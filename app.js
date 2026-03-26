@@ -5,24 +5,24 @@
 
 /* ── PRODUCTOS ── */
 const PRODUCTOS = [
-  { id:1,  cat:"Pizzas Premium",   nombre:"Pizza Margarita",              desc:"Tomate fresco, mozzarella y albahaca. La que nunca falla.",                        precio:11000, img:"pizza-margarita-cocida.jpg", imgPack:"pizza-margarita.jpg", emoji:"🍕", top:true, chips:["Para 1–2 personas","1 pizza grande","Al horno en 12 min"] },
-  { id:2,  cat:"Pizzas Premium",   nombre:"Pizza Jamón y Queso",           desc:"Mucho jamón, mucho queso. Simple, efectiva y sin dramas.",                        precio:11000, img:"pizza-jamon-queso-p.jpg", emoji:"🍕", chips:["Para 1–2 personas","1 pizza grande","Al horno en 12 min"] },
-  { id:3,  cat:"Pizzas Premium",   nombre:"Pizza Cebolla Caramelizada",    desc:"Cebolla bien dulce con queso cremoso. Para los que saben.",                       precio:11000, img:"pizza-cebolla-cocida.jpg", imgPack:"pizza-cebolla-p.jpg", emoji:"🍕", chips:["Para 1–2 personas","1 pizza grande","Al horno en 12 min"] },
-  { id:4,  cat:"Pizzas Premium",   nombre:"Pizza Jamón y Morrón",          desc:"Con jamón, morrón rojo y orégano. Completa y sabrosa.",                           precio:12000, img:"pizza-jamon-morron-cocida.jpg", imgPack:"pizza-jamon-morron.jpg", emoji:"🍕", chips:["Para 1–2 personas","1 pizza grande","Al horno en 12 min"] },
-  { id:5,  cat:"Pizzas Clásicas",  nombre:"Pack Muzarella x2",             desc:"Dos pizzas de muzzarella. Cena resuelta para toda la semana.",                   precio:16000, img:"pack-muzarella-cocida.jpg", imgPack:"pack-muzarella.jpg", emoji:"🍕", top:true, chips:["Para 3–4 personas","2 pizzas grandes","Al horno en 12 min"] },
-  { id:6,  cat:"Pizzas Clásicas",  nombre:"Pack Jamón y Queso x2",         desc:"Dos pizzas de jamón y queso. Una para hoy, una para cuando querás.",             precio:16000, img:"pack-jamon-queso-cocida.jpg", imgPack:"pack-jamon-queso.jpg", emoji:"🍕", chips:["Para 3–4 personas","2 pizzas grandes","Al horno en 12 min"] },
-  { id:7,  cat:"Pizzas Clásicas",  nombre:"Pack Cebolla y Queso x2",       desc:"Dos pizzas con cebolla caramelizada. Guardá una para mañana.",                   precio:16000, img:"pack-cebolla-queso-cocida.jpg", imgPack:"pack-cebolla-queso.jpg", emoji:"🍕", chips:["Para 3–4 personas","2 pizzas grandes","Al horno en 12 min"] },
-  { id:8,  cat:"Sorrentinos",      nombre:"Sorrentinos Cordero al Malbec", desc:"Cordero, zanahoria, apio, cebolla y especias. Distinto y muy rico.",             precio:17500, img:"sorrentinos-plato.jpg", imgPack:"sorrentinos-cordero.jpg", emoji:"🍝", chips:["Para 2–3 personas","600g · 16 unidades","Listos en 4 min"] },
-  { id:9,  cat:"Sorrentinos",      nombre:"Sorrentinos Jamón y Queso",     desc:"Relleno cremoso y generoso. El favorito de la familia.",                         precio:16300, img:"sorrentinos-plato.jpg", imgPack:"sorrentinos-jamon.jpg", emoji:"🍝", top:true, chips:["Para 2–3 personas","600g · 16 unidades","Listos en 4 min"] },
-  { id:10, cat:"Sorrentinos",      nombre:"Sorrentinos Calabaza y Queso",  desc:"Suave, dulce y sabroso. Relleno cremoso de calabaza y queso.",                   precio:14700, img:"sorrentinos-plato.jpg", imgPack:"sorrentinos-calabaza.jpg", emoji:"🍝", chips:["Para 2–3 personas","600g · 16 unidades","Listos en 4 min"] },
-  { id:11, cat:"Empanadas",        nombre:"Empanadas Carne a Cuchillo x8", desc:"Carne cortada a cuchillo, jugosa y bien condimentada. Las que piden todos.",     precio:18800, img:"empanadas-cocidas.jpg", imgPack:"empanadas-carne.jpg", emoji:"🥟", top:true, chips:["Para 2–4 personas","8 empanadas","Al horno hasta dorar"] },
-  { id:12, cat:"Empanadas",        nombre:"Empanadas Jamón y Queso x8",    desc:"Cremosas por dentro, doraditas por fuera. Para cualquier momento.",              precio:16000, img:"empanadas-cocidas.jpg", imgPack:"empanadas-jamon.jpg", emoji:"🥟", chips:["Para 2–4 personas","8 empanadas","Al horno hasta dorar"] },
-  { id:17, cat:"Empanadas",        nombre:"Empanadas Cebolla y Queso x8",  desc:"Cebolla caramelizada con queso derretido. Sabor dulce y cremoso.",               precio:16000, img:"empanadas-cocidas.jpg", emoji:"🥟", chips:["Para 2–4 personas","8 empanadas","Al horno hasta dorar"] },
-  { id:18, cat:"Empanadas",        nombre:"Empanadas Verdura x8",          desc:"Relleno de verdura fresca y queso. Livianas y riquísimas.",                      precio:16000, img:"empanadas-cocidas.jpg", emoji:"🥟", chips:["Para 2–4 personas","8 empanadas","Al horno hasta dorar"] },
-  { id:13, cat:"Postres & Tortas", nombre:"Franui Leche",                  desc:"Frambuesas bañadas en chocolate con leche y blanco. El cierre perfecto.",        precio:8000,  img:"franui.jpg", emoji:"🍫", chips:["Para 2–3 personas","Listo para servir"] },
-  { id:14, cat:"Postres & Tortas", nombre:"Torta Golosa",                  desc:"Masa de chocolate, dulce de leche, mousse de chocolate y almendras acarameladas.", precio:24000, img:"torta-golosa.jpg", emoji:"🎂", chips:["Para 8–10 personas","Torta entera","Lista para cortar y servir"] },
-  { id:15, cat:"Postres & Tortas", nombre:"Torta Lemon Crumble",           desc:"Base sablée, relleno de limón y crumble crocante espolvoreado.",                 precio:24000, img:"torta-lemon.jpg", emoji:"🎂", chips:["Para 8–10 personas","Torta entera","Lista para cortar y servir"] },
-  { id:16, cat:"Postres & Tortas", nombre:"Torta Coco",                    desc:"Base crocante, dulce de leche y relleno de coco. Generosa y sin vueltas.",       precio:24000, img:"torta-coco.jpg", emoji:"🎂", chips:["Para 8–10 personas","Torta entera","Lista para cortar y servir"] },
+  { id:1,  cat:"Pizzas Premium",   nombre:"Pizza Margarita",              desc:"Tomate fresco, mozzarella y albahaca. La que nunca falla.",                        precio:11000, precioSuper:14500, img:"pizza-margarita-cocida.jpg", imgPack:"pizza-margarita.jpg", emoji:"🍕", top:true, chips:["Para 1–2 personas","1 pizza grande","Al horno en 12 min"] },
+  { id:2,  cat:"Pizzas Premium",   nombre:"Pizza Jamón y Queso",           desc:"Mucho jamón, mucho queso. Simple, efectiva y sin dramas.",                        precio:11000, precioSuper:14500, img:"pizza-jamon-queso-p.jpg", emoji:"🍕", chips:["Para 1–2 personas","1 pizza grande","Al horno en 12 min"] },
+  { id:3,  cat:"Pizzas Premium",   nombre:"Pizza Cebolla Caramelizada",    desc:"Cebolla bien dulce con queso cremoso. Para los que saben.",                       precio:11000, precioSuper:14500, img:"pizza-cebolla-cocida.jpg", imgPack:"pizza-cebolla-p.jpg", emoji:"🍕", chips:["Para 1–2 personas","1 pizza grande","Al horno en 12 min"] },
+  { id:4,  cat:"Pizzas Premium",   nombre:"Pizza Jamón y Morrón",          desc:"Con jamón, morrón rojo y orégano. Completa y sabrosa.",                           precio:12000, precioSuper:15500, img:"pizza-jamon-morron-cocida.jpg", imgPack:"pizza-jamon-morron.jpg", emoji:"🍕", chips:["Para 1–2 personas","1 pizza grande","Al horno en 12 min"] },
+  { id:5,  cat:"Pizzas Clásicas",  nombre:"Pack Muzarella x2",             desc:"Dos pizzas de muzzarella. Cena resuelta para toda la semana.",                   precio:16000, precioSuper:22000, img:"pack-muzarella-cocida.jpg", imgPack:"pack-muzarella.jpg", emoji:"🍕", top:true, chips:["Para 3–4 personas","2 pizzas grandes","Al horno en 12 min"] },
+  { id:6,  cat:"Pizzas Clásicas",  nombre:"Pack Jamón y Queso x2",         desc:"Dos pizzas de jamón y queso. Una para hoy, una para cuando querás.",             precio:16000, precioSuper:22000, img:"pack-jamon-queso-cocida.jpg", imgPack:"pack-jamon-queso.jpg", emoji:"🍕", chips:["Para 3–4 personas","2 pizzas grandes","Al horno en 12 min"] },
+  { id:7,  cat:"Pizzas Clásicas",  nombre:"Pack Cebolla y Queso x2",       desc:"Dos pizzas con cebolla caramelizada. Guardá una para mañana.",                   precio:16000, precioSuper:22000, img:"pack-cebolla-queso-cocida.jpg", imgPack:"pack-cebolla-queso.jpg", emoji:"🍕", chips:["Para 3–4 personas","2 pizzas grandes","Al horno en 12 min"] },
+  { id:8,  cat:"Sorrentinos",      nombre:"Sorrentinos Cordero al Malbec", desc:"Cordero, zanahoria, apio, cebolla y especias. Distinto y muy rico.",             precio:17500, precioSuper:23000, img:"sorrentinos-plato.jpg", imgPack:"sorrentinos-cordero.jpg", emoji:"🍝", chips:["Para 2–3 personas","600g · 16 unidades","Listos en 4 min"] },
+  { id:9,  cat:"Sorrentinos",      nombre:"Sorrentinos Jamón y Queso",     desc:"Relleno cremoso y generoso. El favorito de la familia.",                         precio:16300, precioSuper:21000, img:"sorrentinos-plato.jpg", imgPack:"sorrentinos-jamon.jpg", emoji:"🍝", top:true, chips:["Para 2–3 personas","600g · 16 unidades","Listos en 4 min"] },
+  { id:10, cat:"Sorrentinos",      nombre:"Sorrentinos Calabaza y Queso",  desc:"Suave, dulce y sabroso. Relleno cremoso de calabaza y queso.",                   precio:14700, precioSuper:19000, img:"sorrentinos-plato.jpg", imgPack:"sorrentinos-calabaza.jpg", emoji:"🍝", chips:["Para 2–3 personas","600g · 16 unidades","Listos en 4 min"] },
+  { id:11, cat:"Empanadas",        nombre:"Empanadas Carne a Cuchillo x8", desc:"Carne cortada a cuchillo, jugosa y bien condimentada. Las que piden todos.",     precio:18800, precioSuper:24000, img:"empanadas-cocidas.jpg", imgPack:"empanadas-carne.jpg", emoji:"🥟", top:true, chips:["Para 2–4 personas","8 empanadas","Al horno hasta dorar"] },
+  { id:12, cat:"Empanadas",        nombre:"Empanadas Jamón y Queso x8",    desc:"Cremosas por dentro, doraditas por fuera. Para cualquier momento.",              precio:16000, precioSuper:20000, img:"empanadas-cocidas.jpg", imgPack:"empanadas-jamon.jpg", emoji:"🥟", chips:["Para 2–4 personas","8 empanadas","Al horno hasta dorar"] },
+  { id:17, cat:"Empanadas",        nombre:"Empanadas Cebolla y Queso x8",  desc:"Cebolla caramelizada con queso derretido. Sabor dulce y cremoso.",               precio:16000, precioSuper:20000, img:"empanadas-cocidas.jpg", emoji:"🥟", chips:["Para 2–4 personas","8 empanadas","Al horno hasta dorar"] },
+  { id:18, cat:"Empanadas",        nombre:"Empanadas Verdura x8",          desc:"Relleno de verdura fresca y queso. Livianas y riquísimas.",                      precio:16000, precioSuper:20000, img:"empanadas-cocidas.jpg", emoji:"🥟", chips:["Para 2–4 personas","8 empanadas","Al horno hasta dorar"] },
+  { id:13, cat:"Postres & Tortas", nombre:"Franui Leche",                  desc:"Frambuesas bañadas en chocolate con leche y blanco. El cierre perfecto.",        precio:8000,  precioSuper:11000, img:"franui.jpg", emoji:"🍫", chips:["Para 2–3 personas","Listo para servir"] },
+  { id:14, cat:"Postres & Tortas", nombre:"Torta Golosa",                  desc:"Masa de chocolate, dulce de leche, mousse de chocolate y almendras acarameladas.", precio:24000, precioSuper:32000, img:"torta-golosa.jpg", emoji:"🎂", chips:["Para 8–10 personas","Torta entera","Lista para cortar y servir"] },
+  { id:15, cat:"Postres & Tortas", nombre:"Torta Lemon Crumble",           desc:"Base sablée, relleno de limón y crumble crocante espolvoreado.",                 precio:24000, precioSuper:32000, img:"torta-lemon.jpg", emoji:"🎂", chips:["Para 8–10 personas","Torta entera","Lista para cortar y servir"] },
+  { id:16, cat:"Postres & Tortas", nombre:"Torta Coco",                    desc:"Base crocante, dulce de leche y relleno de coco. Generosa y sin vueltas.",       precio:24000, precioSuper:32000, img:"torta-coco.jpg", emoji:"🎂", chips:["Para 8–10 personas","Torta entera","Lista para cortar y servir"] },
 ];
 
 const CATEGORIAS = [
@@ -76,7 +76,12 @@ function $id(id) { return document.getElementById(id); }
 function ars(n) { return '$' + n.toLocaleString('es-AR'); }
 function cartTotal() { return Object.entries(cart).reduce((s,[id,q]) => { const p=PROD_MAP[+id]; return s+(p?p.precio*q:0); }, 0); }
 function cartCount() { return Object.values(cart).reduce((a,b)=>a+b, 0); }
-function getShipping() { return currentZone ? ZONAS[currentZone].envio : 0; }
+function getShipping() {
+  if (!currentZone) return 0;
+  if (currentZone === 'estancias') return 0;
+  if (cartTotal() >= 25000) return 0; // envío gratis desde $25.000
+  return ZONAS[currentZone].envio;
+}
 function slugify(str) {
   return str.toLowerCase().replace(/[áäâà]/g,'a').replace(/[éëêè]/g,'e').replace(/[íïîì]/g,'i').replace(/[óöôò]/g,'o').replace(/[úüûù]/g,'u').replace(/ñ/g,'n').replace(/[^a-z0-9]/g,'-').replace(/-+/g,'-').replace(/^-|-$/g,'');
 }
@@ -125,6 +130,7 @@ function renderCatalog() {
         '</div>' +
         '<div class="product-body">' +
           (p.top ? '<span class="product-top-badge">⭐ Lo más pedido</span>' : '') +
+          (p.precioSuper ? '<span class="savings-badge">Ahorrás ' + Math.round((1-p.precio/p.precioSuper)*100) + '% vs súper</span>' : '') +
           '<h3 class="product-name">' + p.nombre + '</h3>' +
           '<p class="product-desc">' + p.desc + '</p>' +
           (p.chips ? '<div class="product-chips">' + p.chips.map(c => '<span class="chip">' + c + '</span>').join('') + '</div>' : '') +
@@ -225,9 +231,21 @@ function updateUI() {
         '</div>' +
       '</div>';
     }).join('');
+    // Ahorro vs supermercado
+    const ahorroTotal = Object.entries(cart).reduce((s,[id,qty]) => {
+      const p = PROD_MAP[+id]; return s + (p && p.precioSuper ? (p.precioSuper - p.precio) * qty : 0);
+    }, 0);
+    const savingsEl = $id('cart-savings');
+    if (ahorroTotal > 0) { savingsEl.textContent = '🏷 Ahorrás ' + ars(ahorroTotal) + ' vs supermercado'; savingsEl.classList.remove('hidden'); }
+    else { savingsEl.classList.add('hidden'); }
+    // Descuento cupón
+    const disc = getDiscount(subtotal);
+    const discRow = $id('cart-discount-row');
+    if (disc > 0) { discRow.style.display = ''; $id('cart-discount').textContent = '-' + ars(disc); }
+    else { discRow.style.display = 'none'; }
     $id('cart-subtotal').textContent = ars(subtotal);
     $id('cart-shipping').textContent = shipping === 0 ? 'Gratis' : ars(shipping);
-    $id('cart-total').textContent = ars(total);
+    $id('cart-total').textContent = ars(subtotal - disc + shipping);
   }
   updateFormSummary();
 }
@@ -236,13 +254,15 @@ function updateFormSummary() {
   const el = $id('form-summary'), count = cartCount();
   if (count === 0) { el.innerHTML = '<p class="summary-empty">Agregá productos para ver el resumen.</p>'; return; }
   const subtotal = cartTotal(), shipping = getShipping(), total = subtotal + shipping;
+  const disc = getDiscount(subtotal);
   el.innerHTML = Object.entries(cart).map(([id,qty]) => {
     const p = PROD_MAP[+id];
     if (!p) return '';
     return '<div class="summary-line"><span>' + p.nombre + ' <strong>×' + qty + '</strong></span><span>' + ars(p.precio*qty) + '</span></div>';
   }).join('') +
+    (disc > 0 ? '<div class="summary-line" style="color:#2E7D32"><span>Descuento</span><span>-' + ars(disc) + '</span></div>' : '') +
     '<div class="summary-line shipping-line"><span>Envío</span><span>' + (shipping === 0 ? 'Gratis' : ars(shipping)) + '</span></div>' +
-    '<div class="summary-line total-line"><span>Total</span><span>' + ars(total) + '</span></div>';
+    '<div class="summary-line total-line"><span>Total</span><span>' + ars(subtotal - disc + shipping) + '</span></div>';
 }
 
 /* ── TOGGLE CART ── */
@@ -384,7 +404,7 @@ function enviarPedido() {
     return '*' + cat + '*\n' + items.map(i => '  · ' + i.nombre + ' ×' + i.qty + ' — ' + ars(i.subtotal)).join('\n');
   }).join('\n\n');
 
-  const subtotal = cartTotal(), shipping = getShipping(), total = subtotal + shipping;
+  const subtotal = cartTotal(), disc = getDiscount(subtotal), shipping = getShipping(), total = subtotal - disc + shipping;
   const cantItems = Object.values(cart).reduce((a,b)=>a+b,0);
   const sep = '━━━━━━━━━━━━━━━';
   const plural = cantItems !== 1 ? 's' : '';
@@ -403,6 +423,7 @@ function enviarPedido() {
     '', lineas, '',
     sep,
     '*Subtotal: ' + ars(subtotal) + '*',
+    (disc > 0 ? '*Descuento (' + activeCoupon + '): -' + ars(disc) + '*' : null),
     '*Envío: ' + (shipping === 0 ? 'Gratis' : ars(shipping)) + '*',
     '*TOTAL: ' + ars(total) + '*',
     sep, '',
@@ -413,7 +434,7 @@ function enviarPedido() {
     '💳 *Pago:* ' + pagoEl.value,
     '', sep, '🧡 _¡Gracias por elegirnos!_',
   ];
-  const urlText = encodeURIComponent(msgLines.join('\n'));
+  const urlText = encodeURIComponent(msgLines.filter(l => l !== null).join('\n'));
 
   // Registrar en Google Sheets
   const items = Object.entries(cart).map(([id,qty]) => {
@@ -430,6 +451,8 @@ function enviarPedido() {
       lote: currentZone === 'estancias' ? lote : direccion,
       telefono, dia, horario,
       pago: pagoEl.value,
+      cupon: activeCoupon || '',
+      descuento: disc,
       items, total
     })
   }).catch(() => {});
@@ -633,3 +656,131 @@ document.addEventListener('visibilitychange', () => {
 // Float cart visibility
 const _formObs = new IntersectionObserver(([entry]) => { _formVisible = entry.isIntersecting; updateUI(); }, {threshold:0.3});
 _formObs.observe(document.querySelector('.form-section'));
+
+/* ══════════════════════════════════════════════════
+   FEATURES FRIZATA-INSPIRED
+   ══════════════════════════════════════════════════ */
+
+/* ── BARRA ENVÍO GRATIS ── */
+const FREE_SHIPPING_MIN = 25000; // envío gratis desde $25.000 (solo aplica para zona pilar)
+function updateShippingBar() {
+  const bar = $id('shipping-bar');
+  if (!currentZone || currentZone === 'estancias') { bar.classList.add('hidden'); return; }
+  const subtotal = cartTotal();
+  if (cartCount() === 0) { bar.classList.add('hidden'); return; }
+  bar.classList.remove('hidden');
+  const fill = $id('shipping-bar-fill');
+  const text = $id('shipping-bar-text');
+  if (subtotal >= FREE_SHIPPING_MIN) {
+    bar.classList.add('free');
+    text.textContent = '🎉 ¡Envío gratis! Tu pedido supera ' + ars(FREE_SHIPPING_MIN);
+    fill.style.width = '100%';
+    // Override shipping to 0
+  } else {
+    bar.classList.remove('free');
+    const falta = FREE_SHIPPING_MIN - subtotal;
+    text.textContent = '🚚 Sumá ' + ars(falta) + ' más para envío gratis';
+    fill.style.width = Math.min(100, (subtotal / FREE_SHIPPING_MIN) * 100) + '%';
+  }
+}
+// getShipping ya maneja FREE_SHIPPING_MIN internamente
+
+/* ── BANNER PROMO ── */
+function closePromo() {
+  $id('promo-banner').style.display = 'none';
+  sessionStorage.setItem('maleu_promo_closed', '1');
+}
+if (sessionStorage.getItem('maleu_promo_closed')) {
+  $id('promo-banner').style.display = 'none';
+}
+
+/* ── CUPONES ── */
+const CUPONES = {
+  'BIENVENIDO': { tipo: 'porcentaje', valor: 10, desc: '10% OFF', minimo: 0 },
+  'MALEU10':    { tipo: 'porcentaje', valor: 10, desc: '10% OFF', minimo: 0 },
+  'AMIGO15':    { tipo: 'porcentaje', valor: 15, desc: '15% OFF', minimo: 20000 },
+};
+let activeCoupon = null;
+
+function getDiscount(subtotal) {
+  if (!activeCoupon) return 0;
+  const c = CUPONES[activeCoupon];
+  if (!c) return 0;
+  if (subtotal < c.minimo) return 0;
+  if (c.tipo === 'porcentaje') return Math.round(subtotal * c.valor / 100);
+  return c.valor;
+}
+
+function applyCoupon() {
+  const code = $id('f-coupon').value.trim().toUpperCase();
+  const msg = $id('coupon-msg');
+  if (!code) { msg.textContent = '⚠ Ingresá un código'; msg.className = 'coupon-msg error'; return; }
+  const c = CUPONES[code];
+  if (!c) { msg.textContent = '✗ Cupón inválido'; msg.className = 'coupon-msg error'; return; }
+  if (cartTotal() < c.minimo) { msg.textContent = '⚠ Mínimo ' + ars(c.minimo) + ' para usar este cupón'; msg.className = 'coupon-msg error'; return; }
+  activeCoupon = code;
+  $id('coupon-input-area').classList.add('hidden');
+  const applied = $id('coupon-applied');
+  applied.classList.remove('hidden');
+  $id('coupon-applied-text').textContent = '✓ ' + code + ' — ' + c.desc + ' aplicado';
+  msg.textContent = '';
+  updateUI();
+  toast('✓ Cupón ' + code + ' aplicado');
+}
+
+function removeCoupon() {
+  activeCoupon = null;
+  $id('coupon-input-area').classList.remove('hidden');
+  $id('coupon-applied').classList.add('hidden');
+  $id('f-coupon').value = '';
+  $id('coupon-msg').textContent = '';
+  updateUI();
+}
+
+// Restore coupon from localStorage
+try {
+  const savedCoupon = localStorage.getItem('maleu_coupon');
+  if (savedCoupon && CUPONES[savedCoupon]) {
+    activeCoupon = savedCoupon;
+    $id('coupon-input-area').classList.add('hidden');
+    $id('coupon-applied').classList.remove('hidden');
+    $id('coupon-applied-text').textContent = '✓ ' + savedCoupon + ' — ' + CUPONES[savedCoupon].desc + ' aplicado';
+  }
+} catch(ex) {}
+
+/* ── NEWSLETTER POPUP ── */
+function showNewsletter() {
+  if (localStorage.getItem('maleu_nl_done')) return;
+  $id('nl-overlay').classList.remove('hidden');
+}
+function closeNewsletter() {
+  $id('nl-overlay').classList.add('hidden');
+  localStorage.setItem('maleu_nl_done', '1');
+}
+function submitNewsletter() {
+  const email = $id('nl-email').value.trim();
+  if (!email || !email.includes('@')) { toast('⚠ Ingresá un email válido'); return; }
+  fetch(APPS_SCRIPT_URL, {
+    method:'POST', mode:'no-cors', headers:{'Content-Type':'text/plain'},
+    body: JSON.stringify({ canal:'Newsletter', fecha: new Date().toLocaleString('es-AR'), nombre: email, email: email })
+  }).catch(function(){});
+  closeNewsletter();
+  activeCoupon = 'BIENVENIDO';
+  $id('coupon-input-area').classList.add('hidden');
+  $id('coupon-applied').classList.remove('hidden');
+  $id('coupon-applied-text').textContent = '✓ BIENVENIDO — 10% OFF aplicado';
+  localStorage.setItem('maleu_coupon', 'BIENVENIDO');
+  updateUI();
+  toast('🎉 ¡Cupón BIENVENIDO activado! 10% OFF');
+}
+if (!localStorage.getItem('maleu_nl_done')) {
+  setTimeout(showNewsletter, 8000);
+}
+
+/* ── HOOK: actualizar barra envío en cada cambio ── */
+const _origModifyCart = modifyCart;
+window.modifyCart = function(id, delta) {
+  _origModifyCart(id, delta);
+  updateShippingBar();
+};
+updateShippingBar();
