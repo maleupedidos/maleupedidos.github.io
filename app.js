@@ -52,8 +52,9 @@ const ZONAS = {
 };
 
 const WA_NUMBER = "5491155038905";
-const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxmrG5YVSshcYezk8lXFx_uxb7NFGcb9EfTXc7dsIN4rZyj73CET4mk_aKPFPDY2wNi/exec";
-const STOCK_CSV_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vTOq210U9LeSxvXbx_sdglHS0K9DZP8H_5pGXC-WwlMo8AE4UacIN0bpagQqAr79XeJNQ1Nm1eql271/pub?gid=792614962&single=true&output=csv';
+// TODO: conectar con Sheets cuando Pilar Global esté en producción
+const APPS_SCRIPT_URL = "";
+const STOCK_CSV_URL = '';
 
 /* ── ESTADO ── */
 let cart = {};
