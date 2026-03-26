@@ -9,6 +9,7 @@ const PRODUCTOS = [
   { id:2,  cat:"Pizzas Premium",   nombre:"Pizza Jamón y Queso",           desc:"Mucho jamón, mucho queso. Simple, efectiva y sin dramas.",                        precio:11000, precioSuper:14500, img:"pizza-jamon-queso-cocida.jpg", imgPack:"pizza-jamon-queso-p.jpg", emoji:"🍕", chips:["Para 1–2 personas","1 pizza grande","Al horno en 12 min"] },
   { id:3,  cat:"Pizzas Premium",   nombre:"Pizza Cebolla Caramelizada",    desc:"Cebolla bien dulce con queso cremoso. Para los que saben.",                       precio:11000, precioSuper:14500, img:"pizza-cebolla-cocida.jpg", imgPack:"pizza-cebolla-p.jpg", emoji:"🍕", chips:["Para 1–2 personas","1 pizza grande","Al horno en 12 min"] },
   { id:4,  cat:"Pizzas Premium",   nombre:"Pizza Jamón y Morrón",          desc:"Con jamón, morrón rojo y orégano. Completa y sabrosa.",                           precio:12000, precioSuper:15500, img:"pizza-jamon-morron-cocida.jpg", imgPack:"pizza-jamon-morron.jpg", emoji:"🍕", chips:["Para 1–2 personas","1 pizza grande","Al horno en 12 min"] },
+  { id:19, cat:"Pizzas Premium",   nombre:"Pizza Muzzarella",              desc:"Puro queso derretido sobre salsa de tomate. La clásica que nunca sobra.",          precio:11000, precioSuper:14500, img:"pizza-cebolla-cocida.jpg", emoji:"🍕", chips:["Para 1–2 personas","1 pizza grande","Al horno en 12 min"] },
   { id:5,  cat:"Pizzas Clásicas",  nombre:"Pack Muzarella x2",             desc:"Dos pizzas de muzzarella. Cena resuelta para toda la semana.",                   precio:16000, precioSuper:22000, img:"pack-muzarella-cocida.jpg", imgPack:"pack-muzarella.jpg", emoji:"🍕", top:true, chips:["Para 3–4 personas","2 pizzas grandes","Al horno en 12 min"] },
   { id:6,  cat:"Pizzas Clásicas",  nombre:"Pack Jamón y Queso x2",         desc:"Dos pizzas de jamón y queso. Una para hoy, una para cuando querás.",             precio:16000, precioSuper:22000, img:"pack-jamon-queso-cocida.jpg", imgPack:"pack-jamon-queso.jpg", emoji:"🍕", chips:["Para 3–4 personas","2 pizzas grandes","Al horno en 12 min"] },
   { id:7,  cat:"Pizzas Clásicas",  nombre:"Pack Cebolla y Queso x2",       desc:"Dos pizzas con cebolla caramelizada. Guardá una para mañana.",                   precio:16000, precioSuper:22000, img:"pack-cebolla-queso-cocida.jpg", imgPack:"pack-cebolla-queso.jpg", emoji:"🍕", chips:["Para 3–4 personas","2 pizzas grandes","Al horno en 12 min"] },
@@ -69,7 +70,7 @@ const PROD_ABBR = {
   8:'SCo', 9:'SJyQ', 10:'SCa',
   11:'ECaC', 12:'EJyQ', 17:'ECyQ', 18:'EV',
   14:'TG', 15:'TLC', 16:'TC', 13:'F',
-  1:'PMa', 2:'PJyQ', 3:'PCC', 4:'PJyM',
+  1:'PMa', 2:'PJyQ', 3:'PCC', 4:'PJyM', 19:'PMu',
 };
 
 /* ── HELPERS ── */
@@ -127,7 +128,7 @@ function renderCatalog() {
       '</div><div class="products-grid">' +
       prods.map(p => '<article class="product-card" data-id="' + p.id + '">' +
         '<div class="product-thumb">' +
-          '<img class="product-thumb-img" src="img/' + p.img + '" alt="' + p.nombre + '" loading="lazy" width="400" height="400" onerror="this.style.display=\'none\'">' +
+          '<img class="product-thumb-img" src="img/' + p.img + '" alt="' + p.nombre + '" loading="lazy" width="400" height="400" style="object-position:' + (p.imgPos||'center') + '" onerror="this.style.display=\'none\'">' +
         '</div>' +
         '<div class="product-body">' +
           (p.top ? '<span class="product-top-badge">⭐ Lo más pedido</span>' : '') +
