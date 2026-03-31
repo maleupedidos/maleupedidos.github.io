@@ -49,8 +49,7 @@ const CATEGORIAS_CLUBES = [
   { nombre:"Pizzas Premium",  icono:"🍕", nota:"Individuales · Pre-cocidas · Al horno directo desde el freezer" },
   { nombre:"Pizzas Clásicas", icono:"🍕", nota:"Pack de 2 unidades · Ideal para compartir en equipo" },
 ];
-// Agregar productos de clubes al PROD_MAP global para lookups
-PRODUCTOS_CLUBES.forEach(p => PROD_MAP[p.id] = p);
+// Los productos de clubes se agregan a PROD_MAP después de su declaración (ver más abajo)
 
 /* Productos y categorías activos según zona */
 function getActiveProducts() { return currentZone === 'clubes' ? PRODUCTOS_CLUBES : PRODUCTOS; }
@@ -103,6 +102,7 @@ let stockMap = {};
 let _enviando = false;
 let _formVisible = false;
 const PROD_MAP = {}; PRODUCTOS.forEach(p => PROD_MAP[p.id] = p);
+PRODUCTOS_CLUBES.forEach(p => PROD_MAP[p.id] = p);
 
 const PROD_ABBR = {
   5:'PPM', 6:'PPJyQ', 7:'PPCyQ',
