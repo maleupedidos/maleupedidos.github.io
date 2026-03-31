@@ -34,6 +34,28 @@ const CATEGORIAS = [
   { nombre:"Postres & Tortas", icono:"🎂", nota:"Para cerrar bien la noche" },
 ];
 
+/* ── PRODUCTOS CLUBES (precios especiales, solo pizzas) ── */
+const PRODUCTOS_CLUBES = [
+  { id:'c1',  cat:"Pizzas Premium",  nombre:"Pizza Muzzarella",           desc:"Puro queso derretido sobre salsa de tomate. La clásica que nunca sobra.",   precio:7000,  img:"pizza-muzarella-cocida.jpg", emoji:"🍕", chips:["1 pizza grande","Al horno en 12 min"] },
+  { id:'c2',  cat:"Pizzas Premium",  nombre:"Pizza Jamón y Queso",        desc:"Mucho jamón, mucho queso. Simple, efectiva y sin dramas.",                  precio:7000,  img:"pizza-jamon-queso-cocida.jpg", emoji:"🍕", chips:["1 pizza grande","Al horno en 12 min"] },
+  { id:'c3',  cat:"Pizzas Premium",  nombre:"Pizza Cebolla Caramelizada", desc:"Cebolla bien dulce con queso cremoso. Para los que saben.",                 precio:7000,  img:"pizza-cebolla-cocida.jpg", emoji:"🍕", chips:["1 pizza grande","Al horno en 12 min"] },
+  { id:'c4',  cat:"Pizzas Premium",  nombre:"Pizza Margarita",            desc:"Tomate fresco, mozzarella y albahaca. La que nunca falla.",                  precio:7000,  img:"pizza-margarita-cocida.jpg", emoji:"🍕", chips:["1 pizza grande","Al horno en 12 min"] },
+  { id:'c5',  cat:"Pizzas Premium",  nombre:"Pizza Jamón y Morrón",       desc:"Con jamón, morrón rojo y orégano. Completa y sabrosa.",                     precio:7800,  img:"pizza-jamon-morron-cocida.jpg", emoji:"🍕", chips:["1 pizza grande","Al horno en 12 min"] },
+  { id:'c6',  cat:"Pizzas Clásicas", nombre:"Pack Muzarella x2",          desc:"Dos pizzas de muzzarella. Cena resuelta para todo el equipo.",              precio:11000, img:"pack-muzarella-cocida.jpg", emoji:"🍕", top:true, chips:["2 pizzas grandes","Al horno en 12 min"] },
+  { id:'c7',  cat:"Pizzas Clásicas", nombre:"Pack Jamón y Queso x2",      desc:"Dos pizzas de jamón y queso. El clásico del tercer tiempo.",               precio:11000, img:"pack-jamon-queso-cocida.jpg", emoji:"🍕", chips:["2 pizzas grandes","Al horno en 12 min"] },
+  { id:'c8',  cat:"Pizzas Clásicas", nombre:"Pack Cebolla y Queso x2",    desc:"Dos pizzas con cebolla caramelizada. Siempre piden más.",                  precio:11000, img:"pack-cebolla-queso-cocida.jpg", emoji:"🍕", chips:["2 pizzas grandes","Al horno en 12 min"] },
+];
+const CATEGORIAS_CLUBES = [
+  { nombre:"Pizzas Premium",  icono:"🍕", nota:"Individuales · Pre-cocidas · Al horno directo desde el freezer" },
+  { nombre:"Pizzas Clásicas", icono:"🍕", nota:"Pack de 2 unidades · Ideal para compartir en equipo" },
+];
+// Agregar productos de clubes al PROD_MAP global para lookups
+PRODUCTOS_CLUBES.forEach(p => PROD_MAP[p.id] = p);
+
+/* Productos y categorías activos según zona */
+function getActiveProducts() { return currentZone === 'clubes' ? PRODUCTOS_CLUBES : PRODUCTOS; }
+function getActiveCategories() { return currentZone === 'clubes' ? CATEGORIAS_CLUBES : CATEGORIAS; }
+
 /* ── ZONAS ── */
 const ZONAS = {
   estancias: {
@@ -93,7 +115,7 @@ const PROD_ABBR = {
 /* ── HELPERS ── */
 function $id(id) { return document.getElementById(id); }
 function ars(n) { return '$' + n.toLocaleString('es-AR'); }
-function cartTotal() { return Object.entries(cart).reduce((s,[id,q]) => { const p=PROD_MAP[+id]; return s+(p?p.precio*q:0); }, 0); }
+function cartTotal() { return Object.entries(cart).reduce((s,[id,q]) => { const p=PROD_MAP[id]; return s+(p?p.precio*q:0); }, 0); }
 function cartCount() { return Object.values(cart).reduce((a,b)=>a+b, 0); }
 function getShipping() {
   if (!currentZone) return 0;
@@ -122,23 +144,32 @@ function applyZone() {
   $id('zone-chip').textContent = '📍 ' + z.nombre;
   // Hero delivery text
   $id('hero-delivery').textContent = z.deliveryText;
-  // Form fields — Estancias muestra barrio/sub-barrio/lote, el resto muestra dirección libre
+  // Form fields
   $id('fields-estancias').style.display = currentZone === 'estancias' ? '' : 'none';
-  $id('fields-pilar').style.display = currentZone !== 'estancias' ? '' : 'none';
+  $id('fields-pilar').style.display = (currentZone !== 'estancias' && currentZone !== 'clubes') ? '' : 'none';
+  $id('fields-clubes').style.display = currentZone === 'clubes' ? '' : 'none';
   // Días de entrega
   const diaSelect = $id('f-dia');
   diaSelect.innerHTML = '<option value="">Elegí un día</option>';
   Object.keys(z.horarios).forEach(dia => {
     diaSelect.innerHTML += '<option value="' + dia + '">' + dia + '</option>';
   });
+  // Limpiar carrito al cambiar zona (productos/precios cambian)
+  cart = {};
+  // Re-render catálogo y nav con productos de la zona
+  renderCatalog();
+  renderCatNav();
+  updateCatNavTop();
   updateUI();
   updateStockDisplay();
 }
 
 /* ── RENDER CATÁLOGO ── */
 function renderCatalog() {
-  $id('catalog-root').innerHTML = CATEGORIAS.map(cat => {
-    const prods = PRODUCTOS.filter(p => p.cat === cat.nombre).sort((a,b) => (b.top?1:0) - (a.top?1:0));
+  const cats = getActiveCategories();
+  const prods_all = getActiveProducts();
+  $id('catalog-root').innerHTML = cats.map(cat => {
+    const prods = prods_all.filter(p => p.cat === cat.nombre).sort((a,b) => (b.top?1:0) - (a.top?1:0));
     if (!prods.length) return '';
     return '<section class="cat-section"><div class="cat-header">' +
       '<div class="cat-title"><span>' + cat.icono + '</span>' + cat.nombre + '</div>' +
@@ -171,11 +202,11 @@ function renderCardFooter(id) {
   if (!card) return;
   const footer = card.querySelector('.product-footer');
   if (!footer) return;
-  const p = PROD_MAP[+id];
+  const p = PROD_MAP[id];
   if (!p) return;
   const qty = cart[id] || 0;
   const showStock = currentZone && ZONAS[currentZone] && ZONAS[currentZone].showStock;
-  const avail = showStock ? stockMap[+id] : undefined;
+  const avail = showStock ? stockMap[id] : undefined;
   const sinStock = avail !== undefined && avail === 0;
   const atLimit = avail !== undefined && qty >= avail;
   if (qty === 0) {
@@ -197,7 +228,7 @@ function modifyCart(id, delta) {
   const current = cart[id] || 0;
   if (delta > 0) {
     const showStock = currentZone && ZONAS[currentZone] && ZONAS[currentZone].showStock;
-    const avail = showStock ? stockMap[+id] : undefined;
+    const avail = showStock ? stockMap[id] : undefined;
     if (avail !== undefined && current >= avail) { toast('⚠️ No hay más stock'); return; }
   }
   const newQty = current + delta;
@@ -238,7 +269,7 @@ function updateUI() {
   } else {
     footEl.style.display = 'block';
     bodyEl.innerHTML = Object.entries(cart).map(([id,qty]) => {
-      const p = PROD_MAP[+id];
+      const p = PROD_MAP[id];
       if (!p) return '';
       return '<div class="cart-item">' +
         '<span class="cart-item-emoji">' + p.emoji + '</span>' +
@@ -271,7 +302,7 @@ function updateFormSummary() {
   const subtotal = cartTotal(), shipping = getShipping(), total = subtotal + shipping;
   const disc = getDiscount(subtotal);
   el.innerHTML = Object.entries(cart).map(([id,qty]) => {
-    const p = PROD_MAP[+id];
+    const p = PROD_MAP[id];
     if (!p) return '';
     return '<div class="summary-line"><span>' + p.nombre + ' <strong>×' + qty + '</strong></span><span>' + ars(p.precio*qty) + '</span></div>';
   }).join('') +
@@ -316,6 +347,9 @@ function validateOnBlur(campo) {
   if (campo==='barrio') { $id('f-barrio').value ? clearError('f-barrio','err-barrio') : showError('f-barrio','err-barrio'); }
   if (campo==='lote') { $id('f-lote').value.trim() ? clearError('f-lote','err-lote') : showError('f-lote','err-lote'); }
   if (campo==='direccion') { $id('f-direccion').value.trim() ? clearError('f-direccion','err-direccion') : showError('f-direccion','err-direccion'); }
+  if (campo==='club') { $id('f-club').value ? clearError('f-club','err-club') : showError('f-club','err-club'); }
+  if (campo==='deporte') { $id('f-deporte').value ? clearError('f-deporte','err-deporte') : showError('f-deporte','err-deporte'); }
+  if (campo==='grupo') { $id('f-grupo').value ? clearError('f-grupo','err-grupo') : showError('f-grupo','err-grupo'); }
   if (campo==='telefono') { $id('f-telefono').value.replace(/\D/g,'').length >= 8 ? clearError('f-telefono','err-telefono') : showError('f-telefono','err-telefono'); }
   if (campo==='dia') { $id('f-dia').value ? clearError('f-dia','err-dia') : showError('f-dia','err-dia'); }
 }
@@ -360,6 +394,10 @@ function enviarPedido() {
     clearError('f-barrio-privado','err-barrio-privado');
     clearError('f-barrio','err-barrio');
     clearError('f-lote','err-lote');
+  } else if (currentZone === 'clubes') {
+    clearError('f-club','err-club');
+    clearError('f-deporte','err-deporte');
+    clearError('f-grupo','err-grupo');
   } else {
     clearError('f-direccion','err-direccion');
   }
@@ -367,10 +405,10 @@ function enviarPedido() {
   // Validar stock
   let stockProblems = [];
   Object.entries(cart).forEach(([id, qty]) => {
-    const avail = stockMap[+id];
+    const avail = stockMap[id];
     if (avail !== undefined) {
-      if (avail === 0) { stockProblems.push(PROD_MAP[+id]?.nombre + ' (sin stock)'); delete cart[id]; }
-      else if (qty > avail) { cart[id] = avail; stockProblems.push(PROD_MAP[+id]?.nombre + ' (solo quedan ' + avail + ')'); }
+      if (avail === 0) { stockProblems.push(PROD_MAP[id]?.nombre + ' (sin stock)'); delete cart[id]; }
+      else if (qty > avail) { cart[id] = avail; stockProblems.push(PROD_MAP[id]?.nombre + ' (solo quedan ' + avail + ')'); }
     }
   });
   if (stockProblems.length > 0) { updateUI(); toast('⚠️ Stock actualizado'); return; }
@@ -381,7 +419,7 @@ function enviarPedido() {
   let primerInvalido = null;
   if (!nombre) { showError('f-nombre','err-nombre'); if(!primerInvalido) primerInvalido=$id('f-nombre'); }
 
-  let barrioPrivado='', barrio='', lote='', direccion='';
+  let barrioPrivado='', barrio='', lote='', direccion='', club='', deporte='', grupo='';
   if (currentZone === 'estancias') {
     barrioPrivado = $id('f-barrio-privado').value;
     barrio = barrioPrivado === 'Estancias del Pilar' ? $id('f-barrio').value : barrioPrivado;
@@ -389,6 +427,13 @@ function enviarPedido() {
     if (!barrioPrivado) { showError('f-barrio-privado','err-barrio-privado'); if(!primerInvalido) primerInvalido=$id('f-barrio-privado'); }
     if (barrioPrivado === 'Estancias del Pilar' && !barrio) { showError('f-barrio','err-barrio'); if(!primerInvalido) primerInvalido=$id('f-barrio'); }
     if (!lote) { showError('f-lote','err-lote'); if(!primerInvalido) primerInvalido=$id('f-lote'); }
+  } else if (currentZone === 'clubes') {
+    club = $id('f-club').value;
+    deporte = $id('f-deporte').value;
+    grupo = $id('f-grupo').value;
+    if (!club) { showError('f-club','err-club'); if(!primerInvalido) primerInvalido=$id('f-club'); }
+    if (!deporte) { showError('f-deporte','err-deporte'); if(!primerInvalido) primerInvalido=$id('f-deporte'); }
+    if (!grupo) { showError('f-grupo','err-grupo'); if(!primerInvalido) primerInvalido=$id('f-grupo'); }
   } else {
     direccion = $id('f-direccion').value.trim();
     if (!direccion) { showError('f-direccion','err-direccion'); if(!primerInvalido) primerInvalido=$id('f-direccion'); }
@@ -411,7 +456,7 @@ function enviarPedido() {
   // Construir mensaje WhatsApp
   const porCat = {};
   Object.entries(cart).forEach(([id,qty]) => {
-    const p = PROD_MAP[+id]; if (!p) return;
+    const p = PROD_MAP[id]; if (!p) return;
     if (!porCat[p.cat]) porCat[p.cat] = [];
     porCat[p.cat].push({ nombre:p.nombre, qty, subtotal:p.precio*qty });
   });
@@ -428,6 +473,8 @@ function enviarPedido() {
   if (currentZone === 'estancias') {
     const barrioInfo = barrioPrivado === 'Estancias del Pilar' ? barrioPrivado + ' — ' + barrio : barrioPrivado;
     ubicacionStr = '🏘 *Barrio:* ' + barrioInfo + '\n📍 *Lote:* ' + lote;
+  } else if (currentZone === 'clubes') {
+    ubicacionStr = '🏟 *Club:* ' + club + '\n⚽ *Deporte:* ' + deporte + '\n👥 *Grupo:* ' + grupo;
   } else {
     ubicacionStr = '📍 *Dirección:* ' + direccion;
   }
@@ -453,7 +500,7 @@ function enviarPedido() {
 
   // Registrar en Google Sheets
   const items = Object.entries(cart).map(([id,qty]) => {
-    const p = PROD_MAP[+id]; return p ? {id:p.id, nombre:p.nombre, qty, precio:p.precio} : null;
+    const p = PROD_MAP[id]; return p ? {id:p.id, nombre:p.nombre, qty, precio:p.precio} : null;
   }).filter(Boolean);
   fetch(APPS_SCRIPT_URL, {
     method:'POST', mode:'no-cors', headers:{'Content-Type':'text/plain'},
@@ -510,14 +557,15 @@ function expandForm() {
 function renderCatNav() {
   const nav = $id('cat-nav');
   if (!nav) return;
+  const cats = getActiveCategories();
   nav.innerHTML = '<div class="cat-nav-inner" id="cat-nav-inner">' +
-    CATEGORIAS.map((cat,i) => {
+    cats.map((cat,i) => {
       const slug = slugify(cat.nombre);
       return '<button class="cat-nav-btn' + (i===0?' active':'') + '" data-slug="' + slug + '" onclick="scrollToCat(\'' + slug + '\')">' +
         '<span>' + cat.icono + '</span> ' + cat.nombre + '</button>';
     }).join('') + '</div>';
   document.querySelectorAll('.cat-section').forEach((section,i) => {
-    const cat = CATEGORIAS[i]; if (!cat) return;
+    const cat = getActiveCategories()[i]; if (!cat) return;
     section.id = 'cat-' + slugify(cat.nombre);
   });
   const observer = new IntersectionObserver(entries => {
@@ -571,7 +619,7 @@ async function fetchStock() {
     PRODUCTOS.forEach(p => { const abbr=PROD_ABBR[p.id]; if(abbr&&abbrStock[abbr]!==undefined) stockMap[p.id]=abbrStock[abbr]; });
     let ajustado = false;
     Object.entries(cart).forEach(([id,qty]) => {
-      const avail=stockMap[+id];
+      const avail=stockMap[id];
       if(avail!==undefined&&qty>avail){if(avail===0)delete cart[id];else cart[id]=avail;ajustado=true;renderCardFooter(id);}
     });
     if(ajustado){updateUI();toast('⚠️ Tu carrito fue ajustado por cambios de stock');}
