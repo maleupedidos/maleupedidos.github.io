@@ -452,48 +452,35 @@ function enviarPedido() {
   } catch(e) {}
 
   // Construir mensaje WhatsApp
-  const porCat = {};
-  Object.entries(cart).forEach(([id,qty]) => {
-    const p = PROD_MAP[id]; if (!p) return;
-    if (!porCat[p.cat]) porCat[p.cat] = [];
-    porCat[p.cat].push({ nombre:p.nombre, qty, subtotal:p.precio*qty });
-  });
-  const lineas = Object.entries(porCat).map(([cat,items]) => {
-    return '*' + cat + '*\n' + items.map(i => '  · ' + i.nombre + ' ×' + i.qty + ' — ' + ars(i.subtotal)).join('\n');
-  }).join('\n\n');
-
   const subtotal = cartTotal(), shipping = getShipping(), total = subtotal + shipping;
-  const cantItems = Object.values(cart).reduce((a,b)=>a+b,0);
-  const sep = '━━━━━━━━━━━━━━━';
-  const plural = cantItems !== 1 ? 's' : '';
 
-  let ubicacionStr;
+  const prodList = Object.entries(cart).map(([id,qty]) => {
+    const p = PROD_MAP[id]; if (!p) return null;
+    return qty + 'x ' + p.nombre;
+  }).filter(Boolean).join(' | ');
+
+  let direccionStr;
   if (currentZone === 'estancias') {
     const barrioInfo = barrioPrivado === 'Estancias del Pilar' ? barrioPrivado + ' — ' + barrio : barrioPrivado;
-    ubicacionStr = '🏘 *Barrio:* ' + barrioInfo + '\n📍 *Lote:* ' + lote;
+    direccionStr = barrioInfo + ', Lote ' + lote;
   } else if (currentZone === 'clubes') {
-    ubicacionStr = '🏟 *Club:* ' + club + '\n⚽ *Deporte:* ' + deporte + '\n👥 *Grupo:* ' + grupo;
+    direccionStr = club + ' — ' + deporte + ' — ' + grupo;
   } else {
-    ubicacionStr = '📍 *Dirección:* ' + direccion + '\n🏠 *Lote/Piso:* ' + lote;
+    direccionStr = direccion + ', ' + lote;
   }
 
-  const msgLines = [
-    '🧾 *NUEVO PEDIDO — MALEU*',
-    '📦 *' + cantItems + ' producto' + plural + '*',
-    '', lineas, '',
-    sep,
-    '*Subtotal: ' + ars(subtotal) + '*',
-    '*Envío: ' + (shipping === 0 ? 'Gratis' : ars(shipping)) + '*',
-    '*TOTAL: ' + ars(total) + '*',
-    sep, '',
-    '👤 *Nombre:* ' + nombre,
-    ubicacionStr,
-    '📞 *Tel:* ' + telefono,
-    '📅 *Entrega:* ' + dia + ' · ' + horario,
-    '💳 *Pago:* ' + pagoEl.value,
-    '', sep, '🧡 _¡Gracias por elegirnos!_',
-  ];
-  const urlText = encodeURIComponent(msgLines.filter(l => l !== null).join('\n'));
+  const z2 = ZONAS[currentZone];
+  const horarioStr = z2.horarios[dia] || '';
+  const entregaStr = dia + (horarioStr ? ' · ' + horarioStr : '');
+
+  const msg = '\u{1F6D2} PEDIDO MALEU\n'
+    + 'Nombre: ' + nombre + '\n'
+    + 'Productos: ' + prodList + '\n'
+    + 'Total: ' + ars(total) + '\n'
+    + 'Dirección: ' + direccionStr + '\n'
+    + 'Entrega: ' + entregaStr;
+
+  const urlText = encodeURIComponent(msg);
 
   // Registrar en Google Sheets
   const items = Object.entries(cart).map(([id,qty]) => {
