@@ -92,7 +92,7 @@ const ZONAS = {
 };
 
 const WA_NUMBER = "5491155038905";
-const APPS_SCRIPT_URL = "";
+const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxmrG5YVSshcYezk8lXFx_uxb7NFGcb9EfTXc7dsIN4rZyj73CET4mk_aKPFPDY2wNi/exec";
 const STOCK_CSV_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vTOq210U9LeSxvXbx_sdglHS0K9DZP8H_5pGXC-WwlMo8AE4UacIN0bpagQqAr79XeJNQ1Nm1eql271/pub?gid=792614962&single=true&output=csv';
 
 /* ── ESTADO ── */
@@ -285,14 +285,9 @@ function updateUI() {
         '</div>' +
       '</div>';
     }).join('');
-    // Descuento cupón
-    const disc = getDiscount(subtotal);
-    const discRow = $id('cart-discount-row');
-    if (disc > 0) { discRow.style.display = ''; $id('cart-discount').textContent = '-' + ars(disc); }
-    else { discRow.style.display = 'none'; }
     $id('cart-subtotal').textContent = ars(subtotal);
     $id('cart-shipping').textContent = shipping === 0 ? 'Gratis' : ars(shipping);
-    $id('cart-total').textContent = ars(subtotal - disc + shipping);
+    $id('cart-total').textContent = ars(total);
   }
   updateFormSummary();
 }
@@ -301,15 +296,13 @@ function updateFormSummary() {
   const el = $id('form-summary'), count = cartCount();
   if (count === 0) { el.innerHTML = '<p class="summary-empty">Agregá productos para ver el resumen.</p>'; return; }
   const subtotal = cartTotal(), shipping = getShipping(), total = subtotal + shipping;
-  const disc = getDiscount(subtotal);
   el.innerHTML = Object.entries(cart).map(([id,qty]) => {
     const p = PROD_MAP[id];
     if (!p) return '';
     return '<div class="summary-line"><span>' + p.nombre + ' <strong>×' + qty + '</strong></span><span>' + ars(p.precio*qty) + '</span></div>';
   }).join('') +
-    (disc > 0 ? '<div class="summary-line" style="color:#2E7D32"><span>Descuento</span><span>-' + ars(disc) + '</span></div>' : '') +
     '<div class="summary-line shipping-line"><span>Envío</span><span>' + (shipping === 0 ? 'Gratis' : ars(shipping)) + '</span></div>' +
-    '<div class="summary-line total-line"><span>Total</span><span>' + ars(subtotal - disc + shipping) + '</span></div>';
+    '<div class="summary-line total-line"><span>Total</span><span>' + ars(total) + '</span></div>';
 }
 
 /* ── TOGGLE CART ── */
@@ -348,6 +341,7 @@ function validateOnBlur(campo) {
   if (campo==='barrio') { $id('f-barrio').value ? clearError('f-barrio','err-barrio') : showError('f-barrio','err-barrio'); }
   if (campo==='lote') { $id('f-lote').value.trim() ? clearError('f-lote','err-lote') : showError('f-lote','err-lote'); }
   if (campo==='direccion') { $id('f-direccion').value.trim() ? clearError('f-direccion','err-direccion') : showError('f-direccion','err-direccion'); }
+  if (campo==='lotePilar') { $id('f-lote-pilar').value.trim() ? clearError('f-lote-pilar','err-lote-pilar') : showError('f-lote-pilar','err-lote-pilar'); }
   if (campo==='club') { $id('f-club').value ? clearError('f-club','err-club') : showError('f-club','err-club'); }
   if (campo==='deporte') { $id('f-deporte').value ? clearError('f-deporte','err-deporte') : showError('f-deporte','err-deporte'); }
   if (campo==='grupo') { $id('f-grupo').value ? clearError('f-grupo','err-grupo') : showError('f-grupo','err-grupo'); }
@@ -401,6 +395,7 @@ function enviarPedido() {
     clearError('f-grupo','err-grupo');
   } else {
     clearError('f-direccion','err-direccion');
+    clearError('f-lote-pilar','err-lote-pilar');
   }
 
   // Validar stock
@@ -437,7 +432,9 @@ function enviarPedido() {
     if (!grupo) { showError('f-grupo','err-grupo'); if(!primerInvalido) primerInvalido=$id('f-grupo'); }
   } else {
     direccion = $id('f-direccion').value.trim();
+    lote = $id('f-lote-pilar').value.trim();
     if (!direccion) { showError('f-direccion','err-direccion'); if(!primerInvalido) primerInvalido=$id('f-direccion'); }
+    if (!lote) { showError('f-lote-pilar','err-lote-pilar'); if(!primerInvalido) primerInvalido=$id('f-lote-pilar'); }
   }
 
   if ($id('f-telefono').value.replace(/\D/g,'').length < 8) { showError('f-telefono','err-telefono'); if(!primerInvalido) primerInvalido=$id('f-telefono'); }
@@ -465,7 +462,7 @@ function enviarPedido() {
     return '*' + cat + '*\n' + items.map(i => '  · ' + i.nombre + ' ×' + i.qty + ' — ' + ars(i.subtotal)).join('\n');
   }).join('\n\n');
 
-  const subtotal = cartTotal(), disc = getDiscount(subtotal), shipping = getShipping(), total = subtotal - disc + shipping;
+  const subtotal = cartTotal(), shipping = getShipping(), total = subtotal + shipping;
   const cantItems = Object.values(cart).reduce((a,b)=>a+b,0);
   const sep = '━━━━━━━━━━━━━━━';
   const plural = cantItems !== 1 ? 's' : '';
@@ -477,7 +474,7 @@ function enviarPedido() {
   } else if (currentZone === 'clubes') {
     ubicacionStr = '🏟 *Club:* ' + club + '\n⚽ *Deporte:* ' + deporte + '\n👥 *Grupo:* ' + grupo;
   } else {
-    ubicacionStr = '📍 *Dirección:* ' + direccion;
+    ubicacionStr = '📍 *Dirección:* ' + direccion + '\n🏠 *Lote/Piso:* ' + lote;
   }
 
   const msgLines = [
@@ -486,7 +483,6 @@ function enviarPedido() {
     '', lineas, '',
     sep,
     '*Subtotal: ' + ars(subtotal) + '*',
-    (disc > 0 ? '*Descuento (' + activeCoupon + '): -' + ars(disc) + '*' : null),
     '*Envío: ' + (shipping === 0 ? 'Gratis' : ars(shipping)) + '*',
     '*TOTAL: ' + ars(total) + '*',
     sep, '',
@@ -505,17 +501,20 @@ function enviarPedido() {
   }).filter(Boolean);
   fetch(APPS_SCRIPT_URL, {
     method:'POST', mode:'no-cors', headers:{'Content-Type':'text/plain'},
-    body: JSON.stringify({
+    body: JSON.stringify(currentZone === 'clubes' ? {
+      canal: 'Clubes',
+      fecha: new Date().toLocaleString('es-AR'),
+      nombre, telefono, club, deporte, grupo,
+      dia, horario, pago: pagoEl.value,
+      items, total
+    } : {
       canal: z.canal,
       fecha: new Date().toLocaleString('es-AR'),
       nombre, barrioPrivado,
       subBarrio: barrioPrivado === 'Estancias del Pilar' ? barrio : '',
       barrio: currentZone === 'estancias' ? barrio : direccion,
-      lote: currentZone === 'estancias' ? lote : direccion,
-      telefono, dia, horario,
+      lote, telefono, dia, horario,
       pago: pagoEl.value,
-      cupon: activeCoupon || '',
-      descuento: disc,
       items, total
     })
   }).catch(() => {});
@@ -750,96 +749,15 @@ function updateShippingBar() {
 }
 // getShipping ya maneja FREE_SHIPPING_MIN internamente
 
-/* ── BANNER PROMO ── */
-function closePromo() {
-  $id('promo-banner').style.display = 'none';
-  sessionStorage.setItem('maleu_promo_closed', '1');
+/* ── MERCADO PAGO ALIAS ── */
+function onPagoChange() {
+  const sel = document.querySelector('input[name="pago"]:checked');
+  const alias = $id('mp-alias');
+  if (sel && sel.value === 'Transferencia') { alias.classList.remove('hidden'); }
+  else { alias.classList.add('hidden'); }
 }
-if (sessionStorage.getItem('maleu_promo_closed')) {
-  $id('promo-banner').style.display = 'none';
-}
-
-/* ── CUPONES ── */
-const CUPONES = {
-  'BIENVENIDO': { tipo: 'porcentaje', valor: 10, desc: '10% OFF', minimo: 0 },
-  'MALEU10':    { tipo: 'porcentaje', valor: 10, desc: '10% OFF', minimo: 0 },
-  'AMIGO15':    { tipo: 'porcentaje', valor: 15, desc: '15% OFF', minimo: 20000 },
-};
-let activeCoupon = null;
-
-function getDiscount(subtotal) {
-  if (!activeCoupon) return 0;
-  const c = CUPONES[activeCoupon];
-  if (!c) return 0;
-  if (subtotal < c.minimo) return 0;
-  if (c.tipo === 'porcentaje') return Math.round(subtotal * c.valor / 100);
-  return c.valor;
-}
-
-function applyCoupon() {
-  const code = $id('f-coupon').value.trim().toUpperCase();
-  const msg = $id('coupon-msg');
-  if (!code) { msg.textContent = '⚠ Ingresá un código'; msg.className = 'coupon-msg error'; return; }
-  const c = CUPONES[code];
-  if (!c) { msg.textContent = '✗ Cupón inválido'; msg.className = 'coupon-msg error'; return; }
-  if (cartTotal() < c.minimo) { msg.textContent = '⚠ Mínimo ' + ars(c.minimo) + ' para usar este cupón'; msg.className = 'coupon-msg error'; return; }
-  activeCoupon = code;
-  $id('coupon-input-area').classList.add('hidden');
-  const applied = $id('coupon-applied');
-  applied.classList.remove('hidden');
-  $id('coupon-applied-text').textContent = '✓ ' + code + ' — ' + c.desc + ' aplicado';
-  msg.textContent = '';
-  updateUI();
-  toast('✓ Cupón ' + code + ' aplicado');
-}
-
-function removeCoupon() {
-  activeCoupon = null;
-  $id('coupon-input-area').classList.remove('hidden');
-  $id('coupon-applied').classList.add('hidden');
-  $id('f-coupon').value = '';
-  $id('coupon-msg').textContent = '';
-  updateUI();
-}
-
-// Restore coupon from localStorage
-try {
-  const savedCoupon = localStorage.getItem('maleu_coupon');
-  if (savedCoupon && CUPONES[savedCoupon]) {
-    activeCoupon = savedCoupon;
-    $id('coupon-input-area').classList.add('hidden');
-    $id('coupon-applied').classList.remove('hidden');
-    $id('coupon-applied-text').textContent = '✓ ' + savedCoupon + ' — ' + CUPONES[savedCoupon].desc + ' aplicado';
-  }
-} catch(ex) {}
-
-/* ── NEWSLETTER POPUP ── */
-function showNewsletter() {
-  if (localStorage.getItem('maleu_nl_done')) return;
-  $id('nl-overlay').classList.remove('hidden');
-}
-function closeNewsletter() {
-  $id('nl-overlay').classList.add('hidden');
-  localStorage.setItem('maleu_nl_done', '1');
-}
-function submitNewsletter() {
-  const email = $id('nl-email').value.trim();
-  if (!email || !email.includes('@')) { toast('⚠ Ingresá un email válido'); return; }
-  fetch(APPS_SCRIPT_URL, {
-    method:'POST', mode:'no-cors', headers:{'Content-Type':'text/plain'},
-    body: JSON.stringify({ canal:'Newsletter', fecha: new Date().toLocaleString('es-AR'), nombre: email, email: email })
-  }).catch(function(){});
-  closeNewsletter();
-  activeCoupon = 'BIENVENIDO';
-  $id('coupon-input-area').classList.add('hidden');
-  $id('coupon-applied').classList.remove('hidden');
-  $id('coupon-applied-text').textContent = '✓ BIENVENIDO — 10% OFF aplicado';
-  localStorage.setItem('maleu_coupon', 'BIENVENIDO');
-  updateUI();
-  toast('🎉 ¡Cupón BIENVENIDO activado! 10% OFF');
-}
-if (!localStorage.getItem('maleu_nl_done')) {
-  setTimeout(showNewsletter, 8000);
+function copyAlias() {
+  navigator.clipboard.writeText('maleump').then(function() { toast('✓ Alias copiado: maleump'); });
 }
 
 updateShippingBar();
