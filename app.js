@@ -174,7 +174,8 @@ function renderCardFooter(id) {
   const p = PROD_MAP[+id];
   if (!p) return;
   const qty = cart[id] || 0;
-  const avail = stockMap[+id];
+  const showStock = currentZone && ZONAS[currentZone] && ZONAS[currentZone].showStock;
+  const avail = showStock ? stockMap[+id] : undefined;
   const sinStock = avail !== undefined && avail === 0;
   const atLimit = avail !== undefined && qty >= avail;
   if (qty === 0) {
@@ -195,7 +196,8 @@ function renderCardFooter(id) {
 function modifyCart(id, delta) {
   const current = cart[id] || 0;
   if (delta > 0) {
-    const avail = stockMap[+id];
+    const showStock = currentZone && ZONAS[currentZone] && ZONAS[currentZone].showStock;
+    const avail = showStock ? stockMap[+id] : undefined;
     if (avail !== undefined && current >= avail) { toast('⚠️ No hay más stock'); return; }
   }
   const newQty = current + delta;
