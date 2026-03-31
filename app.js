@@ -237,6 +237,7 @@ function modifyCart(id, delta) {
   updateUI();
   renderCardFooter(id);
   updateFormVisibility();
+  updateShippingBar();
 }
 function addToCart(id) {
   modifyCart(id, 1);
@@ -729,7 +730,7 @@ _formObs.observe(document.querySelector('.form-section'));
 const FREE_SHIPPING_MIN = 25000; // envío gratis desde $25.000 (solo aplica para zona pilar)
 function updateShippingBar() {
   const bar = $id('shipping-bar');
-  if (!currentZone || currentZone === 'estancias') { bar.classList.add('hidden'); return; }
+  if (!currentZone || ZONAS[currentZone].envio === 0) { bar.classList.add('hidden'); return; }
   const subtotal = cartTotal();
   if (cartCount() === 0) { bar.classList.add('hidden'); return; }
   bar.classList.remove('hidden');
@@ -841,10 +842,4 @@ if (!localStorage.getItem('maleu_nl_done')) {
   setTimeout(showNewsletter, 8000);
 }
 
-/* ── HOOK: actualizar barra envío en cada cambio ── */
-const _origModifyCart = modifyCart;
-window.modifyCart = function(id, delta) {
-  _origModifyCart(id, delta);
-  updateShippingBar();
-};
 updateShippingBar();
