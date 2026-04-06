@@ -63,7 +63,7 @@ const ZONAS = {
     canal: "Home",
     horarios: { "Lunes":"19 a 21 hs", "Miércoles":"19 a 21 hs", "Viernes":"19 a 21 hs", "Sábado":"19 a 21 hs", "Domingo":"11 a 13 hs" },
     deliveryText: "📅 Entregas: Lun · Mié · Vie · Sáb 19–21 hs · Dom 11–13 hs",
-    showStock: true
+    showStock: false
   },
   pilar: {
     nombre: "Resto de Pilar",
