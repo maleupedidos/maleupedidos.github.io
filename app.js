@@ -68,7 +68,7 @@ const ZONAS = {
   pilar: {
     nombre: "Resto de Pilar",
     envio: 3000,
-    canal: "Delivery",
+    canal: "Pilar",
     horarios: { "Miércoles":"A coordinar", "Viernes":"A coordinar" },
     deliveryText: "📅 Entregas: Miércoles y Viernes · Horario a coordinar",
     showStock: false
@@ -76,7 +76,7 @@ const ZONAS = {
   capital: {
     nombre: "Capital Federal",
     envio: 3000,
-    canal: "Delivery",
+    canal: "Capital Federal",
     horarios: { "Miércoles":"A coordinar" },
     deliveryText: "📅 Entregas: Miércoles · Horario a coordinar",
     showStock: false
@@ -454,10 +454,10 @@ function enviarPedido() {
   // Construir mensaje WhatsApp
   const subtotal = cartTotal(), shipping = getShipping(), total = subtotal + shipping;
 
-  const prodList = Object.entries(cart).map(([id,qty]) => {
+  const prodLines = Object.entries(cart).map(([id,qty]) => {
     const p = PROD_MAP[id]; if (!p) return null;
-    return qty + 'x ' + p.nombre;
-  }).filter(Boolean).join(' | ');
+    return '  • ' + p.nombre + (qty > 1 ? ' ×' + qty : '') + '  —  ' + ars(p.precio * qty);
+  }).filter(Boolean).join('\n');
 
   let direccionStr;
   if (currentZone === 'estancias') {
@@ -471,14 +471,17 @@ function enviarPedido() {
 
   const z2 = ZONAS[currentZone];
   const horarioStr = z2.horarios[dia] || '';
-  const entregaStr = dia + (horarioStr ? ' · ' + horarioStr : '');
+  const entregaStr = dia + (horarioStr && horarioStr !== 'A coordinar' ? ' de ' + horarioStr : '');
+  const pagoStr = pagoEl.value === 'Efectivo' ? 'Efectivo' : 'Mercado Pago';
 
-  const msg = '\u{1F6D2} PEDIDO MALEU\n'
-    + 'Nombre: ' + nombre + '\n'
-    + 'Productos: ' + prodList + '\n'
-    + 'Total: ' + ars(total) + '\n'
-    + 'Dirección: ' + direccionStr + '\n'
-    + 'Entrega: ' + entregaStr;
+  const msg = '¡Hola! Quiero hacer un pedido 🙌\n\n'
+    + '*Pedido:*\n' + prodLines + '\n\n'
+    + (shipping > 0 ? '🚚 Envío: ' + ars(shipping) + '\n' : '')
+    + '*Total: ' + ars(total) + '*\n\n'
+    + '📍 ' + direccionStr + '\n'
+    + '📅 ' + entregaStr + '\n'
+    + '💳 ' + pagoStr + '\n\n'
+    + '_' + nombre + ' · ' + telefono + '_';
 
   const urlText = encodeURIComponent(msg);
 
