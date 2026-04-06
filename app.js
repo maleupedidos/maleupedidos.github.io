@@ -581,10 +581,12 @@ function setActiveNav(slug) {
   });
 }
 function updateCatNavTop() {
-  const header = document.querySelector('header'), nav = $id('cat-nav');
+  const header = document.querySelector('header'), nav = $id('cat-nav'), promo = $id('promo-bar');
   if (header && nav) {
     nav.style.top = header.offsetHeight + 'px';
-    const total = header.offsetHeight + nav.offsetHeight;
+    const promoTop = header.offsetHeight + nav.offsetHeight;
+    if (promo) promo.style.top = promoTop + 'px';
+    const total = promoTop + (promo ? promo.offsetHeight : 0);
     document.querySelectorAll('.cat-section').forEach(s => { s.style.scrollMarginTop = total + 'px'; });
   }
 }
