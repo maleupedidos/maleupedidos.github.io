@@ -146,7 +146,8 @@ function applyZone() {
   $id('hero-delivery').textContent = z.deliveryText;
   // Form fields
   $id('fields-estancias').style.display = currentZone === 'estancias' ? '' : 'none';
-  $id('fields-pilar').style.display = (currentZone !== 'estancias' && currentZone !== 'clubes') ? '' : 'none';
+  $id('fields-pilar').style.display = currentZone === 'pilar' ? '' : 'none';
+  $id('fields-capital').style.display = currentZone === 'capital' ? '' : 'none';
   $id('fields-clubes').style.display = currentZone === 'clubes' ? '' : 'none';
   // Días de entrega
   const diaSelect = $id('f-dia');
@@ -345,6 +346,10 @@ function validateOnBlur(campo) {
   if (campo==='club') { $id('f-club').value ? clearError('f-club','err-club') : showError('f-club','err-club'); }
   if (campo==='deporte') { $id('f-deporte').value ? clearError('f-deporte','err-deporte') : showError('f-deporte','err-deporte'); }
   if (campo==='grupo') { $id('f-grupo').value ? clearError('f-grupo','err-grupo') : showError('f-grupo','err-grupo'); }
+  if (campo==='barrioCaba') { $id('f-barrio-caba').value.trim() ? clearError('f-barrio-caba','err-barrio-caba') : showError('f-barrio-caba','err-barrio-caba'); }
+  if (campo==='calle') { $id('f-calle').value.trim() ? clearError('f-calle','err-calle') : showError('f-calle','err-calle'); }
+  if (campo==='numero') { $id('f-numero').value.trim() ? clearError('f-numero','err-numero') : showError('f-numero','err-numero'); }
+  if (campo==='piso') { $id('f-piso').value.trim() ? clearError('f-piso','err-piso') : showError('f-piso','err-piso'); }
   if (campo==='telefono') { $id('f-telefono').value.replace(/\D/g,'').length >= 8 ? clearError('f-telefono','err-telefono') : showError('f-telefono','err-telefono'); }
   if (campo==='dia') { $id('f-dia').value ? clearError('f-dia','err-dia') : showError('f-dia','err-dia'); }
 }
@@ -393,6 +398,11 @@ function enviarPedido() {
     clearError('f-club','err-club');
     clearError('f-deporte','err-deporte');
     clearError('f-grupo','err-grupo');
+  } else if (currentZone === 'capital') {
+    clearError('f-barrio-caba','err-barrio-caba');
+    clearError('f-calle','err-calle');
+    clearError('f-numero','err-numero');
+    clearError('f-piso','err-piso');
   } else {
     clearError('f-direccion','err-direccion');
     clearError('f-lote-pilar','err-lote-pilar');
@@ -416,6 +426,7 @@ function enviarPedido() {
   if (!nombre) { showError('f-nombre','err-nombre'); if(!primerInvalido) primerInvalido=$id('f-nombre'); }
 
   let barrioPrivado='', barrio='', lote='', direccion='', club='', deporte='', grupo='';
+  let barrioCaba='', calle='', numero='', piso='';
   if (currentZone === 'estancias') {
     barrioPrivado = $id('f-barrio-privado').value;
     barrio = barrioPrivado === 'Estancias del Pilar' ? $id('f-barrio').value : barrioPrivado;
@@ -430,6 +441,15 @@ function enviarPedido() {
     if (!club) { showError('f-club','err-club'); if(!primerInvalido) primerInvalido=$id('f-club'); }
     if (!deporte) { showError('f-deporte','err-deporte'); if(!primerInvalido) primerInvalido=$id('f-deporte'); }
     if (!grupo) { showError('f-grupo','err-grupo'); if(!primerInvalido) primerInvalido=$id('f-grupo'); }
+  } else if (currentZone === 'capital') {
+    barrioCaba = $id('f-barrio-caba').value.trim();
+    calle = $id('f-calle').value.trim();
+    numero = $id('f-numero').value.trim();
+    piso = $id('f-piso').value.trim();
+    if (!barrioCaba) { showError('f-barrio-caba','err-barrio-caba'); if(!primerInvalido) primerInvalido=$id('f-barrio-caba'); }
+    if (!calle) { showError('f-calle','err-calle'); if(!primerInvalido) primerInvalido=$id('f-calle'); }
+    if (!numero) { showError('f-numero','err-numero'); if(!primerInvalido) primerInvalido=$id('f-numero'); }
+    if (!piso) { showError('f-piso','err-piso'); if(!primerInvalido) primerInvalido=$id('f-piso'); }
   } else {
     direccion = $id('f-direccion').value.trim();
     lote = $id('f-lote-pilar').value.trim();
@@ -465,6 +485,8 @@ function enviarPedido() {
     direccionStr = barrioInfo + ', Lote ' + lote;
   } else if (currentZone === 'clubes') {
     direccionStr = club + ' — ' + deporte + ' — ' + grupo;
+  } else if (currentZone === 'capital') {
+    direccionStr = barrioCaba + ', ' + calle + ' ' + numero + (piso ? ', ' + piso : '');
   } else {
     direccionStr = direccion + ', ' + lote;
   }
@@ -489,24 +511,31 @@ function enviarPedido() {
   const items = Object.entries(cart).map(([id,qty]) => {
     const p = PROD_MAP[id]; return p ? {id:p.id, nombre:p.nombre, qty, precio:p.precio} : null;
   }).filter(Boolean);
+  const postData = currentZone === 'clubes' ? {
+    canal: 'Clubes',
+    fecha: new Date().toLocaleString('es-AR'),
+    nombre, telefono, club, deporte, grupo,
+    dia, horario, pago: pagoEl.value,
+    items, total
+  } : currentZone === 'capital' ? {
+    canal: 'Capital Federal',
+    fecha: new Date().toLocaleString('es-AR'),
+    nombre, barrioCaba, calle, numero, piso,
+    telefono, dia, horario, pago: pagoEl.value,
+    items, total
+  } : {
+    canal: z.canal,
+    fecha: new Date().toLocaleString('es-AR'),
+    nombre, barrioPrivado,
+    subBarrio: barrioPrivado === 'Estancias del Pilar' ? barrio : '',
+    barrio: currentZone === 'estancias' ? barrio : direccion,
+    lote, telefono, dia, horario,
+    pago: pagoEl.value,
+    items, total
+  };
   fetch(APPS_SCRIPT_URL, {
     method:'POST', mode:'no-cors', headers:{'Content-Type':'text/plain'},
-    body: JSON.stringify(currentZone === 'clubes' ? {
-      canal: 'Clubes',
-      fecha: new Date().toLocaleString('es-AR'),
-      nombre, telefono, club, deporte, grupo,
-      dia, horario, pago: pagoEl.value,
-      items, total
-    } : {
-      canal: z.canal,
-      fecha: new Date().toLocaleString('es-AR'),
-      nombre, barrioPrivado,
-      subBarrio: barrioPrivado === 'Estancias del Pilar' ? barrio : '',
-      barrio: currentZone === 'estancias' ? barrio : direccion,
-      lote, telefono, dia, horario,
-      pago: pagoEl.value,
-      items, total
-    })
+    body: JSON.stringify(postData)
   }).catch(() => {});
 
   // Abrir WhatsApp
