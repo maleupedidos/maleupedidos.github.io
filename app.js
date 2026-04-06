@@ -69,16 +69,16 @@ const ZONAS = {
     nombre: "Resto de Pilar",
     envio: 3000,
     canal: "Delivery",
-    horarios: { "Miércoles":"A coordinar" },
-    deliveryText: "📅 Entregas: Miércoles (pedí hasta el martes al mediodía)",
+    horarios: { "Miércoles":"A coordinar", "Viernes":"A coordinar" },
+    deliveryText: "📅 Entregas: Miércoles y Viernes · Horario a coordinar",
     showStock: false
   },
   capital: {
     nombre: "Capital Federal",
     envio: 3000,
     canal: "Delivery",
-    horarios: { "Miércoles":"19 a 21 hs" },
-    deliveryText: "📅 Entregas: Miércoles 19–21 hs",
+    horarios: { "Miércoles":"A coordinar" },
+    deliveryText: "📅 Entregas: Miércoles · Horario a coordinar",
     showStock: false
   },
   clubes: {
