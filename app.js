@@ -496,14 +496,14 @@ function enviarPedido() {
   const entregaStr = dia + (horarioStr && horarioStr !== 'A coordinar' ? ' de ' + horarioStr : '');
   const pagoStr = pagoEl.value === 'Efectivo' ? 'Efectivo' : 'Mercado Pago';
 
-  const msg = '¡Hola! Quiero hacer un pedido 🙌\n\n'
+  const msg = 'Hola! Quiero hacer un pedido\n\n'
     + '*Pedido:*\n' + prodLines + '\n\n'
-    + (shipping > 0 ? '🚚 Envío: ' + ars(shipping) + '\n' : '')
+    + (shipping > 0 ? 'Envio: ' + ars(shipping) + '\n' : '')
     + '*Total: ' + ars(total) + '*\n\n'
-    + '📍 ' + direccionStr + '\n'
-    + '📅 ' + entregaStr + '\n'
-    + '💳 ' + pagoStr + '\n\n'
-    + '_' + nombre + ' · ' + telefono + '_';
+    + 'Direccion: ' + direccionStr + '\n'
+    + 'Entrega: ' + entregaStr + '\n'
+    + 'Pago: ' + pagoStr + '\n\n'
+    + nombre + ' - ' + telefono;
 
   const urlText = encodeURIComponent(msg);
 
