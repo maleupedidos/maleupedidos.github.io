@@ -506,7 +506,7 @@ function enviarPedido() {
       + '*Responsable:* ' + nombre + '\n'
       + '*Club:* ' + club + '\n'
       + '*Deporte:* ' + deporte + '\n'
-      + '*Grupo:* ' + grupo + '\n'
+      + '*Equipo:* ' + grupo + '\n'
       + '*WhatsApp:* ' + telefono + '\n'
       + '*Entrega:* ' + entregaStr + '\n'
       + '*Pago:* ' + pagoStr;
