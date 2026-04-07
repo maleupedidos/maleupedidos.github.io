@@ -466,6 +466,7 @@ function enviarPedido() {
   try {
     const clientData = { nombre, telefono, dia, pago: pagoEl.value, zone: currentZone };
     if (currentZone === 'estancias') { clientData.barrioPrivado = barrioPrivado; clientData.barrio = barrio; clientData.lote = lote; }
+    else if (currentZone === 'clubes') { clientData.club = club; clientData.deporte = deporte; clientData.grupo = grupo; }
     else { clientData.direccion = direccion; }
     localStorage.setItem('maleu_cliente_pg', JSON.stringify(clientData));
     localStorage.setItem('maleu_ultimo_pedido_pg', JSON.stringify(Object.entries(cart).map(([id,qty]) => ({id: isNaN(id) ? id : +id, qty}))));
@@ -689,6 +690,11 @@ function loadClientData() {
     }
     if (saved.zone === 'pilar' && currentZone === 'pilar') {
       if (saved.direccion) $id('f-direccion').value = saved.direccion;
+    }
+    if (saved.zone === 'clubes' && currentZone === 'clubes') {
+      if (saved.club) $id('f-club').value = saved.club;
+      if (saved.deporte) $id('f-deporte').value = saved.deporte;
+      if (saved.grupo) $id('f-grupo').value = saved.grupo;
     }
     if (saved.dia) { $id('f-dia').value = saved.dia; onDiaChange(); }
     if (saved.pago) { const r=document.querySelector('input[name="pago"][value="'+saved.pago+'"]'); if(r) r.checked=true; }
