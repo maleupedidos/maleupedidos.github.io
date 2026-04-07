@@ -36,14 +36,14 @@ const CATEGORIAS = [
 
 /* ── PRODUCTOS CLUBES (precios especiales, solo pizzas) ── */
 const PRODUCTOS_CLUBES = [
-  { id:'c1',  cat:"Pizzas Premium",  nombre:"Pizza Muzzarella",           desc:"Puro queso derretido sobre salsa de tomate. La clásica que nunca sobra.",   precio:7000,  img:"pizza-muzarella-cocida.jpg", emoji:"🍕", chips:["1 pizza grande","Al horno en 12 min"] },
-  { id:'c2',  cat:"Pizzas Premium",  nombre:"Pizza Jamón y Queso",        desc:"Mucho jamón, mucho queso. Simple, efectiva y sin dramas.",                  precio:7000,  img:"pizza-jamon-queso-cocida.jpg", emoji:"🍕", chips:["1 pizza grande","Al horno en 12 min"] },
-  { id:'c3',  cat:"Pizzas Premium",  nombre:"Pizza Cebolla Caramelizada", desc:"Cebolla bien dulce con queso cremoso. Para los que saben.",                 precio:7000,  img:"pizza-cebolla-cocida.jpg", emoji:"🍕", chips:["1 pizza grande","Al horno en 12 min"] },
-  { id:'c4',  cat:"Pizzas Premium",  nombre:"Pizza Margarita",            desc:"Tomate fresco, mozzarella y albahaca. La que nunca falla.",                  precio:7000,  img:"pizza-margarita-cocida.jpg", emoji:"🍕", chips:["1 pizza grande","Al horno en 12 min"] },
-  { id:'c5',  cat:"Pizzas Premium",  nombre:"Pizza Jamón y Morrón",       desc:"Con jamón, morrón rojo y orégano. Completa y sabrosa.",                     precio:7800,  img:"pizza-jamon-morron-cocida.jpg", emoji:"🍕", chips:["1 pizza grande","Al horno en 12 min"] },
-  { id:'c6',  cat:"Pizzas Clásicas", nombre:"Pack Muzarella x2",          desc:"Dos pizzas de muzzarella. Cena resuelta para todo el equipo.",              precio:11000, img:"pack-muzarella-cocida.jpg", emoji:"🍕", top:true, chips:["2 pizzas grandes","Al horno en 12 min"] },
-  { id:'c7',  cat:"Pizzas Clásicas", nombre:"Pack Jamón y Queso x2",      desc:"Dos pizzas de jamón y queso. El clásico del tercer tiempo.",               precio:11000, img:"pack-jamon-queso-cocida.jpg", emoji:"🍕", chips:["2 pizzas grandes","Al horno en 12 min"] },
-  { id:'c8',  cat:"Pizzas Clásicas", nombre:"Pack Cebolla y Queso x2",    desc:"Dos pizzas con cebolla caramelizada. Siempre piden más.",                  precio:11000, img:"pack-cebolla-queso-cocida.jpg", emoji:"🍕", chips:["2 pizzas grandes","Al horno en 12 min"] },
+  { id:'pmu', cat:"Pizzas Premium",  nombre:"Pizza Muzzarella",           desc:"Puro queso derretido sobre salsa de tomate. La clásica que nunca sobra.",   precio:7000,  img:"pizza-muzarella-cocida.jpg", emoji:"🍕", chips:["1 pizza grande","Al horno en 12 min"] },
+  { id:'pjq', cat:"Pizzas Premium",  nombre:"Pizza Jamón y Queso",        desc:"Mucho jamón, mucho queso. Simple, efectiva y sin dramas.",                  precio:7000,  img:"pizza-jamon-queso-cocida.jpg", emoji:"🍕", chips:["1 pizza grande","Al horno en 12 min"] },
+  { id:'pcc', cat:"Pizzas Premium",  nombre:"Pizza Cebolla Caramelizada", desc:"Cebolla bien dulce con queso cremoso. Para los que saben.",                 precio:7000,  img:"pizza-cebolla-cocida.jpg", emoji:"🍕", chips:["1 pizza grande","Al horno en 12 min"] },
+  { id:'pma', cat:"Pizzas Premium",  nombre:"Pizza Margarita",            desc:"Tomate fresco, mozzarella y albahaca. La que nunca falla.",                  precio:7000,  img:"pizza-margarita-cocida.jpg", emoji:"🍕", chips:["1 pizza grande","Al horno en 12 min"] },
+  { id:'pjm', cat:"Pizzas Premium",  nombre:"Pizza Jamón y Morrón",       desc:"Con jamón, morrón rojo y orégano. Completa y sabrosa.",                     precio:7800,  img:"pizza-jamon-morron-cocida.jpg", emoji:"🍕", chips:["1 pizza grande","Al horno en 12 min"] },
+  { id:'pp1', cat:"Pizzas Clásicas", nombre:"Pack Muzarella x2",          desc:"Dos pizzas de muzzarella. Cena resuelta para todo el equipo.",              precio:11000, img:"pack-muzarella-cocida.jpg", emoji:"🍕", top:true, chips:["2 pizzas grandes","Al horno en 12 min"] },
+  { id:'pp2', cat:"Pizzas Clásicas", nombre:"Pack Jamón y Queso x2",      desc:"Dos pizzas de jamón y queso. El clásico del tercer tiempo.",               precio:11000, img:"pack-jamon-queso-cocida.jpg", emoji:"🍕", chips:["2 pizzas grandes","Al horno en 12 min"] },
+  { id:'pp3', cat:"Pizzas Clásicas", nombre:"Pack Cebolla y Queso x2",    desc:"Dos pizzas con cebolla caramelizada. Siempre piden más.",                  precio:11000, img:"pack-cebolla-queso-cocida.jpg", emoji:"🍕", chips:["2 pizzas grandes","Al horno en 12 min"] },
 ];
 const CATEGORIAS_CLUBES = [
   { nombre:"Pizzas Premium",  icono:"🍕", nota:"Individuales · Pre-cocidas · Al horno directo desde el freezer" },
@@ -189,7 +189,7 @@ function renderCatalog() {
           '<span class="stock-indicator" id="stock-' + p.id + '"></span>' +
           '<div class="product-footer">' +
             '<span class="product-price">' + ars(p.precio) + '</span>' +
-            '<button class="add-btn" onclick="addToCart(' + p.id + ')">+ Agregar</button>' +
+            '<button class="add-btn" onclick="addToCart(\'' + p.id + '\')">+ Agregar</button>' +
           '</div>' +
         '</div>' +
       '</article>').join('') +
@@ -212,14 +212,14 @@ function renderCardFooter(id) {
   const atLimit = avail !== undefined && qty >= avail;
   if (qty === 0) {
     footer.innerHTML = '<span class="product-price">' + ars(p.precio) + '</span>' +
-      '<button class="add-btn" onclick="addToCart(' + p.id + ')"' + (sinStock ? ' disabled' : '') + '>' +
+      '<button class="add-btn" onclick="addToCart(\'' + p.id + '\')"' + (sinStock ? ' disabled' : '') + '>' +
       (sinStock ? 'Sin stock' : '+ Agregar') + '</button>';
   } else {
     footer.innerHTML = '<span class="product-price">' + ars(p.precio) + '</span>' +
       '<div class="card-qty-controls">' +
-        '<button class="card-qty-btn remove" onclick="cardChangeQty(' + p.id + ',-1)">−</button>' +
+        '<button class="card-qty-btn remove" onclick="cardChangeQty(\'' + p.id + '\',-1)">−</button>' +
         '<span class="card-qty-val">' + qty + '</span>' +
-        '<button class="card-qty-btn" onclick="cardChangeQty(' + p.id + ',+1)"' + (atLimit ? ' disabled' : '') + '>+</button>' +
+        '<button class="card-qty-btn" onclick="cardChangeQty(\'' + p.id + '\',+1)"' + (atLimit ? ' disabled' : '') + '>+</button>' +
       '</div>';
   }
 }
@@ -468,7 +468,7 @@ function enviarPedido() {
     if (currentZone === 'estancias') { clientData.barrioPrivado = barrioPrivado; clientData.barrio = barrio; clientData.lote = lote; }
     else { clientData.direccion = direccion; }
     localStorage.setItem('maleu_cliente_pg', JSON.stringify(clientData));
-    localStorage.setItem('maleu_ultimo_pedido_pg', JSON.stringify(Object.entries(cart).map(([id,qty]) => ({id:+id, qty}))));
+    localStorage.setItem('maleu_ultimo_pedido_pg', JSON.stringify(Object.entries(cart).map(([id,qty]) => ({id: isNaN(id) ? id : +id, qty}))));
   } catch(e) {}
 
   // Construir mensaje WhatsApp
@@ -547,7 +547,7 @@ function enviarPedido() {
 
   setTimeout(() => {
     cart = {}; updateUI();
-    PRODUCTOS.forEach(p => renderCardFooter(p.id));
+    getActiveProducts().forEach(p => renderCardFooter(p.id));
     $id('f-dia').value = ''; onDiaChange();
     document.querySelectorAll('input[name="pago"]').forEach(r => r.checked = false);
     if (waBtn) { waBtn.disabled = false; waBtn.innerHTML = waBtnOrig; }
