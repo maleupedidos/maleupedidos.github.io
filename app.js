@@ -85,8 +85,8 @@ const ZONAS = {
     nombre: "Clubes Deportivos",
     envio: 0,
     canal: "Clubes",
-    horarios: { "Lunes":"A coordinar", "Martes":"A coordinar", "Miércoles":"A coordinar", "Jueves":"A coordinar", "Viernes":"A coordinar", "Sábado":"A coordinar", "Domingo":"A coordinar" },
-    deliveryText: "📅 Entrega en la puerta del club — día a coordinar",
+    horarios: { "Viernes":"Horario a coordinar" },
+    deliveryText: "📅 Entrega los viernes en la puerta del club",
     showStock: false
   }
 };
@@ -496,14 +496,30 @@ function enviarPedido() {
   const entregaStr = dia + (horarioStr && horarioStr !== 'A coordinar' ? ' de ' + horarioStr : '');
   const pagoStr = pagoEl.value === 'Efectivo' ? 'Efectivo' : 'Mercado Pago';
 
-  const msg = 'Hola! Quiero hacer un pedido\n\n'
-    + '*Pedido:*\n' + prodLines + '\n\n'
-    + (shipping > 0 ? 'Envio: ' + ars(shipping) + '\n' : '')
-    + '*Total: ' + ars(total) + '*\n\n'
-    + 'Direccion: ' + direccionStr + '\n'
-    + 'Entrega: ' + entregaStr + '\n'
-    + 'Pago: ' + pagoStr + '\n\n'
-    + nombre + ' - ' + telefono;
+  let msg;
+  if (currentZone === 'clubes') {
+    msg = '*NUEVO PEDIDO — MALEU CLUBES*\n\n'
+      + prodLines + '\n\n'
+      + '———————————————\n'
+      + '*Total: ' + ars(total) + '*\n'
+      + '———————————————\n\n'
+      + '*Responsable:* ' + nombre + '\n'
+      + '*Club:* ' + club + '\n'
+      + '*Deporte:* ' + deporte + '\n'
+      + '*Grupo:* ' + grupo + '\n'
+      + '*WhatsApp:* ' + telefono + '\n'
+      + '*Entrega:* ' + entregaStr + '\n'
+      + '*Pago:* ' + pagoStr;
+  } else {
+    msg = 'Hola! Quiero hacer un pedido\n\n'
+      + '*Pedido:*\n' + prodLines + '\n\n'
+      + (shipping > 0 ? 'Envio: ' + ars(shipping) + '\n' : '')
+      + '*Total: ' + ars(total) + '*\n\n'
+      + 'Direccion: ' + direccionStr + '\n'
+      + 'Entrega: ' + entregaStr + '\n'
+      + 'Pago: ' + pagoStr + '\n\n'
+      + nombre + ' - ' + telefono;
+  }
 
   const urlText = encodeURIComponent(msg);
 
