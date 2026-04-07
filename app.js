@@ -467,7 +467,8 @@ function enviarPedido() {
     const clientData = { nombre, telefono, dia, pago: pagoEl.value, zone: currentZone };
     if (currentZone === 'estancias') { clientData.barrioPrivado = barrioPrivado; clientData.barrio = barrio; clientData.lote = lote; }
     else if (currentZone === 'clubes') { clientData.club = club; clientData.deporte = deporte; clientData.grupo = grupo; }
-    else { clientData.direccion = direccion; }
+    else if (currentZone === 'pilar') { clientData.direccion = direccion; clientData.lote = lote; }
+    else if (currentZone === 'capital') { clientData.barrioCaba = barrioCaba; clientData.calle = calle; clientData.numero = numero; clientData.piso = piso; }
     localStorage.setItem('maleu_cliente_pg', JSON.stringify(clientData));
     localStorage.setItem('maleu_ultimo_pedido_pg', JSON.stringify(Object.entries(cart).map(([id,qty]) => ({id: isNaN(id) ? id : +id, qty}))));
   } catch(e) {}
@@ -501,6 +502,7 @@ function enviarPedido() {
   if (currentZone === 'clubes') {
     msg = '*NUEVO PEDIDO — MALEU CLUBES*\n\n'
       + prodLines + '\n\n'
+      + 'Envio: ' + (shipping > 0 ? ars(shipping) : 'Gratis') + '\n'
       + '———————————————\n'
       + '*Total: ' + ars(total) + '*\n'
       + '———————————————\n\n'
@@ -514,7 +516,7 @@ function enviarPedido() {
   } else {
     msg = 'Hola! Quiero hacer un pedido\n\n'
       + '*Pedido:*\n' + prodLines + '\n\n'
-      + (shipping > 0 ? 'Envio: ' + ars(shipping) + '\n' : '')
+      + 'Envio: ' + (shipping > 0 ? ars(shipping) : 'Gratis') + '\n'
       + '*Total: ' + ars(total) + '*\n\n'
       + 'Direccion: ' + direccionStr + '\n'
       + 'Entrega: ' + entregaStr + '\n'
@@ -533,13 +535,13 @@ function enviarPedido() {
     fecha: new Date().toLocaleString('es-AR'),
     nombre, telefono, club, deporte, grupo,
     dia, horario, pago: pagoEl.value,
-    items, total
+    envio: shipping, items, total
   } : currentZone === 'capital' ? {
     canal: 'Capital Federal',
     fecha: new Date().toLocaleString('es-AR'),
     nombre, barrioCaba, calle, numero, piso,
     telefono, dia, horario, pago: pagoEl.value,
-    items, total
+    envio: shipping, items, total
   } : {
     canal: z.canal,
     fecha: new Date().toLocaleString('es-AR'),
@@ -548,7 +550,7 @@ function enviarPedido() {
     barrio: currentZone === 'estancias' ? barrio : direccion,
     lote, telefono, dia, horario,
     pago: pagoEl.value,
-    items, total
+    envio: shipping, items, total
   };
   fetch(APPS_SCRIPT_URL, {
     method:'POST', mode:'no-cors', headers:{'Content-Type':'text/plain'},
@@ -690,6 +692,13 @@ function loadClientData() {
     }
     if (saved.zone === 'pilar' && currentZone === 'pilar') {
       if (saved.direccion) $id('f-direccion').value = saved.direccion;
+      if (saved.lote) $id('f-lote-pilar').value = saved.lote;
+    }
+    if (saved.zone === 'capital' && currentZone === 'capital') {
+      if (saved.barrioCaba) $id('f-barrio-caba').value = saved.barrioCaba;
+      if (saved.calle) $id('f-calle').value = saved.calle;
+      if (saved.numero) $id('f-numero').value = saved.numero;
+      if (saved.piso) $id('f-piso').value = saved.piso;
     }
     if (saved.zone === 'clubes' && currentZone === 'clubes') {
       if (saved.club) $id('f-club').value = saved.club;
