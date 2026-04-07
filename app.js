@@ -120,9 +120,13 @@ function cartCount() { return Object.values(cart).reduce((a,b)=>a+b, 0); }
 function getShipping() {
   if (!currentZone) return 0;
   const z = ZONAS[currentZone];
-  if (z.envio === 0) return 0;
-  if (cartTotal() >= 25000) return 0; // envío gratis desde $25.000
   return z.envio;
+}
+function getCashDiscount() {
+  if (currentZone === 'clubes') return 0;
+  const sel = document.querySelector('input[name="pago"]:checked');
+  if (!sel || sel.value !== 'Efectivo') return 0;
+  return Math.round(cartTotal() * 0.10);
 }
 function slugify(str) {
   return str.toLowerCase().replace(/[áäâà]/g,'a').replace(/[éëêè]/g,'e').replace(/[íïîì]/g,'i').replace(/[óöôò]/g,'o').replace(/[úüûù]/g,'u').replace(/ñ/g,'n').replace(/[^a-z0-9]/g,'-').replace(/-+/g,'-').replace(/^-|-$/g,'');
@@ -253,7 +257,7 @@ function changeQty(id, delta) { modifyCart(id, delta); }
 function cardChangeQty(id, delta) { modifyCart(id, delta); }
 
 function updateUI() {
-  const count = cartCount(), subtotal = cartTotal(), shipping = getShipping(), total = subtotal + shipping;
+  const count = cartCount(), subtotal = cartTotal(), discount = getCashDiscount(), shipping = getShipping(), total = subtotal - discount + shipping;
   const badge = $id('cart-badge');
   badge.textContent = count;
   badge.style.display = count > 0 ? 'flex' : 'none';
@@ -287,6 +291,9 @@ function updateUI() {
       '</div>';
     }).join('');
     $id('cart-subtotal').textContent = ars(subtotal);
+    const discRow = $id('cart-discount-row');
+    if (discount > 0) { discRow.style.display = ''; $id('cart-discount').textContent = '-' + ars(discount); }
+    else { discRow.style.display = 'none'; }
     $id('cart-shipping').textContent = shipping === 0 ? 'Gratis' : ars(shipping);
     $id('cart-total').textContent = ars(total);
   }
@@ -296,12 +303,13 @@ function updateUI() {
 function updateFormSummary() {
   const el = $id('form-summary'), count = cartCount();
   if (count === 0) { el.innerHTML = '<p class="summary-empty">Agregá productos para ver el resumen.</p>'; return; }
-  const subtotal = cartTotal(), shipping = getShipping(), total = subtotal + shipping;
+  const subtotal = cartTotal(), discount = getCashDiscount(), shipping = getShipping(), total = subtotal - discount + shipping;
   el.innerHTML = Object.entries(cart).map(([id,qty]) => {
     const p = PROD_MAP[id];
     if (!p) return '';
     return '<div class="summary-line"><span>' + p.nombre + ' <strong>×' + qty + '</strong></span><span>' + ars(p.precio*qty) + '</span></div>';
   }).join('') +
+    (discount > 0 ? '<div class="summary-line discount-line"><span>10% OFF Efectivo 💵</span><span>-' + ars(discount) + '</span></div>' : '') +
     '<div class="summary-line shipping-line"><span>Envío</span><span>' + (shipping === 0 ? 'Gratis' : ars(shipping)) + '</span></div>' +
     '<div class="summary-line total-line"><span>Total</span><span>' + ars(total) + '</span></div>';
 }
@@ -474,7 +482,7 @@ function enviarPedido() {
   } catch(e) {}
 
   // Construir mensaje WhatsApp
-  const subtotal = cartTotal(), shipping = getShipping(), total = subtotal + shipping;
+  const subtotal = cartTotal(), discount = getCashDiscount(), shipping = getShipping(), total = subtotal - discount + shipping;
 
   const prodLines = Object.entries(cart).map(([id,qty]) => {
     const p = PROD_MAP[id]; if (!p) return null;
@@ -502,7 +510,6 @@ function enviarPedido() {
   if (currentZone === 'clubes') {
     msg = '*NUEVO PEDIDO — MALEU CLUBES*\n\n'
       + prodLines + '\n\n'
-      + 'Envio: ' + (shipping > 0 ? ars(shipping) : 'Gratis') + '\n'
       + '———————————————\n'
       + '*Total: ' + ars(total) + '*\n'
       + '———————————————\n\n'
@@ -516,6 +523,7 @@ function enviarPedido() {
   } else {
     msg = 'Hola! Quiero hacer un pedido\n\n'
       + '*Pedido:*\n' + prodLines + '\n\n'
+      + (discount > 0 ? '10% OFF Efectivo: -*' + ars(discount) + '*\n' : '')
       + 'Envio: ' + (shipping > 0 ? ars(shipping) : 'Gratis') + '\n'
       + '*Total: ' + ars(total) + '*\n\n'
       + 'Direccion: ' + direccionStr + '\n'
@@ -807,6 +815,8 @@ function onPagoChange() {
   const alias = $id('mp-alias');
   if (sel && sel.value === 'Transferencia') { alias.classList.remove('hidden'); }
   else { alias.classList.add('hidden'); }
+  updateUI();
+  updateFormSummary();
 }
 function copyAlias() {
   navigator.clipboard.writeText('maleump').then(function() { toast('✓ Alias copiado: maleump'); });
