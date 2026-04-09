@@ -592,19 +592,21 @@ function enviarPedido() {
   _sendWithRetry(postData, 3);
   _track('purchase', { value: total, zone: currentZone, items: cartCount(), discount: discount, payment: pagoEl.value });
 
-  // Abrir WhatsApp
+  // Confirmación visual rápida → WhatsApp
   _enviando = true;
   const waBtn = document.querySelector('.whatsapp-btn');
   const waBtnOrig = waBtn ? waBtn.innerHTML : '';
-  if (waBtn) { waBtn.disabled = true; waBtn.innerHTML = '<span>✓</span> ¡Listo! Abrimos WhatsApp…'; }
-  window.location.href = 'https://wa.me/' + WA_NUMBER + '?text=' + urlText;
+  if (waBtn) { waBtn.disabled = true; waBtn.innerHTML = '✓ Pedido registrado'; waBtn.style.background = '#2e7d32'; }
+  setTimeout(function() {
+    window.location.href = 'https://wa.me/' + WA_NUMBER + '?text=' + urlText;
+  }, 800);
 
   setTimeout(() => {
     cart = {}; updateUI();
     getActiveProducts().forEach(p => renderCardFooter(p.id));
     $id('f-dia').value = ''; onDiaChange();
     document.querySelectorAll('input[name="pago"]').forEach(r => r.checked = false);
-    if (waBtn) { waBtn.disabled = false; waBtn.innerHTML = waBtnOrig; }
+    if (waBtn) { waBtn.disabled = false; waBtn.innerHTML = waBtnOrig; waBtn.style.background = ''; }
     _enviando = false;
     updateFormVisibility();
     // Volver al inicio de la página
