@@ -61,9 +61,9 @@ const ZONAS = {
     nombre: "Estancias del Pilar",
     envio: 0,
     canal: "Home",
-    horarios: { "Lunes":"18 a 19 hs", "Martes":"18 a 19 hs", "Miércoles":"19 a 21 hs", "Viernes":"19 a 21 hs", "Sábado":"19 a 21 hs", "Domingo":"11 a 13 hs" },
-    deliveryText: "📅 Entregas: Lun · Mar · Mié · Vie · Sáb · Dom",
-    schedule: "Lunes y Martes 18 a 19hs · Miércoles, Viernes y Sábado 19 a 21hs · Domingo 11 a 13hs",
+    horarios: { "Lunes":"18 a 19 hs", "Miércoles":"19 a 21 hs", "Viernes":"19 a 21 hs", "Sábado":"19 a 21 hs", "Domingo":"11 a 13 hs" },
+    deliveryText: "📅 Entregas: Lun · Mié · Vie · Sáb · Dom",
+    schedule: "Lunes 18 a 19hs · Miércoles, Viernes y Sábado 19 a 21hs · Domingo 11 a 13hs",
     showStock: false
   },
   pilar: {
