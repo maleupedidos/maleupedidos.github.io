@@ -144,6 +144,7 @@ function setZone(zone) {
   currentZone = zone;
   localStorage.setItem('maleu_zone', zone);
   $id('loc-overlay').classList.add('hidden');
+  _track('select_zone', { zone: zone });
   applyZone();
 }
 function showZoneModal() {
@@ -226,8 +227,7 @@ function renderCardFooter(id) {
   const p = PROD_MAP[id];
   if (!p) return;
   const qty = cart[id] || 0;
-  const showStock = currentZone && ZONAS[currentZone] && ZONAS[currentZone].showStock;
-  const avail = showStock ? stockMap[id] : undefined;
+  const avail = stockMap[id];
   const sinStock = avail !== undefined && avail === 0;
   const atLimit = avail !== undefined && qty >= avail;
   if (qty === 0) {
@@ -248,9 +248,11 @@ function renderCardFooter(id) {
 function modifyCart(id, delta) {
   const current = cart[id] || 0;
   if (delta > 0) {
-    const showStock = currentZone && ZONAS[currentZone] && ZONAS[currentZone].showStock;
-    const avail = showStock ? stockMap[id] : undefined;
-    if (avail !== undefined && current >= avail) { toast('⚠️ No hay más stock'); return; }
+    const avail = stockMap[id];
+    if (avail !== undefined && current >= avail) {
+      toast('⚠️ Sin stock — solo hay ' + avail + ' disponible' + (avail !== 1 ? 's' : ''), 3000);
+      return;
+    }
   }
   const newQty = current + delta;
   if (newQty <= 0) delete cart[id];
@@ -260,9 +262,11 @@ function modifyCart(id, delta) {
   updateFormVisibility();
   updateShippingBar();
 }
+function _track(event, params) { if (typeof gtag === 'function') gtag('event', event, params || {}); }
 function addToCart(id) {
   modifyCart(id, 1);
   const p = PROD_MAP[id];
+  _track('add_to_cart', { item_name: p.nombre, price: p.precio, zone: currentZone });
   toast('✓ ' + p.nombre + ' agregado');
   const badge = $id('cart-badge');
   badge.classList.remove('bounce');
@@ -339,6 +343,7 @@ function toggleCart() {
 }
 function goToForm() {
   toggleCart();
+  _track('begin_checkout', { value: cartTotal(), zone: currentZone, items: cartCount() });
   const section = $id('form-section');
   if (section) section.classList.remove('collapsed');
   setTimeout(() => document.querySelector('.form-wrap').scrollIntoView({behavior:'smooth'}), 320);
@@ -479,6 +484,7 @@ function enviarPedido() {
     else if (currentZone === 'pilar') { clientData.direccion = direccion; clientData.lote = lote; }
     localStorage.setItem('maleu_cliente_pg', JSON.stringify(clientData));
     localStorage.setItem('maleu_ultimo_pedido_pg', JSON.stringify(Object.entries(cart).map(([id,qty]) => ({id: isNaN(id) ? id : +id, qty}))));
+    localStorage.setItem('maleu_last_order_zone', currentZone);
   } catch(e) {}
 
   // Construir mensaje WhatsApp
@@ -555,6 +561,7 @@ function enviarPedido() {
     subtotalSinDescuento: subtotal, descuento: discount
   };
   _sendWithRetry(postData, 3);
+  _track('purchase', { value: total, zone: currentZone, items: cartCount(), discount: discount, payment: pagoEl.value });
 
   // Abrir WhatsApp
   _enviando = true;
@@ -606,13 +613,19 @@ setInterval(_retryPendingOrders, 30000);
 
 /* ── TOAST ── */
 let _tt;
-function toast(msg) { const el=$id('toast'); el.textContent=msg; el.classList.add('show'); clearTimeout(_tt); _tt=setTimeout(()=>el.classList.remove('show'),1200); }
+function toast(msg, duration) { const el=$id('toast'); el.textContent=msg; el.classList.add('show'); clearTimeout(_tt); _tt=setTimeout(()=>el.classList.remove('show'), duration || 1500); }
 
 /* ── FORM VISIBILITY ── */
 function updateFormVisibility() {
   const section = $id('form-section');
   if (!section) return;
-  if (cartCount() > 0) section.classList.remove('collapsed');
+  if (cartCount() > 0) {
+    section.classList.remove('collapsed');
+    // Mostrar hint de descuento si no eligió pago aún
+    var hint = $id('pago-hint');
+    var sel = document.querySelector('input[name="pago"]:checked');
+    if (hint && !sel && currentZone !== 'clubes') hint.style.display = '';
+  }
 }
 function expandForm() {
   const section = $id('form-section');
@@ -745,6 +758,11 @@ function loadLastOrder() {
   try {
     const items = JSON.parse(localStorage.getItem('maleu_ultimo_pedido_pg') || 'null');
     if (!items || !items.length) return;
+    // Solo mostrar si la zona coincide (clubes tiene catálogo diferente)
+    var savedZoneOrder = localStorage.getItem('maleu_last_order_zone') || '';
+    var isClubOrder = savedZoneOrder === 'clubes';
+    var isClubNow = currentZone === 'clubes';
+    if (isClubOrder !== isClubNow) return; // no mezclar catálogos
     const block=$id('repeat-block'), list=$id('repeat-items'); if(!block||!list) return;
     const lines = items.map(({id,qty}) => {
       const p=PROD_MAP[id]; if(!p) return '';
