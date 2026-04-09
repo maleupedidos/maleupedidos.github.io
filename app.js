@@ -61,24 +61,17 @@ const ZONAS = {
     nombre: "Estancias del Pilar",
     envio: 0,
     canal: "Home",
-    horarios: { "Lunes":"19 a 21 hs", "Miércoles":"19 a 21 hs", "Viernes":"19 a 21 hs", "Sábado":"19 a 21 hs", "Domingo":"11 a 13 hs" },
-    deliveryText: "📅 Entregas: Lun · Mié · Vie · Sáb 19–21 hs · Dom 11–13 hs",
+    horarios: { "Lunes":"18 a 19 hs", "Martes":"18 a 19 hs", "Miércoles":"19 a 21 hs", "Viernes":"19 a 21 hs", "Sábado":"19 a 21 hs", "Domingo":"11 a 13 hs" },
+    deliveryText: "📅 Entregas: Lun · Mar · Mié · Vie · Sáb · Dom",
+    schedule: "Lunes y Martes 18 a 19hs · Miércoles, Viernes y Sábado 19 a 21hs · Domingo 11 a 13hs",
     showStock: false
   },
   pilar: {
-    nombre: "Resto de Pilar",
+    nombre: "Pilar y Alrededores",
     envio: 3000,
     canal: "Pilar",
     horarios: { "Miércoles":"A coordinar", "Viernes":"A coordinar" },
     deliveryText: "📅 Entregas: Miércoles y Viernes · Horario a coordinar",
-    showStock: false
-  },
-  capital: {
-    nombre: "Capital Federal",
-    envio: 3000,
-    canal: "Capital Federal",
-    horarios: { "Miércoles":"A coordinar" },
-    deliveryText: "📅 Entregas: Miércoles · Horario a coordinar",
     showStock: false
   },
   clubes: {
@@ -127,9 +120,20 @@ function getShipping() {
 }
 function getCashDiscount() {
   if (currentZone === 'clubes') return 0;
+  const total = cartTotal();
   const sel = document.querySelector('input[name="pago"]:checked');
-  if (!sel || sel.value !== 'Efectivo') return 0;
-  return Math.round(cartTotal() * 0.10);
+  const isCash = sel && sel.value === 'Efectivo';
+  const isBulk = total >= 100000;
+  if (isCash || isBulk) return Math.round(total * 0.10);
+  return 0;
+}
+function getDiscountLabel() {
+  const sel = document.querySelector('input[name="pago"]:checked');
+  const isCash = sel && sel.value === 'Efectivo';
+  const isBulk = cartTotal() >= 100000;
+  if (isCash) return '10% OFF Efectivo';
+  if (isBulk) return '10% OFF (+$100K)';
+  return '';
 }
 function slugify(str) {
   return str.toLowerCase().replace(/[áäâà]/g,'a').replace(/[éëêè]/g,'e').replace(/[íïîì]/g,'i').replace(/[óöôò]/g,'o').replace(/[úüûù]/g,'u').replace(/ñ/g,'n').replace(/[^a-z0-9]/g,'-').replace(/-+/g,'-').replace(/^-|-$/g,'');
@@ -151,10 +155,17 @@ function applyZone() {
   $id('zone-chip').textContent = '📍 ' + z.nombre;
   // Hero delivery text
   $id('hero-delivery').textContent = z.deliveryText;
+  // Schedule detail (solo Estancias)
+  const schedEl = $id('hero-schedule');
+  if (schedEl) {
+    if (z.schedule) { schedEl.textContent = z.schedule; schedEl.style.display = ''; }
+    else { schedEl.style.display = 'none'; }
+  }
   // Form fields
   $id('fields-estancias').style.display = currentZone === 'estancias' ? '' : 'none';
   $id('fields-pilar').style.display = currentZone === 'pilar' ? '' : 'none';
-  $id('fields-capital').style.display = currentZone === 'capital' ? '' : 'none';
+  var cfFields = $id('fields-capital');
+  if (cfFields) cfFields.style.display = 'none';
   $id('fields-clubes').style.display = currentZone === 'clubes' ? '' : 'none';
   // Días de entrega
   const diaSelect = $id('f-dia');
@@ -295,7 +306,7 @@ function updateUI() {
     }).join('');
     $id('cart-subtotal').textContent = ars(subtotal);
     const discRow = $id('cart-discount-row');
-    if (discount > 0) { discRow.style.display = ''; $id('cart-discount').textContent = '-' + ars(discount); }
+    if (discount > 0) { discRow.style.display = ''; discRow.querySelector('span').textContent = getDiscountLabel(); $id('cart-discount').textContent = '-' + ars(discount); }
     else { discRow.style.display = 'none'; }
     $id('cart-shipping').textContent = shipping === 0 ? 'Gratis' : ars(shipping);
     $id('cart-total').textContent = ars(total);
@@ -312,7 +323,7 @@ function updateFormSummary() {
     if (!p) return '';
     return '<div class="summary-line"><span>' + p.nombre + ' <strong>×' + qty + '</strong></span><span>' + ars(p.precio*qty) + '</span></div>';
   }).join('') +
-    (discount > 0 ? '<div class="summary-line discount-line"><span>10% OFF Efectivo 💵</span><span>-' + ars(discount) + '</span></div>' : '') +
+    (discount > 0 ? '<div class="summary-line discount-line"><span>' + getDiscountLabel() + '</span><span>-' + ars(discount) + '</span></div>' : '') +
     '<div class="summary-line shipping-line"><span>Envío</span><span>' + (shipping === 0 ? 'Gratis' : ars(shipping)) + '</span></div>' +
     '<div class="summary-line total-line"><span>Total</span><span>' + ars(total) + '</span></div>';
 }
@@ -409,11 +420,6 @@ function enviarPedido() {
     clearError('f-club','err-club');
     clearError('f-deporte','err-deporte');
     clearError('f-grupo','err-grupo');
-  } else if (currentZone === 'capital') {
-    clearError('f-barrio-caba','err-barrio-caba');
-    clearError('f-calle','err-calle');
-    clearError('f-numero','err-numero');
-    clearError('f-piso','err-piso');
   } else {
     clearError('f-direccion','err-direccion');
     clearError('f-lote-pilar','err-lote-pilar');
@@ -437,7 +443,6 @@ function enviarPedido() {
   if (!nombre) { showError('f-nombre','err-nombre'); if(!primerInvalido) primerInvalido=$id('f-nombre'); }
 
   let barrioPrivado='', barrio='', lote='', direccion='', club='', deporte='', grupo='';
-  let barrioCaba='', calle='', numero='', piso='';
   if (currentZone === 'estancias') {
     barrioPrivado = $id('f-barrio-privado').value;
     barrio = barrioPrivado === 'Estancias del Pilar' ? $id('f-barrio').value : barrioPrivado;
@@ -452,15 +457,6 @@ function enviarPedido() {
     if (!club) { showError('f-club','err-club'); if(!primerInvalido) primerInvalido=$id('f-club'); }
     if (!deporte) { showError('f-deporte','err-deporte'); if(!primerInvalido) primerInvalido=$id('f-deporte'); }
     if (!grupo) { showError('f-grupo','err-grupo'); if(!primerInvalido) primerInvalido=$id('f-grupo'); }
-  } else if (currentZone === 'capital') {
-    barrioCaba = $id('f-barrio-caba').value.trim();
-    calle = $id('f-calle').value.trim();
-    numero = $id('f-numero').value.trim();
-    piso = $id('f-piso').value.trim();
-    if (!barrioCaba) { showError('f-barrio-caba','err-barrio-caba'); if(!primerInvalido) primerInvalido=$id('f-barrio-caba'); }
-    if (!calle) { showError('f-calle','err-calle'); if(!primerInvalido) primerInvalido=$id('f-calle'); }
-    if (!numero) { showError('f-numero','err-numero'); if(!primerInvalido) primerInvalido=$id('f-numero'); }
-    if (!piso) { showError('f-piso','err-piso'); if(!primerInvalido) primerInvalido=$id('f-piso'); }
   } else {
     direccion = $id('f-direccion').value.trim();
     lote = $id('f-lote-pilar').value.trim();
@@ -479,7 +475,6 @@ function enviarPedido() {
     if (currentZone === 'estancias') { clientData.barrioPrivado = barrioPrivado; clientData.barrio = barrio; clientData.lote = lote; }
     else if (currentZone === 'clubes') { clientData.club = club; clientData.deporte = deporte; clientData.grupo = grupo; }
     else if (currentZone === 'pilar') { clientData.direccion = direccion; clientData.lote = lote; }
-    else if (currentZone === 'capital') { clientData.barrioCaba = barrioCaba; clientData.calle = calle; clientData.numero = numero; clientData.piso = piso; }
     localStorage.setItem('maleu_cliente_pg', JSON.stringify(clientData));
     localStorage.setItem('maleu_ultimo_pedido_pg', JSON.stringify(Object.entries(cart).map(([id,qty]) => ({id: isNaN(id) ? id : +id, qty}))));
   } catch(e) {}
@@ -498,8 +493,6 @@ function enviarPedido() {
     direccionStr = barrioInfo + ', Lote ' + lote;
   } else if (currentZone === 'clubes') {
     direccionStr = club + ' — ' + deporte + ' — ' + grupo;
-  } else if (currentZone === 'capital') {
-    direccionStr = barrioCaba + ', ' + calle + ' ' + numero + (piso ? ', ' + piso : '');
   } else {
     direccionStr = direccion + ', ' + lote;
   }
@@ -526,7 +519,7 @@ function enviarPedido() {
   } else {
     msg = 'Hola! Quiero hacer un pedido\n\n'
       + '*Pedido:*\n' + prodLines + '\n\n'
-      + (discount > 0 ? '10% OFF Efectivo: -*' + ars(discount) + '*\n' : '')
+      + (discount > 0 ? getDiscountLabel() + ': -*' + ars(discount) + '*\n' : '')
       + 'Envio: ' + (shipping > 0 ? ars(shipping) : 'Gratis') + '\n'
       + '*Total: ' + ars(total) + '*\n\n'
       + 'Direccion: ' + direccionStr + '\n'
@@ -546,13 +539,8 @@ function enviarPedido() {
     fecha: new Date().toLocaleString('es-AR'),
     nombre, telefono, club, deporte, grupo,
     dia, horario, pago: pagoEl.value,
-    envio: shipping, items, total
-  } : currentZone === 'capital' ? {
-    canal: 'Capital Federal',
-    fecha: new Date().toLocaleString('es-AR'),
-    nombre, barrioCaba, calle, numero, piso,
-    telefono, dia, horario, pago: pagoEl.value,
-    envio: shipping, items, total
+    envio: shipping, items, total,
+    subtotalSinDescuento: subtotal, descuento: discount
   } : {
     canal: z.canal,
     fecha: new Date().toLocaleString('es-AR'),
@@ -561,7 +549,8 @@ function enviarPedido() {
     barrio: currentZone === 'estancias' ? barrio : direccion,
     lote, telefono, dia, horario,
     pago: pagoEl.value,
-    envio: shipping, items, total
+    envio: shipping, items, total,
+    subtotalSinDescuento: subtotal, descuento: discount
   };
   _sendWithRetry(postData, 3);
 
@@ -580,6 +569,8 @@ function enviarPedido() {
     if (waBtn) { waBtn.disabled = false; waBtn.innerHTML = waBtnOrig; }
     _enviando = false;
     updateFormVisibility();
+    // Volver al inicio de la página
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   }, 1800);
 }
 
@@ -731,7 +722,7 @@ function loadClientData() {
       if (saved.lote) $id('f-lote-pilar').value = saved.lote;
     }
     if (saved.zone === 'capital' && currentZone === 'capital') {
-      if (saved.barrioCaba) $id('f-barrio-caba').value = saved.barrioCaba;
+      // Capital Federal eliminado
       if (saved.calle) $id('f-calle').value = saved.calle;
       if (saved.numero) $id('f-numero').value = saved.numero;
       if (saved.piso) $id('f-piso').value = saved.piso;
@@ -776,7 +767,9 @@ function repeatLastOrder() {
       agregados++; renderCardFooter(id);
     });
     updateUI();
-    if(agregados>0) toast('✓ Productos agregados'); else toast('⚠️ No hay stock');
+    updateFormVisibility();
+    if(agregados>0) { toast('✓ Productos agregados'); $id('repeat-block').style.display='none'; }
+    else toast('⚠️ No hay stock');
   } catch(e) {}
 }
 
@@ -787,7 +780,8 @@ updateCatNavTop();
 window.addEventListener('resize', updateCatNavTop);
 
 // Zona guardada
-const savedZone = localStorage.getItem('maleu_zone');
+let savedZone = localStorage.getItem('maleu_zone');
+if (savedZone === 'capital') { savedZone = 'pilar'; localStorage.setItem('maleu_zone', 'pilar'); }
 if (savedZone && ZONAS[savedZone]) {
   currentZone = savedZone;
   $id('loc-overlay').classList.add('hidden');
