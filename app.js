@@ -153,13 +153,15 @@ function applyZone() {
   const z = ZONAS[currentZone];
   // Chip
   $id('zone-chip').textContent = '📍 ' + z.nombre;
-  // Hero delivery text
-  $id('hero-delivery').textContent = z.deliveryText;
-  // Schedule detail (solo Estancias)
+  // Hero delivery text — si hay schedule detallado, mostrar solo eso
   const schedEl = $id('hero-schedule');
-  if (schedEl) {
-    if (z.schedule) { schedEl.textContent = z.schedule; schedEl.style.display = ''; }
-    else { schedEl.style.display = 'none'; }
+  if (z.schedule) {
+    $id('hero-delivery').style.display = 'none';
+    if (schedEl) { schedEl.innerHTML = '📅 ' + z.schedule; schedEl.style.display = ''; }
+  } else {
+    $id('hero-delivery').textContent = z.deliveryText;
+    $id('hero-delivery').style.display = '';
+    if (schedEl) schedEl.style.display = 'none';
   }
   // Form fields
   $id('fields-estancias').style.display = currentZone === 'estancias' ? '' : 'none';
@@ -615,6 +617,10 @@ function updateFormVisibility() {
 function expandForm() {
   const section = $id('form-section');
   if (section) section.classList.remove('collapsed');
+  // Mostrar hint de descuento si no eligió pago aún
+  const hint = $id('pago-hint');
+  const sel = document.querySelector('input[name="pago"]:checked');
+  if (hint && !sel && currentZone !== 'clubes') hint.style.display = '';
   setTimeout(() => document.querySelector('.form-wrap').scrollIntoView({behavior:'smooth'}), 50);
 }
 
@@ -732,8 +738,7 @@ function loadClientData() {
       if (saved.deporte) $id('f-deporte').value = saved.deporte;
       if (saved.grupo) $id('f-grupo').value = saved.grupo;
     }
-    if (saved.dia) { $id('f-dia').value = saved.dia; onDiaChange(); }
-    if (saved.pago) { const r=document.querySelector('input[name="pago"][value="'+saved.pago+'"]'); if(r) r.checked=true; }
+    // Día y método de pago NO se precargan — el cliente los elige cada vez
   } catch(e) {}
 }
 function loadLastOrder() {
@@ -838,6 +843,13 @@ function onPagoChange() {
   const alias = $id('mp-alias');
   if (sel && sel.value === 'Transferencia') { alias.classList.remove('hidden'); }
   else { alias.classList.add('hidden'); }
+  // Hint de descuento: mostrar solo cuando NO eligió efectivo
+  const hint = $id('pago-hint');
+  if (hint) {
+    if (sel && sel.value === 'Efectivo') hint.style.display = 'none';
+    else if (currentZone !== 'clubes') hint.style.display = '';
+    else hint.style.display = 'none';
+  }
   updateUI();
   updateFormSummary();
 }
