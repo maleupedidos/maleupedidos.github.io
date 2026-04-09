@@ -110,6 +110,9 @@ const PROD_ABBR = {
   11:'ECaC', 12:'EJyQ', 17:'ECyQ', 18:'EV',
   14:'TG', 15:'TLC', 16:'TC', 13:'F',
   1:'PMa', 2:'PJyQ', 3:'PCC', 4:'PJyM', 19:'PMu',
+  // Clubes (IDs string)
+  'pmu':'PMu', 'pma':'PMa', 'pjq':'PJyQ', 'pcc':'PCC', 'pjm':'PJyM',
+  'pp1':'PPM', 'pp2':'PPJyQ', 'pp3':'PPCyQ',
 };
 
 /* ── HELPERS ── */
@@ -560,10 +563,7 @@ function enviarPedido() {
     pago: pagoEl.value,
     envio: shipping, items, total
   };
-  fetch(APPS_SCRIPT_URL, {
-    method:'POST', mode:'no-cors', headers:{'Content-Type':'text/plain'},
-    body: JSON.stringify(postData)
-  }).catch(() => {});
+  _sendWithRetry(postData, 3);
 
   // Abrir WhatsApp
   _enviando = true;
@@ -582,6 +582,34 @@ function enviarPedido() {
     updateFormVisibility();
   }, 1800);
 }
+
+/* ── RETRY + BACKUP ── */
+function _sendWithRetry(data, retries) {
+  fetch(APPS_SCRIPT_URL, {
+    method:'POST', mode:'no-cors', headers:{'Content-Type':'text/plain'},
+    body: JSON.stringify(data)
+  }).catch(function() {
+    if (retries > 1) {
+      setTimeout(function() { _sendWithRetry(data, retries - 1); }, 2000);
+    } else {
+      try {
+        var pending = JSON.parse(localStorage.getItem('maleu_pending_orders') || '[]');
+        pending.push({ data: data, ts: Date.now() });
+        localStorage.setItem('maleu_pending_orders', JSON.stringify(pending));
+      } catch(e) {}
+    }
+  });
+}
+function _retryPendingOrders() {
+  try {
+    var pending = JSON.parse(localStorage.getItem('maleu_pending_orders') || '[]');
+    if (pending.length === 0) return;
+    var order = pending.shift();
+    localStorage.setItem('maleu_pending_orders', JSON.stringify(pending));
+    _sendWithRetry(order.data, 2);
+  } catch(e) {}
+}
+setInterval(_retryPendingOrders, 30000);
 
 /* ── TOAST ── */
 let _tt;
@@ -771,6 +799,7 @@ if (savedZone && ZONAS[savedZone]) {
 loadClientData();
 $id('cart-badge').style.display = 'none';
 fetchStock();
+_retryPendingOrders();
 let _stockTimer = setInterval(fetchStock, 60000);
 document.addEventListener('visibilitychange', () => {
   if(document.hidden){clearInterval(_stockTimer);_stockTimer=null;}
