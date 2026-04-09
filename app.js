@@ -411,11 +411,11 @@ function validateOnBlur(campo) {
   if (campo==='telefono') { $id('f-telefono').value.replace(/\D/g,'').length >= 8 ? clearError('f-telefono','err-telefono') : showError('f-telefono','err-telefono'); }
   if (campo==='dia') { $id('f-dia').value ? clearError('f-dia','err-dia') : showError('f-dia','err-dia'); }
 }
-function filtrarSubBarrios() {
+function filtrarSubBarrios(keepValue) {
   const privado = $id('f-barrio-privado').value;
   const subField = $id('field-sub-barrio');
   const subSel = $id('f-barrio');
-  subSel.value = '';
+  if (!keepValue) subSel.value = '';
   clearError('f-barrio-privado','err-barrio-privado');
   clearError('f-barrio','err-barrio');
   if (privado === 'Estancias del Pilar') {
@@ -763,7 +763,7 @@ function loadClientData() {
     if (saved.nombre) $id('f-nombre').value = saved.nombre;
     if (saved.telefono) $id('f-telefono').value = saved.telefono;
     if (saved.zone === 'estancias' && currentZone === 'estancias') {
-      if (saved.barrioPrivado) { $id('f-barrio-privado').value = saved.barrioPrivado; filtrarSubBarrios(); }
+      if (saved.barrioPrivado) { $id('f-barrio-privado').value = saved.barrioPrivado; filtrarSubBarrios(true); }
       if (saved.barrio) $id('f-barrio').value = saved.barrio;
       if (saved.lote) $id('f-lote').value = saved.lote;
     }
