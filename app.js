@@ -317,6 +317,34 @@ function updateUI() {
     else { discRow.style.display = 'none'; }
     $id('cart-shipping').textContent = shipping === 0 ? 'Gratis' : ars(shipping);
     $id('cart-total').textContent = ars(total);
+
+    // Incentivo inteligente
+    var incentiveEl = $id('cart-incentive');
+    if (incentiveEl && currentZone !== 'clubes') {
+      var falta = 100000 - subtotal;
+      var sel = document.querySelector('input[name="pago"]:checked');
+      var isCash = sel && sel.value === 'Efectivo';
+      var yaDescuento = discount > 0;
+
+      if (yaDescuento) {
+        // Ya tiene descuento — felicitarlo
+        incentiveEl.innerHTML = '<strong>🎉 ¡Descuento aplicado!</strong><br>Estás ahorrando <strong>' + ars(discount) + '</strong>';
+        incentiveEl.style.display = '';
+      } else if (falta > 0 && falta <= 40000 && subtotal >= 60000) {
+        // Cerca de $100K — incentivar a llegar
+        incentiveEl.innerHTML = '🔥 Estás a <strong>' + ars(falta) + '</strong> de tener <strong>10% OFF</strong> por superar los $100.000' +
+          (!isCash ? '<div class="incentive-cash">💵 También podés pagar en efectivo y tener 10% OFF</div>' : '');
+        incentiveEl.style.display = '';
+      } else if (!isCash && subtotal > 0 && subtotal < 60000) {
+        // Pedido chico — solo recordar el efectivo
+        incentiveEl.innerHTML = '<div class="incentive-cash" style="border:none;margin:0;padding:0;">💵 Pagando en efectivo tenés 10% OFF</div>';
+        incentiveEl.style.display = '';
+      } else {
+        incentiveEl.style.display = 'none';
+      }
+    } else if (incentiveEl) {
+      incentiveEl.style.display = 'none';
+    }
   }
   updateFormSummary();
 }
@@ -719,9 +747,9 @@ function updateStockDisplay() {
   PRODUCTOS.forEach(p => {
     const el=$id('stock-'+p.id), avail=stockMap[p.id]; if(!el) return;
     if (!showStock || avail===undefined) { el.innerHTML=''; }
-    else if(avail===0) el.innerHTML='<span class="stock-badge stock-out">🚫 Sin stock</span>';
-    else if(avail<=5) el.innerHTML='<span class="stock-badge stock-low">⚡ Últimas '+avail+' unidades</span>';
-    else el.innerHTML='<span class="stock-badge stock-ok">✓ '+avail+' disponibles</span>';
+    else if(avail===0) el.innerHTML='<span class="stock-badge stock-out">Sin stock</span>';
+    else if(avail<=3) el.innerHTML='<span class="stock-badge stock-low">Últimas '+avail+' unidades</span>';
+    else el.innerHTML='';
     renderCardFooter(p.id);
   });
 }
