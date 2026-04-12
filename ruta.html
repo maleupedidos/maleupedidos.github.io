@@ -35,13 +35,14 @@ body{font-family:'Segoe UI',system-ui,-apple-system,sans-serif;background:#F5F2E
 /* ── LOADING / EMPTY ── */
 .loading,.empty{text-align:center;padding:60px 20px;color:#7A4A4A}
 .loading{font-style:italic}
-
-/* ── SUMMARY BAR ── */
-.summary-bar{background:#fff;border-bottom:1px solid #E8DFC4;padding:12px 16px;font-size:12px;color:#7A4A4A;line-height:1.6}
-.summary-bar strong{color:#331C1C}
+.loading-inline{text-align:center;padding:8px;font-size:11px;color:#7A4A4A;font-style:italic}
 
 /* ── ARMADO VIEW ── */
 .armado-list{padding:8px}
+.armado-day-header{padding:10px 8px 4px;font-size:13px;font-weight:800;color:#331C1C;display:flex;align-items:center;gap:8px}
+.armado-day-header .day-count{font-size:11px;font-weight:700;background:#F07D47;color:#fff;padding:2px 8px;border-radius:50px}
+.armado-day-header.other-day{color:#7A4A4A;opacity:.7}
+.armado-subbarrio{padding:6px 8px 2px;font-size:11px;font-weight:700;color:#F07D47;text-transform:uppercase;letter-spacing:.06em}
 .armado-card{background:#fff;border-radius:14px;padding:14px 16px;margin-bottom:8px;border:2px solid #E8DFC4;transition:.15s}
 .armado-card.done{opacity:.4;border-color:#4CAF50;background:#f0f8f0}
 .armado-head{display:flex;align-items:center;gap:10px}
@@ -56,6 +57,7 @@ body{font-family:'Segoe UI',system-ui,-apple-system,sans-serif;background:#F5F2E
 .ruta-container{display:flex;flex-direction:column;min-height:calc(100dvh - 104px)}
 .ruta-card{flex:1;padding:16px;display:flex;flex-direction:column}
 .ruta-counter{text-align:center;font-size:12px;color:#7A4A4A;padding:8px;font-weight:600}
+.ruta-subbarrio-banner{background:#F07D47;color:#fff;text-align:center;padding:6px;font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.08em}
 .ruta-zona{text-align:center;font-size:11px;font-weight:700;color:#F07D47;text-transform:uppercase;letter-spacing:.08em;margin-bottom:4px}
 .ruta-nombre{text-align:center;font-size:22px;font-weight:800;margin-bottom:4px}
 .ruta-dir{text-align:center;font-size:16px;color:#7A4A4A;margin-bottom:2px}
@@ -122,13 +124,13 @@ body{font-family:'Segoe UI',system-ui,-apple-system,sans-serif;background:#F5F2E
 
 <!-- ARMADO -->
 <div id="armadoView" class="hidden">
-  <div class="summary-bar" id="summaryBar"></div>
   <div class="armado-list" id="armadoList"></div>
 </div>
 
 <!-- RUTA -->
 <div id="rutaView" class="hidden">
   <div class="ruta-container">
+    <div class="ruta-subbarrio-banner" id="rutaSubbarrioBanner"></div>
     <div class="ruta-counter" id="rutaCounter"></div>
     <div class="ruta-card" id="rutaCard"></div>
     <div class="nav-row">
@@ -174,13 +176,15 @@ updateOnlineStatus();
 window.addEventListener('online', function() { isOnline = true; updateOnlineStatus(); processSyncQueue(); refresh(true); });
 window.addEventListener('offline', function() { isOnline = false; updateOnlineStatus(); });
 
-// Mostrar datos del cache inmediatamente si existen
+// Cache primero: si hay datos, mostrar YA y refrescar silencioso de fondo
 if (entregas.length > 0) {
   document.getElementById('loadingView').classList.add('hidden');
   render();
   updateLastSync();
+  refresh(true); // silencioso, no bloquea UI
+} else {
+  refresh(); // primera vez, mostrar loading
 }
-refresh();
 
 // Auto-refresh cada 90s si hay señal
 setInterval(function() { if (isOnline && document.visibilityState === 'visible') refresh(true); }, 90000);
@@ -281,6 +285,12 @@ function refresh(silent) {
 }
 
 /* ── HELPERS ────────────────────────────────────────────── */
+var DIAS_SEMANA = ['Domingo','Lunes','Martes','Mi\u00E9rcoles','Jueves','Viernes','S\u00E1bado'];
+
+function getDiaHoy() {
+  return DIAS_SEMANA[new Date().getDay()];
+}
+
 function eKey(e) { return e.h + '|' + e.id; }
 
 function isEntregado(e) { return entregados[eKey(e)] || e.es === 'Entregado'; }
@@ -290,15 +300,34 @@ function getPendientes() {
   return entregas.filter(function(e) { return !isEntregado(e); });
 }
 
-function getSorted() {
-  // Agrupar por sub-barrio, dentro por lote numérico
-  var pending = getPendientes();
-  pending.sort(function(a, b) {
-    if (a.sb !== b.sb) return a.sb.localeCompare(b.sb);
+function getHoyPendientes() {
+  var hoy = getDiaHoy();
+  return getPendientes().filter(function(e) { return e.de === hoy; });
+}
+
+function getOtrosDias() {
+  var hoy = getDiaHoy();
+  return getPendientes().filter(function(e) { return e.de !== hoy; });
+}
+
+function sortByZona(list) {
+  // Orden: primero por barrio principal (sb para Home, h para otros), luego sub-barrio, luego lote numérico
+  list.sort(function(a, b) {
+    // Primero por hoja (Home primero, luego Pilar, luego Capital Federal)
+    var hojaOrder = { 'Home': 0, 'Pilar': 1, 'Capital Federal': 2 };
+    var ha = hojaOrder[a.h] || 9, hb = hojaOrder[b.h] || 9;
+    if (ha !== hb) return ha - hb;
+    // Dentro de Home: por sub-barrio
+    if (a.sb !== b.sb) return (a.sb || '').localeCompare(b.sb || '');
+    // Dentro del sub-barrio: por lote numérico
     var la = parseInt(a.l) || 999, lb = parseInt(b.l) || 999;
     return la - lb;
   });
-  return pending;
+  return list;
+}
+
+function getSorted() {
+  return sortByZona(getHoyPendientes());
 }
 
 function prodText(prods) {
@@ -319,14 +348,15 @@ function formatMoney(n) {
 
 /* ── RENDER ─────────────────────────────────────────────── */
 function render() {
-  var pending = getPendientes();
-  var total = entregas.length;
-  var done = total - pending.length;
+  var allPending = getPendientes();
+  var hoyPending = getHoyPendientes();
+  var totalHoy = entregas.filter(function(e) { return e.de === getDiaHoy(); }).length;
+  var doneHoy = totalHoy - hoyPending.length;
 
-  document.getElementById('counterBadge').textContent = done + '/' + total;
+  document.getElementById('counterBadge').textContent = doneHoy + '/' + totalHoy;
   document.getElementById('syncBanner').className = 'sync-banner' + (syncQueue.length > 0 ? ' visible' : '');
 
-  if (total === 0) {
+  if (allPending.length === 0) {
     document.getElementById('emptyView').classList.remove('hidden');
     document.getElementById('armadoView').classList.add('hidden');
     document.getElementById('rutaView').classList.add('hidden');
@@ -343,35 +373,51 @@ function renderArmado() {
   document.getElementById('armadoView').classList.remove('hidden');
   document.getElementById('rutaView').classList.add('hidden');
 
-  var pending = getSorted();
-
-  // Resumen de productos totales
-  var totals = {};
-  pending.forEach(function(e) {
-    e.p.forEach(function(p) {
-      if (!totals[p.a]) totals[p.a] = 0;
-      totals[p.a] += p.q;
-    });
-  });
-  var summaryParts = Object.keys(totals).map(function(a) {
-    return '<strong>' + totals[a] + '</strong> ' + (PROD_NAMES[a] || a);
-  });
-  document.getElementById('summaryBar').innerHTML =
-    '<strong>' + pending.length + ' pedidos pendientes</strong><br>' +
-    summaryParts.join(' &middot; ');
+  var hoy = getDiaHoy();
+  var pedidosHoy = sortByZona(getHoyPendientes());
+  var pedidosOtros = sortByZona(getOtrosDias());
 
   var html = '';
 
-  // Agrupar por sub-barrio
+  // HOY
+  html += renderArmadoGroup(pedidosHoy, 'Hoy ' + hoy, false);
+
+  // OTROS DÍAS
+  if (pedidosOtros.length > 0) {
+    // Agrupar por día
+    var porDia = {};
+    pedidosOtros.forEach(function(e) {
+      if (!porDia[e.de]) porDia[e.de] = [];
+      porDia[e.de].push(e);
+    });
+    Object.keys(porDia).forEach(function(dia) {
+      html += renderArmadoGroup(porDia[dia], dia, true);
+    });
+  }
+
+  document.getElementById('armadoList').innerHTML = html;
+}
+
+function renderArmadoGroup(pedidos, titulo, isOtherDay) {
+  var html = '';
+  html += '<div class="armado-day-header' + (isOtherDay ? ' other-day' : '') + '">' +
+    titulo + ' <span class="day-count">' + pedidos.length + '</span></div>';
+
+  if (pedidos.length === 0) {
+    html += '<div style="padding:12px 8px;font-size:13px;color:#7A4A4A">Sin pedidos</div>';
+    return html;
+  }
+
+  // Agrupar por zona (sub-barrio para Home, hoja para otros)
   var groups = {};
-  pending.forEach(function(e) {
-    var g = e.sb || e.h;
+  pedidos.forEach(function(e) {
+    var g = e.h === 'Home' ? (e.sb || 'Estancias') : e.h;
     if (!groups[g]) groups[g] = [];
     groups[g].push(e);
   });
 
   Object.keys(groups).sort().forEach(function(g) {
-    html += '<div style="padding:8px 4px 2px;font-size:11px;font-weight:700;color:#F07D47;text-transform:uppercase;letter-spacing:.06em">' + g + '</div>';
+    html += '<div class="armado-subbarrio">' + g + '</div>';
     groups[g].forEach(function(e) {
       var key = eKey(e);
       var isDone = armadoDone[key];
@@ -386,7 +432,7 @@ function renderArmado() {
     });
   });
 
-  document.getElementById('armadoList').innerHTML = html;
+  return html;
 }
 
 function toggleArmado(key) {
@@ -402,7 +448,10 @@ function renderRuta() {
   document.getElementById('rutaView').classList.remove('hidden');
 
   var sorted = getSorted();
+  var banner = document.getElementById('rutaSubbarrioBanner');
+
   if (sorted.length === 0) {
+    banner.style.display = 'none';
     document.getElementById('rutaCounter').textContent = 'Todas las entregas completadas';
     document.getElementById('rutaCard').innerHTML = '<div class="empty" style="padding:40px">Sin pedidos pendientes</div>';
     document.getElementById('rutaActions').innerHTML = '';
@@ -415,13 +464,20 @@ function renderRuta() {
   var e = sorted[rutaIndex];
   var key = eKey(e);
 
+  // Sub-barrio banner — muestra zona actual y cuántos quedan ahí
+  var zonaActual = e.h === 'Home' ? (e.sb || 'Estancias') : e.h;
+  var enEstaZona = sorted.filter(function(x) {
+    var z = x.h === 'Home' ? (x.sb || 'Estancias') : x.h;
+    return z === zonaActual;
+  }).length;
+  banner.textContent = zonaActual + ' (' + enEstaZona + ')';
+  banner.style.display = 'block';
+
   document.getElementById('rutaCounter').textContent =
     (rutaIndex + 1) + ' de ' + sorted.length + ' pendientes';
 
   // Card content
-  var loteDisplay = e.l || e.d;
   var html = '';
-  if (e.sb) html += '<div class="ruta-zona">' + e.sb + (e.h !== 'Home' ? ' (' + e.h + ')' : '') + '</div>';
   html += '<div class="ruta-nombre">' + e.c + '</div>';
   if (e.sb && e.l) {
     html += '<div class="ruta-lote">Lote ' + e.l + '</div>';
