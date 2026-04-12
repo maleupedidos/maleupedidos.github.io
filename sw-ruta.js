@@ -1,15 +1,15 @@
 /* ═══════════════════════════════════════════════════════════
-   MALEU RUTA — Service Worker (offline-first)
+   MALEU RUTA — Service Worker (network-first para HTML)
    ═══════════════════════════════════════════════════════════ */
 
-var CACHE_NAME = 'maleu-ruta-v1';
+var CACHE_NAME = 'maleu-ruta-v2';
 var PRECACHE = [
   '/ruta.html',
   '/img/favicon.png',
   '/img/logo-icono.png'
 ];
 
-// Install: pre-cache the shell
+// Install: pre-cache the shell + activar inmediatamente
 self.addEventListener('install', function(event) {
   event.waitUntil(
     caches.open(CACHE_NAME).then(function(cache) {
@@ -20,7 +20,7 @@ self.addEventListener('install', function(event) {
   );
 });
 
-// Activate: clean old caches
+// Activate: limpiar caches viejos + tomar control ya
 self.addEventListener('activate', function(event) {
   event.waitUntil(
     caches.keys().then(function(keys) {
@@ -34,21 +34,41 @@ self.addEventListener('activate', function(event) {
   );
 });
 
-// Fetch: cache-first for app shell, network-first for API
+// Fetch strategy:
+// - API (Apps Script) → network only
+// - HTML (ruta.html) → network-first (siempre la última versión, cache si no hay señal)
+// - Assets (imgs) → cache-first (no cambian)
 self.addEventListener('fetch', function(event) {
   var url = new URL(event.request.url);
 
-  // API calls (Apps Script) → network only, never cache
+  // API calls → network only
   if (url.hostname === 'script.google.com') {
-    return; // let browser handle normally
+    return;
   }
 
-  // Everything else → cache-first, fallback to network
+  // HTML pages → network-first
+  if (event.request.mode === 'navigate' || url.pathname.endsWith('.html')) {
+    event.respondWith(
+      fetch(event.request).then(function(response) {
+        if (response.ok) {
+          var clone = response.clone();
+          caches.open(CACHE_NAME).then(function(cache) {
+            cache.put(event.request, clone);
+          });
+        }
+        return response;
+      }).catch(function() {
+        return caches.match(event.request) || caches.match('/ruta.html');
+      })
+    );
+    return;
+  }
+
+  // Assets → cache-first
   event.respondWith(
     caches.match(event.request).then(function(cached) {
       if (cached) return cached;
       return fetch(event.request).then(function(response) {
-        // Cache new resources dynamically
         if (response.ok && event.request.method === 'GET') {
           var clone = response.clone();
           caches.open(CACHE_NAME).then(function(cache) {
@@ -58,7 +78,6 @@ self.addEventListener('fetch', function(event) {
         return response;
       });
     }).catch(function() {
-      // Offline and not in cache — return offline page if it's a navigation
       if (event.request.mode === 'navigate') {
         return caches.match('/ruta.html');
       }
