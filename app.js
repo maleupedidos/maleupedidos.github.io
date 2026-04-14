@@ -146,6 +146,7 @@ function setZone(zone) {
   $id('loc-overlay').classList.add('hidden');
   _track('select_zone', { zone: zone });
   applyZone();
+  window.scrollTo(0, 0);
 }
 function showZoneModal() {
   $id('loc-overlay').classList.remove('hidden');
