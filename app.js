@@ -310,9 +310,9 @@ function updateUI() {
           '<div class="cart-item-sub">' + ars(p.precio) + ' c/u · <strong>' + ars(p.precio*qty) + '</strong></div>' +
         '</div>' +
         '<div class="qty-controls">' +
-          '<button class="qty-btn" onclick="changeQty(' + id + ',-1)">−</button>' +
+          '<button class="qty-btn" onclick="changeQty(\'' + id + '\',-1)">−</button>' +
           '<span class="qty-val">' + qty + '</span>' +
-          '<button class="qty-btn" onclick="changeQty(' + id + ',+1)">+</button>' +
+          '<button class="qty-btn" onclick="changeQty(\'' + id + '\',+1)">+</button>' +
         '</div>' +
       '</div>';
     }).join('');
