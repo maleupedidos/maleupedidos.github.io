@@ -128,6 +128,7 @@ function getCashDiscount() {
   return 0;
 }
 function getDiscountLabel() {
+  if (currentZone === 'clubes') return '';
   const sel = document.querySelector('input[name="pago"]:checked');
   const isCash = sel && sel.value === 'Efectivo';
   const isBulk = cartTotal() >= 100000;
@@ -177,6 +178,9 @@ function applyZone() {
   Object.keys(z.horarios).forEach(dia => {
     diaSelect.innerHTML += '<option value="' + dia + '">' + dia + '</option>';
   });
+  // Promo bar: ocultar en clubes (no hay descuentos)
+  var promoBar = $id('promo-bar');
+  if (promoBar) promoBar.style.display = currentZone === 'clubes' ? 'none' : '';
   // Limpiar carrito al cambiar zona (productos/precios cambian)
   cart = {};
   // Re-render catálogo y nav con productos de la zona
