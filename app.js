@@ -649,7 +649,7 @@ setInterval(_retryPendingOrders, 30000);
 
 /* ── TOAST ── */
 let _tt;
-function toast(msg, duration) { const el=$id('toast'); el.textContent=msg; el.classList.add('show'); clearTimeout(_tt); _tt=setTimeout(()=>el.classList.remove('show'), duration || 1500); }
+function toast(msg, duration) { const el=$id('toast'); el.textContent=msg; el.classList.add('show'); clearTimeout(_tt); _tt=setTimeout(()=>el.classList.remove('show'), duration || 800); }
 
 /* ── FORM VISIBILITY ── */
 function updateFormVisibility() {
