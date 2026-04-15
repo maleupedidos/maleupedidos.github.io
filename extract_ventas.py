@@ -6,7 +6,10 @@ Ejecutar: python extract_ventas.py
 import openpyxl, json, sys
 from datetime import datetime
 
-PATH = 'C:/Users/tadeu/OneDrive - Económicas - UBA/Maleu 2026/Administración/MALEU 2026.xlsm'
+import shutil, tempfile
+_SRC = 'C:/Users/tadeu/OneDrive - Económicas - UBA/Maleu 2026/Administración/MALEU 2026.xlsm'
+PATH = tempfile.mktemp(suffix='.xlsm')
+shutil.copy2(_SRC, PATH)
 OUT = 'C:/Users/tadeu/maleupedidos.github.io/data/ventas.json'
 
 wb = openpyxl.load_workbook(PATH, read_only=True, data_only=True, keep_vba=False)
@@ -33,15 +36,22 @@ for canal, sheet_name in [('Home', 'Ventas Home'), ('Pilar', 'Ventas Pilar'), ('
     for r in range(2, ws.max_row + 1):
         cliente = safe(ws.cell(r, 8).value)
         if not cliente: continue
-        fecha = fmt_date(ws.cell(r, 4).value)
+        # Usar fecha de ENTREGA (col 48) en vez de pedido (col 4)
+        MESES_VALIDOS = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre']
+        fecha_entrega = ws.cell(r, 48).value
+        fecha = fmt_date(fecha_entrega) if fecha_entrega else fmt_date(ws.cell(r, 4).value)
+        mes_raw = safe(ws.cell(r, 49).value)
+        mes_entrega = mes_raw if mes_raw in MESES_VALIDOS else safe(ws.cell(r, 5).value)
+        sem_raw = num(ws.cell(r, 50).value)
+        sem_entrega = sem_raw if sem_raw > 0 else num(ws.cell(r, 6).value)
         facturado = num(ws.cell(r, 20).value) or num(ws.cell(r, 14).value)
         if facturado == 0: continue
 
         ventas.append({
             'canal': canal,
             'fecha': fecha,
-            'mes': safe(ws.cell(r, 5).value),
-            'sem': int(num(ws.cell(r, 6).value)),
+            'mes': mes_entrega,
+            'sem': int(sem_entrega),
             'cliente': cliente,
             'estado': safe(ws.cell(r, 11).value),
             'fp': safe(ws.cell(r, 12).value),
