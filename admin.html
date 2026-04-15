@@ -305,15 +305,15 @@ body{font-family:-apple-system,'Segoe UI',system-ui,sans-serif;background:var(--
       <div class="dd-btn" onclick="toggleDD('ddSem')"><span class="dd-sel">Todas</span><span class="arrow">&#9660;</span></div>
       <div class="dd-panel" id="ddSem-panel"></div>
     </div>
+    <div class="dd" id="ddUn">
+      <div class="dd-label">Unidad</div>
+      <div class="dd-btn" onclick="toggleDD('ddUn')"><span class="dd-sel">Todas</span><span class="arrow">&#9660;</span></div>
+      <div class="dd-panel" id="ddUn-panel"></div>
+    </div>
     <div class="dd" id="ddCanal">
       <div class="dd-label">Canal</div>
       <div class="dd-btn" onclick="toggleDD('ddCanal')"><span class="dd-sel">Todos</span><span class="arrow">&#9660;</span></div>
       <div class="dd-panel" id="ddCanal-panel"></div>
-    </div>
-    <div class="dd" id="ddEP">
-      <div class="dd-label">Estado pago</div>
-      <div class="dd-btn" onclick="toggleDD('ddEP')"><span class="dd-sel">Todos</span><span class="arrow">&#9660;</span></div>
-      <div class="dd-panel" id="ddEP-panel"></div>
     </div>
   </div>
   <div class="v-summary" id="vSum"></div>
@@ -549,15 +549,28 @@ function rMetricas(){
 // ═══════════════════════════════════════
 //  VENTAS — Histórico desde JSON estático
 // ═══════════════════════════════════════
-var VD=null; // ventas data
-var vFilt={mes:[],sem:[],canal:[],ep:[]};
+var VD=null;
+var vFilt={mes:[],sem:[],un:[],canal:[]};
 var MES_ORD=['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+// Mapeo canal → unidad de negocio
+function getUnidad(canal){
+  if(canal==='Venta Directa')return'Retail';
+  if(canal==='Clubes'||canal==='Red'||canal==='B2B')return'Retail';
+  if(canal==='Catering')return'Catering';
+  return'Otro';
+}
+function getTipo(canal){
+  if(canal==='Venta Directa')return'Venta Directa';
+  if(canal==='Clubes'||canal==='Red'||canal==='B2B')return'Venta Indirecta';
+  if(canal==='Catering')return'Catering';
+  return canal;
+}
 
 function loadVentas(){
-  var cached=localStorage.getItem('ma3v');
+  var cached=localStorage.getItem('ma3v2');
   if(cached){try{VD=JSON.parse(cached);buildVFilters();rVentas();}catch(e){}}
-  fetch('/data/ventas.json?t='+Date.now()).then(function(r){return r.json();}).then(function(d){
-    VD=d;localStorage.setItem('ma3v',JSON.stringify(d));buildVFilters();rVentas();
+  fetch(API+'?action=ventas&t='+Date.now()).then(function(r){return r.json();}).then(function(d){
+    VD=d.v||[];localStorage.setItem('ma3v2',JSON.stringify(VD));buildVFilters();rVentas();
   }).catch(function(){});
 }
 
@@ -581,24 +594,22 @@ document.addEventListener('click',function(e){
 
 function buildVFilters(){
   if(!VD)return;
-  // Extract unique values
-  var meses={},sems={},canales={},eps={};
+  var meses={},sems={},unidades={},canales={};
   VD.forEach(function(v){
     if(v.mes)meses[v.mes]=1;
     if(v.sem)sems[v.sem]=1;
+    var un=getUnidad(v.canal);if(un)unidades[un]=1;
     if(v.canal)canales[v.canal]=1;
-    if(v.ep)eps[v.ep]=1;
   });
-  // Sort meses by order
   var mesArr=Object.keys(meses).sort(function(a,b){return MES_ORD.indexOf(a)-MES_ORD.indexOf(b);});
   var semArr=Object.keys(sems).map(Number).sort(function(a,b){return a-b;}).map(String);
+  var unArr=Object.keys(unidades).sort();
   var canalArr=Object.keys(canales).sort();
-  var epArr=Object.keys(eps).sort();
 
   buildDDOptions('ddMes',mesArr,'mes');
   buildDDOptions('ddSem',semArr,'sem');
+  buildDDOptions('ddUn',unArr,'un');
   buildDDOptions('ddCanal',canalArr,'canal');
-  buildDDOptions('ddEP',epArr,'ep');
 }
 
 function buildDDOptions(ddId,values,filtKey){
@@ -655,34 +666,32 @@ function rVentas(){
   var filtered=VD.filter(function(v){
     if(vFilt.mes.length&&vFilt.mes.indexOf(v.mes)<0)return false;
     if(vFilt.sem.length&&vFilt.sem.indexOf(String(v.sem))<0)return false;
+    if(vFilt.un.length&&vFilt.un.indexOf(getUnidad(v.canal))<0)return false;
     if(vFilt.canal.length&&vFilt.canal.indexOf(v.canal)<0)return false;
-    if(vFilt.ep.length&&vFilt.ep.indexOf(v.ep)<0)return false;
     return true;
   });
 
-  // Summary KPIs
-  var totalFact=0,totalPed=filtered.length,totalEf=0,totalTr=0;
-  filtered.forEach(function(v){totalFact+=v.facturado;totalEf+=v.efectivo;totalTr+=v.transferencia;});
+  var totalFact=0,totalPed=filtered.length,totalMargen=0;
+  filtered.forEach(function(v){totalFact+=v.$;totalMargen+=v.margen||0;});
   $('vSum').innerHTML=
     '<div class="v-kpi"><div class="v-kpi-v">$'+f$(totalFact)+'</div><div class="v-kpi-l">Facturado</div></div>'+
     '<div class="v-kpi"><div class="v-kpi-v">'+totalPed+'</div><div class="v-kpi-l">Ventas</div></div>'+
     '<div class="v-kpi"><div class="v-kpi-v">$'+f$(totalPed>0?Math.round(totalFact/totalPed):0)+'</div><div class="v-kpi-l">Ticket</div></div>';
 
-  // List
   var ct=$('vList');ct.innerHTML='';
   if(!filtered.length){ct.innerHTML='<div class="empty"><i>&#128202;</i><p>Sin ventas con estos filtros</p></div>';return;}
 
   filtered.forEach(function(v){
     var el=document.createElement('div');el.className='vt';
-    var canalColor={'Home':'var(--cd)','Pilar':'#D1C4E9','Capital Federal':'#B3E5FC','Clubes':'#DCEDC8','Red':'#FFE0B2','B2B':'#F8BBD0','Catering':'#B2DFDB'};
-    var fechaShort=v.fecha?v.fecha.substring(8,10)+'/'+v.fecha.substring(5,7):'';
-    el.innerHTML='<div class="vt-top"><span class="vt-cli">'+v.cliente+'</span><span class="vt-$">$'+f$(v.facturado)+'</span></div>'+
+    var canalColor={'Venta Directa':'#E8DFC4','Clubes':'#DCEDC8','Red':'#FFE0B2','B2B':'#F8BBD0','Catering':'#B2DFDB'};
+    var tipoTag=getTipo(v.canal);
+    el.innerHTML='<div class="vt-top"><span class="vt-cli">'+v.cliente+'</span><span class="vt-$">$'+f$(v.$)+'</span></div>'+
       '<div class="vt-bot">'+
         '<span class="tg" style="background:'+(canalColor[v.canal]||'var(--cd)')+';color:var(--b)">'+v.canal+'</span>'+
-        '<span class="tg" style="background:var(--cd);color:var(--bl)">'+fechaShort+'</span>'+
+        (v.zona?'<span class="tg" style="background:var(--cd);color:var(--bl)">'+v.zona+'</span>':'')+
+        '<span class="tg" style="background:var(--cd);color:var(--bl)">'+v.fecha+'</span>'+
         '<span class="tg" style="background:var(--cd);color:var(--bl)">Sem '+v.sem+'</span>'+
         '<span class="tg" style="background:'+(v.ep==='Cobrado'?'var(--gb);color:var(--gd)':'var(--ol);color:#E65100')+'">'+v.ep+'</span>'+
-        '<span class="tg" style="background:var(--cd);color:var(--bl)">'+v.fp+'</span>'+
       '</div>';
     ct.appendChild(el);
   });
