@@ -521,6 +521,7 @@ function enviarPedido() {
     else if (currentZone === 'clubes') { clientData.club = club; clientData.deporte = deporte; clientData.grupo = grupo; }
     else if (currentZone === 'pilar') { clientData.direccion = direccion; clientData.lote = lote; }
     localStorage.setItem('maleu_cliente_pg', JSON.stringify(clientData));
+    localStorage.setItem('maleu_cliente_' + currentZone, JSON.stringify(clientData));
     localStorage.setItem('maleu_ultimo_pedido_pg', JSON.stringify(Object.entries(cart).map(([id,qty]) => ({id: isNaN(id) ? id : +id, qty}))));
     localStorage.setItem('maleu_last_order_zone', currentZone);
   } catch(e) {}
@@ -770,25 +771,30 @@ function updateStockDisplay() {
 /* ── PRECARGAR DATOS ── */
 function loadClientData() {
   try {
-    const saved = JSON.parse(localStorage.getItem('maleu_cliente_pg') || 'null'); if (!saved) return;
+    // Datos específicos de la zona actual (prioridad) o legacy global
+    var saved = JSON.parse(localStorage.getItem('maleu_cliente_' + currentZone) || 'null');
+    var global = JSON.parse(localStorage.getItem('maleu_cliente_pg') || 'null');
+    if (!saved && global && global.zone === currentZone) saved = global;
+    if (!saved) {
+      // Al menos cargar nombre y teléfono del global si existe
+      if (global) {
+        if (global.nombre) $id('f-nombre').value = global.nombre;
+        if (global.telefono) $id('f-telefono').value = global.telefono;
+      }
+      return;
+    }
     if (saved.nombre) $id('f-nombre').value = saved.nombre;
     if (saved.telefono) $id('f-telefono').value = saved.telefono;
-    if (saved.zone === 'estancias' && currentZone === 'estancias') {
+    if (currentZone === 'estancias') {
       if (saved.barrioPrivado) { $id('f-barrio-privado').value = saved.barrioPrivado; filtrarSubBarrios(true); }
       if (saved.barrio) $id('f-barrio').value = saved.barrio;
       if (saved.lote) $id('f-lote').value = saved.lote;
     }
-    if (saved.zone === 'pilar' && currentZone === 'pilar') {
+    if (currentZone === 'pilar') {
       if (saved.direccion) $id('f-direccion').value = saved.direccion;
       if (saved.lote) $id('f-lote-pilar').value = saved.lote;
     }
-    if (saved.zone === 'capital' && currentZone === 'capital') {
-      // Capital Federal eliminado
-      if (saved.calle) $id('f-calle').value = saved.calle;
-      if (saved.numero) $id('f-numero').value = saved.numero;
-      if (saved.piso) $id('f-piso').value = saved.piso;
-    }
-    if (saved.zone === 'clubes' && currentZone === 'clubes') {
+    if (currentZone === 'clubes') {
       if (saved.club) $id('f-club').value = saved.club;
       if (saved.deporte) $id('f-deporte').value = saved.deporte;
       if (saved.grupo) $id('f-grupo').value = saved.grupo;
