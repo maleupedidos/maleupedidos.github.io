@@ -130,6 +130,21 @@ body{font-family:-apple-system,'Segoe UI',system-ui,sans-serif;background:var(--
 .toggle-btn.on{border-color:var(--o);color:var(--o);background:#FFF8F0}
 .hidden{display:none}
 
+/* ── ORIGEN POR PRODUCTO ── */
+.origen-box{margin-top:10px;background:var(--cr);border-radius:10px;padding:10px 12px}
+.origen-prod{display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--cd)}
+.origen-prod:last-of-type{border:none}
+.origen-prod-name{flex:1;font-size:12px;font-weight:600}
+.origen-prod-qty{font-size:11px;color:var(--bl);min-width:24px}
+.origen-toggle{display:flex;gap:0;border-radius:8px;overflow:hidden;border:2px solid var(--cd)}
+.origen-opt{padding:7px 12px;font-size:11px;font-weight:800;cursor:pointer;transition:.15s;background:#fff;color:var(--bl)}
+.origen-opt.dep.on{background:var(--blub);color:var(--blu);border-color:var(--blu)}
+.origen-opt.oc.on{background:#F3E5F5;color:#6A1B9A}
+.btn-origen{display:block;width:100%;margin-top:10px;padding:12px;background:var(--b);color:var(--tx);border:none;border-radius:10px;font-size:14px;font-weight:800;cursor:pointer;text-align:center}
+.btn-origen:active{opacity:.9}
+.btn-origen.saving{background:var(--bl)}
+.btn-origen.done{background:var(--g)}
+
 /* ── FORM ── */
 .form-card{background:#fff;border-radius:16px;padding:18px;margin-bottom:14px;border:2px solid var(--cd)}
 .form-title{font-size:14px;font-weight:800;margin-bottom:14px;display:flex;align-items:center;gap:8px}
@@ -425,6 +440,40 @@ function load(){
 }
 function sync(){var n=new Date();$('syncT').textContent=String(n.getHours()).padStart(2,'0')+':'+String(n.getMinutes()).padStart(2,'0');}
 
+// ── ORIGEN POR PRODUCTO ──
+var origenState={}; // uid → {abbr: 'D'/'OC'}
+function setOrigen(el){
+  var uid=el.dataset.uid, abbr=el.dataset.a, val=el.dataset.v;
+  if(!origenState[uid])origenState[uid]={};
+  origenState[uid][abbr]=val;
+  // Toggle visual
+  var row=el.parentElement;
+  row.querySelectorAll('.origen-opt').forEach(function(o){o.classList.remove('on');});
+  el.classList.add('on');
+}
+
+function confirmarOrigen(btn){
+  var hoja=btn.dataset.h, id=btn.dataset.n, uid=btn.dataset.uid;
+  var state=origenState[uid]||{};
+  // Build productos array
+  var prods=[];
+  var box=$('orig-'+uid);
+  box.querySelectorAll('.origen-prod').forEach(function(row){
+    var opt=row.querySelector('.origen-opt.on');
+    if(opt)prods.push({a:opt.dataset.a, o:opt.dataset.v});
+  });
+  if(!prods.length){toast('Selecciona origen para cada producto');return;}
+
+  btn.textContent='Guardando...';btn.classList.add('saving');
+  fetch(API,{method:'POST',body:JSON.stringify({action:'setOrigenProductos',hoja:hoja,id:id,productos:prods})})
+    .then(function(r){return r.json();})
+    .then(function(r){
+      if(r.ok){btn.textContent='ORIGEN CONFIRMADO';btn.classList.remove('saving');btn.classList.add('done');toast('Origen: '+r.origen);setTimeout(load,2000);}
+      else{btn.textContent='ERROR';btn.classList.remove('saving');}
+    })
+    .catch(function(){btn.textContent='SIN CONEXION';btn.classList.remove('saving');});
+}
+
 // ── PROPINA ──
 var propMetState={}; // uid → 'Efectivo' o 'Mercado Pago'
 function togglePropina(uid){
@@ -581,18 +630,35 @@ function rPedidos(){
     html+='</div>';
     if(prods)html+='<div class="pc-p">'+prods+'</div>';
 
-    // COBRAR + PROPINA if not paid
-    if(p.ep!=='Cobrado'){
+    // ORIGEN por producto si es Pendiente
+    if(p.o==='Pendiente'&&p.p&&p.p.length>0){
       var uid=p.h.replace(/ /g,'')+p.n;
-      html+='<div class="cobrar-row">';
-      html+='<button class="btn-cobrar" data-h="'+p.h+'" data-n="'+p.n+'" data-uid="'+uid+'" onclick="cobrar(this)">COBRAR $'+f$(p.$)+'</button>';
-      html+='<button class="btn-propina" onclick="togglePropina(\''+uid+'\')">PROPINA</button>';
+      html+='<div class="origen-box" id="orig-'+uid+'">';
+      p.p.forEach(function(pr,idx){
+        html+='<div class="origen-prod">';
+        html+='<span class="origen-prod-qty">'+pr.q+'x</span>';
+        html+='<span class="origen-prod-name">'+(PN[pr.a]||pr.a)+'</span>';
+        html+='<div class="origen-toggle">';
+        html+='<span class="origen-opt dep on" data-uid="'+uid+'" data-a="'+pr.a+'" data-v="D" onclick="setOrigen(this)">DEP</span>';
+        html+='<span class="origen-opt oc" data-uid="'+uid+'" data-a="'+pr.a+'" data-v="OC" onclick="setOrigen(this)">OC</span>';
+        html+='</div></div>';
+      });
+      html+='<button class="btn-origen" data-h="'+p.h+'" data-n="'+p.n+'" data-uid="'+uid+'" onclick="confirmarOrigen(this)">CONFIRMAR ORIGEN</button>';
       html+='</div>';
-      html+='<div class="propina-box" id="prop-'+uid+'">';
+    }
+
+    // COBRAR + PROPINA if not paid and origin is set
+    if(p.ep!=='Cobrado'&&p.o!=='Pendiente'){
+      var uid2=(p.h.replace(/ /g,'')+p.n);
+      html+='<div class="cobrar-row">';
+      html+='<button class="btn-cobrar" data-h="'+p.h+'" data-n="'+p.n+'" data-uid="'+uid2+'" onclick="cobrar(this)">COBRAR $'+f$(p.$)+'</button>';
+      html+='<button class="btn-propina" onclick="togglePropina(\''+uid2+'\')">PROPINA</button>';
+      html+='</div>';
+      html+='<div class="propina-box" id="prop-'+uid2+'">';
       html+='<div class="propina-row">';
-      html+='<input type="number" step="0.01" placeholder="Monto" id="propM-'+uid+'">';
-      html+='<span class="propina-met on" id="propEf-'+uid+'" onclick="setPropMet(\''+uid+'\',\'Efectivo\')">EF</span>';
-      html+='<span class="propina-met" id="propMP-'+uid+'" onclick="setPropMet(\''+uid+'\',\'MP\')">MP</span>';
+      html+='<input type="number" step="0.01" placeholder="Monto" id="propM-'+uid2+'">';
+      html+='<span class="propina-met on" id="propEf-'+uid2+'" onclick="setPropMet(\''+uid2+'\',\'Efectivo\')">EF</span>';
+      html+='<span class="propina-met" id="propMP-'+uid2+'" onclick="setPropMet(\''+uid2+'\',\'MP\')">MP</span>';
       html+='</div></div>';
     }
 
