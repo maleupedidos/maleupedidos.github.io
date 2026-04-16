@@ -95,6 +95,12 @@ body{font-family:'Segoe UI',system-ui,-apple-system,sans-serif;background:#F5F2E
 .np-qty-btn{width:40px;height:40px;border:none;background:#F2E8C7;font-size:20px;font-weight:800;color:#331C1C;cursor:pointer;display:flex;align-items:center;justify-content:center}
 .np-qty-btn:active{background:#E8DFC4}
 .np-qty-val{width:40px;text-align:center;font-size:16px;font-weight:800;border:none;outline:none;font-family:inherit;background:#fff}
+/* iOS zoom fix: all inputs/selects must be >= 16px */
+select,input[type="number"]{font-size:16px}
+.np-origen-toggle{display:flex;border-radius:8px;overflow:hidden;border:2px solid #E8DFC4;margin-top:6px}
+.np-origen-opt{flex:1;padding:6px 4px;text-align:center;font-size:11px;font-weight:700;cursor:pointer;transition:.15s;background:#fff;color:#7A4A4A}
+.np-origen-opt.active-oc{background:#1565C0;color:#fff;border-color:#1565C0}
+.np-origen-opt.active-dep{background:#4CAF50;color:#fff;border-color:#4CAF50}
 .np-summary{background:#F2E8C7;border-radius:14px;padding:16px;margin:8px 0}
 .np-summary-title{font-size:11px;font-weight:800;color:#F07D47;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px}
 .np-summary-line{display:flex;justify-content:space-between;font-size:13px;padding:2px 0}
@@ -191,6 +197,7 @@ var marcadosPedido = {};
 var currentTab = 'proveedores';
 var isOnline = navigator.onLine;
 var npQtys = {}; // { "PMu": 3, "ECaC": 1 }
+var npOrigins = {}; // { "PMu": "Orden de Compra", "TLC": "Depósito" }
 
 /* ── INIT ──────────────────────────────────────────────── */
 loadLocal();
@@ -433,6 +440,7 @@ function onNpProvChange() {
   var prov = document.getElementById('npProv').value;
   var container = document.getElementById('npProductsList');
   npQtys = {};
+  npOrigins = {};
 
   if (!prov || !catalogo.productos[prov]) {
     container.innerHTML = '<div class="np-empty">Elegi un proveedor para ver sus productos</div>';
@@ -443,13 +451,18 @@ function onNpProvChange() {
   var items = catalogo.productos[prov];
   var html = '';
   items.forEach(function(it) {
+    // Default origin: if stock > 0 → Depósito, else → OC
+    var defaultOrigen = (it.s !== null && it.s > 0) ? 'Depósito' : 'Orden de Compra';
+    npOrigins[it.a] = defaultOrigen;
+    var isOC = defaultOrigen === 'Orden de Compra';
+
     var stockHtml = '';
     if (it.s !== null) {
       if (it.s === 0) stockHtml = '<span class="np-prod-stock stock-out">Sin stock</span>';
       else if (it.s <= 3) stockHtml = '<span class="np-prod-stock stock-low">Stock: ' + it.s + '</span>';
       else stockHtml = '<span class="np-prod-stock stock-ok">Stock: ' + it.s + '</span>';
     }
-    html += '<div class="np-prod-card">' +
+    html += '<div class="np-prod-card" style="flex-wrap:wrap">' +
       '<div class="np-prod-info">' +
         '<div class="np-prod-name">' + it.n + '</div>' +
         '<div class="np-prod-meta">' + (it.c > 0 ? formatMoney(it.c) + ' c/u' : 'Sin costo') + ' ' + stockHtml + '</div>' +
@@ -459,10 +472,25 @@ function onNpProvChange() {
         '<input class="np-qty-val" id="npq_' + it.a + '" type="number" min="0" value="0" onchange="npSetQty(\'' + it.a + '\',this.value)" inputmode="numeric">' +
         '<button class="np-qty-btn" onclick="npChangeQty(\'' + it.a + '\',1)">+</button>' +
       '</div>' +
+      '<div class="np-origen-toggle" id="npo_' + it.a + '" style="width:100%">' +
+        '<div class="np-origen-opt' + (isOC ? ' active-oc' : '') + '" onclick="npSetOrigen(\'' + it.a + '\',\'Orden de Compra\')">OC (comprar)</div>' +
+        '<div class="np-origen-opt' + (!isOC ? ' active-dep' : '') + '" onclick="npSetOrigen(\'' + it.a + '\',\'Depósito\')">Deposito (tengo)</div>' +
+      '</div>' +
     '</div>';
   });
   container.innerHTML = html;
   updateNpSummary();
+}
+
+function npSetOrigen(abbr, origen) {
+  npOrigins[abbr] = origen;
+  var toggle = document.getElementById('npo_' + abbr);
+  if (!toggle) return;
+  var opts = toggle.children;
+  opts[0].className = 'np-origen-opt' + (origen === 'Orden de Compra' ? ' active-oc' : '');
+  opts[1].className = 'np-origen-opt' + (origen === 'Depósito' ? ' active-dep' : '');
+  updateNpSummary();
+  if (navigator.vibrate) navigator.vibrate(15);
 }
 
 function npChangeQty(abbr, delta) {
@@ -485,7 +513,7 @@ function getNpItems() {
   var items = [];
   catalogo.productos[prov].forEach(function(it) {
     var qty = npQtys[it.a] || 0;
-    if (qty > 0) items.push({ abbr: it.a, nombre: it.n, costo: it.c, qty: qty });
+    if (qty > 0) items.push({ abbr: it.a, nombre: it.n, costo: it.c, qty: qty, origen: npOrigins[it.a] || 'Orden de Compra' });
   });
   return items;
 }
@@ -508,7 +536,8 @@ function updateNpSummary() {
   items.forEach(function(it) {
     var sub = it.costo * it.qty;
     total += sub;
-    html += '<div class="np-summary-line"><span>' + it.qty + ' x ' + it.nombre + '</span><span>' + formatMoney(sub) + '</span></div>';
+    var orTag = it.origen === 'Depósito' ? '<span style="font-size:10px;background:#4CAF50;color:#fff;padding:1px 6px;border-radius:50px;margin-left:4px">DEP</span>' : '<span style="font-size:10px;background:#1565C0;color:#fff;padding:1px 6px;border-radius:50px;margin-left:4px">OC</span>';
+    html += '<div class="np-summary-line"><span>' + it.qty + ' x ' + it.nombre + orTag + '</span><span>' + formatMoney(sub) + '</span></div>';
   });
   html += '<div class="np-summary-total"><span>Total costo</span><span class="amount">' + formatMoney(total) + '</span></div>';
   html += '</div>';
