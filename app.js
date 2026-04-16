@@ -557,7 +557,8 @@ function enviarPedido() {
       + '*Equipo:* ' + grupo + '\n'
       + '*WhatsApp:* ' + telefono + '\n'
       + '*Entrega:* ' + entregaStr + '\n'
-      + '*Pago:* ' + pagoStr;
+      + '*Pago:* ' + pagoStr
+      + (pagoEl.value === 'Transferencia' ? '\nAlias: *maleump*\nTitular: Tadeo Alberto Ustariz' : '');
   } else {
     msg = 'Hola! Quiero hacer un pedido\n\n'
       + '*Pedido:*\n' + prodLines + '\n\n'
@@ -566,8 +567,9 @@ function enviarPedido() {
       + '*Total: ' + ars(total) + '*\n\n'
       + 'Direccion: ' + direccionStr + '\n'
       + 'Entrega: ' + entregaStr + '\n'
-      + 'Pago: ' + pagoStr + '\n\n'
-      + nombre + ' - ' + telefono;
+      + 'Pago: ' + pagoStr + '\n'
+      + (pagoEl.value === 'Transferencia' ? 'Alias: *maleump*\nTitular: Tadeo Alberto Ustariz\n' : '')
+      + '\n' + nombre + ' - ' + telefono;
   }
 
   const urlText = encodeURIComponent(msg);
