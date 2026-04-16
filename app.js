@@ -183,12 +183,16 @@ function applyZone() {
   if (promoBar) promoBar.style.display = currentZone === 'clubes' ? 'none' : '';
   // Limpiar carrito al cambiar zona (productos/precios cambian)
   cart = {};
+  // Ocultar último pedido (se re-evalúa con loadLastOrder)
+  var repeatBlock = $id('repeat-block');
+  if (repeatBlock) repeatBlock.style.display = 'none';
   // Re-render catálogo y nav con productos de la zona
   renderCatalog();
   renderCatNav();
   updateCatNavTop();
   updateUI();
   updateStockDisplay();
+  loadLastOrder();
 }
 
 /* ── RENDER CATÁLOGO ── */
@@ -796,11 +800,9 @@ function loadLastOrder() {
   try {
     const items = JSON.parse(localStorage.getItem('maleu_ultimo_pedido_pg') || 'null');
     if (!items || !items.length) return;
-    // Solo mostrar si la zona coincide (clubes tiene catálogo diferente)
+    // Solo mostrar si la zona coincide exactamente
     var savedZoneOrder = localStorage.getItem('maleu_last_order_zone') || '';
-    var isClubOrder = savedZoneOrder === 'clubes';
-    var isClubNow = currentZone === 'clubes';
-    if (isClubOrder !== isClubNow) return; // no mezclar catálogos
+    if (savedZoneOrder !== currentZone) return;
     const block=$id('repeat-block'), list=$id('repeat-items'); if(!block||!list) return;
     const lines = items.map(({id,qty}) => {
       const p=PROD_MAP[id]; if(!p) return '';
