@@ -54,6 +54,24 @@ body{font-family:'Segoe UI',system-ui,-apple-system,sans-serif;background:#F5F2E
 .btn-pedido{display:block;width:100%;margin-top:8px;padding:12px;background:#331C1C;color:#F2E8C7;border:none;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;text-align:center}
 .btn-pedido:active{background:#5a3a3a}
 .btn-pedido.done{background:#4CAF50;color:#fff}
+.btn-recibir{display:block;width:100%;margin-top:8px;padding:12px;background:#1565C0;color:#fff;border:none;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;text-align:center}
+.btn-recibir:active{background:#0d47a1}
+.btn-recibir.done{background:#4CAF50}
+
+/* ── RECIBIR PANEL ── */
+.recibir-panel{margin-top:10px;background:#F2E8C7;border-radius:10px;padding:12px;display:none}
+.recibir-panel.open{display:block}
+.recibir-row{display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid #E8DFC4}
+.recibir-row:last-child{border:none}
+.recibir-name{flex:1;font-size:13px;font-weight:600}
+.recibir-orig{font-size:12px;color:#7A4A4A;min-width:30px;text-align:center}
+.recibir-arrow{font-size:14px;color:#7A4A4A}
+.recibir-qty{width:50px;text-align:center;padding:8px 4px;border:2px solid #E8DFC4;border-radius:8px;font-size:16px;font-weight:800;font-family:inherit;background:#fff;outline:none}
+.recibir-qty:focus{border-color:#1565C0}
+.recibir-qty.changed{border-color:#e67e22;background:#fff3e0}
+.recibir-qty.zero{border-color:#c0392b;background:#fce8e8}
+.btn-confirmar-recibir{display:block;width:100%;margin-top:10px;padding:12px;background:#4CAF50;color:#fff;border:none;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer}
+.btn-confirmar-recibir:active{background:#388E3C}
 
 /* ── TOTAL BAR ── */
 .total-bar{background:#331C1C;color:#F2E8C7;border-radius:14px;padding:16px;margin:8px;display:flex;justify-content:space-between;align-items:center;font-size:16px;font-weight:800}
@@ -230,6 +248,7 @@ var busqueda = { provs: [], clientes: [], total: 0, ocs: [] };
 var catalogo = { proveedores: [], productos: {} };
 var syncQueue = [];
 var marcadosPedido = {};
+var marcadosRecibido = {};
 var currentTab = 'proveedores';
 var isOnline = navigator.onLine;
 var npQtys = {}; // { "PMu": 3, "ECaC": 1 }
@@ -273,7 +292,7 @@ function updateLastSync() {
 function saveLocal() {
   try {
     localStorage.setItem('maleu_busqueda', JSON.stringify({
-      busqueda: busqueda, catalogo: catalogo, syncQueue: syncQueue, marcadosPedido: marcadosPedido, ts: Date.now()
+      busqueda: busqueda, catalogo: catalogo, syncQueue: syncQueue, marcadosPedido: marcadosPedido, marcadosRecibido: marcadosRecibido, ts: Date.now()
     }));
   } catch(e) {}
 }
@@ -285,6 +304,7 @@ function loadLocal() {
     if (d.catalogo && d.catalogo.proveedores) catalogo = d.catalogo;
     if (d.syncQueue) syncQueue = d.syncQueue;
     if (d.marcadosPedido) marcadosPedido = d.marcadosPedido;
+    if (d.marcadosRecibido) marcadosRecibido = d.marcadosRecibido;
   } catch(e) {}
 }
 
@@ -393,6 +413,26 @@ function renderProveedores() {
 
     html += '<button class="btn-wa" onclick="copyWA(' + idx + ',this)">Copiar para WhatsApp</button>';
     html += '<button class="btn-pedido' + (isPedido ? ' done' : '') + '" onclick="marcarPedido(\'' + esc(prov.n) + '\',' + idx + ',this)">' + (isPedido ? 'Pedido enviado &#x2713;' : 'Marcar como Pedido') + '</button>';
+
+    // Recibir mercadería
+    var isRecibido = marcadosRecibido[prov.n];
+    var provOcs = getOcsByProv(prov.n);
+    if (provOcs.length > 0) {
+      html += '<button class="btn-recibir' + (isRecibido ? ' done' : '') + '" onclick="toggleRecibir(' + idx + ',this)">' + (isRecibido ? 'Recibido &#x2713;' : 'Recibir mercaderia') + '</button>';
+      html += '<div class="recibir-panel" id="recPanel_' + idx + '">';
+      provOcs.forEach(function(oc, oi) {
+        var qClass = '';
+        html += '<div class="recibir-row">' +
+          '<span class="recibir-name">' + oc.prod + '</span>' +
+          '<span class="recibir-orig">' + oc.q + '</span>' +
+          '<span class="recibir-arrow">&rarr;</span>' +
+          '<input class="recibir-qty" id="recQty_' + idx + '_' + oi + '" type="number" inputmode="numeric" min="0" value="' + oc.q + '" onchange="onRecQtyChange(this,' + oc.q + ')">' +
+          '</div>';
+      });
+      html += '<button class="btn-confirmar-recibir" onclick="confirmarRecibir(' + idx + ')">Confirmar recepcion</button>';
+      html += '</div>';
+    }
+
     html += '</div>';
   });
 
@@ -428,6 +468,50 @@ function marcarPedido(provName, idx, btn) {
   btn.innerHTML = 'Pedido enviado &#x2713;';
   processSyncQueue();
   if (navigator.vibrate) navigator.vibrate(50);
+}
+
+/* ── RECIBIR MERCADERÍA ────────────────────────────────── */
+function getOcsByProv(provName) {
+  if (!busqueda.ocs) return [];
+  return busqueda.ocs.filter(function(oc) { return oc.prov === provName; });
+}
+
+function toggleRecibir(idx, btn) {
+  var panel = document.getElementById('recPanel_' + idx);
+  if (!panel) return;
+  panel.classList.toggle('open');
+}
+
+function onRecQtyChange(input, origQty) {
+  var val = parseInt(input.value) || 0;
+  input.className = 'recibir-qty' + (val === 0 ? ' zero' : val < origQty ? ' changed' : '');
+}
+
+function confirmarRecibir(idx) {
+  var prov = busqueda.provs[idx];
+  if (!prov) return;
+  var provOcs = getOcsByProv(prov.n);
+  var items = [];
+
+  provOcs.forEach(function(oc, oi) {
+    var input = document.getElementById('recQty_' + idx + '_' + oi);
+    var qtyRecibida = input ? (parseInt(input.value) || 0) : oc.q;
+    items.push({ r: oc.r, qtyRecibida: qtyRecibida });
+  });
+
+  syncQueue.push({ action: 'recibirMercaderia', items: items, ts: Date.now() });
+  marcadosRecibido[prov.n] = true;
+  saveLocal();
+  processSyncQueue();
+
+  // Update UI
+  var panel = document.getElementById('recPanel_' + idx);
+  if (panel) panel.classList.remove('open');
+  showToast(prov.n + ' — mercaderia recibida');
+  if (navigator.vibrate) navigator.vibrate([50, 50, 50]);
+
+  // Re-render after a beat
+  setTimeout(function() { renderProveedores(); }, 500);
 }
 
 /* ── PEDIDOS TAB — hierarchical navigation ─────────────── */
