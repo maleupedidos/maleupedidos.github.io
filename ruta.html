@@ -105,6 +105,18 @@ body{font-family:'Montserrat',system-ui,-apple-system,sans-serif;background:var(
 .confirm-btns .btn-si{background:var(--green);color:#fff}
 .confirm-btns .btn-no{background:var(--border);color:var(--brown)}
 
+/* ── PENDIENTES COBRO ── */
+.cobro-section{padding:12px 14px;border-top:2px solid var(--orange)}
+.cobro-title{font-size:13px;font-weight:800;color:var(--orange);margin-bottom:8px}
+.cobro-card{background:var(--white);border-radius:10px;padding:10px 12px;margin-bottom:6px;border:2px solid #fff3e0;display:flex;flex-direction:column;gap:6px}
+.cobro-card-head{display:flex;justify-content:space-between;align-items:center}
+.cobro-card-name{font-size:14px;font-weight:700}
+.cobro-card-total{font-size:16px;font-weight:800;color:var(--orange)}
+.cobro-card-actions{display:flex;gap:6px}
+.cobro-card-actions button,.cobro-card-actions a{flex:1;padding:8px;border:none;border-radius:8px;font-family:inherit;font-size:11px;font-weight:700;cursor:pointer;text-align:center;text-decoration:none}
+.cobro-btn-alias{background:#25D366;color:#fff}
+.cobro-btn-cobrado{background:var(--orange);color:#fff}
+
 .sync-banner{background:#FFF3E0;color:#E65100;text-align:center;padding:5px;font-size:10px;font-weight:700;display:none}
 .sync-banner.visible{display:block}
 .hidden{display:none!important}
@@ -179,7 +191,7 @@ var DIAS_SEMANA = ['Domingo','Lunes','Martes','Mi\u00E9rcoles','Jueves','Viernes
 function getDiaHoy() { return DIAS_SEMANA[new Date().getDay()]; }
 
 /* ── STATE ── */
-var entregas=[], entregados={}, cobrados={}, propinas={}, syncQueue=[], armadoDone={};
+var entregas=[], entregados={}, cobrados={}, propinas={}, syncQueue=[], armadoDone={}, pendientesCobro=[];
 var currentTab='armado', rutaIndex=0, isOnline=navigator.onLine, resumenBarrioAbierto=null;
 
 /* ── INIT ── */
@@ -196,8 +208,8 @@ if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw-ruta.js')
 /* ── UTILS ── */
 function updateOnlineStatus(){document.getElementById('statusDot').className='status-dot '+(isOnline?'online':'offline')}
 function updateLastSync(){var n=new Date();document.getElementById('lastSync').textContent=n.getHours()+':'+String(n.getMinutes()).padStart(2,'0');localStorage.setItem('maleu_ruta_sync',n.getTime())}
-function saveLocal(){try{localStorage.setItem('maleu_ruta',JSON.stringify({entregas:entregas,entregados:entregados,cobrados:cobrados,propinas:propinas,syncQueue:syncQueue,armadoDone:armadoDone,currentTab:currentTab,rutaIndex:rutaIndex,ts:Date.now()}))}catch(e){}}
-function loadLocal(){try{var d=JSON.parse(localStorage.getItem('maleu_ruta')||'{}');if(d.entregas)entregas=d.entregas;if(d.entregados)entregados=d.entregados;if(d.cobrados)cobrados=d.cobrados;if(d.propinas)propinas=d.propinas;if(d.syncQueue)syncQueue=d.syncQueue;if(d.armadoDone)armadoDone=d.armadoDone;if(d.currentTab)currentTab=d.currentTab;if(d.rutaIndex!==undefined)rutaIndex=d.rutaIndex}catch(e){}}
+function saveLocal(){try{localStorage.setItem('maleu_ruta',JSON.stringify({entregas:entregas,entregados:entregados,cobrados:cobrados,propinas:propinas,syncQueue:syncQueue,armadoDone:armadoDone,pendientesCobro:pendientesCobro,currentTab:currentTab,rutaIndex:rutaIndex,ts:Date.now()}))}catch(e){}}
+function loadLocal(){try{var d=JSON.parse(localStorage.getItem('maleu_ruta')||'{}');if(d.entregas)entregas=d.entregas;if(d.entregados)entregados=d.entregados;if(d.cobrados)cobrados=d.cobrados;if(d.propinas)propinas=d.propinas;if(d.syncQueue)syncQueue=d.syncQueue;if(d.armadoDone)armadoDone=d.armadoDone;if(d.pendientesCobro)pendientesCobro=d.pendientesCobro;if(d.currentTab)currentTab=d.currentTab;if(d.rutaIndex!==undefined)rutaIndex=d.rutaIndex}catch(e){}}
 
 function refresh(silent){
   if(!silent)document.getElementById('loadingView').classList.remove('hidden');
@@ -332,7 +344,19 @@ function renderRuta(){
 
   if(sorted.length===0){
     header.innerHTML='';
-    body.innerHTML='<div class="empty" style="padding:40px">Todas las entregas de hoy completadas</div>';
+    var emptyH='<div class="empty" style="padding:30px">Todas las entregas de hoy completadas</div>';
+    if(pendientesCobro.length>0){
+      emptyH+='<div class="cobro-section"><div class="cobro-title">Pendientes de cobro ('+pendientesCobro.length+')</div>';
+      pendientesCobro.forEach(function(pc,i){
+        var tel=pc.t?(pc.t.replace(/[^0-9]/g,'')):null;if(tel&&tel.length<12)tel='54'+tel;
+        var aliasMsg=encodeURIComponent('Hola! Cuando puedas mandanos el comprobante. El alias es maleump. Gracias!');
+        emptyH+='<div class="cobro-card"><div class="cobro-card-head"><span class="cobro-card-name">'+pc.c+'</span><span class="cobro-card-total">'+formatMoney(pc.$)+'</span></div><div class="cobro-card-actions">';
+        if(tel){emptyH+='<a href="https://wa.me/'+tel+'?text='+aliasMsg+'" class="cobro-btn-alias">Pedir comprobante</a>'}
+        emptyH+='<button class="cobro-btn-cobrado" onclick="cobrarPendiente('+i+')">Cobrado</button></div></div>';
+      });
+      emptyH+='</div>';
+    }
+    body.innerHTML=emptyH;
     actions.innerHTML='';return;
   }
   if(rutaIndex>=sorted.length)rutaIndex=sorted.length-1;if(rutaIndex<0)rutaIndex=0;
@@ -358,11 +382,25 @@ function renderRuta(){
   var badgeText=cobrado?'Cobrado':e.fp;
   h+='<div class="ruta-cobrar"><span class="ruta-cobrar-total" id="totalFacturado">'+formatMoney(totalFact)+'</span><span class="ruta-cobrar-badge '+badgeClass+'">'+badgeText+'</span></div>';
 
-  // Extras: WhatsApp + Propina (siempre visibles, una fila cada uno)
+  // Extras: WA "Estamos afuera" + Propina
   h+='<div class="ruta-extras">';
-  if(e.t){var tel=e.t.replace(/[^0-9]/g,'');if(tel.length<12)tel='54'+tel;h+='<a href="https://wa.me/'+tel+'?text='+encodeURIComponent('Estamos yendo a dejar tu pedido! :)')+'" class="btn-wpp-sm">WA '+e.c.split(' ')[0]+'</a>'}
+  if(e.t){var tel=e.t.replace(/[^0-9]/g,'');if(tel.length<12)tel='54'+tel;h+='<a href="https://wa.me/'+tel+'?text='+encodeURIComponent('Estamos afuera! :)')+'" class="btn-wpp-sm">Estamos afuera</a>'}
   if(!cobrado){h+='<div style="flex:1;display:flex;align-items:center;gap:6px;background:var(--white);border:1.5px solid var(--border);border-radius:8px;padding:6px 8px"><label style="font-size:11px;font-weight:700;flex-shrink:0">Propina $</label><input type="number" id="propinaInput" inputmode="numeric" placeholder="0" value="'+(prop||'')+'" oninput="actualizarPropina(\''+key+'\','+e.$+')" style="flex:1;border:none;font-size:14px;font-weight:700;font-family:inherit;text-align:right;outline:none;background:transparent"></div>'}
   h+='</div>';
+  body.innerHTML=h;
+
+  // Pendientes de cobro
+  if(pendientesCobro.length>0){
+    h+='<div class="cobro-section"><div class="cobro-title">Pendientes de cobro ('+pendientesCobro.length+')</div>';
+    pendientesCobro.forEach(function(pc,i){
+      var tel=pc.t?(pc.t.replace(/[^0-9]/g,'')):null;if(tel&&tel.length<12)tel='54'+tel;
+      var aliasMsg=encodeURIComponent('Hola! Cuando puedas mandanos el comprobante. El alias es maleump. Gracias!');
+      h+='<div class="cobro-card"><div class="cobro-card-head"><span class="cobro-card-name">'+pc.c+'</span><span class="cobro-card-total">'+formatMoney(pc.$)+'</span></div><div class="cobro-card-actions">';
+      if(tel){h+='<a href="https://wa.me/'+tel+'?text='+aliasMsg+'" class="cobro-btn-alias">Pedir comprobante</a>'}
+      h+='<button class="cobro-btn-cobrado" onclick="cobrarPendiente('+i+')">Cobrado</button></div></div>';
+    });
+    h+='</div>';
+  }
   body.innerHTML=h;
 
   // Actions: botón principal + nav
@@ -398,14 +436,33 @@ function cerrarConfirm(){document.getElementById('confirmOverlay').classList.add
 function marcarEntregado(key){
   entregados[key]=true;var parts=key.split('|'),hoja=parts[0],id=parts[1];
   var ent=entregas.find(function(e){return e.h===hoja&&String(e.id)===id});
-  if(ent){syncQueue.push({action:'marcarEntregado',hoja:ent.h,id:String(ent.id),row:ent.r,cobrado:!!cobrados[key],propina:propinas[key]||0,ts:Date.now()})}
+  if(ent){
+    syncQueue.push({action:'marcarEntregado',hoja:ent.h,id:String(ent.id),row:ent.r,cobrado:!!cobrados[key],propina:propinas[key]||0,ts:Date.now()});
+    // Si no está cobrado, guardar para seguimiento
+    if(!cobrados[key]&&ent.ep!=='Cobrado'){
+      pendientesCobro.push({key:key,c:ent.c,t:ent.t,$:ent.$,fp:ent.fp,ts:Date.now()});
+    }
+  }
   saveLocal();processSyncQueue();if(navigator.vibrate)navigator.vibrate(50);
-  // Auto-avance: no incrementar index porque el entregado sale de la lista
   showToast('Entregado a '+((ent&&ent.c)||'').split(' ')[0]);
   render();
 }
 
 function marcarCobrado(key){cobrados[key]=true;saveLocal();renderRuta();if(navigator.vibrate)navigator.vibrate(30)}
+
+function cobrarPendiente(i){
+  if(i>=0&&i<pendientesCobro.length){
+    var pc=pendientesCobro[i];
+    cobrados[pc.key]=true;
+    // Sync al Sheets
+    var parts=pc.key.split('|');
+    syncQueue.push({action:'marcarEntregado',hoja:parts[0],id:parts[1],row:0,cobrado:true,propina:0,ts:Date.now()});
+    pendientesCobro.splice(i,1);
+    saveLocal();processSyncQueue();renderRuta();
+    showToast('Cobrado a '+pc.c.split(' ')[0]);
+    if(navigator.vibrate)navigator.vibrate(30);
+  }
+}
 
 /* ── SYNC ── */
 function processSyncQueue(){
