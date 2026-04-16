@@ -93,6 +93,22 @@ let cart = {};
 let currentZone = null; // 'estancias' | 'pilar'
 let stockMap = {};
 let _enviando = false;
+
+/* Ventana de stock: solo Estancias, Jueves 13:01 a Domingo 21:00 */
+function isStockLimited() {
+  if (currentZone !== 'estancias') return false;
+  var now = new Date();
+  var utcH = now.getUTCHours(), utcD = now.getUTCDay();
+  // Argentina = UTC-3
+  var arH = (utcH - 3 + 24) % 24;
+  var arD = utcD;
+  if (utcH < 3) arD = (utcD - 1 + 7) % 7;
+  // 0=Dom, 1=Lun, 2=Mar, 3=Mié, 4=Jue, 5=Vie, 6=Sáb
+  if (arD === 4 && arH >= 13) return true;  // Jueves desde 13:01
+  if (arD === 5 || arD === 6) return true;   // Viernes y Sábado todo el día
+  if (arD === 0 && arH < 21) return true;    // Domingo hasta 21:00
+  return false;
+}
 let _formVisible = false;
 const PROD_MAP = {}; PRODUCTOS.forEach(p => PROD_MAP[p.id] = p);
 PRODUCTOS_CLUBES.forEach(p => PROD_MAP[p.id] = p);
@@ -236,22 +252,35 @@ function renderCardFooter(id) {
   const p = PROD_MAP[id];
   if (!p) return;
   const qty = cart[id] || 0;
+  const limited = isStockLimited();
+  const avail = stockMap[id];
+  const sinStock = limited && avail !== undefined && avail === 0;
+  const atLimit = limited && avail !== undefined && qty >= avail;
   if (qty === 0) {
     footer.innerHTML = '<span class="product-price">' + ars(p.precio) + '</span>' +
-      '<button class="add-btn" onclick="addToCart(\'' + p.id + '\')">+ Agregar</button>';
+      '<button class="add-btn" onclick="addToCart(\'' + p.id + '\')"' + (sinStock ? ' disabled' : '') + '>' +
+      (sinStock ? 'Sin stock' : '+ Agregar') + '</button>';
   } else {
     footer.innerHTML = '<span class="product-price">' + ars(p.precio) + '</span>' +
       '<div class="card-qty-controls">' +
         '<button class="card-qty-btn remove" onclick="cardChangeQty(\'' + p.id + '\',-1)">−</button>' +
         '<span class="card-qty-val">' + qty + '</span>' +
-        '<button class="card-qty-btn" onclick="cardChangeQty(\'' + p.id + '\',+1)">+</button>' +
-      '</div>';
+        '<button class="card-qty-btn" onclick="cardChangeQty(\'' + p.id + '\',+1)"' + (atLimit ? ' disabled' : '') + '>+</button>' +
+      '</div>' +
+      (atLimit ? '<span style="display:block;text-align:center;font-size:.75rem;color:#c0392b;margin-top:4px;font-weight:600;">Máximo disponible: ' + avail + '</span>' : '');
   }
 }
 
 /* ── CARRITO ── */
 function modifyCart(id, delta) {
   const current = cart[id] || 0;
+  if (delta > 0 && isStockLimited()) {
+    const avail = stockMap[id];
+    if (avail !== undefined && current >= avail) {
+      toast('⚠️ Stock limitado — solo hay ' + avail + ' disponible' + (avail !== 1 ? 's' : ''), 3000);
+      return;
+    }
+  }
   const newQty = current + delta;
   if (newQty <= 0) delete cart[id];
   else cart[id] = newQty;
@@ -723,6 +752,14 @@ async function fetchStock() {
     }
     rows.slice(1).forEach(row => { const cols=parseCSVRow(row); const abbr=cols[2]; const disp=parseInt(cols[7]); if(abbr&&!isNaN(disp)) abbrStock[abbr]=disp; });
     PRODUCTOS.forEach(p => { const abbr=PROD_ABBR[p.id]; if(abbr&&abbrStock[abbr]!==undefined) stockMap[p.id]=abbrStock[abbr]; });
+    if (isStockLimited()) {
+      let ajustado = false;
+      Object.entries(cart).forEach(([id,qty]) => {
+        const avail=stockMap[id];
+        if(avail!==undefined&&qty>avail){if(avail===0)delete cart[id];else cart[id]=avail;ajustado=true;renderCardFooter(id);}
+      });
+      if(ajustado){updateUI();toast('⚠️ Tu carrito fue ajustado por stock disponible');}
+    }
     updateStockDisplay();
     loadLastOrder();
   } catch(e) { console.warn('fetchStock:',e); }
@@ -731,9 +768,11 @@ function updateStockDisplay() {
   const showStock = currentZone && ZONAS[currentZone] && ZONAS[currentZone].showStock;
   PRODUCTOS.forEach(p => {
     const el=$id('stock-'+p.id), avail=stockMap[p.id]; if(!el) return;
+    var limited = isStockLimited();
     if (!showStock || avail===undefined) { el.innerHTML=''; }
-    else if(avail===0) el.innerHTML='<span class="stock-badge stock-order">A pedido</span>';
-    else if(avail<=3) el.innerHTML='<span class="stock-badge stock-low">Últimas '+avail+' unidades</span>';
+    else if(avail===0 && limited) el.innerHTML='<span class="stock-badge stock-out">Sin stock</span>';
+    else if(avail===0 && !limited) el.innerHTML='<span class="stock-badge stock-order">A pedido</span>';
+    else if(avail<=3 && limited) el.innerHTML='<span class="stock-badge stock-low">Últimas '+avail+' unidades</span>';
     else el.innerHTML='';
     renderCardFooter(p.id);
   });
@@ -796,8 +835,10 @@ function repeatLastOrder() {
     const items = JSON.parse(localStorage.getItem('maleu_ultimo_pedido_pg') || 'null');
     if (!items || !items.length) return;
     let agregados = 0;
+    var limited = isStockLimited();
     items.forEach(({id,qty}) => {
       const p=PROD_MAP[id]; if(!p) return;
+      if (limited) { const avail=stockMap[id]; if(avail!==undefined&&avail===0) return; qty = avail!==undefined ? Math.min(qty, avail-(cart[id]||0)) : qty; if(qty<=0) return; }
       cart[id] = (cart[id]||0) + qty;
       agregados++; renderCardFooter(id);
     });
