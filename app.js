@@ -34,6 +34,15 @@ const CATEGORIAS = [
   { nombre:"Postres & Tortas", icono:"🎂", nota:"Para cerrar bien la noche" },
 ];
 
+/* ── PRODUCTOS RED (catálogo completo + 4 sorrentinos exclusivos, precios retail) ── */
+const PRODUCTOS_RED = [
+  ...PRODUCTOS,
+  { id:20, cat:"Sorrentinos",      nombre:"Sorrentinos Queso Brie",       desc:"Relleno cremoso de queso brie. Suave, intenso y distinto.",                      precio:19300, img:"sorrentinos-cordero-new.png", emoji:"🍝", chips:["Para 2–3 personas","600g · 16 unidades","Listos en 4 min"] },
+  { id:21, cat:"Sorrentinos",      nombre:"Sorrentinos Langostinos",      desc:"Langostinos envueltos en masa fresca. El premium de la mesa.",                   precio:19300, img:"sorrentinos-cordero-new.png", emoji:"🍝", chips:["Para 2–3 personas","600g · 16 unidades","Listos en 4 min"] },
+  { id:22, cat:"Sorrentinos",      nombre:"Sorrentinos Pollo y Puerro",   desc:"Pollo suave y puerro cremoso. Combinación que siempre funciona.",                precio:16300, img:"sorrentinos-cordero-new.png", emoji:"🍝", chips:["Para 2–3 personas","600g · 16 unidades","Listos en 4 min"] },
+  { id:23, cat:"Sorrentinos",      nombre:"Sorrentinos Espinaca",         desc:"Espinaca fresca con queso. Liviana, rica y rendidora.",                           precio:15100, img:"sorrentinos-cordero-new.png", emoji:"🍝", chips:["Para 2–3 personas","600g · 16 unidades","Listos en 4 min"] },
+];
+
 /* ── PRODUCTOS CLUBES (precios especiales, solo pizzas) ── */
 const PRODUCTOS_CLUBES = [
   { id:'pmu', cat:"Pizzas Premium",  nombre:"Pizza Muzzarella",           desc:"Puro queso derretido sobre salsa de tomate. La clásica que nunca sobra.",   precio:7000,  img:"pizza-muzarella-cocida.jpg", emoji:"🍕", chips:["1 pizza grande","Al horno en 12 min"] },
@@ -52,7 +61,7 @@ const CATEGORIAS_CLUBES = [
 // Los productos de clubes se agregan a PROD_MAP después de su declaración (ver más abajo)
 
 /* Productos y categorías activos según zona */
-function getActiveProducts() { return currentZone === 'clubes' ? PRODUCTOS_CLUBES : PRODUCTOS; }
+function getActiveProducts() { return currentZone === 'clubes' ? PRODUCTOS_CLUBES : currentZone === 'red' ? PRODUCTOS_RED : PRODUCTOS; }
 function getActiveCategories() { return currentZone === 'clubes' ? CATEGORIAS_CLUBES : CATEGORIAS; }
 
 /* ── ZONAS ── */
@@ -80,6 +89,14 @@ const ZONAS = {
     canal: "Clubes",
     horarios: { "Viernes":"Horario a coordinar" },
     deliveryText: "📅 Entrega los viernes en la puerta del club",
+    showStock: false
+  },
+  red: {
+    nombre: "Maleu Red — Vendedores",
+    envio: 0,
+    canal: "Red",
+    horarios: { "Lunes":"A coordinar", "Miércoles":"A coordinar", "Viernes":"A coordinar" },
+    deliveryText: "📅 Entrega a coordinar con Maleu",
     showStock: false
   }
 };
@@ -111,6 +128,7 @@ function isStockLimited() {
 }
 let _formVisible = false;
 const PROD_MAP = {}; PRODUCTOS.forEach(p => PROD_MAP[p.id] = p);
+PRODUCTOS_RED.filter(p => !PROD_MAP[p.id]).forEach(p => PROD_MAP[p.id] = p);
 PRODUCTOS_CLUBES.forEach(p => PROD_MAP[p.id] = p);
 
 const PROD_ABBR = {
@@ -119,6 +137,8 @@ const PROD_ABBR = {
   11:'ECaC', 12:'EJyQ', 17:'ECyQ', 18:'EV',
   14:'TG', 15:'TLC', 16:'TC', 13:'F',
   1:'PMa', 2:'PJyQ', 3:'PCC', 4:'PJyM', 19:'PMu',
+  // Red exclusivos
+  20:'SQB', 21:'SL', 22:'SPyP', 23:'SE',
   // Clubes (IDs string)
   'pmu':'PMu', 'pma':'PMa', 'pjq':'PJyQ', 'pcc':'PCC', 'pjm':'PJyM',
   'pp1':'PPM', 'pp2':'PPJyQ', 'pp3':'PPCyQ',
@@ -135,7 +155,7 @@ function getShipping() {
   return z.envio;
 }
 function getCashDiscount() {
-  if (currentZone === 'clubes') return 0;
+  if (currentZone === 'clubes' || currentZone === 'red') return 0;
   const total = cartTotal();
   const sel = document.querySelector('input[name="pago"]:checked');
   const isCash = sel && sel.value === 'Efectivo';
@@ -144,7 +164,7 @@ function getCashDiscount() {
   return 0;
 }
 function getDiscountLabel() {
-  if (currentZone === 'clubes') return '';
+  if (currentZone === 'clubes' || currentZone === 'red') return '';
   const sel = document.querySelector('input[name="pago"]:checked');
   const isCash = sel && sel.value === 'Efectivo';
   const isBulk = cartTotal() >= 100000;
@@ -188,15 +208,17 @@ function applyZone() {
   var cfFields = $id('fields-capital');
   if (cfFields) cfFields.style.display = 'none';
   $id('fields-clubes').style.display = currentZone === 'clubes' ? '' : 'none';
+  var redFields = $id('fields-red');
+  if (redFields) redFields.style.display = currentZone === 'red' ? '' : 'none';
   // Días de entrega
   const diaSelect = $id('f-dia');
   diaSelect.innerHTML = '<option value="">Elegí un día</option>';
   Object.keys(z.horarios).forEach(dia => {
     diaSelect.innerHTML += '<option value="' + dia + '">' + dia + '</option>';
   });
-  // Promo bar: ocultar en clubes (no hay descuentos)
+  // Promo bar: ocultar en clubes y red (no hay descuentos)
   var promoBar = $id('promo-bar');
-  if (promoBar) promoBar.style.display = currentZone === 'clubes' ? 'none' : '';
+  if (promoBar) promoBar.style.display = (currentZone === 'clubes' || currentZone === 'red') ? 'none' : '';
   // Limpiar carrito al cambiar zona (productos/precios cambian)
   cart = {};
   // Ocultar último pedido (se re-evalúa con loadLastOrder)
@@ -482,6 +504,12 @@ function enviarPedido() {
     clearError('f-club','err-club');
     clearError('f-deporte','err-deporte');
     clearError('f-grupo','err-grupo');
+  } else if (currentZone === 'red') {
+    clearError('f-vendedor','err-vendedor');
+    clearError('f-partido','err-partido');
+    clearError('f-localidad','err-localidad');
+    clearError('f-barrio-red','err-barrio-red');
+    clearError('f-domicilio-red','err-domicilio-red');
   } else {
     clearError('f-direccion','err-direccion');
     clearError('f-lote-pilar','err-lote-pilar');
@@ -494,6 +522,7 @@ function enviarPedido() {
   if (!nombre) { showError('f-nombre','err-nombre'); if(!primerInvalido) primerInvalido=$id('f-nombre'); }
 
   let barrioPrivado='', barrio='', lote='', direccion='', club='', deporte='', grupo='';
+  let vendedor='', partido='', localidad='', barrioRed='', domicilioRed='';
   if (currentZone === 'estancias') {
     barrioPrivado = $id('f-barrio-privado').value;
     barrio = barrioPrivado === 'Estancias del Pilar' ? $id('f-barrio').value : barrioPrivado;
@@ -508,6 +537,17 @@ function enviarPedido() {
     if (!club) { showError('f-club','err-club'); if(!primerInvalido) primerInvalido=$id('f-club'); }
     if (!deporte) { showError('f-deporte','err-deporte'); if(!primerInvalido) primerInvalido=$id('f-deporte'); }
     if (!grupo) { showError('f-grupo','err-grupo'); if(!primerInvalido) primerInvalido=$id('f-grupo'); }
+  } else if (currentZone === 'red') {
+    vendedor = $id('f-vendedor').value.trim();
+    partido = $id('f-partido').value.trim();
+    localidad = $id('f-localidad').value.trim();
+    barrioRed = $id('f-barrio-red').value.trim();
+    domicilioRed = $id('f-domicilio-red').value.trim();
+    if (!vendedor) { showError('f-vendedor','err-vendedor'); if(!primerInvalido) primerInvalido=$id('f-vendedor'); }
+    if (!partido) { showError('f-partido','err-partido'); if(!primerInvalido) primerInvalido=$id('f-partido'); }
+    if (!localidad) { showError('f-localidad','err-localidad'); if(!primerInvalido) primerInvalido=$id('f-localidad'); }
+    if (!barrioRed) { showError('f-barrio-red','err-barrio-red'); if(!primerInvalido) primerInvalido=$id('f-barrio-red'); }
+    if (!domicilioRed) { showError('f-domicilio-red','err-domicilio-red'); if(!primerInvalido) primerInvalido=$id('f-domicilio-red'); }
   } else {
     direccion = $id('f-direccion').value.trim();
     lote = $id('f-lote-pilar').value.trim();
@@ -525,6 +565,7 @@ function enviarPedido() {
     const clientData = { nombre, telefono, dia, pago: pagoEl.value, zone: currentZone };
     if (currentZone === 'estancias') { clientData.barrioPrivado = barrioPrivado; clientData.barrio = barrio; clientData.lote = lote; }
     else if (currentZone === 'clubes') { clientData.club = club; clientData.deporte = deporte; clientData.grupo = grupo; }
+    else if (currentZone === 'red') { clientData.vendedor = vendedor; clientData.partido = partido; clientData.localidad = localidad; clientData.barrioRed = barrioRed; clientData.domicilioRed = domicilioRed; }
     else if (currentZone === 'pilar') { clientData.direccion = direccion; clientData.lote = lote; }
     localStorage.setItem('maleu_cliente_pg', JSON.stringify(clientData));
     localStorage.setItem('maleu_cliente_' + currentZone, JSON.stringify(clientData));
@@ -546,6 +587,8 @@ function enviarPedido() {
     direccionStr = barrioInfo + ', Lote ' + lote;
   } else if (currentZone === 'clubes') {
     direccionStr = club + ' — ' + deporte + ' — ' + grupo;
+  } else if (currentZone === 'red') {
+    direccionStr = partido + ', ' + localidad + ' — ' + barrioRed + ', ' + domicilioRed;
   } else {
     direccionStr = direccion + ', ' + lote;
   }
@@ -556,7 +599,21 @@ function enviarPedido() {
   const pagoStr = pagoEl.value === 'Efectivo' ? 'Efectivo' : 'Mercado Pago';
 
   let msg;
-  if (currentZone === 'clubes') {
+  if (currentZone === 'red') {
+    msg = '*NUEVO PEDIDO — MALEU RED*\n\n'
+      + prodLines + '\n\n'
+      + '———————————————\n'
+      + '*Total: ' + ars(total) + '*\n'
+      + '———————————————\n\n'
+      + '*Vendedor:* ' + vendedor + '\n'
+      + '*Cliente:* ' + nombre + '\n'
+      + '*Zona:* ' + partido + ', ' + localidad + '\n'
+      + '*Dirección:* ' + barrioRed + ', ' + domicilioRed + '\n'
+      + '*WhatsApp:* ' + telefono + '\n'
+      + '*Entrega:* ' + entregaStr + '\n'
+      + '*Pago:* ' + pagoStr
+      + (pagoEl.value === 'Transferencia' ? '\nAlias: *maleump*\nTitular: Tadeo Alberto Ustariz' : '');
+  } else if (currentZone === 'clubes') {
     msg = '*NUEVO PEDIDO — MALEU CLUBES*\n\n'
       + prodLines + '\n\n'
       + '———————————————\n'
@@ -589,24 +646,39 @@ function enviarPedido() {
   const items = Object.entries(cart).map(([id,qty]) => {
     const p = PROD_MAP[id]; return p ? {id:p.id, nombre:p.nombre, qty, precio:p.precio} : null;
   }).filter(Boolean);
-  const postData = currentZone === 'clubes' ? {
-    canal: 'Clubes',
-    fecha: new Date().toLocaleString('es-AR'),
-    nombre, telefono, club, deporte, grupo,
-    dia, horario, pago: pagoEl.value,
-    envio: shipping, items, total,
-    subtotalSinDescuento: subtotal, descuento: discount
-  } : {
-    canal: z.canal,
-    fecha: new Date().toLocaleString('es-AR'),
-    nombre, barrioPrivado,
-    subBarrio: barrioPrivado === 'Estancias del Pilar' ? barrio : '',
-    barrio: currentZone === 'estancias' ? barrio : direccion,
-    lote, telefono, dia, horario,
-    pago: pagoEl.value,
-    envio: shipping, items, total,
-    subtotalSinDescuento: subtotal, descuento: discount
-  };
+  let postData;
+  if (currentZone === 'red') {
+    postData = {
+      canal: 'Red',
+      fecha: new Date().toLocaleString('es-AR'),
+      vendedor, nombre, telefono,
+      partido, localidad, barrioRed, domicilioRed,
+      dia, horario, pago: pagoEl.value,
+      envio: shipping, items, total,
+      subtotalSinDescuento: subtotal, descuento: discount
+    };
+  } else if (currentZone === 'clubes') {
+    postData = {
+      canal: 'Clubes',
+      fecha: new Date().toLocaleString('es-AR'),
+      nombre, telefono, club, deporte, grupo,
+      dia, horario, pago: pagoEl.value,
+      envio: shipping, items, total,
+      subtotalSinDescuento: subtotal, descuento: discount
+    };
+  } else {
+    postData = {
+      canal: z.canal,
+      fecha: new Date().toLocaleString('es-AR'),
+      nombre, barrioPrivado,
+      subBarrio: barrioPrivado === 'Estancias del Pilar' ? barrio : '',
+      barrio: currentZone === 'estancias' ? barrio : direccion,
+      lote, telefono, dia, horario,
+      pago: pagoEl.value,
+      envio: shipping, items, total,
+      subtotalSinDescuento: subtotal, descuento: discount
+    };
+  }
   _sendWithRetry(postData, 3);
   _track('purchase', { value: total, zone: currentZone, items: cartCount(), discount: discount, payment: pagoEl.value });
 
@@ -808,6 +880,13 @@ function loadClientData() {
       if (saved.club) $id('f-club').value = saved.club;
       if (saved.deporte) $id('f-deporte').value = saved.deporte;
       if (saved.grupo) $id('f-grupo').value = saved.grupo;
+    }
+    if (currentZone === 'red') {
+      if (saved.vendedor) $id('f-vendedor').value = saved.vendedor;
+      if (saved.partido) $id('f-partido').value = saved.partido;
+      if (saved.localidad) $id('f-localidad').value = saved.localidad;
+      if (saved.barrioRed) $id('f-barrio-red').value = saved.barrioRed;
+      if (saved.domicilioRed) $id('f-domicilio-red').value = saved.domicilioRed;
     }
     // Día y método de pago NO se precargan — el cliente los elige cada vez
   } catch(e) {}
