@@ -469,15 +469,16 @@ function renderProveedores() {
     }
 
     if (allPedido && !allRecibido && provOcs.length > 0) {
-      // Estado: Pedido → mostrar "Recibir mercadería"
+      // Estado: Pedido → mostrar "Recibir mercadería" agrupado por producto
       html += '<button class="btn-recibir" onclick="toggleRecibir(' + idx + ')">Recibir mercaderia</button>';
       html += '<div class="recibir-panel" id="recPanel_' + idx + '">';
-      provOcs.forEach(function(oc, oi) {
+      var grouped = agruparOcsPorProducto(provOcs);
+      grouped.forEach(function(g, gi) {
         html += '<div class="recibir-row">' +
-          '<span class="recibir-name">' + oc.prod + '</span>' +
-          '<span class="recibir-orig">' + oc.q + '</span>' +
+          '<span class="recibir-name">' + g.prod + '</span>' +
+          '<span class="recibir-orig">' + g.totalQty + '</span>' +
           '<span class="recibir-arrow">&rarr;</span>' +
-          '<input class="recibir-qty" id="recQty_' + idx + '_' + oi + '" type="number" inputmode="numeric" min="0" value="' + oc.q + '" onchange="onRecQtyChange(this,' + oc.q + ')">' +
+          '<input class="recibir-qty" id="recQty_' + idx + '_' + gi + '" type="number" inputmode="numeric" min="0" value="' + g.totalQty + '" onchange="onRecQtyChange(this,' + g.totalQty + ')">' +
           '</div>';
       });
       html += '<button class="btn-confirmar-recibir" onclick="confirmarRecibir(' + idx + ')">Confirmar recepcion</button>';
@@ -656,7 +657,21 @@ function getOcsByProv(provName) {
   return busqueda.ocs.filter(function(oc) { return oc.prov === provName; });
 }
 
-function toggleRecibir(idx, btn) {
+function agruparOcsPorProducto(ocs) {
+  var map = {};
+  var order = [];
+  ocs.forEach(function(oc) {
+    if (!map[oc.prod]) {
+      map[oc.prod] = { prod: oc.prod, totalQty: 0, rows: [] };
+      order.push(oc.prod);
+    }
+    map[oc.prod].totalQty += oc.q;
+    map[oc.prod].rows.push({ r: oc.r, q: oc.q });
+  });
+  return order.map(function(p) { return map[p]; });
+}
+
+function toggleRecibir(idx) {
   var panel = document.getElementById('recPanel_' + idx);
   if (!panel) return;
   panel.classList.toggle('open');
@@ -671,12 +686,21 @@ function confirmarRecibir(idx) {
   var prov = busqueda.provs[idx];
   if (!prov) return;
   var provOcs = getOcsByProv(prov.n);
+  var grouped = agruparOcsPorProducto(provOcs);
   var items = [];
 
-  provOcs.forEach(function(oc, oi) {
-    var input = document.getElementById('recQty_' + idx + '_' + oi);
-    var qtyRecibida = input ? (parseInt(input.value) || 0) : oc.q;
-    items.push({ r: oc.r, qtyRecibida: qtyRecibida });
+  // Leer qty recibida por producto agrupado y distribuir a filas individuales
+  grouped.forEach(function(g, gi) {
+    var input = document.getElementById('recQty_' + idx + '_' + gi);
+    var qtyRecibida = input ? (parseInt(input.value) || 0) : g.totalQty;
+    var remaining = qtyRecibida;
+
+    // Distribuir a las filas originales (en orden, hasta agotar)
+    g.rows.forEach(function(row) {
+      var asignar = Math.min(remaining, row.q);
+      items.push({ r: row.r, qtyRecibida: Math.max(0, asignar) });
+      remaining -= asignar;
+    });
   });
 
   syncQueue.push({ action: 'recibirMercaderia', items: items, ts: Date.now() });
@@ -684,13 +708,10 @@ function confirmarRecibir(idx) {
   saveLocal();
   processSyncQueue();
 
-  // Update UI
   var panel = document.getElementById('recPanel_' + idx);
   if (panel) panel.classList.remove('open');
   showToast(prov.n + ' — mercaderia recibida');
   if (navigator.vibrate) navigator.vibrate([50, 50, 50]);
-
-  // Re-render after a beat
   setTimeout(function() { renderProveedores(); }, 500);
 }
 
