@@ -765,10 +765,10 @@ async function fetchStock() {
   } catch(e) { console.warn('fetchStock:',e); }
 }
 function updateStockDisplay() {
-  const showStock = currentZone && ZONAS[currentZone] && ZONAS[currentZone].showStock;
+  const limited = isStockLimited();
+  const showStock = limited || (currentZone && ZONAS[currentZone] && ZONAS[currentZone].showStock);
   PRODUCTOS.forEach(p => {
     const el=$id('stock-'+p.id), avail=stockMap[p.id]; if(!el) return;
-    var limited = isStockLimited();
     if (!showStock || avail===undefined) { el.innerHTML=''; }
     else if(avail===0 && limited) el.innerHTML='<span class="stock-badge stock-out">Sin stock</span>';
     else if(avail===0 && !limited) el.innerHTML='<span class="stock-badge stock-order">A pedido</span>';
