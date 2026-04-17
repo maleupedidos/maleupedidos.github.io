@@ -68,7 +68,10 @@ body{font-family:'Montserrat',system-ui,-apple-system,sans-serif;background:var(
 .ruta-header{background:var(--brown);color:var(--beige);padding:6px 14px;display:flex;justify-content:space-between;align-items:center;font-size:11px;font-weight:700}
 .ruta-header .ruta-zona{color:var(--orange)}
 .ruta-body{flex:1;overflow-y:auto;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:8px 14px;text-align:center}
-.ruta-lote{font-size:56px;font-weight:900;color:var(--orange);line-height:1;margin-bottom:2px}
+.ruta-lote{font-size:40px;font-weight:900;color:var(--orange);line-height:1;margin-bottom:2px}
+.ruta-resumen{background:var(--white);border-bottom:1px solid var(--border);padding:6px 12px;display:flex;gap:5px;flex-wrap:wrap}
+.ruta-resumen-pill{font-size:10px;background:var(--brown);color:var(--beige);padding:3px 8px;border-radius:50px;font-weight:700;cursor:pointer}
+.ruta-resumen-pill.active{background:var(--orange);color:#fff}
 .ruta-nombre{font-size:16px;font-weight:700;color:var(--muted);margin-bottom:8px}
 .ruta-productos{background:var(--white);border-radius:10px;padding:8px 14px;margin-bottom:6px;width:100%;text-align:left}
 .ruta-prod-item{display:flex;justify-content:space-between;padding:3px 0;font-size:13px;border-bottom:1px solid var(--beige)}
@@ -162,6 +165,7 @@ body{font-family:'Montserrat',system-ui,-apple-system,sans-serif;background:var(
 <!-- RUTA -->
 <div id="rutaView" class="hidden">
   <div class="ruta-container">
+    <div class="ruta-resumen" id="rutaResumen"></div>
     <div class="ruta-header" id="rutaHeader"></div>
     <div class="ruta-body" id="rutaBody"></div>
     <div class="ruta-actions" id="rutaActions"></div>
@@ -280,14 +284,15 @@ function renderArmado(){
   // Resumen de productos de HOY (para sacar del freezer)
   var totals={};pedH.forEach(function(e){e.p.forEach(function(p){if(!totals[p.a])totals[p.a]=0;totals[p.a]+=p.q})});
   var sumParts=Object.keys(totals).map(function(a){return'<strong>'+totals[a]+'</strong> '+(PROD_NAMES[a]||a)});
-  var summaryHtml='<strong>'+pedH.length+' pedidos para hoy '+hoy+'</strong>';
-  if(pedO.length>0)summaryHtml+='<span style="float:right;font-size:10px;color:var(--muted)">Pendientes otros dias: '+pedO.length+'</span>';
+  var armadosHoy=0;pedH.forEach(function(e){if(armadoDone[eKey(e)])armadosHoy++});
+  var faltanHoy=pedH.length-armadosHoy;
+  var summaryHtml='<strong>'+faltanHoy+' por armar</strong> de '+pedH.length+' pedidos hoy';
+  if(pedO.length>0)summaryHtml+='<span style="float:right;font-size:10px;color:var(--muted)">Otros dias: '+pedO.length+'</span>';
   if(sumParts.length>0)summaryHtml+='<br>'+sumParts.join(' &middot; ');
   document.getElementById('armadoSummary').innerHTML=summaryHtml;
 
   var html='';
-  // HOY: sin titulo redundante (ya está en el summary)
-  if(pedH.length>0){html+=renderArmadoGroup(pedH,null,false)}
+  if(pedH.length>0){html+=renderArmadoGroup(pedH,'Hoy',false)}
   // OTROS DIAS
   if(pedO.length>0){var pd={};pedO.forEach(function(e){if(!pd[e.de])pd[e.de]=[];pd[e.de].push(e)});Object.keys(pd).forEach(function(d){html+=renderArmadoGroup(pd[d],d,true)})}
   document.getElementById('armadoList').innerHTML=html;
@@ -340,81 +345,80 @@ function confirmarArmado(key){armadoDone[key]=true;saveLocal();renderArmado();if
 /* ── RUTA ── */
 function renderRuta(){
   document.getElementById('armadoView').classList.add('hidden');document.getElementById('rutaView').classList.remove('hidden');
-  var sorted=getSorted(),header=document.getElementById('rutaHeader'),body=document.getElementById('rutaBody'),actions=document.getElementById('rutaActions');
+  var sorted=getSorted(),resumen=document.getElementById('rutaResumen'),header=document.getElementById('rutaHeader'),body=document.getElementById('rutaBody'),actions=document.getElementById('rutaActions');
 
   if(sorted.length===0){
-    header.innerHTML='';
+    resumen.innerHTML='';header.innerHTML='';
     var emptyH='<div class="empty" style="padding:30px">Todas las entregas de hoy completadas</div>';
-    if(pendientesCobro.length>0){
-      emptyH+='<div class="cobro-section"><div class="cobro-title">Pendientes de cobro ('+pendientesCobro.length+')</div>';
-      pendientesCobro.forEach(function(pc,i){
-        var tel=pc.t?(pc.t.replace(/[^0-9]/g,'')):null;if(tel&&tel.length<12)tel='54'+tel;
-        var aliasMsg=encodeURIComponent('Hola! Cuando puedas mandanos el comprobante. El alias es maleump. Gracias!');
-        emptyH+='<div class="cobro-card"><div class="cobro-card-head"><span class="cobro-card-name">'+pc.c+'</span><span class="cobro-card-total">'+formatMoney(pc.$)+'</span></div><div class="cobro-card-actions">';
-        if(tel){emptyH+='<a href="https://wa.me/'+tel+'?text='+aliasMsg+'" class="cobro-btn-alias">Pedir comprobante</a>'}
-        emptyH+='<button class="cobro-btn-cobrado" onclick="cobrarPendiente('+i+')">Cobrado</button></div></div>';
-      });
-      emptyH+='</div>';
-    }
+    if(pendientesCobro.length>0){emptyH+=renderPendientesCobro()}
     body.innerHTML=emptyH;
     actions.innerHTML='';return;
   }
-  if(rutaIndex>=sorted.length)rutaIndex=sorted.length-1;if(rutaIndex<0)rutaIndex=0;
+  if(rutaIndex>=sorted.length)rutaIndex=0;if(rutaIndex<0)rutaIndex=sorted.length-1;
   var e=sorted[rutaIndex],key=eKey(e);
 
-  // Header compacto: zona + contador
+  // Pills de barrios arriba
+  var summary=getZonaSummary(sorted);
+  var barrioActual=e.b||'Otros';
+  var rh='';
+  Object.keys(summary).forEach(function(b){
+    var isActive=b===barrioActual;
+    rh+='<span class="ruta-resumen-pill'+(isActive?' active':'')+'">'+b+' '+summary[b].total+'</span>';
+  });
+  resumen.innerHTML=rh;
+
+  // Header compacto
   var zona=(e.sb&&e.sb!==e.b)?e.sb:e.b;
   header.innerHTML='<span>'+(rutaIndex+1)+'/'+sorted.length+'</span><span class="ruta-zona">'+zona+'</span><span>#'+e.id+'</span>';
 
-  // Body: LOTE primero (lo que necesito ver manejando)
+  // Body
   var h='';
-  if(e.l){h+='<div class="ruta-lote"><span style="font-size:20px;font-weight:700;display:block;color:var(--muted)">Lote</span>'+e.l+'</div>'}
-  else{h+='<div style="font-size:28px;font-weight:900;color:var(--orange);margin-bottom:4px">'+e.d+'</div>'}
+  if(e.l){h+='<div class="ruta-lote"><span style="font-size:16px;font-weight:700;display:block;color:var(--muted)">Lote</span>'+e.l+'</div>'}
+  else{h+='<div style="font-size:24px;font-weight:900;color:var(--orange);margin-bottom:4px">'+e.d+'</div>'}
   h+='<div class="ruta-nombre">'+e.c+'</div>';
 
-  // Productos
   h+='<div class="ruta-productos">';e.p.forEach(function(p){h+='<div class="ruta-prod-item"><span>'+(PROD_NAMES[p.a]||p.a)+'</span><span class="ruta-prod-qty">'+p.q+'</span></div>'});h+='</div>';
 
-  // Cobrar
   var prop=propinas[key]||0,totalFact=e.$+prop;
   var cobrado=isCobrado(e);
   var badgeClass=cobrado?'cobrado':(e.fp==='Efectivo'?'efectivo':'transferencia');
   var badgeText=cobrado?'Cobrado':e.fp;
   h+='<div class="ruta-cobrar"><span class="ruta-cobrar-total" id="totalFacturado">'+formatMoney(totalFact)+'</span><span class="ruta-cobrar-badge '+badgeClass+'">'+badgeText+'</span></div>';
 
-  // Extras: WA "Estamos afuera" + Propina
   h+='<div class="ruta-extras">';
-  if(e.t){var tel=e.t.replace(/[^0-9]/g,'');if(tel.length<12)tel='54'+tel;h+='<a href="https://wa.me/'+tel+'?text='+encodeURIComponent('Estoy en camino!')+'" class="btn-wpp-sm">En camino</a>';h+='<a href="https://wa.me/'+tel+'?text='+encodeURIComponent('Estoy afuera!')+'" class="btn-wpp-sm">Estoy afuera</a>'}
+  if(e.t){var tel=e.t.replace(/[^0-9]/g,'');if(tel.length<12)tel='54'+tel;h+='<a href="https://wa.me/'+tel+'?text='+encodeURIComponent('Estoy afuera!')+'" class="btn-wpp-sm">Estoy afuera</a>'}
   if(!cobrado){h+='<div style="flex:1;display:flex;align-items:center;gap:6px;background:var(--white);border:1.5px solid var(--border);border-radius:8px;padding:6px 8px"><label style="font-size:11px;font-weight:700;flex-shrink:0">Propina $</label><input type="number" id="propinaInput" inputmode="numeric" placeholder="0" value="'+(prop||'')+'" oninput="actualizarPropina(\''+key+'\','+e.$+')" style="flex:1;border:none;font-size:14px;font-weight:700;font-family:inherit;text-align:right;outline:none;background:transparent"></div>'}
   h+='</div>';
-  body.innerHTML=h;
 
-  // Pendientes de cobro
+  // Pendientes de cobro (colapsado, solo indicador)
   if(pendientesCobro.length>0){
-    h+='<div class="cobro-section"><div class="cobro-title">Pendientes de cobro ('+pendientesCobro.length+')</div>';
-    pendientesCobro.forEach(function(pc,i){
-      var tel=pc.t?(pc.t.replace(/[^0-9]/g,'')):null;if(tel&&tel.length<12)tel='54'+tel;
-      var aliasMsg=encodeURIComponent('Hola! Cuando puedas mandanos el comprobante. El alias es maleump. Gracias!');
-      h+='<div class="cobro-card"><div class="cobro-card-head"><span class="cobro-card-name">'+pc.c+'</span><span class="cobro-card-total">'+formatMoney(pc.$)+'</span></div><div class="cobro-card-actions">';
-      if(tel){h+='<a href="https://wa.me/'+tel+'?text='+aliasMsg+'" class="cobro-btn-alias">Pedir comprobante</a>'}
-      h+='<button class="cobro-btn-cobrado" onclick="cobrarPendiente('+i+')">Cobrado</button></div></div>';
-    });
-    h+='</div>';
+    h+='<div style="text-align:center;padding:6px;font-size:11px;color:var(--orange);font-weight:700;cursor:pointer" onclick="document.getElementById(\'cobroExpand\').classList.toggle(\'hidden\')">Pendientes de cobro ('+pendientesCobro.length+') &#x25BC;</div>';
+    h+='<div id="cobroExpand" class="hidden">'+renderPendientesCobro()+'</div>';
   }
   body.innerHTML=h;
 
-  // Actions: botón principal + nav
+  // Actions
   var a='';
-  if(!cobrado){
-    a+='<button class="btn-entregado cobrar-first" id="btnCobrado" onclick="marcarCobrado(\''+key+'\')">COBRADO '+formatMoney(totalFact)+'</button>';
-  }
+  if(!cobrado){a+='<button class="btn-entregado cobrar-first" id="btnCobrado" onclick="marcarCobrado(\''+key+'\')">COBRADO '+formatMoney(totalFact)+'</button>'}
   a+='<button class="btn-entregado" onclick="confirmarEntregado(\''+key+'\')">ENTREGADO</button>';
   a+='<div class="ruta-nav"><button class="btn-prev" onclick="rutaPrev()">&larr;</button><button class="btn-next" onclick="rutaNext()">Siguiente &rarr;</button></div>';
   actions.innerHTML=a;
 }
 
-function rutaNext(){var s=getSorted();if(rutaIndex>=s.length-1){showToast('No hay mas entregas');return}rutaIndex++;saveLocal();renderRuta()}
-function rutaPrev(){if(rutaIndex<=0){showToast('Es la primera entrega');return}rutaIndex--;saveLocal();renderRuta()}
+function renderPendientesCobro(){
+  var h='<div class="cobro-section">';
+  pendientesCobro.forEach(function(pc,i){
+    var tel=pc.t?(pc.t.replace(/[^0-9]/g,'')):null;if(tel&&tel.length<12)tel='54'+tel;
+    var aliasMsg=encodeURIComponent('Hola! Cuando puedas mandanos el comprobante. El alias es maleump. Gracias!');
+    h+='<div class="cobro-card"><div class="cobro-card-head"><span class="cobro-card-name">'+pc.c+'</span><span class="cobro-card-total">'+formatMoney(pc.$)+'</span></div><div class="cobro-card-actions">';
+    if(tel){h+='<a href="https://wa.me/'+tel+'?text='+aliasMsg+'" class="cobro-btn-alias">Pedir comprobante</a>'}
+    h+='<button class="cobro-btn-cobrado" onclick="cobrarPendiente('+i+')">Cobrado</button></div></div>';
+  });
+  h+='</div>';return h;
+}
+
+function rutaNext(){var s=getSorted();rutaIndex=(rutaIndex+1)%s.length;saveLocal();renderRuta()}
+function rutaPrev(){var s=getSorted();rutaIndex=(rutaIndex-1+s.length)%s.length;saveLocal();renderRuta()}
 
 /* ── PROPINA ── */
 function actualizarPropina(key,pedidoTotal){
