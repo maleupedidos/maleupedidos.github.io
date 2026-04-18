@@ -739,19 +739,10 @@ function updateCatNavTop() {
 
 /* ── STOCK ── */
 async function fetchStock() {
-  if (!STOCK_CSV_URL) return;
   try {
-    const bust = '&_=' + Date.now();
-    const res = await fetch(STOCK_CSV_URL + bust, { cache: 'no-store' });
-    const text = await res.text();
-    const rows = text.trim().split('\n');
-    const abbrStock = {};
-    function parseCSVRow(row) {
-      const cols=[]; let cur='',inQ=false;
-      for(let i=0;i<row.length;i++){const ch=row[i]; if(ch==='"'){if(inQ&&row[i+1]==='"'){cur+='"';i++;continue;}inQ=!inQ;continue;} if(ch===','&&!inQ){cols.push(cur.trim());cur='';continue;} cur+=ch;}
-      cols.push(cur.trim()); return cols;
-    }
-    rows.slice(1).forEach(row => { const cols=parseCSVRow(row); const abbr=cols[2]; const disp=parseInt(cols[7]); if(abbr&&!isNaN(disp)) abbrStock[abbr]=disp; });
+    const bust = '?action=stock&_=' + Date.now();
+    const res = await fetch(APPS_SCRIPT_URL + bust, { cache: 'no-store' });
+    const abbrStock = await res.json();
     PRODUCTOS.forEach(p => { const abbr=PROD_ABBR[p.id]; if(abbr&&abbrStock[abbr]!==undefined) stockMap[p.id]=abbrStock[abbr]; });
     if (isStockLimited()) {
       let ajustado = false;
