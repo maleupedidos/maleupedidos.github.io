@@ -741,7 +741,8 @@ function updateCatNavTop() {
 async function fetchStock() {
   if (!STOCK_CSV_URL) return;
   try {
-    const res = await fetch(STOCK_CSV_URL);
+    const bust = '&_=' + Date.now();
+    const res = await fetch(STOCK_CSV_URL + bust, { cache: 'no-store' });
     const text = await res.text();
     const rows = text.trim().split('\n');
     const abbrStock = {};
