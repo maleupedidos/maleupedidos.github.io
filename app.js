@@ -92,6 +92,8 @@ const STOCK_CSV_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vTOq210U9
 let cart = {};
 let currentZone = null; // 'estancias' | 'pilar'
 let stockMap = {};
+let vendedoresRed = []; // {nombre, wa, barrios:[], partido, localidad}
+let barrioToVendedor = {}; // { 'El Lucero': {nombre, wa, partido, localidad}, ... }
 let _enviando = false;
 
 /* Ventana de stock: solo Estancias, Jueves 13:01 a Domingo 21:00 */
@@ -156,6 +158,60 @@ function slugify(str) {
   return str.toLowerCase().replace(/[áäâà]/g,'a').replace(/[éëêè]/g,'e').replace(/[íïîì]/g,'i').replace(/[óöôò]/g,'o').replace(/[úüûù]/g,'u').replace(/ñ/g,'n').replace(/[^a-z0-9]/g,'-').replace(/-+/g,'-').replace(/^-|-$/g,'');
 }
 
+/* ── VENDEDORES RED (Pilar) ── */
+function fetchVendedores() {
+  fetch(APPS_SCRIPT_URL + '?action=vendedores', { cache: 'no-store' })
+    .then(r => r.json())
+    .then(d => {
+      vendedoresRed = d.vendedores || [];
+      barrioToVendedor = {};
+      vendedoresRed.forEach(v => {
+        (v.barrios || []).forEach(b => {
+          barrioToVendedor[b.toLowerCase()] = { nombre: v.nombre, wa: v.wa, partido: v.partido, localidad: v.localidad, barrio: b };
+        });
+      });
+      try { localStorage.setItem('maleu_vendedores', JSON.stringify({ ts: Date.now(), vendedores: vendedoresRed })); } catch(e) {}
+      renderPilarBarrios();
+    })
+    .catch(function() {
+      // Fallback: usar cache si hay
+      try {
+        var cached = JSON.parse(localStorage.getItem('maleu_vendedores') || 'null');
+        if (cached && cached.vendedores) {
+          vendedoresRed = cached.vendedores;
+          barrioToVendedor = {};
+          vendedoresRed.forEach(v => {
+            (v.barrios || []).forEach(b => {
+              barrioToVendedor[b.toLowerCase()] = { nombre: v.nombre, wa: v.wa, partido: v.partido, localidad: v.localidad, barrio: b };
+            });
+          });
+          renderPilarBarrios();
+        }
+      } catch(e) {}
+    });
+}
+function renderPilarBarrios() {
+  var sel = $id('f-pilar-barrio');
+  if (!sel) return;
+  // Limpiar y re-armar
+  var cur = sel.value;
+  sel.innerHTML = '<option value="">Elegí tu barrio privado</option>';
+  // Todos los barrios cubiertos por vendedores activos (ordenados)
+  var all = [];
+  vendedoresRed.forEach(v => (v.barrios || []).forEach(b => { if (all.indexOf(b) === -1) all.push(b); }));
+  all.sort();
+  all.forEach(b => {
+    sel.innerHTML += '<option value="' + b + '">' + b + '</option>';
+  });
+  sel.innerHTML += '<option value="__otro__">Otro barrio</option>';
+  if (cur) sel.value = cur;
+}
+function onPilarBarrioChange() {
+  var val = $id('f-pilar-barrio').value;
+  var fieldOtro = $id('field-pilar-otro');
+  if (fieldOtro) fieldOtro.style.display = val === '__otro__' ? '' : 'none';
+}
+
 /* ── ZONA ── */
 function setZone(zone) {
   currentZone = zone;
@@ -188,6 +244,8 @@ function applyZone() {
   var cfFields = $id('fields-capital');
   if (cfFields) cfFields.style.display = 'none';
   $id('fields-clubes').style.display = currentZone === 'clubes' ? '' : 'none';
+  // Si Pilar, re-render dropdown de barrios por si ya llegaron vendedores
+  if (currentZone === 'pilar') renderPilarBarrios();
   // Días de entrega
   const diaSelect = $id('f-dia');
   diaSelect.innerHTML = '<option value="">Elegí un día</option>';
@@ -483,6 +541,7 @@ function enviarPedido() {
     clearError('f-deporte','err-deporte');
     clearError('f-grupo','err-grupo');
   } else {
+    clearError('f-pilar-barrio','err-pilar-barrio');
     clearError('f-direccion','err-direccion');
     clearError('f-lote-pilar','err-lote-pilar');
   }
@@ -509,9 +568,17 @@ function enviarPedido() {
     if (!deporte) { showError('f-deporte','err-deporte'); if(!primerInvalido) primerInvalido=$id('f-deporte'); }
     if (!grupo) { showError('f-grupo','err-grupo'); if(!primerInvalido) primerInvalido=$id('f-grupo'); }
   } else {
-    direccion = $id('f-direccion').value.trim();
+    // Pilar: dropdown barrio + opción "Otro" (input libre)
+    var pilarSel = $id('f-pilar-barrio').value;
     lote = $id('f-lote-pilar').value.trim();
-    if (!direccion) { showError('f-direccion','err-direccion'); if(!primerInvalido) primerInvalido=$id('f-direccion'); }
+    if (!pilarSel) {
+      showError('f-pilar-barrio','err-pilar-barrio'); if(!primerInvalido) primerInvalido=$id('f-pilar-barrio');
+    } else if (pilarSel === '__otro__') {
+      direccion = $id('f-direccion').value.trim();
+      if (!direccion) { showError('f-direccion','err-direccion'); if(!primerInvalido) primerInvalido=$id('f-direccion'); }
+    } else {
+      direccion = pilarSel;
+    }
     if (!lote) { showError('f-lote-pilar','err-lote-pilar'); if(!primerInvalido) primerInvalido=$id('f-lote-pilar'); }
   }
 
@@ -555,8 +622,24 @@ function enviarPedido() {
   const entregaStr = dia + (horarioStr && horarioStr !== 'A coordinar' ? ' de ' + horarioStr : '');
   const pagoStr = pagoEl.value === 'Efectivo' ? 'Efectivo' : 'Mercado Pago';
 
+  // Detectar si barrio tiene vendedor asignado (Pilar + barrio match)
+  let vendedorMatch = null;
+  if (currentZone === 'pilar' && direccion) {
+    vendedorMatch = barrioToVendedor[direccion.toLowerCase()] || null;
+  }
+
   let msg;
-  if (currentZone === 'clubes') {
+  if (vendedorMatch) {
+    msg = '¡Hola ' + vendedorMatch.nombre + '! Quiero hacer un pedido Maleu\n\n'
+      + '*Pedido:*\n' + prodLines + '\n\n'
+      + 'Envio: Gratis\n'
+      + '*Total: ' + ars(total) + '*\n\n'
+      + 'Direccion: ' + vendedorMatch.barrio + ', Lote ' + lote + '\n'
+      + 'Entrega: ' + entregaStr + '\n'
+      + 'Pago: ' + pagoStr + '\n'
+      + (pagoEl.value === 'Transferencia' ? 'Alias: *maleump*\nTitular: Tadeo Alberto Ustariz\n' : '')
+      + '\n' + nombre + ' - ' + telefono;
+  } else if (currentZone === 'clubes') {
     msg = '*NUEVO PEDIDO — MALEU CLUBES*\n\n'
       + prodLines + '\n\n'
       + '———————————————\n'
@@ -589,34 +672,56 @@ function enviarPedido() {
   const items = Object.entries(cart).map(([id,qty]) => {
     const p = PROD_MAP[id]; return p ? {id:p.id, nombre:p.nombre, qty, precio:p.precio} : null;
   }).filter(Boolean);
-  const postData = currentZone === 'clubes' ? {
-    canal: 'Clubes',
-    fecha: new Date().toLocaleString('es-AR'),
-    nombre, telefono, club, deporte, grupo,
-    dia, horario, pago: pagoEl.value,
-    envio: shipping, items, total,
-    subtotalSinDescuento: subtotal, descuento: discount
-  } : {
-    canal: z.canal,
-    fecha: new Date().toLocaleString('es-AR'),
-    nombre, barrioPrivado,
-    subBarrio: barrioPrivado === 'Estancias del Pilar' ? barrio : '',
-    barrio: currentZone === 'estancias' ? barrio : direccion,
-    lote, telefono, dia, horario,
-    pago: pagoEl.value,
-    envio: shipping, items, total,
-    subtotalSinDescuento: subtotal, descuento: discount
-  };
-  _sendWithRetry(postData, 3);
-  _track('purchase', { value: total, zone: currentZone, items: cartCount(), discount: discount, payment: pagoEl.value });
 
-  // Confirmación visual rápida → WhatsApp
+  let postData;
+  if (currentZone === 'clubes') {
+    postData = {
+      canal: 'Clubes',
+      fecha: new Date().toLocaleString('es-AR'),
+      nombre, telefono, club, deporte, grupo,
+      dia, horario, pago: pagoEl.value,
+      envio: shipping, items, total,
+      subtotalSinDescuento: subtotal, descuento: discount
+    };
+  } else if (vendedorMatch) {
+    // Pilar con barrio cubierto por vendedor → va al canal Red
+    postData = {
+      canal: 'Red',
+      fecha: new Date().toLocaleString('es-AR'),
+      vendedor: vendedorMatch.nombre,
+      nombre, telefono,
+      partido: vendedorMatch.partido,
+      localidad: vendedorMatch.localidad,
+      barrioRed: vendedorMatch.barrio,
+      domicilioRed: lote,
+      dia, horario, pago: pagoEl.value,
+      envio: shipping, items, total,
+      subtotalSinDescuento: subtotal, descuento: discount
+    };
+  } else {
+    postData = {
+      canal: z.canal,
+      fecha: new Date().toLocaleString('es-AR'),
+      nombre, barrioPrivado,
+      subBarrio: barrioPrivado === 'Estancias del Pilar' ? barrio : '',
+      barrio: currentZone === 'estancias' ? barrio : direccion,
+      lote, telefono, dia, horario,
+      pago: pagoEl.value,
+      envio: shipping, items, total,
+      subtotalSinDescuento: subtotal, descuento: discount
+    };
+  }
+  _sendWithRetry(postData, 3);
+  _track('purchase', { value: total, zone: currentZone, items: cartCount(), discount: discount, payment: pagoEl.value, vendedor: vendedorMatch ? vendedorMatch.nombre : '' });
+
+  // Confirmación visual rápida → WhatsApp (al vendedor si aplica, sino a Maleu)
   _enviando = true;
+  const waTarget = vendedorMatch ? vendedorMatch.wa : WA_NUMBER;
   const waBtn = document.querySelector('.whatsapp-btn');
   const waBtnOrig = waBtn ? waBtn.innerHTML : '';
   if (waBtn) { waBtn.disabled = true; waBtn.innerHTML = '✓ Pedido registrado'; waBtn.style.background = '#2e7d32'; }
   setTimeout(function() {
-    window.location.href = 'https://wa.me/' + WA_NUMBER + '?text=' + urlText;
+    window.location.href = 'https://wa.me/' + waTarget + '?text=' + urlText;
   }, 800);
 
   setTimeout(() => {
@@ -793,7 +898,21 @@ function loadClientData() {
       if (saved.lote) $id('f-lote').value = saved.lote;
     }
     if (currentZone === 'pilar') {
-      if (saved.direccion) $id('f-direccion').value = saved.direccion;
+      if (saved.direccion) {
+        var sel = $id('f-pilar-barrio');
+        // Buscar si el barrio guardado está en el dropdown
+        var found = false;
+        if (sel) {
+          for (var i = 0; i < sel.options.length; i++) {
+            if (sel.options[i].value === saved.direccion) { sel.value = saved.direccion; found = true; break; }
+          }
+        }
+        if (!found && sel) {
+          sel.value = '__otro__';
+          $id('f-direccion').value = saved.direccion;
+        }
+        onPilarBarrioChange();
+      }
       if (saved.lote) $id('f-lote-pilar').value = saved.lote;
     }
     if (currentZone === 'clubes') {
@@ -861,6 +980,7 @@ if (savedZone && ZONAS[savedZone]) {
 loadClientData();
 $id('cart-badge').style.display = 'none';
 fetchStock();
+fetchVendedores();
 _retryPendingOrders();
 let _stockTimer = setInterval(fetchStock, 60000);
 document.addEventListener('visibilitychange', () => {
