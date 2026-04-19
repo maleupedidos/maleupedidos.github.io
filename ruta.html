@@ -613,11 +613,24 @@ function renderCobrosFromServer(){
       var globalIdx=pendientesCobro.indexOf(pc);
       var tel=pc.t?(pc.t.replace(/[^0-9]/g,'')):null;if(tel&&tel.length<12)tel='54'+tel;
       var aliasMsg=encodeURIComponent('Hola! Cuando puedas mandanos el comprobante. El alias es maleump. Gracias!');
+      var fpDefault=pc.fp||'Efectivo';
       h+='<div class="cobro-card"><div class="cobro-card-head"><span class="cobro-card-name">'+pc.c+' <span style="font-size:10px;color:var(--muted);font-weight:600">('+pc.h+' #'+pc.id+')</span></span><span class="cobro-card-total" id="cobroTotal_'+globalIdx+'">'+formatMoney(pc.$)+'</span></div>';
+      // Select forma de pago
+      h+='<div style="display:flex;align-items:center;gap:6px"><label style="font-size:10px;font-weight:700;color:var(--muted);flex-shrink:0">Pago</label><select id="cobroFp_'+globalIdx+'" onchange="cambiarFpCobro('+globalIdx+','+pc.$+')" style="flex:1;border:1.5px solid var(--border);border-radius:6px;padding:5px;font-size:12px;font-weight:700;font-family:inherit;background:var(--white)">'
+        +'<option value="Efectivo"'+(fpDefault==='Efectivo'?' selected':'')+'>Efectivo</option>'
+        +'<option value="Transferencia"'+(fpDefault==='Transferencia'?' selected':'')+'>Transferencia</option>'
+        +'<option value="Mixto"'+(fpDefault==='Mixto'?' selected':'')+'>Mixto (Ef+Trans)</option>'
+        +'</select></div>';
+      // Montos mixto (hidden por default si no es Mixto)
+      h+='<div id="cobroMixto_'+globalIdx+'" style="display:'+(fpDefault==='Mixto'?'flex':'none')+';gap:4px">'
+        +'<div style="flex:1;display:flex;align-items:center;gap:4px;background:var(--bg);border-radius:6px;padding:4px 8px"><label style="font-size:10px;flex-shrink:0">Ef $</label><input type="number" id="cobroEf_'+globalIdx+'" inputmode="numeric" placeholder="0" style="flex:1;border:none;background:transparent;text-align:right;font-size:12px;font-weight:700;font-family:inherit;outline:none"></div>'
+        +'<div style="flex:1;display:flex;align-items:center;gap:4px;background:var(--bg);border-radius:6px;padding:4px 8px"><label style="font-size:10px;flex-shrink:0">Tr $</label><input type="number" id="cobroTr_'+globalIdx+'" inputmode="numeric" placeholder="0" style="flex:1;border:none;background:transparent;text-align:right;font-size:12px;font-weight:700;font-family:inherit;outline:none"></div>'
+        +'</div>';
+      // Propina
       h+='<div style="display:flex;align-items:center;gap:6px;background:var(--bg);border-radius:6px;padding:4px 10px"><label style="font-size:10px;font-weight:700;color:var(--muted);flex-shrink:0">Propina $</label><input type="number" id="cobroPropina_'+globalIdx+'" inputmode="numeric" placeholder="0" value="" oninput="actualizarCobroPropina('+globalIdx+','+pc.$+')" style="flex:1;border:none;font-size:13px;font-weight:700;font-family:inherit;text-align:right;outline:none;background:transparent"></div>';
       h+='<div class="cobro-card-actions">';
       if(tel){h+='<a href="https://wa.me/'+tel+'?text='+aliasMsg+'" class="cobro-btn-alias">Pedir comprobante</a>'}
-      h+='<button class="cobro-btn-cobrado" onclick="cobrarPendiente('+globalIdx+')">Cobrado</button></div></div>';
+      h+='<button class="cobro-btn-cobrado" onclick="confirmarCobro('+globalIdx+')">Cobrado</button></div></div>';
     });
     h+='</div>';
   });
@@ -681,21 +694,45 @@ function marcarEntregado(key){
 
 function marcarCobrado(key){cobrados[key]=true;saveLocal();renderRuta();if(navigator.vibrate)navigator.vibrate(30)}
 
-function cobrarPendiente(i){
-  if(i>=0&&i<pendientesCobro.length){
-    var pc=pendientesCobro[i];
-    var propInput=document.getElementById('cobroPropina_'+i);
-    var propina=propInput?(parseInt(propInput.value)||0):0;
-    cobrados[pc.key]=true;
-    var parts=pc.key.split('|');
-    // Usar marcarCobrado (accion dedicada) con propMet para columna correcta de propina
-    syncQueue.push({action:'marcarCobrado',hoja:parts[0],id:parts[1],propina:propina,propMet:pc.fp||'Efectivo',ts:Date.now()});
-    pendientesCobro.splice(i,1);
-    saveLocal();processSyncQueue();
-    if(currentTab==='cobros')renderCobros();else renderRuta();
-    showToast('Cobrado a '+pc.c.split(' ')[0]+(propina>0?' (+propina $'+propina+')':''));
-    if(navigator.vibrate)navigator.vibrate(30);
-  }
+function cambiarFpCobro(i,total){
+  var fp=document.getElementById('cobroFp_'+i).value;
+  var mixto=document.getElementById('cobroMixto_'+i);
+  if(mixto)mixto.style.display=(fp==='Mixto')?'flex':'none';
+}
+
+function confirmarCobro(i){
+  if(i<0||i>=pendientesCobro.length)return;
+  var pc=pendientesCobro[i];
+  var propina=parseInt(document.getElementById('cobroPropina_'+i).value)||0;
+  var fp=document.getElementById('cobroFp_'+i).value;
+  var ef=0,tr=0;
+  if(fp==='Mixto'){
+    ef=parseInt(document.getElementById('cobroEf_'+i).value)||0;
+    tr=parseInt(document.getElementById('cobroTr_'+i).value)||0;
+    if(ef+tr===0){showToast('Completa los montos Ef y Tr');return}
+  } else if(fp==='Efectivo'){ef=pc.$} else {tr=pc.$}
+  var totalConPropina=pc.$+propina;
+  var o=document.getElementById('confirmOverlay');o.className='confirm-overlay';
+  o.innerHTML='<div class="confirm-box"><h3>Confirmar cobro?</h3>'
+    +'<p>'+pc.c+'<br>'+fp+' — '+formatMoney(totalConPropina)+(propina>0?' (con propina)':'')+'</p>'
+    +'<div class="confirm-btns"><button class="btn-no" onclick="cerrarConfirm()">No</button><button class="btn-si" onclick="cerrarConfirm();cobrarPendiente('+i+','+ef+','+tr+',\''+fp+'\')">Si, cobrado</button></div></div>';
+}
+
+function cobrarPendiente(i,ef,tr,fp){
+  if(i<0||i>=pendientesCobro.length)return;
+  var pc=pendientesCobro[i];
+  var propina=parseInt(document.getElementById('cobroPropina_'+i)?document.getElementById('cobroPropina_'+i).value:0)||0;
+  // propMet: si es Mixto y hay propina, va a la parte más grande
+  var propMet=fp==='Transferencia'?'Transferencia':'Efectivo';
+  if(fp==='Mixto')propMet=tr>ef?'Transferencia':'Efectivo';
+  cobrados[pc.key]=true;
+  var parts=pc.key.split('|');
+  syncQueue.push({action:'marcarCobrado',hoja:parts[0],id:parts[1],formaPago:fp||'Efectivo',ef:ef||0,tr:tr||0,propina:propina,propMet:propMet,ts:Date.now()});
+  pendientesCobro.splice(i,1);
+  saveLocal();processSyncQueue();
+  if(currentTab==='cobros')renderCobrosFromServer();else renderRuta();
+  showToast('Cobrado a '+pc.c.split(' ')[0]+' ('+fp+')');
+  if(navigator.vibrate)navigator.vibrate(30);
 }
 
 /* ── SYNC ── */
