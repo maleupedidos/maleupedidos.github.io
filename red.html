@@ -258,27 +258,15 @@
         <div class="err">Completá el teléfono</div>
       </div>
       <div class="row-2">
-        <div class="field" id="fld-partido">
-          <label>Partido / Municipio</label>
-          <input type="text" id="f-partido" />
-          <div class="err">Completá el partido</div>
-        </div>
-        <div class="field" id="fld-localidad">
-          <label>Localidad</label>
-          <input type="text" id="f-localidad" />
-          <div class="err">Completá la localidad</div>
-        </div>
-      </div>
-      <div class="row-2">
         <div class="field" id="fld-barrio">
-          <label>Barrio</label>
-          <input type="text" id="f-barrio" />
+          <label>Barrio Privado</label>
+          <input type="text" id="f-barrio" placeholder="Ej: El Lucero" />
           <div class="err">Completá el barrio</div>
         </div>
-        <div class="field" id="fld-domicilio">
-          <label>Domicilio / Lote</label>
-          <input type="text" id="f-domicilio" placeholder="Ej: San Martín 456" />
-          <div class="err">Completá el domicilio</div>
+        <div class="field" id="fld-lote">
+          <label>Lote</label>
+          <input type="text" id="f-lote" placeholder="Ej: 45" />
+          <div class="err">Completá el lote</div>
         </div>
       </div>
       <div class="row-2">
@@ -421,18 +409,35 @@ function enterDashboard() {
   loadDashboard();
 }
 
-/* ═══════ DASHBOARD ═══════ */
+/* ═══════ DASHBOARD — SWR (stale-while-revalidate) ═══════ */
 function loadDashboard() {
-  $id('dash-loading').classList.remove('hidden');
-  $id('dash-content').classList.add('hidden');
+  // 1) Mostrar cache inmediatamente si existe (instant feel)
+  var hadCache = false;
+  try {
+    var cacheKey = 'maleu_red_dash_' + session.nombre;
+    var cached = JSON.parse(localStorage.getItem(cacheKey) || 'null');
+    if (cached && cached.data) {
+      renderDashboard(cached.data);
+      $id('dash-loading').classList.add('hidden');
+      $id('dash-content').classList.remove('hidden');
+      hadCache = true;
+    }
+  } catch(e) {}
 
+  if (!hadCache) {
+    $id('dash-loading').classList.remove('hidden');
+    $id('dash-content').classList.add('hidden');
+  }
+
+  // 2) Fetch en segundo plano para refrescar
   fetch(APPS_SCRIPT_URL + '?action=dashboardVendedor&nombre=' + encodeURIComponent(session.nombre), { cache: 'no-store' })
     .then(r => r.json())
     .then(d => {
-      if (!d.ok) { toast('Error al cargar datos'); return; }
+      if (!d.ok) { if (!hadCache) toast('Error al cargar datos'); return; }
       renderDashboard(d);
+      try { localStorage.setItem('maleu_red_dash_' + session.nombre, JSON.stringify({ ts: Date.now(), data: d })); } catch(e) {}
     })
-    .catch(e => { toast('Error de conexión'); })
+    .catch(e => { if (!hadCache) toast('Sin conexión — mostrando datos guardados'); })
     .finally(() => {
       $id('dash-loading').classList.add('hidden');
       $id('dash-content').classList.remove('hidden');
@@ -497,14 +502,9 @@ function renderDashboard(d) {
 
 /* ═══════ NUEVO PEDIDO ═══════ */
 function showNuevoPedido() {
-  // Precargar partido/localidad del vendedor
-  if (session) {
-    if (session.partido && !$id('f-partido').value) $id('f-partido').value = session.partido;
-    if (session.localidad && !$id('f-localidad').value) $id('f-localidad').value = session.localidad;
-    // Primer barrio cubierto como default
-    if (session.barrios && session.barrios.length && !$id('f-barrio').value) {
-      $id('f-barrio').value = session.barrios[0];
-    }
+  // Primer barrio cubierto como default
+  if (session && session.barrios && session.barrios.length && !$id('f-barrio').value) {
+    $id('f-barrio').value = session.barrios[0];
   }
   showScreen('nuevo');
 }
@@ -578,10 +578,8 @@ function validateNuevo() {
   const fields = [
     ['fld-cliente', 'f-cliente'],
     ['fld-telefono', 'f-telefono'],
-    ['fld-partido', 'f-partido'],
-    ['fld-localidad', 'f-localidad'],
     ['fld-barrio', 'f-barrio'],
-    ['fld-domicilio', 'f-domicilio'],
+    ['fld-lote', 'f-lote'],
     ['fld-dia', 'f-dia'],
   ];
   fields.forEach(([fld, inp]) => {
@@ -602,10 +600,8 @@ function enviar() {
 
   const nombre    = $id('f-cliente').value.trim();
   const telefono  = $id('f-telefono').value.trim();
-  const partido   = $id('f-partido').value.trim();
-  const localidad = $id('f-localidad').value.trim();
   const barrio    = $id('f-barrio').value.trim();
-  const domicilio = $id('f-domicilio').value.trim();
+  const lote      = $id('f-lote').value.trim();
   const dia       = $id('f-dia').value;
 
   const items = [];
@@ -622,10 +618,9 @@ function enviar() {
     canal: 'Red',
     vendedor: session.nombre,
     nombre, telefono,
-    partido, localidad, barrioRed: barrio, domicilioRed: domicilio,
+    barrioPrivado: barrio, lote: lote,
     dia, horario: 'A coordinar', pago,
-    envio: 0, items, total,
-    subtotalSinDescuento: total, descuento: 0
+    envio: 0, items, total
   };
   sendWithRetry(postData, 3);
 
@@ -639,8 +634,7 @@ function enviar() {
     + '---\n\n'
     + '*Vendedor:* ' + session.nombre + '\n'
     + '*Cliente:* ' + nombre + '\n'
-    + '*Zona:* ' + partido + ', ' + localidad + '\n'
-    + '*Direccion:* ' + barrio + ', ' + domicilio + '\n'
+    + '*Direccion:* ' + barrio + ', Lote ' + lote + '\n'
     + '*WhatsApp:* ' + telefono + '\n'
     + '*Entrega:* ' + dia + '\n'
     + '*Pago:* ' + pagoStr
@@ -661,7 +655,7 @@ function enviar() {
     PRODUCTOS.forEach(p => { const el = $id('qty-' + p.id); if (el) el.textContent = '0'; });
     $id('f-cliente').value = '';
     $id('f-telefono').value = '';
-    $id('f-domicilio').value = '';
+    $id('f-lote').value = '';
     $id('f-dia').value = '';
     pago = '';
     document.querySelectorAll('.pago-opt').forEach(o => o.classList.remove('sel'));

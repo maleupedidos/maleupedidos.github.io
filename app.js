@@ -735,13 +735,10 @@ function enviarPedido() {
       fecha: new Date().toLocaleString('es-AR'),
       vendedor: vendedorMatch.nombre,
       nombre, telefono,
-      partido: vendedorMatch.partido,
-      localidad: vendedorMatch.localidad,
-      barrioRed: vendedorMatch.barrio,
-      domicilioRed: lote,
+      barrioPrivado: vendedorMatch.barrio,
+      lote: lote,
       dia, horario, pago: pagoEl.value,
-      envio: shipping, items, total,
-      subtotalSinDescuento: subtotal, descuento: discount
+      envio: shipping, items, total
     };
   } else {
     postData = {
