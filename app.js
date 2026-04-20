@@ -151,8 +151,19 @@ function getShipping() {
   }
   return z.envio;
 }
+function pilarIsOtroBarrio() {
+  if (currentZone !== 'pilar') return false;
+  var el = $id('f-pilar-barrio');
+  return !!(el && el.value === '__otro__');
+}
+function discountsActive() {
+  if (currentZone === 'clubes') return false;
+  // En Pilar solo hay descuentos cuando el cliente eligió "Otro barrio"
+  if (currentZone === 'pilar' && !pilarIsOtroBarrio()) return false;
+  return true;
+}
 function getCashDiscount() {
-  if (currentZone === 'clubes') return 0;
+  if (!discountsActive()) return 0;
   const total = cartTotal();
   const sel = document.querySelector('input[name="pago"]:checked');
   const isCash = sel && sel.value === 'Efectivo';
@@ -161,7 +172,7 @@ function getCashDiscount() {
   return 0;
 }
 function getDiscountLabel() {
-  if (currentZone === 'clubes') return '';
+  if (!discountsActive()) return '';
   const sel = document.querySelector('input[name="pago"]:checked');
   const isCash = sel && sel.value === 'Efectivo';
   const isBulk = cartTotal() >= 100000;
@@ -226,6 +237,7 @@ function onPilarBarrioChange() {
   var fieldOtro = $id('field-pilar-otro');
   if (fieldOtro) fieldOtro.style.display = val === '__otro__' ? '' : 'none';
   updatePilarVendedorLabel();
+  updatePromoBar();
   updateUI();
   updateShippingBar();
 }
@@ -285,9 +297,8 @@ function applyZone() {
   Object.keys(z.horarios).forEach(dia => {
     diaSelect.innerHTML += '<option value="' + dia + '">' + dia + '</option>';
   });
-  // Promo bar: ocultar en clubes (no hay descuentos)
-  var promoBar = $id('promo-bar');
-  if (promoBar) promoBar.style.display = currentZone === 'clubes' ? 'none' : '';
+  // Promo bar: ocultar si no hay descuentos activos (clubes, o pilar sin "Otro barrio")
+  updatePromoBar();
   // Limpiar carrito al cambiar zona (productos/precios cambian)
   cart = {};
   // Ocultar último pedido (se re-evalúa con loadLastOrder)
@@ -437,7 +448,7 @@ function updateUI() {
 
     // Incentivo inteligente
     var incentiveEl = $id('cart-incentive');
-    if (incentiveEl && currentZone !== 'clubes') {
+    if (incentiveEl && discountsActive()) {
       var falta = 100000 - subtotal;
       var sel = document.querySelector('input[name="pago"]:checked');
       var isCash = sel && sel.value === 'Efectivo';
@@ -811,7 +822,7 @@ function updateFormVisibility() {
     // Mostrar hint de descuento si no eligió pago aún
     var hint = $id('pago-hint');
     var sel = document.querySelector('input[name="pago"]:checked');
-    if (hint && !sel && currentZone !== 'clubes') hint.style.display = '';
+    if (hint && !sel && discountsActive()) hint.style.display = '';
   }
 }
 function expandForm() {
@@ -820,7 +831,7 @@ function expandForm() {
   // Mostrar hint de descuento si no eligió pago aún
   const hint = $id('pago-hint');
   const sel = document.querySelector('input[name="pago"]:checked');
-  if (hint && !sel && currentZone !== 'clubes') hint.style.display = '';
+  if (hint && !sel && discountsActive()) hint.style.display = '';
   setTimeout(() => document.querySelector('.form-wrap').scrollIntoView({behavior:'smooth'}), 50);
 }
 
@@ -1031,9 +1042,16 @@ _formObs.observe(document.querySelector('.form-section'));
 
 /* ── BARRA ENVÍO GRATIS ── */
 const FREE_SHIPPING_MIN = 25000; // envío gratis desde $25.000 (solo aplica para zona pilar)
+function updatePromoBar() {
+  var bar = $id('promo-bar');
+  if (!bar) return;
+  bar.style.display = discountsActive() ? '' : 'none';
+}
 function updateShippingBar() {
   const bar = $id('shipping-bar');
-  // Solo mostrar la barra si la zona cobra envío AHORA (getShipping() > 0)
+  // En Pilar nunca mostrar la barra de envío gratis (el usuario lo pidió así)
+  if (currentZone === 'pilar') { bar.classList.add('hidden'); return; }
+  // En el resto: mostrar solo si la zona cobra envío AHORA
   if (!currentZone || getShipping() === 0) { bar.classList.add('hidden'); return; }
   const subtotal = cartTotal();
   if (cartCount() === 0) { bar.classList.add('hidden'); return; }
@@ -1064,7 +1082,7 @@ function onPagoChange() {
   const hint = $id('pago-hint');
   if (hint) {
     if (sel && sel.value === 'Efectivo') hint.style.display = 'none';
-    else if (currentZone !== 'clubes') hint.style.display = '';
+    else if (discountsActive()) hint.style.display = '';
     else hint.style.display = 'none';
   }
   updateUI();
