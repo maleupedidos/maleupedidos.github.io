@@ -475,6 +475,7 @@ function updateUI() {
     }
   }
   updateFormSummary();
+  updatePagoHint();
 }
 
 function updateFormSummary() {
@@ -820,18 +821,13 @@ function updateFormVisibility() {
   if (cartCount() > 0) {
     section.classList.remove('collapsed');
     // Mostrar hint de descuento si no eligió pago aún
-    var hint = $id('pago-hint');
-    var sel = document.querySelector('input[name="pago"]:checked');
-    if (hint && !sel && discountsActive()) hint.style.display = '';
+    updatePagoHint();
   }
 }
 function expandForm() {
   const section = $id('form-section');
   if (section) section.classList.remove('collapsed');
-  // Mostrar hint de descuento si no eligió pago aún
-  const hint = $id('pago-hint');
-  const sel = document.querySelector('input[name="pago"]:checked');
-  if (hint && !sel && discountsActive()) hint.style.display = '';
+  updatePagoHint();
   setTimeout(() => document.querySelector('.form-wrap').scrollIntoView({behavior:'smooth'}), 50);
 }
 
@@ -1047,6 +1043,14 @@ function updatePromoBar() {
   if (!bar) return;
   bar.style.display = discountsActive() ? '' : 'none';
 }
+function updatePagoHint() {
+  var hint = $id('pago-hint');
+  if (!hint) return;
+  var sel = document.querySelector('input[name="pago"]:checked');
+  var isCash = sel && sel.value === 'Efectivo';
+  // Mostrar solo si hay descuentos activos Y no eligió efectivo todavía
+  hint.style.display = (discountsActive() && !isCash) ? '' : 'none';
+}
 function updateShippingBar() {
   const bar = $id('shipping-bar');
   // En Pilar nunca mostrar la barra de envío gratis (el usuario lo pidió así)
@@ -1079,12 +1083,7 @@ function onPagoChange() {
   if (sel && sel.value === 'Transferencia') { alias.classList.remove('hidden'); }
   else { alias.classList.add('hidden'); }
   // Hint de descuento: mostrar solo cuando NO eligió efectivo
-  const hint = $id('pago-hint');
-  if (hint) {
-    if (sel && sel.value === 'Efectivo') hint.style.display = 'none';
-    else if (discountsActive()) hint.style.display = '';
-    else hint.style.display = 'none';
-  }
+  updatePagoHint();
   updateUI();
   updateFormSummary();
 }
