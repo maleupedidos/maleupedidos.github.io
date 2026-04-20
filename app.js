@@ -218,6 +218,22 @@ function onPilarBarrioChange() {
   var val = $id('f-pilar-barrio').value;
   var fieldOtro = $id('field-pilar-otro');
   if (fieldOtro) fieldOtro.style.display = val === '__otro__' ? '' : 'none';
+  updatePilarVendedorLabel();
+}
+function updatePilarVendedorLabel() {
+  var label = $id('pilar-vendedor-label');
+  if (!label) return;
+  var val = $id('f-pilar-barrio').value;
+  var text = '';
+  if (val === '__otro__') {
+    var otro = ($id('f-direccion') && $id('f-direccion').value || '').trim();
+    if (otro) text = 'El vendedor es Tadeo Ustariz';
+  } else if (val) {
+    var v = barrioToVendedor[val.toLowerCase()];
+    if (v && v.nombre) text = 'El vendedor es ' + v.nombre;
+  }
+  if (text) { label.textContent = text; label.style.display = ''; }
+  else { label.textContent = ''; label.style.display = 'none'; }
 }
 
 /* ── ZONA ── */
