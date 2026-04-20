@@ -461,6 +461,13 @@ function hidratarConceptos(){
 }
 
 // ── TOGGLE GASTO/INGRESO ──
+function toggleSem(n){
+  var b=document.getElementById('sem-body-'+n);
+  var c=document.getElementById('sem-chev-'+n);
+  if(!b)return;
+  b.classList.toggle('hidden');
+  if(c)c.textContent=b.classList.contains('hidden')?'\u25BC':'\u25B2';
+}
 function toggleCajaForm(t){
   $('tGasto').classList.toggle('on',t==='gasto');
   $('tIngreso').classList.toggle('on',t==='ingreso');
@@ -652,34 +659,39 @@ function rInicio(){
     '<div class="hero-t">'+diaHoy+' '+ddH+' de '+mmH+' '+yyH+'</div>'+
     '<div class="hero-d">'+pedSem+' ventas \u00b7 $'+f$(totalSem)+'</div>';
 
-  // ── CAJA: Hoy + Semana (REAL cobrado + por cobrar) + desglose por día DE ENTREGA ──
+  // ── CAJA: Hoy + Semana actual expandida + semanas previas en acordeón ──
   var hoyKey=String(now.getDate()).padStart(2,'0')+'/'+String(now.getMonth()+1).padStart(2,'0');
-  // Agrupamos por fecha DE ENTREGA real (p.fe). Si no hay (pedido aún no entregado), usa fecha pedido como fallback.
-  var hoyEf=0,hoyTr=0,hoyTot=0,hoyPend=0,semEf=0,semTr=0,semTot=0,semPend=0;
-  var porDia={};
+  // Agrupamos por SEMANA → días. Fecha relevante: cobro > entrega > pedido.
+  var porSemana={}; // { semNum: {ef,tr,tot,pend,dias:{k:{...}}, minD, maxD} }
+  var nowYear=now.getFullYear();
   pv.forEach(function(p){
     var cobrado=(p.ep==='Cobrado');
-    // Para cobrados: agrupar por fecha DE COBRO real (cuándo entró la plata).
-    // Fallbacks: fecha entrega real → fecha pedido.
-    // Para pendientes: por fecha pedido (aún no se cobró).
     var k=cobrado?(p.fc||p.fe||p.f||''):(p.f||'');
     if(!k)return;
+    var parts=k.split('/');if(parts.length<2)return;
+    var dd=Number(parts[0]),mm=Number(parts[1]);
+    var d=new Date(nowYear,mm-1,dd);
+    var sem=getWeek(d);
+    if(!porSemana[sem])porSemana[sem]={ef:0,tr:0,tot:0,pend:0,dias:{},minD:d,maxD:d};
+    if(d<porSemana[sem].minD)porSemana[sem].minD=d;
+    if(d>porSemana[sem].maxD)porSemana[sem].maxD=d;
     var diaLbl=cobrado?(p.fcd||p.fed||p.dia||''):(p.dia||'');
-    if(!porDia[k])porDia[k]={dia:diaLbl,fecha:k,ef:0,tr:0,tot:0,pend:0};
-    if(!porDia[k].dia)porDia[k].dia=diaLbl;
+    if(!porSemana[sem].dias[k])porSemana[sem].dias[k]={dia:diaLbl,fecha:k,ef:0,tr:0,tot:0,pend:0};
+    if(!porSemana[sem].dias[k].dia)porSemana[sem].dias[k].dia=diaLbl;
     var ef=(p.ef||0)+(p.pef||0);
     var tr=(p.tr||0)+(p.ptr||0);
     var monto=p.$||(ef+tr);
     if(cobrado){
-      porDia[k].ef+=ef;porDia[k].tr+=tr;porDia[k].tot+=monto;
-      semEf+=ef;semTr+=tr;semTot+=monto;
-      if(k===hoyKey){hoyEf+=ef;hoyTr+=tr;hoyTot+=monto;}
+      porSemana[sem].dias[k].ef+=ef;porSemana[sem].dias[k].tr+=tr;porSemana[sem].dias[k].tot+=monto;
+      porSemana[sem].ef+=ef;porSemana[sem].tr+=tr;porSemana[sem].tot+=monto;
     } else {
-      porDia[k].pend+=monto;
-      semPend+=monto;
-      if(k===hoyKey)hoyPend+=monto;
+      porSemana[sem].dias[k].pend+=monto;porSemana[sem].pend+=monto;
     }
   });
+
+  var semData=porSemana[semActual]||{ef:0,tr:0,tot:0,pend:0,dias:{}};
+  var hoyD=semData.dias[hoyKey]||{ef:0,tr:0,tot:0,pend:0};
+
   var cb=$('hCaja');var cbHtml='';
   function cajaCard(titulo,ef,tr,tot,pend,highlight){
     var html='<div class="card'+(highlight?' acc':'')+'" style="padding:12px">';
@@ -690,19 +702,44 @@ function rInicio(){
     html+='</div>';
     return html;
   }
-  cbHtml+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:10px 0">';
-  cbHtml+=cajaCard('HOY \u00b7 COBRADO',hoyEf,hoyTr,hoyTot,hoyPend,hoyTot>0);
-  cbHtml+=cajaCard('SEMANA \u00b7 COBRADO',semEf,semTr,semTot,semPend,false);
-  cbHtml+='</div>';
-  var diasKeys=Object.keys(porDia).sort(function(a,b){var pa=a.split('/'),pb=b.split('/');return (Number(pa[1])*100+Number(pa[0]))-(Number(pb[1])*100+Number(pb[0]));});
-  if(diasKeys.length>0){
-    cbHtml+='<div class="st" style="margin-top:8px">&#128197; Por d\u00eda</div>';
+  function renderDiasList(dias,isCurSem){
+    var diasKeys=Object.keys(dias).sort(function(a,b){var pa=a.split('/'),pb=b.split('/');return (Number(pa[1])*100+Number(pa[0]))-(Number(pb[1])*100+Number(pb[0]));});
+    var h='';
     diasKeys.forEach(function(k){
-      var d=porDia[k];var diaAb=(d.dia||'').substring(0,3);var isHoy=k===hoyKey;
-      cbHtml+='<div class="card" style="margin-bottom:6px;padding:10px 12px'+(isHoy?';border:2px solid var(--b)':'')+'">';
-      cbHtml+='<div style="display:flex;justify-content:space-between;align-items:center"><span style="font-weight:800;font-size:13px">'+diaAb+' '+k+(isHoy?' \u00b7 HOY':'')+'</span><span style="font-weight:800;font-size:14px">$'+f$(d.tot)+'</span></div>';
-      cbHtml+='<div style="font-size:10px;color:var(--bl);margin-top:2px">EF $'+f$(d.ef)+' \u00b7 TR $'+f$(d.tr)+'</div>';
-      if(d.pend>0)cbHtml+='<div style="font-size:10px;color:#E65100;font-weight:700;margin-top:3px">+$'+f$(d.pend)+' por cobrar</div>';
+      var d=dias[k];var diaAb=(d.dia||'').substring(0,3);var isHoy=isCurSem&&k===hoyKey;
+      h+='<div class="card" style="margin-bottom:6px;padding:10px 12px'+(isHoy?';border:2px solid var(--b)':'')+'">';
+      h+='<div style="display:flex;justify-content:space-between;align-items:center"><span style="font-weight:800;font-size:13px">'+diaAb+' '+k+(isHoy?' \u00b7 HOY':'')+'</span><span style="font-weight:800;font-size:14px">$'+f$(d.tot)+'</span></div>';
+      h+='<div style="font-size:10px;color:var(--bl);margin-top:2px">EF $'+f$(d.ef)+' \u00b7 TR $'+f$(d.tr)+'</div>';
+      if(d.pend>0)h+='<div style="font-size:10px;color:#E65100;font-weight:700;margin-top:3px">+$'+f$(d.pend)+' por cobrar</div>';
+      h+='</div>';
+    });
+    return h;
+  }
+  // Cards HOY + SEMANA ACTUAL
+  cbHtml+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:10px 0">';
+  cbHtml+=cajaCard('HOY \u00b7 COBRADO',hoyD.ef,hoyD.tr,hoyD.tot,hoyD.pend,hoyD.tot>0);
+  cbHtml+=cajaCard('SEMANA '+semActual+' \u00b7 COBRADO',semData.ef,semData.tr,semData.tot,semData.pend,true);
+  cbHtml+='</div>';
+  // Días de semana actual (expandido)
+  if(Object.keys(semData.dias).length>0){
+    cbHtml+='<div class="st" style="margin-top:8px">&#128197; Semana '+semActual+' \u00b7 Por d\u00eda</div>';
+    cbHtml+=renderDiasList(semData.dias,true);
+  }
+  // Semanas previas (acordeón)
+  var MS_SHORT=['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+  var semsOrd=Object.keys(porSemana).map(Number).filter(function(s){return s!==semActual;}).sort(function(a,b){return b-a;});
+  if(semsOrd.length>0){
+    cbHtml+='<div class="st" style="margin-top:14px">&#128336; Semanas anteriores</div>';
+    semsOrd.forEach(function(s){
+      var d=porSemana[s];
+      var r=d.minD.getDate()+' '+MS_SHORT[d.minD.getMonth()]+' \u2013 '+d.maxD.getDate()+' '+MS_SHORT[d.maxD.getMonth()];
+      cbHtml+='<div class="card" style="margin-bottom:6px;padding:0;overflow:hidden">';
+      cbHtml+='<div onclick="toggleSem('+s+')" style="padding:12px;cursor:pointer;display:flex;justify-content:space-between;align-items:center">';
+      cbHtml+='<div><div style="font-weight:800;font-size:13px">Semana '+s+'</div><div style="font-size:10px;color:var(--bl);margin-top:2px">'+r+'</div></div>';
+      cbHtml+='<div style="text-align:right"><div style="font-weight:800;font-size:14px">$'+f$(d.tot)+'</div><div style="font-size:10px;color:var(--bl)">EF $'+f$(d.ef)+' \u00b7 TR $'+f$(d.tr)+'</div>'+(d.pend>0?'<div style="font-size:10px;color:#E65100;font-weight:700">+$'+f$(d.pend)+' pend</div>':'')+'</div>';
+      cbHtml+='<span id="sem-chev-'+s+'" style="margin-left:8px;font-size:14px;color:var(--bl)">\u25BC</span>';
+      cbHtml+='</div>';
+      cbHtml+='<div id="sem-body-'+s+'" class="hidden" style="padding:0 10px 10px">'+renderDiasList(d.dias,false)+'</div>';
       cbHtml+='</div>';
     });
   }
