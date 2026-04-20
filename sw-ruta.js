@@ -2,7 +2,7 @@
    MALEU RUTA — Service Worker (network-first para HTML)
    ═══════════════════════════════════════════════════════════ */
 
-var CACHE_NAME = 'maleu-ruta-v18';
+var CACHE_NAME = 'maleu-ruta-v19';
 var PRECACHE = [
   '/ruta.html',
   '/img/favicon.png',
