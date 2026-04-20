@@ -237,9 +237,30 @@ function onPilarBarrioChange() {
   var fieldOtro = $id('field-pilar-otro');
   if (fieldOtro) fieldOtro.style.display = val === '__otro__' ? '' : 'none';
   updatePilarVendedorLabel();
+  updatePilarDiasEntrega();
   updatePromoBar();
   updateUI();
   updateShippingBar();
+}
+// Si el barrio tiene vendedor Red asignado, limitar días de entrega a Viernes
+function updatePilarDiasEntrega() {
+  if (currentZone !== 'pilar') return;
+  var val = $id('f-pilar-barrio').value;
+  var vendedor = val && val !== '__otro__' ? barrioToVendedor[val.toLowerCase()] : null;
+  var diaSel = $id('f-dia');
+  if (!diaSel) return;
+  var prev = diaSel.value;
+  if (vendedor) {
+    diaSel.innerHTML = '<option value="Viernes" selected>Viernes</option>';
+  } else {
+    // Restaurar días normales de Pilar
+    var z = ZONAS.pilar;
+    diaSel.innerHTML = '<option value="">Elegí un día</option>';
+    Object.keys(z.horarios).forEach(function(dia) {
+      diaSel.innerHTML += '<option value="' + dia + '">' + dia + '</option>';
+    });
+    if (prev && prev !== 'Viernes-only') diaSel.value = prev;
+  }
 }
 function updatePilarVendedorLabel() {
   var label = $id('pilar-vendedor-label');
