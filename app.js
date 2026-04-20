@@ -142,6 +142,13 @@ function cartCount() { return Object.values(cart).reduce((a,b)=>a+b, 0); }
 function getShipping() {
   if (!currentZone) return 0;
   const z = ZONAS[currentZone];
+  // En Pilar: envío $0 por default y si hay vendedor (El Lucero, Los Tacos, etc).
+  // Solo cobra envío cuando el cliente eligió "Otro barrio".
+  if (currentZone === 'pilar') {
+    var barrioEl = $id('f-pilar-barrio');
+    var val = barrioEl ? barrioEl.value : '';
+    return val === '__otro__' ? z.envio : 0;
+  }
   return z.envio;
 }
 function getCashDiscount() {
@@ -219,6 +226,8 @@ function onPilarBarrioChange() {
   var fieldOtro = $id('field-pilar-otro');
   if (fieldOtro) fieldOtro.style.display = val === '__otro__' ? '' : 'none';
   updatePilarVendedorLabel();
+  updateUI();
+  updateShippingBar();
 }
 function updatePilarVendedorLabel() {
   var label = $id('pilar-vendedor-label');
@@ -1024,7 +1033,8 @@ _formObs.observe(document.querySelector('.form-section'));
 const FREE_SHIPPING_MIN = 25000; // envío gratis desde $25.000 (solo aplica para zona pilar)
 function updateShippingBar() {
   const bar = $id('shipping-bar');
-  if (!currentZone || ZONAS[currentZone].envio === 0) { bar.classList.add('hidden'); return; }
+  // Solo mostrar la barra si la zona cobra envío AHORA (getShipping() > 0)
+  if (!currentZone || getShipping() === 0) { bar.classList.add('hidden'); return; }
   const subtotal = cartTotal();
   if (cartCount() === 0) { bar.classList.add('hidden'); return; }
   bar.classList.remove('hidden');
