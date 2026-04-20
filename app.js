@@ -16,6 +16,10 @@ const PRODUCTOS = [
   { id:8,  cat:"Sorrentinos",      nombre:"Sorrentinos Cordero al Malbec", desc:"Cordero, zanahoria, apio, cebolla y especias. Distinto y muy rico.",             precio:17500, img:"sorrentinos-cordero-new.png", emoji:"🍝", chips:["Para 2–3 personas","600g · 16 unidades","Listos en 4 min"] },
   { id:9,  cat:"Sorrentinos",      nombre:"Sorrentinos Jamón y Queso",     desc:"Relleno cremoso y generoso. El favorito de la familia.",                         precio:16300, img:"sorrentinos-jamon-new.png", emoji:"🍝", top:true, chips:["Para 2–3 personas","600g · 16 unidades","Listos en 4 min"] },
   { id:10, cat:"Sorrentinos",      nombre:"Sorrentinos Calabaza y Queso",  desc:"Suave, dulce y sabroso. Relleno cremoso de calabaza y queso.",                   precio:14700, img:"sorrentinos-calabaza-new.png", emoji:"🍝", chips:["Para 2–3 personas","600g · 16 unidades","Listos en 4 min"] },
+  { id:20, cat:"Sorrentinos",      nombre:"Sorrentinos Queso Brie",        desc:"Queso brie cremoso y perfumado. Gourmet sin vueltas.",                          precio:19300, img:"sorrentinos-brie.png",      emoji:"🍝", zonas:["pilar"], chips:["Para 2–3 personas","600g · 16 unidades","Listos en 4 min"] },
+  { id:21, cat:"Sorrentinos",      nombre:"Sorrentinos Langostinos al Azafrán", desc:"Langostinos y azafrán en masa casera. Muy gourmet.",                      precio:19300, img:"sorrentinos-langostinos.png",emoji:"🍝", zonas:["pilar"], chips:["Para 2–3 personas","600g · 16 unidades","Listos en 4 min"] },
+  { id:22, cat:"Sorrentinos",      nombre:"Sorrentinos Pollo y Puerro",    desc:"Pollo tierno con puerro salteado. Suave, sabroso y muy rendidor.",              precio:16300, img:"sorrentinos-pollo-puerro.png",emoji:"🍝", zonas:["pilar"], chips:["Para 2–3 personas","600g · 16 unidades","Listos en 4 min"] },
+  { id:23, cat:"Sorrentinos",      nombre:"Sorrentinos Espinaca",          desc:"Espinaca con queso cremoso. Verde, suave, tradicional.",                         precio:15100, img:"sorrentinos-espinaca.png",   emoji:"🍝", zonas:["pilar"], chips:["Para 2–3 personas","600g · 16 unidades","Listos en 4 min"] },
   { id:11, cat:"Empanadas",        nombre:"Empanadas Carne a Cuchillo x8", desc:"Carne cortada a cuchillo, jugosa y bien condimentada. Las que piden todos.",     precio:18800, img:"empanadas-carne-new.jpg", emoji:"🥟", top:true, chips:["Para 2–4 personas","8 empanadas","Al horno hasta dorar"] },
   { id:12, cat:"Empanadas",        nombre:"Empanadas Jamón y Queso x8",    desc:"Cremosas por dentro, doraditas por fuera. Para cualquier momento.",              precio:16000, img:"empanadas-jamon-new.png", emoji:"🥟", chips:["Para 2–4 personas","8 empanadas","Al horno hasta dorar"] },
   { id:17, cat:"Empanadas",        nombre:"Empanadas Cebolla y Queso x8",  desc:"Cebolla caramelizada con queso derretido. Sabor dulce y cremoso.",               precio:16000, img:"empanadas-cebolla-new.jpg", emoji:"🥟", chips:["Para 2–4 personas","8 empanadas","Al horno hasta dorar"] },
@@ -52,7 +56,10 @@ const CATEGORIAS_CLUBES = [
 // Los productos de clubes se agregan a PROD_MAP después de su declaración (ver más abajo)
 
 /* Productos y categorías activos según zona */
-function getActiveProducts() { return currentZone === 'clubes' ? PRODUCTOS_CLUBES : PRODUCTOS; }
+function getActiveProducts() {
+  if (currentZone === 'clubes') return PRODUCTOS_CLUBES;
+  return PRODUCTOS.filter(function(p) { return !p.zonas || p.zonas.indexOf(currentZone) >= 0; });
+}
 function getActiveCategories() { return currentZone === 'clubes' ? CATEGORIAS_CLUBES : CATEGORIAS; }
 
 /* ── ZONAS ── */
@@ -121,6 +128,7 @@ const PROD_ABBR = {
   11:'ECaC', 12:'EJyQ', 17:'ECyQ', 18:'EV',
   14:'TG', 15:'TLC', 16:'TC', 13:'F',
   1:'PMa', 2:'PJyQ', 3:'PCC', 4:'PJyM', 19:'PMu',
+  20:'SQB', 21:'SL', 22:'SPyP', 23:'SE',
   // Clubes (IDs string)
   'pmu':'PMu', 'pma':'PMa', 'pjq':'PJyQ', 'pcc':'PCC', 'pjm':'PJyM',
   'pp1':'PPM', 'pp2':'PPJyQ', 'pp3':'PPCyQ',
