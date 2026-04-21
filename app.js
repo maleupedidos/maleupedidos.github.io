@@ -293,8 +293,6 @@ function applyZone() {
   // Form fields
   $id('fields-estancias').style.display = currentZone === 'estancias' ? '' : 'none';
   $id('fields-pilar').style.display = currentZone === 'pilar' ? '' : 'none';
-  var cfFields = $id('fields-capital');
-  if (cfFields) cfFields.style.display = 'none';
   $id('fields-clubes').style.display = currentZone === 'clubes' ? '' : 'none';
   // Si Pilar, re-render dropdown de barrios por si ya llegaron vendedores
   if (currentZone === 'pilar') renderPilarBarrios();
@@ -634,10 +632,6 @@ function validateOnBlur(campo) {
   if (campo==='club') { $id('f-club').value ? clearError('f-club','err-club') : showError('f-club','err-club'); }
   if (campo==='deporte') { $id('f-deporte').value ? clearError('f-deporte','err-deporte') : showError('f-deporte','err-deporte'); }
   if (campo==='grupo') { $id('f-grupo').value ? clearError('f-grupo','err-grupo') : showError('f-grupo','err-grupo'); }
-  if (campo==='barrioCaba') { $id('f-barrio-caba').value.trim() ? clearError('f-barrio-caba','err-barrio-caba') : showError('f-barrio-caba','err-barrio-caba'); }
-  if (campo==='calle') { $id('f-calle').value.trim() ? clearError('f-calle','err-calle') : showError('f-calle','err-calle'); }
-  if (campo==='numero') { $id('f-numero').value.trim() ? clearError('f-numero','err-numero') : showError('f-numero','err-numero'); }
-  if (campo==='piso') { $id('f-piso').value.trim() ? clearError('f-piso','err-piso') : showError('f-piso','err-piso'); }
   if (campo==='telefono') { $id('f-telefono').value.replace(/\D/g,'').length >= 8 ? clearError('f-telefono','err-telefono') : showError('f-telefono','err-telefono'); }
   if (campo==='dia') {
     var dpRoot = $id('day-picker');
@@ -780,12 +774,13 @@ function enviarPedido() {
   const z2 = ZONAS[currentZone];
   const horarioStr = z2.horarios[dia] || '';
   const fechaISO = $id('f-dia-fecha') ? $id('f-dia-fecha').value : '';
-  let fechaCorta = '';
+  // diaFull = "Miércoles 22/04/2026" (lo que se guarda en Sheets col "Día de entrega")
+  let diaFull = dia;
   if (fechaISO) {
     const _fp = fechaISO.split('-');
-    fechaCorta = ' ' + _fp[2] + '/' + _fp[1];
+    diaFull = dia + ' ' + _fp[2] + '/' + _fp[1] + '/' + _fp[0];
   }
-  const entregaStr = dia + fechaCorta + (horarioStr && horarioStr !== 'A coordinar' ? ' de ' + horarioStr : '');
+  const entregaStr = diaFull + (horarioStr && horarioStr !== 'A coordinar' ? ' de ' + horarioStr : '');
   const pagoStr = pagoEl.value === 'Efectivo' ? 'Efectivo' : 'Mercado Pago';
 
   // Detectar si barrio tiene vendedor asignado (Pilar + barrio match)
@@ -845,7 +840,7 @@ function enviarPedido() {
       canal: 'Clubes',
       fecha: new Date().toLocaleString('es-AR'),
       nombre, telefono, club, deporte, grupo,
-      dia, horario, fechaEntrega: fechaISO, pago: pagoEl.value,
+      dia: diaFull, horario, fechaEntrega: fechaISO, pago: pagoEl.value,
       envio: shipping, items, total,
       subtotalSinDescuento: subtotal, descuento: discount
     };
@@ -858,7 +853,7 @@ function enviarPedido() {
       nombre, telefono,
       barrioPrivado: vendedorMatch.barrio,
       lote: lote,
-      dia, horario, fechaEntrega: fechaISO, pago: pagoEl.value,
+      dia: diaFull, horario, fechaEntrega: fechaISO, pago: pagoEl.value,
       envio: shipping, items, total
     };
   } else {
@@ -868,7 +863,7 @@ function enviarPedido() {
       nombre, barrioPrivado,
       subBarrio: barrioPrivado === 'Estancias del Pilar' ? barrio : '',
       barrio: currentZone === 'estancias' ? barrio : direccion,
-      lote, telefono, dia, horario, fechaEntrega: fechaISO,
+      lote, telefono, dia: diaFull, horario, fechaEntrega: fechaISO,
       pago: pagoEl.value,
       envio: shipping, items, total,
       subtotalSinDescuento: subtotal, descuento: discount
