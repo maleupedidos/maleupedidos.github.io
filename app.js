@@ -245,22 +245,8 @@ function onPilarBarrioChange() {
 // Si el barrio tiene vendedor Red asignado, limitar días de entrega a Viernes
 function updatePilarDiasEntrega() {
   if (currentZone !== 'pilar') return;
-  var val = $id('f-pilar-barrio').value;
-  var vendedor = val && val !== '__otro__' ? barrioToVendedor[val.toLowerCase()] : null;
-  var diaSel = $id('f-dia');
-  if (!diaSel) return;
-  var prev = diaSel.value;
-  if (vendedor) {
-    diaSel.innerHTML = '<option value="Viernes" selected>Viernes</option>';
-  } else {
-    // Restaurar días normales de Pilar
-    var z = ZONAS.pilar;
-    diaSel.innerHTML = '<option value="">Elegí un día</option>';
-    Object.keys(z.horarios).forEach(function(dia) {
-      diaSel.innerHTML += '<option value="' + dia + '">' + dia + '</option>';
-    });
-    if (prev && prev !== 'Viernes-only') diaSel.value = prev;
-  }
+  // Re-renderiza el calendario con los días habilitados según el vendedor asignado al barrio.
+  renderDayPicker();
 }
 function updatePilarVendedorLabel() {
   var label = $id('pilar-vendedor-label');
@@ -312,12 +298,10 @@ function applyZone() {
   $id('fields-clubes').style.display = currentZone === 'clubes' ? '' : 'none';
   // Si Pilar, re-render dropdown de barrios por si ya llegaron vendedores
   if (currentZone === 'pilar') renderPilarBarrios();
-  // Días de entrega
-  const diaSelect = $id('f-dia');
-  diaSelect.innerHTML = '<option value="">Elegí un día</option>';
-  Object.keys(z.horarios).forEach(dia => {
-    diaSelect.innerHTML += '<option value="' + dia + '">' + dia + '</option>';
-  });
+  // Días de entrega (calendario 14 días)
+  $id('f-dia').value = '';
+  if ($id('f-dia-fecha')) $id('f-dia-fecha').value = '';
+  renderDayPicker();
   // Promo bar: ocultar si no hay descuentos activos (clubes, o pilar sin "Otro barrio")
   updatePromoBar();
   // Limpiar carrito al cambiar zona (productos/precios cambian)
@@ -541,6 +525,102 @@ function onDiaChange() {
   }
 }
 
+/* ── CALENDARIO DE 14 DÍAS ── */
+const DP_DAY_NAMES = ['Domingo','Lunes','Martes','Miércoles','Jueves','Viernes','Sábado'];
+const DP_DAY_LABELS = ['LUN','MAR','MIÉ','JUE','VIE','SÁB','DOM'];
+
+function _todayAR() {
+  // Hora Argentina (UTC-3) — normalizado a medianoche UTC para comparar por día.
+  var now = new Date();
+  var ar = new Date(now.getTime() - 3 * 3600 * 1000);
+  return new Date(Date.UTC(ar.getUTCFullYear(), ar.getUTCMonth(), ar.getUTCDate()));
+}
+
+function _zoneHorariosForDayPicker() {
+  if (!currentZone) return {};
+  var z = ZONAS[currentZone];
+  if (!z) return {};
+  if (currentZone === 'pilar') {
+    var el = $id('f-pilar-barrio');
+    var val = el ? el.value : '';
+    var vendedor = val && val !== '__otro__' ? barrioToVendedor[val.toLowerCase()] : null;
+    if (vendedor) return { 'Viernes': 'A coordinar' };
+  }
+  return z.horarios || {};
+}
+
+function renderDayPicker() {
+  var root = $id('day-picker');
+  if (!root) return;
+  if (!currentZone) { root.innerHTML = ''; return; }
+
+  var horarios = _zoneHorariosForDayPicker();
+  var today = _todayAR();
+  var dow = today.getUTCDay(); // 0=Dom..6=Sáb
+  var diffToMonday = (dow + 6) % 7;
+  var monday = new Date(today);
+  monday.setUTCDate(today.getUTCDate() - diffToMonday);
+  var todayTs = today.getTime();
+  var selectedFecha = $id('f-dia-fecha') ? $id('f-dia-fecha').value : '';
+
+  var html = '<div class="dp-dow">' + DP_DAY_LABELS.map(function(l){ return '<span>' + l + '</span>'; }).join('') + '</div>';
+  html += '<div class="dp-grid">';
+
+  for (var i = 0; i < 14; i++) {
+    var d = new Date(monday);
+    d.setUTCDate(monday.getUTCDate() + i);
+    var dayName = DP_DAY_NAMES[d.getUTCDay()];
+    var dayNum = d.getUTCDate();
+    var iso = d.toISOString().slice(0, 10);
+    var isPast = d.getTime() < todayTs;
+    var isToday = d.getTime() === todayTs;
+    var available = !!horarios[dayName];
+
+    var cls = 'dp-cell';
+    var disabled = false;
+    if (isPast) { cls += ' past'; disabled = true; }
+    else if (!available) { cls += ' unavailable'; disabled = true; }
+    else { cls += ' available'; }
+    if (isToday) cls += ' today';
+    if (!disabled && iso === selectedFecha) cls += ' selected';
+
+    html += '<button type="button" class="' + cls + '"'
+      + (disabled ? ' disabled aria-disabled="true" tabindex="-1"' : '')
+      + ' data-fecha="' + iso + '"'
+      + ' data-dia="' + dayName + '"'
+      + ' aria-label="' + dayName + ' ' + dayNum + (disabled ? ' (no disponible)' : '') + '"'
+      + ' onclick="selectDayPicker(this)">'
+      + dayNum
+      + '</button>';
+  }
+
+  html += '</div>';
+  html += '<div class="dp-legend">'
+    + '<span><i class="l-ok"></i>Disponible</span>'
+    + '<span><i class="l-off"></i>Sin entrega</span>'
+    + '</div>';
+  root.innerHTML = html;
+}
+
+function selectDayPicker(el) {
+  if (!el || el.disabled) return;
+  var root = $id('day-picker');
+  if (root) {
+    var prev = root.querySelectorAll('.dp-cell.selected');
+    for (var i = 0; i < prev.length; i++) prev[i].classList.remove('selected');
+  }
+  el.classList.add('selected');
+  var dia = el.getAttribute('data-dia');
+  var fecha = el.getAttribute('data-fecha');
+  var hidden = $id('f-dia');
+  var hiddenF = $id('f-dia-fecha');
+  if (hidden) hidden.value = dia;
+  if (hiddenF) hiddenF.value = fecha;
+  clearError('f-dia','err-dia');
+  if (root) root.classList.remove('error');
+  onDiaChange();
+}
+
 /* ── VALIDACIÓN ── */
 function showError(fId, eId) { const f=$id(fId), e=$id(eId); if(f)f.classList.add('error'); if(e)e.classList.add('visible'); }
 function clearError(fId, eId) { const f=$id(fId), e=$id(eId); if(f)f.classList.remove('error'); if(e)e.classList.remove('visible'); }
@@ -559,7 +639,16 @@ function validateOnBlur(campo) {
   if (campo==='numero') { $id('f-numero').value.trim() ? clearError('f-numero','err-numero') : showError('f-numero','err-numero'); }
   if (campo==='piso') { $id('f-piso').value.trim() ? clearError('f-piso','err-piso') : showError('f-piso','err-piso'); }
   if (campo==='telefono') { $id('f-telefono').value.replace(/\D/g,'').length >= 8 ? clearError('f-telefono','err-telefono') : showError('f-telefono','err-telefono'); }
-  if (campo==='dia') { $id('f-dia').value ? clearError('f-dia','err-dia') : showError('f-dia','err-dia'); }
+  if (campo==='dia') {
+    var dpRoot = $id('day-picker');
+    if ($id('f-dia').value) {
+      clearError('f-dia','err-dia');
+      if (dpRoot) dpRoot.classList.remove('error');
+    } else {
+      showError('f-dia','err-dia');
+      if (dpRoot) dpRoot.classList.add('error');
+    }
+  }
 }
 function filtrarSubBarrios(keepValue) {
   const privado = $id('f-barrio-privado').value;
@@ -649,7 +738,12 @@ function enviarPedido() {
   }
 
   if ($id('f-telefono').value.replace(/\D/g,'').length < 8) { showError('f-telefono','err-telefono'); if(!primerInvalido) primerInvalido=$id('f-telefono'); }
-  if (!dia) { showError('f-dia','err-dia'); if(!primerInvalido) primerInvalido=$id('f-dia'); }
+  if (!dia) {
+    showError('f-dia','err-dia');
+    var _dpRoot = $id('day-picker');
+    if (_dpRoot) _dpRoot.classList.add('error');
+    if(!primerInvalido) primerInvalido=_dpRoot || $id('f-dia');
+  }
   if (!pagoEl) { $id('err-pago').classList.add('visible'); if(!primerInvalido) primerInvalido=$id('pago-group'); }
   if (primerInvalido) { primerInvalido.scrollIntoView({behavior:'smooth',block:'center'}); return; }
 
@@ -685,7 +779,13 @@ function enviarPedido() {
 
   const z2 = ZONAS[currentZone];
   const horarioStr = z2.horarios[dia] || '';
-  const entregaStr = dia + (horarioStr && horarioStr !== 'A coordinar' ? ' de ' + horarioStr : '');
+  const fechaISO = $id('f-dia-fecha') ? $id('f-dia-fecha').value : '';
+  let fechaCorta = '';
+  if (fechaISO) {
+    const _fp = fechaISO.split('-');
+    fechaCorta = ' ' + _fp[2] + '/' + _fp[1];
+  }
+  const entregaStr = dia + fechaCorta + (horarioStr && horarioStr !== 'A coordinar' ? ' de ' + horarioStr : '');
   const pagoStr = pagoEl.value === 'Efectivo' ? 'Efectivo' : 'Mercado Pago';
 
   // Detectar si barrio tiene vendedor asignado (Pilar + barrio match)
@@ -745,7 +845,7 @@ function enviarPedido() {
       canal: 'Clubes',
       fecha: new Date().toLocaleString('es-AR'),
       nombre, telefono, club, deporte, grupo,
-      dia, horario, pago: pagoEl.value,
+      dia, horario, fechaEntrega: fechaISO, pago: pagoEl.value,
       envio: shipping, items, total,
       subtotalSinDescuento: subtotal, descuento: discount
     };
@@ -758,7 +858,7 @@ function enviarPedido() {
       nombre, telefono,
       barrioPrivado: vendedorMatch.barrio,
       lote: lote,
-      dia, horario, pago: pagoEl.value,
+      dia, horario, fechaEntrega: fechaISO, pago: pagoEl.value,
       envio: shipping, items, total
     };
   } else {
@@ -768,7 +868,7 @@ function enviarPedido() {
       nombre, barrioPrivado,
       subBarrio: barrioPrivado === 'Estancias del Pilar' ? barrio : '',
       barrio: currentZone === 'estancias' ? barrio : direccion,
-      lote, telefono, dia, horario,
+      lote, telefono, dia, horario, fechaEntrega: fechaISO,
       pago: pagoEl.value,
       envio: shipping, items, total,
       subtotalSinDescuento: subtotal, descuento: discount
@@ -790,7 +890,10 @@ function enviarPedido() {
   setTimeout(() => {
     cart = {}; updateUI();
     getActiveProducts().forEach(p => renderCardFooter(p.id));
-    $id('f-dia').value = ''; onDiaChange();
+    $id('f-dia').value = '';
+    if ($id('f-dia-fecha')) $id('f-dia-fecha').value = '';
+    onDiaChange();
+    renderDayPicker();
     document.querySelectorAll('input[name="pago"]').forEach(r => r.checked = false);
     if (waBtn) { waBtn.disabled = false; waBtn.innerHTML = waBtnOrig; waBtn.style.background = ''; }
     _enviando = false;
