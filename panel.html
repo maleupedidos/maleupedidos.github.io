@@ -1021,7 +1021,8 @@ function rPedidos(){
   });
   if(!fl.length){ct.innerHTML='<div class="empty"><i>&#128230;</i><p>Sin pedidos</p></div>';return;}
 
-  // Más recientes arriba: por fecha completa (yyyy-mm-dd) desc, luego hora desc, luego N° desc
+  // Más recientes arriba: fecha pedido + hora, tiebreaker por fila (r) en Sheets —
+  // pedidos sin hora (Red) se ordenan por r desc, que refleja momento de inserción.
   function _tsPed(p){
     var f=p.f||'';var d=f.split('/');
     var dd=d[0]?Number(d[0])||0:0,mm=d[1]?Number(d[1])||0:0,yy=d[2]?Number(d[2])||0:0;
@@ -1032,6 +1033,8 @@ function rPedidos(){
   fl.sort(function(a,b){
     var ta=_tsPed(a),tb=_tsPed(b);
     if(tb!==ta)return tb-ta;
+    var rA=Number(a.r||0),rB=Number(b.r||0);
+    if(rB!==rA)return rB-rA;
     var numA=Number((a.n||'').replace(/\D/g,''))||0;
     var numB=Number((b.n||'').replace(/\D/g,''))||0;
     return numB-numA;
@@ -1047,23 +1050,31 @@ function rPedidos(){
     // Entrega: "Mie 22 Abr" | Pedido: "18:26 · 17 Abr"
     var MSA=['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
     var DNA=['Dom','Lun','Mar','Mie','Jue','Vie','Sab'];
-    function deToISO(de){
+    // Resuelve p.de a ISO. Maneja fecha directa, Date toString, o nombre de día
+    // (Lun/Mar/...) calculando próxima ocurrencia desde fecha del pedido p.f.
+    var DIAS_MAP_P={'domingo':0,'lunes':1,'martes':2,'miércoles':3,'miercoles':3,'jueves':4,'viernes':5,'sábado':6,'sabado':6};
+    function deToISO(de,f,yy){
       if(!de)return '';
-      if(typeof de==='string'&&(de.indexOf('GMT')>=0||de.indexOf('T00:')>=0)){
-        var d=new Date(de);if(!isNaN(d))return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
-      }
-      var m=String(de).match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
-      if(m)return m[3]+'-'+m[2].padStart(2,'0')+'-'+m[1].padStart(2,'0');
-      return '';
+      var s=String(de).trim();if(!s)return '';
+      if(s.indexOf('GMT')>=0||s.indexOf('T00:')>=0){var d=new Date(s);if(!isNaN(d))return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');}
+      var m=s.match(/^(\d{1,2})\/(\d{1,2})(?:\/(\d{4}))?/);
+      if(m){var yr=m[3]?Number(m[3]):yy;return yr+'-'+String(Number(m[2])).padStart(2,'0')+'-'+String(Number(m[1])).padStart(2,'0');}
+      var wd=DIAS_MAP_P[s.toLowerCase()];
+      if(wd===undefined||!f)return '';
+      var fp=String(f).split('/');if(fp.length<2)return '';
+      var fD=new Date(yy,Number(fp[1])-1,Number(fp[0]));
+      fD.setDate(fD.getDate()+((wd-fD.getDay()+7)%7));
+      return fD.getFullYear()+'-'+String(fD.getMonth()+1).padStart(2,'0')+'-'+String(fD.getDate()).padStart(2,'0');
     }
-    var entregaISO=deToISO(p.de);
+    var entregaISO=deToISO(p.de,p.f,new Date().getFullYear());
     var pedidoInfo='';
     if(p.f){var pp=p.f.split('/');if(pp.length>=2)pedidoInfo=Number(pp[0])+' '+MSA[Number(pp[1])-1];}
     if(p.hr&&pedidoInfo)pedidoInfo=p.hr+' \u00b7 '+pedidoInfo;
     else if(p.hr)pedidoInfo=p.hr;
-    // Build card
+    // Build card. Red: Tadeo solo interviene Origen — resto lo maneja el vendedor desde red.html.
+    var isRed=(p.h==='Red');
     var html='';
-    var editable=(p.es!=='Entregado'&&p.es!=='Cancelado');
+    var editable=(!isRed&&p.es!=='Entregado'&&p.es!=='Cancelado');
     var uidFe=(p.h.replace(/ /g,'')+p.n);
     var dateInput=editable
       ? '<input type="date" id="fe-'+uidFe+'" value="'+entregaISO+'" data-h="'+p.h+'" data-n="'+p.n+'" data-r="'+(p.r||'')+'" data-orig="'+entregaISO+'" onchange="cambiarFechaEntrega(this)" style="font-size:11px;padding:2px 4px;border:1px solid var(--cd);border-radius:6px;font-family:inherit;color:var(--b);background:#fff">'
@@ -1096,8 +1107,8 @@ function rPedidos(){
       html+='</div>';
     }
 
-    // RESERVAR / QUITAR RESERVA (Deposito o Mixto, no entregado ni cancelado)
-    if((p.o==='Deposito'||p.o==='Mixto')&&p.es!=='Entregado'&&p.es!=='Cancelado'){
+    // RESERVAR / QUITAR RESERVA (Deposito o Mixto, no entregado ni cancelado) — no aplica a Red
+    if(!isRed&&(p.o==='Deposito'||p.o==='Mixto')&&p.es!=='Entregado'&&p.es!=='Cancelado'){
       if(p.es==='Pendiente'){
         html+='<button class="btn-origen" style="background:var(--blu);margin-top:10px" data-h="'+p.h+'" data-n="'+p.n+'" data-r="'+(p.r||'')+'" data-est="Reservado" onclick="cambiarEstado(this)">RESERVAR</button>';
       } else if(p.es==='Reservado'){
@@ -1105,9 +1116,14 @@ function rPedidos(){
       }
     }
 
-    // CANCELAR PEDIDO (solo si no está ya cancelado ni entregado)
-    if(p.es!=='Cancelado'&&p.es!=='Entregado'){
+    // CANCELAR PEDIDO (solo si no está ya cancelado ni entregado) — no aplica a Red
+    if(!isRed&&p.es!=='Cancelado'&&p.es!=='Entregado'){
       html+='<button class="btn-cancel-ped" data-h="'+p.h+'" data-n="'+p.n+'" data-r="'+(p.r||'')+'" data-c="'+(p.c||'').replace(/"/g,'&quot;')+'" onclick="confirmarCancelarPed(this)" style="display:block;width:100%;margin-top:8px;padding:8px;background:transparent;color:var(--r);border:1px solid var(--r);border-radius:10px;font-size:11px;font-weight:700;cursor:pointer">&#x1F5D1; Cancelar pedido</button>';
+    }
+
+    // Nota para Red: el vendedor maneja Estado de Entrega y Pago desde red.html
+    if(isRed&&p.es!=='Entregado'&&p.es!=='Cancelado'){
+      html+='<div style="margin-top:8px;padding:6px 8px;background:var(--cr);border-radius:8px;font-size:10px;color:var(--bl);text-align:center">El vendedor marca entrega y pago desde <b>red.html</b></div>';
     }
 
     card.innerHTML=html;
