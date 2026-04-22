@@ -793,43 +793,15 @@ function enviarPedido() {
     vendedorMatch = barrioToVendedor[direccion.toLowerCase()] || null;
   }
 
-  let msg;
-  if (vendedorMatch) {
-    msg = '¡Hola ' + vendedorMatch.nombre + '! Quiero hacer un pedido Maleu\n\n'
-      + '*Pedido:*\n' + prodLines + '\n\n'
-      + 'Envio: Gratis\n'
-      + '*Total: ' + ars(total) + '*\n\n'
-      + 'Direccion: ' + vendedorMatch.barrio + ', Lote ' + lote + '\n'
-      + 'Entrega: ' + entregaStr + '\n'
-      + 'Pago: ' + pagoStr + '\n'
-      + (pagoEl.value === 'Transferencia' ? 'Alias: *maleump*\nTitular: Tadeo Alberto Ustariz\n' : '')
-      + '\n' + nombre + ' - ' + telefono;
-  } else if (currentZone === 'clubes') {
-    msg = '*NUEVO PEDIDO — MALEU CLUBES*\n\n'
-      + prodLines + '\n\n'
-      + '———————————————\n'
-      + '*Total: ' + ars(total) + '*\n'
-      + '———————————————\n\n'
-      + '*Responsable:* ' + nombre + '\n'
-      + '*Club:* ' + club + '\n'
-      + '*Deporte:* ' + deporte + '\n'
-      + '*Equipo:* ' + grupo + '\n'
-      + '*WhatsApp:* ' + telefono + '\n'
-      + '*Entrega:* ' + entregaStr + '\n'
-      + '*Pago:* ' + pagoStr
-      + (pagoEl.value === 'Transferencia' ? '\nAlias: *maleump*\nTitular: Tadeo Alberto Ustariz' : '');
-  } else {
-    msg = 'Hola! Quiero hacer un pedido\n\n'
-      + '*Pedido:*\n' + prodLines + '\n\n'
-      + (discount > 0 ? getDiscountLabel() + ': -*' + ars(discount) + '*\n' : '')
-      + 'Envio: ' + (shipping > 0 ? ars(shipping) : 'Gratis') + '\n'
-      + '*Total: ' + ars(total) + '*\n\n'
-      + 'Direccion: ' + direccionStr + '\n'
-      + 'Entrega: ' + entregaStr + '\n'
-      + 'Pago: ' + pagoStr + '\n'
-      + (pagoEl.value === 'Transferencia' ? 'Alias: *maleump*\nTitular: Tadeo Alberto Ustariz\n' : '')
-      + '\n' + nombre + ' - ' + telefono;
-  }
+  // Mensaje unificado: mínimo imprescindible para el cliente.
+  // Los datos del cliente (nombre, tel, dirección, entrega, pago) los ve Maleu
+  // en Panel/Búsqueda/Ruta/Red — no se repiten en el WhatsApp.
+  var msgLines = ['Hola! Quiero hacer un pedido:', prodLines, ''];
+  msgLines.push(ars(subtotal));
+  if (discount > 0) msgLines.push(getDiscountLabel() + ': -' + ars(discount));
+  if (shipping > 0) msgLines.push('Envio: ' + ars(shipping));
+  msgLines.push('*Total: ' + ars(total) + '*');
+  var msg = msgLines.join('\n');
 
   const urlText = encodeURIComponent(msg);
 
