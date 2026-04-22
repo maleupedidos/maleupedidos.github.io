@@ -774,13 +774,17 @@ function enviarPedido() {
   const z2 = ZONAS[currentZone];
   const horarioStr = z2.horarios[dia] || '';
   const fechaISO = $id('f-dia-fecha') ? $id('f-dia-fecha').value : '';
-  // diaFull = "Miércoles 22/04/2026" (lo que se guarda en Sheets col "Día de entrega")
-  let diaFull = dia;
+  // fechaFull  = "22/04/2026" → va al Sheets (col "Día de entrega")
+  // diaMensaje = "Miércoles 22/04" → va al WhatsApp del cliente
+  let fechaFull = '';
+  let diaMensaje = dia;
   if (fechaISO) {
     const _fp = fechaISO.split('-');
-    diaFull = dia + ' ' + _fp[2] + '/' + _fp[1] + '/' + _fp[0];
+    fechaFull = _fp[2] + '/' + _fp[1] + '/' + _fp[0];
+    diaMensaje = dia + ' ' + _fp[2] + '/' + _fp[1];
   }
-  const entregaStr = diaFull + (horarioStr && horarioStr !== 'A coordinar' ? ' de ' + horarioStr : '');
+  const diaSheets = fechaFull || dia;
+  const entregaStr = diaMensaje + (horarioStr && horarioStr !== 'A coordinar' ? ' de ' + horarioStr : '');
   const pagoStr = pagoEl.value === 'Efectivo' ? 'Efectivo' : 'Mercado Pago';
 
   // Detectar si barrio tiene vendedor asignado (Pilar + barrio match)
@@ -840,7 +844,7 @@ function enviarPedido() {
       canal: 'Clubes',
       fecha: new Date().toLocaleString('es-AR'),
       nombre, telefono, club, deporte, grupo,
-      dia: diaFull, horario, fechaEntrega: fechaISO, pago: pagoEl.value,
+      dia: diaSheets, horario, fechaEntrega: fechaISO, pago: pagoEl.value,
       envio: shipping, items, total,
       subtotalSinDescuento: subtotal, descuento: discount
     };
@@ -853,7 +857,7 @@ function enviarPedido() {
       nombre, telefono,
       barrioPrivado: vendedorMatch.barrio,
       lote: lote,
-      dia: diaFull, horario, fechaEntrega: fechaISO, pago: pagoEl.value,
+      dia: diaSheets, horario, fechaEntrega: fechaISO, pago: pagoEl.value,
       envio: shipping, items, total
     };
   } else {
@@ -863,7 +867,7 @@ function enviarPedido() {
       nombre, barrioPrivado,
       subBarrio: barrioPrivado === 'Estancias del Pilar' ? barrio : '',
       barrio: currentZone === 'estancias' ? barrio : direccion,
-      lote, telefono, dia: diaFull, horario, fechaEntrega: fechaISO,
+      lote, telefono, dia: diaSheets, horario, fechaEntrega: fechaISO,
       pago: pagoEl.value,
       envio: shipping, items, total,
       subtotalSinDescuento: subtotal, descuento: discount
