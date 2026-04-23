@@ -1186,10 +1186,23 @@ function updateMainBadges() {
   const bR = $id('badge-ruta');
   if (pendRuta > 0) { bR.classList.remove('hidden'); bR.textContent = pendRuta; }
   else bR.classList.add('hidden');
-  // Pagos: cobrados pero no pagados a Maleu
-  const pendPagos = peds.filter(p => p.ep === 'Cobrado' && !_esPagado(p.epm) && p.es !== 'Cancelado').length;
+  // Pagos: # semanas con saldo pendiente a Maleu (a pagar > ya pagado)
+  const liqIdx = (lastDashboardData && lastDashboardData.liqBySem) || {};
+  const semMap = {};
+  peds.forEach(p => {
+    if (p.es === 'Cancelado') return;
+    if (p.ep !== 'Cobrado') return;
+    const k = p._y + '-' + String(p._sem).padStart(2, '0');
+    if (!semMap[k]) semMap[k] = 0;
+    semMap[k] += Number(p.aPg) || 0;
+  });
+  let pendSemanas = 0;
+  Object.keys(semMap).forEach(k => {
+    const pagado = (liqIdx[k] && liqIdx[k].total) || 0;
+    if (semMap[k] - pagado > 0.01) pendSemanas++;
+  });
   const bP = $id('badge-pagos');
-  if (pendPagos > 0) { bP.classList.remove('hidden'); bP.textContent = pendPagos; }
+  if (pendSemanas > 0) { bP.classList.remove('hidden'); bP.textContent = pendSemanas; }
   else bP.classList.add('hidden');
 }
 
@@ -1622,11 +1635,16 @@ function renderCaja() {
   const cont = $id('caja-content');
   const semanas = _pagosSemanas();
   const cur = _isoWeekNow();
+  const liqIdx = (lastDashboardData && lastDashboardData.liqBySem) || {};
 
-  // Acumuladores globales (solo cobrados — Marcos ya tiene esa plata)
+  // Acumuladores globales
+  // efCobrado/trCobrado = plata que el CLIENTE le pagó a Marcos (cobro al cliente)
+  // efLiqMaleu/trLiqMaleu = plata que Marcos YA le pagó a Maleu (hoja Pagos Red Liq)
+  // Plata en mano = cobrado - ya pagado a Maleu
   let efCobrado = 0, trCobrado = 0;
   let aPagarMaleu = 0, miComision = 0;
-  let efLiq = 0, trLiq = 0; // ya pagado a Maleu
+  let efLiqMaleu = 0, trLiqMaleu = 0;
+  let aPagarTotalHistorico = 0;
 
   semanas.forEach(g => {
     g.pedidos.forEach(p => {
@@ -1634,50 +1652,63 @@ function renderCaja() {
       const spl = _splitPago(p);
       const aPg = Number(p.aPg) || 0;
       const total = Number(p.$) || 0;
-      const com = total - aPg; // comisión = total - a pagar
-      if (_esPagado(p.epm)) {
-        efLiq += spl.ef; trLiq += spl.tr;
-      } else {
-        efCobrado += spl.ef;
-        trCobrado += spl.tr;
-        aPagarMaleu += aPg;
-        miComision += com;
-      }
+      efCobrado += spl.ef;
+      trCobrado += spl.tr;
+      aPagarTotalHistorico += aPg;
+      miComision += (total - aPg);
     });
+    // Pagos a Maleu que ya hizo (de la hoja Pagos Red Liq)
+    const k = g.y + '-' + String(g.sem).padStart(2, '0');
+    if (liqIdx[k]) {
+      efLiqMaleu += liqIdx[k].ef || 0;
+      trLiqMaleu += liqIdx[k].tr || 0;
+    }
   });
+  // A pagar a Maleu neto = total histórico - lo que ya pagó
+  aPagarMaleu = Math.max(0, aPagarTotalHistorico - efLiqMaleu - trLiqMaleu);
+
+  // Plata en mano = cobrado al cliente - ya pagado a Maleu
+  const efEnMano = Math.max(0, efCobrado - efLiqMaleu);
+  const trEnMano = Math.max(0, trCobrado - trLiqMaleu);
+  const saldoTotal = efEnMano + trEnMano;
+  const yaPagadoTotal = efLiqMaleu + trLiqMaleu;
 
   let html = '';
 
-  // Hero: saldo total en mano (cobrado no liquidado)
-  const saldoTotal = efCobrado + trCobrado;
   html += '<div class="caja-hero">';
   html += '<div class="ch-label">💰 Plata en tu caja (cobrada sin liquidar)</div>';
   html += '<div class="ch-row"><div class="ch-val">' + ars(saldoTotal) + '</div></div>';
-  html += '<div class="ch-label" style="margin-top:.6rem">De la cual: ' + ars(miComision) + ' es tuya · ' + ars(aPagarMaleu) + ' para Maleu</div>';
+  if (aPagarMaleu > 0 || miComision > 0) {
+    html += '<div class="ch-label" style="margin-top:.6rem">De la cual: ' + ars(miComision) + ' es tuya · ' + ars(aPagarMaleu) + ' le debés a Maleu</div>';
+  }
+  if (yaPagadoTotal > 0) {
+    html += '<div class="ch-label" style="margin-top:.3rem;opacity:.75">✓ Ya le pagaste a Maleu: ' + ars(yaPagadoTotal) + '</div>';
+  }
   html += '</div>';
 
-  // Dos tarjetas: EF y TR
+  // Dos tarjetas: EF y TR (saldo real = cobrado - ya pagado a Maleu)
   html += '<div class="caja-twin">';
   html += '<div class="caja-card ef">' +
             '<div class="cc-top"><span class="cc-ic">💵</span><span class="cc-title">Efectivo</span></div>' +
-            '<div class="cc-big">' + ars(efCobrado) + '</div>' +
-            '<div class="cc-sub">En tu mano</div>' +
+            '<div class="cc-big">' + ars(efEnMano) + '</div>' +
+            '<div class="cc-sub">' + (efLiqMaleu > 0 ? 'cobraste ' + ars(efCobrado) + ' · pagaste ' + ars(efLiqMaleu) : 'En tu mano') + '</div>' +
           '</div>';
   html += '<div class="caja-card tr">' +
             '<div class="cc-top"><span class="cc-ic">🏦</span><span class="cc-title">Transferencia</span></div>' +
-            '<div class="cc-big">' + ars(trCobrado) + '</div>' +
-            '<div class="cc-sub">En tu cuenta</div>' +
+            '<div class="cc-big">' + ars(trEnMano) + '</div>' +
+            '<div class="cc-sub">' + (trLiqMaleu > 0 ? 'cobraste ' + ars(trCobrado) + ' · pagaste ' + ars(trLiqMaleu) : 'En tu cuenta') + '</div>' +
           '</div>';
   html += '</div>';
 
   // Split: qué le debés a Maleu y cómo
-  if (aPagarMaleu > 0) {
+  if (aPagarMaleu > 0 || yaPagadoTotal > 0) {
     html += '<div class="caja-split">';
     html += '<h4>🧾 Cómo te queda la cuenta</h4>';
     html += '<div class="caja-split-row"><span class="lbl">💵 Efectivo cobrado</span><span class="val ef">' + ars(efCobrado) + '</span></div>';
     html += '<div class="caja-split-row"><span class="lbl">🏦 Transferencia cobrada</span><span class="val tr">' + ars(trCobrado) + '</span></div>';
-    html += '<div class="caja-split-row"><span class="lbl">Total cobrado</span><span class="val">' + ars(saldoTotal) + '</span></div>';
-    html += '<div class="caja-split-row"><span class="lbl">➖ A pagar a Maleu (83%)</span><span class="val" style="color:#c62828">' + ars(aPagarMaleu) + '</span></div>';
+    html += '<div class="caja-split-row"><span class="lbl">Total cobrado</span><span class="val">' + ars(efCobrado + trCobrado) + '</span></div>';
+    html += '<div class="caja-split-row"><span class="lbl">✓ Ya pagaste a Maleu</span><span class="val" style="color:#2e7d32">' + ars(yaPagadoTotal) + '</span></div>';
+    html += '<div class="caja-split-row"><span class="lbl">💸 Falta pagar a Maleu</span><span class="val" style="color:#c62828">' + ars(aPagarMaleu) + '</span></div>';
     html += '<div class="caja-split-row tot"><span class="lbl">✅ Tu comisión (17%)</span><span class="val" style="color:#2e7d32">' + ars(miComision) + '</span></div>';
     html += '</div>';
   }
@@ -1701,22 +1732,43 @@ function renderCaja() {
       if (cobrCount === 0 && totalCount === 0) return;
       const dates = _isoWeekDates(g.y, g.sem);
       const esActual = (g.y === cur.y && g.sem === cur.w);
-      const allPagados = g.pedidos.filter(p => p.ep === 'Cobrado').every(p => _esPagado(p.epm));
+
+      // Ya pagado de esta semana (de hoja Pagos Red Liq)
+      const k = g.y + '-' + String(g.sem).padStart(2, '0');
+      const liq = liqIdx[k] || { ef: 0, tr: 0, total: 0, pagos: [] };
+      const pagadoSem = liq.total || 0;
+      const saldoSem = Math.max(0, aPgS - pagadoSem);
+      const cerrada = (saldoSem === 0 && aPgS > 0);
 
       html += '<div class="caja-sem">';
       html += '<div class="caja-sem-head">' +
-                '<div class="caja-sem-title">Semana ' + g.sem + (esActual ? ' · ACTUAL' : '') + '</div>' +
+                '<div class="caja-sem-title">Semana ' + g.sem + (esActual ? ' · ACTUAL' : '') +
+                  (cerrada ? ' <span style="color:#2e7d32;font-size:.72rem;font-weight:900">✓ CERRADA</span>' : '') +
+                '</div>' +
                 '<div class="caja-sem-sub">' + fmtDM(dates.mon) + ' al ' + fmtDM(dates.dom) + '</div>' +
               '</div>';
       html += '<div style="font-size:.72rem;color:#666;margin-bottom:.4rem">' +
-              cobrCount + '/' + totalCount + ' cobrados' +
-              (allPagados && cobrCount > 0 ? ' · ✓ Ya liquidado a Maleu' : '') + '</div>';
+              cobrCount + '/' + totalCount + ' cobrados</div>';
       html += '<div class="caja-sem-grid">';
-      html += '<div class="caja-sem-cell"><div class="csc-lbl">💵 Efectivo</div><div class="csc-val" style="color:#2e7d32">' + ars(efS) + '</div></div>';
-      html += '<div class="caja-sem-cell"><div class="csc-lbl">🏦 Transfer</div><div class="csc-val" style="color:#1565c0">' + ars(trS) + '</div></div>';
+      html += '<div class="caja-sem-cell"><div class="csc-lbl">💵 Efectivo cobrado</div><div class="csc-val" style="color:#2e7d32">' + ars(efS) + '</div></div>';
+      html += '<div class="caja-sem-cell"><div class="csc-lbl">🏦 Transfer cobrada</div><div class="csc-val" style="color:#1565c0">' + ars(trS) + '</div></div>';
       html += '<div class="caja-sem-cell"><div class="csc-lbl">A pagar Maleu</div><div class="csc-val" style="color:#c62828">' + ars(aPgS) + '</div></div>';
       html += '<div class="caja-sem-cell"><div class="csc-lbl">Tu comisión</div><div class="csc-val">' + ars(comS) + '</div></div>';
       html += '</div>';
+
+      // Pagos ya hechos
+      if (pagadoSem > 0) {
+        html += '<div style="background:#f5f5f5;border-radius:8px;padding:.6rem .7rem;margin-top:.6rem;font-size:.75rem">';
+        html += '<div style="font-weight:800;color:#2e7d32;margin-bottom:.3rem">✓ Ya le pagaste a Maleu: ' + ars(pagadoSem) + '</div>';
+        html += '<div style="color:#666">' + ars(liq.ef) + ' EF + ' + ars(liq.tr) + ' TR';
+        if (liq.pagos && liq.pagos.length > 1) html += ' · en ' + liq.pagos.length + ' pagos';
+        html += '</div>';
+        if (!cerrada) {
+          html += '<div style="color:#c62828;font-weight:800;margin-top:.3rem">💸 Falta: ' + ars(saldoSem) + '</div>';
+        }
+        html += '</div>';
+      }
+
       html += '</div>';
     });
   }
@@ -1728,19 +1780,34 @@ function renderCaja() {
   cont.innerHTML = html;
 }
 
-/* ═══════ MODAL LIQUIDACIÓN (EF + TR) ═══════ */
-let _liqCtx = null; // { year, sem, target, cantidad }
+/* ═══════ MODAL LIQUIDACIÓN (EF + TR) — PAGOS PARCIALES ═══════ */
+let _liqCtx = null; // { year, sem, aPagarTotal, yaPagadoEf, yaPagadoTr, saldo }
 
 function _parseMonto(s) {
   return Number(String(s || '').replace(/[^\d.-]/g, '')) || 0;
 }
 
-function liqOpen(year, sem, target, cantidad) {
-  _liqCtx = { year, sem, target, cantidad };
+// Devuelve lo ya pagado para una semana, leyendo del último dashboard
+function _yaPagado(year, sem) {
+  const liq = lastDashboardData && lastDashboardData.liqBySem;
+  const k = year + '-' + String(sem).padStart(2, '0');
+  if (!liq || !liq[k]) return { ef: 0, tr: 0, total: 0 };
+  return { ef: liq[k].ef || 0, tr: liq[k].tr || 0, total: liq[k].total || 0 };
+}
+
+function liqOpen(year, sem, aPagarTotal, cantidad) {
+  const ya = _yaPagado(year, sem);
+  const saldo = Math.max(0, aPagarTotal - ya.total);
+  _liqCtx = { year, sem, aPagarTotal, yaPagadoEf: ya.ef, yaPagadoTr: ya.tr, saldo };
   const dates = _isoWeekDates(year, sem);
   const fmtDM = d => String(d.getDate()).padStart(2,'0') + '/' + String(d.getMonth()+1).padStart(2,'0');
-  $id('liq-sub').textContent = 'Semana ' + sem + ' · ' + fmtDM(dates.mon) + ' al ' + fmtDM(dates.dom) + ' · ' + cantidad + ' pedido(s)';
-  $id('liq-target').textContent = ars(target);
+  $id('liq-sub').textContent = 'Semana ' + sem + ' · ' + fmtDM(dates.mon) + ' al ' + fmtDM(dates.dom);
+  $id('liq-target').innerHTML =
+    '<div style="display:flex;flex-direction:column;gap:.2rem;width:100%">' +
+      '<div style="display:flex;justify-content:space-between"><span class="lbl">A pagar total (83%)</span><span>' + ars(aPagarTotal) + '</span></div>' +
+      (ya.total > 0 ? '<div style="display:flex;justify-content:space-between;font-size:.8rem;color:#2e7d32"><span>✓ Ya pagaste</span><span>' + ars(ya.total) + ' (' + ars(ya.ef) + ' EF + ' + ars(ya.tr) + ' TR)</span></div>' : '') +
+      '<div style="display:flex;justify-content:space-between;font-size:.95rem;font-weight:900;color:#c62828;margin-top:.2rem"><span>💸 Falta pagar</span><span>' + ars(saldo) + '</span></div>' +
+    '</div>';
   $id('liq-ef').value = '';
   $id('liq-tr').value = '';
   liqUpdateSum();
@@ -1758,60 +1825,69 @@ function liqUpdateSum() {
   const ef = _parseMonto($id('liq-ef').value);
   const tr = _parseMonto($id('liq-tr').value);
   const suma = ef + tr;
-  const target = _liqCtx.target;
+  const saldo = _liqCtx.saldo;
   const sumEl = $id('liq-sum');
-  $id('liq-sum-val').textContent = ars(suma);
   sumEl.classList.remove('ok', 'bad');
   if (suma === 0) {
     $id('liq-sum-val').textContent = ars(0);
-  } else if (suma === target) {
+    sumEl.querySelector('span:first-child').textContent = 'Total a registrar';
+  } else if (suma === saldo) {
     sumEl.classList.add('ok');
-    $id('liq-sum-val').textContent = ars(suma) + ' ✓';
+    $id('liq-sum-val').textContent = ars(suma) + ' ✓ cierra la semana';
+    sumEl.querySelector('span:first-child').textContent = 'Total a registrar';
+  } else if (suma < saldo) {
+    sumEl.classList.add('ok');
+    $id('liq-sum-val').textContent = ars(suma) + ' · falta ' + ars(saldo - suma);
+    sumEl.querySelector('span:first-child').textContent = 'Pago parcial';
   } else {
     sumEl.classList.add('bad');
-    const dif = suma - target;
-    $id('liq-sum-val').textContent = ars(suma) + ' (' + (dif > 0 ? '+' : '') + ars(dif) + ')';
+    $id('liq-sum-val').textContent = ars(suma) + ' · excede por ' + ars(suma - saldo);
+    sumEl.querySelector('span:first-child').textContent = 'Sobrepago';
   }
-  $id('liq-confirm').disabled = (suma !== target);
+  // Permitir registrar cualquier monto > 0 y <= saldo (pago parcial o total)
+  $id('liq-confirm').disabled = !(suma > 0 && suma <= saldo);
 }
 
 function liqConfirm() {
   if (!_liqCtx) return;
   const ef = _parseMonto($id('liq-ef').value);
   const tr = _parseMonto($id('liq-tr').value);
-  if (ef + tr !== _liqCtx.target) { toast('La suma no coincide'); return; }
+  const suma = ef + tr;
+  if (suma <= 0) { toast('Ingresá un monto'); return; }
+  if (suma > _liqCtx.saldo) { toast('Excede lo que falta pagar'); return; }
   const ctx = _liqCtx;
   liqClose();
-  marcarSemanaPagada(ctx.year, ctx.sem, ctx.target, ctx.cantidad, ef, tr);
+  registrarPagoParcial(ctx.year, ctx.sem, ef, tr);
 }
 
 function renderPagos() {
   const cont = $id('pagos-content');
   const semanas = _pagosSemanas();
   const cur = _isoWeekNow();
+  const liqIdx = (lastDashboardData && lastDashboardData.liqBySem) || {};
 
-  // Totales globales (sum AW)
+  // Total deuda acumulada = suma (aPagar - yaPagado) por semana, solo positivos
   let deudaTotal = 0;
   semanas.forEach(g => {
-    g.pedidos.forEach(p => {
-      const aPg = Number(p.aPg) || 0;
-      if (p.ep === 'Cobrado' && !_esPagado(p.epm)) deudaTotal += aPg;
-    });
+    const aPg = g.pedidos.filter(p => p.ep === 'Cobrado').reduce((s, p) => s + (Number(p.aPg) || 0), 0);
+    const k = g.y + '-' + String(g.sem).padStart(2, '0');
+    const pagado = (liqIdx[k] && liqIdx[k].total) || 0;
+    deudaTotal += Math.max(0, aPg - pagado);
   });
 
   let html = '';
 
   if (deudaTotal > 0) {
     html += '<div class="pagos-summary">';
-    html += '<div class="ps-label">💸 Debés liquidar a Maleu</div>';
+    html += '<div class="ps-label">💸 Debés a Maleu</div>';
     html += '<div class="ps-value">' + ars(deudaTotal) + '</div>';
-    html += '<div class="ps-sub">Total de semanas con pedidos cobrados pendientes · 83% del facturado (col AW)</div>';
+    html += '<div class="ps-sub">Saldo pendiente sumando todas las semanas · podés pagar en partes</div>';
     html += '</div>';
   } else {
     html += '<div class="pagos-summary clean">';
     html += '<div class="ps-label">✅ Al día con Maleu</div>';
     html += '<div class="ps-value">$0</div>';
-    html += '<div class="ps-sub">No tenés semanas pendientes de liquidar</div>';
+    html += '<div class="ps-sub">No tenés saldo pendiente</div>';
     html += '</div>';
   }
 
@@ -1820,11 +1896,8 @@ function renderPagos() {
   semanas.forEach(g => {
     const peds = g.pedidos;
     const cobrados = peds.filter(p => p.ep === 'Cobrado');
-    const pendientes = cobrados.filter(p => !_esPagado(p.epm));
-    const pagados = cobrados.filter(p => _esPagado(p.epm));
     const sinCobrar = peds.filter(p => p.ep !== 'Cobrado');
-    const aPagarPend = pendientes.reduce((s, p) => s + (Number(p.aPg) || 0), 0);
-    const aPagarDone = pagados.reduce((s, p) => s + (Number(p.aPg) || 0), 0);
+    const aPagarCobr = cobrados.reduce((s, p) => s + (Number(p.aPg) || 0), 0);
     const aPagarSinCobrar = sinCobrar.reduce((s, p) => s + (Number(p.aPg) || 0), 0);
     const totalFacturado = peds.reduce((s, p) => s + (Number(p.$) || 0), 0);
 
@@ -1832,18 +1905,26 @@ function renderPagos() {
     const rango = fmtDM(dates.mon) + ' al ' + fmtDM(dates.dom);
     const esActual = (g.y === cur.y && g.sem === cur.w);
 
+    // Ya pagado esta semana
+    const k = g.y + '-' + String(g.sem).padStart(2, '0');
+    const liq = liqIdx[k] || { ef: 0, tr: 0, total: 0, pagos: [] };
+    const yaPagado = liq.total || 0;
+    const saldo = Math.max(0, aPagarCobr - yaPagado);
+    const cerrada = (aPagarCobr > 0 && saldo === 0);
+
     let estadoClass, montoDisplay;
-    if (pendientes.length > 0) {
-      estadoClass = 'pend'; montoDisplay = aPagarPend;
-    } else if (sinCobrar.length > 0 && pagados.length === 0) {
+    if (saldo > 0) {
+      estadoClass = 'pend'; montoDisplay = saldo;
+    } else if (sinCobrar.length > 0 && cobrados.length === 0) {
       estadoClass = 'pend'; montoDisplay = aPagarSinCobrar;
     } else {
-      estadoClass = 'done'; montoDisplay = aPagarDone;
+      estadoClass = 'done'; montoDisplay = yaPagado || aPagarCobr;
     }
 
     html += '<div class="pagos-sem">';
     html += '<div class="pagos-sem-head">' +
               '<div class="pagos-sem-label">📅 Semana ' + g.sem + (esActual ? ' · ACTUAL' : '') +
+                (cerrada ? ' <span style="color:#2e7d32;font-size:.7rem">✓ CERRADA</span>' : '') +
                 '<div style="font-size:.72rem;font-weight:600;color:#888;margin-top:.15rem">' + rango + '</div>' +
               '</div>' +
               '<div class="pagos-sem-total' + (estadoClass === 'done' ? ' done' : '') + '">' + ars(montoDisplay) + '</div>' +
@@ -1851,25 +1932,27 @@ function renderPagos() {
 
     html += '<div style="font-size:.75rem;color:#666;margin-bottom:.5rem">' +
             peds.length + (peds.length === 1 ? ' pedido' : ' pedidos') +
-            ' · Total facturado ' + ars(totalFacturado) + '</div>';
+            ' · Facturado ' + ars(totalFacturado) +
+            ' · A pagar Maleu ' + ars(aPagarCobr) + '</div>';
 
     if (sinCobrar.length > 0) {
       html += '<div style="font-size:.72rem;color:#e65100;margin-bottom:.3rem">⏳ ' +
               sinCobrar.length + ' sin cobrar al cliente · ' + ars(aPagarSinCobrar) + '</div>';
     }
-    if (pendientes.length > 0) {
-      html += '<div style="font-size:.72rem;color:#c62828;margin-bottom:.3rem">💸 ' +
-              pendientes.length + ' cobrado(s) por liquidar · ' + ars(aPagarPend) + '</div>';
+    if (yaPagado > 0) {
+      html += '<div style="font-size:.72rem;color:#2e7d32;margin-bottom:.3rem">✓ Pagado a Maleu: ' +
+              ars(yaPagado) + ' (' + ars(liq.ef) + ' EF + ' + ars(liq.tr) + ' TR';
+      if (liq.pagos && liq.pagos.length > 1) html += ' · ' + liq.pagos.length + ' pagos';
+      html += ')</div>';
     }
-    if (pagados.length > 0) {
-      html += '<div style="font-size:.72rem;color:#2e7d32;margin-bottom:.3rem">✓ ' +
-              pagados.length + ' ya pagado(s) a Maleu · ' + ars(aPagarDone) + '</div>';
+    if (saldo > 0) {
+      html += '<div style="font-size:.72rem;color:#c62828;margin-bottom:.3rem">💸 Falta pagar: ' + ars(saldo) + '</div>';
     }
 
-    if (pendientes.length > 0) {
+    if (saldo > 0 && cobrados.length > 0) {
       html += '<button class="big-btn" style="margin:.7rem 0 0;background:#2e7d32;color:#fff;border-color:#2e7d32" ' +
-              'onclick="liqOpen(' + g.y + ',' + g.sem + ',' + aPagarPend + ',' + pendientes.length + ')">' +
-              '✓ Marcar semana como pagada a Maleu (' + ars(aPagarPend) + ')</button>';
+              'onclick="liqOpen(' + g.y + ',' + g.sem + ',' + aPagarCobr + ',' + cobrados.length + ')">' +
+              '💳 Pagar a Maleu (falta ' + ars(saldo) + ')</button>';
     }
 
     html += '</div>';
@@ -1882,25 +1965,10 @@ function renderPagos() {
   cont.innerHTML = html;
 }
 
-function marcarSemanaPagada(year, semana, monto, cantidad, ef, tr) {
+function registrarPagoParcial(year, semana, ef, tr) {
   if (!session) return;
   ef = Number(ef) || 0;
   tr = Number(tr) || 0;
-  // Actualización optimista: marcar los pedidos de esa semana como Pagado
-  if (lastDashboardData) {
-    const hoy = new Date();
-    const fechaHoy = String(hoy.getDate()).padStart(2,'0') + '/' + String(hoy.getMonth()+1).padStart(2,'0') + '/' + hoy.getFullYear();
-    (lastDashboardData.pedidos || []).forEach(p => {
-      if (p._y === year && p._sem === semana && p.ep === 'Cobrado' && !_esPagado(p.epm) && p.es !== 'Cancelado') {
-        p.epm = 'Pagado';
-        p.fpmF = fechaHoy;
-      }
-    });
-    renderPagos();
-    if (currentMainTab === 'caja') renderCaja();
-    updateMainBadges();
-    renderPedidosTab();
-  }
   fetch(APPS_SCRIPT_URL, {
     method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
     body: JSON.stringify({
@@ -1913,7 +1981,12 @@ function marcarSemanaPagada(year, semana, monto, cantidad, ef, tr) {
     .then(r => r.json())
     .then(d => {
       if (!d.ok) { toast('Error: ' + (d.err || 'no se pudo guardar')); return; }
-      toast('✓ Liquidación registrada: ' + ars(ef) + ' EF + ' + ars(tr) + ' TR');
+      const parts = [];
+      if (ef > 0) parts.push(ars(ef) + ' EF');
+      if (tr > 0) parts.push(ars(tr) + ' TR');
+      const msg = '✓ Pago registrado: ' + parts.join(' + ');
+      if (d.semanaCerrada) toast(msg + ' · semana cerrada 🎉');
+      else toast(msg + ' · falta ' + ars(d.saldoRestante));
       loadDashboard();
     })
     .catch(() => toast('Sin conexión — reintentá en un rato'));
