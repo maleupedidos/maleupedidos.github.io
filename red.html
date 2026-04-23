@@ -585,23 +585,8 @@
     </div>
   </div>
 
-  <!-- Pago a Maleu (solo aparece si Cobrado) -->
-  <div class="ctrl-sec hidden" id="sec-pago-maleu">
-    <h4>🧾 Pago a Maleu</h4>
-    <div class="ctrl-row">
-      <div class="ctrl-label">¿Cómo le pagás a Maleu?</div>
-      <div class="pago-radio" id="ctrl-forma-maleu">
-        <div class="opt" data-val="Efectivo" onclick="setFormaMaleu('Efectivo')">Efectivo</div>
-        <div class="opt" data-val="Transferencia" onclick="setFormaMaleu('Transferencia')">Transferencia</div>
-      </div>
-    </div>
-    <div class="ctrl-row">
-      <button class="toggle-btn pay" id="ctrl-pago-maleu" onclick="togglePagoMaleu()">
-        <span id="ctrl-pago-maleu-txt">Marcar como Pagado a Maleu</span>
-      </button>
-      <div class="ctrl-label" id="ctrl-pago-maleu-fecha" style="margin-top:.4rem;font-size:.72rem;color:#2e7d32;display:none"></div>
-    </div>
-  </div>
+  <!-- Pago a Maleu: removido del detalle por pedido. La liquidación se hace por SEMANA en la solapa Pagos. -->
+  <div class="ctrl-sec hidden" id="sec-pago-maleu" style="display:none !important"></div>
 </div>
 
 <div class="saved-ind" id="saved-ind">✓ Guardado</div>
@@ -1051,114 +1036,139 @@ function rutaAbrirCobroMixto() {
   _rutaUpdate({ efectivoMonto: ef, transferenciaMonto: tr });
 }
 
-/* ═══════ VISTA PAGOS A MALEU ═══════ */
-function _pagosList() {
+/* ═══════ VISTA PAGOS A MALEU (por SEMANA ISO) ═══════ */
+// Convierte (año ISO, semana ISO) → lunes y domingo de esa semana
+function _isoWeekDates(y, w) {
+  const jan4 = new Date(y, 0, 4);
+  const jan4Day = jan4.getDay() || 7;
+  const week1Mon = new Date(jan4);
+  week1Mon.setDate(jan4.getDate() - jan4Day + 1);
+  const mon = new Date(week1Mon);
+  mon.setDate(week1Mon.getDate() + (w - 1) * 7);
+  const dom = new Date(mon);
+  dom.setDate(mon.getDate() + 6);
+  return { mon, dom };
+}
+
+// Año + semana ISO actuales (según reloj del device)
+function _isoWeekNow() {
+  const now = new Date();
+  const d = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
+  const dayNum = d.getUTCDay() || 7;
+  d.setUTCDate(d.getUTCDate() + 4 - dayNum);
+  const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+  const weekNo = Math.ceil(((d - yearStart) / 86400000 + 1) / 7);
+  return { y: d.getUTCFullYear(), w: weekNo };
+}
+
+// Agrupa pedidos no cancelados por (año, semana ISO)
+function _pagosSemanas() {
   if (!lastDashboardData) return [];
-  // Pedidos cobrados, no cancelados. Separa "por liquidar" de "liquidados".
-  return (lastDashboardData.pedidos || []).filter(p => p.es !== 'Cancelado' && p.ep === 'Cobrado');
+  const peds = (lastDashboardData.pedidos || []).filter(p => p.es !== 'Cancelado' && p._y && p._sem);
+  const grupos = {};
+  peds.forEach(p => {
+    const k = p._y + '-' + String(p._sem).padStart(2, '0');
+    if (!grupos[k]) grupos[k] = { y: p._y, sem: p._sem, pedidos: [] };
+    grupos[k].pedidos.push(p);
+  });
+  return Object.keys(grupos).sort().reverse().map(k => grupos[k]);
 }
 
 function renderPagos() {
   const cont = $id('pagos-content');
-  const list = _pagosList();
-  const porLiq = list.filter(p => !_esPagado(p.epm));
-  const liqs   = list.filter(p => _esPagado(p.epm));
+  const semanas = _pagosSemanas();
+  const cur = _isoWeekNow();
+
+  // Totales globales (sum AW)
+  let deudaTotal = 0;
+  semanas.forEach(g => {
+    g.pedidos.forEach(p => {
+      const aPg = Number(p.aPg) || 0;
+      if (p.ep === 'Cobrado' && !_esPagado(p.epm)) deudaTotal += aPg;
+    });
+  });
 
   let html = '';
-  // Resumen grande arriba: total por liquidar = 83% del facturado
-  const totalDeuda = porLiq.reduce((s, p) => s + Math.round(p.$ * 83 / 100), 0);
-  if (totalDeuda > 0) {
+
+  if (deudaTotal > 0) {
     html += '<div class="pagos-summary">';
     html += '<div class="ps-label">💸 Debés liquidar a Maleu</div>';
-    html += '<div class="ps-value">' + ars(totalDeuda) + '</div>';
-    html += '<div class="ps-sub">' + porLiq.length + (porLiq.length === 1 ? ' pedido pendiente' : ' pedidos pendientes') + ' · Vos te quedás con el 17% de comisión, el 83% es para Maleu</div>';
+    html += '<div class="ps-value">' + ars(deudaTotal) + '</div>';
+    html += '<div class="ps-sub">Total de semanas con pedidos cobrados pendientes · 83% del facturado (col AW)</div>';
     html += '</div>';
   } else {
     html += '<div class="pagos-summary clean">';
     html += '<div class="ps-label">✅ Al día con Maleu</div>';
     html += '<div class="ps-value">$0</div>';
-    html += '<div class="ps-sub">No tenés pedidos pendientes de liquidar</div>';
+    html += '<div class="ps-sub">No tenés semanas pendientes de liquidar</div>';
     html += '</div>';
   }
 
-  // Agrupar pendientes por semana
-  if (porLiq.length > 0) {
-    const porSem = {};
-    porLiq.forEach(p => {
-      const k = _getSemanaKey(p);
-      if (!porSem[k]) porSem[k] = [];
-      porSem[k].push(p);
-    });
-    Object.keys(porSem).sort().reverse().forEach(sem => {
-      const peds = porSem[sem];
-      const tot = peds.reduce((s, p) => s + Math.round(p.$ * 83 / 100), 0);
-      // Año + semana ISO común para el botón bulk (todos los pedidos del grupo comparten ambos)
-      const semY = peds[0]._y || 0;
-      const semN = peds[0]._sem || 0;
-      html += '<div class="pagos-sem">';
-      html += '<div class="pagos-sem-head"><div class="pagos-sem-label">📅 ' + sem + '</div>' +
-              '<div class="pagos-sem-total">' + ars(tot) + '</div></div>';
-      peds.forEach(p => {
-        const aPagar = Math.round(p.$ * 83 / 100);
-        html += '<div class="pago-row" onclick="pagoOpen(\'' + p.n + '\')">' +
-          '<div class="pago-info">' +
-            '<div class="pago-who">' + (p.c || '—') + '<span class="pago-chip pend">Por pagar</span></div>' +
-            '<div class="pago-sub">R-' + String(p.n).padStart(3,'0') + ' · ' + (p.f || '') + ' · Total ' + ars(p.$) + '</div>' +
-          '</div>' +
-          '<div class="pago-amount">' + ars(aPagar) + '</div>' +
-        '</div>';
-      });
-      // Botón liquidar toda la semana
-      if (semY && semN) {
-        html += '<button class="big-btn" style="margin:.6rem .8rem .8rem;background:#2e7d32;color:#fff;border-color:#2e7d32" ' +
-                'onclick="marcarSemanaPagada(' + semY + ',' + semN + ',' + tot + ',' + peds.length + ')">' +
-                '✓ Marcar semana como pagada a Maleu (' + ars(tot) + ')</button>';
-      }
-      html += '</div>';
-    });
-  }
+  const fmtDM = d => String(d.getDate()).padStart(2,'0') + '/' + String(d.getMonth()+1).padStart(2,'0');
 
-  // Histórico liquidado (colapsable visual)
-  if (liqs.length > 0) {
-    const totalLiq = liqs.reduce((s, p) => s + Math.round(p.$ * 83 / 100), 0);
+  semanas.forEach(g => {
+    const peds = g.pedidos;
+    const cobrados = peds.filter(p => p.ep === 'Cobrado');
+    const pendientes = cobrados.filter(p => !_esPagado(p.epm));
+    const pagados = cobrados.filter(p => _esPagado(p.epm));
+    const sinCobrar = peds.filter(p => p.ep !== 'Cobrado');
+    const aPagarPend = pendientes.reduce((s, p) => s + (Number(p.aPg) || 0), 0);
+    const aPagarDone = pagados.reduce((s, p) => s + (Number(p.aPg) || 0), 0);
+    const aPagarSinCobrar = sinCobrar.reduce((s, p) => s + (Number(p.aPg) || 0), 0);
+    const totalFacturado = peds.reduce((s, p) => s + (Number(p.$) || 0), 0);
+
+    const dates = _isoWeekDates(g.y, g.sem);
+    const rango = fmtDM(dates.mon) + ' al ' + fmtDM(dates.dom);
+    const esActual = (g.y === cur.y && g.sem === cur.w);
+
+    let estadoClass, montoDisplay;
+    if (pendientes.length > 0) {
+      estadoClass = 'pend'; montoDisplay = aPagarPend;
+    } else if (sinCobrar.length > 0 && pagados.length === 0) {
+      estadoClass = 'pend'; montoDisplay = aPagarSinCobrar;
+    } else {
+      estadoClass = 'done'; montoDisplay = aPagarDone;
+    }
+
     html += '<div class="pagos-sem">';
-    html += '<div class="pagos-sem-head"><div class="pagos-sem-label">✓ Pagados a Maleu</div>' +
-            '<div class="pagos-sem-total done">' + ars(totalLiq) + '</div></div>';
-    liqs.slice(0, 10).forEach(p => {
-      const aPagar = Math.round(p.$ * 83 / 100);
-      html += '<div class="pago-row" onclick="pagoOpen(\'' + p.n + '\')">' +
-        '<div class="pago-info">' +
-          '<div class="pago-who">' + (p.c || '—') + '<span class="pago-chip done">✓ Pagado</span></div>' +
-          '<div class="pago-sub">R-' + String(p.n).padStart(3,'0') + ' · ' + (p.fpm || '—') + (p.fpmF ? ' · ' + p.fpmF : '') + '</div>' +
-        '</div>' +
-        '<div class="pago-amount">' + ars(aPagar) + '</div>' +
-      '</div>';
-    });
+    html += '<div class="pagos-sem-head">' +
+              '<div class="pagos-sem-label">📅 Semana ' + g.sem + (esActual ? ' · ACTUAL' : '') +
+                '<div style="font-size:.72rem;font-weight:600;color:#888;margin-top:.15rem">' + rango + '</div>' +
+              '</div>' +
+              '<div class="pagos-sem-total' + (estadoClass === 'done' ? ' done' : '') + '">' + ars(montoDisplay) + '</div>' +
+            '</div>';
+
+    html += '<div style="font-size:.75rem;color:#666;margin-bottom:.5rem">' +
+            peds.length + (peds.length === 1 ? ' pedido' : ' pedidos') +
+            ' · Total facturado ' + ars(totalFacturado) + '</div>';
+
+    if (sinCobrar.length > 0) {
+      html += '<div style="font-size:.72rem;color:#e65100;margin-bottom:.3rem">⏳ ' +
+              sinCobrar.length + ' sin cobrar al cliente · ' + ars(aPagarSinCobrar) + '</div>';
+    }
+    if (pendientes.length > 0) {
+      html += '<div style="font-size:.72rem;color:#c62828;margin-bottom:.3rem">💸 ' +
+              pendientes.length + ' cobrado(s) por liquidar · ' + ars(aPagarPend) + '</div>';
+    }
+    if (pagados.length > 0) {
+      html += '<div style="font-size:.72rem;color:#2e7d32;margin-bottom:.3rem">✓ ' +
+              pagados.length + ' ya pagado(s) a Maleu · ' + ars(aPagarDone) + '</div>';
+    }
+
+    if (pendientes.length > 0) {
+      html += '<button class="big-btn" style="margin:.7rem 0 0;background:#2e7d32;color:#fff;border-color:#2e7d32" ' +
+              'onclick="marcarSemanaPagada(' + g.y + ',' + g.sem + ',' + aPagarPend + ',' + pendientes.length + ')">' +
+              '✓ Marcar semana como pagada a Maleu (' + ars(aPagarPend) + ')</button>';
+    }
+
     html += '</div>';
+  });
+
+  if (semanas.length === 0) {
+    html += '<div class="empty" style="padding:2rem;text-align:center;color:#888">Sin pedidos registrados todavía</div>';
   }
 
   cont.innerHTML = html;
-}
-
-function _getSemanaKey(p) {
-  // Usa la fecha del pedido (p.f = 'dd/MM'). Agrupa por semana ISO aproximada.
-  if (!p.f) return 'Sin fecha';
-  const parts = p.f.split('/');
-  if (parts.length < 2) return p.f;
-  // No tenemos año, asumimos año actual
-  const d = new Date();
-  const dt = new Date(d.getFullYear(), Number(parts[1]) - 1, Number(parts[0]));
-  // Lunes de la semana
-  const day = dt.getDay() || 7;
-  const lun = new Date(dt); lun.setDate(dt.getDate() - day + 1);
-  const dom = new Date(lun); dom.setDate(lun.getDate() + 6);
-  const fmt = x => String(x.getDate()).padStart(2,'0') + '/' + String(x.getMonth()+1).padStart(2,'0');
-  return 'Semana ' + fmt(lun) + ' al ' + fmt(dom);
-}
-
-function pagoOpen(pedidoNum) {
-  // Reutiliza la pantalla de detalle existente (tiene toggle de pago a Maleu)
-  showDetalle(pedidoNum);
 }
 
 function marcarSemanaPagada(year, semana, monto, cantidad) {
