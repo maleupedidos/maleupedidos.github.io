@@ -655,15 +655,26 @@ function confirmarPago(idx) {
 
   fetch(APPS_SCRIPT_URL, {
     method: 'POST',
-    mode: 'no-cors',
-    headers: { 'Content-Type': 'text/plain' },
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
     body: JSON.stringify(payload)
-  }).then(function() {
-    btn.textContent = 'Pago registrado';
-    btn.style.background = '#331C1C';
-    showToast('Pago a ' + d.n + ': ' + formatMoney(total));
-    if (navigator.vibrate) navigator.vibrate([50, 50, 50]);
-    setTimeout(function() { refresh(true); }, 1500);
+  }).then(function(r) {
+    return r.json().catch(function() { return { ok: false }; });
+  }).then(function(resp) {
+    if (resp && resp.ok) {
+      btn.textContent = 'Pago registrado';
+      btn.style.background = '#331C1C';
+      showToast('Pago a ' + d.n + ': ' + formatMoney(total));
+      if (navigator.vibrate) navigator.vibrate([50, 50, 50]);
+      setTimeout(function() { refresh(true); }, 1500);
+    } else {
+      // Backend rechazó → encolar para reintento
+      syncQueue.push(payload);
+      saveLocal();
+      btn.disabled = false;
+      btn.textContent = 'Confirmar pago';
+      showToast('Error al registrar — se reintenta automaticamente');
+      processSyncQueue();
+    }
   }).catch(function() {
     syncQueue.push(payload);
     saveLocal();
@@ -1125,27 +1136,33 @@ function confirmarCompra() {
 
   fetch(APPS_SCRIPT_URL, {
     method: 'POST',
-    mode: 'no-cors',
-    headers: { 'Content-Type': 'text/plain' },
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
     body: JSON.stringify(payload)
-  }).then(function() {
-    btn.classList.add('success');
-    btn.textContent = 'Compra confirmada &#x2713;';
-    showToast(items.length + ' producto(s) agregados a OC');
-    if (navigator.vibrate) navigator.vibrate([50, 50, 50]);
-
-    // Reset form after 2s
-    setTimeout(function() {
-      npQtys = {};
-      onNpProvChange();
-      btn.disabled = true;
-      btn.textContent = 'Confirmar compra';
-      btn.classList.remove('success');
-      // Refresh OC data
-      refresh(true);
-    }, 2000);
+  }).then(function(r) {
+    return r.json().catch(function() { return { ok: false }; });
+  }).then(function(resp) {
+    if (resp && resp.ok) {
+      btn.classList.add('success');
+      btn.textContent = 'Compra confirmada ✓';
+      showToast(items.length + ' producto(s) agregados a OC');
+      if (navigator.vibrate) navigator.vibrate([50, 50, 50]);
+      setTimeout(function() {
+        npQtys = {};
+        onNpProvChange();
+        btn.disabled = true;
+        btn.textContent = 'Confirmar compra';
+        btn.classList.remove('success');
+        refresh(true);
+      }, 2000);
+    } else {
+      syncQueue.push(payload);
+      saveLocal();
+      btn.disabled = false;
+      btn.textContent = 'Reintentar';
+      showToast('Error al registrar — se reintenta automaticamente');
+      processSyncQueue();
+    }
   }).catch(function() {
-    // Queue for later
     syncQueue.push(payload);
     saveLocal();
     btn.classList.add('success');
@@ -1155,22 +1172,53 @@ function confirmarCompra() {
 }
 
 /* ── SYNC QUEUE ────────────────────────────────────────── */
+// Fetch en modo cors con reintentos exponenciales (2s→4s→8s→16s→32s).
+// Si el backend responde ok:false o tira excepción, NO se borra el item de la cola.
 function processSyncQueue() {
   if (!isOnline || syncQueue.length === 0) return;
   var item = syncQueue[0];
+  var attempt = item._attempt || 0;
+
   fetch(APPS_SCRIPT_URL, {
     method: 'POST',
-    mode: 'no-cors',
-    headers: { 'Content-Type': 'text/plain' },
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
     body: JSON.stringify(item)
-  }).then(function() {
-    syncQueue.shift();
-    saveLocal();
-    document.getElementById('syncBanner').className = 'sync-banner' + (syncQueue.length > 0 ? ' visible' : '');
-    if (syncQueue.length > 0) setTimeout(processSyncQueue, 1000);
+  }).then(function(r) {
+    return r.json().catch(function() { return { ok: false, parseError: true }; });
+  }).then(function(resp) {
+    if (resp && resp.ok === false && resp.retry) {
+      // Backend pide retry (ej. lock timeout) → reintentar con backoff
+      scheduleRetry(item, attempt);
+    } else if (resp && resp.ok === false) {
+      // Error definitivo del backend → log y descartar para no bloquear la cola
+      showToast('Error backend: ' + (resp.err || 'desconocido'));
+      syncQueue.shift();
+      saveLocal();
+      document.getElementById('syncBanner').className = 'sync-banner' + (syncQueue.length > 0 ? ' visible' : '');
+      if (syncQueue.length > 0) setTimeout(processSyncQueue, 1000);
+    } else {
+      // OK → sacar de la cola
+      syncQueue.shift();
+      saveLocal();
+      document.getElementById('syncBanner').className = 'sync-banner' + (syncQueue.length > 0 ? ' visible' : '');
+      if (syncQueue.length > 0) setTimeout(processSyncQueue, 1000);
+    }
   }).catch(function() {
-    setTimeout(processSyncQueue, 30000);
+    // Error de red o excepción → retry con backoff
+    scheduleRetry(item, attempt);
   });
+}
+
+function scheduleRetry(item, attempt) {
+  if (attempt >= 5) {
+    showToast('No se pudo sincronizar tras 5 intentos. Se reintenta mas tarde.');
+    // Dejamos el item en la cola; se retomará en el próximo refresh exitoso.
+    return;
+  }
+  item._attempt = attempt + 1;
+  saveLocal();
+  var delay = Math.pow(2, attempt + 1) * 1000; // 2s, 4s, 8s, 16s, 32s
+  setTimeout(processSyncQueue, delay);
 }
 
 /* ── TAB SWITCH ────────────────────────────────────────── */
