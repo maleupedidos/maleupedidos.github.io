@@ -961,12 +961,49 @@ function cobrarPendiente(i,ef,tr,fp){
 }
 
 /* ── SYNC ── */
+// Procesa la cola uno a uno. Cada item solo se remueve de la cola si el backend respondió ok:true.
+// Si el backend respondió ok:false (o hubo error de red), reintentamos con backoff.
+var syncBusy=false;
+var syncBackoffMs=2000;
 function processSyncQueue(){
-  if(!isOnline||syncQueue.length===0)return;
-  fetch(APPS_SCRIPT_URL,{method:'POST',mode:'no-cors',headers:{'Content-Type':'text/plain'},body:JSON.stringify(syncQueue[0])}).then(function(){
-    syncQueue.shift();saveLocal();document.getElementById('syncBanner').className='sync-banner'+(syncQueue.length>0?' visible':'');
-    if(syncQueue.length>0)setTimeout(processSyncQueue,1000);
-  }).catch(function(){setTimeout(processSyncQueue,30000)});
+  if(!isOnline||syncQueue.length===0||syncBusy)return;
+  syncBusy=true;
+  var item=syncQueue[0];
+  var attempts=(item.__attempts||0)+1;item.__attempts=attempts;
+  fetch(APPS_SCRIPT_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(item),redirect:'follow'})
+    .then(function(r){return r.json().catch(function(){return{ok:false,error:'InvalidJSON'}})})
+    .then(function(res){
+      syncBusy=false;
+      if(res&&res.ok){
+        // Éxito: remover de la cola, resetear backoff
+        syncQueue.shift();saveLocal();
+        syncBackoffMs=2000;
+        document.getElementById('syncBanner').className='sync-banner'+(syncQueue.length>0?' visible':'');
+        if(syncQueue.length>0)setTimeout(processSyncQueue,800);
+      }else{
+        // Backend respondió pero falló (ok:false). Log + retry con backoff.
+        console.warn('sync fail',item,res);
+        if(attempts>=5){
+          // Dar por perdido después de 5 intentos, mover al final y avisar
+          syncQueue.shift();
+          var err='Error sync tras 5 intentos: '+(res&&res.error||'desconocido');
+          if(typeof showToast==='function')showToast(err);
+          saveLocal();
+          setTimeout(processSyncQueue,1000);
+        }else{
+          // Reintentar con backoff exponencial (2s → 4s → 8s → 16s → 32s)
+          setTimeout(processSyncQueue,syncBackoffMs);
+          syncBackoffMs=Math.min(syncBackoffMs*2,32000);
+        }
+      }
+    })
+    .catch(function(err){
+      syncBusy=false;
+      console.warn('sync network fail',err);
+      // Red caída → reintento con backoff
+      setTimeout(processSyncQueue,Math.min(30000,syncBackoffMs));
+      syncBackoffMs=Math.min(syncBackoffMs*2,30000);
+    });
 }
 
 /* ── TABS ── */
