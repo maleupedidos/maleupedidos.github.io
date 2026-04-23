@@ -561,19 +561,25 @@ function renderDayPicker() {
   var todayTs = today.getTime();
   var selectedFecha = $id('f-dia-fecha') ? $id('f-dia-fecha').value : '';
 
-  // Corte Red: si estamos en Pilar con vendedor asignado y hoy es Jueves ≥13hs
-  // (o Viernes), el Viernes de esta misma semana ya no entra a tiempo al vendedor.
-  // Se bloquea ese Viernes; el próximo disponible queda 7 días después.
+  // Corte Pilar: el Viernes de esta semana se bloquea si ya pasó el cutoff.
+  //   - Barrio con vendedor Red asignado → cutoff Jueves 13:00 (el vendedor
+  //     necesita margen para preparar y repartir).
+  //   - Barrio "Otro" o sin vendedor Red → cutoff Jueves 21:00 (Tadeo reparte
+  //     él mismo al día siguiente, tiene toda la tarde del Jue para coordinar).
+  // En ambos casos, Viernes y Sábado completos también lo bloquean.
   var redCutoffFriday = null;
   if (currentZone === 'pilar') {
     var barrioEl = $id('f-pilar-barrio');
     var barrioVal = barrioEl ? barrioEl.value : '';
     var tieneVendedor = barrioVal && barrioVal !== '__otro__' && barrioToVendedor[barrioVal.toLowerCase()];
-    if (tieneVendedor) {
+    // Solo aplica si el cliente ya eligió barrio (con o sin vendedor). Si no
+    // eligió todavía, dejamos el picker como estaba para no confundir.
+    if (barrioVal) {
+      var cutoffHour = tieneVendedor ? 13 : 21;
       var nowAR = new Date(new Date().getTime() - 3 * 3600 * 1000);
       var arDow = nowAR.getUTCDay(); // 0=Dom..6=Sáb (hora Argentina)
       var arHour = nowAR.getUTCHours();
-      var bloquear = (arDow === 4 && arHour >= 13) || arDow === 5 || arDow === 6;
+      var bloquear = (arDow === 4 && arHour >= cutoffHour) || arDow === 5 || arDow === 6;
       if (bloquear) {
         // Calcular el Viernes de esta semana (lunes=0 en 'monday', viernes = +4 días)
         var fri = new Date(monday);
