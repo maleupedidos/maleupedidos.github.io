@@ -561,6 +561,28 @@ function renderDayPicker() {
   var todayTs = today.getTime();
   var selectedFecha = $id('f-dia-fecha') ? $id('f-dia-fecha').value : '';
 
+  // Corte Red: si estamos en Pilar con vendedor asignado y hoy es Jueves ≥13hs
+  // (o Viernes), el Viernes de esta misma semana ya no entra a tiempo al vendedor.
+  // Se bloquea ese Viernes; el próximo disponible queda 7 días después.
+  var redCutoffFriday = null;
+  if (currentZone === 'pilar') {
+    var barrioEl = $id('f-pilar-barrio');
+    var barrioVal = barrioEl ? barrioEl.value : '';
+    var tieneVendedor = barrioVal && barrioVal !== '__otro__' && barrioToVendedor[barrioVal.toLowerCase()];
+    if (tieneVendedor) {
+      var nowAR = new Date(new Date().getTime() - 3 * 3600 * 1000);
+      var arDow = nowAR.getUTCDay(); // 0=Dom..6=Sáb (hora Argentina)
+      var arHour = nowAR.getUTCHours();
+      var bloquear = (arDow === 4 && arHour >= 13) || arDow === 5 || arDow === 6;
+      if (bloquear) {
+        // Calcular el Viernes de esta semana (lunes=0 en 'monday', viernes = +4 días)
+        var fri = new Date(monday);
+        fri.setUTCDate(monday.getUTCDate() + 4);
+        redCutoffFriday = fri.getTime();
+      }
+    }
+  }
+
   var html = '<div class="dp-dow">' + DP_DAY_LABELS.map(function(l){ return '<span>' + l + '</span>'; }).join('') + '</div>';
   html += '<div class="dp-grid">';
 
@@ -573,14 +595,22 @@ function renderDayPicker() {
     var isPast = d.getTime() < todayTs;
     var isToday = d.getTime() === todayTs;
     var available = !!horarios[dayName];
+    var isRedCutoff = redCutoffFriday !== null && d.getTime() === redCutoffFriday;
 
     var cls = 'dp-cell';
     var disabled = false;
     if (isPast) { cls += ' past'; disabled = true; }
+    else if (isRedCutoff) { cls += ' unavailable'; disabled = true; }
     else if (!available) { cls += ' unavailable'; disabled = true; }
     else { cls += ' available'; }
     if (isToday) cls += ' today';
     if (!disabled && iso === selectedFecha) cls += ' selected';
+    // Si la fecha previamente elegida ya no está disponible (ej. cambió barrio), limpiarla
+    if (disabled && iso === selectedFecha) {
+      if ($id('f-dia')) $id('f-dia').value = '';
+      if ($id('f-dia-fecha')) $id('f-dia-fecha').value = '';
+      selectedFecha = '';
+    }
 
     html += '<button type="button" class="' + cls + '"'
       + (disabled ? ' disabled aria-disabled="true" tabindex="-1"' : '')
