@@ -472,6 +472,11 @@ var NP_MES_CORTO=['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','N
 var npCart={}, npZona='Home', npPago='Efectivo', npFechaSel='', npSaving=false;
 
 /* ── STATE ── */
+// STORAGE_VERSION: bumpear cuando cambia el formato de eKey() para forzar limpieza
+// del estado viejo en el primer load. v2 (2026-04-23): eKey usa fila (e.r) en vez
+// del N° (e.id), porque el N° se reinicia por semana y colisiona si Tadeo mueve
+// pedidos manualmente entre semanas (caso Fabiana/Iñaki, ambos N°1 en Home).
+var STORAGE_VERSION='v2-row-keyed';
 var entregas=[], entregados={}, cobrados={}, propinas={}, syncQueue=[], armadoDone={}, pendientesCobro=[];
 var currentTab='armado', rutaIndex=0, isOnline=navigator.onLine, resumenBarrioAbierto=null;
 
@@ -493,15 +498,15 @@ if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw-ruta.js')
 /* ── UTILS ── */
 function updateOnlineStatus(){document.getElementById('statusDot').className='status-dot '+(isOnline?'online':'offline')}
 function updateLastSync(){var n=new Date();document.getElementById('lastSync').textContent=n.getHours()+':'+String(n.getMinutes()).padStart(2,'0');localStorage.setItem('maleu_ruta_sync',n.getTime())}
-function saveLocal(){try{localStorage.setItem('maleu_ruta',JSON.stringify({entregas:entregas,entregados:entregados,cobrados:cobrados,propinas:propinas,syncQueue:syncQueue,armadoDone:armadoDone,pendientesCobro:pendientesCobro,currentTab:currentTab,rutaIndex:rutaIndex,ts:Date.now()}))}catch(e){}}
-function loadLocal(){try{var d=JSON.parse(localStorage.getItem('maleu_ruta')||'{}');if(d.entregas)entregas=d.entregas;if(d.entregados)entregados=d.entregados;if(d.cobrados)cobrados=d.cobrados;if(d.propinas)propinas=d.propinas;if(d.syncQueue)syncQueue=d.syncQueue;if(d.armadoDone)armadoDone=d.armadoDone;if(d.pendientesCobro)pendientesCobro=d.pendientesCobro;if(d.currentTab)currentTab=d.currentTab;if(d.rutaIndex!==undefined)rutaIndex=d.rutaIndex}catch(e){}}
+function saveLocal(){try{localStorage.setItem('maleu_ruta',JSON.stringify({_v:STORAGE_VERSION,entregas:entregas,entregados:entregados,cobrados:cobrados,propinas:propinas,syncQueue:syncQueue,armadoDone:armadoDone,pendientesCobro:pendientesCobro,currentTab:currentTab,rutaIndex:rutaIndex,ts:Date.now()}))}catch(e){}}
+function loadLocal(){try{var d=JSON.parse(localStorage.getItem('maleu_ruta')||'{}');if(d._v!==STORAGE_VERSION){d.entregados={};d.cobrados={};d.propinas={};d.armadoDone={};d.syncQueue=[]}if(d.entregas)entregas=d.entregas;if(d.entregados)entregados=d.entregados;if(d.cobrados)cobrados=d.cobrados;if(d.propinas)propinas=d.propinas;if(d.syncQueue)syncQueue=d.syncQueue;if(d.armadoDone)armadoDone=d.armadoDone;if(d.pendientesCobro)pendientesCobro=d.pendientesCobro;if(d.currentTab)currentTab=d.currentTab;if(d.rutaIndex!==undefined)rutaIndex=d.rutaIndex}catch(e){}}
 
 function refresh(silent){
   if(!silent)document.getElementById('loadingView').classList.remove('hidden');
   var btn=document.getElementById('btnRefresh');btn.classList.add('spinning');
   fetch(APPS_SCRIPT_URL+'?action=entregas&t='+Date.now()).then(function(r){return r.json()}).then(function(data){
     btn.classList.remove('spinning');var se=data.e||[];var prev=getPendientes().length;entregas=se;
-    var sk={};entregas.forEach(function(e){sk[e.h+'|'+e.id]=true});
+    var sk={};entregas.forEach(function(e){sk[eKey(e)]=true});
     Object.keys(entregados).forEach(function(k){if(!sk[k])delete entregados[k]});
     Object.keys(cobrados).forEach(function(k){if(!sk[k])delete cobrados[k]});
     // Limpiar keys stale de armadoDone y propinas (pedidos que ya no existen en el sheet).
@@ -519,7 +524,10 @@ function refresh(silent){
 }
 
 /* ── HELPERS ── */
-function eKey(e){return e.h+'|'+e.id}
+// Key única por pedido. Usa fila (e.r) porque el N° (e.id) se reinicia por semana
+// ISO y colisiona si hay pedidos manualmente movidos entre semanas.
+function eKey(e){return e.h+'|R'+e.r}
+function findByKey(key){return entregas.find(function(e){return eKey(e)===key})}
 function isEntregado(e){return entregados[eKey(e)]||e.es==='Entregado'}
 function isCobrado(e){return cobrados[eKey(e)]||e.ep==='Cobrado'}
 function getPendientes(){return entregas.filter(function(e){return!isEntregado(e)})}
@@ -641,11 +649,10 @@ function confirmarCancelar(key,nombre){
 }
 
 function cancelarPedido(key){
-  var parts=key.split('|'),hoja=parts[0],id=parts[1];
-  var ent=entregas.find(function(e){return eKey(e)===key});
+  var ent=findByKey(key);if(!ent)return;
   entregados[key]=true; // para que desaparezca de la lista local
   if(armadoDone[key])delete armadoDone[key];
-  syncQueue.push({action:'cancelarPedido',hoja:hoja,id:String(id),row:(ent&&ent.r)||0,ts:Date.now()});
+  syncQueue.push({action:'cancelarPedido',hoja:ent.h,id:String(ent.id),row:ent.r,ts:Date.now()});
   saveLocal();processSyncQueue();
   showToast('Pedido cancelado - stock devuelto');
   render();
@@ -778,15 +785,18 @@ function fetchCobrosPendientes(){
       var cobros=data.cobros||[];
       // Server = fuente de verdad. Solo agregar locales que aun estan en syncQueue
       // (entregados offline que aun no sincronizaron con el server)
-      var serverKeys={};cobros.forEach(function(c){serverKeys[c.key]=true});
-      var pendientesSyncKeys={};
+      // Identidad estable hoja|id (N° de pedido) — sirve aunque las keys locales y del
+      // server tengan formatos distintos (local: Home|R237, server: Home|1).
+      var serverIds={};cobros.forEach(function(c){if(c.h&&c.id!==undefined)serverIds[c.h+'|'+c.id]=true});
+      var pendientesSyncIds={};
       syncQueue.forEach(function(q){
         if(q.action==='marcarEntregado'&&!q.cobrado){
-          pendientesSyncKeys[q.hoja+'|'+q.id]=true;
+          pendientesSyncIds[q.hoja+'|'+q.id]=true;
         }
       });
       pendientesCobro.forEach(function(pc){
-        if(!serverKeys[pc.key]&&pendientesSyncKeys[pc.key]){
+        var pcId=(pc.h||'')+'|'+(pc.id||'');
+        if(!serverIds[pcId]&&pendientesSyncIds[pcId]){
           cobros.push(pc);
         }
       });
@@ -906,13 +916,13 @@ function cerrarConfirm(){document.getElementById('confirmOverlay').classList.add
 
 /* ── MARCAR ENTREGADO ── */
 function marcarEntregado(key){
-  entregados[key]=true;var parts=key.split('|'),hoja=parts[0],id=parts[1];
-  var ent=entregas.find(function(e){return e.h===hoja&&String(e.id)===id});
+  entregados[key]=true;
+  var ent=findByKey(key);
   if(ent){
     syncQueue.push({action:'marcarEntregado',hoja:ent.h,id:String(ent.id),row:ent.r,cobrado:!!cobrados[key],propina:propinas[key]||0,ts:Date.now()});
     // Si no está cobrado, guardar para seguimiento (Red se liquida aparte en Panel→Caja)
     if(!cobrados[key]&&ent.ep!=='Cobrado'&&ent.h!=='Red'){
-      pendientesCobro.push({key:key,c:ent.c,t:ent.t,$:ent.$,fp:ent.fp,ts:Date.now()});
+      pendientesCobro.push({key:key,h:ent.h,id:String(ent.id),r:ent.r,c:ent.c,t:ent.t,$:ent.$,fp:ent.fp,ts:Date.now()});
     }
   }
   saveLocal();processSyncQueue();if(navigator.vibrate)navigator.vibrate(50);
@@ -923,14 +933,13 @@ function marcarEntregado(key){
 function marcarCobrado(key){
   if(cobrados[key])return; // idempotente
   cobrados[key]=true;
-  var parts=key.split('|'),hoja=parts[0],id=parts[1];
-  var ent=entregas.find(function(e){return e.h===hoja&&String(e.id)===id});
+  var ent=findByKey(key);
   if(ent){
     var fp=ent.fp||'Efectivo';
     var totalFact=(Number(ent.$)||0)+(Number(propinas[key])||0);
     var ef=fp==='Efectivo'?totalFact:0;
     var tr=fp==='Transferencia'?totalFact:0;
-    syncQueue.push({action:'marcarCobrado',hoja:hoja,id:String(id),row:ent.r,formaPago:fp,ef:ef,tr:tr,propina:propinas[key]||0,propMet:fp,ts:Date.now()});
+    syncQueue.push({action:'marcarCobrado',hoja:ent.h,id:String(ent.id),row:ent.r,formaPago:fp,ef:ef,tr:tr,propina:propinas[key]||0,propMet:fp,ts:Date.now()});
     ent.ep='Cobrado';
   }
   // Limpiar propina local: ya fue aplicada y enviada, no contaminar el proximo render/pedido.
@@ -942,11 +951,10 @@ function marcarCobrado(key){
 
 /* ── RESERVAR / QUITAR RESERVA desde Ruta ── */
 function cambiarEstadoRuta(key,nuevoEstado){
-  var parts=key.split('|'),hoja=parts[0],id=parts[1];
-  var ent=entregas.find(function(e){return e.h===hoja&&String(e.id)===id});
+  var ent=findByKey(key);
   if(!ent)return;
   ent.es=nuevoEstado;
-  syncQueue.push({action:'cambiarEstadoEntrega',hoja:hoja,id:id,row:ent.r,estado:nuevoEstado,ts:Date.now()});
+  syncQueue.push({action:'cambiarEstadoEntrega',hoja:ent.h,id:String(ent.id),row:ent.r,estado:nuevoEstado,ts:Date.now()});
   saveLocal();processSyncQueue();
   showToast(nuevoEstado==='Reservado'?'Reservado':'Reserva quitada');
   render();
@@ -954,18 +962,16 @@ function cambiarEstadoRuta(key,nuevoEstado){
 
 /* ── CANCELAR desde Ruta ── */
 function confirmarCancelarRuta(key){
-  var parts=key.split('|'),hoja=parts[0],id=parts[1];
-  var ent=entregas.find(function(e){return e.h===hoja&&String(e.id)===id});
-  var nombre=ent?ent.c:id;
+  var ent=findByKey(key);
+  var nombre=ent?ent.c:'pedido';
   var o=document.getElementById('confirmOverlay');o.className='confirm-overlay';
   o.innerHTML='<div class="confirm-box"><h3>Cancelar pedido de '+nombre+'?</h3><p>Se marca como Cancelado en el Sheets.<br>No se puede deshacer.</p><div class="confirm-btns"><button type="button" class="btn-no" onclick="cerrarConfirm()">No</button><button type="button" class="btn-si" onclick="cerrarConfirm();cancelarRuta(\''+key+'\')">Si, cancelar</button></div></div>';
 }
 function cancelarRuta(key){
-  var parts=key.split('|'),hoja=parts[0],id=parts[1];
-  var idx=entregas.findIndex(function(e){return e.h===hoja&&String(e.id)===id});
+  var idx=entregas.findIndex(function(e){return eKey(e)===key});
   if(idx<0)return;
   var ent=entregas[idx];
-  syncQueue.push({action:'cancelarPedido',hoja:hoja,id:id,row:ent.r,ts:Date.now()});
+  syncQueue.push({action:'cancelarPedido',hoja:ent.h,id:String(ent.id),row:ent.r,ts:Date.now()});
   entregas.splice(idx,1);
   // Ajustar rutaIndex para no quedar fuera de rango
   if(rutaIndex>=entregas.length)rutaIndex=Math.max(0,entregas.length-1);
@@ -1024,8 +1030,11 @@ function cobrarPendiente(i,ef,tr,fp){
   var propMet=fp==='Transferencia'?'Transferencia':'Efectivo';
   if(fp==='Mixto')propMet=tr>ef?'Transferencia':'Efectivo';
   cobrados[pc.key]=true;
-  var parts=pc.key.split('|');
-  syncQueue.push({action:'marcarCobrado',hoja:parts[0],id:parts[1],row:pc.r||0,formaPago:fp||'Efectivo',ef:ef||0,tr:tr||0,propina:propina,propMet:propMet,ts:Date.now()});
+  // pc.h/pc.id/pc.r vienen del server (cobrosPendientes) o del push local en marcarEntregado.
+  // Fallback a parsear pc.key sólo si vino de un cliente viejo en localStorage.
+  var hojaPc=pc.h||pc.key.split('|')[0];
+  var idPc=pc.id||pc.key.split('|')[1]||'';
+  syncQueue.push({action:'marcarCobrado',hoja:hojaPc,id:String(idPc),row:pc.r||0,formaPago:fp||'Efectivo',ef:ef||0,tr:tr||0,propina:propina,propMet:propMet,ts:Date.now()});
   pendientesCobro.splice(i,1);
   saveLocal();processSyncQueue();
   if(currentTab==='cobros')renderCobrosFromServer();else renderRuta();
