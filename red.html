@@ -941,6 +941,7 @@ function renderRuta() {
   html += '<div class="pm-switch">';
   html += '<div class="opt ' + (p.fp === 'Efectivo' ? 'sel' : '') + '" onclick="rutaSetFP(\'Efectivo\')">💵 Efectivo</div>';
   html += '<div class="opt ' + (p.fp === 'Transferencia' ? 'sel' : '') + '" onclick="rutaSetFP(\'Transferencia\')">🏦 Transferencia</div>';
+  html += '<div class="opt ' + (p.fp === 'Mixto' ? 'sel' : '') + '" onclick="rutaAbrirCobroMixto()">💸 Mixto</div>';
   html += '</div>';
   html += '<button class="big-btn cobr' + (cobrado ? ' on' : '') + '" onclick="rutaToggleCobrado()">' +
     (cobrado ? '✓ Cobrado · tocar para deshacer' : '💵 Marcar Cobrado') + '</button>';
@@ -1008,11 +1009,35 @@ function _rutaUpdate(updates) {
 function rutaSetFP(v) { _rutaUpdate({ formaPagoCliente: v }); }
 function rutaToggleCobrado() {
   const p = _rutaCurrent(); if (!p) return;
-  _rutaUpdate({ cobroCliente: p.ep !== 'Cobrado' });
+  const nuevo = p.ep !== 'Cobrado';
+  const msg = nuevo
+    ? '¿Confirmás que cobraste ' + ars(p.$) + ' de ' + (p.c || 'este pedido') + '?'
+    : '¿Deshacer el cobro de ' + (p.c || 'este pedido') + '?';
+  if (!confirm(msg)) return;
+  _rutaUpdate({ cobroCliente: nuevo });
 }
 function rutaToggleEntrega() {
   const p = _rutaCurrent(); if (!p) return;
-  _rutaUpdate({ entrega: p.es !== 'Entregado' });
+  const nuevo = p.es !== 'Entregado';
+  const msg = nuevo
+    ? '¿Confirmás que entregaste el pedido de ' + (p.c || '—') + '?'
+    : '¿Deshacer la entrega de ' + (p.c || 'este pedido') + '?';
+  if (!confirm(msg)) return;
+  _rutaUpdate({ entrega: nuevo });
+}
+
+function rutaAbrirCobroMixto() {
+  const p = _rutaCurrent(); if (!p) return;
+  const total = p.$ || 0;
+  const efRaw = prompt('Cobro MIXTO — ¿cuánto cobraste en EFECTIVO? (total pedido: ' + ars(total) + ')', '0');
+  if (efRaw === null) return;
+  const ef = Number(String(efRaw).replace(/[^\d.-]/g, '')) || 0;
+  const trRaw = prompt('¿Cuánto cobraste en TRANSFERENCIA? (efectivo ingresado: ' + ars(ef) + ')', String(Math.max(0, total - ef)));
+  if (trRaw === null) return;
+  const tr = Number(String(trRaw).replace(/[^\d.-]/g, '')) || 0;
+  if (ef + tr <= 0) { toast('Ingresá al menos un monto'); return; }
+  if (!confirm('Guardar cobro: $' + ef.toLocaleString('es-AR') + ' EF + $' + tr.toLocaleString('es-AR') + ' TR = ' + ars(ef + tr) + '?')) return;
+  _rutaUpdate({ efectivoMonto: ef, transferenciaMonto: tr });
 }
 
 /* ═══════ VISTA PAGOS A MALEU ═══════ */
@@ -1056,6 +1081,9 @@ function renderPagos() {
     Object.keys(porSem).sort().reverse().forEach(sem => {
       const peds = porSem[sem];
       const tot = peds.reduce((s, p) => s + Math.round(p.$ * 83 / 100), 0);
+      // Año + semana ISO común para el botón bulk (todos los pedidos del grupo comparten ambos)
+      const semY = peds[0]._y || 0;
+      const semN = peds[0]._sem || 0;
       html += '<div class="pagos-sem">';
       html += '<div class="pagos-sem-head"><div class="pagos-sem-label">📅 ' + sem + '</div>' +
               '<div class="pagos-sem-total">' + ars(tot) + '</div></div>';
@@ -1069,6 +1097,12 @@ function renderPagos() {
           '<div class="pago-amount">' + ars(aPagar) + '</div>' +
         '</div>';
       });
+      // Botón liquidar toda la semana
+      if (semY && semN) {
+        html += '<button class="big-btn" style="margin:.6rem .8rem .8rem;background:#2e7d32;color:#fff;border-color:#2e7d32" ' +
+                'onclick="marcarSemanaPagada(' + semY + ',' + semN + ',' + tot + ',' + peds.length + ')">' +
+                '✓ Marcar semana como pagada a Maleu (' + ars(tot) + ')</button>';
+      }
       html += '</div>';
     });
   }
@@ -1114,6 +1148,41 @@ function _getSemanaKey(p) {
 function pagoOpen(pedidoNum) {
   // Reutiliza la pantalla de detalle existente (tiene toggle de pago a Maleu)
   showDetalle(pedidoNum);
+}
+
+function marcarSemanaPagada(year, semana, monto, cantidad) {
+  if (!session) return;
+  if (!confirm('¿Confirmás que YA le pagaste a Maleu ' + ars(monto) + ' (' + cantidad + ' pedido' + (cantidad === 1 ? '' : 's') + ' de esa semana)?')) return;
+  // Actualización optimista: marcar los pedidos de esa semana como Pagado
+  if (lastDashboardData) {
+    const hoy = new Date();
+    const fechaHoy = String(hoy.getDate()).padStart(2,'0') + '/' + String(hoy.getMonth()+1).padStart(2,'0') + '/' + hoy.getFullYear();
+    (lastDashboardData.pedidos || []).forEach(p => {
+      if (p._y === year && p._sem === semana && p.ep === 'Cobrado' && !_esPagado(p.epm) && p.es !== 'Cancelado') {
+        p.epm = 'Pagado';
+        p.fpmF = fechaHoy;
+      }
+    });
+    renderPagos();
+    updateMainBadges();
+    renderPedidosTab();
+  }
+  fetch(APPS_SCRIPT_URL, {
+    method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify({
+      action: 'marcarSemanaPagadaRed',
+      vendedor: session.nombre,
+      year: year, semana: semana
+    })
+  })
+    .then(r => r.json())
+    .then(d => {
+      if (!d.ok) { toast('Error: ' + (d.err || 'no se pudo guardar')); return; }
+      toast('✓ ' + d.marcados + ' pedido(s) marcados como pagados');
+      // Refrescar data desde backend para ver la fecha real
+      loadDashboard();
+    })
+    .catch(() => toast('Sin conexión — reintentá en un rato'));
 }
 
 function setTab(tab) {
@@ -1325,6 +1394,14 @@ function _mapUpdatesToPedido(u) {
   if ('entrega' in u)         map.es  = u.entrega ? 'Entregado' : 'Pendiente';
   if ('cobroCliente' in u)    map.ep  = u.cobroCliente ? 'Cobrado' : 'No Cobrado';
   if ('formaPagoCliente' in u) map.fp = u.formaPagoCliente;
+  if ('efectivoMonto' in u || 'transferenciaMonto' in u) {
+    const ef = Number(u.efectivoMonto) || 0;
+    const tr = Number(u.transferenciaMonto) || 0;
+    if (ef > 0 && tr > 0) map.fp = 'Mixto';
+    else if (ef > 0) map.fp = 'Efectivo';
+    else if (tr > 0) map.fp = 'Transferencia';
+    if (ef + tr > 0) map.ep = 'Cobrado';
+  }
   if ('propinaEf' in u)       map.pEf = Number(u.propinaEf) || 0;
   if ('propinaTr' in u)       map.pTr = Number(u.propinaTr) || 0;
   if ('formaPagoMaleu' in u)  map.fpm = u.formaPagoMaleu;
@@ -1341,12 +1418,20 @@ function _mapUpdatesToPedido(u) {
 function toggleEntrega() {
   if (!currentPedido) return;
   const nuevo = currentPedido.es !== 'Entregado';
+  const msg = nuevo
+    ? '¿Confirmás que entregaste el pedido de ' + (currentPedido.c || '—') + '?'
+    : '¿Deshacer la entrega de ' + (currentPedido.c || 'este pedido') + '?';
+  if (!confirm(msg)) return;
   updatePedido({ entrega: nuevo });
   showDetalle(currentPedido.n); // re-render
 }
 function toggleCobrado() {
   if (!currentPedido) return;
   const nuevo = currentPedido.ep !== 'Cobrado';
+  const msg = nuevo
+    ? '¿Confirmás que cobraste ' + ars(currentPedido.$ || 0) + ' de ' + (currentPedido.c || 'este pedido') + '?'
+    : '¿Deshacer el cobro de ' + (currentPedido.c || 'este pedido') + '?';
+  if (!confirm(msg)) return;
   updatePedido({ cobroCliente: nuevo });
   showDetalle(currentPedido.n);
 }
