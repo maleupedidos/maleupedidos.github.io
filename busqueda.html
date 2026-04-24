@@ -132,6 +132,7 @@ body{font-family:'Segoe UI',system-ui,-apple-system,sans-serif;background:#F5F2E
 .cliente-canal{font-size:11px;font-weight:800;background:#F07D47;color:#fff;padding:3px 10px;border-radius:50px;letter-spacing:.04em}
 .cliente-ped{font-size:12px;color:#7A4A4A;margin-bottom:10px;font-weight:600}
 .cliente-dir{font-size:13px;color:#7A4A4A;margin-bottom:10px}
+.cat-header{font-size:12px;font-weight:800;letter-spacing:.5px;text-transform:uppercase;color:#331C1C;background:#F2E8C7;padding:5px 10px;margin:10px -4px 4px;border-radius:8px}
 .cliente-item{display:flex;align-items:center;gap:10px;padding:8px 0;font-size:15px;border-bottom:1px solid #F2E8C7}
 .cliente-item:last-child{border:none}
 .cliente-item-qty{font-weight:800;color:#F07D47;min-width:34px;font-size:16px}
@@ -1059,6 +1060,37 @@ function classifyClientes() {
   return { vd: vd, vi: vi, dep: dep };
 }
 
+var CAT_ORDEN = ['Pizza Clasica', 'Pizza Premium', 'Empanadas', 'Sorrentinos', 'Tortas', 'Otros'];
+var CAT_REMAP = { 'Pack Pizza': 'Pizza Clasica', 'Packs Pizza': 'Pizza Clasica' };
+
+function splitProducto(nombre) {
+  if (!nombre) return { cat: 'Otros', sabor: '' };
+  var idx = nombre.indexOf(' — ');
+  if (idx < 0) idx = nombre.indexOf(' - ');
+  if (idx < 0) return { cat: 'Otros', sabor: nombre };
+  var catRaw = nombre.substring(0, idx).trim();
+  var sabor = nombre.substring(idx + 3).trim();
+  var cat = CAT_REMAP[catRaw] || catRaw;
+  return { cat: cat, sabor: sabor };
+}
+
+function agruparItems(items) {
+  var groups = {};
+  items.forEach(function(it) {
+    var sp = splitProducto(it.prod || it.name || '');
+    if (!groups[sp.cat]) groups[sp.cat] = [];
+    groups[sp.cat].push({ sabor: sp.sabor, raw: it });
+  });
+  var ordered = [];
+  CAT_ORDEN.forEach(function(c) { if (groups[c]) { ordered.push([c, groups[c]]); delete groups[c]; } });
+  Object.keys(groups).sort().forEach(function(c) { ordered.push([c, groups[c]]); });
+  return ordered;
+}
+
+function cardKeyFor(cli) {
+  return (cli.canal + '|' + cli.ped).replace(/[^a-zA-Z0-9]/g, '_');
+}
+
 function getZone(cli) {
   if (cli.canal === 'Home') {
     // Extract barrio from dir (e.g. "Santa Catalina · Lote 123" → use parent barrio)
@@ -1091,28 +1123,44 @@ function renderPedidos() {
     return;
   }
 
+  function pendCount(list) {
+    var n = 0;
+    list.forEach(function(c) { if (!armadoChecked[cardKeyFor(c)]) n++; });
+    return n;
+  }
+  var pendVd = pendCount(cl.vd), pendVi = pendCount(cl.vi), pendDep = pendCount(cl.dep);
+  var pendTotal = pendVd + pendVi + pendDep;
+
   if (pedLevel === 'root') {
-    html += '<div class="ped-summary"><strong>' + total + '</strong>pedidos para armar</div>';
+    if (pendTotal === 0) {
+      html += '<div class="al-dia" style="color:#2E7D32;font-size:18px;font-weight:700">&#x2713; Todo armado</div>' +
+              '<div style="text-align:center;color:#7A4A4A;font-size:13px;margin-top:-4px;margin-bottom:16px">Listos para salir a repartir</div>';
+    } else {
+      html += '<div class="ped-summary"><strong>' + pendTotal + '</strong>pendientes de armar</div>';
+    }
     if (cl.vd.length > 0) {
-      var vdProds = 0; cl.vd.forEach(function(c) { c.items.forEach(function(it) { vdProds += it.q; }); });
-      html += '<div class="nav-card" onclick="pedNav(\'vd\')">' +
+      var vdProds = 0; cl.vd.forEach(function(c) { if (!armadoChecked[cardKeyFor(c)]) c.items.forEach(function(it) { vdProds += it.q; }); });
+      var vdDone = pendVd === 0;
+      html += '<div class="nav-card' + (vdDone ? ' done-card' : '') + '" onclick="pedNav(\'vd\')">' +
         '<div class="nav-card-icon vd">&#x1F3E0;</div>' +
-        '<div class="nav-card-body"><div class="nav-card-title">Venta Directa</div><div class="nav-card-sub">' + vdProds + ' productos</div></div>' +
-        '<span class="nav-card-count">' + cl.vd.length + '</span><span class="nav-card-arrow">&#x203A;</span></div>';
+        '<div class="nav-card-body"><div class="nav-card-title">Venta Directa</div><div class="nav-card-sub">' + (vdDone ? 'Armado &#x2713;' : vdProds + ' productos') + '</div></div>' +
+        '<span class="nav-card-count">' + pendVd + '/' + cl.vd.length + '</span><span class="nav-card-arrow">&#x203A;</span></div>';
     }
     if (cl.vi.length > 0) {
-      var viProds = 0; cl.vi.forEach(function(c) { c.items.forEach(function(it) { viProds += it.q; }); });
-      html += '<div class="nav-card" onclick="pedNav(\'vi\')">' +
+      var viProds = 0; cl.vi.forEach(function(c) { if (!armadoChecked[cardKeyFor(c)]) c.items.forEach(function(it) { viProds += it.q; }); });
+      var viDone = pendVi === 0;
+      html += '<div class="nav-card' + (viDone ? ' done-card' : '') + '" onclick="pedNav(\'vi\')">' +
         '<div class="nav-card-icon vi">&#x1F3C6;</div>' +
-        '<div class="nav-card-body"><div class="nav-card-title">Venta Indirecta</div><div class="nav-card-sub">' + viProds + ' productos</div></div>' +
-        '<span class="nav-card-count">' + cl.vi.length + '</span><span class="nav-card-arrow">&#x203A;</span></div>';
+        '<div class="nav-card-body"><div class="nav-card-title">Venta Indirecta</div><div class="nav-card-sub">' + (viDone ? 'Armado &#x2713;' : viProds + ' productos') + '</div></div>' +
+        '<span class="nav-card-count">' + pendVi + '/' + cl.vi.length + '</span><span class="nav-card-arrow">&#x203A;</span></div>';
     }
     if (cl.dep.length > 0) {
-      var depProds = 0; cl.dep.forEach(function(c) { c.items.forEach(function(it) { depProds += it.q; }); });
-      html += '<div class="nav-card" onclick="pedNav(\'dep\')">' +
+      var depProds = 0; cl.dep.forEach(function(c) { if (!armadoChecked[cardKeyFor(c)]) c.items.forEach(function(it) { depProds += it.q; }); });
+      var depDone = pendDep === 0;
+      html += '<div class="nav-card' + (depDone ? ' done-card' : '') + '" onclick="pedNav(\'dep\')">' +
         '<div class="nav-card-icon zone">&#x1F4E6;</div>' +
-        '<div class="nav-card-body"><div class="nav-card-title">Deposito</div><div class="nav-card-sub">' + depProds + ' productos</div></div>' +
-        '<span class="nav-card-count">' + cl.dep.length + '</span><span class="nav-card-arrow">&#x203A;</span></div>';
+        '<div class="nav-card-body"><div class="nav-card-title">Deposito</div><div class="nav-card-sub">' + (depDone ? 'Armado &#x2713;' : depProds + ' productos') + '</div></div>' +
+        '<span class="nav-card-count">' + pendDep + '/' + cl.dep.length + '</span><span class="nav-card-arrow">&#x203A;</span></div>';
     }
 
   } else if (pedLevel === 'vd' || pedLevel === 'vi' || pedLevel === 'dep') {
@@ -1186,13 +1234,20 @@ function renderRedConsolidadoCard(list) {
     html += '<div class="cliente-head"><span class="cliente-name">' + vName + '</span><span class="cliente-canal">Red</span></div>';
     html += '<div class="cliente-ped">' + data.peds.length + ' pedidos consolidados</div>';
 
-    Object.keys(data.prods).sort().forEach(function(prod) {
-      var p = data.prods[prod];
-      html += '<div class="cliente-item' + (p.pendiente ? ' item-pendiente' : '') + '">' +
-        '<span class="cliente-item-qty">' + p.q + ' &times;</span>' +
-        '<span class="cliente-item-name">' + prod + '</span>' +
-        (p.pendiente ? '<span style="font-size:10px;background:#FFF3E0;color:#e67e22;padding:2px 6px;border-radius:50px;font-weight:700">Pendiente</span>' : '') +
-        '</div>';
+    var flatItems = Object.keys(data.prods).map(function(prod) {
+      return { prod: prod, q: data.prods[prod].q, est: data.prods[prod].pendiente ? 'Pendiente' : '' };
+    });
+    agruparItems(flatItems).forEach(function(g) {
+      html += '<div class="cat-header">' + g[0] + '</div>';
+      g[1].forEach(function(entry) {
+        var it = entry.raw;
+        var pendiente = (it.est === 'Pendiente');
+        html += '<div class="cliente-item' + (pendiente ? ' item-pendiente' : '') + '">' +
+          '<span class="cliente-item-qty">' + it.q + ' &times;</span>' +
+          '<span class="cliente-item-name">' + (entry.sabor || it.prod) + '</span>' +
+          (pendiente ? '<span style="font-size:10px;background:#FFF3E0;color:#e67e22;padding:2px 6px;border-radius:50px;font-weight:700">Pendiente</span>' : '') +
+          '</div>';
+      });
     });
 
     html += '<button class="btn-pedido' + (isDone ? ' done' : '') + '" onclick="toggleArmadoRedConsolidado(\'' + esc(vName) + '\')" style="margin-top:10px">' + (isDone ? 'Armado &#x2713;' : 'Marcar armado') + '</button>';
@@ -1230,14 +1285,18 @@ function renderClienteCard(cli) {
   if (cli.ped) html += '<div class="cliente-ped">Pedido ' + cli.ped + '</div>';
   if (cli.dir) html += '<div class="cliente-dir">' + cli.dir + '</div>';
 
-  // Productos como checklist de armado (sin montos)
-  cli.items.forEach(function(it) {
-    var pendiente = (it.est === 'Pendiente' || it.est === 'Pedido');
-    html += '<div class="cliente-item' + (pendiente ? ' item-pendiente' : '') + '">' +
-      '<span class="cliente-item-qty">' + it.q + ' &times;</span>' +
-      '<span class="cliente-item-name">' + it.prod + '</span>' +
-      (pendiente ? '<span style="font-size:10px;background:#FFF3E0;color:#e67e22;padding:2px 6px;border-radius:50px;font-weight:700">Pendiente</span>' : '') +
-      '</div>';
+  // Productos agrupados por categoria (checklist de armado, sin montos)
+  agruparItems(cli.items).forEach(function(g) {
+    html += '<div class="cat-header">' + g[0] + '</div>';
+    g[1].forEach(function(entry) {
+      var it = entry.raw;
+      var pendiente = (it.est === 'Pendiente' || it.est === 'Pedido');
+      html += '<div class="cliente-item' + (pendiente ? ' item-pendiente' : '') + '">' +
+        '<span class="cliente-item-qty">' + it.q + ' &times;</span>' +
+        '<span class="cliente-item-name">' + (entry.sabor || it.prod) + '</span>' +
+        (pendiente ? '<span style="font-size:10px;background:#FFF3E0;color:#e67e22;padding:2px 6px;border-radius:50px;font-weight:700">Pendiente</span>' : '') +
+        '</div>';
+    });
   });
 
   // Botón "Armado OK"
