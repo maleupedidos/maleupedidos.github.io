@@ -1228,19 +1228,56 @@ function rCaja(){
     '<div class="bal-card"><span class="bal-ico">&#128181;</span><div class="bal-info"><div class="bal-label">Efectivo</div><div class="bal-val" style="color:'+(saldoEf>=0?'var(--gd)':'var(--r)')+'">$'+f$(saldoEf)+'</div></div></div>'+
     '<div class="bal-card"><span class="bal-ico">&#128241;</span><div class="bal-info"><div class="bal-label">Mercado Pago</div><div class="bal-val" style="color:'+(saldoMP>=0?'var(--gd)':'var(--r)')+'">$'+f$(saldoMP)+'</div></div></div>'+
     '<div class="bal-card total"><div class="bal-label">Saldo total</div><div class="bal-val">$'+f$(saldoTotal)+'</div><button class="btn-adjust" onclick="toggleAjuste()">'+(sb.fecha?'Ajustado '+sb.fecha+' \u00b7 ':'')+'Ajustar</button></div>';
-  // Movimientos list (gastos + ingresos merged)
+  // Movimientos: libro diario unificado (cobros de pedidos + ingresos no-venta + gastos).
+  // Fuente: D.movimientos del backend (vista derivada, sin hoja física de movimientos).
+  // Fallback: si el backend viejo no manda movimientos, armar desde gastos+ingresos.
   var gl=$('gList');gl.innerHTML='';
-  var movs=[],idx=0;
-  (D.gastos||[]).forEach(function(g){movs.push({tipo:'gasto',f:g.f,cat:g.cat,con:g.con,met:g.met,$:g.$,not:g.not,i:idx++});});
-  (D.ingresos||[]).forEach(function(i){movs.push({tipo:'ingreso',f:i.f,cat:i.cat,con:i.con,met:i.met,$:i.$,not:i.not,i:idx++});});
+  var movs=D.movimientos;
+  if(!movs){
+    movs=[];var idx=0;
+    (D.gastos||[]).forEach(function(g){movs.push({tipo:'gasto',f:g.f,cat:g.cat,con:g.con,met:g.met,$:g.$,not:g.not,i:idx++});});
+    (D.ingresos||[]).forEach(function(i){movs.push({tipo:'ingreso',f:i.f,cat:i.cat,con:i.con,met:i.met,$:i.$,not:i.not,i:idx++});});
+  }
   if(!movs.length){gl.innerHTML='<div class="empty"><i>&#128196;</i><p>Sin movimientos</p></div>';return;}
-  function fechaToNum(f){if(!f)return 0;var p=f.split('/');return p.length===3?Number(p[2]+p[1]+p[0]):0;}
-  movs.sort(function(a,b){var d=fechaToNum(b.f)-fechaToNum(a.f);return d!==0?d:b.i-a.i;});
-  movs.forEach(function(m){
+  // Filtro simple: botones por tipo
+  if(!$('movFilter')){
+    var fltDiv=document.createElement('div');
+    fltDiv.id='movFilter';
+    fltDiv.style.cssText='display:flex;gap:6px;margin-bottom:10px;overflow-x:auto;padding-bottom:4px';
+    fltDiv.innerHTML=
+      '<button type="button" data-f="todos" class="mf on" style="padding:6px 12px;border-radius:50px;border:2px solid var(--bd);background:var(--o);color:#fff;font-size:11px;font-weight:800;cursor:pointer;white-space:nowrap">TODOS</button>'+
+      '<button type="button" data-f="cobro" class="mf" style="padding:6px 12px;border-radius:50px;border:2px solid #2d8a4f;background:transparent;color:#2d8a4f;font-size:11px;font-weight:800;cursor:pointer;white-space:nowrap">\ud83d\udcb0 COBROS</button>'+
+      '<button type="button" data-f="ingreso" class="mf" style="padding:6px 12px;border-radius:50px;border:2px solid #1976d2;background:transparent;color:#1976d2;font-size:11px;font-weight:800;cursor:pointer;white-space:nowrap">\u2795 INGRESOS</button>'+
+      '<button type="button" data-f="gasto" class="mf" style="padding:6px 12px;border-radius:50px;border:2px solid var(--r);background:transparent;color:var(--r);font-size:11px;font-weight:800;cursor:pointer;white-space:nowrap">\u2796 GASTOS</button>';
+    gl.parentNode.insertBefore(fltDiv,gl);
+    fltDiv.addEventListener('click',function(e){
+      var b=e.target.closest('.mf');if(!b)return;
+      fltDiv.querySelectorAll('.mf').forEach(function(x){x.classList.remove('on');x.style.background='transparent';x.style.color=x.getAttribute('data-f')==='cobro'?'#2d8a4f':x.getAttribute('data-f')==='ingreso'?'#1976d2':x.getAttribute('data-f')==='gasto'?'var(--r)':'var(--br)'});
+      b.classList.add('on');b.style.background=b.getAttribute('data-f')==='cobro'?'#2d8a4f':b.getAttribute('data-f')==='ingreso'?'#1976d2':b.getAttribute('data-f')==='gasto'?'var(--r)':'var(--o)';b.style.color='#fff';
+      window._movFiltro=b.getAttribute('data-f');rCaja();
+    });
+  }
+  var filtro=window._movFiltro||'todos';
+  var movsF=filtro==='todos'?movs:movs.filter(function(m){return m.tipo===filtro});
+  if(!movsF.length){gl.innerHTML='<div class="empty"><i>&#128196;</i><p>Sin movimientos en este filtro</p></div>';return;}
+  // Totales visibles del filtro actual
+  var tEf=0,tMp=0;
+  movsF.forEach(function(m){
+    var signo=m.tipo==='gasto'?-1:1;
+    if(m.met==='Efectivo')tEf+=signo*m.$;else tMp+=signo*m.$;
+  });
+  var hdr=document.createElement('div');
+  hdr.style.cssText='font-size:11px;color:var(--bl);margin-bottom:8px;font-weight:700';
+  hdr.innerHTML=movsF.length+' movimiento(s) \u00b7 Ef '+(tEf>=0?'+':'')+'$'+f$(Math.round(tEf))+' \u00b7 MP '+(tMp>=0?'+':'')+'$'+f$(Math.round(tMp));
+  gl.appendChild(hdr);
+  movsF.forEach(function(m){
     var el=document.createElement('div');el.className='gl';
-    var color=m.tipo==='gasto'?'var(--r)':'var(--gd)';
-    var signo=m.tipo==='gasto'?'-':'+';
-    el.innerHTML='<div class="gl-info"><div class="gl-cat" style="color:'+color+'">'+m.cat+' ('+m.tipo+')</div><div class="gl-con">'+m.con+'</div><div class="gl-meta">'+m.f+' \u00b7 '+m.met+(m.not?' \u00b7 '+m.not:'')+'</div></div><div class="gl-$" style="color:'+color+'">'+signo+'$'+f$(m.$)+'</div>';
+    var color,signo,ico;
+    if(m.tipo==='cobro'){color='#2d8a4f';signo='+';ico='\ud83d\udcb0';}
+    else if(m.tipo==='ingreso'){color='#1976d2';signo='+';ico='\u2795';}
+    else{color='var(--r)';signo='-';ico='\u2796';}
+    var meta=m.f+' \u00b7 '+m.met+(m.not?' \u00b7 '+m.not:'');
+    el.innerHTML='<div class="gl-info"><div class="gl-cat" style="color:'+color+'">'+ico+' '+m.cat+'</div><div class="gl-con">'+m.con+'</div><div class="gl-meta">'+meta+'</div></div><div class="gl-$" style="color:'+color+'">'+signo+'$'+f$(m.$)+'</div>';
     gl.appendChild(el);
   });
 }
