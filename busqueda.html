@@ -719,23 +719,40 @@ function confirmarRecibir(idx) {
   if (!prov) return;
   var provOcs = getOcsByProv(prov.n);
   var grouped = agruparOcsPorProducto(provOcs);
-  var items = [];
+  var groups = [];
+  var hayDiferencia = false;
 
-  // Leer qty recibida por producto agrupado y distribuir a filas individuales
+  // Armar groups: un item por producto, con todas las filas de OC de ese producto
   grouped.forEach(function(g, gi) {
     var input = document.getElementById('recQty_' + idx + '_' + gi);
     var qtyRecibida = input ? (parseInt(input.value) || 0) : g.totalQty;
-    var remaining = qtyRecibida;
-
-    // Distribuir a las filas originales (en orden, hasta agotar)
-    g.rows.forEach(function(row) {
-      var asignar = Math.min(remaining, row.q);
-      items.push({ r: row.r, qtyRecibida: Math.max(0, asignar) });
-      remaining -= asignar;
+    if (qtyRecibida !== g.totalQty) hayDiferencia = true;
+    groups.push({
+      prov: prov.n,
+      prod: g.prod,
+      qtyRecibida: qtyRecibida,
+      rows: g.rows.map(function(r) { return r.r; })
     });
   });
 
-  syncQueue.push({ action: 'recibirMercaderia', items: items, ts: Date.now() });
+  // Si hay diferencia, pedir confirmación (mostrar qué se va a hacer)
+  if (hayDiferencia) {
+    var resumen = 'Confirmar recepción de ' + prov.n + ':\n\n';
+    groups.forEach(function(grp, gi) {
+      var g = grouped[gi];
+      var diff = grp.qtyRecibida - g.totalQty;
+      if (diff === 0) {
+        resumen += '• ' + g.prod + ': ' + grp.qtyRecibida + ' (ok)\n';
+      } else {
+        var signo = diff > 0 ? '+' : '';
+        resumen += '• ' + g.prod + ': ' + grp.qtyRecibida + ' (pedido ' + g.totalQty + ', diferencia ' + signo + diff + ')\n';
+      }
+    });
+    resumen += '\nLa diferencia se absorbe en "Tadeo — Stock" (si existe esa fila para el producto). Si no, se recorta/suma en stock físico.\n\n¿Confirmar?';
+    if (!confirm(resumen)) return;
+  }
+
+  syncQueue.push({ action: 'recibirMercaderia', groups: groups, ts: Date.now() });
   marcadosRecibido[prov.n] = true;
   saveLocal();
   processSyncQueue();
@@ -1198,6 +1215,19 @@ function processSyncQueue() {
       if (syncQueue.length > 0) setTimeout(processSyncQueue, 1000);
     } else {
       // OK → sacar de la cola
+      // Si vino con avisos (recibirMercaderia con diff absorbido), mostrar resumen
+      if (item.action === 'recibirMercaderia' && resp && resp.avisos && resp.avisos.length > 0) {
+        var msgs = resp.avisos.map(function(a) {
+          if (a.tipo === 'faltante_absorbido_stock') return a.prod + ': faltaron ' + (-a.diff) + ', descontados de Tadeo — Stock (' + a.stockAntes + ' → ' + a.stockDespues + ')';
+          if (a.tipo === 'sobrante_absorbido_stock') return a.prod + ': sobraron ' + a.diff + ', sumados a Tadeo — Stock (' + a.stockAntes + ' → ' + a.stockDespues + ')';
+          if (a.tipo === 'faltante_stock_insuficiente_clientes_afectados') return '⚠️ ' + a.prod + ': faltante de ' + (-a.diff) + ' no alcanzó con Stock. Clientes afectados.';
+          if (a.tipo === 'faltante_sin_stock_row_clientes_afectados') return '⚠️ ' + a.prod + ': faltaron ' + (-a.diff) + ' y no había fila Tadeo — Stock. Clientes afectados.';
+          if (a.tipo === 'sobrante_sin_stock_row') return a.prod + ': sobraron ' + a.diff + ' (sumados al stock físico)';
+          if (a.tipo === 'todo_cancelado') return a.prod + ': todo cancelado';
+          return a.prod + ': ajuste ' + (a.diff > 0 ? '+' : '') + a.diff;
+        });
+        alert('Recepción procesada:\n\n' + msgs.join('\n'));
+      }
       syncQueue.shift();
       saveLocal();
       document.getElementById('syncBanner').className = 'sync-banner' + (syncQueue.length > 0 ? ' visible' : '');
