@@ -1184,14 +1184,11 @@ function renderPedidos() {
     return;
   }
 
-  function doneCount(list) {
-    var n = 0;
-    list.forEach(function(c) { if (armadoChecked[cardKeyFor(c)]) n++; });
-    return n;
-  }
-  function pendCount(list) { return list.length - doneCount(list); }
-  var doneVd = doneCount(cl.vd), doneVi = doneCount(cl.vi), doneDep = doneCount(cl.dep);
-  var pendTotal = (cl.vd.length - doneVd) + (cl.vi.length - doneVi) + (cl.dep.length - doneDep);
+  // Conteos basados en grupos fusionados (evita contar 2 OCs del mismo pedido como 2)
+  var cntVd = countGruposArmados(cl.vd);
+  var cntVi = countGruposArmados(cl.vi);
+  var cntDep = countGruposArmados(cl.dep);
+  var pendTotal = (cntVd.total - cntVd.done) + (cntVi.total - cntVi.done) + (cntDep.total - cntDep.done);
 
   if (pedLevel === 'root') {
     if (pendTotal === 0) {
@@ -1200,35 +1197,36 @@ function renderPedidos() {
     } else {
       html += '<div class="ped-summary"><strong>' + pendTotal + '</strong>pendientes de armar</div>';
     }
-    if (cl.vd.length > 0) {
-      var vdDone = doneVd === cl.vd.length;
+    if (cntVd.total > 0) {
+      var vdDone = cntVd.done === cntVd.total;
       html += '<div class="nav-card' + (vdDone ? ' done-card' : '') + '" onclick="pedNav(\'vd\')">' +
         '<div class="nav-card-icon vd">&#x1F3E0;</div>' +
-        '<div class="nav-card-body"><div class="nav-card-title">Venta Directa</div><div class="nav-card-sub">' + (vdDone ? 'Armado &#x2713;' : cl.vd.length + ' pedidos') + '</div></div>' +
-        '<span class="nav-card-count">' + doneVd + '/' + cl.vd.length + '</span><span class="nav-card-arrow">&#x203A;</span></div>';
+        '<div class="nav-card-body"><div class="nav-card-title">Venta Directa</div><div class="nav-card-sub">' + (vdDone ? 'Armado &#x2713;' : cntVd.total + ' pedidos') + '</div></div>' +
+        '<span class="nav-card-count">' + cntVd.done + '/' + cntVd.total + '</span><span class="nav-card-arrow">&#x203A;</span></div>';
     }
-    if (cl.vi.length > 0) {
-      var viDone = doneVi === cl.vi.length;
+    if (cntVi.total > 0) {
+      var viDone = cntVi.done === cntVi.total;
       html += '<div class="nav-card' + (viDone ? ' done-card' : '') + '" onclick="pedNav(\'vi\')">' +
         '<div class="nav-card-icon vi">&#x1F3C6;</div>' +
-        '<div class="nav-card-body"><div class="nav-card-title">Venta Indirecta</div><div class="nav-card-sub">' + (viDone ? 'Armado &#x2713;' : cl.vi.length + ' pedidos') + '</div></div>' +
-        '<span class="nav-card-count">' + doneVi + '/' + cl.vi.length + '</span><span class="nav-card-arrow">&#x203A;</span></div>';
+        '<div class="nav-card-body"><div class="nav-card-title">Venta Indirecta</div><div class="nav-card-sub">' + (viDone ? 'Armado &#x2713;' : cntVi.total + ' pedidos') + '</div></div>' +
+        '<span class="nav-card-count">' + cntVi.done + '/' + cntVi.total + '</span><span class="nav-card-arrow">&#x203A;</span></div>';
     }
-    if (cl.dep.length > 0) {
-      var depDone = doneDep === cl.dep.length;
+    if (cntDep.total > 0) {
+      var depDone = cntDep.done === cntDep.total;
       html += '<div class="nav-card' + (depDone ? ' done-card' : '') + '" onclick="pedNav(\'dep\')">' +
         '<div class="nav-card-icon zone">&#x1F4E6;</div>' +
-        '<div class="nav-card-body"><div class="nav-card-title">Deposito</div><div class="nav-card-sub">' + (depDone ? 'Armado &#x2713;' : cl.dep.length + ' pedidos') + '</div></div>' +
-        '<span class="nav-card-count">' + doneDep + '/' + cl.dep.length + '</span><span class="nav-card-arrow">&#x203A;</span></div>';
+        '<div class="nav-card-body"><div class="nav-card-title">Deposito</div><div class="nav-card-sub">' + (depDone ? 'Armado &#x2713;' : cntDep.total + ' pedidos') + '</div></div>' +
+        '<span class="nav-card-count">' + cntDep.done + '/' + cntDep.total + '</span><span class="nav-card-arrow">&#x203A;</span></div>';
     }
 
   } else if (pedLevel === 'vd' || pedLevel === 'vi' || pedLevel === 'dep') {
     var list = pedLevel === 'vd' ? cl.vd : pedLevel === 'vi' ? cl.vi : cl.dep;
     var label = pedLevel === 'vd' ? 'Venta Directa' : pedLevel === 'vi' ? 'Venta Indirecta' : 'Deposito';
+    var listCnt = countGruposArmados(list);
     html += '<div class="ped-back" onclick="pedNav(\'root\')">&#x2190; Volver</div>';
-    html += '<div class="ped-summary"><strong>' + list.length + '</strong>pedidos — ' + label + '</div>';
+    html += '<div class="ped-summary"><strong>' + listCnt.total + '</strong>pedidos — ' + label + '</div>';
 
-    // Group by zone (Clubes, Red, etc.). Dentro de Red después se baja a vendedor.
+    // Group by zone (Clubes, Red, etc.).
     var zones = {};
     list.forEach(function(c) {
       var z = getZone(c);
@@ -1237,26 +1235,12 @@ function renderPedidos() {
     });
 
     Object.keys(zones).sort().forEach(function(z) {
-      var zList = zones[z];
-      var zDoneN;
-      if (z === 'Red') {
-        // Para Red, "done" es si el consolidado está armado (key RedVendedor|<name>)
-        // o todos los pedidos individuales lo están.
-        zDoneN = 0;
-        var byVtmp = {};
-        zList.forEach(function(c) { var v = c.vendedor || 'Marcos Bottcher'; byVtmp[v] = (byVtmp[v]||0)+1; });
-        Object.keys(byVtmp).forEach(function(vName) {
-          var ck = ('RedVendedor|' + vName).replace(/[^a-zA-Z0-9]/g, '_');
-          if (armadoChecked[ck]) zDoneN += byVtmp[vName];
-        });
-      } else {
-        zDoneN = doneCount(zList);
-      }
-      var zDone = zDoneN === zList.length;
+      var zCnt = countGruposArmados(zones[z]);
+      var zDone = zCnt.done === zCnt.total;
       html += '<div class="nav-card' + (zDone ? ' done-card' : '') + '" onclick="pedNav(\'zone:' + esc(z) + '\')">' +
         '<div class="nav-card-icon zone">&#x1F4CD;</div>' +
-        '<div class="nav-card-body"><div class="nav-card-title">' + z + '</div><div class="nav-card-sub">' + (zDone ? 'Armado &#x2713;' : zList.length + ' pedidos') + '</div></div>' +
-        '<span class="nav-card-count">' + zDoneN + '/' + zList.length + '</span><span class="nav-card-arrow">&#x203A;</span></div>';
+        '<div class="nav-card-body"><div class="nav-card-title">' + z + '</div><div class="nav-card-sub">' + (zDone ? 'Armado &#x2713;' : zCnt.total + ' pedidos') + '</div></div>' +
+        '<span class="nav-card-count">' + zCnt.done + '/' + zCnt.total + '</span><span class="nav-card-arrow">&#x203A;</span></div>';
     });
 
   } else if (pedLevel === 'zone:Red') {
@@ -1299,11 +1283,14 @@ function renderPedidos() {
     var firstCanal = filtered.length > 0 ? filtered[0].canal : '';
     var parent = VD_CANALES[firstCanal] ? 'vd' : VI_CANALES[firstCanal] ? 'vi' : 'dep';
 
-    html += '<div class="ped-back" onclick="pedNav(\'' + parent + '\')">&#x2190; Volver</div>';
-    html += '<div class="ped-summary"><strong>' + filtered.length + '</strong>pedidos — ' + zoneName + '</div>';
+    // Fusionar pedidos del mismo cliente+dir (ver countGruposArmados / mergeClientesMismoPedido)
+    var grupos = mergeClientesMismoPedido(filtered);
 
-    filtered.forEach(function(cli) {
-      html += renderClienteCard(cli);
+    html += '<div class="ped-back" onclick="pedNav(\'' + parent + '\')">&#x2190; Volver</div>';
+    html += '<div class="ped-summary"><strong>' + grupos.length + '</strong>pedidos — ' + zoneName + '</div>';
+
+    grupos.forEach(function(g) {
+      html += renderClienteCardMerged(g);
     });
   }
 
@@ -1389,6 +1376,136 @@ function toggleArmadoRedConsolidado(vName) {
     syncArmadoRuta(k, done);
   });
 
+  saveLocal();
+  renderPedidos();
+  if (navigator.vibrate) navigator.vibrate(30);
+}
+
+// Registry runtime de grupos fusionados (fusionKey -> memberKeys del armadoChecked)
+var pedidoGrupoReg = {};
+
+// Fusiona pedidos distintos del mismo cliente+dirección+canal (no Red).
+// Motivo: a veces el backend genera 2 OCs con N° Pedido distintos para lo que
+// en realidad es el mismo pedido físico. Mostramos UNA sola card.
+function mergeClientesMismoPedido(list) {
+  var groups = {};
+  var order = [];
+  list.forEach(function(cli) {
+    var fusionKey = ('fus|' + (cli.canal || '') + '|' + (cli.n || '') + '|' + (cli.dir || '')).replace(/[^a-zA-Z0-9|]/g, '_').substring(0, 160);
+    if (!groups[fusionKey]) {
+      groups[fusionKey] = {
+        fusionKey: fusionKey,
+        canal: cli.canal, n: cli.n, dir: cli.dir, tel: cli.tel,
+        peds: cli.ped ? [String(cli.ped)] : [],
+        items: cli.items ? cli.items.slice() : [],
+        _members: [cli]
+      };
+      order.push(fusionKey);
+    } else {
+      var g = groups[fusionKey];
+      if (cli.ped && g.peds.indexOf(String(cli.ped)) === -1) g.peds.push(String(cli.ped));
+      g._members.push(cli);
+      (cli.items || []).forEach(function(it) { g.items.push(it); });
+      // Si algún member tiene tel y el grupo no, tomarlo
+      if (!g.tel && cli.tel) g.tel = cli.tel;
+    }
+  });
+  // Sumar items iguales (mismo prod + est) dentro de cada grupo
+  Object.keys(groups).forEach(function(k) {
+    var byProd = {};
+    var orderP = [];
+    groups[k].items.forEach(function(it) {
+      var pk = (it.prod || '') + '||' + (it.est || '');
+      if (!byProd[pk]) { byProd[pk] = { prod: it.prod, q: 0, pv: 0, est: it.est || '' }; orderP.push(pk); }
+      byProd[pk].q += (it.q || 0);
+      byProd[pk].pv += (it.pv || 0);
+    });
+    groups[k].items = orderP.map(function(pk) { return byProd[pk]; });
+  });
+  return order.map(function(k) { return groups[k]; });
+}
+
+// Cuenta {total, done} de cards visibles para una lista: aplica fusión para
+// no-Red + 1 grupo por vendedor para Red.
+function countGruposArmados(list) {
+  var red = [], noRed = [];
+  list.forEach(function(c) { (c.canal === 'Red' ? red : noRed).push(c); });
+  var total = 0, done = 0;
+  // no Red: grupos fusionados
+  mergeClientesMismoPedido(noRed).forEach(function(g) {
+    total++;
+    var allDone = g._members.every(function(c) { return !!armadoChecked[cardKeyFor(c)]; });
+    if (allDone) done++;
+  });
+  // Red: 1 grupo por vendedor
+  var byV = {};
+  red.forEach(function(c) { var v = c.vendedor || 'Marcos Bottcher'; byV[v] = true; });
+  Object.keys(byV).forEach(function(vName) {
+    total++;
+    var ck = ('RedVendedor|' + vName).replace(/[^a-zA-Z0-9]/g, '_');
+    if (armadoChecked[ck]) done++;
+  });
+  return { total: total, done: done };
+}
+
+function renderClienteCardMerged(g) {
+  var memberKeys = g._members.map(function(c) { return cardKeyFor(c); });
+  pedidoGrupoReg[g.fusionKey] = memberKeys;
+  var isDone = memberKeys.length > 0 && memberKeys.every(function(k) { return !!armadoChecked[k]; });
+  var nomSeguro = esc(g.n || '');
+
+  var html = '<div class="cliente-card' + (isDone ? ' done-card' : '') + '">';
+  html += '<div class="cliente-head"><span class="cliente-name">' + (g.n || '') + '</span><span class="cliente-canal">' + (g.canal || '') + '</span></div>';
+  if (g.peds.length > 0) {
+    var pedsTxt = g.peds.length === 1 ? 'Pedido ' + g.peds[0] : 'Pedidos ' + g.peds.join(', ');
+    html += '<div class="cliente-ped">' + pedsTxt + (g.peds.length > 1 ? ' (' + g.peds.length + ' fusionados)' : '') + '</div>';
+  }
+  if (g.dir) html += '<div class="cliente-dir">' + g.dir + '</div>';
+
+  agruparItems(g.items).forEach(function(grp) {
+    html += '<div class="cat-header">' + grp[0] + '</div>';
+    grp[1].forEach(function(entry) {
+      var it = entry.raw;
+      var pendiente = (it.est === 'Pendiente' || it.est === 'Pedido');
+      html += '<div class="cliente-item' + (pendiente ? ' item-pendiente' : '') + '">' +
+        '<span class="cliente-item-qty">' + it.q + ' &times;</span>' +
+        '<span class="cliente-item-name">' + (entry.sabor || it.prod) + '</span>' +
+        (pendiente ? '<span style="font-size:10px;background:#FFF3E0;color:#e67e22;padding:2px 6px;border-radius:50px;font-weight:700">Pendiente</span>' : '') +
+        '</div>';
+    });
+  });
+
+  var showWA = !!g.tel;
+  html += '<div style="display:flex;gap:8px;margin-top:10px">';
+  html += '<button class="btn-pedido' + (isDone ? ' done' : '') + '" onclick="askArmadoGrupo(\'' + g.fusionKey + '\', ' + (isDone ? 'true' : 'false') + ', \'' + nomSeguro + '\')" style="flex:1;font-size:13px;padding:10px;display:flex;align-items:center;justify-content:center;min-height:44px">' + (isDone ? 'Armado &#x2713;' : 'Marcar armado') + '</button>';
+  if (showWA) {
+    var tel = g.tel.replace(/[^0-9+]/g, '');
+    if (tel.length < 12) tel = '54' + tel;
+    html += '<a href="https://wa.me/' + tel + '?text=' + encodeURIComponent('Holaa! Ya tenemos tu pedido separado, en un rato te aviso cuando estemos cerca!') + '" target="_blank" class="btn-call" style="flex:1;font-size:13px;padding:10px;display:flex;align-items:center;justify-content:center;min-height:44px;margin-top:0">Avisar por WhatsApp</a>';
+  }
+  html += '</div>';
+  html += '</div>';
+  return html;
+}
+
+function askArmadoGrupo(fusionKey, isDone, nombre) {
+  if (isDone) { toggleArmadoGrupo(fusionKey); return; }
+  var who = nombre ? ' de ' + nombre : '';
+  askConfirm('¿Estás seguro que ya armaste el pedido' + who + '?', function() {
+    toggleArmadoGrupo(fusionKey);
+  });
+}
+
+function toggleArmadoGrupo(fusionKey) {
+  var memberKeys = pedidoGrupoReg[fusionKey] || [];
+  if (memberKeys.length === 0) return;
+  var allDone = memberKeys.every(function(k) { return !!armadoChecked[k]; });
+  var done = !allDone; // si estaban todos armados, desarmamos; si no, armamos
+  memberKeys.forEach(function(k) {
+    if (done) armadoChecked[k] = true;
+    else delete armadoChecked[k];
+    syncArmadoRuta(k, done);
+  });
   saveLocal();
   renderPedidos();
   if (navigator.vibrate) navigator.vibrate(30);
