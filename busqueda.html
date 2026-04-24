@@ -1150,12 +1150,76 @@ function renderPedidos() {
     html += '<div class="ped-back" onclick="pedNav(\'' + parent + '\')">&#x2190; Volver</div>';
     html += '<div class="ped-summary"><strong>' + filtered.length + '</strong>pedidos — ' + zoneName + '</div>';
 
-    filtered.forEach(function(cli) {
-      html += renderClienteCard(cli);
-    });
+    if (zoneName === 'Red') {
+      html += renderRedConsolidadoCard(filtered);
+    } else {
+      filtered.forEach(function(cli) {
+        html += renderClienteCard(cli);
+      });
+    }
   }
 
   document.getElementById('pedidosList').innerHTML = html;
+}
+
+function renderRedConsolidadoCard(list) {
+  // Agrupa todos los pedidos de Red por vendedor y muestra productos sumados.
+  // Maleu arma UN solo consolidado; el vendedor subdivide después.
+  var byVendedor = {};
+  list.forEach(function(cli) {
+    var v = cli.vendedor || 'Red';
+    if (!byVendedor[v]) byVendedor[v] = { peds: [], prods: {} };
+    byVendedor[v].peds.push(cli);
+    cli.items.forEach(function(it) {
+      if (!byVendedor[v].prods[it.prod]) byVendedor[v].prods[it.prod] = { q: 0, pendiente: false };
+      byVendedor[v].prods[it.prod].q += it.q;
+      if (it.est === 'Pendiente' || it.est === 'Pedido') byVendedor[v].prods[it.prod].pendiente = true;
+    });
+  });
+
+  var html = '';
+  Object.keys(byVendedor).sort().forEach(function(vName) {
+    var data = byVendedor[vName];
+    var cardKey = ('RedVendedor|' + vName).replace(/[^a-zA-Z0-9]/g, '_');
+    var isDone = armadoChecked[cardKey];
+    html += '<div class="cliente-card' + (isDone ? ' done-card' : '') + '">';
+    html += '<div class="cliente-head"><span class="cliente-name">' + vName + '</span><span class="cliente-canal">Red</span></div>';
+    html += '<div class="cliente-ped">' + data.peds.length + ' pedidos consolidados</div>';
+
+    Object.keys(data.prods).sort().forEach(function(prod) {
+      var p = data.prods[prod];
+      html += '<div class="cliente-item' + (p.pendiente ? ' item-pendiente' : '') + '">' +
+        '<span class="cliente-item-qty">' + p.q + ' &times;</span>' +
+        '<span class="cliente-item-name">' + prod + '</span>' +
+        (p.pendiente ? '<span style="font-size:10px;background:#FFF3E0;color:#e67e22;padding:2px 6px;border-radius:50px;font-weight:700">Pendiente</span>' : '') +
+        '</div>';
+    });
+
+    html += '<button class="btn-pedido' + (isDone ? ' done' : '') + '" onclick="toggleArmadoRedConsolidado(\'' + esc(vName) + '\')" style="margin-top:10px">' + (isDone ? 'Armado &#x2713;' : 'Marcar armado') + '</button>';
+    html += '</div>';
+  });
+  return html;
+}
+
+function toggleArmadoRedConsolidado(vName) {
+  var cardKey = ('RedVendedor|' + vName).replace(/[^a-zA-Z0-9]/g, '_');
+  var done = !armadoChecked[cardKey];
+  if (armadoChecked[cardKey]) delete armadoChecked[cardKey];
+  else armadoChecked[cardKey] = true;
+
+  // Marcar todos los pedidos individuales del vendedor (para que Ruta los vea armados)
+  (busqueda.clientes || []).forEach(function(cli) {
+    if (cli.canal !== 'Red') return;
+    if ((cli.vendedor || 'Red') !== vName) return;
+    var k = (cli.canal + '|' + cli.ped).replace(/[^a-zA-Z0-9]/g, '_');
+    if (done) armadoChecked[k] = true;
+    else delete armadoChecked[k];
+    syncArmadoRuta(k, done);
+  });
+
+  saveLocal();
+  renderPedidos();
+  if (navigator.vibrate) navigator.vibrate(30);
 }
 
 function renderClienteCard(cli) {
@@ -1179,15 +1243,11 @@ function renderClienteCard(cli) {
   // Botón "Armado OK"
   html += '<button class="btn-pedido' + (isDone ? ' done' : '') + '" onclick="toggleArmadoCheck(\'' + cardKey + '\')" style="margin-top:10px">' + (isDone ? 'Armado &#x2713;' : 'Marcar armado') + '</button>';
 
-  // Botones WA
-  if (cli.tel) {
+  // Botón WA: solo avisar al cliente que su pedido está armado (Llegando/Estoy son de Ruta)
+  if (cli.tel && cli.canal !== 'Red') {
     var tel = cli.tel.replace(/[^0-9+]/g, '');
     if (tel.length < 12) tel = '54' + tel;
-    html += '<div style="display:flex;gap:6px;margin-top:8px">';
-    html += '<a href="https://wa.me/' + tel + '?text=' + encodeURIComponent('Hola! Ya tenemos tu pedido armado, en un rato lo entregamos!') + '" target="_blank" class="btn-call" style="flex:1;font-size:12px;padding:8px">Armado</a>';
-    html += '<a href="https://wa.me/' + tel + '?text=' + encodeURIComponent('Estamos llegando!') + '" target="_blank" class="btn-call" style="flex:1;font-size:12px;padding:8px;background:#F07D47">Llegando</a>';
-    html += '<a href="https://wa.me/' + tel + '?text=' + encodeURIComponent('Estoy afuera!') + '" target="_blank" class="btn-call" style="flex:1;font-size:12px;padding:8px;background:#331C1C">Estoy!</a>';
-    html += '</div>';
+    html += '<a href="https://wa.me/' + tel + '?text=' + encodeURIComponent('Hola! Ya tenemos tu pedido armado, en un rato lo entregamos!') + '" target="_blank" class="btn-call" style="display:block;margin-top:8px;font-size:12px;padding:8px;text-align:center">Avisar armado por WhatsApp</a>';
   }
 
   html += '</div>';
