@@ -262,6 +262,8 @@ function updatePilarVendedorLabel() {
   }
   if (text) { label.textContent = text; label.style.display = ''; }
   else { label.textContent = ''; label.style.display = 'none'; }
+  // Si ya eligió método de pago, re-evaluar visibilidad del alias maleump
+  if (typeof onPagoChange === 'function') onPagoChange();
 }
 
 /* ── ZONA ── */
@@ -1205,11 +1207,33 @@ function updateShippingBar() {
 // getShipping ya maneja FREE_SHIPPING_MIN internamente
 
 /* ── MERCADO PAGO ALIAS ── */
+// El alias maleump es de Maleu central. Si el barrio (Pilar) tiene vendedor Red
+// asignado (ej: Marcos Bottcher en El Lucero/Los Tacos), el cobro va al vendedor
+// y el alias de Maleu no aplica — el vendedor le pasa el suyo al confirmar.
+function _barrioPilarTieneVendedor() {
+  if (currentZone !== 'pilar') return null;
+  var sel = $id('f-pilar-barrio');
+  if (!sel) return null;
+  var val = sel.value;
+  if (!val || val === '__otro__') return null;
+  return barrioToVendedor[val.toLowerCase()] || null;
+}
 function onPagoChange() {
   const sel = document.querySelector('input[name="pago"]:checked');
   const alias = $id('mp-alias');
-  if (sel && sel.value === 'Transferencia') { alias.classList.remove('hidden'); }
+  const aliasNote = $id('mp-alias-vendedor-note');
+  const esTransfer = sel && sel.value === 'Transferencia';
+  const vendedor = _barrioPilarTieneVendedor();
+  if (esTransfer && !vendedor) { alias.classList.remove('hidden'); }
   else { alias.classList.add('hidden'); }
+  if (aliasNote) {
+    if (esTransfer && vendedor) {
+      aliasNote.textContent = vendedor.nombre + ' te va a pasar el alias al confirmar tu pedido.';
+      aliasNote.classList.remove('hidden');
+    } else {
+      aliasNote.classList.add('hidden');
+    }
+  }
   // Hint de descuento: mostrar solo cuando NO eligió efectivo
   updatePagoHint();
   updateUI();
