@@ -17,8 +17,12 @@
 <style>
 *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent;touch-action:manipulation}
 :root{--brown:#331C1C;--orange:#F07D47;--beige:#F2E8C7;--bg:#F5F2EB;--white:#fff;--muted:#7A4A4A;--border:#E8DFC4;--green:#3d8b3d;--green-light:#e8f5e8;--sat:env(safe-area-inset-top);--sab:env(safe-area-inset-bottom)}
-html,body{background:#2a1717}
+html,body{background:#2a1717;overscroll-behavior-y:contain}
 body{font-family:'Montserrat',system-ui,-apple-system,sans-serif;color:var(--brown);overflow-x:hidden;min-height:100dvh;max-width:480px;margin:0 auto;background:var(--bg);box-shadow:0 0 40px rgba(0,0,0,.18);font-size:15px}
+/* ── PULL TO REFRESH INDICATOR ── */
+.ptr-indicator{position:fixed;top:0;left:50%;width:56px;height:56px;display:flex;align-items:center;justify-content:center;background:#331C1C;border-radius:50%;z-index:200;box-shadow:0 4px 14px rgba(0,0,0,.3);pointer-events:none;opacity:0;transform:translate(-50%,-100%)}
+.ptr-indicator img{width:34px;height:34px;border-radius:8px}
+.ptr-indicator.snap{transition:transform .25s ease,opacity .25s ease}
 /* En desktop: simular pantalla iPhone centrada */
 @media (min-width:600px){body{min-height:100vh}}
 /* Footer fijo y toast se anclan al ancho del body, no del viewport */
@@ -215,7 +219,7 @@ select.np-input{background:var(--white) url("data:image/svg+xml;utf8,<svg xmlns=
   <span id="lastSync" style="font-size:9px;opacity:.6"></span>
   <div class="status-dot" id="statusDot"></div>
   <span class="badge" id="counterBadge">--</span>
-  <button class="btn-refresh" id="btnRefresh" onclick="refresh()">&#x21bb;</button>
+  <button class="btn-refresh" id="btnRefresh" onclick="manualRefresh()">&#x21bb;</button>
 </div>
 
 <div class="sync-banner" id="syncBanner">Entregas pendientes de sincronizar</div>
@@ -398,6 +402,8 @@ select.np-input{background:var(--white) url("data:image/svg+xml;utf8,<svg xmlns=
 <div class="toast" id="toast"></div>
 
 <!-- LOADING OVERLAY -->
+<div class="ptr-indicator" id="ptrIndicator"><img src="/img/logo-icono.png" alt=""></div>
+
 <div class="loader-overlay" id="loaderOverlay">
   <div class="loader-box">
     <div class="loader-logo-wrap">
@@ -406,7 +412,7 @@ select.np-input{background:var(--white) url("data:image/svg+xml;utf8,<svg xmlns=
     </div>
     <div>
       <div class="loader-msg" id="loaderMsg">Guardando...</div>
-      <div class="loader-sub">No cierres ni toques nada, estamos actualizando el Sheets</div>
+      <div class="loader-sub" id="loaderSub">No cierres ni toques nada, estamos actualizando el Sheets</div>
     </div>
   </div>
 </div>
@@ -517,8 +523,10 @@ var npCart={}, npZona='Home', npPago='Efectivo', npFechaSel='', npSaving=false;
 
 /* ── LOADING OVERLAY ── */
 var loaderCount=0;
-function showLoader(msg){loaderCount++;var el=document.getElementById('loaderOverlay');if(msg)document.getElementById('loaderMsg').textContent=msg;if(el)el.classList.add('visible')}
+var LOADER_DEFAULT_SUB='No cierres ni toques nada, estamos actualizando el Sheets';
+function showLoader(msg,sub){loaderCount++;var el=document.getElementById('loaderOverlay');if(msg)document.getElementById('loaderMsg').textContent=msg;var subEl=document.getElementById('loaderSub');if(subEl)subEl.textContent=sub||LOADER_DEFAULT_SUB;if(el)el.classList.add('visible')}
 function hideLoader(force){if(force)loaderCount=0;else loaderCount=Math.max(0,loaderCount-1);if(loaderCount===0){var el=document.getElementById('loaderOverlay');if(el)el.classList.remove('visible')}}
+function isLoaderVisible(){var el=document.getElementById('loaderOverlay');return !!(el&&el.classList.contains('visible'))}
 
 /* ── STATE ── */
 // STORAGE_VERSION: bumpear cuando cambia el formato de eKey() para forzar limpieza
@@ -544,16 +552,69 @@ document.addEventListener('visibilitychange',function(){if(!document.hidden&&isO
 window.addEventListener('focus',function(){if(isOnline)refresh(true)});
 if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw-ruta.js').catch(function(){})}
 
+/* ── PULL TO REFRESH custom ── */
+(function(){
+  var startY=0, lastY=0, pulling=false, ready=false;
+  var THRESHOLD=80, MAX_PULL=140, RESISTANCE=0.55;
+  function ind(){return document.getElementById('ptrIndicator')}
+  function reset(animated){
+    var el=ind();if(!el)return;
+    if(animated)el.classList.add('snap');else el.classList.remove('snap');
+    el.style.transform='translate(-50%,-100%)';
+    el.style.opacity='0';
+    if(animated)setTimeout(function(){el.classList.remove('snap')},260);
+  }
+  document.addEventListener('touchstart',function(ev){
+    if(window.scrollY>0)return;
+    if(isLoaderVisible())return;
+    if(ev.touches.length!==1)return;
+    startY=lastY=ev.touches[0].clientY;
+    pulling=true;ready=false;
+    var el=ind();if(el)el.classList.remove('snap');
+  },{passive:true});
+  document.addEventListener('touchmove',function(ev){
+    if(!pulling)return;
+    if(window.scrollY>0){pulling=false;reset(true);return;}
+    var y=ev.touches[0].clientY;lastY=y;
+    var diff=y-startY;
+    if(diff<=0){reset(false);return;}
+    var pull=Math.min(diff*RESISTANCE,MAX_PULL);
+    ready=pull>=THRESHOLD;
+    var el=ind();if(el){
+      el.style.transform='translate(-50%,'+(pull-56)+'px) rotate('+Math.min(pull*4,360)+'deg)';
+      el.style.opacity=Math.min(1,pull/THRESHOLD).toFixed(2);
+    }
+    if(ev.cancelable)ev.preventDefault();
+  },{passive:false});
+  function endHandler(){
+    if(!pulling)return;
+    pulling=false;
+    reset(true);
+    if(ready){ready=false;manualRefresh();}
+  }
+  document.addEventListener('touchend',endHandler,{passive:true});
+  document.addEventListener('touchcancel',endHandler,{passive:true});
+})();
+
 /* ── UTILS ── */
 function updateOnlineStatus(){document.getElementById('statusDot').className='status-dot '+(isOnline?'online':'offline')}
 function updateLastSync(){var n=new Date();document.getElementById('lastSync').textContent=n.getHours()+':'+String(n.getMinutes()).padStart(2,'0');localStorage.setItem('maleu_ruta_sync',n.getTime())}
 function saveLocal(){try{localStorage.setItem('maleu_ruta',JSON.stringify({_v:STORAGE_VERSION,entregas:entregas,entregados:entregados,cobrados:cobrados,propinas:propinas,syncQueue:syncQueue,armadoDone:armadoDone,pendientesCobro:pendientesCobro,currentTab:currentTab,rutaIndex:rutaIndex,ts:Date.now()}))}catch(e){}}
 function loadLocal(){try{var d=JSON.parse(localStorage.getItem('maleu_ruta')||'{}');if(d._v!==STORAGE_VERSION){d.entregados={};d.cobrados={};d.propinas={};d.armadoDone={};d.syncQueue=[]}if(d.entregas)entregas=d.entregas;if(d.entregados)entregados=d.entregados;if(d.cobrados)cobrados=d.cobrados;if(d.propinas)propinas=d.propinas;if(d.syncQueue)syncQueue=d.syncQueue;if(d.armadoDone)armadoDone=d.armadoDone;if(d.pendientesCobro)pendientesCobro=d.pendientesCobro;if(d.currentTab)currentTab=d.currentTab;if(d.rutaIndex!==undefined)rutaIndex=d.rutaIndex}catch(e){}}
 
+function manualRefresh(){
+  if(isLoaderVisible())return;
+  if(!isOnline){showToast('Sin conexion');return;}
+  showLoader('Actualizando...','Buscando pedidos nuevos del Sheets');
+  var p=refresh();
+  if(p&&typeof p.finally==='function'){p.finally(function(){hideLoader()});}
+  else if(p&&typeof p.then==='function'){p.then(function(){hideLoader()},function(){hideLoader()});}
+  else {setTimeout(function(){hideLoader()},5000);}
+}
 function refresh(silent){
   if(!silent)document.getElementById('loadingView').classList.remove('hidden');
   var btn=document.getElementById('btnRefresh');btn.classList.add('spinning');
-  fetch(APPS_SCRIPT_URL+'?action=entregas&t='+Date.now()).then(function(r){return r.json()}).then(function(data){
+  return fetch(APPS_SCRIPT_URL+'?action=entregas&t='+Date.now()).then(function(r){return r.json()}).then(function(data){
     btn.classList.remove('spinning');var se=data.e||[];var prev=getPendientes().length;entregas=se;
     var sk={};entregas.forEach(function(e){sk[eKey(e)]=true});
     Object.keys(entregados).forEach(function(k){if(!sk[k])delete entregados[k]});
