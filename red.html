@@ -376,6 +376,21 @@
     .pagos-sem-label { font-size: .85rem; font-weight: 800; color: #1a1a1a; }
     .pagos-sem-total { font-size: 1rem; font-weight: 800; color: #c62828; }
     .pagos-sem-total.done { color: #2e7d32; }
+    .pagos-hist { margin-top: 1.4rem; }
+    .pagos-hist-toggle { width: 100%; background: #fff; border: 1px solid #e8e8e8; border-radius: 12px; padding: .8rem 1rem; display: flex; justify-content: space-between; align-items: center; font-size: .82rem; font-weight: 800; color: #555; cursor: pointer; }
+    .pagos-hist-toggle:hover { background: #fafafa; }
+    .pagos-hist-toggle .chev { transition: transform .2s; }
+    .pagos-hist-toggle.open .chev { transform: rotate(90deg); }
+    .pagos-hist-body { margin-top: .6rem; display: none; }
+    .pagos-hist-body.open { display: block; }
+    .pagos-hist-card { background: #fff; border-radius: 12px; padding: .85rem 1rem; margin-bottom: .55rem; box-shadow: 0 1px 4px rgba(0,0,0,.05); border-left: 3px solid #2e7d32; }
+    .pagos-hist-card .ph-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: .35rem; }
+    .pagos-hist-card .ph-sem { font-size: .82rem; font-weight: 800; color: #1a1a1a; }
+    .pagos-hist-card .ph-sem .ph-rango { font-size: .7rem; font-weight: 600; color: #888; margin-left: .3rem; }
+    .pagos-hist-card .ph-tot { font-size: .9rem; font-weight: 800; color: #2e7d32; }
+    .pagos-hist-card .ph-grid { display: grid; grid-template-columns: 1fr 1fr; gap: .3rem .8rem; font-size: .72rem; color: #666; }
+    .pagos-hist-card .ph-grid b { color: #333; font-weight: 800; }
+    .pagos-hist-card .ph-pago { font-size: .7rem; color: #2e7d32; margin-top: .35rem; padding-top: .35rem; border-top: 1px dashed #e8e8e8; }
 
     .pago-row { display: flex; justify-content: space-between; align-items: center; padding: .6rem 0; border-bottom: 1px solid #fafafa; gap: .5rem; cursor: pointer; }
     .pago-row:last-child { border-bottom: none; }
@@ -2066,6 +2081,8 @@ function renderPagos() {
 
   const fmtDM = d => String(d.getDate()).padStart(2,'0') + '/' + String(d.getMonth()+1).padStart(2,'0');
 
+  const semanasCerradas = []; // 100% saldadas → al historial
+
   semanas.forEach(g => {
     const peds = g.pedidos;
     const cobrados = peds.filter(p => p.ep === 'Cobrado');
@@ -2077,8 +2094,13 @@ function renderPagos() {
     const aPagarSinCobrar = sinCobrar.reduce((s, p) => s + (Number(p.aPg) || 0), 0);
     const totalFacturado = peds.reduce((s, p) => s + (Number(p.$) || 0), 0);
 
-    // Ocultar semanas 100% saldadas (sin pendientes, sin sin-cobrar) — sólo mostrar activas
-    if (pendientes.length === 0 && sinCobrar.length === 0) return;
+    // Semanas 100% saldadas (sin pendientes, sin sin-cobrar) → guardarlas para el historial
+    if (pendientes.length === 0 && sinCobrar.length === 0) {
+      if (cobrados.length > 0) {
+        semanasCerradas.push({ g, peds, cobrados, pagados, aPagarDone, totalFacturado });
+      }
+      return;
+    }
 
     const dates = _isoWeekDates(g.y, g.sem);
     const rango = fmtDM(dates.mon) + ' al ' + fmtDM(dates.dom);
@@ -2138,6 +2160,62 @@ function renderPagos() {
 
     html += '</div>';
   });
+
+  // Historial de semanas pagadas (acordeón colapsable)
+  if (semanasCerradas.length > 0) {
+    let totalPagadoHist = 0;
+    let totalFacturadoHist = 0;
+    let totalComisionHist = 0;
+    semanasCerradas.forEach(sc => {
+      const k = sc.g.y + '-' + String(sc.g.sem).padStart(2, '0');
+      const liq = liqIdx[k] || { total: 0 };
+      totalPagadoHist += liq.total || sc.aPagarDone;
+      totalFacturadoHist += sc.totalFacturado;
+      totalComisionHist += (sc.totalFacturado - sc.aPagarDone);
+    });
+
+    html += '<div class="pagos-hist">';
+    html += '<button class="pagos-hist-toggle" onclick="this.classList.toggle(\'open\');this.nextElementSibling.classList.toggle(\'open\')">' +
+              '<span>📚 Historial de semanas pagadas (' + semanasCerradas.length + ') · ' + ars(totalPagadoHist) + '</span>' +
+              '<span class="chev">›</span>' +
+            '</button>';
+    html += '<div class="pagos-hist-body">';
+
+    semanasCerradas.forEach(sc => {
+      const k = sc.g.y + '-' + String(sc.g.sem).padStart(2, '0');
+      const liq = liqIdx[k] || { ef: 0, tr: 0, total: 0, pagos: [] };
+      const dates = _isoWeekDates(sc.g.y, sc.g.sem);
+      const rango = fmtDM(dates.mon) + ' al ' + fmtDM(dates.dom);
+      const pagadoTotal = liq.total || sc.aPagarDone;
+      const comision = sc.totalFacturado - sc.aPagarDone;
+      const fechaPago = (liq.pagos && liq.pagos[liq.pagos.length - 1] && liq.pagos[liq.pagos.length - 1].f) || '';
+
+      html += '<div class="pagos-hist-card">';
+      html += '<div class="ph-head">' +
+                '<div class="ph-sem">Semana ' + sc.g.sem + ' <span class="ph-rango">' + rango + '</span></div>' +
+                '<div class="ph-tot">' + ars(pagadoTotal) + '</div>' +
+              '</div>';
+      html += '<div class="ph-grid">' +
+                '<div>' + sc.peds.length + (sc.peds.length === 1 ? ' pedido' : ' pedidos') + '</div>' +
+                '<div style="text-align:right">Facturado <b>' + ars(sc.totalFacturado) + '</b></div>' +
+                '<div>A Maleu <b>' + ars(sc.aPagarDone) + '</b></div>' +
+                '<div style="text-align:right">Tu comisión <b>' + ars(comision) + '</b></div>' +
+              '</div>';
+      if (liq.total > 0) {
+        const partes = [];
+        if (liq.ef > 0) partes.push(ars(liq.ef) + ' EF');
+        if (liq.tr > 0) partes.push(ars(liq.tr) + ' TR');
+        html += '<div class="ph-pago">✓ Pagado: ' + partes.join(' + ') +
+                (liq.pagos && liq.pagos.length > 1 ? ' · en ' + liq.pagos.length + ' pagos' : '') +
+                (fechaPago ? ' · ' + fechaPago : '') + '</div>';
+      } else {
+        html += '<div class="ph-pago">✓ Saldada (sin registro de liquidación parcial)</div>';
+      }
+      html += '</div>';
+    });
+
+    html += '</div></div>';
+  }
 
   if (semanas.length === 0) {
     html += '<div class="empty" style="padding:2rem;text-align:center;color:#888">Sin pedidos registrados todavía</div>';
