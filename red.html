@@ -1239,8 +1239,9 @@ function filtrarClientes(q) {
 function updateMainBadges() {
   if (!lastDashboardData) return;
   const peds = lastDashboardData.pedidos || [];
-  // Ruta: pedidos del viernes, no cancelados, que aún están sin entregar O sin cobrar
-  const pendRuta = peds.filter(p => p.vi && p.es !== 'Cancelado' && (p.es !== 'Entregado' || p.ep !== 'Cobrado')).length;
+  // Ruta: cualquier pedido abierto (entregar o cobrar pendiente) — no se filtra por viernes
+  // para que los deudores de semanas anteriores no desaparezcan al cambiar de semana.
+  const pendRuta = peds.filter(_rutaAbierto).length;
   const bR = $id('badge-ruta');
   if (pendRuta > 0) { bR.classList.remove('hidden'); bR.textContent = pendRuta; }
   else bR.classList.add('hidden');
@@ -1266,14 +1267,24 @@ function updateMainBadges() {
 }
 
 /* ═══════ VISTA RUTA (entregas paso a paso) ═══════ */
-// Lista visible: pedidos del viernes que siguen abiertos — falta entregar O falta cobrar.
+// Lista visible: pedidos abiertos (falta entregar O falta cobrar al cliente).
+// Incluye los del viernes actual + cualquier entregado-sin-cobrar de semanas
+// anteriores, para que al cambiar de semana NO desaparezcan los deudores.
 // Un pedido recién desaparece cuando está Entregado Y Cobrado (o Cancelado).
+function _rutaAbierto(p) {
+  if (!p || p.es === 'Cancelado') return false;
+  return p.es !== 'Entregado' || p.ep !== 'Cobrado';
+}
 function _rutaList() {
   if (!lastDashboardData) return [];
   return (lastDashboardData.pedidos || [])
-    .filter(p => p.vi && p.es !== 'Cancelado' && (p.es !== 'Entregado' || p.ep !== 'Cobrado'))
+    .filter(_rutaAbierto)
     .sort((a, b) => {
-      // Los entregados pero pendientes de cobro van al final
+      // Prioridad: viernes actual primero, luego pendientes viejos
+      const aVi = a.vi ? 0 : 1;
+      const bVi = b.vi ? 0 : 1;
+      if (aVi !== bVi) return aVi - bVi;
+      // Dentro de cada grupo: entregados-sin-cobrar al final
       const aDone = a.es === 'Entregado' ? 1 : 0;
       const bDone = b.es === 'Entregado' ? 1 : 0;
       if (aDone !== bDone) return aDone - bDone;
@@ -1282,14 +1293,26 @@ function _rutaList() {
       return (Number(a.l) || 0) - (Number(b.l) || 0);
     });
 }
-// Totales del viernes para el progress (entregados y cobrados por separado).
+// Totales para el progress.
+//   - Si hay viernes actual → mide sobre los pedidos del viernes (entregados/cobrados de la jornada).
+//   - Si no hay viernes pero quedan pendientes de semanas previas → mide sobre esos.
 function _rutaTotalViernes() {
   if (!lastDashboardData) return { total: 0, entregados: 0, cobrados: 0 };
-  const all = (lastDashboardData.pedidos || []).filter(p => p.vi && p.es !== 'Cancelado');
+  const peds = lastDashboardData.pedidos || [];
+  const viActuales = peds.filter(p => p.vi && p.es !== 'Cancelado');
+  if (viActuales.length > 0) {
+    return {
+      total: viActuales.length,
+      entregados: viActuales.filter(p => p.es === 'Entregado').length,
+      cobrados:   viActuales.filter(p => p.es === 'Entregado' && p.ep === 'Cobrado').length
+    };
+  }
+  // Sin viernes actual: contabilizar abiertos (falta entregar o cobrar) de semanas pasadas.
+  const abiertos = peds.filter(_rutaAbierto);
   return {
-    total: all.length,
-    entregados: all.filter(p => p.es === 'Entregado').length,
-    cobrados:   all.filter(p => p.es === 'Entregado' && p.ep === 'Cobrado').length
+    total: abiertos.length,
+    entregados: abiertos.filter(p => p.es === 'Entregado').length,
+    cobrados:   abiertos.filter(p => p.es === 'Entregado' && p.ep === 'Cobrado').length
   };
 }
 
