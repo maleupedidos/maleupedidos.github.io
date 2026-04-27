@@ -444,8 +444,10 @@ body{font-family:-apple-system,'Segoe UI',system-ui,sans-serif;background:var(--
   <div class="bn" data-p="caja" onclick="go('caja')"><i>&#128176;</i>Caja</div>
   <div class="bn" data-p="stock" onclick="go('stock')"><i>&#128230;</i>Stock</div>
   <div class="bn" data-p="pedidos" onclick="go('pedidos')"><i>&#128203;</i>Pedidos</div>
-  <div class="bn" data-p="resumen" onclick="go('resumen')"><i>&#128202;</i>Resumen</div>
 </nav>
+
+<!-- Contenedor off-screen para renderizar el resumen al generar PDF desde Inicio -->
+<div id="rsHiddenWrap" style="position:absolute;left:-99999px;top:0;width:800px"></div>
 
 <div class="toast" id="toast"></div>
 
@@ -1029,7 +1031,9 @@ function rInicio(){
       cbHtml+='<div style="font-weight:800;font-size:14px;margin-top:1px;color:'+(d.mg>=0?'var(--gd)':'var(--r)')+'">$'+f$(d.mg)+'</div>';
       if(d.pend>0)cbHtml+='<div style="font-size:11px;color:#E65100;font-weight:700;margin-top:6px">+$'+f$(d.pend)+' por cobrar</div>';
       cbHtml+='</div>';
-      cbHtml+='<div id="sem-body-'+s+'" class="hidden" style="padding:0 10px 10px">'+renderDiasList(d.dias,false)+'</div>';
+      cbHtml+='<div id="sem-body-'+s+'" class="hidden" style="padding:0 10px 10px">'+renderDiasList(d.dias,false);
+      cbHtml+='<button onclick="event.stopPropagation();descargarPDFSemana('+s+','+semActual+')" style="display:block;width:100%;margin-top:8px;padding:11px;background:var(--o);color:#fff;border:none;border-radius:10px;font-size:13px;font-weight:800;cursor:pointer">&#128229; Descargar PDF Semana '+s+'</button>';
+      cbHtml+='</div>';
       cbHtml+='</div>';
     });
     cbHtml+='</div>';
@@ -1720,22 +1724,32 @@ if('serviceWorker' in navigator)navigator.serviceWorker.register('/sw-panel.js')
     var v=d.ventas, fi=d.finanzas, cl=d.clientes, pr=d.productos, cp=d.comparativa, mt=d.meta;
     var resultadoCls=fi.resultadoNeto>=0?'pos':'neg';
     var resultadoSign=fi.resultadoNeto>=0?'+':'';
-    var headline='<b>'+v.pedidos+' pedidos</b> · facturado <b>'+fmt$(v.facturado)+'</b> · resultado <b>'+resultadoSign+fmt$(fi.resultadoNeto)+'</b>';
+    var pedVD=(v.pedidosVD!=null?v.pedidosVD:v.pedidos);
+    var entVD=(v.entregadosVD!=null?v.entregadosVD:v.entregados);
+    var pendVD=(v.pendientesVD!=null?v.pendientesVD:0);
+    var cancVD=(v.canceladosVD!=null?v.canceladosVD:0);
+    var headline='<b>'+pedVD+' pedidos VD</b> · facturado <b>'+fmt$(v.facturado)+'</b> · resultado <b>'+resultadoSign+fmt$(fi.resultadoNeto)+'</b>';
 
-    // KPIs principales
+    // KPIs principales — Pedidos: solo VD (Home + Pilar + Clubes), Red queda fuera
+    var pedSubParts=[entVD+' entregados'];
+    if(pendVD>0)pedSubParts.push(pendVD+' próx. semana');
+    if(cancVD>0)pedSubParts.push(cancVD+' cancelados');
     var kpis=''+
-      kpiCard('Pedidos', v.pedidos, v.entregados+' entregados') +
+      kpiCard('Pedidos VD', pedVD, pedSubParts.join(' · ')) +
       kpiCard('Facturado', fmt$(v.facturado), 'Ticket prom '+fmt$(v.ticketProm)) +
       kpiCard('Cobrado', fmt$(v.cobrado), v.sinCobrar?fmt$(v.sinCobrar)+' sin cobrar':'todo cobrado') +
       kpiCard('Clientes únicos', cl.unicos, cl.nuevosCount+' caras nuevas');
 
-    // Por canal (barras)
+    // Por canal (barras): muestra entregados vs total, agrega pendientes/cancelados si los hay
     var maxFact=Math.max.apply(null,v.porCanal.map(function(c){return c.facturado;}).concat([1]));
     var canalBars=v.porCanal.map(function(c){
       var w=Math.round((c.facturado/maxFact)*100);
+      var detalle=(c.entregados||0)+'/'+c.pedidos+' entreg.';
+      if(c.pendientes)detalle+=' · '+c.pendientes+' pend.';
+      if(c.cancelados)detalle+=' · '+c.cancelados+' canc.';
       return '<div class="rs-bar-row"><div class="rs-bar-lbl">'+c.canal+'</div>'+
         '<div class="rs-bar-track"><div class="rs-bar-fill" style="width:'+w+'%"></div></div>'+
-        '<div class="rs-bar-val">'+c.pedidos+' · '+fmt$(c.facturado)+'</div></div>';
+        '<div class="rs-bar-val">'+c.pedidos+' · '+fmt$(c.facturado)+'<div style="font-size:10px;color:#7A4A4A;font-weight:600">'+detalle+'</div></div></div>';
     }).join('');
 
     // Resultado financiero
@@ -1748,10 +1762,28 @@ if('serviceWorker' in navigator)navigator.serviceWorker.register('/sw-panel.js')
       (ingResta>0?plRow('Ingresos no-venta (rendimientos, liq. Red)', '+'+fmt$(ingResta)):'') +
       '<div class="rs-pl-row total '+resultadoCls+'"><span>Resultado neto</span><span>'+resultadoSign+fmt$(fi.resultadoNeto)+'</span></div>';
 
-    // Gastos por categoría
+    // Gastos por categoría (resumen)
     var gastosCat=fi.gastos.porCategoria.length?
       '<table class="rs-tbl"><thead><tr><th>Categoría</th><th class="num">Monto</th></tr></thead><tbody>'+
         fi.gastos.porCategoria.map(function(g){return '<tr><td>'+g.categoria+'</td><td class="num">'+fmt$(g.monto)+'</td></tr>';}).join('')+
+      '</tbody></table>':'';
+
+    // Gastos detallados (uno por uno)
+    var gastosDet=(fi.gastos.detalle&&fi.gastos.detalle.length)?
+      '<table class="rs-tbl"><thead><tr><th>Fecha</th><th>Categoría</th><th>Concepto</th><th>Método</th><th class="num">Monto</th></tr></thead><tbody>'+
+        fi.gastos.detalle.map(function(g){return '<tr><td>'+g.fecha+'</td><td>'+escapeH(g.categoria)+'</td><td>'+escapeH(g.concepto||'')+(g.notas?' <span style="color:#7A4A4A">('+escapeH(g.notas)+')</span>':'')+'</td><td>'+escapeH(g.metodo||'')+'</td><td class="num">'+fmt$(g.monto)+'</td></tr>';}).join('')+
+      '</tbody></table>':'';
+
+    // Ingresos no-venta detallados
+    var ingresosDet=(fi.ingresosNoVenta&&fi.ingresosNoVenta.detalle&&fi.ingresosNoVenta.detalle.length)?
+      '<table class="rs-tbl"><thead><tr><th>Fecha</th><th>Categoría</th><th>Concepto</th><th>Método</th><th class="num">Monto</th></tr></thead><tbody>'+
+        fi.ingresosNoVenta.detalle.map(function(g){return '<tr><td>'+g.fecha+'</td><td>'+escapeH(g.categoria)+'</td><td>'+escapeH(g.concepto||'')+(g.notas?' <span style="color:#7A4A4A">('+escapeH(g.notas)+')</span>':'')+'</td><td>'+escapeH(g.metodo||'')+'</td><td class="num">'+fmt$(g.monto)+'</td></tr>';}).join('')+
+      '</tbody></table>':'';
+
+    // Pendientes de cobro (quién y cuánto debe)
+    var pendCobro=(fi.cobranza&&fi.cobranza.pendientes&&fi.cobranza.pendientes.length)?
+      '<table class="rs-tbl"><thead><tr><th>Cliente</th><th>Canal</th><th>Fecha</th><th>Estado</th><th class="num">Monto</th></tr></thead><tbody>'+
+        fi.cobranza.pendientes.map(function(p){return '<tr><td>'+escapeH(p.cliente)+'</td><td>'+escapeH(p.canal)+'</td><td>'+p.fecha+'</td><td>'+escapeH(p.estado)+'</td><td class="num">'+fmt$(p.monto)+'</td></tr>';}).join('')+
       '</tbody></table>':'';
 
     // Cobranza
@@ -1805,9 +1837,9 @@ if('serviceWorker' in navigator)navigator.serviceWorker.register('/sw-panel.js')
       '<div style="display:flex;justify-content:space-between;align-items:baseline;font-size:13px"><b>'+mt.alcanzado+' / '+mt.objetivo+'</b><span style="color:#7A4A4A;font-size:11px">'+mt.detalle+'</span></div>'+
       '<div class="rs-meta-bar"><div class="rs-meta-fill '+metaCls+'" style="width:'+metaPct+'%"></div></div>';
 
-    // Mejor día
+    // Mejor día (con nombre del día)
     var mejorDia=v.mejorDia?
-      '<div style="font-size:12px;color:#7A4A4A;margin-top:6px">Mejor día: <b style="color:#331C1C">'+formatFecha(v.mejorDia.fecha)+'</b> con '+v.mejorDia.pedidos+' pedidos · '+fmt$(v.mejorDia.facturado)+'</div>':'';
+      '<div style="font-size:12px;color:#7A4A4A;margin-top:6px">Mejor día: <b style="color:#331C1C">'+(v.mejorDia.diaNombre?v.mejorDia.diaNombre+' ':'')+formatFecha(v.mejorDia.fecha)+'</b> con '+v.mejorDia.pedidos+' pedidos · '+fmt$(v.mejorDia.facturado)+'</div>':'';
 
     return ''+
       '<div class="rs-doc" id="rsDoc">'+
@@ -1821,9 +1853,11 @@ if('serviceWorker' in navigator)navigator.serviceWorker.register('/sw-panel.js')
         section('Foto general', '<div class="rs-kpis">'+kpis+'</div>')+
         section('Ventas por canal', canalBars+mejorDia)+
         section('Resultado financiero', '<div class="rs-pl">'+pl+'</div>'+(gastosCat?'<div style="margin-top:14px"><div class="rs-h" style="font-size:10px">Gastos por categoría</div>'+gastosCat+'</div>':''))+
-        section('Cobranza', cobranza)+
+        (gastosDet?section('Detalle de gastos', gastosDet):'')+
+        (ingresosDet?section('Detalle de ingresos no-venta', ingresosDet):'')+
+        section('Cobranza', cobranza+(pendCobro?'<div style="margin-top:14px"><div class="rs-h" style="font-size:10px">Pendientes de cobro</div>'+pendCobro+'</div>':''))+
         section('Caras nuevas '+(cl.nuevosCount?'('+cl.nuevosCount+')':''), nuevos)+
-        (topCli?section('Top 5 clientes de la semana', topCli):'')+
+        (topCli?section('Top 5 clientes de la semana (sin Red)', topCli):'')+
         (topProd?section('Productos más vendidos', topProd):'')+
         section('Stock al cierre', stock)+
         section('Comparativa vs semana anterior', comp)+
@@ -1843,21 +1877,14 @@ if('serviceWorker' in navigator)navigator.serviceWorker.register('/sw-panel.js')
   }
 
   // ───────── PDF ─────────
-  window.downloadResumenPDF=function(){
-    if(!RS_DATA){toast('Esperá que cargue el resumen');return;}
-    var doc=$('rsDoc');
-    if(!doc){toast('No hay resumen para exportar');return;}
-    var btn=$('rsPdfBtn');
-    btn.disabled=true; btn.innerHTML='Generando…';
-    // Snapshot a alta resolución
-    html2canvas(doc, { scale: 2, useCORS: true, backgroundColor: '#ffffff', windowWidth: 800 }).then(function(canvas){
+  function _generarPDFFromDoc(doc, dataResumen){
+    return html2canvas(doc, { scale: 2, useCORS: true, backgroundColor: '#ffffff', windowWidth: 800 }).then(function(canvas){
       var img=canvas.toDataURL('image/jpeg',0.92);
       var jp=window.jspdf.jsPDF;
       var pdf=new jp({orientation:'portrait',unit:'mm',format:'a4'});
       var pageW=210, pageH=297, margin=8;
       var imgW=pageW-margin*2;
       var imgH=(canvas.height*imgW)/canvas.width;
-      // Si supera una página, lo partimos
       if(imgH<=pageH-margin*2){
         pdf.addImage(img,'JPEG',margin,margin,imgW,imgH);
       } else {
@@ -1878,13 +1905,57 @@ if('serviceWorker' in navigator)navigator.serviceWorker.register('/sw-panel.js')
           y+=sliceH; isFirst=false;
         }
       }
-      var nombre='Maleu - Resumen Semana '+RS_DATA.semanaNum+' ('+RS_DATA.desde.replace(/\//g,'-')+' a '+RS_DATA.hasta.replace(/\//g,'-')+').pdf';
+      var nombre='Maleu - Resumen Semana '+dataResumen.semanaNum+' ('+dataResumen.desde.replace(/\//g,'-')+' a '+dataResumen.hasta.replace(/\//g,'-')+').pdf';
       pdf.save(nombre);
-      btn.disabled=false; btn.innerHTML='&#128229; PDF';
+    });
+  }
+
+  window.downloadResumenPDF=function(){
+    if(!RS_DATA){toast('Esperá que cargue el resumen');return;}
+    var doc=$('rsDoc');
+    if(!doc){toast('No hay resumen para exportar');return;}
+    var btn=$('rsPdfBtn');
+    if(btn){btn.disabled=true; btn.innerHTML='Generando…';}
+    _generarPDFFromDoc(doc, RS_DATA).then(function(){
+      if(btn){btn.disabled=false; btn.innerHTML='&#128229; PDF';}
     }).catch(function(err){
-      btn.disabled=false; btn.innerHTML='&#128229; PDF';
+      if(btn){btn.disabled=false; btn.innerHTML='&#128229; PDF';}
       toast('Error PDF: '+err.message);
     });
+  };
+
+  // Descarga directa del PDF de una semana específica desde el acordeón "Semanas anteriores".
+  // Renderiza off-screen, evita cambiar de solapa.
+  window.descargarPDFSemana=function(semNum, semActual){
+    if(!confirm('¿Estás seguro que querés abrir el PDF de la semana '+semNum+'?'))return;
+    var off=semNum-semActual; // semanas atras (negativo)
+    toast('Generando PDF Semana '+semNum+'...');
+    showLoader('Generando PDF Semana '+semNum+'…');
+    fetch(API+'?action=resumenSemanal&semanaOffset='+off,{cache:'no-store'})
+      .then(function(r){return r.json();})
+      .then(function(d){
+        var hidden=$('rsHiddenWrap');
+        if(!hidden){toast('Error: contenedor no encontrado');hideLoader(true);return;}
+        hidden.innerHTML=renderResumen(d);
+        // Esperar un tick para que html2canvas vea el DOM renderizado.
+        setTimeout(function(){
+          var doc=hidden.querySelector('#rsDoc');
+          if(!doc){toast('No se pudo renderizar');hideLoader(true);return;}
+          _generarPDFFromDoc(doc, d).then(function(){
+            hideLoader(true);
+            toast('PDF descargado');
+            hidden.innerHTML=''; // liberar DOM
+          }).catch(function(err){
+            hideLoader(true);
+            toast('Error PDF: '+err.message);
+            hidden.innerHTML='';
+          });
+        }, 100);
+      })
+      .catch(function(err){
+        hideLoader(true);
+        toast('Error: '+err.message);
+      });
   };
 })();
 </script>
