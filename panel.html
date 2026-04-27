@@ -703,6 +703,21 @@ function confirmarCancelarPed(btn){
 // ── PARSEAR MONTO (acepta coma o punto como decimal) ──
 function parseM(v){var s=String(v||'').trim();if(!s)return 0;s=s.replace(/[^\d,.\-]/g,'');if(s.indexOf(',')>=0){s=s.replace(/\./g,'').replace(',','.');}return Number(s)||0;}
 
+// Aplica un movimiento al D local (saldo + libro diario) sin esperar al backend.
+// Permite cerrar el loader inmediatamente con los montos ya actualizados,
+// mientras load() reconcilia en background.
+function aplicarMovLocal(tipo,fecha,cat,con,met,monto,notas){
+  if(!D)return;
+  D.caja=D.caja||{cobradoEf:0,cobradoMP:0,gastosEf:0,gastosMP:0,ingresosEf:0,ingresosMP:0};
+  var esEf=met==='Efectivo';
+  if(tipo==='gasto'){if(esEf)D.caja.gastosEf=(D.caja.gastosEf||0)+monto;else D.caja.gastosMP=(D.caja.gastosMP||0)+monto;}
+  else{if(esEf)D.caja.ingresosEf=(D.caja.ingresosEf||0)+monto;else D.caja.ingresosMP=(D.caja.ingresosMP||0)+monto;}
+  // Insertar al inicio del libro diario (lo más nuevo arriba)
+  var fStr=fecha?fecha.split('-').reverse().join('/'):'';
+  var mov={tipo:tipo,f:fStr,cat:cat,con:con,met:met,$:monto,not:notas,i:Date.now()};
+  D.movimientos=D.movimientos||[];D.movimientos.unshift(mov);
+}
+
 // ── GUARDAR GASTO (soporta pago dividido EF + MP) ──
 function guardarGasto(e){
   e.preventDefault();
@@ -710,7 +725,8 @@ function guardarGasto(e){
   if(ef<=0&&mp<=0){toast('Ingresa un monto');return false;}
   var btn=$('gBtn');btn.disabled=true;btn.textContent='Guardando...';
   showLoader('Registrando gasto...');
-  var base={action:'gasto',fecha:$('gFecha').value,categoria:$('gCat').value,concepto:$('gCon').value,notas:$('gNotas').value};
+  var fecha=$('gFecha').value, cat=$('gCat').value, con=$('gCon').value, notas=$('gNotas').value;
+  var base={action:'gasto',fecha:fecha,categoria:cat,concepto:con,notas:notas};
   var reqs=[];
   if(ef>0)reqs.push(fetch(API,{method:'POST',body:JSON.stringify(Object.assign({},base,{metodo:'Efectivo',monto:ef}))}));
   if(mp>0)reqs.push(fetch(API,{method:'POST',body:JSON.stringify(Object.assign({},base,{metodo:'Mercado Pago',monto:mp}))}));
@@ -718,11 +734,14 @@ function guardarGasto(e){
     .then(function(results){
       var ok=results.every(function(r){return r.ok;});
       if(ok){
+        if(ef>0)aplicarMovLocal('gasto',fecha,cat,con,'Efectivo',ef,notas);
+        if(mp>0)aplicarMovLocal('gasto',fecha,cat,con,'Mercado Pago',mp,notas);
+        render();hideLoader(true);
         var total=ef+mp;var parts=[];if(ef>0)parts.push('EF $'+f$(ef));if(mp>0)parts.push('MP $'+f$(mp));
         toast('Gasto $'+f$(total)+' ('+parts.join(' + ')+')');
-        saveNota($('gNotas').value);saveConcepto($('gCat').value,$('gCon').value);
+        saveNota(notas);saveConcepto(cat,con);
         $('gCat').value='';$('gCon').value='';$('gEf').value='';$('gMP').value='';$('gNotas').value='';
-        return load().then(function(){hideLoader(true);});
+        load(); // reconciliar en background
       }else{hideLoader(true);toast('Error');}
     })
     .catch(function(){hideLoader(true);toast('Sin conexion');})
@@ -737,7 +756,8 @@ function guardarIngreso(e){
   if(ef<=0&&mp<=0){toast('Ingresa un monto');return false;}
   var btn=$('iBtn');btn.disabled=true;btn.textContent='Guardando...';
   showLoader('Registrando ingreso...');
-  var base={action:'ingreso',fecha:$('iFecha').value,categoria:$('iCat').value,concepto:$('iCon').value,notas:$('iNotas').value};
+  var fecha=$('iFecha').value, cat=$('iCat').value, con=$('iCon').value, notas=$('iNotas').value;
+  var base={action:'ingreso',fecha:fecha,categoria:cat,concepto:con,notas:notas};
   var reqs=[];
   if(ef>0)reqs.push(fetch(API,{method:'POST',body:JSON.stringify(Object.assign({},base,{metodo:'Efectivo',monto:ef}))}));
   if(mp>0)reqs.push(fetch(API,{method:'POST',body:JSON.stringify(Object.assign({},base,{metodo:'Mercado Pago',monto:mp}))}));
@@ -745,11 +765,14 @@ function guardarIngreso(e){
     .then(function(results){
       var ok=results.every(function(r){return r.ok;});
       if(ok){
+        if(ef>0)aplicarMovLocal('ingreso',fecha,cat,con,'Efectivo',ef,notas);
+        if(mp>0)aplicarMovLocal('ingreso',fecha,cat,con,'Mercado Pago',mp,notas);
+        render();hideLoader(true);
         var total=ef+mp;var parts=[];if(ef>0)parts.push('EF $'+f$(ef));if(mp>0)parts.push('MP $'+f$(mp));
         toast('Ingreso $'+f$(total)+' ('+parts.join(' + ')+')');
-        saveNota($('iNotas').value);saveConcepto($('iCat').value,$('iCon').value);
+        saveNota(notas);saveConcepto(cat,con);
         $('iCat').value='';$('iCon').value='';$('iEf').value='';$('iMP').value='';$('iNotas').value='';
-        return load().then(function(){hideLoader(true);});
+        load();
       }else{hideLoader(true);toast('Error');}
     })
     .catch(function(){hideLoader(true);toast('Sin conexion');})
@@ -765,7 +788,19 @@ function guardarAjuste(){
   showLoader('Ajustando saldo...');
   fetch(API,{method:'POST',body:JSON.stringify({action:'ajusteSaldo',efectivo:ef,mp:mp})})
     .then(function(r){return r.json();})
-    .then(function(r){if(r.ok){toast('Saldo: EF $'+f$(ef)+' · MP $'+f$(mp));$('ajusteForm').classList.add('hidden');$('ajEf').value='';$('ajMP').value='';return load().then(function(){hideLoader(true);});}else{hideLoader(true);toast('Error al ajustar');}})
+    .then(function(r){
+      if(r.ok){
+        // El ajuste rebalancea: nuevo Saldo Base = (ef,mp), y los acumuladores
+        // de cobros/gastos/ingresos cuentan solo movimientos posteriores → 0 al instante.
+        var hoy=new Date();var fStr=String(hoy.getDate()).padStart(2,'0')+'/'+String(hoy.getMonth()+1).padStart(2,'0')+'/'+hoy.getFullYear();
+        D.saldoBase={ef:ef,mp:mp,fecha:fStr};
+        D.caja={cobradoEf:0,cobradoMP:0,gastosEf:0,gastosMP:0,ingresosEf:0,ingresosMP:0};
+        render();hideLoader(true);
+        toast('Saldo: EF $'+f$(ef)+' · MP $'+f$(mp));
+        $('ajusteForm').classList.add('hidden');$('ajEf').value='';$('ajMP').value='';
+        load();
+      }else{hideLoader(true);toast('Error al ajustar');}
+    })
     .catch(function(){hideLoader(true);toast('Sin conexion');})
     .finally(function(){btn.disabled=false;btn.textContent='Confirmar saldo';});
 }
