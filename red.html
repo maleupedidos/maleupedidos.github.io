@@ -303,6 +303,7 @@
 
     .ruta-card { background: #fff; border-radius: 16px; padding: 1.2rem; box-shadow: 0 3px 10px rgba(0,0,0,.08); margin-bottom: 1rem; }
     .ruta-card.done { background: #f1f8f4; border: 2px solid #2e7d32; }
+    .ruta-flag-pend { display: inline-block; background: #fff3e0; color: #e65100; border: 1.5px solid #ffb74d; border-radius: 999px; padding: .25rem .7rem; font-size: .78rem; font-weight: 800; margin-bottom: .55rem; }
     .ruta-who { font-size: 1.5rem; font-weight: 800; line-height: 1.1; }
     .ruta-dir { font-size: 1rem; color: #555; margin-top: .2rem; }
     .ruta-lote { font-size: 2.2rem; font-weight: 900; color: #e65100; margin-top: .4rem; line-height: 1; }
@@ -1238,8 +1239,8 @@ function filtrarClientes(q) {
 function updateMainBadges() {
   if (!lastDashboardData) return;
   const peds = lastDashboardData.pedidos || [];
-  // Ruta: pedidos del viernes, no cancelados, no entregados
-  const pendRuta = peds.filter(p => p.vi && p.es !== 'Cancelado' && p.es !== 'Entregado').length;
+  // Ruta: pedidos del viernes, no cancelados, que aún están sin entregar O sin cobrar
+  const pendRuta = peds.filter(p => p.vi && p.es !== 'Cancelado' && (p.es !== 'Entregado' || p.ep !== 'Cobrado')).length;
   const bR = $id('badge-ruta');
   if (pendRuta > 0) { bR.classList.remove('hidden'); bR.textContent = pendRuta; }
   else bR.classList.add('hidden');
@@ -1265,44 +1266,56 @@ function updateMainBadges() {
 }
 
 /* ═══════ VISTA RUTA (entregas paso a paso) ═══════ */
-// Lista visible: solo pedidos del viernes NO entregados (los entregados desaparecen).
+// Lista visible: pedidos del viernes que siguen abiertos — falta entregar O falta cobrar.
+// Un pedido recién desaparece cuando está Entregado Y Cobrado (o Cancelado).
 function _rutaList() {
   if (!lastDashboardData) return [];
   return (lastDashboardData.pedidos || [])
-    .filter(p => p.vi && p.es !== 'Cancelado' && p.es !== 'Entregado')
+    .filter(p => p.vi && p.es !== 'Cancelado' && (p.es !== 'Entregado' || p.ep !== 'Cobrado'))
     .sort((a, b) => {
+      // Los entregados pero pendientes de cobro van al final
+      const aDone = a.es === 'Entregado' ? 1 : 0;
+      const bDone = b.es === 'Entregado' ? 1 : 0;
+      if (aDone !== bDone) return aDone - bDone;
       const ba = (a.b || '').localeCompare(b.b || '');
       if (ba !== 0) return ba;
       return (Number(a.l) || 0) - (Number(b.l) || 0);
     });
 }
-// Total del viernes (incluye entregados) para el progress.
+// Totales del viernes para el progress (entregados y cobrados por separado).
 function _rutaTotalViernes() {
-  if (!lastDashboardData) return { total: 0, entregados: 0 };
+  if (!lastDashboardData) return { total: 0, entregados: 0, cobrados: 0 };
   const all = (lastDashboardData.pedidos || []).filter(p => p.vi && p.es !== 'Cancelado');
-  return { total: all.length, entregados: all.filter(p => p.es === 'Entregado').length };
+  return {
+    total: all.length,
+    entregados: all.filter(p => p.es === 'Entregado').length,
+    cobrados:   all.filter(p => p.es === 'Entregado' && p.ep === 'Cobrado').length
+  };
 }
 
 function renderRuta() {
   const cont = $id('ruta-content');
   const list = _rutaList();
   const tot = _rutaTotalViernes();
-  // Progress contra el total del viernes (incluye entregados)
+  // Progress: avance combina entrega + cobro (cada paso vale medio)
   if (tot.total > 0) {
+    const avance = (tot.entregados + tot.cobrados) / (tot.total * 2);
     $id('ruta-title').textContent = '🚚 Ruta del viernes';
-    $id('ruta-progress').textContent = tot.entregados + ' de ' + tot.total + ' entregados';
-    $id('ruta-bar-fill').style.width = Math.round(tot.entregados * 100 / tot.total) + '%';
+    $id('ruta-progress').textContent =
+      tot.entregados + '/' + tot.total + ' entregados · ' +
+      tot.cobrados   + '/' + tot.total + ' cobrados';
+    $id('ruta-bar-fill').style.width = Math.round(avance * 100) + '%';
   } else {
     $id('ruta-title').textContent = '🚚 Sin pedidos este viernes';
     $id('ruta-progress').textContent = '—';
     $id('ruta-bar-fill').style.width = '0%';
   }
-  // Si ya no quedan pendientes (todos entregados o no hay viernes), pantalla de éxito
+  // Pantalla de éxito SOLO si todos entregados Y todos cobrados
   if (list.length === 0) {
-    if (tot.total > 0 && tot.entregados === tot.total) {
+    if (tot.total > 0 && tot.entregados === tot.total && tot.cobrados === tot.total) {
       cont.innerHTML = '<div class="ruta-empty"><span class="emoji">✅</span>' +
         '<div class="title">¡Ruta completa!</div>' +
-        '<div class="sub">Entregaste los ' + tot.total + ' pedidos del viernes.</div></div>';
+        '<div class="sub">Entregaste y cobraste los ' + tot.total + ' pedidos del viernes.</div></div>';
     } else {
       cont.innerHTML = '<div class="ruta-empty"><span class="emoji">📭</span>' +
         '<div class="title">Sin pedidos para entregar</div>' +
@@ -1343,8 +1356,12 @@ function renderRuta() {
           (esUltimo ? ' disabled style="opacity:.3;cursor:not-allowed"' : '') + '>›</button>';
   html += '</div>';
 
-  // Card del pedido
-  html += '<div class="ruta-card' + (entregado ? ' done' : '') + '">';
+  // Card del pedido (verde solo cuando está 100% cerrado: entregado + cobrado)
+  const cerrado = entregado && cobrado;
+  html += '<div class="ruta-card' + (cerrado ? ' done' : '') + '">';
+  if (entregado && !cobrado) {
+    html += '<div class="ruta-flag-pend">⚠️ Entregado · falta cobrar</div>';
+  }
   html += '<div class="ruta-who">' + (p.c || '—') + '</div>';
   html += '<div class="ruta-dir">' + (p.b || 'Sin barrio') + '</div>';
   if (p.l) html += '<div class="ruta-lote">Lote ' + p.l + '</div>';
@@ -1423,8 +1440,9 @@ function renderRuta() {
       (cobrado ? '✓ Cobrado · tocar para deshacer' : '💵 Marcar Cobrado') + '</button>';
   }
   html += '<h4 style="margin-top:.8rem">🚚 Entrega</h4>';
-  html += '<button class="big-btn" onclick="rutaToggleEntrega()">🚚 Marcar Entregado</button>';
-  html += '<div class="ctrl-label" style="margin-top:.4rem;font-size:.72rem;color:#777">Si te equivocaste podés deshacer entrando al pedido desde la solapa Inicio.</div>';
+  html += '<button class="big-btn entr' + (entregado ? ' on' : '') + '" onclick="rutaToggleEntrega()">' +
+    (entregado ? '✓ Entregado · tocar para deshacer' : '🚚 Marcar Entregado') + '</button>';
+  html += '<div class="ctrl-label" style="margin-top:.4rem;font-size:.72rem;color:#777">Si te equivocaste podés deshacer acá mismo o desde la solapa Inicio.</div>';
   html += '</div>';
 
   cont.innerHTML = html;
