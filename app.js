@@ -835,9 +835,12 @@ function enviarPedido() {
   // Los datos del cliente (nombre, tel, dirección, entrega, pago) los ve Maleu
   // en Panel/Búsqueda/Ruta/Red — no se repiten en el WhatsApp.
   var msgLines = ['Hola! Quiero hacer un pedido:', '', prodLines, ''];
-  msgLines.push('Subtotal: ' + ars(subtotal));
-  if (discount > 0) msgLines.push(getDiscountLabel() + ': -' + ars(discount));
-  if (shipping > 0) msgLines.push('Envio: ' + ars(shipping));
+  // Solo desglosar Subtotal cuando hay descuento o envío. Si Total = Subtotal, mostrar solo Total.
+  if (discount > 0 || shipping > 0) {
+    msgLines.push('Subtotal: ' + ars(subtotal));
+    if (discount > 0) msgLines.push(getDiscountLabel() + ': -' + ars(discount));
+    if (shipping > 0) msgLines.push('Envio: ' + ars(shipping));
+  }
   msgLines.push('*Total: ' + ars(total) + '*');
   var msg = msgLines.join('\n');
 
