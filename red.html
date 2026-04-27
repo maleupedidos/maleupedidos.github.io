@@ -2560,59 +2560,93 @@ function enviar() {
     dia, horario: 'A coordinar', pago,
     envio: 0, items, total
   };
-  sendWithRetry(postData, 3);
 
-  // WhatsApp a Tadeo con el pedido
+  const btn = $id('btn-enviar');
+  btn.disabled = true;
+  btn.textContent = 'Guardando…';
+  btn.style.background = '#888';
+
+  // Mensaje al WhatsApp de Maleu central (Tadeo). Es notificación interna —
+  // no necesita el alias MP ahí. Si el vendedor tiene su propio alias cargado
+  // se incluye en una línea aparte para que Tadeo lo tenga a mano.
   const prodLines = items.map(i => '  - ' + i.nombre + (i.qty > 1 ? ' x' + i.qty : '') + '  ' + ars(i.precio * i.qty)).join('\n');
   const pagoStr = pago === 'Efectivo' ? 'Efectivo' : 'Mercado Pago';
+  const aliasVendStr = (session.aliasMp || '').trim();
   const msg = '*NUEVO PEDIDO -- MALEU RED*\n\n'
     + prodLines + '\n\n'
     + '---\n'
     + '*Total: ' + ars(total) + '*\n'
     + '---\n\n'
-    + '*Vendedor:* ' + session.nombre + '\n'
+    + '*Vendedor:* ' + session.nombre + (aliasVendStr ? ' (alias ' + aliasVendStr + ')' : '') + '\n'
     + '*Cliente:* ' + nombre + '\n'
     + '*Direccion:* ' + barrio + ', Lote ' + lote + '\n'
     + '*WhatsApp:* ' + telefono + '\n'
     + '*Entrega:* ' + dia + '\n'
-    + '*Pago:* ' + pagoStr
-    + (pago === 'Transferencia' ? '\nAlias: *maleump*\nTitular: Tadeo Alberto Ustariz' : '');
+    + '*Pago:* ' + pagoStr;
 
-  const btn = $id('btn-enviar');
-  btn.disabled = true;
-  btn.textContent = '✓ Pedido registrado';
-  btn.style.background = '#2e7d32';
-
-  setTimeout(function() {
-    window.location.href = 'https://wa.me/' + WA_NUMBER + '?text=' + encodeURIComponent(msg);
-  }, 800);
-
-  setTimeout(function() {
-    // Reset y volver al dashboard
-    Object.keys(cart).forEach(k => delete cart[k]);
-    PRODUCTOS.forEach(p => { const el = $id('qty-' + p.id); if (el) el.textContent = '0'; });
-    $id('f-cliente').value = '';
-    $id('f-telefono').value = '';
-    $id('f-lote').value = '';
-    $id('f-dia').value = 'Viernes';
-    pago = '';
-    document.querySelectorAll('.pago-opt').forEach(o => o.classList.remove('sel'));
+  // Esperar la confirmación del backend antes de redirigir a WhatsApp.
+  // Si falla tras 5 reintentos, NO se redirige — se le muestra el error al
+  // vendedor para que reintente. Antes se mandaba con no-cors y el pedido
+  // podía perderse silenciosamente.
+  sendOrderWithRetry(postData, 5).then(function() {
+    btn.textContent = '✓ Pedido registrado';
+    btn.style.background = '#2e7d32';
+    setTimeout(function() {
+      window.location.href = 'https://wa.me/' + WA_NUMBER + '?text=' + encodeURIComponent(msg);
+    }, 600);
+    setTimeout(function() {
+      // Reset y volver al dashboard
+      Object.keys(cart).forEach(k => delete cart[k]);
+      PRODUCTOS.forEach(p => { const el = $id('qty-' + p.id); if (el) el.textContent = '0'; });
+      $id('f-cliente').value = '';
+      $id('f-telefono').value = '';
+      $id('f-lote').value = '';
+      $id('f-dia').value = 'Viernes';
+      pago = '';
+      document.querySelectorAll('.pago-opt').forEach(o => o.classList.remove('sel'));
+      btn.disabled = false;
+      btn.textContent = 'Enviar pedido por WhatsApp';
+      btn.style.background = '';
+      updateCart();
+      showDashboard();
+    }, 2200);
+  }).catch(function(err) {
     btn.disabled = false;
-    btn.textContent = 'Enviar pedido por WhatsApp';
-    btn.style.background = '';
-    updateCart();
-    showDashboard();
-  }, 2500);
+    btn.textContent = 'Reintentar';
+    btn.style.background = '#c62828';
+    toast('No pudimos guardar el pedido: ' + (err && err.message || 'error') + '. Tocá Reintentar.');
+  });
 }
 
-function sendWithRetry(data, retries) {
-  fetch(APPS_SCRIPT_URL, {
-    method: 'POST', mode: 'no-cors',
-    headers: { 'Content-Type': 'text/plain' },
-    body: JSON.stringify(data)
-  }).catch(function() {
-    if (retries > 1) setTimeout(function() { sendWithRetry(data, retries - 1); }, 2000);
-  });
+// Envía un pedido al backend con retries y backoff exponencial.
+// Devuelve una Promise que resuelve { ok:true } o { ok:false, err }.
+// Usa CORS (no no-cors) para poder leer la respuesta y saber si Apps Script
+// realmente persistió el pedido. Antes se mandaba con no-cors y un fallo
+// silencioso (lock timeout, error backend) hacía que el vendedor viera
+// "✓ Pedido registrado" pero nada en el Sheet.
+function sendOrderWithRetry(data, maxAttempts) {
+  maxAttempts = maxAttempts || 5;
+  var attempt = 0;
+  function _try() {
+    attempt++;
+    return fetch(APPS_SCRIPT_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify(data),
+      redirect: 'follow'
+    })
+    .then(function(r) { return r.json().catch(function(){ return { ok:false, err:'JSON invalido' }; }); })
+    .then(function(res) {
+      if (res && res.ok) return res;
+      throw new Error((res && (res.err || res.error)) || 'Backend respondio ok=false');
+    })
+    .catch(function(err) {
+      if (attempt >= maxAttempts) throw err;
+      var wait = Math.min(32000, Math.pow(2, attempt) * 1000); // 2s, 4s, 8s, 16s, 32s
+      return new Promise(function(resolve){ setTimeout(resolve, wait); }).then(_try);
+    });
+  }
+  return _try();
 }
 
 /* ═══════ INIT ═══════ */
