@@ -162,6 +162,9 @@ body{font-family:'Segoe UI',system-ui,-apple-system,sans-serif;background:#F5F2E
 .stock-ok{background:#e8f5e8;color:#2e7d32}
 .stock-low{background:#fff3e0;color:#e67e22}
 .stock-out{background:#fce8e8;color:#c0392b}
+.np-prod-future{font-size:10px;font-weight:800;padding:2px 7px;border-radius:50px;display:inline-block;margin-left:5px;background:#FFE4D0;color:#E5662F;border:1px solid #F07D47}
+.np-cat-title{font-size:11px;font-weight:800;color:#F07D47;text-transform:uppercase;letter-spacing:.08em;margin:14px 0 6px;padding:0 4px;border-left:3px solid #F07D47;line-height:1.2}
+.np-cat-title:first-child{margin-top:4px}
 .np-qty-wrap{display:flex;align-items:center;gap:0;border:2px solid #E8DFC4;border-radius:10px;overflow:hidden}
 .np-qty-btn{width:40px;height:40px;border:none;background:#F2E8C7;font-size:20px;font-weight:800;color:#331C1C;cursor:pointer;display:flex;align-items:center;justify-content:center}
 .np-qty-btn:active{background:#E8DFC4}
@@ -278,7 +281,7 @@ select,input[type="number"]{font-size:16px}
 <div class="sync-banner" id="syncBanner">Hay acciones pendientes de sincronizar</div>
 
 <div class="tabs">
-  <div class="tab active" data-tab="proveedores" onclick="switchTab('proveedores')">BUSQUEDA</div>
+  <div class="tab" data-tab="proveedores" onclick="switchTab('proveedores')">BUSQUEDA</div>
   <div class="tab" data-tab="pedidos" onclick="switchTab('pedidos')">ARMADO</div>
   <div class="tab" data-tab="pagos" onclick="switchTab('pagos')">PAGOS</div>
   <div class="tab" data-tab="nuevo" onclick="switchTab('nuevo')">+ NUEVO</div>
@@ -385,7 +388,10 @@ var marcadosRecibido = {};
 var waCopied = {};
 var armadoChecked = {};
 var vendedoresMap = {}; // { "Marcos Bottcher": { wa, partido, barrios, ... } }
-var currentTab = 'proveedores';
+var currentTab = (function(){
+  try { var t = localStorage.getItem('maleu_busqueda_tab'); return (t === 'proveedores' || t === 'pedidos' || t === 'pagos' || t === 'nuevo') ? t : 'proveedores'; }
+  catch(e) { return 'proveedores'; }
+})();
 var isOnline = navigator.onLine;
 var npQtys = {}; // { "PMu": 3, "ECaC": 1 }
 var npOrigins = {}; // { "PMu": "Orden de Compra", "TLC": "Deposito" }
@@ -1694,37 +1700,73 @@ function onNpProvChange() {
   document.getElementById('npConfirm').classList.remove('hide');
 
   var items = catalogo.productos[prov];
-  var html = '';
-  items.forEach(function(it) {
-    // Default origin: if stock > 0 → Deposito, else → OC
-    var defaultOrigen = (it.s !== null && it.s > 0) ? 'Deposito' : 'Orden de Compra';
-    npOrigins[it.a] = defaultOrigen;
-    var isOC = defaultOrigen === 'Orden de Compra';
+  // Agrupar por categoría (cat = producto base, ej: "Pizza", "Empanadas").
+  var grupos = {}, ordenGrupos = [];
+  items.forEach(function(it){
+    var cat = it.cat || it.n || 'Otros';
+    if (!grupos[cat]) { grupos[cat] = []; ordenGrupos.push(cat); }
+    grupos[cat].push(it);
+  });
+  var mostrarTitulos = ordenGrupos.length > 1;
 
-    var stockHtml = '';
-    if (it.s !== null) {
-      if (it.s === 0) stockHtml = '<span class="np-prod-stock stock-out">Sin stock</span>';
-      else if (it.s <= 3) stockHtml = '<span class="np-prod-stock stock-low">Stock: ' + it.s + '</span>';
-      else stockHtml = '<span class="np-prod-stock stock-ok">Stock: ' + it.s + '</span>';
+  var html = '';
+  ordenGrupos.forEach(function(cat){
+    if (mostrarTitulos) {
+      html += '<div class="np-cat-title">' + cat + '</div>';
     }
-    html += '<div class="np-prod-card" style="flex-wrap:wrap">' +
-      '<div class="np-prod-info">' +
-        '<div class="np-prod-name">' + it.n + '</div>' +
-        '<div class="np-prod-meta">' + (it.c > 0 ? formatMoney(it.c) + ' c/u' : 'Sin costo') + ' ' + stockHtml + '</div>' +
-      '</div>' +
-      '<div class="np-qty-wrap">' +
-        '<button class="np-qty-btn" onclick="npChangeQty(\'' + it.a + '\',-1)">-</button>' +
-        '<input class="np-qty-val" id="npq_' + it.a + '" type="number" min="0" value="0" onchange="npSetQty(\'' + it.a + '\',this.value)" inputmode="numeric">' +
-        '<button class="np-qty-btn" onclick="npChangeQty(\'' + it.a + '\',1)">+</button>' +
-      '</div>' +
-      '<div class="np-origen-toggle" id="npo_' + it.a + '" style="width:100%">' +
-        '<div class="np-origen-opt' + (isOC ? ' active-oc' : '') + '" onclick="npSetOrigen(\'' + it.a + '\',\'Orden de Compra\')">OC (comprar)</div>' +
-        '<div class="np-origen-opt' + (!isOC ? ' active-dep' : '') + '" onclick="npSetOrigen(\'' + it.a + '\',\'Deposito\')">Deposito (tengo)</div>' +
-      '</div>' +
-    '</div>';
+    grupos[cat].forEach(function(it){
+      var defaultOrigen = (it.s !== null && it.s > 0) ? 'Deposito' : 'Orden de Compra';
+      npOrigins[it.a] = defaultOrigen;
+      var isOC = defaultOrigen === 'Orden de Compra';
+
+      var stockHtml = '', futuroHtml = '';
+      if (it.s !== null) {
+        if (it.s === 0) stockHtml = '<span class="np-prod-stock stock-out">Sin stock</span>';
+        else if (it.s <= 3) stockHtml = '<span class="np-prod-stock stock-low">Stock: ' + it.s + '</span>';
+        else stockHtml = '<span class="np-prod-stock stock-ok">Stock: ' + it.s + '</span>';
+        // Marcador "tendría si pido X" — se llena dinámicamente desde npChangeQty/npSetQty
+        futuroHtml = '<span class="np-prod-future hidden" id="npf_' + it.a + '"></span>';
+      }
+      html += '<div class="np-prod-card" style="flex-wrap:wrap">' +
+        '<div class="np-prod-info">' +
+          '<div class="np-prod-name">' + it.n + '</div>' +
+          '<div class="np-prod-meta">' + (it.c > 0 ? formatMoney(it.c) + ' c/u' : 'Sin costo') + ' ' + stockHtml + futuroHtml + '</div>' +
+        '</div>' +
+        '<div class="np-qty-wrap">' +
+          '<button class="np-qty-btn" onclick="npChangeQty(\'' + it.a + '\',-1)">-</button>' +
+          '<input class="np-qty-val" id="npq_' + it.a + '" type="number" min="0" value="0" onchange="npSetQty(\'' + it.a + '\',this.value)" inputmode="numeric">' +
+          '<button class="np-qty-btn" onclick="npChangeQty(\'' + it.a + '\',1)">+</button>' +
+        '</div>' +
+        '<div class="np-origen-toggle" id="npo_' + it.a + '" style="width:100%">' +
+          '<div class="np-origen-opt' + (isOC ? ' active-oc' : '') + '" onclick="npSetOrigen(\'' + it.a + '\',\'Orden de Compra\')">OC (comprar)</div>' +
+          '<div class="np-origen-opt' + (!isOC ? ' active-dep' : '') + '" onclick="npSetOrigen(\'' + it.a + '\',\'Deposito\')">Deposito (tengo)</div>' +
+        '</div>' +
+      '</div>';
+    });
   });
   container.innerHTML = html;
   updateNpSummary();
+}
+
+/* Actualiza el marcador "Tendría: X" al lado del stock cuando cambia la qty del producto. */
+function npUpdateFuturo(abbr) {
+  var el = document.getElementById('npf_' + abbr);
+  if (!el) return;
+  var prov = document.getElementById('npProv').value;
+  var items = (catalogo.productos && catalogo.productos[prov]) || [];
+  var prod = null;
+  for (var i = 0; i < items.length; i++) { if (items[i].a === abbr) { prod = items[i]; break; } }
+  if (!prod || prod.s === null) { el.classList.add('hidden'); return; }
+  var qty = npQtys[abbr] || 0;
+  var origen = npOrigins[abbr] || 'Orden de Compra';
+  if (qty <= 0 || origen !== 'Orden de Compra') {
+    el.classList.add('hidden');
+    el.textContent = '';
+    return;
+  }
+  var futuro = (prod.s || 0) + qty;
+  el.classList.remove('hidden');
+  el.textContent = '→ Tendría: ' + futuro;
 }
 
 function npSetOrigen(abbr, origen) {
@@ -1734,6 +1776,7 @@ function npSetOrigen(abbr, origen) {
   var opts = toggle.children;
   opts[0].className = 'np-origen-opt' + (origen === 'Orden de Compra' ? ' active-oc' : '');
   opts[1].className = 'np-origen-opt' + (origen === 'Deposito' ? ' active-dep' : '');
+  npUpdateFuturo(abbr);
   updateNpSummary();
   if (navigator.vibrate) navigator.vibrate(15);
 }
@@ -1743,12 +1786,14 @@ function npChangeQty(abbr, delta) {
   var val = Math.max(0, (parseInt(input.value) || 0) + delta);
   input.value = val;
   npQtys[abbr] = val;
+  npUpdateFuturo(abbr);
   updateNpSummary();
   if (navigator.vibrate) navigator.vibrate(15);
 }
 
 function npSetQty(abbr, val) {
   npQtys[abbr] = Math.max(0, parseInt(val) || 0);
+  npUpdateFuturo(abbr);
   updateNpSummary();
 }
 
@@ -1924,11 +1969,32 @@ function scheduleRetry(item, attempt) {
 /* ── TAB SWITCH ────────────────────────────────────────── */
 function switchTab(tab) {
   currentTab = tab;
+  try { localStorage.setItem('maleu_busqueda_tab', tab); } catch(e) {}
   document.querySelectorAll('.tab').forEach(function(t) {
     t.classList.toggle('active', t.dataset.tab === tab);
   });
   render();
 }
+
+/* ── Bloqueo de zoom (pinch + double-tap) ─────────────────
+   iOS Safari ignora user-scalable=no del viewport, hay que cerrarlo a mano. */
+document.addEventListener('gesturestart', function(e){ e.preventDefault(); }, { passive: false });
+document.addEventListener('gesturechange', function(e){ e.preventDefault(); }, { passive: false });
+document.addEventListener('gestureend', function(e){ e.preventDefault(); }, { passive: false });
+(function(){
+  var lastTap = 0;
+  document.addEventListener('touchend', function(e){
+    var now = Date.now();
+    if (now - lastTap < 350) e.preventDefault();
+    lastTap = now;
+  }, { passive: false });
+  document.addEventListener('dblclick', function(e){ e.preventDefault(); });
+})();
+
+/* Marca la tab activa al cargar (currentTab puede venir de localStorage). */
+document.querySelectorAll('.tab').forEach(function(t){
+  t.classList.toggle('active', t.dataset.tab === currentTab);
+});
 
 /* ── TOAST ─────────────────────────────────────────────── */
 function showToast(msg) {
