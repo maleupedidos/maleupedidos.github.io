@@ -521,6 +521,7 @@
     <div class="greeting">
       <h2 id="dash-hello">¡Hola!</h2>
       <p id="dash-subtitle">Tu resumen de ventas</p>
+      <p id="last-sync" style="font-size:.72rem;color:#666;margin-top:.3rem;font-weight:600;"></p>
     </div>
 
     <div class="hidden" id="dash-content">
@@ -983,6 +984,7 @@ function enterDashboard() {
 function loadDashboard() {
   // 1) Mostrar cache inmediatamente si existe (instant feel)
   var hadCache = false;
+  var cachedTs = 0;
   try {
     var cacheKey = 'maleu_red_dash_' + session.nombre;
     var cached = JSON.parse(localStorage.getItem(cacheKey) || 'null');
@@ -991,6 +993,8 @@ function loadDashboard() {
       $id('dash-loading').classList.add('hidden');
       $id('dash-content').classList.remove('hidden');
       hadCache = true;
+      cachedTs = cached.ts || 0;
+      _renderLastSync(cachedTs, true);
     }
   } catch(e) {}
 
@@ -1005,13 +1009,32 @@ function loadDashboard() {
     .then(d => {
       if (!d.ok) { if (!hadCache) toast('Error al cargar datos'); return; }
       renderDashboard(d);
-      try { localStorage.setItem('maleu_red_dash_' + session.nombre, JSON.stringify({ ts: Date.now(), data: d })); } catch(e) {}
+      var now = Date.now();
+      try { localStorage.setItem('maleu_red_dash_' + session.nombre, JSON.stringify({ ts: now, data: d })); } catch(e) {}
+      _renderLastSync(now, false);
     })
     .catch(e => { if (!hadCache) toast('Sin conexión — mostrando datos guardados'); })
     .finally(() => {
       $id('dash-loading').classList.add('hidden');
       $id('dash-content').classList.remove('hidden');
     });
+}
+
+// Pinta el indicador "Última sincronización" debajo del saludo. Si los datos
+// son del cache (no se pudo refrescar), se muestra en naranja para alertar.
+function _renderLastSync(ts, isStale) {
+  var el = $id('last-sync');
+  if (!el || !ts) return;
+  var d = new Date(ts);
+  var hh = String(d.getHours()).padStart(2,'0');
+  var mm = String(d.getMinutes()).padStart(2,'0');
+  var dd = String(d.getDate()).padStart(2,'0');
+  var mo = String(d.getMonth()+1).padStart(2,'0');
+  var hoy = new Date();
+  var esHoy = (d.toDateString() === hoy.toDateString());
+  var label = esHoy ? hh + ':' + mm : dd + '/' + mo + ' ' + hh + ':' + mm;
+  el.textContent = (isStale ? '⚠ Sin actualizar · ' : '🔄 Actualizado ') + label;
+  el.style.color = isStale ? '#e65100' : '#666';
 }
 
 let lastDashboardData = null;
@@ -1280,14 +1303,22 @@ function _rutaList() {
   return (lastDashboardData.pedidos || [])
     .filter(_rutaAbierto)
     .sort((a, b) => {
-      // Prioridad: viernes actual primero, luego pendientes viejos
+      // 1) Viernes actual primero (a entregar hoy), pendientes de semanas pasadas después.
       const aVi = a.vi ? 0 : 1;
       const bVi = b.vi ? 0 : 1;
       if (aVi !== bVi) return aVi - bVi;
-      // Dentro de cada grupo: entregados-sin-cobrar al final
+      // 2) Dentro de los NO-viernes: por antigüedad ASC (semanas viejas primero — son los más urgentes de cobrar).
+      if (aVi === 1 && bVi === 1) {
+        const ay = a._y || 0, by = b._y || 0;
+        if (ay !== by) return ay - by;
+        const aw = a._sem || 0, bw = b._sem || 0;
+        if (aw !== bw) return aw - bw;
+      }
+      // 3) Entregados-sin-cobrar al final dentro del mismo grupo.
       const aDone = a.es === 'Entregado' ? 1 : 0;
       const bDone = b.es === 'Entregado' ? 1 : 0;
       if (aDone !== bDone) return aDone - bDone;
+      // 4) Por barrio y lote (geográfico, dentro del viernes actual).
       const ba = (a.b || '').localeCompare(b.b || '');
       if (ba !== 0) return ba;
       return (Number(a.l) || 0) - (Number(b.l) || 0);
@@ -1466,6 +1497,8 @@ function renderRuta() {
   html += '<button class="big-btn entr' + (entregado ? ' on' : '') + '" onclick="rutaToggleEntrega()">' +
     (entregado ? '✓ Entregado · tocar para deshacer' : '🚚 Marcar Entregado') + '</button>';
   html += '<div class="ctrl-label" style="margin-top:.4rem;font-size:.72rem;color:#777">Si te equivocaste podés deshacer acá mismo o desde la solapa Inicio.</div>';
+  // Cancelar pedido (al final, separado y discreto). Doble confirmación.
+  html += '<button type="button" onclick="rutaCancelar()" style="width:100%;margin-top:.8rem;padding:.7rem;background:transparent;color:#c62828;border:1.5px solid #c62828;border-radius:10px;font-family:inherit;font-size:.85rem;font-weight:700;cursor:pointer">✕ Cancelar pedido</button>';
   html += '</div>';
 
   cont.innerHTML = html;
@@ -1567,6 +1600,16 @@ function rutaToggleEntrega() {
   if (!confirm(msg)) return;
   _rutaUpdate({ entrega: nuevo });
   toast(nuevo ? '✓ Entregado a ' + (p.c || '—') : '↩ Entrega deshecha');
+}
+function rutaCancelar() {
+  const p = _rutaCurrent(); if (!p) return;
+  if (p.es === 'Cancelado') { toast('Este pedido ya está cancelado'); return; }
+  // Doble confirmación: el cancelado no se deshace desde el portal.
+  const c = p.c || 'este pedido';
+  if (!confirm('¿Cancelar el pedido de ' + c + '?\n\nEsta acción no se puede deshacer desde el portal — vas a tener que pedirle a Tadeo que lo restaure.')) return;
+  if (!confirm('Confirmar cancelación de ' + c + '.')) return;
+  _rutaUpdate({ cancelar: true });
+  toast('✕ Pedido cancelado');
 }
 
 function rutaAbrirCobroMixto() {
@@ -2298,6 +2341,7 @@ function updatePedido(updates) {
 function _mapUpdatesToPedido(u) {
   const map = {};
   if ('entrega' in u)         map.es  = u.entrega ? 'Entregado' : 'Pendiente';
+  if ('cancelar' in u && u.cancelar) map.es = 'Cancelado';
   if ('cobroCliente' in u)    map.ep  = u.cobroCliente ? 'Cobrado' : 'No Cobrado';
   if ('formaPagoCliente' in u) map.fp = u.formaPagoCliente;
   if ('efectivoMonto' in u || 'transferenciaMonto' in u) {
@@ -2552,12 +2596,25 @@ function enviar() {
     }
   });
 
+  // Calcular fecha real del próximo viernes (en ISO YYYY-MM-DD) para
+  // que el backend la guarde como Date en col K. Antes solo se mandaba el
+  // string "Viernes", lo que rompía el cálculo de semana ISO en _doPostRed.
+  const fechaEntregaISO = (function() {
+    const hoy = new Date();
+    const dow = hoy.getDay();           // 0=Dom, 5=Vie
+    let diff = (5 - dow + 7) % 7;
+    if (diff === 0) diff = 7;           // si hoy es viernes, apuntar al próximo
+    const f = new Date(hoy.getFullYear(), hoy.getMonth(), hoy.getDate() + diff);
+    return f.getFullYear() + '-' + String(f.getMonth()+1).padStart(2,'0') + '-' + String(f.getDate()).padStart(2,'0');
+  })();
+
   const postData = {
     canal: 'Red',
     vendedor: session.nombre,
     nombre, telefono,
     barrioPrivado: barrio, lote: lote,
-    dia, horario: 'A coordinar', pago,
+    dia, fechaEntrega: fechaEntregaISO,
+    horario: 'A coordinar', pago,
     envio: 0, items, total
   };
 
