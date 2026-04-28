@@ -316,6 +316,14 @@ function setZone(zone) {
   localStorage.setItem('maleu_zone', zone);
   _track('select_zone', { zone: zone });
   applyZone();
+  // Clubes: la entrega es siempre Viernes "a coordinar" en la puerta del
+  // club, no tiene sentido preguntar fecha. Se setea automáticamente.
+  if (zone === 'clubes') {
+    _setClubesDefaultDate();
+    _setOverlay(false);
+    window.scrollTo(0, 0);
+    return;
+  }
   // Si ya tenía fecha guardada y aún es vigente, no volver a preguntar.
   // Si no, avanzar al paso 2 (fecha) en el mismo modal.
   if (!_loadSavedDate()) {
@@ -325,13 +333,32 @@ function setZone(zone) {
     window.scrollTo(0, 0);
   }
 }
+function _setClubesDefaultDate() {
+  // Próximo Viernes (a coordinar). Marcamos como flexible para que no
+  // muestre el chip "📅 Fecha" y para que el stock siempre sea abierto.
+  var fri = _getNextDeliveryOf('clubes', 'Viernes');
+  selectedDateIsFlexible = true;
+  if (fri) {
+    selectedDeliveryDate = fri.iso;
+    selectedDeliveryDayName = fri.dayName;
+  }
+  try {
+    localStorage.setItem('maleu_delivery_date', JSON.stringify({
+      iso: selectedDeliveryDate, dayName: selectedDeliveryDayName,
+      flexible: true, zone: 'clubes', ts: Date.now()
+    }));
+  } catch(e) {}
+  _updateDateChip();
+  _preselectDayPicker();
+}
 function showZoneModal() {
   // Reabrir desde el chip "📍 Zona"
   welcomeShowZoneStep();
   _setOverlay(true);
 }
 function showDateModal() {
-  // Reabrir desde el chip "📅 Fecha"
+  // Reabrir desde el chip "📅 Fecha". En Clubes no aplica (Vie en cancha).
+  if (currentZone === 'clubes') return;
   welcomeShowDateStep();
   _setOverlay(true);
 }
@@ -530,6 +557,8 @@ function _loadSavedDate() {
 }
 function _updateDateChip() {
   var chip = $id('date-chip'); if (!chip) return;
+  // En Clubes no se muestra el chip de fecha (entrega siempre Vie en cancha)
+  if (currentZone === 'clubes') { chip.style.display = 'none'; return; }
   if (!selectedDeliveryDate && !selectedDateIsFlexible) { chip.style.display = 'none'; return; }
   chip.style.display = '';
   if (selectedDateIsFlexible) {
@@ -1437,11 +1466,15 @@ if (savedZone && ZONAS[savedZone]) {
   // Cliente recurrente: tiene zona. NO mostrar paso 1 (zona).
   currentZone = savedZone;
   applyZone();
-  // Si tiene fecha vigente guardada → modal cerrado, todo listo.
-  // Si no → abrir el modal directamente en paso 2 (fecha).
-  if (_loadSavedDate()) {
+  if (savedZone === 'clubes') {
+    // Clubes: nunca se pregunta fecha (Vie en cancha). Setear default.
+    if (!_loadSavedDate()) _setClubesDefaultDate();
+    _setOverlay(false);
+  } else if (_loadSavedDate()) {
+    // Tiene fecha vigente → todo listo.
     _setOverlay(false);
   } else {
+    // Falta fecha → abrir el modal directamente en paso 2.
     welcomeShowDateStep();
     _setOverlay(true);
   }
