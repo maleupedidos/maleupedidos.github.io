@@ -102,8 +102,9 @@ let stockMap = {};
 let vendedoresRed = []; // {nombre, wa, barrios:[], partido, localidad}
 let barrioToVendedor = {}; // { 'El Lucero': {nombre, wa, partido, localidad}, ... }
 let _enviando = false;
-let selectedDeliveryDate = null;     // ISO "YYYY-MM-DD" o "any"
+let selectedDeliveryDate = null;     // ISO "YYYY-MM-DD"
 let selectedDeliveryDayName = null;  // "Lunes" | "Miércoles" | etc.
+let selectedDateIsFlexible = false;  // true cuando el cliente elige "Cualquier día"
 
 /* Tope estricto de stock — depende de la fecha de entrega elegida.
    Solo aplica en zona Estancias (Pilar y Clubes nunca tienen tope).
@@ -119,13 +120,14 @@ let selectedDeliveryDayName = null;  // "Lunes" | "Miércoles" | etc.
    también (asumimos que es flexible). */
 function isStockLimited() {
   if (currentZone !== 'estancias') return false;
-  if (!selectedDeliveryDate || selectedDeliveryDate === 'any') return false;
+  if (selectedDateIsFlexible) return false;
+  if (!selectedDeliveryDate) return false;
   var deliveryStartMs = _deliveryStartMs(selectedDeliveryDate);
   if (!deliveryStartMs) return false;
   var hoursUntil = (deliveryStartMs - Date.now()) / 3600000;
   return hoursUntil < 24;
 }
-/* Modo "abierto con info": Estancias con fecha lejana, "any", o sin elegir. */
+/* Modo "abierto con info": Estancias con fecha lejana, "Cualquier día", o sin elegir. */
 function isStockInfoMode() {
   if (currentZone !== 'estancias') return false;
   if (isStockLimited()) return false;
@@ -354,67 +356,154 @@ function welcomeShowDateStep() {
 function renderWelcomeDateGrid() {
   var grid = $id('loc-dates-grid');
   if (!grid || !currentZone) return;
-  var dates = _getNextDeliveryDates(currentZone, 6);
+  var groups = _getNextDeliveryDatesGrouped(currentZone);
   var html = '';
-  // Card "Cualquier día" (flexible)
-  html += '<button type="button" class="loc-date-card any" onclick="setDeliveryDate(\'any\',\'\')" aria-label="Cualquier día">'
-        + '<span class="dc-day">Para cuándo</span>'
-        + '<span class="dc-num">Cualquier día</span>'
-        + '<span class="dc-time">Sin preferencia</span>'
+
+  // Card "Cualquier día" (flexible) — destacada arriba, ancho completo
+  html += '<button type="button" class="loc-any-btn" onclick="setDeliveryDate(\'any\',\'\')" aria-label="Cualquier día">'
+        + '<span class="any-icon">🤝</span>'
+        + '<span class="any-text"><strong>Cualquier día</strong><small>Sin preferencia, lo coordinamos juntos</small></span>'
         + '</button>';
-  for (var i = 0; i < dates.length; i++) {
-    var d = dates[i];
-    var isNext = i === 0;
-    html += '<button type="button" class="loc-date-card' + (isNext ? ' next' : '') + '"'
-          + ' onclick="setDeliveryDate(\'' + d.iso + '\',\'' + d.dayName + '\')"'
-          + ' aria-label="' + d.dayName + ' ' + d.dayNum + ' de ' + d.monthShort + '">'
-          + '<span class="dc-day">' + d.dayShort + '</span>'
-          + '<span class="dc-num">' + d.dayNum + '</span>'
-          + '<span class="dc-mon">' + d.monthShort + '</span>'
-          + '<span class="dc-time">' + d.timeRange + '</span>'
-          + '</button>';
+
+  function cardHTML(d, isNext) {
+    return '<button type="button" class="loc-date-card' + (isNext ? ' next' : '') + '"'
+         + ' onclick="setDeliveryDate(\'' + d.iso + '\',\'' + d.dayName + '\')"'
+         + ' aria-label="' + d.dayName + ' ' + d.dayNum + ' de ' + d.monthShort + '">'
+         + '<span class="dc-day">' + d.dayShort + '</span>'
+         + '<span class="dc-num">' + d.dayNum + '</span>'
+         + '<span class="dc-mon">' + d.monthShort + '</span>'
+         + '<span class="dc-time">' + d.timeRange + '</span>'
+         + '</button>';
   }
+
+  // Sección: Semana actual
+  if (groups.thisWeek.length) {
+    html += '<div class="loc-date-section">';
+    html += '<div class="loc-date-section-title">Semana actual</div>';
+    html += '<div class="loc-date-section-grid">';
+    groups.thisWeek.forEach(function(d, i) { html += cardHTML(d, i === 0); });
+    html += '</div></div>';
+  }
+
+  // Sección: Semana siguiente
+  if (groups.nextWeek.length) {
+    var firstNext = groups.thisWeek.length === 0; // si no había nada esta semana, marcar la primera
+    html += '<div class="loc-date-section">';
+    html += '<div class="loc-date-section-title">Semana siguiente</div>';
+    html += '<div class="loc-date-section-grid">';
+    groups.nextWeek.forEach(function(d, i) { html += cardHTML(d, i === 0 && firstNext); });
+    html += '</div></div>';
+  }
+
+  // Sección: Para más adelante (acordeón)
+  if (groups.later.length) {
+    html += '<div class="loc-date-section">';
+    html += '<button type="button" class="loc-later-toggle" onclick="toggleLaterSection(this)" aria-expanded="false">';
+    html += '<span>Para más adelante</span><span class="chev">▾</span>';
+    html += '</button>';
+    html += '<div class="loc-later-content" hidden>';
+    html += '<div class="loc-date-section-grid">';
+    groups.later.forEach(function(d) { html += cardHTML(d, false); });
+    html += '</div></div></div>';
+  }
+
   grid.innerHTML = html;
 }
-/* Devuelve las próximas N fechas de entrega válidas para la zona dada. */
-function _getNextDeliveryDates(zone, n) {
-  var z = ZONAS[zone]; if (!z || !z.horarios) return [];
-  var validDays = Object.keys(z.horarios); // ["Lunes","Miércoles",...]
-  var out = [];
-  // "Hoy" en hora Argentina (medianoche UTC)
-  var nowUTC = new Date();
-  var nowAR = new Date(nowUTC.getTime() - 3 * 3600 * 1000);
-  var today = new Date(Date.UTC(nowAR.getUTCFullYear(), nowAR.getUTCMonth(), nowAR.getUTCDate()));
+
+function toggleLaterSection(btn) {
+  if (!btn) return;
+  var expanded = btn.getAttribute('aria-expanded') === 'true';
+  btn.setAttribute('aria-expanded', String(!expanded));
+  btn.classList.toggle('open', !expanded);
+  var content = btn.nextElementSibling;
+  if (content) {
+    if (expanded) content.setAttribute('hidden', '');
+    else content.removeAttribute('hidden');
+  }
+}
+
+/* Devuelve las próximas fechas de entrega válidas para la zona dada,
+   agrupadas por: thisWeek (hasta el Domingo de esta semana),
+   nextWeek (Lun-Dom de la semana siguiente), later (todo lo posterior,
+   hasta 5 semanas en total). */
+function _getNextDeliveryDatesGrouped(zone) {
+  var out = { thisWeek: [], nextWeek: [], later: [] };
+  var z = ZONAS[zone]; if (!z || !z.horarios) return out;
+  var validDays = Object.keys(z.horarios);
   var DAY_NAMES_LONG = ['Domingo','Lunes','Martes','Miércoles','Jueves','Viernes','Sábado'];
   var DAY_NAMES_SHORT = ['Dom','Lun','Mar','Mié','Jue','Vie','Sáb'];
   var MONTH_SHORT = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
-  for (var i = 0; i < 21 && out.length < n; i++) {
+
+  // Hoy en hora Argentina (medianoche UTC del día AR)
+  var nowAR = new Date(Date.now() - 3 * 3600 * 1000);
+  var today = new Date(Date.UTC(nowAR.getUTCFullYear(), nowAR.getUTCMonth(), nowAR.getUTCDate()));
+
+  // Lunes de la semana actual (en AR, semana arranca Lun)
+  var dow = today.getUTCDay(); // 0=Dom..6=Sáb
+  var diffToMonday = (dow + 6) % 7; // si Dom=0 → 6, Lun=1 → 0
+  var thisMonday = new Date(today);
+  thisMonday.setUTCDate(today.getUTCDate() - diffToMonday);
+  var nextMonday = new Date(thisMonday);
+  nextMonday.setUTCDate(thisMonday.getUTCDate() + 7);
+  var laterStart = new Date(thisMonday);
+  laterStart.setUTCDate(thisMonday.getUTCDate() + 14);
+
+  for (var i = 0; i < 35; i++) {
     var d = new Date(today);
     d.setUTCDate(today.getUTCDate() + i);
     var dayName = DAY_NAMES_LONG[d.getUTCDay()];
     if (validDays.indexOf(dayName) === -1) continue;
-    // Si es hoy y la entrega ya pasó (o estamos a <2hs), saltar
-    if (i === 0) {
-      var startMs = _deliveryStartMs(d.toISOString().slice(0,10));
-      if (startMs && (startMs - Date.now()) < 2 * 3600 * 1000) continue;
-    }
-    out.push({
-      iso: d.toISOString().slice(0,10),
+    var iso = d.toISOString().slice(0,10);
+    // Si la entrega ya empezó / faltan <2hs, saltar
+    var startMs = _deliveryStartMs(iso);
+    if (startMs && (startMs - Date.now()) < 2 * 3600 * 1000) continue;
+    var item = {
+      iso: iso,
       dayName: dayName,
       dayShort: DAY_NAMES_SHORT[d.getUTCDay()],
       dayNum: d.getUTCDate(),
       monthShort: MONTH_SHORT[d.getUTCMonth()],
       timeRange: (z.horarios[dayName] || '').replace(/\s*hs/g,'hs')
-    });
+    };
+    if (d.getTime() < nextMonday.getTime()) out.thisWeek.push(item);
+    else if (d.getTime() < laterStart.getTime()) out.nextWeek.push(item);
+    else out.later.push(item);
   }
   return out;
 }
+
+/* Devuelve el próximo objeto de fecha de entrega de un día específico
+   ("Viernes", etc.) para la zona dada. Usado para el fallback de
+   "Cualquier día". */
+function _getNextDeliveryOf(zone, targetDayName) {
+  var groups = _getNextDeliveryDatesGrouped(zone);
+  var all = groups.thisWeek.concat(groups.nextWeek, groups.later);
+  for (var i = 0; i < all.length; i++) if (all[i].dayName === targetDayName) return all[i];
+  return all[0] || null;
+}
 function setDeliveryDate(iso, dayName) {
-  selectedDeliveryDate = iso;
-  selectedDeliveryDayName = dayName;
+  if (iso === 'any') {
+    // "Cualquier día" → flexible. Para el day-picker del form usamos
+    // por default el próximo Viernes (la fecha más común y disponible
+    // en todas las zonas).
+    selectedDateIsFlexible = true;
+    var fri = _getNextDeliveryOf(currentZone, 'Viernes') || _getNextDeliveryOf(currentZone, 'Miércoles');
+    if (fri) {
+      selectedDeliveryDate = fri.iso;
+      selectedDeliveryDayName = fri.dayName;
+    } else {
+      selectedDeliveryDate = null;
+      selectedDeliveryDayName = '';
+    }
+  } else {
+    selectedDateIsFlexible = false;
+    selectedDeliveryDate = iso;
+    selectedDeliveryDayName = dayName;
+  }
   try {
     localStorage.setItem('maleu_delivery_date', JSON.stringify({
-      iso: iso, dayName: dayName, zone: currentZone, ts: Date.now()
+      iso: selectedDeliveryDate, dayName: selectedDeliveryDayName,
+      flexible: selectedDateIsFlexible, zone: currentZone, ts: Date.now()
     }));
   } catch(e) {}
   _setOverlay(false);
@@ -430,21 +519,20 @@ function _loadSavedDate() {
     var raw = JSON.parse(localStorage.getItem('maleu_delivery_date') || 'null');
     if (!raw || !raw.iso) return false;
     if (raw.zone && raw.zone !== currentZone) return false;
-    if (raw.iso !== 'any') {
-      var startMs = _deliveryStartMs(raw.iso);
-      if (!startMs || startMs < Date.now()) return false; // ya pasó
-    }
+    var startMs = _deliveryStartMs(raw.iso);
+    if (!startMs || startMs < Date.now()) return false; // ya pasó
     selectedDeliveryDate = raw.iso;
     selectedDeliveryDayName = raw.dayName || '';
+    selectedDateIsFlexible = !!raw.flexible;
     _updateDateChip();
     return true;
   } catch(e) { return false; }
 }
 function _updateDateChip() {
   var chip = $id('date-chip'); if (!chip) return;
-  if (!selectedDeliveryDate) { chip.style.display = 'none'; return; }
+  if (!selectedDeliveryDate && !selectedDateIsFlexible) { chip.style.display = 'none'; return; }
   chip.style.display = '';
-  if (selectedDeliveryDate === 'any') {
+  if (selectedDateIsFlexible) {
     chip.textContent = '📅 Cualquier día';
     return;
   }
