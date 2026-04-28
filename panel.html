@@ -721,6 +721,8 @@ function aplicarMovLocal(tipo,fecha,cat,con,met,monto,notas){
 }
 
 // ── GUARDAR GASTO (soporta pago dividido EF + MP) ──
+// Si backend está al día (v201+) usa el formato batch (montoEf/montoMp = 1 POST).
+// Si está desactualizado, cae al legacy (2 POSTs paralelos con metodo+monto).
 function guardarGasto(e){
   e.preventDefault();
   var ef=parseM($('gEf').value), mp=parseM($('gMP').value);
@@ -728,14 +730,20 @@ function guardarGasto(e){
   var btn=$('gBtn');btn.disabled=true;btn.textContent='Guardando...';
   showLoader('Registrando gasto...');
   var fecha=$('gFecha').value, cat=$('gCat').value, con=$('gCon').value, notas=$('gNotas').value;
-  var base={action:'gasto',fecha:fecha,categoria:cat,concepto:con,notas:notas};
-  var reqs=[];
-  if(ef>0)reqs.push(fetch(API,{method:'POST',body:JSON.stringify(Object.assign({},base,{metodo:'Efectivo',monto:ef}))}));
-  if(mp>0)reqs.push(fetch(API,{method:'POST',body:JSON.stringify(Object.assign({},base,{metodo:'Mercado Pago',monto:mp}))}));
-  Promise.all(reqs).then(function(rs){return Promise.all(rs.map(function(r){return r.json();}));})
-    .then(function(results){
-      var ok=results.every(function(r){return r.ok;});
-      if(ok){
+  // Single POST batch + fallback legacy si el backend no lo soporta (rows undefined o rows=0)
+  fetch(API,{method:'POST',body:JSON.stringify({
+    action:'gasto',fecha:fecha,categoria:cat,concepto:con,notas:notas,
+    montoEf:ef, montoMp:mp,
+    // Compatibilidad con backend v200: si solo hay un método, también va por formato viejo
+    metodo:(ef>0&&mp===0)?'Efectivo':((mp>0&&ef===0)?'Mercado Pago':''),
+    monto:(ef>0&&mp===0)?ef:((mp>0&&ef===0)?mp:0)
+  })})
+    .then(function(r){return r.json();})
+    .then(function(r){
+      var supportsBatch = r.ok && (r.rows !== undefined);
+      var soloUnMetodo = (ef>0)!==(mp>0);
+      // Si el backend procesó OK (batch) o si solo había 1 método (cualquier backend lo procesa), listo.
+      if(r.ok && (supportsBatch || soloUnMetodo)){
         if(ef>0)aplicarMovLocal('gasto',fecha,cat,con,'Efectivo',ef,notas);
         if(mp>0)aplicarMovLocal('gasto',fecha,cat,con,'Mercado Pago',mp,notas);
         render();hideLoader(true);
@@ -743,15 +751,39 @@ function guardarGasto(e){
         toast('Gasto $'+f$(total)+' ('+parts.join(' + ')+')');
         saveNota(notas);saveConcepto(cat,con);
         $('gCat').value='';$('gCon').value='';$('gEf').value='';$('gMP').value='';$('gNotas').value='';
-        load(); // reconciliar en background
-      }else{hideLoader(true);toast('Error');}
+        load();
+        btn.disabled=false;btn.textContent='Guardar gasto';
+        return;
+      }
+      // Fallback: backend viejo + ambos métodos. El primer POST registró Efectivo (o vacío). Mando el segundo.
+      if(r.ok && !supportsBatch && ef>0 && mp>0){
+        // Backend viejo recibió ambos en 1 POST y registró ninguno (metodo vacío). Hacemos 2 POSTs legacy.
+        var base={action:'gasto',fecha:fecha,categoria:cat,concepto:con,notas:notas};
+        Promise.all([
+          fetch(API,{method:'POST',body:JSON.stringify(Object.assign({},base,{metodo:'Efectivo',monto:ef}))}),
+          fetch(API,{method:'POST',body:JSON.stringify(Object.assign({},base,{metodo:'Mercado Pago',monto:mp}))})
+        ]).then(function(rs){return Promise.all(rs.map(function(x){return x.json();}));})
+          .then(function(){
+            aplicarMovLocal('gasto',fecha,cat,con,'Efectivo',ef,notas);
+            aplicarMovLocal('gasto',fecha,cat,con,'Mercado Pago',mp,notas);
+            render();hideLoader(true);
+            toast('Gasto $'+f$(ef+mp)+' (EF $'+f$(ef)+' + MP $'+f$(mp)+')');
+            saveNota(notas);saveConcepto(cat,con);
+            $('gCat').value='';$('gCon').value='';$('gEf').value='';$('gMP').value='';$('gNotas').value='';
+            load();
+          })
+          .catch(function(){hideLoader(true);toast('Sin conexion');})
+          .finally(function(){btn.disabled=false;btn.textContent='Guardar gasto';});
+        return;
+      }
+      hideLoader(true);toast('Error: '+(r.err||'?'));
+      btn.disabled=false;btn.textContent='Guardar gasto';
     })
-    .catch(function(){hideLoader(true);toast('Sin conexion');})
-    .finally(function(){btn.disabled=false;btn.textContent='Guardar gasto';});
+    .catch(function(){hideLoader(true);toast('Sin conexion');btn.disabled=false;btn.textContent='Guardar gasto';});
   return false;
 }
 
-// ── GUARDAR INGRESO (soporta pago dividido EF + MP) ──
+// ── GUARDAR INGRESO (mismo patrón: batch + fallback legacy) ──
 function guardarIngreso(e){
   e.preventDefault();
   var ef=parseM($('iEf').value), mp=parseM($('iMP').value);
@@ -759,14 +791,17 @@ function guardarIngreso(e){
   var btn=$('iBtn');btn.disabled=true;btn.textContent='Guardando...';
   showLoader('Registrando ingreso...');
   var fecha=$('iFecha').value, cat=$('iCat').value, con=$('iCon').value, notas=$('iNotas').value;
-  var base={action:'ingreso',fecha:fecha,categoria:cat,concepto:con,notas:notas};
-  var reqs=[];
-  if(ef>0)reqs.push(fetch(API,{method:'POST',body:JSON.stringify(Object.assign({},base,{metodo:'Efectivo',monto:ef}))}));
-  if(mp>0)reqs.push(fetch(API,{method:'POST',body:JSON.stringify(Object.assign({},base,{metodo:'Mercado Pago',monto:mp}))}));
-  Promise.all(reqs).then(function(rs){return Promise.all(rs.map(function(r){return r.json();}));})
-    .then(function(results){
-      var ok=results.every(function(r){return r.ok;});
-      if(ok){
+  fetch(API,{method:'POST',body:JSON.stringify({
+    action:'ingreso',fecha:fecha,categoria:cat,concepto:con,notas:notas,
+    montoEf:ef, montoMp:mp,
+    metodo:(ef>0&&mp===0)?'Efectivo':((mp>0&&ef===0)?'Mercado Pago':''),
+    monto:(ef>0&&mp===0)?ef:((mp>0&&ef===0)?mp:0)
+  })})
+    .then(function(r){return r.json();})
+    .then(function(r){
+      var supportsBatch = r.ok && (r.rows !== undefined);
+      var soloUnMetodo = (ef>0)!==(mp>0);
+      if(r.ok && (supportsBatch || soloUnMetodo)){
         if(ef>0)aplicarMovLocal('ingreso',fecha,cat,con,'Efectivo',ef,notas);
         if(mp>0)aplicarMovLocal('ingreso',fecha,cat,con,'Mercado Pago',mp,notas);
         render();hideLoader(true);
@@ -775,10 +810,32 @@ function guardarIngreso(e){
         saveNota(notas);saveConcepto(cat,con);
         $('iCat').value='';$('iCon').value='';$('iEf').value='';$('iMP').value='';$('iNotas').value='';
         load();
-      }else{hideLoader(true);toast('Error');}
+        btn.disabled=false;btn.textContent='Guardar ingreso';
+        return;
+      }
+      if(r.ok && !supportsBatch && ef>0 && mp>0){
+        var base={action:'ingreso',fecha:fecha,categoria:cat,concepto:con,notas:notas};
+        Promise.all([
+          fetch(API,{method:'POST',body:JSON.stringify(Object.assign({},base,{metodo:'Efectivo',monto:ef}))}),
+          fetch(API,{method:'POST',body:JSON.stringify(Object.assign({},base,{metodo:'Mercado Pago',monto:mp}))})
+        ]).then(function(rs){return Promise.all(rs.map(function(x){return x.json();}));})
+          .then(function(){
+            aplicarMovLocal('ingreso',fecha,cat,con,'Efectivo',ef,notas);
+            aplicarMovLocal('ingreso',fecha,cat,con,'Mercado Pago',mp,notas);
+            render();hideLoader(true);
+            toast('Ingreso $'+f$(ef+mp)+' (EF $'+f$(ef)+' + MP $'+f$(mp)+')');
+            saveNota(notas);saveConcepto(cat,con);
+            $('iCat').value='';$('iCon').value='';$('iEf').value='';$('iMP').value='';$('iNotas').value='';
+            load();
+          })
+          .catch(function(){hideLoader(true);toast('Sin conexion');})
+          .finally(function(){btn.disabled=false;btn.textContent='Guardar ingreso';});
+        return;
+      }
+      hideLoader(true);toast('Error: '+(r.err||'?'));
+      btn.disabled=false;btn.textContent='Guardar ingreso';
     })
-    .catch(function(){hideLoader(true);toast('Sin conexion');})
-    .finally(function(){btn.disabled=false;btn.textContent='Guardar ingreso';});
+    .catch(function(){hideLoader(true);toast('Sin conexion');btn.disabled=false;btn.textContent='Guardar ingreso';});
   return false;
 }
 
