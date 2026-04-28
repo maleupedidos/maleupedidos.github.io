@@ -103,7 +103,10 @@ let vendedoresRed = []; // {nombre, wa, barrios:[], partido, localidad}
 let barrioToVendedor = {}; // { 'El Lucero': {nombre, wa, partido, localidad}, ... }
 let _enviando = false;
 
-/* Ventana de stock: solo Estancias, Jueves 13:01 a Domingo 21:00 */
+/* Ventana de stock: solo Estancias, Miércoles 12:00 a Domingo 21:00.
+   Antes del Mié 12hs hay tiempo para reponer vía OC al proveedor, por eso
+   el cliente puede pedir cualquier cantidad aunque el stock sea bajo (se
+   muestra un cartel informativo en su lugar). */
 function isStockLimited() {
   if (currentZone !== 'estancias') return false;
   var now = new Date();
@@ -113,10 +116,18 @@ function isStockLimited() {
   var arD = utcD;
   if (utcH < 3) arD = (utcD - 1 + 7) % 7;
   // 0=Dom, 1=Lun, 2=Mar, 3=Mié, 4=Jue, 5=Vie, 6=Sáb
-  if (arD === 4 && arH >= 13) return true;  // Jueves desde 13:01
+  if (arD === 3 && arH >= 12) return true;  // Miércoles desde 12:00
+  if (arD === 4) return true;                // Jueves todo el día
   if (arD === 5 || arD === 6) return true;   // Viernes y Sábado todo el día
   if (arD === 0 && arH < 21) return true;    // Domingo hasta 21:00
   return false;
+}
+/* Modo "abierto con info": Estancias antes del Mié 12hs.
+   Se muestra cartel "Hoy hay N en stock" pero NO se bloquea agregar más. */
+function isStockInfoMode() {
+  if (currentZone !== 'estancias') return false;
+  if (isStockLimited()) return false;
+  return true;
 }
 let _formVisible = false;
 const PROD_MAP = {}; PRODUCTOS.forEach(p => PROD_MAP[p.id] = p);
@@ -1036,13 +1047,16 @@ async function fetchStock() {
 }
 function updateStockDisplay() {
   const limited = isStockLimited();
-  const showStock = limited || (currentZone && ZONAS[currentZone] && ZONAS[currentZone].showStock);
+  const infoMode = isStockInfoMode();
+  const showStock = limited || infoMode || (currentZone && ZONAS[currentZone] && ZONAS[currentZone].showStock);
   PRODUCTOS.forEach(p => {
     const el=$id('stock-'+p.id), avail=stockMap[p.id]; if(!el) return;
     if (!showStock || avail===undefined) { el.innerHTML=''; }
     else if(avail===0 && limited) el.innerHTML='<span class="stock-badge stock-out">Sin stock</span>';
+    else if(avail===0 && infoMode) el.innerHTML='<span class="stock-badge stock-info">Hoy: 0 en stock · Pedís para fecha futura ✓</span>';
     else if(avail===0 && !limited) el.innerHTML='<span class="stock-badge stock-order">A pedido</span>';
     else if(avail<=3 && limited) el.innerHTML='<span class="stock-badge stock-low">Últimas '+avail+' unidades</span>';
+    else if(avail<=5 && infoMode) el.innerHTML='<span class="stock-badge stock-info">Hoy hay '+avail+' en stock · Pedís más para fecha futura ✓</span>';
     else el.innerHTML='';
     renderCardFooter(p.id);
   });
