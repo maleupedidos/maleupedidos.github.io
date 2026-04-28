@@ -296,6 +296,19 @@ function updatePilarVendedorLabel() {
 }
 
 /* ── ZONA + FECHA (modal de bienvenida) ── */
+function _setOverlay(show) {
+  var ov = $id('loc-overlay');
+  if (!ov) return;
+  if (show) {
+    ov.classList.remove('hidden');
+    document.body.classList.add('modal-open');
+    document.documentElement.classList.add('modal-open');
+  } else {
+    ov.classList.add('hidden');
+    document.body.classList.remove('modal-open');
+    document.documentElement.classList.remove('modal-open');
+  }
+}
 function setZone(zone) {
   currentZone = zone;
   localStorage.setItem('maleu_zone', zone);
@@ -306,19 +319,19 @@ function setZone(zone) {
   if (!_loadSavedDate()) {
     welcomeShowDateStep();
   } else {
-    $id('loc-overlay').classList.add('hidden');
+    _setOverlay(false);
     window.scrollTo(0, 0);
   }
 }
 function showZoneModal() {
   // Reabrir desde el chip "📍 Zona"
   welcomeShowZoneStep();
-  $id('loc-overlay').classList.remove('hidden');
+  _setOverlay(true);
 }
 function showDateModal() {
   // Reabrir desde el chip "📅 Fecha"
   welcomeShowDateStep();
-  $id('loc-overlay').classList.remove('hidden');
+  _setOverlay(true);
 }
 function welcomeBackToZone() {
   welcomeShowZoneStep();
@@ -404,7 +417,7 @@ function setDeliveryDate(iso, dayName) {
       iso: iso, dayName: dayName, zone: currentZone, ts: Date.now()
     }));
   } catch(e) {}
-  $id('loc-overlay').classList.add('hidden');
+  _setOverlay(false);
   _updateDateChip();
   _ensureCartFitsDate();
   updateStockDisplay();
@@ -1339,15 +1352,15 @@ if (savedZone && ZONAS[savedZone]) {
   // Si tiene fecha vigente guardada → modal cerrado, todo listo.
   // Si no → abrir el modal directamente en paso 2 (fecha).
   if (_loadSavedDate()) {
-    $id('loc-overlay').classList.add('hidden');
+    _setOverlay(false);
   } else {
     welcomeShowDateStep();
-    $id('loc-overlay').classList.remove('hidden');
+    _setOverlay(true);
   }
 } else {
   // Cliente nuevo: paso 1 (zona) primero
   welcomeShowZoneStep();
-  $id('loc-overlay').classList.remove('hidden');
+  _setOverlay(true);
 }
 
 loadClientData();
