@@ -97,49 +97,55 @@ const STOCK_CSV_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vTOq210U9
 
 /* ── ESTADO ── */
 let cart = {};
-let currentZone = null; // 'estancias' | 'pilar'
+let currentZone = null; // 'estancias' | 'pilar' | 'clubes'
 let stockMap = {};
 let vendedoresRed = []; // {nombre, wa, barrios:[], partido, localidad}
 let barrioToVendedor = {}; // { 'El Lucero': {nombre, wa, partido, localidad}, ... }
 let _enviando = false;
+let selectedDeliveryDate = null;     // ISO "YYYY-MM-DD" o "any"
+let selectedDeliveryDayName = null;  // "Lunes" | "Miércoles" | etc.
 
-/* Tope estricto de stock — solo Estancias.
-   Aplica cuando HOY es día de entrega Home y la entrega aún no pasó, o
-   cuando estamos pasados el cutoff del fin de semana (Mié 12hs → Dom 21hs).
-   Días de entrega Home: Lun/Mié/Vie/Sáb 19-21hs, Dom 11-13hs.
+/* Tope estricto de stock — depende de la fecha de entrega elegida.
+   Solo aplica en zona Estancias (Pilar y Clubes nunca tienen tope).
 
-   Resumen por día (hora Argentina):
-     Lun 0-21:  TOPE (entrega hoy 19-21)
-     Lun 21+:   abierto (próxima entrega Mié con margen)
-     Mar todo:  abierto (no hay entrega hoy)
-     Mié 0-12:  abierto (margen para reponer antes de la entrega del finde)
-     Mié 12+:   TOPE (cutoff fin de semana + entrega hoy 19-21)
-     Jue todo:  TOPE (cutoff fin de semana)
-     Vie/Sáb:   TOPE (entrega hoy + finde)
-     Dom 0-21:  TOPE (entrega 11-13 + finde)
-     Dom 21+:   abierto (cierra ventana de finde) */
+   Regla: si la fecha elegida está a <24hs del horario más temprano de
+   entrega de ese día, no hay tiempo de reponer vía OC al proveedor.
+   Por lo tanto, el cliente solo puede pedir lo que hay en el freezer.
+
+   Si la fecha es a más de 24hs → modo abierto con info (puede pedir
+   cualquier cantidad porque hay margen de reposición).
+
+   Si elige "Cualquier día" o no eligió fecha → modo abierto con info
+   también (asumimos que es flexible). */
 function isStockLimited() {
   if (currentZone !== 'estancias') return false;
-  var now = new Date();
-  var utcH = now.getUTCHours(), utcD = now.getUTCDay();
-  // Argentina = UTC-3
-  var arH = (utcH - 3 + 24) % 24;
-  var arD = utcD;
-  if (utcH < 3) arD = (utcD - 1 + 7) % 7;
-  // 0=Dom, 1=Lun, 2=Mar, 3=Mié, 4=Jue, 5=Vie, 6=Sáb
-  if (arD === 1 && arH < 21) return true;   // Lunes hasta 21 (entrega hoy)
-  if (arD === 3 && arH >= 12) return true;  // Mié 12+ (cutoff finde + entrega)
-  if (arD === 4) return true;                // Jueves todo el día
-  if (arD === 5 || arD === 6) return true;   // Vie/Sáb todo el día
-  if (arD === 0 && arH < 21) return true;    // Domingo hasta 21:00
-  return false;
+  if (!selectedDeliveryDate || selectedDeliveryDate === 'any') return false;
+  var deliveryStartMs = _deliveryStartMs(selectedDeliveryDate);
+  if (!deliveryStartMs) return false;
+  var hoursUntil = (deliveryStartMs - Date.now()) / 3600000;
+  return hoursUntil < 24;
 }
-/* Modo "abierto con info": Estancias en Mar, Mié AM, Lun noche y Dom noche.
-   Se muestra cartel "Hoy hay N en stock" pero NO se bloquea agregar más. */
+/* Modo "abierto con info": Estancias con fecha lejana, "any", o sin elegir. */
 function isStockInfoMode() {
   if (currentZone !== 'estancias') return false;
   if (isStockLimited()) return false;
   return true;
+}
+/* Hora de inicio de entrega (UTC ms) para una fecha ISO dada.
+   Lun 18hs · Mié/Vie/Sáb 19hs · Dom 11hs · Pilar 19hs · Clubes 19hs. */
+function _deliveryStartMs(iso) {
+  if (!iso || iso === 'any') return null;
+  var parts = iso.split('-'); if (parts.length !== 3) return null;
+  var y = +parts[0], m = +parts[1] - 1, d = +parts[2];
+  var date = new Date(Date.UTC(y, m, d));
+  var dow = date.getUTCDay(); // 0=Dom..6=Sáb
+  var hourAR;
+  if (dow === 1) hourAR = 18;        // Lunes 18hs
+  else if (dow === 0) hourAR = 11;   // Domingo 11hs
+  else hourAR = 19;                   // Mié/Vie/Sáb 19hs (y Pilar/Clubes)
+  // AR (UTC-3) → UTC = AR + 3
+  date.setUTCHours(hourAR + 3, 0, 0, 0);
+  return date.getTime();
 }
 let _formVisible = false;
 const PROD_MAP = {}; PRODUCTOS.forEach(p => PROD_MAP[p.id] = p);
@@ -289,17 +295,175 @@ function updatePilarVendedorLabel() {
   if (typeof onPagoChange === 'function') onPagoChange();
 }
 
-/* ── ZONA ── */
+/* ── ZONA + FECHA (modal de bienvenida) ── */
 function setZone(zone) {
   currentZone = zone;
   localStorage.setItem('maleu_zone', zone);
-  $id('loc-overlay').classList.add('hidden');
   _track('select_zone', { zone: zone });
   applyZone();
-  window.scrollTo(0, 0);
+  // Si ya tenía fecha guardada y aún es vigente, no volver a preguntar.
+  // Si no, avanzar al paso 2 (fecha) en el mismo modal.
+  if (!_loadSavedDate()) {
+    welcomeShowDateStep();
+  } else {
+    $id('loc-overlay').classList.add('hidden');
+    window.scrollTo(0, 0);
+  }
 }
 function showZoneModal() {
+  // Reabrir desde el chip "📍 Zona"
+  welcomeShowZoneStep();
   $id('loc-overlay').classList.remove('hidden');
+}
+function showDateModal() {
+  // Reabrir desde el chip "📅 Fecha"
+  welcomeShowDateStep();
+  $id('loc-overlay').classList.remove('hidden');
+}
+function welcomeBackToZone() {
+  welcomeShowZoneStep();
+}
+function welcomeShowZoneStep() {
+  $id('loc-step-zone').style.display = '';
+  $id('loc-step-date').style.display = 'none';
+}
+function welcomeShowDateStep() {
+  $id('loc-step-zone').style.display = 'none';
+  var step = $id('loc-step-date');
+  step.style.display = '';
+  // Etiqueta con la zona elegida
+  var z = ZONAS[currentZone];
+  var label = step.querySelector('#loc-date-zone-label strong');
+  if (label && z) label.textContent = z.nombre;
+  // Render grilla
+  renderWelcomeDateGrid();
+}
+function renderWelcomeDateGrid() {
+  var grid = $id('loc-dates-grid');
+  if (!grid || !currentZone) return;
+  var dates = _getNextDeliveryDates(currentZone, 6);
+  var html = '';
+  // Card "Cualquier día" (flexible)
+  html += '<button type="button" class="loc-date-card any" onclick="setDeliveryDate(\'any\',\'\')" aria-label="Cualquier día">'
+        + '<span class="dc-day">Para cuándo</span>'
+        + '<span class="dc-num">Cualquier día</span>'
+        + '<span class="dc-time">Sin preferencia</span>'
+        + '</button>';
+  for (var i = 0; i < dates.length; i++) {
+    var d = dates[i];
+    var isNext = i === 0;
+    html += '<button type="button" class="loc-date-card' + (isNext ? ' next' : '') + '"'
+          + ' onclick="setDeliveryDate(\'' + d.iso + '\',\'' + d.dayName + '\')"'
+          + ' aria-label="' + d.dayName + ' ' + d.dayNum + ' de ' + d.monthShort + '">'
+          + '<span class="dc-day">' + d.dayShort + '</span>'
+          + '<span class="dc-num">' + d.dayNum + '</span>'
+          + '<span class="dc-mon">' + d.monthShort + '</span>'
+          + '<span class="dc-time">' + d.timeRange + '</span>'
+          + '</button>';
+  }
+  grid.innerHTML = html;
+}
+/* Devuelve las próximas N fechas de entrega válidas para la zona dada. */
+function _getNextDeliveryDates(zone, n) {
+  var z = ZONAS[zone]; if (!z || !z.horarios) return [];
+  var validDays = Object.keys(z.horarios); // ["Lunes","Miércoles",...]
+  var out = [];
+  // "Hoy" en hora Argentina (medianoche UTC)
+  var nowUTC = new Date();
+  var nowAR = new Date(nowUTC.getTime() - 3 * 3600 * 1000);
+  var today = new Date(Date.UTC(nowAR.getUTCFullYear(), nowAR.getUTCMonth(), nowAR.getUTCDate()));
+  var DAY_NAMES_LONG = ['Domingo','Lunes','Martes','Miércoles','Jueves','Viernes','Sábado'];
+  var DAY_NAMES_SHORT = ['Dom','Lun','Mar','Mié','Jue','Vie','Sáb'];
+  var MONTH_SHORT = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+  for (var i = 0; i < 21 && out.length < n; i++) {
+    var d = new Date(today);
+    d.setUTCDate(today.getUTCDate() + i);
+    var dayName = DAY_NAMES_LONG[d.getUTCDay()];
+    if (validDays.indexOf(dayName) === -1) continue;
+    // Si es hoy y la entrega ya pasó (o estamos a <2hs), saltar
+    if (i === 0) {
+      var startMs = _deliveryStartMs(d.toISOString().slice(0,10));
+      if (startMs && (startMs - Date.now()) < 2 * 3600 * 1000) continue;
+    }
+    out.push({
+      iso: d.toISOString().slice(0,10),
+      dayName: dayName,
+      dayShort: DAY_NAMES_SHORT[d.getUTCDay()],
+      dayNum: d.getUTCDate(),
+      monthShort: MONTH_SHORT[d.getUTCMonth()],
+      timeRange: (z.horarios[dayName] || '').replace(/\s*hs/g,'hs')
+    });
+  }
+  return out;
+}
+function setDeliveryDate(iso, dayName) {
+  selectedDeliveryDate = iso;
+  selectedDeliveryDayName = dayName;
+  try {
+    localStorage.setItem('maleu_delivery_date', JSON.stringify({
+      iso: iso, dayName: dayName, zone: currentZone, ts: Date.now()
+    }));
+  } catch(e) {}
+  $id('loc-overlay').classList.add('hidden');
+  _updateDateChip();
+  _ensureCartFitsDate();
+  updateStockDisplay();
+  // Pre-rellenar el day-picker del form si corresponde
+  _preselectDayPicker();
+  window.scrollTo(0, 0);
+}
+function _loadSavedDate() {
+  try {
+    var raw = JSON.parse(localStorage.getItem('maleu_delivery_date') || 'null');
+    if (!raw || !raw.iso) return false;
+    if (raw.zone && raw.zone !== currentZone) return false;
+    if (raw.iso !== 'any') {
+      var startMs = _deliveryStartMs(raw.iso);
+      if (!startMs || startMs < Date.now()) return false; // ya pasó
+    }
+    selectedDeliveryDate = raw.iso;
+    selectedDeliveryDayName = raw.dayName || '';
+    _updateDateChip();
+    return true;
+  } catch(e) { return false; }
+}
+function _updateDateChip() {
+  var chip = $id('date-chip'); if (!chip) return;
+  if (!selectedDeliveryDate) { chip.style.display = 'none'; return; }
+  chip.style.display = '';
+  if (selectedDeliveryDate === 'any') {
+    chip.textContent = '📅 Cualquier día';
+    return;
+  }
+  var parts = selectedDeliveryDate.split('-');
+  if (parts.length !== 3) { chip.textContent = '📅 Fecha'; return; }
+  var DAY_NAMES_SHORT = ['Dom','Lun','Mar','Mié','Jue','Vie','Sáb'];
+  var d = new Date(Date.UTC(+parts[0], +parts[1]-1, +parts[2]));
+  chip.textContent = '📅 ' + DAY_NAMES_SHORT[d.getUTCDay()] + ' ' + (+parts[2]) + '/' + (+parts[1]);
+}
+function _ensureCartFitsDate() {
+  // Si la fecha elegida activa modo limitado, recortar carrito al stock real
+  if (!isStockLimited()) return;
+  var ajustado = false;
+  Object.entries(cart).forEach(function(kv) {
+    var id = kv[0], qty = kv[1];
+    var avail = stockMap[id];
+    if (avail !== undefined && qty > avail) {
+      if (avail === 0) delete cart[id];
+      else cart[id] = avail;
+      ajustado = true;
+      renderCardFooter(id);
+    }
+  });
+  if (ajustado) { updateUI(); toast('⚠️ Tu carrito fue ajustado al stock disponible para esa fecha'); }
+}
+function _preselectDayPicker() {
+  // Si el day-picker del form existe, marcar la fecha elegida
+  if (!selectedDeliveryDate || selectedDeliveryDate === 'any') return;
+  var hidden = $id('f-dia'), hiddenF = $id('f-dia-fecha');
+  if (hidden) hidden.value = selectedDeliveryDayName || '';
+  if (hiddenF) hiddenF.value = selectedDeliveryDate;
+  if (typeof renderDayPicker === 'function') renderDayPicker();
 }
 function applyZone() {
   const z = ZONAS[currentZone];
@@ -1169,11 +1333,21 @@ window.addEventListener('resize', updateCatNavTop);
 let savedZone = localStorage.getItem('maleu_zone');
 if (savedZone === 'capital') { savedZone = 'pilar'; localStorage.setItem('maleu_zone', 'pilar'); }
 if (savedZone && ZONAS[savedZone]) {
+  // Cliente recurrente: tiene zona. NO mostrar paso 1 (zona).
   currentZone = savedZone;
-  $id('loc-overlay').classList.add('hidden');
   applyZone();
+  // Si tiene fecha vigente guardada → modal cerrado, todo listo.
+  // Si no → abrir el modal directamente en paso 2 (fecha).
+  if (_loadSavedDate()) {
+    $id('loc-overlay').classList.add('hidden');
+  } else {
+    welcomeShowDateStep();
+    $id('loc-overlay').classList.remove('hidden');
+  }
 } else {
-  // Mostrar modal
+  // Cliente nuevo: paso 1 (zona) primero
+  welcomeShowZoneStep();
+  $id('loc-overlay').classList.remove('hidden');
 }
 
 loadClientData();
