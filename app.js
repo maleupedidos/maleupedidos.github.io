@@ -103,10 +103,21 @@ let vendedoresRed = []; // {nombre, wa, barrios:[], partido, localidad}
 let barrioToVendedor = {}; // { 'El Lucero': {nombre, wa, partido, localidad}, ... }
 let _enviando = false;
 
-/* Ventana de stock: solo Estancias, Miércoles 12:00 a Domingo 21:00.
-   Antes del Mié 12hs hay tiempo para reponer vía OC al proveedor, por eso
-   el cliente puede pedir cualquier cantidad aunque el stock sea bajo (se
-   muestra un cartel informativo en su lugar). */
+/* Tope estricto de stock — solo Estancias.
+   Aplica cuando HOY es día de entrega Home y la entrega aún no pasó, o
+   cuando estamos pasados el cutoff del fin de semana (Mié 12hs → Dom 21hs).
+   Días de entrega Home: Lun/Mié/Vie/Sáb 19-21hs, Dom 11-13hs.
+
+   Resumen por día (hora Argentina):
+     Lun 0-21:  TOPE (entrega hoy 19-21)
+     Lun 21+:   abierto (próxima entrega Mié con margen)
+     Mar todo:  abierto (no hay entrega hoy)
+     Mié 0-12:  abierto (margen para reponer antes de la entrega del finde)
+     Mié 12+:   TOPE (cutoff fin de semana + entrega hoy 19-21)
+     Jue todo:  TOPE (cutoff fin de semana)
+     Vie/Sáb:   TOPE (entrega hoy + finde)
+     Dom 0-21:  TOPE (entrega 11-13 + finde)
+     Dom 21+:   abierto (cierra ventana de finde) */
 function isStockLimited() {
   if (currentZone !== 'estancias') return false;
   var now = new Date();
@@ -116,13 +127,14 @@ function isStockLimited() {
   var arD = utcD;
   if (utcH < 3) arD = (utcD - 1 + 7) % 7;
   // 0=Dom, 1=Lun, 2=Mar, 3=Mié, 4=Jue, 5=Vie, 6=Sáb
-  if (arD === 3 && arH >= 12) return true;  // Miércoles desde 12:00
+  if (arD === 1 && arH < 21) return true;   // Lunes hasta 21 (entrega hoy)
+  if (arD === 3 && arH >= 12) return true;  // Mié 12+ (cutoff finde + entrega)
   if (arD === 4) return true;                // Jueves todo el día
-  if (arD === 5 || arD === 6) return true;   // Viernes y Sábado todo el día
+  if (arD === 5 || arD === 6) return true;   // Vie/Sáb todo el día
   if (arD === 0 && arH < 21) return true;    // Domingo hasta 21:00
   return false;
 }
-/* Modo "abierto con info": Estancias antes del Mié 12hs.
+/* Modo "abierto con info": Estancias en Mar, Mié AM, Lun noche y Dom noche.
    Se muestra cartel "Hoy hay N en stock" pero NO se bloquea agregar más. */
 function isStockInfoMode() {
   if (currentZone !== 'estancias') return false;
