@@ -95,6 +95,20 @@ const WA_NUMBER = "5491155038905";
 const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxmrG5YVSshcYezk8lXFx_uxb7NFGcb9EfTXc7dsIN4rZyj73CET4mk_aKPFPDY2wNi/exec";
 const STOCK_CSV_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vTOq210U9LeSxvXbx_sdglHS0K9DZP8H_5pGXC-WwlMo8AE4UacIN0bpagQqAr79XeJNQ1Nm1eql271/pub?gid=792614962&single=true&output=csv';
 
+/* ── RESTRICCIONES TEMPORALES ──
+   Pilar y Alrededores: del 29/04 hasta el Domingo 03/05/2026 inclusive.
+   Durante esa ventana, los pedidos de Pilar deben (a) topar al stock
+   real del depósito y (b) solo aceptar barrios cubiertos por vendedores
+   Red activos (hoy: Marcos Bottcher en El Lucero / Los Tacos). Vuelve
+   automáticamente a la normalidad el Lunes 04/05 (en realidad la zona
+   se reabre el Mié 06/05 que es el próximo día de entrega Pilar).
+   Vencido el timestamp, la restricción se desactiva sola sin tocar nada. */
+const PILAR_RESTRICCION_HASTA_MS = Date.UTC(2026, 4, 4, 2, 59, 59); // Dom 03/05 23:59:59 AR = Lun 04/05 02:59:59 UTC
+function isPilarRestricted() {
+  if (currentZone !== 'pilar') return false;
+  return Date.now() < PILAR_RESTRICCION_HASTA_MS;
+}
+
 /* ── ESTADO ── */
 let cart = {};
 let currentZone = null; // 'estancias' | 'pilar' | 'clubes'
@@ -119,6 +133,8 @@ let selectedDateIsFlexible = false;  // true cuando el cliente elige "Cualquier 
    Si elige "Cualquier día" o no eligió fecha → modo abierto con info
    también (asumimos que es flexible). */
 function isStockLimited() {
+  // Pilar bajo restricción temporal de esta semana → tope al stock real
+  if (isPilarRestricted()) return true;
   if (currentZone !== 'estancias') return false;
   if (selectedDateIsFlexible) return false;
   if (!selectedDeliveryDate) return false;
@@ -250,6 +266,7 @@ function fetchVendedores() {
 function renderPilarBarrios() {
   var sel = $id('f-pilar-barrio');
   if (!sel) return;
+  var restricted = isPilarRestricted();
   // Limpiar y re-armar
   var cur = sel.value;
   sel.innerHTML = '<option value="">Elegí tu barrio privado</option>';
@@ -260,8 +277,16 @@ function renderPilarBarrios() {
   all.forEach(b => {
     sel.innerHTML += '<option value="' + b + '">' + b + '</option>';
   });
-  sel.innerHTML += '<option value="__otro__">Otro barrio</option>';
+  // "Otro barrio" se oculta durante la restricción de esta semana
+  if (!restricted) {
+    sel.innerHTML += '<option value="__otro__">Otro barrio</option>';
+  }
+  // Si el cliente tenía elegido "Otro barrio" guardado, limpiarlo
+  if (cur === '__otro__' && restricted) cur = '';
   if (cur) sel.value = cur;
+  // Cartel info
+  var info = $id('pilar-restriccion-info');
+  if (info) info.style.display = restricted ? '' : 'none';
 }
 function onPilarBarrioChange() {
   var val = $id('f-pilar-barrio').value;
