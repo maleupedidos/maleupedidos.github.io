@@ -95,6 +95,26 @@ const WA_NUMBER = "5491155038905";
 const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxmrG5YVSshcYezk8lXFx_uxb7NFGcb9EfTXc7dsIN4rZyj73CET4mk_aKPFPDY2wNi/exec";
 const STOCK_CSV_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vTOq210U9LeSxvXbx_sdglHS0K9DZP8H_5pGXC-WwlMo8AE4UacIN0bpagQqAr79XeJNQ1Nm1eql271/pub?gid=792614962&single=true&output=csv';
 
+/* ── AJUSTES ESPECIALES POR SEMANA ──
+   Feriados que se BLOQUEAN del calendario (no hay entrega ese día).
+   Entregas EXTRA agregadas puntualmente (días que normalmente no se
+   entregan pero que esta semana sí, por ejemplo cuando un Vie es feriado
+   y se reparte el Jue). Después de la fecha pasada se ignoran solas.
+
+   Semana del 28/04 al 03/05/2026:
+   - Vie 01/05: Día del Trabajador, feriado nacional → no se entrega en
+     Estancias ni Pilar.
+   - Jue 30/04: entrega Home extra 19-21hs (compensación por feriado). */
+const FERIADOS_BLOQUEADOS = {
+  estancias: ['2026-05-01'],
+  pilar: ['2026-05-01']
+};
+const ENTREGAS_EXTRA = {
+  estancias: [
+    { iso: '2026-04-30', dayName: 'Jueves', timeRange: '19 a 21 hs' }
+  ]
+};
+
 /* ── RESTRICCIONES TEMPORALES ──
    Pilar y Alrededores: del 29/04 hasta el Domingo 03/05/2026 inclusive.
    Durante esa ventana, los pedidos de Pilar deben (a) topar al stock
@@ -512,26 +532,42 @@ function _getNextDeliveryDatesGrouped(zone) {
   // acepta Viernes (Marcos entrega los Vie). El resto de la semana queda
   // fuera. La semana siguiente en adelante NO se filtra.
   var pilarRestricted = (zone === 'pilar' && isPilarRestricted());
+  var feriados = FERIADOS_BLOQUEADOS[zone] || [];
+  var extras = ENTREGAS_EXTRA[zone] || [];
 
   for (var i = 0; i < 35; i++) {
     var d = new Date(today);
     d.setUTCDate(today.getUTCDate() + i);
     var dayName = DAY_NAMES_LONG[d.getUTCDay()];
-    if (validDays.indexOf(dayName) === -1) continue;
     var iso = d.toISOString().slice(0,10);
+    // Es entrega extra puntual de esa fecha
+    var isExtra = extras.some(function(e) { return e.iso === iso; });
+    // ¿Día normalmente válido O entrega extra?
+    if (validDays.indexOf(dayName) === -1 && !isExtra) continue;
+    // Bloqueado por feriado
+    if (feriados.indexOf(iso) !== -1) continue;
     // Si la entrega ya empezó / faltan <2hs, saltar
     var startMs = _deliveryStartMs(iso);
     if (startMs && (startMs - Date.now()) < 2 * 3600 * 1000) continue;
     var inThisWeek = d.getTime() < nextMonday.getTime();
-    // Filtro de restricción Pilar: solo Vie en thisWeek
-    if (pilarRestricted && inThisWeek && dayName !== 'Viernes') continue;
+    // Filtro de restricción Pilar: solo Vie en thisWeek (las extras también pasan)
+    if (pilarRestricted && inThisWeek && dayName !== 'Viernes' && !isExtra) continue;
+    // timeRange: usar el de extra si aplica, sino el del horario normal
+    var timeRange;
+    if (isExtra) {
+      var ex = extras.filter(function(e) { return e.iso === iso; })[0];
+      timeRange = (ex && ex.timeRange) || '19 a 21 hs';
+    } else {
+      timeRange = (z.horarios[dayName] || '').replace(/\s*hs/g,'hs');
+    }
     var item = {
       iso: iso,
       dayName: dayName,
       dayShort: DAY_NAMES_SHORT[d.getUTCDay()],
       dayNum: d.getUTCDate(),
       monthShort: MONTH_SHORT[d.getUTCMonth()],
-      timeRange: (z.horarios[dayName] || '').replace(/\s*hs/g,'hs')
+      timeRange: timeRange,
+      isExtra: isExtra
     };
     if (inThisWeek) out.thisWeek.push(item);
     else if (d.getTime() < laterStart.getTime()) out.nextWeek.push(item);
@@ -871,12 +907,22 @@ function goToForm() {
 }
 
 /* ── DÍA / HORARIO ── */
+function _getHorarioForFecha(zone, dayName, iso) {
+  // Si la fecha es una entrega extra puntual (ej. Jue 30/4 por feriado),
+  // devolver el horario de la entrega extra. Sino, el horario normal de la zona.
+  var extras = ENTREGAS_EXTRA[zone] || [];
+  var ex = extras.filter(function(e) { return e.iso === iso; })[0];
+  if (ex) return ex.timeRange;
+  var z = ZONAS[zone];
+  return (z && z.horarios && z.horarios[dayName]) || '';
+}
 function onDiaChange() {
   const dia = $id('f-dia').value;
+  const fecha = $id('f-dia-fecha') ? $id('f-dia-fecha').value : '';
   const hint = $id('horario-hint');
-  const z = ZONAS[currentZone];
-  if (dia && z && z.horarios[dia]) {
-    hint.textContent = 'Horario: ' + z.horarios[dia];
+  const horario = _getHorarioForFecha(currentZone, dia, fecha);
+  if (horario) {
+    hint.textContent = 'Horario: ' + horario;
     hint.style.display = 'block';
   } else {
     hint.style.display = 'none';
@@ -952,6 +998,9 @@ function renderDayPicker() {
   var html = '<div class="dp-dow">' + DP_DAY_LABELS.map(function(l){ return '<span>' + l + '</span>'; }).join('') + '</div>';
   html += '<div class="dp-grid">';
 
+  var feriadosDP = FERIADOS_BLOQUEADOS[currentZone] || [];
+  var extrasDP = ENTREGAS_EXTRA[currentZone] || [];
+
   for (var i = 0; i < 14; i++) {
     var d = new Date(monday);
     d.setUTCDate(monday.getUTCDate() + i);
@@ -960,7 +1009,9 @@ function renderDayPicker() {
     var iso = d.toISOString().slice(0, 10);
     var isPast = d.getTime() < todayTs;
     var isToday = d.getTime() === todayTs;
-    var available = !!horarios[dayName];
+    var isExtraDP = extrasDP.some(function(e) { return e.iso === iso; });
+    var available = (!!horarios[dayName]) || isExtraDP;
+    if (feriadosDP.indexOf(iso) !== -1) available = false;
     var isRedCutoff = redCutoffFriday !== null && d.getTime() === redCutoffFriday;
 
     var cls = 'dp-cell';
@@ -1064,7 +1115,8 @@ function enviarPedido() {
   const telefono = $id('f-telefono').value.trim();
   const dia = $id('f-dia').value;
   const z = ZONAS[currentZone];
-  const horario = z.horarios[dia] || '';
+  const fechaISOEarly = $id('f-dia-fecha') ? $id('f-dia-fecha').value : '';
+  const horario = _getHorarioForFecha(currentZone, dia, fechaISOEarly);
   const pagoEl = document.querySelector('input[name="pago"]:checked');
 
   // Limpiar errores
@@ -1168,8 +1220,8 @@ function enviarPedido() {
   }
 
   const z2 = ZONAS[currentZone];
-  const horarioStr = z2.horarios[dia] || '';
   const fechaISO = $id('f-dia-fecha') ? $id('f-dia-fecha').value : '';
+  const horarioStr = _getHorarioForFecha(currentZone, dia, fechaISO);
   // fechaFull  = "22/04/2026" → va al Sheets (col "Día de entrega")
   // diaMensaje = "Miércoles 22/04" → va al WhatsApp del cliente
   let fechaFull = '';
