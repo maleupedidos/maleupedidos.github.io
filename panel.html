@@ -687,27 +687,47 @@ function confirmarDeshacerOrigen(btn){
     .catch(function(){hideLoader(true);btn.disabled=false;btn.textContent='REINTENTAR';});
 }
 
+// Auto-balance: cuando cambiás un input (DEP u OC), el otro se ajusta para que sumen la cantidad pedida.
+function adjustOrigenSplit(inp){
+  var rowUid=inp.dataset.row, q=Number(inp.dataset.q)||0, role=inp.dataset.role;
+  var v=Math.max(0, Math.min(q, Number(inp.value)||0));
+  inp.value=v;
+  var pair=document.querySelector('input[data-row="'+rowUid+'"][data-role="'+(role==='d'?'oc':'d')+'"]');
+  if(pair) pair.value = q - v;
+}
+
 function confirmarOrigen(btn){
   if(btn.disabled)return;
   var hoja=btn.dataset.h, id=btn.dataset.n, row=Number(btn.dataset.r)||0, uid=btn.dataset.uid;
   var box=$('orig-'+uid);
   var productos=[];
   var resumen=[];
-  box.querySelectorAll('.origen-prod').forEach(function(row){
-    var opt=row.querySelector('.origen-opt.on');
-    var abbr=opt?opt.dataset.a:row.querySelector('.origen-opt').dataset.a;
-    var val=opt?opt.dataset.v:'D';
-    productos.push({a:abbr,o:val});
-    resumen.push((PN[abbr]||abbr)+': '+(val==='D'?'Depósito':'Orden de Compra'));
+  var error=null;
+  box.querySelectorAll('.origen-prod').forEach(function(prodRow){
+    var abbr=prodRow.dataset.a;
+    var qTot=Number(prodRow.dataset.q)||0;
+    var dInp=prodRow.querySelector('input[data-role="d"]');
+    var ocInp=prodRow.querySelector('input[data-role="oc"]');
+    var d=Math.max(0, Number(dInp&&dInp.value)||0);
+    var oc=Math.max(0, Number(ocInp&&ocInp.value)||0);
+    if(d+oc !== qTot){error=(PN[abbr]||abbr)+': '+d+'+'+oc+'≠'+qTot; return;}
+    productos.push({a:abbr,d:d,oc:oc});
+    var lbl;
+    if(d>0&&oc>0) lbl=d+' Depósito + '+oc+' OC';
+    else if(d>0) lbl=d+' Depósito';
+    else if(oc>0) lbl=oc+' OC';
+    else lbl='(0)';
+    resumen.push((PN[abbr]||abbr)+': '+lbl);
   });
+  if(error){toast('Cantidad no coincide en '+error);return;}
   if(!confirm('¿Confirmar origen de este pedido?\n\n'+resumen.join('\n')))return;
   btn.disabled=true;btn.textContent='Guardando...';btn.classList.add('saving');
   showLoader('Guardando origen...');
   // Calcular el origen resultante (Deposito / Orden de Compra / Mixto) para UI optimista
-  var allD=true,allOC=true;
-  productos.forEach(function(p){if(p.o==='D')allOC=false;if(p.o==='OC')allD=false;});
-  var nuevoOrigen=allD?'Deposito':(allOC?'Orden de Compra':'Mixto');
-  var detalleObj={};productos.forEach(function(p){detalleObj[p.a]=p.o;});
+  var anyD=false,anyOC=false;
+  productos.forEach(function(p){if(p.d>0)anyD=true;if(p.oc>0)anyOC=true;});
+  var nuevoOrigen=(anyD&&!anyOC)?'Deposito':(anyOC&&!anyD)?'Orden de Compra':(anyD&&anyOC)?'Mixto':'Pendiente';
+  var detalleObj={};productos.forEach(function(p){detalleObj[p.a]={d:p.d,oc:p.oc};});
   fetch(API,{method:'POST',body:JSON.stringify({action:'setOrigenProductos',hoja:hoja,id:id,row:row,productos:productos})})
     .then(function(r){return r.json();})
     .then(function(r){
@@ -1480,20 +1500,23 @@ function rPedidos(){
     html+='</div>';
     if(prods)html+='<div class="pc-p">'+prods+'</div>';
 
-    // ORIGEN por producto si es Pendiente y el pedido no está cancelado ni entregado
+    // ORIGEN por producto (split DEP/OC por cantidad) si es Pendiente y el pedido no está cancelado ni entregado
     if(p.o==='Pendiente'&&p.p&&p.p.length>0&&p.es!=='Cancelado'&&p.es!=='Entregado'){
       var uid=p.h.replace(/ /g,'')+p.n;
       html+='<div class="origen-box" id="orig-'+uid+'">';
+      html+='<div style="font-size:10px;color:var(--bl);margin-bottom:6px;line-height:1.3">Repartí cada producto entre <b style="color:var(--blu)">Depósito</b> y <b style="color:#6A1B9A">Orden de Compra</b>. La suma debe igualar la cantidad pedida.</div>';
       p.p.forEach(function(pr,idx){
-        html+='<div class="origen-prod">';
-        html+='<span class="origen-prod-qty">'+pr.q+'x</span>';
-        html+='<span class="origen-prod-name">'+(PN[pr.a]||pr.a)+'</span>';
-        html+='<div class="origen-toggle">';
-        html+='<span class="origen-opt dep on" data-uid="'+uid+'" data-a="'+pr.a+'" data-v="D" onclick="setOrigen(this)">DEP</span>';
-        html+='<span class="origen-opt oc" data-uid="'+uid+'" data-a="'+pr.a+'" data-v="OC" onclick="setOrigen(this)">OC</span>';
+        var rowUid=uid+'-'+idx;
+        html+='<div class="origen-prod" data-uid="'+uid+'" data-a="'+pr.a+'" data-q="'+pr.q+'" style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px dashed var(--cd)">';
+        html+='<div style="flex:1;font-size:12px"><b>'+pr.q+'x</b> '+(PN[pr.a]||pr.a)+'</div>';
+        html+='<div style="display:flex;gap:6px;align-items:center">';
+        html+='<label style="font-size:10px;color:var(--blu);font-weight:700">DEP</label>';
+        html+='<input type="number" min="0" max="'+pr.q+'" value="'+pr.q+'" data-role="d" data-row="'+rowUid+'" data-q="'+pr.q+'" onchange="adjustOrigenSplit(this)" oninput="adjustOrigenSplit(this)" style="width:55px;padding:4px 6px;border:1px solid var(--blu);border-radius:6px;font-size:12px;font-weight:700;text-align:center;color:var(--blu)">';
+        html+='<label style="font-size:10px;color:#6A1B9A;font-weight:700">OC</label>';
+        html+='<input type="number" min="0" max="'+pr.q+'" value="0" data-role="oc" data-row="'+rowUid+'" data-q="'+pr.q+'" onchange="adjustOrigenSplit(this)" oninput="adjustOrigenSplit(this)" style="width:55px;padding:4px 6px;border:1px solid #6A1B9A;border-radius:6px;font-size:12px;font-weight:700;text-align:center;color:#6A1B9A">';
         html+='</div></div>';
       });
-      html+='<button class="btn-origen" data-h="'+p.h+'" data-n="'+p.n+'" data-r="'+(p.r||'')+'" data-uid="'+uid+'" onclick="confirmarOrigen(this)">CONFIRMAR ORIGEN</button>';
+      html+='<button class="btn-origen" data-h="'+p.h+'" data-n="'+p.n+'" data-r="'+(p.r||'')+'" data-uid="'+uid+'" onclick="confirmarOrigen(this)" style="margin-top:10px">CONFIRMAR ORIGEN</button>';
       html+='</div>';
     }
 
