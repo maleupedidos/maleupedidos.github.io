@@ -603,9 +603,31 @@ function toggleCajaForm(t){
 }
 
 // ── LOADING OVERLAY ──
+// Loader RETRASADO: solo aparece si la operación tarda más de LOADER_DELAY ms.
+// La mayoría de POSTs responden en <500ms con UI optimista, así que el loader
+// nunca llega a mostrarse. Si tarda, recién ahí aparece para indicar al usuario
+// que algo sigue en curso. hideLoader cancela el timer si todavía no se mostró.
 var loaderCount=0;
-function showLoader(msg){loaderCount++;var el=document.getElementById('loaderOverlay');if(msg)document.getElementById('loaderMsg').textContent=msg;if(el)el.classList.add('visible')}
-function hideLoader(force){if(force)loaderCount=0;else loaderCount=Math.max(0,loaderCount-1);if(loaderCount===0){var el=document.getElementById('loaderOverlay');if(el)el.classList.remove('visible')}}
+var loaderTimer=null;
+var LOADER_DELAY=400; // ms
+function showLoader(msg){
+  loaderCount++;
+  if(loaderTimer)return;
+  loaderTimer=setTimeout(function(){
+    loaderTimer=null;
+    var el=document.getElementById('loaderOverlay');
+    if(msg)document.getElementById('loaderMsg').textContent=msg;
+    if(el&&loaderCount>0)el.classList.add('visible');
+  },LOADER_DELAY);
+}
+function hideLoader(force){
+  if(force)loaderCount=0;else loaderCount=Math.max(0,loaderCount-1);
+  if(loaderCount===0){
+    if(loaderTimer){clearTimeout(loaderTimer);loaderTimer=null;}
+    var el=document.getElementById('loaderOverlay');
+    if(el)el.classList.remove('visible');
+  }
+}
 
 // ── FETCH ──
 function load(){
@@ -710,51 +732,78 @@ function confirmarOrigen(btn){
     .catch(function(){hideLoader(true);btn.disabled=false;btn.textContent='REINTENTAR';btn.classList.remove('saving');});
 }
 
-// ── CAMBIAR FECHA DE ENTREGA (input date) ──
+// Helper: actualiza un campo de un pedido en D.pedidos (UI optimista).
+function _patchPedidoLocal(hoja,id,patch){
+  if(!D||!D.pedidos)return;
+  for(var i=0;i<D.pedidos.length;i++){
+    var p=D.pedidos[i];
+    if(p&&p.h===hoja&&String(p.n)===String(id)){
+      Object.keys(patch).forEach(function(k){p[k]=patch[k];});
+      return;
+    }
+  }
+}
+
+// ── CAMBIAR FECHA DE ENTREGA (input date) — UI optimista ──
 function cambiarFechaEntrega(inp){
   var hoja=inp.dataset.h, id=inp.dataset.n, row=Number(inp.dataset.r)||0, orig=inp.dataset.orig||'';
   var fecha=inp.value;
   if(!fecha||fecha===orig)return;
   inp.disabled=true;inp.style.opacity='.6';
+  // Optimista: actualizar p.dee (ISO) y p.de (nombre del día) localmente
+  var DIAS=['Domingo','Lunes','Martes','Miércoles','Jueves','Viernes','Sábado'];
+  var pp=fecha.split('-');var d=new Date(+pp[0],+pp[1]-1,+pp[2]);
+  _patchPedidoLocal(hoja,id,{dee:fecha,de:DIAS[d.getDay()]});
+  inp.dataset.orig=fecha;
+  toast('Entrega actualizada');
   showLoader('Actualizando fecha de entrega...');
   fetch(API,{method:'POST',body:JSON.stringify({action:'updateDiaEntrega',hoja:hoja,id:id,row:row,fecha:fecha})})
     .then(function(r){return r.json();})
     .then(function(r){
-      if(r.ok){inp.dataset.orig=fecha;toast('Entrega actualizada');return load().then(function(){hideLoader(true);});}
-      else{hideLoader(true);inp.value=orig;toast('Error: '+(r.err||r.error||'?'));}
+      hideLoader(true);
+      if(r.ok){load();}
+      else{inp.value=orig;_patchPedidoLocal(hoja,id,{dee:orig});toast('Error: '+(r.err||r.error||'?'));render();}
     })
     .catch(function(){hideLoader(true);inp.value=orig;toast('Sin conexion');})
     .finally(function(){inp.disabled=false;inp.style.opacity='1';});
 }
 
-// ── CAMBIAR ESTADO (Reservar / Quitar reserva) ──
+// ── CAMBIAR ESTADO (Reservar / Quitar reserva) — UI optimista ──
 function cambiarEstado(btn){
   var hoja=btn.dataset.h, id=btn.dataset.n, row=Number(btn.dataset.r)||0, nuevoEstado=btn.dataset.est;
-  var label=nuevoEstado==='Reservado'?'RESERVANDO...':'QUITANDO...';
-  btn.textContent=label;btn.classList.add('saving');
+  // Optimista: actualizar p.es localmente y re-renderizar
+  _patchPedidoLocal(hoja,id,{es:nuevoEstado});
+  render();
+  toast(nuevoEstado==='Reservado'?'Reservado':'Reserva quitada');
   showLoader(nuevoEstado==='Reservado'?'Reservando...':'Quitando reserva...');
   fetch(API,{method:'POST',body:JSON.stringify({action:'cambiarEstadoEntrega',hoja:hoja,id:id,row:row,estado:nuevoEstado})})
     .then(function(r){return r.json();})
     .then(function(r){
-      if(r.ok){toast(nuevoEstado==='Reservado'?'Reservado':'Reserva quitada');return load().then(function(){hideLoader(true);});}
-      else{hideLoader(true);btn.textContent='ERROR: '+(r.error||r.err||'');btn.classList.remove('saving');toast('Error: '+(r.error||r.err));}
+      hideLoader(true);
+      if(r.ok){load();}
+      else{toast('Error: '+(r.error||r.err));load();}
     })
-    .catch(function(){hideLoader(true);btn.textContent='SIN CONEXION';btn.classList.remove('saving');});
+    .catch(function(){hideLoader(true);toast('Sin conexion');load();});
 }
 
-// ── CANCELAR PEDIDO (con confirmación) ──
+// ── CANCELAR PEDIDO (con confirmación) — UI optimista ──
 function confirmarCancelarPed(btn){
   var hoja=btn.dataset.h, id=btn.dataset.n, row=Number(btn.dataset.r)||0, cli=btn.dataset.c||'';
   if(!confirm('¿Cancelar el pedido de '+cli+' (N° '+id+')?\n\nEsta acción no se puede deshacer.'))return;
-  btn.textContent='CANCELANDO...';btn.disabled=true;
+  btn.disabled=true;
+  // Optimista
+  _patchPedidoLocal(hoja,id,{es:'Cancelado'});
+  render();
+  toast('Pedido cancelado');
   showLoader('Cancelando pedido...');
   fetch(API,{method:'POST',body:JSON.stringify({action:'cancelarPedido',hoja:hoja,id:id,row:row})})
     .then(function(r){return r.json();})
     .then(function(r){
-      if(r.ok){toast('Pedido cancelado');return load().then(function(){hideLoader(true);});}
-      else{hideLoader(true);btn.textContent='ERROR: '+(r.error||r.err||'?');btn.disabled=false;toast('Error');}
+      hideLoader(true);
+      if(r.ok){load();}
+      else{toast('Error: '+(r.error||r.err||'?'));load();}
     })
-    .catch(function(){hideLoader(true);btn.textContent='SIN CONEXION';btn.disabled=false;});
+    .catch(function(){hideLoader(true);toast('Sin conexion');load();});
 }
 
 // ── PARSEAR MONTO (acepta coma o punto como decimal) ──
