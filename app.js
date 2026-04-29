@@ -98,16 +98,16 @@ const STOCK_CSV_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vTOq210U9
 /* ── AJUSTES ESPECIALES POR SEMANA ──
    Feriados que se BLOQUEAN del calendario (no hay entrega ese día).
    Entregas EXTRA agregadas puntualmente (días que normalmente no se
-   entregan pero que esta semana sí, por ejemplo cuando un Vie es feriado
-   y se reparte el Jue). Después de la fecha pasada se ignoran solas.
+   entregan pero que esta semana sí). Después de la fecha pasada se
+   ignoran solas.
 
    Semana del 28/04 al 03/05/2026:
-   - Vie 01/05: Día del Trabajador, feriado nacional → no se entrega en
-     Estancias ni Pilar.
-   - Jue 30/04: entrega Home extra 19-21hs (compensación por feriado). */
+   - Jue 30/04: entrega Home extra 19-21hs. Como Vie 01/05 es feriado
+     (Día del Trabajador), la gente con casa de fin de semana llega el
+     Jue y conviene tener delivery ese día. El Vie 01/05 SÍ se entrega
+     normal — es feriado pero buen momento de ventas. */
 const FERIADOS_BLOQUEADOS = {
-  estancias: ['2026-05-01'],
-  pilar: ['2026-05-01']
+  // Vacío — no hay días bloqueados esta semana
 };
 const ENTREGAS_EXTRA = {
   estancias: [
