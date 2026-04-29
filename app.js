@@ -446,10 +446,15 @@ function renderWelcomeDateGrid() {
         + '</button>';
 
   function cardHTML(d, isNext) {
-    return '<button type="button" class="loc-date-card' + (isNext ? ' next' : '') + '"'
+    var classes = ['loc-date-card'];
+    if (isNext) classes.push('next');
+    if (d.isToday) classes.push('is-today');
+    else if (d.isTomorrow) classes.push('is-tomorrow');
+    var dayClass = (d.isToday || d.isTomorrow) ? 'dc-day dc-day-flag' : 'dc-day';
+    return '<button type="button" class="' + classes.join(' ') + '"'
          + ' onclick="setDeliveryDate(\'' + d.iso + '\',\'' + d.dayName + '\')"'
          + ' aria-label="' + d.dayName + ' ' + d.dayNum + ' de ' + d.monthShort + '">'
-         + '<span class="dc-day">' + d.dayShort + '</span>'
+         + '<span class="' + dayClass + '">' + d.dayShort + '</span>'
          + '<span class="dc-num">' + d.dayNum + '</span>'
          + '<span class="dc-mon">' + d.monthShort + '</span>'
          + '<span class="dc-time">' + d.timeRange + '</span>'
@@ -517,6 +522,8 @@ function _getNextDeliveryDatesGrouped(zone) {
   // Hoy en hora Argentina (medianoche UTC del día AR)
   var nowAR = new Date(Date.now() - 3 * 3600 * 1000);
   var today = new Date(Date.UTC(nowAR.getUTCFullYear(), nowAR.getUTCMonth(), nowAR.getUTCDate()));
+  var todayMs = today.getTime();
+  var tomorrowMs = todayMs + 86400000;
 
   // Lunes de la semana actual (en AR, semana arranca Lun)
   var dow = today.getUTCDay(); // 0=Dom..6=Sáb
@@ -560,14 +567,21 @@ function _getNextDeliveryDatesGrouped(zone) {
     } else {
       timeRange = (z.horarios[dayName] || '').replace(/\s*hs/g,'hs');
     }
+    var dms = d.getTime();
+    var label;
+    if (dms === todayMs) label = 'HOY';
+    else if (dms === tomorrowMs) label = 'MAÑANA';
+    else label = DAY_NAMES_SHORT[d.getUTCDay()];
     var item = {
       iso: iso,
       dayName: dayName,
-      dayShort: DAY_NAMES_SHORT[d.getUTCDay()],
+      dayShort: label,
       dayNum: d.getUTCDate(),
       monthShort: MONTH_SHORT[d.getUTCMonth()],
       timeRange: timeRange,
-      isExtra: isExtra
+      isExtra: isExtra,
+      isToday: dms === todayMs,
+      isTomorrow: dms === tomorrowMs
     };
     if (inThisWeek) out.thisWeek.push(item);
     else if (d.getTime() < laterStart.getTime()) out.nextWeek.push(item);
