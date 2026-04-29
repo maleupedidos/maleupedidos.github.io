@@ -133,8 +133,16 @@ let selectedDateIsFlexible = false;  // true cuando el cliente elige "Cualquier 
    Si elige "Cualquier día" o no eligió fecha → modo abierto con info
    también (asumimos que es flexible). */
 function isStockLimited() {
-  // Pilar bajo restricción temporal de esta semana → tope al stock real
-  if (isPilarRestricted()) return true;
+  // Pilar bajo restricción temporal: tope solo si la entrega es de ESTA
+  // semana (Vie 1/5 con Marcos). Si pide para la semana siguiente o más
+  // adelante, el flujo "a pedido" vuelve a estar disponible.
+  if (isPilarRestricted()) {
+    if (selectedDateIsFlexible) return true; // "Cualquier día" → próximo Vie (esta sem)
+    if (!selectedDeliveryDate) return true;
+    var pms = _deliveryStartMs(selectedDeliveryDate);
+    if (pms && pms < PILAR_RESTRICCION_HASTA_MS) return true; // entrega dentro de la restricción
+    return false; // semana siguiente en adelante → abierto
+  }
   if (currentZone !== 'estancias') return false;
   if (selectedDateIsFlexible) return false;
   if (!selectedDeliveryDate) return false;
@@ -500,6 +508,11 @@ function _getNextDeliveryDatesGrouped(zone) {
   var laterStart = new Date(thisMonday);
   laterStart.setUTCDate(thisMonday.getUTCDate() + 14);
 
+  // Durante la restricción Pilar de esta semana, en thisWeek solo se
+  // acepta Viernes (Marcos entrega los Vie). El resto de la semana queda
+  // fuera. La semana siguiente en adelante NO se filtra.
+  var pilarRestricted = (zone === 'pilar' && isPilarRestricted());
+
   for (var i = 0; i < 35; i++) {
     var d = new Date(today);
     d.setUTCDate(today.getUTCDate() + i);
@@ -509,6 +522,9 @@ function _getNextDeliveryDatesGrouped(zone) {
     // Si la entrega ya empezó / faltan <2hs, saltar
     var startMs = _deliveryStartMs(iso);
     if (startMs && (startMs - Date.now()) < 2 * 3600 * 1000) continue;
+    var inThisWeek = d.getTime() < nextMonday.getTime();
+    // Filtro de restricción Pilar: solo Vie en thisWeek
+    if (pilarRestricted && inThisWeek && dayName !== 'Viernes') continue;
     var item = {
       iso: iso,
       dayName: dayName,
@@ -517,7 +533,7 @@ function _getNextDeliveryDatesGrouped(zone) {
       monthShort: MONTH_SHORT[d.getUTCMonth()],
       timeRange: (z.horarios[dayName] || '').replace(/\s*hs/g,'hs')
     };
-    if (d.getTime() < nextMonday.getTime()) out.thisWeek.push(item);
+    if (inThisWeek) out.thisWeek.push(item);
     else if (d.getTime() < laterStart.getTime()) out.nextWeek.push(item);
     else out.later.push(item);
   }
