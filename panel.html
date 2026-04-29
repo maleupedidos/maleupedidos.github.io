@@ -630,13 +630,27 @@ function hideLoader(force){
 }
 
 // ── FETCH ──
+// Si hay un editor abierto (`window._ed_*`), posponer el render para no romper el formulario.
+// Los datos se igual se descargan y guardan en D, pero NO se rerenderiza la solapa Pedidos
+// hasta que el usuario cierre el editor (cancelar / guardar).
+var _pendingLoadRender=false;
+function _hayEditorAbierto(){
+  for(var k in window){if(k.indexOf('_ed_')===0&&window[k])return true;}
+  return false;
+}
 function load(){
   return fetch(API+'?action=admin&t='+Date.now()).then(function(r){return r.json();}).then(function(d){
-    D=d;localStorage.setItem('ma3',JSON.stringify(d));render();sync();$('ld').style.display='none';$('dot').className='hdr-dot';
+    D=d;localStorage.setItem('ma3',JSON.stringify(d));sync();$('ld').style.display='none';$('dot').className='hdr-dot';
+    if(_hayEditorAbierto()){_pendingLoadRender=true;}
+    else{render();}
   }).catch(function(){
     $('dot').className='hdr-dot off';
-    var c=localStorage.getItem('ma3');if(c&&!D){D=JSON.parse(c);render();$('ld').style.display='none';}
+    var c=localStorage.getItem('ma3');if(c&&!D){D=JSON.parse(c);if(!_hayEditorAbierto())render();$('ld').style.display='none';}
   });
+}
+// Rerender pendiente cuando se cierra el último editor
+function _flushPendingLoadRender(){
+  if(_pendingLoadRender&&!_hayEditorAbierto()){_pendingLoadRender=false;render();}
 }
 function sync(){var n=new Date();$('syncT').textContent=String(n.getHours()).padStart(2,'0')+':'+String(n.getMinutes()).padStart(2,'0');}
 
@@ -860,6 +874,7 @@ function agregarLineaEditor(uid){
 function cancelarEditor(uid){
   var box=$(uid); if(box){box.classList.add('hidden');box.innerHTML='';}
   delete window['_ed_'+uid];
+  _flushPendingLoadRender();
 }
 function guardarEditor(uid){
   var ed=window['_ed_'+uid]; if(!ed) return;
@@ -1705,23 +1720,27 @@ function rPedidos(){
       var uid=p.h.replace(/ /g,'')+p.n;
       var provs=(D&&D.proveedores)||[];
       html+='<div class="origen-box" id="orig-'+uid+'">';
-      html+='<div style="font-size:10px;color:var(--bl);margin-bottom:6px;line-height:1.3">Repartí cada producto entre <b style="color:var(--blu)">Depósito</b> y <b style="color:#6A1B9A">Orden de Compra</b>. Si elegís OC podés también seleccionar el proveedor. La suma debe igualar la cantidad pedida.</div>';
+      html+='<div style="font-size:11px;color:var(--bl);margin-bottom:10px;line-height:1.4">Repartí cada producto entre <b style="color:var(--blu)">Depósito</b> y <b style="color:#6A1B9A">Orden de Compra</b>. La suma debe igualar la cantidad pedida.</div>';
       p.p.forEach(function(pr,idx){
         var rowUid=uid+'-'+idx;
-        html+='<div class="origen-prod" data-uid="'+uid+'" data-a="'+pr.a+'" data-q="'+pr.q+'" style="padding:8px 0;border-bottom:1px dashed var(--cd)">';
-        html+='<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">';
-        html+='<div style="flex:1;font-size:12px;min-width:120px"><b>'+pr.q+'x</b> '+(PN[pr.a]||pr.a)+'</div>';
-        html+='<div style="display:flex;gap:6px;align-items:center">';
-        html+='<label style="font-size:10px;color:var(--blu);font-weight:700">DEP</label>';
-        html+='<input type="number" min="0" max="'+pr.q+'" value="'+pr.q+'" data-role="d" data-row="'+rowUid+'" data-q="'+pr.q+'" onchange="adjustOrigenSplit(this)" oninput="adjustOrigenSplit(this)" style="width:55px;padding:4px 6px;border:1px solid var(--blu);border-radius:6px;font-size:12px;font-weight:700;text-align:center;color:var(--blu)">';
-        html+='<label style="font-size:10px;color:#6A1B9A;font-weight:700">OC</label>';
-        html+='<input type="number" min="0" max="'+pr.q+'" value="0" data-role="oc" data-row="'+rowUid+'" data-q="'+pr.q+'" onchange="adjustOrigenSplit(this)" oninput="adjustOrigenSplit(this)" style="width:55px;padding:4px 6px;border:1px solid #6A1B9A;border-radius:6px;font-size:12px;font-weight:700;text-align:center;color:#6A1B9A">';
-        html+='</div></div>';
-        // Dropdown de proveedor (override) — siempre visible, se aplica solo si OC > 0
+        // Card vertical por producto — legible en mobile
+        html+='<div class="origen-prod" data-uid="'+uid+'" data-a="'+pr.a+'" data-q="'+pr.q+'" style="background:#fff;border:1px solid var(--cd);border-radius:10px;padding:12px;margin-bottom:8px">';
+        html+='<div style="font-size:13px;font-weight:800;color:var(--b);margin-bottom:10px"><b>'+pr.q+'x</b> '+(PN[pr.a]||pr.a)+'</div>';
+        // DEP fila
+        html+='<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">';
+        html+='<label style="flex:1;font-size:12px;color:var(--blu);font-weight:700">Depósito</label>';
+        html+='<input type="number" inputmode="numeric" min="0" max="'+pr.q+'" value="'+pr.q+'" data-role="d" data-row="'+rowUid+'" data-q="'+pr.q+'" onchange="adjustOrigenSplit(this)" oninput="adjustOrigenSplit(this)" style="width:90px;padding:8px 10px;border:1.5px solid var(--blu);border-radius:8px;font-size:14px;font-weight:700;text-align:center;color:var(--blu);font-family:inherit">';
+        html+='</div>';
+        // OC fila
+        html+='<div style="display:flex;align-items:center;gap:10px;margin-bottom:'+(provs.length>0?'10px':'0')+'">';
+        html+='<label style="flex:1;font-size:12px;color:#6A1B9A;font-weight:700">Orden de Compra</label>';
+        html+='<input type="number" inputmode="numeric" min="0" max="'+pr.q+'" value="0" data-role="oc" data-row="'+rowUid+'" data-q="'+pr.q+'" onchange="adjustOrigenSplit(this)" oninput="adjustOrigenSplit(this)" style="width:90px;padding:8px 10px;border:1.5px solid #6A1B9A;border-radius:8px;font-size:14px;font-weight:700;text-align:center;color:#6A1B9A;font-family:inherit">';
+        html+='</div>';
+        // Dropdown de proveedor (full width abajo)
         if(provs.length>0){
-          html+='<div style="display:flex;align-items:center;gap:6px;margin-top:6px;padding-left:4px">';
-          html+='<label style="font-size:10px;color:var(--bl);font-weight:600">Proveedor (si OC):</label>';
-          html+='<select data-role="prov" data-a="'+pr.a+'" style="flex:1;font-size:11px;padding:3px 6px;border:1px solid var(--cd);border-radius:6px;background:#fff">';
+          html+='<div style="border-top:1px dashed var(--cd);padding-top:8px">';
+          html+='<label style="font-size:11px;color:var(--bl);font-weight:600;display:block;margin-bottom:4px">Proveedor (si OC > 0):</label>';
+          html+='<select data-role="prov" data-a="'+pr.a+'" style="width:100%;font-size:13px;padding:8px 30px 8px 10px;border:1.5px solid var(--cd);border-radius:8px;background:#fff;font-family:inherit;-webkit-appearance:none;background-image:url(\'data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%2212%22 height=%2212%22 viewBox=%220 0 12 12%22><path d=%22M2 4l4 4 4-4%22 stroke=%22%237A4A4A%22 stroke-width=%222%22 fill=%22none%22/></svg>\');background-repeat:no-repeat;background-position:right 10px center">';
           html+='<option value="">Default del catálogo</option>';
           provs.forEach(function(pv){html+='<option value="'+pv.replace(/"/g,'&quot;')+'">'+pv+'</option>';});
           html+='</select></div>';
