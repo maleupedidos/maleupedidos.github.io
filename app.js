@@ -114,6 +114,13 @@ const ENTREGAS_EXTRA = {
     { iso: '2026-04-30', dayName: 'Jueves', timeRange: '19 a 21 hs' }
   ]
 };
+/* Stock estricto extendido: entregas Home dentro de esta ventana topan
+   al stock real aunque la fecha esté a >24hs. Pensado para semanas con
+   feriado donde no se puede reponer al proveedor. Después del timestamp
+   se desactiva sola. */
+const STOCK_ESTRICTO_HASTA_MS = {
+  estancias: Date.UTC(2026, 4, 4, 3, 0, 0) // Lun 04/05 00:00 AR = 03:00 UTC
+};
 
 /* ── RESTRICCIONES TEMPORALES ──
    Pilar y Alrededores: del 29/04 hasta el Domingo 03/05/2026 inclusive.
@@ -164,10 +171,17 @@ function isStockLimited() {
     return false; // semana siguiente en adelante → abierto
   }
   if (currentZone !== 'estancias') return false;
-  if (selectedDateIsFlexible) return false;
+  // Si elige "Cualquier día" sin fecha → no aplicar tope (no sabemos cuándo)
+  if (selectedDateIsFlexible && !selectedDeliveryDate) return false;
   if (!selectedDeliveryDate) return false;
   var deliveryStartMs = _deliveryStartMs(selectedDeliveryDate);
   if (!deliveryStartMs) return false;
+  // Stock estricto extendido por semana especial (ej. feriados, falta
+  // de margen para reponer): toda entrega dentro de la ventana topa al
+  // stock real aunque la fecha esté a >24hs.
+  var hastaMs = STOCK_ESTRICTO_HASTA_MS[currentZone];
+  if (hastaMs && deliveryStartMs < hastaMs) return true;
+  // Regla por defecto: tope si faltan menos de 24hs para la entrega
   var hoursUntil = (deliveryStartMs - Date.now()) / 3600000;
   return hoursUntil < 24;
 }
