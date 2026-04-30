@@ -1421,6 +1421,48 @@ function rInicio(){
     }
     cbHtml+='<div id="sem-body-actual" class="hidden" style="margin-top:6px">'+bodyH+'</div>';
   })();
+  // Pendientes por semana — VD/Clubes (entregados sin cobrar) + Red (deudaPorSemana)
+  // Atribución: por fecha de entrega real (fe) o día de entrega elegido (dee) o p.de.
+  var pendPorSem={}; // { sem: { vd:[{c,h,$}], red:[{nom,$}], totVD:0, totRed:0, total:0 } }
+  function _semFromAny(p){
+    var k=p.fe||p.dee||p.de||p.f;
+    if(!k)return null;
+    var dt=null;
+    var s=String(k).trim();
+    var iso=s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+    if(iso){dt=new Date(Number(iso[1]),Number(iso[2])-1,Number(iso[3]));}
+    else{
+      var dmy=s.match(/^(\d{1,2})\/(\d{1,2})(?:\/(\d{4}))?/);
+      if(dmy)dt=new Date(dmy[3]?Number(dmy[3]):now.getFullYear(),Number(dmy[2])-1,Number(dmy[1]));
+    }
+    if(!dt||isNaN(dt))return null;
+    return getWeek(dt);
+  }
+  pvAll.forEach(function(p){
+    if(p.h==='Red')return; // Red entra por deudaPorSemana del backend
+    if(p.es!=='Entregado')return;
+    if(p.ep==='Cobrado')return;
+    var sem=_semFromAny(p);if(!sem)return;
+    if(!pendPorSem[sem])pendPorSem[sem]={vd:[],red:[],totVD:0,totRed:0,total:0};
+    pendPorSem[sem].vd.push({c:p.c||'-',h:p.h,$:p.$||0});
+    pendPorSem[sem].totVD+=p.$||0;
+    pendPorSem[sem].total+=p.$||0;
+  });
+  ((D&&D.vendedores)||[]).forEach(function(v){
+    var dps=v.deudaPorSemana||{};
+    Object.keys(dps).forEach(function(k){
+      // k puede ser "2026-18" o "18"
+      var sem=Number(String(k).split('-').pop())||0;
+      if(!sem)return;
+      var monto=Math.round(Number(dps[k])||0);
+      if(monto<=0)return;
+      if(!pendPorSem[sem])pendPorSem[sem]={vd:[],red:[],totVD:0,totRed:0,total:0};
+      pendPorSem[sem].red.push({nom:v.nombre,$:monto});
+      pendPorSem[sem].totRed+=monto;
+      pendPorSem[sem].total+=monto;
+    });
+  });
+
   // Semanas previas (acordeón)
   var MS_SHORT=['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
   var semsOrd=Object.keys(porSemana).map(Number).filter(function(s){return s!==semActual;}).sort(function(a,b){return b-a;});
@@ -1448,6 +1490,18 @@ function rInicio(){
       cbHtml+='<div style="margin-top:8px;font-size:10px;color:var(--bl);font-weight:700;letter-spacing:.4px;text-transform:uppercase">Margen bruto</div>';
       cbHtml+='<div style="font-weight:800;font-size:14px;margin-top:1px;color:'+(d.mg>=0?'var(--gd)':'var(--r)')+'">$'+f$(d.mg)+'</div>';
       if(d.pend>0)cbHtml+='<div style="font-size:11px;color:#E65100;font-weight:700;margin-top:6px">+$'+f$(d.pend)+' por cobrar</div>';
+      // Pendientes de cobro de la semana (VD/Clubes + Red)
+      var pSem=pendPorSem[s];
+      if(pSem && pSem.total>0){
+        cbHtml+='<div style="margin-top:10px;padding-top:8px;border-top:1px dashed var(--cd)">';
+        cbHtml+='<div style="font-size:10px;color:var(--bl);font-weight:700;letter-spacing:.4px;text-transform:uppercase">⏳ Pendientes de cobro</div>';
+        cbHtml+='<div style="font-weight:800;font-size:14px;margin-top:1px;color:#E65100">$'+f$(pSem.total)+'</div>';
+        var detP=[];
+        if(pSem.totVD>0)detP.push(pSem.vd.length+' VD/Club ($'+f$(pSem.totVD)+')');
+        pSem.red.forEach(function(r){detP.push(r.nom+' Red ($'+f$(r.$)+')');});
+        if(detP.length)cbHtml+='<div style="font-size:11px;color:var(--bl);margin-top:2px;line-height:1.4">'+detP.join(' · ')+'</div>';
+        cbHtml+='</div>';
+      }
       cbHtml+='</div>';
       cbHtml+='<div id="sem-body-'+s+'" class="hidden" style="padding:0 10px 10px">'+renderDiasList(d.dias,false)+'</div>';
       // Botón PDF SIEMPRE visible (fuera del acordeón hidden)
@@ -1461,13 +1515,54 @@ function rInicio(){
   // ── ALERTAS ──
   var ac=$('hAlerts');ac.innerHTML='';
   var pendSinOrigen=pv.filter(function(p){return p.o==='Pendiente'&&p.es!=='Cancelado';});
+  // Sin cobrar VD/Clubes solamente — Red NO entra acá (la liquidación es del vendedor).
   var sinCobrarVD=pv.filter(function(p){return p.ep!=='Cobrado'&&p.es==='Entregado';});
-  // Red: 1 alerta por cada vendedor con deuda pendiente a Maleu
-  // (en Cobros se agrupa por vendedor, no por pedido; el conteo lo refleja).
-  var nVendRedDeuda=((D&&D.vendedores)||[]).filter(function(v){return v&&Number(v.deuda)>0;}).length;
-  var totSinCobrar=sinCobrarVD.length+nVendRedDeuda;
   if(pendSinOrigen.length>0)ac.innerHTML+='<div class="al wr" style="cursor:pointer" onclick="go(\'pedidos\')"><span class="al-i">&#9888;&#65039;</span><div><h3>'+pendSinOrigen.length+' sin origen</h3><p>Tocar para definir DEP/OC</p></div></div>';
-  if(totSinCobrar>0)ac.innerHTML+='<a class="al wr" href="ruta.html#cobros" style="cursor:pointer;text-decoration:none;color:inherit"><span class="al-i">&#128176;</span><div><h3>'+totSinCobrar+' entregado'+(totSinCobrar>1?'s':'')+' sin cobrar</h3><p>Cobrar en Ruta &rarr; Cobros</p></div></a>';
+  if(sinCobrarVD.length>0)ac.innerHTML+='<a class="al wr" href="ruta.html#cobros" style="cursor:pointer;text-decoration:none;color:inherit"><span class="al-i">&#128176;</span><div><h3>'+sinCobrarVD.length+' entregado'+(sinCobrarVD.length>1?'s':'')+' sin cobrar</h3><p>Cobrar en Ruta &rarr; Cobros</p></div></a>';
+
+  // ── TARJETA RED: estado de liquidación de vendedores ──
+  // Por cada vendedor, mostrar SI corresponde:
+  //   • Verde ("Te liquidó") — si hay liquidación reciente (<48h, flag del backend).
+  //   • Naranja ("Pendiente") — si tiene deuda > 0. Botón "Recordarle" sólo los Domingos.
+  //   • Mixto — ambos al mismo tiempo (liquidó parcial y queda saldo).
+  var vendsRed=((D&&D.vendedores)||[]).filter(function(v){
+    if(!v||!v.nombre)return false;
+    var deuda=Number(v.deuda)||0;
+    var hayLiqRec=(v.liquidaciones||[]).some(function(l){return l&&l.reciente;});
+    return deuda>0 || hayLiqRec;
+  });
+  if(vendsRed.length>0){
+    var esDomingo=(now.getDay()===0);
+    vendsRed.forEach(function(v){
+      var deuda=Math.round(Number(v.deuda)||0);
+      var liqRec=(v.liquidaciones||[]).filter(function(l){return l&&l.reciente;})[0]; // más reciente (ya viene ordenado desc)
+      var color=liqRec?'#2d8a4f':'var(--o)';
+      var card='<div class="card" style="margin:10px 0;padding:12px;border:2px solid '+color+'">';
+      card+='<div style="font-size:10px;font-weight:800;letter-spacing:.5px;color:'+color+';margin-bottom:4px">RED · '+String(v.nombre).toUpperCase()+'</div>';
+      if(liqRec){
+        card+='<div style="font-size:14px;font-weight:800;color:#2d8a4f">✅ Te liquidó $'+f$(liqRec.tot)+'</div>';
+        card+='<div style="font-size:11px;color:var(--bl);margin-top:2px">'+liqRec.f+'</div>';
+        var det='';
+        if(liqRec.ef>0)det+='Ef $'+f$(liqRec.ef);
+        if(liqRec.mp>0)det+=(det?' · ':'')+'MP $'+f$(liqRec.mp);
+        if(det)card+='<div style="font-size:11px;color:var(--bl);margin-top:2px">'+det+'</div>';
+        card+='<div style="font-size:10px;color:var(--bl);margin-top:6px;font-style:italic">Verificá que entró la plata y listó.</div>';
+      }
+      if(deuda>0){
+        if(liqRec)card+='<div style="margin-top:8px;padding-top:8px;border-top:1px dashed var(--cd)"></div>';
+        card+='<div style="font-size:13px;font-weight:800;color:var(--o)">⏳ Pendiente de liquidar: $'+f$(deuda)+'</div>';
+        card+='<div style="font-size:11px;color:var(--bl);margin-top:2px">Rinde fin de semana</div>';
+        if(esDomingo){
+          var firstName=String(v.nombre).split(' ')[0];
+          var msg=encodeURIComponent('Hola '+firstName+', ¿podés liquidar la semana? Tenés $'+f$(deuda)+' pendientes. Entrá a maleupedidos.github.io/red.html → Pagos → Liquidar semana. ¡Gracias!');
+          var wa=String(v.wa||'').replace(/[^0-9]/g,'');
+          if(wa)card+='<a href="https://wa.me/'+wa+'?text='+msg+'" target="_blank" style="display:block;margin-top:8px;padding:10px;background:var(--o);color:#fff;text-align:center;border-radius:10px;font-size:12px;font-weight:800;text-decoration:none">📲 Recordarle a '+firstName+'</a>';
+        }
+      }
+      card+='</div>';
+      ac.innerHTML+=card;
+    });
+  }
 
   // ── KPIs SEMANA: Ventas, Facturación, CMV, Margen ──
   // Ventas = VD + Clubes + 1 por cada vendedor Red con pedidos en la semana
