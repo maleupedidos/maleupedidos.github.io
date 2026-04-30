@@ -760,25 +760,32 @@ function render(){
 //   - Viejo: { "PPM":"D", "ECaC":"OC" }  → todo el item es D u OC
 //   - Nuevo: { "PPM":{"d":1,"oc":0} }    → cantidades parciales del depósito
 // Si no hay oD (objeto vacío), asumimos que todo el pedido sale del depósito (compat).
-/* Source of truth de qué es OC: el array e.oc viene del backend leyendo la hoja
-   "Orden de Compra" directamente. Es autoritativo. Solo si el backend no lo manda
-   (cliente cacheado viejo) caemos al oD del JSON Origen Detalle. */
+/* Determina qué es OC para cada producto del pedido.
+   Prioridad: oD (Origen Detalle, lo que Tadeo elige desde el panel producto a producto)
+   por encima de e.oc (hoja Orden de Compra, que puede tener filas residuales o desactualizadas).
+   Solo si oD está vacío caemos a e.oc. */
 function _ocMapDe(e){
   var m={};
-  if(e.oc && e.oc.length){e.oc.forEach(function(p){m[p.a]=(m[p.a]||0)+(p.q||0)});return m}
-  // Fallback: leer del oD si no vino e.oc
   var oD=e.oD||{};
-  e.p.forEach(function(p){
-    var v=oD[p.a];
-    var qOC=0;
-    if(v==='OC')qOC=p.q;
-    else if(v && typeof v==='object')qOC=Number(v.oc)||0;
-    if(qOC>0)m[p.a]=qOC;
-  });
+  var hasOD=Object.keys(oD).length>0;
+  if(hasOD){
+    e.p.forEach(function(p){
+      var v=oD[p.a];
+      var qOC=0;
+      if(v==='OC')qOC=p.q;
+      else if(v && typeof v==='object')qOC=Number(v.oc)||0;
+      if(qOC>0)m[p.a]=qOC;
+    });
+    return m;
+  }
+  // Fallback: e.oc desde la hoja Orden de Compra
+  if(e.oc && e.oc.length){
+    e.oc.forEach(function(p){m[p.a]=(m[p.a]||0)+(p.q||0)});
+  }
   return m;
 }
 function _itemsDepDe(e){
-  // DEP = total del pedido - OC (de la hoja Orden de Compra). Si OC > total, queda 0.
+  // DEP = total del pedido - OC. Si todo es OC, queda vacío.
   var ocMap=_ocMapDe(e);
   var out=[];
   e.p.forEach(function(p){
@@ -788,7 +795,7 @@ function _itemsDepDe(e){
   });
   return out;
 }
-/* Complemento: items que vienen del proveedor via OC (no del depósito). */
+/* Items que vienen del proveedor via OC (no del depósito). */
 function _itemsOCDe(e){
   var ocMap=_ocMapDe(e);
   var out=[];
@@ -880,15 +887,18 @@ function _canalLabel(c){
    el pedido cuando llega del proveedor (a la puerta del club). */
 function _renderArmadoCard(e){
   var depItems=_itemsDepDe(e);
-  if(depItems.length===0)return ''; // sin items del freezer = nada que armar
   var ocItems=_itemsOCDe(e);
   var ocSum=0;ocItems.forEach(function(p){ocSum+=p.q});
+  // Card siempre visible. Si hay items DEP, mostrar solo esos. Si no, mostrar todo el pedido.
+  var prodsToShow=depItems.length>0?depItems:e.p;
+  var allOC=(depItems.length===0 && ocSum>0);
   var key=eKey(e),isDone=armadoDone[key];
   var loteStr=e.l?'Lote '+e.l:'';
   var isRed=e.h==='Red';
   var retiraTag=isRed?(' <span class="armado-retira-tag">'+(e.retira||'Vendedor')+' retira</span>'):'';
   var cancelBtn=isRed?'':'<button type="button" class="armado-cancel" onclick="event.stopPropagation();confirmarCancelar(\''+key+'\',\''+(e.c.replace(/\'/g,""))+'\')" title="Cancelar pedido">&#x1F5D1;</button>';
-  var ocTag=ocSum>0?('<div class="armado-oc-tag" onclick="toggleArmado(\''+key+'\')" title="'+ocItems.map(function(p){return p.q+'x '+(PROD_NAMES[p.a]||p.a)}).join(', ')+'">+ Orden de compra ('+ocSum+' productos)</div>'):'';
+  var ocTagText=allOC?('Todo via Orden de compra ('+ocSum+' productos)'):(ocSum>0?('+ Orden de compra ('+ocSum+' productos)'):'');
+  var ocTag=ocTagText?('<div class="armado-oc-tag" onclick="toggleArmado(\''+key+'\')" title="'+ocItems.map(function(p){return p.q+'x '+(PROD_NAMES[p.a]||p.a)}).join(', ')+'">'+ocTagText+'</div>'):'';
   return '<div class="armado-card'+(isDone?' done':'')+(isRed?' red':'')+'">'
     +(loteStr?'<div class="armado-lote">'+loteStr+'</div>':'')
     +cancelBtn
@@ -896,7 +906,7 @@ function _renderArmadoCard(e){
     +'<div class="armado-check">'+(isDone?'&#x2713;':'')+'</div>'
     +'<span class="armado-name">'+e.c+retiraTag+'</span>'
     +'</div>'
-    +'<div class="armado-prods" onclick="toggleArmado(\''+key+'\')">'+prodText(depItems)+'</div>'
+    +'<div class="armado-prods" onclick="toggleArmado(\''+key+'\')">'+prodText(prodsToShow)+'</div>'
     +ocTag
     +'</div>';
 }
