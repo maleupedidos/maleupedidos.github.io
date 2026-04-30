@@ -783,14 +783,6 @@ function renderArmado(){
   document.getElementById('armadoView').classList.remove('hidden');document.getElementById('rutaView').classList.add('hidden');document.getElementById('cobrosView').classList.add('hidden');document.getElementById('nuevoView').classList.add('hidden');
   var hoy=getDiaHoy(),pedH=sortByZona(getHoyPendientes()),pedO=sortByZona(getOtrosDias());
 
-  // Resumen de productos de HOY que salen del DEPÓSITO (oD === "D"), incluyendo Red
-  var totalsDep={};
-  pedH.forEach(function(e){
-    _itemsDepDe(e).forEach(function(p){
-      if(!totalsDep[p.a])totalsDep[p.a]=0;
-      totalsDep[p.a]+=p.q;
-    });
-  });
   var pedHTadeo=pedH.filter(function(e){return e.h!=='Red'});
   var armadosHoy=0;pedHTadeo.forEach(function(e){if(armadoDone[eKey(e)])armadosHoy++});
   var faltanHoy=pedHTadeo.length-armadosHoy;
@@ -801,30 +793,6 @@ function renderArmado(){
   document.getElementById('armadoSummary').innerHTML=summaryHtml;
 
   var html='';
-
-  // Bloque "🧊 Sale del depósito" — checklist agregado por producto del DÍA
-  if(Object.keys(totalsDep).length>0){
-    var hoyISO=getHoyISO();
-    var dcAll=getDepCheck();
-    var dcHoy=dcAll[hoyISO]||{};
-    var totalItems=0,doneItems=0;
-    Object.keys(totalsDep).forEach(function(a){totalItems++;if(dcHoy[a])doneItems++});
-    html+='<div class="dep-block">'
-      +'<div class="dep-block-title"><span class="ico">🧊</span><span>Sale del depósito (hoy)</span></div>'
-      +'<div class="dep-block-sub">Sacá del freezer antes de salir</div>';
-    // Sort: undone primero, done al final
-    var items=Object.keys(totalsDep).map(function(a){return{a:a,q:totalsDep[a],done:!!dcHoy[a]}});
-    items.sort(function(x,y){if(x.done!==y.done)return x.done?1:-1;return (PROD_NAMES[x.a]||x.a).localeCompare(PROD_NAMES[y.a]||y.a)});
-    items.forEach(function(it){
-      html+='<div class="dep-item'+(it.done?' done':'')+'" onclick="toggleDepItem(\''+it.a+'\')">'
-        +'<div class="check">'+(it.done?'&#x2713;':'')+'</div>'
-        +'<div class="qty">'+it.q+'</div>'
-        +'<div class="name">'+(PROD_NAMES[it.a]||it.a)+'</div>'
-        +'</div>';
-    });
-    html+='<div class="dep-block-foot"><span>'+doneItems+'/'+totalItems+' productos sacados</span></div>'
-      +'</div>';
-  }
 
   if(pedH.length>0){html+=renderArmadoGroup(pedH,labelFecha(getHoyISO()),false,getHoyISO(),true)}
   // OTROS DIAS (agrupados por fecha exacta, ordenados)
@@ -883,8 +851,12 @@ function _canalLabel(c){
   return 'Venta Directa';
 }
 
-/* Render de una card individual */
+/* Render de una card individual.
+   Solo muestra los productos que salen del DEPOSITO (los OC ya van directo del proveedor
+   al cliente, no se arman desde el freezer). Si el pedido es 100% OC, la card no se muestra. */
 function _renderArmadoCard(e){
+  var depItems=_itemsDepDe(e);
+  if(depItems.length===0)return ''; // todo OC, nada que armar desde el freezer
   var key=eKey(e),isDone=armadoDone[key];
   var loteStr=e.l?'Lote '+e.l:'';
   var isRed=e.h==='Red';
@@ -897,8 +869,36 @@ function _renderArmadoCard(e){
     +'<div class="armado-check">'+(isDone?'&#x2713;':'')+'</div>'
     +'<span class="armado-name">'+e.c+retiraTag+'</span>'
     +'</div>'
-    +'<div class="armado-prods" onclick="toggleArmado(\''+key+'\')">'+prodText(e.p)+'</div>'
+    +'<div class="armado-prods" onclick="toggleArmado(\''+key+'\')">'+prodText(depItems)+'</div>'
     +'</div>';
+}
+
+/* Render agregado para canal Red: a Tadeo no le importan los pedidos individuales
+   de los clientes de Marcos, solo qué productos sacar del freezer para entregárselos.
+   Suma cantidades por producto (solo items del depósito) y muestra una sola card.
+   Tildable: marca/destilda todos los pedidos Red de la lista al mismo tiempo. */
+function _renderArmadoRedAggregate(lista){
+  var totals={};
+  lista.forEach(function(e){
+    _itemsDepDe(e).forEach(function(p){
+      if(!totals[p.a])totals[p.a]=0;
+      totals[p.a]+=p.q;
+    });
+  });
+  var keys=Object.keys(totals).sort(function(a,b){return (PROD_NAMES[a]||a).localeCompare(PROD_NAMES[b]||b)});
+  if(keys.length===0)return '<div class="armado-red-empty" style="padding:14px;color:var(--muted);font-size:13px;font-style:italic;text-align:center">Marcos no retira nada del depósito (todo via OC)</div>';
+  // Marcado como armado si TODOS los pedidos del bloque están armadoDone
+  var allDone=lista.every(function(e){return armadoDone[eKey(e)]});
+  // Lista serializada de keys para el toggle masivo
+  var keysList=lista.map(function(e){return eKey(e)}).join(',');
+  var prodLines=keys.map(function(a){return '<span>'+totals[a]+'x</span> '+(PROD_NAMES[a]||a)}).join('<br>');
+  return '<div class="armado-cards"><div class="armado-card red'+(allDone?' done':'')+'" onclick="toggleArmadoMasivo(\''+keysList+'\')">'
+    +'<div class="armado-head">'
+    +'<div class="armado-check">'+(allDone?'&#x2713;':'')+'</div>'
+    +'<span class="armado-name">Sacar para Marcos ('+lista.length+' pedido'+(lista.length>1?'s':'')+')</span>'
+    +'</div>'
+    +'<div class="armado-prods">'+prodLines+'</div>'
+    +'</div></div>';
 }
 
 /* Render del bloque de barrios+subbarrios+cards de una lista de pedidos */
@@ -964,9 +964,10 @@ function renderArmadoGroup(pedidos,titulo,isOther,dayKey,esHoy){
 
   canalesActivos.forEach(function(canal){
     var lista=canales[canal];
+    // Canal Red: render agregado (productos a separar para Marcos), no cards individuales
+    var contenido=(canal==='re')?_renderArmadoRedAggregate(lista):_renderArmadoBarrios(lista);
     if(hideCanalHeader){
-      // Solo render directo de barrios/cards
-      html+='<div class="armado-canal-content">'+_renderArmadoBarrios(lista)+'</div>';
+      html+='<div class="armado-canal-content">'+contenido+'</div>';
       return;
     }
     var canalKey='can:'+dayKey+':'+canal;
@@ -977,7 +978,7 @@ function renderArmadoGroup(pedidos,titulo,isOther,dayKey,esHoy){
       +'<span class="ch-arrow">▼</span>'
       +'</div>';
     html+='<div class="armado-canal-content'+(canalCollapsed?' collapsed':'')+'" data-collapse-key="'+canalKey+'">';
-    html+=_renderArmadoBarrios(lista);
+    html+=contenido;
     html+='</div>'; // canal-content
   });
 
@@ -994,6 +995,24 @@ function toggleArmado(key){
   }
 }
 function confirmarArmado(key){armadoDone[key]=true;syncArmadoBusqueda(key,true);saveLocal();render();if(navigator.vibrate)navigator.vibrate(30)}
+
+/* Marca / desmarca varios pedidos de una sola vez (usado por el bloque agregado de Red). */
+function toggleArmadoMasivo(keysCsv){
+  var keys=(keysCsv||'').split(',').filter(Boolean);
+  if(keys.length===0)return;
+  var allDone=keys.every(function(k){return armadoDone[k]});
+  if(allDone){
+    keys.forEach(function(k){delete armadoDone[k];syncArmadoBusqueda(k,false)});
+    saveLocal();render();
+  } else {
+    var o=document.getElementById('confirmOverlay');o.className='confirm-overlay';
+    o.innerHTML='<div class="confirm-box"><h3>Listo para Marcos?</h3><p>Marcar como armados los '+keys.length+' pedidos del bloque</p><div class="confirm-btns"><button class="btn-no" onclick="cerrarConfirm()">No</button><button class="btn-si" onclick="cerrarConfirm();confirmarArmadoMasivo(\''+keysCsv+'\')">Si, listos</button></div></div>';
+  }
+}
+function confirmarArmadoMasivo(keysCsv){
+  (keysCsv||'').split(',').filter(Boolean).forEach(function(k){armadoDone[k]=true;syncArmadoBusqueda(k,true)});
+  saveLocal();render();if(navigator.vibrate)navigator.vibrate(30);
+}
 
 function confirmarCancelar(key,nombre){
   var o=document.getElementById('confirmOverlay');o.className='confirm-overlay';
