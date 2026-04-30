@@ -760,36 +760,40 @@ function render(){
 //   - Viejo: { "PPM":"D", "ECaC":"OC" }  → todo el item es D u OC
 //   - Nuevo: { "PPM":{"d":1,"oc":0} }    → cantidades parciales del depósito
 // Si no hay oD (objeto vacío), asumimos que todo el pedido sale del depósito (compat).
-function _itemsDepDe(e){
+/* Source of truth de qué es OC: el array e.oc viene del backend leyendo la hoja
+   "Orden de Compra" directamente. Es autoritativo. Solo si el backend no lo manda
+   (cliente cacheado viejo) caemos al oD del JSON Origen Detalle. */
+function _ocMapDe(e){
+  var m={};
+  if(e.oc && e.oc.length){e.oc.forEach(function(p){m[p.a]=(m[p.a]||0)+(p.q||0)});return m}
+  // Fallback: leer del oD si no vino e.oc
   var oD=e.oD||{};
-  var hasOD=Object.keys(oD).length>0;
-  var out=[];
   e.p.forEach(function(p){
     var v=oD[p.a];
-    var qD;
-    if(!hasOD) qD=p.q;
-    else if(v==='D') qD=p.q;
-    else if(v==='OC') qD=0;
-    else if(v && typeof v==='object') qD=Number(v.d)||0;
-    else qD=0;
-    if(qD>0) out.push({a:p.a,q:qD});
+    var qOC=0;
+    if(v==='OC')qOC=p.q;
+    else if(v && typeof v==='object')qOC=Number(v.oc)||0;
+    if(qOC>0)m[p.a]=qOC;
+  });
+  return m;
+}
+function _itemsDepDe(e){
+  // DEP = total del pedido - OC (de la hoja Orden de Compra). Si OC > total, queda 0.
+  var ocMap=_ocMapDe(e);
+  var out=[];
+  e.p.forEach(function(p){
+    var qOC=ocMap[p.a]||0;
+    var qD=Math.max(0,(p.q||0)-qOC);
+    if(qD>0)out.push({a:p.a,q:qD});
   });
   return out;
 }
 /* Complemento: items que vienen del proveedor via OC (no del depósito). */
 function _itemsOCDe(e){
-  var oD=e.oD||{};
-  var hasOD=Object.keys(oD).length>0;
+  var ocMap=_ocMapDe(e);
   var out=[];
-  e.p.forEach(function(p){
-    var v=oD[p.a];
-    var qOC;
-    if(!hasOD) qOC=0; // sin oD asumimos todo del depósito (compat viejo)
-    else if(v==='OC') qOC=p.q;
-    else if(v==='D') qOC=0;
-    else if(v && typeof v==='object') qOC=Number(v.oc)||0;
-    else qOC=0;
-    if(qOC>0) out.push({a:p.a,q:qOC});
+  Object.keys(ocMap).forEach(function(a){
+    if(ocMap[a]>0)out.push({a:a,q:ocMap[a]});
   });
   return out;
 }
