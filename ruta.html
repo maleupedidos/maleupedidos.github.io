@@ -56,6 +56,26 @@ input,select,textarea,button{font-size:16px}
 .armado-summary{background:var(--white);border-bottom:1px solid var(--border);padding:12px 16px;font-size:13px;color:var(--muted);line-height:1.7}
 .armado-summary strong{color:var(--brown);font-weight:800}
 
+/* ── ARMADO: BLOQUE DEPÓSITO ── */
+.dep-block{background:#E8F5E9;border:2px solid #2E7D32;border-radius:14px;margin:10px 8px;padding:12px 14px;box-shadow:0 2px 6px rgba(46,125,50,.12)}
+.dep-block-title{font-size:14px;font-weight:800;color:#1B5E20;display:flex;align-items:center;gap:8px;margin-bottom:8px;letter-spacing:.02em}
+.dep-block-title .ico{font-size:18px}
+.dep-block-sub{font-size:11px;font-weight:700;color:#2E7D32;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px}
+.dep-item{display:flex;align-items:center;gap:10px;padding:8px 4px;border-bottom:1px dashed rgba(46,125,50,.25);font-size:14px}
+.dep-item:last-child{border-bottom:none}
+.dep-item.done{opacity:.45;text-decoration:line-through}
+.dep-item .check{width:26px;height:26px;border-radius:7px;border:2.5px solid #2E7D32;display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:14px;color:#fff;cursor:pointer;background:#fff}
+.dep-item.done .check{background:#2E7D32}
+.dep-item .qty{font-weight:800;color:#1B5E20;min-width:32px;text-align:right}
+.dep-item .name{flex:1;font-weight:600;color:#1B5E20}
+.dep-block-foot{margin-top:10px;display:flex;justify-content:space-between;align-items:center;font-size:12px;color:#1B5E20;font-weight:700}
+
+/* Card Red (retira el vendedor) */
+.armado-card.red{border-color:#7B1FA2;background:#F3E5F5}
+.armado-card.red .armado-check{border-color:#7B1FA2}
+.armado-card.red.done .armado-check{background:#7B1FA2;border-color:#7B1FA2}
+.armado-retira-tag{display:inline-block;font-size:10px;font-weight:800;background:#7B1FA2;color:#fff;padding:2px 8px;border-radius:50px;margin-left:6px;letter-spacing:.04em;text-transform:uppercase}
+
 /* ── ARMADO VIEW ── */
 .armado-list{padding:10px}
 .armado-day-header{padding:14px 8px 6px;font-size:15px;font-weight:800;color:var(--brown);display:flex;align-items:center;justify-content:space-between}
@@ -669,8 +689,9 @@ function sortByZona(list){
     return(parseInt(a.l)||999)-(parseInt(b.l)||999);
   });return list;
 }
-function getSorted(){return sortByZona(getHoyPendientes().filter(function(e){return armadoDone[eKey(e)]}))}
-function getHoySinArmar(){return getHoyPendientes().filter(function(e){return !armadoDone[eKey(e)]})}
+// Red NO entra en RUTA (Tadeo no entrega — los retira el vendedor)
+function getSorted(){return sortByZona(getHoyPendientes().filter(function(e){return e.h!=='Red'&&armadoDone[eKey(e)]}))}
+function getHoySinArmar(){return getHoyPendientes().filter(function(e){return e.h!=='Red'&&!armadoDone[eKey(e)]})}
 function prodText(p){return p.map(function(x){return'<span>'+x.q+'x</span> '+(PROD_NAMES[x.a]||x.a)}).join('<br>')}
 function formatMoney(n){return'$'+n.toLocaleString('es-AR')}
 function getZonaSummary(list){
@@ -685,8 +706,12 @@ function render(){
   document.getElementById('counterBadge').textContent=doneHoy+'/'+totalHoy;
   document.getElementById('syncBanner').className='sync-banner'+(syncQueue.length>0?' visible':'');
   document.getElementById('errorView').classList.add('hidden');
-  // Tab counts: ambos muestran HOY
-  var porArmar=0,armadosHoy=0;hoy.forEach(function(e){if(armadoDone[eKey(e)])armadosHoy++;else porArmar++});
+  // Tab counts: ambos muestran HOY (Red cuenta para ARMADO pero no para RUTA)
+  var porArmar=0,armadosHoy=0;
+  hoy.forEach(function(e){
+    if(armadoDone[eKey(e)]){if(e.h!=='Red')armadosHoy++}
+    else porArmar++;
+  });
   document.getElementById('tabArmadoCount').textContent=porArmar;
   document.getElementById('tabRutaCount').textContent=armadosHoy;
   document.getElementById('tabCobrosCount').textContent=pendientesCobro.length||'';
@@ -702,21 +727,68 @@ function render(){
 }
 
 /* ── ARMADO ── */
+// Items que salen del depósito (oD === "D"). Si no hay oD, asumir que todo el pedido es D
+// (compat con pedidos viejos antes de Origen Detalle).
+function _itemsDepDe(e){
+  var oD=e.oD||{};
+  var hasOD=Object.keys(oD).length>0;
+  return e.p.filter(function(p){
+    if(!hasOD) return true;
+    return oD[p.a]==='D';
+  });
+}
+function _esArmadoDep(e){
+  // Solo para resumen depósito: sumamos items D
+  return _itemsDepDe(e).length>0;
+}
+
 function renderArmado(){
   document.getElementById('armadoView').classList.remove('hidden');document.getElementById('rutaView').classList.add('hidden');document.getElementById('cobrosView').classList.add('hidden');document.getElementById('nuevoView').classList.add('hidden');
   var hoy=getDiaHoy(),pedH=sortByZona(getHoyPendientes()),pedO=sortByZona(getOtrosDias());
 
-  // Resumen de productos de HOY (para sacar del freezer)
-  var totals={};pedH.forEach(function(e){e.p.forEach(function(p){if(!totals[p.a])totals[p.a]=0;totals[p.a]+=p.q})});
-  var sumParts=Object.keys(totals).map(function(a){return'<strong>'+totals[a]+'</strong> '+(PROD_NAMES[a]||a)});
-  var armadosHoy=0;pedH.forEach(function(e){if(armadoDone[eKey(e)])armadosHoy++});
-  var faltanHoy=pedH.length-armadosHoy;
-  var summaryHtml='<strong>'+faltanHoy+' por armar</strong> de '+pedH.length+' pedidos hoy';
+  // Resumen de productos de HOY que salen del DEPÓSITO (oD === "D"), incluyendo Red
+  var totalsDep={};
+  pedH.forEach(function(e){
+    _itemsDepDe(e).forEach(function(p){
+      if(!totalsDep[p.a])totalsDep[p.a]=0;
+      totalsDep[p.a]+=p.q;
+    });
+  });
+  var pedHTadeo=pedH.filter(function(e){return e.h!=='Red'});
+  var armadosHoy=0;pedHTadeo.forEach(function(e){if(armadoDone[eKey(e)])armadosHoy++});
+  var faltanHoy=pedHTadeo.length-armadosHoy;
+  var pedRedHoy=pedH.filter(function(e){return e.h==='Red'});
+  var summaryHtml='<strong>'+faltanHoy+' por armar</strong> de '+pedHTadeo.length+' pedidos hoy';
+  if(pedRedHoy.length>0)summaryHtml+=' &middot; <strong>'+pedRedHoy.length+'</strong> Marcos retira';
   if(pedO.length>0)summaryHtml+='<span style="float:right;font-size:10px;color:var(--muted)">Otros dias: '+pedO.length+'</span>';
-  if(sumParts.length>0)summaryHtml+='<br>'+sumParts.join(' &middot; ');
   document.getElementById('armadoSummary').innerHTML=summaryHtml;
 
   var html='';
+
+  // Bloque "🧊 Sale del depósito" — checklist agregado por producto del DÍA
+  if(Object.keys(totalsDep).length>0){
+    var hoyISO=getHoyISO();
+    var dcAll=getDepCheck();
+    var dcHoy=dcAll[hoyISO]||{};
+    var totalItems=0,doneItems=0;
+    Object.keys(totalsDep).forEach(function(a){totalItems++;if(dcHoy[a])doneItems++});
+    html+='<div class="dep-block">'
+      +'<div class="dep-block-title"><span class="ico">🧊</span><span>Sale del depósito (hoy)</span></div>'
+      +'<div class="dep-block-sub">Sacá del freezer antes de salir</div>';
+    // Sort: undone primero, done al final
+    var items=Object.keys(totalsDep).map(function(a){return{a:a,q:totalsDep[a],done:!!dcHoy[a]}});
+    items.sort(function(x,y){if(x.done!==y.done)return x.done?1:-1;return (PROD_NAMES[x.a]||x.a).localeCompare(PROD_NAMES[y.a]||y.a)});
+    items.forEach(function(it){
+      html+='<div class="dep-item'+(it.done?' done':'')+'" onclick="toggleDepItem(\''+it.a+'\')">'
+        +'<div class="check">'+(it.done?'&#x2713;':'')+'</div>'
+        +'<div class="qty">'+it.q+'</div>'
+        +'<div class="name">'+(PROD_NAMES[it.a]||it.a)+'</div>'
+        +'</div>';
+    });
+    html+='<div class="dep-block-foot"><span>'+doneItems+'/'+totalItems+' productos sacados</span></div>'
+      +'</div>';
+  }
+
   if(pedH.length>0){html+=renderArmadoGroup(pedH,'Hoy &middot; '+labelFecha(getHoyISO()),false)}
   // OTROS DIAS (agrupados por fecha exacta, ordenados)
   if(pedO.length>0){
@@ -724,6 +796,23 @@ function renderArmado(){
     Object.keys(pd).sort().forEach(function(k){html+=renderArmadoGroup(pd[k],labelFecha(k)||k,true)});
   }
   document.getElementById('armadoList').innerHTML=html;
+}
+
+/* Estado de checkboxes del bloque depósito (por día) — solo localStorage */
+function getDepCheck(){
+  try{return JSON.parse(localStorage.getItem('maleu_ruta_depcheck')||'{}')}catch(e){return{}}
+}
+function saveDepCheck(d){
+  try{localStorage.setItem('maleu_ruta_depcheck',JSON.stringify(d))}catch(e){}
+}
+function toggleDepItem(abbr){
+  var hoyISO=getHoyISO();
+  var d=getDepCheck();
+  if(!d[hoyISO])d[hoyISO]={};
+  if(d[hoyISO][abbr])delete d[hoyISO][abbr];else d[hoyISO][abbr]=true;
+  saveDepCheck(d);
+  renderArmado();
+  if(navigator.vibrate)navigator.vibrate(15);
 }
 
 function renderArmadoGroup(pedidos,titulo,isOther){
@@ -743,12 +832,16 @@ function renderArmadoGroup(pedidos,titulo,isOther){
       subs[sb].forEach(function(e){
         var key=eKey(e),isDone=armadoDone[key];
         var loteStr=e.l?'Lote '+e.l:'';
-        html+='<div class="armado-card'+(isDone?' done':'')+'">'
+        var isRed=e.h==='Red';
+        var retiraTag=isRed?(' <span class="armado-retira-tag">'+(e.retira||'Vendedor')+' retira</span>'):'';
+        // Para Red, el cancel-button no tiene sentido (no se cancela desde acá)
+        var cancelBtn=isRed?'':'<button type="button" class="armado-cancel" onclick="event.stopPropagation();confirmarCancelar(\''+key+'\',\''+(e.c.replace(/\'/g,""))+'\')" title="Cancelar pedido">&#x1F5D1;</button>';
+        html+='<div class="armado-card'+(isDone?' done':'')+(isRed?' red':'')+'">'
           +'<div class="armado-head" onclick="toggleArmado(\''+key+'\')">'
           +'<div class="armado-check">'+(isDone?'&#x2713;':'')+'</div>'
-          +'<span class="armado-name">'+e.c+'</span>'
+          +'<span class="armado-name">'+e.c+retiraTag+'</span>'
           +(loteStr?'<span class="armado-lote">'+loteStr+'</span>':'')
-          +'<button type="button" class="armado-cancel" onclick="event.stopPropagation();confirmarCancelar(\''+key+'\',\''+(e.c.replace(/\'/g,""))+'\')" title="Cancelar pedido">&#x1F5D1;</button>'
+          +cancelBtn
           +'</div>'
           +'<div class="armado-prods" onclick="toggleArmado(\''+key+'\')">'+prodText(e.p)+'</div>'
           +'</div>';

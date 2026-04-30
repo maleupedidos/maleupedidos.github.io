@@ -218,6 +218,25 @@ select,input[type="number"]{font-size:16px}
 .sync-banner{background:#FFF3E0;color:#E65100;text-align:center;padding:6px;font-size:11px;font-weight:700;display:none}
 .sync-banner.visible{display:block}
 
+/* ── BUSQUEDA programación ── */
+.prov-prog{display:flex;align-items:center;gap:6px;margin:8px 0 4px;padding:8px 10px;border-radius:10px;background:#FFF3E0;border:1px dashed #F07D47;cursor:pointer;font-size:13px;font-weight:700;color:#7A4A4A}
+.prov-prog.set{background:#E3F2FD;border:1px solid #1565C0;color:#0D47A1;border-style:solid}
+.prov-prog.urgent{background:#FFEBEE;border-color:#C62828;color:#B71C1C}
+.prov-prog .ico{font-size:16px;line-height:1}
+.prov-prog .lbl{flex:1}
+.prov-prog .clear{font-size:13px;color:#c0392b;font-weight:800;padding:2px 6px;border-radius:6px;background:rgba(198,40,40,.08)}
+.prog-overlay{position:fixed;inset:0;background:rgba(0,0,0,.55);display:none;align-items:flex-end;justify-content:center;z-index:700}
+.prog-overlay.show{display:flex}
+.prog-sheet{background:#fff;border-radius:18px 18px 0 0;width:100%;max-width:480px;padding:18px 16px 24px;box-shadow:0 -8px 32px rgba(0,0,0,.3);max-height:90vh;overflow-y:auto}
+.prog-title{font-size:16px;font-weight:800;color:#331C1C;text-align:center;margin-bottom:14px}
+.prog-options{display:flex;flex-direction:column;gap:8px}
+.prog-opt{padding:14px 16px;background:#F2E8C7;border:none;border-radius:10px;font-family:inherit;font-size:15px;font-weight:700;color:#331C1C;cursor:pointer;text-align:left;display:flex;justify-content:space-between;align-items:center}
+.prog-opt:active{background:#E8DFC4}
+.prog-opt.danger{background:#FFEBEE;color:#B71C1C}
+.prog-opt .day{font-weight:800}
+.prog-opt .date{color:#7A4A4A;font-size:12px;font-weight:600}
+.prog-cancel{margin-top:12px;padding:12px;background:#331C1C;color:#F2E8C7;border:none;border-radius:10px;font-family:inherit;font-size:14px;font-weight:700;cursor:pointer;width:100%}
+
 /* ── PAGOS TAB ── */
 .deuda-card{background:#fff;border-radius:14px;padding:14px;margin:8px;border:2px solid #E8DFC4}
 .deuda-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;padding-bottom:8px;border-bottom:2px solid #E8DFC4}
@@ -387,6 +406,15 @@ html,body{overscroll-behavior-y:contain}
 </div>
 
 <div class="toast" id="toast"></div>
+
+<!-- MODAL PROGRAMAR BÚSQUEDA -->
+<div class="prog-overlay" id="progOverlay" onclick="if(event.target===this)cerrarProgModal()">
+  <div class="prog-sheet">
+    <div class="prog-title" id="progTitle">Programar búsqueda</div>
+    <div class="prog-options" id="progOptions"></div>
+    <button class="prog-cancel" onclick="cerrarProgModal()">Cancelar</button>
+  </div>
+</div>
 
 <!-- CONFIRM MODAL (reemplaza al confirm() del navegador) -->
 <div class="confirm-overlay" id="confirmOverlay">
@@ -648,6 +676,14 @@ function renderProveedores() {
   document.getElementById('pagosView').classList.add('hidden');
   document.getElementById('nuevoView').classList.add('hidden');
 
+  // Ordenar: primero los programados por fecha asc, después los sin programar.
+  // Mutamos busqueda.provs para que copyWA/confirmarRecibir/etc sigan usando el mismo idx.
+  busqueda.provs = (busqueda.provs || []).sort(function(a, b) {
+    var fa = (a.fProg || '9999-99-99');
+    var fb = (b.fProg || '9999-99-99');
+    return fa < fb ? -1 : fa > fb ? 1 : 0;
+  });
+
   var html = '';
   busqueda.provs.forEach(function(prov, idx) {
     // Determinar estado real desde los datos del servidor
@@ -660,6 +696,9 @@ function renderProveedores() {
 
     html += '<div class="prov-card">';
     html += '<div class="prov-head"><span class="prov-name">' + prov.n + '</span><span class="prov-cost">' + formatMoney(prov.costo) + '</span></div>';
+
+    // Chip de programación de búsqueda
+    html += renderProgChip(prov);
 
     prov.cats.forEach(function(c) {
       html += '<div class="prov-cat">' + c.cat + '</div>';
@@ -724,6 +763,98 @@ function renderProveedores() {
     html = '<div class="al-dia" style="color:#7A4A4A">Para la Semana ' + getSemanaISO() + ' ya no hay mas Busquedas</div>';
   }
   document.getElementById('provList').innerHTML = html;
+}
+
+/* ── PROGRAMAR BÚSQUEDA ────────────────────────────── */
+function _hoyISO() {
+  var d = new Date();
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+}
+function _addDias(iso, n) {
+  var p = iso.split('-');
+  var d = new Date(Number(p[0]), Number(p[1]) - 1, Number(p[2]));
+  d.setDate(d.getDate() + n);
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+}
+function _labelDia(iso) {
+  var p = iso.split('-');
+  var d = new Date(Number(p[0]), Number(p[1]) - 1, Number(p[2]));
+  var dias = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
+  return dias[d.getDay()] + ' ' + p[2] + '/' + p[1];
+}
+function _diasHasta(iso) {
+  if (!iso) return 999;
+  var hoy = _hoyISO();
+  var dh = hoy.split('-'), de = iso.split('-');
+  var dHoy = new Date(Number(dh[0]), Number(dh[1]) - 1, Number(dh[2]));
+  var dEt = new Date(Number(de[0]), Number(de[1]) - 1, Number(de[2]));
+  return Math.round((dEt - dHoy) / 86400000);
+}
+function renderProgChip(prov) {
+  var fp = prov.fProg;
+  if (!fp) {
+    return '<button class="prov-prog" onclick="openProgModal(\'' + esc(prov.n) + '\')"><span class="ico">📅</span><span class="lbl">Programar búsqueda</span></button>';
+  }
+  var dias = _diasHasta(fp);
+  var cls = 'prov-prog set' + (dias <= 0 ? ' urgent' : '');
+  var lbl;
+  if (dias === 0) lbl = 'Hoy';
+  else if (dias === 1) lbl = 'Mañana';
+  else if (dias < 0) lbl = 'Atrasado · ' + _labelDia(fp);
+  else lbl = _labelDia(fp);
+  return '<div class="' + cls + '" onclick="openProgModal(\'' + esc(prov.n) + '\')"><span class="ico">📅</span><span class="lbl">Búsqueda: ' + lbl + '</span><span class="clear" onclick="event.stopPropagation();programarBusqueda(\'' + esc(prov.n) + '\',\'\')">Quitar</span></div>';
+}
+function openProgModal(provName) {
+  var hoy = _hoyISO();
+  var opts = [
+    { lbl: 'Hoy', iso: hoy },
+    { lbl: 'Mañana', iso: _addDias(hoy, 1) },
+    { lbl: 'En 2 días', iso: _addDias(hoy, 2) },
+    { lbl: 'En 3 días', iso: _addDias(hoy, 3) },
+    { lbl: 'En 4 días', iso: _addDias(hoy, 4) },
+    { lbl: 'En 5 días', iso: _addDias(hoy, 5) },
+    { lbl: 'En 7 días', iso: _addDias(hoy, 7) }
+  ];
+  var html = '';
+  opts.forEach(function(o) {
+    html += '<button class="prog-opt" onclick="programarBusqueda(\'' + esc(provName) + '\',\'' + o.iso + '\')"><span class="day">' + o.lbl + '</span><span class="date">' + _labelDia(o.iso) + '</span></button>';
+  });
+  // Si el proveedor ya tiene fecha, opción para limpiar
+  var prov = (busqueda.provs || []).filter(function(p) { return p.n === provName; })[0];
+  if (prov && prov.fProg) {
+    html += '<button class="prog-opt danger" onclick="programarBusqueda(\'' + esc(provName) + '\',\'\')"><span class="day">Quitar programación</span><span class="date"></span></button>';
+  }
+  document.getElementById('progTitle').textContent = 'Buscar a ' + provName;
+  document.getElementById('progOptions').innerHTML = html;
+  document.getElementById('progOverlay').classList.add('show');
+}
+function cerrarProgModal() {
+  document.getElementById('progOverlay').classList.remove('show');
+}
+function programarBusqueda(provName, isoFecha) {
+  cerrarProgModal();
+  // Update optimista local
+  (busqueda.provs || []).forEach(function(p) { if (p.n === provName) p.fProg = isoFecha || ''; });
+  saveLocal();
+  render();
+  // POST al backend
+  fetch(APPS_SCRIPT_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify({ action: 'programarBusqueda', proveedor: provName, fecha: isoFecha || '' })
+  }).then(function(r) { return r.json().catch(function() { return {}; }); }).then(function(resp) {
+    if (resp && resp.ok) {
+      showToast(isoFecha ? ('📅 ' + provName + ': ' + _labelDia(isoFecha)) : ('Quitada programación de ' + provName));
+    } else {
+      syncQueue.push({ action: 'programarBusqueda', proveedor: provName, fecha: isoFecha || '' });
+      saveLocal();
+      processSyncQueue();
+    }
+  }).catch(function() {
+    syncQueue.push({ action: 'programarBusqueda', proveedor: provName, fecha: isoFecha || '' });
+    saveLocal();
+    showToast('Sin conexión — se sincroniza después');
+  });
 }
 
 function copyWA(idx, btn, provName) {
