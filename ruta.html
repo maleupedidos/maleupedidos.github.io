@@ -1051,8 +1051,47 @@ function toggleArmadoMasivo(keysCsv){
   }
 }
 function confirmarArmadoMasivo(keysCsv){
-  (keysCsv||'').split(',').filter(Boolean).forEach(function(k){armadoDone[k]=true;syncArmadoBusqueda(k,true)});
+  var keys=(keysCsv||'').split(',').filter(Boolean);
+  if(keys.length===0)return;
+  // Detectar si todas las keys son de Red (formato "Red|R<n>")
+  var allRed=keys.every(function(k){return k.indexOf('Red|')===0});
+  keys.forEach(function(k){armadoDone[k]=true;syncArmadoBusqueda(k,true)});
   saveLocal();render();if(navigator.vibrate)navigator.vibrate(30);
+  // Para Red: ademas enviar POST que marca "Entregado a Vendedor" en el sheet,
+  // asi el bloque desaparece del Armado y no aparece de nuevo en el proximo refresh.
+  if(allRed){
+    var rows=keys.map(function(k){
+      var ent=findByKey(k);return ent?ent.r:0;
+    }).filter(function(r){return r>=2});
+    if(rows.length>0){
+      showLoader('Marcando entregado...');
+      var payload={action:'marcarEntregadoAVendedor',rows:rows,ts:Date.now()};
+      fetch(APPS_SCRIPT_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(payload),redirect:'follow'})
+        .then(function(r){return r.json().catch(function(){return{ok:false}})})
+        .then(function(res){
+          hideLoader(true);
+          if(res&&res.ok){
+            // Quitar esos pedidos de entregas localmente (no esperar al refresh)
+            keys.forEach(function(k){var ent=findByKey(k);if(ent)entregados[k]=true});
+            saveLocal();render();
+            showToast('Entregado a Marcos ('+rows.length+' pedidos)');
+            // Refresh fresh para sincronizar
+            if(isOnline)refresh(true,true);
+          } else {
+            // Si fallo, dejar la queue y reintentar en el sync normal
+            rows.forEach(function(r,i){syncQueue.push({action:'marcarEntregadoAVendedor',rows:[r],ts:Date.now()})});
+            saveLocal();processSyncQueue();
+            showToast('Sin conexion — se reintenta');
+          }
+        })
+        .catch(function(){
+          hideLoader(true);
+          rows.forEach(function(r){syncQueue.push({action:'marcarEntregadoAVendedor',rows:[r],ts:Date.now()})});
+          saveLocal();processSyncQueue();
+          showToast('Sin conexion — se reintenta');
+        });
+    }
+  }
 }
 
 function confirmarCancelar(key,nombre){
