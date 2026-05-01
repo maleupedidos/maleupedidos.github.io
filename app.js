@@ -207,6 +207,21 @@ function _deliveryStartMs(iso) {
   date.setUTCHours(hourAR + 3, 0, 0, 0);
   return date.getTime();
 }
+/* Hora de FIN de entrega (UTC ms) para una fecha ISO. Usado para decidir
+   si la fecha ya pasó por completo y conviene sacarla del calendario. */
+function _deliveryEndMs(iso) {
+  if (!iso || iso === 'any') return null;
+  var parts = iso.split('-'); if (parts.length !== 3) return null;
+  var y = +parts[0], m = +parts[1] - 1, d = +parts[2];
+  var date = new Date(Date.UTC(y, m, d));
+  var dow = date.getUTCDay();
+  var hourAR;
+  if (dow === 1) hourAR = 19;        // Lunes 18-19hs
+  else if (dow === 0) hourAR = 13;   // Domingo 11-13hs
+  else hourAR = 21;                   // Mié/Jue/Vie/Sáb 19-21hs
+  date.setUTCHours(hourAR + 3, 0, 0, 0);
+  return date.getTime();
+}
 let _formVisible = false;
 const PROD_MAP = {}; PRODUCTOS.forEach(p => PROD_MAP[p.id] = p);
 PRODUCTOS_CLUBES.forEach(p => PROD_MAP[p.id] = p);
@@ -567,9 +582,9 @@ function _getNextDeliveryDatesGrouped(zone) {
     if (validDays.indexOf(dayName) === -1 && !isExtra) continue;
     // Bloqueado por feriado
     if (feriados.indexOf(iso) !== -1) continue;
-    // Si la entrega ya empezó / faltan <2hs, saltar
-    var startMs = _deliveryStartMs(iso);
-    if (startMs && (startMs - Date.now()) < 2 * 3600 * 1000) continue;
+    // Si la entrega ya terminó (pasó el horario de cierre), saltar
+    var endMs = _deliveryEndMs(iso);
+    if (endMs && endMs <= Date.now()) continue;
     var inThisWeek = d.getTime() < nextMonday.getTime();
     // Filtro de restricción Pilar: solo Vie en thisWeek (las extras también pasan)
     if (pilarRestricted && inThisWeek && dayName !== 'Viernes' && !isExtra) continue;
