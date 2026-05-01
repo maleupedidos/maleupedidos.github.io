@@ -918,7 +918,7 @@ function _renderArmadoCard(e){
    de los clientes de Marcos, solo qué productos sacar del freezer para entregárselos.
    Suma cantidades por producto (solo items del depósito) y muestra una sola card.
    Tildable: marca/destilda todos los pedidos Red de la lista al mismo tiempo. */
-function _renderArmadoRedAggregate(lista){
+function _renderArmadoRedAggregate(lista,dayKey){
   var totals={};
   lista.forEach(function(e){
     _itemsDepDe(e).forEach(function(p){
@@ -933,7 +933,8 @@ function _renderArmadoRedAggregate(lista){
   // Lista serializada de keys para el toggle masivo
   var keysList=lista.map(function(e){return eKey(e)}).join(',');
   var prodLines=keys.map(function(a){return '<span>'+totals[a]+'x</span> '+(PROD_NAMES[a]||a)}).join('<br>');
-  return '<div class="armado-cards"><div class="armado-card red'+(allDone?' done':'')+'" onclick="toggleArmadoMasivo(\''+keysList+'\')">'
+  // dayKey: ISO yyyy-mm-dd. Lo pasamos al toggle para que el backend marque tambien los pedidos Red 100% OC del mismo dia que no aparecen en el bloque.
+  return '<div class="armado-cards"><div class="armado-card red'+(allDone?' done':'')+'" onclick="toggleArmadoMasivo(\''+keysList+'\',\''+(dayKey||'')+'\')">'
     +'<div class="armado-head">'
     +'<div class="armado-check">'+(allDone?'&#x2713;':'')+'</div>'
     +'<span class="armado-name">Sacar para Marcos ('+lista.length+' pedido'+(lista.length>1?'s':'')+')</span>'
@@ -1006,7 +1007,7 @@ function renderArmadoGroup(pedidos,titulo,isOther,dayKey,esHoy){
   canalesActivos.forEach(function(canal){
     var lista=canales[canal];
     // Canal Red: render agregado (productos a separar para Marcos), no cards individuales
-    var contenido=(canal==='re')?_renderArmadoRedAggregate(lista):_renderArmadoBarrios(lista);
+    var contenido=(canal==='re')?_renderArmadoRedAggregate(lista,dayKey):_renderArmadoBarrios(lista);
     if(hideCanalHeader){
       html+='<div class="armado-canal-content">'+contenido+'</div>';
       return;
@@ -1037,8 +1038,10 @@ function toggleArmado(key){
 }
 function confirmarArmado(key){armadoDone[key]=true;syncArmadoBusqueda(key,true);saveLocal();render();if(navigator.vibrate)navigator.vibrate(30)}
 
-/* Marca / desmarca varios pedidos de una sola vez (usado por el bloque agregado de Red). */
-function toggleArmadoMasivo(keysCsv){
+/* Marca / desmarca varios pedidos de una sola vez (usado por el bloque agregado de Red).
+   dayKey opcional: si es bloque Red, sirve para que el backend marque tambien los Red
+   100% OC del mismo dia que no aparecen como cards en el bloque. */
+function toggleArmadoMasivo(keysCsv,dayKey){
   var keys=(keysCsv||'').split(',').filter(Boolean);
   if(keys.length===0)return;
   var allDone=keys.every(function(k){return armadoDone[k]});
@@ -1047,50 +1050,44 @@ function toggleArmadoMasivo(keysCsv){
     saveLocal();render();
   } else {
     var o=document.getElementById('confirmOverlay');o.className='confirm-overlay';
-    o.innerHTML='<div class="confirm-box"><h3>Listo para Marcos?</h3><p>Marcar como armados los '+keys.length+' pedidos del bloque</p><div class="confirm-btns"><button class="btn-no" onclick="cerrarConfirm()">No</button><button class="btn-si" onclick="cerrarConfirm();confirmarArmadoMasivo(\''+keysCsv+'\')">Si, listos</button></div></div>';
+    o.innerHTML='<div class="confirm-box"><h3>Listo para Marcos?</h3><p>Marcar como armados los '+keys.length+' pedidos del bloque</p><div class="confirm-btns"><button class="btn-no" onclick="cerrarConfirm()">No</button><button class="btn-si" onclick="cerrarConfirm();confirmarArmadoMasivo(\''+keysCsv+'\',\''+(dayKey||'')+'\')">Si, listos</button></div></div>';
   }
 }
-function confirmarArmadoMasivo(keysCsv){
+function confirmarArmadoMasivo(keysCsv,dayKey){
   var keys=(keysCsv||'').split(',').filter(Boolean);
   if(keys.length===0)return;
   // Detectar si todas las keys son de Red (formato "Red|R<n>")
   var allRed=keys.every(function(k){return k.indexOf('Red|')===0});
   keys.forEach(function(k){armadoDone[k]=true;syncArmadoBusqueda(k,true)});
   saveLocal();render();if(navigator.vibrate)navigator.vibrate(30);
-  // Para Red: ademas enviar POST que marca "Entregado a Vendedor" en el sheet,
-  // asi el bloque desaparece del Armado y no aparece de nuevo en el proximo refresh.
+  // Para Red: enviar POST que marca "Entregado a Vendedor" en el sheet.
+  // Pasamos dia para que el backend marque tambien los pedidos Red 100% OC del mismo dia
+  // que no aparecen como cards en el bloque (e.g. Marcos retira el dia entero).
   if(allRed){
     var rows=keys.map(function(k){
       var ent=findByKey(k);return ent?ent.r:0;
     }).filter(function(r){return r>=2});
-    if(rows.length>0){
-      showLoader('Marcando entregado...');
-      var payload={action:'marcarEntregadoAVendedor',rows:rows,ts:Date.now()};
-      fetch(APPS_SCRIPT_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(payload),redirect:'follow'})
-        .then(function(r){return r.json().catch(function(){return{ok:false}})})
-        .then(function(res){
-          hideLoader(true);
-          if(res&&res.ok){
-            // Quitar esos pedidos de entregas localmente (no esperar al refresh)
-            keys.forEach(function(k){var ent=findByKey(k);if(ent)entregados[k]=true});
-            saveLocal();render();
-            showToast('Entregado a Marcos ('+rows.length+' pedidos)');
-            // Refresh fresh para sincronizar
-            if(isOnline)refresh(true,true);
-          } else {
-            // Si fallo, dejar la queue y reintentar en el sync normal
-            rows.forEach(function(r,i){syncQueue.push({action:'marcarEntregadoAVendedor',rows:[r],ts:Date.now()})});
-            saveLocal();processSyncQueue();
-            showToast('Sin conexion — se reintenta');
-          }
-        })
-        .catch(function(){
-          hideLoader(true);
-          rows.forEach(function(r){syncQueue.push({action:'marcarEntregadoAVendedor',rows:[r],ts:Date.now()})});
-          saveLocal();processSyncQueue();
+    showLoader('Marcando entregado...');
+    var payload={action:'marcarEntregadoAVendedor',rows:rows,dia:dayKey||'',ts:Date.now()};
+    fetch(APPS_SCRIPT_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(payload),redirect:'follow'})
+      .then(function(r){return r.json().catch(function(){return{ok:false}})})
+      .then(function(res){
+        hideLoader(true);
+        if(res&&res.ok){
+          keys.forEach(function(k){var ent=findByKey(k);if(ent)entregados[k]=true});
+          saveLocal();render();
+          showToast('Entregado a Marcos ('+(res.n||rows.length)+' pedidos)');
+          if(isOnline)refresh(true,true);
+        } else {
+          syncQueue.push(payload);saveLocal();processSyncQueue();
           showToast('Sin conexion — se reintenta');
-        });
-    }
+        }
+      })
+      .catch(function(){
+        hideLoader(true);
+        syncQueue.push(payload);saveLocal();processSyncQueue();
+        showToast('Sin conexion — se reintenta');
+      });
   }
 }
 
