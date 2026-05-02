@@ -236,6 +236,21 @@ body{font-family:'Inter',-apple-system,'Segoe UI',system-ui,sans-serif;backgroun
 .empty i{font-size:36px;display:block;margin-bottom:8px;font-style:normal}
 .empty p{font-size:13px;font-weight:500}
 
+/* ── PULL-TO-REFRESH (tab Pedidos) ── */
+.ptr-ind{position:fixed;top:-70px;left:50%;transform:translateX(-50%);background:linear-gradient(135deg,#5C3A2A,#331C1C);color:var(--tx);padding:11px 22px;border-radius:0 0 26px 26px;font-size:13px;font-weight:800;z-index:90;display:flex;align-items:center;gap:10px;box-shadow:0 6px 20px rgba(51,28,28,.28);transition:top .18s ease-out;pointer-events:none;letter-spacing:.02em;white-space:nowrap}
+.ptr-ind .ptr-arrow{display:inline-block;font-size:15px;transition:transform .2s;line-height:1}
+.ptr-ind.ready .ptr-arrow{transform:rotate(180deg);color:var(--o)}
+.ptr-ind .ptr-spin{display:inline-block;width:14px;height:14px;border:2px solid rgba(242,232,199,.28);border-top-color:var(--o);border-right-color:var(--o);border-radius:50%;animation:loaderSpin .7s linear infinite;flex-shrink:0}
+
+/* Toast destacado de "+N pedido nuevo" */
+.toast.toast-new{background:linear-gradient(135deg,var(--o),#E5662F);font-size:14px;padding:12px 26px;box-shadow:0 8px 24px rgba(240,125,71,.4);animation:toastBounce .35s ease-out}
+@keyframes toastBounce{0%{transform:translateX(-50%) scale(.7);opacity:0}60%{transform:translateX(-50%) scale(1.06)}100%{transform:translateX(-50%) scale(1);opacity:1}}
+
+/* Highlight extra para card recién llegada */
+.pc.is-fresh{animation:freshIn .5s ease-out, freshGlow 2.5s ease-out 1}
+@keyframes freshIn{0%{opacity:0;transform:translateY(-8px)}100%{opacity:1;transform:translateY(0)}}
+@keyframes freshGlow{0%,100%{box-shadow:0 0 0 0 rgba(240,125,71,0)}30%{box-shadow:0 0 0 6px rgba(240,125,71,.18)}}
+
 /* ── MULTI-SELECT DROPDOWN ── */
 .dd{position:relative;margin-bottom:10px}
 .dd-label{font-size:11px;font-weight:500;color:var(--ink2);text-transform:none;letter-spacing:0;margin-bottom:5px}
@@ -860,15 +875,20 @@ function toggleCajaForm(t){
 var loaderCount=0;
 var loaderTimer=null;
 var LOADER_DELAY=400; // ms
-function showLoader(msg){
+function showLoader(msg, immediate){
   loaderCount++;
-  if(loaderTimer)return;
-  loaderTimer=setTimeout(function(){
-    loaderTimer=null;
+  var doShow=function(){
     var el=document.getElementById('loaderOverlay');
     if(msg)document.getElementById('loaderMsg').textContent=msg;
     if(el&&loaderCount>0)el.classList.add('visible');
-  },LOADER_DELAY);
+  };
+  if(immediate){
+    if(loaderTimer){clearTimeout(loaderTimer);loaderTimer=null;}
+    doShow();
+    return;
+  }
+  if(loaderTimer)return;
+  loaderTimer=setTimeout(function(){loaderTimer=null;doShow();},LOADER_DELAY);
 }
 function hideLoader(force){
   if(force)loaderCount=0;else loaderCount=Math.max(0,loaderCount-1);
@@ -2530,6 +2550,118 @@ function rVentas(){
   window.addEventListener('focus',function(){_refresh(false);});
   window.addEventListener('online',function(){$('dot').className='hdr-dot';_refresh(true);});
   window.addEventListener('offline',function(){$('dot').className='hdr-dot off';});
+
+  // ── PULL-TO-REFRESH (tab Pedidos) ──
+  // Tirar hacia abajo desde el top → loader Maleu inmediato + load() + toast
+  // "+N pedido(s) nuevo(s)" si aparecieron pedidos no vistos. Después del
+  // refresh, hideLoader() ya hace scroll-to-top y los nuevos quedan arriba
+  // con highlight naranja (regla unseen del render).
+  (function setupPTR(){
+    var ind=document.createElement('div');
+    ind.className='ptr-ind';
+    ind.innerHTML='<span class="ptr-arrow">&#x2193;</span><span class="ptr-text">Tirá para actualizar</span>';
+    document.body.appendChild(ind);
+    var startY=0,deltaY=0,pulling=false,refreshing=false;
+    var THRESHOLD=70,MAX_PULL=120;
+
+    function inPedidos(){
+      var el=document.getElementById('p-pedidos');
+      return el&&el.classList.contains('on');
+    }
+    function setPos(y,ready){
+      ind.style.top=Math.min(y,MAX_PULL+10)+'px';
+      if(ready){
+        ind.classList.add('ready');
+        var t=ind.querySelector('.ptr-text');if(t)t.textContent='Soltá para actualizar';
+      }else{
+        ind.classList.remove('ready');
+        var t2=ind.querySelector('.ptr-text');if(t2)t2.textContent='Tirá para actualizar';
+      }
+    }
+    function reset(){
+      ind.style.top='-70px';
+      ind.classList.remove('ready');
+      ind.innerHTML='<span class="ptr-arrow">&#x2193;</span><span class="ptr-text">Tirá para actualizar</span>';
+    }
+
+    document.addEventListener('touchstart',function(e){
+      if(refreshing)return;
+      if(!inPedidos())return;
+      if(window.scrollY>5)return;
+      // Ignorar si el touch arrancó en un control interactivo (no robar pulls del editor)
+      var tg=e.target;
+      if(tg&&tg.closest&&tg.closest('input,select,textarea,button,.origen-box,.pc-fe-input'))return;
+      startY=e.touches[0].clientY;deltaY=0;pulling=true;
+    },{passive:true});
+
+    document.addEventListener('touchmove',function(e){
+      if(!pulling||refreshing)return;
+      deltaY=e.touches[0].clientY-startY;
+      if(deltaY<=0){setPos(-70,false);return;}
+      var pull=Math.min(deltaY*0.5,MAX_PULL);
+      setPos(pull-30,pull>=THRESHOLD);
+    },{passive:true});
+
+    document.addEventListener('touchend',function(){
+      if(!pulling||refreshing){pulling=false;return;}
+      pulling=false;
+      var pull=Math.min(deltaY*0.5,MAX_PULL);
+      if(pull<THRESHOLD){reset();return;}
+
+      refreshing=true;
+      ind.innerHTML='<span class="ptr-spin"></span><span class="ptr-text">Buscando pedidos...</span>';
+      ind.style.top='10px';
+
+      // Snapshot previo: IDs y origen Pendiente actuales
+      var prevIds={};
+      if(D&&D.pedidos){D.pedidos.forEach(function(p){if(p&&p.h&&p.n)prevIds[p.h+'|'+p.n]=true;});}
+
+      showLoader('Buscando pedidos nuevos...',true);
+      LAST_LOAD=Date.now();
+
+      Promise.all([load(),loadVentas()]).then(function(){
+        refreshing=false;
+        // Detectar pedidos verdaderamente nuevos
+        var nuevos=[];
+        if(D&&D.pedidos){
+          D.pedidos.forEach(function(p){
+            if(p&&p.h&&p.n&&!prevIds[p.h+'|'+p.n])nuevos.push(p.h+'|'+p.n);
+          });
+        }
+        // Marcar las cards correspondientes con .is-fresh para animarlas
+        if(nuevos.length>0){
+          setTimeout(function(){
+            nuevos.forEach(function(k){
+              var card=document.querySelector('.pc[data-pc-key="'+k+'"]');
+              if(card)card.classList.add('is-fresh');
+            });
+            setTimeout(function(){
+              document.querySelectorAll('.pc.is-fresh').forEach(function(c){c.classList.remove('is-fresh');});
+            },3500);
+          },80);
+        }
+        hideLoader(true); // hace scroll al top automáticamente en tab Pedidos
+        reset();
+        // Toast solo después de cerrar el loader
+        setTimeout(function(){
+          if(nuevos.length>0){
+            var t=document.createElement('div');
+            t.className='toast toast-new show';
+            t.textContent='🔔 '+nuevos.length+' pedido'+(nuevos.length===1?'':'s')+' nuevo'+(nuevos.length===1?'':'s');
+            document.body.appendChild(t);
+            setTimeout(function(){t.classList.remove('show');setTimeout(function(){if(t.parentNode)t.parentNode.removeChild(t);},400);},2400);
+          }else{
+            toast('Sin pedidos nuevos');
+          }
+        },150);
+      }).catch(function(){
+        refreshing=false;
+        hideLoader(true);
+        toast('Sin conexión');
+        reset();
+      });
+    },{passive:true});
+  })();
 })();
 // Service Worker con auto-update: cuando hay versión nueva, reload automático.
 // Sin esto el SW viejo sigue sirviendo el HTML cacheado por días en iPhone.
