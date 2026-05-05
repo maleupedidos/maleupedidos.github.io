@@ -1057,6 +1057,7 @@ body.role-single .statusbar{font-size:11px}
   <div class="bn" data-p="egresos" data-roles="admin" data-tip="Egresos" onclick="openEgresosMenu(this,event)"><svg viewBox="0 0 24 24"><path d="M12 2v20"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg><span class="bn-lbl">Egresos</span><span class="bn-kbd">5</span></div>
   <div class="bn" data-p="stock" data-roles="admin,empleado" data-tip="Stock" onclick="go('stock')"><svg viewBox="0 0 24 24"><path d="M3 7l9-4 9 4-9 4-9-4z"/><path d="M3 7v10l9 4 9-4V7"/><path d="M12 11v10"/></svg><span class="bn-lbl">Stock</span><span class="bn-kbd">6</span></div>
   <div class="bn" data-p="ruta" data-roles="admin,empleado,repartidor" data-tip="Ruta" onclick="go('ruta')"><svg viewBox="0 0 24 24"><path d="M3 17h2l3-9h8l3 9h2"/><circle cx="7" cy="18" r="2"/><circle cx="17" cy="18" r="2"/></svg><span class="bn-lbl">Ruta</span><span class="bn-kbd">9</span></div>
+  <div class="bn" data-p="busqueda" data-roles="admin" data-tip="Abastecimiento" onclick="go('busqueda')"><svg viewBox="0 0 24 24"><path d="M3 7h13l4 4v8a1 1 0 0 1-1 1H3z"/><path d="M3 7V5a1 1 0 0 1 1-1h11l1 3"/><circle cx="8" cy="20" r="1.5"/><circle cx="17" cy="20" r="1.5"/></svg><span class="bn-lbl">Abast.</span><span class="bn-kbd">0</span></div>
   <div class="snav-section">Datos</div>
   <div class="bn" data-p="bbdd" data-roles="admin" data-tip="BBDD" onclick="go('bbdd')"><svg viewBox="0 0 24 24"><ellipse cx="12" cy="6" rx="8" ry="3"/><path d="M4 6v6c0 1.7 3.6 3 8 3s8-1.3 8-3V6"/><path d="M4 12v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/></svg><span class="bn-lbl">BBDD</span><span class="bn-kbd">7</span></div>
   <div class="snav-section">Vendedores</div>
@@ -3634,6 +3635,32 @@ function rEERR_dual(body){
   // a Maleu el 83%). Aplicar otro 17% sería doble conteo.
   var v_comRed=0;
 
+  // ─────────────────────────────────────────────────────────────────
+  //  DEVENGADO: provisiones automáticas
+  // ─────────────────────────────────────────────────────────────────
+  // 1) Comisiones MP estimadas: 3% sobre cobros por transferencia del mes.
+  //    Sale de D.pedidos: pedidos cobrados con fecha de cobro en el mes,
+  //    sumando el monto que entró por transferencia (p.tr).
+  var mesNum=eerrMes.getMonth()+1;
+  var cobrosTr=0;
+  ((D&&D.pedidos)||[]).forEach(function(p){
+    if(p.pago!=='Cobrado')return;
+    var fc=p.fc||'';if(!fc)return;
+    var parts=String(fc).split('/');if(parts.length<2)return;
+    if(Number(parts[1])!==mesNum)return;
+    cobrosTr+=Number(p.tr||0);
+    // Si no hay desglose de tr/ef, fallback: todo el total si fp=Transferencia
+    if(!p.tr&&p.fp==='Transferencia')cobrosTr+=Number(p.t||p.total||0);
+  });
+  v_comCobro+=Math.round(cobrosTr*0.03);
+
+  // 2) Sueldo del dueño imputado: piso $1.000.000 todos los meses.
+  //    Si lo cargado es menor, agregar la diferencia como provisión devengada.
+  var SUELDO_PISO=1000000;
+  var sueldoReal=f_sueldo;
+  var sueldoProv=Math.max(SUELDO_PISO-sueldoReal,0);
+  f_sueldo=sueldoReal+sueldoProv; // total = real + provisión
+
   var totVar=v_fletes+v_packaging+v_comRed+v_comCobro+v_otrosVar;
   var totMC=totMB-totVar;
   var totEstr=f_software+f_marketing+f_honorarios+f_servicios+f_ocupacion+f_sueldo+f_otrosEst;
@@ -3713,6 +3740,7 @@ function rEERR_dual(body){
   html+=leaf('Packaging',-v_packaging);
   html+=detailRows(v_packagingD);
   html+=leaf('Comisiones de cobro (MP, transferencias)',-v_comCobro);
+  if(cobrosTr>0)html+=subleaf('3% × $'+f$(Math.round(cobrosTr))+' (cobros por transferencia del mes)',-Math.round(cobrosTr*0.03),true);
   if(v_otrosVar>0){html+=leaf('Otros variables',-v_otrosVar);html+=detailRows(v_otrosVarD);}
 
   // MARGEN DE CONTRIBUCIÓN
@@ -3732,6 +3760,7 @@ function rEERR_dual(body){
   html+=detailRows(f_ocupacionD);
   html+=leaf('Sueldo del dueño imputado',-f_sueldo);
   html+=detailRows(f_sueldoD);
+  if(sueldoProv>0)html+=subleaf('Provisión devengada (piso $1.000.000 − cargado $'+f$(Math.round(sueldoReal))+')',-sueldoProv,true);
   if(f_otrosEst>0){html+=leaf('Otros',-f_otrosEst);html+=detailRows(f_otrosEstD);}
 
   // EBITDA
@@ -3808,7 +3837,7 @@ function rEERR_dual(body){
     {t:'(−) Gastos Variables Comerciales',d:'Gastos que crecen con cada venta. Mientras más vendés, más gastás. Compuestos por:'},
     {t:'· Fletes y logística',d:'Pagos al repartidor + nafta del mes. Sale del Sheets <code>Egresos</code>, categorías <code>Repartidor</code> y <code>Nafta</code>.'},
     {t:'· Packaging',d:'Bolsas, cajas, sticker, todo lo que va con el pedido. Sale del Sheets <code>Egresos</code>, categoría <code>Bolsas</code>.'},
-    {t:'· Comisiones de cobro (MP, transferencias)',d:'Comisiones que cobra Mercado Pago / banco al recibir el dinero. <b>Hoy en $0:</b> todavía no se está registrando, pero conceptualmente es ~5% sobre cobros MP.'},
+    {t:'· Comisiones de cobro (MP, transferencias)',d:'Estimadas como <b>3% sobre cobros por transferencia del mes</b> (el promedio de comisión de Mercado Pago según plan). Se calcula automáticamente desde los pedidos cobrados con fecha de cobro en el mes (campo <code>p.tr</code>). No requiere que cargues nada; ya queda devengado.'},
     {t:'= MARGEN DE CONTRIBUCIÓN',d:'Lo que queda después de los variables. Cada venta nueva agrega este monto al pozo común que cubre los fijos. Es el indicador clave para decisiones de volumen y pricing.'},
     {t:'(−) Gastos de Estructura (fijos)',d:'Costos que existen sí o sí, vendas o no. La "maquinaria" del negocio:'},
     {t:'· Software',d:'N8N, Claude API, Canva, WATI, hosting, Apps Script si tuviera costo. Sale del Sheets <code>Egresos</code>, categoría <code>Herramienta</code>.'},
@@ -3816,7 +3845,8 @@ function rEERR_dual(body){
     {t:'· Honorarios profesionales',d:'Contador, abogado, asesores. <b>Hoy en $0:</b> falta cargar. Cuando lo cargues con concepto que diga "honorario" o "contador" cae acá automáticamente.'},
     {t:'· Servicios',d:'Luz, internet, telefonía, gas. <b>Hoy en $0.</b> Cargá el gasto con cat <code>Otro</code> y palabras como "luz", "internet", "teléfono" o "gas" en el concepto.'},
     {t:'· Costo de ocupación imputado',d:'<b>Costo imputado:</b> aunque hoy no pagues alquiler (usás el cuartito de tu casa), económicamente ese espacio tiene un costo. Cargá lo que pagarías de alquiler equivalente a precio de mercado. Si no lo cargás, la rentabilidad del negocio queda inflada. <b>Hoy en $0.</b>'},
-    {t:'· Sueldo del dueño imputado',d:'Tu sueldo. Hoy se está cargando como categoría <code>Sueldo</code>. El ideal es pagarte $1.000.000/mes — si te pagás menos, lo que falta para llegar a ese piso también debería imputarse para reflejar el costo real de tu trabajo.'},
+    {t:'· Sueldo del dueño imputado',d:'Piso fijo de <b>$1.000.000/mes</b> (lo que tendrías que ganar como sueldo digno). Sale de los movimientos cargados con categoría <code>Sueldo</code>. Si en el mes te giraste menos, la diferencia se carga como <b>provisión devengada</b> (ej: en abril te giraste $758.972 → provisión $241.028 → total devengado $1.000.000). Esto es <b>devengado</b>: el costo de tu trabajo existe igual aunque no te lo hayas pagado.'},
+    {t:'¿Qué es una "provisión devengada"?',d:'Costo que existe económicamente en el mes aunque la factura/pago no haya pasado todavía. Ejemplo: el contador trabaja en mayo pero te factura el 5 de junio. El costo es de mayo. <b>Para gastos recurrentes con piso conocido</b> (sueldo dueño, software, comisiones MP) el EERR provisiona automáticamente sin esperar el pago real. Cuando el pago entra al Sheets, reemplaza la provisión.'},
     {t:'= EBITDA',d:'<b>E</b>arnings <b>B</b>efore <b>I</b>nterest, <b>T</b>axes, <b>D</b>epreciation and <b>A</b>mortization. Resultado operativo "puro" antes de financieros, impuestos y amortizaciones. Es el indicador que más mira un inversor para comparar negocios entre sí.'},
     {t:'(−) Amortizaciones',d:'Si compraste un freezer de $500.000 con vida útil de 5 años, no es justo cargar todo el costo el mes que lo compraste. Se "consume" $8.333 por mes durante 60 meses. <b>Hoy en $0.</b>'},
     {t:'= RESULTADO OPERATIVO',d:'Lo que el negocio genera por su actividad principal, ya descontadas las amortizaciones, antes de financieros e impuestos.'},
