@@ -3299,126 +3299,134 @@ function eerrMov(d){eerrMes.setMonth(eerrMes.getMonth()+d);rEERR();}
 
 function rEERR_dual(body){
   var mesNom=MES_ORD[eerrMes.getMonth()],anioN=eerrMes.getFullYear();
-  var mesNum=eerrMes.getMonth()+1;
 
-  // ── ECONÓMICO (devengado) ──
+  // ── Ventas devengadas del mes (entregadas, sin importar cobro), con desglose por canal ──
   var ventas=VD.filter(function(v){return v.mes===mesNom;});
+  var canales={Home:{f:0,c:0},Pilar:{f:0,c:0},Clubes:{f:0,c:0},Red:{f:0,c:0},B2B:{f:0,c:0},Catering:{f:0,c:0}};
   var totFact=0,totCMV=0;
-  ventas.forEach(function(v){totFact+=Number(v.$)||0;totCMV+=Number(v.costo)||0;});
+  ventas.forEach(function(v){
+    var f=Number(v.$)||0,c=Number(v.costo)||0,canal=v.canal,zona=v.zona;
+    totFact+=f;totCMV+=c;
+    var k=null;
+    if(canal==='Venta Directa')k=(zona==='Pilar'?'Pilar':'Home');
+    else if(canal==='Clubes'||canal==='Red'||canal==='B2B'||canal==='Catering')k=canal;
+    if(k&&canales[k]){canales[k].f+=f;canales[k].c+=c;}
+  });
   var totMB=totFact-totCMV;
 
-  // Gastos del mes clasificados
+  // ── Gastos del mes clasificados (Proveedor excluido: ya está dentro del CMV devengado) ──
   var gastosMes=((D&&D.gastos)||[]).filter(function(g){return g.mes===mesNom;});
-  var gFij={},gVar={},gSemi={},gCmvPag={};
-  var totFij=0,totVar=0,totSemi=0,totCmvPagado=0;
+  var gFij={},gVar={},gSemi={};
+  var totFij=0,totVar=0,totSemi=0;
   gastosMes.forEach(function(g){
     var cat=g.cat||'Otro',m=Number(g.$)||0;
     var t=eerrClasif(cat);
     if(t==='fijo'){gFij[cat]=(gFij[cat]||0)+m;totFij+=m;}
     else if(t==='variable'){gVar[cat]=(gVar[cat]||0)+m;totVar+=m;}
-    else if(t==='cmv'){gCmvPag[cat]=(gCmvPag[cat]||0)+m;totCmvPagado+=m;}
+    else if(t==='cmv'){/* excluido — ya en CMV devengado */}
     else {gSemi[cat]=(gSemi[cat]||0)+m;totSemi+=m;}
   });
   var totMC=totMB-totVar;
-  var resultadoEcon=totMC-totSemi-totFij;
+  var utilOper=totMC-totSemi-totFij;
 
-  // ── FINANCIERO (percibido) ──
-  // Cobranzas del mes: pedidos con Estado de Pago = Cobrado y fecha de cobro en el mes.
-  var cobranzas=0,cobN=0;
-  ((D&&D.pedidos)||[]).forEach(function(p){
-    if(p.pago!=='Cobrado')return;
-    var fc=p.fc||'';if(!fc)return;
-    var parts=String(fc).split('/');if(parts.length<2)return;
-    var pmes=Number(parts[1]);if(pmes!==mesNum)return;
-    cobranzas+=Number(p.t||p.total||0);cobN++;
-  });
-  var ingresosNoVenta=0;
-  ((D&&D.ingresos)||[]).filter(function(i){return i.mes===mesNom;}).forEach(function(i){ingresosNoVenta+=Number(i.$)||0;});
-  var totEntradas=cobranzas+ingresosNoVenta;
-  var totSalidas=totFij+totVar+totSemi+totCmvPagado;
-  var flujoFin=totEntradas-totSalidas;
-
-  // ── empty state ──
-  if(totFact===0&&totSalidas===0&&cobranzas===0){
+  if(totFact===0&&totFij===0&&totVar===0&&totSemi===0){
     body.innerHTML='<div class="eerr-empty">Sin movimientos registrados en '+mesNom+' '+anioN+'.</div>';
     return;
   }
 
-  // ── helpers de tabla ──
+  // ── helpers ──
   function ln(lbl,val,cls,pctStr){
     var sign=val<0?'-$':'$';var abs=Math.abs(Math.round(val));
     return '<tr class="'+(cls||'')+'"><td>'+lbl+'</td><td class="num">'+sign+f$(abs)+(pctStr?' <span class="pct">'+pctStr+'</span>':'')+'</td></tr>';
   }
-  function grupo(lbl,total,detail){
-    var html='<tr class="neg"><td>'+lbl+'</td><td class="num">-$'+f$(Math.round(total))+'</td></tr>';
-    Object.keys(detail).sort(function(a,b){return detail[b]-detail[a];}).forEach(function(k){
-      if(detail[k]>0)html+='<tr class="leaf"><td>'+k+'</td><td class="num">-$'+f$(Math.round(detail[k]))+'</td></tr>';
+  function leaf(lbl,val,pctStr){
+    var sign=val<0?'-$':'$';var abs=Math.abs(Math.round(val));
+    return '<tr class="leaf"><td>'+lbl+'</td><td class="num">'+sign+f$(abs)+(pctStr?' <span class="pct">'+pctStr+'</span>':'')+'</td></tr>';
+  }
+  function desgloseCanal(getVal,getBase){
+    var orden=['Home','Pilar','Clubes','Red','B2B','Catering'];
+    var out='';
+    orden.forEach(function(k){
+      var v=getVal(canales[k]);if(!v)return;
+      var p=getBase?eerrPct(v,getBase(canales[k])):'';
+      out+=leaf(k,v,p);
     });
-    return html;
+    return out;
+  }
+  function desgloseGasto(detail){
+    var out='';
+    Object.keys(detail).sort(function(a,b){return detail[b]-detail[a];}).forEach(function(k){
+      if(detail[k]>0)out+=leaf(k,-detail[k]);
+    });
+    return out;
   }
 
   var html='';
-  html+='<div class="eerr-dual">';
-
-  // ── Columna ECONÓMICO ──
-  html+='<div class="eerr-col">';
-  html+='<div class="eerr-col-h"><b>Económico</b><span>devengado</span></div>';
+  html+='<div class="eerr-col" style="max-width:760px;margin:0 auto">';
+  html+='<div class="eerr-col-h"><b>Estado de Resultados — Económico</b><span>'+mesNom+' '+anioN+' · devengado</span></div>';
   html+='<table class="eerr-tbl"><tbody>';
-  html+=ln('Facturación',totFact);
-  html+=ln('(−) CMV',-totCMV,'neg');
-  html+=ln('Margen Bruto',totMB,'sub',eerrPct(totMB,totFact));
-  if(totVar>0)html+=grupo('(−) Gastos Variables',totVar,gVar);
-  html+=ln('Margen de Contribución',totMC,'sub',eerrPct(totMC,totFact));
-  if(totSemi>0)html+=grupo('(−) Gastos Semi-Variables',totSemi,gSemi);
-  if(totFij>0)html+=grupo('(−) Gastos Fijos',totFij,gFij);
-  html+=ln('Resultado Neto Económico',resultadoEcon,'tot'+(resultadoEcon<0?' neg':''),eerrPct(resultadoEcon,totFact));
+
+  // FACTURACIÓN
+  html+=ln('Facturación',totFact,'sub');
+  html+=desgloseCanal(function(c){return c.f;});
+
+  // CMV
+  html+=ln('(−) Costo de Mercadería Vendida',-totCMV,'sub neg');
+  html+=desgloseCanal(function(c){return -c.c;});
+
+  // MARGEN BRUTO
+  html+=ln('= Margen Bruto',totMB,'sub',eerrPct(totMB,totFact));
+  html+=desgloseCanal(function(c){return c.f-c.c;},function(c){return c.f;});
+
+  // GASTOS VARIABLES
+  if(totVar>0){
+    html+=ln('(−) Gastos Variables',-totVar,'sub neg');
+    html+=desgloseGasto(gVar);
+  } else {
+    html+=ln('(−) Gastos Variables',0,'sub neg');
+  }
+
+  // MARGEN DE CONTRIBUCIÓN A FIJOS
+  html+=ln('= Margen de Contribución a Fijos',totMC,'sub',eerrPct(totMC,totFact));
+
+  // GASTOS SEMI-VARIABLES
+  if(totSemi>0){
+    html+=ln('(−) Gastos Semi-Variables',-totSemi,'sub neg');
+    html+=desgloseGasto(gSemi);
+  }
+
+  // GASTOS FIJOS
+  if(totFij>0){
+    html+=ln('(−) Gastos Fijos',-totFij,'sub neg');
+    html+=desgloseGasto(gFij);
+  }
+
+  // RESULTADO NETO
+  html+=ln('Resultado Neto Económico',utilOper,'tot'+(utilOper<0?' neg':''),eerrPct(utilOper,totFact));
   html+='</tbody></table>';
   html+='</div>';
 
-  // ── Columna FINANCIERO ──
-  html+='<div class="eerr-col">';
-  html+='<div class="eerr-col-h"><b>Financiero</b><span>percibido</span></div>';
-  html+='<table class="eerr-tbl"><tbody>';
-  html+=ln('Cobranzas de pedidos'+(cobN?' ('+cobN+')':''),cobranzas);
-  if(ingresosNoVenta>0)html+=ln('(+) Otros ingresos',ingresosNoVenta);
-  html+=ln('Total Entradas',totEntradas,'sub');
-  if(totCmvPagado>0)html+=ln('(−) Pagos a proveedores',-totCmvPagado,'neg');
-  if(totVar>0)html+=ln('(−) Pagos variables',-totVar,'neg');
-  if(totSemi>0)html+=ln('(−) Pagos semi-variables',-totSemi,'neg');
-  if(totFij>0)html+=ln('(−) Pagos fijos',-totFij,'neg');
-  html+=ln('Total Salidas',-totSalidas,'sub');
-  html+=ln('Flujo Neto Financiero',flujoFin,'tot'+(flujoFin<0?' neg':''));
-  html+='</tbody></table>';
+  // KPIs económicos
+  html+='<div class="eerr-cmp" style="max-width:760px;margin:12px auto 0">';
+  html+='<div class="eerr-cmp-c"><div class="eerr-cmp-l">Margen Bruto %</div><div class="eerr-cmp-v">'+eerrPct(totMB,totFact)+'</div></div>';
+  html+='<div class="eerr-cmp-c"><div class="eerr-cmp-l">Margen Contribución %</div><div class="eerr-cmp-v">'+eerrPct(totMC,totFact)+'</div></div>';
+  html+='<div class="eerr-cmp-c"><div class="eerr-cmp-l">Resultado Neto %</div><div class="eerr-cmp-v '+(utilOper>=0?'pos':'neg')+'">'+eerrPct(utilOper,totFact)+'</div></div>';
   html+='</div>';
 
-  html+='</div>'; // /dual
-
-  // ── Comparación 3 KPIs ──
-  var dif=resultadoEcon-flujoFin;
-  var pendCobro=Math.max(totFact-cobranzas,0);
-  var difCMV=totCMV-totCmvPagado;
-  html+='<div class="eerr-cmp">';
-  html+='<div class="eerr-cmp-c"><div class="eerr-cmp-l">Margen Bruto</div><div class="eerr-cmp-v">'+eerrPct(totMB,totFact)+'</div></div>';
-  html+='<div class="eerr-cmp-c"><div class="eerr-cmp-l">Margen Contribución</div><div class="eerr-cmp-v">'+eerrPct(totMC,totFact)+'</div></div>';
-  html+='<div class="eerr-cmp-c"><div class="eerr-cmp-l">Brecha Econ. − Fin.</div><div class="eerr-cmp-v '+(dif>=0?'pos':'neg')+'">'+(dif>=0?'+':'−')+'$'+f$(Math.abs(Math.round(dif)))+'</div></div>';
-  html+='</div>';
-
-  // ── Anotación interpretativa ──
-  html+='<div class="eerr-note" style="margin-top:12px">';
+  // Lectura del mes
+  html+='<div class="eerr-note" style="max-width:760px;margin:12px auto 0">';
   html+='<div class="eerr-note-h">Lectura del mes</div>';
-  html+='<p>El <b>económico</b> mide la rentabilidad real del negocio (ventas entregadas contra todos los costos en los que se incurre para producirlas y operar). El <b>financiero</b> mide la caja: lo que entró menos lo que salió en el mes.</p>';
-  var bits=[];
-  if(pendCobro>0)bits.push('hay <b>$'+f$(Math.round(pendCobro))+'</b> de ventas del mes aún por cobrar (no entraron a caja)');
-  if(difCMV>5000)bits.push('quedan <b>$'+f$(Math.round(difCMV))+'</b> de CMV por pagar a proveedores');
-  else if(difCMV<-5000)bits.push('se adelantaron <b>$'+f$(Math.round(-difCMV))+'</b> a proveedores respecto del CMV devengado');
-  if(bits.length)html+='<p>La diferencia se explica porque '+bits.join(' y ')+'.</p>';
-  // flags
+  html+='<p>El EERR <b>económico</b> mide la <b>rentabilidad</b>: una venta cuenta cuando el pedido se entregó (sin importar el cobro) y un costo cuenta cuando se incurrió. Mide cuánto ganó o perdió el patrimonio en el período. Es distinto del <b>flujo financiero</b>, que mira la caja: cuándo entró y salió la plata. Maleu puede ser rentable económicamente y aun así tener problemas financieros si las cobranzas se atrasan.</p>';
+  if(totMC>0&&totFij>0){
+    var coberturaFijos=totMC/totFij;
+    if(coberturaFijos>=1)html+='<p>El Margen de Contribución <b>cubre '+Math.round(coberturaFijos*100)+'%</b> de los Gastos Fijos del mes.</p>';
+    else html+='<p>El Margen de Contribución <b>cubre solo '+Math.round(coberturaFijos*100)+'%</b> de los Gastos Fijos. Hay que aumentar volumen, subir margen o bajar fijos para llegar a equilibrio.</p>';
+  }
   var flags=[];
   if(totMB<0)flags.push('<span class="flag">Margen Bruto negativo</span>');
   if(totMC<0)flags.push('<span class="flag">No cubre variables</span>');
-  if(resultadoEcon<0&&totFact>0)flags.push('<span class="flag">Pérdida económica</span>');
-  if(flujoFin<0)flags.push('<span class="flag">Flujo financiero negativo</span>');
-  if(totFij>totMB&&totFact>0)flags.push('<span class="flag">Fijos &gt; Margen Bruto</span>');
+  if(utilOper<0&&totFact>0)flags.push('<span class="flag">Pérdida económica</span>');
+  if(totFij>totMB&&totFact>0&&totFij>0)flags.push('<span class="flag">Fijos &gt; Margen Bruto</span>');
   if(flags.length)html+='<p><b>Alertas:</b> '+flags.join(' ')+'</p>';
   html+='</div>';
 
