@@ -31,6 +31,9 @@ input,select,textarea,button{font-size:16px}
 
 /* ── TOP BAR ── */
 .topbar{background:var(--brown);color:var(--beige);padding:calc(10px + var(--sat)) 16px 12px;display:flex;align-items:center;gap:10px;position:sticky;top:0;z-index:100;min-height:calc(56px + var(--sat))}
+/* Modo embebido (dentro de panel.html via iframe): ocultar topbar propio. El panel maneja header + statusbar */
+body.embed .topbar{display:none}
+body.embed{background:#fff}
 .topbar h1{font-size:16px;font-weight:800;flex:1;letter-spacing:.04em}
 .status-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0}
 .status-dot.online{background:#4CAF50}
@@ -501,6 +504,21 @@ document.addEventListener('dblclick', function(e){ e.preventDefault(); }, { pass
 var APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxmrG5YVSshcYezk8lXFx_uxb7NFGcb9EfTXc7dsIN4rZyj73CET4mk_aKPFPDY2wNi/exec';
 var WA_NUMBER = '5491155038905';
 
+/* ═══════════════════════════════════════════════════════════
+   USUARIO DE RUTA — quién marca cada entrega.
+   En modo embebido (dentro de panel.html) se popula desde la sesión
+   del panel padre (localStorage 'maleu_panel_session'). En standalone,
+   se asume "Tadeo" (compat: ruta.html histórica sin auth).
+   ═══════════════════════════════════════════════════════════ */
+var _RUTA_USER = (function(){
+  try{
+    var s = JSON.parse(localStorage.getItem('maleu_panel_session') || 'null');
+    if (s && s.nombre) return s.nombre;
+  }catch(e){}
+  return 'Tadeo';
+})();
+function _rutaUser(){return _RUTA_USER || 'Tadeo';}
+
 var PROD_NAMES = {
   PPM:'Pack Muzza x2', PPJyQ:'Pack J&Q x2', PPCyQ:'Pack C&Q x2',
   SCo:'Sorr. Cordero', SQB:'Sorr. Queso Brie', SL:'Sorr. Langostinos',
@@ -628,7 +646,23 @@ if(entregas.length>0){render();updateLastSync();refresh(true)}else{showRefreshLo
 // Refresh al volver al tab (visibilitychange/focus) en vez de polling por tiempo
 document.addEventListener('visibilitychange',function(){if(!document.hidden&&isOnline)refresh(true)});
 window.addEventListener('focus',function(){if(isOnline)refresh(true)});
-if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw-ruta.js').catch(function(){})}
+// Detectar modo embebido (dentro de panel.html): aplicar clase y NO registrar SW
+// (el panel ya tiene su propio SW; dos SW peleándose por la misma URL = bug).
+var _IS_EMBED=(function(){try{return new URLSearchParams(location.search).get('embed')==='1';}catch(e){return false;}})();
+if(_IS_EMBED){
+  document.body.classList.add('embed');
+  // Cuando el panel pide el counter (al abrir la tab), responder con el valor actual
+  window.addEventListener('message',function(e){
+    if(e&&e.data&&e.data.type==='maleu_ruta_get_counter'){
+      try{
+        var totalHoy=entregas.filter(esHoy).length;
+        var doneHoy=totalHoy-getHoyPendientes().length;
+        parent.postMessage({type:'maleu_ruta_counter',entregadas:doneHoy,total:totalHoy},'*');
+      }catch(_){}
+    }
+  });
+}
+if('serviceWorker' in navigator && !_IS_EMBED){navigator.serviceWorker.register('/sw-ruta.js').catch(function(){})}
 
 /* ── PULL TO REFRESH custom ── */
 (function(){
@@ -757,6 +791,8 @@ function render(){
   var totalHoy=entregas.filter(esHoy).length;
   var doneHoy=totalHoy-hoy.length;
   document.getElementById('counterBadge').textContent=doneHoy+'/'+totalHoy;
+  // Si estoy embebido, avisar counter al panel padre (statusbar item).
+  if(_IS_EMBED){try{parent.postMessage({type:'maleu_ruta_counter',entregadas:doneHoy,total:totalHoy},'*');}catch(e){}}
   document.getElementById('syncBanner').className='sync-banner'+(syncQueue.length>0?' visible':'');
   document.getElementById('errorView').classList.add('hidden');
   // Tab counts: ambos muestran HOY (Red cuenta para ARMADO pero no para RUTA)
@@ -1488,7 +1524,7 @@ function marcarEntregado(key){
   entregados[key]=true;
   var ent=findByKey(key);
   if(ent){
-    syncQueue.push({action:'marcarEntregado',hoja:ent.h,id:String(ent.id),row:ent.r,cobrado:!!cobrados[key],propina:propinas[key]||0,ts:Date.now()});
+    syncQueue.push({action:'marcarEntregado',hoja:ent.h,id:String(ent.id),row:ent.r,cobrado:!!cobrados[key],propina:propinas[key]||0,repartidor:_rutaUser(),ts:Date.now()});
     // Si no está cobrado, guardar para seguimiento (Red se liquida aparte en Panel→Caja)
     if(!cobrados[key]&&ent.ep!=='Cobrado'&&ent.h!=='Red'){
       pendientesCobro.push({key:key,h:ent.h,id:String(ent.id),r:ent.r,c:ent.c,t:ent.t,$:ent.$,fp:ent.fp,ts:Date.now()});
@@ -1509,7 +1545,7 @@ function marcarCobrado(key){
     var totalPedido=Number(ent.$)||0;
     var ef=fp==='Efectivo'?totalPedido:0;
     var tr=fp==='Transferencia'?totalPedido:0;
-    syncQueue.push({action:'marcarCobrado',hoja:ent.h,id:String(ent.id),row:ent.r,formaPago:fp,ef:ef,tr:tr,propina:propinas[key]||0,propMet:fp,ts:Date.now()});
+    syncQueue.push({action:'marcarCobrado',hoja:ent.h,id:String(ent.id),row:ent.r,formaPago:fp,ef:ef,tr:tr,propina:propinas[key]||0,propMet:fp,repartidor:_rutaUser(),ts:Date.now()});
     ent.ep='Cobrado';
   }
   // Limpiar propina local: ya fue aplicada y enviada, no contaminar el proximo render/pedido.
@@ -1691,7 +1727,7 @@ function cobrarPendiente(i,ef,tr,fp,recalc){
   if(fp==='Mixto')propMet=tr>ef?'Transferencia':'Efectivo';
   var hojaPc=pc.h||pc.key.split('|')[0];
   var idPc=pc.id||pc.key.split('|')[1]||'';
-  var payload={action:'marcarCobrado',hoja:hojaPc,id:String(idPc),row:pc.r||0,formaPago:fp||'Efectivo',ef:ef||0,tr:tr||0,propina:propina,propMet:propMet,ts:Date.now()};
+  var payload={action:'marcarCobrado',hoja:hojaPc,id:String(idPc),row:pc.r||0,formaPago:fp||'Efectivo',ef:ef||0,tr:tr||0,propina:propina,propMet:propMet,repartidor:_rutaUser(),ts:Date.now()};
   if(recalc)payload.recalcular=true;
 
   // 1) Loader ARRIBA de todo, ANTES de cambiar state local. Bloquea cualquier flicker.
