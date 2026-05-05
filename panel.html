@@ -3581,6 +3581,9 @@ function eerrEsServicio(txt){
   return txt.indexOf('movistar')>=0||txt.indexOf('claro')>=0||txt.indexOf('personal')>=0||txt.indexOf('celular')>=0||txt.indexOf('chip')>=0;
 }
 
+var eerrModo=(function(){try{return localStorage.getItem('maleu_eerr_modo')||'economico';}catch(e){return'economico';}})();
+function eerrSetModo(m){eerrModo=m;try{localStorage.setItem('maleu_eerr_modo',m);}catch(e){}rEERR();}
+
 function rEERR(){
   if(!eerrMes){var n=new Date();eerrMes=new Date(n.getFullYear(),n.getMonth(),1);}
   var mesNom=MES_ORD[eerrMes.getMonth()],anioN=eerrMes.getFullYear();
@@ -3591,12 +3594,377 @@ function rEERR(){
         '<div class="eerr-mes-lbl">'+mesNom+' '+anioN+'</div>'+
         '<button class="eerr-mes-btn" onclick="eerrMov(1)">&rsaquo;</button>'+
       '</div>'+
+      '<div class="eerr-toggle">'+
+        '<button class="'+(eerrModo==='economico'?'on':'')+'" onclick="eerrSetModo(\'economico\')">Económico</button>'+
+        '<button class="'+(eerrModo==='financiero'?'on':'')+'" onclick="eerrSetModo(\'financiero\')">Financiero</button>'+
+      '</div>'+
     '</div>';
   var body=$('eerrBody');
   if(!VD){body.innerHTML='<div class="eerr-empty">Cargando ventas…</div>';loadVentas();return;}
-  rEERR_dual(body);
+  if(eerrModo==='financiero')rEERR_financiero(body);
+  else rEERR_dual(body);
 }
 function eerrMov(d){eerrMes.setMonth(eerrMes.getMonth()+d);rEERR();}
+
+// ═══════════════════════════════════════════════════════════════
+//  EERR FINANCIERO (caja / percibido)
+//  Reglas:
+//   - Cobranzas: pedidos con pago=Cobrado, mes determinado por fc (fecha cobro)
+//     o, en su defecto, fe (fecha entrega) — fallback con cobertura visible.
+//   - Egresos: D.gastos del mes (fecha de pago efectivo).
+//   - Costos imputados (sueldo provisión, ocupación, amortización) NO entran.
+//   - Sueldo del dueño: solo lo efectivamente girado, no el piso.
+//   - Comisiones MP estimadas tampoco (no son egreso real, son cálculo).
+// ═══════════════════════════════════════════════════════════════
+function rEERR_financiero(body){
+  var mesNom=MES_ORD[eerrMes.getMonth()],anioN=eerrMes.getFullYear();
+  var mesNum=eerrMes.getMonth()+1;
+  function mesDe(fStr){
+    var p=String(fStr||'').split('/');
+    if(p.length<2)return null;
+    var n=Number(p[1]);return isFinite(n)?n:null;
+  }
+
+  // ── 1. COBRANZAS por canal con fallback fc → fe ──
+  var canalMap={Home:'Home',Pilar:'Pilar',Clubes:'Clubes',Red:'Red',B2B:'B2B',Catering:'Catering'};
+  var cobr={Home:0,Pilar:0,Clubes:0,Red:0,B2B:0,Catering:0};
+  var cobrCount={Home:0,Pilar:0,Clubes:0,Red:0,B2B:0,Catering:0};
+  var cobrEstimado={Home:0,Pilar:0,Clubes:0,Red:0,B2B:0,Catering:0};
+  var cobrEstCount={Home:0,Pilar:0,Clubes:0,Red:0,B2B:0,Catering:0};
+  ((D&&D.pedidos)||[]).forEach(function(p){
+    if(p.pago!=='Cobrado')return;
+    var hoja=p.h||'';if(!canalMap[hoja])return;
+    var monto=Number(p.t||p.total||0);if(!monto)return;
+    var mesPago=mesDe(p.fc);
+    var estimado=false;
+    if(!mesPago){mesPago=mesDe(p.fe);estimado=true;}
+    if(!mesPago)return;
+    if(mesPago!==mesNum)return;
+    cobr[hoja]+=monto;cobrCount[hoja]++;
+    if(estimado){cobrEstimado[hoja]+=monto;cobrEstCount[hoja]++;}
+  });
+  // B2B y Catering: heurística simple — pago al entregar (mes=fe)
+  // (ya cubierto arriba con fallback)
+
+  var totCobr=cobr.Home+cobr.Pilar+cobr.Clubes+cobr.Red+cobr.B2B+cobr.Catering;
+  var totEst=cobrEstimado.Home+cobrEstimado.Pilar+cobrEstimado.Clubes+cobrEstimado.Red+cobrEstimado.B2B+cobrEstimado.Catering;
+  var coberturaPct=totCobr>0?Math.round((1-totEst/totCobr)*100):0;
+
+  // Otros ingresos no-venta (D.ingresos del mes) — incluye liquidaciones Red, rendimientos, etc.
+  var otrosIng=0,otrosIngDet=[];
+  ((D&&D.ingresos)||[]).filter(function(i){return i.mes===mesNom;}).forEach(function(i){
+    var m=Number(i.$)||0;otrosIng+=m;otrosIngDet.push({con:i.con||'',not:i.not||'',m:m});
+  });
+  var totEntradas=totCobr+otrosIng;
+
+  // ── 2. EGRESOS del mes ──
+  function normCat(c){var s=String(c||'').trim().toLowerCase();if(s.length>3&&s.charAt(s.length-1)==='s')s=s.substring(0,s.length-1);return s;}
+  function isExtraord(t){return t.indexOf('regalo')>=0||t.indexOf('perd')>=0||t.indexOf('falt')>=0||t.indexOf('robo')>=0||t.indexOf('extraord')>=0;}
+  function isCapex(t){return t.indexOf('freezer')>=0||t.indexOf('heladera')>=0||t.indexOf('horno')>=0||t.indexOf('auto')>=0||t.indexOf('vehic')>=0||t.indexOf('notebook')>=0||t.indexOf('computad')>=0||t.indexOf('mobiliario')>=0||t.indexOf('mueble')>=0;}
+
+  var pagProv=0,pagProvD=[];
+  var pagFletes=0,pagPack=0,pagOtroVar=0;
+  var pagFletesD=[],pagPackD=[],pagOtroVarD=[];
+  var pagSoftware=0,pagMarketing=0,pagHonorarios=0,pagServicios=0,pagAlquiler=0,pagOtroEst=0;
+  var pagSoftwareD=[],pagMarketingD=[],pagHonorariosD=[],pagServiciosD=[],pagAlquilerD=[],pagOtroEstD=[];
+  var sueldoGirado=0,sueldoGiradoD=[];
+  var pagImp=0,pagImpD=[];
+  var pagExt=0,pagExtD=[];
+  var pagCapex=0,pagCapexD=[];
+
+  ((D&&D.gastos)||[]).filter(function(g){return g.mes===mesNom;}).forEach(function(g){
+    var rawCat=g.cat||'Otro',m=Number(g.$)||0;
+    var cat=normCat(rawCat);
+    var con=String(g.con||'').toLowerCase(),not=String(g.not||'').toLowerCase();
+    var txt=con+' '+not;
+    var det={con:g.con||'',not:g.not||'',m:m};
+    // CAPEX detectado por keyword tiene prioridad
+    if(isCapex(txt)){pagCapex+=m;pagCapexD.push(det);return;}
+    // Proveedor → CMV pagado
+    if(cat==='proveedor'){pagProv+=m;pagProvD.push(det);return;}
+    // Catering (egreso) → es CMV directo del evento (igual que económico)
+    if(cat==='catering'){pagProv+=m;pagProvD.push(det);return;}
+    // Extraordinarios (one-off)
+    if(isExtraord(txt)){pagExt+=m;pagExtD.push(det);return;}
+    // Variables comerciales
+    if(cat==='repartidor'||cat==='nafta'){pagFletes+=m;pagFletesD.push(det);return;}
+    if(cat==='bolsa'){pagPack+=m;pagPackD.push(det);return;}
+    // Estructura
+    if(cat==='marketing'){pagMarketing+=m;pagMarketingD.push(det);return;}
+    if(cat==='herramienta'){
+      if(eerrEsServicio(txt)){pagServicios+=m;pagServiciosD.push(det);}
+      else {pagSoftware+=m;pagSoftwareD.push(det);}
+      return;
+    }
+    // Sueldo: SOLO el efectivamente girado, sin piso imputado
+    if(cat==='sueldo'){sueldoGirado+=m;sueldoGiradoD.push(det);return;}
+    // Impuestos
+    if(cat==='impuesto'){pagImp+=m;pagImpD.push(det);return;}
+    // Otro: keywords
+    if(txt.indexOf('honorario')>=0||txt.indexOf('contador')>=0){pagHonorarios+=m;pagHonorariosD.push(det);return;}
+    if(txt.indexOf('luz')>=0||txt.indexOf('internet')>=0||txt.indexOf('telef')>=0||txt.indexOf('gas ')>=0||txt.indexOf('servicio')>=0){pagServicios+=m;pagServiciosD.push(det);return;}
+    if(txt.indexOf('alquiler')>=0){pagAlquiler+=m;pagAlquilerD.push(det);return;}
+    pagOtroEst+=m;pagOtroEstD.push(det);
+  });
+
+  var totVar=pagFletes+pagPack+pagOtroVar;
+  var totEstr=pagSoftware+pagMarketing+pagHonorarios+pagServicios+pagAlquiler+pagOtroEst;
+  var totSalidas=pagProv+totVar+totEstr+sueldoGirado+pagImp+pagExt+pagCapex;
+  var flujoNeto=totEntradas-totSalidas;
+
+  // ── 3. SALDOS ──
+  var sb=(D&&D.saldoBase)||{ef:0,mp:0,fecha:''};
+  var saldoActualReal=Number(sb.ef||0)+Number(sb.mp||0);
+
+  // Empty state
+  if(totEntradas===0&&totSalidas===0){
+    body.innerHTML='<div class="eerr-empty">Sin movimientos de caja registrados en '+mesNom+' '+anioN+'.</div>';
+    return;
+  }
+
+  // ── 4. RECONCILIACIÓN económico → financiero (necesita re-correr económico)
+  // Calcular Resultado Neto Económico inline (mismo flujo que rEERR_dual pero sin renderizar).
+  function calcEcon(){
+    var ventas=VD.filter(function(v){return v.mes===mesNom;});
+    var totFact=0,totCMV=0;
+    ventas.forEach(function(v){totFact+=Number(v.$)||0;totCMV+=Number(v.costo)||0;});
+    var cmvCateringE=0;
+    ((D&&D.gastos)||[]).filter(function(g){return g.mes===mesNom;}).forEach(function(g){
+      if(normCat(g.cat||'')==='catering')cmvCateringE+=Number(g.$)||0;
+    });
+    totCMV+=cmvCateringE;
+    var totMB=totFact-totCMV;
+    // Gastos clasificados igual que el económico
+    var f_sw=0,f_mk=0,f_hon=0,f_serv=0,f_oc=0,f_su=0,f_otr=0;
+    var v_fl=0,v_pk=0;
+    var er=0,ep=0,eo=0;var ii=0,im=0,io=0;
+    ((D&&D.gastos)||[]).filter(function(g){return g.mes===mesNom;}).forEach(function(g){
+      var c=normCat(g.cat||'Otro'),m=Number(g.$)||0;
+      var con=String(g.con||'').toLowerCase(),not=String(g.not||'').toLowerCase();
+      var txt=con+' '+not;
+      if(c==='proveedor'||c==='catering')return;
+      if(isExtraord(txt)){
+        if(txt.indexOf('regalo')>=0)er+=m;
+        else if(txt.indexOf('perd')>=0||txt.indexOf('robo')>=0)ep+=m;
+        else eo+=m;
+        return;
+      }
+      if(c==='repartidor'||c==='nafta')v_fl+=m;
+      else if(c==='bolsa')v_pk+=m;
+      else if(c==='marketing')f_mk+=m;
+      else if(c==='herramienta'){if(eerrEsServicio(txt))f_serv+=m;else f_sw+=m;}
+      else if(c==='sueldo')f_su+=m;
+      else if(c==='impuesto'){
+        if(txt.indexOf('iibb')>=0||txt.indexOf('ingresos brutos')>=0)ii+=m;
+        else if(txt.indexOf('mono')>=0)im+=m;
+        else io+=m;
+      }
+      else {
+        if(txt.indexOf('honorario')>=0||txt.indexOf('contador')>=0)f_hon+=m;
+        else if(txt.indexOf('luz')>=0||txt.indexOf('internet')>=0||txt.indexOf('telef')>=0||txt.indexOf('gas ')>=0||txt.indexOf('servicio')>=0)f_serv+=m;
+        else if(txt.indexOf('alquiler')>=0||txt.indexOf('ocupac')>=0||txt.indexOf('imputado')>=0)f_oc+=m;
+        else f_otr+=m;
+      }
+    });
+    // Provisiones imputadas
+    var provs=eerrProvisiones(mesNum,eerrMes.getFullYear());
+    var sueldoProvE=0,servProvE=0,ocupProvE=0,amortE=0;
+    provs.forEach(function(p){
+      var monto=Number(p.monto)||0;
+      if(p.cat==='sueldo')sueldoProvE=Math.max(monto-f_su,0);
+      else if(p.cat==='servicios')servProvE=Math.max(monto-f_serv,0);
+      else if(p.cat==='ocupacion')ocupProvE=Math.max(monto-f_oc,0);
+      else if(p.cat==='amortizacion')amortE+=monto;
+    });
+    f_su+=sueldoProvE;f_serv+=servProvE;f_oc+=ocupProvE;
+    // Comisiones MP estimadas
+    var cobrosTr=0;
+    ((D&&D.pedidos)||[]).forEach(function(p){
+      if(p.pago!=='Cobrado')return;
+      var fc=p.fc||'';if(!fc)return;
+      var pp=String(fc).split('/');if(pp.length<2)return;
+      if(Number(pp[1])!==mesNum)return;
+      cobrosTr+=Number(p.tr||0);
+    });
+    var v_cmp=Math.round(cobrosTr*0.03);
+    var totVar2=v_fl+v_pk+v_cmp;
+    var totMC=totMB-totVar2;
+    var totEstr2=f_sw+f_mk+f_hon+f_serv+f_oc+f_su+f_otr;
+    var ebitda=totMC-totEstr2;
+    var resOper=ebitda-amortE;
+    var resAImp=resOper-(er+ep+eo);
+    var resNeto=resAImp-(ii+im+io);
+    return {
+      resNeto:resNeto,totFact:totFact,totCMV:totCMV,
+      sueldoProvE:sueldoProvE,servProvE:servProvE,ocupProvE:ocupProvE,amortE:amortE,
+      v_cmpE:v_cmp
+    };
+  }
+  var econ=calcEcon();
+
+  // ── 5. RENDER ──
+  function ln(lbl,val,cls,pctStr){
+    var muted=(val===0&&(cls||'').indexOf('totsub')<0&&cls!=='tot')?' muted':'';
+    var sign=val<0?'-$':'$';var abs=Math.abs(Math.round(val));
+    return '<tr class="'+(cls||'')+muted+'"><td>'+lbl+'</td><td class="num">'+sign+f$(abs)+(pctStr?' <span class="pct">'+pctStr+'</span>':'')+'</td></tr>';
+  }
+  function leaf(lbl,val){
+    var muted=val===0?' muted':'';
+    var sign=val<0?'-$':'$';var abs=Math.abs(Math.round(val));
+    return '<tr class="leaf'+muted+'"><td>'+lbl+'</td><td class="num">'+sign+f$(abs)+'</td></tr>';
+  }
+  function subleaf(lbl,val,calc){
+    var sign=val<0?'-$':'$';var abs=Math.abs(Math.round(val));
+    return '<tr class="subleaf'+(calc?' calc':'')+'"><td>'+lbl+'</td><td class="num">'+sign+f$(abs)+'</td></tr>';
+  }
+  function detailRows(arr){
+    if(!arr||!arr.length)return'';
+    var grouped={};
+    arr.forEach(function(d){
+      var k=String(d.con||'(sin concepto)').trim();
+      if(!grouped[k])grouped[k]={con:k,m:0,n:0};
+      grouped[k].m+=d.m;grouped[k].n++;
+    });
+    var list=Object.keys(grouped).map(function(k){return grouped[k];});
+    list.sort(function(a,b){return b.m-a.m;});
+    var out='';
+    list.forEach(function(d){
+      var lbl=d.con+(d.n>1?' <span style="opacity:.55">×'+d.n+'</span>':'');
+      out+=subleaf(lbl,-d.m);
+    });
+    return out;
+  }
+
+  var html='';
+  html+='<div class="eerr-col" style="max-width:820px;margin:0 auto">';
+  var badgeCobertura='';
+  if(totCobr>0){
+    var color=coberturaPct>=80?'var(--gd)':(coberturaPct>=60?'var(--wrn)':'var(--r)');
+    badgeCobertura='<span style="font-size:10px;font-weight:700;background:'+(coberturaPct>=80?'var(--gb)':(coberturaPct>=60?'var(--wrnb)':'var(--rb)'))+';color:'+color+';padding:2px 8px;border-radius:3px;letter-spacing:.04em;text-transform:uppercase">Cobertura FC: '+coberturaPct+'%</span>';
+  }
+  html+='<div class="eerr-col-h"><b>Estado de Resultados — Financiero</b><span>'+mesNom+' '+anioN+' · caja</span>'+(badgeCobertura?'<span style="margin-left:auto">'+badgeCobertura+'</span>':'')+'</div>';
+  html+='<table class="eerr-tbl"><tbody>';
+
+  // INGRESOS
+  html+=ln('INGRESOS DE CAJA',totEntradas,'sub');
+  ['Home','Pilar','Clubes','Red','B2B','Catering'].forEach(function(k){
+    var lbl='Cobranzas '+k;
+    if(cobrEstCount[k]>0&&cobrCount[k]>0){
+      var pctEst=Math.round(cobrEstimado[k]/cobr[k]*100);
+      lbl+=' <span style="font-size:10px;color:var(--wrn)">· '+pctEst+'% estimado por entrega</span>';
+    }
+    html+=leaf(lbl,cobr[k]);
+  });
+  if(otrosIng>0){html+=leaf('Otros ingresos (rendimientos, liquidaciones Red, devoluciones)',otrosIng);html+=detailRows(otrosIngDet);}
+
+  // EGRESOS
+  html+=ln('(−) EGRESOS DE CAJA',-totSalidas,'sub neg');
+
+  // Pagos a proveedores
+  html+=leaf('Pagos a proveedores de mercadería',-pagProv);
+  html+=detailRows(pagProvD);
+
+  // Variables comerciales
+  html+=leaf('Pagos variables comerciales',-totVar);
+  if(pagFletes>0){html+=subleaf('Repartidor / fletes / nafta',-pagFletes);html+=detailRows(pagFletesD);}
+  if(pagPack>0){html+=subleaf('Packaging',-pagPack);html+=detailRows(pagPackD);}
+
+  // Estructura
+  html+=leaf('Pagos de estructura',-totEstr);
+  if(pagSoftware>0){html+=subleaf('Software',-pagSoftware);html+=detailRows(pagSoftwareD);}
+  if(pagMarketing>0){html+=subleaf('Marketing y diseño',-pagMarketing);html+=detailRows(pagMarketingD);}
+  if(pagHonorarios>0){html+=subleaf('Honorarios profesionales',-pagHonorarios);html+=detailRows(pagHonorariosD);}
+  if(pagServicios>0){html+=subleaf('Servicios',-pagServicios);html+=detailRows(pagServiciosD);}
+  if(pagAlquiler>0){html+=subleaf('Alquiler real',-pagAlquiler);html+=detailRows(pagAlquilerD);}
+  if(pagOtroEst>0){html+=subleaf('Otros estructura',-pagOtroEst);html+=detailRows(pagOtroEstD);}
+
+  // Retiros del dueño
+  html+=leaf('Retiros del dueño (sueldo girado)',-sueldoGirado);
+  html+=detailRows(sueldoGiradoD);
+
+  // Impuestos
+  html+=leaf('Impuestos pagados',-pagImp);
+  html+=detailRows(pagImpD);
+
+  // Extraordinarios
+  if(pagExt>0){html+=leaf('Pagos extraordinarios',-pagExt);html+=detailRows(pagExtD);}
+
+  // CAPEX
+  if(pagCapex>0){html+=leaf('Inversiones en bienes de uso',-pagCapex);html+=detailRows(pagCapexD);}
+
+  // FLUJO NETO
+  html+=ln('= FLUJO DE CAJA NETO DEL MES',flujoNeto,'tot'+(flujoNeto<0?' neg':''));
+
+  html+='</tbody></table></div>';
+
+  // ── Saldo de caja (referencia) ──
+  html+='<div class="eerr-cmp" style="max-width:820px;margin:12px auto 0;grid-template-columns:repeat(auto-fit,minmax(150px,1fr))">';
+  html+='<div class="eerr-cmp-c"><div class="eerr-cmp-l">Total Entradas</div><div class="eerr-cmp-v">$'+f$(Math.round(totEntradas))+'</div></div>';
+  html+='<div class="eerr-cmp-c"><div class="eerr-cmp-l">Total Salidas</div><div class="eerr-cmp-v">$'+f$(Math.round(totSalidas))+'</div></div>';
+  html+='<div class="eerr-cmp-c"><div class="eerr-cmp-l">Flujo Neto</div><div class="eerr-cmp-v '+(flujoNeto>=0?'pos':'neg')+'">'+(flujoNeto>=0?'+':'−')+'$'+f$(Math.abs(Math.round(flujoNeto)))+'</div></div>';
+  if(econ.totFact>0){
+    var ratioCob=totCobr/econ.totFact;
+    html+='<div class="eerr-cmp-c"><div class="eerr-cmp-l">Ratio cobranzas/facturación</div><div class="eerr-cmp-v '+(ratioCob>=0.8?'pos':'')+'">'+Math.round(ratioCob*100)+'%</div></div>';
+  }
+  if(saldoActualReal>0&&totSalidas>0){
+    var diasCaja=Math.round(saldoActualReal/(totSalidas/30));
+    html+='<div class="eerr-cmp-c"><div class="eerr-cmp-l">Días de caja</div><div class="eerr-cmp-v">'+diasCaja+' días</div></div>';
+  }
+  html+='</div>';
+
+  // ── RECONCILIACIÓN económico → financiero ──
+  var imputadosTot=econ.sueldoProvE+econ.servProvE+econ.ocupProvE+econ.amortE+econ.v_cmpE;
+  var varCxC=econ.totFact-totCobr; // facturado pero no cobrado
+  var varCxP=pagProv-econ.totCMV; // pagado a proveedores - CMV devengado
+  // Reconciliación: ResNeto + imputados − varCxC + varCxP − CAPEX = Flujo
+  var flujoReconc=econ.resNeto+imputadosTot-varCxC+varCxP-pagCapex;
+  var diff=flujoNeto-flujoReconc;
+
+  html+='<div class="eerr-note" style="max-width:820px;margin:12px auto 0">';
+  html+='<div class="eerr-note-h">Reconciliación: Resultado Económico → Flujo de Caja</div>';
+  html+='<table class="eerr-tbl" style="margin-top:6px"><tbody>';
+  html+=ln('Resultado Neto Económico',econ.resNeto,'sub');
+  html+=ln('(+) Costos imputados (no son egresos de caja)',imputadosTot,'');
+  if(econ.sueldoProvE>0)html+=subleaf('Sueldo dueño imputado (no girado)',econ.sueldoProvE);
+  if(econ.servProvE>0)html+=subleaf('Servicios imputados (provisión)',econ.servProvE);
+  if(econ.ocupProvE>0)html+=subleaf('Ocupación imputada',econ.ocupProvE);
+  if(econ.amortE>0)html+=subleaf('Amortizaciones',econ.amortE);
+  if(econ.v_cmpE>0)html+=subleaf('Comisiones MP estimadas',econ.v_cmpE);
+  html+=ln((varCxC>=0?'(−)':'(+)')+' Variación cuentas a cobrar',-varCxC,(varCxC>=0?'neg':''));
+  html+=subleaf('Facturación devengada − cobranzas reales',varCxC);
+  html+=ln((varCxP>=0?'(+)':'(−)')+' Variación cuentas a pagar (proveedores)',varCxP,'');
+  html+=subleaf('Pagos a proveedores − CMV devengado',varCxP);
+  if(pagCapex>0)html+=ln('(−) Inversiones en bienes de uso',-pagCapex,'neg');
+  html+=ln('= Flujo de Caja calculado por reconciliación',flujoReconc,'totsub');
+  html+=ln('  Flujo de Caja directo (cuadro arriba)',flujoNeto,'sub');
+  if(Math.abs(diff)>10){
+    html+=ln('  Diferencia',diff,'neg');
+  }
+  html+='</tbody></table>';
+  if(coberturaPct<70){
+    html+='<p style="margin-top:8px;font-size:11px;color:var(--wrn);font-weight:600">⚠ Cobertura de Fecha de Cobro: '+coberturaPct+'%. Parte de la variación de cuentas a cobrar está estimada usando fecha de entrega como proxy.</p>';
+  }
+  html+='<p style="margin-top:8px;font-size:11px;color:var(--ink3);line-height:1.55">El financiero mide la <b>caja</b> (lo que entra y sale efectivamente). La reconciliación muestra cómo se llega del resultado económico al flujo: sumando los costos imputados (no salieron de caja), restando lo que facturaste pero todavía no cobraste, y sumando lo que recibiste de proveedores a crédito.</p>';
+  html+='</div>';
+
+  // Glosario corto del financiero
+  html+='<div class="eerr-glos">';
+  html+='<div class="eerr-glos-h">Glosario · Financiero</div>';
+  var GLOSF=[
+    {t:'Cobranzas por canal',d:'Pedidos con Estado de Pago = Cobrado, agrupados por mes de la <b>Fecha de Cobro</b>. Si un pedido no tiene fecha de cobro cargada, se usa la fecha de entrega como proxy y se marca con <span style="color:var(--wrn)">% estimado</span>.'},
+    {t:'Otros ingresos',d:'Ingresos no asociados a un pedido: rendimientos MP, liquidaciones Red (cuando Marcos rinde), reintegros, devoluciones de impuestos. Sale del Sheets, hoja <code>Ingresos</code>.'},
+    {t:'Pagos a proveedores',d:'Egresos del Sheets con cat <code>Proveedor</code> o <code>Catering</code> (insumos de eventos), filtrados por mes de la fecha de pago.'},
+    {t:'Retiros del dueño',d:'Sueldo <b>efectivamente girado</b> en el mes (cat <code>Sueldo</code>). El piso imputado de $1M del económico NO entra acá — solo lo que salió de caja.'},
+    {t:'Inversiones en bienes de uso',d:'CAPEX: compra de freezers, equipos durables, vehículos. Detectado por keyword. Se separa porque es egreso de caja pero NO es gasto operativo (se consume vía amortización en el económico).'},
+    {t:'Ratio cobranzas/facturación',d:'Cuánto de lo que facturaste cobraste en el mes. Sano: 80-95% para Maleu. Lo que falta queda como cuentas por cobrar.'},
+    {t:'Días de caja',d:'Saldo actual / egresos promedio diarios. Cuántos días podés operar si dejara de entrar plata.'},
+    {t:'Reconciliación Económico → Financiero',d:'Demuestra que el económico y el financiero cuadran. Partís del Resultado Neto, le sumás los costos imputados (no son caja), ajustás por cuentas a cobrar y a pagar, restás CAPEX, y llegás al Flujo de Caja. Si el "Flujo calculado" coincide con el "Flujo directo", los dos estados están bien armados.'}
+  ];
+  GLOSF.forEach(function(g){html+='<div class="eerr-glos-item"><div class="eerr-glos-t">'+g.t+'</div><div class="eerr-glos-d">'+g.d+'</div></div>';});
+  html+='</div>';
+
+  body.innerHTML=html;
+}
 
 function rEERR_dual(body){
   var mesNom=MES_ORD[eerrMes.getMonth()],anioN=eerrMes.getFullYear();
