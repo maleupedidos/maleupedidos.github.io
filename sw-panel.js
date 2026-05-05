@@ -1,5 +1,5 @@
-var CN='maleu-panel-v18';
-self.addEventListener('install',function(e){e.waitUntil(caches.open(CN).then(function(c){return c.addAll(['/panel.html','/img/favicon.png']);}));self.skipWaiting();});
+var CN='maleu-panel-v19';
+self.addEventListener('install',function(e){e.waitUntil(caches.open(CN).then(function(c){return c.addAll(['/panel.html','/panel-manifest.json','/img/favicon.png']);}));self.skipWaiting();});
 self.addEventListener('activate',function(e){e.waitUntil(caches.keys().then(function(ks){return Promise.all(ks.filter(function(k){return k!==CN;}).map(function(k){return caches.delete(k);}));}));self.clients.claim();});
 self.addEventListener('fetch',function(e){
   var u=new URL(e.request.url);
