@@ -647,6 +647,13 @@ body.sb-open .sb-toggle .sb-toggle-lbl{display:inline}
 .eerr-cmp-l{font-size:9px;font-weight:700;color:var(--bl);text-transform:uppercase;letter-spacing:.06em}
 .eerr-cmp-v{font-size:14px;font-weight:800;color:var(--b);font-variant-numeric:tabular-nums;margin-top:2px}
 .eerr-cmp-v.pos{color:var(--gd)}.eerr-cmp-v.neg{color:var(--r)}
+.eerr-cmp{grid-template-columns:repeat(auto-fit,minmax(120px,1fr))}
+.eerr-tbl tr.muted td{color:#B5A48A;font-weight:400}
+.eerr-tbl tr.muted td.num{color:#B5A48A;font-weight:500}
+.eerr-tbl tr.sub.muted td{color:var(--ink3);font-weight:600}
+.eerr-tbl tr.sub.muted td.num{color:var(--ink3);font-weight:600}
+.eerr-tbl tr.totsub td{background:#f6f0e0;font-weight:800;color:var(--b);font-size:13.5px;border-top:2px solid var(--cd);border-bottom:1px solid var(--cd)}
+.eerr-tbl tr.totsub td.num{color:var(--b)}
 
 /* ════════════════════════════════════════════════════════════════
    MOBILE LAYOUT (≤768px) — sidebar lateral pasa a bottom-nav,
@@ -3301,9 +3308,9 @@ function eerrMov(d){eerrMes.setMonth(eerrMes.getMonth()+d);rEERR();}
 function rEERR_dual(body){
   var mesNom=MES_ORD[eerrMes.getMonth()],anioN=eerrMes.getFullYear();
 
-  // ── Ventas devengadas del mes (entregadas, sin importar cobro), con desglose por canal ──
+  // ── FACTURACIÓN devengada del mes por canal ──
   var ventas=VD.filter(function(v){return v.mes===mesNom;});
-  var canales={Home:{f:0,c:0},Pilar:{f:0,c:0},Clubes:{f:0,c:0},Red:{f:0,c:0},B2B:{f:0,c:0},Catering:{f:0,c:0}};
+  var canales={Home:0,Pilar:0,Clubes:0,Red:0,B2B:0,Catering:0};
   var totFact=0,totCMV=0;
   ventas.forEach(function(v){
     var f=Number(v.$)||0,c=Number(v.costo)||0,canal=v.canal,zona=v.zona;
@@ -3311,123 +3318,172 @@ function rEERR_dual(body){
     var k=null;
     if(canal==='Venta Directa')k=(zona==='Pilar'?'Pilar':'Home');
     else if(canal==='Clubes'||canal==='Red'||canal==='B2B'||canal==='Catering')k=canal;
-    if(k&&canales[k]){canales[k].f+=f;canales[k].c+=c;}
+    if(k&&canales.hasOwnProperty(k))canales[k]+=f;
   });
-  var totMB=totFact-totCMV;
 
-  // ── Gastos del mes clasificados (Proveedor excluido: ya está dentro del CMV devengado) ──
+  // Devoluciones / bonificaciones (no hay rubro propio aún → 0)
+  var devBon=0;
+  var ventasNetas=totFact-devBon;
+  var totMB=ventasNetas-totCMV;
+  var pctBase=ventasNetas;
+
+  // ── Gastos del mes mapeados al modelo profesional ──
   var gastosMes=((D&&D.gastos)||[]).filter(function(g){return g.mes===mesNom;});
-  var gFij={},gVar={},gSemi={};
-  var totFij=0,totVar=0,totSemi=0;
+  // Variables comerciales
+  var v_fletes=0,v_packaging=0,v_comCobro=0,v_otrosVar=0;
+  // Estructura (fijos)
+  var f_software=0,f_marketing=0,f_honorarios=0,f_servicios=0,f_ocupacion=0,f_sueldo=0,f_otrosEst=0;
+  // Impuestos
+  var imp_iibb=0,imp_mono=0,imp_otros=0;
   gastosMes.forEach(function(g){
     var cat=g.cat||'Otro',m=Number(g.$)||0;
-    var t=eerrClasif(cat);
-    if(t==='fijo'){gFij[cat]=(gFij[cat]||0)+m;totFij+=m;}
-    else if(t==='variable'){gVar[cat]=(gVar[cat]||0)+m;totVar+=m;}
-    else if(t==='cmv'){/* excluido — ya en CMV devengado */}
-    else {gSemi[cat]=(gSemi[cat]||0)+m;totSemi+=m;}
+    var con=String(g.con||'').toLowerCase(),not=String(g.not||'').toLowerCase();
+    var txt=con+' '+not;
+    if(cat==='Proveedor')return; // ya en CMV devengado
+    if(cat==='Repartidor'||cat==='Nafta')v_fletes+=m;
+    else if(cat==='Bolsas')v_packaging+=m;
+    else if(cat==='Catering')v_otrosVar+=m;
+    else if(cat==='Marketing')f_marketing+=m;
+    else if(cat==='Herramienta')f_software+=m;
+    else if(cat==='Sueldo')f_sueldo+=m;
+    else if(cat==='Impuesto'){
+      if(txt.indexOf('iibb')>=0||txt.indexOf('ingresos brutos')>=0)imp_iibb+=m;
+      else if(txt.indexOf('mono')>=0)imp_mono+=m;
+      else imp_otros+=m;
+    }
+    else {
+      // 'Otro' u otra cat no clasificada → distribución por keyword del concepto
+      if(txt.indexOf('honorario')>=0||txt.indexOf('contador')>=0)f_honorarios+=m;
+      else if(txt.indexOf('luz')>=0||txt.indexOf('internet')>=0||txt.indexOf('telef')>=0||txt.indexOf('gas ')>=0||txt.indexOf('servicio')>=0)f_servicios+=m;
+      else if(txt.indexOf('alquiler')>=0||txt.indexOf('ocupac')>=0||txt.indexOf('imputado')>=0)f_ocupacion+=m;
+      else f_otrosEst+=m;
+    }
   });
-  var totMC=totMB-totVar;
-  var utilOper=totMC-totSemi-totFij;
 
-  if(totFact===0&&totFij===0&&totVar===0&&totSemi===0){
+  // Comisiones Red automáticas: 17% sobre canal Red
+  var v_comRed=Math.round(canales.Red*0.17);
+
+  var totVar=v_fletes+v_packaging+v_comRed+v_comCobro+v_otrosVar;
+  var totMC=totMB-totVar;
+  var totEstr=f_software+f_marketing+f_honorarios+f_servicios+f_ocupacion+f_sueldo+f_otrosEst;
+  var ebitda=totMC-totEstr;
+  var amort=0;
+  var resOper=ebitda-amort;
+  var rFinanc=0;
+  var resAImp=resOper+rFinanc;
+  var totImp=imp_iibb+imp_mono+imp_otros;
+  var resNeto=resAImp-totImp;
+
+  if(totFact===0&&totVar===0&&totEstr===0&&totImp===0){
     body.innerHTML='<div class="eerr-empty">Sin movimientos registrados en '+mesNom+' '+anioN+'.</div>';
     return;
   }
 
-  // ── helpers ──
+  // ── Helpers de fila ──
   function ln(lbl,val,cls,pctStr){
+    var muted=(val===0&&(cls||'').indexOf('totsub')<0&&(cls||'').indexOf('tot ')<0&&cls!=='tot')?' muted':'';
     var sign=val<0?'-$':'$';var abs=Math.abs(Math.round(val));
-    return '<tr class="'+(cls||'')+'"><td>'+lbl+'</td><td class="num">'+sign+f$(abs)+(pctStr?' <span class="pct">'+pctStr+'</span>':'')+'</td></tr>';
+    return '<tr class="'+(cls||'')+muted+'"><td>'+lbl+'</td><td class="num">'+sign+f$(abs)+(pctStr?' <span class="pct">'+pctStr+'</span>':'')+'</td></tr>';
   }
-  function leaf(lbl,val,pctStr){
+  function leaf(lbl,val){
+    var muted=val===0?' muted':'';
     var sign=val<0?'-$':'$';var abs=Math.abs(Math.round(val));
-    return '<tr class="leaf"><td>'+lbl+'</td><td class="num">'+sign+f$(abs)+(pctStr?' <span class="pct">'+pctStr+'</span>':'')+'</td></tr>';
-  }
-  function desgloseCanal(getVal,getBase){
-    var orden=['Home','Pilar','Clubes','Red','B2B','Catering'];
-    var out='';
-    orden.forEach(function(k){
-      var v=getVal(canales[k]);if(!v)return;
-      var p=getBase?eerrPct(v,getBase(canales[k])):'';
-      out+=leaf(k,v,p);
-    });
-    return out;
-  }
-  function desgloseGasto(detail){
-    var out='';
-    Object.keys(detail).sort(function(a,b){return detail[b]-detail[a];}).forEach(function(k){
-      if(detail[k]>0)out+=leaf(k,-detail[k]);
-    });
-    return out;
+    return '<tr class="leaf'+muted+'"><td>'+lbl+'</td><td class="num">'+sign+f$(abs)+'</td></tr>';
   }
 
   var html='';
-  html+='<div class="eerr-col" style="max-width:760px;margin:0 auto">';
+  html+='<div class="eerr-col" style="max-width:820px;margin:0 auto">';
   html+='<div class="eerr-col-h"><b>Estado de Resultados — Económico</b><span>'+mesNom+' '+anioN+' · devengado</span></div>';
   html+='<table class="eerr-tbl"><tbody>';
 
   // FACTURACIÓN
-  html+=ln('Facturación',totFact,'sub');
-  html+=desgloseCanal(function(c){return c.f;});
+  html+=ln('FACTURACIÓN',totFact,'sub');
+  ['Home','Pilar','Clubes','Red','B2B','Catering'].forEach(function(k){html+=leaf(k,canales[k]);});
+
+  // Devoluciones y bonificaciones
+  html+=ln('(−) Devoluciones y bonificaciones',-devBon,'neg');
+
+  // VENTAS NETAS
+  html+=ln('= VENTAS NETAS',ventasNetas,'totsub');
 
   // CMV
-  html+=ln('(−) Costo de Mercadería Vendida',-totCMV,'sub neg');
-  html+=desgloseCanal(function(c){return -c.c;});
+  html+=ln('(−) CMV (Costo de Mercadería Vendida)',-totCMV,'sub neg');
 
   // MARGEN BRUTO
-  html+=ln('= Margen Bruto',totMB,'sub',eerrPct(totMB,totFact));
-  html+=desgloseCanal(function(c){return c.f-c.c;},function(c){return c.f;});
+  html+=ln('= MARGEN BRUTO',totMB,'totsub',eerrPct(totMB,pctBase));
 
-  // GASTOS VARIABLES
-  if(totVar>0){
-    html+=ln('(−) Gastos Variables',-totVar,'sub neg');
-    html+=desgloseGasto(gVar);
-  } else {
-    html+=ln('(−) Gastos Variables',0,'sub neg');
-  }
+  // GASTOS VARIABLES COMERCIALES
+  html+=ln('(−) Gastos Variables Comerciales',-totVar,'sub neg');
+  html+=leaf('Fletes y logística',-v_fletes);
+  html+=leaf('Packaging',-v_packaging);
+  html+=leaf('Comisiones Red (Marcos y otros)',-v_comRed);
+  html+=leaf('Comisiones de cobro (MP, transferencias)',-v_comCobro);
+  if(v_otrosVar>0)html+=leaf('Otros variables',-v_otrosVar);
 
-  // MARGEN DE CONTRIBUCIÓN A FIJOS
-  html+=ln('= Margen de Contribución a Fijos',totMC,'sub',eerrPct(totMC,totFact));
+  // MARGEN DE CONTRIBUCIÓN
+  html+=ln('= MARGEN DE CONTRIBUCIÓN',totMC,'totsub',eerrPct(totMC,pctBase));
 
-  // GASTOS SEMI-VARIABLES
-  if(totSemi>0){
-    html+=ln('(−) Gastos Semi-Variables',-totSemi,'sub neg');
-    html+=desgloseGasto(gSemi);
-  }
+  // GASTOS DE ESTRUCTURA
+  html+=ln('(−) Gastos de Estructura (fijos)',-totEstr,'sub neg');
+  html+=leaf('Software (N8N, Claude API, Canva, Wati, hosting)',-f_software);
+  html+=leaf('Marketing y publicidad',-f_marketing);
+  html+=leaf('Honorarios profesionales (contador)',-f_honorarios);
+  html+=leaf('Servicios (luz, internet, telefonía)',-f_servicios);
+  html+=leaf('Costo de ocupación imputado (alquiler equivalente)',-f_ocupacion);
+  html+=leaf('Sueldo del dueño imputado',-f_sueldo);
+  if(f_otrosEst>0)html+=leaf('Otros',-f_otrosEst);
 
-  // GASTOS FIJOS
-  if(totFij>0){
-    html+=ln('(−) Gastos Fijos',-totFij,'sub neg');
-    html+=desgloseGasto(gFij);
-  }
+  // EBITDA
+  html+=ln('= EBITDA',ebitda,'totsub'+(ebitda<0?' neg':''),eerrPct(ebitda,pctBase));
+
+  // AMORTIZACIONES
+  html+=ln('(−) Amortizaciones',-amort,'neg');
+
+  // RESULTADO OPERATIVO
+  html+=ln('= RESULTADO OPERATIVO',resOper,'totsub'+(resOper<0?' neg':''),eerrPct(resOper,pctBase));
+
+  // RESULTADOS FINANCIEROS
+  html+=ln('(+/−) Resultados Financieros',rFinanc,'sub');
+  html+=leaf('Intereses ganados / perdidos',0);
+  html+=leaf('Diferencia de cambio',0);
+
+  // RESULTADO ANTES DE IMPUESTOS
+  html+=ln('= RESULTADO ANTES DE IMPUESTOS',resAImp,'totsub'+(resAImp<0?' neg':''));
+
+  // IMPUESTOS
+  html+=ln('(−) Impuestos',-totImp,'sub neg');
+  html+=leaf('IIBB',-imp_iibb);
+  html+=leaf('Monotributo',-imp_mono);
+  if(imp_otros>0)html+=leaf('Otros impuestos',-imp_otros);
 
   // RESULTADO NETO
-  html+=ln('Resultado Neto Económico',utilOper,'tot'+(utilOper<0?' neg':''),eerrPct(utilOper,totFact));
-  html+='</tbody></table>';
-  html+='</div>';
+  html+=ln('= RESULTADO NETO',resNeto,'tot'+(resNeto<0?' neg':''),eerrPct(resNeto,pctBase));
 
-  // KPIs económicos
-  html+='<div class="eerr-cmp" style="max-width:760px;margin:12px auto 0">';
-  html+='<div class="eerr-cmp-c"><div class="eerr-cmp-l">Margen Bruto %</div><div class="eerr-cmp-v">'+eerrPct(totMB,totFact)+'</div></div>';
-  html+='<div class="eerr-cmp-c"><div class="eerr-cmp-l">Margen Contribución %</div><div class="eerr-cmp-v">'+eerrPct(totMC,totFact)+'</div></div>';
-  html+='<div class="eerr-cmp-c"><div class="eerr-cmp-l">Resultado Neto %</div><div class="eerr-cmp-v '+(utilOper>=0?'pos':'neg')+'">'+eerrPct(utilOper,totFact)+'</div></div>';
+  html+='</tbody></table></div>';
+
+  // KPIs
+  html+='<div class="eerr-cmp" style="max-width:820px;margin:12px auto 0">';
+  html+='<div class="eerr-cmp-c"><div class="eerr-cmp-l">Margen Bruto %</div><div class="eerr-cmp-v">'+eerrPct(totMB,pctBase)+'</div></div>';
+  html+='<div class="eerr-cmp-c"><div class="eerr-cmp-l">Margen Contribución %</div><div class="eerr-cmp-v">'+eerrPct(totMC,pctBase)+'</div></div>';
+  html+='<div class="eerr-cmp-c"><div class="eerr-cmp-l">EBITDA %</div><div class="eerr-cmp-v '+(ebitda>=0?'':'neg')+'">'+eerrPct(ebitda,pctBase)+'</div></div>';
+  html+='<div class="eerr-cmp-c"><div class="eerr-cmp-l">Resultado Neto %</div><div class="eerr-cmp-v '+(resNeto>=0?'pos':'neg')+'">'+eerrPct(resNeto,pctBase)+'</div></div>';
   html+='</div>';
 
   // Lectura del mes
-  html+='<div class="eerr-note" style="max-width:760px;margin:12px auto 0">';
+  html+='<div class="eerr-note" style="max-width:820px;margin:12px auto 0">';
   html+='<div class="eerr-note-h">Lectura del mes</div>';
-  html+='<p>El EERR <b>económico</b> mide la <b>rentabilidad</b>: una venta cuenta cuando el pedido se entregó (sin importar el cobro) y un costo cuenta cuando se incurrió. Mide cuánto ganó o perdió el patrimonio en el período. Es distinto del <b>flujo financiero</b>, que mira la caja: cuándo entró y salió la plata. Maleu puede ser rentable económicamente y aun así tener problemas financieros si las cobranzas se atrasan.</p>';
-  if(totMC>0&&totFij>0){
-    var coberturaFijos=totMC/totFij;
-    if(coberturaFijos>=1)html+='<p>El Margen de Contribución <b>cubre '+Math.round(coberturaFijos*100)+'%</b> de los Gastos Fijos del mes.</p>';
-    else html+='<p>El Margen de Contribución <b>cubre solo '+Math.round(coberturaFijos*100)+'%</b> de los Gastos Fijos. Hay que aumentar volumen, subir margen o bajar fijos para llegar a equilibrio.</p>';
+  html+='<p>El EERR <b>económico</b> mide <b>rentabilidad</b>: una venta cuenta cuando el pedido se entregó (sin importar el cobro) y un costo cuenta cuando se incurrió. Los porcentajes se calculan sobre <b>Ventas Netas</b>, no sobre Facturación.</p>';
+  if(totMC>0&&totEstr>0){
+    var coberturaFijos=totMC/totEstr;
+    if(coberturaFijos>=1)html+='<p>El Margen de Contribución <b>cubre '+Math.round(coberturaFijos*100)+'%</b> de la estructura fija del mes.</p>';
+    else html+='<p>El Margen de Contribución <b>cubre solo '+Math.round(coberturaFijos*100)+'%</b> de la estructura fija. Hay que aumentar volumen, subir margen o bajar estructura para llegar a equilibrio.</p>';
   }
   var flags=[];
   if(totMB<0)flags.push('<span class="flag">Margen Bruto negativo</span>');
   if(totMC<0)flags.push('<span class="flag">No cubre variables</span>');
-  if(utilOper<0&&totFact>0)flags.push('<span class="flag">Pérdida económica</span>');
-  if(totFij>totMB&&totFact>0&&totFij>0)flags.push('<span class="flag">Fijos &gt; Margen Bruto</span>');
+  if(ebitda<0&&totFact>0)flags.push('<span class="flag">EBITDA negativo</span>');
+  if(resNeto<0&&totFact>0)flags.push('<span class="flag">Pérdida neta</span>');
+  if(totEstr>totMB&&totFact>0&&totEstr>0)flags.push('<span class="flag">Estructura &gt; Margen Bruto</span>');
   if(flags.length)html+='<p><b>Alertas:</b> '+flags.join(' ')+'</p>';
   html+='</div>';
 
