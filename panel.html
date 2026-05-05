@@ -3557,6 +3557,30 @@ var EERR_CLAS={
 function eerrClasif(cat){return EERR_CLAS[cat]||'semi';}
 function eerrPct(n,d){return d>0?Math.round(n/d*1000)/10+'%':'—';}
 
+// Provisiones fijas devengadas (fuente: hoja Provisiones_Fijas).
+// Mientras el Apps Script no exponga D.provisiones, usamos este fallback con
+// los mismos valores cargados en la hoja. Si actualizás un monto, también
+// actualizá esta tabla.
+var EERR_PROV_DEFAULT=[
+  {concepto:'Sueldo dueño imputado',cat:'sueldo',monto:1000000,desde:'2026-01',hasta:null},
+  {concepto:'Movistar celular',cat:'servicios',monto:50000,desde:'2026-01',hasta:null},
+  {concepto:'Ocupación imputada',cat:'ocupacion',monto:50000,desde:'2026-01',hasta:null},
+  {concepto:'Amortización freezers',cat:'amortizacion',monto:35000,desde:'2026-01',hasta:null}
+];
+function eerrProvisiones(mesNum,anio){
+  var src=(D&&D.provisiones&&D.provisiones.length)?D.provisiones:EERR_PROV_DEFAULT;
+  var ym=anio+'-'+String(mesNum).padStart(2,'0');
+  return src.filter(function(p){
+    if(p.desde&&ym<p.desde)return false;
+    if(p.hasta&&ym>p.hasta)return false;
+    return Number(p.monto||0)>0;
+  });
+}
+// Detecta movimiento "Herramienta" que es realmente Servicios (telefonía)
+function eerrEsServicio(txt){
+  return txt.indexOf('movistar')>=0||txt.indexOf('claro')>=0||txt.indexOf('personal')>=0||txt.indexOf('celular')>=0||txt.indexOf('chip')>=0;
+}
+
 function rEERR(){
   if(!eerrMes){var n=new Date();eerrMes=new Date(n.getFullYear(),n.getMonth(),1);}
   var mesNom=MES_ORD[eerrMes.getMonth()],anioN=eerrMes.getFullYear();
@@ -3630,7 +3654,10 @@ function rEERR_dual(body){
     else if(cat==='Bolsas'){v_packaging+=m;pushDet(v_packagingD,g,m);}
     else if(cat==='Catering'){v_otrosVar+=m;pushDet(v_otrosVarD,g,m);}
     else if(cat==='Marketing'){f_marketing+=m;pushDet(f_marketingD,g,m);}
-    else if(cat==='Herramienta'){f_software+=m;pushDet(f_softwareD,g,m);}
+    else if(cat==='Herramienta'){
+      if(eerrEsServicio(txt)){f_servicios+=m;pushDet(f_serviciosD,g,m);}
+      else {f_software+=m;pushDet(f_softwareD,g,m);}
+    }
     else if(cat==='Sueldo'){f_sueldo+=m;pushDet(f_sueldoD,g,m);}
     else if(cat==='Impuesto'){
       if(txt.indexOf('iibb')>=0||txt.indexOf('ingresos brutos')>=0){imp_iibb+=m;pushDet(imp_iibbD,g,m);}
@@ -3669,18 +3696,36 @@ function rEERR_dual(body){
   });
   v_comCobro+=Math.round(cobrosTr*0.03);
 
-  // 2) Sueldo del dueño imputado: piso $1.000.000 todos los meses.
-  //    Si lo cargado es menor, agregar la diferencia como provisión devengada.
-  var SUELDO_PISO=1000000;
-  var sueldoReal=f_sueldo;
-  var sueldoProv=Math.max(SUELDO_PISO-sueldoReal,0);
-  f_sueldo=sueldoReal+sueldoProv; // total = real + provisión
+  // 2) Provisiones fijas devengadas (hoja Provisiones_Fijas).
+  //    Regla max(real, piso): si el real cargado del mes ya cubre el piso,
+  //    se usa el real; si está por debajo, se agrega la diferencia como provisión.
+  //    Aplica a: Sueldo dueño, Servicios, Ocupación, Amortización.
+  var provs=eerrProvisiones(mesNum,eerrMes.getFullYear());
+  var sueldoReal=f_sueldo,sueldoProv=0,sueldoProvCon='';
+  var serviciosProv=0,serviciosProvCon='';
+  var ocupacionProv=0,ocupacionProvCon='';
+  var amortProv=0,amortProvCon='';
+  provs.forEach(function(p){
+    var monto=Number(p.monto)||0;
+    if(p.cat==='sueldo'){
+      var d=Math.max(monto-f_sueldo,0);
+      if(d>0){f_sueldo+=d;sueldoProv=d;sueldoProvCon=p.concepto;}
+    } else if(p.cat==='servicios'){
+      var d=Math.max(monto-f_servicios,0);
+      if(d>0){f_servicios+=d;serviciosProv=d;serviciosProvCon=p.concepto;}
+    } else if(p.cat==='ocupacion'){
+      var d=Math.max(monto-f_ocupacion,0);
+      if(d>0){f_ocupacion+=d;ocupacionProv=d;ocupacionProvCon=p.concepto;}
+    } else if(p.cat==='amortizacion'){
+      amortProv+=monto;amortProvCon=(amortProvCon?amortProvCon+' + ':'')+p.concepto;
+    }
+  });
 
   var totVar=v_fletes+v_packaging+v_comRed+v_comCobro+v_otrosVar;
   var totMC=totMB-totVar;
   var totEstr=f_software+f_marketing+f_honorarios+f_servicios+f_ocupacion+f_sueldo+f_otrosEst;
   var ebitda=totMC-totEstr;
-  var amort=0;
+  var amort=amortProv;
   var resOper=ebitda-amort;
   var totExt=ext_perdidas+ext_regalos+ext_otros;
   var rFinanc=0;
@@ -3771,8 +3816,10 @@ function rEERR_dual(body){
   html+=detailRows(f_honorariosD);
   html+=leaf('Servicios (luz, internet, telefonía)',-f_servicios);
   html+=detailRows(f_serviciosD);
+  if(serviciosProv>0)html+=subleaf('Provisión: '+serviciosProvCon+' (piso fijo)',-serviciosProv,true);
   html+=leaf('Costo de ocupación imputado (alquiler equivalente)',-f_ocupacion);
   html+=detailRows(f_ocupacionD);
+  if(ocupacionProv>0)html+=subleaf('Provisión: '+ocupacionProvCon+' (alquiler equivalente cuartito Estancias)',-ocupacionProv,true);
   html+=leaf('Sueldo del dueño imputado',-f_sueldo);
   html+=detailRows(f_sueldoD);
   if(sueldoProv>0)html+=subleaf('Provisión devengada (piso $1.000.000 − cargado $'+f$(Math.round(sueldoReal))+')',-sueldoProv,true);
@@ -3783,6 +3830,7 @@ function rEERR_dual(body){
 
   // AMORTIZACIONES
   html+=ln('(−) Amortizaciones',-amort,'neg');
+  if(amortProv>0)html+=subleaf('Provisión: '+amortProvCon,-amortProv,true);
 
   // RESULTADO OPERATIVO
   html+=ln('= RESULTADO OPERATIVO',resOper,'totsub'+(resOper<0?' neg':''),eerrPct(resOper,pctBase));
@@ -3858,12 +3906,12 @@ function rEERR_dual(body){
     {t:'· Software',d:'N8N, Claude API, Canva, WATI, hosting, Apps Script si tuviera costo. Sale del Sheets <code>Egresos</code>, categoría <code>Herramienta</code>.'},
     {t:'· Marketing y publicidad',d:'Diseñadora (Juana Peña), flyers, pauta, contenido. Sale del Sheets <code>Egresos</code>, categoría <code>Marketing</code>.'},
     {t:'· Honorarios profesionales',d:'Contador, abogado, asesores. <b>Hoy en $0:</b> falta cargar. Cuando lo cargues con concepto que diga "honorario" o "contador" cae acá automáticamente.'},
-    {t:'· Servicios',d:'Luz, internet, telefonía, gas. <b>Hoy en $0.</b> Cargá el gasto con cat <code>Otro</code> y palabras como "luz", "internet", "teléfono" o "gas" en el concepto.'},
-    {t:'· Costo de ocupación imputado',d:'<b>Costo imputado:</b> aunque hoy no pagues alquiler (usás el cuartito de tu casa), económicamente ese espacio tiene un costo. Cargá lo que pagarías de alquiler equivalente a precio de mercado. Si no lo cargás, la rentabilidad del negocio queda inflada. <b>Hoy en $0.</b>'},
+    {t:'· Servicios',d:'Luz, internet, telefonía, gas. Hoy hay una <b>provisión fija de $50.000/mes (Movistar celular Maleu)</b> cargada en la hoja <code>Provisiones_Fijas</code>. Si en algún mes la factura real supera el piso, se usa el real. Otros servicios (luz, internet del depósito) se suman si los cargás como gasto con esos keywords en el concepto.'},
+    {t:'· Costo de ocupación imputado',d:'<b>Costo imputado de $50.000/mes</b> (alquiler equivalente del cuartito del depósito en Estancias del Pilar) cargado en <code>Provisiones_Fijas</code>. Aunque hoy no pagues alquiler, económicamente ese espacio tiene un costo. El día que arranques a alquilar real, se cierra la provisión (columna "Activa hasta") y empezás a cargar la factura real.'},
     {t:'· Sueldo del dueño imputado',d:'Piso fijo de <b>$1.000.000/mes</b> (lo que tendrías que ganar como sueldo digno). Sale de los movimientos cargados con categoría <code>Sueldo</code>. Si en el mes te giraste menos, la diferencia se carga como <b>provisión devengada</b> (ej: en abril te giraste $758.972 → provisión $241.028 → total devengado $1.000.000). Esto es <b>devengado</b>: el costo de tu trabajo existe igual aunque no te lo hayas pagado.'},
     {t:'¿Qué es una "provisión devengada"?',d:'Costo que existe económicamente en el mes aunque la factura/pago no haya pasado todavía. Ejemplo: el contador trabaja en mayo pero te factura el 5 de junio. El costo es de mayo. <b>Para gastos recurrentes con piso conocido</b> (sueldo dueño, software, comisiones MP) el EERR provisiona automáticamente sin esperar el pago real. Cuando el pago entra al Sheets, reemplaza la provisión.'},
     {t:'= EBITDA',d:'<b>E</b>arnings <b>B</b>efore <b>I</b>nterest, <b>T</b>axes, <b>D</b>epreciation and <b>A</b>mortization. Resultado operativo "puro" antes de financieros, impuestos y amortizaciones. Es el indicador que más mira un inversor para comparar negocios entre sí.'},
-    {t:'(−) Amortizaciones',d:'Si compraste un freezer de $500.000 con vida útil de 5 años, no es justo cargar todo el costo el mes que lo compraste. Se "consume" $8.333 por mes durante 60 meses. <b>Hoy en $0.</b>'},
+    {t:'(−) Amortizaciones',d:'Si compraste un freezer de $500.000 con vida útil de 5 años, no es justo cargar todo el costo el mes que lo compraste. Se "consume" $8.333 por mes durante 60 meses. <b>Provisión actual: $35.000/mes</b> (3 freezers, estimado provisorio hasta confirmar costo de adquisición real). Cargado en <code>Provisiones_Fijas</code>.'},
     {t:'= RESULTADO OPERATIVO',d:'Lo que el negocio genera por su actividad principal, ya descontadas las amortizaciones, antes de financieros e impuestos.'},
     {t:'(−) Resultados Extraordinarios',d:'Pérdidas y gastos <b>no recurrentes</b>: regalos, faltantes, robos, pérdidas de efectivo, cosas one-off. Se separan del operativo para no contaminar la lectura mes a mes. Detección automática por keyword en concepto/notas: <code>regalo · perd · falt · robo</code>. En abril cae acá: regalo a Fede ($145.000), pérdida de efectivo ($90.000), faltante de Marcos ($300).'},
     {t:'(+/−) Resultados Financieros',d:'Intereses ganados (rendimientos MP, plazo fijo) menos intereses pagados (tarjetas, financiación). Más diferencia de cambio si tenés algo en USD. <b>Hoy en $0.</b>'},
