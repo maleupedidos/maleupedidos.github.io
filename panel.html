@@ -3581,6 +3581,28 @@ function eerrEsServicio(txt){
   return txt.indexOf('movistar')>=0||txt.indexOf('claro')>=0||txt.indexOf('personal')>=0||txt.indexOf('celular')>=0||txt.indexOf('chip')>=0;
 }
 
+// Config_Maleu: parámetros editables desde Sheets con trazabilidad por "Activo desde".
+// Fallback hardcoded mientras D.config no venga del backend; mantener en sync con la hoja.
+var EERR_CONFIG_DEFAULT=[
+  {param:'CAJA_MINIMA',valor:1500000,desde:'2026-01'},
+  {param:'SUELDO_MENSUAL',valor:1000000,desde:'2026-01'},
+  {param:'GIRO_QUINCENAL',valor:500000,desde:'2026-01'},
+  {param:'DIA_GIRO_1',valor:5,desde:'2026-01'},
+  {param:'DIA_GIRO_2',valor:20,desde:'2026-01'},
+  {param:'COMISION_MP_PCT',valor:0.03,desde:'2026-01'},
+  {param:'EBITDA_REALISTA',valor:0.08,desde:'2026-01'},
+  {param:'EBITDA_ASPIRACIONAL',valor:0.15,desde:'2026-01'}
+];
+// Devuelve el valor del parámetro vigente al ym (YYYY-MM). Si pasaron varios "Activo desde",
+// usa el más reciente que sea ≤ ym.
+function eerrConfig(param,ym){
+  var src=(D&&D.config&&D.config.length)?D.config:EERR_CONFIG_DEFAULT;
+  var matches=src.filter(function(c){return c.param===param&&(!c.desde||ym>=c.desde);});
+  if(!matches.length){var fb=EERR_CONFIG_DEFAULT.filter(function(c){return c.param===param;})[0];return fb?fb.valor:null;}
+  matches.sort(function(a,b){return (b.desde||'').localeCompare(a.desde||'');});
+  return Number(matches[0].valor);
+}
+
 var eerrModo=(function(){try{return localStorage.getItem('maleu_eerr_modo')||'economico';}catch(e){return'economico';}})();
 function eerrSetModo(m){eerrModo=m;try{localStorage.setItem('maleu_eerr_modo',m);}catch(e){}rEERR();}
 
@@ -3786,7 +3808,8 @@ function rEERR_financiero(body){
       if(Number(pp[1])!==mesNum)return;
       cobrosTr+=Number(p.tr||0);
     });
-    var v_cmp=Math.round(cobrosTr*0.03);
+    var ymCmp=eerrMes.getFullYear()+'-'+String(eerrMes.getMonth()+1).padStart(2,'0');
+    var v_cmp=Math.round(cobrosTr*eerrConfig('COMISION_MP_PCT',ymCmp));
     var totVar2=v_fl+v_pk+v_cmp;
     var totMC=totMB-totVar2;
     var totEstr2=f_sw+f_mk+f_hon+f_serv+f_oc+f_su+f_otr;
@@ -3838,24 +3861,31 @@ function rEERR_financiero(body){
   var html='';
 
   // ── ESTADO DE CAJA (gobierno de retiros) ──
-  // Mostrar solo cuando el mes seleccionado es el actual o futuro próximo (tiene sentido la decisión de giro).
+  // Mostrar solo cuando el mes seleccionado es el actual.
   var hoyD=new Date();
   var esMesActual=(eerrMes.getFullYear()===hoyD.getFullYear()&&eerrMes.getMonth()===hoyD.getMonth());
   if(esMesActual){
-    var CAJA_MINIMA=1500000;
-    var SUELDO_MENSUAL=1000000;
-    var GIRO_QUINCENAL=SUELDO_MENSUAL/2;
-    var DIA_PRIMER_GIRO=5,DIA_SEGUNDO_GIRO=20;
+    var ym=eerrMes.getFullYear()+'-'+String(eerrMes.getMonth()+1).padStart(2,'0');
+    var CAJA_MINIMA=eerrConfig('CAJA_MINIMA',ym);
+    var SUELDO_MENSUAL=eerrConfig('SUELDO_MENSUAL',ym);
+    var GIRO_QUINCENAL=eerrConfig('GIRO_QUINCENAL',ym);
+    var DIA_PRIMER_GIRO=eerrConfig('DIA_GIRO_1',ym);
+    var DIA_SEGUNDO_GIRO=eerrConfig('DIA_GIRO_2',ym);
     var hoyDia=hoyD.getDate();
     var margenMin=saldoActualReal-CAJA_MINIMA;
     var sueldoPendiente=Math.max(SUELDO_MENSUAL-sueldoGirado,0);
-    // Determinar próximo giro
+    // Próximo giro
     var proxFecha,proxMonto;
     if(hoyDia<DIA_PRIMER_GIRO){proxFecha=DIA_PRIMER_GIRO+'/'+(hoyD.getMonth()+1);proxMonto=Math.min(GIRO_QUINCENAL,sueldoPendiente);}
     else if(hoyDia<DIA_SEGUNDO_GIRO){proxFecha=DIA_SEGUNDO_GIRO+'/'+(hoyD.getMonth()+1);proxMonto=Math.min(GIRO_QUINCENAL,sueldoPendiente);}
     else {var prox=new Date(hoyD.getFullYear(),hoyD.getMonth()+1,DIA_PRIMER_GIRO);proxFecha=DIA_PRIMER_GIRO+'/'+(prox.getMonth()+1);proxMonto=Math.min(GIRO_QUINCENAL,SUELDO_MENSUAL);}
-    var habilitaGiro=(saldoActualReal-proxMonto)>=CAJA_MINIMA;
-    var bajoMinimo=margenMin<0;
+    // Semáforo de 3 zonas
+    var bajoMinimo=saldoActualReal<CAJA_MINIMA;
+    var girarTeDejaBajoMin=(saldoActualReal-proxMonto)<CAJA_MINIMA;
+    var zona; // 'rojo' | 'amarillo' | 'verde'
+    if(bajoMinimo)zona='rojo';
+    else if(girarTeDejaBajoMin)zona='amarillo';
+    else zona='verde';
 
     var colorMargen=bajoMinimo?'var(--r)':(margenMin<500000?'var(--wrn)':'var(--gd)');
     var colorBg=bajoMinimo?'var(--rb)':(margenMin<500000?'var(--wrnb)':'var(--gb)');
@@ -3874,10 +3904,15 @@ function rEERR_financiero(body){
     html+='<tr><td style="padding:4px 0;color:var(--ink2)">Girado en lo que va</td><td style="padding:4px 0;text-align:right;color:var(--ink);font-weight:600">$'+f$(Math.round(sueldoGirado))+'</td></tr>';
     html+='<tr><td style="padding:4px 0;color:var(--ink2)">Pendiente de girar</td><td style="padding:4px 0;text-align:right;color:'+(sueldoPendiente>0?'var(--o)':'var(--gd)')+';font-weight:700">$'+f$(Math.round(sueldoPendiente))+'</td></tr>';
     if(sueldoPendiente>0){
-      var icon=habilitaGiro?'✓':'⚠';
-      var color=habilitaGiro?'var(--gd)':'var(--r)';
-      var bg=habilitaGiro?'var(--gb)':'var(--rb)';
-      var msg=habilitaGiro?'Próximo giro habilitado · '+proxFecha+' · $'+f$(proxMonto):'Caja por debajo del mínimo. Posponer retiros hasta recuperar nivel.';
+      var icon,color,bg,msg;
+      if(zona==='verde'){icon='✓';color='var(--gd)';bg='var(--gb)';msg='Próximo giro habilitado · '+proxFecha+' · $'+f$(proxMonto);}
+      else if(zona==='amarillo'){
+        icon='⚠';color='#8B6A00';bg='var(--wrnb)';
+        var saldoPostGiro=saldoActualReal-proxMonto;
+        var giroParcialSeguro=Math.max(saldoActualReal-CAJA_MINIMA,0);
+        msg='Giro posible pero te deja bajo el mínimo (saldo post-giro: $'+f$(Math.round(saldoPostGiro))+'). Considerar girar parcial $'+f$(Math.round(giroParcialSeguro))+' o posponer.';
+      }
+      else {icon='⛔';color='var(--r)';bg='var(--rb)';msg='Caja por debajo del mínimo. Posponer retiros hasta recuperar nivel.';}
       html+='<tr><td colspan="2" style="padding-top:8px"><div style="background:'+bg+';color:'+color+';padding:8px 10px;border-radius:4px;font-size:12px;font-weight:600;border:1px solid '+color+'">'+icon+' '+msg+'</div></td></tr>';
     }
     html+='</table></div></div>';
@@ -4130,7 +4165,9 @@ function rEERR_dual(body){
     // Si no hay desglose de tr/ef, fallback: todo el total si fp=Transferencia
     if(!p.tr&&p.fp==='Transferencia')cobrosTr+=Number(p.t||p.total||0);
   });
-  v_comCobro+=Math.round(cobrosTr*0.03);
+  var ymMP=eerrMes.getFullYear()+'-'+String(mesNum).padStart(2,'0');
+  var COMISION_MP=eerrConfig('COMISION_MP_PCT',ymMP);
+  v_comCobro+=Math.round(cobrosTr*COMISION_MP);
 
   // 2) Provisiones fijas devengadas (hoja Provisiones_Fijas).
   //    Regla max(real, piso): si el real cargado del mes ya cubre el piso,
@@ -4237,7 +4274,7 @@ function rEERR_dual(body){
   html+=leaf('Packaging',-v_packaging);
   html+=detailRows(v_packagingD);
   html+=leaf('Comisiones de cobro (MP, transferencias)',-v_comCobro);
-  if(cobrosTr>0)html+=subleaf('3% × $'+f$(Math.round(cobrosTr))+' (cobros por transferencia del mes)',-Math.round(cobrosTr*0.03),true);
+  if(cobrosTr>0)html+=subleaf((COMISION_MP*100).toFixed(0)+'% × $'+f$(Math.round(cobrosTr))+' (cobros por transferencia del mes)',-Math.round(cobrosTr*COMISION_MP),true);
   if(v_otrosVar>0){html+=leaf('Otros variables',-v_otrosVar);html+=detailRows(v_otrosVarD);}
 
   // MARGEN DE CONTRIBUCIÓN
@@ -4349,13 +4386,16 @@ function rEERR_dual(body){
     var fact10Mejor=factTarget(0.10,mcMejorado,totEstr);
     html+='<p style="margin-top:10px;font-size:12px;color:var(--ink2);line-height:1.55">📊 <b>Lectura:</b> el techo natural de tu EBITDA% es tu MC%. Un EBITDA objetivo <b>sano</b> para Maleu hoy está entre <b>'+sanoBaja+'-'+sanoAlta+'%</b> (50-65% del MC actual). Para llegar a EBITDA +10% sin tocar el MC necesitás <b>'+fmtM(fact10Actual)+'/mes</b>; subiendo el MC a '+(mcMejorado*100).toFixed(0)+'%, te alcanza con <b>'+fmtM(fact10Mejor)+'/mes</b>. La estrategia óptima combina ambas palancas: <b>crecer facturación + subir margen</b>.</p>';
 
-    // Sensibilidad al MC% — calculada para EBITDA +8% (objetivo realista 12 meses).
+    // Sensibilidad al MC% — objetivo realista leído de Config_Maleu.
     // Fórmula exacta: Facturación = Estructura / (MC% − EBITDA%).
-    html+='<p style="margin-top:10px"><b>Sensibilidad al MC%</b> · facturación necesaria para <b>EBITDA +8%</b> (objetivo realista 12 meses):</p>';
+    var ymCfg=eerrMes.getFullYear()+'-'+String(eerrMes.getMonth()+1).padStart(2,'0');
+    var EBITDA_REALISTA=eerrConfig('EBITDA_REALISTA',ymCfg);
+    var EBITDA_ASPIRACIONAL=eerrConfig('EBITDA_ASPIRACIONAL',ymCfg);
+    html+='<p style="margin-top:10px"><b>Sensibilidad al MC%</b> · facturación necesaria para <b>EBITDA +'+(EBITDA_REALISTA*100).toFixed(0)+'%</b> (objetivo realista 12 meses):</p>';
     html+='<table class="eerr-tbl"><tbody>';
     [0,3,6,9,12].forEach(function(deltaPP){
       var mc=mcRatio+deltaPP/100;
-      var v=factTarget(0.08,mc,totEstr);
+      var v=factTarget(EBITDA_REALISTA,mc,totEstr);
       var lblMc='MC '+(mc*100).toFixed(0)+'%';
       if(deltaPP===0)lblMc+=' <span style="opacity:.6">(actual)</span>';
       else lblMc+=' <span class="pct">+'+deltaPP+'pp</span>';
@@ -4373,10 +4413,10 @@ function rEERR_dual(body){
       html+='<tr><td>'+lblMc+' <span style="font-size:10px;color:var(--ink4)">'+realStr+'</span></td><td class="num" style="font-weight:700">'+fmtM(v)+'</td><td style="text-align:right;font-size:11px">'+contexto+'</td></tr>';
     });
     html+='</tbody></table>';
-    // Referencia aspiracional EBITDA +15%
-    var ref15a=factTarget(0.15,mcRatio+0.06,totEstr);
-    var ref15b=factTarget(0.15,mcRatio+0.11,totEstr);
-    html+='<p style="margin-top:8px;font-size:11px;color:var(--ink3);line-height:1.5"><b>Referencia largo plazo</b> · para EBITDA +15% los números se multiplican: con MC '+((mcRatio+0.06)*100).toFixed(0)+'% se necesitan <b>'+fmtM(ref15a)+'</b>, con MC '+((mcRatio+0.11)*100).toFixed(0)+'% se necesitan <b>'+fmtM(ref15b)+'</b>. EBITDA +15% no es objetivo a 12 meses.</p>';
+    // Referencia aspiracional EBITDA aspiracional
+    var ref15a=factTarget(EBITDA_ASPIRACIONAL,mcRatio+0.06,totEstr);
+    var ref15b=factTarget(EBITDA_ASPIRACIONAL,mcRatio+0.11,totEstr);
+    html+='<p style="margin-top:8px;font-size:11px;color:var(--ink3);line-height:1.5"><b>Referencia largo plazo</b> · para EBITDA +'+(EBITDA_ASPIRACIONAL*100).toFixed(0)+'% los números se multiplican: con MC '+((mcRatio+0.06)*100).toFixed(0)+'% se necesitan <b>'+fmtM(ref15a)+'</b>, con MC '+((mcRatio+0.11)*100).toFixed(0)+'% se necesitan <b>'+fmtM(ref15b)+'</b>. EBITDA +'+(EBITDA_ASPIRACIONAL*100).toFixed(0)+'% no es objetivo a 12 meses.</p>';
     html+='<p style="margin-top:10px;font-size:11px;color:var(--ink3);line-height:1.55"><b>Tu objetivo realista a 12 meses:</b> MC '+(mcPct+5).toFixed(0)+'-'+(mcPct+7).toFixed(0)+'% + facturación $12-15M/mes → EBITDA +6 a +9% sostenido. <b>Volumen te lleva a break-even; margen te lleva a rentabilidad.</b></p>';
     html+='</div>';
   }
