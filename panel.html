@@ -3646,19 +3646,21 @@ function eerrFlujoMes(mn,anio){
   function _normCat(c){var s=String(c||'').trim().toLowerCase();if(s.length>3&&s.charAt(s.length-1)==='s')s=s.substring(0,s.length-1);return s;}
   function _isExt(t){return t.indexOf('regalo')>=0||t.indexOf('perd')>=0||t.indexOf('falt')>=0||t.indexOf('robo')>=0||t.indexOf('extraord')>=0;}
   function _isCapex(t){return t.indexOf('freezer')>=0||t.indexOf('heladera')>=0||t.indexOf('horno')>=0||t.indexOf('vehic')>=0||t.indexOf('notebook')>=0||t.indexOf('computad')>=0||t.indexOf('mobiliario')>=0;}
-  // Cobranzas con fallback fc->fe
+  // Cobranzas con fallback fc->fe + tracking de cobertura FC
   var canalesValidos={Home:1,Pilar:1,Clubes:1,Red:1,B2B:1,Catering:1};
-  var cobr=0;
+  var cobr=0,cobrEst=0;
   ((D&&D.pedidos)||[]).forEach(function(p){
     if(p.pago!=='Cobrado')return;
     if(!canalesValidos[p.h])return;
     var monto=Number(p.t||p.total||0);if(!monto)return;
-    var ms=null;
+    var ms=null,estimado=false;
     if(p.fc){var pp=String(p.fc).split('/');if(pp.length>=2)ms=Number(pp[1]);}
-    if(!ms&&p.fe){var pp2=String(p.fe).split('/');if(pp2.length>=2)ms=Number(pp2[1]);}
+    if(!ms&&p.fe){var pp2=String(p.fe).split('/');if(pp2.length>=2){ms=Number(pp2[1]);estimado=true;}}
     if(ms!==mn)return;
     cobr+=monto;
+    if(estimado)cobrEst+=monto;
   });
+  var coberturaFC=cobr>0?Math.round((1-cobrEst/cobr)*100):0;
   var otros=0;
   ((D&&D.ingresos)||[]).filter(function(i){return i.mes===mesNom;}).forEach(function(i){otros+=Number(i.$)||0;});
   var entradas=cobr+otros;
@@ -3667,7 +3669,7 @@ function eerrFlujoMes(mn,anio){
   ((D&&D.gastos)||[]).filter(function(g){return g.mes===mesNom;}).forEach(function(g){
     salidas+=Number(g.$)||0;
   });
-  return {entradas:entradas,salidas:salidas,flujo:entradas-salidas,cobranzas:cobr};
+  return {entradas:entradas,salidas:salidas,flujo:entradas-salidas,cobranzas:cobr,cobertura:coberturaFC};
 }
 
 function rEERR_financiero(body){
@@ -3963,23 +3965,32 @@ function rEERR_financiero(body){
     html+='</table></div></div>';
 
     // ── Sub-indicadores: alerta de flujo recurrente + proyección de cierre ──
-    // 1) Promedio últimos 3 meses cerrados
+    // 1) Filtro inteligente: solo promediar meses cerrados con cobertura FC ≥ 80%.
+    var COBERTURA_MIN=80;
     var meses3=[];
     for(var i=1;i<=3;i++){
       var d=new Date(eerrMes.getFullYear(),eerrMes.getMonth()-i,1);
-      meses3.push(eerrFlujoMes(d.getMonth()+1,d.getFullYear()));
+      var fm=eerrFlujoMes(d.getMonth()+1,d.getFullYear());
+      fm._mn=d.getMonth()+1;fm._mesNom=MES_ORD[d.getMonth()];
+      fm._tieneActividad=(fm.entradas>0||fm.salidas>0);
+      fm._calibrado=fm._tieneActividad&&fm.cobertura>=COBERTURA_MIN;
+      meses3.push(fm);
     }
-    var sumFlujo=0,nValidos=0;
-    meses3.forEach(function(m){if(m.entradas>0||m.salidas>0){sumFlujo+=m.flujo;nValidos++;}});
-    var flujoProm=nValidos>0?sumFlujo/nValidos:0;
-    // Días de pista (si flujo promedio negativo)
-    var diasPista=null;
-    if(flujoProm<0&&saldoActualReal>0){
-      var burnDiario=Math.abs(flujoProm)/30;
-      diasPista=Math.round(saldoActualReal/burnDiario);
+    var calibrados=meses3.filter(function(m){return m._calibrado;});
+    var enCalibracion=calibrados.length<2;
+    var flujoProm=null,diasPista=null;
+    if(!enCalibracion){
+      var sumFlujo=0;
+      calibrados.forEach(function(m){sumFlujo+=m.flujo;});
+      flujoProm=sumFlujo/calibrados.length;
+      if(flujoProm<0&&saldoActualReal>0){
+        var burnDiario=Math.abs(flujoProm)/30;
+        diasPista=Math.round(saldoActualReal/burnDiario);
+      }
     }
     var alertaColor,alertaBg,alertaIcon,alertaTxt;
-    if(flujoProm>=0){alertaColor='var(--gd)';alertaBg='var(--gb)';alertaIcon='✓';alertaTxt='Flujo recurrente positivo · operación auto-sostenible';}
+    if(enCalibracion){alertaColor='var(--ink3)';alertaBg='var(--cr)';alertaIcon='⏳';alertaTxt='Pista: dato insuficiente, esperar a tener 2 meses calibrados (cobertura FC ≥80%).';}
+    else if(flujoProm>=0){alertaColor='var(--gd)';alertaBg='var(--gb)';alertaIcon='✓';alertaTxt='Flujo recurrente positivo · operación auto-sostenible';}
     else if(diasPista===null||diasPista>=90){alertaColor='var(--gd)';alertaBg='var(--gb)';alertaIcon='✓';alertaTxt='Pista holgada · '+diasPista+' días al ritmo actual';}
     else if(diasPista>=30){alertaColor='#8B6A00';alertaBg='var(--wrnb)';alertaIcon='⚠';alertaTxt='Pista ajustada · solo '+diasPista+' días al ritmo actual. Acelerar cobranzas o reducir egresos.';}
     else {alertaColor='var(--r)';alertaBg='var(--rb)';alertaIcon='⛔';alertaTxt='Pista crítica · '+diasPista+' días. Acción inmediata: cobrar cartera y diferir pagos no esenciales.';}
@@ -3995,10 +4006,23 @@ function rEERR_financiero(body){
 
     html+='<div style="border-top:1px solid var(--cd);padding:12px 14px">';
     html+='<div style="font-size:11px;font-weight:700;color:var(--b);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">Alerta temprana de caja</div>';
+    if(enCalibracion){
+      html+='<div style="background:var(--ol);color:#8B3A0E;padding:8px 10px;border-radius:4px;font-size:11px;font-weight:500;border:1px solid var(--o);margin-bottom:8px;line-height:1.5"><b>⚠ Datos en calibración.</b> El flujo histórico incluye meses con cobertura FC parcial y/o saldos iniciales faltantes. La alerta se considera confiable a partir de tener <b>2 meses cerrados con cobertura FC ≥ 80%</b> y snapshots de saldo completos.</div>';
+    }
     html+='<div style="background:'+alertaBg+';color:'+alertaColor+';padding:8px 10px;border-radius:4px;font-size:12px;font-weight:600;border:1px solid '+alertaColor+';margin-bottom:8px">'+alertaIcon+' '+alertaTxt+'</div>';
     html+='<table style="width:100%;font-size:12px;font-variant-numeric:tabular-nums;border-collapse:collapse">';
-    html+='<tr><td style="padding:4px 0;color:var(--ink2)">Flujo promedio últimos 3 meses</td><td style="padding:4px 0;text-align:right;color:'+(flujoProm>=0?'var(--gd)':'var(--r)')+';font-weight:700">'+(flujoProm>=0?'+':'−')+'$'+f$(Math.abs(Math.round(flujoProm)))+'/mes</td></tr>';
-    if(diasPista!==null)html+='<tr><td style="padding:4px 0;color:var(--ink2)">Días de pista al ritmo actual</td><td style="padding:4px 0;text-align:right;color:var(--ink);font-weight:700">'+diasPista+' días</td></tr>';
+    if(flujoProm!==null){
+      html+='<tr><td style="padding:4px 0;color:var(--ink2)">Flujo promedio (meses calibrados: '+calibrados.length+')</td><td style="padding:4px 0;text-align:right;color:'+(flujoProm>=0?'var(--gd)':'var(--r)')+';font-weight:700">'+(flujoProm>=0?'+':'−')+'$'+f$(Math.abs(Math.round(flujoProm)))+'/mes</td></tr>';
+      if(diasPista!==null)html+='<tr><td style="padding:4px 0;color:var(--ink2)">Días de pista al ritmo actual</td><td style="padding:4px 0;text-align:right;color:var(--ink);font-weight:700">'+diasPista+' días</td></tr>';
+    }
+    // Detalle de los 3 meses con su estado de calibración
+    meses3.forEach(function(m){
+      if(!m._tieneActividad)return;
+      var estado;
+      if(m._calibrado)estado='<span style="color:var(--gd)">✓ calibrado · '+m.cobertura+'% FC</span>';
+      else estado='<span style="color:var(--wrn)">⚠ '+m.cobertura+'% FC (excluido)</span>';
+      html+='<tr><td style="padding:3px 0;color:var(--ink3);font-size:11px;padding-left:10px">'+m._mesNom+' · '+(m.flujo>=0?'+':'−')+'$'+f$(Math.abs(Math.round(m.flujo)))+'</td><td style="padding:3px 0;text-align:right;font-size:10px">'+estado+'</td></tr>';
+    });
     html+='</table>';
     html+='</div>';
 
@@ -4012,7 +4036,7 @@ function rEERR_financiero(body){
     html+='<tr style="border-top:1px solid var(--cd)"><td style="padding:6px 0 4px;color:var(--b);font-weight:700">Flujo proyectado al cierre</td><td style="padding:6px 0 4px;text-align:right;color:'+(flujoProy>=0?'var(--gd)':'var(--r)')+';font-weight:800;font-size:14px">'+(flujoProy>=0?'+':'−')+'$'+f$(Math.abs(Math.round(flujoProy)))+'</td></tr>';
     html+='<tr><td style="padding:4px 0;color:var(--ink2)">Saldo proyectado al cierre</td><td style="padding:4px 0;text-align:right;color:var(--b);font-weight:700">$'+f$(Math.round(saldoProyFinal))+'</td></tr>';
     html+='</table>';
-    html+='<p style="margin-top:8px;font-size:10px;color:var(--ink4);font-style:italic;line-height:1.5">Proyección lineal: extrapola el ritmo actual al fin de mes. No considera estacionalidad ni cobros/pagos pendientes específicos.</p>';
+    html+='<p style="margin-top:8px;font-size:10px;color:var(--ink4);font-style:italic;line-height:1.5">Proyección lineal: extrapola el ritmo actual al fin de mes. <b>En la primera semana del mes suele subestimar</b> (las cobranzas grandes vienen después). No considera estacionalidad ni cobros/pagos pendientes específicos. Tomar como indicativo, no como predicción precisa.</p>';
     html+='</div>';
 
     html+='</div>'; // /caja-card
