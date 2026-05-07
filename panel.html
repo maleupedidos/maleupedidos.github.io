@@ -2050,26 +2050,26 @@ function load(){
     var c=localStorage.getItem('ma3');if(c&&!D){D=JSON.parse(c);if(!_hayEditorAbierto())render();$('ld').style.display='none';}
   });
 }
-// Refresh manual desde tab Pedidos: usa endpoint LIGHT (~3s vs ~12s del admin
-// completo). Mergea solo pedidos+canales en D y re-renderiza el tab Pedidos.
-// El resto del estado (caja, stock, vendedores, etc.) NO se toca — cuando el
-// usuario navegue a otro tab que lo necesite, el _refresh por foco lo cargará.
+// Refresh manual desde tab Pedidos: usa endpoint LIGHT (~5s vs ~17s admin).
+// SIN loader fullscreen — solo cambia el texto del botón a "Buscando…" para
+// que el usuario pueda seguir scrolleando / mirando los pedidos actuales
+// mientras corre. Mergea solo pedidos+canales en D y re-renderiza el tab.
 function actualizarPedidos(){
   var btn=$('btnReloadPed');
-  if(btn){btn.disabled=true;btn.classList.add('loading');}
+  var lbl=btn?btn.querySelector('span'):null;
+  var lblOrig=lbl?lbl.textContent:'';
+  if(btn){btn.disabled=true;btn.classList.add('loading');if(lbl)lbl.textContent='Buscando pedidos nuevos…';}
   var antes={};
   if(D&&Array.isArray(D.pedidos)){
     D.pedidos.forEach(function(p){if(p&&p.h&&p.n)antes[p.h+'|'+p.n]=true;});
   }
   var editando=_hayEditorAbierto();
-  if(!editando)showLoader('Buscando pedidos nuevos...');
+  function _restoreBtn(){if(btn){btn.disabled=false;btn.classList.remove('loading');if(lbl)lbl.textContent=lblOrig||'Actualizar pedidos';}}
   fetch(API+'?action=pedidosLight&t='+Date.now())
     .then(function(r){return r.json();})
     .then(function(d){
-      if(!editando)hideLoader(true);
-      if(btn){btn.disabled=false;btn.classList.remove('loading');}
+      _restoreBtn();
       if(!d||!Array.isArray(d.pedidos)){toast('Sin respuesta del servidor');return;}
-      // Mergear pedidos y canales en D, persistir cache, re-render solo de Pedidos.
       if(!D)D={};
       D.pedidos=d.pedidos;
       if(Array.isArray(d.canales))D.canales=d.canales;
@@ -2084,18 +2084,15 @@ function actualizarPedidos(){
       if(editando){
         if(nuevos>0)toast('+'+nuevos+' pedido'+(nuevos>1?'s':'')+' nuevo'+(nuevos>1?'s':'')+' (aparecen al cerrar la edición)');
         else toast('Sin pedidos nuevos');
-        // Marcar pendiente de render para cuando se cierre la edición
         _pendingLoadRender=true;
       } else {
         if(nuevos>0)toast('+'+nuevos+' pedido'+(nuevos>1?'s':'')+' nuevo'+(nuevos>1?'s':'')+' ✨');
         else toast('Sin pedidos nuevos');
-        // Re-render solo del tab Pedidos (más rápido que render() completo)
         try{rPedidos();}catch(e){render();}
       }
     })
     .catch(function(){
-      if(!editando)hideLoader(true);
-      if(btn){btn.disabled=false;btn.classList.remove('loading');}
+      _restoreBtn();
       toast('Error al actualizar');
     });
 }
@@ -3713,13 +3710,35 @@ function rEgresos(){
     fInner.appendChild(catDiv);
   } else if(catDiv.parentNode!==fInner){fInner.appendChild(catDiv);}
   var catLbl=groupByProv?'Proveedor':'Categoría';
+  // Buscador inline cuando hay muchas categorías/proveedores (>8)
+  var needSearch=catsArr.length>8;
+  if(typeof window._egrSearch!=='string')window._egrSearch='';
+  var srch=String(window._egrSearch||'').toLowerCase().trim();
+  var catsView=needSearch&&srch?catsArr.filter(function(c){return c.toLowerCase().indexOf(srch)>=0;}):catsArr;
   var catHtml='<span style="font-size:10px;color:var(--bl);font-weight:800;flex:none;padding-right:4px">'+catLbl.toUpperCase()+':</span>';
-  if(!catsArr.length){catHtml+='<span style="font-size:11px;color:var(--bl)">(sin movimientos)</span>';}
-  catsArr.forEach(function(c){
+  if(needSearch){
+    catHtml+='<input id="egrSearchInp" type="text" placeholder="🔍 Buscar..." value="'+srch.replace(/"/g,'&quot;')+'" style="flex:none;width:130px;padding:6px 10px;border-radius:50px;border:2px solid var(--b);background:#fff;color:var(--b);font-size:11px;font-weight:600;font-family:inherit;outline:none">';
+  }
+  if(!catsView.length){catHtml+='<span style="font-size:11px;color:var(--bl)">'+(srch?'(sin coincidencias)':'(sin movimientos)')+'</span>';}
+  // Mantener seleccionados arriba aunque no matcheen el search (para que se puedan deseleccionar)
+  var catsRender=needSearch?catsView.concat(catsSel.filter(function(c){return catsView.indexOf(c)<0;})):catsView;
+  catsRender.forEach(function(c){
     var on=catsSel.indexOf(c)>=0;
     catHtml+='<button type="button" data-c="'+c.replace(/"/g,'&quot;')+'" style="padding:6px 12px;border-radius:50px;border:2px solid var(--b);background:'+(on?'var(--b)':'transparent')+';color:'+(on?'#fff':'var(--b)')+';font-size:11px;font-weight:800;cursor:pointer;white-space:nowrap;font-family:inherit">'+c+'</button>';
   });
   catDiv.innerHTML=catHtml;
+  if(needSearch){
+    var sInp=$('egrSearchInp');
+    if(sInp){
+      sInp.oninput=function(){
+        window._egrSearch=this.value;
+        // Re-render solo los chips, sin tocar el input (evita perder foco)
+        var on=document.activeElement===sInp;
+        rEgresos();
+        if(on){var ni=$('egrSearchInp');if(ni){ni.focus();ni.setSelectionRange(ni.value.length,ni.value.length);}}
+      };
+    }
+  } else if(window._egrSearch){window._egrSearch='';}
   catDiv.querySelectorAll('button[data-c]').forEach(function(btn){
     btn.onclick=function(){
       var c=btn.getAttribute('data-c');var i=catsSel.indexOf(c);
@@ -3777,25 +3796,41 @@ function rEgresos(){
     if(!_enPeriodo(m))return false;
     return true;
   });
-  // KPIs: total, # movimientos, ticket prom, top categoría/proveedor
+  // KPIs: total, # movimientos, top o período, ticket prom (solo si n≥3)
   var totEf=0,totMp=0,n=filt.length;
-  var byCat={};
+  var byCat={},minTs=Infinity,maxTs=-Infinity;
   filt.forEach(function(m){
     if(m.met==='Efectivo')totEf+=m.$;else totMp+=m.$;
     var k=catKey(m);if(!byCat[k])byCat[k]={n:0,$:0};byCat[k].n++;byCat[k].$+=m.$;
+    var ts=_movTs(m);if(ts){if(ts<minTs)minTs=ts;if(ts>maxTs)maxTs=ts;}
   });
   var tot=totEf+totMp;
   var topCat='—',topVal=0;
   Object.keys(byCat).forEach(function(k){if(byCat[k].$>topVal){topVal=byCat[k].$;topCat=k;}});
   var ticket=n>0?Math.round(tot/n):0;
   var lblTot=_egrSub==='compras'?'Total Compras':'Total Gastos';
+  var nGroups=Object.keys(byCat).length;
+  // 4ta KPI: cuando hay ≥2 grupos → "Top X". Cuando hay 1 solo grupo y ≥2 movs → "Período" (rango de fechas).
   var lblTop=groupByProv?'Top proveedor':'Top categoría';
+  var fmtDM=function(ts){var d=new Date(ts);return String(d.getDate()).padStart(2,'0')+'/'+String(d.getMonth()+1).padStart(2,'0');};
+  var kpi4='';
+  if(nGroups>=2){
+    kpi4='<div class="card"><div class="kl">'+lblTop+'</div><div class="kv" style="font-size:14px">'+topCat+'</div><div class="ks">$'+f$(topVal)+'</div></div>';
+  } else if(nGroups===1 && n>=2 && isFinite(minTs)){
+    var rangoLbl=minTs===maxTs?fmtDM(minTs):fmtDM(minTs)+' → '+fmtDM(maxTs);
+    var diasDif=Math.round((maxTs-minTs)/86400000);
+    kpi4='<div class="card"><div class="kl">Período</div><div class="kv" style="font-size:14px">'+rangoLbl+'</div><div class="ks">'+(diasDif>0?diasDif+' día(s) entre pagos':'Mismo día')+'</div></div>';
+  } else if(nGroups===1){
+    kpi4='<div class="card"><div class="kl">'+lblTop+'</div><div class="kv" style="font-size:14px">'+topCat+'</div><div class="ks">$'+f$(topVal)+'</div></div>';
+  }
+  // Ticket promedio: solo si hay ≥3 movs (con menos no informa nada)
+  var kpiTicket=n>=3?'<div class="card"><div class="kl">Ticket promedio</div><div class="kv">$'+f$(ticket)+'</div></div>':'';
   $('egrKpi').innerHTML=
     '<div class="card acc"><div class="kl">'+lblTot+'</div><div class="kv">$'+f$(tot)+'</div><div class="ks">'+n+' movimiento(s)</div></div>'+
     '<div class="card"><div class="kl">Efectivo</div><div class="kv">$'+f$(totEf)+'</div></div>'+
     '<div class="card"><div class="kl">Mercado Pago</div><div class="kv">$'+f$(totMp)+'</div></div>'+
-    '<div class="card"><div class="kl">'+lblTop+'</div><div class="kv" style="font-size:14px">'+topCat+'</div><div class="ks">$'+f$(topVal)+'</div></div>'+
-    '<div class="card"><div class="kl">Ticket promedio</div><div class="kv">$'+f$(ticket)+'</div></div>';
+    kpi4+
+    kpiTicket;
   // Breakdown ordenado desc por monto
   var brkTitle=$('egrBreakTitle');
   if(brkTitle)brkTitle.innerHTML=(groupByProv?'🏭 Por proveedor':'📊 Por categoría');
@@ -3817,11 +3852,78 @@ function rEgresos(){
       };
     });
   }
-  // Lista detallada (ordenada por timestamp según _egrOrden)
+  // Lista detallada
   var _ord=window._egrOrden==='asc'?1:-1;
-  filt.sort(function(a,b){return _ord*((_movTs(a)||0)-(_movTs(b)||0));});
   var list=$('egrList');list.innerHTML='';
   if(!filt.length){list.innerHTML='<div class="empty"><i>&#128196;</i><p>Sin movimientos en este filtro</p></div>';return;}
+  // Modo "agrupado por proveedor" cuando estás viendo Compras o Gastos→Proveedor.
+  // Muestra cards-contenedor con header "Proveedor · n pagos · $total" y sub-cards numeradas (1°, 2°, ...).
+  // Si un proveedor tiene 1 solo movimiento → card normal.
+  if(groupByProv){
+    var grupos={};
+    filt.forEach(function(m){
+      var k=catKey(m);if(!grupos[k])grupos[k]={mov:[],tot:0};
+      grupos[k].mov.push(m);grupos[k].tot+=m.$;
+    });
+    // Ordenar grupos por total desc (los que más plata se llevan, primero)
+    var keys=Object.keys(grupos).sort(function(a,b){return grupos[b].tot-grupos[a].tot;});
+    keys.forEach(function(k){
+      var g=grupos[k];
+      // Subordenar movs por timestamp ascendente (para numerar 1° pago = más viejo)
+      g.mov.sort(function(a,b){return (_movTs(a)||0)-(_movTs(b)||0);});
+      if(g.mov.length===1){
+        var m=g.mov[0];
+        var meta=m.f+' · '+m.met+(m.not?' · '+m.not:'');
+        var el=document.createElement('div');el.className='gl';
+        el.innerHTML='<div class="gl-info"><div class="gl-cat" style="color:var(--r)">➖ '+m.cat+'</div><div class="gl-con">'+m.con+'</div><div class="gl-meta">'+meta+'</div></div><div class="gl-$" style="color:var(--r)">-$'+f$(m.$)+'</div>';
+        list.appendChild(el);
+        return;
+      }
+      // Grupo con 2+ pagos → card-contenedor
+      var wrapEl=document.createElement('div');
+      wrapEl.style.cssText='border:1px solid var(--cd);border-radius:10px;background:#fff;margin-bottom:10px;overflow:hidden';
+      // Header del grupo
+      var hdr=document.createElement('div');
+      hdr.style.cssText='padding:12px 14px;background:linear-gradient(135deg,#FFF6F0 0%,#FFEFE0 100%);border-bottom:1px solid var(--cd);display:flex;justify-content:space-between;align-items:center;gap:10px';
+      var firstMov=g.mov[0],lastMov=g.mov[g.mov.length-1];
+      var firstD=firstMov.f.split(' ')[0],lastD=lastMov.f.split(' ')[0];
+      var rangoTxt=firstD===lastD?firstD:firstD+' → '+lastD;
+      hdr.innerHTML='<div style="flex:1;min-width:0">'+
+        '<div style="font-weight:800;font-size:14px;color:var(--b);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">🏭 '+k+'</div>'+
+        '<div style="font-size:11px;color:var(--bl);margin-top:2px">'+g.mov.length+' pagos · '+rangoTxt+'</div>'+
+        '</div>'+
+        '<div style="text-align:right;flex:none">'+
+        '<div style="font-weight:800;font-size:15px;color:var(--r)">-$'+f$(g.tot)+'</div>'+
+        '<div style="font-size:10px;color:var(--bl);text-transform:uppercase;letter-spacing:.05em">Total</div>'+
+        '</div>';
+      wrapEl.appendChild(hdr);
+      // Sub-cards numeradas (orden controlado por _egrOrden: si es desc, invertimos)
+      var ordMov=_ord===1?g.mov:g.mov.slice().reverse();
+      var totMov=g.mov.length;
+      ordMov.forEach(function(m){
+        // Número del pago en orden cronológico ascendente
+        var idx=g.mov.indexOf(m)+1;
+        var ordLbl=totMov===2?(idx===1?'1° pago · seña':'2° pago · saldo'):(idx+'° pago de '+totMov);
+        var pct=g.tot>0?Math.round(m.$/g.tot*100):0;
+        var meta=m.f+' · '+m.met+(m.not?' · '+m.not:'');
+        var sub=document.createElement('div');
+        sub.style.cssText='padding:10px 14px;border-top:1px solid var(--cd);display:flex;justify-content:space-between;align-items:center;gap:10px;background:#fff';
+        sub.innerHTML='<div style="flex:1;min-width:0">'+
+          '<div style="display:inline-block;padding:2px 8px;border-radius:50px;background:var(--b);color:#fff;font-size:9px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;margin-bottom:4px">'+ordLbl+'</div>'+
+          '<div style="font-size:11px;color:var(--bl);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+meta+'</div>'+
+          '</div>'+
+          '<div style="text-align:right;flex:none">'+
+          '<div style="font-weight:800;font-size:13px;color:var(--r)">-$'+f$(m.$)+'</div>'+
+          '<div style="font-size:10px;color:var(--bl)">'+pct+'%</div>'+
+          '</div>';
+        wrapEl.appendChild(sub);
+      });
+      list.appendChild(wrapEl);
+    });
+    return;
+  }
+  // Modo lista plana (sub-tab Gastos viendo por categoría)
+  filt.sort(function(a,b){return _ord*((_movTs(a)||0)-(_movTs(b)||0));});
   filt.forEach(function(m){
     var meta=m.f+' · '+m.met+(m.not?' · '+m.not:'');
     var el=document.createElement('div');el.className='gl';
