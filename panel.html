@@ -3605,9 +3605,18 @@ function rCaja(){
 //   Gastos  = resto de categorías (Marketing, Nafta, Sueldo, etc.)
 // Reusa el mismo patrón de filtros de período/orden que rCaja().
 var _egrSub=(function(){try{return localStorage.getItem('maleu_egr_sub')||'compras';}catch(e){return'compras';}})();
+// Modo de agrupación dentro de sub-tab Gastos: 'cat' (default) o 'prov' (agrupa por proveedor/concepto limpio)
+var _egrViewBy=(function(){try{return localStorage.getItem('maleu_egr_viewby')||'cat';}catch(e){return'cat';}})();
 function egrSwitch(s){
   _egrSub=s;try{localStorage.setItem('maleu_egr_sub',s);}catch(e){}
   document.querySelectorAll('#p-egresos .ist').forEach(function(b){b.classList.toggle('on',b.dataset.st===s);});
+  // Reset del filtro de cat seleccionada al cambiar de sub-tab/modo (sino quedan filtros viejos)
+  window._egrCats=[];
+  rEgresos();
+}
+function egrSwitchView(v){
+  _egrViewBy=v;try{localStorage.setItem('maleu_egr_viewby',v);}catch(e){}
+  window._egrCats=[];
   rEgresos();
 }
 function rEgresos(){
@@ -3673,9 +3682,29 @@ function rEgresos(){
     return m.cat!=='Proveedor';
   });
   function _cleanProv(s){s=String(s||'').trim();s=s.replace(/^pago\s*[a:\-]\s*/i,'');return s||'(sin proveedor)';}
-  var catKey=_egrSub==='compras'?function(m){return _cleanProv(m.con);}:function(m){return m.cat||'Otro';};
+  // Resolución del key de agrupación:
+  //  - Compras: siempre por proveedor (concepto limpio)
+  //  - Gastos: según _egrViewBy → 'cat' (por categoría) o 'prov' (por proveedor/concepto)
+  var groupByProv=(_egrSub==='compras')||(_egrSub==='gastos'&&_egrViewBy==='prov');
+  var catKey=groupByProv?function(m){return _cleanProv(m.con);}:function(m){return m.cat||'Otro';};
   var catSet={};subGastos.forEach(function(m){catSet[catKey(m)]=1;});
   var catsArr=Object.keys(catSet).sort();
+  // Toggle "Ver por:" sólo en sub-tab Gastos (Compras siempre va por proveedor)
+  var viewDiv=$('egrViewToggle');
+  if(_egrSub==='gastos'){
+    if(!viewDiv){
+      viewDiv=document.createElement('div');viewDiv.id='egrViewToggle';
+      viewDiv.style.cssText='display:flex;gap:6px;align-items:center;padding-bottom:2px';
+      fInner.appendChild(viewDiv);
+    } else if(viewDiv.parentNode!==fInner){fInner.appendChild(viewDiv);}
+    var vbCat=_egrViewBy==='cat',vbPr=_egrViewBy==='prov';
+    viewDiv.innerHTML='<span style="font-size:10px;color:var(--bl);font-weight:800;flex:none;padding-right:4px">VER POR:</span>'+
+      '<button type="button" data-vb="cat" style="padding:6px 12px;border-radius:50px;border:2px solid var(--b);background:'+(vbCat?'var(--b)':'transparent')+';color:'+(vbCat?'#fff':'var(--b)')+';font-size:11px;font-weight:800;cursor:pointer;font-family:inherit">📊 Categoría</button>'+
+      '<button type="button" data-vb="prov" style="padding:6px 12px;border-radius:50px;border:2px solid var(--b);background:'+(vbPr?'var(--b)':'transparent')+';color:'+(vbPr?'#fff':'var(--b)')+';font-size:11px;font-weight:800;cursor:pointer;font-family:inherit">🏭 Proveedor</button>';
+    viewDiv.querySelectorAll('button[data-vb]').forEach(function(btn){
+      btn.onclick=function(){egrSwitchView(btn.getAttribute('data-vb'));};
+    });
+  } else if(viewDiv){viewDiv.remove();}
   // Render filtro de categoría
   var catDiv=$('egrCatFilter');
   if(!catDiv){
@@ -3683,7 +3712,7 @@ function rEgresos(){
     catDiv.style.cssText='display:flex;gap:6px;overflow-x:auto;padding-bottom:2px;align-items:center;flex-wrap:nowrap';
     fInner.appendChild(catDiv);
   } else if(catDiv.parentNode!==fInner){fInner.appendChild(catDiv);}
-  var catLbl=_egrSub==='compras'?'Proveedor':'Categoría';
+  var catLbl=groupByProv?'Proveedor':'Categoría';
   var catHtml='<span style="font-size:10px;color:var(--bl);font-weight:800;flex:none;padding-right:4px">'+catLbl.toUpperCase()+':</span>';
   if(!catsArr.length){catHtml+='<span style="font-size:11px;color:var(--bl)">(sin movimientos)</span>';}
   catsArr.forEach(function(c){
@@ -3760,7 +3789,7 @@ function rEgresos(){
   Object.keys(byCat).forEach(function(k){if(byCat[k].$>topVal){topVal=byCat[k].$;topCat=k;}});
   var ticket=n>0?Math.round(tot/n):0;
   var lblTot=_egrSub==='compras'?'Total Compras':'Total Gastos';
-  var lblTop=_egrSub==='compras'?'Top proveedor':'Top categoría';
+  var lblTop=groupByProv?'Top proveedor':'Top categoría';
   $('egrKpi').innerHTML=
     '<div class="card acc"><div class="kl">'+lblTot+'</div><div class="kv">$'+f$(tot)+'</div><div class="ks">'+n+' movimiento(s)</div></div>'+
     '<div class="card"><div class="kl">Efectivo</div><div class="kv">$'+f$(totEf)+'</div></div>'+
@@ -3769,7 +3798,7 @@ function rEgresos(){
     '<div class="card"><div class="kl">Ticket promedio</div><div class="kv">$'+f$(ticket)+'</div></div>';
   // Breakdown ordenado desc por monto
   var brkTitle=$('egrBreakTitle');
-  if(brkTitle)brkTitle.innerHTML=(_egrSub==='compras'?'🏭 Por proveedor':'📊 Por categoría');
+  if(brkTitle)brkTitle.innerHTML=(groupByProv?'🏭 Por proveedor':'📊 Por categoría');
   var brk=$('egrBreakdown');brk.innerHTML='';
   var ordCats=Object.keys(byCat).sort(function(a,b){return byCat[b].$-byCat[a].$;});
   if(!ordCats.length){
