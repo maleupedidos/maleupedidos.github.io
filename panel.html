@@ -3782,20 +3782,46 @@ function rEgresos(){
   $('egrFechaInp').onchange=function(){if(this.value)window._egrPeriodo='fecha:'+this.value;else window._egrPeriodo='';rEgresos();};
   $('egrSemSel').onchange=function(){window._egrPeriodo=this.value?'sem:'+this.value:'';rEgresos();};
   $('egrMesSel').onchange=function(){window._egrPeriodo=this.value?'mes:'+this.value:'';rEgresos();};
+  function _enPeriodoEspecifico(m,p){
+    if(!p)return false;
+    var ts=_movTs(m);if(!ts)return false;var d=new Date(ts);
+    if(p.indexOf('fecha:')===0){var fp=p.slice(6).split('-');return d.getFullYear()===+fp[0]&&d.getMonth()===+fp[1]-1&&d.getDate()===+fp[2];}
+    if(p.indexOf('sem:')===0)return _semKey(d)===p.slice(4);
+    if(p.indexOf('mes:')===0){var k=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0');return k===p.slice(4);}
+    return false;
+  }
   function _enPeriodo(m){
     if(!periodo)return true;
-    var ts=_movTs(m);if(!ts)return false;var d=new Date(ts);
-    if(periodo.indexOf('fecha:')===0){var fp=periodo.slice(6).split('-');return d.getFullYear()===+fp[0]&&d.getMonth()===+fp[1]-1&&d.getDate()===+fp[2];}
-    if(periodo.indexOf('sem:')===0)return _semKey(d)===periodo.slice(4);
-    if(periodo.indexOf('mes:')===0){var k=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0');return k===periodo.slice(4);}
-    return true;
+    return _enPeriodoEspecifico(m,periodo);
   }
+  // Período anterior (para delta vs anterior). null si no hay filtro de período.
+  function _periodoAnterior(p){
+    if(!p)return null;
+    if(p.indexOf('mes:')===0){var sp=p.slice(4).split('-');var d=new Date(+sp[0],+sp[1]-2,1);return 'mes:'+d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0');}
+    if(p.indexOf('sem:')===0){var sp2=p.slice(4).split('-');var y=+sp2[0],w=+sp2[1];if(w>1)return 'sem:'+y+'-'+String(w-1).padStart(2,'0');return 'sem:'+(y-1)+'-52';}
+    if(p.indexOf('fecha:')===0){var fp=p.slice(6).split('-');var d2=new Date(+fp[0],+fp[1]-1,+fp[2]-1);return 'fecha:'+d2.getFullYear()+'-'+String(d2.getMonth()+1).padStart(2,'0')+'-'+String(d2.getDate()).padStart(2,'0');}
+    return null;
+  }
+  function _periodoAnteriorLbl(p){
+    if(!p)return '';
+    if(p.indexOf('mes:')===0)return 'mes anterior';
+    if(p.indexOf('sem:')===0)return 'semana anterior';
+    if(p.indexOf('fecha:')===0)return 'día anterior';
+    return 'período anterior';
+  }
+  var prevPeriodo=_periodoAnterior(periodo);
+  var prevLbl=_periodoAnteriorLbl(periodo);
   // Aplicar filtros
   var filt=subGastos.filter(function(m){
     if(catsSel.length>0 && catsSel.indexOf(catKey(m))<0)return false;
     if(!_enPeriodo(m))return false;
     return true;
   });
+  // Subset del período anterior (para delta) — respeta el mismo filtro de cats
+  var filtPrev=prevPeriodo?subGastos.filter(function(m){
+    if(catsSel.length>0 && catsSel.indexOf(catKey(m))<0)return false;
+    return _enPeriodoEspecifico(m,prevPeriodo);
+  }):[];
   // KPIs: total, # movimientos, top o período, ticket prom (solo si n≥3)
   var totEf=0,totMp=0,n=filt.length;
   var byCat={},minTs=Infinity,maxTs=-Infinity;
@@ -3805,6 +3831,22 @@ function rEgresos(){
     var ts=_movTs(m);if(ts){if(ts<minTs)minTs=ts;if(ts>maxTs)maxTs=ts;}
   });
   var tot=totEf+totMp;
+  // Totales del período anterior (para delta vs anterior)
+  var totPrev=0,byCatPrev={};
+  filtPrev.forEach(function(m){
+    totPrev+=m.$;
+    var k=catKey(m);if(!byCatPrev[k])byCatPrev[k]={n:0,$:0};byCatPrev[k].n++;byCatPrev[k].$+=m.$;
+  });
+  // Helper: render del badge delta. Para gastos: subir es alerta (rojo), bajar es bueno (verde).
+  function _deltaBadge(actual,anterior,fontSize){
+    if(!prevPeriodo||anterior<=0)return '';
+    var pct=Math.round((actual-anterior)/anterior*100);
+    var arrow=pct>=10?'▲':pct<=-10?'▼':'≈';
+    var color=pct>=10?'#C62828':pct<=-10?'#2E7D32':'#888';
+    var sign=pct>0?'+':'';
+    var fs=fontSize||'11px';
+    return '<span style="color:'+color+';font-weight:800;font-size:'+fs+'">'+arrow+' '+sign+pct+'%</span>';
+  }
   var topCat='—',topVal=0;
   Object.keys(byCat).forEach(function(k){if(byCat[k].$>topVal){topVal=byCat[k].$;topCat=k;}});
   var ticket=n>0?Math.round(tot/n):0;
@@ -3825,8 +3867,19 @@ function rEgresos(){
   }
   // Ticket promedio: solo si hay ≥3 movs (con menos no informa nada)
   var kpiTicket=n>=3?'<div class="card"><div class="kl">Ticket promedio</div><div class="kv">$'+f$(ticket)+'</div></div>':'';
+  // Delta vs período anterior — se muestra como tercera línea del KPI Total cuando hay filtro de período
+  var deltaTotalLine='';
+  if(prevPeriodo && totPrev>0){
+    var pct=Math.round((tot-totPrev)/totPrev*100);
+    var arrow=pct>=10?'▲':pct<=-10?'▼':'≈';
+    var color=pct>=10?'#C62828':pct<=-10?'#2E7D32':'#888';
+    var sign=pct>0?'+':'';
+    deltaTotalLine='<div class="ks" style="color:'+color+';font-weight:700;margin-top:2px">'+arrow+' '+sign+pct+'% vs '+prevLbl+' ($'+f$(totPrev)+')</div>';
+  } else if(prevPeriodo && totPrev===0 && tot>0){
+    deltaTotalLine='<div class="ks" style="color:#888;font-weight:600;margin-top:2px">Sin movimientos en '+prevLbl+'</div>';
+  }
   $('egrKpi').innerHTML=
-    '<div class="card acc"><div class="kl">'+lblTot+'</div><div class="kv">$'+f$(tot)+'</div><div class="ks">'+n+' movimiento(s)</div></div>'+
+    '<div class="card acc"><div class="kl">'+lblTot+'</div><div class="kv">$'+f$(tot)+'</div><div class="ks">'+n+' movimiento(s)</div>'+deltaTotalLine+'</div>'+
     '<div class="card"><div class="kl">Efectivo</div><div class="kv">$'+f$(totEf)+'</div></div>'+
     '<div class="card"><div class="kl">Mercado Pago</div><div class="kv">$'+f$(totMp)+'</div></div>'+
     kpi4+
@@ -3842,7 +3895,15 @@ function rEgresos(){
     ordCats.forEach(function(k){
       var info=byCat[k];var pct=tot>0?Math.round(info.$/tot*100):0;
       var on=catsSel.indexOf(k)>=0;
-      brk.innerHTML+='<div class="card" style="cursor:pointer'+(on?';border-color:var(--b);box-shadow:0 0 0 1px var(--b)':'')+'" data-egr-c="'+k.replace(/"/g,'&quot;')+'"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><span style="font-weight:800">'+k+'</span><span style="font-size:13px;font-weight:800;color:var(--r)">$'+f$(info.$)+'</span></div><div style="display:flex;justify-content:space-between;font-size:11px;color:var(--bl)"><span>'+info.n+' movimiento(s)</span><span>'+pct+'% del total</span></div><div class="pb" style="margin-top:6px"><div class="pf o" style="width:'+pct+'%"></div></div></div>';
+      // Delta vs período anterior — solo si hay filtro de período Y existió este grupo en el anterior
+      var prevInfo=byCatPrev[k];
+      var deltaHtml='';
+      if(prevPeriodo && prevInfo && prevInfo.$>0){
+        deltaHtml=' · '+_deltaBadge(info.$,prevInfo.$,'10px');
+      } else if(prevPeriodo && (!prevInfo||prevInfo.$===0) && info.$>0){
+        deltaHtml=' · <span style="color:#888;font-weight:600;font-size:10px">nuevo</span>';
+      }
+      brk.innerHTML+='<div class="card" style="cursor:pointer'+(on?';border-color:var(--b);box-shadow:0 0 0 1px var(--b)':'')+'" data-egr-c="'+k.replace(/"/g,'&quot;')+'"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><span style="font-weight:800">'+k+'</span><span style="font-size:13px;font-weight:800;color:var(--r)">$'+f$(info.$)+'</span></div><div style="display:flex;justify-content:space-between;font-size:11px;color:var(--bl)"><span>'+info.n+' movimiento(s)'+deltaHtml+'</span><span>'+pct+'% del total</span></div><div class="pb" style="margin-top:6px"><div class="pf o" style="width:'+pct+'%"></div></div></div>';
     });
     brk.querySelectorAll('[data-egr-c]').forEach(function(card){
       card.onclick=function(){
