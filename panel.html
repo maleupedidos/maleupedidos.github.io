@@ -1957,15 +1957,21 @@ function hideLoader(force){
 // hasta que el usuario cierre el editor (cancelar / guardar).
 var _pendingLoadRender=false;
 // Detecta si el usuario está editando algo y NO debe ser interrumpido por un
-// rerender automático. Cubre: editor de productos abierto, split de origen
-// modificado (alguna divergencia respecto al default), o foco actual en un
-// input/select/textarea dentro de cualquier card de pedido o formulario de Caja.
+// rerender automático. Cubre 4 casos para no pisar lo que estoy tocando:
+//   1) Editor de productos abierto (window._ed_* o div #ed-*).
+//   2) Cualquier .origen-box que el usuario haya tocado (data-touched=1) —
+//      el listener focusin/input global lo marca al primer contacto.
+//   3) Split de origen con valores cambiados (oc>0 o dep!=qTot o prov).
+//   4) Foco actual en un control dentro de zona editable.
 function _hayEditorAbierto(){
-  // 1) Editor de productos abierto (window._ed_*)
+  // 1) Editor de productos abierto
   for(var k in window){if(k.indexOf('_ed_')===0&&window[k])return true;}
-  // 2) Split de origen tocado (oc>0 o dep!=qTot o proveedor seleccionado)
+  var edDivs=document.querySelectorAll('[id^="ed-"]:not(.hidden)');
+  if(edDivs.length>0)return true;
+  // 2 + 3) Split de origen tocado o con cambios
   var boxes=document.querySelectorAll('.origen-box');
   for(var i=0;i<boxes.length;i++){
+    if(boxes[i].dataset.touched==='1')return true;
     var prods=boxes[i].querySelectorAll('.origen-prod');
     for(var j=0;j<prods.length;j++){
       var qTot=Number(prods[j].dataset.q)||0;
@@ -1979,13 +1985,25 @@ function _hayEditorAbierto(){
     var provAll=boxes[i].querySelector('.origen-prov-all select');
     if(provAll&&provAll.value)return true;
   }
-  // 3) Foco actual en un control dentro de zona editable
+  // 4) Foco actual en un control dentro de zona editable
   var ae=document.activeElement;
   if(ae&&(ae.tagName==='INPUT'||ae.tagName==='SELECT'||ae.tagName==='TEXTAREA')){
     if(ae.closest && ae.closest('.pc, .form-card, #ajusteForm')) return true;
   }
   return false;
 }
+// Marcar como "tocada" cualquier .origen-box donde el user interactúe.
+// Esto extiende la protección de _hayEditorAbierto al caso "abrí el split,
+// todavía no cambié valores pero estoy mirando/tocando" — antes ese momento
+// dejaba al panel re-renderizar y pisaba la card.
+document.addEventListener('focusin',function(e){
+  var box=e.target.closest&&e.target.closest('.origen-box');
+  if(box)box.dataset.touched='1';
+});
+document.addEventListener('input',function(e){
+  var box=e.target.closest&&e.target.closest('.origen-box');
+  if(box)box.dataset.touched='1';
+},true);
 function load(){
   return fetch(API+'?action=admin&t='+Date.now()).then(function(r){return r.json();}).then(function(d){
     D=d;localStorage.setItem('ma3',JSON.stringify(d));sync();$('ld').style.display='none';$('dot').className='hdr-dot';try{sbUpdateMetrics();}catch(e){}
@@ -1998,17 +2016,20 @@ function load(){
 }
 // Refresh manual desde tab Pedidos: bypassa el throttle de 60s, muestra loader,
 // y al terminar avisa con toast cuántos pedidos NUEVOS aparecieron desde el snapshot.
+// SI hay edición activa (origen-box tocada / editor de productos abierto),
+// load() postpone el render automáticamente — los nuevos aparecen recién al
+// cerrar/confirmar la edición. Se avisa por toast.
 function actualizarPedidos(){
   var btn=$('btnReloadPed');
   if(btn){btn.disabled=true;btn.classList.add('loading');}
-  // Snapshot de IDs antes del refresh (excluyendo cancelados, cualquiera puede aparecer cancelado)
   var antes={};
   if(D&&Array.isArray(D.pedidos)){
     D.pedidos.forEach(function(p){if(p&&p.h&&p.n)antes[p.h+'|'+p.n]=true;});
   }
-  showLoader('Buscando pedidos nuevos...');
+  var editando=_hayEditorAbierto();
+  if(!editando)showLoader('Buscando pedidos nuevos...');
   load().then(function(){
-    hideLoader(true);
+    if(!editando)hideLoader(true);
     if(btn){btn.disabled=false;btn.classList.remove('loading');}
     var nuevos=0;
     (D.pedidos||[]).forEach(function(p){
@@ -2016,10 +2037,15 @@ function actualizarPedidos(){
       if(p.es==='Cancelado')return;
       if(!antes[p.h+'|'+p.n])nuevos++;
     });
-    if(nuevos>0)toast('+'+nuevos+' pedido'+(nuevos>1?'s':'')+' nuevo'+(nuevos>1?'s':'')+' ✨');
-    else toast('Sin pedidos nuevos');
+    if(editando){
+      if(nuevos>0)toast('+'+nuevos+' pedido'+(nuevos>1?'s':'')+' nuevo'+(nuevos>1?'s':'')+' (aparecen al cerrar la edición)');
+      else toast('Sin pedidos nuevos');
+    } else {
+      if(nuevos>0)toast('+'+nuevos+' pedido'+(nuevos>1?'s':'')+' nuevo'+(nuevos>1?'s':'')+' ✨');
+      else toast('Sin pedidos nuevos');
+    }
   }).catch(function(){
-    hideLoader(true);
+    if(!editando)hideLoader(true);
     if(btn){btn.disabled=false;btn.classList.remove('loading');}
     toast('Error al actualizar');
   });
