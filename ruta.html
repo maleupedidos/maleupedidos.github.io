@@ -269,6 +269,10 @@ select.np-input{background:var(--white) url("data:image/svg+xml;utf8,<svg xmlns=
 @keyframes loaderPulse{0%,100%{transform:scale(1);opacity:.95}50%{transform:scale(1.08);opacity:1}}
 .loader-msg{font-size:18px;font-weight:800;letter-spacing:.02em}
 .loader-sub{font-size:13px;color:rgba(242,232,199,.75);max-width:260px;line-height:1.4;font-weight:600}
+
+/* Nombre clickable que abre el Detalle de Pedido en el Panel padre */
+.ord-link{cursor:pointer;text-decoration:none;color:inherit;border-radius:4px;padding:1px 3px;margin:0 -3px;transition:background .12s,color .12s}
+.ord-link:hover{background:rgba(240,125,71,.15);color:var(--o,#F07D47)}
 </style>
 </head>
 <body>
@@ -516,6 +520,16 @@ document.addEventListener('dblclick', function(e){ e.preventDefault(); }, { pass
    ═══════════════════════════════════════════════════════════ */
 var APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxmrG5YVSshcYezk8lXFx_uxb7NFGcb9EfTXc7dsIN4rZyj73CET4mk_aKPFPDY2wNi/exec';
 var WA_NUMBER = '5491155038905';
+
+// Abre el Detalle de Pedido en el Panel padre (cuando ruta.html está embebido).
+// En standalone, no hace nada visualmente (el detalle vive en Panel).
+function _openOrdInPanel(hoja, n){
+  try{
+    if(window.parent && window.parent !== window){
+      window.parent.postMessage({type:'openOrdDetail', hoja:String(hoja), n:String(n)}, '*');
+    }
+  }catch(e){}
+}
 
 /* ═══════════════════════════════════════════════════════════
    USUARIO DE RUTA — quién marca cada entrega.
@@ -890,7 +904,11 @@ function renderArmado(){
   var faltanHoy=pedHTadeo.length-armadosHoy;
   var pedRedHoy=pedH.filter(function(e){return e.h==='Red'});
   var summaryHtml='<strong>'+faltanHoy+' por armar</strong> de '+pedHTadeo.length+' pedidos hoy';
-  if(pedRedHoy.length>0)summaryHtml+=' &middot; <strong>'+pedRedHoy.length+'</strong> Marcos retira';
+  if(pedRedHoy.length>0){
+    var vendsHoy={};pedRedHoy.forEach(function(e){var v=e.retira||'Vendedor';vendsHoy[v]=true;});
+    var nVends=Object.keys(vendsHoy).length;
+    summaryHtml+=' &middot; <strong>'+pedRedHoy.length+'</strong> para '+(nVends===1?Object.keys(vendsHoy)[0]:(nVends+' vendedores'));
+  }
   if(pedO.length>0)summaryHtml+='<span style="float:right;font-size:10px;color:var(--muted)">Otros dias: '+pedO.length+'</span>';
   document.getElementById('armadoSummary').innerHTML=summaryHtml;
 
@@ -949,7 +967,7 @@ function _canalOf(e){
 }
 function _canalLabel(c){
   if(c==='cl') return 'Clubes';
-  if(c==='re') return 'Red — Marcos retira';
+  if(c==='re') return 'Red — Para Vendedores';
   return 'Venta Directa';
 }
 
@@ -962,7 +980,12 @@ function _renderArmadoCard(e){
   var depItems=_itemsDepDe(e);
   var ocItems=_itemsOCDe(e);
   var ocSum=0;ocItems.forEach(function(p){ocSum+=p.q});
-  // Card siempre visible. Si hay items DEP, mostrar solo esos. Si no, mostrar todo el pedido.
+  // Si no hay nada que sacar del freezer (depItems vacío) y el origen ya está
+  // confirmado como Orden de Compra, ese pedido NO va al Armado: aparece en Ruta
+  // cuando llegue el día. Devolvemos null y el caller lo filtra.
+  if(depItems.length===0 && e.o==='Orden de Compra')return '';
+  // Si hay items DEP, mostrar solo esos. Si todavía no se decidió origen
+  // (origen=Pendiente) o por compat hay un pedido viejo sin oD, mostrar todo.
   var prodsToShow=depItems.length>0?depItems:e.p;
   var key=eKey(e),isDone=armadoDone[key];
   var loteStr=e.l?'Lote '+e.l:'';
@@ -976,44 +999,73 @@ function _renderArmadoCard(e){
     +cancelBtn
     +'<div class="armado-head" onclick="toggleArmado(\''+key+'\')">'
     +'<div class="armado-check">'+(isDone?'&#x2713;':'')+'</div>'
-    +'<span class="armado-name">'+e.c+retiraTag+'</span>'
+    +'<span class="armado-name"><span class="ord-link" onclick="event.stopPropagation();_openOrdInPanel(\''+e.h+'\',\''+e.id+'\')" title="Ver detalle">'+e.c+'</span>'+retiraTag+'</span>'
     +'</div>'
     +'<div class="armado-prods" onclick="toggleArmado(\''+key+'\')">'+prodText(prodsToShow)+'</div>'
     +ocTag
     +'</div>';
 }
 
-/* Render agregado para canal Red: a Tadeo no le importan los pedidos individuales
-   de los clientes de Marcos, solo qué productos sacar del freezer para entregárselos.
-   Suma cantidades por producto (solo items del depósito) y muestra una sola card.
-   Tildable: marca/destilda todos los pedidos Red de la lista al mismo tiempo. */
+/* Render agregado para canal Red: una card POR VENDEDOR (Tadeo arma una tanda
+   por vendedor cuando sale a buscar el viernes). Cada card suma los productos D
+   de TODOS los pedidos de ese vendedor para el día. Diseño preparado para
+   múltiples vendedores: el nombre se toma de e.retira (genérico). */
 function _renderArmadoRedAggregate(lista,dayKey){
-  var totals={};
+  // Agrupar por vendedor (e.retira). Si no viene, fallback a 'Vendedor'.
+  var porVendedor={};
   lista.forEach(function(e){
+    var v=e.retira||'Vendedor';
+    if(!porVendedor[v])porVendedor[v]={pedidos:[],totals:{}};
+    porVendedor[v].pedidos.push(e);
     _itemsDepDe(e).forEach(function(p){
-      if(!totals[p.a])totals[p.a]=0;
-      totals[p.a]+=p.q;
+      var t=porVendedor[v].totals;
+      if(!t[p.a])t[p.a]=0;
+      t[p.a]+=p.q;
     });
   });
-  var keys=Object.keys(totals).sort(function(a,b){return (PROD_NAMES[a]||a).localeCompare(PROD_NAMES[b]||b)});
-  if(keys.length===0)return '<div class="armado-red-empty" style="padding:14px;color:var(--muted);font-size:13px;font-style:italic;text-align:center">Marcos no retira nada del depósito (todo via OC)</div>';
-  // Marcado como armado si TODOS los pedidos del bloque están armadoDone
-  var allDone=lista.every(function(e){return armadoDone[eKey(e)]});
-  // Lista serializada de keys para el toggle masivo
-  var keysList=lista.map(function(e){return eKey(e)}).join(',');
-  var prodLines=keys.map(function(a){return '<span>'+totals[a]+'x</span> '+(PROD_NAMES[a]||a)}).join('<br>');
-  // dayKey: ISO yyyy-mm-dd. Lo pasamos al toggle para que el backend marque tambien los pedidos Red 100% OC del mismo dia que no aparecen en el bloque.
-  return '<div class="armado-cards"><div class="armado-card red'+(allDone?' done':'')+'" onclick="toggleArmadoMasivo(\''+keysList+'\',\''+(dayKey||'')+'\')">'
-    +'<div class="armado-head">'
-    +'<div class="armado-check">'+(allDone?'&#x2713;':'')+'</div>'
-    +'<span class="armado-name">Sacar para Marcos ('+lista.length+' pedido'+(lista.length>1?'s':'')+')</span>'
-    +'</div>'
-    +'<div class="armado-prods">'+prodLines+'</div>'
-    +'</div></div>';
+  var vendedores=Object.keys(porVendedor).sort();
+  if(vendedores.length===0)return '';
+  var html='<div class="armado-cards">';
+  vendedores.forEach(function(v){
+    var pack=porVendedor[v];
+    var keys=Object.keys(pack.totals).sort(function(a,b){return (PROD_NAMES[a]||a).localeCompare(PROD_NAMES[b]||b)});
+    var nPed=pack.pedidos.length;
+    var allDone=pack.pedidos.every(function(e){return armadoDone[eKey(e)]});
+    var keysList=pack.pedidos.map(function(e){return eKey(e)}).join(',');
+    var subtitulo=nPed+' pedido'+(nPed>1?'s':'');
+    if(keys.length===0){
+      // Vendedor sin productos del depósito (todo OC). Mostrar card informativa
+      // pero igual tildable: el armado Red marca también los 100% OC del día.
+      html+='<div class="armado-card red'+(allDone?' done':'')+'" onclick="toggleArmadoMasivo(\''+keysList+'\',\''+(dayKey||'')+'\')">'
+        +'<div class="armado-head">'
+        +'<div class="armado-check">'+(allDone?'&#x2713;':'')+'</div>'
+        +'<span class="armado-name">Sacar para '+v+' ('+subtitulo+')</span>'
+        +'</div>'
+        +'<div class="armado-prods" style="font-style:italic;color:var(--muted)">Sin productos del depósito (todo viene del proveedor)</div>'
+        +'</div>';
+      return;
+    }
+    var prodLines=keys.map(function(a){return '<span>'+pack.totals[a]+'x</span> '+(PROD_NAMES[a]||a)}).join('<br>');
+    html+='<div class="armado-card red'+(allDone?' done':'')+'" onclick="toggleArmadoMasivo(\''+keysList+'\',\''+(dayKey||'')+'\')">'
+      +'<div class="armado-head">'
+      +'<div class="armado-check">'+(allDone?'&#x2713;':'')+'</div>'
+      +'<span class="armado-name">Sacar para '+v+' ('+subtitulo+')</span>'
+      +'</div>'
+      +'<div class="armado-prods">'+prodLines+'</div>'
+      +'</div>';
+  });
+  html+='</div>';
+  return html;
 }
 
 /* Render del bloque de barrios+subbarrios+cards de una lista de pedidos */
 function _renderArmadoBarrios(lista){
+  // Filtrar pedidos 100% OC con origen confirmado: no hay nada que sacar del
+  // freezer (van directo del proveedor al cliente vía pasamanos en la ruta).
+  lista=lista.filter(function(e){
+    if(e.o==='Orden de Compra' && _itemsDepDe(e).length===0)return false;
+    return true;
+  });
   var html='';
   var barrios={};
   lista.forEach(function(e){var b=e.b||e.h;if(!barrios[b])barrios[b]={};var sb=(e.b===e.sb||!e.sb)?'_main':e.sb;if(!barrios[b][sb])barrios[b][sb]=[];barrios[b][sb].push(e)});
@@ -1267,7 +1319,7 @@ function renderRuta(){
   var h='';
   if(e.l){h+='<div class="ruta-lote"><span style="font-size:16px;font-weight:700;display:block;color:var(--muted)">Lote</span>'+e.l+'</div>'}
   else{h+='<div style="font-size:24px;font-weight:900;color:var(--orange);margin-bottom:4px">'+e.d+'</div>'}
-  h+='<div class="ruta-nombre">'+e.c+'</div>';
+  h+='<div class="ruta-nombre"><span class="ord-link" onclick="event.stopPropagation();_openOrdInPanel(\''+e.h+'\',\''+e.id+'\')" title="Ver detalle">'+e.c+'</span></div>';
 
   h+='<div class="ruta-productos">';e.p.forEach(function(p){h+='<div class="ruta-prod-item"><span>'+(PROD_NAMES[p.a]||p.a)+'</span><span class="ruta-prod-qty">'+p.q+'</span></div>'});h+='</div>';
 
