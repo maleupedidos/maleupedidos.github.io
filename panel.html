@@ -2014,11 +2014,10 @@ function load(){
     var c=localStorage.getItem('ma3');if(c&&!D){D=JSON.parse(c);if(!_hayEditorAbierto())render();$('ld').style.display='none';}
   });
 }
-// Refresh manual desde tab Pedidos: bypassa el throttle de 60s, muestra loader,
-// y al terminar avisa con toast cuántos pedidos NUEVOS aparecieron desde el snapshot.
-// SI hay edición activa (origen-box tocada / editor de productos abierto),
-// load() postpone el render automáticamente — los nuevos aparecen recién al
-// cerrar/confirmar la edición. Se avisa por toast.
+// Refresh manual desde tab Pedidos: usa endpoint LIGHT (~3s vs ~12s del admin
+// completo). Mergea solo pedidos+canales en D y re-renderiza el tab Pedidos.
+// El resto del estado (caja, stock, vendedores, etc.) NO se toca — cuando el
+// usuario navegue a otro tab que lo necesite, el _refresh por foco lo cargará.
 function actualizarPedidos(){
   var btn=$('btnReloadPed');
   if(btn){btn.disabled=true;btn.classList.add('loading');}
@@ -2028,27 +2027,41 @@ function actualizarPedidos(){
   }
   var editando=_hayEditorAbierto();
   if(!editando)showLoader('Buscando pedidos nuevos...');
-  load().then(function(){
-    if(!editando)hideLoader(true);
-    if(btn){btn.disabled=false;btn.classList.remove('loading');}
-    var nuevos=0;
-    (D.pedidos||[]).forEach(function(p){
-      if(!p||!p.h||!p.n)return;
-      if(p.es==='Cancelado')return;
-      if(!antes[p.h+'|'+p.n])nuevos++;
+  fetch(API+'?action=pedidosLight&t='+Date.now())
+    .then(function(r){return r.json();})
+    .then(function(d){
+      if(!editando)hideLoader(true);
+      if(btn){btn.disabled=false;btn.classList.remove('loading');}
+      if(!d||!Array.isArray(d.pedidos)){toast('Sin respuesta del servidor');return;}
+      // Mergear pedidos y canales en D, persistir cache, re-render solo de Pedidos.
+      if(!D)D={};
+      D.pedidos=d.pedidos;
+      if(Array.isArray(d.canales))D.canales=d.canales;
+      try{localStorage.setItem('ma3',JSON.stringify(D));}catch(e){}
+      sync();
+      var nuevos=0;
+      d.pedidos.forEach(function(p){
+        if(!p||!p.h||!p.n)return;
+        if(p.es==='Cancelado')return;
+        if(!antes[p.h+'|'+p.n])nuevos++;
+      });
+      if(editando){
+        if(nuevos>0)toast('+'+nuevos+' pedido'+(nuevos>1?'s':'')+' nuevo'+(nuevos>1?'s':'')+' (aparecen al cerrar la edición)');
+        else toast('Sin pedidos nuevos');
+        // Marcar pendiente de render para cuando se cierre la edición
+        _pendingLoadRender=true;
+      } else {
+        if(nuevos>0)toast('+'+nuevos+' pedido'+(nuevos>1?'s':'')+' nuevo'+(nuevos>1?'s':'')+' ✨');
+        else toast('Sin pedidos nuevos');
+        // Re-render solo del tab Pedidos (más rápido que render() completo)
+        try{rPedidos();}catch(e){render();}
+      }
+    })
+    .catch(function(){
+      if(!editando)hideLoader(true);
+      if(btn){btn.disabled=false;btn.classList.remove('loading');}
+      toast('Error al actualizar');
     });
-    if(editando){
-      if(nuevos>0)toast('+'+nuevos+' pedido'+(nuevos>1?'s':'')+' nuevo'+(nuevos>1?'s':'')+' (aparecen al cerrar la edición)');
-      else toast('Sin pedidos nuevos');
-    } else {
-      if(nuevos>0)toast('+'+nuevos+' pedido'+(nuevos>1?'s':'')+' nuevo'+(nuevos>1?'s':'')+' ✨');
-      else toast('Sin pedidos nuevos');
-    }
-  }).catch(function(){
-    if(!editando)hideLoader(true);
-    if(btn){btn.disabled=false;btn.classList.remove('loading');}
-    toast('Error al actualizar');
-  });
 }
 // Rerender pendiente cuando se cierra el último editor
 function _flushPendingLoadRender(){
