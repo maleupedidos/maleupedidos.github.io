@@ -90,6 +90,9 @@ body.embed{background:#fff;padding-bottom:calc(72px + env(safe-area-inset-bottom
 .armado-card.red{border-color:#7B1FA2;background:#F3E5F5}
 .armado-card.red .armado-check{border-color:#7B1FA2}
 .armado-card.red.done .armado-check{background:#7B1FA2;border-color:#7B1FA2}
+.armado-entregar-btn{display:block;width:calc(100% - 24px);margin:10px 12px 6px;padding:11px 14px;background:#7B1FA2;color:#fff;border:none;border-radius:8px;font-family:inherit;font-size:14px;font-weight:700;cursor:pointer;letter-spacing:.01em;box-shadow:0 2px 6px rgba(123,31,162,.3)}
+.armado-entregar-btn:hover{background:#6A1B8C}
+.armado-entregar-btn:active{transform:scale(.98)}
 .armado-oc-tag{display:inline-block;font-size:11px;font-weight:700;color:#1565C0;background:#E3F2FD;padding:5px 10px;border-radius:6px;margin:8px 0 0 38px;border:1px dashed #1565C0;letter-spacing:.02em}
 .armado-retira-tag{display:inline-block;font-size:10px;font-weight:800;background:#7B1FA2;color:#fff;padding:2px 8px;border-radius:50px;margin-left:6px;letter-spacing:.04em;text-transform:uppercase}
 
@@ -1035,25 +1038,33 @@ function _renderArmadoRedAggregate(lista,dayKey){
     var allDone=pack.pedidos.every(function(e){return armadoDone[eKey(e)]});
     var keysList=pack.pedidos.map(function(e){return eKey(e)}).join(',');
     var subtitulo=nPed+' pedido'+(nPed>1?'s':'');
+    var vEsc=String(v).replace(/'/g,"\\'");
+    // Botón "Entregar al vendedor" — visible solo cuando ya está armado.
+    // Hace POST explícito a marcarEntregadoAVendedor (col BE en Sheets).
+    var btnEntregar=allDone
+      ? '<button type="button" class="armado-entregar-btn" onclick="event.stopPropagation();entregarAVendedor(\''+keysList+'\',\''+(dayKey||'')+'\',\''+vEsc+'\')">📤 Entregar a '+v+'</button>'
+      : '';
     if(keys.length===0){
       // Vendedor sin productos del depósito (todo OC). Mostrar card informativa
       // pero igual tildable: el armado Red marca también los 100% OC del día.
-      html+='<div class="armado-card red'+(allDone?' done':'')+'" onclick="toggleArmadoMasivo(\''+keysList+'\',\''+(dayKey||'')+'\')">'
-        +'<div class="armado-head">'
+      html+='<div class="armado-card red'+(allDone?' done':'')+'">'
+        +'<div class="armado-head" onclick="toggleArmadoMasivo(\''+keysList+'\',\''+(dayKey||'')+'\')">'
         +'<div class="armado-check">'+(allDone?'&#x2713;':'')+'</div>'
         +'<span class="armado-name">Sacar para '+v+' ('+subtitulo+')</span>'
         +'</div>'
-        +'<div class="armado-prods" style="font-style:italic;color:var(--muted)">Sin productos del depósito (todo viene del proveedor)</div>'
+        +'<div class="armado-prods" style="font-style:italic;color:var(--muted)" onclick="toggleArmadoMasivo(\''+keysList+'\',\''+(dayKey||'')+'\')">Sin productos del depósito (todo viene del proveedor)</div>'
+        +btnEntregar
         +'</div>';
       return;
     }
     var prodLines=keys.map(function(a){return '<span>'+pack.totals[a]+'x</span> '+(PROD_NAMES[a]||a)}).join('<br>');
-    html+='<div class="armado-card red'+(allDone?' done':'')+'" onclick="toggleArmadoMasivo(\''+keysList+'\',\''+(dayKey||'')+'\')">'
-      +'<div class="armado-head">'
+    html+='<div class="armado-card red'+(allDone?' done':'')+'">'
+      +'<div class="armado-head" onclick="toggleArmadoMasivo(\''+keysList+'\',\''+(dayKey||'')+'\')">'
       +'<div class="armado-check">'+(allDone?'&#x2713;':'')+'</div>'
       +'<span class="armado-name">Sacar para '+v+' ('+subtitulo+')</span>'
       +'</div>'
-      +'<div class="armado-prods">'+prodLines+'</div>'
+      +'<div class="armado-prods" onclick="toggleArmadoMasivo(\''+keysList+'\',\''+(dayKey||'')+'\')">'+prodLines+'</div>'
+      +btnEntregar
       +'</div>';
   });
   html+='</div>';
@@ -1187,39 +1198,41 @@ function toggleArmadoMasivo(keysCsv,dayKey){
 function confirmarArmadoMasivo(keysCsv,dayKey){
   var keys=(keysCsv||'').split(',').filter(Boolean);
   if(keys.length===0)return;
-  // Detectar si todas las keys son de Red (formato "Red|R<n>")
-  var allRed=keys.every(function(k){return k.indexOf('Red|')===0});
+  // Solo marca armado local (sacaste del freezer, lo cargaste al auto).
+  // El "Entregado al Vendedor" es un paso aparte (botón en la card o tab Ruta).
   keys.forEach(function(k){armadoDone[k]=true;syncArmadoBusqueda(k,true)});
   saveLocal();render();if(navigator.vibrate)navigator.vibrate(30);
-  // Para Red: enviar POST que marca "Entregado a Vendedor" en el sheet.
-  // Pasamos dia para que el backend marque tambien los pedidos Red 100% OC del mismo dia
-  // que no aparecen como cards en el bloque (e.g. Marcos retira el dia entero).
-  if(allRed){
-    var rows=keys.map(function(k){
-      var ent=findByKey(k);return ent?ent.r:0;
-    }).filter(function(r){return r>=2});
-    showLoader('Marcando entregado...');
-    var payload={action:'marcarEntregadoAVendedor',rows:rows,dia:dayKey||'',ts:Date.now()};
-    fetch(APPS_SCRIPT_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(payload),redirect:'follow'})
-      .then(function(r){return r.json().catch(function(){return{ok:false}})})
-      .then(function(res){
-        hideLoader(true);
-        if(res&&res.ok){
-          keys.forEach(function(k){var ent=findByKey(k);if(ent)entregados[k]=true});
-          saveLocal();render();
-          showToast('Entregado a Marcos ('+(res.n||rows.length)+' pedidos)');
-          if(isOnline)refresh(true,true);
-        } else {
-          syncQueue.push(payload);saveLocal();processSyncQueue();
-          showToast('Sin conexion — se reintenta');
-        }
-      })
-      .catch(function(){
-        hideLoader(true);
+}
+
+// POST explícito: "ya le di la bolsa física al vendedor". Marca col BE
+// "Entregado a Vendedor" en el Sheets y saca esos pedidos del flujo de Armado.
+function entregarAVendedor(keysCsv,dayKey,vendedorNombre){
+  var keys=(keysCsv||'').split(',').filter(Boolean);
+  if(keys.length===0)return;
+  var msg='¿Confirmás que ya le diste la bolsa a '+(vendedorNombre||'el vendedor')+'?\n\nEsto saca los '+keys.length+' pedido'+(keys.length>1?'s':'')+' de Armado y Ruta.';
+  if(!confirm(msg))return;
+  var rows=keys.map(function(k){var ent=findByKey(k);return ent?ent.r:0;}).filter(function(r){return r>=2});
+  showLoader('Marcando entregado al vendedor...');
+  var payload={action:'marcarEntregadoAVendedor',rows:rows,dia:dayKey||'',ts:Date.now()};
+  fetch(APPS_SCRIPT_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(payload),redirect:'follow'})
+    .then(function(r){return r.json().catch(function(){return{ok:false}})})
+    .then(function(res){
+      hideLoader(true);
+      if(res&&res.ok){
+        keys.forEach(function(k){var ent=findByKey(k);if(ent)entregados[k]=true});
+        saveLocal();render();
+        showToast('Entregado a '+(vendedorNombre||'vendedor')+' ('+(res.n||rows.length)+' pedidos)');
+        if(isOnline)refresh(true,true);
+      } else {
         syncQueue.push(payload);saveLocal();processSyncQueue();
         showToast('Sin conexion — se reintenta');
-      });
-  }
+      }
+    })
+    .catch(function(){
+      hideLoader(true);
+      syncQueue.push(payload);saveLocal();processSyncQueue();
+      showToast('Sin conexion — se reintenta');
+    });
 }
 
 function confirmarCancelar(key,nombre){
