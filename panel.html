@@ -4350,6 +4350,104 @@ function rEERR(){
 }
 function eerrMov(d){eerrMes.setMonth(eerrMes.getMonth()+d);rEERR();}
 
+// Helper: KPIs económicos clave (totFact, totMB, totMC, ebitda, resNeto, totEstr) de cualquier mes.
+// Pure-function: usado por la tendencia 6 meses en el EERR económico.
+// Replica la clasificación de calcEcon() pero standalone (no depende de mesNom outer).
+function eerrKpisMes(mn,anio){
+  var MES_NOMBRES=['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+  var mesNom=MES_NOMBRES[mn-1];
+  function _norm(c){var s=String(c||'').trim().toLowerCase();if(s.length>3&&s.charAt(s.length-1)==='s')s=s.substring(0,s.length-1);return s;}
+  function _isExt(t){return t.indexOf('regalo')>=0||t.indexOf('perd')>=0||t.indexOf('falt')>=0||t.indexOf('robo')>=0||t.indexOf('extraord')>=0;}
+  if(!window.VD)return null;
+  var ventas=VD.filter(function(v){return v.mes===mesNom;});
+  var totFact=0,totCMV=0;
+  ventas.forEach(function(v){totFact+=Number(v.$)||0;totCMV+=Number(v.costo)||0;});
+  // CMV catering directo
+  ((D&&D.gastos)||[]).filter(function(g){return g.mes===mesNom;}).forEach(function(g){
+    if(_norm(g.cat||'')==='catering')totCMV+=Number(g.$)||0;
+  });
+  var totMB=totFact-totCMV;
+  var f_sw=0,f_mk=0,f_hon=0,f_serv=0,f_oc=0,f_su=0,f_otr=0;
+  var v_fl=0,v_pk=0;
+  var er=0,ep=0,eo=0,ii=0,im=0,io=0;
+  ((D&&D.gastos)||[]).filter(function(g){return g.mes===mesNom;}).forEach(function(g){
+    var c=_norm(g.cat||'Otro'),m=Number(g.$)||0;
+    var con=String(g.con||'').toLowerCase(),not=String(g.not||'').toLowerCase();
+    var txt=con+' '+not;
+    if(c==='proveedor'||c==='catering')return;
+    if(_isExt(txt)){
+      if(txt.indexOf('regalo')>=0)er+=m;
+      else if(txt.indexOf('perd')>=0||txt.indexOf('robo')>=0)ep+=m;
+      else eo+=m;
+      return;
+    }
+    if(c==='repartidor'||c==='nafta')v_fl+=m;
+    else if(c==='bolsa')v_pk+=m;
+    else if(c==='marketing')f_mk+=m;
+    else if(c==='herramienta'){if(eerrEsServicio(txt))f_serv+=m;else f_sw+=m;}
+    else if(c==='sueldo')f_su+=m;
+    else if(c==='impuesto'){
+      if(txt.indexOf('iibb')>=0||txt.indexOf('ingresos brutos')>=0)ii+=m;
+      else if(txt.indexOf('mono')>=0)im+=m;
+      else io+=m;
+    }
+    else {
+      if(txt.indexOf('honorario')>=0||txt.indexOf('contador')>=0)f_hon+=m;
+      else if(txt.indexOf('luz')>=0||txt.indexOf('internet')>=0||txt.indexOf('telef')>=0||txt.indexOf('gas ')>=0||txt.indexOf('servicio')>=0)f_serv+=m;
+      else if(txt.indexOf('alquiler')>=0||txt.indexOf('ocupac')>=0||txt.indexOf('imputado')>=0)f_oc+=m;
+      else f_otr+=m;
+    }
+  });
+  // Provisiones imputadas
+  var provs=eerrProvisiones(mn,anio);
+  var amortE=0;
+  provs.forEach(function(p){
+    var monto=Number(p.monto)||0;
+    if(p.cat==='sueldo')f_su+=Math.max(monto-f_su,0);
+    else if(p.cat==='servicios')f_serv+=Math.max(monto-f_serv,0);
+    else if(p.cat==='ocupacion')f_oc+=Math.max(monto-f_oc,0);
+    else if(p.cat==='amortizacion')amortE+=monto;
+  });
+  // Comisiones MP
+  var cobrosTr=0;
+  ((D&&D.pedidos)||[]).forEach(function(p){
+    if(p.pago!=='Cobrado')return;
+    var fc=p.fc||'';if(!fc)return;
+    var pp=String(fc).split('/');if(pp.length<2)return;
+    if(Number(pp[1])!==mn)return;
+    cobrosTr+=Number(p.tr||0);
+  });
+  var ymCmp=anio+'-'+String(mn).padStart(2,'0');
+  var v_cmp=Math.round(cobrosTr*(eerrConfig('COMISION_MP_PCT',ymCmp)||0.03));
+  var totVar=v_fl+v_pk+v_cmp;
+  var totMC=totMB-totVar;
+  var totEstr=f_sw+f_mk+f_hon+f_serv+f_oc+f_su+f_otr;
+  var ebitda=totMC-totEstr;
+  var resOper=ebitda-amortE;
+  // Resultados financieros (rendimientos MP / intereses ganados)
+  var rFinanc=0;
+  ((D&&D.ingresos)||[]).filter(function(i){return i.mes===mesNom;}).forEach(function(i){
+    var con=String(i.con||'').toLowerCase(),not=String(i.not||'').toLowerCase();
+    var txt=con+' '+not;
+    if(txt.indexOf('liquid')>=0&&txt.indexOf('red')>=0)return;
+    if(txt.indexOf('rendimiento')>=0||txt.indexOf('interes')>=0||txt.indexOf('plazo fijo')>=0||txt.indexOf('rentabilidad')>=0||(txt.indexOf('mp')>=0&&txt.indexOf('rend')>=0)){
+      rFinanc+=Number(i.$)||0;
+    }
+  });
+  var resAImp=resOper-(er+ep+eo)+rFinanc;
+  var resNeto=resAImp-(ii+im+io);
+  return {
+    mn:mn,anio:anio,mesNom:mesNom,
+    totFact:totFact,totCMV:totCMV,totMB:totMB,
+    totVar:totVar,totMC:totMC,totEstr:totEstr,
+    ebitda:ebitda,resOper:resOper,resNeto:resNeto,
+    mbPct:totFact>0?totMB/totFact*100:0,
+    mcPct:totFact>0?totMC/totFact*100:0,
+    ebitdaPct:totFact>0?ebitda/totFact*100:0,
+    rnPct:totFact>0?resNeto/totFact*100:0
+  };
+}
+
 // ═══════════════════════════════════════════════════════════════
 //  EERR FINANCIERO (caja / percibido)
 //  Reglas:
@@ -4906,6 +5004,9 @@ function rEERR_dual(body){
   // ── FACTURACIÓN devengada del mes por canal ──
   var ventas=VD.filter(function(v){return v.mes===mesNom;});
   var canales={Home:0,Pilar:0,Clubes:0,Red:0,B2B:0,Catering:0};
+  // Tracking por canal para validar carga de costos (CMV).
+  var canalFact={Home:0,Pilar:0,Clubes:0,Red:0,B2B:0,Catering:0};
+  var canalCMV={Home:0,Pilar:0,Clubes:0,Red:0,B2B:0,Catering:0};
   var totFact=0,totCMV=0;
   ventas.forEach(function(v){
     var f=Number(v.$)||0,c=Number(v.costo)||0,canal=v.canal,zona=v.zona;
@@ -4913,7 +5014,7 @@ function rEERR_dual(body){
     var k=null;
     if(canal==='Venta Directa')k=(zona==='Pilar'?'Pilar':'Home');
     else if(canal==='Clubes'||canal==='Red'||canal==='B2B'||canal==='Catering')k=canal;
-    if(k&&canales.hasOwnProperty(k))canales[k]+=f;
+    if(k&&canales.hasOwnProperty(k)){canales[k]+=f;canalFact[k]+=f;canalCMV[k]+=c;}
   });
   // Costos directos de catering (cat=Catering en Egresos): insumos + mano de obra
   // del evento. Se suman al CMV antes del Margen Bruto.
@@ -5052,7 +5153,19 @@ function rEERR_dual(body){
   var amort=amortProv;
   var resOper=ebitda-amort;
   var totExt=ext_perdidas+ext_regalos+ext_otros;
-  var rFinanc=0;
+  // Resultados Financieros: rendimientos MP / intereses ganados detectados en D.ingresos por keyword.
+  // Liquidaciones Red NO entran (son operativas, son cobros del canal Red diferidos).
+  var r_intereses=0,r_interesesD=[];
+  ((D&&D.ingresos)||[]).filter(function(i){return i.mes===mesNom;}).forEach(function(i){
+    var con=String(i.con||'').toLowerCase(),not=String(i.not||'').toLowerCase();
+    var txt=con+' '+not;
+    if(txt.indexOf('liquid')>=0&&txt.indexOf('red')>=0)return; // liq Red = operativo
+    if(txt.indexOf('rendimiento')>=0||txt.indexOf('interes')>=0||txt.indexOf('plazo fijo')>=0||txt.indexOf('rentabilidad')>=0||
+       (txt.indexOf('mp')>=0&&txt.indexOf('rend')>=0)){
+      var m=Number(i.$)||0;r_intereses+=m;r_interesesD.push({con:i.con||'',not:i.not||'',m:m});
+    }
+  });
+  var rFinanc=r_intereses;
   var resAImp=resOper-totExt+rFinanc;
   var totImp=imp_iibb+imp_mono+imp_otros;
   var resNeto=resAImp-totImp;
@@ -5099,6 +5212,26 @@ function rEERR_dual(body){
   var html='';
   html+='<div class="eerr-col" style="max-width:820px;margin:0 auto">';
   html+='<div class="eerr-col-h"><b>Estado de Resultados — Económico</b><span>'+mesNom+' '+anioN+' · devengado</span></div>';
+
+  // ── Validación CMV: alerta si un canal facturó >$0 con costo cargado = 0 o desproporcionadamente bajo (<5% sobre facturación).
+  // Sin costo, el Margen Bruto se infla artificialmente y el EERR miente.
+  var cmvWarnings=[];
+  ['Home','Pilar','Clubes','Red','B2B','Catering'].forEach(function(k){
+    var f=canalFact[k]||0,c=canalCMV[k]||0;
+    if(f<=0)return;
+    if(c<=0)cmvWarnings.push({canal:k,fact:f,tipo:'sin-costo'});
+    else if(c/f<0.05)cmvWarnings.push({canal:k,fact:f,cmv:c,ratio:c/f,tipo:'costo-bajo'});
+  });
+  if(cmvWarnings.length){
+    html+='<div style="background:var(--wrnb);border:1px solid var(--wrn);border-left:3px solid var(--wrn);border-radius:6px;padding:10px 12px;margin-bottom:10px;font-size:11px;line-height:1.55">'+
+      '<div style="font-weight:800;color:var(--wrn);margin-bottom:4px">⚠️ CMV incompleto — el Margen Bruto puede estar inflado</div>';
+    cmvWarnings.forEach(function(w){
+      if(w.tipo==='sin-costo')html+='<div>• <b>'+w.canal+'</b> facturó $'+f$(Math.round(w.fact))+' pero <b>no tiene costo cargado</b>. Revisar columna Costo en la hoja '+w.canal+'.</div>';
+      else html+='<div>• <b>'+w.canal+'</b> facturó $'+f$(Math.round(w.fact))+' con CMV solo $'+f$(Math.round(w.cmv))+' ('+(w.ratio*100).toFixed(1)+'%). Posiblemente faltan costos de productos.</div>';
+    });
+    html+='</div>';
+  }
+
   html+='<table class="eerr-tbl"><tbody>';
 
   // FACTURACIÓN
@@ -5169,8 +5302,9 @@ function rEERR_dual(body){
   if(ext_otros>0){html+=leaf('Otros no recurrentes',-ext_otros);html+=detailRows(ext_otrosD);}
 
   // RESULTADOS FINANCIEROS
-  html+=ln('(+/−) Resultados Financieros',rFinanc,'sub');
-  html+=leaf('Intereses ganados / perdidos',0);
+  html+=ln('(+/−) Resultados Financieros',rFinanc,'sub'+(rFinanc<0?' neg':''));
+  html+=leaf('Intereses ganados (rendimientos MP, plazo fijo)',r_intereses);
+  if(r_interesesD.length)html+=detailRows(r_interesesD);
   html+=leaf('Diferencia de cambio',0);
 
   // RESULTADO ANTES DE IMPUESTOS
@@ -5189,13 +5323,102 @@ function rEERR_dual(body){
 
   html+='</tbody></table></div>';
 
-  // KPIs
+  // KPIs (con EBITDA target visible al lado del real)
+  var ymKpi=eerrMes.getFullYear()+'-'+String(eerrMes.getMonth()+1).padStart(2,'0');
+  var ebitdaRealistaPct=(eerrConfig('EBITDA_REALISTA',ymKpi)||0.08)*100;
+  var ebitdaAspirPct=(eerrConfig('EBITDA_ASPIRACIONAL',ymKpi)||0.15)*100;
+  var ebitdaPctReal=pctBase>0?(ebitda/pctBase*100):0;
+  var gapReal=ebitdaPctReal-ebitdaRealistaPct;
+  var gapAsp=ebitdaPctReal-ebitdaAspirPct;
+  var hitReal=gapReal>=0,hitAsp=gapAsp>=0;
+  // Mini-bar: posiciona EBITDA real, 0%, target realista y aspiracional en una escala lineal.
+  var barMin=Math.min(0,Math.floor(ebitdaPctReal));
+  var barMax=Math.max(ebitdaAspirPct,Math.ceil(ebitdaPctReal));
+  function barPos(v){var span=barMax-barMin;return span>0?Math.max(0,Math.min(100,(v-barMin)/span*100)):0;}
+  var posReal=barPos(ebitdaPctReal),posObjReal=barPos(ebitdaRealistaPct),posObjAsp=barPos(ebitdaAspirPct),pos0=barPos(0);
+  var ebitdaCls=ebitda>=0?(hitReal?'pos':''):'neg';
   html+='<div class="eerr-cmp" style="max-width:820px;margin:12px auto 0">';
   html+='<div class="eerr-cmp-c"><div class="eerr-cmp-l">Margen Bruto %</div><div class="eerr-cmp-v">'+eerrPct(totMB,pctBase)+'</div></div>';
   html+='<div class="eerr-cmp-c"><div class="eerr-cmp-l">Margen Contribución %</div><div class="eerr-cmp-v">'+eerrPct(totMC,pctBase)+'</div></div>';
-  html+='<div class="eerr-cmp-c"><div class="eerr-cmp-l">EBITDA %</div><div class="eerr-cmp-v '+(ebitda>=0?'':'neg')+'">'+eerrPct(ebitda,pctBase)+'</div></div>';
+  html+='<div class="eerr-cmp-c" style="grid-column:span 2">'+
+    '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;flex-wrap:wrap">'+
+      '<div><div class="eerr-cmp-l">EBITDA %</div>'+
+      '<div class="eerr-cmp-v '+ebitdaCls+'">'+eerrPct(ebitda,pctBase)+'</div></div>'+
+      '<div style="text-align:right;font-size:10px;color:var(--ink3);line-height:1.55">'+
+        '<div>🎯 Realista <b style="color:var(--ink)">'+ebitdaRealistaPct.toFixed(0)+'%</b> '+(hitReal?'<span style="color:var(--gd);font-weight:700">✓ alcanzado</span>':'<span style="color:'+(gapReal<-10?'var(--r)':'var(--wrn)')+';font-weight:700">'+gapReal.toFixed(1)+'pp</span>')+'</div>'+
+        '<div>🚀 Aspiracional <b style="color:var(--ink)">'+ebitdaAspirPct.toFixed(0)+'%</b> '+(hitAsp?'<span style="color:var(--gd);font-weight:700">✓ alcanzado</span>':'<span style="color:var(--ink3);font-weight:700">'+gapAsp.toFixed(1)+'pp</span>')+'</div>'+
+      '</div>'+
+    '</div>'+
+    '<div style="margin-top:10px;position:relative;height:10px;background:var(--cd);border-radius:5px">'+
+      (ebitdaRealistaPct>0?'<div style="position:absolute;left:'+pos0+'%;width:'+(posObjReal-pos0)+'%;top:0;bottom:0;background:rgba(76,175,80,.18);border-radius:5px 0 0 5px"></div>':'')+
+      '<div title="Realista" style="position:absolute;left:'+posObjReal+'%;top:-3px;bottom:-3px;width:2px;background:var(--g)"></div>'+
+      '<div title="Aspiracional" style="position:absolute;left:'+posObjAsp+'%;top:-3px;bottom:-3px;width:2px;background:var(--o)"></div>'+
+      '<div title="0%" style="position:absolute;left:'+pos0+'%;top:-3px;bottom:-3px;width:1px;background:var(--ink3)"></div>'+
+      '<div title="Actual" style="position:absolute;left:calc('+posReal+'% - 7px);top:-4px;width:14px;height:18px;background:'+(ebitda>=0?'var(--gd)':'var(--r)')+';border-radius:3px;box-shadow:0 0 0 2px #fff"></div>'+
+    '</div>'+
+    '<div style="display:flex;justify-content:space-between;font-size:9px;color:var(--ink4);margin-top:4px;letter-spacing:.04em"><span>'+barMin.toFixed(0)+'%</span><span>0%</span><span>'+ebitdaRealistaPct.toFixed(0)+'%</span><span>'+ebitdaAspirPct.toFixed(0)+'%</span></div>'+
+  '</div>';
   html+='<div class="eerr-cmp-c"><div class="eerr-cmp-l">Resultado Neto %</div><div class="eerr-cmp-v '+(resNeto>=0?'pos':'neg')+'">'+eerrPct(resNeto,pctBase)+'</div></div>';
   html+='</div>';
+
+  // ── Tendencia 6 meses: Facturación + MB% + MC% + EBITDA% mes a mes ──
+  // Permite ver de un vistazo si la rentabilidad mejora o se deteriora en el tiempo.
+  (function(){
+    var serie=[];
+    var d=new Date(eerrMes.getFullYear(),eerrMes.getMonth(),1);
+    for(var i=5;i>=0;i--){
+      var dd=new Date(d.getFullYear(),d.getMonth()-i,1);
+      var k=eerrKpisMes(dd.getMonth()+1,dd.getFullYear());
+      if(k){k._mesAb=MES_ORD[dd.getMonth()].substring(0,3);k._actual=(i===0);serie.push(k);}
+    }
+    if(serie.length<2)return; // poca historia, no rendera
+    // Rango facturación para el mini-bar
+    var maxFact=0;serie.forEach(function(s){if(s.totFact>maxFact)maxFact=s.totFact;});
+    if(maxFact<=0)return;
+    // Realista para sombrear el EBITDA
+    var ebitdaTargetPct=(eerrConfig('EBITDA_REALISTA',ymKpi)||0.08)*100;
+    function pctFmt(v){return (v>=0?'+':'')+v.toFixed(1)+'%';}
+    function pctCls(v,target){if(v>=target)return'pos';if(v>=0)return'';return'neg';}
+    var html6='<div class="eerr-trend" style="max-width:820px;margin:14px auto 0;background:#fff;border:1px solid var(--border);border-radius:6px;padding:14px 16px;box-shadow:var(--shadow)">'+
+      '<div style="font-size:11px;color:var(--ink3);font-weight:700;text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px">📈 Tendencia 6 meses</div>'+
+      '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:11px;min-width:520px">'+
+      '<thead><tr style="border-bottom:1px solid var(--cd);color:var(--ink3);font-weight:700;text-transform:uppercase;letter-spacing:.04em;font-size:10px">'+
+        '<th style="text-align:left;padding:6px 4px">Mes</th>'+
+        '<th style="text-align:right;padding:6px 4px">Facturación</th>'+
+        '<th style="text-align:right;padding:6px 4px">MB %</th>'+
+        '<th style="text-align:right;padding:6px 4px">MC %</th>'+
+        '<th style="text-align:right;padding:6px 4px">EBITDA %</th>'+
+        '<th style="text-align:right;padding:6px 4px">Result. Neto %</th>'+
+      '</tr></thead><tbody>';
+    serie.forEach(function(s,idx){
+      var prev=idx>0?serie[idx-1]:null;
+      var deltaFact=prev&&prev.totFact>0?((s.totFact-prev.totFact)/prev.totFact*100):null;
+      var deltaArrow=deltaFact==null?'':(deltaFact>=2?' <span style="color:var(--gd)">▲</span>':(deltaFact<=-2?' <span style="color:var(--r)">▼</span>':' <span style="color:var(--ink4)">▬</span>'));
+      var factBarW=Math.max(2,Math.round(s.totFact/maxFact*100));
+      var miniBar='<div style="position:relative;height:4px;background:var(--cd);border-radius:2px;margin-top:3px;width:100%"><div style="position:absolute;left:0;top:0;bottom:0;width:'+factBarW+'%;background:var(--o);border-radius:2px"></div></div>';
+      html6+='<tr style="border-bottom:1px dashed var(--cd)'+(s._actual?';background:var(--ol)':'')+'">'+
+        '<td style="padding:8px 4px;font-weight:'+(s._actual?'800':'600')+';color:var(--ink)">'+s._mesAb+(s._actual?' <span style="font-size:9px;color:var(--o);font-weight:700">ACTUAL</span>':'')+'</td>'+
+        '<td style="padding:8px 4px;text-align:right;font-variant-numeric:tabular-nums;font-weight:700">$'+f$(Math.round(s.totFact/1000))+'k'+deltaArrow+miniBar+'</td>'+
+        '<td style="padding:8px 4px;text-align:right;font-variant-numeric:tabular-nums">'+s.mbPct.toFixed(1)+'%</td>'+
+        '<td style="padding:8px 4px;text-align:right;font-variant-numeric:tabular-nums">'+s.mcPct.toFixed(1)+'%</td>'+
+        '<td style="padding:8px 4px;text-align:right;font-variant-numeric:tabular-nums;font-weight:700;color:'+(s.ebitdaPct>=ebitdaTargetPct?'var(--gd)':(s.ebitdaPct>=0?'var(--ink)':'var(--r)'))+'">'+pctFmt(s.ebitdaPct)+'</td>'+
+        '<td style="padding:8px 4px;text-align:right;font-variant-numeric:tabular-nums;color:'+(s.rnPct>=0?'var(--gd)':'var(--r)')+'">'+pctFmt(s.rnPct)+'</td>'+
+      '</tr>';
+    });
+    html6+='</tbody></table></div>';
+    // Lectura: tendencia EBITDA% últimos 3 meses
+    if(serie.length>=3){
+      var u3=serie.slice(-3);
+      var ebitdaProm=u3.reduce(function(a,s){return a+s.ebitdaPct;},0)/3;
+      var primero=serie[0].ebitdaPct,ultimo=serie[serie.length-1].ebitdaPct;
+      var deltaEbitda=ultimo-primero;
+      var dir=deltaEbitda>=2?'mejorando':(deltaEbitda<=-2?'deteriorándose':'estable');
+      var dirCol=deltaEbitda>=2?'var(--gd)':(deltaEbitda<=-2?'var(--r)':'var(--ink2)');
+      html6+='<div style="margin-top:10px;font-size:11px;color:var(--ink2);line-height:1.55"><b>Lectura:</b> EBITDA promedio últimos 3 meses <b>'+pctFmt(ebitdaProm)+'</b> · tendencia <b style="color:'+dirCol+'">'+dir+'</b> (de '+pctFmt(primero)+' a '+pctFmt(ultimo)+'). Objetivo realista <b>'+ebitdaTargetPct.toFixed(0)+'%</b>.</div>';
+    }
+    html6+='</div>';
+    html+=html6;
+  })();
 
   // ── Ruta al equilibrio: Facturación necesaria = Estructura / (MC% − EBITDA% objetivo)
   if(totMC>0&&totEstr>0&&pctBase>0){
@@ -5314,7 +5537,7 @@ function rEERR_dual(body){
     {t:'(−) Amortizaciones',d:'Si compraste un freezer de $500.000 con vida útil de 5 años, no es justo cargar todo el costo el mes que lo compraste. Se "consume" $8.333 por mes durante 60 meses. <b>Provisión actual: $35.000/mes</b> (3 freezers, estimado provisorio hasta confirmar costo de adquisición real). Cargado en <code>Provisiones_Fijas</code>.'},
     {t:'= RESULTADO OPERATIVO',d:'Lo que el negocio genera por su actividad principal, ya descontadas las amortizaciones, antes de financieros e impuestos.'},
     {t:'(−) Resultados Extraordinarios',d:'Pérdidas y gastos <b>no recurrentes</b>: regalos, faltantes, robos, pérdidas de efectivo, cosas one-off. Se separan del operativo para no contaminar la lectura mes a mes. Detección automática por keyword en concepto/notas: <code>regalo · perd · falt · robo</code>. En abril cae acá: regalo a Fede ($145.000), pérdida de efectivo ($90.000), faltante de Marcos ($300).'},
-    {t:'(+/−) Resultados Financieros',d:'Intereses ganados (rendimientos MP, plazo fijo) menos intereses pagados (tarjetas, financiación). Más diferencia de cambio si tenés algo en USD. <b>Hoy en $0.</b>'},
+    {t:'(+/−) Resultados Financieros',d:'Intereses ganados (rendimientos MP, plazo fijo) menos intereses pagados (tarjetas, financiación). Más diferencia de cambio si tenés algo en USD. Los rendimientos MP se detectan automáticamente en Ingresos por keyword (rendimiento, interés, plazo fijo).'},
     {t:'= RESULTADO ANTES DE IMPUESTOS',d:'Resultado operativo, neto de extraordinarios y financieros, antes de pagar impuestos.'},
     {t:'(−) Impuestos',d:'IIBB e Impuesto al Monotributo del mes. Sale del Sheets <code>Egresos</code>, categoría <code>Impuesto</code>. La separación IIBB / Monotributo se hace por keyword en el concepto.'},
     {t:'= RESULTADO NETO',d:'La última línea. Lo que <b>realmente ganaste</b> económicamente en el mes. Si es negativo, perdiste patrimonio aunque la caja diga lo contrario. Si es positivo, generaste valor aunque la caja todavía no lo refleje.'}
