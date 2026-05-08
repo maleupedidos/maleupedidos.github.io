@@ -660,6 +660,10 @@ function isAnyLoaderVisible(){var a=document.getElementById('loaderOverlay'),b=d
 // pedidos manualmente entre semanas (caso Fabiana/Iñaki, ambos N°1 en Home).
 var STORAGE_VERSION='v2-row-keyed';
 var entregas=[], entregados={}, cobrados={}, propinas={}, syncQueue=[], armadoDone={}, pendientesCobro=[];
+// pendientesGuardarStock: OCs "Tadeo — Stock" con Estado=Recibido y col Y (Guardado) vacía.
+// Una sola card sintética en RUTA agrupa todas. Se completa cuando Tadeo confirma que
+// la mercadería ya está físicamente en el freezer.
+var pendientesGuardarStock=[]; // [{abbr,prod,qty,rows:[r1,r2,...],proveedor}]
 var currentTab='armado', rutaIndex=0, isOnline=navigator.onLine, resumenBarrioAbierto=null;
 // Estado de colapso del tab Armado: runtime-only, en cada refresh arranca vacio.
 // Declarado aca arriba para que getArmadoCollapse() no devuelva undefined si render()
@@ -783,10 +787,27 @@ function refresh(silent,fresh){
     mergeArmadoBusqueda();saveLocal();render();updateLastSync();
     var nc=getPendientes().length;if(silent&&nc>prev)showToast('+'+(nc-prev)+' pedido(s) nuevo(s)');
     document.getElementById('loadingView').classList.add('hidden');processSyncQueue();
+    // En paralelo: pendientes de guardar en stock (OCs Tadeo-Stock recibidas no guardadas)
+    fetchPendientesGuardarStock();
   }).catch(function(){
     btn.classList.remove('spinning');document.getElementById('loadingView').classList.add('hidden');
     if(entregas.length>0){render();showToast('Sin conexion — cache')}else{document.getElementById('errorView').classList.remove('hidden')}
   });
+}
+
+// Trae OCs Tadeo-Stock recibidas pendientes de confirmar guardado en freezer.
+// Endpoint independiente del de entregas porque la fuente es la hoja OC, no las
+// hojas operativas. Falla silenciosa: si no hay conexión, no se actualiza.
+function fetchPendientesGuardarStock(){
+  fetch(APPS_SCRIPT_URL+'?action=pendientesGuardarStock&t='+Date.now())
+    .then(function(r){return r.json()})
+    .then(function(data){
+      if(!data||!data.ok)return;
+      pendientesGuardarStock=data.items||[];
+      // Re-render solo si estamos viendo la tab Ruta (la única donde aparece la card)
+      if(currentTab==='ruta')render();
+    })
+    .catch(function(){});
 }
 
 /* ── HELPERS ── */
@@ -869,6 +890,20 @@ function getSorted(){
       });
     });
   }
+  // Append: card sintética "Para Depósito" si hay OCs Tadeo-Stock recibidas
+  // sin confirmar guardado en freezer. Es la última estación del día: traer
+  // todo del auto al depósito.
+  if(pendientesGuardarStock && pendientesGuardarStock.length>0){
+    var prods=pendientesGuardarStock.map(function(it){return {a:it.abbr,q:it.qty}});
+    var allRows=[];
+    pendientesGuardarStock.forEach(function(it){(it.rows||[]).forEach(function(r){allRows.push(r)})});
+    clientes.push({
+      _depAgg:true,_rows:allRows,
+      h:'OC',id:'dep-stock',r:0,
+      c:'Tadeo — Stock (Depósito)',l:'',b:'Depósito',sb:'',
+      de:'',es:'',o:'',oD:{},fp:'',ep:'',$:0,p:prods,t:'',retira:''
+    });
+  }
   return clientes;
 }
 // "Sin armar" = pedidos del día que requieren armado (dep o mixto) y todavía no están armados.
@@ -911,7 +946,7 @@ function render(){
   document.getElementById('tabArmadoCount').textContent=porArmar;
   document.getElementById('tabRutaCount').textContent=armadosHoy;
   document.getElementById('tabCobrosCount').textContent=pendientesCobro.length||'';
-  if(all.length===0&&pendientesCobro.length===0&&currentTab!=='nuevo'){
+  if(all.length===0&&pendientesCobro.length===0&&pendientesGuardarStock.length===0&&currentTab!=='nuevo'){
     document.getElementById('armadoView').classList.add('hidden');document.getElementById('rutaView').classList.add('hidden');document.getElementById('cobrosView').classList.add('hidden');document.getElementById('nuevoView').classList.add('hidden');
     document.getElementById('emptyView').classList.remove('hidden');
     document.getElementById('emptyTitle').textContent='Sin pedidos pendientes';
@@ -1286,6 +1321,38 @@ function confirmarArmadoMasivo(keysCsv,dayKey){
   saveLocal();render();if(navigator.vibrate)navigator.vibrate(30);
 }
 
+// POST: "ya guardé los productos Tadeo-Stock en el freezer". Marca col Y de
+// cada row en hoja OC con timestamp. NO toca stock (ya se sumó al Recibir).
+// Es la verificación final de la cadena: recibido del proveedor → guardado.
+function confirmarGuardadoStock(rowsCsv,nProds,totalUnid){
+  var rows=(rowsCsv||'').split(',').map(Number).filter(function(r){return r>=2});
+  if(rows.length===0)return;
+  var msg='¿Confirmás que guardaste los '+nProds+' producto'+(nProds>1?'s':'')+' ('+totalUnid+' unidades) en el freezer?\n\nEsto los marca como verificados en el depósito.';
+  if(!confirm(msg))return;
+  showLoader('Marcando guardado en freezer...');
+  var payload={action:'marcarGuardadoEnStock',rows:rows,repartidor:_rutaUser(),ts:Date.now()};
+  fetch(APPS_SCRIPT_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(payload),redirect:'follow'})
+    .then(function(r){return r.json().catch(function(){return{ok:false}})})
+    .then(function(res){
+      hideLoader(true);
+      if(res&&res.ok){
+        // Actualización optimista: vacío la lista local. El próximo refresh confirma.
+        pendientesGuardarStock=[];
+        render();
+        showToast('Guardado confirmado ('+(res.n||rows.length)+' OCs)');
+        if(isOnline)fetchPendientesGuardarStock();
+      } else {
+        syncQueue.push(payload);saveLocal();processSyncQueue();
+        showToast('Sin conexion — se reintenta');
+      }
+    })
+    .catch(function(){
+      hideLoader(true);
+      syncQueue.push(payload);saveLocal();processSyncQueue();
+      showToast('Sin conexion — se reintenta');
+    });
+}
+
 // POST explícito: "ya le di la bolsa física al vendedor". Marca col BE
 // "Entregado a Vendedor" en el Sheets y saca esos pedidos del flujo de Armado.
 function entregarAVendedor(keysCsv,dayKey,vendedorNombre){
@@ -1422,6 +1489,25 @@ function renderRuta(){
 
   // Body
   var h='';
+
+  // ── Card especial: bloque "Para Depósito" (OCs Tadeo-Stock recibidas, pendientes de guardar en freezer) ──
+  if(e._depAgg){
+    var nProds=(e.p||[]).length;
+    var totalUnidades=0;e.p.forEach(function(p){totalUnidades+=p.q});
+    h+='<div style="font-size:46px;margin-bottom:6px">📥</div>';
+    h+='<div class="ruta-origen-tag" style="background:#FFF3E0;color:#BF360C;border:1.5px solid #E65100">PARA DEPÓSITO</div>';
+    h+='<div style="font-size:22px;font-weight:900;color:var(--brown);margin-bottom:4px">Guardar en freezer</div>';
+    h+='<div style="font-size:13px;font-weight:700;color:var(--muted);margin-bottom:14px">'+nProds+' producto'+(nProds>1?'s':'')+' · '+totalUnidades+' unidades — recibidas del proveedor, falta confirmar guardado</div>';
+    h+='<div class="ruta-productos">';e.p.forEach(function(p){h+='<div class="ruta-prod-item"><span>'+(PROD_NAMES[p.a]||p.a)+'</span><span class="ruta-prod-qty">'+p.q+'</span></div>'});h+='</div>';
+    body.innerHTML=h;
+
+    var ar='';
+    var rowsCsv=(e._rows||[]).join(',');
+    ar+='<button class="btn-entregado" style="background:#E65100" onclick="confirmarGuardadoStock(\''+rowsCsv+'\','+nProds+','+totalUnidades+')">📥 GUARDADO EN FREEZER</button>';
+    ar+='<div class="ruta-nav"><button class="btn-prev" onclick="rutaPrev()">&larr;</button><button class="btn-next" onclick="rutaNext()">Siguiente &rarr;</button></div>';
+    actions.innerHTML=ar;
+    return;
+  }
 
   // ── Card especial: bloque agregado de Red (entrega al vendedor) ──
   if(e._redAgg){
@@ -2023,7 +2109,13 @@ function processSyncQueue(){
 }
 
 /* ── TABS ── */
-function switchTab(tab){currentTab=tab;saveLocal();document.querySelectorAll('.tab').forEach(function(t){t.classList.toggle('active',t.dataset.tab===tab)});render();}
+function switchTab(tab){
+  currentTab=tab;saveLocal();
+  document.querySelectorAll('.tab').forEach(function(t){t.classList.toggle('active',t.dataset.tab===tab)});
+  render();
+  // Al entrar a Ruta, refrescar pendientes de guardar (puede haber cambiado desde otro dispositivo)
+  if(tab==='ruta')fetchPendientesGuardarStock();
+}
 
 /* ── NUEVO PEDIDO: form express para alta rapida (Tadeo en el auto, anciana en wpp, etc) ──
    Golden path Home + 1 pizza: 3 taps (zona Home ya activa, tap producto +, tap GUARDAR).
