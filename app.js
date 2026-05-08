@@ -136,6 +136,29 @@ function isPilarRestricted() {
   return Date.now() < PILAR_RESTRICCION_HASTA_MS;
 }
 
+/* Cutoff del Viernes de esta semana para Pilar.
+   - Marcos (barrio Red): Jue 13:00 → Marcos necesita el pedido el Jue tarde
+     para repartirlo en Garín el Vie.
+   - Otro barrio: Jue 21:00 → Tadeo va el Vie a la mañana al proveedor a
+     buscar y reparte el Vie a la noche.
+   Si no se eligió barrio aún (caso modal de bienvenida), usamos el cutoff
+   más permisivo (Otro = Jue 21:00) para no ocultar de más. El day-picker
+   del checkout, una vez elegido el barrio, vuelve a evaluar.
+
+   Devuelve true si HOY ya pasó el cutoff aplicable y el Vie de esta semana
+   debe quedar oculto. */
+function _isPilarFridayCutoffPast() {
+  var barrioEl = $id('f-pilar-barrio');
+  var barrioVal = barrioEl ? barrioEl.value : '';
+  var tieneVendedor = barrioVal && barrioVal !== '__otro__' && barrioToVendedor[barrioVal.toLowerCase()];
+  // Sin barrio elegido aún → asumir Otro (más permisivo)
+  var cutoffHour = tieneVendedor ? 13 : 21;
+  var nowAR = new Date(Date.now() - 3 * 3600 * 1000);
+  var arDow = nowAR.getUTCDay(); // 0=Dom..6=Sáb
+  var arHour = nowAR.getUTCHours();
+  return (arDow === 4 && arHour >= cutoffHour) || arDow === 5 || arDow === 6;
+}
+
 /* ── ESTADO ── */
 let cart = {};
 let currentZone = null; // 'estancias' | 'pilar' | 'clubes'
@@ -570,6 +593,8 @@ function _getNextDeliveryDatesGrouped(zone) {
   var pilarRestricted = (zone === 'pilar' && isPilarRestricted());
   var feriados = FERIADOS_BLOQUEADOS[zone] || [];
   var extras = ENTREGAS_EXTRA[zone] || [];
+  // Cutoff Pilar Vie de esta semana: si ya pasó, bloquear el Vie en thisWeek
+  var pilarFridayBloqueadoFlag = (zone === 'pilar' && _isPilarFridayCutoffPast());
 
   for (var i = 0; i < 35; i++) {
     var d = new Date(today);
@@ -588,6 +613,8 @@ function _getNextDeliveryDatesGrouped(zone) {
     var inThisWeek = d.getTime() < nextMonday.getTime();
     // Filtro de restricción Pilar: solo Vie en thisWeek (las extras también pasan)
     if (pilarRestricted && inThisWeek && dayName !== 'Viernes' && !isExtra) continue;
+    // Cutoff Pilar Vie de esta semana ya vencido → no ofrecer ese Vie
+    if (pilarFridayBloqueadoFlag && inThisWeek && dayName === 'Viernes') continue;
     // timeRange: usar el de extra si aplica, sino el del horario normal
     var timeRange;
     if (isExtra) {
@@ -1010,32 +1037,15 @@ function renderDayPicker() {
   var todayTs = today.getTime();
   var selectedFecha = $id('f-dia-fecha') ? $id('f-dia-fecha').value : '';
 
-  // Corte Pilar: el Viernes de esta semana se bloquea si ya pasó el cutoff.
-  //   - Barrio con vendedor Red asignado → cutoff Jueves 13:00 (el vendedor
-  //     necesita margen para preparar y repartir).
-  //   - Barrio "Otro" o sin vendedor Red → cutoff Jueves 21:00 (Tadeo reparte
-  //     él mismo al día siguiente, tiene toda la tarde del Jue para coordinar).
-  // En ambos casos, Viernes y Sábado completos también lo bloquean.
+  // Cutoff Pilar Vie de esta semana — usa la misma función que el modal
+  // de bienvenida para que ambos sean consistentes.
+  // Si el cliente todavía no eligió barrio, asumimos "Otro" (más permisivo:
+  // cutoff Jue 21hs). Cuando elige barrio en el checkout, se re-evalúa.
   var redCutoffFriday = null;
-  if (currentZone === 'pilar') {
-    var barrioEl = $id('f-pilar-barrio');
-    var barrioVal = barrioEl ? barrioEl.value : '';
-    var tieneVendedor = barrioVal && barrioVal !== '__otro__' && barrioToVendedor[barrioVal.toLowerCase()];
-    // Solo aplica si el cliente ya eligió barrio (con o sin vendedor). Si no
-    // eligió todavía, dejamos el picker como estaba para no confundir.
-    if (barrioVal) {
-      var cutoffHour = tieneVendedor ? 13 : 21;
-      var nowAR = new Date(new Date().getTime() - 3 * 3600 * 1000);
-      var arDow = nowAR.getUTCDay(); // 0=Dom..6=Sáb (hora Argentina)
-      var arHour = nowAR.getUTCHours();
-      var bloquear = (arDow === 4 && arHour >= cutoffHour) || arDow === 5 || arDow === 6;
-      if (bloquear) {
-        // Calcular el Viernes de esta semana (lunes=0 en 'monday', viernes = +4 días)
-        var fri = new Date(monday);
-        fri.setUTCDate(monday.getUTCDate() + 4);
-        redCutoffFriday = fri.getTime();
-      }
-    }
+  if (currentZone === 'pilar' && _isPilarFridayCutoffPast()) {
+    var fri = new Date(monday);
+    fri.setUTCDate(monday.getUTCDate() + 4);
+    redCutoffFriday = fri.getTime();
   }
 
   var html = '<div class="dp-dow">' + DP_DAY_LABELS.map(function(l){ return '<span>' + l + '</span>'; }).join('') + '</div>';
