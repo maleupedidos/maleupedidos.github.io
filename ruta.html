@@ -829,16 +829,48 @@ function _origenTipo(e){
   if(oc.length>0)return 'oc';
   return 'dep';
 }
-// Red NO entra en RUTA (Tadeo no entrega — los retira el vendedor).
-// Para los demás canales: entran a RUTA si están armados (productos del freezer ya en bolsa)
+// Red SÍ entra en RUTA — pero como una card agregada por vendedor (al final), porque
+// Tadeo no entrega cliente x cliente, le da una sola tanda al vendedor.
+// Para los demás canales: entran a RUTA si están armados (productos del freezer en bolsa)
 // O si son 100% OC (no requieren armado, vienen directo del proveedor al cliente).
-function getSorted(){return sortByZona(getHoyPendientes().filter(function(e){
-  if(e.h==='Red')return false;
-  if(armadoDone[eKey(e)])return true;
-  // 100% OC: pasa directo a Ruta sin pasar por Armado (no hay nada que sacar del freezer)
-  if(_origenTipo(e)==='oc')return true;
-  return false;
-}))}
+function getSorted(){
+  var clientes=sortByZona(getHoyPendientes().filter(function(e){
+    if(e.h==='Red')return false;
+    if(armadoDone[eKey(e)])return true;
+    // 100% OC: pasa directo a Ruta sin pasar por Armado (no hay nada que sacar del freezer)
+    if(_origenTipo(e)==='oc')return true;
+    return false;
+  }));
+  // Append: bloque sintético por vendedor Red (cuando hay Reds armados pendientes
+  // de entrega al vendedor). Una sola card por vendedor con suma de productos.
+  var redArmados=getHoyPendientes().filter(function(e){return e.h==='Red'&&armadoDone[eKey(e)]});
+  if(redArmados.length>0){
+    var porVendedor={};
+    redArmados.forEach(function(e){
+      var v=e.retira||'Vendedor';
+      if(!porVendedor[v])porVendedor[v]={pedidos:[],totals:{}};
+      porVendedor[v].pedidos.push(e);
+      (e.p||[]).forEach(function(p){
+        if(!porVendedor[v].totals[p.a])porVendedor[v].totals[p.a]=0;
+        porVendedor[v].totals[p.a]+=p.q;
+      });
+    });
+    Object.keys(porVendedor).sort().forEach(function(v){
+      var pack=porVendedor[v];
+      var prods=Object.keys(pack.totals).map(function(a){return {a:a,q:pack.totals[a]}});
+      var keys=pack.pedidos.map(function(e){return eKey(e)});
+      var rows=pack.pedidos.map(function(e){return e.r}).filter(function(r){return r>=2});
+      clientes.push({
+        _redAgg:true,_vendedor:v,_keys:keys,_rows:rows,
+        h:'Red',id:'red-'+v.replace(/\s/g,''),r:0,
+        c:v+' (Red)',l:'',b:'Vendedor Red',sb:'',
+        de:pack.pedidos[0].de||'',es:'Armado',o:'',oD:{},
+        fp:'Vendedor Red',ep:'',$:0,p:prods,t:'',retira:v
+      });
+    });
+  }
+  return clientes;
+}
 // "Sin armar" = pedidos del día que requieren armado (dep o mixto) y todavía no están armados.
 // Los 100% OC NO van acá — no requieren armado, van directo a Ruta.
 function getHoySinArmar(){return getHoyPendientes().filter(function(e){
@@ -863,15 +895,19 @@ function render(){
   if(_IS_EMBED){try{parent.postMessage({type:'maleu_ruta_counter',entregadas:doneHoy,total:totalHoy},'*');}catch(e){}}
   document.getElementById('syncBanner').className='sync-banner'+(syncQueue.length>0?' visible':'');
   document.getElementById('errorView').classList.add('hidden');
-  // Tab counts: ambos muestran HOY (Red cuenta para ARMADO pero no para RUTA).
-  // Los 100% OC NO suman a "por armar" (no requieren armado): van directo a RUTA.
-  var porArmar=0,armadosHoy=0;
+  // Tab counts:
+  // - ARMADO: pedidos del día que requieren armado y aún no están armados.
+  //   Los 100% OC NO suman (van directo a RUTA, no requieren armado).
+  //   Los Red sí suman (Tadeo arma la tanda del vendedor).
+  // - RUTA: total de cards que muestra getSorted (clientes individuales + 1 por
+  //   vendedor Red con tanda armada).
+  var porArmar=0;
   hoy.forEach(function(e){
-    if(armadoDone[eKey(e)]){if(e.h!=='Red')armadosHoy++; return;}
-    // Pedido sin armar: si es 100% OC va directo a RUTA, sino requiere armado
-    if(_origenTipo(e)==='oc'){if(e.h!=='Red')armadosHoy++}
-    else porArmar++;
+    if(armadoDone[eKey(e)])return;
+    if(_origenTipo(e)==='oc' && e.h!=='Red')return;
+    porArmar++;
   });
+  var armadosHoy=getSorted().length;
   document.getElementById('tabArmadoCount').textContent=porArmar;
   document.getElementById('tabRutaCount').textContent=armadosHoy;
   document.getElementById('tabCobrosCount').textContent=pendientesCobro.length||'';
@@ -1386,6 +1422,28 @@ function renderRuta(){
 
   // Body
   var h='';
+
+  // ── Card especial: bloque agregado de Red (entrega al vendedor) ──
+  if(e._redAgg){
+    var nPed=(e._keys||[]).length;
+    h+='<div style="font-size:46px;margin-bottom:6px">📤</div>';
+    h+='<div class="ruta-origen-tag" style="background:#F3E5F5;color:#4A148C;border:1.5px solid #7B1FA2">VENDEDOR RED</div>';
+    h+='<div style="font-size:24px;font-weight:900;color:var(--brown);margin-bottom:4px">'+e._vendedor+'</div>';
+    h+='<div style="font-size:13px;font-weight:700;color:var(--muted);margin-bottom:14px">'+nPed+' pedido'+(nPed>1?'s':'')+' del día — Tadeo no entrega cliente por cliente</div>';
+    h+='<div class="ruta-productos">';e.p.forEach(function(p){h+='<div class="ruta-prod-item"><span>'+(PROD_NAMES[p.a]||p.a)+'</span><span class="ruta-prod-qty">'+p.q+'</span></div>'});h+='</div>';
+    body.innerHTML=h;
+
+    // Actions: solo botón ENTREGAR A VENDEDOR + nav
+    var ar='';
+    var keysCsv=(e._keys||[]).join(',');
+    var vEsc=String(e._vendedor).replace(/'/g,"\\'");
+    var dayKey=e.de||'';
+    ar+='<button class="btn-entregado" style="background:#7B1FA2" onclick="entregarAVendedor(\''+keysCsv+'\',\''+dayKey+'\',\''+vEsc+'\')">📤 ENTREGAR A '+e._vendedor.toUpperCase()+'</button>';
+    ar+='<div class="ruta-nav"><button class="btn-prev" onclick="rutaPrev()">&larr;</button><button class="btn-next" onclick="rutaNext()">Siguiente &rarr;</button></div>';
+    actions.innerHTML=ar;
+    return;
+  }
+
   if(e.l){h+='<div class="ruta-lote"><span style="font-size:16px;font-weight:700;display:block;color:var(--muted)">Lote</span>'+e.l+'</div>'}
   else{h+='<div style="font-size:24px;font-weight:900;color:var(--orange);margin-bottom:4px">'+e.d+'</div>'}
   // Tag de origen: dónde está físicamente el producto que voy a entregar.
