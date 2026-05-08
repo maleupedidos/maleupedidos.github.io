@@ -60,6 +60,8 @@ body.embed{background:#fff;padding-bottom:calc(72px + env(safe-area-inset-bottom
 
 /* ── TABS ── */
 .tabs{display:flex;background:var(--border);position:sticky;top:calc(56px + var(--sat));z-index:99}
+/* En modo embed (dentro de panel.html), no hay topbar propio: las tabs van pegadas arriba */
+body.embed .tabs{top:0}
 .tab{flex:1;padding:14px 6px;text-align:center;font-size:14px;font-weight:700;cursor:pointer;border-bottom:3px solid transparent;transition:.15s;min-height:48px;display:flex;align-items:center;justify-content:center;gap:4px}
 .tab.active{border-bottom-color:var(--orange);color:var(--orange)}
 .tab .tab-count{font-size:11px;background:var(--orange);color:#fff;padding:2px 8px;border-radius:50px}
@@ -141,6 +143,10 @@ body.embed{background:#fff;padding-bottom:calc(72px + env(safe-area-inset-bottom
 
 /* ── RUTA VIEW ── */
 .ruta-container{display:flex;flex-direction:column}
+.ruta-origen-tag{display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:800;padding:5px 12px;border-radius:50px;letter-spacing:.04em;text-transform:uppercase;margin-bottom:8px}
+.ruta-origen-tag.dep{background:#E8F5E9;color:#1B5E20;border:1.5px solid #2E7D32}
+.ruta-origen-tag.oc{background:#E3F2FD;color:#0D47A1;border:1.5px solid #1565C0}
+.ruta-origen-tag.mixto{background:#FFF3E0;color:#E65100;border:1.5px solid #F07D47}
 .ruta-header{background:var(--brown);color:var(--beige);padding:8px 14px;display:flex;justify-content:space-between;align-items:center;font-size:13px;font-weight:700}
 .ruta-header .ruta-zona{color:var(--orange)}
 .ruta-body{display:flex;flex-direction:column;align-items:center;justify-content:flex-start;padding:12px 14px 8px;text-align:center}
@@ -694,8 +700,12 @@ if(_IS_EMBED){
 }
 if('serviceWorker' in navigator && !_IS_EMBED){navigator.serviceWorker.register('/sw-ruta.js').catch(function(){})}
 
-/* ── PULL TO REFRESH custom ── */
+/* ── PULL TO REFRESH custom ──
+   En modo embed (dentro de panel.html) NO se activa: el panel ya tiene su botón
+   ↻ flotante y el auto-refresh al abrir la tab. Mantener el PTR adentro hace
+   que cualquier scroll natural hacia arriba dispare un refresh fantasma. */
 (function(){
+  if(document.body.classList.contains('embed') || (function(){try{return new URLSearchParams(location.search).get('embed')==='1';}catch(e){return false;}})())return;
   var startY=0, lastY=0, pulling=false, ready=false;
   var THRESHOLD=80, MAX_PULL=140, RESISTANCE=0.55;
   function ind(){return document.getElementById('ptrIndicator')}
@@ -806,9 +816,37 @@ function sortByZona(list){
     return(parseInt(a.l)||999)-(parseInt(b.l)||999);
   });return list;
 }
-// Red NO entra en RUTA (Tadeo no entrega — los retira el vendedor)
-function getSorted(){return sortByZona(getHoyPendientes().filter(function(e){return e.h!=='Red'&&armadoDone[eKey(e)]}))}
-function getHoySinArmar(){return getHoyPendientes().filter(function(e){return e.h!=='Red'&&!armadoDone[eKey(e)]})}
+// Tipo de origen efectivo del pedido para mostrar en RUTA y filtrar.
+//   'dep'   = todo sale del freezer (requiere armado)
+//   'oc'    = todo viene del proveedor (no requiere armado, va directo del proveedor al cliente)
+//   'mixto' = parte freezer + parte proveedor
+// Se calcula con _itemsDepDe / _itemsOCDe (que ya respetan oD y e.oc).
+function _origenTipo(e){
+  // Helpers _itemsDepDe / _itemsOCDe se definen más abajo en el archivo, pero JS hoists
+  // function declarations, así que es seguro llamarlos desde acá.
+  var dep=_itemsDepDe(e), oc=_itemsOCDe(e);
+  if(dep.length>0 && oc.length>0)return 'mixto';
+  if(oc.length>0)return 'oc';
+  return 'dep';
+}
+// Red NO entra en RUTA (Tadeo no entrega — los retira el vendedor).
+// Para los demás canales: entran a RUTA si están armados (productos del freezer ya en bolsa)
+// O si son 100% OC (no requieren armado, vienen directo del proveedor al cliente).
+function getSorted(){return sortByZona(getHoyPendientes().filter(function(e){
+  if(e.h==='Red')return false;
+  if(armadoDone[eKey(e)])return true;
+  // 100% OC: pasa directo a Ruta sin pasar por Armado (no hay nada que sacar del freezer)
+  if(_origenTipo(e)==='oc')return true;
+  return false;
+}))}
+// "Sin armar" = pedidos del día que requieren armado (dep o mixto) y todavía no están armados.
+// Los 100% OC NO van acá — no requieren armado, van directo a Ruta.
+function getHoySinArmar(){return getHoyPendientes().filter(function(e){
+  if(e.h==='Red')return false;
+  if(armadoDone[eKey(e)])return false;
+  if(_origenTipo(e)==='oc')return false;
+  return true;
+})}
 function prodText(p){return p.map(function(x){return'<span>'+x.q+'x</span> '+(PROD_NAMES[x.a]||x.a)}).join('<br>')}
 function formatMoney(n){return'$'+n.toLocaleString('es-AR')}
 function getZonaSummary(list){
@@ -825,10 +863,13 @@ function render(){
   if(_IS_EMBED){try{parent.postMessage({type:'maleu_ruta_counter',entregadas:doneHoy,total:totalHoy},'*');}catch(e){}}
   document.getElementById('syncBanner').className='sync-banner'+(syncQueue.length>0?' visible':'');
   document.getElementById('errorView').classList.add('hidden');
-  // Tab counts: ambos muestran HOY (Red cuenta para ARMADO pero no para RUTA)
+  // Tab counts: ambos muestran HOY (Red cuenta para ARMADO pero no para RUTA).
+  // Los 100% OC NO suman a "por armar" (no requieren armado): van directo a RUTA.
   var porArmar=0,armadosHoy=0;
   hoy.forEach(function(e){
-    if(armadoDone[eKey(e)]){if(e.h!=='Red')armadosHoy++}
+    if(armadoDone[eKey(e)]){if(e.h!=='Red')armadosHoy++; return;}
+    // Pedido sin armar: si es 100% OC va directo a RUTA, sino requiere armado
+    if(_origenTipo(e)==='oc'){if(e.h!=='Red')armadosHoy++}
     else porArmar++;
   });
   document.getElementById('tabArmadoCount').textContent=porArmar;
@@ -1081,10 +1122,11 @@ function _renderArmadoBarrios(lista){
     return true;
   });
   if(lista.length===0 && totalIn>0){
-    return '<div style="padding:20px 16px;text-align:center;color:var(--muted);font-size:13px;line-height:1.5;background:#FFFBF2;border-radius:10px;margin:6px 12px;border:1px dashed var(--cd)">'
+    return '<div style="padding:18px 16px;text-align:center;color:var(--brown);font-size:13px;line-height:1.5;background:#E3F2FD;border-radius:12px;margin:6px 12px;border:1.5px solid #1565C0">'
       +'<div style="font-size:28px;margin-bottom:6px">📦</div>'
-      +'<b style="color:var(--ink);display:block;margin-bottom:3px">Sin armado del depósito</b>'
-      +'Los '+totalIn+' pedido'+(totalIn>1?'s':'')+' de este día son <b>Orden de Compra</b> (vienen del proveedor). Aparecen en la tab <b>Ruta</b> el día de entrega.'
+      +'<b style="display:block;margin-bottom:4px;color:#0D47A1;font-size:14px">Sin armado del depósito</b>'
+      +'<div style="margin-bottom:12px">Los '+totalIn+' pedido'+(totalIn>1?'s':'')+' de este día vienen del proveedor (<b>Orden de Compra</b>). No requieren armado.</div>'
+      +'<button type="button" onclick="switchTab(\'ruta\')" style="padding:11px 22px;background:#1565C0;color:#fff;border:none;border-radius:10px;font-family:inherit;font-size:13px;font-weight:800;cursor:pointer;letter-spacing:.02em">Ir a RUTA para entregarlos →</button>'
       +'</div>';
   }
   var html='';
@@ -1120,9 +1162,13 @@ function renderArmadoGroup(pedidos,titulo,isOther,dayKey,esHoy){
   var html='';
   if(pedidos.length===0) return html;
 
-  // Conteo de armados / total
-  var armadosEnDia=0;pedidos.forEach(function(e){if(armadoDone[eKey(e)])armadosEnDia++});
-  var contLbl=armadosEnDia+'/'+pedidos.length+' armados';
+  // Conteo de armados / total. Solo cuentan los pedidos que REQUIEREN armado (Dep o Mixto).
+  // Los 100% OC no entran al denominador — no se arman desde el freezer.
+  var pedArmables=pedidos.filter(function(e){return _origenTipo(e)!=='oc'});
+  var armadosEnDia=0;pedArmables.forEach(function(e){if(armadoDone[eKey(e)])armadosEnDia++});
+  var contLbl=pedArmables.length>0
+    ? armadosEnDia+'/'+pedArmables.length+' armados'
+    : pedidos.length+' del proveedor';
 
   var dKey='dia:'+dayKey;
   var dayCollapsed=_isCollapsed(dKey,!!isOther); // hoy abierto, otros dias cerrados
@@ -1342,6 +1388,11 @@ function renderRuta(){
   var h='';
   if(e.l){h+='<div class="ruta-lote"><span style="font-size:16px;font-weight:700;display:block;color:var(--muted)">Lote</span>'+e.l+'</div>'}
   else{h+='<div style="font-size:24px;font-weight:900;color:var(--orange);margin-bottom:4px">'+e.d+'</div>'}
+  // Tag de origen: dónde está físicamente el producto que voy a entregar.
+  // dep = ya armado en bolsa · oc = pasa a buscar al proveedor · mixto = parte y parte
+  var _ot=_origenTipo(e);
+  var _otLabels={dep:'🧊 Del freezer',oc:'📦 Del proveedor',mixto:'🔀 Mixto'};
+  h+='<div class="ruta-origen-tag '+_ot+'">'+_otLabels[_ot]+'</div>';
   h+='<div class="ruta-nombre"><span class="ord-link" onclick="event.stopPropagation();_openOrdInPanel(\''+e.h+'\',\''+e.id+'\')" title="Ver detalle">'+e.c+'</span></div>';
 
   h+='<div class="ruta-productos">';e.p.forEach(function(p){h+='<div class="ruta-prod-item"><span>'+(PROD_NAMES[p.a]||p.a)+'</span><span class="ruta-prod-qty">'+p.q+'</span></div>'});h+='</div>';
