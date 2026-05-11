@@ -5806,28 +5806,51 @@ document.addEventListener('click',function(e){
   }
 });
 
+// Filtros facetados: cada dropdown muestra solo opciones presentes en VD
+// luego de aplicar los OTROS filtros. Si elegis Semana 19, el dropdown
+// Fecha solo lista las fechas que tienen ventas en Semana 19.
+function _vMatchesExcept(v,exceptKey){
+  if(exceptKey!=='mes'   && vFilt.mes.length   && vFilt.mes.indexOf(v.mes)<0)return false;
+  if(exceptKey!=='sem'   && vFilt.sem.length   && vFilt.sem.indexOf(String(v.sem))<0)return false;
+  if(exceptKey!=='un'    && vFilt.un.length    && vFilt.un.indexOf(getUnidad(v.canal))<0)return false;
+  if(exceptKey!=='canal' && vFilt.canal.length && vFilt.canal.indexOf(v.canal)<0)return false;
+  if(exceptKey!=='fecha' && vFilt.fecha.length && vFilt.fecha.indexOf(v.fecha)<0)return false;
+  if(exceptKey!=='pago'  && vFilt.pago.length  && vFilt.pago.indexOf(metodoPago(v))<0)return false;
+  if(exceptKey!=='ep'    && vFilt.ep.length    && vFilt.ep.indexOf(v.ep)<0)return false;
+  return true;
+}
+
 function buildVFilters(){
   if(!VD)return;
-  var meses={},sems={},unidades={},canales={},fechas={},pagos={},eps={};
-  VD.forEach(function(v){
-    if(v.mes)meses[v.mes]=1;
-    if(v.sem)sems[v.sem]=1;
-    var un=getUnidad(v.canal);if(un)unidades[un]=1;
-    if(v.canal)canales[v.canal]=1;
-    if(v.fecha)fechas[v.fecha]=1;
-    var mp=metodoPago(v);if(mp)pagos[mp]=1;
-    if(v.ep)eps[v.ep]=1;
+  var opts={mes:{},sem:{},un:{},canal:{},fecha:{},pago:{},ep:{}};
+  ['mes','sem','un','canal','fecha','pago','ep'].forEach(function(k){
+    VD.forEach(function(v){
+      if(!_vMatchesExcept(v,k))return;
+      if(k==='mes' && v.mes)opts.mes[v.mes]=1;
+      else if(k==='sem' && v.sem)opts.sem[v.sem]=1;
+      else if(k==='un'){var u=getUnidad(v.canal);if(u)opts.un[u]=1;}
+      else if(k==='canal' && v.canal)opts.canal[v.canal]=1;
+      else if(k==='fecha' && v.fecha)opts.fecha[v.fecha]=1;
+      else if(k==='pago'){var p=metodoPago(v);if(p)opts.pago[p]=1;}
+      else if(k==='ep' && v.ep)opts.ep[v.ep]=1;
+    });
   });
-  var mesArr=Object.keys(meses).sort(function(a,b){return MES_ORD.indexOf(a)-MES_ORD.indexOf(b);});
-  var semArr=Object.keys(sems).map(Number).sort(function(a,b){return a-b;}).map(String);
-  var unArr=Object.keys(unidades).sort();
-  var canalArr=Object.keys(canales).sort();
-  // Fechas dd/mm/yyyy ordenadas descendente (más recientes arriba)
   function _fNum(f){var p=f.split('/');return p.length===3?(p[2]+p[1]+p[0]):f;}
-  var fechaArr=Object.keys(fechas).sort(function(a,b){return _fNum(b).localeCompare(_fNum(a));});
-  var pagoArr=['Efectivo','MP','Mixto','Pendiente'].filter(function(p){return pagos[p];});
-  var epArr=Object.keys(eps).sort();
-
+  var mesArr=Object.keys(opts.mes).sort(function(a,b){return MES_ORD.indexOf(a)-MES_ORD.indexOf(b);});
+  var semArr=Object.keys(opts.sem).map(Number).sort(function(a,b){return a-b;}).map(String);
+  var unArr=Object.keys(opts.un).sort();
+  var canalArr=Object.keys(opts.canal).sort();
+  var fechaArr=Object.keys(opts.fecha).sort(function(a,b){return _fNum(b).localeCompare(_fNum(a));});
+  var pagoArr=['Efectivo','MP','Mixto','Pendiente'].filter(function(p){return opts.pago[p];});
+  var epArr=Object.keys(opts.ep).sort();
+  // Limpiar selecciones huerfanas (que ya no aparecen tras los otros filtros)
+  vFilt.mes  =vFilt.mes.filter(function(x){return opts.mes[x];});
+  vFilt.sem  =vFilt.sem.filter(function(x){return opts.sem[x];});
+  vFilt.un   =vFilt.un.filter(function(x){return opts.un[x];});
+  vFilt.canal=vFilt.canal.filter(function(x){return opts.canal[x];});
+  vFilt.fecha=vFilt.fecha.filter(function(x){return opts.fecha[x];});
+  vFilt.pago =vFilt.pago.filter(function(x){return opts.pago[x];});
+  vFilt.ep   =vFilt.ep.filter(function(x){return opts.ep[x];});
   buildDDOptions('ddMes',mesArr,'mes');
   buildDDOptions('ddSem',semArr,'sem');
   buildDDOptions('ddUn',unArr,'un');
@@ -5835,6 +5858,9 @@ function buildVFilters(){
   buildDDOptions('ddFecha',fechaArr,'fecha');
   buildDDOptions('ddPago',pagoArr,'pago');
   buildDDOptions('ddEp',epArr,'ep');
+  ['mes','sem','un','canal','fecha','pago','ep'].forEach(function(k){
+    updateDDLabel('dd'+k.charAt(0).toUpperCase()+k.slice(1),k);
+  });
 }
 
 // Metodo de pago calculado desde ef/tr (más confiable que el campo `fp` que
@@ -5910,11 +5936,11 @@ function buildDDOptions(ddId,values,filtKey){
       var idx=vFilt[filtKey].indexOf(v);
       if(idx>=0){vFilt[filtKey].splice(idx,1);opt.classList.remove('on');}
       else{vFilt[filtKey].push(v);opt.classList.add('on');}
-      updateDDLabel(ddId,filtKey);
-      // If mes changed, filter semanas
-      if(filtKey==='mes')filterSemanasbyMes();
       // Si tocan un filtro manualmente, desactivar chip rapido
       if(vQuickActive){vQuickActive=null;document.querySelectorAll('.v-chip[data-q]').forEach(function(c){c.classList.remove('on');});}
+      // Rebuild facetado: los demas dropdowns se re-arman con las opciones
+      // realmente disponibles dado este nuevo filtro.
+      buildVFilters();
       rVentas();
     };
     panel.appendChild(opt);
@@ -5929,25 +5955,6 @@ function updateDDLabel(ddId,filtKey){
   else{btn.textContent=sel.length+' seleccionados';btn.classList.add('has');}
 }
 
-function filterSemanasbyMes(){
-  if(!VD)return;
-  var selMeses=vFilt.mes;
-  if(!selMeses.length){
-    // Show all semanas
-    buildDDOptions('ddSem',Object.keys(VD.reduce(function(acc,v){if(v.sem)acc[v.sem]=1;return acc;},{})).map(Number).sort(function(a,b){return a-b;}).map(String),'sem');
-    return;
-  }
-  // Filter semanas by selected meses
-  var sems={};
-  VD.forEach(function(v){
-    if(selMeses.indexOf(v.mes)>=0&&v.sem)sems[v.sem]=1;
-  });
-  var semArr=Object.keys(sems).map(Number).sort(function(a,b){return a-b;}).map(String);
-  // Remove selected semanas that no longer exist
-  vFilt.sem=vFilt.sem.filter(function(s){return sems[s];});
-  buildDDOptions('ddSem',semArr,'sem');
-  updateDDLabel('ddSem','sem');
-}
 
 function rVentas(){
   if(!VD)return;
