@@ -506,8 +506,7 @@ function setZone(zone) {
   }
 }
 function welcomeShowBarrioStep() {
-  $id('loc-step-zone').style.display = 'none';
-  $id('loc-step-date').style.display = 'none';
+  _hideAllSteps();
   var step = $id('loc-step-barrio');
   if (step) step.style.display = '';
   renderWelcomeBarrioGrid();
@@ -601,12 +600,16 @@ function showDateModal() {
 function welcomeBackToZone() {
   welcomeShowZoneStep();
 }
+function _hideAllSteps() {
+  var ids = ['loc-step-zone', 'loc-step-barrio', 'loc-step-date'];
+  ids.forEach(function(id) { var el = $id(id); if (el) el.style.display = 'none'; });
+}
 function welcomeShowZoneStep() {
+  _hideAllSteps();
   $id('loc-step-zone').style.display = '';
-  $id('loc-step-date').style.display = 'none';
 }
 function welcomeShowDateStep() {
-  $id('loc-step-zone').style.display = 'none';
+  _hideAllSteps();
   var step = $id('loc-step-date');
   step.style.display = '';
   // Etiqueta con la zona elegida
