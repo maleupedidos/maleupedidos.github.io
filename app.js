@@ -148,21 +148,20 @@ function isPilarRestricted() {
    Devuelve true si HOY ya pasó el cutoff aplicable y el Vie de esta semana
    debe quedar oculto. */
 function _isPilarFridayCutoffPast() {
-  var barrioEl = $id('f-pilar-barrio');
-  var barrioVal = barrioEl ? barrioEl.value : '';
-  var tieneVendedor = barrioVal && barrioVal !== '__otro__' && barrioToVendedor[barrioVal.toLowerCase()];
-  // Sin barrio elegido aún → asumir Otro (más permisivo)
-  var cutoffHour = tieneVendedor ? 13 : 21;
+  // Desde 12/05/2026 ambos cutoffs (Red y no-Red) están alineados al cierre
+  // de OC con proveedor: Jueves 12:00 hs AR. Después de ese momento, el Vie
+  // de esta semana ya no es ofrecible.
   var nowAR = new Date(Date.now() - 3 * 3600 * 1000);
   var arDow = nowAR.getUTCDay(); // 0=Dom..6=Sáb
   var arHour = nowAR.getUTCHours();
-  return (arDow === 4 && arHour >= cutoffHour) || arDow === 5 || arDow === 6;
+  return (arDow === 4 && arHour >= 12) || arDow === 5 || arDow === 6;
 }
 
 /* ── ESTADO ── */
 let cart = {};
 let currentZone = null; // 'estancias' | 'pilar' | 'clubes'
-let stockMap = {};
+let stockMap = {};            // stock físico actual (lo que hay en el depósito)
+let stockProyectadoMap = {};  // físico + Σ cantidad OC "Pedido" pendientes
 let vendedoresRed = []; // {nombre, wa, barrios:[], partido, localidad}
 let barrioToVendedor = {}; // { 'El Lucero': {nombre, wa, partido, localidad}, ... }
 let _enviando = false;
@@ -197,40 +196,57 @@ const BARRIOS_PILAR_MODAL = [
 
    Si elige "Cualquier día" o no eligió fecha → modo abierto con info
    también (asumimos que es flexible). */
-function isStockLimited() {
-  // Pilar bajo restricción temporal: tope solo si la entrega es de ESTA
-  // semana (Vie 1/5 con Marcos). Si pide para la semana siguiente o más
-  // adelante, el flujo "a pedido" vuelve a estar disponible.
+/* Devuelve el modo de stock a aplicar según zona, barrio y fecha de
+   entrega elegida. Tres valores:
+     - 'ilimitado': sin tope, cliente pide lo que quiera.
+     - 'proyectado': tope = físico + lo que viene en camino (OC "Pedido").
+     - 'real': tope = stock físico actual.
+   Regla operativa: Tadeo cierra OC con proveedor Jue 12hs AR. Lo que el
+   cliente pida para entregas posteriores al próximo Vie depende de si
+   alcanzó esa OC (antes Jue 12hs → ilimitado) o ya no (después → proyectado). */
+function getStockMode() {
+  // Clubes y Pilar Red siempre ilimitado (el calendario los bloquea por
+  // cutoff si la fecha no aplica; el stock en sí no tiene tope).
+  if (currentZone === 'clubes') return 'ilimitado';
+  if (currentZone === 'pilar' && _pilarBarrioIsRed()) return 'ilimitado';
+  // Restricción Pilar temporal (29/4 - 3/5/2026, ya vencida). Compat.
   if (isPilarRestricted()) {
-    if (selectedDateIsFlexible) return true;
-    if (!selectedDeliveryDate) return true;
+    if (selectedDateIsFlexible) return 'real';
+    if (!selectedDeliveryDate) return 'real';
     var pms = _deliveryStartMs(selectedDeliveryDate);
-    if (pms && pms < PILAR_RESTRICCION_HASTA_MS) return true;
-    return false;
+    if (pms && pms < PILAR_RESTRICCION_HASTA_MS) return 'real';
+    return 'ilimitado';
   }
-  // Pilar fuera de restricción: tope si el barrio NO es Red (Marcos).
-  // Misma regla que Home: stock real para entregas ANTES del próximo
-  // Viernes; modo abierto desde el Vie en adelante.
-  if (currentZone === 'pilar') {
-    if (_pilarBarrioIsRed()) return false; // Red → a pedido / modo abierto
-    if (selectedDateIsFlexible && !selectedDeliveryDate) return false;
-    if (!selectedDeliveryDate) return false;
-    return _isDeliveryBeforeNextFriday(selectedDeliveryDate);
-  }
-  if (currentZone !== 'estancias') return false;
-  // Si elige "Cualquier día" sin fecha → no aplicar tope (no sabemos cuándo)
-  if (selectedDateIsFlexible && !selectedDeliveryDate) return false;
-  if (!selectedDeliveryDate) return false;
-  var deliveryStartMs = _deliveryStartMs(selectedDeliveryDate);
-  if (!deliveryStartMs) return false;
-  // Stock estricto extendido por semana especial (ej. feriados, falta
-  // de margen para reponer): toda entrega dentro de la ventana topa al
-  // stock real aunque esté lejos.
-  var hastaMs = STOCK_ESTRICTO_HASTA_MS[currentZone];
-  if (hastaMs && deliveryStartMs < hastaMs) return true;
-  // Regla por defecto: tope si la entrega es ANTES del próximo Viernes.
-  // Desde el Vie en adelante hay tiempo de reponer al proveedor → modo abierto.
-  return _isDeliveryBeforeNextFriday(selectedDeliveryDate);
+  if (currentZone !== 'estancias' && currentZone !== 'pilar') return 'ilimitado';
+  if (selectedDateIsFlexible && !selectedDeliveryDate) return 'ilimitado';
+  if (!selectedDeliveryDate) return 'ilimitado';
+  var deliveryDay = _isoToUTCMidnightMs(selectedDeliveryDate);
+  if (deliveryDay == null) return 'ilimitado';
+  var todayDay = _todayARMidnightMs();
+  if (deliveryDay < todayDay) return 'real';
+  var todayDow = new Date(todayDay).getUTCDay();
+  var daysToFriday = (5 - todayDow + 7) % 7;
+  var proximoVie = todayDay + daysToFriday * 86400000;
+  var siguienteVie = proximoVie + 7 * 86400000;
+  if (deliveryDay < proximoVie) return 'real';
+  if (deliveryDay >= siguienteVie) return 'ilimitado';
+  // Entrega entre próximo_vie y siguiente_vie: depende del cutoff_OC.
+  // cutoff_OC = Jue anterior 12hs AR = Jue 00:00 UTC + 15hs.
+  var cutoffOC = proximoVie - 86400000 + 15 * 3600 * 1000;
+  return Date.now() < cutoffOC ? 'ilimitado' : 'proyectado';
+}
+function _todayARMidnightMs() {
+  var nowAR = new Date(Date.now() - 3 * 3600 * 1000);
+  return Date.UTC(nowAR.getUTCFullYear(), nowAR.getUTCMonth(), nowAR.getUTCDate());
+}
+function _isoToUTCMidnightMs(iso) {
+  if (!iso) return null;
+  var p = iso.split('-'); if (p.length !== 3) return null;
+  return Date.UTC(+p[0], +p[1] - 1, +p[2]);
+}
+function isStockLimited() {
+  var m = getStockMode();
+  return m === 'real' || m === 'proyectado';
 }
 /* True si la fecha de entrega ISO cae ANTES del próximo Viernes
    (incluyendo hoy si aún no es Vie). Regla operativa: tope al stock real
@@ -266,17 +282,12 @@ function _pilarBarrioIsRed() {
   return !!barrioToVendedor[val.toLowerCase()];
 }
 /* Modo "abierto con info": muestra cartel celeste "Hoy hay N en stock ·
-   Pedís más para fecha futura". Aplica en Estancias y en Pilar no-Red
-   (cuando comparten regla con Home). */
+   Pedís más para fecha futura". Aplica solo cuando el modo es 'ilimitado'
+   en Estancias o Pilar no-Red, y el stock físico es bajo. */
 function isStockInfoMode() {
-  if (currentZone === 'estancias') {
-    if (isStockLimited()) return false;
-    return true;
-  }
-  if (currentZone === 'pilar' && !_pilarBarrioIsRed()) {
-    if (isStockLimited()) return false;
-    return true;
-  }
+  if (getStockMode() !== 'ilimitado') return false;
+  if (currentZone === 'estancias') return true;
+  if (currentZone === 'pilar' && !_pilarBarrioIsRed()) return true;
   return false;
 }
 /* Hora de inicio de entrega (UTC ms) para una fecha ISO dada.
@@ -977,10 +988,10 @@ function renderCardFooter(id) {
   const p = PROD_MAP[id];
   if (!p) return;
   const qty = cart[id] || 0;
-  const limited = isStockLimited();
-  const avail = stockMap[id];
-  const sinStock = limited && avail !== undefined && avail === 0;
-  const atLimit = limited && avail !== undefined && qty >= avail;
+  // Tope dinámico según modo: real (físico), proyectado (físico+OC), o null (ilimitado).
+  const cap = getStockCap(id);
+  const sinStock = cap !== null && cap !== undefined && cap === 0;
+  const atLimit = cap !== null && cap !== undefined && qty >= cap;
   if (qty === 0) {
     footer.innerHTML = '<span class="product-price">' + ars(p.precio) + '</span>' +
       '<button class="add-btn" onclick="addToCart(\'' + p.id + '\')"' + (sinStock ? ' disabled' : '') + '>' +
@@ -992,17 +1003,17 @@ function renderCardFooter(id) {
         '<span class="card-qty-val">' + qty + '</span>' +
         '<button class="card-qty-btn" onclick="cardChangeQty(\'' + p.id + '\',+1)"' + (atLimit ? ' disabled' : '') + '>+</button>' +
       '</div>' +
-      (atLimit ? '<span style="display:block;text-align:center;font-size:.75rem;color:#c0392b;margin-top:4px;font-weight:600;">Máximo disponible: ' + avail + '</span>' : '');
+      (atLimit ? '<span style="display:block;text-align:center;font-size:.75rem;color:#c0392b;margin-top:4px;font-weight:600;">Máximo disponible: ' + cap + '</span>' : '');
   }
 }
 
 /* ── CARRITO ── */
 function modifyCart(id, delta) {
   const current = cart[id] || 0;
-  if (delta > 0 && isStockLimited()) {
-    const avail = stockMap[id];
-    if (avail !== undefined && current >= avail) {
-      toast('⚠️ Stock limitado — solo hay ' + avail + ' disponible' + (avail !== 1 ? 's' : ''), 3000);
+  if (delta > 0) {
+    const cap = getStockCap(id);
+    if (cap !== null && cap !== undefined && current >= cap) {
+      toast('⚠️ Stock limitado — solo hay ' + cap + ' disponible' + (cap !== 1 ? 's' : ''), 3000);
       return;
     }
   }
@@ -1633,37 +1644,83 @@ function updateCatNavTop() {
 }
 
 /* ── STOCK ── */
+/* stockMap[id]            = stock físico (lo que hay en el depósito ahora)
+   stockProyectadoMap[id]  = físico + Σ cantidad de OCs en estado "Pedido"
+                             (lo que está en camino al depósito)            */
 async function fetchStock() {
   try {
-    const bust = '?action=stock&_=' + Date.now();
+    const bust = '?action=stock_full&_=' + Date.now();
     const res = await fetch(APPS_SCRIPT_URL + bust, { cache: 'no-store' });
-    const abbrStock = await res.json();
-    PRODUCTOS.forEach(p => { const abbr=PROD_ABBR[p.id]; if(abbr&&abbrStock[abbr]!==undefined) stockMap[p.id]=abbrStock[abbr]; });
-    if (isStockLimited()) {
+    const full = await res.json();
+    PRODUCTOS.forEach(p => {
+      const abbr = PROD_ABBR[p.id];
+      if (!abbr || !full[abbr]) return;
+      stockMap[p.id] = full[abbr].f;
+      stockProyectadoMap[p.id] = full[abbr].p;
+    });
+    // Ajustar carrito si excede el tope vigente según el modo actual
+    const mode = getStockMode();
+    if (mode === 'real' || mode === 'proyectado') {
+      const capMap = mode === 'real' ? stockMap : stockProyectadoMap;
       let ajustado = false;
-      Object.entries(cart).forEach(([id,qty]) => {
-        const avail=stockMap[id];
-        if(avail!==undefined&&qty>avail){if(avail===0)delete cart[id];else cart[id]=avail;ajustado=true;renderCardFooter(id);}
+      Object.entries(cart).forEach(([id, qty]) => {
+        const cap = capMap[id];
+        if (cap !== undefined && qty > cap) {
+          if (cap === 0) delete cart[id];
+          else cart[id] = cap;
+          ajustado = true;
+          renderCardFooter(id);
+        }
       });
-      if(ajustado){updateUI();toast('⚠️ Tu carrito fue ajustado por stock disponible');}
+      if (ajustado) { updateUI(); toast('⚠️ Tu carrito fue ajustado al stock disponible'); }
     }
     updateStockDisplay();
     loadLastOrder();
-  } catch(e) { console.warn('fetchStock:',e); }
+  } catch (e) { console.warn('fetchStock:', e); }
+}
+/* Devuelve el tope a usar para un producto según el modo de stock actual.
+   Si es 'ilimitado', devuelve null (sin tope). */
+function getStockCap(id) {
+  const m = getStockMode();
+  if (m === 'ilimitado') return null;
+  if (m === 'proyectado') return stockProyectadoMap[id];
+  return stockMap[id];
 }
 function updateStockDisplay() {
-  const limited = isStockLimited();
-  const infoMode = isStockInfoMode();
-  const showStock = limited || infoMode || (currentZone && ZONAS[currentZone] && ZONAS[currentZone].showStock);
+  const mode = getStockMode();
+  const showStock = mode !== 'ilimitado' || isStockInfoMode() || (currentZone && ZONAS[currentZone] && ZONAS[currentZone].showStock);
   PRODUCTOS.forEach(p => {
-    const el=$id('stock-'+p.id), avail=stockMap[p.id]; if(!el) return;
-    if (!showStock || avail===undefined) { el.innerHTML=''; }
-    else if(avail===0 && limited) el.innerHTML='<span class="stock-badge stock-out">Sin stock</span>';
-    else if(avail===0 && infoMode) el.innerHTML='<span class="stock-badge stock-info">Hoy: 0 en stock · Pedís para fecha futura ✓</span>';
-    else if(avail===0 && !limited) el.innerHTML='<span class="stock-badge stock-order">A pedido</span>';
-    else if(avail<=3 && limited) el.innerHTML='<span class="stock-badge stock-low">Últimas '+avail+' unidades</span>';
-    else if(avail<=5 && infoMode) el.innerHTML='<span class="stock-badge stock-info">Hoy hay '+avail+' en stock · Pedís más para fecha futura ✓</span>';
-    else el.innerHTML='';
+    const el = $id('stock-' + p.id);
+    if (!el) return;
+    const fis = stockMap[p.id];
+    const proy = stockProyectadoMap[p.id];
+    if (!showStock || fis === undefined) { el.innerHTML = ''; renderCardFooter(p.id); return; }
+    if (mode === 'real') {
+      if (fis === 0) el.innerHTML = '<span class="stock-badge stock-out">Sin stock</span>';
+      else if (fis <= 3) el.innerHTML = '<span class="stock-badge stock-low">Últimas ' + fis + ' unidades</span>';
+      else el.innerHTML = '';
+    } else if (mode === 'proyectado') {
+      // El cap es proy. Si proy == fis (no hay OC pedida) mostrar igual que real.
+      if (proy === 0) el.innerHTML = '<span class="stock-badge stock-out">Sin stock</span>';
+      else if (proy === fis) {
+        if (proy <= 3) el.innerHTML = '<span class="stock-badge stock-low">Últimas ' + proy + ' unidades</span>';
+        else el.innerHTML = '';
+      } else {
+        // Hay OC en camino que suma al disponible
+        el.innerHTML = '<span class="stock-badge stock-proj">Disponible: ' + proy + ' · incluye lo que viene en camino</span>';
+      }
+    } else {
+      // ilimitado con info: stock físico bajo pero puede pedir más
+      if (isStockInfoMode()) {
+        if (fis === 0) el.innerHTML = '<span class="stock-badge stock-info">Hoy: 0 en stock · Pedís para fecha futura ✓</span>';
+        else if (fis <= 5) el.innerHTML = '<span class="stock-badge stock-info">Hoy hay ' + fis + ' en stock · Pedís más para fecha futura ✓</span>';
+        else el.innerHTML = '';
+      } else if (fis === 0) {
+        el.innerHTML = '<span class="stock-badge stock-order">A pedido</span>';
+      } else {
+        el.innerHTML = '';
+      }
+    }
     renderCardFooter(p.id);
   });
 }
