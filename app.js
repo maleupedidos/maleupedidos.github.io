@@ -169,6 +169,21 @@ let _enviando = false;
 let selectedDeliveryDate = null;     // ISO "YYYY-MM-DD"
 let selectedDeliveryDayName = null;  // "Lunes" | "Miércoles" | etc.
 let selectedDateIsFlexible = false;  // true cuando el cliente elige "Cualquier día"
+let selectedPilarBarrio = null;      // valor del dropdown Pilar (ej: 'Pilara', '__otro__')
+let selectedPilarBarrioName = null;  // nombre display del barrio
+
+/* Lista de barrios que se muestran en el paso 2 del modal de bienvenida
+   cuando el cliente eligió Pilar y Alrededores. Los marcados isRed son
+   los de vendedores Red (Marcos) y entran en flujo "a pedido". El resto
+   se comporta como Home: tope al stock real si la fecha está cerca. */
+const BARRIOS_PILAR_MODAL = [
+  { val: 'Pilara',       nombre: 'Pilara',       isRed: false },
+  { val: 'El Ocho',      nombre: 'El Ocho',      isRed: false },
+  { val: 'El Lucero',    nombre: 'El Lucero',    isRed: true, badge: 'Marcos' },
+  { val: 'Los Tacos',    nombre: 'Los Tacos',    isRed: true, badge: 'Marcos' },
+  { val: 'Villa Bertha', nombre: 'Villa Bertha', isRed: true, badge: 'Marcos' },
+  { val: '__otro__',     nombre: 'Otro barrio',  isRed: false, isOther: true }
+];
 
 /* Tope estricto de stock — depende de la fecha de entrega elegida.
    Solo aplica en zona Estancias (Pilar y Clubes nunca tienen tope).
@@ -187,11 +202,21 @@ function isStockLimited() {
   // semana (Vie 1/5 con Marcos). Si pide para la semana siguiente o más
   // adelante, el flujo "a pedido" vuelve a estar disponible.
   if (isPilarRestricted()) {
-    if (selectedDateIsFlexible) return true; // "Cualquier día" → próximo Vie (esta sem)
+    if (selectedDateIsFlexible) return true;
     if (!selectedDeliveryDate) return true;
     var pms = _deliveryStartMs(selectedDeliveryDate);
-    if (pms && pms < PILAR_RESTRICCION_HASTA_MS) return true; // entrega dentro de la restricción
-    return false; // semana siguiente en adelante → abierto
+    if (pms && pms < PILAR_RESTRICCION_HASTA_MS) return true;
+    return false;
+  }
+  // Pilar fuera de restricción: tope si el barrio NO es Red (Marcos).
+  // Misma regla que Home: tope si faltan <24hs de la entrega.
+  if (currentZone === 'pilar') {
+    if (_pilarBarrioIsRed()) return false; // Red → a pedido / modo abierto
+    if (selectedDateIsFlexible && !selectedDeliveryDate) return false;
+    if (!selectedDeliveryDate) return false;
+    var pDS = _deliveryStartMs(selectedDeliveryDate);
+    if (!pDS) return false;
+    return ((pDS - Date.now()) / 3600000) < 24;
   }
   if (currentZone !== 'estancias') return false;
   // Si elige "Cualquier día" sin fecha → no aplicar tope (no sabemos cuándo)
@@ -208,11 +233,28 @@ function isStockLimited() {
   var hoursUntil = (deliveryStartMs - Date.now()) / 3600000;
   return hoursUntil < 24;
 }
-/* Modo "abierto con info": Estancias con fecha lejana, "Cualquier día", o sin elegir. */
+/* Devuelve true si el barrio elegido en Pilar pertenece a un vendedor Red
+   (hoy Marcos: El Lucero / Los Tacos / Villa Bertha). Si todavía no eligió
+   barrio, devuelve false (no-Red por default → más estricto). */
+function _pilarBarrioIsRed() {
+  var sel = $id('f-pilar-barrio');
+  var val = sel ? sel.value : (selectedPilarBarrio || '');
+  if (!val || val === '__otro__') return false;
+  return !!barrioToVendedor[val.toLowerCase()];
+}
+/* Modo "abierto con info": muestra cartel celeste "Hoy hay N en stock ·
+   Pedís más para fecha futura". Aplica en Estancias y en Pilar no-Red
+   (cuando comparten regla con Home). */
 function isStockInfoMode() {
-  if (currentZone !== 'estancias') return false;
-  if (isStockLimited()) return false;
-  return true;
+  if (currentZone === 'estancias') {
+    if (isStockLimited()) return false;
+    return true;
+  }
+  if (currentZone === 'pilar' && !_pilarBarrioIsRed()) {
+    if (isStockLimited()) return false;
+    return true;
+  }
+  return false;
 }
 /* Hora de inicio de entrega (UTC ms) para una fecha ISO dada.
    Lun 18hs · Mié/Vie/Sáb 19hs · Dom 11hs · Pilar 19hs · Clubes 19hs. */
@@ -348,15 +390,23 @@ function renderPilarBarrios() {
   if (!sel) return;
   var restricted = isPilarRestricted();
   // Limpiar y re-armar
-  var cur = sel.value;
+  var cur = sel.value || selectedPilarBarrio || '';
   sel.innerHTML = '<option value="">Elegí tu barrio privado</option>';
-  // Todos los barrios cubiertos por vendedores activos (ordenados)
-  var all = [];
-  vendedoresRed.forEach(v => (v.barrios || []).forEach(b => { if (all.indexOf(b) === -1) all.push(b); }));
-  all.sort();
-  all.forEach(b => {
-    sel.innerHTML += '<option value="' + b + '">' + b + '</option>';
+  // Lista canónica del modal (incluye no-Red como Pilara y El Ocho).
+  // Agregamos primero los del modal, después los Red dinámicos del Sheets
+  // que no estén ya, para no perder ninguno.
+  var addedVals = {};
+  BARRIOS_PILAR_MODAL.forEach(function(b) {
+    if (b.isOther) return; // "Otro" se agrega al final
+    sel.innerHTML += '<option value="' + b.val + '">' + b.nombre + '</option>';
+    addedVals[b.val] = true;
   });
+  vendedoresRed.forEach(v => (v.barrios || []).forEach(b => {
+    if (!addedVals[b]) {
+      sel.innerHTML += '<option value="' + b + '">' + b + '</option>';
+      addedVals[b] = true;
+    }
+  }));
   // "Otro barrio" se oculta durante la restricción de esta semana
   if (!restricted) {
     sel.innerHTML += '<option value="__otro__">Otro barrio</option>';
@@ -372,9 +422,20 @@ function onPilarBarrioChange() {
   var val = $id('f-pilar-barrio').value;
   var fieldOtro = $id('field-pilar-otro');
   if (fieldOtro) fieldOtro.style.display = val === '__otro__' ? '' : 'none';
+  // Sincronizar con el barrio guardado del modal
+  if (val) {
+    var match = BARRIOS_PILAR_MODAL.filter(function(b) { return b.val === val; })[0];
+    var nombre = match ? match.nombre : val;
+    selectedPilarBarrio = val;
+    selectedPilarBarrioName = nombre;
+    try { localStorage.setItem('maleu_pilar_barrio', JSON.stringify({ val: val, nombre: nombre, ts: Date.now() })); } catch(e) {}
+  }
   updatePilarVendedorLabel();
   updatePilarDiasEntrega();
   updatePromoBar();
+  // Si cambió Red ↔ no-Red, el cap de stock puede cambiar — refrescar
+  _ensureCartFitsDate();
+  updateStockDisplay();
   updateUI();
   updateShippingBar();
 }
@@ -429,14 +490,84 @@ function setZone(zone) {
     window.scrollTo(0, 0);
     return;
   }
+  // Pilar: paso intermedio de barrio. Si tiene barrio guardado vigente
+  // saltamos directo al paso fecha.
+  if (zone === 'pilar' && !_loadSavedPilarBarrio()) {
+    welcomeShowBarrioStep();
+    return;
+  }
   // Si ya tenía fecha guardada y aún es vigente, no volver a preguntar.
-  // Si no, avanzar al paso 2 (fecha) en el mismo modal.
+  // Si no, avanzar al paso de fecha.
   if (!_loadSavedDate()) {
     welcomeShowDateStep();
   } else {
     _setOverlay(false);
     window.scrollTo(0, 0);
   }
+}
+function welcomeShowBarrioStep() {
+  $id('loc-step-zone').style.display = 'none';
+  $id('loc-step-date').style.display = 'none';
+  var step = $id('loc-step-barrio');
+  if (step) step.style.display = '';
+  renderWelcomeBarrioGrid();
+}
+function welcomeBackFromDate() {
+  // Botón "← Volver" del paso fecha. Si zona = Pilar volver a paso barrio,
+  // si no, al paso de zona.
+  if (currentZone === 'pilar') welcomeShowBarrioStep();
+  else welcomeShowZoneStep();
+}
+function renderWelcomeBarrioGrid() {
+  var grid = $id('loc-barrios-grid');
+  if (!grid) return;
+  grid.innerHTML = BARRIOS_PILAR_MODAL.map(function(b) {
+    var classes = ['loc-barrio-card'];
+    if (b.isRed) classes.push('is-red');
+    if (b.isOther) classes.push('is-other');
+    var badge = b.badge ? '<span class="loc-barrio-badge">' + b.badge + '</span>' : '';
+    return '<button type="button" class="' + classes.join(' ') + '"'
+         + ' onclick="setPilarBarrio(\'' + b.val + '\',\'' + b.nombre + '\')">'
+         + badge
+         + '<span class="loc-barrio-name">' + b.nombre + '</span>'
+         + '</button>';
+  }).join('');
+}
+function setPilarBarrio(val, nombre) {
+  selectedPilarBarrio = val;
+  selectedPilarBarrioName = nombre;
+  try {
+    localStorage.setItem('maleu_pilar_barrio', JSON.stringify({
+      val: val, nombre: nombre, ts: Date.now()
+    }));
+  } catch(e) {}
+  // Pre-popular el dropdown del checkout
+  var sel = $id('f-pilar-barrio');
+  if (sel) {
+    sel.value = val;
+    if (typeof onPilarBarrioChange === 'function') onPilarBarrioChange();
+  }
+  // Avanzar al paso fecha
+  if (!_loadSavedDate()) {
+    welcomeShowDateStep();
+  } else {
+    _setOverlay(false);
+    window.scrollTo(0, 0);
+  }
+}
+function _loadSavedPilarBarrio() {
+  try {
+    var raw = JSON.parse(localStorage.getItem('maleu_pilar_barrio') || 'null');
+    if (!raw || !raw.val) return false;
+    selectedPilarBarrio = raw.val;
+    selectedPilarBarrioName = raw.nombre || '';
+    var sel = $id('f-pilar-barrio');
+    if (sel) {
+      sel.value = raw.val;
+      if (typeof onPilarBarrioChange === 'function') onPilarBarrioChange();
+    }
+    return true;
+  } catch(e) { return false; }
 }
 function _setClubesDefaultDate() {
   // Próximo Viernes (a coordinar). Marcamos como flexible para que no
@@ -1616,11 +1747,15 @@ if (savedZone && ZONAS[savedZone]) {
     // Clubes: nunca se pregunta fecha (Vie en cancha). Setear default.
     if (!_loadSavedDate()) _setClubesDefaultDate();
     _setOverlay(false);
+  } else if (savedZone === 'pilar' && !_loadSavedPilarBarrio()) {
+    // Pilar sin barrio guardado → preguntar barrio.
+    welcomeShowBarrioStep();
+    _setOverlay(true);
   } else if (_loadSavedDate()) {
     // Tiene fecha vigente → todo listo.
     _setOverlay(false);
   } else {
-    // Falta fecha → abrir el modal directamente en paso 2.
+    // Falta fecha → abrir el modal directamente en paso fecha.
     welcomeShowDateStep();
     _setOverlay(true);
   }
