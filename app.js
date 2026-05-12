@@ -209,12 +209,13 @@ function isStockLimited() {
     return false;
   }
   // Pilar fuera de restricción: tope si el barrio NO es Red (Marcos).
-  // Misma regla que Home: tope si la entrega es HOY o MAÑANA.
+  // Misma regla que Home: stock real para entregas ANTES del próximo
+  // Viernes; modo abierto desde el Vie en adelante.
   if (currentZone === 'pilar') {
     if (_pilarBarrioIsRed()) return false; // Red → a pedido / modo abierto
     if (selectedDateIsFlexible && !selectedDeliveryDate) return false;
     if (!selectedDeliveryDate) return false;
-    return _isDeliveryTodayOrTomorrow(selectedDeliveryDate);
+    return _isDeliveryBeforeNextFriday(selectedDeliveryDate);
   }
   if (currentZone !== 'estancias') return false;
   // Si elige "Cualquier día" sin fecha → no aplicar tope (no sabemos cuándo)
@@ -227,19 +228,33 @@ function isStockLimited() {
   // stock real aunque esté lejos.
   var hastaMs = STOCK_ESTRICTO_HASTA_MS[currentZone];
   if (hastaMs && deliveryStartMs < hastaMs) return true;
-  // Regla por defecto: tope si la entrega es HOY o MAÑANA. Pasado mañana
-  // en adelante hay margen para reponer al proveedor → modo abierto.
-  return _isDeliveryTodayOrTomorrow(selectedDeliveryDate);
+  // Regla por defecto: tope si la entrega es ANTES del próximo Viernes.
+  // Desde el Vie en adelante hay tiempo de reponer al proveedor → modo abierto.
+  return _isDeliveryBeforeNextFriday(selectedDeliveryDate);
 }
-/* True si la fecha de entrega ISO cae en HOY o MAÑANA (hora Argentina). */
-function _isDeliveryTodayOrTomorrow(iso) {
+/* True si la fecha de entrega ISO cae ANTES del próximo Viernes
+   (incluyendo hoy si aún no es Vie). Regla operativa: tope al stock real
+   para entregas anteriores al próximo Vie; modo abierto desde el Vie en
+   adelante. Cumple los casos de Home y Pilar no-Red:
+     Hoy Mar 12 → Mié 13 = stock (antes del Vie 15), Vie 15 = ilimitado.
+     Hoy Dom 9  → Lun 10 = stock (antes del Vie 14), Mié 12 = stock,
+                  Vie 14 = ilimitado.
+   Si hoy es Vie, el "próximo Vie" es hoy mismo → todas las entregas
+   futuras (incl. la de hoy) caen como ilimitado.
+   Si hoy es Sáb, el "próximo Vie" es +6 días → entregas Dom/Lun/Mar/Mié/Jue
+   intermedios quedan como stock. */
+function _isDeliveryBeforeNextFriday(iso) {
   if (!iso) return false;
   var parts = iso.split('-'); if (parts.length !== 3) return false;
   var nowAR = new Date(Date.now() - 3 * 3600 * 1000);
   var today = new Date(Date.UTC(nowAR.getUTCFullYear(), nowAR.getUTCMonth(), nowAR.getUTCDate()));
   var d = Date.UTC(+parts[0], +parts[1] - 1, +parts[2]);
-  var diffDays = Math.round((d - today.getTime()) / 86400000);
-  return diffDays <= 1 && diffDays >= 0;
+  if (d < today.getTime()) return false;
+  var todayDow = today.getUTCDay(); // 0=Dom..6=Sáb
+  // Distancia al próximo Vie (5 = Vie). Si hoy es Vie, daysToFriday=0.
+  var daysToFriday = (5 - todayDow + 7) % 7;
+  var fridayMs = today.getTime() + daysToFriday * 86400000;
+  return d < fridayMs;
 }
 /* Devuelve true si el barrio elegido en Pilar pertenece a un vendedor Red
    (hoy Marcos: El Lucero / Los Tacos / Villa Bertha). Si todavía no eligió
@@ -280,19 +295,16 @@ function _deliveryStartMs(iso) {
   date.setUTCHours(hourAR + 3, 0, 0, 0);
   return date.getTime();
 }
-/* Hora de FIN de entrega (UTC ms) para una fecha ISO. Usado para decidir
-   si la fecha ya pasó por completo y conviene sacarla del calendario. */
+/* Fin del día calendario AR (00:00 del día siguiente) para una fecha ISO.
+   Se usa para decidir si la fecha calendario ya pasó. Mantenemos la fecha
+   disponible hasta las 23:59 hs AR de ese mismo día, aunque la ventana de
+   entrega haya terminado a las 21hs. */
 function _deliveryEndMs(iso) {
   if (!iso || iso === 'any') return null;
   var parts = iso.split('-'); if (parts.length !== 3) return null;
-  var y = +parts[0], m = +parts[1] - 1, d = +parts[2];
-  var date = new Date(Date.UTC(y, m, d));
-  var dow = date.getUTCDay();
-  var hourAR;
-  if (dow === 1) hourAR = 19;        // Lunes 18-19hs
-  else if (dow === 0) hourAR = 13;   // Domingo 11-13hs
-  else hourAR = 21;                   // Mié/Jue/Vie/Sáb 19-21hs
-  date.setUTCHours(hourAR + 3, 0, 0, 0);
+  // 00:00 AR del día siguiente = 03:00 UTC del día siguiente
+  var date = new Date(Date.UTC(+parts[0], +parts[1] - 1, +parts[2] + 1));
+  date.setUTCHours(3, 0, 0, 0);
   return date.getTime();
 }
 let _formVisible = false;
