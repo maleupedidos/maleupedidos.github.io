@@ -209,14 +209,12 @@ function isStockLimited() {
     return false;
   }
   // Pilar fuera de restricción: tope si el barrio NO es Red (Marcos).
-  // Misma regla que Home: tope si faltan <24hs de la entrega.
+  // Misma regla que Home: tope si la entrega es HOY o MAÑANA.
   if (currentZone === 'pilar') {
     if (_pilarBarrioIsRed()) return false; // Red → a pedido / modo abierto
     if (selectedDateIsFlexible && !selectedDeliveryDate) return false;
     if (!selectedDeliveryDate) return false;
-    var pDS = _deliveryStartMs(selectedDeliveryDate);
-    if (!pDS) return false;
-    return ((pDS - Date.now()) / 3600000) < 24;
+    return _isDeliveryTodayOrTomorrow(selectedDeliveryDate);
   }
   if (currentZone !== 'estancias') return false;
   // Si elige "Cualquier día" sin fecha → no aplicar tope (no sabemos cuándo)
@@ -226,12 +224,22 @@ function isStockLimited() {
   if (!deliveryStartMs) return false;
   // Stock estricto extendido por semana especial (ej. feriados, falta
   // de margen para reponer): toda entrega dentro de la ventana topa al
-  // stock real aunque la fecha esté a >24hs.
+  // stock real aunque esté lejos.
   var hastaMs = STOCK_ESTRICTO_HASTA_MS[currentZone];
   if (hastaMs && deliveryStartMs < hastaMs) return true;
-  // Regla por defecto: tope si faltan menos de 24hs para la entrega
-  var hoursUntil = (deliveryStartMs - Date.now()) / 3600000;
-  return hoursUntil < 24;
+  // Regla por defecto: tope si la entrega es HOY o MAÑANA. Pasado mañana
+  // en adelante hay margen para reponer al proveedor → modo abierto.
+  return _isDeliveryTodayOrTomorrow(selectedDeliveryDate);
+}
+/* True si la fecha de entrega ISO cae en HOY o MAÑANA (hora Argentina). */
+function _isDeliveryTodayOrTomorrow(iso) {
+  if (!iso) return false;
+  var parts = iso.split('-'); if (parts.length !== 3) return false;
+  var nowAR = new Date(Date.now() - 3 * 3600 * 1000);
+  var today = new Date(Date.UTC(nowAR.getUTCFullYear(), nowAR.getUTCMonth(), nowAR.getUTCDate()));
+  var d = Date.UTC(+parts[0], +parts[1] - 1, +parts[2]);
+  var diffDays = Math.round((d - today.getTime()) / 86400000);
+  return diffDays <= 1 && diffDays >= 0;
 }
 /* Devuelve true si el barrio elegido en Pilar pertenece a un vendedor Red
    (hoy Marcos: El Lucero / Los Tacos / Villa Bertha). Si todavía no eligió
