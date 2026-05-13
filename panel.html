@@ -1061,7 +1061,19 @@ body.role-single .statusbar{font-size:11px}
       <div class="fg"><label>Efectivo real ($)</label><input type="text" id="ajEf" placeholder="0" inputmode="decimal"></div>
       <div class="fg"><label>Mercado Pago real ($)</label><input type="text" id="ajMP" placeholder="0" inputmode="decimal"></div>
     </div>
+    <div class="fg" style="margin-top:8px"><label>De ese Efectivo, ¿cuánto en billetera? ($) <span style="color:var(--bl);font-weight:400">(opcional)</span></label><input type="text" id="ajBil" placeholder="0" inputmode="decimal"></div>
     <button class="btn-submit" id="ajBtn" onclick="guardarAjuste()">Confirmar saldo</button>
+  </div>
+  <!-- Mover plata entre Caja Fuerte y Billetera (oculto por defecto) -->
+  <div class="form-card hidden" id="moverForm">
+    <div class="form-title">Mover entre Caja Fuerte y Billetera</div>
+    <p style="font-size:11px;color:var(--bl);margin-bottom:12px;line-height:1.4">No cambia el saldo Efectivo total — solo mueve plata de un lugar al otro.</p>
+    <div class="toggle-row" style="margin-bottom:12px">
+      <div class="toggle-btn on" id="movDirA" onclick="setMoverDir('aBilletera')">🔒 → 👛 A billetera</div>
+      <div class="toggle-btn" id="movDirB" onclick="setMoverDir('aCajaFuerte')">👛 → 🔒 A caja fuerte</div>
+    </div>
+    <div class="fg"><label>Monto ($)</label><input type="text" id="movMonto" placeholder="0" inputmode="decimal"></div>
+    <button class="btn-submit" id="movBtn" onclick="guardarMover()">Confirmar</button>
   </div>
   <!-- Toggle gasto / ingreso -->
   <div class="toggle-row">
@@ -2905,28 +2917,64 @@ function guardarIngreso(e){
 }
 
 // ── AJUSTAR SALDO ──
-function toggleAjuste(){$('ajusteForm').classList.toggle('hidden');}
+function toggleAjuste(){$('ajusteForm').classList.toggle('hidden');$('moverForm').classList.add('hidden');}
 function guardarAjuste(){
   var ef=parseM($('ajEf').value),mp=parseM($('ajMP').value);
+  var bilRaw=$('ajBil').value;
+  var bil=bilRaw.trim()===''?null:parseM(bilRaw); // null = hereda valor anterior
+  if(bil!==null && bil>ef){toast('La billetera no puede ser mayor al efectivo total');return;}
   var btn=$('ajBtn');btn.disabled=true;btn.textContent='Guardando...';
   showLoader('Ajustando saldo...');
-  fetch(API,{method:'POST',body:JSON.stringify({action:'ajusteSaldo',efectivo:ef,mp:mp})})
+  var payload={action:'ajusteSaldo',efectivo:ef,mp:mp};
+  if(bil!==null)payload.billetera=bil;
+  fetch(API,{method:'POST',body:JSON.stringify(payload)})
     .then(function(r){return r.json();})
     .then(function(r){
       if(r.ok){
         // El ajuste rebalancea: nuevo Saldo Base = (ef,mp), y los acumuladores
         // de cobros/gastos/ingresos cuentan solo movimientos posteriores → 0 al instante.
         var hoy=new Date();var fStr=String(hoy.getDate()).padStart(2,'0')+'/'+String(hoy.getMonth()+1).padStart(2,'0')+'/'+hoy.getFullYear();
-        D.saldoBase={ef:ef,mp:mp,fecha:fStr};
+        D.saldoBase={ef:ef,mp:mp,bil:(r.bil!==undefined?r.bil:(bil||0)),fecha:fStr};
         D.caja={cobradoEf:0,cobradoMP:0,gastosEf:0,gastosMP:0,ingresosEf:0,ingresosMP:0};
         render();hideLoader(true);
         toast('Saldo: EF $'+f$(ef)+' · MP $'+f$(mp));
-        $('ajusteForm').classList.add('hidden');$('ajEf').value='';$('ajMP').value='';
+        $('ajusteForm').classList.add('hidden');$('ajEf').value='';$('ajMP').value='';$('ajBil').value='';
         load();
       }else{hideLoader(true);toast('Error al ajustar');}
     })
     .catch(function(){hideLoader(true);toast('Sin conexion');})
     .finally(function(){btn.disabled=false;btn.textContent='Confirmar saldo';});
+}
+
+// ── MOVER ENTRE CAJA FUERTE Y BILLETERA ──
+// No cambia el saldo Efectivo total. Solo reasigna el sub-saldo "billetera".
+// Default: aBilletera (caso típico: sacar plata para salir a repartir).
+var _moverDir='aBilletera';
+function toggleMover(){$('moverForm').classList.toggle('hidden');$('ajusteForm').classList.add('hidden');setMoverDir('aBilletera');}
+function setMoverDir(dir){
+  _moverDir=dir;
+  $('movDirA').classList.toggle('on',dir==='aBilletera');
+  $('movDirB').classList.toggle('on',dir==='aCajaFuerte');
+}
+function guardarMover(){
+  var monto=parseM($('movMonto').value);
+  if(monto<=0){toast('Ingresá un monto');return;}
+  var btn=$('movBtn');btn.disabled=true;btn.textContent='Guardando...';
+  showLoader('Moviendo...');
+  fetch(API,{method:'POST',body:JSON.stringify({action:'moverBilletera',monto:monto,dir:_moverDir})})
+    .then(function(r){return r.json();})
+    .then(function(r){
+      if(r.ok){
+        // Optimistic update local: ajustar bil sin esperar el load completo
+        if(D.saldoBase){D.saldoBase.bil=r.bil;}
+        render();hideLoader(true);
+        toast(_moverDir==='aBilletera'?'→ Billetera $'+f$(monto):'→ Caja fuerte $'+f$(monto));
+        $('moverForm').classList.add('hidden');$('movMonto').value='';
+        load();
+      }else{hideLoader(true);toast(r.err||'Error al mover');}
+    })
+    .catch(function(){hideLoader(true);toast('Sin conexion');})
+    .finally(function(){btn.disabled=false;btn.textContent='Confirmar';});
 }
 
 // ── RENDER ──
@@ -3637,13 +3685,22 @@ function rCaja(){
     requestAnimationFrame(function(){window.scrollTo(0,_savedScroll);});
   }
   var cj=D.caja||{cobradoEf:0,cobradoMP:0,gastosEf:0,gastosMP:0,ingresosEf:0,ingresosMP:0};
-  var sb=D.saldoBase||{ef:0,mp:0,fecha:''};
+  var sb=D.saldoBase||{ef:0,mp:0,bil:0,fecha:''};
   // Saldo = base + cobrado pedidos + ingresos manuales - gastos
   var saldoEf=sb.ef+cj.cobradoEf+(cj.ingresosEf||0)-cj.gastosEf;
   var saldoMP=sb.mp+cj.cobradoMP+(cj.ingresosMP||0)-cj.gastosMP;
   var saldoTotal=saldoEf+saldoMP;
+  // Sub-saldo Billetera: el snapshot lo trae; no se afecta por cobros/gastos del d\u00eda
+  // (decisi\u00f3n 1b: el desglose es manual, no autom\u00e1tico). Caja Fuerte = saldoEf - bil.
+  var bil=Number(sb.bil||0);
+  var cajaFuerte=saldoEf-bil;
   $('cBal').innerHTML=
-    '<div class="bal-card"><span class="bal-ico">&#128181;</span><div class="bal-info"><div class="bal-label">Efectivo</div><div class="bal-val" style="color:'+(saldoEf>=0?'var(--gd)':'var(--r)')+'">$'+f$(saldoEf)+'</div></div></div>'+
+    '<div class="bal-card"><span class="bal-ico">&#128181;</span><div class="bal-info"><div class="bal-label">Efectivo</div><div class="bal-val" style="color:'+(saldoEf>=0?'var(--gd)':'var(--r)')+'">$'+f$(saldoEf)+'</div>'
+      +'<div class="bal-sub" style="font-size:11px;color:var(--bl);line-height:1.4;margin-top:4px">'
+      +'<div style="display:flex;justify-content:space-between;gap:8px"><span>\ud83d\udd12 Caja fuerte</span><b style="color:var(--ink)">$'+f$(cajaFuerte)+'</b></div>'
+      +'<div style="display:flex;justify-content:space-between;gap:8px"><span>\ud83d\udc5b Billetera</span><b style="color:var(--ink)">$'+f$(bil)+'</b></div>'
+      +'<button onclick="toggleMover()" style="margin-top:6px;width:100%;padding:6px 10px;background:transparent;border:1px dashed var(--bl);border-radius:6px;font-family:inherit;font-size:11px;font-weight:600;color:var(--bl);cursor:pointer">\u2194 Mover entre las dos</button>'
+      +'</div></div></div>'+
     '<div class="bal-card"><span class="bal-ico">&#128241;</span><div class="bal-info"><div class="bal-label">Mercado Pago</div><div class="bal-val" style="color:'+(saldoMP>=0?'var(--gd)':'var(--r)')+'">$'+f$(saldoMP)+'</div></div></div>'+
     '<div class="bal-card total"><div class="bal-label">Saldo total</div><div class="bal-val">$'+f$(saldoTotal)+'</div><button class="btn-adjust" onclick="toggleAjuste()">'+(sb.fecha?'Ajustado '+sb.fecha+' \u00b7 ':'')+'Ajustar</button></div>';
   // Movimientos: libro diario unificado (cobros de pedidos + ingresos no-venta + gastos).
