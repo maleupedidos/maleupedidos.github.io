@@ -2333,6 +2333,7 @@ function confirmarDeshacerOrigen(btn){
   var hoja=btn.dataset.h, id=btn.dataset.n, row=Number(btn.dataset.r)||0, cli=btn.dataset.c||'';
   if(!confirm('¿Deshacer el origen del pedido de '+cli+'?\n\nEl pedido vuelve a "Pendiente" y se eliminan las Órdenes de Compra asociadas. Después podés volver a elegir el origen.'))return;
   btn.disabled=true;btn.textContent='Deshaciendo...';
+  window._forceTopOnRender=true;
   showLoader('Deshaciendo origen...');
   fetch(API,{method:'POST',body:JSON.stringify({action:'deshacerOrigen',hoja:hoja,id:id,row:row})})
     .then(function(r){return r.json();})
@@ -2351,14 +2352,14 @@ function confirmarDeshacerOrigen(btn){
         }
         render();hideLoader(true);
         toast('Origen deshecho · '+(r.ocBorradas||0)+' OC borrada'+(r.ocBorradas===1?'':'s'));
-        load();
+        load().then(function(){window._forceTopOnRender=false;});
       } else {
-        hideLoader(true);
+        hideLoader(true);window._forceTopOnRender=false;
         btn.disabled=false;btn.textContent='↩️ Deshacer origen (volver a Pendiente)';
         toast('Error: '+(r.err||r.error||'?'));
       }
     })
-    .catch(function(){hideLoader(true);btn.disabled=false;btn.textContent='REINTENTAR';});
+    .catch(function(){hideLoader(true);window._forceTopOnRender=false;btn.disabled=false;btn.textContent='REINTENTAR';});
 }
 
 // ── EDITOR DE PRODUCTOS DEL PEDIDO ──
@@ -2621,6 +2622,8 @@ function confirmarOrigen(btn){
   if(error){toast('Cantidad no coincide en '+error);return;}
   if(!confirm('¿Confirmar origen de este pedido?\n\n'+resumen.join('\n')))return;
   btn.disabled=true;btn.textContent='Guardando...';btn.classList.add('saving');
+  // Tras confirmar origen, scrolleamos al top en cada render hasta que termina la accion.
+  window._forceTopOnRender=true;
   showLoader('Guardando origen...');
   // Calcular el origen resultante (Deposito / Orden de Compra / Mixto) para UI optimista
   var anyD=false,anyOC=false;
@@ -2644,11 +2647,11 @@ function confirmarOrigen(btn){
         }
         render();hideLoader(true);
         toast('Origen guardado');
-        load(); // reconciliar en background (sin bloquear UI)
+        load().then(function(){window._forceTopOnRender=false;}); // reconciliar en background
       }
-      else{hideLoader(true);btn.disabled=false;btn.textContent='ERROR: '+(r.error||r.err||'?');btn.classList.remove('saving');}
+      else{hideLoader(true);window._forceTopOnRender=false;btn.disabled=false;btn.textContent='ERROR: '+(r.error||r.err||'?');btn.classList.remove('saving');}
     })
-    .catch(function(){hideLoader(true);btn.disabled=false;btn.textContent='REINTENTAR';btn.classList.remove('saving');});
+    .catch(function(){hideLoader(true);window._forceTopOnRender=false;btn.disabled=false;btn.textContent='REINTENTAR';btn.classList.remove('saving');});
 }
 
 // Helper: actualiza un campo de un pedido en D.pedidos (UI optimista).
@@ -2718,7 +2721,10 @@ function cambiarFechaEntrega(inp){
 // ── CAMBIAR ESTADO (Reservar / Quitar reserva) — UI optimista + loader hasta sync completo ──
 function cambiarEstado(btn){
   var hoja=btn.dataset.h, id=btn.dataset.n, row=Number(btn.dataset.r)||0, nuevoEstado=btn.dataset.est;
-  // Optimista: render local del pedido (estado nuevo se ve al instante)
+  // Optimista: render local del pedido (estado nuevo se ve al instante).
+  // Scroll al top en cada render hasta que termine la accion: Tadeo quiere
+  // ver desde arriba la nueva lista, no quedarse pegado en el item que toco.
+  window._forceTopOnRender=true;
   _patchPedidoLocal(hoja,id,{es:nuevoEstado});
   render();
   showLoader(nuevoEstado==='Reservado'?'Reservando y actualizando stock...':'Quitando reserva y actualizando stock...');
@@ -2733,8 +2739,8 @@ function cambiarEstado(btn){
       // Esperar al load() para que el stock de la hoja Productos llegue refrescado.
       return load();
     })
-    .then(function(){hideLoader(true);})
-    .catch(function(){hideLoader(true);toast('Sin conexion');});
+    .then(function(){hideLoader(true);window._forceTopOnRender=false;})
+    .catch(function(){hideLoader(true);window._forceTopOnRender=false;toast('Sin conexion');});
 }
 
 // ── CANCELAR PEDIDO (con confirmación) — UI optimista ──
@@ -6013,13 +6019,17 @@ function rVentas(){
     totalPropEf+=Number(v.pEf)||0;
     totalPropTr+=Number(v.pTr)||0;
   });
-  var totalPropinas=totalPropEf+totalPropTr;
-  var totalCob=totalEf+totalTr+totalPropinas;
-  var totalEfRecibido=totalEf+totalPropEf;
-  var totalTrRecibido=totalTr+totalPropTr;
+  // Propina NEGATIVA = ajuste de redondeo (ej. cobre $10.550 de un pedido de
+  // $10.580 → pEf=-30). No es plata que entro, es un descuento aplicado.
+  // Por eso al sumar Cobrado/Efectivo/MP solo contamos propinas positivas.
+  var totalPropinas=totalPropEf+totalPropTr; // neto (puede ser negativo)
+  var totalPropPos=Math.max(0,totalPropEf)+Math.max(0,totalPropTr);
+  var totalCob=totalEf+totalTr+totalPropPos;
+  var totalEfRecibido=totalEf+Math.max(0,totalPropEf);
+  var totalTrRecibido=totalTr+Math.max(0,totalPropTr);
   var totalPend=Math.max(0,totalFact-totalCob);
-  var sumPropinas=totalPropinas>0
-    ? '<div class="v-kpi prop"><div class="v-kpi-v">$'+f$(totalPropinas)+'</div><div class="v-kpi-l">Propinas</div></div>'
+  var sumPropinas=totalPropinas!==0
+    ? '<div class="v-kpi prop"><div class="v-kpi-v">'+(totalPropinas<0?'-':'')+'$'+f$(Math.abs(totalPropinas))+'</div><div class="v-kpi-l">Propinas / Ajustes</div></div>'
     : '';
   if(vTab==='cobros'){
     // En Cobros: todos los pedidos estan cobrados. No tiene sentido mostrar "Facturado"
@@ -6049,14 +6059,19 @@ function rVentas(){
   filtered.forEach(function(v){
     var el=document.createElement('div');el.className='vt';
     var canalColor={'Venta Directa':'#E8DFC4','Clubes':'#DCEDC8','Red':'#FFE0B2','B2B':'#F8BBD0','Catering':'#B2DFDB'};
-    // Total cobrado por metodo (incluye propina sumada al metodo en el que se recibio).
-    var totEf=(Number(v.ef)||0)+(Number(v.pEf)||0);
-    var totTr=(Number(v.tr)||0)+(Number(v.pTr)||0);
+    // Total cobrado por metodo. Propina positiva = se suma al cash recibido.
+    // Propina negativa = ajuste de redondeo, se muestra aparte para no confundir.
+    var _ef=Number(v.ef)||0,_tr=Number(v.tr)||0;
+    var _pEf=Number(v.pEf)||0,_pTr=Number(v.pTr)||0;
+    var totEf=_ef+Math.max(0,_pEf);
+    var totTr=_tr+Math.max(0,_pTr);
+    var ajuste=Math.min(0,_pEf)+Math.min(0,_pTr); // suma de propinas negativas
     var pagoLine='';
-    if(totEf>0||totTr>0){
+    if(totEf>0||totTr>0||ajuste<0){
       var parts=[];
       if(totEf>0)parts.push('<b>Ef</b> $'+f$(totEf));
       if(totTr>0)parts.push('<b>MP</b> $'+f$(totTr));
+      if(ajuste<0)parts.push('<b>Ajuste</b> -$'+f$(Math.abs(ajuste)));
       pagoLine='<div class="vt-pago">'+parts.join(' &middot; ')+'</div>';
     }
     // Tag de fecha segun el modo activo. Si entrega y cobro difieren, mostrar la otra
@@ -6105,12 +6120,19 @@ function rVentas(){
       if(c)c.textContent='▲';
     });
   }
+  // Cuando una accion del usuario quiere forzar scroll al top (ej: cambio estado
+  // de un pedido) seteamos window._forceTopOnRender=true antes del render. El
+  // wrapper lo respeta en lugar de restaurar la posicion anterior.
   window.render=function(){
     var open=_snapAcc();
     var sx=window.scrollX,sy=window.scrollY;
     var r=_origRender.apply(this,arguments);
     _restAcc(open);
-    window.scrollTo(sx,sy);
+    if(window._forceTopOnRender){
+      window.scrollTo(0,0);
+    } else {
+      window.scrollTo(sx,sy);
+    }
     return r;
   };
 })();
