@@ -152,8 +152,11 @@ body.embed .tabs{top:0}
 .ruta-body{display:flex;flex-direction:column;align-items:center;justify-content:flex-start;padding:12px 14px 8px;text-align:center}
 .ruta-lote{font-size:48px;font-weight:900;color:var(--orange);line-height:1;margin-bottom:4px}
 .ruta-resumen{background:var(--white);border-bottom:1px solid var(--border);padding:8px 12px;display:flex;gap:6px;flex-wrap:wrap}
-.ruta-resumen-pill{font-size:12px;background:var(--brown);color:var(--beige);padding:6px 12px;border-radius:50px;font-weight:700;cursor:pointer;min-height:32px;display:inline-flex;align-items:center}
+.ruta-resumen-pill{font-size:12px;background:var(--brown);color:var(--beige);padding:6px 12px;border-radius:50px;font-weight:700;cursor:pointer;min-height:32px;display:inline-flex;align-items:center;-webkit-tap-highlight-color:transparent;user-select:none;transition:transform .1s,background .12s}
+.ruta-resumen-pill:active{transform:scale(.94)}
 .ruta-resumen-pill.active{background:var(--orange);color:#fff}
+.ruta-resumen-pill.todos{background:transparent;color:var(--brown);border:1.5px dashed var(--brown)}
+.ruta-resumen-pill.todos:active{background:rgba(51,28,28,.08)}
 .ruta-nombre{font-size:18px;font-weight:700;color:var(--muted);margin-bottom:10px;line-height:1.2}
 .ruta-productos{background:var(--white);border-radius:12px;padding:10px 14px;margin-bottom:8px;width:100%;text-align:left}
 .ruta-prod-item{display:flex;justify-content:space-between;padding:5px 0;font-size:15px;border-bottom:1px solid var(--beige)}
@@ -664,6 +667,9 @@ var entregas=[], entregados={}, cobrados={}, propinas={}, syncQueue=[], armadoDo
 // Una sola card sintética en RUTA agrupa todas. Se completa cuando Tadeo confirma que
 // la mercadería ya está físicamente en el freezer.
 var pendientesGuardarStock=[]; // [{abbr,prod,qty,rows:[r1,r2,...],proveedor}]
+// Filtro de zona en RUTA. null = todos. String = subbarrio/barrio. Las pills arriba
+// permiten elegir destino y la lista de Ruta se filtra a solo ese subbarrio.
+var rutaFiltroZona=null;
 var currentTab='armado', rutaIndex=0, isOnline=navigator.onLine, resumenBarrioAbierto=null;
 // Estado de colapso del tab Armado: runtime-only, en cada refresh arranca vacio.
 // Declarado aca arriba para que getArmadoCollapse() no devuelva undefined si render()
@@ -1428,14 +1434,46 @@ function mergeArmadoBusqueda(){
 }
 
 /* ── RUTA ── */
+
+// Identifica la "zona" de un pedido para filtros/pills.
+// Estancias del Pilar tiene subbarrios reales (Santa Catalina, La Pionera, etc).
+// Pilar/Clubes/sintéticos usan el barrio como zona.
+function _zonaDe(e){
+  if(e._depAgg)return 'Depósito';
+  if(e._redAgg)return 'Vendedor Red';
+  return e.sb || e.b || 'Otros';
+}
+
+// Cambiar/quitar filtro de zona en RUTA. Toggle si misma zona, reset rutaIndex.
+function setRutaFiltro(zona){
+  if(rutaFiltroZona===zona)rutaFiltroZona=null;
+  else rutaFiltroZona=zona;
+  rutaIndex=0;
+  saveLocal();
+  renderRuta();
+}
+
 function renderRuta(){
   document.getElementById('armadoView').classList.add('hidden');document.getElementById('rutaView').classList.remove('hidden');document.getElementById('cobrosView').classList.add('hidden');document.getElementById('nuevoView').classList.add('hidden');
-  var sorted=getSorted(),resumen=document.getElementById('rutaResumen'),header=document.getElementById('rutaHeader'),body=document.getElementById('rutaBody'),actions=document.getElementById('rutaActions');
+  var sortedAll=getSorted();
+  // Aplicar filtro si está activo
+  var sorted=rutaFiltroZona ? sortedAll.filter(function(e){return _zonaDe(e)===rutaFiltroZona}) : sortedAll;
+  var resumen=document.getElementById('rutaResumen'),header=document.getElementById('rutaHeader'),body=document.getElementById('rutaBody'),actions=document.getElementById('rutaActions');
 
   if(sorted.length===0){
     resumen.innerHTML='';header.innerHTML='';
     var sinArmar=getHoySinArmar();
     var emptyH;
+    if(rutaFiltroZona && sortedAll.length>0){
+      // Filtro activo y no quedan pedidos en esa zona
+      emptyH='<div class="empty" style="padding:24px 20px;display:flex;flex-direction:column;align-items:center;gap:14px">'
+        +'<div style="font-size:48px">✓</div>'
+        +'<div style="font-size:16px;font-weight:800;color:var(--brown)">No hay entregas en '+rutaFiltroZona+'</div>'
+        +'<div style="font-size:13px;color:var(--muted)">Quedan '+sortedAll.length+' pedido'+(sortedAll.length>1?'s':'')+' en otras zonas</div>'
+        +'<button type="button" onclick="setRutaFiltro(null)" style="margin-top:6px;padding:12px 22px;background:var(--orange);color:#fff;border:none;border-radius:10px;font-family:inherit;font-size:14px;font-weight:800;cursor:pointer">Ver todas las zonas</button>'
+        +'</div>';
+      body.innerHTML=emptyH;actions.innerHTML='';return;
+    }
     if(sinArmar.length>0){
       emptyH='<div class="empty" style="padding:24px 20px;display:flex;flex-direction:column;align-items:center;gap:14px">'
         +'<div style="font-size:48px">📦</div>'
@@ -1474,13 +1512,23 @@ function renderRuta(){
   if(rutaIndex>=sorted.length)rutaIndex=0;if(rutaIndex<0)rutaIndex=sorted.length-1;
   var e=sorted[rutaIndex],key=eKey(e);
 
-  // Pills de barrios arriba
-  var summary=getZonaSummary(sorted);
-  var barrioActual=e.b||'Otros';
+  // Pills por subbarrio (clickeables, filtran la lista). Se calculan sobre
+  // sortedAll (sin filtro) para que vos veas qué zonas tienen entregas hoy.
+  var zonasCount={};
+  sortedAll.forEach(function(it){
+    var z=_zonaDe(it);
+    zonasCount[z]=(zonasCount[z]||0)+1;
+  });
+  var zonaActual=_zonaDe(e);
   var rh='';
-  Object.keys(summary).forEach(function(b){
-    var isActive=b===barrioActual;
-    rh+='<span class="ruta-resumen-pill'+(isActive?' active':'')+'">'+b+' '+summary[b].total+'</span>';
+  // Pill "Todos" para limpiar filtro
+  if(rutaFiltroZona){
+    rh+='<span class="ruta-resumen-pill todos" onclick="setRutaFiltro(null)">↺ Todos ('+sortedAll.length+')</span>';
+  }
+  Object.keys(zonasCount).sort().forEach(function(z){
+    var isActive=rutaFiltroZona ? (rutaFiltroZona===z) : (z===zonaActual);
+    var zEsc=String(z).replace(/'/g,"\\'");
+    rh+='<span class="ruta-resumen-pill'+(isActive?' active':'')+'" onclick="setRutaFiltro(\''+zEsc+'\')">'+z+' '+zonasCount[z]+'</span>';
   });
   resumen.innerHTML=rh;
 
@@ -1549,7 +1597,11 @@ function renderRuta(){
   h+='<div class="ruta-cobrar"><span class="ruta-cobrar-total" id="totalFacturado">'+formatMoney(totalFact)+'</span><span class="ruta-cobrar-badge '+badgeClass+'">'+badgeText+'</span></div>';
 
   h+='<div class="ruta-extras">';
-  if(e.t){var tel=e.t.replace(/[^0-9]/g,'');if(tel.length<12)tel='54'+tel;h+='<a href="https://wa.me/'+tel+'?text='+encodeURIComponent('En camino a dejarte el pedido!')+'" class="btn-wpp-sm">En camino</a>';h+='<a href="https://wa.me/'+tel+'?text='+encodeURIComponent('Estoy afuera!')+'" class="btn-wpp-sm">Estoy afuera</a>'}
+  // wa.me requiere target="_blank" cuando ruta.html está embebida en un iframe
+  // (panel.html). Sin target, Safari iOS intenta cargar wa.me dentro del iframe
+  // y bloquea silenciosamente (los handlers de app no funcionan en iframes
+  // anidados). _blank rompe del iframe y dispara la app WhatsApp.
+  if(e.t){var tel=e.t.replace(/[^0-9]/g,'');if(tel.length<12)tel='54'+tel;h+='<a href="https://wa.me/'+tel+'?text='+encodeURIComponent('En camino a dejarte el pedido!')+'" target="_blank" rel="noopener" class="btn-wpp-sm">En camino</a>';h+='<a href="https://wa.me/'+tel+'?text='+encodeURIComponent('Estoy afuera!')+'" target="_blank" rel="noopener" class="btn-wpp-sm">Estoy afuera</a>'}
   if(!cobrado){h+='<div style="flex:2;display:flex;align-items:center;gap:8px;background:var(--white);border:1.5px solid var(--border);border-radius:8px;padding:10px 12px;min-width:0"><label style="font-size:12px;font-weight:700;flex-shrink:0">Propina $</label><input type="number" id="propinaInput" inputmode="numeric" placeholder="0" value="'+(prop||'')+'" oninput="actualizarPropina(\''+key+'\','+e.$+')" style="flex:1;min-width:0;border:none;font-size:16px;font-weight:700;font-family:inherit;text-align:right;outline:none;background:transparent"></div>'}
   h+='</div>';
 
@@ -1704,7 +1756,7 @@ function renderCobrosFromServer(){
       // Propina
       h+='<div class="cobro-field"><label>Propina $</label><input type="number" id="cobroPropina_'+globalIdx+'" inputmode="numeric" placeholder="0" value="" oninput="actualizarCobroPropina('+globalIdx+')"></div>';
       h+='<div class="cobro-card-actions">';
-      if(tel){h+='<a href="https://wa.me/'+tel+'?text='+aliasMsg+'" class="cobro-btn-alias">Comprobante</a>'}
+      if(tel){h+='<a href="https://wa.me/'+tel+'?text='+aliasMsg+'" target="_blank" rel="noopener" class="cobro-btn-alias">Comprobante</a>'}
       h+='<button type="button" class="cobro-btn-cobrado" style="background:#F9A825;color:#fff" onclick="abrirCobroParcial('+globalIdx+')">Parcial</button>';
       h+='<button class="cobro-btn-cobrado" onclick="confirmarCobro('+globalIdx+')">Cobrado</button></div></div>';
     });
@@ -1722,7 +1774,7 @@ function renderPendientesCobro(){
     // Propina input
     h+='<div class="cobro-field"><label>Propina $</label><input type="number" id="cobroPropina_'+i+'" inputmode="numeric" placeholder="0" value="" oninput="actualizarCobroPropina('+i+')"></div>';
     h+='<div class="cobro-card-actions">';
-    if(tel){h+='<a href="https://wa.me/'+tel+'?text='+aliasMsg+'" class="cobro-btn-alias">Comprobante</a>'}
+    if(tel){h+='<a href="https://wa.me/'+tel+'?text='+aliasMsg+'" target="_blank" rel="noopener" class="cobro-btn-alias">Comprobante</a>'}
     var fpLocal=pc.fp||'Efectivo';
     var efLocal=fpLocal==='Efectivo'?pc.$:0;var trLocal=fpLocal==='Transferencia'?pc.$:0;
     h+='<button class="cobro-btn-cobrado" onclick="cobrarPendiente('+i+','+efLocal+','+trLocal+',\''+fpLocal+'\',false)">Cobrado</button></div></div>';
