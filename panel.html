@@ -1282,6 +1282,10 @@ body.role-single .statusbar{font-size:11px}
         <option value="vendidos">Mas vendidos</option>
         <option value="mes">Mas vendidos (mes)</option>
         <option value="facturado">Mas facturados</option>
+        <option value="comprados30">Mas comprados (30d)</option>
+        <option value="stSobra">Sell-through bajo (sobra)</option>
+        <option value="stRota">Sell-through alto (rota)</option>
+        <option value="costoUlt">Costo unit. mas alto</option>
         <option value="stock">Mas stock</option>
         <option value="alfa">Nombre A-Z</option>
       </select>
@@ -7053,12 +7057,26 @@ if('serviceWorker' in navigator){
     if (sortBy === 'vendidos') lista.sort(function(a,b){ return b.vendidosTotal - a.vendidosTotal; });
     else if (sortBy === 'mes') lista.sort(function(a,b){ return b.vendidosMes - a.vendidosMes; });
     else if (sortBy === 'facturado') lista.sort(function(a,b){ return b.facturadoTotal - a.facturadoTotal; });
+    else if (sortBy === 'comprados30') lista.sort(function(a,b){ return (b.comprados30||0) - (a.comprados30||0); });
+    else if (sortBy === 'stSobra') {
+      // Productos donde compraste mucho mas que lo que vendes: sell-through bajo (% pequeno)
+      lista = lista.filter(function(p){ return (p.comprados30||0) > 0; })
+                   .sort(function(a,b){ return (a.sellThrough30||0) - (b.sellThrough30||0); });
+    }
+    else if (sortBy === 'stRota') {
+      lista = lista.filter(function(p){ return (p.sellThrough30||0) > 0; })
+                   .sort(function(a,b){ return (b.sellThrough30||0) - (a.sellThrough30||0); });
+    }
+    else if (sortBy === 'costoUlt') lista.sort(function(a,b){ return (b.costoUltimo||0) - (a.costoUltimo||0); });
     else if (sortBy === 'stock') lista.sort(function(a,b){ return b.stockFisico - a.stockFisico; });
     else if (sortBy === 'alfa') lista.sort(function(a,b){ return (a.nombre||'').localeCompare(b.nombre||''); });
 
     var totalUnid = lista.reduce(function(s,p){ return s + p.vendidosTotal; }, 0);
     var totalFact = lista.reduce(function(s,p){ return s + p.facturadoTotal; }, 0);
-    el('crmProdStats').innerHTML = '<b>'+lista.length+'</b> productos &middot; <b>'+totalUnid+'</b> unidades vendidas &middot; <b>$'+fmt$(totalFact)+'</b> facturado';
+    var totalVen30 = lista.reduce(function(s,p){ return s + (p.vendidosMes||0); }, 0);
+    var totalCom30 = lista.reduce(function(s,p){ return s + (p.comprados30||0); }, 0);
+    var stGlobal = totalCom30 > 0 ? Math.round(totalVen30 / totalCom30 * 100) : null;
+    el('crmProdStats').innerHTML = '<b>'+lista.length+'</b> productos &middot; <b>'+totalUnid+'</b> u vendidas &middot; <b>$'+fmt$(totalFact)+'</b> facturado &middot; <b>'+totalCom30+'</b> u compradas 30d' + (stGlobal!==null?' &middot; sell-through 30d <b>'+stGlobal+'%</b>':'');
 
     if (!lista.length) {
       el('crmProdList').innerHTML = '<div class="empty"><p>Sin resultados</p></div>';
@@ -7068,12 +7086,20 @@ if('serviceWorker' in navigator){
     var html = lista.map(function(p){
       var stockClass = p.stockFisico === 0 ? 'crm-est-deuda' : (p.stockFisico <= 3 ? 'crm-est-Dormido' : 'crm-est-Activo');
       var stockLbl = p.stockFisico === 0 ? '0 - sin stock' : p.stockFisico + ' u';
+      // Sell-through badge: rojo si <50% (sobra), verde 80-130% (sano), naranja si >150% (rota mas de lo que entra)
+      var st = p.sellThrough30;
+      var stHtml = '';
+      if (st !== null && st !== undefined && (p.comprados30||0) > 0) {
+        var stCol = st < 50 ? '#c0392b' : (st > 150 ? '#e67e22' : (st >= 80 && st <= 130 ? '#27ae60' : '#7f8c8d'));
+        stHtml = '<span class="crm-st-badge" style="background:'+stCol+'1a;color:'+stCol+';border:1px solid '+stCol+'55;padding:2px 7px;border-radius:10px;font-size:11px;font-weight:600;margin-left:6px">'+st+'%</span>';
+      }
+      var costoLbl = p.costoUltimo > 0 ? ('costo $'+fmt$(p.costoUltimo)) : ('costo $'+fmt$(p.costo));
       return '<div class="crm-card" onclick="crmOpenProducto(\''+escHtml(p.abrev)+'\')">'
         + '<div class="crm-card-info">'
-          + '<div class="crm-card-name">'+escHtml(p.nombre)+' <span class="crm-alt">'+escHtml(p.abrev)+'</span></div>'
+          + '<div class="crm-card-name">'+escHtml(p.nombre)+' <span class="crm-alt">'+escHtml(p.abrev)+'</span>'+stHtml+'</div>'
           + '<div class="crm-card-meta">'
-            + '<span>$'+fmt$(p.precio)+'</span>'
-            + '<span>vendidos mes: <b>'+p.vendidosMes+'</b></span>'
+            + '<span>$'+fmt$(p.precio)+' &middot; '+costoLbl+'</span>'
+            + '<span>vend 30d: <b>'+p.vendidosMes+'</b> &middot; comp 30d: <b>'+(p.comprados30||0)+'</b></span>'
             + (p.clientesUnicos>0?'<span>'+p.clientesUnicos+' clientes</span>':'')
           + '</div>'
         + '</div>'
@@ -7252,11 +7278,37 @@ if('serviceWorker' in navigator){
     var vendidos = (d.topClientes||[]).reduce(function(s,c){ return s+c.cant; }, 0);
     var facturado = (d.topClientes||[]).reduce(function(s,c){ return s+c.monto; }, 0);
 
+    // Sell-through 30d a partir de pedidosRecientes (Entregados) y comprasRecientes
+    var hoyTs = Date.now();
+    var hace30Ts = hoyTs - 30*86400000;
+    var ven30 = (d.pedidosRecientes||[]).reduce(function(s,pr){
+      if (!pr.fechaSort || pr.fechaSort < hace30Ts) return s;
+      return s + (pr.cant || 0);
+    }, 0);
+    var com30 = (d.comprasRecientes||[]).reduce(function(s,cr){
+      if (!cr.fechaSort || cr.fechaSort < hace30Ts) return s;
+      return s + (cr.cant || 0);
+    }, 0);
+    var stPct = com30 > 0 ? Math.round(ven30 / com30 * 100) : null;
+    var stColor = stPct === null ? 'color:var(--ink3)' : (stPct < 50 ? 'color:#c0392b' : (stPct > 150 ? 'color:#e67e22' : (stPct >= 80 && stPct <= 130 ? 'color:#27ae60' : 'color:var(--ink2)')));
+    var costoUltLbl = d.costoUltimo > 0 ? ('$'+fmt$(d.costoUltimo)) : ('$'+fmt$(p.costo));
+    var costoSub = d.costoUltimo > 0
+      ? ('ult OC '+escHtml(d.fechaCostoUltimo||'')+(d.provCostoUltimo?' &middot; '+escHtml(d.provCostoUltimo):''))
+      : 'costo en hoja';
+    var deltaCosto = (d.costoUltimo > 0 && p.costo > 0)
+      ? Math.round((d.costoUltimo - p.costo) / p.costo * 100)
+      : null;
+    var deltaCostoHtml = deltaCosto !== null && deltaCosto !== 0
+      ? ' <span style="color:'+(deltaCosto>0?'#c0392b':'#27ae60')+';font-size:11px;font-weight:600">('+(deltaCosto>0?'+':'')+deltaCosto+'% vs hoja)</span>'
+      : '';
+
     var kpisHtml = '<div class="crm-kpis">'
       + '<div class="crm-kpi"><div class="crm-kpi-l">Stock fisico</div><div class="crm-kpi-v" style="'+stockColor+'">'+p.stockFisico+'</div><div class="crm-kpi-s">disp '+p.disponible+' &middot; reserv '+p.reservado+'</div></div>'
       + '<div class="crm-kpi"><div class="crm-kpi-l">Vendidos histor.</div><div class="crm-kpi-v">'+vendidos+'</div><div class="crm-kpi-s">'+(d.clientesUnicos||0)+' clientes</div></div>'
-      + '<div class="crm-kpi"><div class="crm-kpi-l">Precio retail</div><div class="crm-kpi-v">$'+fmt$(p.precio)+'</div><div class="crm-kpi-s">costo $'+fmt$(p.costo)+'</div></div>'
-      + '<div class="crm-kpi"><div class="crm-kpi-l">Margen unit.</div><div class="crm-kpi-v">$'+fmt$(p.margenUnit)+'</div><div class="crm-kpi-s">'+(p.precio>0?Math.round(p.margenUnit/p.precio*100)+'%':'-')+'</div></div>'
+      + '<div class="crm-kpi"><div class="crm-kpi-l">Comprado histor.</div><div class="crm-kpi-v">'+(d.totalComprado||0)+'</div><div class="crm-kpi-s">'+((d.proveedores||[]).length)+' proveedores</div></div>'
+      + '<div class="crm-kpi"><div class="crm-kpi-l">Sell-through 30d</div><div class="crm-kpi-v" style="'+stColor+'">'+(stPct===null?'—':stPct+'%')+'</div><div class="crm-kpi-s">vend '+ven30+' / comp '+com30+'</div></div>'
+      + '<div class="crm-kpi"><div class="crm-kpi-l">Precio retail</div><div class="crm-kpi-v">$'+fmt$(p.precio)+'</div><div class="crm-kpi-s">margen $'+fmt$(p.margenUnit)+' &middot; '+(p.precio>0?Math.round(p.margenUnit/p.precio*100)+'%':'-')+'</div></div>'
+      + '<div class="crm-kpi"><div class="crm-kpi-l">Costo ultimo</div><div class="crm-kpi-v">'+costoUltLbl+deltaCostoHtml+'</div><div class="crm-kpi-s">'+costoSub+'</div></div>'
     + '</div>';
 
     // Ventas por canal
@@ -7289,6 +7341,55 @@ if('serviceWorker' in navigator){
       + '</div>';
     }
 
+    // Compras por mes (Ola 1) — mismo formato que ventas
+    var compMesData = d.comprasPorMes || {};
+    var compMesKeys = Object.keys(compMesData).sort().slice(-6);
+    var compMesHtml = '';
+    if (compMesKeys.length) {
+      var maxC = Math.max.apply(null, compMesKeys.map(function(k){ return compMesData[k]; }));
+      compMesHtml = '<div class="crm-section"><div class="crm-section-h">Compras (ultimos meses)</div>'
+        + compMesKeys.reverse().map(function(k){
+            var pct = maxC > 0 ? (compMesData[k]/maxC*100) : 0;
+            var venK = (d.ventasPorMes||{})[k] || 0;
+            return '<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;font-size:12px">'
+              + '<span style="flex:0 0 60px;color:var(--ink3);font-weight:500">'+escHtml(k)+'</span>'
+              + '<div style="flex:1;height:14px;background:var(--cr);border-radius:3px;overflow:hidden"><div style="width:'+pct+'%;height:100%;background:#2d7bb8"></div></div>'
+              + '<span style="flex:0 0 90px;text-align:right;font-weight:600">'+compMesData[k]+' u <span style="color:var(--ink3);font-weight:400">/ '+venK+' v</span></span>'
+            + '</div>';
+          }).join('')
+      + '</div>';
+    }
+
+    // Proveedores (Ola 1)
+    var provs = d.proveedores || [];
+    var provHtml = '';
+    if (provs.length) {
+      var totalProvMonto = provs.reduce(function(s,x){ return s+x.monto; }, 0);
+      provHtml = '<div class="crm-section"><div class="crm-section-h">Proveedores</div>'
+        + provs.map(function(pr){
+            var pctP = totalProvMonto > 0 ? Math.round(pr.monto/totalProvMonto*100) : 0;
+            return '<div class="crm-row">'
+              + '<span class="crm-row-l">'+escHtml(pr.prov)+' <span class="crm-alt">'+pctP+'%</span></span>'
+              + '<span class="crm-row-v"><b>'+pr.cant+'u</b> &middot; $'+fmt$(pr.monto)+' &middot; ult $'+fmt$(pr.ultimoCosto)+' ('+escHtml(pr.ultimaFecha||'-')+')</span>'
+            + '</div>';
+          }).join('')
+      + '</div>';
+    }
+
+    // Ultimas compras (Ola 1)
+    var ultCompras = (d.comprasRecientes || []).slice(0, 8);
+    var ultComprasHtml = '';
+    if (ultCompras.length) {
+      ultComprasHtml = '<div class="crm-section"><div class="crm-section-h">Ultimas compras</div>'
+        + ultCompras.map(function(c){
+            return '<div class="crm-row">'
+              + '<span class="crm-row-l">'+escHtml(c.fecha)+' &middot; '+escHtml(c.prov||'-')+'</span>'
+              + '<span class="crm-row-v"><b>'+c.cant+'u</b> @ $'+fmt$(c.costoUnit)+' = $'+fmt$(c.monto)+'</span>'
+            + '</div>';
+          }).join('')
+      + '</div>';
+    }
+
     // Top clientes
     var topCli = (d.topClientes||[]).slice(0, 10);
     var topHtml = topCli.length ? '<div class="crm-section"><div class="crm-section-h">Top clientes</div>'
@@ -7304,7 +7405,7 @@ if('serviceWorker' in navigator){
 
     el('crmDrawerBody').innerHTML = '<div class="crm-ficha-name">'+escHtml(p.nombre)+'</div>'
       + '<div class="crm-ficha-meta"><span>'+escHtml(p.abrev)+'</span><span>$'+fmt$(p.precio)+'</span></div>'
-      + alertaStock + kpisHtml + canalesHtml + mesHtml + topHtml;
+      + alertaStock + kpisHtml + canalesHtml + mesHtml + compMesHtml + provHtml + ultComprasHtml + topHtml;
   }
 
   // Cerrar drawer con ESC
