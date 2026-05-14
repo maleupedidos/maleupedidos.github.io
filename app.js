@@ -1700,15 +1700,12 @@ function updateStockDisplay() {
       else if (fis <= 3) el.innerHTML = '<span class="stock-badge stock-low">Últimas ' + fis + ' unidades</span>';
       else el.innerHTML = '';
     } else if (mode === 'proyectado') {
-      // El cap es proy. Si proy == fis (no hay OC pedida) mostrar igual que real.
+      // Mismo tratamiento visual que modo real: el cliente no ve "lo que
+      // viene en camino" explícito; solo ve "Sin stock" o "Últimas N" si
+      // queda poco. Cuando intente superar el tope verá "Máximo disponible: N".
       if (proy === 0) el.innerHTML = '<span class="stock-badge stock-out">Sin stock</span>';
-      else if (proy === fis) {
-        if (proy <= 3) el.innerHTML = '<span class="stock-badge stock-low">Últimas ' + proy + ' unidades</span>';
-        else el.innerHTML = '';
-      } else {
-        // Hay OC en camino que suma al disponible
-        el.innerHTML = '<span class="stock-badge stock-proj">Disponible: ' + proy + ' · incluye lo que viene en camino</span>';
-      }
+      else if (proy <= 3) el.innerHTML = '<span class="stock-badge stock-low">Últimas ' + proy + ' unidades</span>';
+      else el.innerHTML = '';
     } else {
       // ilimitado con info: stock físico bajo pero puede pedir más
       if (isStockInfoMode()) {
