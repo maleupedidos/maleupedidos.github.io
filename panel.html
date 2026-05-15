@@ -2437,6 +2437,13 @@ function _costoCatalogo(abbr){
   }
   return 0;
 }
+function _stockDisponible(abbr){
+  // Stock disponible (físico - reservado) desde D.stock[].d
+  if(D&&D.stock){
+    for(var i=0;i<D.stock.length;i++){if(D.stock[i].a===abbr) return Number(D.stock[i].d)||0;}
+  }
+  return 0;
+}
 
 function abrirEditorPedido(hoja, id, row, uidEd){
   var box=$(uidEd); if(!box) return;
@@ -2452,7 +2459,9 @@ function abrirEditorPedido(hoja, id, row, uidEd){
   // Estado del editor: lineas: [{a, q, precio, costo}]
   var ed={hoja:hoja,id:id,row:row,uid:uidEd,lineas:[]};
   (ped.p||[]).forEach(function(pr){
-    ed.lineas.push({a:pr.a,q:pr.q,precio:_precioCatalogo(hoja,pr.a),costo:_costoCatalogo(pr.a)});
+    // qOrig = cantidad original del pedido. Si ya estaba reservada (origen=Deposito),
+    // el stock disponible la descontó, así que el cap real es disponible+qOrig.
+    ed.lineas.push({a:pr.a,q:pr.q,qOrig:pr.q,precio:_precioCatalogo(hoja,pr.a),costo:_costoCatalogo(pr.a)});
   });
   window['_ed_'+uidEd]=ed;
   box.classList.remove('hidden');
@@ -2473,11 +2482,14 @@ function renderEditor(uidEd){
     html+='<div style="background:#fff;border:1px solid var(--cd);border-radius:10px;padding:12px;margin-bottom:8px;position:relative">';
     html+='<button onclick="quitarLineaEditor(\''+uidEd+'\','+idx+')" style="position:absolute;top:8px;right:8px;background:transparent;border:none;color:var(--r);font-size:16px;cursor:pointer;padding:4px" title="Quitar">&#x274C;</button>';
     html+='<div style="font-size:13px;font-weight:800;color:var(--b);margin-bottom:10px;padding-right:24px">'+(PN[l.a]||l.a)+'</div>';
-    // Cantidad (full width)
-    html+='<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">';
-    html+='<label style="flex:1;font-size:12px;color:var(--bl);font-weight:600">Cantidad</label>';
-    html+='<input type="number" inputmode="numeric" min="0" value="'+l.q+'" data-uid="'+uidEd+'" data-idx="'+idx+'" data-role="q" oninput="actualizarLineaEditor(this)" style="width:90px;padding:8px 10px;border:1.5px solid var(--cd);border-radius:8px;font-size:14px;font-weight:700;text-align:center;font-family:inherit">';
+    // Cantidad (full width) + stock disponible debajo
+    var capL = _stockDisponible(l.a) + (l.qOrig||0);
+    var atCapL = l.q >= capL;
+    html+='<div style="display:flex;align-items:center;gap:10px;margin-bottom:4px">';
+    html+='<label style="flex:1;font-size:12px;color:var(--bl);font-weight:600">Cantidad <span style="font-size:10px;color:var(--bl);font-weight:400">(máx '+capL+')</span></label>';
+    html+='<input type="number" inputmode="numeric" min="0" max="'+capL+'" value="'+l.q+'" data-uid="'+uidEd+'" data-idx="'+idx+'" data-role="q" oninput="actualizarLineaEditor(this)" style="width:90px;padding:8px 10px;border:1.5px solid '+(atCapL?'#C62828':'var(--cd)')+';border-radius:8px;font-size:14px;font-weight:700;text-align:center;font-family:inherit'+(atCapL?';color:#C62828':'')+'">';
     html+='</div>';
+    html+='<div data-uid="'+uidEd+'" data-idx="'+idx+'" data-role="stock-hint" style="font-size:10px;color:'+(capL===0?'#C62828':'var(--bl)')+';margin-bottom:8px;text-align:right;font-weight:'+(atCapL?'700':'500')+'">'+(capL===0?'⚠️ Sin stock':'Stock disponible: '+capL)+'</div>';
     // Precio venta
     html+='<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">';
     html+='<label style="flex:1;font-size:12px;color:var(--bl);font-weight:600">Precio venta <span style="font-size:10px;color:var(--bl)">(al cliente)</span></label>';
@@ -2530,6 +2542,25 @@ function renderEditor(uidEd){
 function actualizarLineaEditor(inp){
   var uid=inp.dataset.uid, idx=Number(inp.dataset.idx), role=inp.dataset.role, val=Number(inp.value)||0;
   var ed=window['_ed_'+uid]; if(!ed||!ed.lineas[idx]) return;
+  // Cap por stock disponible solo para cantidad
+  if(role==='q'){
+    var line=ed.lineas[idx];
+    var cap=_stockDisponible(line.a)+(line.qOrig||0);
+    if(val>cap){
+      val=cap;
+      inp.value=cap;
+      toast('Stock disponible: '+cap);
+    }
+    // Marcar input + hint si llegó al cap
+    var atCap=(val>=cap);
+    inp.style.borderColor=atCap?'#C62828':'var(--cd)';
+    inp.style.color=atCap?'#C62828':'';
+    var hint=document.querySelector('div[data-uid="'+uid+'"][data-idx="'+idx+'"][data-role="stock-hint"]');
+    if(hint){
+      hint.style.fontWeight=atCap?'700':'500';
+      hint.style.color=cap===0?'#C62828':'var(--bl)';
+    }
+  }
   ed.lineas[idx][role]=Math.max(0,val);
   // NO re-renderizar (rompe el foco en mobile). Solo recalcular totales y subtotales en vivo.
   recalcularTotalesEditor(uid);
@@ -2579,7 +2610,10 @@ function quitarLineaEditor(uid, idx){
 function agregarLineaEditor(uid){
   var ed=window['_ed_'+uid]; if(!ed) return;
   var sel=$(uid+'-add'); var ab=sel&&sel.value; if(!ab) return;
-  ed.lineas.push({a:ab,q:1,precio:_precioCatalogo(ed.hoja,ab),costo:_costoCatalogo(ab)});
+  // Cap inicial: stock disponible (sin qOrig porque es producto nuevo en este pedido)
+  var capN=_stockDisponible(ab);
+  if(capN<=0){toast('Sin stock disponible');return;}
+  ed.lineas.push({a:ab,q:1,qOrig:0,precio:_precioCatalogo(ed.hoja,ab),costo:_costoCatalogo(ab)});
   renderEditor(uid);
 }
 function cancelarEditor(uid){
