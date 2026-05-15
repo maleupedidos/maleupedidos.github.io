@@ -24,10 +24,13 @@ const PRODUCTOS = [
   { id:12, cat:"Empanadas",        nombre:"Empanadas Jamón y Queso x8",    desc:"Cremosas por dentro, doraditas por fuera. Para cualquier momento.",              precio:16000, img:"empanadas-jamon-new.png", emoji:"🥟", chips:["Para 2–4 personas","8 empanadas","Al horno hasta dorar"] },
   { id:17, cat:"Empanadas",        nombre:"Empanadas Cebolla y Queso Azul x8",  desc:"Cebolla caramelizada con queso azul. Intensas y cremosas.",               precio:16000, img:"empanadas-cebolla-new.jpg", emoji:"🥟", chips:["Para 2–4 personas","8 empanadas","Al horno hasta dorar"] },
   { id:18, cat:"Empanadas",        nombre:"Empanadas Verdura x8",          desc:"Relleno de verdura fresca y queso. Livianas y riquísimas.",                      precio:16000, img:"empanadas-verdura-new.png", emoji:"🥟", chips:["Para 2–4 personas","8 empanadas","Al horno hasta dorar"] },
+  /* TARTAS GOURMET — Inhabilitadas hasta paso 2 (columnas en hojas operativas + Apps Script).
+     Reactivar quitando los comentarios cuando paso 2 esté listo.
   { id:24, cat:"Tartas Gourmet",   nombre:"Tarta Pollo y Verdeo",          desc:"Pollo y verdeo. Sustanciosa y bien rendidora.",                                  precio:11000, img:"tarta-pollo.png", emoji:"🥧", chips:["Para 2–3 personas","Tarta de 16 cm","Al horno en 10 min"] },
   { id:25, cat:"Tartas Gourmet",   nombre:"Tarta Jamón y Queso",           desc:"El clásico. Mucho jamón, mucho queso. Hecha como en casa.",                      precio:11000, img:"tarta-jamon-queso.png", emoji:"🥧", chips:["Para 2–3 personas","Tarta de 16 cm","Al horno en 10 min"] },
   { id:26, cat:"Tartas Gourmet",   nombre:"Tarta Calabaza",                desc:"Calabaza con queso rallado y semillas de girasol arriba. Sabor a horno familiar.", precio:11000, img:"tarta-calabaza.png", emoji:"🥧", chips:["Para 2–3 personas","Tarta de 16 cm","Al horno en 10 min"] },
   { id:27, cat:"Tartas Gourmet",   nombre:"Tarta Verdura",                 desc:"Verdura con queso rallado. Liviana y rica.",                                     precio:11000, img:"tarta-verdura.png", emoji:"🥧", chips:["Para 2–3 personas","Tarta de 16 cm","Al horno en 10 min"] },
+  */
   { id:13, cat:"Postres & Tortas", nombre:"Franui Leche",                  desc:"Frambuesas bañadas en chocolate con leche y blanco. El cierre perfecto.",        precio:8000,  img:"franui-new.jpg", emoji:"🍫", chips:["Para 2–3 personas","Listo para servir"] },
   { id:14, cat:"Postres & Tortas", nombre:"Torta Golosa",                  desc:"Masa de chocolate, dulce de leche, mousse de chocolate y almendras acarameladas.", precio:24000, img:"torta-golosa.jpg", emoji:"🎂", chips:["Para 8–10 personas","Torta entera","Lista para cortar y servir"] },
   { id:15, cat:"Postres & Tortas", nombre:"Torta Lemon Crumble",           desc:"Base sablée, relleno de limón y crumble crocante espolvoreado.",                 precio:24000, img:"torta-lemon.jpg", emoji:"🎂", chips:["Para 8–10 personas","Torta entera","Lista para cortar y servir"] },
@@ -39,7 +42,9 @@ const CATEGORIAS = [
   { nombre:"Pizzas Clásicas",  icono:"🍕", nota:"Pack de 2 unidades · Perfectas para tener siempre a mano" },
   { nombre:"Sorrentinos",      icono:"🍝", nota:"600g · 16 unidades · Rinde 3 porciones · Solo 4 minutos de cocción", tip:"Hervir agua · Agregar sorrentinos · 4 min con olla destapada · Retirar con espumadera y servir" },
   { nombre:"Empanadas",        icono:"🥟", nota:"x8 unidades · Congeladas, listas para el horno · Cocinar hasta dorar" },
+  /* Tartas Gourmet — Inhabilitada hasta paso 2 (columnas en hojas + Apps Script).
   { nombre:"Tartas Gourmet",   icono:"🥧", nota:"Pre-cocidas · 16cm · Listas al horno en 10 min", tip:"Precalentar horno al máximo 10 min · Hornear 10 min · Servir" },
+  */
   { nombre:"Postres & Tortas", icono:"🎂", nota:"Para cerrar bien la noche" },
 ];
 
