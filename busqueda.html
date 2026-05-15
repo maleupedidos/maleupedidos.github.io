@@ -52,6 +52,11 @@ body.embed{background:#fff;padding-bottom:calc(72px + env(safe-area-inset-bottom
 .tab{flex:1;padding:14px 4px;text-align:center;font-size:13px;font-weight:800;cursor:pointer;border-bottom:3px solid transparent;transition:.15s;min-height:48px;display:flex;align-items:center;justify-content:center;letter-spacing:.03em}
 .tab.active{border-bottom-color:#F07D47;color:#F07D47}
 
+/* Selector de semana de entrega (Esta semana / Próxima semana) */
+.sem-tabs{display:flex;gap:6px;padding:8px 12px;background:#F8F2DF;border-bottom:1px solid #E8DFC4;position:sticky;top:calc(100px + env(safe-area-inset-top));z-index:98}
+.sem-btn{flex:1;padding:8px 10px;border:1.5px solid #E8DFC4;background:#fff;color:#7A4A4A;border-radius:20px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;letter-spacing:.02em}
+.sem-btn.on{background:#F07D47;color:#fff;border-color:#F07D47}
+
 /* ── LOADING / EMPTY ── */
 .loading,.empty{text-align:center;padding:60px 20px;color:#7A4A4A}
 .loading{font-style:italic}
@@ -359,6 +364,12 @@ html,body{overscroll-behavior:none;-webkit-overflow-scrolling:touch}
   <div class="tab" data-tab="nuevo" onclick="switchTab('nuevo')">+ NUEVO</div>
 </div>
 
+<!-- Selector semana de entrega: solo visible en BUSQUEDA y ARMADO. -->
+<div class="sem-tabs" id="semTabs" style="display:none">
+  <button class="sem-btn on" data-sem="actual" onclick="switchSemSel('actual')">Esta semana</button>
+  <button class="sem-btn" data-sem="prox" onclick="switchSemSel('prox')">Próxima semana</button>
+</div>
+
 <div id="ptrIndicator" class="ptr">
   <div class="ptr-inner">
     <img class="ptr-icon" id="ptrIcon" src="/img/logo-icono.png" alt="">
@@ -493,6 +504,29 @@ var marcadosRecibido = {};
 var waCopied = {};
 var armadoChecked = {};
 var vendedoresMap = {}; // { "Marcos Bottcher": { wa, partido, barrios, ... } }
+// Selector de semana de entrega: 'actual' = esta semana ISO + atrasados, 'prox' = próxima semana.
+var semSel = (function(){
+  try { var s = localStorage.getItem('maleu_busqueda_sem'); return s === 'prox' ? 'prox' : 'actual'; }
+  catch(e) { return 'actual'; }
+})();
+function _semOf(o){ return Number(o && (o.semEnt || o.sem)) || 0; }
+function _semActual(){ return Number(busqueda.semActual) || 0; }
+function _semProx(){ var s = _semActual(); return s > 0 ? s + 1 : 0; }
+// True si el item (cli o item de prov) cae en la semana seleccionada.
+// 'actual' incluye atrasados (sem < actual) para que Tadeo no pierda OCs viejas.
+function _matchSem(o){
+  var s = _semOf(o);
+  var act = _semActual();
+  if (semSel === 'prox') return s === act + 1;
+  return s <= act; // actual + atrasados
+}
+function switchSemSel(s){
+  if (semSel === s) return;
+  semSel = s;
+  try { localStorage.setItem('maleu_busqueda_sem', s); } catch(e) {}
+  document.querySelectorAll('.sem-btn').forEach(function(b){ b.classList.toggle('on', b.getAttribute('data-sem') === s); });
+  render();
+}
 var currentTab = (function(){
   try { var t = localStorage.getItem('maleu_busqueda_tab'); return (t === 'proveedores' || t === 'pedidos' || t === 'pagos' || t === 'nuevo') ? t : 'proveedores'; }
   catch(e) { return 'proveedores'; }
@@ -705,6 +739,14 @@ function render() {
   }
   document.getElementById('emptyView').classList.add('hidden');
 
+  // Sincronizar visibilidad del selector de semana y estado del boton activo
+  var semTabs = document.getElementById('semTabs');
+  if (semTabs) {
+    var visible = (currentTab === 'proveedores' || currentTab === 'pedidos');
+    semTabs.style.display = visible ? 'flex' : 'none';
+    if (visible) document.querySelectorAll('.sem-btn').forEach(function(b){ b.classList.toggle('on', b.getAttribute('data-sem') === semSel); });
+  }
+
   if (currentTab === 'proveedores') renderProveedores();
   else if (currentTab === 'pedidos') renderPedidos();
   else if (currentTab === 'pagos') renderPagos();
@@ -727,9 +769,20 @@ function renderProveedores() {
   });
 
   var html = '';
+  var provsVisibles = 0;
   busqueda.provs.forEach(function(prov, idx) {
-    // Determinar estado real desde los datos del servidor
-    var provOcs = getOcsByProv(prov.n);
+    // Filtrar items por semana seleccionada (cada item trae sem/anio).
+    // Tambien recalculamos costo solo para los items visibles.
+    var catsFiltradas = (prov.cats || []).map(function(c){
+      return { cat: c.cat, items: (c.items || []).filter(function(it){ return _matchSem(it); }) };
+    }).filter(function(c){ return c.items.length > 0; });
+    if (catsFiltradas.length === 0) return; // este proveedor no tiene OCs en la semana visible
+    var costoFiltrado = 0;
+    catsFiltradas.forEach(function(c){ c.items.forEach(function(it){ costoFiltrado += (it.ct || 0); }); });
+    provsVisibles++;
+
+    // Determinar estado real desde los datos del servidor (por proveedor + semana)
+    var provOcs = getOcsByProv(prov.n).filter(function(oc){ return _matchSem(oc); });
     var allPedido = provOcs.length > 0 && provOcs.every(function(oc) { return oc.est === 'Pedido' || oc.est === 'Recibido'; });
     var allRecibido = provOcs.length > 0 && provOcs.every(function(oc) { return oc.est === 'Recibido' || oc.est === 'Cancelado'; });
     // Local overrides (para cuando aún no se sincronizó)
@@ -737,12 +790,13 @@ function renderProveedores() {
     if (marcadosRecibido[prov.n]) allRecibido = true;
 
     html += '<div class="prov-card">';
-    html += '<div class="prov-head"><span class="prov-name">' + prov.n + '</span><span class="prov-cost">' + formatMoney(prov.costo) + '</span></div>';
+    html += '<div class="prov-head"><span class="prov-name">' + prov.n + '</span><span class="prov-cost">' + formatMoney(costoFiltrado) + '</span></div>';
 
-    // Chip de programación de búsqueda
+    // Chip de programación de búsqueda. Si la fProg ya paso vs primer dia de la semana
+    // visible, renderProgChip lo trata como "Elegir fecha" (no zombie).
     html += renderProgChip(prov);
 
-    prov.cats.forEach(function(c) {
+    catsFiltradas.forEach(function(c) {
       html += '<div class="prov-cat">' + c.cat + '</div>';
       c.items.forEach(function(it) {
         html += '<div class="prov-item"><span class="prov-qty">' + it.q + ' &times;</span><span class="prov-var">' + (it.v || c.cat) + '</span><span class="prov-item-cost">' + formatMoney(it.ct) + '</span></div>';
@@ -799,10 +853,16 @@ function renderProveedores() {
     html += '</div>';
   });
 
-  if (busqueda.provs.length > 0) {
-    html += '<div class="total-bar"><span>Total proveedores</span><span class="amount">' + formatMoney(busqueda.total || 0) + '</span></div>';
+  if (provsVisibles > 0) {
+    // Total de proveedores filtrado por la semana visible
+    var totalSem = 0;
+    busqueda.provs.forEach(function(prov){
+      (prov.cats || []).forEach(function(c){ (c.items || []).forEach(function(it){ if (_matchSem(it)) totalSem += (it.ct || 0); }); });
+    });
+    html += '<div class="total-bar"><span>Total proveedores</span><span class="amount">' + formatMoney(totalSem) + '</span></div>';
   } else {
-    html = '<div class="al-dia" style="color:#7A4A4A">Para la Semana ' + getSemanaISO() + ' ya no hay mas Busquedas</div>';
+    var lbl = (semSel === 'prox') ? 'la proxima semana' : ('la Semana ' + getSemanaISO());
+    html = '<div class="al-dia" style="color:#7A4A4A">Para ' + lbl + ' ya no hay mas Busquedas</div>';
   }
   document.getElementById('provList').innerHTML = html;
 }
@@ -832,12 +892,23 @@ function _diasHasta(iso) {
   var dEt = new Date(Number(de[0]), Number(de[1]) - 1, Number(de[2]));
   return Math.round((dEt - dHoy) / 86400000);
 }
+function _primerDiaSemSelISO() {
+  // Lunes de la semana visible (actual o proxima). Las fProg < este dia se
+  // consideran obsoletas: chip vuelve a "Elegir fecha de busqueda".
+  var hoy = new Date();
+  var dow = hoy.getDay() || 7;
+  var lun = new Date(hoy);
+  lun.setDate(hoy.getDate() - (dow - 1));
+  if (semSel === 'prox') lun.setDate(lun.getDate() + 7);
+  return lun.getFullYear() + '-' + String(lun.getMonth() + 1).padStart(2, '0') + '-' + String(lun.getDate()).padStart(2, '0');
+}
 function renderProgChip(prov) {
   var fp = prov.fProg;
   var dias = fp ? _diasHasta(fp) : null;
-  // Si no hay programacion, o si quedo en el pasado (ya buscado, programacion
-  // zombi), mostramos el CTA para elegir nueva fecha.
-  if (!fp || dias < 0) {
+  var primerDiaVisible = _primerDiaSemSelISO();
+  // Si no hay programacion, o si quedo antes del lunes de la semana visible
+  // (ya buscado en el ciclo previo), mostramos el CTA para elegir nueva fecha.
+  if (!fp || dias < 0 || fp < primerDiaVisible) {
     return '<button class="prov-prog" onclick="openProgModal(\'' + esc(prov.n) + '\')"><span class="ico">📅</span><span class="lbl">Elegir fecha de búsqueda</span></button>';
   }
   var cls = 'prov-prog set' + (dias === 0 ? ' urgent' : '');
@@ -1516,6 +1587,12 @@ function renderPedidos() {
 }
 
 function _renderPedidosInner() {
+  // Filtrar clientes por semana de entrega seleccionada. Override temporal de
+  // busqueda.clientes para que classifyClientes y subrenders trabajen con la
+  // lista filtrada sin tocar todos los call sites.
+  var _origClientes = busqueda.clientes || [];
+  busqueda.clientes = _origClientes.filter(_matchSem);
+  try {
   var cl = classifyClientes();
   var total = (busqueda.clientes || []).length;
   var totalIng = 0;
@@ -1640,6 +1717,9 @@ function _renderPedidosInner() {
   }
 
   document.getElementById('pedidosList').innerHTML = html;
+  } finally {
+    busqueda.clientes = _origClientes;
+  }
 }
 
 function renderRedConsolidadoCard(list) {
