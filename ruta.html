@@ -157,6 +157,8 @@ body.embed .tabs{top:0}
 .ruta-resumen-pill.active{background:var(--orange);color:#fff}
 .ruta-resumen-pill.todos{background:transparent;color:var(--brown);border:1.5px dashed var(--brown)}
 .ruta-resumen-pill.todos:active{background:rgba(51,28,28,.08)}
+.ruta-resumen-pill.ordenar{background:#FFF3E0;color:var(--orange);border:1.5px solid var(--orange)}
+.ruta-resumen-pill.ordenar:active{background:#FFE0B2}
 .ruta-nombre{font-size:18px;font-weight:700;color:var(--muted);margin-bottom:10px;line-height:1.2}
 .ruta-productos{background:var(--white);border-radius:12px;padding:10px 14px;margin-bottom:8px;width:100%;text-align:left}
 .ruta-prod-item{display:flex;justify-content:space-between;padding:5px 0;font-size:15px;border-bottom:1px solid var(--beige)}
@@ -676,6 +678,12 @@ var pendientesGuardarStock=[]; // [{abbr,prod,qty,rows:[r1,r2,...],proveedor}]
 // Filtro de zona en RUTA. null = todos. String = subbarrio/barrio. Las pills arriba
 // permiten elegir destino y la lista de Ruta se filtra a solo ese subbarrio.
 var rutaFiltroZona=null;
+// Orden manual de RUTA. Mapa eKey(e) → número (menor = más arriba). Pedidos sin
+// entrada en este mapa siguen el orden geográfico por defecto. Permite que Tadeo
+// suba pedidos urgentes al top sin perder el orden geográfico del resto.
+var rutaOrden={};
+// Modo "ordenar": muestra una lista compacta con flechas en lugar de la card grande.
+var rutaModoLista=false;
 var currentTab='armado', rutaIndex=0, isOnline=navigator.onLine, resumenBarrioAbierto=null;
 // Estado de colapso del tab Armado: runtime-only, en cada refresh arranca vacio.
 // Declarado aca arriba para que getArmadoCollapse() no devuelva undefined si render()
@@ -767,8 +775,8 @@ if('serviceWorker' in navigator && !_IS_EMBED){navigator.serviceWorker.register(
 /* ── UTILS ── */
 function updateOnlineStatus(){document.getElementById('statusDot').className='status-dot '+(isOnline?'online':'offline')}
 function updateLastSync(){var n=new Date();document.getElementById('lastSync').textContent=n.getHours()+':'+String(n.getMinutes()).padStart(2,'0');localStorage.setItem('maleu_ruta_sync',n.getTime())}
-function saveLocal(){try{localStorage.setItem('maleu_ruta',JSON.stringify({_v:STORAGE_VERSION,entregas:entregas,entregados:entregados,cobrados:cobrados,propinas:propinas,syncQueue:syncQueue,armadoDone:armadoDone,pendientesCobro:pendientesCobro,currentTab:currentTab,rutaIndex:rutaIndex,ts:Date.now()}))}catch(e){}}
-function loadLocal(){try{var d=JSON.parse(localStorage.getItem('maleu_ruta')||'{}');if(d._v!==STORAGE_VERSION){d.entregados={};d.cobrados={};d.propinas={};d.armadoDone={};d.syncQueue=[]}if(d.entregas)entregas=d.entregas;if(d.entregados)entregados=d.entregados;if(d.cobrados)cobrados=d.cobrados;if(d.propinas)propinas=d.propinas;if(d.syncQueue)syncQueue=d.syncQueue;if(d.armadoDone)armadoDone=d.armadoDone;if(d.pendientesCobro)pendientesCobro=d.pendientesCobro;if(d.currentTab)currentTab=d.currentTab;if(d.rutaIndex!==undefined)rutaIndex=d.rutaIndex}catch(e){}}
+function saveLocal(){try{localStorage.setItem('maleu_ruta',JSON.stringify({_v:STORAGE_VERSION,entregas:entregas,entregados:entregados,cobrados:cobrados,propinas:propinas,syncQueue:syncQueue,armadoDone:armadoDone,pendientesCobro:pendientesCobro,currentTab:currentTab,rutaIndex:rutaIndex,rutaOrden:rutaOrden,ts:Date.now()}))}catch(e){}}
+function loadLocal(){try{var d=JSON.parse(localStorage.getItem('maleu_ruta')||'{}');if(d._v!==STORAGE_VERSION){d.entregados={};d.cobrados={};d.propinas={};d.armadoDone={};d.syncQueue=[]}if(d.entregas)entregas=d.entregas;if(d.entregados)entregados=d.entregados;if(d.cobrados)cobrados=d.cobrados;if(d.propinas)propinas=d.propinas;if(d.syncQueue)syncQueue=d.syncQueue;if(d.armadoDone)armadoDone=d.armadoDone;if(d.pendientesCobro)pendientesCobro=d.pendientesCobro;if(d.currentTab)currentTab=d.currentTab;if(d.rutaIndex!==undefined)rutaIndex=d.rutaIndex;if(d.rutaOrden)rutaOrden=d.rutaOrden}catch(e){}}
 
 function manualRefresh(){
   if(isAnyLoaderVisible())return;
@@ -794,6 +802,8 @@ function refresh(silent,fresh){
     // Limpiar keys stale de armadoDone y propinas (pedidos que ya no existen en el sheet).
     // Tambien limpiar armadoChecked de Busqueda para que el sync no reviva armados viejos.
     Object.keys(armadoDone).forEach(function(k){if(!sk[k])delete armadoDone[k]});
+    // Limpiar rutaOrden de pedidos que ya no existen (entregados/cancelados/movidos)
+    Object.keys(rutaOrden).forEach(function(k){if(!sk[k])delete rutaOrden[k]});
     Object.keys(propinas).forEach(function(k){if(!sk[k])delete propinas[k]});
     try{var bus=JSON.parse(localStorage.getItem('maleu_busqueda')||'{}');if(bus.armadoChecked){var activeBusKeys={};Object.keys(sk).forEach(function(k){activeBusKeys[k.replace(/[^a-zA-Z0-9]/g,'_')]=true});Object.keys(bus.armadoChecked).forEach(function(bk){if(!activeBusKeys[bk])delete bus.armadoChecked[bk]});localStorage.setItem('maleu_busqueda',JSON.stringify(bus))}}catch(e){}
     mergeArmadoBusqueda();saveLocal();render();updateLastSync();
@@ -874,6 +884,20 @@ function getSorted(){
     if(_origenTipo(e)==='oc')return true;
     return false;
   }));
+  // Aplicar orden manual (botones ↑↓🔝 en vista "Ordenar"). Los pedidos con prioridad
+  // asignada van primero, ordenados por valor (menor=arriba). Los sin prioridad
+  // mantienen el orden geográfico relativo.
+  var ordenes=rutaOrden||{};
+  if(Object.keys(ordenes).length>0){
+    clientes=clientes.slice().sort(function(a,b){
+      var pa=ordenes[eKey(a)], pb=ordenes[eKey(b)];
+      var ha=(pa!==undefined), hb=(pb!==undefined);
+      if(ha&&hb)return pa-pb;
+      if(ha)return -1;
+      if(hb)return 1;
+      return 0; // ambos sin prioridad: respeta el orden geográfico que ya venía
+    });
+  }
   // Append: bloque sintético por vendedor Red. Una sola card por vendedor con suma
   // de productos. Entran:
   //   - Red armados (Tadeo ya tildó la tanda en ARMADO).
@@ -1425,6 +1449,59 @@ function cancelarPedido(key){
   if(navigator.vibrate)navigator.vibrate([30,50,30]);
 }
 
+/* ── ORDEN MANUAL DE RUTA (vista "Ordenar") ──
+   rutaOrden es un mapa eKey → número (menor = más arriba). Las funciones de abajo
+   reasignan números relativos al orden actual de getSorted (no usan números fijos
+   tipo 1,2,3 — se recalculan en cada cambio para evitar drift). */
+function toggleRutaListaModo(){rutaModoLista=!rutaModoLista;renderRuta()}
+
+// Asigna prioridades 0,1,2... a la lista de claves recibida (en el orden dado).
+// Las claves no incluidas en el array quedan SIN prioridad (orden geográfico).
+function _rutaSetOrdenFromList(keys){
+  var newOrden={};
+  keys.forEach(function(k,i){newOrden[k]=i});
+  rutaOrden=newOrden;
+  saveLocal();
+}
+
+// Devuelve el array de keys del orden actual (solo clientes VD, sin sintéticos).
+function _rutaKeysSorted(){
+  return getSorted().filter(function(e){return !e._redAgg&&!e._depAgg}).map(eKey);
+}
+
+// Mueve un pedido al inicio. Si ya está en el top, lo deja ahí.
+function rutaTop(key){
+  var keys=_rutaKeysSorted();
+  var idx=keys.indexOf(key);
+  if(idx<=0)return;
+  keys.splice(idx,1);keys.unshift(key);
+  _rutaSetOrdenFromList(keys);
+  renderRuta();
+}
+// Sube un pedido 1 posición.
+function rutaSubir(key){
+  var keys=_rutaKeysSorted();
+  var idx=keys.indexOf(key);
+  if(idx<=0)return;
+  var tmp=keys[idx-1];keys[idx-1]=keys[idx];keys[idx]=tmp;
+  _rutaSetOrdenFromList(keys);
+  renderRuta();
+}
+// Baja un pedido 1 posición.
+function rutaBajar(key){
+  var keys=_rutaKeysSorted();
+  var idx=keys.indexOf(key);
+  if(idx<0||idx>=keys.length-1)return;
+  var tmp=keys[idx+1];keys[idx+1]=keys[idx];keys[idx]=tmp;
+  _rutaSetOrdenFromList(keys);
+  renderRuta();
+}
+// Limpiar el orden custom (vuelve a orden geográfico puro).
+function rutaResetOrden(){
+  if(Object.keys(rutaOrden).length===0)return;
+  rutaOrden={};saveLocal();renderRuta();
+}
+
 // Sincronizar armado con Búsqueda (bidireccional)
 function syncArmadoBusqueda(key,done){
   try{
@@ -1475,6 +1552,47 @@ function renderRuta(){
   // Aplicar filtro si está activo
   var sorted=rutaFiltroZona ? sortedAll.filter(function(e){return _zonaDe(e)===rutaFiltroZona}) : sortedAll;
   var resumen=document.getElementById('rutaResumen'),header=document.getElementById('rutaHeader'),body=document.getElementById('rutaBody'),actions=document.getElementById('rutaActions');
+
+  // ── MODO LISTA (Ordenar) ──
+  // Vista compacta para reordenar pedidos con flechas. Las cards sintéticas (Red,
+  // Depósito) NO entran porque siempre van al final por diseño.
+  if(rutaModoLista && sorted.length>0){
+    var lista=sorted.filter(function(e){return !e._redAgg&&!e._depAgg});
+    var hayCustomOrden=Object.keys(rutaOrden||{}).length>0;
+    resumen.innerHTML='';
+    header.innerHTML='<span style="font-size:14px;font-weight:800">📋 Reordenar entregas</span><span style="font-size:11px;opacity:.75">'+lista.length+' pedidos</span>';
+    var lh='<div style="padding:8px 10px;font-size:12px;color:var(--muted);line-height:1.4">Tocá 🔝 para mandar al principio · ↑/↓ para mover de a uno. El orden se guarda y respeta cuando volvés a la vista normal.</div>';
+    lh+='<div style="display:flex;flex-direction:column;gap:6px;padding:0 10px 16px">';
+    lista.forEach(function(e,idx){
+      var k=eKey(e);
+      var lote=e.l?'Lote '+e.l:'';
+      var zona=_zonaDe(e);
+      var esPrio=(rutaOrden&&rutaOrden[k]!==undefined);
+      var bgCard=esPrio?'#FFF3E0':'var(--white)';
+      var borderCard=esPrio?'1.5px solid var(--orange)':'1.5px solid var(--border)';
+      lh+='<div style="background:'+bgCard+';border:'+borderCard+';border-radius:12px;padding:10px 12px;display:flex;align-items:center;gap:8px">';
+      lh+='<div style="font-size:14px;font-weight:800;color:var(--orange);min-width:22px;text-align:center">'+(idx+1)+'</div>';
+      lh+='<div style="flex:1;min-width:0">';
+      lh+='<div style="font-size:14px;font-weight:700;color:var(--brown);line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+e.c+'</div>';
+      lh+='<div style="font-size:11px;color:var(--muted);margin-top:2px">'+zona+(lote?' · '+lote:'')+' · '+formatMoney(e.$)+'</div>';
+      lh+='</div>';
+      lh+='<div style="display:flex;gap:4px;flex-shrink:0">';
+      lh+='<button type="button" onclick="rutaTop(\''+k+'\')" style="width:36px;height:36px;border:1.5px solid var(--orange);background:#fff;color:var(--orange);border-radius:8px;font-family:inherit;font-size:14px;font-weight:800;cursor:pointer;padding:0" title="Al principio">🔝</button>';
+      lh+='<button type="button" onclick="rutaSubir(\''+k+'\')" style="width:36px;height:36px;border:1.5px solid var(--border);background:#fff;color:var(--brown);border-radius:8px;font-family:inherit;font-size:16px;font-weight:800;cursor:pointer;padding:0"'+(idx===0?' disabled style="opacity:.3"':'')+' title="Subir">↑</button>';
+      lh+='<button type="button" onclick="rutaBajar(\''+k+'\')" style="width:36px;height:36px;border:1.5px solid var(--border);background:#fff;color:var(--brown);border-radius:8px;font-family:inherit;font-size:16px;font-weight:800;cursor:pointer;padding:0"'+(idx===lista.length-1?' disabled style="opacity:.3"':'')+' title="Bajar">↓</button>';
+      lh+='</div>';
+      lh+='</div>';
+    });
+    lh+='</div>';
+    body.innerHTML=lh;
+    var ah='';
+    ah+='<button class="btn-entregado" style="background:var(--green)" onclick="toggleRutaListaModo()">✓ Listo, volver</button>';
+    if(hayCustomOrden){
+      ah+='<button type="button" onclick="rutaResetOrden()" style="width:100%;margin-top:8px;padding:11px;background:transparent;border:1.5px solid var(--muted);color:var(--muted);border-radius:10px;font-family:inherit;font-size:13px;font-weight:700;cursor:pointer">Restaurar orden geográfico</button>';
+    }
+    actions.innerHTML=ah;
+    return;
+  }
 
   if(sorted.length===0){
     resumen.innerHTML='';header.innerHTML='';
@@ -1537,6 +1655,8 @@ function renderRuta(){
   });
   var zonaActual=_zonaDe(e);
   var rh='';
+  // Botón "📋 Ordenar" — abre vista lista para reordenar pedidos manualmente
+  rh+='<span class="ruta-resumen-pill ordenar" onclick="toggleRutaListaModo()">📋 Ordenar</span>';
   // Pill "Todos" para limpiar filtro
   if(rutaFiltroZona){
     rh+='<span class="ruta-resumen-pill todos" onclick="setRutaFiltro(null)">↺ Todos ('+sortedAll.length+')</span>';
