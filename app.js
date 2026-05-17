@@ -1520,7 +1520,10 @@ function enviarPedido() {
       subtotalSinDescuento: subtotal, descuento: discount
     };
   }
-  _sendWithRetry(postData, 3);
+  // ID único para idempotencia: si el cliente reintenta por mala señal y el POST
+  // anterior ya había llegado al server, el backend lo descarta (CacheService 6h).
+  postData.clientOrderId = 'co_' + Date.now() + '_' + Math.random().toString(36).slice(2,10);
+  _sendWithRetry(postData);
   _track('purchase', { value: total, zone: currentZone, items: cartCount(), discount: discount, payment: pagoEl.value, vendedor: vendedorMatch ? vendedorMatch.nombre : '' });
 
   // Confirmación visual rápida → WhatsApp (al vendedor si aplica, sino a Maleu)
@@ -1549,31 +1552,104 @@ function enviarPedido() {
   }, 1800);
 }
 
-/* ── RETRY + BACKUP ── */
-function _sendWithRetry(data, retries) {
-  fetch(APPS_SCRIPT_URL, {
+/* ── RETRY + BACKUP — robustecido 17/05/2026 ──
+   Diseñado para clientes con mala señal en Estancias del Pilar.
+   1. Persiste el pedido en localStorage ANTES de mandarlo (sobrevive a cerrar la tienda).
+   2. AbortController con timeout 12s por intento (no se queda colgado en fetch zombie).
+   3. Backoff exponencial: 5s, 15s, 45s, 2min, 5min, 15min.
+   4. Reintenta automático cuando el navegador recupera señal (evento 'online') o
+      cuando el cliente vuelve a la tienda (visibilitychange).
+   5. Backend dedupea por clientOrderId (CacheService 6h) — si un POST llegó pero
+      la respuesta se perdió, el reintento no crea duplicado.
+
+   Estructura en localStorage: { [clientOrderId]: { data, ts, tries } }
+   Se borra al recibir confirmación (resolve), o cuando se hayan agotado retries.
+*/
+var MALEU_RETRY_DELAYS = [5000, 15000, 45000, 120000, 300000, 900000]; // ms
+var MALEU_MAX_TRIES = MALEU_RETRY_DELAYS.length + 1; // 7 intentos totales
+
+function _pendingMap() {
+  try { return JSON.parse(localStorage.getItem('maleu_pending_orders') || '{}'); }
+  catch(e) { return {}; }
+}
+function _pendingSave(map) {
+  try { localStorage.setItem('maleu_pending_orders', JSON.stringify(map)); } catch(e) {}
+}
+function _persistPending(data) {
+  var key = data.clientOrderId;
+  if (!key) return;
+  var map = _pendingMap();
+  var prev = map[key];
+  map[key] = { data: data, ts: (prev && prev.ts) || Date.now(), tries: (prev && prev.tries || 0) };
+  _pendingSave(map);
+}
+function _removePending(key) {
+  if (!key) return;
+  var map = _pendingMap();
+  if (map[key]) { delete map[key]; _pendingSave(map); }
+}
+
+function _sendWithRetry(data) {
+  // Persistir SIEMPRE antes de intentar. Si el navegador se cierra a la mitad,
+  // queda guardado para el próximo retry oportuno.
+  _persistPending(data);
+  var key = data.clientOrderId;
+
+  // AbortController: si el fetch queda colgado (mala señal después de iniciar
+  // conexión), abortamos a los 12s y vamos a retry.
+  var ctrl;
+  var timeoutId;
+  try {
+    ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+    if (ctrl) timeoutId = setTimeout(function(){ try { ctrl.abort(); } catch(e){} }, 12000);
+  } catch(e) {}
+
+  var fetchOpts = {
     method:'POST', mode:'no-cors', headers:{'Content-Type':'text/plain'},
     body: JSON.stringify(data)
+  };
+  if (ctrl) fetchOpts.signal = ctrl.signal;
+
+  fetch(APPS_SCRIPT_URL, fetchOpts).then(function() {
+    if (timeoutId) clearTimeout(timeoutId);
+    // no-cors devuelve "opaque" response → asumimos OK si fetch resolvió sin abortar.
+    _removePending(key);
   }).catch(function() {
-    if (retries > 1) {
-      setTimeout(function() { _sendWithRetry(data, retries - 1); }, 2000);
-    } else {
-      try {
-        var pending = JSON.parse(localStorage.getItem('maleu_pending_orders') || '[]');
-        pending.push({ data: data, ts: Date.now() });
-        localStorage.setItem('maleu_pending_orders', JSON.stringify(pending));
-      } catch(e) {}
+    if (timeoutId) clearTimeout(timeoutId);
+    var map = _pendingMap();
+    if (!map[key]) return; // ya removido por otro flow
+    map[key].tries = (map[key].tries || 0) + 1;
+    _pendingSave(map);
+    if (map[key].tries < MALEU_MAX_TRIES) {
+      var delay = MALEU_RETRY_DELAYS[Math.min(map[key].tries - 1, MALEU_RETRY_DELAYS.length - 1)];
+      setTimeout(function() { _sendWithRetry(data); }, delay);
     }
+    // Si superó MAX_TRIES queda en cola; _retryPendingOrders lo agarra en el próximo
+    // ciclo (online / visible / interval).
   });
 }
+
 function _retryPendingOrders() {
-  try {
-    var pending = JSON.parse(localStorage.getItem('maleu_pending_orders') || '[]');
-    if (pending.length === 0) return;
-    var order = pending.shift();
-    localStorage.setItem('maleu_pending_orders', JSON.stringify(pending));
-    _sendWithRetry(order.data, 2);
-  } catch(e) {}
+  var map = _pendingMap();
+  var keys = Object.keys(map);
+  if (keys.length === 0) return;
+  // Si el navegador está offline, no perder tiempo
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
+  keys.forEach(function(k) {
+    var entry = map[k];
+    if (!entry || !entry.data) return;
+    // Resetear contador de tries para que reciba la ronda completa de delays nuevos
+    entry.tries = 0;
+    _sendWithRetry(entry.data);
+  });
+}
+
+// Reintentos oportunos: recuperar señal, volver a la tienda, o cada 30s mientras esté abierta.
+if (typeof window !== 'undefined') {
+  window.addEventListener('online', _retryPendingOrders);
+  document.addEventListener('visibilitychange', function() {
+    if (document.visibilityState === 'visible') _retryPendingOrders();
+  });
 }
 setInterval(_retryPendingOrders, 30000);
 
