@@ -1879,8 +1879,11 @@ function updatePagoHint() {
   if (!hint) return;
   var sel = document.querySelector('input[name="pago"]:checked');
   var isCash = sel && sel.value === 'Efectivo';
-  // Mostrar solo si hay descuentos activos Y no eligió efectivo todavía
-  hint.style.display = (discountsActive() && !isCash) ? '' : 'none';
+  // Si el descuento del 10% ya se aplica por superar $100K, no tiene sentido
+  // invitar al cliente a cambiar a efectivo — ya tiene el 10% ahorrado.
+  var yaBulk = cartTotal() >= 100000;
+  // Mostrar solo si hay descuentos activos, no eligió efectivo Y el bulk no aplica
+  hint.style.display = (discountsActive() && !isCash && !yaBulk) ? '' : 'none';
 }
 function updateShippingBar() {
   const bar = $id('shipping-bar');
