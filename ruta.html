@@ -1898,7 +1898,9 @@ function renderCobrosFromServer(){
         +'</div>';
       // Propina (puede ser negativa: boton ± permite ajuste de redondeo)
       h+='<div class="cobro-field"><label>Propina $</label><input type="number" id="cobroPropina_'+globalIdx+'" inputmode="numeric" placeholder="0" value="" oninput="actualizarCobroPropina('+globalIdx+')"><button type="button" class="btn-prop-signo" data-prop-target="cobroPropina_'+globalIdx+'" onclick="togglePropSigno(\'cobroPropina_'+globalIdx+'\')" title="Cambiar signo">+</button></div>';
-      // A favor del cliente (entra como crédito para próxima compra). Suma al cobro real.
+      // Banner saldo a favor previo del cliente (se popula vía fetch si tiene saldo)
+      h+='<div id="cobroSaldoBanner_'+globalIdx+'" style="display:none;background:#FFF8E1;border:1.5px solid #F9A825;border-radius:8px;padding:10px 12px;line-height:1.4"></div>';
+      // A favor del cliente: + cuando paga de más (crédito); − cuando aplica saldo previo.
       h+='<div class="cobro-field" style="background:#FFF8E1;border:1.5px solid #FFD54F"><label style="color:#5D4037">A favor 💰</label><input type="number" id="cobroAFavor_'+globalIdx+'" inputmode="numeric" placeholder="0" value="" oninput="actualizarCobroPropina('+globalIdx+')"></div>';
       h+='<div class="cobro-card-actions">';
       if(tel){h+='<a href="https://wa.me/'+tel+'?text='+aliasMsg+'" target="_blank" rel="noopener" class="cobro-btn-alias">Comprobante</a>'}
@@ -1908,6 +1910,12 @@ function renderCobrosFromServer(){
     h+='</div>';
   });
   el.innerHTML=h;
+  // Después del render, disparar fetch de saldo a favor por teléfono para cada card.
+  // No bloquea — el banner aparece después de que llega la respuesta.
+  pendientesCobro.forEach(function(pc, idx){
+    if(pc.isVendedor)return;
+    if(pc.t)_fetchSaldoCobro(pc.t, idx);
+  });
 }
 
 function renderPendientesCobro(){
@@ -1969,11 +1977,57 @@ function _leerCobroPropina(i){
   return isNeg?-Math.abs(raw):Math.abs(raw);
 }
 
-// Lee el campo "A favor cliente $" — siempre positivo (crédito que se le guarda al cliente).
+// Lee el campo "A favor cliente $" — puede ser positivo (sobrepago, crédito nuevo)
+// o negativo (aplicación: descuenta saldo previo del cliente).
 function _leerCobroAFavor(i){
   var inp=document.getElementById('cobroAFavor_'+i);
   if(!inp)return 0;
-  return Math.max(0, Math.round(Number(inp.value)||0));
+  return Math.round(Number(inp.value)||0);
+}
+
+// Cache de saldos a favor por teléfono (para no spamear el backend al renderear cobros)
+var _saldosClienteCache={}; // tel → {saldo, ts}
+function _fetchSaldoCobro(tel, idx){
+  if(!tel)return;
+  var key=String(tel).replace(/\D/g,'');
+  if(!key)return;
+  var cached=_saldosClienteCache[key];
+  if(cached && (Date.now()-cached.ts)<60000){
+    _renderSaldoBanner(idx, cached.saldo);
+    return;
+  }
+  fetch(APPS_SCRIPT_URL+'?action=saldoCliente&tel='+encodeURIComponent(key)+'&t='+Date.now())
+    .then(function(r){return r.json()})
+    .then(function(data){
+      var s=(data && data.ok) ? (Number(data.saldo)||0) : 0;
+      _saldosClienteCache[key]={saldo:s, ts:Date.now()};
+      _renderSaldoBanner(idx, s);
+    })
+    .catch(function(){});
+}
+function _renderSaldoBanner(idx, saldo){
+  var el=document.getElementById('cobroSaldoBanner_'+idx);
+  if(!el)return;
+  if(saldo>0){
+    el.style.display='';
+    el.innerHTML='<div style="font-weight:800;color:#5D4037;font-size:13px">🎁 Tiene $'+formatMoney(saldo).replace('$','')+' a favor</div>'
+      +'<div style="font-size:11px;color:#5D4037;margin:2px 0 6px">De compras anteriores. Aplicalo a este cobro:</div>'
+      +'<button type="button" onclick="aplicarSaldoCobro('+idx+','+saldo+')" style="width:100%;padding:8px;background:#F9A825;color:#fff;border:none;border-radius:8px;font-family:inherit;font-size:13px;font-weight:800;cursor:pointer">Aplicar $'+formatMoney(saldo).replace('$','')+' al cobro</button>';
+  } else {
+    el.style.display='none';
+  }
+}
+function aplicarSaldoCobro(i, saldo){
+  if(i<0||i>=pendientesCobro.length)return;
+  var pc=pendientesCobro[i];
+  // El saldo a aplicar no puede exceder el total del pedido (no dejar el cobro en negativo)
+  var aplicable=Math.min(saldo, pc.$||0);
+  var inp=document.getElementById('cobroAFavor_'+i);
+  if(inp){
+    inp.value=-aplicable;
+    actualizarCobroPropina(i);
+    showToast('Saldo de $'+formatMoney(aplicable).replace('$','')+' aplicado');
+  }
 }
 
 function actualizarCobroPropina(i){
@@ -2264,20 +2318,33 @@ function cobrarPendiente(i,ef,tr,fp,recalc){
   if(fp==='Mixto')propMet=tr>ef?'Transferencia':'Efectivo';
   var hojaPc=pc.h||pc.key.split('|')[0];
   var idPc=pc.id||pc.key.split('|')[1]||'';
-  // marcarCobrado ahora acepta aFavor: el backend ajusta ef/tr y col BE/BH del pedido.
-  // Facturado se recalcula via fórmula. NO va por Ingresos aparte.
-  var payload={action:'marcarCobrado',hoja:hojaPc,id:String(idPc),row:pc.r||0,formaPago:fp||'Efectivo',ef:ef||0,tr:tr||0,propina:propina,propMet:propMet,aFavor:aFavor,repartidor:_rutaUser(),ts:Date.now()};
+  // aFavor puede ser positivo (sobrepago, crédito nuevo) o negativo (aplicación de
+  // saldo previo del cliente). El backend espera dos campos separados (aFavor,
+  // aplicacion) ambos positivos. Separamos según el signo.
+  var aFavorPos = aFavor > 0 ? aFavor : 0;
+  var aplicacionPos = aFavor < 0 ? Math.abs(aFavor) : 0;
+  // marcarCobrado: backend ajusta ef/tr y col BI/BL del pedido. Facturado vía fórmula.
+  var payload={action:'marcarCobrado',hoja:hojaPc,id:String(idPc),row:pc.r||0,formaPago:fp||'Efectivo',ef:ef||0,tr:tr||0,propina:propina,propMet:propMet,aFavor:aFavorPos,aplicacion:aplicacionPos,repartidor:_rutaUser(),ts:Date.now()};
   if(recalc)payload.recalcular=true;
-  // Payload secundario: solo para registrar el crédito en hoja Saldos Clientes
-  // (historial). El ajuste de caja ya lo hace marcarCobrado vía col BE/BH.
+  // Payload secundario: registrar el movimiento en hoja Saldos Clientes (historial).
+  // El ajuste de caja ya lo hace marcarCobrado vía col BI/BL.
   var aFavorPayload=null;
-  if(aFavor>0){
+  if(aFavorPos>0){
     aFavorPayload={
       action:'crearSaldoCliente',
       cliente:pc.c,telefono:pc.t||'',
-      tipo:'Crédito',monto:aFavor,
+      tipo:'Crédito',monto:aFavorPos,
       pedidoHoja:hojaPc,pedidoId:String(idPc),
       notas:'A favor por cobro mayor al total del pedido',
+      repartidor:_rutaUser(),ts:Date.now()
+    };
+  } else if(aplicacionPos>0){
+    aFavorPayload={
+      action:'crearSaldoCliente',
+      cliente:pc.c,telefono:pc.t||'',
+      tipo:'Aplicación',monto:aplicacionPos,
+      pedidoHoja:hojaPc,pedidoId:String(idPc),
+      notas:'Saldo aplicado al cobro desde Ruta',
       repartidor:_rutaUser(),ts:Date.now()
     };
   }
@@ -2323,7 +2390,8 @@ function cobrarPendiente(i,ef,tr,fp,recalc){
             .then(function(r2){return r2.json().catch(function(){return{ok:false}})})
             .then(function(res2){
               if(res2&&res2.ok){
-                showToast('💰 $'+formatMoney(aFavor).replace('$','')+' a favor de '+pc.c.split(' ')[0]+' (saldo: $'+formatMoney(res2.saldo||aFavor).replace('$','')+')');
+                var labelMov = aplicacionPos>0 ? ('Aplicado $'+formatMoney(aplicacionPos).replace('$','')) : ('💰 $'+formatMoney(aFavorPos).replace('$','')+' a favor');
+                showToast(labelMov+' · '+pc.c.split(' ')[0]+' (saldo: $'+formatMoney(res2.saldo||0).replace('$','')+')');
               } else {
                 syncQueue.push(aFavorPayload);saveLocal();processSyncQueue();
               }
