@@ -4722,6 +4722,27 @@ function eerrEsServicio(txt){
   return txt.indexOf('movistar')>=0||txt.indexOf('claro')>=0||txt.indexOf('personal')>=0||txt.indexOf('celular')>=0||txt.indexOf('chip')>=0;
 }
 
+// Deuda viva con proveedores (FIFO por semana, igual que Abastecimiento).
+// Fetch al mismo endpoint que la tab Abastecimiento. Cache en memoria.
+var _eerrDeudaProv=null,_eerrDeudaProvDet=[];
+function eerrFetchDeudaProv(cb){
+  if(_eerrDeudaProv!==null){cb(_eerrDeudaProv,_eerrDeudaProvDet);return;}
+  fetch(API+'?action=busqueda&t='+Date.now()).then(function(r){return r.json();}).then(function(d){
+    var total=0,det=[];
+    (d.provs||[]).forEach(function(p){
+      var deudaProv=0;
+      (p.semanas||[]).forEach(function(s){
+        var pend=Number(s.pendiente)||0;
+        if(pend>0.01){total+=pend;deudaProv+=pend;}
+      });
+      if(deudaProv>0.01)det.push({n:p.n||p.nombre||'?',m:deudaProv});
+    });
+    det.sort(function(a,b){return b.m-a.m;});
+    _eerrDeudaProv=total;_eerrDeudaProvDet=det;
+    cb(total,det);
+  }).catch(function(){_eerrDeudaProv=0;_eerrDeudaProvDet=[];cb(0,[]);});
+}
+
 // Config_Maleu: parámetros editables desde Sheets con trazabilidad por "Activo desde".
 // Fallback hardcoded mientras D.config no venga del backend; mantener en sync con la hoja.
 var EERR_CONFIG_DEFAULT=[
@@ -5015,6 +5036,17 @@ function rEERR_financiero(body){
   var saldoEfVivo=Number(sb.ef||0)+Number(cj.cobradoEf||0)+Number(cj.ingresosEf||0)-Number(cj.gastosEf||0);
   var saldoMPVivo=Number(sb.mp||0)+Number(cj.cobradoMP||0)+Number(cj.ingresosMP||0)-Number(cj.gastosMP||0);
   var saldoActualReal=saldoEfVivo+saldoMPVivo;
+  // Deuda viva con proveedores (FIFO por semana). Dispara fetch async — al volver, re-render del Financiero.
+  var deudaProv=_eerrDeudaProv;
+  var deudaProvDet=_eerrDeudaProvDet;
+  if(deudaProv===null){
+    eerrFetchDeudaProv(function(){
+      // Solo re-render si seguimos en Financiero del mismo mes
+      if(cur==='inicio'&&curSI==='eerr'&&eerrModo==='financiero')rEERR();
+    });
+    deudaProv=0; // mostrar "calculando..." en el primer render
+  }
+  var cajaNeta=saldoActualReal-deudaProv;
 
   // Empty state
   if(totEntradas===0&&totSalidas===0){
@@ -5163,17 +5195,19 @@ function rEERR_financiero(body){
     var DIA_PRIMER_GIRO=eerrConfig('DIA_GIRO_1',ym);
     var DIA_SEGUNDO_GIRO=eerrConfig('DIA_GIRO_2',ym);
     var hoyDia=hoyD.getDate();
-    var margenMin=saldoActualReal-CAJA_MINIMA;
+    // La caja NETA = caja − deuda viva con proveedores. Es la disponible real.
+    // El semáforo y el margen sobre piso se miden contra cajaNeta, no contra caja sola.
+    var margenMin=cajaNeta-CAJA_MINIMA;
     var sueldoPendiente=Math.max(SUELDO_MENSUAL-sueldoGirado,0);
     // Próximo giro
     var proxFecha,proxMonto;
     if(hoyDia<DIA_PRIMER_GIRO){proxFecha=DIA_PRIMER_GIRO+'/'+(hoyD.getMonth()+1);proxMonto=Math.min(GIRO_QUINCENAL,sueldoPendiente);}
     else if(hoyDia<DIA_SEGUNDO_GIRO){proxFecha=DIA_SEGUNDO_GIRO+'/'+(hoyD.getMonth()+1);proxMonto=Math.min(GIRO_QUINCENAL,sueldoPendiente);}
     else {var prox=new Date(hoyD.getFullYear(),hoyD.getMonth()+1,DIA_PRIMER_GIRO);proxFecha=DIA_PRIMER_GIRO+'/'+(prox.getMonth()+1);proxMonto=Math.min(GIRO_QUINCENAL,SUELDO_MENSUAL);}
-    // Semáforo de 3 zonas
-    var bajoMinimo=saldoActualReal<CAJA_MINIMA;
-    var girarTeDejaBajoMin=(saldoActualReal-proxMonto)<CAJA_MINIMA;
-    var zona; // 'rojo' | 'amarillo' | 'verde'
+    // Semáforo de 3 zonas sobre la caja NETA (descontando deuda proveedores)
+    var bajoMinimo=cajaNeta<CAJA_MINIMA;
+    var girarTeDejaBajoMin=(cajaNeta-proxMonto)<CAJA_MINIMA;
+    var zona;
     if(bajoMinimo)zona='rojo';
     else if(girarTeDejaBajoMin)zona='amarillo';
     else zona='verde';
@@ -5183,10 +5217,22 @@ function rEERR_financiero(body){
 
     html+='<div style="max-width:820px;margin:0 auto 14px;background:#fff;border:1px solid var(--cd);border-radius:8px;overflow:hidden">';
     html+='<div style="padding:10px 14px;background:linear-gradient(180deg,#fafaf3,#fff);border-bottom:1px solid var(--cd);display:flex;align-items:center;gap:8px"><b style="font-size:13px;color:var(--b)">Estado de Caja</b><span style="font-size:10px;color:var(--bl);font-weight:600;text-transform:uppercase;letter-spacing:.06em">gobierno de retiros</span></div>';
-    html+='<div style="padding:14px;display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px">';
+    // Bloque 1: caja - deuda = caja neta
+    html+='<div style="padding:14px;display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;border-bottom:1px solid var(--cd)">';
     html+='<div style="background:var(--cr);border:1px solid var(--cd);border-radius:6px;padding:10px"><div style="font-size:10px;color:var(--bl);font-weight:700;text-transform:uppercase;letter-spacing:.06em">Caja real hoy</div><div style="font-size:18px;font-weight:800;color:var(--b);font-variant-numeric:tabular-nums;margin-top:2px">$'+f$(Math.round(saldoActualReal))+'</div></div>';
+    html+='<div style="background:var(--rb);border:1px solid var(--r);border-radius:6px;padding:10px"><div style="font-size:10px;color:var(--r);font-weight:700;text-transform:uppercase;letter-spacing:.06em">(−) Deuda proveedores</div><div style="font-size:18px;font-weight:800;color:var(--r);font-variant-numeric:tabular-nums;margin-top:2px">'+(_eerrDeudaProv===null?'<span style="font-size:11px">calculando…</span>':'−$'+f$(Math.round(deudaProv)))+'</div>';
+    if(deudaProvDet&&deudaProvDet.length){
+      var detTxt=deudaProvDet.slice(0,4).map(function(d){return d.n+' $'+f$(Math.round(d.m));}).join(' · ');
+      html+='<div style="font-size:9px;color:var(--ink3);margin-top:4px;line-height:1.4">'+detTxt+'</div>';
+    }
+    html+='</div>';
+    var cajaNetaColor=cajaNeta>=0?'var(--b)':'var(--r)';
+    html+='<div style="background:#fff;border:2px solid var(--b);border-radius:6px;padding:10px"><div style="font-size:10px;color:var(--bl);font-weight:700;text-transform:uppercase;letter-spacing:.06em">= Caja neta disponible</div><div style="font-size:18px;font-weight:800;color:'+cajaNetaColor+';font-variant-numeric:tabular-nums;margin-top:2px">'+(cajaNeta>=0?'$':'−$')+f$(Math.abs(Math.round(cajaNeta)))+'</div></div>';
+    html+='</div>';
+    // Bloque 2: caja neta vs piso
+    html+='<div style="padding:14px;display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px">';
     html+='<div style="background:var(--cr);border:1px solid var(--cd);border-radius:6px;padding:10px"><div style="font-size:10px;color:var(--bl);font-weight:700;text-transform:uppercase;letter-spacing:.06em">Caja mínima operativa</div><div style="font-size:18px;font-weight:800;color:var(--b);font-variant-numeric:tabular-nums;margin-top:2px">$'+f$(CAJA_MINIMA)+'</div></div>';
-    html+='<div style="background:'+colorBg+';border:1px solid '+colorMargen+';border-radius:6px;padding:10px"><div style="font-size:10px;color:var(--bl);font-weight:700;text-transform:uppercase;letter-spacing:.06em">Margen sobre mínimo</div><div style="font-size:18px;font-weight:800;color:'+colorMargen+';font-variant-numeric:tabular-nums;margin-top:2px">'+(margenMin>=0?'+':'−')+'$'+f$(Math.abs(Math.round(margenMin)))+'</div></div>';
+    html+='<div style="background:'+colorBg+';border:1px solid '+colorMargen+';border-radius:6px;padding:10px"><div style="font-size:10px;color:var(--bl);font-weight:700;text-transform:uppercase;letter-spacing:.06em">Margen Caja Neta − Piso</div><div style="font-size:18px;font-weight:800;color:'+colorMargen+';font-variant-numeric:tabular-nums;margin-top:2px">'+(margenMin>=0?'+':'−')+'$'+f$(Math.abs(Math.round(margenMin)))+'</div></div>';
     html+='</div>';
     // Sueldo del mes
     html+='<div style="padding:0 14px 14px"><div style="border-top:1px solid var(--cd);padding-top:10px"><div style="font-size:11px;font-weight:700;color:var(--b);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">Sueldo del dueño · '+mesNom+'</div>';
