@@ -1898,6 +1898,8 @@ function renderCobrosFromServer(){
         +'</div>';
       // Propina (puede ser negativa: boton ± permite ajuste de redondeo)
       h+='<div class="cobro-field"><label>Propina $</label><input type="number" id="cobroPropina_'+globalIdx+'" inputmode="numeric" placeholder="0" value="" oninput="actualizarCobroPropina('+globalIdx+')"><button type="button" class="btn-prop-signo" data-prop-target="cobroPropina_'+globalIdx+'" onclick="togglePropSigno(\'cobroPropina_'+globalIdx+'\')" title="Cambiar signo">+</button></div>';
+      // A favor del cliente (entra como crédito para próxima compra). Suma al cobro real.
+      h+='<div class="cobro-field" style="background:#FFF8E1;border:1.5px solid #FFD54F"><label style="color:#5D4037">A favor 💰</label><input type="number" id="cobroAFavor_'+globalIdx+'" inputmode="numeric" placeholder="0" value="" oninput="actualizarCobroPropina('+globalIdx+')"></div>';
       h+='<div class="cobro-card-actions">';
       if(tel){h+='<a href="https://wa.me/'+tel+'?text='+aliasMsg+'" target="_blank" rel="noopener" class="cobro-btn-alias">Comprobante</a>'}
       h+='<button type="button" class="cobro-btn-cobrado" style="background:#F9A825;color:#fff" onclick="abrirCobroParcial('+globalIdx+')">Parcial</button>';
@@ -1967,11 +1969,21 @@ function _leerCobroPropina(i){
   return isNeg?-Math.abs(raw):Math.abs(raw);
 }
 
+// Lee el campo "A favor cliente $" — siempre positivo (crédito que se le guarda al cliente).
+function _leerCobroAFavor(i){
+  var inp=document.getElementById('cobroAFavor_'+i);
+  if(!inp)return 0;
+  return Math.max(0, Math.round(Number(inp.value)||0));
+}
+
 function actualizarCobroPropina(i){
   if(i<0||i>=pendientesCobro.length)return;
   var prop=_leerCobroPropina(i);
+  var aFavor=_leerCobroAFavor(i);
   var r=cobroCalcularBase(i);
-  var totalFinal=r.base+prop;
+  // Total que se le pide al cliente = pedido + propina + a-favor
+  // (a-favor es plata extra que el cliente paga y queda como crédito).
+  var totalFinal=r.base+prop+aFavor;
   var totalEl=document.getElementById('cobroTotal_'+i);
   var prevEl=document.getElementById('cobroTotalPrev_'+i);
   var hintEl=document.getElementById('cobroHint_'+i);
@@ -2137,6 +2149,7 @@ function confirmarCobro(i){
   if(i<0||i>=pendientesCobro.length)return;
   var pc=pendientesCobro[i];
   var propina=_leerCobroPropina(i);
+  var aFavor=_leerCobroAFavor(i);
   var fp=document.getElementById('cobroFp_'+i).value;
   var r=cobroCalcularBase(i);
   var baseTotal=r.base;
@@ -2147,10 +2160,17 @@ function confirmarCobro(i){
     if(ef+tr===0){showToast('Completa los montos Ef y Tr');return}
   } else if(fp==='Efectivo'){ef=baseTotal} else {tr=baseTotal}
   var totalConPropina=baseTotal+propina;
+  var totalReal=totalConPropina+aFavor;
   var cambioTxt=r.changed?'<br><span style="color:var(--green);font-weight:700">Total ajustado por cambio de forma de pago</span>':'';
+  // Si hay a-favor, mostrar desglose claro
+  var aFavorTxt='';
+  if(aFavor>0){
+    aFavorTxt='<br><span style="background:#FFF8E1;color:#5D4037;padding:3px 8px;border-radius:6px;font-weight:700;display:inline-block;margin-top:6px">💰 Queda $'+formatMoney(aFavor).replace('$','')+' a favor para próxima compra</span>';
+  }
+  var totalTxt=aFavor>0?'<b>Total a cobrar: '+formatMoney(totalReal)+'</b>':formatMoney(totalConPropina);
   var o=document.getElementById('confirmOverlay');o.className='confirm-overlay';
   o.innerHTML='<div class="confirm-box"><h3>Confirmar cobro?</h3>'
-    +'<p>'+pc.c+'<br>'+fp+' — '+formatMoney(totalConPropina)+(propina>0?' (con propina)':'')+cambioTxt+'</p>'
+    +'<p>'+pc.c+'<br>'+fp+' — '+totalTxt+(propina>0?' (con propina)':'')+cambioTxt+aFavorTxt+'</p>'
     +'<div class="confirm-btns"><button class="btn-no" onclick="cerrarConfirm()">No</button><button class="btn-si" onclick="cerrarConfirm();cobrarPendiente('+i+','+ef+','+tr+',\''+fp+'\','+(r.changed?'true':'false')+')">Si, cobrado</button></div></div>';
 }
 
@@ -2239,12 +2259,27 @@ function cobrarPendiente(i,ef,tr,fp,recalc){
   if(i<0||i>=pendientesCobro.length)return;
   var pc=pendientesCobro[i];
   var propina=_leerCobroPropina(i);
+  var aFavor=_leerCobroAFavor(i);
   var propMet=fp==='Transferencia'?'Transferencia':'Efectivo';
   if(fp==='Mixto')propMet=tr>ef?'Transferencia':'Efectivo';
   var hojaPc=pc.h||pc.key.split('|')[0];
   var idPc=pc.id||pc.key.split('|')[1]||'';
   var payload={action:'marcarCobrado',hoja:hojaPc,id:String(idPc),row:pc.r||0,formaPago:fp||'Efectivo',ef:ef||0,tr:tr||0,propina:propina,propMet:propMet,repartidor:_rutaUser(),ts:Date.now()};
   if(recalc)payload.recalcular=true;
+  // Payload secundario para saldo a favor (se envía DESPUÉS del cobro exitoso).
+  // Método del a-favor: si fp=Mixto, usa el dominante; sino el mismo fp.
+  var aFavorPayload=null;
+  if(aFavor>0){
+    aFavorPayload={
+      action:'crearSaldoCliente',
+      cliente:pc.c,telefono:pc.t||'',
+      tipo:'Crédito',monto:aFavor,
+      pedidoHoja:hojaPc,pedidoId:String(idPc),
+      metodo:fp==='Mixto'?propMet:(fp||'Efectivo'),
+      notas:'A favor por cobro mayor al total del pedido',
+      repartidor:_rutaUser(),ts:Date.now()
+    };
+  }
 
   // 1) Loader ARRIBA de todo, ANTES de cambiar state local. Bloquea cualquier flicker.
   showLoader('Cobrando...');
@@ -2253,7 +2288,9 @@ function cobrarPendiente(i,ef,tr,fp,recalc){
   if(!isOnline){
     cobrados[pc.key]=true;
     pendientesCobro.splice(i,1);
-    syncQueue.push(payload);saveLocal();
+    syncQueue.push(payload);
+    if(aFavorPayload)syncQueue.push(aFavorPayload);
+    saveLocal();
     if(currentTab==='cobros')renderCobrosFromServer();else renderRuta();
     var elBO=document.getElementById('tabCobrosCount');if(elBO)elBO.textContent=pendientesCobro.length||'';
     hideLoader(true);
@@ -2278,6 +2315,20 @@ function cobrarPendiente(i,ef,tr,fp,recalc){
         hideLoader(true);
         showToast('Cobrado a '+pc.c.split(' ')[0]+' ('+fp+')'+(recalc?' — total ajustado':''));
         if(navigator.vibrate)navigator.vibrate(30);
+        // POST secundario: registrar saldo a favor (si aplica). Fire-and-forget,
+        // si falla queda en syncQueue para reintento.
+        if(aFavorPayload){
+          fetch(APPS_SCRIPT_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(aFavorPayload),redirect:'follow'})
+            .then(function(r2){return r2.json().catch(function(){return{ok:false}})})
+            .then(function(res2){
+              if(res2&&res2.ok){
+                showToast('💰 $'+formatMoney(aFavor).replace('$','')+' a favor de '+pc.c.split(' ')[0]+' (saldo: $'+formatMoney(res2.saldo||aFavor).replace('$','')+')');
+              } else {
+                syncQueue.push(aFavorPayload);saveLocal();processSyncQueue();
+              }
+            })
+            .catch(function(){syncQueue.push(aFavorPayload);saveLocal();processSyncQueue();});
+        }
       }else{
         // Server fallo: queue para retry, no actualizamos UI todavia
         syncQueue.push(payload);saveLocal();processSyncQueue();
