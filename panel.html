@@ -1282,16 +1282,22 @@ body.role-single .statusbar{font-size:11px}
         <select id="vtSubcanal" class="vt-sel" onchange="rTendencia()"></select>
       </div>
       <div class="vt-sel-wrap">
-        <label class="vt-sel-lbl">Día de la semana</label>
+        <label class="vt-sel-lbl">Período</label>
         <select id="vtDow" class="vt-sel" onchange="rTendencia()">
-          <option value="-1">Todos los días</option>
-          <option value="1">Lunes</option>
-          <option value="2">Martes</option>
-          <option value="3">Miércoles</option>
-          <option value="4">Jueves</option>
-          <option value="5" selected>Viernes</option>
-          <option value="6">Sábado</option>
-          <option value="0">Domingo</option>
+          <optgroup label="Agregado">
+            <option value="week">Por semana</option>
+            <option value="month">Por mes</option>
+          </optgroup>
+          <optgroup label="Día puntual">
+            <option value="-1">Todos los días</option>
+            <option value="1">Lunes</option>
+            <option value="2">Martes</option>
+            <option value="3">Miércoles</option>
+            <option value="4">Jueves</option>
+            <option value="5" selected>Viernes</option>
+            <option value="6">Sábado</option>
+            <option value="0">Domingo</option>
+          </optgroup>
         </select>
       </div>
       <div class="vt-sel-wrap">
@@ -6213,7 +6219,8 @@ function loadVentas(){
 
 // ═══════════════════════════════════════
 //  TENDENCIA — subtab de Ventas
-//  Compara mismo día de la semana × canal a lo largo del tiempo.
+//  Compara un canal a lo largo del tiempo, agregado por día puntual,
+//  semana o mes según el selector de "Período".
 // ═══════════════════════════════════════
 function _tendSubcanal(v){
   if(v.canal==='Venta Directa'){
@@ -6233,6 +6240,16 @@ function _tendParseDMY(s){
   return isNaN(d)?null:d;
 }
 var TEND_DAYS=['Dom','Lun','Mar','Mié','Jue','Vie','Sáb'];
+var TEND_MS_FULL=['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+var TEND_MS_SHORT=['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+// ISO week (Lun=1..Dom=7). Devuelve número de semana del año al que pertenece.
+function _tendISOWeek(d){
+  var t=new Date(Date.UTC(d.getFullYear(),d.getMonth(),d.getDate()));
+  var dn=t.getUTCDay()||7;
+  t.setUTCDate(t.getUTCDate()+4-dn);
+  var y0=new Date(Date.UTC(t.getUTCFullYear(),0,1));
+  return Math.ceil((((t-y0)/86400000)+1)/7);
+}
 function _tendBuildSubcanalOptions(){
   var sel=document.getElementById('vtSubcanal');if(!sel||!VD)return;
   var seen={};
@@ -6248,27 +6265,46 @@ function rTendencia(){
   if(!VD)return;
   _tendBuildSubcanalOptions();
   var sub=document.getElementById('vtSubcanal').value;
-  var dow=parseInt(document.getElementById('vtDow').value,10);
+  var period=document.getElementById('vtDow').value; // 'week'|'month'|'-1'..'6'
   var metric=document.getElementById('vtMetric').value;
   var win=parseInt(document.getElementById('vtWindow').value,10);
-  // 1. Filtrar
+  var isWeek=(period==='week'), isMonth=(period==='month');
+  var dow=(!isWeek && !isMonth)?parseInt(period,10):-1;
+  // 1. Filtrar (canal + día puntual si aplica)
   var rows=VD.filter(function(v){
     if(v.ep==='Cancelado')return false;
     if(sub!=='__all' && _tendSubcanal(v)!==sub)return false;
     if(!v.fecha)return false;
     var d=_tendParseDMY(v.fecha);if(!d)return false;
-    if(dow>=0 && d.getDay()!==dow)return false;
+    if(!isWeek && !isMonth && dow>=0 && d.getDay()!==dow)return false;
     return true;
   });
-  // 2. Agrupar por fecha (dd/mm/aaaa)
+  // 2. Agrupar según modo
   var grp={};
   rows.forEach(function(v){
-    var k=v.fecha;
-    if(!grp[k])grp[k]={fecha:k, d:_tendParseDMY(k), n:0, fact:0};
-    grp[k].n++;
-    grp[k].fact+=Number(v.$)||0;
+    var d=_tendParseDMY(v.fecha);
+    var k, item;
+    if(isWeek){
+      var sem=_tendISOWeek(d), anio=d.getFullYear();
+      k=anio+'-W'+String(sem).padStart(2,'0');
+      if(!grp[k])grp[k]={key:k, sem:sem, anio:anio, n:0, fact:0, minD:d, maxD:d, sortKey:anio*100+sem};
+      item=grp[k];
+      if(d<item.minD)item.minD=d;
+      if(d>item.maxD)item.maxD=d;
+    } else if(isMonth){
+      var mIdx=d.getMonth(), anioM=d.getFullYear();
+      k=anioM+'-M'+String(mIdx).padStart(2,'0');
+      if(!grp[k])grp[k]={key:k, mes:TEND_MS_FULL[mIdx], mIdx:mIdx, anio:anioM, n:0, fact:0, sortKey:anioM*100+mIdx};
+      item=grp[k];
+    } else {
+      k=v.fecha;
+      if(!grp[k])grp[k]={key:k, fecha:k, d:d, n:0, fact:0, sortKey:d.getTime()};
+      item=grp[k];
+    }
+    item.n++;
+    item.fact+=Number(v.$)||0;
   });
-  var serie=Object.keys(grp).map(function(k){return grp[k];}).sort(function(a,b){return a.d-b.d;});
+  var serie=Object.keys(grp).map(function(k){return grp[k];}).sort(function(a,b){return a.sortKey-b.sortKey;});
   if(win>0 && serie.length>win)serie=serie.slice(-win);
   function val(p){
     if(metric==='ped')return p.n;
@@ -6278,6 +6314,27 @@ function rTendencia(){
   function valFmt(x){
     if(metric==='ped')return String(Math.round(x));
     return '$'+f$(Math.round(x));
+  }
+  function _fmtDM(d){return String(d.getDate()).padStart(2,'0')+'/'+String(d.getMonth()+1).padStart(2,'0');}
+  function topLbl(p){
+    if(isWeek)return 'Sem '+p.sem;
+    if(isMonth)return TEND_MS_SHORT[p.mIdx];
+    return TEND_DAYS[p.d.getDay()];
+  }
+  function botLbl(p){
+    if(isWeek)return _fmtDM(p.minD)+'-'+_fmtDM(p.maxD);
+    if(isMonth)return "'"+String(p.anio).slice(-2);
+    return _fmtDM(p.d);
+  }
+  function kpiLbl(p){
+    if(isWeek)return 'Sem '+p.sem+' · '+_fmtDM(p.minD)+'-'+_fmtDM(p.maxD);
+    if(isMonth)return TEND_MS_SHORT[p.mIdx]+" '"+String(p.anio).slice(-2);
+    return p.fecha;
+  }
+  function tabLbl(p){
+    if(isWeek)return 'Sem '+p.sem+' ('+_fmtDM(p.minD)+'-'+_fmtDM(p.maxD)+')';
+    if(isMonth)return p.mes+' '+p.anio;
+    return TEND_DAYS[p.d.getDay()]+' '+_fmtDM(p.d);
   }
   var kpiBox=document.getElementById('vtKpis');
   var chartBox=document.getElementById('vtChart');
@@ -6311,12 +6368,13 @@ function rTendencia(){
       deltaHtml='<div class="v-kpi"><div class="v-kpi-v">▲ nuevo</div><div class="v-kpi-l">Últimos '+nHalf+' vs '+nHalf+' previos</div></div>';
     }
   }
+  var unitLbl=isWeek?'Semanas':(isMonth?'Meses':'Períodos');
   kpiBox.innerHTML=
     '<div class="v-kpi"><div class="v-kpi-v">'+valFmt(avg)+'</div><div class="v-kpi-l">Promedio</div></div>'+
-    '<div class="v-kpi cob"><div class="v-kpi-v">'+valFmt(maxV)+'</div><div class="v-kpi-l">Máximo · '+serie[iMax].fecha+'</div></div>'+
-    '<div class="v-kpi pend"><div class="v-kpi-v">'+valFmt(minV)+'</div><div class="v-kpi-l">Mínimo · '+serie[iMin].fecha+'</div></div>'+
+    '<div class="v-kpi cob"><div class="v-kpi-v">'+valFmt(maxV)+'</div><div class="v-kpi-l">Máximo · '+kpiLbl(serie[iMax])+'</div></div>'+
+    '<div class="v-kpi pend"><div class="v-kpi-v">'+valFmt(minV)+'</div><div class="v-kpi-l">Mínimo · '+kpiLbl(serie[iMin])+'</div></div>'+
     deltaHtml+
-    '<div class="v-kpi"><div class="v-kpi-v">'+values.length+'</div><div class="v-kpi-l">Períodos</div></div>';
+    '<div class="v-kpi"><div class="v-kpi-v">'+values.length+'</div><div class="v-kpi-l">'+unitLbl+'</div></div>';
   // Gráfico SVG
   var barW=46, gap=14, padL=14, padR=14, padT=28, padB=44, h=260;
   var n=serie.length;
@@ -6341,17 +6399,14 @@ function rTendencia(){
     var cls=isCur?'cur':(isRecent?'recent':'prev');
     svg+='<rect class="vt-bar-rect '+cls+'" x="'+x+'" y="'+y+'" width="'+barW+'" height="'+bh+'" rx="3"/>';
     svg+='<text class="vt-bar-val" x="'+(x+barW/2)+'" y="'+(y-4)+'">'+valFmt(vv)+'</text>';
-    var dt=p.d;
-    var dn=TEND_DAYS[dt.getDay()];
-    var dd=String(dt.getDate()).padStart(2,'0');
-    var mm=String(dt.getMonth()+1).padStart(2,'0');
-    svg+='<text class="vt-bar-lbl" x="'+(x+barW/2)+'" y="'+(h-padB+14)+'">'+dn+'</text>';
-    svg+='<text class="vt-bar-lbl" x="'+(x+barW/2)+'" y="'+(h-padB+28)+'" style="font-weight:600;fill:var(--ink3)">'+dd+'/'+mm+'</text>';
+    svg+='<text class="vt-bar-lbl" x="'+(x+barW/2)+'" y="'+(h-padB+14)+'">'+topLbl(p)+'</text>';
+    svg+='<text class="vt-bar-lbl" x="'+(x+barW/2)+'" y="'+(h-padB+28)+'" style="font-weight:600;fill:var(--ink3)">'+botLbl(p)+'</text>';
   });
   svg+='</svg>';
   chartBox.innerHTML=svg;
   // Tabla resumen
-  var thead='<div class="row h"><div>Fecha</div><div class="num">Pedidos</div><div class="num">Facturado</div><div class="num">Δ vs anterior</div></div>';
+  var col1Lbl=isWeek?'Semana':(isMonth?'Mes':'Fecha');
+  var thead='<div class="row h"><div>'+col1Lbl+'</div><div class="num">Pedidos</div><div class="num">Facturado</div><div class="num">Δ vs anterior</div></div>';
   var rows2=serie.slice().reverse().map(function(p,i){
     var realIdx=serie.length-1-i;
     var vv=values[realIdx];
@@ -6365,11 +6420,7 @@ function rTendencia(){
     } else if(prev===0 && vv>0){
       delta='▲ nuevo'; dCls='delta-up';
     }
-    var dt=p.d;
-    var dn=TEND_DAYS[dt.getDay()];
-    var dd=String(dt.getDate()).padStart(2,'0');
-    var mm=String(dt.getMonth()+1).padStart(2,'0');
-    return '<div class="row"><div>'+dn+' '+dd+'/'+mm+'</div><div class="num">'+p.n+'</div><div class="num">$'+f$(Math.round(p.fact))+'</div><div class="num '+dCls+'">'+delta+'</div></div>';
+    return '<div class="row"><div>'+tabLbl(p)+'</div><div class="num">'+p.n+'</div><div class="num">$'+f$(Math.round(p.fact))+'</div><div class="num '+dCls+'">'+delta+'</div></div>';
   }).join('');
   tableBox.innerHTML=thead+rows2;
 }
