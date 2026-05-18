@@ -3322,9 +3322,10 @@ function rInicio(){
       if(d<porSemana[sem].minD)porSemana[sem].minD=d;
       if(d>porSemana[sem].maxD)porSemana[sem].maxD=d;
       var diaLbl=p.fcd||p.fed||p.dia||'';
-      if(!porSemana[sem].dias[k])porSemana[sem].dias[k]={dia:diaLbl,fecha:k,ef:0,tr:0,tot:0,pend:0,n:0,mg:0};
+      if(!porSemana[sem].dias[k])porSemana[sem].dias[k]={dia:diaLbl,fecha:k,ef:0,tr:0,tot:0,pend:0,n:0,mg:0,peds:[]};
       if(!porSemana[sem].dias[k].dia)porSemana[sem].dias[k].dia=diaLbl;
       porSemana[sem].dias[k].ef+=ef;porSemana[sem].dias[k].tr+=tr;porSemana[sem].dias[k].tot+=monto;porSemana[sem].dias[k].n++;porSemana[sem].dias[k].mg+=mg;
+      porSemana[sem].dias[k].peds.push({n:p.n,c:p.c||'',h:p.h,fp:p.fp||'',ef:ef,tr:tr,t:monto,br:p.br||''});
       porSemana[sem].ef+=ef;porSemana[sem].tr+=tr;porSemana[sem].tot+=monto;porSemana[sem].n++;porSemana[sem].mg+=mg;
     } else {
       // No cobrados: siempre cuentan solo en la SEMANA ACTUAL como "por cobrar".
@@ -3347,15 +3348,81 @@ function rInicio(){
     html+='</div>';
     return html;
   }
-  function renderDiasList(dias,isCurSem){
+  // Conciliaci\u00f3n efectivo: tildados persistidos en localStorage por N\u00b0 de pedido.
+  // Permite marcar cobros EF a medida que se cuadra contra la caja real.
+  function _cnGet(){try{return JSON.parse(localStorage.getItem('maleu_concil_ef')||'{}');}catch(e){return {};}}
+  function _cnSet(o){try{localStorage.setItem('maleu_concil_ef',JSON.stringify(o));}catch(e){}}
+  window.toggleConcilPed=function(pedKey,btnEl){
+    var s=_cnGet();var on=!s[pedKey];
+    if(on)s[pedKey]=Date.now();else delete s[pedKey];
+    _cnSet(s);
+    if(btnEl){
+      btnEl.style.borderColor=on?'var(--g)':'var(--bl)';
+      btnEl.style.background=on?'var(--g)':'transparent';
+      btnEl.innerHTML=on?'✓':'';
+    }
+  };
+  window.toggleDiaPeds=function(elId){var el=$(elId);if(!el)return;el.classList.toggle('hidden');var chev=$(elId+'-chev');if(chev)chev.textContent=el.classList.contains('hidden')?'\u25be':'\u25b4';};
+  function renderDiasList(dias,isCurSem,semNum){
     var diasKeys=Object.keys(dias).sort(function(a,b){var pa=a.split('/'),pb=b.split('/');return (Number(pa[1])*100+Number(pa[0]))-(Number(pb[1])*100+Number(pb[0]));});
-    var h='';
-    diasKeys.forEach(function(k){
+    var h='';var conSt=_cnGet();
+    diasKeys.forEach(function(k,idx){
       var d=dias[k];var diaAb=(d.dia||'').substring(0,3);var isHoy=isCurSem&&k===hoyKey;
-      h+='<div class="card" style="margin-bottom:6px;padding:10px 12px'+(isHoy?';border:2px solid var(--b)':'')+'">';
-      h+='<div style="display:flex;justify-content:space-between;align-items:center"><span style="font-weight:800;font-size:13px">'+diaAb+' '+k+(isHoy?' \u00b7 HOY':'')+'</span><span style="font-weight:800;font-size:14px">$'+f$(d.tot)+'</span></div>';
-      h+='<div style="font-size:10px;color:var(--bl);margin-top:2px">EF $'+f$(d.ef)+' \u00b7 TR $'+f$(d.tr)+'</div>';
+      var dayId='dia-'+(semNum||'x')+'-'+k.replace('/','-');
+      // Subtotal de efectivo ya conciliado en este d\u00eda
+      var efConc=0,efPend=0;
+      (d.peds||[]).forEach(function(p){
+        if(p.ef>0){
+          var key=(p.h||'')+'-'+(p.n||'');
+          if(conSt[key])efConc+=p.ef; else efPend+=p.ef;
+        }
+      });
+      var efAllConc=d.ef>0&&efPend===0;
+      h+='<div class="card" style="margin-bottom:6px;padding:10px 12px'+(isHoy?';border:2px solid var(--b)':(efAllConc?';border:1px solid var(--g)':''))+'">';
+      h+='<div onclick="toggleDiaPeds(\''+dayId+'\')" style="display:flex;justify-content:space-between;align-items:center;cursor:pointer">';
+      h+='<span style="font-weight:800;font-size:13px">'+diaAb+' '+k+(isHoy?' \u00b7 HOY':'')+(efAllConc?' <span style="color:var(--gd);font-size:11px">\u2713 EF conciliado</span>':'')+'</span>';
+      h+='<span style="display:flex;align-items:center;gap:8px"><span style="font-weight:800;font-size:14px">$'+f$(d.tot)+'</span><span id="'+dayId+'-chev" style="font-size:11px;color:var(--bl)">\u25be</span></span>';
+      h+='</div>';
+      h+='<div style="font-size:10px;color:var(--bl);margin-top:2px">EF $'+f$(d.ef)+' \u00b7 TR $'+f$(d.tr);
+      if(d.peds&&d.peds.length)h+=' \u00b7 '+d.peds.length+(d.peds.length===1?' pedido':' pedidos');
+      h+='</div>';
+      if(efPend>0&&d.ef>0)h+='<div style="font-size:10px;color:var(--wrn);font-weight:700;margin-top:2px">Efectivo a conciliar: $'+f$(efPend)+(efConc>0?' \u00b7 ya tildado $'+f$(efConc):'')+'</div>';
       if(d.pend>0)h+='<div style="font-size:10px;color:#E65100;font-weight:700;margin-top:3px">+$'+f$(d.pend)+' por cobrar</div>';
+      // Detalle pedido a pedido
+      if(d.peds&&d.peds.length){
+        h+='<div id="'+dayId+'" class="hidden" style="margin-top:8px;border-top:1px dashed var(--cd);padding-top:8px">';
+        // Sort por m\u00e9todo (EF arriba) y luego por N\u00b0
+        var sorted=d.peds.slice().sort(function(a,b){if((a.ef>0)!==(b.ef>0))return a.ef>0?-1:1;return Number(a.n||0)-Number(b.n||0);});
+        sorted.forEach(function(p){
+          var pedKey=(p.h||'')+'-'+(p.n||'');
+          var isEF=p.ef>0;
+          var tildado=isEF&&conSt[pedKey];
+          var nLbl=p.h?(p.h.substring(0,1))+'-'+(p.n||'?'):'#'+(p.n||'?');
+          h+='<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid rgba(232,223,196,.5);font-size:11px">';
+          if(isEF){
+            h+='<span onclick="toggleConcilPed(\''+pedKey+'\',this)" style="cursor:pointer;display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border:1.5px solid '+(tildado?'var(--g)':'var(--bl)')+';background:'+(tildado?'var(--g)':'transparent')+';color:#fff;border-radius:3px;font-weight:800;font-size:10px;flex-shrink:0">'+(tildado?'\u2713':'')+'</span>';
+          } else {
+            h+='<span style="display:inline-block;width:18px;flex-shrink:0"></span>';
+          }
+          h+='<span style="flex:1;min-width:0">';
+          h+='<span style="font-weight:800;color:var(--ink)">'+nLbl+'</span> ';
+          h+='<span style="color:var(--ink2)">'+(p.c||'-')+'</span>';
+          if(p.br&&p.h==='Red')h+=' <span style="color:var(--bl);font-size:10px">('+p.br+')</span>';
+          h+='</span>';
+          h+='<span style="font-weight:800;color:'+(isEF?'var(--gd)':'var(--ink)')+';white-space:nowrap;font-variant-numeric:tabular-nums">';
+          h+=(isEF?'EF ':'TR ')+'$'+f$(p.t);
+          h+='</span>';
+          h+='</div>';
+        });
+        // Subtotales del detalle
+        if(d.ef>0){
+          h+='<div style="margin-top:6px;padding-top:6px;border-top:1px solid var(--cd);font-size:11px;display:flex;justify-content:space-between"><span style="color:var(--bl);font-weight:700">Total EF</span><span style="font-weight:800">$'+f$(d.ef)+'</span></div>';
+        }
+        if(d.tr>0){
+          h+='<div style="font-size:11px;display:flex;justify-content:space-between"><span style="color:var(--bl);font-weight:700">Total TR</span><span style="font-weight:800">$'+f$(d.tr)+'</span></div>';
+        }
+        h+='</div>';
+      }
       h+='</div>';
     });
     return h;
@@ -3495,7 +3562,7 @@ function rInicio(){
         cbHtml+='</div>';
       }
       cbHtml+='</div>';
-      cbHtml+='<div id="sem-body-'+s+'" class="hidden" style="padding:0 10px 10px">'+renderDiasList(d.dias,false)+'</div>';
+      cbHtml+='<div id="sem-body-'+s+'" class="hidden" style="padding:0 10px 10px">'+renderDiasList(d.dias,false,s)+'</div>';
       // Botón PDF SIEMPRE visible (fuera del acordeón hidden)
       cbHtml+='<div style="padding:0 12px 12px"><button onclick="event.stopPropagation();descargarPDFSemana('+s+','+semActual+')" style="display:block;width:100%;padding:12px;background:var(--o);color:#fff;border:none;border-radius:10px;font-size:13px;font-weight:800;cursor:pointer">&#128229; Descargar PDF Semana '+s+'</button></div>';
       cbHtml+='</div>';
