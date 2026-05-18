@@ -588,9 +588,11 @@ function setZone(zone) {
     window.scrollTo(0, 0);
     return;
   }
-  // Pilar: paso intermedio de barrio. Si tiene barrio guardado vigente
-  // saltamos directo al paso fecha.
-  if (zone === 'pilar' && !_loadSavedPilarBarrio()) {
+  // Pilar: cuando el cliente elige Pilar EXPLÍCITAMENTE desde el modal,
+  // siempre mostrar el paso barrio (puede que quiera cambiarlo). El skip
+  // del paso barrio solo aplica en el INIT cuando ya entra con zona+barrio
+  // guardados y NO está pasando por el modal de zona.
+  if (zone === 'pilar') {
     welcomeShowBarrioStep();
     return;
   }
