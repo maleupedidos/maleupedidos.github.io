@@ -823,6 +823,9 @@ function _getNextDeliveryDatesGrouped(zone) {
   // acepta Viernes (Marcos entrega los Vie). El resto de la semana queda
   // fuera. La semana siguiente en adelante NO se filtra.
   var pilarRestricted = (zone === 'pilar' && isPilarRestricted());
+  // Si el cliente eligió barrio Red (Marcos): solo Vie en TODAS las semanas
+  // (Marcos reparte solamente los Viernes, no los Miércoles).
+  var pilarRedOnly = (zone === 'pilar' && _pilarBarrioIsRed());
   var feriados = FERIADOS_BLOQUEADOS[zone] || [];
   var extras = ENTREGAS_EXTRA[zone] || [];
   // Cutoff Pilar Vie de esta semana: si ya pasó, bloquear el Vie en thisWeek
@@ -845,6 +848,8 @@ function _getNextDeliveryDatesGrouped(zone) {
     var inThisWeek = d.getTime() < nextMonday.getTime();
     // Filtro de restricción Pilar: solo Vie en thisWeek (las extras también pasan)
     if (pilarRestricted && inThisWeek && dayName !== 'Viernes' && !isExtra) continue;
+    // Barrio Red (Marcos): solo Viernes, todas las semanas
+    if (pilarRedOnly && dayName !== 'Viernes' && !isExtra) continue;
     // Cutoff Pilar Vie de esta semana ya vencido → no ofrecer ese Vie
     if (pilarFridayBloqueadoFlag && inThisWeek && dayName === 'Viernes') continue;
     // timeRange: usar el de extra si aplica, sino el del horario normal
