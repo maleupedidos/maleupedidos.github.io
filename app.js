@@ -345,6 +345,67 @@ function $id(id) { return document.getElementById(id); }
 function ars(n) { return '$' + n.toLocaleString('es-AR'); }
 function cartTotal() { return Object.entries(cart).reduce((s,[id,q]) => { const p=PROD_MAP[id]; return s+(p?p.precio*q:0); }, 0); }
 function cartCount() { return Object.values(cart).reduce((a,b)=>a+b, 0); }
+
+/* ── SALDO A FAVOR DEL CLIENTE (auto-detección por teléfono) ──
+   Cuando el cliente termina de escribir el teléfono en el checkout, consultamos
+   al backend si tiene saldo a favor de compras anteriores. Si sí, mostramos un
+   banner y aplicamos automáticamente como descuento al total.
+   El monto aplicado se manda al backend en `saldoAplicado` del postData, y queda
+   registrado en hoja Saldos Clientes como "Aplicación" + col BI/BL del pedido. */
+var _saldoCliente = { tel: '', saldo: 0, ultimoFetch: 0 };
+function getSaldoAFavor() {
+  // Aplicar saldo solo si: tenemos saldo>0, hay teléfono válido y hay carrito.
+  // No aplicar más que el subtotal (no puede dejar el pedido en negativo).
+  if (!_saldoCliente.saldo || _saldoCliente.saldo <= 0) return 0;
+  var sub = cartTotal();
+  if (sub <= 0) return 0;
+  return Math.min(_saldoCliente.saldo, sub);
+}
+function checkSaldoCliente() {
+  try {
+    var inp = $id('f-telefono');
+    if (!inp) return;
+    var tel = String(inp.value || '').replace(/\D/g, '');
+    if (tel.length < 8) {
+      // No es un teléfono válido todavía — limpiar banner
+      _saldoCliente = { tel: '', saldo: 0, ultimoFetch: 0 };
+      _toggleSaldoBanner();
+      _updateCartTotals();
+      return;
+    }
+    // Cache: no re-fetch si es el mismo número en los últimos 30s
+    if (_saldoCliente.tel === tel && (Date.now() - _saldoCliente.ultimoFetch) < 30000) return;
+    _saldoCliente.tel = tel;
+    _saldoCliente.ultimoFetch = Date.now();
+    fetch(APPS_SCRIPT_URL + '?action=saldoCliente&tel=' + encodeURIComponent(tel) + '&t=' + Date.now())
+      .then(function(r){ return r.json(); })
+      .then(function(data){
+        if (data && data.ok) {
+          _saldoCliente.saldo = Number(data.saldo) || 0;
+        } else {
+          _saldoCliente.saldo = 0;
+        }
+        _toggleSaldoBanner();
+        _updateCartTotals();
+      })
+      .catch(function(){ /* silencioso: si falla, simplemente no aplica saldo */ });
+  } catch(e) {}
+}
+function _toggleSaldoBanner() {
+  var banner = $id('saldoFavorBanner');
+  var monto = $id('saldoFavorMonto');
+  if (!banner || !monto) return;
+  if (_saldoCliente.saldo > 0) {
+    banner.style.display = '';
+    monto.textContent = ars(_saldoCliente.saldo);
+  } else {
+    banner.style.display = 'none';
+  }
+}
+function _updateCartTotals() {
+  // Re-render todos los lugares que muestran el total (cart pop, resumen final).
+  try { if (typeof updateUI === 'function') updateUI(); } catch(e){}
+}
 function getShipping() {
   if (!currentZone) return 0;
   const z = ZONAS[currentZone];
@@ -1046,7 +1107,7 @@ function changeQty(id, delta) { modifyCart(id, delta); }
 function cardChangeQty(id, delta) { modifyCart(id, delta); }
 
 function updateUI() {
-  const count = cartCount(), subtotal = cartTotal(), discount = getCashDiscount(), shipping = getShipping(), total = subtotal - discount + shipping;
+  const count = cartCount(), subtotal = cartTotal(), discount = getCashDiscount(), shipping = getShipping(), saldoAFavor = getSaldoAFavor(), total = subtotal - discount + shipping - saldoAFavor;
   const badge = $id('cart-badge');
   badge.textContent = count;
   badge.style.display = count > 0 ? 'flex' : 'none';
@@ -1084,6 +1145,11 @@ function updateUI() {
     if (discount > 0) { discRow.style.display = ''; discRow.querySelector('span').textContent = getDiscountLabel(); $id('cart-discount').textContent = '-' + ars(discount); }
     else { discRow.style.display = 'none'; }
     $id('cart-shipping').textContent = shipping === 0 ? 'Gratis' : ars(shipping);
+    const saldoRow = $id('cart-saldo-row');
+    if (saldoRow) {
+      if (saldoAFavor > 0) { saldoRow.style.display = ''; $id('cart-saldo').textContent = '-' + ars(saldoAFavor); }
+      else { saldoRow.style.display = 'none'; }
+    }
     $id('cart-total').textContent = ars(total);
 
     // Incentivo inteligente
@@ -1426,7 +1492,7 @@ function enviarPedido() {
   } catch(e) {}
 
   // Construir mensaje WhatsApp
-  const subtotal = cartTotal(), discount = getCashDiscount(), shipping = getShipping(), total = subtotal - discount + shipping;
+  const subtotal = cartTotal(), discount = getCashDiscount(), shipping = getShipping(), saldoAFavor = getSaldoAFavor(), total = subtotal - discount + shipping - saldoAFavor;
 
   const prodLines = Object.entries(cart).map(([id,qty]) => {
     const p = PROD_MAP[id]; if (!p) return null;
@@ -1469,11 +1535,12 @@ function enviarPedido() {
   // Los datos del cliente (nombre, tel, dirección, entrega, pago) los ve Maleu
   // en Panel/Búsqueda/Ruta/Red — no se repiten en el WhatsApp.
   var msgLines = ['Hola! Quiero hacer un pedido:', '', prodLines, ''];
-  // Solo desglosar Subtotal cuando hay descuento o envío. Si Total = Subtotal, mostrar solo Total.
-  if (discount > 0 || shipping > 0) {
+  // Solo desglosar Subtotal cuando hay descuento, envío o saldo a favor.
+  if (discount > 0 || shipping > 0 || saldoAFavor > 0) {
     msgLines.push('Subtotal: ' + ars(subtotal));
     if (discount > 0) msgLines.push(getDiscountLabel() + ': -' + ars(discount));
     if (shipping > 0) msgLines.push('Envio: ' + ars(shipping));
+    if (saldoAFavor > 0) msgLines.push('🎁 Saldo a favor: -' + ars(saldoAFavor));
   }
   msgLines.push('*Total: ' + ars(total) + '*');
   var msg = msgLines.join('\n');
@@ -1517,7 +1584,8 @@ function enviarPedido() {
       lote, telefono, dia: diaSheets, horario, fechaEntrega: fechaISO,
       pago: pagoEl.value,
       envio: shipping, items, total,
-      subtotalSinDescuento: subtotal, descuento: discount
+      subtotalSinDescuento: subtotal, descuento: discount,
+      saldoAplicado: saldoAFavor  // backend lo escribe negativo en col BI/BL del pedido
     };
   }
   // ID único para idempotencia: si el cliente reintenta por mala señal y el POST
