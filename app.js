@@ -282,9 +282,17 @@ function _isDeliveryBeforeNextFriday(iso) {
    barrio, devuelve false (no-Red por default → más estricto). */
 function _pilarBarrioIsRed() {
   var sel = $id('f-pilar-barrio');
-  var val = sel ? sel.value : (selectedPilarBarrio || '');
+  // Priorizar selectedPilarBarrio (estado JS) sobre el dropdown — el dropdown
+  // puede tener value='' si la option aún no fue cargada por renderPilarBarrios.
+  var val = (sel && sel.value) || selectedPilarBarrio || '';
   if (!val || val === '__otro__') return false;
-  return !!barrioToVendedor[val.toLowerCase()];
+  // Defensa 1: barrioToVendedor cargado desde Sheets (puede no haber llegado todavía).
+  if (barrioToVendedor[val.toLowerCase()]) return true;
+  // Defensa 2: lista hardcodeada en BARRIOS_PILAR_MODAL (siempre disponible).
+  for (var i = 0; i < BARRIOS_PILAR_MODAL.length; i++) {
+    if (BARRIOS_PILAR_MODAL[i].val === val && BARRIOS_PILAR_MODAL[i].isRed) return true;
+  }
+  return false;
 }
 /* Modo "abierto con info": muestra cartel celeste "Hoy hay N en stock ·
    Pedís más para fecha futura". Aplica solo cuando el modo es 'ilimitado'
