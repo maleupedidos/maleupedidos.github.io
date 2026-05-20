@@ -1864,12 +1864,10 @@ function updateStockDisplay() {
       else if (proy <= 3) el.innerHTML = '<span class="stock-badge stock-low">Últimas ' + proy + ' unidades</span>';
       else el.innerHTML = '';
     } else {
-      // ilimitado con info: stock físico bajo pero puede pedir más
-      if (isStockInfoMode()) {
-        if (fis === 0) el.innerHTML = '<span class="stock-badge stock-info">Hoy: 0 en stock · Pedís para fecha futura ✓</span>';
-        else if (fis <= 5) el.innerHTML = '<span class="stock-badge stock-info">Hoy hay ' + fis + ' en stock · Pedís más para fecha futura ✓</span>';
-        else el.innerHTML = '';
-      } else if (fis === 0) {
+      // Modo ilimitado: el cliente puede pedir cualquier cantidad. NO mostrar
+      // info de stock físico — solo distrae. El cartel "A pedido" se mantiene
+      // únicamente en Pilar/Clubes cuando stock=0 (zonas que siempre son a pedido).
+      if (fis === 0 && currentZone !== 'estancias' && !(currentZone === 'pilar' && !_pilarBarrioIsRed())) {
         el.innerHTML = '<span class="stock-badge stock-order">A pedido</span>';
       } else {
         el.innerHTML = '';
