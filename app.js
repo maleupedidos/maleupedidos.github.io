@@ -1677,9 +1677,26 @@ function _sendWithRetry(data) {
   // queda guardado para el próximo retry oportuno.
   _persistPending(data);
   var key = data.clientOrderId;
+  var body = JSON.stringify(data);
 
-  // AbortController: si el fetch queda colgado (mala señal después de iniciar
-  // conexión), abortamos a los 12s y vamos a retry.
+  // ── DEFENSA #1: sendBeacon ──────────────────────────────────────────────
+  // sendBeacon GARANTIZA que el navegador entregue el POST aún si la página
+  // se cierra o navega (redirect a wa.me a los 800ms). No devuelve respuesta,
+  // pero asegura el delivery — clave en iOS Safari, que aborta fetch agresivo
+  // al cambiar de página. El server tiene idempotencia por clientOrderId.
+  try {
+    if (typeof navigator !== 'undefined' && navigator.sendBeacon) {
+      var blob = new Blob([body], { type: 'text/plain;charset=UTF-8' });
+      navigator.sendBeacon(APPS_SCRIPT_URL, blob);
+    }
+  } catch(e) {}
+
+  // ── DEFENSA #2: fetch CORS ──────────────────────────────────────────────
+  // En paralelo, fetch normal (CORS) para LEER la respuesta del server. Si
+  // confirma {ok:true}, borramos el pendiente. Si falla o el server devuelve
+  // {ok:false}, queda en pendientes → retry (con dedup en el server).
+  // Antes era mode:'no-cors' (opaque) → no se podía detectar errores → pedidos
+  // perdidos silenciosamente. Bug que costó un pedido de un cliente real.
   var ctrl;
   var timeoutId;
   try {
@@ -1688,20 +1705,30 @@ function _sendWithRetry(data) {
   } catch(e) {}
 
   var fetchOpts = {
-    method:'POST', mode:'no-cors', headers:{'Content-Type':'text/plain'},
-    body: JSON.stringify(data)
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain' }, // text/plain evita preflight CORS (request "simple")
+    body: body
   };
   if (ctrl) fetchOpts.signal = ctrl.signal;
 
-  fetch(APPS_SCRIPT_URL, fetchOpts).then(function() {
+  fetch(APPS_SCRIPT_URL, fetchOpts).then(function(r) {
     if (timeoutId) clearTimeout(timeoutId);
-    // no-cors devuelve "opaque" response → asumimos OK si fetch resolvió sin abortar.
-    _removePending(key);
-  }).catch(function() {
+    if (!r.ok) throw new Error('http ' + r.status);
+    return r.text();
+  }).then(function(txt) {
+    var resp = null;
+    try { resp = JSON.parse(txt); } catch(e) {}
+    if (resp && resp.ok) {
+      _removePending(key);
+    } else {
+      throw new Error('server-not-ok: ' + (resp && (resp.err || resp.error) || 'unknown'));
+    }
+  }).catch(function(err) {
     if (timeoutId) clearTimeout(timeoutId);
     var map = _pendingMap();
     if (!map[key]) return; // ya removido por otro flow
     map[key].tries = (map[key].tries || 0) + 1;
+    map[key].lastError = String(err && err.message || err);
     _pendingSave(map);
     if (map[key].tries < MALEU_MAX_TRIES) {
       var delay = MALEU_RETRY_DELAYS[Math.min(map[key].tries - 1, MALEU_RETRY_DELAYS.length - 1)];
