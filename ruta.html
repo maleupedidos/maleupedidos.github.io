@@ -959,6 +959,83 @@ function fetchPendientesGuardarStock(){
 // Key única por pedido. Usa fila (e.r) porque el N° (e.id) se reinicia por semana
 // ISO y colisiona si hay pedidos manualmente movidos entre semanas.
 function eKey(e){return e.h+'|R'+e.r}
+
+/* ── AGRUPACIÓN DE PEDIDOS DEL MISMO CLIENTE / DÍA ──
+   Caso real (Eloisa Caride 25/05/2026): cliente hizo 2 pedidos el mismo día
+   (segundo pedido fue "agregame algo más" después del primero). En el Sheets
+   son 2 filas distintas, pero en RUTA y COBROS deberian aparecer como UNA
+   sola card para el cliente con la suma de productos y total combinado.
+   La agrupación es solo VISUAL — los pedidos siguen siendo entidades separadas
+   en el Sheets (no se fusionan, no se rompe auditoría). */
+
+// Devuelve string que identifica al cliente+día. Mismo cliente fisico (mismo
+// teléfono normalizado, sino fallback a nombre+lote). Mismo día de entrega.
+function _claveCombo(e){
+  var tel=String(e.t||'').replace(/\D/g,'');
+  var nombre=String(e.c||'').toLowerCase().trim();
+  var dia=e.fe||e.de||'';
+  var clienteId=tel||(nombre+'|'+(e.l||'')+'|'+(e.sb||''));
+  return clienteId+'|'+dia;
+}
+
+// Agrupa una lista de pedidos por _claveCombo. Retorna array donde cada item es:
+// - Pedido individual: el objeto pedido tal cual.
+// - Combo (N>=2 pedidos del mismo cliente+día): un pedido sintético con _combo:true
+//   y _pedidos:[...] que contiene los pedidos originales.
+function _agruparPedidos(lista){
+  var grupos={};
+  var orden=[]; // mantener orden de aparición de la primera ocurrencia
+  lista.forEach(function(e){
+    // Sintéticos (Red, Depósito) no se agrupan
+    if(e._redAgg||e._depAgg){orden.push({_skipAgrup:true,e:e});return;}
+    var k=_claveCombo(e);
+    if(!grupos[k]){grupos[k]={key:k,pedidos:[]};orden.push({k:k});}
+    grupos[k].pedidos.push(e);
+  });
+  return orden.map(function(it){
+    if(it._skipAgrup)return it.e;
+    var grp=grupos[it.k];
+    if(grp.pedidos.length===1)return grp.pedidos[0];
+    // Combo: armar pedido sintético con suma
+    var primero=grp.pedidos[0];
+    var totalCombo=grp.pedidos.reduce(function(s,p){return s+(Number(p.$)||0);},0);
+    // Sumar productos por abbr (mantener orden por aparición)
+    var prodMap={},prodOrden=[];
+    grp.pedidos.forEach(function(p){
+      (p.p||[]).forEach(function(item){
+        if(prodMap[item.a]===undefined){prodMap[item.a]=0;prodOrden.push(item.a);}
+        prodMap[item.a]+=item.q;
+      });
+    });
+    var prodsArr=prodOrden.map(function(a){return {a:a,q:prodMap[a]}});
+    var ids=grp.pedidos.map(function(p){return p.id;}).join(',');
+    return {
+      _combo:true,
+      _pedidos:grp.pedidos,
+      _key:'combo|'+it.k,
+      // Campos como pedido individual para compat con renderRuta
+      h:primero.h,
+      id:ids,                  // "340,345"
+      r:primero.r,
+      c:primero.c,
+      t:primero.t,
+      d:primero.d,
+      b:primero.b,
+      sb:primero.sb,
+      l:primero.l,
+      de:primero.de,
+      fe:primero.fe,
+      es:primero.es,
+      o:primero.o,
+      oD:primero.oD,
+      fp:primero.fp,
+      ep:primero.ep,
+      $:totalCombo,
+      p:prodsArr,
+      retira:primero.retira
+    };
+  });
+}
 function findByKey(key){return entregas.find(function(e){return eKey(e)===key})}
 function isEntregado(e){return entregados[eKey(e)]||e.es==='Entregado'}
 function isCobrado(e){return cobrados[eKey(e)]||e.ep==='Cobrado'}
@@ -1072,7 +1149,9 @@ function getSorted(){
       de:'',es:'',o:'',oD:{},fp:'',ep:'',$:0,p:prods,t:'',retira:''
     });
   }
-  return clientes;
+  // Agrupar pedidos del mismo cliente + mismo día en combos visuales.
+  // Sintéticos (Red/Depósito) pasan tal cual (función los detecta y skipea).
+  return _agruparPedidos(clientes);
 }
 // "Sin armar" = pedidos del día que requieren armado (dep o mixto) y todavía no están armados.
 // Los 100% OC NO van acá — no requieren armado, van directo a Ruta.
@@ -1789,7 +1868,10 @@ function renderRuta(){
     actions.innerHTML='';return;
   }
   if(rutaIndex>=sorted.length)rutaIndex=0;if(rutaIndex<0)rutaIndex=sorted.length-1;
-  var e=sorted[rutaIndex],key=eKey(e);
+  var e=sorted[rutaIndex];
+  // Para combos usar la key especial _key (combo|tel|dia). Para pedidos individuales,
+  // usar eKey(e) como siempre. Esto identifica el "item de Ruta" para propinas/cobros locales.
+  var key=e._combo?e._key:eKey(e);
 
   // Pills por subbarrio (clickeables, filtran la lista). Se calculan sobre
   // sortedAll (sin filtro) para que vos veas qué zonas tienen entregas hoy.
@@ -1867,7 +1949,20 @@ function renderRuta(){
   var _ot=_origenTipo(e);
   var _otLabels={dep:'🧊 Del freezer',oc:'📦 Del proveedor',mixto:'🔀 Mixto'};
   h+='<div class="ruta-origen-tag '+_ot+'">'+_otLabels[_ot]+'</div>';
-  h+='<div class="ruta-nombre"><span class="ord-link" onclick="event.stopPropagation();_openOrdInPanel(\''+e.h+'\',\''+e.id+'\')" title="Ver detalle">'+e.c+'</span></div>';
+  // Para combos, el link al detalle abre el primer pedido (e.id es CSV "340,345").
+  var _idLink=e._combo?String(e._pedidos[0].id):e.id;
+  h+='<div class="ruta-nombre"><span class="ord-link" onclick="event.stopPropagation();_openOrdInPanel(\''+e.h+'\',\''+_idLink+'\')" title="Ver detalle">'+e.c+'</span></div>';
+
+  // ── Caja informativa de combo: "2 pedidos juntos" ──
+  if(e._combo){
+    var nC=e._pedidos.length;
+    h+='<div style="background:#FFF8E1;border:1.5px solid #F9A825;border-radius:10px;padding:9px 11px;margin:6px 0 8px;font-size:12px;line-height:1.5">'
+      +'<div style="font-weight:800;color:#5D4037;margin-bottom:4px">🔗 '+nC+' pedidos del mismo cliente · día</div>';
+    e._pedidos.forEach(function(p,i){
+      h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#5D4037"><span>#'+p.id+(i===0?' (1er pedido)':' (agregó después)')+'</span><b>'+formatMoney(p.$)+'</b></div>';
+    });
+    h+='</div>';
+  }
 
   h+='<div class="ruta-productos">';e.p.forEach(function(p){h+='<div class="ruta-prod-item"><span>'+(PROD_NAMES[p.a]||p.a)+'</span><span class="ruta-prod-qty">'+p.q+'</span></div>'});h+='</div>';
 
@@ -1899,14 +1994,17 @@ function renderRuta(){
   var a='';
   // Red: no se cobra desde Ruta (el vendedor Red liquida aparte en Panel → Caja)
   var esRed=e.h==='Red';
-  if(!cobrado&&!esRed){a+='<button class="btn-entregado cobrar-first" id="btnCobrado" onclick="abrirCobroRuta(\''+key+'\')">COBRADO '+formatMoney(totalFact)+'</button>'}
-  a+='<button class="btn-entregado" onclick="confirmarEntregado(\''+key+'\')">ENTREGADO</button>';
+  // Para combos: los onclick pasan la lista de keys individuales (CSV) y los handlers
+  // iteran. El "key" actual sirve para propinas locales del combo.
+  var _kArg=key;
+  if(!cobrado&&!esRed){a+='<button class="btn-entregado cobrar-first" id="btnCobrado" onclick="abrirCobroRuta(\''+_kArg+'\')">COBRADO '+formatMoney(totalFact)+'</button>'}
+  a+='<button class="btn-entregado" onclick="confirmarEntregado(\''+_kArg+'\')">ENTREGADO</button>';
   // Reservar / Cancelar (alternativas a Entregado)
   var estAct=e.es||'Pendiente';
   a+='<div style="display:flex;gap:6px;margin-top:8px">';
-  if(estAct==='Pendiente'){a+='<button type="button" onclick="cambiarEstadoRuta(\''+key+'\',\'Reservado\')" style="flex:1;padding:10px;background:transparent;color:#1976d2;border:1.5px solid #1976d2;border-radius:8px;font-family:inherit;font-size:12px;font-weight:700;cursor:pointer">Reservar</button>';}
-  else if(estAct==='Reservado'){a+='<button type="button" onclick="cambiarEstadoRuta(\''+key+'\',\'Pendiente\')" style="flex:1;padding:10px;background:transparent;color:var(--muted);border:1.5px solid var(--border);border-radius:8px;font-family:inherit;font-size:12px;font-weight:700;cursor:pointer">Quitar reserva</button>';}
-  a+='<button type="button" onclick="confirmarCancelarRuta(\''+key+'\')" style="flex:1;padding:10px;background:transparent;color:#c62828;border:1.5px solid #c62828;border-radius:8px;font-family:inherit;font-size:12px;font-weight:700;cursor:pointer">Cancelar pedido</button>';
+  if(estAct==='Pendiente'){a+='<button type="button" onclick="cambiarEstadoRuta(\''+_kArg+'\',\'Reservado\')" style="flex:1;padding:10px;background:transparent;color:#1976d2;border:1.5px solid #1976d2;border-radius:8px;font-family:inherit;font-size:12px;font-weight:700;cursor:pointer">Reservar</button>';}
+  else if(estAct==='Reservado'){a+='<button type="button" onclick="cambiarEstadoRuta(\''+_kArg+'\',\'Pendiente\')" style="flex:1;padding:10px;background:transparent;color:var(--muted);border:1.5px solid var(--border);border-radius:8px;font-family:inherit;font-size:12px;font-weight:700;cursor:pointer">Quitar reserva</button>';}
+  a+='<button type="button" onclick="confirmarCancelarRuta(\''+_kArg+'\')" style="flex:1;padding:10px;background:transparent;color:#c62828;border:1.5px solid #c62828;border-radius:8px;font-family:inherit;font-size:12px;font-weight:700;cursor:pointer">Cancelar pedido</button>';
   a+='</div>';
   a+='<div class="ruta-nav"><button class="btn-prev" onclick="rutaPrev()">&larr;</button><button class="btn-next" onclick="rutaNext()">Siguiente &rarr;</button></div>';
   actions.innerHTML=a;
@@ -2245,6 +2343,14 @@ function actualizarPropina(key,pedidoTotal){
 
 /* ── CONFIRMAR ENTREGADO ── */
 function confirmarEntregado(key){
+  // Combo: confirmar mencionando la cantidad de pedidos.
+  if(_esCombo(key)){
+    var peds=_pedidosDelCombo(key);
+    if(peds.length===0)return;
+    var o=document.getElementById('confirmOverlay');o.className='confirm-overlay';
+    o.innerHTML='<div class="confirm-box"><h3>Marcar '+peds.length+' pedidos como entregados?</h3><p>'+peds[0].c+' · Se marcan los '+peds.length+' pedidos a la vez.</p><div class="confirm-btns"><button class="btn-no" onclick="cerrarConfirm()">No</button><button class="btn-si" onclick="cerrarConfirm();marcarEntregado(\''+key+'\')">Si, entregados</button></div></div>';
+    return;
+  }
   var o=document.getElementById('confirmOverlay');o.className='confirm-overlay';
   o.innerHTML='<div class="confirm-box"><h3>Marcar como entregado?</h3><p>Se actualiza en el Sheets</p><div class="confirm-btns"><button class="btn-no" onclick="cerrarConfirm()">No</button><button class="btn-si" onclick="cerrarConfirm();marcarEntregado(\''+key+'\')">Si, entregado</button></div></div>';
 }
@@ -2252,6 +2358,24 @@ function cerrarConfirm(){document.getElementById('confirmOverlay').classList.add
 
 /* ── MARCAR ENTREGADO ── */
 function marcarEntregado(key){
+  // Combo: iterar y marcar cada pedido individual.
+  if(_esCombo(key)){
+    var peds=_pedidosDelCombo(key);
+    if(peds.length===0)return;
+    var nombre=(peds[0].c||'').split(' ')[0];
+    peds.forEach(function(p){
+      var k=eKey(p);
+      entregados[k]=true;
+      syncQueue.push({action:'marcarEntregado',hoja:p.h,id:String(p.id),row:p.r,cobrado:!!cobrados[k],propina:propinas[k]||0,repartidor:_rutaUser(),ts:Date.now()});
+      if(!cobrados[k]&&p.ep!=='Cobrado'&&p.h!=='Red'){
+        pendientesCobro.push({key:k,h:p.h,id:String(p.id),r:p.r,c:p.c,t:p.t,$:p.$,fp:p.fp,ts:Date.now()});
+      }
+    });
+    saveLocal();showLoader('Marcando '+peds.length+' entregados...');processSyncQueue();if(navigator.vibrate)navigator.vibrate(50);
+    showToast('Entregado a '+nombre+' ('+peds.length+' pedidos)');
+    render();
+    return;
+  }
   entregados[key]=true;
   var ent=findByKey(key);
   if(ent){
@@ -2266,6 +2390,22 @@ function marcarEntregado(key){
   render();
 }
 
+/* ── HELPERS DE COMBO ──
+   Un "combo" es un grupo visual de 2+ pedidos del mismo cliente/día que en RUTA
+   se muestran como una sola card. Las acciones (entregar/cobrar/reservar/cancelar)
+   detectan si el key es un combo y operan sobre todos los pedidos. */
+function _esCombo(key){return String(key||'').indexOf('combo|')===0;}
+function _pedidosDelCombo(comboKey){
+  // Buscar el combo en getSorted() por su _key
+  var sorted=getSorted();
+  for(var i=0;i<sorted.length;i++){
+    if(sorted[i]._combo && sorted[i]._key===comboKey){
+      return sorted[i]._pedidos;
+    }
+  }
+  return [];
+}
+
 /* ═══ MODAL DE COBRO COMPLETO (subtab RUTA) ═══
    Estado interno mientras el modal está abierto. Se setea en abrirCobroRuta()
    y se limpia en cerrarCobroRuta(). */
@@ -2273,6 +2413,32 @@ var _cobroRutaState=null;
 
 // Abre el modal con defaults inteligentes según fp del pedido.
 function abrirCobroRuta(key){
+  // Combo: abrir modal con total combinado. Estado guarda los pedidos para distribuir.
+  if(_esCombo(key)){
+    var peds=_pedidosDelCombo(key);
+    if(peds.length===0)return;
+    var yaCobrados=peds.every(function(p){var k=eKey(p);return cobrados[k]||p.ep==='Cobrado';});
+    if(yaCobrados){showToast('Los pedidos ya están cobrados');return;}
+    var totalC=peds.reduce(function(s,p){return s+(Number(p.$)||0);},0);
+    var fp=peds[0].fp||'Efectivo';
+    _cobroRutaState={key:key,combo:true,pedidos:peds,total:totalC,fp:fp,cambioOpen:false,aFavOpen:false};
+
+    document.getElementById('cobroRutaTitle').textContent='Cobrar a '+peds[0].c;
+    document.getElementById('cobroRutaSub').textContent=peds.length+' pedidos juntos · Total '+formatMoney(totalC);
+    document.querySelectorAll('#cobroRutaFp .cobro-pill').forEach(function(p){p.classList.toggle('on',p.getAttribute('data-fp')===fp)});
+    document.getElementById('cobroRecEf').value=(fp==='Efectivo')?totalC:0;
+    document.getElementById('cobroRecMP').value=(fp==='Transferencia')?totalC:0;
+    document.getElementById('cobroCamEf').value=0;
+    document.getElementById('cobroCamMP').value=0;
+    document.getElementById('cobroAFavInp').value=0;
+    document.getElementById('cobroCambioSection').style.display='none';
+    document.getElementById('cobroAFavSection').style.display='none';
+    document.getElementById('cobroToggleCambio').classList.remove('on');
+    document.getElementById('cobroToggleAFav').classList.remove('on');
+    document.getElementById('cobroRutaOverlay').classList.remove('hidden');
+    _recalcCobroRuta();
+    return;
+  }
   var ent=findByKey(key);
   if(!ent)return;
   if(cobrados[key]||ent.ep==='Cobrado'){
@@ -2280,7 +2446,7 @@ function abrirCobroRuta(key){
   }
   var total=Number(ent.$)||0;
   var fp=ent.fp||'Efectivo';
-  _cobroRutaState={key:key,ent:ent,total:total,fp:fp,cambioOpen:false,aFavOpen:false};
+  _cobroRutaState={key:key,combo:false,ent:ent,total:total,fp:fp,cambioOpen:false,aFavOpen:false};
 
   // Setear UI
   document.getElementById('cobroRutaTitle').textContent='Cobrar a '+ent.c;
@@ -2388,6 +2554,10 @@ function confirmarCobroRuta(){
   var r=_recalcCobroRuta();
   if(!r||r.errors.length>0)return;
   var st=_cobroRutaState;
+  // Combo: distribuir el cobro entre los pedidos individuales.
+  if(st.combo){
+    return _confirmarCobroComboRuta(st,r);
+  }
   var key=st.key,ent=st.ent,fp=st.fp,total=st.total;
   // Calcular ef/tr que se registran en el pedido (después del cambio cruzado)
   // - El cambio Ef devuelto físicamente sale del Ef que entró → cobro Ef = recEf - camEf
@@ -2467,6 +2637,78 @@ function confirmarCobroRuta(){
   if(navigator.vibrate)navigator.vibrate(30);
 }
 
+/* ── COBRO COMBO: distribuir entre los pedidos del combo ──
+   Estrategia: la propina y el a-favor se cargan al PRIMER pedido del combo.
+   Los pedidos siguientes se cobran por su monto facturado individual sin
+   extras. El cambio cruzado (cambioMP/cambioCruzadoEf) tambien va al
+   primero (acumula todo). Cada pedido recibe su POST marcarCobrado. */
+function _confirmarCobroComboRuta(st,r){
+  var peds=st.pedidos,fp=st.fp;
+  var prop=Math.max(0,r.propina),aFav=r.aFav;
+  var nombre=(peds[0].c||'').split(' ')[0];
+  peds.forEach(function(p,idx){
+    var k=eKey(p);
+    var totalP=Number(p.$)||0;
+    var propP=(idx===0)?prop:0;
+    var aFavP=(idx===0)?aFav:0;
+    var facturadoP=totalP+propP+aFavP;
+    var efP=0,trP=0;
+    if(fp==='Efectivo'){efP=facturadoP;trP=0;}
+    else if(fp==='Transferencia'){efP=0;trP=facturadoP;}
+    else {
+      var netoEf=Math.max(0,r.recEf-r.camEf);
+      var netoMP=Math.max(0,r.recMP-r.camMP);
+      var totNeto=netoEf+netoMP;
+      if(totNeto<=0){efP=facturadoP;}
+      else {efP=Math.round(facturadoP*(netoEf/totNeto));trP=facturadoP-efP;}
+    }
+    var propMet=(efP>=trP)?'Efectivo':'Transferencia';
+    cobrados[k]=true;
+    p.ep='Cobrado';
+    if(propP>0)propinas[k]=propP;else delete propinas[k];
+    pendientesCobro=pendientesCobro.filter(function(pc){
+      return !(((pc.h||'')===p.h) && (String(pc.id||'')===String(p.id)));
+    });
+    var payload={
+      action:'marcarCobrado',
+      hoja:p.h,id:String(p.id),row:p.r,
+      formaPago:fp,
+      ef:efP,tr:trP,
+      propina:propP,propMet:propMet,
+      aFavor:aFavP,
+      cliente:p.c||'',
+      repartidor:_rutaUser(),ts:Date.now()
+    };
+    if(idx===0){
+      if(r.camMP>0 && r.recEf>=r.camMP)payload.cambioMP=r.camMP;
+      if(r.camEf>0 && r.recMP>=r.camEf)payload.cambioCruzadoEf=r.camEf;
+    }
+    syncQueue.push(payload);
+    if(idx===0 && aFavP>0){
+      syncQueue.push({
+        action:'crearSaldoCliente',
+        cliente:p.c||'',telefono:p.t||'',
+        tipo:'Crédito',monto:aFavP,
+        pedidoHoja:p.h,pedidoId:String(p.id),
+        notas:'A favor por cobro combinado mayor al total',
+        repartidor:_rutaUser(),ts:Date.now()
+      });
+    }
+  });
+  var elBC=document.getElementById('tabCobrosCount');
+  if(elBC)elBC.textContent=pendientesCobro.length||'';
+  saveLocal();
+  cerrarCobroRuta();
+  showLoader('Marcando '+peds.length+' cobrados...');
+  processSyncQueue();
+  renderRuta();
+  var totalFact=peds.reduce(function(s,p){return s+(Number(p.$)||0);},0)+prop+aFav;
+  var msg='Cobrado a '+nombre+' ('+peds.length+' pedidos) · '+formatMoney(totalFact);
+  if(r.camMP>0)msg+=' (cambio $'+formatMoney(r.camMP).replace('$','')+' por MP)';
+  showToast(msg);
+  if(navigator.vibrate)navigator.vibrate(30);
+}
+
 function marcarCobrado(key){
   if(cobrados[key])return; // idempotente
   cobrados[key]=true;
@@ -2498,6 +2740,19 @@ function marcarCobrado(key){
 
 /* ── RESERVAR / QUITAR RESERVA desde Ruta ── */
 function cambiarEstadoRuta(key,nuevoEstado){
+  // Combo: aplicar el cambio a todos los pedidos del combo.
+  if(_esCombo(key)){
+    var peds=_pedidosDelCombo(key);
+    if(peds.length===0)return;
+    peds.forEach(function(p){
+      p.es=nuevoEstado;
+      syncQueue.push({action:'cambiarEstadoEntrega',hoja:p.h,id:String(p.id),row:p.r,estado:nuevoEstado,ts:Date.now()});
+    });
+    saveLocal();showLoader(nuevoEstado==='Reservado'?'Reservando '+peds.length+' pedidos...':'Quitando reserva...');processSyncQueue();
+    showToast((nuevoEstado==='Reservado'?'Reservados':'Reserva quitada')+' ('+peds.length+' pedidos)');
+    render();
+    return;
+  }
   var ent=findByKey(key);
   if(!ent)return;
   ent.es=nuevoEstado;
@@ -2509,12 +2764,34 @@ function cambiarEstadoRuta(key,nuevoEstado){
 
 /* ── CANCELAR desde Ruta ── */
 function confirmarCancelarRuta(key){
+  if(_esCombo(key)){
+    var peds=_pedidosDelCombo(key);
+    if(peds.length===0)return;
+    var o=document.getElementById('confirmOverlay');o.className='confirm-overlay';
+    o.innerHTML='<div class="confirm-box"><h3>Cancelar los '+peds.length+' pedidos de '+peds[0].c+'?</h3><p>Se marcan TODOS como Cancelado en el Sheets.<br>No se puede deshacer.</p><div class="confirm-btns"><button type="button" class="btn-no" onclick="cerrarConfirm()">No</button><button type="button" class="btn-si" onclick="cerrarConfirm();cancelarRuta(\''+key+'\')">Si, cancelar TODO</button></div></div>';
+    return;
+  }
   var ent=findByKey(key);
   var nombre=ent?ent.c:'pedido';
   var o=document.getElementById('confirmOverlay');o.className='confirm-overlay';
   o.innerHTML='<div class="confirm-box"><h3>Cancelar pedido de '+nombre+'?</h3><p>Se marca como Cancelado en el Sheets.<br>No se puede deshacer.</p><div class="confirm-btns"><button type="button" class="btn-no" onclick="cerrarConfirm()">No</button><button type="button" class="btn-si" onclick="cerrarConfirm();cancelarRuta(\''+key+'\')">Si, cancelar</button></div></div>';
 }
 function cancelarRuta(key){
+  // Combo: cancelar todos los pedidos del combo.
+  if(_esCombo(key)){
+    var peds=_pedidosDelCombo(key);
+    if(peds.length===0)return;
+    peds.forEach(function(p){
+      syncQueue.push({action:'cancelarPedido',hoja:p.h,id:String(p.id),row:p.r,ts:Date.now()});
+      var idx=entregas.findIndex(function(e){return eKey(e)===eKey(p)});
+      if(idx>=0)entregas.splice(idx,1);
+    });
+    if(rutaIndex>=entregas.length)rutaIndex=Math.max(0,entregas.length-1);
+    saveLocal();showLoader('Cancelando '+peds.length+' pedidos...');processSyncQueue();
+    showToast(peds.length+' pedidos cancelados');
+    render();
+    return;
+  }
   var idx=entregas.findIndex(function(e){return eKey(e)===key});
   if(idx<0)return;
   var ent=entregas[idx];
