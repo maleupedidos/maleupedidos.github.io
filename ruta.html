@@ -2708,68 +2708,24 @@ function cobrarPendiente(i,ef,tr,fp,recalc){
     };
   }
 
-  // 1) Loader ARRIBA de todo, ANTES de cambiar state local. Bloquea cualquier flicker.
-  showLoader('Cobrando...');
-
-  // 2) Offline: queue + UI optimista (no hay server al cual esperar).
-  if(!isOnline){
-    cobrados[pc.key]=true;
-    pendientesCobro.splice(i,1);
-    syncQueue.push(payload);
-    if(aFavorPayload)syncQueue.push(aFavorPayload);
-    saveLocal();
-    if(currentTab==='cobros')renderCobrosFromServer();else renderRuta();
-    var elBO=document.getElementById('tabCobrosCount');if(elBO)elBO.textContent=pendientesCobro.length||'';
-    hideLoader(true);
-    showToast('Cobrado offline a '+pc.c.split(' ')[0]+' — se sincroniza al volver la senal');
-    if(navigator.vibrate)navigator.vibrate(30);
-    return;
-  }
-
-  // 3) Online: POST directo. Solo actualizamos UI cuando el server responde ok.
-  fetch(APPS_SCRIPT_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(payload),redirect:'follow'})
-    .then(function(r){return r.json().catch(function(){return{ok:false,error:'InvalidJSON'}})})
-    .then(function(res){
-      if(res&&res.ok){
-        cobrados[pc.key]=true;
-        // Re-encontrar el item por hoja|id (puede haber cambiado el index si llego un fetch nuevo)
-        var pcKey=(pc.h||'')+'|'+(pc.id||'');
-        var idx=-1;for(var j=0;j<pendientesCobro.length;j++){var p=pendientesCobro[j];if(((p.h||'')+'|'+(p.id||''))===pcKey){idx=j;break;}}
-        if(idx>=0)pendientesCobro.splice(idx,1);
-        saveLocal();
-        if(currentTab==='cobros')renderCobrosFromServer();else renderRuta();
-        var elB=document.getElementById('tabCobrosCount');if(elB)elB.textContent=pendientesCobro.length||'';
-        hideLoader(true);
-        showToast('Cobrado a '+pc.c.split(' ')[0]+' ('+fp+')'+(recalc?' — total ajustado':''));
-        if(navigator.vibrate)navigator.vibrate(30);
-        // POST secundario: registrar saldo a favor (si aplica). Fire-and-forget,
-        // si falla queda en syncQueue para reintento.
-        if(aFavorPayload){
-          fetch(APPS_SCRIPT_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(aFavorPayload),redirect:'follow'})
-            .then(function(r2){return r2.json().catch(function(){return{ok:false}})})
-            .then(function(res2){
-              if(res2&&res2.ok){
-                var labelMov = aplicacionPos>0 ? ('Aplicado $'+formatMoney(aplicacionPos).replace('$','')) : ('💰 $'+formatMoney(aFavorPos).replace('$','')+' a favor');
-                showToast(labelMov+' · '+pc.c.split(' ')[0]+' (saldo: $'+formatMoney(res2.saldo||0).replace('$','')+')');
-              } else {
-                syncQueue.push(aFavorPayload);saveLocal();processSyncQueue();
-              }
-            })
-            .catch(function(){syncQueue.push(aFavorPayload);saveLocal();processSyncQueue();});
-        }
-      }else{
-        // Server fallo: queue para retry, no actualizamos UI todavia
-        syncQueue.push(payload);saveLocal();processSyncQueue();
-        hideLoader(true);
-        showToast('Error al cobrar: '+(res&&res.error||'desconocido')+' — reintentando');
-      }
-    })
-    .catch(function(){
-      // Red fallo: queue para retry
-      syncQueue.push(payload);saveLocal();processSyncQueue();
-      hideLoader(true);
-      showToast('Sin conexion — se reintenta al recuperar senal');
-    });
+  // ── UI OPTIMISTA SIEMPRE ──
+  // Antes habia 2 ramas (online: esperar respuesta, offline: queue). El branch
+  // "online" cuando fallaba el fetch (timeout / cors / 302 redirect raro) mostraba
+  // un toast "Sin conexion" enganoso porque el cobro habia llegado igual al backend.
+  // Ahora: sacamos del UI siempre al instante, encolamos el payload, y processSyncQueue
+  // se encarga del POST. El usuario ve "Cobrado" sin friccion.
+  cobrados[pc.key]=true;
+  var pcKey=(pc.h||'')+'|'+(pc.id||'');
+  var idx=-1;for(var j=0;j<pendientesCobro.length;j++){var p=pendientesCobro[j];if(((p.h||'')+'|'+(p.id||''))===pcKey){idx=j;break;}}
+  if(idx>=0)pendientesCobro.splice(idx,1);
+  syncQueue.push(payload);
+  if(aFavorPayload)syncQueue.push(aFavorPayload);
+  saveLocal();
+  if(currentTab==='cobros')renderCobrosFromServer();else renderRuta();
+  var elB=document.getElementById('tabCobrosCount');if(elB)elB.textContent=pendientesCobro.length||'';
+  processSyncQueue();
+  showToast('Cobrado a '+pc.c.split(' ')[0]+' ('+fp+')'+(recalc?' — total ajustado':''));
+  if(navigator.vibrate)navigator.vibrate(30);
 }
 
 /* ── SYNC ── */
