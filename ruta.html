@@ -2528,6 +2528,43 @@ function _setMoneyInput(id,value){
    y se limpia en cerrarCobroRuta(). */
 var _cobroRutaState=null;
 
+// Calcula el total del pedido según la FP. Replica regla del checkout y de
+// cobroCalcularBase: 10% OFF si Efectivo O subtotal >= $100.000.
+function _totalSegunFp(ent,fp){
+  var sub=Number(ent&&ent.sub)||0;
+  var env=Number(ent&&ent.env)||0;
+  var orig=Number(ent&&ent['$'])||0;
+  if(sub<=0||fp==='Mixto')return orig;
+  var aplicaCash=(fp==='Efectivo');
+  var aplicaBulk=(sub>=100000);
+  var desc=(aplicaCash||aplicaBulk)?Math.round(sub*0.10):0;
+  return sub+env-desc;
+}
+
+// Lee la propina manual respetando el signo del botón ±.
+function _leerPropinaModalCobro(){
+  var raw=_parseMoneyInput(document.getElementById('cobroPropinaInp'));
+  var btn=document.querySelector('[data-prop-target="cobroPropinaInp"]');
+  var neg=btn&&btn.classList.contains('neg');
+  return neg?-Math.abs(raw):Math.abs(raw);
+}
+
+// Resetea las 3 secciones colapsables + inputs + signo de propina.
+function _resetCobroSeccionesColapsables(){
+  ['cobroCambioSection','cobroAFavSection','cobroPropinaSection'].forEach(function(id){
+    var el=document.getElementById(id);if(el)el.style.display='none';
+  });
+  ['cobroToggleCambio','cobroToggleAFav','cobroTogglePropina'].forEach(function(id){
+    var el=document.getElementById(id);if(el)el.classList.remove('on');
+  });
+  _setMoneyInput('cobroCamEf',0);
+  _setMoneyInput('cobroCamMP',0);
+  _setMoneyInput('cobroAFavInp',0);
+  _setMoneyInput('cobroPropinaInp',0);
+  var btnSig=document.querySelector('[data-prop-target="cobroPropinaInp"]');
+  if(btnSig){btnSig.classList.remove('neg');btnSig.textContent='+';}
+}
+
 // Abre el modal con defaults inteligentes según fp del pedido.
 function abrirCobroRuta(key){
   // Combo: abrir modal con total combinado. Estado guarda los pedidos para distribuir.
@@ -2538,20 +2575,14 @@ function abrirCobroRuta(key){
     if(yaCobrados){showToast('Los pedidos ya están cobrados');return;}
     var totalC=peds.reduce(function(s,p){return s+(Number(p.$)||0);},0);
     var fp=peds[0].fp||'Efectivo';
-    _cobroRutaState={key:key,combo:true,pedidos:peds,total:totalC,fp:fp,cambioOpen:false,aFavOpen:false};
+    _cobroRutaState={key:key,combo:true,pedidos:peds,total:totalC,totalOriginal:totalC,fp:fp,cambioOpen:false,aFavOpen:false};
 
     document.getElementById('cobroRutaTitle').textContent='Cobrar a '+peds[0].c;
     document.getElementById('cobroRutaSub').textContent=peds.length+' pedidos juntos · Total '+formatMoney(totalC);
     document.querySelectorAll('#cobroRutaFp .cobro-pill').forEach(function(p){p.classList.toggle('on',p.getAttribute('data-fp')===fp)});
-    document.getElementById('cobroRecEf').value=(fp==='Efectivo')?totalC:0;
-    document.getElementById('cobroRecMP').value=(fp==='Transferencia')?totalC:0;
-    document.getElementById('cobroCamEf').value=0;
-    document.getElementById('cobroCamMP').value=0;
-    document.getElementById('cobroAFavInp').value=0;
-    document.getElementById('cobroCambioSection').style.display='none';
-    document.getElementById('cobroAFavSection').style.display='none';
-    document.getElementById('cobroToggleCambio').classList.remove('on');
-    document.getElementById('cobroToggleAFav').classList.remove('on');
+    _setMoneyInput('cobroRecEf',(fp==='Efectivo')?totalC:0);
+    _setMoneyInput('cobroRecMP',(fp==='Transferencia')?totalC:0);
+    _resetCobroSeccionesColapsables();
     document.getElementById('cobroRutaOverlay').classList.remove('hidden');
     _recalcCobroRuta();
     return;
@@ -2561,28 +2592,19 @@ function abrirCobroRuta(key){
   if(cobrados[key]||ent.ep==='Cobrado'){
     showToast('Ya está cobrado');return;
   }
-  var total=Number(ent.$)||0;
   var fp=ent.fp||'Efectivo';
-  _cobroRutaState={key:key,combo:false,ent:ent,total:total,fp:fp,cambioOpen:false,aFavOpen:false};
+  // Total según la FP actual. Si Tadeo cambia la FP en el modal, _setCobroFp
+  // recalcula con la regla 10% OFF (Efectivo o subtotal >= $100K).
+  var total=_totalSegunFp(ent,fp);
+  _cobroRutaState={key:key,combo:false,ent:ent,total:total,totalOriginal:Number(ent.$)||0,fp:fp,cambioOpen:false,aFavOpen:false};
 
   // Setear UI
   document.getElementById('cobroRutaTitle').textContent='Cobrar a '+ent.c;
   document.getElementById('cobroRutaSub').textContent='Pedido '+formatMoney(total)+' · '+ent.h+' #'+ent.id;
-  // Pills FP
   document.querySelectorAll('#cobroRutaFp .cobro-pill').forEach(function(p){p.classList.toggle('on',p.getAttribute('data-fp')===fp)});
-  // Defaults Recibí según fp
-  document.getElementById('cobroRecEf').value=(fp==='Efectivo')?total:0;
-  document.getElementById('cobroRecMP').value=(fp==='Transferencia')?total:0;
-  // Limpiar cambios y a favor
-  document.getElementById('cobroCamEf').value=0;
-  document.getElementById('cobroCamMP').value=0;
-  document.getElementById('cobroAFavInp').value=0;
-  // Cerrar secciones colapsables
-  document.getElementById('cobroCambioSection').style.display='none';
-  document.getElementById('cobroAFavSection').style.display='none';
-  document.getElementById('cobroToggleCambio').classList.remove('on');
-  document.getElementById('cobroToggleAFav').classList.remove('on');
-  // Mostrar modal
+  _setMoneyInput('cobroRecEf',(fp==='Efectivo')?total:0);
+  _setMoneyInput('cobroRecMP',(fp==='Transferencia')?total:0);
+  _resetCobroSeccionesColapsables();
   document.getElementById('cobroRutaOverlay').classList.remove('hidden');
   _recalcCobroRuta();
 }
@@ -2594,13 +2616,37 @@ function cerrarCobroRuta(){
 
 function _setCobroFp(fp){
   if(!_cobroRutaState)return;
-  _cobroRutaState.fp=fp;
+  var st=_cobroRutaState;
+  st.fp=fp;
   document.querySelectorAll('#cobroRutaFp .cobro-pill').forEach(function(p){p.classList.toggle('on',p.getAttribute('data-fp')===fp)});
-  var total=_cobroRutaState.total;
-  // Re-defaults al cambiar fp
-  if(fp==='Efectivo'){document.getElementById('cobroRecEf').value=total;document.getElementById('cobroRecMP').value=0;}
-  else if(fp==='Transferencia'){document.getElementById('cobroRecEf').value=0;document.getElementById('cobroRecMP').value=total;}
+  // Recalcular total (combo no tiene sub/env por pedido, mantenemos original).
+  var nuevoTotal=st.combo?st.totalOriginal:_totalSegunFp(st.ent,fp);
+  st.total=nuevoTotal;
+  // Actualizar header sub
+  if(st.combo){
+    document.getElementById('cobroRutaSub').textContent=st.pedidos.length+' pedidos juntos · Total '+formatMoney(nuevoTotal);
+  } else {
+    document.getElementById('cobroRutaSub').textContent='Pedido '+formatMoney(nuevoTotal)+' · '+st.ent.h+' #'+st.ent.id;
+  }
+  // Re-defaults Recibí (suma propina manual y a-favor si están cargados)
+  var prop=_leerPropinaModalCobro();
+  var aFav=_parseMoneyInput(document.getElementById('cobroAFavInp'));
+  var target=nuevoTotal+prop+aFav;
+  if(fp==='Efectivo'){_setMoneyInput('cobroRecEf',target);_setMoneyInput('cobroRecMP',0);}
+  else if(fp==='Transferencia'){_setMoneyInput('cobroRecEf',0);_setMoneyInput('cobroRecMP',target);}
   // Mixto: dejar como estaban
+  _recalcCobroRuta();
+}
+
+// Llamado desde el input de propina manual y desde el botón ±.
+function _onPropinaManualChange(){
+  if(!_cobroRutaState)return;
+  var st=_cobroRutaState;
+  var prop=_leerPropinaModalCobro();
+  var aFav=_parseMoneyInput(document.getElementById('cobroAFavInp'));
+  var target=st.total+prop+aFav;
+  if(st.fp==='Efectivo')_setMoneyInput('cobroRecEf',target);
+  else if(st.fp==='Transferencia')_setMoneyInput('cobroRecMP',target);
   _recalcCobroRuta();
 }
 
@@ -2612,10 +2658,17 @@ function _toggleCobroSec(secId,btn){
   if(open){
     // Si se cierra, resetear valores de esa sección
     if(secId==='cobroCambioSection'){
-      document.getElementById('cobroCamEf').value=0;
-      document.getElementById('cobroCamMP').value=0;
+      _setMoneyInput('cobroCamEf',0);
+      _setMoneyInput('cobroCamMP',0);
     } else if(secId==='cobroAFavSection'){
-      document.getElementById('cobroAFavInp').value=0;
+      _setMoneyInput('cobroAFavInp',0);
+    } else if(secId==='cobroPropinaSection'){
+      _setMoneyInput('cobroPropinaInp',0);
+      var btnSig=document.querySelector('[data-prop-target="cobroPropinaInp"]');
+      if(btnSig){btnSig.classList.remove('neg');btnSig.textContent='+';}
+      // Si se cerró la propina, recalcular "recibí" sin propina manual
+      _onPropinaManualChange();
+      return; // _onPropinaManualChange ya llama _recalcCobroRuta
     }
   }
   _recalcCobroRuta();
@@ -2625,11 +2678,12 @@ function _toggleCobroSec(secId,btn){
 function _recalcCobroRuta(){
   if(!_cobroRutaState)return null;
   var total=_cobroRutaState.total;
-  var recEf=Math.max(0,Number(document.getElementById('cobroRecEf').value)||0);
-  var recMP=Math.max(0,Number(document.getElementById('cobroRecMP').value)||0);
-  var camEf=Math.max(0,Number(document.getElementById('cobroCamEf').value)||0);
-  var camMP=Math.max(0,Number(document.getElementById('cobroCamMP').value)||0);
-  var aFav=Math.max(0,Number(document.getElementById('cobroAFavInp').value)||0);
+  // Lectura con formato AR: "35.500,50" → 35500.50
+  var recEf=Math.max(0,_parseMoneyInput(document.getElementById('cobroRecEf')));
+  var recMP=Math.max(0,_parseMoneyInput(document.getElementById('cobroRecMP')));
+  var camEf=Math.max(0,_parseMoneyInput(document.getElementById('cobroCamEf')));
+  var camMP=Math.max(0,_parseMoneyInput(document.getElementById('cobroCamMP')));
+  var aFav=Math.max(0,_parseMoneyInput(document.getElementById('cobroAFavInp')));
   var pagado=recEf+recMP;
   var camTot=camEf+camMP;
   var neto=pagado-camTot;
