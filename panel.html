@@ -2185,9 +2185,16 @@ function refreshContextual(){
     return;
   }
   // Default: Inicio / Pedidos / Caja / Egresos / Stock / BBDD / Mi Portal
-  showLoader('Actualizando...',true);
+  // Para tabs que no necesitan stock/OC/vendedores actualizado en tiempo real,
+  // usamos loadRapido() que es ~5x mas rapido (3 endpoints ligeros en paralelo
+  // vs admin completo). Foco: pedidos + cobros + caja.
+  // Para Stock, BBDD: necesitan load() completo. Para Inicio/Pedidos/Caja/Egresos:
+  // alcanza con rapido.
+  var usaRapido=(active==='inicio'||active==='pedidos'||active==='caja'||active==='egresos');
+  showLoader(usaRapido?'Actualizando...':'Actualizando todo...',true);
   var ps=[];
-  if(typeof load==='function')ps.push(load());
+  if(usaRapido && typeof loadRapido==='function')ps.push(loadRapido());
+  else if(typeof load==='function')ps.push(load());
   // En Inicio queremos también ventas (por la sección histórica embedida)
   if(active==='inicio'&&typeof loadVentas==='function')ps.push(loadVentas());
   Promise.all(ps).then(function(){hideLoader(true);done();},function(){hideLoader(true);done();});
@@ -2726,6 +2733,53 @@ function load(){
   }).catch(function(){
     $('dot').className='hdr-dot off';
     var c=localStorage.getItem('ma3');if(c&&!D){D=JSON.parse(c);if(!_hayEditorAbierto())render();$('ld').style.display='none';}
+  });
+}
+
+/* ── REFRESH RAPIDO (botón Actualizar del topbar) ──
+   En lugar de pegarle a 'admin' (~17s) que trae stock, OC, vendedores, ventas
+   históricas, etc., usamos 3 endpoints ligeros en paralelo:
+   - pedidosLight: pedidos + canales (incluye pendientes Estado de Entrega).
+   - cobrosPendientes: deudores (Estado de Pago = No Cobrado).
+   - cajaLight: caja, saldoBase, movimientos, gastos, ingresos.
+   Mergea en D y re-renderiza la tab activa. Stock/OC/vendedores quedan con
+   los valores anteriores hasta el próximo load() completo (que no es
+   urgente para el dia a dia). Foco: lo que Tadeo necesita ver YA.
+   Reportado por Tadeo (25/05/2026): "actualizar pedidos cuando Estado de
+   Entrega = Pendiente. Y deudores cuando Estado de Pago = No Cobrado." */
+function loadRapido(){
+  var tsBase=Date.now();
+  return Promise.all([
+    fetch(API+'?action=pedidosLight&t='+tsBase).then(function(r){return r.json();}).catch(function(){return null;}),
+    fetch(API+'?action=cobrosPendientes&t='+tsBase).then(function(r){return r.json();}).catch(function(){return null;}),
+    fetch(API+'?action=cajaLight&t='+tsBase).then(function(r){return r.json();}).catch(function(){return null;})
+  ]).then(function(arr){
+    var lightData=arr[0], cobrosData=arr[1], cajaData=arr[2];
+    if(!D)D={};
+    if(lightData && Array.isArray(lightData.pedidos)){
+      D.pedidos=lightData.pedidos;
+      if(lightData.canales)D.canales=lightData.canales;
+    }
+    if(cobrosData && Array.isArray(cobrosData.cobros)){
+      D.cobrosPendientes=cobrosData.cobros;
+    }
+    if(cajaData){
+      if(cajaData.caja)D.caja=cajaData.caja;
+      if(cajaData.saldoBase)D.saldoBase=cajaData.saldoBase;
+      if(Array.isArray(cajaData.gastos))D.gastos=cajaData.gastos;
+      if(Array.isArray(cajaData.ingresos))D.ingresos=cajaData.ingresos;
+      if(Array.isArray(cajaData.gastosHist))D.gastosHist=cajaData.gastosHist;
+      if(Array.isArray(cajaData.movimientos))D.movimientos=cajaData.movimientos;
+    }
+    try{localStorage.setItem('ma3',JSON.stringify(D));}catch(e){}
+    sync();
+    $('dot').className='hdr-dot';
+    try{sbUpdateMetrics();}catch(e){}
+    if(_hayEditorAbierto()){_pendingLoadRender=true;}
+    else{render();}
+    if(typeof _markRefreshTime==='function')_markRefreshTime();
+  }).catch(function(){
+    $('dot').className='hdr-dot off';
   });
 }
 // Refresh manual desde tab Caja: usa endpoint cajaLight (~5s vs ~17s admin).
