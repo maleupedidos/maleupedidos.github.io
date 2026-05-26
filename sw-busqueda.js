@@ -2,7 +2,7 @@
    MALEU BUSQUEDA — Service Worker (network-first para HTML)
    ═══════════════════════════════════════════════════════════ */
 
-var CACHE_NAME = 'maleu-busqueda-v11';
+var CACHE_NAME = 'maleu-busqueda-v12';
 var PRECACHE = [
   '/busqueda.html',
   '/img/favicon.png',
