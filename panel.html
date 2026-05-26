@@ -6195,23 +6195,10 @@ function rEERR_dual(body){
   // ─────────────────────────────────────────────────────────────────
   //  DEVENGADO: provisiones automáticas
   // ─────────────────────────────────────────────────────────────────
-  // 1) Comisiones MP estimadas: 3% sobre cobros por transferencia del mes.
-  //    Sale de D.pedidos: pedidos cobrados con fecha de cobro en el mes,
-  //    sumando el monto que entró por transferencia (p.tr).
+  // Maleu NO paga comisión a Mercado Pago — los cobros llegan netos. Esta línea
+  // se removió del EERR económico (era 0 igual). v_comCobro queda en 0 por
+  // compatibilidad con totVar.
   var mesNum=eerrMes.getMonth()+1;
-  var cobrosTr=0;
-  ((D&&D.pedidos)||[]).forEach(function(p){
-    if(p.ep!=='Cobrado')return;
-    var fc=p.fc||'';if(!fc)return;
-    var parts=String(fc).split('/');if(parts.length<2)return;
-    if(Number(parts[1])!==mesNum)return;
-    cobrosTr+=Number(p.tr||0);
-    // Si no hay desglose de tr/ef, fallback: todo el total si fp=Transferencia
-    if(!p.tr&&p.fp==='Transferencia')cobrosTr+=Number(p.$||p.t||p.total||0);
-  });
-  var ymMP=eerrMes.getFullYear()+'-'+String(mesNum).padStart(2,'0');
-  var COMISION_MP=eerrConfig('COMISION_MP_PCT',ymMP);
-  v_comCobro+=Math.round(cobrosTr*COMISION_MP);
 
   // 2) Provisiones fijas devengadas (hoja Provisiones_Fijas).
   //    Regla max(real, piso): si el real cargado del mes ya cubre el piso,
@@ -6340,42 +6327,54 @@ function rEERR_dual(body){
 
   // VENTAS DEL MES
   html+=ln(eL('VENTAS DEL MES','Lo que Maleu vendió en el mes, esté cobrado o no. Suma de Total de cada pedido entregado.'),totFact,'sub');
-  ['Home','Pilar','Clubes','Red','B2B','Catering'].forEach(function(k){html+=leaf(k,canales[k]);});
+  ['Home','Pilar','Clubes','Red','B2B','Catering'].forEach(function(k){
+    // Ocultar canales en $0 (B2B/Catering típicamente)
+    if(canales[k]>0)html+=leaf(k,canales[k]);
+  });
 
-  // Devoluciones y bonificaciones
-  html+=ln(eL('(−) Devoluciones y bonificaciones','Pedidos devueltos o descuentos otorgados después de la venta. Hoy no hay rubro cargable, queda en $0.'),-devBon,'neg');
+  // Devoluciones y bonificaciones — solo si hay
+  if(devBon>0){
+    html+=ln(eL('(−) Devoluciones y bonificaciones','Pedidos devueltos o descuentos otorgados después de la venta.'),-devBon,'neg');
+  }
 
-  // VENTAS NETAS
-  html+=ln(eL('= VENTAS NETAS','Ventas del mes menos devoluciones. Es la base sobre la que se calculan los %.'),ventasNetas,'totsub');
+  // VENTAS NETAS — siempre se muestra (es la base de los %)
+  html+=ln(eL('= VENTAS NETAS','Ventas del mes menos devoluciones. Es la base sobre la que se calculan todos los %.'),ventasNetas,'totsub');
 
-  // COSTO DE LO VENDIDO
+  // COSTO DE LO VENDIDO — separado en Productos terminados + Insumos directos
+  var cmvProductos=Math.max(totCMV-cmvCateringDirecto,0);
   html+=ln(eL('(−) COSTO DE LO VENDIDO','Lo que le pagaste (o le debés) a tus proveedores por la mercadería que vendiste este mes. NO es el efectivo que salió, es el costo del producto que entregaste.'),-totCMV,'sub neg');
-  if(cmvCateringDirecto>0)html+=subleaf('Insumos de catering (productos comprados para eventos)',-cmvCateringDirecto,true);
+  if(cmvProductos>0)html+=leaf(eL('Productos terminados comprados','Pizzas, sorrentinos, empanadas, tartas — lo que comprás a Sevuchitas, Bernardo Pisano, Le Unike, Claudia Polito.'),-cmvProductos);
+  if(cmvCateringDirecto>0){
+    html+=leaf(eL('Insumos directos de catering','Productos comprados específicamente para un evento de catering.'),-cmvCateringDirecto);
+    html+=detailRows(cmvCateringDet);
+  }
 
   // MARGEN BRUTO
   html+=ln(eL('= MARGEN BRUTO','Lo que te queda después de pagar la mercadería. Es la primera medida real de si vendés a un precio sano. Sano para Maleu: ≥35%.'),totMB,'totsub',eerrPct(totMB,pctBase));
 
-  // GASTOS VARIABLES (de cada venta)
-  html+=ln(eL('(−) Gastos Variables (de cada venta)','Gastos que crecen con cada pedido entregado: nafta del reparto, bolsas, comisiones MP. Si vendés 0, no los tenés.'),-totVar,'sub neg');
+  // GASTOS VARIABLES (de cada venta) — sin Comisión MP (Maleu no paga)
+  html+=ln(eL('(−) Gastos Variables (de cada venta)','Gastos que crecen con cada pedido entregado: nafta del reparto, bolsas. Si vendés 0, no los tenés.'),-totVar,'sub neg');
   html+=leaf(eL('Fletes y logística','Repartidor + Nafta del reparto.'),-v_fletes);
   html+=detailRows(v_fletesD);
   html+=leaf(eL('Bolsas y packaging','Bolsas de delivery, etiquetas, todo lo que va con el producto.'),-v_packaging);
   html+=detailRows(v_packagingD);
-  html+=leaf(eL('Comisión Mercado Pago','3% que Mercado Pago se queda de cada cobro por transferencia.'),-v_comCobro);
-  if(cobrosTr>0)html+=subleaf((COMISION_MP*100).toFixed(0)+'% × $'+f$(Math.round(cobrosTr))+' (cobros por transferencia del mes)',-Math.round(cobrosTr*COMISION_MP),true);
   if(v_otrosVar>0){html+=leaf('Otros variables',-v_otrosVar);html+=detailRows(v_otrosVarD);}
 
-  // MARGEN OPERATIVO (=Contribución)
-  html+=ln(eL('= MARGEN OPERATIVO','Lo que aporta cada venta después de costos directos. Es lo que queda para cubrir tus gastos fijos (sueldo, alquiler, herramientas). También llamado "Margen de Contribución".'),totMC,'totsub',eerrPct(totMC,pctBase));
+  // MARGEN DE CONTRIBUCIÓN (rename de "Margen Operativo")
+  html+=ln(eL('= MARGEN DE CONTRIBUCIÓN','Lo que aporta cada venta después de costos directos. Es lo que queda para cubrir tus gastos fijos (sueldo, alquiler, herramientas).'),totMC,'totsub',eerrPct(totMC,pctBase));
 
-  // GASTOS FIJOS (estructura)
-  html+=ln(eL('(−) Gastos Fijos (estructura)','Lo que pagás aunque no vendas nada: tu sueldo, herramientas, contador, servicios. Independientes del volumen.'),-totEstr,'sub neg');
+  // ─── GASTOS COMERCIALES (captar y retener clientes) ───
+  var gtosCom=f_marketing;
+  html+=ln(eL('(−) Gastos Comerciales','Lo que gastás en captar y retener clientes: marketing, diseño, contenido. Independiente del volumen vendido.'),-gtosCom,'sub neg');
+  html+=leaf(eL('Marketing y publicidad','Juana Peña (diseño), pauta, flyers, contenido. Hoy bajo, históricamente clave para crecer.'),-f_marketing);
+  html+=detailRows(f_marketingD);
+
+  // ─── GASTOS ADMINISTRATIVOS (operar el negocio) ───
+  var gtosAdm=f_software+f_honorarios+f_servicios+f_ocupacion+f_sueldo+f_otrosEst;
+  html+=ln(eL('(−) Gastos Administrativos','Lo que pagás para que Maleu funcione: tu sueldo, herramientas, contador, alquiler, servicios. Independiente del volumen.'),-gtosAdm,'sub neg');
   html+=leaf(eL('Herramientas y software','N8N, Claude API, Canva, Wati, hosting, dominios. Todo lo digital que hace funcionar Maleu.'),-f_software);
   html+=detailRows(f_softwareD);
-  html+=leaf('Marketing y publicidad',-f_marketing);
-  html+=detailRows(f_marketingD);
-  html+=leaf('Contador y honorarios profesionales',-f_honorarios);
-  html+=detailRows(f_honorariosD);
+  if(f_honorarios>0){html+=leaf('Contador y honorarios profesionales',-f_honorarios);html+=detailRows(f_honorariosD);}
   html+=leaf(eL('Servicios (luz, internet, teléfono)','Movistar, ABSA, lo que usa Maleu para funcionar día a día.'),-f_servicios);
   html+=detailRows(f_serviciosD);
   if(serviciosProv>0)html+=subleaf('+ Provisión: lo que se asume aunque no llegó la factura ('+serviciosProvCon+')',-serviciosProv,true);
@@ -6385,7 +6384,7 @@ function rEERR_dual(body){
   html+=leaf(eL('Tu sueldo (lo que vale tu tiempo)','El objetivo de sueldo del fundador: $1.000.000/mes. Si te giraste menos, Maleu te queda debiendo la diferencia.'),-f_sueldo);
   html+=detailRows(f_sueldoD);
   if(sueldoProv>0)html+=subleaf('+ Sueldo que Maleu te quedó debiendo este mes (te giraste $'+f$(Math.round(sueldoReal))+' de $1.000.000)',-sueldoProv,true);
-  if(f_otrosEst>0){html+=leaf('Otros gastos fijos',-f_otrosEst);html+=detailRows(f_otrosEstD);}
+  if(f_otrosEst>0){html+=leaf('Otros gastos administrativos',-f_otrosEst);html+=detailRows(f_otrosEstD);}
 
   // EBITDA
   html+=ln(eL('= EBITDA','Ganancia operativa antes de desgaste de equipos e impuestos. Es la mejor medida de si la operación es rentable. EBITDA% sano para Maleu: ≥8%.'),ebitda,'totsub'+(ebitda<0?' neg':''),eerrPct(ebitda,pctBase));
@@ -6394,36 +6393,39 @@ function rEERR_dual(body){
   html+=ln(eL('(−) Desgaste de equipos','Tus freezers, auto, notebook pierden valor con el uso. Aunque no es plata que sale hoy, contablemente se descuenta cada mes. También llamado "Amortizaciones".'),-amort,'neg');
   if(amortProv>0)html+=subleaf('Provisión: '+amortProvCon,-amortProv,true);
 
-  // GANANCIA OPERATIVA
-  html+=ln(eL('= GANANCIA OPERATIVA','Ganancia del negocio operativo, después de descontar TODOS los costos. Antes de eventos extraordinarios y financieros.'),resOper,'totsub'+(resOper<0?' neg':''),eerrPct(resOper,pctBase));
+  // RESULTADO OPERATIVO (rename de "Ganancia Operativa")
+  html+=ln(eL('= RESULTADO OPERATIVO','Ganancia del negocio operativo, después de descontar TODOS los costos. Antes de eventos no recurrentes y financieros.'),resOper,'totsub'+(resOper<0?' neg':''),eerrPct(resOper,pctBase));
+
+  // ── RESULTADOS FINANCIEROS (intereses ganados − costos financieros) ──
+  // Standard contable: financieros van antes que extraordinarios.
+  var costosFinancieros=0; // Hoy Maleu no tiene deudas con interés. Se mantiene la línea por completitud.
+  html+=ln(eL('(+/−) Resultados Financieros','Intereses ganados (rendimientos MP, plazo fijo) menos intereses pagados (tarjeta corporativa, préstamos). Maleu hoy solo gana, no paga.'),rFinanc-costosFinancieros,'sub');
+  html+=leaf(eL('Intereses ganados','Lo que generó Maleu de plata parada en MP o plazo fijo.'),r_intereses);
+  if(r_interesesD.length)html+=detailRows(r_interesesD);
+  // Línea vacía mantenida para el día que Maleu use financiamiento
+  if(costosFinancieros>0)html+=leaf(eL('Costos financieros','Intereses pagados por créditos, tarjeta corporativa, descuento de cheques.'),-costosFinancieros);
 
   // GASTOS ONE-OFF (Extraordinarios)
-  html+=ln(eL('(−) Gastos one-off (no recurrentes)','Cosas que pasaron este mes pero no son parte del negocio normal: regalos, faltantes, pérdidas puntuales. Se separan para no contaminar la lectura de la rentabilidad real.'),-totExt,'sub neg');
-  html+=leaf('Regalos / atenciones',-ext_regalos);
-  html+=detailRows(ext_regalosD);
-  html+=leaf('Pérdidas y faltantes',-ext_perdidas);
-  html+=detailRows(ext_perdidasD);
-  if(ext_otros>0){html+=leaf('Otros no recurrentes',-ext_otros);html+=detailRows(ext_otrosD);}
+  if(totExt>0||ext_regalos>0||ext_perdidas>0){
+    html+=ln(eL('(−) Gastos one-off (no recurrentes)','Cosas que pasaron este mes pero no son parte del negocio normal: regalos, faltantes, pérdidas puntuales. Se separan para no contaminar la lectura de la rentabilidad real.'),-totExt,'sub neg');
+    if(ext_regalos>0){html+=leaf('Regalos / atenciones',-ext_regalos);html+=detailRows(ext_regalosD);}
+    if(ext_perdidas>0){html+=leaf('Pérdidas y faltantes',-ext_perdidas);html+=detailRows(ext_perdidasD);}
+    if(ext_otros>0){html+=leaf('Otros no recurrentes',-ext_otros);html+=detailRows(ext_otrosD);}
+  }
 
-  // RESULTADOS FINANCIEROS
-  html+=ln(eL('(+/−) Intereses ganados','Lo que generó Maleu de plata parada: rendimientos de Mercado Pago, plazo fijo. Maleu no tiene deudas con intereses, así que solo suma.'),rFinanc,'sub'+(rFinanc<0?' neg':''));
-  html+=leaf('Rendimientos MP, plazo fijo',r_intereses);
-  if(r_interesesD.length)html+=detailRows(r_interesesD);
+  // RESULTADO ANTES DE IMPUESTOS (rename de "Ganancia Antes de Impuestos")
+  html+=ln(eL('= RESULTADO ANTES DE IMPUESTOS','Casi el resultado final. Solo falta restar lo que le debés al fisco.'),resAImp,'totsub'+(resAImp<0?' neg':''));
 
-  // GANANCIA ANTES DE IMPUESTOS
-  html+=ln(eL('= GANANCIA ANTES DE IMPUESTOS','Casi el resultado final. Solo falta restar lo que le debés al fisco.'),resAImp,'totsub'+(resAImp<0?' neg':''));
-
-  // IMPUESTOS
+  // IMPUESTOS — solo monotributo (sos monotributista, no pagás IIBB)
   html+=ln('(−) Impuestos',-totImp,'sub neg');
-  html+=leaf(eL('IIBB','Ingresos Brutos provinciales. Hoy Maleu no paga (monotributo lo cubre).'),-imp_iibb);
-  html+=detailRows(imp_iibbD);
-  html+=leaf(eL('Monotributo','Tu cuota fija mensual de monotributo.'),-imp_mono);
+  html+=leaf(eL('Monotributo','Tu cuota fija mensual de monotributo. Como sos monotributista, esto reemplaza Ganancias, IVA e IIBB.'),-imp_mono);
   html+=detailRows(imp_monoD);
   if(monoProv>0)html+=subleaf('+ Provisión: cuota mensual aunque no llegó el cargo ('+monoProvCon+')',-monoProv,true);
+  if(imp_iibb>0){html+=leaf('IIBB',-imp_iibb);html+=detailRows(imp_iibbD);}
   if(imp_otros>0){html+=leaf('Otros impuestos',-imp_otros);html+=detailRows(imp_otrosD);}
 
-  // GANANCIA / PÉRDIDA DEL MES
-  html+=ln(eL('= GANANCIA / PÉRDIDA DEL MES','La línea final. Si es positivo, Maleu ganó plata este mes (devengado). Si es negativo, perdió. Esto NO es la caja, es la rentabilidad real.'),resNeto,'tot'+(resNeto<0?' neg':''),eerrPct(resNeto,pctBase));
+  // RESULTADO NETO (rename de "Ganancia / Pérdida del Mes")
+  html+=ln(eL('= RESULTADO NETO','La línea final. Si es positivo, Maleu ganó plata este mes (devengado). Si es negativo, perdió. Esto NO es la caja, es la rentabilidad real.'),resNeto,'tot'+(resNeto<0?' neg':''),eerrPct(resNeto,pctBase));
 
   html+='</tbody></table></div>';
 
