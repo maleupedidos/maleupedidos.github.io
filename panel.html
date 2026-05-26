@@ -2794,29 +2794,42 @@ function actualizarPedidos(){
   var btn=$('btnReloadPed');
   var lbl=btn?btn.querySelector('span'):null;
   var lblOrig=lbl?lbl.textContent:'';
-  if(btn){btn.disabled=true;btn.classList.add('loading');if(lbl)lbl.textContent='Buscando pedidos nuevos…';}
+  if(btn){btn.disabled=true;btn.classList.add('loading');if(lbl)lbl.textContent='Buscando…';}
   var antes={};
   if(D&&Array.isArray(D.pedidos)){
     D.pedidos.forEach(function(p){if(p&&p.h&&p.n)antes[p.h+'|'+p.n]=true;});
   }
   var editando=_hayEditorAbierto();
   function _restoreBtn(){if(btn){btn.disabled=false;btn.classList.remove('loading');if(lbl)lbl.textContent=lblOrig||'Actualizar pedidos';}}
-  fetch(API+'?action=pedidosLight&t='+Date.now())
+  // pedidosNew: lee solo las últimas 10 filas de cada hoja operativa. ~400ms vs ~3s.
+  // Detecta cualquier pedido nuevo (entran al final) y refresca el estado de pedidos
+  // recientes. Pedidos viejos (>10 filas atrás en cada hoja) no se refrescan acá —
+  // para eso está el load() completo cada vez que se entra al tab o al cargar la app.
+  fetch(API+'?action=pedidosNew&tail=10&t='+Date.now())
     .then(function(r){return r.json();})
     .then(function(d){
       _restoreBtn();
       if(!d||!Array.isArray(d.pedidos)){toast('Sin respuesta del servidor');return;}
       if(!D)D={};
-      D.pedidos=d.pedidos;
-      if(Array.isArray(d.canales))D.canales=d.canales;
+      if(!Array.isArray(D.pedidos))D.pedidos=[];
+      // Merge: por h|n. Los devueltos pisan a los que tenía (refresca estado/origen
+      // recientes); los no devueltos se mantienen intactos en D.pedidos.
+      var ix={};
+      D.pedidos.forEach(function(p,i){if(p&&p.h&&p.n)ix[p.h+'|'+p.n]=i;});
+      var nuevos=0;
+      d.pedidos.forEach(function(np){
+        if(!np||!np.h||!np.n)return;
+        var key=np.h+'|'+np.n;
+        if(ix[key]!=null){
+          D.pedidos[ix[key]]=np; // actualizar
+        }else{
+          D.pedidos.push(np);
+          if(np.es!=='Cancelado'&&!antes[key])nuevos++;
+        }
+      });
+      // canales[] no viene en modo tail — los previos se mantienen.
       try{localStorage.setItem('ma3',JSON.stringify(D));}catch(e){}
       sync();
-      var nuevos=0;
-      d.pedidos.forEach(function(p){
-        if(!p||!p.h||!p.n)return;
-        if(p.es==='Cancelado')return;
-        if(!antes[p.h+'|'+p.n])nuevos++;
-      });
       if(editando){
         if(nuevos>0)toast('+'+nuevos+' pedido'+(nuevos>1?'s':'')+' nuevo'+(nuevos>1?'s':'')+' (aparecen al cerrar la edición)');
         else toast('Sin pedidos nuevos');
