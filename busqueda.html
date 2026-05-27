@@ -1116,60 +1116,89 @@ function _renderPagosInner() {
       // Detalle de OCs imputadas a esta semana (qué se pidió). Permite chequear
       // contra lo que reclama el proveedor item por item.
       if (s.items && s.items.length > 0) {
-        // ── AGREGADO POR PRODUCTO ──
-        // Agrupar por (categoría, sabor, costoUnit). Esto matchea con cómo el
-        // proveedor factura ("Muzzarella x 58 x $5.800 = $336.400"), permite
-        // comparar directo contra lo que te mande Bernardo/Sevuchitas/etc.
-        var aggCat = {}; // { categoria: { sabor: { q, cu, ct } } }
-        var ordenCat = [];
-        var totalAgg = 0;
-        s.items.forEach(function(it){
-          var sp = splitProducto(it.prod || '');
-          var cat = sp.cat || 'Otros';
-          var sab = sp.sabor || (it.prod || '');
-          var cu = Number(it.costoU) || 0;
-          if (!aggCat[cat]) { aggCat[cat] = {}; ordenCat.push(cat); }
-          var keyS = sab + '|' + cu; // si el costo unitario difiere en el mismo sabor, separar líneas
-          if (!aggCat[cat][keyS]) aggCat[cat][keyS] = { sabor: sab, q: 0, cu: cu, ct: 0 };
-          aggCat[cat][keyS].q += Number(it.q) || 0;
-          aggCat[cat][keyS].ct += Number(it.costo) || 0;
-          totalAgg += Number(it.costo) || 0;
-        });
-        // Agrupar por cliente (para el detalle posterior)
-        var byCli = {};
-        var ordenCli = [];
-        s.items.forEach(function(it){
-          var key = (it.canal || '') + ' / ' + (it.cliente || 's/cli') + (it.nped ? ' #' + it.nped : '');
-          if (!byCli[key]) { byCli[key] = []; ordenCli.push(key); }
-          byCli[key].push(it);
-        });
-        out += '<details class="sem-items-acc"><summary>Ver detalle (' + s.items.length + ' OC' + (s.items.length === 1 ? '' : 's') + ')</summary>';
-        // BLOQUE 1: Agregado por producto (como te factura el proveedor)
-        out += '<div class="sem-agg-titulo">Lo que pediste — total por producto</div>';
-        ordenCat.forEach(function(cat){
-          out += '<div class="sem-agg-cat">' + esc(cat) + '</div>';
-          var sabKeys = Object.keys(aggCat[cat]).sort();
-          sabKeys.forEach(function(sk){
-            var a = aggCat[cat][sk];
-            out += '<div class="sem-agg-item">' +
-              '<span class="sabor">' + esc(a.sabor) + '</span>' +
-              '<span class="qcu">' + a.q + ' × ' + formatMoney(a.cu) + '</span>' +
-              '<span class="tot">' + formatMoney(a.ct) + '</span>' +
-              '</div>';
-          });
-        });
-        out += '<div class="sem-agg-total"><span>Total proveedor</span><span>' + formatMoney(totalAgg) + '</span></div>';
-        // BLOQUE 2: Detalle por cliente (de dónde vino cada producto)
-        out += '<div class="sem-agg-titulo" style="margin-top:12px">Desglose por pedido cliente</div>';
-        ordenCli.forEach(function(key){
-          var items = byCli[key];
-          var sub = items.reduce(function(a, it){ return a + (Number(it.costo) || 0); }, 0);
-          out += '<div class="sem-items-cli"><span class="cli">' + esc(key) + '</span><span class="sub">' + formatMoney(sub) + '</span></div>';
-          items.forEach(function(it){
-            var nombre = (it.prod || '').replace(/ — /g, ' · ');
-            out += '<div class="sem-item"><span class="q">' + (it.q || 0) + '×</span><span class="nombre">' + esc(nombre) + '</span><span class="costo">' + formatMoney(it.costo || 0) + '</span></div>';
-          });
-        });
+        // BLOQUE 1: AGREGADO POR PRODUCTO — formato factura del proveedor.
+        // Agrupa por (sabor, costoUnit) para mostrar "Muzzarella · 58 × $5.800 = $336.400".
+        // OJO: sin try/catch externo este bloque tira pantalla en blanco si algun
+        // item viene con shape raro. Tiramos el try/catch propio para no perder
+        // el detalle por cliente si solo el agregado rompe.
+        try {
+          var aggCat = {};
+          var ordenCat = [];
+          var totalAgg = 0;
+          for (var ai = 0; ai < s.items.length; ai++) {
+            var it = s.items[ai];
+            var prodStr = String(it && it.prod || '');
+            var cat, sab;
+            var sepIdx = prodStr.indexOf(' — '); // em dash con espacios
+            if (sepIdx < 0) sepIdx = prodStr.indexOf(' - ');
+            if (sepIdx >= 0) {
+              cat = prodStr.substring(0, sepIdx).trim();
+              sab = prodStr.substring(sepIdx + 3).trim();
+            } else {
+              cat = 'Otros';
+              sab = prodStr || '(s/nombre)';
+            }
+            var cu = Number(it && it.costoU) || 0;
+            var qi = Number(it && it.q) || 0;
+            var ci = Number(it && it.costo) || 0;
+            if (!aggCat[cat]) { aggCat[cat] = {}; ordenCat.push(cat); }
+            var keyS = sab + '|' + cu;
+            if (!aggCat[cat][keyS]) aggCat[cat][keyS] = { sabor: sab, q: 0, cu: cu, ct: 0 };
+            aggCat[cat][keyS].q += qi;
+            aggCat[cat][keyS].ct += ci;
+            totalAgg += ci;
+          }
+          var aggHtml = '<div class="sem-agg-titulo">Lo que pediste — total por producto</div>';
+          for (var ci2 = 0; ci2 < ordenCat.length; ci2++) {
+            var cat2 = ordenCat[ci2];
+            aggHtml += '<div class="sem-agg-cat">' + esc(cat2) + '</div>';
+            var sabKeys = Object.keys(aggCat[cat2]).sort();
+            for (var si2 = 0; si2 < sabKeys.length; si2++) {
+              var a = aggCat[cat2][sabKeys[si2]];
+              aggHtml += '<div class="sem-agg-item">' +
+                '<span class="sabor">' + esc(String(a.sabor || '')) + '</span>' +
+                '<span class="qcu">' + a.q + ' × ' + formatMoney(a.cu) + '</span>' +
+                '<span class="tot">' + formatMoney(a.ct) + '</span>' +
+                '</div>';
+            }
+          }
+          aggHtml += '<div class="sem-agg-total"><span>Total proveedor</span><span>' + formatMoney(totalAgg) + '</span></div>';
+          out += '<details class="sem-items-acc" open><summary>Ver detalle (' + s.items.length + ' OC' + (s.items.length === 1 ? '' : 's') + ')</summary>';
+          out += aggHtml;
+        } catch(e) {
+          console.error('[busqueda] agg crash:', e);
+          out += '<details class="sem-items-acc"><summary>Ver detalle (' + s.items.length + ' OC' + (s.items.length === 1 ? '' : 's') + ')</summary>';
+          out += '<div class="sem-agg-titulo" style="color:#C62828">No se pudo armar el resumen por producto: ' + esc(String(e && e.message || e)) + '</div>';
+        }
+
+        // BLOQUE 2: DESGLOSE POR PEDIDO CLIENTE
+        try {
+          var byCli = {};
+          var ordenCli = [];
+          for (var bi = 0; bi < s.items.length; bi++) {
+            var it2 = s.items[bi];
+            var keyCli = String(it2 && it2.canal || '') + ' / ' + String(it2 && it2.cliente || 's/cli') +
+                         (it2 && it2.nped ? ' #' + it2.nped : '');
+            if (!byCli[keyCli]) { byCli[keyCli] = []; ordenCli.push(keyCli); }
+            byCli[keyCli].push(it2);
+          }
+          out += '<div class="sem-agg-titulo" style="margin-top:12px">Desglose por pedido cliente</div>';
+          for (var ki = 0; ki < ordenCli.length; ki++) {
+            var keyCli2 = ordenCli[ki];
+            var items = byCli[keyCli2];
+            var sub = 0;
+            for (var iti = 0; iti < items.length; iti++) sub += Number(items[iti].costo) || 0;
+            out += '<div class="sem-items-cli"><span class="cli">' + esc(keyCli2) + '</span><span class="sub">' + formatMoney(sub) + '</span></div>';
+            for (var iti2 = 0; iti2 < items.length; iti2++) {
+              var it3 = items[iti2];
+              var nombre = String(it3 && it3.prod || '').replace(/ — /g, ' · ');
+              out += '<div class="sem-item"><span class="q">' + (Number(it3.q) || 0) + '×</span><span class="nombre">' + esc(nombre) + '</span><span class="costo">' + formatMoney(Number(it3.costo) || 0) + '</span></div>';
+            }
+          }
+        } catch(e2) {
+          console.error('[busqueda] cli crash:', e2);
+          out += '<div class="sem-agg-titulo" style="color:#C62828">No se pudo armar el desglose por cliente.</div>';
+        }
         out += '</details>';
       }
       if (!saldada) {
