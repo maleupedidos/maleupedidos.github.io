@@ -1797,12 +1797,12 @@ function renderCatNav() {
   const nav = $id('cat-nav');
   if (!nav) return;
   const cats = getActiveCategories();
-  nav.innerHTML = '<div class="cat-nav-inner" id="cat-nav-inner">' +
+  nav.innerHTML = '<div class="cat-nav-wrap" id="cat-nav-wrap"><div class="cat-nav-inner" id="cat-nav-inner">' +
     cats.map((cat,i) => {
       const slug = slugify(cat.nombre);
       return '<button class="cat-nav-btn' + (i===0?' active':'') + '" data-slug="' + slug + '" onclick="scrollToCat(\'' + slug + '\')">' +
-        '<span>' + cat.icono + '</span> ' + cat.nombre + '</button>';
-    }).join('') + '</div>';
+        '<span>' + cat.icono + '</span>' + cat.nombre + '</button>';
+    }).join('') + '</div></div>';
   document.querySelectorAll('.cat-section').forEach((section,i) => {
     const cat = getActiveCategories()[i]; if (!cat) return;
     section.id = 'cat-' + slugify(cat.nombre);
@@ -1812,6 +1812,29 @@ function renderCatNav() {
     entries.forEach(entry => { if (entry.isIntersecting) setActiveNav(entry.target.id.replace('cat-','')); });
   }, { rootMargin:'-20% 0px -70% 0px', threshold:0 });
   document.querySelectorAll('.cat-section').forEach(s => observer.observe(s));
+  // Hint de scroll: si el inner ya está al final, sacar el fade
+  var inner = $id('cat-nav-inner'), wrap = $id('cat-nav-wrap');
+  function updateFade() {
+    if (!inner || !wrap) return;
+    var atEnd = (inner.scrollLeft + inner.clientWidth) >= (inner.scrollWidth - 4);
+    wrap.classList.toggle('at-end', atEnd);
+  }
+  if (inner) {
+    inner.addEventListener('scroll', updateFade);
+    setTimeout(updateFade, 100);
+  }
+  // Pulse inicial para llamar la atención (solo una vez por sesión)
+  try {
+    if (!sessionStorage.getItem('maleu_cat_pulse_done')) {
+      setTimeout(function() {
+        document.querySelectorAll('.cat-nav-btn').forEach(function(b) { b.classList.add('cat-nav-pulse'); });
+        setTimeout(function() {
+          document.querySelectorAll('.cat-nav-btn').forEach(function(b) { b.classList.remove('cat-nav-pulse'); });
+        }, 1400);
+      }, 1200);
+      sessionStorage.setItem('maleu_cat_pulse_done', '1');
+    }
+  } catch(e) {}
 }
 let _scrollingToCat = false;
 function scrollToCat(slug) {
