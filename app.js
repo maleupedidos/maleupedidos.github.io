@@ -1858,13 +1858,35 @@ function setActiveNav(slug) {
 function updateCatNavTop() {
   const header = document.querySelector('header'), nav = $id('cat-nav'), promo = $id('promo-bar');
   if (header && nav) {
-    nav.style.top = header.offsetHeight + 'px';
-    const promoTop = header.offsetHeight + nav.offsetHeight;
+    var headerH = header.classList.contains('scrolled-hidden') ? 0 : header.offsetHeight;
+    nav.style.top = headerH + 'px';
+    const promoTop = headerH + nav.offsetHeight;
     if (promo) promo.style.top = promoTop + 'px';
     const total = promoTop + (promo ? promo.offsetHeight : 0);
     document.querySelectorAll('.cat-section').forEach(s => { s.style.scrollMarginTop = total + 'px'; });
   }
 }
+/* Hide header on scroll down, show on scroll up. Cat-nav y promo se
+   reposicionan al top para no dejar gap cuando el header se esconde. */
+var _lastScrollY = 0;
+var _headerHidden = false;
+window.addEventListener('scroll', function() {
+  var y = window.scrollY || window.pageYOffset;
+  var header = document.querySelector('header');
+  if (!header) return;
+  var goingDown = y > _lastScrollY + 4;
+  var goingUp   = y < _lastScrollY - 4;
+  if (y > 150 && goingDown && !_headerHidden) {
+    header.classList.add('scrolled-hidden');
+    _headerHidden = true;
+    updateCatNavTop();
+  } else if ((goingUp || y < 80) && _headerHidden) {
+    header.classList.remove('scrolled-hidden');
+    _headerHidden = false;
+    updateCatNavTop();
+  }
+  _lastScrollY = y;
+}, { passive: true });
 
 /* ── STOCK ── */
 /* stockMap[id]            = stock físico (lo que hay en el depósito ahora)
