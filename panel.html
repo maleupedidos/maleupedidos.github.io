@@ -1675,6 +1675,41 @@ body.role-single .statusbar{font-size:11px}
         </table>
       </div>
     </div>
+
+    <!-- Renegociación de proveedores -->
+    <div class="prod-card">
+      <h3 class="prod-card-h">🤝 Renegociación de proveedores</h3>
+      <div class="prod-card-sub">Ranking por <b>upside</b>: productos que más $ aportarían si llevaras su margen a la meta. Foco en alto volumen + margen bajo.</div>
+      <div style="display:flex;gap:12px;align-items:center;margin:12px 0 8px;flex-wrap:wrap">
+        <span style="font-size:12px;color:#6b7280;font-weight:600">Meta de margen bruto:</span>
+        <select id="renegMeta" style="padding:4px 8px;border:1px solid #d1d5db;border-radius:4px;font-size:12px;font-weight:600">
+          <option value="0.35">35% (piso categoría)</option>
+          <option value="0.40" selected>40% (target realista)</option>
+          <option value="0.45">45% (aspiracional)</option>
+          <option value="0.50">50% (premium)</option>
+        </select>
+        <span style="font-size:11px;color:#6b7280">Solo se listan productos con ≥1% de la facturación del período.</span>
+      </div>
+      <div id="renegResumen" style="background:#FFF8F0;border:1px solid #F4D5A8;border-radius:6px;padding:10px 14px;margin-bottom:12px;font-size:13px"></div>
+      <div class="prod-tabla-wrap">
+        <table class="prod-tabla" id="prodReneg">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Producto</th>
+              <th class="num">% Vta</th>
+              <th class="num">Mg actual</th>
+              <th class="num">$ Vta período</th>
+              <th class="num">Upside / período</th>
+              <th class="num">Bajar costo/u</th>
+              <th class="num">Costo objetivo</th>
+              <th>Acción</th>
+            </tr>
+          </thead>
+          <tbody id="prodRenegBody"></tbody>
+        </table>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -9700,6 +9735,7 @@ if('serviceWorker' in navigator){
     renderAlertas(d);
     renderCombos(d);
     renderRentabilidad(d);
+    renderRenegociacion(d);
   }
 
   function renderKpis(d){
@@ -9946,6 +9982,87 @@ if('serviceWorker' in navigator){
       html += '</tr>';
     });
     document.getElementById('prodRentBody').innerHTML = html;
+  }
+
+  // Estado: meta seleccionada y tracking de productos marcados como "renegociado"
+  function _renegGetMarcados(){
+    try{ return JSON.parse(localStorage.getItem('maleu_reneg_marcados')||'{}'); }
+    catch(e){ return {}; }
+  }
+  function _renegSetMarcado(abbr, fechaIso){
+    var m = _renegGetMarcados();
+    if(fechaIso) m[abbr] = fechaIso;
+    else delete m[abbr];
+    try{ localStorage.setItem('maleu_reneg_marcados', JSON.stringify(m)); }catch(e){}
+  }
+  window.toggleRenegMarcado = function(abbr){
+    var m = _renegGetMarcados();
+    if(m[abbr]) _renegSetMarcado(abbr, null);
+    else _renegSetMarcado(abbr, new Date().toISOString().slice(0,10));
+    if(prodState.data) renderRenegociacion(prodState.data);
+  };
+
+  function renderRenegociacion(d){
+    var sel = document.getElementById('renegMeta');
+    if(!sel) return;
+    // Hook change una sola vez
+    if(!sel._bound){ sel._bound = true; sel.addEventListener('change', function(){ if(prodState.data) renderRenegociacion(prodState.data); }); }
+    var meta = parseFloat(sel.value) || 0.40;
+    var totFact = (d.totales && d.totales.facturado) || 0;
+    var marcados = _renegGetMarcados();
+
+    // Filtrar productos con >=1% de share y margen actual < meta
+    var arr = d.productos.filter(function(p){
+      if(totFact <= 0) return false;
+      if(!p.facturado || p.facturado <= 0) return false;
+      var share = p.facturado / totFact;
+      if(share < 0.01) return false;
+      return p.margenPct < meta;
+    }).map(function(p){
+      var share = p.facturado / totFact;
+      var gap = meta - p.margenPct;                       // 0..1
+      var upside = p.facturado * gap;                     // $ extra si llega a meta
+      var costoObjetivo = p.precioRetail * (1 - meta);    // costo unitario para llegar a meta sin tocar precio
+      var bajarCosto = p.costo - costoObjetivo;
+      return {p:p, share:share, gap:gap, upside:upside, costoObjetivo:costoObjetivo, bajarCosto:bajarCosto};
+    });
+    arr.sort(function(a,b){return b.upside - a.upside;});
+
+    // Resumen total
+    var sumUpside = arr.reduce(function(s,x){return s+x.upside;},0);
+    var resumen = document.getElementById('renegResumen');
+    if(arr.length === 0){
+      resumen.innerHTML = '<b style="color:#15803D">✓ Todos los productos con peso ≥1% ya están en o sobre la meta del '+Math.round(meta*100)+'%.</b>';
+    } else {
+      resumen.innerHTML =
+        '<b>'+arr.length+' productos</b> bajo la meta del <b>'+Math.round(meta*100)+'%</b>. '+
+        'Si todos llegaran a meta, sumarían <b style="color:#15803D">+'+fmt$(sumUpside)+'</b> al margen del período. '+
+        '<span style="color:#6b7280">Período: '+d.periodo.dias+' días → anualizado ≈ <b>'+fmt$(sumUpside * 365 / d.periodo.dias)+'</b></span>';
+    }
+
+    var html = '';
+    arr.forEach(function(x, i){
+      var p = x.p;
+      var abbr = p.abrev || p.abreviatura || p.abbr || p.nombre;
+      var marcadoFecha = marcados[abbr];
+      var rowStyle = marcadoFecha ? 'opacity:.55;background:#F0FDF4' : '';
+      var btnTxt = marcadoFecha ? '✓ '+marcadoFecha.slice(8,10)+'/'+marcadoFecha.slice(5,7) : 'Marcar';
+      var btnStyle = marcadoFecha
+        ? 'background:#DCFCE7;color:#166534;border:1px solid #86EFAC'
+        : 'background:#fff;color:#374151;border:1px solid #d1d5db';
+      html += '<tr style="'+rowStyle+'">';
+      html += '<td><b>'+(i+1)+'</b></td>';
+      html += '<td><b>'+escHtml(p.nombre)+'</b></td>';
+      html += '<td class="num">'+fmtPct(x.share,1)+'</td>';
+      html += '<td class="num"><b style="color:#B91C1C">'+fmtPct(p.margenPct,0)+'</b></td>';
+      html += '<td class="num">'+fmt$(p.facturado)+'</td>';
+      html += '<td class="num"><b style="color:#15803D">+'+fmt$(x.upside)+'</b></td>';
+      html += '<td class="num">'+fmt$(x.bajarCosto)+'</td>';
+      html += '<td class="num">'+fmt$(x.costoObjetivo)+' <span style="color:#9ca3af;font-size:10px">(hoy '+fmt$(p.costo)+')</span></td>';
+      html += '<td><button onclick="toggleRenegMarcado(\''+abbr.replace(/\'/g,"\\'")+'\')" style="padding:4px 10px;border-radius:4px;font-size:11px;font-weight:600;cursor:pointer;'+btnStyle+'">'+btnTxt+'</button></td>';
+      html += '</tr>';
+    });
+    document.getElementById('prodRenegBody').innerHTML = html;
   }
 
   // Hook: click en headers para ordenar
