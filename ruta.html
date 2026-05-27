@@ -2140,11 +2140,18 @@ function renderCobrosFromServer(){
   }));
   if(el.__sig===sig&&!el.__pending)return;
   el.__sig=sig;el.__pending=false;
+  // Banner de diagnostico SIEMPRE visible (aunque no haya pendientes) — Tadeo lo necesita
+  // para saber si una accion fallo silenciosamente. Se popula via _setCobroDiag().
+  var diagHtml='<div id="cobroDiagBanner" style="display:none;background:#FFF3E0;border:1.5px solid #FB8C00;border-radius:8px;padding:8px 12px;margin-bottom:10px;font-size:12px;color:#5D4037;font-weight:700"></div>';
+  var qLen=Array.isArray(syncQueue)?syncQueue.length:0;
+  var queueHtml=qLen>0
+    ? '<div style="background:#FFEBEE;border:1.5px solid #C62828;border-radius:8px;padding:10px 12px;margin-bottom:10px;display:flex;justify-content:space-between;align-items:center;gap:8px"><div style="font-size:12px;font-weight:700;color:#B71C1C">'+qLen+' cobro(s) sin sincronizar</div><button type="button" onclick="reintentarSyncQueue()" style="padding:6px 12px;background:#C62828;color:#fff;border:none;border-radius:6px;font-family:inherit;font-size:12px;font-weight:800;cursor:pointer">Reintentar ya</button></div>'
+    : '';
   if(pendientesCobro.length===0){
-    el.innerHTML='<div class="empty" style="padding:40px">Sin pendientes de cobro</div>';return;
+    el.innerHTML=diagHtml+queueHtml+'<div class="empty" style="padding:40px">Sin pendientes de cobro</div>';return;
   }
   var total=0;pendientesCobro.forEach(function(pc){total+=pc.$});
-  var h='<div style="font-size:13px;font-weight:800;margin-bottom:10px">'+pendientesCobro.length+' pendiente(s) — Total: '+formatMoney(total)+'</div>';
+  var h=diagHtml+queueHtml+'<div style="font-size:13px;font-weight:800;margin-bottom:10px">'+pendientesCobro.length+' pendiente(s) — Total: '+formatMoney(total)+'</div>';
 
   // Agrupar por Día de Entrega Elegido (pc.fe ahora viene del backend con la
   // fecha de col J/M, no la fecha del pedido). Fallback a fePed para pedidos
@@ -3182,13 +3189,15 @@ function cobrarPendiente(i,ef,tr,fp,recalc){
     };
   }
 
-  // ── FLUJO HIBRIDO: fetch directo con feedback honesto + fallback a queue ──
-  // Tadeo (27/05/2026): cobro de Iñaki Ustariz no aparecio en Sheets aunque la UI
-  // decia "Cobrado". El branch optimista anterior asumia que el POST llegaba
-  // siempre — si la cola se trababa, el cobro se perdia silenciosamente.
-  // Ahora: UI optimista (saca de pendientesCobro al instante) PERO el fetch va
-  // directo. Si OK: confirmamos con toast verde. Si falla: revertimos UI y
-  // mostramos toast ROJO claro (no engañoso). El queue es solo para offline.
+  // ── FLUJO BLINDADO: fetch directo + revertir UI ante cualquier fallo ──
+  // Tadeo (27/05/2026 v2): el flujo anterior gateaba en navigator.onLine — que en
+  // iframes y en algunos browsers reporta false aun con red OK — y solo revertia
+  // la UI cuando backend devolvia ok:false; ante un .catch (network/timeout) el
+  // cobro se perdia: UI lo sacaba, el fetch nunca llegaba, syncQueue se perdia o
+  // expiraba a las 4hs, y Tadeo se enteraba al ver Sheets. Cambios:
+  //   1) Disparamos fetch SIEMPRE (no consultamos isOnline; el browser sabra)
+  //   2) Cualquier fallo (ok:false o .catch) → REVERTIR pc a pendientesCobro
+  //   3) Log diagnostico visible: ultimo evento + boton "Reintentar" en COBROS
   cobrados[pc.key]=true;
   var pcKey=(pc.h||'')+'|'+(pc.id||'');
   var idxRemoved=-1;
@@ -3199,56 +3208,80 @@ function cobrarPendiente(i,ef,tr,fp,recalc){
   if(currentTab==='cobros')renderCobrosFromServer();else renderRuta();
   var elB=document.getElementById('tabCobrosCount');if(elB)elB.textContent=pendientesCobro.length||'';
 
-  // Offline: encolar y avisar claramente
-  if(!isOnline){
+  function _revertirCobro(motivo){
+    delete cobrados[pc.key];
+    // Solo re-insertar si no esta ya (puede haber llegado en un refresh)
+    var yaEsta=false;
+    for(var kk=0;kk<pendientesCobro.length;kk++){
+      var pp=pendientesCobro[kk];
+      if(((pp.h||'')+'|'+(pp.id||''))===pcKey){yaEsta=true;break;}
+    }
+    if(!yaEsta&&pcBackup)pendientesCobro.push(pcBackup);
+    saveLocal();
+    if(currentTab==='cobros')renderCobrosFromServer();else renderRuta();
+    var elBr=document.getElementById('tabCobrosCount');if(elBr)elBr.textContent=pendientesCobro.length||'';
+    _setCobroDiag('❌ '+pc.c.split(' ')[0]+': '+motivo+' — reintentar manualmente');
+    showToast('❌ '+pc.c.split(' ')[0]+': '+motivo);
+  }
+
+  _setCobroDiag('⏳ Cobrando '+pc.c.split(' ')[0]+'...');
+  showToast('Cobrando a '+pc.c.split(' ')[0]+'...');
+  // Timeout duro: si el fetch tarda >15s, asumimos que se colgo y revertimos.
+  var timedOut=false;
+  var timer=setTimeout(function(){
+    timedOut=true;
     syncQueue.push(payload);
     if(aFavorPayload)syncQueue.push(aFavorPayload);
     saveLocal();
     document.getElementById('syncBanner').className='sync-banner visible';
-    showToast('⏳ Cobrado offline — se sincroniza al volver señal');
-    if(navigator.vibrate)navigator.vibrate(30);
-    return;
-  }
+    _revertirCobro('timeout 15s (en cola)');
+    setTimeout(processSyncQueue,1000);
+  },15000);
 
-  // Online: fetch directo. Esperamos respuesta antes de confirmar.
-  showToast('Cobrando a '+pc.c.split(' ')[0]+'...');
   fetch(APPS_SCRIPT_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(payload),redirect:'follow'})
     .then(function(r){return r.json().catch(function(){return{ok:false,error:'InvalidJSON'}})})
     .then(function(res){
+      if(timedOut)return;
+      clearTimeout(timer);
       if(res&&res.ok){
-        // Confirmado en backend
         if(aFavorPayload){
-          // Disparar saldo cliente en background (no bloquea)
           fetch(APPS_SCRIPT_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(aFavorPayload),redirect:'follow'})
             .catch(function(){syncQueue.push(aFavorPayload);saveLocal();processSyncQueue();});
         }
+        _setCobroDiag('✓ Cobrado '+pc.c.split(' ')[0]+' ('+fp+')');
         showToast('✓ Cobrado a '+pc.c.split(' ')[0]+' ('+fp+')'+(recalc?' — total ajustado':''));
         if(navigator.vibrate)navigator.vibrate(30);
       } else {
-        // Backend respondió error: REVERTIR UI y avisar claramente
-        delete cobrados[pc.key];
-        if(pcBackup)pendientesCobro.push(pcBackup);
-        saveLocal();
-        if(currentTab==='cobros')renderCobrosFromServer();else renderRuta();
-        var elB2=document.getElementById('tabCobrosCount');if(elB2)elB2.textContent=pendientesCobro.length||'';
-        // Pushar al queue para retry y avisar
         syncQueue.push(payload);
         if(aFavorPayload)syncQueue.push(aFavorPayload);
         saveLocal();
         document.getElementById('syncBanner').className='sync-banner visible';
-        showToast('❌ Error al cobrar: '+(res&&res.error||'sin respuesta')+' — reintentando');
+        _revertirCobro('backend dice '+(res&&res.error||res&&res.err||'sin respuesta'));
+        setTimeout(processSyncQueue,1500);
       }
     })
     .catch(function(err){
-      // Network falló: encolar + UI revertida no es necesario (puede reintentar)
-      // Dejamos UI optimista pero con banner visible.
+      if(timedOut)return;
+      clearTimeout(timer);
       syncQueue.push(payload);
       if(aFavorPayload)syncQueue.push(aFavorPayload);
       saveLocal();
       document.getElementById('syncBanner').className='sync-banner visible';
-      showToast('⏳ Sin respuesta del servidor — se reintenta automaticamente');
+      _revertirCobro('red caida ('+(err&&err.message||'err')+')');
       setTimeout(processSyncQueue,2000);
     });
+}
+
+// Diagnostico visible: ultimo evento de cobro (UI o red), para que Tadeo SIEMPRE
+// vea si algo fallo silenciosamente. Se pinta en banner persistente en COBROS.
+function _setCobroDiag(msg){
+  try{
+    var el=document.getElementById('cobroDiagBanner');
+    if(!el)return;
+    var hora=new Date().toLocaleTimeString('es-AR',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+    el.textContent='['+hora+'] '+msg;
+    el.style.display='block';
+  }catch(e){}
 }
 
 /* ── SYNC ── */
@@ -3256,6 +3289,22 @@ function cobrarPendiente(i,ef,tr,fp,recalc){
 // Si el backend respondió ok:false (o hubo error de red), reintentamos con backoff.
 var syncBusy=false;
 var syncBackoffMs=2000;
+// Boton "Reintentar ya": fuerza un processSyncQueue + refetch de cobros.
+// Si la cola sigue trabada despues de 3s, refetchamos igual para que Tadeo
+// vea el estado real del backend.
+function reintentarSyncQueue(){
+  _setCobroDiag('⏳ Reintentando sincronizar...');
+  syncBackoffMs=2000; // resetear backoff
+  processSyncQueue();
+  setTimeout(function(){
+    fetchCobrosPendientes(true).then(function(){
+      var nq=Array.isArray(syncQueue)?syncQueue.length:0;
+      if(nq===0)_setCobroDiag('✓ Sincronizado — cola vacia');
+      else _setCobroDiag('⚠ Quedan '+nq+' en cola — revisa conexion');
+    });
+  },3000);
+}
+
 function processSyncQueue(){
   if(!isOnline||syncQueue.length===0||syncBusy)return;
   syncBusy=true;
