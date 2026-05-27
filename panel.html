@@ -1294,12 +1294,16 @@ body.role-single .statusbar{font-size:11px}
 
     <!-- ── SUB-TAB HISTORIAL ── -->
     <div id="mrPaneHist" style="display:none">
-      <!-- Pills de filtro de rango -->
-      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px" id="mrhPills">
+      <!-- Filtros: pills rápidas + dropdowns de mes/semana -->
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px" id="mrhPills">
         <span class="pill" data-mrh="todo">Todo</span>
-        <span class="pill" data-mrh="mes">Este mes</span>
-        <span class="pill" data-mrh="sem">Esta semana</span>
         <span class="pill" data-mrh="hoy">Hoy</span>
+        <select id="mrhSelMes" onchange="mrhSetFilterFromSelect('mes',this.value)" style="padding:7px 10px;border:1.5px solid var(--bd);border-radius:8px;font-size:14px;background:#fff;font-weight:600;color:var(--m2);cursor:pointer">
+          <option value="">Mes ▾</option>
+        </select>
+        <select id="mrhSelSem" onchange="mrhSetFilterFromSelect('sem',this.value)" style="padding:7px 10px;border:1.5px solid var(--bd);border-radius:8px;font-size:14px;background:#fff;font-weight:600;color:var(--m2);cursor:pointer">
+          <option value="">Semana ▾</option>
+        </select>
       </div>
 
       <!-- Resumen acumulado (varia segun rol) -->
@@ -2279,31 +2283,150 @@ function mrShowSub(which){
   try{localStorage.setItem('maleu_mr_sub',which);}catch(e){}
 }
 
-// Estado del filtro de rango del Historial (pill activa) + cache de la data ya traída.
-var _mrhFilter='todo'; // todo|mes|sem|hoy
+// Filtro del Historial: 'todo' | 'hoy' | {t:'mes',v:'YYYY-MM'} | {t:'sem',v:'YYYY-WW'}
+var _mrhFilter='todo';
 var _mrhData=null;
+
+// ISO week (Mon-Sun): devuelve [year, week] de una fecha.
+function _isoWeek(date){
+  var d=new Date(Date.UTC(date.getFullYear(),date.getMonth(),date.getDate()));
+  var dayNum=d.getUTCDay()||7;
+  d.setUTCDate(d.getUTCDate()+4-dayNum);
+  var yearStart=new Date(Date.UTC(d.getUTCFullYear(),0,1));
+  var weekNo=Math.ceil((((d-yearStart)/86400000)+1)/7);
+  return [d.getUTCFullYear(),weekNo];
+}
+// Lunes y Domingo (date objects) de una ISO week (year, week).
+function _isoWeekRange(year,week){
+  var jan4=new Date(Date.UTC(year,0,4));
+  var jan4Dow=jan4.getUTCDay()||7;
+  var mondayWeek1=new Date(Date.UTC(year,0,4-(jan4Dow-1)));
+  var monday=new Date(mondayWeek1);
+  monday.setUTCDate(monday.getUTCDate()+(week-1)*7);
+  var sunday=new Date(monday);sunday.setUTCDate(sunday.getUTCDate()+6);
+  return [monday,sunday];
+}
+
+function _isoStr(yy,mm,dd){return yy+'-'+String(mm).padStart(2,'0')+'-'+String(dd).padStart(2,'0');}
+function _serializeFilter(f){
+  if(typeof f==='string')return f;
+  return f.t+':'+f.v;
+}
+function _deserializeFilter(s){
+  if(!s)return 'todo';
+  if(s==='todo'||s==='hoy')return s;
+  var p=s.split(':');
+  if(p.length===2 && (p[0]==='mes'||p[0]==='sem'))return {t:p[0],v:p[1]};
+  return 'todo';
+}
+
+// Aplicar filtro (string simple) — usado por los pills.
 function mrhSetFilter(v){
   _mrhFilter=v;
-  try{localStorage.setItem('maleu_mrh_filter',v);}catch(e){}
-  document.querySelectorAll('#mrhPills .pill').forEach(function(p){
-    p.classList.toggle('on',p.dataset.mrh===v);
-  });
+  try{localStorage.setItem('maleu_mrh_filter',_serializeFilter(v));}catch(e){}
+  _mrhUpdateActiveUI();
   if(_mrhData)_mrhRender(_mrhData);
 }
-// Range helper: devuelve {from:ISO,to:ISO} para el filtro elegido.
+// Aplicar filtro desde un dropdown (mes o sem).
+function mrhSetFilterFromSelect(type,value){
+  if(!value){mrhSetFilter('todo');return;}
+  _mrhFilter={t:type,v:value};
+  try{localStorage.setItem('maleu_mrh_filter',_serializeFilter(_mrhFilter));}catch(e){}
+  // Resetear el otro dropdown al placeholder
+  var otherId=type==='mes'?'mrhSelSem':'mrhSelMes';
+  var other=document.getElementById(otherId);
+  if(other)other.value='';
+  _mrhUpdateActiveUI();
+  if(_mrhData)_mrhRender(_mrhData);
+}
+// Visual: marca el pill / select activo segun _mrhFilter.
+function _mrhUpdateActiveUI(){
+  var f=_mrhFilter;
+  var isStr=typeof f==='string';
+  document.querySelectorAll('#mrhPills .pill').forEach(function(p){
+    p.classList.toggle('on',isStr && p.dataset.mrh===f);
+  });
+  // Color borde del select activo
+  var selM=document.getElementById('mrhSelMes'),selS=document.getElementById('mrhSelSem');
+  function _hl(el,act){if(!el)return;el.style.borderColor=act?'var(--b)':'var(--bd)';el.style.color=act?'var(--b)':'var(--m2)';}
+  _hl(selM, !isStr && f.t==='mes');
+  _hl(selS, !isStr && f.t==='sem');
+}
+
+// Range para el filtro actual.
 function _mrhRange(){
   var n=new Date();var y=n.getFullYear(),m=n.getMonth(),d=n.getDate();
-  function iso(yy,mm,dd){return yy+'-'+String(mm+1).padStart(2,'0')+'-'+String(dd).padStart(2,'0');}
-  if(_mrhFilter==='hoy')return {from:iso(y,m,d),to:iso(y,m,d)};
-  if(_mrhFilter==='mes')return {from:iso(y,m,1),to:iso(y,m,new Date(y,m+1,0).getDate())};
-  if(_mrhFilter==='sem'){
-    // Lunes a Domingo (ISO week)
-    var dow=n.getDay();var diff=(dow===0?-6:1-dow);
-    var lun=new Date(y,m,d+diff);var dom=new Date(y,m,d+diff+6);
-    return {from:iso(lun.getFullYear(),lun.getMonth(),lun.getDate()),
-            to:iso(dom.getFullYear(),dom.getMonth(),dom.getDate())};
+  var f=_mrhFilter;
+  if(f==='hoy')return {from:_isoStr(y,m+1,d),to:_isoStr(y,m+1,d)};
+  if(typeof f==='object' && f.t==='mes'){
+    // f.v = 'YYYY-MM'
+    var p=f.v.split('-');
+    var yy=Number(p[0]),mm=Number(p[1]); // mm 1-12
+    var lastDay=new Date(yy,mm,0).getDate();
+    return {from:_isoStr(yy,mm,1),to:_isoStr(yy,mm,lastDay)};
+  }
+  if(typeof f==='object' && f.t==='sem'){
+    // f.v = 'YYYY-WW'
+    var pp=f.v.split('-');
+    var rr=_isoWeekRange(Number(pp[0]),Number(pp[1]));
+    var lun=rr[0],dom=rr[1];
+    return {from:_isoStr(lun.getUTCFullYear(),lun.getUTCMonth()+1,lun.getUTCDate()),
+            to:_isoStr(dom.getUTCFullYear(),dom.getUTCMonth()+1,dom.getUTCDate())};
   }
   return null; // 'todo'
+}
+
+// Popula los <select> de Mes y Semana con las opciones presentes en la data.
+function _mrhPopulateSelects(dias){
+  var MESES=['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+  var meses={},semanas={};
+  dias.forEach(function(r){
+    var p=r.f.split('-');
+    var yy=Number(p[0]),mm=Number(p[1]),dd=Number(p[2]);
+    var dt=new Date(yy,mm-1,dd);
+    var mesKey=yy+'-'+String(mm).padStart(2,'0');
+    if(!meses[mesKey])meses[mesKey]={label:MESES[mm-1]+' '+yy};
+    var wk=_isoWeek(dt);
+    var semKey=wk[0]+'-'+String(wk[1]).padStart(2,'0');
+    if(!semanas[semKey]){
+      var rng=_isoWeekRange(wk[0],wk[1]);
+      var l=rng[0],dom=rng[1];
+      var lblRng=String(l.getUTCDate()).padStart(2,'0')+'/'+String(l.getUTCMonth()+1).padStart(2,'0')+' al '+String(dom.getUTCDate()).padStart(2,'0')+'/'+String(dom.getUTCMonth()+1).padStart(2,'0');
+      semanas[semKey]={label:'Sem '+wk[1]+' · '+lblRng};
+    }
+  });
+  // Hoy: agregar mes y semana actuales aunque no haya datos, para que se vea "Mayo 2026" o "Sem 22" siempre disponibles.
+  var nowAR=new Date();
+  var nowMesKey=nowAR.getFullYear()+'-'+String(nowAR.getMonth()+1).padStart(2,'0');
+  if(!meses[nowMesKey])meses[nowMesKey]={label:MESES[nowAR.getMonth()]+' '+nowAR.getFullYear()};
+  var nowWk=_isoWeek(nowAR);
+  var nowSemKey=nowWk[0]+'-'+String(nowWk[1]).padStart(2,'0');
+  if(!semanas[nowSemKey]){
+    var rngN=_isoWeekRange(nowWk[0],nowWk[1]);
+    var lN=rngN[0],domN=rngN[1];
+    var lblN=String(lN.getUTCDate()).padStart(2,'0')+'/'+String(lN.getUTCMonth()+1).padStart(2,'0')+' al '+String(domN.getUTCDate()).padStart(2,'0')+'/'+String(domN.getUTCMonth()+1).padStart(2,'0');
+    semanas[nowSemKey]={label:'Sem '+nowWk[1]+' · '+lblN};
+  }
+  // Marcar "(Esta)" en mes y semana actuales
+  if(meses[nowMesKey])meses[nowMesKey].label='Este mes · '+meses[nowMesKey].label;
+  if(semanas[nowSemKey])semanas[nowSemKey].label='Esta sem · '+semanas[nowSemKey].label.replace(/^Sem \d+ · /,'');
+
+  // Render selects, ordenados DESC (más reciente arriba)
+  var selM=document.getElementById('mrhSelMes');
+  if(selM){
+    var keys=Object.keys(meses).sort().reverse();
+    selM.innerHTML='<option value="">Mes ▾</option>'+keys.map(function(k){return '<option value="'+k+'">'+meses[k].label+'</option>';}).join('');
+  }
+  var selS=document.getElementById('mrhSelSem');
+  if(selS){
+    var keysS=Object.keys(semanas).sort().reverse();
+    selS.innerHTML='<option value="">Semana ▾</option>'+keysS.map(function(k){return '<option value="'+k+'">'+semanas[k].label+'</option>';}).join('');
+  }
+  // Restaurar valor del select si _mrhFilter coincide
+  if(typeof _mrhFilter==='object'){
+    var elSel=_mrhFilter.t==='mes'?selM:selS;
+    if(elSel)elSel.value=_mrhFilter.v;
+  }
 }
 
 // ── Mi Reparto - Historial: carga el dataset completo. El filtrado es client-side.
@@ -2321,13 +2444,16 @@ function loadMiRepartoHistorial(){
       return;
     }
     _mrhData=d;
-    // Restaurar filtro persistido
+    // Restaurar filtro persistido (puede ser string 'todo'/'hoy' o objeto {t,v})
     var saved='todo';try{saved=localStorage.getItem('maleu_mrh_filter')||'todo';}catch(e){}
-    _mrhFilter=saved;
+    _mrhFilter=_deserializeFilter(saved);
+    // Wire pills (Todo / Hoy)
     document.querySelectorAll('#mrhPills .pill').forEach(function(p){
-      p.classList.toggle('on',p.dataset.mrh===saved);
       p.onclick=function(){mrhSetFilter(p.dataset.mrh);};
     });
+    // Poblar dropdowns Mes y Semana con las opciones reales de la data
+    _mrhPopulateSelects(d.dias||[]);
+    _mrhUpdateActiveUI();
     _mrhRender(d);
   }).catch(function(){
     if(listEl)listEl.innerHTML='<div style="color:#d33;padding:14px">Error de red.</div>';
