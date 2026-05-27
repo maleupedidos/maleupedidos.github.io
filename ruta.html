@@ -339,7 +339,7 @@ select.np-input{background:var(--white) url("data:image/svg+xml;utf8,<svg xmlns=
   <button class="btn-refresh" id="btnRefresh" onclick="manualRefresh()">&#x21bb;</button>
 </div>
 
-<div class="sync-banner" id="syncBanner" onclick="processSyncQueue()" style="cursor:pointer">⏳ Hay acciones pendientes de sincronizar — tocá para reintentar</div>
+<div class="sync-banner" id="syncBanner">Entregas pendientes de sincronizar</div>
 
 <div class="tabs">
   <div class="tab active" data-tab="armado" onclick="switchTab('armado')">ARMADO<span class="tab-count" id="tabArmadoCount"></span></div>
@@ -3159,73 +3159,24 @@ function cobrarPendiente(i,ef,tr,fp,recalc){
     };
   }
 
-  // ── FLUJO HIBRIDO: fetch directo con feedback honesto + fallback a queue ──
-  // Tadeo (27/05/2026): cobro de Iñaki Ustariz no aparecio en Sheets aunque la UI
-  // decia "Cobrado". El branch optimista anterior asumia que el POST llegaba
-  // siempre — si la cola se trababa, el cobro se perdia silenciosamente.
-  // Ahora: UI optimista (saca de pendientesCobro al instante) PERO el fetch va
-  // directo. Si OK: confirmamos con toast verde. Si falla: revertimos UI y
-  // mostramos toast ROJO claro (no engañoso). El queue es solo para offline.
+  // ── UI OPTIMISTA SIEMPRE ──
+  // Antes habia 2 ramas (online: esperar respuesta, offline: queue). El branch
+  // "online" cuando fallaba el fetch (timeout / cors / 302 redirect raro) mostraba
+  // un toast "Sin conexion" enganoso porque el cobro habia llegado igual al backend.
+  // Ahora: sacamos del UI siempre al instante, encolamos el payload, y processSyncQueue
+  // se encarga del POST. El usuario ve "Cobrado" sin friccion.
   cobrados[pc.key]=true;
   var pcKey=(pc.h||'')+'|'+(pc.id||'');
-  var idxRemoved=-1;
-  for(var j=0;j<pendientesCobro.length;j++){var p=pendientesCobro[j];if(((p.h||'')+'|'+(p.id||''))===pcKey){idxRemoved=j;break;}}
-  var pcBackup=idxRemoved>=0?pendientesCobro[idxRemoved]:null;
-  if(idxRemoved>=0)pendientesCobro.splice(idxRemoved,1);
+  var idx=-1;for(var j=0;j<pendientesCobro.length;j++){var p=pendientesCobro[j];if(((p.h||'')+'|'+(p.id||''))===pcKey){idx=j;break;}}
+  if(idx>=0)pendientesCobro.splice(idx,1);
+  syncQueue.push(payload);
+  if(aFavorPayload)syncQueue.push(aFavorPayload);
   saveLocal();
   if(currentTab==='cobros')renderCobrosFromServer();else renderRuta();
   var elB=document.getElementById('tabCobrosCount');if(elB)elB.textContent=pendientesCobro.length||'';
-
-  // Offline: encolar y avisar claramente
-  if(!isOnline){
-    syncQueue.push(payload);
-    if(aFavorPayload)syncQueue.push(aFavorPayload);
-    saveLocal();
-    document.getElementById('syncBanner').className='sync-banner visible';
-    showToast('⏳ Cobrado offline — se sincroniza al volver señal');
-    if(navigator.vibrate)navigator.vibrate(30);
-    return;
-  }
-
-  // Online: fetch directo. Esperamos respuesta antes de confirmar.
-  showToast('Cobrando a '+pc.c.split(' ')[0]+'...');
-  fetch(APPS_SCRIPT_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(payload),redirect:'follow'})
-    .then(function(r){return r.json().catch(function(){return{ok:false,error:'InvalidJSON'}})})
-    .then(function(res){
-      if(res&&res.ok){
-        // Confirmado en backend
-        if(aFavorPayload){
-          // Disparar saldo cliente en background (no bloquea)
-          fetch(APPS_SCRIPT_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(aFavorPayload),redirect:'follow'})
-            .catch(function(){syncQueue.push(aFavorPayload);saveLocal();processSyncQueue();});
-        }
-        showToast('✓ Cobrado a '+pc.c.split(' ')[0]+' ('+fp+')'+(recalc?' — total ajustado':''));
-        if(navigator.vibrate)navigator.vibrate(30);
-      } else {
-        // Backend respondió error: REVERTIR UI y avisar claramente
-        delete cobrados[pc.key];
-        if(pcBackup)pendientesCobro.push(pcBackup);
-        saveLocal();
-        if(currentTab==='cobros')renderCobrosFromServer();else renderRuta();
-        var elB2=document.getElementById('tabCobrosCount');if(elB2)elB2.textContent=pendientesCobro.length||'';
-        // Pushar al queue para retry y avisar
-        syncQueue.push(payload);
-        if(aFavorPayload)syncQueue.push(aFavorPayload);
-        saveLocal();
-        document.getElementById('syncBanner').className='sync-banner visible';
-        showToast('❌ Error al cobrar: '+(res&&res.error||'sin respuesta')+' — reintentando');
-      }
-    })
-    .catch(function(err){
-      // Network falló: encolar + UI revertida no es necesario (puede reintentar)
-      // Dejamos UI optimista pero con banner visible.
-      syncQueue.push(payload);
-      if(aFavorPayload)syncQueue.push(aFavorPayload);
-      saveLocal();
-      document.getElementById('syncBanner').className='sync-banner visible';
-      showToast('⏳ Sin respuesta del servidor — se reintenta automaticamente');
-      setTimeout(processSyncQueue,2000);
-    });
+  processSyncQueue();
+  showToast('Cobrado a '+pc.c.split(' ')[0]+' ('+fp+')'+(recalc?' — total ajustado':''));
+  if(navigator.vibrate)navigator.vibrate(30);
 }
 
 /* ── SYNC ── */
