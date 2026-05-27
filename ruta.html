@@ -333,7 +333,7 @@ select.np-input{background:var(--white) url("data:image/svg+xml;utf8,<svg xmlns=
 
 <div class="topbar">
   <h1>MALEU RUTA</h1>
-  <span id="appVer" style="font-size:9px;opacity:.5;margin-left:4px">v61</span>
+  <span id="appVer" style="font-size:9px;opacity:.5;margin-left:4px"></span>
   <span id="lastSync" style="font-size:9px;opacity:.6"></span>
   <div class="status-dot" id="statusDot"></div>
   <span class="badge" id="counterBadge">--</span>
@@ -804,7 +804,9 @@ var STORAGE_VERSION='v2-row-keyed';
 // APP_VERSION: si el browser carga una version distinta a la conocida, limpiamos
 // caches del SW y recargamos. Evita que iOS Safari sirva HTML viejo (bug Violeta
 // 27/05: PWA con codigo v55 procesando cobros con processSyncQueue trabado).
-var APP_VERSION='v62';
+var APP_VERSION='v63';
+// Pintar version real en el badge (no hardcodear el HTML, suele desincronizar).
+try{var __ve=document.getElementById('appVer');if(__ve)__ve.textContent=APP_VERSION;}catch(_){}
 (function(){
   try{
     var lastVer=localStorage.getItem('maleu_ruta_app_ver');
@@ -3062,7 +3064,17 @@ function cobrarDirecto(i){
   // Loader visible INMEDIATO antes de cualquier cosa. Si no aparece, el tap no
   // ejecuto la funcion (problema de cache/JS error).
   try{showLoader('Procesando cobro...');}catch(_){}
-  if(i<0||i>=pendientesCobro.length){hideLoader(true);showToast('Pedido no encontrado');return;}
+  // GUARDIA UNIVERSAL: el loader se cierra a los 25s SIEMPRE, pase lo que pase
+  // dentro de la función. Esto evita "loader tildado" si cualquier código tira
+  // exception, si fetch nunca responde, o si AbortController falla.
+  // Bug Violeta 27/05: errores antes del fetch impedían registrar el hard-timeout.
+  var _guard=setTimeout(function(){
+    try{hideLoader(true);}catch(_){}
+    try{showToast('⏳ El servidor tardó demasiado — probá de nuevo o revisá conexión');}catch(_){}
+  },25000);
+  // Wrap todo en try-catch para que si ALGO falla, igual sale del loader.
+  try{
+  if(i<0||i>=pendientesCobro.length){clearTimeout(_guard);hideLoader(true);showToast('Pedido no encontrado');return;}
   var pc=pendientesCobro[i];
   var fpEl=document.getElementById('cobroFp_'+i);
   var fp=(fpEl&&fpEl.value)||pc.fp||'Efectivo';
@@ -3074,7 +3086,7 @@ function cobrarDirecto(i){
   if(fp==='Mixto'){
     ef=parseInt((document.getElementById('cobroEf_'+i)||{}).value)||0;
     tr=parseInt((document.getElementById('cobroTr_'+i)||{}).value)||0;
-    if(ef+tr===0){hideLoader(true);showToast('Completa los montos Ef y Tr');return;}
+    if(ef+tr===0){clearTimeout(_guard);hideLoader(true);showToast('Completa los montos Ef y Tr');return;}
   } else if(fp==='Efectivo'){ef=baseTotal;} else {tr=baseTotal;}
   showLoader('Cobrando a '+(pc.c||'').split(' ')[0]+' ('+formatMoney(baseTotal)+' '+fp+')...');
 
@@ -3100,7 +3112,7 @@ function cobrarDirecto(i){
 
   if(!isOnline){
     syncQueue.push(payload);saveLocal();
-    hideLoader(true);
+    clearTimeout(_guard);hideLoader(true);
     showToast('Cobrado offline — se sincroniza al volver señal');
     return;
   }
@@ -3128,7 +3140,7 @@ function cobrarDirecto(i){
     .then(function(rs){clearTimeout(_timer);return rs.json().catch(function(){return{ok:false,error:'InvalidJSON'};});})
     .then(function(res){
       if(_settled)return;
-      _settled=true;clearTimeout(_hardTimer);
+      _settled=true;clearTimeout(_hardTimer);clearTimeout(_guard);
       hideLoader(true);
       if(res&&res.ok){
         showToast('✓ Cobrado a '+(pc.c||'').split(' ')[0]+' ('+fp+')');
@@ -3144,7 +3156,7 @@ function cobrarDirecto(i){
     })
     .catch(function(err){
       if(_settled)return;
-      _settled=true;clearTimeout(_timer);clearTimeout(_hardTimer);
+      _settled=true;clearTimeout(_timer);clearTimeout(_hardTimer);clearTimeout(_guard);
       hideLoader(true);
       var aborted=err&&err.name==='AbortError';
       delete cobrados[pc.key];
@@ -3154,6 +3166,13 @@ function cobrarDirecto(i){
       var elB3=document.getElementById('tabCobrosCount');if(elB3)elB3.textContent=pendientesCobro.length||'';
       showToast(aborted?'❌ Timeout: el servidor tardó más de 15s':'❌ Sin respuesta del servidor — '+(err&&err.message||'error'));
     });
+  } catch(_ex_){
+    // Si CUALQUIER cosa antes del fetch tira excepción, igual cerramos el loader.
+    clearTimeout(_guard);
+    hideLoader(true);
+    try{console.error('cobrarDirecto error:', _ex_);}catch(_){}
+    showToast('❌ Error interno: '+(_ex_&&_ex_.message||'desconocido')+' — recargá la página');
+  }
 }
 
 function confirmarCobro(i){
