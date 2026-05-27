@@ -1745,13 +1745,21 @@ function _retryPendingOrders() {
   if (keys.length === 0) return;
   // Si el navegador está offline, no perder tiempo
   if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
+  // Descartar pedidos pendientes > 4 horas (probablemente tests viejos o intentos
+  // de sesiones anteriores que no queremos reprocesar de la nada).
+  var now = Date.now(), maxAge = 4*3600*1000, descartados = 0;
   keys.forEach(function(k) {
     var entry = map[k];
-    if (!entry || !entry.data) return;
-    // Resetear contador de tries para que reciba la ronda completa de delays nuevos
+    if (!entry || !entry.data) { delete map[k]; descartados++; return; }
+    var ts = Number(entry.ts) || 0;
+    if (ts > 0 && (now - ts) > maxAge) {
+      delete map[k]; descartados++;
+      return;
+    }
     entry.tries = 0;
     _sendWithRetry(entry.data);
   });
+  if (descartados > 0) { _pendingSave(map); }
 }
 
 // Reintentos oportunos: recuperar señal, volver a la tienda, o cada 30s mientras esté abierta.
