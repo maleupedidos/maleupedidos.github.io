@@ -804,7 +804,7 @@ var STORAGE_VERSION='v2-row-keyed';
 // APP_VERSION: si el browser carga una version distinta a la conocida, limpiamos
 // caches del SW y recargamos. Evita que iOS Safari sirva HTML viejo (bug Violeta
 // 27/05: PWA con codigo v55 procesando cobros con processSyncQueue trabado).
-var APP_VERSION='v61';
+var APP_VERSION='v62';
 (function(){
   try{
     var lastVer=localStorage.getItem('maleu_ruta_app_ver');
@@ -3107,11 +3107,28 @@ function cobrarDirecto(i){
 
   var _aborter=(typeof AbortController!=='undefined')?new AbortController():null;
   var _timer=setTimeout(function(){if(_aborter)_aborter.abort();},15000);
+  // Hard-timeout redundante: cierra loader sí o sí a los 20s. Evita "loader tildado"
+  // si AbortController falla en algún browser/iframe (bug Violeta 27/05 + 26/05).
+  var _settled=false;
+  var _hardTimer=setTimeout(function(){
+    if(_settled)return;
+    _settled=true;
+    hideLoader(true);
+    delete cobrados[pc.key];
+    if(pcBackup)pendientesCobro.push(pcBackup);
+    saveLocal();
+    if(currentTab==='cobros')renderCobrosFromServer();
+    var elH=document.getElementById('tabCobrosCount');if(elH)elH.textContent=pendientesCobro.length||'';
+    showToast('⏳ Sin respuesta del servidor — probá de nuevo');
+    syncQueue.push(payload);saveLocal();setTimeout(processSyncQueue,2000);
+  },20000);
   var _fopts={method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(payload),redirect:'follow'};
   if(_aborter)_fopts.signal=_aborter.signal;
   fetch(APPS_SCRIPT_URL,_fopts)
     .then(function(rs){clearTimeout(_timer);return rs.json().catch(function(){return{ok:false,error:'InvalidJSON'};});})
     .then(function(res){
+      if(_settled)return;
+      _settled=true;clearTimeout(_hardTimer);
       hideLoader(true);
       if(res&&res.ok){
         showToast('✓ Cobrado a '+(pc.c||'').split(' ')[0]+' ('+fp+')');
@@ -3126,7 +3143,8 @@ function cobrarDirecto(i){
       }
     })
     .catch(function(err){
-      clearTimeout(_timer);
+      if(_settled)return;
+      _settled=true;clearTimeout(_timer);clearTimeout(_hardTimer);
       hideLoader(true);
       var aborted=err&&err.name==='AbortError';
       delete cobrados[pc.key];
@@ -3323,11 +3341,25 @@ function cobrarPendiente(i,ef,tr,fp,recalc){
   showLoader('Cobrando a '+pc.c.split(' ')[0]+' ('+formatMoney(payload.ef+payload.tr)+' '+fp+')...');
   var _aborter=(typeof AbortController!=='undefined')?new AbortController():null;
   var _timer=setTimeout(function(){if(_aborter)_aborter.abort();},15000);
+  // Hard-timeout redundante: cierra loader a los 20s sí o sí (bug Violeta 26/05).
+  var _settled=false;
+  var _hardTimer=setTimeout(function(){
+    if(_settled)return;
+    _settled=true;
+    hideLoader(true);
+    syncQueue.push(payload);
+    if(aFavorPayload)syncQueue.push(aFavorPayload);
+    saveLocal();
+    showToast('⏳ Sin respuesta — se reintenta automáticamente');
+    setTimeout(processSyncQueue,2000);
+  },20000);
   var _fopts={method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(payload),redirect:'follow'};
   if(_aborter)_fopts.signal=_aborter.signal;
   fetch(APPS_SCRIPT_URL,_fopts)
     .then(function(r){clearTimeout(_timer);return r.json().catch(function(){return{ok:false,error:'InvalidJSON'};});})
     .then(function(res){
+      if(_settled)return;
+      _settled=true;clearTimeout(_hardTimer);
       hideLoader(true);
       if(res&&res.ok){
         if(aFavorPayload){
@@ -3344,7 +3376,8 @@ function cobrarPendiente(i,ef,tr,fp,recalc){
       }
     })
     .catch(function(err){
-      clearTimeout(_timer);
+      if(_settled)return;
+      _settled=true;clearTimeout(_timer);clearTimeout(_hardTimer);
       hideLoader(true);
       var aborted=err&&err.name==='AbortError';
       if(aborted){
