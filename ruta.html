@@ -333,6 +333,7 @@ select.np-input{background:var(--white) url("data:image/svg+xml;utf8,<svg xmlns=
 
 <div class="topbar">
   <h1>MALEU RUTA</h1>
+  <span id="appVer" style="font-size:9px;opacity:.5;margin-left:4px">v59</span>
   <span id="lastSync" style="font-size:9px;opacity:.6"></span>
   <div class="status-dot" id="statusDot"></div>
   <span class="badge" id="counterBadge">--</span>
@@ -800,6 +801,29 @@ function isAnyLoaderVisible(){var a=document.getElementById('loaderOverlay'),b=d
 // del N° (e.id), porque el N° se reinicia por semana y colisiona si Tadeo mueve
 // pedidos manualmente entre semanas (caso Fabiana/Iñaki, ambos N°1 en Home).
 var STORAGE_VERSION='v2-row-keyed';
+// APP_VERSION: si el browser carga una version distinta a la conocida, limpiamos
+// caches del SW y recargamos. Evita que iOS Safari sirva HTML viejo (bug Violeta
+// 27/05: PWA con codigo v55 procesando cobros con processSyncQueue trabado).
+var APP_VERSION='v59';
+(function(){
+  try{
+    var lastVer=localStorage.getItem('maleu_ruta_app_ver');
+    if(lastVer && lastVer !== APP_VERSION && 'caches' in window){
+      caches.keys().then(function(keys){
+        return Promise.all(keys.filter(function(k){return k.indexOf('maleu-ruta-')===0;}).map(function(k){return caches.delete(k);}));
+      }).then(function(){
+        localStorage.setItem('maleu_ruta_app_ver',APP_VERSION);
+        if('serviceWorker' in navigator){
+          navigator.serviceWorker.getRegistrations().then(function(regs){
+            return Promise.all(regs.map(function(r){return r.update();}));
+          }).then(function(){location.reload();});
+        } else { location.reload(); }
+      });
+    } else if(!lastVer){
+      localStorage.setItem('maleu_ruta_app_ver',APP_VERSION);
+    }
+  }catch(_){}
+})();
 var entregas=[], entregados={}, cobrados={}, propinas={}, syncQueue=[], armadoDone={}, pendientesCobro=[];
 // pendientesGuardarStock: OCs "Tadeo — Stock" con Estado=Recibido y col Y (Guardado) vacía.
 // Una sola card sintética en RUTA agrupa todas. Se completa cuando Tadeo confirma que
@@ -3211,10 +3235,14 @@ function cobrarPendiente(i,ef,tr,fp,recalc){
     return;
   }
 
-  // Online: fetch directo, esperar respuesta.
+  // Online: fetch directo, esperar respuesta con timeout de 15s.
   showToast('Cobrando a '+pc.c.split(' ')[0]+'...');
-  fetch(APPS_SCRIPT_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(payload),redirect:'follow'})
-    .then(function(r){return r.json().catch(function(){return{ok:false,error:'InvalidJSON'};});})
+  var _aborter=(typeof AbortController!=='undefined')?new AbortController():null;
+  var _timer=setTimeout(function(){if(_aborter)_aborter.abort();},15000);
+  var _fopts={method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(payload),redirect:'follow'};
+  if(_aborter)_fopts.signal=_aborter.signal;
+  fetch(APPS_SCRIPT_URL,_fopts)
+    .then(function(r){clearTimeout(_timer);return r.json().catch(function(){return{ok:false,error:'InvalidJSON'};});})
     .then(function(res){
       if(res&&res.ok){
         if(aFavorPayload){
@@ -3232,12 +3260,24 @@ function cobrarPendiente(i,ef,tr,fp,recalc){
       }
     })
     .catch(function(err){
-      // Network fail: NO revertir UI (probablemente llegó al backend). Encolar para reintento.
-      syncQueue.push(payload);
-      if(aFavorPayload)syncQueue.push(aFavorPayload);
-      saveLocal();
-      showToast('⏳ Sin respuesta del servidor — se reintenta automaticamente');
-      setTimeout(processSyncQueue,2000);
+      clearTimeout(_timer);
+      var aborted=err&&err.name==='AbortError';
+      if(aborted){
+        // Timeout: revertir UI y encolar — el cobro NO llego o tardo demasiado.
+        _revertirCobroUI();
+        syncQueue.push(payload);
+        if(aFavorPayload)syncQueue.push(aFavorPayload);
+        saveLocal();
+        showToast('❌ Timeout: el servidor no respondio en 15s — probá de nuevo');
+        setTimeout(processSyncQueue,2000);
+      } else {
+        // Network fail: probable que llego al backend. Mantener UI optimista, encolar.
+        syncQueue.push(payload);
+        if(aFavorPayload)syncQueue.push(aFavorPayload);
+        saveLocal();
+        showToast('⏳ Sin respuesta del servidor — se reintenta automaticamente');
+        setTimeout(processSyncQueue,2000);
+      }
     });
 }
 
