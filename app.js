@@ -53,10 +53,15 @@ const PRODUCTOS_CLUBES = [
   { id:'pp1', cat:"Pizzas Clásicas", nombre:"Pack Muzarella x2",          desc:"Dos pizzas de muzzarella. Cena resuelta para todo el equipo.",              precio:11000, img:"pack-muzarella-cocida.jpg", emoji:"🍕", top:true, chips:["2 pizzas grandes","Al horno en 12 min"] },
   { id:'pp2', cat:"Pizzas Clásicas", nombre:"Pack Jamón y Queso x2",      desc:"Dos pizzas de jamón y queso. El clásico del tercer tiempo.",               precio:11000, img:"pack-jamon-queso-cocida.jpg", emoji:"🍕", chips:["2 pizzas grandes","Al horno en 12 min"] },
   { id:'pp3', cat:"Pizzas Clásicas", nombre:"Pack Cebolla y Queso x2",    desc:"Dos pizzas con cebolla caramelizada. Siempre piden más.",                  precio:11000, img:"pack-cebolla-queso-cocida.jpg", emoji:"🍕", chips:["2 pizzas grandes","Al horno en 12 min"] },
+  { id:'ecac', cat:"Empanadas", nombre:"Empanadas Carne a Cuchillo x8", desc:"Carne cortada a cuchillo, jugosa y bien condimentada. Las que piden todos.", precio:18400, img:"empanadas-carne-new.jpg", emoji:"🥟", chips:["8 empanadas","Al horno hasta dorar"] },
+  { id:'ejyq', cat:"Empanadas", nombre:"Empanadas Jamón y Queso x8",    desc:"Cremosas por dentro, doraditas por fuera. Para cualquier momento.",          precio:16000, img:"empanadas-jamon-new.png", emoji:"🥟", chips:["8 empanadas","Al horno hasta dorar"] },
+  { id:'ecyq', cat:"Empanadas", nombre:"Empanadas Cebolla y Queso Azul x8", desc:"Cebolla caramelizada con queso azul. Intensas y cremosas.",              precio:16000, img:"empanadas-cebolla-new.jpg", emoji:"🥟", chips:["8 empanadas","Al horno hasta dorar"] },
+  { id:'evc',  cat:"Empanadas", nombre:"Empanadas Verdura x8",          desc:"Relleno de verdura fresca y queso. Livianas y riquísimas.",                  precio:16000, img:"empanadas-verdura-new.png", emoji:"🥟", chips:["8 empanadas","Al horno hasta dorar"] },
 ];
 const CATEGORIAS_CLUBES = [
   { nombre:"Pizzas Premium",  icono:"🍕", nota:"Individuales · Pre-cocidas · Al horno directo desde el freezer" },
   { nombre:"Pizzas Clásicas", icono:"🍕", nota:"Pack de 2 unidades · Ideal para compartir en equipo" },
+  { nombre:"Empanadas",       icono:"🥟", nota:"x8 unidades · Congeladas, listas para el horno · Cocinar hasta dorar" },
 ];
 // Los productos de clubes se agregan a PROD_MAP después de su declaración (ver más abajo)
 
@@ -346,6 +351,7 @@ const PROD_ABBR = {
   // Clubes (IDs string)
   'pmu':'PMu', 'pma':'PMa', 'pjq':'PJyQ', 'pcc':'PCC', 'pjm':'PJyM',
   'pp1':'PPM', 'pp2':'PPJyQ', 'pp3':'PPCyQ',
+  'ecac':'ECaC', 'ejyq':'EJyQ', 'ecyq':'ECyQ', 'evc':'EV',
 };
 
 /* ── HELPERS ── */
