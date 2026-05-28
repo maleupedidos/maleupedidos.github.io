@@ -109,6 +109,11 @@ body.embed .tabs{top:0}
 .armado-day-header.collapsed .arrow{transform:rotate(-90deg)}
 .armado-day-header.other-day{color:var(--muted);opacity:.75}
 .armado-day-header.other-day .day-count{background:#bbb}
+/* Atrasado: pedido cuyo día de entrega pasó y sigue sin entregar. Alerta roja. */
+.armado-day-header.atrasado{color:#B71C1C;background:#FFEBEE;border-color:#C62828;opacity:1}
+.armado-day-header.atrasado .day-count{background:#C62828}
+.armado-day-header.atrasado .day-pill-atrasado{font-size:10px;font-weight:800;background:#C62828;color:#fff;padding:3px 8px;border-radius:50px;letter-spacing:.04em;flex-shrink:0;animation:atrasadoPulse 1.6s ease-in-out infinite}
+@keyframes atrasadoPulse{0%,100%{opacity:1}50%{opacity:.55}}
 .armado-day-content{margin:8px 0 14px;padding:0 4px}
 .armado-day-content.collapsed{display:none}
 
@@ -804,7 +809,7 @@ var STORAGE_VERSION='v2-row-keyed';
 // APP_VERSION: si el browser carga una version distinta a la conocida, limpiamos
 // caches del SW y recargamos. Evita que iOS Safari sirva HTML viejo (bug Violeta
 // 27/05: PWA con codigo v55 procesando cobros con processSyncQueue trabado).
-var APP_VERSION='v65';
+var APP_VERSION='v66';
 // Pintar version real en el badge (no hardcodear el HTML, suele desincronizar).
 try{var __ve=document.getElementById('appVer');if(__ve)__ve.textContent=APP_VERSION;}catch(_){}
 (function(){
@@ -1101,12 +1106,21 @@ function getPendientes(){return entregas.filter(function(e){return!isEntregado(e
 function esHoy(e){var hi=getHoyISO();if(e.fe)return e.fe===hi;return e.de===getDiaHoy()}
 function getHoyPendientes(){return getPendientes().filter(esHoy)}
 function getOtrosDias(){
-  // Solo dias futuros (los pasados no se muestran en Armado, ya pasaron).
+  // Solo dias futuros. Los pasados van a getAtrasados() (bloque de alerta aparte).
   var hoyISO=getHoyISO();
   return getPendientes().filter(function(e){
     if(esHoy(e))return false;
-    if(e.fe && e.fe<hoyISO)return false; // fecha anterior a hoy = pasado
+    if(e.fe && e.fe<hoyISO)return false; // fecha anterior a hoy = atrasado, va a su bloque
     return true;
+  });
+}
+// Pedidos cuya fecha de entrega elegida ya PASÓ y siguen sin entregar (Pendiente/Reservado).
+// Caso real (Rodrigo/Sandra/Gonzalo 27/05): Tadeo se olvidó de marcarlos el día de entrega.
+// Aparecen en Armado en un bloque rojo de alerta para que no se pierdan.
+function getAtrasados(){
+  var hoyISO=getHoyISO();
+  return getPendientes().filter(function(e){
+    return e.fe && e.fe<hoyISO; // fecha de entrega anterior a hoy + no entregado/cancelado
   });
 }
 function sortByZona(list){
@@ -1326,13 +1340,17 @@ function _esArmadoDep(e){
 
 function renderArmado(){
   document.getElementById('armadoView').classList.remove('hidden');document.getElementById('rutaView').classList.add('hidden');document.getElementById('cobrosView').classList.add('hidden');document.getElementById('nuevoView').classList.add('hidden');
-  var hoy=getDiaHoy(),pedH=sortByZona(getHoyPendientes()),pedO=sortByZona(getOtrosDias());
+  var hoy=getDiaHoy(),pedAtr=sortByZona(getAtrasados()),pedH=sortByZona(getHoyPendientes()),pedO=sortByZona(getOtrosDias());
 
   var pedHTadeo=pedH.filter(function(e){return e.h!=='Red'});
   var armadosHoy=0;pedHTadeo.forEach(function(e){if(armadoDone[eKey(e)])armadosHoy++});
   var faltanHoy=pedHTadeo.length-armadosHoy;
   var pedRedHoy=pedH.filter(function(e){return e.h==='Red'});
-  var summaryHtml='<strong>'+faltanHoy+' por armar</strong> de '+pedHTadeo.length+' pedidos hoy';
+  var summaryHtml='';
+  if(pedAtr.length>0){
+    summaryHtml+='<span style="color:#C62828;font-weight:800">⚠️ '+pedAtr.length+' atrasado'+(pedAtr.length>1?'s':'')+'</span> &middot; ';
+  }
+  summaryHtml+='<strong>'+faltanHoy+' por armar</strong> de '+pedHTadeo.length+' pedidos hoy';
   if(pedRedHoy.length>0){
     var vendsHoy={};pedRedHoy.forEach(function(e){var v=e.retira||'Vendedor';vendsHoy[v]=true;});
     var nVends=Object.keys(vendsHoy).length;
@@ -1342,6 +1360,12 @@ function renderArmado(){
   document.getElementById('armadoSummary').innerHTML=summaryHtml;
 
   var html='';
+
+  // ATRASADOS primero (bloque rojo de alerta). Agrupados por su fecha original, más viejo arriba.
+  if(pedAtr.length>0){
+    var pa={};pedAtr.forEach(function(e){var k=entregaKey(e);if(!pa[k])pa[k]=[];pa[k].push(e)});
+    Object.keys(pa).sort().forEach(function(k){html+=renderArmadoGroup(pa[k],labelFecha(k)||k,true,k,false,true)});
+  }
 
   if(pedH.length>0){html+=renderArmadoGroup(pedH,labelFecha(getHoyISO()),false,getHoyISO(),true)}
   // OTROS DIAS (agrupados por fecha exacta, ordenados)
@@ -1544,7 +1568,7 @@ function _renderArmadoBarrios(lista){
   return html;
 }
 
-function renderArmadoGroup(pedidos,titulo,isOther,dayKey,esHoy){
+function renderArmadoGroup(pedidos,titulo,isOther,dayKey,esHoy,esAtrasado){
   var html='';
   if(pedidos.length===0) return html;
 
@@ -1571,12 +1595,14 @@ function renderArmadoGroup(pedidos,titulo,isOther,dayKey,esHoy){
     : pedidos.length+' del proveedor';
 
   var dKey='dia:'+dayKey;
-  var dayCollapsed=_isCollapsed(dKey,!!isOther); // hoy abierto, otros dias cerrados
+  // Atrasados y Hoy arrancan ABIERTOS (urgente). Otros días, cerrados.
+  var dayCollapsed=_isCollapsed(dKey, esAtrasado?false:!!isOther);
 
   if(titulo){
     var pillHoy=esHoy?'<span class="day-pill-hoy">HOY</span>':'';
-    html+='<div class="armado-day-header'+(isOther?' other-day':'')+(dayCollapsed?' collapsed':'')+'" data-collapse-key="'+dKey+'" onclick="toggleCollapse(\''+dKey+'\')">'
-      +'<span class="day-title"><span>'+titulo+'</span>'+pillHoy+'</span>'
+    var pillAtr=esAtrasado?'<span class="day-pill-atrasado">⚠️ NO ENTREGADO</span>':'';
+    html+='<div class="armado-day-header'+(isOther?' other-day':'')+(esAtrasado?' atrasado':'')+(dayCollapsed?' collapsed':'')+'" data-collapse-key="'+dKey+'" onclick="toggleCollapse(\''+dKey+'\')">'
+      +'<span class="day-title"><span>'+titulo+'</span>'+pillHoy+pillAtr+'</span>'
       +'<span class="day-count">'+contLbl+'</span>'
       +'<span class="arrow">▼</span>'
       +'</div>';
