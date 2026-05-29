@@ -239,6 +239,18 @@ body.embed .tabs{top:0}
 
 /* ── PENDIENTES COBRO ── */
 .cobro-section{padding:12px 14px;border-top:2px solid var(--orange)}
+/* Chips de filtro arriba de Cobros (Todos / Hoy / Directa / Red / Clubes) */
+.cobros-chips{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;padding:8px 0;position:sticky;top:0;background:var(--beige);z-index:5}
+.cobros-chip{padding:7px 12px;border:1.5px solid var(--border);background:#fff;border-radius:50px;font-family:inherit;font-size:12px;font-weight:700;color:var(--brown);cursor:pointer;-webkit-tap-highlight-color:transparent;transition:.12s;white-space:nowrap}
+.cobros-chip:active{transform:scale(.96)}
+.cobros-chip.on{background:var(--orange);color:#fff;border-color:var(--orange)}
+/* Header de DÍA (grande, naranja). Sticky para que se vea al scrollear el día. */
+.cobro-dia-header{font-size:14px;font-weight:800;color:#fff;background:linear-gradient(135deg,var(--orange) 0%,#E65100 100%);margin:16px 0 8px;padding:12px 14px;border-radius:10px;display:flex;justify-content:space-between;align-items:baseline;gap:8px;box-shadow:0 2px 6px rgba(230,81,0,.15)}
+/* Header de CANAL adentro de un día (más chico, color del canal). */
+.cobro-canal-header{font-size:12px;font-weight:800;padding:8px 12px;border-radius:8px;margin:8px 0 6px;display:flex;justify-content:space-between;align-items:baseline;gap:8px;letter-spacing:.03em}
+.cobro-canal-header.vd{background:#FFF3E0;color:#5D4037;border-left:3px solid var(--orange)}
+.cobro-canal-header.cl{background:#E8F5E9;color:#2E7D32;border-left:3px solid #2E7D32}
+.cobro-canal-header.re{background:#FFEBEE;color:#C62828;border-left:3px solid #C62828}
 .cobro-title{font-size:14px;font-weight:800;color:var(--orange);margin-bottom:10px}
 .cobro-card{background:var(--white);border-radius:14px;padding:14px 14px;margin-bottom:10px;border:2px solid #fff3e0;display:flex;flex-direction:column;gap:10px}
 .cobro-card-head{display:flex;justify-content:space-between;align-items:flex-start;gap:10px}
@@ -2217,34 +2229,115 @@ function abrirCobroPendiente(idx){
   if(pc.t)_fetchSaldoPrevioModal(pc.t);
 }
 
+// Filtro activo de la tab Cobros (chips). 'todos' | 'hoy' | 'vd' | 're' | 'cl'
+var cobrosFiltro='todos';
+// Canal de un cobro: 're'=Red(vendedor), 'cl'=Clubes, 'vd'=Venta Directa (Home/Pilar)
+function _canalDeCobro(pc){
+  if(pc.isVendedor)return 're';
+  if(pc.h==='Clubes')return 'cl';
+  return 'vd';
+}
+function _canalCobroLabel(c){
+  return c==='re'?'🔴 Red':(c==='cl'?'⚽ Clubes':'🏠 Venta Directa');
+}
+function _cobroPasaFiltro(pc){
+  if(cobrosFiltro==='todos')return true;
+  if(cobrosFiltro==='hoy'){
+    var hoyTs=parseFecha((function(){var d=new Date();return String(d.getDate()).padStart(2,'0')+'/'+String(d.getMonth()+1).padStart(2,'0')+'/'+d.getFullYear();})());
+    var ts=parseFecha(pc.fe||pc.fePed||'');
+    return ts===hoyTs;
+  }
+  return _canalDeCobro(pc)===cobrosFiltro;
+}
+function setCobrosFiltro(f){
+  cobrosFiltro=f;
+  document.querySelectorAll('.cobros-chip').forEach(function(b){b.classList.toggle('on',b.getAttribute('data-cf')===f);});
+  var el=document.getElementById('cobrosContent');if(el)el.__sig=null; // forzar re-render
+  renderCobrosFromServer();
+}
+
+// HTML de la card de un pedido individual (Venta Directa / Clubes). globalIdx = índice en pendientesCobro.
+function _cobroCardHTML(pc, globalIdx){
+  var tel=pc.t?(pc.t.replace(/[^0-9]/g,'')):null;if(tel&&tel.length<12)tel='54'+tel;
+  var aliasMsg=encodeURIComponent('Hola! Cuando puedas mandanos el comprobante. El alias es maleump. Gracias!');
+  var estColor=pc.es==='Entregado'?'#3d8b3d':(pc.es==='Reservado'?'#1976d2':'#E65100');
+  var estBadge=pc.es?'<span style="font-size:9px;background:'+estColor+';color:#fff;padding:2px 6px;border-radius:50px;font-weight:700;margin-left:4px">'+pc.es+'</span>':'';
+  var canRecalc=(pc.h==='Home'||pc.h==='Pilar')&&(Number(pc.sub)||0)>0;
+  var c='<div class="cobro-card" data-sub="'+(pc.sub||0)+'" data-env="'+(pc.env||0)+'" data-desc="'+(pc.desc||0)+'" data-recalc="'+(canRecalc?'1':'0')+'" data-orig="'+pc.$+'">';
+  c+='<div class="cobro-card-head"><span class="cobro-card-name">'+pc.c+' <span style="font-size:11px;color:var(--muted);font-weight:600">('+pc.h+' #'+pc.id+')</span>'+estBadge+'</span>';
+  c+='<span style="text-align:right"><span class="cobro-card-total" id="cobroTotal_'+globalIdx+'">'+formatMoney(pc.$)+'</span><span class="cobro-card-total-prev" id="cobroTotalPrev_'+globalIdx+'" style="display:none"></span></span></div>';
+  if(pc.cobradoParcial && pc.cobradoParcial>0){
+    c+='<div style="background:#FFF8E1;border-left:3px solid #F9A825;padding:8px 10px;border-radius:6px;font-size:12px">';
+    c+='<div style="font-weight:700;color:#5D4037">Total facturado: '+formatMoney(pc.totalOriginal||0)+'</div>';
+    c+='<div style="color:#33691E;font-weight:700;margin-top:2px">Ya cobrado: '+formatMoney(pc.cobradoParcial)+'</div>';
+    if(pc.parciales && pc.parciales.length){
+      var detP=pc.parciales.map(function(x){return x.fecha+' · '+x.fp+' '+formatMoney(x.monto)}).join('<br>');
+      c+='<div style="font-size:11px;color:var(--muted);margin-top:4px;line-height:1.4">'+detP+'</div>';
+    }
+    c+='<div style="font-weight:800;color:#C62828;margin-top:4px">Saldo: '+formatMoney(pc.$)+'</div>';
+    c+='</div>';
+  }
+  c+='<div class="cobro-card-actions">';
+  if(tel){c+='<a href="https://wa.me/'+tel+'?text='+aliasMsg+'" target="_blank" rel="noopener" class="cobro-btn-alias">Comprobante</a>'}
+  c+='<button type="button" class="cobro-btn-cobrado" style="flex:1" onclick="abrirCobroPendiente('+globalIdx+')">Cobrado</button></div></div>';
+  return c;
+}
+// HTML de la card de un vendedor Red (cobra todos sus pedidos de una).
+function _cobroVendedorHTML(pc){
+  var c='<div class="cobro-card" style="border-color:#c62828">';
+  c+='<div class="cobro-card-head"><span class="cobro-card-name">'+pc.c+'</span><span class="cobro-card-total">'+formatMoney(pc.$)+'</span></div>';
+  c+='<div style="font-size:11px;color:var(--muted);padding:4px 0">'+pc.pedidosIds.length+' pedidos &middot; Bruto '+formatMoney(pc.totalBruto)+' &middot; Comision '+(pc.comisionPct||17)+'% -'+formatMoney(pc.comision)+'</div>';
+  c+='<div class="cobro-card-actions"><button type="button" class="cobro-btn-cobrado" style="flex:1" onclick="confirmarCobroVendedor(\''+pc.c.replace(/\'/g,'')+'\','+pc.$+')">Cobrado ('+pc.pedidosIds.length+' pedidos)</button></div></div>';
+  return c;
+}
+// Banner "COBRAR JUNTOS" para un cliente con 2+ pedidos en el mismo día.
+function _cobroComboBanner(pc, combo){
+  var totalCombo=combo.items.reduce(function(s,p){return s+(Number(p.$)||0);},0);
+  var idxsCsv=combo.idxs.join(',');
+  return '<div style="background:linear-gradient(135deg,#FFF8E1 0%,#FFE082 100%);border:2px solid #F9A825;border-radius:12px;padding:12px 14px;margin-bottom:8px">'
+    +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">'
+    +'<div><div style="font-weight:800;color:#5D4037;font-size:14px">🔗 '+pc.c+'</div><div style="font-size:11px;color:#5D4037;margin-top:2px">'+combo.items.length+' pedidos del mismo dia · Total <b>'+formatMoney(totalCombo)+'</b></div></div>'
+    +'</div>'
+    +'<button type="button" onclick="abrirCobroComboCobros(\''+idxsCsv+'\')" style="width:100%;padding:11px;background:#F9A825;color:#fff;border:none;border-radius:8px;font-family:inherit;font-size:13px;font-weight:800;cursor:pointer;letter-spacing:.02em">💰 COBRAR JUNTOS '+formatMoney(totalCombo)+'</button>'
+    +'<div style="font-size:10px;color:#5D4037;margin-top:6px;text-align:center;opacity:.8">o cobrá uno por uno abajo ↓</div>'
+    +'</div>';
+}
+
 function renderCobrosFromServer(){
   var el=document.getElementById('cobrosContent');
-  // Guard 1: si hay un select/input de cobros con foco (ej. picker iOS abierto),
-  // NO re-renderizar — innerHTML=... cierra el picker nativo de golpe.
-  // Diferimos el re-render hasta que el usuario salga del control.
+  // Guard 1: si hay un input/select de cobros con foco, NO re-renderizar (cierra el picker iOS).
   var active=document.activeElement;
   if(active&&el.contains(active)&&(active.tagName==='SELECT'||active.tagName==='INPUT')){
-    el.__pending=true;
-    return;
+    el.__pending=true;return;
   }
-  // Guard 2: dedupe. Si el payload no cambió respecto del último render,
-  // no reemplazar el DOM (evita parpadeos y pierde valores tipeados).
-  var sig=JSON.stringify(pendientesCobro.map(function(pc){
+  // Guard 2: dedupe — incluye el filtro activo para re-renderizar al cambiar chip.
+  var sig=JSON.stringify([cobrosFiltro,pendientesCobro.map(function(pc){
     return [pc.h,pc.id,pc.r,pc.$,pc.fp,pc.es,pc.sub||0,pc.env||0,pc.desc||0,pc.isVendedor?1:0];
-  }));
+  })]);
   if(el.__sig===sig&&!el.__pending)return;
   el.__sig=sig;el.__pending=false;
-  if(pendientesCobro.length===0){
-    el.innerHTML='<div class="empty" style="padding:40px">Sin pendientes de cobro</div>';return;
-  }
-  var total=0;pendientesCobro.forEach(function(pc){total+=pc.$});
-  var h='<div style="font-size:13px;font-weight:800;margin-bottom:10px">'+pendientesCobro.length+' pendiente(s) — Total: '+formatMoney(total)+'</div>';
 
-  // Agrupar por Día de Entrega Elegido (pc.fe ahora viene del backend con la
-  // fecha de col J/M, no la fecha del pedido). Fallback a fePed para pedidos
-  // viejos sin fecha de entrega. Orden ascendente = más urgente primero.
+  // ── Chips de filtro (siempre visibles arriba) ──
+  function _chip(f,txt){return '<button type="button" class="cobros-chip'+(cobrosFiltro===f?' on':'')+'" data-cf="'+f+'" onclick="setCobrosFiltro(\''+f+'\')">'+txt+'</button>';}
+  var chips='<div class="cobros-chips">'+_chip('todos','Todos')+_chip('hoy','Hoy')+_chip('vd','🏠 Directa')+_chip('re','🔴 Red')+_chip('cl','⚽ Clubes')+'</div>';
+
+  if(pendientesCobro.length===0){
+    el.innerHTML=chips+'<div class="empty" style="padding:40px">Sin pendientes de cobro</div>';return;
+  }
+
+  // Aplicar filtro
+  var visibles=pendientesCobro.filter(_cobroPasaFiltro);
+  var total=0;visibles.forEach(function(pc){total+=pc.$});
+  var h=chips;
+  h+='<div style="font-size:13px;font-weight:800;margin-bottom:10px">'+visibles.length+' pendiente(s) — Total: '+formatMoney(total)+'</div>';
+
+  if(visibles.length===0){
+    el.innerHTML=h+'<div class="empty" style="padding:30px">Nada en este filtro</div>';return;
+  }
+
+  // Agrupar por día (fe = fecha de entrega; fallback fePed). Más urgente arriba.
   var grupos={};
-  pendientesCobro.forEach(function(pc){
+  visibles.forEach(function(pc){
     var k=pc.fe||pc.fePed||'Sin fecha';
     if(!grupos[k])grupos[k]={ts:parseFecha(k),dia:pc.de||'',items:[],esEntrega:!!pc.feEnt};
     grupos[k].items.push(pc);
@@ -2255,76 +2348,43 @@ function renderCobrosFromServer(){
     var g=grupos[k];
     var subtotal=0;g.items.forEach(function(i){subtotal+=i.$});
     var tituloPrefix=g.esEntrega?'Entrega: ':'Pedido: ';
-    h+='<div style="font-size:13px;font-weight:800;color:var(--orange);margin:14px 0 8px;display:flex;justify-content:space-between;align-items:baseline;gap:8px"><span>'+tituloPrefix+(g.dia?g.dia+' ':'')+k+'</span><span>'+formatMoney(subtotal)+'</span></div>';
-    h+='<div class="cobro-section" style="border:none;padding:0">';
-    // Sub-agrupar por cliente: detectar clientes con 2+ pedidos en este día.
-    // Para clientes con 2+ mostramos un BANNER arriba con boton "COBRAR JUNTOS"
-    // y las cards individuales siguen abajo por si Tadeo quiere cobrar de a uno.
-    var porCliente={};
-    g.items.forEach(function(pc){
-      if(pc.isVendedor)return;
-      var ck=_claveCombo(pc);
-      if(!porCliente[ck])porCliente[ck]={items:[],idxs:[]};
-      porCliente[ck].items.push(pc);
-      porCliente[ck].idxs.push(pendientesCobro.indexOf(pc));
+    // Header DÍA (grande)
+    h+='<div class="cobro-dia-header"><span>📅 '+tituloPrefix+(g.dia?g.dia+' ':'')+k+'</span><span>'+formatMoney(subtotal)+'</span></div>';
+
+    // Dentro del día, agrupar por CANAL: vd, cl, re
+    var porCanal={vd:[],cl:[],re:[]};
+    g.items.forEach(function(pc){porCanal[_canalDeCobro(pc)].push(pc);});
+
+    ['vd','cl','re'].forEach(function(canal){
+      var lista=porCanal[canal];
+      if(lista.length===0)return;
+      var totCanal=lista.reduce(function(s,p){return s+(Number(p.$)||0);},0);
+      h+='<div class="cobro-canal-header '+canal+'"><span>'+_canalCobroLabel(canal)+'</span><span>'+formatMoney(totCanal)+'</span></div>';
+      h+='<div class="cobro-section" style="border:none;padding:0">';
+
+      if(canal==='re'){
+        lista.forEach(function(pc){h+=_cobroVendedorHTML(pc);});
+      } else {
+        // VD/Clubes: detectar combos (cliente con 2+ pedidos en el día)
+        var porCliente={};
+        lista.forEach(function(pc){
+          var ck=_claveCombo(pc);
+          if(!porCliente[ck])porCliente[ck]={items:[],idxs:[]};
+          porCliente[ck].items.push(pc);
+          porCliente[ck].idxs.push(pendientesCobro.indexOf(pc));
+        });
+        var baneados={};
+        lista.forEach(function(pc){
+          var ck=_claveCombo(pc);
+          if(!baneados[ck] && porCliente[ck].items.length>=2){
+            baneados[ck]=true;
+            h+=_cobroComboBanner(pc, porCliente[ck]);
+          }
+          h+=_cobroCardHTML(pc, pendientesCobro.indexOf(pc));
+        });
+      }
+      h+='</div>';
     });
-    var clientesYaBaneados={};
-    g.items.forEach(function(pc){
-      var globalIdx=pendientesCobro.indexOf(pc);
-      // Si es el primer pedido de un cliente con 2+, mostrar banner combo
-      if(!pc.isVendedor){
-        var ck=_claveCombo(pc);
-        if(!clientesYaBaneados[ck] && porCliente[ck].items.length>=2){
-          clientesYaBaneados[ck]=true;
-          var totalCombo=porCliente[ck].items.reduce(function(s,p){return s+(Number(p.$)||0);},0);
-          var nPed=porCliente[ck].items.length;
-          var idxsCsv=porCliente[ck].idxs.join(',');
-          h+='<div style="background:linear-gradient(135deg,#FFF8E1 0%,#FFE082 100%);border:2px solid #F9A825;border-radius:12px;padding:12px 14px;margin-bottom:8px">'
-            +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">'
-            +'<div><div style="font-weight:800;color:#5D4037;font-size:14px">🔗 '+pc.c+'</div><div style="font-size:11px;color:#5D4037;margin-top:2px">'+nPed+' pedidos del mismo dia · Total <b>'+formatMoney(totalCombo)+'</b></div></div>'
-            +'</div>'
-            +'<button type="button" onclick="abrirCobroComboCobros(\''+idxsCsv+'\')" style="width:100%;padding:11px;background:#F9A825;color:#fff;border:none;border-radius:8px;font-family:inherit;font-size:13px;font-weight:800;cursor:pointer;letter-spacing:.02em">💰 COBRAR JUNTOS '+formatMoney(totalCombo)+'</button>'
-            +'<div style="font-size:10px;color:#5D4037;margin-top:6px;text-align:center;opacity:.8">o cobrá uno por uno abajo ↓</div>'
-            +'</div>';
-        }
-      }
-      // VENDEDOR RED: card especial con comision 17% visible, cobra todos de una vez
-      if(pc.isVendedor){
-        h+='<div class="cobro-card" style="border-color:#c62828">';
-        h+='<div class="cobro-card-head"><span class="cobro-card-name">'+pc.c+'</span><span class="cobro-card-total">'+formatMoney(pc.$)+'</span></div>';
-        h+='<div style="font-size:11px;color:var(--muted);padding:4px 0">'+pc.pedidosIds.length+' pedidos &middot; Bruto '+formatMoney(pc.totalBruto)+' &middot; Comision '+(pc.comisionPct||17)+'% -'+formatMoney(pc.comision)+'</div>';
-        h+='<div class="cobro-card-actions"><button type="button" class="cobro-btn-cobrado" style="flex:1" onclick="confirmarCobroVendedor(\''+pc.c.replace(/\'/g,'')+'\','+pc.$+')">Cobrado ('+pc.pedidosIds.length+' pedidos)</button></div></div>';
-        return;
-      }
-      var tel=pc.t?(pc.t.replace(/[^0-9]/g,'')):null;if(tel&&tel.length<12)tel='54'+tel;
-      var aliasMsg=encodeURIComponent('Hola! Cuando puedas mandanos el comprobante. El alias es maleump. Gracias!');
-      var fpDefault=pc.fp||'Efectivo';
-      var estColor=pc.es==='Entregado'?'#3d8b3d':(pc.es==='Reservado'?'#1976d2':'#E65100');
-      var estBadge=pc.es?'<span style="font-size:9px;background:'+estColor+';color:#fff;padding:2px 6px;border-radius:50px;font-weight:700;margin-left:4px">'+pc.es+'</span>':'';
-      // Canal con descuento recalculable (Home/Pilar). Clubes no recalcula.
-      var canRecalc=(pc.h==='Home'||pc.h==='Pilar')&&(Number(pc.sub)||0)>0;
-      h+='<div class="cobro-card" data-sub="'+(pc.sub||0)+'" data-env="'+(pc.env||0)+'" data-desc="'+(pc.desc||0)+'" data-recalc="'+(canRecalc?'1':'0')+'" data-orig="'+pc.$+'">';
-      h+='<div class="cobro-card-head"><span class="cobro-card-name">'+pc.c+' <span style="font-size:11px;color:var(--muted);font-weight:600">('+pc.h+' #'+pc.id+')</span>'+estBadge+'</span>';
-      h+='<span style="text-align:right"><span class="cobro-card-total" id="cobroTotal_'+globalIdx+'">'+formatMoney(pc.$)+'</span><span class="cobro-card-total-prev" id="cobroTotalPrev_'+globalIdx+'" style="display:none"></span></span></div>';
-      // Bloque de cobros parciales ya registrados
-      if(pc.cobradoParcial && pc.cobradoParcial>0){
-        h+='<div style="background:#FFF8E1;border-left:3px solid #F9A825;padding:8px 10px;border-radius:6px;font-size:12px">';
-        h+='<div style="font-weight:700;color:#5D4037">Total facturado: '+formatMoney(pc.totalOriginal||0)+'</div>';
-        h+='<div style="color:#33691E;font-weight:700;margin-top:2px">Ya cobrado: '+formatMoney(pc.cobradoParcial)+'</div>';
-        if(pc.parciales && pc.parciales.length){
-          var detP=pc.parciales.map(function(x){return x.fecha+' · '+x.fp+' '+formatMoney(x.monto)}).join('<br>');
-          h+='<div style="font-size:11px;color:var(--muted);margin-top:4px;line-height:1.4">'+detP+'</div>';
-        }
-        h+='<div style="font-weight:800;color:#C62828;margin-top:4px">Saldo: '+formatMoney(pc.$)+'</div>';
-        h+='</div>';
-      }
-      // Acciones: el botón Cobrado abre el modal de cobro unificado (idéntico a RUTA),
-      // que maneja FP, propina, mixto, a-favor, aplicar saldo previo y pago parcial.
-      h+='<div class="cobro-card-actions">';
-      if(tel){h+='<a href="https://wa.me/'+tel+'?text='+aliasMsg+'" target="_blank" rel="noopener" class="cobro-btn-alias">Comprobante</a>'}
-      h+='<button type="button" class="cobro-btn-cobrado" style="flex:1" onclick="abrirCobroPendiente('+globalIdx+')">Cobrado</button></div></div>';
-    });
-    h+='</div>';
   });
   el.innerHTML=h;
 }
