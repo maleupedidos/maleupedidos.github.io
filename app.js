@@ -1803,7 +1803,11 @@ function renderCatNav() {
   const nav = $id('cat-nav');
   if (!nav) return;
   const cats = getActiveCategories();
-  nav.innerHTML = '<div class="cat-nav-wrap" id="cat-nav-wrap"><div class="cat-nav-inner" id="cat-nav-inner">' +
+  nav.innerHTML =
+    '<button class="cat-nav-home" type="button" aria-label="Volver al inicio" onclick="window.scrollTo({top:0,behavior:\'smooth\'})">' +
+      '<img src="img/logo-icono.png" alt="Maleu">' +
+    '</button>' +
+    '<div class="cat-nav-wrap" id="cat-nav-wrap"><div class="cat-nav-inner" id="cat-nav-inner">' +
     cats.map((cat,i) => {
       const slug = slugify(cat.nombre);
       return '<button class="cat-nav-btn' + (i===0?' active':'') + '" data-slug="' + slug + '" onclick="scrollToCat(\'' + slug + '\')">' +
