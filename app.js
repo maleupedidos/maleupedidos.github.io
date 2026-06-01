@@ -1612,33 +1612,70 @@ function enviarPedido() {
   // ID único para idempotencia: si el cliente reintenta por mala señal y el POST
   // anterior ya había llegado al server, el backend lo descarta (CacheService 6h).
   postData.clientOrderId = 'co_' + Date.now() + '_' + Math.random().toString(36).slice(2,10);
-  _sendWithRetry(postData);
   _track('purchase', { value: total, zone: currentZone, items: cartCount(), discount: discount, payment: pagoEl.value, vendedor: vendedorMatch ? vendedorMatch.nombre : '' });
 
-  // Confirmación visual rápida → WhatsApp (al vendedor si aplica, sino a Maleu)
+  // Esperar confirmación del server ANTES de redirigir a WhatsApp.
+  // Antes redirigíamos 800ms después del POST sin esperar respuesta → si el POST
+  // fallaba (iOS + señal floja en Estancias), el cliente mandaba el WhatsApp
+  // pero el Sheets quedaba vacío. Caso real: Magdalena Garcia Espil 30/05/2026.
+  //
+  // Ahora: timeout 3s. En buena señal la respuesta llega <1s y el redirect es
+  // tan rápido (o más) que antes. En señal mala el cliente ve "Sin señal" y
+  // puede tocar de nuevo en vez de creer que se envió. El retry en background
+  // sigue corriendo aunque haya error visible — si la respuesta llega tarde,
+  // se limpia el pendiente.
   _enviando = true;
   const waTarget = vendedorMatch ? vendedorMatch.wa : WA_NUMBER;
   const waBtn = document.querySelector('.whatsapp-btn');
   const waBtnOrig = waBtn ? waBtn.innerHTML : '';
-  if (waBtn) { waBtn.disabled = true; waBtn.innerHTML = '✓ Pedido registrado'; waBtn.style.background = '#2e7d32'; }
-  setTimeout(function() {
-    window.location.href = 'https://wa.me/' + waTarget + '?text=' + urlText;
-  }, 800);
+  if (waBtn) { waBtn.disabled = true; waBtn.innerHTML = 'Enviando…'; waBtn.style.background = '#2e7d32'; }
 
-  setTimeout(() => {
-    cart = {}; updateUI();
-    getActiveProducts().forEach(p => renderCardFooter(p.id));
-    $id('f-dia').value = '';
-    if ($id('f-dia-fecha')) $id('f-dia-fecha').value = '';
-    onDiaChange();
-    renderDayPicker();
-    document.querySelectorAll('input[name="pago"]').forEach(r => r.checked = false);
+  function _afterSuccess() {
+    if (waBtn) waBtn.innerHTML = '✓ Pedido registrado';
+    // Redirect inmediato a WhatsApp (200ms = feedback visual mínimo).
+    setTimeout(function() {
+      window.location.href = 'https://wa.me/' + waTarget + '?text=' + urlText;
+    }, 200);
+    setTimeout(() => {
+      cart = {}; updateUI();
+      getActiveProducts().forEach(p => renderCardFooter(p.id));
+      $id('f-dia').value = '';
+      if ($id('f-dia-fecha')) $id('f-dia-fecha').value = '';
+      onDiaChange();
+      renderDayPicker();
+      document.querySelectorAll('input[name="pago"]').forEach(r => r.checked = false);
+      if (waBtn) { waBtn.disabled = false; waBtn.innerHTML = waBtnOrig; waBtn.style.background = ''; }
+      _enviando = false;
+      updateFormVisibility();
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }, 1200);
+  }
+  function _afterFail() {
     if (waBtn) { waBtn.disabled = false; waBtn.innerHTML = waBtnOrig; waBtn.style.background = ''; }
+    toast('⚠️ Sin señal estable. Tocá de nuevo para enviar tu pedido.', 3500);
     _enviando = false;
-    updateFormVisibility();
-    // Volver al inicio de la página
-    window.scrollTo({ top: 0, behavior: 'smooth' });
-  }, 1800);
+  }
+
+  var TIMEOUT_MS = 3000;
+  var timeoutTriggered = false;
+  var settled = false;
+  var sendPromise = _sendWithRetry(postData);
+  var timeoutId = setTimeout(function(){
+    if (settled) return;
+    timeoutTriggered = true; settled = true;
+    _afterFail();
+  }, TIMEOUT_MS);
+  sendPromise.then(function() {
+    if (timeoutTriggered || settled) return;
+    settled = true;
+    clearTimeout(timeoutId);
+    _afterSuccess();
+  }).catch(function() {
+    if (timeoutTriggered || settled) return;
+    settled = true;
+    clearTimeout(timeoutId);
+    _afterFail();
+  });
 }
 
 /* ── RETRY + BACKUP — robustecido 17/05/2026 ──
@@ -1717,7 +1754,10 @@ function _sendWithRetry(data) {
   };
   if (ctrl) fetchOpts.signal = ctrl.signal;
 
-  fetch(APPS_SCRIPT_URL, fetchOpts).then(function(r) {
+  // Devolvemos la Promise del intento actual para que enviarPedido() pueda
+  // esperar la confirmación antes de redirigir a WhatsApp. La cadena de retry
+  // en background sigue corriendo igual aunque el caller ignore la promesa.
+  return fetch(APPS_SCRIPT_URL, fetchOpts).then(function(r) {
     if (timeoutId) clearTimeout(timeoutId);
     if (!r.ok) throw new Error('http ' + r.status);
     return r.text();
@@ -1726,22 +1766,25 @@ function _sendWithRetry(data) {
     try { resp = JSON.parse(txt); } catch(e) {}
     if (resp && resp.ok) {
       _removePending(key);
+      return resp;
     } else {
       throw new Error('server-not-ok: ' + (resp && (resp.err || resp.error) || 'unknown'));
     }
   }).catch(function(err) {
     if (timeoutId) clearTimeout(timeoutId);
     var map = _pendingMap();
-    if (!map[key]) return; // ya removido por otro flow
-    map[key].tries = (map[key].tries || 0) + 1;
-    map[key].lastError = String(err && err.message || err);
-    _pendingSave(map);
-    if (map[key].tries < MALEU_MAX_TRIES) {
-      var delay = MALEU_RETRY_DELAYS[Math.min(map[key].tries - 1, MALEU_RETRY_DELAYS.length - 1)];
-      setTimeout(function() { _sendWithRetry(data); }, delay);
+    if (map[key]) {
+      map[key].tries = (map[key].tries || 0) + 1;
+      map[key].lastError = String(err && err.message || err);
+      _pendingSave(map);
+      if (map[key].tries < MALEU_MAX_TRIES) {
+        var delay = MALEU_RETRY_DELAYS[Math.min(map[key].tries - 1, MALEU_RETRY_DELAYS.length - 1)];
+        setTimeout(function() { _sendWithRetry(data); }, delay);
+      }
+      // Si superó MAX_TRIES queda en cola; _retryPendingOrders lo agarra en el próximo
+      // ciclo (online / visible / interval).
     }
-    // Si superó MAX_TRIES queda en cola; _retryPendingOrders lo agarra en el próximo
-    // ciclo (online / visible / interval).
+    throw err; // re-lanzar para que el caller (enviarPedido) sepa que falló
   });
 }
 
