@@ -2559,6 +2559,14 @@ function _leerPropinaModalCobro(){
 }
 
 // Resetea las 3 secciones colapsables + inputs + signo de propina.
+// Toggle del flag "Aceptar descuento" — se activa cuando Tadeo cobra menos que el total
+// pero quiere cerrar el pedido igual (la diferencia se registra como propina negativa,
+// que reduce el Facturado y el margen bruto). Se resetea al abrir el modal.
+function _toggleAceptaDescuento(){
+  if(!_cobroRutaState)return;
+  _cobroRutaState.aceptaDescuento=!_cobroRutaState.aceptaDescuento;
+  _recalcCobroRuta();
+}
 function _resetCobroSeccionesColapsables(){
   ['cobroCambioSection','cobroAFavSection','cobroPropinaSection'].forEach(function(id){
     var el=document.getElementById(id);if(el)el.style.display='none';
@@ -2572,6 +2580,8 @@ function _resetCobroSeccionesColapsables(){
   _setMoneyInput('cobroPropinaInp',0);
   var btnSig=document.querySelector('[data-prop-target="cobroPropinaInp"]');
   if(btnSig){btnSig.classList.remove('neg');btnSig.textContent='+';}
+  // Reset flag de descuento aceptado (no persiste entre cobros)
+  if(_cobroRutaState)_cobroRutaState.aceptaDescuento=false;
   // Reset toggle parcial + banner de saldo previo (persisten en DOM entre aperturas)
   var btnPar=document.getElementById('cobroTogglePartial');if(btnPar)btnPar.classList.remove('on');
   var saldoEl=document.getElementById('cobroSaldoPrevio');if(saldoEl){saldoEl.style.display='none';saldoEl.innerHTML='';}
@@ -2755,29 +2765,43 @@ function _recalcCobroRuta(){
   var err=document.getElementById('cobroRutaErr');
   var btn=document.getElementById('btnCobroRutaOk');
   var errors=[];
+  var faltante=(!partial && neto<requerido)?(requerido-neto):0;
   if(pagado<=0)errors.push('Indicá cuánto recibiste.');
-  // Tolerancia para ajuste de redondeo (propina negativa). Hasta $500 menos se
-  // acepta como redondeo (común: cliente paga $21.700 de $21.770). Más allá
-  // pide usar "Pago parcial". El monto faltante queda visible en "Propina
-  // automática" en rojo, así Tadeo lo ve antes de confirmar.
-  if(!partial && (requerido-neto)>500)errors.push('Falta cobrar: '+formatMoney(requerido-neto)+'. Si te quedó debiendo, usá "Pago parcial".');
+  // Tolerancia $500 para redondeo (propina negativa chica). Más allá:
+  // - Si Tadeo activa "Aceptar descuento": se cierra el pedido y la diferencia
+  //   se registra como propina negativa (descuento al cobrar). Facturado = neto.
+  // - Si no, sigue bloqueando y sugiere Pago parcial.
+  if(!partial && faltante>500 && !st.aceptaDescuento)errors.push(
+    'Falta cobrar: '+formatMoney(faltante)+'. Si te quedó debiendo, usá <b>"Pago parcial"</b>. Si fue un descuento de hecho y querés cerrar igual, tocá <b>"Aceptar descuento"</b> abajo.'
+  );
   if(partial && neto>=total)errors.push('Ese monto cubre todo el pedido — usá el cobro normal, no parcial.');
   if(camMP>recEf)errors.push('No podés devolver más MP del que entró en efectivo.');
   if(camEf>recMP)errors.push('No podés devolver más efectivo del que entró por MP.');
+  // Toggle "Aceptar descuento" — solo aparece cuando faltante > $500 y NO es parcial.
+  var descBtnExtra='';
+  if(!partial && faltante>500){
+    if(st.aceptaDescuento){
+      descBtnExtra='<div style="background:#FFF3E0;border:1.5px solid #F9A825;border-radius:8px;padding:9px 11px;margin-top:8px;font-size:12px;line-height:1.5;color:#5D4037">✅ <b>Descuento aceptado: '+formatMoney(faltante)+'</b><br>El pedido se cierra como cobrado por '+formatMoney(neto)+'. El descuento queda registrado como propina negativa y reduce el margen bruto. <button type="button" onclick="_toggleAceptaDescuento()" style="margin-top:6px;padding:6px 10px;background:#fff;color:#5D4037;border:1.5px solid #F9A825;border-radius:6px;font-family:inherit;font-size:11px;font-weight:700;cursor:pointer">Quitar descuento</button></div>';
+    } else {
+      descBtnExtra='<button type="button" onclick="_toggleAceptaDescuento()" style="display:block;width:100%;margin-top:8px;padding:10px;background:#fff;color:#E65100;border:1.5px dashed #F9A825;border-radius:8px;font-family:inherit;font-size:13px;font-weight:800;cursor:pointer">💸 Aceptar descuento de '+formatMoney(faltante)+'</button>';
+    }
+  }
   if(errors.length>0){
     err.style.display='block';
-    err.innerHTML='⚠️ '+errors.join('<br>⚠️ ');
+    err.innerHTML='⚠️ '+errors.join('<br>⚠️ ')+descBtnExtra;
     btn.disabled=true;
     btn.textContent='Revisá los montos';
   } else {
-    err.style.display='none';
+    err.style.display=descBtnExtra?'block':'none';
+    err.innerHTML=descBtnExtra; // muestra solo el bloque "descuento aceptado" si aplica
     btn.disabled=false;
     if(partial){
       btn.textContent='Registrar parcial '+formatMoney(neto);
+    } else if(st.aceptaDescuento && faltante>0){
+      btn.textContent='✓ COBRADO '+formatMoney(neto)+' (descuento '+formatMoney(faltante)+')';
     } else {
       // El botón muestra la PLATA QUE ENTRA en este cobro (cash recibido neto),
       // no el facturado del pedido. Con saldo previo aplicado: neto < facturado.
-      // Sin saldo aplicado: neto = facturado.
       btn.textContent='✓ COBRADO '+formatMoney(neto);
     }
   }
