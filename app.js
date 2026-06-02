@@ -1884,6 +1884,48 @@ function updateFormVisibility() {
     // Mostrar hint de descuento si no eligió pago aún
     updatePagoHint();
   }
+  updateWhatsappCta();
+}
+
+/* Detecta si el form está completo y resalta el botón WhatsApp con
+   hint "Último paso" + pulse + glow para que el cliente lo encuentre.
+   Bug común: el cliente completa todo y deja la pantalla ahí sin tocar
+   el botón final, perdiéndose el pedido. */
+function updateWhatsappCta() {
+  const wrap = $id('whatsapp-cta-wrap');
+  if (!wrap) return;
+  // Necesita carrito con items
+  if (cartCount() === 0) { wrap.classList.remove('ready'); return; }
+  // Campos comunes: nombre, teléfono, fecha de entrega, método de pago
+  const nombre = ($id('f-nombre') && $id('f-nombre').value || '').trim();
+  const telDigits = ($id('f-telefono') && $id('f-telefono').value || '').replace(/\D/g,'');
+  const fechaIso = $id('f-dia-fecha') ? $id('f-dia-fecha').value : '';
+  const dia = $id('f-dia') ? $id('f-dia').value : '';
+  const pagoSel = document.querySelector('input[name="pago"]:checked');
+  if (!nombre || telDigits.length < 8 || !(fechaIso || dia) || !pagoSel) {
+    wrap.classList.remove('ready'); return;
+  }
+  // Campos específicos por zona
+  if (currentZone === 'estancias') {
+    const bp = ($id('f-barrio-privado') && $id('f-barrio-privado').value || '').trim();
+    const lote = ($id('f-lote') && $id('f-lote').value || '').trim();
+    if (!bp || !lote) { wrap.classList.remove('ready'); return; }
+  } else if (currentZone === 'pilar') {
+    const pb = ($id('f-pilar-barrio') && $id('f-pilar-barrio').value || '').trim();
+    const lotep = ($id('f-lote-pilar') && $id('f-lote-pilar').value || '').trim();
+    if (!pb || !lotep) { wrap.classList.remove('ready'); return; }
+    // Si eligió "Otro barrio" también necesita el input libre
+    if (pb === '__otro__') {
+      const dir = ($id('f-direccion') && $id('f-direccion').value || '').trim();
+      if (!dir) { wrap.classList.remove('ready'); return; }
+    }
+  } else if (currentZone === 'clubes') {
+    const club = ($id('f-club') && $id('f-club').value || '').trim();
+    const dep = ($id('f-deporte') && $id('f-deporte').value || '').trim();
+    const gr = ($id('f-grupo') && $id('f-grupo').value || '').trim();
+    if (!club || !dep || !gr) { wrap.classList.remove('ready'); return; }
+  }
+  wrap.classList.add('ready');
 }
 function expandForm() {
   const section = $id('form-section');
@@ -2172,6 +2214,14 @@ $id('cart-badge').style.display = 'none';
 fetchStock();
 fetchVendedores();
 _retryPendingOrders();
+// Listener delegado: cualquier cambio en el form recalcula el CTA del botón WA
+(function(){
+  var formSec = $id('form-section');
+  if (!formSec) return;
+  ['input','change'].forEach(function(ev){
+    formSec.addEventListener(ev, updateWhatsappCta);
+  });
+})();
 let _stockTimer = setInterval(fetchStock, 60000);
 document.addEventListener('visibilitychange', () => {
   if(document.hidden){clearInterval(_stockTimer);_stockTimer=null;}
