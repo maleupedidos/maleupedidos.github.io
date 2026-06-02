@@ -1656,7 +1656,11 @@ function enviarPedido() {
     _enviando = false;
   }
 
-  var TIMEOUT_MS = 3000;
+  // Timeout subido de 3s a 12s el 02/06/2026: Apps Script empezó a tardar
+  // 6-9s en responder POSTs de pedidos nuevos (antes <1s). El timeout corto
+  // hacía aparecer "Sin señal" aunque el pedido sí entrara al Sheets, y el
+  // cliente reintentaba generando duplicados.
+  var TIMEOUT_MS = 12000;
   var timeoutTriggered = false;
   var settled = false;
   var sendPromise = _sendWithRetry(postData);
