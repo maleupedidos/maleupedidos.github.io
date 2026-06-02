@@ -423,12 +423,11 @@ function _updateCartTotals() {
 function getShipping() {
   if (!currentZone) return 0;
   const z = ZONAS[currentZone];
-  // En Pilar: envío $0 por default y si hay vendedor (El Lucero, Los Tacos, etc).
-  // Solo cobra envío cuando el cliente eligió "Otro barrio".
+  // En Pilar: envío gratis solo en barrios Red (Marcos los reparte sin cobrar
+  // en El Lucero / Los Tacos / Villa Bertha). Cualquier otro barrio (Pilara,
+  // El Ocho, Otro barrio, etc.) lo reparte Tadeo y cobra $3.000.
   if (currentZone === 'pilar') {
-    var barrioEl = $id('f-pilar-barrio');
-    var val = barrioEl ? barrioEl.value : '';
-    return val === '__otro__' ? z.envio : 0;
+    return _pilarBarrioIsRed() ? 0 : z.envio;
   }
   return z.envio;
 }
@@ -439,8 +438,9 @@ function pilarIsOtroBarrio() {
 }
 function discountsActive() {
   if (currentZone === 'clubes') return false;
-  // En Pilar solo hay descuentos cuando el cliente eligió "Otro barrio"
-  if (currentZone === 'pilar' && !pilarIsOtroBarrio()) return false;
+  // En Pilar: descuentos aplican a barrios NO-Red (Pilara, El Ocho, Otro,
+  // cualquier no-Marcos). Los barrios Red (Marcos) no tienen descuentos.
+  if (currentZone === 'pilar' && _pilarBarrioIsRed()) return false;
   return true;
 }
 function getCashDiscount() {
