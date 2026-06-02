@@ -1013,6 +1013,11 @@ function applyZone() {
   $id('fields-estancias').style.display = currentZone === 'estancias' ? '' : 'none';
   $id('fields-pilar').style.display = currentZone === 'pilar' ? '' : 'none';
   $id('fields-clubes').style.display = currentZone === 'clubes' ? '' : 'none';
+  // Limpiar cartel del vendedor Red (solo aplica en Pilar con barrio Marcos).
+  // Si el cliente venía de Pilar y vuelve a Home/Clubes, el cartel quedaba pegado.
+  var _aliasNote = $id('mp-alias-vendedor-note');
+  if (_aliasNote) _aliasNote.classList.add('hidden');
+  if (typeof onPagoChange === 'function') onPagoChange();
   // Si Pilar, re-render dropdown de barrios por si ya llegaron vendedores
   if (currentZone === 'pilar') renderPilarBarrios();
   // Días de entrega (calendario 14 días)
