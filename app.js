@@ -1417,6 +1417,48 @@ function filtrarSubBarrios(keepValue) {
   }
 }
 
+/* ── LOADER OVERLAY DE ENVÍO ──
+   Modal con spinner + barra de progreso indeterminada que cubre la pantalla
+   mientras el POST al backend está en vuelo. Tiene 3 estados: default (enviando),
+   .success (✓ verde), .error (! rojo). Se cierra automáticamente. */
+function showSendLoader() {
+  var ov = $id('send-overlay');
+  if (!ov) return;
+  var card = ov.querySelector('.send-card');
+  if (card) card.classList.remove('success', 'error');
+  var t = $id('send-title'), s = $id('send-sub');
+  if (t) t.textContent = 'Enviando tu pedido…';
+  if (s) s.textContent = 'Estamos confirmando con Maleu. En unos segundos te llevamos a WhatsApp.';
+  ov.classList.add('active');
+  ov.setAttribute('aria-hidden', 'false');
+  document.body.style.overflow = 'hidden';
+}
+function setSendLoaderSuccess() {
+  var ov = $id('send-overlay');
+  if (!ov) return;
+  var card = ov.querySelector('.send-card');
+  if (card) card.classList.add('success');
+  var t = $id('send-title'), s = $id('send-sub');
+  if (t) t.textContent = '¡Pedido enviado!';
+  if (s) s.textContent = 'Te abrimos WhatsApp para que confirmes con Maleu.';
+}
+function setSendLoaderError() {
+  var ov = $id('send-overlay');
+  if (!ov) return;
+  var card = ov.querySelector('.send-card');
+  if (card) card.classList.add('error');
+  var t = $id('send-title'), s = $id('send-sub');
+  if (t) t.textContent = 'No pudimos confirmarlo';
+  if (s) s.textContent = 'Tocá "Pedir por WhatsApp" de nuevo. Tu carrito sigue intacto.';
+}
+function hideSendLoader() {
+  var ov = $id('send-overlay');
+  if (!ov) return;
+  ov.classList.remove('active');
+  ov.setAttribute('aria-hidden', 'true');
+  document.body.style.overflow = '';
+}
+
 /* ── ENVIAR PEDIDO ── */
 function enviarPedido() {
   if (_enviando) return;
@@ -1629,13 +1671,16 @@ function enviarPedido() {
   const waBtn = document.querySelector('.whatsapp-btn');
   const waBtnOrig = waBtn ? waBtn.innerHTML : '';
   if (waBtn) { waBtn.disabled = true; waBtn.innerHTML = 'Enviando…'; waBtn.style.background = '#2e7d32'; }
+  // Mostrar overlay loader (animado, branded)
+  showSendLoader();
 
   function _afterSuccess() {
     if (waBtn) waBtn.innerHTML = '✓ Pedido registrado';
-    // Redirect inmediato a WhatsApp (200ms = feedback visual mínimo).
+    setSendLoaderSuccess();
+    // Redirect a WhatsApp con un breve respiro para que se vea el check verde
     setTimeout(function() {
       window.location.href = 'https://wa.me/' + waTarget + '?text=' + urlText;
-    }, 200);
+    }, 800);
     setTimeout(() => {
       cart = {}; updateUI();
       getActiveProducts().forEach(p => renderCardFooter(p.id));
@@ -1646,13 +1691,15 @@ function enviarPedido() {
       document.querySelectorAll('input[name="pago"]').forEach(r => r.checked = false);
       if (waBtn) { waBtn.disabled = false; waBtn.innerHTML = waBtnOrig; waBtn.style.background = ''; }
       _enviando = false;
+      hideSendLoader();
       updateFormVisibility();
       window.scrollTo({ top: 0, behavior: 'smooth' });
-    }, 1200);
+    }, 1800);
   }
   function _afterFail() {
     if (waBtn) { waBtn.disabled = false; waBtn.innerHTML = waBtnOrig; waBtn.style.background = ''; }
-    toast('⚠️ Sin señal estable. Tocá de nuevo para enviar tu pedido.', 3500);
+    setSendLoaderError();
+    setTimeout(hideSendLoader, 2400);
     _enviando = false;
   }
 
