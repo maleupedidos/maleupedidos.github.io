@@ -437,11 +437,9 @@ function pilarIsOtroBarrio() {
   return !!(el && el.value === '__otro__');
 }
 function discountsActive() {
-  if (currentZone === 'clubes') return false;
-  // En Pilar: descuentos aplican a barrios NO-Red (Pilara, El Ocho, Otro,
-  // cualquier no-Marcos). Los barrios Red (Marcos) no tienen descuentos.
-  if (currentZone === 'pilar' && _pilarBarrioIsRed()) return false;
-  return true;
+  // Descuentos (10% Efectivo / 10% +$100K) SOLO en Home (Estancias).
+  // Pilar (ningún barrio) y Clubes no tienen descuentos.
+  return currentZone === 'estancias';
 }
 function getCashDiscount() {
   if (!discountsActive()) return 0;
