@@ -28,8 +28,8 @@ const PRODUCTOS = [
   { id:25, cat:"Tartas",   nombre:"Tarta Jamón y Queso",           desc:"El clásico. Mucho jamón, mucho queso. Hecha como en casa.",                                                                  precio:12000, img:"tarta-jamon-queso.jpg", emoji:"🥧", chips:["Para 1–2 personas","Tarta de 16 cm","Al horno en 10 min"] },
   { id:26, cat:"Tartas",   nombre:"Tarta Calabaza",                desc:"Calabaza con queso rallado y semillas de girasol arriba. Sabor a horno familiar.",                                                                  precio:12000, img:"tarta-calabaza.jpg", emoji:"🥧", chips:["Para 1–2 personas","Tarta de 16 cm","Al horno en 10 min"] },
   { id:27, cat:"Tartas",   nombre:"Tarta Verdura",                 desc:"Verdura con queso rallado. Liviana y rica.",                                                                  precio:12000, img:"tarta-verdura.jpg", emoji:"🥧", chips:["Para 1–2 personas","Tarta de 16 cm","Al horno en 10 min"] },
-  { id:28, cat:"Rolls",    nombre:"Roll Carne",                    desc:"Roll relleno de carne. Bien condimentado, listo al horno.",                                                       precio:15000, img:"roll-carne.jpg", emoji:"🌯", chips:["Para 1–2 personas","Listo al horno en 10 min"] },
-  { id:29, cat:"Rolls",    nombre:"Roll Pollo",                    desc:"Roll relleno de pollo. Sabroso y rendidor.",                                                                      precio:15000, img:"roll-pollo.jpg", emoji:"🌯", chips:["Para 1–2 personas","Listo al horno en 10 min"] },
+  { id:28, cat:"Wraps",    nombre:"Wrap Carne",                    desc:"Wrap relleno de carne. Bien condimentado, listo al horno.",                                                       precio:15000, img:"roll-carne.jpg", emoji:"🌯", chips:["Para 1–2 personas","Listo al horno en 10 min"] },
+  { id:29, cat:"Wraps",    nombre:"Wrap Pollo",                    desc:"Wrap relleno de pollo. Sabroso y rendidor.",                                                                      precio:15000, img:"roll-pollo.jpg", emoji:"🌯", chips:["Para 1–2 personas","Listo al horno en 10 min"] },
   { id:13, cat:"Postres", nombre:"Franui Leche",                  desc:"Frambuesas bañadas en chocolate con leche y blanco. El cierre perfecto.",        precio:8000,  img:"franui-new.jpg", emoji:"🍫", chips:["Para 2–3 personas","Listo para servir"] },
   { id:14, cat:"Postres", nombre:"Torta Golosa",                  desc:"Masa de chocolate, dulce de leche, mousse de chocolate y almendras acarameladas.", precio:24000, img:"torta-golosa.jpg", emoji:"🎂", chips:["Para 8–10 personas","Torta entera","Lista para cortar y servir"] },
   { id:15, cat:"Postres", nombre:"Torta Lemon Crumble",           desc:"Base sablée, relleno de limón y crumble crocante espolvoreado.",                 precio:24000, img:"torta-lemon.jpg", emoji:"🎂", chips:["Para 8–10 personas","Torta entera","Lista para cortar y servir"] },
@@ -42,7 +42,7 @@ const CATEGORIAS = [
   { nombre:"Sorrentinos",      icono:"🍝", nota:"600g · 16 unidades · Rinde 3 porciones · Solo 4 minutos de cocción", tip:"Hervir agua · Agregar sorrentinos · 4 min con olla destapada · Retirar con espumadera y servir" },
   { nombre:"Empanadas",        icono:"🥟", nota:"x8 unidades · Congeladas, listas para el horno · Cocinar hasta dorar" },
   { nombre:"Tartas",           icono:"🥧", nota:"Pre-cocidas · 16cm · Listas al horno en 10 min", tip:"Precalentar horno al máximo 10 min · Hornear 10 min · Servir" },
-  { nombre:"Rolls",            icono:"🌯", nota:"Pre-cocidos · Listos al horno en pocos minutos" },
+  { nombre:"Wraps",            icono:"🌯", nota:"Pre-cocidos · Listos al horno en pocos minutos" },
   { nombre:"Postres",          icono:"🎂", nota:"Para cerrar bien la noche" },
 ];
 
