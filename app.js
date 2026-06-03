@@ -5,14 +5,14 @@
 
 /* ── PRODUCTOS ── */
 const PRODUCTOS = [
-  { id:1,  cat:"Pizzas Premium",   nombre:"Pizza Margarita",              desc:"Tomate fresco, mozzarella y albahaca. La que nunca falla.",                        precio:11200, img:"pizza-margarita-cocida.jpg", emoji:"🍕", top:true, chips:["Para 1–2 personas","1 pizza grande","Al horno en 12 min"] },
-  { id:2,  cat:"Pizzas Premium",   nombre:"Pizza Jamón y Queso",           desc:"Mucho jamón, mucho queso. Simple, efectiva y sin dramas.",                        precio:11200, img:"pizza-jamon-queso-cocida.jpg", emoji:"🍕", chips:["Para 1–2 personas","1 pizza grande","Al horno en 12 min"] },
-  { id:3,  cat:"Pizzas Premium",   nombre:"Pizza Cebolla Caramelizada",    desc:"Cebolla bien dulce con queso cremoso. Para los que saben.",                       precio:11200, img:"pizza-cebolla-cocida.jpg", emoji:"🍕", chips:["Para 1–2 personas","1 pizza grande","Al horno en 12 min"] },
-  { id:4,  cat:"Pizzas Premium",   nombre:"Pizza Jamón y Morrón",          desc:"Con jamón, morrón rojo y orégano. Completa y sabrosa.",                           precio:12000, img:"pizza-jamon-morron-cocida.jpg", emoji:"🍕", chips:["Para 1–2 personas","1 pizza grande","Al horno en 12 min"] },
-  { id:19, cat:"Pizzas Premium",   nombre:"Pizza Muzzarella",              desc:"Puro queso derretido sobre salsa de tomate. La clásica que nunca sobra.",          precio:11000, img:"pizza-muzarella-cocida.jpg", emoji:"🍕", chips:["Para 1–2 personas","1 pizza grande","Al horno en 12 min"] },
-  { id:5,  cat:"Pizzas Clásicas",  nombre:"Pack Muzarella x2",             desc:"Dos pizzas de muzzarella. Cena resuelta para toda la semana.",                   precio:17000, img:"pack-muzarella-cocida.jpg", emoji:"🍕", top:true, chips:["Para 3–4 personas","2 pizzas grandes","Al horno en 12 min"] },
-  { id:6,  cat:"Pizzas Clásicas",  nombre:"Pack Jamón y Queso x2",         desc:"Dos pizzas de jamón y queso. Una para hoy, una para cuando querás.",             precio:17000, img:"pack-jamon-queso-cocida.jpg", emoji:"🍕", chips:["Para 3–4 personas","2 pizzas grandes","Al horno en 12 min"] },
-  { id:7,  cat:"Pizzas Clásicas",  nombre:"Pack Cebolla y Queso x2",       desc:"Dos pizzas con cebolla caramelizada. Guardá una para mañana.",                   precio:17000, img:"pack-cebolla-queso-cocida.jpg", emoji:"🍕", chips:["Para 3–4 personas","2 pizzas grandes","Al horno en 12 min"] },
+  { id:1,  cat:"Pizzas",   nombre:"Pizza Margarita",              desc:"Tomate fresco, mozzarella y albahaca. La que nunca falla.",                        precio:11200, img:"pizza-margarita-cocida.jpg", emoji:"🍕", top:true, chips:["Para 1–2 personas","1 pizza grande","Al horno en 12 min"] },
+  { id:2,  cat:"Pizzas",   nombre:"Pizza Jamón y Queso",           desc:"Mucho jamón, mucho queso. Simple, efectiva y sin dramas.",                        precio:11200, img:"pizza-jamon-queso-cocida.jpg", emoji:"🍕", chips:["Para 1–2 personas","1 pizza grande","Al horno en 12 min"] },
+  { id:3,  cat:"Pizzas",   nombre:"Pizza Cebolla Caramelizada",    desc:"Cebolla bien dulce con queso cremoso. Para los que saben.",                       precio:11200, img:"pizza-cebolla-cocida.jpg", emoji:"🍕", chips:["Para 1–2 personas","1 pizza grande","Al horno en 12 min"] },
+  { id:4,  cat:"Pizzas",   nombre:"Pizza Jamón y Morrón",          desc:"Con jamón, morrón rojo y orégano. Completa y sabrosa.",                           precio:12000, img:"pizza-jamon-morron-cocida.jpg", emoji:"🍕", chips:["Para 1–2 personas","1 pizza grande","Al horno en 12 min"] },
+  { id:19, cat:"Pizzas",   nombre:"Pizza Muzzarella",              desc:"Puro queso derretido sobre salsa de tomate. La clásica que nunca sobra.",          precio:11000, img:"pizza-muzarella-cocida.jpg", emoji:"🍕", chips:["Para 1–2 personas","1 pizza grande","Al horno en 12 min"] },
+  { id:5,  cat:"Pack Pizzas",  nombre:"Pack Muzarella x2",             desc:"Dos pizzas de muzzarella. Cena resuelta para toda la semana.",                   precio:17000, img:"pack-muzarella-cocida.jpg", emoji:"🍕", top:true, chips:["Para 3–4 personas","2 pizzas grandes","Al horno en 12 min"] },
+  { id:6,  cat:"Pack Pizzas",  nombre:"Pack Jamón y Queso x2",         desc:"Dos pizzas de jamón y queso. Una para hoy, una para cuando querás.",             precio:17000, img:"pack-jamon-queso-cocida.jpg", emoji:"🍕", chips:["Para 3–4 personas","2 pizzas grandes","Al horno en 12 min"] },
+  { id:7,  cat:"Pack Pizzas",  nombre:"Pack Cebolla y Queso x2",       desc:"Dos pizzas con cebolla caramelizada. Guardá una para mañana.",                   precio:17000, img:"pack-cebolla-queso-cocida.jpg", emoji:"🍕", chips:["Para 3–4 personas","2 pizzas grandes","Al horno en 12 min"] },
   { id:8,  cat:"Sorrentinos",      nombre:"Sorrentinos Cordero al Malbec", desc:"Cordero, zanahoria, apio, cebolla y especias. Distinto y muy rico.",             precio:19800, img:"sorrentinos-cordero-v2.jpg", emoji:"🍝", chips:["Para 2–3 personas","600g · 16 unidades","Listos en 4 min"] },
   { id:9,  cat:"Sorrentinos",      nombre:"Sorrentinos Jamón y Queso",     desc:"Relleno cremoso y generoso. El favorito de la familia.",                         precio:18300, img:"sorrentinos-jamon-v2.jpg", emoji:"🍝", top:true, chips:["Para 2–3 personas","600g · 16 unidades","Listos en 4 min"] },
   { id:10, cat:"Sorrentinos",      nombre:"Sorrentinos Calabaza y Queso",  desc:"Suave, dulce y sabroso. Relleno cremoso de calabaza y queso.",                   precio:16500, img:"sorrentinos-calabaza-v2.jpg", emoji:"🍝", chips:["Para 2–3 personas","600g · 16 unidades","Listos en 4 min"] },
@@ -30,41 +30,42 @@ const PRODUCTOS = [
   { id:27, cat:"Tartas",   nombre:"Tarta Verdura",                 desc:"Verdura con queso rallado. Liviana y rica.",                                                                  precio:12000, img:"tarta-verdura.jpg", emoji:"🥧", chips:["Para 1–2 personas","Tarta de 16 cm","Al horno en 10 min"] },
   { id:28, cat:"Wraps",    nombre:"Wrap Carne",                    desc:"Wrap relleno de carne. Bien condimentado, listo al horno.",                                                       precio:15000, img:"wrap-carne.jpg", emoji:"🌯", chips:["Para 1–2 personas","Listo al horno en 10 min"] },
   { id:29, cat:"Wraps",    nombre:"Wrap Pollo",                    desc:"Wrap relleno de pollo. Sabroso y rendidor.",                                                                      precio:15000, img:"wrap-pollo.jpg", emoji:"🌯", chips:["Para 1–2 personas","Listo al horno en 10 min"] },
-  { id:13, cat:"Postres", nombre:"Franui Leche",                  desc:"Frambuesas bañadas en chocolate con leche y blanco. El cierre perfecto.",        precio:8000,  img:"franui-new.jpg", emoji:"🍫", chips:["Para 2–3 personas","Listo para servir"] },
-  { id:14, cat:"Postres", nombre:"Torta Golosa",                  desc:"Masa de chocolate, dulce de leche, mousse de chocolate y almendras acarameladas.", precio:24000, img:"torta-golosa.jpg", emoji:"🎂", chips:["Para 8–10 personas","Torta entera","Lista para cortar y servir"] },
-  { id:15, cat:"Postres", nombre:"Torta Lemon Crumble",           desc:"Base sablée, relleno de limón y crumble crocante espolvoreado.",                 precio:24000, img:"torta-lemon.jpg", emoji:"🎂", chips:["Para 8–10 personas","Torta entera","Lista para cortar y servir"] },
-  { id:16, cat:"Postres", nombre:"Torta Coco",                    desc:"Base crocante, dulce de leche y relleno de coco. Generosa y sin vueltas.",       precio:24000, img:"torta-coco.jpg", emoji:"🎂", chips:["Para 8–10 personas","Torta entera","Lista para cortar y servir"] },
+  { id:13, cat:"Pote de Franui", nombre:"Franui Leche",            desc:"Frambuesas bañadas en chocolate con leche y blanco. El cierre perfecto.",        precio:8000,  img:"franui-new.jpg", emoji:"🍫", chips:["Para 2–3 personas","Listo para servir"] },
+  { id:14, cat:"Tortas", nombre:"Torta Golosa",                  desc:"Masa de chocolate, dulce de leche, mousse de chocolate y almendras acarameladas.", precio:24000, img:"torta-golosa.jpg", emoji:"🎂", chips:["Para 8–10 personas","Torta entera","Lista para cortar y servir"] },
+  { id:15, cat:"Tortas", nombre:"Torta Lemon Crumble",           desc:"Base sablée, relleno de limón y crumble crocante espolvoreado.",                 precio:24000, img:"torta-lemon.jpg", emoji:"🎂", chips:["Para 8–10 personas","Torta entera","Lista para cortar y servir"] },
+  { id:16, cat:"Tortas", nombre:"Torta Coco",                    desc:"Base crocante, dulce de leche y relleno de coco. Generosa y sin vueltas.",       precio:24000, img:"torta-coco.jpg", emoji:"🎂", chips:["Para 8–10 personas","Torta entera","Lista para cortar y servir"] },
 ];
 
 const CATEGORIAS = [
-  { nombre:"Pizzas Premium",   icono:"🍕", nota:"Pre-cocidas · Listas en minutos · Al horno directo desde el freezer" },
-  { nombre:"Pizzas Clásicas",  icono:"🍕", nota:"Pack de 2 unidades · Perfectas para tener siempre a mano" },
-  { nombre:"Sorrentinos",      icono:"🍝", nota:"600g · 16 unidades · Rinde 3 porciones · Solo 4 minutos de cocción", tip:"Hervir agua · Agregar sorrentinos · 4 min con olla destapada · Retirar con espumadera y servir" },
-  { nombre:"Empanadas",        icono:"🥟", nota:"x8 unidades · Congeladas, listas para el horno · Cocinar hasta dorar" },
-  { nombre:"Tartas",           icono:"🥧", nota:"Pre-cocidas · 16cm · Listas al horno en 10 min", tip:"Precalentar horno al máximo 10 min · Hornear 10 min · Servir" },
-  { nombre:"Wraps",            icono:"🌯", nota:"Pre-cocidos · Listos al horno en pocos minutos" },
-  { nombre:"Postres",          icono:"🎂", nota:"Para cerrar bien la noche" },
+  { nombre:"Pack Pizzas",       icono:"🍕", nota:"Pack de 2 unidades · Perfectas para tener siempre a mano" },
+  { nombre:"Pizzas",            icono:"🍕", nota:"Pre-cocidas · Listas en minutos · Al horno directo desde el freezer" },
+  { nombre:"Sorrentinos",       icono:"🍝", nota:"600g · 16 unidades · Rinde 3 porciones · Solo 4 minutos de cocción", tip:"Hervir agua · Agregar sorrentinos · 4 min con olla destapada · Retirar con espumadera y servir" },
+  { nombre:"Empanadas",         icono:"🥟", nota:"x8 unidades · Congeladas, listas para el horno · Cocinar hasta dorar" },
+  { nombre:"Tartas",            icono:"🥧", nota:"Pre-cocidas · 16cm · Listas al horno en 10 min", tip:"Precalentar horno al máximo 10 min · Hornear 10 min · Servir" },
+  { nombre:"Pote de Franui",    icono:"🍫", nota:"Frambuesas bañadas en chocolate · Listas para servir" },
+  { nombre:"Tortas",            icono:"🎂", nota:"Tortas enteras · Listas para cortar y servir" },
+  { nombre:"Wraps",             icono:"🌯", nota:"Pre-cocidos · Listos al horno en pocos minutos" },
 ];
 
 /* ── PRODUCTOS CLUBES (precios especiales, solo pizzas) ── */
 const PRODUCTOS_CLUBES = [
-  { id:'pmu', cat:"Pizzas Premium",  nombre:"Pizza Muzzarella",           desc:"Puro queso derretido sobre salsa de tomate. La clásica que nunca sobra.",   precio:7000,  img:"pizza-muzarella-cocida.jpg", emoji:"🍕", chips:["1 pizza grande","Al horno en 12 min"] },
-  { id:'pjq', cat:"Pizzas Premium",  nombre:"Pizza Jamón y Queso",        desc:"Mucho jamón, mucho queso. Simple, efectiva y sin dramas.",                  precio:7000,  img:"pizza-jamon-queso-cocida.jpg", emoji:"🍕", chips:["1 pizza grande","Al horno en 12 min"] },
-  { id:'pcc', cat:"Pizzas Premium",  nombre:"Pizza Cebolla Caramelizada", desc:"Cebolla bien dulce con queso cremoso. Para los que saben.",                 precio:7000,  img:"pizza-cebolla-cocida.jpg", emoji:"🍕", chips:["1 pizza grande","Al horno en 12 min"] },
-  { id:'pma', cat:"Pizzas Premium",  nombre:"Pizza Margarita",            desc:"Tomate fresco, mozzarella y albahaca. La que nunca falla.",                  precio:7000,  img:"pizza-margarita-cocida.jpg", emoji:"🍕", chips:["1 pizza grande","Al horno en 12 min"] },
-  { id:'pjm', cat:"Pizzas Premium",  nombre:"Pizza Jamón y Morrón",       desc:"Con jamón, morrón rojo y orégano. Completa y sabrosa.",                     precio:7800,  img:"pizza-jamon-morron-cocida.jpg", emoji:"🍕", chips:["1 pizza grande","Al horno en 12 min"] },
-  { id:'pp1', cat:"Pizzas Clásicas", nombre:"Pack Muzarella x2",          desc:"Dos pizzas de muzzarella. Cena resuelta para todo el equipo.",              precio:11000, img:"pack-muzarella-cocida.jpg", emoji:"🍕", top:true, chips:["2 pizzas grandes","Al horno en 12 min"] },
-  { id:'pp2', cat:"Pizzas Clásicas", nombre:"Pack Jamón y Queso x2",      desc:"Dos pizzas de jamón y queso. El clásico del tercer tiempo.",               precio:11000, img:"pack-jamon-queso-cocida.jpg", emoji:"🍕", chips:["2 pizzas grandes","Al horno en 12 min"] },
-  { id:'pp3', cat:"Pizzas Clásicas", nombre:"Pack Cebolla y Queso x2",    desc:"Dos pizzas con cebolla caramelizada. Siempre piden más.",                  precio:11000, img:"pack-cebolla-queso-cocida.jpg", emoji:"🍕", chips:["2 pizzas grandes","Al horno en 12 min"] },
+  { id:'pmu', cat:"Pizzas",  nombre:"Pizza Muzzarella",           desc:"Puro queso derretido sobre salsa de tomate. La clásica que nunca sobra.",   precio:7000,  img:"pizza-muzarella-cocida.jpg", emoji:"🍕", chips:["1 pizza grande","Al horno en 12 min"] },
+  { id:'pjq', cat:"Pizzas",  nombre:"Pizza Jamón y Queso",        desc:"Mucho jamón, mucho queso. Simple, efectiva y sin dramas.",                  precio:7000,  img:"pizza-jamon-queso-cocida.jpg", emoji:"🍕", chips:["1 pizza grande","Al horno en 12 min"] },
+  { id:'pcc', cat:"Pizzas",  nombre:"Pizza Cebolla Caramelizada", desc:"Cebolla bien dulce con queso cremoso. Para los que saben.",                 precio:7000,  img:"pizza-cebolla-cocida.jpg", emoji:"🍕", chips:["1 pizza grande","Al horno en 12 min"] },
+  { id:'pma', cat:"Pizzas",  nombre:"Pizza Margarita",            desc:"Tomate fresco, mozzarella y albahaca. La que nunca falla.",                  precio:7000,  img:"pizza-margarita-cocida.jpg", emoji:"🍕", chips:["1 pizza grande","Al horno en 12 min"] },
+  { id:'pjm', cat:"Pizzas",  nombre:"Pizza Jamón y Morrón",       desc:"Con jamón, morrón rojo y orégano. Completa y sabrosa.",                     precio:7800,  img:"pizza-jamon-morron-cocida.jpg", emoji:"🍕", chips:["1 pizza grande","Al horno en 12 min"] },
+  { id:'pp1', cat:"Pack Pizzas", nombre:"Pack Muzarella x2",          desc:"Dos pizzas de muzzarella. Cena resuelta para todo el equipo.",              precio:11000, img:"pack-muzarella-cocida.jpg", emoji:"🍕", top:true, chips:["2 pizzas grandes","Al horno en 12 min"] },
+  { id:'pp2', cat:"Pack Pizzas", nombre:"Pack Jamón y Queso x2",      desc:"Dos pizzas de jamón y queso. El clásico del tercer tiempo.",               precio:11000, img:"pack-jamon-queso-cocida.jpg", emoji:"🍕", chips:["2 pizzas grandes","Al horno en 12 min"] },
+  { id:'pp3', cat:"Pack Pizzas", nombre:"Pack Cebolla y Queso x2",    desc:"Dos pizzas con cebolla caramelizada. Siempre piden más.",                  precio:11000, img:"pack-cebolla-queso-cocida.jpg", emoji:"🍕", chips:["2 pizzas grandes","Al horno en 12 min"] },
   { id:'ecac', cat:"Empanadas", nombre:"Empanadas Carne a Cuchillo x8", desc:"Carne cortada a cuchillo, jugosa y bien condimentada. Las que piden todos.", precio:18400, img:"empanadas-carne-v2.jpg", emoji:"🥟", chips:["8 empanadas","Al horno hasta dorar"] },
   { id:'ejyq', cat:"Empanadas", nombre:"Empanadas Jamón y Queso x8",    desc:"Cremosas por dentro, doraditas por fuera. Para cualquier momento.",          precio:16000, img:"empanadas-jamon-v2.jpg", emoji:"🥟", chips:["8 empanadas","Al horno hasta dorar"] },
   { id:'ecyq', cat:"Empanadas", nombre:"Empanadas Cebolla y Queso Azul x8", desc:"Cebolla caramelizada con queso azul. Intensas y cremosas.",              precio:16000, img:"empanadas-cebolla-v2.jpg", emoji:"🥟", chips:["8 empanadas","Al horno hasta dorar"] },
   { id:'evc',  cat:"Empanadas", nombre:"Empanadas Verdura x8",          desc:"Relleno de verdura fresca y queso. Livianas y riquísimas.",                  precio:16000, img:"empanadas-verdura-v2.jpg", emoji:"🥟", chips:["8 empanadas","Al horno hasta dorar"] },
 ];
 const CATEGORIAS_CLUBES = [
-  { nombre:"Pizzas Premium",  icono:"🍕", nota:"Individuales · Pre-cocidas · Al horno directo desde el freezer" },
-  { nombre:"Pizzas Clásicas", icono:"🍕", nota:"Pack de 2 unidades · Ideal para compartir en equipo" },
-  { nombre:"Empanadas",       icono:"🥟", nota:"x8 unidades · Congeladas, listas para el horno · Cocinar hasta dorar" },
+  { nombre:"Pack Pizzas", icono:"🍕", nota:"Pack de 2 unidades · Ideal para compartir en equipo" },
+  { nombre:"Pizzas",      icono:"🍕", nota:"Individuales · Pre-cocidas · Al horno directo desde el freezer" },
+  { nombre:"Empanadas",   icono:"🥟", nota:"x8 unidades · Congeladas, listas para el horno · Cocinar hasta dorar" },
 ];
 // Los productos de clubes se agregan a PROD_MAP después de su declaración (ver más abajo)
 
