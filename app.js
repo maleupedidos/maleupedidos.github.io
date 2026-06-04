@@ -441,27 +441,38 @@ function pilarIsOtroBarrio() {
   var el = $id('f-pilar-barrio');
   return !!(el && el.value === '__otro__');
 }
-function discountsActive() {
-  // Descuentos (10% Efectivo / 10% +$100K) SOLO en Home (Estancias).
-  // Pilar (ningún barrio) y Clubes no tienen descuentos.
+// Descuentos separados por tipo (jun/26):
+//   10% Efectivo  → solo Home (Estancias).
+//   10% +$100K    → Home (Estancias) Y Pilar NO-Red (Pilara, El Ocho,
+//                   Otro barrio). Pilar Red (Marcos) y Clubes nunca.
+function cashDiscountActive() {
   return currentZone === 'estancias';
 }
+function bulkDiscountActive() {
+  if (currentZone === 'estancias') return true;
+  if (currentZone === 'pilar') return !_pilarBarrioIsRed();
+  return false;
+}
+function discountsActive() {
+  // Hay AL MENOS UN descuento activo en la zona — usado para mostrar la
+  // promo bar y el incentivo del carrito en general.
+  return cashDiscountActive() || bulkDiscountActive();
+}
 function getCashDiscount() {
-  if (!discountsActive()) return 0;
   const total = cartTotal();
   const sel = document.querySelector('input[name="pago"]:checked');
   const isCash = sel && sel.value === 'Efectivo';
   const isBulk = total >= 100000;
-  if (isCash || isBulk) return Math.round(total * 0.10);
+  if (isCash && cashDiscountActive()) return Math.round(total * 0.10);
+  if (isBulk && bulkDiscountActive()) return Math.round(total * 0.10);
   return 0;
 }
 function getDiscountLabel() {
-  if (!discountsActive()) return '';
   const sel = document.querySelector('input[name="pago"]:checked');
   const isCash = sel && sel.value === 'Efectivo';
   const isBulk = cartTotal() >= 100000;
-  if (isCash) return '10% OFF Efectivo';
-  if (isBulk) return '10% OFF (+$100K)';
+  if (isCash && cashDiscountActive()) return '10% OFF Efectivo';
+  if (isBulk && bulkDiscountActive()) return '10% OFF (+$100K)';
   return '';
 }
 function slugify(str) {
@@ -1188,17 +1199,19 @@ function updateUI() {
       var sel = document.querySelector('input[name="pago"]:checked');
       var isCash = sel && sel.value === 'Efectivo';
       var yaDescuento = discount > 0;
+      var cashOK = cashDiscountActive();
+      var bulkOK = bulkDiscountActive();
 
       if (yaDescuento) {
         // Ya tiene descuento — felicitarlo
         incentiveEl.innerHTML = '<strong>🎉 ¡Descuento aplicado!</strong><br>Estás ahorrando <strong>' + ars(discount) + '</strong>';
         incentiveEl.style.display = '';
-      } else if (falta > 0 && falta <= 40000 && subtotal >= 60000) {
+      } else if (bulkOK && falta > 0 && falta <= 40000 && subtotal >= 60000) {
         // Cerca de $100K — incentivar a llegar
         incentiveEl.innerHTML = '🔥 Estás a <strong>' + ars(falta) + '</strong> de tener <strong>10% OFF</strong> por superar los $100.000' +
-          (!isCash ? '<div class="incentive-cash">💵 También podés pagar en efectivo y tener 10% OFF</div>' : '');
+          (cashOK && !isCash ? '<div class="incentive-cash">💵 También podés pagar en efectivo y tener 10% OFF</div>' : '');
         incentiveEl.style.display = '';
-      } else if (!isCash && subtotal > 0 && subtotal < 60000) {
+      } else if (cashOK && !isCash && subtotal > 0 && subtotal < 60000) {
         // Pedido chico — solo recordar el efectivo
         incentiveEl.innerHTML = '<div class="incentive-cash" style="border:none;margin:0;padding:0;">💵 Pagando en efectivo tenés 10% OFF</div>';
         incentiveEl.style.display = '';
@@ -2249,7 +2262,19 @@ const FREE_SHIPPING_MIN = 25000; // envío gratis desde $25.000 (solo aplica par
 function updatePromoBar() {
   var bar = $id('promo-bar');
   if (!bar) return;
-  bar.style.display = discountsActive() ? '' : 'none';
+  if (!discountsActive()) { bar.style.display = 'none'; return; }
+  // Construir el ticker dinámicamente según qué descuentos aplican en la zona
+  // (en Pilar NO-Red solo aplica el +$100K, no el efectivo).
+  var msgEl = bar.querySelector('.promo-msg');
+  if (msgEl) {
+    var chips = [];
+    if (cashDiscountActive()) chips.push('💵 10% OFF en efectivo');
+    if (bulkDiscountActive()) chips.push('🔥 10% OFF superando $100.000');
+    // Duplicar la secuencia para el efecto marquee continuo
+    var seq = chips.concat(chips).join(' &nbsp;·&nbsp; ') + ' &nbsp;·&nbsp;';
+    msgEl.innerHTML = seq;
+  }
+  bar.style.display = '';
 }
 function updatePagoHint() {
   var hint = $id('pago-hint');
@@ -2259,8 +2284,9 @@ function updatePagoHint() {
   // Si el descuento del 10% ya se aplica por superar $100K, no tiene sentido
   // invitar al cliente a cambiar a efectivo — ya tiene el 10% ahorrado.
   var yaBulk = cartTotal() >= 100000;
-  // Mostrar solo si hay descuentos activos, no eligió efectivo Y el bulk no aplica
-  hint.style.display = (discountsActive() && !isCash && !yaBulk) ? '' : 'none';
+  // Mostrar solo si el descuento de efectivo aplica en la zona, no eligió
+  // efectivo Y el bulk no está ya cubriendo el 10%.
+  hint.style.display = (cashDiscountActive() && !isCash && !yaBulk) ? '' : 'none';
 }
 function updateShippingBar() {
   const bar = $id('shipping-bar');
