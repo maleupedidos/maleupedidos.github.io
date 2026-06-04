@@ -279,6 +279,15 @@ body.embed .tabs{top:0}
 .np-wrap{padding:14px 16px 20px;max-width:100%;overflow-x:hidden}
 .np-label{font-size:12px;font-weight:800;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin:14px 2px 6px}
 .np-row{margin-bottom:8px}
+.np-search-wrap{position:relative}
+.np-dropdown{position:absolute;top:100%;left:0;right:0;background:var(--white);border:1.5px solid var(--border);border-radius:10px;margin-top:4px;max-height:280px;overflow-y:auto;z-index:80;box-shadow:0 8px 16px rgba(0,0,0,.10)}
+.np-dropdown.hidden{display:none}
+.np-cli-item{padding:11px 13px;cursor:pointer;border-bottom:1px solid #F2E8C7;touch-action:manipulation}
+.np-cli-item:last-child{border-bottom:none}
+.np-cli-item:active{background:#FFF8E1}
+.np-cli-name{font-weight:800;color:var(--brown);font-size:15px;line-height:1.2}
+.np-cli-meta{font-size:11px;color:var(--muted);margin-top:3px}
+.np-cli-empty{padding:11px 13px;font-size:12px;color:var(--muted);font-style:italic}
 .np-row-2{display:flex;gap:8px;margin-bottom:8px}
 .np-row-2 > *{flex:1;min-width:0}
 .np-input{width:100%;padding:14px 14px;border:1.5px solid var(--border);border-radius:10px;font-family:inherit;font-size:16px;font-weight:600;background:var(--white);outline:none;color:var(--brown);-webkit-appearance:none;appearance:none}
@@ -411,8 +420,9 @@ select.np-input{background:var(--white) url("data:image/svg+xml;utf8,<svg xmlns=
     </div>
 
     <!-- Cliente + Lote (golden path) -->
-    <div class="np-row">
-      <input type="text" id="npNombre" placeholder="Nombre cliente" class="np-input" autocomplete="off">
+    <div class="np-row np-search-wrap">
+      <input type="text" id="npNombre" placeholder="Buscar cliente o tipear nombre nuevo" class="np-input" autocomplete="off" oninput="npFiltrarClientes()" onfocus="npFiltrarClientes()">
+      <div id="npClientesDropdown" class="np-dropdown hidden"></div>
     </div>
 
     <!-- Home: barrio privado + sub barrio + lote -->
@@ -838,6 +848,7 @@ var NP_DIA_NOMBRE=['Domingo','Lunes','Martes','Mi\u00E9rcoles','Jueves','Viernes
 var NP_DIA_CORTO=['DOM','LUN','MAR','MIE','JUE','VIE','SAB'];
 var NP_MES_CORTO=['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
 var npCart={}, npZona='Home', npPago='Efectivo', npFechaSel='', npSaving=false;
+var _npClientesCache=null, _npClientesCacheTs=0, _npClickHandlerInstalled=false;
 
 /* ── LOADING OVERLAYS (dos distintos: GUARDAR y CARGAR) ── */
 var loaderCount=0;
@@ -857,7 +868,7 @@ var STORAGE_VERSION='v2-row-keyed';
 // APP_VERSION: si el browser carga una version distinta a la conocida, limpiamos
 // caches del SW y recargamos. Evita que iOS Safari sirva HTML viejo (bug Violeta
 // 27/05: PWA con codigo v55 procesando cobros con processSyncQueue trabado).
-var APP_VERSION='v87';
+var APP_VERSION='v91';
 // Pintar version real en el badge (no hardcodear el HTML, suele desincronizar).
 try{var __ve=document.getElementById('appVer');if(__ve)__ve.textContent=APP_VERSION;}catch(_){}
 (function(){
@@ -3552,6 +3563,158 @@ function renderNuevo(){
     npRenderFechas();
   }
   npUpdateTotal();
+  // Buscador de clientes: precarga la lista (CRM) la primera vez o si está
+  // vencida (30 min). No bloquea — si el fetch tarda, el input sigue siendo un
+  // texto libre. Pensado para los picos vie/sáb de Home: cliente repetido se
+  // encuentra en 2 letras y autocompleta barrio + sub-barrio + tel.
+  npFetchClientes();
+  npInstallClickHandler();
+}
+
+// Carga la lista de clientes desde el CRM (un solo fetch, cache 30 min).
+function npFetchClientes(){
+  if(_npClientesCache && (Date.now()-_npClientesCacheTs)<1800000)return;
+  fetch(APPS_SCRIPT_URL+'?action=crmClientes&t='+Date.now())
+    .then(function(r){return r.json()})
+    .then(function(data){
+      var lista=(data&&data.clientes)||(Array.isArray(data)?data:[]);
+      _npClientesCache=lista.map(function(c){
+        return {
+          nombre:c.nombre||'',
+          tel:c.tel||c.telDisplay||'',
+          barrio:c.barrio||'',
+          subBarrio:c.subBarrio||'',
+          club:c.club||'',
+          canal:c.canalDom||'',
+          pedidos:Number(c.pedidos)||0,
+          // Precomputado para filtrar rápido
+          _sn:(c.nombre||'').toLowerCase(),
+          _sa:(c.nombresAlt||[]).map(function(n){return String(n||'').toLowerCase()}),
+          _st:String(c.tel||c.telDisplay||'').replace(/\D/g,'')
+        };
+      });
+      _npClientesCacheTs=Date.now();
+    })
+    .catch(function(){});
+}
+
+// Filtra y renderea el dropdown según lo tipeado en npNombre.
+// Match por nombre (substring), por alias (nombresAlt para tipeos típicos),
+// o por teléfono (si tipea dígitos). Prioriza clientes del canal activo.
+function npFiltrarClientes(){
+  var input=document.getElementById('npNombre');
+  var dd=document.getElementById('npClientesDropdown');
+  if(!input||!dd)return;
+  var q=String(input.value||'').trim().toLowerCase();
+  if(q.length<2){dd.classList.add('hidden');dd.innerHTML='';dd.__matches=null;return;}
+  if(!_npClientesCache){
+    // Aún cargando — feedback honesto. Reintenta el fetch por las dudas.
+    dd.classList.remove('hidden');
+    dd.innerHTML='<div class="np-cli-empty">Cargando clientes...</div>';
+    npFetchClientes();
+    return;
+  }
+  var qDigit=q.replace(/\D/g,'');
+  var matches=[];
+  for(var i=0;i<_npClientesCache.length;i++){
+    var c=_npClientesCache[i];
+    var hit=(c._sn.indexOf(q)>=0)
+         || (qDigit.length>=3 && c._st.indexOf(qDigit)>=0)
+         || c._sa.some(function(a){return a.indexOf(q)>=0});
+    if(hit)matches.push(c);
+  }
+  if(matches.length===0){
+    dd.classList.remove('hidden');
+    dd.innerHTML='<div class="np-cli-empty">Sin coincidencias — seguí tipeando y se guarda como cliente nuevo.</div>';
+    dd.__matches=null;
+    return;
+  }
+  // Sort: canal activo primero, después por más pedidos (clientes recurrentes arriba)
+  matches.sort(function(a,b){
+    var ca=(a.canal===npZona)?1:0,cb=(b.canal===npZona)?1:0;
+    if(ca!==cb)return cb-ca;
+    return b.pedidos-a.pedidos;
+  });
+  if(matches.length>8)matches=matches.slice(0,8);
+  dd.__matches=matches;
+  dd.innerHTML=matches.map(function(c,idx){
+    var meta=[];
+    if(c.subBarrio)meta.push(c.subBarrio);
+    else if(c.barrio)meta.push(c.barrio);
+    if(c.club)meta.push(c.club);
+    if(c.canal)meta.push(c.canal);
+    if(c.pedidos)meta.push(c.pedidos+' ped.');
+    return '<div class="np-cli-item" onclick="npSelectCliente('+idx+')">'+
+      '<div class="np-cli-name">'+c.nombre+'</div>'+
+      '<div class="np-cli-meta">'+meta.join(' · ')+'</div>'+
+      '</div>';
+  }).join('');
+  dd.classList.remove('hidden');
+}
+
+// Selecciona un cliente del dropdown y autocompleta los campos según la zona activa.
+function npSelectCliente(idx){
+  var dd=document.getElementById('npClientesDropdown');
+  var matches=(dd&&dd.__matches)||[];
+  var c=matches[idx];
+  if(!c)return;
+  document.getElementById('npNombre').value=c.nombre;
+  // Tel (siempre, se guarda en el pedido)
+  var elTel=document.getElementById('npTel');if(elTel&&c.tel)elTel.value=c.tel;
+  // Home: barrio privado + sub-barrio (si matchean un option). Lote queda manual.
+  if(npZona==='Home'){
+    if(c.barrio){
+      var bp=document.getElementById('npBarrioPrivado');
+      if(bp){
+        for(var i=0;i<bp.options.length;i++){
+          if(bp.options[i].value===c.barrio){bp.value=c.barrio;if(typeof npBarrioPrivadoChange==='function')npBarrioPrivadoChange();break;}
+        }
+      }
+    }
+    if(c.subBarrio){
+      var sb=document.getElementById('npSubBarrio');
+      if(sb){
+        for(var j=0;j<sb.options.length;j++){
+          if(sb.options[j].value===c.subBarrio){sb.value=c.subBarrio;break;}
+        }
+      }
+    }
+    var lote=document.getElementById('npLote');
+    if(lote)setTimeout(function(){try{lote.focus();}catch(_){}}, 60);
+  } else if(npZona==='Pilar'){
+    if(c.barrio){var bpi=document.getElementById('npPilarBarrio');if(bpi)bpi.value=c.barrio;}
+    var lp=document.getElementById('npPilarLote');
+    if(lp)setTimeout(function(){try{lp.focus();}catch(_){}}, 60);
+  } else if(npZona==='Clubes'){
+    if(c.club){
+      var cl=document.getElementById('npClub');
+      if(cl){
+        for(var k=0;k<cl.options.length;k++){
+          if(cl.options[k].value===c.club){cl.value=c.club;break;}
+        }
+      }
+    }
+  }
+  dd.classList.add('hidden');
+  dd.innerHTML='';
+  dd.__matches=null;
+}
+
+// Cierra el dropdown al tap fuera. Se instala una sola vez.
+function npInstallClickHandler(){
+  if(_npClickHandlerInstalled)return;
+  _npClickHandlerInstalled=true;
+  document.addEventListener('click',function(e){
+    var dd=document.getElementById('npClientesDropdown');
+    if(!dd||dd.classList.contains('hidden'))return;
+    var t=e.target;
+    if(!t)return;
+    // No cerrar si el tap fue adentro del dropdown o del input
+    if(t.id==='npNombre')return;
+    var p=t;
+    while(p){if(p.id==='npClientesDropdown')return;p=p.parentNode;}
+    dd.classList.add('hidden');
+  });
 }
 
 function npSetZona(z){
