@@ -1235,6 +1235,8 @@ function updateFormSummary() {
     if (!p) return '';
     return '<div class="summary-line"><span>' + p.nombre + ' <strong>×' + qty + '</strong></span><span>' + ars(p.precio*qty) + '</span></div>';
   }).join('') +
+    // Sub Total: solo si hay descuento (deja claro de qué monto sale el 10%).
+    (discount > 0 ? '<div class="summary-line subtotal-line"><span>Sub Total</span><span>' + ars(subtotal) + '</span></div>' : '') +
     (discount > 0 ? '<div class="summary-line discount-line"><span>' + getDiscountLabel() + '</span><span>-' + ars(discount) + '</span></div>' : '') +
     '<div class="summary-line shipping-line"><span>Envío</span><span>' + (shipping === 0 ? 'Gratis' : ars(shipping)) + '</span></div>' +
     '<div class="summary-line total-line"><span>Total</span><span>' + ars(total) + '</span></div>';
