@@ -89,7 +89,7 @@ const ZONAS = {
   },
   pilar: {
     nombre: "Pilar y Alrededores",
-    envio: 3000,
+    envio: 5000,
     canal: "Pilar",
     horarios: { "Miércoles":"A coordinar", "Viernes":"A coordinar" },
     deliveryText: "📅 Entregas: Miércoles y Viernes · Horario a coordinar",
@@ -430,7 +430,7 @@ function getShipping() {
   const z = ZONAS[currentZone];
   // En Pilar: envío gratis solo en barrios Red (Marcos los reparte sin cobrar
   // en El Lucero / Los Tacos / Villa Bertha). Cualquier otro barrio (Pilara,
-  // El Ocho, Otro barrio, etc.) lo reparte Tadeo y cobra $3.000.
+  // El Ocho, Otro barrio, etc.) lo reparte Tadeo y cobra $5.000.
   if (currentZone === 'pilar') {
     return _pilarBarrioIsRed() ? 0 : z.envio;
   }
