@@ -567,6 +567,9 @@ select.np-input{background:var(--white) url("data:image/svg+xml;utf8,<svg xmlns=
     <!-- Saldo a favor previo del cliente (se popula al abrir si tiene crédito) -->
     <div id="cobroSaldoPrevio" style="display:none;background:#FFF8E1;border:1.5px solid #F9A825;border-radius:10px;padding:10px 12px;margin-bottom:10px"></div>
 
+    <!-- Info de descuento: explica por qué cambia el total según FP -->
+    <div id="cobroRutaDescInfo" style="display:none;border-radius:8px;padding:9px 11px;margin-bottom:10px;font-size:12px;line-height:1.5"></div>
+
     <div class="cobro-ruta-section">
       <label class="cobro-ruta-lbl">Forma de pago</label>
       <div class="cobro-ruta-pills" id="cobroRutaFp">
@@ -854,7 +857,7 @@ var STORAGE_VERSION='v2-row-keyed';
 // APP_VERSION: si el browser carga una version distinta a la conocida, limpiamos
 // caches del SW y recargamos. Evita que iOS Safari sirva HTML viejo (bug Violeta
 // 27/05: PWA con codigo v55 procesando cobros con processSyncQueue trabado).
-var APP_VERSION='v86';
+var APP_VERSION='v87';
 // Pintar version real en el badge (no hardcodear el HTML, suele desincronizar).
 try{var __ve=document.getElementById('appVer');if(__ve)__ve.textContent=APP_VERSION;}catch(_){}
 (function(){
@@ -2256,6 +2259,7 @@ function abrirCobroPendiente(idx){
   _setMoneyInput('cobroRecMP',(fp==='Transferencia')?total:0);
   _resetCobroSeccionesColapsables();
   document.getElementById('cobroRutaOverlay').classList.remove('hidden');
+  _renderCobroDescInfo();
   _recalcCobroRuta();
   // Traer saldo a favor previo del cliente para el bloque "Aplicar saldo"
   if(pc.t||pc.c)_fetchSaldoPrevioModal(pc.t,pc.c);
@@ -2588,6 +2592,65 @@ function _totalSegunFp(ent,fp){
   return sub+env-desc;
 }
 
+// Pinta una caja informativa debajo de "Forma de pago" explicando POR QUÉ el total
+// es el que es. Casos: 10% OFF Efectivo (sub<$100K), 10% OFF +$100K (sub>=$100K
+// en cualquier FP), o sin descuento. Si el pedido tiene parcial previo, no se
+// recalcula nada (el descuento se aplicó al primer cobro).
+function _renderCobroDescInfo(){
+  var el=document.getElementById('cobroRutaDescInfo');
+  if(!el)return;
+  var st=_cobroRutaState;
+  if(!st || st.combo){el.style.display='none';return;}
+  var ent=st.ent;
+  if(!ent){el.style.display='none';return;}
+  // Parcial previo: el saldo ya viene calculado, no aplicar reglas de descuento.
+  if(st.esParcialPrev){
+    el.style.display='block';
+    el.style.background='#FFF8E1';
+    el.style.border='1.5px solid #F9A825';
+    el.style.color='#5D4037';
+    el.innerHTML='💡 Este saldo ya tiene el descuento del primer cobro aplicado. Cambiar la forma de pago acá no recalcula.';
+    return;
+  }
+  var sub=Number(ent.sub)||0;
+  var env=Number(ent.env)||0;
+  if(sub<=0){el.style.display='none';return;}
+  var fp=st.fp||'Efectivo';
+  var aplicaCash=(fp==='Efectivo');
+  var aplicaBulk=(sub>=100000);
+  var desc=(aplicaCash||aplicaBulk)?Math.round(sub*0.10):0;
+  var total=sub+env-desc;
+  var motivo='';
+  if(aplicaBulk){
+    motivo='<b>10% OFF +$100K</b> aplicado automáticamente (subtotal supera $100K, sin importar la forma de pago)';
+  } else if(aplicaCash){
+    motivo='<b>10% OFF efectivo</b> aplicado';
+  }
+  var html='';
+  if(desc>0){
+    el.style.background='#E8F5E9';
+    el.style.border='1.5px solid #4CAF50';
+    el.style.color='#1B5E20';
+    html='💸 '+motivo+'<br>';
+    html+='<span style="color:#5D4037">Subtotal '+formatMoney(sub)+(env>0?' + envío '+formatMoney(env):'')+' − descuento '+formatMoney(desc)+' = <b>'+formatMoney(total)+'</b></span>';
+  } else if(fp==='Transferencia' && sub<100000 && sub>0){
+    el.style.background='#FFF3E0';
+    el.style.border='1.5px solid #FB923C';
+    el.style.color='#9A3412';
+    var descSi=Math.round(sub*0.10);
+    html='ℹ️ <b>Sin descuento</b> con MP/Transf. Si el cliente paga en Efectivo, ahorra '+formatMoney(descSi)+' (10% OFF).';
+  } else if(fp==='Mixto'){
+    el.style.background='#F3F4F6';
+    el.style.border='1.5px solid #9CA3AF';
+    el.style.color='#374151';
+    html='ℹ️ <b>Mixto</b>: se toma el total tal cual del pedido original (sin recalcular descuento).';
+  } else {
+    el.style.display='none';return;
+  }
+  el.style.display='block';
+  el.innerHTML=html;
+}
+
 // Lee la propina manual respetando el signo del botón ±.
 function _leerPropinaModalCobro(){
   var raw=_parseMoneyInput(document.getElementById('cobroPropinaInp'));
@@ -2668,6 +2731,7 @@ function abrirCobroRuta(key){
   _setMoneyInput('cobroRecMP',(fp==='Transferencia')?total:0);
   _resetCobroSeccionesColapsables();
   document.getElementById('cobroRutaOverlay').classList.remove('hidden');
+  _renderCobroDescInfo();
   _recalcCobroRuta();
 }
 
@@ -2693,6 +2757,7 @@ function _setCobroFp(fp){
       : 'Pedido '+formatMoney(nuevoTotal)+' · '+st.ent.h+' #'+st.ent.id;
     document.getElementById('cobroRutaSub').textContent=subTxt;
   }
+  _renderCobroDescInfo();
   // Re-defaults Recibí (suma propina manual y a-favor; resta saldo previo aplicado).
   // En modo parcial no se prefilla — Tadeo tipea lo que recibió.
   if(!st.partial){
