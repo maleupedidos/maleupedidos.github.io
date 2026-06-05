@@ -3756,6 +3756,56 @@ function _stockDisponible(abbr){
   return 0;
 }
 
+// ── Receta de descuento (mirror del backend) ──
+var _DESC_CAT_OF_ABBR={PPM:'Pack Pizzas x2',PPJyQ:'Pack Pizzas x2',PPCyQ:'Pack Pizzas x2',PMu:'Pizzas Individuales',PMa:'Pizzas Individuales',PJyQ:'Pizzas Individuales',PCC:'Pizzas Individuales',PJyM:'Pizzas Individuales',RC:'Wraps',RP:'Wraps',ECaC:'Empanadas',EJyQ:'Empanadas',ECyQ:'Empanadas',EV:'Empanadas',SCo:'Sorrentinos',SJyQ:'Sorrentinos',SCa:'Sorrentinos',SQB:'Sorrentinos',SL:'Sorrentinos',SPyP:'Sorrentinos',SE:'Sorrentinos',TP:'Tartas',TJyQ:'Tartas',TCa:'Tartas',TV:'Tartas',F:'Franuis',TG:'Tortas',TLC:'Tortas',TC:'Tortas'};
+function _parseRecetaPanel(raw){if(!raw)return null;try{var o=typeof raw==='object'?raw:JSON.parse(raw);return (o&&typeof o==='object')?o:null;}catch(e){return null;}}
+// Devuelve {sub, desc, total} aplicando la receta a las lineas [{a,q,precio}]. Mirror exacto del backend.
+function _calcDescRecetaPanel(receta,lineas,pago){
+  var sub=0,catDiscP=0;
+  lineas.forEach(function(l){var line=(Number(l.precio)||0)*(Number(l.q)||0);sub+=line;if(receta){var cp=(receta.c&&Number(receta.c[_DESC_CAT_OF_ABBR[l.a]]))||0;if(cp>0)catDiscP+=line*cp/100;}});
+  catDiscP=Math.round(catDiscP);
+  var desc=0;
+  if(receta){
+    var g=Number(receta.g)||0;
+    var globalDiscP=Math.round(Math.max(0,sub-catDiscP)*g/100);
+    var pctDisc=catDiscP+globalDiscP; if(pctDisc>sub)pctDisc=sub;
+    var auto=0;
+    if(receta.auto10&&pctDisc===0&&(pago==='Efectivo'||sub>=100000))auto=Math.round(sub*0.10);
+    var eff=pctDisc>0?pctDisc:auto; var regalo=Math.max(0,Number(receta.r)||0);
+    desc=Math.min(sub,eff+regalo);
+  } else if(pago==='Efectivo'||sub>=100000){ desc=Math.round(sub*0.10); }
+  return {sub:sub,desc:desc,total:Math.max(0,sub-desc)};
+}
+// HTML del box de totales del editor (incluye descuento de la receta en vivo)
+function _editorTotalsHTML(uid){
+  var ed=window['_ed_'+uid]; if(!ed) return '';
+  var costoCalc=0;
+  var lineas=ed.lineas.map(function(l){costoCalc+=l.q*(l.costo||0);return {a:l.a,q:l.q,precio:l.precio};});
+  var d=_calcDescRecetaPanel(ed.receta,lineas,ed.fp);
+  var margenCalc=d.total-costoCalc;
+  var margenPctCalc=d.total>0?Math.round(margenCalc/d.total*100):0;
+  var h='';
+  h+='<div style="display:flex;justify-content:space-between;align-items:center;font-size:13px;color:var(--bl);margin-bottom:6px"><span>Subtotal productos</span><span style="font-weight:700">$'+f$(d.sub)+'</span></div>';
+  if(d.desc>0)h+='<div style="display:flex;justify-content:space-between;align-items:center;font-size:13px;color:var(--gd);margin-bottom:6px"><span>Descuento</span><span style="font-weight:700">&minus;$'+f$(d.desc)+'</span></div>';
+  h+='<div style="display:flex;justify-content:space-between;align-items:center;font-size:13px;color:var(--bl);margin-bottom:6px"><span>Costo total (CMV)</span><span style="font-weight:700;color:#C62828">$'+f$(costoCalc)+'</span></div>';
+  h+='<div style="display:flex;justify-content:space-between;align-items:center;font-size:13px;color:var(--bl);margin-bottom:8px"><span>Margen bruto <b style="color:'+(margenCalc>=0?'var(--gd)':'var(--r)')+'">('+margenPctCalc+'%)</b></span><span style="font-weight:700;color:'+(margenCalc>=0?'var(--gd)':'var(--r)')+'">$'+f$(margenCalc)+'</span></div>';
+  h+='<div style="display:flex;justify-content:space-between;align-items:center;padding-top:8px;border-top:1px solid var(--cd);font-weight:800;font-size:16px;color:var(--b)"><span>Total a cobrar</span><span>$'+f$(d.total)+'</span></div>';
+  return h;
+}
+// Reconstruye ed.receta desde los inputs de descuento del editor
+function actualizarDescuentoEditor(uid){
+  var ed=window['_ed_'+uid]; if(!ed) return;
+  var box=$(uid); if(!box) return;
+  var gEl=box.querySelector('[data-drole="g"]'); var g=gEl?Number(gEl.value)||0:0; if(g<0)g=0; if(g>100)g=100;
+  var rEl=box.querySelector('[data-drole="r"]'); var r=rEl?Number(rEl.value)||0:0; if(r<0)r=0;
+  var no10El=box.querySelector('[data-drole="no10"]'); var no10=no10El?!!no10El.checked:false;
+  var c={};
+  box.querySelectorAll('[data-drole="cat"]').forEach(function(inp){var v=Number(inp.value)||0; if(v>100)v=100; if(v>0)c[inp.dataset.cat]=v;});
+  var hasPct=(g>0)||Object.keys(c).length>0;
+  ed.receta=(hasPct||r>0||no10)?{g:g,c:c,r:r,auto10:!(hasPct||no10)}:null;
+  recalcularTotalesEditor(uid);
+}
+
 function abrirEditorPedido(hoja, id, row, uidEd){
   var box=$(uidEd); if(!box) return;
   if(!box.classList.contains('hidden')){box.classList.add('hidden');box.innerHTML='';return;}
@@ -3767,8 +3817,8 @@ function abrirEditorPedido(hoja, id, row, uidEd){
     }
   }
   if(!ped){toast('Pedido no encontrado');return;}
-  // Estado del editor: lineas: [{a, q, precio, costo}]
-  var ed={hoja:hoja,id:id,row:row,uid:uidEd,lineas:[]};
+  // Estado del editor: lineas: [{a, q, precio, costo}], receta de descuento, forma de pago
+  var ed={hoja:hoja,id:id,row:row,uid:uidEd,lineas:[],receta:_parseRecetaPanel(ped.dd),fp:ped.fp||''};
   (ped.p||[]).forEach(function(pr){
     // qOrig = cantidad original del pedido. Si ya estaba reservada (origen=Deposito),
     // el stock disponible la descontó, así que el cap real es disponible+qOrig.
@@ -3835,13 +3885,29 @@ function renderEditor(uidEd){
     html+='<button onclick="agregarLineaEditor(\''+uidEd+'\')" style="padding:10px 16px;background:var(--o);color:#fff;border:none;border-radius:8px;font-size:18px;font-weight:800;cursor:pointer;line-height:1">+</button>';
     html+='</div></div>';
   }
+  // ── Descuento (receta) — solo Home/Pilar ──
+  if(ed.hoja==='Home'||ed.hoja==='Pilar'){
+    var rec=ed.receta||{g:0,c:{},r:0};
+    var catsP=[],seenC={};
+    ed.lineas.forEach(function(l){var ct=_DESC_CAT_OF_ABBR[l.a];if(ct&&!seenC[ct]){seenC[ct]=1;catsP.push(ct);}});
+    var inpSt='width:74px;padding:8px 10px;border:1.5px solid var(--cd);border-radius:8px;font-size:14px;font-weight:700;text-align:right;font-family:inherit';
+    var rowSt='display:flex;align-items:center;gap:8px;margin-bottom:7px';
+    var lblSt='flex:1;font-size:12px;color:var(--bl);font-weight:600';
+    html+='<div style="background:#fff;border:1px dashed var(--gd);border-radius:10px;padding:12px;margin-bottom:10px">';
+    html+='<div style="font-size:12px;color:var(--gd);font-weight:800;margin-bottom:10px">% Descuento</div>';
+    html+='<div style="'+rowSt+'"><label style="'+lblSt+'">% al pedido</label><input type="number" inputmode="numeric" min="0" max="100" value="'+(Number(rec.g)>0?rec.g:'')+'" data-drole="g" oninput="actualizarDescuentoEditor(\''+uidEd+'\')" style="'+inpSt+'"><span style="font-size:13px;color:var(--bl);font-weight:700">%</span></div>';
+    catsP.forEach(function(ct){
+      var cv=(rec.c&&Number(rec.c[ct]))||0;
+      html+='<div style="'+rowSt+'"><label style="'+lblSt+'">% '+ct+'</label><input type="number" inputmode="numeric" min="0" max="100" value="'+(cv>0?cv:'')+'" data-drole="cat" data-cat="'+ct+'" oninput="actualizarDescuentoEditor(\''+uidEd+'\')" style="'+inpSt+'"><span style="font-size:13px;color:var(--bl);font-weight:700">%</span></div>';
+    });
+    html+='<div style="'+rowSt+'"><label style="'+lblSt+'">&#x1F381; Regalo $</label><input type="number" inputmode="numeric" min="0" value="'+(Number(rec.r)>0?rec.r:'')+'" data-drole="r" oninput="actualizarDescuentoEditor(\''+uidEd+'\')" style="'+inpSt+'"></div>';
+    var no10c=(ed.receta&&ed.receta.auto10===false&&!(Number(rec.g)>0)&&!(rec.c&&Object.keys(rec.c).length));
+    html+='<label style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--bl);font-weight:600;margin-top:4px;cursor:pointer"><input type="checkbox" data-drole="no10" '+(no10c?'checked':'')+' onchange="actualizarDescuentoEditor(\''+uidEd+'\')" style="width:16px;height:16px"> Cobrar precio normal (sin 10% efectivo)</label>';
+    html+='</div>';
+  }
   // Totales
-  var margenCalc=totalCalc-costoCalc;
-  var margenPctCalc=totalCalc>0?Math.round(margenCalc/totalCalc*100):0;
   html+='<div style="background:linear-gradient(135deg,#FFF8F0,#fff);border:2px solid var(--o);border-radius:12px;padding:14px;margin-top:10px">';
-  html+='<div style="display:flex;justify-content:space-between;align-items:center;font-size:13px;color:var(--bl);margin-bottom:6px"><span>Costo total (CMV)</span><span style="font-weight:700;color:#C62828">$'+f$(costoCalc)+'</span></div>';
-  html+='<div style="display:flex;justify-content:space-between;align-items:center;font-size:13px;color:var(--bl);margin-bottom:8px"><span>Margen bruto <b style="color:'+(margenCalc>=0?'var(--gd)':'var(--r)')+'">('+margenPctCalc+'%)</b></span><span style="font-weight:700;color:'+(margenCalc>=0?'var(--gd)':'var(--r)')+'">$'+f$(margenCalc)+'</span></div>';
-  html+='<div style="display:flex;justify-content:space-between;align-items:center;padding-top:8px;border-top:1px solid var(--cd);font-weight:800;font-size:16px;color:var(--b)"><span>Total a cobrar</span><span>$'+f$(totalCalc)+'</span></div>';
+  html+=_editorTotalsHTML(uidEd);
   html+='</div>';
   // Botones acción
   html+='<div style="display:flex;gap:8px;margin-top:12px">';
@@ -3907,10 +3973,7 @@ function recalcularTotalesEditor(uid){
   var margenPctCalc=totalCalc>0?Math.round(margenCalc/totalCalc*100):0;
   var totalesBox=box.querySelector('div[style*="linear-gradient(135deg,#FFF8F0"]');
   if(totalesBox){
-    totalesBox.innerHTML=
-      '<div style="display:flex;justify-content:space-between;align-items:center;font-size:13px;color:var(--bl);margin-bottom:6px"><span>Costo total (CMV)</span><span style="font-weight:700;color:#C62828">$'+f$(costoCalc)+'</span></div>'+
-      '<div style="display:flex;justify-content:space-between;align-items:center;font-size:13px;color:var(--bl);margin-bottom:8px"><span>Margen bruto <b style="color:'+(margenCalc>=0?'var(--gd)':'var(--r)')+'">('+margenPctCalc+'%)</b></span><span style="font-weight:700;color:'+(margenCalc>=0?'var(--gd)':'var(--r)')+'">$'+f$(margenCalc)+'</span></div>'+
-      '<div style="display:flex;justify-content:space-between;align-items:center;padding-top:8px;border-top:1px solid var(--cd);font-weight:800;font-size:16px;color:var(--b)"><span>Total a cobrar</span><span>$'+f$(totalCalc)+'</span></div>';
+    totalesBox.innerHTML=_editorTotalsHTML(uid);
   }
 }
 function quitarLineaEditor(uid, idx){
@@ -3941,7 +4004,7 @@ function guardarEditor(uid){
   // Tras la acción, scroll al top.
   window._forceTopOnRender=true;
   showLoader('Guardando cambios...');
-  fetch(API,{method:'POST',body:JSON.stringify({action:'editarPedido',hoja:ed.hoja,id:ed.id,row:ed.row,lineas:lineas})})
+  fetch(API,{method:'POST',body:JSON.stringify({action:'editarPedido',hoja:ed.hoja,id:ed.id,row:ed.row,lineas:lineas,descuentoReceta:ed.receta||null,descuentoRecetaEditor:true})})
     .then(function(r){return r.json();})
     .then(function(r){
       if(r.ok){
