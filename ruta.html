@@ -305,6 +305,15 @@ select.np-input{background:var(--white) url("data:image/svg+xml;utf8,<svg xmlns=
 .np-fecha-btn.active .fb-dia{color:#fff;opacity:.85}
 .np-productos{display:flex;flex-direction:column;gap:6px}
 .np-cat{font-size:11px;font-weight:800;color:var(--orange);text-transform:uppercase;letter-spacing:.08em;margin:8px 2px 2px}
+.np-cat-row{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:8px 2px 2px}
+.np-cat-row .np-cat{margin:0}
+.np-cat-disc{display:inline-flex;align-items:center;gap:1px;border:1.5px dashed var(--border);border-radius:8px;padding:3px 8px;background:var(--white);opacity:.55;transition:.12s}
+.np-cat-disc.on{border-style:solid;border-color:var(--orange);opacity:1;background:#FFF8F0}
+.np-cat-disc-inp{width:30px;border:none;background:transparent;font-family:inherit;font-size:13px;font-weight:800;text-align:right;color:var(--orange);outline:none;-webkit-appearance:none;appearance:none;padding:0}
+.np-cat-disc-pct{font-size:12px;font-weight:800;color:var(--orange)}
+.np-pct-wrap{position:relative;display:flex;align-items:center}
+.np-pct-wrap .np-input{padding-right:30px}
+.np-pct-sign{position:absolute;right:13px;font-size:16px;font-weight:800;color:var(--muted);pointer-events:none}
 .np-prod{display:flex;align-items:center;gap:10px;background:var(--white);border:1.5px solid var(--border);border-radius:10px;padding:10px 12px;min-width:0}
 .np-prod.has-qty{border-color:var(--orange);background:#FFF8F0}
 .np-prod-info{flex:1;min-width:0}
@@ -503,11 +512,16 @@ select.np-input{background:var(--white) url("data:image/svg+xml;utf8,<svg xmlns=
     <div class="np-label">Productos</div>
     <div id="npProductos" class="np-productos"></div>
 
-    <!-- Descuento manual / Regalo (opcional). Caso típico: cliente VIP, regalo
-         1 pizza ($11.000) → cargás la pizza en el pedido (qty=1) Y ponés $11.000
-         acá → total queda neto, pero el producto se descuenta del stock. -->
-    <div class="np-row" style="margin-top:10px">
-      <input type="number" id="npDescuentoManual" inputmode="numeric" placeholder="🎁 Descuento / Regalo $ (opcional)" class="np-input" oninput="npUpdateTotal()" min="0">
+    <!-- Descuentos. Dos cosas distintas:
+         · % al pedido: descuento sobre TODO el pedido (reemplaza el 10% del efectivo).
+         · 🎁 Regalo $: bonificación puntual en pesos (ej: regalo 1 pizza). Se suma aparte.
+         (El % por categoría va en el encabezado de cada categoría del catálogo de arriba.) -->
+    <div class="np-row-2" style="margin-top:10px">
+      <div class="np-pct-wrap" id="npGlobalPctWrap">
+        <input type="number" id="npGlobalPct" inputmode="numeric" placeholder="% al pedido" class="np-input" oninput="npSetGlobalPct()" min="0" max="100">
+        <span class="np-pct-sign">%</span>
+      </div>
+      <input type="number" id="npDescuentoManual" inputmode="numeric" placeholder="🎁 Regalo $ (opc.)" class="np-input" oninput="npUpdateTotal()" min="0">
     </div>
 
     <!-- Pago + Propina -->
@@ -855,6 +869,8 @@ var NP_DIA_NOMBRE=['Domingo','Lunes','Martes','Mi\u00E9rcoles','Jueves','Viernes
 var NP_DIA_CORTO=['DOM','LUN','MAR','MIE','JUE','VIE','SAB'];
 var NP_MES_CORTO=['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
 var npCart={}, npZona='Home', npPago='Efectivo', npFechaSel='', npSaving=false;
+var npGlobalPct=0;   // % de descuento sobre todo el pedido (tab "+")
+var npCatDisc={};    // { 'Tartas': 20, ... } % de descuento por categoría
 var _npClientesCache=null, _npClientesCacheTs=0, _npClickHandlerInstalled=false;
 
 /* ── LOADING OVERLAYS (dos distintos: GUARDAR y CARGAR) ── */
@@ -3779,6 +3795,9 @@ function npSetZona(z){
   document.getElementById('npPilarFields').classList.toggle('hidden',z!=='Pilar');
   document.getElementById('npClubesFields').classList.toggle('hidden',z!=='Clubes');
   document.getElementById('npFam').style.display=(z==='Home')?'flex':'none';
+  // Clubes: precio institucional → ocultar el % al pedido (y el % por categoría no se renderiza)
+  var gpw=document.getElementById('npGlobalPctWrap');if(gpw)gpw.style.display=(z==='Clubes')?'none':'';
+  if(z==='Clubes'){npGlobalPct=0;npCatDisc={};var gpi=document.getElementById('npGlobalPct');if(gpi)gpi.value='';}
   // Re-render catalogo (clubes filtra a 8 productos) y fechas
   npRenderCatalogo();
   npRenderFechas();
@@ -3797,7 +3816,19 @@ function npRenderCatalogo(){
   NP_CAT.forEach(function(c){
     var items=c.items.filter(function(p){return npZona!=='Clubes'||NP_CLUBES_IDS.indexOf(p.id)>=0});
     if(items.length===0)return;
-    html+='<div class="np-cat">'+c.cat+'</div>';
+    if(npZona==='Clubes'){
+      html+='<div class="np-cat">'+c.cat+'</div>';
+    } else {
+      var catPct=Number(npCatDisc[c.cat])||0;
+      var catAttr=c.cat.replace(/"/g,'&quot;');
+      html+='<div class="np-cat-row">'
+        +'<span class="np-cat">'+c.cat+'</span>'
+        +'<span class="np-cat-disc'+(catPct>0?' on':'')+'">'
+          +'<input type="number" inputmode="numeric" min="0" max="100" class="np-cat-disc-inp" value="'+(catPct>0?catPct:'')+'" placeholder="%" data-cat="'+catAttr+'" oninput="npSetCatDisc(this)">'
+          +'<span class="np-cat-disc-pct">%</span>'
+        +'</span>'
+      +'</div>';
+    }
     items.forEach(function(p){
       var pr=NP_PRECIOS[p.abbr]||{};
       var precio=npZona==='Clubes'?(pr.pc||pr.p||0):(pr.p||0);
@@ -3927,17 +3958,81 @@ function npDescuentoManualValor(){
   var v=parseInt((document.getElementById('npDescuentoManual')||{}).value)||0;
   return v>0?v:0;
 }
+// Categoría a la que pertenece un id de producto (para el descuento por categoría)
+function npCatForId(id){
+  for(var i=0;i<NP_CAT.length;i++){
+    for(var j=0;j<NP_CAT[i].items.length;j++){if(NP_CAT[i].items[j].id==id)return NP_CAT[i].cat;}
+  }
+  return '';
+}
+// Precio unitario de una línea según el tipo de pedido (retail / costo / club)
+function npLineUnit(abbr,tipo){
+  var pr=NP_PRECIOS[abbr];if(!pr)return 0;
+  return tipo==='club'?(pr.pc||pr.p):(tipo==='costo'?pr.c:pr.p);
+}
+// Calcula TODO el desglose de descuentos del pedido actual. Fuente única de verdad
+// para el total mostrado y para lo que se manda al Sheets.
+//  · catDiscP   = suma de descuentos por categoría (en pesos)
+//  · globalDiscP= % al pedido aplicado sobre el neto post-categorías (en pesos)
+//  · pctDisc    = catDiscP + globalDiscP (los descuentos % que fija Tadeo)
+//  · auto       = 10% del efectivo/bulk — SÓLO si NO hay % manual (lo reemplaza)
+//  · effDisc    = el descuento que efectivamente aplica (pctDisc si hay, sino auto)
+//  · regalo     = bonificación puntual en pesos (🎁), se suma aparte
+//  · authoritative = true si Tadeo puso algún %, el backend confía el número
+function npDiscountInfo(){
+  var tipo=npGetTipo(),sub=0,catDiscP=0;
+  var esClub=(npZona==='Clubes');   // Clubes: precio institucional, sin descuentos %
+  Object.keys(npCart).forEach(function(id){
+    var qty=npCart[id];if(!qty)return;
+    var p=NP_CAT_FLAT.find(function(x){return x.id==id});if(!p)return;
+    var unit=npLineUnit(p.abbr,tipo);if(!unit)return;
+    var line=unit*qty;sub+=line;
+    if(esClub)return;
+    var cp=Number(npCatDisc[npCatForId(id)])||0;
+    if(cp>0)catDiscP+=line*cp/100;
+  });
+  catDiscP=Math.round(catDiscP);
+  var gp=esClub?0:(Number(npGlobalPct)||0);
+  var base=Math.max(0,sub-catDiscP);
+  var globalDiscP=Math.round(base*gp/100);
+  var pctDisc=catDiscP+globalDiscP;
+  if(pctDisc>sub)pctDisc=sub;
+  var auto=0;
+  if(pctDisc===0&&tipo==='normal'&&(npPago==='Efectivo'||sub>100000))auto=Math.round(sub*0.10);
+  var effDisc=pctDisc>0?pctDisc:auto;
+  var regalo=npDescuentoManualValor();
+  var total=Math.max(0,sub-effDisc-regalo);
+  return {sub:sub,catDiscP:catDiscP,globalDiscP:globalDiscP,pctDisc:pctDisc,auto:auto,effDisc:effDisc,regalo:regalo,total:total,authoritative:pctDisc>0,globalPct:gp};
+}
+
+function npSetGlobalPct(){
+  var el=document.getElementById('npGlobalPct');
+  var v=parseInt(el&&el.value)||0;
+  if(v<0)v=0;if(v>100){v=100;if(el)el.value=100;}
+  npGlobalPct=v;
+  npUpdateTotal();
+}
+function npSetCatDisc(el){
+  if(!el)return;
+  var cat=el.dataset.cat;
+  var v=parseInt(el.value)||0;
+  if(v<0)v=0;if(v>100){v=100;el.value=100;}
+  if(v>0)npCatDisc[cat]=v;else delete npCatDisc[cat];
+  var wrap=el.parentNode;if(wrap)wrap.classList.toggle('on',v>0);
+  npUpdateTotal();
+}
+
 function npUpdateTotal(){
-  var sub=npSubtotal(),tipo=npGetTipo();
-  var desc=npDescuento(sub,tipo);
-  var descMan=npDescuentoManualValor();
+  var info=npDiscountInfo(),tipo=npGetTipo();
   var prop=parseInt((document.getElementById('npPropina')||{}).value)||0;
-  var total=Math.max(0,sub-desc-descMan+prop);
+  var total=Math.max(0,info.total+prop);
   var parts=[];
   if(tipo==='costo')parts.push('al costo');
   else if(tipo==='club')parts.push('precio Club');
-  if(desc>0)parts.push('10% OFF');
-  if(descMan>0)parts.push('descuento');
+  if(info.globalDiscP>0)parts.push(info.globalPct+'% pedido');
+  if(info.catDiscP>0)parts.push('% categoría');
+  if(info.auto>0)parts.push('10% OFF');
+  if(info.regalo>0)parts.push('regalo');
   var label=parts.length?('Total ('+parts.join(' + ')+')'):'Total';
   document.getElementById('npTotalLabel').textContent=label;
   document.getElementById('npTotalValue').textContent=npMoney(total);
@@ -3978,10 +4073,14 @@ function npGuardar(){
     if(!document.getElementById('npGrupo').value){showToast('Elegi el grupo');return}
   }
 
-  var sub=npSubtotal(),desc=npDescuento(sub,tipo);
-  var descMan=npDescuentoManualValor();
+  var info=npDiscountInfo();
+  var sub=info.sub;
   var prop=parseInt(document.getElementById('npPropina').value)||0;
-  var total=Math.max(0,sub-desc-descMan);
+  // descuento que va a la col P: si Tadeo puso % es autoritativo (el backend lo
+  // respeta y reemplaza el 10% auto); si no, mandamos el auto y el backend recalcula.
+  var desc=info.authoritative?info.pctDisc:info.auto;
+  var descMan=info.regalo;        // 🎁 regalo $: se suma aparte en el backend
+  var total=info.total;           // sub - effDisc - regalo (sin propina, va aparte)
   // Nombre del dia derivado de la fecha seleccionada
   var p=npFechaSel.split('-');
   var dFecha=new Date(Number(p[0]),Number(p[1])-1,Number(p[2]));
@@ -4003,6 +4102,8 @@ function npGuardar(){
     subtotalSinDescuento:sub,
     descuento:desc,
     descuentoManual:descMan,
+    descuentoManualEsAutoridad:info.authoritative,
+    descuentoGlobalPct:info.globalPct,
     propina:prop,
     tipoPedido:tipo,
     origen:(document.getElementById('npOrigen')||{}).value||'Pendiente',
@@ -4058,7 +4159,8 @@ function npGuardar(){
 
 function npReset(){
   npCart={};
-  ['npNombre','npLote','npPilarBarrio','npPilarLote','npTel','npPropina','npDescuentoManual'].forEach(function(id){var el=document.getElementById(id);if(el)el.value=''});
+  npGlobalPct=0;npCatDisc={};
+  ['npNombre','npLote','npPilarBarrio','npPilarLote','npTel','npPropina','npDescuentoManual','npGlobalPct'].forEach(function(id){var el=document.getElementById(id);if(el)el.value=''});
   ['npSubBarrio','npClub','npDeporte','npGrupo'].forEach(function(id){var el=document.getElementById(id);if(el)el.value=''});
   var bp=document.getElementById('npBarrioPrivado');if(bp){bp.value='Estancias del Pilar';npBarrioPrivadoChange()}
   document.getElementById('npTipo').value='normal';
