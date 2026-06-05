@@ -875,7 +875,7 @@ var STORAGE_VERSION='v2-row-keyed';
 // APP_VERSION: si el browser carga una version distinta a la conocida, limpiamos
 // caches del SW y recargamos. Evita que iOS Safari sirva HTML viejo (bug Violeta
 // 27/05: PWA con codigo v55 procesando cobros con processSyncQueue trabado).
-var APP_VERSION='v93';
+var APP_VERSION='v95';
 // Pintar version real en el badge (no hardcodear el HTML, suele desincronizar).
 try{var __ve=document.getElementById('appVer');if(__ve)__ve.textContent=APP_VERSION;}catch(_){}
 (function(){
@@ -1256,9 +1256,14 @@ function getSorted(){
     var porVendedor={};
     redArmados.forEach(function(e){
       var v=e.retira||'Vendedor';
-      if(!porVendedor[v])porVendedor[v]={pedidos:[],totals:{}};
+      if(!porVendedor[v])porVendedor[v]={pedidos:[],totals:{},todoOC:true};
       porVendedor[v].pedidos.push(e);
-      (e.p||[]).forEach(function(p){
+      // Solo items DEL DEPÓSITO (D). Los OC los retira el vendedor directo del proveedor,
+      // no salen del freezer de Tadeo. Bug 05/06/2026: card de Marcos mostraba productos OC
+      // como si fueran del depósito cuando todos los pedidos de la semana eran OC.
+      var depItems=_itemsDepDe(e);
+      if(depItems.length>0)porVendedor[v].todoOC=false;
+      depItems.forEach(function(p){
         if(!porVendedor[v].totals[p.a])porVendedor[v].totals[p.a]=0;
         porVendedor[v].totals[p.a]+=p.q;
       });
@@ -1270,6 +1275,7 @@ function getSorted(){
       var rows=pack.pedidos.map(function(e){return e.r}).filter(function(r){return r>=2});
       clientes.push({
         _redAgg:true,_vendedor:v,_keys:keys,_rows:rows,
+        _todoOC:pack.todoOC,
         h:'Red',id:'red-'+v.replace(/\s/g,''),r:0,
         c:v+' (Red)',l:'',b:'Vendedor Red',sb:'',
         de:pack.pedidos[0].de||'',es:'Armado',o:'',oD:{},
@@ -2092,7 +2098,13 @@ function renderRuta(){
     h+='<div class="ruta-origen-tag" style="background:#F3E5F5;color:#4A148C;border:1.5px solid #7B1FA2">VENDEDOR RED</div>';
     h+='<div style="font-size:24px;font-weight:900;color:var(--brown);margin-bottom:4px">'+e._vendedor+'</div>';
     h+='<div style="font-size:13px;font-weight:700;color:var(--muted);margin-bottom:14px">'+nPed+' pedido'+(nPed>1?'s':'')+' del día — Tadeo no entrega cliente por cliente</div>';
-    h+='<div class="ruta-productos">';_sortProds(e.p).forEach(function(p){h+='<div class="ruta-prod-item"><span>'+(PROD_NAMES[p.a]||p.a)+'</span><span class="ruta-prod-qty">'+p.q+'</span></div>'});h+='</div>';
+    if(e._todoOC){
+      // Todos los pedidos del vendedor son 100% OC: no sale nada del freezer.
+      // El vendedor retira la mercadería directo del proveedor.
+      h+='<div style="background:#FFF3E0;border:1.5px solid #FB923C;border-radius:10px;padding:12px 14px;margin-bottom:12px;font-size:13px;line-height:1.5;color:#9A3412;text-align:left">📦 <b>Todos los pedidos son Orden de Compra.</b><br>El vendedor retira directo del proveedor. No sale nada de tu freezer.</div>';
+    } else {
+      h+='<div class="ruta-productos">';_sortProds(e.p).forEach(function(p){h+='<div class="ruta-prod-item"><span>'+(PROD_NAMES[p.a]||p.a)+'</span><span class="ruta-prod-qty">'+p.q+'</span></div>'});h+='</div>';
+    }
     body.innerHTML=h;
 
     // Actions: solo botón ENTREGAR A VENDEDOR + nav
@@ -3505,8 +3517,15 @@ function processSyncQueue(){
   syncBusy=true;
   var item=syncQueue[0];
   var attempts=(item.__attempts||0)+1;item.__attempts=attempts;
-  fetch(APPS_SCRIPT_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(item),redirect:'follow'})
-    .then(function(r){return r.json().catch(function(){return{ok:false,error:'InvalidJSON'}})})
+  // Timeout 25s: si el backend está colgado (lock contention, hoja grande), no
+  // dejamos al usuario con el loader trabado un minuto. A los 25s abortamos y
+  // dejamos que el backoff exponencial reintente. Matchea el guard del cobro.
+  var _aborter=(typeof AbortController!=='undefined')?new AbortController():null;
+  var _abortTimer=setTimeout(function(){if(_aborter)_aborter.abort();},25000);
+  var _fopts={method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(item),redirect:'follow'};
+  if(_aborter)_fopts.signal=_aborter.signal;
+  fetch(APPS_SCRIPT_URL,_fopts)
+    .then(function(r){clearTimeout(_abortTimer);return r.json().catch(function(){return{ok:false,error:'InvalidJSON'}})})
     .then(function(res){
       syncBusy=false;
       if(res&&res.ok){
@@ -3535,9 +3554,10 @@ function processSyncQueue(){
       }
     })
     .catch(function(err){
+      clearTimeout(_abortTimer);
       syncBusy=false;
       console.warn('sync network fail',err);
-      // Red caída → reintento con backoff
+      // Red caída o timeout (AbortError) → reintento con backoff
       setTimeout(processSyncQueue,Math.min(30000,syncBackoffMs));
       syncBackoffMs=Math.min(syncBackoffMs*2,30000);
     });
@@ -3570,18 +3590,18 @@ function renderNuevo(){
     npRenderFechas();
   }
   npUpdateTotal();
-  // Buscador de clientes: precarga la lista (CRM) la primera vez o si está
-  // vencida (30 min). No bloquea — si el fetch tarda, el input sigue siendo un
-  // texto libre. Pensado para los picos vie/sáb de Home: cliente repetido se
-  // encuentra en 2 letras y autocompleta barrio + sub-barrio + tel.
-  npFetchClientes();
+  // Buscador de clientes: NO precargamos al abrir la tab (la GET crmClientes
+  // tarda ~7-10s y compite con marcarEntregado/marcarCobrado en horarios pico).
+  // En vez se trae al primer tipeo del usuario (npFiltrarClientes lo dispara si
+  // _npClientesCache es null). Resultado: si Tadeo no busca cliente, no se
+  // consume backend; si busca, se trae una sola vez y queda cacheado 30 min.
   npInstallClickHandler();
 }
 
 // Carga la lista de clientes desde el CRM (un solo fetch, cache 30 min).
 function npFetchClientes(){
   if(_npClientesCache && (Date.now()-_npClientesCacheTs)<1800000)return;
-  fetch(APPS_SCRIPT_URL+'?action=crmClientes&t='+Date.now())
+  fetch(APPS_SCRIPT_URL+'?action=crmClientes&lite=1&t='+Date.now())
     .then(function(r){return r.json()})
     .then(function(data){
       var lista=(data&&data.clientes)||(Array.isArray(data)?data:[]);
