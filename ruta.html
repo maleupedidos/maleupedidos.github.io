@@ -875,7 +875,7 @@ var STORAGE_VERSION='v2-row-keyed';
 // APP_VERSION: si el browser carga una version distinta a la conocida, limpiamos
 // caches del SW y recargamos. Evita que iOS Safari sirva HTML viejo (bug Violeta
 // 27/05: PWA con codigo v55 procesando cobros con processSyncQueue trabado).
-var APP_VERSION='v95';
+var APP_VERSION='v96';
 // Pintar version real en el badge (no hardcodear el HTML, suele desincronizar).
 try{var __ve=document.getElementById('appVer');if(__ve)__ve.textContent=APP_VERSION;}catch(_){}
 (function(){
@@ -3099,13 +3099,17 @@ function confirmarCobroRuta(){
   var prop=Math.max(0,r.propina);
   var aFav=r.aFav;
   var facturadoTotal=total+prop+aFav;
+  // Auto-detección de Mixto: si hay plata en AMBOS inputs, ignorar el pill y tratar como Mixto.
+  // Bug Gonzalo Latugaye 05/06: pill default era Transferencia y se pisaban los inputs.
+  var netoEf=Math.max(0,r.recEf-r.camEf);
+  var netoMP=Math.max(0,r.recMP-r.camMP);
+  var esMixtoReal=(netoEf>0 && netoMP>0);
+  var fpFinal=esMixtoReal?'Mixto':fp;
   var ef=0,tr=0;
-  if(fp==='Efectivo'){ef=facturadoTotal;tr=0;}
-  else if(fp==='Transferencia'){ef=0;tr=facturadoTotal;}
+  if(fpFinal==='Efectivo'){ef=facturadoTotal;tr=0;}
+  else if(fpFinal==='Transferencia'){ef=0;tr=facturadoTotal;}
   else {
     // Mixto: distribuir según los recibidos netos
-    var netoEf=Math.max(0,r.recEf-r.camEf);
-    var netoMP=Math.max(0,r.recMP-r.camMP);
     var totNeto=netoEf+netoMP;
     if(totNeto<=0){ef=facturadoTotal;tr=0;}
     else {ef=Math.round(facturadoTotal*(netoEf/totNeto));tr=facturadoTotal-ef;}
@@ -3129,7 +3133,7 @@ function confirmarCobroRuta(){
   var payload={
     action:'marcarCobrado',
     hoja:ent.h,id:String(ent.id),row:ent.r,
-    formaPago:fp,
+    formaPago:fpFinal,
     ef:ef,tr:tr,
     propina:prop,propMet:propMet,
     aFavor:aFav,
@@ -3176,6 +3180,11 @@ function _confirmarCobroComboRuta(st,r){
   var peds=st.pedidos,fp=st.fp;
   var prop=Math.max(0,r.propina),aFav=r.aFav;
   var nombre=(peds[0].c||'').split(' ')[0];
+  // Auto-detección de Mixto a nivel combo (mismo criterio que cobros sueltos).
+  var netoEfC=Math.max(0,r.recEf-r.camEf);
+  var netoMPC=Math.max(0,r.recMP-r.camMP);
+  var esMixtoComboReal=(netoEfC>0 && netoMPC>0);
+  var fpComboFinal=esMixtoComboReal?'Mixto':fp;
   peds.forEach(function(p,idx){
     var k=eKey(p);
     var totalP=Number(p.$)||0;
@@ -3183,14 +3192,12 @@ function _confirmarCobroComboRuta(st,r){
     var aFavP=(idx===0)?aFav:0;
     var facturadoP=totalP+propP+aFavP;
     var efP=0,trP=0;
-    if(fp==='Efectivo'){efP=facturadoP;trP=0;}
-    else if(fp==='Transferencia'){efP=0;trP=facturadoP;}
+    if(fpComboFinal==='Efectivo'){efP=facturadoP;trP=0;}
+    else if(fpComboFinal==='Transferencia'){efP=0;trP=facturadoP;}
     else {
-      var netoEf=Math.max(0,r.recEf-r.camEf);
-      var netoMP=Math.max(0,r.recMP-r.camMP);
-      var totNeto=netoEf+netoMP;
+      var totNeto=netoEfC+netoMPC;
       if(totNeto<=0){efP=facturadoP;}
-      else {efP=Math.round(facturadoP*(netoEf/totNeto));trP=facturadoP-efP;}
+      else {efP=Math.round(facturadoP*(netoEfC/totNeto));trP=facturadoP-efP;}
     }
     var propMet=(efP>=trP)?'Efectivo':'Transferencia';
     cobrados[k]=true;
@@ -3202,7 +3209,7 @@ function _confirmarCobroComboRuta(st,r){
     var payload={
       action:'marcarCobrado',
       hoja:p.h,id:String(p.id),row:p.r,
-      formaPago:fp,
+      formaPago:fpComboFinal,
       ef:efP,tr:trP,
       propina:propP,propMet:propMet,
       aFavor:aFavP,
@@ -3264,24 +3271,30 @@ function _confirmarCobroPendiente(st,r){
   var propina=r.propina;                    // puede ser negativa (ajuste de redondeo)
   var aFavorPos=Math.max(0,r.aFav);         // crédito nuevo (cliente paga de más)
   var aplicacionPos=Math.max(0,r.aplicar);  // saldo previo aplicado
+  // ── Detección AUTOMÁTICA de Mixto ──
+  // Bug Gonzalo Latugaye 05/06: Tadeo tipeó $90K Ef + $8.6K MP pero el pill seguía en
+  // "Transferencia" (default del pedido) → el código pisaba ef/tr y mandaba todo a tr.
+  // Ahora: si hay plata en AMBOS inputs (neto > 0), tratar como Mixto sin importar el pill.
+  var netoEf=Math.max(0,r.recEf-r.camEf);
+  var netoMP=Math.max(0,r.recMP-r.camMP);
+  var esMixtoReal=(netoEf>0 && netoMP>0);
+  var fpFinal=esMixtoReal?'Mixto':fp;
   // ef/tr = total del pedido por método (SIN propina). El backend suma/resta
   // (aFavor − aplicacion) y escribe propina aparte en T/U.
   var ef=0,tr=0;
-  if(fp==='Efectivo'){ef=total;tr=0;}
-  else if(fp==='Transferencia'){ef=0;tr=total;}
+  if(fpFinal==='Efectivo'){ef=total;tr=0;}
+  else if(fpFinal==='Transferencia'){ef=0;tr=total;}
   else {
-    var netoEf=Math.max(0,r.recEf-r.camEf);
-    var netoMP=Math.max(0,r.recMP-r.camMP);
     var totNeto=netoEf+netoMP;
     if(totNeto<=0){ef=total;tr=0;}
     else {ef=Math.round(total*(netoEf/totNeto));tr=total-ef;}
   }
-  var propMet=(fp==='Transferencia')?'Transferencia':'Efectivo';
-  if(fp==='Mixto')propMet=(tr>ef)?'Transferencia':'Efectivo';
+  var propMet=(fpFinal==='Transferencia')?'Transferencia':'Efectivo';
+  if(fpFinal==='Mixto')propMet=(tr>ef)?'Transferencia':'Efectivo';
   var recalcular=(Number(st.total)||0)!==(Number(st.totalOriginal)||0);
 
   var payload={action:'marcarCobrado',hoja:pc.h,id:String(pc.id),row:pc.r||0,
-    formaPago:fp,ef:ef,tr:tr,propina:propina,propMet:propMet,
+    formaPago:fpFinal,ef:ef,tr:tr,propina:propina,propMet:propMet,
     aFavor:aFavorPos,aplicacion:aplicacionPos,cliente:pc.c||'',
     repartidor:_rutaUser(),ts:Date.now()};
   if(recalcular)payload.recalcular=true;
