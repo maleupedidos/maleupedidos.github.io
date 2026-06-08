@@ -2631,7 +2631,7 @@ var _cobroRutaState=null;
 
 // Calcula el total del pedido según la FP. Replica la regla del checkout:
 // 10% OFF si Efectivo O subtotal >= $100.000.
-function _totalSegunFp(ent,fp){
+function _totalSegunFp(ent,fp,noDisc){
   if(!ent)return 0;
   // Si el pedido YA tiene cobros parciales previos, el saldo pendiente es ent.$
   // directo del backend. NO recalcular con descuentos: el descuento ya se aplicó
@@ -2642,6 +2642,8 @@ function _totalSegunFp(ent,fp){
   var env=Number(ent.env)||0;
   var orig=Number(ent['$'])||0;
   if(sub<=0||fp==='Mixto')return orig;
+  // noDisc: Tadeo quitó manualmente el descuento (10% OFF efectivo o +$100K) → cobra precio normal.
+  if(noDisc)return sub+env;
   var aplicaCash=(fp==='Efectivo');
   var aplicaBulk=(sub>=100000);
   var desc=(aplicaCash||aplicaBulk)?Math.round(sub*0.10):0;
@@ -2674,7 +2676,8 @@ function _renderCobroDescInfo(){
   var fp=st.fp||'Efectivo';
   var aplicaCash=(fp==='Efectivo');
   var aplicaBulk=(sub>=100000);
-  var desc=(aplicaCash||aplicaBulk)?Math.round(sub*0.10):0;
+  var descDisponible=(aplicaCash||aplicaBulk)?Math.round(sub*0.10):0;
+  var desc=st.noDisc?0:descDisponible;
   var total=sub+env-desc;
   var motivo='';
   if(aplicaBulk){
@@ -2683,12 +2686,23 @@ function _renderCobroDescInfo(){
     motivo='<b>10% OFF efectivo</b> aplicado';
   }
   var html='';
+  // Descuento quitado manualmente por Tadeo: mostrar precio normal + botón para volver a aplicarlo.
+  if(st.noDisc && descDisponible>0){
+    el.style.background='#FFF3E0';
+    el.style.border='1.5px solid #FB923C';
+    el.style.color='#9A3412';
+    el.style.display='block';
+    el.innerHTML='🚫 <b>Descuento quitado.</b> Cobrás precio normal: <b>'+formatMoney(sub+env)+'</b> (sin el 10% OFF de '+formatMoney(descDisponible)+').'
+      +'<button type="button" onclick="_toggleCobroNoDisc()" style="display:block;width:100%;margin-top:8px;padding:8px;background:#fff;color:#1B5E20;border:1.5px dashed #4CAF50;border-radius:8px;font-family:inherit;font-size:12px;font-weight:800;cursor:pointer">💸 Volver a aplicar 10% OFF</button>';
+    return;
+  }
   if(desc>0){
     el.style.background='#E8F5E9';
     el.style.border='1.5px solid #4CAF50';
     el.style.color='#1B5E20';
     html='💸 '+motivo+'<br>';
     html+='<span style="color:#5D4037">Subtotal '+formatMoney(sub)+(env>0?' + envío '+formatMoney(env):'')+' − descuento '+formatMoney(desc)+' = <b>'+formatMoney(total)+'</b></span>';
+    html+='<button type="button" onclick="_toggleCobroNoDisc()" style="display:block;width:100%;margin-top:8px;padding:8px;background:#fff;color:#9A3412;border:1.5px dashed #FB923C;border-radius:8px;font-family:inherit;font-size:12px;font-weight:800;cursor:pointer">🚫 Quitar descuento (cobrar precio normal)</button>';
   } else if(fp==='Transferencia' && sub<100000 && sub>0){
     el.style.background='#FFF3E0';
     el.style.border='1.5px solid #FB923C';
@@ -2802,7 +2816,7 @@ function _setCobroFp(fp){
   st.fp=fp;
   document.querySelectorAll('#cobroRutaFp .cobro-pill').forEach(function(p){p.classList.toggle('on',p.getAttribute('data-fp')===fp)});
   // Recalcular total (combo no tiene sub/env por pedido, mantenemos original).
-  var nuevoTotal=st.combo?st.totalOriginal:_totalSegunFp(st.ent,fp);
+  var nuevoTotal=st.combo?st.totalOriginal:_totalSegunFp(st.ent,fp,st.noDisc);
   st.total=nuevoTotal;
   // Actualizar header sub
   if(st.combo){
@@ -2825,6 +2839,27 @@ function _setCobroFp(fp){
     else if(fp==='Transferencia'){_setMoneyInput('cobroRecEf',0);_setMoneyInput('cobroRecMP',target);}
     // Mixto: dejar como estaban
   }
+  _recalcCobroRuta();
+}
+
+// Quitar / volver a aplicar el descuento (10% OFF efectivo o +$100K) en este cobro.
+// Le da libertad a Tadeo de cobrar precio normal aunque el cliente pague efectivo o supere $100K.
+function _toggleCobroNoDisc(){
+  var st=_cobroRutaState; if(!st||st.combo)return;
+  if(st.esParcialPrev){showToast('El saldo ya tiene el descuento del primer cobro');return;}
+  st.noDisc=!st.noDisc;
+  var nuevoTotal=_totalSegunFp(st.ent,st.fp,st.noDisc);
+  st.total=nuevoTotal;
+  document.getElementById('cobroRutaSub').textContent='Pedido '+formatMoney(nuevoTotal)+' · '+st.ent.h+' #'+st.ent.id;
+  if(!st.partial){
+    var prop=_leerPropinaModalCobro();
+    var aFav=_parseMoneyInput(document.getElementById('cobroAFavInp'));
+    var aplicar=Math.max(0,Math.min(Number(st.aplicarSaldo)||0,nuevoTotal));
+    var target=Math.max(0,nuevoTotal-aplicar)+prop+aFav;
+    if(st.fp==='Efectivo'){_setMoneyInput('cobroRecEf',target);_setMoneyInput('cobroRecMP',0);}
+    else if(st.fp==='Transferencia'){_setMoneyInput('cobroRecEf',0);_setMoneyInput('cobroRecMP',target);}
+  }
+  _renderCobroDescInfo();
   _recalcCobroRuta();
 }
 
@@ -3158,6 +3193,8 @@ function confirmarCobroRuta(){
     cliente:ent.c||'',
     repartidor:_rutaUser(),ts:Date.now()
   };
+  // Descuento quitado manualmente: forzar recalc del total SIN 10% en el backend.
+  if(st.noDisc){payload.recalcular=true;payload.noDescuento=true;}
   // Cambio cruzado: si Tadeo devolvió MP cuando recibió Ef extra, mandamos cambioMP.
   // Si recibió MP extra y devolvió Ef, mandamos cambioCruzadoEf.
   if(r.camMP>0 && r.recEf>=r.camMP)payload.cambioMP=r.camMP;
@@ -3316,6 +3353,8 @@ function _confirmarCobroPendiente(st,r){
     aFavor:aFavorPos,aplicacion:aplicacionPos,cliente:pc.c||'',
     repartidor:_rutaUser(),ts:Date.now()};
   if(recalcular)payload.recalcular=true;
+  // Descuento quitado manualmente: forzar recalc del total SIN 10% en el backend.
+  if(st.noDisc){payload.recalcular=true;payload.noDescuento=true;}
   // Cambio cruzado Ef↔MP (igual que RUTA)
   if(r.camMP>0 && r.recEf>=r.camMP)payload.cambioMP=r.camMP;
   if(r.camEf>0 && r.recMP>=r.camEf)payload.cambioCruzadoEf=r.camEf;
