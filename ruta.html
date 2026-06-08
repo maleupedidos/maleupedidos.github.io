@@ -637,7 +637,8 @@ select.np-input{background:var(--white) url("data:image/svg+xml;utf8,<svg xmlns=
           <input type="text" id="cobroCamMP" inputmode="decimal" placeholder="0" oninput="_fmtMoneyInput(this);_recalcCobroRuta()">
         </div>
       </div>
-      <div class="cobro-ruta-hint">💡 Si no tenés cambio físico, podés devolverlo por MP. El sistema balancea automáticamente.</div>
+      <div class="cobro-ruta-hint" id="cobroBilleteraHint" style="font-weight:700;color:#5D4037"></div>
+      <div class="cobro-ruta-hint">💡 El vuelto en efectivo sale de la billetera (fondo de cambio). Si no tenés cambio físico, devolvelo por MP — el sistema balancea solo.</div>
     </div>
 
     <div class="cobro-ruta-toggles">
@@ -2223,6 +2224,7 @@ function fetchCobrosPendientes(fresh){
   return fetch(APPS_SCRIPT_URL+'?action=cobrosPendientes&t='+Date.now()+(fresh?'&fresh=1':''))
     .then(function(r){return r.json()})
     .then(function(data){
+      if(typeof data.billetera==='number')_billeteraRuta=data.billetera; // fondo de cambio para el cuadro de Cobros
       var cobros=data.cobros||[];
       // Server = fuente de verdad. Solo agregar locales que aun estan en syncQueue
       // (entregados offline que aun no sincronizaron con el server)
@@ -2628,6 +2630,7 @@ function _setMoneyInput(id,value){
    Estado interno mientras el modal está abierto. Se setea en abrirCobroRuta()
    y se limpia en cerrarCobroRuta(). */
 var _cobroRutaState=null;
+var _billeteraRuta=0;  // saldo de la billetera (fondo de cambio), lo trae cobrosPendientes
 
 // Calcula el total del pedido según la FP. Replica la regla del checkout:
 // 10% OFF si Efectivo O subtotal >= $100.000.
@@ -2950,6 +2953,20 @@ function _recalcCobroRuta(){
   document.getElementById('cobroSumPag').textContent=formatMoney(pagado);
   document.getElementById('cobroSumPed').textContent=formatMoney(total);
   document.getElementById('cobroSumCam').textContent=camTot>0?formatMoney(camTot):'$0';
+  // Indicador de billetera (fondo de cambio): el vuelto en efectivo cubierto por el efectivo
+  // recibido sale de la billetera. Muestra saldo actual y cuánto quedará tras este vuelto.
+  var _bilHint=document.getElementById('cobroBilleteraHint');
+  if(_bilHint){
+    var camBilletera=(camEf>0 && recEf>=camEf)?camEf:0; // vuelto que sale de la billetera (mismo método)
+    if(camBilletera>0){
+      var queda=_billeteraRuta-camBilletera;
+      _bilHint.textContent='👛 Billetera: '+formatMoney(_billeteraRuta)+' → das '+formatMoney(camBilletera)+' de vuelto → queda '+formatMoney(queda);
+      _bilHint.style.color=queda<0?'#C62828':'#5D4037';
+    } else {
+      _bilHint.textContent='👛 Billetera disponible para cambio: '+formatMoney(_billeteraRuta);
+      _bilHint.style.color='#5D4037';
+    }
+  }
   document.getElementById('cobroSumFav').textContent=aFav>0?formatMoney(aFav):'$0';
   var aplicRow=document.getElementById('cobroSumAplicRow');
   if(aplicRow){aplicRow.style.display=aplicar>0?'':'none';document.getElementById('cobroSumAplic').textContent='-'+formatMoney(aplicar);}
@@ -2972,8 +2989,11 @@ function _recalcCobroRuta(){
     'Falta cobrar: '+formatMoney(faltante)+'. Si te quedó debiendo, usá <b>"Pago parcial"</b>. Si fue un descuento de hecho y querés cerrar igual, tocá <b>"Aceptar descuento"</b> abajo.'
   );
   if(partial && neto>=total)errors.push('Ese monto cubre todo el pedido — usá el cobro normal, no parcial.');
-  if(camMP>recEf)errors.push('No podés devolver más MP del que entró en efectivo.');
-  if(camEf>recMP)errors.push('No podés devolver más efectivo del que entró por MP.');
+  // El vuelto en efectivo sale de la billetera (si el cliente pagó efectivo) o es cambio
+  // cruzado (si pagó MP y le devolvés efectivo). Solo es inválido devolver más de lo que
+  // entró en total. (Antes bloqueaba el caso normal: pagó efectivo → vuelto de billetera.)
+  if(camEf>0 && camEf>recEf && camEf>recMP)errors.push('No podés devolver más efectivo del que recibiste.');
+  if(camMP>0 && camMP>recEf && camMP>recMP)errors.push('No podés devolver más por MP del que recibiste.');
   // Toggle "Aceptar descuento" — solo aparece cuando faltante > $500 y NO es parcial.
   var descBtnExtra='';
   if(!partial && faltante>500){
@@ -3195,10 +3215,13 @@ function confirmarCobroRuta(){
   };
   // Descuento quitado manualmente: forzar recalc del total SIN 10% en el backend.
   if(st.noDisc){payload.recalcular=true;payload.noDescuento=true;}
-  // Cambio cruzado: si Tadeo devolvió MP cuando recibió Ef extra, mandamos cambioMP.
-  // Si recibió MP extra y devolvió Ef, mandamos cambioCruzadoEf.
+  // Vuelto en efectivo: lo cubre el efectivo recibido → sale de la billetera (mismo método);
+  // si no, y lo cubre MP → cambio cruzado (Egreso Ef / Ingreso MP).
+  if(r.camEf>0){
+    if(r.recEf>=r.camEf)payload.cambioBilletera=r.camEf;
+    else if(r.recMP>=r.camEf)payload.cambioCruzadoEf=r.camEf;
+  }
   if(r.camMP>0 && r.recEf>=r.camMP)payload.cambioMP=r.camMP;
-  if(r.camEf>0 && r.recMP>=r.camEf)payload.cambioCruzadoEf=r.camEf;
 
   syncQueue.push(payload);
 
@@ -3272,8 +3295,11 @@ function _confirmarCobroComboRuta(st,r){
       repartidor:_rutaUser(),ts:Date.now()
     };
     if(idx===0){
+      if(r.camEf>0){
+        if(r.recEf>=r.camEf)payload.cambioBilletera=r.camEf;
+        else if(r.recMP>=r.camEf)payload.cambioCruzadoEf=r.camEf;
+      }
       if(r.camMP>0 && r.recEf>=r.camMP)payload.cambioMP=r.camMP;
-      if(r.camEf>0 && r.recMP>=r.camEf)payload.cambioCruzadoEf=r.camEf;
     }
     syncQueue.push(payload);
     if(idx===0 && aFavP>0){
@@ -3355,9 +3381,13 @@ function _confirmarCobroPendiente(st,r){
   if(recalcular)payload.recalcular=true;
   // Descuento quitado manualmente: forzar recalc del total SIN 10% en el backend.
   if(st.noDisc){payload.recalcular=true;payload.noDescuento=true;}
-  // Cambio cruzado Ef↔MP (igual que RUTA)
+  // Vuelto en efectivo: si lo cubre el efectivo recibido → sale de la billetera (mismo método).
+  //                     si no, y lo cubre MP → cambio cruzado (Egreso Ef / Ingreso MP).
+  if(r.camEf>0){
+    if(r.recEf>=r.camEf)payload.cambioBilletera=r.camEf;
+    else if(r.recMP>=r.camEf)payload.cambioCruzadoEf=r.camEf;
+  }
   if(r.camMP>0 && r.recEf>=r.camMP)payload.cambioMP=r.camMP;
-  if(r.camEf>0 && r.recMP>=r.camEf)payload.cambioCruzadoEf=r.camEf;
 
   // Payload secundario: historial en hoja Saldos Clientes (crédito o aplicación)
   var saldoPayload=null;
