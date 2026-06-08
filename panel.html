@@ -3817,8 +3817,8 @@ function abrirEditorPedido(hoja, id, row, uidEd){
     }
   }
   if(!ped){toast('Pedido no encontrado');return;}
-  // Estado del editor: lineas: [{a, q, precio, costo}], receta de descuento, forma de pago
-  var ed={hoja:hoja,id:id,row:row,uid:uidEd,lineas:[],receta:_parseRecetaPanel(ped.dd),fp:ped.fp||''};
+  // Estado del editor: lineas: [{a, q, precio, costo}], receta de descuento, forma de pago, estado
+  var ed={hoja:hoja,id:id,row:row,uid:uidEd,lineas:[],receta:_parseRecetaPanel(ped.dd),fp:ped.fp||'',es:ped.es||''};
   (ped.p||[]).forEach(function(pr){
     // qOrig = cantidad original del pedido. Si ya estaba reservada (origen=Deposito),
     // el stock disponible la descontó, así que el cap real es disponible+qOrig.
@@ -4000,7 +4000,10 @@ function guardarEditor(uid){
   var lineas=ed.lineas.filter(function(l){return l.q>0;});
   if(lineas.length===0){toast('Agregá al menos un producto');return;}
   var resumen=lineas.map(function(l){return l.q+'x '+(PN[l.a]||l.a)+' @ $'+f$(l.precio);}).join('\n');
-  if(!confirm('Guardar cambios al pedido?\n\n'+resumen+'\n\nSi solo bajaste cantidades, el origen se mantiene.\nSi agregaste productos o aumentaste, el origen se resetea a Pendiente.'))return;
+  var _aviso=(ed.es==='Entregado')
+    ? '⚠️ Estás editando un pedido YA ENTREGADO.\nEl stock se reajusta solo por la diferencia.\n\n'
+    : 'Si solo bajaste cantidades, el origen se mantiene.\nSi agregaste productos o aumentaste, el origen se resetea a Pendiente.';
+  if(!confirm('Guardar cambios al pedido?\n\n'+resumen+'\n\n'+_aviso))return;
   // Tras la acción, scroll al top.
   window._forceTopOnRender=true;
   showLoader('Guardando cambios...');
@@ -4737,8 +4740,14 @@ function rInicio(){
     // Cobro = Facturado (col V). Se asigna al medio según Forma de Pago del pedido.
     var monto=p.$||0, ef=0, tr=0;
     if(monto>0){
-      if(p.fp==='Efectivo') ef=monto;
-      else tr=monto;
+      if(p.fp==='Mixto'){
+        // Mixto: partir entre efectivo y transferencia segun el cobro real
+        // (cols Ef/Tr + propina en efectivo). Antes mandaba TODO a TR.
+        ef=(Number(p.ef)||0)+Math.max(0,Number(p.pEf)||0);
+        if(ef>monto)ef=monto;
+        tr=monto-ef;
+      } else if(p.fp==='Efectivo'){ ef=monto; }
+      else { tr=monto; }
     }
     var mg=p.mg||0;
     if(cobrado){
@@ -4798,6 +4807,7 @@ function rInicio(){
         h+='<div id="'+dayId+'" class="hidden" style="margin-top:8px;border-top:1px dashed var(--cd);padding-top:8px">';
         var sorted=d.peds.slice().sort(function(a,b){if((a.ef>0)!==(b.ef>0))return a.ef>0?-1:1;return Number(a.n||0)-Number(b.n||0);});
         sorted.forEach(function(p){
+          var isMix=p.ef>0&&p.tr>0;
           var isEF=p.ef>0;
           var canalLbl=p.h||'-';
           h+='<div style="display:flex;align-items:flex-start;gap:8px;padding:6px 0;border-bottom:1px solid rgba(232,223,196,.5);font-size:11px">';
@@ -4806,8 +4816,13 @@ function rInicio(){
           h+='<span style="color:var(--ink2)">'+(p.c||'-')+'</span>';
           if(p.rep)h+='<div style="font-size:10px;color:var(--bl);margin-top:2px">Repartió: <b style="color:var(--ink2)">'+p.rep+'</b></div>';
           h+='</span>';
-          h+='<span style="font-weight:800;color:'+(isEF?'var(--gd)':'var(--ink)')+';white-space:nowrap;font-variant-numeric:tabular-nums">';
-          h+=(isEF?'EF ':'TR ')+'$'+f$(p.t);
+          h+='<span style="font-weight:800;white-space:nowrap;font-variant-numeric:tabular-nums">';
+          if(isMix){
+            // Mixto: mostrar las dos patas (efectivo + transferencia)
+            h+='<span style="color:var(--gd)">EF $'+f$(p.ef)+'</span> · <span style="color:var(--ink)">TR $'+f$(p.tr)+'</span>';
+          } else {
+            h+='<span style="color:'+(isEF?'var(--gd)':'var(--ink)')+'">'+(isEF?'EF ':'TR ')+'$'+f$(p.t)+'</span>';
+          }
           h+='</span>';
           h+='</div>';
         });
@@ -5376,11 +5391,16 @@ function rPedidos(opts){
       html+='<button class="btn-origen" style="background:transparent;color:var(--bl);border:1.5px dashed var(--bl);margin-top:8px;font-size:12px;padding:11px;min-height:42px" data-h="'+p.h+'" data-n="'+p.n+'" data-r="'+(p.r||'')+'" data-c="'+(p.c||'').replace(/"/g,'&quot;')+'" onclick="confirmarDeshacerOrigen(this)">&#x21A9;&#xFE0F; Deshacer origen</button>';
     }
 
-    // EDITAR PRODUCTOS DEL PEDIDO — disponible si el pedido sigue editable
-    if(p.es!=='Entregado'&&p.es!=='Cancelado'&&p.ep!=='Cobrado'){
+    // EDITAR PRODUCTOS DEL PEDIDO — editable si no está Cancelado ni Cobrado.
+    // Entregado: permitido SOLO en Home/Pilar (el backend reajusta el stock por diferencia).
+    var _editEntregado=(p.es==='Entregado');
+    var _editable=(p.es!=='Cancelado'&&p.ep!=='Cobrado')&&(!_editEntregado||p.h==='Home'||p.h==='Pilar');
+    if(_editable){
       var uidEd='ed-'+p.h.replace(/ /g,'')+p.n;
-      html+='<button class="btn-origen" style="background:transparent;color:var(--o);border:1.5px dashed var(--o);margin-top:8px;font-size:12px;padding:11px;min-height:42px" onclick="abrirEditorPedido(\''+p.h+'\',\''+p.n+'\','+(p.r||0)+',\''+uidEd+'\')">&#x270F;&#xFE0F; Editar productos</button>';
-      html+='<div id="'+uidEd+'" class="hidden" style="margin-top:10px;padding:10px;background:var(--cr);border-radius:10px;border:2px solid var(--o)"></div>';
+      var _eCol=_editEntregado?'#C62828':'var(--o)';
+      var _eLbl=_editEntregado?'&#x270F;&#xFE0F; Editar productos (entregado)':'&#x270F;&#xFE0F; Editar productos';
+      html+='<button class="btn-origen" style="background:transparent;color:'+_eCol+';border:1.5px dashed '+_eCol+';margin-top:8px;font-size:12px;padding:11px;min-height:42px" onclick="abrirEditorPedido(\''+p.h+'\',\''+p.n+'\','+(p.r||0)+',\''+uidEd+'\')">'+_eLbl+'</button>';
+      html+='<div id="'+uidEd+'" class="hidden" style="margin-top:10px;padding:10px;background:var(--cr);border-radius:10px;border:2px solid '+_eCol+'"></div>';
     }
 
     // RESERVAR / QUITAR RESERVA (Deposito o Mixto, no entregado ni cancelado).
