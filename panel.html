@@ -4727,6 +4727,7 @@ function rInicio(){
   var hoyKey=String(now.getDate()).padStart(2,'0')+'/'+String(now.getMonth()+1).padStart(2,'0');
   // Agrupamos por SEMANA → días. Fecha relevante: cobro > entrega > pedido.
   var porSemana={}; // { semNum: {ef,tr,tot,pend,dias:{k:{...}}, minD, maxD} }
+  var estPilarPorSemana={}; // { semNum: {tot, dias:{k:count}} } — pedidos Entregados de Estancias del Pilar
   var nowYear=now.getFullYear();
   // Incluir Red en el resumen de cobros: el backend ya manda p.$ NETO (post 17%
   // de comisión Marcos), por eso sumarlos al cobrado refleja la plata que entró
@@ -4751,6 +4752,21 @@ function rInicio(){
       else { tr=monto; }
     }
     var mg=p.mg||0;
+    // Tracking aparte: pedidos ENTREGADOS de Estancias del Pilar, agrupados por fecha
+    // de entrega (no de cobro). Es el indicador operativo del corazón del negocio.
+    if(p.h==='Home'&&p.es==='Entregado'&&String(p.bar||'').toLowerCase()==='estancias del pilar'){
+      var kFe=p.fe||p.f||'';
+      if(kFe){
+        var pFe=String(kFe).split('/');
+        if(pFe.length>=2){
+          var dFe=new Date(nowYear,Number(pFe[1])-1,Number(pFe[0]));
+          var semFe=getWeek(dFe);
+          if(!estPilarPorSemana[semFe])estPilarPorSemana[semFe]={tot:0,dias:{}};
+          estPilarPorSemana[semFe].tot++;
+          estPilarPorSemana[semFe].dias[kFe]=(estPilarPorSemana[semFe].dias[kFe]||0)+1;
+        }
+      }
+    }
     if(cobrado){
       // Cobrados: agrupar por fecha de cobro (fallback a entrega/pedido) en la semana que corresponde
       var k=p.fc||p.fe||p.f||'';
@@ -4791,7 +4807,7 @@ function rInicio(){
   // Vueltos de billetera por día (dd/MM): para explicar EF neto vs billetes recibidos en mano.
   var vueltosPorDia={};(D.vueltos||[]).forEach(function(v){vueltosPorDia[v.f]=(vueltosPorDia[v.f]||0)+(Number(v['$'])||0);});
   window.toggleDiaPeds=function(elId){var el=$(elId);if(!el)return;el.classList.toggle('hidden');var chev=$(elId+'-chev');if(chev)chev.textContent=el.classList.contains('hidden')?'▾':'▴';};
-  function renderDiasList(dias,isCurSem,semNum){
+  function renderDiasList(dias,isCurSem,semNum,estByDia){
     var diasKeys=Object.keys(dias).sort(function(a,b){var pa=a.split('/'),pb=b.split('/');return (Number(pa[1])*100+Number(pa[0]))-(Number(pb[1])*100+Number(pb[0]));});
     var h='';
     diasKeys.forEach(function(k,idx){
@@ -4805,6 +4821,8 @@ function rInicio(){
       h+='<div style="font-size:10px;color:var(--bl);margin-top:2px">EF $'+f$(d.ef)+' · TR $'+f$(d.tr);
       if(d.peds&&d.peds.length)h+=' · '+d.peds.length+(d.peds.length===1?' pedido':' pedidos');
       h+='</div>';
+      var _estN=(estByDia&&estByDia[k])||0;
+      if(_estN>0)h+='<div style="font-size:11px;color:var(--o);margin-top:3px;font-weight:700">🏘️ '+_estN+' entregado'+(_estN===1?'':'s')+' en Estancias del Pilar</div>';
       var _vd=vueltosPorDia[k]||0;
       if(_vd>0)h+='<div style="font-size:10px;color:#9A3412;margin-top:2px">💸 Diste $'+f$(_vd)+' de vuelto (billetera) · en mano recibiste $'+f$(d.ef+_vd)+' en efectivo</div>';
       if(d.pend>0)h+='<div style="font-size:10px;color:#E65100;font-weight:700;margin-top:3px">+$'+f$(d.pend)+' por cobrar</div>';
@@ -4863,12 +4881,17 @@ function rInicio(){
     }
     var ventasPorDia={};
     var ventasPorDiaCanal={}; // {dia: {Home:n, Pilar:n, Clubes:n, Red:n}}
+    var entregEstPorDia={}; // Pedidos ENTREGADOS de Estancias del Pilar por día (foco operativo)
     pvSem.forEach(function(p){
       var k=_deeKey(p);if(!k)return;
       ventasPorDia[k]=(ventasPorDia[k]||0)+1;
       var canal=p.h||'Otro';
       if(!ventasPorDiaCanal[k])ventasPorDiaCanal[k]={};
       ventasPorDiaCanal[k][canal]=(ventasPorDiaCanal[k][canal]||0)+1;
+      // Estancias del Pilar entregados (corazón del negocio)
+      if(p.h==='Home'&&p.es==='Entregado'&&String(p.bar||'').toLowerCase()==='estancias del pilar'){
+        entregEstPorDia[k]=(entregEstPorDia[k]||0)+1;
+      }
     });
     var redByVend={};
     D.pedidos.forEach(function(p){
@@ -4894,9 +4917,10 @@ function rInicio(){
         return ia-ib;
       });
     }
+    var _totEstSem=0;Object.keys(entregEstPorDia).forEach(function(k){_totEstSem+=entregEstPorDia[k];});
     cbHtml+='<div onclick="toggleSem(\'actual\')" style="margin-top:8px;padding:10px 12px;background:#fff;border:2px solid var(--cd);border-radius:12px;cursor:pointer;display:flex;justify-content:space-between;align-items:center">';
     cbHtml+='<span style="font-weight:800;font-size:12px;color:var(--o);text-transform:uppercase;letter-spacing:.06em">&#128197; Semana '+semActual+' \u00b7 Por d\u00eda</span>';
-    cbHtml+='<span id="sem-chev-actual" style="font-size:14px;color:var(--bl)">\u25BC</span>';
+    cbHtml+='<span style="display:flex;align-items:center;gap:10px">'+(_totEstSem>0?'<span style="font-size:11px;color:var(--o);font-weight:700">\ud83c\udfd8\ufe0f '+_totEstSem+' Estancias</span>':'')+'<span id="sem-chev-actual" style="font-size:14px;color:var(--bl)">\u25BC</span></span>';
     cbHtml+='</div>';
     var bodyH='';
     for(var i=0;i<7;i++){
@@ -4916,6 +4940,10 @@ function rInicio(){
       if(_ordK.length){
         var _canalLine=_ordK.map(function(c){return '<b style="color:var(--ink)">'+c+'</b> '+_byC[c];}).join(' &middot; ');
         bodyH+='<div style="font-size:11px;color:var(--ink3);margin-top:3px;font-weight:500">'+_canalLine+'</div>';
+      }
+      var _estN=entregEstPorDia[k]||0;
+      if(_estN>0){
+        bodyH+='<div style="font-size:11px;color:var(--o);margin-top:3px;font-weight:700">🏘️ '+_estN+' entregado'+(_estN===1?'':'s')+' en Estancias del Pilar</div>';
       }
       bodyH+='<div style="display:flex;justify-content:space-between;align-items:center;margin-top:4px;font-size:11px"><span style="color:var(--bl);font-weight:700">Cobrado</span><span style="font-weight:800">$'+f$(dd.tot)+'</span></div>';
       bodyH+='<div style="font-size:10px;color:var(--bl);margin-top:2px">EF $'+f$(dd.ef)+' · TR $'+f$(dd.tr)+'</div>';
@@ -4987,6 +5015,8 @@ function rInicio(){
       cbHtml+='</div>';
       cbHtml+='<div style="font-size:11px;color:var(--bl);margin-top:2px">'+r+'</div>';
       cbHtml+='<div style="font-size:11px;color:var(--bl);margin-top:6px">'+nVtas+' venta'+(nVtas===1?'':'s')+'</div>';
+      var estSem=(estPilarPorSemana[s]&&estPilarPorSemana[s].tot)||0;
+      if(estSem>0)cbHtml+='<div style="font-size:12px;color:var(--o);margin-top:4px;font-weight:800">🏘️ '+estSem+' entregado'+(estSem===1?'':'s')+' en Estancias del Pilar</div>';
       cbHtml+='<div style="margin-top:8px;font-size:10px;color:var(--bl);font-weight:700;letter-spacing:.4px;text-transform:uppercase">Facturaci\u00f3n total</div>';
       cbHtml+='<div style="font-weight:800;font-size:18px;margin-top:1px">$'+f$(d.tot)+'</div>';
       cbHtml+='<div style="font-size:11px;color:var(--bl);margin-top:2px">EF $'+f$(d.ef)+' \u00b7 TR $'+f$(d.tr)+'</div>';
@@ -5006,7 +5036,7 @@ function rInicio(){
         cbHtml+='</div>';
       }
       cbHtml+='</div>';
-      cbHtml+='<div id="sem-body-'+s+'" class="hidden" style="padding:0 10px 10px">'+renderDiasList(d.dias,false,s)+'</div>';
+      cbHtml+='<div id="sem-body-'+s+'" class="hidden" style="padding:0 10px 10px">'+renderDiasList(d.dias,false,s,(estPilarPorSemana[s]&&estPilarPorSemana[s].dias)||{})+'</div>';
       // Botón PDF SIEMPRE visible (fuera del acordeón hidden)
       cbHtml+='<div style="padding:0 12px 12px"><button onclick="event.stopPropagation();descargarPDFSemana('+s+','+semActual+')" style="display:block;width:100%;padding:12px;background:var(--o);color:#fff;border:none;border-radius:10px;font-size:13px;font-weight:800;cursor:pointer">&#128229; Descargar PDF Semana '+s+'</button></div>';
       cbHtml+='</div>';
