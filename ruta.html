@@ -338,6 +338,8 @@ select.np-input{background:var(--white) url("data:image/svg+xml;utf8,<svg xmlns=
 .np-btn-save{width:100%;padding:18px;border:none;border-radius:14px;background:var(--green);color:#fff;font-family:inherit;font-size:18px;font-weight:900;cursor:pointer;touch-action:manipulation;letter-spacing:.02em}
 .np-btn-save:active{background:#2d6a2d;transform:scale(.98)}
 .np-btn-save:disabled{opacity:.5}
+.np-btn-copy{width:100%;padding:12px;border:1.5px dashed var(--orange);border-radius:12px;background:var(--white);color:var(--orange);font-family:inherit;font-size:14px;font-weight:800;cursor:pointer;touch-action:manipulation;margin-bottom:8px}
+.np-btn-copy:active{background:#FFF3E0}
 .np-success{position:fixed;left:16px;right:16px;bottom:100px;background:var(--green);color:#fff;padding:14px 16px;border-radius:12px;text-align:center;font-weight:800;font-size:14px;z-index:70;box-shadow:0 8px 20px rgba(61,139,61,.3)}
 .np-flash{animation:npFlash .9s ease}
 @keyframes npFlash{0%{background:#e8f5e8;border-color:var(--green);box-shadow:0 0 0 3px rgba(61,139,61,.25)}100%{background:var(--white);box-shadow:none}}
@@ -578,6 +580,7 @@ select.np-input{background:var(--white) url("data:image/svg+xml;utf8,<svg xmlns=
       <span class="np-total-label" id="npTotalLabel">Total</span>
       <span class="np-total-value" id="npTotalValue">$0</span>
     </div>
+    <button type="button" id="npCopiar" class="np-btn-copy" onclick="npCopiarResumen()">📋 Copiar resumen para WhatsApp</button>
     <button type="button" id="npGuardar" class="np-btn-save" onclick="npGuardar()">GUARDAR PEDIDO</button>
   </div>
   <div id="npSuccess" class="np-success hidden"></div>
@@ -897,7 +900,7 @@ var STORAGE_VERSION='v2-row-keyed';
 // APP_VERSION: si el browser carga una version distinta a la conocida, limpiamos
 // caches del SW y recargamos. Evita que iOS Safari sirva HTML viejo (bug Violeta
 // 27/05: PWA con codigo v55 procesando cobros con processSyncQueue trabado).
-var APP_VERSION='v98';
+var APP_VERSION='v99';
 // Pintar version real en el badge (no hardcodear el HTML, suele desincronizar).
 try{var __ve=document.getElementById('appVer');if(__ve)__ve.textContent=APP_VERSION;}catch(_){}
 (function(){
@@ -4166,6 +4169,57 @@ function npUpdateTotal(){
 
 function npMoney(n){return'$'+(n||0).toLocaleString('es-AR')}
 
+// Resumen del pedido en formato WhatsApp (con asteriscos para negrita en el
+// total). Usado por "📋 Copiar resumen" — antes y después de guardar.
+// Tras guardar, se guarda en _npLastResumen porque npReset() limpia el cart.
+var _npLastResumen='';
+function npResumenTextoWA(){
+  var nombre=String((document.getElementById('npNombre')||{}).value||'').trim();
+  var tipo=npGetTipo();
+  var items=[],sub=0;
+  Object.keys(npCart).forEach(function(id){
+    var q=npCart[id];if(!q)return;
+    var p=NP_CAT_FLAT.find(function(x){return x.id==id});if(!p)return;
+    var pr=NP_PRECIOS[p.abbr];if(!pr)return;
+    var precio=tipo==='club'?(pr.pc||pr.p):(tipo==='costo'?pr.c:pr.p);
+    var lineaTotal=precio*q;
+    sub+=lineaTotal;
+    var nombreLargo=PROD_NAMES[p.abbr]||p.n||p.abbr;
+    items.push('• '+q+'× '+nombreLargo+' — '+npMoney(lineaTotal));
+  });
+  if(items.length===0)return '';
+  var desc=npDescuento(sub,tipo);
+  var descMan=npDescuentoManualValor();
+  var total=Math.max(0,sub-desc-descMan);
+  var saludo=nombre?('Hola '+nombre.split(' ')[0]+'!'):'Hola!';
+  var lines=[saludo,'','Te confirmo tu pedido:',''];
+  lines=lines.concat(items);
+  lines.push('');
+  lines.push('Subtotal: '+npMoney(sub));
+  if(desc>0)lines.push('Descuento 10% OFF: -'+npMoney(desc));
+  if(descMan>0)lines.push('Descuento: -'+npMoney(descMan));
+  lines.push('*Total a pagar: '+npMoney(total)+'*');
+  return lines.join('\n');
+}
+
+// Copia el resumen al portapapeles. Si npLastResumen no esta vacio (post-guardar)
+// lo usa; sino lo recalcula del cart actual.
+function npCopiarResumen(){
+  var txt=_npLastResumen||npResumenTextoWA();
+  if(!txt){showToast('Cargá productos primero');return}
+  function ok(){showToast('✓ Resumen copiado — pegalo en WhatsApp');}
+  function fallback(){
+    var ta=document.createElement('textarea');
+    ta.value=txt;ta.style.position='fixed';ta.style.top='-9999px';
+    document.body.appendChild(ta);ta.focus();ta.select();
+    try{document.execCommand('copy');ok();}catch(e){showToast('No pude copiar — pedí ayuda');}
+    document.body.removeChild(ta);
+  }
+  if(navigator.clipboard&&navigator.clipboard.writeText){
+    navigator.clipboard.writeText(txt).then(ok).catch(fallback);
+  }else{fallback();}
+}
+
 function npFetchPrecios(){
   fetch(APPS_SCRIPT_URL+'?action=precios&t='+Date.now())
     .then(function(r){return r.json()})
@@ -4280,18 +4334,25 @@ function npGuardar(){
     .then(function(res){
       if(!res||!res.ok){throw new Error((res&&res.error)||'Backend respondio ok=false')}
       hideLoader(true);
+      // Stash el resumen ANTES de npReset() (que limpia el cart). Permite que el
+      // botón "📋 Copiar resumen" siga funcionando después de guardar.
+      _npLastResumen=npResumenTextoWA();
       var s=document.getElementById('npSuccess');
       s.classList.remove('hidden');
-      s.textContent='Pedido guardado en Sheets - '+nombre+' - '+npMoney(total);
+      s.innerHTML='<div style="margin-bottom:8px">Pedido guardado en Sheets · '+nombre+' · '+npMoney(total)+'</div>'+
+        '<button type="button" class="np-btn-copy" style="margin:0" onclick="npCopiarResumen()">📋 Copiar resumen para WhatsApp</button>';
       btn.textContent='GUARDAR PEDIDO';btn.disabled=false;npSaving=false;
       npReset();
+      // Antes el redirect al tab Armado disparaba a los 2s. Lo subimos a 6s para
+      // que Tadeo tenga tiempo de tocar "Copiar resumen" antes de que se cierre.
       setTimeout(function(){
         s.classList.add('hidden');
+        _npLastResumen=''; // limpio para el próximo pedido
         refresh();
         currentTab='armado';saveLocal();
         document.querySelectorAll('.tab').forEach(function(t){t.classList.toggle('active',t.dataset.tab==='armado')});
         render();
-      },2000);
+      },6000);
     })
     .catch(function(err){
       hideLoader(true);
