@@ -526,13 +526,32 @@ select.np-input{background:var(--white) url("data:image/svg+xml;utf8,<svg xmlns=
       <input type="number" id="npDescuentoManual" inputmode="numeric" placeholder="🎁 Regalo $ (opc.)" class="np-input" oninput="npUpdateTotal()" min="0">
     </div>
 
-    <!-- Pago + Propina -->
+    <!-- Pago: Efectivo / Transferencia / Mixto + Sin 10% OFF -->
     <div class="np-row-2" style="margin-top:10px">
       <div class="np-chips" style="flex:1">
         <button type="button" class="np-chip active" data-pago="Efectivo" onclick="npSetPago('Efectivo')">Efectivo</button>
         <button type="button" class="np-chip" data-pago="Transferencia" onclick="npSetPago('Transferencia')">MP / Transf.</button>
         <button type="button" class="np-chip" data-pago="Mixto" onclick="npSetPago('Mixto')">Mixto</button>
-        <button type="button" class="np-chip" id="npChipNoDisc" onclick="npToggleNoDisc()" title="Cobrar precio normal sin el 10% OFF del Efectivo">Sin 10% OFF</button>
+      </div>
+      <button type="button" class="np-chip" id="npChipNoDisc" onclick="npToggleNoDisc()" title="Cobrar precio normal sin el 10% OFF del Efectivo">Sin 10% OFF</button>
+    </div>
+
+    <!-- Ya me pagó: si el cliente paga al momento (caso clásico: vienen al
+         depósito, pagan y se llevan). Setea estadoPago='Cobrado', llena
+         R/S, stampa fecha de cobro. Para Mixto pide el split ef/tr. -->
+    <label style="display:flex;align-items:center;gap:10px;padding:11px 13px;border:1.5px solid var(--border);border-radius:10px;background:var(--white);cursor:pointer;margin-top:8px">
+      <input type="checkbox" id="npYaCobrado" onchange="npToggleYaCobrado()" style="width:20px;height:20px;cursor:pointer;accent-color:var(--green);flex-shrink:0">
+      <span style="font-weight:700;color:var(--brown);font-size:14px">💸 Ya me pagó (registrar como cobrado)</span>
+    </label>
+    <!-- Mixto split: visible solo cuando pago=Mixto Y yaCobrado. -->
+    <div id="npMixtoSplit" class="hidden" style="margin-top:8px;gap:8px">
+      <div style="display:flex;align-items:center;gap:6px;flex:1;background:var(--white);border:1.5px solid var(--border);border-radius:10px;padding:10px 12px">
+        <span style="font-weight:700;color:var(--brown);font-size:14px">💵 $</span>
+        <input type="number" id="npEfMixto" inputmode="numeric" placeholder="0" style="width:100%;min-width:0;border:none;font-size:16px;font-weight:700;text-align:right;outline:none;background:transparent">
+      </div>
+      <div style="display:flex;align-items:center;gap:6px;flex:1;background:var(--white);border:1.5px solid var(--border);border-radius:10px;padding:10px 12px">
+        <span style="font-weight:700;color:var(--brown);font-size:14px">📱 $</span>
+        <input type="number" id="npTrMixto" inputmode="numeric" placeholder="0" style="width:100%;min-width:0;border:none;font-size:16px;font-weight:700;text-align:right;outline:none;background:transparent">
       </div>
     </div>
 
@@ -903,7 +922,7 @@ var STORAGE_VERSION='v2-row-keyed';
 // APP_VERSION: si el browser carga una version distinta a la conocida, limpiamos
 // caches del SW y recargamos. Evita que iOS Safari sirva HTML viejo (bug Violeta
 // 27/05: PWA con codigo v55 procesando cobros con processSyncQueue trabado).
-var APP_VERSION='v103';
+var APP_VERSION='v104';
 // Pintar version real en el badge (no hardcodear el HTML, suele desincronizar).
 try{var __ve=document.getElementById('appVer');if(__ve)__ve.textContent=APP_VERSION;}catch(_){}
 (function(){
@@ -3927,7 +3946,37 @@ function npSetZona(z){
 function npSetPago(p){
   npPago=p;
   document.querySelectorAll('.np-chip[data-pago]').forEach(function(b){b.classList.toggle('active',b.dataset.pago===p)});
+  npUpdateMixtoSplit();
   npUpdateTotal();
+}
+
+// Muestra/oculta el split ef/tr para pedidos pagados Mixto en el momento.
+// Solo aparece si Tadeo marcó "Ya me pagó" Y eligió Mixto. Pre-fillea Ef=total
+// y Tr=0 para que tipee solo lo que difiere.
+function npUpdateMixtoSplit(){
+  var ya=(document.getElementById('npYaCobrado')||{}).checked;
+  var split=document.getElementById('npMixtoSplit');
+  if(!split)return;
+  var mostrar=ya && npPago==='Mixto';
+  split.classList.toggle('hidden',!mostrar);
+  if(mostrar){
+    split.style.display='flex';
+    // Pre-fill: si los inputs están vacíos, sugerí total en Ef y 0 en Tr.
+    var info=(typeof npDiscountInfo==='function')?npDiscountInfo():{total:0};
+    var totalActual=Math.max(0,Number(info.total)||0);
+    var efI=document.getElementById('npEfMixto'), trI=document.getElementById('npTrMixto');
+    var efV=parseInt(efI&&efI.value)||0, trV=parseInt(trI&&trI.value)||0;
+    if(efV===0 && trV===0 && totalActual>0){
+      if(efI)efI.value=totalActual;
+      if(trI)trI.value=0;
+    }
+  } else {
+    split.style.display='';
+  }
+}
+
+function npToggleYaCobrado(){
+  npUpdateMixtoSplit();
 }
 
 // Toggle "Sin 10% OFF" — al activarlo, anula el descuento automatico (Efectivo o >$100K).
@@ -4338,6 +4387,25 @@ function npGuardar(){
     estadoEntrega:(document.getElementById('npEstadoEntrega')||{}).value||'Pendiente',
     estadoPago:'No Cobrado'
   };
+  // "Ya me pagó": registra el pedido como cobrado en el acto. Para Mixto pide
+  // el split ef/tr; para Efectivo/Transf, el total va al método correspondiente.
+  var yaCobrado=(document.getElementById('npYaCobrado')||{}).checked;
+  if(yaCobrado){
+    data.estadoPago='Cobrado';
+    if(npPago==='Mixto'){
+      var efM=parseInt((document.getElementById('npEfMixto')||{}).value)||0;
+      var trM=parseInt((document.getElementById('npTrMixto')||{}).value)||0;
+      if(efM+trM<=0){showToast('Mixto: cargá los montos Ef y/o Tr');return;}
+      data.efectivo=efM;
+      data.transferencia=trM;
+    } else if(npPago==='Efectivo'){
+      data.efectivo=total;
+      data.transferencia=0;
+    } else if(npPago==='Transferencia'){
+      data.efectivo=0;
+      data.transferencia=total;
+    }
+  }
   if(npZona==='Home'){
     data.barrioPrivado=(document.getElementById('npBarrioPrivado')||{}).value||'Estancias del Pilar';
     data.subBarrio=document.getElementById('npSubBarrio').value.trim();
@@ -4397,7 +4465,9 @@ function npReset(){
   npGlobalPct=0;npCatDisc={};
   npNoDisc=false;
   var nd=document.getElementById('npChipNoDisc');if(nd)nd.classList.remove('active');
-  ['npNombre','npLote','npPilarBarrio','npPilarLote','npTel','npPropina','npDescuentoManual','npGlobalPct'].forEach(function(id){var el=document.getElementById(id);if(el)el.value=''});
+  ['npNombre','npLote','npPilarBarrio','npPilarLote','npTel','npPropina','npDescuentoManual','npGlobalPct','npEfMixto','npTrMixto'].forEach(function(id){var el=document.getElementById(id);if(el)el.value=''});
+  var yc=document.getElementById('npYaCobrado');if(yc)yc.checked=false;
+  var split=document.getElementById('npMixtoSplit');if(split){split.classList.add('hidden');split.style.display='';}
   ['npSubBarrio','npClub','npDeporte','npGrupo'].forEach(function(id){var el=document.getElementById(id);if(el)el.value=''});
   var bp=document.getElementById('npBarrioPrivado');if(bp){bp.value='Estancias del Pilar';npBarrioPrivadoChange()}
   document.getElementById('npTipo').value='normal';
