@@ -205,6 +205,13 @@ body.embed .sem-tabs{top:48px}
 .stock-low{background:#fff3e0;color:#e67e22}
 .stock-out{background:#fce8e8;color:#c0392b}
 .np-prod-future{font-size:10px;font-weight:800;padding:2px 7px;border-radius:50px;display:inline-block;margin-left:5px;background:#FFE4D0;color:#E5662F;border:1px solid #F07D47}
+.np-prod-sug{font-size:10px;font-weight:800;padding:2px 7px;border-radius:50px;display:inline-block;margin-left:5px;background:#E3F2FD;color:#0D47A1;border:1px solid #1565C0;cursor:pointer}
+.np-prod-sug:active{background:#1565C0;color:#fff}
+.np-sug-bar{display:flex;align-items:center;gap:10px;margin:2px 0 12px;padding:11px 13px;border-radius:12px;background:#E3F2FD;border:1px solid #90CAF9}
+.np-sug-bar .txt{flex:1;font-size:12px;color:#0D47A1;font-weight:600;line-height:1.35}
+.np-sug-bar .txt b{font-weight:800}
+.np-sug-bar button{background:#1565C0;color:#fff;border:none;border-radius:9px;padding:10px 14px;font-family:inherit;font-size:13px;font-weight:800;cursor:pointer;white-space:nowrap}
+.np-sug-bar button:active{background:#0D47A1}
 .np-cat-title{font-size:11px;font-weight:800;color:#F07D47;text-transform:uppercase;letter-spacing:.08em;margin:14px 0 6px;padding:0 4px;border-left:3px solid #F07D47;line-height:1.2}
 .np-cat-title:first-child{margin-top:4px}
 .np-qty-wrap{display:flex;align-items:center;gap:0;border:2px solid #E8DFC4;border-radius:10px;overflow:hidden}
@@ -238,6 +245,8 @@ select,input[type="number"]{font-size:16px}
 .stock-table td:first-child{text-align:left;font-weight:700;font-size:12px}
 .stock-table .val-stock{color:#331C1C;font-weight:700}
 .stock-table .val-pedido{color:#1565C0;font-weight:800}
+.stock-table .val-sug{color:#0D47A1;font-weight:800}
+.stock-table .val-sug b{font-weight:800}
 .stock-table .val-total{font-weight:800}
 .stock-table .val-total.ok{color:#4CAF50}
 .stock-table .val-total.low{color:#e67e22}
@@ -2277,23 +2286,25 @@ function renderStockOverview() {
   }
 
   var html = '<div class="stock-overview">';
-  html += '<div class="stock-title">Stock actual + pedidos pendientes</div>';
-  html += '<table class="stock-table"><thead><tr><th>Producto</th><th>Stock</th><th>Pedido</th><th>Total</th></tr></thead><tbody>';
+  html += '<div class="stock-title">Stock + pedidos · 💡 cuánto pedir (ventas Home 3 sem)</div>';
+  html += '<table class="stock-table"><thead><tr><th>Producto</th><th>Stock</th><th>Pedido</th><th>Total</th><th>Pedir</th></tr></thead><tbody>';
 
   catalogo.proveedores.forEach(function(prov) {
     var items = catalogo.productos[prov] || [];
     if (items.length === 0) return;
-    html += '<tr class="stock-prov-header"><td colspan="4">' + prov + '</td></tr>';
+    html += '<tr class="stock-prov-header"><td colspan="5">' + prov + '</td></tr>';
     items.forEach(function(it) {
       var stock = (it.s !== null) ? it.s : 0;
       var pedido = ocPending[it.a] || 0;
       var total = stock + pedido;
       var cls = total === 0 ? 'zero' : total <= 3 ? 'low' : 'ok';
+      var sug = npSugerido(it);
       html += '<tr>' +
         '<td>' + it.a + '</td>' +
         '<td class="val-stock">' + stock + '</td>' +
         '<td class="val-pedido">' + (pedido > 0 ? '+' + pedido : '-') + '</td>' +
         '<td class="val-total ' + cls + '">' + total + '</td>' +
+        '<td class="val-sug">' + (sug > 0 ? '<b>' + sug + '</b>' : '-') + '</td>' +
         '</tr>';
     });
   });
@@ -2330,7 +2341,16 @@ function onNpProvChange() {
   });
   var mostrarTitulos = ordenGrupos.length > 1;
 
+  // Barra de sugeridos (solo para Tadeo — Stock): total a pedir según ventas Home
+  var esStock = npEsStock();
   var html = '';
+  if (esStock) {
+    var totalSug = 0;
+    items.forEach(function(it){ totalSug += npSugerido(it); });
+    if (totalSug > 0) {
+      html += '<div class="np-sug-bar"><div class="txt">💡 Según tus ventas <b>Home</b> de las últimas 3 semanas y lo que ya tenés (stock + en camino), te conviene pedir <b>' + totalSug + ' u.</b> de este proveedor.</div><button onclick="npCargarSugeridos()">Cargar</button></div>';
+    }
+  }
   ordenGrupos.forEach(function(cat){
     if (mostrarTitulos) {
       html += '<div class="np-cat-title">' + cat + '</div>';
@@ -2348,10 +2368,21 @@ function onNpProvChange() {
         // Marcador "tendría si pido X" — se llena dinámicamente desde npChangeQty/npSetQty
         futuroHtml = '<span class="np-prod-future hidden" id="npf_' + it.a + '"></span>';
       }
+      // Chip de sugerido (tap para aplicar) — solo Tadeo — Stock y con demanda Home > 0
+      var sugHtml = '';
+      if (esStock && it.dem > 0) {
+        var sug = npSugerido(it);
+        var wkTxt = (it.wk && it.wk.length === 3) ? it.wk.join('/') : '';
+        if (sug > 0) {
+          sugHtml = '<span class="np-prod-sug" onclick="npAplicarSugerido(\'' + it.a + '\')" title="Home 3 sem: ' + it.dem + ' u/sem (' + wkTxt + ') · cobertura ' + NP_COBERTURA + ' sem — tap para cargar">💡 Pedí ' + sug + '</span>';
+        } else {
+          sugHtml = '<span class="np-prod-sug" style="background:#e8f5e8;color:#2e7d32;border-color:#a5d6a7;cursor:default" title="Home 3 sem: ' + it.dem + ' u/sem (' + wkTxt + ') — stock + en camino ya cubre la cobertura">✓ cubierto</span>';
+        }
+      }
       html += '<div class="np-prod-card" style="flex-wrap:wrap">' +
         '<div class="np-prod-info">' +
           '<div class="np-prod-name">' + it.n + '</div>' +
-          '<div class="np-prod-meta">' + (it.c > 0 ? formatMoney(it.c) + ' c/u' : 'Sin costo') + ' ' + stockHtml + futuroHtml + '</div>' +
+          '<div class="np-prod-meta">' + (it.c > 0 ? formatMoney(it.c) + ' c/u' : 'Sin costo') + ' ' + stockHtml + futuroHtml + sugHtml + '</div>' +
         '</div>' +
         '<div class="np-qty-wrap">' +
           '<button class="np-qty-btn" onclick="npChangeQty(\'' + it.a + '\',-1)">-</button>' +
@@ -2416,6 +2447,71 @@ function npSetQty(abbr, val) {
   npQtys[abbr] = Math.max(0, parseInt(val) || 0);
   npUpdateFuturo(abbr);
   updateNpSummary();
+}
+
+/* ── SUGERIDOR DE COMPRA (depósito) ─────────────────────────
+   Sugerido = máx(0, demandaHomeSemanal × COBERTURA − disponible − enCamino)
+   · demandaHomeSemanal: prom de unidades vendidas en Home las últimas 3 sem (backend, it.dem)
+   · disponible: it.s (físico − reservado; lo reservado ya está vendido para el finde)
+   · enCamino: OCs "Tadeo — Stock" pendientes de ese producto
+   Solo aplica al vendedor "Tadeo — Stock". */
+var NP_COBERTURA = 1.5; // semanas de stock objetivo en el freezer
+
+function npEnCamino(abbr) {
+  var n = 0;
+  if (typeof busqueda !== 'undefined' && busqueda && busqueda.ocs) {
+    busqueda.ocs.forEach(function(oc) {
+      if (oc.canal !== 'Deposito') return;
+      if (oc.est === 'Recibido' || oc.est === 'Cancelado') return;
+      if ((oc.abbr || oc.prod) === abbr) n += (oc.q || 0);
+    });
+  }
+  return n;
+}
+
+function npSugerido(it) {
+  if (!it || it.dem === undefined || it.dem === null || it.dem <= 0) return 0;
+  var disp = (it.s !== null && it.s !== undefined) ? it.s : 0;
+  var s = Math.round(it.dem * NP_COBERTURA - disp - npEnCamino(it.a));
+  return s > 0 ? s : 0;
+}
+
+function npEsStock() {
+  return document.getElementById('npVendedor').value === 'Tadeo — Stock';
+}
+
+/* Aplica el sugerido a un solo producto (tap en el chip 💡). */
+function npAplicarSugerido(abbr) {
+  var prov = document.getElementById('npProv').value;
+  var items = (catalogo.productos && catalogo.productos[prov]) || [];
+  var it = null;
+  for (var i = 0; i < items.length; i++) { if (items[i].a === abbr) { it = items[i]; break; } }
+  if (!it) return;
+  var s = npSugerido(it);
+  npSetOrigen(abbr, 'Orden de Compra');
+  var input = document.getElementById('npq_' + abbr);
+  if (input) input.value = s;
+  npQtys[abbr] = s;
+  npUpdateFuturo(abbr);
+  updateNpSummary();
+  if (navigator.vibrate) navigator.vibrate(15);
+}
+
+/* Carga todos los sugeridos del proveedor de una (botón superior). */
+function npCargarSugeridos() {
+  var prov = document.getElementById('npProv').value;
+  var items = (catalogo.productos && catalogo.productos[prov]) || [];
+  items.forEach(function(it) {
+    var s = npSugerido(it);
+    if (s <= 0) return;
+    npSetOrigen(it.a, 'Orden de Compra');
+    var input = document.getElementById('npq_' + it.a);
+    if (input) input.value = s;
+    npQtys[it.a] = s;
+    npUpdateFuturo(it.a);
+  });
+  updateNpSummary();
+  if (navigator.vibrate) navigator.vibrate(20);
 }
 
 function getNpItems() {
