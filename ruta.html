@@ -902,7 +902,7 @@ var STORAGE_VERSION='v2-row-keyed';
 // APP_VERSION: si el browser carga una version distinta a la conocida, limpiamos
 // caches del SW y recargamos. Evita que iOS Safari sirva HTML viejo (bug Violeta
 // 27/05: PWA con codigo v55 procesando cobros con processSyncQueue trabado).
-var APP_VERSION='v101';
+var APP_VERSION='v102';
 // Pintar version real en el badge (no hardcodear el HTML, suele desincronizar).
 try{var __ve=document.getElementById('appVer');if(__ve)__ve.textContent=APP_VERSION;}catch(_){}
 (function(){
@@ -4172,8 +4172,10 @@ function npUpdateTotal(){
 function npMoney(n){return'$'+(n||0).toLocaleString('es-AR')}
 
 // Resumen del pedido en formato WhatsApp, agrupado por categoría. Cada
-// categoría muestra: "Nombre = cantidad total" (más "(N pizzas en total)"
-// para Pack Pizzas) y debajo las líneas con producto + precio.
+// categoría muestra "Nombre = cantidad total" (con extras: "(N pizzas en
+// total)" para Pack Pizzas, "(X% OFF)" si la categoría tiene descuento) y
+// debajo las líneas con producto + precio de lista. Al final, summary con
+// subtotal, descuentos (por cat / global / 10% auto / regalo $) y total.
 // Tras guardar, se cachea en _npLastResumen porque npReset() limpia el cart.
 var _npLastResumen='';
 function npResumenTextoWA(){
@@ -4182,39 +4184,50 @@ function npResumenTextoWA(){
   var saludo=nombre?('Hola '+nombre.split(' ')[0]+'!'):'Hola!';
   var lines=[saludo,'','Te confirmo tu pedido:',''];
   var sub=0,hayItems=false;
+  var catDescDetalle=[]; // [{name, pct, monto}] para el summary
   NP_CAT.forEach(function(cat){
-    var catLineas=[],catQty=0;
+    var catLineas=[],catQty=0,subCat=0;
     cat.items.forEach(function(item){
       var q=npCart[item.id];if(!q)return;
       var pr=NP_PRECIOS[item.abbr];if(!pr)return;
       var precio=tipo==='club'?(pr.pc||pr.p):(tipo==='costo'?pr.c:pr.p);
       var lineaTotal=precio*q;
       sub+=lineaTotal;
+      subCat+=lineaTotal;
       catQty+=q;
       var nombreLargo=PROD_NAMES[item.abbr]||item.n||item.abbr;
       catLineas.push('• '+q+'× '+nombreLargo+' — '+npMoney(lineaTotal));
     });
     if(catLineas.length===0)return;
     hayItems=true;
-    // Header de categoría: nombre sin " x2" + cantidad. Pack Pizzas extra info.
     var catName=cat.cat.replace(/\s*x\d+\s*$/i,'').trim();
-    var header=catName+' = '+catQty;
-    if(/Pack Pizzas/i.test(cat.cat))header+=' ('+(catQty*2)+' pizzas en total)';
+    var pctCat=(npZona==='Clubes')?0:(Number(npCatDisc[cat.cat])||0);
+    // Extras dentro del paréntesis del header (concatenados con ·)
+    var extras=[];
+    if(/Pack Pizzas/i.test(cat.cat))extras.push((catQty*2)+' pizzas en total');
+    if(pctCat>0){
+      extras.push(pctCat+'% OFF');
+      catDescDetalle.push({name:catName,pct:pctCat,monto:Math.round(subCat*pctCat/100)});
+    }
+    var header=catName+' = '+catQty+(extras.length?' ('+extras.join(' · ')+')':'');
     lines.push(header);
     lines=lines.concat(catLineas);
     lines.push(''); // separador entre categorías
   });
   if(!hayItems)return '';
-  // Sacar el último blank de la última categoría (queda 1 línea en blanco antes del subtotal)
   while(lines.length&&lines[lines.length-1]==='')lines.pop();
   lines.push('');
-  var desc=npDescuento(sub,tipo);
-  var descMan=npDescuentoManualValor();
-  var total=Math.max(0,sub-desc-descMan);
+  // Usar npDiscountInfo() para reflejar TODOS los descuentos activos (% por
+  // categoría + % global + 10% auto + regalo $).
+  var info=npDiscountInfo();
   lines.push('Subtotal: '+npMoney(sub));
-  if(desc>0)lines.push('Descuento 10% OFF: -'+npMoney(desc));
-  if(descMan>0)lines.push('Descuento: -'+npMoney(descMan));
-  lines.push('*Total a pagar: '+npMoney(total)+'*');
+  catDescDetalle.forEach(function(d){
+    lines.push('Descuento '+d.name+' (-'+d.pct+'%): -'+npMoney(d.monto));
+  });
+  if(info.globalDiscP>0)lines.push('Descuento general (-'+info.globalPct+'%): -'+npMoney(info.globalDiscP));
+  if(info.auto>0)lines.push('Descuento 10% OFF: -'+npMoney(info.auto));
+  if(info.regalo>0)lines.push('Descuento / Regalo: -'+npMoney(info.regalo));
+  lines.push('*Total a pagar: '+npMoney(info.total)+'*');
   return lines.join('\n');
 }
 
