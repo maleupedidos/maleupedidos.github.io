@@ -922,7 +922,7 @@ var STORAGE_VERSION='v2-row-keyed';
 // APP_VERSION: si el browser carga una version distinta a la conocida, limpiamos
 // caches del SW y recargamos. Evita que iOS Safari sirva HTML viejo (bug Violeta
 // 27/05: PWA con codigo v55 procesando cobros con processSyncQueue trabado).
-var APP_VERSION='v105';
+var APP_VERSION='v106';
 // Pintar version real en el badge (no hardcodear el HTML, suele desincronizar).
 try{var __ve=document.getElementById('appVer');if(__ve)__ve.textContent=APP_VERSION;}catch(_){}
 (function(){
@@ -1287,29 +1287,27 @@ function getSorted(){
       return 0; // ambos sin prioridad: respeta el orden geográfico que ya venía
     });
   }
-  // Append: bloque sintético por vendedor Red. Una sola card por vendedor con suma
-  // de productos. Entran:
-  //   - Red armados (Tadeo ya tildó la tanda en ARMADO).
-  //   - Red 100% OC (no requieren armado: van directo del proveedor al vendedor).
-  // Sin el caso 100% OC, los pedidos Red 100% OC quedaban en limbo (no aparecía
-  // la card violeta porque Tadeo nunca tildaba algo que no requería tildar).
-  var redArmados=_base.filter(function(e){
-    if(e.h!=='Red')return false;
-    if(armadoDone[eKey(e)])return true;
-    if(_origenTipo(e)==='oc')return true;
-    return false;
-  });
-  if(redArmados.length>0){
+  // Append: bloque sintético por vendedor Red. Una sola card por vendedor que
+  // agrega TODOS los pedidos Red del día (armados, 100% OC y Mixtos sin armar).
+  // todoOC se calcula sobre el conjunto completo (no solo los que entran al
+  // agregado, como antes — bug 12/06/2026: Marcos mostraba "todo OC" cuando
+  // tenía un pedido Mixto con items D sin armar que no entraba al filtro).
+  // pendientesArmar cuenta los pedidos con items D no armados → se muestra
+  // como warning en la card para que Tadeo arme antes de entregar.
+  var redDelDia=_base.filter(function(e){return e.h==='Red'});
+  if(redDelDia.length>0){
     var porVendedor={};
-    redArmados.forEach(function(e){
+    redDelDia.forEach(function(e){
       var v=e.retira||'Vendedor';
-      if(!porVendedor[v])porVendedor[v]={pedidos:[],totals:{},todoOC:true};
+      if(!porVendedor[v])porVendedor[v]={pedidos:[],totals:{},todoOC:true,pendientesArmar:0};
       porVendedor[v].pedidos.push(e);
       // Solo items DEL DEPÓSITO (D). Los OC los retira el vendedor directo del proveedor,
-      // no salen del freezer de Tadeo. Bug 05/06/2026: card de Marcos mostraba productos OC
-      // como si fueran del depósito cuando todos los pedidos de la semana eran OC.
+      // no salen del freezer de Tadeo.
       var depItems=_itemsDepDe(e);
-      if(depItems.length>0)porVendedor[v].todoOC=false;
+      if(depItems.length>0){
+        porVendedor[v].todoOC=false;
+        if(!armadoDone[eKey(e)])porVendedor[v].pendientesArmar++;
+      }
       depItems.forEach(function(p){
         if(!porVendedor[v].totals[p.a])porVendedor[v].totals[p.a]=0;
         porVendedor[v].totals[p.a]+=p.q;
@@ -1322,7 +1320,7 @@ function getSorted(){
       var rows=pack.pedidos.map(function(e){return e.r}).filter(function(r){return r>=2});
       clientes.push({
         _redAgg:true,_vendedor:v,_keys:keys,_rows:rows,
-        _todoOC:pack.todoOC,
+        _todoOC:pack.todoOC,_pendientesArmar:pack.pendientesArmar,
         h:'Red',id:'red-'+v.replace(/\s/g,''),r:0,
         c:v+' (Red)',l:'',b:'Vendedor Red',sb:'',
         de:pack.pedidos[0].de||'',
@@ -2155,6 +2153,11 @@ function renderRuta(){
       // El vendedor retira la mercadería directo del proveedor.
       h+='<div style="background:#FFF3E0;border:1.5px solid #FB923C;border-radius:10px;padding:12px 14px;margin-bottom:12px;font-size:13px;line-height:1.5;color:#9A3412;text-align:left">📦 <b>Todos los pedidos son Orden de Compra.</b><br>El vendedor retira directo del proveedor. No sale nada de tu freezer.</div>';
     } else {
+      // Warning si hay pedidos con items D sin armar (faltan sacar del freezer)
+      if(e._pendientesArmar>0){
+        h+='<div style="background:#FFEBEE;border:1.5px solid #EF5350;border-radius:10px;padding:10px 12px;margin-bottom:10px;font-size:13px;line-height:1.5;color:#B71C1C;text-align:left">⚠️ <b>'+e._pendientesArmar+' pedido'+(e._pendientesArmar>1?'s':'')+' pendiente'+(e._pendientesArmar>1?'s':'')+' de armar.</b><br>Andá a ARMADO y tildá los pedidos del depósito antes de entregar.</div>';
+      }
+      h+='<div style="font-size:12px;font-weight:700;color:var(--muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:.04em">🧊 Sale del freezer</div>';
       h+='<div class="ruta-productos">';_sortProds(e.p).forEach(function(p){h+='<div class="ruta-prod-item"><span>'+(PROD_NAMES[p.a]||p.a)+'</span><span class="ruta-prod-qty">'+p.q+'</span></div>'});h+='</div>';
     }
     body.innerHTML=h;
