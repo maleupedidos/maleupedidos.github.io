@@ -670,8 +670,22 @@ select.np-input{background:var(--white) url("data:image/svg+xml;utf8,<svg xmlns=
     <div class="cobro-ruta-toggles">
       <button type="button" class="cobro-toggle" id="cobroToggleCambio" onclick="_toggleCobroSec('cobroCambioSection',this)">💸 Devolví cambio</button>
       <button type="button" class="cobro-toggle" id="cobroToggleAFav" onclick="_toggleCobroSec('cobroAFavSection',this)">🎁 A favor del cliente</button>
+      <button type="button" class="cobro-toggle" id="cobroToggleDesc" onclick="_toggleCobroSec('cobroDescSection',this)">💸 Descuento</button>
       <button type="button" class="cobro-toggle" id="cobroTogglePropina" onclick="_toggleCobroSec('cobroPropinaSection',this)">💰 Propina</button>
       <button type="button" class="cobro-toggle" id="cobroTogglePartial" onclick="_toggleCobroParcial(this)">🧩 Pago parcial</button>
+    </div>
+
+    <div class="cobro-ruta-section" id="cobroDescSection" style="display:none">
+      <label class="cobro-ruta-lbl">Descuento manual (se le baja al cliente)</label>
+      <div class="cobro-ruta-pills" style="margin-bottom:8px">
+        <button type="button" class="cobro-pill on" id="cobroDescTipoPct" onclick="_setCobroDescTipo('pct')">% del pedido</button>
+        <button type="button" class="cobro-pill" id="cobroDescTipoMonto" onclick="_setCobroDescTipo('monto')">$ fijo</button>
+      </div>
+      <div class="cobro-ruta-field">
+        <span class="cobro-ruta-prefix" id="cobroDescPrefix">%</span>
+        <input type="text" id="cobroDescInp" inputmode="decimal" placeholder="0" oninput="_onDescManualChange()">
+      </div>
+      <div class="cobro-ruta-hint" id="cobroDescHint" style="font-weight:700;color:#5D4037">Descuento: $0 · Total: $0</div>
     </div>
 
     <div class="cobro-ruta-section" id="cobroAFavSection" style="display:none">
@@ -922,7 +936,7 @@ var STORAGE_VERSION='v2-row-keyed';
 // APP_VERSION: si el browser carga una version distinta a la conocida, limpiamos
 // caches del SW y recargamos. Evita que iOS Safari sirva HTML viejo (bug Violeta
 // 27/05: PWA con codigo v55 procesando cobros con processSyncQueue trabado).
-var APP_VERSION='v110';
+var APP_VERSION='v111';
 // Pintar version real en el badge (no hardcodear el HTML, suele desincronizar).
 try{var __ve=document.getElementById('appVer');if(__ve)__ve.textContent=APP_VERSION;}catch(_){}
 (function(){
@@ -2809,20 +2823,29 @@ function _toggleAceptaDescuento(){
   _recalcCobroRuta();
 }
 function _resetCobroSeccionesColapsables(){
-  ['cobroCambioSection','cobroAFavSection','cobroPropinaSection'].forEach(function(id){
+  ['cobroCambioSection','cobroAFavSection','cobroDescSection','cobroPropinaSection'].forEach(function(id){
     var el=document.getElementById(id);if(el)el.style.display='none';
   });
-  ['cobroToggleCambio','cobroToggleAFav','cobroTogglePropina'].forEach(function(id){
+  ['cobroToggleCambio','cobroToggleAFav','cobroToggleDesc','cobroTogglePropina'].forEach(function(id){
     var el=document.getElementById(id);if(el)el.classList.remove('on');
   });
   _setMoneyInput('cobroCamEf',0);
   _setMoneyInput('cobroCamMP',0);
   _setMoneyInput('cobroAFavInp',0);
   _setMoneyInput('cobroPropinaInp',0);
+  var inpDM=document.getElementById('cobroDescInp');if(inpDM)inpDM.value='';
   var btnSig=document.querySelector('[data-prop-target="cobroPropinaInp"]');
   if(btnSig){btnSig.classList.remove('neg');btnSig.textContent='+';}
-  // Reset flag de descuento aceptado (no persiste entre cobros)
-  if(_cobroRutaState)_cobroRutaState.aceptaDescuento=false;
+  // Reset flag de descuento aceptado + descuento manual (no persisten entre cobros)
+  if(_cobroRutaState){
+    _cobroRutaState.aceptaDescuento=false;
+    delete _cobroRutaState.descManual;
+    _cobroRutaState.descManualTipo='pct';
+    // Reset pills del descuento manual
+    var bp=document.getElementById('cobroDescTipoPct');if(bp)bp.classList.add('on');
+    var bm=document.getElementById('cobroDescTipoMonto');if(bm)bm.classList.remove('on');
+    var pref=document.getElementById('cobroDescPrefix');if(pref)pref.textContent='%';
+  }
   // Reset toggle parcial + banner de saldo previo (persisten en DOM entre aperturas)
   var btnPar=document.getElementById('cobroTogglePartial');if(btnPar)btnPar.classList.remove('on');
   var saldoEl=document.getElementById('cobroSaldoPrevio');if(saldoEl){saldoEl.style.display='none';saldoEl.innerHTML='';}
@@ -2937,6 +2960,57 @@ function _toggleCobroNoDisc(){
   _recalcCobroRuta();
 }
 
+// ── DESCUENTO MANUAL ──
+// Tadeo decide darle un descuento libre al cliente (% o $ fijo) en el momento del cobro.
+// El descuento se calcula sobre el total base del pedido (sub+env si existe, sino el $ original).
+// Al confirmar el cobro, el payload lleva descuentoManual y el backend actualiza
+// las cols Descuento y Total a cobrar del pedido + cierra con el nuevo total.
+function _setCobroDescTipo(tipo){
+  var st=_cobroRutaState; if(!st)return;
+  st.descManualTipo=tipo;
+  var bp=document.getElementById('cobroDescTipoPct');
+  var bm=document.getElementById('cobroDescTipoMonto');
+  if(bp)bp.classList.toggle('on',tipo==='pct');
+  if(bm)bm.classList.toggle('on',tipo==='monto');
+  var pref=document.getElementById('cobroDescPrefix');
+  if(pref)pref.textContent=tipo==='pct'?'%':'$';
+  _onDescManualChange();
+}
+
+function _onDescManualChange(){
+  var st=_cobroRutaState; if(!st)return;
+  if(st.esParcialPrev){showToast('El saldo ya viene calculado del parcial. No podés aplicar otro descuento');return;}
+  var tipo=st.descManualTipo||'pct';
+  var raw=String((document.getElementById('cobroDescInp')||{}).value||'').replace(/[^\d.,-]/g,'').replace(',','.');
+  var val=parseFloat(raw)||0;
+  var sub=Number(st.ent.sub)||0;
+  var env=Number(st.ent.env)||0;
+  var orig=Number(st.ent['$'])||0;
+  var totalBase=(sub>0)?(sub+env):orig; // total normal del pedido (sin descuento manual)
+  var monto=0;
+  if(tipo==='pct')monto=Math.round(totalBase*val/100);
+  else monto=Math.round(val);
+  monto=Math.max(0,Math.min(monto,totalBase));
+  if(monto>0){
+    st.descManual={tipo:tipo,valor:val,monto:monto,totalBase:totalBase};
+  } else {
+    delete st.descManual;
+  }
+  var nuevoTotal=Math.max(0,totalBase-monto);
+  st.total=nuevoTotal;
+  var hint=document.getElementById('cobroDescHint');
+  if(hint)hint.textContent='Descuento: '+formatMoney(monto)+' · Total: '+formatMoney(nuevoTotal);
+  document.getElementById('cobroRutaSub').textContent='Pedido '+formatMoney(nuevoTotal)+' · '+st.ent.h+' #'+st.ent.id+(monto>0?' (descuento '+formatMoney(monto)+')':'');
+  if(!st.partial){
+    var aplic=Math.max(0,Math.min(Number(st.aplicarSaldo)||0,nuevoTotal));
+    var target=Math.max(0,nuevoTotal-aplic);
+    if(st.fp==='Efectivo'){_setMoneyInput('cobroRecEf',target);_setMoneyInput('cobroRecMP',0);}
+    else if(st.fp==='Transferencia'){_setMoneyInput('cobroRecEf',0);_setMoneyInput('cobroRecMP',target);}
+  }
+  _renderCobroDescInfo();
+  _recalcCobroRuta();
+}
+
 // Llamado desde el input de propina manual y desde el botón ±.
 function _onPropinaManualChange(){
   if(!_cobroRutaState)return;
@@ -2966,6 +3040,27 @@ function _toggleCobroSec(secId,btn){
       _setMoneyInput('cobroCamMP',0);
     } else if(secId==='cobroAFavSection'){
       _setMoneyInput('cobroAFavInp',0);
+    } else if(secId==='cobroDescSection'){
+      // Al cerrar la sección de descuento manual, restaurar el total original.
+      var inpD=document.getElementById('cobroDescInp');if(inpD)inpD.value='';
+      var st=_cobroRutaState;
+      if(st && st.descManual){
+        delete st.descManual;
+        // Recalcular total original sin descuento manual
+        var nuevoTotal=_totalSegunFp(st.ent,st.fp,st.noDisc);
+        st.total=nuevoTotal;
+        var subTxt=st.esParcialPrev
+          ? 'Saldo '+formatMoney(nuevoTotal)+' · '+st.ent.h+' #'+st.ent.id+' (ya cobraste '+formatMoney(st.yaCobrado||0)+' de '+formatMoney(st.totalOriginal||0)+')'
+          : 'Pedido '+formatMoney(nuevoTotal)+' · '+st.ent.h+' #'+st.ent.id;
+        document.getElementById('cobroRutaSub').textContent=subTxt;
+        if(!st.partial){
+          var aplic=Math.max(0,Math.min(Number(st.aplicarSaldo)||0,nuevoTotal));
+          var target=Math.max(0,nuevoTotal-aplic);
+          if(st.fp==='Efectivo'){_setMoneyInput('cobroRecEf',target);_setMoneyInput('cobroRecMP',0);}
+          else if(st.fp==='Transferencia'){_setMoneyInput('cobroRecEf',0);_setMoneyInput('cobroRecMP',target);}
+        }
+        _renderCobroDescInfo();
+      }
     } else if(secId==='cobroPropinaSection'){
       _setMoneyInput('cobroPropinaInp',0);
       var btnSig=document.querySelector('[data-prop-target="cobroPropinaInp"]');
@@ -3286,6 +3381,10 @@ function confirmarCobroRuta(){
   };
   // Descuento quitado manualmente: forzar recalc del total SIN 10% en el backend.
   if(st.noDisc){payload.recalcular=true;payload.noDescuento=true;}
+  if(st.descManual && st.descManual.monto>0){
+    payload.recalcular=true;
+    payload.descuentoManual={tipo:st.descManual.tipo,valor:st.descManual.valor,monto:st.descManual.monto};
+  }
   // Vuelto en efectivo: lo cubre el efectivo recibido → sale de la billetera (mismo método);
   // si no, y lo cubre MP → cambio cruzado (Egreso Ef / Ingreso MP).
   if(r.camEf>0){
@@ -3452,6 +3551,10 @@ function _confirmarCobroPendiente(st,r){
   if(recalcular)payload.recalcular=true;
   // Descuento quitado manualmente: forzar recalc del total SIN 10% en el backend.
   if(st.noDisc){payload.recalcular=true;payload.noDescuento=true;}
+  if(st.descManual && st.descManual.monto>0){
+    payload.recalcular=true;
+    payload.descuentoManual={tipo:st.descManual.tipo,valor:st.descManual.valor,monto:st.descManual.monto};
+  }
   // Vuelto en efectivo: si lo cubre el efectivo recibido → sale de la billetera (mismo método).
   //                     si no, y lo cubre MP → cambio cruzado (Egreso Ef / Ingreso MP).
   if(r.camEf>0){
