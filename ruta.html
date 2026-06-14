@@ -936,7 +936,7 @@ var STORAGE_VERSION='v2-row-keyed';
 // APP_VERSION: si el browser carga una version distinta a la conocida, limpiamos
 // caches del SW y recargamos. Evita que iOS Safari sirva HTML viejo (bug Violeta
 // 27/05: PWA con codigo v55 procesando cobros con processSyncQueue trabado).
-var APP_VERSION='v111';
+var APP_VERSION='v112';
 // Pintar version real en el badge (no hardcodear el HTML, suele desincronizar).
 try{var __ve=document.getElementById('appVer');if(__ve)__ve.textContent=APP_VERSION;}catch(_){}
 (function(){
@@ -970,6 +970,31 @@ var rutaFiltroZona=null;
 // entrada en este mapa siguen el orden geográfico por defecto. Permite que Tadeo
 // suba pedidos urgentes al top sin perder el orden geográfico del resto.
 var rutaOrden={};
+// Modo de orden base de la sub-tab RUTA: 'zona' (geográfico, default) o 'hora'
+// (FIFO por hora del pedido, los más viejos primero). Persistido aparte del
+// resto del state porque es preferencia de UI del repartidor, no data sync.
+var rutaOrdenModo=(function(){try{return localStorage.getItem('maleu_ruta_orden_modo')||'zona';}catch(e){return 'zona';}})();
+function _setRutaOrdenModo(m){
+  rutaOrdenModo=m;
+  try{localStorage.setItem('maleu_ruta_orden_modo',m);}catch(e){}
+}
+function toggleRutaOrdenModo(){
+  _setRutaOrdenModo(rutaOrdenModo==='zona'?'hora':'zona');
+  renderRuta();
+}
+// Ordenar por (fecha pedido + hora pedido) ascendente. Los más viejos arriba.
+function sortByHora(list){
+  list.sort(function(a,b){
+    function ts(e){
+      var f=String(e.f||'').split(/[\/\-]/);
+      var hr=String(e.hr||'00:00').split(':');
+      if(f.length<3)return 0;
+      return new Date(Number(f[2]),Number(f[1])-1,Number(f[0]),Number(hr[0])||0,Number(hr[1])||0).getTime();
+    }
+    return ts(a)-ts(b);
+  });
+  return list;
+}
 // Modo "ordenar": muestra una lista compacta con flechas en lugar de la card grande.
 var rutaModoLista=false;
 var currentTab='armado', rutaIndex=0, isOnline=navigator.onLine, resumenBarrioAbierto=null;
@@ -1280,13 +1305,15 @@ function getSorted(){
   // Bug 28/05: los atrasados, aunque Tadeo los armara, no entraban a la ruta porque
   // solo se miraba getHoyPendientes(). Ahora también van los vencidos.
   var _base=getHoyPendientes().concat(getAtrasados());
-  var clientes=sortByZona(_base.filter(function(e){
+  var _filtrados=_base.filter(function(e){
     if(e.h==='Red')return false;
     if(armadoDone[eKey(e)])return true;
     // 100% OC: pasa directo a Ruta sin pasar por Armado (no hay nada que sacar del freezer)
     if(_origenTipo(e)==='oc')return true;
     return false;
-  }));
+  });
+  // Orden base: zona (geográfico, minimiza zigzag) o hora (FIFO por hora pedido)
+  var clientes=(rutaOrdenModo==='hora')?sortByHora(_filtrados):sortByZona(_filtrados);
   // Aplicar orden manual (botones ↑↓🔝 en vista "Ordenar"). Los pedidos con prioridad
   // asignada van primero, ordenados por valor (menor=arriba). Los sin prioridad
   // mantienen el orden geográfico relativo.
@@ -2118,6 +2145,10 @@ function renderRuta(){
   var rh='';
   // Botón "📋 Ordenar" — abre vista lista para reordenar pedidos manualmente
   rh+='<span class="ruta-resumen-pill ordenar" onclick="toggleRutaListaModo()">📋 Ordenar</span>';
+  // Pill toggle orden base: zona ↔ hora del pedido. Persistido en localStorage.
+  var _modoIc=(rutaOrdenModo==='hora')?'🕐':'🗺️';
+  var _modoLbl=(rutaOrdenModo==='hora')?'Por hora':'Por zona';
+  rh+='<span class="ruta-resumen-pill" style="background:#FFF8E1;border-color:#F9A825;color:#5D4037" onclick="toggleRutaOrdenModo()" title="Cambiar orden: zona o hora del pedido">'+_modoIc+' '+_modoLbl+'</span>';
   // Pill "Todos" para limpiar filtro
   if(rutaFiltroZona){
     rh+='<span class="ruta-resumen-pill todos" onclick="setRutaFiltro(null)">↺ Todos ('+sortedAll.length+')</span>';
@@ -2200,6 +2231,14 @@ function renderRuta(){
   // Para combos, el link al detalle abre el primer pedido (e.id es CSV "340,345").
   var _idLink=e._combo?String(e._pedidos[0].id):e.id;
   h+='<div class="ruta-nombre"><span class="ord-link" onclick="event.stopPropagation();_openOrdInPanel(\''+e.h+'\',\''+_idLink+'\')" title="Ver detalle">'+e.c+'</span></div>';
+  // Hora del pedido (útil para "modo hora" — saber quién pidió antes y entregarlo primero).
+  // Si es combo, mostrar la hora del PRIMER pedido (el más viejo).
+  var _hrShow=e._combo?(e._pedidos[0].hr||''):(e.hr||'');
+  var _fShow=e._combo?(e._pedidos[0].f||''):(e.f||'');
+  if(_hrShow){
+    var _hint=_fShow?(' · '+_fShow):'';
+    h+='<div style="font-size:12px;color:var(--muted);margin-bottom:6px;font-weight:600">🕐 Pedido a las '+_hrShow+_hint+'</div>';
+  }
 
   // ── Caja informativa de combo: "2 pedidos juntos" ──
   if(e._combo){
