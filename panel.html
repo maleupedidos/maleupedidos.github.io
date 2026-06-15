@@ -1953,6 +1953,7 @@ body.role-single .statusbar{font-size:11px}
       <input type="text" id="crmProdSearch" class="bbdd-search" placeholder="Buscar producto..." oninput="renderCrmProductos()">
       <select id="crmProdSort" class="bbdd-sel" onchange="renderCrmProductos()">
         <option value="vendPer" selected>Mas vendidos (periodo)</option>
+        <option value="vendUltSem">Mas vendidos (ultima semana)</option>
         <option value="compPer">Mas comprados (periodo)</option>
         <option value="vendidos">Mas vendidos (histor.)</option>
         <option value="facturado">Mas facturados (histor.)</option>
@@ -5008,6 +5009,51 @@ function rInicio(){
     }
   });
 
+  // ── SALUD DE CLIENTES (Home / Venta Directa) ──
+  // Por semana, clasifica a los clientes Home en Nuevos / Recompra / Reactivados.
+  // Universo: pedidos Home no cancelados (Estancias del Pilar + Los Alcanfores + Estancias del Río),
+  // la base de consumidores recurrentes. La semana se toma por fecha de entrega (fallback pedido),
+  // igual que el contador de Estancias. Reactivado = ya había comprado pero hace 5+ semanas.
+  var homeCliWeeks={}; // cliNorm -> { semana: true }
+  D.pedidos.forEach(function(p){
+    if(p.h!=='Home'||p.es==='Cancelado'||p.hist)return;
+    if(!p.c||!p.c.trim())return;
+    var f=p.fe||p.f;if(!f)return;
+    var pp=String(f).split('/');if(pp.length<2)return;
+    var w=getWeek(new Date(nowYear,Number(pp[1])-1,Number(pp[0])));
+    var key=p.c.trim().toLowerCase();
+    if(!homeCliWeeks[key])homeCliWeeks[key]={};
+    homeCliWeeks[key][w]=true;
+  });
+  function saludClientesSemana(w){
+    var nuevos=0,recompra=0,react=0;
+    Object.keys(homeCliWeeks).forEach(function(key){
+      if(!homeCliWeeks[key][w])return;
+      var prior=Object.keys(homeCliWeeks[key]).map(Number).filter(function(x){return x<w;});
+      if(!prior.length){nuevos++;return;}
+      var last=Math.max.apply(null,prior);
+      if(last>=w-4)recompra++; else react++; // compró en las últimas 4 semanas → activo
+    });
+    return {nuevos:nuevos,recompra:recompra,react:react,total:nuevos+recompra+react};
+  }
+  function saludClientesHTML(w){
+    var s=saludClientesSemana(w);
+    if(s.total===0)return '';
+    function chip(emoji,n,lbl,col){
+      return '<div style="flex:1;background:#fff;border:1px solid var(--cd);border-radius:10px;padding:7px 4px;text-align:center">'
+        +'<div style="font-size:17px;font-weight:800;color:'+col+';line-height:1">'+n+'</div>'
+        +'<div style="font-size:9px;color:var(--bl);font-weight:700;text-transform:uppercase;letter-spacing:.3px;margin-top:3px">'+emoji+' '+lbl+'</div>'
+        +'</div>';
+    }
+    return '<div style="margin-top:10px">'
+      +'<div style="font-size:10px;color:var(--bl);font-weight:700;letter-spacing:.4px;text-transform:uppercase;margin-bottom:5px">👥 Clientes Home · '+s.total+'</div>'
+      +'<div style="display:flex;gap:6px">'
+      + chip('🆕',s.nuevos,'Nuevos','var(--o)')
+      + chip('🔁',s.recompra,'Recompra','var(--gd)')
+      + chip('⏰',s.react,'Reactivados','#2563EB')
+      +'</div></div>';
+  }
+
   var semData=porSemana[semActual]||{ef:0,tr:0,tot:0,pend:0,dias:{}};
   var hoyD=semData.dias[hoyKey]||{ef:0,tr:0,tot:0,pend:0};
 
@@ -5083,6 +5129,7 @@ function rInicio(){
   cbHtml+=cajaCard('HOY \u00b7 COBRADO',hoyD.ef,hoyD.tr,hoyD.tot,hoyD.pend,hoyD.tot>0);
   cbHtml+=cajaCard('SEMANA '+semActual+' \u00b7 COBRADO',semData.ef,semData.tr,semData.tot,semData.pend,true);
   cbHtml+='</div>';
+  cbHtml+=saludClientesHTML(semActual);
   // Días de semana actual (expandido)
   // Semana actual: SIEMPRE Lunes a Domingo, incluso días sin facturación
   (function(){
@@ -5234,6 +5281,7 @@ function rInicio(){
       cbHtml+='<div style="font-size:11px;color:var(--bl);margin-top:6px">'+nVtas+' venta'+(nVtas===1?'':'s')+'</div>';
       var estSem=(estPilarPorSemana[s]&&estPilarPorSemana[s].tot)||0;
       if(estSem>0)cbHtml+='<div style="font-size:12px;color:var(--o);margin-top:4px;font-weight:800">🏘️ '+estSem+' entregado'+(estSem===1?'':'s')+' en Estancias del Pilar</div>';
+      cbHtml+=saludClientesHTML(s);
       cbHtml+='<div style="margin-top:8px;font-size:10px;color:var(--bl);font-weight:700;letter-spacing:.4px;text-transform:uppercase">Facturaci\u00f3n total</div>';
       cbHtml+='<div style="font-weight:800;font-size:18px;margin-top:1px">$'+f$(d.tot)+'</div>';
       cbHtml+='<div style="font-size:11px;color:var(--bl);margin-top:2px">EF $'+f$(d.ef)+' \u00b7 TR $'+f$(d.tr)+'</div>';
@@ -9602,6 +9650,7 @@ if('serviceWorker' in navigator){
   var CRM_API = 'https://script.google.com/macros/s/AKfycbxmrG5YVSshcYezk8lXFx_uxb7NFGcb9EfTXc7dsIN4rZyj73CET4mk_aKPFPDY2wNi/exec';
   var crmClientes = null;       // cache lista
   var crmProductos = null;
+  var crmProdSemanas = null;    // [{w, desde, hasta}] últimas 8 semanas ISO (desglose por producto)
   var crmCliFilter = 'todos';
   var crmCurSub = 'clientes';
   var crmFichaActual = null;     // {tipo:'cliente'|'producto', data}
@@ -9849,6 +9898,7 @@ if('serviceWorker' in navigator){
       .then(function(d){
         crmProductos = d.productos || [];
         crmProdPeriodoMeta = d.periodo || null;
+        crmProdSemanas = d.semanas || null;
         renderCrmProductos();
       })
       .catch(function(err){
@@ -9901,12 +9951,30 @@ if('serviceWorker' in navigator){
     var sortBy = el('crmProdSort').value;
     var lista = crmProductos.slice();
 
+    // Desglose por semana ISO (últimas 8 completas). ultSem = última semana cerrada.
+    var semMeta = crmProdSemanas || [];
+    var ultSemMeta = semMeta.length ? semMeta[semMeta.length - 1] : null;
+    function ultSem(p){ return (p.wk && p.wk.length) ? p.wk[p.wk.length - 1] : 0; }
+    function sparkline(p){
+      if (!p.wk || !p.wk.length || !semMeta.length) return '';
+      var max = 1, i;
+      for (i = 0; i < p.wk.length; i++) { if (p.wk[i] > max) max = p.wk[i]; }
+      var bars = p.wk.map(function(v, i){
+        var h = Math.max(Math.round((v / max) * 100), v > 0 ? 12 : 4);
+        var sm = semMeta[i] || {};
+        return '<span class="crm-spark-bar'+(i === p.wk.length - 1 ? ' last' : '')+'" style="height:'+h+'%" title="Sem '+(sm.w||'')+' ('+(sm.desde||'')+'-'+(sm.hasta||'')+'): '+v+' u"></span>';
+      }).join('');
+      return '<span class="crm-spark" title="Unidades vendidas por semana ISO (ultimas 8)">'+bars+'</span>'
+           + '<span class="crm-spark-lbl">sem '+(ultSemMeta ? ultSemMeta.w : '')+': <b>'+ultSem(p)+'</b> u</span>';
+    }
+
     if (q) lista = lista.filter(function(p){
       return (p.nombre||'').toLowerCase().indexOf(q) >= 0 || (p.abrev||'').toLowerCase().indexOf(q) >= 0;
     });
 
     if (sortBy === 'vendidos') lista.sort(function(a,b){ return b.vendidosTotal - a.vendidosTotal; });
     else if (sortBy === 'vendPer') lista.sort(function(a,b){ return (b.vendidosPeriodo||0) - (a.vendidosPeriodo||0); });
+    else if (sortBy === 'vendUltSem') lista.sort(function(a,b){ return ultSem(b) - ultSem(a); });
     else if (sortBy === 'compPer') lista.sort(function(a,b){ return (b.compradosPeriodo||0) - (a.compradosPeriodo||0); });
     else if (sortBy === 'facturado') lista.sort(function(a,b){ return b.facturadoTotal - a.facturadoTotal; });
     else if (sortBy === 'stSobra') {
