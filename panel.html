@@ -541,6 +541,11 @@ body{font-family:'Inter',-apple-system,'Segoe UI',system-ui,sans-serif;backgroun
 .crm-card-name .crm-alt{font-size:10px;color:var(--ink3);font-weight:500;font-style:italic}
 .crm-card-meta{font-size:11px;color:var(--ink3);margin-top:3px;display:flex;gap:10px;flex-wrap:wrap}
 .crm-card-meta span{white-space:nowrap}
+.crm-filtro-bar{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0 0}
+.crm-filtro-bar .bbdd-sel{flex:1;min-width:150px}
+.crm-filtro-active{margin-top:6px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.crm-filtro-tag{background:var(--o);color:#fff;padding:2px 9px;border-radius:8px;font-weight:700;font-size:11px}
+.crm-filtro-note{color:var(--ink3);font-size:10px;font-style:italic}
 .crm-card-spark{display:flex;align-items:center;gap:8px;margin-top:6px}
 .crm-spark{display:inline-flex;align-items:flex-end;gap:2px;height:22px}
 .crm-spark-bar{width:5px;min-height:1px;background:#d7cdb8;border-radius:2px 2px 0 0;display:block}
@@ -1985,6 +1990,14 @@ body.role-single .statusbar{font-size:11px}
         <button onclick="aplicarCrmProdRango()" class="crm-period-aplicar">Aplicar</button>
       </div>
       <span class="crm-period-info" id="crmProdPeriodoInfo"></span>
+    </div>
+    <div class="crm-filtro-bar">
+      <select id="crmProdCanal" class="bbdd-sel" onchange="onCrmProdFiltro('canal')">
+        <option value="todos">Todos los canales</option>
+      </select>
+      <select id="crmProdBarrio" class="bbdd-sel" onchange="onCrmProdFiltro('barrio')">
+        <option value="todos">Todos los barrios</option>
+      </select>
     </div>
     <div class="bbdd-stats" id="crmProdStats"></div>
     <div id="crmProdList" class="bbdd-list"></div>
@@ -9496,6 +9509,27 @@ if('serviceWorker' in navigator){
         '</div></div>';
       }).join('')+'</div>':'<div style="font-size:12px;color:#7A4A4A;text-align:center;padding:12px">No entraron clientes nuevos esta semana.</div>';
 
+    // Salud de clientes: nuevos / recompra activa / reactivados (nuevos+activa+react = únicos)
+    var saludCl='';
+    (function(){
+      var nv=cl.nuevosCount||0;
+      var ra=(cl.recompraActiva!=null?cl.recompraActiva:null);
+      var re=(cl.reactivados!=null?cl.reactivados:null);
+      if(ra==null||re==null){ // backend aún sin propagar: mostramos lo disponible
+        saludCl='<div class="rs-comp">'+
+          '<div class="rs-comp-c"><div class="rs-comp-l">Únicos</div><div class="rs-comp-d">'+(cl.unicos||0)+'</div></div>'+
+          '<div class="rs-comp-c"><div class="rs-comp-l">Nuevos</div><div class="rs-comp-d">'+nv+'</div></div>'+
+          '<div class="rs-comp-c"><div class="rs-comp-l">Recompra</div><div class="rs-comp-d">'+(cl.recurrentes||0)+'</div></div>'+
+        '</div>';
+        return;
+      }
+      saludCl='<div class="rs-comp">'+
+        '<div class="rs-comp-c"><div class="rs-comp-l">🆕 Nuevos</div><div class="rs-comp-d">'+nv+'</div><div class="rs-kpi-s">primera compra</div></div>'+
+        '<div class="rs-comp-c"><div class="rs-comp-l">🔁 Recompra activa</div><div class="rs-comp-d">'+ra+'</div><div class="rs-kpi-s">últimas 4 semanas</div></div>'+
+        '<div class="rs-comp-c"><div class="rs-comp-l">⏰ Reactivados</div><div class="rs-comp-d">'+re+'</div><div class="rs-kpi-s">volvieron dormidos</div></div>'+
+      '</div>';
+    })();
+
     // Top clientes
     var topCli=cl.top.length?'<table class="rs-tbl"><thead><tr><th>Cliente</th><th>Canal</th><th class="num">Pedidos</th><th class="num">Monto</th></tr></thead><tbody>'+
       cl.top.map(function(c){return '<tr><td>'+escapeH(c.nombre)+'</td><td>'+c.canal+'</td><td class="num">'+c.pedidos+'</td><td class="num">'+fmt$(c.monto)+'</td></tr>';}).join('')+
@@ -9546,6 +9580,7 @@ if('serviceWorker' in navigator){
         (gastosDet?section('Detalle de gastos', gastosDet):'')+
         (ingresosDet?section('Detalle de ingresos no-venta', ingresosDet):'')+
         section('Cobranza', cobranza+(pendCobro?'<div style="margin-top:14px"><div class="rs-h" style="font-size:10px">Pendientes de cobro</div>'+pendCobro+'</div>':''))+
+        section('Salud de clientes', saludCl)+
         section('Caras nuevas '+(cl.nuevosCount?'('+cl.nuevosCount+')':''), nuevos)+
         (topCli?section('Top 5 clientes de la semana (sin Red)', topCli):'')+
         (topProd?section('Productos más vendidos', topProd):'')+
@@ -9657,6 +9692,8 @@ if('serviceWorker' in navigator){
   var crmClientes = null;       // cache lista
   var crmProductos = null;
   var crmProdSemanas = null;    // [{w, desde, hasta}] últimas 8 semanas ISO (desglose por producto)
+  var crmProdCanal = 'todos';   // filtro canal (Home/Pilar/Clubes/Red)
+  var crmProdBarrio = 'todos';  // filtro barrio privado (zona o sub-barrio)
   var crmCliFilter = 'todos';
   var crmCurSub = 'clientes';
   var crmFichaActual = null;     // {tipo:'cliente'|'producto', data}
@@ -9899,18 +9936,70 @@ if('serviceWorker' in navigator){
     } else {
       qs += '&dias=' + (crmProdPeriodoCfg.dias || 30);
     }
+    if (crmProdCanal && crmProdCanal !== 'todos') qs += '&canal=' + encodeURIComponent(crmProdCanal);
+    if (crmProdBarrio && crmProdBarrio !== 'todos') qs += '&barrio=' + encodeURIComponent(crmProdBarrio);
     fetch(CRM_API + qs)
       .then(function(r){ return r.json(); })
       .then(function(d){
         crmProductos = d.productos || [];
         crmProdPeriodoMeta = d.periodo || null;
         crmProdSemanas = d.semanas || null;
+        crmFillProdFiltros(d.filtros);
         renderCrmProductos();
       })
       .catch(function(err){
         el('crmProdList').innerHTML = '<div class="empty"><p>Error: '+escHtml(err.message)+'</p></div>';
       });
   }
+
+  // Pobla los dropdowns de canal/barrio desde el universo que manda el backend.
+  function crmFillProdFiltros(filtros){
+    if (!filtros) return;
+    var cSel = el('crmProdCanal');
+    var copt = '<option value="todos">Todos los canales</option>';
+    (filtros.canales||[]).forEach(function(c){
+      copt += '<option value="'+escHtml(c)+'"'+(c===crmProdCanal?' selected':'')+'>'+escHtml(c)+'</option>';
+    });
+    cSel.innerHTML = copt;
+    if ((filtros.canales||[]).indexOf(crmProdCanal) < 0) { crmProdCanal = 'todos'; }
+    cSel.value = crmProdCanal;
+
+    function _bOpt(b){
+      return '<option value="'+escHtml(b.v)+'"'+(b.v===crmProdBarrio?' selected':'')+'>'+escHtml(b.v)+' ('+b.n+')</option>';
+    }
+    var TLBL = {zona:'Zonas', sub:'Barrios privados', barrio:'Barrios'};
+    var lista = (filtros.barrios||[]).filter(function(b){ return crmProdCanal==='todos' || b.canal===crmProdCanal; });
+    var bopt = '<option value="todos">Todos los barrios</option>';
+    if (crmProdCanal === 'todos') {
+      var byCanal = {};
+      lista.forEach(function(b){ (byCanal[b.canal]=byCanal[b.canal]||[]).push(b); });
+      (filtros.canales||[]).forEach(function(c){
+        var arr = byCanal[c]; if (!arr || !arr.length) return;
+        bopt += '<optgroup label="'+escHtml(c)+'">';
+        arr.forEach(function(b){ bopt += _bOpt(b); });
+        bopt += '</optgroup>';
+      });
+    } else {
+      ['zona','sub','barrio'].forEach(function(t){
+        var arr = lista.filter(function(b){ return b.tipo===t; });
+        if (!arr.length) return;
+        bopt += '<optgroup label="'+TLBL[t]+'">';
+        arr.forEach(function(b){ bopt += _bOpt(b); });
+        bopt += '</optgroup>';
+      });
+    }
+    var bSel = el('crmProdBarrio');
+    bSel.innerHTML = bopt;
+    bSel.value = crmProdBarrio;
+    if (bSel.value !== crmProdBarrio) { crmProdBarrio = 'todos'; bSel.value = 'todos'; }
+  }
+
+  window.onCrmProdFiltro = function(which){
+    crmProdCanal = el('crmProdCanal').value;
+    if (which === 'canal') crmProdBarrio = 'todos';   // cambiar canal resetea barrio
+    else crmProdBarrio = el('crmProdBarrio').value;
+    loadCrmProductos();
+  };
 
   window.setCrmProdPeriodo = function(dias){
     crmProdPeriodoCfg = {dias: dias};
@@ -10021,7 +10110,15 @@ if('serviceWorker' in navigator){
     }
     var totalUltSem = lista.reduce(function(s,p){ return s + ultSem(p); }, 0);
     var ultSemHtml = ultSemMeta ? ' &middot; <b>sem '+ultSemMeta.w+'</b> ('+escHtml(ultSemMeta.desde)+'-'+escHtml(ultSemMeta.hasta)+'): <b>'+totalUltSem+'</b> u' : '';
-    el('crmProdStats').innerHTML = '<b>'+lista.length+'</b> productos &middot; <b>'+totalVenPer+'</b> u vendidas'+dVHtml+' &middot; <b>'+totalComPer+'</b> u compradas &middot; <b>$'+fmt$(totalFactPer)+'</b> facturado' + (stGlobal!==null?' &middot; sell-through <b>'+stGlobal+'%</b>':'') + ultSemHtml;
+    var filtroActivo = (crmProdCanal !== 'todos' || crmProdBarrio !== 'todos');
+    var filtroHtml = '';
+    if (filtroActivo) {
+      var fparts = [];
+      if (crmProdCanal !== 'todos') fparts.push(escHtml(crmProdCanal));
+      if (crmProdBarrio !== 'todos') fparts.push(escHtml(crmProdBarrio));
+      filtroHtml = '<div class="crm-filtro-active"><span class="crm-filtro-tag">📍 '+fparts.join(' &middot; ')+'</span> <span class="crm-filtro-note">ventas filtradas — compras y sell-through son globales</span></div>';
+    }
+    el('crmProdStats').innerHTML = '<b>'+lista.length+'</b> productos &middot; <b>'+totalVenPer+'</b> u vendidas'+dVHtml+' &middot; <b>'+totalComPer+'</b> u compradas &middot; <b>$'+fmt$(totalFactPer)+'</b> facturado' + (stGlobal!==null?' &middot; sell-through <b>'+stGlobal+'%</b>':'') + ultSemHtml + filtroHtml;
 
     if (!lista.length) {
       el('crmProdList').innerHTML = '<div class="empty"><p>Sin resultados</p></div>';
