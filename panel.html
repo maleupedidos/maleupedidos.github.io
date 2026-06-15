@@ -607,6 +607,21 @@ body{font-family:'Inter',-apple-system,'Segoe UI',system-ui,sans-serif;backgroun
 .crm-react-btn{display:inline-flex;align-items:center;gap:4px;padding:5px 10px;border-radius:4px;background:var(--o);color:#fff;font-size:11px;font-weight:600;cursor:pointer;font-family:inherit;text-decoration:none;border:none;transition:.12s}
 .crm-react-btn:hover{background:#D9663A}
 .crm-tag-chip{display:inline-block;background:var(--cr);border:1px solid var(--cd);color:var(--b);font-size:10px;font-weight:600;padding:1px 7px;border-radius:10px;margin-left:3px}
+.crm-dup-banner{display:flex;align-items:center;gap:12px;background:var(--ol);border:1px solid var(--o);border-radius:6px;padding:9px 14px;margin-bottom:10px;font-size:12px;color:#8B3A0E}
+.crm-dup-banner span{flex:1}
+.crm-dup-banner b{color:var(--b)}
+.crm-dup-banner-btn{padding:5px 12px;border:1px solid var(--o);background:var(--o);color:#fff;border-radius:4px;font-size:11px;font-weight:600;cursor:pointer;font-family:inherit;transition:.12s;white-space:nowrap}
+.crm-dup-banner-btn:hover{background:#D9663A}
+.crm-dup-intro{font-size:12px;color:var(--ink2);line-height:1.5;background:var(--cr);border-radius:6px;padding:10px 12px;margin-bottom:14px}
+.crm-dup-intro b{color:var(--ink)}
+.crm-dup-group{border:1px solid var(--border);border-radius:6px;padding:12px;margin-bottom:12px}
+.crm-dup-opt{display:flex;align-items:center;gap:10px;padding:8px;border-radius:4px;cursor:pointer;transition:.12s}
+.crm-dup-opt:hover{background:var(--cr)}
+.crm-dup-opt input{flex-shrink:0;width:16px;height:16px;accent-color:var(--o);cursor:pointer}
+.crm-dup-opt-body{display:flex;flex-direction:column;gap:1px;min-width:0}
+.crm-dup-name{font-size:13px;font-weight:600;color:var(--ink)}
+.crm-dup-meta{font-size:11px;color:var(--ink3)}
+.crm-dup-go{margin-top:8px}
 .crm-variants{background:var(--cr);border-radius:4px;padding:8px 10px;font-size:11px;color:var(--ink2);margin-bottom:10px}
 .crm-variants b{color:var(--ink);font-weight:600}
 .crm-meta-form .fg{margin-bottom:8px}
@@ -1919,6 +1934,7 @@ body.role-single .statusbar{font-size:11px}
       <button class="bbdd-pill" data-f="tipeo" onclick="crmFilterCli('tipeo')">Tipeo distinto</button>
     </div>
     <div class="bbdd-stats" id="crmCliStats"></div>
+    <div id="crmDupBanner" class="crm-dup-banner" style="display:none"></div>
     <div id="crmCliList" class="bbdd-list"></div>
   </div>
 
@@ -9623,6 +9639,42 @@ if('serviceWorker' in navigator){
     renderCrmClientes();
   };
 
+  // Normaliza un nombre para detectar duplicados (lowercase, sin acentos).
+  function _crmNormName(s){
+    s = String(s||'').toLowerCase();
+    if (s.normalize) s = s.normalize('NFD').replace(/[̀-ͯ]/g,'');
+    return s.replace(/\s+/g,' ').trim();
+  }
+
+  // Detecta grupos de posibles duplicados: mismo nombre normalizado en keys
+  // distintas, donde a lo sumo UNO tiene teléfono (si hay 2+ teléfonos distintos
+  // son casi siempre personas distintas con el mismo nombre, no un duplicado).
+  function _crmDetectDuplicados(){
+    if (!crmClientes) return [];
+    var byName = {};
+    crmClientes.forEach(function(c){
+      var nn = _crmNormName(c.nombre);
+      if (!nn) return;
+      (byName[nn] = byName[nn] || []).push(c);
+    });
+    var groups = [];
+    Object.keys(byName).forEach(function(nn){
+      var g = byName[nn];
+      if (g.length < 2) return;
+      var tels = {};
+      g.forEach(function(c){ if (c.tel) tels[c.tel] = true; });
+      if (Object.keys(tels).length > 1) return; // teléfonos distintos → no duplicado
+      groups.push(g);
+    });
+    // Más facturación primero (los que más conviene limpiar)
+    groups.sort(function(a,b){
+      var fa = a.reduce(function(s,c){return s+c.facturado;},0);
+      var fb = b.reduce(function(s,c){return s+c.facturado;},0);
+      return fb - fa;
+    });
+    return groups;
+  }
+
   // True si el cumple (DD/MM) cae en el mes actual.
   function _crmCumpleEsteMes(cumple){
     if (!cumple) return false;
@@ -9654,6 +9706,18 @@ if('serviceWorker' in navigator){
   window.renderCrmClientes = function(){
     if (!crmClientes) return;
     _crmUpdatePillCounts();
+    // Banner de duplicados (independiente del filtro/búsqueda activos)
+    var dupBanner = el('crmDupBanner');
+    if (dupBanner){
+      var dupGroups = _crmDetectDuplicados();
+      if (dupGroups.length){
+        dupBanner.style.display = '';
+        dupBanner.innerHTML = '<span><b>'+dupGroups.length+'</b> '+(dupGroups.length===1?'posible duplicado':'posibles duplicados')+' detectado'+(dupGroups.length===1?'':'s')+'</span>'
+          + '<button class="crm-dup-banner-btn" onclick="crmOpenDuplicados()">Revisar y fusionar</button>';
+      } else {
+        dupBanner.style.display = 'none';
+      }
+    }
     var q = (el('crmCliSearch').value || '').toLowerCase().trim();
     var sortBy = el('crmCliSort').value;
     var lista = crmClientes.slice();
@@ -9893,6 +9957,67 @@ if('serviceWorker' in navigator){
   // ═══ DRAWER FICHA ═══
   function openDrawer(){ el('crmDrawer').classList.add('on'); el('crmDrawerBg').classList.add('on'); }
   window.crmCloseDrawer = function(){ el('crmDrawer').classList.remove('on'); el('crmDrawerBg').classList.remove('on'); crmFichaActual=null; };
+
+  window.crmOpenDuplicados = function(){
+    var groups = _crmDetectDuplicados();
+    el('crmDrawerTitle').textContent = 'Posibles duplicados';
+    openDrawer();
+    if (!groups.length){
+      el('crmDrawerBody').innerHTML = '<div class="empty"><p>Sin duplicados detectados</p></div>';
+      return;
+    }
+    var html = '<div class="crm-dup-intro">Clientes con el mismo nombre y a lo sumo un tel&eacute;fono. Eleg&iacute; cu&aacute;l queda (can&oacute;nico); el resto se absorben (pedidos, facturaci&oacute;n e historial se combinan). Es reversible borrando la fila en la hoja <b>Clientes Merge</b>.</div>';
+    html += groups.map(function(g, gi){
+      var rows = g.map(function(c, i){
+        var sub = [];
+        sub.push(c.tel ? escHtml(c.telDisplay||c.tel) : 'sin tel');
+        if (c.barrio) sub.push(escHtml(c.barrio));
+        if (c.lote) sub.push('Lote '+escHtml(c.lote));
+        sub.push(c.pedidos+' ped');
+        sub.push('$'+fmt$(c.facturado));
+        return '<label class="crm-dup-opt">'
+          + '<input type="radio" name="dup'+gi+'" value="'+encodeURIComponent(c.key)+'"'+(i===0?' checked':'')+'>'
+          + '<span class="crm-dup-opt-body"><span class="crm-dup-name">'+escHtml(c.nombre)+'</span>'
+          + '<span class="crm-dup-meta">'+sub.join(' &middot; ')+'</span></span>'
+        + '</label>';
+      }).join('');
+      var keysJson = encodeURIComponent(JSON.stringify(g.map(function(c){ return c.key; })));
+      return '<div class="crm-dup-group">'
+        + '<div class="crm-section-h">'+escHtml(g[0].nombre)+' <span class="crm-alt">('+g.length+')</span></div>'
+        + rows
+        + '<button class="btn-submit crm-dup-go" onclick="crmFusionarGrupo('+gi+',\''+keysJson+'\',this)">Fusionar este grupo</button>'
+      + '</div>';
+    }).join('');
+    el('crmDrawerBody').innerHTML = html;
+  };
+
+  window.crmFusionarGrupo = function(gi, keysJsonEnc, btn){
+    var keys = JSON.parse(decodeURIComponent(keysJsonEnc));
+    var sel = document.querySelector('input[name="dup'+gi+'"]:checked');
+    if (!sel){ toast('Eleg&iacute; el cliente que queda'); return; }
+    var canonical = decodeURIComponent(sel.value);
+    var aliases = keys.filter(function(k){ return k !== canonical; });
+    if (!aliases.length){ toast('Nada para fusionar'); return; }
+    if (!confirm('Fusionar '+aliases.length+' cliente'+(aliases.length>1?'s':'')+' en el seleccionado? Se puede revertir borrando la fila en la hoja "Clientes Merge".')) return;
+    if (btn){ btn.disabled = true; btn.textContent = 'Fusionando...'; }
+    var chain = Promise.resolve();
+    aliases.forEach(function(ak){
+      chain = chain.then(function(){
+        return fetch(CRM_API, {method:'POST', mode:'cors', body: JSON.stringify({action:'crmMergeClientes', keyCanonical:canonical, keyAlias:ak})})
+          .then(function(r){ return r.json(); })
+          .then(function(d){ if (!d.ok) throw new Error(d.error||'error'); });
+      });
+    });
+    chain.then(function(){
+      toast('Clientes fusionados');
+      crmClientes = null;
+      crmCloseDrawer();
+      loadCrmClientes();
+    }).catch(function(err){
+      toast('Error: '+err.message);
+      if (btn){ btn.disabled = false; btn.textContent = 'Fusionar este grupo'; }
+    });
+  };
 
   window.crmOpenCliente = function(keyEnc){
     var key = decodeURIComponent(keyEnc);
