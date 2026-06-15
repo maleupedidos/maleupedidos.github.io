@@ -594,6 +594,7 @@ body{font-family:'Inter',-apple-system,'Segoe UI',system-ui,sans-serif;backgroun
 .crm-edit-btn:hover{background:var(--o);color:#fff}
 .crm-wp-btn{display:inline-flex;align-items:center;gap:4px;padding:5px 10px;border-radius:4px;background:#25D366;color:#fff;font-size:11px;font-weight:600;cursor:pointer;font-family:inherit;text-decoration:none;border:none;transition:.12s}
 .crm-wp-btn:hover{background:#1da851}
+.crm-tag-chip{display:inline-block;background:var(--cr);border:1px solid var(--cd);color:var(--b);font-size:10px;font-weight:600;padding:1px 7px;border-radius:10px;margin-left:3px}
 .crm-variants{background:var(--cr);border-radius:4px;padding:8px 10px;font-size:11px;color:var(--ink2);margin-bottom:10px}
 .crm-variants b{color:var(--ink);font-weight:600}
 .crm-meta-form .fg{margin-bottom:8px}
@@ -1890,6 +1891,7 @@ body.role-single .statusbar{font-size:11px}
         <option value="facturado">Mas facturacion</option>
         <option value="pedidos">Mas pedidos</option>
         <option value="ticket">Mayor ticket</option>
+        <option value="deuda">Mayor deuda</option>
         <option value="nombre">Nombre A-Z</option>
       </select>
     </div>
@@ -1897,6 +1899,7 @@ body.role-single .statusbar{font-size:11px}
       <button class="bbdd-pill on" data-f="todos" onclick="crmFilterCli('todos')">Todos</button>
       <button class="bbdd-pill" data-f="activo" onclick="crmFilterCli('activo')">Activos</button>
       <button class="bbdd-pill" data-f="dormido" onclick="crmFilterCli('dormido')">Dormidos</button>
+      <button class="bbdd-pill" data-f="inactivo" onclick="crmFilterCli('inactivo')">Inactivos</button>
       <button class="bbdd-pill" data-f="nuevo" onclick="crmFilterCli('nuevo')">Nuevos</button>
       <button class="bbdd-pill" data-f="vip" onclick="crmFilterCli('vip')">VIP</button>
       <button class="bbdd-pill" data-f="deuda" onclick="crmFilterCli('deuda')">Con deuda</button>
@@ -9587,13 +9590,14 @@ if('serviceWorker' in navigator){
     lista = lista.filter(function(c){
       if (crmCliFilter === 'activo' && c.estado !== 'Activo') return false;
       if (crmCliFilter === 'dormido' && c.estado !== 'Dormido') return false;
+      if (crmCliFilter === 'inactivo' && c.estado !== 'Inactivo') return false;
       if (crmCliFilter === 'nuevo' && c.estado !== 'Nuevo') return false;
       if (crmCliFilter === 'vip' && !c.vip) return false;
       if (crmCliFilter === 'deuda' && (!c.deuda || c.deuda <= 0)) return false;
       if (crmCliFilter === 'tipeo' && (!c.nombresAlt || c.nombresAlt.length === 0)) return false;
       if (q) {
         var hay = (c.nombre||'').toLowerCase() + ' ' + (c.barrio||'').toLowerCase() + ' ' + (c.subBarrio||'').toLowerCase()
-          + ' ' + (c.club||'').toLowerCase() + ' ' + (c.telDisplay||'') + ' ' + (c.tel||'')
+          + ' ' + (c.lote||'').toLowerCase() + ' ' + (c.club||'').toLowerCase() + ' ' + (c.telDisplay||'') + ' ' + (c.tel||'')
           + ' ' + (c.nombresAlt||[]).join(' ').toLowerCase();
         if (hay.indexOf(q) < 0) return false;
       }
@@ -9604,6 +9608,7 @@ if('serviceWorker' in navigator){
     if (sortBy === 'facturado') lista.sort(function(a,b){ return b.facturado - a.facturado; });
     else if (sortBy === 'pedidos') lista.sort(function(a,b){ return b.pedidos - a.pedidos; });
     else if (sortBy === 'ticket') lista.sort(function(a,b){ return b.ticket - a.ticket; });
+    else if (sortBy === 'deuda') lista.sort(function(a,b){ return b.deuda - a.deuda; });
     else if (sortBy === 'nombre') lista.sort(function(a,b){ return (a.nombre||'').localeCompare(b.nombre||''); });
     // 'ultima' ya viene ordenada
 
@@ -9624,6 +9629,7 @@ if('serviceWorker' in navigator){
       var deuda = c.deuda > 0 ? '<span class="crm-card-est crm-est-deuda">$'+fmt$(c.deuda)+' deuda</span>' : '';
       var meta = [];
       if (c.barrio) meta.push('<span>'+escHtml(c.barrio)+(c.subBarrio?' &middot; '+escHtml(c.subBarrio):'')+'</span>');
+      if (c.lote) meta.push('<span>Lote '+escHtml(c.lote)+'</span>');
       if (c.club) meta.push('<span>'+escHtml(c.club)+'</span>');
       if (c.telDisplay) meta.push('<span>'+escHtml(c.telDisplay)+'</span>');
       if (c.diasUltima >= 0) meta.push('<span>hace '+c.diasUltima+'d</span>');
@@ -9831,6 +9837,12 @@ if('serviceWorker' in navigator){
     var barrios = Object.keys(c.barrios||{});
     var subBarrios = Object.keys(c.subBarrios||{});
     var clubes = Object.keys(c.clubes||{});
+    // Lote / domicilio: el dominante (más frecuente) es la dirección real del
+    // cliente; el resto suelen ser tipeos o lotes de invitados/familia.
+    function _topKey(map){ var t='',mx=-1; Object.keys(map||{}).forEach(function(kk){ if(map[kk]>mx){mx=map[kk];t=kk;} }); return t; }
+    var loteRep = _topKey(c.domicilios);
+    var lotesExtra = Object.keys(c.domicilios||{}).filter(function(d){ return d !== loteRep; });
+    var canales = Object.keys(c.canales||{});
 
     var alertHtml = '';
     if (variantes.length > 1) {
@@ -9856,12 +9868,15 @@ if('serviceWorker' in navigator){
       + (c.tel ? '<div class="crm-row"><span class="crm-row-l">Telefono</span><span class="crm-row-v">'+escHtml(c.tel)+(telefonos.length>1?' (+'+(telefonos.length-1)+' var.)':'')+'</span></div>' : '')
       + (barrios.length ? '<div class="crm-row"><span class="crm-row-l">Barrio</span><span class="crm-row-v">'+escHtml(barrios.join(' / '))+'</span></div>' : '')
       + (subBarrios.length ? '<div class="crm-row"><span class="crm-row-l">Sub barrio</span><span class="crm-row-v">'+escHtml(subBarrios.join(' / '))+'</span></div>' : '')
+      + (loteRep ? '<div class="crm-row"><span class="crm-row-l">Lote / Domicilio</span><span class="crm-row-v">'+escHtml(loteRep)+(lotesExtra.length?' <span style="color:var(--ink3);font-weight:500">(+'+lotesExtra.length+' '+(lotesExtra.length===1?'otro':'otros')+')</span>':'')+'</span></div>' : '')
       + (clubes.length ? '<div class="crm-row"><span class="crm-row-l">Club</span><span class="crm-row-v">'+escHtml(clubes.join(' / '))+'</span></div>' : '')
+      + (canales.length ? '<div class="crm-row"><span class="crm-row-l">Compra por</span><span class="crm-row-v">'+escHtml(canales.join(' / '))+'</span></div>' : '')
       + '<div class="crm-row"><span class="crm-row-l">Estado</span><span class="crm-row-v">'+escHtml(k.estado)+'</span></div>'
       + '<div class="crm-row"><span class="crm-row-l">Primera compra</span><span class="crm-row-v">'+escHtml(c.primeraFecha||'-')+'</span></div>'
       + '<div class="crm-row"><span class="crm-row-l">Ultima compra</span><span class="crm-row-v">'+escHtml(c.ultimaFecha||'-')+'</span></div>'
       + (c.meta && c.meta.cumple ? '<div class="crm-row"><span class="crm-row-l">Cumpleanos</span><span class="crm-row-v">'+escHtml(c.meta.cumple)+'</span></div>' : '')
       + (c.meta && c.meta.aliasMp ? '<div class="crm-row"><span class="crm-row-l">Alias MP</span><span class="crm-row-v">'+escHtml(c.meta.aliasMp)+'</span></div>' : '')
+      + (c.meta && c.meta.tags ? '<div class="crm-row"><span class="crm-row-l">Tags</span><span class="crm-row-v">'+c.meta.tags.split(',').map(function(t){ return '<span class="crm-tag-chip">'+escHtml(t.trim())+'</span>'; }).join(' ')+'</span></div>' : '')
       + (c.meta && c.meta.notas ? '<div class="crm-row"><span class="crm-row-l">Notas</span><span class="crm-row-v">'+escHtml(c.meta.notas)+'</span></div>' : '')
     + '</div>';
 
