@@ -924,7 +924,7 @@ var npCart={}, npZona='Home', npPago='Efectivo', npFechaSel='', npSaving=false;
 var npGlobalPct=0;   // % de descuento sobre todo el pedido (tab "+")
 var npCatDisc={};    // { 'Tartas': 20, ... } % de descuento por categoría
 var npNoDisc=false;  // toggle "Sin 10% OFF": desactiva el descuento automático aunque sea Efectivo o supere $100K
-var _npClientesCache=null, _npClientesCacheTs=0, _npClickHandlerInstalled=false;
+var _npClientesCache=null, _npClientesCacheTs=0, _npClickHandlerInstalled=false, _npFetchingClientes=false;
 
 /* ── LOADING OVERLAYS (dos distintos: GUARDAR y CARGAR) ── */
 var loaderCount=0;
@@ -3924,21 +3924,50 @@ function renderNuevo(){
     var _coll=localStorage.getItem('maleu_np_footer_collapsed')==='1';
     npApplyFooterCollapsed(_coll);
   }catch(e){}
-  // Buscador de clientes: NO precargamos al abrir la tab (la GET crmClientes
-  // tarda ~7-10s y compite con marcarEntregado/marcarCobrado en horarios pico).
-  // En vez se trae al primer tipeo del usuario (npFiltrarClientes lo dispara si
-  // _npClientesCache es null). Resultado: si Tadeo no busca cliente, no se
-  // consume backend; si busca, se trae una sola vez y queda cacheado 30 min.
+  // Buscador de clientes: hidratamos el cache desde localStorage (instantáneo) y,
+  // si está viejo o vacío, disparamos un refresh en background. Con la persistencia
+  // en LS + el cache de 6h del backend, el rebuild pesado (7-10s) casi nunca corre,
+  // así que precalentar al abrir ya no compite con cobros en horario pico.
+  _npLoadCacheFromLS();
+  npFetchClientes(); // no bloquea: si hay LS el buscador anda al instante
   npInstallClickHandler();
 }
 
-// Carga la lista de clientes desde el CRM (un solo fetch, cache 30 min).
-function npFetchClientes(){
-  if(_npClientesCache && (Date.now()-_npClientesCacheTs)<1800000)return;
+// Persistencia del cache de clientes en localStorage. Antes el cache vivía solo
+// en memoria (se perdía en cada recarga) → el buscador esperaba 7-10s el rebuild
+// del backend cada vez. Ahora hidrata desde localStorage al instante y refresca
+// en segundo plano (stale-while-revalidate). Clave versionada por si cambia el shape.
+var _NP_CLI_LS_KEY='maleu_np_clientes_v1';
+function _npLoadCacheFromLS(){
+  if(_npClientesCache)return; // ya hidratado en esta sesión
+  try{
+    var raw=localStorage.getItem(_NP_CLI_LS_KEY);
+    if(!raw)return;
+    var obj=JSON.parse(raw);
+    if(obj&&Array.isArray(obj.list)&&obj.list.length){
+      _npClientesCache=obj.list;
+      _npClientesCacheTs=Number(obj.ts)||0;
+    }
+  }catch(e){}
+}
+function _npSaveCacheToLS(){
+  try{localStorage.setItem(_NP_CLI_LS_KEY,JSON.stringify({ts:_npClientesCacheTs,list:_npClientesCache}));}catch(e){}
+}
+
+// Carga la lista de clientes desde el CRM. Estrategia:
+//  1) Hidrata de localStorage (instantáneo, sobrevive recargas).
+//  2) Si el cache en memoria es fresco (<30 min) y no se fuerza, no pega al backend.
+//  3) Si está viejo/vacío, refresca en background sin bloquear el buscador.
+function npFetchClientes(force){
+  _npLoadCacheFromLS();
+  if(!force && _npClientesCache && (Date.now()-_npClientesCacheTs)<1800000)return;
+  if(_npFetchingClientes)return; // ya hay un fetch en curso
+  _npFetchingClientes=true;
   fetch(APPS_SCRIPT_URL+'?action=crmClientes&lite=1&t='+Date.now())
     .then(function(r){return r.json()})
     .then(function(data){
       var lista=(data&&data.clientes)||(Array.isArray(data)?data:[]);
+      if(!lista.length)return; // respuesta vacía: conservo el cache viejo
       _npClientesCache=lista.map(function(c){
         return {
           nombre:c.nombre||'',
@@ -3956,8 +3985,13 @@ function npFetchClientes(){
         };
       });
       _npClientesCacheTs=Date.now();
+      _npSaveCacheToLS();
+      // Si el usuario estaba esperando con el buscador abierto, re-filtrar ya.
+      var inp=document.getElementById('npNombre');
+      if(inp&&document.activeElement===inp&&String(inp.value||'').trim().length>=2)npFiltrarClientes();
     })
-    .catch(function(){});
+    .catch(function(){})
+    .then(function(){_npFetchingClientes=false;}); // finally (compat amplia)
 }
 
 // Filtra y renderea el dropdown según lo tipeado en npNombre.
