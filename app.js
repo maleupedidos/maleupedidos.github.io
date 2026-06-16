@@ -1677,6 +1677,9 @@ function enviarPedido() {
   // ID único para idempotencia: si el cliente reintenta por mala señal y el POST
   // anterior ya había llegado al server, el backend lo descarta (CacheService 6h).
   postData.clientOrderId = 'co_' + Date.now() + '_' + Math.random().toString(36).slice(2,10);
+  // Cumpleaños del cliente (si lo cargó en el form) → backend lo guarda en Clientes Meta.
+  var _cumple = getCumpleValue();
+  if (_cumple) postData.cumple = _cumple;
   _track('purchase', { value: total, zone: currentZone, items: cartCount(), discount: discount, payment: pagoEl.value, vendedor: vendedorMatch ? vendedorMatch.nombre : '' });
 
   // Esperar confirmación del server ANTES de redirigir a WhatsApp.
@@ -2237,6 +2240,7 @@ $id('cart-badge').style.display = 'none';
 fetchStock();
 fetchVendedores();
 _retryPendingOrders();
+initCumpleBlock();
 // Listener delegado: cualquier cambio en el form recalcula el CTA del botón WA
 (function(){
   var formSec = $id('form-section');
@@ -2254,6 +2258,108 @@ document.addEventListener('visibilitychange', () => {
 // Float cart visibility
 const _formObs = new IntersectionObserver(([entry]) => { _formVisible = entry.isIntersecting; updateUI(); }, {threshold:0.3});
 _formObs.observe(document.querySelector('.form-section'));
+
+/* ══════════════════════════════════════════════════
+   CUMPLEAÑOS DEL CLIENTE
+   Bloque en el form (arriba del botón WhatsApp). Se guarda en
+   localStorage al completar y viaja en el payload del pedido
+   (postData.cumple) → el backend lo escribe en "Clientes Meta"
+   atado al teléfono normalizado (filtro 🎂 Cumple del Panel).
+   Formato guardado: "DD/MM/AAAA".
+   ══════════════════════════════════════════════════ */
+var CUMPLE_MESES = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+
+function getCumpleValue() {
+  try { return localStorage.getItem('maleu_cumple') || ''; } catch(e) { return ''; }
+}
+
+function initCumpleBlock() {
+  var selDia = $id('f-cumple-dia'), selMes = $id('f-cumple-mes'), selAnio = $id('f-cumple-anio');
+  if (!selDia || !selMes || !selAnio) return;
+
+  // Poblar días 1–31
+  for (var d = 1; d <= 31; d++) {
+    var o = document.createElement('option'); o.value = String(d); o.textContent = String(d); selDia.appendChild(o);
+  }
+  // Poblar meses
+  for (var m = 0; m < 12; m++) {
+    var om = document.createElement('option'); om.value = String(m + 1); om.textContent = CUMPLE_MESES[m]; selMes.appendChild(om);
+  }
+  // Poblar años 2012 → 1956 (más jóvenes primero)
+  for (var y = 2012; y >= 1956; y--) {
+    var oy = document.createElement('option'); oy.value = String(y); oy.textContent = String(y); selAnio.appendChild(oy);
+  }
+
+  [selDia, selMes, selAnio].forEach(function(s) { s.addEventListener('change', cumpleOnChange); });
+
+  // Restaurar si ya estaba guardado
+  var saved = getCumpleValue();
+  if (saved) {
+    var p = saved.split('/'); // DD/MM/AAAA
+    if (p.length === 3) {
+      selDia.value = String(parseInt(p[0], 10));
+      selMes.value = String(parseInt(p[1], 10));
+      selAnio.value = p[2];
+    }
+    _cumpleShowDone(saved);
+  } else {
+    _cumpleShowAsk();
+  }
+}
+
+function cumpleOnChange() {
+  var dia = $id('f-cumple-dia').value, mes = $id('f-cumple-mes').value, anio = $id('f-cumple-anio').value;
+  if (!dia || !mes || !anio) return; // todavía incompleto
+  var dd = ('0' + dia).slice(-2), mm = ('0' + mes).slice(-2);
+  var valor = dd + '/' + mm + '/' + anio;
+  try { localStorage.setItem('maleu_cumple', valor); } catch(e) {}
+  // Si ya conocemos el teléfono del cliente (recurrente), lo guardamos al toque.
+  _cumpleSaveBackend(valor);
+  _cumpleShowDone(valor);
+  try { toast('🎂 ¡Gracias! Guardamos tu cumple'); } catch(e) {}
+}
+
+function _cumpleShowDone(valor) {
+  var ask = $id('cumple-ask'), done = $id('cumple-done'), fechaEl = $id('cumple-done-fecha');
+  if (fechaEl) {
+    var p = valor.split('/');
+    fechaEl.textContent = (p.length === 3) ? (parseInt(p[0],10) + ' de ' + (CUMPLE_MESES[parseInt(p[1],10)-1] || '')) : valor;
+  }
+  if (ask) ask.style.display = 'none';
+  if (done) done.style.display = '';
+}
+
+function _cumpleShowAsk() {
+  var ask = $id('cumple-ask'), done = $id('cumple-done');
+  if (ask) ask.style.display = '';
+  if (done) done.style.display = 'none';
+}
+
+// Permite corregir un cumple ya cargado.
+function cumpleEditar() { _cumpleShowAsk(); }
+
+// Guarda el cumple en el backend si ya tenemos un teléfono (cliente recurrente o
+// número ya tipeado en el form). Fire-and-forget, no bloquea nada. El pedido igual
+// lleva postData.cumple como vía principal.
+function _cumpleSaveBackend(valor) {
+  var tel = '';
+  var telEl = $id('f-telefono');
+  if (telEl && telEl.value) tel = telEl.value;
+  if (!tel) {
+    try {
+      var saved = JSON.parse(localStorage.getItem('maleu_cliente_pg') || 'null');
+      if (saved && saved.telefono) tel = saved.telefono;
+    } catch(e) {}
+  }
+  if (!tel || tel.replace(/\D/g, '').length < 8) return; // sin teléfono → se guarda al hacer el pedido
+  try {
+    fetch(APPS_SCRIPT_URL, {
+      method: 'POST', mode: 'cors', keepalive: true,
+      headers: { 'Content-Type': 'text/plain' }, // evita preflight CORS (igual que el pedido)
+      body: JSON.stringify({ action: 'guardarCumpleCliente', tel: tel, cumple: valor })
+    }).catch(function(){});
+  } catch(e) {}
+}
 
 /* ══════════════════════════════════════════════════
    FEATURES FRIZATA-INSPIRED
