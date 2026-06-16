@@ -1992,9 +1992,9 @@ body.role-single .statusbar{font-size:11px}
       <div class="hoy-title">Tu d&iacute;a <span id="hoyFecha" class="hoy-fecha"></span></div>
       <div class="hoy-thresh">
         <span>Dormido tras</span>
-        <button class="hoy-thresh-chip" data-d="14" onclick="setHoyUmbral(14)">14d</button>
-        <button class="hoy-thresh-chip on" data-d="21" onclick="setHoyUmbral(21)">21d</button>
-        <button class="hoy-thresh-chip" data-d="30" onclick="setHoyUmbral(30)">30d</button>
+        <button class="hoy-thresh-chip" data-d="21" onclick="setHoyUmbral(21)">21d</button>
+        <button class="hoy-thresh-chip on" data-d="28" onclick="setHoyUmbral(28)">28d</button>
+        <button class="hoy-thresh-chip" data-d="35" onclick="setHoyUmbral(35)">35d</button>
       </div>
     </div>
     <div id="hoyList"><div class="loading">Cargando tu d&iacute;a...</div></div>
@@ -9803,7 +9803,7 @@ if('serviceWorker' in navigator){
   var crmProdBarrio = 'todos';  // filtro barrio privado (zona o sub-barrio)
   var crmCliFilter = 'todos';
   var crmCurSub = 'hoy';
-  var crmHoyUmbral = 21;         // dias sin comprar para considerar "dormido" (configurable)
+  var crmHoyUmbral = 28;         // dias sin comprar (el LOTE) para "dormido" — 4 semanas aprox un mes
   var crmFichaActual = null;     // {tipo:'cliente'|'producto', data}
 
   function fmt$(n){ return (Number(n)||0).toLocaleString('es-AR'); }
@@ -9967,28 +9967,63 @@ if('serviceWorker' in navigator){
 
   function _hoyPrimerNombre(n){ return (String(n||'').trim().split(/\s+/)[0]) || ''; }
 
+  // Construye "unidades" para el cockpit. En Estancias (Home) la unidad es el
+  // LOTE: todos los que comparten barrio+sub-barrio+lote son un hogar. Fuera de
+  // Home, la unidad es la persona. Un lote esta activo si CUALQUIER miembro
+  // compro dentro del umbral (asi Jimena no figura dormida si Claudio pidio).
+  function _crmUnidadesHoy(){
+    var units = {}, order = [];
+    crmClientes.forEach(function(c){
+      var isLote = !!(c.canalDom === 'Home' && c.lote);
+      var id = isLote
+        ? ('L|'+_crmNormName(c.barrio)+'|'+_crmNormName(c.subBarrio)+'|'+_crmNormName(c.lote))
+        : ('C|'+c.key);
+      var u = units[id];
+      if (!u){ u = units[id] = {id:id, isLote:isLote, members:[], deuda:0, entregados:0, facturado:0, diasUltima:-1, ultimaFecha:'', barrio:c.barrio, subBarrio:c.subBarrio, lote:c.lote, cumpleMember:null, cumpleDias:null}; order.push(id); }
+      u.members.push(c);
+      u.deuda += (c.deuda||0);
+      u.entregados += (c.entregados||0);
+      u.facturado += (c.facturado||0);
+      if (typeof c.diasUltima==='number' && c.diasUltima>=0 && (u.diasUltima<0 || c.diasUltima<u.diasUltima)){ u.diasUltima=c.diasUltima; u.ultimaFecha=c.ultimaFecha; }
+      var dc = _crmDiasHastaCumple(c.cumple);
+      if (dc!==null && (u.cumpleDias===null || dc<u.cumpleDias)){ u.cumpleDias=dc; u.cumpleMember=c; }
+    });
+    return order.map(function(id){
+      var u = units[id];
+      // Contacto principal: el miembro con tel que mas pedidos hizo (a quien escribirle)
+      var cand = u.members.filter(function(m){ return m.tel; });
+      if (!cand.length) cand = u.members;
+      cand.sort(function(a,b){ return (b.entregados-a.entregados) || (b.pedidos-a.pedidos); });
+      u.contacto = cand[0];
+      u.nombre = u.contacto.nombre;
+      return u;
+    });
+  }
+
+  // Miembro objetivo del mensaje: en cumple, el que cumple; si no, el contacto.
+  function _hoyTarget(banda, u){ return (banda==='cumple' && u.cumpleMember) ? u.cumpleMember : u.contacto; }
+
+  // Banda de mayor prioridad para una unidad, o null si no requiere accion hoy.
+  function _hoyBandaUnit(u){
+    if (u.deuda > 0) return 'deuda';
+    if (u.cumpleDias !== null && u.cumpleDias <= 7) return 'cumple';
+    if (u.diasUltima >= 0 && u.diasUltima > crmHoyUmbral){
+      if (u.entregados >= 2) return 'dormido';
+      if (u.entregados === 1) return 'reactivable';
+    }
+    if (u.diasUltima >= 0 && u.diasUltima <= crmHoyUmbral && u.entregados <= 2) return 'nuevo';
+    return null;
+  }
+
   // Mensaje sugerido por banda — voz de marca, sin palabras prohibidas.
-  function _hoyMensaje(banda, c){
-    var n = _hoyPrimerNombre(c.nombre);
-    if (banda==='deuda') return 'Hola '+n+'! Como va? Te escribo para coordinar el pago del ultimo pedido ($'+fmt$(c.deuda)+'). Cuando puedas me avisas y lo cerramos. Gracias!';
+  function _hoyMensaje(banda, u){
+    var n = _hoyPrimerNombre(_hoyTarget(banda, u).nombre);
+    if (banda==='deuda') return 'Hola '+n+'! Como va? Te escribo para coordinar el pago del ultimo pedido ($'+fmt$(u.deuda)+'). Cuando puedas me avisas y lo cerramos. Gracias!';
     if (banda==='cumple') return 'Hola '+n+'! 🧡 Feliz cumple de parte de Maleu! Que tengas un dia genial. Cuando quieras armar algo rico y listo en minutos, aca estoy.';
     if (banda==='dormido') return 'Hola '+n+'! Soy Tadeo de Maleu 🧡 Hace un tiempo que no nos cruzamos. Tengo todo listo para que tu proxima comida sea rica y lista en minutos. Te armo un pedido para esta semana?';
     if (banda==='reactivable') return 'Hola '+n+'! Soy Tadeo de Maleu 🧡 Probaste con nosotros hace un tiempo y me encantaria que vuelvas a tener algo rico y listo en la heladera. Te muestro lo nuevo de esta semana?';
     if (banda==='nuevo') return 'Hola '+n+'! Soy Tadeo de Maleu 🧡 Gracias por tu pedido! Para lo que necesites resolver de comida contas conmigo. Te cuento las novedades de la semana?';
     return 'Hola '+n+'!';
-  }
-
-  // Banda de mayor prioridad para un cliente, o null si no requiere accion hoy.
-  function _hoyBanda(c){
-    if (c.deuda > 0) return 'deuda';
-    var dc = _crmDiasHastaCumple(c.cumple);
-    if (dc !== null && dc <= 7) return 'cumple';
-    if (c.estado === 'Nuevo') return 'nuevo';
-    if (c.diasUltima > crmHoyUmbral) {
-      if (c.entregados >= 2) return 'dormido';
-      if (c.entregados === 1) return 'reactivable';
-    }
-    return null;
   }
 
   window.renderCrmHoy = function(){
@@ -9998,18 +10033,19 @@ if('serviceWorker' in navigator){
     var hoy = new Date();
     var fe = el('hoyFecha'); if (fe) fe.textContent = '· '+DIAS[hoy.getDay()]+' '+hoy.getDate()+' '+MES[hoy.getMonth()]+' '+hoy.getFullYear();
 
+    var unidades = _crmUnidadesHoy();
     var bandas = {deuda:[], cumple:[], dormido:[], reactivable:[], nuevo:[]};
-    crmClientes.forEach(function(c){ var b = _hoyBanda(c); if (b) bandas[b].push(c); });
+    unidades.forEach(function(u){ var b = _hoyBandaUnit(u); if (b) bandas[b].push(u); });
     bandas.deuda.sort(function(a,b){ return b.deuda - a.deuda; });
-    bandas.cumple.sort(function(a,b){ return _crmDiasHastaCumple(a.cumple) - _crmDiasHastaCumple(b.cumple); });
+    bandas.cumple.sort(function(a,b){ return a.cumpleDias - b.cumpleDias; });
     bandas.dormido.sort(function(a,b){ return b.facturado - a.facturado; });
     bandas.reactivable.sort(function(a,b){ return b.facturado - a.facturado; });
     bandas.nuevo.sort(function(a,b){ return a.diasUltima - b.diasUltima; });
 
     var defs = [
-      {k:'deuda', ic:'🔴', t:'Deudas a cobrar', d:'Clientes con saldo pendiente'},
+      {k:'deuda', ic:'🔴', t:'Deudas a cobrar', d:'Con saldo pendiente'},
       {k:'cumple', ic:'🟢', t:'Cumpleanos', d:'Proximos 7 dias — excusa perfecta para aparecer'},
-      {k:'dormido', ic:'🟠', t:'Dormidos', d:'No compran hace mas de '+crmHoyUmbral+' dias'},
+      {k:'dormido', ic:'🟠', t:'Lotes dormidos', d:'El lote no compra hace mas de '+crmHoyUmbral+' dias'},
       {k:'reactivable', ic:'🟡', t:'Reactivables', d:'Compraron una vez y no volvieron'},
       {k:'nuevo', ic:'⚪', t:'Nuevos sin clasificar', d:'Caras nuevas para fidelizar'}
     ];
@@ -10020,9 +10056,9 @@ if('serviceWorker' in navigator){
       return;
     }
 
-    var resumen = '<div class="hoy-resumen">'+total+' '+(total===1?'accion':'acciones')+' para hoy</div>';
+    var resumen = '<div class="hoy-resumen">'+total+' '+(total===1?'accion':'acciones')+' para hoy &middot; unidad = lote en Estancias</div>';
     var html = resumen + defs.filter(function(def){ return bandas[def.k].length; }).map(function(def){
-      var rows = bandas[def.k].map(function(c){ return _hoyRow(def.k, c); }).join('');
+      var rows = bandas[def.k].map(function(u){ return _hoyRow(def.k, u); }).join('');
       return '<div class="hoy-band hoy-band-'+def.k+'">'
         + '<div class="hoy-band-h"><span class="hoy-band-ic">'+def.ic+'</span><span class="hoy-band-t">'+def.t+'</span><span class="hoy-band-n">'+bandas[def.k].length+'</span><span class="hoy-band-d">'+def.d+'</span></div>'
         + '<div class="hoy-band-rows">'+rows+'</div>'
@@ -10031,21 +10067,29 @@ if('serviceWorker' in navigator){
     el('hoyList').innerHTML = html;
   };
 
-  function _hoyRow(banda, c){
+  function _hoyRow(banda, u){
+    var c = u.contacto;
     var keyEnc = encodeURIComponent(c.key);
-    var canal = c.canalDom || (c.canales && c.canales[0]) || '';
     var sub = [];
-    if (canal) sub.push(escHtml(canal));
-    if (c.ultimaFecha) sub.push('ult: '+escHtml(c.ultimaFecha)+(c.diasUltima>=0?' (hace '+c.diasUltima+'d)':''));
+    if (u.isLote){
+      sub.push((u.subBarrio?escHtml(u.subBarrio)+' &middot; ':'')+'Lote '+escHtml(u.lote));
+      if (u.members.length > 1) sub.push(u.members.length+' en el lote');
+    } else {
+      var canal = c.canalDom || (c.canales && c.canales[0]) || '';
+      if (canal) sub.push(escHtml(canal));
+    }
+    if (u.ultimaFecha) sub.push('ult: '+escHtml(u.ultimaFecha)+(u.diasUltima>=0?' (hace '+u.diasUltima+'d)':''));
     else sub.push('sin pedidos');
     var right = '';
-    if (banda==='deuda') right = '<span class="hoy-row-amt">$'+fmt$(c.deuda)+'</span>';
-    else if (banda==='cumple'){ var dc=_crmDiasHastaCumple(c.cumple); right = '<span class="hoy-row-bday">'+(dc===0?'HOY':(dc===1?'manana':'en '+dc+'d'))+' &middot; '+escHtml(c.cumple)+'</span>'; }
-    var msg = _hoyMensaje(banda, c);
-    var wa = c.tel ? '<a class="hoy-act hoy-act-wa" href="https://wa.me/549'+c.tel+'?text='+encodeURIComponent(msg)+'" target="_blank" rel="noopener" onclick="event.stopPropagation()">WhatsApp</a>' : '<span class="hoy-act hoy-act-notel">sin tel</span>';
-    var cp = c.tel ? '<button class="hoy-act hoy-act-cp" onclick="event.stopPropagation();crmHoyCopiarMsg(this)" data-msg="'+escHtml(msg)+'" title="Copiar mensaje">Copiar</button>' : '';
+    if (banda==='deuda') right = '<span class="hoy-row-amt">$'+fmt$(u.deuda)+'</span>';
+    else if (banda==='cumple'){ var dc=u.cumpleDias; var who=u.cumpleMember?_hoyPrimerNombre(u.cumpleMember.nombre):''; right = '<span class="hoy-row-bday">'+(dc===0?'HOY':(dc===1?'manana':'en '+dc+'d'))+(who?' &middot; '+escHtml(who):'')+'</span>'; }
+    var msg = _hoyMensaje(banda, u);
+    var target = _hoyTarget(banda, u);
+    var waTel = (target && target.tel) || c.tel || '';
+    var wa = waTel ? '<a class="hoy-act hoy-act-wa" href="https://wa.me/549'+waTel+'?text='+encodeURIComponent(msg)+'" target="_blank" rel="noopener" onclick="event.stopPropagation()">WhatsApp</a>' : '<span class="hoy-act hoy-act-notel">sin tel</span>';
+    var cp = waTel ? '<button class="hoy-act hoy-act-cp" onclick="event.stopPropagation();crmHoyCopiarMsg(this)" data-msg="'+escHtml(msg)+'" title="Copiar mensaje">Copiar</button>' : '';
     return '<div class="hoy-row" onclick="crmOpenCliente(\''+keyEnc+'\')">'
-      + '<div class="hoy-row-main"><div class="hoy-row-name">'+escHtml(c.nombre)+(c.vip?' <span class="crm-vip">VIP</span>':'')+'</div>'
+      + '<div class="hoy-row-main"><div class="hoy-row-name">'+escHtml(u.nombre)+(c.vip?' <span class="crm-vip">VIP</span>':'')+'</div>'
       + '<div class="hoy-row-meta">'+sub.join(' &middot; ')+'</div></div>'
       + (right ? '<div class="hoy-row-right">'+right+'</div>' : '')
       + '<div class="hoy-row-acts">'+wa+cp+'</div>'
@@ -10199,7 +10243,7 @@ if('serviceWorker' in navigator){
     function _bOpt(b){
       return '<option value="'+escHtml(b.v)+'"'+(b.v===crmProdBarrio?' selected':'')+'>'+escHtml(b.v)+' ('+b.n+')</option>';
     }
-    var TLBL = {zona:'Zonas', sub:'Barrios privados', barrio:'Barrios'};
+    var TLBL = {priv:'Barrios privados', sub:'Sub Barrios'};
     var lista = (filtros.barrios||[]).filter(function(b){ return crmProdCanal==='todos' || b.canal===crmProdCanal; });
     var bopt = '<option value="todos">Todos los barrios</option>';
     if (crmProdCanal === 'todos') {
@@ -10212,7 +10256,7 @@ if('serviceWorker' in navigator){
         bopt += '</optgroup>';
       });
     } else {
-      ['zona','sub','barrio'].forEach(function(t){
+      ['priv','sub'].forEach(function(t){
         var arr = lista.filter(function(b){ return b.tipo===t; });
         if (!arr.length) return;
         bopt += '<optgroup label="'+TLBL[t]+'">';
@@ -11561,8 +11605,8 @@ if('serviceWorker' in navigator){
         html += '<optgroup label="'+escHtml(c)+'">'+arr.map(opt).join('')+'</optgroup>';
       });
     } else {
-      var TLBL={zona:'Zonas',sub:'Barrios privados',barrio:'Barrios'};
-      ['zona','sub','barrio'].forEach(function(t){
+      var TLBL={priv:'Barrios privados',sub:'Sub Barrios'};
+      ['priv','sub'].forEach(function(t){
         var arr=barrios.filter(function(b){return b.tipo===t;}); if(!arr.length) return;
         html += '<optgroup label="'+TLBL[t]+'">'+arr.map(opt).join('')+'</optgroup>';
       });
