@@ -675,6 +675,18 @@ body{font-family:'Inter',-apple-system,'Segoe UI',system-ui,sans-serif;backgroun
 .hoy-empty-ic{font-size:40px;margin-bottom:10px}
 .hoy-empty p{font-size:14px;font-weight:500}
 
+/* ── F5: Plan semanal de Estancias ── */
+.hoy-band-recompra{border-left-color:#2E7D32}
+.hoy-band-riesgo{border-left-color:#F4511E}
+.hoy-band-segunda{border-left-color:#BDBDBD}
+.sem-prog{background:#fff;border:1px solid var(--border);border-radius:8px;padding:13px 15px;margin-bottom:14px}
+.sem-prog-top{display:flex;align-items:baseline;justify-content:space-between;gap:10px;margin-bottom:8px;flex-wrap:wrap}
+.sem-prog-lbl{font-size:13px;font-weight:700;color:var(--ink)}
+.sem-prog-n{font-size:12px;font-weight:600;color:#2E7D32;font-variant-numeric:tabular-nums}
+.sem-prog-bar{height:8px;background:var(--cd);border-radius:5px;overflow:hidden}
+.sem-prog-fill{height:100%;background:linear-gradient(90deg,#43A047,#2E7D32);border-radius:5px;transition:width .4s ease}
+.sem-prog-hint{font-size:11px;color:var(--ink3);margin-top:7px}
+
 /* ── F3: Bitácora de interacciones ── */
 .hoy-band-seguimiento{border-left-color:#5E35B1}
 .hoy-act-reg{background:#fff;border-color:var(--border);color:var(--ink2)}
@@ -10825,6 +10837,181 @@ if('serviceWorker' in navigator){
     } catch(e){ _crmCopyFallback(msg, ok); }
   };
 
+  // ════════ F5: PLAN SEMANAL DE ESTANCIAS ════════
+  // El cerebro de "qué mensaje mandarle a cada hogar esta semana". A diferencia
+  // del cockpit "Hoy" (reactivo: espera a que se duerma), el Plan es PREDICTIVO:
+  // aprende el RITMO de recompra de cada hogar (frecuencia personal) y avisa
+  // cuándo "le toca", antes de perderlo. Universo = Estancias (Home/lotes), que
+  // es finito → se vuelve una rutina semanal cerrable, no decisiones al azar.
+  // Todo client-side desde crmClientes + la bitácora (F3). Mensajes 1-a-1
+  // (manuales vía wa.me) → sin templates de WATI, instantáneos y personalizados.
+  var crmSemUmbral = 28;
+  window.setSemUmbral = function(d){
+    crmSemUmbral = d;
+    document.querySelectorAll('#bbdd-semana .hoy-thresh-chip').forEach(function(b){ b.classList.toggle('on', String(b.dataset.d)===String(d)); });
+    renderCrmSemana();
+  };
+
+  // Ritmo del hogar: frecuencia personal (días promedio entre pedidos del hogar)
+  // + producto que más compra. {freq, prodTop, total}.
+  function _semRitmo(u){
+    var first=null, total=0, prodW={};
+    u.members.forEach(function(m){
+      var e = m.entregados||0; total += e;
+      var pf=_crmFechaSort(m.primeraFecha);
+      if(pf && (first===null || pf<first)) first=pf;
+      if(m.prodTop) prodW[m.prodTop]=(prodW[m.prodTop]||0)+(e||1);
+    });
+    var last=_crmFechaSort(u.ultimaFecha);
+    var freq=null;
+    if(total>=2 && first && last && last>first){ freq=Math.max(1, Math.round((last-first)/86400000/(total-1))); }
+    var prodTop='', mx=-1;
+    Object.keys(prodW).forEach(function(p){ if(prodW[p]>mx){mx=prodW[p];prodTop=p;} });
+    return {freq:freq, prodTop:prodTop, total:total};
+  }
+
+  // Jugada de la semana para un hogar. d = días desde la última compra del hogar.
+  function _semJugada(u){
+    if (u.deuda > 0) return 'deuda';
+    if (u.cumpleDias !== null && u.cumpleDias <= 7) return 'cumple';
+    var d = u.diasUltima;
+    if (d < 0) return null;                         // sin pedidos
+    if (d > crmSemUmbral) return (u.entregados >= 2) ? 'dormido' : 'reactivable';
+    if (u.entregados <= 1) return (d >= 7 ? 'segunda' : null);  // 1 pedido: empujar la 2da tras una semana
+    var r = u._ritmo;
+    if (r.freq){
+      if (d >= Math.round(r.freq*0.85)){
+        return (d <= Math.round(r.freq*1.6)) ? 'recompra' : 'riesgo';
+      }
+      return null;                                  // acaba de pedir → al día
+    }
+    return (d >= 10 ? 'recompra' : null);           // ≥2 pedidos sin ritmo confiable
+  }
+
+  function _semProdNice(p){ if(!p) return ''; try { return prodName(p); } catch(e){ return ''; } }
+
+  // Mensaje 1-a-1 personalizado (nombre + producto + ritmo). Voz de marca.
+  function _semMensaje(jugada, u){
+    var n = _hoyPrimerNombre(u.contacto.nombre);
+    var prod = _semProdNice(u._ritmo && u._ritmo.prodTop);
+    var pcl = prod ? ' Te dejo '+prod+' que siempre te llevas.' : '';
+    if (jugada==='recompra') return 'Hola '+n+'! Como va? 🧡 Ya paso tu semanita y no quiero que te quedes sin nada rico en la heladera.'+pcl+' Te armo el pedido para esta semana?';
+    if (jugada==='riesgo')   return 'Hola '+n+'! Tanto tiempo 🧡 Hace unos dias que no te preparo nada.'+pcl+' Te sumo el pedido de esta semana asi tenes todo listo?';
+    if (jugada==='segunda')  return 'Hola '+n+'! Que bueno que probaste Maleu 🧡'+(prod?' '+prod+' sale buenisimo para tener siempre a mano.':'')+' Te muestro lo de esta semana asi armamos el segundo pedido?';
+    if (jugada==='dormido')  return 'Hola '+n+'! Soy Tadeo de Maleu 🧡 Hace rato que no nos cruzamos.'+pcl+' Te armo algo rico y listo para esta semana?';
+    if (jugada==='reactivable') return 'Hola '+n+'! Soy Tadeo de Maleu 🧡 Probaste con nosotros hace un tiempo y me encantaria que vuelvas a tener algo rico y listo en la heladera. Te muestro las novedades?';
+    if (jugada==='deuda')    return 'Hola '+n+'! Como va? Te escribo para coordinar el pago del ultimo pedido ($'+fmt$(u.deuda)+'). Cuando puedas me avisas y lo cerramos. Gracias!';
+    if (jugada==='cumple')   return 'Hola '+n+'! 🧡 Feliz cumple de parte de Maleu! Que tengas un dia genial. Cuando quieras armar algo rico y listo en minutos, aca estoy.';
+    return 'Hola '+n+'!';
+  }
+
+  window.renderCrmSemana = function(){
+    if (!crmClientes) return;
+    var DIAS = ['Domingo','Lunes','Martes','Miercoles','Jueves','Viernes','Sabado'];
+    var MES = ['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'];
+    var hoy = new Date();
+    var fe = el('semFecha'); if (fe) fe.textContent = '· '+DIAS[hoy.getDay()]+' '+hoy.getDate()+' '+MES[hoy.getMonth()]+' '+hoy.getFullYear();
+
+    // Universo Estancias: hogares Home (lotes) — donde el ritmo de recompra aplica.
+    var unidades = _crmUnidadesHoy().filter(function(u){ return u.isLote || (u.contacto && u.contacto.canalDom === 'Home'); });
+
+    var bandas = {recompra:[], riesgo:[], deuda:[], cumple:[], segunda:[], dormido:[], reactivable:[]};
+    var trabajados = 0;  // ya contactados esta semana o con seguimiento agendado
+    unidades.forEach(function(u){
+      u._ritmo = _semRitmo(u);
+      var est = _hoyEstadoInter(u); u._inter = est;
+      if (est){
+        // Seguimiento futuro agendado → ya tenés plan, cuenta como trabajado.
+        if (est.diasHasta !== null && est.diasHasta > 0){ trabajados++; return; }
+        // Contactado hace poco sin plan → trabajado, no reaparece.
+        if (est.diasHasta === null && est.diasDesde !== null && est.diasDesde <= CRM_SILENCE_DIAS){ trabajados++; return; }
+      }
+      var j = _semJugada(u);
+      if (j) bandas[j].push(u);
+    });
+
+    function _over(u){ return (u._ritmo.freq ? (u.diasUltima - u._ritmo.freq) : u.diasUltima); }
+    bandas.recompra.sort(function(a,b){ return _over(b) - _over(a); });
+    bandas.riesgo.sort(function(a,b){ return _over(b) - _over(a); });
+    bandas.deuda.sort(function(a,b){ return b.deuda - a.deuda; });
+    bandas.cumple.sort(function(a,b){ return a.cumpleDias - b.cumpleDias; });
+    bandas.segunda.sort(function(a,b){ return b.facturado - a.facturado; });
+    bandas.dormido.sort(function(a,b){ return b.facturado - a.facturado; });
+    bandas.reactivable.sort(function(a,b){ return b.facturado - a.facturado; });
+
+    var defs = [
+      {k:'recompra', ic:'🎯', t:'Recompra esta semana', d:'Entraron en su ventana — escribiles AHORA, antes de que se enfrien'},
+      {k:'riesgo', ic:'⚠️', t:'En riesgo', d:'Se pasaron de su ritmo habitual — reenganchar antes de que se duerman'},
+      {k:'deuda', ic:'🔴', t:'Deudas a cobrar', d:'Con saldo pendiente'},
+      {k:'cumple', ic:'🎂', t:'Cumpleanos', d:'Proximos 7 dias'},
+      {k:'segunda', ic:'⚪', t:'Segunda compra', d:'Pidieron una vez — convertir en habito'},
+      {k:'dormido', ic:'🟠', t:'Dormidos', d:'No compran hace mas de '+crmSemUmbral+' dias'},
+      {k:'reactivable', ic:'🟡', t:'Reactivables', d:'Probaron una vez y no volvieron'}
+    ];
+
+    var pendientes = defs.reduce(function(s,def){ return s + bandas[def.k].length; }, 0);
+    var totalPlan = pendientes + trabajados;
+
+    if (totalPlan === 0){
+      el('semList').innerHTML = '<div class="hoy-empty"><div class="hoy-empty-ic">✅</div><p>Estancias al dia. No hay hogares para trabajar esta semana.</p></div>';
+      return;
+    }
+
+    var pct = totalPlan>0 ? Math.round(trabajados/totalPlan*100) : 0;
+    var prog = '<div class="sem-prog">'
+      + '<div class="sem-prog-top"><span class="sem-prog-lbl">Recorrido de la semana</span><span class="sem-prog-n">'+trabajados+' / '+totalPlan+' hogares trabajados</span></div>'
+      + '<div class="sem-prog-bar"><div class="sem-prog-fill" style="width:'+pct+'%"></div></div>'
+      + '<div class="sem-prog-hint">'+pendientes+' '+(pendientes===1?'hogar te espera':'hogares te esperan')+' &middot; cada contacto que registres se va tachando solo</div>'
+    + '</div>';
+
+    if (pendientes === 0){
+      el('semList').innerHTML = prog + '<div class="hoy-empty"><div class="hoy-empty-ic">🎉</div><p>Cerraste el recorrido de Estancias de esta semana. Bien ahi.</p></div>';
+      return;
+    }
+
+    var html = prog + defs.filter(function(def){ return bandas[def.k].length; }).map(function(def){
+      var rows = bandas[def.k].map(function(u){ return _semRow(def.k, u); }).join('');
+      return '<div class="hoy-band hoy-band-'+def.k+'">'
+        + '<div class="hoy-band-h"><span class="hoy-band-ic">'+def.ic+'</span><span class="hoy-band-t">'+def.t+'</span><span class="hoy-band-n">'+bandas[def.k].length+'</span><span class="hoy-band-d">'+def.d+'</span></div>'
+        + '<div class="hoy-band-rows">'+rows+'</div>'
+      + '</div>';
+    }).join('');
+    el('semList').innerHTML = html;
+  };
+
+  function _semRow(jugada, u){
+    var c = u.contacto;
+    var keyEnc = encodeURIComponent(c.key);
+    var r = u._ritmo;
+    var sub = [];
+    sub.push((u.subBarrio?escHtml(u.subBarrio)+' &middot; ':'')+(u.lote?'Lote '+escHtml(u.lote):'Home'));
+    if (r.freq) sub.push('pide cada '+r.freq+'d &middot; van '+(u.diasUltima>=0?u.diasUltima+'d':'-'));
+    else if (u.ultimaFecha) sub.push('ult: '+escHtml(u.ultimaFecha)+(u.diasUltima>=0?' (hace '+u.diasUltima+'d)':''));
+    if (r.prodTop) sub.push('suele: '+escHtml(_semProdNice(r.prodTop)));
+    var right = '';
+    if (jugada==='deuda') right = '<span class="hoy-row-amt">$'+fmt$(u.deuda)+'</span>';
+    else if (jugada==='cumple'){ var dc=u.cumpleDias; right = '<span class="hoy-row-bday">'+(dc===0?'HOY':(dc===1?'manana':'en '+dc+'d'))+'</span>'; }
+    else if ((jugada==='recompra'||jugada==='riesgo') && r.freq){ var ov=u.diasUltima-r.freq; right = '<span class="hoy-row-prox'+(jugada==='riesgo'?' vencido':'')+'">'+(ov>=0?'+'+ov+'d':ov+'d')+' vs ritmo</span>'; }
+    // F3: rastro del último contacto
+    var lastLine = '';
+    if (u._inter && u._inter.last){
+      var li = u._inter.last;
+      var when = (u._inter.diasDesde===0?'hoy':(u._inter.diasDesde===1?'ayer':'hace '+u._inter.diasDesde+'d'));
+      lastLine = '<div class="hoy-row-last"><span class="ic">📌</span><span>'+escHtml(when)+': '+escHtml(li.resultado+(li.nota?' — '+li.nota:''))+'</span></div>';
+    }
+    var msg = _semMensaje(jugada, u);
+    var waTel = c.tel || '';
+    var wa = waTel ? '<a class="hoy-act hoy-act-wa" href="https://wa.me/549'+waTel+'?text='+encodeURIComponent(msg)+'" target="_blank" rel="noopener" onclick="event.stopPropagation()">WhatsApp</a>' : '<span class="hoy-act hoy-act-notel">sin tel</span>';
+    var cp = waTel ? '<button class="hoy-act hoy-act-cp" onclick="event.stopPropagation();crmHoyCopiarMsg(this)" data-msg="'+escHtml(msg)+'" title="Copiar mensaje">Copiar</button>' : '';
+    var reg = '<button class="hoy-act hoy-act-reg" onclick="event.stopPropagation();crmLogOpen(this)" data-key="'+escHtml(c.key)+'" data-tel="'+escHtml(waTel)+'" data-nombre="'+escHtml(u.nombre)+'" data-origen="semana" title="Registrar contacto">Registrar</button>';
+    return '<div class="hoy-row" onclick="crmOpenCliente(\''+keyEnc+'\')">'
+      + '<div class="hoy-row-main"><div class="hoy-row-name">'+escHtml(u.nombre)+(c.vip?' <span class="crm-vip">VIP</span>':'')+'</div>'
+      + '<div class="hoy-row-meta">'+sub.join(' &middot; ')+'</div>'+lastLine+'</div>'
+      + (right ? '<div class="hoy-row-right">'+right+'</div>' : '')
+      + '<div class="hoy-row-acts">'+wa+cp+reg+'</div>'
+    + '</div>';
+  }
+
   // ════════ F3: MODAL "REGISTRAR CONTACTO" ════════
   var CRM_RESULTADOS = ['Le escribi', 'No contesto', 'Quedo en pedir', 'Pidio 🎉', 'No le interesa', 'Otro'];
   var _crmLogState = null;   // {key, tel, nombre, origen, resultado}
@@ -10910,6 +11097,7 @@ if('serviceWorker' in navigator){
           toast('Contacto registrado');
           // Re-pintar lo que esté a la vista.
           if (crmCurSub === 'hoy' && crmClientes) renderCrmHoy();
+          if (crmCurSub === 'semana' && crmClientes) renderCrmSemana();
           if (crmFichaActual && crmFichaActual.tipo === 'cliente') _crmRenderBitacora(crmFichaActual.data);
         } else {
           toast('Error: ' + (d.error || 'desconocido'));
@@ -10971,6 +11159,7 @@ if('serviceWorker' in navigator){
           toast('Contacto borrado');
           if (crmFichaActual && crmFichaActual.tipo === 'cliente') _crmRenderBitacora(crmFichaActual.data);
           if (crmCurSub === 'hoy' && crmClientes) renderCrmHoy();
+          if (crmCurSub === 'semana' && crmClientes) renderCrmSemana();
         } else { toast('Error: ' + (d.error || 'desconocido')); }
       })
       .catch(function(err){ toast('Error: '+err.message); });
