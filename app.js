@@ -2292,16 +2292,12 @@ function initCumpleBlock() {
 
   [selDia, selMes, selAnio].forEach(function(s) { s.addEventListener('change', cumpleOnChange); });
 
-  // Restaurar si ya estaba guardado
+  // Si ya lo completó en una visita anterior → no volver a mostrar NADA (ni el "¡Listo!").
+  // El estado "¡Listo!" solo se ve en el momento en que lo carga (cumpleOnChange).
   var saved = getCumpleValue();
   if (saved) {
-    var p = saved.split('/'); // DD/MM/AAAA
-    if (p.length === 3) {
-      selDia.value = String(parseInt(p[0], 10));
-      selMes.value = String(parseInt(p[1], 10));
-      selAnio.value = p[2];
-    }
-    _cumpleShowDone(saved);
+    var block = $id('cumple-block');
+    if (block) block.style.display = 'none';
   } else {
     _cumpleShowAsk();
   }
