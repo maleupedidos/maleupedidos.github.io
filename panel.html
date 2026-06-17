@@ -777,6 +777,8 @@ body{font-family:'Inter',-apple-system,'Segoe UI',system-ui,sans-serif;backgroun
 .crm-meta-form .fg{margin-bottom:8px}
 .crm-meta-form input,.crm-meta-form textarea,.crm-meta-form select{width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:4px;font-size:13px;font-family:inherit;background:#fff;color:var(--ink)}
 .lote-sub-h{font-size:11px;font-weight:700;color:var(--b);text-transform:uppercase;letter-spacing:.04em;margin:14px 0 6px;padding-top:10px;border-top:1px dashed var(--cd)}
+.lote-check{display:flex;align-items:flex-start;gap:8px;cursor:pointer;font-size:12px;color:var(--ink2);line-height:1.35}
+.lote-check input{width:auto!important;margin-top:2px;flex-shrink:0;accent-color:var(--o)}
 .crm-meta-form input:focus,.crm-meta-form textarea:focus{outline:none;border-color:var(--o);box-shadow:0 0 0 3px rgba(240,125,71,.18)}
 
 /* ── BBDD en iPhone: pills deslizables en una fila + targets tactiles mas grandes ── */
@@ -10239,10 +10241,20 @@ if('serviceWorker' in navigator){
     return '#E53935';                          // inactivo
   }
 
+  // Color de un lote en modo "sobres" según estado de la campaña.
+  function _sobreColor(rec){
+    var e = rec && rec.sobreEstado;
+    if (e === 'Entregado en mano') return '#43A047';   // verde
+    if (e === 'Dejado bajo puerta') return '#F4C430';  // amarillo
+    if (e === 'Toqué, no había nadie') return '#5C6BC0'; // azul
+    if (e === 'No corresponde') return '#757575';      // gris oscuro
+    return '#C8C8C8';                                   // pendiente / sin dato
+  }
+
   window.mapaColorPor = function(){
-    _mapaColorMode = (_mapaColorMode === 'cliente') ? 'subbarrio' : 'cliente';
+    _mapaColorMode = _mapaColorMode==='subbarrio' ? 'cliente' : (_mapaColorMode==='cliente' ? 'sobres' : 'subbarrio');
     var b = el('mapaColorBtn');
-    if (b) b.textContent = _mapaColorMode==='cliente' ? 'Color: clientes/ventas' : 'Color: sub-barrio';
+    if (b) b.textContent = _mapaColorMode==='cliente' ? 'Color: clientes/ventas' : (_mapaColorMode==='sobres' ? 'Color: sobres' : 'Color: sub-barrio');
     _recolorLotes(); _renderLegend();
   };
 
@@ -10250,14 +10262,17 @@ if('serviceWorker' in navigator){
     _mapaLotes.forEach(function(L0){
       // Zona "de afuera": el lote se saca del mapa siempre
       if (_enExcl(L0.lat, L0.lng)){
-        L0.zona = -2; L0.cli = null;
+        L0.zona = -2; L0.cli = null; L0.rec = null;
         if (_mapaLotesLayer && _mapaLotesLayer.hasLayer(L0.marker)) _mapaLotesLayer.removeLayer(L0.marker);
         return;
       }
       var zi = _zonaDe(L0.lat, L0.lng); L0.zona = zi;
-      L0.cli = _mapaCliDe(L0);
+      var sub = zi>=0 ? (_subZonas[zi] && _subZonas[zi].nombre) : null;
+      L0.cli = sub ? (_mapaLoteCli[_crmNormName(sub)+'|'+_loteNorm(L0.n)] || null) : null;
+      L0.rec = sub ? (_mapaLotesData[_crmNormName(sub)+'|'+_loteNorm(L0.n)] || null) : null;
       var col, rad = 5;
       if (_mapaColorMode === 'cliente'){ col = _mapaCliColor(L0.cli); if (L0.cli) rad = 6; }
+      else if (_mapaColorMode === 'sobres'){ col = _sobreColor(L0.rec); if (L0.rec && L0.rec.sobreEstado) rad = 6; }
       else { col = zi>=0 ? _zColor(zi) : '#9E9E9E'; }
       L0.marker.setStyle({fillColor: col, radius: rad});
       // "Solo mis sub-barrios": ocultar lotes que no caen en ninguna zona
@@ -10367,6 +10382,7 @@ if('serviceWorker' in navigator){
       + '<div class="lote-sub-h">📨 Campaña sobres (folleto + imán, puerta a puerta)</div>'
       + '<div class="fg"><label>Estado del sobre</label><select id="loteSobreEstado">'+SOBRE_ESTADOS.map(function(o){ return '<option'+(o===(rec.sobreEstado||'')?' selected':'')+'>'+escHtml(o)+'</option>'; }).join('')+'</select></div>'
       + '<div class="fg"><label>Nota del sobre (situación)</label><textarea id="loteSobreNota" rows="2" placeholder="ej. toqué, me atendió la señora, muy amable, dijo que pide la próxima">'+escHtml(rec.sobreNota||'')+'</textarea></div>'
+      + '<div class="fg"><label class="lote-check"><input type="checkbox" id="loteReside"'+(rec.reside==='Sí'?' checked':'')+'> <span><b>Vive acá</b> (residente — me atendieron / luces prendidas, no es casa de fin de semana)</span></label></div>'
       + '<div class="fg"><label>Notas generales</label><textarea id="loteNotas" rows="3" placeholder="freezer chico, prefiere que avise antes, etc.">'+escHtml(rec.notas||'')+'</textarea></div>'
       + '<button class="btn-submit" onclick="crmLoteGuardar(\''+encodeURIComponent(sub)+'\',\''+encodeURIComponent(lote)+'\')" style="margin-top:6px">Guardar lote</button>'
     + '</div></div>';
@@ -10425,6 +10441,7 @@ if('serviceWorker' in navigator){
       tel: el('loteTel').value.trim(),
       sobreEstado: el('loteSobreEstado') ? el('loteSobreEstado').value : '',
       sobreNota: el('loteSobreNota') ? el('loteSobreNota').value.trim() : '',
+      reside: (el('loteReside') && el('loteReside').checked) ? 'Sí' : '',
       notas: el('loteNotas').value.trim()
     };
     fetch(CRM_API, {method:'POST', mode:'cors', body: JSON.stringify(body)})
@@ -10432,7 +10449,7 @@ if('serviceWorker' in navigator){
       .then(function(d){
         if (d.ok){
           toast('Lote guardado');
-          _mapaLotesData[_crmNormName(sub)+'|'+_loteNorm(lote)] = {sub:sub, lote:lote, estadoContacto:body.estadoContacto, familia:body.familia, integrantes:resumen, composicion:comp, titular:body.titular, notas:body.notas, tel:body.tel, sobreEstado:body.sobreEstado, sobreNota:body.sobreNota};
+          _mapaLotesData[_crmNormName(sub)+'|'+_loteNorm(lote)] = {sub:sub, lote:lote, estadoContacto:body.estadoContacto, familia:body.familia, integrantes:resumen, composicion:comp, titular:body.titular, notas:body.notas, tel:body.tel, sobreEstado:body.sobreEstado, sobreNota:body.sobreNota, reside:body.reside};
           _mapaUpdateTooltips();
         } else toast('Error: '+(d.error||''));
       })
@@ -10480,6 +10497,24 @@ if('serviceWorker' in navigator){
       + '<span class="mapa-leg-item"><span class="mapa-leg-sw" style="background:#FB8C00"></span>Dormidos <b>'+dor+'</b></span>'
       + '<span class="mapa-leg-item"><span class="mapa-leg-sw" style="background:#E53935"></span>Inactivos <b>'+ina+'</b></span>'
       + '<span class="mapa-leg-item"><span class="mapa-leg-sw" style="background:#C8C8C8"></span>Prospectos <b>'+pro+'</b></span>';
+      return;
+    }
+    // Modo "sobres": leyenda por avance de la campaña puerta a puerta.
+    if (_mapaColorMode === 'sobres'){
+      var enm=0,bp=0,nad=0,pend=0;
+      _mapaLotes.forEach(function(L0){
+        if (L0.zona===-2) return;
+        var e = L0.rec && L0.rec.sobreEstado;
+        if (e==='Entregado en mano') enm++;
+        else if (e==='Dejado bajo puerta') bp++;
+        else if (e==='Toqué, no había nadie') nad++;
+        else pend++;
+      });
+      elg.innerHTML =
+        '<span class="mapa-leg-item"><span class="mapa-leg-sw" style="background:#43A047"></span>En mano <b>'+enm+'</b></span>'
+      + '<span class="mapa-leg-item"><span class="mapa-leg-sw" style="background:#F4C430"></span>Bajo puerta <b>'+bp+'</b></span>'
+      + '<span class="mapa-leg-item"><span class="mapa-leg-sw" style="background:#5C6BC0"></span>No había nadie <b>'+nad+'</b></span>'
+      + '<span class="mapa-leg-item"><span class="mapa-leg-sw" style="background:#C8C8C8"></span>Pendiente <b>'+pend+'</b></span>';
       return;
     }
     var html = _subZonas.map(function(z,i){
