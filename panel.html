@@ -674,6 +674,15 @@ body{font-family:'Inter',-apple-system,'Segoe UI',system-ui,sans-serif;backgroun
 .hoy-empty{text-align:center;padding:48px 20px;color:var(--ink3)}
 .hoy-empty-ic{font-size:40px;margin-bottom:10px}
 .hoy-empty p{font-size:14px;font-weight:500}
+
+/* ── F2: Mapa de lotes ── */
+.mapa-bar{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:10px}
+.mapa-info{font-size:13px;color:var(--ink2);font-weight:500}
+.mapa-info b{color:var(--ink);font-weight:700}
+.mapa-hint{font-size:11px;color:var(--ink3)}
+.mapa-canvas{height:calc(100vh - 230px);min-height:420px;border-radius:8px;overflow:hidden;border:1px solid var(--border);background:#dfe6e9}
+.mapa-canvas .leaflet-container{height:100%;width:100%;font-family:inherit}
+@media(max-width:768px){ .mapa-canvas{height:calc(100vh - 250px)} .mapa-hint{display:none} }
 .crm-variants{background:var(--cr);border-radius:4px;padding:8px 10px;font-size:11px;color:var(--ink2);margin-bottom:10px}
 .crm-variants b{color:var(--ink);font-weight:600}
 .crm-meta-form .fg{margin-bottom:8px}
@@ -2025,6 +2034,7 @@ body.role-single .statusbar{font-size:11px}
   <div class="bbdd-tabs">
     <button class="bbdd-tab on" data-sub="hoy" onclick="bbddSwitch('hoy')">Hoy</button>
     <button class="bbdd-tab" data-sub="clientes" onclick="bbddSwitch('clientes')">Clientes</button>
+    <button class="bbdd-tab" data-sub="mapa" onclick="bbddSwitch('mapa')">Mapa</button>
     <button class="bbdd-tab" data-sub="productos" onclick="bbddSwitch('productos')">Productos</button>
   </div>
 
@@ -2069,6 +2079,15 @@ body.role-single .statusbar{font-size:11px}
     <div class="bbdd-stats" id="crmCliStats"></div>
     <div id="crmDupBanner" class="crm-dup-banner" style="display:none"></div>
     <div id="crmCliList" class="bbdd-list"></div>
+  </div>
+
+  <!-- Sub: MAPA (lotes de Estancias del Pilar) -->
+  <div class="bbdd-sub" id="bbdd-mapa">
+    <div class="mapa-bar">
+      <span class="mapa-info">Estancias del Pilar &middot; <b id="mapaCount">…</b> lotes</span>
+      <span class="mapa-hint">Toc&aacute; un lote para ver su n&uacute;mero</span>
+    </div>
+    <div id="mapaMap" class="mapa-canvas"></div>
   </div>
 
   <!-- Sub: PRODUCTOS -->
@@ -2675,7 +2694,7 @@ var MOD_META={
   caja:{t:'Caja',bc:'Libro diario · Saldo · Movimientos'},
   egresos:{t:'Pagos',bc:'Compras · Gastos · flujo de caja salida'},
   stock:{t:'Stock',bc:'Productos · Existencias · Reposición'},
-  bbdd:{t:'BBDD',bc:'Hoy · Clientes · Productos · CRM'},
+  bbdd:{t:'BBDD',bc:'Hoy · Clientes · Mapa · Productos · CRM'},
   miportal:{t:'Mi Portal',bc:'Portal de vendedor Red'},
   ruta:{t:'Ruta',bc:'Delivery · Armado · Cobros'},
   busqueda:{t:'Abastecimiento',bc:'Compras a proveedores · Pagos · OC'},
@@ -9874,7 +9893,9 @@ if('serviceWorker' in navigator){
     crmCurSub = sub;
     document.querySelectorAll('.bbdd-tab').forEach(function(t){ t.classList.toggle('on', t.dataset.sub===sub); });
     document.querySelectorAll('.bbdd-sub').forEach(function(s){ s.classList.toggle('on', s.id==='bbdd-'+sub); });
-    if (sub === 'productos') {
+    if (sub === 'mapa') {
+      initMapaEstancias();
+    } else if (sub === 'productos') {
       if (!crmProductos || force) loadCrmProductos();
     } else {
       // 'hoy' y 'clientes' comparten la misma data (crmClientes)
@@ -9903,6 +9924,50 @@ if('serviceWorker' in navigator){
         el(tgt).innerHTML = '<div class="empty"><p>Error: '+escHtml(err.message)+'</p></div>';
       });
   }
+
+  // ════════ F2: MAPA DE LOTES (Estancias del Pilar) ════════
+  var _mapaObj = null;
+  // Carga Leaflet bajo demanda (solo cuando se abre el Mapa la primera vez).
+  function _ensureLeaflet(cb){
+    if (window.L) { cb(); return; }
+    var css = document.createElement('link');
+    css.rel = 'stylesheet'; css.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
+    document.head.appendChild(css);
+    var js = document.createElement('script');
+    js.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
+    js.onload = cb;
+    js.onerror = function(){ el('mapaMap').innerHTML = '<div class="empty" style="padding:40px"><p>No se pudo cargar el mapa (revisá la conexión)</p></div>'; };
+    document.head.appendChild(js);
+  }
+
+  window.initMapaEstancias = function(){
+    // Ya inicializado: solo recalcular tamaño (el contenedor recién se hizo visible)
+    if (_mapaObj) { setTimeout(function(){ try{ _mapaObj.invalidateSize(); }catch(e){} }, 120); return; }
+    _ensureLeaflet(function(){
+      _mapaObj = L.map('mapaMap', {preferCanvas:true, zoomControl:true, scrollWheelZoom:true});
+      var sat = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {maxZoom:20, attribution:'Esri World Imagery'});
+      var calle = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom:19, attribution:'© OpenStreetMap'});
+      sat.addTo(_mapaObj);
+      L.control.layers({'Satélite':sat, 'Calles':calle}, null, {position:'topright'}).addTo(_mapaObj);
+      _mapaObj.setView([-34.486, -58.998], 15);
+      fetch('/data/estancias-nros.geojson')
+        .then(function(r){ return r.json(); })
+        .then(function(gj){
+          var grp = L.featureGroup();
+          (gj.features||[]).forEach(function(f){
+            var c = f.geometry.coordinates; // [lon, lat]
+            var m = L.circleMarker([c[1], c[0]], {radius:5, color:'#fff', weight:1, fillColor:'#F07D47', fillOpacity:.95});
+            m.bindTooltip('Lote '+f.properties.n, {direction:'top', offset:[0,-4]});
+            grp.addLayer(m);
+          });
+          grp.addTo(_mapaObj);
+          var mc = el('mapaCount'); if (mc) mc.textContent = (gj.features||[]).length;
+          try { _mapaObj.fitBounds(grp.getBounds().pad(0.04)); } catch(e){}
+          setTimeout(function(){ try{ _mapaObj.invalidateSize(); }catch(e){} }, 120);
+        })
+        .catch(function(){ el('mapaMap').innerHTML = '<div class="empty" style="padding:40px"><p>No se pudieron cargar los lotes</p></div>'; });
+    });
+  };
 
   window.crmCopyTel = function(tel){
     var full = '+549' + tel;
