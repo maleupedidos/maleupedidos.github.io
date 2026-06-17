@@ -10165,6 +10165,7 @@ if('serviceWorker' in navigator){
   // ════════ F2: MAPA DE LOTES (Estancias del Pilar) ════════
   var _mapaObj = null, _mapaLotes = [], _mapaZonas = [], _subZonas = [], _exclZonas = [], _mapaZonasLayer = null, _mapaLotesLayer = null, _mapaDrawHooked = false, _mapaSoloAsignados = false, _mapaDrawTipo = 'zona';
   var _mapaColorMode = 'subbarrio', _mapaLoteCli = {}, _mapaLotesData = {};
+  var _loteComp = {tipo:'', n1:'', n2:'', padre:'', madre:'', hijos:[]};
   var SUBBARRIOS = ['Champagnat Alto','Champagnat Bajo','El Recuerdo','Golf','La Pionera','Argentina 1','Argentina 2','Argentina 3','Argentina 4','La Paz','Los Alcanfores','Estancias del Rio'];
   var ZCOLORS = ['#E53935','#8E24AA','#3949AB','#039BE5','#00897B','#43A047','#C0CA33','#FB8C00','#6D4C41','#F4511E','#D81B60','#5E35B1','#1E88E5','#00ACC1','#7CB342','#FDD835'];
 
@@ -10296,9 +10297,21 @@ if('serviceWorker' in navigator){
       .then(function(d){
         _mapaLotesData = {};
         (d.lotes||[]).forEach(function(r){ _mapaLotesData[_crmNormName(r.sub)+'|'+_loteNorm(r.lote)] = r; });
+        _mapaUpdateTooltips();
         if (cb) cb();
       })
       .catch(function(){ if (cb) cb(); });
+  }
+
+  // Tooltip de cada lote: "Lote N · Apellido" si hay familia cargada.
+  function _mapaUpdateTooltips(){
+    _mapaLotes.forEach(function(L0){
+      if (!L0.marker.getTooltip()) return;
+      var sub = L0.zona>=0 ? (_subZonas[L0.zona] && _subZonas[L0.zona].nombre) : null;
+      var rec = sub ? _mapaLotesData[_crmNormName(sub)+'|'+_loteNorm(L0.n)] : null;
+      var fam = (rec && rec.familia) ? ' · ' + rec.familia : '';
+      L0.marker.setTooltipContent('Lote ' + L0.n + fam);
+    });
   }
 
   // Ficha completa del lote: ventas (CRM) + datos de territorio editables.
@@ -10313,6 +10326,9 @@ if('serviceWorker' in navigator){
   function _renderFichaLote(L0, sub, lote){
     var u = L0.cli; // hogar segun ventas
     var rec = _mapaLotesData[_crmNormName(sub)+'|'+_loteNorm(lote)] || {};
+    // Inicializar la composición del hogar (estructurada) desde lo guardado
+    var rc = rec.composicion;
+    _loteComp = (rc && rc.tipo) ? {tipo:rc.tipo, n1:rc.n1||'', n2:rc.n2||'', padre:rc.padre||'', madre:rc.madre||'', hijos:(rc.hijos||[]).slice()} : {tipo:'', n1:'', n2:'', padre:'', madre:'', hijos:[]};
     var relTxt, relCol;
     if (u){
       if (u.diasUltima<0){ relTxt='Cliente'; relCol='#9E9E9E'; }
@@ -10343,7 +10359,7 @@ if('serviceWorker' in navigator){
     html += '<div class="crm-section"><div class="crm-section-h">Ficha del lote (editable)</div><div class="crm-meta-form">'
       + '<div class="fg"><label>Estado de contacto</label><select id="loteEstado">'+ESTADOS.map(function(o){ return '<option'+(o===(rec.estadoContacto||'')?' selected':'')+'>'+escHtml(o)+'</option>'; }).join('')+'</select></div>'
       + '<div class="fg"><label>Familia (apellido)</label><input id="loteFamilia" value="'+escHtml(rec.familia||'')+'" placeholder="ej. Fernandez"></div>'
-      + '<div class="fg"><label>Integrantes / quién vive</label><textarea id="loteIntegrantes" rows="2" placeholder="ej. Claudio, Jimena y 2 hijos">'+escHtml(rec.integrantes||'')+'</textarea></div>'
+      + '<div class="fg"><label>Composición del hogar</label><div id="loteCompBox"></div></div>'
       + '<div class="fg"><label>Titular del lote (a quién contactar)</label><input id="loteTitular" value="'+escHtml(rec.titular||'')+'" placeholder="ej. Claudio"></div>'
       + '<div class="fg"><label>Teléfono extra</label><input id="loteTel" value="'+escHtml(rec.tel||'')+'" placeholder="opcional"></div>'
       + '<div class="fg"><label>Notas</label><textarea id="loteNotas" rows="3" placeholder="freezer chico, prefiere que avise antes, etc.">'+escHtml(rec.notas||'')+'</textarea></div>'
@@ -10351,15 +10367,55 @@ if('serviceWorker' in navigator){
     + '</div></div>';
 
     el('crmDrawerBody').innerHTML = html;
+    _renderComposicion();
+  }
+
+  // ── Composición del hogar (Pareja / Familia / Vive solo) ──
+  function _fgInput(label, id, val){ return '<div class="fg"><label>'+label+'</label><input id="'+id+'" value="'+escHtml(val||'')+'"></div>'; }
+  function _loteCapture(){
+    var c = _loteComp;
+    if (el('loteN1')) c.n1 = el('loteN1').value;
+    if (el('loteN2')) c.n2 = el('loteN2').value;
+    if (el('lotePadre')) c.padre = el('lotePadre').value;
+    if (el('loteMadre')) c.madre = el('loteMadre').value;
+    c.hijos = c.hijos.map(function(h,i){ var e=el('loteHijo'+i); return e ? e.value : h; });
+  }
+  window.loteSetTipo = function(v){ _loteCapture(); _loteComp.tipo = v; _renderComposicion(); };
+  window.loteSetHijos = function(v){ _loteCapture(); var n=parseInt(v,10)||0; var h=_loteComp.hijos.slice(0,n); while(h.length<n) h.push(''); _loteComp.hijos=h; _renderComposicion(); };
+  function _renderComposicion(){
+    var c = _loteComp, h = '';
+    h += '<select id="loteTipo" onchange="loteSetTipo(this.value)" style="margin-bottom:8px">'
+      + '<option value=""'+(c.tipo===''?' selected':'')+'>(elegir tipo)</option>'
+      + ['Pareja','Familia','Vive solo/a'].map(function(o){ return '<option value="'+o+'"'+(o===c.tipo?' selected':'')+'>'+o+'</option>'; }).join('')
+      + '</select>';
+    if (c.tipo==='Pareja'){ h += _fgInput('Integrante 1','loteN1',c.n1) + _fgInput('Integrante 2 (si lo/la conocés)','loteN2',c.n2); }
+    else if (c.tipo==='Vive solo/a'){ h += _fgInput('Nombre completo','loteN1',c.n1); }
+    else if (c.tipo==='Familia'){
+      h += _fgInput('Padre','lotePadre',c.padre) + _fgInput('Madre','loteMadre',c.madre);
+      h += '<div class="fg"><label>Cantidad de hijos</label><select id="loteNHijos" onchange="loteSetHijos(this.value)">'
+        + [0,1,2,3,4,5,6,7,8].map(function(n){ return '<option'+(n===c.hijos.length?' selected':'')+'>'+n+'</option>'; }).join('') + '</select></div>';
+      c.hijos.forEach(function(hn,i){ h += _fgInput('Hijo/a '+(i+1),'loteHijo'+i,hn); });
+    }
+    var box = el('loteCompBox'); if (box) box.innerHTML = h;
+  }
+  function _compResumen(c){
+    if (c.tipo==='Pareja') return 'Pareja: '+[c.n1,c.n2].filter(Boolean).join(' y ');
+    if (c.tipo==='Vive solo/a') return 'Vive solo/a: '+(c.n1||'');
+    if (c.tipo==='Familia'){ var p=[c.padre,c.madre].filter(Boolean).join(' y '); var hh=c.hijos.filter(Boolean); return 'Familia: '+p+(hh.length?' · Hijos ('+hh.length+'): '+hh.join(', '):''); }
+    return '';
   }
 
   window.crmLoteGuardar = function(subEnc, loteEnc){
     var sub = decodeURIComponent(subEnc), lote = decodeURIComponent(loteEnc);
+    _loteCapture();
+    var comp = JSON.parse(JSON.stringify(_loteComp));
+    var resumen = _compResumen(comp);
     var body = {
       action:'crmLoteSave', sub:sub, lote:lote,
       estadoContacto: el('loteEstado').value,
       familia: el('loteFamilia').value.trim(),
-      integrantes: el('loteIntegrantes').value.trim(),
+      integrantes: resumen,
+      composicion: JSON.stringify(comp),
       titular: el('loteTitular').value.trim(),
       tel: el('loteTel').value.trim(),
       notas: el('loteNotas').value.trim()
@@ -10369,7 +10425,8 @@ if('serviceWorker' in navigator){
       .then(function(d){
         if (d.ok){
           toast('Lote guardado');
-          _mapaLotesData[_crmNormName(sub)+'|'+_loteNorm(lote)] = {sub:sub, lote:lote, estadoContacto:body.estadoContacto, familia:body.familia, integrantes:body.integrantes, titular:body.titular, notas:body.notas, tel:body.tel};
+          _mapaLotesData[_crmNormName(sub)+'|'+_loteNorm(lote)] = {sub:sub, lote:lote, estadoContacto:body.estadoContacto, familia:body.familia, integrantes:resumen, composicion:comp, titular:body.titular, notas:body.notas, tel:body.tel};
+          _mapaUpdateTooltips();
         } else toast('Error: '+(d.error||''));
       })
       .catch(function(err){ toast('Error: '+err.message); });
@@ -10436,7 +10493,7 @@ if('serviceWorker' in navigator){
         _mapaZonas = (d.zonas||[]).filter(function(z){ return z.poly && z.poly.length>=3; });
         _subZonas = _mapaZonas.filter(function(z){ return z.tipo !== 'excluir'; });
         _exclZonas = _mapaZonas.filter(function(z){ return z.tipo === 'excluir'; });
-        _renderZonas(); _recolorLotes(); _renderLegend();
+        _renderZonas(); _recolorLotes(); _renderLegend(); _mapaUpdateTooltips();
       })
       .catch(function(){});
   }
