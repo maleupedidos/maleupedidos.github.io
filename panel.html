@@ -763,7 +763,7 @@ body{font-family:'Inter',-apple-system,'Segoe UI',system-ui,sans-serif;backgroun
 .crm-variants{background:var(--cr);border-radius:4px;padding:8px 10px;font-size:11px;color:var(--ink2);margin-bottom:10px}
 .crm-variants b{color:var(--ink);font-weight:600}
 .crm-meta-form .fg{margin-bottom:8px}
-.crm-meta-form input,.crm-meta-form textarea{width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:4px;font-size:13px;font-family:inherit}
+.crm-meta-form input,.crm-meta-form textarea,.crm-meta-form select{width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:4px;font-size:13px;font-family:inherit;background:#fff;color:var(--ink)}
 .crm-meta-form input:focus,.crm-meta-form textarea:focus{outline:none;border-color:var(--o);box-shadow:0 0 0 3px rgba(240,125,71,.18)}
 
 /* ── BBDD en iPhone: pills deslizables en una fila + targets tactiles mas grandes ── */
@@ -10135,7 +10135,7 @@ if('serviceWorker' in navigator){
 
   // ════════ F2: MAPA DE LOTES (Estancias del Pilar) ════════
   var _mapaObj = null, _mapaLotes = [], _mapaZonas = [], _subZonas = [], _exclZonas = [], _mapaZonasLayer = null, _mapaLotesLayer = null, _mapaDrawHooked = false, _mapaSoloAsignados = false, _mapaDrawTipo = 'zona';
-  var _mapaColorMode = 'subbarrio', _mapaLoteCli = {};
+  var _mapaColorMode = 'subbarrio', _mapaLoteCli = {}, _mapaLotesData = {};
   var SUBBARRIOS = ['Champagnat Alto','Champagnat Bajo','El Recuerdo','Golf','La Pionera','Argentina 1','Argentina 2','Argentina 3','Argentina 4','La Paz','Los Alcanfores','Estancias del Rio'];
   var ZCOLORS = ['#E53935','#8E24AA','#3949AB','#039BE5','#00897B','#43A047','#C0CA33','#FB8C00','#6D4C41','#F4511E','#D81B60','#5E35B1','#1E88E5','#00ACC1','#7CB342','#FDD835'];
 
@@ -10260,6 +10260,92 @@ if('serviceWorker' in navigator){
     L0.marker.bindPopup(html, {minWidth:180}).openPopup();
   }
 
+  // Carga la capa editable de lotes (hoja Lotes Estancias).
+  function _mapaLoadLotesData(cb){
+    fetch(CRM_API + '?action=crmLotes')
+      .then(function(r){ return r.json(); })
+      .then(function(d){
+        _mapaLotesData = {};
+        (d.lotes||[]).forEach(function(r){ _mapaLotesData[_crmNormName(r.sub)+'|'+_loteNorm(r.lote)] = r; });
+        if (cb) cb();
+      })
+      .catch(function(){ if (cb) cb(); });
+  }
+
+  // Ficha completa del lote: ventas (CRM) + datos de territorio editables.
+  window.crmOpenLote = function(L0){
+    var sub = L0.zona>=0 ? (_subZonas[L0.zona] && _subZonas[L0.zona].nombre) : '';
+    var lote = L0.n;
+    el('crmDrawerTitle').textContent = (sub||'Lote') + ' · Lote ' + lote;
+    openDrawer();
+    _renderFichaLote(L0, sub, lote);
+  };
+
+  function _renderFichaLote(L0, sub, lote){
+    var u = L0.cli; // hogar segun ventas
+    var rec = _mapaLotesData[_crmNormName(sub)+'|'+_loteNorm(lote)] || {};
+    var relTxt, relCol;
+    if (u){
+      if (u.diasUltima<0){ relTxt='Cliente'; relCol='#9E9E9E'; }
+      else if (u.diasUltima<=28){ relTxt='Cliente activo'; relCol='#43A047'; }
+      else if (u.diasUltima<=90){ relTxt='Cliente dormido'; relCol='#FB8C00'; }
+      else { relTxt='Cliente inactivo'; relCol='#E53935'; }
+    } else { relTxt='Prospecto'; relCol='#9E9E9E'; }
+
+    var html = '<div class="crm-ficha-name">'+escHtml(sub||'')+' &middot; Lote '+escHtml(lote)+'</div>'
+      + '<div class="crm-ficha-meta"><span style="color:'+relCol+';font-weight:700">'+relTxt+'</span>'+(rec.estadoContacto?'<span>'+escHtml(rec.estadoContacto)+'</span>':'')+'</div>';
+
+    if (u){
+      var freq = (u.contacto && u.contacto.frecuencia>0) ? 'cada '+u.contacto.frecuencia+'d' : '-';
+      html += '<div class="crm-kpis">'
+        + '<div class="crm-kpi"><div class="crm-kpi-l">Pedidos</div><div class="crm-kpi-v">'+u.entregados+'</div></div>'
+        + '<div class="crm-kpi"><div class="crm-kpi-l">Facturado</div><div class="crm-kpi-v">$'+fmt$(u.facturado)+'</div></div>'
+        + '<div class="crm-kpi"><div class="crm-kpi-l">Frecuencia</div><div class="crm-kpi-v">'+freq+'</div><div class="crm-kpi-s">ult: '+(u.diasUltima>=0?'hace '+u.diasUltima+'d':'-')+'</div></div>'
+        + '<div class="crm-kpi'+(u.deuda>0?' crm-kpi-alert':'')+'"><div class="crm-kpi-l">Deuda</div><div class="crm-kpi-v">$'+fmt$(u.deuda)+'</div></div>'
+      + '</div>';
+      html += '<div class="crm-section"><div class="crm-section-h">Integrantes (segun ventas)</div>'
+        + u.members.map(function(m){ return '<div class="crm-row"><span class="crm-row-l">'+escHtml(m.nombre)+'</span><span class="crm-row-v">'+(m.telDisplay?escHtml(m.telDisplay):(m.tel?escHtml(m.tel):'sin tel'))+'</span></div>'; }).join('')
+      + '</div>';
+      var telWp = u.contacto.tel ? 'https://wa.me/549'+u.contacto.tel : '';
+      html += '<div class="crm-tags-row">'+(telWp?'<a class="crm-wp-btn" href="'+telWp+'" target="_blank">WhatsApp</a>':'')+'<button class="crm-edit-btn" onclick="crmOpenCliente(\''+encodeURIComponent(u.contacto.key)+'\')">Ver ficha completa</button></div>';
+    }
+
+    var ESTADOS = ['', 'Cliente', 'Nos conoce', 'Folleto en mano', 'Folleto bajo puerta', 'No había nadie', 'No nos conoce todavía', 'Visita pendiente'];
+    html += '<div class="crm-section"><div class="crm-section-h">Ficha del lote (editable)</div><div class="crm-meta-form">'
+      + '<div class="fg"><label>Estado de contacto</label><select id="loteEstado">'+ESTADOS.map(function(o){ return '<option'+(o===(rec.estadoContacto||'')?' selected':'')+'>'+escHtml(o)+'</option>'; }).join('')+'</select></div>'
+      + '<div class="fg"><label>Familia (apellido)</label><input id="loteFamilia" value="'+escHtml(rec.familia||'')+'" placeholder="ej. Fernandez"></div>'
+      + '<div class="fg"><label>Integrantes / quién vive</label><textarea id="loteIntegrantes" rows="2" placeholder="ej. Claudio, Jimena y 2 hijos">'+escHtml(rec.integrantes||'')+'</textarea></div>'
+      + '<div class="fg"><label>Titular del lote (a quién contactar)</label><input id="loteTitular" value="'+escHtml(rec.titular||'')+'" placeholder="ej. Claudio"></div>'
+      + '<div class="fg"><label>Teléfono extra</label><input id="loteTel" value="'+escHtml(rec.tel||'')+'" placeholder="opcional"></div>'
+      + '<div class="fg"><label>Notas</label><textarea id="loteNotas" rows="3" placeholder="freezer chico, prefiere que avise antes, etc.">'+escHtml(rec.notas||'')+'</textarea></div>'
+      + '<button class="btn-submit" onclick="crmLoteGuardar(\''+encodeURIComponent(sub)+'\',\''+encodeURIComponent(lote)+'\')" style="margin-top:6px">Guardar lote</button>'
+    + '</div></div>';
+
+    el('crmDrawerBody').innerHTML = html;
+  }
+
+  window.crmLoteGuardar = function(subEnc, loteEnc){
+    var sub = decodeURIComponent(subEnc), lote = decodeURIComponent(loteEnc);
+    var body = {
+      action:'crmLoteSave', sub:sub, lote:lote,
+      estadoContacto: el('loteEstado').value,
+      familia: el('loteFamilia').value.trim(),
+      integrantes: el('loteIntegrantes').value.trim(),
+      titular: el('loteTitular').value.trim(),
+      tel: el('loteTel').value.trim(),
+      notas: el('loteNotas').value.trim()
+    };
+    fetch(CRM_API, {method:'POST', mode:'cors', body: JSON.stringify(body)})
+      .then(function(r){ return r.json(); })
+      .then(function(d){
+        if (d.ok){
+          toast('Lote guardado');
+          _mapaLotesData[_crmNormName(sub)+'|'+_loteNorm(lote)] = {sub:sub, lote:lote, estadoContacto:body.estadoContacto, familia:body.familia, integrantes:body.integrantes, titular:body.titular, notas:body.notas, tel:body.tel};
+        } else toast('Error: '+(d.error||''));
+      })
+      .catch(function(err){ toast('Error: '+err.message); });
+  };
+
   window.mapaToggleSolo = function(){
     _mapaSoloAsignados = !_mapaSoloAsignados;
     var b = el('mapaSoloBtn');
@@ -10370,7 +10456,7 @@ if('serviceWorker' in navigator){
             var m = L.circleMarker([c[1], c[0]], {radius:5, color:'#fff', weight:1, fillColor:'#9E9E9E', fillOpacity:.95});
             m.bindTooltip('Lote '+f.properties.n, {direction:'top', offset:[0,-4]});
             var lo = {n:f.properties.n, lat:c[1], lng:c[0], marker:m, zona:-1, cli:null};
-            m.on('click', function(){ _mapaLotePopup(lo); });
+            m.on('click', function(){ crmOpenLote(lo); });
             _mapaLotesLayer.addLayer(m);
             _mapaLotes.push(lo);
           });
@@ -10384,6 +10470,7 @@ if('serviceWorker' in navigator){
           } catch(e){}
           setTimeout(function(){ try{ _mapaObj.invalidateSize(); }catch(e){} }, 120);
           _cargarZonas();
+          _mapaLoadLotesData();
           // Cruce con ventas: cargar clientes (si faltan) y repintar/recalcular.
           _mapaEnsureClientes(function(){ _mapaBuildCliIndex(); _recolorLotes(); _renderLegend(); });
         })
