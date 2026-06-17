@@ -680,9 +680,20 @@ body{font-family:'Inter',-apple-system,'Segoe UI',system-ui,sans-serif;backgroun
 .mapa-info{font-size:13px;color:var(--ink2);font-weight:500}
 .mapa-info b{color:var(--ink);font-weight:700}
 .mapa-hint{font-size:11px;color:var(--ink3)}
-.mapa-canvas{height:calc(100vh - 230px);min-height:420px;border-radius:8px;overflow:hidden;border:1px solid var(--border);background:#dfe6e9}
+.mapa-draw-btn{padding:6px 12px;border:1px solid var(--o);background:var(--o);color:#fff;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;transition:.12s;white-space:nowrap}
+.mapa-draw-btn:hover{background:#D9663A}
+.mapa-legend{display:flex;flex-wrap:wrap;gap:6px 12px;margin-bottom:8px;font-size:11px;color:var(--ink2)}
+.mapa-legend:empty{display:none}
+.mapa-leg-item{display:inline-flex;align-items:center;gap:5px}
+.mapa-leg-sw{width:11px;height:11px;border-radius:3px;display:inline-block;border:1px solid rgba(0,0,0,.15)}
+.mapa-leg-item b{color:var(--ink);font-weight:700}
+.mapa-leg-del{border:none;background:none;color:var(--ink4);cursor:pointer;font-size:14px;line-height:1;padding:0 2px}
+.mapa-leg-del:hover{color:var(--r)}
+.mapa-canvas{height:calc(100vh - 250px);min-height:420px;border-radius:8px;overflow:hidden;border:1px solid var(--border);background:#dfe6e9}
 .mapa-canvas .leaflet-container{height:100%;width:100%;font-family:inherit}
-@media(max-width:768px){ .mapa-canvas{height:calc(100vh - 250px)} .mapa-hint{display:none} }
+.leaflet-tooltip.mapa-zona-lbl{background:rgba(255,255,255,.88);border:none;box-shadow:none;color:#331C1C;font-weight:700;font-size:11px;padding:1px 6px;border-radius:4px}
+.leaflet-tooltip.mapa-zona-lbl::before{display:none}
+@media(max-width:768px){ .mapa-canvas{height:calc(100vh - 270px)} }
 .crm-variants{background:var(--cr);border-radius:4px;padding:8px 10px;font-size:11px;color:var(--ink2);margin-bottom:10px}
 .crm-variants b{color:var(--ink);font-weight:600}
 .crm-meta-form .fg{margin-bottom:8px}
@@ -2089,8 +2100,9 @@ body.role-single .statusbar{font-size:11px}
   <div class="bbdd-sub" id="bbdd-mapa">
     <div class="mapa-bar">
       <span class="mapa-info">Estancias del Pilar &middot; <b id="mapaCount">…</b> lotes</span>
-      <span class="mapa-hint">Toc&aacute; un lote para ver su n&uacute;mero</span>
+      <button class="mapa-draw-btn" onclick="mapaDibujarZona()">&#9999;&#65039; Dibujar sub-barrio</button>
     </div>
+    <div id="mapaLegend" class="mapa-legend"></div>
     <div id="mapaMap" class="mapa-canvas"></div>
   </div>
 
@@ -5199,7 +5211,13 @@ function rInicio(){
     return {nuevos:nuevos,recompra:recompra,react:react,total:nuevos+recompra+react};
   }
   function saludClientesHTML(w){
-    var s=saludClientesSemana(w);
+    // Preferir la salud calculada en backend con identidad canónica del CRM
+    // (teléfono + fusiones "Clientes Merge"): no se deja engañar por un mismo
+    // cliente cargado con nombres distintos. Fallback al cálculo local por
+    // nombre crudo solo si el backend todavía no la mandó (deploy viejo / offline).
+    var s=(D.saludHome&&D.saludHome.sem===w)
+      ?{nuevos:D.saludHome.nuevos,recompra:D.saludHome.recompra,react:D.saludHome.react,total:D.saludHome.total}
+      :saludClientesSemana(w);
     if(s.total===0)return '';
     function chip(emoji,n,lbl,col){
       return '<div style="flex:1;background:#fff;border:1px solid var(--cd);border-radius:10px;padding:7px 4px;text-align:center">'
@@ -9930,55 +9948,143 @@ if('serviceWorker' in navigator){
   }
 
   // ════════ F2: MAPA DE LOTES (Estancias del Pilar) ════════
-  var _mapaObj = null;
-  // Carga Leaflet bajo demanda (solo cuando se abre el Mapa la primera vez).
+  var _mapaObj = null, _mapaLotes = [], _mapaZonas = [], _mapaZonasLayer = null, _mapaDrawHooked = false;
+  var SUBBARRIOS = ['Champagnat Alto','Champagnat Bajo','El Recuerdo','Golf','La Pionera','Argentina 1','Argentina 2','Argentina 3','Argentina 4','La Paz','Los Alcanfores','Estancias del Rio'];
+  var ZCOLORS = ['#E53935','#8E24AA','#3949AB','#039BE5','#00897B','#43A047','#C0CA33','#FB8C00','#6D4C41','#F4511E','#D81B60','#5E35B1','#1E88E5','#00ACC1','#7CB342','#FDD835'];
+
+  // Carga Leaflet + Leaflet.draw bajo demanda (solo al abrir el Mapa la 1ra vez).
   function _ensureLeaflet(cb){
-    if (window.L) { cb(); return; }
-    var css = document.createElement('link');
-    css.rel = 'stylesheet'; css.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
-    document.head.appendChild(css);
-    var js = document.createElement('script');
-    js.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
-    js.onload = cb;
-    js.onerror = function(){ el('mapaMap').innerHTML = '<div class="empty" style="padding:40px"><p>No se pudo cargar el mapa (revisá la conexión)</p></div>'; };
-    document.head.appendChild(js);
+    function loadCss(href){ var l=document.createElement('link'); l.rel='stylesheet'; l.href=href; document.head.appendChild(l); }
+    function loadJs(src, done){ var s=document.createElement('script'); s.src=src; s.onload=done; s.onerror=function(){ el('mapaMap').innerHTML='<div class="empty" style="padding:40px"><p>No se pudo cargar el mapa (revisá la conexión)</p></div>'; }; document.head.appendChild(s); }
+    function afterLeaflet(){
+      if (window.L && window.L.Draw) { cb(); return; }
+      loadCss('https://cdn.jsdelivr.net/npm/leaflet-draw@1.0.4/dist/leaflet.draw.css');
+      loadJs('https://cdn.jsdelivr.net/npm/leaflet-draw@1.0.4/dist/leaflet.draw.js', cb);
+    }
+    if (window.L) { afterLeaflet(); return; }
+    loadCss('https://unpkg.com/leaflet@1.9.4/dist/leaflet.css');
+    loadJs('https://unpkg.com/leaflet@1.9.4/dist/leaflet.js', afterLeaflet);
+  }
+
+  // Punto-en-polígono (poly = [[lat,lng],...]) por ray-casting.
+  function _pip(lat, lng, poly){
+    var inside=false;
+    for (var i=0, j=poly.length-1; i<poly.length; j=i++){
+      var yi=poly[i][0], xi=poly[i][1], yj=poly[j][0], xj=poly[j][1];
+      if (((yi>lat)!==(yj>lat)) && (lng < (xj-xi)*(lat-yi)/(yj-yi)+xi)) inside=!inside;
+    }
+    return inside;
+  }
+  function _zonaDe(lat, lng){ for (var i=0;i<_mapaZonas.length;i++){ if (_pip(lat,lng,_mapaZonas[i].poly)) return i; } return -1; }
+  function _zColor(i){ return ZCOLORS[i % ZCOLORS.length]; }
+
+  function _recolorLotes(){
+    _mapaLotes.forEach(function(L0){
+      var zi = _zonaDe(L0.lat, L0.lng); L0.zona = zi;
+      L0.marker.setStyle({fillColor: zi>=0 ? _zColor(zi) : '#9E9E9E'});
+    });
+  }
+  function _renderZonas(){
+    if (!_mapaZonasLayer) return;
+    _mapaZonasLayer.clearLayers();
+    _mapaZonas.forEach(function(z, i){
+      var col = _zColor(i);
+      var pg = L.polygon(z.poly, {color:col, weight:2, fillColor:col, fillOpacity:.10});
+      pg.bindTooltip(z.nombre, {permanent:true, direction:'center', className:'mapa-zona-lbl'});
+      _mapaZonasLayer.addLayer(pg);
+    });
+  }
+  function _renderLegend(){
+    var elg = el('mapaLegend'); if (!elg) return;
+    var counts = _mapaZonas.map(function(){ return 0; }), sin = 0;
+    _mapaLotes.forEach(function(L0){ if (L0.zona>=0) counts[L0.zona]++; else sin++; });
+    var html = _mapaZonas.map(function(z,i){
+      return '<span class="mapa-leg-item"><span class="mapa-leg-sw" style="background:'+_zColor(i)+'"></span>'+escHtml(z.nombre)+' <b>'+counts[i]+'</b>'
+        + '<button class="mapa-leg-del" title="Borrar zona" onclick="mapaBorrarZona(\''+encodeURIComponent(z.nombre)+'\')">&times;</button></span>';
+    }).join('');
+    html += '<span class="mapa-leg-item"><span class="mapa-leg-sw" style="background:#9E9E9E"></span>Sin asignar <b>'+sin+'</b></span>';
+    elg.innerHTML = html;
+  }
+  function _cargarZonas(){
+    fetch(CRM_API + '?action=crmZonas')
+      .then(function(r){ return r.json(); })
+      .then(function(d){
+        _mapaZonas = (d.zonas||[]).filter(function(z){ return z.poly && z.poly.length>=3; });
+        _renderZonas(); _recolorLotes(); _renderLegend();
+      })
+      .catch(function(){});
   }
 
   window.initMapaEstancias = function(){
-    // Ya inicializado: solo recalcular tamaño (el contenedor recién se hizo visible)
     if (_mapaObj) { setTimeout(function(){ try{ _mapaObj.invalidateSize(); }catch(e){} }, 120); return; }
     _ensureLeaflet(function(){
       // Encerrado en Estancias del Pilar: no se puede alejar al mundo ni salir del barrio.
       _mapaObj = L.map('mapaMap', {preferCanvas:true, zoomControl:true, scrollWheelZoom:true, minZoom:14, maxZoom:20, maxBoundsViscosity:1.0});
-      // maxNativeZoom: a partir de ahi Leaflet AGRANDA la ultima imagen disponible
-      // (en vez de pedir tiles que no existen y mostrar "Map data not yet available").
+      // maxNativeZoom: a partir de ahi Leaflet AGRANDA la ultima imagen (no "Map data not yet available").
       var sat = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {maxNativeZoom:18, maxZoom:20, attribution:'Esri World Imagery'});
       var calle = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {maxNativeZoom:19, maxZoom:20, attribution:'© OpenStreetMap'});
       sat.addTo(_mapaObj);
       L.control.layers({'Satélite':sat, 'Calles':calle}, null, {position:'topright'}).addTo(_mapaObj);
       _mapaObj.setView([-34.48746, -58.99602], 16);
+      _mapaZonasLayer = L.layerGroup().addTo(_mapaObj);
+
+      // Al terminar de dibujar un polígono → pedir nombre y guardar la zona.
+      if (!_mapaDrawHooked){
+        _mapaObj.on(L.Draw.Event.CREATED, function(ev){
+          var pts = ev.layer.getLatLngs()[0].map(function(p){ return [Math.round(p.lat*1e6)/1e6, Math.round(p.lng*1e6)/1e6]; });
+          if (pts.length < 3){ toast('Dibujá al menos 3 puntos'); return; }
+          var nombre = prompt('Nombre del sub-barrio para esta zona:\n('+SUBBARRIOS.join(', ')+')');
+          if (!nombre || !nombre.trim()) return;
+          nombre = nombre.trim();
+          toast('Guardando zona...');
+          fetch(CRM_API, {method:'POST', mode:'cors', body: JSON.stringify({action:'crmZonaSave', nombre:nombre, poly:pts})})
+            .then(function(r){ return r.json(); })
+            .then(function(d){ if (d.ok){ toast('Zona guardada: '+nombre); _cargarZonas(); } else toast('Error: '+(d.error||'')); })
+            .catch(function(err){ toast('Error: '+err.message); });
+        });
+        _mapaDrawHooked = true;
+      }
+
       fetch('/data/estancias-nros.geojson')
         .then(function(r){ return r.json(); })
         .then(function(gj){
           var grp = L.featureGroup();
+          _mapaLotes = [];
           (gj.features||[]).forEach(function(f){
             var c = f.geometry.coordinates; // [lon, lat]
-            var m = L.circleMarker([c[1], c[0]], {radius:5, color:'#fff', weight:1, fillColor:'#F07D47', fillOpacity:.95});
+            var m = L.circleMarker([c[1], c[0]], {radius:5, color:'#fff', weight:1, fillColor:'#9E9E9E', fillOpacity:.95});
             m.bindTooltip('Lote '+f.properties.n, {direction:'top', offset:[0,-4]});
             grp.addLayer(m);
+            _mapaLotes.push({n:f.properties.n, lat:c[1], lng:c[0], marker:m, zona:-1});
           });
           grp.addTo(_mapaObj);
-          var mc = el('mapaCount'); if (mc) mc.textContent = (gj.features||[]).length;
+          var mc = el('mapaCount'); if (mc) mc.textContent = _mapaLotes.length;
           try {
             var b = grp.getBounds();
             _mapaObj.fitBounds(b.pad(0.03));
-            _mapaObj.setMaxBounds(b.pad(0.25));               // no salir del barrio
-            _mapaObj.setMinZoom(Math.max(14, _mapaObj.getZoom() - 1)); // no alejarse mas alla del barrio
+            _mapaObj.setMaxBounds(b.pad(0.25));
+            _mapaObj.setMinZoom(Math.max(14, _mapaObj.getZoom() - 1));
           } catch(e){}
           setTimeout(function(){ try{ _mapaObj.invalidateSize(); }catch(e){} }, 120);
+          _cargarZonas();
         })
         .catch(function(){ el('mapaMap').innerHTML = '<div class="empty" style="padding:40px"><p>No se pudieron cargar los lotes</p></div>'; });
     });
+  };
+
+  window.mapaDibujarZona = function(){
+    if (!_mapaObj || !window.L || !L.Draw){ toast('El mapa todavía se está cargando'); return; }
+    toast('Tocá los vértices del sub-barrio. Cerrá tocando el primer punto.');
+    new L.Draw.Polygon(_mapaObj, {allowIntersection:false, shapeOptions:{color:'#F07D47', weight:2}}).enable();
+  };
+
+  window.mapaBorrarZona = function(nombreEnc){
+    var nombre = decodeURIComponent(nombreEnc);
+    if (!confirm('Borrar la zona "'+nombre+'"? Los lotes quedan sin asignar.')) return;
+    fetch(CRM_API, {method:'POST', mode:'cors', body: JSON.stringify({action:'crmZonaDelete', nombre:nombre})})
+      .then(function(r){ return r.json(); })
+      .then(function(d){ if (d.ok){ toast('Zona borrada'); _cargarZonas(); } else toast('Error'); })
+      .catch(function(err){ toast('Error: '+err.message); });
   };
 
   window.crmCopyTel = function(tel){
