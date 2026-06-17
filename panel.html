@@ -748,6 +748,13 @@ body{font-family:'Inter',-apple-system,'Segoe UI',system-ui,sans-serif;backgroun
 .mapa-leg-del{border:none;background:none;color:var(--ink4);cursor:pointer;font-size:14px;line-height:1;padding:0 2px}
 .mapa-leg-del:hover{color:var(--r)}
 .mapa-leg-excl{color:var(--ink3);font-style:italic}
+.mapa-pop{font-family:inherit;min-width:170px}
+.mapa-pop-h{font-size:12px;font-weight:700;color:var(--ink);margin-bottom:4px}
+.mapa-pop-cli{font-size:13px;font-weight:600;color:var(--ink);margin-bottom:2px}
+.mapa-pop-meta{font-size:11px;color:var(--ink2);margin-bottom:2px}
+.mapa-pop-acts{display:flex;gap:6px;margin-top:7px}
+.mapa-pop-btn{display:inline-flex;align-items:center;justify-content:center;padding:5px 10px;border:1px solid var(--o);background:var(--o);color:#fff;border-radius:5px;font-size:11px;font-weight:600;cursor:pointer;font-family:inherit;text-decoration:none}
+.mapa-pop-btn.wa{background:#25D366;border-color:#25D366}
 .mapa-canvas{height:calc(100vh - 250px);min-height:420px;border-radius:8px;overflow:hidden;border:1px solid var(--border);background:#dfe6e9}
 .mapa-canvas .leaflet-container{height:100%;width:100%;font-family:inherit}
 .leaflet-tooltip.mapa-zona-lbl{background:rgba(255,255,255,.88);border:none;box-shadow:none;color:#331C1C;font-weight:700;font-size:11px;padding:1px 6px;border-radius:4px}
@@ -2184,6 +2191,7 @@ body.role-single .statusbar{font-size:11px}
     <div class="mapa-bar">
       <span class="mapa-info">Estancias del Pilar &middot; <b id="mapaCount">…</b> lotes</span>
       <span class="mapa-bar-actions">
+        <button id="mapaColorBtn" class="mapa-toggle-btn" onclick="mapaColorPor()">Color: sub-barrio</button>
         <button id="mapaSoloBtn" class="mapa-toggle-btn" onclick="mapaToggleSolo()">Ver: todos los lotes</button>
         <button class="mapa-toggle-btn" onclick="mapaGoogleEarth()" title="Abrir esta zona en Google Earth (perspectiva 3D)">&#127758; Ver en 3D</button>
         <button class="mapa-toggle-btn" onclick="mapaMarcarAfuera()">&#128465;&#65039; Borrar zona de afuera</button>
@@ -10127,6 +10135,7 @@ if('serviceWorker' in navigator){
 
   // ════════ F2: MAPA DE LOTES (Estancias del Pilar) ════════
   var _mapaObj = null, _mapaLotes = [], _mapaZonas = [], _subZonas = [], _exclZonas = [], _mapaZonasLayer = null, _mapaLotesLayer = null, _mapaDrawHooked = false, _mapaSoloAsignados = false, _mapaDrawTipo = 'zona';
+  var _mapaColorMode = 'subbarrio', _mapaLoteCli = {};
   var SUBBARRIOS = ['Champagnat Alto','Champagnat Bajo','El Recuerdo','Golf','La Pionera','Argentina 1','Argentina 2','Argentina 3','Argentina 4','La Paz','Los Alcanfores','Estancias del Rio'];
   var ZCOLORS = ['#E53935','#8E24AA','#3949AB','#039BE5','#00897B','#43A047','#C0CA33','#FB8C00','#6D4C41','#F4511E','#D81B60','#5E35B1','#1E88E5','#00ACC1','#7CB342','#FDD835'];
 
@@ -10157,16 +10166,69 @@ if('serviceWorker' in navigator){
   function _enExcl(lat, lng){ for (var i=0;i<_exclZonas.length;i++){ if (_pip(lat,lng,_exclZonas[i].poly)) return true; } return false; }
   function _zColor(i){ return ZCOLORS[i % ZCOLORS.length]; }
 
+  // Normaliza un número de lote para cruzar mapa↔ventas (saca ceros a la izquierda).
+  function _loteNorm(s){ s = String(s||'').trim().replace(/^0+/,''); return s || '0'; }
+
+  // Índice lote→clientes: key = subBarrioNorm|loteNorm → hogar agregado.
+  function _mapaBuildCliIndex(){
+    _mapaLoteCli = {};
+    if (!crmClientes) return;
+    crmClientes.forEach(function(c){
+      if (!c.lote || !c.subBarrio) return;
+      var key = _crmNormName(c.subBarrio)+'|'+_loteNorm(c.lote);
+      var u = _mapaLoteCli[key];
+      if (!u){ u = _mapaLoteCli[key] = {members:[], deuda:0, entregados:0, facturado:0, diasUltima:-1, ultimaFecha:'', contacto:null}; }
+      u.members.push(c);
+      u.deuda += (c.deuda||0); u.entregados += (c.entregados||0); u.facturado += (c.facturado||0);
+      if (typeof c.diasUltima==='number' && c.diasUltima>=0 && (u.diasUltima<0 || c.diasUltima<u.diasUltima)){ u.diasUltima=c.diasUltima; u.ultimaFecha=c.ultimaFecha; }
+    });
+    Object.keys(_mapaLoteCli).forEach(function(k){
+      var u=_mapaLoteCli[k]; var cand=u.members.filter(function(m){return m.tel;}); if(!cand.length)cand=u.members;
+      cand.sort(function(a,b){ return (b.entregados-a.entregados) || (b.pedidos-a.pedidos); }); u.contacto=cand[0];
+    });
+  }
+  function _mapaEnsureClientes(cb){
+    if (crmClientes){ cb(); return; }
+    fetch(CRM_API + '?action=crmClientes').then(function(r){return r.json();})
+      .then(function(d){ crmClientes = d.clientes||[]; cb(); }).catch(function(){ cb(); });
+  }
+  // Cliente (hogar) que corresponde a un lote del mapa, o null.
+  function _mapaCliDe(L0){
+    if (L0.zona < 0) return null;
+    var sub = _subZonas[L0.zona] && _subZonas[L0.zona].nombre;
+    if (!sub) return null;
+    return _mapaLoteCli[_crmNormName(sub)+'|'+_loteNorm(L0.n)] || null;
+  }
+  // Color de un lote en modo "cliente" según recencia del hogar.
+  function _mapaCliColor(u){
+    if (!u) return '#C8C8C8';                 // prospecto (nunca compró)
+    if (u.diasUltima < 0) return '#9E9E9E';
+    if (u.diasUltima <= 28) return '#43A047'; // activo
+    if (u.diasUltima <= 90) return '#FB8C00'; // dormido
+    return '#E53935';                          // inactivo
+  }
+
+  window.mapaColorPor = function(){
+    _mapaColorMode = (_mapaColorMode === 'cliente') ? 'subbarrio' : 'cliente';
+    var b = el('mapaColorBtn');
+    if (b) b.textContent = _mapaColorMode==='cliente' ? 'Color: clientes/ventas' : 'Color: sub-barrio';
+    _recolorLotes(); _renderLegend();
+  };
+
   function _recolorLotes(){
     _mapaLotes.forEach(function(L0){
       // Zona "de afuera": el lote se saca del mapa siempre
       if (_enExcl(L0.lat, L0.lng)){
-        L0.zona = -2;
+        L0.zona = -2; L0.cli = null;
         if (_mapaLotesLayer && _mapaLotesLayer.hasLayer(L0.marker)) _mapaLotesLayer.removeLayer(L0.marker);
         return;
       }
       var zi = _zonaDe(L0.lat, L0.lng); L0.zona = zi;
-      L0.marker.setStyle({fillColor: zi>=0 ? _zColor(zi) : '#9E9E9E'});
+      L0.cli = _mapaCliDe(L0);
+      var col, rad = 5;
+      if (_mapaColorMode === 'cliente'){ col = _mapaCliColor(L0.cli); if (L0.cli) rad = 6; }
+      else { col = zi>=0 ? _zColor(zi) : '#9E9E9E'; }
+      L0.marker.setStyle({fillColor: col, radius: rad});
       // "Solo mis sub-barrios": ocultar lotes que no caen en ninguna zona
       if (_mapaLotesLayer){
         var visible = !(_mapaSoloAsignados && zi < 0);
@@ -10175,6 +10237,27 @@ if('serviceWorker' in navigator){
         else if (!visible && enMapa) _mapaLotesLayer.removeLayer(L0.marker);
       }
     });
+  }
+
+  // Popup al tocar un lote: hogar (si es cliente) o prospecto.
+  function _mapaLotePopup(L0){
+    var sub = L0.zona>=0 ? (_subZonas[L0.zona] && _subZonas[L0.zona].nombre) : 'sin sub-barrio';
+    var u = L0.cli;
+    var html = '<div class="mapa-pop"><div class="mapa-pop-h">'+escHtml(sub||'')+' &middot; Lote '+escHtml(L0.n)+'</div>';
+    if (u){
+      var nombres = u.members.map(function(m){ return escHtml(m.nombre); }).join(', ');
+      var est = u.diasUltima<0?'sin fecha':(u.diasUltima<=28?'Activo':(u.diasUltima<=90?'Dormido':'Inactivo'));
+      html += '<div class="mapa-pop-cli">'+nombres+'</div>';
+      html += '<div class="mapa-pop-meta">'+est+(u.ultimaFecha?' &middot; ult: '+escHtml(u.ultimaFecha)+' (hace '+u.diasUltima+'d)':'')+'</div>';
+      html += '<div class="mapa-pop-meta">$'+fmt$(u.facturado)+' facturado'+(u.deuda>0?' &middot; <b style="color:#E53935">$'+fmt$(u.deuda)+' deuda</b>':'')+'</div>';
+      html += '<div class="mapa-pop-acts"><button class="mapa-pop-btn" onclick="crmOpenCliente(\''+encodeURIComponent(u.contacto.key)+'\')">Ver ficha</button>';
+      if (u.contacto.tel) html += '<a class="mapa-pop-btn wa" href="https://wa.me/549'+u.contacto.tel+'" target="_blank" rel="noopener">WhatsApp</a>';
+      html += '</div>';
+    } else {
+      html += '<div class="mapa-pop-meta" style="color:#9E9E9E">Prospecto — sin ventas registradas</div>';
+    }
+    html += '</div>';
+    L0.marker.bindPopup(html, {minWidth:180}).openPopup();
   }
 
   window.mapaToggleSolo = function(){
@@ -10201,6 +10284,24 @@ if('serviceWorker' in navigator){
     var counts = _subZonas.map(function(){ return 0; }), sin = 0, excl = 0;
     _mapaLotes.forEach(function(L0){ if (L0.zona===-2) excl++; else if (L0.zona>=0) counts[L0.zona]++; else sin++; });
     var mc = el('mapaCount'); if (mc) mc.textContent = (_mapaLotes.length - excl);
+    // Modo "cliente": leyenda por estado de venta del hogar.
+    if (_mapaColorMode === 'cliente'){
+      var act=0,dor=0,ina=0,pro=0;
+      _mapaLotes.forEach(function(L0){
+        if (L0.zona===-2) return;
+        var u = L0.cli;
+        if (!u){ pro++; return; }
+        if (u.diasUltima<0 || u.diasUltima>90) ina++;
+        else if (u.diasUltima<=28) act++;
+        else dor++;
+      });
+      elg.innerHTML =
+        '<span class="mapa-leg-item"><span class="mapa-leg-sw" style="background:#43A047"></span>Activos <b>'+act+'</b></span>'
+      + '<span class="mapa-leg-item"><span class="mapa-leg-sw" style="background:#FB8C00"></span>Dormidos <b>'+dor+'</b></span>'
+      + '<span class="mapa-leg-item"><span class="mapa-leg-sw" style="background:#E53935"></span>Inactivos <b>'+ina+'</b></span>'
+      + '<span class="mapa-leg-item"><span class="mapa-leg-sw" style="background:#C8C8C8"></span>Prospectos <b>'+pro+'</b></span>';
+      return;
+    }
     var html = _subZonas.map(function(z,i){
       return '<span class="mapa-leg-item"><span class="mapa-leg-sw" style="background:'+_zColor(i)+'"></span>'+escHtml(z.nombre)+' <b>'+counts[i]+'</b>'
         + '<button class="mapa-leg-del" title="Borrar zona" onclick="mapaBorrarZona(\''+encodeURIComponent(z.nombre)+'\')">&times;</button></span>';
@@ -10268,8 +10369,10 @@ if('serviceWorker' in navigator){
             var c = f.geometry.coordinates; // [lon, lat]
             var m = L.circleMarker([c[1], c[0]], {radius:5, color:'#fff', weight:1, fillColor:'#9E9E9E', fillOpacity:.95});
             m.bindTooltip('Lote '+f.properties.n, {direction:'top', offset:[0,-4]});
+            var lo = {n:f.properties.n, lat:c[1], lng:c[0], marker:m, zona:-1, cli:null};
+            m.on('click', function(){ _mapaLotePopup(lo); });
             _mapaLotesLayer.addLayer(m);
-            _mapaLotes.push({n:f.properties.n, lat:c[1], lng:c[0], marker:m, zona:-1});
+            _mapaLotes.push(lo);
           });
           _mapaLotesLayer.addTo(_mapaObj);
           var mc = el('mapaCount'); if (mc) mc.textContent = _mapaLotes.length;
@@ -10281,6 +10384,8 @@ if('serviceWorker' in navigator){
           } catch(e){}
           setTimeout(function(){ try{ _mapaObj.invalidateSize(); }catch(e){} }, 120);
           _cargarZonas();
+          // Cruce con ventas: cargar clientes (si faltan) y repintar/recalcular.
+          _mapaEnsureClientes(function(){ _mapaBuildCliIndex(); _recolorLotes(); _renderLegend(); });
         })
         .catch(function(){ el('mapaMap').innerHTML = '<div class="empty" style="padding:40px"><p>No se pudieron cargar los lotes</p></div>'; });
     });
