@@ -692,6 +692,7 @@ body{font-family:'Inter',-apple-system,'Segoe UI',system-ui,sans-serif;backgroun
 .mapa-leg-item b{color:var(--ink);font-weight:700}
 .mapa-leg-del{border:none;background:none;color:var(--ink4);cursor:pointer;font-size:14px;line-height:1;padding:0 2px}
 .mapa-leg-del:hover{color:var(--r)}
+.mapa-leg-excl{color:var(--ink3);font-style:italic}
 .mapa-canvas{height:calc(100vh - 250px);min-height:420px;border-radius:8px;overflow:hidden;border:1px solid var(--border);background:#dfe6e9}
 .mapa-canvas .leaflet-container{height:100%;width:100%;font-family:inherit}
 .leaflet-tooltip.mapa-zona-lbl{background:rgba(255,255,255,.88);border:none;box-shadow:none;color:#331C1C;font-weight:700;font-size:11px;padding:1px 6px;border-radius:4px}
@@ -2129,6 +2130,7 @@ body.role-single .statusbar{font-size:11px}
       <span class="mapa-info">Estancias del Pilar &middot; <b id="mapaCount">…</b> lotes</span>
       <span class="mapa-bar-actions">
         <button id="mapaSoloBtn" class="mapa-toggle-btn" onclick="mapaToggleSolo()">Ver: todos los lotes</button>
+        <button class="mapa-toggle-btn" onclick="mapaMarcarAfuera()">&#128465;&#65039; Borrar zona de afuera</button>
         <button class="mapa-draw-btn" onclick="mapaDibujarZona()">&#9999;&#65039; Dibujar sub-barrio</button>
       </span>
     </div>
@@ -9978,7 +9980,7 @@ if('serviceWorker' in navigator){
   }
 
   // ════════ F2: MAPA DE LOTES (Estancias del Pilar) ════════
-  var _mapaObj = null, _mapaLotes = [], _mapaZonas = [], _mapaZonasLayer = null, _mapaLotesLayer = null, _mapaDrawHooked = false, _mapaSoloAsignados = false;
+  var _mapaObj = null, _mapaLotes = [], _mapaZonas = [], _subZonas = [], _exclZonas = [], _mapaZonasLayer = null, _mapaLotesLayer = null, _mapaDrawHooked = false, _mapaSoloAsignados = false, _mapaDrawTipo = 'zona';
   var SUBBARRIOS = ['Champagnat Alto','Champagnat Bajo','El Recuerdo','Golf','La Pionera','Argentina 1','Argentina 2','Argentina 3','Argentina 4','La Paz','Los Alcanfores','Estancias del Rio'];
   var ZCOLORS = ['#E53935','#8E24AA','#3949AB','#039BE5','#00897B','#43A047','#C0CA33','#FB8C00','#6D4C41','#F4511E','#D81B60','#5E35B1','#1E88E5','#00ACC1','#7CB342','#FDD835'];
 
@@ -10005,14 +10007,21 @@ if('serviceWorker' in navigator){
     }
     return inside;
   }
-  function _zonaDe(lat, lng){ for (var i=0;i<_mapaZonas.length;i++){ if (_pip(lat,lng,_mapaZonas[i].poly)) return i; } return -1; }
+  function _zonaDe(lat, lng){ for (var i=0;i<_subZonas.length;i++){ if (_pip(lat,lng,_subZonas[i].poly)) return i; } return -1; }
+  function _enExcl(lat, lng){ for (var i=0;i<_exclZonas.length;i++){ if (_pip(lat,lng,_exclZonas[i].poly)) return true; } return false; }
   function _zColor(i){ return ZCOLORS[i % ZCOLORS.length]; }
 
   function _recolorLotes(){
     _mapaLotes.forEach(function(L0){
+      // Zona "de afuera": el lote se saca del mapa siempre
+      if (_enExcl(L0.lat, L0.lng)){
+        L0.zona = -2;
+        if (_mapaLotesLayer && _mapaLotesLayer.hasLayer(L0.marker)) _mapaLotesLayer.removeLayer(L0.marker);
+        return;
+      }
       var zi = _zonaDe(L0.lat, L0.lng); L0.zona = zi;
       L0.marker.setStyle({fillColor: zi>=0 ? _zColor(zi) : '#9E9E9E'});
-      // "Solo mis sub-barrios": ocultar lotes que no caen en ninguna zona (afuera de Estancias)
+      // "Solo mis sub-barrios": ocultar lotes que no caen en ninguna zona
       if (_mapaLotesLayer){
         var visible = !(_mapaSoloAsignados && zi < 0);
         var enMapa = _mapaLotesLayer.hasLayer(L0.marker);
@@ -10031,22 +10040,30 @@ if('serviceWorker' in navigator){
   function _renderZonas(){
     if (!_mapaZonasLayer) return;
     _mapaZonasLayer.clearLayers();
-    _mapaZonas.forEach(function(z, i){
+    _subZonas.forEach(function(z, i){
       var col = _zColor(i);
       var pg = L.polygon(z.poly, {color:col, weight:2, fillColor:col, fillOpacity:.10});
       pg.bindTooltip(z.nombre, {permanent:true, direction:'center', className:'mapa-zona-lbl'});
       _mapaZonasLayer.addLayer(pg);
     });
+    _exclZonas.forEach(function(z){
+      L.polygon(z.poly, {color:'#9E9E9E', weight:1, dashArray:'4', fillColor:'#000', fillOpacity:.04, interactive:false}).addTo(_mapaZonasLayer);
+    });
   }
   function _renderLegend(){
     var elg = el('mapaLegend'); if (!elg) return;
-    var counts = _mapaZonas.map(function(){ return 0; }), sin = 0;
-    _mapaLotes.forEach(function(L0){ if (L0.zona>=0) counts[L0.zona]++; else sin++; });
-    var html = _mapaZonas.map(function(z,i){
+    var counts = _subZonas.map(function(){ return 0; }), sin = 0, excl = 0;
+    _mapaLotes.forEach(function(L0){ if (L0.zona===-2) excl++; else if (L0.zona>=0) counts[L0.zona]++; else sin++; });
+    var mc = el('mapaCount'); if (mc) mc.textContent = (_mapaLotes.length - excl);
+    var html = _subZonas.map(function(z,i){
       return '<span class="mapa-leg-item"><span class="mapa-leg-sw" style="background:'+_zColor(i)+'"></span>'+escHtml(z.nombre)+' <b>'+counts[i]+'</b>'
         + '<button class="mapa-leg-del" title="Borrar zona" onclick="mapaBorrarZona(\''+encodeURIComponent(z.nombre)+'\')">&times;</button></span>';
     }).join('');
     html += '<span class="mapa-leg-item"><span class="mapa-leg-sw" style="background:#9E9E9E"></span>Sin asignar <b>'+sin+'</b></span>';
+    _exclZonas.forEach(function(z){
+      html += '<span class="mapa-leg-item mapa-leg-excl"><span class="mapa-leg-sw" style="background:#000;opacity:.18"></span>'+escHtml(z.nombre)+'<button class="mapa-leg-del" title="Restaurar (borrar marca)" onclick="mapaBorrarZona(\''+encodeURIComponent(z.nombre)+'\')">&times;</button></span>';
+    });
+    if (excl>0) html += '<span class="mapa-leg-item" style="color:var(--ink4)">'+excl+' lotes de afuera ocultos</span>';
     elg.innerHTML = html;
   }
   function _cargarZonas(){
@@ -10054,6 +10071,8 @@ if('serviceWorker' in navigator){
       .then(function(r){ return r.json(); })
       .then(function(d){
         _mapaZonas = (d.zonas||[]).filter(function(z){ return z.poly && z.poly.length>=3; });
+        _subZonas = _mapaZonas.filter(function(z){ return z.tipo !== 'excluir'; });
+        _exclZonas = _mapaZonas.filter(function(z){ return z.tipo === 'excluir'; });
         _renderZonas(); _recolorLotes(); _renderLegend();
       })
       .catch(function(){});
@@ -10077,13 +10096,18 @@ if('serviceWorker' in navigator){
         _mapaObj.on(L.Draw.Event.CREATED, function(ev){
           var pts = ev.layer.getLatLngs()[0].map(function(p){ return [Math.round(p.lat*1e6)/1e6, Math.round(p.lng*1e6)/1e6]; });
           if (pts.length < 3){ toast('Dibujá al menos 3 puntos'); return; }
-          var nombre = prompt('Nombre del sub-barrio para esta zona:\n('+SUBBARRIOS.join(', ')+')');
-          if (!nombre || !nombre.trim()) return;
-          nombre = nombre.trim();
-          toast('Guardando zona...');
-          fetch(CRM_API, {method:'POST', mode:'cors', body: JSON.stringify({action:'crmZonaSave', nombre:nombre, poly:pts})})
+          var tipo = _mapaDrawTipo, nombre;
+          if (tipo === 'excluir'){
+            nombre = 'Afuera ' + (_exclZonas.length + 1);
+          } else {
+            nombre = prompt('Nombre del sub-barrio para esta zona:\n('+SUBBARRIOS.join(', ')+')');
+            if (!nombre || !nombre.trim()) return;
+            nombre = nombre.trim();
+          }
+          toast('Guardando...');
+          fetch(CRM_API, {method:'POST', mode:'cors', body: JSON.stringify({action:'crmZonaSave', nombre:nombre, poly:pts, tipo:tipo})})
             .then(function(r){ return r.json(); })
-            .then(function(d){ if (d.ok){ toast('Zona guardada: '+nombre); _cargarZonas(); } else toast('Error: '+(d.error||'')); })
+            .then(function(d){ if (d.ok){ toast(tipo==='excluir'?'Zona de afuera marcada':'Zona guardada: '+nombre); _cargarZonas(); } else toast('Error: '+(d.error||'')); })
             .catch(function(err){ toast('Error: '+err.message); });
         });
         _mapaDrawHooked = true;
@@ -10118,8 +10142,16 @@ if('serviceWorker' in navigator){
 
   window.mapaDibujarZona = function(){
     if (!_mapaObj || !window.L || !L.Draw){ toast('El mapa todavía se está cargando'); return; }
+    _mapaDrawTipo = 'zona';
     toast('Tocá los vértices del sub-barrio. Cerrá tocando el primer punto.');
     new L.Draw.Polygon(_mapaObj, {allowIntersection:false, shapeOptions:{color:'#F07D47', weight:2}}).enable();
+  };
+
+  window.mapaMarcarAfuera = function(){
+    if (!_mapaObj || !window.L || !L.Draw){ toast('El mapa todavía se está cargando'); return; }
+    _mapaDrawTipo = 'excluir';
+    toast('Rodeá la zona de AFUERA a borrar. Cerrá tocando el primer punto.');
+    new L.Draw.Polygon(_mapaObj, {allowIntersection:false, shapeOptions:{color:'#9E9E9E', weight:2, dashArray:'4'}}).enable();
   };
 
   window.mapaBorrarZona = function(nombreEnc){
