@@ -772,6 +772,7 @@ body{font-family:'Inter',-apple-system,'Segoe UI',system-ui,sans-serif;backgroun
 .mapa-draw-btn:hover{background:#D9663A}
 .mapa-toggle-btn{padding:6px 12px;border:1px solid var(--border);background:#fff;color:var(--ink2);border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;transition:.12s;white-space:nowrap}
 .mapa-toggle-btn:hover{border-color:var(--o);color:var(--o)}
+.mapa-toggle-btn.on{background:var(--o);color:#fff;border-color:var(--o)}
 .mapa-legend{display:flex;flex-wrap:wrap;gap:6px 12px;margin-bottom:8px;font-size:11px;color:var(--ink2)}
 .mapa-legend:empty{display:none}
 .mapa-leg-item{display:inline-flex;align-items:center;gap:5px}
@@ -2259,6 +2260,8 @@ body.role-single .statusbar{font-size:11px}
         <button id="mapaSoloBtn" class="mapa-toggle-btn" onclick="mapaToggleSolo()">Ver: todos los lotes</button>
         <button class="mapa-toggle-btn" onclick="mapaGoogleEarth()" title="Abrir esta zona en Google Earth (perspectiva 3D)">&#127758; Ver en 3D</button>
         <button class="mapa-toggle-btn" onclick="mapaMarcarAfuera()">&#128465;&#65039; Borrar zona de afuera</button>
+        <button id="mapaEditBtn" class="mapa-toggle-btn" onclick="mapaToggleEdit()">&#128205; Editar puntos</button>
+        <button id="mapaAddBtn" class="mapa-toggle-btn" onclick="mapaAgregarInit()" style="display:none">&#10133; Agregar lote</button>
         <button class="mapa-draw-btn" onclick="mapaDibujarZona()">&#9999;&#65039; Dibujar sub-barrio</button>
       </span>
     </div>
@@ -10226,6 +10229,7 @@ if('serviceWorker' in navigator){
   var _mapaObj = null, _mapaLotes = [], _mapaZonas = [], _subZonas = [], _exclZonas = [], _mapaZonasLayer = null, _mapaLotesLayer = null, _mapaDrawHooked = false, _mapaSoloAsignados = false, _mapaDrawTipo = 'zona';
   var _mapaColorMode = 'subbarrio', _mapaLoteCli = {}, _mapaLotesData = {};
   var _loteComp = {tipo:'', n1:'', n2:'', padre:'', madre:'', hijos:[]};
+  var _mapaBaseFeatures = [], _mapaPuntosOv = {}, _mapaEditMode = false, _mapaMovePending = null, _mapaAddPending = false;
   var SUBBARRIOS = ['Champagnat Alto','Champagnat Bajo','El Recuerdo','Golf','La Pionera','Argentina 1','Argentina 2','Argentina 3','Argentina 4','La Paz','Los Alcanfores','Estancias del Rio'];
   var ZCOLORS = ['#E53935','#8E24AA','#3949AB','#039BE5','#00897B','#43A047','#C0CA33','#FB8C00','#6D4C41','#F4511E','#D81B60','#5E35B1','#1E88E5','#00ACC1','#7CB342','#FDD835'];
 
@@ -10632,37 +10636,147 @@ if('serviceWorker' in navigator){
         _mapaDrawHooked = true;
       }
 
+      // Click en el mapa: resuelve un movimiento o alta de lote pendiente.
+      _mapaObj.on('click', function(e){
+        if (_mapaMovePending){ var id=_mapaMovePending; _mapaMovePending=null; _mapaPuntoMover(id, e.latlng); }
+        else if (_mapaAddPending){ _mapaAddPending=false; _mapaPuntoAgregar(e.latlng); }
+      });
+
       fetch('/data/estancias-nros.geojson')
         .then(function(r){ return r.json(); })
         .then(function(gj){
-          _mapaLotesLayer = L.featureGroup();
-          _mapaLotes = [];
-          (gj.features||[]).forEach(function(f){
-            var c = f.geometry.coordinates; // [lon, lat]
-            var m = L.circleMarker([c[1], c[0]], {radius:5, color:'#fff', weight:1, fillColor:'#9E9E9E', fillOpacity:.95});
-            m.bindTooltip('Lote '+f.properties.n, {direction:'top', offset:[0,-4]});
-            var lo = {n:f.properties.n, lat:c[1], lng:c[0], marker:m, zona:-1, cli:null};
-            m.on('click', function(){ crmOpenLote(lo); });
-            _mapaLotesLayer.addLayer(m);
-            _mapaLotes.push(lo);
+          _mapaBaseFeatures = gj.features || [];
+          _mapaLoadPuntos(function(){
+            _mapaBuildPuntos();
+            try {
+              var b = _mapaLotesLayer.getBounds();
+              _mapaObj.fitBounds(b.pad(0.03));
+              _mapaObj.setMaxBounds(b.pad(0.25));
+              _mapaObj.setMinZoom(Math.max(14, _mapaObj.getZoom() - 1));
+            } catch(e){}
+            setTimeout(function(){ try{ _mapaObj.invalidateSize(); }catch(e){} }, 120);
+            _cargarZonas();
+            _mapaLoadLotesData();
+            _mapaEnsureClientes(function(){ _mapaBuildCliIndex(); _recolorLotes(); _renderLegend(); });
           });
-          _mapaLotesLayer.addTo(_mapaObj);
-          var mc = el('mapaCount'); if (mc) mc.textContent = _mapaLotes.length;
-          try {
-            var b = _mapaLotesLayer.getBounds();
-            _mapaObj.fitBounds(b.pad(0.03));
-            _mapaObj.setMaxBounds(b.pad(0.25));
-            _mapaObj.setMinZoom(Math.max(14, _mapaObj.getZoom() - 1));
-          } catch(e){}
-          setTimeout(function(){ try{ _mapaObj.invalidateSize(); }catch(e){} }, 120);
-          _cargarZonas();
-          _mapaLoadLotesData();
-          // Cruce con ventas: cargar clientes (si faltan) y repintar/recalcular.
-          _mapaEnsureClientes(function(){ _mapaBuildCliIndex(); _recolorLotes(); _renderLegend(); });
         })
         .catch(function(){ el('mapaMap').innerHTML = '<div class="empty" style="padding:40px"><p>No se pudieron cargar los lotes</p></div>'; });
     });
   };
+
+  // Carga las correcciones de puntos (hoja Lotes Puntos) keyeadas por id.
+  function _mapaLoadPuntos(cb){
+    fetch(CRM_API + '?action=crmPuntos')
+      .then(function(r){ return r.json(); })
+      .then(function(d){
+        _mapaPuntosOv = {};
+        (d.puntos||[]).forEach(function(p){ _mapaPuntosOv[p.id] = p; });
+        if (cb) cb();
+      })
+      .catch(function(){ if (cb) cb(); });
+  }
+
+  // Crea un marcador de lote y lo registra en _mapaLotes.
+  function _mapaAddMarker(id, n, lat, lng){
+    var m = L.circleMarker([lat, lng], {radius:5, color:'#fff', weight:1, fillColor:'#9E9E9E', fillOpacity:.95});
+    m.bindTooltip('Lote '+n, {direction:'top', offset:[0,-4]});
+    var lo = {id:id, n:n, lat:lat, lng:lng, marker:m, zona:-1, cli:null, rec:null};
+    m.on('click', function(){
+      if (_mapaMovePending || _mapaAddPending) return;   // el click del mapa lo resuelve
+      if (_mapaEditMode) _mapaPuntoEditMenu(lo);
+      else crmOpenLote(lo);
+    });
+    _mapaLotesLayer.addLayer(m);
+    _mapaLotes.push(lo);
+  }
+
+  // Construye todos los puntos: base (GeoJSON) + correcciones (movidos/renombrados/borrados/agregados).
+  function _mapaBuildPuntos(){
+    if (_mapaLotesLayer) { _mapaLotesLayer.clearLayers(); }
+    _mapaLotesLayer = L.featureGroup();
+    _mapaLotes = [];
+    _mapaBaseFeatures.forEach(function(f, i){
+      var id = 'b'+i, ov = _mapaPuntosOv[id], c = f.geometry.coordinates;
+      if (ov && ov.borrado) return;
+      var lat = (ov && ov.lat) ? ov.lat : c[1];
+      var lng = (ov && ov.lng) ? ov.lng : c[0];
+      var n = (ov && ov.lote) ? ov.lote : f.properties.n;
+      _mapaAddMarker(id, n, lat, lng);
+    });
+    Object.keys(_mapaPuntosOv).forEach(function(id){
+      if (id.charAt(0) !== 'a') return;          // solo los agregados
+      var ov = _mapaPuntosOv[id];
+      if (ov.borrado || !ov.lat) return;
+      _mapaAddMarker(id, ov.lote, ov.lat, ov.lng);
+    });
+    _mapaLotesLayer.addTo(_mapaObj);
+    var mc = el('mapaCount'); if (mc) mc.textContent = _mapaLotes.length;
+  }
+
+  function _mapaPuntoSave(id, lote, lat, lng, borrado){
+    return fetch(CRM_API, {method:'POST', mode:'cors', body: JSON.stringify({action:'crmPuntoSave', id:id, lote:lote, lat:lat, lng:lng, borrado:borrado?1:0})})
+      .then(function(r){ return r.json(); });
+  }
+
+  // ── Modo edición de puntos ──
+  window.mapaToggleEdit = function(){
+    _mapaEditMode = !_mapaEditMode;
+    _mapaMovePending = null; _mapaAddPending = false;
+    var b = el('mapaEditBtn'); if (b) b.classList.toggle('on', _mapaEditMode);
+    var add = el('mapaAddBtn'); if (add) add.style.display = _mapaEditMode ? 'inline-flex' : 'none';
+    toast(_mapaEditMode ? 'Modo edición: tocá un lote para mover/renombrar/borrar' : 'Modo edición desactivado');
+  };
+
+  function _mapaPuntoEditMenu(lo){
+    var html = '<div class="mapa-pop"><div class="mapa-pop-h">Lote '+escHtml(lo.n)+'</div>'
+      + '<div class="mapa-pop-acts" style="flex-wrap:wrap">'
+      + '<button class="mapa-pop-btn" onclick="mapaPuntoMoverInit(\''+lo.id+'\')">Mover</button>'
+      + '<button class="mapa-pop-btn" onclick="mapaPuntoRenombrar(\''+lo.id+'\')">Renombrar</button>'
+      + '<button class="mapa-pop-btn" style="background:#E53935;border-color:#E53935" onclick="mapaPuntoBorrar(\''+lo.id+'\')">Borrar</button>'
+      + '</div></div>';
+    lo.marker.bindPopup(html, {minWidth:170}).openPopup();
+  }
+  function _mapaLoteById(id){ for (var i=0;i<_mapaLotes.length;i++){ if (_mapaLotes[i].id===id) return _mapaLotes[i]; } return null; }
+
+  window.mapaPuntoMoverInit = function(id){
+    _mapaMovePending = id;
+    var lo = _mapaLoteById(id); if (lo) lo.marker.closePopup();
+    toast('Tocá en el mapa la ubicación correcta del lote');
+  };
+  function _mapaPuntoMover(id, latlng){
+    var lo = _mapaLoteById(id); if (!lo) return;
+    lo.lat = Math.round(latlng.lat*1e6)/1e6; lo.lng = Math.round(latlng.lng*1e6)/1e6;
+    lo.marker.setLatLng([lo.lat, lo.lng]);
+    _mapaPuntoSave(id, lo.n, lo.lat, lo.lng, false).then(function(){ toast('Lote movido'); _recolorLotes(); });
+  }
+  window.mapaPuntoRenombrar = function(id){
+    var lo = _mapaLoteById(id); if (!lo) return;
+    var nuevo = prompt('Número de lote:', lo.n); if (nuevo===null) return;
+    nuevo = String(nuevo).trim(); if (!nuevo) return;
+    lo.n = nuevo; lo.marker.closePopup();
+    _mapaPuntoSave(id, lo.n, lo.lat, lo.lng, false).then(function(){ toast('Lote renombrado'); _recolorLotes(); _mapaUpdateTooltips(); });
+  };
+  window.mapaPuntoBorrar = function(id){
+    var lo = _mapaLoteById(id); if (!lo) return;
+    if (!confirm('Borrar el círculo del lote '+lo.n+'?')) return;
+    lo.marker.closePopup();
+    if (_mapaLotesLayer.hasLayer(lo.marker)) _mapaLotesLayer.removeLayer(lo.marker);
+    _mapaLotes = _mapaLotes.filter(function(x){ return x.id !== id; });
+    _mapaPuntoSave(id, lo.n, lo.lat, lo.lng, true).then(function(){ toast('Círculo borrado'); _renderLegend(); });
+  };
+  window.mapaAgregarInit = function(){
+    if (!_mapaEditMode){ toast('Activá primero "Editar puntos"'); return; }
+    _mapaAddPending = true;
+    toast('Tocá en el mapa dónde va el lote nuevo');
+  };
+  function _mapaPuntoAgregar(latlng){
+    var nuevo = prompt('Número del lote nuevo:'); if (nuevo===null) return;
+    nuevo = String(nuevo).trim(); if (!nuevo) return;
+    var id = 'a' + Date.now();
+    var lat = Math.round(latlng.lat*1e6)/1e6, lng = Math.round(latlng.lng*1e6)/1e6;
+    _mapaAddMarker(id, nuevo, lat, lng);
+    _mapaPuntoSave(id, nuevo, lat, lng, false).then(function(){ toast('Lote agregado'); _recolorLotes(); _renderLegend(); });
+  }
 
   window.mapaDibujarZona = function(){
     if (!_mapaObj || !window.L || !L.Draw){ toast('El mapa todavía se está cargando'); return; }
