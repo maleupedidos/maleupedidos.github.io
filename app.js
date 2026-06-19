@@ -429,6 +429,8 @@ function _updateCartTotals() {
 }
 function getShipping() {
   if (!currentZone) return 0;
+  // Cupón tipo ENVIO → envío gratis sin importar la zona/barrio.
+  if (getCouponShippingOverride()) return 0;
   const z = ZONAS[currentZone];
   // En Pilar: envío gratis solo en barrios Red (Marcos los reparte sin cobrar
   // en El Lucero / Los Tacos / Villa Bertha). Cualquier otro barrio (Pilara,
@@ -460,22 +462,156 @@ function discountsActive() {
   // promo bar y el incentivo del carrito en general.
   return cashDiscountActive() || bulkDiscountActive();
 }
+
+/* ── CUPÓN aplicado ─────────────────────────────────────────
+   Estado: appliedCoupon = {codigo, tipo, valor, scope, mensaje, stack}
+   o null si no hay cupón.
+
+   Regla por producto: gana el descuento más alto entre cupón y auto
+   (efectivo/+$100K). El cupón aplica solo a su scope (todo, cat, prod),
+   y los auto aplican solo a lo que NO está cubierto por el cupón. */
+let appliedCoupon = null;
+
+function _itemsInCart() {
+  return Object.entries(cart).map(function(e) {
+    const p = PROD_MAP[e[0]]; if (!p) return null;
+    return { id: p.id, abbr: PROD_ABBR[p.id] || '', cat: p.cat, precio: p.precio, qty: e[1] };
+  }).filter(Boolean);
+}
+function _subtotalForScope(scope) {
+  if (!scope) return 0;
+  const ix = scope.indexOf(':');
+  const key = (ix >= 0 ? scope.substring(0, ix) : scope).trim().toUpperCase();
+  const val = ix >= 0 ? scope.substring(ix + 1).trim() : '';
+  return _itemsInCart().reduce(function(sum, it) {
+    var match = false;
+    if (key === 'TODO') match = true;
+    else if (key === 'CATEGORIA' && it.cat === val) match = true;
+    else if (key === 'PRODUCTO' && it.abbr === val) match = true;
+    return sum + (match ? it.precio * it.qty : 0);
+  }, 0);
+}
+function getCouponDiscount() {
+  if (!appliedCoupon) return 0;
+  const sub = _subtotalForScope(appliedCoupon.scope);
+  if (sub <= 0) return 0;
+  if (appliedCoupon.tipo === 'PCT')  return Math.round(sub * (appliedCoupon.valor / 100));
+  if (appliedCoupon.tipo === 'ARS')  return Math.min(appliedCoupon.valor, sub);
+  return 0;
+}
+function couponAppliesToAll() {
+  // Cupón con scope=TODO cubre toda la base imponible para auto-descuentos
+  return appliedCoupon && /^TODO\b/i.test(appliedCoupon.scope || 'TODO');
+}
+
 function getCashDiscount() {
   const total = cartTotal();
   const sel = document.querySelector('input[name="pago"]:checked');
   const isCash = sel && sel.value === 'Efectivo';
   const isBulk = total >= 100000;
-  if (isCash && cashDiscountActive()) return Math.round(total * 0.10);
-  if (isBulk && bulkDiscountActive()) return Math.round(total * 0.10);
+  if (!isCash && !isBulk) return 0;
+  if (isCash && !cashDiscountActive() && (!isBulk || !bulkDiscountActive())) return 0;
+  if (!isCash && isBulk && !bulkDiscountActive()) return 0;
+
+  // Base = subtotal NO cubierto por el cupón (la parte del cupón ya tiene su descuento).
+  // Excepción: si cupón=ENVIO, no afecta base. Si cupón con stack=true, base = subtotal completo.
+  let base = total;
+  if (appliedCoupon && appliedCoupon.tipo !== 'ENVIO' && !appliedCoupon.stack) {
+    const cubierto = _subtotalForScope(appliedCoupon.scope);
+    base = Math.max(0, total - cubierto);
+  }
+  if (base <= 0) return 0;
+
+  const aplicaEfectivo = isCash && cashDiscountActive();
+  const aplicaBulk     = isBulk && bulkDiscountActive();
+  if (aplicaEfectivo || aplicaBulk) return Math.round(base * 0.10);
   return 0;
 }
 function getDiscountLabel() {
   const sel = document.querySelector('input[name="pago"]:checked');
   const isCash = sel && sel.value === 'Efectivo';
   const isBulk = cartTotal() >= 100000;
+  // Hay cupón? Mostrar de qué tipo es el auto (el cupón se muestra en otra línea)
   if (isCash && cashDiscountActive()) return '10% OFF Efectivo';
   if (isBulk && bulkDiscountActive()) return '10% OFF (+$100K)';
   return '';
+}
+function getTotalDiscount() {
+  // Total combinado de cupón + auto. Lo usa el shipping bar, el WhatsApp y el total final.
+  return getCouponDiscount() + getCashDiscount();
+}
+function getCouponShippingOverride() {
+  // Si cupón=ENVIO, devuelve true para anular el envío
+  return appliedCoupon && appliedCoupon.tipo === 'ENVIO';
+}
+
+/* ── UI cupón ─────────────────────────────────────────────── */
+function toggleCouponBox() {
+  var btn = $id('coupon-toggle'), box = $id('coupon-box');
+  var open = box.style.display === 'none';
+  box.style.display = open ? '' : 'none';
+  btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+  if (open) setTimeout(function() { var inp = $id('f-cupon'); if (inp) inp.focus(); }, 50);
+}
+function _showCouponMsg(txt, cls) {
+  var el = $id('coupon-msg'); if (!el) return;
+  el.textContent = txt || '';
+  el.className = 'coupon-msg' + (cls ? ' ' + cls : '');
+}
+function applyCoupon() {
+  var inp = $id('f-cupon');
+  var btn = $id('coupon-apply-btn');
+  var code = (inp.value || '').trim().toUpperCase();
+  if (!code) { _showCouponMsg('Escribí el código del cupón', 'err'); return; }
+  if (code.length < 3) { _showCouponMsg('Código muy corto', 'err'); return; }
+
+  btn.disabled = true; btn.textContent = '...';
+  _showCouponMsg('', '');
+
+  var items = _itemsInCart();
+  var url = APPS_SCRIPT_URL + '?action=validarCupon&codigo=' + encodeURIComponent(code)
+          + '&itemsJson=' + encodeURIComponent(JSON.stringify(items))
+          + '&t=' + Date.now();
+  fetch(url, { cache: 'no-store' })
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      btn.disabled = false; btn.textContent = 'Aplicar';
+      if (!d.ok) {
+        _showCouponMsg(d.error || 'No pudimos validar el cupón', 'err');
+        return;
+      }
+      appliedCoupon = {
+        codigo:  d.codigo,
+        tipo:    d.tipo,
+        valor:   d.valor,
+        scope:   d.scope,
+        mensaje: d.mensaje,
+        stack:   !!d.stack
+      };
+      // Cerrar el input y mostrar el card verde
+      $id('coupon-box').style.display = 'none';
+      var ap = $id('coupon-applied');
+      $id('coupon-applied-code').textContent = '🎟️ ' + d.codigo;
+      $id('coupon-applied-msg').textContent  = d.mensaje || '';
+      ap.style.display = '';
+      $id('coupon-toggle').style.display = 'none';
+      _track('coupon_applied', { code: d.codigo, scope: d.scope });
+      updateUI();
+    })
+    .catch(function(err) {
+      btn.disabled = false; btn.textContent = 'Aplicar';
+      _showCouponMsg('Sin conexión. Probá de nuevo.', 'err');
+    });
+}
+function removeCoupon() {
+  appliedCoupon = null;
+  $id('coupon-applied').style.display = 'none';
+  $id('coupon-box').style.display = 'none';
+  $id('coupon-toggle').style.display = '';
+  $id('coupon-toggle').setAttribute('aria-expanded', 'false');
+  var inp = $id('f-cupon'); if (inp) inp.value = '';
+  _showCouponMsg('', '');
+  updateUI();
 }
 function slugify(str) {
   return str.toLowerCase().replace(/[áäâà]/g,'a').replace(/[éëêè]/g,'e').replace(/[íïîì]/g,'i').replace(/[óöôò]/g,'o').replace(/[úüûù]/g,'u').replace(/ñ/g,'n').replace(/[^a-z0-9]/g,'-').replace(/-+/g,'-').replace(/^-|-$/g,'');
@@ -1149,7 +1285,7 @@ function changeQty(id, delta) { modifyCart(id, delta); }
 function cardChangeQty(id, delta) { modifyCart(id, delta); }
 
 function updateUI() {
-  const count = cartCount(), subtotal = cartTotal(), discount = getCashDiscount(), shipping = getShipping(), saldoAFavor = getSaldoAFavor(), total = subtotal - discount + shipping - saldoAFavor;
+  const count = cartCount(), subtotal = cartTotal(), discount = getTotalDiscount(), shipping = getShipping(), saldoAFavor = getSaldoAFavor(), total = subtotal - discount + shipping - saldoAFavor;
   const badge = $id('cart-badge');
   badge.textContent = count;
   badge.style.display = count > 0 ? 'flex' : 'none';
@@ -1184,7 +1320,16 @@ function updateUI() {
     }).join('');
     $id('cart-subtotal').textContent = ars(subtotal);
     const discRow = $id('cart-discount-row');
-    if (discount > 0) { discRow.style.display = ''; discRow.querySelector('span').textContent = getDiscountLabel(); $id('cart-discount').textContent = '-' + ars(discount); }
+    if (discount > 0) {
+      discRow.style.display = '';
+      // Label combinado: si hay cupón + auto, los junta con '+'.
+      var partes = [];
+      if (appliedCoupon) partes.push('🎟️ ' + appliedCoupon.codigo);
+      var autoLbl = getDiscountLabel();
+      if (autoLbl) partes.push(autoLbl);
+      discRow.querySelector('span').textContent = partes.join(' + ') || '10% OFF';
+      $id('cart-discount').textContent = '-' + ars(discount);
+    }
     else { discRow.style.display = 'none'; }
     $id('cart-shipping').textContent = shipping === 0 ? 'Gratis' : ars(shipping);
     const saldoRow = $id('cart-saldo-row');
@@ -1231,17 +1376,34 @@ function updateUI() {
 function updateFormSummary() {
   const el = $id('form-summary'), count = cartCount();
   if (count === 0) { el.innerHTML = '<p class="summary-empty">Agregá productos para ver el resumen.</p>'; return; }
-  const subtotal = cartTotal(), discount = getCashDiscount(), shipping = getShipping(), total = subtotal - discount + shipping;
-  el.innerHTML = Object.entries(cart).map(([id,qty]) => {
+  const subtotal = cartTotal();
+  const cuponDesc = getCouponDiscount();
+  const autoDesc  = getCashDiscount();
+  const totalDesc = cuponDesc + autoDesc;
+  const shipping  = getShipping();
+  const total     = subtotal - totalDesc + shipping;
+
+  let html = Object.entries(cart).map(([id,qty]) => {
     const p = PROD_MAP[id];
     if (!p) return '';
     return '<div class="summary-line"><span>' + p.nombre + ' <strong>×' + qty + '</strong></span><span>' + ars(p.precio*qty) + '</span></div>';
-  }).join('') +
-    // Sub Total: solo si hay descuento (deja claro de qué monto sale el 10%).
-    (discount > 0 ? '<div class="summary-line subtotal-line"><span>Sub Total</span><span>' + ars(subtotal) + '</span></div>' : '') +
-    (discount > 0 ? '<div class="summary-line discount-line"><span>' + getDiscountLabel() + '</span><span>-' + ars(discount) + '</span></div>' : '') +
-    '<div class="summary-line shipping-line"><span>Envío</span><span>' + (shipping === 0 ? 'Gratis' : ars(shipping)) + '</span></div>' +
-    '<div class="summary-line total-line"><span>Total</span><span>' + ars(total) + '</span></div>';
+  }).join('');
+
+  // Sub Total: solo si hay descuentos (deja claro de qué monto sale el 10%/cupón).
+  if (totalDesc > 0) {
+    html += '<div class="summary-line subtotal-line"><span>Sub Total</span><span>' + ars(subtotal) + '</span></div>';
+  }
+  // Cupón en su propia línea (verde) — separado del auto para que el cliente entienda qué le aportó.
+  if (cuponDesc > 0 && appliedCoupon) {
+    html += '<div class="summary-line discount-line" style="color:#2e7d32"><span>🎟️ ' + appliedCoupon.codigo + ' · ' + (appliedCoupon.mensaje || '') + '</span><span>-' + ars(cuponDesc) + '</span></div>';
+  }
+  // Auto-descuento (efectivo / +$100K)
+  if (autoDesc > 0) {
+    html += '<div class="summary-line discount-line"><span>' + getDiscountLabel() + '</span><span>-' + ars(autoDesc) + '</span></div>';
+  }
+  html += '<div class="summary-line shipping-line"><span>Envío</span><span>' + (shipping === 0 ? 'Gratis' : ars(shipping)) + '</span></div>';
+  html += '<div class="summary-line total-line"><span>Total</span><span>' + ars(total) + '</span></div>';
+  el.innerHTML = html;
 }
 
 /* ── TOGGLE CART ── */
@@ -1580,7 +1742,7 @@ function enviarPedido() {
   } catch(e) {}
 
   // Construir mensaje WhatsApp
-  const subtotal = cartTotal(), discount = getCashDiscount(), shipping = getShipping(), saldoAFavor = getSaldoAFavor(), total = subtotal - discount + shipping - saldoAFavor;
+  const subtotal = cartTotal(), discount = getTotalDiscount(), shipping = getShipping(), saldoAFavor = getSaldoAFavor(), total = subtotal - discount + shipping - saldoAFavor;
 
   const prodLines = Object.entries(cart).map(([id,qty]) => {
     const p = PROD_MAP[id]; if (!p) return null;
@@ -1622,11 +1784,14 @@ function enviarPedido() {
   // Mensaje unificado: mínimo imprescindible para el cliente.
   // Los datos del cliente (nombre, tel, dirección, entrega, pago) los ve Maleu
   // en Panel/Búsqueda/Ruta/Red — no se repiten en el WhatsApp.
+  const cuponDescW = getCouponDiscount();
+  const autoDescW  = getCashDiscount();
   var msgLines = ['Hola! Quiero hacer un pedido:', '', prodLines, ''];
   // Solo desglosar Subtotal cuando hay descuento, envío o saldo a favor.
   if (discount > 0 || shipping > 0 || saldoAFavor > 0) {
     msgLines.push('Subtotal: ' + ars(subtotal));
-    if (discount > 0) msgLines.push(getDiscountLabel() + ': -' + ars(discount));
+    if (cuponDescW > 0 && appliedCoupon) msgLines.push('🎟️ ' + appliedCoupon.codigo + ': -' + ars(cuponDescW));
+    if (autoDescW > 0) msgLines.push(getDiscountLabel() + ': -' + ars(autoDescW));
     if (shipping > 0) msgLines.push('Envio: ' + ars(shipping));
     if (saldoAFavor > 0) msgLines.push('🎁 Saldo a favor: -' + ars(saldoAFavor));
   }
@@ -1682,7 +1847,12 @@ function enviarPedido() {
   // Cumpleaños del cliente (si lo cargó en el form) → backend lo guarda en Clientes Meta.
   var _cumple = getCumpleValue();
   if (_cumple) postData.cumple = _cumple;
-  _track('purchase', { value: total, zone: currentZone, items: cartCount(), discount: discount, payment: pagoEl.value, vendedor: vendedorMatch ? vendedorMatch.nombre : '' });
+  // Cupón aplicado: lo mando al backend para tracking futuro y best-effort sumo uso al cerrar.
+  if (appliedCoupon) {
+    postData.cupon = appliedCoupon.codigo;
+    postData.cuponDescuento = cuponDescW;
+  }
+  _track('purchase', { value: total, zone: currentZone, items: cartCount(), discount: discount, payment: pagoEl.value, cupon: appliedCoupon ? appliedCoupon.codigo : '', vendedor: vendedorMatch ? vendedorMatch.nombre : '' });
 
   // Esperar confirmación del server ANTES de redirigir a WhatsApp.
   // Antes redirigíamos 800ms después del POST sin esperar respuesta → si el POST
@@ -1705,6 +1875,14 @@ function enviarPedido() {
   function _afterSuccess() {
     if (waBtn) waBtn.innerHTML = '✓ Pedido registrado';
     setSendLoaderSuccess();
+    // Best-effort: sumar uso al cupón. No bloqueamos el flujo si falla.
+    if (appliedCoupon) {
+      try {
+        var blob = new Blob([JSON.stringify({ action: 'usarCupon', codigo: appliedCoupon.codigo })], { type: 'text/plain;charset=utf-8' });
+        if (navigator.sendBeacon) navigator.sendBeacon(APPS_SCRIPT_URL, blob);
+        else fetch(APPS_SCRIPT_URL, { method:'POST', body: blob, mode:'no-cors', keepalive: true }).catch(function(){});
+      } catch(_e) {}
+    }
     // Redirect a WhatsApp con un breve respiro para que se vea el check verde
     setTimeout(function() {
       window.location.href = 'https://wa.me/' + waTarget + '?text=' + urlText;
@@ -1717,6 +1895,7 @@ function enviarPedido() {
       onDiaChange();
       renderDayPicker();
       document.querySelectorAll('input[name="pago"]').forEach(r => r.checked = false);
+      removeCoupon();
       if (waBtn) { waBtn.disabled = false; waBtn.innerHTML = waBtnOrig; waBtn.style.background = ''; }
       _enviando = false;
       hideSendLoader();
