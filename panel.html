@@ -713,6 +713,8 @@ body{font-family:'Inter',-apple-system,'Segoe UI',system-ui,sans-serif;backgroun
 .seg-mark:hover{background:#1f5b23}
 .seg-hh-resv{font-size:10px;font-weight:700;color:#C62828;background:var(--rb);border-radius:8px;padding:1px 6px;margin-left:5px}
 .seg-row-resv{opacity:.5}
+.seg-hh-ck{flex:0 0 auto;display:flex;align-items:center;justify-content:center;width:22px}
+.seg-hh-ck input{width:17px;height:17px;cursor:pointer;accent-color:#5E35B1}
 
 /* ── F3: Bitácora de interacciones ── */
 .hoy-band-seguimiento{border-left-color:#5E35B1}
@@ -11384,6 +11386,7 @@ if('serviceWorker' in navigator){
   var crmSegVista = 'cross';
   var crmSegExcluirDias = 1;   // no mandar 2 difusiones al mismo cliente dentro de N días (1 = mismo día)
   var _segCache = {};          // id → {all, disp, tpl}
+  var _segExcl = {};           // id → {key:1} exclusiones manuales (los que NO mandé)
   var SEG_CATS = ['Sorrentinos','Postres','Tartas','Empanadas','Pizzas','Wraps'];
   // Hook concreto + template (los que armó Tadeo) por categoría que NO probó.
   var SEG_CROSS = {
@@ -11475,28 +11478,50 @@ if('serviceWorker' in navigator){
     var disp = hh.filter(function(u){ return !u._reservado; });
     var reservados = hh.length - disp.length;
     _segCache[id] = {all: hh, disp: disp, tpl: tpl};
+    _segExcl[id] = {};   // exclusiones manuales (los que NO mandé) — arrancan vacías
     var conTel = disp.filter(function(u){ return u.contacto && u.contacto.tel; }).length;
     var tplReal = tpl && tpl.indexOf('(') === -1;
     var resv = reservados>0 ? '<span class="seg-card-resv">'+reservados+' ya en campaña — excluidos</span>' : '';
     var marcar = tplReal
-      ? '<button class="seg-copy seg-mark" onclick="segMarcarEnviada(\''+id+'\')">✅ Marcar enviada ('+conTel+')</button>'
+      ? '<button class="seg-copy seg-mark" id="segmark-'+id+'" onclick="segMarcarEnviada(\''+id+'\')">✅ Marcar enviada ('+conTel+')</button>'
       : '';
     return '<div class="seg-card" style="border-left-color:'+color+'">'
       + '<div class="seg-card-h" onclick="segToggle(\''+id+'\')">'
-        + '<div class="seg-card-tt"><span class="seg-card-t">'+escHtml(titulo)+'</span><span class="seg-card-n">'+disp.length+'</span>'+resv+'</div>'
+        + '<div class="seg-card-tt"><span class="seg-card-t">'+escHtml(titulo)+'</span><span class="seg-card-n" id="segn-'+id+'">'+conTel+'</span>'+resv+'</div>'
         + '<span class="seg-card-exp" id="segexp-'+id+'">ver ▾</span>'
       + '</div>'
       + '<div class="seg-card-hook">'+escHtml(hook)+'</div>'
       + '<div class="seg-card-tpl">Template WATI: <b>'+escHtml(tpl)+'</b></div>'
       + '<div class="seg-card-acts">'
-        + '<button class="seg-copy" onclick="segCopiarTels(\''+id+'\')">📋 Copiar '+conTel+' tel&eacute;fonos</button>'
-        + '<button class="seg-copy seg-copy-2" onclick="segCopiarNombres(\''+id+'\')">👤 Copiar nombres</button>'
+        + '<button class="seg-copy" id="segcopy-'+id+'" onclick="segCopiarTels(\''+id+'\')">📋 Copiar '+conTel+' tel&eacute;fonos</button>'
+        + '<button class="seg-copy seg-copy-2" onclick="segCopiarNombres(\''+id+'\')">👤 Nombres</button>'
+        + '<button class="seg-copy seg-copy-2" onclick="segCopiarCodPais(\''+id+'\')" title="Copia 54 una vez por contacto (columna país)">🌎 54</button>'
         + marcar
-        + '<button class="seg-copy seg-copy-2" onclick="segToggle(\''+id+'\')">Ver hogares</button>'
+        + '<button class="seg-copy seg-copy-2" onclick="segToggle(\''+id+'\')">Ver / elegir hogares</button>'
       + '</div>'
       + '<div class="seg-hh" id="seghh-'+id+'" style="display:none"></div>'
     + '</div>';
   }
+
+  // Disponibles REALES = no reservados, con tel, y no des-tildados manualmente.
+  function _segDispAvail(id){
+    var e = _segCache[id]; if (!e) return [];
+    var ex = _segExcl[id] || {};
+    return (e.disp||[]).filter(function(u){ return u.contacto && u.contacto.tel && !ex[u.contacto.key]; });
+  }
+  // Actualiza los contadores visibles del segmento tras tildar/destildar.
+  function _segUpdCounts(id){
+    var n = _segDispAvail(id).length;
+    var cp = el('segcopy-'+id); if (cp) cp.innerHTML = '📋 Copiar '+n+' tel&eacute;fonos';
+    var mk = el('segmark-'+id); if (mk) mk.innerHTML = '✅ Marcar enviada ('+n+')';
+    var nb = el('segn-'+id); if (nb) nb.textContent = n;
+  }
+  window.segToggleExcl = function(id, keyEnc, cb){
+    var key = decodeURIComponent(keyEnc);
+    if (!_segExcl[id]) _segExcl[id] = {};
+    if (cb.checked) delete _segExcl[id][key]; else _segExcl[id][key] = 1;
+    _segUpdCounts(id);
+  };
 
   window.segToggle = function(id){
     var box = el('seghh-'+id); if (!box) return;
@@ -11509,7 +11534,14 @@ if('serviceWorker' in navigator){
         var resv = u._reservado ? ' <span class="seg-hh-resv">en campaña hace '+(u._camp&&u._camp.dd!=null?u._camp.dd+'d':'')+'</span>' : '';
         var wa = tel ? '<a class="hoy-act hoy-act-wa" href="https://wa.me/549'+tel+'" target="_blank" rel="noopener" onclick="event.stopPropagation()">WA</a>' : '<span class="hoy-act hoy-act-notel">sin tel</span>';
         var reg = '<button class="hoy-act hoy-act-reg" onclick="event.stopPropagation();crmLogOpen(this)" data-key="'+escHtml(c.key)+'" data-tel="'+escHtml(tel)+'" data-nombre="'+escHtml(u.nombre)+'" data-origen="segmento">Registrar</button>';
-        return '<div class="hoy-row'+(u._reservado?' seg-row-resv':'')+'" onclick="crmOpenCliente(\''+keyEnc+'\')"><div class="hoy-row-main"><div class="hoy-row-name">'+escHtml(u.nombre)+resv+'</div><div class="hoy-row-meta">'+loc+(tel?' · '+escHtml(tel):'')+'</div></div><div class="hoy-row-acts">'+wa+reg+'</div></div>';
+        // Checkbox para incluir/excluir del envío (solo disponibles con tel).
+        var ck = (!u._reservado && tel)
+          ? '<label class="seg-hh-ck" title="Destildá a quien NO querés mandarle" onclick="event.stopPropagation()"><input type="checkbox" checked onclick="segToggleExcl(\''+id+'\',\''+keyEnc+'\',this)"></label>'
+          : '<span class="seg-hh-ck"></span>';
+        return '<div class="hoy-row'+(u._reservado?' seg-row-resv':'')+'">'
+          + ck
+          + '<div class="hoy-row-main" onclick="crmOpenCliente(\''+keyEnc+'\')"><div class="hoy-row-name">'+escHtml(u.nombre)+resv+'</div><div class="hoy-row-meta">'+loc+(tel?' · '+escHtml(tel):'')+'</div></div>'
+          + '<div class="hoy-row-acts">'+wa+reg+'</div></div>';
       }).join('');
       box.style.display = '';
       if (exp) exp.textContent = 'ocultar ▴';
@@ -11529,21 +11561,27 @@ if('serviceWorker' in navigator){
   }
 
   window.segCopiarTels = function(id){
-    var disp = (_segCache[id] && _segCache[id].disp) || [];
-    var tels = [];
-    disp.forEach(function(u){ if (u.contacto && u.contacto.tel) tels.push('549'+u.contacto.tel); });
-    if (!tels.length){ toast('Sin tel&eacute;fonos disponibles'); return; }
-    _segCopiar(tels.join('\n'), tels.length+' tel&eacute;fonos copiados (excluye los ya en campaña)');
+    var disp = _segDispAvail(id);
+    if (!disp.length){ toast('Sin tel&eacute;fonos disponibles'); return; }
+    var tels = disp.map(function(u){ return '549'+u.contacto.tel; });
+    _segCopiar(tels.join('\n'), tels.length+' tel&eacute;fonos copiados');
   };
 
   // Copia los NOMBRES (primer nombre, para el {{1}} del template), en el MISMO
   // orden que los teléfonos → se pueden pegar como columna paralela en WATI.
   window.segCopiarNombres = function(id){
-    var disp = (_segCache[id] && _segCache[id].disp) || [];
-    var noms = [];
-    disp.forEach(function(u){ if (u.contacto && u.contacto.tel) noms.push(_hoyPrimerNombre(u.nombre)); });
-    if (!noms.length){ toast('Sin nombres disponibles'); return; }
+    var disp = _segDispAvail(id);
+    if (!disp.length){ toast('Sin nombres disponibles'); return; }
+    var noms = disp.map(function(u){ return _hoyPrimerNombre(u.nombre); });
     _segCopiar(noms.join('\n'), noms.length+' nombres copiados (mismo orden que los tel&eacute;fonos)');
+  };
+
+  // Copia el código de país "54" una vez por contacto → columna alineada para WATI.
+  window.segCopiarCodPais = function(id){
+    var disp = _segDispAvail(id);
+    if (!disp.length){ toast('Sin contactos disponibles'); return; }
+    var col = disp.map(function(){ return '54'; });
+    _segCopiar(col.join('\n'), col.length+' veces "54" copiado (columna c&oacute;d. pa&iacute;s)');
   };
 
   // Marca la campaña como ENVIADA: registra a los disponibles como contactados por
@@ -11551,8 +11589,7 @@ if('serviceWorker' in navigator){
   window.segMarcarEnviada = function(id){
     var entry = _segCache[id]; if (!entry) return;
     var tpl = entry.tpl;
-    var items = (entry.disp||[]).filter(function(u){ return u.contacto && u.contacto.tel; })
-      .map(function(u){ return {key: u.contacto.key, tel: u.contacto.tel, nombre: u.nombre}; });
+    var items = _segDispAvail(id).map(function(u){ return {key: u.contacto.key, tel: u.contacto.tel, nombre: u.nombre}; });
     if (!items.length){ toast('Sin clientes para marcar'); return; }
     if (!confirm('Marcar '+items.length+' clientes como enviados con la campaña "'+tpl+'"?\n\nVan a quedar excluidos de las otras difusiones (según la ventana elegida). Hacé esto DESPUÉS de mandar el broadcast en WATI.')) return;
     fetch(CRM_API, {method:'POST', mode:'cors', body: JSON.stringify({action:'crmLogCampania', template: tpl, items: items})})
