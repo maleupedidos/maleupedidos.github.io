@@ -944,7 +944,7 @@ var STORAGE_VERSION='v2-row-keyed';
 // APP_VERSION: si el browser carga una version distinta a la conocida, limpiamos
 // caches del SW y recargamos. Evita que iOS Safari sirva HTML viejo (bug Violeta
 // 27/05: PWA con codigo v55 procesando cobros con processSyncQueue trabado).
-var APP_VERSION='v118';
+var APP_VERSION='v119';
 // Pintar version real en el badge (no hardcodear el HTML, suele desincronizar).
 try{var __ve=document.getElementById('appVer');if(__ve)__ve.textContent=APP_VERSION;}catch(_){}
 (function(){
@@ -1348,23 +1348,35 @@ function getSorted(){
     var porVendedor={};
     redDelDia.forEach(function(e){
       var v=e.retira||'Vendedor';
-      if(!porVendedor[v])porVendedor[v]={pedidos:[],totals:{},todoOC:true,pendientesArmar:0};
+      if(!porVendedor[v])porVendedor[v]={pedidos:[],totalsD:{},totalsOC:{},todoOC:true,pendientesArmar:0};
       porVendedor[v].pedidos.push(e);
-      // Solo items DEL DEPÓSITO (D). Los OC los retira el vendedor directo del proveedor,
-      // no salen del freezer de Tadeo.
+      // Separar items D (salen del freezer Maleu) de OC (retira del proveedor).
       var depItems=_itemsDepDe(e);
+      var ocItems=_itemsOCDe(e);
       if(depItems.length>0){
         porVendedor[v].todoOC=false;
         if(!armadoDone[eKey(e)])porVendedor[v].pendientesArmar++;
       }
       depItems.forEach(function(p){
-        if(!porVendedor[v].totals[p.a])porVendedor[v].totals[p.a]=0;
-        porVendedor[v].totals[p.a]+=p.q;
+        if(!porVendedor[v].totalsD[p.a])porVendedor[v].totalsD[p.a]=0;
+        porVendedor[v].totalsD[p.a]+=p.q;
+      });
+      ocItems.forEach(function(p){
+        if(!porVendedor[v].totalsOC[p.a])porVendedor[v].totalsOC[p.a]=0;
+        porVendedor[v].totalsOC[p.a]+=p.q;
       });
     });
     Object.keys(porVendedor).sort().forEach(function(v){
       var pack=porVendedor[v];
-      var prods=_sortProds(Object.keys(pack.totals).map(function(a){return {a:a,q:pack.totals[a]}}));
+      // Combinar D + OC en un solo array de productos con desglose por origen.
+      // Cada producto: {a, d, oc, q=d+oc}. q se usa para el sort estándar.
+      var allAbbrs={};
+      Object.keys(pack.totalsD).forEach(function(a){allAbbrs[a]=true;});
+      Object.keys(pack.totalsOC).forEach(function(a){allAbbrs[a]=true;});
+      var prods=_sortProds(Object.keys(allAbbrs).map(function(a){
+        var d=pack.totalsD[a]||0, oc=pack.totalsOC[a]||0;
+        return {a:a, d:d, oc:oc, q:d+oc};
+      }));
       var keys=pack.pedidos.map(function(e){return eKey(e)});
       var rows=pack.pedidos.map(function(e){return e.r}).filter(function(r){return r>=2});
       clientes.push({
@@ -2201,18 +2213,29 @@ function renderRuta(){
     h+='<div class="ruta-origen-tag" style="background:#F3E5F5;color:#4A148C;border:1.5px solid #7B1FA2">VENDEDOR RED</div>';
     h+='<div style="font-size:24px;font-weight:900;color:var(--brown);margin-bottom:4px">'+e._vendedor+'</div>';
     h+='<div style="font-size:13px;font-weight:700;color:var(--muted);margin-bottom:14px">'+nPed+' pedido'+(nPed>1?'s':'')+' del día — Tadeo no entrega cliente por cliente</div>';
+    // Nota chica si todo es OC (info pero ya no oculta los productos)
     if(e._todoOC){
-      // Todos los pedidos del vendedor son 100% OC: no sale nada del freezer.
-      // El vendedor retira la mercadería directo del proveedor.
-      h+='<div style="background:#FFF3E0;border:1.5px solid #FB923C;border-radius:10px;padding:12px 14px;margin-bottom:12px;font-size:13px;line-height:1.5;color:#9A3412;text-align:left">📦 <b>Todos los pedidos son Orden de Compra.</b><br>El vendedor retira directo del proveedor. No sale nada de tu freezer.</div>';
-    } else {
-      // Warning si hay pedidos con items D sin armar (faltan sacar del freezer)
-      if(e._pendientesArmar>0){
-        h+='<div style="background:#FFEBEE;border:1.5px solid #EF5350;border-radius:10px;padding:10px 12px;margin-bottom:10px;font-size:13px;line-height:1.5;color:#B71C1C;text-align:left">⚠️ <b>'+e._pendientesArmar+' pedido'+(e._pendientesArmar>1?'s':'')+' pendiente'+(e._pendientesArmar>1?'s':'')+' de armar.</b><br>Andá a ARMADO y tildá los pedidos del depósito antes de entregar.</div>';
-      }
-      h+='<div style="font-size:12px;font-weight:700;color:var(--muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:.04em">🧊 Sale del freezer</div>';
-      h+='<div class="ruta-productos">';_sortProds(e.p).forEach(function(p){h+='<div class="ruta-prod-item"><span>'+(PROD_NAMES[p.a]||p.a)+'</span><span class="ruta-prod-qty">'+p.q+'</span></div>'});h+='</div>';
+      h+='<div style="background:#FFF3E0;border:1.5px solid #FB923C;border-radius:10px;padding:8px 12px;margin-bottom:10px;font-size:12px;line-height:1.4;color:#9A3412;text-align:left">📦 Todos los productos vienen del proveedor — no sale nada de tu freezer.</div>';
     }
+    // Warning si hay pedidos con items D sin armar (faltan sacar del freezer)
+    if(e._pendientesArmar>0){
+      h+='<div style="background:#FFEBEE;border:1.5px solid #EF5350;border-radius:10px;padding:10px 12px;margin-bottom:10px;font-size:13px;line-height:1.5;color:#B71C1C;text-align:left">⚠️ <b>'+e._pendientesArmar+' pedido'+(e._pendientesArmar>1?'s':'')+' pendiente'+(e._pendientesArmar>1?'s':'')+' de armar.</b><br>Andá a ARMADO y tildá los pedidos del depósito antes de entregar.</div>';
+    }
+    // SIEMPRE mostrar la lista completa de productos a entregar al vendedor,
+    // con tag DEP (sale del freezer) u OC (lo retira él del proveedor) por línea.
+    // Si un producto tiene D y OC mezclado (raro), se muestran 2 líneas separadas.
+    h+='<div style="font-size:12px;font-weight:700;color:var(--muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:.04em">📦 Para entregar a '+e._vendedor+'</div>';
+    h+='<div class="ruta-productos">';
+    _sortProds(e.p).forEach(function(p){
+      var name=PROD_NAMES[p.a]||p.a;
+      if(p.d>0){
+        h+='<div class="ruta-prod-item"><span>'+name+' <span style="font-size:10px;background:#E3F2FD;color:#0D47A1;padding:2px 6px;border-radius:50px;font-weight:800;margin-left:4px">🧊 DEP</span></span><span class="ruta-prod-qty">'+p.d+'</span></div>';
+      }
+      if(p.oc>0){
+        h+='<div class="ruta-prod-item"><span>'+name+' <span style="font-size:10px;background:#FFF3E0;color:#BF360C;padding:2px 6px;border-radius:50px;font-weight:800;margin-left:4px">📦 OC</span></span><span class="ruta-prod-qty">'+p.oc+'</span></div>';
+      }
+    });
+    h+='</div>';
     body.innerHTML=h;
 
     // Actions: solo botón ENTREGAR A VENDEDOR + nav
