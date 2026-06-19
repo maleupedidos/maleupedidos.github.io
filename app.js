@@ -588,13 +588,11 @@ function applyCoupon() {
         mensaje: d.mensaje,
         stack:   !!d.stack
       };
-      // Cerrar el input y mostrar el card verde
+      // Cerrar el input y mostrar el card. _renderCouponApplied decide el copy según
+      // si el descuento ya se está aplicando o si está pending (sin productos del scope).
       $id('coupon-box').style.display = 'none';
-      var ap = $id('coupon-applied');
-      $id('coupon-applied-code').textContent = '🎟️ ' + d.codigo;
-      $id('coupon-applied-msg').textContent  = d.mensaje || '';
-      ap.style.display = '';
       $id('coupon-toggle').style.display = 'none';
+      _renderCouponApplied();
       _track('coupon_applied', { code: d.codigo, scope: d.scope });
       updateUI();
     })
@@ -606,12 +604,52 @@ function applyCoupon() {
 function removeCoupon() {
   appliedCoupon = null;
   $id('coupon-applied').style.display = 'none';
+  $id('coupon-applied').classList.remove('pending');
   $id('coupon-box').style.display = 'none';
   $id('coupon-toggle').style.display = '';
   $id('coupon-toggle').setAttribute('aria-expanded', 'false');
   var inp = $id('f-cupon'); if (inp) inp.value = '';
   _showCouponMsg('', '');
   updateUI();
+}
+
+/* Render del card del cupón aplicado.
+   Estado ACTIVE: hay descuento aplicándose → card verde con monto.
+   Estado PENDING: cupón válido pero todavía no agregaron productos del
+   scope → card naranja/amarillo invitando a sumar (ej. "agregá un
+   sorrentino y se activa el 20% off"). */
+function _renderCouponApplied() {
+  if (!appliedCoupon) return;
+  var card = $id('coupon-applied');
+  if (!card) return;
+  var disc = getCouponDiscount();
+  var codeEl = $id('coupon-applied-code');
+  var msgEl  = $id('coupon-applied-msg');
+
+  // Etiqueta linda del scope (ej "CATEGORIA:Sorrentinos" → "Sorrentinos")
+  var scopeNice = '';
+  if (appliedCoupon.scope) {
+    var ix = appliedCoupon.scope.indexOf(':');
+    if (ix >= 0) scopeNice = appliedCoupon.scope.substring(ix + 1).trim();
+  }
+
+  if (disc > 0) {
+    // Activo: descuento aplicándose ahora
+    card.classList.remove('pending');
+    codeEl.textContent = '🎟️ ' + appliedCoupon.codigo + ' aplicado';
+    msgEl.textContent  = appliedCoupon.mensaje || '';
+  } else {
+    // Pending: el cupón está cargado pero no hay productos del scope
+    card.classList.add('pending');
+    codeEl.textContent = '🎟️ ' + appliedCoupon.codigo + ' listo para usar';
+    if (scopeNice) {
+      msgEl.textContent = '¡Adelante! Sumá ' + scopeNice + ' al pedido y activá tu ' +
+        (appliedCoupon.tipo === 'PCT' ? appliedCoupon.valor + '% OFF' : 'descuento') + '.';
+    } else {
+      msgEl.textContent = appliedCoupon.mensaje || '¡Adelante, usalo en tu pedido!';
+    }
+  }
+  card.style.display = '';
 }
 function slugify(str) {
   return str.toLowerCase().replace(/[áäâà]/g,'a').replace(/[éëêè]/g,'e').replace(/[íïîì]/g,'i').replace(/[óöôò]/g,'o').replace(/[úüûù]/g,'u').replace(/ñ/g,'n').replace(/[^a-z0-9]/g,'-').replace(/-+/g,'-').replace(/^-|-$/g,'');
@@ -1371,6 +1409,9 @@ function updateUI() {
   }
   updateFormSummary();
   updatePagoHint();
+  // Si hay cupón aplicado, refresco el card para que pase de pending → activo
+  // (o viceversa) cuando el cliente agrega o saca productos del scope.
+  if (appliedCoupon) _renderCouponApplied();
 }
 
 function updateFormSummary() {
