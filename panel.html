@@ -558,6 +558,8 @@ body{font-family:'Inter',-apple-system,'Segoe UI',system-ui,sans-serif;backgroun
 .crm-card-ico-wa:hover{background:#25D366;color:#fff;border-color:#25D366}
 .crm-card-ico-cp{color:var(--ink3)}
 .crm-card-ico-cp:hover{background:var(--cr);color:var(--b);border-color:var(--cd)}
+.crm-card-ico-map{color:var(--o)}
+.crm-card-ico-map:hover{background:var(--o);color:#fff;border-color:var(--o)}
 .crm-card-stats{display:flex;flex-direction:column;align-items:flex-end;gap:2px;flex-shrink:0;text-align:right}
 .crm-card-fact{font-size:13px;font-weight:700;color:var(--ink);font-variant-numeric:tabular-nums}
 .crm-card-ped{font-size:11px;color:var(--ink3);font-variant-numeric:tabular-nums}
@@ -10476,7 +10478,7 @@ if('serviceWorker' in navigator){
   var _mapaObj = null, _mapaLotes = [], _mapaZonas = [], _subZonas = [], _exclZonas = [], _mapaZonasLayer = null, _mapaLotesLayer = null, _mapaDrawHooked = false, _mapaSoloAsignados = false, _mapaDrawTipo = 'zona';
   var _mapaColorMode = 'subbarrio', _mapaLoteCli = {}, _mapaLotesData = {};
   var _loteComp = {tipo:'', n1:'', n2:'', padre:'', madre:'', hijos:[]};
-  var _mapaBaseFeatures = [], _mapaPuntosOv = {}, _mapaEditMode = false, _mapaMovePending = null, _mapaAddPending = false;
+  var _mapaBaseFeatures = [], _mapaPuntosOv = {}, _mapaEditMode = false, _mapaMovePending = null, _mapaAddPending = false, _mapaPendingLocate = null;
   var SUBBARRIOS = ['Champagnat Alto','Champagnat Bajo','El Recuerdo','Golf','La Pionera','Argentina 1','Argentina 2','Argentina 3','Argentina 4','La Paz','Los Alcanfores','Estancias del Rio'];
   var ZCOLORS = ['#E53935','#8E24AA','#3949AB','#039BE5','#00897B','#43A047','#C0CA33','#FB8C00','#6D4C41','#F4511E','#D81B60','#5E35B1','#1E88E5','#00ACC1','#7CB342','#FDD835'];
 
@@ -10533,6 +10535,34 @@ if('serviceWorker' in navigator){
     fetch(CRM_API + '?action=crmClientes').then(function(r){return r.json();})
       .then(function(d){ crmClientes = d.clientes||[]; cb(); }).catch(function(){ cb(); });
   }
+
+  // Busca el punto del mapa que corresponde a (sub-barrio, lote) de un cliente.
+  function _mapaFindLote(sub, lote){
+    var ns = _crmNormName(sub), nl = _loteNorm(lote);
+    for (var i=0;i<_mapaLotes.length;i++){
+      var L0 = _mapaLotes[i]; if (L0.zona < 0) continue;
+      var zsub = _subZonas[L0.zona] && _subZonas[L0.zona].nombre;
+      if (_crmNormName(zsub) === ns && _loteNorm(L0.n) === nl) return L0;
+    }
+    return null;
+  }
+  function _mapaProcessLocate(){
+    if (!_mapaPendingLocate || !_mapaObj) return;
+    var pl = _mapaPendingLocate; _mapaPendingLocate = null;
+    var lo = _mapaFindLote(pl.sub, pl.lote);
+    if (!lo){ toast('Ese cliente todavía no está ubicado en el mapa (revisá su lote o agregalo con "Editar puntos")'); return; }
+    try { _mapaObj.flyTo([lo.lat, lo.lng], 19, {duration:0.8}); } catch(e){ _mapaObj.setView([lo.lat, lo.lng], 19); }
+    setTimeout(function(){ crmOpenLote(lo); }, 850);
+  }
+  // Salta desde un cliente a su lote en el mapa.
+  window.crmVerEnMapa = function(subEnc, loteEnc){
+    var sub = decodeURIComponent(subEnc), lote = decodeURIComponent(loteEnc);
+    if (!sub || !lote){ toast('Este cliente no tiene sub-barrio + lote para ubicar'); return; }
+    crmCloseDrawer();
+    _mapaPendingLocate = {sub:sub, lote:lote};
+    bbddSwitch('mapa');
+    if (_mapaObj && _mapaLotes && _mapaLotes.length) setTimeout(_mapaProcessLocate, 200);
+  };
   // Cliente (hogar) que corresponde a un lote del mapa, o null.
   function _mapaCliDe(L0){
     if (L0.zona < 0) return null;
@@ -10904,7 +10934,7 @@ if('serviceWorker' in navigator){
             setTimeout(function(){ try{ _mapaObj.invalidateSize(); }catch(e){} }, 120);
             _cargarZonas();
             _mapaLoadLotesData();
-            _mapaEnsureClientes(function(){ _mapaBuildCliIndex(); _recolorLotes(); _renderLegend(); });
+            _mapaEnsureClientes(function(){ _mapaBuildCliIndex(); _recolorLotes(); _renderLegend(); _mapaProcessLocate(); });
           });
         })
         .catch(function(){ el('mapaMap').innerHTML = '<div class="empty" style="padding:40px"><p>No se pudieron cargar los lotes</p></div>'; });
@@ -12015,6 +12045,7 @@ if('serviceWorker' in navigator){
           + '<button class="crm-card-ico crm-card-ico-cp" title="Copiar telefono" onclick="event.stopPropagation();crmCopyTel(\''+telN+'\')">'
             + '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h8"/></svg>'
           + '</button>'
+          + ((c.lote && c.subBarrio) ? '<button class="crm-card-ico crm-card-ico-map" title="Ver en mapa" onclick="event.stopPropagation();crmVerEnMapa(\''+encodeURIComponent(c.subBarrio)+'\',\''+encodeURIComponent(c.lote)+'\')"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 21s-6-5.7-6-10a6 6 0 0 1 12 0c0 4.3-6 10-6 10z"/><circle cx="12" cy="11" r="2"/></svg></button>' : '')
         + '</div>' : '';
       return '<div class="crm-card" onclick="crmOpenCliente(\''+dataKey+'\')">'
         + '<div class="crm-card-info">'
@@ -12441,9 +12472,12 @@ if('serviceWorker' in navigator){
       reactWp = '<a class="crm-react-btn" href="' + telWp + '?text=' + encodeURIComponent(msg) + '" target="_blank" rel="noopener">Reactivar</a>';
     }
 
+    var _subRep = _topKey(c.subBarrios);
+    var verMapaBtn = (loteRep && _subRep) ? '<button class="crm-edit-btn" onclick="crmVerEnMapa(\''+encodeURIComponent(_subRep)+'\',\''+encodeURIComponent(loteRep)+'\')">📍 Ver en mapa</button>' : '';
     var actionsHtml = '<div class="crm-tags-row">'
       + (telWp ? '<a class="crm-wp-btn" href="'+telWp+'" target="_blank">WhatsApp</a>' : '')
       + reactWp
+      + verMapaBtn
       + (c.tel ? '<button class="crm-edit-btn" onclick="crmEditarMeta()">Editar ficha</button>' : '')
     + '</div>';
 
