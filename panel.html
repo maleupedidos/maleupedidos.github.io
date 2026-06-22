@@ -10398,7 +10398,11 @@ if('serviceWorker' in navigator){
   }
 
   function loadCrmClientes(){
-    if (crmCurSub === 'hoy') el('hoyList').innerHTML = '<div class="loading">Cargando tu d&iacute;a...</div>';
+    // Pintado instantáneo desde cache local (sin "Cargando") + refresco en 2do plano.
+    var _hadCache = false;
+    try { var _cc = JSON.parse(localStorage.getItem('maleu_crm_clientes_v1') || 'null'); if (_cc && _cc.length) { crmClientes = _cc; _crmCanalBarrioFilled = false; _hadCache = true; } } catch(e){}
+    if (_hadCache) { _crmRenderActiveSub(); }
+    else if (crmCurSub === 'hoy') el('hoyList').innerHTML = '<div class="loading">Cargando tu d&iacute;a...</div>';
     else if (crmCurSub === 'semana') el('semList').innerHTML = '<div class="loading">Calculando el plan...</div>';
     else if (crmCurSub === 'segmentos') el('segList').innerHTML = '<div class="loading">Armando segmentos...</div>';
     else { el('crmCliList').innerHTML = '<div class="loading">Cargando clientes...</div>'; el('crmCliStats').textContent = ''; }
@@ -10409,10 +10413,12 @@ if('serviceWorker' in navigator){
       .then(function(r){ return r.json(); })
       .then(function(d){
         crmClientes = d.clientes || [];
+        try { localStorage.setItem('maleu_crm_clientes_v1', JSON.stringify(crmClientes)); } catch(e){}
         _crmCanalBarrioFilled = false;
         _crmRenderActiveSub();
       })
       .catch(function(err){
+        if (_hadCache) return; // ya hay data pintada del cache
         var tgt = crmCurSub === 'hoy' ? 'hoyList' : 'crmCliList';
         el(tgt).innerHTML = '<div class="empty"><p>Error: '+escHtml(err.message)+'</p></div>';
       });
@@ -10553,7 +10559,20 @@ if('serviceWorker' in navigator){
     var lo = _mapaFindLote(pl.sub, pl.lote);
     if (!lo){ toast('Ese cliente todavía no está ubicado en el mapa (revisá su lote o agregalo con "Editar puntos")'); return; }
     try { _mapaObj.flyTo([lo.lat, lo.lng], 19, {duration:0.8}); } catch(e){ _mapaObj.setView([lo.lat, lo.lng], 19); }
-    setTimeout(function(){ crmOpenLote(lo); }, 850);
+    setTimeout(function(){ _mapaPulse(lo); }, 850);
+  }
+  // Titila el lote con un color resaltante, "señalando" dónde está.
+  function _mapaPulse(lo){
+    if (!lo || !lo.marker) return;
+    var m = lo.marker;
+    try { if (m.bringToFront) m.bringToFront(); m.openTooltip(); } catch(e){}
+    var step = 0;
+    var iv = setInterval(function(){
+      step++;
+      var big = (step % 2 === 1);
+      m.setStyle({ radius: big?16:7, color:'#FFFFFF', weight: big?4:2, fillColor:'#FF1744', fillOpacity:1 });
+      if (step >= 10){ clearInterval(iv); _recolorLotes(); }
+    }, 320);
   }
   // Salta desde un cliente a su lote en el mapa.
   window.crmVerEnMapa = function(subEnc, loteEnc){
@@ -12478,9 +12497,6 @@ if('serviceWorker' in navigator){
     var canales = Object.keys(c.canales||{});
 
     var alertHtml = '';
-    if (variantes.length > 1) {
-      alertHtml += '<div class="crm-warn"><b>Tipeos detectados:</b> el cliente aparece con distintos nombres en la BBDD: ' + escHtml(variantes.join(' / ')) + '</div>';
-    }
     if (c.deuda > 0) {
       alertHtml += '<div class="crm-warn" style="background:var(--rb);border-color:var(--r);color:var(--r)"><b>Deuda viva:</b> $' + fmt$(c.deuda) + ' en pedidos entregados sin cobrar</div>';
     }
@@ -12616,10 +12632,11 @@ if('serviceWorker' in navigator){
       .then(function(d){
         if (d.ok) {
           toast('Ficha actualizada');
-          // Recargar ficha
-          crmOpenCliente(encodeURIComponent(c.key));
-          // Invalidar lista para que la próxima vez recargue
+          // Invalidar cache local y recargar la lista (sin trabarla) + reabrir ficha.
+          try { localStorage.removeItem('maleu_crm_clientes_v1'); } catch(e){}
           crmClientes = null;
+          loadCrmClientes();
+          crmOpenCliente(encodeURIComponent(c.key));
         } else {
           toast('Error: ' + (d.error || 'desconocido'));
         }
