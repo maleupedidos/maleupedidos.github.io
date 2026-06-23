@@ -10766,6 +10766,63 @@ if('serviceWorker' in navigator){
     _renderFichaLote(L0, sub, lote);
   };
 
+  // ── Enriquecimiento de la ficha de lote (estudio profundo del hogar) ──
+  // Posición del hogar en el ranking de Estancias (por facturado y por pedidos).
+  function _loteRankingDe(sub, lote){
+    if(!crmClientes) return null;
+    var built = (_hogLast && _hogLast.hogares && _hogLast.hogares.length) ? _hogLast : _hogBuild();
+    var key=_crmNormName(sub)+'|'+_loteNorm(lote), tot=built.hogares.length;
+    var byF=built.hogares.slice().sort(function(a,b){return b.facturado-a.facturado;});
+    var byP=built.hogares.slice().sort(function(a,b){return (b.entregados-a.entregados)||(b.facturado-a.facturado);});
+    var rf=0,rp=0; byF.forEach(function(h,i){if(h.key===key)rf=i+1;}); byP.forEach(function(h,i){if(h.key===key)rp=i+1;});
+    return rf? {rf:rf,rp:rp,tot:tot} : null;
+  }
+  // Nombres declarados en la composición del hogar, con su rol.
+  function _loteNombresComp(c){
+    var o=[]; if(!c) return o;
+    if(c.tipo==='Pareja'){ if(c.n1)o.push({rol:'Integrante',n:c.n1}); if(c.n2)o.push({rol:'Integrante',n:c.n2}); }
+    else if(c.tipo==='Vive solo/a'){ if(c.n1)o.push({rol:'Vive solo/a',n:c.n1}); }
+    else if(c.tipo==='Familia'){ if(c.padre)o.push({rol:'Padre',n:c.padre}); if(c.madre)o.push({rol:'Madre',n:c.madre}); (c.hijos||[]).forEach(function(h,i){ if(h)o.push({rol:'Hijo/a '+(i+1),n:h}); }); }
+    return o;
+  }
+  function _primNorm(n){ return _crmNormName(_hoyPrimerNombre(n||'')); }
+  // Cruce: cada persona declarada en la composición ↔ quién realmente pide.
+  function _loteCruceHtml(comp, members){
+    var decl=_loteNombresComp(comp);
+    if(!decl.length) return '';   // sin composición declarada no hay cruce (el aviso ya está en Hogares)
+    var salesFirst=(members||[]).map(function(m){ return {n:m.nombre, f:_primNorm(m.nombre)}; });
+    var rows=decl.map(function(d){
+      var fn=_primNorm(d.n);
+      var hit=salesFirst.some(function(s){ return s.f && s.f===fn; });
+      return '<div class="crm-row"><span class="crm-row-l">'+escHtml(d.rol)+': '+escHtml(d.n)+'</span><span class="crm-row-v" style="color:'+(hit?'var(--gd)':'var(--ink3)')+';font-weight:600">'+(hit?'✓ pide':'— sin pedidos')+'</span></div>';
+    }).join('');
+    var declFirst=decl.map(function(d){return _primNorm(d.n);});
+    var extra=salesFirst.filter(function(s){ return s.f && declFirst.indexOf(s.f)<0; });
+    var extraHtml=extra.length ? '<div class="hog-gap" style="margin-top:6px">⚠️ Piden pero no figuran en la composición: '+extra.map(function(s){return escHtml(_hoyPrimerNombre(s.n));}).join(', ')+'</div>' : '';
+    return '<div class="crm-section"><div class="crm-section-h">Quién es quién (composición ↔ ventas)</div>'+rows+extraHtml+'</div>';
+  }
+  // Productos del hogar (top 5): agrega los topProductos de cada integrante (async).
+  function _loteProdsCargar(members, divId){
+    var div=el(divId); if(!div) return;
+    var withKey=(members||[]).filter(function(m){return m.key;});
+    if(!withKey.length){ div.innerHTML=''; return; }
+    var agg={}, pend=withKey.length;
+    function done(){
+      if(--pend>0) return;
+      var arr=Object.keys(agg).map(function(k){return agg[k];}).sort(function(a,b){return b.monto-a.monto;}).slice(0,5);
+      div.innerHTML = arr.length
+        ? '<div class="crm-section-h">Productos del hogar (top 5)</div>'+arr.map(function(p){ return '<div class="crm-prod-row"><b>'+escHtml(prodName(p.abrev))+'</b><span><span class="crm-prod-cant">'+p.cant+'u</span> &middot; $'+fmt$(p.monto)+'</span></div>'; }).join('')
+        : '';
+    }
+    withKey.forEach(function(m){
+      fetch(CRM_API+'?action=crmCliente&key='+encodeURIComponent(m.key))
+        .then(function(r){return r.json();})
+        .then(function(d){ if(d&&d.cliente&&d.cliente.topProductos){ d.cliente.topProductos.forEach(function(p){ var a=agg[p.abrev]||(agg[p.abrev]={abrev:p.abrev,cant:0,monto:0}); a.cant+=(p.cant||0); a.monto+=(p.monto||0); }); } })
+        .catch(function(){})
+        .then(done);
+    });
+  }
+
   function _renderFichaLote(L0, sub, lote){
     var u = L0.cli; // hogar segun ventas
     var rec = _mapaLotesData[_crmNormName(sub)+'|'+_loteNorm(lote)] || {};
@@ -10780,8 +10837,10 @@ if('serviceWorker' in navigator){
       else { relTxt='Cliente inactivo'; relCol='#E53935'; }
     } else { relTxt='Prospecto'; relCol='#9E9E9E'; }
 
-    var html = '<div class="crm-ficha-name">'+escHtml(sub||'')+' &middot; Lote '+escHtml(lote)+'</div>'
-      + '<div class="crm-ficha-meta"><span style="color:'+relCol+';font-weight:700">'+relTxt+'</span>'+(rec.estadoContacto?'<span>'+escHtml(rec.estadoContacto)+'</span>':'')+'</div>';
+    var _rk = u ? _loteRankingDe(sub, lote) : null;
+    var html = '<div class="crm-ficha-name">'+escHtml(sub||'')+' &middot; Lote '+escHtml(lote)+(rec.familia?' &middot; '+escHtml(rec.familia):'')+'</div>'
+      + '<div class="crm-ficha-meta"><span style="color:'+relCol+';font-weight:700">'+relTxt+'</span>'+(rec.estadoContacto?'<span>'+escHtml(rec.estadoContacto)+'</span>':'')+'</div>'
+      + (_rk ? '<div style="font-size:11.5px;color:var(--o);font-weight:700;margin:-2px 0 10px">🏆 #'+_rk.rf+' de '+_rk.tot+' hogares por facturado &middot; #'+_rk.rp+' por pedidos</div>' : '');
 
     if (u){
       var freq = (u.contacto && u.contacto.frecuencia>0) ? 'cada '+u.contacto.frecuencia+'d' : '-';
@@ -10792,8 +10851,17 @@ if('serviceWorker' in navigator){
         + '<div class="crm-kpi'+(u.deuda>0?' crm-kpi-alert':'')+'"><div class="crm-kpi-l">Deuda</div><div class="crm-kpi-v">$'+fmt$(u.deuda)+'</div></div>'
       + '</div>';
       html += '<div class="crm-section"><div class="crm-section-h">Integrantes (segun ventas)</div>'
-        + u.members.map(function(m){ return '<div class="crm-row"><span class="crm-row-l">'+escHtml(m.nombre)+'</span><span class="crm-row-v">'+(m.telDisplay?escHtml(m.telDisplay):(m.tel?escHtml(m.tel):'sin tel'))+'</span></div>'; }).join('')
+        + u.members.slice().sort(function(a,b){ return (b.entregados-a.entregados)||(b.facturado-a.facturado); }).map(function(m){
+            var esTit = rec.titular && _primNorm(m.nombre)===_primNorm(rec.titular);
+            var tel = m.tel || '';
+            var nm = tel ? '<a href="https://wa.me/549'+tel+'" target="_blank" rel="noopener" onclick="event.stopPropagation()">'+escHtml(m.nombre)+'</a>' : escHtml(m.nombre);
+            var badges = (esTit?' <span class="crm-vip">titular</span>':'') + (m.vip?' <span class="crm-vip">VIP</span>':'');
+            var rt = [(m.entregados||0)+'p', '$'+fmt$(m.facturado||0)]; if(m.prodTop) rt.push(escHtml(prodName(m.prodTop)));
+            return '<div class="crm-row"><span class="crm-row-l">'+nm+badges+'</span><span class="crm-row-v">'+rt.join(' &middot; ')+'</span></div>';
+          }).join('')
       + '</div>';
+      html += '<div class="crm-section" id="loteProds"><div class="loading">Cargando productos del hogar…</div></div>';
+      html += _loteCruceHtml(_loteComp, u.members);
       var telWp = u.contacto.tel ? 'https://wa.me/549'+u.contacto.tel : '';
       html += '<div class="crm-tags-row">'+(telWp?'<a class="crm-wp-btn" href="'+telWp+'" target="_blank">WhatsApp</a>':'')+'<button class="crm-edit-btn" onclick="crmOpenCliente(\''+encodeURIComponent(u.contacto.key)+'\')">Ver ficha completa</button></div>';
     }
@@ -10816,6 +10884,7 @@ if('serviceWorker' in navigator){
 
     el('crmDrawerBody').innerHTML = html;
     _renderComposicion();
+    if (u) _loteProdsCargar(u.members, 'loteProds');
   }
 
   // ── Composición del hogar (Pareja / Familia / Vive solo) ──
