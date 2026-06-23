@@ -12722,9 +12722,10 @@ if('serviceWorker' in navigator){
     });
     chain.then(function(){
       toast('Clientes fusionados');
-      crmClientes = null;
+      aliases.forEach(function(ak){ _crmMergeEnMemoria(canonical, ak); });
       crmCloseDrawer();
-      loadCrmClientes();
+      _crmRenderActiveSub();
+      _crmRefreshSilent();
     }).catch(function(err){
       toast('Error: '+err.message);
       if (btn){ btn.disabled = false; btn.textContent = 'Fusionar este grupo'; }
@@ -12763,6 +12764,31 @@ if('serviceWorker' in navigator){
         + '<div class="crm-card-stats"><div class="crm-card-fact">$'+fmt$(x.facturado)+'</div></div></div>';
     }).join('');
   };
+  // Refresco en 2do plano: NO muestra "Cargando", deja la lista visible y la
+  // reemplaza cuando llega data fresca del backend (que puede tardar).
+  function _crmRefreshSilent(){
+    fetch(CRM_API + '?action=crmClientes')
+      .then(function(r){ return r.json(); })
+      .then(function(d){
+        crmClientes = d.clientes || [];
+        try { localStorage.setItem('maleu_crm_clientes_v1', JSON.stringify(crmClientes)); } catch(e){}
+        _crmCanalBarrioFilled = false;
+        _crmRenderActiveSub();
+      })
+      .catch(function(){});
+  }
+  // Fusión optimista en memoria: combina alias dentro de canónico (para no esperar al backend).
+  function _crmMergeEnMemoria(canonKey, aliasKey){
+    if (!crmClientes) return;
+    var canon=null, ai=-1, alias=null;
+    for (var i=0;i<crmClientes.length;i++){ if(crmClientes[i].key===canonKey)canon=crmClientes[i]; if(crmClientes[i].key===aliasKey){alias=crmClientes[i];ai=i;} }
+    if (!canon || !alias) return;
+    ['pedidos','entregados','facturado','cobrado','deuda'].forEach(function(f){ canon[f]=(canon[f]||0)+(alias[f]||0); });
+    if (typeof alias.diasUltima==='number' && alias.diasUltima>=0 && (canon.diasUltima<0 || alias.diasUltima<canon.diasUltima)){ canon.diasUltima=alias.diasUltima; canon.ultimaFecha=alias.ultimaFecha; canon.estado=alias.estado; }
+    crmClientes.splice(ai,1);
+    try { localStorage.setItem('maleu_crm_clientes_v1', JSON.stringify(crmClientes)); } catch(e){}
+  }
+
   window.crmFusionConfirm = function(otherKeyEnc){
     var otherKey = decodeURIComponent(otherKeyEnc);
     var other = (crmClientes||[]).filter(function(x){ return x.key === otherKey; })[0];
@@ -12777,7 +12803,7 @@ if('serviceWorker' in navigator){
     fetch(CRM_API, {method:'POST', mode:'cors', body: JSON.stringify({action:'crmMergeClientes', keyCanonical:canonKey, keyAlias:aliasKey})})
       .then(function(r){ return r.json(); })
       .then(function(d){
-        if (d.ok){ toast('Clientes fusionados'); try{localStorage.removeItem('maleu_crm_clientes_v1');}catch(e){} crmClientes=null; crmCloseDrawer(); loadCrmClientes(); }
+        if (d.ok){ toast('Clientes fusionados'); _crmMergeEnMemoria(canonKey, aliasKey); crmCloseDrawer(); _crmRenderActiveSub(); _crmRefreshSilent(); }
         else toast('Error: '+(d.error||''));
       })
       .catch(function(err){ toast('Error: '+err.message); });
@@ -13058,11 +13084,24 @@ if('serviceWorker' in navigator){
       .then(function(d){
         if (d.ok) {
           toast('Ficha actualizada');
-          // Invalidar cache local y recargar la lista (sin trabarla) + reabrir ficha.
-          try { localStorage.removeItem('maleu_crm_clientes_v1'); } catch(e){}
-          crmClientes = null;
-          loadCrmClientes();
-          crmOpenCliente(encodeURIComponent(c.key));
+          // Optimista: actualizar el cliente en memoria → la lista refleja al instante (sin "Cargando").
+          try {
+            var it = (crmClientes||[]).filter(function(x){ return x.key === c.key; })[0];
+            if (it){
+              if (body.nombreCanonico) it.nombre = body.nombreCanonico;
+              it.cumple = body.cumple; it.tags = body.tags; it.notas = body.notas; it.aliasMp = body.aliasMp;
+              it.nombresOcultos = body.nombresOcultos || [];
+              it.subBarrioMapa = body.subBarrioMapa; it.loteMapa = body.loteMapa; it.barrioMapa = body.barrioMapa; it.canalMapa = body.canalMapa; it.sinUbicacion = !!body.sinUbicacion;
+              if (body.canalMapa){ it.canalDom = body.canalMapa; it.canales = [body.canalMapa]; }
+              if (body.barrioMapa) it.barrio = body.barrioMapa;
+              if (body.sinUbicacion){ it.subBarrio=''; it.lote=''; }
+              else { if (body.subBarrioMapa) it.subBarrio = body.subBarrioMapa; if (body.loteMapa) it.lote = body.loteMapa; }
+              try { localStorage.setItem('maleu_crm_clientes_v1', JSON.stringify(crmClientes)); } catch(e){}
+            }
+          } catch(e){}
+          _crmRenderActiveSub();
+          crmOpenCliente(encodeURIComponent(c.key));   // reabre la ficha (skeleton instante)
+          _crmRefreshSilent();                          // corrige en 2do plano, sin "Cargando"
         } else {
           toast('Error: ' + (d.error || 'desconocido'));
         }
