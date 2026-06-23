@@ -12409,6 +12409,58 @@ if('serviceWorker' in navigator){
     });
   };
 
+  // ── Fusión MANUAL: elegir dos clientes a mano (sirve para misma persona con 2 teléfonos) ──
+  var _fusionBaseKey = '', _fusionBaseNombre = '', _fusionBasePed = 0;
+  window.crmFusionarConInit = function(){
+    if (!crmFichaActual || crmFichaActual.tipo !== 'cliente') return;
+    var c = crmFichaActual.data;
+    _fusionBaseKey = c.key; _fusionBaseNombre = c.nombre; _fusionBasePed = c.countPedidos || 0;
+    el('crmDrawerBody').innerHTML = '<div class="crm-section">'
+      + '<div class="crm-section-h">Fusionar &laquo;'+escHtml(c.nombre)+'&raquo; con otro cliente</div>'
+      + '<div class="crm-dup-hint">Buscá a la misma persona (que aparece con otro teléfono o nombre). Queda el que tenga más pedidos; el otro se absorbe. Reversible.</div>'
+      + '<div class="crm-meta-form"><div class="fg"><input id="fusionSearch" placeholder="Buscar por nombre, teléfono…" oninput="crmFusionRender()" autocomplete="off"></div></div>'
+      + '<div id="fusionResults" class="bbdd-list"></div>'
+      + '<button class="crm-edit-btn" style="margin-top:10px" onclick="crmOpenCliente(\''+encodeURIComponent(c.key)+'\')">&larr; Volver a la ficha</button>'
+    + '</div>';
+    setTimeout(function(){ var f=el('fusionSearch'); if(f) f.focus(); }, 50);
+  };
+  window.crmFusionRender = function(){
+    var q = (el('fusionSearch').value || '').toLowerCase().trim();
+    var res = el('fusionResults'); if (!res) return;
+    if (q.length < 2){ res.innerHTML = '<div class="crm-ped-prods" style="padding:8px">Escribí al menos 2 letras…</div>'; return; }
+    var matches = (crmClientes||[]).filter(function(x){
+      if (x.key === _fusionBaseKey) return false;
+      var hay = (x.nombre||'').toLowerCase()+' '+(x.telDisplay||'')+' '+(x.tel||'')+' '+(x.barrio||'').toLowerCase()+' '+(x.subBarrio||'').toLowerCase()+' '+(x.lote||'');
+      return hay.indexOf(q) >= 0;
+    }).slice(0, 15);
+    if (!matches.length){ res.innerHTML = '<div class="crm-ped-prods" style="padding:8px">Sin resultados</div>'; return; }
+    res.innerHTML = matches.map(function(x){
+      return '<div class="crm-card" onclick="crmFusionConfirm(\''+encodeURIComponent(x.key)+'\')">'
+        + '<div class="crm-card-info"><div class="crm-card-name">'+escHtml(x.nombre)+'</div>'
+        + '<div class="crm-card-meta"><span>'+escHtml(x.subBarrio||x.barrio||'')+(x.lote?' &middot; Lote '+escHtml(x.lote):'')+'</span>'+(x.telDisplay?'<span>'+escHtml(x.telDisplay)+'</span>':'')+'<span>'+x.pedidos+' ped</span></div></div>'
+        + '<div class="crm-card-stats"><div class="crm-card-fact">$'+fmt$(x.facturado)+'</div></div></div>';
+    }).join('');
+  };
+  window.crmFusionConfirm = function(otherKeyEnc){
+    var otherKey = decodeURIComponent(otherKeyEnc);
+    var other = (crmClientes||[]).filter(function(x){ return x.key === otherKey; })[0];
+    if (!other) return;
+    var baseCanon = (_fusionBasePed >= (other.pedidos||0));
+    var canonKey = baseCanon ? _fusionBaseKey : otherKey;
+    var aliasKey = baseCanon ? otherKey : _fusionBaseKey;
+    var canonNom = baseCanon ? _fusionBaseNombre : other.nombre;
+    var aliasNom = baseCanon ? other.nombre : _fusionBaseNombre;
+    if (!confirm('Fusionar «'+aliasNom+'» dentro de «'+canonNom+'»?\nQueda «'+canonNom+'» con todo combinado (pedidos, facturación, teléfonos). Reversible borrando la fila en la hoja "Clientes Merge".')) return;
+    toast('Fusionando...');
+    fetch(CRM_API, {method:'POST', mode:'cors', body: JSON.stringify({action:'crmMergeClientes', keyCanonical:canonKey, keyAlias:aliasKey})})
+      .then(function(r){ return r.json(); })
+      .then(function(d){
+        if (d.ok){ toast('Clientes fusionados'); try{localStorage.removeItem('maleu_crm_clientes_v1');}catch(e){} crmClientes=null; crmCloseDrawer(); loadCrmClientes(); }
+        else toast('Error: '+(d.error||''));
+      })
+      .catch(function(err){ toast('Error: '+err.message); });
+  };
+
   window.crmOpenCliente = function(keyEnc){
     var key = decodeURIComponent(keyEnc);
     openDrawer();
@@ -12518,6 +12570,7 @@ if('serviceWorker' in navigator){
       + reactWp
       + verMapaBtn
       + (c.tel ? '<button class="crm-edit-btn" onclick="crmEditarMeta()">Editar ficha</button>' : '')
+      + '<button class="crm-edit-btn" onclick="crmFusionarConInit()">Fusionar con…</button>'
     + '</div>';
 
     var pctCob = c.totalFacturado > 0 ? Math.round(c.totalCobrado / c.totalFacturado * 100) : 100;
