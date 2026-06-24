@@ -3881,14 +3881,38 @@ function confirmarCobroVendedor(vendedor,monto){
 
 function cobrarVendedorRed(vendedor,formaPago){
   formaPago=formaPago||'Transferencia';
-  // Quitar todos los pedidos del vendedor de pendientesCobro local
+  var payload={action:'cobrarVendedorRed',vendedor:vendedor,formaPago:formaPago,ts:Date.now()};
+  // UI optimista: sacar al vendedor de la lista local (con backup para revertir si falla)
+  var backup=pendientesCobro.filter(function(pc){return (pc.isVendedor&&pc.c.indexOf(vendedor)===0);});
   pendientesCobro=pendientesCobro.filter(function(pc){return !(pc.isVendedor&&pc.c.indexOf(vendedor)===0)});
-  syncQueue.push({action:'cobrarVendedorRed',vendedor:vendedor,formaPago:formaPago,ts:Date.now()});
-  saveLocal();showLoader('Cobrando a '+vendedor.split(' ')[0]+'...');processSyncQueue();
-  showToast('Cobrado a '+vendedor.split(' ')[0]+' · '+(formaPago==='Efectivo'?'efectivo':'MP'));
+  saveLocal();
   if(currentTab==='cobros')renderCobrosFromServer();
-  document.getElementById('tabCobrosCount').textContent=pendientesCobro.length||'';
+  var elB=document.getElementById('tabCobrosCount');if(elB)elB.textContent=pendientesCobro.length||'';
   if(navigator.vibrate)navigator.vibrate(30);
+  function _revert(){pendientesCobro=pendientesCobro.concat(backup);saveLocal();if(currentTab==='cobros')renderCobrosFromServer();var e2=document.getElementById('tabCobrosCount');if(e2)e2.textContent=pendientesCobro.length||'';}
+  // Offline real → encolar. Online → FETCH DIRECTO endurecido (NO syncQueue: en el
+  // iframe del Panel la cola se trababa y el cobro nunca se mandaba, sin avisar).
+  if(!isOnline){ syncQueue.push(payload);saveLocal();showToast('Cobrado offline — se sincroniza al volver señal');return; }
+  showLoader('Cobrando a '+vendedor.split(' ')[0]+'...');
+  var _ab=(typeof AbortController!=='undefined')?new AbortController():null;
+  var _t=setTimeout(function(){if(_ab)_ab.abort();},15000);
+  var _fopts={method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(payload),redirect:'follow'};
+  if(_ab)_fopts.signal=_ab.signal;
+  fetch(APPS_SCRIPT_URL,_fopts)
+    .then(function(rs){clearTimeout(_t);return rs.json().catch(function(){return{ok:false,error:'InvalidJSON'};});})
+    .then(function(res){
+      hideLoader(true);
+      if(res&&res.ok){
+        if(res.updated>0){ showToast('✓ Cobrado a '+vendedor.split(' ')[0]+' · '+(formaPago==='Efectivo'?'efectivo':'MP')+' ($'+formatMoney(res.total||0).replace('$','')+')'); }
+        else { _revert(); showToast('Nada por cobrar de '+vendedor.split(' ')[0]); }
+        if(currentTab==='cobros')fetchCobrosPendientes(true);
+      } else { _revert(); showToast('❌ Error: '+((res&&res.error)||'sin respuesta')+' — probá de nuevo'); }
+    })
+    .catch(function(err){
+      clearTimeout(_t);hideLoader(true);_revert();
+      var aborted=err&&err.name==='AbortError';
+      showToast(aborted?'❌ Timeout (15s) — probá de nuevo':'❌ Sin respuesta — '+((err&&err.message)||'error'));
+    });
 }
 
 
