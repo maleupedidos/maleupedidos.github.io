@@ -5684,13 +5684,17 @@ function rInicio(){
     });
     return h;
   }
-  // ── CÓMO FUE LA SEMANA (Home / Estancias del Pilar) ──
-  // Respuesta de un vistazo a "¿cómo le fue a Maleu esta semana?". Es lo primero
-  // que se ve al entrar a Inicio. Universo: canal Home (Estancias del Pilar + Los
-  // Alcanfores + Estancias del Río), el corazón recurrente del negocio. Ancla en la
-  // última semana CERRADA (un lunes a la mañana responde por el finde que pasó, no
-  // por la semana que recién arranca); el domingo muestra el cierre del propio día.
-  // Compara esa semana completa vs la anterior completa. Facturado = p.$ (col V).
+  // ── CÓMO FUE / CÓMO VA LA SEMANA (Home / Estancias del Pilar) ──
+  // Respuesta de un vistazo a "¿cómo le va a Maleu?". Es lo primero que se ve al
+  // entrar a Inicio. Universo: canal Home (Estancias del Pilar + Los Alcanfores +
+  // Estancias del Río), el corazón recurrente del negocio.
+  //   • LUNES → muestra la semana que CERRÓ ayer (el finde), completa vs la anterior
+  //     completa. Así un lunes respondés por el fin de semana, no por una semana que
+  //     recién arranca con 1 pedido.
+  //   • MARTES a SÁBADO → muestra la semana EN CURSO, comparada "a la misma altura"
+  //     (mismo día ISO) contra la semana pasada, para que el avance sea honesto.
+  //   • DOMINGO → cierre del propio día (la semana en curso ya prácticamente completa).
+  // Margen bruto = facturado − costo (p.$ − p.co), la definición canónica del EERR/hero.
   window.copyResumenSemana=function(btn){
     try{
       var txt=decodeURIComponent(btn.getAttribute('data-copy')||'');
@@ -5701,36 +5705,48 @@ function rInicio(){
     }catch(e){}
   };
   function comoFueSemanaHTML(){
-    var diaIdx=(now.getDay()+6)%7; // altura de hoy: Lun=0..Dom=6
-    // "La semana" que responde a ¿cómo FUE? = la última semana CERRADA. El domingo
-    // es el cierre de la semana en curso (ese día sí mostramos la propia). El resto
-    // de los días anclamos en la semana que terminó el domingo pasado, así un lunes
-    // a la mañana ves el resultado real del fin de semana y no una semana que recién
-    // arranca con 1 pedido. Comparación: semana cerrada completa vs la anterior completa.
-    var refDate=(diaIdx===6)
-      ? new Date(now.getFullYear(),now.getMonth(),now.getDate())
-      : new Date(now.getFullYear(),now.getMonth(),now.getDate()-(diaIdx+1)); // domingo pasado
+    var diaIdx=(now.getDay()+6)%7; // Lun=0..Dom=6
+    var hoyM=new Date(now.getFullYear(),now.getMonth(),now.getDate());
+    var DAB=['lunes','martes','miércoles','jueves','viernes','sábado','domingo'];
+    // Modo: lunes = semana cerrada (el finde); martes en adelante = semana en curso.
+    var modoCerrada=(diaIdx===0);
+    var refDate, cutIdx;
+    if(modoCerrada){ refDate=new Date(hoyM.getFullYear(),hoyM.getMonth(),hoyM.getDate()-1); cutIdx=6; } // domingo pasado, semana completa
+    else { refDate=hoyM; cutIdx=diaIdx; } // semana en curso, recortada a hoy (misma altura)
     var refWeek=getWeek(refDate);
     var prevDate=new Date(refDate.getFullYear(),refDate.getMonth(),refDate.getDate()-7);
     var prevWeek=getWeek(prevDate);
-    var curWeekNow=getWeek(new Date(now.getFullYear(),now.getMonth(),now.getDate())); // semana en curso real
-    var agg={}; // sem -> {fact,n,cli:{}}
+    var enCurso=(!modoCerrada && diaIdx!==6); // mar-sáb: presente; lun y dom: pasado/cierre
+    // Agregado Home entregados por semana, con buckets por día ISO para poder cortar "a la misma altura".
+    var agg={}; // w -> {fact,n,mg,cli:{}, wd:{dN:{fact,n,mg,cli:{}}}}
     D.pedidos.forEach(function(p){
       if(p.h!=='Home'||p.es!=='Entregado'||p.hist)return;
       var f=p.fe||p.f;if(!f)return;
       var pp=String(f).split('/');if(pp.length<2)return;
       var d=new Date(nowYear,Number(pp[1])-1,Number(pp[0]));
-      var w=getWeek(d), cli=(p.c||'').trim().toLowerCase();
-      if(!agg[w])agg[w]={fact:0,n:0,mg:0,cli:{}};
-      // Margen bruto = facturado − costo (definición canónica del EERR/hero, NO la col p.mg).
-      agg[w].fact+=Number(p.$||0);agg[w].n++;agg[w].mg+=(Number(p.$||0)-(Number(p.co||0)));if(cli)agg[w].cli[cli]=true;
+      var w=getWeek(d), wd=(d.getDay()+6)%7, cli=(p.c||'').trim().toLowerCase();
+      var mb=(Number(p.$||0)-(Number(p.co||0)));
+      if(!agg[w])agg[w]={fact:0,n:0,mg:0,cli:{},wd:{}};
+      agg[w].fact+=Number(p.$||0);agg[w].n++;agg[w].mg+=mb;if(cli)agg[w].cli[cli]=true;
+      var kd='d'+wd;
+      if(!agg[w].wd[kd])agg[w].wd[kd]={fact:0,n:0,mg:0,cli:{}};
+      agg[w].wd[kd].fact+=Number(p.$||0);agg[w].wd[kd].n++;agg[w].wd[kd].mg+=mb;if(cli)agg[w].wd[kd].cli[cli]=true;
     });
-    var cur=agg[refWeek];
-    if(!cur||cur.n===0)return '';
-    var prev=agg[prevWeek]||null;
+    function cutWeek(wa,cut){
+      if(!wa)return null;
+      var o={fact:0,n:0,mg:0,cli:{}};
+      Object.keys(wa.wd).forEach(function(kd){
+        if(Number(kd.slice(1))>cut)return;
+        o.fact+=wa.wd[kd].fact;o.n+=wa.wd[kd].n;o.mg+=wa.wd[kd].mg;
+        Object.keys(wa.wd[kd].cli).forEach(function(c){o.cli[c]=true;});
+      });
+      return o.n>0?o:null;
+    }
+    var cur=cutWeek(agg[refWeek],cutIdx);
+    if(!cur)return '';
+    var prev=cutWeek(agg[prevWeek],cutIdx);
     var curCli=Object.keys(cur.cli).length, curMg=cur.mg||0, curMgPct=cur.fact>0?Math.round(curMg/cur.fact*100):0;
     var prevCli=prev?Object.keys(prev.cli).length:0, prevMg=prev?(prev.mg||0):0;
-    var esCierre=(diaIdx===6); // domingo: cierre del día (la semana ref es la actual)
     function delta(c,p,money){
       if(prev===null)return '';
       var d=c-p, col=d>0?'var(--gd)':(d<0?'var(--r)':'var(--bl)'), arr=d>0?'▲':(d<0?'▼':'—');
@@ -5743,18 +5759,20 @@ function rInicio(){
         +'<div style="font-size:15px;font-weight:800;color:var(--ink);line-height:1.1;margin-top:3px">'+val+'</div>'
         +delta(c,p,money)+'</div>';
     }
+    var titulo=enCurso?'Cómo va la semana':'Cómo fue la semana';
+    var estado=modoCerrada?'cerrada':(diaIdx===6?'cierre de hoy':'en curso · al '+DAB[diaIdx]);
     var verdict,vcol,vem;
     if(prev===null){verdict='Primera semana con datos';vcol='var(--bl)';vem='📊';}
-    else if(cur.fact>prev.fact){verdict='Mejor que la semana anterior';vcol='var(--gd)';vem='📈';}
-    else if(cur.fact<prev.fact){verdict='Por debajo de la semana anterior';vcol='var(--r)';vem='📉';}
-    else {verdict='Igual que la semana anterior';vcol='var(--bl)';vem='➡️';}
+    else if(cur.fact>prev.fact){verdict=enCurso?'Vas mejor que la semana pasada':'Mejor que la semana anterior';vcol='var(--gd)';vem='📈';}
+    else if(cur.fact<prev.fact){verdict=enCurso?'Por ahora, abajo de la semana pasada':'Por debajo de la semana anterior';vcol='var(--r)';vem='📉';}
+    else {verdict=enCurso?'Igual que la semana pasada':'Igual que la semana anterior';vcol='var(--bl)';vem='➡️';}
     if(prev!==null&&cur.fact!==prev.fact)verdict+=' ('+(cur.fact>prev.fact?'+':'-')+'$'+f$(Math.abs(cur.fact-prev.fact))+')';
-    var phrase='📊 Semana '+refWeek+' · Estancias del Pilar: '+cur.n+' pedidos · $'+f$(cur.fact)+' facturado · '+curCli+' clientes · margen bruto $'+f$(Math.round(curMg))+' ('+curMgPct+'%)';
-    if(prev!==null){var df=cur.fact-prev.fact;phrase+=' · '+(df>0?'⬆️ mejor que la semana anterior (+$'+f$(df)+')':(df<0?'⬇️ abajo de la anterior (-$'+f$(Math.abs(df))+')':'igual que la anterior'));}
+    var phrase='📊 Semana '+refWeek+' · Estancias del Pilar'+(enCurso?' (en curso al '+DAB[diaIdx]+')':'')+': '+cur.n+' pedidos · $'+f$(cur.fact)+' facturado · '+curCli+' clientes · margen bruto $'+f$(Math.round(curMg))+' ('+curMgPct+'%)';
+    if(prev!==null){var df=cur.fact-prev.fact;var vsTxt=enCurso?' a la misma altura':'';phrase+=' · '+(df>0?'⬆️ '+(enCurso?'vas mejor':'mejor')+vsTxt+' (+$'+f$(df)+')':(df<0?'⬇️ abajo'+vsTxt+' (-$'+f$(Math.abs(df))+')':'igual'+vsTxt));}
     var h='<div class="card acc" style="padding:13px;margin:10px 0">';
     h+='<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:9px">';
-    h+='<div><div style="font-size:13px;font-weight:800;color:var(--ink)">📊 Cómo fue la semana</div>'
-      +'<div style="font-size:10px;color:var(--bl);font-weight:700;margin-top:1px">Estancias del Pilar · Semana '+refWeek+' · '+(esCierre?'cierre de hoy':'cerrada')+'</div></div>';
+    h+='<div><div style="font-size:13px;font-weight:800;color:var(--ink)">📊 '+titulo+'</div>'
+      +'<div style="font-size:10px;color:var(--bl);font-weight:700;margin-top:1px">Estancias del Pilar · Semana '+refWeek+' · '+estado+'</div></div>';
     h+='<button onclick="copyResumenSemana(this)" data-lbl="📋 Copiar" data-copy="'+encodeURIComponent(phrase)+'" style="background:var(--ink);color:#fff;border:none;border-radius:8px;padding:7px 10px;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap">📋 Copiar</button>';
     h+='</div>';
     h+='<div style="display:flex;gap:6px">';
@@ -5763,12 +5781,20 @@ function rInicio(){
     h+=stat('Clientes',curCli,curCli,prevCli,false);
     h+=stat('Margen Bruto','$'+f$(Math.round(curMg)),Math.round(curMg),Math.round(prevMg),true);
     h+='</div>';
-    h+='<div style="margin-top:9px;font-size:12.5px;font-weight:800;color:'+vcol+'">'+vem+' '+verdict+'</div>';
-    // Línea extra: si la semana en curso ya arrancó (no es domingo) y tiene actividad
-    if(!esCierre&&curWeekNow!==refWeek&&agg[curWeekNow]&&agg[curWeekNow].n>0){
-      var ip=agg[curWeekNow];
+    h+='<div style="margin-top:9px;font-size:12.5px;font-weight:800;color:'+vcol+'">'+vem+' '+verdict+(enCurso&&prev!==null?'<span style="font-size:10px;font-weight:600;color:var(--bl)"> · a la misma altura ('+DAB[diaIdx]+')</span>':'')+'</div>';
+    // Línea extra de referencia:
+    //  - en curso → cómo terminó la semana anterior (completa)
+    //  - lunes (cerrada) → cómo viene arrancando la semana en curso
+    if(enCurso && agg[prevWeek] && agg[prevWeek].n>0){
+      var pw=agg[prevWeek];
       h+='<div style="margin-top:8px;padding-top:8px;border-top:1px dashed var(--cd);font-size:11px;color:var(--bl)">'
-        +'<b style="color:var(--ink2)">Semana en curso ('+curWeekNow+'):</b> '+ip.n+' pedido'+(ip.n===1?'':'s')+' · $'+f$(ip.fact)+' — recién arranca</div>';
+        +'<b style="color:var(--ink2)">Semana anterior ('+prevWeek+', cerrada):</b> '+pw.n+' pedidos · $'+f$(pw.fact)+'</div>';
+    } else if(modoCerrada){
+      var cw=getWeek(hoyM), ipc=agg[cw];
+      if(ipc && ipc.n>0 && cw!==refWeek){
+        h+='<div style="margin-top:8px;padding-top:8px;border-top:1px dashed var(--cd);font-size:11px;color:var(--bl)">'
+          +'<b style="color:var(--ink2)">Semana en curso ('+cw+'):</b> '+ipc.n+' pedido'+(ipc.n===1?'':'s')+' · $'+f$(ipc.fact)+' — recién arranca</div>';
+      }
     }
     return h;
   }
