@@ -3053,11 +3053,18 @@ function processSyncQueue() {
   var item = syncQueue[0];
   var attempt = item._attempt || 0;
 
+  // Timeout 25s: si el server queda colgado, abortamos y el loader cierra en el catch
+  // (antes el fetch sin timeout dejaba el "Recibiendo mercadería..." infinito).
+  var ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+  var timeoutId = ctrl ? setTimeout(function(){ try { ctrl.abort(); } catch(e){} }, 25000) : null;
+
   fetch(APPS_SCRIPT_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-    body: JSON.stringify(item)
+    body: JSON.stringify(item),
+    signal: ctrl ? ctrl.signal : undefined
   }).then(function(r) {
+    if (timeoutId) clearTimeout(timeoutId);
     return r.json().catch(function() { return { ok: false, parseError: true }; });
   }).then(function(resp) {
     if (resp && resp.ok === false && resp.retry) {
@@ -3096,7 +3103,13 @@ function processSyncQueue() {
         if (isOnline) refresh(true);
       }
     }
-  }).catch(function() {
+  }).catch(function(err) {
+    if (timeoutId) clearTimeout(timeoutId);
+    // Si fue aborto por timeout, avisar a Tadeo (sino queda silencioso).
+    if (err && err.name === 'AbortError') {
+      hideLoader(true);
+      showToast('Server tardó >25s. Refrescá para confirmar si se aplicó.');
+    }
     // Error de red o excepción → retry con backoff
     scheduleRetry(item, attempt);
   });
