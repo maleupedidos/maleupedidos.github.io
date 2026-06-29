@@ -94,21 +94,78 @@ function getActiveCategories() { return currentZone === 'clubes' ? CATEGORIAS_CL
 
    comboCart: { [signature]: { comboId, qty, comp:[{id,qty}], picks:[{label,prodId,nombre}] } }
    ══════════════════════════════════════════════════ */
+// Placeholder común hasta tener artes definitivos de cada combo.
+const COMBO_PLACEHOLDER_IMG = 'pack-muzarella-cocida.jpg';
 const COMBOS = [
   {
-    id: 'cmb_finde',
-    nombre: 'Combo Finde',
-    desc: 'Elegí tu pizza para compartir, el sabor de empanadas y sumá el postre. La cena del finde resuelta de una.',
-    precio: 39900,                       // precio fijo cerrado
-    img: 'pack-muzarella-cocida.jpg',    // placeholder hasta tener arte propio del combo
+    id: 'cmb_descubri_semana',
+    nombre: 'Descubrí Maleu · Semana',
+    desc: 'Conocé los productos ideales para el día a día.',
+    precio: 46900,
+    img: COMBO_PLACEHOLDER_IMG,
     emoji: '🎁',
-    top: true,
-    chips: ['Para 3–4 personas', 'Pizza + empanadas + postre'],
-    zonas: ['estancias'],   // combos solo para Estancias del Pilar / Alcanfores / Río
+    zonas: ['estancias'],
     slots: [
-      { label: 'Pizza',     unidad: 'pack de pizzas',    pick: 1, options: { cat: 'Pack Pizzas x2' } },
-      { label: 'Empanadas', unidad: 'pack de empanadas', pick: 1, options: { cat: 'Empanadas' } },
-      { label: 'Postre',    unidad: 'postre',            pick: 1, options: { ids: [13] } },  // Franui (1 opción → fijo)
+      { label: 'Tarta',       unidad: 'tarta',               pick: 1, options: { cat: 'Tartas' } },
+      { label: 'Wrap',        unidad: 'wrap',                pick: 1, options: { cat: 'Wraps' } },
+      { label: 'Sorrentinos', unidad: 'pack de sorrentinos', pick: 1, options: { ids: [10, 9, 8] } },  // Calabaza, J&Q, Cordero
+      { label: 'Postre',      unidad: 'Franui',              pick: 1, options: { ids: [13] } },
+    ],
+  },
+  {
+    id: 'cmb_descubri_finde',
+    nombre: 'Descubrí Maleu · Fin de Semana',
+    desc: 'Probá los clásicos de Maleu para compartir.',
+    precio: 34900,
+    img: COMBO_PLACEHOLDER_IMG,
+    emoji: '🎁',
+    zonas: ['estancias'],
+    slots: [
+      { label: 'Pizza premium', unidad: 'pizza individual',   pick: 1, options: { cat: 'Pizzas Individuales' } },
+      { label: 'Empanadas',     unidad: 'pack de empanadas',  pick: 1, options: { cat: 'Empanadas' } },
+      { label: 'Postre',        unidad: 'Franui',             pick: 1, options: { ids: [13] } },
+    ],
+  },
+  {
+    id: 'cmb_noche_casa',
+    nombre: 'Noche en Casa',
+    desc: 'Una cena rica y lista en minutos para dos personas.',
+    precio: 23900,
+    img: COMBO_PLACEHOLDER_IMG,
+    emoji: '🎁',
+    zonas: ['estancias'],
+    slots: [
+      { label: 'Pizza',  unidad: 'pack de pizzas x2', pick: 1, options: { cat: 'Pack Pizzas x2' } },
+      { label: 'Postre', unidad: 'Franui',            pick: 1, options: { ids: [13] } },
+    ],
+  },
+  {
+    id: 'cmb_mesa_familiar',
+    nombre: 'Mesa Familiar',
+    desc: 'Una solución práctica para una comida en familia.',
+    precio: 45900,
+    img: COMBO_PLACEHOLDER_IMG,
+    emoji: '🎁',
+    zonas: ['estancias'],
+    slots: [
+      { label: 'Tarta',     unidad: 'tarta',              pick: 2, options: { cat: 'Tartas' } },      // dos iguales o distintas
+      { label: 'Empanadas', unidad: 'pack de empanadas',  pick: 1, options: { cat: 'Empanadas' } },
+      { label: 'Postre',    unidad: 'Franui',             pick: 1, options: { ids: [13] } },
+    ],
+  },
+  {
+    id: 'cmb_freezer_lleno',
+    nombre: 'Freezer Lleno',
+    desc: 'Resolvé varias comidas de la semana en un solo pedido.',
+    precio: 84900,
+    img: COMBO_PLACEHOLDER_IMG,
+    emoji: '🎁',
+    zonas: ['estancias'],
+    slots: [
+      { label: 'Pizza',       unidad: 'pack de pizzas x2',   pick: 2, options: { cat: 'Pack Pizzas x2' } },  // dos iguales o distintas
+      { label: 'Sorrentinos', unidad: 'pack de sorrentinos', pick: 1, options: { ids: [10, 9, 8] } },
+      { label: 'Empanadas',   unidad: 'pack de empanadas',   pick: 1, options: { cat: 'Empanadas' } },
+      { label: 'Tarta',       unidad: 'tarta',               pick: 2, options: { cat: 'Tartas' } },           // dos iguales o distintas
     ],
   },
 ];
@@ -1391,7 +1448,7 @@ function renderCombosSectionHTML() {
         return p ? '<li class="fixed"><strong>' + pick + '×</strong> ' + p.nombre + '</li>' : '';
       }
       return '<li><strong>' + pick + '×</strong> ' + noun +
-        ' <span class="combo-choose">· elegís el sabor</span></li>';
+        ' <span class="combo-choose">· elegís ' + (pick > 1 ? 'los sabores' : 'el sabor') + '</span></li>';
     }).join('');
     const choices = comboHasChoices(c);
     const tachado = comboNaturalSumComp(resolveComp(c, defaultSelection(c)).comp);
@@ -1668,7 +1725,8 @@ function renderComboConfig() {
           (out ? '<span class="cfg-opt-out">Sin stock</span>' : '') +
           '</button>';
       }).join('');
-      pickBlocks.push('<div class="cfg-opts">' + cards + '</div>');
+      const blockHdr = pick > 1 ? '<div class="cfg-pick-idx">Elección ' + (k + 1) + '</div>' : '';
+      pickBlocks.push('<div class="cfg-pickblock">' + blockHdr + '<div class="cfg-opts">' + cards + '</div></div>');
     }
     const lbl = slot.label + ' <span class="cfg-pick-n">· elegí ' + pick + '</span>';
     return '<div class="cfg-slot"><div class="cfg-slot-label">' + lbl + '</div>' + pickBlocks.join('') + '</div>';
