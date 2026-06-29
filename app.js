@@ -104,11 +104,11 @@ const COMBOS = [
     emoji: '🎁',
     top: true,
     chips: ['Para 3–4 personas', 'Pizza + empanadas + postre'],
-    zonas: ['estancias', 'pilar'],
+    zonas: ['estancias'],   // combos solo para Estancias del Pilar / Alcanfores / Río
     slots: [
-      { label: 'Pizza',     pick: 1, options: { cat: 'Pack Pizzas x2' } },  // elegí 1 pack
-      { label: 'Empanadas', pick: 1, options: { cat: 'Empanadas' } },       // elegí 1 sabor
-      { label: 'Postre',    pick: 1, options: { ids: [13] } },              // Franui (fijo: 1 opción)
+      { label: 'Pizza',     unidad: 'pack de pizzas',    pick: 1, options: { cat: 'Pack Pizzas x2' } },
+      { label: 'Empanadas', unidad: 'pack de empanadas', pick: 1, options: { cat: 'Empanadas' } },
+      { label: 'Postre',    unidad: 'postre',            pick: 1, options: { ids: [13] } },  // Franui (1 opción → fijo)
     ],
   },
 ];
@@ -1360,6 +1360,9 @@ function applyZone() {
   renderCatalog();
   renderCatNav();
   updateCatNavTop();
+  // Botón "Ver los combos" del hero: solo si la zona tiene combos (hoy, Estancias).
+  var combosCta = $id('hero-combos-cta');
+  if (combosCta) combosCta.style.display = getActiveCombos().length ? '' : 'none';
   updateUI();
   updateStockDisplay();
   loadLastOrder();
@@ -1370,12 +1373,17 @@ function renderCombosSectionHTML() {
   const combos = getActiveCombos();
   if (!combos.length) return '';
   const cards = combos.map(c => {
-    // Resumen de la plantilla: slots con elección → "Elegí tu …"; fijos → "✓ …".
+    // Resumen de la composición: cuántas unidades de cada cosa + si elige el sabor.
     const compList = (c.slots || []).map(slot => {
       const opts = slotOptions(slot);
-      if (opts.length <= 1) { const p = opts[0]; return p ? '<li class="fixed">✓ ' + p.nombre + '</li>' : ''; }
       const pick = slot.pick || 1;
-      return '<li>Elegí ' + (pick > 1 ? pick + ' ' : 'tu ') + slot.label.toLowerCase() + '</li>';
+      const noun = slot.unidad || slot.label.toLowerCase();
+      if (opts.length <= 1) {
+        const p = opts[0];
+        return p ? '<li class="fixed"><strong>' + pick + '×</strong> ' + p.nombre + '</li>' : '';
+      }
+      return '<li><strong>' + pick + '×</strong> ' + noun +
+        ' <span class="combo-choose">· elegís el sabor</span></li>';
     }).join('');
     const choices = comboHasChoices(c);
     const tachado = comboNaturalSumComp(resolveComp(c, defaultSelection(c)).comp);
@@ -1400,9 +1408,9 @@ function renderCombosSectionHTML() {
       '</div>' +
     '</article>';
   }).join('');
-  return '<section class="cat-section combos-section"><div class="cat-header">' +
+  return '<section class="cat-section combos-section" id="combos-ancla"><div class="cat-header">' +
     '<div class="cat-title">🎁 Combos</div>' +
-    '<div class="cat-nota">Propuestas ya armadas a precio cerrado · Resolvé en un toque</div>' +
+    '<div class="cat-nota">Propuestas ya armadas a precio cerrado · Elegí los sabores y listo</div>' +
     '</div><div class="products-grid">' + cards + '</div></section>';
 }
 
@@ -1410,7 +1418,7 @@ function renderCombosSectionHTML() {
 function renderCatalog() {
   const cats = getActiveCategories();
   const prods_all = getActiveProducts();
-  $id('catalog-root').innerHTML = renderCombosSectionHTML() + cats.map(cat => {
+  $id('catalog-root').innerHTML = renderCombosSectionHTML() + '<span id="productos-ancla"></span>' + cats.map(cat => {
     const prods = prods_all.filter(p => p.cat === cat.nombre).sort((a,b) => (b.top?1:0) - (a.top?1:0));
     if (!prods.length) return '';
     return '<section class="cat-section"><div class="cat-header">' +
@@ -1654,7 +1662,7 @@ function renderComboConfig() {
       }).join('');
       pickBlocks.push('<div class="cfg-opts">' + cards + '</div>');
     }
-    const lbl = slot.label + (pick > 1 ? ' <span class="cfg-pick-n">(elegí ' + pick + ')</span>' : '');
+    const lbl = slot.label + ' <span class="cfg-pick-n">· elegí ' + pick + '</span>';
     return '<div class="cfg-slot"><div class="cfg-slot-label">' + lbl + '</div>' + pickBlocks.join('') + '</div>';
   }).join('');
 
