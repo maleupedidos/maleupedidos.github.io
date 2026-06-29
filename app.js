@@ -1958,6 +1958,14 @@ function updateUI() {
       incentiveEl.style.display = 'none';
     }
   }
+  // Barra de promo superior: visible normalmente (el 10% aplica a productos
+  // sueltos aun con combos). Solo se oculta si el carrito es SOLO combos
+  // (no hay nada descontable → el cartel mentiría).
+  var promoBar = $id('promo-bar');
+  if (promoBar && discountsActive()) {
+    var soloCombos = combosInCart() && productsSubtotal() === 0;
+    promoBar.style.display = soloCombos ? 'none' : '';
+  }
   updateFormSummary();
   updatePagoHint();
   // Si hay cupón aplicado, refresco el card para que pase de pending → activo
@@ -3221,6 +3229,8 @@ function updatePromoBar() {
   var bar = $id('promo-bar');
   if (!bar) return;
   if (!discountsActive()) { bar.style.display = 'none'; return; }
+  // Carrito solo-combos: no hay nada descontable → ocultar (no mentir con el 10%).
+  if (combosInCart() && productsSubtotal() === 0) { bar.style.display = 'none'; return; }
   // Construir el ticker dinámicamente según qué descuentos aplican en la zona
   // (en Pilar NO-Red solo aplica el +$100K, no el efectivo).
   var msgEl = bar.querySelector('.promo-msg');
