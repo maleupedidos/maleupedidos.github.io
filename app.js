@@ -2667,16 +2667,22 @@ function renderCatNav() {
     }
   } catch(e) {}
 }
-/* Scroll suave a un ancla compensando el header sticky (cat-nav + promo bar).
-   Más confiable que el salto nativo de #hash con secciones renderizadas por JS. */
+/* Scroll suave a un ancla. Usa scrollIntoView (imperativo, no depende del
+   hash) + scroll-margin-top en CSS para compensar el header sticky. */
 function _smoothScrollToEl(el) {
-  if (!el) return;
-  const sticky = document.querySelector('.sticky-header');
-  const offset = (sticky ? sticky.offsetHeight : 0) + 10;
-  const y = el.getBoundingClientRect().top + window.pageYOffset - offset;
-  window.scrollTo({ top: Math.max(0, y), behavior: 'smooth' });
+  if (!el) return false;
+  el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  return true;
 }
-function scrollToCombos() { _smoothScrollToEl($id('combos-ancla')); }
+function scrollToCombos() {
+  // Buscar por id; si no está, por clase (más estable ante re-render).
+  const el = $id('combos-ancla') || document.querySelector('.combos-section');
+  if (!_smoothScrollToEl(el)) {
+    // Último recurso: si la sección no existe aún, re-render y reintentar.
+    if (typeof renderCatalog === 'function') { renderCatalog(); updateStockDisplay(); }
+    _smoothScrollToEl($id('combos-ancla') || document.querySelector('.combos-section'));
+  }
+}
 function scrollToProductos() { _smoothScrollToEl($id('productos-ancla') || $id('catalogo')); }
 
 let _scrollingToCat = false;
