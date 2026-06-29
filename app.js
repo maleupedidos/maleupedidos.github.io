@@ -99,11 +99,11 @@ const COMBO_PLACEHOLDER_IMG = 'pack-muzarella-cocida.jpg';
 const COMBOS = [
   // ── TEMPORALES (categoria definida → van primero, separados) ──
   {
-    id: 'cmb_arg_32avos',
-    nombre: 'Combo Argentina · 32avos',
+    id: 'cmb_arg_16avos',
+    nombre: 'Combo Argentina · 16avos',
     desc: 'Para alentar a la Selección.',
     precio: 39900,
-    img: COMBO_PLACEHOLDER_IMG,
+    img: 'combo-arg-16avos.jpg', fullCard: true,
     emoji: '🇦🇷',
     flag: '🇦🇷',
     categoria: '🇦🇷 Mundial 2026',
