@@ -77,86 +77,127 @@ function getActiveProducts() {
 function getActiveCategories() { return currentZone === 'clubes' ? CATEGORIAS_CLUBES : CATEGORIAS; }
 
 /* ══════════════════════════════════════════════════
-   COMBOS — bundles con precio fijo cerrado
+   COMBOS — bundles configurables con precio fijo cerrado
    ──────────────────────────────────────────────────
-   Un combo es atómico para el cliente (una sola línea, el +/− mueve el combo
-   entero) pero se EXPANDE a productos reales al escribir al Sheet, para no
-   romper stock / caja / abastecimiento / analytics.
-   - precio: precio fijo cerrado (NO suma de componentes). No se le apila el
-     10% efectivo ni cupones (queda amurallado del descuento automático).
-   - items: [{id, qty}] referencian ids de PRODUCTOS (zona estancias/pilar).
-   - zonas: opcional; si falta, se habilita en estancias y pilar (clubes nunca,
-     porque usa otra lista de precios/ids). Un combo solo aparece si TODOS sus
-     componentes existen y están habilitados en la zona actual.
-   El precio "tachado" (valor individual) y el ahorro se derivan solos.
+   Un combo es una PLANTILLA con `slots` (ranuras). Cada slot es "elegí N de
+   este conjunto de opciones válidas". El cliente arma el combo en un modal y
+   recién entonces lo agrega; cada CONFIGURACIÓN distinta es una instancia
+   distinta del carrito.
+   - precio: fijo cerrado (NO suma de componentes). No apila 10%/promos/cupón.
+   - slots[].options: { cat:'Tartas' }  (todas las de la zona) | { ids:[28,29] }.
+   - slots[].pick: cuántas unidades elige (default 1).
+   - Un slot con 1 sola opción válida = componente fijo (no muestra selector).
+   - Un combo aparece en una zona solo si TODOS sus slots tienen >=1 opción.
+   El combo se EXPANDE a productos reales al escribir al Sheet (stock/caja/
+   abastecimiento/analytics intactos). El precio original "tachado" se calcula
+   según la selección concreta.
+
+   comboCart: { [signature]: { comboId, qty, comp:[{id,qty}], picks:[{label,prodId,nombre}] } }
    ══════════════════════════════════════════════════ */
 const COMBOS = [
   {
     id: 'cmb_finde',
     nombre: 'Combo Finde',
-    desc: 'Pizza para compartir, empanadas y el postre. La cena del finde resuelta de una.',
+    desc: 'Elegí tu pizza para compartir, el sabor de empanadas y sumá el postre. La cena del finde resuelta de una.',
     precio: 39900,                       // precio fijo cerrado
     img: 'pack-muzarella-cocida.jpg',    // placeholder hasta tener arte propio del combo
     emoji: '🎁',
     top: true,
     chips: ['Para 3–4 personas', 'Pizza + empanadas + postre'],
     zonas: ['estancias', 'pilar'],
-    items: [
-      { id: 5,  qty: 1 },   // Pack Muzarella x2
-      { id: 11, qty: 1 },   // Empanadas Carne a Cuchillo x8
-      { id: 13, qty: 1 },   // Franui Leche
+    slots: [
+      { label: 'Pizza',     pick: 1, options: { cat: 'Pack Pizzas x2' } },  // elegí 1 pack
+      { label: 'Empanadas', pick: 1, options: { cat: 'Empanadas' } },       // elegí 1 sabor
+      { label: 'Postre',    pick: 1, options: { ids: [13] } },              // Franui (fijo: 1 opción)
     ],
   },
 ];
 const COMBO_MAP = {}; COMBOS.forEach(c => COMBO_MAP[c.id] = c);
 
-/* Combos visibles en la zona actual: clubes nunca; resto solo si todos los
-   componentes existen y están habilitados en la zona. */
+/* Opciones válidas de un slot en la zona actual (array de productos). */
+function slotOptions(slot) {
+  let prods;
+  if (slot.options && slot.options.ids) {
+    prods = slot.options.ids.map(id => PROD_MAP[id]).filter(Boolean);
+  } else if (slot.options && slot.options.cat) {
+    prods = getActiveProducts().filter(p => p.cat === slot.options.cat);
+  } else { prods = []; }
+  return prods.filter(p => !p.zonas || p.zonas.indexOf(currentZone) >= 0);
+}
+/* ¿El combo tiene al menos un slot con opción a elegir (más de 1)? */
+function comboHasChoices(c) { return (c.slots || []).some(s => slotOptions(s).length > 1); }
+/* ¿El combo se puede mostrar en la zona? Todos los slots con >=1 opción. */
+function comboAvailableInZone(c) {
+  if (c.zonas && c.zonas.indexOf(currentZone) < 0) return false;
+  if (!c.slots || !c.slots.length) return false;
+  return c.slots.every(s => slotOptions(s).length >= 1);
+}
 function getActiveCombos() {
   if (currentZone === 'clubes') return [];
-  return COMBOS.filter(function(c) {
-    if (c.zonas && c.zonas.indexOf(currentZone) < 0) return false;
-    return c.items.every(function(ci) {
-      const p = PROD_MAP[ci.id];
-      if (!p) return false;
-      if (p.zonas && p.zonas.indexOf(currentZone) < 0) return false;
-      return true;
-    });
+  return COMBOS.filter(comboAvailableInZone);
+}
+/* Selección por defecto: primera opción de cada slot (repite si pick>1). */
+function defaultSelection(c) {
+  return (c.slots || []).map(slot => {
+    const opts = slotOptions(slot);
+    const pick = slot.pick || 1;
+    const sel = [];
+    for (let k = 0; k < pick; k++) { const p = opts[k % opts.length] || opts[0]; sel.push(p ? p.id : null); }
+    return sel;
   });
 }
-/* Suma del valor individual de los componentes de un combo (precio "tachado"). */
-function comboNaturalSum(c) {
-  return c.items.reduce(function(s, ci) {
-    const p = PROD_MAP[ci.id]; return s + (p ? p.precio * ci.qty : 0);
-  }, 0);
+/* Resuelve una selección (array alineado a slots, cada uno array de prodIds)
+   en componentes mergeados {comp:[{id,qty}], picks:[{label,prodId,nombre}]}. */
+function resolveComp(c, selections) {
+  const compMap = {}; const picks = [];
+  (c.slots || []).forEach((slot, i) => {
+    (selections[i] || []).forEach(pid => {
+      if (pid == null) return;
+      const key = String(pid);
+      compMap[key] = (compMap[key] || 0) + 1;
+      const p = PROD_MAP[pid];
+      picks.push({ label: slot.label, prodId: pid, nombre: p ? p.nombre : '' });
+    });
+  });
+  const comp = Object.entries(compMap).map(([id, qty]) => ({ id: isNaN(id) ? id : +id, qty }));
+  return { comp, picks };
 }
-/* Ahorro de un combo respecto a comprar suelto (>=0). */
-function comboSavings(c) { return Math.max(0, comboNaturalSum(c) - c.precio); }
+/* Firma única de una configuración (combo + componentes elegidos). */
+function comboSignature(comboId, comp) {
+  return comboId + '|' + comp.map(ci => ci.id + 'x' + ci.qty).sort().join(',');
+}
+/* Valor individual (precio "tachado") de una lista de componentes. */
+function comboNaturalSumComp(comp) {
+  return comp.reduce((s, ci) => { const p = PROD_MAP[ci.id]; return s + (p ? p.precio * ci.qty : 0); }, 0);
+}
 
-/* Unidades de un producto ya comprometidas en el carrito (productos sueltos +
-   combos), opcionalmente excluyendo un combo (para evaluar cuántos más entran). */
-function _unitsConsumed(prodId, excludeCombo) {
+/* Unidades de un producto ya comprometidas (productos sueltos + instancias de
+   combo), opcionalmente excluyendo una firma (para evaluar cuántas más entran). */
+function _unitsConsumed(prodId, excludeSig) {
   let n = cart[prodId] || 0;
-  Object.keys(comboCart).forEach(function(cid) {
-    if (cid === excludeCombo) return;
-    const c = COMBO_MAP[cid]; if (!c) return;
-    const q = comboCart[cid];
-    c.items.forEach(function(ci) { if (String(ci.id) === String(prodId)) n += ci.qty * q; });
+  Object.keys(comboCart).forEach(sig => {
+    if (sig === excludeSig) return;
+    const inst = comboCart[sig]; if (!inst) return;
+    inst.comp.forEach(ci => { if (String(ci.id) === String(prodId)) n += ci.qty * inst.qty; });
   });
   return n;
 }
-/* Máximo de combos de este id que entran dado el stock libre (compartido con
-   productos sueltos y otros combos). Infinity = sin tope (modo ilimitado). */
-function comboMaxTotal(comboId) {
-  const c = COMBO_MAP[comboId]; if (!c) return Infinity;
+/* Máximo de instancias de esta configuración que entran dado el stock libre. */
+function compMaxTotal(comp, excludeSig) {
   let cap = Infinity;
-  c.items.forEach(function(ci) {
-    const sc = getStockCap(ci.id);                 // null/undefined = ilimitado
+  comp.forEach(ci => {
+    const sc = getStockCap(ci.id);                  // null/undefined = ilimitado
     if (sc === null || sc === undefined) return;
-    const otros = _unitsConsumed(ci.id, comboId);  // sin contar este combo
+    const otros = _unitsConsumed(ci.id, excludeSig);
     cap = Math.min(cap, Math.floor((sc - otros) / ci.qty));
   });
   return cap;
+}
+/* Disponibilidad de una opción suelta (cuántas unidades libres quedan ahora). */
+function optionAvailable(prodId) {
+  const sc = getStockCap(prodId);
+  if (sc === null || sc === undefined) return Infinity;
+  return sc - _unitsConsumed(prodId, null);
 }
 
 /* Subtotales separados: productos sueltos vs combos (a precio cerrado). */
@@ -164,7 +205,7 @@ function productsSubtotal() {
   return Object.entries(cart).reduce(function(s, e) { const p = PROD_MAP[e[0]]; return s + (p ? p.precio * e[1] : 0); }, 0);
 }
 function combosSubtotal() {
-  return Object.entries(comboCart).reduce(function(s, e) { const c = COMBO_MAP[e[0]]; return s + (c ? c.precio * e[1] : 0); }, 0);
+  return Object.values(comboCart).reduce((s, inst) => { const c = COMBO_MAP[inst.comboId]; return s + (c ? c.precio * inst.qty : 0); }, 0);
 }
 
 /* ── ZONAS ── */
@@ -266,7 +307,7 @@ function _isPilarFridayCutoffPast() {
 
 /* ── ESTADO ── */
 let cart = {};
-let comboCart = {}; // { comboId: cantidad } — combos atómicos, paralelo a `cart`
+let comboCart = {}; // { [signature]: { comboId, qty, comp, picks } } — instancias configuradas
 let currentZone = null; // 'estancias' | 'pilar' | 'clubes'
 let stockMap = {};            // stock físico actual (lo que hay en el depósito)
 let stockProyectadoMap = {};  // físico + Σ cantidad OC "Pedido" pendientes
@@ -457,7 +498,7 @@ const PROD_ABBR = {
 function $id(id) { return document.getElementById(id); }
 function ars(n) { return '$' + n.toLocaleString('es-AR'); }
 function cartTotal() { return productsSubtotal() + combosSubtotal(); }
-function cartCount() { return Object.values(cart).reduce((a,b)=>a+b, 0) + Object.values(comboCart).reduce((a,b)=>a+b, 0); }
+function cartCount() { return Object.values(cart).reduce((a,b)=>a+b, 0) + Object.values(comboCart).reduce((a,inst)=>a+(inst.qty||0), 0); }
 
 /* ── SALDO A FAVOR DEL CLIENTE (auto-detección por teléfono) ──
    Cuando el cliente termina de escribir el teléfono en el checkout, consultamos
@@ -1329,11 +1370,20 @@ function renderCombosSectionHTML() {
   const combos = getActiveCombos();
   if (!combos.length) return '';
   const cards = combos.map(c => {
-    const ahorro = comboSavings(c);
-    const compList = c.items.map(ci => {
-      const p = PROD_MAP[ci.id]; if (!p) return '';
-      return '<li>' + (ci.qty > 1 ? ci.qty + '× ' : '') + p.nombre + '</li>';
+    // Resumen de la plantilla: slots con elección → "Elegí tu …"; fijos → "✓ …".
+    const compList = (c.slots || []).map(slot => {
+      const opts = slotOptions(slot);
+      if (opts.length <= 1) { const p = opts[0]; return p ? '<li class="fixed">✓ ' + p.nombre + '</li>' : ''; }
+      const pick = slot.pick || 1;
+      return '<li>Elegí ' + (pick > 1 ? pick + ' ' : 'tu ') + slot.label.toLowerCase() + '</li>';
     }).join('');
+    const choices = comboHasChoices(c);
+    const tachado = comboNaturalSumComp(resolveComp(c, defaultSelection(c)).comp);
+    const priceHtml = '<span class="product-price">' +
+      (tachado > c.precio ? '<s class="combo-price-old">' + ars(tachado) + '</s> ' : '') + ars(c.precio) + '</span>';
+    const btn = choices
+      ? '<button class="add-btn" onclick="openComboConfig(\'' + c.id + '\')">Armar combo</button>'
+      : '<button class="add-btn" onclick="addComboDefault(\'' + c.id + '\')">+ Agregar</button>';
     return '<article class="product-card combo-card" data-id="' + c.id + '">' +
       '<div class="product-thumb">' +
         '<span class="combo-flag">🎁 Combo</span>' +
@@ -1345,12 +1395,8 @@ function renderCombosSectionHTML() {
         '<p class="product-desc">' + c.desc + '</p>' +
         '<ul class="combo-includes">' + compList + '</ul>' +
         (c.chips ? '<div class="product-chips">' + c.chips.map(x => '<span class="chip">' + x + '</span>').join('') + '</div>' : '') +
-        (ahorro > 0 ? '<div class="combo-saving">Valor individual <s>' + ars(comboNaturalSum(c)) + '</s> · Ahorrás ' + ars(ahorro) + '</div>' : '') +
         '<span class="stock-indicator" id="stock-' + c.id + '"></span>' +
-        '<div class="product-footer">' +
-          '<span class="product-price">' + ars(c.precio) + '</span>' +
-          '<button class="add-btn" onclick="addCombo(\'' + c.id + '\')">+ Agregar</button>' +
-        '</div>' +
+        '<div class="product-footer">' + priceHtml + btn + '</div>' +
       '</div>' +
     '</article>';
   }).join('');
@@ -1452,43 +1498,58 @@ function addToCart(id) {
 function changeQty(id, delta) { modifyCart(id, delta); }
 function cardChangeQty(id, delta) { modifyCart(id, delta); }
 
-/* ── COMBOS: mutación atómica del carrito ── */
-function modifyComboCart(comboId, delta) {
-  const current = comboCart[comboId] || 0;
-  if (delta > 0) {
-    const max = comboMaxTotal(comboId);
-    if (current >= max) {
-      const c = COMBO_MAP[comboId];
-      // ¿el tope viene de un componente puntual sin stock?
-      toast('⚠️ No hay stock para sumar otro ' + (c ? c.nombre : 'combo'), 3000);
-      return;
-    }
+/* ── COMBOS: alta de instancias configuradas ── */
+/* Agrega una instancia (comboId + componentes resueltos). Devuelve true si entró. */
+function addComboInstance(comboId, comp, picks) {
+  const c = COMBO_MAP[comboId]; if (!c) return false;
+  const sig = comboSignature(comboId, comp);
+  const existing = comboCart[sig] ? comboCart[sig].qty : 0;
+  const max = compMaxTotal(comp, sig);                 // máx instancias de esta config
+  if (existing >= max) {
+    toast('⚠️ No hay stock para sumar otro ' + c.nombre, 3000);
+    return false;
   }
-  const newQty = current + delta;
-  if (newQty <= 0) delete comboCart[comboId];
-  else comboCart[comboId] = newQty;
-  updateUI();
-  renderComboFooter(comboId);
-  // Sumar/quitar un combo cambia el stock compartido → refrescar los productos.
-  getActiveProducts().forEach(p => renderCardFooter(p.id));
-  updateFormVisibility();
-  updateShippingBar();
-}
-function addCombo(comboId) {
-  const before = comboCart[comboId] || 0;
-  modifyComboCart(comboId, 1);
-  const c = COMBO_MAP[comboId];
-  if (!c || (comboCart[comboId] || 0) === before) return; // no entró (sin stock)
+  if (comboCart[sig]) comboCart[sig].qty = existing + 1;
+  else comboCart[sig] = { comboId, qty: 1, comp, picks: picks || [] };
   _track('add_to_cart', { item_name: c.nombre, price: c.precio, zone: currentZone, combo: true });
   toast('✓ ' + c.nombre + ' agregado');
   const badge = $id('cart-badge');
-  badge.classList.remove('bounce'); void badge.offsetWidth; badge.classList.add('bounce');
+  if (badge) { badge.classList.remove('bounce'); void badge.offsetWidth; badge.classList.add('bounce'); }
+  _afterComboChange();
+  return true;
 }
-function comboChangeQty(comboId, delta) { modifyComboCart(comboId, delta); }
-function removeCombo(comboId) { delete comboCart[comboId]; updateUI(); renderComboFooter(comboId); getActiveProducts().forEach(p => renderCardFooter(p.id)); updateFormVisibility(); updateShippingBar(); }
+/* Combo sin elecciones reales: arma la config por defecto y la agrega directo. */
+function addComboDefault(comboId) {
+  const c = COMBO_MAP[comboId]; if (!c) return;
+  const r = resolveComp(c, defaultSelection(c));
+  addComboInstance(comboId, r.comp, r.picks);
+}
+/* +/- y eliminar sobre una instancia puntual del carrito (por firma). */
+function comboChangeQty(sig, delta) {
+  const inst = comboCart[sig]; if (!inst) return;
+  if (delta > 0) {
+    const max = compMaxTotal(inst.comp, sig);
+    if (inst.qty >= max) { toast('⚠️ No hay stock para sumar otro ' + (COMBO_MAP[inst.comboId] || {}).nombre, 3000); return; }
+    inst.qty++;
+  } else {
+    inst.qty--;
+    if (inst.qty <= 0) delete comboCart[sig];
+  }
+  _afterComboChange();
+}
+function removeComboInst(sig) { delete comboCart[sig]; _afterComboChange(); }
+/* Refresca todo lo que depende del stock compartido tras tocar un combo. */
+function _afterComboChange() {
+  updateUI();
+  getActiveProducts().forEach(p => renderCardFooter(p.id));
+  getActiveCombos().forEach(c => renderComboFooter(c.id));
+  updateStockBadgesCombos();
+  updateFormVisibility();
+  updateShippingBar();
+}
 
-/* Footer de la card de combo: + Agregar / controles de cantidad / Sin stock /
-   Máximo disponible. Espeja a renderCardFooter pero con precio cerrado. */
+/* Footer de la card de combo: combos con elecciones → "Armar combo" (abre el
+   configurador). Combos sin elecciones → "+ Agregar" directo. */
 function renderComboFooter(comboId) {
   const card = document.querySelector('.combo-card[data-id="' + comboId + '"]');
   if (!card) return;
@@ -1496,25 +1557,139 @@ function renderComboFooter(comboId) {
   if (!footer) return;
   const c = COMBO_MAP[comboId];
   if (!c) return;
-  const qty = comboCart[comboId] || 0;
-  const max = comboMaxTotal(comboId);                 // Infinity = ilimitado
-  const capped = max !== Infinity;
-  const sinStock = capped && max <= 0;
-  const atLimit = capped && qty >= max;
-  const priceHtml = '<span class="product-price">' + ars(c.precio) + '</span>';
-  if (qty === 0) {
+  const tachado = comboNaturalSumComp(resolveComp(c, defaultSelection(c)).comp);
+  const priceHtml = '<span class="product-price">' +
+    (tachado > c.precio ? '<s class="combo-price-old">' + ars(tachado) + '</s> ' : '') +
+    ars(c.precio) + '</span>';
+  if (comboHasChoices(c)) {
     footer.innerHTML = priceHtml +
-      '<button class="add-btn" onclick="addCombo(\'' + c.id + '\')"' + (sinStock ? ' disabled' : '') + '>' +
-      (sinStock ? 'Sin stock' : '+ Agregar') + '</button>';
+      '<button class="add-btn" onclick="openComboConfig(\'' + c.id + '\')">Armar combo</button>';
   } else {
+    const max = compMaxTotal(resolveComp(c, defaultSelection(c)).comp, null);
+    const sinStock = max !== Infinity && max <= 0;
     footer.innerHTML = priceHtml +
-      '<div class="card-qty-controls">' +
-        '<button class="card-qty-btn remove" onclick="comboChangeQty(\'' + c.id + '\',-1)">−</button>' +
-        '<span class="card-qty-val">' + qty + '</span>' +
-        '<button class="card-qty-btn" onclick="comboChangeQty(\'' + c.id + '\',+1)"' + (atLimit ? ' disabled' : '') + '>+</button>' +
-      '</div>' +
-      (atLimit ? '<span style="display:block;text-align:center;font-size:.75rem;color:#c0392b;margin-top:4px;font-weight:600;">Máximo disponible: ' + max + '</span>' : '');
+      '<button class="add-btn" onclick="addComboDefault(\'' + c.id + '\')"' + (sinStock ? ' disabled' : '') + '>' +
+      (sinStock ? 'Sin stock' : '+ Agregar') + '</button>';
   }
+}
+/* Badge de stock de las cards de combo (mismo criterio que productos). */
+function updateStockBadgesCombos() {
+  const mode = (typeof getStockMode === 'function') ? getStockMode() : 'ilimitado';
+  getActiveCombos().forEach(c => {
+    const el = $id('stock-' + c.id);
+    if (!el) return;
+    const max = compMaxTotal(resolveComp(c, defaultSelection(c)).comp, null);
+    if (mode === 'ilimitado' || max === Infinity) el.innerHTML = '';
+    else if (max <= 0) el.innerHTML = '<span class="stock-badge stock-out">Sin stock</span>';
+    else if (max <= 3) el.innerHTML = '<span class="stock-badge stock-low">Últimas ' + max + ' unidades</span>';
+    else el.innerHTML = '';
+  });
+}
+
+/* ══════════════════════════════════════════════════
+   CONFIGURADOR DE COMBO (modal "Armar combo")
+   ══════════════════════════════════════════════════ */
+let _comboConfig = null;  // { comboId, sel:[[prodId,...], ...] }
+function openComboConfig(comboId) {
+  const c = COMBO_MAP[comboId]; if (!c) return;
+  _comboConfig = { comboId, sel: defaultSelection(c) };
+  _ensureComboModal();
+  renderComboConfig();
+  const ov = $id('combo-modal');
+  ov.style.display = 'flex';
+  document.body.style.overflow = 'hidden';
+}
+function closeComboConfig() {
+  const ov = $id('combo-modal');
+  if (ov) ov.style.display = 'none';
+  document.body.style.overflow = '';
+  _comboConfig = null;
+}
+function _ensureComboModal() {
+  if ($id('combo-modal')) return;
+  const ov = document.createElement('div');
+  ov.id = 'combo-modal';
+  ov.className = 'combo-modal-overlay';
+  ov.onclick = function(e) { if (e.target === ov) closeComboConfig(); };
+  ov.innerHTML = '<div class="combo-modal" role="dialog" aria-modal="true">' +
+    '<button class="combo-modal-close" onclick="closeComboConfig()" aria-label="Cerrar">×</button>' +
+    '<div id="combo-modal-content"></div>' +
+    '</div>';
+  document.body.appendChild(ov);
+}
+/* Elige una opción en un slot (índice de slot, posición dentro del pick). */
+function comboPick(slotIdx, pickIdx, prodId) {
+  if (!_comboConfig) return;
+  _comboConfig.sel[slotIdx][pickIdx] = isNaN(prodId) ? prodId : +prodId;
+  renderComboConfig();
+}
+function renderComboConfig() {
+  if (!_comboConfig) return;
+  const c = COMBO_MAP[_comboConfig.comboId]; if (!c) return;
+  const cont = $id('combo-modal-content'); if (!cont) return;
+  const sel = _comboConfig.sel;
+
+  const slotsHtml = (c.slots || []).map((slot, i) => {
+    const opts = slotOptions(slot);
+    const pick = slot.pick || 1;
+    // Slot fijo (1 sola opción): se muestra como "incluido", sin selector.
+    if (opts.length <= 1) {
+      const p = opts[0];
+      return p ? '<div class="cfg-slot cfg-slot-fixed"><div class="cfg-slot-label">' + slot.label +
+        '</div><div class="cfg-fixed-item">✓ ' + p.nombre + '</div></div>' : '';
+    }
+    // Un bloque de opciones por cada unidad a elegir (pick).
+    const pickBlocks = [];
+    for (let k = 0; k < pick; k++) {
+      const chosen = sel[i][k];
+      const cards = opts.map(p => {
+        const avail = optionAvailable(p.id);
+        const out = avail !== Infinity && avail <= 0;
+        const active = String(chosen) === String(p.id);
+        return '<button class="cfg-opt' + (active ? ' active' : '') + (out ? ' out' : '') + '"' +
+          (out ? ' disabled' : ' onclick="comboPick(' + i + ',' + k + ',\'' + p.id + '\')"') + '>' +
+          '<span class="cfg-opt-name">' + p.nombre + '</span>' +
+          (out ? '<span class="cfg-opt-out">Sin stock</span>' : '') +
+          '</button>';
+      }).join('');
+      pickBlocks.push('<div class="cfg-opts">' + cards + '</div>');
+    }
+    const lbl = slot.label + (pick > 1 ? ' <span class="cfg-pick-n">(elegí ' + pick + ')</span>' : '');
+    return '<div class="cfg-slot"><div class="cfg-slot-label">' + lbl + '</div>' + pickBlocks.join('') + '</div>';
+  }).join('');
+
+  // Resolver la selección actual para precio tachado + chequeo de stock.
+  const r = resolveComp(c, sel);
+  const tachado = comboNaturalSumComp(r.comp);
+  const sig = comboSignature(c.id, r.comp);
+  const existing = comboCart[sig] ? comboCart[sig].qty : 0;
+  const max = compMaxTotal(r.comp, sig);
+  const completo = (c.slots || []).every((slot, i) => (sel[i] || []).every(x => x != null));
+  const sinStock = max !== Infinity && existing >= max;
+  const canAdd = completo && !sinStock;
+
+  cont.innerHTML =
+    '<div class="combo-modal-head">' +
+      '<img class="combo-modal-img" src="img/' + c.img + '" alt="' + c.nombre + '" onerror="this.style.display=\'none\'">' +
+      '<div><h3 class="combo-modal-title">' + c.nombre + '</h3>' +
+      '<p class="combo-modal-desc">' + c.desc + '</p></div>' +
+    '</div>' +
+    '<div class="combo-modal-slots">' + slotsHtml + '</div>' +
+    '<div class="combo-modal-foot">' +
+      '<div class="combo-modal-price">' +
+        (tachado > c.precio ? '<s class="combo-price-old">' + ars(tachado) + '</s> ' : '') +
+        '<strong>' + ars(c.precio) + '</strong>' +
+      '</div>' +
+      '<button class="combo-modal-add" onclick="confirmComboConfig()"' + (canAdd ? '' : ' disabled') + '>' +
+        (sinStock ? 'Sin stock para esta combinación' : 'Agregar al carrito') +
+      '</button>' +
+    '</div>';
+}
+function confirmComboConfig() {
+  if (!_comboConfig) return;
+  const c = COMBO_MAP[_comboConfig.comboId]; if (!c) return;
+  const r = resolveComp(c, _comboConfig.sel);
+  if (addComboInstance(c.id, r.comp, r.picks)) closeComboConfig();
 }
 
 function updateUI() {
@@ -1535,24 +1710,24 @@ function updateUI() {
     footEl.style.display = 'none';
   } else {
     footEl.style.display = 'block';
-    const comboLines = Object.entries(comboCart).map(([cid,qty]) => {
-      const c = COMBO_MAP[cid];
+    const comboLines = Object.entries(comboCart).map(([sig,inst]) => {
+      const c = COMBO_MAP[inst.comboId];
       if (!c) return '';
-      const comps = c.items.map(ci => {
-        const p = PROD_MAP[ci.id]; if (!p) return '';
-        return '<li>' + (ci.qty > 1 ? ci.qty + '× ' : '') + p.nombre + '</li>';
-      }).join('');
+      const comps = (inst.picks || []).map(pk =>
+        '<li><span class="pk-label">' + pk.label + ':</span> ' + pk.nombre + '</li>'
+      ).join('');
+      const sigEsc = sig.replace(/'/g, "\\'");
       return '<div class="cart-item cart-item-combo">' +
         '<span class="cart-item-emoji">' + c.emoji + '</span>' +
         '<div class="cart-item-info">' +
           '<div class="cart-item-name">' + c.nombre + '</div>' +
-          '<div class="cart-item-sub">' + ars(c.precio) + ' c/u · <strong>' + ars(c.precio*qty) + '</strong></div>' +
+          '<div class="cart-item-sub">' + ars(c.precio) + ' c/u · <strong>' + ars(c.precio*inst.qty) + '</strong></div>' +
           '<ul class="cart-combo-includes">' + comps + '</ul>' +
         '</div>' +
         '<div class="qty-controls">' +
-          '<button class="qty-btn" onclick="comboChangeQty(\'' + cid + '\',-1)">−</button>' +
-          '<span class="qty-val">' + qty + '</span>' +
-          '<button class="qty-btn" onclick="comboChangeQty(\'' + cid + '\',+1)">+</button>' +
+          '<button class="qty-btn" onclick="comboChangeQty(\'' + sigEsc + '\',-1)">−</button>' +
+          '<span class="qty-val">' + inst.qty + '</span>' +
+          '<button class="qty-btn" onclick="comboChangeQty(\'' + sigEsc + '\',+1)">+</button>' +
         '</div>' +
       '</div>';
     }).join('');
@@ -2004,14 +2179,17 @@ function enviarPedido() {
   // Combos: el precio cerrado se traduce en un descuento sobre el valor
   // individual de los componentes, para que el Sheet vea productos reales a
   // precio de lista y el ahorro del combo quede como descuento (total intacto).
-  const comboSavingsTotal = Object.entries(comboCart).reduce((s,[cid,q]) => { const c = COMBO_MAP[cid]; return s + (c ? comboSavings(c) * q : 0); }, 0);
+  const comboSavingsTotal = Object.values(comboCart).reduce((s,inst) => {
+    const c = COMBO_MAP[inst.comboId]; if (!c) return s;
+    return s + Math.max(0, comboNaturalSumComp(inst.comp) - c.precio) * inst.qty;
+  }, 0);
   const naturalSubtotal = subtotal + comboSavingsTotal;     // productos + componentes a precio lista
   const descuentoSheet  = discount + comboSavingsTotal;     // descuentos vigentes + ahorro de combos
 
-  const comboLinesWA = Object.entries(comboCart).map(([cid,q]) => {
-    const c = COMBO_MAP[cid]; if (!c) return null;
-    const head = '  🎁 ' + c.nombre + (q > 1 ? ' ×' + q : '') + '  —  ' + ars(c.precio * q);
-    const comps = c.items.map(ci => { const p = PROD_MAP[ci.id]; return p ? '       ◦ ' + (ci.qty > 1 ? ci.qty + '× ' : '') + p.nombre : ''; }).filter(Boolean).join('\n');
+  const comboLinesWA = Object.values(comboCart).map((inst) => {
+    const c = COMBO_MAP[inst.comboId]; if (!c) return null;
+    const head = '  🎁 ' + c.nombre + (inst.qty > 1 ? ' ×' + inst.qty : '') + '  —  ' + ars(c.precio * inst.qty);
+    const comps = (inst.picks || []).map(pk => '       ◦ ' + pk.label + ': ' + pk.nombre).join('\n');
     return head + (comps ? '\n' + comps : '');
   }).filter(Boolean).join('\n');
   const prodLinesProductos = Object.entries(cart).map(([id,qty]) => {
@@ -2076,18 +2254,18 @@ function enviarPedido() {
   // descuenta bien, abastecimiento ve los productos y analytics no se rompe.
   const expanded = {};
   Object.entries(cart).forEach(([id,qty]) => { const p = PROD_MAP[id]; if (!p) return; expanded[p.id] = (expanded[p.id] || 0) + qty; });
-  Object.entries(comboCart).forEach(([cid,q]) => {
-    const c = COMBO_MAP[cid]; if (!c) return;
-    c.items.forEach(ci => { const p = PROD_MAP[ci.id]; if (!p) return; expanded[ci.id] = (expanded[ci.id] || 0) + ci.qty * q; });
+  Object.values(comboCart).forEach((inst) => {
+    inst.comp.forEach(ci => { const p = PROD_MAP[ci.id]; if (!p) return; expanded[ci.id] = (expanded[ci.id] || 0) + ci.qty * inst.qty; });
   });
   const items = Object.entries(expanded).map(([id,qty]) => {
     const p = PROD_MAP[id]; return p ? {id:p.id, nombre:p.nombre, qty, precio:p.precio} : null;
   }).filter(Boolean);
-  // Trazabilidad del combo (receta) para uso futuro del backend / Panel.
-  const combosPayload = Object.entries(comboCart).map(([cid,q]) => {
-    const c = COMBO_MAP[cid]; if (!c) return null;
-    return { id:c.id, nombre:c.nombre, precio:c.precio, qty:q,
-      items: c.items.map(ci => ({ id:ci.id, qty:ci.qty, precio:(PROD_MAP[ci.id]||{}).precio || 0 })) };
+  // Trazabilidad del combo (receta + sabores elegidos) para uso futuro del backend / Panel.
+  const combosPayload = Object.values(comboCart).map((inst) => {
+    const c = COMBO_MAP[inst.comboId]; if (!c) return null;
+    return { id:c.id, nombre:c.nombre, precio:c.precio, qty:inst.qty,
+      picks: (inst.picks || []).map(pk => ({ label:pk.label, id:pk.prodId, nombre:pk.nombre })),
+      items: inst.comp.map(ci => ({ id:ci.id, qty:ci.qty, precio:(PROD_MAP[ci.id]||{}).precio || 0 })) };
   }).filter(Boolean);
 
   let postData;
@@ -2587,17 +2765,8 @@ function updateStockDisplay() {
     renderCardFooter(p.id);
   });
   // Combos: badge de stock (mismo criterio que productos) + footer.
-  getActiveCombos().forEach(c => {
-    const el = $id('stock-' + c.id);
-    if (el) {
-      const max = comboMaxTotal(c.id);
-      if (mode === 'ilimitado' || max === Infinity) el.innerHTML = '';
-      else if (max <= 0) el.innerHTML = '<span class="stock-badge stock-out">Sin stock</span>';
-      else if (max <= 3) el.innerHTML = '<span class="stock-badge stock-low">Últimas ' + max + ' unidades</span>';
-      else el.innerHTML = '';
-    }
-    renderComboFooter(c.id);
-  });
+  updateStockBadgesCombos();
+  getActiveCombos().forEach(c => renderComboFooter(c.id));
 }
 
 /* ── PRECARGAR DATOS ── */
