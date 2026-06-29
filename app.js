@@ -1986,8 +1986,12 @@ function updateFormSummary() {
   let html = Object.values(comboCart).map(inst => {
     const c = COMBO_MAP[inst.comboId];
     if (!c) return '';
-    return '<div class="summary-line"><span>' + (c.emoji ? c.emoji + ' ' : '') + c.nombre +
-      (inst.qty > 1 ? ' <strong>×' + inst.qty + '</strong>' : '') + '</span><span>' + ars(c.precio*inst.qty) + '</span></div>';
+    const picks = (inst.picks || []).map(pk => _optLabel(pk.nombre, pk.label)).join(' · ');
+    return '<div class="summary-line summary-line-combo"><span>' +
+      '<span class="summary-combo-name">' + (c.emoji ? c.emoji + ' ' : '') + c.nombre +
+        (inst.qty > 1 ? ' <strong>×' + inst.qty + '</strong>' : '') + '</span>' +
+      (picks ? '<span class="summary-combo-picks">' + picks + '</span>' : '') +
+      '</span><span>' + ars(c.precio*inst.qty) + '</span></div>';
   }).join('');
   html += Object.entries(cart).map(([id,qty]) => {
     const p = PROD_MAP[id];
