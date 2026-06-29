@@ -136,6 +136,14 @@ function getActiveCombos() {
   if (currentZone === 'clubes') return [];
   return COMBOS.filter(comboAvailableInZone);
 }
+/* Saca el prefijo de categoría redundante del nombre de una opción según el
+   label del slot. Ej: slot "Empanadas" + "Empanadas Carne x8" → "Carne x8". */
+function _optLabel(nombre, slotLabel) {
+  if (!nombre) return '';
+  const l = (slotLabel || '').trim().toLowerCase();
+  if (l && nombre.toLowerCase().indexOf(l + ' ') === 0) return nombre.slice(l.length + 1);
+  return nombre;
+}
 /* Selección por defecto: primera opción de cada slot (repite si pick>1). */
 function defaultSelection(c) {
   return (c.slots || []).map(slot => {
@@ -1394,7 +1402,7 @@ function renderCombosSectionHTML() {
       : '<button class="add-btn" onclick="addComboDefault(\'' + c.id + '\')">+ Agregar</button>';
     return '<article class="product-card combo-card" data-id="' + c.id + '">' +
       '<div class="product-thumb">' +
-        '<span class="combo-flag">🎁 Combo</span>' +
+        '<span class="combo-flag">🎁</span>' +
         '<img class="product-thumb-img" src="img/' + c.img + '" alt="' + c.nombre + '" loading="lazy" width="400" height="400" style="object-position:' + (c.imgPos||'center') + '" onerror="this.style.display=\'none\'">' +
       '</div>' +
       '<div class="product-body">' +
@@ -1644,7 +1652,7 @@ function renderComboConfig() {
     if (opts.length <= 1) {
       const p = opts[0];
       return p ? '<div class="cfg-slot cfg-slot-fixed"><div class="cfg-slot-label">' + slot.label +
-        '</div><div class="cfg-fixed-item">✓ ' + p.nombre + '</div></div>' : '';
+        '</div><div class="cfg-fixed-item">✓ ' + _optLabel(p.nombre, slot.label) + '</div></div>' : '';
     }
     // Un bloque de opciones por cada unidad a elegir (pick).
     const pickBlocks = [];
@@ -1656,7 +1664,7 @@ function renderComboConfig() {
         const active = String(chosen) === String(p.id);
         return '<button class="cfg-opt' + (active ? ' active' : '') + (out ? ' out' : '') + '"' +
           (out ? ' disabled' : ' onclick="comboPick(' + i + ',' + k + ',\'' + p.id + '\')"') + '>' +
-          '<span class="cfg-opt-name">' + p.nombre + '</span>' +
+          '<span class="cfg-opt-name">' + _optLabel(p.nombre, slot.label) + '</span>' +
           (out ? '<span class="cfg-opt-out">Sin stock</span>' : '') +
           '</button>';
       }).join('');
@@ -1678,7 +1686,7 @@ function renderComboConfig() {
 
   cont.innerHTML =
     '<div class="combo-modal-head">' +
-      '<img class="combo-modal-img" src="img/' + c.img + '" alt="' + c.nombre + '" onerror="this.style.display=\'none\'">' +
+      '<img class="combo-modal-img" src="img/' + c.img + '" alt="" onerror="this.style.display=\'none\'">' +
       '<div><h3 class="combo-modal-title">' + c.nombre + '</h3>' +
       '<p class="combo-modal-desc">' + c.desc + '</p></div>' +
     '</div>' +
@@ -1722,7 +1730,7 @@ function updateUI() {
       const c = COMBO_MAP[inst.comboId];
       if (!c) return '';
       const comps = (inst.picks || []).map(pk =>
-        '<li><span class="pk-label">' + pk.label + ':</span> ' + pk.nombre + '</li>'
+        '<li><span class="pk-label">' + pk.label + ':</span> ' + _optLabel(pk.nombre, pk.label) + '</li>'
       ).join('');
       const sigEsc = sig.replace(/'/g, "\\'");
       return '<div class="cart-item cart-item-combo">' +
@@ -2197,7 +2205,7 @@ function enviarPedido() {
   const comboLinesWA = Object.values(comboCart).map((inst) => {
     const c = COMBO_MAP[inst.comboId]; if (!c) return null;
     const head = '  🎁 ' + c.nombre + (inst.qty > 1 ? ' ×' + inst.qty : '') + '  —  ' + ars(c.precio * inst.qty);
-    const comps = (inst.picks || []).map(pk => '       ◦ ' + pk.label + ': ' + pk.nombre).join('\n');
+    const comps = (inst.picks || []).map(pk => '       ◦ ' + pk.label + ': ' + _optLabel(pk.nombre, pk.label)).join('\n');
     return head + (comps ? '\n' + comps : '');
   }).filter(Boolean).join('\n');
   const prodLinesProductos = Object.entries(cart).map(([id,qty]) => {
