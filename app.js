@@ -2667,6 +2667,18 @@ function renderCatNav() {
     }
   } catch(e) {}
 }
+/* Scroll suave a un ancla compensando el header sticky (cat-nav + promo bar).
+   Más confiable que el salto nativo de #hash con secciones renderizadas por JS. */
+function _smoothScrollToEl(el) {
+  if (!el) return;
+  const sticky = document.querySelector('.sticky-header');
+  const offset = (sticky ? sticky.offsetHeight : 0) + 10;
+  const y = el.getBoundingClientRect().top + window.pageYOffset - offset;
+  window.scrollTo({ top: Math.max(0, y), behavior: 'smooth' });
+}
+function scrollToCombos() { _smoothScrollToEl($id('combos-ancla')); }
+function scrollToProductos() { _smoothScrollToEl($id('productos-ancla') || $id('catalogo')); }
+
 let _scrollingToCat = false;
 function scrollToCat(slug) {
   const section = $id('cat-' + slug); if (!section) return;
