@@ -120,7 +120,7 @@ const COMBOS = [
     nombre: 'Descubrí Maleu · Semana',
     desc: 'Conocé los productos ideales para el día a día.',
     precio: 46900,
-    img: COMBO_PLACEHOLDER_IMG,
+    img: 'combo-semana.jpg', fullCard: true,
     emoji: '🎁',
     zonas: ['estancias'],
     slots: [
@@ -135,7 +135,7 @@ const COMBOS = [
     nombre: 'Descubrí Maleu · Fin de Semana',
     desc: 'Probá los clásicos de Maleu para compartir.',
     precio: 34900,
-    img: COMBO_PLACEHOLDER_IMG,
+    img: 'combo-finde.jpg', fullCard: true,
     emoji: '🎁',
     zonas: ['estancias'],
     slots: [
@@ -149,7 +149,7 @@ const COMBOS = [
     nombre: 'Noche en Casa',
     desc: 'Una cena rica y lista en minutos para dos personas.',
     precio: 23900,
-    img: COMBO_PLACEHOLDER_IMG,
+    img: 'combo-noche.jpg', fullCard: true,
     emoji: '🎁',
     zonas: ['estancias'],
     slots: [
@@ -162,7 +162,7 @@ const COMBOS = [
     nombre: 'Mesa Familiar',
     desc: 'Una solución práctica para una comida en familia.',
     precio: 45900,
-    img: COMBO_PLACEHOLDER_IMG,
+    img: 'combo-mesa.jpg', fullCard: true,
     emoji: '🎁',
     zonas: ['estancias'],
     slots: [
@@ -176,7 +176,7 @@ const COMBOS = [
     nombre: 'Freezer Lleno',
     desc: 'Resolvé varias comidas de la semana en un solo pedido.',
     precio: 84900,
-    img: COMBO_PLACEHOLDER_IMG,
+    img: 'combo-freezer.jpg', fullCard: true,
     emoji: '🎁',
     zonas: ['estancias'],
     slots: [
@@ -1451,8 +1451,30 @@ function applyZone() {
   loadLastOrder();
 }
 
-/* HTML de UNA card de combo (reutilizable en grupos temporales y permanentes). */
+/* HTML de UNA card de combo (reutilizable en grupos temporales y permanentes).
+   - fullCard: la imagen YA es una placa diseñada (trae nombre, descripción y
+     composición). Se muestra entera y NO se repite el texto en HTML; debajo
+     solo el precio (tachado dinámico + final) y el botón.
+   - sin fullCard: layout de texto clásico (placeholder / combos sin arte). */
 function _comboCardHTML(c) {
+  const tachado = comboNaturalSumComp(resolveComp(c, defaultSelection(c)).comp);
+  const priceHtml = '<span class="product-price">' +
+    (tachado > c.precio ? '<s class="combo-price-old">' + ars(tachado) + '</s> ' : '') + ars(c.precio) + '</span>';
+  const choices = comboHasChoices(c);
+  const btn = choices
+    ? '<button class="add-btn" onclick="openComboConfig(\'' + c.id + '\')">Armar combo</button>'
+    : '<button class="add-btn" onclick="addComboDefault(\'' + c.id + '\')">+ Agregar</button>';
+
+  if (c.fullCard) {
+    return '<article class="product-card combo-card combo-card-full" data-id="' + c.id + '">' +
+      '<img class="combo-full-img" src="img/' + c.img + '" alt="' + c.nombre + '" loading="lazy">' +
+      '<div class="combo-full-foot">' +
+        '<span class="stock-indicator" id="stock-' + c.id + '"></span>' +
+        '<div class="product-footer">' + priceHtml + btn + '</div>' +
+      '</div>' +
+    '</article>';
+  }
+
   const compList = (c.slots || []).map(slot => {
     const opts = slotOptions(slot);
     const pick = slot.pick || 1;
@@ -1464,13 +1486,6 @@ function _comboCardHTML(c) {
     return '<li><strong>' + pick + '×</strong> ' + noun +
       ' <span class="combo-choose">· elegís ' + (pick > 1 ? 'los sabores' : 'el sabor') + '</span></li>';
   }).join('');
-  const choices = comboHasChoices(c);
-  const tachado = comboNaturalSumComp(resolveComp(c, defaultSelection(c)).comp);
-  const priceHtml = '<span class="product-price">' +
-    (tachado > c.precio ? '<s class="combo-price-old">' + ars(tachado) + '</s> ' : '') + ars(c.precio) + '</span>';
-  const btn = choices
-    ? '<button class="add-btn" onclick="openComboConfig(\'' + c.id + '\')">Armar combo</button>'
-    : '<button class="add-btn" onclick="addComboDefault(\'' + c.id + '\')">+ Agregar</button>';
   return '<article class="product-card combo-card" data-id="' + c.id + '">' +
     '<div class="product-thumb">' +
       '<span class="combo-flag">' + (c.flag || '🎁') + '</span>' +
@@ -1793,7 +1808,7 @@ function renderComboConfig() {
 
   cont.innerHTML =
     '<div class="combo-modal-head">' +
-      '<img class="combo-modal-img" src="img/' + c.img + '" alt="" onerror="this.style.display=\'none\'">' +
+      (c.fullCard ? '' : '<img class="combo-modal-img" src="img/' + c.img + '" alt="" onerror="this.style.display=\'none\'">') +
       '<div><h3 class="combo-modal-title">' + c.nombre + '</h3>' +
       '<p class="combo-modal-desc">' + c.desc + '</p></div>' +
     '</div>' +
