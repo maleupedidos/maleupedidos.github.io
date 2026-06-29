@@ -3725,7 +3725,7 @@ function _confirmarCobroPendiente(st,r){
 function _commitCobroPendiente(payload,saldoPayload,pc){
   var pcKey=(pc.h||'')+'|'+(pc.id||'');
   try{showLoader('Cobrando a '+((pc.c||'').split(' ')[0])+'...');}catch(_){}
-  var _guard=setTimeout(function(){try{hideLoader(true);}catch(_){}try{showToast('⏳ El servidor tardó demasiado — probá de nuevo o revisá conexión');}catch(_){}},25000);
+  var _guard=setTimeout(function(){try{hideLoader(true);}catch(_){}try{showToast('⏳ El servidor tardó demasiado — verificá en unos segundos');}catch(_){}},45000);
   try{
     // UI optimista: sacar de la lista local
     cobrados[pcKey]=true;
@@ -3740,6 +3740,18 @@ function _commitCobroPendiente(payload,saldoPayload,pc){
 
     function _revert(){delete cobrados[pcKey];if(pcBackup)pendientesCobro.push(pcBackup);saveLocal();if(currentTab==='cobros')renderCobrosFromServer();var e2=document.getElementById('tabCobrosCount');if(e2)e2.textContent=pendientesCobro.length||'';}
 
+    // Falla transitoria (timeout / red / respuesta no-JSON de Apps Script): el server
+    // PUDO haber escrito igual. El backend es IDEMPOTENTE (no duplica), así que en vez de
+    // revertir a ciegas y mostrar el pedido cobrable de nuevo (riesgo de doble cobro que
+    // reportó Tadeo), reencolamos para reintentar y reconciliamos con la verdad del server:
+    // si ya se cobró NO reaparece; si de verdad falló, vuelve solo.
+    function _onFailTransitorio(msg){
+      syncQueue.push(payload);if(saldoPayload)syncQueue.push(saldoPayload);saveLocal();
+      setTimeout(processSyncQueue,1500);
+      showToast(msg||'⏳ No confirmó a tiempo — reintentando y verificando…');
+      setTimeout(function(){fetchCobrosPendientes(true);},4000);
+    }
+
     if(!isOnline){
       syncQueue.push(payload);
       if(saldoPayload)syncQueue.push(saldoPayload);
@@ -3750,27 +3762,30 @@ function _commitCobroPendiente(payload,saldoPayload,pc){
     }
 
     var _aborter=(typeof AbortController!=='undefined')?new AbortController():null;
-    var _timer=setTimeout(function(){if(_aborter)_aborter.abort();},15000);
+    var _timer=setTimeout(function(){if(_aborter)_aborter.abort();},30000);
     var _settled=false;
     var _hardTimer=setTimeout(function(){
-      if(_settled)return;_settled=true;
-      hideLoader(true);_revert();
-      showToast('⏳ Sin respuesta del servidor — probá de nuevo');
-      syncQueue.push(payload);if(saldoPayload)syncQueue.push(saldoPayload);saveLocal();setTimeout(processSyncQueue,2000);
-    },20000);
+      if(_settled)return;_settled=true;clearTimeout(_guard);
+      hideLoader(true);
+      _onFailTransitorio('⏳ El servidor no respondió — reintentando en segundo plano…');
+    },40000);
     var _fopts={method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(payload),redirect:'follow'};
     if(_aborter)_fopts.signal=_aborter.signal;
     fetch(APPS_SCRIPT_URL,_fopts)
-      .then(function(rs){clearTimeout(_timer);return rs.json().catch(function(){return{ok:false,error:'InvalidJSON'};});})
+      .then(function(rs){clearTimeout(_timer);return rs.json().catch(function(){return{ok:false,_parseError:true,error:'InvalidJSON'};});})
       .then(function(res){
         if(_settled)return;_settled=true;clearTimeout(_hardTimer);clearTimeout(_guard);
         hideLoader(true);
         if(res&&res.ok){
-          showToast('✓ Cobrado a '+((pc.c||'').split(' ')[0]));
+          showToast(res.already?('✓ Ya estaba cobrado '+((pc.c||'').split(' ')[0])):('✓ Cobrado a '+((pc.c||'').split(' ')[0])));
           if(navigator.vibrate)navigator.vibrate(30);
           if(saldoPayload){syncQueue.push(saldoPayload);saveLocal();setTimeout(processSyncQueue,500);}
           if(currentTab==='cobros')fetchCobrosPendientes(true);
+        } else if(res&&res._parseError){
+          // Apps Script devolvió HTML/no-JSON (error transitorio de Google): tratar como timeout.
+          _onFailTransitorio('⏳ Respuesta inválida del servidor — reintentando y verificando…');
         } else {
+          // Error REAL del backend (validación): este sí revierte y avisa (no se arregla solo).
           _revert();
           showToast('❌ Error: '+((res&&res.error)||'sin respuesta')+' — probá de nuevo');
         }
@@ -3778,9 +3793,7 @@ function _commitCobroPendiente(payload,saldoPayload,pc){
       .catch(function(err){
         if(_settled)return;_settled=true;clearTimeout(_timer);clearTimeout(_hardTimer);clearTimeout(_guard);
         hideLoader(true);
-        var aborted=err&&err.name==='AbortError';
-        _revert();
-        showToast(aborted?'❌ Timeout: el servidor tardó más de 15s':'❌ Sin respuesta del servidor — '+((err&&err.message)||'error'));
+        _onFailTransitorio(err&&err.name==='AbortError'?'⏳ Tardó más de 30s — reintentando y verificando…':'⏳ Sin respuesta — reintentando y verificando…');
       });
   } catch(_ex_){
     clearTimeout(_guard);hideLoader(true);
