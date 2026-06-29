@@ -713,7 +713,6 @@ function _subtotalForScope(scope) {
 }
 function getCouponDiscount() {
   if (!appliedCoupon) return 0;
-  if (combosInCart()) return 0;   // con combo en el carrito no aplica ningún descuento
   const sub = _subtotalForScope(appliedCoupon.scope);
   if (sub <= 0) return 0;
   if (appliedCoupon.tipo === 'PCT')  return Math.round(sub * (appliedCoupon.valor / 100));
@@ -726,11 +725,9 @@ function couponAppliesToAll() {
 }
 
 function getCashDiscount() {
-  // Si hay un combo en el carrito, se inhabilitan los descuentos del pedido
-  // (no acumula con 10% efectivo ni +$100K).
-  if (combosInCart()) return 0;
-  // Combos quedan FUERA del 10% (precio cerrado, no apila): base y umbral
-  // bulk se calculan solo sobre productos sueltos.
+  // Combos quedan FUERA del 10%: el descuento (efectivo / +$100K) aplica solo a
+  // los productos sueltos. Base y umbral bulk se calculan sobre productsSubtotal
+  // (el combo, a precio cerrado, no recibe descuento ni cuenta para el +$100K).
   const total = productsSubtotal();
   const sel = document.querySelector('input[name="pago"]:checked');
   const isCash = sel && sel.value === 'Efectivo';
@@ -1928,10 +1925,13 @@ function updateUI() {
     }
     $id('cart-total').textContent = ars(total);
 
-    // Incentivo inteligente — se oculta si hay un combo (descuentos inhabilitados).
+    // Incentivo inteligente — el 10% aplica solo a productos sueltos (no combos),
+    // así que el umbral y los mensajes usan productsSubtotal. Si el carrito es
+    // solo combos (pSub=0), no hay nada que descontar → se oculta.
     var incentiveEl = $id('cart-incentive');
-    if (incentiveEl && discountsActive() && !combosInCart()) {
-      var falta = 100000 - subtotal;
+    var pSub = productsSubtotal();
+    if (incentiveEl && discountsActive() && pSub > 0) {
+      var falta = 100000 - pSub;
       var sel = document.querySelector('input[name="pago"]:checked');
       var isCash = sel && sel.value === 'Efectivo';
       var yaDescuento = discount > 0;
@@ -1942,12 +1942,12 @@ function updateUI() {
         // Ya tiene descuento — felicitarlo
         incentiveEl.innerHTML = '<strong>🎉 ¡Descuento aplicado!</strong><br>Estás ahorrando <strong>' + ars(discount) + '</strong>';
         incentiveEl.style.display = '';
-      } else if (bulkOK && falta > 0 && falta <= 40000 && subtotal >= 60000) {
-        // Cerca de $100K — incentivar a llegar
+      } else if (bulkOK && falta > 0 && falta <= 40000 && pSub >= 60000) {
+        // Cerca de $100K — incentivar a llegar (sin contar combos)
         incentiveEl.innerHTML = '🔥 Estás a <strong>' + ars(falta) + '</strong> de tener <strong>10% OFF</strong> por superar los $100.000' +
           (cashOK && !isCash ? '<div class="incentive-cash">💵 También podés pagar en efectivo y tener 10% OFF</div>' : '');
         incentiveEl.style.display = '';
-      } else if (cashOK && !isCash && subtotal > 0 && subtotal < 60000) {
+      } else if (cashOK && !isCash && pSub > 0 && pSub < 60000) {
         // Pedido chico — solo recordar el efectivo
         incentiveEl.innerHTML = '<div class="incentive-cash" style="border:none;margin:0;padding:0;">💵 Pagando en efectivo tenés 10% OFF</div>';
         incentiveEl.style.display = '';
@@ -1957,12 +1957,6 @@ function updateUI() {
     } else if (incentiveEl) {
       incentiveEl.style.display = 'none';
     }
-  }
-  // Barra de promo superior: ocultar si hay un combo (descuentos inhabilitados),
-  // restaurar si no. Solo togglea el display (no reconstruye el marquee).
-  var promoBar = $id('promo-bar');
-  if (promoBar && discountsActive()) {
-    promoBar.style.display = combosInCart() ? 'none' : '';
   }
   updateFormSummary();
   updatePagoHint();
@@ -3227,8 +3221,6 @@ function updatePromoBar() {
   var bar = $id('promo-bar');
   if (!bar) return;
   if (!discountsActive()) { bar.style.display = 'none'; return; }
-  // Con un combo en el carrito los descuentos quedan inhabilitados → ocultar la barra.
-  if (combosInCart()) { bar.style.display = 'none'; return; }
   // Construir el ticker dinámicamente según qué descuentos aplican en la zona
   // (en Pilar NO-Red solo aplica el +$100K, no el efectivo).
   var msgEl = bar.querySelector('.promo-msg');
@@ -3247,12 +3239,12 @@ function updatePagoHint() {
   if (!hint) return;
   var sel = document.querySelector('input[name="pago"]:checked');
   var isCash = sel && sel.value === 'Efectivo';
-  // Si el descuento del 10% ya se aplica por superar $100K, no tiene sentido
-  // invitar al cliente a cambiar a efectivo — ya tiene el 10% ahorrado.
-  var yaBulk = cartTotal() >= 100000;
-  // Mostrar solo si el descuento de efectivo aplica en la zona, no eligió
-  // efectivo Y el bulk no está ya cubriendo el 10%.
-  hint.style.display = (cashDiscountActive() && !isCash && !yaBulk) ? '' : 'none';
+  // El 10% aplica solo a productos sueltos (no combos): el umbral $100K y el
+  // "hay algo que descontar" se miden sobre productsSubtotal. Si el carrito es
+  // solo combos (pSub=0), no mostrar el cartel.
+  var pSub = productsSubtotal();
+  var yaBulk = pSub >= 100000;
+  hint.style.display = (cashDiscountActive() && !isCash && !yaBulk && pSub > 0) ? '' : 'none';
 }
 function updateShippingBar() {
   const bar = $id('shipping-bar');
