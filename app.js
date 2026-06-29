@@ -2805,7 +2805,11 @@ function renderCatNav() {
       const slug = slugify(cat.nombre);
       return '<button class="cat-nav-btn' + (i===0?' active':'') + '" data-slug="' + slug + '" onclick="scrollToCat(\'' + slug + '\')">' +
         cat.nombre + '</button>';
-    }).join('') + '</div></div>';
+    }).join('') +
+    // Chip "Combos" al final, color propio. data-slug = id de la sección para que
+    // el IntersectionObserver lo resalte al scrollear hasta los combos.
+    (getActiveCombos().length ? '<button class="cat-nav-btn cat-nav-combos" data-slug="combos-ancla" onclick="scrollToCombos()">🎁 Combos</button>' : '') +
+    '</div></div>';
   document.querySelectorAll('.cat-section').forEach((section,i) => {
     const cat = getActiveCategories()[i]; if (!cat) return;
     section.id = 'cat-' + slugify(cat.nombre);
