@@ -828,12 +828,12 @@ function applyCoupon() {
     });
 }
 function removeCoupon() {
+  // Cupones discontinuados (el bloque ya no existe en la tienda). Mantener
+  // null-safe: removeCoupon() se sigue llamando en el reset post-envío.
   appliedCoupon = null;
-  $id('coupon-applied').style.display = 'none';
-  $id('coupon-applied').classList.remove('pending');
-  $id('coupon-box').style.display = 'none';
-  $id('coupon-toggle').style.display = '';
-  $id('coupon-toggle').setAttribute('aria-expanded', 'false');
+  var ca = $id('coupon-applied'); if (ca) { ca.style.display = 'none'; ca.classList.remove('pending'); }
+  var cb = $id('coupon-box'); if (cb) cb.style.display = 'none';
+  var ct = $id('coupon-toggle'); if (ct) { ct.style.display = ''; ct.setAttribute('aria-expanded', 'false'); }
   var inp = $id('f-cupon'); if (inp) inp.value = '';
   _showCouponMsg('', '');
   updateUI();
