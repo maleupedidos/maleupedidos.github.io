@@ -1483,7 +1483,7 @@ function renderCombosSectionHTML() {
 function renderCatalog() {
   const cats = getActiveCategories();
   const prods_all = getActiveProducts();
-  $id('catalog-root').innerHTML = renderCombosSectionHTML() + '<span id="productos-ancla"></span>' + cats.map(cat => {
+  $id('catalog-root').innerHTML = '<span id="productos-ancla"></span>' + cats.map(cat => {
     const prods = prods_all.filter(p => p.cat === cat.nombre).sort((a,b) => (b.top?1:0) - (a.top?1:0));
     if (!prods.length) return '';
     return '<section class="cat-section"><div class="cat-header">' +
@@ -1508,7 +1508,7 @@ function renderCatalog() {
         '</div>' +
       '</article>').join('') +
       '</div></section>';
-  }).join('');
+  }).join('') + renderCombosSectionHTML();  // combos al final, después de la última categoría (Tortas)
 }
 
 /* ── RENDER CARD FOOTER ── */
