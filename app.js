@@ -1456,6 +1456,18 @@ function applyZone() {
      composición). Se muestra entera y NO se repite el texto en HTML; debajo
      solo el precio (tachado dinámico + final) y el botón.
    - sin fullCard: layout de texto clásico (placeholder / combos sin arte). */
+/* Composición condensada de un combo en una línea corta (para la card completa,
+   donde la placa diseñada se lee difícil). Ej: "1 tarta · 1 wrap · 1 pack de
+   sorrentinos · Franui". */
+function _comboCompSummary(c) {
+  return (c.slots || []).map(slot => {
+    const pick = slot.pick || 1;
+    const opts = slotOptions(slot);
+    let noun = slot.unidad || ((opts.length <= 1 && opts[0]) ? opts[0].nombre : slot.label.toLowerCase());
+    return (pick > 1 ? pick + '× ' : '') + noun;
+  }).join(' · ');
+}
+
 function _comboCardHTML(c) {
   const tachado = comboNaturalSumComp(resolveComp(c, defaultSelection(c)).comp);
   const priceHtml = '<span class="product-price">' +
@@ -1469,6 +1481,7 @@ function _comboCardHTML(c) {
     return '<article class="product-card combo-card combo-card-full" data-id="' + c.id + '">' +
       '<img class="combo-full-img" src="img/' + c.img + '" alt="' + c.nombre + '" loading="lazy">' +
       '<div class="combo-full-foot">' +
+        '<p class="combo-full-comp"><strong>Incluye:</strong> ' + _comboCompSummary(c) + '</p>' +
         '<span class="stock-indicator" id="stock-' + c.id + '"></span>' +
         '<div class="product-footer">' + priceHtml + btn + '</div>' +
       '</div>' +
