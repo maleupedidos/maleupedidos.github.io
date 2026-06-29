@@ -290,6 +290,10 @@ function productsSubtotal() {
 function combosSubtotal() {
   return Object.values(comboCart).reduce((s, inst) => { const c = COMBO_MAP[inst.comboId]; return s + (c ? c.precio * inst.qty : 0); }, 0);
 }
+/* ¿Hay al menos un combo en el carrito? Si hay, se inhabilitan TODOS los
+   descuentos del pedido (10% efectivo, +$100K y cupones): el combo ya es
+   precio cerrado promocional y no acumula con nada. */
+function combosInCart() { return Object.keys(comboCart).length > 0; }
 
 /* ── ZONAS ── */
 const ZONAS = {
@@ -709,6 +713,7 @@ function _subtotalForScope(scope) {
 }
 function getCouponDiscount() {
   if (!appliedCoupon) return 0;
+  if (combosInCart()) return 0;   // con combo en el carrito no aplica ningún descuento
   const sub = _subtotalForScope(appliedCoupon.scope);
   if (sub <= 0) return 0;
   if (appliedCoupon.tipo === 'PCT')  return Math.round(sub * (appliedCoupon.valor / 100));
@@ -721,6 +726,9 @@ function couponAppliesToAll() {
 }
 
 function getCashDiscount() {
+  // Si hay un combo en el carrito, se inhabilitan los descuentos del pedido
+  // (no acumula con 10% efectivo ni +$100K).
+  if (combosInCart()) return 0;
   // Combos quedan FUERA del 10% (precio cerrado, no apila): base y umbral
   // bulk se calculan solo sobre productos sueltos.
   const total = productsSubtotal();
@@ -1920,9 +1928,9 @@ function updateUI() {
     }
     $id('cart-total').textContent = ars(total);
 
-    // Incentivo inteligente
+    // Incentivo inteligente — se oculta si hay un combo (descuentos inhabilitados).
     var incentiveEl = $id('cart-incentive');
-    if (incentiveEl && discountsActive()) {
+    if (incentiveEl && discountsActive() && !combosInCart()) {
       var falta = 100000 - subtotal;
       var sel = document.querySelector('input[name="pago"]:checked');
       var isCash = sel && sel.value === 'Efectivo';
@@ -1965,9 +1973,17 @@ function updateFormSummary() {
   const autoDesc  = getCashDiscount();
   const totalDesc = cuponDesc + autoDesc;
   const shipping  = getShipping();
-  const total     = subtotal - totalDesc + shipping;
+  const saldoAFavor = getSaldoAFavor();
+  const total     = subtotal - totalDesc + shipping - saldoAFavor;
 
-  let html = Object.entries(cart).map(([id,qty]) => {
+  // Combos primero (cada instancia configurada), luego productos sueltos.
+  let html = Object.values(comboCart).map(inst => {
+    const c = COMBO_MAP[inst.comboId];
+    if (!c) return '';
+    return '<div class="summary-line"><span>' + (c.emoji ? c.emoji + ' ' : '') + c.nombre +
+      (inst.qty > 1 ? ' <strong>×' + inst.qty + '</strong>' : '') + '</span><span>' + ars(c.precio*inst.qty) + '</span></div>';
+  }).join('');
+  html += Object.entries(cart).map(([id,qty]) => {
     const p = PROD_MAP[id];
     if (!p) return '';
     return '<div class="summary-line"><span>' + p.nombre + ' <strong>×' + qty + '</strong></span><span>' + ars(p.precio*qty) + '</span></div>';
@@ -1986,6 +2002,9 @@ function updateFormSummary() {
     html += '<div class="summary-line discount-line"><span>' + getDiscountLabel() + '</span><span>-' + ars(autoDesc) + '</span></div>';
   }
   html += '<div class="summary-line shipping-line"><span>Envío</span><span>' + (shipping === 0 ? 'Gratis' : ars(shipping)) + '</span></div>';
+  if (saldoAFavor > 0) {
+    html += '<div class="summary-line discount-line" style="color:#2e7d32"><span>🎁 Saldo a favor</span><span>-' + ars(saldoAFavor) + '</span></div>';
+  }
   html += '<div class="summary-line total-line"><span>Total</span><span>' + ars(total) + '</span></div>';
   el.innerHTML = html;
 }
