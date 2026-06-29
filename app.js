@@ -97,6 +97,24 @@ function getActiveCategories() { return currentZone === 'clubes' ? CATEGORIAS_CL
 // Placeholder común hasta tener artes definitivos de cada combo.
 const COMBO_PLACEHOLDER_IMG = 'pack-muzarella-cocida.jpg';
 const COMBOS = [
+  // ── TEMPORALES (categoria definida → van primero, separados) ──
+  {
+    id: 'cmb_arg_32avos',
+    nombre: 'Combo Argentina · 32avos',
+    desc: 'Para alentar a la Selección.',
+    precio: 39900,
+    img: COMBO_PLACEHOLDER_IMG,
+    emoji: '🇦🇷',
+    flag: '🇦🇷',
+    categoria: '🇦🇷 Mundial 2026',
+    zonas: ['estancias'],
+    slots: [
+      { label: 'Pizza',     unidad: 'pack de pizzas clásicas x2', pick: 1, options: { cat: 'Pack Pizzas x2' } },
+      { label: 'Empanadas', unidad: 'pack de empanadas x8',       pick: 1, options: { cat: 'Empanadas' } },
+      { label: 'Postre',    unidad: 'Franui',                     pick: 1, options: { ids: [13] } },
+    ],
+  },
+  // ── PERMANENTES ──
   {
     id: 'cmb_descubri_semana',
     nombre: 'Descubrí Maleu · Semana',
@@ -1433,50 +1451,81 @@ function applyZone() {
   loadLastOrder();
 }
 
-/* ── RENDER SECCIÓN COMBOS (arriba del catálogo) ── */
+/* HTML de UNA card de combo (reutilizable en grupos temporales y permanentes). */
+function _comboCardHTML(c) {
+  const compList = (c.slots || []).map(slot => {
+    const opts = slotOptions(slot);
+    const pick = slot.pick || 1;
+    const noun = slot.unidad || slot.label.toLowerCase();
+    if (opts.length <= 1) {
+      const p = opts[0];
+      return p ? '<li class="fixed"><strong>' + pick + '×</strong> ' + p.nombre + '</li>' : '';
+    }
+    return '<li><strong>' + pick + '×</strong> ' + noun +
+      ' <span class="combo-choose">· elegís ' + (pick > 1 ? 'los sabores' : 'el sabor') + '</span></li>';
+  }).join('');
+  const choices = comboHasChoices(c);
+  const tachado = comboNaturalSumComp(resolveComp(c, defaultSelection(c)).comp);
+  const priceHtml = '<span class="product-price">' +
+    (tachado > c.precio ? '<s class="combo-price-old">' + ars(tachado) + '</s> ' : '') + ars(c.precio) + '</span>';
+  const btn = choices
+    ? '<button class="add-btn" onclick="openComboConfig(\'' + c.id + '\')">Armar combo</button>'
+    : '<button class="add-btn" onclick="addComboDefault(\'' + c.id + '\')">+ Agregar</button>';
+  return '<article class="product-card combo-card" data-id="' + c.id + '">' +
+    '<div class="product-thumb">' +
+      '<span class="combo-flag">' + (c.flag || '🎁') + '</span>' +
+      '<img class="product-thumb-img" src="img/' + c.img + '" alt="' + c.nombre + '" loading="lazy" width="400" height="400" style="object-position:' + (c.imgPos||'center') + '" onerror="this.style.display=\'none\'">' +
+    '</div>' +
+    '<div class="product-body">' +
+      (c.top ? '<span class="product-top-badge">⭐ Lo más pedido</span>' : '') +
+      '<h3 class="product-name">' + c.nombre + '</h3>' +
+      '<p class="product-desc">' + c.desc + '</p>' +
+      '<ul class="combo-includes">' + compList + '</ul>' +
+      (c.chips ? '<div class="product-chips">' + c.chips.map(x => '<span class="chip">' + x + '</span>').join('') + '</div>' : '') +
+      '<span class="stock-indicator" id="stock-' + c.id + '"></span>' +
+      '<div class="product-footer">' + priceHtml + btn + '</div>' +
+    '</div>' +
+  '</article>';
+}
+
+/* ── RENDER SECCIÓN COMBOS ──
+   Dentro de la sección conviven CATEGORÍAS:
+   - Temporales (combo.categoria definido): van PRIMERO, cada una con su
+     encabezado y estilo destacado (ej. "🇦🇷 Mundial 2026").
+   - Permanentes (sin categoria): van debajo.
+   Para sumar otra categoría temporal (octavos, Día del Amigo, etc.) basta con
+   poner `categoria` en cada combo nuevo; se agrupan solos. */
 function renderCombosSectionHTML() {
   const combos = getActiveCombos();
   if (!combos.length) return '';
-  const cards = combos.map(c => {
-    // Resumen de la composición: cuántas unidades de cada cosa + si elige el sabor.
-    const compList = (c.slots || []).map(slot => {
-      const opts = slotOptions(slot);
-      const pick = slot.pick || 1;
-      const noun = slot.unidad || slot.label.toLowerCase();
-      if (opts.length <= 1) {
-        const p = opts[0];
-        return p ? '<li class="fixed"><strong>' + pick + '×</strong> ' + p.nombre + '</li>' : '';
-      }
-      return '<li><strong>' + pick + '×</strong> ' + noun +
-        ' <span class="combo-choose">· elegís ' + (pick > 1 ? 'los sabores' : 'el sabor') + '</span></li>';
-    }).join('');
-    const choices = comboHasChoices(c);
-    const tachado = comboNaturalSumComp(resolveComp(c, defaultSelection(c)).comp);
-    const priceHtml = '<span class="product-price">' +
-      (tachado > c.precio ? '<s class="combo-price-old">' + ars(tachado) + '</s> ' : '') + ars(c.precio) + '</span>';
-    const btn = choices
-      ? '<button class="add-btn" onclick="openComboConfig(\'' + c.id + '\')">Armar combo</button>'
-      : '<button class="add-btn" onclick="addComboDefault(\'' + c.id + '\')">+ Agregar</button>';
-    return '<article class="product-card combo-card" data-id="' + c.id + '">' +
-      '<div class="product-thumb">' +
-        '<span class="combo-flag">🎁</span>' +
-        '<img class="product-thumb-img" src="img/' + c.img + '" alt="' + c.nombre + '" loading="lazy" width="400" height="400" style="object-position:' + (c.imgPos||'center') + '" onerror="this.style.display=\'none\'">' +
-      '</div>' +
-      '<div class="product-body">' +
-        (c.top ? '<span class="product-top-badge">⭐ Lo más pedido</span>' : '') +
-        '<h3 class="product-name">' + c.nombre + '</h3>' +
-        '<p class="product-desc">' + c.desc + '</p>' +
-        '<ul class="combo-includes">' + compList + '</ul>' +
-        (c.chips ? '<div class="product-chips">' + c.chips.map(x => '<span class="chip">' + x + '</span>').join('') + '</div>' : '') +
-        '<span class="stock-indicator" id="stock-' + c.id + '"></span>' +
-        '<div class="product-footer">' + priceHtml + btn + '</div>' +
-      '</div>' +
-    '</article>';
-  }).join('');
+  const temporales = combos.filter(c => c.categoria);
+  const permanentes = combos.filter(c => !c.categoria);
+
+  // Agrupar temporales por nombre de categoría, en orden de aparición.
+  const catOrder = []; const catMap = {};
+  temporales.forEach(c => {
+    if (!catMap[c.categoria]) { catMap[c.categoria] = []; catOrder.push(c.categoria); }
+    catMap[c.categoria].push(c);
+  });
+
+  let groups = '';
+  catOrder.forEach(cat => {
+    groups += '<div class="combo-group combo-group-temporal">' +
+      '<div class="combo-group-head">' + cat + '<span class="combo-group-tag">Por tiempo limitado</span></div>' +
+      '<div class="products-grid">' + catMap[cat].map(_comboCardHTML).join('') + '</div>' +
+    '</div>';
+  });
+  if (permanentes.length) {
+    groups += '<div class="combo-group">' +
+      (catOrder.length ? '<div class="combo-group-head combo-group-head-perma">Combos de siempre</div>' : '') +
+      '<div class="products-grid">' + permanentes.map(_comboCardHTML).join('') + '</div>' +
+    '</div>';
+  }
+
   return '<section class="cat-section combos-section" id="combos-ancla"><div class="cat-header">' +
     '<div class="cat-title">🎁 Combos</div>' +
     '<div class="cat-nota">Propuestas ya armadas a precio cerrado · Elegí los sabores y listo</div>' +
-    '</div><div class="products-grid">' + cards + '</div></section>';
+    '</div>' + groups + '</section>';
 }
 
 /* ── RENDER CATÁLOGO ── */
@@ -2262,7 +2311,7 @@ function enviarPedido() {
 
   const comboLinesWA = Object.values(comboCart).map((inst) => {
     const c = COMBO_MAP[inst.comboId]; if (!c) return null;
-    const head = '  🎁 ' + c.nombre + (inst.qty > 1 ? ' ×' + inst.qty : '') + '  —  ' + ars(c.precio * inst.qty);
+    const head = '  ' + (c.emoji || '🎁') + ' ' + c.nombre + (inst.qty > 1 ? ' ×' + inst.qty : '') + '  —  ' + ars(c.precio * inst.qty);
     const comps = (inst.picks || []).map(pk => '       ◦ ' + pk.label + ': ' + _optLabel(pk.nombre, pk.label)).join('\n');
     return head + (comps ? '\n' + comps : '');
   }).filter(Boolean).join('\n');
