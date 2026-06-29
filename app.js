@@ -1958,6 +1958,12 @@ function updateUI() {
       incentiveEl.style.display = 'none';
     }
   }
+  // Barra de promo superior: ocultar si hay un combo (descuentos inhabilitados),
+  // restaurar si no. Solo togglea el display (no reconstruye el marquee).
+  var promoBar = $id('promo-bar');
+  if (promoBar && discountsActive()) {
+    promoBar.style.display = combosInCart() ? 'none' : '';
+  }
   updateFormSummary();
   updatePagoHint();
   // Si hay cupón aplicado, refresco el card para que pase de pending → activo
@@ -3207,6 +3213,8 @@ function updatePromoBar() {
   var bar = $id('promo-bar');
   if (!bar) return;
   if (!discountsActive()) { bar.style.display = 'none'; return; }
+  // Con un combo en el carrito los descuentos quedan inhabilitados → ocultar la barra.
+  if (combosInCart()) { bar.style.display = 'none'; return; }
   // Construir el ticker dinámicamente según qué descuentos aplican en la zona
   // (en Pilar NO-Red solo aplica el +$100K, no el efectivo).
   var msgEl = bar.querySelector('.promo-msg');
