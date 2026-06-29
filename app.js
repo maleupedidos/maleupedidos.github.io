@@ -2489,6 +2489,12 @@ function enviarPedido() {
   if (combosPayload.length) {
     postData.combos = combosPayload;
     postData.comboDetalle = JSON.stringify(combosPayload);
+    // CLAVE: con combos el descuento que mando (= ahorro del combo) es la
+    // autoridad. Sin este flag el backend RECALCULA el descuento (10%/0%) y
+    // pisaría el precio cerrado del combo, cobrando mal (ej. el subtotal a
+    // precio de lista). El backend respeta descuento+total tal cual (línea
+    // ~4182 de apps-script.gs) → total = subtotalSinDescuento - ahorro combo.
+    postData.descuentoManualEsAutoridad = true;
   }
   // ID único para idempotencia: si el cliente reintenta por mala señal y el POST
   // anterior ya había llegado al server, el backend lo descarta (CacheService 6h).
