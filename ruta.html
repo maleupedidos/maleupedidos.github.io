@@ -3968,7 +3968,12 @@ function confirmarCobroVendedor(vendedor,monto,bruto,comision,nPedidos){
 
 function cobrarVendedorRed(vendedor,formaPago){
   formaPago=formaPago||'Transferencia';
-  var payload={action:'cobrarVendedorRed',vendedor:vendedor,formaPago:formaPago,ts:Date.now()};
+  // El backend espera el nombre EXACTO como está en la col Vendedor del Sheets
+  // (sin sufijos). Acá venía "Marcos Bottcher (Vendedor Red)" que el frontend
+  // arma para mostrar — strict equality contra col 8 fallaba y el cobro caía
+  // silenciosamente (updated:0). Reportado por Tadeo 30/06/2026.
+  var vendedorLimpio=String(vendedor).replace(/\s*\(Vendedor Red\)\s*$/,'').trim();
+  var payload={action:'cobrarVendedorRed',vendedor:vendedorLimpio,formaPago:formaPago,ts:Date.now()};
   // UI optimista: sacar al vendedor de la lista local (con backup para revertir si falla)
   var backup=pendientesCobro.filter(function(pc){return (pc.isVendedor&&pc.c.indexOf(vendedor)===0);});
   pendientesCobro=pendientesCobro.filter(function(pc){return !(pc.isVendedor&&pc.c.indexOf(vendedor)===0)});
@@ -3991,9 +3996,16 @@ function cobrarVendedorRed(vendedor,formaPago){
       hideLoader(true);
       if(res&&res.ok){
         if(res.updated>0){ showToast('✓ Cobrado a '+vendedor.split(' ')[0]+' · '+(formaPago==='Efectivo'?'efectivo':'MP')+' ($'+formatMoney(res.total||0).replace('$','')+')'); }
-        else { _revert(); showToast('Nada por cobrar de '+vendedor.split(' ')[0]); }
+        else {
+          // updated:0 con ok:true = backend no encontró pedidos para cobrar a ese
+          // vendedor. Antes mostraba un toast chico que pasaba desapercibido y la
+          // card volvía sin avisar (caso 30/06/2026 con sufijo "(Vendedor Red)").
+          // Ahora alert bloqueante: el usuario no se puede perder este estado.
+          _revert();
+          alert('⚠ El cobro NO se aplicó.\n\nNo se encontraron pedidos pendientes a nombre de "'+vendedor+'".\n\nPosibles causas:\n• Ya estaban marcados como Pagado a Maleu\n• El nombre del vendedor no coincide con la hoja Red\n\nNada se modificó. Avisá si pasa de nuevo.');
+        }
         if(currentTab==='cobros')fetchCobrosPendientes(true);
-      } else { _revert(); showToast('❌ Error: '+((res&&res.error)||'sin respuesta')+' — probá de nuevo'); }
+      } else { _revert(); alert('❌ Error al cobrar a '+vendedor+'\n\n'+((res&&res.error)||'sin respuesta del servidor')+'\n\nNada se modificó. Probá de nuevo.'); }
     })
     .catch(function(err){
       clearTimeout(_t);hideLoader(true);_revert();
