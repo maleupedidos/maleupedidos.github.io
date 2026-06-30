@@ -102,6 +102,7 @@ const COMBOS = [
     id: 'cmb_arg_16avos',
     nombre: 'Combo Argentina · 16avos',
     desc: 'Para alentar a la Selección.',
+    personas: '4 a 6 personas',
     precio: 54900,
     img: 'combo-arg-16avos.jpg', fullCard: true,   // placa actualizada (3 Franui, $54.900)
     emoji: '🇦🇷',
@@ -118,6 +119,7 @@ const COMBOS = [
     id: 'cmb_mundialista',
     nombre: 'Combo Mundialista',
     desc: 'Ideal para compartir todos los partidos del Mundial.',
+    personas: '8 a 12 personas',
     precio: 69900,
     img: 'combo-mundialista.jpg', fullCard: true,
     emoji: '🌎',
@@ -134,6 +136,7 @@ const COMBOS = [
     id: 'cmb_descubri_semana',
     nombre: 'Descubrí Maleu · Semana',
     desc: 'Conocé los productos ideales para el día a día.',
+    personas: '2 a 3 personas',
     precio: 46900,
     img: 'combo-semana.jpg', fullCard: true,
     emoji: '🎁',
@@ -149,6 +152,7 @@ const COMBOS = [
     id: 'cmb_descubri_finde',
     nombre: 'Descubrí Maleu · Fin de Semana',
     desc: 'Probá los clásicos de Maleu para compartir.',
+    personas: '2 a 3 personas',
     precio: 34900,
     img: 'combo-finde.jpg', fullCard: true,
     emoji: '🎁',
@@ -163,6 +167,7 @@ const COMBOS = [
     id: 'cmb_noche_casa',
     nombre: 'Noche en Casa',
     desc: 'Una cena rica y lista en minutos para dos personas.',
+    personas: '2 personas',
     precio: 23900,
     img: 'combo-noche.jpg', fullCard: true,
     emoji: '🎁',
@@ -176,6 +181,7 @@ const COMBOS = [
     id: 'cmb_mesa_familiar',
     nombre: 'Mesa Familiar',
     desc: 'Una solución práctica para una comida en familia.',
+    personas: '4 a 5 personas',
     precio: 45900,
     img: 'combo-mesa.jpg', fullCard: true,
     emoji: '🎁',
@@ -190,6 +196,7 @@ const COMBOS = [
     id: 'cmb_freezer_lleno',
     nombre: 'Freezer Lleno',
     desc: 'Resolvé varias comidas de la semana en un solo pedido.',
+    personas: '4 a 6 personas',
     precio: 84900,
     img: 'combo-freezer.jpg', fullCard: true,
     emoji: '🎁',
@@ -1493,6 +1500,11 @@ function _comboCompListHTML(c) {
   }).join('');
 }
 
+/* Badge "para cuántas personas" — lo primero que mira el cliente. */
+function _comboPersonasHTML(c) {
+  return c.personas ? '<div class="combo-personas">👥 Para ' + c.personas + '</div>' : '';
+}
+
 function _comboCardHTML(c) {
   const tachado = comboNaturalSumComp(resolveComp(c, defaultSelection(c)).comp);
   const priceHtml = '<span class="product-price">' +
@@ -1506,6 +1518,7 @@ function _comboCardHTML(c) {
     return '<article class="product-card combo-card combo-card-full" data-id="' + c.id + '">' +
       '<img class="combo-full-img" src="img/' + c.img + '" alt="' + c.nombre + '" loading="lazy">' +
       '<div class="combo-full-foot">' +
+        _comboPersonasHTML(c) +
         '<ul class="combo-includes">' + _comboCompListHTML(c) + '</ul>' +
         '<span class="stock-indicator" id="stock-' + c.id + '"></span>' +
         '<div class="product-footer">' + priceHtml + btn + '</div>' +
@@ -1521,6 +1534,7 @@ function _comboCardHTML(c) {
     '<div class="product-body">' +
       (c.top ? '<span class="product-top-badge">⭐ Lo más pedido</span>' : '') +
       '<h3 class="product-name">' + c.nombre + '</h3>' +
+      _comboPersonasHTML(c) +
       '<p class="product-desc">' + c.desc + '</p>' +
       '<ul class="combo-includes">' + _comboCompListHTML(c) + '</ul>' +
       (c.chips ? '<div class="product-chips">' + c.chips.map(x => '<span class="chip">' + x + '</span>').join('') + '</div>' : '') +
