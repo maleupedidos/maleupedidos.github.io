@@ -102,8 +102,8 @@ const COMBOS = [
     id: 'cmb_arg_16avos',
     nombre: 'Combo Argentina · 16avos',
     desc: 'Para alentar a la Selección.',
-    precio: 39900,
-    img: 'combo-arg-16avos.jpg', fullCard: true,
+    precio: 54900,
+    img: COMBO_PLACEHOLDER_IMG,   // placa combo-arg-16avos.jpg quedó desactualizada (3 Franui + precio nuevo) → texto hasta tener arte nuevo
     emoji: '🇦🇷',
     flag: '🇦🇷',
     categoria: '🇦🇷 Mundial 2026',
@@ -111,7 +111,22 @@ const COMBOS = [
     slots: [
       { label: 'Pizza',     unidad: 'pack de pizzas clásicas x2', pick: 1, options: { cat: 'Pack Pizzas x2' } },
       { label: 'Empanadas', unidad: 'pack de empanadas x8',       pick: 1, options: { cat: 'Empanadas' } },
-      { label: 'Postre',    unidad: 'Franui',                     pick: 1, options: { ids: [13] } },
+      { label: 'Postre',    unidad: 'Franui',                     pick: 3, options: { ids: [13] } },
+    ],
+  },
+  {
+    id: 'cmb_mundialista',
+    nombre: 'Combo Mundialista',
+    desc: 'Ideal para compartir todos los partidos del Mundial.',
+    precio: 69900,
+    img: COMBO_PLACEHOLDER_IMG,
+    emoji: '🌎',
+    flag: '🌎',
+    categoria: '🇦🇷 Mundial 2026',
+    zonas: ['estancias'],
+    slots: [
+      { label: 'Pizzas', unidad: 'pack de pizzas clásicas x2', pick: 3, options: { cat: 'Pack Pizzas x2' } },  // 3 packs, sabores a elección libre
+      { label: 'Postre', unidad: 'Franui',                     pick: 3, options: { ids: [13] } },
     ],
   },
   // ── PERMANENTES ──
@@ -1791,7 +1806,7 @@ function renderComboConfig() {
     if (opts.length <= 1) {
       const p = opts[0];
       return p ? '<div class="cfg-slot cfg-slot-fixed"><div class="cfg-slot-label">' + slot.label +
-        '</div><div class="cfg-fixed-item">✓ ' + _optLabel(p.nombre, slot.label) + '</div></div>' : '';
+        '</div><div class="cfg-fixed-item">✓ ' + (pick > 1 ? pick + '× ' : '') + _optLabel(p.nombre, slot.label) + '</div></div>' : '';
     }
     // Un bloque de opciones por cada unidad a elegir (pick).
     const pickBlocks = [];
