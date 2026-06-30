@@ -107,7 +107,7 @@ const COMBOS = [
     emoji: '🇦🇷',
     flag: '🇦🇷',
     categoria: '🇦🇷 Mundial 2026',
-    zonas: ['estancias'],
+    zonas: ['estancias', 'pilar'],
     slots: [
       { label: 'Pizza',     unidad: 'pack de pizzas clásicas x2', pick: 1, options: { cat: 'Pack Pizzas x2' } },
       { label: 'Empanadas', unidad: 'pack de empanadas x8',       pick: 1, options: { cat: 'Empanadas' } },
@@ -123,7 +123,7 @@ const COMBOS = [
     emoji: '🌎',
     flag: '🌎',
     categoria: '🇦🇷 Mundial 2026',
-    zonas: ['estancias'],
+    zonas: ['estancias', 'pilar'],
     slots: [
       { label: 'Pizzas', unidad: 'pack de pizzas clásicas x2', pick: 3, options: { cat: 'Pack Pizzas x2' } },  // 3 packs, sabores a elección libre
       { label: 'Postre', unidad: 'Franui',                     pick: 3, options: { ids: [13] } },
@@ -137,7 +137,7 @@ const COMBOS = [
     precio: 46900,
     img: 'combo-semana.jpg', fullCard: true,
     emoji: '🎁',
-    zonas: ['estancias'],
+    zonas: ['estancias', 'pilar'],
     slots: [
       { label: 'Tarta',       unidad: 'tarta',               pick: 1, options: { cat: 'Tartas' } },
       { label: 'Wrap',        unidad: 'wrap',                pick: 1, options: { cat: 'Wraps' } },
@@ -152,7 +152,7 @@ const COMBOS = [
     precio: 34900,
     img: 'combo-finde.jpg', fullCard: true,
     emoji: '🎁',
-    zonas: ['estancias'],
+    zonas: ['estancias', 'pilar'],
     slots: [
       { label: 'Pizza premium', unidad: 'pizza individual',   pick: 1, options: { cat: 'Pizzas Individuales' } },
       { label: 'Empanadas',     unidad: 'pack de empanadas',  pick: 1, options: { cat: 'Empanadas' } },
@@ -166,7 +166,7 @@ const COMBOS = [
     precio: 23900,
     img: 'combo-noche.jpg', fullCard: true,
     emoji: '🎁',
-    zonas: ['estancias'],
+    zonas: ['estancias', 'pilar'],
     slots: [
       { label: 'Pizza',  unidad: 'pack de pizzas x2', pick: 1, options: { cat: 'Pack Pizzas x2' } },
       { label: 'Postre', unidad: 'Franui',            pick: 1, options: { ids: [13] } },
@@ -179,7 +179,7 @@ const COMBOS = [
     precio: 45900,
     img: 'combo-mesa.jpg', fullCard: true,
     emoji: '🎁',
-    zonas: ['estancias'],
+    zonas: ['estancias', 'pilar'],
     slots: [
       { label: 'Tarta',     unidad: 'tarta',              pick: 2, options: { cat: 'Tartas' } },      // dos iguales o distintas
       { label: 'Empanadas', unidad: 'pack de empanadas',  pick: 1, options: { cat: 'Empanadas' } },
@@ -193,7 +193,7 @@ const COMBOS = [
     precio: 84900,
     img: 'combo-freezer.jpg', fullCard: true,
     emoji: '🎁',
-    zonas: ['estancias'],
+    zonas: ['estancias', 'pilar'],
     slots: [
       { label: 'Pizza',       unidad: 'pack de pizzas x2',   pick: 2, options: { cat: 'Pack Pizzas x2' } },  // dos iguales o distintas
       { label: 'Sorrentinos', unidad: 'pack de sorrentinos', pick: 1, options: { ids: [10, 9, 8] } },
@@ -1463,7 +1463,7 @@ function applyZone() {
   renderCatalog();
   renderCatNav();
   updateCatNavTop();
-  // Botón "Ver los combos" del hero: solo si la zona tiene combos (hoy, Estancias).
+  // Botón "Ver los combos" del hero: solo si la zona tiene combos (Estancias y Pilar).
   var combosCta = $id('hero-combos-cta');
   if (combosCta) combosCta.style.display = getActiveCombos().length ? '' : 'none';
   updateUI();
