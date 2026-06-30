@@ -2370,7 +2370,10 @@ function enviarPedido() {
 
   const comboLinesWA = Object.values(comboCart).map((inst) => {
     const c = COMBO_MAP[inst.comboId]; if (!c) return null;
-    const head = '  ' + (c.emoji || '🎁') + ' ' + c.nombre + (inst.qty > 1 ? ' ×' + inst.qty : '') + '  —  ' + ars(c.precio * inst.qty);
+    // Emoji fijo 🎁 en WhatsApp: las banderas de país (regional-indicator) no
+    // renderizan confiable en texto plano según el dispositivo (salía "�"). El
+    // nombre del combo ya lleva la identidad ("Combo Argentina · 16avos").
+    const head = '  🎁 ' + c.nombre + (inst.qty > 1 ? ' ×' + inst.qty : '') + '  —  ' + ars(c.precio * inst.qty);
     const comps = (inst.picks || []).map(pk => '       ◦ ' + pk.label + ': ' + _optLabel(pk.nombre, pk.label)).join('\n');
     return head + (comps ? '\n' + comps : '');
   }).filter(Boolean).join('\n');
