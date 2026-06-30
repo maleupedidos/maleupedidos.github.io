@@ -119,7 +119,7 @@ const COMBOS = [
     nombre: 'Combo Mundialista',
     desc: 'Ideal para compartir todos los partidos del Mundial.',
     precio: 69900,
-    img: COMBO_PLACEHOLDER_IMG,
+    img: 'combo-mundialista.jpg', fullCard: true,
     emoji: '🌎',
     flag: '🌎',
     categoria: '🇦🇷 Mundial 2026',
