@@ -103,7 +103,7 @@ const COMBOS = [
     nombre: 'Combo Argentina · 16avos',
     desc: 'Para alentar a la Selección.',
     precio: 54900,
-    img: COMBO_PLACEHOLDER_IMG,   // placa combo-arg-16avos.jpg quedó desactualizada (3 Franui + precio nuevo) → texto hasta tener arte nuevo
+    img: 'combo-arg-16avos.jpg', fullCard: true,   // placa actualizada (3 Franui, $54.900)
     emoji: '🇦🇷',
     flag: '🇦🇷',
     categoria: '🇦🇷 Mundial 2026',
@@ -1476,16 +1476,21 @@ function applyZone() {
      composición). Se muestra entera y NO se repite el texto en HTML; debajo
      solo el precio (tachado dinámico + final) y el botón.
    - sin fullCard: layout de texto clásico (placeholder / combos sin arte). */
-/* Composición condensada de un combo en una línea corta (para la card completa,
-   donde la placa diseñada se lee difícil). Ej: "1 tarta · 1 wrap · 1 pack de
-   sorrentinos · Franui". */
-function _comboCompSummary(c) {
+/* Lista de composición de un combo (los <li>): cuántas unidades de cada cosa +
+   "elegís el/los sabor(es)" en los slots con opción, o el producto en los fijos.
+   Se usa igual en la card permanente (fullCard) y en la temporal (texto). */
+function _comboCompListHTML(c) {
   return (c.slots || []).map(slot => {
-    const pick = slot.pick || 1;
     const opts = slotOptions(slot);
-    let noun = slot.unidad || ((opts.length <= 1 && opts[0]) ? opts[0].nombre : slot.label.toLowerCase());
-    return (pick > 1 ? pick + '× ' : '') + noun;
-  }).join(' · ');
+    const pick = slot.pick || 1;
+    const noun = slot.unidad || slot.label.toLowerCase();
+    if (opts.length <= 1) {
+      const p = opts[0];
+      return p ? '<li class="fixed"><strong>' + pick + '×</strong> ' + p.nombre + '</li>' : '';
+    }
+    return '<li><strong>' + pick + '×</strong> ' + noun +
+      ' <span class="combo-choose">· elegís ' + (pick > 1 ? 'los sabores' : 'el sabor') + '</span></li>';
+  }).join('');
 }
 
 function _comboCardHTML(c) {
@@ -1501,24 +1506,13 @@ function _comboCardHTML(c) {
     return '<article class="product-card combo-card combo-card-full" data-id="' + c.id + '">' +
       '<img class="combo-full-img" src="img/' + c.img + '" alt="' + c.nombre + '" loading="lazy">' +
       '<div class="combo-full-foot">' +
-        '<p class="combo-full-comp"><strong>Incluye:</strong> ' + _comboCompSummary(c) + '</p>' +
+        '<ul class="combo-includes">' + _comboCompListHTML(c) + '</ul>' +
         '<span class="stock-indicator" id="stock-' + c.id + '"></span>' +
         '<div class="product-footer">' + priceHtml + btn + '</div>' +
       '</div>' +
     '</article>';
   }
 
-  const compList = (c.slots || []).map(slot => {
-    const opts = slotOptions(slot);
-    const pick = slot.pick || 1;
-    const noun = slot.unidad || slot.label.toLowerCase();
-    if (opts.length <= 1) {
-      const p = opts[0];
-      return p ? '<li class="fixed"><strong>' + pick + '×</strong> ' + p.nombre + '</li>' : '';
-    }
-    return '<li><strong>' + pick + '×</strong> ' + noun +
-      ' <span class="combo-choose">· elegís ' + (pick > 1 ? 'los sabores' : 'el sabor') + '</span></li>';
-  }).join('');
   return '<article class="product-card combo-card" data-id="' + c.id + '">' +
     '<div class="product-thumb">' +
       '<span class="combo-flag">' + (c.flag || '🎁') + '</span>' +
@@ -1528,7 +1522,7 @@ function _comboCardHTML(c) {
       (c.top ? '<span class="product-top-badge">⭐ Lo más pedido</span>' : '') +
       '<h3 class="product-name">' + c.nombre + '</h3>' +
       '<p class="product-desc">' + c.desc + '</p>' +
-      '<ul class="combo-includes">' + compList + '</ul>' +
+      '<ul class="combo-includes">' + _comboCompListHTML(c) + '</ul>' +
       (c.chips ? '<div class="product-chips">' + c.chips.map(x => '<span class="chip">' + x + '</span>').join('') + '</div>' : '') +
       '<span class="stock-indicator" id="stock-' + c.id + '"></span>' +
       '<div class="product-footer">' + priceHtml + btn + '</div>' +
