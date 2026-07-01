@@ -2411,11 +2411,7 @@ function enviarPedido() {
       // Muzarella x2"): el nº es cuántos, el resto es el nombre. Sin ambigüedad.
       return '     • ' + totalN + ' ' + nom;
     }).join('\n');
-    // Mostrar el ahorro del combo (precio de lista de los componentes − precio
-    // cerrado): es el gancho de valor que hoy el cliente no ve.
-    const saving = Math.max(0, comboNaturalSumComp(inst.comp) - c.precio) * inst.qty;
-    const savingLine = saving > 0 ? '\n     ✅ Ahorrás ' + ars(saving) : '';
-    return head + (comps ? '\n' + comps : '') + savingLine;
+    return head + (comps ? '\n' + comps : '');
   }).filter(Boolean).join('\n\n');
   const prodLinesProductos = Object.entries(cart).map(([id,qty]) => {
     const p = PROD_MAP[id]; if (!p) return null;
