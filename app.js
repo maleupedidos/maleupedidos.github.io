@@ -119,7 +119,7 @@ const COMBOS = [
     id: 'cmb_mundialista',
     nombre: 'Combo Mundialista',
     desc: 'Ideal para compartir todos los partidos del Mundial.',
-    personas: '8 a 12 personas',
+    personas: '6 a 8 personas',
     precio: 69900,
     img: 'combo-mundialista.jpg', fullCard: true,
     emoji: '🌎',
