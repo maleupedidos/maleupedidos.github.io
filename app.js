@@ -2396,15 +2396,33 @@ function enviarPedido() {
     // Emoji fijo 🎁 en WhatsApp: las banderas de país (regional-indicator) no
     // renderizan confiable en texto plano según el dispositivo (salía "�"). El
     // nombre del combo ya lleva la identidad ("Combo Argentina · 16avos").
-    const head = '  🎁 ' + c.nombre + (inst.qty > 1 ? ' ×' + inst.qty : '') + '  —  ' + ars(c.precio * inst.qty);
-    const comps = (inst.picks || []).map(pk => '       ◦ ' + pk.label + ': ' + _optLabel(pk.nombre, pk.label)).join('\n');
-    return head + (comps ? '\n' + comps : '');
-  }).filter(Boolean).join('\n');
+    const head = '🎁 *' + c.nombre + (inst.qty > 1 ? ' ×' + inst.qty : '') + '*  —  ' + ars(c.precio * inst.qty);
+    // Agrupar componentes repetidos: 3 slots de Franui → "Franui Leche ×3".
+    // Se descarta el prefijo de categoría ("Pizzas:/Postre:") — es ruido; el
+    // nombre del producto ya se entiende solo.
+    const counts = {};
+    (inst.picks || []).forEach(pk => {
+      const nom = _optLabel(pk.nombre, pk.label);
+      counts[nom] = (counts[nom] || 0) + 1;
+    });
+    const comps = Object.entries(counts).map(([nom, n]) => {
+      const totalN = n * inst.qty;
+      return '     • ' + (totalN > 1 ? totalN + '× ' : '') + nom;
+    }).join('\n');
+    // Mostrar el ahorro del combo (precio de lista de los componentes − precio
+    // cerrado): es el gancho de valor que hoy el cliente no ve.
+    const saving = Math.max(0, comboNaturalSumComp(inst.comp) - c.precio) * inst.qty;
+    const savingLine = saving > 0 ? '\n     ✅ Ahorrás ' + ars(saving) : '';
+    return head + (comps ? '\n' + comps : '') + savingLine;
+  }).filter(Boolean).join('\n\n');
   const prodLinesProductos = Object.entries(cart).map(([id,qty]) => {
     const p = PROD_MAP[id]; if (!p) return null;
     return '  • ' + p.nombre + (qty > 1 ? ' ×' + qty : '') + '  —  ' + ars(p.precio * qty);
   }).filter(Boolean).join('\n');
-  const prodLines = [comboLinesWA, prodLinesProductos].filter(Boolean).join('\n');
+  // Cuando hay combo Y productos sueltos, un encabezado "Además:" deja clarísimo
+  // qué entra en el combo y qué es adicional (hoy se confunden).
+  const _sepAdemas = (comboLinesWA && prodLinesProductos) ? '\nAdemás:' : '';
+  const prodLines = [comboLinesWA, _sepAdemas, prodLinesProductos].filter(Boolean).join('\n');
 
   let direccionStr;
   if (currentZone === 'estancias') {
@@ -2448,7 +2466,7 @@ function enviarPedido() {
   if (discount > 0 || shipping > 0 || saldoAFavor > 0) {
     msgLines.push('Subtotal: ' + ars(subtotal));
     if (cuponDescW > 0 && appliedCoupon) msgLines.push('🎟️ ' + appliedCoupon.codigo + ': -' + ars(cuponDescW));
-    if (autoDescW > 0) msgLines.push(getDiscountLabel() + ': -' + ars(autoDescW));
+    if (autoDescW > 0) msgLines.push(getDiscountLabel() + (combosInCart() ? ' (productos)' : '') + ': -' + ars(autoDescW));
     if (shipping > 0) msgLines.push('Envio: ' + ars(shipping));
     if (saldoAFavor > 0) msgLines.push('🎁 Saldo a favor: -' + ars(saldoAFavor));
   }
