@@ -2407,7 +2407,9 @@ function enviarPedido() {
     });
     const comps = Object.entries(counts).map(([nom, n]) => {
       const totalN = n * inst.qty;
-      return '     • ' + (totalN > 1 ? totalN + '× ' : '') + nom;
+      // Cantidad como número adelante, siempre ("3 Franui Leche", "1 Pack
+      // Muzarella x2"): el nº es cuántos, el resto es el nombre. Sin ambigüedad.
+      return '     • ' + totalN + ' ' + nom;
     }).join('\n');
     // Mostrar el ahorro del combo (precio de lista de los componentes − precio
     // cerrado): es el gancho de valor que hoy el cliente no ve.
@@ -2417,7 +2419,9 @@ function enviarPedido() {
   }).filter(Boolean).join('\n\n');
   const prodLinesProductos = Object.entries(cart).map(([id,qty]) => {
     const p = PROD_MAP[id]; if (!p) return null;
-    return '  • ' + p.nombre + (qty > 1 ? ' ×' + qty : '') + '  —  ' + ars(p.precio * qty);
+    // Cantidad como número adelante, siempre ("2 Pack Muzarella x2",
+    // "3 Sorrentinos Cordero"): el nº es cuántos, el resto es el nombre.
+    return '  • ' + qty + ' ' + p.nombre + '  —  ' + ars(p.precio * qty);
   }).filter(Boolean).join('\n');
   // Cuando hay combo Y productos sueltos, un encabezado "Además:" deja clarísimo
   // qué entra en el combo y qué es adicional (hoy se confunden).
