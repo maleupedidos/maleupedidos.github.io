@@ -791,6 +791,40 @@ function getCouponShippingOverride() {
   return appliedCoupon && appliedCoupon.tipo === 'ENVIO';
 }
 
+/* ── PROPINA para vendedor Red ─────────────────────────────
+   Barrios de Marcos (isRed:true en BARRIOS_PILAR_MODAL): checkbox
+   default marcado que suma $3.000 al pedido. Ese monto va al
+   vendedor (no a Maleu) — se guarda en Sheets Red col S/T según
+   pago. Cliente puede destildarlo si no quiere dejar propina. */
+const TIP_AMOUNT = 3000;
+function tipZoneApplies() {
+  // Solo aplica en Pilar cuando el barrio elegido es Red.
+  return currentZone === 'pilar' && _pilarBarrioIsRed();
+}
+function tipEnabled() {
+  var cb = $id('f-tip');
+  return tipZoneApplies() && cb && cb.checked;
+}
+function getTip() { return tipEnabled() ? TIP_AMOUNT : 0; }
+function updateTipVisibility() {
+  var block = $id('tip-block'); if (!block) return;
+  var show = tipZoneApplies();
+  block.style.display = show ? '' : 'none';
+  if (!show) {
+    // Fuera de Red: destildar para no propagar propina fantasma si vuelve.
+    var cb = $id('f-tip'); if (cb) cb.checked = true;  // reset a marcado (default para próxima vez)
+  } else {
+    // Mostrar nombre real del vendedor si tenemos el mapeo
+    var name = 'Marcos';
+    try {
+      var val = $id('f-pilar-barrio') && $id('f-pilar-barrio').value;
+      if (val && barrioToVendedor[val.toLowerCase()]) name = (barrioToVendedor[val.toLowerCase()].nombre || 'Marcos').split(' ')[0];
+    } catch(e) {}
+    var el = $id('tip-vendedor-name'); if (el) el.textContent = name;
+  }
+}
+function onTipChange() { updateUI(); }
+
 /* ── UI cupón ─────────────────────────────────────────────── */
 function toggleCouponBox() {
   var btn = $id('coupon-toggle'), box = $id('coupon-box');
@@ -981,6 +1015,7 @@ function onPilarBarrioChange() {
   updatePilarVendedorLabel();
   updatePilarDiasEntrega();
   updatePromoBar();
+  updateTipVisibility();
   // Si cambió Red ↔ no-Red, el cap de stock puede cambiar — refrescar
   _ensureCartFitsDate();
   updateStockDisplay();
@@ -1873,7 +1908,7 @@ function confirmComboConfig() {
 }
 
 function updateUI() {
-  const count = cartCount(), subtotal = cartTotal(), discount = getTotalDiscount(), shipping = getShipping(), saldoAFavor = getSaldoAFavor(), total = subtotal - discount + shipping - saldoAFavor;
+  const count = cartCount(), subtotal = cartTotal(), discount = getTotalDiscount(), shipping = getShipping(), tip = getTip(), saldoAFavor = getSaldoAFavor(), total = subtotal - discount + shipping + tip - saldoAFavor;
   const badge = $id('cart-badge');
   badge.textContent = count;
   badge.style.display = count > 0 ? 'flex' : 'none';
@@ -2005,8 +2040,9 @@ function updateFormSummary() {
   const autoDesc  = getCashDiscount();
   const totalDesc = cuponDesc + autoDesc;
   const shipping  = getShipping();
+  const tip        = getTip();
   const saldoAFavor = getSaldoAFavor();
-  const total     = subtotal - totalDesc + shipping - saldoAFavor;
+  const total     = subtotal - totalDesc + shipping + tip - saldoAFavor;
 
   // Combos primero (cada instancia configurada), luego productos sueltos.
   let html = Object.values(comboCart).map(inst => {
@@ -2038,6 +2074,11 @@ function updateFormSummary() {
     html += '<div class="summary-line discount-line"><span>' + getDiscountLabel() + '</span><span>-' + ars(autoDesc) + '</span></div>';
   }
   html += '<div class="summary-line shipping-line"><span>Envío</span><span>' + (shipping === 0 ? 'Gratis' : ars(shipping)) + '</span></div>';
+  if (tip > 0) {
+    // Propina explícita al vendedor Red
+    var tipName = ($id('tip-vendedor-name') && $id('tip-vendedor-name').textContent) || 'Marcos';
+    html += '<div class="summary-line" style="color:#E65100"><span>💛 Propina para ' + tipName + '</span><span>+' + ars(tip) + '</span></div>';
+  }
   if (saldoAFavor > 0) {
     html += '<div class="summary-line discount-line" style="color:#2e7d32"><span>🎁 Saldo a favor</span><span>-' + ars(saldoAFavor) + '</span></div>';
   }
@@ -2381,7 +2422,7 @@ function enviarPedido() {
   } catch(e) {}
 
   // Construir mensaje WhatsApp
-  const subtotal = cartTotal(), discount = getTotalDiscount(), shipping = getShipping(), saldoAFavor = getSaldoAFavor(), total = subtotal - discount + shipping - saldoAFavor;
+  const subtotal = cartTotal(), discount = getTotalDiscount(), shipping = getShipping(), tip = getTip(), saldoAFavor = getSaldoAFavor(), total = subtotal - discount + shipping + tip - saldoAFavor;
   // Combos: el precio cerrado se traduce en un descuento sobre el valor
   // individual de los componentes, para que el Sheet vea productos reales a
   // precio de lista y el ahorro del combo quede como descuento (total intacto).
@@ -2463,12 +2504,13 @@ function enviarPedido() {
   const cuponDescW = getCouponDiscount();
   const autoDescW  = getCashDiscount();
   var msgLines = ['Hola! Quiero hacer un pedido:', '', prodLines, ''];
-  // Solo desglosar Subtotal cuando hay descuento, envío o saldo a favor.
-  if (discount > 0 || shipping > 0 || saldoAFavor > 0) {
+  // Solo desglosar Subtotal cuando hay descuento, envío, propina o saldo a favor.
+  if (discount > 0 || shipping > 0 || tip > 0 || saldoAFavor > 0) {
     msgLines.push('Subtotal: ' + ars(subtotal));
     if (cuponDescW > 0 && appliedCoupon) msgLines.push('🎟️ ' + appliedCoupon.codigo + ': -' + ars(cuponDescW));
     if (autoDescW > 0) msgLines.push(getDiscountLabel() + (combosInCart() ? ' (productos)' : '') + ': -' + ars(autoDescW));
     if (shipping > 0) msgLines.push('Envio: ' + ars(shipping));
+    if (tip > 0) msgLines.push('💛 Propina para ' + (vendedorMatch ? (vendedorMatch.nombre || 'el vendedor').split(' ')[0] : 'el vendedor') + ': +' + ars(tip));
     if (saldoAFavor > 0) msgLines.push('🎁 Saldo a favor: -' + ars(saldoAFavor));
   }
   msgLines.push('*Total: ' + ars(total) + '*');
@@ -2515,7 +2557,8 @@ function enviarPedido() {
       barrioPrivado: vendedorMatch.barrio,
       lote: lote,
       dia: diaSheets, horario, fechaEntrega: fechaISO, pago: pagoEl.value,
-      envio: shipping, items, total
+      envio: shipping, items, total,
+      propina: tip
     };
   } else {
     postData = {
@@ -2841,6 +2884,10 @@ function expandForm() {
   const section = $id('form-section');
   if (section) section.classList.remove('collapsed');
   updatePagoHint();
+  updateTipVisibility();
+  // Asegurar que la fecha elegida en el modal welcome quede seleccionada
+  // en el day-picker del form (por si algún re-render la limpió antes).
+  _preselectDayPicker();
   setTimeout(() => document.querySelector('.form-wrap').scrollIntoView({behavior:'smooth'}), 50);
 }
 
