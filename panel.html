@@ -8855,9 +8855,407 @@ function _ckVentasTopClientes(ventasMes){
   return h;
 }
 function rCierreProductos(box){box.innerHTML='<div class="ck-empty"><div class="ck-empty-i">📦</div>Sección Productos — próximamente.<br><span style="font-size:11px">Top productos vendidos, márgenes por SKU, rotación.</span></div>';}
-function rCierreClientes(box){box.innerHTML='<div class="ck-empty"><div class="ck-empty-i">👥</div>Sección Clientes — próximamente.<br><span style="font-size:11px">Top clientes, recompra, nuevos vs recurrentes.</span></div>';}
-function rCierreCaja(box){box.innerHTML='<div class="ck-empty"><div class="ck-empty-i">💰</div>Sección Caja — próximamente.<br><span style="font-size:11px">Flujo de caja del mes, libro diario filtrado.</span></div>';}
-function rCierreInsights(box){box.innerHTML='<div class="ck-empty"><div class="ck-empty-i">💡</div>Sección Insights — próximamente.<br><span style="font-size:11px">Alertas automáticas, anomalías y oportunidades.</span></div>';}
+// Helper compartido: parsea fecha dd/mm/yyyy → Date (o null)
+function _ckParseDMY(s){
+  var p=String(s||'').split('/');
+  if(p.length<3)return null;
+  var d=new Date(+p[2],+p[1]-1,+p[0]);
+  return isNaN(d.getTime())?null:d;
+}
+
+// ══════════════════════════════════════════════════════════════
+//  SECCIÓN: CLIENTES
+//  Nuevos vs recurrentes vs reactivados, recompra, top LTV, frecuencia.
+//  Fuente: VD (historial completo) — clasifica cruzando toda la historia.
+// ══════════════════════════════════════════════════════════════
+var _CK_REACT_DIAS=60; // gap ≥ 60 días sin comprar = dormido → reactivado
+function rCierreClientes(box){
+  var mesNom=MES_ORD[cierreMes.getMonth()],anioN=cierreMes.getFullYear();
+  var y=cierreMes.getFullYear(),mo=cierreMes.getMonth();
+  var monthStart=new Date(y,mo,1).getTime();
+  var vd=((typeof VD!=='undefined'&&VD)||[]);
+  if(!vd.length){box.innerHTML='<div class="ck-empty"><div class="ck-empty-i">👥</div>Sin datos de ventas para analizar clientes.</div>';return;}
+
+  var COLORS={Home:'#F07D47',Pilar:'#5C3A2A',Clubes:'#7A4A4A',Red:'#A89880',Catering:'#4CAF50',B2B:'#7B6BD9'};
+  // Construir historia por cliente (toda la data)
+  var hist={};
+  vd.forEach(function(v){
+    var cli=String(v.cliente||'').trim();if(!cli)return;
+    var d=_ckParseDMY(v.fecha);if(!d)return;
+    var m=cli.match(/^(.+?)\s*\(([^)]+)\)$/);
+    var nom=m?m[1].trim():cli,extra=m?m[2].trim():'';
+    if(!hist[cli])hist[cli]={nom:nom,extra:extra,canal:_ckVentasCanalKey(v),dates:[],fMes:0,nMes:0,fTot:0,nTot:0};
+    var h=hist[cli];
+    h.dates.push(d.getTime());h.fTot+=+v.$||0;h.nTot++;
+    if(d.getFullYear()===y&&d.getMonth()===mo){h.fMes+=+v.$||0;h.nMes++;h.canal=_ckVentasCanalKey(v);}
+  });
+  // Contar activos de cualquier mes (para comparativa)
+  function cliMes(yy,mm){
+    var ms=new Date(yy,mm,1).getTime();
+    var r={act:0,nue:0,rea:0,rec:0};
+    Object.keys(hist).forEach(function(k){
+      var ds=hist[k].dates;
+      var inm=false;for(var i=0;i<ds.length;i++){var dt=new Date(ds[i]);if(dt.getFullYear()===yy&&dt.getMonth()===mm){inm=true;break;}}
+      if(!inm)return;r.act++;
+      var before=ds.filter(function(t){return t<ms;});
+      if(!before.length)r.nue++;
+      else{var lb=Math.max.apply(null,before);var gap=(ms-lb)/86400000;if(gap>=_CK_REACT_DIAS)r.rea++;else r.rec++;}
+    });
+    return r;
+  }
+  // Lista de activos del mes en curso, decorada con clasificación + LTV
+  var act=[];
+  Object.keys(hist).forEach(function(k){
+    var h=hist[k];if(!h.nMes)return;
+    h.dates.sort(function(a,b){return a-b;});
+    var before=h.dates.filter(function(t){return t<monthStart;});
+    if(!before.length){h.cls='nuevo';}
+    else{var lb=Math.max.apply(null,before);var gap=(monthStart-lb)/86400000;h.cls=(gap>=_CK_REACT_DIAS)?'react':'recur';}
+    h.primera=new Date(h.dates[0]);
+    act.push(h);
+  });
+  if(!act.length){box.innerHTML='<div class="ck-empty"><div class="ck-empty-i">👥</div>Sin clientes activos en '+mesNom+' '+anioN+'.</div>';return;}
+  var nNue=0,nRea=0,nRec=0,factMes=0,pedMes=0;
+  act.forEach(function(h){factMes+=h.fMes;pedMes+=h.nMes;if(h.cls==='nuevo')nNue++;else if(h.cls==='react')nRea++;else nRec++;});
+  var nAct=act.length;
+  var repite=nRec+nRea; // clientes que ya habían comprado antes
+  var recompraPct=nAct>0?repite/nAct*100:0;
+  var ticketCli=nAct>0?factMes/nAct:0;
+  var pedPorCli=nAct>0?pedMes/nAct:0;
+  var carteraTot=Object.keys(hist).length;
+  // Comparativa mes anterior
+  var pd=new Date(y,mo-1,1);
+  var prev=cliMes(pd.getFullYear(),pd.getMonth());
+  function dPill(a,b){if(!b||b===0)return '';var dv=(a-b)/Math.abs(b)*100;return '<div class="ck-card-d '+(dv>=0?'pos':'neg')+'">'+(dv>=0?'+':'')+dv.toFixed(0)+'% vs '+MES_ORD[pd.getMonth()].substring(0,3)+'</div>';}
+
+  var h='';
+  // HERO
+  h+='<div class="ck-hero">'+
+    '<div class="ck-hero-t">Clientes activos · '+mesNom+' '+anioN+'</div>'+
+    '<div class="ck-hero-v">'+nAct+'</div>'+
+    '<div class="ck-hero-s">'+nNue+' nuevos · '+nRec+' recurrentes · '+nRea+' reactivados · Recompra '+recompraPct.toFixed(0)+'%</div>'+
+  '</div>';
+  // KPI grid
+  h+='<div class="ck-grid">';
+  h+='<div class="ck-card o"><div class="ck-card-t">Clientes activos</div><div class="ck-card-v">'+nAct+'</div><div class="ck-card-s">compraron este mes</div>'+dPill(nAct,prev.act)+'</div>';
+  h+='<div class="ck-card g"><div class="ck-card-t">Nuevos</div><div class="ck-card-v">'+nNue+'</div><div class="ck-card-s">primera compra en Maleu</div>'+dPill(nNue,prev.nue)+'</div>';
+  h+='<div class="ck-card '+(nRea>0?'o':'')+'"><div class="ck-card-t">Reactivados</div><div class="ck-card-v">'+nRea+'</div><div class="ck-card-s">volvieron tras '+_CK_REACT_DIAS+'+ días</div>'+dPill(nRea,prev.rea)+'</div>';
+  var recCls=recompraPct>=50?'g':(recompraPct>=30?'wrn':'r');
+  h+='<div class="ck-card '+recCls+'"><div class="ck-card-t">Tasa de recompra</div><div class="ck-card-v">'+recompraPct.toFixed(0)+'%</div><div class="ck-card-s">'+repite+' ya habían comprado</div></div>';
+  h+='<div class="ck-card"><div class="ck-card-t">Ticket por cliente</div><div class="ck-card-v">'+_ckMoneyShort(ticketCli)+'</div><div class="ck-card-s">'+pedPorCli.toFixed(1)+' pedidos/cliente</div></div>';
+  h+='<div class="ck-card"><div class="ck-card-t">Cartera total</div><div class="ck-card-v">'+carteraTot+'</div><div class="ck-card-s">clientes históricos únicos</div></div>';
+  h+='</div>';
+
+  // COMPOSICIÓN — barras apiladas nuevos/recurrentes/reactivados
+  (function(){
+    var segs=[{k:'Recurrentes',n:nRec,c:'#F07D47'},{k:'Nuevos',n:nNue,c:'#4CAF50'},{k:'Reactivados',n:nRea,c:'#7C4DC4'}];
+    h+='<div class="ck-block"><div class="ck-block-h">🧬 Composición de la base activa<span class="ck-block-h-sub">De dónde vienen los '+nAct+' clientes del mes</span></div>';
+    h+='<div style="display:flex;height:34px;border-radius:8px;overflow:hidden;border:1px solid var(--cd);margin-bottom:12px">';
+    segs.forEach(function(s){if(s.n<=0)return;var pct=s.n/nAct*100;h+='<div title="'+s.k+': '+s.n+'" style="width:'+pct+'%;background:'+s.c+';display:flex;align-items:center;justify-content:center;color:#fff;font-size:11px;font-weight:800;min-width:0">'+(pct>=10?s.n:'')+'</div>';});
+    h+='</div>';
+    h+='<div style="display:flex;gap:18px;flex-wrap:wrap;font-size:12px">';
+    segs.forEach(function(s){var pct=nAct>0?s.n/nAct*100:0;h+='<div style="display:flex;align-items:center;gap:6px"><span style="width:11px;height:11px;background:'+s.c+';border-radius:3px;display:inline-block"></span><b style="color:var(--ink)">'+s.k+'</b> <span style="color:var(--ink3)">'+s.n+' · '+pct.toFixed(0)+'%</span></div>';});
+    h+='</div></div>';
+  })();
+
+  // FRECUENCIA de compra en el mes
+  (function(){
+    var b1=0,b2=0,b3=0;
+    act.forEach(function(x){if(x.nMes>=3)b3++;else if(x.nMes===2)b2++;else b1++;});
+    var buckets=[{l:'1 pedido',n:b1,c:'#E8DFC4'},{l:'2 pedidos',n:b2,c:'#F0A868'},{l:'3+ pedidos',n:b3,c:'#F07D47'}];
+    var maxB=Math.max(b1,b2,b3,1);
+    h+='<div class="ck-block"><div class="ck-block-h">🔁 Frecuencia de compra en el mes<span class="ck-block-h-sub">Cuántas veces compró cada cliente</span></div>';
+    h+='<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px">';
+    buckets.forEach(function(bk){var pct=bk.n/maxB*100;h+='<div style="text-align:center"><div style="height:90px;position:relative;background:var(--cr);border-radius:6px;overflow:hidden;border:1px solid var(--cd)"><div style="position:absolute;bottom:0;left:0;right:0;height:'+pct+'%;background:'+bk.c+'"></div></div><div style="font-size:20px;font-weight:800;color:var(--ink);margin-top:6px">'+bk.n+'</div><div style="font-size:11px;color:var(--ink3);font-weight:700">'+bk.l+'</div></div>';});
+    h+='</div></div>';
+  })();
+
+  // CLIENTES por canal
+  (function(){
+    var porC={};act.forEach(function(x){var k=x.canal||'(s/c)';if(!porC[k])porC[k]={n:0,f:0};porC[k].n++;porC[k].f+=x.fMes;});
+    var keys=Object.keys(porC).sort(function(a,b){return porC[b].f-porC[a].f;});
+    if(keys.length){
+      h+='<div class="ck-block"><div class="ck-block-h">📡 Clientes por canal</div>';
+      h+='<table class="ck-tbl"><thead><tr><th>Canal</th><th style="text-align:right">Clientes</th><th style="text-align:right">Facturación</th><th style="text-align:right">Ticket/cli</th></tr></thead><tbody>';
+      keys.forEach(function(k){var d=porC[k];var col=COLORS[k]||'#999';h+='<tr><td><span style="display:inline-block;width:8px;height:8px;background:'+col+';border-radius:50%;margin-right:6px"></span><b style="color:var(--ink)">'+k+'</b></td><td class="pct">'+d.n+'</td><td class="num">'+_ckMoneyShort(d.f)+'</td><td class="num">'+_ckMoneyShort(d.n>0?d.f/d.n:0)+'</td></tr>';});
+      h+='</tbody></table></div>';
+    }
+  })();
+
+  // TOP clientes del mes con LTV
+  (function(){
+    var top=act.slice().sort(function(a,b){return b.fMes-a.fMes;}).slice(0,12);
+    var CLS_LBL={nuevo:['NUEVO','g'],react:['REACTIVADO','o'],recur:['FIEL','']};
+    h+='<div class="ck-block"><div class="ck-block-h">🏆 Top clientes del mes<span class="ck-block-h-sub">Facturación del mes + valor histórico (LTV)</span></div>';
+    h+='<table class="ck-tbl"><thead><tr><th style="width:22px">#</th><th>Cliente</th><th></th><th style="text-align:right">Mes</th><th style="text-align:right">Ped.</th><th style="text-align:right">LTV</th><th style="text-align:right">Ped. hist.</th><th style="text-align:right">Cliente desde</th></tr></thead><tbody>';
+    top.forEach(function(c,i){
+      var col=COLORS[c.canal]||'#999';
+      var badge=CLS_LBL[c.cls]||['','' ];
+      var prim=c.primera?(String(c.primera.getMonth()+1).padStart(2,'0')+'/'+c.primera.getFullYear()):'—';
+      h+='<tr><td style="color:var(--ink3);font-weight:700">'+(i+1)+'</td>'+
+        '<td><b style="color:var(--ink)">'+c.nom+'</b>'+(c.extra?'<span style="font-size:10px;color:var(--ink3);margin-left:5px">('+c.extra+')</span>':'')+' <span style="display:inline-block;width:7px;height:7px;background:'+col+';border-radius:50%;margin-left:3px"></span></td>'+
+        '<td>'+(badge[0]?'<span class="ck-flag '+badge[1]+'">'+badge[0]+'</span>':'')+'</td>'+
+        '<td class="num">'+_ckMoneyShort(c.fMes)+'</td>'+
+        '<td class="pct">'+c.nMes+'</td>'+
+        '<td class="num" style="color:var(--ink2)">'+_ckMoneyShort(c.fTot)+'</td>'+
+        '<td class="pct">'+c.nTot+'</td>'+
+        '<td class="pct" style="font-size:11px">'+prim+'</td></tr>';
+    });
+    h+='</tbody></table></div>';
+  })();
+
+  // LECTURA
+  (function(){
+    var L=[];
+    if(nNue>0)L.push('<b><span class="ck-flag g">+</span> Adquisición:</b> entraron '+nNue+' cliente'+(nNue===1?'':'s')+' nuevo'+(nNue===1?'':'s')+' este mes'+(prev.nue?' (vs '+prev.nue+' el mes pasado)':'')+'.');
+    else L.push('<b><span class="ck-flag wrn">!</span> Sin adquisición:</b> no entró ningún cliente nuevo este mes. Ojo con el tope de mercado en la base actual.');
+    if(nRea>0)L.push('<b><span class="ck-flag o">↻</span> Reactivación:</b> '+nRea+' cliente'+(nRea===1?'':'s')+' dormido'+(nRea===1?'':'s')+' volvió'+(nRea===1?'':'eron') +' a comprar. La reconexión está funcionando.');
+    if(recompraPct>=50)L.push('<b><span class="ck-flag g">✓</span> Base fiel:</b> '+recompraPct.toFixed(0)+'% de los clientes del mes ya habían comprado antes. La recompra sostiene el negocio.');
+    else if(recompraPct<30)L.push('<b><span class="ck-flag r">−</span> Recompra baja:</b> solo '+recompraPct.toFixed(0)+'% repite. El negocio depende demasiado de captar nuevos cada mes.');
+    var dAct=prev.act?((nAct-prev.act)/prev.act*100):null;
+    if(dAct!==null){if(dAct>=5)L.push('<b><span class="ck-flag g">↑</span> Base creciendo:</b> +'+dAct.toFixed(0)+'% de clientes activos vs mes anterior.');else if(dAct<=-5)L.push('<b><span class="ck-flag wrn">↓</span> Base achicándose:</b> '+dAct.toFixed(0)+'% de clientes activos vs mes anterior.');}
+    h+='<div class="ck-block"><div class="ck-block-h">💡 Lectura de clientes</div>'+L.map(function(l){return '<div style="font-size:12.5px;color:var(--ink2);line-height:1.65;margin-bottom:6px">'+l+'</div>';}).join('')+'</div>';
+  })();
+
+  box.innerHTML=h;
+}
+
+// ══════════════════════════════════════════════════════════════
+//  SECCIÓN: CAJA
+//  Flujo del mes (percibido) — ingresos vs egresos, ef/MP, categorías.
+//  Fuente: D.movimientos (libro diario unificado: cobros+ingresos+gastos).
+// ══════════════════════════════════════════════════════════════
+function rCierreCaja(box){
+  var mesNom=MES_ORD[cierreMes.getMonth()],anioN=cierreMes.getFullYear();
+  var y=cierreMes.getFullYear(),mo=cierreMes.getMonth();
+  var hoy=new Date();
+  var esMesActual=(y===hoy.getFullYear()&&mo===hoy.getMonth());
+  function movTs(m){if(m.ts)return m.ts;var s=String(m.f||'').trim();var x=s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:\s+(\d{1,2}):(\d{2}))?/);if(!x)return 0;return new Date(+x[3],+x[2]-1,+x[1],x[4]?+x[4]:0,x[5]?+x[5]:0).getTime();}
+  var movs=(D&&D.movimientos)||null;
+  if(!movs){
+    // Fallback: armar desde gastos+ingresos (sin cobros) si el backend viejo no manda movimientos
+    movs=[];
+    ((D&&D.gastos)||[]).forEach(function(g){movs.push({tipo:'gasto',f:g.f,cat:g.cat,con:g.con,met:g.met,$:g.$});});
+    ((D&&D.ingresos)||[]).forEach(function(i){movs.push({tipo:'ingreso',f:i.f,cat:i.cat,con:i.con,met:i.met,$:i.$});});
+  }
+  var mesMovs=movs.filter(function(m){var t=movTs(m);if(!t)return false;var d=new Date(t);return d.getFullYear()===y&&d.getMonth()===mo;});
+  if(!mesMovs.length){
+    box.innerHTML='<div class="ck-empty"><div class="ck-empty-i">💰</div>Sin movimientos de caja en '+mesNom+' '+anioN+'.<br><span style="font-size:11px">El libro diario en vivo cubre el período reciente; para meses viejos puede no haber detalle cargado.</span></div>';
+    return;
+  }
+  function isIn(m){return m.tipo!=='gasto';} // cobro + ingreso = entra plata
+  function isEf(m){return m.met==='Efectivo';}
+  var inTot=0,inEf=0,inMp=0,outTot=0,outEf=0,outMp=0,cobros=0,ingresosOtros=0;
+  mesMovs.forEach(function(m){
+    var v=Number(m.$)||0;
+    if(isIn(m)){inTot+=v;if(isEf(m))inEf+=v;else inMp+=v;if(m.tipo==='cobro')cobros+=v;else ingresosOtros+=v;}
+    else{outTot+=v;if(isEf(m))outEf+=v;else outMp+=v;}
+  });
+  var neto=inTot-outTot;
+
+  var h='';
+  if(esMesActual){h+='<div style="background:var(--wrnb);border:1px solid var(--wrn);border-left:3px solid var(--wrn);border-radius:6px;padding:9px 13px;margin-bottom:12px;font-size:12px;color:#8B6A00"><b>⏱ Mes en curso.</b> El flujo es parcial hasta el cierre. Es caja <b>percibida</b> (cuándo entró/salió la plata), distinta del resultado económico devengado.</div>';}
+  // HERO — flujo neto
+  var netoCls=neto>=0?'pos':'neg';
+  h+='<div class="ck-hero">'+
+    '<div class="ck-hero-t">Flujo de caja neto · '+mesNom+' '+anioN+'</div>'+
+    '<div class="ck-hero-v '+netoCls+'">'+(neto>=0?'+':'')+_ckMoney(neto)+'</div>'+
+    '<div class="ck-hero-s">Entró '+_ckMoneyShort(inTot)+' · Salió '+_ckMoneyShort(outTot)+' · '+mesMovs.length+' movimientos</div>'+
+  '</div>';
+  // KPI grid
+  h+='<div class="ck-grid">';
+  h+='<div class="ck-card g"><div class="ck-card-t">Ingresos de caja</div><div class="ck-card-v">'+_ckMoneyShort(inTot)+'</div><div class="ck-card-s">Cobros '+_ckMoneyShort(cobros)+' · Otros '+_ckMoneyShort(ingresosOtros)+'</div></div>';
+  h+='<div class="ck-card r"><div class="ck-card-t">Egresos de caja</div><div class="ck-card-v">'+_ckMoneyShort(outTot)+'</div><div class="ck-card-s">gastos + pagos a proveedores</div></div>';
+  h+='<div class="ck-card '+(neto>=0?'o':'r')+'"><div class="ck-card-t">Flujo neto</div><div class="ck-card-v '+netoCls+'">'+(neto>=0?'+':'')+_ckMoneyShort(neto)+'</div><div class="ck-card-s">'+(neto>=0?'la caja creció':'la caja se achicó')+'</div></div>';
+  var tasaEf=inTot>0?inEf/inTot*100:0;
+  h+='<div class="ck-card"><div class="ck-card-t">Mix de cobro</div><div class="ck-card-v">'+tasaEf.toFixed(0)+'% ef</div><div class="ck-card-s">Ef '+_ckMoneyShort(inEf)+' · MP '+_ckMoneyShort(inMp)+'</div></div>';
+  h+='</div>';
+
+  // FLUJO DIARIO — barras netas por día
+  (function(){
+    var dias={};mesMovs.forEach(function(m){var d=new Date(movTs(m)).getDate();if(!dias[d])dias[d]={in:0,out:0};if(isIn(m))dias[d].in+=Number(m.$)||0;else dias[d].out+=Number(m.$)||0;});
+    var ultDia=new Date(y,mo+1,0).getDate();
+    var serie=[];for(var i=1;i<=ultDia;i++){var dd=dias[i]||{in:0,out:0};serie.push({d:i,net:dd.in-dd.out,futuro:esMesActual&&i>hoy.getDate()});}
+    var maxAbs=Math.max.apply(null,serie.map(function(s){return Math.abs(s.net);}));
+    if(maxAbs>0){
+      var W=760,H=210,padL=44,padR=14,padT=16,padB=30,iw=W-padL-padR,ih=H-padT-padB;
+      var zeroY=padT+ih/2,half=ih/2;
+      var barW=iw/ultDia*0.72;
+      var svg='<svg viewBox="0 0 '+W+' '+H+'" preserveAspectRatio="xMidYMid meet" style="width:100%;height:auto;max-height:230px;display:block">';
+      svg+='<line x1="'+padL+'" y1="'+zeroY+'" x2="'+(W-padR)+'" y2="'+zeroY+'" stroke="#C9BC98" stroke-width="1"/>';
+      svg+='<text x="'+(padL-6)+'" y="'+(padT+8)+'" font-size="9" fill="#4CAF50" font-weight="700" text-anchor="end">+'+(maxAbs>=1000000?(maxAbs/1000000).toFixed(1)+'M':Math.round(maxAbs/1000)+'k')+'</text>';
+      svg+='<text x="'+(padL-6)+'" y="'+(H-padB+2)+'" font-size="9" fill="#C62828" font-weight="700" text-anchor="end">-'+(maxAbs>=1000000?(maxAbs/1000000).toFixed(1)+'M':Math.round(maxAbs/1000)+'k')+'</text>';
+      serie.forEach(function(s,i){
+        if(s.net===0||s.futuro)return;
+        var x=padL+iw*(i+0.5)/ultDia-barW/2;
+        var hb=Math.abs(s.net)/maxAbs*half;
+        var yy=s.net>=0?zeroY-hb:zeroY;
+        svg+='<rect x="'+x+'" y="'+yy+'" width="'+barW+'" height="'+Math.max(hb,1)+'" fill="'+(s.net>=0?'#4CAF50':'#C62828')+'" rx="2" opacity=".92"/>';
+      });
+      for(var d2=1;d2<=ultDia;d2++){if(d2===1||d2%5===0||d2===ultDia){var x2=padL+iw*(d2-0.5)/ultDia;svg+='<text x="'+x2+'" y="'+(H-8)+'" font-size="9" fill="#7A4A4A" font-weight="600" text-anchor="middle">'+d2+'</text>';}}
+      svg+='</svg>';
+      h+='<div class="ck-block"><div class="ck-block-h">📈 Flujo diario de caja<span class="ck-block-h-sub">Verde = entró más de lo que salió · Rojo = salió más</span></div>'+svg+'</div>';
+    }
+  })();
+
+  // EGRESOS por categoría
+  (function(){
+    var cats={};mesMovs.forEach(function(m){if(isIn(m))return;var k=m.cat||'Sin categoría';if(!cats[k])cats[k]={f:0,n:0};cats[k].f+=Number(m.$)||0;cats[k].n++;});
+    var keys=Object.keys(cats).sort(function(a,b){return cats[b].f-cats[a].f;});
+    if(keys.length){
+      var maxC=cats[keys[0]].f;
+      h+='<div class="ck-block"><div class="ck-block-h">📉 En qué se fue la plata<span class="ck-block-h-sub">Egresos por categoría</span></div>';
+      keys.forEach(function(k){var d=cats[k];var pct=maxC>0?d.f/maxC*100:0;var pctT=outTot>0?d.f/outTot*100:0;
+        h+='<div style="display:grid;grid-template-columns:130px 1fr 90px;gap:10px;align-items:center;padding:6px 0;font-size:12px">'+
+          '<div style="font-weight:700;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+k+'</div>'+
+          '<div style="height:20px;background:var(--cd);border-radius:10px;overflow:hidden;position:relative"><div style="height:100%;width:'+pct+'%;background:#C0755A;border-radius:10px"></div><div style="position:absolute;top:0;left:9px;height:20px;line-height:20px;font-size:10px;font-weight:700;color:'+(pct>25?'#fff':'var(--ink2)')+'">'+pctT.toFixed(0)+'%</div></div>'+
+          '<div style="text-align:right;font-weight:800;color:var(--ink)">'+_ckMoneyShort(d.f)+'</div>'+
+        '</div>';
+      });
+      h+='</div>';
+    }
+  })();
+
+  // Nota devengado vs percibido + contraste con resultado económico
+  (function(){
+    var k=eerrKpisMes(mo+1,y);
+    var econ=k?k.resNeto:null;
+    h+='<div class="ck-read"><b>💡 Caja (percibido) vs resultado (devengado):</b> este mes la caja '+(neto>=0?'creció':'se achicó')+' '+_ckMoneyShort(Math.abs(neto))+
+      (econ!==null?', mientras el resultado económico del mes fue '+(econ>=0?'+':'')+_ckMoneyShort(econ)+'. La diferencia son cobros/pagos que caen en otro mes que la venta o el costo (ventas a crédito, pagos FIFO a proveedores, inversiones).':'.')+
+    '</div>';
+  })();
+
+  box.innerHTML=h;
+}
+
+// ══════════════════════════════════════════════════════════════
+//  SECCIÓN: INSIGHTS
+//  Alertas automáticas, anomalías y oportunidades. Motor de reglas
+//  sobre KPIs económicos + VD (clientes/canales) + objetivo del año.
+// ══════════════════════════════════════════════════════════════
+var _CK_HOME_TARGET=9000000; // Meta julio 2026: $9M en Home
+function rCierreInsights(box){
+  var mesNom=MES_ORD[cierreMes.getMonth()],anioN=cierreMes.getFullYear();
+  var y=cierreMes.getFullYear(),mo=cierreMes.getMonth();
+  var mn=mo+1;
+  var hoy=new Date();
+  var esMesActual=(y===hoy.getFullYear()&&mo===hoy.getMonth());
+  var ultDia=new Date(y,mo+1,0).getDate();
+  var diaHoy=esMesActual?hoy.getDate():ultDia;
+  var k=eerrKpisMes(mn,anioN);
+  if(!k||k.totFact===0){box.innerHTML='<div class="ck-empty"><div class="ck-empty-i">💡</div>Sin datos suficientes en '+mesNom+' '+anioN+' para generar insights.</div>';return;}
+  var pd=new Date(y,mo-1,1);
+  var kPrev=eerrKpisMes(pd.getMonth()+1,pd.getFullYear());
+  var ymKpi=anioN+'-'+String(mn).padStart(2,'0');
+  var ebitdaTarget=(eerrConfig('EBITDA_REALISTA',ymKpi)||0.08)*100;
+
+  // Análisis de VD del mes: canales, clientes, concentración
+  var vd=((typeof VD!=='undefined'&&VD)||[]);
+  var canales={},totF=0,cliMesSet={},cliFact={},histFirst={};
+  var monthStart=new Date(y,mo,1).getTime();
+  vd.forEach(function(v){
+    var d=_ckParseDMY(v.fecha);if(!d)return;
+    var cli=String(v.cliente||'').trim();
+    // primera compra histórica por cliente
+    if(cli){if(histFirst[cli]===undefined||d.getTime()<histFirst[cli])histFirst[cli]=d.getTime();}
+    if(d.getFullYear()!==y||d.getMonth()!==mo)return;
+    var ck=_ckVentasCanalKey(v),f=+v.$||0;
+    if(!canales[ck])canales[ck]={f:0,n:0};canales[ck].f+=f;canales[ck].n++;totF+=f;
+    if(cli){cliMesSet[cli]=1;cliFact[cli]=(cliFact[cli]||0)+f;}
+  });
+  var cliArr=Object.keys(cliFact).map(function(k2){return cliFact[k2];}).sort(function(a,b){return b-a;});
+  var nCli=cliArr.length;
+  var top10=cliArr.slice(0,10).reduce(function(a,b){return a+b;},0);
+  var concentr=totF>0?top10/totF*100:0;
+  var homeF=(canales.Home&&canales.Home.f)||0;
+  var homePct=totF>0?homeF/totF*100:0;
+  var nNuevos=0;Object.keys(cliMesSet).forEach(function(c){if(histFirst[c]>=monthStart)nNuevos++;});
+
+  // Runway / días de pista (solo mes actual, usa posición de caja)
+  var runway=null,posNeta=null;
+  if(esMesActual&&D){
+    var sb=D.saldoBase||{ef:0,mp:0};var cj=D.caja||{};
+    var sEf=Number(sb.ef||0)+Number(cj.cobradoEf||0)+Number(cj.ingresosEf||0)-Number(cj.gastosEf||0);
+    var sMp=Number(sb.mp||0)+Number(cj.cobradoMP||0)+Number(cj.ingresosMP||0)-Number(cj.gastosMP||0);
+    posNeta=sEf+sMp;
+    var gastoMes=(k.totEstr||0)+(k.totFact-k.totMB); // estructura + CMV aprox como salida mensual
+    if(gastoMes>0)runway=posNeta/(gastoMes)*30;
+  }
+
+  // ── Motor de reglas → array de insights {sev, ico, tit, txt}
+  // sev: 'bad'(rojo) 'warn'(amarillo) 'opp'(oportunidad) 'good'(verde)
+  var ins=[];
+  // Objetivo del año — Home $9M (norte estratégico con Fede)
+  (function(){
+    var pct=homeF/_CK_HOME_TARGET*100;
+    var proj=(esMesActual&&diaHoy>0)?homeF/diaHoy*ultDia:homeF;
+    var projPct=proj/_CK_HOME_TARGET*100;
+    var txt='Home lleva <b>'+_ckMoneyShort(homeF)+'</b> en '+mesNom+' — <b>'+pct.toFixed(0)+'%</b> de la meta de $9M.';
+    if(esMesActual)txt+=' A este ritmo proyecta <b>'+_ckMoneyShort(proj)+'</b> ('+projPct.toFixed(0)+'%) al cierre. Faltan '+(_CK_HOME_TARGET-homeF>0?_ckMoneyShort(_CK_HOME_TARGET-homeF):'$0')+'.';
+    ins.push({sev:projPct>=100?'good':(projPct>=70?'opp':'warn'),ico:'🎯',tit:'Objetivo Home: $9M',txt:txt,pri:projPct>=100?3:1});
+  })();
+  // EBITDA vs target
+  if(k.ebitdaPct>=ebitdaTarget)ins.push({sev:'good',ico:'✓',tit:'Rentabilidad en objetivo',txt:'EBITDA <b>'+_ckPct(k.ebitdaPct)+'</b> vs target '+ebitdaTarget.toFixed(0)+'%. La operación es rentable este mes.',pri:3});
+  else if(k.ebitdaPct>=0)ins.push({sev:'warn',ico:'!',tit:'EBITDA bajo objetivo',txt:'EBITDA <b>'+_ckPct(k.ebitdaPct)+'</b>, falta '+(ebitdaTarget-k.ebitdaPct).toFixed(1)+'pp para el target de '+ebitdaTarget.toFixed(0)+'%.',pri:1});
+  else ins.push({sev:'bad',ico:'−',tit:'EBITDA negativo',txt:'EBITDA <b>'+_ckPct(k.ebitdaPct)+'</b>. La operación no cubre su estructura este mes.',pri:0});
+  // Facturación trend
+  if(kPrev){var dF=_ckDelta(k.totFact,kPrev.totFact);if(dF!==null){
+    if(dF>=10)ins.push({sev:'good',ico:'↑',tit:'Facturación en alza',txt:'Ventas <b>+'+dF.toFixed(0)+'%</b> vs '+MES_ORD[pd.getMonth()].substring(0,3)+' ('+_ckMoneyShort(k.totFact)+').',pri:3});
+    else if(dF<=-10)ins.push({sev:'bad',ico:'↓',tit:'Facturación cayó',txt:'Ventas <b>'+dF.toFixed(0)+'%</b> vs '+MES_ORD[pd.getMonth()].substring(0,3)+'. Revisar si es estacional o señal de fondo.',pri:0});
+  }}
+  // Margen bruto trend
+  if(kPrev){var dMB=k.mbPct-kPrev.mbPct;
+    if(dMB<=-3)ins.push({sev:'warn',ico:'▼',tit:'Margen bruto se comprime',txt:'MB cayó <b>'+dMB.toFixed(1)+'pp</b> (a '+k.mbPct.toFixed(1)+'%). Investigar mix de canales o suba de costos.',pri:1});
+    else if(dMB>=3)ins.push({sev:'good',ico:'▲',tit:'Margen bruto mejoró',txt:'MB <b>+'+dMB.toFixed(1)+'pp</b> (a '+k.mbPct.toFixed(1)+'%). Mejor mix o pricing.',pri:3});
+  }
+  // Concentración de clientes
+  if(nCli>0){
+    if(concentr>=60)ins.push({sev:'warn',ico:'⚠',tit:'Cartera concentrada',txt:'El <b>'+concentr.toFixed(0)+'%</b> del facturado viene de 10 clientes (de '+nCli+' activos). Riesgo si alguno se va — vale profundizar la base.',pri:1});
+    else ins.push({sev:'good',ico:'👥',tit:'Cartera diversificada',txt:concentr.toFixed(0)+'% en el top 10 sobre '+nCli+' clientes activos. Sana distribución.',pri:3});
+  }
+  // Dependencia de canal Home
+  if(homePct>=75)ins.push({sev:'warn',ico:'📡',tit:'Dependencia de Home',txt:'Home es el <b>'+homePct.toFixed(0)+'%</b> de la facturación. Es el motor, pero conviene empujar Pilar/Clubes/Red para no depender de un solo canal.',pri:2});
+  // Adquisición
+  if(nNuevos===0)ins.push({sev:'warn',ico:'🌱',tit:'Sin clientes nuevos',txt:'No entró ningún cliente nuevo este mes. La adquisición está frenada.',pri:1});
+  else if(nNuevos>=5)ins.push({sev:'good',ico:'🌱',tit:'Buena adquisición',txt:'<b>'+nNuevos+'</b> clientes nuevos este mes. La captación funciona.',pri:3});
+  // Runway
+  if(runway!==null){
+    if(runway<30)ins.push({sev:'bad',ico:'⛽',tit:'Pista de caja corta',txt:'La posición ('+_ckMoneyShort(posNeta)+') cubre ~<b>'+Math.round(runway)+' días</b> de operación al ritmo de gasto actual. Cuidar el flujo.',pri:0});
+    else if(runway<60)ins.push({sev:'warn',ico:'⛽',tit:'Pista de caja ajustada',txt:'Cubrís ~<b>'+Math.round(runway)+' días</b> de operación con la caja actual.',pri:1});
+    else ins.push({sev:'good',ico:'⛽',tit:'Caja holgada',txt:'~'+Math.round(runway)+' días de pista con la posición actual ('+_ckMoneyShort(posNeta)+').',pri:3});
+  }
+  // A cobrar pendiente
+  if(esMesActual&&D){var aCobrar=0;((D.pedidos)||[]).forEach(function(p){if(p.h==='Red'||p.es!=='Entregado'||p.ep==='Cobrado')return;aCobrar+=Number(p.$||0);});
+    if(aCobrar>50000)ins.push({sev:'opp',ico:'💵',tit:'Plata en la calle',txt:'Hay <b>'+_ckMoneyShort(aCobrar)+'</b> entregado y sin cobrar. Salir a cerrar esos cobros mejora la caja ya.',pri:2});
+  }
+
+  // Orden: bad → warn → opp → good; dentro, por prioridad
+  var SEVORD={bad:0,warn:1,opp:2,good:3};
+  ins.sort(function(a,b){return (SEVORD[a.sev]-SEVORD[b.sev])||(a.pri-b.pri);});
+  var nBad=ins.filter(function(i){return i.sev==='bad';}).length;
+  var nWarn=ins.filter(function(i){return i.sev==='warn';}).length;
+  var nOpp=ins.filter(function(i){return i.sev==='opp';}).length;
+
+  var SEVMAP={bad:{c:'#C62828',bg:'var(--rb)',fl:'r',lbl:'ALERTA'},warn:{c:'#8B6A00',bg:'var(--wrnb)',fl:'wrn',lbl:'ATENCIÓN'},opp:{c:'#8B3A0E',bg:'var(--ol)',fl:'o',lbl:'OPORTUNIDAD'},good:{c:'var(--gd)',bg:'var(--gb)',fl:'g',lbl:'OK'}};
+  var h='';
+  h+='<div class="ck-hero">'+
+    '<div class="ck-hero-t">Insights automáticos · '+mesNom+' '+anioN+'</div>'+
+    '<div class="ck-hero-v">'+ins.length+'</div>'+
+    '<div class="ck-hero-s">'+(nBad?nBad+' alerta'+(nBad===1?'':'s')+' · ':'')+(nWarn?nWarn+' a vigilar · ':'')+(nOpp?nOpp+' oportunidad'+(nOpp===1?'':'es')+' · ':'')+(ins.length-nBad-nWarn-nOpp)+' en verde</div>'+
+  '</div>';
+  h+='<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px">';
+  ins.forEach(function(it){
+    var s=SEVMAP[it.sev];
+    h+='<div style="background:#fff;border:1px solid var(--cd);border-left:4px solid '+s.c+';border-radius:8px;padding:14px 16px;box-shadow:var(--shadow)">'+
+      '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px"><span style="font-size:18px">'+it.ico+'</span><b style="color:var(--ink);font-size:13.5px;flex:1">'+it.tit+'</b><span class="ck-flag '+s.fl+'">'+s.lbl+'</span></div>'+
+      '<div style="font-size:12.5px;color:var(--ink2);line-height:1.6">'+it.txt+'</div>'+
+    '</div>';
+  });
+  h+='</div>';
+  h+='<div class="ck-read" style="margin-top:14px"><b>Cómo leer esto:</b> los insights se generan solos cruzando el EERR del mes, la base de clientes y la caja. Priorizados de más urgente (alerta) a favorable (verde). '+(esMesActual?'Mes en curso → algunos usan proyección a fin de mes.':'')+'</div>';
+
+  box.innerHTML=h;
+}
 
 // Helper: KPIs económicos clave (totFact, totMB, totMC, ebitda, resNeto, totEstr) de cualquier mes.
 // Pure-function: usado por la tendencia 6 meses en el EERR económico.
