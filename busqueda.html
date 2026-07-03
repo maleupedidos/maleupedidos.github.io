@@ -3056,11 +3056,12 @@ function processSyncQueue() {
   var item = syncQueue[0];
   var attempt = item._attempt || 0;
 
-  // Timeout 10s. El server está optimizado con batch reads (cargarInfo y prodCache
-  // en memoria). Si igual tarda más, abortamos y reintentamos — el server tiene
-  // idempotencia por clientOpId, así que el retry NO duplica.
+  // Timeout 30s (alineado con el lock de 30s del backend). Recibir mercadería de un
+  // proveedor grande procesa fila por fila con flush + Kardex + stock y puede pasar
+  // los 10s viejos, que hacían abortar en falso. Si igual tarda más, abortamos y
+  // reintentamos — el server tiene idempotencia por clientOpId, así que el retry NO duplica.
   var ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
-  var timeoutId = ctrl ? setTimeout(function(){ try { ctrl.abort(); } catch(e){} }, 10000) : null;
+  var timeoutId = ctrl ? setTimeout(function(){ try { ctrl.abort(); } catch(e){} }, 30000) : null;
 
   fetch(APPS_SCRIPT_URL, {
     method: 'POST',
@@ -3109,10 +3110,13 @@ function processSyncQueue() {
     }
   }).catch(function(err) {
     if (timeoutId) clearTimeout(timeoutId);
-    // Si fue aborto por timeout, avisar a Tadeo (sino queda silencioso).
+    // Timeout/abort NO es una falla: el server sigue procesando y la operación es
+    // idempotente por clientOpId. En vez de ocultar el loader y asustar, lo dejamos
+    // visible con un mensaje tranquilizador y dejamos que el retry reconcilie.
+    // Si agota los 5 intentos, scheduleRetry avisa y recién ahí oculta el loader.
     if (err && err.name === 'AbortError') {
-      hideLoader(true);
-      showToast('Server tardó >10s. Reintentando…');
+      var _lm = document.getElementById('loaderMsg');
+      if (_lm) _lm.textContent = 'El servidor está tardando un poco, seguimos sincronizando…';
     }
     // Error de red o excepción → retry con backoff (idempotente por clientOpId)
     scheduleRetry(item, attempt);
