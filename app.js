@@ -2271,14 +2271,21 @@ function setSendLoaderSuccess() {
   if (t) t.textContent = '¡Pedido enviado!';
   if (s) s.textContent = 'Te abrimos WhatsApp para que confirmes con Maleu.';
 }
-function setSendLoaderError() {
+function setSendLoaderError(beaconOK) {
   var ov = $id('send-overlay');
   if (!ov) return;
   var card = ov.querySelector('.send-card');
   if (card) card.classList.add('error');
   var t = $id('send-title'), s = $id('send-sub');
-  if (t) t.textContent = 'No pudimos confirmarlo';
-  if (s) s.textContent = 'Tocá "Pedir por WhatsApp" de nuevo. Tu carrito sigue intacto.';
+  if (beaconOK) {
+    // sendBeacon disparó OK — el pedido va a llegar aunque el fetch no confirmó.
+    if (card) { card.classList.add('warn'); card.classList.remove('error'); }
+    if (t) t.textContent = 'Tu pedido está en camino';
+    if (s) s.textContent = 'Te confirmamos por WhatsApp en unos minutos. Por favor no lo vuelvas a enviar.';
+  } else {
+    if (t) t.textContent = 'No pudimos enviar';
+    if (s) s.textContent = 'Reintentá en 30 segundos. No se va a duplicar si volvés a apretar.';
+  }
 }
 function hideSendLoader() {
   var ov = $id('send-overlay');
@@ -2548,7 +2555,12 @@ function enviarPedido() {
   }
   // ID único para idempotencia: si el cliente reintenta por mala señal y el POST
   // anterior ya había llegado al server, el backend lo descarta (CacheService 6h).
-  postData.clientOrderId = 'co_' + Date.now() + '_' + Math.random().toString(36).slice(2,10);
+  //
+  // Firma del pedido = canal+telefono+items+total. Si el cliente aprieta el botón
+  // 2 veces con el MISMO pedido (típico en señal mala: ve error, reintenta), el
+  // clientOrderId se REUSA → backend dedupea. Fix del 21/06/26 tras duplicados
+  // Vie/Sáb 19-20/06 en Estancias que hubo que borrar a mano del Sheets.
+  postData.clientOrderId = _clientOrderIdForOrder(postData);
   // Cumpleaños del cliente (si lo cargó en el form) → backend lo guarda en Clientes Meta.
   var _cumple = getCumpleValue();
   if (_cumple) postData.cumple = _cumple;
@@ -2559,16 +2571,18 @@ function enviarPedido() {
   }
   _track('purchase', { value: total, zone: currentZone, items: cartCount(), discount: discount, payment: pagoEl.value, cupon: appliedCoupon ? appliedCoupon.codigo : '', vendedor: vendedorMatch ? vendedorMatch.nombre : '' });
 
-  // Esperar confirmación del server ANTES de redirigir a WhatsApp.
-  // Antes redirigíamos 800ms después del POST sin esperar respuesta → si el POST
-  // fallaba (iOS + señal floja en Estancias), el cliente mandaba el WhatsApp
-  // pero el Sheets quedaba vacío. Caso real: Magdalena Garcia Espil 30/05/2026.
+  // Estrategia de envío (21/06/26):
+  //  - sendBeacon dispara PRIMERO (garantizado por spec, sobrevive al redirect).
+  //  - fetch en paralelo intenta leer la respuesta {ok:true}.
+  //  - Si fetch responde en <3s: éxito confirmado real.
+  //  - Si fetch tarda o falla PERO sendBeacon disparó OK: tratamos como éxito
+  //    "optimista" (el server SÍ va a recibirlo). Redirigimos a WhatsApp igual.
+  //  - Si TODO falla (sendBeacon rejected + fetch falla): recién ahí mostramos
+  //    error, con mensaje bloqueante que dice "no vuelvas a apretar".
   //
-  // Ahora: timeout 3s. En buena señal la respuesta llega <1s y el redirect es
-  // tan rápido (o más) que antes. En señal mala el cliente ve "Sin señal" y
-  // puede tocar de nuevo en vez de creer que se envió. El retry en background
-  // sigue corriendo aunque haya error visible — si la respuesta llega tarde,
-  // se limpia el pendiente.
+  // Además: signature-based clientOrderId asegura que si el cliente re-envía
+  // el mismo pedido, backend deduplica automático. Previene duplicados por
+  // doble-tap del cliente ansioso viendo "Sin señal" (bug fin-de-semana 19-20/06).
   _enviando = true;
   const waTarget = vendedorMatch ? vendedorMatch.wa : WA_NUMBER;
   const waBtn = document.querySelector('.whatsapp-btn');
@@ -2610,36 +2624,84 @@ function enviarPedido() {
     }, 1800);
   }
   function _afterFail() {
-    if (waBtn) { waBtn.disabled = false; waBtn.innerHTML = waBtnOrig; waBtn.style.background = ''; }
-    setSendLoaderError();
-    setTimeout(hideSendLoader, 2400);
+    setSendLoaderError(beaconOK);
+    // El botón queda desactivado 60s para bloquear el doble-tap ansioso.
+    // El mensaje depende de si sendBeacon logró disparar el POST o no.
+    // Aunque el cliente reintente, el clientOrderId por signature garantiza que
+    // el backend no cree un duplicado. Pero el mensaje debe ser honesto igual.
+    var msg;
+    if (beaconOK) {
+      if (waBtn) { waBtn.disabled = true; waBtn.innerHTML = '⏳ Tu pedido está en camino'; waBtn.style.background = '#8d6e63'; }
+      msg = '⏳ Tu pedido se envió y en unos minutos te confirmamos por WhatsApp. NO lo vuelvas a enviar. Si no te llega en 5 min, escribinos.';
+    } else {
+      if (waBtn) { waBtn.disabled = true; waBtn.innerHTML = '⚠ No pudimos enviar — reintentá en un momento'; waBtn.style.background = '#c62828'; }
+      msg = '⚠ No pudimos enviar tu pedido — probá dentro de 30 segundos. No se va a duplicar si reintentas.';
+    }
+    toast(msg, 14000);
+    setTimeout(hideSendLoader, 3000);
+    setTimeout(function() {
+      if (waBtn) { waBtn.disabled = false; waBtn.innerHTML = waBtnOrig; waBtn.style.background = ''; }
+    }, 60000);
     _enviando = false;
   }
 
-  // Timeout subido de 3s a 12s el 02/06/2026: Apps Script empezó a tardar
-  // 6-9s en responder POSTs de pedidos nuevos (antes <1s). El timeout corto
-  // hacía aparecer "Sin señal" aunque el pedido sí entrara al Sheets, y el
-  // cliente reintentaba generando duplicados.
-  var TIMEOUT_MS = 12000;
-  var timeoutTriggered = false;
+  // Sábana de tiempos:
+  //  0s:     dispara sendBeacon + fetch. Loader visible.
+  //  0-3s:   si fetch responde ok → éxito confirmado (_afterSuccess).
+  //  3s:     si fetch no respondió pero sendBeacon disparó OK → éxito OPTIMISTA
+  //          (redirigimos igual, sendBeacon garantiza la entrega).
+  //  20s:    si fetch tampoco respondió tras 20s → _afterFail (mensaje bloqueante).
+  //          Este es el peor caso: sendBeacon no disponible o rechazado.
+  var FAST_CONFIRM_MS = 3000;   // ventana de confirmación real por fetch
+  var HARD_TIMEOUT_MS = 20000;  // ceiling absoluto antes de dar por perdido
   var settled = false;
+  var beaconOK = _tryBeaconOnly(postData);
   var sendPromise = _sendWithRetry(postData);
-  var timeoutId = setTimeout(function(){
+
+  var optimisticTimer = setTimeout(function() {
     if (settled) return;
-    timeoutTriggered = true; settled = true;
-    _afterFail();
-  }, TIMEOUT_MS);
-  sendPromise.then(function() {
-    if (timeoutTriggered || settled) return;
+    if (beaconOK) {
+      settled = true;
+      _afterSuccess(); // sendBeacon fue OK → confiamos y redirigimos
+    }
+  }, FAST_CONFIRM_MS);
+
+  var hardTimer = setTimeout(function() {
+    if (settled) return;
     settled = true;
-    clearTimeout(timeoutId);
+    clearTimeout(optimisticTimer);
+    _afterFail();
+  }, HARD_TIMEOUT_MS);
+
+  sendPromise.then(function() {
+    if (settled) return;
+    settled = true;
+    clearTimeout(optimisticTimer);
+    clearTimeout(hardTimer);
     _afterSuccess();
   }).catch(function() {
-    if (timeoutTriggered || settled) return;
-    settled = true;
-    clearTimeout(timeoutId);
-    _afterFail();
+    // Si sendBeacon fue OK, el pedido llegará igual — no mostrar error todavía;
+    // dejar que el optimistic timer decida. Si sendBeacon también falló, el hard
+    // timer va a saltar.
+    if (settled) return;
+    if (!beaconOK) {
+      // sendBeacon falló Y fetch también → error real, adelantar el fail
+      settled = true;
+      clearTimeout(optimisticTimer);
+      clearTimeout(hardTimer);
+      _afterFail();
+    }
   });
+}
+
+/* Dispara sólo el sendBeacon con el postData. Devuelve true si el navegador
+   aceptó encolar el POST (garantiza entrega). Se llama ANTES del fetch. */
+function _tryBeaconOnly(postData) {
+  try {
+    if (typeof navigator === 'undefined' || !navigator.sendBeacon) return false;
+    var blob = new Blob([JSON.stringify(postData)], { type: 'text/plain;charset=UTF-8' });
+    return navigator.sendBeacon(APPS_SCRIPT_URL, blob) === true;
+  } catch (e) { return false; }
 }
 
 /* ── RETRY + BACKUP — robustecido 17/05/2026 ──
@@ -2657,6 +2719,41 @@ function enviarPedido() {
 */
 var MALEU_RETRY_DELAYS = [5000, 15000, 45000, 120000, 300000, 900000]; // ms
 var MALEU_MAX_TRIES = MALEU_RETRY_DELAYS.length + 1; // 7 intentos totales
+
+// ── SIGNATURE-BASED IDEMPOTENCY (21/06/26) ────────────────────────────
+// Si el cliente aprieta 'Pedir por WhatsApp' 2 veces con el MISMO pedido
+// (típico cuando ve un error y reintenta), reusamos el clientOrderId anterior
+// para que el backend deduplique (CacheService 6h). Antes cada intento
+// generaba un ID nuevo → se creaban duplicados en Sheets. Ventana: 30 min.
+function _orderSignature(postData) {
+  var itemsKey = ((postData && postData.items) || [])
+    .slice()
+    .sort(function(a,b){ return Number(a.id) - Number(b.id); })
+    .map(function(it){ return it.id + 'x' + it.qty; })
+    .join(',');
+  return [
+    postData.canal || '',
+    (postData.telefono || '').toString().replace(/\D/g,''),
+    postData.dia || '',
+    itemsKey,
+    Math.round(Number(postData.total) || 0)
+  ].join('|');
+}
+function _clientOrderIdForOrder(postData) {
+  var sig = _orderSignature(postData);
+  var map = {};
+  try { map = JSON.parse(localStorage.getItem('maleu_order_sigs') || '{}'); } catch(e) {}
+  var now = Date.now();
+  // Limpiar entradas viejas (>30 min) para no crecer indefinidamente
+  Object.keys(map).forEach(function(k) {
+    if (!map[k] || now - (map[k].ts || 0) > 1800000) delete map[k];
+  });
+  var oid = (map[sig] && map[sig].oid) ? map[sig].oid
+          : ('co_' + now + '_' + Math.random().toString(36).slice(2,10));
+  map[sig] = { oid: oid, ts: now };
+  try { localStorage.setItem('maleu_order_sigs', JSON.stringify(map)); } catch(e) {}
+  return oid;
+}
 
 function _pendingMap() {
   try { return JSON.parse(localStorage.getItem('maleu_pending_orders') || '{}'); }
