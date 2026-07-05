@@ -945,7 +945,7 @@ var STORAGE_VERSION='v2-row-keyed';
 // APP_VERSION: si el browser carga una version distinta a la conocida, limpiamos
 // caches del SW y recargamos. Evita que iOS Safari sirva HTML viejo (bug Violeta
 // 27/05: PWA con codigo v55 procesando cobros con processSyncQueue trabado).
-var APP_VERSION='v120';
+var APP_VERSION='v121';
 // Pintar version real en el badge (no hardcodear el HTML, suele desincronizar).
 try{var __ve=document.getElementById('appVer');if(__ve)__ve.textContent=APP_VERSION;}catch(_){}
 (function(){
@@ -2280,6 +2280,10 @@ function renderRuta(){
     var _hint=_fShow?(' · '+_fShow):'';
     h+='<div style="font-size:12px;color:var(--muted);margin-bottom:6px;font-weight:600">🕐 Pedido a las '+_hrShow+_hint+'</div>';
   }
+  // Banner "saldo a favor previo" — se popula async con _fetchSaldoRutaCard.
+  // Sirve para que Tadeo vea ANTES de tocar el pedido que el cliente tiene
+  // crédito de compras anteriores (así al cobrar recuerda aplicarlo).
+  h+='<div class="ruta-saldo-previo" data-cliente="'+String(e.c||'').replace(/"/g,'&quot;')+'" style="display:none"></div>';
 
   // ── Caja informativa de combo: "2 pedidos juntos" ──
   if(e._combo){
@@ -2332,6 +2336,9 @@ function renderRuta(){
   a+='</div>';
   a+='<div class="ruta-nav"><button class="btn-prev" onclick="rutaPrev()">&larr;</button><button class="btn-next" onclick="rutaNext()">Siguiente &rarr;</button></div>';
   actions.innerHTML=a;
+  // Traer saldo a favor previo del cliente y mostrar banner en la card
+  // (lazy con cache 5min, comparte cache con ARMADO y con el modal de cobro).
+  _populateRutaSaldoPrevio();
 }
 
 function renderCobros(){
@@ -3435,6 +3442,47 @@ function _renderArmadoSaldoBadges(elements, saldo){
   }
   var txt='🎁 $'+formatMoney(saldo).replace('$','')+' a favor';
   elements.forEach(function(el){el.style.display='';el.textContent=txt;});
+}
+
+// Sub-tab RUTA: banner "saldo a favor previo" en la card del cliente actual.
+// Mismo patrón que ARMADO pero con estilo de banner (más visible porque en
+// RUTA solo se ve UNA card por vez, no una lista compacta).
+function _populateRutaSaldoPrevio(){
+  var els=document.querySelectorAll('.ruta-saldo-previo[data-cliente]');
+  if(els.length===0)return;
+  if(!_saldosClienteCache){_saldosClienteCache=window._saldosClienteCache={};}
+  var grupos={};
+  for(var i=0;i<els.length;i++){
+    var cli=String(els[i].getAttribute('data-cliente')||'').trim();
+    if(!cli)continue;
+    var k='c:'+cli.toLowerCase();
+    if(!grupos[k])grupos[k]={cli:cli,els:[]};
+    grupos[k].els.push(els[i]);
+  }
+  Object.keys(grupos).forEach(function(k){
+    var g=grupos[k];
+    var cached=_saldosClienteCache[k];
+    if(cached && (Date.now()-cached.ts)<300000){
+      _renderRutaSaldoBanner(g.els, cached.saldo);
+      return;
+    }
+    fetch(APPS_SCRIPT_URL+'?action=saldoCliente&cliente='+encodeURIComponent(g.cli)+'&t='+Date.now())
+      .then(function(r){return r.json()})
+      .then(function(data){
+        var s=(data&&data.ok)?(Number(data.saldo)||0):0;
+        _saldosClienteCache[k]={saldo:s,ts:Date.now()};
+        _renderRutaSaldoBanner(g.els, s);
+      })
+      .catch(function(){});
+  });
+}
+function _renderRutaSaldoBanner(elements, saldo){
+  if(!(saldo>0)){
+    elements.forEach(function(el){el.style.display='none';el.innerHTML='';});
+    return;
+  }
+  var html='<div style="background:#FFF8E1;border:1.5px solid #F9A825;border-radius:10px;padding:10px 12px;margin:8px 0;font-size:13px;line-height:1.4;color:#5D4037;text-align:center;font-weight:700">🎁 Tiene $'+formatMoney(saldo).replace('$','')+' a favor <span style="font-weight:600;opacity:.8">— acordate de aplicarlo al cobrar</span></div>';
+  elements.forEach(function(el){el.style.display='';el.innerHTML=html;});
 }
 
 // Toggle "Pago parcial": permite cobrar menos que el total (queda saldo).
