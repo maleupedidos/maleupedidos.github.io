@@ -7633,16 +7633,31 @@ function rCaja(){
   // Separador por día: al cambiar de fecha mientras scrolleás, header con el día + el neto de ese día (en el filtro actual).
   function _movDiaKey(m){ var mm=String(m.f||'').match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/); if(mm)return mm[3]+'-'+String(+mm[2]).padStart(2,'0')+'-'+String(+mm[1]).padStart(2,'0'); if(m.ts){var d=new Date(m.ts);return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');} return ''; }
   var _DSEM=['Domingo','Lunes','Martes','Miércoles','Jueves','Viernes','Sábado'];
-  var _diaNet={}; movsF.forEach(function(m){var k=_movDiaKey(m);if(!k)return;_diaNet[k]=(_diaNet[k]||0)+(m.tipo==='gasto'?-1:1)*(Number(m.$)||0);});
+  // Por día: 4 patas (entró efectivo/MP, salió efectivo/MP) + neto (en el filtro actual).
+  var _diaBk={}; movsF.forEach(function(m){
+    var k=_movDiaKey(m);if(!k)return;
+    if(!_diaBk[k])_diaBk[k]={inEf:0,inMp:0,outEf:0,outMp:0};
+    var v=Number(m.$)||0,ef=(m.met==='Efectivo');
+    if(m.tipo==='gasto'){ if(ef)_diaBk[k].outEf+=v; else _diaBk[k].outMp+=v; }
+    else{ if(ef)_diaBk[k].inEf+=v; else _diaBk[k].inMp+=v; }
+  });
   var _lastDiaKey='';
   movsF.forEach(function(m){
     var dk=_movDiaKey(m);
     if(dk&&dk!==_lastDiaKey){
       _lastDiaKey=dk;
-      var dp=dk.split('-');var dt=new Date(+dp[0],+dp[1]-1,+dp[2]);var net=_diaNet[dk]||0;
+      var dp=dk.split('-');var dt=new Date(+dp[0],+dp[1]-1,+dp[2]);
+      var b=_diaBk[dk]||{inEf:0,inMp:0,outEf:0,outMp:0};
+      var net=b.inEf+b.inMp-b.outEf-b.outMp;
       var sep=document.createElement('div');
-      sep.style.cssText='display:flex;justify-content:space-between;align-items:center;margin:12px 0 6px;padding:5px 2px;border-bottom:1.5px solid var(--cd);font-size:12px;font-weight:800;color:var(--ink)';
-      sep.innerHTML='<span>📅 '+(_DSEM[dt.getDay()]||'')+' '+dp[2]+'/'+dp[1]+'</span><span style="font-size:11px;color:'+(net>=0?'#2d8a4f':'var(--r)')+'">'+(net>=0?'+':'')+'$'+f$(Math.round(net))+'</span>';
+      sep.style.cssText='margin:12px 0 6px;padding:5px 2px;border-bottom:1.5px solid var(--cd)';
+      sep.innerHTML='<div style="display:flex;justify-content:space-between;align-items:center;font-size:12px;font-weight:800;color:var(--ink)">'
+        +'<span>📅 '+(_DSEM[dt.getDay()]||'')+' '+dp[2]+'/'+dp[1]+'</span>'
+        +'<span style="color:'+(net>=0?'#2d8a4f':'var(--r)')+'">'+(net>=0?'+':'')+'$'+f$(Math.round(net))+'</span></div>'
+        +'<div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;font-size:10.5px;font-weight:700;margin-top:3px">'
+          +'<span style="color:#2d8a4f">Entró · 💵 $'+f$(Math.round(b.inEf))+' &nbsp;·&nbsp; 📱 $'+f$(Math.round(b.inMp))+'</span>'
+          +'<span style="color:var(--r)">Salió · 💵 $'+f$(Math.round(b.outEf))+' &nbsp;·&nbsp; 📱 $'+f$(Math.round(b.outMp))+'</span>'
+        +'</div>';
       gl.appendChild(sep);
     }
     var el=document.createElement('div');el.className='gl';
@@ -8357,7 +8372,11 @@ var EERR_CONFIG_DEFAULT=[
   {param:'DIA_GIRO_2',valor:20,desde:'2026-01'},
   {param:'COMISION_MP_PCT',valor:0,desde:'2026-01'},
   {param:'EBITDA_REALISTA',valor:0.08,desde:'2026-01'},
-  {param:'EBITDA_ASPIRACIONAL',valor:0.15,desde:'2026-01'}
+  {param:'EBITDA_ASPIRACIONAL',valor:0.15,desde:'2026-01'},
+  // Costo estimado de packaging por pedido entregado (Home/Pilar): promedio ponderado
+  // naranja $1.905 (nuevos + pedidos grandes, ~35-40%) + blanca $120-160 + sticker $87,50.
+  // Se imputa por pedido como CMV (Fede 02/07). Ajustable acá o en Config_Maleu.
+  {param:'COSTO_PACKAGING_PEDIDO',valor:850,desde:'2026-01'}
 ];
 // Devuelve el valor del parámetro vigente al ym (YYYY-MM). Si pasaron varios "Activo desde",
 // usa el más reciente que sea ≤ ym.
@@ -10496,6 +10515,9 @@ function rEERR_dual(body){
   // vs Vehículo (nafta, arreglos, patente, seguro del auto de reparto). Son cosas distintas.
   var v_delivery=0,v_vehiculo=0,v_packaging=0,v_comCobro=0,v_otrosVar=0;
   var v_deliveryD=[],v_vehiculoD=[],v_packagingD=[],v_otrosVarD=[];
+  // v_packagingCompras: lo realmente comprado de bolsas en Egresos (memo). En devengado NO se usa
+  // por-compra (es lumpy); el packaging se imputa por pedido entregado. Las compras son caja (financiero).
+  var v_packagingCompras=0,v_packagingComprasD=[];
   // Estructura (fijos)
   // Software comercial (WATI, Claude) = herramientas para captar/atender clientes → van en Gastos Comerciales.
   // Software administrativo (N8N, Canva, hosting, dominios) → operar el negocio → Gastos Administrativos.
@@ -10553,7 +10575,7 @@ function rEERR_dual(body){
     if(esCreditoComercial(txt)){f_marketing+=m;pushDet(f_marketingD,g,m);return;}
     if(cat==='repartidor'){v_delivery+=m;pushDet(v_deliveryD,g,m);}
     else if(cat==='nafta'){v_vehiculo+=m;pushDet(v_vehiculoD,g,m);}
-    else if(cat==='bolsa'){v_packaging+=m;pushDet(v_packagingD,g,m);}
+    else if(cat==='bolsa'){v_packagingCompras+=m;pushDet(v_packagingComprasD,g,m);} // memo; el packaging se imputa por pedido (abajo)
     else if(cat==='catering'){/* movido a CMV (cmvCateringDirecto) */}
     else if(cat==='marketing'){f_marketing+=m;pushDet(f_marketingD,g,m);}
     else if(cat==='herramienta'){
@@ -10619,6 +10641,20 @@ function rEERR_dual(body){
       if(dMono>0){imp_mono+=dMono;monoProv=dMono;monoProvCon=p.concepto;}
     }
   });
+
+  // ── Packaging imputado por pedido (Fede 02/07): bolsas+stickers = variable como el CMV.
+  // Se cuenta cada pedido entregado de Home/Pilar (venta directa al consumidor con bolsa Maleu)
+  // × costo unitario estimado (Config COSTO_PACKAGING_PEDIDO). NO se usan las compras reales
+  // de Egresos (lumpy, van a la caja/financiero). Clubes/Red no llevan bolsa (granel/vendedor).
+  var ymPack=eerrMes.getFullYear()+'-'+String(mesNum).padStart(2,'0');
+  var costoPackU=eerrConfig('COSTO_PACKAGING_PEDIDO',ymPack)||0;
+  var pedidosPackHP=((D&&D.pedidos)||[]).filter(function(p){
+    if(p.es!=='Entregado')return false;
+    if(p.h!=='Home'&&p.h!=='Pilar')return false;
+    var dee=String(p.dee||'').split('-');
+    return dee.length>=2&&Number(dee[1])===mesNum;
+  }).length;
+  v_packaging=Math.round(pedidosPackHP*costoPackU);
 
   // Nafta/Vehículo NO es variable por pedido (Fede, 02/07/2026): es semi-variable → gasto administrativo.
   // No reduce el Margen de Contribución; se resta como estructura antes del EBITDA.
@@ -10775,8 +10811,9 @@ function rEERR_dual(body){
   html+=ln(eL('(−) Gastos Variables (de cada venta)','Gastos que crecen con cada pedido entregado: delivery, vehículo, bolsas. Si vendés 0, no los tenés.'),-totVar,'sub neg');
   html+=leaf(eL('Delivery','Lo que les pagás a los repartidores de Estancias (Santos Bullrich, Agustín Carpinacci) por llevar los pedidos. Escala con cada entrega.'),-v_delivery);
   html+=detailRows(v_deliveryD);
-  html+=leaf(eL('Bolsas y packaging','Bolsas naranjas + stickers. Cada pedido entregado consume packaging, así que va como costo variable (igual que el producto).'),-v_packaging);
-  html+=detailRows(v_packagingD);
+  html+=leaf(eL('Bolsas y packaging','Bolsas (naranja/blancas) + stickers. Se imputa por pedido entregado de Home/Pilar, no por compra, para que cada pedido "pague" su bolsa (Fede). Costo unitario estimado en Config; ajustable.'),-v_packaging);
+  html+=subleaf('Imputado: '+pedidosPackHP+' pedidos Home/Pilar × $'+f$(Math.round(costoPackU)),-v_packaging,true);
+  if(v_packagingCompras>0)html+=subleaf('(memo) compras reales de bolsas este mes: $'+f$(Math.round(v_packagingCompras))+' — van a la caja, no acá',0,true);
   if(v_otrosVar>0){html+=leaf('Otros variables',-v_otrosVar);html+=detailRows(v_otrosVarD);}
 
   // MARGEN DE CONTRIBUCIÓN (rename de "Margen Operativo")
