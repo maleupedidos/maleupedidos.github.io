@@ -446,6 +446,15 @@ const BARRIOS_PILAR_MODAL = [
   { val: '__otro__',     nombre: 'Otro barrio',  isRed: false, isOther: true }
 ];
 
+/* Fini (Ayres) arranca la semana del 13/07/2026. Esta semana es feriado
+   (jue 09 Independencia + vie 10 puente), así que el barrio Ayres NO debe
+   aparecer en la tienda todavía. Se reactiva SOLO al vencer el timestamp:
+   el lunes 13/07 el barrio vuelve a mostrarse sin tocar código ni deployar. */
+const AYRES_OCULTO_HASTA_MS = Date.UTC(2026, 6, 13, 3, 0, 0); // Lun 13/07/2026 00:00 AR
+function _barrioOculto(val) {
+  return val === 'Ayres' && Date.now() < AYRES_OCULTO_HASTA_MS;
+}
+
 /* Tope estricto de stock — depende de la fecha de entrega elegida.
    Solo aplica en zona Estancias (Pilar y Clubes nunca tienen tope).
 
@@ -952,10 +961,12 @@ function renderPilarBarrios() {
   var addedVals = {};
   BARRIOS_PILAR_MODAL.forEach(function(b) {
     if (b.isOther) return; // "Otro" se agrega al final
+    if (_barrioOculto(b.val)) return; // barrio no habilitado esta semana (ej: Ayres)
     sel.innerHTML += '<option value="' + b.val + '">' + b.nombre + '</option>';
     addedVals[b.val] = true;
   });
   vendedoresRed.forEach(v => (v.barrios || []).forEach(b => {
+    if (_barrioOculto(b)) return; // barrio no habilitado esta semana (ej: Ayres)
     if (!addedVals[b]) {
       sel.innerHTML += '<option value="' + b + '">' + b + '</option>';
       addedVals[b] = true;
@@ -1076,7 +1087,7 @@ function welcomeBackFromDate() {
 function renderWelcomeBarrioGrid() {
   var grid = $id('loc-barrios-grid');
   if (!grid) return;
-  grid.innerHTML = BARRIOS_PILAR_MODAL.map(function(b) {
+  grid.innerHTML = BARRIOS_PILAR_MODAL.filter(function(b){ return !_barrioOculto(b.val); }).map(function(b) {
     var classes = ['loc-barrio-card'];
     if (b.isRed) classes.push('is-red');
     if (b.isOther) classes.push('is-other');
