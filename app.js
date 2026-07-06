@@ -440,6 +440,7 @@ const BARRIOS_PILAR_MODAL = [
   { val: 'Los Tacos',    nombre: 'Los Tacos',    isRed: true, badge: 'Marcos' },
   { val: 'Villa Bertha', nombre: 'Villa Bertha', isRed: true, badge: 'Marcos' },
   { val: 'Azzurra',      nombre: 'Azzurra',      isRed: true, badge: 'Marcos' },
+  { val: 'Ayres',        nombre: 'Ayres',        isRed: true, badge: 'Fini' },
   { val: '__otro__',     nombre: 'Otro barrio',  isRed: false, isOther: true }
 ];
 
