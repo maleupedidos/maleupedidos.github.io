@@ -2134,6 +2134,7 @@ body.role-single .statusbar{font-size:11px}
       <button type="submit" class="btn-submit" id="iBtn">Guardar ingreso</button>
     </form>
   </div>
+  <div id="cobranzasCard"></div>
   <div style="display:flex;align-items:center;justify-content:space-between;margin:14px 0 6px">
     <div class="st" style="margin:0">&#128196; Movimientos</div>
     <button id="btnReloadCaja" type="button" onclick="actualizarCaja()" class="btn-reload-caja" title="Buscar movimientos nuevos">
@@ -7259,6 +7260,91 @@ function rPedidos(opts){
   });
 }
 
+// ── Análisis de Cobranzas: composición efectivo vs digital en las dos puntas ──
+// Independiente de los filtros del libro. Fuente: D.movimientos (cobro+ingreso = entró,
+// gasto = salió). "Digital" = transferencia/alias/CBU o Mercado Pago (met != 'Efectivo').
+// El % NO refleja costo de comisión: los cobros digitales entran por alias/CBU sin arancel.
+function rCobranzas(){
+  var box=$('cobranzasCard');if(!box)return;
+  var movs=(D&&Array.isArray(D.movimientos))?D.movimientos:[];
+  if(!movs.length){box.innerHTML='';return;}
+  var MS=['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+  function tsOf(m){
+    if(m.ts)return m.ts;
+    var x=String(m.f||'').match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:\s+(\d{1,2}):(\d{2}))?/);
+    return x?new Date(+x[3],+x[2]-1,+x[1],x[4]?+x[4]:0,x[5]?+x[5]:0).getTime():0;
+  }
+  var esEf=function(m){return m.met==='Efectivo';};
+  // Acumuladores globales + por mes
+  var inEf=0,inMp=0,outEf=0,outMp=0;
+  var meses={}; // 'YYYY-MM' -> {inEf,inMp,outEf,outMp}
+  movs.forEach(function(m){
+    if(!m||!m.$)return;
+    var entra=(m.tipo==='cobro'||m.tipo==='ingreso'),sale=(m.tipo==='gasto');
+    if(!entra&&!sale)return;
+    var ts=tsOf(m);var mk=ts?(new Date(ts).getFullYear()+'-'+String(new Date(ts).getMonth()+1).padStart(2,'0')):'?';
+    if(!meses[mk])meses[mk]={inEf:0,inMp:0,outEf:0,outMp:0};
+    if(entra){ if(esEf(m)){inEf+=m.$;meses[mk].inEf+=m.$;} else {inMp+=m.$;meses[mk].inMp+=m.$;} }
+    else{ if(esEf(m)){outEf+=m.$;meses[mk].outEf+=m.$;} else {outMp+=m.$;meses[mk].outMp+=m.$;} }
+  });
+  var inTot=inEf+inMp,outTot=outEf+outMp;
+  if(inTot<=0&&outTot<=0){box.innerHTML='';return;}
+  var pct=function(a,b){return b>0?Math.round(a/b*100):0;};
+  var C_EF='#E65100',C_MP='#5E35B1';
+  // Panel de una punta (entró / salió)
+  function punta(titulo,ico,tot,ef,mp,cEf,cMp){
+    var pEf=pct(ef,tot),pMp=100-pEf;
+    return '<div style="flex:1;min-width:150px;background:#fff;border:1px solid var(--border);border-radius:12px;padding:12px 14px">'
+      +'<div style="font-size:11px;font-weight:800;color:var(--bl);letter-spacing:.3px">'+ico+' '+titulo+'</div>'
+      +'<div style="font-size:19px;font-weight:800;color:var(--ink);margin:2px 0 8px">$'+f$(Math.round(tot))+'</div>'
+      +'<div style="display:flex;height:9px;border-radius:6px;overflow:hidden;background:#eee;margin-bottom:8px">'
+        +'<div style="width:'+pEf+'%;background:'+C_EF+'"></div><div style="width:'+pMp+'%;background:'+C_MP+'"></div></div>'
+      +'<div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px"><span style="color:'+C_EF+';font-weight:700">💵 Efectivo</span><span style="font-weight:800;color:var(--ink)">'+pEf+'%</span></div>'
+      +'<div style="font-size:11px;color:var(--bl);text-align:right;margin-top:-3px;margin-bottom:6px">$'+f$(Math.round(ef))+'</div>'
+      +'<div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px"><span style="color:'+C_MP+';font-weight:700">📱 Digital</span><span style="font-weight:800;color:var(--ink)">'+pMp+'%</span></div>'
+      +'<div style="font-size:11px;color:var(--bl);text-align:right;margin-top:-3px">$'+f$(Math.round(mp))+'</div>'
+      +'</div>';
+  }
+  // Evolución mensual (hasta 6 meses con datos, reciente primero)
+  var mk=Object.keys(meses).filter(function(k){return k!=='?';}).sort().reverse().slice(0,6);
+  var evo='';
+  if(mk.length){
+    evo='<div style="margin-top:12px"><div style="font-size:11px;font-weight:800;color:var(--bl);margin-bottom:6px">EVOLUCIÓN MENSUAL · % efectivo</div>'
+      +'<table style="width:100%;border-collapse:collapse;font-size:12px">'
+      +'<tr style="color:var(--bl);font-size:10px;text-align:right"><td style="text-align:left">Mes</td><td>Entró</td><td>%Ef</td><td>Salió</td><td>%Ef</td></tr>';
+    mk.forEach(function(k){
+      var d=meses[k],it=d.inEf+d.inMp,ot=d.outEf+d.outMp,mp=k.split('-');
+      var lbl=MS[+mp[1]-1]+' '+mp[0].slice(2);
+      evo+='<tr style="text-align:right;border-top:1px solid var(--border)">'
+        +'<td style="text-align:left;font-weight:700;color:var(--ink);padding:4px 0">'+lbl+'</td>'
+        +'<td style="color:var(--bl)">$'+f$(Math.round(it))+'</td>'
+        +'<td style="font-weight:800;color:'+C_EF+'">'+pct(d.inEf,it)+'%</td>'
+        +'<td style="color:var(--bl)">$'+f$(Math.round(ot))+'</td>'
+        +'<td style="font-weight:800;color:'+C_EF+'">'+pct(d.outEf,ot)+'%</td></tr>';
+    });
+    evo+='</table></div>';
+  }
+  // Neto por medio: cuánto queda/sobra en cada carril
+  var netMp=inMp-outMp,netEf=inEf-outEf;
+  var neto='<div style="margin-top:10px;padding-top:10px;border-top:1px dashed var(--border);font-size:11.5px;color:var(--bl);line-height:1.7">'
+    +'<div>💵 <b style="color:var(--ink)">Efectivo</b> · entró $'+f$(Math.round(inEf))+' · salió $'+f$(Math.round(outEf))+' · <b style="color:'+(netEf>=0?'#2E7D32':'var(--r)')+'">'+(netEf>=0?'sobra':'falta')+' $'+f$(Math.abs(Math.round(netEf)))+'</b></div>'
+    +'<div>📱 <b style="color:var(--ink)">Digital</b> · entró $'+f$(Math.round(inMp))+' · salió $'+f$(Math.round(outMp))+' · <b style="color:'+(netMp>=0?'#2E7D32':'var(--r)')+'">'+(netMp>=0?'queda':'falta')+' $'+f$(Math.abs(Math.round(netMp)))+'</b></div>'
+    +'</div>';
+  var open=(window._cobrOpen===true);
+  box.innerHTML='<div style="background:var(--card,#faf7f5);border:1px solid var(--border);border-radius:14px;padding:14px;margin-top:14px">'
+    +'<div id="cobrHdr" style="display:flex;align-items:center;justify-content:space-between;cursor:pointer">'
+      +'<div class="st" style="margin:0">📊 Análisis de Cobranzas</div>'
+      +'<span style="font-size:12px;color:var(--bl);font-weight:700">'+(open?'Ocultar ▴':'Ver ▾')+'</span></div>'
+    +'<div id="cobrBody" style="display:'+(open?'block':'none')+';margin-top:12px">'
+      +'<div style="display:flex;gap:10px;flex-wrap:wrap">'
+        +punta('ENTRÓ','⬇️',inTot,inEf,inMp)
+        +punta('SALIÓ','⬆️',outTot,outEf,outMp)
+      +'</div>'+neto+evo
+      +'<div style="font-size:10.5px;color:var(--bl);margin-top:10px;font-style:italic">Digital = transferencia/alias/CBU o MP, sin comisión. Entró = cobros de venta + ingresos. Salió = gastos.</div>'
+    +'</div></div>';
+  $('cobrHdr').onclick=function(){window._cobrOpen=!(window._cobrOpen===true);rCobranzas();};
+}
+
 function rCaja(){
   // Preservar scroll: cada filtro (tipo / período / orden) llama rCaja() y el
   // browser saltaba al top al rebuild de gList. Guardamos scrollY antes de
@@ -7301,6 +7387,7 @@ function rCaja(){
   // Movimientos: libro diario unificado (cobros de pedidos + ingresos no-venta + gastos).
   // Fuente: D.movimientos del backend (vista derivada, sin hoja física de movimientos).
   // Fallback: si el backend viejo no manda movimientos, armar desde gastos+ingresos.
+  rCobranzas();
   var gl=$('gList');gl.innerHTML='';
   var movs=D.movimientos;
   if(!movs){
