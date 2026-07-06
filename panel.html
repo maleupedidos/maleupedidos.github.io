@@ -2646,6 +2646,7 @@ body.role-single .statusbar{font-size:11px}
   <div class="bbdd-tabs">
     <button class="bbdd-tab on" data-esub="pulso" onclick="estSwitch('pulso')">📊 Pulso</button>
     <button class="bbdd-tab" data-esub="hogares" onclick="estSwitch('hogares')">🏠 Hogares</button>
+    <button class="bbdd-tab" data-esub="clientes" onclick="estSwitch('clientes')">👤 Clientes</button>
     <button class="bbdd-tab" data-esub="quien" onclick="estSwitch('quien')">👥 Quién compra</button>
     <button class="bbdd-tab" data-esub="barrios" onclick="estSwitch('barrios')">🗺️ Sub-barrios</button>
     <button class="bbdd-tab" data-esub="hoy" onclick="estSwitch('hoy')">☀️ Hoy</button>
@@ -2669,6 +2670,10 @@ body.role-single .statusbar{font-size:11px}
   <!-- Sub: SUB-BARRIOS -->
   <div class="est-sub" id="est-barrios">
     <div id="estBarrios"></div>
+  </div>
+  <!-- Sub: CLIENTES (individuales de Estancias del Pilar) -->
+  <div class="est-sub" id="est-clientes">
+    <div id="estClientes"></div>
   </div>
 
   <!-- Sub: HOY (cockpit del día · migrado de BBDD) -->
@@ -13085,6 +13090,12 @@ if('serviceWorker' in navigator){
     if (!(crmClientes && crmClientes.length)) return null;
     try{ return _hogBuild(); }catch(e){ return null; }
   };
+  // SÍNCRONO: clientes INDIVIDUALES de Estancias del Pilar (desde cache). null si no hay.
+  window.estClientesSync = function(){
+    if (!(crmClientes && crmClientes.length)){ try{ var cc=JSON.parse(localStorage.getItem('maleu_crm_clientes_v1')||'null'); if(cc&&cc.length)crmClientes=cc; }catch(e){} }
+    if (!(crmClientes && crmClientes.length)) return null;
+    return crmClientes.filter(function(c){ return String(c.barrio||'').trim().toLowerCase()==='estancias del pilar'; });
+  };
   // BACKGROUND: baja clientes + lotes frescos, cachea y devuelve hogares actualizados.
   window.estHogaresRefresh = function(cb){
     var pend=2;
@@ -17484,6 +17495,7 @@ if('serviceWorker' in navigator){
     document.querySelectorAll('#p-estancias .est-sub').forEach(function(s){s.classList.toggle('on',s.id==='est-'+sub);});
     try{localStorage.setItem('maleu_est_sub',sub);}catch(e){}
     if(sub==='hogares')rHogares();
+    if(sub==='clientes')rClientes();
     if(sub==='quien')rQuien();
     if(sub==='barrios')rBarrios();
     if(sub==='hoy'||sub==='semana'||sub==='segmentos'){ if(typeof window.crmRenderSub==='function')crmRenderSub(sub); }
@@ -17553,7 +17565,7 @@ if('serviceWorker' in navigator){
     }).catch(function(){});
   }
   function _estBadge(estado){
-    var m={activo:['🟢','Activo','#2E7D32','#E8F5E9'],dormido:['🟠','Dormido','#E65100','#FFF3E0'],inactivo:['🔴','Inactivo','#C62828','#FFEBEE'],sin:['⚪','Sin compras','#7A4A4A','#F5F0E6']};
+    var m={activo:['🟢','Activo','#2E7D32','#E8F5E9'],dormido:['🟠','Dormido','#E65100','#FFF3E0'],inactivo:['🔴','Inactivo','#C62828','#FFEBEE'],nuevo:['🆕','Nuevo','#2563EB','#EAF1FF'],sin:['⚪','Sin compras','#7A4A4A','#F5F0E6']};
     var b=m[estado]||m.sin;
     return '<span class="est-badge" style="color:'+b[2]+';background:'+b[3]+'">'+b[0]+' '+b[1]+'</span>';
   }
@@ -17849,6 +17861,94 @@ if('serviceWorker' in navigator){
           +'<div class="est-bar2-v">'+x.act+'/'+x.tot+'</div></div>';
       }).join('')+'</div>';
       host.innerHTML=h;
+    });
+  };
+
+  // ─────────── sub-tab CLIENTES (individuales de Estancias del Pilar) ───────────
+  var _estCli=null;
+  var _cliFiltro={busq:'',orden:'ultima',estado:''};
+  function _cliEstadoNorm(c){ return String(c.estado||'').trim().toLowerCase()||'sin'; }
+  function _cliEnsure(cb){
+    if(_estCli){ cb(); return; }
+    if(typeof window.estClientesSync!=='function'){ cb('nocrm'); return; }
+    var raw=window.estClientesSync(), painted=false;
+    if(raw){ _estCli=raw; cb(); painted=true; }
+    if(typeof window.estHogaresRefresh==='function'){
+      window.estHogaresRefresh(function(){ var f=window.estClientesSync(); if(f){ _estCli=f; if(painted)_cliRenderList(); else cb(); } });
+    } else if(!painted){ cb('nocrm'); }
+  }
+  function _cliCard(c){
+    var est=_cliEstadoNorm(c);
+    var loc=(c.subBarrio||'')+(c.lote?' · Lote '+c.lote:'');
+    var ult=(typeof c.diasUltima==='number'&&c.diasUltima>=0)?(esc(c.ultimaFecha||'')+' · hace '+c.diasUltima+'d'):'sin compras';
+    var tel=c.telDisplay||c.tel||'';
+    return '<div class="hog-card" onclick="crmOpenCliente(\''+encodeURIComponent(c.key)+'\')">'
+      +'<div class="hog-card-top"><div style="min-width:0">'
+      +'<div class="hog-card-name">'+esc(c.nombre)+' '+_estBadge(est)+(c.vip?' <span class="hog-mergedbadge" style="color:#8a6d1f;background:#FFF3D6">★ VIP</span>':'')+' <span class="hog-open">ver ›</span></div>'
+      +'<div class="hog-card-sub">'+esc(loc||'—')+' · últ: '+ult+'</div></div>'
+      +'<div class="hog-card-val"><b>'+money(c.facturado)+'</b><small>'+(c.entregados||0)+' pedidos</small></div></div>'
+      +'<div class="hog-card-stats">'
+      +'<span class="hog-stat">Ticket <b>'+money(c.ticket)+'</b></span>'
+      +'<span class="hog-stat">Deuda <b style="color:'+((c.deuda>0)?'var(--r)':'var(--ink)')+'">'+money(c.deuda)+'</b></span>'
+      +(tel?'<span class="hog-stat">📞 <b class="est-tel" style="cursor:pointer" onclick="event.stopPropagation();crmCopyTel(\''+tel+'\')">'+esc(tel)+'</b></span>':'')
+      +'</div></div>';
+  }
+  function _cliFilteredSorted(){
+    var arr=(_estCli||[]).filter(function(c){
+      if(_cliFiltro.estado && _cliEstadoNorm(c)!==_cliFiltro.estado) return false;
+      if(_cliFiltro.busq){ var hay=((c.nombre||'')+' '+(c.subBarrio||'')+' '+(c.lote||'')+' '+(c.telDisplay||c.tel||'')).toLowerCase(); if(hay.indexOf(_cliFiltro.busq)<0) return false; }
+      return true;
+    });
+    var o=_cliFiltro.orden;
+    arr.sort(function(a,b){
+      if(o==='facturado') return b.facturado-a.facturado;
+      if(o==='pedidos') return (b.entregados-a.entregados)||(b.facturado-a.facturado);
+      if(o==='ticket') return (b.ticket||0)-(a.ticket||0);
+      if(o==='nombre') return String(a.nombre||'').localeCompare(String(b.nombre||''));
+      return ((a.diasUltima<0?99999:a.diasUltima)-(b.diasUltima<0?99999:b.diasUltima));
+    });
+    return arr;
+  }
+  function _cliRenderList(){
+    var box=E$('estCliList'); if(!box)return;
+    var arr=_cliFilteredSorted();
+    if(!arr.length){ box.innerHTML='<div class="est-soon"><div class="est-soon-i">🔍</div><div>Ningún cliente con ese filtro.</div></div>'; return; }
+    box.innerHTML=arr.slice(0,400).map(_cliCard).join('');
+    var c=E$('estCliCount'); if(c)c.textContent=arr.length+' clientes';
+  }
+  window.estCliBusq=function(v){ _cliFiltro.busq=(v||'').toLowerCase().trim(); _cliRenderList(); };
+  window.estCliOrden=function(o){ _cliFiltro.orden=o; document.querySelectorAll('#estClientes .est-chip[data-o]').forEach(function(b){b.classList.toggle('on',b.dataset.o===o);}); _cliRenderList(); };
+  window.estCliEstado=function(e){ _cliFiltro.estado=e; document.querySelectorAll('#estClientes .est-chip[data-e]').forEach(function(b){b.classList.toggle('on',b.dataset.e===e);}); _cliRenderList(); };
+  window.rClientes=function(){
+    var host=E$('estClientes'); host.innerHTML='<div class="loading">Cargando clientes…</div>';
+    _cliEnsure(function(err){
+      if(err==='nocrm'){ host.innerHTML=_nocrm(); return; }
+      var C=_estCli||[], act=0,dorm=0,inact=0,nuev=0,fact=0;
+      C.forEach(function(c){ var e=_cliEstadoNorm(c); if(e==='activo')act++; else if(e==='dormido')dorm++; else if(e==='inactivo')inact++; else if(e==='nuevo')nuev++; fact+=(c.facturado||0); });
+      var html='<div class="est-kpis">'
+        +'<div class="est-kpi"><div class="est-kpi-l">Clientes</div><div class="est-kpi-v">'+C.length+'</div><div class="est-kpi-s" style="color:var(--bl)">de Estancias del Pilar</div></div>'
+        +'<div class="est-kpi"><div class="est-kpi-l">Activos</div><div class="est-kpi-v" style="color:var(--gd)">'+act+'</div><div class="est-kpi-s" style="color:var(--bl)">'+dorm+' dormidos · '+inact+' inactivos</div></div>'
+        +'<div class="est-kpi"><div class="est-kpi-l">Nuevos</div><div class="est-kpi-v" style="color:#2563EB">'+nuev+'</div><div class="est-kpi-s" style="color:var(--bl)">recientes</div></div>'
+        +'<div class="est-kpi"><div class="est-kpi-l">Facturado</div><div class="est-kpi-v">'+money(fact)+'</div><div class="est-kpi-s" style="color:var(--bl)">histórico</div></div>'
+        +'</div>';
+      html+='<div class="est-ctl">'
+        +'<input class="est-search" type="text" placeholder="Buscar nombre, lote, sub-barrio o teléfono…" oninput="estCliBusq(this.value)">'
+        +'<div class="est-ctl-row"><span class="est-ctl-lbl">Ordenar</span>'
+        +'<button class="est-chip on" data-o="ultima" onclick="estCliOrden(\'ultima\')">🕒 Compra reciente</button>'
+        +'<button class="est-chip" data-o="facturado" onclick="estCliOrden(\'facturado\')">💰 Más facturan</button>'
+        +'<button class="est-chip" data-o="pedidos" onclick="estCliOrden(\'pedidos\')">📦 Más pedidos</button>'
+        +'<button class="est-chip" data-o="ticket" onclick="estCliOrden(\'ticket\')">🎫 Mayor ticket</button>'
+        +'<button class="est-chip" data-o="nombre" onclick="estCliOrden(\'nombre\')">A-Z</button></div>'
+        +'<div class="est-ctl-row"><span class="est-ctl-lbl">Estado</span>'
+        +'<button class="est-chip on" data-e="" onclick="estCliEstado(\'\')">Todos</button>'
+        +'<button class="est-chip" data-e="activo" onclick="estCliEstado(\'activo\')">🟢 Activos</button>'
+        +'<button class="est-chip" data-e="dormido" onclick="estCliEstado(\'dormido\')">🟠 Dormidos</button>'
+        +'<button class="est-chip" data-e="inactivo" onclick="estCliEstado(\'inactivo\')">🔴 Inactivos</button>'
+        +'<button class="est-chip" data-e="nuevo" onclick="estCliEstado(\'nuevo\')">🆕 Nuevos</button>'
+        +'<span style="margin-left:auto;font-size:11px;color:var(--bl);font-weight:700" id="estCliCount"></span></div>'
+        +'</div><div id="estCliList"></div>';
+      host.innerHTML=html;
+      _cliRenderList();
     });
   };
 
