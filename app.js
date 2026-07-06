@@ -109,6 +109,8 @@ const COMBOS = [
     flag: '🇦🇷',
     categoria: '🇦🇷 Mundial 2026',
     zonas: ['estancias', 'pilar'],
+    terminado: true,   // 16avos ya se jugaron — combo visible pero no comprable
+    terminadoLabel: 'Terminado · Argentina pasó a Octavos 🎉',
     slots: [
       { label: 'Pizza',     unidad: 'pack de pizzas clásicas x2', pick: 1, options: { cat: 'Pack Pizzas x2' } },
       { label: 'Empanadas', unidad: 'pack de empanadas x8',       pick: 1, options: { cat: 'Empanadas' } },
@@ -1515,12 +1517,21 @@ function _comboCardHTML(c) {
   const priceHtml = '<span class="product-price">' +
     (tachado > c.precio ? '<s class="combo-price-old">' + ars(tachado) + '</s> ' : '') + ars(c.precio) + '</span>';
   const choices = comboHasChoices(c);
-  const btn = choices
-    ? '<button class="add-btn" onclick="openComboConfig(\'' + c.id + '\')">Armar combo</button>'
-    : '<button class="add-btn" onclick="addComboDefault(\'' + c.id + '\')">+ Agregar</button>';
+  // Combo terminado (evento pasó): botón bloqueado + label custom. Se sigue viendo
+  // en la tienda pero sin acción posible.
+  const btn = c.terminado
+    ? '<button class="add-btn combo-btn-terminado" disabled aria-disabled="true">Terminado</button>'
+    : (choices
+      ? '<button class="add-btn" onclick="openComboConfig(\'' + c.id + '\')">Armar combo</button>'
+      : '<button class="add-btn" onclick="addComboDefault(\'' + c.id + '\')">+ Agregar</button>');
+  const terminadoBadge = c.terminado
+    ? '<span class="combo-terminado-badge">' + (c.terminadoLabel || 'Terminado') + '</span>'
+    : '';
+  const cardCls = c.terminado ? ' combo-card-terminado' : '';
 
   if (c.fullCard) {
-    return '<article class="product-card combo-card combo-card-full" data-id="' + c.id + '">' +
+    return '<article class="product-card combo-card combo-card-full' + cardCls + '" data-id="' + c.id + '">' +
+      terminadoBadge +
       '<img class="combo-full-img" src="img/' + c.img + '" alt="' + c.nombre + '" loading="lazy">' +
       '<div class="combo-full-foot">' +
         _comboPersonasHTML(c) +
@@ -1531,7 +1542,8 @@ function _comboCardHTML(c) {
     '</article>';
   }
 
-  return '<article class="product-card combo-card" data-id="' + c.id + '">' +
+  return '<article class="product-card combo-card' + cardCls + '" data-id="' + c.id + '">' +
+    terminadoBadge +
     '<div class="product-thumb">' +
       '<span class="combo-flag">' + (c.flag || '🎁') + '</span>' +
       '<img class="product-thumb-img" src="img/' + c.img + '" alt="' + c.nombre + '" loading="lazy" width="400" height="400" style="object-position:' + (c.imgPos||'center') + '" onerror="this.style.display=\'none\'">' +
@@ -1705,6 +1717,7 @@ function addComboInstance(comboId, comp, picks) {
 /* Combo sin elecciones reales: arma la config por defecto y la agrega directo. */
 function addComboDefault(comboId) {
   const c = COMBO_MAP[comboId]; if (!c) return;
+  if (c.terminado) { toast('⚠ Este combo ya no está disponible', 3000); return; }
   const r = resolveComp(c, defaultSelection(c));
   addComboInstance(comboId, r.comp, r.picks);
 }
@@ -1776,6 +1789,7 @@ function updateStockBadgesCombos() {
 let _comboConfig = null;  // { comboId, sel:[[prodId,...], ...] }
 function openComboConfig(comboId) {
   const c = COMBO_MAP[comboId]; if (!c) return;
+  if (c.terminado) { toast('⚠ Este combo ya no está disponible', 3000); return; }
   _comboConfig = { comboId, sel: defaultSelection(c) };
   _ensureComboModal();
   renderComboConfig();
@@ -3390,7 +3404,7 @@ function updatePromoBar() {
     if (bulkDiscountActive()) chips.push('🔥 10% OFF superando $100.000');
     // Aclaraciones legales para evitar el malentendido "20% off si pago efectivo Y supero 100K":
     // los descuentos NO se suman, y los combos NO participan de la promoción.
-    if (chips.length > 1) chips.push('ℹ️ No acumulables — aplica solo el mayor');
+    if (chips.length > 1) chips.push('ℹ️ No son acumulables · Máximo 10% OFF por pedido');
     chips.push('🎁 Combos no participan de esta promoción');
     // Duplicar la secuencia para el efecto marquee continuo
     var seq = chips.concat(chips).join(' &nbsp;·&nbsp; ') + ' &nbsp;·&nbsp;';
