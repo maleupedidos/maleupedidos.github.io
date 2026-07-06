@@ -562,6 +562,25 @@ body{font-family:'Inter',-apple-system,'Segoe UI',system-ui,sans-serif;backgroun
 .est-bar2-t{flex:1;height:22px;background:#F2E8C7;border-radius:8px;overflow:hidden;display:flex}
 .est-bar2-seg{height:100%}
 .est-bar2-v{flex:0 0 auto;min-width:70px;text-align:right;font-weight:800;font-size:11px;color:var(--ink)}
+/* acciones de fusión */
+.hog-actions{display:flex;gap:7px;align-items:center;flex-wrap:wrap;margin-top:9px;padding-top:9px;border-top:1px solid #F2E8C7}
+.hog-actbtn{background:none;border:1px solid var(--cd);border-radius:14px;padding:4px 11px;font-size:11px;font-weight:700;color:var(--ink2);cursor:pointer;font-family:inherit}
+.hog-actbtn:hover{border-color:var(--o);color:var(--o)}
+.hog-mergedbadge{font-size:10px;font-weight:800;color:#2563EB;background:#EAF1FF;padding:3px 9px;border-radius:12px}
+.hog-warn{font-size:10px;font-weight:700;color:#B45309;background:#FEF3C7;padding:3px 9px;border-radius:12px}
+.est-modal-ov{position:fixed;inset:0;background:rgba(51,28,28,.55);z-index:9999;display:flex;align-items:flex-end;justify-content:center;padding:0}
+@media(min-width:768px){.est-modal-ov{align-items:center;padding:20px}}
+.est-modal{background:#fff;border-radius:16px 16px 0 0;width:100%;max-width:560px;max-height:82vh;display:flex;flex-direction:column;padding:16px;box-shadow:0 -6px 30px rgba(0,0,0,.25)}
+@media(min-width:768px){.est-modal{border-radius:16px}}
+.est-modal-h{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:8px}
+.est-modal-h b{font-size:16px;color:var(--ink)}
+.est-modal-sub{font-size:11px;color:var(--bl);font-weight:600;margin-top:2px}
+.est-modal-x{background:none;border:none;font-size:20px;color:var(--bl);cursor:pointer;line-height:1;padding:2px 6px}
+.est-modal-note{font-size:12px;color:var(--ink2);background:#FFFBF2;border:1px solid var(--cd);border-radius:10px;padding:9px 11px;margin-bottom:10px;line-height:1.45}
+.est-modal-list{overflow-y:auto;margin-top:10px;flex:1}
+.est-modal-cand{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:10px 4px;border-bottom:1px solid #F2E8C7}
+.est-modal-cand-n{font-size:13px;font-weight:800;color:var(--ink)}
+.est-modal-cand-s{font-size:11px;color:var(--bl);font-weight:600;margin-top:1px}
 
 /* ── BBDD (CRM) ── */
 .bbdd-tabs{display:flex;gap:0;border-bottom:1px solid var(--border);margin-bottom:16px}
@@ -17319,15 +17338,45 @@ if('serviceWorker' in navigator){
   };
 
   // ── Motor de hogares (reusa _hogBuild del CRM vía window.estHogaresData) ──
-  var _estHog=null;            // cache de hogares {hogares, prospectos}
+  var EST_API='https://script.google.com/macros/s/AKfycbxmrG5YVSshcYezk8lXFx_uxb7NFGcb9EfTXc7dsIN4rZyj73CET4mk_aKPFPDY2wNi/exec';
+  var _estHog=null;            // hogares ya con merges aplicados {hogares, prospectos}
+  var _estRaw=null;            // hogares crudos de _hogBuild (sin merges)
+  var _estMerges=null;         // reglas [{from,to,nota}]
   var _hogFiltro={busq:'',orden:'facturado',estado:''};
+  function _estEstado(d){ if(d<0)return 'sin'; if(d<=28)return 'activo'; if(d<=90)return 'dormido'; return 'inactivo'; }
+  function _combineHog(to,from){
+    to.members=(to.members||[]).concat(from.members||[]);
+    ['pedidos','entregados','facturado','cobrado','deuda'].forEach(function(f){ to[f]=(to[f]||0)+(from[f]||0); });
+    if(typeof from.diasUltima==='number'&&from.diasUltima>=0&&(to.diasUltima<0||from.diasUltima<to.diasUltima)){ to.diasUltima=from.diasUltima; to.ultimaFecha=from.ultimaFecha; }
+    to.ticket=to.entregados>0?Math.round(to.facturado/to.entregados):0;
+    to.estado=_estEstado(to.diasUltima);
+    if(from.vip)to.vip=true;
+  }
+  function _applyMerges(raw,merges){
+    var hogares=(raw.hogares||[]).map(function(h){ var c={}; for(var k in h)c[k]=h[k]; c.members=(h.members||[]).slice(); return c; });
+    var byKey={}; hogares.forEach(function(h){ byKey[h.key]=h; });
+    var toMap={}; (merges||[]).forEach(function(m){ if(m.from&&m.to)toMap[m.from]=m.to; });
+    function resolve(k){ var seen={}; while(toMap[k]&&!seen[k]){ seen[k]=1; k=toMap[k]; } return k; }
+    var absorbed={};
+    (merges||[]).forEach(function(m){
+      var fromH=byKey[m.from], toH=byKey[resolve(m.from)];
+      if(!fromH||!toH||fromH===toH||absorbed[m.from])return;
+      _combineHog(toH,fromH); absorbed[m.from]=toH.key;
+      toH._mergedKeys=(toH._mergedKeys||[]); toH._mergedKeys.push(m.from);
+    });
+    return { hogares: hogares.filter(function(h){return !absorbed[h.key];}), prospectos: raw.prospectos||[] };
+  }
   function _estEnsure(cb){
     if(_estHog){ cb(); return; }
-    if(typeof window.estHogaresData!=='function'){
-      cb('nocrm'); return;
-    }
-    window.estHogaresData(function(data){ _estHog=data||{hogares:[],prospectos:[]}; cb(); });
+    if(typeof window.estHogaresData!=='function'){ cb('nocrm'); return; }
+    window.estHogaresData(function(data){
+      _estRaw=data||{hogares:[],prospectos:[]};
+      fetch(EST_API+'?action=hogaresMerge&t='+Date.now()).then(function(r){return r.json();}).then(function(d){
+        _estMerges=(d&&d.merges)||[]; _estHog=_applyMerges(_estRaw,_estMerges); cb();
+      }).catch(function(){ _estMerges=[]; _estHog=_applyMerges(_estRaw,[]); cb(); });
+    });
   }
+  function _estReload(){ _estHog=null; _estRaw=null; var s=(function(){try{return localStorage.getItem('maleu_est_sub');}catch(e){return 'pulso';}})()||'pulso'; if(s==='pulso')rEstancias(); else if(s==='hogares')rHogares(); else if(s==='quien')rQuien(); else if(s==='barrios')rBarrios(); }
   function _estBadge(estado){
     var m={activo:['🟢','Activo','#2E7D32','#E8F5E9'],dormido:['🟠','Dormido','#E65100','#FFF3E0'],inactivo:['🔴','Inactivo','#C62828','#FFEBEE'],sin:['⚪','Sin compras','#7A4A4A','#F5F0E6']};
     var b=m[estado]||m.sin;
@@ -17485,7 +17534,18 @@ if('serviceWorker' in navigator){
       +'<span class="hog-stat">Frecuencia <b>'+(h.freq?('~'+h.freq+'d'):'—')+'</b></span>'
       +'<span class="hog-stat">Deuda <b style="color:'+((h.deuda>0)?'var(--r)':'var(--ink)')+'">'+money(h.deuda)+'</b></span>'
       +(h.prodTop?'<span class="hog-stat">Suele llevar <b>'+esc(h.prodTop)+'</b></span>':'')
-      +'</div>'+(mems?'<div class="hog-members">'+mems+'</div>':'')+'</div>';
+      +'</div>'+(mems?'<div class="hog-members">'+mems+'</div>':'')
+      +_hogActions(h)+'</div>';
+  }
+  function _hogActions(h){
+    var warn=(!h.sub||h.sub==='-'||!h.lote||h.lote==='-')?'<span class="hog-warn">⚠️ sub-barrio/lote faltante — conviene fusionarlo al lote correcto</span>':'';
+    var merged=(h._mergedKeys&&h._mergedKeys.length)
+      ? '<span class="hog-mergedbadge">🔗 fusionado ('+(h._mergedKeys.length+1)+' lotes)</span>'
+        +'<button class="hog-actbtn" onclick="event.stopPropagation();estUnmerge(\''+esc(h.key)+'\')">separar</button>'
+      : '';
+    return '<div class="hog-actions">'
+      +'<button class="hog-actbtn" onclick="event.stopPropagation();estMergeOpen(\''+esc(h.key)+'\')">🔗 Fusionar con otro lote</button>'
+      +merged+warn+'</div>';
   }
 
   // ─────────── sub-tab HOGARES ───────────
@@ -17602,6 +17662,56 @@ if('serviceWorker' in navigator){
           +'<div class="est-bar2-v">'+x.act+'/'+x.tot+'</div></div>';
       }).join('')+'</div>';
       host.innerHTML=h;
+    });
+  };
+
+  // ─────────── HERRAMIENTA DE FUSIÓN DE HOGARES ───────────
+  var _estMergeFrom=null, _estMergeCands=[];
+  function _toast(m){ try{ if(typeof toast==='function')toast(m); else alert(m); }catch(e){ alert(m); } }
+  window.estMergeOpen=function(fromKey){
+    var from=(_estHog.hogares||[]).filter(function(h){return h.key===fromKey;})[0];
+    if(!from){ _toast('No encontré el hogar'); return; }
+    _estMergeFrom=fromKey;
+    _estMergeCands=(_estHog.hogares||[]).filter(function(h){return h.key!==fromKey;}).sort(function(a,b){return b.facturado-a.facturado;});
+    var ov=document.createElement('div'); ov.id='estMergeModal'; ov.className='est-modal-ov';
+    ov.innerHTML='<div class="est-modal"><div class="est-modal-h"><div><b>Fusionar hogar</b>'
+      +'<div class="est-modal-sub">'+esc(_hogNombre(from))+' · '+esc(from.sub||'')+' Lote '+esc(from.lote)+'</div></div>'
+      +'<button class="est-modal-x" onclick="estMergeClose()">✕</button></div>'
+      +'<div class="est-modal-note">Elegí el hogar <b>destino</b>: los pedidos de <b>'+esc(_hogNombre(from))+'</b> se suman ahí. Es reversible (botón «separar»).</div>'
+      +'<input id="estMergeSearch" class="est-search" placeholder="Buscar familia, apellido, lote o sub-barrio…" oninput="estMergeFilter(this.value)">'
+      +'<div id="estMergeList" class="est-modal-list"></div></div>';
+    document.body.appendChild(ov);
+    ov.addEventListener('click',function(e){ if(e.target===ov)estMergeClose(); });
+    estMergeFilter('');
+  };
+  window.estMergeClose=function(){ var m=document.getElementById('estMergeModal'); if(m)m.remove(); _estMergeFrom=null; };
+  window.estMergeFilter=function(v){
+    v=(v||'').toLowerCase().trim();
+    var box=document.getElementById('estMergeList'); if(!box)return;
+    var arr=_estMergeCands.filter(function(h){ if(!v)return true; var hay=((h.familia||'')+' '+(h.titular||'')+' '+(h.sub||'')+' '+(h.lote||'')+' '+_hogInts(h).join(' ')).toLowerCase(); return hay.indexOf(v)>=0; }).slice(0,40);
+    box.innerHTML=arr.map(function(h){
+      return '<div class="est-modal-cand"><div style="min-width:0"><div class="est-modal-cand-n">'+esc(_hogNombre(h))+'</div>'
+        +'<div class="est-modal-cand-s">'+esc(h.sub||'')+' · Lote '+esc(h.lote)+' · '+(h.entregados||0)+' ped · '+money(h.facturado)+'</div></div>'
+        +'<button class="est-chip" onclick="estMergePick(\''+esc(_estMergeFrom)+'\',\''+esc(h.key)+'\')">Fusionar acá</button></div>';
+    }).join('')||'<div style="padding:14px;color:var(--bl);font-size:13px">Sin resultados.</div>';
+  };
+  window.estMergePick=function(fromKey,toKey){
+    if(!confirm('¿Fusionar este hogar dentro del destino? (es reversible)'))return;
+    fetch(EST_API,{method:'POST',body:JSON.stringify({action:'hogaresMergeSave',from:fromKey,to:toKey})})
+      .then(function(r){return r.json();}).then(function(d){
+        if(d&&d.ok){ estMergeClose(); _toast('Hogares fusionados'); _estReload(); }
+        else _toast('Error: '+((d&&d.error)||'no se pudo'));
+      }).catch(function(){ _toast('Error de red'); });
+  };
+  window.estUnmerge=function(key){
+    var h=(_estHog.hogares||[]).filter(function(x){return x.key===key;})[0];
+    if(!h||!h._mergedKeys||!h._mergedKeys.length)return;
+    if(!confirm('¿Separar los '+h._mergedKeys.length+' lote(s) fusionados en este hogar?'))return;
+    var pend=h._mergedKeys.length, err=false;
+    h._mergedKeys.forEach(function(fk){
+      fetch(EST_API,{method:'POST',body:JSON.stringify({action:'hogaresMergeSave',from:fk,del:1})})
+        .then(function(r){return r.json();}).then(function(d){ if(!(d&&d.ok))err=true; if(--pend<=0){ _toast(err?'Separado con avisos':'Separado'); _estReload(); } })
+        .catch(function(){ if(--pend<=0)_estReload(); });
     });
   };
 })();
