@@ -12933,26 +12933,26 @@ if('serviceWorker' in navigator){
   }
 
   // ── Puente para la tab "Estancias del Pilar": reusa el MISMO motor de hogares
-  // (_hogBuild) que BBDD→Hogares, garantizando consistencia. Asegura que los datos
-  // (clientes + master de lotes) estén cargados y devuelve {hogares, prospectos}.
-  window.estHogaresData = function(cb){
-    function ready(){ try{ cb(_hogBuild()); }catch(e){ cb({hogares:[],prospectos:[]}); } }
-    var needCli = !(crmClientes && crmClientes.length);
-    var needLotes = !_mapaLotesData;
-    if (needCli){ try{ var cc=JSON.parse(localStorage.getItem('maleu_crm_clientes_v1')||'null'); if(cc&&cc.length){ crmClientes=cc; needCli=false; } }catch(e){} }
-    if (!needCli && !needLotes){ ready(); return; }
-    var pend = 0;
-    function done(){ if(--pend<=0) ready(); }
-    if (needLotes){ pend++; _mapaLoadLotesData(done); }
-    if (needCli){
-      pend++;
-      fetch(CRM_API + '?action=crmClientes').then(function(r){return r.json();}).then(function(d){
-        crmClientes = d.clientes || [];
-        try{ localStorage.setItem('maleu_crm_clientes_v1', JSON.stringify(crmClientes)); }catch(e){}
-        done();
-      }).catch(function(){ crmClientes = crmClientes || []; done(); });
-    }
-    if (pend===0) ready();
+  // (_hogBuild) que BBDD→Hogares. Patrón instantáneo: estHogaresSync() pinta YA desde
+  // cache local (localStorage) sin network; estHogaresRefresh() actualiza en 2do plano.
+  function _estCacheLotes(){
+    try{ localStorage.setItem('maleu_crm_lotes_v1', JSON.stringify(Object.keys(_mapaLotesData||{}).map(function(k){return _mapaLotesData[k];}))); }catch(e){}
+  }
+  // SÍNCRONO: devuelve {hogares,prospectos} desde cache, o null si no hay nada cacheado.
+  window.estHogaresSync = function(){
+    if (!(crmClientes && crmClientes.length)){ try{ var cc=JSON.parse(localStorage.getItem('maleu_crm_clientes_v1')||'null'); if(cc&&cc.length)crmClientes=cc; }catch(e){} }
+    if (!_mapaLotesData){ try{ var lc=JSON.parse(localStorage.getItem('maleu_crm_lotes_v1')||'null'); if(lc&&lc.length){ _mapaLotesData={}; lc.forEach(function(r){ _mapaLotesData[_crmNormName(r.sub)+'|'+_loteNorm(r.lote)]=r; }); } }catch(e){} }
+    if (!(crmClientes && crmClientes.length)) return null;
+    try{ return _hogBuild(); }catch(e){ return null; }
+  };
+  // BACKGROUND: baja clientes + lotes frescos, cachea y devuelve hogares actualizados.
+  window.estHogaresRefresh = function(cb){
+    var pend=2;
+    function done(){ if(--pend<=0){ try{ cb(_hogBuild()); }catch(e){ cb({hogares:[],prospectos:[]}); } } }
+    fetch(CRM_API + '?action=crmClientes').then(function(r){return r.json();}).then(function(d){
+      crmClientes = d.clientes || []; try{ localStorage.setItem('maleu_crm_clientes_v1', JSON.stringify(crmClientes)); }catch(e){} done();
+    }).catch(done);
+    _mapaLoadLotesData(function(){ _estCacheLotes(); done(); });
   };
 
   // Tooltip de cada lote: "Lote N · Apellido" si hay familia cargada.
@@ -17337,7 +17337,7 @@ if('serviceWorker' in navigator){
     if(sub==='barrios')rBarrios();
   };
 
-  // ── Motor de hogares (reusa _hogBuild del CRM vía window.estHogaresData) ──
+  // ── Motor de hogares (reusa _hogBuild del CRM vía estHogaresSync/Refresh) ──
   var EST_API='https://script.google.com/macros/s/AKfycbxmrG5YVSshcYezk8lXFx_uxb7NFGcb9EfTXc7dsIN4rZyj73CET4mk_aKPFPDY2wNi/exec';
   var _estHog=null;            // hogares ya con merges aplicados {hogares, prospectos}
   var _estRaw=null;            // hogares crudos de _hogBuild (sin merges)
@@ -17366,17 +17366,39 @@ if('serviceWorker' in navigator){
     });
     return { hogares: hogares.filter(function(h){return !absorbed[h.key];}), prospectos: raw.prospectos||[] };
   }
+  function _mergesCache(){ try{ return JSON.parse(localStorage.getItem('maleu_est_merges_v1')||'[]')||[]; }catch(e){ return []; } }
   function _estEnsure(cb){
-    if(_estHog){ cb(); return; }
-    if(typeof window.estHogaresData!=='function'){ cb('nocrm'); return; }
-    window.estHogaresData(function(data){
-      _estRaw=data||{hogares:[],prospectos:[]};
-      fetch(EST_API+'?action=hogaresMerge&t='+Date.now()).then(function(r){return r.json();}).then(function(d){
-        _estMerges=(d&&d.merges)||[]; _estHog=_applyMerges(_estRaw,_estMerges); cb();
-      }).catch(function(){ _estMerges=[]; _estHog=_applyMerges(_estRaw,[]); cb(); });
+    if(_estHog){ cb(); return; }                                   // en memoria → instantáneo
+    if(typeof window.estHogaresSync!=='function'){ cb('nocrm'); return; }
+    var painted=false;
+    var raw=window.estHogaresSync();                               // SÍNCRONO desde cache
+    if(raw){ _estRaw=raw; _estMerges=_mergesCache(); _estHog=_applyMerges(raw,_estMerges); cb(); painted=true; }
+    if(typeof window.estHogaresRefresh!=='function'){ if(!painted)cb('nocrm'); return; }
+    // Refresco en 2do plano (no bloquea): clientes+lotes frescos + merges frescos.
+    window.estHogaresRefresh(function(fresh){
+      _estRaw=fresh||{hogares:[],prospectos:[]};
+      fetch(EST_API+'?action=hogaresMerge&t='+Date.now()).then(function(r){return r.json();}).then(function(d){ _estMerges=(d&&d.merges)||[]; })
+        .catch(function(){ _estMerges=_estMerges||_mergesCache(); })
+        .then(function(){
+          try{ localStorage.setItem('maleu_est_merges_v1',JSON.stringify(_estMerges||[])); }catch(e){}
+          _estHog=_applyMerges(_estRaw,_estMerges||[]);
+          if(painted) _estRerender(); else cb();
+        });
     });
   }
-  function _estReload(){ _estHog=null; _estRaw=null; var s=(function(){try{return localStorage.getItem('maleu_est_sub');}catch(e){return 'pulso';}})()||'pulso'; if(s==='pulso')rEstancias(); else if(s==='hogares')rHogares(); else if(s==='quien')rQuien(); else if(s==='barrios')rBarrios(); }
+  // Re-pinta el sub activo SIN spinner (datos ya en memoria → sincrónico).
+  function _estRerender(){
+    var s=(function(){try{return localStorage.getItem('maleu_est_sub');}catch(e){return 'pulso';}})()||'pulso';
+    if(s==='hogares'){ if(document.getElementById('estHogList')) _hogRenderList(); else rHogares(); }
+    else if(s==='quien')rQuien(); else if(s==='barrios')rBarrios();
+  }
+  // Tras fusionar/separar: refresca solo las reglas (rápido) y re-aplica sobre los hogares en memoria.
+  function _estReload(){
+    fetch(EST_API+'?action=hogaresMerge&t='+Date.now()).then(function(r){return r.json();}).then(function(d){
+      _estMerges=(d&&d.merges)||[]; try{ localStorage.setItem('maleu_est_merges_v1',JSON.stringify(_estMerges)); }catch(e){}
+      if(_estRaw){ _estHog=_applyMerges(_estRaw,_estMerges); _estRerender(); }
+    }).catch(function(){});
+  }
   function _estBadge(estado){
     var m={activo:['🟢','Activo','#2E7D32','#E8F5E9'],dormido:['🟠','Dormido','#E65100','#FFF3E0'],inactivo:['🔴','Inactivo','#C62828','#FFEBEE'],sin:['⚪','Sin compras','#7A4A4A','#F5F0E6']};
     var b=m[estado]||m.sin;
