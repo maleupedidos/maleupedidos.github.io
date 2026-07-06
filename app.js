@@ -158,9 +158,9 @@ const COMBOS = [
     emoji: '🎁',
     zonas: ['estancias', 'pilar'],
     slots: [
-      { label: 'Pizza premium', unidad: 'pizza individual',   pick: 1, options: { cat: 'Pizzas Individuales' } },
-      { label: 'Empanadas',     unidad: 'pack de empanadas',  pick: 1, options: { cat: 'Empanadas' } },
-      { label: 'Postre',        unidad: 'Franui',             pick: 1, options: { ids: [13] } },
+      { label: 'Pizza premium', unidad: 'pizza individual',      pick: 1, options: { cat: 'Pizzas Individuales' } },
+      { label: 'Empanadas',     unidad: 'pack de empanadas x8',  pick: 1, options: { cat: 'Empanadas' } },
+      { label: 'Postre',        unidad: 'Franui',                pick: 1, options: { ids: [13] } },
     ],
   },
   {
@@ -173,8 +173,8 @@ const COMBOS = [
     emoji: '🎁',
     zonas: ['estancias', 'pilar'],
     slots: [
-      { label: 'Pizza',  unidad: 'pack de pizzas x2', pick: 1, options: { cat: 'Pack Pizzas x2' } },
-      { label: 'Postre', unidad: 'Franui',            pick: 1, options: { ids: [13] } },
+      { label: 'Pizza',  unidad: 'pack de pizzas clásicas x2', pick: 1, options: { cat: 'Pack Pizzas x2' } },
+      { label: 'Postre', unidad: 'Franui',                     pick: 1, options: { ids: [13] } },
     ],
   },
   {
@@ -187,9 +187,9 @@ const COMBOS = [
     emoji: '🎁',
     zonas: ['estancias', 'pilar'],
     slots: [
-      { label: 'Tarta',     unidad: 'tarta',              pick: 2, options: { cat: 'Tartas' } },      // dos iguales o distintas
-      { label: 'Empanadas', unidad: 'pack de empanadas',  pick: 1, options: { cat: 'Empanadas' } },
-      { label: 'Postre',    unidad: 'Franui',             pick: 1, options: { ids: [13] } },
+      { label: 'Tarta',     unidad: 'tarta',                 pick: 2, options: { cat: 'Tartas' } },      // dos iguales o distintas
+      { label: 'Empanadas', unidad: 'pack de empanadas x8',  pick: 1, options: { cat: 'Empanadas' } },
+      { label: 'Postre',    unidad: 'Franui',                pick: 1, options: { ids: [13] } },
     ],
   },
   {
@@ -202,10 +202,10 @@ const COMBOS = [
     emoji: '🎁',
     zonas: ['estancias', 'pilar'],
     slots: [
-      { label: 'Pizza',       unidad: 'pack de pizzas x2',   pick: 2, options: { cat: 'Pack Pizzas x2' } },  // dos iguales o distintas
-      { label: 'Sorrentinos', unidad: 'pack de sorrentinos', pick: 1, options: { ids: [10, 9, 8] } },
-      { label: 'Empanadas',   unidad: 'pack de empanadas',   pick: 1, options: { cat: 'Empanadas' } },
-      { label: 'Tarta',       unidad: 'tarta',               pick: 2, options: { cat: 'Tartas' } },           // dos iguales o distintas
+      { label: 'Pizza',       unidad: 'pack de pizzas clásicas x2', pick: 2, options: { cat: 'Pack Pizzas x2' } },  // dos iguales o distintas
+      { label: 'Sorrentinos', unidad: 'pack de sorrentinos',        pick: 1, options: { ids: [10, 9, 8] } },
+      { label: 'Empanadas',   unidad: 'pack de empanadas x8',       pick: 1, options: { cat: 'Empanadas' } },
+      { label: 'Tarta',       unidad: 'tarta',                      pick: 2, options: { cat: 'Tartas' } },           // dos iguales o distintas
     ],
   },
 ];
@@ -1586,6 +1586,7 @@ function renderCombosSectionHTML() {
   return '<section class="cat-section combos-section" id="combos-ancla"><div class="cat-header">' +
     '<div class="cat-title">🎁 Combos</div>' +
     '<div class="cat-nota">Propuestas ya armadas a precio cerrado · Elegí los sabores y listo</div>' +
+    '<div class="combos-disclaimer">ℹ️ La oferta de combos no es acumulable a los descuentos.</div>' +
     '</div>' + groups + '</section>';
 }
 
@@ -3387,6 +3388,10 @@ function updatePromoBar() {
     var chips = [];
     if (cashDiscountActive()) chips.push('💵 10% OFF en efectivo');
     if (bulkDiscountActive()) chips.push('🔥 10% OFF superando $100.000');
+    // Aclaraciones legales para evitar el malentendido "20% off si pago efectivo Y supero 100K":
+    // los descuentos NO se suman, y los combos NO participan de la promoción.
+    if (chips.length > 1) chips.push('ℹ️ No acumulables — aplica solo el mayor');
+    chips.push('🎁 Combos no participan de esta promoción');
     // Duplicar la secuencia para el efecto marquee continuo
     var seq = chips.concat(chips).join(' &nbsp;·&nbsp; ') + ' &nbsp;·&nbsp;';
     msgEl.innerHTML = seq;
