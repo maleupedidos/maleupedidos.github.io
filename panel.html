@@ -4351,27 +4351,29 @@ function refreshContextual(){
     done();
     return;
   }
-  // Ventas / Resumen ejecutivo: histórico
+  // Ventas / Resumen ejecutivo: histórico. En 2do plano (sin tapar la pantalla).
   if(active==='ventas'){
-    showLoader('Recargando Ventas...',true);
     var pV=(typeof loadVentas==='function')?loadVentas():null;
-    Promise.resolve(pV).then(function(){hideLoader(true);done();},function(){hideLoader(true);done();});
+    Promise.resolve(pV).then(done,done);
     return;
   }
-  // Default: Inicio / Pedidos / Caja / Egresos / Stock / BBDD / Mi Portal
-  // Para tabs que no necesitan stock/OC/vendedores actualizado en tiempo real,
-  // usamos loadRapido() que es ~5x mas rapido (3 endpoints ligeros en paralelo
-  // vs admin completo). Foco: pedidos + cobros + caja.
-  // Para Stock, BBDD: necesitan load() completo. Para Inicio/Pedidos/Caja/Egresos:
-  // alcanza con rapido.
-  var usaRapido=(active==='inicio'||active==='pedidos'||active==='caja'||active==='egresos');
-  showLoader(usaRapido?'Actualizando...':'Actualizando todo...',true);
+  // Default: Inicio / Pedidos / Caja / Egresos / Stock / Estancias / etc.
+  // REGLA DE ORO: nunca tapar la pantalla al actualizar. El botón gira (spinner)
+  // y los datos se refrescan en background (stale-while-revalidate); la vista
+  // actual sigue usable y se re-pinta sola cuando llegan los datos frescos.
+  // Se usa loadRapido() (3 endpoints ligeros ~5s) salvo tabs que necesitan el
+  // admin completo (stock/OC/vendedores).
+  var usaRapido=(active==='inicio'||active==='pedidos'||active==='caja'||active==='egresos'||active==='estancias');
   var ps=[];
   if(usaRapido && typeof loadRapido==='function')ps.push(loadRapido());
   else if(typeof load==='function')ps.push(load());
   // En Inicio queremos también ventas (por la sección histórica embedida)
   if(active==='inicio'&&typeof loadVentas==='function')ps.push(loadVentas());
-  Promise.all(ps).then(function(){hideLoader(true);done();},function(){hideLoader(true);done();});
+  Promise.all(ps).then(function(){
+    // Estancias: re-pintar el sub activo YA con los datos frescos.
+    if(active==='estancias'&&typeof window.estRefreshActivo==='function'){ try{ estRefreshActivo(); }catch(e){} }
+    done();
+  },done);
 }
 
 // Atajo R: actualizar la tab activa (no rompe Ctrl+R del browser).
@@ -5440,32 +5442,41 @@ function guardarEditor(uid){
   // Tras la acción, scroll al top.
   window._forceTopOnRender=true;
   showLoader('Guardando cambios...');
-  fetch(API,{method:'POST',body:JSON.stringify({action:'editarPedido',hoja:ed.hoja,id:ed.id,row:ed.row,lineas:lineas,descuentoReceta:ed.receta||null,descuentoRecetaEditor:true,formaPago:ed.fp||''})})
+  // Snapshot del pedido para UI optimista antes de mandar
+  var _edHoja=ed.hoja, _edId=ed.id;
+  var _edLineas=lineas.map(function(l){return {a:l.a,q:l.q};});
+  var _edFP=ed.fp||'';
+  fetch(API,{method:'POST',body:JSON.stringify({action:'editarPedido',hoja:ed.hoja,id:ed.id,row:ed.row,lineas:lineas,descuentoReceta:ed.receta||null,descuentoRecetaEditor:true,formaPago:_edFP})})
     .then(function(r){return r.json();})
     .then(function(r){
+      // Cerrar loader apenas responde el POST — no esperamos load() completo (~15s).
+      // UI optimista: pinto las líneas nuevas + FP + $ del pedido en D antes de load.
+      hideLoader(true);
       if(r.ok){
         cancelarEditor(uid);
+        // Patch local del pedido con lo que devolvió el backend + lo que enviamos
+        var _patch={p:_edLineas,fp:_edFP};
+        if(typeof r.total==='number') _patch.$=r.total;
+        if(typeof r.costo==='number') _patch.co=r.costo;
+        if(typeof r.margen==='number') _patch.mg=r.margen;
+        if(r.autoReReservado){_patch.o='Deposito';_patch.es='Reservado';}
+        else if(r.origenReseteado){_patch.o='Pendiente';_patch.oDet='';}
+        _patchPedidoLocal(_edHoja,_edId,_patch);
+        // Limpiar state residual + render forzado (mismo motivo que antes)
+        document.querySelectorAll('.origen-box[data-touched="1"]').forEach(function(b){delete b.dataset.touched;});
+        _pendingLoadRender=false;
+        render();
         var msg='Pedido actualizado';
         if(r.autoReReservado) msg+=' · Auto-reservado ✓';
         else if(r.origenReseteado) msg+=' (origen reseteado)';
         toast(msg);
-        return load().then(function(){
-          // Post-save SIEMPRE re-renderizar: el editor ya se cerró y el usuario
-          // confirmó el cambio. _hayEditorAbierto() puede devolver true por state
-          // residual en listeners globales (.origen-box[data-touched]) y dejar
-          // el render pendiente — eso hace que el panel siga mostrando productos
-          // y origen viejos hasta refresh manual. Acá lo despachamos a mano.
-          document.querySelectorAll('.origen-box[data-touched="1"]').forEach(function(b){delete b.dataset.touched;});
-          _pendingLoadRender=false;
-          render();
-          window._forceTopOnRender=false;
-        });
+        // Reconciliar en background — sin loader visible
+        load().then(function(){window._forceTopOnRender=false;});
       }else{
         toast('Error: '+(r.err||r.error||'?'));
-        return load().then(function(){window._forceTopOnRender=false;});
+        load().then(function(){window._forceTopOnRender=false;});
       }
     })
-    .then(function(){hideLoader(true);})
     .catch(function(){hideLoader(true);window._forceTopOnRender=false;toast('Sin conexion');});
 }
 
@@ -17597,6 +17608,19 @@ if('serviceWorker' in navigator){
     if(s==='hogares'){ if(document.getElementById('estHogList')) _hogRenderList(); else rHogares(); }
     else if(s==='quien')rQuien(); else if(s==='barrios')rBarrios();
   }
+  // Refresh manual (botón Actualizar del topbar) del sub activo de Estancias:
+  // invalida caches → repinta instantáneo desde cache + refresca en background.
+  window.estRefreshActivo=function(){
+    var s=(function(){try{return localStorage.getItem('maleu_est_sub');}catch(e){return 'pulso';}})()||'pulso';
+    _estHog=null; _estRaw=null; _estCli=null;
+    if(s==='pulso')rEstancias();
+    else if(s==='hogares')rHogares();
+    else if(s==='clientes')rClientes();
+    else if(s==='quien')rQuien();
+    else if(s==='barrios')rBarrios();
+    else if(s==='hoy'||s==='semana'||s==='segmentos'){ if(typeof window.crmRenderSub==='function')crmRenderSub(s); }
+    else if(s==='mapa'){ if(typeof window.initMapaEstancias==='function')initMapaEstancias(); }
+  };
   // Tras fusionar/separar: refresca solo las reglas (rápido) y re-aplica sobre los hogares en memoria.
   function _estReload(){
     fetch(EST_API+'?action=hogaresMerge&t='+Date.now()).then(function(r){return r.json();}).then(function(d){
