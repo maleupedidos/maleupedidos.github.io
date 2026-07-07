@@ -759,9 +759,6 @@ body{font-family:'Inter',-apple-system,'Segoe UI',system-ui,sans-serif;backgroun
 .hog-controls{margin-bottom:12px}
 .hog-ctl-row{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:8px}
 .hog-ctl-lbl{font-size:11px;font-weight:700;color:var(--ink3);margin-right:2px}
-.hog-sort,.hog-fe{padding:5px 11px;border:1px solid var(--border);background:#fff;border-radius:16px;font-family:inherit;font-size:12px;font-weight:600;color:var(--ink2);cursor:pointer;transition:.12s}
-.hog-sort:hover,.hog-fe:hover{border-color:var(--o);color:var(--o)}
-.hog-sort.on,.hog-fe.on{background:var(--b);color:var(--tx);border-color:var(--b)}
 .hog-sec-h{font-size:12px;font-weight:700;color:var(--ink2);margin:16px 0 8px;display:flex;align-items:center;gap:8px}
 .hog-sec-h .n{font-size:11px;font-weight:700;color:var(--tx);background:var(--b);border-radius:10px;padding:1px 8px}
 .hog-card{display:flex;align-items:center;gap:12px;padding:11px 14px;background:#fff;border:1px solid var(--border);border-radius:8px;margin-bottom:8px;cursor:pointer;transition:.12s}
@@ -13989,10 +13986,6 @@ if('serviceWorker' in navigator){
   var hogBusq = '';
   var _hogLast = null;            // último build (para abrir la ficha de lote sin recomputar)
 
-  window.setHogOrden = function(o){ hogOrden=o; document.querySelectorAll('#bbdd-hogares .hog-sort').forEach(function(b){ b.classList.toggle('on', b.dataset.o===o); }); renderCrmHogares(); };
-  window.setHogEstado = function(e){ hogFiltroEstado=e; document.querySelectorAll('#bbdd-hogares .hog-fe').forEach(function(b){ b.classList.toggle('on', b.dataset.e===e); }); renderCrmHogares(); };
-  window.hogBuscar = function(v){ hogBusq=(v||'').toLowerCase().trim(); renderCrmHogares(); };
-
   function _hogEstado(d){ if(d<0) return 'sin'; if(d<=28) return 'activo'; if(d<=90) return 'dormido'; return 'inactivo'; }
 
   // Asegura la capa manual de lotes (hoja Lotes Estancias) y re-renderiza.
@@ -17596,14 +17589,10 @@ if('serviceWorker' in navigator){
     return { hogares: hogares.filter(function(h){return !absorbed[h.key];}), prospectos: raw.prospectos||[] };
   }
   function _mergesCache(){ try{ return JSON.parse(localStorage.getItem('maleu_est_merges_v1')||'[]')||[]; }catch(e){ return []; } }
-  function _estEnsure(cb){
-    if(_estHog){ cb(); return; }                                   // en memoria → instantáneo
-    if(typeof window.estHogaresSync!=='function'){ cb('nocrm'); return; }
-    var painted=false;
-    var raw=window.estHogaresSync();                               // SÍNCRONO desde cache
-    if(raw){ _estRaw=raw; _estMerges=_mergesCache(); _estHog=_applyMerges(raw,_estMerges); cb(); painted=true; }
-    if(typeof window.estHogaresRefresh!=='function'){ if(!painted)cb('nocrm'); return; }
-    // Refresco en 2do plano (no bloquea): clientes+lotes frescos + merges frescos.
+  // Refresco en 2do plano (no bloquea): clientes+lotes frescos + merges frescos.
+  // Al terminar re-aplica merges y llama after() (repintar o cerrar la 1ra carga).
+  var _estLastRefresh=0;
+  function _estRefreshCore(after){
     window.estHogaresRefresh(function(fresh){
       _estRaw=fresh||{hogares:[],prospectos:[]};
       fetch(EST_API+'?action=hogaresMerge&t='+Date.now()).then(function(r){return r.json();}).then(function(d){ _estMerges=(d&&d.merges)||[]; })
@@ -17611,9 +17600,26 @@ if('serviceWorker' in navigator){
         .then(function(){
           try{ localStorage.setItem('maleu_est_merges_v1',JSON.stringify(_estMerges||[])); }catch(e){}
           _estHog=_applyMerges(_estRaw,_estMerges||[]);
-          if(painted) _estRerender(); else cb();
+          after();
         });
     });
+  }
+  // Reabrir un sub con datos ya en memoria: refresco throttled (60s) para que Hogares/
+  // Quién/Sub-barrios no queden congelados toda la sesión si entran pedidos nuevos.
+  function _estBgRefresh(){
+    if(typeof window.estHogaresRefresh!=='function')return;
+    var t=Date.now(); if(t-_estLastRefresh<60000)return;
+    _estLastRefresh=t; _estRefreshCore(_estRerender);
+  }
+  function _estEnsure(cb){
+    if(_estHog){ cb(); _estBgRefresh(); return; }                  // en memoria → instantáneo + refresco throttled
+    if(typeof window.estHogaresSync!=='function'){ cb('nocrm'); return; }
+    var painted=false;
+    var raw=window.estHogaresSync();                               // SÍNCRONO desde cache
+    if(raw){ _estRaw=raw; _estMerges=_mergesCache(); _estHog=_applyMerges(raw,_estMerges); cb(); painted=true; }
+    if(typeof window.estHogaresRefresh!=='function'){ if(!painted)cb('nocrm'); return; }
+    _estLastRefresh=Date.now();
+    _estRefreshCore(function(){ if(painted) _estRerender(); else cb(); });
   }
   // Re-pinta el sub activo SIN spinner (datos ya en memoria → sincrónico).
   function _estRerender(){
@@ -17688,7 +17694,10 @@ if('serviceWorker' in navigator){
       var w=getWeek(d);
       if(!W[w])W[w]={w:w,n:0,fact:0,cli:{},minTs:d.getTime(),maxTs:d.getTime(),day:{},sub:{}};
       var o=W[w]; o.n++; o.fact+=Number(p.$||0);
-      var c=(p.c||'').trim().toLowerCase(); if(c)o.cli[c]=true;
+      // Identidad del cliente: teléfono (dedup real, mismo tel = misma persona aunque
+      // el nombre venga tipeado distinto); si no hay tel, cae al nombre normalizado.
+      var _tel=String(p.tel||'').replace(/\D/g,''); if(_tel.length>10)_tel=_tel.slice(-10);
+      var ck=_tel||(p.c||'').trim().toLowerCase(); if(ck)o.cli[ck]=true;
       if(d.getTime()<o.minTs)o.minTs=d.getTime(); if(d.getTime()>o.maxTs)o.maxTs=d.getTime();
       o.day[d.getDay()]=(o.day[d.getDay()]||0)+1;
       var sb=String(p.br||'').trim()||'(sin sub-barrio)';   // p.br = sub-barrio del pedido
@@ -17814,7 +17823,6 @@ if('serviceWorker' in navigator){
 
   // ─────────── helpers hogares ───────────
   function _nocrm(){ return '<div class="est-soon"><div class="est-soon-i">⚠️</div><div>No pude cargar el motor de hogares. Abrí <b>BBDD</b> una vez y volvé.</div></div>'; }
-  function _wa(tel){ var d=String(tel||'').replace(/\D/g,''); if(!d)return ''; d=d.replace(/^0/,''); if(d.indexOf('54')!==0)d='549'+d; else if(d.indexOf('549')!==0)d='549'+d.slice(2); return d; }
   function _minPrimera(h){
     var min=null;
     (h.members||[]).forEach(function(m){ var d=_parseFecha(m.primeraFecha); if(d&&(!min||d<min))min=d; });
