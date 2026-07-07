@@ -544,6 +544,8 @@ body{font-family:'Inter',-apple-system,'Segoe UI',system-ui,sans-serif;backgroun
 .hog-card-top{display:flex;justify-content:space-between;align-items:flex-start;gap:10px}
 .hog-rank{flex:0 0 auto;width:26px;height:26px;border-radius:8px;background:#F5EFD9;color:var(--o);font-weight:800;font-size:12px;display:flex;align-items:center;justify-content:center;margin-right:2px}
 .hog-card-name{font-size:15px;font-weight:800;color:var(--ink);display:flex;align-items:center;gap:8px;flex-wrap:wrap;line-height:1.2}
+.est-tipochip{font-size:10px;font-weight:800;padding:2px 7px;border-radius:999px;white-space:nowrap;letter-spacing:.2px}
+.hog-apwarn{font-size:10px;font-weight:700;color:#B26A00;background:#FFF3E0;padding:2px 6px;border-radius:6px;cursor:help;white-space:nowrap}
 .hog-card-sub{font-size:11px;color:var(--bl);margin-top:3px;font-weight:600}
 .hog-card-val{text-align:right;flex:0 0 auto}
 .hog-card-val b{font-size:16px;font-weight:800;color:var(--ink);font-variant-numeric:tabular-nums}
@@ -2730,6 +2732,7 @@ body.role-single .statusbar{font-size:11px}
   <div class="est-sub" id="est-mapa">
     <div class="mapa-bar">
       <span class="mapa-info">Estancias del Pilar &middot; <b id="mapaCount">…</b> lotes<span id="mapaPenet"></span></span>
+      <span id="mapaUltimo" class="mapa-ultimo" style="display:none"></span>
       <span class="mapa-bar-actions">
         <button id="mapaColorBtn" class="mapa-toggle-btn" onclick="mapaColorPor()">Color: sub-barrio</button>
         <button id="mapaSoloBtn" class="mapa-toggle-btn" onclick="mapaToggleSolo()">Ver: todos los lotes</button>
@@ -13157,8 +13160,30 @@ if('serviceWorker' in navigator){
     var sub = L0.zona>=0 ? (_subZonas[L0.zona] && _subZonas[L0.zona].nombre) : '';
     var lote = L0.n;
     el('crmDrawerTitle').textContent = (sub||'Lote') + ' · Lote ' + lote;
+    _mapaMarcarUltimo(L0);   // halo persistente: no perder de vista qué lote estás editando
     openDrawer();
     _renderFichaLote(L0, sub, lote);
+  };
+
+  // ── SEGUIMIENTO DEL ÚLTIMO LOTE TOCADO ──
+  // Al abrir un lote queda un aro (halo) marcándolo aunque cierres la ficha, hasta
+  // que toques otro. Más un chip "📍 Último: Lote N · volver" para re-centrarlo.
+  var _mapaHalo = null, _mapaUltimoLo = null;
+  function _mapaMarcarUltimo(L0){
+    _mapaUltimoLo = L0 || null;
+    if (_mapaHalo){ try{ _mapaObj.removeLayer(_mapaHalo); }catch(e){} _mapaHalo = null; }
+    var chip = el('mapaUltimo');
+    if (!L0 || !_mapaObj || L0.lat == null){ if (chip) chip.style.display='none'; return; }
+    try {
+      _mapaHalo = L.circleMarker([L0.lat, L0.lng], {radius:13, color:'#F07D47', weight:3, opacity:.95, fill:false, interactive:false, className:'mapa-halo'}).addTo(_mapaObj);
+      if (_mapaHalo.bringToFront) _mapaHalo.bringToFront();
+    } catch(e){}
+    if (chip){ chip.style.display='inline-flex'; chip.innerHTML = '📍 Último: <b>Lote '+escHtml(String(L0.n))+'</b><button onclick="mapaVolverUltimo()">volver</button>'; }
+  }
+  window.mapaVolverUltimo = function(){
+    var L0 = _mapaUltimoLo; if (!L0 || !_mapaObj || L0.lat==null) return;
+    try { _mapaObj.flyTo([L0.lat, L0.lng], 19, {duration:0.6}); } catch(e){ try{ _mapaObj.setView([L0.lat, L0.lng], 19); }catch(_e){} }
+    setTimeout(function(){ try{ _mapaPulse(L0); }catch(e){} }, 650);
   };
 
   // ── Enriquecimiento de la ficha de lote (estudio profundo del hogar) ──
@@ -13292,10 +13317,16 @@ if('serviceWorker' in navigator){
     var c = _loteComp, h = '';
     h += '<select id="loteTipo" onchange="loteSetTipo(this.value)" style="margin-bottom:8px">'
       + '<option value=""'+(c.tipo===''?' selected':'')+'>(elegir tipo)</option>'
-      + ['Pareja','Familia','Vive solo/a'].map(function(o){ return '<option value="'+o+'"'+(o===c.tipo?' selected':'')+'>'+o+'</option>'; }).join('')
+      + [['Familia','Familiar (los dos mayores)'],['Monoparental','Familiar con un mayor'],['Pareja','Pareja (sin hijos)'],['Vive solo/a','Solitario/a']].map(function(o){ return '<option value="'+o[0]+'"'+(o[0]===c.tipo?' selected':'')+'>'+o[1]+'</option>'; }).join('')
       + '</select>';
     if (c.tipo==='Pareja'){ h += _fgInput('Integrante 1','loteN1',c.n1) + _fgInput('Integrante 2 (si lo/la conocés)','loteN2',c.n2); }
     else if (c.tipo==='Vive solo/a'){ h += _fgInput('Nombre completo','loteN1',c.n1); }
+    else if (c.tipo==='Monoparental'){
+      h += _fgInput('Adulto/a a cargo','loteN1',c.n1);
+      h += '<div class="fg"><label>Cantidad de hijos</label><select id="loteNHijos" onchange="loteSetHijos(this.value)">'
+        + [0,1,2,3,4,5,6,7,8].map(function(n){ return '<option'+(n===c.hijos.length?' selected':'')+'>'+n+'</option>'; }).join('') + '</select></div>';
+      c.hijos.forEach(function(hn,i){ h += _fgInput('Hijo/a '+(i+1),'loteHijo'+i,hn); });
+    }
     else if (c.tipo==='Familia'){
       h += _fgInput('Padre','lotePadre',c.padre) + _fgInput('Madre','loteMadre',c.madre);
       h += '<div class="fg"><label>Cantidad de hijos</label><select id="loteNHijos" onchange="loteSetHijos(this.value)">'
@@ -13307,6 +13338,7 @@ if('serviceWorker' in navigator){
   function _compResumen(c){
     if (c.tipo==='Pareja') return 'Pareja: '+[c.n1,c.n2].filter(Boolean).join(' y ');
     if (c.tipo==='Vive solo/a') return 'Vive solo/a: '+(c.n1||'');
+    if (c.tipo==='Monoparental'){ var hm=c.hijos.filter(Boolean); return 'Familiar (un mayor): '+(c.n1||'')+(hm.length?' · Hijos ('+hm.length+'): '+hm.join(', '):''); }
     if (c.tipo==='Familia'){ var p=[c.padre,c.madre].filter(Boolean).join(' y '); var hh=c.hijos.filter(Boolean); return 'Familia: '+p+(hh.length?' · Hijos ('+hh.length+'): '+hh.join(', '):''); }
     return '';
   }
@@ -14043,6 +14075,7 @@ if('serviceWorker' in navigator){
       h.familia = rec ? (rec.familia||'') : '';
       h.titular = rec ? (rec.titular||'') : '';
       h.compTxt = (rec && rec.composicion && rec.composicion.tipo) ? _compResumen(rec.composicion) : '';
+      h.tipo = (rec && rec.composicion && rec.composicion.tipo) ? rec.composicion.tipo : '';
       h.reside = rec ? (rec.reside||'') : '';
       return h;
     });
@@ -17670,11 +17703,45 @@ if('serviceWorker' in navigator){
     var b=m[estado]||m.sin;
     return '<span class="est-badge" style="color:'+b[2]+';background:'+b[3]+'">'+b[0]+' '+b[1]+'</span>';
   }
+  // Partículas de apellidos compuestos (Del Bono, De los Santos, Van Damme…).
+  var _PARTIC={de:1,del:1,la:1,las:1,los:1,da:1,di:1,van:1,von:1,san:1,santa:1,mc:1,mac:1};
+  function _tituleCase(s){
+    return String(s||'').toLowerCase().replace(/\s+/g,' ').trim().split(' ').filter(Boolean).map(function(w,i){
+      if(i>0 && _PARTIC[w]) return w;
+      return w.charAt(0).toUpperCase()+w.slice(1);
+    }).join(' ');
+  }
+  // Aísla el apellido de un nombre crudo. {ap, flag}. flag=true si solo hay nombre de pila.
+  function _apellidoDe(nombre){
+    var toks=_tituleCase(nombre).split(' ').filter(Boolean);
+    if(!toks.length) return {ap:'', flag:true};
+    if(toks.length===1) return {ap:toks[0], flag:true};   // un solo token → probable nombre de pila
+    var i=toks.length-1, ap=[toks[i]];
+    while(i-1>=0 && _PARTIC[toks[i-1].toLowerCase()]){ i--; ap.unshift(toks[i]); }
+    var out=ap.join(' '); out=out.charAt(0).toUpperCase()+out.slice(1);  // partícula inicial en mayúscula (Del Bono)
+    return {ap:out, flag:false};
+  }
+  function _hogBase(h){
+    var c=h.contacto||(h.members&&h.members[0]);
+    return h.titular || (c?c.nombre:'') || '';
+  }
+  // Título de la casa = apellido. Prioridad: familia cargada a mano → apellido deducido del titular/comprador.
   function _hogNombre(h){
     if(h.familia) return h.familia;
-    if(h.titular) return h.titular;
-    var c=h.contacto||(h.members&&h.members[0]);
-    return c?c.nombre:'(sin nombre)';
+    var r=_apellidoDe(_hogBase(h));
+    return r.ap || _hogBase(h) || '(sin nombre)';
+  }
+  function _hogNeedsAp(h){ return h.familia ? false : _apellidoDe(_hogBase(h)).flag; }
+  // Chip de categoría del hogar (composición cargada en BBDD → lote).
+  function _tipoChip(tipo){
+    var m={
+      'Familia':['👨‍👩‍👧','Familiar','#6A1B9A','#F3E5F5'],
+      'Monoparental':['🧑‍👧','Familiar · un mayor','#00695C','#E0F2F1'],
+      'Pareja':['💑','Pareja','#AD1457','#FCE4EC'],
+      'Vive solo/a':['🧍','Solitario/a','#1565C0','#E3F2FD']
+    };
+    var b=m[tipo]; if(!b) return '';
+    return '<span class="est-tipochip" style="color:'+b[2]+';background:'+b[3]+'">'+b[0]+' '+b[1]+'</span>';
   }
   function _hogInts(h){
     return (h.members||[]).map(function(m){return m.nombre;}).filter(Boolean);
@@ -17849,11 +17916,12 @@ if('serviceWorker' in navigator){
   }
   function _hogCard(h,rank){
     var ints=_hogInts(h), nombre=_hogNombre(h);
+    var apWarn=_hogNeedsAp(h)?' <span class="hog-apwarn" title="Solo tengo el nombre de pila. Cargá el apellido en BBDD → lote para que el título quede fino.">⚠️ apellido</span>':'';
     var ult=h.ultimaFecha?(h.ultimaFecha+' · hace '+h.diasUltima+'d'):'sin compras';
     return '<div class="hog-card" onclick="estHogFicha(\''+esc(h.key)+'\')">'
       +'<div class="hog-card-top"><div style="display:flex;align-items:flex-start;min-width:0">'
       +(rank?'<div class="hog-rank">'+rank+'</div>':'')
-      +'<div style="min-width:0"><div class="hog-card-name">'+esc(nombre)+' '+_estBadge(h.estado)+' <span class="hog-open">ver ›</span></div>'
+      +'<div style="min-width:0"><div class="hog-card-name">'+esc(nombre)+' '+_estBadge(h.estado)+_tipoChip(h.tipo)+apWarn+' <span class="hog-open">ver ›</span></div>'
       +'<div class="hog-card-sub">'+esc(h.sub||'')+' · Lote '+esc(h.lote)+' · '+ints.length+' int. · últ: '+esc(ult)+'</div></div></div>'
       +'<div class="hog-card-val"><b>'+money(h.facturado)+'</b><small>'+(h.entregados||0)+' pedidos</small></div></div>'
       +'<div class="hog-card-stats">'
@@ -18158,7 +18226,7 @@ if('serviceWorker' in navigator){
     var cta=(h.estado==='dormido'||h.estado==='inactivo')?_reactivarBtn(h):'';
     var ov=document.createElement('div'); ov.id='estFichaModal'; ov.className='est-modal-ov';
     var ultLin=(typeof h.diasUltima==='number'&&h.diasUltima>=0&&h.ultimaFecha)?('última compra '+esc(h.ultimaFecha)+' · hace '+h.diasUltima+' días'):'sin compras registradas';
-    ov.innerHTML='<div class="est-modal"><div class="est-modal-h"><div><b>'+esc(_hogNombre(h))+'</b> '+_estBadge(h.estado)
+    ov.innerHTML='<div class="est-modal"><div class="est-modal-h"><div><b>'+esc(_hogNombre(h))+'</b> '+_estBadge(h.estado)+_tipoChip(h.tipo)
       +'<div class="est-modal-sub" style="color:var(--ink2);font-weight:700">'+ultLin+'</div>'
       +'<div class="est-modal-sub">'+esc(h.sub||'')+' · Lote '+esc(h.lote)+' · '+ints.length+' integrante'+(ints.length===1?'':'s')
       +(h.familia&&h.titular&&h.titular!==h.familia?' · titular '+esc(h.titular):'')+'</div></div>'
