@@ -18147,7 +18147,20 @@ if('serviceWorker' in navigator){
   // ─────────── sub-tab CLIENTES (individuales de Estancias del Pilar) ───────────
   var _estCli=null;
   var _cliFiltro={busq:'',orden:'ultima',estado:''};
-  function _cliEstadoNorm(c){ return String(c.estado||'').trim().toLowerCase()||'sin'; }
+  // Esta es una tab de ESTANCIAS: las métricas primarias son SOLO Home/Estancias
+  // (los *Home del backend v424), NUNCA el total cross-canal (que incluye Clubes).
+  // Si no, un residente que compra fuerte por Clubes (ej. Josefina Del Bono) se
+  // colaba al top del ranking. El cross-canal queda como referencia (facturadoAll).
+  function _cliVals(c){
+    var dias=(typeof c.diasUltimaHome==='number')?c.diasUltimaHome:-1;
+    var est=_estEstado(dias);
+    if(est==='activo'){ var pf=_parseFecha(c.primeraFechaHome); if(pf && ((new Date()-pf)/86400000)<=35) est='nuevo'; }
+    return { facturado:c.facturadoHome||0, entregados:c.entregadosHome||0, ticket:c.ticketHome||0,
+      deuda:c.deudaHome||0, diasUltima:dias, ultimaFecha:c.ultimaFechaHome||'', estado:est,
+      facturadoAll:c.facturado||0 };
+  }
+  function _cliH(c){ if(!c.__h) c.__h=_cliVals(c); return c.__h; }
+  function _cliEstadoNorm(c){ return _cliH(c).estado; }
   function _cliEnsure(cb){
     if(_estCli){ cb(); return; }
     if(typeof window.estClientesSync!=='function'){ cb('nocrm'); return; }
@@ -18158,19 +18171,21 @@ if('serviceWorker' in navigator){
     } else if(!painted){ cb('nocrm'); }
   }
   function _cliCard(c){
-    var est=_cliEstadoNorm(c);
+    var v=_cliH(c);
     var loc=(c.subBarrio||'')+(c.lote?' · Lote '+c.lote:'');
-    var ult=(typeof c.diasUltima==='number'&&c.diasUltima>=0)?(esc(c.ultimaFecha||'')+' · hace '+c.diasUltima+'d'):'sin compras';
+    var ult=(typeof v.diasUltima==='number'&&v.diasUltima>=0)?(esc(v.ultimaFecha||'')+' · hace '+v.diasUltima+'d'):'sin compras Home';
     var tel=c.telDisplay||c.tel||'';
+    var otros=(v.facturadoAll>v.facturado)?(v.facturadoAll-v.facturado):0;
     return '<div class="hog-card" onclick="crmOpenCliente(\''+encodeURIComponent(c.key)+'\')">'
       +'<div class="hog-card-top"><div style="min-width:0">'
-      +'<div class="hog-card-name">'+esc(c.nombre)+' '+_estBadge(est)+(c.vip?' <span class="hog-mergedbadge" style="color:#8a6d1f;background:#FFF3D6">★ VIP</span>':'')+' <span class="hog-open">ver ›</span></div>'
+      +'<div class="hog-card-name">'+esc(c.nombre)+' '+_estBadge(v.estado)+(c.vip?' <span class="hog-mergedbadge" style="color:#8a6d1f;background:#FFF3D6">★ VIP</span>':'')+' <span class="hog-open">ver ›</span></div>'
       +'<div class="hog-card-sub">'+esc(loc||'—')+' · últ: '+ult+'</div></div>'
-      +'<div class="hog-card-val"><b>'+money(c.facturado)+'</b><small>'+(c.entregados||0)+' pedidos</small></div></div>'
+      +'<div class="hog-card-val"><b>'+money(v.facturado)+'</b><small>'+(v.entregados||0)+' pedidos</small></div></div>'
       +'<div class="hog-card-stats">'
-      +'<span class="hog-stat">Ticket <b>'+money(c.ticket)+'</b></span>'
-      +'<span class="hog-stat">Deuda <b style="color:'+((c.deuda>0)?'var(--r)':'var(--ink)')+'">'+money(c.deuda)+'</b></span>'
+      +'<span class="hog-stat">Ticket <b>'+money(v.ticket)+'</b></span>'
+      +'<span class="hog-stat">Deuda <b style="color:'+((v.deuda>0)?'var(--r)':'var(--ink)')+'">'+money(v.deuda)+'</b></span>'
       +(tel?'<span class="hog-stat">📞 <b class="est-tel" style="cursor:pointer" onclick="event.stopPropagation();crmCopyTel(\''+tel+'\')">'+esc(tel)+'</b></span>':'')
+      +(otros>0?'<span class="hog-stat" style="color:var(--bl)" title="Facturado fuera de Home/Estancias (Clubes u otros canales) — no cuenta en este ranking">🎟️ +'+money(otros)+' en otros canales</span>':'')
       +'</div></div>';
   }
   function _cliFilteredSorted(){
@@ -18181,11 +18196,12 @@ if('serviceWorker' in navigator){
     });
     var o=_cliFiltro.orden;
     arr.sort(function(a,b){
-      if(o==='facturado') return b.facturado-a.facturado;
-      if(o==='pedidos') return (b.entregados-a.entregados)||(b.facturado-a.facturado);
-      if(o==='ticket') return (b.ticket||0)-(a.ticket||0);
+      var va=_cliH(a), vb=_cliH(b);
+      if(o==='facturado') return vb.facturado-va.facturado;
+      if(o==='pedidos') return (vb.entregados-va.entregados)||(vb.facturado-va.facturado);
+      if(o==='ticket') return (vb.ticket||0)-(va.ticket||0);
       if(o==='nombre') return String(a.nombre||'').localeCompare(String(b.nombre||''));
-      return ((a.diasUltima<0?99999:a.diasUltima)-(b.diasUltima<0?99999:b.diasUltima));
+      return ((va.diasUltima<0?99999:va.diasUltima)-(vb.diasUltima<0?99999:vb.diasUltima));
     });
     return arr;
   }
@@ -18204,7 +18220,7 @@ if('serviceWorker' in navigator){
     _cliEnsure(function(err){
       if(err==='nocrm'){ host.innerHTML=_nocrm(); return; }
       var C=_estCli||[], act=0,dorm=0,inact=0,nuev=0,fact=0;
-      C.forEach(function(c){ var e=_cliEstadoNorm(c); if(e==='activo')act++; else if(e==='dormido')dorm++; else if(e==='inactivo')inact++; else if(e==='nuevo')nuev++; fact+=(c.facturado||0); });
+      C.forEach(function(c){ var v=_cliH(c); var e=v.estado; if(e==='activo')act++; else if(e==='dormido')dorm++; else if(e==='inactivo')inact++; else if(e==='nuevo')nuev++; fact+=(v.facturado||0); });
       var html='<div class="est-kpis">'
         +'<div class="est-kpi"><div class="est-kpi-l">Clientes</div><div class="est-kpi-v">'+C.length+'</div><div class="est-kpi-s" style="color:var(--bl)">de Estancias del Pilar</div></div>'
         +'<div class="est-kpi"><div class="est-kpi-l">Activos</div><div class="est-kpi-v" style="color:var(--gd)">'+act+'</div><div class="est-kpi-s" style="color:var(--bl)">'+dorm+' dormidos · '+inact+' inactivos</div></div>'
