@@ -546,6 +546,18 @@ body{font-family:'Inter',-apple-system,'Segoe UI',system-ui,sans-serif;backgroun
 .hog-card-name{font-size:15px;font-weight:800;color:var(--ink);display:flex;align-items:center;gap:8px;flex-wrap:wrap;line-height:1.2}
 .est-tipochip{font-size:10px;font-weight:800;padding:2px 7px;border-radius:999px;white-space:nowrap;letter-spacing:.2px}
 .hog-apwarn{font-size:10px;font-weight:700;color:#B26A00;background:#FFF3E0;padding:2px 6px;border-radius:6px;cursor:help;white-space:nowrap}
+.est-editbtn{background:#F2E8C7;color:#331C1C;border:1px solid #E0D2A8;border-radius:8px;padding:6px 11px;font-size:12px;font-weight:800;cursor:pointer;white-space:nowrap}
+.est-editbtn:hover{background:#EADFB8}
+.est-ef{margin:12px 0}
+.est-ef>label{display:block;font-size:11px;font-weight:800;color:var(--bl,#7A4A4A);margin-bottom:5px;text-transform:uppercase;letter-spacing:.3px}
+.est-ef-hint{font-size:11px;color:var(--bl,#7A4A4A);margin-top:5px}
+.est-tsel-row{display:flex;flex-wrap:wrap;gap:7px}
+.est-tsel{background:#fff;border:1.5px solid #E0D2A8;border-radius:999px;padding:7px 12px;font-size:12px;font-weight:700;color:#331C1C;cursor:pointer;transition:.12s}
+.est-tsel:hover{border-color:#C9A227}
+.est-tsel.on{background:#331C1C;color:#F2E8C7;border-color:#331C1C}
+.btn-guardar-hog{width:100%;margin-top:16px;background:#2E7D32;color:#fff;border:none;border-radius:10px;padding:12px;font-size:14px;font-weight:800;cursor:pointer}
+.btn-guardar-hog:hover{background:#256628}
+.btn-guardar-hog:disabled{opacity:.6;cursor:default}
 .hog-card-sub{font-size:11px;color:var(--bl);margin-top:3px;font-weight:600}
 .hog-card-val{text-align:right;flex:0 0 auto}
 .hog-card-val b{font-size:16px;font-weight:800;color:var(--ink);font-variant-numeric:tabular-nums}
@@ -13149,6 +13161,22 @@ if('serviceWorker' in navigator){
     }).catch(done);
     _mapaLoadLotesData(function(){ _estCacheLotes(); done(); });
   };
+  // Puente: parchea la cache de lotes del CRM tras guardar desde la ficha de Estancias,
+  // así el refresh en background (que lee _mapaLotesData) no revierte el cambio.
+  window.crmLoteSetLocal = function(sub, lote, patch){
+    if (!_mapaLotesData) _mapaLotesData = {};
+    var key = _crmNormName(sub)+'|'+_loteNorm(lote);
+    var cur = _mapaLotesData[key] || {sub:sub, lote:lote};
+    for (var k in patch) cur[k] = patch[k];
+    cur.sub = sub; cur.lote = lote;
+    _mapaLotesData[key] = cur;
+    _estCacheLotes();
+    if (typeof _mapaUpdateTooltips==='function') { try{ _mapaUpdateTooltips(); }catch(e){} }
+  };
+  window.crmLoteGetLocal = function(sub, lote){
+    if (!_mapaLotesData){ try{ var lc=JSON.parse(localStorage.getItem('maleu_crm_lotes_v1')||'null'); if(lc&&lc.length){ _mapaLotesData={}; lc.forEach(function(r){ _mapaLotesData[_crmNormName(r.sub)+'|'+_loteNorm(r.lote)]=r; }); } }catch(e){} }
+    return (_mapaLotesData||{})[_crmNormName(sub)+'|'+_loteNorm(lote)] || null;
+  };
 
   // Tooltip de cada lote: "Lote N · Apellido" si hay familia cargada.
   function _mapaUpdateTooltips(){
@@ -18236,7 +18264,8 @@ if('serviceWorker' in navigator){
       +'<div class="est-modal-sub" style="color:var(--ink2);font-weight:700">'+ultLin+'</div>'
       +'<div class="est-modal-sub">'+esc(h.sub||'')+' · Lote '+esc(h.lote)+' · '+ints.length+' integrante'+(ints.length===1?'':'s')
       +(h.familia&&h.titular&&h.titular!==h.familia?' · titular '+esc(h.titular):'')+'</div></div>'
-      +'<button class="est-modal-x" onclick="estFichaClose()">✕</button></div>'
+      +'<div style="display:flex;gap:6px;align-items:center"><button class="est-editbtn" onclick="estHogEdit(\''+esc(h.key)+'\')">✏️ Editar</button>'
+      +'<button class="est-modal-x" onclick="estFichaClose()">✕</button></div></div>'
       +'<div class="est-fk-row">'+kh+'</div>'+cta
       +'<div class="est-sec-h" style="margin:15px 0 9px">Integrantes del hogar</div>'
       +'<div class="est-modal-list" style="overflow-y:auto">'+rows+'</div></div>';
@@ -18244,6 +18273,66 @@ if('serviceWorker' in navigator){
     ov.addEventListener('click',function(e){ if(e.target===ov)estFichaClose(); });
   };
   window.estFichaClose=function(){ var m=document.getElementById('estFichaModal'); if(m)m.remove(); };
+
+  // ─────────── EDITOR RÁPIDO DEL HOGAR (apellido + titular + categoría) ───────────
+  // Guarda en la hoja "Lotes Estancias" (endpoint crmLoteSave), preservando la
+  // composición previa y actualizando la cache del CRM (crmLoteSetLocal) para que
+  // el refresh en background no revierta. Cero salto a BBDD.
+  var _EST_TIPOS=[['Familia','👨‍👩‍👧 Familiar'],['Monoparental','🧑‍👧 Familiar · un mayor'],['Pareja','💑 Pareja'],['Vive solo/a','🧍 Solitario/a']];
+  var _estEditTipo='';
+  window.estHogTipoPick=function(t){ _estEditTipo=(_estEditTipo===t?'':t); document.querySelectorAll('#estEditModal .est-tsel').forEach(function(b){ b.classList.toggle('on', b.dataset.t===_estEditTipo); }); };
+  window.estHogEdit=function(key){
+    var h=(_estHog.hogares||[]).filter(function(x){return x.key===key;})[0];
+    if(!h){ _toast('No encontré el hogar'); return; }
+    var apSug = h.familia || _apellidoDe(_hogBase(h)).ap || '';
+    _estEditTipo = h.tipo || '';
+    var chips=_EST_TIPOS.map(function(o){ return '<button class="est-tsel'+(o[0]===_estEditTipo?' on':'')+'" data-t="'+o[0]+'" onclick="estHogTipoPick(\''+o[0]+'\')">'+o[1]+'</button>'; }).join('');
+    var ov=document.createElement('div'); ov.id='estEditModal'; ov.className='est-modal-ov';
+    ov.innerHTML='<div class="est-modal" style="max-width:440px">'
+      +'<div class="est-modal-h"><div><b>Editar hogar</b>'
+      +'<div class="est-modal-sub">'+esc(h.sub||'')+' · Lote '+esc(h.lote)+'</div></div>'
+      +'<button class="est-modal-x" onclick="estHogEditClose()">✕</button></div>'
+      +'<div class="est-ef"><label>Apellido de la casa</label>'
+      +'<input id="estEditAp" class="est-search" value="'+esc(apSug)+'" placeholder="ej. Del Bono · Ustariz/Basualdo">'
+      +'<div class="est-ef-hint">Si son dos apellidos (padre/madre) usá barra: <b>Perez/Gomez</b>.</div></div>'
+      +'<div class="est-ef"><label>Titular (opcional)</label>'
+      +'<input id="estEditTit" class="est-search" value="'+esc(h.titular||'')+'" placeholder="quién decide / con quién hablás"></div>'
+      +'<div class="est-ef"><label>Categoría del hogar</label><div class="est-tsel-row">'+chips+'</div></div>'
+      +'<button class="btn-guardar-hog" onclick="estHogEditSave(\''+esc(h.key)+'\')">Guardar</button>'
+      +'</div>';
+    document.body.appendChild(ov);
+    ov.addEventListener('click',function(e){ if(e.target===ov)estHogEditClose(); });
+    setTimeout(function(){ var i=document.getElementById('estEditAp'); if(i)i.focus(); },50);
+  };
+  window.estHogEditClose=function(){ var m=document.getElementById('estEditModal'); if(m)m.remove(); };
+  window.estHogEditSave=function(key){
+    var h=(_estHog.hogares||[]).filter(function(x){return x.key===key;})[0];
+    if(!h){ _toast('No encontré el hogar'); return; }
+    var ap=(document.getElementById('estEditAp').value||'').trim();
+    var tit=(document.getElementById('estEditTit').value||'').trim();
+    var tipo=_estEditTipo;
+    // Preservar la composición previa (nombres de integrantes) si existía; solo cambiamos el tipo.
+    var prev=(typeof window.crmLoteGetLocal==='function')?window.crmLoteGetLocal(h.sub,h.lote):null;
+    var comp=(prev&&prev.composicion)?prev.composicion:{};
+    if(typeof comp==='string'){ try{ comp=JSON.parse(comp); }catch(e){ comp={}; } }
+    comp.tipo=tipo;
+    var body={ action:'crmLoteSave', sub:h.sub, lote:h.lote,
+      estadoContacto:(prev&&prev.estadoContacto)||'',
+      familia:ap, titular:tit,
+      composicion:JSON.stringify(comp), integrantes:(prev&&prev.integrantes)||'',
+      tel:(prev&&prev.tel)||'', notas:(prev&&prev.notas)||'',
+      sobreEstado:(prev&&prev.sobreEstado)||'', sobreNota:(prev&&prev.sobreNota)||'', reside:(prev&&prev.reside)||'' };
+    var btn=document.querySelector('#estEditModal .btn-guardar-hog'); if(btn){ btn.disabled=true; btn.textContent='Guardando…'; }
+    fetch(EST_API,{method:'POST',body:JSON.stringify(body)}).then(function(r){return r.json();}).then(function(d){
+      if(d&&d.ok){
+        // Actualizo memoria (hogar + cache CRM) para que se vea YA y no revierta el bg refresh.
+        h.familia=ap; h.titular=tit; h.tipo=tipo; h.compTxt=tipo?_estTipoLabel(tipo):'';
+        if(typeof window.crmLoteSetLocal==='function') window.crmLoteSetLocal(h.sub,h.lote,{familia:ap,titular:tit,composicion:comp,integrantes:body.integrantes,estadoContacto:body.estadoContacto,tel:body.tel,notas:body.notas,sobreEstado:body.sobreEstado,sobreNota:body.sobreNota,reside:body.reside});
+        estHogEditClose(); estFichaClose(); _toast('Hogar guardado'); _estRerender();
+      } else { _toast('Error: '+((d&&d.error)||'no se pudo')); if(btn){ btn.disabled=false; btn.textContent='Guardar'; } }
+    }).catch(function(e){ _toast('Error: '+e.message); if(btn){ btn.disabled=false; btn.textContent='Guardar'; } });
+  };
+  function _estTipoLabel(t){ for(var i=0;i<_EST_TIPOS.length;i++){ if(_EST_TIPOS[i][0]===t) return _EST_TIPOS[i][1].replace(/^[^ ]+ /,''); } return ''; }
 })();
 </script>
 
