@@ -12879,10 +12879,13 @@ if('serviceWorker' in navigator){
   // Carga la bitácora de interacciones (F3). Al volver, re-pinta el sub activo
   // si los clientes ya están (así el cockpit aplica silencio + seguimientos).
   function loadCrmInteracciones(){
+    // Pintado instantáneo desde cache local (la bitácora ya aparece en la ficha) + refresco bg.
+    if (!crmInteracciones){ try{ var ic=JSON.parse(localStorage.getItem('maleu_crm_inter_v1')||'null'); if(ic){ crmInteracciones=ic; _crmIndexInteracciones(); } }catch(e){} }
     fetch(CRM_API + '?action=crmInteracciones')
       .then(function(r){ return r.json(); })
       .then(function(d){
         crmInteracciones = d.interacciones || [];
+        try{ localStorage.setItem('maleu_crm_inter_v1', JSON.stringify(crmInteracciones)); }catch(e){}
         _crmIndexInteracciones();
         if (crmClientes) _crmRenderActiveSub();
       })
@@ -14747,6 +14750,8 @@ if('serviceWorker' in navigator){
     var nombre = c.nombre || '';
     var addBtn = '<button class="crm-bita-add" onclick="crmLogOpen(this)" data-key="'+escHtml(c.key||'')+'" data-tel="'+escHtml(c.tel||'')+'" data-nombre="'+escHtml(nombre)+'" data-origen="ficha">+ Registrar contacto</button>';
     var head = '<div class="crm-bita-head"><div class="crm-section-h" style="margin:0">Bit&aacute;cora</div>'+addBtn+'</div>';
+    // Restaurar bitácora desde cache local si todavía no llegó del server → instantánea.
+    if (!crmInteracciones){ try{ var _ic=JSON.parse(localStorage.getItem('maleu_crm_inter_v1')||'null'); if(_ic){ crmInteracciones=_ic; _crmIndexInteracciones(); } }catch(e){} }
     if (!crmInteracciones){
       return '<div class="crm-section">'+head+'<div class="crm-bita-empty">Cargando...</div></div>';
     }
@@ -15312,6 +15317,10 @@ if('serviceWorker' in navigator){
     if (li) {
       el('crmDrawerTitle').textContent = li.nombre + (li.vip ? '  -  VIP' : '');
       renderFichaSkeleton(li);
+      // Si armamos el historial completo desde memoria (D.pedidos), la ficha ya está
+      // lista: NO pedimos el detalle pesado al server (evita 7-10s + flicker + carga).
+      // Solo se busca en el server si no hay pedidos en memoria (fallback).
+      if (_crmHistLocalHtml(li) != null) return;
     } else {
       el('crmDrawerTitle').textContent = 'Cargando...';
       el('crmDrawerBody').innerHTML = '<div class="loading">Cargando ficha...</div>';
@@ -15331,6 +15340,36 @@ if('serviceWorker' in navigator){
       });
   };
 
+  // Historial + productos preferidos armados AL INSTANTE desde D.pedidos (ya en memoria),
+  // matcheando por nombre + variantes de tipeo. Evita esperar el fetch crmCliente (~7-10s).
+  // Devuelve el HTML de las secciones, o null si no hay pedidos en memoria.
+  function _crmHistLocalHtml(li){
+    if (!window.D || !Array.isArray(D.pedidos)) return null;
+    var names={}; function add(n){ if(n) names[String(n).trim().toLowerCase()]=1; }
+    add(li.nombre); add(li.nombreCanonico); (li.nombresAlt||[]).forEach(add);
+    var mine = D.pedidos.filter(function(p){ if(p.hist) return false; return names[String(p.c||'').trim().toLowerCase()]; });
+    if (!mine.length) return null;
+    function ts(p){ var f=String(p.fe||p.f||'').split('/'); if(f.length<2)return 0; return (Number(f[2]||new Date().getFullYear())*10000)+(Number(f[1])*100)+Number(f[0]); }
+    mine.sort(function(a,b){ return ts(b)-ts(a); });
+    var agg={}; mine.forEach(function(p){ (p.p||[]).forEach(function(x){ if(x&&x.a) agg[x.a]=(agg[x.a]||0)+(Number(x.q)||0); }); });
+    var top=Object.keys(agg).map(function(a){return {a:a,q:agg[a]};}).sort(function(a,b){return b.q-a.q;}).slice(0,5);
+    var prodsHtml = top.length ? '<div class="crm-section"><div class="crm-section-h">Productos preferidos (top 5)</div>'
+      + top.map(function(p){ return '<div class="crm-prod-row"><b>'+escHtml(prodName(p.a))+'</b><span class="crm-prod-cant">'+p.q+'u</span></div>'; }).join('') + '</div>' : '';
+    var pedHtml = '<div class="crm-section"><div class="crm-section-h">Historial ('+mine.length+')</div>'
+      + mine.slice(0,25).map(function(p){
+          var prodLbl=(p.p||[]).map(function(x){return escHtml(x.q+'x'+x.a);}).join(' &middot; ');
+          var st=p.es||'', pg=p.ep||'No Cobrado';
+          var stColor = st==='Entregado'?'background:var(--gb);color:var(--gd)':(st==='Cancelado'?'background:var(--rb);color:var(--r)':'background:var(--ol);color:#8B3A0E');
+          var pgColor = pg==='Cobrado'?'color:var(--gd)':'color:var(--wrn)';
+          return '<div class="crm-ped"><div class="crm-ped-top"><span><span class="crm-ped-canal">'+escHtml(p.h||'')+'</span> <span class="crm-ped-fecha">'+escHtml(p.fe||p.f||'')+'</span></span><span class="crm-ped-total">$'+fmt$(p.$||0)+'</span></div>'
+            + (prodLbl?'<div class="crm-ped-prods">'+prodLbl+'</div>':'')
+            + '<div class="crm-ped-prods" style="margin-top:3px"><span class="crm-ped-state" style="'+stColor+'">'+escHtml(st)+'</span> &middot; <span style="'+pgColor+';font-weight:600">'+escHtml(pg)+'</span></div></div>';
+        }).join('')
+      + (mine.length>25?'<div class="crm-ped-prods" style="text-align:center;padding:8px">Mostrando 25 de '+mine.length+'</div>':'')
+      + '</div>';
+    return prodsHtml + pedHtml;
+  }
+
   // Ficha instantanea a partir del item de la lista (todo menos historial/productos,
   // que requieren leer las hojas). Mismo layout que renderFichaCliente.
   function renderFichaSkeleton(li){
@@ -15338,7 +15377,11 @@ if('serviceWorker' in navigator){
     var o1={}, o2={}; if(li.subBarrio) o1[li.subBarrio]=1; if(li.lote) o2[li.lote]=1;
     crmFichaActual = {tipo:'cliente', data:{
       key: li.key, nombre: li.nombre, tel: li.tel, countPedidos: li.pedidos,
-      subBarrios: o1, domicilios: o2, nombresVariantes: {},
+      subBarrios: o1, domicilios: o2,
+      // Variantes de tipeo desde la lista (li.nombresAlt) → el editor puede ocultar
+      // tipeos sin depender del fetch pesado crmCliente.
+      nombresVariantes: (function(){ var o={}; if(li.nombre)o[li.nombre]=1; (li.nombresAlt||[]).forEach(function(n){ if(n)o[n]=1; }); return o; })(),
+      telefonos: li.tel ? (function(){var o={};o[li.tel]=1;return o;})() : {},
       barrios: li.barrio ? (function(){var o={};o[li.barrio]=1;return o;})() : {},
       canales: (li.canalDom ? (function(){var o={};o[li.canalDom]=1;return o;})() : {}),
       canalesExtra: li.canalesExtra || [],
@@ -15376,7 +15419,9 @@ if('serviceWorker' in navigator){
       + (li.tags ? '<div class="crm-row"><span class="crm-row-l">Tags</span><span class="crm-row-v">'+li.tags.split(',').map(function(t){ return '<span class="crm-tag-chip">'+escHtml(t.trim())+'</span>'; }).join(' ')+'</span></div>' : '')
       + (li.notas ? '<div class="crm-row"><span class="crm-row-l">Notas</span><span class="crm-row-v">'+escHtml(li.notas)+'</span></div>' : '')
     + '</div>';
-    var loadingSec = '<div class="crm-section"><div class="crm-section-h">Historial</div><div class="loading">Cargando historial...</div></div>';
+    // Historial + productos AL INSTANTE desde D.pedidos. Si no hay pedidos en memoria,
+    // cae al "Cargando…" hasta que llegue crmCliente (que refina con $ por producto).
+    var loadingSec = _crmHistLocalHtml(li) || '<div class="crm-section"><div class="crm-section-h">Historial</div><div class="loading">Cargando historial...</div></div>';
     el('crmDrawerBody').innerHTML = '<div class="crm-ficha-name">'+escHtml(li.nombre)+'</div>'
       + '<div class="crm-ficha-meta">'+(li.tel?'<span>+54 9 '+escHtml(li.tel)+'</span>':'')+'<span>'+escHtml(li.estado)+'</span>'+(li.vip?'<span style="color:var(--o);font-weight:700">VIP</span>':'')+'</div>'
       + actions + alertH + kpis + datos + '<div id="crmBitacora">'+_crmBitacoraHtml(li)+'</div>' + loadingSec;
