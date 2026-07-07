@@ -14018,12 +14018,18 @@ if('serviceWorker' in navigator){
       if (!c.lote || !c.subBarrio) return;
       var key = _crmNormName(c.subBarrio)+'|'+_loteNorm(c.lote);
       var h = H[key];
-      if(!h){ h=H[key]={key:key, sub:c.subBarrio, lote:c.lote, members:[], pedidos:0, entregados:0, facturado:0, cobrado:0, deuda:0, diasUltima:-1, ultimaFecha:'', vip:false}; }
+      if(!h){ h=H[key]={key:key, sub:c.subBarrio, lote:c.lote, members:[], pedidos:0, entregados:0, facturado:0, cobrado:0, deuda:0, diasUltima:-1, ultimaFecha:'', vip:false,
+        entregadosAll:0, facturadoAll:0, cobradoAll:0, deudaAll:0, diasUltimaAll:-1, ultimaFechaAll:''}; }
       h.members.push(c);
-      h.pedidos+=(c.pedidos||0); h.entregados+=(c.entregados||0);
-      h.facturado+=(c.facturado||0); h.cobrado+=(c.cobrado||0); h.deuda+=(c.deuda||0);
+      // PRIMARIO en Estancias = solo Home/Estancias retail (sin Clubes ni otros canales).
+      // El backend ya lo desglosa por cliente (facturadoHome, entregadosHome, …).
+      h.pedidos+=(c.entregadosHome||0); h.entregados+=(c.entregadosHome||0);
+      h.facturado+=(c.facturadoHome||0); h.cobrado+=(c.cobradoHome||0); h.deuda+=(c.deudaHome||0);
+      if(typeof c.diasUltimaHome==='number'&&c.diasUltimaHome>=0&&(h.diasUltima<0||c.diasUltimaHome<h.diasUltima)){ h.diasUltima=c.diasUltimaHome; h.ultimaFecha=c.ultimaFechaHome; }
+      // Cross-canal (referencia, sufijo All) — por si alguna vista quiere el total con Maleu.
+      h.entregadosAll+=(c.entregados||0); h.facturadoAll+=(c.facturado||0); h.cobradoAll+=(c.cobrado||0); h.deudaAll+=(c.deuda||0);
+      if(typeof c.diasUltima==='number'&&c.diasUltima>=0&&(h.diasUltimaAll<0||c.diasUltima<h.diasUltimaAll)){ h.diasUltimaAll=c.diasUltima; h.ultimaFechaAll=c.ultimaFecha; }
       if(c.vip) h.vip=true;
-      if(typeof c.diasUltima==='number'&&c.diasUltima>=0&&(h.diasUltima<0||c.diasUltima<h.diasUltima)){ h.diasUltima=c.diasUltima; h.ultimaFecha=c.ultimaFecha; }
     });
     var arr = Object.keys(H).map(function(k){
       var h=H[k];
@@ -17580,7 +17586,7 @@ if('serviceWorker' in navigator){
   function _estEstado(d){ if(d<0)return 'sin'; if(d<=28)return 'activo'; if(d<=90)return 'dormido'; return 'inactivo'; }
   function _combineHog(to,from){
     to.members=(to.members||[]).concat(from.members||[]);
-    ['pedidos','entregados','facturado','cobrado','deuda'].forEach(function(f){ to[f]=(to[f]||0)+(from[f]||0); });
+    ['pedidos','entregados','facturado','cobrado','deuda','entregadosAll','facturadoAll','cobradoAll','deudaAll'].forEach(function(f){ to[f]=(to[f]||0)+(from[f]||0); });
     if(typeof from.diasUltima==='number'&&from.diasUltima>=0&&(to.diasUltima<0||from.diasUltima<to.diasUltima)){ to.diasUltima=from.diasUltima; to.ultimaFecha=from.ultimaFecha; }
     to.ticket=to.entregados>0?Math.round(to.facturado/to.entregados):0;
     to.estado=_estEstado(to.diasUltima);
@@ -17836,8 +17842,9 @@ if('serviceWorker' in navigator){
   // ─────────── helpers hogares ───────────
   function _nocrm(){ return '<div class="est-soon"><div class="est-soon-i">⚠️</div><div>No pude cargar el motor de hogares. Abrí <b>BBDD</b> una vez y volvé.</div></div>'; }
   function _minPrimera(h){
+    // Primera compra HOME/Estancias (nuevos del cockpit = nuevos en Home, no en Clubes).
     var min=null;
-    (h.members||[]).forEach(function(m){ var d=_parseFecha(m.primeraFecha); if(d&&(!min||d<min))min=d; });
+    (h.members||[]).forEach(function(m){ var d=_parseFecha(m.primeraFechaHome||m.primeraFecha); if(d&&(!min||d<min))min=d; });
     return min;
   }
   function _hogCard(h,rank){
@@ -17854,6 +17861,7 @@ if('serviceWorker' in navigator){
       +'<span class="hog-stat">Frecuencia <b>'+(h.freq?('~'+h.freq+'d'):'—')+'</b></span>'
       +'<span class="hog-stat">Deuda <b style="color:'+((h.deuda>0)?'var(--r)':'var(--ink)')+'">'+money(h.deuda)+'</b></span>'
       +(h.prodTop?'<span class="hog-stat">Suele llevar <b>'+esc(h.prodTop)+'</b></span>':'')
+      +((h.facturadoAll||0)>(h.facturado||0)?'<span class="hog-stat" style="color:var(--bl)" title="Facturado fuera de Home/Estancias (Clubes u otros canales) — no cuenta acá">🎟️ +'+money((h.facturadoAll||0)-(h.facturado||0))+' en otros canales</span>':'')
       +'</div>'
       +_hogActions(h)+'</div>';
   }
@@ -18134,15 +18142,18 @@ if('serviceWorker' in navigator){
   window.estHogFicha=function(key){
     var h=(_estHog.hogares||[]).filter(function(x){return x.key===key;})[0];
     if(!h){ _toast('No encontré el hogar'); return; }
-    var ints=(h.members||[]).slice().sort(function(a,b){return (b.entregados||0)-(a.entregados||0);});
+    // Todo Home/Estancias retail (los KPIs del hogar ya vienen así de _hogBuild).
+    var ints=(h.members||[]).slice().sort(function(a,b){return (b.entregadosHome||0)-(a.entregadosHome||0);});
     var kpis=[['Pedidos',(h.entregados||0)],['Facturado',money(h.facturado)],['Ticket',money(h.ticket)],
       ['Frecuencia',h.freq?('~'+h.freq+'d'):'—'],['Última',(typeof h.diasUltima==='number'&&h.diasUltima>=0)?('hace '+h.diasUltima+'d'):'—'],['Deuda',money(h.deuda)]];
     var kh=kpis.map(function(k){return '<div class="est-fk"><div class="est-fk-l">'+k[0]+'</div><div class="est-fk-v">'+k[1]+'</div></div>';}).join('');
     var rows=ints.map(function(m){
       var tel=m.telDisplay||m.tel||'';
+      var mEnt=m.entregadosHome||0, mFact=m.facturadoHome||0, mUlt=m.ultimaFechaHome||'', mProd=m.prodTop||'';
+      var mEst=_estEstado(typeof m.diasUltimaHome==='number'?m.diasUltimaHome:-1);
       return '<div class="est-int"><div style="min-width:0"><div class="est-int-n">'+esc(m.nombre)+(tel?' <span class="est-tel">'+esc(tel)+'</span>':'')+'</div>'
-        +'<div class="est-int-s">'+(m.entregados||0)+' ped · '+money(m.facturado)+' · últ '+esc(m.ultimaFecha||'—')+(m.prodTop?' · suele: '+esc(m.prodTop):'')+'</div></div>'
-        +_estBadge(m.estado)+'</div>';
+        +'<div class="est-int-s">'+mEnt+' ped · '+money(mFact)+' · últ '+esc(mUlt||'—')+(mProd?' · suele: '+esc(mProd):'')+'</div></div>'
+        +_estBadge(mEst)+'</div>';
     }).join('');
     var cta=(h.estado==='dormido'||h.estado==='inactivo')?_reactivarBtn(h):'';
     var ov=document.createElement('div'); ov.id='estFichaModal'; ov.className='est-modal-ov';
