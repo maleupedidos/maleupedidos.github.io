@@ -2289,6 +2289,9 @@ function validateOnBlur(campo) {
       if (dpRoot) dpRoot.classList.add('error');
     }
   }
+  // Refrescar el hint del botón WhatsApp: puede haber cambiado el estado
+  // (ej: al completar nombre, el hint pasa a "solo falta el pago").
+  updateWhatsappCta();
 }
 function filtrarSubBarrios(keepValue) {
   const privado = $id('f-barrio-privado').value;
@@ -2963,38 +2966,58 @@ function updateFormVisibility() {
 function updateWhatsappCta() {
   const wrap = $id('whatsapp-cta-wrap');
   if (!wrap) return;
+  const hintText = wrap.querySelector('.wh-hint-text');
+  const hintArrow = wrap.querySelector('.wh-arrow');
+  const setState = function(cls, arrow, text) {
+    wrap.classList.remove('ready', 'missing-pay');
+    if (cls) wrap.classList.add(cls);
+    if (hintArrow) hintArrow.textContent = arrow;
+    if (hintText) hintText.textContent = text;
+  };
+
   // Necesita carrito con items
-  if (cartCount() === 0) { wrap.classList.remove('ready'); return; }
-  // Campos comunes: nombre, teléfono, fecha de entrega, método de pago
+  if (cartCount() === 0) { setState('', '👇', 'Último paso: tocá para enviar tu pedido'); return; }
+  // Campos comunes salvo pago: nombre, teléfono, fecha de entrega
   const nombre = ($id('f-nombre') && $id('f-nombre').value || '').trim();
   const telDigits = ($id('f-telefono') && $id('f-telefono').value || '').replace(/\D/g,'');
   const fechaIso = $id('f-dia-fecha') ? $id('f-dia-fecha').value : '';
   const dia = $id('f-dia') ? $id('f-dia').value : '';
   const pagoSel = document.querySelector('input[name="pago"]:checked');
-  if (!nombre || telDigits.length < 8 || !(fechaIso || dia) || !pagoSel) {
-    wrap.classList.remove('ready'); return;
-  }
-  // Campos específicos por zona
+  const otherCompleto = !!nombre && telDigits.length >= 8 && !!(fechaIso || dia);
+  if (!otherCompleto) { setState('', '👇', 'Último paso: tocá para enviar tu pedido'); return; }
+  // Campos específicos por zona (los revisamos aparte del pago para poder
+  // detectar el caso "solo falta pago").
+  let zonaCompleto = true;
   if (currentZone === 'estancias') {
     const bp = ($id('f-barrio-privado') && $id('f-barrio-privado').value || '').trim();
     const lote = ($id('f-lote') && $id('f-lote').value || '').trim();
-    if (!bp || !lote) { wrap.classList.remove('ready'); return; }
+    if (!bp || !lote) zonaCompleto = false;
+    // Sub-barrio requerido si eligió Estancias del Pilar
+    if (bp === 'Estancias del Pilar') {
+      const sb = ($id('f-barrio') && $id('f-barrio').value || '').trim();
+      if (!sb) zonaCompleto = false;
+    }
   } else if (currentZone === 'pilar') {
     const pb = ($id('f-pilar-barrio') && $id('f-pilar-barrio').value || '').trim();
     const lotep = ($id('f-lote-pilar') && $id('f-lote-pilar').value || '').trim();
-    if (!pb || !lotep) { wrap.classList.remove('ready'); return; }
-    // Si eligió "Otro barrio" también necesita el input libre
+    if (!pb || !lotep) zonaCompleto = false;
     if (pb === '__otro__') {
       const dir = ($id('f-direccion') && $id('f-direccion').value || '').trim();
-      if (!dir) { wrap.classList.remove('ready'); return; }
+      if (!dir) zonaCompleto = false;
     }
   } else if (currentZone === 'clubes') {
     const club = ($id('f-club') && $id('f-club').value || '').trim();
     const dep = ($id('f-deporte') && $id('f-deporte').value || '').trim();
     const gr = ($id('f-grupo') && $id('f-grupo').value || '').trim();
-    if (!club || !dep || !gr) { wrap.classList.remove('ready'); return; }
+    if (!club || !dep || !gr) zonaCompleto = false;
   }
-  wrap.classList.add('ready');
+  if (!zonaCompleto) { setState('', '👇', 'Último paso: tocá para enviar tu pedido'); return; }
+
+  // Todo lo demás está OK. Si solo falta pago → hint específico ambar.
+  if (!pagoSel) { setState('missing-pay', '⚠️', 'Te falta elegir el método de pago antes de pedir'); return; }
+
+  // Todo listo — el hint clásico verde.
+  setState('ready', '👇', 'Último paso: tocá para enviar tu pedido');
 }
 function expandForm() {
   const section = $id('form-section');
