@@ -13227,13 +13227,29 @@ if('serviceWorker' in navigator){
   }
 
   // Ficha completa del lote: ventas (CRM) + datos de territorio editables.
+  var _loteUltimoArgs = null;
   window.crmOpenLote = function(L0){
     var sub = L0.zona>=0 ? (_subZonas[L0.zona] && _subZonas[L0.zona].nombre) : '';
     var lote = L0.n;
+    // Reasegurar el índice cliente↔lote fresco (evita ficha en blanco al saltar de Hogares a Mapa).
+    try{ if(crmClientes){ _mapaBuildCliIndex(); if(sub) L0.cli = _mapaLoteCli[_crmNormName(sub)+'|'+_loteNorm(lote)] || L0.cli; } }catch(e){}
+    _loteUltimoArgs = {L0:L0, sub:sub, lote:lote};
     el('crmDrawerTitle').textContent = (sub||'Lote') + ' · Lote ' + lote;
     _mapaMarcarUltimo(L0);   // halo persistente: no perder de vista qué lote estás editando
     openDrawer();
     _renderFichaLote(L0, sub, lote);
+  };
+  // Reintento manual cuando la ficha del lote falló (datos del mapa sincronizando).
+  // Reasegura clientes + reconstruye el índice lote↔cliente y re-renderiza.
+  window.crmReintentarLote = function(){
+    if(!_loteUltimoArgs) return;
+    var a=_loteUltimoArgs, body=el('crmDrawerBody');
+    if(body) body.innerHTML='<div class="loading" style="padding:20px">Cargando…</div>';
+    _mapaEnsureClientes(function(){
+      try{ _mapaBuildCliIndex(); }catch(e){}
+      try{ a.L0.cli = _mapaLoteCli[_crmNormName(a.sub)+'|'+_loteNorm(a.lote)] || a.L0.cli; }catch(e){}
+      _renderFichaLote(a.L0, a.sub, a.lote);
+    });
   };
 
   // ── SEGUIMIENTO DEL ÚLTIMO LOTE TOCADO ──
@@ -13260,19 +13276,22 @@ if('serviceWorker' in navigator){
   // ── Enriquecimiento de la ficha de lote (estudio profundo del hogar) ──
   // Posición del hogar en el ranking de Estancias (por facturado y por pedidos).
   function _loteRankingDe(sub, lote){
-    if(!crmClientes) return null;
-    var built = (_hogLast && _hogLast.hogares && _hogLast.hogares.length) ? _hogLast : _hogBuild();
-    var key=_crmNormName(sub)+'|'+_loteNorm(lote), tot=built.hogares.length;
-    var byF=built.hogares.slice().sort(function(a,b){return b.facturado-a.facturado;});
-    var byP=built.hogares.slice().sort(function(a,b){return (b.entregados-a.entregados)||(b.facturado-a.facturado);});
-    var rf=0,rp=0; byF.forEach(function(h,i){if(h.key===key)rf=i+1;}); byP.forEach(function(h,i){if(h.key===key)rp=i+1;});
-    return rf? {rf:rf,rp:rp,tot:tot} : null;
+    try {
+      if(!crmClientes) return null;
+      var built = (_hogLast && _hogLast.hogares && _hogLast.hogares.length) ? _hogLast : _hogBuild();
+      var key=_crmNormName(sub)+'|'+_loteNorm(lote), tot=built.hogares.length;
+      var byF=built.hogares.slice().sort(function(a,b){return b.facturado-a.facturado;});
+      var byP=built.hogares.slice().sort(function(a,b){return (b.entregados-a.entregados)||(b.facturado-a.facturado);});
+      var rf=0,rp=0; byF.forEach(function(h,i){if(h.key===key)rf=i+1;}); byP.forEach(function(h,i){if(h.key===key)rp=i+1;});
+      return rf? {rf:rf,rp:rp,tot:tot} : null;
+    } catch(e){ return null; }
   }
   // Nombres declarados en la composición del hogar, con su rol.
   function _loteNombresComp(c){
     var o=[]; if(!c) return o;
     if(c.tipo==='Pareja'){ if(c.n1)o.push({rol:'Integrante',n:c.n1}); if(c.n2)o.push({rol:'Integrante',n:c.n2}); }
     else if(c.tipo==='Vive solo/a'){ if(c.n1)o.push({rol:'Vive solo/a',n:c.n1}); }
+    else if(c.tipo==='Monoparental'){ if(c.n1)o.push({rol:'Adulto/a a cargo',n:c.n1}); (c.hijos||[]).forEach(function(h,i){ if(h)o.push({rol:'Hijo/a '+(i+1),n:h}); }); }
     else if(c.tipo==='Familia'){ if(c.padre)o.push({rol:'Padre',n:c.padre}); if(c.madre)o.push({rol:'Madre',n:c.madre}); (c.hijos||[]).forEach(function(h,i){ if(h)o.push({rol:'Hijo/a '+(i+1),n:h}); }); }
     return o;
   }
@@ -13307,6 +13326,7 @@ if('serviceWorker' in navigator){
   }
 
   function _renderFichaLote(L0, sub, lote){
+   try {
     var u = L0.cli; // hogar segun ventas
     var rec = _mapaLotesData[_crmNormName(sub)+'|'+_loteNorm(lote)] || {};
     // Inicializar la composición del hogar (estructurada) desde lo guardado
@@ -13370,6 +13390,14 @@ if('serviceWorker' in navigator){
     el('crmDrawerBody').innerHTML = html;
     _renderComposicion();
     if (u) _loteProdsCargar(u.members, 'loteProds');
+   } catch(err){
+    try{ console.error('renderFichaLote error', err); }catch(e){}
+    var body=el('crmDrawerBody');
+    if(body) body.innerHTML='<div style="padding:20px">'
+      +'<div style="color:#E53935;font-weight:800;margin-bottom:6px">No se pudo cargar la ficha del lote.</div>'
+      +'<div style="font-size:12.5px;color:#7A4A4A;margin-bottom:14px">Puede que los datos del mapa se estén sincronizando. Tocá Reintentar.</div>'
+      +'<button class="btn-submit" onclick="crmReintentarLote()">Reintentar</button></div>';
+   }
   }
 
   // ── Composición del hogar (Pareja / Familia / Vive solo) ──
