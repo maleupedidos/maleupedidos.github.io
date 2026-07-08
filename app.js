@@ -133,6 +133,38 @@ const COMBOS = [
       { label: 'Postre', unidad: 'Franui',                     pick: 3, options: { ids: [13] } },
     ],
   },
+  {
+    id: 'cmb_cuartos_empanadas',
+    nombre: 'Combo Cuartos de Final · Empanadas',
+    desc: '¡Vamos Argentina! 32 empanadas y Franui para ver los cuartos con todos.',
+    personas: '8 a 10 personas',
+    precio: 95900,                       // valor ind. ~$109.000 (~12% off), le gana al 10% efectivo
+    img: COMBO_PLACEHOLDER_IMG,          // placeholder hasta la placa (flyer)
+    emoji: '🥟',
+    flag: '🇦🇷',
+    categoria: '🇦🇷 Mundial 2026',
+    zonas: ['estancias', 'pilar'],
+    slots: [
+      { label: 'Empanadas', unidad: 'pack de empanadas x8', pick: 4, options: { cat: 'Empanadas' } },  // 4 packs a elección libre
+      { label: 'Postre',    unidad: 'Franui',               pick: 4, options: { ids: [13] } },
+    ],
+  },
+  {
+    id: 'cmb_cuartos_pizzas',
+    nombre: 'Combo Cuartos de Final · Pizzas',
+    desc: '¡Vamos Argentina! 8 pizzas y Franui para bancar a la Selección en cuartos.',
+    personas: '8 a 10 personas',
+    precio: 91900,                       // valor ind. $104.000 (~11,6% off), le gana al 10% efectivo
+    img: COMBO_PLACEHOLDER_IMG,
+    emoji: '🍕',
+    flag: '🇦🇷',
+    categoria: '🇦🇷 Mundial 2026',
+    zonas: ['estancias', 'pilar'],
+    slots: [
+      { label: 'Pizzas', unidad: 'pack de pizzas clásicas x2', pick: 4, options: { cat: 'Pack Pizzas x2' } },  // 4 packs a elección libre
+      { label: 'Postre', unidad: 'Franui',                     pick: 4, options: { ids: [13] } },
+    ],
+  },
   // ── PERMANENTES ──
   {
     id: 'cmb_descubri_semana',
