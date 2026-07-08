@@ -2121,7 +2121,17 @@ function goToForm() {
   _track('begin_checkout', { value: cartTotal(), zone: currentZone, items: cartCount() });
   const section = $id('form-section');
   if (section) section.classList.remove('collapsed');
-  setTimeout(() => document.querySelector('.form-wrap').scrollIntoView({behavior:'smooth'}), 320);
+  // Esperamos que termine la animación de cierre del sidebar (300ms) + un
+  // margen para reflow del form recién expandido. Antes se scrolleaba a
+  // .form-wrap con setTimeout 320ms y en algunos navegadores el smooth se
+  // cancelaba por la animación paralela → el usuario quedaba viendo los
+  // combos (el elemento más cercano al fold). Ahora scrolleamos al title
+  // del form (más arriba del .form-wrap), con delay más largo y usando
+  // el helper que reintenta si el elemento no está.
+  setTimeout(function() {
+    var target = $id('form-title') || $id('form-section');
+    if (target) _smoothScrollToEl(target);
+  }, 420);
 }
 
 /* ── DÍA / HORARIO ── */
