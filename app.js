@@ -137,7 +137,8 @@ const COMBOS = [
     desc: '¡Vamos Argentina! 32 empanadas y Franui para ver los cuartos con todos.',
     personas: '6 a 8 personas',
     precio: 95900,                       // valor ind. ~$109.000 (~12% off), le gana al 10% efectivo
-    img: 'combo-cuartos-empanadas.jpg', fullCard: true, placaSola: true,  // placa trae composición + precio
+    img: 'combo-cuartos-empanadas.jpg', fullCard: true,
+    tachadoFijo: 119600,   // = valor individual que muestra la placa (para que coincida)
     emoji: '🥟',
     flag: '🇦🇷',
     categoria: '⚽ Cuartos de Final',
@@ -153,7 +154,8 @@ const COMBOS = [
     desc: '¡Vamos Argentina! 8 pizzas y Franui para bancar a la Selección en cuartos.',
     personas: '6 a 8 personas',
     precio: 91900,                       // valor ind. $104.000 (~11,6% off), le gana al 10% efectivo
-    img: 'combo-cuartos-pizzas.jpg', fullCard: true, placaSola: true,  // placa trae composición + precio
+    img: 'combo-cuartos-pizzas.jpg', fullCard: true,
+    tachadoFijo: 112800,   // = valor individual que muestra la placa (para que coincida)
     emoji: '🍕',
     flag: '🇦🇷',
     categoria: '⚽ Cuartos de Final',
@@ -1556,7 +1558,7 @@ function _comboPersonasHTML(c) {
 }
 
 function _comboCardHTML(c) {
-  const tachado = comboNaturalSumComp(resolveComp(c, defaultSelection(c)).comp);
+  const tachado = c.tachadoFijo || comboNaturalSumComp(resolveComp(c, defaultSelection(c)).comp);
   const priceHtml = '<span class="product-price">' +
     (tachado > c.precio ? '<s class="combo-price-old">' + ars(tachado) + '</s> ' : '') + ars(c.precio) + '</span>';
   const choices = comboHasChoices(c);
@@ -1815,7 +1817,7 @@ function renderComboFooter(comboId) {
   }
   // placaSola: la placa ya trae el precio → footer solo con el botón (no duplicar).
   if (c.placaSola) { footer.innerHTML = btn; return; }
-  const tachado = comboNaturalSumComp(resolveComp(c, defaultSelection(c)).comp);
+  const tachado = c.tachadoFijo || comboNaturalSumComp(resolveComp(c, defaultSelection(c)).comp);
   const priceHtml = '<span class="product-price">' +
     (tachado > c.precio ? '<s class="combo-price-old">' + ars(tachado) + '</s> ' : '') +
     ars(c.precio) + '</span>';
@@ -1911,7 +1913,7 @@ function renderComboConfig() {
 
   // Resolver la selección actual para precio tachado + chequeo de stock.
   const r = resolveComp(c, sel);
-  const tachado = comboNaturalSumComp(r.comp);
+  const tachado = c.tachadoFijo || comboNaturalSumComp(r.comp);
   const sig = comboSignature(c.id, r.comp);
   const existing = comboCart[sig] ? comboCart[sig].qty : 0;
   const max = compMaxTotal(r.comp, sig);
