@@ -3572,3 +3572,18 @@ function copyAlias() {
 }
 
 updateShippingBar();
+
+// Listener global: cualquier input/change dentro del form refresca el hint
+// del botón WhatsApp. Antes solo se disparaba en blur de inputs y cambio de
+// pago — al elegir día/barrio/sub-barrio/etc. el hint quedaba desactualizado
+// y el usuario no veía el aviso 'Te falta elegir el método de pago'.
+(function _wireCtaRefresh() {
+  var form = document.querySelector('.form-wrap');
+  if (form) {
+    form.addEventListener('input',  function() { updateWhatsappCta(); });
+    form.addEventListener('change', function() { updateWhatsappCta(); });
+  }
+  // Day-picker: los "botones día" viven fuera del <form>. Delegación en el root.
+  var dp = document.getElementById('day-picker');
+  if (dp) dp.addEventListener('click', function() { setTimeout(updateWhatsappCta, 30); });
+})();
