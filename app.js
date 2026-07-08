@@ -1801,20 +1801,25 @@ function renderComboFooter(comboId) {
   if (!footer) return;
   const c = COMBO_MAP[comboId];
   if (!c) return;
+  // Botón según estado (terminado / con elecciones / directo).
+  let btn;
+  if (c.terminado) {
+    btn = '<button class="add-btn combo-btn-terminado" disabled aria-disabled="true">Terminado</button>';
+  } else if (comboHasChoices(c)) {
+    btn = '<button class="add-btn" onclick="openComboConfig(\'' + c.id + '\')">Armar combo</button>';
+  } else {
+    const max = compMaxTotal(resolveComp(c, defaultSelection(c)).comp, null);
+    const sinStock = max !== Infinity && max <= 0;
+    btn = '<button class="add-btn" onclick="addComboDefault(\'' + c.id + '\')"' + (sinStock ? ' disabled' : '') + '>' +
+      (sinStock ? 'Sin stock' : '+ Agregar') + '</button>';
+  }
+  // placaSola: la placa ya trae el precio → footer solo con el botón (no duplicar).
+  if (c.placaSola) { footer.innerHTML = btn; return; }
   const tachado = comboNaturalSumComp(resolveComp(c, defaultSelection(c)).comp);
   const priceHtml = '<span class="product-price">' +
     (tachado > c.precio ? '<s class="combo-price-old">' + ars(tachado) + '</s> ' : '') +
     ars(c.precio) + '</span>';
-  if (comboHasChoices(c)) {
-    footer.innerHTML = priceHtml +
-      '<button class="add-btn" onclick="openComboConfig(\'' + c.id + '\')">Armar combo</button>';
-  } else {
-    const max = compMaxTotal(resolveComp(c, defaultSelection(c)).comp, null);
-    const sinStock = max !== Infinity && max <= 0;
-    footer.innerHTML = priceHtml +
-      '<button class="add-btn" onclick="addComboDefault(\'' + c.id + '\')"' + (sinStock ? ' disabled' : '') + '>' +
-      (sinStock ? 'Sin stock' : '+ Agregar') + '</button>';
-  }
+  footer.innerHTML = priceHtml + btn;
 }
 /* Badge de stock de las cards de combo (mismo criterio que productos). */
 function updateStockBadgesCombos() {
@@ -1923,7 +1928,7 @@ function renderComboConfig() {
     '<div class="combo-modal-slots">' + slotsHtml + '</div>' +
     '<div class="combo-modal-foot">' +
       '<div class="combo-modal-price">' +
-        (tachado > c.precio ? '<s class="combo-price-old">' + ars(tachado) + '</s> ' : '') +
+        (!c.placaSola && tachado > c.precio ? '<s class="combo-price-old">' + ars(tachado) + '</s> ' : '') +
         '<strong>' + ars(c.precio) + '</strong>' +
       '</div>' +
       '<button class="combo-modal-add" onclick="confirmComboConfig()"' + (canAdd ? '' : ' disabled') + '>' +
