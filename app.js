@@ -137,9 +137,9 @@ const COMBOS = [
     id: 'cmb_cuartos_empanadas',
     nombre: 'Combo Cuartos de Final · Empanadas',
     desc: '¡Vamos Argentina! 32 empanadas y Franui para ver los cuartos con todos.',
-    personas: '8 a 10 personas',
+    personas: '6 a 8 personas',
     precio: 95900,                       // valor ind. ~$109.000 (~12% off), le gana al 10% efectivo
-    img: COMBO_PLACEHOLDER_IMG,          // placeholder hasta la placa (flyer)
+    img: 'combo-cuartos-empanadas.jpg', fullCard: true, placaSola: true,  // placa trae composición + precio
     emoji: '🥟',
     flag: '🇦🇷',
     categoria: '🇦🇷 Mundial 2026',
@@ -153,9 +153,9 @@ const COMBOS = [
     id: 'cmb_cuartos_pizzas',
     nombre: 'Combo Cuartos de Final · Pizzas',
     desc: '¡Vamos Argentina! 8 pizzas y Franui para bancar a la Selección en cuartos.',
-    personas: '8 a 10 personas',
+    personas: '6 a 8 personas',
     precio: 91900,                       // valor ind. $104.000 (~11,6% off), le gana al 10% efectivo
-    img: COMBO_PLACEHOLDER_IMG,
+    img: 'combo-cuartos-pizzas.jpg', fullCard: true, placaSola: true,  // placa trae composición + precio
     emoji: '🍕',
     flag: '🇦🇷',
     categoria: '🇦🇷 Mundial 2026',
@@ -1575,15 +1575,19 @@ function _comboCardHTML(c) {
   const cardCls = c.terminado ? ' combo-card-terminado' : '';
 
   if (c.fullCard) {
+    // placaSola: la placa YA trae composición + precio (tachado y final). Mostramos
+    // solo la imagen + botón, sin duplicar/chocar con un precio dinámico debajo.
+    var foot = c.placaSola
+      ? '<span class="stock-indicator" id="stock-' + c.id + '"></span>' +
+        '<div class="product-footer">' + btn + '</div>'
+      : _comboPersonasHTML(c) +
+        '<ul class="combo-includes">' + _comboCompListHTML(c) + '</ul>' +
+        '<span class="stock-indicator" id="stock-' + c.id + '"></span>' +
+        '<div class="product-footer">' + priceHtml + btn + '</div>';
     return '<article class="product-card combo-card combo-card-full' + cardCls + '" data-id="' + c.id + '">' +
       terminadoBadge +
       '<img class="combo-full-img" src="img/' + c.img + '" alt="' + c.nombre + '" loading="lazy">' +
-      '<div class="combo-full-foot">' +
-        _comboPersonasHTML(c) +
-        '<ul class="combo-includes">' + _comboCompListHTML(c) + '</ul>' +
-        '<span class="stock-indicator" id="stock-' + c.id + '"></span>' +
-        '<div class="product-footer">' + priceHtml + btn + '</div>' +
-      '</div>' +
+      '<div class="combo-full-foot">' + foot + '</div>' +
     '</article>';
   }
 
