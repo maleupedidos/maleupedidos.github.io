@@ -99,18 +99,16 @@ const COMBO_PLACEHOLDER_IMG = 'pack-muzarella-cocida.jpg';
 const COMBOS = [
   // ── TEMPORALES (categoria definida → van primero, separados) ──
   {
-    id: 'cmb_arg_16avos',
-    nombre: 'Combo Argentina · 16avos',
-    desc: 'Para alentar a la Selección.',
+    id: 'cmb_arg_16avos',   // id interno estable (sin ventas); ahora "Combo Mundialista"
+    nombre: 'Combo Mundialista',
+    desc: 'El que combina pizza y empanadas. Para alentar a la Selección con todo.',
     personas: '4 a 6 personas',
     precio: 54900,
-    img: 'combo-arg-16avos.jpg', fullCard: true,   // placa actualizada (3 Franui, $54.900)
-    emoji: '🇦🇷',
-    flag: '🇦🇷',
-    categoria: '🇦🇷 Mundial 2026',
+    img: 'combo-mundialista-1.jpg', fullCard: true,   // placa "Mundialista 1" (pizza + empanada)
+    emoji: '🌎',
+    flag: '🌎',
+    categoria: '🌎 Combos Mundialista',
     zonas: ['estancias', 'pilar'],
-    terminado: true,   // 16avos ya se jugaron — combo visible pero no comprable
-    terminadoLabel: 'Terminado · Argentina pasó a Octavos 🎉',
     slots: [
       { label: 'Pizza',     unidad: 'pack de pizzas clásicas x2', pick: 1, options: { cat: 'Pack Pizzas x2' } },
       { label: 'Empanadas', unidad: 'pack de empanadas x8',       pick: 1, options: { cat: 'Empanadas' } },
@@ -119,14 +117,14 @@ const COMBOS = [
   },
   {
     id: 'cmb_mundialista',
-    nombre: 'Combo Mundialista',
+    nombre: 'Combo Mundialista · Pizzas',
     desc: 'Ideal para compartir todos los partidos del Mundial.',
     personas: '6 a 8 personas',
     precio: 69900,
     img: 'combo-mundialista.jpg', fullCard: true,
     emoji: '🌎',
     flag: '🌎',
-    categoria: '🇦🇷 Mundial 2026',
+    categoria: '🌎 Combos Mundialista',
     zonas: ['estancias', 'pilar'],
     slots: [
       { label: 'Pizzas', unidad: 'pack de pizzas clásicas x2', pick: 3, options: { cat: 'Pack Pizzas x2' } },  // 3 packs, sabores a elección libre
@@ -142,7 +140,7 @@ const COMBOS = [
     img: 'combo-cuartos-empanadas.jpg', fullCard: true, placaSola: true,  // placa trae composición + precio
     emoji: '🥟',
     flag: '🇦🇷',
-    categoria: '🇦🇷 Mundial 2026',
+    categoria: '⚽ Cuartos de Final',
     zonas: ['estancias', 'pilar'],
     slots: [
       { label: 'Empanadas', unidad: 'pack de empanadas x8', pick: 4, options: { cat: 'Empanadas' } },  // 4 packs a elección libre
@@ -158,7 +156,7 @@ const COMBOS = [
     img: 'combo-cuartos-pizzas.jpg', fullCard: true, placaSola: true,  // placa trae composición + precio
     emoji: '🍕',
     flag: '🇦🇷',
-    categoria: '🇦🇷 Mundial 2026',
+    categoria: '⚽ Cuartos de Final',
     zonas: ['estancias', 'pilar'],
     slots: [
       { label: 'Pizzas', unidad: 'pack de pizzas clásicas x2', pick: 4, options: { cat: 'Pack Pizzas x2' } },  // 4 packs a elección libre
