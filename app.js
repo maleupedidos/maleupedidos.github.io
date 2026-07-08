@@ -334,8 +334,10 @@ const ZONAS = {
     nombre: "Pilar y Alrededores",
     envio: 5000,
     canal: "Pilar",
-    horarios: { "Miércoles":"A coordinar", "Viernes":"A coordinar" },
-    deliveryText: "📅 Entregas: Miércoles y Viernes · Horario a coordinar",
+    // 06/07/26: eliminado delivery de miércoles en Pilar. Solo viernes
+    // (Tadeo hace el recorrido combinado M2+M3 solo ese día).
+    horarios: { "Viernes":"A coordinar" },
+    deliveryText: "📅 Entregas: solo los viernes · Horario a coordinar",
     showStock: false
   },
   clubes: {
@@ -2128,12 +2130,10 @@ function _zoneHorariosForDayPicker() {
   if (!currentZone) return {};
   var z = ZONAS[currentZone];
   if (!z) return {};
-  if (currentZone === 'pilar') {
-    var el = $id('f-pilar-barrio');
-    var val = el ? el.value : '';
-    var vendedor = val && val !== '__otro__' ? barrioToVendedor[val.toLowerCase()] : null;
-    if (vendedor) return { 'Viernes': 'A coordinar' };
-  }
+  // Pilar (todos los barrios, Red y no-Red): SOLO viernes desde 06/07/26.
+  // Antes NO-Red tenía Miércoles y Viernes, pero Tadeo decidió consolidar
+  // el reparto en un único día.
+  if (currentZone === 'pilar') return { 'Viernes': 'A coordinar' };
   return z.horarios || {};
 }
 
