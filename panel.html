@@ -531,15 +531,17 @@ body{font-family:'Inter',-apple-system,'Segoe UI',system-ui,sans-serif;backgroun
 /* Gráfico de columnas (tendencia por semana) */
 .est-chart-plot{position:relative;display:flex;align-items:flex-end;gap:5px;height:150px;margin-top:22px;border-bottom:2px solid var(--cd)}
 .est-col{flex:1;height:100%;display:flex;align-items:flex-end;justify-content:center}
-.est-col-bar{position:relative;width:100%;max-width:26px;min-height:3px;border-radius:5px 5px 0 0;transition:height .3s}
-.est-col-bar.curso{background:repeating-linear-gradient(45deg,#F5A26B,#F5A26B 4px,#FBD9C4 4px,#FBD9C4 8px)}
-.est-col-n{position:absolute;top:-15px;left:-5px;right:-5px;text-align:center;font-size:10px;font-weight:800;color:var(--ink);font-variant-numeric:tabular-nums}
+.est-col-stack{position:relative;width:100%;max-width:26px;min-height:3px;display:flex;flex-direction:column;transition:height .3s}
+.est-col-done{width:100%;flex-shrink:0}
+.est-col-pend{width:100%;flex-shrink:0;background:repeating-linear-gradient(45deg,#F5A26B,#F5A26B 4px,#FBD9C4 4px,#FBD9C4 8px)}
+.est-col-n{position:absolute;top:-15px;left:-6px;right:-6px;text-align:center;font-size:10px;font-weight:800;color:var(--ink);font-variant-numeric:tabular-nums}
 .est-chart-meta{position:absolute;left:0;right:0;border-top:2px dashed rgba(51,28,28,.45);z-index:2;pointer-events:none}
 .est-chart-x{display:flex;gap:5px;margin-top:6px}
 .est-col-x{flex:1;text-align:center;font-size:10px;font-weight:700;color:var(--bl);font-variant-numeric:tabular-nums}
 .est-col-x.cur{color:var(--o);font-weight:800}
 .est-chart-foot{font-size:10px;color:var(--bl);margin-top:9px;text-align:center;line-height:1.4}
-@media(max-width:520px){.est-chart-plot{gap:3px}.est-col-bar{max-width:20px}.est-col-n{font-size:9px}.est-col-x{font-size:9px}}
+.est-chart-foot i{font-style:normal;background:repeating-linear-gradient(45deg,#F5A26B,#F5A26B 3px,#FBD9C4 3px,#FBD9C4 6px);padding:0 6px;border-radius:3px;color:#8a4a28}
+@media(max-width:520px){.est-chart-plot{gap:3px}.est-col-stack{max-width:20px}.est-col-n{font-size:9px}.est-col-x{font-size:9px}}
 .est-soon{display:flex;gap:13px;align-items:center;background:#FFFBF2;border:1.5px dashed var(--cd);border-radius:12px;padding:18px;font-size:13px;color:var(--ink);line-height:1.5}
 .est-soon-i{font-size:26px;flex:0 0 auto}
 /* controles hogares */
@@ -13224,13 +13226,30 @@ if('serviceWorker' in navigator){
     if (!(crmClientes && crmClientes.length)) return null;
     return crmClientes.filter(function(c){ return String(c.barrio||'').trim().toLowerCase()==='estancias del pilar'; });
   };
+  // Baja clientes con reintentos. Devuelve la lista SOLO si vino con datos; null si
+  // falló o vino vacía (así NUNCA pisamos datos buenos ni cacheamos vacío).
+  function _fetchClientesRetry(retries, cb){
+    fetch(CRM_API + '?action=crmClientes', {cache:'no-store'})
+      .then(function(r){ if(!r.ok) throw new Error('http '+r.status); return r.json(); })
+      .then(function(d){ var l=(d&&d.clientes)||[]; cb(l.length?l:null); })
+      .catch(function(){ if(retries>0) setTimeout(function(){ _fetchClientesRetry(retries-1, cb); }, 1200); else cb(null); });
+  }
   // BACKGROUND: baja clientes + lotes frescos, cachea y devuelve hogares actualizados.
+  // cb(hogares, ok): ok=true si hay clientes reales (memoria o cache); false si no
+  // pudimos traer nada y tampoco había cache (→ la UI muestra "Reintentar", no ceros).
   window.estHogaresRefresh = function(cb){
     var pend=2;
-    function done(){ if(--pend<=0){ try{ cb(_hogBuild()); }catch(e){ cb({hogares:[],prospectos:[]}); } } }
-    fetch(CRM_API + '?action=crmClientes').then(function(r){return r.json();}).then(function(d){
-      crmClientes = d.clientes || []; try{ localStorage.setItem('maleu_crm_clientes_v1', JSON.stringify(crmClientes)); }catch(e){} done();
-    }).catch(done);
+    function done(){ if(--pend>0) return;
+      // Si el fetch no trajo clientes, caemos a la cache local antes de construir.
+      if(!(crmClientes && crmClientes.length)){ try{ var cc=JSON.parse(localStorage.getItem('maleu_crm_clientes_v1')||'null'); if(cc&&cc.length)crmClientes=cc; }catch(e){} }
+      var ok=!!(crmClientes && crmClientes.length);
+      try{ cb(_hogBuild(), ok); }catch(e){ cb({hogares:[],prospectos:[]}, ok); }
+    }
+    _fetchClientesRetry(2, function(list){
+      if(list && list.length){ crmClientes=list; try{ localStorage.setItem('maleu_crm_clientes_v1', JSON.stringify(crmClientes)); }catch(e){} }
+      // si vino null (falló/vacío): NO tocamos crmClientes ni la cache.
+      done();
+    });
     _mapaLoadLotesData(function(){ _estCacheLotes(); done(); });
   };
   // Puente: parchea la cache de lotes del CRM tras guardar desde la ficha de Estancias,
@@ -17820,14 +17839,16 @@ if('serviceWorker' in navigator){
   // Al terminar re-aplica merges y llama after() (repintar o cerrar la 1ra carga).
   var _estLastRefresh=0;
   function _estRefreshCore(after){
-    window.estHogaresRefresh(function(fresh){
-      _estRaw=fresh||{hogares:[],prospectos:[]};
+    window.estHogaresRefresh(function(fresh, ok){
+      // Solo reemplazamos los datos si el refresh trajo clientes reales (ok). Si falló,
+      // dejamos intacto lo que ya había pintado (cache) — nunca lo pisamos con vacío.
+      if(ok) _estRaw=fresh||{hogares:[],prospectos:[]};
       fetch(EST_API+'?action=hogaresMerge&t='+Date.now()).then(function(r){return r.json();}).then(function(d){ _estMerges=(d&&d.merges)||[]; })
         .catch(function(){ _estMerges=_estMerges||_mergesCache(); })
         .then(function(){
           try{ localStorage.setItem('maleu_est_merges_v1',JSON.stringify(_estMerges||[])); }catch(e){}
-          _estHog=_applyMerges(_estRaw,_estMerges||[]);
-          after();
+          if(ok || (!_estHog && _estRaw)) _estHog=_applyMerges(_estRaw,_estMerges||[]);
+          after(ok);
         });
     });
   }
@@ -17846,7 +17867,7 @@ if('serviceWorker' in navigator){
     if(raw){ _estRaw=raw; _estMerges=_mergesCache(); _estHog=_applyMerges(raw,_estMerges); cb(); painted=true; }
     if(typeof window.estHogaresRefresh!=='function'){ if(!painted)cb('nocrm'); return; }
     _estLastRefresh=Date.now();
-    _estRefreshCore(function(){ if(painted) _estRerender(); else cb(); });
+    _estRefreshCore(function(ok){ if(painted) _estRerender(); else cb((!ok && !(_estHog&&_estHog.hogares&&_estHog.hogares.length))?'nocrm':undefined); });
   }
   // Re-pinta el sub activo SIN spinner (datos ya en memoria → sincrónico).
   function _estRerender(){
@@ -18039,22 +18060,29 @@ if('serviceWorker' in navigator){
       +'<div style="height:12px;background:#F2E8C7;border-radius:6px;overflow:hidden;margin-top:9px;position:relative"><div style="height:100%;width:'+Math.min(100,Math.round(promMes/META_SEM*100))+'%;background:'+(promMes>=META_SEM?'linear-gradient(90deg,#4CAF50,#2E7D32)':'linear-gradient(90deg,#F07D47,#E5662F)')+'"></div></div>'
       +'</div>';
 
-    // ── Tendencia 12 semanas (columnas verticales) ──
+    // ── Tendencia 12 semanas (columnas apiladas: entregado + a entregar) ──
+    // La escala y la línea de meta se leen contra el TOTAL proyectado (entregado +
+    // pendiente), así se ve si la semana en curso llega a la meta con lo que falta entregar.
     var last12=weeks.slice(-12);
-    var scale=Math.max.apply(null,last12.map(function(w){return W[w].n;}).concat([META_SEM]));
+    var scale=Math.max.apply(null,last12.map(function(w){return W[w].n+(W[w].pend||0);}).concat([META_SEM]));
     var metaBottom=Math.round(META_SEM/scale*100);
     var cols=last12.map(function(w){
-      var o=W[w]; var hpct=Math.max(2,Math.round(o.n/scale*100)); var wc=(w===refW&&enCurso);
+      var o=W[w]; var pnd=o.pend||0, tot=o.n+pnd;
+      var totPct=Math.max(2,Math.round(tot/scale*100));
+      var donePct=tot>0?Math.round(o.n/tot*100):100, pendPct=100-donePct;
       var col=o.n>=META_SEM?'linear-gradient(180deg,#4CAF50,#2E7D32)':'linear-gradient(180deg,#F5A26B,#E5662F)';
-      var tip='Sem '+w+' · '+_dm(o.minTs)+'–'+_dm(o.maxTs)+' · '+o.n+' ventas · '+money(o.fact)+' · ticket '+money(o.n?o.fact/o.n:0);
-      return '<div class="est-col" title="'+esc(tip)+'"><div class="est-col-bar'+(wc?' curso':'')+'" style="height:'+hpct+'%'+(wc?'':';background:'+col)+'"><span class="est-col-n">'+o.n+'</span></div></div>';
+      var tip='Sem '+w+' · '+_dm(o.minTs)+'–'+_dm(o.maxTs)+' · '+o.n+' ventas'+(pnd>0?' + '+pnd+' a entregar = '+tot+' total':'')+' · '+money(o.fact)+' · ticket '+money(o.n?o.fact/o.n:0);
+      var pendSeg=pnd>0?'<div class="est-col-pend" style="height:'+pendPct+'%;border-radius:5px 5px 0 0"></div>':'';
+      var doneSeg='<div class="est-col-done" style="height:'+donePct+'%;background:'+col+(pnd>0?'':';border-radius:5px 5px 0 0')+'"></div>';
+      return '<div class="est-col" title="'+esc(tip)+'"><div class="est-col-stack" style="height:'+totPct+'%">'
+        +pendSeg+doneSeg+'<span class="est-col-n">'+tot+'</span></div></div>';
     }).join('');
     var xs=last12.map(function(w){ return '<div class="est-col-x'+(w===refW?' cur':'')+'">'+w+'</div>'; }).join('');
     h+='<div class="est-sec"><div class="est-sec-h"><span>Tendencia · ventas por semana</span>'
       +'<span style="color:var(--bl);font-weight:700;text-transform:none;letter-spacing:0">┈ meta '+META_SEM+'</span></div>'
       +'<div class="est-chart"><div class="est-chart-plot"><div class="est-chart-meta" style="bottom:'+metaBottom+'%"></div>'+cols+'</div>'
       +'<div class="est-chart-x">'+xs+'</div></div>'
-      +'<div class="est-chart-foot">cada columna = ventas de la semana · nº abajo = semana · tocá una barra para facturado y ticket</div></div>';
+      +'<div class="est-chart-foot">columna = ventas entregadas + <i>a entregar</i> · nº = total de la semana · tocá para ver el detalle</div></div>';
 
     // ── Desglose por sub-barrio (semana de referencia) ──
     // De dónde vinieron los pedidos de ESTA semana. Sale directo de p.br (el pedido ya
@@ -18096,7 +18124,7 @@ if('serviceWorker' in navigator){
   };
 
   // ─────────── helpers hogares ───────────
-  function _nocrm(){ return '<div class="est-soon"><div class="est-soon-i">⚠️</div><div>No pude cargar el motor de hogares. Abrí <b>BBDD</b> una vez y volvé.</div></div>'; }
+  function _nocrm(){ return '<div class="est-soon"><div class="est-soon-i">📡</div><div style="margin-bottom:12px">No pude traer los datos de Estancias (el server no respondió).</div><button class="btn-submit" style="max-width:220px;margin:0 auto" onclick="estRefreshActivo()">🔄 Reintentar</button></div>'; }
   function _minPrimera(h){
     // Primera compra HOME/Estancias (nuevos del cockpit = nuevos en Home, no en Clubes).
     var min=null;
@@ -18274,7 +18302,11 @@ if('serviceWorker' in navigator){
     var raw=window.estClientesSync(), painted=false;
     if(raw){ _estCli=raw; cb(); painted=true; }
     if(typeof window.estHogaresRefresh==='function'){
-      window.estHogaresRefresh(function(){ var f=window.estClientesSync(); if(f){ _estCli=f; if(painted)_cliRenderList(); else cb(); } });
+      window.estHogaresRefresh(function(fresh, ok){
+        var f=window.estClientesSync();
+        if(f){ _estCli=f; if(painted)_cliRenderList(); else cb(); }
+        else if(!painted){ cb(ok?undefined:'nocrm'); }   // sin datos ni cache → Reintentar, no ceros
+      });
     } else if(!painted){ cb('nocrm'); }
   }
   function _cliCard(c){
