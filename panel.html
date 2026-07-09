@@ -7042,6 +7042,31 @@ function rPedidos(opts){
   var listId = opts.listId || 'pList';
   var frId = opts.frId || 'fRow';
   function _rerender(){ rPedidos(opts); }
+  // ── Detección de OCs huérfanas: pedido marcado "Orden de Compra"/"Mixto",
+  //    no entregado/cancelado, pero SIN líneas en la hoja Orden de Compra.
+  //    (Le pasó a N65 de Del Bono: el origen decía OC pero la OC nunca se generó.)
+  function _ocLineasDe(p){
+    if(!D||!D.oc||!D.oc.lista)return [];
+    return D.oc.lista.filter(function(o){return o&&String(o.canal||'').trim()===p.h&&String(o.pedido||'').trim()===String(p.n);});
+  }
+  function _esOrphanOC(p){
+    if(!p||p.hist)return false;
+    if(!p.c||!String(p.c).trim()||!p.$)return false;
+    if(p.es==='Entregado'||p.es==='Cancelado')return false;
+    if(p.o!=='Orden de Compra'&&p.o!=='Mixto')return false;
+    return _ocLineasDe(p).length===0;
+  }
+  function _escH(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+  function _ocOrphanBannerHtml(list){
+    var items=list.map(function(p){
+      var lbl=_escH(p.h+' N'+p.n+' · '+(p.c||'—'));
+      return '<button type="button" onclick="openOrdDetail(\''+p.h+'\',\''+String(p.n).replace(/\\/g,"\\\\").replace(/'/g,"\\'")+'\')" style="display:block;width:100%;text-align:left;margin:5px 0 0;padding:8px 10px;background:#fff;border:1px solid var(--r);border-radius:8px;font-family:inherit;font-size:12.5px;font-weight:700;color:var(--r);cursor:pointer">'+lbl+' →</button>';
+    }).join('');
+    return '<div style="margin:0 0 12px;padding:12px 14px;background:var(--rb);border:1.5px solid var(--r);border-radius:12px">'+
+      '<div style="font-size:13.5px;font-weight:800;color:var(--r)">&#9888;&#65039; '+list.length+' pedido'+(list.length===1?'':'s')+' marcado'+(list.length===1?'':'s')+' &ldquo;Orden de Compra&rdquo; sin OC generada</div>'+
+      '<div style="font-size:12px;color:var(--r);opacity:.92;margin-top:3px;line-height:1.4">Est&aacute;n marcados para comprar al proveedor pero no tienen l&iacute;neas en la hoja <b>Orden de Compra</b>. Gener&aacute; la OC en Abastecimiento o cambi&aacute; el origen a Dep&oacute;sito.</div>'+
+      items+'</div>';
+  }
   // Pills
   var fr=$(frId);if(!fr)return;fr.innerHTML='';
   // Botón mini de orden (toggle entrega↔pedido). Va primero, visualmente distinto.
@@ -7070,6 +7095,9 @@ function rPedidos(opts){
   });
 
   var ct=$(listId);if(!ct)return;ct.innerHTML='';
+  // Aviso de OCs huérfanas (ignora los filtros de canal/estado para no ocultarse).
+  var _orphans=(D.pedidos||[]).filter(function(p){ if(homeOnly&&p.h!=='Home')return false; return _esOrphanOC(p); });
+  var _orphanBanner=_orphans.length?_ocOrphanBannerHtml(_orphans):'';
   // Filter out empty rows (no client or $0)
   var fl=D.pedidos.filter(function(p){
     if(p.hist)return false;
@@ -7080,7 +7108,7 @@ function rPedidos(opts){
     if(fE!=='Todos'&&p.es!==fE)return false;
     return true;
   });
-  if(!fl.length){ct.innerHTML='<div class="empty"><i>&#128230;</i><p>Sin pedidos</p></div>';return;}
+  if(!fl.length){ct.innerHTML=_orphanBanner+'<div class="empty"><i>&#128230;</i><p>Sin pedidos</p></div>';return;}
 
   // Más recientes arriba: fecha pedido + hora, tiebreaker por fila (r) en Sheets —
   // pedidos sin hora (Red) se ordenan por r desc, que refleja momento de inserción.
@@ -7123,6 +7151,7 @@ function rPedidos(opts){
   // Depósito/OC todavía) Y no fue abierto manualmente. En cuanto se confirma
   // origen, o se cancela/entrega, pierde el highlight. El localStorage queda
   // como backup: si Tadeo expande la card sin cambiar nada, también la limpia.
+  if(_orphanBanner)ct.innerHTML=_orphanBanner;
   var __vistos=_pcVistos();
   fl.forEach(function(p){
     var card=document.createElement('div');
@@ -7199,6 +7228,10 @@ function rPedidos(opts){
           var falta=ocsP.length-ocsP.filter(function(o){return String(o.estado||'').toLowerCase()==='recibido';}).length;
           sumReadyBadge='<span class="tg" style="background:var(--ol);color:#8B3A0E" title="Esperando OCs del proveedor">📦 '+falta+' OC</span>';
         }
+      } else {
+        // Origen dice OC/Mixto pero NO hay ninguna línea en la hoja Orden de Compra:
+        // la OC nunca se generó. Antes esto no mostraba nada (silencio → confusión).
+        sumReadyBadge='<span class="tg" style="background:var(--rb);color:var(--r);font-weight:800" title="Marcado como Orden de Compra pero la OC no está generada en la hoja Orden de Compra. Generala en Abastecimiento o cambiá el origen a Depósito.">&#9888;&#65039; OC sin generar</span>';
       }
     }
     // Badge "Decidir Origen" — aparece SOLO en pedidos con Origen=Pendiente todavía
