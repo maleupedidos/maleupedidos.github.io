@@ -4366,8 +4366,34 @@ function refreshContextual(){
     if(btn)btn.classList.remove('spinning');
     _markRefreshTime();
   };
-  // Ruta y Abastecimiento: recargar iframe
+  // Ruta: en vez de recargar iframe entero (lento + puede pegar en cache),
+  // le mando un postMessage al iframe para que HAGA refresh con fresh=1
+  // (bypass cache server-side 20s). Fallback a recarga completa si no
+  // responde en 4s.
   if(active==='ruta'){
+    var frR=document.getElementById('rutaFrame');
+    if(frR && frR.contentWindow){
+      showLoader('Actualizando Ruta...', true);
+      var _fbTimer=setTimeout(function(){
+        window.removeEventListener('message',_rutaMsgHandler);
+        refreshIframe('rutaFrame','/ruta.html?embed=1&_t='+Date.now(),'Recargando Ruta...').then(done);
+      },4000);
+      var _rutaMsgHandler=function(ev){
+        if(!ev||!ev.data||ev.data.type!=='maleu_ruta_refresh_done')return;
+        clearTimeout(_fbTimer);
+        window.removeEventListener('message',_rutaMsgHandler);
+        hideLoader(true);
+        done();
+      };
+      window.addEventListener('message',_rutaMsgHandler);
+      try{ frR.contentWindow.postMessage({type:'maleu_ruta_refresh',fresh:true},'*'); }
+      catch(_e){
+        clearTimeout(_fbTimer);
+        window.removeEventListener('message',_rutaMsgHandler);
+        refreshIframe('rutaFrame','/ruta.html?embed=1&_t='+Date.now(),'Recargando Ruta...').then(done);
+      }
+      return;
+    }
     refreshIframe('rutaFrame','/ruta.html?embed=1&_t='+Date.now(),'Recargando Ruta...').then(done);
     return;
   }
@@ -17863,20 +17889,24 @@ if('serviceWorker' in navigator){
     var t=Date.now(); if(t-_estLastRefresh<60000)return;
     _estLastRefresh=t; _estRefreshCore(_estRerender);
   }
+  function _estHogTiene(){ return !!(_estHog && _estHog.hogares && _estHog.hogares.length); }
   function _estEnsure(cb){
-    if(_estHog){ cb(); _estBgRefresh(); return; }                  // en memoria → instantáneo + refresco throttled
+    // OJO: sólo cortocircuitar si REALMENTE hay hogares. Un _estHog truthy-pero-vacío
+    // (build desde una cache de clientes stale que da 0 hogares de Estancias) trababa
+    // el estado en vacío para siempre y nunca dejaba refrescar de la red. Nunca más.
+    if(_estHogTiene()){ cb(); _estBgRefresh(); return; }            // en memoria → instantáneo + refresco throttled
     var painted=false;
     if(typeof window.estHogaresSync==='function'){
       var raw=window.estHogaresSync();                             // SÍNCRONO desde cache de clientes
-      if(raw){ _estRaw=raw; _estMerges=_mergesCache(); _estHog=_applyMerges(raw,_estMerges); cb(); painted=true; }
+      if(raw && raw.hogares && raw.hogares.length){ _estRaw=raw; _estMerges=_mergesCache(); _estHog=_applyMerges(raw,_estMerges); cb(); painted=_estHogTiene(); }
     }
-    if(!painted){                                                  // sin clientes en cache → cache durable del build
+    if(!painted){                                                  // sin clientes útiles en cache → cache durable del build
       var cached=_estHogCacheLoad();
-      if(cached){ _estHog=cached; _estMerges=_estMerges||_mergesCache(); cb(); painted=true; }
+      if(cached){ _estHog=cached; _estMerges=_estMerges||_mergesCache(); cb(); painted=_estHogTiene(); }
     }
     if(typeof window.estHogaresRefresh!=='function'){ if(!painted)cb('nocrm'); return; }
     _estLastRefresh=Date.now();
-    _estRefreshCore(function(ok){ if(painted) _estRerender(); else cb((!ok && !(_estHog&&_estHog.hogares&&_estHog.hogares.length))?'nocrm':undefined); });
+    _estRefreshCore(function(ok){ if(painted) _estRerender(); else cb(_estHogTiene()?undefined:'nocrm'); });
   }
   // Re-pinta el sub activo SIN spinner (datos ya en memoria → sincrónico).
   function _estRerender(){
@@ -18236,9 +18266,9 @@ if('serviceWorker' in navigator){
   function _quienRender(host, loading){
     var H=(_estHog&&_estHog.hogares)?_estHog.hogares.slice():[];
     if(!H.length){
-      host.innerHTML = loading
-        ? '<div class="loading">Cargando quién compra…</div>'
-        : '<div class="est-soon"><div class="est-soon-i">📭</div><div>Todavía no hay hogares con compras cargados.</div></div>';
+      // En Estancias SIEMPRE hay hogares con compras → vacío = problema de carga, no realidad.
+      // Mientras carga: spinner. Si terminó y sigue vacío: botón Reintentar (no un dead-end).
+      host.innerHTML = loading ? '<div class="loading">Cargando quién compra…</div>' : _nocrm();
       return;
     }
     var now=new Date();
