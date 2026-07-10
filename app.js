@@ -2563,6 +2563,13 @@ function enviarPedido() {
     if (saldoAFavor > 0) msgLines.push('🎁 Saldo a favor: -' + ars(saldoAFavor));
   }
   msgLines.push('*Total: ' + ars(total) + '*');
+  // Alias de Mercado Pago cuando el cliente elige Transferencia y NO hay vendedor Red
+  // asignado al barrio. Si hay vendedor Red (Marcos), es él quien le pasa su propio
+  // alias, así que evitamos el conflicto no incluyendo el nuestro.
+  if (pagoEl.value === 'Transferencia' && !vendedorMatch) {
+    msgLines.push('');
+    msgLines.push('alias: *maleump*');
+  }
   var msg = msgLines.join('\n');
 
   const urlText = encodeURIComponent(msg);
