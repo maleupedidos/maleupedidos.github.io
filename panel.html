@@ -18382,6 +18382,7 @@ if('serviceWorker' in navigator){
   // ─────────── sub-tab CLIENTES (individuales de Estancias del Pilar) ───────────
   var _estCli=null;
   var _cliFiltro={busq:'',orden:'ultima',estado:''};
+  var _cliExcluidos={}; // keys marcados "no es de Estancias" en esta sesión (guard anti-reaparición)
   // Esta es una tab de ESTANCIAS: las métricas primarias son SOLO Home/Estancias
   // (los *Home del backend v424), NUNCA el total cross-canal (que incluye Clubes).
   // Si no, un residente que compra fuerte por Clubes (ej. Josefina Del Bono) se
@@ -18448,6 +18449,7 @@ if('serviceWorker' in navigator){
       +'<span class="hog-stat">Deuda <b style="color:'+((v.deuda>0)?'var(--r)':'var(--ink)')+'">'+money(v.deuda)+'</b></span>'
       +(tel?'<span class="hog-stat">📞 <b class="est-tel" style="cursor:pointer" onclick="event.stopPropagation();crmCopyTel(\''+tel+'\')">'+esc(tel)+'</b></span>':'')
       +(otros>0?'<span class="hog-stat" style="color:var(--bl)" title="Facturado fuera de Home/Estancias (Clubes u otros canales) — no cuenta en este ranking">🎟️ +'+money(otros)+' en otros canales</span>':'')
+      +'<button class="hog-stat" style="margin-left:auto;border:none;background:transparent;cursor:pointer;color:var(--o);font:inherit;padding:0" title="Este cliente no vive en Estancias — sacarlo del cockpit (Clientes + Pulso). Reversible." onclick="event.stopPropagation();estCliFuera(\''+encodeURIComponent(c.key)+'\',\''+encodeURIComponent(c.nombre||'')+'\')">🚫 No es de Estancias</button>'
       +'</div></div>';
   }
   // Recencia efectiva para el orden "Compra reciente": un pedido en curso (para
@@ -18455,6 +18457,7 @@ if('serviceWorker' in navigator){
   function _cliRec(v){ return (v.diasUltima>=0)?v.diasUltima:((v.pend>0)?-1:99999); }
   function _cliFilteredSorted(){
     var arr=(_estCli||[]).filter(function(c){
+      if(_cliExcluidos[c.key]) return false; // sacado del cockpit ("no es de Estancias")
       if(_cliFiltro.estado){
         // "Pendientes" agrupa a TODO cliente con pedido en curso, tenga o no historial.
         if(_cliFiltro.estado==='pendiente'){ if(!(_cliH(c).pend>0)) return false; }
@@ -18484,6 +18487,28 @@ if('serviceWorker' in navigator){
   window.estCliBusq=function(v){ _cliFiltro.busq=(v||'').toLowerCase().trim(); _cliRenderList(); };
   window.estCliOrden=function(o){ _cliFiltro.orden=o; document.querySelectorAll('#estClientes .est-chip[data-o]').forEach(function(b){b.classList.toggle('on',b.dataset.o===o);}); _cliRenderList(); };
   window.estCliEstado=function(e){ _cliFiltro.estado=e; document.querySelectorAll('#estClientes .est-chip[data-e]').forEach(function(b){b.classList.toggle('on',b.dataset.e===e);}); _cliRenderList(); };
+  // "No es de Estancias": saca al cliente del cockpit (Clientes + Pulso). Optimista +
+  // reversible. El backend reescribe el Barrio de sus filas Home a "Fuera de Estancias".
+  window.estCliFuera=function(keyEnc,nombreEnc){
+    var key=decodeURIComponent(keyEnc||''), nombre=decodeURIComponent(nombreEnc||'')||'este cliente';
+    if(!confirm('¿Marcar a "'+nombre+'" como NO de Estancias?\n\nSe saca del cockpit (sub-tab Clientes y Pulso) y se corrige el barrio de sus pedidos Home. Es reversible.')) return;
+    _cliExcluidos[key]=1;
+    // Optimista: sacarlo de la lista en memoria + parchear crmClientes (para que el
+    // refresh en background no lo revierta antes de que el server re-agregue).
+    _estCli=(_estCli||[]).filter(function(c){ return c.key!==key; });
+    try{ if(window.crmClientes){ crmClientes.forEach(function(c){ if(c.key===key) c.barrio='Fuera de Estancias'; }); localStorage.setItem('maleu_crm_clientes_v1', JSON.stringify(crmClientes)); } }catch(e){}
+    _cliRenderList();
+    _toast('Sacando a '+nombre+' de Estancias…');
+    fetch(EST_API,{method:'POST',mode:'cors',body:JSON.stringify({action:'estFueraEstancias',key:key})})
+      .then(function(r){return r.json();}).then(function(d){
+        if(d&&d.ok){ _toast('✅ '+nombre+' fuera de Estancias'+((d.updated>=0)?(' ('+d.updated+' pedido'+(d.updated===1?'':'s')+' corregido'+(d.updated===1?'':'s')+')'):'')); }
+        else { throw new Error((d&&d.error)||'no se pudo'); }
+      }).catch(function(err){
+        delete _cliExcluidos[key];
+        _toast('⚠️ No se pudo sacar a '+nombre+': '+err.message+'. Recargá y reintentá.');
+        _estCli=null; rClientes(); // recargar estado real
+      });
+  };
   window.rClientes=function(){
     var host=E$('estClientes'); host.innerHTML='<div class="loading">Cargando clientes…</div>';
     _cliEnsure(function(err){
