@@ -945,7 +945,7 @@ var STORAGE_VERSION='v2-row-keyed';
 // APP_VERSION: si el browser carga una version distinta a la conocida, limpiamos
 // caches del SW y recargamos. Evita que iOS Safari sirva HTML viejo (bug Violeta
 // 27/05: PWA con codigo v55 procesando cobros con processSyncQueue trabado).
-var APP_VERSION='v124';
+var APP_VERSION='v125';
 // Pintar version real en el badge (no hardcodear el HTML, suele desincronizar).
 try{var __ve=document.getElementById('appVer');if(__ve)__ve.textContent=APP_VERSION;}catch(_){}
 (function(){
@@ -1637,6 +1637,67 @@ function _canalLabel(c){
    del proveedor al cliente, no se arman desde el freezer). Si el pedido VD es 100% OC, no se
    muestra la card. Para Clubes mostramos todos los productos siempre porque Tadeo igual arma
    el pedido cuando llega del proveedor (a la puerta del club). */
+// Agrupa una lista de pedidos por cliente (mismo e.c case-insensitive).
+// Si un cliente tiene 1 pedido, usa la card normal. Si tiene 2+, renderiza
+// UNA card fusionada con todos los productos unificados y check unificado
+// (bug 11/07 Sandra: 2 pedidos aparecían como 2 cards separadas → confuso
+// para el armado en el freezer).
+function _renderArmadoCardsAgrupadoPorCliente(lista){
+  var porCli={},orden=[];
+  lista.forEach(function(e){
+    var k=String(e.c||'').trim().toLowerCase();
+    if(!porCli[k]){porCli[k]={cli:e.c,pedidos:[]};orden.push(k);}
+    porCli[k].pedidos.push(e);
+  });
+  return orden.map(function(k){
+    var pack=porCli[k];
+    if(pack.pedidos.length===1)return _renderArmadoCard(pack.pedidos[0]);
+    return _renderArmadoCardCombo(pack.cli,pack.pedidos);
+  }).join('');
+}
+
+// Card fusionada de N pedidos del mismo cliente. Suma cantidades por producto
+// (DEP y OC por separado). Check unificado tilda todos a la vez con
+// toggleArmadoMasivo. No incluye botón cancelar (el usuario tiene que ir a
+// cada pedido individual desde Panel si quiere cancelar).
+function _renderArmadoCardCombo(cli,pedidos){
+  var depSum={},ocSum={};
+  var lotes={},allKeys=[],allDone=true;
+  pedidos.forEach(function(e){
+    _itemsDepDe(e).forEach(function(p){depSum[p.a]=(depSum[p.a]||0)+p.q;});
+    _itemsOCDe(e).forEach(function(p){ocSum[p.a]=(ocSum[p.a]||0)+p.q;});
+    if(e.l)lotes[e.l]=true;
+    var k=eKey(e);
+    allKeys.push(k);
+    if(!armadoDone[k])allDone=false;
+  });
+  var depItems=Object.keys(depSum).map(function(a){return{a:a,q:depSum[a]};});
+  var ocItems=Object.keys(ocSum).map(function(a){return{a:a,q:ocSum[a]};});
+  var ocTot=0;ocItems.forEach(function(p){ocTot+=p.q;});
+  // Si TODOS son 100% OC (sin nada DEP), no mostrar en Armado (se salta arriba
+  // igual que la card individual — coherencia con _renderArmadoCard).
+  if(depItems.length===0 && pedidos.every(function(e){return e.o==='Orden de Compra';}))return '';
+  var lotesArr=Object.keys(lotes);
+  var loteStr=lotesArr.length===0?'':(lotesArr.length===1?('Lote '+lotesArr[0]):('Lotes '+lotesArr.join(', ')));
+  var isRed=pedidos[0].h==='Red';
+  var keysList=allKeys.join(',');
+  var subtitulo=pedidos.length+' pedidos';
+  var ocTag=(depItems.length>0 && ocTot>0)?('<div class="armado-oc-tag" onclick="toggleArmadoMasivo(\''+keysList+'\')" title="'+_sortProds(ocItems).map(function(p){return p.q+'x '+(PROD_NAMES[p.a]||p.a);}).join(', ')+'">+ Orden de compra ('+ocTot+' productos)</div>'):'';
+  var prodsToShow=depItems.length>0?depItems:pedidos[0].p;
+  var cliEsc=String(cli||'').replace(/"/g,'&quot;');
+  return '<div class="armado-card'+(allDone?' done':'')+(isRed?' red':'')+'">'
+    +(loteStr?'<div class="armado-lote">'+loteStr+' · '+subtitulo+'</div>':'<div class="armado-lote">'+subtitulo+'</div>')
+    +'<div class="armado-head" onclick="toggleArmadoMasivo(\''+keysList+'\')">'
+    +'<div class="armado-check">'+(allDone?'&#x2713;':'')+'</div>'
+    +'<span class="armado-name">'+cli
+    +'<span class="armado-saldo" data-cliente="'+cliEsc+'" style="display:none"></span>'
+    +'</span>'
+    +'</div>'
+    +'<div class="armado-prods" onclick="toggleArmadoMasivo(\''+keysList+'\')">'+prodText(prodsToShow)+'</div>'
+    +ocTag
+    +'</div>';
+}
+
 function _renderArmadoCard(e){
   var depItems=_itemsDepDe(e);
   var ocItems=_itemsOCDe(e);
@@ -1771,7 +1832,7 @@ function _renderArmadoBarrios(lista){
         html+='<div class="armado-subbarrio">'+sb+' <span class="sb-count">'+subs[sb].length+'</span></div>';
       }
       html+='<div class="armado-cards">';
-      subs[sb].forEach(function(e){html+=_renderArmadoCard(e)});
+      html+=_renderArmadoCardsAgrupadoPorCliente(subs[sb]);
       html+='</div>';
     });
   });
