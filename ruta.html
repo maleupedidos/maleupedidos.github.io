@@ -945,7 +945,7 @@ var STORAGE_VERSION='v2-row-keyed';
 // APP_VERSION: si el browser carga una version distinta a la conocida, limpiamos
 // caches del SW y recargamos. Evita que iOS Safari sirva HTML viejo (bug Violeta
 // 27/05: PWA con codigo v55 procesando cobros con processSyncQueue trabado).
-var APP_VERSION='v125';
+var APP_VERSION='v126';
 // Pintar version real en el badge (no hardcodear el HTML, suele desincronizar).
 try{var __ve=document.getElementById('appVer');if(__ve)__ve.textContent=APP_VERSION;}catch(_){}
 (function(){
@@ -2870,7 +2870,12 @@ function _renderCobroProds(prods){
 
 // Calcula el total del pedido según la FP. Replica la regla del checkout:
 // 10% OFF si Efectivo O subtotal >= $100.000.
-function _totalSegunFp(ent,fp,noDisc){
+// noDisc=true      → forzar SIN descuento (aunque la regla lo aplicaría)
+// forzarDesc=true  → forzar CON descuento 10% (aunque la regla no lo aplicaría,
+//                    ej. MP con subtotal < $100k). Pedido Tadeo 11/07 caso
+//                    Carolina Ageitos: quiere ofrecer 10% OFF aunque el
+//                    autopedido fuera guardado sin la regla automática.
+function _totalSegunFp(ent,fp,noDisc,forzarDesc){
   if(!ent)return 0;
   // Si el pedido YA tiene cobros parciales previos, el saldo pendiente es ent.$
   // directo del backend. NO recalcular con descuentos: el descuento ya se aplicó
@@ -2890,6 +2895,8 @@ function _totalSegunFp(ent,fp,noDisc){
   if(descGuardado>0 && descGuardado!==Math.round(sub*0.10))return noDisc?(sub+env):orig;
   // noDisc: Tadeo quitó manualmente el descuento (10% OFF efectivo o +$100K) → cobra precio normal.
   if(noDisc)return sub+env;
+  // forzarDesc: aplicar 10% aunque la regla automática no toque (fp Transferencia con sub<$100K).
+  if(forzarDesc)return sub+env-Math.round(sub*0.10);
   var aplicaCash=(fp==='Efectivo');
   var aplicaBulk=(sub>=100000);
   var desc=(aplicaCash||aplicaBulk)?Math.round(sub*0.10):0;
@@ -2940,47 +2947,51 @@ function _renderCobroDescInfo(){
   var fp=st.fp||'Efectivo';
   var aplicaCash=(fp==='Efectivo');
   var aplicaBulk=(sub>=100000);
-  var descDisponible=(aplicaCash||aplicaBulk)?Math.round(sub*0.10):0;
-  var desc=st.noDisc?0:descDisponible;
-  var total=sub+env-desc;
+  var reglaAuto=(aplicaCash||aplicaBulk);
+  var descEstandar=Math.round(sub*0.10);
+  // Estado ACTUAL del descuento: aplicado o no. Puede ser por regla auto, por
+  // forzarDesc manual, o ninguno (noDisc o regla no toca sin forzar).
+  var descAplicado = st.noDisc ? 0
+                   : st.forzarDesc ? descEstandar
+                   : (reglaAuto ? descEstandar : 0);
+  var total=sub+env-descAplicado;
+  el.style.display='block';
   var motivo='';
-  if(aplicaBulk){
-    motivo='<b>10% OFF +$100K</b> aplicado automáticamente (subtotal supera $100K, sin importar la forma de pago)';
-  } else if(aplicaCash){
-    motivo='<b>10% OFF efectivo</b> aplicado';
+  if(descAplicado>0){
+    if(st.forzarDesc) motivo='<b>10% OFF aplicado manualmente</b>';
+    else if(aplicaBulk) motivo='<b>10% OFF +$100K</b> automático';
+    else motivo='<b>10% OFF efectivo</b> automático';
+  }
+  // Botón único: aplicar o quitar según estado actual
+  var btnHtml;
+  if(descAplicado>0){
+    btnHtml='<button type="button" onclick="'+(st.forzarDesc?'_toggleCobroForzarDesc()':'_toggleCobroNoDisc()')+'" style="display:block;width:100%;margin-top:8px;padding:8px;background:#fff;color:#9A3412;border:1.5px dashed #FB923C;border-radius:8px;font-family:inherit;font-size:12px;font-weight:800;cursor:pointer">🚫 Quitar 10% (cobrar '+formatMoney(sub+env)+')</button>';
+  } else {
+    // Descuento no aplicado. Botón para aplicarlo (via forzarDesc si la regla no toca, o
+    // "volver a aplicar" via _toggleCobroNoDisc si Tadeo lo había quitado con regla auto).
+    var accion = st.noDisc ? '_toggleCobroNoDisc()' : '_toggleCobroForzarDesc()';
+    btnHtml='<button type="button" onclick="'+accion+'" style="display:block;width:100%;margin-top:8px;padding:8px;background:#fff;color:#1B5E20;border:1.5px dashed #4CAF50;border-radius:8px;font-family:inherit;font-size:12px;font-weight:800;cursor:pointer">💸 Aplicar 10% OFF (cobrar '+formatMoney(sub+env-descEstandar)+')</button>';
   }
   var html='';
-  // Descuento quitado manualmente por Tadeo: mostrar precio normal + botón para volver a aplicarlo.
-  if(st.noDisc && descDisponible>0){
-    el.style.background='#FFF3E0';
-    el.style.border='1.5px solid #FB923C';
-    el.style.color='#9A3412';
-    el.style.display='block';
-    el.innerHTML='🚫 <b>Descuento quitado.</b> Cobrás precio normal: <b>'+formatMoney(sub+env)+'</b> (sin el 10% OFF de '+formatMoney(descDisponible)+').'
-      +'<button type="button" onclick="_toggleCobroNoDisc()" style="display:block;width:100%;margin-top:8px;padding:8px;background:#fff;color:#1B5E20;border:1.5px dashed #4CAF50;border-radius:8px;font-family:inherit;font-size:12px;font-weight:800;cursor:pointer">💸 Volver a aplicar 10% OFF</button>';
-    return;
-  }
-  if(desc>0){
+  if(descAplicado>0){
     el.style.background='#E8F5E9';
     el.style.border='1.5px solid #4CAF50';
     el.style.color='#1B5E20';
-    html='💸 '+motivo+'<br>';
-    html+='<span style="color:#5D4037">Subtotal '+formatMoney(sub)+(env>0?' + envío '+formatMoney(env):'')+' − descuento '+formatMoney(desc)+' = <b>'+formatMoney(total)+'</b></span>';
-    html+='<button type="button" onclick="_toggleCobroNoDisc()" style="display:block;width:100%;margin-top:8px;padding:8px;background:#fff;color:#9A3412;border:1.5px dashed #FB923C;border-radius:8px;font-family:inherit;font-size:12px;font-weight:800;cursor:pointer">🚫 Quitar descuento (cobrar precio normal)</button>';
-  } else if(fp==='Transferencia' && sub<100000 && sub>0){
-    el.style.background='#FFF3E0';
-    el.style.border='1.5px solid #FB923C';
-    el.style.color='#9A3412';
-    var descSi=Math.round(sub*0.10);
-    html='ℹ️ <b>Sin descuento</b> con MP/Transf. Si el cliente paga en Efectivo, ahorra '+formatMoney(descSi)+' (10% OFF).';
+    html='💸 '+motivo+'<br><span style="color:#5D4037">Subtotal '+formatMoney(sub)+(env>0?' + envío '+formatMoney(env):'')+' − descuento '+formatMoney(descAplicado)+' = <b>'+formatMoney(total)+'</b></span>';
+  } else if(st.noDisc && reglaAuto){
+    // Regla auto se dispararía pero Tadeo lo quitó manualmente
+    el.style.background='#FFF3E0';el.style.border='1.5px solid #FB923C';el.style.color='#9A3412';
+    html='🚫 <b>Descuento quitado.</b> Cobrás <b>'+formatMoney(sub+env)+'</b> (sin el 10% OFF).';
   } else if(fp==='Mixto'){
-    el.style.background='#F3F4F6';
-    el.style.border='1.5px solid #9CA3AF';
-    el.style.color='#374151';
-    html='ℹ️ <b>Mixto</b>: se toma el total tal cual del pedido original (sin recalcular descuento).';
+    el.style.background='#F3F4F6';el.style.border='1.5px solid #9CA3AF';el.style.color='#374151';
+    html='ℹ️ <b>Mixto</b>: total tal cual del pedido original. Para 10% OFF cambiá el pill.';
   } else {
-    el.style.display='none';return;
+    // Sin descuento (regla no toca ni Tadeo forzó). Ofrecerle SIEMPRE aplicarlo.
+    el.style.background='#FFF3E0';el.style.border='1.5px solid #FB923C';el.style.color='#9A3412';
+    html='ℹ️ <b>Sin descuento.</b> Total pedido: <b>'+formatMoney(sub+env)+'</b>. Si querés hacerle 10% OFF de todas formas, tocá abajo.';
   }
+  // Botón único visible SIEMPRE (excepto Mixto): aplicar o quitar el 10% OFF.
+  if(fp!=='Mixto') html+=btnHtml;
   el.style.display='block';
   el.innerHTML=html;
 }
@@ -3153,7 +3164,7 @@ function _setCobroFp(fp){
   st.fp=fp;
   document.querySelectorAll('#cobroRutaFp .cobro-pill').forEach(function(p){p.classList.toggle('on',p.getAttribute('data-fp')===fp)});
   // Recalcular total (combo no tiene sub/env por pedido, mantenemos original).
-  var nuevoTotal=st.combo?st.totalOriginal:_totalSegunFp(st.ent,fp,st.noDisc);
+  var nuevoTotal=st.combo?st.totalOriginal:_totalSegunFp(st.ent,fp,st.noDisc,st.forzarDesc);
   st.total=nuevoTotal;
   // Actualizar header sub
   if(st.combo){
@@ -3185,7 +3196,22 @@ function _toggleCobroNoDisc(){
   var st=_cobroRutaState; if(!st||st.combo)return;
   if(st.esParcialPrev){showToast('El saldo ya tiene el descuento del primer cobro');return;}
   st.noDisc=!st.noDisc;
-  var nuevoTotal=_totalSegunFp(st.ent,st.fp,st.noDisc);
+  if(st.noDisc)st.forzarDesc=false; // mutuamente exclusivos
+  _reaplicarTotalYCobro();
+}
+// Aplicar 10% OFF manual (aunque la regla automática no toque, ej. MP <$100k).
+// Pedido Tadeo 11/07 Carolina Ageitos: quiere ofrecer el 10% siempre desde el
+// cuadro de cobros, sin importar cómo se guardó el pedido original.
+function _toggleCobroForzarDesc(){
+  var st=_cobroRutaState; if(!st||st.combo)return;
+  if(st.esParcialPrev){showToast('El saldo ya tiene el descuento del primer cobro');return;}
+  st.forzarDesc=!st.forzarDesc;
+  if(st.forzarDesc)st.noDisc=false; // mutuamente exclusivos
+  _reaplicarTotalYCobro();
+}
+function _reaplicarTotalYCobro(){
+  var st=_cobroRutaState; if(!st)return;
+  var nuevoTotal=_totalSegunFp(st.ent,st.fp,st.noDisc,st.forzarDesc);
   st.total=nuevoTotal;
   document.getElementById('cobroRutaSub').textContent='Pedido '+formatMoney(nuevoTotal)+' · '+st.ent.h+' #'+st.ent.id;
   if(!st.partial){
@@ -3193,7 +3219,7 @@ function _toggleCobroNoDisc(){
     var aFav=_parseMoneyInput(document.getElementById('cobroAFavInp'));
     var aplicar=Math.max(0,Math.min(Number(st.aplicarSaldo)||0,nuevoTotal));
     var target=Math.max(0,nuevoTotal-aplicar)+prop+aFav;
-    if(st.fp==='Efectivo'){_setMoneyInput('cobroRecEf',target);_setMoneyInput('cobroRecMP',0);}
+    if(st.fp==='Efectivo'){_setMoneyInput('cobroRecEf',_autoCargaEf(st.fp,target));_setMoneyInput('cobroRecMP',0);}
     else if(st.fp==='Transferencia'){_setMoneyInput('cobroRecEf',0);_setMoneyInput('cobroRecMP',target);}
   }
   _renderCobroDescInfo();
@@ -3313,7 +3339,7 @@ function _toggleCobroSec(secId,btn){
       if(st && st.descManual){
         delete st.descManual;
         // Recalcular total original sin descuento manual
-        var nuevoTotal=_totalSegunFp(st.ent,st.fp,st.noDisc);
+        var nuevoTotal=_totalSegunFp(st.ent,st.fp,st.noDisc,st.forzarDesc);
         st.total=nuevoTotal;
         var subTxt=st.esParcialPrev
           ? 'Saldo '+formatMoney(nuevoTotal)+' · '+st.ent.h+' #'+st.ent.id+' (ya cobraste '+formatMoney(st.yaCobrado||0)+' de '+formatMoney(st.totalOriginal||0)+')'
