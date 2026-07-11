@@ -945,7 +945,7 @@ var STORAGE_VERSION='v2-row-keyed';
 // APP_VERSION: si el browser carga una version distinta a la conocida, limpiamos
 // caches del SW y recargamos. Evita que iOS Safari sirva HTML viejo (bug Violeta
 // 27/05: PWA con codigo v55 procesando cobros con processSyncQueue trabado).
-var APP_VERSION='v126';
+var APP_VERSION='v127';
 // Pintar version real en el badge (no hardcodear el HTML, suele desincronizar).
 try{var __ve=document.getElementById('appVer');if(__ve)__ve.textContent=APP_VERSION;}catch(_){}
 (function(){
@@ -2487,6 +2487,8 @@ function abrirCobroComboCobros(idxsCsv){
   document.getElementById('cobroRutaOverlay').classList.remove('hidden');
   _recalcCobroRuta();
   _refrescarBilleteraRuta();
+  // Traer saldo a favor previo del cliente (mismo cliente en todos los pedidos del combo)
+  if(peds[0] && (peds[0].t||peds[0].c))_fetchSaldoPrevioModal(peds[0].t,peds[0].c);
 }
 
 // Abre el modal de cobro (idéntico a RUTA) para UN pedido suelto de COBROS.
@@ -3125,6 +3127,7 @@ function abrirCobroRuta(key){
     _renderCobroProds(Object.keys(_mc).map(function(a){return {a:a,q:_mc[a]};}));
     _recalcCobroRuta();
     _refrescarBilleteraRuta();
+    if(peds[0] && (peds[0].t||peds[0].c))_fetchSaldoPrevioModal(peds[0].t,peds[0].c);
     return;
   }
   var ent=findByKey(key);
@@ -3150,6 +3153,7 @@ function abrirCobroRuta(key){
   _renderCobroDescInfo();
   _recalcCobroRuta();
   _refrescarBilleteraRuta();
+  if(ent.t||ent.c)_fetchSaldoPrevioModal(ent.t,ent.c);
 }
 
 function cerrarCobroRuta(){
@@ -3716,6 +3720,7 @@ function confirmarCobroRuta(){
   //   crea un par balanceador aparte (Ingreso Ef + Egreso MP).
   var prop=Math.max(0,r.propina);
   var aFav=r.aFav;
+  var aplicacion=Math.max(0,r.aplicar||0); // saldo previo aplicado a este cobro
   // ef/tr = SOLO el "Total a cobrar" del pedido (col Q) distribuido por método.
   // El backend agrega aFavor a la col Ef/Tr y escribe la propina en su col separada.
   // Bug Consuelo 20/06/2026: si se mandaba (total+prop+aFav), backend volvía a sumar
@@ -3760,6 +3765,7 @@ function confirmarCobroRuta(){
     ef:ef,tr:tr,
     propina:prop,propMet:propMet,
     aFavor:aFav,
+    aplicacion:aplicacion,
     cliente:ent.c||'',
     repartidor:_rutaUser(),ts:Date.now()
   };
@@ -3790,6 +3796,17 @@ function confirmarCobroRuta(){
       repartidor:_rutaUser(),ts:Date.now()
     });
   }
+  // Si hay saldo previo APLICADO, registrar debito en Saldos Clientes.
+  if(aplicacion>0){
+    syncQueue.push({
+      action:'crearSaldoCliente',
+      cliente:ent.c||'',telefono:ent.t||'',
+      tipo:'Aplicación',monto:aplicacion,
+      pedidoHoja:ent.h,pedidoId:String(ent.id),
+      notas:'Saldo aplicado al cobro desde Ruta',
+      repartidor:_rutaUser(),ts:Date.now()
+    });
+  }
 
   saveLocal();
   cerrarCobroRuta();
@@ -3811,6 +3828,7 @@ function confirmarCobroRuta(){
 function _confirmarCobroComboRuta(st,r){
   var peds=st.pedidos,fp=st.fp;
   var prop=Math.max(0,r.propina),aFav=r.aFav;
+  var aplicacion=Math.max(0,r.aplicar||0); // saldo previo aplicado, va al primer pedido
   var nombre=(peds[0].c||'').split(' ')[0];
   // Auto-detección de Mixto a nivel combo (mismo criterio que cobros sueltos).
   var netoEfC=Math.max(0,r.recEf-r.camEf);
@@ -3839,6 +3857,7 @@ function _confirmarCobroComboRuta(st,r){
     pendientesCobro=pendientesCobro.filter(function(pc){
       return !(((pc.h||'')===p.h) && (String(pc.id||'')===String(p.id)));
     });
+    var aplicP=(idx===0)?aplicacion:0;
     var payload={
       action:'marcarCobrado',
       hoja:p.h,id:String(p.id),row:p.r,
@@ -3846,6 +3865,7 @@ function _confirmarCobroComboRuta(st,r){
       ef:efP,tr:trP,
       propina:propP,propMet:propMet,
       aFavor:aFavP,
+      aplicacion:aplicP,
       cliente:p.c||'',
       repartidor:_rutaUser(),ts:Date.now()
     };
@@ -3864,6 +3884,16 @@ function _confirmarCobroComboRuta(st,r){
         tipo:'Crédito',monto:aFavP,
         pedidoHoja:p.h,pedidoId:String(p.id),
         notas:'A favor por cobro combinado mayor al total',
+        repartidor:_rutaUser(),ts:Date.now()
+      });
+    }
+    if(idx===0 && aplicP>0){
+      syncQueue.push({
+        action:'crearSaldoCliente',
+        cliente:p.c||'',telefono:p.t||'',
+        tipo:'Aplicación',monto:aplicP,
+        pedidoHoja:p.h,pedidoId:String(p.id),
+        notas:'Saldo aplicado al cobro combinado',
         repartidor:_rutaUser(),ts:Date.now()
       });
     }
