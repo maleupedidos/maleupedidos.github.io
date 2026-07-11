@@ -945,7 +945,7 @@ var STORAGE_VERSION='v2-row-keyed';
 // APP_VERSION: si el browser carga una version distinta a la conocida, limpiamos
 // caches del SW y recargamos. Evita que iOS Safari sirva HTML viejo (bug Violeta
 // 27/05: PWA con codigo v55 procesando cobros con processSyncQueue trabado).
-var APP_VERSION='v122';
+var APP_VERSION='v123';
 // Pintar version real en el badge (no hardcodear el HTML, suele desincronizar).
 try{var __ve=document.getElementById('appVer');if(__ve)__ve.textContent=APP_VERSION;}catch(_){}
 (function(){
@@ -2941,6 +2941,49 @@ function _toggleAceptaDescuento(){
   _cobroRutaState.aceptaDescuento=!_cobroRutaState.aceptaDescuento;
   _recalcCobroRuta();
 }
+// Sobrante del cobro → destino EXPLÍCITO (elimina el default silencioso "propina automática").
+// Abre la sección correspondiente con el monto sobrante pre-cargado.
+function _marcarSobranteAFavor(){
+  var st=_cobroRutaState; if(!st||st.partial)return;
+  var recEf=_parseMoneyInput(document.getElementById('cobroRecEf'));
+  var recMP=_parseMoneyInput(document.getElementById('cobroRecMP'));
+  var camEf=_parseMoneyInput(document.getElementById('cobroCamEf'));
+  var camMP=_parseMoneyInput(document.getElementById('cobroCamMP'));
+  var neto=(recEf+recMP)-(camEf+camMP);
+  var aplic=Math.max(0,Math.min(Number(st.aplicarSaldo)||0,st.total));
+  var requerido=Math.max(0,st.total-aplic);
+  var sobr=Math.max(0,neto-requerido);
+  if(sobr<=0){_recalcCobroRuta();return;}
+  // Abrir sección "A favor" (idéntico al toggle manual) y cargar el sobrante
+  var sec=document.getElementById('cobroAFavSection');
+  var btn=document.getElementById('cobroToggleAFav');
+  if(sec)sec.style.display='block';
+  if(btn)btn.classList.add('on');
+  _setMoneyInput('cobroAFavInp',sobr);
+  _renderAFavCalc();
+  _recalcCobroRuta();
+}
+function _marcarSobranteComoPropina(){
+  var st=_cobroRutaState; if(!st||st.partial)return;
+  var recEf=_parseMoneyInput(document.getElementById('cobroRecEf'));
+  var recMP=_parseMoneyInput(document.getElementById('cobroRecMP'));
+  var camEf=_parseMoneyInput(document.getElementById('cobroCamEf'));
+  var camMP=_parseMoneyInput(document.getElementById('cobroCamMP'));
+  var neto=(recEf+recMP)-(camEf+camMP);
+  var aplic=Math.max(0,Math.min(Number(st.aplicarSaldo)||0,st.total));
+  var requerido=Math.max(0,st.total-aplic);
+  var sobr=Math.max(0,neto-requerido);
+  if(sobr<=0){_recalcCobroRuta();return;}
+  // Abrir sección "Propina" y cargar el sobrante manualmente
+  var sec=document.getElementById('cobroPropinaSection');
+  var btn=document.getElementById('cobroTogglePropina');
+  if(sec)sec.style.display='block';
+  if(btn)btn.classList.add('on');
+  _setMoneyInput('cobroPropinaInp',sobr);
+  var btnSig=document.querySelector('[data-prop-target="cobroPropinaInp"]');
+  if(btnSig){btnSig.classList.remove('neg');btnSig.textContent='+';}
+  _recalcCobroRuta();
+}
 function _resetCobroSeccionesColapsables(){
   ['cobroCambioSection','cobroAFavSection','cobroDescSection','cobroPropinaSection'].forEach(function(id){
     var el=document.getElementById(id);if(el)el.style.display='none';
@@ -3316,12 +3359,14 @@ function _recalcCobroRuta(){
   var errors=[];
   var faltante=(!partial && neto<requerido)?(requerido-neto):0;
   if(pagado<=0)errors.push('Indicá cuánto recibiste.');
-  // Tolerancia $500 para redondeo (propina negativa chica). Más allá:
-  // - Si Tadeo activa "Aceptar descuento": se cierra el pedido y la diferencia
-  //   se registra como propina negativa (descuento al cobrar). Facturado = neto.
-  // - Si no, sigue bloqueando y sugiere Pago parcial.
-  if(!partial && faltante>500 && !st.aceptaDescuento)errors.push(
-    'Falta cobrar: '+formatMoney(faltante)+'. Si te quedó debiendo, usá <b>"Pago parcial"</b>. Si fue un descuento de hecho y querés cerrar igual, tocá <b>"Aceptar descuento"</b> abajo.'
+  // Cero tolerancia: cualquier faltante bloquea (así no se cuelan descuentos
+  // tácitos por redondeo — bug 10/07 Lucia $480 + Martina $160 = $640 perdidos
+  // silenciosamente por la vieja tolerancia $500). Opciones para cerrar igual:
+  // - "Aceptar descuento": Facturado=neto, propina negativa registrada explícitamente.
+  // - "Pago parcial": queda saldo pendiente.
+  // - Cambiar el input al monto real que recibiste.
+  if(!partial && faltante>0 && !st.aceptaDescuento)errors.push(
+    'Recibiste <b>'+formatMoney(neto)+'</b> pero el pedido es <b>'+formatMoney(requerido)+'</b>. Falta <b>'+formatMoney(faltante)+'</b>. Elegí una opción:<br>• Cambiá el monto arriba si te confundiste<br>• <b>"Aceptar descuento"</b> abajo si le hiciste rebaja<br>• <b>"Pago parcial"</b> arriba si te queda debiendo'
   );
   if(partial && neto>=total)errors.push('Ese monto cubre todo el pedido — usá el cobro normal, no parcial.');
   // El vuelto en efectivo sale de la billetera (si el cliente pagó efectivo) o es cambio
@@ -3329,9 +3374,28 @@ function _recalcCobroRuta(){
   // entró en total. (Antes bloqueaba el caso normal: pagó efectivo → vuelto de billetera.)
   if(camEf>0 && camEf>recEf && camEf>recMP)errors.push('No podés devolver más efectivo del que recibiste.');
   if(camMP>0 && camMP>recEf && camMP>recMP)errors.push('No podés devolver más por MP del que recibiste.');
-  // Toggle "Aceptar descuento" — solo aparece cuando faltante > $500 y NO es parcial.
+  // Excedente sin destino explícito: bloquear hasta que Tadeo elija.
+  // Antes: sobrante > 0 se iba silenciosamente a "propina automática" (caso Alejandra $1k
+  // 10/07 = pagó de más y quedó como propina cuando debía ser saldo a favor / no elegido).
+  // Ahora: si hay sobrante y NI "A favor" NI "Propina" están abiertos, forzar elección.
+  var sobrBtnExtra='';
+  if(!partial && propina>0){
+    var _aFavAbierto=document.getElementById('cobroAFavSection').style.display!=='none';
+    var _propAbierto=document.getElementById('cobroPropinaSection').style.display!=='none';
+    if(!_aFavAbierto && !_propAbierto){
+      sobrBtnExtra='<div style="background:#E8F5E9;border:1.5px solid #4CAF50;border-radius:8px;padding:9px 11px;margin-top:8px;font-size:12px;line-height:1.5;color:#1B5E20">'
+        +'💰 Sobran <b>'+formatMoney(propina)+'</b> del cobro. ¿Qué hacés?<br>'
+        +'<div style="display:flex;gap:6px;margin-top:8px">'
+        +'<button type="button" onclick="_marcarSobranteAFavor()" style="flex:1;padding:9px;background:#4CAF50;color:#fff;border:none;border-radius:6px;font-family:inherit;font-size:12px;font-weight:800;cursor:pointer">🎁 A favor del cliente</button>'
+        +'<button type="button" onclick="_marcarSobranteComoPropina()" style="flex:1;padding:9px;background:#FF9800;color:#fff;border:none;border-radius:6px;font-family:inherit;font-size:12px;font-weight:800;cursor:pointer">💰 Es propina</button>'
+        +'</div></div>';
+      errors.push('Elegí qué hacer con el sobrante de <b>'+formatMoney(propina)+'</b>.');
+    }
+  }
+  // Toggle "Aceptar descuento" — aparece con cualquier faltante > $0 (sin tolerancia)
+  // para que Tadeo decida SIEMPRE explícitamente qué hacer con la diferencia.
   var descBtnExtra='';
-  if(!partial && faltante>500){
+  if(!partial && faltante>0){
     if(st.aceptaDescuento){
       descBtnExtra='<div style="background:#FFF3E0;border:1.5px solid #F9A825;border-radius:8px;padding:9px 11px;margin-top:8px;font-size:12px;line-height:1.5;color:#5D4037">✅ <b>Descuento aceptado: '+formatMoney(faltante)+'</b><br>El pedido se cierra como cobrado por '+formatMoney(neto)+'. El descuento queda registrado como propina negativa y reduce el margen bruto. <button type="button" onclick="_toggleAceptaDescuento()" style="margin-top:6px;padding:6px 10px;background:#fff;color:#5D4037;border:1.5px solid #F9A825;border-radius:6px;font-family:inherit;font-size:11px;font-weight:700;cursor:pointer">Quitar descuento</button></div>';
     } else {
@@ -3340,12 +3404,14 @@ function _recalcCobroRuta(){
   }
   if(errors.length>0){
     err.style.display='block';
-    err.innerHTML='⚠️ '+errors.join('<br>⚠️ ')+descBtnExtra;
+    // Renderizar warnings + bloques inline (sobrante / descuento). Filtrar strings vacíos.
+    var msgs=errors.filter(function(e){return e && e.length>0;});
+    err.innerHTML=(msgs.length?('⚠️ '+msgs.join('<br>⚠️ ')):'')+sobrBtnExtra+descBtnExtra;
     btn.disabled=true;
     btn.textContent='Revisá los montos';
   } else {
-    err.style.display=descBtnExtra?'block':'none';
-    err.innerHTML=descBtnExtra; // muestra solo el bloque "descuento aceptado" si aplica
+    err.style.display=(descBtnExtra||sobrBtnExtra)?'block':'none';
+    err.innerHTML=sobrBtnExtra+descBtnExtra;
     btn.disabled=false;
     if(partial){
       btn.textContent='Registrar parcial '+formatMoney(neto);
