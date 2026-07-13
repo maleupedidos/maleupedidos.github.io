@@ -462,8 +462,10 @@ let _enviando = false;
 let selectedDeliveryDate = null;     // ISO "YYYY-MM-DD"
 let selectedDeliveryDayName = null;  // "Lunes" | "Miércoles" | etc.
 let selectedDateIsFlexible = false;  // true cuando el cliente elige "Cualquier día"
-let selectedPilarBarrio = null;      // valor del dropdown Pilar (ej: 'Pilara', '__otro__')
-let selectedPilarBarrioName = null;  // nombre display del barrio
+let selectedPilarZona = null;        // zona canonical elegida en paso 2 (ej: 'Ayres y alrededores')
+let selectedPilarZonaName = null;
+let selectedPilarBarrio = null;      // sub-barrio elegido en paso 3 (ej: 'Ayres del Pilar', '__otro__')
+let selectedPilarBarrioName = null;
 
 /* Lista de barrios que se muestran en el paso 2 del modal de bienvenida
    cuando el cliente eligió Pilar y Alrededores. Los marcados isRed son
@@ -511,12 +513,14 @@ const BARRIOS_PILAR_MODAL = [
    sub-barrio (Ayres del Pilar) — para el segundo caso resuelve la zona vía
    barrioToVendedor.zonaCanon (que se llena desde Sheets Vendedores). */
 function _getPilarZonaActual() {
-  if (!selectedPilarBarrio) return null;
+  var candidato = selectedPilarZona || selectedPilarBarrio;
+  if (!candidato) return null;
   var i;
   for (i = 0; i < BARRIOS_PILAR_MODAL.length; i++) {
-    if (BARRIOS_PILAR_MODAL[i].val === selectedPilarBarrio) return BARRIOS_PILAR_MODAL[i];
+    if (BARRIOS_PILAR_MODAL[i].val === candidato) return BARRIOS_PILAR_MODAL[i];
   }
-  var v = barrioToVendedor[String(selectedPilarBarrio).toLowerCase()];
+  // Retro-compat: si es un sub-barrio viejo, resolvemos vía barrioToVendedor.
+  var v = barrioToVendedor[String(candidato).toLowerCase()];
   if (v && v.zonaCanon) {
     for (i = 0; i < BARRIOS_PILAR_MODAL.length; i++) {
       if (BARRIOS_PILAR_MODAL[i].val === v.zonaCanon) return BARRIOS_PILAR_MODAL[i];
@@ -1163,9 +1167,9 @@ function welcomeShowBarrioStep() {
   renderWelcomeBarrioGrid();
 }
 function welcomeBackFromDate() {
-  // Botón "← Volver" del paso fecha. Si zona = Pilar volver a paso barrio,
-  // si no, al paso de zona.
-  if (currentZone === 'pilar') welcomeShowBarrioStep();
+  // Botón "← Volver" del paso fecha. En Pilar volvemos al paso sub-barrio
+  // (más cercano). En Home/Clubes al paso de zona.
+  if (currentZone === 'pilar') welcomeShowSubBarrioStep();
   else welcomeShowZoneStep();
 }
 function renderWelcomeBarrioGrid() {
@@ -1192,26 +1196,92 @@ function renderWelcomeBarrioGrid() {
          + '</button>';
   }).join('');
 }
+/* Paso 2 del welcome: el cliente eligió una ZONA canonical (Tortugas /
+   Ayres / Manzanares / Otra). Guardamos la zona y avanzamos al paso 3
+   (sub-barrio) — no vamos directo a fecha porque ahora el cliente debe
+   elegir su barrio específico dentro de la zona. */
 function setPilarBarrio(val, nombre) {
-  selectedPilarBarrio = val;
-  selectedPilarBarrioName = nombre;
+  selectedPilarZona = val;
+  selectedPilarZonaName = nombre;
   try {
-    localStorage.setItem('maleu_pilar_barrio', JSON.stringify({
+    localStorage.setItem('maleu_pilar_zona', JSON.stringify({
       val: val, nombre: nombre, ts: Date.now()
     }));
   } catch(e) {}
-  // El cliente eligió la ZONA — hay que re-renderizar el dropdown del form con
-  // los sub-barrios de esa zona. El valor del dropdown queda vacío hasta que el
-  // cliente elija su barrio específico en el checkout.
+  // Refresca el dropdown del form (los sub-barrios de la zona nueva).
   if (typeof renderPilarBarrios === 'function') renderPilarBarrios();
-  if (typeof onPilarBarrioChange === 'function') onPilarBarrioChange();
-  // Avanzar al paso fecha
+  welcomeShowSubBarrioStep();
+}
+
+/* Paso 3 del welcome: el cliente eligió el sub-barrio dentro de la zona.
+   Guardamos y avanzamos a fecha (o cerramos si ya había fecha guardada). */
+function setPilarSubBarrio(val, nombre) {
+  selectedPilarBarrio = val;
+  selectedPilarBarrioName = nombre || val;
+  try {
+    localStorage.setItem('maleu_pilar_barrio', JSON.stringify({
+      val: val, nombre: nombre || val, ts: Date.now()
+    }));
+  } catch(e) {}
+  var sel = $id('f-pilar-barrio');
+  if (sel) {
+    sel.value = val;
+    if (typeof onPilarBarrioChange === 'function') onPilarBarrioChange();
+  }
   if (!_loadSavedDate()) {
     welcomeShowDateStep();
   } else {
     _setOverlay(false);
     window.scrollTo(0, 0);
   }
+}
+
+/* Muestra el paso 3 (sub-barrio) con las cards individuales de la zona
+   elegida. Se llama desde setPilarBarrio (avance normal) o desde el
+   botón "← Cambiar barrio" del paso fecha si el cliente vuelve. */
+function welcomeShowSubBarrioStep() {
+  _hideAllSteps();
+  var step = $id('loc-step-subbarrio');
+  if (step) step.style.display = '';
+  renderWelcomeSubBarrioGrid();
+}
+
+function renderWelcomeSubBarrioGrid() {
+  var grid = $id('loc-subbarrios-grid');
+  if (!grid) return;
+  var zona = _getPilarZonaActual();
+  if (!zona) { grid.innerHTML = ''; return; }
+  var subs = (zona.subBarriosList || []).slice();
+  // 'Otra zona': agregamos "Otro barrio" con input libre (mismo comportamiento
+  // que en el dropdown del form).
+  var cards = subs.map(function(nombre) {
+    var valEsc = nombre.replace(/'/g, "\\'");
+    var nombreEsc = nombre.replace(/'/g, "\\'");
+    return '<button type="button" class="loc-zona-card is-simple"'
+         + ' onclick="setPilarSubBarrio(\'' + valEsc + '\',\'' + nombreEsc + '\')">'
+         +   '<span class="loc-zona-name">📍 ' + nombre + '</span>'
+         + '</button>';
+  });
+  if (zona.isOther) {
+    cards.push(
+      '<button type="button" class="loc-zona-card is-simple is-other"'
+    + ' onclick="setPilarSubBarrio(\'__otro__\',\'Otro barrio\')">'
+    +   '<span class="loc-zona-name">📍 Otro barrio</span>'
+    +   '<span class="loc-zona-sub">Escribís la dirección al confirmar</span>'
+    + '</button>'
+    );
+  }
+  grid.innerHTML = cards.join('');
+}
+
+function _loadSavedPilarZona() {
+  try {
+    var raw = JSON.parse(localStorage.getItem('maleu_pilar_zona') || 'null');
+    if (!raw || !raw.val) return false;
+    selectedPilarZona = raw.val;
+    selectedPilarZonaName = raw.nombre || '';
+    return true;
+  } catch(e) { return false; }
 }
 function _loadSavedPilarBarrio() {
   try {
@@ -1260,7 +1330,7 @@ function welcomeBackToZone() {
   welcomeShowZoneStep();
 }
 function _hideAllSteps() {
-  var ids = ['loc-step-zone', 'loc-step-barrio', 'loc-step-date'];
+  var ids = ['loc-step-zone', 'loc-step-barrio', 'loc-step-subbarrio', 'loc-step-date'];
   ids.forEach(function(id) { var el = $id(id); if (el) el.style.display = 'none'; });
 }
 function welcomeShowZoneStep() {
@@ -3401,10 +3471,23 @@ if (savedZone && ZONAS[savedZone]) {
     // Clubes: nunca se pregunta fecha (Vie en cancha). Setear default.
     if (!_loadSavedDate()) _setClubesDefaultDate();
     _setOverlay(false);
-  } else if (savedZone === 'pilar' && !_loadSavedPilarBarrio()) {
-    // Pilar sin barrio guardado → preguntar barrio.
-    welcomeShowBarrioStep();
-    _setOverlay(true);
+  } else if (savedZone === 'pilar') {
+    // Pilar: cargar zona + barrio guardados si existen. Si falta alguno,
+    // arrancar por el paso más cercano.
+    var tieneZona = _loadSavedPilarZona();
+    var tieneBarrio = _loadSavedPilarBarrio();
+    if (!tieneZona) {
+      welcomeShowBarrioStep();       // Paso 2: elegir zona
+      _setOverlay(true);
+    } else if (!tieneBarrio) {
+      welcomeShowSubBarrioStep();    // Paso 3: elegir sub-barrio (zona ya elegida)
+      _setOverlay(true);
+    } else if (_loadSavedDate()) {
+      _setOverlay(false);            // Zona + barrio + fecha OK → cerrar modal
+    } else {
+      welcomeShowDateStep();
+      _setOverlay(true);
+    }
   } else if (_loadSavedDate()) {
     // Tiene fecha vigente → todo listo.
     _setOverlay(false);
