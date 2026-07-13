@@ -2258,17 +2258,24 @@ function goToForm() {
   _track('begin_checkout', { value: cartTotal(), zone: currentZone, items: cartCount() });
   const section = $id('form-section');
   if (section) section.classList.remove('collapsed');
-  // Esperamos que termine la animación de cierre del sidebar (300ms) + un
-  // margen para reflow del form recién expandido. Antes se scrolleaba a
-  // .form-wrap con setTimeout 320ms y en algunos navegadores el smooth se
-  // cancelaba por la animación paralela → el usuario quedaba viendo los
-  // combos (el elemento más cercano al fold). Ahora scrolleamos al title
-  // del form (más arriba del .form-wrap), con delay más largo y usando
-  // el helper que reintenta si el elemento no está.
-  setTimeout(function() {
+  // Bug histórico: 'behavior:smooth' se cancelaba por la animación paralela del
+  // sidebar cerrándose (iOS Safari cancela smooth-scroll cuando hay layout
+  // shifts). El cliente terminaba viendo los combos, el elemento más cercano al
+  // fold. Fix definitivo (13/07/26): calculamos la Y manualmente con
+  // getBoundingClientRect y hacemos scroll INSTANTÁNEO (behavior:'auto') —
+  // nada puede cancelarlo. Reintento a los 500ms por si el sticky-header
+  // reajusta la Y después del reflow.
+  var _doScroll = function() {
     var target = $id('form-title') || $id('form-section');
-    if (target) _smoothScrollToEl(target);
-  }, 420);
+    if (!target) return;
+    var rect = target.getBoundingClientRect();
+    // Offset para no dejar el título tapado por el sticky-header (cat-nav +
+    // promo-bar ≈ 105px). Coincide con el scroll-margin-top del CSS.
+    var y = rect.top + window.pageYOffset - 110;
+    window.scrollTo({ top: Math.max(0, y), behavior: 'auto' });
+  };
+  setTimeout(_doScroll, 380);
+  setTimeout(_doScroll, 720);  // segundo intento por si algo lo movió
 }
 
 /* ── DÍA / HORARIO ── */
