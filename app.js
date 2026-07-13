@@ -1115,9 +1115,11 @@ function onPilarBarrioChange() {
   updatePilarDiasEntrega();
   updatePromoBar();
   // Sorrentinos bloqueados en Ayres del Pilar: sacarlos del carrito y re-renderizar
-  // el catálogo (oculta/reaparece la categoría según el barrio elegido).
+  // catálogo + nav (oculta/reaparece la categoría y sus chips según el barrio).
+  // renderCatNav() va SIEMPRE junto a renderCatalog(): reasigna los id de las
+  // secciones y rearma los chips; sin él, los chips quedan viejos y el tap falla.
   _purgeCartBloqueados();
-  if (typeof renderCatalog === 'function') renderCatalog();
+  if (typeof renderCatalog === 'function') { renderCatalog(); renderCatNav(); }
   // Si cambió Red ↔ no-Red, el cap de stock puede cambiar — refrescar
   _ensureCartFitsDate();
   updateStockDisplay();
