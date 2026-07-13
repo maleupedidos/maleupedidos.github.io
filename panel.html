@@ -15699,12 +15699,18 @@ if('serviceWorker' in navigator){
     var _subRep = (c.meta && c.meta.subBarrioMapa) || _topKey(c.subBarrios);
     var _loteVer = (c.meta && c.meta.loteMapa) || loteRep;
     var verMapaBtn = (!sinUbic && _loteVer && _subRep) ? '<button class="crm-edit-btn" onclick="crmVerEnMapa(\''+encodeURIComponent(_subRep)+'\',\''+encodeURIComponent(_loteVer)+'\')">📍 Ver en mapa</button>' : '';
+    // Si el cliente figura en Estancias por un barrio mal cargado, se lo saca del
+    // cockpit desde acá (la acción vive en la ficha, no ensuciando cada tarjeta).
+    var _esEst = (barrios||[]).some(function(b){ return String(b).trim().toLowerCase()==='estancias del pilar'; });
+    var fueraBtn = (_esEst && c.key && typeof window.estCliFuera==='function')
+      ? '<button class="crm-edit-btn" style="color:var(--o)" title="Este cliente no vive en Estancias — sacarlo del cockpit (Clientes + Pulso). Reversible." onclick="estCliFuera(\''+encodeURIComponent(c.key)+'\',\''+encodeURIComponent(c.nombre||'')+'\')">🚫 No es de Estancias</button>' : '';
     var actionsHtml = '<div class="crm-tags-row">'
       + (c.tel ? '<button class="crm-edit-btn" onclick="crmCopyTel(\''+c.tel+'\')">📞 Copiar tel</button>' : '')
       + reactWp
       + verMapaBtn
       + (c.tel ? '<button class="crm-edit-btn" onclick="crmEditarMeta()">Editar ficha</button>' : '')
       + '<button class="crm-edit-btn" onclick="crmFusionarConInit()">Fusionar con…</button>'
+      + fueraBtn
     + '</div>';
 
     var pctCob = c.totalFacturado > 0 ? Math.round(c.totalCobrado / c.totalFacturado * 100) : 100;
@@ -18512,10 +18518,40 @@ if('serviceWorker' in navigator){
     // NO está "sin compras": está pendiente. Los que ya tienen historial conservan
     // su estado real (activo/dormido/…) y muestran el pendiente como chip aparte.
     if(est==='sin' && pend>0) est='pendiente';
-    return { facturado:c.facturadoHome||0, entregados:c.entregadosHome||0, ticket:c.ticketHome||0,
+    var ent=c.entregadosHome||0;
+    // Frecuencia HOME real (días entre pedidos Home), NO la cross-canal del backend.
+    var freqH=0, pfH=_parseFecha(c.primeraFechaHome), ufH=_parseFecha(c.ultimaFechaHome);
+    if(pfH && ufH && ent>1){ freqH=Math.round((ufH-pfH)/86400000/(ent-1)); }
+    // "Se estira": activo con ≥3 compras que ya pasó 1,5× su ritmo habitual → a punto
+    // de dormirse. Señal para actuar antes de perderlo. Conservador para no ser ruido.
+    var riesgo=(est==='activo' && freqH>0 && ent>=3 && dias>Math.max(freqH*1.5, freqH+4));
+    return { facturado:c.facturadoHome||0, entregados:ent, ticket:c.ticketHome||0,
       deuda:c.deudaHome||0, diasUltima:dias, ultimaFecha:c.ultimaFechaHome||'', estado:est,
-      pend:pend, proxEntrega:c.proxEntregaHome||'',
+      pend:pend, proxEntrega:c.proxEntregaHome||'', freqH:freqH, riesgo:riesgo,
       facturadoAll:c.facturado||0 };
+  }
+  // Título del cliente en title-case respetando partículas (de, del, la, los, van…).
+  function _tcNombre(n){
+    n=String(n||'').trim(); if(!n) return n;
+    var low={de:1,del:1,la:1,las:1,los:1,y:1,da:1,di:1,van:1,von:1,'el':1};
+    return n.split(/\s+/).map(function(w,i){
+      var lw=w.toLowerCase();
+      if(i>0 && low[lw]) return lw;
+      return lw.charAt(0).toUpperCase()+lw.slice(1);
+    }).join(' ');
+  }
+  // Etiqueta de recencia PRECISA (evita el "hace 2d" cuando fue ayer, que salía del
+  // Math.round del backend). Se recalcula en el front desde la fecha, con floor.
+  function _cliUltLabel(v){
+    var pf=_parseFecha(v.ultimaFecha);
+    if(pf){
+      var hoy=new Date(); hoy.setHours(0,0,0,0); pf.setHours(0,0,0,0);
+      var d=Math.round((hoy-pf)/86400000);
+      var rel=(d<=0)?'hoy':(d===1)?'ayer':'hace '+d+'d';
+      return esc(v.ultimaFecha)+' · '+rel;
+    }
+    if(v.pend>0) return _cliPendLabel(v);
+    return 'sin compras Home';
   }
   // Etiqueta amigable de la próxima entrega pendiente ("mañana", "hoy" o la fecha).
   function _cliPendLabel(v){
@@ -18555,24 +18591,23 @@ if('serviceWorker' in navigator){
   function _cliCard(c){
     var v=_cliH(c);
     var loc=(c.subBarrio||'')+(c.lote?' · Lote '+c.lote:'');
-    var pendTxt=_cliPendLabel(v);
-    // Sub-línea: si no hay entregas pero SÍ pedido en curso, mostramos el pendiente
-    // (no "sin compras"). Si además tiene historial, sumamos el pendiente al final.
-    var ult=(typeof v.diasUltima==='number'&&v.diasUltima>=0)?(esc(v.ultimaFecha||'')+' · hace '+v.diasUltima+'d'):(pendTxt||'sin compras Home');
+    // Sub-línea: recencia precisa (hoy/ayer/hace Nd) o el pendiente si no hay entregas.
+    var ult=_cliUltLabel(v);
     var tel=c.telDisplay||c.tel||'';
     var otros=(v.facturadoAll>v.facturado)?(v.facturadoAll-v.facturado):0;
     var pendPill=(v.pend>0 && v.estado!=='pendiente')?' <span class="hog-mergedbadge" style="color:#8a6d1f;background:#FFF7DB">🕒 '+v.pend+' en curso</span>':'';
+    var riesgoPill=v.riesgo?' <span class="hog-mergedbadge" style="color:#C62828;background:#FFEBEE" title="Activo que ya pasó 1,5× su ritmo habitual (cada '+v.freqH+'d) — a punto de dormirse">⚠️ se estira</span>':'';
     return '<div class="hog-card" onclick="crmOpenCliente(\''+encodeURIComponent(c.key)+'\')">'
       +'<div class="hog-card-top"><div style="min-width:0">'
-      +'<div class="hog-card-name">'+esc(c.nombre)+' '+_estBadge(v.estado)+pendPill+(c.vip?' <span class="hog-mergedbadge" style="color:#8a6d1f;background:#FFF3D6">★ VIP</span>':'')+' <span class="hog-open">ver ›</span></div>'
+      +'<div class="hog-card-name">'+esc(_tcNombre(c.nombre))+' '+_estBadge(v.estado)+pendPill+riesgoPill+(c.vip?' <span class="hog-mergedbadge" style="color:#8a6d1f;background:#FFF3D6">★ VIP</span>':'')+' <span class="hog-open">ver ›</span></div>'
       +'<div class="hog-card-sub">'+esc(loc||'—')+' · últ: '+ult+'</div></div>'
       +'<div class="hog-card-val"><b>'+money(v.facturado)+'</b><small>'+(v.entregados||0)+' pedidos'+(v.pend>0?' · 🕒'+v.pend:'')+'</small></div></div>'
       +'<div class="hog-card-stats">'
       +'<span class="hog-stat">Ticket <b>'+money(v.ticket)+'</b></span>'
       +'<span class="hog-stat">Deuda <b style="color:'+((v.deuda>0)?'var(--r)':'var(--ink)')+'">'+money(v.deuda)+'</b></span>'
+      +(v.freqH>0?'<span class="hog-stat">Ritmo <b>cada '+v.freqH+'d</b></span>':'')
       +(tel?'<span class="hog-stat">📞 <b class="est-tel" style="cursor:pointer" onclick="event.stopPropagation();crmCopyTel(\''+tel+'\')">'+esc(tel)+'</b></span>':'')
       +(otros>0?'<span class="hog-stat" style="color:var(--bl)" title="Facturado fuera de Home/Estancias (Clubes u otros canales) — no cuenta en este ranking">🎟️ +'+money(otros)+' en otros canales</span>':'')
-      +'<button class="hog-stat" style="margin-left:auto;border:none;background:transparent;cursor:pointer;color:var(--o);font:inherit;padding:0" title="Este cliente no vive en Estancias — sacarlo del cockpit (Clientes + Pulso). Reversible." onclick="event.stopPropagation();estCliFuera(\''+encodeURIComponent(c.key)+'\',\''+encodeURIComponent(c.nombre||'')+'\')">🚫 No es de Estancias</button>'
       +'</div></div>';
   }
   // Recencia efectiva para el orden "Compra reciente": un pedido en curso (para
@@ -18595,7 +18630,8 @@ if('serviceWorker' in navigator){
       if(o==='facturado') return vb.facturado-va.facturado;
       if(o==='pedidos') return (vb.entregados-va.entregados)||(vb.facturado-va.facturado);
       if(o==='ticket') return (vb.ticket||0)-(va.ticket||0);
-      if(o==='nombre') return String(a.nombre||'').localeCompare(String(b.nombre||''));
+      if(o==='deuda') return (vb.deuda||0)-(va.deuda||0);
+      if(o==='nombre') return String(_tcNombre(a.nombre)).localeCompare(String(_tcNombre(b.nombre)));
       return _cliRec(va)-_cliRec(vb);
     });
     return arr;
@@ -18620,7 +18656,10 @@ if('serviceWorker' in navigator){
     // refresh en background no lo revierta antes de que el server re-agregue).
     _estCli=(_estCli||[]).filter(function(c){ return c.key!==key; });
     try{ if(window.crmClientes){ crmClientes.forEach(function(c){ if(c.key===key) c.barrio='Fuera de Estancias'; }); window._lsSetSafe('maleu_crm_clientes_v1', JSON.stringify(crmClientes)); } }catch(e){}
-    _cliRenderList();
+    // Re-render completo (KPIs + lista) si la tab está montada, así el contador de
+    // arriba no queda viejo (era el desfasaje 193 KPI vs 192 lista). Instantáneo (cache).
+    if(E$('estClientes')) rClientes(); else _cliRenderList();
+    if(typeof window.crmCloseDrawer==='function'){ try{ window.crmCloseDrawer(); }catch(e){} }
     _toast('Sacando a '+nombre+' de Estancias…');
     fetch(EST_API,{method:'POST',mode:'cors',body:JSON.stringify({action:'estFueraEstancias',key:key})})
       .then(function(r){return r.json();}).then(function(d){
@@ -18636,13 +18675,13 @@ if('serviceWorker' in navigator){
     var host=E$('estClientes'); host.innerHTML='<div class="loading">Cargando clientes…</div>';
     _cliEnsure(function(err){
       if(err==='nocrm'){ host.innerHTML=_nocrm(); return; }
-      var C=_estCli||[], act=0,dorm=0,inact=0,nuev=0,fact=0,pend=0;
-      C.forEach(function(c){ var v=_cliH(c); var e=v.estado; if(e==='activo')act++; else if(e==='dormido')dorm++; else if(e==='inactivo')inact++; else if(e==='nuevo')nuev++; if(v.pend>0)pend++; fact+=(v.facturado||0); });
+      var C=_estCli||[], act=0,dorm=0,inact=0,nuev=0,fact=0,pend=0,deudaTot=0,riesgoN=0;
+      C.forEach(function(c){ var v=_cliH(c); var e=v.estado; if(e==='activo')act++; else if(e==='dormido')dorm++; else if(e==='inactivo')inact++; else if(e==='nuevo')nuev++; if(v.pend>0)pend++; if(v.riesgo)riesgoN++; deudaTot+=(v.deuda||0); fact+=(v.facturado||0); });
       var html='<div class="est-kpis">'
         +'<div class="est-kpi"><div class="est-kpi-l">Clientes</div><div class="est-kpi-v">'+C.length+'</div><div class="est-kpi-s" style="color:var(--bl)">de Estancias del Pilar</div></div>'
-        +'<div class="est-kpi"><div class="est-kpi-l">Activos</div><div class="est-kpi-v" style="color:var(--gd)">'+act+'</div><div class="est-kpi-s" style="color:var(--bl)">'+dorm+' dormidos · '+inact+' inactivos</div></div>'
+        +'<div class="est-kpi"><div class="est-kpi-l">Activos</div><div class="est-kpi-v" style="color:var(--gd)">'+act+'</div><div class="est-kpi-s" style="color:var(--bl)">'+dorm+' dormidos · '+inact+' inactivos'+(riesgoN>0?' · <b style="color:#C62828">'+riesgoN+' ⚠️ se estiran</b>':'')+'</div></div>'
         +'<div class="est-kpi"><div class="est-kpi-l">Nuevos</div><div class="est-kpi-v" style="color:#2563EB">'+nuev+'</div><div class="est-kpi-s" style="color:var(--bl)">recientes</div></div>'
-        +'<div class="est-kpi"><div class="est-kpi-l">Facturado</div><div class="est-kpi-v">'+money(fact)+'</div><div class="est-kpi-s" style="color:var(--bl)">histórico</div></div>'
+        +'<div class="est-kpi"><div class="est-kpi-l">Facturado</div><div class="est-kpi-v">'+money(fact)+'</div><div class="est-kpi-s" style="color:var(--bl)">Home · histórico'+(deudaTot>0?' · <b style="color:var(--r)">'+money(deudaTot)+' por cobrar</b>':'')+'</div></div>'
         +'</div>';
       html+='<div class="est-ctl">'
         +'<input class="est-search" type="text" placeholder="Buscar nombre, lote, sub-barrio o teléfono…" oninput="estCliBusq(this.value)">'
@@ -18651,6 +18690,7 @@ if('serviceWorker' in navigator){
         +'<button class="est-chip" data-o="facturado" onclick="estCliOrden(\'facturado\')">💰 Más facturan</button>'
         +'<button class="est-chip" data-o="pedidos" onclick="estCliOrden(\'pedidos\')">📦 Más pedidos</button>'
         +'<button class="est-chip" data-o="ticket" onclick="estCliOrden(\'ticket\')">🎫 Mayor ticket</button>'
+        +'<button class="est-chip" data-o="deuda" onclick="estCliOrden(\'deuda\')">💸 Deuda</button>'
         +'<button class="est-chip" data-o="nombre" onclick="estCliOrden(\'nombre\')">A-Z</button></div>'
         +'<div class="est-ctl-row"><span class="est-ctl-lbl">Estado</span>'
         +'<button class="est-chip on" data-e="" onclick="estCliEstado(\'\')">Todos</button>'
