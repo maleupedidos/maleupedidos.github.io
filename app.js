@@ -524,8 +524,8 @@ const BARRIOS_PILAR_MODAL = [
     val: 'Manzanares',
     nombre: 'Manzanares',
     isRed: true, badge: 'Rufo',
-    subBarrios: 'San Francisco · La Escondida · Manzanares Chico',
-    subBarriosList: ['San Francisco', 'La Escondida', 'Manzanares Chico']
+    subBarrios: 'San Francisco · La Escondida · Manzanares Chico · Cerrillos · CUBA Fátima',
+    subBarriosList: ['San Francisco', 'La Escondida', 'Manzanares Chico', 'Cerrillos', 'CUBA Fátima']
   },
   {
     val: '__otro__',
@@ -3667,29 +3667,58 @@ function _cumpleSaveBackend(valor) {
 
 /* ── BARRA ENVÍO GRATIS ── */
 const FREE_SHIPPING_MIN = 25000; // envío gratis desde $25.000 (solo aplica para zona pilar)
+/* Cutoff de pedidos para vendedores Red: Jueves 12:00 AR.
+   ABIERTO (Lun-Mié y Jue antes de 12hs): entrega el próximo Viernes.
+   CERRADO (Jue 12hs → Dom 23:59): la entrega del próximo Vie ya cerró.
+   Devuelve el chip para incluir en el ticker o '' si no aplica. */
+function _pilarRedCutoffChip() {
+  if (currentZone !== 'pilar' || !_pilarBarrioIsRed()) return '';
+  // Hora Argentina (UTC-3)
+  var nowAR = new Date(Date.now() - 3 * 3600 * 1000);
+  var dow = nowAR.getUTCDay(); // 0=Dom, 4=Jue, 5=Vie
+  var hour = nowAR.getUTCHours();
+  // ABIERTO: Lun(1), Mar(2), Mié(3), Jue(4) antes de 12hs.
+  var abierto = (dow >= 1 && dow <= 3) || (dow === 4 && hour < 12);
+  if (abierto) {
+    return '⏰ Hay tiempo para pedir hasta el Jueves a las 12hs · Entrega Viernes';
+  }
+  return '⏰ Tiempo agotado esta semana · Pedí ahora con entrega el Viernes que viene';
+}
+
 function updatePromoBar() {
   var bar = $id('promo-bar');
   if (!bar) return;
-  if (!discountsActive()) { bar.style.display = 'none'; return; }
-  // Carrito solo-combos: no hay nada descontable → ocultar (no mentir con el 10%).
-  if (combosInCart() && productsSubtotal() === 0) { bar.style.display = 'none'; return; }
-  // Construir el ticker dinámicamente según qué descuentos aplican en la zona
-  // (en Pilar NO-Red solo aplica el +$100K, no el efectivo).
-  var msgEl = bar.querySelector('.promo-msg');
-  if (msgEl) {
-    var chips = [];
+  // Carrito solo-combos: los descuentos no aplican → ocultarlos.
+  var soloCombos = combosInCart() && productsSubtotal() === 0;
+  // Construir el ticker mezclando descuentos (si aplican) + cutoff Red (si aplica).
+  var chips = [];
+  if (discountsActive() && !soloCombos) {
     if (cashDiscountActive()) chips.push('💵 10% OFF en efectivo');
     if (bulkDiscountActive()) chips.push('🔥 10% OFF superando $100.000');
     // Aclaraciones legales para evitar el malentendido "20% off si pago efectivo Y supero 100K":
     // los descuentos NO se suman, y los combos NO participan de la promoción.
     if (chips.length > 1) chips.push('ℹ️ No son acumulables · Máximo 10% OFF por pedido');
     chips.push('🎁 Combos no participan de esta promoción');
+  }
+  // Chip de cutoff Red (aplica en Pilar Red haya descuentos o no).
+  var cutoffChip = _pilarRedCutoffChip();
+  if (cutoffChip) chips.push(cutoffChip);
+
+  if (chips.length === 0) { bar.style.display = 'none'; return; }
+
+  var msgEl = bar.querySelector('.promo-msg');
+  if (msgEl) {
     // Duplicar la secuencia para el efecto marquee continuo
     var seq = chips.concat(chips).join(' &nbsp;·&nbsp; ') + ' &nbsp;·&nbsp;';
     msgEl.innerHTML = seq;
   }
   bar.style.display = '';
 }
+// Cutoff cambia a las 12:00 del jueves — refrescamos la barra promo cada minuto
+// para que el mensaje pase de "abierto" a "cerrado" sin necesidad de recargar.
+setInterval(function() {
+  try { if (typeof updatePromoBar === 'function') updatePromoBar(); } catch(e) {}
+}, 60000);
 function updatePagoHint() {
   var hint = $id('pago-hint');
   if (!hint) return;
