@@ -13310,6 +13310,25 @@ if('serviceWorker' in navigator){
   function _estCacheLotes(){
     try{ window._lsSetSafe('maleu_crm_lotes_v1', JSON.stringify(Object.keys(_mapaLotesData||{}).map(function(k){return _mapaLotesData[k];}))); }catch(e){}
   }
+  // SNAPSHOT ESTÁTICO same-origin (GitHub Pages / CDN): rápido y CONFIABLE. El endpoint
+  // live de Apps Script es lento (8-18s) y en algunos navegadores falla siempre; el
+  // snapshot garantiza que SIEMPRE haya datos para pintar al instante. Siembra crmClientes
+  // (si estaba vacío) + la cache local, así el sync sincrónico ya tiene con qué. El live
+  // sigue refrescando por detrás para la frescura. Se regenera aparte (commit / rutina).
+  var _snapTried=false;
+  window.estSnapshotSeed = function(cb){
+    fetch('crm-clientes-snapshot.json', {cache:'default'})
+      .then(function(r){ return r.ok ? r.json() : null; })
+      .then(function(d){
+        var l=(d&&d.clientes)||null; _snapTried=true;
+        if(l && l.length){
+          if(!(crmClientes && crmClientes.length)) crmClientes=l;   // sembramos global solo si estaba vacío
+          try{ window._lsSetSafe('maleu_crm_clientes_v1', JSON.stringify(l)); }catch(e){}
+        }
+        cb(!!(l && l.length));
+      })
+      .catch(function(){ _snapTried=true; cb(false); });
+  };
   // SÍNCRONO: devuelve {hogares,prospectos} desde cache, o null si no hay nada cacheado.
   window.estHogaresSync = function(){
     if (!(crmClientes && crmClientes.length)){ try{ var cc=JSON.parse(localStorage.getItem('maleu_crm_clientes_v1')||'null'); if(cc&&cc.length)crmClientes=cc; }catch(e){} }
@@ -17975,17 +17994,35 @@ if('serviceWorker' in navigator){
     // el estado en vacío para siempre y nunca dejaba refrescar de la red. Nunca más.
     if(_estHogTiene()){ cb(); _estBgRefresh(); return; }            // en memoria → instantáneo + refresco throttled
     var painted=false;
-    if(typeof window.estHogaresSync==='function'){
-      var raw=window.estHogaresSync();                             // SÍNCRONO desde cache de clientes
-      if(raw && raw.hogares && raw.hogares.length){ _estRaw=raw; _estMerges=_mergesCache(); _estHog=_applyMerges(raw,_estMerges); cb(); painted=_estHogTiene(); }
+    function firstPaint(){ if(painted||!_estHogTiene())return; painted=true; cb(); }
+    function paintFromSync(){
+      if(painted||typeof window.estHogaresSync!=='function')return;
+      var raw=window.estHogaresSync();
+      if(raw && raw.hogares && raw.hogares.length){ _estRaw=raw; _estMerges=_mergesCache(); _estHog=_applyMerges(raw,_estMerges); _estHogCacheSave(_estHog); firstPaint(); }
     }
-    if(!painted){                                                  // sin clientes útiles en cache → cache durable del build
-      var cached=_estHogCacheLoad();
-      if(cached){ _estHog=cached; _estMerges=_estMerges||_mergesCache(); cb(); painted=_estHogTiene(); }
+    // 1) cache local sincrónica (clientes cacheados → build, o build durable)
+    paintFromSync();
+    if(!painted){ var cached=_estHogCacheLoad(); if(cached){ _estHog=cached; _estMerges=_estMerges||_mergesCache(); firstPaint(); } }
+
+    var liveOn=(typeof window.estHogaresRefresh==='function');
+    // Único camino de cierre: el live refresca por detrás; si al terminar NADA pintó → nocrm.
+    function liveRefresh(){
+      if(!liveOn){ if(!painted) cb('nocrm'); return; }
+      _estLastRefresh=Date.now();
+      _estRefreshCore(function(){
+        if(_estHogTiene()){ if(painted)_estRerender(); else firstPaint(); }
+        else if(!painted){ cb('nocrm'); }                          // todas las fuentes fallaron
+      });
     }
-    if(typeof window.estHogaresRefresh!=='function'){ if(!painted)cb('nocrm'); return; }
-    _estLastRefresh=Date.now();
-    _estRefreshCore(function(ok){ if(painted) _estRerender(); else cb(_estHogTiene()?undefined:'nocrm'); });
+
+    if(painted){ liveRefresh(); return; }                          // ya pintó de cache → live solo refresca
+
+    // 2) sin cache local: SNAPSHOT estático same-origin (rápido y confiable) para pintar YA
+    if(typeof window.estSnapshotSeed==='function'){
+      window.estSnapshotSeed(function(){ paintFromSync(); liveRefresh(); });
+    } else {
+      liveRefresh();
+    }
   }
   // Re-pinta el sub activo SIN spinner (datos ya en memoria → sincrónico).
   function _estRerender(){
@@ -18498,15 +18535,22 @@ if('serviceWorker' in navigator){
   function _cliEnsure(cb){
     if(_estCli){ cb(); return; }
     if(typeof window.estClientesSync!=='function'){ cb('nocrm'); return; }
-    var raw=window.estClientesSync(), painted=false;
-    if(raw){ _estCli=raw; cb(); painted=true; }
-    if(typeof window.estHogaresRefresh==='function'){
+    var painted=false;
+    function paintCli(){ if(painted)return; var raw=window.estClientesSync(); if(raw){ _estCli=raw; cb(); painted=true; } }
+    paintCli();                                                    // 1) cache local
+    var liveOn=(typeof window.estHogaresRefresh==='function');
+    function liveRefresh(){
+      if(!liveOn){ if(!painted) cb('nocrm'); return; }
       window.estHogaresRefresh(function(fresh, ok){
         var f=window.estClientesSync();
-        if(f){ _estCli=f; if(painted)_cliRenderList(); else cb(); }
-        else if(!painted){ cb(ok?undefined:'nocrm'); }   // sin datos ni cache → Reintentar, no ceros
+        if(f){ _estCli=f; if(painted)_cliRenderList(); else { cb(); painted=true; } }
+        else if(!painted){ cb('nocrm'); }
       });
-    } else if(!painted){ cb('nocrm'); }
+    }
+    if(painted){ liveRefresh(); return; }
+    // 2) snapshot estático (rápido y confiable)
+    if(typeof window.estSnapshotSeed==='function'){ window.estSnapshotSeed(function(){ paintCli(); liveRefresh(); }); }
+    else liveRefresh();
   }
   function _cliCard(c){
     var v=_cliH(c);
