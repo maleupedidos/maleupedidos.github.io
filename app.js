@@ -491,14 +491,14 @@ const BARRIOS_PILAR_MODAL = [
   {
     val: 'Manzanares',
     nombre: 'Manzanares',
-    isRed: true, badge: 'Rufino',
+    isRed: true, badge: 'Rufo',
     subBarrios: 'San Francisco · La Escondida · Manzanares Chico'
   },
   {
     val: '__otro__',
     nombre: 'Otra zona de Pilar',
-    isRed: false, isOther: true,
-    subBarrios: 'Pilara · El Ocho · fuera de barrio cerrado'
+    isRed: false, isOther: true, badge: 'Tadeo',
+    subBarrios: 'Pilara · El Ocho · Otros'
   }
 ];
 
@@ -1155,9 +1155,9 @@ function renderWelcomeBarrioGrid() {
     var classes = ['loc-zona-card'];
     if (b.isRed) classes.push('is-red');
     if (b.isOther) classes.push('is-other');
-    var badge = b.badge
-      ? '<span class="loc-zona-vendedor">Reparte <strong>' + b.badge + '</strong></span>'
-      : '<span class="loc-zona-vendedor is-tadeo">La reparto yo · <strong>Envío $5.000</strong></span>';
+    // Badge del vendedor: solo el nombre. La "Otra zona" (Tadeo) usa estilo naranja.
+    var badgeCls = 'loc-zona-vendedor' + (b.isOther ? ' is-tadeo' : '');
+    var badge = '<span class="' + badgeCls + '">' + (b.badge || '') + '</span>';
     var subBarrios = b.subBarrios ? '<span class="loc-zona-sub">' + b.subBarrios + '</span>' : '';
     // Escapo comillas simples del nombre para el onclick
     var valEsc = b.val.replace(/'/g, "\\'");
