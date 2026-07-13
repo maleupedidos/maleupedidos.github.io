@@ -13325,11 +13325,19 @@ if('serviceWorker' in navigator){
   };
   // Baja clientes con reintentos. Devuelve la lista SOLO si vino con datos; null si
   // falló o vino vacía (así NUNCA pisamos datos buenos ni cacheamos vacío).
-  function _fetchClientesRetry(retries, cb){
+  // Reintentos PACIENTES con backoff exponencial. El server (Apps Script) tarda 8-18s
+  // y se congestiona en el boot (admin + clientes + ventas + … a la vez) → un fetch
+  // puede fallar transitoriamente. Reintentamos hasta ~30s antes de rendirnos, así no
+  // damos un falso "no respondió" cuando en realidad estaba saturado.
+  function _fetchClientesRetry(retries, cb, _try){
+    _try=_try||0;
     fetch(CRM_API + '?action=crmClientes', {cache:'no-store'})
       .then(function(r){ if(!r.ok) throw new Error('http '+r.status); return r.json(); })
       .then(function(d){ var l=(d&&d.clientes)||[]; cb(l.length?l:null); })
-      .catch(function(){ if(retries>0) setTimeout(function(){ _fetchClientesRetry(retries-1, cb); }, 1200); else cb(null); });
+      .catch(function(){
+        if(retries>0){ var wait=Math.min(1500*Math.pow(2,_try), 8000); setTimeout(function(){ _fetchClientesRetry(retries-1, cb, _try+1); }, wait); }
+        else cb(null);
+      });
   }
   // BACKGROUND: baja clientes + lotes frescos, cachea y devuelve hogares actualizados.
   // cb(hogares, ok): ok=true si hay clientes reales (memoria o cache); false si no
@@ -13342,7 +13350,7 @@ if('serviceWorker' in navigator){
       var ok=!!(crmClientes && crmClientes.length);
       try{ cb(_hogBuild(), ok); }catch(e){ cb({hogares:[],prospectos:[]}, ok); }
     }
-    _fetchClientesRetry(2, function(list){
+    _fetchClientesRetry(4, function(list){
       if(list && list.length){ crmClientes=list; try{ window._lsSetSafe('maleu_crm_clientes_v1', JSON.stringify(crmClientes)); }catch(e){} }
       // si vino null (falló/vacío): NO tocamos crmClientes ni la cache.
       done();
