@@ -1080,6 +1080,7 @@ function onPilarBarrioChange() {
   updatePilarVendedorLabel();
   updatePilarDiasEntrega();
   updatePromoBar();
+  _updateZoneChip();
   // Sorrentinos bloqueados en Ayres del Pilar: sacarlos del carrito y re-renderizar
   // catálogo + nav (oculta/reaparece la categoría y sus chips según el barrio).
   // renderCatNav() va SIEMPRE junto a renderCatalog(): reasigna los id de las
@@ -1210,6 +1211,7 @@ function setPilarBarrio(val, nombre) {
   } catch(e) {}
   // Refresca el dropdown del form (los sub-barrios de la zona nueva).
   if (typeof renderPilarBarrios === 'function') renderPilarBarrios();
+  _updateZoneChip();
   welcomeShowSubBarrioStep();
 }
 
@@ -1228,6 +1230,7 @@ function setPilarSubBarrio(val, nombre) {
     sel.value = val;
     if (typeof onPilarBarrioChange === 'function') onPilarBarrioChange();
   }
+  _updateZoneChip();
   if (!_loadSavedDate()) {
     welcomeShowDateStep();
   } else {
@@ -1294,6 +1297,7 @@ function _loadSavedPilarBarrio() {
       sel.value = raw.val;
       if (typeof onPilarBarrioChange === 'function') onPilarBarrioChange();
     }
+    _updateZoneChip();
     return true;
   } catch(e) { return false; }
 }
@@ -1610,10 +1614,30 @@ function _preselectDayPicker() {
   if (hiddenF) hiddenF.value = selectedDeliveryDate;
   if (typeof renderDayPicker === 'function') renderDayPicker();
 }
+/* Actualiza el chip 📍 del header con la etiqueta más específica disponible:
+     Pilar + sub-barrio elegido  → 'Ayres del Pilar' (mostramos el barrio)
+     Pilar sin sub-barrio        → nombre de la zona canonical (Tortugas y…)
+     Home/Clubes o sin datos     → z.nombre.
+   Se llama desde applyZone() y desde cada punto donde cambia el barrio. */
+function _updateZoneChip() {
+  var chip = $id('zone-chip'); if (!chip) return;
+  var z = ZONAS[currentZone];
+  var label = z ? z.nombre : '';
+  if (currentZone === 'pilar') {
+    // Si el sub-barrio del form está seleccionado, usarlo
+    var sel = $id('f-pilar-barrio');
+    var val = (sel && sel.value) || selectedPilarBarrio || '';
+    if (val && val !== '__otro__') {
+      label = val;
+    } else if (selectedPilarZona || selectedPilarZonaName) {
+      label = selectedPilarZonaName || selectedPilarZona;
+    }
+  }
+  chip.textContent = '📍 ' + label;
+}
 function applyZone() {
   const z = ZONAS[currentZone];
-  // Chip
-  $id('zone-chip').textContent = '📍 ' + z.nombre;
+  _updateZoneChip();
   // Hero delivery text — si hay schedule detallado, mostrar solo eso
   const schedEl = $id('hero-schedule');
   if (z.schedule) {
