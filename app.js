@@ -159,40 +159,6 @@ const COMBOS = [
       { label: 'Postre', unidad: 'Franui',                     pick: 3, options: { ids: [13] } },
     ],
   },
-  {
-    id: 'cmb_cuartos_empanadas',
-    nombre: 'Combo Cuartos de Final · Empanadas',
-    desc: '¡Vamos Argentina! 32 empanadas y Franui para ver los cuartos con todos.',
-    personas: '6 a 8 personas',
-    precio: 95900,                       // valor ind. ~$109.000 (~12% off), le gana al 10% efectivo
-    img: 'combo-cuartos-empanadas.jpg', fullCard: true,
-    tachadoFijo: 119600,   // = valor individual que muestra la placa (para que coincida)
-    emoji: '🥟',
-    flag: '🇦🇷',
-    categoria: '⚽ Cuartos de Final',
-    zonas: ['estancias', 'pilar'],
-    slots: [
-      { label: 'Empanadas', unidad: 'pack de empanadas x8', pick: 4, options: { cat: 'Empanadas' } },  // 4 packs a elección libre
-      { label: 'Postre',    unidad: 'Franui',               pick: 4, options: { ids: [13] } },
-    ],
-  },
-  {
-    id: 'cmb_cuartos_pizzas',
-    nombre: 'Combo Cuartos de Final · Pizzas',
-    desc: '¡Vamos Argentina! 8 pizzas y Franui para bancar a la Selección en cuartos.',
-    personas: '6 a 8 personas',
-    precio: 91900,                       // valor ind. $104.000 (~11,6% off), le gana al 10% efectivo
-    img: 'combo-cuartos-pizzas.jpg', fullCard: true,
-    tachadoFijo: 112800,   // = valor individual que muestra la placa (para que coincida)
-    emoji: '🍕',
-    flag: '🇦🇷',
-    categoria: '⚽ Cuartos de Final',
-    zonas: ['estancias', 'pilar'],
-    slots: [
-      { label: 'Pizzas', unidad: 'pack de pizzas clásicas x2', pick: 4, options: { cat: 'Pack Pizzas x2' } },  // 4 packs a elección libre
-      { label: 'Postre', unidad: 'Franui',                     pick: 4, options: { ids: [13] } },
-    ],
-  },
   // ── PERMANENTES ──
   {
     id: 'cmb_descubri_semana',
@@ -2292,24 +2258,12 @@ function goToForm() {
   _track('begin_checkout', { value: cartTotal(), zone: currentZone, items: cartCount() });
   const section = $id('form-section');
   if (section) section.classList.remove('collapsed');
-  // Bug histórico: 'behavior:smooth' se cancelaba por la animación paralela del
-  // sidebar cerrándose (iOS Safari cancela smooth-scroll cuando hay layout
-  // shifts). El cliente terminaba viendo los combos, el elemento más cercano al
-  // fold. Fix definitivo (13/07/26): calculamos la Y manualmente con
-  // getBoundingClientRect y hacemos scroll INSTANTÁNEO (behavior:'auto') —
-  // nada puede cancelarlo. Reintento a los 500ms por si el sticky-header
-  // reajusta la Y después del reflow.
-  var _doScroll = function() {
+  // Delay 380ms deja terminar la animación de cierre del sidebar. Usamos scroll
+  // INSTANT porque hay layout shifts en paralelo — smooth se cancelaría.
+  setTimeout(function() {
     var target = $id('form-title') || $id('form-section');
-    if (!target) return;
-    var rect = target.getBoundingClientRect();
-    // Offset para no dejar el título tapado por el sticky-header (cat-nav +
-    // promo-bar ≈ 105px). Coincide con el scroll-margin-top del CSS.
-    var y = rect.top + window.pageYOffset - 110;
-    window.scrollTo({ top: Math.max(0, y), behavior: 'auto' });
-  };
-  setTimeout(_doScroll, 380);
-  setTimeout(_doScroll, 720);  // segundo intento por si algo lo movió
+    if (target) _smoothScrollToEl(target, { instant: true });
+  }, 380);
 }
 
 /* ── DÍA / HORARIO ── */
@@ -3284,9 +3238,33 @@ function renderCatNav() {
 }
 /* Scroll suave a un ancla. Usa scrollIntoView (imperativo, no depende del
    hash) + scroll-margin-top en CSS para compensar el header sticky. */
-function _smoothScrollToEl(el) {
+/* Scroll robusto a un elemento respetando el sticky-header (cat-nav + promo-bar
+   ≈ 110px). Antes usábamos scrollIntoView({behavior:'smooth'}) que a veces se
+   cancelaba en iOS Safari por layout shifts paralelos → el usuario terminaba
+   viendo el elemento anterior (típico: combos en vez del form). Ahora:
+   - Calculamos Y con getBoundingClientRect (100% determinista).
+   - behavior:'smooth' cuando el navegador está calmo; 'auto' si acabamos de
+     abrir/cerrar overlays (para no competir con animaciones).
+   - Reintento a los 380ms por si un reflow tardío movió el layout. */
+function _stickyOffsetPx() {
+  var sh = document.querySelector('.sticky-header');
+  if (!sh) return 100;
+  var r = sh.getBoundingClientRect();
+  return Math.max(60, r.height + 10);
+}
+function _smoothScrollToEl(el, opts) {
   if (!el) return false;
-  el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  var behavior = (opts && opts.instant) ? 'auto' : 'smooth';
+  var offset = _stickyOffsetPx();
+  var doScroll = function() {
+    var rect = el.getBoundingClientRect();
+    var y = rect.top + window.pageYOffset - offset;
+    window.scrollTo({ top: Math.max(0, y), behavior: behavior });
+  };
+  doScroll();
+  // Segundo intento por si un reflow tardío desplazó el layout (típico cuando
+  // se acaba de expandir/colapsar una sección arriba del target).
+  setTimeout(doScroll, 380);
   return true;
 }
 function scrollToCombos() {
@@ -3305,7 +3283,7 @@ function scrollToCat(slug) {
   const section = $id('cat-' + slug); if (!section) return;
   _scrollingToCat = true;
   setActiveNav(slug);
-  section.scrollIntoView({behavior:'smooth',block:'start'});
+  _smoothScrollToEl(section);
   setTimeout(() => { _scrollingToCat = false; }, 800);
 }
 function setActiveNav(slug) {
