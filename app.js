@@ -480,27 +480,50 @@ const BARRIOS_PILAR_MODAL = [
     val: 'Tortugas y alrededores',
     nombre: 'Tortugas y alrededores',
     isRed: true, badge: 'Marcos',
-    subBarrios: 'El Lucero · Los Tacos · Villa Bertha · Azzurra'
+    subBarrios: 'El Lucero · Los Tacos · Villa Bertha · Azzurra',
+    subBarriosList: ['El Lucero', 'Los Tacos', 'Villa Bertha', 'Azzurra']
   },
   {
     val: 'Ayres y alrededores',
     nombre: 'Ayres y alrededores',
     isRed: true, badge: 'Fini',
-    subBarrios: 'Ayres del Pilar · La Lomada · Los Lagartos · Highland'
+    subBarrios: 'Ayres del Pilar · La Lomada · Los Lagartos · Highland',
+    subBarriosList: ['Ayres del Pilar', 'La Lomada', 'Los Lagartos', 'Highland']
   },
   {
     val: 'Manzanares',
     nombre: 'Manzanares',
     isRed: true, badge: 'Rufo',
-    subBarrios: 'San Francisco · La Escondida · Manzanares Chico'
+    subBarrios: 'San Francisco · La Escondida · Manzanares Chico',
+    subBarriosList: ['San Francisco', 'La Escondida', 'Manzanares Chico']
   },
   {
     val: '__otro__',
     nombre: 'Otra zona de Pilar',
     isRed: false, isOther: true, badge: 'Tadeo',
-    subBarrios: 'Pilara · El Ocho · Otros'
+    subBarrios: 'Pilara · El Ocho · Otros',
+    subBarriosList: ['Pilara', 'El Ocho']  // '__otro__' se agrega dinámico para el input libre
   }
 ];
+
+/* Devuelve la ZONA canonical actualmente elegida (o null si no hay).
+   Soporta que selectedPilarBarrio sea la zona (Ayres y alrededores) O un
+   sub-barrio (Ayres del Pilar) — para el segundo caso resuelve la zona vía
+   barrioToVendedor.zonaCanon (que se llena desde Sheets Vendedores). */
+function _getPilarZonaActual() {
+  if (!selectedPilarBarrio) return null;
+  var i;
+  for (i = 0; i < BARRIOS_PILAR_MODAL.length; i++) {
+    if (BARRIOS_PILAR_MODAL[i].val === selectedPilarBarrio) return BARRIOS_PILAR_MODAL[i];
+  }
+  var v = barrioToVendedor[String(selectedPilarBarrio).toLowerCase()];
+  if (v && v.zonaCanon) {
+    for (i = 0; i < BARRIOS_PILAR_MODAL.length; i++) {
+      if (BARRIOS_PILAR_MODAL[i].val === v.zonaCanon) return BARRIOS_PILAR_MODAL[i];
+    }
+  }
+  return null;
+}
 
 /* Hook para ocultar una zona/barrio temporalmente (feriados, arranque de un
    vendedor nuevo, etc.). Actualmente no hay ninguno oculto (Fini arrancó
@@ -1012,38 +1035,35 @@ function renderPilarBarrios() {
   var sel = $id('f-pilar-barrio');
   if (!sel) return;
   var restricted = isPilarRestricted();
-  var cur = sel.value || selectedPilarBarrio || '';
-  sel.innerHTML = '<option value="">Elegí tu zona</option>';
-  // Solo mostramos las 4 zonas canonical de BARRIOS_PILAR_MODAL. Los sub-barrios
-  // (El Lucero, San Francisco, etc.) NO van al dropdown para no duplicar.
-  BARRIOS_PILAR_MODAL.forEach(function(b) {
-    if (b.isOther) return;
-    if (_barrioOculto(b.val)) return;
-    sel.innerHTML += '<option value="' + b.val + '">' + b.nombre + '</option>';
+  var zona = _getPilarZonaActual();
+  var curSubBarrio = sel.value || '';
+
+  // Si el cliente todavía no eligió zona en el welcome, dropdown vacío.
+  if (!zona) {
+    sel.innerHTML = '<option value="">Elegí tu zona primero</option>';
+    var info0 = $id('pilar-restriccion-info');
+    if (info0) info0.style.display = restricted ? '' : 'none';
+    return;
+  }
+
+  sel.innerHTML = '<option value="">Elegí tu barrio</option>';
+  // Sub-barrios de la zona activa. Estos VALORES matchean 1:1 con Sheets
+  // Vendedores col Barrios → barrioToVendedor los usa para el routing al
+  // vendedor correcto (Fini para 'Ayres del Pilar', etc.).
+  (zona.subBarriosList || []).forEach(function(b) {
+    sel.innerHTML += '<option value="' + b + '">' + b + '</option>';
   });
-  // "Otra zona de Pilar" queda oculta cuando el cutoff (Vie <21hs post-Jue) impide
-  // reparto de Tadeo para el próximo Vie.
-  if (!restricted) {
-    sel.innerHTML += '<option value="__otro__">Otra zona de Pilar</option>';
+  // 'Otra zona de Pilar' agrega opción "Otro barrio" con input libre para
+  // que el cliente escriba la dirección exacta (ej. calle + número).
+  if (zona.isOther && !restricted) {
+    sel.innerHTML += '<option value="__otro__">Otro barrio (escribo la dirección)</option>';
   }
-  if (cur === '__otro__' && restricted) cur = '';
-  // Retro-compat: si el cliente tiene guardado un sub-barrio viejo (ej. 'El
-  // Lucero') lo mapeamos a su ZONA canonical ('Tortugas y alrededores') para
-  // que el dropdown no arranque vacío tras el rediseño 13/07/26.
-  if (cur) {
-    var isCanon = BARRIOS_PILAR_MODAL.some(function(b){ return b.val === cur; });
-    if (!isCanon) {
-      var v = barrioToVendedor[cur.toLowerCase()];
-      if (v && v.zonaCanon) {
-        cur = v.zonaCanon;
-        selectedPilarBarrio = cur;
-        selectedPilarBarrioName = cur;
-      } else {
-        cur = '';
-      }
-    }
-    if (cur) sel.value = cur;
+
+  // Preservar la selección del cliente si sigue siendo válida en la zona nueva
+  if (curSubBarrio && Array.from(sel.options).some(function(o){ return o.value === curSubBarrio; })) {
+    sel.value = curSubBarrio;
   }
+
   var info = $id('pilar-restriccion-info');
   if (info) info.style.display = restricted ? '' : 'none';
 }
@@ -1180,12 +1200,11 @@ function setPilarBarrio(val, nombre) {
       val: val, nombre: nombre, ts: Date.now()
     }));
   } catch(e) {}
-  // Pre-popular el dropdown del checkout
-  var sel = $id('f-pilar-barrio');
-  if (sel) {
-    sel.value = val;
-    if (typeof onPilarBarrioChange === 'function') onPilarBarrioChange();
-  }
+  // El cliente eligió la ZONA — hay que re-renderizar el dropdown del form con
+  // los sub-barrios de esa zona. El valor del dropdown queda vacío hasta que el
+  // cliente elija su barrio específico en el checkout.
+  if (typeof renderPilarBarrios === 'function') renderPilarBarrios();
+  if (typeof onPilarBarrioChange === 'function') onPilarBarrioChange();
   // Avanzar al paso fecha
   if (!_loadSavedDate()) {
     welcomeShowDateStep();
