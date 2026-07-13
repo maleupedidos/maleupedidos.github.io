@@ -69,12 +69,40 @@ const CATEGORIAS_CLUBES = [
 ];
 // Los productos de clubes se agregan a PROD_MAP después de su declaración (ver más abajo)
 
+/* Restricción de producto por SUB-BARRIO. En "Ayres del Pilar" (zona de Fini)
+   NO se pueden vender sorrentinos: Fini sí los vende en sus otros barrios, pero
+   en Ayres del Pilar no. Se ocultan del catálogo, de las categorías y de los
+   combos, y se purgan del carrito si el cliente cambia a ese barrio.
+   (13/07/2026, pedido de Tadeo.) */
+function _catBloqueadaPorBarrio(cat) {
+  return currentZone === 'pilar'
+      && cat === 'Sorrentinos'
+      && (selectedPilarBarrio === 'Ayres del Pilar' || selectedPilarBarrioName === 'Ayres del Pilar');
+}
+/* Saca del carrito los productos bloqueados por el barrio actual. Devuelve true
+   si sacó algo. (cart y PROD_MAP se inicializan más abajo; se usa en runtime.) */
+function _purgeCartBloqueados() {
+  var changed = false;
+  Object.keys(cart).forEach(function(id) {
+    var p = PROD_MAP[id];
+    if (p && _catBloqueadaPorBarrio(p.cat)) { delete cart[id]; changed = true; }
+  });
+  return changed;
+}
+
 /* Productos y categorías activos según zona */
 function getActiveProducts() {
   if (currentZone === 'clubes') return PRODUCTOS_CLUBES;
-  return PRODUCTOS.filter(function(p) { return !p.zonas || p.zonas.indexOf(currentZone) >= 0; });
+  return PRODUCTOS.filter(function(p) {
+    if (p.zonas && p.zonas.indexOf(currentZone) < 0) return false;
+    if (_catBloqueadaPorBarrio(p.cat)) return false;
+    return true;
+  });
 }
-function getActiveCategories() { return currentZone === 'clubes' ? CATEGORIAS_CLUBES : CATEGORIAS; }
+function getActiveCategories() {
+  var cats = currentZone === 'clubes' ? CATEGORIAS_CLUBES : CATEGORIAS;
+  return cats.filter(function(c) { return !_catBloqueadaPorBarrio(c.nombre); });
+}
 
 /* ══════════════════════════════════════════════════
    COMBOS — bundles configurables con precio fijo cerrado
@@ -253,7 +281,7 @@ function slotOptions(slot) {
   } else if (slot.options && slot.options.cat) {
     prods = getActiveProducts().filter(p => p.cat === slot.options.cat);
   } else { prods = []; }
-  return prods.filter(p => !p.zonas || p.zonas.indexOf(currentZone) >= 0);
+  return prods.filter(p => (!p.zonas || p.zonas.indexOf(currentZone) >= 0) && !_catBloqueadaPorBarrio(p.cat));
 }
 /* ¿El combo tiene al menos un slot con opción a elegir (más de 1)? */
 function comboHasChoices(c) { return (c.slots || []).some(s => slotOptions(s).length > 1); }
@@ -1086,6 +1114,10 @@ function onPilarBarrioChange() {
   updatePilarVendedorLabel();
   updatePilarDiasEntrega();
   updatePromoBar();
+  // Sorrentinos bloqueados en Ayres del Pilar: sacarlos del carrito y re-renderizar
+  // el catálogo (oculta/reaparece la categoría según el barrio elegido).
+  _purgeCartBloqueados();
+  if (typeof renderCatalog === 'function') renderCatalog();
   // Si cambió Red ↔ no-Red, el cap de stock puede cambiar — refrescar
   _ensureCartFitsDate();
   updateStockDisplay();
