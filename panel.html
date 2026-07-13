@@ -14344,6 +14344,7 @@ if('serviceWorker' in navigator){
     (crmClientes||[]).forEach(function(c){
       if (_crmNormName(c.barrio) !== 'estancias del pilar') return;
       if (c.sinUbicacion) return;                 // marcado "no ubicar" → no cuenta como este lote
+      if (c.visitante) return;                    // no reside (pidió a casa ajena) → no infla el hogar
       if (!c.lote || !c.subBarrio) return;
       var key = _crmNormName(c.subBarrio)+'|'+_loteNorm(c.lote);
       var h = H[key];
@@ -15719,18 +15720,24 @@ if('serviceWorker' in navigator){
     var _subRep = (c.meta && c.meta.subBarrioMapa) || _topKey(c.subBarrios);
     var _loteVer = (c.meta && c.meta.loteMapa) || loteRep;
     var verMapaBtn = (!sinUbic && _loteVer && _subRep) ? '<button class="crm-edit-btn" onclick="crmVerEnMapa(\''+encodeURIComponent(_subRep)+'\',\''+encodeURIComponent(_loteVer)+'\')">📍 Ver en mapa</button>' : '';
-    // Si el cliente figura en Estancias por un barrio mal cargado, se lo saca del
-    // cockpit desde acá (la acción vive en la ficha, no ensuciando cada tarjeta).
+    // "Visitante": persona que pide a una casa de Estancias pero no reside (novia/prima/
+    // amigo). Se la saca de Clientes y Hogares (no residente); el pedido queda intacto.
+    // La acción vive en la ficha (no ensucia cada tarjeta). Toggle mark/unmark.
     var _esEst = (barrios||[]).some(function(b){ return String(b).trim().toLowerCase()==='estancias del pilar'; });
-    var fueraBtn = (_esEst && c.key && typeof window.estCliFuera==='function')
-      ? '<button class="crm-edit-btn" style="color:var(--o)" title="Este cliente no vive en Estancias — sacarlo del cockpit (Clientes + Pulso). Reversible." onclick="estCliFuera(\''+encodeURIComponent(c.key)+'\',\''+encodeURIComponent(c.nombre||'')+'\')">🚫 No es de Estancias</button>' : '';
+    var _cliLi = (window.crmClientes||[]).filter(function(x){ return x.tel===c.tel; })[0];
+    var _esVis = !!(_cliLi && _cliLi.visitante) || !!(c.meta && c.meta.visitante);
+    var visBtn = (_esEst && c.tel && typeof window.estCliVisitante==='function')
+      ? (_esVis
+          ? '<button class="crm-edit-btn" style="color:var(--gd)" title="Volver a marcar como residente de Estancias" onclick="estCliVisitante(\''+c.tel+'\',\''+encodeURIComponent(c.nombre||'')+'\',0)">🏠 Es residente</button>'
+          : '<button class="crm-edit-btn" style="color:var(--o)" title="No vive en Estancias, solo pidió a una casa de acá — sacarlo de Clientes/Hogares. Reversible." onclick="estCliVisitante(\''+c.tel+'\',\''+encodeURIComponent(c.nombre||'')+'\',1)">🚶 Marcar visitante</button>')
+      : '';
     var actionsHtml = '<div class="crm-tags-row">'
       + (c.tel ? '<button class="crm-edit-btn" onclick="crmCopyTel(\''+c.tel+'\')">📞 Copiar tel</button>' : '')
       + reactWp
       + verMapaBtn
       + (c.tel ? '<button class="crm-edit-btn" onclick="crmEditarMeta()">Editar ficha</button>' : '')
       + '<button class="crm-edit-btn" onclick="crmFusionarConInit()">Fusionar con…</button>'
-      + fueraBtn
+      + visBtn
     + '</div>';
 
     var pctCob = c.totalFacturado > 0 ? Math.round(c.totalCobrado / c.totalFacturado * 100) : 100;
@@ -18524,7 +18531,6 @@ if('serviceWorker' in navigator){
   // ─────────── sub-tab CLIENTES (individuales de Estancias del Pilar) ───────────
   var _estCli=null;
   var _cliFiltro={busq:'',orden:'ultima',estado:''};
-  var _cliExcluidos={}; // keys marcados "no es de Estancias" en esta sesión (guard anti-reaparición)
   // Esta es una tab de ESTANCIAS: las métricas primarias son SOLO Home/Estancias
   // (los *Home del backend v424), NUNCA el total cross-canal (que incluye Clubes).
   // Si no, un residente que compra fuerte por Clubes (ej. Josefina Del Bono) se
@@ -18617,9 +18623,10 @@ if('serviceWorker' in navigator){
     var otros=(v.facturadoAll>v.facturado)?(v.facturadoAll-v.facturado):0;
     var pendPill=(v.pend>0 && v.estado!=='pendiente')?' <span class="hog-mergedbadge" style="color:#8a6d1f;background:#FFF7DB">🕒 '+v.pend+' en curso</span>':'';
     var riesgoPill=v.riesgo?' <span class="hog-mergedbadge" style="color:#C62828;background:#FFEBEE" title="Activo que ya pasó 1,5× su ritmo habitual (cada '+v.freqH+'d) — a punto de dormirse">⚠️ se estira</span>':'';
+    var visPill=c.visitante?' <span class="hog-mergedbadge" style="color:#7A4A4A;background:#F5F0E6" title="Pidió a una casa de Estancias pero no reside — no cuenta como residente">🚶 Visitante</span>':'';
     return '<div class="hog-card" onclick="crmOpenCliente(\''+encodeURIComponent(c.key)+'\')">'
       +'<div class="hog-card-top"><div style="min-width:0">'
-      +'<div class="hog-card-name">'+esc(_tcNombre(c.nombre))+' '+_estBadge(v.estado)+pendPill+riesgoPill+(c.vip?' <span class="hog-mergedbadge" style="color:#8a6d1f;background:#FFF3D6">★ VIP</span>':'')+' <span class="hog-open">ver ›</span></div>'
+      +'<div class="hog-card-name">'+esc(_tcNombre(c.nombre))+' '+(c.visitante?visPill:_estBadge(v.estado)+pendPill+riesgoPill)+(c.vip?' <span class="hog-mergedbadge" style="color:#8a6d1f;background:#FFF3D6">★ VIP</span>':'')+' <span class="hog-open">ver ›</span></div>'
       +'<div class="hog-card-sub">'+esc(loc||'—')+' · últ: '+ult+'</div></div>'
       +'<div class="hog-card-val"><b>'+money(v.facturado)+'</b><small>'+(v.entregados||0)+' pedidos'+(v.pend>0?' · 🕒'+v.pend:'')+'</small></div></div>'
       +'<div class="hog-card-stats">'
@@ -18635,8 +18642,11 @@ if('serviceWorker' in navigator){
   function _cliRec(v){ return (v.diasUltima>=0)?v.diasUltima:((v.pend>0)?-1:99999); }
   function _cliFilteredSorted(){
     var arr=(_estCli||[]).filter(function(c){
-      if(_cliExcluidos[c.key]) return false; // sacado del cockpit ("no es de Estancias")
-      if(_cliFiltro.estado){
+      // Visitante = pidió a una casa de Estancias pero no reside. Se muestra SOLO en su
+      // propio filtro; en cualquier otra vista (residentes) no aparece.
+      if(_cliFiltro.estado==='visitante'){ if(!c.visitante) return false; }
+      else if(c.visitante) return false;
+      if(_cliFiltro.estado && _cliFiltro.estado!=='visitante'){
         // "Pendientes" agrupa a TODO cliente con pedido en curso, tenga o no historial.
         if(_cliFiltro.estado==='pendiente'){ if(!(_cliH(c).pend>0)) return false; }
         else if(_cliEstadoNorm(c)!==_cliFiltro.estado) return false;
@@ -18666,39 +18676,38 @@ if('serviceWorker' in navigator){
   window.estCliBusq=function(v){ _cliFiltro.busq=(v||'').toLowerCase().trim(); _cliRenderList(); };
   window.estCliOrden=function(o){ _cliFiltro.orden=o; document.querySelectorAll('#estClientes .est-chip[data-o]').forEach(function(b){b.classList.toggle('on',b.dataset.o===o);}); _cliRenderList(); };
   window.estCliEstado=function(e){ _cliFiltro.estado=e; document.querySelectorAll('#estClientes .est-chip[data-e]').forEach(function(b){b.classList.toggle('on',b.dataset.e===e);}); _cliRenderList(); };
-  // "No es de Estancias": saca al cliente del cockpit (Clientes + Pulso). Optimista +
-  // reversible. El backend reescribe el Barrio de sus filas Home a "Fuera de Estancias".
-  window.estCliFuera=function(keyEnc,nombreEnc){
-    var key=decodeURIComponent(keyEnc||''), nombre=decodeURIComponent(nombreEnc||'')||'este cliente';
-    if(!confirm('¿Marcar a "'+nombre+'" como NO de Estancias?\n\nSe saca del cockpit (sub-tab Clientes y Pulso) y se corrige el barrio de sus pedidos Home. Es reversible.')) return;
-    _cliExcluidos[key]=1;
-    // Optimista: sacarlo de la lista en memoria + parchear crmClientes (para que el
-    // refresh en background no lo revierta antes de que el server re-agregue).
-    _estCli=(_estCli||[]).filter(function(c){ return c.key!==key; });
-    try{ if(window.crmClientes){ crmClientes.forEach(function(c){ if(c.key===key) c.barrio='Fuera de Estancias'; }); window._lsSetSafe('maleu_crm_clientes_v1', JSON.stringify(crmClientes)); } }catch(e){}
-    // Re-render completo (KPIs + lista) si la tab está montada, así el contador de
-    // arriba no queda viejo (era el desfasaje 193 KPI vs 192 lista). Instantáneo (cache).
-    if(E$('estClientes')) rClientes(); else _cliRenderList();
+  // "Visitante": persona que pide a una casa de Estancias pero NO reside (novia,
+  // prima, amigo). No es cliente residente → sale de Clientes y de Hogares. El pedido
+  // queda intacto (fue una entrega real → sigue en el Pulso). Flag de persona en la
+  // meta (crmSetVisitante), no-destructivo y reversible (toggle). Optimista.
+  window.estCliVisitante=function(telArg,nombreEnc,on){
+    var tel=String(telArg||'').trim(), nombre=decodeURIComponent(nombreEnc||'')||'este cliente';
+    on=(on===1||on===true||on==='1');
+    if(!tel){ _toast('Sin teléfono: no puedo marcar visitante a '+nombre); return; }
+    if(on && !confirm('¿Marcar a "'+nombre+'" como VISITANTE (no reside en Estancias)?\n\nSale del sub-tab Clientes y de Hogares (no es residente). El pedido/entrega no se toca. Es reversible.')) return;
+    // Optimista: parchear el flag en crmClientes (mismo objeto que _estCli) + cache.
+    try{ if(window.crmClientes){ crmClientes.forEach(function(c){ if(c.tel===tel) c.visitante=on; }); if(window._lsSetSafe)_lsSetSafe('maleu_crm_clientes_v1', JSON.stringify(crmClientes)); } }catch(e){}
+    if(E$('estClientes')) rClientes(); else if(typeof _cliRenderList==='function') _cliRenderList();
     if(typeof window.crmCloseDrawer==='function'){ try{ window.crmCloseDrawer(); }catch(e){} }
-    _toast('Sacando a '+nombre+' de Estancias…');
-    fetch(EST_API,{method:'POST',mode:'cors',body:JSON.stringify({action:'estFueraEstancias',key:key})})
+    _toast(on?('Marcando visitante a '+nombre+'…'):('Volviendo residente a '+nombre+'…'));
+    fetch(EST_API,{method:'POST',mode:'cors',body:JSON.stringify({action:'crmSetVisitante',tel:tel,visitante:on?1:0})})
       .then(function(r){return r.json();}).then(function(d){
-        if(d&&d.ok){ _toast('✅ '+nombre+' fuera de Estancias'+((d.updated>=0)?(' ('+d.updated+' pedido'+(d.updated===1?'':'s')+' corregido'+(d.updated===1?'':'s')+')'):'')); }
+        if(d&&d.ok){ _toast(on?('✅ '+nombre+' marcado visitante'):('✅ '+nombre+' vuelve a residente')); }
         else { throw new Error((d&&d.error)||'no se pudo'); }
       }).catch(function(err){
-        delete _cliExcluidos[key];
-        _toast('⚠️ No se pudo sacar a '+nombre+': '+err.message+'. Recargá y reintentá.');
-        _estCli=null; rClientes(); // recargar estado real
+        try{ if(window.crmClientes){ crmClientes.forEach(function(c){ if(c.tel===tel) c.visitante=!on; }); } }catch(e){}
+        _toast('⚠️ No se pudo con '+nombre+': '+err.message+'. Reintentá.');
+        if(E$('estClientes')) rClientes();
       });
   };
   window.rClientes=function(){
     var host=E$('estClientes'); host.innerHTML='<div class="loading">Cargando clientes…</div>';
     _cliEnsure(function(err){
       if(err==='nocrm'){ host.innerHTML=_nocrm(); return; }
-      var C=_estCli||[], act=0,dorm=0,inact=0,nuev=0,fact=0,pend=0,deudaTot=0,riesgoN=0;
-      C.forEach(function(c){ var v=_cliH(c); var e=v.estado; if(e==='activo')act++; else if(e==='dormido')dorm++; else if(e==='inactivo')inact++; else if(e==='nuevo')nuev++; if(v.pend>0)pend++; if(v.riesgo)riesgoN++; deudaTot+=(v.deuda||0); fact+=(v.facturado||0); });
+      var C=_estCli||[], act=0,dorm=0,inact=0,nuev=0,fact=0,pend=0,deudaTot=0,riesgoN=0,visN=0,resid=0;
+      C.forEach(function(c){ if(c.visitante){ visN++; return; } resid++; var v=_cliH(c); var e=v.estado; if(e==='activo')act++; else if(e==='dormido')dorm++; else if(e==='inactivo')inact++; else if(e==='nuevo')nuev++; if(v.pend>0)pend++; if(v.riesgo)riesgoN++; deudaTot+=(v.deuda||0); fact+=(v.facturado||0); });
       var html='<div class="est-kpis">'
-        +'<div class="est-kpi"><div class="est-kpi-l">Clientes</div><div class="est-kpi-v">'+C.length+'</div><div class="est-kpi-s" style="color:var(--bl)">de Estancias del Pilar</div></div>'
+        +'<div class="est-kpi"><div class="est-kpi-l">Clientes</div><div class="est-kpi-v">'+resid+'</div><div class="est-kpi-s" style="color:var(--bl)">residentes de Estancias'+(visN>0?' · '+visN+' visitantes':'')+'</div></div>'
         +'<div class="est-kpi"><div class="est-kpi-l">Activos</div><div class="est-kpi-v" style="color:var(--gd)">'+act+'</div><div class="est-kpi-s" style="color:var(--bl)">'+dorm+' dormidos · '+inact+' inactivos'+(riesgoN>0?' · <b style="color:#C62828">'+riesgoN+' ⚠️ se estiran</b>':'')+'</div></div>'
         +'<div class="est-kpi"><div class="est-kpi-l">Nuevos</div><div class="est-kpi-v" style="color:#2563EB">'+nuev+'</div><div class="est-kpi-s" style="color:var(--bl)">recientes</div></div>'
         +'<div class="est-kpi"><div class="est-kpi-l">Facturado</div><div class="est-kpi-v">'+money(fact)+'</div><div class="est-kpi-s" style="color:var(--bl)">Home · histórico'+(deudaTot>0?' · <b style="color:var(--r)">'+money(deudaTot)+' por cobrar</b>':'')+'</div></div>'
@@ -18719,6 +18728,7 @@ if('serviceWorker' in navigator){
         +'<button class="est-chip" data-e="inactivo" onclick="estCliEstado(\'inactivo\')">🔴 Inactivos</button>'
         +'<button class="est-chip" data-e="nuevo" onclick="estCliEstado(\'nuevo\')">🆕 Nuevos</button>'
         +(pend>0?'<button class="est-chip" data-e="pendiente" onclick="estCliEstado(\'pendiente\')">🕒 Pendientes ('+pend+')</button>':'')
+        +(visN>0?'<button class="est-chip" data-e="visitante" onclick="estCliEstado(\'visitante\')">🚶 Visitantes ('+visN+')</button>':'')
         +'<span style="margin-left:auto;font-size:11px;color:var(--bl);font-weight:700" id="estCliCount"></span></div>'
         +'</div><div id="estCliList"></div>';
       host.innerHTML=html;
