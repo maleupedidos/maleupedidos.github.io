@@ -1,0 +1,64 @@
+name: Snapshot Estancias
+
+# Regenera crm-clientes-snapshot.json (la "foto" que hace que Hogares cargue
+# al instante) desde el endpoint live de Apps Script. Corre SOLA cada hora en
+# la infra de GitHub — silenciosa, sin depender del navegador de Tadeo.
+# Solo commitea si los datos cambiaron; si el endpoint no responde, NO toca
+# la foto (nunca la pisa con vacío).
+
+on:
+  schedule:
+    - cron: '0 * * * *'      # cada hora en punto (UTC)
+  workflow_dispatch: {}       # + botón para correrla a mano
+
+permissions:
+  contents: write
+
+concurrency:
+  group: snapshot-estancias
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Bajar clientes y escribir la foto
+        run: |
+          set -e
+          URL='https://script.google.com/macros/s/AKfycbxmrG5YVSshcYezk8lXFx_uxb7NFGcb9EfTXc7dsIN4rZyj73CET4mk_aKPFPDY2wNi/exec?action=crmClientes'
+          ok=0
+          for i in 1 2 3 4 5; do
+            if curl -sSL --max-time 90 "$URL" -o raw.json \
+               && python3 -c "import json,sys; d=json.load(open('raw.json')); sys.exit(0 if d.get('clientes') else 1)"; then
+              ok=1; break
+            fi
+            echo "intento $i sin datos, reintento en 15s..."; sleep 15
+          done
+          if [ "$ok" != "1" ]; then
+            echo "El endpoint no devolvió datos. NO toco la foto (queda la anterior)."; exit 0
+          fi
+          python3 - <<'PY'
+          import json
+          d = json.load(open('raw.json'))
+          cli = d.get('clientes', [])
+          if not cli:
+              raise SystemExit(0)
+          out = {'clientes': cli, '_snapshot': True}
+          json.dump(out, open('crm-clientes-snapshot.json', 'w'),
+                    ensure_ascii=False, separators=(',', ':'))
+          print('clientes en la foto:', len(cli))
+          PY
+          rm -f raw.json
+
+      - name: Commitear solo si cambió
+        run: |
+          if git diff --quiet -- crm-clientes-snapshot.json; then
+            echo "Sin cambios: no hay nada que commitear."; exit 0
+          fi
+          git config user.name  "maleu-snapshot-bot"
+          git config user.email "maleucongelados@gmail.com"
+          git add crm-clientes-snapshot.json
+          git commit -m "chore: refrescar foto Estancias [skip ci]"
+          git push
