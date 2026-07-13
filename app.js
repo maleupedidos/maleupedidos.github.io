@@ -469,24 +469,45 @@ let selectedPilarBarrioName = null;  // nombre display del barrio
    cuando el cliente eligió Pilar y Alrededores. Los marcados isRed son
    los de vendedores Red (Marcos) y entran en flujo "a pedido". El resto
    se comporta como Home: tope al stock real si la fecha está cerca. */
+// Rediseño 13/07/2026: 4 ZONAS grandes (antes 7 barrios sueltos + Otro).
+// Cada zona = 1 vendedor Red (o Tadeo para "Otra zona"). Los sub-barrios se
+// listan como texto informativo dentro de la card, pero el valor que va al
+// backend es el nombre de la zona (que también está en Sheets Vendedores col
+// "Barrios" para que el routing barrioToVendedor haga match). Escalable: si
+// suma otro vendedor, se agrega una card.
 const BARRIOS_PILAR_MODAL = [
-  { val: 'Pilara',       nombre: 'Pilara',       isRed: false },
-  { val: 'El Ocho',      nombre: 'El Ocho',      isRed: false },
-  { val: 'El Lucero',    nombre: 'El Lucero',    isRed: true, badge: 'Marcos' },
-  { val: 'Los Tacos',    nombre: 'Los Tacos',    isRed: true, badge: 'Marcos' },
-  { val: 'Villa Bertha', nombre: 'Villa Bertha', isRed: true, badge: 'Marcos' },
-  { val: 'Azzurra',      nombre: 'Azzurra',      isRed: true, badge: 'Marcos' },
-  { val: 'Ayres',        nombre: 'Ayres',        isRed: true, badge: 'Fini' },
-  { val: '__otro__',     nombre: 'Otro barrio',  isRed: false, isOther: true }
+  {
+    val: 'Tortugas y alrededores',
+    nombre: 'Tortugas y alrededores',
+    isRed: true, badge: 'Marcos',
+    subBarrios: 'El Lucero · Los Tacos · Villa Bertha · Azzurra'
+  },
+  {
+    val: 'Ayres y alrededores',
+    nombre: 'Ayres y alrededores',
+    isRed: true, badge: 'Fini',
+    subBarrios: 'Ayres del Pilar · La Lomada · Los Lagartos · Highland'
+  },
+  {
+    val: 'Manzanares',
+    nombre: 'Manzanares',
+    isRed: true, badge: 'Rufino',
+    subBarrios: 'San Francisco · La Escondida · Manzanares Chico'
+  },
+  {
+    val: '__otro__',
+    nombre: 'Otra zona de Pilar',
+    isRed: false, isOther: true,
+    subBarrios: 'Pilara · El Ocho · fuera de barrio cerrado'
+  }
 ];
 
-/* Fini (Ayres) arranca la semana del 13/07/2026. Esta semana es feriado
-   (jue 09 Independencia + vie 10 puente), así que el barrio Ayres NO debe
-   aparecer en la tienda todavía. Se reactiva SOLO al vencer el timestamp:
-   el lunes 13/07 el barrio vuelve a mostrarse sin tocar código ni deployar. */
-const AYRES_OCULTO_HASTA_MS = Date.UTC(2026, 6, 13, 3, 0, 0); // Lun 13/07/2026 00:00 AR
+/* Hook para ocultar una zona/barrio temporalmente (feriados, arranque de un
+   vendedor nuevo, etc.). Actualmente no hay ninguno oculto (Fini arrancó
+   13/07/26 con Ayres y alrededores). Para volver a usar, retornar true
+   cuando corresponda. */
 function _barrioOculto(val) {
-  return val === 'Ayres' && Date.now() < AYRES_OCULTO_HASTA_MS;
+  return false;
 }
 
 /* Tope estricto de stock — depende de la fecha de entrega elegida.
@@ -958,8 +979,12 @@ function fetchVendedores() {
       vendedoresRed = d.vendedores || [];
       barrioToVendedor = {};
       vendedoresRed.forEach(v => {
+        // Convención Sheets Vendedores col "Barrios": el PRIMER item es la
+        // ZONA canonical ("Tortugas y alrededores", etc.). Los demás son sub-
+        // barrios que también matchean para retro-compatibilidad.
+        var zonaCanon = (v.barrios || [])[0] || '';
         (v.barrios || []).forEach(b => {
-          barrioToVendedor[b.toLowerCase()] = { nombre: v.nombre, wa: v.wa, partido: v.partido, localidad: v.localidad, barrio: b };
+          barrioToVendedor[b.toLowerCase()] = { nombre: v.nombre, wa: v.wa, alias: v.alias || '', partido: v.partido, localidad: v.localidad, barrio: b, zonaCanon: zonaCanon };
         });
       });
       try { localStorage.setItem('maleu_vendedores', JSON.stringify({ ts: Date.now(), vendedores: vendedoresRed })); } catch(e) {}
@@ -973,8 +998,9 @@ function fetchVendedores() {
           vendedoresRed = cached.vendedores;
           barrioToVendedor = {};
           vendedoresRed.forEach(v => {
+            var zonaCanon = (v.barrios || [])[0] || '';
             (v.barrios || []).forEach(b => {
-              barrioToVendedor[b.toLowerCase()] = { nombre: v.nombre, wa: v.wa, partido: v.partido, localidad: v.localidad, barrio: b };
+              barrioToVendedor[b.toLowerCase()] = { nombre: v.nombre, wa: v.wa, alias: v.alias || '', partido: v.partido, localidad: v.localidad, barrio: b, zonaCanon: zonaCanon };
             });
           });
           renderPilarBarrios();
@@ -986,34 +1012,38 @@ function renderPilarBarrios() {
   var sel = $id('f-pilar-barrio');
   if (!sel) return;
   var restricted = isPilarRestricted();
-  // Limpiar y re-armar
   var cur = sel.value || selectedPilarBarrio || '';
-  sel.innerHTML = '<option value="">Elegí tu barrio privado</option>';
-  // Lista canónica del modal (incluye no-Red como Pilara y El Ocho).
-  // Agregamos primero los del modal, después los Red dinámicos del Sheets
-  // que no estén ya, para no perder ninguno.
-  var addedVals = {};
+  sel.innerHTML = '<option value="">Elegí tu zona</option>';
+  // Solo mostramos las 4 zonas canonical de BARRIOS_PILAR_MODAL. Los sub-barrios
+  // (El Lucero, San Francisco, etc.) NO van al dropdown para no duplicar.
   BARRIOS_PILAR_MODAL.forEach(function(b) {
-    if (b.isOther) return; // "Otro" se agrega al final
-    if (_barrioOculto(b.val)) return; // barrio no habilitado esta semana (ej: Ayres)
+    if (b.isOther) return;
+    if (_barrioOculto(b.val)) return;
     sel.innerHTML += '<option value="' + b.val + '">' + b.nombre + '</option>';
-    addedVals[b.val] = true;
   });
-  vendedoresRed.forEach(v => (v.barrios || []).forEach(b => {
-    if (_barrioOculto(b)) return; // barrio no habilitado esta semana (ej: Ayres)
-    if (!addedVals[b]) {
-      sel.innerHTML += '<option value="' + b + '">' + b + '</option>';
-      addedVals[b] = true;
-    }
-  }));
-  // "Otro barrio" se oculta durante la restricción de esta semana
+  // "Otra zona de Pilar" queda oculta cuando el cutoff (Vie <21hs post-Jue) impide
+  // reparto de Tadeo para el próximo Vie.
   if (!restricted) {
-    sel.innerHTML += '<option value="__otro__">Otro barrio</option>';
+    sel.innerHTML += '<option value="__otro__">Otra zona de Pilar</option>';
   }
-  // Si el cliente tenía elegido "Otro barrio" guardado, limpiarlo
   if (cur === '__otro__' && restricted) cur = '';
-  if (cur) sel.value = cur;
-  // Cartel info
+  // Retro-compat: si el cliente tiene guardado un sub-barrio viejo (ej. 'El
+  // Lucero') lo mapeamos a su ZONA canonical ('Tortugas y alrededores') para
+  // que el dropdown no arranque vacío tras el rediseño 13/07/26.
+  if (cur) {
+    var isCanon = BARRIOS_PILAR_MODAL.some(function(b){ return b.val === cur; });
+    if (!isCanon) {
+      var v = barrioToVendedor[cur.toLowerCase()];
+      if (v && v.zonaCanon) {
+        cur = v.zonaCanon;
+        selectedPilarBarrio = cur;
+        selectedPilarBarrioName = cur;
+      } else {
+        cur = '';
+      }
+    }
+    if (cur) sel.value = cur;
+  }
   var info = $id('pilar-restriccion-info');
   if (info) info.style.display = restricted ? '' : 'none';
 }
@@ -1122,14 +1152,23 @@ function renderWelcomeBarrioGrid() {
   var grid = $id('loc-barrios-grid');
   if (!grid) return;
   grid.innerHTML = BARRIOS_PILAR_MODAL.filter(function(b){ return !_barrioOculto(b.val); }).map(function(b) {
-    var classes = ['loc-barrio-card'];
+    var classes = ['loc-zona-card'];
     if (b.isRed) classes.push('is-red');
     if (b.isOther) classes.push('is-other');
-    var badge = b.badge ? '<span class="loc-barrio-badge">' + b.badge + '</span>' : '';
+    var badge = b.badge
+      ? '<span class="loc-zona-vendedor">Reparte <strong>' + b.badge + '</strong></span>'
+      : '<span class="loc-zona-vendedor is-tadeo">La reparto yo · <strong>Envío $5.000</strong></span>';
+    var subBarrios = b.subBarrios ? '<span class="loc-zona-sub">' + b.subBarrios + '</span>' : '';
+    // Escapo comillas simples del nombre para el onclick
+    var valEsc = b.val.replace(/'/g, "\\'");
+    var nombreEsc = b.nombre.replace(/'/g, "\\'");
     return '<button type="button" class="' + classes.join(' ') + '"'
-         + ' onclick="setPilarBarrio(\'' + b.val + '\',\'' + b.nombre + '\')">'
-         + badge
-         + '<span class="loc-barrio-name">' + b.nombre + '</span>'
+         + ' onclick="setPilarBarrio(\'' + valEsc + '\',\'' + nombreEsc + '\')">'
+         + '<div class="loc-zona-head">'
+         +   '<span class="loc-zona-name">📍 ' + b.nombre + '</span>'
+         +   badge
+         + '</div>'
+         + subBarrios
          + '</button>';
   }).join('');
 }
@@ -2563,12 +2602,18 @@ function enviarPedido() {
     if (saldoAFavor > 0) msgLines.push('🎁 Saldo a favor: -' + ars(saldoAFavor));
   }
   msgLines.push('*Total: ' + ars(total) + '*');
-  // Alias de Mercado Pago cuando el cliente elige Transferencia y NO hay vendedor Red
-  // asignado al barrio. Si hay vendedor Red (Marcos), es él quien le pasa su propio
-  // alias, así que evitamos el conflicto no incluyendo el nuestro.
-  if (pagoEl.value === 'Transferencia' && !vendedorMatch) {
-    msgLines.push('');
-    msgLines.push('alias: *maleump*');
+  // Alias de Mercado Pago cuando el cliente elige Transferencia:
+  //   - Sin vendedor Red (Home / 'Otra zona' de Pilar): alias maleu (maleump).
+  //   - Con vendedor Red y ALIAS cargado en Sheets: alias del vendedor.
+  //   - Con vendedor Red sin alias: no ponemos alias — el vendedor lo pasa a mano.
+  if (pagoEl.value === 'Transferencia') {
+    var aliasWA = '';
+    if (!vendedorMatch)               aliasWA = 'maleump';
+    else if (vendedorMatch.alias)     aliasWA = vendedorMatch.alias;
+    if (aliasWA) {
+      msgLines.push('');
+      msgLines.push('alias: *' + aliasWA + '*');
+    }
   }
   var msg = msgLines.join('\n');
 
@@ -3559,11 +3604,25 @@ function onPagoChange() {
   const aliasNote = $id('mp-alias-vendedor-note');
   const esTransfer = sel && sel.value === 'Transferencia';
   const vendedor = _barrioPilarTieneVendedor();
-  if (esTransfer && !vendedor) { alias.classList.remove('hidden'); }
+  // Alias maleu (bloque azul con "maleump" + botón Copiar): se muestra cuando el
+  // cliente elige transferencia y NO hay vendedor Red (Home, Pilar 'Otra zona',
+  // o vendedor Red sin alias propio cargado).
+  var mostrarAliasMaleu = esTransfer && (!vendedor || !vendedor.alias);
+  if (mostrarAliasMaleu) { alias.classList.remove('hidden'); }
   else { alias.classList.add('hidden'); }
   if (aliasNote) {
     if (esTransfer && vendedor) {
-      aliasNote.textContent = vendedor.nombre + ' te va a pasar el alias al confirmar tu pedido.';
+      var nombreCorto = (vendedor.nombre || '').split(' ')[0];
+      if (vendedor.alias) {
+        // Vendedor tiene alias cargado — se lo mostramos directo con botón Copiar.
+        aliasNote.innerHTML =
+          '<div style="display:flex;align-items:center;justify-content:space-between;gap:.5rem;flex-wrap:wrap">' +
+            '<span>Alias de ' + nombreCorto + ': <strong>' + vendedor.alias + '</strong></span>' +
+            '<button type="button" onclick="copyVendedorAlias(\'' + vendedor.alias.replace(/\'/g, "\\'") + '\',\'' + nombreCorto + '\')" style="background:#E67C0E;color:#fff;border:none;border-radius:6px;padding:.3rem .7rem;font-family:var(--font);font-size:.75rem;font-weight:700;cursor:pointer">Copiar</button>' +
+          '</div>';
+      } else {
+        aliasNote.textContent = nombreCorto + ' te va a pasar el alias al confirmar tu pedido.';
+      }
       aliasNote.classList.remove('hidden');
     } else {
       aliasNote.classList.add('hidden');
@@ -3576,6 +3635,11 @@ function onPagoChange() {
 }
 function copyAlias() {
   navigator.clipboard.writeText('maleump').then(function() { toast('✓ Alias copiado: maleump'); });
+}
+function copyVendedorAlias(alias, nombreCorto) {
+  navigator.clipboard.writeText(alias).then(function() {
+    toast('✓ Alias de ' + nombreCorto + ' copiado: ' + alias);
+  });
 }
 
 updateShippingBar();
