@@ -13179,12 +13179,27 @@ if('serviceWorker' in navigator){
   function _loteNorm(s){ s = String(s||'').trim().toLowerCase().replace(/\s+/g,' ').replace(/^0+(?=\d)/,''); return s || '0'; }
 
   // Índice lote→clientes: key = subBarrioNorm|loteNorm → hogar agregado.
+  // True si el punto no es una unidad vendible (parte de otra casa o baldío):
+  // no cuenta en el denominador de penetración ni recibe cliente propio.
+  function _mapaExcluido(L0){ return L0.zona===-2 || L0.tipo==='anexo' || L0.tipo==='baldio'; }
+
   function _mapaBuildCliIndex(){
     _mapaLoteCli = {};
     if (!crmClientes) return;
+    // Casas multi-lote: un anexo redirige su cliente a la casa principal (dueño),
+    // así Rivas registrado bajo 78, 79 u 80 cae siempre en el mismo hogar.
+    var _redir = {};
+    _mapaLotes.forEach(function(L0){
+      if (L0.tipo !== 'anexo' || !L0.dueno) return;
+      var zi = (typeof L0.zona==='number' && L0.zona>=0) ? L0.zona : _zonaDe(L0.lat, L0.lng);
+      var sub = zi>=0 ? (_subZonas[zi] && _subZonas[zi].nombre) : null;
+      if (!sub) return;
+      _redir[_crmNormName(sub)+'|'+_loteNorm(L0.n)] = _crmNormName(sub)+'|'+_loteNorm(L0.dueno);
+    });
     crmClientes.forEach(function(c){
       if (!c.lote || !c.subBarrio) return;
       var key = _crmNormName(c.subBarrio)+'|'+_loteNorm(c.lote);
+      if (_redir[key]) key = _redir[key];
       var u = _mapaLoteCli[key];
       if (!u){ u = _mapaLoteCli[key] = {members:[], deuda:0, entregados:0, facturado:0, diasUltima:-1, ultimaFecha:'', contacto:null}; }
       u.members.push(c);
@@ -13288,6 +13303,17 @@ if('serviceWorker' in navigator){
         return;
       }
       var zi = _zonaDe(L0.lat, L0.lng); L0.zona = zi;
+      // Anexo / baldío: unidad no vendible → estilo atenuado y sin cliente propio.
+      if (L0.tipo === 'anexo' || L0.tipo === 'baldio'){
+        L0.cli = null; L0.rec = null;
+        L0.marker.setStyle(_mapaStyleTipo(L0.tipo));
+        if (_mapaLotesLayer){
+          var vE = !(_mapaSoloAsignados && zi < 0), enE = _mapaLotesLayer.hasLayer(L0.marker);
+          if (vE && !enE) _mapaLotesLayer.addLayer(L0.marker);
+          else if (!vE && enE) _mapaLotesLayer.removeLayer(L0.marker);
+        }
+        return;
+      }
       var sub = zi>=0 ? (_subZonas[zi] && _subZonas[zi].nombre) : null;
       L0.cli = sub ? (_mapaLoteCli[_crmNormName(sub)+'|'+_loteNorm(L0.n)] || null) : null;
       L0.rec = sub ? (_mapaLotesData[_crmNormName(sub)+'|'+_loteNorm(L0.n)] || null) : null;
@@ -13295,7 +13321,7 @@ if('serviceWorker' in navigator){
       if (_mapaColorMode === 'cliente'){ col = _mapaCliColor(L0.cli); if (L0.cli) rad = 6; }
       else if (_mapaColorMode === 'sobres'){ col = _sobreColor(L0.rec); if (L0.rec && L0.rec.sobreEstado) rad = 6; }
       else { col = zi>=0 ? _zColor(zi) : '#9E9E9E'; }
-      L0.marker.setStyle({fillColor: col, radius: rad});
+      L0.marker.setStyle({fillColor: col, radius: rad, fillOpacity:.95, weight:1, dashArray:null});
       // "Solo mis sub-barrios": ocultar lotes que no caen en ninguna zona
       if (_mapaLotesLayer){
         var visible = !(_mapaSoloAsignados && zi < 0);
@@ -13453,7 +13479,8 @@ if('serviceWorker' in navigator){
       var sub = L0.zona>=0 ? (_subZonas[L0.zona] && _subZonas[L0.zona].nombre) : null;
       var rec = sub ? _mapaLotesData[_crmNormName(sub)+'|'+_loteNorm(L0.n)] : null;
       var fam = (rec && rec.familia) ? ' · ' + rec.familia : '';
-      L0.marker.setTooltipContent('Lote ' + L0.n + fam);
+      var suf = L0.tipo==='baldio' ? ' (baldío)' : (L0.tipo==='anexo' ? ' (anexo'+(L0.dueno?' de '+L0.dueno:'')+')' : '');
+      L0.marker.setTooltipContent('Lote ' + L0.n + suf + fam);
     });
   }
 
@@ -13726,16 +13753,19 @@ if('serviceWorker' in navigator){
   }
   function _renderLegend(){
     var elg = el('mapaLegend'); if (!elg) return;
-    var counts = _subZonas.map(function(){ return 0; }), sin = 0, excl = 0;
-    _mapaLotes.forEach(function(L0){ if (L0.zona===-2) excl++; else if (L0.zona>=0) counts[L0.zona]++; else sin++; });
-    var mc = el('mapaCount'); if (mc) mc.textContent = (_mapaLotes.length - excl);
-    // Penetración del barrio: lotes que conocen Maleu (compraron alguna vez) / total. Siempre visible.
-    var _conoc=0, _totL=(_mapaLotes.length - excl);
-    _mapaLotes.forEach(function(L0){ if (L0.zona!==-2 && L0.cli) _conoc++; });
+    var counts = _subZonas.map(function(){ return 0; }), sin = 0, excl = 0, noVend = 0;
+    _mapaLotes.forEach(function(L0){
+      if (L0.tipo==='anexo' || L0.tipo==='baldio'){ noVend++; return; } // fuera del total (no es casa vendible)
+      if (L0.zona===-2) excl++; else if (L0.zona>=0) counts[L0.zona]++; else sin++;
+    });
+    var mc = el('mapaCount'); if (mc) mc.textContent = (_mapaLotes.length - excl - noVend);
+    // Penetración del barrio: CASAS que conocen Maleu (compraron alguna vez) / total. Siempre visible.
+    var _conoc=0, _totL=(_mapaLotes.length - excl - noVend);
+    _mapaLotes.forEach(function(L0){ if (!_mapaExcluido(L0) && L0.cli) _conoc++; });
     var _mp = el('mapaPenet'); if (_mp) _mp.innerHTML = _totL ? (' &middot; <b style="color:var(--o)">'+(Math.round(_conoc/_totL*1000)/10)+'%</b> conoce Maleu ('+_conoc+')') : '';
     // Penetración POR SUB-BARRIO (dónde estás fuerte y dónde casi no entraste). Siempre visible.
     var _subCon = _subZonas.map(function(){ return 0; });
-    _mapaLotes.forEach(function(L0){ if (L0.zona>=0 && L0.cli) _subCon[L0.zona]++; });
+    _mapaLotes.forEach(function(L0){ if (!_mapaExcluido(L0) && L0.zona>=0 && L0.cli) _subCon[L0.zona]++; });
     var _psb = el('mapaPenetSub');
     if (_psb){
       var _rows = _subZonas.map(function(z,i){ return {nombre:z.nombre, tot:counts[i], con:_subCon[i]}; })
@@ -13754,7 +13784,7 @@ if('serviceWorker' in navigator){
     if (_mapaColorMode === 'cliente'){
       var act=0,dor=0,ina=0,pro=0;
       _mapaLotes.forEach(function(L0){
-        if (L0.zona===-2) return;
+        if (_mapaExcluido(L0)) return;
         var u = L0.cli;
         if (!u){ pro++; return; }
         if (u.diasUltima<0 || u.diasUltima>90) ina++;
@@ -13763,11 +13793,12 @@ if('serviceWorker' in navigator){
       });
       var conocen=act+dor+ina, totLot=conocen+pro, penet=totLot?Math.round(conocen/totLot*1000)/10:0;
       elg.innerHTML =
-        '<span class="mapa-leg-penet">🎯 <b>'+penet+'%</b> del barrio conoce Maleu <small>('+conocen+' de '+totLot+' lotes)</small></span>'
+        '<span class="mapa-leg-penet">🎯 <b>'+penet+'%</b> del barrio conoce Maleu <small>('+conocen+' de '+totLot+' casas)</small></span>'
       + '<span class="mapa-leg-item"><span class="mapa-leg-sw" style="background:#43A047"></span>Activos <b>'+act+'</b></span>'
       + '<span class="mapa-leg-item"><span class="mapa-leg-sw" style="background:#FB8C00"></span>Dormidos <b>'+dor+'</b></span>'
       + '<span class="mapa-leg-item"><span class="mapa-leg-sw" style="background:#E53935"></span>Inactivos <b>'+ina+'</b></span>'
-      + '<span class="mapa-leg-item"><span class="mapa-leg-sw" style="background:#C8C8C8"></span>Prospectos <b>'+pro+'</b></span>';
+      + '<span class="mapa-leg-item"><span class="mapa-leg-sw" style="background:#C8C8C8"></span>Prospectos <b>'+pro+'</b></span>'
+      + (noVend ? '<span class="mapa-leg-item" title="Anexos (parte de otra casa) y baldíos — fuera del %"><span class="mapa-leg-sw" style="background:#BBB3AB"></span>Anexo/baldío <b>'+noVend+'</b></span>' : '');
       return;
     }
     // Modo "sobres": leyenda por avance de la campaña puerta a puerta.
@@ -13898,11 +13929,19 @@ if('serviceWorker' in navigator){
       .catch(function(){ if (cb) cb(); });
   }
 
+  // Estilo base de un punto según su tipo (casa / anexo / baldío).
+  function _mapaStyleTipo(tipo){
+    if (tipo === 'baldio') return {radius:4, color:'#cfcfcf', weight:1, fillColor:'#8D8D8D', fillOpacity:.45, dashArray:'2'};
+    if (tipo === 'anexo')  return {radius:3, color:'#ffffff', weight:1, fillColor:'#BBB3AB', fillOpacity:.4, dashArray:null};
+    return {radius:5, color:'#fff', weight:1, fillColor:'#9E9E9E', fillOpacity:.95, dashArray:null};
+  }
   // Crea un marcador de lote y lo registra en _mapaLotes.
-  function _mapaAddMarker(id, n, lat, lng){
-    var m = L.circleMarker([lat, lng], {radius:5, color:'#fff', weight:1, fillColor:'#9E9E9E', fillOpacity:.95});
-    m.bindTooltip('Lote '+n, {direction:'top', offset:[0,-4]});
-    var lo = {id:id, n:n, lat:lat, lng:lng, marker:m, zona:-1, cli:null, rec:null};
+  function _mapaAddMarker(id, n, lat, lng, tipo, dueno){
+    tipo = tipo || 'casa';
+    var m = L.circleMarker([lat, lng], _mapaStyleTipo(tipo));
+    var suf = tipo==='baldio' ? ' (baldío)' : (tipo==='anexo' ? ' (anexo'+(dueno?' de '+dueno:'')+')' : '');
+    m.bindTooltip('Lote '+n+suf, {direction:'top', offset:[0,-4]});
+    var lo = {id:id, n:n, lat:lat, lng:lng, marker:m, zona:-1, cli:null, rec:null, tipo:tipo, dueno:dueno||''};
     m.on('click', function(){
       if (_mapaMovePending || _mapaAddPending) return;   // el click del mapa lo resuelve
       if (_mapaEditMode) _mapaPuntoEditMenu(lo);
@@ -13923,20 +13962,20 @@ if('serviceWorker' in navigator){
       var lat = (ov && ov.lat) ? ov.lat : c[1];
       var lng = (ov && ov.lng) ? ov.lng : c[0];
       var n = (ov && ov.lote) ? ov.lote : f.properties.n;
-      _mapaAddMarker(id, n, lat, lng);
+      _mapaAddMarker(id, n, lat, lng, ov && ov.tipo, ov && ov.dueno);
     });
     Object.keys(_mapaPuntosOv).forEach(function(id){
       if (id.charAt(0) !== 'a') return;          // solo los agregados
       var ov = _mapaPuntosOv[id];
       if (ov.borrado || !ov.lat) return;
-      _mapaAddMarker(id, ov.lote, ov.lat, ov.lng);
+      _mapaAddMarker(id, ov.lote, ov.lat, ov.lng, ov.tipo, ov.dueno);
     });
     _mapaLotesLayer.addTo(_mapaObj);
     var mc = el('mapaCount'); if (mc) mc.textContent = _mapaLotes.length;
   }
 
-  function _mapaPuntoSave(id, lote, lat, lng, borrado){
-    return fetch(CRM_API, {method:'POST', mode:'cors', body: JSON.stringify({action:'crmPuntoSave', id:id, lote:lote, lat:lat, lng:lng, borrado:borrado?1:0})})
+  function _mapaPuntoSave(id, lote, lat, lng, borrado, tipo, dueno){
+    return fetch(CRM_API, {method:'POST', mode:'cors', body: JSON.stringify({action:'crmPuntoSave', id:id, lote:lote, lat:lat, lng:lng, borrado:borrado?1:0, tipo:tipo||'casa', dueno:dueno||''})})
       .then(function(r){ return r.json(); });
   }
 
@@ -13950,14 +13989,39 @@ if('serviceWorker' in navigator){
   };
 
   function _mapaPuntoEditMenu(lo){
-    var html = '<div class="mapa-pop"><div class="mapa-pop-h">Lote '+escHtml(lo.n)+'</div>'
+    var t = lo.tipo || 'casa';
+    var tLbl = t==='baldio' ? 'baldío' : (t==='anexo' ? 'anexo'+(lo.dueno?' de '+escHtml(lo.dueno):'') : 'casa');
+    var html = '<div class="mapa-pop"><div class="mapa-pop-h">Lote '+escHtml(lo.n)+' <small style="opacity:.6;font-weight:400">('+tLbl+')</small></div>'
       + '<div class="mapa-pop-acts" style="flex-wrap:wrap">'
       + '<button class="mapa-pop-btn" onclick="mapaPuntoMoverInit(\''+lo.id+'\')">Mover</button>'
       + '<button class="mapa-pop-btn" onclick="mapaPuntoRenombrar(\''+lo.id+'\')">Renombrar</button>'
       + '<button class="mapa-pop-btn" style="background:#E53935;border-color:#E53935" onclick="mapaPuntoBorrar(\''+lo.id+'\')">Borrar</button>'
+      + '</div>'
+      + '<div class="mapa-pop-acts" style="flex-wrap:wrap;margin-top:6px">'
+      + (t!=='casa'   ? '<button class="mapa-pop-btn" onclick="mapaPuntoTipo(\''+lo.id+'\',\'casa\')">Es una casa</button>' : '')
+      + (t!=='anexo'  ? '<button class="mapa-pop-btn" onclick="mapaPuntoTipo(\''+lo.id+'\',\'anexo\')">Parte de otra casa</button>' : '')
+      + (t!=='baldio' ? '<button class="mapa-pop-btn" onclick="mapaPuntoTipo(\''+lo.id+'\',\'baldio\')">Baldío</button>' : '')
       + '</div></div>';
-    lo.marker.bindPopup(html, {minWidth:170}).openPopup();
+    lo.marker.bindPopup(html, {minWidth:200}).openPopup();
   }
+  // Cambia el tipo de un punto: casa / anexo (parte de otra casa) / baldío.
+  window.mapaPuntoTipo = function(id, tipo){
+    var lo = _mapaLoteById(id); if (!lo) return;
+    var dueno = '';
+    if (tipo === 'anexo'){
+      dueno = prompt('¿A qué lote pertenece este anexo?\nPoné el número de la casa principal (ej: si es parte de la casa del lote 79, poné 79).', lo.dueno||'');
+      if (dueno === null) return;
+      dueno = String(dueno).trim();
+      if (!dueno){ toast('Necesito el número de lote de la casa principal'); return; }
+    }
+    lo.tipo = tipo; lo.dueno = dueno; lo.marker.closePopup();
+    if (_mapaPuntosOv[id]){ _mapaPuntosOv[id].tipo = tipo; _mapaPuntosOv[id].dueno = dueno; }
+    else _mapaPuntosOv[id] = {id:id, lote:lo.n, lat:lo.lat, lng:lo.lng, tipo:tipo, dueno:dueno};
+    _mapaPuntoSave(id, lo.n, lo.lat, lo.lng, false, tipo, dueno).then(function(){
+      toast(tipo==='baldio' ? 'Marcado como baldío (fuera del %)' : (tipo==='anexo' ? 'Anexo de la casa del lote '+dueno : 'Marcado como casa'));
+      _mapaBuildCliIndex(); _recolorLotes(); _renderLegend(); _mapaUpdateTooltips();
+    });
+  };
   function _mapaLoteById(id){ for (var i=0;i<_mapaLotes.length;i++){ if (_mapaLotes[i].id===id) return _mapaLotes[i]; } return null; }
 
   window.mapaPuntoMoverInit = function(id){
@@ -13969,14 +14033,14 @@ if('serviceWorker' in navigator){
     var lo = _mapaLoteById(id); if (!lo) return;
     lo.lat = Math.round(latlng.lat*1e6)/1e6; lo.lng = Math.round(latlng.lng*1e6)/1e6;
     lo.marker.setLatLng([lo.lat, lo.lng]);
-    _mapaPuntoSave(id, lo.n, lo.lat, lo.lng, false).then(function(){ toast('Lote movido'); _recolorLotes(); });
+    _mapaPuntoSave(id, lo.n, lo.lat, lo.lng, false, lo.tipo, lo.dueno).then(function(){ toast('Lote movido'); _recolorLotes(); });
   }
   window.mapaPuntoRenombrar = function(id){
     var lo = _mapaLoteById(id); if (!lo) return;
     var nuevo = prompt('Número de lote:', lo.n); if (nuevo===null) return;
     nuevo = String(nuevo).trim(); if (!nuevo) return;
     lo.n = nuevo; lo.marker.closePopup();
-    _mapaPuntoSave(id, lo.n, lo.lat, lo.lng, false).then(function(){ toast('Lote renombrado'); _recolorLotes(); _mapaUpdateTooltips(); });
+    _mapaPuntoSave(id, lo.n, lo.lat, lo.lng, false, lo.tipo, lo.dueno).then(function(){ toast('Lote renombrado'); _recolorLotes(); _mapaUpdateTooltips(); });
   };
   window.mapaPuntoBorrar = function(id){
     var lo = _mapaLoteById(id); if (!lo) return;
@@ -13984,7 +14048,7 @@ if('serviceWorker' in navigator){
     lo.marker.closePopup();
     if (_mapaLotesLayer.hasLayer(lo.marker)) _mapaLotesLayer.removeLayer(lo.marker);
     _mapaLotes = _mapaLotes.filter(function(x){ return x.id !== id; });
-    _mapaPuntoSave(id, lo.n, lo.lat, lo.lng, true).then(function(){ toast('Círculo borrado'); _renderLegend(); });
+    _mapaPuntoSave(id, lo.n, lo.lat, lo.lng, true, lo.tipo, lo.dueno).then(function(){ toast('Círculo borrado'); _renderLegend(); });
   };
   window.mapaAgregarInit = function(){
     if (!_mapaEditMode){ toast('Activá primero "Editar puntos"'); return; }
