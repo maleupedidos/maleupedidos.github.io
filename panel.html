@@ -2786,7 +2786,6 @@ body.role-single .statusbar{font-size:11px}
     <button class="bbdd-tab on" data-esub="pulso" onclick="estSwitch('pulso')">📊 Pulso</button>
     <button class="bbdd-tab" data-esub="hogares" onclick="estSwitch('hogares')">🏠 Hogares</button>
     <button class="bbdd-tab" data-esub="clientes" onclick="estSwitch('clientes')">👤 Clientes</button>
-    <button class="bbdd-tab" data-esub="quien" onclick="estSwitch('quien')">👥 Quién compra</button>
     <button class="bbdd-tab" data-esub="barrios" onclick="estSwitch('barrios')">🗺️ Sub-barrios</button>
     <button class="bbdd-tab" data-esub="hoy" onclick="estSwitch('hoy')">☀️ Hoy</button>
     <button class="bbdd-tab" data-esub="semana" onclick="estSwitch('semana')">🗓️ Plan semana</button>
@@ -2801,10 +2800,6 @@ body.role-single .statusbar{font-size:11px}
   <!-- Sub: HOGARES -->
   <div class="est-sub" id="est-hogares">
     <div id="estHogares"></div>
-  </div>
-  <!-- Sub: QUIÉN COMPRA -->
-  <div class="est-sub" id="est-quien">
-    <div id="estQuien"></div>
   </div>
   <!-- Sub: SUB-BARRIOS -->
   <div class="est-sub" id="est-barrios">
@@ -18368,12 +18363,12 @@ if('serviceWorker' in navigator){
   var MSL=['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
 
   window.estSwitch=function(sub){
+    if(sub==='quien')sub='hogares';   // "Quién compra" se fusionó dentro de Hogares (vistas)
     document.querySelectorAll('#p-estancias .bbdd-tab').forEach(function(b){b.classList.toggle('on',b.dataset.esub===sub);});
     document.querySelectorAll('#p-estancias .est-sub').forEach(function(s){s.classList.toggle('on',s.id==='est-'+sub);});
     try{localStorage.setItem('maleu_est_sub',sub);}catch(e){}
     if(sub==='hogares')rHogares();
     if(sub==='clientes')rClientes();
-    if(sub==='quien')rQuien();
     if(sub==='barrios')rBarrios();
     if(sub==='hoy'||sub==='semana'||sub==='segmentos'){ if(typeof window.crmRenderSub==='function')crmRenderSub(sub); }
     if(sub==='mapa'){ if(typeof window.initMapaEstancias==='function')initMapaEstancias(); }
@@ -18384,7 +18379,7 @@ if('serviceWorker' in navigator){
   var _estHog=null;            // hogares ya con merges aplicados {hogares, prospectos}
   var _estRaw=null;            // hogares crudos de _hogBuild (sin merges)
   var _estMerges=null;         // reglas [{from,to,nota}]
-  var _hogFiltro={busq:'',orden:'facturado',estado:''};
+  var _hogFiltro={busq:'',vista:'todos'};
   function _estEstado(d){ if(d<0)return 'sin'; if(d<=28)return 'activo'; if(d<=90)return 'dormido'; return 'inactivo'; }
   function _combineHog(to,from){
     to.members=(to.members||[]).concat(from.members||[]);
@@ -18477,8 +18472,8 @@ if('serviceWorker' in navigator){
   // Re-pinta el sub activo SIN spinner (datos ya en memoria → sincrónico).
   function _estRerender(){
     var s=(function(){try{return localStorage.getItem('maleu_est_sub');}catch(e){return 'pulso';}})()||'pulso';
-    if(s==='hogares'){ if(document.getElementById('estHogList')) _hogRenderList(); else rHogares(); }
-    else if(s==='quien')rQuien(); else if(s==='barrios')rBarrios();
+    if(s==='hogares'||s==='quien'){ if(document.getElementById('estHogList')) _hogRenderList(); else rHogares(); }
+    else if(s==='barrios')rBarrios();
   }
   // Refresh manual (botón Actualizar del topbar) del sub activo de Estancias:
   // invalida caches → repinta instantáneo desde cache + refresca en background.
@@ -18486,9 +18481,8 @@ if('serviceWorker' in navigator){
     var s=(function(){try{return localStorage.getItem('maleu_est_sub');}catch(e){return 'pulso';}})()||'pulso';
     _estHog=null; _estRaw=null; _estCli=null;
     if(s==='pulso')rEstancias();
-    else if(s==='hogares')rHogares();
+    else if(s==='hogares'||s==='quien')rHogares();
     else if(s==='clientes')rClientes();
-    else if(s==='quien')rQuien();
     else if(s==='barrios')rBarrios();
     else if(s==='hoy'||s==='semana'||s==='segmentos'){ if(typeof window.crmRenderSub==='function')crmRenderSub(s); }
     else if(s==='mapa'){ if(typeof window.initMapaEstancias==='function')initMapaEstancias(); }
@@ -18571,7 +18565,7 @@ if('serviceWorker' in navigator){
   window.rEstancias=function(){
     var host=E$('estPulso'); if(!host)return;
     // Restaurar sub-tab elegido
-    try{var s=localStorage.getItem('maleu_est_sub');if(s&&s!=='pulso'&&E$('est-'+s))estSwitch(s);}catch(e){}
+    try{var s=localStorage.getItem('maleu_est_sub');if(s==='quien')s='hogares';if(s&&s!=='pulso'&&E$('est-'+s))estSwitch(s);}catch(e){}
     if(!window.D||!D.pedidos){host.innerHTML='<div class="loading">Cargando datos…</div>';return;}
     var now=new Date();
 
@@ -18768,145 +18762,88 @@ if('serviceWorker' in navigator){
   }
 
   // ─────────── sub-tab HOGARES ───────────
+  // VISTAS (jugadas): cada una define un filtro + un orden + una explicación de la jugada.
+  // Reemplazan la vieja sub-tab "Quién compra" — mismo directorio, un solo camino de datos.
+  var _hogVistas={
+    todos:   {lbl:'Todos', icon:'🏠', filt:null, sort:'facturado'},
+    top:     {lbl:'Top facturan', icon:'🏆', filt:function(h){return (h.facturado||0)>0;}, sort:'facturado',
+              desc:'Las familias que más facturan en Home. Cuidalas: son la base del $9M.', vacio:'Sin datos.'},
+    frec:    {lbl:'Frecuentes', icon:'🔁', filt:function(h){return h.estado==='activo'&&h.freq&&(h.entregados||0)>=3;}, sort:'freq',
+              desc:'Compran seguido y sostenido. El corazón de la recompra — mantené el ritmo.', vacio:'Todavía no hay hogares con ritmo estable (≥3 pedidos).'},
+    riesgo:  {lbl:'En riesgo', icon:'⚠️', filt:function(h){return h.estado==='activo'&&h.freq&&(h.entregados||0)>=2&&h.diasUltima>=Math.round(h.freq*0.9);}, sort:'recencia',
+              desc:'Activos que ya pasaron su ritmo habitual sin volver a pedir. Empujá AHORA antes de que se duerman.', vacio:'✓ Ningún activo estirándose. Base al día.'},
+    unsolo:  {lbl:'Un solo pedido', icon:'🌱', filt:function(h){return (h.entregados||0)===1&&h.diasUltima>=0;}, sort:'recencia',
+              desc:'Probaron una vez y no volvieron. La segunda compra es la que fideliza — el mejor lugar para invertir.', vacio:'✓ Ningún hogar quedó en un solo pedido.'},
+    dormidos:{lbl:'Dormidos', icon:'🟠', filt:function(h){return h.estado==='dormido';}, sort:'facturado',
+              desc:'Compraban y frenaron (29–90 días). Reconectar cuesta menos que conseguir uno nuevo.', vacio:'✓ Ningún hogar dormido. ¡Base sana!'},
+    nuevos:  {lbl:'Nuevos', icon:'🆕', filt:function(h){ if(h._primera===undefined)h._primera=_minPrimera(h); return h._primera&&((Date.now()-h._primera)/86400000)<=35; }, sort:'primera',
+              desc:'Entraron en los últimos 35 días. Asegurá la segunda compra para que no se enfríen.', vacio:'No entraron hogares nuevos en los últimos 35 días.'}
+  };
   window.estHogBusq=function(v){ _hogFiltro.busq=(v||'').toLowerCase().trim(); _hogRenderList(); };
-  window.estHogOrden=function(o){ _hogFiltro.orden=o; document.querySelectorAll('#estHogares .est-chip[data-o]').forEach(function(b){b.classList.toggle('on',b.dataset.o===o);}); _hogRenderList(); };
-  window.estHogEstado=function(e){ _hogFiltro.estado=e; document.querySelectorAll('#estHogares .est-chip[data-e]').forEach(function(b){b.classList.toggle('on',b.dataset.e===e);}); _hogRenderList(); };
+  window.estHogVista=function(v){
+    _hogFiltro.vista=v;
+    document.querySelectorAll('#estHogares .est-chip[data-v]').forEach(function(b){b.classList.toggle('on',b.dataset.v===v);});
+    _hogRenderList();
+  };
   function _hogFilteredSorted(){
-    var arr=(_estHog.hogares||[]).filter(function(h){
-      if(_hogFiltro.estado && h.estado!==_hogFiltro.estado) return false;
+    var vi=_hogVistas[_hogFiltro.vista]||_hogVistas.todos;
+    var arr=((_estHog&&_estHog.hogares)||[]).filter(function(h){
+      if(vi.filt && !vi.filt(h)) return false;
       if(_hogFiltro.busq){ var hay=((h.familia||'')+' '+(h.titular||'')+' '+(h.sub||'')+' '+(h.lote||'')+' '+_hogInts(h).join(' ')).toLowerCase(); if(hay.indexOf(_hogFiltro.busq)<0) return false; }
       return true;
     });
-    var o=_hogFiltro.orden;
+    var o=vi.sort;
     arr.sort(function(a,b){
       if(o==='pedidos') return (b.entregados-a.entregados)||(b.facturado-a.facturado);
       if(o==='freq') return ((a.freq||99999)-(b.freq||99999))||(b.entregados-a.entregados);
       if(o==='recencia') return ((a.diasUltima<0?99999:a.diasUltima)-(b.diasUltima<0?99999:b.diasUltima));
+      if(o==='primera'){ if(a._primera===undefined)a._primera=_minPrimera(a); if(b._primera===undefined)b._primera=_minPrimera(b); return (b._primera||0)-(a._primera||0); }
       return b.facturado-a.facturado;
     });
     return arr;
   }
   function _hogRenderList(){
+    var vi=_hogVistas[_hogFiltro.vista]||_hogVistas.todos;
     var arr=_hogFilteredSorted();
+    var d=E$('estHogDesc'); if(d) d.innerHTML=(_hogFiltro.vista!=='todos'&&vi.desc)?('<div style="font-size:12px;color:var(--bl);margin:2px 2px 10px;line-height:1.4">'+vi.icon+' '+vi.desc+'</div>'):'';
     var box=E$('estHogList'); if(!box)return;
-    if(!arr.length){ box.innerHTML='<div class="est-soon"><div class="est-soon-i">🔍</div><div>Ningún hogar con ese filtro.</div></div>'; return; }
-    box.innerHTML=arr.map(function(h,i){return _hogCard(h,i+1);}).join('');
-    var c=E$('estHogCount'); if(c)c.textContent=arr.length+' hogares';
+    var ranked=(vi.sort==='facturado'||vi.sort==='pedidos'||vi.sort==='freq');
+    if(!arr.length){
+      var vac=_hogFiltro.busq?'Ningún hogar con esa búsqueda.':(vi.vacio||'Ningún hogar en esta vista.');
+      box.innerHTML='<div class="est-soon"><div class="est-soon-i">🔍</div><div>'+vac+'</div></div>';
+    } else {
+      box.innerHTML=arr.map(function(h,i){return _hogCard(h, ranked?(i+1):0);}).join('');
+    }
+    var c=E$('estHogCount'); if(c)c.textContent=arr.length+' '+(arr.length===1?'hogar':'hogares');
   }
   window.rHogares=function(){
     var host=E$('estHogares'); host.innerHTML='<div class="loading">Cargando hogares…</div>';
     _estEnsure(function(err){
       if(err==='nocrm'){ host.innerHTML=_nocrm(); return; }
-      var H=_estHog.hogares||[];
-      var tot=H.length, act=0,dorm=0,inact=0,factTot=0,entTot=0;
-      H.forEach(function(h){ if(h.estado==='activo')act++; else if(h.estado==='dormido')dorm++; else if(h.estado==='inactivo')inact++; factTot+=(h.facturado||0); entTot+=(h.entregados||0); });
+      var H=(_estHog&&_estHog.hogares)||[];
+      var tot=0, act=0,dorm=0,inact=0,factTot=0,entTot=0;
+      H.forEach(function(h){ if((h.entregados||0)>0)tot++; if(h.estado==='activo')act++; else if(h.estado==='dormido')dorm++; else if(h.estado==='inactivo')inact++; factTot+=(h.facturado||0); entTot+=(h.entregados||0); });
       var ticketH=entTot?Math.round(factTot/entTot):0;
+      var penet=tot?Math.round(act/tot*100):0;
       var html='<div class="est-kpis">'
-        +'<div class="est-kpi"><div class="est-kpi-l">Hogares</div><div class="est-kpi-v">'+tot+'</div><div class="est-kpi-s" style="color:var(--bl)">lotes con compras</div></div>'
-        +'<div class="est-kpi"><div class="est-kpi-l">Activos</div><div class="est-kpi-v" style="color:var(--gd)">'+act+'</div><div class="est-kpi-s" style="color:var(--bl)">'+dorm+' dormidos · '+inact+' inactivos</div></div>'
-        +'<div class="est-kpi"><div class="est-kpi-l">Facturado total</div><div class="est-kpi-v">'+money(factTot)+'</div><div class="est-kpi-s" style="color:var(--bl)">histórico</div></div>'
+        +'<div class="est-kpi"><div class="est-kpi-l">Hogares que compran</div><div class="est-kpi-v">'+tot+'</div><div class="est-kpi-s" style="color:var(--bl)">con ≥1 pedido Home</div></div>'
+        +'<div class="est-kpi"><div class="est-kpi-l">Activos</div><div class="est-kpi-v" style="color:var(--gd)">'+act+'</div><div class="est-kpi-s" style="color:var(--bl)">'+penet+'% penetración · '+dorm+' dormidos · '+inact+' inactivos</div></div>'
+        +'<div class="est-kpi"><div class="est-kpi-l">Facturación</div><div class="est-kpi-v">'+money(factTot)+'</div><div class="est-kpi-s" style="color:var(--bl)">histórica Home</div></div>'
         +'<div class="est-kpi"><div class="est-kpi-l">Ticket x hogar</div><div class="est-kpi-v">'+money(ticketH)+'</div><div class="est-kpi-s" style="color:var(--bl)">promedio</div></div>'
         +'</div>';
+      var chips=Object.keys(_hogVistas).map(function(k){ var v=_hogVistas[k];
+        return '<button class="est-chip'+(k===_hogFiltro.vista?' on':'')+'" data-v="'+k+'" onclick="estHogVista(\''+k+'\')">'+v.icon+' '+v.lbl+'</button>'; }).join('');
       html+='<div class="est-ctl">'
         +'<input class="est-search" type="text" placeholder="Buscar familia, apellido, lote, sub-barrio o nombre…" oninput="estHogBusq(this.value)">'
-        +'<div class="est-ctl-row"><span class="est-ctl-lbl">Ordenar</span>'
-        +'<button class="est-chip on" data-o="facturado" onclick="estHogOrden(\'facturado\')">💰 Más facturan</button>'
-        +'<button class="est-chip" data-o="pedidos" onclick="estHogOrden(\'pedidos\')">📦 Más pedidos</button>'
-        +'<button class="est-chip" data-o="freq" onclick="estHogOrden(\'freq\')">🔁 Más frecuentes</button>'
-        +'<button class="est-chip" data-o="recencia" onclick="estHogOrden(\'recencia\')">🕒 Compra reciente</button></div>'
-        +'<div class="est-ctl-row"><span class="est-ctl-lbl">Estado</span>'
-        +'<button class="est-chip on" data-e="" onclick="estHogEstado(\'\')">Todos</button>'
-        +'<button class="est-chip" data-e="activo" onclick="estHogEstado(\'activo\')">🟢 Activos</button>'
-        +'<button class="est-chip" data-e="dormido" onclick="estHogEstado(\'dormido\')">🟠 Dormidos</button>'
-        +'<button class="est-chip" data-e="inactivo" onclick="estHogEstado(\'inactivo\')">🔴 Inactivos</button>'
+        +'<div class="est-ctl-row"><span class="est-ctl-lbl">Vista</span>'+chips
         +'<span style="margin-left:auto;font-size:11px;color:var(--bl);font-weight:700" id="estHogCount"></span></div>'
-        +'</div><div id="estHogList"></div>';
+        +'</div><div id="estHogDesc"></div><div id="estHogList"></div>';
       host.innerHTML=html;
       _hogRenderList();
     });
   };
+  window.rQuien=window.rHogares;   // alias defensivo: cualquier referencia vieja a "quién compra" cae en Hogares
 
-  // ─────────── sub-tab QUIÉN COMPRA ───────────
-  // Segmenta la base de Estancias por valor y ciclo de vida para responder QUIÉN compra
-  // (y a quién empujar). Pinta AL INSTANTE desde memoria/cache; el refresh repinta solo.
-  function _quienRender(host, loading){
-    var H=(_estHog&&_estHog.hogares)?_estHog.hogares.slice():[];
-    if(!H.length){
-      // En Estancias SIEMPRE hay hogares con compras → vacío = problema de carga, no realidad.
-      // Mientras carga: spinner. Si terminó y sigue vacío: botón Reintentar (no un dead-end).
-      host.innerHTML = loading ? '<div class="loading">Cargando quién compra…</div>' : _nocrm();
-      return;
-    }
-    var now=new Date();
-    // KPIs de cabecera
-    var conCompras=0, act=0, dorm=0, inact=0, factTot=0, entTot=0;
-    H.forEach(function(h){
-      if((h.entregados||0)>0) conCompras++;
-      if(h.estado==='activo')act++; else if(h.estado==='dormido')dorm++; else if(h.estado==='inactivo')inact++;
-      factTot+=(h.facturado||0); entTot+=(h.entregados||0);
-      h._primera=_minPrimera(h);
-    });
-    var ticketH=entTot?Math.round(factTot/entTot):0;
-    var penet=conCompras?Math.round(act/conCompras*100):0;
-
-    // Segmentos accionables
-    var top=H.slice().sort(function(a,b){return b.facturado-a.facturado;}).slice(0,8);
-    var frecuentes=H.filter(function(h){return h.estado==='activo'&&h.freq&&(h.entregados||0)>=3;})
-      .sort(function(a,b){return (a.freq-b.freq)||(b.entregados-a.entregados);}).slice(0,8);
-    var riesgo=H.filter(function(h){return h.estado==='activo'&&h.freq&&(h.entregados||0)>=2&&h.diasUltima>=Math.round(h.freq*0.9);})
-      .sort(function(a,b){return b.facturado-a.facturado;}).slice(0,8);
-    var unSolo=H.filter(function(h){return (h.entregados||0)===1&&h.diasUltima>=0;})
-      .sort(function(a,b){return a.diasUltima-b.diasUltima;}).slice(0,10);
-    var dormidos=H.filter(function(h){return h.estado==='dormido';})
-      .sort(function(a,b){return b.facturado-a.facturado;}).slice(0,12);
-    var nuevos=H.filter(function(h){return h._primera&&((now-h._primera)/86400000)<=35;})
-      .sort(function(a,b){return b._primera-a._primera;});
-
-    function kpi(l,v,s,color){ return '<div class="est-kpi"><div class="est-kpi-l">'+l+'</div><div class="est-kpi-v"'+(color?' style="color:'+color+'"':'')+'>'+v+'</div><div class="est-kpi-s" style="color:var(--bl)">'+s+'</div></div>'; }
-    function sec(icon,titulo,desc,cnt,rows,vacio){
-      return '<div class="est-sec"><div class="est-sec-h"><span>'+icon+' '+titulo+'</span>'
-        +(cnt!=null?'<span style="color:var(--bl);font-weight:700;text-transform:none;letter-spacing:0">'+cnt+'</span>':'')+'</div>'
-        +(desc?'<div style="font-size:12px;color:var(--bl);margin:-4px 0 10px;line-height:1.4">'+desc+'</div>':'')
-        +(rows||('<div style="font-size:13px;color:var(--gd);padding:6px">'+vacio+'</div>'))+'</div>';
-    }
-
-    var h='<div class="est-kpis">'
-      +kpi('Hogares que compran', conCompras, 'con ≥1 pedido Home')
-      +kpi('Activos', act, penet+'% de penetración · '+dorm+' dormidos · '+inact+' inactivos', 'var(--gd)')
-      +kpi('Facturación', money(factTot), 'histórica Home')
-      +kpi('Ticket x hogar', money(ticketH), 'promedio')
-      +'</div>';
-
-    h+=sec('🏆','Top hogares','Las familias que más facturan en Home. Cuidalas: son la base del $9M.','histórico',
-      top.map(function(x,i){return _hogCard(x,i+1);}).join(''),'Sin datos');
-    h+=sec('🔁','Campeones de frecuencia','Compran seguido y sostenido. El corazón de la recompra — mantené el ritmo.',frecuentes.length+' hogares',
-      frecuentes.length?frecuentes.map(function(x,i){return _hogCard(x,i+1);}).join(''):null,'Todavía no hay hogares con ritmo estable (≥3 pedidos).');
-    h+=sec('⚠️','En riesgo (se están estirando)','Activos que ya pasaron su ritmo habitual sin volver a pedir. Empujá AHORA antes de que se duerman.',riesgo.length+' hogares',
-      riesgo.length?riesgo.map(function(x){return _hogCard(x);}).join(''):null,'✓ Ningún activo estirándose. Base al día.');
-    h+=sec('🌱','Un solo pedido','Probaron una vez y no volvieron. La segunda compra es la que fideliza — el mejor lugar para invertir.',unSolo.length+' hogares',
-      unSolo.length?unSolo.map(function(x){return _hogCard(x);}).join(''):null,'✓ Ningún hogar quedó en un solo pedido.');
-    h+=sec('🟠','Dormidos para reactivar','Compraban y frenaron (29–90 días). Reconectar cuesta menos que conseguir uno nuevo.',dorm+' hogares',
-      dormidos.length?dormidos.map(function(x){return _hogCard(x);}).join(''):null,'✓ Ningún hogar dormido. ¡Base sana!');
-    h+=sec('🆕','Hogares nuevos','Entraron en los últimos 35 días. Asegurá la segunda compra para que no se enfríen.',nuevos.length+' hogares',
-      nuevos.length?nuevos.map(function(x){return _hogCard(x);}).join(''):null,'No entraron hogares nuevos en los últimos 35 días.');
-
-    host.innerHTML=h;
-  }
-  window.rQuien=function(){
-    var host=E$('estQuien'); if(!host)return;
-    // 1) intento síncrono: si hay datos en memoria/cache, pintar YA (sin spinner)
-    if(!_estHog){
-      try{ var raw=window.estHogaresSync&&window.estHogaresSync(); if(raw){ _estRaw=raw; _estMerges=_mergesCache(); _estHog=_applyMerges(raw,_estMerges); } }catch(e){}
-      if(!(_estHog&&_estHog.hogares&&_estHog.hogares.length)){ var c=_estHogCacheLoad(); if(c)_estHog=c; }
-    }
-    var teniaDatos=!!(_estHog&&_estHog.hogares&&_estHog.hogares.length);
-    _quienRender(host, !teniaDatos);
-    // 2) refresco: SIEMPRE repinta esta sub cuando llega data fresca (no depende de _estRerender)
-    _estEnsure(function(err){
-      if(err==='nocrm'){ if(!teniaDatos) host.innerHTML=_nocrm(); return; }
-      _quienRender(host, false);
-    });
-  };
 
   // ─────────── sub-tab SUB-BARRIOS ───────────
   // Drilldown de sub-barrios: al abrir una fila se ve QUIÉNES son (hogares por dentro),
