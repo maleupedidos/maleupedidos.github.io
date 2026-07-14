@@ -1,0 +1,52 @@
+name: Sync precios portal
+
+# Fuente única de precios: el array PRODUCTOS de app.js (la tienda). Cada vez
+# que se pushea un cambio a app.js, este workflow regenera data/precios.json
+# (mapa id -> precio) que lee el Portal Red (red.html) al arrancar. Así el
+# portal nunca se desfasa de la tienda: se edita el precio en un solo lugar
+# (app.js) y el portal lo toma solo. Solo commitea si el JSON cambió.
+
+on:
+  push:
+    branches: [ main ]
+    paths: [ 'app.js' ]
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-precios
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Regenerar data/precios.json desde app.js
+        run: |
+          python3 - <<'PY'
+          import re, json
+          app = open('app.js', encoding='utf-8').read()
+          start = app.index('const PRODUCTOS')
+          block = app[start:app.index('];', start)]
+          items = re.findall(r'\bid:(\d+),.*?precio:(\d+)', block)
+          m = {str(int(i)): int(p) for i, p in items}
+          m = {k: m[k] for k in sorted(m, key=lambda x: int(x))}
+          json.dump(m, open('data/precios.json', 'w', encoding='utf-8'),
+                    ensure_ascii=False, separators=(',', ':'))
+          print('precios.json:', len(m), 'productos')
+          PY
+
+      - name: Commitear solo si cambió
+        run: |
+          if git diff --quiet -- data/precios.json; then
+            echo "Sin cambios de precios: nada que commitear."; exit 0
+          fi
+          git config user.name  "maleu-precios-bot"
+          git config user.email "maleucongelados@gmail.com"
+          git add data/precios.json
+          git commit -m "chore: sync precios portal desde app.js [skip ci]"
+          git push
