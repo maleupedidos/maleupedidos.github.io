@@ -13292,9 +13292,13 @@ if('serviceWorker' in navigator){
     });
   }
   function _mapaEnsureClientes(cb){
-    if (crmClientes){ cb(); return; }
+    if (crmClientes && crmClientes.length){ cb(); return; }
+    // NUNCA pisar con []: un fetch vacío/fallido envenena _hogBuild (todo en 0). Si no vino
+    // nada, caemos a la cache local y dejamos crmClientes como estaba (null → reintenta luego).
+    function fallback(){ if(!(crmClientes&&crmClientes.length)){ try{ var cc=JSON.parse(localStorage.getItem('maleu_crm_clientes_v1')||'null'); if(cc&&cc.length)crmClientes=cc; }catch(e){} } cb(); }
     fetch(CRM_API + '?action=crmClientes').then(function(r){return r.json();})
-      .then(function(d){ crmClientes = d.clientes||[]; cb(); }).catch(function(){ cb(); });
+      .then(function(d){ var l=(d&&d.clientes)||null; if(l&&l.length)crmClientes=l; fallback(); })
+      .catch(function(){ fallback(); });
   }
 
   // Busca el punto del mapa que corresponde a (sub-barrio, lote) de un cliente.
@@ -19277,8 +19281,20 @@ if('serviceWorker' in navigator){
   // ─────────── HERRAMIENTA DE FUSIÓN DE HOGARES ───────────
   var _estMergeFrom=null, _estMergeCands=[];
   function _toast(m){ try{ if(typeof toast==='function')toast(m); else alert(m); }catch(e){ alert(m); } }
+  // Busca un hogar por key con AUTO-SANACIÓN: si _estHog quedó vacío/stale al momento del
+  // click (p.ej. un refresh transitorio dejó crmClientes en [] o lo reasignó a otro build),
+  // reconstruye desde la cache sincrónica de clientes o la cache durable del build y
+  // reintenta. Así tocar una card NUNCA es un dead-end "No encontré el hogar".
+  function _estFindHog(key){
+    function find(){ return ((_estHog&&_estHog.hogares)||[]).filter(function(x){return x.key===key;})[0]; }
+    var h=find(); if(h) return h;
+    try{ var raw=window.estHogaresSync&&window.estHogaresSync(); if(raw&&raw.hogares&&raw.hogares.length){ _estRaw=raw; _estMerges=_mergesCache(); _estHog=_applyMerges(raw,_estMerges); } }catch(e){}
+    h=find(); if(h) return h;
+    var c=_estHogCacheLoad(); if(c&&c.hogares&&c.hogares.length){ _estHog=c; }
+    return find();
+  }
   window.estMergeOpen=function(fromKey){
-    var from=(_estHog.hogares||[]).filter(function(h){return h.key===fromKey;})[0];
+    var from=_estFindHog(fromKey);
     if(!from){ _toast('No encontré el hogar'); return; }
     _estMergeFrom=fromKey;
     _estMergeCands=(_estHog.hogares||[]).filter(function(h){return h.key!==fromKey;}).sort(function(a,b){return b.facturado-a.facturado;});
@@ -19313,7 +19329,7 @@ if('serviceWorker' in navigator){
       }).catch(function(){ _toast('Error de red'); });
   };
   window.estUnmerge=function(key){
-    var h=(_estHog.hogares||[]).filter(function(x){return x.key===key;})[0];
+    var h=_estFindHog(key);
     if(!h||!h._mergedKeys||!h._mergedKeys.length)return;
     if(!confirm('¿Separar los '+h._mergedKeys.length+' lote(s) fusionados en este hogar?'))return;
     var pend=h._mergedKeys.length, err=false;
@@ -19333,7 +19349,7 @@ if('serviceWorker' in navigator){
     return '<div class="est-reac">🟠 <b>Hogar para reactivar.</b> '+(tel?'Tel <b>'+esc(tel)+'</b> · ':'')+'sumalo a una campaña en <b>Segmentos</b> (WATI).</div>';
   }
   window.estHogFicha=function(key){
-    var h=(_estHog.hogares||[]).filter(function(x){return x.key===key;})[0];
+    var h=_estFindHog(key);
     if(!h){ _toast('No encontré el hogar'); return; }
     // Todo Home/Estancias retail (los KPIs del hogar ya vienen así de _hogBuild).
     var ints=(h.members||[]).slice().sort(function(a,b){return (b.entregadosHome||0)-(a.entregadosHome||0);});
@@ -19395,7 +19411,7 @@ if('serviceWorker' in navigator){
   var _estEditTipo='';
   window.estHogTipoPick=function(t){ _estEditTipo=(_estEditTipo===t?'':t); document.querySelectorAll('#estEditModal .est-tsel').forEach(function(b){ b.classList.toggle('on', b.dataset.t===_estEditTipo); }); };
   window.estHogEdit=function(key){
-    var h=(_estHog.hogares||[]).filter(function(x){return x.key===key;})[0];
+    var h=_estFindHog(key);
     if(!h){ _toast('No encontré el hogar'); return; }
     var apSug = h.familia || _apellidoDe(_hogBase(h)).ap || '';
     _estEditTipo = h.tipo || '';
@@ -19419,7 +19435,7 @@ if('serviceWorker' in navigator){
   };
   window.estHogEditClose=function(){ var m=document.getElementById('estEditModal'); if(m)m.remove(); };
   window.estHogEditSave=function(key){
-    var h=(_estHog.hogares||[]).filter(function(x){return x.key===key;})[0];
+    var h=_estFindHog(key);
     if(!h){ _toast('No encontré el hogar'); return; }
     var ap=(document.getElementById('estEditAp').value||'').trim();
     var tit=(document.getElementById('estEditTit').value||'').trim();
