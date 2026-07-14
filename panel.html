@@ -13177,6 +13177,29 @@ if('serviceWorker' in navigator){
   // colapsados: soporta lotes numéricos (082 → 82) Y etiquetas de texto de dormies
   // ("Golf Suites C1" == "golf suites c1"), que antes no matcheaban por mayúsculas.
   function _loteNorm(s){ s = String(s||'').trim().toLowerCase().replace(/\s+/g,' ').replace(/^0+(?=\d)/,''); return s || '0'; }
+  // Una casa puede ocupar varios lotes y quedar rotulada "78, 79 y 80" (o
+  // "78/79/80", "78-80"). Devuelve cada lote normalizado por separado para que
+  // el cliente cargado bajo cualquiera de ellos matchee con ese punto.
+  function _loteTokens(n){
+    var s = String(n==null?'':n).trim();
+    if (!s) return ['0'];
+    var parts = s.split(/\s*,\s*|\s*;\s*|\s*\/\s*|\s+y\s+/i).map(function(x){ return x.trim(); }).filter(Boolean);
+    if (!parts.length) parts = [s];
+    var out = [];
+    parts.forEach(function(p){
+      var m = p.match(/^(\d+)\s*-\s*(\d+)$/);
+      if (m){ var a=+m[1], b=+m[2]; if (b>=a && b-a<=100){ for (var i=a;i<=b;i++) out.push(_loteNorm(i)); return; } }
+      out.push(_loteNorm(p));
+    });
+    return out;
+  }
+  // Cliente (hogar) que corresponde a un punto, probando cada lote de su rótulo.
+  function _mapaCliDeSub(sub, n){
+    if (!sub) return null;
+    var toks = _loteTokens(n), sn = _crmNormName(sub);
+    for (var i=0;i<toks.length;i++){ var u = _mapaLoteCli[sn+'|'+toks[i]]; if (u) return u; }
+    return null;
+  }
 
   // Índice lote→clientes: key = subBarrioNorm|loteNorm → hogar agregado.
   // True si el punto no es una unidad vendible (parte de otra casa o baldío):
@@ -13198,13 +13221,20 @@ if('serviceWorker' in navigator){
     });
     crmClientes.forEach(function(c){
       if (!c.lote || !c.subBarrio) return;
-      var key = _crmNormName(c.subBarrio)+'|'+_loteNorm(c.lote);
-      if (_redir[key]) key = _redir[key];
-      var u = _mapaLoteCli[key];
-      if (!u){ u = _mapaLoteCli[key] = {members:[], deuda:0, entregados:0, facturado:0, diasUltima:-1, ultimaFecha:'', contacto:null}; }
-      u.members.push(c);
-      u.deuda += (c.deuda||0); u.entregados += (c.entregados||0); u.facturado += (c.facturado||0);
-      if (typeof c.diasUltima==='number' && c.diasUltima>=0 && (u.diasUltima<0 || c.diasUltima<u.diasUltima)){ u.diasUltima=c.diasUltima; u.ultimaFecha=c.ultimaFecha; }
+      var subn = _crmNormName(c.subBarrio);
+      // Indexo el cliente bajo CADA lote de su rótulo ("78, 79 y 80" → 78, 79 y 80),
+      // así matchea con el punto tenga el formato que tenga cualquiera de los dos.
+      _loteTokens(c.lote).forEach(function(tok){
+        var key = subn+'|'+tok;
+        if (_redir[key]) key = _redir[key];
+        var u = _mapaLoteCli[key];
+        if (!u){ u = _mapaLoteCli[key] = {members:[], deuda:0, entregados:0, facturado:0, diasUltima:-1, ultimaFecha:'', contacto:null}; }
+        if (u.members.indexOf(c) === -1){
+          u.members.push(c);
+          u.deuda += (c.deuda||0); u.entregados += (c.entregados||0); u.facturado += (c.facturado||0);
+          if (typeof c.diasUltima==='number' && c.diasUltima>=0 && (u.diasUltima<0 || c.diasUltima<u.diasUltima)){ u.diasUltima=c.diasUltima; u.ultimaFecha=c.ultimaFecha; }
+        }
+      });
     });
     Object.keys(_mapaLoteCli).forEach(function(k){
       var u=_mapaLoteCli[k]; var cand=u.members.filter(function(m){return m.tel;}); if(!cand.length)cand=u.members;
@@ -13223,7 +13253,9 @@ if('serviceWorker' in navigator){
     for (var i=0;i<_mapaLotes.length;i++){
       var L0 = _mapaLotes[i]; if (L0.zona < 0) continue;
       var zsub = _subZonas[L0.zona] && _subZonas[L0.zona].nombre;
-      if (_crmNormName(zsub) === ns && _loteNorm(L0.n) === nl) return L0;
+      if (_crmNormName(zsub) !== ns) continue;
+      var toks = _loteTokens(L0.n);  // el punto puede cubrir varios lotes (casa multi-lote)
+      if (toks.indexOf(nl) !== -1) return L0;
     }
     return null;
   }
@@ -13265,8 +13297,7 @@ if('serviceWorker' in navigator){
   function _mapaCliDe(L0){
     if (L0.zona < 0) return null;
     var sub = _subZonas[L0.zona] && _subZonas[L0.zona].nombre;
-    if (!sub) return null;
-    return _mapaLoteCli[_crmNormName(sub)+'|'+_loteNorm(L0.n)] || null;
+    return _mapaCliDeSub(sub, L0.n);
   }
   // Color de un lote en modo "cliente" según recencia del hogar.
   function _mapaCliColor(u){
@@ -13319,8 +13350,9 @@ if('serviceWorker' in navigator){
         return;
       }
       var sub = zi>=0 ? (_subZonas[zi] && _subZonas[zi].nombre) : null;
-      L0.cli = sub ? (_mapaLoteCli[_crmNormName(sub)+'|'+_loteNorm(L0.n)] || null) : null;
-      L0.rec = sub ? (_mapaLotesData[_crmNormName(sub)+'|'+_loteNorm(L0.n)] || null) : null;
+      L0.cli = _mapaCliDeSub(sub, L0.n);
+      L0.rec = null;
+      if (sub){ var _sn=_crmNormName(sub), _tk=_loteTokens(L0.n); for (var _i=0;_i<_tk.length;_i++){ var _r=_mapaLotesData[_sn+'|'+_tk[_i]]; if(_r){ L0.rec=_r; break; } } }
       var col, rad = 5;
       if (_mapaColorMode === 'cliente'){ col = _mapaCliColor(L0.cli); if (L0.cli) rad = 6; }
       else if (_mapaColorMode === 'sobres'){ col = _sobreColor(L0.rec); if (L0.rec && L0.rec.sobreEstado) rad = 6; }
