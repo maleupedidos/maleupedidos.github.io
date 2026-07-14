@@ -991,6 +991,11 @@ body{font-family:'Inter',-apple-system,'Segoe UI',system-ui,sans-serif;backgroun
 .mapa-bar-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .mapa-draw-btn{padding:6px 12px;border:1px solid var(--o);background:var(--o);color:#fff;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;transition:.12s;white-space:nowrap}
 .mapa-draw-btn:hover{background:#D9663A}
+.mapa-zona-pick{position:absolute;z-index:1200;top:52px;right:12px;background:#fff;border:1px solid var(--border);border-radius:10px;box-shadow:0 6px 24px rgba(0,0,0,.18);padding:8px;max-height:60vh;overflow:auto;display:flex;flex-direction:column;gap:4px;min-width:180px}
+.mapa-zona-pick-h{font-size:11px;font-weight:800;color:var(--bl);text-transform:uppercase;letter-spacing:.04em;padding:2px 4px 4px}
+.mapa-zona-pick-b{padding:7px 10px;border:1px solid var(--border);background:#fff;color:var(--ink);border-radius:7px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;text-align:left}
+.mapa-zona-pick-b:hover{background:#FFF3E0;border-color:var(--o)}
+.mapa-zona-pick-x{margin-top:4px;padding:6px 10px;border:none;background:transparent;color:var(--bl);font-size:12px;font-weight:700;cursor:pointer;font-family:inherit}
 .mapa-toggle-btn{padding:6px 12px;border:1px solid var(--border);background:#fff;color:var(--ink2);border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;transition:.12s;white-space:nowrap}
 .mapa-toggle-btn:hover{border-color:var(--o);color:var(--o)}
 .mapa-toggle-btn.on{background:var(--o);color:#fff;border-color:var(--o)}
@@ -2865,6 +2870,9 @@ body.role-single .statusbar{font-size:11px}
         <button id="mapaEditBtn" class="mapa-toggle-btn" onclick="mapaToggleEdit()">&#128205; Editar puntos</button>
         <button id="mapaAddBtn" class="mapa-toggle-btn" onclick="mapaAgregarInit()" style="display:none">&#10133; Agregar lote</button>
         <button class="mapa-draw-btn" onclick="mapaDibujarZona()">&#9999;&#65039; Dibujar sub-barrio</button>
+        <button class="mapa-draw-btn" onclick="mapaEditarZonaInit()" title="Corregir el borde de un sub-barrio arrastrando sus vértices">&#9998; Editar límite</button>
+        <button id="mapaZonaSaveBtn" class="mapa-draw-btn" onclick="mapaGuardarZonaLimite()" style="display:none;background:#2E7D32;border-color:#2E7D32">&#128190; Guardar límite</button>
+        <button id="mapaZonaCancelBtn" class="mapa-draw-btn" onclick="mapaCancelarZonaLimite()" style="display:none;background:#B23A48;border-color:#B23A48">&#10005; Cancelar</button>
         <button id="mapaCancelDrawBtn" class="mapa-draw-btn" onclick="mapaCancelarDibujo()" style="display:none;background:#B23A48;border-color:#B23A48">&#10005; Cancelar dibujo</button>
       </span>
     </div>
@@ -13183,6 +13191,7 @@ if('serviceWorker' in navigator){
   function _resNorm(v){ v=String(v||'').trim().toLowerCase(); if(v==='sí'||v==='si'||v==='permanente') return 'Permanente'; if(v==='finde'||v==='fin de semana') return 'Finde'; return ''; }
   function _resLabel(v){ v=_resNorm(v); return v==='Permanente'?'Vive todo el año':(v==='Finde'?'Fin de semana':''); }
   var _mapaBaseFeatures = [], _mapaPuntosOv = {}, _mapaEditMode = false, _mapaMovePending = null, _mapaAddPending = false, _mapaPendingLocate = null;
+  var _mapaZonaLayers = {}, _mapaZonaEditName = null;  // refs a los polígonos de sub-barrio + zona en edición de límite
   var SUBBARRIOS = ['Champagnat Alto','Champagnat Bajo','El Recuerdo','Golf','La Pionera','Argentina 1','Argentina 2','Argentina 3','Argentina 4','La Paz','Los Alcanfores','Estancias del Rio'];
   var ZCOLORS = ['#E53935','#8E24AA','#3949AB','#039BE5','#00897B','#43A047','#C0CA33','#FB8C00','#6D4C41','#F4511E','#D81B60','#5E35B1','#1E88E5','#00ACC1','#7CB342','#FDD835'];
 
@@ -13929,12 +13938,14 @@ if('serviceWorker' in navigator){
   function _renderZonas(){
     if (!_mapaZonasLayer) return;
     _mapaZonasLayer.clearLayers();
+    _mapaZonaLayers = {};
     _subZonas.forEach(function(z, i){
       var col = _zColor(i);
       // interactive:false → los clics pasan a los lotes que estan debajo del polígono
       var pg = L.polygon(z.poly, {color:col, weight:2, fillColor:col, fillOpacity:.10, interactive:false});
       pg.bindTooltip(z.nombre, {permanent:true, direction:'center', className:'mapa-zona-lbl'});
       _mapaZonasLayer.addLayer(pg);
+      _mapaZonaLayers[z.nombre] = pg;   // ref para editar el límite después
     });
     _exclZonas.forEach(function(z){
       L.polygon(z.poly, {color:'#9E9E9E', weight:1, dashArray:'4', fillColor:'#000', fillOpacity:.04, interactive:false}).addTo(_mapaZonasLayer);
@@ -14317,6 +14328,72 @@ if('serviceWorker' in navigator){
       .then(function(d){ if (d.ok){ toast('Zona borrada'); _cargarZonas(); } else toast('Error'); })
       .catch(function(err){ toast('Error: '+err.message); });
   };
+
+  // ── EDITAR EL LÍMITE (trazado) de un sub-barrio existente ──
+  // Arrastra los vértices del polígono (Leaflet.draw). Guarda con el MISMO nombre →
+  // el backend hace upsert (crmZonaSave actualiza por nombre). Al guardar, los lotes
+  // se re-asignan al sub-barrio correcto según el borde nuevo.
+  window.mapaEditarZonaInit = function(){
+    if (!_mapaObj || !window.L || !L.Edit || !L.Edit.Poly){ toast('El mapa todavía se está cargando'); return; }
+    if (!_subZonas.length){ toast('No hay sub-barrios dibujados todavía'); return; }
+    if (_mapaZonaEditName){ toast('Ya estás editando "'+_mapaZonaEditName+'". Guardá o cancelá primero.'); return; }
+    var old = el('mapaZonaPick'); if (old && old.parentNode) old.parentNode.removeChild(old);
+    var box = document.createElement('div'); box.id = 'mapaZonaPick'; box.className = 'mapa-zona-pick';
+    box.innerHTML = '<div class="mapa-zona-pick-h">Editar límite de…</div>'
+      + _subZonas.map(function(z){ return '<button class="mapa-zona-pick-b" onclick="mapaZonaEditStart(\''+encodeURIComponent(z.nombre)+'\')">'+escHtml(z.nombre)+'</button>'; }).join('')
+      + '<button class="mapa-zona-pick-x" onclick="var e=document.getElementById(\'mapaZonaPick\');if(e&&e.parentNode)e.parentNode.removeChild(e);">Cancelar</button>';
+    var host = el('mapaMap'); (host||document.body).appendChild(box);
+    try { if (window.L && L.DomEvent){ L.DomEvent.disableClickPropagation(box); L.DomEvent.disableScrollPropagation(box); } } catch(e){}
+  };
+  window.mapaZonaEditStart = function(nombreEnc){
+    var nombre = decodeURIComponent(nombreEnc);
+    var pk = el('mapaZonaPick'); if (pk && pk.parentNode) pk.parentNode.removeChild(pk);
+    var pg = _mapaZonaLayers[nombre];
+    if (!pg){ toast('No encontré el polígono de "'+nombre+'"'); return; }
+    _mapaZonaEditName = nombre;
+    try { pg.setStyle({interactive:true, weight:3, fillOpacity:.18, dashArray:null}); } catch(e){}
+    try { if (!pg.editing) pg.editing = new L.Edit.Poly(pg); pg.editing.enable(); pg.bringToFront(); }
+    catch(e){ toast('No pude activar la edición'); _mapaZonaEditName=null; return; }
+    var sb=el('mapaZonaSaveBtn'), cb=el('mapaZonaCancelBtn');
+    if (sb) sb.style.display='inline-flex'; if (cb) cb.style.display='inline-flex';
+    if (sb) sb.textContent='💾 Guardar «'+nombre+'»';
+    toast('Arrastrá los puntos del borde de "'+nombre+'". Los puntos claros (medios) agregan vértices nuevos. Guardá al terminar.');
+  };
+  window.mapaGuardarZonaLimite = function(){
+    var nombre = _mapaZonaEditName; if (!nombre){ return; }
+    var pg = _mapaZonaLayers[nombre]; if (!pg){ _mapaZonaLimiteFin(); return; }
+    var lls = pg.getLatLngs(); var ring = (lls && Array.isArray(lls[0])) ? lls[0] : lls;
+    if (!ring || ring.length < 3){ toast('El sub-barrio necesita al menos 3 puntos'); return; }
+    var poly = ring.map(function(p){ return [p.lat, p.lng]; });
+    try { if (pg.editing) pg.editing.disable(); } catch(e){}
+    var sb=el('mapaZonaSaveBtn'), cb=el('mapaZonaCancelBtn');
+    if (sb) sb.style.display='none'; if (cb) cb.style.display='none';
+    toast('Guardando límite de '+nombre+'…');
+    fetch(CRM_API, {method:'POST', mode:'cors', body: JSON.stringify({action:'crmZonaSave', nombre:nombre, poly:poly, tipo:'zona'})})
+      .then(function(r){ return r.json(); })
+      .then(function(d){
+        if (!(d && d.ok)) throw new Error((d && d.error) || 'no se pudo');
+        // Actualizar en memoria + re-asignar lotes al borde nuevo (instantáneo, sin refetch).
+        for (var i=0;i<_mapaZonas.length;i++){ if (_mapaZonas[i].nombre===nombre){ _mapaZonas[i].poly=poly; } }
+        _subZonas = _mapaZonas.filter(function(z){ return z.tipo !== 'excluir'; });
+        _renderZonas(); _recolorLotes(); _renderLegend(); if (typeof _mapaUpdateTooltips==='function') _mapaUpdateTooltips();
+        toast('✅ Límite de '+nombre+' actualizado — lotes re-asignados');
+      })
+      .catch(function(e){ toast('⚠️ No se pudo guardar: '+e.message); if (typeof _cargarZonas==='function') _cargarZonas(); });
+    _mapaZonaEditName = null;
+  };
+  window.mapaCancelarZonaLimite = function(){
+    var pg = _mapaZonaEditName ? _mapaZonaLayers[_mapaZonaEditName] : null;
+    if (pg){ try { if (pg.editing) pg.editing.disable(); } catch(e){} }
+    _mapaZonaLimiteFin();
+    _renderZonas();  // revertir el visual al original
+  };
+  function _mapaZonaLimiteFin(){
+    _mapaZonaEditName = null;
+    var sb=el('mapaZonaSaveBtn'), cb=el('mapaZonaCancelBtn');
+    if (sb) sb.style.display='none'; if (cb) cb.style.display='none';
+    var pk=el('mapaZonaPick'); if (pk && pk.parentNode) pk.parentNode.removeChild(pk);
+  }
 
   window.crmCopyTel = function(tel){
     var full = '+549' + tel;
