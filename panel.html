@@ -5262,6 +5262,15 @@ function setOrigen(el){
 
 // Deshace el origen de un pedido (vuelve a Pendiente y borra OC asociadas).
 // Mismo patrón optimista que confirmarOrigen.
+// Ventana de gracia (15s) para el aviso de OCs huérfanas: se setea acá y en
+// confirmarOrigen para que, mientras load() reconcilia D.oc.lista, no aparezca
+// un banner falso "OC sin generar" sobre el pedido que Tadeo acaba de tocar.
+var _ultimoCambioOrigenTs = 0;
+function _marcarCambioOrigen(){
+  _ultimoCambioOrigenTs = Date.now();
+  // Re-render al terminar la ventana de gracia por si sigue habiendo huérfanos reales
+  setTimeout(function(){ try{ if(typeof render==='function') render(); }catch(_e){} }, 15200);
+}
 function confirmarDeshacerOrigen(btn){
   if(btn.disabled)return;
   var hoja=btn.dataset.h, id=btn.dataset.n, row=Number(btn.dataset.r)||0, cli=btn.dataset.c||'';
@@ -5269,6 +5278,7 @@ function confirmarDeshacerOrigen(btn){
   btn.disabled=true;btn.textContent='Deshaciendo...';
   // Tras la acción, scroll al top para que Tadeo no tenga que volver arriba a mano.
   window._forceTopOnRender=true;
+  _marcarCambioOrigen();
   showLoader('Deshaciendo origen...');
   fetch(API,{method:'POST',body:JSON.stringify({action:'deshacerOrigen',hoja:hoja,id:id,row:row})})
     .then(function(r){return r.json();})
@@ -5602,6 +5612,9 @@ function guardarEditor(uid){
   if(!confirm('Guardar cambios al pedido?\n\n'+resumen+'\n\n'+_aviso))return;
   // Tras la acción, scroll al top.
   window._forceTopOnRender=true;
+  // Editar productos puede resetear origen a Pendiente o auto-reservar → tratarlo como
+  // cambio de origen para la ventana de gracia del aviso de OCs huérfanas.
+  if(typeof _marcarCambioOrigen==='function') _marcarCambioOrigen();
   showLoader('Guardando cambios...');
   // Snapshot del pedido para UI optimista antes de mandar
   var _edHoja=ed.hoja, _edId=ed.id;
@@ -5705,6 +5718,7 @@ function confirmarOrigen(btn){
   btn.disabled=true;btn.textContent='Guardando...';btn.classList.add('saving');
   // Tras la acción, scroll al top para que Tadeo no tenga que volver arriba a mano.
   window._forceTopOnRender=true;
+  _marcarCambioOrigen();
   showLoader('Guardando origen...');
   // Calcular el origen resultante (Deposito / Orden de Compra / Mixto) para UI optimista
   var anyD=false,anyOC=false;
@@ -7270,8 +7284,14 @@ function rPedidos(opts){
 
   var ct=$(listId);if(!ct)return;ct.innerHTML='';
   // Aviso de OCs huérfanas (ignora los filtros de canal/estado para no ocultarse).
+  // Ventana de gracia: si Tadeo acaba de confirmar/deshacer origen en el panel,
+  // el UI optimista marca el pedido como "Orden de Compra" antes de que load()
+  // refresque D.oc.lista → sale un banner falso durante ~15s. Suprimimos el
+  // banner hasta que pasen 15s del último cambio de origen o hasta el próximo
+  // render post-load (lo que ocurra primero).
+  var _dentroGraciaOC = (typeof _ultimoCambioOrigenTs==='number') && (Date.now() - _ultimoCambioOrigenTs < 15000);
   var _orphans=(D.pedidos||[]).filter(function(p){ if(homeOnly&&p.h!=='Home')return false; return _esOrphanOC(p); });
-  var _orphanBanner=_orphans.length?_ocOrphanBannerHtml(_orphans):'';
+  var _orphanBanner=(_orphans.length && !_dentroGraciaOC)?_ocOrphanBannerHtml(_orphans):'';
   // Filter out empty rows (no client or $0)
   var fl=D.pedidos.filter(function(p){
     if(p.hist)return false;
