@@ -13482,8 +13482,13 @@ if('serviceWorker' in navigator){
     fetch(CRM_API + '?action=crmLotes')
       .then(function(r){ return r.json(); })
       .then(function(d){
-        _mapaLotesData = {};
-        (d.lotes||[]).forEach(function(r){ _mapaLotesData[_crmNormName(r.sub)+'|'+_loteNorm(r.lote)] = r; });
+        var L=(d&&d.lotes)||null;
+        if(!(L && L.length)){ if(cb)cb(); return; }   // vacío/fallido → NO pisar el roster bueno
+        var map={};
+        L.forEach(function(r){ if(r&&r.sub!=null&&r.lote!=null) map[_crmNormName(r.sub)+'|'+_loteNorm(r.lote)] = r; });
+        if(typeof _prunePendingLotes==='function') _prunePendingLotes(map);
+        if(window._applyPendingLotes) window._applyPendingLotes(map);   // ediciones locales recientes ganan
+        _mapaLotesData = map;
         _mapaUpdateTooltips();
         if (cb) cb();
       })
@@ -13520,6 +13525,9 @@ if('serviceWorker' in navigator){
   // sigue refrescando por detrás para la frescura. Se regenera aparte (commit / rutina).
   var _snapTried=false;
   window.estSnapshotSeed = function(cb){
+    var pend=2, anyC=false;
+    function done(){ if(--pend<=0) cb(anyC); }
+    // 1) CLIENTES (mismo patrón de siempre)
     fetch('crm-clientes-snapshot.json', {cache:'default'})
       .then(function(r){ return r.ok ? r.json() : null; })
       .then(function(d){
@@ -13527,10 +13535,30 @@ if('serviceWorker' in navigator){
         if(l && l.length){
           if(!(crmClientes && crmClientes.length)) crmClientes=l;   // sembramos global solo si estaba vacío
           try{ window._lsSetSafe('maleu_crm_clientes_v1', JSON.stringify(l)); }catch(e){}
+          anyC=true;
         }
-        cb(!!(l && l.length));
+        done();
       })
-      .catch(function(){ _snapTried=true; cb(false); });
+      .catch(function(){ _snapTried=true; done(); });
+    // 2) LOTES (roster: familias/composición/visitas/dueño). El endpoint crmLotes es tan
+    // flaky como crmClientes en algunos navegadores → si el roster no carga, se ven los
+    // apellidos AUTO-DEDUCIDOS y parece que "no se guardó nada". El snapshot (verdad de la
+    // hoja, regenerado por rutina) garantiza el roster. Base = snapshot; overlay = cache
+    // local (ediciones recientes de este equipo ganan).
+    fetch('crm-lotes-snapshot.json', {cache:'default'})
+      .then(function(r){ return r.ok ? r.json() : null; })
+      .then(function(d){
+        var L=(d&&d.lotes)||null;
+        if(L && L.length){
+          var base={}; L.forEach(function(r){ if(r&&r.sub!=null&&r.lote!=null) base[_crmNormName(r.sub)+'|'+_loteNorm(r.lote)]=r; });
+          _prunePendingLotes(base);                    // saca del pendiente lo que el snapshot ya trae
+          window._applyPendingLotes(base);             // overlay: ediciones locales recientes ganan
+          _mapaLotesData=base;                         // el snapshot es la verdad de la hoja → autoridad del roster
+          try{ window._lsSetSafe('maleu_crm_lotes_v1', JSON.stringify(Object.keys(base).map(function(k){return base[k];}))); }catch(e){}
+        }
+        done();
+      })
+      .catch(function(){ done(); });
   };
   // SÍNCRONO: devuelve {hogares,prospectos} desde cache, o null si no hay nada cacheado.
   window.estHogaresSync = function(){
@@ -13589,8 +13617,27 @@ if('serviceWorker' in navigator){
     cur.sub = sub; cur.lote = lote;
     _mapaLotesData[key] = cur;
     _estCacheLotes();
+    // Store de EDICIONES LOCALES PENDIENTES: sobrevive a que el snapshot (verdad de la
+    // hoja) sea ~1h viejo o a que la cache full se pise. Siempre gana sobre el snapshot,
+    // así una edición recién hecha NUNCA "desaparece" al refrescar. Se poda cuando el
+    // snapshot ya la trae (estSnapshotSeed).
+    try{ var pend=JSON.parse(localStorage.getItem('maleu_crm_lotes_pending_v1')||'{}')||{}; pend[key]=cur; window._lsSetSafe('maleu_crm_lotes_pending_v1', JSON.stringify(pend)); }catch(e){}
     if (typeof _mapaUpdateTooltips==='function') { try{ _mapaUpdateTooltips(); }catch(e){} }
   };
+  // Superpone las ediciones locales pendientes sobre un roster (mapa key→rec). Local gana.
+  window._applyPendingLotes = function(map){
+    try{ var pend=JSON.parse(localStorage.getItem('maleu_crm_lotes_pending_v1')||'{}')||{}; for(var k in pend){ if(pend[k]) map[k]=pend[k]; } }catch(e){}
+    return map;
+  };
+  // Poda del store pendiente: saca las claves que el snapshot ya refleja (familia+comp iguales).
+  function _prunePendingLotes(base){
+    try{
+      var pend=JSON.parse(localStorage.getItem('maleu_crm_lotes_pending_v1')||'{}')||{}, changed=false;
+      function sig(r){ if(!r)return ''; var c=r.composicion; if(typeof c!=='string'){ try{c=JSON.stringify(c||{});}catch(e){c='';} } return (r.familia||'')+'|'+(r.titular||'')+'|'+(r.tel||'')+'|'+(r.reside||'')+'|'+(r.notas||'')+'|'+c; }
+      for(var k in pend){ if(base[k] && sig(base[k])===sig(pend[k])){ delete pend[k]; changed=true; } }
+      if(changed) window._lsSetSafe('maleu_crm_lotes_pending_v1', JSON.stringify(pend));
+    }catch(e){}
+  }
   window.crmLoteGetLocal = function(sub, lote){
     if (!_mapaLotesData){ try{ var lc=JSON.parse(localStorage.getItem('maleu_crm_lotes_v1')||'null'); if(lc&&lc.length){ _mapaLotesData={}; lc.forEach(function(r){ _mapaLotesData[_crmNormName(r.sub)+'|'+_loteNorm(r.lote)]=r; }); } }catch(e){} }
     return (_mapaLotesData||{})[_crmNormName(sub)+'|'+_loteNorm(lote)] || null;
@@ -18901,6 +18948,13 @@ if('serviceWorker' in navigator){
     return arr;
   }
   function _hogRenderList(){
+    // Guard anti-lag: tras editar una casa, _estHog puede quedar null un instante
+    // (rebuild en curso). Si está vacío, reconstruyo YA desde cache sincrónica antes de
+    // pintar → nunca muestro "Ninguna casa" falso al tocar un filtro.
+    if(!(_estHog&&_estHog.hogares&&_estHog.hogares.length)){
+      try{ var raw=window.estHogaresSync&&window.estHogaresSync(); if(raw&&raw.hogares&&raw.hogares.length){ _estRaw=raw; _estMerges=_mergesCache(); _estHog=_applyMerges(raw,_estMerges); } }catch(e){}
+      if(!(_estHog&&_estHog.hogares&&_estHog.hogares.length)){ var cc=_estHogCacheLoad(); if(cc)_estHog=cc; }
+    }
     var vi=_hogVistas[_hogFiltro.vista]||_hogVistas.todos;
     var arr=_hogFilteredSorted();
     var d=E$('estHogDesc'); if(d) d.innerHTML=(_hogFiltro.vista!=='todos'&&vi.desc)?('<div style="font-size:12px;color:var(--bl);margin:2px 2px 10px;line-height:1.4">'+vi.icon+' '+vi.desc+'</div>'):'';
