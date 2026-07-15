@@ -16457,7 +16457,7 @@ if('serviceWorker' in navigator){
             var it = (crmClientes||[]).filter(function(x){ return x.key === c.key; })[0];
             if (it){
               if (body.nombreCanonico) it.nombre = body.nombreCanonico;
-              it.cumple = body.cumple; it.tags = body.tags; it.notas = body.notas; it.aliasMp = body.aliasMp;
+              it.cumple = body.cumple; it.tags = body.tags; it.notas = body.notas; it.aliasMp = body.aliasMp; it.apodo = body.apodo;
               it.nombresOcultos = body.nombresOcultos || [];
               it.subBarrioMapa = body.subBarrioMapa; it.loteMapa = body.loteMapa; it.barrioMapa = body.barrioMapa; it.canalMapa = body.canalMapa; it.sinUbicacion = !!body.sinUbicacion;
               it.canalesExtra = body.canalesExtra || [];
@@ -19311,6 +19311,40 @@ if('serviceWorker' in navigator){
   window.estCliBusq=function(v){ _cliFiltro.busq=(v||'').toLowerCase().trim(); _cliRenderList(); };
   window.estCliOrden=function(o){ _cliFiltro.orden=o; document.querySelectorAll('#estClientes .est-chip[data-o]').forEach(function(b){b.classList.toggle('on',b.dataset.o===o);}); _cliRenderList(); };
   window.estCliEstado=function(e){ _cliFiltro.estado=e; document.querySelectorAll('#estClientes .est-chip[data-e]').forEach(function(b){b.classList.toggle('on',b.dataset.e===e);}); _cliRenderList(); };
+  // ─────────── EXPORTAR CSV PARA WATI (importación de contactos) ───────────
+  // Descarga el filtro actual con las 6 columnas EXACTAS que espera WATI:
+  // Name · CountryCode(54) · Phone(9+número, 11 díg) · AllowCampaign(True) · AllowSMS(True) · Apodo
+  function _telWati(tel){
+    var d=String(tel||'').replace(/\D/g,'');
+    if(!d) return '';
+    if(d.indexOf('54')===0 && d.length>10) d=d.slice(2);      // ya traía 54 → sacarlo (va en CountryCode)
+    if(d.length===11 && d.charAt(0)==='9') return d;           // ya es 9+10díg
+    if(d.length===10) return '9'+d;                            // 11XXXXXXXX → 911XXXXXXXX
+    return d.length>=8 ? '9'+d : '';                           // fallback razonable
+  }
+  function _csvCell(v){ v=(v==null?'':String(v)); return /[",\n;]/.test(v) ? '"'+v.replace(/"/g,'""')+'"' : v; }
+  window.estCliDescargarCSV=function(){
+    var arr=(typeof _cliFilteredSorted==='function')?_cliFilteredSorted():[];
+    if(!arr.length){ _toast('No hay clientes en el filtro actual'); return; }
+    var rows=[['Name','CountryCode','Phone','AllowCampaign','AllowSMS','Apodo']], sinTel=0;
+    arr.forEach(function(c){
+      var phone=_telWati(c.telDisplay||c.tel);
+      if(!phone){ sinTel++; return; }   // sin teléfono no sirve para WATI
+      rows.push([_tcNombre(c.nombre||''), '54', phone, 'True', 'True', (c.apodo||'')]);
+    });
+    if(rows.length<=1){ _toast('Ningún cliente del filtro tiene teléfono válido'); return; }
+    var csv=rows.map(function(r){ return r.map(_csvCell).join(','); }).join('\r\n');
+    // BOM UTF-8 para que Excel muestre bien los acentos.
+    var blob=new Blob([String.fromCharCode(0xFEFF)+csv], {type:'text/csv;charset=utf-8;'});
+    var etiquetas={'':'todos','activo':'activos','dormido':'dormidos','inactivo':'inactivos','nuevo':'nuevos','pendiente':'pendientes','visitante':'visitantes'};
+    var seg=etiquetas[_cliFiltro.estado]||'clientes';
+    var f=new Date(), z=function(n){return (n<10?'0':'')+n;};
+    var fname='maleu-estancias-'+seg+'-'+f.getFullYear()+z(f.getMonth()+1)+z(f.getDate())+'.csv';
+    var url=URL.createObjectURL(blob), a=document.createElement('a');
+    a.href=url; a.download=fname; document.body.appendChild(a); a.click();
+    setTimeout(function(){ document.body.removeChild(a); URL.revokeObjectURL(url); }, 400);
+    _toast('⬇️ '+(rows.length-1)+' contactos'+(sinTel?(' · '+sinTel+' sin tel omitidos'):'')+' → '+fname);
+  };
   // "Visitante": persona que pide a una casa de Estancias pero NO reside (novia,
   // prima, amigo). No es cliente residente → sale de Clientes y de Hogares. El pedido
   // queda intacto (fue una entrega real → sigue en el Pulso). Flag de persona en la
@@ -19365,6 +19399,7 @@ if('serviceWorker' in navigator){
         +(pend>0?'<button class="est-chip" data-e="pendiente" onclick="estCliEstado(\'pendiente\')">🕒 Pendientes ('+pend+')</button>':'')
         +(visN>0?'<button class="est-chip" data-e="visitante" onclick="estCliEstado(\'visitante\')">🚶 Visitas ('+visN+')</button>':'')
         +'<span style="margin-left:auto;font-size:11px;color:var(--bl);font-weight:700" id="estCliCount"></span></div>'
+        +'<div class="est-ctl-row"><button class="est-chip" style="background:#1f7a3d;color:#fff;border-color:#1f7a3d;font-weight:700" onclick="estCliDescargarCSV()" title="Descarga los clientes del filtro actual como CSV listo para importar contactos en WATI (Excel)">⬇️ Descargar CSV para WATI (filtro actual)</button></div>'
         +'</div><div id="estCliList"></div>';
       host.innerHTML=html;
       _cliRenderList();
