@@ -5742,9 +5742,22 @@ function confirmarOrigen(btn){
   productos.forEach(function(p){if(p.d>0)anyD=true;if(p.oc>0)anyOC=true;});
   var nuevoOrigen=(anyD&&!anyOC)?'Deposito':(anyOC&&!anyD)?'Orden de Compra':(anyD&&anyOC)?'Mixto':'Pendiente';
   var detalleObj={};productos.forEach(function(p){detalleObj[p.a]={d:p.d,oc:p.oc};});
-  fetch(API,{method:'POST',body:JSON.stringify({action:'setOrigenProductos',hoja:hoja,id:id,row:row,productos:productos})})
+  // enviar(force): force=true reintenta pasando por encima del aviso de OC comprometida.
+  function enviar(force){
+    fetch(API,{method:'POST',body:JSON.stringify({action:'setOrigenProductos',hoja:hoja,id:id,row:row,productos:productos,force:!!force})})
     .then(function(r){return r.json();})
     .then(function(r){
+      // Backend pide confirmación: una OC destructiva toca algo ya comprometido con el proveedor.
+      if(r&&r.needsConfirm){
+        hideLoader(true);
+        if(confirm(_warnOCMsg(r.warn))){
+          showLoader('Guardando origen...');
+          enviar(true);
+        }else{
+          window._forceTopOnRender=false;btn.disabled=false;btn.textContent='CONFIRMAR ORIGEN';btn.classList.remove('saving');
+        }
+        return;
+      }
       if(r.ok){
         // UI optimista: actualizar el pedido en D.pedidos y re-renderizar al instante.
         if(D&&D.pedidos){
@@ -5758,12 +5771,26 @@ function confirmarOrigen(btn){
           }
         }
         render();hideLoader(true);
-        toast('Origen guardado');
+        var _m='Origen guardado';
+        if(r.ocBorradas>0) _m+=' · '+r.ocBorradas+' OC quitada'+(r.ocBorradas>1?'s':'');
+        toast(_m);
         load().then(function(){window._forceTopOnRender=false;}); // reconciliar en background
       }
       else{hideLoader(true);window._forceTopOnRender=false;btn.disabled=false;btn.textContent='ERROR: '+(r.error||r.err||'?');btn.classList.remove('saving');}
     })
     .catch(function(){hideLoader(true);window._forceTopOnRender=false;btn.disabled=false;btn.textContent='REINTENTAR';btn.classList.remove('saving');});
+  }
+  enviar(false);
+}
+// Arma el texto del aviso cuando retroceder una OC toca algo ya comprometido con el proveedor.
+function _warnOCMsg(warn){
+  var lines=(warn||[]).map(function(w){
+    var nm=(PN[w.abbr]||w.abbr);
+    var acc=(w.accion==='quitar')?'sacar de OC':'bajar cantidad';
+    var est=(w.estado==='Recibido')?'ya RECIBIDA (la mercadería entró al stock)':'ya pasó el cutoff del jueves (capaz ya se la pasaste al proveedor)';
+    return '• '+nm+': '+acc+' — '+est;
+  });
+  return '⚠️ Ojo antes de retroceder:\n\n'+lines.join('\n')+'\n\n¿Modificar igual?';
 }
 
 // Helper: actualiza un campo de un pedido en D.pedidos (UI optimista).
