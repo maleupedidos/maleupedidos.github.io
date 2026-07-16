@@ -19185,7 +19185,7 @@ if('serviceWorker' in navigator){
 
   // ─────────── sub-tab CLIENTES (individuales de Estancias del Pilar) ───────────
   var _estCli=null;
-  var _cliFiltro={busq:'',orden:'ultima',estado:''};
+  var _cliFiltro={busq:'',orden:'ultima',estado:'',integrante:''};  // estado e integrante = 2 dimensiones independientes
   // Esta es una tab de ESTANCIAS: las métricas primarias son SOLO Home/Estancias
   // (los *Home del backend v424), NUNCA el total cross-canal (que incluye Clubes).
   // Si no, un residente que compra fuerte por Clubes (ej. Josefina Del Bono) se
@@ -19299,18 +19299,17 @@ if('serviceWorker' in navigator){
   // mañana) es la actividad MÁS reciente → va arriba de todo (antes Su caía al fondo).
   function _cliRec(v){ return (v.diasUltima>=0)?v.diasUltima:((v.pend>0)?-1:99999); }
   function _cliFilteredSorted(){
+    var fe=_cliFiltro.estado||'', fi=_cliFiltro.integrante||'';
     var arr=(_estCli||[]).filter(function(c){
-      var f=_cliFiltro.estado;
-      // Visita = pidió a una casa de Estancias pero no reside. Se muestra SOLO en su
-      // propio filtro; en cualquier otra vista (residentes) no aparece.
-      if(f==='visitante'||f==='visita'){ if(!c.visitante) return false; }
-      else if(c.visitante) return false;
-      // Tipo de integrante (residencia) entre residentes.
-      if(f==='vive'||f==='finde'){ if((c.residencia||'')!==f) return false; }
-      else if(f && f!=='visitante' && f!=='visita'){
-        // "Pendientes" agrupa a TODO cliente con pedido en curso, tenga o no historial.
-        if(f==='pendiente'){ if(!(_cliH(c).pend>0)) return false; }
-        else if(_cliEstadoNorm(c)!==f) return false;
+      var esVis=!!c.visitante;
+      // DIMENSIÓN INTEGRANTE (residencia). Sin filtro → ocultar visitas (vista de residentes).
+      if(fi==='visita'||fi==='visitante'){ if(!esVis) return false; }
+      else if(fi==='vive'||fi==='finde'){ if(esVis || (c.residencia||'')!==fi) return false; }
+      else if(esVis) return false;
+      // DIMENSIÓN ESTADO (recencia/salud) — independiente, se cruza con la anterior.
+      if(fe){
+        if(fe==='pendiente'){ if(!(_cliH(c).pend>0)) return false; }
+        else if(_cliEstadoNorm(c)!==fe) return false;
       }
       if(_cliFiltro.busq){ var hay=((c.nombre||'')+' '+(c.subBarrio||'')+' '+(c.lote||'')+' '+(c.telDisplay||c.tel||'')).toLowerCase(); if(hay.indexOf(_cliFiltro.busq)<0) return false; }
       return true;
@@ -19336,7 +19335,10 @@ if('serviceWorker' in navigator){
   }
   window.estCliBusq=function(v){ _cliFiltro.busq=(v||'').toLowerCase().trim(); _cliRenderList(); };
   window.estCliOrden=function(o){ _cliFiltro.orden=o; document.querySelectorAll('#estClientes .est-chip[data-o]').forEach(function(b){b.classList.toggle('on',b.dataset.o===o);}); _cliRenderList(); };
-  window.estCliEstado=function(e){ _cliFiltro.estado=e; document.querySelectorAll('#estClientes .est-chip[data-e]').forEach(function(b){b.classList.toggle('on',b.dataset.e===e);}); _cliRenderList(); };
+  // Estado e Integrante son 2 dimensiones INDEPENDIENTES y toggleables: re-tocar el
+  // chip activo lo desactiva (vuelve a "todos" en esa dimensión). Se pueden cruzar.
+  window.estCliEstado=function(e){ _cliFiltro.estado=(e && _cliFiltro.estado===e)?'':e; document.querySelectorAll('#estClientes .est-chip[data-e]').forEach(function(b){b.classList.toggle('on',b.dataset.e===(_cliFiltro.estado||''));}); _cliRenderList(); };
+  window.estCliIntegrante=function(i){ _cliFiltro.integrante=(_cliFiltro.integrante===i)?'':i; document.querySelectorAll('#estClientes .est-chip[data-i]').forEach(function(b){b.classList.toggle('on',b.dataset.i===_cliFiltro.integrante);}); _cliRenderList(); };
   // ─────────── EXPORTAR CSV PARA WATI (importación de contactos) ───────────
   // Descarga el filtro actual con las 6 columnas EXACTAS que espera WATI:
   // Name · CountryCode(54) · Phone(9+número, 11 díg) · AllowCampaign(True) · AllowSMS(True) · Apodo
@@ -19362,8 +19364,9 @@ if('serviceWorker' in navigator){
     var csv=rows.map(function(r){ return r.map(_csvCell).join(','); }).join('\r\n');
     // BOM UTF-8 para que Excel muestre bien los acentos.
     var blob=new Blob([String.fromCharCode(0xFEFF)+csv], {type:'text/csv;charset=utf-8;'});
-    var etiquetas={'':'todos','activo':'activos','dormido':'dormidos','inactivo':'inactivos','nuevo':'nuevos','pendiente':'pendientes','visitante':'visitantes'};
-    var seg=etiquetas[_cliFiltro.estado]||'clientes';
+    var etiE={'':'','activo':'activos','dormido':'dormidos','inactivo':'inactivos','nuevo':'nuevos','pendiente':'pendientes'};
+    var etiI={'':'','vive':'vive','finde':'finde','visita':'visitas','visitante':'visitas'};
+    var seg=[etiE[_cliFiltro.estado]||'',etiI[_cliFiltro.integrante]||''].filter(Boolean).join('-')||'todos';
     var f=new Date(), z=function(n){return (n<10?'0':'')+n;};
     var fname='maleu-estancias-'+seg+'-'+f.getFullYear()+z(f.getMonth()+1)+z(f.getDate())+'.csv';
     var url=URL.createObjectURL(blob), a=document.createElement('a');
@@ -19427,16 +19430,17 @@ if('serviceWorker' in navigator){
         +(pend>0?'<button class="est-chip" data-e="pendiente" onclick="estCliEstado(\'pendiente\')">🕒 Pendientes ('+pend+')</button>':'')
         +'<span style="margin-left:auto;font-size:11px;color:var(--bl);font-weight:700" id="estCliCount"></span></div>'
         +('<div class="est-ctl-row"><span class="est-ctl-lbl">Integrante</span>'
-          +'<button class="est-chip" data-e="vive" onclick="estCliEstado(\'vive\')">🏠 Vive ('+viveN+')</button>'
-          +'<button class="est-chip" data-e="finde" onclick="estCliEstado(\'finde\')">📅 Fin de semana ('+findeN+')</button>'
-          +'<button class="est-chip" data-e="visitante" onclick="estCliEstado(\'visitante\')">🚶 Visitas ('+visN+')</button>'
-          +'<span class="est-ctl-hint" style="font-size:11px;color:var(--bl);align-self:center">clasificá cada uno en su ficha ✎</span></div>')
+          +'<button class="est-chip" data-i="vive" onclick="estCliIntegrante(\'vive\')">🏠 Vive ('+viveN+')</button>'
+          +'<button class="est-chip" data-i="finde" onclick="estCliIntegrante(\'finde\')">📅 Fin de semana ('+findeN+')</button>'
+          +'<button class="est-chip" data-i="visita" onclick="estCliIntegrante(\'visita\')">🚶 Visitas ('+visN+')</button>'
+          +'<span class="est-ctl-hint" style="font-size:11px;color:var(--bl);align-self:center">se cruza con Estado · tocá de nuevo para soltar · clasificá en la ficha ✎</span></div>')
         +'<div class="est-ctl-row"><button class="est-chip" style="background:#1f7a3d;color:#fff;border-color:#1f7a3d;font-weight:700" onclick="estCliDescargarCSV()" title="Descarga los clientes del filtro actual como CSV listo para importar contactos en WATI (Excel)">⬇️ Descargar CSV para WATI (filtro actual)</button></div>'
         +'</div><div id="estCliList"></div>';
       host.innerHTML=html;
-      // Preservar el resaltado del filtro activo tras un re-render (ej. refresh en bg).
+      // Preservar el resaltado de los filtros activos tras un re-render (ej. refresh en bg).
       document.querySelectorAll('#estClientes .est-chip[data-o]').forEach(function(b){b.classList.toggle('on',b.dataset.o===_cliFiltro.orden);});
       document.querySelectorAll('#estClientes .est-chip[data-e]').forEach(function(b){b.classList.toggle('on',b.dataset.e===(_cliFiltro.estado||''));});
+      document.querySelectorAll('#estClientes .est-chip[data-i]').forEach(function(b){b.classList.toggle('on',b.dataset.i===(_cliFiltro.integrante||''));});
       _cliRenderList();
     });
   };
