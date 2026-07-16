@@ -224,6 +224,12 @@
     .sync-btn:active { background: rgba(0,0,0,.06); opacity: .6; }
     .sync-btn.spinning { animation: syncPulse .8s ease-in-out infinite; }
     @keyframes syncPulse { 0%,100% { opacity: 1; } 50% { opacity: .4; } }
+    .dash-error { text-align: center; padding: 2.5rem 1.2rem; }
+    .dash-error .de-emoji { font-size: 2.4rem; margin-bottom: .6rem; }
+    .dash-error .de-title { font-size: 1.05rem; font-weight: 800; color: #1a1a1a; margin-bottom: .3rem; }
+    .dash-error .de-sub { font-size: .82rem; color: #777; margin-bottom: 1rem; line-height: 1.4; }
+    .dash-error .de-btn { background: #e65100; color: #fff; border: none; border-radius: 12px; padding: .8rem 1.4rem; font-family: inherit; font-size: .9rem; font-weight: 800; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+    .dash-error .de-btn:active { opacity: .7; }
     .summary-box { background: #f5f5f5; border-radius: 8px; padding: .8rem; }
     .sum-row { display: flex; justify-content: space-between; font-size: .85rem; padding: .25rem 0; }
     .sum-row.total { font-weight: 700; font-size: 1rem; border-top: 2px solid #ddd; padding-top: .5rem; margin-top: .3rem; }
@@ -1151,6 +1157,29 @@ function enterDashboard() {
 }
 
 /* ═══════ DASHBOARD — SWR (stale-while-revalidate) ═══════ */
+// Fetch del dashboard con REINTENTOS + backoff. Igual que el envío de pedidos,
+// no puede depender de una sola llamada: Apps Script a veces tarda/falla y en
+// el celular con señal floja pasa seguido. Sin esto, un fallo transitorio hacía
+// que el vendedor viera "no tenés pedidos" (bug Fini 16/07/2026).
+function _fetchDashboardRetry(maxAttempts) {
+  maxAttempts = maxAttempts || 4;
+  var attempt = 0;
+  function _try() {
+    attempt++;
+    return fetch(APPS_SCRIPT_URL + '?action=dashboardVendedor&nombre=' + encodeURIComponent(session.nombre), { cache: 'no-store' })
+      .then(function(r){ if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+      .then(function(d){ if (!d || !d.ok) throw new Error((d && d.err) || 'ok=false'); return d; })
+      .catch(function(err){
+        if (attempt >= maxAttempts) throw err;
+        var wait = Math.min(8000, Math.pow(2, attempt) * 1000); // 2s, 4s, 8s
+        return new Promise(function(res){ setTimeout(res, wait); }).then(_try);
+      });
+  }
+  return _try();
+}
+
+// Devuelve una promesa que resuelve true (cargó fresco) o false (falló). NUNCA
+// rechaza, para no dejar rejections sin manejar en los callers fire-and-forget.
 function loadDashboard() {
   // 1) Mostrar cache inmediatamente si existe (instant feel)
   var hadCache = false;
@@ -1169,26 +1198,42 @@ function loadDashboard() {
   } catch(e) {}
 
   if (!hadCache) {
-    $id('dash-loading').classList.remove('hidden');
+    // Primera carga: spinner, NUNCA contenido vacío (sino parece "sin pedidos").
+    var l0 = $id('dash-loading');
+    l0.innerHTML = '<div class="spinner"></div>';
+    l0.classList.remove('hidden');
     $id('dash-content').classList.add('hidden');
   }
 
-  // 2) Fetch en segundo plano para refrescar. Devolvemos la promesa para que
-  //    refreshPortal() sepa cuándo terminó (feedback del botón "Actualizar").
-  return fetch(APPS_SCRIPT_URL + '?action=dashboardVendedor&nombre=' + encodeURIComponent(session.nombre), { cache: 'no-store' })
-    .then(r => r.json())
-    .then(d => {
-      if (!d.ok) { if (!hadCache) toast('Error al cargar datos'); return; }
-      renderDashboard(d);
-      var now = Date.now();
-      try { localStorage.setItem('maleu_red_dash_' + session.nombre, JSON.stringify({ ts: now, data: d })); } catch(e) {}
-      _renderLastSync(now, false);
-    })
-    .catch(e => { if (!hadCache) toast('Sin conexión — mostrando datos guardados'); })
-    .finally(() => {
-      $id('dash-loading').classList.add('hidden');
-      $id('dash-content').classList.remove('hidden');
-    });
+  // 2) Fetch con reintentos.
+  return _fetchDashboardRetry(4).then(function(d){
+    renderDashboard(d);
+    var now = Date.now();
+    try { localStorage.setItem('maleu_red_dash_' + session.nombre, JSON.stringify({ ts: now, data: d })); } catch(e) {}
+    _renderLastSync(now, false);
+    $id('dash-loading').classList.add('hidden');
+    $id('dash-content').classList.remove('hidden');
+    return true;
+  }).catch(function(err){
+    // Falló la carga. CLAVE: no mostrar un dashboard vacío que parezca "sin pedidos".
+    if (hadCache) {
+      // Hay cache: dejarlo visible y avisar que está desactualizado.
+      toast('No pudimos actualizar — mostrando lo último guardado');
+      _renderLastSync(cachedTs, true);
+    } else {
+      // Sin cache y sin datos frescos: estado de error explícito con reintento.
+      $id('dash-content').classList.add('hidden');
+      var l = $id('dash-loading');
+      l.classList.remove('hidden');
+      l.innerHTML = '<div class="dash-error">' +
+        '<div class="de-emoji">📡</div>' +
+        '<div class="de-title">No pudimos cargar tus pedidos</div>' +
+        '<div class="de-sub">Puede ser la señal. Tus pedidos están guardados — tocá para reintentar.</div>' +
+        '<button class="de-btn" onclick="loadDashboard()">🔄 Reintentar</button>' +
+        '</div>';
+    }
+    return false;
+  });
 }
 
 // Refresco manual: el vendedor toca "🔄 Actualizado …" para traer datos frescos.
@@ -1201,8 +1246,8 @@ function refreshPortal() {
   if (el) { el.classList.add('spinning'); el.textContent = '🔄 Actualizando…'; el.style.color = '#666'; }
   var fin = function () { _refreshingPortal = false; if (el) el.classList.remove('spinning'); };
   var pr = loadDashboard();
-  if (pr && typeof pr.finally === 'function') {
-    pr.then(function () { toast('✓ Actualizado'); }).finally(fin);
+  if (pr && typeof pr.then === 'function') {
+    pr.then(function (ok) { toast(ok ? '✓ Actualizado' : 'No se pudo actualizar — probá de nuevo'); }).finally(fin);
   } else {
     setTimeout(fin, 800);
   }
