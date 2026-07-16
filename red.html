@@ -1120,8 +1120,9 @@ function doLogin() {
         return;
       }
       session = d;
+      session.usuario = user.toLowerCase(); // identidad estable para auto-corregir el nombre si cambia
       if ($id('f-remember').checked) {
-        try { localStorage.setItem('maleu_red_session', JSON.stringify(d)); } catch(e) {}
+        try { localStorage.setItem('maleu_red_session', JSON.stringify(session)); } catch(e) {}
       }
       enterDashboard();
     })
@@ -1153,7 +1154,43 @@ function enterDashboard() {
   try { savedTab = localStorage.getItem('maleu_red_main_tab') || 'inicio'; } catch(e) {}
   if (!['inicio','ruta','pagos'].includes(savedTab)) savedTab = 'inicio';
   setMainTab(savedTab);
-  loadDashboard();
+  // Auto-corregir el nombre por si el vendedor fue renombrado en la hoja
+  // (la sesión guardada puede tener el nombre viejo). Recién después cargar el
+  // dashboard, para consultar con el nombre correcto. Ver bug Fini 16/07/2026.
+  _resolverNombreCanonico().finally(function(){ loadDashboard(); });
+}
+
+// Pregunta al backend el nombre canónico ACTUAL usando la identidad estable de
+// la sesión (usuario o WhatsApp) y lo sincroniza. Así, si un vendedor se renombró
+// en la hoja, la sesión vieja se auto-corrige sin necesidad de re-loguear.
+// Resuelve true si el nombre cambió. Nunca rechaza.
+function _resolverNombreCanonico() {
+  if (!session) return Promise.resolve(false);
+  var u = encodeURIComponent(session.usuario || '');
+  var w = encodeURIComponent(String(session.wa || '').replace(/\D/g, ''));
+  if (!u && !w) return Promise.resolve(false);
+  var ctrl = ('AbortController' in window) ? new AbortController() : null;
+  var to = setTimeout(function(){ if (ctrl) ctrl.abort(); }, 5000);
+  var opt = { cache: 'no-store' };
+  if (ctrl) opt.signal = ctrl.signal;
+  return fetch(APPS_SCRIPT_URL + '?action=resolverVendedor&usuario=' + u + '&wa=' + w, opt)
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      if (!d || !d.ok || !d.nombre) return false;
+      var changed = (d.nombre !== session.nombre);
+      session.nombre = d.nombre;
+      if (!session.usuario && d.usuario) session.usuario = d.usuario;
+      try { localStorage.setItem('maleu_red_session', JSON.stringify(session)); } catch(e) {}
+      if (changed) {
+        var fn = (session.nombre || '').split(' ')[0];
+        var h  = $id('dash-hello');       if (h)  h.textContent  = '¡Hola ' + fn + '! 👋';
+        var hv = $id('h-vendedor-name');  if (hv) hv.textContent = session.nombre;
+        var hn = $id('h-nuevo-name');     if (hn) hn.textContent = session.nombre;
+      }
+      return changed;
+    })
+    .catch(function(){ return false; })
+    .finally(function(){ clearTimeout(to); });
 }
 
 /* ═══════ DASHBOARD — SWR (stale-while-revalidate) ═══════ */
