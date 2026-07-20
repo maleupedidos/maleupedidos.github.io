@@ -2570,6 +2570,8 @@ function _cobroCardHTML(pc, globalIdx){
   var c='<div class="cobro-card" data-sub="'+(pc.sub||0)+'" data-env="'+(pc.env||0)+'" data-desc="'+(pc.desc||0)+'" data-recalc="'+(canRecalc?'1':'0')+'" data-orig="'+pc.$+'">';
   c+='<div class="cobro-card-head"><span class="cobro-card-name">'+pc.c+' <span style="font-size:11px;color:var(--muted);font-weight:600">('+pc.h+' #'+pc.id+')</span>'+estBadge+'</span>';
   c+='<span style="text-align:right"><span class="cobro-card-total" id="cobroTotal_'+globalIdx+'">'+formatMoney(pc.$)+'</span><span class="cobro-card-total-prev" id="cobroTotalPrev_'+globalIdx+'" style="display:none"></span></span></div>';
+  var _fCard=((pc.de?pc.de+' ':'')+(pc.fe||pc.fePed||'')).trim();
+  if(_fCard)c+='<div style="font-size:11px;color:var(--muted);margin:-2px 0 4px 0">📅 '+_fCard+'</div>';
   if(pc.cobradoParcial && pc.cobradoParcial>0){
     c+='<div style="background:#FFF8E1;border-left:3px solid #F9A825;padding:8px 10px;border-radius:6px;font-size:12px">';
     c+='<div style="font-weight:700;color:#5D4037">Total facturado: '+formatMoney(pc.totalOriginal||0)+'</div>';
@@ -2607,6 +2609,43 @@ function _cobroComboBanner(pc, combo){
     +'</div>';
 }
 
+// Identidad de cliente para agrupar sus cobros ACROSS días (sin el día).
+// Nombre + teléfono: separa a los de la misma familia (mismo tel, distinto nombre:
+// Tadeo vs Rodrigo Ustariz) pero junta al mismo cliente aunque los pedidos sean de
+// días distintos. Fallback a lote/sub-barrio si no hay tel.
+function _claveCliente(e){
+  var nombre=String(e.c||'').toLowerCase().trim();
+  var tel=String(e.t||'').replace(/\D/g,'');
+  if(tel.length>=8)return 'n:'+nombre+'|t:'+tel.slice(-10);
+  return 'n:'+nombre+'|'+(e.l||'')+'|'+(e.sb||'');
+}
+
+// Card AGRUPADA de un cliente con 2+ cobros pendientes: nombre + total arriba, cada
+// pedido con su fecha y botón para cobrar individual, y un botón grande para cobrar
+// todos juntos. Reemplaza al banner+cards sueltas (más lindo y ordenado).
+function _cobroClienteGrupoHTML(grp){
+  var items=grp.items.slice().sort(function(a,b){return (parseFecha(a.fe||a.fePed||'')||0)-(parseFecha(b.fe||b.fePed||'')||0);});
+  var total=items.reduce(function(s,p){return s+(Number(p.$)||0);},0);
+  var idxsCsv=items.map(function(p){return pendientesCobro.indexOf(p);}).join(',');
+  var c='<div class="cobro-card" style="border:2px solid #F9A825;background:linear-gradient(135deg,#FFFDF7,#FFF3D6)">';
+  c+='<div class="cobro-card-head"><span class="cobro-card-name">👤 '+items[0].c+' <span style="font-size:11px;color:#B8860B;font-weight:800">· '+items.length+' cobros</span></span>';
+  c+='<span class="cobro-card-total">'+formatMoney(total)+'</span></div>';
+  c+='<div style="margin:8px 0">';
+  items.forEach(function(p){
+    var gidx=pendientesCobro.indexOf(p);
+    var fecha=(p.de?p.de.slice(0,3)+' ':'')+(p.fe||p.fePed||'');
+    c+='<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:7px 2px;border-top:1px solid #F0DCA8">'
+      +'<span style="font-size:12px;color:#5D4037;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">📅 '+fecha+' · '+p.h+' #'+p.id+'</span>'
+      +'<span style="display:flex;align-items:center;gap:8px;flex-shrink:0"><b style="font-size:13px;color:#5D4037">'+formatMoney(p.$)+'</b>'
+      +'<button type="button" class="cobro-btn-cobrado" style="padding:5px 12px;font-size:12px" onclick="abrirCobroPendiente('+gidx+')">Cobrar</button></span>'
+      +'</div>';
+  });
+  c+='</div>';
+  c+='<button type="button" class="cobro-btn-cobrado" style="width:100%;background:#F9A825;font-weight:800;letter-spacing:.02em" onclick="abrirCobroComboCobros(\''+idxsCsv+'\')">💰 Cobrar los '+items.length+' juntos · '+formatMoney(total)+'</button>';
+  c+='</div>';
+  return c;
+}
+
 function renderCobrosFromServer(){
   var el=document.getElementById('cobrosContent');
   // Guard 1: si hay un input/select de cobros con foco, NO re-renderizar (cierra el picker iOS).
@@ -2639,56 +2678,42 @@ function renderCobrosFromServer(){
     el.innerHTML=h+'<div class="empty" style="padding:30px">Nada en este filtro</div>';return;
   }
 
-  // Agrupar por día (fe = fecha de entrega; fallback fePed). Más urgente arriba.
-  var grupos={};
-  visibles.forEach(function(pc){
-    var k=pc.fe||pc.fePed||'Sin fecha';
-    if(!grupos[k])grupos[k]={ts:parseFecha(k),dia:pc.de||'',items:[],esEntrega:!!pc.feEnt};
-    grupos[k].items.push(pc);
-  });
-  var keys=Object.keys(grupos).sort(function(a,b){return grupos[a].ts-grupos[b].ts});
+  // Agrupar por CANAL, y dentro de Venta Directa / Clubes por CLIENTE (across días).
+  // Antes se agrupaba por día → el mismo cliente en días distintos quedaba suelto.
+  // Ahora: un cliente con 2+ cobros pendientes se muestra en UNA card con "cobrar juntos".
+  var porCanal={vd:[],cl:[],re:[]};
+  visibles.forEach(function(pc){porCanal[_canalDeCobro(pc)].push(pc);});
 
-  keys.forEach(function(k){
-    var g=grupos[k];
-    var subtotal=0;g.items.forEach(function(i){subtotal+=i.$});
-    var tituloPrefix=g.esEntrega?'Entrega: ':'Pedido: ';
-    // Header DÍA (grande)
-    h+='<div class="cobro-dia-header"><span>📅 '+tituloPrefix+(g.dia?g.dia+' ':'')+k+'</span><span>'+formatMoney(subtotal)+'</span></div>';
+  ['vd','cl','re'].forEach(function(canal){
+    var lista=porCanal[canal];
+    if(lista.length===0)return;
+    var totCanal=lista.reduce(function(s,p){return s+(Number(p.$)||0);},0);
+    h+='<div class="cobro-canal-header '+canal+'"><span>'+_canalCobroLabel(canal)+'</span><span>'+formatMoney(totCanal)+'</span></div>';
+    h+='<div class="cobro-section" style="border:none;padding:0">';
 
-    // Dentro del día, agrupar por CANAL: vd, cl, re
-    var porCanal={vd:[],cl:[],re:[]};
-    g.items.forEach(function(pc){porCanal[_canalDeCobro(pc)].push(pc);});
-
-    ['vd','cl','re'].forEach(function(canal){
-      var lista=porCanal[canal];
-      if(lista.length===0)return;
-      var totCanal=lista.reduce(function(s,p){return s+(Number(p.$)||0);},0);
-      h+='<div class="cobro-canal-header '+canal+'"><span>'+_canalCobroLabel(canal)+'</span><span>'+formatMoney(totCanal)+'</span></div>';
-      h+='<div class="cobro-section" style="border:none;padding:0">';
-
-      if(canal==='re'){
-        lista.forEach(function(pc){h+=_cobroVendedorHTML(pc);});
-      } else {
-        // VD/Clubes: detectar combos (cliente con 2+ pedidos en el día)
-        var porCliente={};
-        lista.forEach(function(pc){
-          var ck=_claveCombo(pc);
-          if(!porCliente[ck])porCliente[ck]={items:[],idxs:[]};
-          porCliente[ck].items.push(pc);
-          porCliente[ck].idxs.push(pendientesCobro.indexOf(pc));
-        });
-        var baneados={};
-        lista.forEach(function(pc){
-          var ck=_claveCombo(pc);
-          if(!baneados[ck] && porCliente[ck].items.length>=2){
-            baneados[ck]=true;
-            h+=_cobroComboBanner(pc, porCliente[ck]);
-          }
-          h+=_cobroCardHTML(pc, pendientesCobro.indexOf(pc));
-        });
-      }
-      h+='</div>';
-    });
+    if(canal==='re'){
+      lista.forEach(function(pc){h+=_cobroVendedorHTML(pc);});
+    } else {
+      // Agrupar por cliente (nombre+tel), sin importar el día.
+      var porCli={},orden=[];
+      lista.forEach(function(pc){
+        var ck=_claveCliente(pc);
+        if(!porCli[ck]){porCli[ck]={items:[]};orden.push(ck);}
+        porCli[ck].items.push(pc);
+      });
+      // Ordenar por urgencia: la fecha pendiente más vieja del cliente, primero.
+      orden.sort(function(a,b){
+        var fa=Math.min.apply(null,porCli[a].items.map(function(p){return parseFecha(p.fe||p.fePed||'')||9e15;}));
+        var fb=Math.min.apply(null,porCli[b].items.map(function(p){return parseFecha(p.fe||p.fePed||'')||9e15;}));
+        return fa-fb;
+      });
+      orden.forEach(function(ck){
+        var grp=porCli[ck];
+        if(grp.items.length>=2)h+=_cobroClienteGrupoHTML(grp);
+        else h+=_cobroCardHTML(grp.items[0], pendientesCobro.indexOf(grp.items[0]));
+      });
+    }
+    h+='</div>';
   });
   el.innerHTML=h;
 }
