@@ -2484,6 +2484,10 @@ function abrirCobroComboCobros(idxsCsv){
   _setMoneyInput('cobroRecEf',_autoCargaEf(fp,totalC));
   _setMoneyInput('cobroRecMP',_autoCargaMP(fp,totalC));
   _resetCobroSeccionesColapsables();
+  // Limpiar restos de un pedido individual abierto antes: en combo NO se muestra el
+  // detalle de productos ni el cartel de 10% de un solo pedido (el total ya viene sumado).
+  _renderCobroProds(null);
+  _renderCobroDescInfo();
   document.getElementById('cobroRutaOverlay').classList.remove('hidden');
   _recalcCobroRuta();
   _refrescarBilleteraRuta();
@@ -3852,6 +3856,7 @@ function confirmarCobroRuta(){
    primero (acumula todo). Cada pedido recibe su POST marcarCobrado. */
 function _confirmarCobroComboRuta(st,r){
   var peds=st.pedidos,fp=st.fp;
+  var _comboPayloads=[]; // se envían por FETCH DIRECTO (no syncQueue, que se traba en el iframe)
   var prop=Math.max(0,r.propina),aFav=r.aFav;
   var aplicacion=Math.max(0,r.aplicar||0); // saldo previo aplicado, va al primer pedido
   var nombre=(peds[0].c||'').split(' ')[0];
@@ -3901,9 +3906,9 @@ function _confirmarCobroComboRuta(st,r){
       }
       if(r.camMP>0 && r.recEf>=r.camMP)payload.cambioMP=r.camMP;
     }
-    syncQueue.push(payload);
+    _comboPayloads.push(payload);
     if(idx===0 && aFavP>0){
-      syncQueue.push({
+      _comboPayloads.push({
         action:'crearSaldoCliente',
         cliente:p.c||'',telefono:p.t||'',
         tipo:'Crédito',monto:aFavP,
@@ -3913,7 +3918,7 @@ function _confirmarCobroComboRuta(st,r){
       });
     }
     if(idx===0 && aplicP>0){
-      syncQueue.push({
+      _comboPayloads.push({
         action:'crearSaldoCliente',
         cliente:p.c||'',telefono:p.t||'',
         tipo:'Aplicación',monto:aplicP,
@@ -3928,16 +3933,59 @@ function _confirmarCobroComboRuta(st,r){
   var fromCobros=st.fromCobros;
   saveLocal();
   cerrarCobroRuta();
-  showLoader('Marcando '+peds.length+' cobrados...');
-  processSyncQueue();
   // Si el combo se abrió desde subtab COBROS, refrescar esa vista. Sino, RUTA.
   if(fromCobros && currentTab==='cobros')renderCobrosFromServer();
   else renderRuta();
-  var totalFact=peds.reduce(function(s,p){return s+(Number(p.$)||0);},0)+prop+aFav;
-  var msg='Cobrado a '+nombre+' ('+peds.length+' pedidos) · '+formatMoney(totalFact);
-  if(r.camMP>0)msg+=' (cambio $'+formatMoney(r.camMP).replace('$','')+' por MP)';
-  showToast(msg);
-  if(navigator.vibrate)navigator.vibrate(30);
+  // Commit por FETCH DIRECTO endurecido (backend idempotente v404 → reintento seguro).
+  _commitCobroComboDirecto(_comboPayloads, peds);
+}
+
+// Envía los N cobros de un combo por fetch directo (NO syncQueue, que se traba en el
+// iframe del Panel — mismo motivo por el que los cobros sueltos usan fetch directo).
+// Backend idempotente: reintentar un pedido ya cobrado no duplica. Ante falla transitoria,
+// reencola SOLO los fallidos y reconcilia con el server (la card vuelve solo si de verdad
+// no se cobró).
+function _commitCobroComboDirecto(payloads, peds){
+  if(!payloads||!payloads.length)return;
+  var nombre=(peds&&peds[0]&&peds[0].c||'').split(' ')[0];
+  showLoader('Cobrando '+peds.length+' pedidos de '+nombre+'...');
+  var _guard=setTimeout(function(){try{hideLoader(true);}catch(_){}},45000);
+  function _reconciliar(){setTimeout(function(){if(currentTab==='cobros')fetchCobrosPendientes(true);},4000);}
+  if(!isOnline){
+    payloads.forEach(function(p){syncQueue.push(p);});saveLocal();
+    clearTimeout(_guard);hideLoader(true);
+    showToast('Cobro combinado offline — se sincroniza al volver señal');
+    return;
+  }
+  var _settled=false;
+  var _timer=setTimeout(function(){
+    if(_settled)return;_settled=true;clearTimeout(_guard);hideLoader(true);
+    payloads.forEach(function(p){syncQueue.push(p);});saveLocal();setTimeout(processSyncQueue,1500);
+    showToast('⏳ El servidor tardó — reintentando en segundo plano…');_reconciliar();
+  },35000);
+  Promise.all(payloads.map(function(p){
+    return fetch(APPS_SCRIPT_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(p),redirect:'follow'})
+      .then(function(rs){return rs.json().catch(function(){return{ok:false,_transitorio:true};});})
+      .catch(function(){return{ok:false,_transitorio:true};});
+  })).then(function(results){
+    if(_settled)return;_settled=true;clearTimeout(_timer);clearTimeout(_guard);hideLoader(true);
+    var fallidos=[];
+    results.forEach(function(res,i){if(!(res&&res.ok))fallidos.push(payloads[i]);});
+    if(fallidos.length===0){
+      showToast('✓ Cobrados '+peds.length+' pedidos de '+nombre);
+      if(navigator.vibrate)navigator.vibrate(30);
+      if(currentTab==='cobros')fetchCobrosPendientes(true);
+    } else {
+      // Reencolar SOLO los que no confirmaron (idempotente) + reconciliar.
+      fallidos.forEach(function(p){syncQueue.push(p);});saveLocal();setTimeout(processSyncQueue,1500);
+      showToast('⏳ '+fallidos.length+'/'+payloads.length+' sin confirmar — reintentando y verificando…');
+      _reconciliar();
+    }
+  }).catch(function(){
+    if(_settled)return;_settled=true;clearTimeout(_timer);clearTimeout(_guard);hideLoader(true);
+    payloads.forEach(function(p){syncQueue.push(p);});saveLocal();setTimeout(processSyncQueue,1500);
+    showToast('⏳ Sin respuesta — reintentando en segundo plano…');_reconciliar();
+  });
 }
 
 // ── COBRO de un pedido suelto desde COBROS (modal unificado) ──
