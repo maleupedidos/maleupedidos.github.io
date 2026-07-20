@@ -18611,7 +18611,7 @@ if('serviceWorker' in navigator){
   var _estHog=null;            // hogares ya con merges aplicados {hogares, prospectos}
   var _estRaw=null;            // hogares crudos de _hogBuild (sin merges)
   var _estMerges=null;         // reglas [{from,to,nota}]
-  var _hogFiltro={busq:'',vista:'todos'};
+  var _hogFiltro={busq:'',orden:'facturado',estado:'',resid:''};  // 2 ejes (Ordenar × Estado) + Residencia, espejo de Clientes pero por CASA
   function _estEstado(d){ if(d<0)return 'sin'; if(d<=28)return 'activo'; if(d<=90)return 'dormido'; return 'inactivo'; }
   function _combineHog(to,from){
     to.members=(to.members||[]).concat(from.members||[]);
@@ -18990,40 +18990,48 @@ if('serviceWorker' in navigator){
   // ─────────── sub-tab HOGARES ───────────
   // VISTAS (jugadas): cada una define un filtro + un orden + una explicación de la jugada.
   // Reemplazan la vieja sub-tab "Quién compra" — mismo directorio, un solo camino de datos.
-  var _hogVistas={
-    todos:   {lbl:'Todos', icon:'🏠', filt:null, sort:'facturado'},
-    top:     {lbl:'Top facturan', icon:'🏆', filt:function(h){return (h.facturado||0)>0;}, sort:'facturado',
-              desc:'Las familias que más facturan en Home. Cuidalas: son la base del $9M.', vacio:'Sin datos.'},
-    frec:    {lbl:'Frecuentes', icon:'🔁', filt:function(h){return h.estado==='activo'&&h.freq&&(h.entregados||0)>=3;}, sort:'freq',
-              desc:'Compran seguido y sostenido. El corazón de la recompra — mantené el ritmo.', vacio:'Todavía no hay casas con ritmo estable (≥3 pedidos).'},
-    riesgo:  {lbl:'En riesgo', icon:'⚠️', filt:function(h){return h.estado==='activo'&&h.freq&&(h.entregados||0)>=2&&h.diasUltima>=Math.round(h.freq*0.9);}, sort:'recencia',
-              desc:'Activos que ya pasaron su ritmo habitual sin volver a pedir. Empujá AHORA antes de que se duerman.', vacio:'✓ Ningún activo estirándose. Base al día.'},
-    unsolo:  {lbl:'Un solo pedido', icon:'🌱', filt:function(h){return (h.entregados||0)===1&&h.diasUltima>=0;}, sort:'recencia',
-              desc:'Probaron una vez y no volvieron. La segunda compra es la que fideliza — el mejor lugar para invertir.', vacio:'✓ Ninguna casa quedó en un solo pedido.'},
-    dormidos:{lbl:'Dormidos', icon:'🟠', filt:function(h){return h.estado==='dormido';}, sort:'facturado',
-              desc:'Compraban y frenaron (29–90 días). Reconectar cuesta menos que conseguir uno nuevo.', vacio:'✓ Ninguna casa dormida. ¡Base sana!'},
-    nuevos:  {lbl:'Nuevos', icon:'🆕', filt:function(h){ if(h._primera===undefined)h._primera=_minPrimera(h); return h._primera&&((Date.now()-h._primera)/86400000)<=35; }, sort:'primera',
-              desc:'Entraron en los últimos 35 días. Asegurá la segunda compra para que no se enfríen.', vacio:'No entraron casas nuevas en los últimos 35 días.'}
+  // ── Focos estratégicos que no se arman con un estado simple (se conservan de las Vistas viejas) ──
+  function _hogEsNuevo(h){ if(h._primera===undefined)h._primera=_minPrimera(h); return !!(h._primera && ((Date.now()-h._primera)/86400000)<=35); }
+  function _hogEnRiesgo(h){ return h.estado==='activo' && h.freq && (h.entregados||0)>=2 && h.diasUltima>=Math.round(h.freq*0.9); }
+  function _hogUnSolo(h){ return (h.entregados||0)===1 && h.diasUltima>=0; }
+  // Residencia de la CASA: dato del lote (Permanente/Finde); si falta, se deduce de sus integrantes.
+  function _hogResid(h){
+    var r=_resNorm(h.reside); if(r==='Permanente')return 'vive'; if(r==='Finde')return 'finde';
+    var vive=false, finde=false;
+    (h.members||[]).forEach(function(m){ if(m.visitante)return; if(m.residencia==='vive')vive=true; else if(m.residencia==='finde')finde=true; });
+    return vive?'vive':(finde?'finde':'');
+  }
+  var _hogEstadoDesc={
+    riesgo:'⚠️ Activas que ya pasaron su ritmo habitual sin volver a pedir. Empujá AHORA antes de que se duerman.',
+    unsolo:'🌱 Probaron una vez y no volvieron. La segunda compra es la que fideliza — el mejor lugar para invertir.',
+    dormido:'🟠 Compraban y frenaron (29–90 días). Reconectar cuesta menos que conseguir una nueva.',
+    nuevo:'🆕 Entraron en los últimos 35 días. Asegurá la segunda compra para que no se enfríen.'
   };
   window.estHogBusq=function(v){ _hogFiltro.busq=(v||'').toLowerCase().trim(); _hogRenderList(); };
-  window.estHogVista=function(v){
-    _hogFiltro.vista=v;
-    document.querySelectorAll('#estHogares .est-chip[data-v]').forEach(function(b){b.classList.toggle('on',b.dataset.v===v);});
-    _hogRenderList();
-  };
+  window.estHogOrden=function(o){ _hogFiltro.orden=o; document.querySelectorAll('#estHogares .est-chip[data-o]').forEach(function(b){b.classList.toggle('on',b.dataset.o===o);}); _hogRenderList(); };
+  // Estado y Residencia = dimensiones INDEPENDIENTES y toggleables: re-tocar el chip activo lo apaga.
+  window.estHogEstado=function(e){ _hogFiltro.estado=(e && _hogFiltro.estado===e)?'':e; document.querySelectorAll('#estHogares .est-chip[data-e]').forEach(function(b){b.classList.toggle('on',b.dataset.e===(_hogFiltro.estado||''));}); _hogRenderList(); };
+  window.estHogResid=function(r){ _hogFiltro.resid=(_hogFiltro.resid===r)?'':r; document.querySelectorAll('#estHogares .est-chip[data-r]').forEach(function(b){b.classList.toggle('on',b.dataset.r===_hogFiltro.resid);}); _hogRenderList(); };
   function _hogFilteredSorted(){
-    var vi=_hogVistas[_hogFiltro.vista]||_hogVistas.todos;
+    var fe=_hogFiltro.estado||'', fr=_hogFiltro.resid||'';
     var arr=((_estHog&&_estHog.hogares)||[]).filter(function(h){
-      if(vi.filt && !vi.filt(h)) return false;
+      if(fe){                                            // DIMENSIÓN ESTADO (salud/foco)
+        if(fe==='riesgo'){ if(!_hogEnRiesgo(h)) return false; }
+        else if(fe==='unsolo'){ if(!_hogUnSolo(h)) return false; }
+        else if(fe==='nuevo'){ if(!_hogEsNuevo(h)) return false; }
+        else if(h.estado!==fe) return false;             // activo/dormido/inactivo
+      }
+      if(fr){ if(_hogResid(h)!==fr) return false; }       // DIMENSIÓN RESIDENCIA (independiente)
       if(_hogFiltro.busq){ var hay=((h.familia||'')+' '+(h.titular||'')+' '+(h.sub||'')+' '+(h.lote||'')+' '+_hogInts(h).join(' ')).toLowerCase(); if(hay.indexOf(_hogFiltro.busq)<0) return false; }
       return true;
     });
-    var o=vi.sort;
+    var o=_hogFiltro.orden;
     arr.sort(function(a,b){
       if(o==='pedidos') return (b.entregados-a.entregados)||(b.facturado-a.facturado);
-      if(o==='freq') return ((a.freq||99999)-(b.freq||99999))||(b.entregados-a.entregados);
-      if(o==='recencia') return ((a.diasUltima<0?99999:a.diasUltima)-(b.diasUltima<0?99999:b.diasUltima));
-      if(o==='primera'){ if(a._primera===undefined)a._primera=_minPrimera(a); if(b._primera===undefined)b._primera=_minPrimera(b); return (b._primera||0)-(a._primera||0); }
+      if(o==='ticket') return (b.ticket||0)-(a.ticket||0);
+      if(o==='deuda') return (b.deuda||0)-(a.deuda||0);
+      if(o==='nombre') return String(_hogNombre(a)||'').localeCompare(String(_hogNombre(b)||''));
+      if(o==='ultima') return ((a.diasUltima<0?99999:a.diasUltima)-(b.diasUltima<0?99999:b.diasUltima));
       return b.facturado-a.facturado;
     });
     return arr;
@@ -19036,13 +19044,12 @@ if('serviceWorker' in navigator){
       try{ var raw=window.estHogaresSync&&window.estHogaresSync(); if(raw&&raw.hogares&&raw.hogares.length){ _estRaw=raw; _estMerges=_mergesCache(); _estHog=_applyMerges(raw,_estMerges); } }catch(e){}
       if(!(_estHog&&_estHog.hogares&&_estHog.hogares.length)){ var cc=_estHogCacheLoad(); if(cc)_estHog=cc; }
     }
-    var vi=_hogVistas[_hogFiltro.vista]||_hogVistas.todos;
     var arr=_hogFilteredSorted();
-    var d=E$('estHogDesc'); if(d) d.innerHTML=(_hogFiltro.vista!=='todos'&&vi.desc)?('<div style="font-size:12px;color:var(--bl);margin:2px 2px 10px;line-height:1.4">'+vi.icon+' '+vi.desc+'</div>'):'';
+    var d=E$('estHogDesc'); if(d) d.innerHTML=_hogEstadoDesc[_hogFiltro.estado]?('<div style="font-size:12px;color:var(--bl);margin:2px 2px 10px;line-height:1.4">'+_hogEstadoDesc[_hogFiltro.estado]+'</div>'):'';
     var box=E$('estHogList'); if(!box)return;
-    var ranked=(vi.sort==='facturado'||vi.sort==='pedidos'||vi.sort==='freq');
+    var ranked=(_hogFiltro.orden==='facturado'||_hogFiltro.orden==='pedidos');
     if(!arr.length){
-      var vac=_hogFiltro.busq?'Ninguna casa con esa búsqueda.':(vi.vacio||'Ninguna casa en esta vista.');
+      var vac=_hogFiltro.busq?'Ninguna casa con esa búsqueda.':'Ninguna casa con este filtro.';
       box.innerHTML='<div class="est-soon"><div class="est-soon-i">🔍</div><div>'+vac+'</div></div>';
     } else {
       box.innerHTML=arr.map(function(h,i){return _hogCard(h, ranked?(i+1):0);}).join('');
@@ -19054,8 +19061,8 @@ if('serviceWorker' in navigator){
     _estEnsure(function(err){
       if(err==='nocrm'){ host.innerHTML=_nocrm(); return; }
       var H=(_estHog&&_estHog.hogares)||[];
-      var tot=0, act=0,dorm=0,inact=0,factTot=0,entTot=0;
-      H.forEach(function(h){ if((h.entregados||0)>0)tot++; if(h.estado==='activo')act++; else if(h.estado==='dormido')dorm++; else if(h.estado==='inactivo')inact++; factTot+=(h.facturado||0); entTot+=(h.entregados||0); });
+      var tot=0, act=0,dorm=0,inact=0,factTot=0,entTot=0,viveN=0,findeN=0;
+      H.forEach(function(h){ if((h.entregados||0)>0)tot++; if(h.estado==='activo')act++; else if(h.estado==='dormido')dorm++; else if(h.estado==='inactivo')inact++; factTot+=(h.facturado||0); entTot+=(h.entregados||0); var rr=_hogResid(h); if(rr==='vive')viveN++; else if(rr==='finde')findeN++; });
       var ticketH=entTot?Math.round(factTot/entTot):0;
       var penet=tot?Math.round(act/tot*100):0;
       var html='<div class="est-kpis">'
@@ -19064,11 +19071,29 @@ if('serviceWorker' in navigator){
         +'<div class="est-kpi"><div class="est-kpi-l">Facturación</div><div class="est-kpi-v">'+money(factTot)+'</div><div class="est-kpi-s" style="color:var(--bl)">histórica Home</div></div>'
         +'<div class="est-kpi"><div class="est-kpi-l">Ticket x casa</div><div class="est-kpi-v">'+money(ticketH)+'</div><div class="est-kpi-s" style="color:var(--bl)">promedio</div></div>'
         +'</div>';
-      var chips=Object.keys(_hogVistas).map(function(k){ var v=_hogVistas[k];
-        return '<button class="est-chip'+(k===_hogFiltro.vista?' on':'')+'" data-v="'+k+'" onclick="estHogVista(\''+k+'\')">'+v.icon+' '+v.lbl+'</button>'; }).join('');
+      function _oc(o){return _hogFiltro.orden===o?' on':'';}
+      function _ec(e){return (_hogFiltro.estado||'')===e?' on':'';}
+      function _rc(r){return _hogFiltro.resid===r?' on':'';}
       html+='<div class="est-ctl">'
         +'<input class="est-search" type="text" placeholder="Buscar familia, apellido, lote, sub-barrio o nombre…" oninput="estHogBusq(this.value)">'
-        +'<div class="est-ctl-row"><span class="est-ctl-lbl">Vista</span>'+chips
+        +'<div class="est-ctl-row"><span class="est-ctl-lbl">Ordenar</span>'
+        +'<button class="est-chip'+_oc('ultima')+'" data-o="ultima" onclick="estHogOrden(\'ultima\')">🕒 Compra reciente</button>'
+        +'<button class="est-chip'+_oc('facturado')+'" data-o="facturado" onclick="estHogOrden(\'facturado\')">💰 Más facturan</button>'
+        +'<button class="est-chip'+_oc('pedidos')+'" data-o="pedidos" onclick="estHogOrden(\'pedidos\')">📦 Más pedidos</button>'
+        +'<button class="est-chip'+_oc('ticket')+'" data-o="ticket" onclick="estHogOrden(\'ticket\')">🎫 Mayor ticket</button>'
+        +'<button class="est-chip'+_oc('deuda')+'" data-o="deuda" onclick="estHogOrden(\'deuda\')">💸 Deuda</button>'
+        +'<button class="est-chip'+_oc('nombre')+'" data-o="nombre" onclick="estHogOrden(\'nombre\')">A-Z</button></div>'
+        +'<div class="est-ctl-row"><span class="est-ctl-lbl">Estado</span>'
+        +'<button class="est-chip'+_ec('')+'" data-e="" onclick="estHogEstado(\'\')">Todas</button>'
+        +'<button class="est-chip'+_ec('activo')+'" data-e="activo" onclick="estHogEstado(\'activo\')">🟢 Activas</button>'
+        +'<button class="est-chip'+_ec('dormido')+'" data-e="dormido" onclick="estHogEstado(\'dormido\')">🟠 Dormidas</button>'
+        +'<button class="est-chip'+_ec('inactivo')+'" data-e="inactivo" onclick="estHogEstado(\'inactivo\')">🔴 Inactivas</button>'
+        +'<button class="est-chip'+_ec('nuevo')+'" data-e="nuevo" onclick="estHogEstado(\'nuevo\')">🆕 Nuevas</button>'
+        +'<button class="est-chip'+_ec('riesgo')+'" data-e="riesgo" onclick="estHogEstado(\'riesgo\')">⚠️ En riesgo</button>'
+        +'<button class="est-chip'+_ec('unsolo')+'" data-e="unsolo" onclick="estHogEstado(\'unsolo\')">🌱 Un solo pedido</button></div>'
+        +'<div class="est-ctl-row"><span class="est-ctl-lbl">Residencia</span>'
+        +'<button class="est-chip'+_rc('vive')+'" data-r="vive" onclick="estHogResid(\'vive\')">🏡 Vive todo el año ('+viveN+')</button>'
+        +'<button class="est-chip'+_rc('finde')+'" data-r="finde" onclick="estHogResid(\'finde\')">⛱️ Fin de semana ('+findeN+')</button>'
         +'<span style="margin-left:auto;font-size:11px;color:var(--bl);font-weight:700" id="estHogCount"></span></div>'
         +'</div><div id="estHogDesc"></div><div id="estHogList"></div>';
       host.innerHTML=html;
