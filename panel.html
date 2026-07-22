@@ -2976,6 +2976,7 @@ body.role-single .statusbar{font-size:11px}
     <button class="aj-pill" data-sec="provisiones" onclick="ajGo('provisiones')">🧾 Provisiones</button>
     <button class="aj-pill" data-sec="config" onclick="ajGo('config')">🛠️ Config operativa</button>
     <button class="aj-pill" data-sec="vendedores" onclick="ajGo('vendedores')">🛵 Vendedores</button>
+    <button class="aj-pill" data-sec="saldos" onclick="ajGo('saldos')">💰 Saldos a favor</button>
     <button class="aj-pill" data-sec="permisos" onclick="ajGo('permisos')">🔐 Permisos</button>
   </div>
 
@@ -3010,8 +3011,10 @@ function ajRender(){
   else if(AJ_SEC==='provisiones') h=ajProvHTML();
   else if(AJ_SEC==='config') h=ajConfigHTML();
   else if(AJ_SEC==='vendedores') h=ajVendHTML();
+  else if(AJ_SEC==='saldos') h=ajSaldosHTML();
   else if(AJ_SEC==='permisos') h=ajPermisosHTML();
   b.innerHTML=h;
+  if(AJ_SEC==='saldos') ajLoadSaldos();
 }
 function ajPost(action,body,okMsg){
   body.action=action;
@@ -3202,6 +3205,103 @@ function ajSaveVend(btn){
   var orig=r.getAttribute('data-orig'); if(orig) body.origUsuario=orig;
   if(!body.usuario||!body.nombre){ toast('Falta nombre o usuario'); return; }
   ajPost('vendedorSet',body,'Vendedor guardado');
+}
+
+/* ── SALDOS A FAVOR DE CLIENTES ──
+ * Monedero del cliente (hoja Saldos Clientes). Crédito suma, Aplicación resta.
+ * El ajuste manual SOLO mueve el crédito del cliente — no toca caja ni facturado. */
+var AJ_SALDOS=null, AJ_SALDO_FILTRO='';
+function ajMoney(n){ return Number(n||0).toLocaleString('es-AR'); }
+function ajSaldosHTML(){
+  return '<div class="aj-note">💰 <b>Monedero de cada cliente</b> (saldo a favor para próximas compras). Agregar/quitar acá <b>solo mueve el crédito del cliente</b> — no toca la caja ni el facturado de ningún pedido. La plata real se mueve sola cuando el cliente usa el crédito en un cobro.</div>'
+    +'<div class="aj-card"><h3>Dar crédito a un cliente</h3><div class="desc">Sumale saldo a favor a cualquier cliente (por nombre y, si podés, teléfono para identificarlo bien).</div>'
+    +'<div class="aj-row" id="ajCredRow" style="grid-template-columns:1.3fr 1fr .8fr 1.4fr auto">'
+    +'<div class="aj-f"><label>Cliente</label><input data-k="cliente" placeholder="Nombre"></div>'
+    +'<div class="aj-f"><label>Teléfono</label><input data-k="telefono" placeholder="opcional pero recomendado"></div>'
+    +'<div class="aj-f"><label>Monto $</label><input data-k="monto" inputmode="numeric" placeholder="5000"></div>'
+    +'<div class="aj-f"><label>Motivo</label><input data-k="motivo" placeholder="ej: pagó de más / gesto"></div>'
+    +'<div class="aj-actions"><button class="aj-btn sm" onclick="ajDarCredito(this)">+ Dar crédito</button></div>'
+    +'</div></div>'
+    +'<div class="aj-card"><h3>Clientes con saldo a favor</h3>'
+    +'<input id="ajSaldoSearch" oninput="ajSaldoBuscar(this.value)" placeholder="🔍 Buscar cliente por nombre o teléfono…" style="width:100%;box-sizing:border-box;padding:9px 12px;border:1.5px solid var(--border);border-radius:8px;font-family:inherit;font-size:13px;margin-bottom:12px">'
+    +'<div id="ajSaldosList"><div class="aj-loading">Cargando saldos…</div></div>'
+    +'</div>';
+}
+function ajLoadSaldos(){
+  var l=document.getElementById('ajSaldosList'); if(!l) return;
+  fetch(API+'?action=saldosClientes&_t='+Date.now())
+    .then(function(r){return r.json();})
+    .then(function(d){ AJ_SALDOS=(d&&d.clientes)||[]; ajRenderSaldosList(); })
+    .catch(function(){ if(l)l.innerHTML='<div class="aj-loading">Error de conexión.</div>'; });
+}
+function ajSaldoBuscar(v){ AJ_SALDO_FILTRO=(v||'').toLowerCase().trim(); ajRenderSaldosList(); }
+function ajRenderSaldosList(){
+  var l=document.getElementById('ajSaldosList'); if(!l) return;
+  var arr=AJ_SALDOS||[];
+  var f=AJ_SALDO_FILTRO;
+  var vis=arr.filter(function(c){
+    if(!f) return c.saldo>0; // por defecto solo con saldo; al buscar, todos los que matcheen
+    return (String(c.cliente||'').toLowerCase().indexOf(f)>=0 || String(c.telefono||'').indexOf(f)>=0);
+  });
+  if(!vis.length){ l.innerHTML='<div class="aj-loading">'+(f?'Sin resultados.':'Ningún cliente con saldo a favor.')+'</div>'; return; }
+  var total=arr.reduce(function(s,c){return s+(c.saldo>0?c.saldo:0);},0);
+  var h='<div style="font-size:12px;color:var(--bl);margin-bottom:10px">Total a favor de clientes: <b style="color:var(--b)">$'+ajMoney(total)+'</b> · '+arr.filter(function(c){return c.saldo>0;}).length+' clientes</div>';
+  h+=vis.map(function(c){
+    var i=arr.indexOf(c);
+    var movs=(c.movimientos||[]).map(function(m){
+      var esCred=(String(m.tipo||'').indexOf('Cr')===0);
+      return '<div style="display:flex;justify-content:space-between;gap:8px;font-size:11.5px;padding:3px 0;border-top:1px dashed var(--border)"><span style="color:var(--bl)">'+ajEsc(m.fecha)+' · '+(esCred?'➕ Crédito':'➖ Aplicación')+(m.notas?(' · '+ajEsc(m.notas)):'')+'</span><b style="color:'+(esCred?'#2E7D32':'#C62828')+'">'+(esCred?'+':'−')+'$'+ajMoney(m.monto)+'</b></div>';
+    }).join('');
+    return '<div style="border:1px solid var(--border);border-radius:10px;padding:11px 13px;margin-bottom:9px;background:#fff">'
+      +'<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">'
+      +'<div style="min-width:0"><div style="font-weight:800;color:var(--b);font-size:14px">'+ajEsc(c.cliente||'(sin nombre)')+'</div><div style="font-size:11px;color:var(--bl)">'+ajEsc(c.telefono||'sin teléfono')+'</div></div>'
+      +'<div style="text-align:right"><div style="font-size:19px;font-weight:900;color:'+(c.saldo>0?'#2E7D32':'var(--bl)')+'">$'+ajMoney(c.saldo)+'</div><button class="aj-btn ghost sm" onclick="ajSaldoToggle('+i+')" style="margin-top:2px">Ajustar ▾</button></div>'
+      +'</div>'
+      +'<div id="ajSaldoEd'+i+'" style="display:none;margin-top:11px;border-top:1px solid var(--border);padding-top:11px">'
+      +'<div class="aj-row" style="grid-template-columns:.9fr 1.4fr auto auto;padding:0;border:none">'
+      +'<div class="aj-f"><label>Monto $</label><input data-k="monto" inputmode="numeric" placeholder="'+(c.saldo>0?c.saldo:'0')+'"></div>'
+      +'<div class="aj-f"><label>Motivo</label><input data-k="motivo" placeholder="ej: corrección"></div>'
+      +'<div class="aj-actions" style="align-self:end"><button class="aj-btn sm" onclick="ajSaldoAjustar('+i+',\'Crédito\')">+ Agregar</button></div>'
+      +'<div class="aj-actions" style="align-self:end"><button class="aj-btn sm danger" onclick="ajSaldoAjustar('+i+',\'Aplicación\')">− Quitar</button></div>'
+      +'</div>'
+      +(movs?('<div style="margin-top:10px"><div style="font-size:10px;font-weight:800;color:var(--bl);text-transform:uppercase;letter-spacing:.5px;margin-bottom:2px">Movimientos</div>'+movs+'</div>'):'')
+      +'</div></div>';
+  }).join('');
+  l.innerHTML=h;
+}
+function ajSaldoToggle(i){
+  var e=document.getElementById('ajSaldoEd'+i); if(!e) return;
+  e.style.display=(e.style.display==='none')?'block':'none';
+}
+function ajSaldoAjustar(i,tipo){
+  var c=(AJ_SALDOS||[])[i]; if(!c) return;
+  var ed=document.getElementById('ajSaldoEd'+i);
+  var monto=Number(String((ed.querySelector('[data-k="monto"]').value||'')).replace(/[^\d]/g,''))||0;
+  var motivo=(ed.querySelector('[data-k="motivo"]').value||'').trim();
+  if(monto<=0){ toast('Poné un monto'); return; }
+  if(tipo==='Aplicación' && monto>c.saldo){ if(!confirm('Vas a quitar $'+ajMoney(monto)+' pero el cliente tiene $'+ajMoney(c.saldo)+'. ¿Seguir? (quedará en 0 o negativo)')) return; }
+  var body={ cliente:c.cliente, telefono:c.telefono, tipo:tipo, monto:monto, notas:'Ajuste manual (Panel)'+(motivo?(': '+motivo):'') };
+  fetch(API,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(Object.assign({action:'crearSaldoCliente'},body))})
+    .then(function(r){return r.json();})
+    .then(function(d){ if(d&&d.ok){ toast((tipo==='Crédito'?'Crédito agregado':'Saldo descontado')+' · nuevo saldo $'+ajMoney(d.saldo)); ajLoadSaldos(); } else toast('Error: '+((d&&d.err)||'?')); })
+    .catch(function(e){ toast('Error: '+e.message); });
+}
+function ajDarCredito(btn){
+  var r=document.getElementById('ajCredRow');
+  var cliente=(r.querySelector('[data-k="cliente"]').value||'').trim();
+  var telefono=(r.querySelector('[data-k="telefono"]').value||'').trim();
+  var monto=Number(String(r.querySelector('[data-k="monto"]').value||'').replace(/[^\d]/g,''))||0;
+  var motivo=(r.querySelector('[data-k="motivo"]').value||'').trim();
+  if(!cliente){ toast('Falta el nombre del cliente'); return; }
+  if(monto<=0){ toast('Poné un monto'); return; }
+  var body={ action:'crearSaldoCliente', cliente:cliente, telefono:telefono, tipo:'Crédito', monto:monto, notas:'Ajuste manual (Panel)'+(motivo?(': '+motivo):'') };
+  btn.disabled=true; btn.textContent='...';
+  fetch(API,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(body)})
+    .then(function(r2){return r2.json();})
+    .then(function(d){ btn.disabled=false; btn.textContent='+ Dar crédito';
+      if(d&&d.ok){ toast('Crédito dado a '+cliente+' · saldo $'+ajMoney(d.saldo)); r.querySelector('[data-k="cliente"]').value=''; r.querySelector('[data-k="telefono"]').value=''; r.querySelector('[data-k="monto"]').value=''; r.querySelector('[data-k="motivo"]').value=''; ajLoadSaldos(); }
+      else toast('Error: '+((d&&d.err)||'?')); })
+    .catch(function(e){ btn.disabled=false; btn.textContent='+ Dar crédito'; toast('Error: '+e.message); });
 }
 
 /* ── PERMISOS (matriz rol × tab) ── */
