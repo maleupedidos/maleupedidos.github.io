@@ -7090,20 +7090,45 @@ function rInicio(){
   var semData=porSemana[semActual]||{ef:0,tr:0,tot:0,pend:0,dias:{}};
   var hoyD=semData.dias[hoyKey]||{ef:0,tr:0,tot:0,pend:0};
 
-  // Vueltos de billetera por día (dd/MM): el EF de los pedidos del Sheets es el neto
-  // que se queda Maleu (despues del vuelto). Para reflejar lo FISICO que el repartidor
-  // tuvo en mano (y que cuenta cuando cierra caja), sumamos los vueltos dados ese día.
-  // Ejemplo: Sandra pagó $150K, vuelto $5.640 → pedido EF=$144.360, físico recibido=$150K.
-  var vueltosPorDia={};(D.vueltos||[]).forEach(function(v){vueltosPorDia[v.f]=(vueltosPorDia[v.f]||0)+(Number(v['$'])||0);});
+  // Cambios en efectivo por día (dd/MM). El EF de los pedidos del Sheets es el NETO
+  // (lo que se queda Maleu). El FÍSICO en mano se ajusta según el TIPO de cambio
+  // (col Tipo de la hoja "Cambios Billetera"):
+  //   • 'Billetera' → el cliente pagó de más en efectivo y le diste el vuelto de la
+  //     billetera. El billete entró entero → suma al físico. (+)
+  //   • 'CambioMP'  → pagó de más en efectivo y le devolviste por MP. Te quedó ese
+  //     efectivo extra en mano (tu MP bajó, ya asentado como Egreso MP). (+)
+  //   • 'CruzadoEf' → pagó por MP y le diste el vuelto en EFECTIVO. Salió efectivo de
+  //     tu mano sin entrar por el cobro. (−)
+  var vueltoTipoPorDia={}; // k -> {bill,cambioMP,cruzadoEf}
+  (D.vueltos||[]).forEach(function(v){
+    var k=v.f, m=Number(v['$'])||0, t=String(v.tipo||'Billetera');
+    if(!vueltoTipoPorDia[k])vueltoTipoPorDia[k]={bill:0,cambioMP:0,cruzadoEf:0};
+    if(t==='CambioMP')vueltoTipoPorDia[k].cambioMP+=m;
+    else if(t==='CruzadoEf')vueltoTipoPorDia[k].cruzadoEf+=m;
+    else vueltoTipoPorDia[k].bill+=m;
+  });
+  var vueltosPorDia={}; // ajuste NETO al EF en mano = bill + cambioMP − cruzadoEf
+  Object.keys(vueltoTipoPorDia).forEach(function(k){
+    var t=vueltoTipoPorDia[k];
+    vueltosPorDia[k]=t.bill+t.cambioMP-t.cruzadoEf;
+  });
+  // Texto legible de la composición del ajuste de efectivo de un día.
+  function _vueltoDescDia(k){
+    var t=vueltoTipoPorDia[k]; if(!t)return '';
+    var parts=[];
+    if(t.bill>0)parts.push('$'+f$(t.bill)+' de vuelto en efectivo (billetera)');
+    if(t.cambioMP>0)parts.push('$'+f$(t.cambioMP)+' de efectivo extra (cambio devuelto por MP)');
+    if(t.cruzadoEf>0)parts.push('−$'+f$(t.cruzadoEf)+' de efectivo dado como cambio (pago por MP)');
+    return parts.join(' · ');
+  }
   var vueltoHoy=vueltosPorDia[hoyKey]||0;
-  // Vuelto total de la semana actual: suma vueltos de cada día que pertenece a semData.dias
   var vueltoSem=0;Object.keys(semData.dias||{}).forEach(function(k){vueltoSem+=(vueltosPorDia[k]||0);});
 
   var cb=$('hCaja');var cbHtml='';
-  function cajaCard(titulo,ef,tr,tot,pend,highlight,vuelto,detId){
-    // EF físico = EF neto del Sheets + vueltos dados (de billetera) ese período.
-    // El "tot" que recibimos es el neto (ef+tr). Lo sumamos al vuelto para mostrar
-    // lo que el repartidor cuenta en mano al cerrar. Sub-linea aclara el neto Maleu.
+  function cajaCard(titulo,ef,tr,tot,pend,highlight,vuelto,detId,descKey){
+    // EF físico = EF neto del Sheets + ajuste por cambios (billetera + cambioMP −
+    // cruzadoEf) del período. El "tot" que recibimos es el neto (ef+tr). Le sumamos
+    // el ajuste para mostrar lo que se cuenta en mano al cerrar; la sub-línea aclara.
     var v=Number(vuelto)||0;
     var efMano=ef+v, totMano=tot+v;
     var clickable=!!detId;
@@ -7114,8 +7139,9 @@ function rInicio(){
     html+='</div>';
     html+='<div style="font-size:20px;font-weight:800;margin:3px 0">$'+f$(totMano)+'</div>';
     html+='<div style="font-size:10px;color:var(--bl);line-height:1.4">EF $'+f$(efMano)+'<br>TR $'+f$(tr)+'</div>';
-    if(v>0){
-      html+='<div style="margin-top:6px;padding-top:6px;border-top:1px dashed var(--cd);font-size:10px;color:#9A3412;line-height:1.4">👛 Vuelto dado: $'+f$(v)+'<br>↳ Neto Maleu: $'+f$(tot)+'</div>';
+    if(v!==0){
+      var _desc=descKey?_vueltoDescDia(descKey):'';
+      html+='<div style="margin-top:6px;padding-top:6px;border-top:1px dashed var(--cd);font-size:10px;color:#9A3412;line-height:1.4">👛 Cambios en efectivo: '+(v>0?'+':'−')+'$'+f$(Math.abs(v))+' en mano'+(_desc?'<br>↳ '+_desc:'')+'<br>↳ Neto cobrado: $'+f$(tot)+'</div>';
     }
     if(pend>0)html+='<div style="margin-top:6px;padding-top:6px;border-top:1px dashed var(--cd);font-size:10px;color:#E65100;font-weight:700">+$'+f$(pend)+' por cobrar</div>';
     html+='</div>';
@@ -7145,14 +7171,16 @@ function rInicio(){
       });
       h+='<div style="display:flex;justify-content:space-between;padding:4px 0;font-weight:700;color:var(--gd);border-top:1px dashed var(--cd);margin-top:2px">'
        +'<span>Subtotal EF (cobros)</span><span>$'+f$(sumEfPed)+'</span></div>';
-      if(vueltosDia>0){
+      var _descDia=_vueltoDescDia(diaKey);
+      if(vueltosDia!==0){
         h+='<div style="display:flex;justify-content:space-between;padding:3px 0;font-size:11px;color:#9A3412">'
-         +'<span>+ Vueltos dados (billetera)</span><span>$'+f$(vueltosDia)+'</span></div>';
+         +'<span>'+(vueltosDia>0?'+ Ajuste por cambios':'− Efectivo dado de cambio')+'</span><span>'+(vueltosDia>0?'+':'−')+'$'+f$(Math.abs(vueltosDia))+'</span></div>';
+        if(_descDia)h+='<div style="font-size:10px;color:#9A3412;padding:0 0 3px;line-height:1.3">'+_descDia+'</div>';
         h+='<div style="display:flex;justify-content:space-between;padding:5px 0;font-weight:800;color:var(--ink);border-top:1px solid var(--cd);margin-top:3px">'
          +'<span>= FÍSICO EN MANO</span><span>$'+f$(totalFisicoEF)+'</span></div>';
         h+='<div style="font-size:10px;color:var(--bl);margin-top:2px;line-height:1.35">Lo que tendrías que estar contando en efectivo al cerrar. Si te da otro número, avisá cuál para reconciliar.</div>';
       } else {
-        h+='<div style="font-size:10px;color:var(--bl);margin-top:4px;line-height:1.35">Sin vueltos hoy → físico en mano = subtotal EF.</div>';
+        h+='<div style="font-size:10px;color:var(--bl);margin-top:4px;line-height:1.35">Sin cambios hoy → físico en mano = subtotal EF.</div>';
       }
     }
     if(trPeds.length){
@@ -7189,7 +7217,8 @@ function rInicio(){
       h+='</div>';
       var _estN=(estByDia&&estByDia[k])||0;
       if(_estN>0)h+='<div style="font-size:11px;color:var(--o);margin-top:3px;font-weight:700">🏘️ '+_estN+' entregado'+(_estN===1?'':'s')+' en Estancias del Pilar</div>';
-      if(_vd>0)h+='<div style="font-size:10px;color:#9A3412;margin-top:2px">👛 Vuelto $'+f$(_vd)+' (billetera) · Neto Maleu EF $'+f$(d.ef)+'</div>';
+      var _ddL=_vueltoDescDia(k);
+      if(_ddL)h+='<div style="font-size:10px;color:#9A3412;margin-top:2px">👛 '+_ddL+' · Neto Maleu EF $'+f$(d.ef)+'</div>';
       if(d.pend>0)h+='<div style="font-size:10px;color:#E65100;font-weight:700;margin-top:3px">+$'+f$(d.pend)+' por cobrar</div>';
       if(d.peds&&d.peds.length){
         h+='<div id="'+dayId+'" class="hidden" style="margin-top:8px;border-top:1px dashed var(--cd);padding-top:8px">';
@@ -7351,7 +7380,7 @@ function rInicio(){
   cbHtml+=comoFueSemanaHTML();
   // Cards HOY + SEMANA ACTUAL
   cbHtml+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:10px 0">';
-  cbHtml+=cajaCard('HOY \u00b7 EN MANO',hoyD.ef,hoyD.tr,hoyD.tot,hoyD.pend,hoyD.tot>0,vueltoHoy,'hoyEnManoDet');
+  cbHtml+=cajaCard('HOY \u00b7 EN MANO',hoyD.ef,hoyD.tr,hoyD.tot,hoyD.pend,hoyD.tot>0,vueltoHoy,'hoyEnManoDet',hoyKey);
   cbHtml+=cajaCard('SEMANA '+semActual+' \u00b7 EN MANO',semData.ef,semData.tr,semData.tot,semData.pend,true,vueltoSem);
   cbHtml+='</div>';
   // Detalle clickeable de HOY \u2014 reconciliar pedido por pedido contra la caja f\u00edsica.
@@ -7443,7 +7472,8 @@ function rInicio(){
       var _efMano=dd.ef+_vd, _totMano=dd.tot+_vd;
       bodyH+='<div style="display:flex;justify-content:space-between;align-items:center;margin-top:4px;font-size:11px"><span style="color:var(--bl);font-weight:700">Cobrado'+(_vd>0?' (en mano)':'')+'</span><span style="font-weight:800">$'+f$(_totMano)+'</span></div>';
       bodyH+='<div style="font-size:10px;color:var(--bl);margin-top:2px">EF $'+f$(_efMano)+' · TR $'+f$(dd.tr)+'</div>';
-      if(_vd>0)bodyH+='<div style="font-size:10px;color:#9A3412;font-weight:600;margin-top:2px">👛 Incluye $'+f$(_vd)+' de vuelto (billetera) · neto Maleu EF $'+f$(dd.ef)+'</div>';
+      var _ddP=_vueltoDescDia(k);
+      if(_ddP)bodyH+='<div style="font-size:10px;color:#9A3412;font-weight:600;margin-top:2px">👛 Incluye '+_ddP+' · neto Maleu EF $'+f$(dd.ef)+'</div>';
       if(dd.pend>0)bodyH+='<div style="font-size:10px;color:#E65100;font-weight:700;margin-top:2px">+$'+f$(dd.pend)+' por cobrar</div>';
       bodyH+='</div>';
     }
