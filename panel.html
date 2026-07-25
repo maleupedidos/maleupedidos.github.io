@@ -5248,6 +5248,22 @@ function getWeek(d){
   return Math.ceil((((t-y0)/864e5)+1)/7);
 }
 
+// ── VENTA = ocasión de compra (cliente + día), NO pedido suelto ──
+// Un cliente que parte una compra en varios pedidos el mismo día (ej. Cape Brave:
+// "sumame 1 pack más", "cerrame con 3") cuenta como 1 VENTA, no como N. El Panel no
+// trae el teléfono en los pedidos, así que agrupamos por nombre normalizado + día de
+// entrega (fe→f). Facturado y margen NO cambian; solo el CONTEO de ventas y el ticket.
+function _ventaKey(p){
+  var cli=String(p.c||'').toLowerCase().trim().replace(/\s+/g,' ');
+  var dia=String(p.fe||p.f||'');
+  return cli+'|'+dia;
+}
+function _contarVentas(peds){
+  var s={};
+  for(var i=0;i<peds.length;i++){var k=_ventaKey(peds[i]);if(k&&k!=='|')s[k]=true;}
+  return Object.keys(s).length;
+}
+
 // ── DATE HELPERS dd/mm/aaaa ──
 // Backend exige ISO YYYY-MM-DD; UI muestra dd/mm/aaaa. Convertimos en ambos lados.
 function dmyToIso(s){
@@ -6894,7 +6910,9 @@ function rInicio(){
   }
   // Red se agrupa por VENDEDOR: para Maleu cada vendedor = 1 venta (no N pedidos del vendedor)
   var pvSem=pv.filter(_esSemActual);
-  var totalSem=0,costoSem=0,pedSem=pvSem.length;
+  // Ventas VD = ocasiones de compra (cliente+día), no pedidos sueltos. Cape Brave 3
+  // pedidos el mismo día = 1 venta. Facturado/costo suman todos los pedidos igual.
+  var totalSem=0,costoSem=0,pedSem=_contarVentas(pvSem);
   pvSem.forEach(function(p){totalSem+=p.$;costoSem+=(p.co||0);});
 
   var redPorVend={};var redTotal=0,redCosto=0;
@@ -7303,22 +7321,25 @@ function rInicio(){
       var f=p.fe||p.f;if(!f)return;
       var pp=String(f).split('/');if(pp.length<2)return;
       var d=new Date(nowYear,Number(pp[1])-1,Number(pp[0]));
-      var w=getWeek(d), wd=(d.getDay()+6)%7, cli=(p.c||'').trim().toLowerCase();
+      var w=getWeek(d), wd=(d.getDay()+6)%7, cli=(p.c||'').trim().toLowerCase().replace(/\s+/g,' ');
       var mb=(Number(p.$||0)-(Number(p.co||0)));
-      if(!agg[w])agg[w]={fact:0,n:0,mg:0,cli:{},wd:{}};
-      agg[w].fact+=Number(p.$||0);agg[w].n++;agg[w].mg+=mb;if(cli)agg[w].cli[cli]=true;
+      var vk=cli+'|'+f; // clave de venta: cliente + día (compra dividida en momentos = 1 venta)
+      if(!agg[w])agg[w]={fact:0,mg:0,cli:{},ventas:{},wd:{}};
+      agg[w].fact+=Number(p.$||0);agg[w].mg+=mb;if(cli){agg[w].cli[cli]=true;agg[w].ventas[vk]=true;}
       var kd='d'+wd;
-      if(!agg[w].wd[kd])agg[w].wd[kd]={fact:0,n:0,mg:0,cli:{}};
-      agg[w].wd[kd].fact+=Number(p.$||0);agg[w].wd[kd].n++;agg[w].wd[kd].mg+=mb;if(cli)agg[w].wd[kd].cli[cli]=true;
+      if(!agg[w].wd[kd])agg[w].wd[kd]={fact:0,mg:0,cli:{},ventas:{}};
+      agg[w].wd[kd].fact+=Number(p.$||0);agg[w].wd[kd].mg+=mb;if(cli){agg[w].wd[kd].cli[cli]=true;agg[w].wd[kd].ventas[vk]=true;}
     });
     function cutWeek(wa,cut){
       if(!wa)return null;
-      var o={fact:0,n:0,mg:0,cli:{}};
+      var o={fact:0,mg:0,cli:{},ventas:{}};
       Object.keys(wa.wd).forEach(function(kd){
         if(Number(kd.slice(1))>cut)return;
-        o.fact+=wa.wd[kd].fact;o.n+=wa.wd[kd].n;o.mg+=wa.wd[kd].mg;
+        o.fact+=wa.wd[kd].fact;o.mg+=wa.wd[kd].mg;
         Object.keys(wa.wd[kd].cli).forEach(function(c){o.cli[c]=true;});
+        Object.keys(wa.wd[kd].ventas).forEach(function(v){o.ventas[v]=true;});
       });
+      o.n=Object.keys(o.ventas).length; // n = VENTAS (cliente+día), no pedidos sueltos
       return o.n>0?o:null;
     }
     var cur=cutWeek(agg[refWeek],cutIdx);
@@ -7346,7 +7367,7 @@ function rInicio(){
     else if(cur.fact<prev.fact){verdict=enCurso?'Por ahora, abajo de la semana pasada':'Por debajo de la semana anterior';vcol='var(--r)';vem='📉';}
     else {verdict=enCurso?'Igual que la semana pasada':'Igual que la semana anterior';vcol='var(--bl)';vem='➡️';}
     if(prev!==null&&cur.fact!==prev.fact)verdict+=' ('+(cur.fact>prev.fact?'+':'-')+'$'+f$(Math.abs(cur.fact-prev.fact))+')';
-    var phrase='📊 Semana '+refWeek+' · Estancias del Pilar'+(enCurso?' (en curso al '+DAB[diaIdx]+')':'')+': '+cur.n+' pedidos · $'+f$(cur.fact)+' facturado · '+curCli+' clientes · margen bruto $'+f$(Math.round(curMg))+' ('+curMgPct+'%)';
+    var phrase='📊 Semana '+refWeek+' · Estancias del Pilar'+(enCurso?' (en curso al '+DAB[diaIdx]+')':'')+': '+cur.n+' ventas · $'+f$(cur.fact)+' facturado · '+curCli+' clientes · margen bruto $'+f$(Math.round(curMg))+' ('+curMgPct+'%)';
     if(prev!==null){var df=cur.fact-prev.fact;var vsTxt=enCurso?' a la misma altura':'';phrase+=' · '+(df>0?'⬆️ '+(enCurso?'vas mejor':'mejor')+vsTxt+' (+$'+f$(df)+')':(df<0?'⬇️ abajo'+vsTxt+' (-$'+f$(Math.abs(df))+')':'igual'+vsTxt));}
     var h='<div class="card acc" style="padding:13px;margin:10px 0">';
     h+='<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:9px">';
@@ -7355,7 +7376,7 @@ function rInicio(){
     h+='<button onclick="copyResumenSemana(this)" data-lbl="📋 Copiar" data-copy="'+encodeURIComponent(phrase)+'" style="background:var(--ink);color:#fff;border:none;border-radius:8px;padding:7px 10px;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap">📋 Copiar</button>';
     h+='</div>';
     h+='<div style="display:flex;gap:6px">';
-    h+=stat('Pedidos',cur.n,cur.n,prev?prev.n:0,false);
+    h+=stat('Ventas',cur.n,cur.n,prev?prev.n:0,false);
     h+=stat('Facturado','$'+f$(cur.fact),cur.fact,prev?prev.fact:0,true);
     h+=stat('Clientes',curCli,curCli,prevCli,false);
     h+=stat('Margen Bruto','$'+f$(Math.round(curMg)),Math.round(curMg),Math.round(prevMg),true);
@@ -7364,15 +7385,16 @@ function rInicio(){
     // Línea extra de referencia:
     //  - en curso → cómo terminó la semana anterior (completa)
     //  - lunes (cerrada) → cómo viene arrancando la semana en curso
-    if(enCurso && agg[prevWeek] && agg[prevWeek].n>0){
-      var pw=agg[prevWeek];
+    if(enCurso && agg[prevWeek] && Object.keys(agg[prevWeek].ventas).length>0){
+      var pw=agg[prevWeek], pwV=Object.keys(pw.ventas).length;
       h+='<div style="margin-top:8px;padding-top:8px;border-top:1px dashed var(--cd);font-size:11px;color:var(--bl)">'
-        +'<b style="color:var(--ink2)">Semana anterior ('+prevWeek+', cerrada):</b> '+pw.n+' pedidos · $'+f$(pw.fact)+'</div>';
+        +'<b style="color:var(--ink2)">Semana anterior ('+prevWeek+', cerrada):</b> '+pwV+' ventas · $'+f$(pw.fact)+'</div>';
     } else if(modoCerrada){
       var cw=getWeek(hoyM), ipc=agg[cw];
-      if(ipc && ipc.n>0 && cw!==refWeek){
+      var ipcV=ipc?Object.keys(ipc.ventas).length:0;
+      if(ipc && ipcV>0 && cw!==refWeek){
         h+='<div style="margin-top:8px;padding-top:8px;border-top:1px dashed var(--cd);font-size:11px;color:var(--bl)">'
-          +'<b style="color:var(--ink2)">Semana en curso ('+cw+'):</b> '+ipc.n+' pedido'+(ipc.n===1?'':'s')+' · $'+f$(ipc.fact)+' — recién arranca</div>';
+          +'<b style="color:var(--ink2)">Semana en curso ('+cw+'):</b> '+ipcV+' venta'+(ipcV===1?'':'s')+' · $'+f$(ipc.fact)+' — recién arranca</div>';
       }
     }
     return h;
@@ -19366,12 +19388,15 @@ if('serviceWorker' in navigator){
       if(!_esEst(p))return;
       var d=_parseFecha(p.fe||p.f); if(!d)return;
       var w=getWeek(d);
-      if(!W[w])W[w]={w:w,n:0,fact:0,cli:{},minTs:d.getTime(),maxTs:d.getTime(),day:{},sub:{},pend:0,pendFact:0};
-      var o=W[w]; o.n++; o.fact+=Number(p.$||0);
+      if(!W[w])W[w]={w:w,n:0,fact:0,cli:{},ventas:{},minTs:d.getTime(),maxTs:d.getTime(),day:{},sub:{},pend:0,pendFact:0};
+      var o=W[w]; o.fact+=Number(p.$||0);
       // Identidad del cliente: teléfono (dedup real, mismo tel = misma persona aunque
       // el nombre venga tipeado distinto); si no hay tel, cae al nombre normalizado.
       var _tel=String(p.tel||'').replace(/\D/g,''); if(_tel.length>10)_tel=_tel.slice(-10);
       var ck=_tel||(p.c||'').trim().toLowerCase(); if(ck)o.cli[ck]=true;
+      // Venta = ocasión de compra = cliente + día (compra partida en momentos = 1 venta).
+      // o.n se fija después del loop como cantidad de ventas únicas.
+      if(ck)o.ventas[ck+'|'+d.getFullYear()+'-'+(d.getMonth()+1)+'-'+d.getDate()]=true;
       if(d.getTime()<o.minTs)o.minTs=d.getTime(); if(d.getTime()>o.maxTs)o.maxTs=d.getTime();
       o.day[d.getDay()]=(o.day[d.getDay()]||0)+1;
       var sb=String(p.br||'').trim()||'(sin sub-barrio)';   // p.br = sub-barrio del pedido
@@ -19389,6 +19414,9 @@ if('serviceWorker' in navigator){
       var w=getWeek(d); var o=W[w]; if(!o)return;
       o.pend++; o.pendFact+=Number(p.$||0);
     });
+    // Fijar n = cantidad de VENTAS (cliente+día) de cada semana. Todo lo que sigue
+    // (hero, KPIs, barras, récord, ticket) hereda este conteo agrupado.
+    Object.keys(W).forEach(function(w){W[w].n=Object.keys(W[w].ventas).length;});
     var weeks=Object.keys(W).map(Number).sort(function(a,b){return a-b;});
     if(!weeks.length){host.innerHTML='<div class="est-soon"><div class="est-soon-i">📭</div><div>Todavía no hay pedidos entregados en Estancias del Pilar este año.</div></div>';return;}
 
@@ -19401,8 +19429,9 @@ if('serviceWorker' in navigator){
     var refTicket=ref.n?Math.round(ref.fact/ref.n):0, prevTicket=prev&&prev.n?Math.round(prev.fact/prev.n):0;
 
     // Promedio semanal del mes en curso vs meta
-    var mNum=now.getMonth(), mY=now.getFullYear(), pedMes=0, factMes=0;
-    D.pedidos.forEach(function(p){ if(!_esEst(p))return; var d=_parseFecha(p.fe||p.f); if(!d)return; if(d.getMonth()===mNum&&d.getFullYear()===mY){pedMes++;factMes+=Number(p.$||0);} });
+    var mNum=now.getMonth(), mY=now.getFullYear(), factMes=0, _vMes={};
+    D.pedidos.forEach(function(p){ if(!_esEst(p))return; var d=_parseFecha(p.fe||p.f); if(!d)return; if(d.getMonth()===mNum&&d.getFullYear()===mY){factMes+=Number(p.$||0); var _t=String(p.tel||'').replace(/\D/g,''); if(_t.length>10)_t=_t.slice(-10); var _k=_t||(p.c||'').trim().toLowerCase(); if(_k)_vMes[_k+'|'+d.getFullYear()+'-'+(d.getMonth()+1)+'-'+d.getDate()]=true;} });
+    var pedMes=Object.keys(_vMes).length; // ventas del mes (cliente+día)
     var semMes=Math.max(1,Math.round(now.getDate()/7));
     var promMes=Math.round(pedMes/semMes*10)/10;
 
@@ -19434,7 +19463,7 @@ if('serviceWorker' in navigator){
     }
     var metaCol=ref.n>=META_SEM?'var(--gd)':(ref.n>=META_SEM*0.7?'#D97706':'var(--r)');
     h+='<div class="est-kpis">'
-      +kpi('Pedidos / meta','<span style="color:'+metaCol+'">'+ref.n+'</span> <span style="font-size:13px;color:var(--bl)">/ '+META_SEM+'</span>', pctMeta+'% de la meta', metaCol)
+      +kpi('Ventas / meta','<span style="color:'+metaCol+'">'+ref.n+'</span> <span style="font-size:13px;color:var(--bl)">/ '+META_SEM+'</span>', pctMeta+'% de la meta', metaCol)
       +kpi('Facturado', money(ref.fact), enCurso?'en curso (parcial)':(_delta(ref.fact,prev?prev.fact:null,true)+' vs sem ant.'))
       +kpi('Ticket promedio', money(refTicket), _delta(refTicket,prev?prevTicket:null,true)+' vs sem ant.')
       +kpi('Clientes', refCli, enCurso?'en curso (parcial)':(_delta(refCli,prev?prevCli:null,false)+' vs sem ant.'))
@@ -19445,7 +19474,7 @@ if('serviceWorker' in navigator){
     var faltan=Math.max(0,META_SEM-ref.n);
     h+='<div class="est-sec"><div class="est-sec-h"><span>Objetivo del año · 50 pedidos/semana</span>'
       +'<span style="color:var(--bl);font-weight:700;text-transform:none;letter-spacing:0">Récord '+recN+' (sem '+recW+') · Prom. 12 sem '+avg12+'</span></div>'
-      +'<div style="font-size:13px;color:var(--ink)">'+MSL[mNum]+' hasta hoy: <b>'+pedMes+' pedidos</b> en ~'+semMes+' sem · promedio <b style="color:'+promCol+'">'+promMes+'/sem</b> <span style="color:var(--bl)">(meta '+META_SEM+')</span>'
+      +'<div style="font-size:13px;color:var(--ink)">'+MSL[mNum]+' hasta hoy: <b>'+pedMes+' ventas</b> en ~'+semMes+' sem · promedio <b style="color:'+promCol+'">'+promMes+'/sem</b> <span style="color:var(--bl)">(meta '+META_SEM+')</span>'
       +(faltan>0?' · <b style="color:var(--o)">te faltan '+faltan+'/sem</b> para la meta':' · <b style="color:var(--gd)">¡meta alcanzada!</b>')+'</div>'
       +'<div style="height:12px;background:#F2E8C7;border-radius:6px;overflow:hidden;margin-top:9px;position:relative"><div style="height:100%;width:'+Math.min(100,Math.round(promMes/META_SEM*100))+'%;background:'+(promMes>=META_SEM?'linear-gradient(90deg,#4CAF50,#2E7D32)':'linear-gradient(90deg,#F07D47,#E5662F)')+'"></div></div>'
       +'</div>';
