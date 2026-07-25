@@ -2952,6 +2952,85 @@ function _totalSegunFp(ent,fp,noDisc,forzarDesc){
   return sub+env-desc;
 }
 
+// ── DESCUENTO A NIVEL COMBO (pedidos juntos del mismo cliente/día) ──
+// Un descuento "para todo el combo" = aplicar la misma decisión a CADA pedido:
+//  · comboNoDisc → cada pedido a precio pleno (sub+env), sin descuento.
+//  · comboPct>0  → cada pedido con ese % OFF sobre su subtotal (= % del total combinado).
+//  · ninguno     → cada pedido mantiene su propio descuento (total guardado).
+// Reusa el backend por-pedido (recalcular + noDescuento / descuentoManual), el mismo
+// que el cobro suelto. Pedidos con parcial previo o sin subtotal se cobran tal cual.
+function _pedComboAdj(p,st){
+  var sub=Number(p.sub)||0, env=Number(p.env)||0, orig=Number(p['$'])||0;
+  if(Number(p.cobradoParcial)>0 || sub<=0) return {total:orig, extra:null};
+  if(st.comboPct>0){
+    var monto=Math.round(sub*st.comboPct/100);
+    return {total:sub-monto+env, extra:{recalcular:true, descuentoManual:{tipo:'pct',valor:st.comboPct,monto:monto}}};
+  }
+  if(st.comboNoDisc) return {total:sub+env, extra:{recalcular:true, noDescuento:true}};
+  return {total:orig, extra:null};
+}
+function _comboRecalcTotal(st){
+  var tot=0; st.pedidos.forEach(function(p){ tot+=_pedComboAdj(p,st).total; });
+  st.total=tot; return tot;
+}
+// Refresca header + input "Recibí" cuando cambia el descuento del combo.
+function _comboAfterDescChange(st,fullRender){
+  var total=_comboRecalcTotal(st);
+  var subEl=document.getElementById('cobroRutaSub');
+  if(subEl)subEl.textContent=st.pedidos.length+' pedidos juntos · Total '+formatMoney(total);
+  if(!st.partial){
+    var prop=_leerPropinaModalCobro();
+    var aFav=_parseMoneyInput(document.getElementById('cobroAFavInp'));
+    var aplicar=Math.max(0,Math.min(Number(st.aplicarSaldo)||0,total));
+    var target=Math.max(0,total-aplicar)+prop+aFav;
+    if(st.fp==='Efectivo'){_setMoneyInput('cobroRecEf',target);_setMoneyInput('cobroRecMP',0);}
+    else if(st.fp==='Transferencia'){_setMoneyInput('cobroRecEf',0);_setMoneyInput('cobroRecMP',target);}
+  }
+  var stEl=document.getElementById('comboDescStatus');
+  if(stEl)stEl.innerHTML=_comboDescStatusTxt(st);
+  if(fullRender)_renderCobroDescInfo();
+  _recalcCobroRuta();
+}
+function _comboToggleNoDisc(){
+  var st=_cobroRutaState; if(!st||!st.combo)return;
+  st.comboNoDisc=!st.comboNoDisc;
+  if(st.comboNoDisc){ st.comboPct=0; var i=document.getElementById('comboDescPct'); if(i)i.value=''; }
+  _comboAfterDescChange(st,true);
+}
+function _comboOnPctChange(){
+  var st=_cobroRutaState; if(!st||!st.combo)return;
+  var v=parseFloat((document.getElementById('comboDescPct')||{}).value)||0;
+  v=Math.max(0,Math.min(100,v));
+  st.comboPct=v; if(v>0)st.comboNoDisc=false;
+  _comboAfterDescChange(st,false); // sin full-render para no perder el foco del input
+}
+function _comboDescStatusTxt(st){
+  var total=st.total||0;
+  if(st.comboNoDisc)return '🚫 <b>Sin descuentos</b> — precio pleno. Total: <b>'+formatMoney(total)+'</b>';
+  if(st.comboPct>0)return '💸 <b>'+st.comboPct+'% OFF</b> a todo el combo. Total: <b>'+formatMoney(total)+'</b>';
+  return 'Cada pedido con su descuento actual. Total: <b>'+formatMoney(total)+'</b>';
+}
+function _renderComboDescInfo(el,st){
+  var subT=0, envT=0, recalc=false;
+  st.pedidos.forEach(function(p){
+    var s=Number(p.sub)||0;
+    if(s>0 && !(Number(p.cobradoParcial)>0)){ subT+=s; envT+=Number(p.env)||0; recalc=true; }
+  });
+  _comboRecalcTotal(st);
+  el.style.display='block';
+  el.style.background='#FFFDF7'; el.style.border='1.5px solid #F9A825'; el.style.color='#5D4037';
+  var h='<div style="font-weight:800;margin-bottom:4px">💸 Descuento del combo · '+st.pedidos.length+' pedidos</div>';
+  if(!recalc){
+    el.innerHTML=h+'<div style="font-size:12px">No puedo recalcular descuentos acá (faltan subtotales). Se cobra el total guardado: <b>'+formatMoney(st.total)+'</b>.</div>';
+    return;
+  }
+  h+='<div id="comboDescStatus" style="font-size:12px">'+_comboDescStatusTxt(st)+'</div>';
+  h+='<button type="button" onclick="_comboToggleNoDisc()" style="display:block;width:100%;margin-top:8px;padding:8px;background:'+(st.comboNoDisc?'#9A3412':'#fff')+';color:'+(st.comboNoDisc?'#fff':'#9A3412')+';border:1.5px dashed #FB923C;border-radius:8px;font-family:inherit;font-size:12px;font-weight:800;cursor:pointer">'+(st.comboNoDisc?'✓ Todos sin descuento (tocá para volver)':'🚫 Quitar todos los descuentos (precio pleno)')+'</button>';
+  h+='<div style="display:flex;align-items:center;gap:6px;margin-top:8px"><span style="font-size:12px;font-weight:700">O poner % para todo:</span>'
+    +'<input type="text" id="comboDescPct" inputmode="decimal" value="'+(st.comboPct>0?st.comboPct:'')+'" placeholder="0" oninput="_comboOnPctChange()" style="width:66px;padding:6px 8px;border:1.5px solid #E0D2A8;border-radius:8px;font-family:inherit;font-size:13px;text-align:center">'
+    +'<span style="font-size:12px;font-weight:700">%</span></div>';
+  el.innerHTML=h;
+}
 // Pinta una caja informativa debajo de "Forma de pago" explicando POR QUÉ el total
 // es el que es. Casos: 10% OFF Efectivo (sub<$100K), 10% OFF +$100K (sub>=$100K
 // en cualquier FP), o sin descuento. Si el pedido tiene parcial previo, no se
@@ -2960,7 +3039,8 @@ function _renderCobroDescInfo(){
   var el=document.getElementById('cobroRutaDescInfo');
   if(!el)return;
   var st=_cobroRutaState;
-  if(!st || st.combo){el.style.display='none';return;}
+  if(!st){el.style.display='none';return;}
+  if(st.combo){_renderComboDescInfo(el,st);return;}
   var ent=st.ent;
   if(!ent){el.style.display='none';return;}
   // Parcial previo: el saldo ya viene calculado, no aplicar reglas de descuento.
@@ -3161,7 +3241,7 @@ function abrirCobroRuta(key){
     if(yaCobrados){showToast('Los pedidos ya están cobrados');return;}
     var totalC=peds.reduce(function(s,p){return s+(Number(p.$)||0);},0);
     var fp=peds[0].fp||'Efectivo';
-    _cobroRutaState={key:key,combo:true,pedidos:peds,total:totalC,totalOriginal:totalC,fp:fp,cambioOpen:false,aFavOpen:false};
+    _cobroRutaState={key:key,combo:true,pedidos:peds,total:totalC,totalOriginal:totalC,fp:fp,cambioOpen:false,aFavOpen:false,comboNoDisc:false,comboPct:0};
 
     document.getElementById('cobroRutaTitle').textContent='Cobrar a '+peds[0].c;
     document.getElementById('cobroRutaSub').textContent=peds.length+' pedidos juntos · Total '+formatMoney(totalC);
@@ -3172,6 +3252,7 @@ function abrirCobroRuta(key){
     document.getElementById('cobroRutaOverlay').classList.remove('hidden');
     var _mc={};peds.forEach(function(pp){(pp.p||[]).forEach(function(x){_mc[x.a]=(_mc[x.a]||0)+x.q;});});
     _renderCobroProds(Object.keys(_mc).map(function(a){return {a:a,q:_mc[a]};}));
+    _renderCobroDescInfo();
     _recalcCobroRuta();
     _refrescarBilleteraRuta();
     if(peds[0] && (peds[0].t||peds[0].c))_fetchSaldoPrevioModal(peds[0].t,peds[0].c);
@@ -3214,8 +3295,8 @@ function _setCobroFp(fp){
   var st=_cobroRutaState;
   st.fp=fp;
   document.querySelectorAll('#cobroRutaFp .cobro-pill').forEach(function(p){p.classList.toggle('on',p.getAttribute('data-fp')===fp)});
-  // Recalcular total (combo no tiene sub/env por pedido, mantenemos original).
-  var nuevoTotal=st.combo?st.totalOriginal:_totalSegunFp(st.ent,fp,st.noDisc,st.forzarDesc);
+  // Recalcular total. Combo: respeta el descuento del combo (noDisc / % / propio).
+  var nuevoTotal=st.combo?_comboRecalcTotal(st):_totalSegunFp(st.ent,fp,st.noDisc,st.forzarDesc);
   st.total=nuevoTotal;
   // Actualizar header sub
   if(st.combo){
@@ -3885,7 +3966,9 @@ function _confirmarCobroComboRuta(st,r){
   var fpComboFinal=esMixtoComboReal?'Mixto':fp;
   peds.forEach(function(p,idx){
     var k=eKey(p);
-    var totalP=Number(p.$)||0;
+    // Descuento del combo aplicado a este pedido (precio pleno / % / propio).
+    var _adj=_pedComboAdj(p,st);
+    var totalP=_adj.total;
     var propP=(idx===0)?prop:0;
     var aFavP=(idx===0)?aFav:0;
     // ef/tr = total puro del pedido (sin prop ni aFav). Backend suma aFav a la col
@@ -3917,6 +4000,12 @@ function _confirmarCobroComboRuta(st,r){
       cliente:p.c||'',
       repartidor:_rutaUser(),ts:Date.now()
     };
+    // Descuento del combo: forzar recalculo del total/facturado en el backend por pedido.
+    if(_adj.extra){
+      if(_adj.extra.recalcular)payload.recalcular=true;
+      if(_adj.extra.noDescuento)payload.noDescuento=true;
+      if(_adj.extra.descuentoManual)payload.descuentoManual=_adj.extra.descuentoManual;
+    }
     if(idx===0){
       if(r.camEf>0){
         if(r.recEf>=r.camEf)payload.cambioBilletera=r.camEf;
