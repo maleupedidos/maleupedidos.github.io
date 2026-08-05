@@ -31,9 +31,9 @@ const PRODUCTOS = [
   { id:28, cat:"Wraps",    nombre:"Wrap Carne",                    desc:"Wrap relleno de carne. Bien condimentado, listo al horno.",                                                       precio:13000, img:"wrap-carne.jpg", emoji:"🌯", chips:["Para 1–2 personas","Listo al horno en 10 min"] },
   { id:29, cat:"Wraps",    nombre:"Wrap Pollo",                    desc:"Wrap relleno de pollo. Sabroso y rendidor.",                                                                      precio:13000, img:"wrap-pollo.jpg", emoji:"🌯", chips:["Para 1–2 personas","Listo al horno en 10 min"] },
   { id:13, cat:"Franuis", nombre:"Franui Leche",            desc:"Frambuesas bañadas en chocolate con leche y blanco. El cierre perfecto.",        precio:9000,  img:"franui-new.jpg", emoji:"🍫", chips:["Para 2–3 personas","Listo para servir"] },
-  { id:14, cat:"Tortas", nombre:"Torta Golosa",                  desc:"Masa de chocolate, dulce de leche, mousse de chocolate y almendras acarameladas.", precio:24000, img:"torta-golosa.jpg", emoji:"🎂", chips:["Para 8–10 personas","Torta entera","Lista para cortar y servir"] },
-  { id:15, cat:"Tortas", nombre:"Torta Lemon Crumble",           desc:"Base sablée, relleno de limón y crumble crocante espolvoreado.",                 precio:24000, img:"torta-lemon.jpg", emoji:"🎂", chips:["Para 8–10 personas","Torta entera","Lista para cortar y servir"] },
-  { id:16, cat:"Tortas", nombre:"Torta Coco",                    desc:"Base crocante, dulce de leche y relleno de coco. Generosa y sin vueltas.",       precio:24000, img:"torta-coco.jpg", emoji:"🎂", chips:["Para 8–10 personas","Torta entera","Lista para cortar y servir"] },
+  { id:14, cat:"Tortas", nombre:"Torta Golosa",                  desc:"Masa de chocolate, dulce de leche, mousse de chocolate y almendras acarameladas.", precio:26000, img:"torta-golosa.jpg", emoji:"🎂", chips:["Para 8–10 personas","Torta entera","Lista para cortar y servir"] },
+  { id:15, cat:"Tortas", nombre:"Torta Lemon Crumble",           desc:"Base sablée, relleno de limón y crumble crocante espolvoreado.",                 precio:26000, img:"torta-lemon.jpg", emoji:"🎂", chips:["Para 8–10 personas","Torta entera","Lista para cortar y servir"] },
+  { id:16, cat:"Tortas", nombre:"Torta Coco",                    desc:"Base crocante, dulce de leche y relleno de coco. Generosa y sin vueltas.",       precio:26000, img:"torta-coco.jpg", emoji:"🎂", chips:["Para 8–10 personas","Torta entera","Lista para cortar y servir"] },
 ];
 
 const CATEGORIAS = [
