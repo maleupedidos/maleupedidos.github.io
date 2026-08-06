@@ -125,40 +125,6 @@ function getActiveCategories() {
 // Placeholder común hasta tener artes definitivos de cada combo.
 const COMBO_PLACEHOLDER_IMG = 'pack-muzarella-cocida.jpg';
 const COMBOS = [
-  // ── TEMPORALES (categoria definida → van primero, separados) ──
-  {
-    id: 'cmb_arg_16avos',   // id interno estable (sin ventas); ahora "Combo Mundialista"
-    nombre: 'Combo Mundialista',
-    desc: 'El que combina pizza y empanadas. Para alentar a la Selección con todo.',
-    personas: '4 a 6 personas',
-    precio: 54900,
-    img: 'combo-mundialista-1.jpg', fullCard: true,   // placa "Mundialista 1" (pizza + empanada)
-    emoji: '🌎',
-    flag: '🌎',
-    categoria: '🌎 Combos Mundialista',
-    zonas: ['estancias', 'pilar'],
-    slots: [
-      { label: 'Pizza',     unidad: 'pack de pizzas clásicas x2', pick: 1, options: { cat: 'Pack Pizzas x2' } },
-      { label: 'Empanadas', unidad: 'pack de empanadas x8',       pick: 1, options: { cat: 'Empanadas' } },
-      { label: 'Postre',    unidad: 'Franui',                     pick: 3, options: { ids: [13] } },
-    ],
-  },
-  {
-    id: 'cmb_mundialista',
-    nombre: 'Combo Mundialista · Pizzas',
-    desc: 'Ideal para compartir todos los partidos del Mundial.',
-    personas: '6 a 8 personas',
-    precio: 69900,
-    img: 'combo-mundialista.jpg', fullCard: true,
-    emoji: '🌎',
-    flag: '🌎',
-    categoria: '🌎 Combos Mundialista',
-    zonas: ['estancias', 'pilar'],
-    slots: [
-      { label: 'Pizzas', unidad: 'pack de pizzas clásicas x2', pick: 3, options: { cat: 'Pack Pizzas x2' } },  // 3 packs, sabores a elección libre
-      { label: 'Postre', unidad: 'Franui',                     pick: 3, options: { ids: [13] } },
-    ],
-  },
   // ── PERMANENTES ──
   {
     id: 'cmb_descubri_semana',
