@@ -572,6 +572,12 @@ var marcadosRecibido = {};
 var waCopied = {};
 var armadoChecked = {};
 var vendedoresMap = {}; // { "Marcos Bottcher": { wa, partido, barrios, ... } }
+// Etiqueta neutra para cuando NO sabemos de qué vendedor Red es un pedido/OC.
+// Antes se defaulteaba a 'Marcos Bottcher', que no es un default sino una mentira:
+// los pedidos de Rufino y Fini se rotulaban como de Marcos y Tadeo armaba la tanda
+// equivocada. Preferimos decir "no sé" antes que decir un nombre falso. (07/08/2026)
+var VEND_RED_SIN_ID = 'Vendedor Red (sin identificar)';
+function _vendRed(c) { return (c && c.vendedor) ? String(c.vendedor).trim() : VEND_RED_SIN_ID; }
 // Selector de semana de entrega: 'actual' = esta semana ISO + atrasados, 'prox' = próxima semana.
 var semSel = (function(){
   try { var s = localStorage.getItem('maleu_busqueda_sem'); return s === 'prox' ? 'prox' : 'actual'; }
@@ -2168,7 +2174,7 @@ function _renderPedidosInner() {
     var redList = (busqueda.clientes || []).filter(function(c) { return c.canal === 'Red'; });
     var byV = {};
     redList.forEach(function(c) {
-      var v = c.vendedor || 'Marcos Bottcher';
+      var v = _vendRed(c);
       if (!byV[v]) byV[v] = [];
       byV[v].push(c);
     });
@@ -2188,7 +2194,7 @@ function _renderPedidosInner() {
   } else if (pedLevel.indexOf('redv:') === 0) {
     var redVName = pedLevel.substring(5);
     var filtered = (busqueda.clientes || []).filter(function(c) {
-      return c.canal === 'Red' && (c.vendedor || 'Marcos Bottcher') === redVName;
+      return c.canal === 'Red' && _vendRed(c) === redVName;
     });
     html += '<div class="ped-back" onclick="pedNav(\'zone:Red\')">&#x2190; Volver</div>';
     html += '<div class="ped-summary"><strong>1</strong>consolidado — ' + redVName + ' · ' + filtered.length + ' pedidos</div>';
@@ -2225,7 +2231,7 @@ function renderRedConsolidadoCard(list) {
   // Maleu arma UN solo consolidado; el vendedor subdivide después.
   var byVendedor = {};
   list.forEach(function(cli) {
-    var v = cli.vendedor || 'Marcos Bottcher';
+    var v = _vendRed(cli);
     if (!byVendedor[v]) byVendedor[v] = { peds: [], prods: {} };
     byVendedor[v].peds.push(cli);
     cli.items.forEach(function(it) {
@@ -2292,7 +2298,7 @@ function toggleArmadoRedConsolidado(vName) {
   // Marcar todos los pedidos individuales del vendedor (para que Ruta los vea armados)
   (busqueda.clientes || []).forEach(function(cli) {
     if (cli.canal !== 'Red') return;
-    if ((cli.vendedor || 'Marcos Bottcher') !== vName) return;
+    if (_vendRed(cli) !== vName) return;
     var k = cardKeyFor(cli);
     if (done) armadoChecked[k] = true;
     else delete armadoChecked[k];
@@ -2362,7 +2368,7 @@ function countGruposArmados(list) {
   });
   // Red: 1 grupo por vendedor
   var byV = {};
-  red.forEach(function(c) { var v = c.vendedor || 'Marcos Bottcher'; byV[v] = true; });
+  red.forEach(function(c) { byV[_vendRed(c)] = true; });
   Object.keys(byV).forEach(function(vName) {
     total++;
     var ck = ('RedVendedor|' + vName).replace(/[^a-zA-Z0-9]/g, '_');
@@ -2555,8 +2561,11 @@ function pedNav(level) {
 // Agrupa las OCs de busqueda.ocs por proveedor → por producto → splits por
 // cliente/pedido. Usado por la vista "Por Proveedor" en ARMADO.
 // Filtra por semana seleccionada (Esta / Próxima) igual que las otras vistas.
-// Red: consolida todos los splits bajo el vendedor (Marcos Bottcher) porque
-// Tadeo le entrega la tanda completa a él, no cliente final por cliente final.
+// Red: consolida los splits bajo CADA vendedor (Marcos / Rufino / Fini) porque
+// Tadeo le entrega la tanda completa a cada uno, no cliente final por cliente final.
+// OJO: antes fusionaba TODAS las OC de Red en un solo renglón rotulado con
+// "Marcos Bottcher" hardcodeado — los pedidos de Rufino y Fini aparecían a nombre
+// de Marcos y no había forma de saber qué le tocaba a cada uno. (Tadeo 07/08/2026)
 // Devuelve: {totalProvs, porProv:{<prov>:{pedido,recibido,porProd:{<abbr>:{prod,pedido,recibido,splits:[{qty,cliente,canal,nped,est}]}}}}}
 function _porProveedorAgregado() {
   var porProv = {};
@@ -2582,17 +2591,20 @@ function _porProveedorAgregado() {
     p.pedido += qty;
     if (recibido) p.recibido += qty;
     if (oc.canal === 'Red') {
-      // Consolidar Red bajo el vendedor. Si hay más de un OC Red para este
-      // producto, sumamos qty en el mismo split (un solo renglón total).
+      // Consolidar Red bajo SU vendedor: un renglón por vendedor, no uno solo para
+      // toda la Red. El nombre viene del backend (oc.vend, join por N° Pedido contra
+      // la col H de la hoja Red). Si un payload viejo cacheado no lo trae, mostramos
+      // una etiqueta neutra en vez de inventar un nombre.
+      var etiquetaRed = oc.vend ? (oc.vend + ' (Vendedor Red)') : VEND_RED_SIN_ID;
       var existing = null;
       for (var si = 0; si < p.splits.length; si++) {
-        if (p.splits[si].canal === 'Red') { existing = p.splits[si]; break; }
+        if (p.splits[si].canal === 'Red' && p.splits[si].cliente === etiquetaRed) { existing = p.splits[si]; break; }
       }
       if (existing) {
         existing.qty += qty;
         if (!recibido) existing.est = 'Pendiente'; // si alguno está pendiente, todo el split se marca pendiente
       } else {
-        p.splits.push({qty:qty, cliente:'Marcos Bottcher (Vendedor Red)', canal:'Red', nped:'', est:recibido?'Recibido':'Pendiente'});
+        p.splits.push({qty:qty, cliente:etiquetaRed, canal:'Red', nped:'', est:recibido?'Recibido':'Pendiente'});
       }
     } else {
       p.splits.push({qty:qty, cliente:oc.cliente||'?', canal:oc.canal||'', nped:oc.nped||'', est:est});
