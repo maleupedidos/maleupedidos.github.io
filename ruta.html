@@ -2610,12 +2610,43 @@ function _cobroCardHTML(pc, globalIdx){
   c+='<button type="button" class="cobro-btn-cobrado" style="flex:1" onclick="abrirCobroPendiente('+globalIdx+')">Cobrado</button></div></div>';
   return c;
 }
-// HTML de la card de un vendedor Red (cobra todos sus pedidos de una).
+// Registro de las cards de vendedor que están en pantalla. El modal de cobro lee
+// de acá el desglose por semana en vez de recibirlo serializado en el onclick.
+var _cobroVendReg={};
+function _vendNombreLimpio(s){return String(s||'').replace(/\s*\(Vendedor Red\)\s*$/,'').trim()}
+
+// HTML de la card de un vendedor Red (liquida todos sus pedidos entregados).
+// Muestra el desglose por semana ISO porque la liquidación es semana por semana,
+// igual que en el portal del vendedor — si Tadeo cobra de menos, cierra las
+// semanas viejas y la última queda abierta con saldo.
 function _cobroVendedorHTML(pc){
+  var vName=_vendNombreLimpio(pc.c);
+  _cobroVendReg[vName]=pc;
+  var sems=pc.sems||[];
+  var ya=Number(pc.yaPagado)||0;
+  var nPed=(pc.pedidosIds||[]).length;
   var c='<div class="cobro-card" style="border-color:#c62828">';
-  c+='<div class="cobro-card-head"><span class="cobro-card-name">'+pc.c+'</span><span class="cobro-card-total">'+formatMoney(pc.$)+'</span></div>';
-  c+='<div style="font-size:11px;color:var(--muted);padding:4px 0">'+pc.pedidosIds.length+' pedidos &middot; Bruto '+formatMoney(pc.totalBruto)+' &middot; Comision '+(pc.comisionPct||17)+'% -'+formatMoney(pc.comision)+'</div>';
-  c+='<div class="cobro-card-actions"><button type="button" class="cobro-btn-cobrado" style="flex:1" onclick="confirmarCobroVendedor(\''+pc.c.replace(/\'/g,'')+'\','+pc.$+','+(pc.totalBruto||0)+','+(pc.comision||0)+','+pc.pedidosIds.length+')">Cobrado ('+pc.pedidosIds.length+' pedidos)</button></div></div>';
+  c+='<div class="cobro-card-head">'
+    +'<span class="cobro-card-name">'+vName
+    +' <span style="font-size:9px;background:#c62828;color:#fff;padding:2px 6px;border-radius:50px;font-weight:700;vertical-align:middle">VENDEDOR RED</span></span>'
+    +'<span class="cobro-card-total">'+formatMoney(pc.$)+'</span></div>';
+  c+='<div style="font-size:11px;color:var(--muted);padding:3px 0">'+nPed+' pedido'+(nPed!==1?'s':'')
+    +' &middot; Bruto '+formatMoney(pc.totalBruto||0)
+    +' &middot; Comisión '+(pc.comisionPct||17)+'% −'+formatMoney(pc.comision||0)+'</div>';
+  if(ya>0){
+    c+='<div style="background:#E8F5E9;border-left:3px solid #2E7D32;padding:6px 9px;border-radius:6px;font-size:11px;color:#1B5E20;font-weight:700;margin:2px 0">'
+      +'✓ Ya rindió '+formatMoney(ya)+' &middot; saldo '+formatMoney(pc.$)+'</div>';
+  }
+  if(sems.length){
+    c+='<div style="display:flex;flex-wrap:wrap;gap:5px;padding:4px 0">';
+    sems.forEach(function(s){
+      var abierta=(Number(s.yaPagado)||0)>0&&(Number(s.saldo)||0)>0;
+      c+='<span style="font-size:10px;background:'+(abierta?'#FFF8E1':'#F5F0E1')+';border:1px solid '+(abierta?'#F9A825':'#E8DFC4')+';color:#5D4037;padding:2px 7px;border-radius:50px;font-weight:700">'
+        +'Sem '+s.sem+' &middot; '+s.n+'p &middot; '+formatMoney(s.saldo)+'</span>';
+    });
+    c+='</div>';
+  }
+  c+='<div class="cobro-card-actions"><button type="button" class="cobro-btn-cobrado" style="flex:1" onclick="confirmarCobroVendedor(\''+vName.replace(/'/g,'')+'\')">Cobrar</button></div></div>';
   return c;
 }
 // Banner "COBRAR JUNTOS" para un cliente con 2+ pedidos en el mismo día.
@@ -4378,64 +4409,168 @@ function cancelarRuta(key){
   render();
 }
 
-function confirmarCobroVendedor(vendedor,monto,bruto,comision,nPedidos){
-  var vEsc=vendedor.replace(/'/g,'');
-  // El backend manda c = "Marcos Bottcher (Vendedor Red)" — separamos para el modal.
-  var nombre=String(vendedor).replace(/\s*\(Vendedor Red\)\s*$/,'');
-  bruto=Number(bruto)||0; comision=Number(comision)||0;
-  nPedidos=Number(nPedidos)||0;
-  var pctReal=bruto>0?(comision*100/bruto):0;
-  var pctStr=pctReal>0?pctReal.toFixed(pctReal===Math.round(pctReal)?0:1)+'%':'';
-  var o=document.getElementById('confirmOverlay');o.className='confirm-overlay';
-  var html=''
-    +'<div class="confirm-box" style="padding:0;overflow:hidden;max-width:340px">'
-    +  '<div style="padding:18px 20px 14px;border-bottom:1px solid #eee">'
-    +    '<div style="font-size:11px;font-weight:700;color:#888;text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px">Cobrar a vendedor Red</div>'
-    +    '<div style="font-size:18px;font-weight:800;color:#1a1a1a;line-height:1.2">'+nombre+'</div>'
-    +  '</div>'
-    +  '<div style="padding:18px 20px 6px;text-align:center">'
-    +    '<div style="font-size:11px;font-weight:700;color:#888;text-transform:uppercase;letter-spacing:.5px">Neto a cobrar</div>'
-    +    '<div style="font-size:34px;font-weight:800;color:#2E7D32;line-height:1.1;margin-top:4px">'+formatMoney(monto)+'</div>'
-    +  '</div>'
-    +  (bruto>0
-      ? '<div style="padding:8px 20px 14px;font-size:12px;color:#555">'
-        + '<div style="display:flex;justify-content:space-between;padding:4px 0"><span>Bruto</span><b>'+formatMoney(bruto)+'</b></div>'
-        + '<div style="display:flex;justify-content:space-between;padding:4px 0;color:#C62828"><span>Comisión'+(pctStr?' ('+pctStr+')':'')+'</span><b>−'+formatMoney(comision)+'</b></div>'
-        + (nPedidos>0?'<div style="text-align:center;font-size:11px;color:#999;margin-top:6px">'+nPedidos+' pedido'+(nPedidos!==1?'s':'')+' pasan a Pagado a Maleu</div>':'')
-        + '</div>'
-      : '')
-    +  '<div style="padding:14px 20px 18px;background:#fafafa">'
-    +    '<div style="font-size:12px;font-weight:700;color:#5D4037;text-align:center;margin-bottom:10px">¿Cómo te pagó?</div>'
-    +    '<div style="display:flex;gap:8px">'
-    +      '<button type="button" class="btn-si" style="flex:1;background:#2E7D32;font-size:13px;padding:11px 8px" onclick="cerrarConfirm();cobrarVendedorRed(\''+vEsc+'\',\'Efectivo\')">💵 Efectivo</button>'
-    +      '<button type="button" class="btn-si" style="flex:1;font-size:13px;padding:11px 8px" onclick="cerrarConfirm();cobrarVendedorRed(\''+vEsc+'\',\'Transferencia\')">📱 Transf.</button>'
-    +    '</div>'
-    +    '<button type="button" class="btn-no" style="width:100%;margin-top:8px;font-size:13px;padding:10px" onclick="cerrarConfirm()">Cancelar</button>'
-    +  '</div>'
-    +'</div>';
-  o.innerHTML=html;
+/* ── Cobro a vendedor Red ────────────────────────────────────────────────────
+   Antes eran dos botones (Efectivo / Transferencia) y nada más: no se podía
+   cobrar mixto ni parcial, y no se veía qué semanas se estaban liquidando.
+   Ahora el modal es el mismo criterio que el portal del vendedor (red.html →
+   liqOpen/liqUpdateSum): montos por método, suma en vivo y liquidación semana
+   por semana de la más vieja a la más nueva. (Tadeo 07/08/2026) */
+var _cvCtx=null;
+function _cvMonto(s){return Number(String(s||'').replace(/[^\d,.-]/g,'').replace(/\./g,'').replace(',','.'))||0}
+function _cvEl(id){return document.getElementById(id)}
+
+// Reparto FIFO de un monto entre las semanas abiertas. Replica exactamente lo que
+// hace el backend, para que lo que Tadeo ve en pantalla sea lo que va a pasar.
+function _cvPlan(monto){
+  var resto=monto,out=[];
+  (_cvCtx&&_cvCtx.sems||[]).forEach(function(s){
+    var saldo=Number(s.saldo)||0;
+    if(saldo<=0)return;
+    var asign=Math.min(resto,saldo);resto-=asign;
+    out.push({sem:s.sem,n:s.n,saldo:saldo,asign:asign,cierra:asign+0.01>=saldo});
+  });
+  return out;
 }
 
-function cobrarVendedorRed(vendedor,formaPago){
-  formaPago=formaPago||'Transferencia';
+function confirmarCobroVendedor(vendedor){
+  var nombre=_vendNombreLimpio(vendedor);
+  var pc=_cobroVendReg[nombre];
+  if(!pc){showToast('No tengo los datos de '+nombre+' — actualizá Cobros');return}
+  var saldo=Number(pc.$)||0;
+  var bruto=Number(pc.totalBruto)||0;
+  var comision=Number(pc.comision)||0;
+  var ya=Number(pc.yaPagado)||0;
+  var nPedidos=(pc.pedidosIds||[]).length;
+  _cvCtx={vendedor:nombre,saldo:saldo,sems:(pc.sems||[])};
+  var pctReal=bruto>0?(comision*100/bruto):0;
+  var pctStr=pctReal>0?pctReal.toFixed(pctReal===Math.round(pctReal)?0:1)+'%':'';
+  var inp='width:100%;box-sizing:border-box;padding:10px 9px;font-size:17px;font-weight:800;font-family:inherit;'
+         +'border:1.5px solid #ddd;border-radius:9px;text-align:right;background:#fff;color:#1a1a1a';
+  var chip='font-size:10px;font-weight:800;padding:4px 0;border:1px solid #ddd;background:#fff;'
+          +'border-radius:7px;cursor:pointer;font-family:inherit;color:#5D4037;flex:1';
+  var html=''
+    +'<div class="confirm-box" style="padding:0;overflow:hidden;max-width:360px;text-align:left">'
+    +  '<div style="padding:15px 18px 11px;border-bottom:1px solid #eee">'
+    +    '<div style="font-size:10px;font-weight:800;color:#c62828;text-transform:uppercase;letter-spacing:.6px">Liquidación &middot; Vendedor Red</div>'
+    +    '<div style="font-size:19px;font-weight:800;color:#1a1a1a;line-height:1.2;margin-top:2px">'+nombre+'</div>'
+    +  '</div>'
+    +  '<div style="padding:13px 18px 2px;text-align:center">'
+    +    '<div style="font-size:10px;font-weight:800;color:#888;text-transform:uppercase;letter-spacing:.6px">Saldo a cobrar</div>'
+    +    '<div style="font-size:31px;font-weight:800;color:#2E7D32;line-height:1.1;margin-top:1px">'+formatMoney(saldo)+'</div>'
+    +  '</div>'
+    +  '<div style="padding:8px 18px 12px;font-size:12px;color:#555">'
+    +    (bruto>0?'<div style="display:flex;justify-content:space-between;padding:2px 0"><span>Bruto</span><b>'+formatMoney(bruto)+'</b></div>'
+    +      '<div style="display:flex;justify-content:space-between;padding:2px 0;color:#C62828"><span>Comisión'+(pctStr?' ('+pctStr+')':'')+'</span><b>−'+formatMoney(comision)+'</b></div>':'')
+    +    (ya>0?'<div style="display:flex;justify-content:space-between;padding:2px 0;color:#2E7D32"><span>✓ Ya rindió</span><b>'+formatMoney(ya)+'</b></div>':'')
+    +    '<div style="font-size:11px;color:#999;margin-top:5px">'+nPedidos+' pedido'+(nPedidos!==1?'s':'')+' pendiente'+(nPedidos!==1?'s':'')+' de liquidar</div>'
+    +  '</div>'
+    +  '<div style="padding:0 18px 12px"><div id="cvSemanas" style="font-size:11px"></div></div>'
+    +  '<div style="padding:13px 18px 16px;background:#fafafa;border-top:1px solid #eee">'
+    +    '<div style="font-size:11px;font-weight:800;color:#5D4037;margin-bottom:8px">¿Cómo te pagó?</div>'
+    +    '<div style="display:flex;gap:9px">'
+    +      '<div style="flex:1"><label style="font-size:10px;font-weight:800;color:#2E7D32;display:block;margin-bottom:3px">💵 EFECTIVO</label>'
+    +        '<input id="cvEf" type="tel" inputmode="numeric" placeholder="0" style="'+inp+'" oninput="_cvSync()"></div>'
+    +      '<div style="flex:1"><label style="font-size:10px;font-weight:800;color:#1976d2;display:block;margin-bottom:3px">📱 TRANSFER.</label>'
+    +        '<input id="cvTr" type="tel" inputmode="numeric" placeholder="0" style="'+inp+'" oninput="_cvSync()"></div>'
+    +    '</div>'
+    +    '<div style="display:flex;gap:6px;margin-top:7px">'
+    +      '<button type="button" style="'+chip+'" onclick="_cvQuick(\'ef\')">Todo efectivo</button>'
+    +      '<button type="button" style="'+chip+'" onclick="_cvQuick(\'tr\')">Todo transfer.</button>'
+    +      '<button type="button" style="'+chip+'" onclick="_cvQuick(\'x\')">Limpiar</button>'
+    +    '</div>'
+    +    '<div id="cvSum" style="display:flex;justify-content:space-between;align-items:baseline;margin-top:10px;padding:9px 11px;border-radius:9px;background:#F5F0E1;font-size:12px;font-weight:800;color:#5D4037">'
+    +      '<span id="cvSumLbl">Total a registrar</span><span id="cvSumVal">'+formatMoney(0)+'</span></div>'
+    +    '<div style="display:flex;gap:8px;margin-top:10px">'
+    +      '<button type="button" class="btn-no" style="flex:1;font-size:13px;padding:11px" onclick="cerrarConfirm()">Cancelar</button>'
+    +      '<button type="button" id="cvOk" class="btn-si" style="flex:1.4;background:#2E7D32;font-size:13px;padding:11px;opacity:.45" disabled onclick="_cvConfirm()">Confirmar cobro</button>'
+    +    '</div>'
+    +  '</div>'
+    +'</div>';
+  var o=_cvEl('confirmOverlay');o.className='confirm-overlay';o.innerHTML=html;
+  _cvSync();
+}
+
+// Repinta el desglose por semana, la suma y el estado del botón.
+function _cvSync(){
+  if(!_cvCtx)return;
+  var ef=_cvMonto(_cvEl('cvEf')&&_cvEl('cvEf').value);
+  var tr=_cvMonto(_cvEl('cvTr')&&_cvEl('cvTr').value);
+  var suma=ef+tr,saldo=_cvCtx.saldo;
+  var plan=_cvPlan(suma),h='';
+  plan.forEach(function(p){
+    var activa=p.asign>0;
+    var col=!activa?'#999':(p.cierra?'#2E7D32':'#E65100');
+    var bg=!activa?'#F7F7F7':(p.cierra?'#E8F5E9':'#FFF8E1');
+    var nota=!activa?'sin asignar':(p.cierra?'✓ cierra':'parcial · queda '+formatMoney(p.saldo-p.asign));
+    h+='<div style="display:flex;justify-content:space-between;align-items:center;padding:5px 9px;margin-bottom:4px;'
+      +'border-radius:7px;background:'+bg+';color:'+col+';font-weight:700">'
+      +'<span>Semana '+p.sem+' <span style="opacity:.7;font-weight:600">· '+p.n+' ped · '+formatMoney(p.saldo)+'</span></span>'
+      +'<span>'+nota+'</span></div>';
+  });
+  var elS=_cvEl('cvSemanas');if(elS)elS.innerHTML=h;
+
+  var lbl='Total a registrar',val=formatMoney(suma),bg='#F5F0E1',col='#5D4037',ok=false;
+  // Saldo 0 con pedidos abiertos: ya rindió todo por su portal pero quedaron pedidos
+  // sin marcar. No hay plata que cobrar, solo cerrarlos.
+  if(suma<=0&&saldo<=0){lbl='Ya rindió todo';val='cerrar pedidos abiertos';bg='#E8F5E9';col='#1B5E20';ok=true;}
+  else if(suma<=0){}
+  else if(suma>saldo){lbl='Excede el saldo';val=formatMoney(suma)+' · +'+formatMoney(suma-saldo);bg='#FFEBEE';col='#C62828';}
+  else if(suma===saldo){lbl='Total a registrar';val=formatMoney(suma)+' ✓ liquida todo';bg='#E8F5E9';col='#1B5E20';ok=true;}
+  else{lbl='Cobro parcial';val=formatMoney(suma)+' · falta '+formatMoney(saldo-suma);bg='#FFF8E1';col='#E65100';ok=true;}
+  var s=_cvEl('cvSum');if(s){s.style.background=bg;s.style.color=col;}
+  var l=_cvEl('cvSumLbl');if(l)l.textContent=lbl;
+  var v=_cvEl('cvSumVal');if(v)v.textContent=val;
+  var b=_cvEl('cvOk');if(b){b.disabled=!ok;b.style.opacity=ok?'1':'.45';}
+}
+
+function _cvQuick(modo){
+  if(!_cvCtx)return;
+  var e=_cvEl('cvEf'),t=_cvEl('cvTr');if(!e||!t)return;
+  if(modo==='ef'){e.value=String(_cvCtx.saldo);t.value='';}
+  else if(modo==='tr'){e.value='';t.value=String(_cvCtx.saldo);}
+  else{e.value='';t.value='';}
+  _cvSync();
+}
+
+function _cvConfirm(){
+  if(!_cvCtx)return;
+  var ef=_cvMonto(_cvEl('cvEf').value),tr=_cvMonto(_cvEl('cvTr').value);
+  var suma=ef+tr;
+  if(suma<=0&&_cvCtx.saldo>0){showToast('Ingresá un monto');return}
+  if(suma>_cvCtx.saldo){showToast('El monto excede el saldo');return}
+  var ctx=_cvCtx;
+  cerrarConfirm();
+  cobrarVendedorRed(ctx.vendedor,ef,tr,suma>=ctx.saldo);
+}
+
+function cobrarVendedorRed(vendedor,ef,tr,esTotal){
+  ef=Number(ef)||0; tr=Number(tr)||0;
   // El backend espera el nombre EXACTO como está en la col Vendedor del Sheets
   // (sin sufijos). Acá venía "Marcos Bottcher (Vendedor Red)" que el frontend
   // arma para mostrar — strict equality contra col 8 fallaba y el cobro caía
   // silenciosamente (updated:0). Reportado por Tadeo 30/06/2026.
-  var vendedorLimpio=String(vendedor).replace(/\s*\(Vendedor Red\)\s*$/,'').trim();
-  var payload={action:'cobrarVendedorRed',vendedor:vendedorLimpio,formaPago:formaPago,ts:Date.now()};
-  // UI optimista: sacar al vendedor de la lista local (con backup para revertir si falla)
-  var backup=pendientesCobro.filter(function(pc){return (pc.isVendedor&&pc.c.indexOf(vendedor)===0);});
-  pendientesCobro=pendientesCobro.filter(function(pc){return !(pc.isVendedor&&pc.c.indexOf(vendedor)===0)});
-  saveLocal();
-  if(currentTab==='cobros')renderCobrosFromServer();
-  var elB=document.getElementById('tabCobrosCount');if(elB)elB.textContent=pendientesCobro.length||'';
+  var vendedorLimpio=_vendNombreLimpio(vendedor);
+  // Mandamos MONTOS, no una forma de pago: así el backend puede registrar mixto
+  // (ef>0 y tr>0) y parcial (ef+tr < saldo), repartiendo por semana igual que el
+  // portal del vendedor. El campo formaPago quedó como camino viejo del backend.
+  var payload={action:'cobrarVendedorRed',vendedor:vendedorLimpio,ef:ef,tr:tr,ts:Date.now()};
+  var metodoTxt=(ef>0&&tr>0)?'mixto':(ef>0?'efectivo':'MP');
+  // UI optimista SOLO si se liquida todo. En un cobro parcial el vendedor sigue
+  // debiendo, así que la card tiene que quedar — la refrescamos contra el server.
+  var backup=[];
+  function _revert(){if(!backup.length)return;pendientesCobro=pendientesCobro.concat(backup);saveLocal();if(currentTab==='cobros')renderCobrosFromServer();var e2=document.getElementById('tabCobrosCount');if(e2)e2.textContent=pendientesCobro.length||'';}
+  if(esTotal){
+    backup=pendientesCobro.filter(function(pc){return (pc.isVendedor&&_vendNombreLimpio(pc.c)===vendedorLimpio);});
+    pendientesCobro=pendientesCobro.filter(function(pc){return !(pc.isVendedor&&_vendNombreLimpio(pc.c)===vendedorLimpio)});
+    saveLocal();
+    if(currentTab==='cobros')renderCobrosFromServer();
+    var elB=document.getElementById('tabCobrosCount');if(elB)elB.textContent=pendientesCobro.length||'';
+  }
   if(navigator.vibrate)navigator.vibrate(30);
-  function _revert(){pendientesCobro=pendientesCobro.concat(backup);saveLocal();if(currentTab==='cobros')renderCobrosFromServer();var e2=document.getElementById('tabCobrosCount');if(e2)e2.textContent=pendientesCobro.length||'';}
   // Offline real → encolar. Online → FETCH DIRECTO endurecido (NO syncQueue: en el
   // iframe del Panel la cola se trababa y el cobro nunca se mandaba, sin avisar).
   if(!isOnline){ syncQueue.push(payload);saveLocal();showToast('Cobrado offline — se sincroniza al volver señal');return; }
-  showLoader('Cobrando a '+vendedor.split(' ')[0]+'...');
+  showLoader('Cobrando a '+vendedorLimpio.split(' ')[0]+'...');
   var _ab=(typeof AbortController!=='undefined')?new AbortController():null;
   var _t=setTimeout(function(){if(_ab)_ab.abort();},15000);
   var _fopts={method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(payload),redirect:'follow'};
@@ -4444,19 +4579,30 @@ function cobrarVendedorRed(vendedor,formaPago){
     .then(function(rs){clearTimeout(_t);return rs.json().catch(function(){return{ok:false,error:'InvalidJSON'};});})
     .then(function(res){
       hideLoader(true);
+      var corto=vendedorLimpio.split(' ')[0];
       if(res&&res.ok){
-        if(res.updated>0){ showToast('✓ Cobrado a '+vendedor.split(' ')[0]+' · '+(formaPago==='Efectivo'?'efectivo':'MP')+' ($'+formatMoney(res.total||0).replace('$','')+')'); }
+        if(res.total>0||res.updated>0){
+          // Un parcial NO marca pedidos como Pagado (updated=0) pero SÍ registró
+          // plata; y el cierre de una semana ya rendida marca pedidos sin cobrar
+          // nada (total=0). Los dos son éxito, no error.
+          var msg=res.total>0
+            ?('✓ Cobrado a '+corto+' · '+metodoTxt+' '+formatMoney(res.total))
+            :('✓ '+corto+' ya había rendido · '+res.updated+' pedidos cerrados');
+          if(res.saldoPendiente>0) msg+=' · queda '+formatMoney(res.saldoPendiente);
+          else if(res.total>0&&res.updated>0) msg+=' · '+res.updated+' pedidos liquidados';
+          showToast(msg);
+        }
         else if(res.reason==='ya_pagado' || res.reason==='sin_pendientes'){
           // NO es un error: ese vendedor YA estaba cobrado (card vieja/cacheada).
           // Mensaje tranquilo y la card se queda quitada (el fetch de abajo reconcilia).
-          showToast('✓ '+vendedor.split(' ')[0]+' ya estaba cobrado — no hay nada pendiente'+(res.ultimaFechaPago?' (pagó el '+res.ultimaFechaPago+')':''));
+          showToast('✓ '+corto+' ya estaba cobrado — no hay nada pendiente'+(res.ultimaFechaPago?' (pagó el '+res.ultimaFechaPago+')':''));
         } else {
           // reason 'sin_match': el nombre NO existe en la hoja Red → problema real.
           _revert();
-          alert('⚠ El cobro NO se aplicó.\n\nNo se encontró ningún pedido a nombre de "'+vendedor+'" en la hoja Red.\n\nRevisá que el nombre del vendedor esté EXACTO como en la solapa Vendedores.\n\nNada se modificó. Avisá si pasa de nuevo.');
+          alert('⚠ El cobro NO se aplicó.\n\nNo se encontró ningún pedido a nombre de "'+vendedorLimpio+'" en la hoja Red.\n\nRevisá que el nombre del vendedor esté EXACTO como en la solapa Vendedores.\n\nNada se modificó. Avisá si pasa de nuevo.');
         }
         if(currentTab==='cobros')fetchCobrosPendientes(true);
-      } else { _revert(); alert('❌ Error al cobrar a '+vendedor+'\n\n'+((res&&res.error)||'sin respuesta del servidor')+'\n\nNada se modificó. Probá de nuevo.'); }
+      } else { _revert(); alert('❌ Error al cobrar a '+vendedorLimpio+'\n\n'+((res&&(res.err||res.error))||'sin respuesta del servidor')+'\n\nNada se modificó. Probá de nuevo.'); }
     })
     .catch(function(err){
       clearTimeout(_t);hideLoader(true);_revert();
