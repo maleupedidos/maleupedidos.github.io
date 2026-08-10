@@ -245,6 +245,31 @@ function defaultSelection(c) {
     return sel;
   });
 }
+/* Igual que defaultSelection pero prefiriendo gustos que SÍ tengan stock. Se
+   usa solo al abrir el configurador: si el gusto por defecto estaba agotado, el
+   modal abría directo en "Sin stock para esta combinación" y parecía que el
+   combo entero no se podía armar. La selección "cruda" se sigue usando para el
+   precio tachado, para que no baile según el stock del día. */
+function defaultSelectionInStock(c) {
+  const usado = {};
+  return (c.slots || []).map(slot => {
+    const opts = slotOptions(slot);
+    const pick = slot.pick || 1;
+    const sel = [];
+    for (let k = 0; k < pick; k++) {
+      let elegido = null;
+      for (let i = 0; i < opts.length; i++) {
+        const libre = optionAvailable(opts[i].id);
+        if (libre === Infinity || libre - (usado[opts[i].id] || 0) > 0) { elegido = opts[i]; break; }
+      }
+      // Si no hay nada libre, caemos al default de siempre (el modal avisará).
+      if (!elegido) elegido = opts[k % opts.length] || opts[0];
+      if (elegido) { usado[elegido.id] = (usado[elegido.id] || 0) + 1; sel.push(elegido.id); }
+      else sel.push(null);
+    }
+    return sel;
+  });
+}
 /* Resuelve una selección (array alineado a slots, cada uno array de prodIds)
    en componentes mergeados {comp:[{id,qty}], picks:[{label,prodId,nombre}]}. */
 function resolveComp(c, selections) {
@@ -292,6 +317,46 @@ function compMaxTotal(comp, excludeSig) {
   });
   return cap;
 }
+/* Máximo de instancias del combo eligiendo el MEJOR gusto disponible en cada
+   slot, en vez de dar por sentado el gusto por defecto.
+
+   Antes las cards usaban compMaxTotal(defaultSelection(c)), que mira solo la
+   primera opción de cada slot. Bastaba que se acabara UN gusto (típicamente el
+   Franui, que es la única opción del slot Postre en todos los combos, o la
+   primera tarta de la lista) para que TODOS los combos se mostraran "Sin
+   stock" — cuando en realidad el combo se puede armar perfecto con los otros
+   gustos. Acá sumamos las unidades libres de todas las opciones del slot: si
+   entre todas alcanzan, el combo está disponible.
+
+   Los slots de un mismo combo no comparten productos entre sí (ver COMBOS), así
+   que sumar por slot no double-countea. */
+function comboBestMax(c, excludeSig) {
+  var libre = {};
+  function libreDe(id) {
+    if (libre[id] === undefined) {
+      var sc = getStockCap(id);
+      libre[id] = (sc === null || sc === undefined)
+        ? Infinity
+        : Math.max(0, sc - _unitsConsumed(id, excludeSig));
+    }
+    return libre[id];
+  }
+  var cap = Infinity;
+  (c.slots || []).forEach(function(slot) {
+    var opts = slotOptions(slot);
+    if (!opts.length) { cap = 0; return; }
+    var total = 0, hayIlimitada = false;
+    opts.forEach(function(p) {
+      var f = libreDe(p.id);
+      if (f === Infinity) hayIlimitada = true;
+      else total += f;
+    });
+    if (hayIlimitada) return;  // alguna opción sin tope → este slot no limita
+    cap = Math.min(cap, Math.floor(total / (slot.pick || 1)));
+  });
+  return cap;
+}
+
 /* Disponibilidad de una opción suelta (cuántas unidades libres quedan ahora). */
 function optionAvailable(prodId) {
   const sc = getStockCap(prodId);
@@ -329,7 +394,7 @@ const ZONAS = {
     // 06/07/26: eliminado delivery de miércoles en Pilar. Solo viernes
     // (Tadeo hace el recorrido combinado M2+M3 solo ese día).
     horarios: { "Viernes":"A coordinar" },
-    deliveryText: "📅 Entregas: solo los viernes · Horario a coordinar",
+    deliveryText: "📅 Entregas: viernes durante el día · Pedidos hasta el jueves 12 hs",
     showStock: false
   },
   clubes: {
@@ -463,10 +528,27 @@ const BARRIOS_PILAR_MODAL = [
     val: '__otro__',
     nombre: 'Otra zona de Pilar',
     isRed: false, isOther: true, badge: 'Tadeo',
-    subBarrios: 'Pilara · El Ocho · Otros',
-    subBarriosList: ['Pilara', 'El Ocho']  // '__otro__' se agrega dinámico para el input libre
+    // 10/08/26: Los Alcanfores y Estancias del Río se mudaron acá desde la zona
+    // Estancias. Entregan solo los viernes, en el recorrido de Tadeo.
+    subBarrios: 'Los Alcanfores · Estancias del Río · Pilara · El Ocho · Otros',
+    subBarriosList: ['Los Alcanfores', 'Estancias del Río', 'Pilara', 'El Ocho']  // '__otro__' se agrega dinámico para el input libre
   }
 ];
+
+/* Barrios que hasta el 10/08/2026 eran zona Estancias (canal Home) y pasaron
+   a "Otra zona de Pilar". Cambian los días de entrega (ahora solo viernes),
+   pero por decisión comercial NO pierden los dos beneficios que tenían como
+   Home: envío gratis y 10% OFF en efectivo. Por eso getShipping() y
+   cashDiscountActive() los tratan como excepción dentro de la zona Pilar. */
+const BARRIOS_EX_HOME = ['Los Alcanfores', 'Estancias del Río'];
+function _pilarBarrioEsExHome() {
+  if (currentZone !== 'pilar') return false;
+  // Mismo criterio que _pilarBarrioIsRed(): el dropdown puede estar vacío si
+  // renderPilarBarrios() todavía no corrió, así que caemos al estado JS.
+  var sel = $id('f-pilar-barrio');
+  var val = (sel && sel.value) || selectedPilarBarrio || '';
+  return BARRIOS_EX_HOME.indexOf(val) !== -1;
+}
 
 /* Devuelve la ZONA canonical actualmente elegida (o null si no hay).
    Soporta que selectedPilarBarrio sea la zona (Ayres y alrededores) O un
@@ -735,6 +817,9 @@ function getShipping() {
   //     facturado sin envío, así que el envío entero se queda con Marcos).
   //   NO-Red (Pilara, El Ocho, Otro barrio): $5.000 — lo reparte Tadeo.
   if (currentZone === 'pilar') {
+    // Ex-Home (Los Alcanfores / Estancias del Río): conservan el envío gratis
+    // que tenían cuando eran zona Estancias.
+    if (_pilarBarrioEsExHome()) return 0;
     return _pilarBarrioIsRed() ? 3000 : z.envio;
   }
   return z.envio;
@@ -745,11 +830,15 @@ function pilarIsOtroBarrio() {
   return !!(el && el.value === '__otro__');
 }
 // Descuentos separados por tipo (jun/26):
-//   10% Efectivo  → solo Home (Estancias).
+//   10% Efectivo  → Home (Estancias) y los ex-Home de Pilar (Los Alcanfores /
+//                   Estancias del Río, ver BARRIOS_EX_HOME).
 //   10% +$100K    → Home (Estancias) Y Pilar NO-Red (Pilara, El Ocho,
 //                   Otro barrio). Pilar Red (Marcos) y Clubes nunca.
 function cashDiscountActive() {
-  return currentZone === 'estancias';
+  if (currentZone === 'estancias') return true;
+  // Ex-Home: conservan el 10% en efectivo aunque ahora estén en zona Pilar.
+  if (_pilarBarrioEsExHome()) return true;
+  return false;
 }
 function bulkDiscountActive() {
   if (currentZone === 'estancias') return true;
@@ -1307,6 +1396,35 @@ function welcomeShowZoneStep() {
   _hideAllSteps();
   $id('loc-step-zone').style.display = '';
 }
+/* Aviso contextual del paso "fecha" para Pilar y Alrededores.
+
+   El cliente frecuente entra y lo PRIMERO que ve es este paso (ya tiene zona y
+   barrio guardados), así que es el único lugar donde podemos contarle cómo
+   funciona el recorrido. Y lo que necesita saber cambia según el día: el
+   recorrido es el viernes y los pedidos cierran el jueves 12hs (mismo cutoff
+   que _isPilarFridayCutoffPast, que es el que además esconde el viernes del
+   calendario). Devuelve null en las zonas donde no aplica. */
+function _pilarDateStepNote() {
+  if (currentZone !== 'pilar') return null;
+  var nowAR = new Date(Date.now() - 3 * 3600 * 1000);
+  var dow = nowAR.getUTCDay();      // 0=Dom .. 6=Sáb
+  var hour = nowAR.getUTCHours();
+  // Lun a Mié: hay tiempo de sobra, solo explicamos cómo viene la mano.
+  if (dow >= 1 && dow <= 3) {
+    return { tone: 'info', html: '🚚 Repartimos los <strong>viernes durante el día</strong>. Tenés tiempo hasta el <strong>jueves 12 hs</strong> para entrar en el recorrido de esta semana.' };
+  }
+  // Jueves antes del cierre: última chance para el viernes de mañana.
+  if (dow === 4 && hour < 12) {
+    return { tone: 'urgente', html: '⏰ <strong>¡Estás a tiempo!</strong> Cerramos los pedidos <strong>hoy a las 12 hs</strong> y mañana viernes salimos a repartir. Dejanos el tuyo y entrás en el recorrido.' };
+  }
+  // Viernes: hoy es el día. Lo invitamos al recorrido de la semana que viene.
+  if (dow === 5) {
+    return { tone: 'entregando', html: '📦 <strong>Hoy estamos entregando</strong> en Pilar y Alrededores. ¿Querés vivir la experiencia Maleu? El <strong>próximo viernes</strong> volvemos a pasar — dejanos tu pedido ahora y ya quedás en el recorrido.' };
+  }
+  // Jue después de las 12, Sáb y Dom: este viernes ya cerró.
+  return { tone: 'info', html: '📅 Los pedidos de <strong>este viernes ya cerraron</strong>. Dejanos el tuyo ahora y salís en el recorrido del <strong>viernes que viene</strong>.' };
+}
+
 function welcomeShowDateStep() {
   _hideAllSteps();
   var step = $id('loc-step-date');
@@ -1315,6 +1433,19 @@ function welcomeShowDateStep() {
   var z = ZONAS[currentZone];
   var label = step.querySelector('#loc-date-zone-label strong');
   if (label && z) label.textContent = z.nombre;
+  // Aviso del cutoff (solo Pilar; en el resto queda oculto)
+  var note = $id('loc-date-note');
+  if (note) {
+    var n = _pilarDateStepNote();
+    if (n) {
+      note.className = 'loc-date-note ' + n.tone;
+      note.innerHTML = n.html;
+      note.style.display = '';
+    } else {
+      note.innerHTML = '';
+      note.style.display = 'none';
+    }
+  }
   // Render grilla
   renderWelcomeDateGrid();
 }
@@ -1928,7 +2059,9 @@ function renderComboFooter(comboId) {
   } else if (comboHasChoices(c)) {
     btn = '<button class="add-btn" onclick="openComboConfig(\'' + c.id + '\')">Armar combo</button>';
   } else {
-    const max = compMaxTotal(resolveComp(c, defaultSelection(c)).comp, null);
+    // Sin elecciones: el "mejor" armado es el único posible, pero usamos
+    // comboBestMax igual para que card y badge midan siempre con la misma vara.
+    const max = comboBestMax(c, null);
     const sinStock = max !== Infinity && max <= 0;
     btn = '<button class="add-btn" onclick="addComboDefault(\'' + c.id + '\')"' + (sinStock ? ' disabled' : '') + '>' +
       (sinStock ? 'Sin stock' : '+ Agregar') + '</button>';
@@ -1947,7 +2080,7 @@ function updateStockBadgesCombos() {
   getActiveCombos().forEach(c => {
     const el = $id('stock-' + c.id);
     if (!el) return;
-    const max = compMaxTotal(resolveComp(c, defaultSelection(c)).comp, null);
+    const max = comboBestMax(c, null);
     if (mode === 'ilimitado' || max === Infinity) el.innerHTML = '';
     else if (max <= 0) el.innerHTML = '<span class="stock-badge stock-out">Sin stock</span>';
     else if (max <= 3) el.innerHTML = '<span class="stock-badge stock-low">Últimas ' + max + ' unidades</span>';
@@ -1962,7 +2095,7 @@ let _comboConfig = null;  // { comboId, sel:[[prodId,...], ...] }
 function openComboConfig(comboId) {
   const c = COMBO_MAP[comboId]; if (!c) return;
   if (c.terminado) { toast('⚠ Este combo ya no está disponible', 3000); return; }
-  _comboConfig = { comboId, sel: defaultSelection(c) };
+  _comboConfig = { comboId, sel: defaultSelectionInStock(c) };
   _ensureComboModal();
   renderComboConfig();
   const ov = $id('combo-modal');
@@ -3244,12 +3377,23 @@ function _stickyOffsetPx() {
 }
 function _smoothScrollToEl(el, opts) {
   if (!el) return false;
-  var behavior = (opts && opts.instant) ? 'auto' : 'smooth';
+  var instant = !!(opts && opts.instant);
   var offset = _stickyOffsetPx();
   var doScroll = function() {
     var rect = el.getBoundingClientRect();
-    var y = rect.top + window.pageYOffset - offset;
-    window.scrollTo({ top: Math.max(0, y), behavior: behavior });
+    var y = Math.max(0, rect.top + window.pageYOffset - offset);
+    if (!instant) { window.scrollTo({ top: y, behavior: 'smooth' }); return; }
+    /* OJO: behavior:'auto' NO es instantáneo. Hereda el `scroll-behavior:smooth`
+       que el CSS le pone al <html>, así que lo que parecía un salto era en
+       realidad una animación de miles de píxeles. En iPhone esa animación se
+       corta sola (basta que el dedo roce la pantalla al soltar el botón) y el
+       cliente quedaba tirado a mitad de camino, arriba de los Combos, en vez de
+       llegar al formulario. Apagamos el smooth del CSS solo durante el salto. */
+    var root = document.documentElement;
+    var prev = root.style.scrollBehavior;
+    root.style.scrollBehavior = 'auto';
+    window.scrollTo(0, y);
+    root.style.scrollBehavior = prev;
   };
   doScroll();
   // Segundo intento por si un reflow tardío desplazó el layout (típico cuando
@@ -3472,6 +3616,25 @@ window.addEventListener('resize', updateCatNavTop);
 // Zona guardada
 let savedZone = localStorage.getItem('maleu_zone');
 if (savedZone === 'capital') { savedZone = 'pilar'; localStorage.setItem('maleu_zone', 'pilar'); }
+/* Migración 10/08/2026: Los Alcanfores y Estancias del Río salieron de la zona
+   Estancias y pasaron a "Otra zona de Pilar". Los clientes recurrentes tienen
+   maleu_zone='estancias' cacheado en el navegador; sin esto entrarían a una
+   zona donde su barrio ya no está en el dropdown y quedarían trabados. Los
+   movemos solos a Pilar con la zona y el barrio ya elegidos. La fecha guardada
+   se descarta sola: _loadSavedDate() ignora las fechas de otra zona. */
+if (savedZone === 'estancias') {
+  try {
+    var _cliMig = JSON.parse(localStorage.getItem('maleu_cliente_estancias') || 'null')
+               || JSON.parse(localStorage.getItem('maleu_cliente_pg') || 'null');
+    var _bpMig = _cliMig && _cliMig.barrioPrivado;
+    if (_bpMig && BARRIOS_EX_HOME.indexOf(_bpMig) !== -1) {
+      savedZone = 'pilar';
+      localStorage.setItem('maleu_zone', 'pilar');
+      localStorage.setItem('maleu_pilar_zona', JSON.stringify({ val: '__otro__', nombre: 'Otra zona de Pilar', ts: Date.now() }));
+      localStorage.setItem('maleu_pilar_barrio', JSON.stringify({ val: _bpMig, nombre: _bpMig, ts: Date.now() }));
+    }
+  } catch(e) {}
+}
 if (savedZone && ZONAS[savedZone]) {
   // Cliente recurrente: tiene zona. NO mostrar paso 1 (zona).
   currentZone = savedZone;
