@@ -3843,6 +3843,9 @@ function _renderRutaSaldoBanner(elements, saldo){
 // Toggle "Pago parcial": permite cobrar menos que el total (queda saldo).
 function _toggleCobroParcial(btn){
   var st=_cobroRutaState; if(!st)return;
+  // Avisar ACÁ y no después de tipear el monto: en combo el parcial no se puede
+  // repartir entre los pedidos (ver guarda en confirmarCobroRuta).
+  if(st.combo){showToast('El parcial no se reparte en un combo — cobralo pedido por pedido');return;}
   st.partial=!st.partial;
   if(btn)btn.classList.toggle('on',st.partial);
   if(st.partial){
@@ -3863,6 +3866,11 @@ function confirmarCobroRuta(){
   var st=_cobroRutaState;
   // Combo: distribuir el cobro entre los pedidos individuales.
   if(st.combo){
+    // Un parcial sobre un combo no tiene reparto definido entre los N pedidos, y
+    // _confirmarCobroComboRuta cobra cada uno por su monto FULL. Antes de tener
+    // un reparto explícito preferimos frenar: registrar de más es peor que no
+    // registrar. (Ver bug Cristina Plate abajo.)
+    if(r.partial){showToast('El parcial no se reparte en un combo — cobralo pedido por pedido');return;}
     return _confirmarCobroComboRuta(st,r);
   }
   // Pedido suelto desde COBROS: payload estilo backend + commit endurecido (fetch directo).
@@ -3870,6 +3878,28 @@ function confirmarCobroRuta(){
     return _confirmarCobroPendiente(st,r);
   }
   var key=st.key,ent=st.ent,fp=st.fp,total=st.total;
+
+  // ── PAGO PARCIAL desde ENTREGA → action=cobrarParcial ──
+  // Bug Cristina Plate 12/08/2026 (pedido Home #763, $72.300): el toggle "Pago
+  // parcial" sólo se respetaba en el path de COBROS (st.fromCobros, más abajo en
+  // _confirmarCobroPendiente). Abriendo el cobro desde la card de ENTREGA se caía
+  // acá, que arma ef/tr con el TOTAL del pedido → el parcial entraba como cobro
+  // COMPLETO y no quedaba ninguna fila en "Cobros Parciales". El saldo se
+  // evaporaba en silencio, y encima el botón decía "Registrar parcial $X".
+  if(r.partial){
+    var montoPar=Math.round(r.neto);
+    if(montoPar<=0)return;
+    var fpPar=(fp==='Mixto')?(r.recMP>=r.recEf?'Transferencia':'Efectivo'):fp;
+    // OJO: NO tocamos cobrados[key] ni ent.ep. El pedido queda entregado pero
+    // debiendo el saldo — el backend lo cierra solo cuando los parciales cubren
+    // el total. Si lo marcáramos cobrado acá, volveríamos al mismo bug.
+    var payloadPar={action:'cobrarParcial',hoja:ent.h,id:String(ent.id),row:ent.r||0,
+      formaPago:fpPar,monto:montoPar,notas:'Parcial desde Ruta/ENTREGA',ts:Date.now()};
+    cerrarCobroRuta();
+    _commitCobroParcialModal(payloadPar,ent);
+    renderRuta();
+    return;
+  }
   // Calcular ef/tr que se registran en el pedido (después del cambio cruzado)
   // - El cambio Ef devuelto físicamente sale del Ef que entró → cobro Ef = recEf - camEf
   // - El cambio MP devuelto físicamente sale del MP que entró → cobro MP = recMP - camMP
