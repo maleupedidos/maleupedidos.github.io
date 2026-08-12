@@ -4404,7 +4404,11 @@ function _confirmarCobroPendiente(st,r){
 function _commitCobroPendiente(payload,saldoPayload,pc){
   var pcKey=(pc.h||'')+'|'+(pc.id||'');
   try{showLoader('Cobrando a '+((pc.c||'').split(' ')[0])+'...');}catch(_){}
-  var _guard=setTimeout(function(){try{hideLoader(true);}catch(_){}try{showToast('⏳ El servidor tardó demasiado — verificá en unos segundos');}catch(_){}},45000);
+  // Guard de UI a 12s. La UI ya es optimista (el pedido salió de la lista) y el
+  // modal está cerrado, así que dejar el loader puesto 45s no protege de nada:
+  // sólo hace que Tadeo mire una pantalla trabada. Lo sacamos temprano y avisamos
+  // que sigue en segundo plano; la confirmación real llega igual más abajo.
+  var _guard=setTimeout(function(){try{hideLoader(true);}catch(_){}try{showToast('⏳ Está tardando — sigue en segundo plano, ya podés seguir');}catch(_){}},12000);
   try{
     // UI optimista: sacar de la lista local
     cobrados[pcKey]=true;
@@ -4472,7 +4476,13 @@ function _commitCobroPendiente(payload,saldoPayload,pc){
       .catch(function(err){
         if(_settled)return;_settled=true;clearTimeout(_timer);clearTimeout(_hardTimer);clearTimeout(_guard);
         hideLoader(true);
-        _onFailTransitorio(err&&err.name==='AbortError'?'⏳ Tardó más de 30s — reintentando y verificando…':'⏳ Sin respuesta — reintentando y verificando…');
+        // Mensaje honesto: el POST ya salió, así que lo más probable es que el
+        // cobro HAYA entrado y sólo se haya perdido la confirmación. Decir "se
+        // acabó el tiempo" sugiere que no se registró y asusta al pedo — abortar
+        // el fetch no cancela nada del lado del servidor.
+        _onFailTransitorio(err&&err.name==='AbortError'
+          ? '⏳ No llegó la confirmación (>30s). El cobro probablemente ya entró — verificando…'
+          : '⏳ Sin respuesta. Verificando si el cobro entró…');
       });
   } catch(_ex_){
     clearTimeout(_guard);hideLoader(true);
@@ -4815,9 +4825,28 @@ function cobrarVendedorRed(vendedor,ef,tr,esTotal){
 // Si el backend respondió ok:false (o hubo error de red), reintentamos con backoff.
 var syncBusy=false;
 var syncBackoffMs=2000;
+/* Guard global del loader de la cola de sync. Seis flujos distintos hacen
+   showLoader(...)+processSyncQueue() sin ningún tope de tiempo: si el backend
+   tarda, o si el fetch aborta a los 25s y entra al backoff, el loader se queda
+   puesto medio minuto y parece que la app se colgó. Lo sacamos a los 12s: la
+   cola sigue trabajando sola y el syncBanner ya muestra que hay pendientes. */
+var _syncLoaderGuard=null;
+function _armarGuardLoaderSync(){
+  if(_syncLoaderGuard)return;
+  _syncLoaderGuard=setTimeout(function(){
+    _syncLoaderGuard=null;
+    if(syncQueue.length>0){
+      try{hideLoader(true);}catch(_){}
+      try{showToast('⏳ Está tardando — sigue sincronizando en segundo plano');}catch(_){}
+    }
+  },12000);
+}
+function _limpiarGuardLoaderSync(){if(_syncLoaderGuard){clearTimeout(_syncLoaderGuard);_syncLoaderGuard=null;}}
+
 function processSyncQueue(){
   if(!isOnline||syncQueue.length===0||syncBusy)return;
   syncBusy=true;
+  _armarGuardLoaderSync();
   var item=syncQueue[0];
   var attempts=(item.__attempts||0)+1;item.__attempts=attempts;
   // Timeout 25s: si el backend está colgado (lock contention, hoja grande), no
@@ -4837,7 +4866,7 @@ function processSyncQueue(){
         syncBackoffMs=2000;
         document.getElementById('syncBanner').className='sync-banner'+(syncQueue.length>0?' visible':'');
         if(syncQueue.length>0)setTimeout(processSyncQueue,800);
-        else hideLoader(true);
+        else {_limpiarGuardLoaderSync();hideLoader(true);}
       }else{
         // Backend respondió pero falló (ok:false). Log + retry con backoff.
         console.warn('sync fail',item,res);
@@ -4847,7 +4876,7 @@ function processSyncQueue(){
           var err='Error sync tras 5 intentos: '+(res&&res.error||'desconocido');
           if(typeof showToast==='function')showToast(err);
           saveLocal();
-          if(syncQueue.length===0)hideLoader(true);
+          if(syncQueue.length===0){_limpiarGuardLoaderSync();hideLoader(true);}
           setTimeout(processSyncQueue,1000);
         }else{
           // Reintentar con backoff exponencial (2s → 4s → 8s → 16s → 32s)
