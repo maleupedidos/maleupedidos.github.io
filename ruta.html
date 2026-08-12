@@ -681,6 +681,7 @@ select.np-input{background:var(--white) url("data:image/svg+xml;utf8,<svg xmlns=
       <button type="button" class="cobro-toggle" id="cobroToggleDesc" onclick="_toggleCobroSec('cobroDescSection',this)">💸 Descuento</button>
       <button type="button" class="cobro-toggle" id="cobroTogglePropina" onclick="_toggleCobroSec('cobroPropinaSection',this)">💰 Propina</button>
       <button type="button" class="cobro-toggle" id="cobroTogglePartial" onclick="_toggleCobroParcial(this)">🧩 Pago parcial</button>
+      <button type="button" class="cobro-toggle" id="cobroToggleAlCosto" onclick="_toggleCobroAlCosto(this)">🏷️ Al costo</button>
     </div>
 
     <div class="cobro-ruta-section" id="cobroDescSection" style="display:none">
@@ -2502,6 +2503,7 @@ function abrirCobroComboCobros(idxsCsv){
   if(fp==='Efectivo'){_setMoneyInput('cobroRecEf',totalC);_setMoneyInput('cobroRecMP',0);}
   else {_setMoneyInput('cobroRecEf',0);_setMoneyInput('cobroRecMP',totalC);}
   _resetCobroSeccionesColapsables();
+  _refrescarPreciosSilencioso();
   // Limpiar restos de un pedido individual abierto antes: en combo NO se muestra el
   // detalle de productos ni el cartel de 10% de un solo pedido (el total ya viene sumado).
   _renderCobroProds(null);
@@ -2546,6 +2548,7 @@ function abrirCobroPendiente(idx){
   _setMoneyInput('cobroRecEf',_autoCargaEf(fp,total));
   _setMoneyInput('cobroRecMP',_autoCargaMP(fp,total));
   _resetCobroSeccionesColapsables();
+  _refrescarPreciosSilencioso();
   document.getElementById('cobroRutaOverlay').classList.remove('hidden');
   _renderCobroProds(pc.p);
   _renderCobroDescInfo();
@@ -2993,6 +2996,15 @@ function _totalSegunFp(ent,fp,noDisc,forzarDesc){
 function _pedComboAdj(p,st){
   var sub=Number(p.sub)||0, env=Number(p.env)||0, orig=Number(p['$'])||0;
   if(Number(p.cobradoParcial)>0 || sub<=0) return {total:orig, extra:null};
+  // "Al costo" manda sobre cualquier otro ajuste del combo.
+  if(st.comboAlCosto){
+    var cst=_costoPedido(p);
+    if(cst!==null && cst<sub){
+      var mCosto=sub-cst;
+      return {total:cst+env, extra:{recalcular:true, descuentoManual:{tipo:'monto',valor:mCosto,monto:mCosto}}};
+    }
+    return {total:orig, extra:null};   // sin costo conocido: ese pedido va a precio normal
+  }
   if(st.comboPct>0){
     var monto=Math.round(sub*st.comboPct/100);
     return {total:sub-monto+env, extra:{recalcular:true, descuentoManual:{tipo:'pct',valor:st.comboPct,monto:monto}}};
@@ -3255,8 +3267,10 @@ function _resetCobroSeccionesColapsables(){
     var bm=document.getElementById('cobroDescTipoMonto');if(bm)bm.classList.remove('on');
     var pref=document.getElementById('cobroDescPrefix');if(pref)pref.textContent='%';
   }
-  // Reset toggle parcial + banner de saldo previo (persisten en DOM entre aperturas)
+  // Reset toggle parcial + al costo + banner de saldo previo (persisten en DOM entre aperturas)
   var btnPar=document.getElementById('cobroTogglePartial');if(btnPar)btnPar.classList.remove('on');
+  var btnAC=document.getElementById('cobroToggleAlCosto');if(btnAC)btnAC.classList.remove('on');
+  if(_cobroRutaState){_cobroRutaState.alCosto=false;delete _cobroRutaState.comboAlCosto;}
   var saldoEl=document.getElementById('cobroSaldoPrevio');if(saldoEl){saldoEl.style.display='none';saldoEl.innerHTML='';}
   var aplicRow=document.getElementById('cobroSumAplicRow');if(aplicRow)aplicRow.style.display='none';
   var quedaRow=document.getElementById('cobroSumQuedaRow');if(quedaRow)quedaRow.style.display='none';
@@ -3280,6 +3294,7 @@ function abrirCobroRuta(key){
     _setMoneyInput('cobroRecEf',_autoCargaEf(fp,totalC));
     _setMoneyInput('cobroRecMP',_autoCargaMP(fp,totalC));
     _resetCobroSeccionesColapsables();
+  _refrescarPreciosSilencioso();
     document.getElementById('cobroRutaOverlay').classList.remove('hidden');
     var _mc={};peds.forEach(function(pp){(pp.p||[]).forEach(function(x){_mc[x.a]=(_mc[x.a]||0)+x.q;});});
     _renderCobroProds(Object.keys(_mc).map(function(a){return {a:a,q:_mc[a]};}));
@@ -3307,6 +3322,7 @@ function abrirCobroRuta(key){
   _setMoneyInput('cobroRecEf',_autoCargaEf(fp,total));
   _setMoneyInput('cobroRecMP',_autoCargaMP(fp,total));
   _resetCobroSeccionesColapsables();
+  _refrescarPreciosSilencioso();
   document.getElementById('cobroRutaOverlay').classList.remove('hidden');
   _renderCobroProds(ent.p);
   _renderCobroDescInfo();
@@ -3327,7 +3343,10 @@ function _setCobroFp(fp){
   st.fp=fp;
   document.querySelectorAll('#cobroRutaFp .cobro-pill').forEach(function(p){p.classList.toggle('on',p.getAttribute('data-fp')===fp)});
   // Recalcular total. Combo: respeta el descuento del combo (noDisc / % / propio).
-  var nuevoTotal=st.combo?_comboRecalcTotal(st):_totalSegunFp(st.ent,fp,st.noDisc,st.forzarDesc);
+  // "Al costo" NO depende de la forma de pago (no le aplica el 10% OFF), así que
+  // se conserva tal cual — si no, cambiar de Efectivo a MP lo borraba en silencio.
+  // El combo ya queda cubierto: _comboRecalcTotal pasa por _pedComboAdj.
+  var nuevoTotal=st.combo?_comboRecalcTotal(st):(st.alCosto?Number(st.total)||0:_totalSegunFp(st.ent,fp,st.noDisc,st.forzarDesc));
   st.total=nuevoTotal;
   // Actualizar header sub
   if(st.combo){
@@ -3335,7 +3354,7 @@ function _setCobroFp(fp){
   } else {
     var subTxt=st.esParcialPrev
       ? 'Saldo '+formatMoney(nuevoTotal)+' · '+st.ent.h+' #'+st.ent.id+' (ya cobraste '+formatMoney(st.yaCobrado||0)+' de '+formatMoney(st.totalOriginal||0)+')'
-      : 'Pedido '+formatMoney(nuevoTotal)+' · '+st.ent.h+' #'+st.ent.id;
+      : 'Pedido '+formatMoney(nuevoTotal)+' · '+st.ent.h+' #'+st.ent.id+(st.alCosto?' · AL COSTO':'');
     document.getElementById('cobroRutaSub').textContent=subTxt;
   }
   _renderCobroDescInfo();
@@ -3840,12 +3859,111 @@ function _renderRutaSaldoBanner(elements, saldo){
   elements.forEach(function(el){el.style.display='';el.innerHTML=html;});
 }
 
+/* ── COBRAR "AL COSTO" ──────────────────────────────────────────────────────
+   Cobra el pedido a lo que nos costó a nosotros, para el caso de consumo propio
+   o de favores (ej. Tadeo se lleva 2 tartas). Se implementa como un DESCUENTO
+   MANUAL por monto en vez de abrir un camino nuevo: así viaja por la misma vía
+   ya probada hasta el backend (escribe la col Descuento y recalcula el Total),
+   y no hace falta tocar Apps Script.
+   El ENVÍO no se descuenta: no es un producto, es un gasto real que igual se
+   pagó. Si el pedido no tiene envío, no cambia nada. */
+
+// Refresca NP_PRECIOS sin tocar el DOM de "Nuevo pedido". npFetchPrecios() sí lo
+// repinta, y sólo corre al abrir ESA vista: si Tadeo nunca la abre, el catálogo
+// queda en los valores hardcodeados de esta versión del archivo y "Al costo"
+// cobraría un costo viejo sin avisar. Se dispara al abrir el modal de cobro.
+var _preciosFresh=false;
+function _refrescarPreciosSilencioso(){
+  if(_preciosFresh)return;
+  fetch(APPS_SCRIPT_URL+'?action=precios&t='+Date.now())
+    .then(function(r){return r.json()})
+    .then(function(d){if(d&&Object.keys(d).length>0){NP_PRECIOS=d;_preciosFresh=true;}})
+    .catch(function(){});
+}
+
+// Costo del pedido = Σ (costo unitario del catálogo × cantidad). Devuelve null
+// si falta el costo de ALGÚN producto — preferimos no ofrecer el botón antes
+// que cobrar sobre un costo inventado.
+function _costoPedido(p){
+  var items=p&&p.p;
+  if(!Array.isArray(items)||!items.length)return null;
+  var tot=0;
+  for(var i=0;i<items.length;i++){
+    var pr=NP_PRECIOS[items[i].a];
+    var c=pr?Number(pr.c):0;
+    if(!(c>0))return null;
+    tot+=c*(Number(items[i].q)||0);
+  }
+  return Math.round(tot);
+}
+
+// Refresca header + input "Recibí" después de entrar/salir de "Al costo".
+// Espeja la cola de _onDescManualChange (misma mecánica, distinto disparador).
+function _afterAlCostoChange(st){
+  var nuevoTotal=Number(st.total)||0;
+  var sub=document.getElementById('cobroRutaSub');
+  if(sub)sub.textContent='Pedido '+formatMoney(nuevoTotal)+' · '+st.ent.h+' #'+st.ent.id+(st.alCosto?' · AL COSTO':'');
+  if(!st.partial){
+    var aplic=Math.max(0,Math.min(Number(st.aplicarSaldo)||0,nuevoTotal));
+    var target=Math.max(0,nuevoTotal-aplic);
+    if(st.fp==='Efectivo'){_setMoneyInput('cobroRecEf',target);_setMoneyInput('cobroRecMP',0);}
+    else if(st.fp==='Transferencia'){_setMoneyInput('cobroRecEf',0);_setMoneyInput('cobroRecMP',target);}
+  }
+  _renderCobroDescInfo();
+  _recalcCobroRuta();
+}
+
+function _quitarAlCosto(st,btn){
+  st.alCosto=false; delete st.comboAlCosto;
+  if(btn)btn.classList.remove('on');
+  if(st.combo){ _comboAfterDescChange(st,true); return; }
+  delete st.descManual;
+  st.total=_totalSegunFp(st.ent,st.fp);   // vuelve a la regla normal (incluye 10% OFF si aplica)
+  _afterAlCostoChange(st);
+}
+
+function _toggleCobroAlCosto(btn){
+  var st=_cobroRutaState; if(!st)return;
+  if(st.alCosto){ _quitarAlCosto(st,btn); return; }
+  if(st.partial){showToast('Quitá el modo parcial para cobrar al costo');return;}
+  if(st.esParcialPrev){showToast('El saldo ya viene calculado del parcial — no se puede cobrar al costo');return;}
+
+  if(st.combo){
+    var sinCosto=st.pedidos.filter(function(p){return _costoPedido(p)===null;});
+    if(sinCosto.length){showToast('No tengo el costo de todos los productos del combo');return;}
+    st.alCosto=true; st.comboAlCosto=true;
+    st.comboPct=0; st.comboNoDisc=false;   // "al costo" manda sobre los otros ajustes
+    if(btn)btn.classList.add('on');
+    _comboAfterDescChange(st,true);
+    showToast('Cobrando al costo · Total '+formatMoney(st.total));
+    return;
+  }
+
+  var costo=_costoPedido(st.ent);
+  if(costo===null){showToast('No tengo el costo de todos los productos de este pedido');return;}
+  var subP=Number(st.ent.sub)||0, envP=Number(st.ent.env)||0, origP=Number(st.ent['$'])||0;
+  var totalBase=(subP>0)?(subP+envP):origP;   // total sin descuento, igual que _onDescManualChange
+  var nuevoTotal=costo+envP;
+  if(nuevoTotal>=totalBase){
+    showToast('El costo ('+formatMoney(nuevoTotal)+') no es menor al total del pedido');
+    return;
+  }
+  st.alCosto=true;
+  // El descuento manual ES la diferencia precio→costo. El backend lo escribe en
+  // la col Descuento y recalcula el Total, así el margen del pedido queda en cero
+  // en vez de fingir una venta a precio pleno.
+  var descCosto=totalBase-nuevoTotal;
+  st.descManual={tipo:'monto',valor:descCosto,monto:descCosto,totalBase:totalBase};
+  st.total=nuevoTotal;
+  if(btn)btn.classList.add('on');
+  _afterAlCostoChange(st);
+  showToast('Al costo: '+formatMoney(nuevoTotal)+' (te ahorrás cobrarle '+formatMoney(descCosto)+')');
+}
+
 // Toggle "Pago parcial": permite cobrar menos que el total (queda saldo).
 function _toggleCobroParcial(btn){
   var st=_cobroRutaState; if(!st)return;
-  // Avisar ACÁ y no después de tipear el monto: en combo el parcial no se puede
-  // repartir entre los pedidos (ver guarda en confirmarCobroRuta).
-  if(st.combo){showToast('El parcial no se reparte en un combo — cobralo pedido por pedido');return;}
+  if(st.alCosto){showToast('Quitá "Al costo" para cobrar parcial');return;}
   st.partial=!st.partial;
   if(btn)btn.classList.toggle('on',st.partial);
   if(st.partial){
@@ -3866,11 +3984,6 @@ function confirmarCobroRuta(){
   var st=_cobroRutaState;
   // Combo: distribuir el cobro entre los pedidos individuales.
   if(st.combo){
-    // Un parcial sobre un combo no tiene reparto definido entre los N pedidos, y
-    // _confirmarCobroComboRuta cobra cada uno por su monto FULL. Antes de tener
-    // un reparto explícito preferimos frenar: registrar de más es peor que no
-    // registrar. (Ver bug Cristina Plate abajo.)
-    if(r.partial){showToast('El parcial no se reparte en un combo — cobralo pedido por pedido');return;}
     return _confirmarCobroComboRuta(st,r);
   }
   // Pedido suelto desde COBROS: payload estilo backend + commit endurecido (fetch directo).
@@ -4025,6 +4138,36 @@ function confirmarCobroRuta(){
 function _confirmarCobroComboRuta(st,r){
   var peds=st.pedidos,fp=st.fp;
   var _comboPayloads=[]; // se envían por FETCH DIRECTO (no syncQueue, que se traba en el iframe)
+
+  // ── PAGO PARCIAL de un combo → N × action=cobrarParcial, repartido FIFO ──
+  // El monto recibido se asigna del primer pedido al último: los que quedan
+  // cubiertos los cierra el backend solo (restante<=0 → marca Cobrado) y el
+  // último recibe el remanente. Mismo criterio que la liquidación a vendedores
+  // Red: una deuda se salda de la más vieja a la más nueva, sin netear.
+  // Ninguno de los pedidos se marca cobrado localmente — siguen debiendo hasta
+  // que el backend confirme (bug Cristina Plate 12/08/2026).
+  if(r.partial){
+    var restoPar=Math.round(r.neto);
+    if(restoPar<=0)return;
+    var fpParC=(fp==='Mixto')?(r.recMP>=r.recEf?'Transferencia':'Efectivo'):fp;
+    var parPayloads=[],nCierra=0;
+    for(var ip=0;ip<peds.length && restoPar>0;ip++){
+      var pPar=peds[ip];
+      var totPar=Number(_pedComboAdj(pPar,st).total)||0;
+      if(totPar<=0)continue;
+      var asigPar=Math.min(restoPar,totPar);
+      restoPar-=asigPar;
+      if(asigPar>=totPar)nCierra++;
+      parPayloads.push({action:'cobrarParcial',hoja:pPar.h,id:String(pPar.id),row:pPar.r||0,
+        formaPago:fpParC,monto:asigPar,notas:'Parcial desde Ruta/COMBO',ts:Date.now()});
+    }
+    if(!parPayloads.length)return;
+    cerrarCobroRuta();
+    _commitCobroComboDirecto(parPayloads,peds);
+    showToast('Parcial '+formatMoney(Math.round(r.neto))+' · '+nCierra+'/'+peds.length+' pedidos cerrados');
+    renderRuta();
+    return;
+  }
   var prop=Math.max(0,r.propina),aFav=r.aFav;
   var aplicacion=Math.max(0,r.aplicar||0); // saldo previo aplicado, va al primer pedido
   var nombre=(peds[0].c||'').split(' ')[0];
