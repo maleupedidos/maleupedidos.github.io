@@ -3929,7 +3929,9 @@ function confirmarCobroRuta(){
     if(totNeto<=0){ef=total;tr=0;}
     else {ef=Math.round(total*(netoEf/totNeto));tr=total-ef;}
   }
-  // facturadoTotal solo para el mensaje toast post-cobro
+  // Lo que REALMENTE entró por este pedido. Espeja la fórmula del backend
+  // (Code.js:4706 — Facturado V = Total + Propina Ef + Propina Tr + A Favor),
+  // así el número local y el que baja después del refetch son el mismo.
   var facturadoTotal=total+prop+aFav;
   // Propina va al método dominante
   var propMet=(ef>=tr)?'Efectivo':'Transferencia';
@@ -3937,6 +3939,12 @@ function confirmarCobroRuta(){
   // Marcar local como cobrado
   cobrados[key]=true;
   ent.ep='Cobrado';
+  // Actualizar el monto de la card al cobrado real. El render usa `cobrado?e.$`
+  // (no re-suma la propina, para no repetir el bug Sandra 28/05), así que si no
+  // pisamos ent.$ acá la card queda congelada en el facturado PREVIO al cobro:
+  // cobrás $20.000 de un pedido de $19.000 y sigue diciendo $19.000 hasta el
+  // próximo refetch del backend. (Tadeo 13/08/2026)
+  ent['$']=facturadoTotal;
   // Propina se guarda para que el render post-cobro la muestre
   if(prop>0)propinas[key]=prop;else delete propinas[key];
   // Sacar de pendientesCobro si estaba
@@ -4045,6 +4053,10 @@ function _confirmarCobroComboRuta(st,r){
     var propMet=(efP>=trP)?'Efectivo':'Transferencia';
     cobrados[k]=true;
     p.ep='Cobrado';
+    // Mismo criterio que el cobro suelto: la card muestra lo realmente cobrado,
+    // no el facturado previo. propina y a-favor van enteros al primer pedido del
+    // combo, así que sólo ése cambia de monto.
+    p['$']=totalP+propP+aFavP;
     if(propP>0)propinas[k]=propP;else delete propinas[k];
     pendientesCobro=pendientesCobro.filter(function(pc){
       return !(((pc.h||'')===p.h) && (String(pc.id||'')===String(p.id)));
@@ -4225,6 +4237,19 @@ function _confirmarCobroPendiente(st,r){
     saldoPayload={action:'crearSaldoCliente',cliente:pc.c||'',telefono:pc.t||'',tipo:'Crédito',monto:aFavorPos,pedidoHoja:pc.h,pedidoId:String(pc.id),notas:'A favor por cobro mayor al total del pedido',repartidor:_rutaUser(),ts:Date.now()};
   } else if(aplicacionPos>0){
     saldoPayload={action:'crearSaldoCliente',cliente:pc.c||'',telefono:pc.t||'',tipo:'Aplicación',monto:aplicacionPos,pedidoHoja:pc.h,pedidoId:String(pc.id),notas:'Saldo aplicado al cobro desde Ruta',repartidor:_rutaUser(),ts:Date.now()};
+  }
+
+  // Si el pedido también está en la lista de RUTA, actualizarle monto y estado.
+  // Las keys no coinciden entre las dos vistas (eKey usa hoja+FILA, acá se usa
+  // hoja+ID), así que lo buscamos por hoja+id a mano. Sin esto la card de RUTA
+  // se queda con el facturado previo al cobro hasta el próximo refetch.
+  var _entRuta=entregas.filter(function(e){
+    return (e.h||'')===(pc.h||'') && String(e.id||'')===String(pc.id||'');
+  })[0];
+  if(_entRuta){
+    _entRuta['$']=total+propina+aFavorPos;
+    _entRuta.ep='Cobrado';
+    cobrados[eKey(_entRuta)]=true;
   }
 
   cerrarCobroRuta();
