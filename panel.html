@@ -17041,6 +17041,8 @@ if('serviceWorker' in navigator){
     var html = '<div class="crm-meta-form">'
       + '<div class="fg"><label>Nombre canonico (corregido)</label><input id="metaNombre" placeholder="ej. Marcos" value="'+escHtml(_canon)+'"></div>'
       + '<div class="fg"><label>Apodo (para campañas WATI — ej. «Tade»)</label><input id="metaApodo" placeholder="ej. Tade" value="'+escHtml(meta.apodo||'')+'"></div>'
+      + '<div class="fg"><label>Teléfono</label><input id="metaTel" placeholder="ej. +5491149918807" value="'+escHtml(c.telDisplay||c.tel||'')+'">'
+        + '<div class="meta-ubic-hint">El teléfono es la <b>identidad</b> del cliente: el CRM agrupa sus pedidos por este número. Si lo cambiás, se reescribe en <b>todos</b> sus pedidos y se mueve su ficha, su apodo y su historial. Tiene que quedar en 10 dígitos (+54 9 y el 15 se sacan solos).</div></div>'
       + altsHtml
       + '<div class="fg"><label>Cumpleanos (DD/MM)</label><input id="metaCumple" placeholder="13/05" value="'+escHtml(meta.cumple||'')+'"></div>'
       + '<div class="fg"><label>Alias MP</label><input id="metaAlias" placeholder="ej. maleump" value="'+escHtml(meta.aliasMp||'')+'"></div>'
@@ -17077,9 +17079,56 @@ if('serviceWorker' in navigator){
     if (hint) hint.style.display = off ? 'block' : 'none';
   };
 
+  // Normalización espejo de _crmNormTel del backend (Code.js:13276). Acá se usa
+  // sólo para DETECTAR si Tadeo cambió el número y para avisar temprano; la
+  // validación que vale es la del backend, que es quien escribe.
+  function _crmNormTelJS(t){
+    var s = String(t||'').replace(/\D/g,'');
+    if (!s) return '';
+    if (s.length>10 && s.indexOf('549')===0) s = s.substring(3);
+    else if (s.length>10 && s.indexOf('54')===0) s = s.substring(2);
+    if (s.length>10 && s.charAt(0)==='9') s = s.substring(1);
+    if (s.length>10 && s.charAt(0)==='0') s = s.substring(1);
+    if (s.length>10 && s.substring(0,2)==='15') s = s.substring(2);
+    if (s.length>10) s = s.substring(s.length-10);
+    return s.length<8 ? '' : s;
+  }
+
   window.crmGuardarMeta = function(){
     if (!crmFichaActual) return;
     var c = crmFichaActual.data;
+    // ── Cambio de teléfono ──
+    // Va primero y por su propio endpoint: mueve la IDENTIDAD del cliente
+    // (pedidos + Clientes Merge + Clientes Meta), no es un campo más de la meta.
+    // Recién cuando el backend confirma se guarda el resto de la ficha, ya
+    // contra la key nueva — si no, la meta se escribiría en la key vieja.
+    var _telInput = el('metaTel') ? el('metaTel').value.trim() : '';
+    var _telNuevo = _crmNormTelJS(_telInput);
+    var _telViejo = _crmNormTelJS(c.telDisplay || c.tel || '');
+    if (_telInput && _telNuevo !== _telViejo) {
+      if (_telNuevo.length !== 10) { toast('El teléfono tiene que quedar en 10 dígitos (ej. 1149918807)'); return; }
+      var _msg = 'Cambiar el teléfono de ' + (c.nombre || 'este cliente') + '\n\n'
+        + 'De:  ' + (_telViejo || '(sin teléfono)') + '\n'
+        + 'A:   ' + _telNuevo + '\n\n'
+        + 'Se reescribe en sus ' + (c.pedidos || 0) + ' pedidos y se mueve su ficha completa '
+        + '(apodo, cumpleaños, notas, ubicación).\n\n¿Confirmás?';
+      if (!confirm(_msg)) return;
+      toast('Cambiando teléfono...');
+      fetch(CRM_API, {method:'POST', mode:'cors', body: JSON.stringify({action:'crmCambiarTelefono', key: c.key, telNuevo: _telInput})})
+        .then(function(r){ return r.json(); })
+        .then(function(d){
+          if (!d || !d.ok) { toast('Error: ' + ((d && d.error) || 'no se pudo cambiar el teléfono')); return; }
+          toast('Teléfono actualizado en ' + (d.totalFilas || 0) + ' pedidos');
+          c.key = d.telNuevo; c.tel = d.telNuevo; c.telDisplay = d.telNuevo;
+          _crmGuardarMetaResto(c);
+        })
+        .catch(function(err){ toast('Error: ' + err.message); });
+      return;
+    }
+    _crmGuardarMetaResto(c);
+  };
+
+  function _crmGuardarMetaResto(c){
     var ocultos = [];
     document.querySelectorAll('.metaAltChk:checked').forEach(function(ch){ ocultos.push(ch.getAttribute('data-n')); });
     var body = {
