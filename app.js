@@ -402,7 +402,7 @@ const ZONAS = {
     envio: 0,
     canal: "Clubes",
     horarios: { "Viernes":"Horario a coordinar" },
-    deliveryText: "📅 Entrega los viernes en la puerta del club",
+    deliveryText: "📅 Entrega los viernes en la puerta del club · Pedidos hasta el jueves 12 hs",
     showStock: false
   }
 };
@@ -465,7 +465,7 @@ function isPilarRestricted() {
 
    Devuelve true si HOY ya pasó el cutoff aplicable y el Vie de esta semana
    debe quedar oculto. */
-function _isPilarFridayCutoffPast() {
+function _isFridayCutoffPast() {
   // Desde 12/05/2026 ambos cutoffs (Red y no-Red) están alineados al cierre
   // de OC con proveedor: Jueves 12:00 hs AR. Después de ese momento, el Vie
   // de esta semana ya no es ofrecible.
@@ -473,6 +473,29 @@ function _isPilarFridayCutoffPast() {
   var arDow = nowAR.getUTCDay(); // 0=Dom..6=Sáb
   var arHour = nowAR.getUTCHours();
   return (arDow === 4 && arHour >= 12) || arDow === 5 || arDow === 6;
+}
+/* Zonas cuyo reparto sale del recorrido del viernes y por lo tanto dependen
+   del cierre de OC del jueves 12hs: Pilar y Clubes. Estancias no entra — tiene
+   entregas cinco días por semana y se abastece distinto.
+   14/08/26: Clubes se sumó acá. Antes no tenía cutoff de ningún tipo, así que
+   un club podía pedir el viernes a la tarde para ese mismo viernes y había que
+   sacar mercadería del depósito para cubrirlo. */
+function _zonaDependeDelCutoffViernes(zone) {
+  return zone === 'pilar' || zone === 'clubes';
+}
+/* ¿Esta fecha ISO es el viernes de ESTA semana y el cutoff ya pasó? Sirve para
+   descartar una fecha ya elegida (guardada en localStorage) que dejó de ser
+   ofrecible mientras el cliente no estaba mirando. */
+function _fechaBloqueadaPorCutoff(zone, iso) {
+  if (!iso || iso === 'any') return false;
+  if (!_zonaDependeDelCutoffViernes(zone)) return false;
+  if (!_isFridayCutoffPast()) return false;
+  var nowAR = new Date(Date.now() - 3 * 3600 * 1000);
+  var today = new Date(Date.UTC(nowAR.getUTCFullYear(), nowAR.getUTCMonth(), nowAR.getUTCDate()));
+  var diffToMonday = (today.getUTCDay() + 6) % 7;
+  var viernes = new Date(today);
+  viernes.setUTCDate(today.getUTCDate() - diffToMonday + 4);
+  return iso === viernes.toISOString().slice(0, 10);
 }
 
 /* ── ESTADO ── */
@@ -1396,22 +1419,31 @@ function welcomeShowZoneStep() {
   _hideAllSteps();
   $id('loc-step-zone').style.display = '';
 }
-/* Aviso contextual del paso "fecha" para Pilar y Alrededores.
+/* Aviso contextual del cutoff, para las zonas que dependen del recorrido del
+   viernes (Pilar y Clubes).
 
-   El cliente frecuente entra y lo PRIMERO que ve es este paso (ya tiene zona y
-   barrio guardados), así que es el único lugar donde podemos contarle cómo
-   funciona el recorrido. Y lo que necesita saber cambia según el día: el
-   recorrido es el viernes y los pedidos cierran el jueves 12hs (mismo cutoff
-   que _isPilarFridayCutoffPast, que es el que además esconde el viernes del
-   calendario). Devuelve null en las zonas donde no aplica. */
-function _pilarDateStepNote() {
-  if (currentZone !== 'pilar') return null;
+   Por qué existe: el cliente frecuente entra con zona y fecha ya guardadas, así
+   que este cartel es el único lugar donde nos lee cómo funciona el recorrido. Y
+   lo que necesita saber cambia según el día — el reparto es el viernes y los
+   pedidos cierran el jueves 12hs (mismo cutoff que _isFridayCutoffPast, el que
+   además esconde el viernes del calendario).
+
+   Dónde se muestra: en Pilar, en el paso "¿para cuándo?" del modal. En Clubes
+   NO hay paso de fecha (la fecha se asigna sola en _setClubesDefaultDate), así
+   que va en el hero, que es lo primero que ven al entrar.
+
+   Devuelve null en Estancias, que no depende de este cutoff. */
+function _cutoffNote(zone) {
+  zone = zone || currentZone;
+  if (!_zonaDependeDelCutoffViernes(zone)) return null;
+  var esClub = zone === 'clubes';
+  var donde = esClub ? 'en la puerta del club' : 'en Pilar y Alrededores';
   var nowAR = new Date(Date.now() - 3 * 3600 * 1000);
   var dow = nowAR.getUTCDay();      // 0=Dom .. 6=Sáb
   var hour = nowAR.getUTCHours();
   // Lun a Mié: hay tiempo de sobra, solo explicamos cómo viene la mano.
   if (dow >= 1 && dow <= 3) {
-    return { tone: 'info', html: '🚚 Repartimos los <strong>viernes durante el día</strong>. Tenés tiempo hasta el <strong>jueves 12 hs</strong> para entrar en el recorrido de esta semana.' };
+    return { tone: 'info', html: '🚚 Entregamos los <strong>viernes</strong> ' + donde + '. Tenés tiempo hasta el <strong>jueves 12 hs</strong> para entrar en el recorrido de esta semana.' };
   }
   // Jueves antes del cierre: última chance para el viernes de mañana.
   if (dow === 4 && hour < 12) {
@@ -1419,10 +1451,23 @@ function _pilarDateStepNote() {
   }
   // Viernes: hoy es el día. Lo invitamos al recorrido de la semana que viene.
   if (dow === 5) {
-    return { tone: 'entregando', html: '📦 <strong>Hoy estamos entregando</strong> en Pilar y Alrededores. ¿Querés vivir la experiencia Maleu? El <strong>próximo viernes</strong> volvemos a pasar — dejanos tu pedido ahora y ya quedás en el recorrido.' };
+    return { tone: 'entregando', html: '📦 <strong>Hoy estamos entregando</strong> ' + donde + '. ¿Querés vivir la experiencia Maleu? El <strong>próximo viernes</strong> volvemos a pasar — dejanos tu pedido ahora y ya quedás en el recorrido.' };
   }
   // Jue después de las 12, Sáb y Dom: este viernes ya cerró.
   return { tone: 'info', html: '📅 Los pedidos de <strong>este viernes ya cerraron</strong>. Dejanos el tuyo ahora y salís en el recorrido del <strong>viernes que viene</strong>.' };
+}
+/* Pinta el aviso en un contenedor. Comparten función el cartel del modal
+   (Pilar) y el del hero (Clubes) para que nunca se desincronicen. */
+function _renderCutoffNote(el, note, baseClass) {
+  if (!el) return;
+  if (note) {
+    el.className = baseClass + ' ' + note.tone;
+    el.innerHTML = note.html;
+    el.style.display = '';
+  } else {
+    el.innerHTML = '';
+    el.style.display = 'none';
+  }
 }
 
 function welcomeShowDateStep() {
@@ -1433,19 +1478,9 @@ function welcomeShowDateStep() {
   var z = ZONAS[currentZone];
   var label = step.querySelector('#loc-date-zone-label strong');
   if (label && z) label.textContent = z.nombre;
-  // Aviso del cutoff (solo Pilar; en el resto queda oculto)
-  var note = $id('loc-date-note');
-  if (note) {
-    var n = _pilarDateStepNote();
-    if (n) {
-      note.className = 'loc-date-note ' + n.tone;
-      note.innerHTML = n.html;
-      note.style.display = '';
-    } else {
-      note.innerHTML = '';
-      note.style.display = 'none';
-    }
-  }
+  // Aviso del cutoff. Acá en la práctica es siempre Pilar: Clubes nunca llega
+  // a este paso (ve el mismo aviso en el hero) y Estancias devuelve null.
+  _renderCutoffNote($id('loc-date-note'), _cutoffNote(), 'loc-date-note');
   // Render grilla
   renderWelcomeDateGrid();
 }
@@ -1560,8 +1595,9 @@ function _getNextDeliveryDatesGrouped(zone) {
   var pilarRedOnly = (zone === 'pilar' && _pilarBarrioIsRed());
   var feriados = FERIADOS_BLOQUEADOS[zone] || [];
   var extras = ENTREGAS_EXTRA[zone] || [];
-  // Cutoff Pilar Vie de esta semana: si ya pasó, bloquear el Vie en thisWeek
-  var pilarFridayBloqueadoFlag = (zone === 'pilar' && _isPilarFridayCutoffPast());
+  // Cutoff del Vie de esta semana: si ya pasó, bloquear el Vie en thisWeek.
+  // Aplica a Pilar y a Clubes — los dos salen en el recorrido del viernes.
+  var pilarFridayBloqueadoFlag = (_zonaDependeDelCutoffViernes(zone) && _isFridayCutoffPast());
 
   for (var i = 0; i < 35; i++) {
     var d = new Date(today);
@@ -1664,6 +1700,10 @@ function _loadSavedDate() {
     if (raw.zone && raw.zone !== currentZone) return false;
     var startMs = _deliveryStartMs(raw.iso);
     if (!startMs || startMs < Date.now()) return false; // ya pasó
+    // El viernes de esta semana pudo quedar bloqueado por el cutoff del jueves
+    // 12hs DESPUÉS de que el cliente lo eligiera. Sin esto, un club que entró
+    // el miércoles vuelve el viernes a la tarde y se le respeta la fecha vieja.
+    if (_fechaBloqueadaPorCutoff(currentZone, raw.iso)) return false;
     selectedDeliveryDate = raw.iso;
     selectedDeliveryDayName = raw.dayName || '';
     selectedDateIsFlexible = !!raw.flexible;
@@ -1745,6 +1785,10 @@ function applyZone() {
     $id('hero-delivery').style.display = '';
     if (schedEl) schedEl.style.display = 'none';
   }
+  // Aviso del cutoff en el hero: solo Clubes, que no pasa por el paso de fecha
+  // del modal y por lo tanto no lo vería en ningún otro lado.
+  _renderCutoffNote($id('hero-cutoff-note'),
+    currentZone === 'clubes' ? _cutoffNote('clubes') : null, 'hero-cutoff-note');
   // Form fields
   $id('fields-estancias').style.display = currentZone === 'estancias' ? '' : 'none';
   $id('fields-pilar').style.display = currentZone === 'pilar' ? '' : 'none';
@@ -2448,12 +2492,10 @@ function renderDayPicker() {
   var todayTs = today.getTime();
   var selectedFecha = $id('f-dia-fecha') ? $id('f-dia-fecha').value : '';
 
-  // Cutoff Pilar Vie de esta semana — usa la misma función que el modal
-  // de bienvenida para que ambos sean consistentes.
-  // Si el cliente todavía no eligió barrio, asumimos "Otro" (más permisivo:
-  // cutoff Jue 21hs). Cuando elige barrio en el checkout, se re-evalúa.
+  // Cutoff del Vie de esta semana (Pilar y Clubes) — usa la misma función que
+  // el modal de bienvenida para que ambos sean consistentes.
   var redCutoffFriday = null;
-  if (currentZone === 'pilar' && _isPilarFridayCutoffPast()) {
+  if (_zonaDependeDelCutoffViernes(currentZone) && _isFridayCutoffPast()) {
     var fri = new Date(monday);
     fri.setUTCDate(monday.getUTCDate() + 4);
     redCutoffFriday = fri.getTime();
