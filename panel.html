@@ -3747,6 +3747,33 @@ function ajPermisoSet(rol,tab,acceso){
 <script>
 var API='https://script.google.com/macros/s/AKfycbxmrG5YVSshcYezk8lXFx_uxb7NFGcb9EfTXc7dsIN4rZyj73CET4mk_aKPFPDY2wNi/exec';
 
+/* ── AUTH Maleu (19/08/2026) ────────────────────────────────────────────
+   Agrega el token de sesion a toda llamada al backend. Se hace aca, una sola
+   vez, en vez de tocar las 120+ llamadas fetch sueltas que hay repartidas.
+   Sin token (visitante de la tienda) no cambia nada: las acciones publicas
+   siguen funcionando igual. */
+(function(){
+  if (window.__maleuAuth) return; window.__maleuAuth = true;
+  var _fetch = window.fetch.bind(window);
+  window.fetch = function(input, init){
+    try{
+      var t = ''; try { t = localStorage.getItem('maleu_token') || ''; } catch(e){}
+      var url = (typeof input === 'string') ? input : ((input && input.url) || '');
+      if (t && url.indexOf('script.google.com/macros') > -1){
+        var esPost = !!(init && init.method && String(init.method).toUpperCase() === 'POST');
+        if (esPost && init && typeof init.body === 'string'){
+          var b = JSON.parse(init.body);
+          if (b && typeof b === 'object' && !b.token){ b.token = t; init.body = JSON.stringify(b); }
+        } else if (!esPost && typeof input === 'string' && input.indexOf('token=') < 0){
+          input += (input.indexOf('?') > -1 ? '&' : '?') + 'token=' + encodeURIComponent(t);
+        }
+      }
+    }catch(e){}
+    return _fetch(input, init);
+  };
+})();
+
+
 /* ════════════════ AUTH + ROLES (Fase 1) ════════════════
  * Sesión guardada en localStorage como 'maleu_panel_session' = {usuario, rol, nombre, ts}.
  * Roles definidos:
@@ -3758,6 +3785,9 @@ var API='https://script.google.com/macros/s/AKfycbxmrG5YVSshcYezk8lXFx_uxb7NFGcb
 var SESSION=null;
 function _loadSession(){
   try{var s=localStorage.getItem('maleu_panel_session');if(s){SESSION=JSON.parse(s);}}catch(e){SESSION=null;}
+  // AUTH (19/08/2026): las sesiones guardadas antes del token no sirven para hablar
+  // con el backend. Se descartan una unica vez para que vuelva a pedir usuario+PIN.
+  try{ if(SESSION && !localStorage.getItem('maleu_token')){ SESSION=null; localStorage.removeItem('maleu_panel_session'); } }catch(e){}
 }
 _loadSession();
 function panelDoLogin(){
@@ -3771,6 +3801,9 @@ function panelDoLogin(){
     .then(function(r){return r.json();})
     .then(function(d){
       if(!d||!d.ok){er.textContent=(d&&d.err)||'Usuario o PIN incorrectos';er.classList.add('show');btn.disabled=false;btn.textContent='Entrar';return;}
+      // AUTH: el token habilita TODAS las llamadas al backend, asi que se guarda
+      // siempre — no depende del tilde de 'recordarme'.
+      try{ if(d.token) localStorage.setItem('maleu_token', d.token); }catch(e){}
       SESSION={
         usuario:d.usuario||u,rol:d.rol||'empleado',nombre:d.nombre||u,ts:Date.now(),
         tabs:Array.isArray(d.tabs)?d.tabs:null
@@ -3791,6 +3824,7 @@ function panelDoLogin(){
 }
 function panelDoLogout(){
   try{
+    localStorage.removeItem('maleu_token');
     localStorage.removeItem('maleu_panel_session');
     localStorage.removeItem('maleu_tab');
     localStorage.removeItem('maleu_red_session');
