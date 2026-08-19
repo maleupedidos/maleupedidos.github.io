@@ -1032,9 +1032,45 @@ const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxmrG5YVSshcYez
    vez, en vez de tocar las 120+ llamadas fetch sueltas que hay repartidas.
    Sin token (visitante de la tienda) no cambia nada: las acciones publicas
    siguen funcionando igual. */
+/* ── REINTENTO ANTE TRABA (19/08/2026) ───────────────────────────────────
+   doPost toma una traba global antes de escribir. Si no la consigue en 30s
+   devuelve LockTimeout y NO escribio nada — por eso reintentar es seguro y no
+   puede duplicar un cobro. Pasa los viernes, cuando los vendedores, el
+   repartidor y el Panel escriben a la vez: hay 15 casos en Log Errores.
+   Antes de esto, el Panel no reintentaba y la operacion se perdia callada. */
 (function(){
   if (window.__maleuAuth) return; window.__maleuAuth = true;
   var _fetch = window.fetch.bind(window);
+  var ESPERAS = [1200, 2600, 5000];   /* 3 reintentos, cada vez esperando mas */
+  function _dormir(ms){ return new Promise(function(res){ setTimeout(res, ms); }); }
+  function _avisar(txt){ try { if (typeof toast === 'function') toast(txt); else alert(txt); } catch(e){} }
+  function _pedir(input, init, intento){
+    return _fetch(input, init).then(function(r){
+      if (!r || !r.ok || String(r.url || '').indexOf('script.google') < 0) return r;
+      return r.clone().text().then(function(txt){
+        if (txt && txt.indexOf('"authRequired":true') > -1){ _sesionVencida(); return r; }
+        if (txt && txt.indexOf('"error":"LockTimeout"') > -1){
+          if (intento < ESPERAS.length){
+            return _dormir(ESPERAS[intento]).then(function(){ return _pedir(input, init, intento + 1); });
+          }
+          _avisar('La planilla esta ocupada con otra operacion. No se guardo nada: proba de nuevo en unos segundos.');
+        }
+        return r;
+      }).catch(function(){ return r; });
+    });
+  }
+  function _sesionVencida(){
+    try{
+      localStorage.removeItem('maleu_token');
+      localStorage.removeItem('maleu_panel_session');
+      localStorage.removeItem('maleu_red_session');
+    }catch(e){}
+    if (!window.__maleuAuthAviso){
+      window.__maleuAuthAviso = true;
+      alert('Tu sesion vencio. Entra de nuevo con tu usuario y PIN.');
+      location.reload();
+    }
+  }
   window.fetch = function(input, init){
     try{
       var t = ''; try { t = localStorage.getItem('maleu_token') || ''; } catch(e){}
@@ -1049,30 +1085,8 @@ const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxmrG5YVSshcYez
         }
       }
     }catch(e){}
-    return _fetch(input, init).then(function(r){
-      /* Si el backend contesta "no autorizado" (token vencido o borrado), no dejamos
-         la pantalla muda: se limpia la sesion y se vuelve a pedir usuario+PIN. */
-      try{
-        if (r && r.ok && String(r.url||'').indexOf('script.google') > -1){
-          var c = r.clone();
-          c.text().then(function(t){
-            if (t && t.indexOf('"authRequired":true') > -1){
-              try{
-                localStorage.removeItem('maleu_token');
-                localStorage.removeItem('maleu_panel_session');
-                localStorage.removeItem('maleu_red_session');
-              }catch(e){}
-              if (!window.__maleuAuthAviso){
-                window.__maleuAuthAviso = true;
-                alert('Tu sesion vencio. Entra de nuevo con tu usuario y PIN.');
-                location.reload();
-              }
-            }
-          }).catch(function(){});
-        }
-      }catch(e){}
-      return r;
-    });
+    /* _pedir se encarga de dos cosas: sesion vencida y reintento ante traba. */
+    return _pedir(input, init, 0);
   };
 })();
 
