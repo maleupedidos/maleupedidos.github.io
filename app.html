@@ -6687,6 +6687,8 @@ function go(p){
   cur=p;try{localStorage.setItem('maleu_tab',p);}catch(e){}
   /* Los datos se piden por tab, no de arranque: ver _pedirD(). */
   if(_tabUsaD(p))_pedirD();
+  if(_SECCION[p])_visitadas[p]=true;
+  _pintarSeccion(p);
   if((p==='ventas'||p==='inicio')&&_tengoTab(p))_pedirVentas();
   document.body.classList.toggle('mp-abierto',p==='miportal');
   _ldSync();
@@ -9684,22 +9686,56 @@ function guardarInvertir(){
 // ── RENDER ──
 function rPedidosHome(){ rPedidos({homeOnly:true,listId:'pListHome',frId:'fRowHome'}); }
 
+/* -- PINTAR SOLO LO QUE SE ESTA MIRANDO -----------------------------------
+   render() dibujaba las seis secciones pesadas de un saque. Medido con la CPU
+   frenada a la de un celular: Inicio 1,5s + Pedidos 2,5s + Pedidos Home 2,3s +
+   Caja 2,9s + Pagos 0,4s = 9,4 segundos de JavaScript, y eso pasaba en cada
+   carga de datos. Cinco de esas seis eran tabs que no tenias abiertas.
+   Ahora se pinta la tab en la que estas, y las demas se van pintando solas en
+   los ratos libres del navegador, de a una. Cada seccion ademas va en su
+   propia red: si una revienta, las otras se dibujan igual. (21/8/2026) */
+var _SECCION={
+  inicio     : function(){rInicio();},
+  pedidos    : function(){rPedidos();},
+  pedidoshome: function(){rPedidosHome();},
+  caja       : function(){rCaja();},
+  egresos    : function(){rEgresos();},
+  stock      : function(){rStock();}
+};
+var _pintadas={};      /* secciones al dia con el D de ahora */
+var _colaPintar=null;
+/* Que tabs abriste en esta sesion: van primero en la cola de adelantado,
+   asi las que usas de verdad estan listas antes que las que no mirás. */
+var _visitadas={};
+function _pintarSeccion(k){
+  if(!D||!k||_pintadas[k]||!_SECCION[k])return;
+  if(!_tengoTab(k))return;
+  _pintadas[k]=true;
+  try{_SECCION[k]();}catch(e){console.error('render -> '+k,e);}
+}
+function _pintarEnLosRatosLibres(){
+  if(_colaPintar)return;
+  /* Se adelantan todas, pero primero las que ya abriste en esta sesion. */
+  var pend=Object.keys(_SECCION).filter(function(k){return !_pintadas[k]&&_tengoTab(k);})
+    .sort(function(a,b){return (_visitadas[b]?1:0)-(_visitadas[a]?1:0);});
+  if(!pend.length)return;
+  var idle=window.requestIdleCallback||function(f){return setTimeout(f,300);};
+  _colaPintar=idle(function(){
+    _colaPintar=null;
+    if(_hayEditorAbierto())return;     /* mientras edita no le tocamos el DOM */
+    _pintarSeccion(pend[0]);
+    _pintarEnLosRatosLibres();
+  });
+}
 function render(){
   if(!D)return;
   try{hidratarConceptos();}catch(e){console.error('hidratarConceptos()',e);}
-  /* Cada seccion en su propia red. Antes iban una atras de otra en la misma
-     linea: si rStock reventaba (pasa con un volcado a medias, o si el backend
-     deja de mandar un campo), Pedidos y Caja ni se dibujaban y la tab quedaba
-     en blanco sin decir por que. Y no pintamos lo que este rol no puede abrir:
-     en un celular eso es medio segundo tirado por tab. (21/8/2026) */
-  var _secs=[['inicio',rInicio],['pedidos',rPedidos],['pedidoshome',rPedidosHome],
-             ['caja',rCaja],['egresos',rEgresos],['stock',rStock],[null,rMetricas]];
-  for(var _i=0;_i<_secs.length;_i++){
-    if(_secs[_i][0]&&!_tengoTab(_secs[_i][0]))continue;
-    try{_secs[_i][1]();}catch(e){console.error('render -> '+(_secs[_i][0]||'metricas'),e);}
-  }
+  _pintadas={};                        /* datos nuevos: lo pintado quedo viejo */
+  _pintarSeccion(cur);                 /* primero lo que estas mirando */
+  try{rMetricas();}catch(e){console.error('render -> metricas',e);}
   if(cur==='inicio'&&curSI==='eerr'){try{rEERR();}catch(e){}}
   var _pg=$('p-'+cur);if(_pg)_pg.classList.add('on');
+  _pintarEnLosRatosLibres();
 }
 
 // ── SNAPSHOT DIARIO (Inicio): 5 números clave del estado del negocio hoy ──
