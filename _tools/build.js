@@ -181,6 +181,12 @@ function main() {
     '<script>\n' + MOTOR + '\n' + jsTodo.join('\n') + '\n</script>\n</body>');
 
   fs.writeFileSync(SALIDA, html);
+
+  // panel.html — lo que abre el icono de Tadeo. Es panel.src.html tal cual:
+  // sigue usando iframes para Ruta/Abast./Mi Portal. Se copia (no se edita a
+  // mano) para que haya UN solo archivo fuente y todo arreglo llegue a los dos.
+  fs.writeFileSync(path.join(RAIZ, 'panel.html'), fs.readFileSync(FUENTE, 'utf8'));
+  console.log('  panel.html (con iframes, el que se usa hoy) — copiado de panel.src.html');
   console.log('╚══ app.html: ' + Math.round(html.length / 1024) + ' KB ══╝\n');
 }
 
