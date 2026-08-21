@@ -85,7 +85,10 @@ git add -A
 git diff --cached --quiet || git -c commit.gpgsign=false commit -q -m "$MSG
 
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
-git -c credential.helper='!gh auth git-credential' push -q origin main
+# Token de maleupedidos EXPLICITO. No alcanza con `gh auth switch`: hay varias
+# sesiones abiertas y la cuenta activa de gh se vuelve sola a chuchhh (la
+# personal), que no tiene permiso acá. Asi no depende de cual este activa.
+GH_TOKEN="$(gh auth token -u maleupedidos)"   git -c credential.helper='!gh auth git-credential' push -q origin main
 echo "${GRN}✅ Publicado — $MSG${RST}"
 echo "   GitHub Pages tarda ~1 min. Verificá contra la URL real antes de cantar victoria:"
 echo "   curl -s https://maleupedidos.github.io/panel.html | grep -c 'algo-de-tu-cambio'"
