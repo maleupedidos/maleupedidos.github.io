@@ -249,6 +249,32 @@ function domesticar(js, cont) {
   // 4c. recargar la pagina entera: la sub-app ya no manda sobre eso
   js = js.replace(/\blocation\.reload\s*\(\s*\)/g, () => marca('_recargarApp()'));
 
+  // 4c-bis. LO QUE MAS DOLIO. Ruta y Abastecimiento cuelgan del DOCUMENTO sus
+  //   manejadores de dedo. Adentro de un iframe eso solo las afectaba a ellas.
+  //   Fusionadas, pasan a gobernar el ERP entero. El peor:
+  //       document.addEventListener('touchend', function(e){
+  //         if (now - lastTouchEnd <= 350) e.preventDefault();   // anti zoom
+  //       }, {passive:false});
+  //   preventDefault() en touchend CANCELA EL CLICK. O sea: con solo haber
+  //   entrado una vez a Ruta, cualquier toque que caiga a menos de 350ms del
+  //   anterior se comia el clic en CUALQUIER tab. Navegando se tapea mas
+  //   rapido que eso, asi que la app se sentia muerta aunque los datos se
+  //   actualizaran. Lo mismo el pull-to-refresh, que secuestraba el scroll.
+  //   Ojo: esto NO se ve clickeando con el mouse — solo con el dedo. Por eso
+  //   se me paso en las pruebas. (21/8/2026)
+  var _EV_DEDO = ['touchstart','touchmove','touchend','touchcancel',
+                  'gesturestart','gesturechange','gestureend',
+                  'dblclick','click','contextmenu','wheel',
+                  'pointerdown','pointerup','pointermove',
+                  'mousedown','mouseup','mousemove'];
+  var _destino = '_cont' + cont.replace(/-/g, '_');
+  _EV_DEDO.forEach(function (ev) {
+    ['\'', '"'].forEach(function (q) {
+      var re = new RegExp('document\\.addEventListener\\(\\s*' + q + ev + q, 'g');
+      js = js.replace(re, function () { n++; return _destino + '.addEventListener(' + q + ev + q; });
+    });
+  });
+
   // 4d. cada sub-app se pregunta "¿estoy embebida?" mirando la URL. Fusionada
   //     siempre lo esta: sin esto se dibuja el header propio y el boton de
   //     salir, duplicando los del panel.
