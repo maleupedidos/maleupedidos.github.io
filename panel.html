@@ -5101,26 +5101,63 @@ function _markRefreshTime(){
 // específico de esa tab. Funciona con un solo botón global (en topbar) tanto
 // para compu como para mobile. Acciones internas (confirmarOrigen, cobrar,
 // etc.) ya disparan reload local y también marcan el timestamp.
-/* ── Version de la app con la que arranco esta sesion ──────────────────────
-   Instalado como app (standalone) no hay barra de Safari ni "recargar": la
-   pagina puede quedar viva dias y seguir corriendo un panel.html viejo sin que
-   Tadeo tenga forma de enterarse. Comparamos contra sw-panel.js, que deploy.sh
-   OBLIGA a subir de version en cada cambio de HTML, asi que sirve de sello. */
-var _APP_VER=null;
-(function(){
-  fetch('/sw-panel.js',{cache:'no-store'}).then(function(r){return r.text();})
-    .then(function(t){var m=t.match(/CN='([^']+)'/);if(m)_APP_VER=m[1];})
-    .catch(function(){});
-})();
-function _hayVersionNueva(){
-  return fetch('/sw-panel.js?v='+Date.now(),{cache:'no-store'})
+/* ── Versiones con las que arranco esta sesion ────────────────────────────
+   El ERP son tres documentos con caches independientes (panel + los iframes de
+   Ruta y Abastecimiento). Instalado como app no hay barra de Safari: la pagina
+   puede quedar viva dias corriendo codigo viejo. Cada uno se sella contra SU
+   service worker, que deploy.sh OBLIGA a subir de version en cada cambio.
+   Antes esto miraba solo el Panel: un fix en Ruta no se enteraba nadie y habia
+   que cerrar y reabrir la app a mano. */
+var _APPS=[
+  {k:'panel',    sw:'/sw-panel.js',    re:/CN\s*=\s*'([^']+)'/,           frame:null,            url:null},
+  {k:'ruta',     sw:'/sw-ruta.js',     re:/CACHE_NAME\s*=\s*'([^']+)'/,   frame:'rutaFrame',     url:'/ruta.html?embed=1',     nombre:'Ruta'},
+  {k:'busqueda', sw:'/sw-busqueda.js', re:/CACHE_NAME\s*=\s*'([^']+)'/,   frame:'busquedaFrame', url:'/busqueda.html?embed=1', nombre:'Abastecimiento'}
+];
+var _APP_VER={};
+function _leerVersion(app){
+  return fetch(app.sw+'?v='+Date.now(),{cache:'no-store'})
     .then(function(r){return r.text();})
-    .then(function(t){
-      var m=t.match(/CN='([^']+)'/);
-      if(!m)return false;
-      if(!_APP_VER){_APP_VER=m[1];return false;}   // primera lectura: solo sella
-      return m[1]!==_APP_VER;
-    }).catch(function(){return false;});
+    .then(function(t){var m=t.match(app.re);return m?m[1]:null;})
+    .catch(function(){return null;});
+}
+(function(){ _APPS.forEach(function(a){ _leerVersion(a).then(function(v){ if(v)_APP_VER[a.k]=v; }); }); })();
+
+/* Devuelve que cambio desde que arranco la sesion. */
+function _chequearVersiones(){
+  return Promise.all(_APPS.map(function(a){
+    return _leerVersion(a).then(function(v){
+      if(!v)return null;
+      if(!_APP_VER[a.k]){_APP_VER[a.k]=v;return null;}  // primera lectura: solo sella
+      if(v===_APP_VER[a.k])return null;
+      _APP_VER[a.k]=v;
+      return a;
+    });
+  })).then(function(arr){return arr.filter(Boolean);});
+}
+
+/* Aplica lo que haya cambiado. El Panel obliga a recargar todo; Ruta y
+   Abastecimiento se arreglan recargando SOLO su iframe, que es instantaneo y
+   no te saca de donde estabas. */
+function _aplicarVersionNueva(cambiados){
+  if(!cambiados.length)return;
+  var editando=(typeof _hayEditorAbierto==='function' && _hayEditorAbierto());
+  if(cambiados.some(function(a){return a.k==='panel';})){
+    if(editando){toast('🆕 Hay una version nueva — recarga cuando termines de editar');return;}
+    toast('🆕 Version nueva — actualizando la app…');
+    setTimeout(function(){location.reload();},1400);
+    return;
+  }
+  if(editando){toast('🆕 Version nueva de '+cambiados[0].nombre+' — recarga cuando termines');return;}
+  var nombres=[];
+  cambiados.forEach(function(a){
+    var fr=document.getElementById(a.frame);
+    // Si nunca se abrio (about:blank) no hay nada que recargar: cuando lo abras
+    // va a pedir la version nueva igual.
+    if(!fr||fr.src.indexOf('about:blank')>=0)return;
+    fr.src=a.url+'&_t='+Date.now();
+    nombres.push(a.nombre);
+  });
+  if(nombres.length)toast('🆕 '+nombres.join(' y ')+' se actualizo a la ultima version');
 }
 
 /* Recarga dura, la salida de emergencia en modo app: limpia las caches del
@@ -5172,15 +5209,8 @@ function refreshContextual(){
       _markRefreshTime();
       if(msg)toast(msg);
     }
-    // Aviso de version nueva de la app, en paralelo y sin molestar si no hay.
-    _hayVersionNueva().then(function(hay){
-      if(!hay)return;
-      if(typeof _hayEditorAbierto==='function' && _hayEditorAbierto()){
-        toast('🆕 Hay una version nueva — recarga cuando termines de editar');return;
-      }
-      toast('🆕 Version nueva — actualizando la app…');
-      setTimeout(function(){location.reload();},1400);
-    });
+    // Aviso de version nueva, en paralelo y sin molestar si no hay.
+    _chequearVersiones().then(_aplicarVersionNueva);
   };
 
   // Sin conexion no tiene sentido ni intentar: mejor decirlo de una.
