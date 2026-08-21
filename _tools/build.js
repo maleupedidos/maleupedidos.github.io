@@ -20,7 +20,13 @@ const { fusionar, APPS } = require('./fusionar');
 
 const RAIZ = path.resolve(__dirname, '..');
 const FUENTE = path.join(RAIZ, 'panel.src.html');   // el que se edita
-const SALIDA = path.join(RAIZ, 'panel.html');       // el que se publica
+// 21/8/2026 — VUELTA ATRAS TEMPORAL. El ERP fusionado se le quedaba sin
+// responder a los toques en el celular de Tadeo y no pude reproducirlo (aca
+// solo tengo Chromium; su telefono es WebKit). Mientras lo busco, lo que se
+// publica en /panel.html es la version de siempre, con iframes, que funciona.
+// El fusionado se publica aparte en /app.html para poder probarlo sin que
+// nadie deje de trabajar. Cuando este resuelto, esto vuelve a 'panel.html'.
+const SALIDA = path.join(RAIZ, 'app.html');
 
 // tab del panel  →  clave de la sub-app
 const TAB = { miportal: 'miportal', ruta: 'ruta', busqueda: 'abast' };
@@ -135,7 +141,7 @@ function main() {
     ? pedidas.map((a) => (TAB[a] ? a : Object.keys(TAB).find((t) => TAB[t] === a)))
     : Object.keys(TAB);
 
-  console.log('\n╔══ BUILD panel.html ══╗');
+  console.log('\n╔══ BUILD app.html ══╗');
   console.log('  fusionando: ' + tabs.join(', ') + '\n');
 
   let html = fs.readFileSync(FUENTE, 'utf8');
@@ -175,7 +181,7 @@ function main() {
     '<script>\n' + MOTOR + '\n' + jsTodo.join('\n') + '\n</script>\n</body>');
 
   fs.writeFileSync(SALIDA, html);
-  console.log('╚══ panel.html: ' + Math.round(html.length / 1024) + ' KB ══╝\n');
+  console.log('╚══ app.html: ' + Math.round(html.length / 1024) + ' KB ══╝\n');
 }
 
 /** Cada sub-app queda adentro de una funcion que corre la primera vez que
