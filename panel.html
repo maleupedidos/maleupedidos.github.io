@@ -1147,6 +1147,11 @@ body.sb-open{padding-left:var(--sidebar-w-open)}
 .hdr-refresh:hover{background:rgba(255,255,255,.14);border-color:rgba(255,255,255,.22);color:#fff}
 .hdr-refresh:active{transform:scale(.97)}
 .hdr-refresh.spinning{pointer-events:none;opacity:.75}
+/* Rojo cuando la ultima actualizacion fallo: la hora que se ve al lado es
+   vieja y tiene que notarse. Se limpia al proximo ↻ exitoso. */
+.hdr-refresh.err{border-color:rgba(255,120,110,.6);background:rgba(198,40,40,.22)}
+.hdr-refresh.err .hdr-refresh-ico{color:#ff8a80}
+.hdr-refresh.err .hdr-refresh-time{color:#ff8a80}
 .hdr-refresh.spinning .hdr-refresh-ico{animation:spinRefresh .85s linear infinite;display:inline-block}
 .hdr-refresh-ico{font-size:15px;font-weight:700;line-height:1;color:var(--o)}
 .hdr-refresh-txt{display:inline}
@@ -5089,17 +5094,90 @@ function _markRefreshTime(){
 // específico de esa tab. Funciona con un solo botón global (en topbar) tanto
 // para compu como para mobile. Acciones internas (confirmarOrigen, cobrar,
 // etc.) ya disparan reload local y también marcan el timestamp.
+/* ── Version de la app con la que arranco esta sesion ──────────────────────
+   Instalado como app (standalone) no hay barra de Safari ni "recargar": la
+   pagina puede quedar viva dias y seguir corriendo un panel.html viejo sin que
+   Tadeo tenga forma de enterarse. Comparamos contra sw-panel.js, que deploy.sh
+   OBLIGA a subir de version en cada cambio de HTML, asi que sirve de sello. */
+var _APP_VER=null;
+(function(){
+  fetch('/sw-panel.js',{cache:'no-store'}).then(function(r){return r.text();})
+    .then(function(t){var m=t.match(/CN='([^']+)'/);if(m)_APP_VER=m[1];})
+    .catch(function(){});
+})();
+function _hayVersionNueva(){
+  return fetch('/sw-panel.js?v='+Date.now(),{cache:'no-store'})
+    .then(function(r){return r.text();})
+    .then(function(t){
+      var m=t.match(/CN='([^']+)'/);
+      if(!m)return false;
+      if(!_APP_VER){_APP_VER=m[1];return false;}   // primera lectura: solo sella
+      return m[1]!==_APP_VER;
+    }).catch(function(){return false;});
+}
+
+/* Recarga dura, la salida de emergencia en modo app: limpia las caches del
+   service worker y vuelve a pedir todo al server. Se dispara manteniendo
+   apretado el boton ↻. */
+function refreshDuro(){
+  if(typeof _hayEditorAbierto==='function' && _hayEditorAbierto()){
+    toast('Cerra lo que estas editando antes de recargar');return;
+  }
+  if(!confirm('¿Recargar la app entera? Se pierde lo que no hayas guardado.'))return;
+  var fin=function(){location.reload();};
+  if(!('caches' in window))return fin();
+  caches.keys().then(function(ks){return Promise.all(ks.map(function(k){return caches.delete(k);}));})
+    .then(fin,fin);
+}
+(function(){
+  var btn=document.getElementById('hdrRefresh');
+  if(!btn)return;
+  var t=null;
+  var arranca=function(){t=setTimeout(function(){t=null;refreshDuro();},800);};
+  var corta=function(){if(t){clearTimeout(t);t=null;}};
+  btn.addEventListener('pointerdown',arranca);
+  ['pointerup','pointerleave','pointercancel'].forEach(function(ev){btn.addEventListener(ev,corta);});
+})();
+
 function refreshContextual(){
   var btn=document.getElementById('hdrRefresh');
   if(btn&&btn.classList.contains('spinning'))return;
-  if(btn)btn.classList.add('spinning');
+  if(btn){btn.classList.add('spinning');btn.classList.remove('err');}
   // Detectar tab activa
   var pgs=document.querySelectorAll('.pg.on');
   var active=pgs.length?pgs[0].id.replace(/^p-/,''):'';
-  var done=function(){
-    if(btn)btn.classList.remove('spinning');
-    _markRefreshTime();
+
+  var _cerrado=false;
+  // Freno duro: si algo queda colgado, el boton se destraba solo. Sin esto, en
+  // modo app un fetch que nunca vuelve deja el ↻ girando para siempre y no hay
+  // forma de actualizar (no existe el reload de Safari).
+  var _tope=setTimeout(function(){ done(false,'⏱️ Tardo demasiado — proba de nuevo'); },25000);
+
+  var done=function(ok,msg){
+    if(_cerrado)return; _cerrado=true;
+    clearTimeout(_tope);
+    try{hideLoader(true);}catch(_){}
+    if(btn){btn.classList.remove('spinning');btn.classList.toggle('err',ok===false);}
+    if(ok===false){
+      // NO estampamos la hora: seria mentir. El ↻ tiene que poder decir "no pude".
+      toast(msg||'⚠️ No se pudo actualizar — seguis viendo los datos de antes');
+    }else{
+      _markRefreshTime();
+      if(msg)toast(msg);
+    }
+    // Aviso de version nueva de la app, en paralelo y sin molestar si no hay.
+    _hayVersionNueva().then(function(hay){
+      if(!hay)return;
+      if(typeof _hayEditorAbierto==='function' && _hayEditorAbierto()){
+        toast('🆕 Hay una version nueva — recarga cuando termines de editar');return;
+      }
+      toast('🆕 Version nueva — actualizando la app…');
+      setTimeout(function(){location.reload();},1400);
+    });
   };
+
+  // Sin conexion no tiene sentido ni intentar: mejor decirlo de una.
+  if(navigator.onLine===false){ done(false,'📴 Sin conexion — no se pudo actualizar'); return; }
   // Ruta: en vez de recargar iframe entero (lento + puede pegar en cache),
   // le mando un postMessage al iframe para que HAGA refresh con fresh=1
   // (bypass cache server-side 20s). Fallback a recarga completa si no
@@ -5110,29 +5188,36 @@ function refreshContextual(){
       showLoader('Actualizando Ruta...', true);
       var _fbTimer=setTimeout(function(){
         window.removeEventListener('message',_rutaMsgHandler);
-        refreshIframe('rutaFrame','/ruta.html?embed=1&_t='+Date.now(),'Recargando Ruta...').then(done);
+        refreshIframe('rutaFrame','/ruta.html?embed=1&_t='+Date.now(),'Recargando Ruta...').then(function(){done(true);});
       },4000);
       var _rutaMsgHandler=function(ev){
         if(!ev||!ev.data||ev.data.type!=='maleu_ruta_refresh_done')return;
         clearTimeout(_fbTimer);
         window.removeEventListener('message',_rutaMsgHandler);
         hideLoader(true);
-        done();
+        done(true);
       };
       window.addEventListener('message',_rutaMsgHandler);
       try{ frR.contentWindow.postMessage({type:'maleu_ruta_refresh',fresh:true},'*'); }
       catch(_e){
         clearTimeout(_fbTimer);
         window.removeEventListener('message',_rutaMsgHandler);
-        refreshIframe('rutaFrame','/ruta.html?embed=1&_t='+Date.now(),'Recargando Ruta...').then(done);
+        refreshIframe('rutaFrame','/ruta.html?embed=1&_t='+Date.now(),'Recargando Ruta...').then(function(){done(true);});
       }
       return;
     }
-    refreshIframe('rutaFrame','/ruta.html?embed=1&_t='+Date.now(),'Recargando Ruta...').then(done);
+    refreshIframe('rutaFrame','/ruta.html?embed=1&_t='+Date.now(),'Recargando Ruta...').then(function(){done(true);});
     return;
   }
   if(active==='busqueda'){
-    refreshIframe('busquedaFrame','/busqueda.html?embed=1','Recargando Abastecimiento...').then(done);
+    refreshIframe('busquedaFrame','/busqueda.html?embed=1','Recargando Abastecimiento...').then(function(){done(true);});
+    return;
+  }
+  // Mi Portal (red.html) tambien vive en un iframe y NO tenia rama: caia en el
+  // default, que recarga los datos del panel y deja el iframe intacto. O sea:
+  // el boton giraba, estampaba hora nueva y no actualizaba nada de lo que veias.
+  if(active==='miportal'){
+    refreshIframe('miPortalFrame','/red.html?embed=1','Actualizando Mi Portal...').then(function(){done(true);});
     return;
   }
   if(active==='mireparto'){
@@ -5140,7 +5225,7 @@ function refreshContextual(){
       var sub='dia';try{sub=localStorage.getItem('maleu_mr_sub')||'dia';}catch(e){}
       if(sub==='hist')loadMiRepartoHistorial(); else loadMiReparto();
     }catch(e){}
-    done();
+    done(true);
     return;
   }
   // BBDD (CRM): la lista de clientes/productos vive en cache JS propio. load()
@@ -5151,13 +5236,13 @@ function refreshContextual(){
       var sub=(onTab&&onTab.dataset.sub)||'clientes';
       if(typeof bbddSwitch==='function') bbddSwitch(sub, true);
     }catch(e){}
-    done();
+    done(true);
     return;
   }
   // Ventas / Resumen ejecutivo: histórico. En 2do plano (sin tapar la pantalla).
   if(active==='ventas'){
     var pV=(typeof loadVentas==='function')?loadVentas():null;
-    Promise.resolve(pV).then(done,done);
+    Promise.resolve(pV).then(function(){done(true);},function(){done(false);});
     return;
   }
   // Default: Inicio / Pedidos / Caja / Egresos / Stock / Estancias / etc.
@@ -5172,11 +5257,24 @@ function refreshContextual(){
   else if(typeof load==='function')ps.push(load());
   // En Inicio queremos también ventas (por la sección histórica embedida)
   if(active==='inicio'&&typeof loadVentas==='function')ps.push(loadVentas());
-  Promise.all(ps).then(function(){
+  Promise.all(ps).then(function(res){
     // Estancias: re-pintar el sub activo YA con los datos frescos.
     if(active==='estancias'&&typeof window.estRefreshActivo==='function'){ try{ estRefreshActivo(); }catch(e){} }
-    done();
-  },done);
+    // Re-disparar el hook de entrada de la tab. Proveedores, Planificacion,
+    // Resumen y Ajustes NO se alimentan de load(): cargan lo suyo desde go(),
+    // asi que sin esto el ↻ les giraba al pedo. go() es idempotente y no
+    // recarga los iframes (solo los prende si estan en about:blank).
+    if(typeof go==='function' && active){ try{ go(active); }catch(e){} }
+    var malos=(res||[]).filter(function(r){return r && r.ok===false;});
+    if(!malos.length)return done(true);
+    // Distinguir el diagnostico: no es lo mismo "no llego nada" que "llegaron
+    // los datos y se rompio al dibujarlos". Con el mensaje generico Tadeo se
+    // ponia a revisar la senal cuando el problema estaba en el ERP.
+    var sinRed=malos.some(function(r){return r.red===false;});
+    done(false, sinRed
+      ? '⚠️ No se pudo actualizar — seguis viendo los datos de antes'
+      : '⚠️ Los datos llegaron pero fallo el dibujado — mantene ↻ apretado para recargar');
+  },function(){done(false);});
 }
 
 // Atajo R: actualizar la tab activa (no rompe Ctrl+R del browser).
@@ -5742,12 +5840,17 @@ document.addEventListener('input',function(e){
 function load(){
   return fetch(API+'?action=admin&t='+Date.now()).then(function(r){return r.json();}).then(function(d){
     D=d;localStorage.setItem('ma3',JSON.stringify(d));sync();$('ld').style.display='none';$('dot').className='hdr-dot';try{sbUpdateMetrics();}catch(e){}
+    var _pinto=true;
     if(_hayEditorAbierto()){_pendingLoadRender=true;}
-    else{render();}
-    if(typeof _markRefreshTime==='function')_markRefreshTime();
+    else{ try{ render(); }catch(e){ _pinto=false; console.error('render()',e); } }
+    if(_pinto && typeof _markRefreshTime==='function')_markRefreshTime();
+    return {ok:_pinto, red:true, pinto:_pinto};
   }).catch(function(){
     $('dot').className='hdr-dot off';
     var c=localStorage.getItem('ma3');if(c&&!D){D=JSON.parse(c);if(!_hayEditorAbierto())render();$('ld').style.display='none';}
+    // Devolvemos ok:false en vez de tragarnos el error: quien nos llamo tiene
+    // que poder distinguir "datos frescos" de "segui viendo los de antes".
+    return {ok:false, red:false, pinto:false};
   });
 }
 
@@ -5770,6 +5873,11 @@ function loadRapido(){
     fetch(API+'?action=cajaLight&t='+tsBase).then(function(r){return r.json();}).catch(function(){return null;})
   ]).then(function(arr){
     var lightData=arr[0], cobrosData=arr[1], cajaData=arr[2];
+    // Cada fetch tiene su propio .catch(->null), asi que un endpoint caido no
+    // tumba a los otros dos. Pero hay que CONTARLOS: antes se resolvia como
+    // exito aunque los 3 hubieran fallado, y el boton estampaba una hora nueva
+    // sobre datos viejos.
+    var _fallaron=[lightData,cobrosData,cajaData].filter(function(x){return !x;}).length;
     if(!D)D={};
     if(lightData && Array.isArray(lightData.pedidos)){
       D.pedidos=lightData.pedidos;
@@ -5790,11 +5898,15 @@ function loadRapido(){
     sync();
     $('dot').className='hdr-dot';
     try{sbUpdateMetrics();}catch(e){}
+    var _pinto=true;
     if(_hayEditorAbierto()){_pendingLoadRender=true;}
-    else{render();}
-    if(typeof _markRefreshTime==='function')_markRefreshTime();
+    else{ try{ render(); }catch(e){ _pinto=false; console.error('render()',e); } }
+    if(_fallaron===0 && _pinto && typeof _markRefreshTime==='function')_markRefreshTime();
+    if(_fallaron>0)$('dot').className='hdr-dot off';
+    return {ok:_fallaron===0&&_pinto, fallaron:_fallaron, total:3, red:_fallaron<3, pinto:_pinto};
   }).catch(function(){
     $('dot').className='hdr-dot off';
+    return {ok:false, fallaron:3, total:3, red:false, pinto:false};
   });
 }
 // Refresh manual desde tab Caja: usa endpoint cajaLight (~5s vs ~17s admin).
