@@ -4016,7 +4016,27 @@ function _enterApp(){
   if(nm)nm.textContent=firstName;
   if(rl)rl.textContent=(SESSION.rol||'').toUpperCase();
   // Disparar carga de datos si está disponible (load se define más abajo)
-  if(typeof load==='function')load();
+  if(typeof load==='function' && _necesitaDatosPanel())load();
+}
+// Tabs que se dibujan con el volcado grande del panel (action=admin).
+// Un vendedor solo ve el iframe de Mi Portal: pedir ese volcado seria traerse
+// pedidos, caja y egresos enteros para no dibujar nada — y desde la Fase 1 el
+// backend directamente no se lo da (401). Sin esto, el panel de un vendedor
+// arrancaba con un error que no significaba nada para el.
+var _TABS_CON_DATOS=['inicio','ventas','pedidos','caja','egresos','stock','bbdd',
+                     'pedidoshome','proveedores','planificacion','estancias','mireparto'];
+// true si la sesion tiene acceso a esa tab. Sin info de tabs (sesion vieja),
+// devolvemos true para no cambiarle nada a quien ya estaba adentro.
+function _tengoTab(t){
+  var l=(SESSION&&Array.isArray(SESSION.tabs))?SESSION.tabs:null;
+  if(!l||!l.length)return true;
+  return l.indexOf(t)>=0;
+}
+function _necesitaDatosPanel(){
+  var t=(SESSION&&Array.isArray(SESSION.tabs))?SESSION.tabs:null;
+  if(!t||!t.length)return true;            // sin info de tabs, comportarse como antes
+  for(var i=0;i<t.length;i++){if(_TABS_CON_DATOS.indexOf(t[i])>=0)return true;}
+  return false;
 }
 function applyRoles(){
   if(!SESSION)return;
@@ -5919,14 +5939,23 @@ function loadRapido(){
   return Promise.all([
     fetch(API+'?action=pedidosLight&t='+tsBase).then(function(r){return r.json();}).catch(function(){return null;}),
     fetch(API+'?action=cobrosPendientes&t='+tsBase).then(function(r){return r.json();}).catch(function(){return null;}),
-    fetch(API+'?action=cajaLight&t='+tsBase).then(function(r){return r.json();}).catch(function(){return null;})
+    // La caja es plata: si el rol no tiene la tab, ni la pedimos. El backend
+    // ademas la niega (Fase 1) — pedirla igual seria un 401 que el usuario
+    // veria como "no se pudo actualizar" sin entender por que.
+    _tengoTab('caja')
+      ? fetch(API+'?action=cajaLight&t='+tsBase).then(function(r){return r.json();}).catch(function(){return null;})
+      : Promise.resolve('sin-caja')
   ]).then(function(arr){
     var lightData=arr[0], cobrosData=arr[1], cajaData=arr[2];
     // Cada fetch tiene su propio .catch(->null), asi que un endpoint caido no
     // tumba a los otros dos. Pero hay que CONTARLOS: antes se resolvia como
     // exito aunque los 3 hubieran fallado, y el boton estampaba una hora nueva
     // sobre datos viejos.
-    var _fallaron=[lightData,cobrosData,cajaData].filter(function(x){return !x;}).length;
+    var _pidoCaja=(cajaData!=='sin-caja');
+    if(!_pidoCaja)cajaData=null;              // omitida a proposito, no es una falla
+    var _total=_pidoCaja?3:2;
+    var _fallaron=[lightData,cobrosData].filter(function(x){return !x;}).length
+                 +((_pidoCaja&&!cajaData)?1:0);
     if(!D)D={};
     if(lightData && Array.isArray(lightData.pedidos)){
       D.pedidos=lightData.pedidos;
@@ -5952,7 +5981,7 @@ function loadRapido(){
     else{ try{ render(); }catch(e){ _pinto=false; console.error('render()',e); } }
     if(_fallaron===0 && _pinto && typeof _markRefreshTime==='function')_markRefreshTime();
     if(_fallaron>0)$('dot').className='hdr-dot off';
-    return {ok:_fallaron===0&&_pinto, fallaron:_fallaron, total:3, red:_fallaron<3, pinto:_pinto};
+    return {ok:_fallaron===0&&_pinto, fallaron:_fallaron, total:_total, red:_fallaron<_total, pinto:_pinto};
   }).catch(function(){
     $('dot').className='hdr-dot off';
     return {ok:false, fallaron:3, total:3, red:false, pinto:false};
