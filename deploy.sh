@@ -20,8 +20,16 @@ if [ -z "$MSG" ]; then echo "Falta el mensaje.  Uso: ./deploy.sh \"que cambiaste
 RED=$'\e[31m'; GRN=$'\e[32m'; YEL=$'\e[33m'; RST=$'\e[0m'
 fallar(){ echo "${RED}✖ $1${RST}" >&2; exit 1; }
 
+# ── 0. Generar panel.html ────────────────────────────────────────────────────
+#  panel.html NO se edita: se arma con _tools/build.js a partir de
+#  panel.src.html + ruta.html + red.html + busqueda.html. Se regenera SIEMPRE,
+#  asi es imposible publicar un panel viejo despues de tocar una sub-app.
+echo "→ [0/6] Armando panel.html…"
+[ -d node_modules ] || { echo "    faltan dependencias, instalando…"; npm install --no-audit --no-fund >/dev/null; }
+node _tools/build.js | sed 's/^/    /' || fallar "El build no compilo — no se publica nada."
+
 # ── 1. Rama y sincronia con origin ───────────────────────────────────────────
-echo "→ [1/5] Sincronia con origin…"
+echo "→ [1/6] Sincronia con origin…"
 BR="$(git rev-parse --abbrev-ref HEAD)"
 [ "$BR" = "main" ] || fallar "Estas en la rama '$BR', no en main."
 git fetch -q origin main
@@ -36,7 +44,7 @@ fi
 echo "  OK: al dia con origin/main."
 
 # ── 2. Que haya algo que publicar ────────────────────────────────────────────
-echo "→ [2/5] Cambios a publicar…"
+echo "→ [2/6] Cambios a publicar…"
 CAMBIOS="$(git status --porcelain -- '*.html' '*.js' '*.json' '*.css' | awk '{print $NF}' | sort -u)"
 if [ -z "$CAMBIOS" ] && [ "$(git rev-list --count origin/main..HEAD)" -eq 0 ]; then
   fallar "No hay nada modificado ni ningun commit pendiente de push."
@@ -44,7 +52,7 @@ fi
 [ -n "$CAMBIOS" ] && echo "$CAMBIOS" | sed 's/^/    /' || echo "    (solo commits ya hechos, pendientes de push)"
 
 # ── 3. Sintaxis de los HTML tocados ──────────────────────────────────────────
-echo "→ [3/5] Sintaxis…"
+echo "→ [3/6] Sintaxis…"
 HTMLS="$(echo "${CAMBIOS:-}" | grep -E '\.html$' || true)"
 if [ -n "$HTMLS" ]; then
   while IFS= read -r f; do
@@ -60,12 +68,18 @@ fi
 # ── 4. Service worker al dia ─────────────────────────────────────────────────
 #  Si cambio el HTML de una PWA, su CACHE_NAME tiene que cambiar tambien, o el
 #  celular que ya tiene ese nombre cacheado no invalida nada.
-echo "→ [4/5] Service workers…"
-sw_de(){ case "$1" in panel.html) echo sw-panel.js;; ruta.html) echo sw-ruta.js;;
-                       busqueda.html) echo sw-busqueda.js;; *) echo "";; esac; }
+echo "→ [4/6] Service workers…"
+# Ruta, Mi Portal y Abastecimiento ya no son PWAs aparte: se compilan adentro
+# de panel.html. Entonces tocar CUALQUIERA de las cuatro fuentes obliga a subir
+# el CACHE_NAME de sw-panel.js — es el unico service worker que queda vivo.
+sw_de(){ case "$1" in panel.html|panel.src.html|ruta.html|red.html|busqueda.html) echo sw-panel.js;;
+                       *) echo "";; esac; }
 if [ -n "$HTMLS" ]; then
+  VISTOS=""
   while IFS= read -r f; do
     SW="$(sw_de "$f")"; [ -n "$SW" ] || continue
+    case " $VISTOS " in *" $SW "*) continue;; esac
+    VISTOS="$VISTOS $SW"
     ACT="$(grep -oE "maleu-[a-z]+-v[0-9]+" "$SW" | head -1)"
     PUB="$(git show "origin/main:$SW" 2>/dev/null | grep -oE "maleu-[a-z]+-v[0-9]+" | head -1 || echo "")"
     if [ "$ACT" = "$PUB" ]; then
@@ -80,7 +94,7 @@ else
 fi
 
 # ── 5. Commit + push ─────────────────────────────────────────────────────────
-echo "→ [5/5] Publicando…"
+echo "→ [5/6] Publicando…"
 git add -A
 git diff --cached --quiet || git -c commit.gpgsign=false commit -q -m "$MSG
 
