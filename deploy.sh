@@ -85,10 +85,11 @@ git add -A
 git diff --cached --quiet || git -c commit.gpgsign=false commit -q -m "$MSG
 
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
-# Token de maleupedidos EXPLICITO. No alcanza con `gh auth switch`: hay varias
-# sesiones abiertas y la cuenta activa de gh se vuelve sola a chuchhh (la
-# personal), que no tiene permiso acá. Asi no depende de cual este activa.
-GH_TOKEN="$(gh auth token -u maleupedidos)"   git -c credential.helper='!gh auth git-credential' push -q origin main
+# El helper es Git Credential Manager y la identidad la decide la carpeta via
+# includeIf en ~/.gitconfig (Trabajo\ -> maleupedidos). No hace falta forzar
+# token ni correr `gh auth switch`: un push que falla NO es por la cuenta activa.
+# Diagnostico completo en C:\Tadeo Ustariz\CLAUDE.md, "Dos cuentas de GitHub".
+git push -q origin main
 echo "${GRN}✅ Publicado — $MSG${RST}"
 echo "   GitHub Pages tarda ~1 min. Verificá contra la URL real antes de cantar victoria:"
 echo "   curl -s https://maleupedidos.github.io/panel.html | grep -c 'algo-de-tu-cambio'"
