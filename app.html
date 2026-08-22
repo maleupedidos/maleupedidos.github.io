@@ -7825,6 +7825,35 @@ function refreshContextual(){
   // default, que recarga los datos del panel y deja el iframe intacto. O sea:
   // el boton giraba, estampaba hora nueva y no actualizaba nada de lo que veias.
   if(active==='miportal'){
+    /* Igual que Ruta: actualizacion silenciosa. Mi Portal es la app entera del
+       vendedor; recargar el iframe lo devolvia a Inicio con pantalla en blanco
+       cada vez que tocaba el ↻. (Tadeo, 22/8/2026) */
+    var frMP=document.getElementById('miPortalFrame');
+    var _mpSrc=frMP?String(frMP.getAttribute('src')||''):'';
+    if(frMP && frMP.contentWindow && _mpSrc && _mpSrc.indexOf('about:blank')<0){
+      var _mpVivo=false;
+      var _mpTimer=setTimeout(function(){
+        if(_mpVivo)return;                        // esta trabajando: dejalo
+        window.removeEventListener('message',_mpMsgHandler);
+        refreshIframe('miPortalFrame','/red.html?embed=1','Actualizando Mi Portal...').then(function(){done(true);});
+      },2500);
+      var _mpMsgHandler=function(ev){
+        if(!ev||!ev.data)return;
+        if(ev.data.type==='maleu_red_refresh_ack'){_mpVivo=true;clearTimeout(_mpTimer);return;}
+        if(ev.data.type!=='maleu_red_refresh_done')return;
+        clearTimeout(_mpTimer);
+        window.removeEventListener('message',_mpMsgHandler);
+        done(ev.data.ok!==false);
+      };
+      window.addEventListener('message',_mpMsgHandler);
+      try{ frMP.contentWindow.postMessage({type:'maleu_red_refresh'},'*'); }
+      catch(_e){
+        clearTimeout(_mpTimer);
+        window.removeEventListener('message',_mpMsgHandler);
+        refreshIframe('miPortalFrame','/red.html?embed=1','Actualizando Mi Portal...').then(function(){done(true);});
+      }
+      return;
+    }
     if(typeof RED$refreshPortal!=='function'){ done(false,'Entra una vez a Mi Portal antes de actualizarlo'); return; }
     Promise.resolve(RED$refreshPortal())
       .then(function(){done(true);},function(){done(false);});
@@ -10968,7 +10997,12 @@ function rPedidos(opts){
   // banner hasta que pasen 30s del último cambio de origen o hasta el próximo
   // render post-load (lo que ocurra primero).
   var _dentroGraciaOC = (typeof _ultimoCambioOrigenTs==='number') && (Date.now() - _ultimoCambioOrigenTs < 30000);
-  var _orphans=(D.pedidos||[]).filter(function(p){ if(homeOnly&&p.h!=='Home')return false; return _esOrphanOC(p); });
+  // Y solo para quien puede resolverlo: el cartel manda a Abastecimiento, asi
+  // que a un repartidor le quedaba un cartel rojo apuntando a una tab que no
+  // tiene. Un problema que no podes arreglar no es un aviso, es ruido.
+  // (Tadeo, 22/8/2026)
+  var _puedeOC=_tengoTab('busqueda');
+  var _orphans=_puedeOC?(D.pedidos||[]).filter(function(p){ if(homeOnly&&p.h!=='Home')return false; return _esOrphanOC(p); }):[];
   var _orphanBanner=(_orphans.length && !_dentroGraciaOC)?_ocOrphanBannerHtml(_orphans):'';
   // Filter out empty rows (no client or $0)
   var fl=D.pedidos.filter(function(p){
@@ -11103,7 +11137,7 @@ function rPedidos(opts){
       } else {
         // Origen dice OC/Mixto pero NO hay ninguna línea en la hoja Orden de Compra:
         // la OC nunca se generó. Antes esto no mostraba nada (silencio → confusión).
-        sumReadyBadge='<span class="tg" style="background:var(--rb);color:var(--r);font-weight:800" title="Marcado como Orden de Compra pero la OC no está generada en la hoja Orden de Compra. Generala en Abastecimiento o cambiá el origen a Depósito.">&#9888;&#65039; OC sin generar</span>';
+        if(_tengoTab('busqueda'))sumReadyBadge='<span class="tg" style="background:var(--rb);color:var(--r);font-weight:800" title="Marcado como Orden de Compra pero la OC no está generada en la hoja Orden de Compra. Generala en Abastecimiento o cambiá el origen a Depósito.">&#9888;&#65039; OC sin generar</span>';
       }
     }
     // Badge "Decidir Origen" — aparece SOLO en pedidos con Origen=Pendiente todavía
@@ -24519,6 +24553,24 @@ window.addEventListener('message', function (e) {
     var t = e.data.tab;
     if (['inicio','ruta','caja','pagos'].indexOf(t) < 0) return;
     if (t !== RED$currentMainTab) RED$setMainTab(t);
+    return;
+  }
+  /* El boton actualizar del panel. Antes el panel recargaba el iframe entero:
+     el vendedor perdia la sub-tab donde estaba y se comia una pantalla en
+     blanco. Ahora refrescamos los datos en el lugar (refreshPortal ya hace
+     exactamente eso) y le avisamos al panel cuando termina.
+     El acuse va PRIMERO: el fetch tarda varios segundos y el panel, sin
+     noticias, asume que me colgue. (Tadeo, 22/8/2026) */
+  if (e.data.type === 'maleu_red_refresh') {
+    try { parent.postMessage({ type: 'maleu_red_refresh_ack' }, '*'); } catch (_) {}
+    var _pr = null;
+    try { _pr = RED$refreshPortal(); } catch (_) {}
+    Promise.resolve(_pr).then(function (ok) {
+      try { parent.postMessage({ type: 'maleu_red_refresh_done', ok: ok !== false }, '*'); } catch (_) {}
+    }, function () {
+      try { parent.postMessage({ type: 'maleu_red_refresh_done', ok: false }, '*'); } catch (_) {}
+    });
+    return;
   }
 });
 
