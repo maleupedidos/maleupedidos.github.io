@@ -7804,9 +7804,6 @@ function refreshContextual(){
   // le mando un postMessage al iframe para que HAGA refresh con fresh=1
   // (bypass cache server-side 20s). Fallback a recarga completa si no
   // responde en 4s.
-  // Ruta ya no es un iframe: es un modulo de esta misma app. En vez de
-  // recargar una URL y esperar un postMessage, le pedimos los datos frescos
-  // y esperamos SU promesa. Si falla, el boton lo dice.
   if(active==='ruta'){
     if(typeof RUT$refresh!=='function'){ done(false,'Entra una vez a Ruta antes de actualizarla'); return; }
     showLoader('Actualizando Ruta...', true);
@@ -7816,7 +7813,6 @@ function refreshContextual(){
   }
   if(active==='busqueda'){
     if(typeof ABA$refresh!=='function'){ done(false,'Entra una vez a Abastecimiento antes de actualizarlo'); return; }
-    showLoader('Actualizando Abastecimiento...', true);
     Promise.resolve(ABA$refresh(true))
       .then(function(){done(true);},function(){done(false);});
     return;
@@ -7825,35 +7821,6 @@ function refreshContextual(){
   // default, que recarga los datos del panel y deja el iframe intacto. O sea:
   // el boton giraba, estampaba hora nueva y no actualizaba nada de lo que veias.
   if(active==='miportal'){
-    /* Igual que Ruta: actualizacion silenciosa. Mi Portal es la app entera del
-       vendedor; recargar el iframe lo devolvia a Inicio con pantalla en blanco
-       cada vez que tocaba el ↻. (Tadeo, 22/8/2026) */
-    var frMP=document.getElementById('miPortalFrame');
-    var _mpSrc=frMP?String(frMP.getAttribute('src')||''):'';
-    if(frMP && frMP.contentWindow && _mpSrc && _mpSrc.indexOf('about:blank')<0){
-      var _mpVivo=false;
-      var _mpTimer=setTimeout(function(){
-        if(_mpVivo)return;                        // esta trabajando: dejalo
-        window.removeEventListener('message',_mpMsgHandler);
-        refreshIframe('miPortalFrame','/red.html?embed=1','Actualizando Mi Portal...').then(function(){done(true);});
-      },2500);
-      var _mpMsgHandler=function(ev){
-        if(!ev||!ev.data)return;
-        if(ev.data.type==='maleu_red_refresh_ack'){_mpVivo=true;clearTimeout(_mpTimer);return;}
-        if(ev.data.type!=='maleu_red_refresh_done')return;
-        clearTimeout(_mpTimer);
-        window.removeEventListener('message',_mpMsgHandler);
-        done(ev.data.ok!==false);
-      };
-      window.addEventListener('message',_mpMsgHandler);
-      try{ frMP.contentWindow.postMessage({type:'maleu_red_refresh'},'*'); }
-      catch(_e){
-        clearTimeout(_mpTimer);
-        window.removeEventListener('message',_mpMsgHandler);
-        refreshIframe('miPortalFrame','/red.html?embed=1','Actualizando Mi Portal...').then(function(){done(true);});
-      }
-      return;
-    }
     if(typeof RED$refreshPortal!=='function'){ done(false,'Entra una vez a Mi Portal antes de actualizarlo'); return; }
     Promise.resolve(RED$refreshPortal())
       .then(function(){done(true);},function(){done(false);});
@@ -31656,6 +31623,23 @@ function ABA$loadLocal() {
 }
 
 /* ── REFRESH (OC data) ─────────────────────────────────── */
+/* El boton actualizar del panel. Ultima de las tres sub-apps en tener esto:
+   antes el panel recargaba el iframe entero y Abastecimiento arrancaba de cero
+   con la pantalla en blanco. `refresh(true)` ya hacia lo correcto — solo
+   faltaba que alguien se lo pidiera. El acuse va primero porque el fetch tarda
+   y el panel, sin noticias, asume que me colgue. (Tadeo, 22/8/2026) */
+window.addEventListener('message', function (e) {
+  if (!e || !e.data || e.data.type !== 'maleu_abast_refresh') return;
+  try { parent.postMessage({ type: 'maleu_abast_refresh_ack' }, '*'); } catch (_) {}
+  var pr = null;
+  try { pr = ABA$refresh(true); } catch (_) {}
+  Promise.resolve(pr).then(function () {
+    try { parent.postMessage({ type: 'maleu_abast_refresh_done', ok: true }, '*'); } catch (_) {}
+  }, function () {
+    try { parent.postMessage({ type: 'maleu_abast_refresh_done', ok: false }, '*'); } catch (_) {}
+  });
+});
+
 function ABA$refresh(silent) {
   if (!silent) document.getElementById('loadingView').classList.remove('hidden');
   var btn = document.getElementById('btnRefresh');

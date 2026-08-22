@@ -72,48 +72,67 @@ const IFRAMES = {
   }
 };
 
+/** Encuentra la rama `if(active==='X'){ ... }` completa dentro de
+ *  refreshContextual y devuelve [desde, hasta) contando llaves.
+ *
+ *  Antes esto pegaba el texto EXACTO de cada rama. Cada vez que se tocaba el
+ *  ↻ en panel.src.html habia que venir a copiar el bloque nuevo aca adentro,
+ *  y si te olvidabas el build cortaba. Contando llaves alcanza con que la rama
+ *  exista. Igual sigue cortando fuerte si no la encuentra: prefiero no
+ *  compilar antes que publicar un ERP con el boton actualizar roto.
+ *  (Tadeo, 22/8/2026) */
+function cortarRama(html, clave, quien) {
+  const marca = "  if(active==='" + clave + "'){";
+  const i = html.indexOf(marca);
+  if (i < 0) { console.error('\n✗ No encontre la rama ' + quien + ' del ↻'); process.exit(1); }
+  if (html.indexOf(marca, i + 1) >= 0) { console.error('\n✗ La rama ' + quien + ' del ↻ aparece mas de una vez'); process.exit(1); }
+  let n = 0, j = i;
+  for (; j < html.length; j++) {
+    const c = html[j];
+    if (c === '{') n++;
+    else if (c === '}') { n--; if (n === 0) { j++; break; } }
+  }
+  if (n !== 0) { console.error('\n✗ No pude cerrar la rama ' + quien + ' del ↻'); process.exit(1); }
+  while (html[j] === '\n') j++;
+  return [i, j];
+}
+
 /** El ↻ mandaba postMessage a iframes y recargaba URLs. Ahora Ruta,
  *  Abastecimiento y Mi Portal son modulos: se les llama la funcion y listo.
  *  Ademas hay UNA sola version que chequear, no tres. */
 function arreglarRefresh(html) {
-  // ── rama Ruta: todo el baile de postMessage + fallback ──
-  const iniRuta = html.indexOf("  if(active==='ruta'){\n    var frR=");
-  const finRuta = html.indexOf("  if(active==='busqueda'){", iniRuta);
-  if (iniRuta < 0 || finRuta < 0) { console.error('\n✗ No encontre la rama Ruta del ↻'); process.exit(1); }
-  html = html.slice(0, iniRuta) + `  // Ruta ya no es un iframe: es un modulo de esta misma app. En vez de
-  // recargar una URL y esperar un postMessage, le pedimos los datos frescos
-  // y esperamos SU promesa. Si falla, el boton lo dice.
-  if(active==='ruta'){
+  // De atras para adelante, asi los indices de las ramas anteriores no se mueven.
+  const RAMAS = [
+    ['miportal', 'Mi Portal', `  if(active==='miportal'){
+    if(typeof RED$refreshPortal!=='function'){ done(false,'Entra una vez a Mi Portal antes de actualizarlo'); return; }
+    Promise.resolve(RED$refreshPortal())
+      .then(function(){done(true);},function(){done(false);});
+    return;
+  }
+`],
+    ['busqueda', 'Abastecimiento', `  if(active==='busqueda'){
+    if(typeof ABA$refresh!=='function'){ done(false,'Entra una vez a Abastecimiento antes de actualizarlo'); return; }
+    Promise.resolve(ABA$refresh(true))
+      .then(function(){done(true);},function(){done(false);});
+    return;
+  }
+`],
+    // Ruta ya no es un iframe: es un modulo de esta misma app. En vez de
+    // recargar una URL y esperar un postMessage, le pedimos los datos frescos
+    // y esperamos SU promesa. Si falla, el boton lo dice.
+    ['ruta', 'Ruta', `  if(active==='ruta'){
     if(typeof RUT$refresh!=='function'){ done(false,'Entra una vez a Ruta antes de actualizarla'); return; }
     showLoader('Actualizando Ruta...', true);
     Promise.resolve(RUT$refresh(true,true))
       .then(function(){done(true);},function(){done(false);});
     return;
   }
-` + html.slice(finRuta);
-
-  // ── rama Abastecimiento ──
-  html = reemplazar(html,
-    `  if(active==='busqueda'){
-    refreshIframe('busquedaFrame','/busqueda.html?embed=1','Recargando Abastecimiento...').then(function(){done(true);});
-    return;
-  }`,
-    `  if(active==='busqueda'){
-    if(typeof ABA$refresh!=='function'){ done(false,'Entra una vez a Abastecimiento antes de actualizarlo'); return; }
-    showLoader('Actualizando Abastecimiento...', true);
-    Promise.resolve(ABA$refresh(true))
-      .then(function(){done(true);},function(){done(false);});
-    return;
-  }`, '↻ Abastecimiento');
-
-  // ── rama Mi Portal ──
-  html = reemplazar(html,
-    `    refreshIframe('miPortalFrame','/red.html?embed=1','Actualizando Mi Portal...').then(function(){done(true);});
-    return;`,
-    `    if(typeof RED$refreshPortal!=='function'){ done(false,'Entra una vez a Mi Portal antes de actualizarlo'); return; }
-    Promise.resolve(RED$refreshPortal())
-      .then(function(){done(true);},function(){done(false);});
-    return;`, '↻ Mi Portal');
+`],
+  ];
+  for (const [clave, quien, reemplazo] of RAMAS) {
+    const [a, b] = cortarRama(html, clave, quien);
+    html = html.slice(0, a) + reemplazo + html.slice(b);
+  }
 
   // ── una sola app = una sola version que mirar ──
   const iniApps = html.indexOf('var _APPS=[');
