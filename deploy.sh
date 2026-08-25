@@ -4,6 +4,9 @@
 #
 #  Uso:  ./deploy.sh "que cambiaste"
 #
+#  El ERP se publica en /app.html — lo genera _tools/build.js a partir de
+#  _src/panel.src.html + ruta.html + red.html + busqueda.html.
+#
 #  Existe porque este repo NO tenia red de contencion, a diferencia de
 #  estancias/. Dos formas de romperlo en silencio, ambas ya pasadas:
 #    · Otra sesion de Claude pushea y esta trabaja sobre una copia vieja.
@@ -21,10 +24,10 @@ RED=$'\e[31m'; GRN=$'\e[32m'; YEL=$'\e[33m'; RST=$'\e[0m'
 fallar(){ echo "${RED}✖ $1${RST}" >&2; exit 1; }
 
 # ── 0. Generar panel.html ────────────────────────────────────────────────────
-#  panel.html NO se edita: se arma con _tools/build.js a partir de
-#  panel.src.html + ruta.html + red.html + busqueda.html. Se regenera SIEMPRE,
-#  asi es imposible publicar un panel viejo despues de tocar una sub-app.
-echo "→ [0/6] Armando panel.html…"
+#  app.html NO se edita: se arma con _tools/build.js a partir de
+#  _src/panel.src.html + ruta.html + red.html + busqueda.html. Se regenera
+#  SIEMPRE, asi es imposible publicar un ERP viejo despues de tocar una sub-app.
+echo "→ [0/6] Armando app.html…"
 [ -d node_modules ] || { echo "    faltan dependencias, instalando…"; npm install --no-audit --no-fund >/dev/null; }
 node _tools/build.js | sed 's/^/    /' || fallar "El build no compilo — no se publica nada."
 
@@ -72,7 +75,7 @@ echo "→ [4/6] Service workers…"
 # Ruta, Mi Portal y Abastecimiento ya no son PWAs aparte: se compilan adentro
 # de panel.html. Entonces tocar CUALQUIERA de las cuatro fuentes obliga a subir
 # el CACHE_NAME de sw-panel.js — es el unico service worker que queda vivo.
-sw_de(){ case "$1" in panel.html|panel.src.html|ruta.html|red.html|busqueda.html) echo sw-panel.js;;
+sw_de(){ case "$1" in app.html|_src/panel.src.html|ruta.html|red.html|busqueda.html) echo sw-panel.js;;
                        *) echo "";; esac; }
 if [ -n "$HTMLS" ]; then
   VISTOS=""
@@ -106,4 +109,4 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 git push -q origin main
 echo "${GRN}✅ Publicado — $MSG${RST}"
 echo "   GitHub Pages tarda ~1 min. Verificá contra la URL real antes de cantar victoria:"
-echo "   curl -s https://maleupedidos.github.io/panel.html | grep -c 'algo-de-tu-cambio'"
+echo "   curl -s https://maleupedidos.github.io/app.html | grep -c 'algo-de-tu-cambio'"

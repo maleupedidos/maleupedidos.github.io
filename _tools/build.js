@@ -1,14 +1,16 @@
 #!/usr/bin/env node
 /*
- * build.js — arma panel.html: UN archivo con todo el ERP adentro.
+ * build.js — arma app.html: UN archivo con todo el ERP adentro.
  *
  *   node _tools/build.js                 → fusiona las 3 sub-apps
  *   node _tools/build.js miportal        → solo esa (para ir de a poco)
  *
- * SE EDITAN:  panel.src.html, ruta.html, red.html, busqueda.html
- * SE PUBLICA: panel.html — lo genera este script, NO se toca a mano.
- *             Se llama asi para que el icono que ya esta instalado en el
- *             celular siga abriendo la misma URL de siempre.
+ * SE EDITAN:  _src/panel.src.html, ruta.html, red.html, busqueda.html
+ * SE PUBLICA: app.html — lo genera este script, NO se toca a mano.
+ *
+ * El fuente vive en _src/ a proposito: GitHub Pages corre Jekyll, que no
+ * publica las carpetas que empiezan con guion bajo. Asi el codigo del ERP
+ * deja de estar servido dos veces (una compilado y otra en crudo).
  *
  * Si un anclaje no aparece EXACTAMENTE una vez, el build corta con error.
  * Prefiero que no compile a que publique un ERP roto un viernes.
@@ -19,13 +21,19 @@ const path = require('path');
 const { fusionar, APPS } = require('./fusionar');
 
 const RAIZ = path.resolve(__dirname, '..');
-const FUENTE = path.join(RAIZ, 'panel.src.html');   // el que se edita
-// 21/8/2026 — VUELTA ATRAS TEMPORAL. El ERP fusionado se le quedaba sin
-// responder a los toques en el celular de Tadeo y no pude reproducirlo (aca
-// solo tengo Chromium; su telefono es WebKit). Mientras lo busco, lo que se
-// publica en /panel.html es la version de siempre, con iframes, que funciona.
-// El fusionado se publica aparte en /app.html para poder probarlo sin que
-// nadie deje de trabajar. Cuando este resuelto, esto vuelve a 'panel.html'.
+const FUENTE = path.join(RAIZ, '_src', 'panel.src.html');   // el que se edita
+// /app.html ES el ERP. (25/8/2026)
+//
+// El 21/8 esto fue una vuelta atras temporal: el ERP fusionado se le quedaba
+// sin responder a los toques en el celular de Tadeo, no se pudo reproducir
+// (aca solo hay Chromium; su telefono es WebKit) y se publico aparte en
+// /app.html para no bloquear a nadie. El 25/8 Tadeo lo probo en su iPhone,
+// instalado como app: responde bien. El bug era el de los manejadores de
+// touch (commit d375429) y ya estaba arreglado.
+//
+// Se queda en /app.html en vez de volver a 'panel.html' porque el icono que
+// Tadeo tiene hoy en el celular apunta aca. /panel.html quedo como puente
+// que redirige, para los iconos viejos de repartidores y vendedores.
 const SALIDA = path.join(RAIZ, 'app.html');
 
 // tab del panel  →  clave de la sub-app
@@ -201,11 +209,12 @@ function main() {
 
   fs.writeFileSync(SALIDA, html);
 
-  // panel.html — lo que abre el icono de Tadeo. Es panel.src.html tal cual:
-  // sigue usando iframes para Ruta/Abast./Mi Portal. Se copia (no se edita a
-  // mano) para que haya UN solo archivo fuente y todo arreglo llegue a los dos.
-  fs.writeFileSync(path.join(RAIZ, 'panel.html'), fs.readFileSync(FUENTE, 'utf8'));
-  console.log('  panel.html (con iframes, el que se usa hoy) — copiado de panel.src.html');
+  // panel.html YA NO SE GENERA. (25/8/2026)
+  // Mientras el ERP fusionado estaba en prueba, aca se copiaba panel.src.html
+  // encima de panel.html para que el icono de Tadeo siguiera abriendo la
+  // version con iframes. Ahora /app.html ES el ERP, y /panel.html es un
+  // redirect de 30 lineas escrito a mano — si el build lo volviera a pisar,
+  // publicaria el ERP entero en crudo por segunda vez y sin compilar.
   console.log('╚══ app.html: ' + Math.round(html.length / 1024) + ' KB ══╝\n');
 }
 

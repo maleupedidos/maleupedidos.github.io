@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /*
  * fusionar.js — mete una sub-app (ruta.html, red.html, busqueda.html) ADENTRO
- * de panel.html, para que el ERP sea una sola aplicacion en vez de tres.
+ * de app.html, para que el ERP sea una sola aplicacion en vez de tres.
  *
  *   node _tools/fusionar.js miportal      → fusiona red.html
  *   node _tools/fusionar.js abast         → fusiona busqueda.html
@@ -56,10 +56,12 @@ function despiezar(html) {
   let descartados = 0;
   let sinScripts = sinEstilos.replace(/<script([^>]*)>([\s\S]*?)<\/script>/gi, (todo, attrs, js) => {
     if (/\bsrc=/i.test(attrs)) { externos.push(todo); return ''; }
-    // El guardia de "si me abris suelto, mandame a panel.html". Fusionada, la
-    // sub-app YA es panel.html: si lo dejabamos, abrir la tab Ruta recargaba
-    // el ERP entero y parecia que no pasaba nada. (Lo encontre probando.)
-    if (/location\.replace\(\s*['"]\/panel\.html['"]\s*\)/.test(js)) { descartados++; return ''; }
+    // El guardia de "si me abris suelto, mandame al ERP". Fusionada, la sub-app
+    // YA es el ERP: si lo dejabamos, abrir la tab Ruta recargaba el ERP entero
+    // y parecia que no pasaba nada. (Lo encontre probando.)
+    // Se aceptan los dos destinos: /app.html es el de hoy, /panel.html quedo en
+    // sub-apps que todavia no se actualizaron. (25/8/2026)
+    if (/location\.replace\(\s*['"]\/(app|panel)\.html['"]\s*\)/.test(js)) { descartados++; return ''; }
     scripts.push(js);
     return '';
   });
@@ -309,7 +311,7 @@ function fusionar(clave) {
   const mk = acotarMarkup(p.cuerpo, renombrados, app.pref);
 
   // ids que ya existen en el panel
-  const idsPanel = leerIds(fs.readFileSync(path.join(RAIZ, 'panel.src.html'), 'utf8'));
+  const idsPanel = leerIds(fs.readFileSync(path.join(RAIZ, '_src', 'panel.src.html'), 'utf8'));
   const mios = leerIds(p.cuerpo);
   const chocan = [...mios].filter((x) => idsPanel.has(x));
   const ai = acotarIds(mk.markup, jsRen, chocan, app.pref);
