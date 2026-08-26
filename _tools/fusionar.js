@@ -32,11 +32,37 @@ const postcss = require('postcss');
 const RAIZ = path.resolve(__dirname, '..');
 
 // ── Que sub-app va en que tab del panel ──
+// `pref`    → prefijo del JS. Vacio = esta sub-app YA viene con nombres unicos
+//              desde la fuente y no hay que renombrarle nada (ver mas abajo).
+// `prefCss` → prefijo de los @keyframes y de los ids que chocan con el panel.
+//              Ese trabajo hay que hacerlo igual, este despegada o no: son
+//              nombres del HTML y del CSS, no variables de JavaScript.
 const APPS = {
-  miportal: { archivo: 'red.html',      frame: 'miPortalFrame', cont: 'pg-miportal', pref: 'RED$'  },
-  abast:    { archivo: 'busqueda.html', frame: 'busquedaFrame', cont: 'pg-abast',    pref: 'ABA$'  },
-  ruta:     { archivo: 'ruta.html',     frame: 'rutaFrame',     cont: 'pg-ruta',     pref: 'RUT$'  }
+  miportal: { archivo: 'red.html',      frame: 'miPortalFrame', cont: 'pg-miportal', pref: 'RED$', prefCss: 'RED$' },
+  abast:    { archivo: 'busqueda.html', frame: 'busquedaFrame', cont: 'pg-abast',    pref: '',     prefCss: 'ABA$' },
+  ruta:     { archivo: 'ruta.html',     frame: 'rutaFrame',     cont: 'pg-ruta',     pref: 'RUT$', prefCss: 'RUT$' }
 };
+
+/* ── Por que abast tiene el prefijo vacio (26/08/2026) ───────────────────────
+ *
+ * Hasta hoy este archivo renombraba las globales de las tres sub-apps EN CADA
+ * COMPILADA. Eran 538 nombres tocados para resolver 24 colisiones reales: el
+ * 95% del renombrado era daño colateral. Y cada nombre tocado era una chance
+ * de romper un onclick escrito adentro de un string, que el renombrador no ve
+ * — fueron 311 botones muertos, sin un solo error en consola. (25/08/2026)
+ *
+ * Abastecimiento ya no pasa por ahi. Sus 21 nombres que chocaban se
+ * renombraron UNA VEZ en busqueda.html con `_tools/despegar.js`, y quedaron
+ * escritos en la fuente: abaRefresh, abaRender, ABA_APPS_SCRIPT_URL. Lo que
+ * se lee en el archivo es lo que corre en el navegador.
+ *
+ * Con pref vacio el renombrado se vuelve la identidad, asi que el codigo de
+ * abajo sigue andando sin ramas nuevas: recorre los mismos nombres, no cambia
+ * ninguno, y devuelve la lista completa de globales — que es justo lo que
+ * build.js necesita para publicarlas en window.
+ *
+ * Las otras dos siguen con prefijo hasta que les toque su turno.
+ */
 
 // ════════════════════════════════════════════════════════
 //  1. Despiezar el HTML de la sub-app
@@ -339,7 +365,7 @@ function fusionar(clave) {
               Math.round(p.cuerpo.length / 1024) + ' KB de markup');
 
   // CSS
-  const css = p.estilos.map((c) => acotarCss(c, app.cont, app.pref)).join('\n');
+  const css = p.estilos.map((c) => acotarCss(c, app.cont, app.prefCss)).join('\n');
 
   // JS: se une todo y se renombra de una, asi las apps ven sus propias globales
   const jsCrudo = p.scripts.join('\n;\n');
@@ -355,7 +381,7 @@ function fusionar(clave) {
   const idsPanel = leerIds(fs.readFileSync(path.join(RAIZ, '_src', 'panel.src.html'), 'utf8'));
   const mios = leerIds(p.cuerpo);
   const chocan = [...mios].filter((x) => idsPanel.has(x));
-  const ai = acotarIds(mk.markup, hj.js, chocan, app.pref);
+  const ai = acotarIds(mk.markup, hj.js, chocan, app.prefCss);
 
   const { js: jsFinal, tocados } = domesticar(ai.js, app.cont);
 

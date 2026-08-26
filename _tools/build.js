@@ -108,42 +108,59 @@ function cortarRama(html, clave, quien) {
 /** El ↻ mandaba postMessage a iframes y recargaba URLs. Ahora Ruta,
  *  Abastecimiento y Mi Portal son modulos: se les llama la funcion y listo.
  *  Ademas hay UNA sola version que chequear, no tres. */
+/* Como se llama, EN EL BUNDLE, la funcion que refresca cada sub-app.
+ *
+ * Va explicito y no derivado del prefijo a proposito: desde el 26/08/2026 las
+ * sub-apps se van "despegando" del renombrador una por una, asi que conviven
+ * dos formas de nombre — la despegada trae el suyo escrito en la fuente
+ * (abaRefresh) y la que todavia pasa por el renombrador lo tiene con prefijo
+ * (RUT$refresh). Una regla automatica acertaria en una y erraria en la otra.
+ *
+ * Y erra CALLADO, que es lo peor: la rama hace `typeof X!=='function'` y, si
+ * el nombre no existe, no tira error — muestra "Entra una vez a X antes de
+ * actualizarlo". Un mensaje que miente, sobre un boton que no anda. Paso al
+ * despegar Abastecimiento: aca seguia diciendo ABA$refresh cuando la funcion
+ * ya se llamaba abaRefresh. Por eso existe chequearRefrescos(): el build corta
+ * si alguno de estos nombres no llego a window. */
+const REFRESCO = {
+  miportal: { fn: 'RED$refreshPortal', args: '',          quien: 'Mi Portal',      cierre: 'lo' },
+  busqueda: { fn: 'abaRefresh',        args: 'true',      quien: 'Abastecimiento', cierre: 'lo' },
+  ruta:     { fn: 'RUT$refresh',       args: 'true,true', quien: 'Ruta',           cierre: 'la' },
+};
+
+/** Corta el build si la rama del ↻ nombra una funcion que no existe. */
+function chequearRefrescos(html) {
+  const faltan = Object.values(REFRESCO).filter((r) => !html.includes('window["' + r.fn + '"]='));
+  if (!faltan.length) return;
+  console.error('\n✗ El boton ↻ apunta a funciones que NO existen en el bundle:');
+  faltan.forEach((r) => console.error('    ' + r.quien.padEnd(16) + r.fn));
+  console.error('  Se renombro la funcion y no se actualizo REFRESCO en _tools/build.js.');
+  console.error('  El ↻ de esa tab no tiraria error: diria "Entra una vez..." y no haria nada.');
+  process.exit(1);
+}
+
 function arreglarRefresh(html) {
   // De atras para adelante, asi los indices de las ramas anteriores no se mueven.
-  const RAMAS = [
-    ['miportal', 'Mi Portal', `  if(active==='miportal'){
-    if(typeof RED$refreshPortal!=='function'){ done(false,'Entra una vez a Mi Portal antes de actualizarlo'); return; }
-    Promise.resolve(RED$refreshPortal())
-      .then(function(){done(true);},function(){done(false);});
-    return;
-  }
-`],
-    ['busqueda', 'Abastecimiento', `  if(active==='busqueda'){
-    if(typeof ABA$refresh!=='function'){ done(false,'Entra una vez a Abastecimiento antes de actualizarlo'); return; }
-    Promise.resolve(ABA$refresh(true))
-      .then(function(){done(true);},function(){done(false);});
-    return;
-  }
-`],
+  const ORDEN = ['miportal', 'busqueda', 'ruta'];
+  for (const clave of ORDEN) {
+    const r = REFRESCO[clave];
     // Ruta ya no es un iframe: es un modulo de esta misma app. En vez de
     // recargar una URL y esperar un postMessage, le pedimos los datos frescos
     // y esperamos SU promesa. Si falla, el boton lo dice.
-    ['ruta', 'Ruta', `  if(active==='ruta'){
-    if(typeof RUT$refresh!=='function'){ done(false,'Entra una vez a Ruta antes de actualizarla'); return; }
-    /* SIN loader, igual que Mi Portal y Abastecimiento. Ruta se actualiza en su
-       lugar: los datos cambian abajo y listo. Lo unico que se mueve es el ↻
-       girando arriba. Tapar media pantalla 8-15s para una actualizacion que no
-       cambia de vista era el peor de los tres, porque el endpoint entregas es el mas lento.
-       Se habia sacado de panel.src.html el 22/8/2026 pero seguia inyectandose
-       aca, asi que en el app.html generado nunca se fue. (25/8/2026) */
-    Promise.resolve(RUT$refresh(true,true))
+    //
+    // Y SIN loader, las tres. Ruta se actualiza en su lugar: los datos cambian
+    // abajo y listo. Tapar media pantalla 8-15s para una actualizacion que no
+    // cambia de vista era el peor de los tres, porque el endpoint entregas es
+    // el mas lento. Se habia sacado de panel.src.html el 22/8/2026 pero seguia
+    // inyectandose aca, asi que en el app.html generado nunca se fue. (25/8)
+    const reemplazo = `  if(active==='${clave}'){
+    if(typeof ${r.fn}!=='function'){ done(false,'Entra una vez a ${r.quien} antes de actualizar${r.cierre}'); return; }
+    Promise.resolve(${r.fn}(${r.args}))
       .then(function(){done(true);},function(){done(false);});
     return;
   }
-`],
-  ];
-  for (const [clave, quien, reemplazo] of RAMAS) {
-    const [a, b] = cortarRama(html, clave, quien);
+`;
+    const [a, b] = cortarRama(html, clave, r.quien);
     html = html.slice(0, a) + reemplazo + html.slice(b);
   }
 
@@ -227,6 +244,12 @@ function main() {
   html = enElUltimo(html, '</body>',
     '<script>\n' + MOTOR + '\n' + jsTodo.join('\n') + '\n</script>\n</body>');
 
+  // El ↻ llama a sus funciones POR NOMBRE, escrito a mano mas arriba. Si una
+  // no llego a window, esa tab queda con el boton actualizar muerto y sin
+  // decir por que. Se chequea recien aca porque el JS de las sub-apps se
+  // agrega en el paso 5: antes de eso todavia no hay window a que mirar.
+  if (tabs.length === Object.keys(TAB).length) chequearRefrescos(html);
+
   fs.writeFileSync(SALIDA, html);
 
   // panel.html YA NO SE GENERA. (25/8/2026)
@@ -260,7 +283,10 @@ function envolver(clave, r, ambiguos) {
     .map((n) => {
       const N = r.pref + n;
       let out = 'try{window[' + JSON.stringify(N) + ']=' + N + ';}catch(e){}';
-      if (!ambiguos.has(n)) {
+      // Sin prefijo (sub-app despegada) el alias seria la misma linea dos
+      // veces: el nombre viejo Y el nuevo son el mismo. El alias existe solo
+      // para tapar el agujero del renombrado, y ahi ya no hay renombrado.
+      if (r.pref && !ambiguos.has(n)) {
         out += 'try{if(!(' + JSON.stringify(n) + ' in window))window[' +
                JSON.stringify(n) + ']=' + N + ';}catch(e){}';
       }
