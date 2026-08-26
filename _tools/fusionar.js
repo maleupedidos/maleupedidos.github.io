@@ -216,6 +216,44 @@ function acotarMarkup(markup, renombrados, pref) {
   return { markup: out, tocados: n };
 }
 
+// ════════════════════════════════════════════════════════
+//  3c. Los onclick que el JS DIBUJA en runtime
+// ════════════════════════════════════════════════════════
+/* acotarMarkup() arriba solo toca el markup ESTATICO. Pero las sub-apps dibujan
+   casi toda su pantalla desde JavaScript:
+
+       html += '<button onclick="rutaGo(-1)">Anterior</button>';
+
+   Ese onclick es un string comun para el renombrador: no lo ve. Entonces la
+   funcion pasaba a llamarse RED$rutaGo y el boton seguia invocando rutaGo, que
+   ya no existia. No tiraba error visible: el boton simplemente no hacia nada.
+   Eran 311 botones en 148 funciones, casi todos de Ruta y Abastecimiento, que
+   son las dos que mas markup arman por JS. (25/8/2026) */
+function acotarHandlersEnJS(js, renombrados, pref) {
+  const set = new Set(renombrados);
+  let n = 0;
+  const reescribir = (codigo) => codigo.replace(/(^|[^\w$.'"])([A-Za-z_$][\w$]*)/g, (todo, antes, id) => {
+    if (!set.has(id)) return todo;
+    n++;
+    return antes + pref + id;
+  });
+  // Las dos formas que este codigo usa de verdad (verificado: 0 handlers con
+  // comillas escapadas en ruta/red/busqueda, 28 con comilla simple en ruta). Se
+  // exige un '(' en el cuerpo: sin llamada no es un handler, y asi no tocamos
+  // cosas como  var onclick = "algo".
+  const FORMAS = [
+    /(\son[a-z]+\s*=\s*")([^"]*)(")/gi,
+    /(\son[a-z]+\s*=\s*')([^']*)(')/gi,
+  ];
+  for (const re of FORMAS) {
+    js = js.replace(re, (todo, cab, val, cierre) => {
+      if (!val.includes('(')) return todo;
+      return cab + reescribir(val) + cierre;
+    });
+  }
+  return { js, tocados: n };
+}
+
 /** Los ids que chocan con el panel se renombran en el markup Y en el JS. */
 function acotarIds(markup, js, idsChocan, pref) {
   let nM = 0, nJ = 0;
@@ -310,16 +348,20 @@ function fusionar(clave) {
   // los onclick del HTML todavia nombran las funciones viejas
   const mk = acotarMarkup(p.cuerpo, renombrados, app.pref);
 
+  // ...y los que el JS dibuja en runtime, tambien
+  const hj = acotarHandlersEnJS(jsRen, renombrados, app.pref);
+
   // ids que ya existen en el panel
   const idsPanel = leerIds(fs.readFileSync(path.join(RAIZ, '_src', 'panel.src.html'), 'utf8'));
   const mios = leerIds(p.cuerpo);
   const chocan = [...mios].filter((x) => idsPanel.has(x));
-  const ai = acotarIds(mk.markup, jsRen, chocan, app.pref);
+  const ai = acotarIds(mk.markup, hj.js, chocan, app.pref);
 
   const { js: jsFinal, tocados } = domesticar(ai.js, app.cont);
 
   console.log('  ' + renombrados.length + ' globales renombradas');
   console.log('  ' + mk.tocados + ' referencias reescritas en los onclick del markup');
+  console.log('  ' + hj.tocados + ' en los onclick que el JS dibuja en runtime');
   console.log('  ' + chocan.length + ' id(s) que chocaban con el panel: ' + (chocan.join(', ') || '—') +
               '  (' + ai.nM + ' en markup, ' + ai.nJ + ' en JS)');
   console.log('  ' + tocados + ' asunciones de "dueño de la pagina" desactivadas');

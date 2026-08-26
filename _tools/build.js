@@ -180,9 +180,24 @@ function main() {
   const cssTodo = [];
   const jsTodo = [];
 
+  // Primera pasada: quien renombra que. Un nombre que aparece en DOS sub-apps
+  // es ambiguo y no se le puede poner alias global sin que una le pise a la otra.
+  // (se fusiona una sola vez y se guarda: fusionar() no es barato)
+  const _fus = {};
+  const _cuantas = {};
+  tabs.forEach((tab) => {
+    _fus[tab] = fusionar(TAB[tab]);
+    for (const n of _fus[tab].renombrados) _cuantas[n] = (_cuantas[n] || 0) + 1;
+  });
+  const ambiguos = new Set(Object.keys(_cuantas).filter((n) => _cuantas[n] > 1));
+  if (ambiguos.size) {
+    console.log('\n  ' + ambiguos.size + ' nombre(s) en mas de una sub-app, sin alias: ' +
+                [...ambiguos].join(', ') + '\n');
+  }
+
   tabs.forEach((tab) => {
     const clave = TAB[tab];
-    const r = fusionar(clave);
+    const r = _fus[tab];
 
     // 1) el iframe se vuelve un div con la app adentro
     const ifr = IFRAMES[tab];
@@ -195,7 +210,7 @@ function main() {
 
     // 3) CSS y JS
     cssTodo.push('/* ═══ ' + clave + ' (de ' + APPS[clave].archivo + ') ═══ */\n' + r.css);
-    jsTodo.push(envolver(clave, r));
+    jsTodo.push(envolver(clave, r, ambiguos));
     console.log('');
   });
 
@@ -227,12 +242,30 @@ function main() {
  *  abris su tab — igual que hoy, que el iframe no carga hasta que entras.
  *  Al final se exportan sus nombres a window porque los onclick del markup
  *  viven en el HTML y solo ven lo global. */
-function envolver(clave, r) {
+function envolver(clave, r, ambiguos) {
   // Los onclick del HTML solo ven lo global, pero el codigo de la sub-app vive
   // adentro de una funcion. Por eso se publica cada nombre YA RENOMBRADO.
   // (r.renombrados guarda los nombres VIEJOS: el nuevo es pref + viejo.)
+  //
+  // Y ADEMAS se publica el nombre VIEJO como alias. Por que: acotarHandlersEnJS
+  // arregla los onclick que estan escritos como texto, pero no puede con los que
+  // el codigo arma por concatenacion, tipo
+  //     onclick="'+(x?'unaFuncion()':'otraFuncion()')+'"
+  // Ahi el nombre no existe como texto hasta que corre. El alias los salva.
+  //
+  // Dos candados para que el alias no rompa nada:
+  //   - nunca para un nombre que exista en DOS sub-apps (seria una pisando a la otra)
+  //   - nunca si ya hay algo con ese nombre (el panel gana siempre: llega primero)
   const exports = r.renombrados
-    .map((n) => { const N = r.pref + n; return 'try{window[' + JSON.stringify(N) + ']=' + N + ';}catch(e){}'; })
+    .map((n) => {
+      const N = r.pref + n;
+      let out = 'try{window[' + JSON.stringify(N) + ']=' + N + ';}catch(e){}';
+      if (!ambiguos.has(n)) {
+        out += 'try{if(!(' + JSON.stringify(n) + ' in window))window[' +
+               JSON.stringify(n) + ']=' + N + ';}catch(e){}';
+      }
+      return out;
+    })
     .join('');
   return `
 /* ═══════════ ${clave} ═══════════ */
