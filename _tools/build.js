@@ -125,7 +125,7 @@ function cortarRama(html, clave, quien) {
 const REFRESCO = {
   miportal: { fn: 'RED$refreshPortal', args: '',          quien: 'Mi Portal',      cierre: 'lo' },
   busqueda: { fn: 'abaRefresh',        args: 'true',      quien: 'Abastecimiento', cierre: 'lo' },
-  ruta:     { fn: 'RUT$refresh',       args: 'true,true', quien: 'Ruta',           cierre: 'la' },
+  ruta:     { fn: 'refresh',           args: 'true,true', quien: 'Ruta',           cierre: 'la' },
 };
 
 /** Corta el build si la rama del ↻ nombra una funcion que no existe. */

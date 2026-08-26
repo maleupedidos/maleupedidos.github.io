@@ -40,7 +40,7 @@ const RAIZ = path.resolve(__dirname, '..');
 const APPS = {
   miportal: { archivo: 'red.html',      frame: 'miPortalFrame', cont: 'pg-miportal', pref: 'RED$', prefCss: 'RED$' },
   abast:    { archivo: 'busqueda.html', frame: 'busquedaFrame', cont: 'pg-abast',    pref: '',     prefCss: 'ABA$' },
-  ruta:     { archivo: 'ruta.html',     frame: 'rutaFrame',     cont: 'pg-ruta',     pref: 'RUT$', prefCss: 'RUT$' }
+  ruta:     { archivo: 'ruta.html',     frame: 'rutaFrame',     cont: 'pg-ruta',     pref: '',     prefCss: 'RUT$' }
 };
 
 /* ── Por que abast tiene el prefijo vacio (26/08/2026) ───────────────────────
@@ -385,7 +385,10 @@ function fusionar(clave) {
 
   const { js: jsFinal, tocados } = domesticar(ai.js, app.cont);
 
-  console.log('  ' + renombrados.length + ' globales renombradas');
+  // Con prefijo vacio el renombrado es la identidad: recorre los nombres y no
+  // cambia ninguno. Decir "285 globales renombradas" ahi seria mentir, y esta
+  // salida es lo unico que uno mira para saber que hizo el build.
+  console.log('  ' + renombrados.length + (app.pref ? ' globales renombradas' : ' globales, ninguna renombrada (despegada)'));
   console.log('  ' + mk.tocados + ' referencias reescritas en los onclick del markup');
   console.log('  ' + hj.tocados + ' en los onclick que el JS dibuja en runtime');
   console.log('  ' + chocan.length + ' id(s) que chocaban con el panel: ' + (chocan.join(', ') || '—') +
