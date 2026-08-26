@@ -226,7 +226,7 @@ function main() {
 
   fs.writeFileSync(ruta, nuevoHtml);
   console.log(GRN + '\n  Escrito en ' + app.archivo + RST);
-  console.log('  Ahora sacale el prefijo en _tools/fusionar.js y corre: node _tools/verificar.js\n');
+  console.log('  Corre el build: chequearColisiones() te marca lo que haya quedado.\n');
 }
 
 main();

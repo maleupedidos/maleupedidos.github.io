@@ -18,7 +18,7 @@
 'use strict';
 const fs = require('fs');
 const path = require('path');
-const { fusionar, APPS } = require('./fusionar');
+const { fusionar, APPS, globalesDe } = require('./fusionar');
 
 const RAIZ = path.resolve(__dirname, '..');
 const FUENTE = path.join(RAIZ, '_src', 'panel.src.html');   // el que se edita
@@ -128,6 +128,54 @@ const REFRESCO = {
   ruta:     { fn: 'refresh',           args: 'true,true', quien: 'Ruta',           cierre: 'la' },
 };
 
+/* Corta el build si dos fuentes declaran el mismo nombre global.
+ *
+ * ESTE ES EL CANDADO QUE REEMPLAZA AL RENOMBRADOR. (26/08/2026)
+ *
+ * Antes, dos `render` no eran un problema: el build les ponia prefijo y listo.
+ * Ese arreglo automatico costaba caro — renombraba 538 nombres para resolver
+ * 24 colisiones, y rompia los onclick escritos adentro de strings (311 botones
+ * muertos, sin un error en consola).
+ *
+ * Ahora los nombres vienen unicos desde la fuente, asi que nadie los arregla
+ * en el camino: dos globales iguales se PISAN, gana la ultima que carga, y la
+ * otra sub-app se rompe de una forma dificil de rastrear.
+ *
+ * Por eso esto corta la compilada y dice exactamente que hacer. Cambiamos un
+ * arreglo silencioso por un error ruidoso: el build se niega a publicar un ERP
+ * con dos funciones peleandose el mismo nombre.
+ */
+function chequearColisiones(fus) {
+  const donde = {};   // nombre → [sub-apps que lo declaran]
+  for (const [tab, r] of Object.entries(fus)) {
+    for (const n of r.globales) (donde[n] = donde[n] || []).push(tab);
+  }
+  // El panel tambien juega: sus globales viven en el mismo window.
+  const panel = new Set(globalesDelPanel());
+  const choques = Object.entries(donde)
+    .filter(([n, apps]) => apps.length > 1 || panel.has(n))
+    .map(([n, apps]) => [n, panel.has(n) ? ['panel', ...apps] : apps]);
+
+  if (!choques.length) return;
+  console.error('\n✗ ' + choques.length + ' nombre(s) declarados en mas de un lugar:');
+  choques.forEach(([n, apps]) => console.error('    ' + n.padEnd(24) + apps.join(' + ')));
+  console.error('\n  Sin renombrador estos se pisan en silencio: gana el ultimo que carga.');
+  console.error('  Arreglalo renombrando en la FUENTE:  node _tools/despegar.js <sub-app>');
+  process.exit(1);
+}
+
+/** Las globales del panel — comparten window con las sub-apps. */
+function globalesDelPanel() {
+  const html = fs.readFileSync(FUENTE, 'utf8');
+  const js = [];
+  html.replace(/<script([^>]*)>([\s\S]*?)<\/script>/gi, (t, attrs, codigo) => {
+    if (!/\bsrc=/i.test(attrs)) js.push(codigo);
+    return '';
+  });
+  try { return globalesDe(js.join('\n;\n')); }
+  catch (e) { console.error('\n✗ No pude leer las globales del panel: ' + e.message); process.exit(1); }
+}
+
 /** Corta el build si la rama del ↻ nombra una funcion que no existe. */
 function chequearRefrescos(html) {
   const faltan = Object.values(REFRESCO).filter((r) => !html.includes('window["' + r.fn + '"]='));
@@ -197,20 +245,10 @@ function main() {
   const cssTodo = [];
   const jsTodo = [];
 
-  // Primera pasada: quien renombra que. Un nombre que aparece en DOS sub-apps
-  // es ambiguo y no se le puede poner alias global sin que una le pise a la otra.
   // (se fusiona una sola vez y se guarda: fusionar() no es barato)
   const _fus = {};
-  const _cuantas = {};
-  tabs.forEach((tab) => {
-    _fus[tab] = fusionar(TAB[tab]);
-    for (const n of _fus[tab].renombrados) _cuantas[n] = (_cuantas[n] || 0) + 1;
-  });
-  const ambiguos = new Set(Object.keys(_cuantas).filter((n) => _cuantas[n] > 1));
-  if (ambiguos.size) {
-    console.log('\n  ' + ambiguos.size + ' nombre(s) en mas de una sub-app, sin alias: ' +
-                [...ambiguos].join(', ') + '\n');
-  }
+  tabs.forEach((tab) => { _fus[tab] = fusionar(TAB[tab]); });
+  if (tabs.length === Object.keys(TAB).length) chequearColisiones(_fus);
 
   tabs.forEach((tab) => {
     const clave = TAB[tab];
@@ -227,7 +265,7 @@ function main() {
 
     // 3) CSS y JS
     cssTodo.push('/* ═══ ' + clave + ' (de ' + APPS[clave].archivo + ') ═══ */\n' + r.css);
-    jsTodo.push(envolver(clave, r, ambiguos));
+    jsTodo.push(envolver(clave, r));
     console.log('');
   });
 
@@ -265,33 +303,17 @@ function main() {
  *  abris su tab — igual que hoy, que el iframe no carga hasta que entras.
  *  Al final se exportan sus nombres a window porque los onclick del markup
  *  viven en el HTML y solo ven lo global. */
-function envolver(clave, r, ambiguos) {
+function envolver(clave, r) {
   // Los onclick del HTML solo ven lo global, pero el codigo de la sub-app vive
-  // adentro de una funcion. Por eso se publica cada nombre YA RENOMBRADO.
-  // (r.renombrados guarda los nombres VIEJOS: el nuevo es pref + viejo.)
+  // adentro de una funcion. Por eso cada global se publica en window.
   //
-  // Y ADEMAS se publica el nombre VIEJO como alias. Por que: acotarHandlersEnJS
-  // arregla los onclick que estan escritos como texto, pero no puede con los que
-  // el codigo arma por concatenacion, tipo
+  // Antes aca habia tambien un ALIAS del nombre viejo, porque el build
+  // renombraba las globales y los onclick armados por concatenacion —
   //     onclick="'+(x?'unaFuncion()':'otraFuncion()')+'"
-  // Ahi el nombre no existe como texto hasta que corre. El alias los salva.
-  //
-  // Dos candados para que el alias no rompa nada:
-  //   - nunca para un nombre que exista en DOS sub-apps (seria una pisando a la otra)
-  //   - nunca si ya hay algo con ese nombre (el panel gana siempre: llega primero)
-  const exports = r.renombrados
-    .map((n) => {
-      const N = r.pref + n;
-      let out = 'try{window[' + JSON.stringify(N) + ']=' + N + ';}catch(e){}';
-      // Sin prefijo (sub-app despegada) el alias seria la misma linea dos
-      // veces: el nombre viejo Y el nuevo son el mismo. El alias existe solo
-      // para tapar el agujero del renombrado, y ahi ya no hay renombrado.
-      if (r.pref && !ambiguos.has(n)) {
-        out += 'try{if(!(' + JSON.stringify(n) + ' in window))window[' +
-               JSON.stringify(n) + ']=' + N + ';}catch(e){}';
-      }
-      return out;
-    })
+  // — seguian nombrando el viejo. Ya no hay renombrado ni nombres viejos: el
+  // nombre de la fuente es el que va a window. Se fueron 62 KB de alias.
+  const exports = r.globales
+    .map((n) => 'try{window[' + JSON.stringify(n) + ']=' + n + ';}catch(e){}')
     .join('');
   return `
 /* ═══════════ ${clave} ═══════════ */

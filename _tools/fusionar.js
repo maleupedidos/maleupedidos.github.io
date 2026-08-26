@@ -11,16 +11,38 @@
  * script es el que arma el archivo unico que se publica. Si mañana editas
  * ruta.html, corres el build y listo.
  *
- * Por que no se puede pegar y ya:
- *   · Los cuatro archivos declaran nombres iguales (render, showLoader,
- *     APPS_SCRIPT_URL...). Con const, declarar dos veces es error de sintaxis:
- *     la app entera deja de arrancar. Por eso el renombrado es CONSCIENTE DE
- *     SCOPE (acorn + eslint-scope): renombra la variable, no el texto. Una
- *     propiedad que se llame igual (obj.render) queda intacta.
- *   · Cada uno trae su propio CSS con .card, .btn, .row. Se limita cada hoja
- *     de estilos a su contenedor con postcss, incluyendo @media y @keyframes.
- *   · Cada uno cree que es dueño de la pagina: registra su service worker,
- *     redirige, toca document.body. Todo eso se desactiva al fusionar.
+ * Lo que hace falta hacerle a una sub-app para que conviva con las otras:
+ *   · Su CSS trae .card, .btn, .row igual que el panel. Se encierra cada hoja
+ *     de estilos en su contenedor con postcss, incluyendo @media y @keyframes.
+ *   · Sus ids del HTML (toast, loaderOverlay) chocan con los del panel. Se
+ *     les pone prefijo en el markup y en el JS que los busca.
+ *   · Cree que es dueña de la pagina: registra su service worker, redirige,
+ *     toca document.body, cuelga manejadores de dedo del documento. Todo eso
+ *     se desactiva al fusionar.
+ *
+ * ── Lo que este archivo YA NO HACE (26/08/2026) ─────────────────────────────
+ *
+ * Hasta hoy tambien RENOMBRABA las globales de cada sub-app en cada compilada,
+ * con acorn, para que no chocaran entre si: RUT$render, ABA$refresh, RED$toast.
+ *
+ * Eran 538 nombres tocados para resolver 24 colisiones reales — el 95% era
+ * daño colateral. Y cada nombre tocado era una chance de romper un onclick
+ * escrito adentro de un string, porque las sub-apps dibujan su pantalla asi:
+ *
+ *     html += '<button onclick="rutaGo(-1)">Anterior</button>';
+ *
+ * Para el renombrador ese onclick es un string cualquiera: no lo ve. Fueron
+ * 311 botones muertos, sin un solo error en consola. (25/08/2026)
+ *
+ * Hoy los nombres vienen unicos DESDE LA FUENTE. Se renombraron una vez con
+ * `_tools/despegar.js` y quedaron escritos: abaRefresh, rutRender, redToast.
+ * Lo que se lee en el archivo es lo que corre en el navegador.
+ *
+ * Eso no se sostiene solo: si mañana alguien declara un `render` en dos
+ * fuentes, sin renombrador se pisan en silencio y gana el ultimo que carga.
+ * Por eso build.js corta la compilada si detecta un nombre repetido
+ * (chequearColisiones). El renombrado en silencio se cambio por un error
+ * ruidoso, que es lo que uno quiere de un build.
  */
 'use strict';
 const fs = require('fs');
@@ -32,37 +54,32 @@ const postcss = require('postcss');
 const RAIZ = path.resolve(__dirname, '..');
 
 // ── Que sub-app va en que tab del panel ──
-// `pref`    → prefijo del JS. Vacio = esta sub-app YA viene con nombres unicos
-//              desde la fuente y no hay que renombrarle nada (ver mas abajo).
 // `prefCss` → prefijo de los @keyframes y de los ids que chocan con el panel.
-//              Ese trabajo hay que hacerlo igual, este despegada o no: son
-//              nombres del HTML y del CSS, no variables de JavaScript.
+//              Son nombres del HTML y del CSS, no variables de JavaScript: el
+//              renombrado del JS nunca los cubrio y esto sigue haciendo falta.
 const APPS = {
-  miportal: { archivo: 'red.html',      frame: 'miPortalFrame', cont: 'pg-miportal', pref: '',     prefCss: 'RED$' },
-  abast:    { archivo: 'busqueda.html', frame: 'busquedaFrame', cont: 'pg-abast',    pref: '',     prefCss: 'ABA$' },
-  ruta:     { archivo: 'ruta.html',     frame: 'rutaFrame',     cont: 'pg-ruta',     pref: '',     prefCss: 'RUT$' }
+  miportal: { archivo: 'red.html',      frame: 'miPortalFrame', cont: 'pg-miportal', prefCss: 'RED$' },
+  abast:    { archivo: 'busqueda.html', frame: 'busquedaFrame', cont: 'pg-abast',    prefCss: 'ABA$' },
+  ruta:     { archivo: 'ruta.html',     frame: 'rutaFrame',     cont: 'pg-ruta',     prefCss: 'RUT$' }
 };
 
-/* ── Por que abast tiene el prefijo vacio (26/08/2026) ───────────────────────
- *
- * Hasta hoy este archivo renombraba las globales de las tres sub-apps EN CADA
- * COMPILADA. Eran 538 nombres tocados para resolver 24 colisiones reales: el
- * 95% del renombrado era daño colateral. Y cada nombre tocado era una chance
- * de romper un onclick escrito adentro de un string, que el renombrador no ve
- * — fueron 311 botones muertos, sin un solo error en consola. (25/08/2026)
- *
- * Abastecimiento ya no pasa por ahi. Sus 21 nombres que chocaban se
- * renombraron UNA VEZ en busqueda.html con `_tools/despegar.js`, y quedaron
- * escritos en la fuente: abaRefresh, abaRender, ABA_APPS_SCRIPT_URL. Lo que
- * se lee en el archivo es lo que corre en el navegador.
- *
- * Con pref vacio el renombrado se vuelve la identidad, asi que el codigo de
- * abajo sigue andando sin ramas nuevas: recorre los mismos nombres, no cambia
- * ninguno, y devuelve la lista completa de globales — que es justo lo que
- * build.js necesita para publicarlas en window.
- *
- * Las otras dos siguen con prefijo hasta que les toque su turno.
- */
+/** Las globales que declara este JS. No las toca: solo las lista, para que
+ *  build.js sepa cuales publicar en window y pueda detectar repetidas. */
+function globalesDe(js) {
+  let ast;
+  try {
+    ast = acorn.parse(js, { ecmaVersion: 2022, sourceType: 'script', ranges: true });
+  } catch (e) {
+    throw new Error('No pude parsear el JS de la sub-app: ' + e.message);
+  }
+  const global = escope.analyze(ast, { ecmaVersion: 2022, sourceType: 'script' }).scopes[0];
+  const out = [];
+  global.variables.forEach((v) => {
+    if (v.name === 'arguments' || !v.defs.length) return;   // sin defs = es de afuera
+    out.push(v.name);
+  });
+  return out;
+}
 
 // ════════════════════════════════════════════════════════
 //  1. Despiezar el HTML de la sub-app
@@ -157,129 +174,6 @@ function acotarCss(css, cont, pref) {
   return out;
 }
 
-// ════════════════════════════════════════════════════════
-//  3. Renombrar los globales del JS (consciente de scope)
-// ════════════════════════════════════════════════════════
-// No se comparte NADA entre el panel y la sub-app: cada una queda con sus
-// propios nombres. Compartir "solo un par" es lo que despues explota de
-// noche, cuando uno de los dos cambia y el otro no se entera.
-const NO_TOCAR = new Set([]);
-
-function renombrarGlobales(js, pref) {
-  let ast;
-  try {
-    ast = acorn.parse(js, { ecmaVersion: 2022, sourceType: 'script', ranges: true });
-  } catch (e) {
-    throw new Error('No pude parsear el JS de la sub-app: ' + e.message);
-  }
-  const manager = escope.analyze(ast, { ecmaVersion: 2022, sourceType: 'script' });
-  const global = manager.scopes[0];
-
-  const cambios = [];   // {start, end, nuevo}
-  const renombrados = [];
-
-  // 1) que nombres declara esta app a nivel global
-  const mios = new Map();               // nombre → nombre nuevo
-  global.variables.forEach((v) => {
-    if (v.name === 'arguments') return;
-    if (NO_TOCAR.has(v.name)) return;
-    if (!v.defs.length) return;          // no lo declara esta app: es de afuera
-    mios.set(v.name, pref + v.name);
-    renombrados.push(v.name);
-    v.defs.forEach((d) => {
-      if (d.name && d.name.range) cambios.push({ start: d.name.range[0], end: d.name.range[1], nuevo: pref + v.name });
-    });
-    v.references.forEach((r) => {
-      const id = r.identifier;
-      if (id && id.range) cambios.push({ start: id.range[0], end: id.range[1], nuevo: pref + v.name });
-    });
-  });
-
-  // 2) En sourceType 'script' eslint-scope NO cuelga las referencias a globales
-  //    de variable.references: las deja sin resolver en globalScope.through.
-  //    Si solo miraramos .references renombrabamos la declaracion y ninguna de
-  //    las llamadas — la app compila y despues explota con "X is not defined".
-  //    (Me paso: NP_CAT, loadLocal y renderProducts. 21/8/2026.)
-  //    Lo bueno de 'through': una variable local que tape a una global NO
-  //    aparece ahi, asi que el shadowing se respeta solo.
-  global.through.forEach((r) => {
-    const id = r.identifier;
-    if (!id || !id.range) return;
-    const nuevo = mios.get(id.name);
-    if (!nuevo) return;                  // es de afuera (window, document, fetch…)
-    cambios.push({ start: id.range[0], end: id.range[1], nuevo });
-  });
-
-  // de atras para adelante, asi los offsets no se corren
-  cambios.sort((a, b) => b.start - a.start);
-  let out = js;
-  let ultimo = Infinity;
-  cambios.forEach((c) => {
-    if (c.start >= ultimo) return;       // duplicado (una def es tambien referencia)
-    out = out.slice(0, c.start) + c.nuevo + out.slice(c.end);
-    ultimo = c.start;
-  });
-
-  return { js: out, renombrados };
-}
-
-// ════════════════════════════════════════════════════════
-//  3b. Los onclick del markup apuntan a los nombres viejos
-// ════════════════════════════════════════════════════════
-/** Reescribe SOLO adentro de los atributos on*="..." y href="javascript:..." */
-function acotarMarkup(markup, renombrados, pref) {
-  const set = new Set(renombrados);
-  let n = 0;
-  const reescribir = (codigo) => codigo.replace(/(^|[^\w$.'"])([A-Za-z_$][\w$]*)/g, (todo, antes, id) => {
-    if (!set.has(id)) return todo;
-    n++;
-    return antes + pref + id;
-  });
-  const out = markup.replace(/\b(on[a-z]+|href)\s*=\s*"([^"]*)"/gi, (todo, attr, val) => {
-    if (attr.toLowerCase() === 'href' && !/^javascript:/i.test(val)) return todo;
-    return attr + '="' + reescribir(val) + '"';
-  });
-  return { markup: out, tocados: n };
-}
-
-// ════════════════════════════════════════════════════════
-//  3c. Los onclick que el JS DIBUJA en runtime
-// ════════════════════════════════════════════════════════
-/* acotarMarkup() arriba solo toca el markup ESTATICO. Pero las sub-apps dibujan
-   casi toda su pantalla desde JavaScript:
-
-       html += '<button onclick="rutaGo(-1)">Anterior</button>';
-
-   Ese onclick es un string comun para el renombrador: no lo ve. Entonces la
-   funcion pasaba a llamarse RED$rutaGo y el boton seguia invocando rutaGo, que
-   ya no existia. No tiraba error visible: el boton simplemente no hacia nada.
-   Eran 311 botones en 148 funciones, casi todos de Ruta y Abastecimiento, que
-   son las dos que mas markup arman por JS. (25/8/2026) */
-function acotarHandlersEnJS(js, renombrados, pref) {
-  const set = new Set(renombrados);
-  let n = 0;
-  const reescribir = (codigo) => codigo.replace(/(^|[^\w$.'"])([A-Za-z_$][\w$]*)/g, (todo, antes, id) => {
-    if (!set.has(id)) return todo;
-    n++;
-    return antes + pref + id;
-  });
-  // Las dos formas que este codigo usa de verdad (verificado: 0 handlers con
-  // comillas escapadas en ruta/red/busqueda, 28 con comilla simple en ruta). Se
-  // exige un '(' en el cuerpo: sin llamada no es un handler, y asi no tocamos
-  // cosas como  var onclick = "algo".
-  const FORMAS = [
-    /(\son[a-z]+\s*=\s*")([^"]*)(")/gi,
-    /(\son[a-z]+\s*=\s*')([^']*)(')/gi,
-  ];
-  for (const re of FORMAS) {
-    js = js.replace(re, (todo, cab, val, cierre) => {
-      if (!val.includes('(')) return todo;
-      return cab + reescribir(val) + cierre;
-    });
-  }
-  return { js, tocados: n };
-}
-
 /** Los ids que chocan con el panel se renombran en el markup Y en el JS. */
 function acotarIds(markup, js, idsChocan, pref) {
   let nM = 0, nJ = 0;
@@ -367,30 +261,21 @@ function fusionar(clave) {
   // CSS
   const css = p.estilos.map((c) => acotarCss(c, app.cont, app.prefCss)).join('\n');
 
-  // JS: se une todo y se renombra de una, asi las apps ven sus propias globales
+  // JS: se une todo, asi las apps ven sus propias globales. NO se renombra
+  // nada — los nombres ya vienen unicos desde la fuente.
   const jsCrudo = p.scripts.join('\n;\n');
-  const { js: jsRen, renombrados } = renombrarGlobales(jsCrudo, app.pref);
+  const globales = globalesDe(jsCrudo);
 
-  // los onclick del HTML todavia nombran las funciones viejas
-  const mk = acotarMarkup(p.cuerpo, renombrados, app.pref);
-
-  // ...y los que el JS dibuja en runtime, tambien
-  const hj = acotarHandlersEnJS(jsRen, renombrados, app.pref);
-
-  // ids que ya existen en el panel
+  // ids que ya existen en el panel. Esto SI sigue: son nombres del HTML, no
+  // variables de JavaScript, y el renombrado nunca los cubrio.
   const idsPanel = leerIds(fs.readFileSync(path.join(RAIZ, '_src', 'panel.src.html'), 'utf8'));
   const mios = leerIds(p.cuerpo);
   const chocan = [...mios].filter((x) => idsPanel.has(x));
-  const ai = acotarIds(mk.markup, hj.js, chocan, app.prefCss);
+  const ai = acotarIds(p.cuerpo, jsCrudo, chocan, app.prefCss);
 
   const { js: jsFinal, tocados } = domesticar(ai.js, app.cont);
 
-  // Con prefijo vacio el renombrado es la identidad: recorre los nombres y no
-  // cambia ninguno. Decir "285 globales renombradas" ahi seria mentir, y esta
-  // salida es lo unico que uno mira para saber que hizo el build.
-  console.log('  ' + renombrados.length + (app.pref ? ' globales renombradas' : ' globales, ninguna renombrada (despegada)'));
-  console.log('  ' + mk.tocados + ' referencias reescritas en los onclick del markup');
-  console.log('  ' + hj.tocados + ' en los onclick que el JS dibuja en runtime');
+  console.log('  ' + globales.length + ' globales, sin renombrar');
   console.log('  ' + chocan.length + ' id(s) que chocaban con el panel: ' + (chocan.join(', ') || '—') +
               '  (' + ai.nM + ' en markup, ' + ai.nJ + ' en JS)');
   console.log('  ' + tocados + ' asunciones de "dueño de la pagina" desactivadas');
@@ -402,8 +287,7 @@ function fusionar(clave) {
     css,
     markup: ai.markup,
     js: jsFinal,
-    renombrados,          // nombres ORIGINALES (los usa el markup)
-    pref: app.pref,       // para reconstruir el nombre nuevo: pref + original
+    globales,             // para publicarlas en window: el nombre es el que es
     idsRenombrados: chocan
   };
 }
@@ -415,7 +299,7 @@ function leerIds(html) {
   return s;
 }
 
-module.exports = { fusionar, APPS, acotarCss, renombrarGlobales, despiezar, domesticar, acotarMarkup, acotarIds };
+module.exports = { fusionar, APPS, acotarCss, globalesDe, despiezar, domesticar, acotarIds };
 
 if (require.main === module) {
   const clave = process.argv[2];

@@ -141,7 +141,13 @@ function verificar(html, comoSeLlama) {
 
   const concatenados = [...estaticos, ...dinamicos].filter((h) => h.concatenado).length;
   if (concatenados) {
-    console.log(DIM + '  ' + concatenados + ' armados por concatenacion: no se pueden leer, van por el alias' + RST);
+    // Estos eran el punto flojo mientras el build renombraba: el nombre no
+    // existe como texto hasta que corre, asi que ni el renombrador ni este
+    // chequeo lo ven, y dependian de un alias del nombre viejo para no
+    // romperse. Desde el 26/08/2026 no hay renombrado: el nombre que arma el
+    // string es el mismo que esta en window. Se siguen contando aparte porque
+    // este script no puede leerlos, no porque haya algo que los sostenga.
+    console.log(DIM + '  ' + concatenados + ' armados por concatenacion: no se pueden leer aca (ya no hace falta: nadie les cambia el nombre)' + RST);
   }
 
   if (muertos.size === 0) {
