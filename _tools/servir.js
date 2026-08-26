@@ -57,6 +57,46 @@ const TIPOS = {
   '.woff2': 'font/woff2', '.txt': 'text/plain; charset=utf-8',
 };
 
+/* ── MODO PRUEBA: /app.html?prueba=1 ─────────────────────────────────────────
+ *
+ * Deja mirar las pantallas del ERP sin usuario, sin PIN y sin backend valido.
+ * Existe para poder revisar el ERP ANTES de pedirle a nadie que lo pruebe.
+ *
+ * Sin esto la revision visual es imposible: el ERP arranca, le pega al backend
+ * con un token que no vale, el backend contesta "no autorizado", y el ERP hace
+ * lo correcto — te avisa con un alert y recarga para que entres de nuevo. Un
+ * alert sin cerrar BLOQUEA el hilo de la pagina, y la recarga borra todo lo que
+ * habias abierto. La revision se corta siempre en el mismo lugar.
+ *
+ * La clave es `window.__maleuAuth`. El ERP instala su interceptor de sesion asi:
+ *
+ *     (function(){ if (window.__maleuAuth) return; window.__maleuAuth = true; ... })
+ *
+ * O sea que si la bandera YA esta puesta, el interceptor no se instala. Se
+ * aprovecha ese mismo mecanismo en vez de parchar nada: sin interceptor no hay
+ * alert ni recarga, y las pantallas se dejan mirar. Los datos no llegan igual
+ * —no hay backend— pero el layout, el CSS y el scroll son los de verdad, que es
+ * lo que se viene a revisar.
+ *
+ * NO cambia el app.html: se inyecta al servirlo, y solo con ?prueba=1.
+ */
+const PREPARAR_PRUEBA = `<script>
+(function(){
+  window.__maleuAuth = true;              /* el ERP no instala su interceptor */
+  window.alert = function(m){ (window.__avisos = window.__avisos || []).push(String(m)); };
+  window.confirm = function(){ return false; };
+  try{
+    localStorage.setItem('maleu_panel_session', JSON.stringify({
+      usuario:'prueba', nombre:'Modo Prueba', rol:'admin',
+      tabs:['inicio','pedidos','pedidoshome','caja','pagos','ruta','busqueda','miportal','bbdd','ventas','ajustes'],
+      token:'modo-prueba', exp: Date.now()+86400000
+    }));
+    localStorage.setItem('maleu_token','modo-prueba');
+  }catch(e){}
+  console.log('[servir.js] MODO PRUEBA: sin backend, sin alerts. Los datos no llegan; el layout si.');
+})();
+</script>`;
+
 // Un service worker que se suicida. Se sirve en lugar del real.
 const SW_SUICIDA = `/* servir.js: SW desactivado en desarrollo.
    El real cachea por CACHE_NAME y en local eso solo sirve para mostrarte la
@@ -98,7 +138,9 @@ FUENTES.forEach((f) => {
 });
 
 const servidor = http.createServer((req, res) => {
-  let ruta = decodeURIComponent(req.url.split('?')[0]);
+  const partes = req.url.split('?');
+  let ruta = decodeURIComponent(partes[0]);
+  const prueba = /(^|&)prueba=1(&|$)/.test(partes[1] || '');
   if (ruta === '/') ruta = '/app.html';
 
   if (ruta === '/sw-panel.js' && !CON_SW) {
@@ -114,6 +156,16 @@ const servidor = http.createServer((req, res) => {
     if (err) {
       res.writeHead(404, { 'Content-Type': TIPOS['.html'], 'Cache-Control': 'no-store' });
       return res.end('<h1>404</h1><p>No existe <code>' + ruta + '</code> en el repo.</p>');
+    }
+    // El script de prueba va lo mas arriba posible: tiene que correr ANTES que
+    // cualquier linea del ERP, o el interceptor de sesion ya se instalo.
+    if (prueba && path.extname(destino).toLowerCase() === '.html') {
+      const html = buf.toString('utf8');
+      const i = html.search(/<head[^>]*>/i);
+      buf = Buffer.from(
+        i >= 0 ? html.slice(0, html.indexOf('>', i) + 1) + '\n' + PREPARAR_PRUEBA + html.slice(html.indexOf('>', i) + 1)
+               : PREPARAR_PRUEBA + html,
+        'utf8');
     }
     res.writeHead(200, {
       'Content-Type': TIPOS[path.extname(destino).toLowerCase()] || 'application/octet-stream',
