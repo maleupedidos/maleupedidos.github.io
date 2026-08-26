@@ -93,6 +93,27 @@ const PREPARAR_PRUEBA = `<script>
     }));
     localStorage.setItem('maleu_token','modo-prueba');
   }catch(e){}
+  /* Quien engancha eventos de scroll, y si puede cancelarlos.
+     Un listener de wheel/touchmove con {passive:false} PUEDE llamar
+     preventDefault() y trabar el scroll. Con passive:true el navegador ni lo
+     escucha para eso. Como se instalan adentro del ERP y en varias fuentes
+     distintas, la unica forma de saber cuales hay es anotarlos al vuelo.
+     Se lee desde afuera con window.__scrollHooks. */
+  window.__scrollHooks = [];
+  var _add = EventTarget.prototype.addEventListener;
+  EventTarget.prototype.addEventListener = function(tipo, fn, opts){
+    if(/^(wheel|mousewheel|touchmove|touchstart|scroll)$/.test(tipo)){
+      var pasivo = (opts && typeof opts === 'object') ? opts.passive : undefined;
+      var quien = (this === document) ? 'document'
+                : (this === window)   ? 'window'
+                : (this.id ? '#'+this.id : (this.tagName||'?'));
+      var pila = '';
+      try { pila = (new Error()).stack.split('\\n').slice(2,4).join(' | ').slice(0,160); } catch(e){}
+      window.__scrollHooks.push({ tipo: tipo, pasivo: pasivo, donde: quien, pila: pila });
+    }
+    return _add.apply(this, arguments);
+  };
+
   console.log('[servir.js] MODO PRUEBA: sin backend, sin alerts. Los datos no llegan; el layout si.');
 })();
 </script>`;

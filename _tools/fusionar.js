@@ -171,6 +171,32 @@ function acotarCss(css, cont, pref) {
     out = out.replace(re, (m0, antes) => antes + pref.replace(/\$$/, '') + '-' + k);
   });
 
+  /* ── EL CONTENEDOR NO ES UNA PAGINA ──────────────────────────────────────
+   * Arriba, `body{...}` de la sub-app se convirtio en `#pg-ruta{...}`. Para
+   * los colores y el tipo de letra eso es justo lo que se quiere. Para el
+   * SCROLL es una trampa, y bastante fea:
+   *
+   *     body { overflow-y:auto; overscroll-behavior:none }   ← en la pagina suelta
+   *     #pg-ruta { overflow-y:auto; overscroll-behavior:none } ← fusionada
+   *
+   * En una pagina suelta eso esta bien: el body ES lo que scrollea. Fusionado,
+   * `#pg-ruta` es un div que crece con su contenido — no le sobra nada para
+   * scrollear. Pero al navegador le sigue diciendo "yo manejo mi scroll", asi
+   * que cuando el puntero cae encima le entrega la rueda a el; el no puede
+   * scrollear, y con overscroll-behavior:none tampoco se la pasa al documento.
+   * El scroll muere ahi.
+   *
+   * Sintoma: la rueda anda o no anda segun DONDE tengas el puntero. Sobre una
+   * fila de producto anda, sobre el fondo de la tab no. Lo reporto Tadeo como
+   * "a veces se me traba para scrollear" el 26/8/2026 — y era literal.
+   *
+   * Va al final y con la misma especificidad, asi que gana por orden. Se
+   * resetea solo lo que hace de una caja "una pagina": el resto del body
+   * (fondo, color, fuente) se respeta. */
+  out += '\n/* el contenedor de la sub-app NO scrollea solo: scrollea la pagina */\n' +
+         sel + '{overflow:visible;overscroll-behavior:auto;height:auto;max-height:none;' +
+         'position:static;touch-action:auto}\n';
+
   return out;
 }
 
