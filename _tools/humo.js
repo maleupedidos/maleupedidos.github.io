@@ -415,7 +415,7 @@ async function main() {
   }
 
   if (problemas.length === 0) {
-    console.log(GRN + '\n  OK: el ERP arranca y las tres sub-apps tambien.\n' + RST);
+    console.log(GRN + '\n  OK: el ERP arranca y las tres tabs tambien.\n' + RST);
     process.exit(0);
   }
   console.log(RED + '\n  X ' + problemas.length + ' problema/s:' + RST);

@@ -108,13 +108,11 @@ function cortarRama(html, clave, quien) {
 /** El ↻ mandaba postMessage a iframes y recargaba URLs. Ahora Ruta,
  *  Abastecimiento y Mi Portal son modulos: se les llama la funcion y listo.
  *  Ademas hay UNA sola version que chequear, no tres. */
-/* Como se llama, EN EL BUNDLE, la funcion que refresca cada sub-app.
+/* Como se llama la funcion que refresca cada tab.
  *
- * Va explicito y no derivado del prefijo a proposito: desde el 26/08/2026 las
- * sub-apps se van "despegando" del renombrador una por una, asi que conviven
- * dos formas de nombre — la despegada trae el suyo escrito en la fuente
- * (abaRefresh) y la que todavia pasa por el renombrador lo tiene con prefijo
- * (RUT$refresh). Una regla automatica acertaria en una y erraria en la otra.
+ * Va explicito y en un solo lugar. Antes se derivaba del prefijo que ponia el
+ * renombrador; hoy no hay renombrador y cada nombre es el que esta escrito en
+ * la fuente, asi que no hay ninguna regla de la que derivarlo.
  *
  * Y erra CALLADO, que es lo peor: la rama hace `typeof X!=='function'` y, si
  * el nombre no existe, no tira error — muestra "Entra una vez a X antes de
@@ -160,8 +158,55 @@ function chequearColisiones(fus) {
   console.error('\n✗ ' + choques.length + ' nombre(s) declarados en mas de un lugar:');
   choques.forEach(([n, apps]) => console.error('    ' + n.padEnd(24) + apps.join(' + ')));
   console.error('\n  Sin renombrador estos se pisan en silencio: gana el ultimo que carga.');
-  console.error('  Arreglalo renombrando en la FUENTE:  node _tools/despegar.js <sub-app>');
+  console.error('  Arreglalo renombrando en la FUENTE:  node _tools/despegar.js <tab>');
   process.exit(1);
+}
+
+/* Lo mismo que chequearColisiones, pero para los ids del HTML. Es un candado
+ * aparte porque la forma de fallar es distinta y bastante peor.
+ *
+ * Dos funciones con el mismo nombre al menos se pisan: gana una, y si te fijas
+ * en consola algo raro ves. Dos ELEMENTOS con el mismo id no se pisan: conviven
+ * los dos en el documento, y getElementById devuelve siempre el primero. O sea
+ * que la tab que va segunda le habla a los elementos de la primera —que estan
+ * en display:none— y su propia pantalla no se entera de nada.
+ *
+ * No hay error, no hay warning, no hay nada. La pantalla sale EN BLANCO.
+ *
+ * Paso de verdad: Ruta y Abastecimiento declaraban los dos un id="nuevoView", y
+ * la sub-tab "+ NUEVO" de Abastecimiento salia vacia. Eran 14 ids compartidos, y
+ * Abastecimiento perdia los 14 por ir ultimo en el documento — incluidas las
+ * cuatro vistas (loadingView, emptyView, errorView, nuevoView), que es tambien
+ * por que habia que tocar el ↻ una vez para que la tab arrancara. (26/08/2026)
+ */
+function chequearIds(fus) {
+  const donde = {};   // id → [tabs que lo declaran]
+  for (const [tab, r] of Object.entries(fus)) {
+    for (const id of r.ids) (donde[id] = donde[id] || []).push(tab);
+  }
+  const panel = leerIds(fs.readFileSync(FUENTE, 'utf8'));
+  const choques = Object.entries(donde)
+    .filter(([id, tabs]) => tabs.length > 1 || panel.has(id))
+    .map(([id, tabs]) => [id, panel.has(id) ? ['panel', ...tabs] : tabs]);
+
+  if (!choques.length) return;
+  console.error('\n✗ ' + choques.length + ' id(s) declarados en mas de un lugar:');
+  choques.forEach(([id, tabs]) => console.error('    ' + id.padEnd(24) + tabs.join(' + ')));
+  console.error('\n  En el ERP fusionado los dos elementos existen a la vez y');
+  console.error('  getElementById devuelve el primero. La tab que va segunda le');
+  console.error('  habla a la pantalla de la otra: sale en blanco, sin ningun error.');
+  console.error('\n  Arreglalo renombrando en la FUENTE:  node _tools/despegar-ids.js <tab>');
+  process.exit(1);
+}
+
+/** Los ids que declara el markup de un archivo (sin <script> ni <style>). */
+function leerIds(html) {
+  const cuerpo = html.replace(/<style[\s\S]*?<\/style>/gi, '')
+                     .replace(/<script[\s\S]*?<\/script>/gi, '');
+  const s = new Set(); let m;
+  const re = /\bid\s*=\s*["']([^"']+)["']/g;
+  while ((m = re.exec(cuerpo))) s.add(m[1]);
+  return s;
 }
 
 /** Las globales del panel — comparten window con las sub-apps. */
@@ -248,7 +293,7 @@ function main() {
   // (se fusiona una sola vez y se guarda: fusionar() no es barato)
   const _fus = {};
   tabs.forEach((tab) => { _fus[tab] = fusionar(TAB[tab]); });
-  if (tabs.length === Object.keys(TAB).length) chequearColisiones(_fus);
+  if (tabs.length === Object.keys(TAB).length) { chequearColisiones(_fus); chequearIds(_fus); }
 
   tabs.forEach((tab) => {
     const clave = TAB[tab];
@@ -337,12 +382,12 @@ var _subappsVivas = {};
 function _abrirSubapp(clave){
   if(_subappsVivas[clave])return;
   var f = window['_SUBAPP_' + clave];
-  if(typeof f !== 'function'){ console.error('sub-app desconocida:', clave); return; }
+  if(typeof f !== 'function'){ console.error('tab desconocida:', clave); return; }
   _subappsVivas[clave] = true;
   try{ f(); }
   catch(e){
     _subappsVivas[clave] = false;
-    console.error('La sub-app ' + clave + ' no arranco:', e);
+    console.error('La tab ' + clave + ' no arranco:', e);
     if(typeof toast === 'function') toast('No pude abrir esa seccion — mante apretado el boton de actualizar');
   }
 }

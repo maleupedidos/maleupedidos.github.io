@@ -14,8 +14,6 @@
  * Lo que hace falta hacerle a una sub-app para que conviva con las otras:
  *   · Su CSS trae .card, .btn, .row igual que el panel. Se encierra cada hoja
  *     de estilos en su contenedor con postcss, incluyendo @media y @keyframes.
- *   · Sus ids del HTML (toast, loaderOverlay) chocan con los del panel. Se
- *     les pone prefijo en el markup y en el JS que los busca.
  *   · Cree que es dueña de la pagina: registra su service worker, redirige,
  *     toca document.body, cuelga manejadores de dedo del documento. Todo eso
  *     se desactiva al fusionar.
@@ -54,9 +52,12 @@ const postcss = require('postcss');
 const RAIZ = path.resolve(__dirname, '..');
 
 // ── Que sub-app va en que tab del panel ──
-// `prefCss` → prefijo de los @keyframes y de los ids que chocan con el panel.
-//              Son nombres del HTML y del CSS, no variables de JavaScript: el
-//              renombrado del JS nunca los cubrio y esto sigue haciendo falta.
+// `prefCss` → prefijo de los @keyframes, y nada mas. Los @keyframes son el
+//              unico nombre que todavia se toca al fusionar: viven en un espacio
+//              global propio del CSS, no se pueden encerrar en el contenedor
+//              como los selectores, y no se leen desde ningun lado, asi que
+//              renombrarlos no puede romper nada en silencio. Los ids ya no
+//              pasan por aca: vienen unicos desde la fuente (26/08/2026).
 const APPS = {
   miportal: { archivo: 'red.html',      frame: 'miPortalFrame', cont: 'pg-miportal', prefCss: 'RED$' },
   abast:    { archivo: 'busqueda.html', frame: 'busquedaFrame', cont: 'pg-abast',    prefCss: 'ABA$' },
@@ -70,7 +71,7 @@ function globalesDe(js) {
   try {
     ast = acorn.parse(js, { ecmaVersion: 2022, sourceType: 'script', ranges: true });
   } catch (e) {
-    throw new Error('No pude parsear el JS de la sub-app: ' + e.message);
+    throw new Error('No pude parsear el JS de la tab: ' + e.message);
   }
   const global = escope.analyze(ast, { ecmaVersion: 2022, sourceType: 'script' }).scopes[0];
   const out = [];
@@ -200,23 +201,19 @@ function acotarCss(css, cont, pref) {
   return out;
 }
 
-/** Los ids que chocan con el panel se renombran en el markup Y en el JS. */
-function acotarIds(markup, js, idsChocan, pref) {
-  let nM = 0, nJ = 0;
-  const nuevo = (id) => pref.replace(/\$$/, '_') + id;
-
-  idsChocan.forEach((id) => {
-    const esc = id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    markup = markup.replace(new RegExp('(\\bid\\s*=\\s*["\'])' + esc + '(["\'])', 'g'),
-      (m0, a, b) => { nM++; return a + nuevo(id) + b; });
-    // en el JS: solo strings exactamente iguales al id, o selectores "#id"
-    js = js.replace(new RegExp('(["\'])' + esc + '\\1', 'g'),
-      (m0, q) => { nJ++; return q + nuevo(id) + q; });
-    js = js.replace(new RegExp('(["\'])#' + esc + '\\1', 'g'),
-      (m0, q) => { nJ++; return q + '#' + nuevo(id) + q; });
-  });
-  return { markup, js, nM, nJ };
-}
+/* Aca vivia acotarIds(), que le ponia prefijo a los ids que chocaban con el
+ * panel, en cada compilada. Se borro el 26/08/2026 junto con el renombrador de
+ * globales, y por el mismo motivo: un arreglo automatico y silencioso hace que
+ * lo que se lee en el archivo no sea lo que corre en el navegador.
+ *
+ * Y ademas nunca alcanzo. Solo miraba tab-contra-panel, nunca tab-contra-tab,
+ * que es donde estaba el bug real: Ruta y Abastecimiento declaraban los dos un
+ * id="nuevoView", getElementById devolvia el de Ruta —escondido en display:none—
+ * y la sub-tab "+ NUEVO" de Abastecimiento salia EN BLANCO, sin un solo error.
+ *
+ * Hoy los ids vienen unicos desde la fuente (los despego _tools/despegar-ids.js,
+ * una sola vez) y chequearIds() en build.js CORTA el build si dos fuentes
+ * vuelven a declarar el mismo. Ruidoso en vez de callado. */
 
 // ════════════════════════════════════════════════════════
 //  4. Desactivar lo que asume "soy dueño de la pagina"
@@ -274,7 +271,7 @@ function domesticar(js, cont) {
 // ════════════════════════════════════════════════════════
 function fusionar(clave) {
   const app = APPS[clave];
-  if (!app) { console.error('No conozco la sub-app "' + clave + '". Son: ' + Object.keys(APPS).join(', ')); process.exit(1); }
+  if (!app) { console.error('No conozco la tab "' + clave + '". Son: ' + Object.keys(APPS).join(', ')); process.exit(1); }
 
   const rutaSub = path.join(RAIZ, app.archivo);
   const html = fs.readFileSync(rutaSub, 'utf8');
@@ -292,18 +289,14 @@ function fusionar(clave) {
   const jsCrudo = p.scripts.join('\n;\n');
   const globales = globalesDe(jsCrudo);
 
-  // ids que ya existen en el panel. Esto SI sigue: son nombres del HTML, no
-  // variables de JavaScript, y el renombrado nunca los cubrio.
-  const idsPanel = leerIds(fs.readFileSync(path.join(RAIZ, '_src', 'panel.src.html'), 'utf8'));
+  // Los ids ya no se tocan: vienen unicos desde la fuente. Se cuentan nada mas
+  // para que el reporte del build diga cuantos aporta cada tab; si alguno
+  // chocara, chequearIds() corta antes de llegar aca.
   const mios = leerIds(p.cuerpo);
-  const chocan = [...mios].filter((x) => idsPanel.has(x));
-  const ai = acotarIds(p.cuerpo, jsCrudo, chocan, app.prefCss);
 
-  const { js: jsFinal, tocados } = domesticar(ai.js, app.cont);
+  const { js: jsFinal, tocados } = domesticar(jsCrudo, app.cont);
 
-  console.log('  ' + globales.length + ' globales, sin renombrar');
-  console.log('  ' + chocan.length + ' id(s) que chocaban con el panel: ' + (chocan.join(', ') || '—') +
-              '  (' + ai.nM + ' en markup, ' + ai.nJ + ' en JS)');
+  console.log('  ' + globales.length + ' globales y ' + mios.size + ' ids, sin renombrar');
   console.log('  ' + tocados + ' asunciones de "dueño de la pagina" desactivadas');
 
   return {
@@ -311,10 +304,10 @@ function fusionar(clave) {
     frame: app.frame,
     clasesBody: p.clasesBody,
     css,
-    markup: ai.markup,
+    markup: p.cuerpo,     // tal cual viene de la fuente: ya no se le tocan los ids
     js: jsFinal,
     globales,             // para publicarlas en window: el nombre es el que es
-    idsRenombrados: chocan
+    ids: [...mios]        // para que build.js corte si dos tabs declaran el mismo
   };
 }
 
@@ -325,7 +318,7 @@ function leerIds(html) {
   return s;
 }
 
-module.exports = { fusionar, APPS, acotarCss, globalesDe, despiezar, domesticar, acotarIds };
+module.exports = { fusionar, APPS, acotarCss, globalesDe, despiezar, domesticar, leerIds };
 
 if (require.main === module) {
   const clave = process.argv[2];
