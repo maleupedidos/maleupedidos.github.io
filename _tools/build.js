@@ -123,7 +123,7 @@ function cortarRama(html, clave, quien) {
  * ya se llamaba abaRefresh. Por eso existe chequearRefrescos(): el build corta
  * si alguno de estos nombres no llego a window. */
 const REFRESCO = {
-  miportal: { fn: 'RED$refreshPortal', args: '',          quien: 'Mi Portal',      cierre: 'lo' },
+  miportal: { fn: 'refreshPortal',     args: '',          quien: 'Mi Portal',      cierre: 'lo' },
   busqueda: { fn: 'abaRefresh',        args: 'true',      quien: 'Abastecimiento', cierre: 'lo' },
   ruta:     { fn: 'refresh',           args: 'true,true', quien: 'Ruta',           cierre: 'la' },
 };

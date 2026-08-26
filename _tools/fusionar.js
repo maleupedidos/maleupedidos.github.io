@@ -38,7 +38,7 @@ const RAIZ = path.resolve(__dirname, '..');
 //              Ese trabajo hay que hacerlo igual, este despegada o no: son
 //              nombres del HTML y del CSS, no variables de JavaScript.
 const APPS = {
-  miportal: { archivo: 'red.html',      frame: 'miPortalFrame', cont: 'pg-miportal', pref: 'RED$', prefCss: 'RED$' },
+  miportal: { archivo: 'red.html',      frame: 'miPortalFrame', cont: 'pg-miportal', pref: '',     prefCss: 'RED$' },
   abast:    { archivo: 'busqueda.html', frame: 'busquedaFrame', cont: 'pg-abast',    pref: '',     prefCss: 'ABA$' },
   ruta:     { archivo: 'ruta.html',     frame: 'rutaFrame',     cont: 'pg-ruta',     pref: '',     prefCss: 'RUT$' }
 };
