@@ -53,31 +53,20 @@ function reemplazar(s, viejo, nuevo, quien) {
   return s.replace(viejo, nuevo);
 }
 
-// ── Los bloques del panel que hoy prenden un iframe ──
+/* Donde va cada tab adentro del panel.
+ *
+ * Esto es lo UNICO que el build reemplaza del panel, y es legitimo: pega el
+ * contenido de otro archivo en un lugar marcado. No reescribe logica.
+ *
+ * Hasta el 27/8/2026 tambien reescribia el lazy-load, el boton actualizar y
+ * la lista de service workers. Eso hacia que panel.src.html mintiera: lo que
+ * leias no era lo que corria. El sintoma clasico fue el loader de Ruta, que
+ * se saco de la fuente el 22/8 y siguio saliendo tres dias porque el build lo
+ * volvia a inyectar. Hoy todo eso vive en la fuente. */
 const IFRAMES = {
-  miportal: {
-    iframe: `<iframe id="miPortalFrame" src="about:blank" style="width:100%;height:calc(100vh - 70px);border:none;background:#fff;border-radius:8px"></iframe>`,
-    lazy: `    if(fr&&(fr.src==='about:blank'||fr.src.indexOf('about:blank')>=0)){
-      fr.src='/red.html?embed=1&_t='+Date.now();
-    }`,
-    lazyNuevo: `    _abrirSubapp('miportal');`
-  },
-  ruta: {
-    iframe: `<iframe id="rutaFrame" src="about:blank" style="width:100%;height:calc(100vh - 80px);border:none;background:#fff;border-radius:8px"></iframe>`,
-    lazy: `    if(fr2&&(fr2.src==='about:blank'||fr2.src.indexOf('about:blank')>=0)){
-      fr2.src='/ruta.html?embed=1&_t='+Date.now();
-    }
-    // Pedir counter actualizado al iframe (B opción 2: mostrar en statusbar)
-    setTimeout(function(){try{fr2.contentWindow.postMessage({type:'maleu_ruta_get_counter'},'*');}catch(e){}},800);`,
-    lazyNuevo: `    _abrirSubapp('ruta');`
-  },
-  busqueda: {
-    iframe: `<iframe id="busquedaFrame" src="about:blank" style="width:100%;height:calc(100vh - 70px);border:none;background:#fff;border-radius:8px"></iframe>`,
-    lazy: `    if(fr3&&(fr3.src==='about:blank'||fr3.src.indexOf('about:blank')>=0)){
-      fr3.src='/busqueda.html?embed=1';
-    }`,
-    lazyNuevo: `    _abrirSubapp('abast');`
-  }
+  miportal: { iframe: `<iframe id="miPortalFrame" src="about:blank" style="width:100%;height:calc(100vh - 70px);border:none;background:#fff;border-radius:8px"></iframe>` },
+  ruta:     { iframe: `<iframe id="rutaFrame" src="about:blank" style="width:100%;height:calc(100vh - 80px);border:none;background:#fff;border-radius:8px"></iframe>` },
+  busqueda: { iframe: `<iframe id="busquedaFrame" src="about:blank" style="width:100%;height:calc(100vh - 70px);border:none;background:#fff;border-radius:8px"></iframe>` }
 };
 
 /** Encuentra la rama `if(active==='X'){ ... }` completa dentro de
@@ -108,18 +97,11 @@ function cortarRama(html, clave, quien) {
 /** El ↻ mandaba postMessage a iframes y recargaba URLs. Ahora Ruta,
  *  Abastecimiento y Mi Portal son modulos: se les llama la funcion y listo.
  *  Ademas hay UNA sola version que chequear, no tres. */
-/* Como se llama la funcion que refresca cada tab.
+/* A que funcion le pide datos frescos el ↻ de cada tab.
  *
- * Va explicito y en un solo lugar. Antes se derivaba del prefijo que ponia el
- * renombrador; hoy no hay renombrador y cada nombre es el que esta escrito en
- * la fuente, asi que no hay ninguna regla de la que derivarlo.
- *
- * Y erra CALLADO, que es lo peor: la rama hace `typeof X!=='function'` y, si
- * el nombre no existe, no tira error — muestra "Entra una vez a X antes de
- * actualizarlo". Un mensaje que miente, sobre un boton que no anda. Paso al
- * despegar Abastecimiento: aca seguia diciendo ABA$refresh cuando la funcion
- * ya se llamaba abaRefresh. Por eso existe chequearRefrescos(): el build corta
- * si alguno de estos nombres no llego a window. */
+ * Esto ya NO se inyecta: las tres ramas estan escritas en panel.src.html, que
+ * es donde se leen y se tocan. Aca queda solo la lista de nombres, para que
+ * chequearCosturas() los verifique contra el bundle antes de publicar. */
 const REFRESCO = {
   miportal: { fn: 'refreshPortal',     args: '',          quien: 'Mi Portal',      cierre: 'lo' },
   busqueda: { fn: 'abaRefresh',        args: 'true',      quien: 'Abastecimiento', cierre: 'lo' },
@@ -221,53 +203,32 @@ function globalesDelPanel() {
   catch (e) { console.error('\n✗ No pude leer las globales del panel: ' + e.message); process.exit(1); }
 }
 
-/** Corta el build si la rama del ↻ nombra una funcion que no existe. */
-function chequearRefrescos(html) {
-  const faltan = Object.values(REFRESCO).filter((r) => !html.includes('window["' + r.fn + '"]='));
+/** Corta el build si el panel llama a algo que no llego al bundle.
+ *
+ * Son las dos costuras entre el panel y las tabs, y las dos erran CALLADAS:
+ *
+ *  - el ↻ hace `typeof X!=='function'` y, si el nombre no existe, muestra
+ *    "Entra una vez a X antes de actualizarlo". Un mensaje que miente, sobre
+ *    un boton que no anda. Paso al despegar Abastecimiento (25/8/2026).
+ *  - `_abrirSubapp` la define el motor, que se pega al final del body. Si le
+ *    cambian el nombre ahi, la tab no abre nunca y tampoco hay error: esa
+ *    funcion ya se traga las excepciones en un try/catch.
+ *
+ * Ninguna de las dos la agarran verificar.js ni humo.js, porque no son
+ * onclick. Por eso se chequean aca. */
+function chequearCosturas(html) {
+  const faltan = Object.values(REFRESCO)
+    .filter((r) => !html.includes('window["' + r.fn + '"]='))
+    .map((r) => [r.quien + ' (↻)', r.fn]);
+  if (!/function\s+_abrirSubapp\s*\(/.test(html)) {
+    faltan.push(['abrir una tab', '_abrirSubapp']);
+  }
   if (!faltan.length) return;
-  console.error('\n✗ El boton ↻ apunta a funciones que NO existen en el bundle:');
-  faltan.forEach((r) => console.error('    ' + r.quien.padEnd(16) + r.fn));
-  console.error('  Se renombro la funcion y no se actualizo REFRESCO en _tools/build.js.');
-  console.error('  El ↻ de esa tab no tiraria error: diria "Entra una vez..." y no haria nada.');
+  console.error('\n✗ El panel llama a funciones que NO existen en el bundle:');
+  faltan.forEach(([quien, fn]) => console.error('    ' + quien.padEnd(24) + fn));
+  console.error('  Se renombro la funcion y quedo el nombre viejo escrito.');
+  console.error('  Eso no tira error en consola: la tab simplemente no responde.');
   process.exit(1);
-}
-
-function arreglarRefresh(html) {
-  // De atras para adelante, asi los indices de las ramas anteriores no se mueven.
-  const ORDEN = ['miportal', 'busqueda', 'ruta'];
-  for (const clave of ORDEN) {
-    const r = REFRESCO[clave];
-    // Ruta ya no es un iframe: es un modulo de esta misma app. En vez de
-    // recargar una URL y esperar un postMessage, le pedimos los datos frescos
-    // y esperamos SU promesa. Si falla, el boton lo dice.
-    //
-    // Y SIN loader, las tres. Ruta se actualiza en su lugar: los datos cambian
-    // abajo y listo. Tapar media pantalla 8-15s para una actualizacion que no
-    // cambia de vista era el peor de los tres, porque el endpoint entregas es
-    // el mas lento. Se habia sacado de panel.src.html el 22/8/2026 pero seguia
-    // inyectandose aca, asi que en el app.html generado nunca se fue. (25/8)
-    const reemplazo = `  if(active==='${clave}'){
-    if(typeof ${r.fn}!=='function'){ done(false,'Entra una vez a ${r.quien} antes de actualizar${r.cierre}'); return; }
-    Promise.resolve(${r.fn}(${r.args}))
-      .then(function(){done(true);},function(){done(false);});
-    return;
-  }
-`;
-    const [a, b] = cortarRama(html, clave, r.quien);
-    html = html.slice(0, a) + reemplazo + html.slice(b);
-  }
-
-  // ── una sola app = una sola version que mirar ──
-  const iniApps = html.indexOf('var _APPS=[');
-  const finApps = html.indexOf('];', iniApps);
-  if (iniApps < 0) { console.error('\n✗ No encontre _APPS'); process.exit(1); }
-  html = html.slice(0, iniApps) + `/* Antes esto miraba tres service workers, uno por app. Ahora el ERP es un
-   solo archivo con un solo SW: si cambia, se recarga y punto. */
-var _APPS=[
-  {k:'panel', sw:'/sw-panel.js', re:/CN\\s*=\\s*'([^']+)'/, frame:null, url:null}
-` + html.slice(finApps);
-
-  return html;
 }
 
 /** Reemplaza la ULTIMA aparicion (la que cierra el documento de verdad). */
@@ -305,33 +266,25 @@ function main() {
       '<div id="' + r.cont + '" class="subapp ' + (r.clasesBody || '') + '">\n' + r.markup + '\n</div>',
       tab + ': iframe → div');
 
-    // 2) el lazy-load ahora arranca la sub-app en vez de cargar una URL
-    html = reemplazar(html, ifr.lazy, ifr.lazyNuevo, tab + ': lazy-load');
-
-    // 3) CSS y JS
+    // 2) CSS y JS
     cssTodo.push('/* ═══ ' + clave + ' (de ' + APPS[clave].archivo + ') ═══ */\n' + r.css);
     jsTodo.push(envolver(clave, r));
     console.log('');
   });
 
-  // 3b) el boton ↻ hablaba con iframes que ya no existen
-  if (tabs.length === Object.keys(TAB).length) html = arreglarRefresh(html);
-
-  // 4) el CSS de las sub-apps, al final del head
+  // 3) el CSS de las tabs, al final del head
   //    Ojo: "</head>" y "</body>" tambien aparecen adentro de strings del JS
   //    del panel. El que cierra el documento de verdad es SIEMPRE el ultimo.
   html = enElUltimo(html, '</head>',
     '<style id="css-subapps">\n' + cssTodo.join('\n\n') + '\n</style>\n</head>');
 
-  // 5) el motor de sub-apps + el JS de cada una, al final del body
+  // 4) el motor de tabs + el JS de cada una, al final del body
   html = enElUltimo(html, '</body>',
     '<script>\n' + MOTOR + '\n' + jsTodo.join('\n') + '\n</script>\n</body>');
 
-  // El ↻ llama a sus funciones POR NOMBRE, escrito a mano mas arriba. Si una
-  // no llego a window, esa tab queda con el boton actualizar muerto y sin
-  // decir por que. Se chequea recien aca porque el JS de las sub-apps se
-  // agrega en el paso 5: antes de eso todavia no hay window a que mirar.
-  if (tabs.length === Object.keys(TAB).length) chequearRefrescos(html);
+  // Se chequea recien aca porque el JS de las tabs y el motor se agregan en
+  // los pasos 3 y 4: antes de eso todavia no hay window a que mirar.
+  if (tabs.length === Object.keys(TAB).length) chequearCosturas(html);
 
   fs.writeFileSync(SALIDA, html);
 
