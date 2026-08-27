@@ -63,6 +63,20 @@ function reemplazar(s, viejo, nuevo, quien) {
  * leias no era lo que corria. El sintoma clasico fue el loader de Ruta, que
  * se saco de la fuente el 22/8 y siguio saliendo tres dias porque el build lo
  * volvia a inyectar. Hoy todo eso vive en la fuente. */
+const COLA = `
+/* -- Si tocaste una tab antes de que llegara este script -----------------
+   El panel la anoto en _tabPendiente en vez de reventar (ver abrirTab() en
+   panel.src.html). Se abre ahora.
+
+   Va aca abajo de todo A PROPOSITO: el motor se define arriba, pero el codigo
+   de cada tab se define en los bloques de recien. Desencolar al final del
+   MOTOR dejaba "tab desconocida: ruta" en la consola y la pantalla vacia,
+   porque _SUBAPP_ruta todavia no existia. */
+if(typeof _tabPendiente !== 'undefined' && _tabPendiente){
+  var _pend = _tabPendiente; _tabPendiente = null; _abrirSubapp(_pend);
+}
+`;
+
 const IFRAMES = {
   miportal: { iframe: `<iframe id="miPortalFrame" src="about:blank" style="width:100%;height:calc(100vh - 70px);border:none;background:#fff;border-radius:8px"></iframe>` },
   ruta:     { iframe: `<iframe id="rutaFrame" src="about:blank" style="width:100%;height:calc(100vh - 80px);border:none;background:#fff;border-radius:8px"></iframe>` },
@@ -223,6 +237,11 @@ function chequearCosturas(html) {
   if (!/function\s+_abrirSubapp\s*\(/.test(html)) {
     faltan.push(['abrir una tab', '_abrirSubapp']);
   }
+  // El amortiguador: sin el, tocar una tab en el primer segundo revienta.
+  if (!/function\s+abrirTab\s*\(/.test(html)) faltan.push(['abrir una tab (cola)', 'abrirTab']);
+  if (!/_tabPendiente\s*=\s*null;\s*_abrirSubapp\(_pend\)/.test(html)) {
+    faltan.push(['vaciar la cola de tabs', 'el final del MOTOR']);
+  }
   if (!faltan.length) return;
   console.error('\n✗ El panel llama a funciones que NO existen en el bundle:');
   faltan.forEach(([quien, fn]) => console.error('    ' + quien.padEnd(24) + fn));
@@ -280,7 +299,7 @@ function main() {
 
   // 4) el motor de tabs + el JS de cada una, al final del body
   html = enElUltimo(html, '</body>',
-    '<script>\n' + MOTOR + '\n' + jsTodo.join('\n') + '\n</script>\n</body>');
+    '<script>\n' + MOTOR + '\n' + jsTodo.join('\n') + '\n' + COLA + '\n</script>\n</body>');
 
   // Se chequea recien aca porque el JS de las tabs y el motor se agregan en
   // los pasos 3 y 4: antes de eso todavia no hay window a que mirar.
