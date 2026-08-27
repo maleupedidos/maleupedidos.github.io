@@ -5625,16 +5625,33 @@ function ajCerrarSesion(){
   if(!confirm('¿Cerrar la sesión de "'+u+'"? Vas a volver a la pantalla de PIN y este teléfono se olvida de todo lo del ERP.'))return;
   panelDoLogout();
 }
-function ajLoad(){
+function ajLoad(opts){
   var b=document.getElementById('ajBody');
-  if(AJ_DATA){ ajRender(); return; } // ya cargado; usar cache (recargar tras guardar)
+  if(AJ_DATA){ ajRender(); return; } // ya cargado en esta sesion
   b.innerHTML='<div class="aj-loading">Cargando configuración…</div>';
-  fetch(API+'?action=ajustesData&_t='+Date.now())
-    .then(function(r){return r.json();})
-    .then(function(d){ if(!d||!d.ok){ b.innerHTML='<div class="aj-loading">No se pudo cargar.</div>'; return;} AJ_DATA=d; ajRender(); })
-    .catch(function(){ b.innerHTML='<div class="aj-loading">Error de conexión.</div>'; });
+  // Antes esto esperaba al backend con la pantalla en "Cargando…". Ahora pinta
+  // la copia de la ultima vez al instante y la reemplaza cuando llega la nueva.
+  traer('ajustes', API+'?action=ajustesData&_t='+Date.now(), function(d,info){
+    AJ_DATA=d; ajRender();
+    _ajSello(info);
+  }, { valido:function(d){return d&&d.ok;}, sinCache:opts&&opts.sinCache })
+  .catch(function(){
+    if(!AJ_DATA)b.innerHTML='<div class="aj-loading">No se pudo cargar. Fijate la conexión.</div>';
+  });
 }
-function ajReload(){ AJ_DATA=null; ajLoad(); }
+/* Deja dicho de cuando son los datos que se estan viendo. Sin esto, mostrar una
+   copia guardada seria mentir por omision. */
+function _ajSello(info){
+  var b=document.getElementById('ajBody'); if(!b||!info)return;
+  var s=document.getElementById('ajSello');
+  if(!s){
+    s=document.createElement('div'); s.id='ajSello';
+    s.style.cssText='font-size:11px;color:#9A8C7A;padding:6px 2px 0;text-align:right';
+    b.appendChild(s);
+  }else if(s.parentNode!==b){ b.appendChild(s); }
+  s.textContent=info.viejo?('Datos de '+info.hace+' · actualizando…'):('Actualizado '+info.hace);
+}
+function ajReload(){ AJ_DATA=null; ajLoad({sinCache:true}); }
 function ajGo(sec){
   AJ_SEC=sec;
   document.querySelectorAll('#p-ajustes .aj-pill').forEach(function(p){p.classList.toggle('on',p.dataset.sec===sec);});
@@ -5874,10 +5891,9 @@ function ajSaldosHTML(){
 }
 function ajLoadSaldos(){
   var l=document.getElementById('ajSaldosList'); if(!l) return;
-  fetch(API+'?action=saldosClientes&_t='+Date.now())
-    .then(function(r){return r.json();})
-    .then(function(d){ AJ_SALDOS=(d&&d.clientes)||[]; ajRenderSaldosList(); })
-    .catch(function(){ if(l)l.innerHTML='<div class="aj-loading">Error de conexión.</div>'; });
+  traer('saldos', API+'?action=saldosClientes&_t='+Date.now(),
+    function(d){ AJ_SALDOS=(d&&d.clientes)||[]; ajRenderSaldosList(); })
+    .catch(function(){ if(l&&!(AJ_SALDOS||[]).length)l.innerHTML='<div class="aj-loading">Error de conexión.</div>'; });
 }
 function ajSaldoBuscar(v){ AJ_SALDO_FILTRO=(v||'').toLowerCase().trim(); ajRenderSaldosList(); }
 function ajRenderSaldosList(){
@@ -8635,6 +8651,102 @@ document.addEventListener('input',function(e){
   var box=e.target.closest&&e.target.closest('.origen-box');
   if(box)box.dataset.touched='1';
 },true);
+/* ═══════════════════════════════════════════════════════════════════════════
+   MOSTRAR LO DE ANTES AL INSTANTE, REFRESCAR ATRAS      (27/8/2026)
+
+   El ERP le pide datos al backend a mas de 20 lugares distintos. De todos esos,
+   UNO solo guardaba copia en el celular: el volcado grande (`ma3`). Todos los
+   demas —CRM, Abastecimiento, Ajustes, Mi Reparto— preguntaban al servidor cada
+   vez y se quedaban esperando con la pantalla vacia. Apps Script tarda entre 3
+   y 20 segundos. Eso era el "entro a una tab y tarda un monton".
+
+   Algunos cacheaban en una variable (AJ_DATA, _eerrDeudaProv), que sirve
+   mientras la app esta abierta y no sirve para nada al reabrirla — que es
+   justo cuando duele.
+
+   `traer()` generaliza lo que loadVentas() ya hacia bien a mano:
+     1. si hay copia guardada, la pinta YA (con la hora de cuando se trajo)
+     2. pide igual al servidor
+     3. cuando llega, guarda y repinta — salvo que estes editando algo
+
+   No reemplaza a `load()` ni al volcado grande: es para los endpoints chicos.
+   ═══════════════════════════════════════════════════════════════════════════ */
+var _SWR='mc_';   // prefijo de las copias en localStorage
+
+function _swrLeer(clave){
+  try{
+    var raw=localStorage.getItem(_SWR+clave);
+    if(!raw)return null;
+    var o=JSON.parse(raw);
+    return (o&&'d' in o)?o:null;
+  }catch(e){return null;}
+}
+
+/* localStorage tiene ~5 MB y el volcado grande ya se come casi 1. Si no entra,
+   se tiran las copias mas viejas y se reintenta UNA vez. Que no se pueda
+   guardar no es un error: es una copia de mas, la app sigue igual. */
+function _swrGuardar(clave,dato){
+  var paq=JSON.stringify({t:Date.now(),d:dato});
+  try{ localStorage.setItem(_SWR+clave,paq); return true; }
+  catch(e){
+    _swrPodar();
+    try{ localStorage.setItem(_SWR+clave,paq); return true; }catch(e2){ return false; }
+  }
+}
+
+function _swrPodar(){
+  try{
+    var mios=[];
+    for(var i=0;i<localStorage.length;i++){
+      var k=localStorage.key(i);
+      if(k&&k.indexOf(_SWR)===0){
+        var t=0; try{t=(JSON.parse(localStorage.getItem(k))||{}).t||0;}catch(e){}
+        mios.push({k:k,t:t});
+      }
+    }
+    mios.sort(function(a,b){return a.t-b.t;});           // el mas viejo primero
+    mios.slice(0,Math.ceil(mios.length/2)).forEach(function(o){
+      try{localStorage.removeItem(o.k);}catch(e){}
+    });
+  }catch(e){}
+}
+
+/* "hace 3 min" — para que nadie dude de que esta mirando. */
+function _hace(ts){
+  var s=Math.max(0,Math.round((Date.now()-ts)/1000));
+  if(s<45)return 'recien';
+  var m=Math.round(s/60);
+  if(m<60)return 'hace '+m+' min';
+  var h=Math.round(m/60);
+  if(h<24)return 'hace '+h+(h===1?' hora':' horas');
+  var d=Math.round(h/24);
+  if(d===1)return 'de ayer';
+  return 'hace '+d+' días';
+}
+
+/* pintar(datos, info) — info = {viejo:true|false, cuando:<timestamp>, hace:'...'} */
+function traer(clave,url,pintar,opts){
+  opts=opts||{};
+  var guardado=opts.sinCache?null:_swrLeer(clave);
+  var pinto=function(d,viejo,cuando){
+    try{ pintar(d,{viejo:viejo,cuando:cuando,hace:_hace(cuando)}); }
+    catch(e){ console.error('traer/'+clave,e); }
+  };
+
+  if(guardado)pinto(guardado.d,true,guardado.t);
+
+  return fetch(url).then(function(r){return r.json();}).then(function(d){
+    if(opts.valido&&!opts.valido(d))throw new Error('respuesta invalida');
+    _swrGuardar(clave,d);
+    // Si esta editando, no le movemos la pantalla: se guarda igual para despues.
+    if(typeof _hayEditorAbierto!=='function'||!_hayEditorAbierto())pinto(d,false,Date.now());
+    return d;
+  }).catch(function(e){
+    if(guardado)return guardado.d;   // ya lo pintamos; que siga viendo lo de antes
+    throw e;
+  });
+}
+
 function load(){
   return fetch(API+'?action=admin&t='+Date.now()).then(function(r){return r.json();}).then(function(d){
     D=d;try{localStorage.setItem('ma3',JSON.stringify(d));}catch(e){}try{sync();}catch(e){}_ldSync();$('dot').className='hdr-dot';try{sbUpdateMetrics();}catch(e){}
@@ -12486,7 +12598,10 @@ function eerrEsServicio(txt){
 var _eerrDeudaProv=null,_eerrDeudaProvDet=[];
 function eerrFetchDeudaProv(cb){
   if(_eerrDeudaProv!==null){cb(_eerrDeudaProv,_eerrDeudaProvDet);return;}
-  fetch(API+'?action=busqueda&t='+Date.now()).then(function(r){return r.json();}).then(function(d){
+  // Con copia guardada: contesta al instante con lo de la ultima vez y vuelve a
+  // llamar al callback cuando llega lo nuevo. El backend de `busqueda` es de los
+  // mas lentos (arma la deuda FIFO por semana).
+  traer('deudaprov', API+'?action=busqueda&t='+Date.now(), function(d){
     // Backend devuelve d.deudas[] (no d.provs). Cada item: {n, total (deuda viva FIFO), semanas[]}.
     var total=0,det=[];
     (d.deudas||[]).forEach(function(p){
@@ -16648,12 +16763,15 @@ if('serviceWorker' in navigator){
     $('rsLoader').classList.add('on');
     $('rsContent').innerHTML='';
     $('rsPdfBtn').disabled=true;
-    fetch(API+'?action=resumenSemanal&semanaOffset='+off,{cache:'no-store'})
-      .then(function(r){return r.json();})
-      .then(function(d){
+    // La copia se guarda POR SEMANA: el resumen de la semana pasada no cambia
+    // mas, asi que la segunda vez que lo abris tiene que salir al instante.
+    traer('resumen'+off, API+'?action=resumenSemanal&semanaOffset='+off,
+      function(d,info){
         RS_DATA=d; RS_LOADED_OFFSET=off;
         $('rsLoader').classList.remove('on');
-        $('rsContent').innerHTML=renderResumen(d);
+        $('rsContent').innerHTML=renderResumen(d)+
+          '<div style="font-size:11px;color:#9A8C7A;text-align:right;padding:8px 2px 0">'+
+          (info.viejo?'Datos de '+info.hace+' · actualizando…':'Actualizado '+info.hace)+'</div>';
         $('rsPdfBtn').disabled=false;
       })
       .catch(function(err){
@@ -18181,9 +18299,10 @@ if('serviceWorker' in navigator){
     elg.innerHTML = html;
   }
   function _cargarZonas(){
-    fetch(CRM_API + '?action=crmZonas')
-      .then(function(r){ return r.json(); })
-      .then(function(d){
+    // Las zonas del mapa casi no cambian: guardarlas es lo que hace que el mapa
+    // de Estancias se dibuje al toque en vez de esperar al backend.
+    traer('crmzonas', CRM_API + '?action=crmZonas',
+      function(d){
         _mapaZonas = (d.zonas||[]).filter(function(z){ return z.poly && z.poly.length>=3; });
         _subZonas = _mapaZonas.filter(function(z){ return z.tipo !== 'excluir'; });
         _exclZonas = _mapaZonas.filter(function(z){ return z.tipo === 'excluir'; });
@@ -18269,9 +18388,8 @@ if('serviceWorker' in navigator){
 
   // Carga las correcciones de puntos (hoja Lotes Puntos) keyeadas por id.
   function _mapaLoadPuntos(cb){
-    fetch(CRM_API + '?action=crmPuntos')
-      .then(function(r){ return r.json(); })
-      .then(function(d){
+    traer('crmpuntos', CRM_API + '?action=crmPuntos',
+      function(d){
         _mapaPuntosOv = {};
         (d.puntos||[]).forEach(function(p){ _mapaPuntosOv[p.id] = p; });
         if (cb) cb();
