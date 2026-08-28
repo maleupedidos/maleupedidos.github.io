@@ -20409,7 +20409,8 @@ if('serviceWorker' in navigator){
     var verMapa = (!li.sinUbicacion && li.lote && li.subBarrio) ? '<button class="crm-edit-btn" onclick="crmVerEnMapa(\''+encodeURIComponent(li.subBarrio)+'\',\''+encodeURIComponent(li.lote)+'\')">📍 Ver en mapa</button>' : '';
     var resBtnsSk = window.crmResCtlHtml(li.tel, encodeURIComponent(li.nombre||''), encodeURIComponent(li.barrio||''), li.residencia||'', 0);
     var actions = '<div class="crm-tags-row">' + copiarTel + verMapa
-      + (li.tel ? '<button class="crm-edit-btn" onclick="crmEditarMeta()">Editar ficha</button>' : '')
+      + (li.tel ? '<button class="crm-edit-btn" onclick="crmEditarMeta()">Editar ficha</button>'
+                : '<button class="crm-edit-btn" onclick="crmAgregarTel()">📞 Agregar teléfono</button>')
       + '<button class="crm-edit-btn" onclick="crmFusionarConInit()">Fusionar con…</button>'
     + '</div>' + resBtnsSk;
     var alertH = li.deuda > 0 ? '<div class="crm-warn" style="background:var(--rb);border-color:var(--r);color:var(--r)"><b>Deuda viva:</b> $' + fmt$(li.deuda) + ' en pedidos entregados sin cobrar</div>' : '';
@@ -20489,7 +20490,8 @@ if('serviceWorker' in navigator){
       + (c.tel ? '<button class="crm-edit-btn" onclick="crmCopyTel(\''+c.tel+'\')">📞 Copiar tel</button>' : '')
       + reactWp
       + verMapaBtn
-      + (c.tel ? '<button class="crm-edit-btn" onclick="crmEditarMeta()">Editar ficha</button>' : '')
+      + (c.tel ? '<button class="crm-edit-btn" onclick="crmEditarMeta()">Editar ficha</button>'
+               : '<button class="crm-edit-btn" onclick="crmAgregarTel()">📞 Agregar teléfono</button>')
       + '<button class="crm-edit-btn" onclick="crmFusionarConInit()">Fusionar con…</button>'
     + '</div>' + resBtns;
 
@@ -20638,6 +20640,49 @@ if('serviceWorker' in navigator){
     if (s.length>10) s = s.substring(s.length-10);
     return s.length<8 ? '' : s;
   }
+
+  /* Cliente SIN teléfono: la ficha quedaba sin salida.
+     "Editar ficha" no se dibuja sin teléfono porque la meta se guarda keyeada
+     por número — y eso está bien. Pero tampoco había forma de CARGARLE uno
+     desde acá: había que adivinar que se hace desde la ficha de un pedido suyo.
+     Resultado: una ficha que no se puede editar y no dice por qué.
+     (28/8/2026, lo reportó Tadeo con Pini Bonorino.)
+
+     El backend ya sabe resolverlo: busca las filas del cliente por su key
+     'NOMBRE:<nombre>' cuando no tiene teléfono (_doPostCrmCambiarTelefono), así
+     que alcanza con ofrecerle el botón. */
+  window.crmAgregarTel = function(){
+    if (!crmFichaActual || crmFichaActual.tipo !== 'cliente') return;
+    var c = crmFichaActual.data;
+    if (c.tel) { crmEditarMeta(); return; }          // ya tiene: es "editar", no "agregar"
+    var quien = c.nombre || 'este cliente';
+    var tecleado = prompt('Cargarle el teléfono a ' + quien +
+      '\n\nVan los 10 dígitos con código de área, sin 0 ni 15.\nEjemplo: 1149918807', '');
+    if (tecleado === null) return;
+    var limpio = _crmNormTelJS(tecleado);
+    // 10 exactos, igual que en el backend: aceptar menos fue lo que partió en
+    // dos a Claudio Fernández.
+    if (limpio.length !== 10) {
+      toast('Tienen que quedar 10 dígitos (ej. 1149918807). Me llegó: ' + (limpio || 'nada'));
+      return;
+    }
+    var nPed = c.countPedidos || (c.pedidos && c.pedidos.length) || 0;
+    if (!confirm('Guardarle el teléfono a ' + quien + ':\n\n' + limpio +
+        '\n\nSe escribe en sus ' + nPed + ' pedido' + (nPed === 1 ? '' : 's') +
+        ' y con eso se le engancha la ficha completa.')) return;
+    toast('Guardando el teléfono...');
+    fetch(CRM_API, {method:'POST', mode:'cors',
+      body: JSON.stringify({action:'crmCambiarTelefono', key: c.key, telNuevo: limpio})})
+      .then(function(r){ return r.json(); })
+      .then(function(d){
+        if (!d || !d.ok) { toast('Error: ' + ((d && d.error) || 'no se pudo guardar')); return; }
+        toast('Teléfono guardado en ' + (d.totalFilas || 0) + ' pedido' + ((d.totalFilas === 1) ? '' : 's'));
+        // La identidad del cliente cambió: la ficha vieja ya no existe.
+        try { CRM_DATA = null; } catch(e){}
+        crmOpenCliente(encodeURIComponent(d.telNuevo));
+      })
+      .catch(function(err){ toast('Error: ' + err.message); });
+  };
 
   window.crmGuardarMeta = function(){
     if (!crmFichaActual) return;
