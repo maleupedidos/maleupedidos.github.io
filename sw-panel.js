@@ -24,11 +24,19 @@
  * Y si alguien igual queda pegado: mantener apretado el ↻ borra todo y
  * recarga de cero (refreshDuro).
  */
-var CN='maleu-panel-v193';
+var CN='maleu-panel-v194';
 
 self.addEventListener('install',function(e){
   e.waitUntil(caches.open(CN).then(function(c){
-    return c.addAll(['/app.html','/panel-manifest.json','/img/favicon.png']);
+    // Estos tres SON la app: si falta uno, la instalacion tiene que fallar.
+    return c.addAll(['/app.html','/panel-manifest.json','/img/favicon.png']).then(function(){
+      // El indice de ubicaciones va aparte y con catch a proposito: es lo que
+      // hace andar el boton "Ubicacion" de Ruta sin senal (Tadeo maneja por
+      // adentro del barrio). Pero addAll es atomico: si este 404eara, se caeria
+      // la instalacion entera del service worker y la app se quedaria sin PWA.
+      // Que falte el indice tiene que degradar el boton, no romper la app.
+      return c.add('/data/lotes-ubicacion.json').catch(function(){});
+    });
   }));
   self.skipWaiting();
 });
