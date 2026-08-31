@@ -1109,6 +1109,11 @@ function sortByHora(list){
 // Modo "ordenar": muestra una lista compacta con flechas en lugar de la card grande.
 var rutaModoLista=false;
 var rutCurrentTab='armado', rutaIndex=0, isOnline=navigator.onLine, resumenBarrioAbierto=null;
+/* Los cobros pendientes se piden por su propio endpoint. _cobrosIntentados dice
+   si ya se pidieron alguna vez (para no afirmar "no hay nada" sin haber
+   preguntado) y _cobrosOk si la ultima respuesta sirvio (para no confundir
+   "fallo" con "vacio"). Ver el circulo cerrado del 31/8/2026 en rutRender. */
+var _cobrosIntentados=false, _cobrosOk=null;
 // Estado de colapso del tab Armado: runtime-only, en cada refresh arranca vacio.
 // Declarado aca arriba para que getArmadoCollapse() no devuelva undefined si render()
 // corre en el init antes de que se ejecute la asignacion mas abajo en el script.
@@ -1253,9 +1258,12 @@ function manualRefresh(){
   // boton de refresh siempre traigan datos REALES del Sheet (importante si el user marco
   // entregado desde otra herramienta como el Panel admin).
   var promises=[refresh(true,true)];
-  // En tab Cobros, ↻ también refetchea los pendientes de cobro (endpoint distinto al
-  // de entregas, antes no se refrescaba al tocar el botón).
-  if(rutCurrentTab==='cobros')promises.push(fetchCobrosPendientes(true));
+  // El ↻ SIEMPRE re-pide los cobros, no solo estando en su tab: son un endpoint
+  // aparte y si fallaron una vez hay que poder reintentar desde donde estes.
+  _cobrosIntentados=false;
+  promises.push(fetchCobrosPendientes(true).then(function(ok){
+    _cobrosIntentados=true; _cobrosOk=(ok!==false);
+  }));
   var p=Promise.all(promises.map(function(x){return (x&&x.then)?x:Promise.resolve()}));
   if(p&&typeof p.finally==='function'){p.finally(function(){hideRefreshLoader()});}
   else if(p&&typeof p.then==='function'){p.then(function(){hideRefreshLoader()},function(){hideRefreshLoader()});}
@@ -1608,8 +1616,40 @@ function rutRender(){
   if(all.length===0&&pendientesCobro.length===0&&pendientesGuardarStock.length===0&&rutCurrentTab!=='nuevo'){
     document.getElementById('armadoView').classList.add('hidden');document.getElementById('rutaView').classList.add('hidden');document.getElementById('cobrosView').classList.add('hidden');document.getElementById('nuevoView').classList.add('hidden');
     document.getElementById('emptyView').classList.remove('hidden');
-    document.getElementById('emptyTitle').textContent='Sin pedidos pendientes';
-    document.getElementById('emptyDetail').textContent=entregas.length>0?entregas.length+' pedido(s) ya entregados':'No hay pedidos cargados';
+
+    /* ── El circulo cerrado del 31/8/2026 ────────────────────────────────────
+       Los cobros pendientes NO son pedidos del dia: vienen de otro endpoint
+       (cobrosPendientes) y en el flujo normal el UNICO que lo pide es
+       renderCobros(). Pero cuando no hay entregas del dia, este bloque pintaba
+       el cartel de vacio y hacia `return` ANTES de llegar a renderCobros().
+       Resultado: los cobros no se pedian NUNCA, pendientesCobro seguia vacio, y
+       el cartel se volvia a mostrar. De ese circulo no se salia ni cerrando
+       sesion ni tocando la tab.
+
+       Paso el lunes 31/8/2026, el primer dia sin pedidos: Tadeo tenia 7 pedidos
+       sin cobrar por $256.450 y la pantalla le decia "No hay pedidos cargados".
+
+       Ahora: antes de afirmar que no hay nada, se PIDEN. Y hasta que la
+       respuesta llegue, la pantalla no miente. */
+    if(!_cobrosIntentados){
+      _cobrosIntentados=true;
+      document.getElementById('emptyTitle').textContent='Buscando cobros pendientes…';
+      document.getElementById('emptyDetail').textContent='Un segundo';
+      fetchCobrosPendientes(true).then(function(ok){
+        _cobrosOk=(ok!==false); rutRender();
+      },function(){
+        _cobrosOk=false; rutRender();
+      });
+      return;
+    }
+    document.getElementById('emptyTitle').textContent=(_cobrosOk===false)
+      ? 'No pude traer los datos'
+      : 'Sin pedidos pendientes';
+    document.getElementById('emptyDetail').textContent=(_cobrosOk===false)
+      /* "no pude leer" y "no hay nada que cobrar" NO se pueden ver igual: son la
+         misma pantalla diciendo cosas opuestas, y una de las dos es plata. */
+      ? 'Fijate la conexion y toca ↻ para reintentar'
+      : (entregas.length>0?entregas.length+' pedido(s) ya entregados':'No hay pedidos cargados');
     return;
   }
   document.getElementById('emptyView').classList.add('hidden');
@@ -2682,6 +2722,15 @@ function fetchCobrosPendientes(fresh){
   return fetch(RUT_APPS_SCRIPT_URL+'?action=cobrosPendientes&t='+Date.now()+(fresh?'&fresh=1':''))
     .then(function(r){return r.json()})
     .then(function(data){
+      /* Una respuesta de error NO es una lista vacia. Sin esto, un
+         {ok:false,authRequired:true} caia en `data.cobros||[]` y la pantalla
+         decia "Sin pedidos pendientes" — o sea, "no pude leer" y "no hay nada
+         que cobrar" se veian identicos. En una pantalla de plata eso no puede
+         pasar. (Misma leccion que el portal de vendedores: distinguir "fallo"
+         de "vacio".) */
+      if(!data||data.ok===false||!Array.isArray(data.cobros)){
+        throw new Error((data&&(data.err||data.error))||'respuesta sin cobros');
+      }
       if(typeof data.billetera==='number')_billeteraRuta=data.billetera; // fondo de cambio para el cuadro de Cobros
       var cobros=data.cobros||[];
       // Server = fuente de verdad. Solo agregar locales que aun estan en syncQueue
@@ -2705,8 +2754,11 @@ function fetchCobrosPendientes(fresh){
       saveLocal();
       if(rutCurrentTab==='cobros')renderCobrosFromServer();
       document.getElementById('tabCobrosCount').textContent=cobros.length||'';
+      return true;
     })
-    .catch(function(){});
+    /* Resuelve con true/false en vez de re-lanzar: hay 8 llamadores y varios
+       ignoran la promesa — un reject suelto quedaria sin manejar. */
+    .catch(function(){ return false; });
 }
 
 function parseFecha(s){
@@ -5150,6 +5202,14 @@ function switchTab(tab){
   rutRender();
   // Al entrar a Ruta, refrescar pendientes de guardar (puede haber cambiado desde otro dispositivo)
   if(tab==='ruta')fetchPendientesGuardarStock();
+  // Entrar a COBROS siempre los pide. Antes solo los pedia renderCobros(), y si
+  // el cartel de vacio se habia comido el render, no se pedian nunca.
+  if(tab==='cobros'){
+    fetchCobrosPendientes(true).then(function(ok){
+      _cobrosIntentados=true; _cobrosOk=(ok!==false);
+      if(rutCurrentTab==='cobros')rutRender();
+    });
+  }
 }
 
 /* ── NUEVO PEDIDO: form express para alta rapida (Tadeo en el auto, anciana en wpp, etc) ──
