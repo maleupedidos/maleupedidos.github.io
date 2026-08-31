@@ -98,7 +98,10 @@ body{font-family:'Inter',-apple-system,'Segoe UI',system-ui,sans-serif;backgroun
 .btn-reload-ped.loading svg{animation:rpSpin 1s linear infinite}
 @keyframes rpSpin{from{transform:rotate(0)}to{transform:rotate(360deg)}}
 /* Botón "Actualizar" caja — chiquito, al lado del header Movimientos. */
-.btn-reload-caja{display:inline-flex;align-items:center;gap:5px;padding:5px 10px;border:1.5px solid var(--o);background:#fff;color:var(--o);border-radius:50px;font-size:11px;font-weight:800;font-family:inherit;cursor:pointer;transition:.15s;-webkit-tap-highlight-color:transparent;white-space:nowrap}
+/* min-height 44px: medido el 31/8/2026, este botón tenía 26px de alto y en el
+   iPhone se falla el toque. "El botón de actualizar de Caja no se actualiza"
+   no era un bug de datos — era que no le pegaba. 44px es el mínimo táctil. */
+.btn-reload-caja{display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:5px 14px;min-height:44px;border:1.5px solid var(--o);background:#fff;color:var(--o);border-radius:50px;font-size:12px;font-weight:800;font-family:inherit;cursor:pointer;transition:.15s;-webkit-tap-highlight-color:transparent;white-space:nowrap}
 .btn-reload-caja:hover{background:var(--ol)}
 .btn-reload-caja:active{transform:scale(.95)}
 .btn-reload-caja:disabled{opacity:.6;cursor:wait}
@@ -1624,10 +1627,14 @@ body.sb-open .sb-toggle .sb-toggle-lbl{display:inline}
   .hdr-title, .hdr-bc, .hdr-search, .hdr-clock, .hdr-user{display:none !important}
   /* hdr-actions queda visible para mostrar el botón Actualizar global, pero
      ocultamos los demás items (notif, ?, dot) que ahora viven en el statusbar. */
-  .hdr-actions{margin-left:auto;gap:4px}
+  /* height:auto — el contenedor tiene 30px fijos en escritorio y recortaría el
+     botón de 44px de abajo. */
+  .hdr-actions{margin-left:auto;gap:4px;height:auto}
   .hdr-actions .hdr-btn{display:none !important}
-  /* El botón Actualizar pasa a modo compacto en mobile: solo ↻ + HH:MM */
-  .hdr-refresh{padding:0 10px;height:34px;gap:6px}
+  /* El botón Actualizar pasa a modo compacto en mobile: solo ↻ + HH:MM.
+     44px de alto, no 34: es el ÚNICO botón de actualizar que se ve sin
+     scrollear, y con 34 se falla el toque en el iPhone (medido 31/8/2026). */
+  .hdr-refresh{padding:0 12px;height:44px;gap:6px}
   .hdr-refresh-txt{display:none}
   .hdr-refresh-ico{font-size:18px}
   .hdr-refresh-time{font-size:10px;padding-left:6px}
@@ -6871,6 +6878,11 @@ function abrirTab(clave){
 
 function go(p){
   cur=p;try{localStorage.setItem('maleu_tab',p);}catch(e){}
+  /* Entrar a una tab con datos viejos los renueva solo. Esto es lo que hace que
+     no haya que "actualizar en cada tab": el refresco va en segundo plano, sin
+     loader, y con los mismos tres candados (editor abierto / 90 s / sin tapar).
+     Ver el bloque _refrescarSiEstaViejo. */
+  try{ if(typeof window._refrescarSiEstaViejo==='function') window._refrescarSiEstaViejo(); }catch(e){}
   /* Los datos se piden por tab, no de arranque: ver _pedirD(). */
   if(_tabUsaD(p))_pedirD();
   if(_SECCION[p])_visitadas[p]=true;
@@ -16253,7 +16265,45 @@ function rVentas(){
     if(_necesitaDatosPanel()&&_tabUsaD(cur))load();
     if((cur==='ventas'||cur==='inicio')&&_tengoTab(cur))loadVentas();
   }
-  // visibilitychange y focus listeners SACADOS a propósito.
+  /* ── Los listeners de visibilidad VUELVEN (31/8/2026) ─────────────────────
+     Tadeo: "no puede ser que tenga que actualizar en cada Tab... no es de un
+     ERP profesional manejarse así".
+
+     OJO: esto se sacó a propósito en mayo/2026, y el motivo está 15 líneas más
+     arriba — el panel se re-renderizaba al volver del foco, se le caía el
+     desglose o la edición, y se sentía como "se cierra solo". No lo estoy
+     ignorando: vuelve porque ESA razón ya está resuelta por otro lado. Hoy
+     _hayEditorAbierto() + _pendingLoadRender hacen que una carga en curso NO
+     repinte mientras estás editando (se pinta recién al cerrar el editor), y
+     loadRapido() no tapa la pantalla con ningún loader.
+
+     Si alguna vez volvés a sentir que "se cierra solo", ESTE es el primer
+     sospechoso: se apaga poniendo _REFRESCO_AUTO en false.
+
+     Tres candados, y los tres importan:
+       1. nunca si hay un editor abierto
+       2. nunca antes de 90 s del último refresco (volver a la app 4 veces en
+          un minuto no dispara 4 cargas)
+       3. nunca tapa la pantalla — el único movimiento es el reloj del ↻ */
+  var _REFRESCO_AUTO = true;
+  var _REFRESCO_MIN_MS = 90000;
+  var _ultimoRefrescoAuto = Date.now();
+  var _refrescandoAuto = false;
+  window._refrescarSiEstaViejo = function(){
+    if(!_REFRESCO_AUTO || _refrescandoAuto) return;
+    if(navigator.onLine === false) return;
+    if(typeof _hayEditorAbierto === 'function' && _hayEditorAbierto()) return;
+    if(Date.now() - _ultimoRefrescoAuto < _REFRESCO_MIN_MS) return;
+    if(typeof loadRapido !== 'function') return;
+    _refrescandoAuto = true;
+    _ultimoRefrescoAuto = Date.now();
+    Promise.resolve(loadRapido()).then(function(r){
+      if(r && r.ok && typeof _markRefreshTime === 'function') _markRefreshTime();
+    }, function(){}).then(function(){ _refrescandoAuto = false; });
+  };
+  document.addEventListener('visibilitychange',function(){
+    if(document.visibilityState === 'visible') window._refrescarSiEstaViejo();
+  });
   window.addEventListener('online',function(){$('dot').className='hdr-dot';_refresh(true);});
   window.addEventListener('offline',function(){$('dot').className='hdr-dot off';});
 
