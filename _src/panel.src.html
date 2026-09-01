@@ -14426,6 +14426,12 @@ if('serviceWorker' in navigator){
 
     // Botonera contextual
     html+='<div class="ord-actions">';
+    // Red: si la mercaderia esta en poder del vendedor (col BE), se puede registrar
+    // que la devolvio. Antes esto habia que hacerlo a mano en el Sheets — y el Sheets
+    // es el motor, no la pantalla: todo lo que Tadeo opera tiene que estar acá.
+    if(p.h==='Red'&&p.ev==='Entregado'&&p.es!=='Cancelado'){
+      html+='<button class="ord-btn" onclick="_ordDevolucionRed('+(p.r||0)+')">↩ Me devolvió la mercadería</button>';
+    }
     var editable=(p.es!=='Entregado'&&p.es!=='Cancelado'&&p.ep!=='Cobrado'&&p.h!=='Red');
     if(editable){
       html+='<button class="ord-btn" onclick="_ordGo(\'pedidos\',\''+p.h+'\',\''+p.n+'\')">📋 Ir a Pedidos</button>';
@@ -14540,7 +14546,49 @@ if('serviceWorker' in navigator){
       }
     },150);
   };
-  // Helper: cancelar pedido desde el drawer (delega a la función existente del Panel)
+  // Devolucion de mercaderia de un vendedor Red. Devuelve el stock al freezer y
+  // desmarca "Entregado a Vendedor". No cancela el pedido: una devolucion no siempre
+  // es una cancelacion (se puede reprogramar). Si ademas hay que cancelarlo, esta el
+  // boton de cancelar, y como este ya desmarco la col BE no se suma el stock dos veces.
+  window._ordDevolucionRed=function(row){
+    if(!row){ toast('No puedo ubicar el pedido'); return; }
+    // Los datos salen del volcado y no del onclick: meter el nombre del cliente en el
+    // atributo obliga a escapar comillas dentro de comillas dentro de un string, que es
+    // justo como se rompio este boton al escribirlo la primera vez.
+    var p=null;
+    ((typeof D!=='undefined'&&D&&D.pedidos)||[]).forEach(function(x){
+      if(x.h==='Red'&&Number(x.r)===Number(row)) p=x;
+    });
+    var cli=(p&&p.c)||'este cliente', vend=(p&&p.br)||'el vendedor', origen=(p&&p.o)||'';
+    var tocaStock=(origen==='Deposito'||origen==='Mixto');
+    var msg='\u00bfTe devolvi\u00f3 '+vend+' la mercader\u00eda del pedido de '+cli+'?\n\n';
+    msg+=tocaStock ? 'Vuelve al freezer y se descuenta de lo que el vendedor tiene.'
+                   : 'Este pedido se compr\u00f3 al proveedor (no sali\u00f3 del freezer), as\u00ed que el stock no cambia.';
+    msg+='\n\nEl pedido NO se cancela. Si adem\u00e1s hay que cancelarlo, us\u00e1 el bot\u00f3n de cancelar despu\u00e9s.';
+    if(!confirm(msg))return;
+    var btns=document.querySelectorAll('.ord-actions .ord-btn');
+    for(var i=0;i<btns.length;i++) btns[i].disabled=true;
+    fetch(API,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},
+      body:JSON.stringify({action:'devolucionVendedorRed',row:row})})
+      .then(function(r){return r.json();})
+      .then(function(d){
+        if(d&&d.ok){
+          if(d.devuelto===false){ toast(d.msg||'No hab\u00eda nada que devolver'); }
+          else toast(d.stock?'Devuelto \u2014 la mercader\u00eda volvi\u00f3 al freezer':'Devoluci\u00f3n registrada');
+          closeOrdDetail();
+          if(typeof load==='function')load();
+        } else {
+          toast('Error: '+((d&&d.err)||'?'));
+          for(var j=0;j<btns.length;j++) btns[j].disabled=false;
+        }
+      })
+      .catch(function(e){
+        toast('Error: '+e.message);
+        for(var j=0;j<btns.length;j++) btns[j].disabled=false;
+      });
+  };
+
+
   window._ordCancelar=function(hoja,n,row,cli){
     closeOrdDetail();
     setTimeout(function(){
