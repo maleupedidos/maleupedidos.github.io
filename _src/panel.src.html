@@ -7762,19 +7762,51 @@ function rHSnap(){
   var now=new Date();
   var mn=now.getMonth()+1,anioN=now.getFullYear();
   var ym=anioN+'-'+String(mn).padStart(2,'0');
-  // 1. Facturado del mes (devengado) — pedidos no cancelados con fecha de entrega (o pedido) en el mes
+  // 1. Facturado del mes — MISMA definición que el EERR, que es la fuente de verdad:
+  // solo pedidos ENTREGADOS, contados en el mes en que se entregó la mercadería.
+  //
+  // Hasta el 31/8/2026 esta cuenta daba distinto que el EERR ($9.266.270 vs $8.691.291)
+  // por dos motivos, los dos arreglados acá:
+  //   1. contaba los NO cancelados, o sea incluía los pendientes — 8 pedidos Red que el
+  //      vendedor tenía pero todavía no había entregado, $499.079. Un pedido no entregado
+  //      no está devengado: no se facturó nada todavía.
+  //   2. miraba `p.fe||p.f` y de ahí sacaba SOLO el número de mes. Como el volcado manda
+  //      `fe` únicamente en Home/Pilar, Clubes y Red se contaban por fecha de PEDIDO
+  //      (un pedido de Clubes cargado el 2/8 y entregado el 31/7 sumaba acá y en julio
+  //      en el EERR, $75.900). Y como `fe` viene "dd/MM" sin año, en 2027 iba a sumar
+  //      agosto 2026 + agosto 2027 en la misma cifra.
+  // El backend manda ahora `mc` ("aaaa-mm"), calculado con la misma regla que el EERR.
+  //
   // facturadoMesCobrado: de ese MISMO facturado, cuánto ya está Cobrado. Sirve para el %
   // "ya cobrado" honesto (devengado vs devengado). NO usar cobranzas de caja del mes:
   // esas incluyen cobros de pedidos de meses previos y harían pasar el % de 100%.
   var facturadoMes=0, facturadoMesCobrado=0;
   ((D.pedidos)||[]).forEach(function(p){
-    if(p.es==='Cancelado'||p.hist)return;
+    if(p.es!=='Entregado'||p.hist)return;
     if(!p.c||!p.c.trim()||!(p.$>0))return;
-    var f=p.fe||p.f;if(!f)return;
-    var pp=String(f).split('/');if(pp.length<2)return;
-    if(Number(pp[1])!==mn)return;
+    if(p.mc){
+      if(p.mc!==ym)return;
+    }else{
+      // Backend viejo sin `mc`: se cae al criterio de antes para no quedar en $0.
+      // No puede arreglar Clubes/Red (el volcado viejo no les manda `fe`), pero al
+      // menos filtra el anio: `fe` viene "dd/MM" pelado, asi que el anio sale de `f`.
+      var f=p.fe||p.f;if(!f)return;
+      var pp=String(f).split('/');if(pp.length<2)return;
+      if(Number(pp[1])!==mn)return;
+      var anioP=Number(pp[2]||String(p.f||'').split('/')[2]);
+      if(anioP&&anioP!==anioN)return;
+    }
     facturadoMes+=Number(p.$||0);
     if(p.ep==='Cobrado')facturadoMesCobrado+=Number(p.$||0);
+  });
+  // Mercadería entregada a un vendedor Red que todavía no llegó al cliente final.
+  // No es facturación (no se entregó) pero tampoco está en el freezer ni en "a cobrar":
+  // hoy no aparece en ninguna pantalla. Se informa abajo de la Posición Neta.
+  var redEnPoderDeVendedor=0, redEnPoderN=0;
+  ((D.pedidos)||[]).forEach(function(p){
+    if(p.h!=='Red'||p.es==='Entregado'||p.es==='Cancelado'||p.hist)return;
+    if(!(p.$>0))return;
+    redEnPoderDeVendedor+=Number(p.$||0); redEnPoderN++;
   });
   // 2 y 3: Cobrado y Quemado del mes — del cálculo validado de eerrFlujoMes
   var fm=(typeof eerrFlujoMes==='function')?eerrFlujoMes(mn,anioN):{cobranzas:0,salidas:0,flujo:0};
@@ -7838,7 +7870,7 @@ function rHSnap(){
       '</div>';
   }
   var html='<div class="snap">';
-  html+=card('','Facturado mes',fmoney(facturadoMes),pctCobr>0?(pctCobr+'% ya cobrado'):'devengado');
+  html+=card('','Facturado mes',fmoney(facturadoMes),pctCobr>0?(pctCobr+'% ya cobrado'):'entregado');
   html+=card(sCobrado,'Cobrado mes',fmoney(cobradoMes),fm.cobertura?(fm.cobertura+'% cobertura FC'):'caja real');
   html+=card(sFlujo,'Gastado mes',fmoney(quemadoMes),(flujoMes>=0?'+':'')+fmoney(flujoMes)+' flujo neto');
   html+=card(sSaldo,'Saldo de caja',fmoney(saldoTot),(saldoTot>=cajaMin?'sobre caja mín ':'bajo caja mín ')+fmoney(cajaMin));
@@ -7854,6 +7886,11 @@ function rHSnap(){
       '<b style="color:var(--ink)">Posición Neta real:</b> '+fmoney(saldoTot)+' caja + '+fmoney(aCobrar)+' a cobrar + '+fmoney(stockTot)+' stock − '+fmoney(deudaProv)+' deuda = '+
       '<b style="color:'+posColor+';font-variant-numeric:tabular-nums">'+fmoney(posNeta)+'</b>'+
       '<div style="font-size:10px;color:var(--ink3);margin-top:3px;font-style:italic">Capital de trabajo total — distribuido entre caja, mercadería y cuentas pendientes</div>'+
+      (redEnPoderDeVendedor>0
+        ? '<div style="font-size:10px;color:var(--wrn);margin-top:5px;padding-top:5px;border-top:1px dashed var(--cd)">'+
+          '⚠ No incluye <b>'+fmoney(redEnPoderDeVendedor)+'</b> de mercadería en poder de vendedores Red ('+redEnPoderN+
+          (redEnPoderN===1?' pedido':' pedidos')+' sin entregar al cliente). Salió del freezer y todavía no es venta.</div>'
+        : '')+
     '</div>';
   }
   box.innerHTML=html;
