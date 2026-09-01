@@ -6433,7 +6433,8 @@ function goSubInicio(st){
   },true);
 })();
 (function(){var t=localStorage.getItem('maleu_tab');if(t){cur=t;document.querySelectorAll('.bn').forEach(function(e){e.classList.toggle('on',e.dataset.p===t);});}})();
-function toast(m){var e=$('toast');e.textContent=m;e.classList.add('show');setTimeout(function(){e.classList.remove('show');},2500);}
+// `ms` opcional: un aviso largo no se lee en 2,5 s. Default igual que siempre.
+function toast(m,ms){var e=$('toast');e.textContent=m;e.classList.add('show');clearTimeout(toast._t);toast._t=setTimeout(function(){e.classList.remove('show');},ms||2500);}
 
 function nextDel(){
   var now=new Date(),hoy=DS[now.getDay()],hr=now.getHours();
@@ -14960,6 +14961,36 @@ if('serviceWorker' in navigator){
   // Marcar un pedido Red como entregado al cliente final. Se sella con el DIA DE
   // ENTREGA del pedido, no con el momento del clic: casi siempre se marca despues,
   // y poner la fecha de hoy seria falsear cuando se entrego.
+  // Semana ISO de un "dd/mm/aaaa". Misma cuenta que _isoWeek del backend: el ERP
+  // tiene que poder avisar ANTES de apretar, no despues de que el POST conteste.
+  function _semanaISOde(txt){
+    var m=String(txt||'').match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+    if(!m) return null;
+    var d=new Date(Date.UTC(+m[3],+m[2]-1,+m[1]));
+    if(isNaN(d.getTime())) return null;
+    var dn=d.getUTCDay()||7;
+    d.setUTCDate(d.getUTCDate()+4-dn);
+    var y0=new Date(Date.UTC(d.getUTCFullYear(),0,1));
+    return {sem:Math.ceil((((d-y0)/86400000)+1)/7), anio:+m[3]};
+  }
+  function _semanaISOhoy(){
+    var h=new Date();
+    var d=new Date(Date.UTC(h.getFullYear(),h.getMonth(),h.getDate()));
+    var dn=d.getUTCDay()||7;
+    d.setUTCDate(d.getUTCDate()+4-dn);
+    var y0=new Date(Date.UTC(d.getUTCFullYear(),0,1));
+    return {sem:Math.ceil((((d-y0)/86400000)+1)/7), anio:h.getFullYear()};
+  }
+  /* ¿El freezer se va a tocar al marcar esta entrega?
+     El stock solo se mueve si la entrega es de la semana EN CURSO: la hoja Productos
+     iguala Stock Inicial = Stock Fisico cada lunes, asi que una entrega de una semana
+     anterior ya fue absorbida por el conteo y descontarla de nuevo deja el freezer
+     corto. Paso de verdad el 31/8/2026 (7 pedidos, 11 unidades de mas al contar). */
+  window._entregaEsDeSemanaVieja=function(dia){
+    var a=_semanaISOde(dia); if(!a) return null;
+    var b=_semanaISOhoy();
+    return (a.sem===b.sem&&a.anio===b.anio) ? null : a.sem;
+  };
   window._ordMarcarEntregadoRed=function(row){
     if(!row){ toast('No puedo ubicar el pedido'); return; }
     var p=null;
@@ -14971,6 +15002,12 @@ if('serviceWorker' in navigator){
     var msg='\u00bfConfirm\u00e1s que '+vend+' ya le entreg\u00f3 el pedido a '+cli+'?\n\n';
     msg+=dia ? ('Se registra con la fecha de entrega del pedido: '+dia+'.')
              : 'Se registra con la fecha de hoy (el pedido no tiene d\u00eda de entrega cargado).';
+    var semVieja=_entregaEsDeSemanaVieja(dia);
+    if(semVieja!==null){
+      msg+='\n\nEs de la semana '+semVieja+', no de esta. NO le voy a tocar el stock: '+
+           'el conteo del dep\u00f3sito de esa semana ya descont\u00f3 esa mercader\u00eda. '+
+           'Si el freezer no se cont\u00f3 desde entonces, ajustalo en la tab Stock.';
+    }
     if(!confirm(msg))return;
     var btns=document.querySelectorAll('.ord-actions .ord-btn');
     for(var i=0;i<btns.length;i++) btns[i].disabled=true;
@@ -14979,7 +15016,10 @@ if('serviceWorker' in navigator){
       .then(function(r){return r.json();})
       .then(function(d){
         if(d&&d.ok){
-          toast(d.ya?'Ya estaba marcado':'Listo \u2014 entregado el '+(d.sello||''));
+          if(d.ya) toast('Ya estaba marcado');
+          else if(d.stockOmitido) toast('Listo \u2014 entregado el '+(d.sello||'')+
+            '. No toqu\u00e9 el stock: es de la semana '+d.semana+' y ya lo hab\u00eda descontado el conteo.',6000);
+          else toast('Listo \u2014 entregado el '+(d.sello||''));
           closeOrdDetail();
           if(typeof load==='function')load();
         } else {
