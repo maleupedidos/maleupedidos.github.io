@@ -731,6 +731,9 @@ body{font-family:'Inter',-apple-system,'Segoe UI',system-ui,sans-serif;backgroun
 .est-int-edit{font-size:10px;font-weight:800;color:var(--bl);opacity:.7}
 .est-rol-badge{font-size:10px;font-weight:800;color:#455A64;background:#ECEFF1;border-radius:999px;padding:2px 8px;white-space:nowrap}
 .est-visita-badge{font-size:10px;font-weight:800;color:#C05621;background:#FFF3E0;border:1px solid #F0D9B5;border-radius:999px;padding:2px 8px;white-space:nowrap}
+.est-nocompra-badge{font-size:10px;font-weight:800;color:#5C6BC0;background:#E8EAF6;border:1px solid #C5CAE9;border-radius:999px;padding:2px 8px;white-space:nowrap}
+.est-sec-h .est-sec-add{background:#fff;border:1.5px solid #E0D2A8;border-radius:999px;padding:5px 11px;font-size:11px;font-weight:800;color:#331C1C;cursor:pointer;text-transform:none;letter-spacing:0;white-space:nowrap;min-height:32px}
+.est-sec-h .est-sec-add:hover{border-color:var(--o);color:var(--o)}
 .est-reschip{font-size:10px;font-weight:800;padding:2px 7px;border-radius:999px;white-space:nowrap;margin-left:4px}
 .est-reschip.perm{color:#2E7D32;background:#E8F5E9}
 .est-reschip.finde{color:#1565C0;background:#E3F2FD}
@@ -1166,7 +1169,14 @@ body{font-family:'Inter',-apple-system,'Segoe UI',system-ui,sans-serif;backgroun
   .crm-card-actions{gap:8px}
   .hoy-band-d{display:none}
   .hoy-act-cp{display:none}
-  .hoy-act{height:38px}
+  /* La fila de Hoy / Plan semana tenia las 3 columnas en una sola linea. Con el
+     telefono y "Registrar" sin encoger, al nombre le quedaban ~100px y partia en
+     tres renglones. Ahora las acciones bajan a su propia linea: arriba el nombre
+     con su etiqueta ("+8d vs ritmo", el monto, el cumple) y abajo los dos botones
+     a lo ancho, de 44px, que es el minimo para tocarlos con el pulgar. */
+  .hoy-row{flex-wrap:wrap;row-gap:8px}
+  .hoy-row-acts{flex:1 0 100%;gap:8px}
+  .hoy-act{height:44px;flex:1}
 }
 
 /* ════════════════════════════════════════════════════════════════
@@ -24778,6 +24788,49 @@ if('serviceWorker' in navigator){
   var _RELACIONES=['Primo/a','Sobrino/a','Amigo/a','Novio/a','Hijo/a (no vive acá)','Padre/Madre','Nieto/a','Empleado/a','Otro'];
   var _ROLES=['Padre/Madre','Hijo/a','Abuelo/a','Pareja','Hermano/a','Otro'];
   function _intKey(m){ return m.tel || ('nom:'+String(m.nombre||'').toLowerCase().trim()); }
+
+  // ───────── INTEGRANTES QUE NO COMPRAN ─────────
+  // Una casa no es su lista de clientes. Tadeo conoce familias enteras donde
+  // compra una sola persona, y hasta hoy el ERP solo sabia mostrar a quien
+  // aparecia en el Sheets. Estos se guardan en la capa manual del lote
+  // (`composicion.extra`, hoja "Lotes Estancias"), que el backend ya guarda como
+  // JSON opaco — no hizo falta tocar el backend.
+  //
+  // NO entran en ninguna metrica, y no es un olvido: no compraron, asi que
+  // sumarlos al facturado, al ritmo o al estado seria inventar.
+  function _exTel(t){ return String(t||'').replace(/\D/g,'').slice(-10); }
+  function _exNom(n){ return String(n||'').trim().toLowerCase().replace(/\s+/g,' '); }
+  function _extrasDe(h){
+    var ex=(_lotePrev(h).comp||{}).extra;
+    if(!Array.isArray(ex)) return [];
+    // Si con el tiempo esa persona compra, entra sola como miembro real. Gana el
+    // real y el manual deja de dibujarse: queda guardado, sin molestar.
+    var ya={};
+    (h.members||[]).forEach(function(m){
+      if(m.tel) ya['t:'+_exTel(m.tel)]=1;
+      ya['n:'+_exNom(m.nombre)]=1;
+    });
+    return ex.filter(function(e){
+      if(!e || !String(e.n||'').trim()) return false;
+      if(e.tel && ya['t:'+_exTel(e.tel)]) return false;
+      return !ya['n:'+_exNom(e.n)];
+    });
+  }
+  // ¿Ese nombre o telefono ya esta en la casa? Devuelve como esta, o ''.
+  function _extraYaEsta(h, nombre, tel, idSelf){
+    var n=_exNom(nombre), t=_exTel(tel);
+    var choque='';
+    (h.members||[]).forEach(function(m){
+      if(choque) return;
+      if((t && _exTel(m.tel)===t) || _exNom(m.nombre)===n) choque=m.nombre+' ya compra en esta casa';
+    });
+    if(choque) return choque;
+    _extrasDe(h).forEach(function(e){
+      if(choque || e.id===idSelf) return;
+      if((t && _exTel(e.tel)===t) || _exNom(e.n)===n) choque=e.n+' ya esta cargado en esta casa';
+    });
+    return choque;
+  }
   function _intFind(h,ik){ return (h.members||[]).filter(function(m){return _intKey(m)===ik;})[0]; }
   // Resumen de composición (mirror de _compResumen del CRM, usando la taxonomía compartida).
   function _compTxt(comp){
@@ -24837,12 +24890,27 @@ if('serviceWorker' in navigator){
         +'<div class="est-int-s">'+mEnt+' ped · '+money(mFact)+' · últ '+esc(mUlt||'—')+(mProd?' · suele: '+esc(mProd):'')+'</div></div>'
         +'<div style="display:flex;flex-direction:column;gap:5px;align-items:flex-end;flex:0 0 auto">'+tag+'<span class="est-int-edit">editar ›</span></div></div>';
     }
+    var extras=_extrasDe(h);
+    // Los manuales van en la misma lista que los residentes —viven ahi igual—
+    // pero con chapita propia: no tienen pedidos que mostrar.
+    function extraRow(e){
+      var tel=String(e.tel||'').trim(), det=[];
+      if(e.rol) det.push(esc(e.rol));
+      if(e.cumple) det.push('🎂 '+esc(e.cumple));
+      if(e.nota) det.push(esc(e.nota));
+      return '<div class="est-int est-int-tap" onclick="estExtraEdit(\''+esc(h.key)+'\',\''+esc(e.id||'')+'\')">'
+        +'<div style="min-width:0"><div class="est-int-n">'+esc(e.n)+(tel?' <span class="est-tel">'+esc(tel)+'</span>':'')+'</div>'
+        +'<div class="est-int-s">'+(det.length?det.join(' · '):'sin datos cargados')+'</div></div>'
+        +'<div style="display:flex;flex-direction:column;gap:5px;align-items:flex-end;flex:0 0 auto">'
+        +'<span class="est-nocompra-badge">sin compras</span><span class="est-int-edit">editar ›</span></div></div>';
+    }
     var cta=(h.estado==='dormido'||h.estado==='inactivo')?_reactivarBtn(h):'';
     var ov=document.createElement('div'); ov.id='estFichaModal'; ov.className='est-modal-ov';
     var ultLin=(typeof h.diasUltima==='number'&&h.diasUltima>=0&&h.ultimaFecha)?('última compra '+esc(h.ultimaFecha)+' · hace '+h.diasUltima+' días'):'sin compras registradas';
     var resChip=h.reside==='Permanente'?'<span class="est-reschip perm">🏡 Todo el año</span>':(h.reside==='Finde'?'<span class="est-reschip finde">⛱️ Finde</span>':'');
     var duenoLin=h.presta?('<div class="est-modal-sub" style="color:var(--o)">🔑 Casa prestada / de familiares'+(h.dueno?' · dueño: '+esc(h.dueno):'')+'</div>'):'';
     var subLin=esc(h.sub||'')+' · Lote '+esc(h.lote)+' · '+residentes.length+' residente'+(residentes.length===1?'':'s')+(visitas.length?' · '+visitas.length+' visita'+(visitas.length===1?'':'s'):'')
+      +(extras.length?' · '+extras.length+' sin compras':'')
       +(h.familia&&h.titular&&h.titular!==h.familia?' · titular '+esc(h.titular):'');
     var body='<div class="est-modal"><div class="est-modal-h"><div><b>'+esc(_hogNombre(h))+'</b> '+_estBadge(h.estado)+_tipoChip(h.tipo)+' '+resChip
       +'<div class="est-modal-sub" style="color:var(--ink2);font-weight:700">'+ultLin+'</div>'
@@ -24852,8 +24920,13 @@ if('serviceWorker' in navigator){
       +'<button class="est-editbtn" onclick="estHogEdit(\''+esc(h.key)+'\')">✏️ Editar casa</button>'
       +'<button class="est-modal-x" onclick="estFichaClose()">✕</button></div></div>'
       +'<div class="est-fk-row">'+kh+'</div>'+cta
-      +'<div class="est-sec-h" style="margin:15px 0 9px">Residentes <span style="font-weight:700;color:var(--bl);text-transform:none;letter-spacing:0">· tocá para editar rol o marcar visita</span></div>'
-      +'<div class="est-modal-list">'+(residentes.length?residentes.map(function(m){return intRow(m,false);}).join(''):'<div style="font-size:13px;color:var(--gd);padding:6px">Sin residentes con compras registradas.</div>')+'</div>';
+      +'<div class="est-sec-h" style="margin:15px 0 9px"><span>Residentes <span style="font-weight:700;color:var(--bl);text-transform:none;letter-spacing:0">· tocá para editar rol o marcar visita</span></span>'
+        +'<button class="est-sec-add" onclick="estExtraEdit(\''+esc(h.key)+'\',\'\')">+ Integrante</button></div>'
+      +'<div class="est-modal-list">'
+        +(residentes.length?residentes.map(function(m){return intRow(m,false);}).join(''):'')
+        +extras.map(extraRow).join('')
+        +((residentes.length||extras.length)?'':'<div style="font-size:13px;color:var(--gd);padding:6px">Todavía no hay nadie cargado. Agregá a los que conocés, compren o no.</div>')
+      +'</div>';
     if(visitas.length){
       body+='<div class="est-sec-h" style="margin:15px 0 9px">🚶 Visitas <span style="font-weight:700;color:var(--bl);text-transform:none;letter-spacing:0">· pidieron acá pero no viven — no cuentan en la casa</span></div>'
         +'<div class="est-modal-list">'+visitas.map(function(m){return intRow(m,true);}).join('')+'</div>';
@@ -24931,6 +25004,76 @@ if('serviceWorker' in navigator){
     _toast(_intEdit.visita?('🚶 '+_primerNombreSafe(m.nombre)+' marcado como visita'):('✓ '+_primerNombreSafe(m.nombre)+' guardado'));
     _loteSave(h, rec, function(ok){ if(!ok)_toast('⚠️ No se guardó el cambio. Reintentá.'); });
     _estRefreshCasa(_intEdit.key);
+  };
+
+  // ───────── EDITOR DE UN INTEGRANTE QUE NO COMPRA ─────────
+  var _exEdit={key:'',id:'',rol:''};
+  window.estExtraRolPick=function(r){
+    _exEdit.rol=(_exEdit.rol===r?'':r);
+    document.querySelectorAll('#estExtraModal [data-exrol]').forEach(function(b){ b.classList.toggle('on', b.dataset.exrol===_exEdit.rol); });
+  };
+  window.estExtraClose=function(){ var m=document.getElementById('estExtraModal'); if(m)m.remove(); };
+  window.estExtraEdit=function(key,id){
+    var h=_estFindHog(key); if(!h){ _toast('No encontré la casa'); return; }
+    var e=_extrasDe(h).filter(function(x){ return x.id===id; })[0] || {n:'',rol:'',tel:'',cumple:'',nota:''};
+    _exEdit={key:key, id:id||'', rol:e.rol||''};
+    var chips=_ROLES.map(function(r){ return '<button class="est-tsel'+(r===_exEdit.rol?' on':'')+'" data-exrol="'+esc(r)+'" onclick="estExtraRolPick(\''+esc(r)+'\')">'+esc(r)+'</button>'; }).join('');
+    var ov=document.createElement('div'); ov.id='estExtraModal'; ov.className='est-modal-ov';
+    ov.innerHTML='<div class="est-modal" style="max-width:440px">'
+      +'<div class="est-modal-h"><div><b>'+(id?'Editar integrante':'Agregar integrante')+'</b>'
+      +'<div class="est-modal-sub">'+esc(h.sub||'')+' · Lote '+esc(h.lote)+'</div>'
+      +'<div class="est-modal-sub" style="color:var(--bl)">No hace falta que compre. Es para saber quién vive acá.</div></div>'
+      +'<button class="est-modal-x" onclick="estExtraClose()">✕</button></div>'
+      +'<div class="est-ef"><label>Nombre y apellido</label><input id="exNom" type="text" value="'+esc(e.n||'')+'" placeholder="ej. Carolina Goldaracena"></div>'
+      +'<div class="est-ef"><label>Rol en la casa (opcional)</label><div class="est-tsel-row">'+chips+'</div></div>'
+      +'<div class="est-ef"><label>Teléfono (opcional)</label><input id="exTel" type="tel" inputmode="numeric" value="'+esc(e.tel||'')+'" placeholder="1155667788"></div>'
+      +'<div class="est-ef"><label>Cumpleaños (opcional)</label><input id="exCum" type="text" inputmode="numeric" value="'+esc(e.cumple||'')+'" placeholder="dd/mm"></div>'
+      +'<div class="est-ef"><label>Nota (opcional)</label><input id="exNota" type="text" value="'+esc(e.nota||'')+'" placeholder="ej. la que cocina, vegetariana"></div>'
+      +'<button class="btn-guardar-hog" onclick="estExtraSave()">Guardar</button>'
+      +(id?'<button class="est-editbtn" style="width:100%;margin-top:8px;color:#C62828;border-color:#F0C7C7;background:#fff" onclick="estExtraBorrar()">Borrar integrante</button>':'')
+      +'</div>';
+    document.body.appendChild(ov);
+    ov.addEventListener('click',function(ev){ if(ev.target===ov)estExtraClose(); });
+    var i=document.getElementById('exNom'); if(i&&!id)i.focus();
+  };
+  // Guarda dentro de composicion.extra del lote. Un id estable por integrante:
+  // si fuera el indice del array, borrar a uno le cambiaria la identidad al resto.
+  window.estExtraSave=function(){
+    var h=_estFindHog(_exEdit.key); if(!h){ _toast('No encontré la casa'); return; }
+    var v=function(id){ var el=document.getElementById(id); return el?(el.value||'').trim():''; };
+    var nom=v('exNom');
+    if(!nom){ _toast('Poneme al menos el nombre'); return; }
+    var tel=v('exTel').replace(/\D/g,'');
+    var cum=v('exCum');
+    if(cum && !/^\d{1,2}\/\d{1,2}$/.test(cum)){ _toast('El cumpleaños va dd/mm (ej. 04/07)'); return; }
+    var choque=_extraYaEsta(h, nom, tel, _exEdit.id);
+    if(choque){ _toast('⚠️ '+choque); return; }
+    var p=_lotePrev(h), comp=p.comp, prev=p.prev;
+    if(!Array.isArray(comp.extra)) comp.extra=[];
+    var reg={id:_exEdit.id||('x'+Date.now().toString(36)), n:nom, rol:_exEdit.rol||'', tel:tel, cumple:cum, nota:v('exNota')};
+    var i=-1; comp.extra.forEach(function(x,k){ if(x&&x.id===reg.id)i=k; });
+    if(i>=0) comp.extra[i]=reg; else comp.extra.push(reg);
+    var rec={familia:prev.familia||h.familia||'', titular:prev.titular||h.titular||'', tel:prev.tel||'', reside:prev.reside||h.reside||'',
+      notas:prev.notas||'', estadoContacto:prev.estadoContacto||'', sobreEstado:prev.sobreEstado||'', sobreNota:prev.sobreNota||'', composicion:comp};
+    estExtraClose();
+    _toast('✓ '+_primerNombreSafe(nom)+(_exEdit.id?' guardado':' agregado a la casa'));
+    _loteSave(h, rec, function(ok){ if(!ok)_toast('⚠️ No se guardó. Reintentá.'); });
+    _estRefreshCasa(_exEdit.key);
+  };
+  window.estExtraBorrar=function(){
+    var h=_estFindHog(_exEdit.key); if(!h || !_exEdit.id){ estExtraClose(); return; }
+    var p=_lotePrev(h), comp=p.comp, prev=p.prev;
+    var quien='';
+    comp.extra=(Array.isArray(comp.extra)?comp.extra:[]).filter(function(x){
+      if(x && x.id===_exEdit.id){ quien=x.n; return false; }
+      return true;
+    });
+    var rec={familia:prev.familia||h.familia||'', titular:prev.titular||h.titular||'', tel:prev.tel||'', reside:prev.reside||h.reside||'',
+      notas:prev.notas||'', estadoContacto:prev.estadoContacto||'', sobreEstado:prev.sobreEstado||'', sobreNota:prev.sobreNota||'', composicion:comp};
+    estExtraClose();
+    _toast('Saqué a '+_primerNombreSafe(quien||'ese integrante')+' de la casa');
+    _loteSave(h, rec, function(ok){ if(!ok)_toast('⚠️ No se guardó. Reintentá.'); });
+    _estRefreshCasa(_exEdit.key);
   };
 
   // ───────── EDITOR DE LA CASA (apellido · categoría · dueño/vive · residencia · titular · notas) ─────────
