@@ -88,7 +88,13 @@ const PREPARAR_PRUEBA = `<script>
   try{
     localStorage.setItem('maleu_panel_session', JSON.stringify({
       usuario:'prueba', nombre:'Modo Prueba', rol:'admin',
-      tabs:['inicio','pedidos','pedidoshome','caja','pagos','ruta','busqueda','miportal','bbdd','ventas','ajustes'],
+      /* Van TODAS las tabs de Maleu a proposito: una que falte no se puede
+         revisar en localhost — el ERP la marca role-hidden y queda en display:none,
+         asi que la pantalla sale en blanco y parece un bug del ERP. Paso con
+         'estancias' el 2/9/2026. */
+      tabs:['inicio','ventas','planificacion','pedidos','pedidoshome','mireparto','caja','egresos',
+            'stock','metricas','resumen','pagos','ruta','busqueda','miportal','bbdd','estancias',
+            'proveedores','ajustes'],
       token:'modo-prueba', exp: Date.now()+86400000
     }));
     localStorage.setItem('maleu_token','modo-prueba');

@@ -962,6 +962,11 @@ body{font-family:'Inter',-apple-system,'Segoe UI',system-ui,sans-serif;backgroun
 .sem-prog-bar{height:8px;background:var(--cd);border-radius:5px;overflow:hidden}
 .sem-prog-fill{height:100%;background:linear-gradient(90deg,#43A047,#2E7D32);border-radius:5px;transition:width .4s ease}
 .sem-prog-hint{font-size:11px;color:var(--ink3);margin-top:7px}
+.sem-band-camp .hoy-band-d{margin-left:0}
+.sem-band-tog{margin-left:auto;display:inline-flex;align-items:center;gap:6px;background:var(--b);border:1px solid var(--border);border-radius:6px;padding:6px 11px;font-size:11px;font-weight:700;color:var(--ink2);cursor:pointer;min-height:32px}
+.sem-band-tog:hover{background:var(--cd)}
+.sem-band-tog .car{display:inline-block;transition:transform .18s ease}
+.hoy-band.abierta .sem-band-tog .car{transform:rotate(180deg)}
 
 /* ── Segmentos (campañas WATI) ── */
 .seg-sub-toggle{display:flex;gap:5px}
@@ -1647,6 +1652,15 @@ body.sb-open .sb-toggle .sb-toggle-lbl{display:inline}
   /* height:auto — el contenedor tiene 30px fijos en escritorio y recortaría el
      botón de 44px de abajo. */
   .hdr-actions{margin-left:auto;gap:4px;height:auto}
+  /* El header se pasaba 23px de la pantalla desde que entro el switch de negocio
+     (1/9/2026): sus 149px son el 40% del ancho de un iPhone. En el celular el
+     boton dice "Diagonal" a secas — con dos opciones a la vista, "Carnes" no
+     desambigua nada. Ahorra 35px y el header entra con lugar de sobra.
+     min-width:0 es la red: si manana entra un tercer negocio y vuelve a no
+     entrar, el switch se comprime en vez de empujar la pantalla de costado. */
+  .hdr-neg-larga{display:none}
+  .hdr-neg{min-width:0}
+  .hdr-neg button{min-width:0;overflow:hidden;text-overflow:ellipsis}
   .hdr-actions .hdr-btn{display:none !important}
   /* El botón Actualizar pasa a modo compacto en mobile: solo ↻ + HH:MM.
      44px de alto, no 34: es el ÚNICO botón de actualizar que se ve sin
@@ -3518,7 +3532,7 @@ body.role-single .statusbar{font-size:11px}
   <img class="hdr-wordmark" src="/img/logo-white.png" alt="maleu" onclick="go('inicio')">
   <div class="hdr-neg" id="hdrNeg">
     <button type="button" data-neg="maleu" class="on" onclick="setNegocio('maleu')">Maleu</button>
-    <button type="button" data-neg="diagonal" onclick="setNegocio('diagonal')">Diagonal Carnes</button>
+    <button type="button" data-neg="diagonal" onclick="setNegocio('diagonal')">Diagonal<span class="hdr-neg-larga"> Carnes</span></button>
   </div>
   <span class="hdr-title" id="hdrTitle">Inicio</span>
   <span class="hdr-bc" id="hdrBc">Resumen ejecutivo</span>
@@ -19556,6 +19570,61 @@ if('serviceWorker' in navigator){
     });
   }
 
+  // -- Un solo motor de casas para Hoy / Plan semana / Segmentos -------------
+  // Hasta el 2/9/2026 esta tab tenia DOS agrupadores y los numeros no cerraban
+  // entre sub-tabs: Casas/Sub-barrios/Mapa armaban la casa con _hogBuild (+ los
+  // merges de la hoja Hogares Merge, sin visitantes y solo con los campos Home),
+  // y Hoy/Plan/Segmentos con _crmUnidadesHoy (todos los canales, sin merges, y
+  // agrupando por lote solo si canalDom==='Home'). Ahora Estancias sale del
+  // mismo lado que Casas; _crmUnidadesHoy queda para los demas barrios, que
+  // _hogBuild no cubre y Hoy si muestra (banda "Dormidos - otros barrios").
+  function _crmCasasMergeadas(){
+    var raw = _hogBuild();
+    // Los merges viven en el <script> de la tab Estancias, que expone el
+    // aplicador. Si todavia no cargo, seguimos sin merges: el conteo queda como
+    // estaba antes, que es preferible a un cockpit vacio.
+    try { if (typeof window.estCasasMergeadas === 'function') return window.estCasasMergeadas(raw); } catch(e){}
+    return raw;
+  }
+
+  // Le pone a una casa lo que las bandas esperan de una "unidad": identidad,
+  // barrio, cumpleaños y las keys/tels con las que se cruza la bitacora (F3).
+  function _casaComoUnidad(h){
+    h.id = 'H|' + h.key;
+    h.isLote = true;
+    h.barrio = 'Estancias del Pilar';
+    h.subBarrio = h.sub;
+    h.nombre = (h.contacto && h.contacto.nombre) || '';
+    var resid = h.members.filter(function(m){ return !m._visita; });
+    if (!resid.length) resid = h.members;      // casa que solo tiene visitas
+    // Solo RESIDENTES: un contacto con la visita no puede silenciar a la casa
+    // ni contarla como trabajada. Las visitas siguen visibles en la ficha.
+    h.keys = resid.map(function(m){ return m.key; }).filter(Boolean);
+    h.tels = resid.map(function(m){ return m.tel; }).filter(Boolean);
+    h.cumpleDias = null; h.cumpleMember = null;
+    resid.forEach(function(m){
+      var d = _crmDiasHastaCumple(m.cumple);
+      if (d !== null && (h.cumpleDias === null || d < h.cumpleDias)){ h.cumpleDias = d; h.cumpleMember = m; }
+    });
+    return h;
+  }
+
+  // El universo de Estancias del Pilar: las casas + los clientes que _hogBuild
+  // no puede ubicar (sin lote, o marcados "no ubicar" en su ficha). Los sueltos
+  // van igual y marcados, para que nadie con deuda o cumple desaparezca de la
+  // pantalla por no tener la direccion cargada.
+  function _crmUnidadesEstancias(){
+    var casas = (_crmCasasMergeadas().hogares || []).map(_casaComoUnidad);
+    var dentro = {};
+    casas.forEach(function(h){ (h.members||[]).forEach(function(m){ if (m.key) dentro[m.key] = 1; }); });
+    var sueltos = _crmUnidadesHoy().filter(function(u){
+      if (_crmNormName(u.barrio) !== 'estancias del pilar') return false;
+      return u.members.every(function(m){ return !dentro[m.key]; });
+    });
+    sueltos.forEach(function(u){ u.sinUbicar = true; });
+    return casas.concat(sueltos);
+  }
+
   // F3: estado relacional de una unidad a partir de su interacción más reciente.
   // Devuelve {last, prox, diasDesde, diasHasta} o null si nunca la contactaste.
   function _hoyEstadoInter(u){
@@ -19580,8 +19649,12 @@ if('serviceWorker' in navigator){
   // null        = Clubes / Red / etc → no nos interesan, fuera del cockpit.
   function _hoyZonaDormido(u){
     var bar = _crmNormName(u.barrio||'');
+    // Una CASA de Estancias es del cockpit siempre, sin mirar el canal. Mirar
+    // canalDom dejaba afuera justo a los multicanal: Eduardo Del Piano compra
+    // $434.320 en Home y ademas por Clubes, y como Clubes es su canal dominante
+    // su casa (El Recuerdo 42) no entraba en ninguna banda.
+    if (bar === 'estancias del pilar') return 'estancias';
     var canal = (u.contacto && u.contacto.canalDom) || '';
-    if (canal === 'Home' && bar === 'estancias del pilar') return 'estancias';
     if (canal === 'Home' && (bar === 'los alcanfores' || bar === 'estancias del rio')) return 'otros';
     if (canal === 'Pilar') return 'otros';
     return null;
@@ -19624,7 +19697,10 @@ if('serviceWorker' in navigator){
     var hoy = new Date();
     var fe = el('hoyFecha'); if (fe) fe.textContent = '· '+DIAS[hoy.getDay()]+' '+hoy.getDate()+' '+MES[hoy.getMonth()]+' '+hoy.getFullYear();
 
-    var unidades = _crmUnidadesHoy();
+    // Estancias con el motor de casas (el mismo que Casas/Sub-barrios/Mapa); los
+    // demas barrios por persona, que es lo que alimenta "Dormidos - otros barrios".
+    var unidades = _crmUnidadesEstancias().concat(
+      _crmUnidadesHoy().filter(function(u){ return _crmNormName(u.barrio) !== 'estancias del pilar'; }));
     var bandas = {seguimiento:[], deuda:[], cumple:[], dormido:[], dormidoOtros:[], reactivable:[], nuevo:[]};
     var silenciados = 0;  // contactados hace poco / con seguimiento futuro — ocultos a propósito
     unidades.forEach(function(u){
@@ -20017,6 +20093,15 @@ if('serviceWorker' in navigator){
     return 'Hola '+n+'!';
   }
 
+  // Las bandas de campania arrancan plegadas y el estado sobrevive al repintado
+  // (renderCrmSemana se vuelve a llamar sola cuando entran datos frescos).
+  var SEM_CAMP = {dormido:1, reactivable:1};
+  var _semPlegadas = {dormido:true, reactivable:true};
+  window.semTogglePlegada = function(k){
+    _semPlegadas[k] = !_semPlegadas[k];
+    renderCrmSemana();
+  };
+
   window.renderCrmSemana = function(){
     if (!crmClientes) return;
     var DIAS = ['Domingo','Lunes','Martes','Miercoles','Jueves','Viernes','Sabado'];
@@ -20027,7 +20112,7 @@ if('serviceWorker' in navigator){
     // Universo: SOLO Estancias del Pilar (decisión de Tadeo 18/06 — el resto de
     // barrios/zonas no entran en el seguimiento personalizado). Es donde el lote
     // es la unidad y el ritmo de recompra aplica.
-    var unidades = _crmUnidadesHoy().filter(function(u){ return _crmNormName(u.barrio) === 'estancias del pilar'; });
+    var unidades = _crmUnidadesEstancias();
 
     var bandas = {recompra:[], riesgo:[], deuda:[], cumple:[], segunda:[], dormido:[], reactivable:[]};
     var trabajados = 0;  // ya contactados esta semana o con seguimiento agendado
@@ -20059,46 +20144,59 @@ if('serviceWorker' in navigator){
       {k:'deuda', ic:'🔴', t:'Deudas a cobrar', d:'Con saldo pendiente'},
       {k:'cumple', ic:'🎂', t:'Cumpleanos', d:'Proximos 7 dias'},
       {k:'segunda', ic:'⚪', t:'Segunda compra', d:'Pidieron una vez — convertir en habito'},
-      {k:'dormido', ic:'🟠', t:'Dormidos', d:'No compran hace mas de '+crmSemUmbral+' dias'},
-      {k:'reactivable', ic:'🟡', t:'Reactivables', d:'Probaron una vez y no volvieron'}
+      {k:'dormido', ic:'🟠', t:'Dormidos', d:'No compran hace mas de '+crmSemUmbral+' dias — van por campania desde Segmentos'},
+      {k:'reactivable', ic:'🟡', t:'Reactivables', d:'Probaron una vez y no volvieron — van por campania desde Segmentos'}
     ];
 
-    var pendientes = defs.reduce(function(s,def){ return s + bandas[def.k].length; }, 0);
-    var totalPlan = pendientes + trabajados;
+    // Accionable = lo que se trabaja UNA POR UNA esta semana. Dormidos y
+    // reactivables no: salen por campania de WATI desde Segmentos, asi que la
+    // barra de arriba no los cuenta y sus bandas arrancan plegadas. Cuando
+    // contaban todo, el recorrido decia 152 casas y no se cerraba nunca.
+    var accionables = defs.reduce(function(s,def){ return s + (SEM_CAMP[def.k] ? 0 : bandas[def.k].length); }, 0);
+    var campania    = defs.reduce(function(s,def){ return s + (SEM_CAMP[def.k] ? bandas[def.k].length : 0); }, 0);
+    var totalPlan   = accionables + trabajados;
 
-    if (totalPlan === 0){
-      el('semList').innerHTML = '<div class="hoy-empty"><div class="hoy-empty-ic">✅</div><p>Estancias al dia. No hay hogares para trabajar esta semana.</p></div>';
+    if (totalPlan === 0 && campania === 0){
+      el('semList').innerHTML = '<div class="hoy-empty"><div class="hoy-empty-ic">✅</div><p>Estancias al dia. No hay casas para trabajar esta semana.</p></div>';
       return;
     }
 
-    var pct = totalPlan>0 ? Math.round(trabajados/totalPlan*100) : 0;
+    var pct = totalPlan>0 ? Math.round(trabajados/totalPlan*100) : 100;
     var prog = '<div class="sem-prog">'
-      + '<div class="sem-prog-top"><span class="sem-prog-lbl">Recorrido de la semana</span><span class="sem-prog-n">'+trabajados+' / '+totalPlan+' hogares trabajados</span></div>'
+      + '<div class="sem-prog-top"><span class="sem-prog-lbl">Recorrido de la semana</span><span class="sem-prog-n">'+trabajados+' / '+totalPlan+' casas trabajadas</span></div>'
       + '<div class="sem-prog-bar"><div class="sem-prog-fill" style="width:'+pct+'%"></div></div>'
-      + '<div class="sem-prog-hint">'+pendientes+' '+(pendientes===1?'hogar te espera':'hogares te esperan')+' &middot; cada contacto que registres se va tachando solo</div>'
-    + '</div>';
+      + '<div class="sem-prog-hint">'+accionables+' '+(accionables===1?'casa te espera':'casas te esperan')+' &middot; cada contacto que registres se va tachando solo'
+      + (campania ? ' &middot; '+campania+' mas van por campania' : '')
+    + '</div></div>';
 
-    if (pendientes === 0){
-      el('semList').innerHTML = prog + '<div class="hoy-empty"><div class="hoy-empty-ic">🎉</div><p>Cerraste el recorrido de Estancias de esta semana. Bien ahi.</p></div>';
-      return;
-    }
-
-    var html = prog + defs.filter(function(def){ return bandas[def.k].length; }).map(function(def){
-      var rows = bandas[def.k].map(function(u){ return _semRow(def.k, u); }).join('');
-      return '<div class="hoy-band hoy-band-'+def.k+'">'
-        + '<div class="hoy-band-h"><span class="hoy-band-ic">'+def.ic+'</span><span class="hoy-band-t">'+def.t+'</span><span class="hoy-band-n">'+bandas[def.k].length+'</span><span class="hoy-band-d">'+def.d+'</span></div>'
-        + '<div class="hoy-band-rows">'+rows+'</div>'
+    var bandasHtml = defs.filter(function(def){ return bandas[def.k].length; }).map(function(def){
+      var camp = !!SEM_CAMP[def.k];
+      var plegada = camp && _semPlegadas[def.k];
+      var tog = camp
+        ? '<button class="sem-band-tog" onclick="semTogglePlegada(\''+def.k+'\')">'
+          + (plegada ? 'Ver las '+bandas[def.k].length : 'Ocultar')
+          + ' <span class="car">▾</span></button>'
+        : '';
+      return '<div class="hoy-band hoy-band-'+def.k+(camp?' sem-band-camp':'')+(plegada?'':' abierta')+'">'
+        + '<div class="hoy-band-h"><span class="hoy-band-ic">'+def.ic+'</span><span class="hoy-band-t">'+def.t+'</span><span class="hoy-band-n">'+bandas[def.k].length+'</span><span class="hoy-band-d">'+def.d+'</span>'+tog+'</div>'
+        + (plegada ? '' : '<div class="hoy-band-rows">'+bandas[def.k].map(function(u){ return _semRow(def.k, u); }).join('')+'</div>')
       + '</div>';
     }).join('');
-    el('semList').innerHTML = html;
+
+    var cerrado = (accionables === 0)
+      ? '<div class="hoy-empty"><div class="hoy-empty-ic">🎉</div><p>Cerraste el recorrido de Estancias de esta semana. Bien ahi.</p></div>'
+      : '';
+    el('semList').innerHTML = prog + cerrado + bandasHtml;
   };
+
 
   function _semRow(jugada, u){
     var c = u.contacto;
     var keyEnc = encodeURIComponent(c.key);
     var r = u._ritmo;
     var sub = [];
-    sub.push((u.subBarrio?escHtml(u.subBarrio)+' &middot; ':'')+(u.lote?'Lote '+escHtml(u.lote):'Home'));
+    sub.push(u.sinUbicar ? 'sin direccion cargada'
+      : (u.subBarrio?escHtml(u.subBarrio)+' &middot; ':'')+(u.lote?'Lote '+escHtml(u.lote):'Home'));
     if (r.freq) sub.push('pide cada '+r.freq+'d &middot; van '+(u.diasUltima>=0?u.diasUltima+'d':'-'));
     else if (u.ultimaFecha) sub.push('ult: '+escHtml(u.ultimaFecha)+(u.diasUltima>=0?' (hace '+u.diasUltima+'d)':''));
     if (r.prodTop) sub.push('suele: '+escHtml(_semProdNice(r.prodTop)));
@@ -20173,14 +20271,15 @@ if('serviceWorker' in navigator){
 
   // Hogares de Estancias del Pilar con jugada conductual + categorías + estado de campaña.
   function _estHouseholds(){
-    var us = _crmUnidadesHoy().filter(function(u){ return _crmNormName(u.barrio)==='estancias del pilar'; });
+    var us = _crmUnidadesEstancias();
     us.forEach(function(u){
       u._ritmo = _semRitmo(u);
       var j = _semJugada(u);
       u._activo = (u.diasUltima>=0 && u.diasUltima<=crmSemUmbral);
       u._jug = j || (u._activo ? 'al_dia' : 'sin');
       var cset = {};
-      u.members.forEach(function(m){ (m.cats||[]).forEach(function(c){ cset[c]=1; }); });
+      // Las visitas no cuentan: lo que probo la casa es lo que probaron los que viven ahi.
+      u.members.forEach(function(m){ if (m._visita) return; (m.cats||[]).forEach(function(c){ cset[c]=1; }); });
       u._cats = cset;
       u._camp = _segCampania(u);
       u._reservado = !!(crmSegExcluirDias > 0 && u._camp && u._camp.dd != null && u._camp.dd < crmSegExcluirDias);
@@ -23591,6 +23690,12 @@ if('serviceWorker' in navigator){
     return { hogares: hogares.filter(function(h){return !absorbed[h.key];}), prospectos: raw.prospectos||[] };
   }
   function _mergesCache(){ try{ return JSON.parse(localStorage.getItem('maleu_est_merges_v1')||'[]')||[]; }catch(e){ return []; } }
+  // El CRM (otro <script>) arma las casas de Hoy/Plan/Segmentos con _hogBuild y
+  // necesita los MISMOS merges que Casas, o los conteos no coinciden. No puede
+  // llamar a _applyMerges directo: vive en este scope. Se lo exponemos.
+  window.estCasasMergeadas = function(raw){
+    try { return _applyMerges(raw, _estMerges || _mergesCache()); } catch(e){ return raw; }
+  };
   // Cache DURABLE del build ya mergeado, para pintar Estancias al instante en cada
   // refresh (aunque falte la cache de clientes). Se guarda solo si tiene hogares reales.
   function _estHogCacheSave(hog){ try{ if(hog&&hog.hogares&&hog.hogares.length){ var w=(typeof window._lsSetSafe==='function')?window._lsSetSafe:function(k,v){localStorage.setItem(k,v);}; w('maleu_est_built_v1', JSON.stringify(hog)); } }catch(e){} }
