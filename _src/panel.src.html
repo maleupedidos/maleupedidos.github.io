@@ -1003,6 +1003,13 @@ body{font-family:'Inter',-apple-system,'Segoe UI',system-ui,sans-serif;backgroun
 /* ── F3: Bitácora de interacciones ── */
 .hoy-band-seguimiento{border-left-color:#5E35B1}
 .hoy-band-esperando{border-left-color:#00897B}
+.hoy-band-dormidoOtros{border-left-color:#B0641E}
+.crm-busq{position:relative;margin:10px 0 14px}
+.crm-busq input{width:100%;box-sizing:border-box;padding:11px 34px 11px 36px;border:1px solid var(--border);border-radius:9px;font-size:14px;font-family:inherit;color:var(--ink);background:#fff;min-height:44px}
+.crm-busq input:focus{outline:none;border-color:var(--o)}
+.crm-busq .lupa{position:absolute;left:12px;top:50%;transform:translateY(-50%);font-size:14px;opacity:.55;pointer-events:none}
+.crm-busq .x{position:absolute;right:6px;top:50%;transform:translateY(-50%);border:none;background:none;font-size:17px;color:var(--ink3);cursor:pointer;padding:6px 9px;line-height:1}
+.crm-busq-n{font-size:11.5px;color:var(--ink3);margin:-8px 0 12px}
 .hoy-act-esc{background:#E0F2F1;border-color:#B2DFDB;color:#00695C}
 .hoy-act-esc:hover{background:#B2DFDB}
 .hoy-act-anot{background:#fff;border-color:var(--border);color:var(--ink2)}
@@ -3187,13 +3194,10 @@ body.role-single .statusbar{font-size:11px}
   <div class="est-sub" id="est-hoy">
     <div class="hoy-head">
       <div class="hoy-title">Tu d&iacute;a <span id="hoyFecha" class="hoy-fecha"></span></div>
-      <div class="hoy-thresh">
-        <span>Dormido tras</span>
-        <button class="hoy-thresh-chip" data-d="21" onclick="setHoyUmbral(21)">21d</button>
-        <button class="hoy-thresh-chip on" data-d="28" onclick="setHoyUmbral(28)">28d</button>
-        <button class="hoy-thresh-chip" data-d="35" onclick="setHoyUmbral(35)">35d</button>
-      </div>
     </div>
+    <div class="crm-busq"><span class="lupa">&#128269;</span>
+      <input id="hoyBusq" type="search" autocomplete="off" placeholder="Buscar una casa o persona&hellip;" oninput="crmHoyBuscar(this.value)">
+      <button class="x" onclick="crmHoyBuscar('',1)" title="Limpiar">&times;</button></div>
     <div id="hoyList"><div class="loading">Cargando tu d&iacute;a...</div></div>
   </div>
 
@@ -3208,6 +3212,9 @@ body.role-single .statusbar{font-size:11px}
         <button class="hoy-thresh-chip" data-d="35" onclick="setSemUmbral(35)">35d</button>
       </div>
     </div>
+    <div class="crm-busq"><span class="lupa">&#128269;</span>
+      <input id="semBusq" type="search" autocomplete="off" placeholder="Buscar una casa o persona&hellip;" oninput="crmSemBuscar(this.value)">
+      <button class="x" onclick="crmSemBuscar('',1)" title="Limpiar">&times;</button></div>
     <div id="semList"><div class="loading">Calculando el plan...</div></div>
   </div>
 
@@ -17221,11 +17228,6 @@ if('serviceWorker' in navigator){
   }
 
   // ════════ F1: COCKPIT "HOY" ════════
-  window.setHoyUmbral = function(d){
-    crmHoyUmbral = d;
-    document.querySelectorAll('.hoy-thresh-chip').forEach(function(b){ b.classList.toggle('on', String(b.dataset.d)===String(d)); });
-    renderCrmHoy();
-  };
 
   // Dias hasta el proximo cumpleanos (0 = hoy), o null si la fecha no es valida.
   function _crmDiasHastaCumple(cumple){
@@ -17380,10 +17382,15 @@ if('serviceWorker' in navigator){
   }
 
   // Banda de mayor prioridad para una unidad, o null si no requiere accion hoy.
-  function _hoyBandaUnit(u){
+  // El umbral entra por parametro para que "dormido" se defina UNA sola vez: la
+  // banda de otros barrios ahora vive en Plan semana y usa el umbral de esa
+  // pantalla. Duplicar la condicion con otro umbral era garantia de que un dia
+  // dijeran cosas distintas.
+  function _hoyBandaUnit(u, umbral){
+    var lim = (typeof umbral === 'number') ? umbral : crmHoyUmbral;
     if (u.deuda > 0) return 'deuda';
     if (u.cumpleDias !== null && u.cumpleDias <= 7) return 'cumple';
-    if (u.diasUltima >= 0 && u.diasUltima > crmHoyUmbral){
+    if (u.diasUltima >= 0 && u.diasUltima > lim){
       if (u.entregados >= 2){
         // "Lotes dormidos" es SOLO Estancias del Pilar. Pilar/Alcanfores/Río van
         // a una banda aparte; Clubes/Red quedan fuera del cockpit (no interesan).
@@ -17392,8 +17399,73 @@ if('serviceWorker' in navigator){
       }
       if (u.entregados === 1) return 'reactivable';
     }
-    if (u.diasUltima >= 0 && u.diasUltima <= crmHoyUmbral && u.entregados <= 2) return 'nuevo';
+    if (u.diasUltima >= 0 && u.diasUltima <= lim && u.entregados <= 2) return 'nuevo';
     return null;
+  }
+
+  // Los dormidos de los OTROS barrios (Pilara, Los Alcanfores, Estancias del Río,
+  // Nordelta, San Fermín…). Plan semana filtra solo Estancias del Pilar, así que
+  // hasta el 2/9/2026 esta era la única pantalla donde aparecían. Se mudan allá,
+  // en su propia banda y plegadas, porque ahí el lote no es la unidad y el
+  // seguimiento por casa no aplica igual.
+  function _dormidosOtrosBarrios(){
+    return _crmUnidadesHoy().filter(function(u){
+      if (_crmNormName(u.barrio) === 'estancias del pilar') return false;
+      var est = _hoyEstadoInter(u); u._inter = est;
+      if (est){
+        if (_esperandoRespuesta(u)) return false;
+        if (est.diasHasta !== null) return false;
+        if (est.diasDesde !== null && est.diasDesde <= CRM_SILENCE_DIAS) return false;
+      }
+      if (_hoyBandaUnit(u, crmSemUmbral) !== 'dormidoOtros') return false;
+      u._ritmo = _semRitmo(u);
+      return true;
+    });
+  }
+
+  // ── El buscador de las dos listas ─────────────────────────────────────────
+  // El input vive en el markup, FUERA de la lista: si se redibujara con cada
+  // tecla perdería el foco en la mitad de una palabra.
+  var crmHoyBusq = '', crmSemBusq = '';
+  function _busqCoincide(u, q){
+    if (!q) return true;
+    // Un numero corto es un LOTE, no un telefono. Buscar "116" contra los telefonos
+    // devolvia 29 casas (cualquiera cuyo numero tuviera 116 adentro) y el buscador
+    // no servia para lo que uno lo usa: encontrar el lote 116.
+    var soloDigitos = /^\d+$/.test(q);
+    var hay = [u.nombre, u.subBarrio, u.barrio];
+    (u.members || []).forEach(function(m){ hay.push(m.nombre); });
+    if (soloDigitos && q.length <= 4){
+      // lote exacto (el "12" no puede traer el 120, el 121 y el 312)
+      var lote = _crmNormName(String(u.lote || ''));
+      if (lote && (lote === q || lote.split(/[^0-9a-z]+/).indexOf(q) >= 0)) return true;
+    } else {
+      hay.push(u.lote);
+      (u.members || []).forEach(function(m){ hay.push(m.tel); });
+      if (u.contacto) hay.push(u.contacto.tel);
+    }
+    return _crmNormName(hay.join(' ')).indexOf(q) >= 0;
+  }
+  function _busqFiltrar(bandas, q){
+    if (!q) return bandas;
+    var out = {};
+    Object.keys(bandas).forEach(function(k){ out[k] = bandas[k].filter(function(u){ return _busqCoincide(u, q); }); });
+    return out;
+  }
+  window.crmHoyBuscar = function(v, limpiar){
+    crmHoyBusq = _crmNormName(String(v || ''));
+    if (limpiar && el('hoyBusq')) el('hoyBusq').value = '';
+    renderCrmHoy();
+  };
+  window.crmSemBuscar = function(v, limpiar){
+    crmSemBusq = _crmNormName(String(v || ''));
+    if (limpiar && el('semBusq')) el('semBusq').value = '';
+    renderCrmSemana();
+  };
+  function _busqAviso(q, n, total){
+    if (!q) return '';
+    return '<div class="crm-busq-n">' + (n ? n + ' de ' + total + ' coinciden con lo que buscás'
+      : 'Nada coincide con lo que buscás. Puede estar al día — probá en la otra pantalla.') + '</div>';
   }
 
   // Mensaje sugerido por banda — voz de marca, sin palabras prohibidas.
@@ -17416,11 +17488,17 @@ if('serviceWorker' in navigator){
     var hoy = new Date();
     var fe = el('hoyFecha'); if (fe) fe.textContent = '· '+DIAS[hoy.getDay()]+' '+hoy.getDate()+' '+MES[hoy.getMonth()]+' '+hoy.getFullYear();
 
-    // Estancias con el motor de casas (el mismo que Casas/Sub-barrios/Mapa); los
-    // demas barrios por persona, que es lo que alimenta "Dormidos - otros barrios".
-    var unidades = _crmUnidadesEstancias().concat(
-      _crmUnidadesHoy().filter(function(u){ return _crmNormName(u.barrio) !== 'estancias del pilar'; }));
-    var bandas = {esperando:[], seguimiento:[], deuda:[], cumple:[], dormido:[], dormidoOtros:[], reactivable:[], nuevo:[]};
+    // SOLO Estancias del Pilar. Antes esto concatenaba los demás barrios, que
+    // estaban acá únicamente para la banda "Dormidos · otros barrios" — y de paso
+    // metían en Deudas a clientes de Red de Ayres del Pilar, La Escondida y
+    // Highland, que no son de esta tab. Esa banda se mudó a 🗓️ Plan semana.
+    var unidades = _crmUnidadesEstancias();
+    // ☀️ Hoy = lo que estoy EN DEUDA de contactar. Solo compromisos: algo que dije
+    // que iba a hacer, plata que me deben, un cumpleaños. Lo que se decide por
+    // ritmo o antigüedad (riesgo, recompra, segunda, dormidos, reactivables) es
+    // 🗓️ Plan semana. Hasta el 2/9/2026 cuatro de las siete bandas estaban en las
+    // dos pantallas y no se sabía en cuál pararse.
+    var bandas = {esperando:[], seguimiento:[], deuda:[], cumple:[]};
     var silenciados = 0;  // contactados hace poco / con seguimiento futuro — ocultos a propósito
     unidades.forEach(function(u){
       // F3: la bitácora manda por encima de las bandas automáticas.
@@ -17437,45 +17515,45 @@ if('serviceWorker' in navigator){
         // Contactado hace poco y sin plan → no escribir de nuevo todavía.
         if (est.diasDesde !== null && est.diasDesde <= CRM_SILENCE_DIAS){ silenciados++; return; }
       }
-      var b = _hoyBandaUnit(u); if (b) bandas[b].push(u);
+      var b = _hoyBandaUnit(u);
+      if (b === 'deuda' || b === 'cumple') bandas[b].push(u);
     });
     // Primero los que hace más que esperan: son los que se están enfriando.
     bandas.esperando.sort(function(a,b){ return (b._inter.diasDesde||0) - (a._inter.diasDesde||0); });
     bandas.seguimiento.sort(function(a,b){ return (a._inter.diasHasta) - (b._inter.diasHasta); });
     bandas.deuda.sort(function(a,b){ return b.deuda - a.deuda; });
     bandas.cumple.sort(function(a,b){ return a.cumpleDias - b.cumpleDias; });
-    bandas.dormido.sort(function(a,b){ return b.facturado - a.facturado; });
-    bandas.dormidoOtros.sort(function(a,b){ return b.facturado - a.facturado; });
-    bandas.reactivable.sort(function(a,b){ return b.facturado - a.facturado; });
-    bandas.nuevo.sort(function(a,b){ return a.diasUltima - b.diasUltima; });
 
     var defs = [
       {k:'esperando', ic:'⏳', t:'Esperando respuesta', d:'Les escribiste y todavía no sabés — marcá el desenlace cuando te contesten'},
       {k:'seguimiento', ic:'📌', t:'Seguimientos de hoy', d:'Quedaron en algo — toca cumplir tu palabra'},
       {k:'deuda', ic:'🔴', t:'Deudas a cobrar', d:'Con saldo pendiente'},
-      {k:'cumple', ic:'🟢', t:'Cumpleanos', d:'Proximos 7 dias — excusa perfecta para aparecer'},
-      {k:'dormido', ic:'🟠', t:'Lotes dormidos', d:'Lotes de Estancias del Pilar sin comprar hace mas de '+crmHoyUmbral+' dias'},
-      {k:'dormidoOtros', ic:'🟤', t:'Dormidos · otros barrios', d:'Pilar, Los Alcanfores y Estancias del Rio — +'+crmHoyUmbral+' dias'},
-      {k:'reactivable', ic:'🟡', t:'Reactivables', d:'Compraron una vez y no volvieron'},
-      {k:'nuevo', ic:'⚪', t:'Nuevos sin clasificar', d:'Caras nuevas para fidelizar'}
+      {k:'cumple', ic:'🎂', t:'Cumpleaños', d:'Próximos 7 días — excusa perfecta para aparecer'}
     ];
 
     var total = defs.reduce(function(s,def){ return s + bandas[def.k].length; }, 0);
+    // Que no haya nada NO es un error: quiere decir que no le debés un mensaje a
+    // nadie. Por eso lo dice, y de paso dice dónde está el otro trabajo.
     if (total === 0) {
       var okMsg = silenciados > 0
-        ? 'Estas al dia. '+silenciados+' '+(silenciados===1?'contacto reciente esta':'contactos recientes estan')+' en seguimiento — nada nuevo para hacer hoy.'
-        : 'Estas al dia. No hay acciones pendientes hoy.';
-      el('hoyList').innerHTML = '<div class="hoy-empty"><div class="hoy-empty-ic">✅</div><p>'+escHtml(okMsg)+'</p></div>';
+        ? 'Estás al día. '+silenciados+' '+(silenciados===1?'contacto reciente está':'contactos recientes están')+' en seguimiento.'
+        : 'Estás al día. No le debés un mensaje a nadie.';
+      el('hoyList').innerHTML = '<div class="hoy-empty"><div class="hoy-empty-ic">✅</div><p>'+escHtml(okMsg)+'</p>'
+        + '<p style="font-size:12.5px;color:var(--ink3);margin-top:8px">A qui&eacute;n le toca por su ritmo est&aacute; en 🗓️ Plan semana.</p></div>';
       return;
     }
 
-    var resumen = '<div class="hoy-resumen">'+total+' '+(total===1?'accion':'acciones')+' para hoy &middot; unidad = lote en Estancias'
+    // El buscador filtra lo que se DIBUJA. Los conteos de arriba siguen siendo los
+    // de verdad, para que no bailen mientras tipeás.
+    var vis = _busqFiltrar(bandas, crmHoyBusq);
+    var nVis = defs.reduce(function(s,def){ return s + vis[def.k].length; }, 0);
+    var resumen = '<div class="hoy-resumen">'+total+' '+(total===1?'cosa que deb&eacute;s hacer':'cosas que deb&eacute;s hacer')+' &middot; solo compromisos'
       + (silenciados > 0 ? ' &middot; <span style="color:#5E35B1">'+silenciados+' en seguimiento (ocultos)</span>' : '')
-    + '</div>';
-    var html = resumen + defs.filter(function(def){ return bandas[def.k].length; }).map(function(def){
-      var rows = bandas[def.k].map(function(u){ return _hoyRow(def.k, u); }).join('');
+    + '</div>' + _busqAviso(crmHoyBusq, nVis, total);
+    var html = resumen + defs.filter(function(def){ return vis[def.k].length; }).map(function(def){
+      var rows = vis[def.k].map(function(u){ return _hoyRow(def.k, u); }).join('');
       return '<div class="hoy-band hoy-band-'+def.k+'">'
-        + '<div class="hoy-band-h"><span class="hoy-band-ic">'+def.ic+'</span><span class="hoy-band-t">'+def.t+'</span><span class="hoy-band-n">'+bandas[def.k].length+'</span><span class="hoy-band-d">'+def.d+'</span></div>'
+        + '<div class="hoy-band-h"><span class="hoy-band-ic">'+def.ic+'</span><span class="hoy-band-t">'+def.t+'</span><span class="hoy-band-n">'+vis[def.k].length+'</span><span class="hoy-band-d">'+def.d+'</span></div>'
         + '<div class="hoy-band-rows">'+rows+'</div>'
       + '</div>';
     }).join('');
@@ -17877,8 +17955,8 @@ if('serviceWorker' in navigator){
 
   // Las bandas de campania arrancan plegadas y el estado sobrevive al repintado
   // (renderCrmSemana se vuelve a llamar sola cuando entran datos frescos).
-  var SEM_CAMP = {dormido:1, reactivable:1};
-  var _semPlegadas = {dormido:true, reactivable:true};
+  var SEM_CAMP = {dormido:1, reactivable:1, dormidoOtros:1};
+  var _semPlegadas = {dormido:true, reactivable:true, dormidoOtros:true};
   window.semTogglePlegada = function(k){
     _semPlegadas[k] = !_semPlegadas[k];
     renderCrmSemana();
@@ -17896,7 +17974,10 @@ if('serviceWorker' in navigator){
     // es la unidad y el ritmo de recompra aplica.
     var unidades = _crmUnidadesEstancias();
 
-    var bandas = {recompra:[], riesgo:[], deuda:[], cumple:[], segunda:[], dormido:[], reactivable:[]};
+    // 🗓️ Plan semana = a quién le toca por su ESTADO (ritmo o antigüedad).
+    // Deudas y cumpleaños se fueron a ☀️ Hoy: son compromisos con fecha, no
+    // trabajo de captación, y estar en las dos pantallas era el problema.
+    var bandas = {recompra:[], riesgo:[], segunda:[], dormido:[], reactivable:[], dormidoOtros:[]};
     var trabajados = 0;  // ya contactados esta semana o con seguimiento agendado
     unidades.forEach(function(u){
       u._ritmo = _semRitmo(u);
@@ -17912,26 +17993,29 @@ if('serviceWorker' in navigator){
         if (est.diasHasta === null && est.diasDesde !== null && est.diasDesde <= CRM_SILENCE_DIAS){ trabajados++; return; }
       }
       var j = _semJugada(u);
-      if (j) bandas[j].push(u);
+      if (j && bandas[j]) bandas[j].push(u);
     });
+    // Los dormidos de los otros barrios (Pilara, Los Alcanfores, Estancias del
+    // Río, Nordelta, San Fermín…). Vivían en ☀️ Hoy porque esta pantalla filtra
+    // solo Estancias del Pilar. Van al final y plegados: ahí el lote no es la
+    // unidad, así que el seguimiento por casa no aplica igual.
+    bandas.dormidoOtros = _dormidosOtrosBarrios();
 
     function _over(u){ return (u._ritmo.freq ? (u.diasUltima - u._ritmo.freq) : u.diasUltima); }
     bandas.recompra.sort(function(a,b){ return _over(b) - _over(a); });
     bandas.riesgo.sort(function(a,b){ return _over(b) - _over(a); });
-    bandas.deuda.sort(function(a,b){ return b.deuda - a.deuda; });
-    bandas.cumple.sort(function(a,b){ return a.cumpleDias - b.cumpleDias; });
     bandas.segunda.sort(function(a,b){ return b.facturado - a.facturado; });
     bandas.dormido.sort(function(a,b){ return b.facturado - a.facturado; });
     bandas.reactivable.sort(function(a,b){ return b.facturado - a.facturado; });
+    bandas.dormidoOtros.sort(function(a,b){ return b.facturado - a.facturado; });
 
     var defs = [
       {k:'recompra', ic:'🎯', t:'Recompra esta semana', d:'Entraron en su ventana — escribiles AHORA, antes de que se enfrien'},
       {k:'riesgo', ic:'⚠️', t:'En riesgo', d:'Se pasaron de su ritmo habitual — reenganchar antes de que se duerman'},
-      {k:'deuda', ic:'🔴', t:'Deudas a cobrar', d:'Con saldo pendiente'},
-      {k:'cumple', ic:'🎂', t:'Cumpleanos', d:'Proximos 7 dias'},
-      {k:'segunda', ic:'⚪', t:'Segunda compra', d:'Pidieron una vez — convertir en habito'},
+      {k:'segunda', ic:'⚪', t:'Segunda compra', d:'Pidieron una vez — convertir en hábito'},
       {k:'dormido', ic:'🟠', t:'Dormidos', d:'No compran hace mas de '+crmSemUmbral+' dias — van por campania desde Segmentos'},
-      {k:'reactivable', ic:'🟡', t:'Reactivables', d:'Probaron una vez y no volvieron — van por campania desde Segmentos'}
+      {k:'reactivable', ic:'🟡', t:'Reactivables', d:'Probaron una vez y no volvieron — van por campaña desde Segmentos'},
+      {k:'dormidoOtros', ic:'🟤', t:'Dormidos · otros barrios', d:'Fuera de Estancias: acá la unidad es la persona, no la casa — el seguimiento por casa no aplica igual'}
     ];
 
     // Accionable = lo que se trabaja UNA POR UNA esta semana. Dormidos y
@@ -17955,17 +18039,25 @@ if('serviceWorker' in navigator){
       + (campania ? ' &middot; '+campania+' mas van por campania' : '')
     + '</div></div>';
 
-    var bandasHtml = defs.filter(function(def){ return bandas[def.k].length; }).map(function(def){
+    // El buscador filtra lo que se DIBUJA; la barra de arriba sigue contando el
+    // total, para que no baile mientras tipeás. Y con búsqueda activa las bandas
+    // de campaña se despliegan solas: si no, buscabas a alguien que está en
+    // dormidos y no aparecía.
+    var vis = _busqFiltrar(bandas, crmSemBusq);
+    var nVis = defs.reduce(function(s,def){ return s + vis[def.k].length; }, 0);
+    var nTot = defs.reduce(function(s,def){ return s + bandas[def.k].length; }, 0);
+    var bandasHtml = _busqAviso(crmSemBusq, nVis, nTot)
+      + defs.filter(function(def){ return vis[def.k].length; }).map(function(def){
       var camp = !!SEM_CAMP[def.k];
-      var plegada = camp && _semPlegadas[def.k];
-      var tog = camp
+      var plegada = camp && _semPlegadas[def.k] && !crmSemBusq;
+      var tog = (camp && !crmSemBusq)
         ? '<button class="sem-band-tog" onclick="semTogglePlegada(\''+def.k+'\')">'
-          + (plegada ? 'Ver las '+bandas[def.k].length : 'Ocultar')
+          + (plegada ? 'Ver las '+vis[def.k].length : 'Ocultar')
           + ' <span class="car">▾</span></button>'
         : '';
       return '<div class="hoy-band hoy-band-'+def.k+(camp?' sem-band-camp':'')+(plegada?'':' abierta')+'">'
-        + '<div class="hoy-band-h"><span class="hoy-band-ic">'+def.ic+'</span><span class="hoy-band-t">'+def.t+'</span><span class="hoy-band-n">'+bandas[def.k].length+'</span><span class="hoy-band-d">'+def.d+'</span>'+tog+'</div>'
-        + (plegada ? '' : '<div class="hoy-band-rows">'+bandas[def.k].map(function(u){ return _semRow(def.k, u); }).join('')+'</div>')
+        + '<div class="hoy-band-h"><span class="hoy-band-ic">'+def.ic+'</span><span class="hoy-band-t">'+def.t+'</span><span class="hoy-band-n">'+vis[def.k].length+'</span><span class="hoy-band-d">'+def.d+'</span>'+tog+'</div>'
+        + (plegada ? '' : '<div class="hoy-band-rows">'+vis[def.k].map(function(u){ return _semRow(def.k, u); }).join('')+'</div>')
       + '</div>';
     }).join('');
 
@@ -17982,7 +18074,8 @@ if('serviceWorker' in navigator){
     var r = u._ritmo;
     var sub = [];
     sub.push(u.sinUbicar ? 'sin direccion cargada'
-      : (u.subBarrio?escHtml(u.subBarrio)+' &middot; ':'')+(u.lote?'Lote '+escHtml(u.lote):'Home'));
+      : (jugada==='dormidoOtros' ? escHtml(u.barrio||'otro barrio')+(u.contacto&&u.contacto.canalDom?' &middot; '+escHtml(u.contacto.canalDom):'')
+        : (u.subBarrio?escHtml(u.subBarrio)+' &middot; ':'')+(u.lote?'Lote '+escHtml(u.lote):'Home')));
     if (r.freq) sub.push('pide cada '+r.freq+'d'+(r.estimada?' (estimado)':'')+' &middot; van '+(u.diasUltima>=0?u.diasUltima+'d':'-'));
     else if (u.ultimaFecha) sub.push('ult: '+escHtml(u.ultimaFecha)+(u.diasUltima>=0?' (hace '+u.diasUltima+'d)':''));
     if (r.prodTop) sub.push('suele: '+escHtml(_semProdNice(r.prodTop)));
@@ -17997,7 +18090,8 @@ if('serviceWorker' in navigator){
       var when = (u._inter.diasDesde===0?'hoy':(u._inter.diasDesde===1?'ayer':'hace '+u._inter.diasDesde+'d'));
       lastLine = '<div class="hoy-row-last"><span class="ic">📌</span><span>'+escHtml(when)+': '+escHtml(li.resultado+(li.nota?' — '+li.nota:''))+'</span></div>';
     }
-    var msg = _semMensaje(jugada, u);
+    // dormidoOtros es un dormido de otro barrio: mismo mensaje de reactivación.
+    var msg = _semMensaje(jugada === 'dormidoOtros' ? 'dormido' : jugada, u);
     var waTel = c.tel || '';
     var wa = waTel ? '<span class="hoy-act crm-tel-txt" onclick="event.stopPropagation();crmCopyTel(\''+waTel+'\')" title="Copiar tel (para WATI)" style="cursor:pointer">📞 '+escHtml(waTel)+'</span>' : '<span class="hoy-act hoy-act-notel">sin tel</span>';
     var cp = waTel ? '<button class="hoy-act hoy-act-cp" onclick="event.stopPropagation();crmHoyCopiarMsg(this)" data-msg="'+escHtml(msg)+'" title="Copiar mensaje">Copiar</button>' : '';
