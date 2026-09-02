@@ -4047,6 +4047,7 @@ body.role-single .statusbar{font-size:11px}
     <button class="v-tab" data-vt="tendencia" onclick="vSwitchTab('tendencia')">TENDENCIA</button>
     <button class="v-tab" data-vt="productos" onclick="vSwitchTab('productos')">PRODUCTOS</button>
     <button class="v-tab" data-vt="combos" onclick="vSwitchTab('combos')">COMBOS</button>
+    <button class="v-tab" data-vt="cruce" onclick="vSwitchTab('cruce')">🥩 CRUCE</button>
   </div>
   <div class="v-chips" id="vChips">
     <button class="v-chip" data-q="hoy" onclick="vQuick('hoy')">Hoy</button>
@@ -4174,6 +4175,25 @@ body.role-single .statusbar{font-size:11px}
     <div class="prod-card">
       <h3 class="prod-card-h">🧾 Últimas ventas de combos</h3>
       <div id="combosRecientes"></div>
+    </div>
+  </div>
+
+  <!-- ═══ Subtab CRUCE (Maleu + Diagonal Carnes) ═══ -->
+  <div id="vCruce" style="display:none">
+    <div class="prod-card">
+      <h3 class="prod-card-h">🥩 Cruce Maleu + Diagonal Carnes</h3>
+      <div class="prod-card-sub">Los pedidos en los que el cliente además se llevó carne. Se cuentan por <b>día de entrega elegido</b>, así que un pedido del sábado cuenta el sábado aunque todavía no esté cobrado.</div>
+      <div id="cruceSemChips" class="v-chips" style="margin:10px 0 14px"></div>
+      <div id="cruceKpis"></div>
+    </div>
+    <div class="prod-card">
+      <h3 class="prod-card-h">📈 Semana por semana</h3>
+      <div class="prod-card-sub">El % de efectivo se mueve solo entre 28% y 55% según la semana. Antes de decir que la promo movió algo, mirá contra qué lo estás comparando.</div>
+      <div id="cruceTabla"></div>
+    </div>
+    <div class="prod-card">
+      <h3 class="prod-card-h">🧾 Los pedidos cruzados de esa semana</h3>
+      <div id="cruceLista"></div>
     </div>
   </div>
 
@@ -5221,6 +5241,16 @@ body.role-single .statusbar{font-size:11px}
       <input type="checkbox" id="npYaCobrado" onchange="npToggleYaCobrado()" style="width:20px;height:20px;cursor:pointer;accent-color:var(--green);flex-shrink:0">
       <span style="font-weight:700;color:var(--brown);font-size:14px">💸 Ya me pagó (registrar como cobrado)</span>
     </label>
+    <!-- Cruce con Diagonal Carnes (promo desde el 5/9/2026). Solo Home y Pilar.
+         Se marca ACA y no despues porque este es el unico momento en que se sabe:
+         el que carga el pedido es el que vio al cliente llevarse tambien la carne.
+         La marca no cambia ni un peso del pedido — el 10% del cruce es el MISMO
+         10% del contado, y por eso el descuento no puede distinguirlos. -->
+    <label id="npCruceWrap" style="display:flex;align-items:center;gap:10px;padding:11px 13px;border:1.5px solid var(--border);border-radius:10px;background:var(--white);cursor:pointer;margin-top:8px">
+      <input type="checkbox" id="npCruceDiagonal" style="width:20px;height:20px;cursor:pointer;accent-color:var(--green);flex-shrink:0">
+      <span style="font-weight:700;color:var(--brown);font-size:14px">🥩 También compró en Diagonal Carnes</span>
+    </label>
+
     <!-- Mixto split: visible solo cuando pago=Mixto Y yaCobrado. -->
     <div id="npMixtoSplit" class="hidden" style="margin-top:8px;gap:8px">
       <div style="display:flex;align-items:center;gap:6px;flex:1;background:var(--white);border:1.5px solid var(--border);border-radius:10px;padding:10px 12px">
@@ -13069,6 +13099,20 @@ function vSwitchTab(t){
   vTab=t;
   document.querySelectorAll('.v-tab').forEach(function(b){b.classList.toggle('on',b.getAttribute('data-vt')===t);});
   var ddfAny=document.querySelector('#p-ventas .dd-filters');
+  // Se apaga desde una sola linea en vez de sumar un display:none a cada rama: si
+  // manana entra otra sub-tab, olvidarse de una rama la deja pintada encima.
+  var _vc=document.getElementById('vCruce'); if(_vc)_vc.style.display=(t==='cruce')?'block':'none';
+  if(t==='cruce'){
+    document.getElementById('vChips').style.display='none';
+    if(ddfAny)ddfAny.style.display='none';
+    document.getElementById('vSum').style.display='none';
+    document.getElementById('vList').style.display='none';
+    document.getElementById('vTend').style.display='none';
+    document.getElementById('vProductos').style.display='none';
+    document.getElementById('vCombos').style.display='none';
+    renderCruce();
+    return;
+  }
   if(t==='tendencia'){
     document.getElementById('vChips').style.display='none';
     if(ddfAny)ddfAny.style.display='none';
@@ -13117,6 +13161,150 @@ function vSwitchTab(t){
   buildVFilters();
   rVentas();
 }
+
+/* ═══ CRUCE MALEU + DIAGONAL CARNES (tab Ventas → 🥩 CRUCE) ═══
+   Contesta las tres preguntas del lunes: cuantos pedidos fueron cruzados y cuanto
+   facturaron, efectivo vs transferencia contra un finde normal, y el ticket de los
+   cruzados contra el de los que compraron solo Maleu.
+
+   NO pide nada al backend: sale del volcado que el panel ya tiene (D.pedidos), asi
+   que funciona tambien de la copia guardada.
+
+   [!] La fecha es p.dee ('aaaa-mm-dd', el Dia de Entrega Elegido). NO p.fe, que
+   viaja como 'dd/MM' SIN ANIO: agrupar semanas con eso mezclaria la semana 36 de
+   2026 con la de 2027. Es la misma trampa que descuadro Inicio contra el EERR.
+
+   [!] El % de efectivo sale de la FORMA DE PAGO del pedido (p.fp), no de la plata
+   cobrada (p.ef/p.tr): esas dos columnas estan en cero hasta que se cobra, y el
+   lunes a la manana los pedidos del sabado pueden no estar cobrados todavia.
+   Verificado sobre los 851 pedidos de 2026: Forma de Pago no tiene ni un vacio. */
+var _cruceSemSel=null;   // semana elegida; null = la mas reciente con pedidos
+
+function _cruceSemISO(iso){
+  var p=String(iso||'').split('-');
+  if(p.length!==3)return null;
+  var d=new Date(Date.UTC(+p[0],+p[1]-1,+p[2]));
+  if(isNaN(d.getTime()))return null;
+  var dn=d.getUTCDay()||7;
+  d.setUTCDate(d.getUTCDate()+4-dn);
+  var y0=new Date(Date.UTC(d.getUTCFullYear(),0,1));
+  return {sem:Math.ceil((((d-y0)/86400000)+1)/7),anio:d.getUTCFullYear()};
+}
+function _cruceClave(iso){
+  var s=_cruceSemISO(iso);
+  return s?(s.anio+'-S'+(s.sem<10?'0':'')+s.sem):'';
+}
+/* Junta los pedidos de Home y Pilar por semana ISO de entrega. */
+function _cruceDatos(){
+  var peds=((typeof D!=='undefined'&&D&&D.pedidos)||[]).filter(function(p){
+    return (p.h==='Home'||p.h==='Pilar') && p.es!=='Cancelado' && p.dee;
+  });
+  var sem={};
+  peds.forEach(function(p){
+    var k=_cruceClave(p.dee); if(!k)return;
+    var b=sem[k]||(sem[k]={clave:k,n:0,fact:0,ef:0,nCruz:0,factCruz:0,efCruz:0,nSolo:0,factSolo:0,efSolo:0,lista:[]});
+    var esEf=(p.fp==='Efectivo'), cruz=!!p.crd, f=Number(p.$)||0;
+    b.n++; b.fact+=f; if(esEf)b.ef++;
+    if(cruz){ b.nCruz++; b.factCruz+=f; if(esEf)b.efCruz++; b.lista.push(p); }
+    else    { b.nSolo++; b.factSolo+=f; if(esEf)b.efSolo++; }
+  });
+  return {sem:sem,claves:Object.keys(sem).sort()};
+}
+function renderCruce(){
+  function fmt$(n){return '$'+(Math.round(Number(n)||0)).toLocaleString('es-AR');}
+  function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
+  function pct(a,b){return b?Math.round(a*100/b):0;}
+  var kp=document.getElementById('cruceKpis'), tb=document.getElementById('cruceTabla'),
+      ls=document.getElementById('cruceLista'), ch=document.getElementById('cruceSemChips');
+  if(!kp)return;
+  if(typeof D==='undefined'||!D||!D.pedidos){
+    kp.innerHTML='<div style="padding:18px;color:#6b7280">Todav\u00eda no llegaron los pedidos. Entr\u00e1 a Pedidos una vez y volv\u00e9.</div>';
+    if(tb)tb.innerHTML=''; if(ls)ls.innerHTML=''; if(ch)ch.innerHTML='';
+    return;
+  }
+  var dat=_cruceDatos(), claves=dat.claves;
+  if(!claves.length){
+    kp.innerHTML='<div style="padding:18px;color:#6b7280">No hay pedidos de Home ni Pilar con d\u00eda de entrega cargado.</div>';
+    if(tb)tb.innerHTML=''; if(ls)ls.innerHTML=''; if(ch)ch.innerHTML='';
+    return;
+  }
+  var sel=(_cruceSemSel&&dat.sem[_cruceSemSel])?_cruceSemSel:claves[claves.length-1];
+  var b=dat.sem[sel];
+  // Las chips: las ultimas 8 semanas con pedidos.
+  if(ch){
+    var ult=claves.slice(-8).reverse(), h='';
+    ult.forEach(function(k,i){
+      var et=(i===0&&k===claves[claves.length-1])?'Esta semana':('Sem '+k.split('-S')[1]);
+      h+='<button class="v-chip'+(k===sel?' on':'')+'" onclick="cruceVerSemana(\''+k+'\')">'+et+
+         (dat.sem[k].nCruz?' \u00b7 🥩'+dat.sem[k].nCruz:'')+'</button>';
+    });
+    ch.innerHTML=h;
+  }
+  // El promedio de las 4 semanas anteriores a la elegida: el denominador contra el
+  // que se compara. Sin eso, un 45% de efectivo no dice nada.
+  var idx=claves.indexOf(sel), prev=claves.slice(Math.max(0,idx-4),idx);
+  var pn=0,pef=0,pfact=0;
+  prev.forEach(function(k){pn+=dat.sem[k].n;pef+=dat.sem[k].ef;pfact+=dat.sem[k].fact;});
+  var tkCruz=b.nCruz?Math.round(b.factCruz/b.nCruz):0;
+  var tkSolo=b.nSolo?Math.round(b.factSolo/b.nSolo):0;
+  var difTk=tkSolo?Math.round((tkCruz-tkSolo)*100/tkSolo):0;
+  var efPct=pct(b.ef,b.n), efPrev=pct(pef,pn);
+  var k='<div class="prod-kpis">';
+  k+='<div class="prod-kpi"><div class="prod-kpi-lbl">Pedidos cruzados</div><div class="prod-kpi-val">'+b.nCruz+'</div>'+
+     '<div class="prod-kpi-sub">de '+b.n+' de la semana \u00b7 '+pct(b.nCruz,b.n)+'%</div></div>';
+  k+='<div class="prod-kpi kpi-fact"><div class="prod-kpi-lbl">Facturado cruzado</div><div class="prod-kpi-val">'+fmt$(b.factCruz)+'</div>'+
+     '<div class="prod-kpi-sub">'+pct(b.factCruz,b.fact)+'% de los '+fmt$(b.fact)+' de la semana</div></div>';
+  k+='<div class="prod-kpi kpi-marg"><div class="prod-kpi-lbl">Ticket cruzado</div><div class="prod-kpi-val">'+(b.nCruz?fmt$(tkCruz):'\u2014')+'</div>'+
+     '<div class="prod-kpi-sub">'+(!b.nCruz?'sin pedidos cruzados':(!b.nSolo?'toda la semana fue cruzada':('solo Maleu: '+fmt$(tkSolo)+(difTk?(' \u00b7 '+(difTk>0?'+':'')+difTk+'%'):''))))+'</div></div>';
+  k+='<div class="prod-kpi kpi-top"><div class="prod-kpi-lbl">Pag\u00f3 en efectivo</div><div class="prod-kpi-val">'+efPct+'%</div>'+
+     '<div class="prod-kpi-sub">'+(pn?('las 4 previas: '+efPrev+'%'):'sin semanas previas')+
+     (b.nCruz&&b.nSolo?(' · cruzados '+pct(b.efCruz,b.nCruz)+'% vs '+pct(b.efSolo,b.nSolo)+'%'):'')+'</div></div>';
+  k+='</div>';
+  if(!b.nCruz){
+    k+='<div style="margin-top:12px;padding:14px;background:#FFF8E1;border:1px solid #FFE082;border-radius:10px;font-size:13px;color:#7A5B00;line-height:1.55">'+
+       '<b>Todav\u00eda no marcaste ning\u00fan pedido de esta semana como cruzado.</b><br>'+
+       'Se marca de un toque: abr\u00ed el pedido (en Pedidos o en Inicio) y toc\u00e1 <b>🥩 Marc\u00f3 tambi\u00e9n en Diagonal</b>. '+
+       'Si lo carg\u00e1s vos desde la tab \u201c+\u201d, la casilla est\u00e1 ah\u00ed mismo y queda marcado al guardar.</div>';
+  }
+  kp.innerHTML=k;
+  // Tabla semana por semana
+  if(tb){
+    var t='<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px">';
+    t+='<thead><tr style="text-align:left;color:#6b7280;font-size:11px;text-transform:uppercase;letter-spacing:.5px">'+
+       '<th style="padding:8px 6px">Semana</th><th style="padding:8px 6px;text-align:right">Pedidos</th>'+
+       '<th style="padding:8px 6px;text-align:right">Cruzados</th><th style="padding:8px 6px;text-align:right">Facturado</th>'+
+       '<th style="padding:8px 6px;text-align:right">% efectivo</th><th style="padding:8px 6px;text-align:right">Ticket</th></tr></thead><tbody>';
+    claves.slice(-8).reverse().forEach(function(kk){
+      var s=dat.sem[kk], on=(kk===sel);
+      t+='<tr style="border-top:1px solid var(--cd);cursor:pointer'+(on?';background:#FFF3E0;font-weight:700':'')+'" onclick="cruceVerSemana(\''+kk+'\')">'+
+         '<td style="padding:9px 6px">'+esc(kk)+'</td>'+
+         '<td style="padding:9px 6px;text-align:right">'+s.n+'</td>'+
+         '<td style="padding:9px 6px;text-align:right">'+(s.nCruz?('🥩 '+s.nCruz):'\u2014')+'</td>'+
+         '<td style="padding:9px 6px;text-align:right">'+fmt$(s.fact)+'</td>'+
+         '<td style="padding:9px 6px;text-align:right">'+pct(s.ef,s.n)+'%</td>'+
+         '<td style="padding:9px 6px;text-align:right">'+fmt$(s.n?s.fact/s.n:0)+'</td></tr>';
+    });
+    t+='</tbody></table></div>';
+    tb.innerHTML=t;
+  }
+  // Los pedidos cruzados de la semana elegida
+  if(ls){
+    if(!b.lista.length){
+      ls.innerHTML='<div style="padding:16px;color:#6b7280;font-size:13px">Ninguno marcado en '+esc(sel)+'.</div>';
+    }else{
+      var l='';
+      b.lista.sort(function(x,y){return String(x.dee).localeCompare(String(y.dee));}).forEach(function(p){
+        l+='<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:11px 4px;border-top:1px solid var(--cd);cursor:pointer" '+
+           'onclick="openOrdDetail(\''+esc(p.h)+'\',\''+esc(String(p.n))+'\')">'+
+           '<div style="min-width:0"><div style="font-weight:700">'+esc(p.c||'\u2014')+'</div>'+
+           '<div style="font-size:11px;color:#6b7280">'+esc(p.de||p.dee)+' \u00b7 '+esc(p.h)+' \u00b7 '+esc(p.fp||'\u2014')+'</div></div>'+
+           '<div style="font-weight:800;white-space:nowrap">'+fmt$(p.$)+'</div></div>';
+      });
+      ls.innerHTML=l;
+    }
+  }
+}
+window.cruceVerSemana=function(k){ _cruceSemSel=k; renderCruce(); };
 
 /* ── EVALUACIÓN DE COMBOS (tab Ventas → COMBOS) ── */
 var _combosEvalCache=null;
@@ -17157,6 +17345,7 @@ if('serviceWorker' in navigator){
     if(p.ep==='Cobrado')html+='<span class="ord-tag" style="background:var(--gb);color:var(--gd)">Cobrado</span>';
     else html+='<span class="ord-tag" style="background:var(--ol);color:#E65100">No cobrado</span>';
     if(p.fp)html+='<span class="ord-tag" style="background:var(--cd);color:var(--bl)">'+p.fp+'</span>';
+    if(p.crd)html+='<span class="ord-tag" style="background:#FCE4EC;color:#AD1457">🥩 Cruce Diagonal</span>';
     html+='</div>';
 
     // Estado consolidado
@@ -17288,6 +17477,14 @@ if('serviceWorker' in navigator){
     }
     if(p.h==='Red'&&p.ev==='Entregado'&&p.es!=='Cancelado'){
       html+='<button class="ord-btn" onclick="_ordDevolucionRed('+(p.r||0)+')">↩ Me devolvió la mercadería</button>';
+    }
+    // Cruce con Diagonal Carnes: Home y Pilar, mientras el pedido no este cancelado.
+    // Se puede marcar y desmarcar despues de entregado y de cobrado a proposito: la
+    // marca no cambia ni un peso del pedido, es un dato para medir la promo, y casi
+    // siempre uno se acuerda de marcarla cuando ya cobro.
+    if((p.h==='Home'||p.h==='Pilar')&&p.es!=='Cancelado'){
+      html+='<button class="ord-btn'+(p.crd?'':' full')+'" onclick="_ordCruceDiagonal(\''+p.h+'\',\''+p.n+'\','+(p.r||0)+','+(p.crd?0:1)+')">'+
+            (p.crd?'🥩 Sacar la marca de cruce':'🥩 Marc\u00f3 tambi\u00e9n en Diagonal')+'</button>';
     }
     var editable=(p.es!=='Entregado'&&p.es!=='Cancelado'&&p.ep!=='Cobrado'&&p.h!=='Red');
     if(editable){
@@ -17435,6 +17632,35 @@ if('serviceWorker' in navigator){
     var a=_semanaISOde(dia); if(!a) return null;
     var b=_semanaISOhoy();
     return (a.sem===b.sem&&a.anio===b.anio) ? null : a.sem;
+  };
+  /* Marcar / desmarcar el cruce con Diagonal Carnes.
+     No recarga el volcado entero (son ~20s y la marca no mueve ningun numero del
+     pedido): actualiza el pedido en memoria y repinta la ficha. El refresco normal
+     lo sincroniza despues. Si el POST falla no se toca nada. */
+  window._ordCruceDiagonal=function(hoja,n,row,valor){
+    if(!row){ toast('No puedo ubicar el pedido'); return; }
+    var btns=document.querySelectorAll('.ord-actions .ord-btn');
+    for(var i=0;i<btns.length;i++) btns[i].disabled=true;
+    fetch(API,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},
+      body:JSON.stringify({action:'cruceDiagonal',hoja:hoja,row:row,valor:!!valor})})
+      .then(function(r){return r.json();})
+      .then(function(d){
+        if(d&&d.ok){
+          ((typeof D!=='undefined'&&D&&D.pedidos)||[]).forEach(function(x){
+            if(x.h===hoja&&Number(x.r)===Number(row)) x.crd=valor?1:0;
+          });
+          toast(valor?'Marcado \u2014 tambi\u00e9n compr\u00f3 en Diagonal':'Marca sacada');
+          if(typeof openOrdDetail==='function') openOrdDetail(hoja,n);
+          if(typeof vTab!=='undefined'&&vTab==='cruce'&&typeof renderCruce==='function') renderCruce();
+        } else {
+          toast('Error: '+((d&&d.err)||'?'));
+          for(var j=0;j<btns.length;j++) btns[j].disabled=false;
+        }
+      })
+      .catch(function(e){
+        toast('Error: '+e.message);
+        for(var j=0;j<btns.length;j++) btns[j].disabled=false;
+      });
   };
   window._ordMarcarEntregadoRed=function(row){
     if(!row){ toast('No puedo ubicar el pedido'); return; }
@@ -32646,6 +32872,14 @@ function npSetZona(z){
   document.getElementById('npFam').style.display=(z==='Home')?'flex':'none';
   // Clubes: precio institucional → ocultar el % al pedido (y el % por categoría no se renderiza)
   var gpw=document.getElementById('npGlobalPctWrap');if(gpw)gpw.style.display=(z==='Clubes')?'none':'';
+  // El cruce con Diagonal es de Home y Pilar. En Clubes y Red no se ofrece — y al
+  // esconderla se la destilda, para que no viaje marcada desde un pedido anterior.
+  var cw=document.getElementById('npCruceWrap');
+  if(cw){
+    var aplica=(z==='Home'||z==='Pilar');
+    cw.style.display=aplica?'flex':'none';
+    if(!aplica){var cc=document.getElementById('npCruceDiagonal');if(cc)cc.checked=false;}
+  }
   if(z==='Clubes'){npGlobalPct=0;npCatDisc={};var gpi=document.getElementById('npGlobalPct');if(gpi)gpi.value='';}
   // Re-render catalogo (clubes filtra a 8 productos) y fechas
   npRenderCatalogo();
@@ -33137,6 +33371,7 @@ function npGuardar(){
     descuentoManualEsAutoridad:authoritative,
     descuentoGlobalPct:info.globalPct,
     descuentoReceta:receta,
+    cruceDiagonal:!!(document.getElementById('npCruceDiagonal')||{}).checked,
     propina:prop,
     tipoPedido:tipo,
     origen:(document.getElementById('npOrigen')||{}).value||'Pendiente',
@@ -33234,6 +33469,7 @@ function npReset(){
   var nd=document.getElementById('npChipNoDisc');if(nd)nd.classList.remove('active');
   ['npNombre','npLote','npPilarBarrio','npPilarLote','npTel','npPropina','npDescuentoManual','npGlobalPct','npEfMixto','npTrMixto'].forEach(function(id){var el=document.getElementById(id);if(el)el.value=''});
   var yc=document.getElementById('npYaCobrado');if(yc)yc.checked=false;
+  var cd=document.getElementById('npCruceDiagonal');if(cd)cd.checked=false;
   var split=document.getElementById('npMixtoSplit');if(split){split.classList.add('hidden');split.style.display='';}
   ['npSubBarrio','npClub','npDeporte','npGrupo'].forEach(function(id){var el=document.getElementById(id);if(el)el.value=''});
   var bp=document.getElementById('npBarrioPrivado');if(bp){bp.value='Estancias del Pilar';npBarrioPrivadoChange()}
