@@ -1002,6 +1002,19 @@ body{font-family:'Inter',-apple-system,'Segoe UI',system-ui,sans-serif;backgroun
 
 /* ── F3: Bitácora de interacciones ── */
 .hoy-band-seguimiento{border-left-color:#5E35B1}
+.hoy-band-esperando{border-left-color:#00897B}
+.hoy-act-esc{background:#E0F2F1;border-color:#B2DFDB;color:#00695C}
+.hoy-act-esc:hover{background:#B2DFDB}
+.hoy-act-anot{background:#fff;border-color:var(--border);color:var(--ink2)}
+.hoy-act-anot:hover{border-color:var(--o);color:var(--o)}
+.hoy-act-si{background:#E8F5E9;border-color:#C8E6C9;color:#2E7D32}
+.hoy-act-quedo{background:#FFF8E1;border-color:#FFECB3;color:#8D6E00}
+.hoy-act-no{background:#FAFAFA;border-color:var(--border);color:var(--ink3)}
+.hoy-row-esperando{font-size:11px;font-weight:700;color:#00695C;white-space:nowrap}
+.crm-anot-hint{font-size:11px;color:var(--ink3);margin-top:4px;line-height:1.45}
+.crm-anot-tag{display:inline-flex;align-items:center;gap:6px;background:#fff;border:1.5px solid var(--border);border-radius:999px;padding:7px 13px;font-size:12px;font-weight:700;color:var(--ink2);cursor:pointer;min-height:36px}
+.crm-anot-tag.on{background:#EDE7F6;border-color:#B39DDB;color:#4527A0}
+.hoy-row-tag{font-size:10px;font-weight:800;color:#4527A0;background:#EDE7F6;border-radius:999px;padding:1px 7px;margin-left:5px;white-space:nowrap}
 .hoy-act-reg{background:#fff;border-color:var(--border);color:var(--ink2)}
 .hoy-act-reg:hover{border-color:#5E35B1;color:#5E35B1}
 .hoy-row-prox{font-size:11px;font-weight:600;color:#5E35B1;white-space:nowrap}
@@ -1175,8 +1188,8 @@ body{font-family:'Inter',-apple-system,'Segoe UI',system-ui,sans-serif;backgroun
      con su etiqueta ("+8d vs ritmo", el monto, el cumple) y abajo los dos botones
      a lo ancho, de 44px, que es el minimo para tocarlos con el pulgar. */
   .hoy-row{flex-wrap:wrap;row-gap:8px}
-  .hoy-row-acts{flex:1 0 100%;gap:8px}
-  .hoy-act{height:44px;flex:1}
+  .hoy-row-acts{flex:1 0 100%;gap:8px;flex-wrap:wrap}
+  .hoy-act{height:44px;flex:1 1 40%}
 }
 
 /* ════════════════════════════════════════════════════════════════
@@ -16507,8 +16520,13 @@ if('serviceWorker' in navigator){
     if(m) m.rolHogar=rol;
     try{ (crmClientes||[]).forEach(function(c){ if(String(c.tel)===tel) c.rolHogar=rol; }); }catch(_e){}
     fetch(CRM_API,{method:'POST',mode:'cors',body:JSON.stringify({action:'crmSetRolHogar',tel:tel,rol:rol})}).catch(function(){});
-    _compSyncRol(nombre, rol);
     toast('Rol: '+(rol||'sin rol'));
+    // Espejar el rol en la composicion es cosa del MAPA, y solo vale si la persona
+    // es del lote que esta abierto ahi. Desde el panel Anotar (Hoy / Plan semana)
+    // `m` no esta y `_loteUltimoArgs` sigue apuntando al ultimo lote que se miro en
+    // el Mapa: guardar ahi le reescribiria la composicion a una casa ajena.
+    if (!m) return;
+    _compSyncRol(nombre, rol);
     _loteGuardarComposicion();
   };
   // Campo de composición: chip read-only si el nombre es un integrante que compra;
@@ -17329,6 +17347,18 @@ if('serviceWorker' in navigator){
     };
   }
 
+  // "Le escribi y estoy esperando": la ultima interaccion de la casa dice eso y
+  // todavia no hay ninguna posterior que cierre el hilo. Devuelve el estado o null.
+  //
+  // Es el estado que faltaba. Antes, marcar un contacto escondia la casa 3 dias
+  // (CRM_SILENCE_DIAS) y despues la devolvia a la cola mezclada con todas, sin
+  // ninguna marca de que habia una conversacion abierta: el hilo se perdia.
+  function _esperandoRespuesta(u){
+    var est = u && u._inter;
+    if (!est || !est.last) return null;
+    return (String(est.last.resultado || '').trim() === 'Le escribi') ? est : null;
+  }
+
   // Miembro objetivo del mensaje: en cumple, el que cumple; si no, el contacto.
   function _hoyTarget(banda, u){ return (banda==='cumple' && u.cumpleMember) ? u.cumpleMember : u.contacto; }
 
@@ -17390,7 +17420,7 @@ if('serviceWorker' in navigator){
     // demas barrios por persona, que es lo que alimenta "Dormidos - otros barrios".
     var unidades = _crmUnidadesEstancias().concat(
       _crmUnidadesHoy().filter(function(u){ return _crmNormName(u.barrio) !== 'estancias del pilar'; }));
-    var bandas = {seguimiento:[], deuda:[], cumple:[], dormido:[], dormidoOtros:[], reactivable:[], nuevo:[]};
+    var bandas = {esperando:[], seguimiento:[], deuda:[], cumple:[], dormido:[], dormidoOtros:[], reactivable:[], nuevo:[]};
     var silenciados = 0;  // contactados hace poco / con seguimiento futuro — ocultos a propósito
     unidades.forEach(function(u){
       // F3: la bitácora manda por encima de las bandas automáticas.
@@ -17399,6 +17429,9 @@ if('serviceWorker' in navigator){
       if (est){
         // Seguimiento vencido o para hoy → al tope, pase lo que pase.
         if (est.diasHasta !== null && est.diasHasta <= 0){ bandas.seguimiento.push(u); return; }
+        // Le escribiste y todavía no sabés → el hilo queda ABIERTO y a la vista,
+        // no escondido 3 días para volver mezclado con el resto.
+        if (_esperandoRespuesta(u)){ bandas.esperando.push(u); return; }
         // Seguimiento futuro agendado → ya tenés un plan, no lo molestes hasta la fecha.
         if (est.diasHasta !== null && est.diasHasta > 0){ silenciados++; return; }
         // Contactado hace poco y sin plan → no escribir de nuevo todavía.
@@ -17406,6 +17439,8 @@ if('serviceWorker' in navigator){
       }
       var b = _hoyBandaUnit(u); if (b) bandas[b].push(u);
     });
+    // Primero los que hace más que esperan: son los que se están enfriando.
+    bandas.esperando.sort(function(a,b){ return (b._inter.diasDesde||0) - (a._inter.diasDesde||0); });
     bandas.seguimiento.sort(function(a,b){ return (a._inter.diasHasta) - (b._inter.diasHasta); });
     bandas.deuda.sort(function(a,b){ return b.deuda - a.deuda; });
     bandas.cumple.sort(function(a,b){ return a.cumpleDias - b.cumpleDias; });
@@ -17415,6 +17450,7 @@ if('serviceWorker' in navigator){
     bandas.nuevo.sort(function(a,b){ return a.diasUltima - b.diasUltima; });
 
     var defs = [
+      {k:'esperando', ic:'⏳', t:'Esperando respuesta', d:'Les escribiste y todavía no sabés — marcá el desenlace cuando te contesten'},
       {k:'seguimiento', ic:'📌', t:'Seguimientos de hoy', d:'Quedaron en algo — toca cumplir tu palabra'},
       {k:'deuda', ic:'🔴', t:'Deudas a cobrar', d:'Con saldo pendiente'},
       {k:'cumple', ic:'🟢', t:'Cumpleanos', d:'Proximos 7 dias — excusa perfecta para aparecer'},
@@ -17463,6 +17499,7 @@ if('serviceWorker' in navigator){
     if (banda==='deuda') right = '<span class="hoy-row-amt">$'+fmt$(u.deuda)+'</span>';
     else if (banda==='cumple'){ var dc=u.cumpleDias; var who=u.cumpleMember?_hoyPrimerNombre(u.cumpleMember.nombre):''; right = '<span class="hoy-row-bday">'+(dc===0?'HOY':(dc===1?'manana':'en '+dc+'d'))+(who?' &middot; '+escHtml(who):'')+'</span>'; }
     else if (banda==='seguimiento' && u._inter){ var dh=u._inter.diasHasta; var lbl = dh<0?('vencio hace '+(-dh)+'d'):(dh===0?'para HOY':'para '+u._inter.prox); right = '<span class="hoy-row-prox'+(dh<0?' vencido':'')+'">'+escHtml(lbl)+'</span>'; }
+    else if (banda==='esperando' && u._inter){ var dd=u._inter.diasDesde; right = '<span class="hoy-row-esperando">le escribiste '+(dd===0?'hoy':(dd===1?'ayer':'hace '+dd+'d'))+'</span>'; }
     // F3: rastro del último contacto (resultado + nota) bajo el nombre.
     var lastLine = '';
     if (u._inter && u._inter.last){
@@ -17476,13 +17513,46 @@ if('serviceWorker' in navigator){
     var waTel = (target && target.tel) || c.tel || '';
     var wa = waTel ? '<span class="hoy-act crm-tel-txt" onclick="event.stopPropagation();crmCopyTel(\''+waTel+'\')" title="Copiar tel (para WATI)" style="cursor:pointer">📞 '+escHtml(waTel)+'</span>' : '<span class="hoy-act hoy-act-notel">sin tel</span>';
     var cp = waTel ? '<button class="hoy-act hoy-act-cp" onclick="event.stopPropagation();crmHoyCopiarMsg(this)" data-msg="'+escHtml(msg)+'" title="Copiar mensaje">Copiar</button>' : '';
-    var reg = '<button class="hoy-act hoy-act-reg" onclick="event.stopPropagation();crmLogOpen(this)" data-key="'+escHtml(c.key)+'" data-tel="'+escHtml(waTel)+'" data-nombre="'+escHtml(u.nombre)+'" data-origen="hoy" title="Registrar contacto">Registrar</button>';
+    // En "Esperando respuesta" lo que falta es el DESENLACE, no volver a escribir:
+    // los tres botones que antes estaban enterrados adentro del modal, de un toque.
+    var acts = (banda==='esperando')
+      ? wa + _hoyDesenlaceBtns(c, u, 'hoy')
+      : wa + cp + _hoyEscribiBtn(c, u, waTel, 'hoy') + _hoyAnotarBtn(c, u)
+           + '<button class="hoy-act hoy-act-reg" onclick="event.stopPropagation();crmLogOpen(this)" data-key="'+escHtml(c.key)+'" data-tel="'+escHtml(waTel)+'" data-nombre="'+escHtml(u.nombre)+'" data-origen="hoy" title="Registrar con nota o fecha de seguimiento">Registrar</button>';
     return '<div class="hoy-row" onclick="crmOpenCliente(\''+keyEnc+'\')">'
-      + '<div class="hoy-row-main"><div class="hoy-row-name">'+escHtml(u.nombre)+(c.vip?' <span class="crm-vip">VIP</span>':'')+'</div>'
+      + '<div class="hoy-row-main"><div class="hoy-row-name">'+escHtml(u.nombre)+(c.vip?' <span class="crm-vip">VIP</span>':'')+_tagChip(u)+'</div>'
       + '<div class="hoy-row-meta">'+sub.join(' &middot; ')+'</div>'+lastLine+'</div>'
       + (right ? '<div class="hoy-row-right">'+right+'</div>' : '')
-      + '<div class="hoy-row-acts">'+wa+cp+reg+'</div>'
+      + '<div class="hoy-row-acts">'+acts+'</div>'
     + '</div>';
+  }
+
+  // ── Los tres botones que se comparten entre Hoy y Plan semana ─────────────
+  // "Le escribí" es un sí/no y tiene que costar un toque: abrir un modal para
+  // elegir un chip, escribir y guardar son cuatro, y por eso no se usaba.
+  function _hoyEscribiBtn(c, u, waTel, origen){
+    if (!waTel) return '';
+    return '<button class="hoy-act hoy-act-esc" onclick="event.stopPropagation();crmMarcarEscribi(this)"'
+      + ' data-key="'+escHtml(c.key)+'" data-tel="'+escHtml(waTel)+'" data-nombre="'+escHtml(u.nombre)+'"'
+      + ' data-origen="'+escHtml(origen)+'" title="Marcar que le escribiste (el resultado lo cargás cuando te contesten)">✓ Le escribí</button>';
+  }
+  function _hoyAnotarBtn(c, u){
+    return '<button class="hoy-act hoy-act-anot" onclick="event.stopPropagation();crmAnotar(this)"'
+      + ' data-key="'+escHtml(c.key)+'" data-tel="'+escHtml(c.tel||'')+'" data-nombre="'+escHtml(u.nombre)+'"'
+      + ' data-barrio="'+escHtml(u.barrio||'')+'" title="Anotar algo de esta persona sin salir de acá">Anotar</button>';
+  }
+  var _DESENLACES = [['Pidio 🎉','si','🎉 Pidió'], ['Quedo en pedir','quedo','Quedó en pedir'], ['No contesto','no','No contestó']];
+  function _hoyDesenlaceBtns(c, u, origen){
+    return _DESENLACES.map(function(d){
+      return '<button class="hoy-act hoy-act-'+d[1]+'" onclick="event.stopPropagation();crmDesenlace(this)"'
+        + ' data-key="'+escHtml(c.key)+'" data-tel="'+escHtml(c.tel||'')+'" data-nombre="'+escHtml(u.nombre)+'"'
+        + ' data-origen="'+escHtml(origen)+'" data-r="'+escHtml(d[0])+'">'+d[2]+'</button>';
+    }).join('');
+  }
+  // La casa que compra por evento lo dice en la fila: si no, no aparecer en la
+  // cola de recompra parece un olvido del sistema en vez de una decisión.
+  function _tagChip(u){
+    return _casaSinRitmo(u) ? ' <span class="hoy-row-tag" title="Compra por evento: no entra en recompra ni en riesgo">⚡ sin ritmo</span>' : '';
   }
 
   window.crmHoyCopiarMsg = function(btn){
@@ -17744,7 +17814,24 @@ if('serviceWorker' in navigator){
     if(total>=2 && first && last && last>first){ freq=Math.max(1, Math.round((last-first)/86400000/(total-1))); }
     var prodTop='', mx=-1;
     Object.keys(prodW).forEach(function(p){ if(prodW[p]>mx){mx=prodW[p];prodTop=p;} });
-    return {freq:freq, prodTop:prodTop, total:total};
+    // Con 2 entregas hay UN SOLO intervalo: la "frecuencia" es la distancia entre
+    // sus dos unicas compras, no un patron. No se esconde —es el unico dato que
+    // hay— pero se marca, y la banda la trata distinto (ver _semJugada).
+    return {freq:freq, prodTop:prodTop, total:total, estimada:(freq!==null && total<=2)};
+  }
+
+  // Casas que compran por EVENTO, no por ciclo: el tag las saca de las jugadas de
+  // ritmo (recompra / riesgo) y las deja para las de campaña. Benja Villanueva es
+  // el caso: pide cuando tiene amigos en la casa de fin de semana, asi que medirlo
+  // por ritmo lo iba a marcar en riesgo cada 15 dias, para siempre.
+  // El tag es de PERSONA (Clientes Meta), asi que la casa lo tiene si lo tiene
+  // cualquiera de los que viven ahi.
+  var TAG_SIN_RITMO = 'sin-ritmo';
+  function _tags(m){ return String((m&&m.tags)||'').toLowerCase().split(/[,;]+|\s+/).map(function(s){return s.trim();}).filter(Boolean); }
+  function _casaSinRitmo(u){
+    return (u && u.members || []).some(function(m){
+      return !m._visita && _tags(m).indexOf(TAG_SIN_RITMO) >= 0;
+    });
   }
 
   // Jugada de la semana para un hogar. d = días desde la última compra del hogar.
@@ -17755,10 +17842,16 @@ if('serviceWorker' in navigator){
     if (d < 0) return null;                         // sin pedidos
     if (d > crmSemUmbral) return (u.entregados >= 2) ? 'dormido' : 'reactivable';
     if (u.entregados <= 1) return (d >= 7 ? 'segunda' : null);  // 1 pedido: empujar la 2da tras una semana
+    // Compra por evento: el ritmo no predice nada. Fuera de recompra y riesgo.
+    if (_casaSinRitmo(u)) return null;
     var r = u._ritmo;
     if (r.freq){
       if (d >= Math.round(r.freq*0.85)){
-        return (d <= Math.round(r.freq*1.6)) ? 'recompra' : 'riesgo';
+        if (d <= Math.round(r.freq*1.6)) return 'recompra';
+        // Con 2 entregas el "ritmo" es un solo intervalo: no alcanza para decir
+        // que se atrasó. Es una casa que todavía no tiene hábito, no una que lo
+        // perdió → va a segunda compra, que es lo que realmente es.
+        return r.estimada ? 'segunda' : 'riesgo';
       }
       return null;                                  // acaba de pedir → al día
     }
@@ -17809,6 +17902,10 @@ if('serviceWorker' in navigator){
       u._ritmo = _semRitmo(u);
       var est = _hoyEstadoInter(u); u._inter = est;
       if (est){
+        // Le escribiste y estás esperando → ya la trabajaste esta semana. El hilo
+        // no se pierde: vive en la banda "Esperando respuesta" de ☀️ Hoy, con los
+        // botones del desenlace. Antes volvía a la cola a los 3 días como si nada.
+        if (_esperandoRespuesta(u)){ trabajados++; return; }
         // Seguimiento futuro agendado → ya tenés plan, cuenta como trabajado.
         if (est.diasHasta !== null && est.diasHasta > 0){ trabajados++; return; }
         // Contactado hace poco sin plan → trabajado, no reaparece.
@@ -17886,7 +17983,7 @@ if('serviceWorker' in navigator){
     var sub = [];
     sub.push(u.sinUbicar ? 'sin direccion cargada'
       : (u.subBarrio?escHtml(u.subBarrio)+' &middot; ':'')+(u.lote?'Lote '+escHtml(u.lote):'Home'));
-    if (r.freq) sub.push('pide cada '+r.freq+'d &middot; van '+(u.diasUltima>=0?u.diasUltima+'d':'-'));
+    if (r.freq) sub.push('pide cada '+r.freq+'d'+(r.estimada?' (estimado)':'')+' &middot; van '+(u.diasUltima>=0?u.diasUltima+'d':'-'));
     else if (u.ultimaFecha) sub.push('ult: '+escHtml(u.ultimaFecha)+(u.diasUltima>=0?' (hace '+u.diasUltima+'d)':''));
     if (r.prodTop) sub.push('suele: '+escHtml(_semProdNice(r.prodTop)));
     var right = '';
@@ -17904,9 +18001,10 @@ if('serviceWorker' in navigator){
     var waTel = c.tel || '';
     var wa = waTel ? '<span class="hoy-act crm-tel-txt" onclick="event.stopPropagation();crmCopyTel(\''+waTel+'\')" title="Copiar tel (para WATI)" style="cursor:pointer">📞 '+escHtml(waTel)+'</span>' : '<span class="hoy-act hoy-act-notel">sin tel</span>';
     var cp = waTel ? '<button class="hoy-act hoy-act-cp" onclick="event.stopPropagation();crmHoyCopiarMsg(this)" data-msg="'+escHtml(msg)+'" title="Copiar mensaje">Copiar</button>' : '';
-    var reg = '<button class="hoy-act hoy-act-reg" onclick="event.stopPropagation();crmLogOpen(this)" data-key="'+escHtml(c.key)+'" data-tel="'+escHtml(waTel)+'" data-nombre="'+escHtml(u.nombre)+'" data-origen="semana" title="Registrar contacto">Registrar</button>';
+    var reg = _hoyEscribiBtn(c, u, waTel, 'semana') + _hoyAnotarBtn(c, u)
+      + '<button class="hoy-act hoy-act-reg" onclick="event.stopPropagation();crmLogOpen(this)" data-key="'+escHtml(c.key)+'" data-tel="'+escHtml(waTel)+'" data-nombre="'+escHtml(u.nombre)+'" data-origen="semana" title="Registrar con nota o fecha de seguimiento">Registrar</button>';
     return '<div class="hoy-row" onclick="crmOpenCliente(\''+keyEnc+'\')">'
-      + '<div class="hoy-row-main"><div class="hoy-row-name">'+escHtml(u.nombre)+(c.vip?' <span class="crm-vip">VIP</span>':'')+'</div>'
+      + '<div class="hoy-row-main"><div class="hoy-row-name">'+escHtml(u.nombre)+(c.vip?' <span class="crm-vip">VIP</span>':'')+_tagChip(u)+'</div>'
       + '<div class="hoy-row-meta">'+sub.join(' &middot; ')+'</div>'+lastLine+'</div>'
       + (right ? '<div class="hoy-row-right">'+right+'</div>' : '')
       + '<div class="hoy-row-acts">'+wa+cp+reg+'</div>'
@@ -18232,6 +18330,129 @@ if('serviceWorker' in navigator){
         }
       })
       .catch(function(err){ btn.disabled = false; btn.textContent = 'Guardar contacto'; toast('Error: '+err.message); });
+  };
+
+  // ── Marcar de UN toque, y cargar el desenlace despues ─────────────────────
+  // El modal completo pedia el resultado en el momento en que todavia no se sabe:
+  // acabas de mandar el mensaje y te pregunta si contestaron. Son dos momentos
+  // distintos y ahora son dos acciones distintas. El modal se queda para cuando
+  // hay algo mas que contar (una nota larga, una fecha de seguimiento), pero dejo
+  // de ser el camino obligatorio.
+  function _crmLogRapido(btn, resultado, aviso){
+    if (!btn || btn.disabled) return;
+    var d = {
+      key: btn.getAttribute('data-key') || '',
+      tel: btn.getAttribute('data-tel') || '',
+      nombre: btn.getAttribute('data-nombre') || '',
+      origen: btn.getAttribute('data-origen') || ''
+    };
+    var txt = btn.textContent;
+    btn.disabled = true; btn.textContent = '…';
+    fetch(CRM_API, {method:'POST', mode:'cors', body: JSON.stringify({
+      action: 'crmLogInteraccion', key: d.key, tel: d.tel, nombre: d.nombre,
+      resultado: resultado, prox: '', nota: '', origen: d.origen
+    })})
+      .then(function(r){ return r.json(); })
+      .then(function(res){
+        if (!res || !res.ok || !res.interaccion){
+          btn.disabled = false; btn.textContent = txt;
+          toast('Error: ' + ((res && res.error) || 'no se pudo guardar'));
+          return;
+        }
+        // Optimista: entra en la cache local y se repinta, sin recargar todo.
+        crmInteracciones = crmInteracciones || [];
+        crmInteracciones.push(res.interaccion);
+        _crmIndexInteracciones();
+        toast(aviso.replace('{n}', _hoyPrimerNombre(d.nombre)));
+        if (crmCurSub === 'hoy' && crmClientes) renderCrmHoy();
+        else if (crmCurSub === 'semana' && crmClientes) renderCrmSemana();
+        else if (crmCurSub === 'segmentos' && crmClientes) renderCrmSegmentos();
+      })
+      .catch(function(err){ btn.disabled = false; btn.textContent = txt; toast('Error: '+err.message); });
+  }
+  window.crmMarcarEscribi = function(btn){
+    _crmLogRapido(btn, 'Le escribi', '✓ Le escribiste a {n} — queda en «Esperando respuesta»');
+  };
+  window.crmDesenlace = function(btn){
+    var r = (btn && btn.getAttribute('data-r')) || '';
+    var avisos = {'Pidio 🎉':'🎉 {n} pidió — bien ahí', 'Quedo en pedir':'Anotado: {n} quedó en pedir', 'No contesto':'Anotado: {n} no contestó'};
+    _crmLogRapido(btn, r, avisos[r] || 'Anotado');
+  };
+
+  // ── Anotar: lo mínimo sobre una persona, sin salir de la lista ────────────
+  // Notas y Tags estaban en CERO sobre 257 fichas porque anotarlos obligaba a
+  // irse a la tab Clientes, y el rol a la tab Casas. Residencia, que ya tenia su
+  // control a mano, tenia 83 cargadas. La diferencia es la friccion, no las ganas.
+  var _anotState = null;
+  window.crmAnotar = function(btn){
+    var key = (btn && btn.getAttribute('data-key')) || '';
+    var tel = (btn && btn.getAttribute('data-tel')) || '';
+    var nombre = (btn && btn.getAttribute('data-nombre')) || '';
+    var barrio = (btn && btn.getAttribute('data-barrio')) || '';
+    // El cliente vivo (trae notas, tags, rol y residencia ya cargados).
+    var c = null;
+    (crmClientes||[]).forEach(function(x){ if (!c && (x.key===key || (tel && x.tel===tel))) c = x; });
+    if (!c){ toast('No encontré a ' + (nombre||'esa persona')); return; }
+    if (!c.tel){ toast('Sin teléfono no puedo guardar notas — cargale uno desde su ficha'); return; }
+    _anotState = {tel: c.tel, key: c.key, nombre: c.nombre || nombre};
+    var tags = String(c.tags||'');
+    var tieneTag = _tags(c).indexOf(TAG_SIN_RITMO) >= 0;
+    var rolSel = _rolHogarSelect(c) || '<span style="font-size:11px;color:var(--ink3)">(sin teléfono no se puede asignar rol)</span>';
+    var resCtl = window.crmResCtlHtml(c.tel, encodeURIComponent(c.nombre||''), encodeURIComponent(barrio||c.barrio||''), c.residencia||'', 0)
+      || '<div class="crm-anot-hint">El tipo de integrante solo aplica a Estancias del Pilar.</div>';
+    el('crmDrawerTitle').textContent = 'Anotar · ' + (c.nombre || nombre);
+    el('crmDrawerBody').innerHTML = '<div class="crm-section">'
+      + '<div class="crm-section-h">Lo que sabés de ' + escHtml(c.nombre || nombre) + '</div>'
+      + '<div class="crm-meta-form">'
+        + '<div class="fg"><label>Notas</label><textarea id="anotNotas" rows="4" placeholder="ej. usa Maleu cuando tiene amigos en casa, nunca cuando está solo">'+escHtml(c.notas||'')+'</textarea></div>'
+        + '<div class="fg"><label>Tags</label><input id="anotTags" value="'+escHtml(tags)+'" placeholder="ej. fan, alergia gluten">'
+          + '<div class="crm-tags-row" style="margin-top:7px">'
+            + '<button type="button" class="crm-anot-tag'+(tieneTag?' on':'')+'" id="anotTagEvento" onclick="crmAnotToggleEvento()">⚡ Compra por evento</button>'
+          + '</div>'
+          + '<div class="crm-anot-hint">Con <b>'+escHtml(TAG_SIN_RITMO)+'</b> esta casa deja de aparecer en <b>recompra</b> y <b>riesgo</b>: '
+          + 'compra cuando pasa algo, no cada tantos días, así que medirla por ritmo la marcaría atrasada para siempre. '
+          + 'Sigue entrando en las campañas y en deudas y cumpleaños.</div></div>'
+        + '<div class="fg"><label>Rol en la casa</label><div>'+rolSel+'</div></div>'
+        + '<div class="fg"><label>Tipo de integrante</label>'+resCtl+'</div>'
+        + '<button class="btn-submit" onclick="crmAnotGuardar()" style="margin-top:6px">Guardar y volver</button>'
+      + '</div></div>';
+    openDrawer();
+  };
+  // El tag se pone y se saca con el botón: escribirlo a mano invita a tipearlo mal.
+  window.crmAnotToggleEvento = function(){
+    var inp = el('anotTags'), b = el('anotTagEvento');
+    if (!inp || !b) return;
+    var lista = String(inp.value||'').split(',').map(function(s){ return s.trim(); }).filter(Boolean);
+    var i = -1;
+    lista.forEach(function(t, k){ if (t.toLowerCase() === TAG_SIN_RITMO) i = k; });
+    if (i >= 0) lista.splice(i, 1); else lista.push(TAG_SIN_RITMO);
+    inp.value = lista.join(', ');
+    b.classList.toggle('on', i < 0);
+  };
+  window.crmAnotGuardar = function(){
+    if (!_anotState) return;
+    var notas = (el('anotNotas') ? el('anotNotas').value : '').trim();
+    var tags  = (el('anotTags')  ? el('anotTags').value  : '').trim();
+    var st = _anotState;
+    // Optimista: el rol y la residencia ya se guardaron solos al tocarlos (cada uno
+    // tiene su endpoint); acá va lo que falta.
+    try {
+      (crmClientes||[]).forEach(function(x){ if (x.tel===st.tel){ x.notas=notas; x.tags=tags; } });
+      if (window._lsSetSafe) _lsSetSafe('maleu_crm_clientes_v1', JSON.stringify(crmClientes));
+    } catch(e){}
+    // Endpoint acotado: crmUpdateClienteMeta reescribe 14 columnas de un saque y
+    // desde acá se borrarían nombre canónico, cumple, alias y ubicación.
+    fetch(CRM_API, {method:'POST', mode:'cors', body: JSON.stringify({
+      action: 'crmSetNotasTags', tel: st.tel, notas: notas, tags: tags
+    })})
+      .then(function(r){ return r.json(); })
+      .then(function(d){ if (!d || !d.ok) toast('⚠️ No se guardó: ' + ((d&&d.error)||'error')); })
+      .catch(function(){ toast('⚠️ No se guardó. Reintentá.'); });
+    toast('✓ Anotado sobre ' + _hoyPrimerNombre(st.nombre));
+    _anotState = null;
+    // Volver a la lista donde estaba, no a la ficha completa.
+    _crmListaDirty = true;
+    crmCloseDrawer();
   };
 
   // ── F3: Sección Bitácora dentro de la ficha del cliente ──
