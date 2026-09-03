@@ -93,6 +93,20 @@ else
   echo "    (ningun .html modificado)"
 fi
 
+# ── 3d. Que se pueda LEER en la computadora ──────────────────────────────────
+#  El 3/9/2026 se publico el desglose de una venta probado solo a 390px: en el
+#  celular se veia bien y en la computadora era ilegible (el label a 1189px de
+#  su numero, medido). Ninguna otra red lo agarra: parsea, arranca, no tira un
+#  error. Esto mide el hueco entre cada label y su valor a 1440, 1180 y 390px.
+echo "→ [3d/8] Se lee en la computadora…"
+if [ -n "${SIN_HUMO:-}" ]; then
+  echo "${YEL}    SALTEADO a mano (SIN_HUMO=1). Abrilo en la compu y miralo vos.${RST}"
+elif [ -n "$HTMLS" ]; then
+  node _tools/escritorio.js | sed 's/^/    /' || fallar "En escritorio hay datos que no se pueden leer — no se publica."
+else
+  echo "    (ningun .html modificado)"
+fi
+
 # ── 4. Service worker al dia ─────────────────────────────────────────────────
 #  Si cambio el HTML de una PWA, su CACHE_NAME tiene que cambiar tambien, o el
 #  celular que ya tiene ese nombre cacheado no invalida nada.
