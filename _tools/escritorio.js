@@ -137,8 +137,18 @@ const PREPARAR = `
 /* ── Lo que corre adentro del navegador ─────────────────────────────────────
    Devuelve, de cada par label/valor que este en la misma linea, el hueco que
    los separa. Solo mira lo que de verdad esta renderizado. */
+/* Que cuenta como "par label -> valor" y que no. Las dos exclusiones salieron de
+   medir de verdad, no de suponer:
+   · si a la derecha hay un BOTON o un link, no es un valor que haya que
+     emparejar con nada: es una accion, y su lugar natural es la punta.
+   · si el par esta SOLO —el encabezado de una tarjeta, con el titulo a un lado y
+     su total al otro— la vista lo resuelve de una. Lo que no se puede leer es una
+     LISTA de pares estirados: ahi el ojo tiene que cruzar la pantalla en zigzag,
+     una vez por renglon, y eso fue exactamente el bug del 3/9/2026 (9 renglones
+     con el label a 1189px de su numero).
+   Por eso se exige que haya 2 o mas hermanos con la misma pinta. */
 const MEDIR_PARES = `(function(raiz, tope){
-  var fuera = [], vistos = 0;
+  var cand = [], vistos = 0;
   [].forEach.call(document.querySelectorAll(raiz + ' div, ' + raiz + ' li, ' + raiz + ' tr'), function(e){
     var cs = getComputedStyle(e);
     var reparte = cs.display === 'flex' && cs.justifyContent === 'space-between';
@@ -147,15 +157,25 @@ const MEDIR_PARES = `(function(raiz, tope){
     var hijos = [].filter.call(e.children, function(c){
       var r = c.getBoundingClientRect(); return r.width > 0 && c.textContent.trim(); });
     if (hijos.length !== 2) return;
+    var esControl = function(c){
+      return /^(BUTTON|A|INPUT|SELECT|LABEL)$/.test(c.tagName) || !!c.querySelector('button,a,input,select'); };
+    if (esControl(hijos[1])) return;
     var a = hijos[0].getBoundingClientRect(), b = hijos[1].getBoundingClientRect();
     if (Math.abs(a.top - b.top) > 6) return;      // no comparten linea: no es un par
     vistos++;
     var hueco = Math.round(b.left - a.right);
     if (hueco <= tope) return;
-    fuera.push({ clase: String(e.className || '(sin clase)'), hueco: hueco,
+    cand.push({ e: e, clase: String(e.className || '(sin clase)'), hueco: hueco,
       lbl: hijos[0].textContent.trim().slice(0,30), val: hijos[1].textContent.trim().slice(0,20) });
   });
-  return { fuera: fuera, vistos: vistos };
+  /* Solo los que forman LISTA: 2 o mas hermanos con la misma clase. */
+  var fuera = cand.filter(function(c){
+    var p = c.e.parentNode; if (!p) return false;
+    var n = 0;
+    [].forEach.call(p.children, function(x){ if (String(x.className||'') === c.clase) n++; });
+    return n >= 2;
+  }).map(function(c){ return { clase:c.clase, hueco:c.hueco, lbl:c.lbl, val:c.val }; });
+  return { fuera: fuera, vistos: vistos, sueltos: cand.length - fuera.length };
 })`;
 
 const MEDIR_DESGLOSE = `(function(){
@@ -311,7 +331,8 @@ async function main() {
         /* El verde tiene que decir cuantos pares miro: "0 fuera de tope" sobre 0
            pares examinados no prueba nada. */
         chequeo(r.vistos >= 8, 'examino ' + r.vistos + ' pares label→valor de la tab Ventas');
-        chequeo(fuera.length === 0, fuera.length + ' pares más separados de ' + TOPE_HUECO + 'px');
+        chequeo(fuera.length === 0, fuera.length + ' listas de pares más separadas de ' + TOPE_HUECO + 'px' +
+          (r.sueltos ? DIM + '  (' + r.sueltos + ' par/es sueltos, no en lista: no cuentan)' + RST : ''));
         fuera.slice(0, 10).forEach((f) => console.log('        ' + AM + f + RST));
       }
     }
