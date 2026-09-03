@@ -5108,6 +5108,11 @@ if(SESSION&&SESSION.usuario&&SESSION.rol){
 }
 
 var D=null,cur='inicio',fC='Todos',fE='Todos';
+/* ¿Las Ordenes de Compra que tenemos son DE AHORA, o las que quedaron guardadas?
+   Vive fuera de `D` a proposito: `D` se persiste entero en `ma3`, asi que un flag
+   adentro volveria en `true` sobre datos de hace dias. Solo lo prenden las cargas
+   que traen OCs de la red. Lo miran los avisos que afirman que una OC NO existe. */
+var _ocFrescas=false;
 // Orden de la lista de Pedidos: 'entrega' (default) ordena por fecha de entrega
 // elegida (dee) descendente y dentro del mismo día por fecha+hora del pedido.
 // 'ped' ordena solo por fecha+hora del pedido. Toggle desde el botón mini.
@@ -7461,7 +7466,7 @@ function traer(clave,url,pintar,opts){
 
 function load(){
   return fetch(API+'?action=admin&t='+Date.now()).then(function(r){return r.json();}).then(function(d){
-    D=d;try{localStorage.setItem('ma3',JSON.stringify(d));}catch(e){}try{sync();}catch(e){}_ldSync();$('dot').className='hdr-dot';try{sbUpdateMetrics();}catch(e){}
+    D=d;if(d&&d.oc&&d.oc.lista)_ocFrescas=true;try{localStorage.setItem('ma3',JSON.stringify(d));}catch(e){}try{sync();}catch(e){}_ldSync();$('dot').className='hdr-dot';try{sbUpdateMetrics();}catch(e){}
     var _pinto=true;
     if(_hayEditorAbierto()){_pendingLoadRender=true;}
     else{ try{ render(); }catch(e){ _pinto=false; console.error('render()',e); } }
@@ -7498,9 +7503,13 @@ function loadRapido(){
     // veria como "no se pudo actualizar" sin entender por que.
     _tengoTab('caja')
       ? fetch(API+'?action=cajaLight&t='+tsBase).then(function(r){return r.json();}).catch(function(){return null;})
-      : Promise.resolve('sin-caja')
+      : Promise.resolve('sin-caja'),
+    /* Las OCs viajan con los pedidos, o el cruce queda con una punta nueva y la
+       otra congelada en el ultimo load() completo — que fue el bug de los "7
+       pedidos sin OC generada". Son 62 KB y 4 s: no cambia lo que tarda esto. */
+    fetch(API+'?action=ocLight&t='+tsBase).then(function(r){return r.json();}).catch(function(){return null;})
   ]).then(function(arr){
-    var lightData=arr[0], cobrosData=arr[1], cajaData=arr[2];
+    var lightData=arr[0], cobrosData=arr[1], cajaData=arr[2], ocData=arr[3];
     // Cada fetch tiene su propio .catch(->null), asi que un endpoint caido no
     // tumba a los otros dos. Pero hay que CONTARLOS: antes se resolvia como
     // exito aunque los 3 hubieran fallado, y el boton estampaba una hora nueva
@@ -7517,6 +7526,10 @@ function loadRapido(){
     }
     if(cobrosData && Array.isArray(cobrosData.cobros)){
       D.cobrosPendientes=cobrosData.cobros;
+    }
+    if(ocData && ocData.oc && Array.isArray(ocData.oc.lista)){
+      D.oc=ocData.oc;
+      _ocFrescas=true;   // recién ahora se puede afirmar que a un pedido le falta la OC
     }
     if(cajaData){
       if(cajaData.caja)D.caja=cajaData.caja;
@@ -9979,14 +9992,18 @@ function rPedidos(opts){
     });
   }
   function _esOrphanOC(p){
-    /* SIN la lista de OCs no se puede saber, y no saber NO es lo mismo que
-       "no existe". `pedidosLight` (12-17 s) trae los pedidos pero NO trae `oc`,
-       que viaja en el volcado grande (21-27 s): durante esos ~10 s D esta a
-       medias y TODOS los pedidos con origen "Orden de Compra" parecian
-       huerfanos. El 3/9/2026 eso le mostro a Tadeo un cartel rojo con 7 pedidos
-       cuyas OCs estaban generadas desde hacia dias — la mas nueva, 3 horas
-       antes. Un cartel rojo que aparece solo porque los datos todavia no
-       llegaron es peor que no tener cartel: se deja de creer en todos. */
+    /* Este aviso afirma que una OC NO EXISTE. Para poder afirmarlo hacen falta
+       DOS cosas, y la segunda es la que costo encontrar:
+         1. que la lista de OCs haya llegado — `pedidosLight` trae los pedidos y
+            el volcado grande trae las OCs ~10 s despues;
+         2. que sea la lista DE AHORA. `D` se restaura de `localStorage` con las
+            OCs del ultimo `load()` completo, que puede ser de hace dias.
+       El 3/9/2026 eso le mostraba a Tadeo **7** pedidos "sin OC generada" en el
+       celular y **1** en la computadora, al mismo tiempo y con las mismas OCs
+       generadas: cada aparato tenia la lista congelada en un momento distinto.
+       Por eso `_ocFrescas` NO vive adentro de `D`: si viviera ahi se guardaria
+       en `ma3` y volveria en `true` con datos viejos. */
+    if(!_ocFrescas)return false;
     if(!D||!D.oc||!D.oc.lista)return false;
     if(!p||p.hist)return false;
     if(!p.c||!String(p.c).trim()||!p.$)return false;
@@ -10179,7 +10196,7 @@ function rPedidos(opts){
           var falta=ocsP.length-ocsP.filter(function(o){return String(o.estado||'').toLowerCase()==='recibido';}).length;
           sumReadyBadge='<span class="tg" style="background:var(--ol);color:#8B3A0E" title="Esperando OCs del proveedor">📦 '+falta+' OC</span>';
         }
-      } else if(D&&D.oc&&D.oc.lista){
+      } else if(_ocFrescas&&D&&D.oc&&D.oc.lista){
         // Origen dice OC/Mixto pero NO hay ninguna línea en la hoja Orden de Compra:
         // la OC nunca se generó. Antes esto no mostraba nada (silencio → confusión).
         // El `else if` es el mismo candado que `_esOrphanOC`: sin la lista de OCs
