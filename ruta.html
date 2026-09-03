@@ -345,6 +345,13 @@ select.np-input{background:var(--white) url("data:image/svg+xml;utf8,<svg xmlns=
 .np-prod-info{flex:1;min-width:0}
 .np-prod-name{font-size:14px;font-weight:700;color:var(--brown);line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .np-prod-price{font-size:11px;font-weight:700;color:var(--muted);margin-top:2px}
+/* Cuanto queda de cada producto en la tab "+". Antes no se veia nada: un pedido
+   cargado a mano no pasaba por ningun control de stock, al reves que la tienda. */
+.np-stk{font-size:11px;font-weight:700;margin-top:2px;color:#2E7D32}
+.np-stk.poco{color:#E65100}
+.np-stk.cero{color:#c0392b}
+.np-stk.pasado{color:#c0392b;background:#FDECEA;border-radius:4px;padding:1px 5px;display:inline-block}
+.np-prod.sobrepasa{border-color:#c0392b;background:#FFF6F5}
 .np-qty{display:flex;align-items:center;gap:6px;flex-shrink:0}
 .np-qty-btn{width:38px;height:38px;border:1.5px solid var(--border);background:var(--white);border-radius:9px;font-family:inherit;font-size:20px;font-weight:900;cursor:pointer;touch-action:manipulation;-webkit-user-select:none;user-select:none;padding:0;color:var(--brown);display:flex;align-items:center;justify-content:center;line-height:1}
 .np-qty-btn:active{background:var(--beige);transform:scale(.93)}
@@ -5239,6 +5246,7 @@ function renderNuevo(){
   } else {
     npRenderFechas();
   }
+  npFetchStock();
   npUpdateTotal();
   // Aplicar estado del footer colapsado (persistido)
   try{
@@ -5459,6 +5467,7 @@ function npSetZona(z){
   }
   if(z==='Clubes'){npGlobalPct=0;npCatDisc={};var gpi=document.getElementById('npGlobalPct');if(gpi)gpi.value='';}
   // Re-render catalogo (clubes filtra a 8 productos) y fechas
+  npFetchStock();
   npRenderCatalogo();
   npRenderFechas();
   npUpdateTotal();
@@ -5513,6 +5522,16 @@ function npToggleNoDisc(){
 function npRenderCatalogo(){
   var host=document.getElementById('npProductos');
   var html='';
+  // Un numero sin decir de que es, miente por omision: "quedan 5" no es lo mismo
+  // antes del cutoff que despues.
+  var _m=npStockMode();
+  if(_m!=='ilimitado'){
+    html+='<div style="font-size:11px;font-weight:700;color:'+(_m==='real'?'#c0392b':'#E65100')+';background:'+(_m==='real'?'#FDECEA':'#FFF8E1')+';border-radius:8px;padding:8px 10px;margin-bottom:8px;line-height:1.45">'
+      +(_m==='real'
+        ? '🧊 Lo que ves es el <b>stock del freezer AHORA</b>. La entrega es antes del pr\u00f3ximo viernes: no hay reposici\u00f3n en el medio.'
+        : '🧊 Lo que ves es el <b>stock proyectado</b> (freezer + lo que ya est\u00e1 comprado al proveedor). El cutoff de compra fue el <b>jueves 12:00</b>, as\u00ed que esta entrega se sirve con eso.')
+      +'</div>';
+  }
   NP_CAT.forEach(function(c){
     var items=c.items.filter(function(p){return npZona!=='Clubes'||NP_CLUBES_IDS.indexOf(p.id)>=0});
     if(items.length===0)return;
@@ -5533,9 +5552,19 @@ function npRenderCatalogo(){
       var pr=NP_PRECIOS[p.abbr]||{};
       var precio=npZona==='Clubes'?(pr.pc||pr.p||0):(pr.p||0);
       var qty=npCart[p.id]||0;
-      html+='<div class="np-prod'+(qty>0?' has-qty':'')+'" id="npProd_'+p.id+'">'
+      var cap=npCap(p.abbr);
+      var stkHtml='';
+      if(cap!==null){
+        if(qty>cap){
+          stkHtml='<div class="np-stk pasado">\u26a0\ufe0f Ped\u00eds '+qty+' y hay '+cap+'</div>';
+        } else {
+          var cls=cap===0?'cero':(cap<=3?'poco':'');
+          stkHtml='<div class="np-stk '+cls+'">'+(cap===0?'sin stock':('quedan '+cap))+'</div>';
+        }
+      }
+      html+='<div class="np-prod'+(qty>0?' has-qty':'')+((cap!==null&&qty>cap)?' sobrepasa':'')+'" id="npProd_'+p.id+'">'
         +'<div class="np-prod-info"><div class="np-prod-name">'+p.n+'</div>'
-        +'<div class="np-prod-price">'+npMoney(precio)+'</div></div>'
+        +'<div class="np-prod-price">'+npMoney(precio)+'</div>'+stkHtml+'</div>'
         +'<div class="np-qty">'
         +'<button type="button" class="np-qty-btn" onclick="npQty('+p.id+',-1)">&minus;</button>'
         +'<span class="np-qty-num" id="npQty_'+p.id+'">'+qty+'</span>'
@@ -5567,6 +5596,9 @@ function npRenderFechas(){
 
 function npSetFecha(iso){
   npFechaSel=iso;
+  // El tope depende de la fecha de entrega: cambiarla puede pasar de ilimitado a
+  // proyectado y al reves, asi que hay que repintar el catalogo.
+  setTimeout(function(){ npFetchStock(); npRenderCatalogo(); },0);
   document.querySelectorAll('.np-fecha-btn').forEach(function(b){b.classList.toggle('active',b.dataset.iso===iso)});
 }
 
@@ -5575,6 +5607,21 @@ function npQty(id,delta){
   if(v===0)delete npCart[id];else npCart[id]=v;
   var num=document.getElementById('npQty_'+id);if(num)num.textContent=v;
   var card=document.getElementById('npProd_'+id);if(card)card.classList.toggle('has-qty',v>0);
+  // Avisar al pasarse, sin bloquear: se puede vender por encima del stock, pero
+  // no puede pasar sin que nadie se entere. Solo al cruzar el limite, no en cada
+  // toque, para que no se vuelva ruido.
+  var _p=null; NP_CAT_FLAT.forEach(function(x){ if(x.id===id)_p=x; });
+  if(_p&&delta>0){
+    var cap=npCap(_p.abbr);
+    if(cap!==null&&v>cap&&(v-delta)<=cap){
+      showToast(cap===0?('\u26a0\ufe0f No hay '+_p.n+' \u2014 lo pod\u00e9s cargar igual')
+                       :('\u26a0\ufe0f Te pasaste: de '+_p.n+' hay '+cap),3500);
+    }
+    if(cap!==null)npRenderCatalogo();
+  } else if(_p&&delta<0){
+    var cap2=npCap(_p.abbr);
+    if(cap2!==null)npRenderCatalogo();
+  }
   npUpdateTotal();
 }
 
@@ -5859,6 +5906,77 @@ function npCopiarResumen(){
   }else{fallback();}
 }
 
+/* ═══ STOCK EN LA TAB "+" ═══   (3/9/2026)
+   Un pedido cargado a mano no pasaba por NINGUN control de stock: la tab "+" no
+   mostraba cuanto quedaba, no topeaba y no avisaba. La tienda si — y esa
+   asimetria importa el fin de semana en que entra volumen y los pedidos los
+   carga otra persona.
+
+   [!] La regla de que tope aplicar es la MISMA que la tienda (getStockMode de
+   tienda/app.js). Estan en repos distintos, asi que son dos copias del mismo
+   criterio: lo que lo sostiene es _tools/probar-stock-modo.js, que corre las dos
+   funciones sobre todas las combinaciones de fecha y zona y exige 0 diferencias.
+   Si algun dia cambia la regla en la tienda, ese test lo grita.
+
+   [!] AVISA, NO BLOQUEA. Vender por encima del stock es una decision legitima
+   (se puede comprar mas, o la entrega es para mas adelante). Lo que no puede
+   pasar es que ocurra sin que nadie se entere. */
+var NP_STOCK=null;        // { abbr: {f: fisico, p: proyectado} }
+var NP_STOCK_TS=0;
+
+function npFetchStock(force){
+  if(!force && NP_STOCK && (Date.now()-NP_STOCK_TS)<60000) return;
+  fetch(RUT_APPS_SCRIPT_URL+'?action=stock_full&_='+Date.now(),{cache:'no-store'})
+    .then(function(r){return r.json()})
+    .then(function(d){ if(d&&typeof d==='object'){ NP_STOCK=d; NP_STOCK_TS=Date.now(); npRenderCatalogo(); } })
+    .catch(function(){});
+}
+function _npHoyAR(){
+  var n=new Date(Date.now()-3*3600*1000);
+  return Date.UTC(n.getUTCFullYear(),n.getUTCMonth(),n.getUTCDate());
+}
+function _npIsoUTC(iso){
+  var p=String(iso||'').split('-'); if(p.length!==3)return null;
+  return Date.UTC(+p[0],+p[1]-1,+p[2]);
+}
+/* 'ilimitado' | 'proyectado' (fisico + lo que viene en camino) | 'real' (fisico).
+   Espejo exacto de getStockMode() de la tienda para zona estancias/pilar con una
+   fecha concreta elegida. Clubes va ilimitado, igual que alla. */
+function npStockMode(){
+  if(npZona==='Clubes')return 'ilimitado';
+  if(!npFechaSel)return 'ilimitado';
+  var deliveryDay=_npIsoUTC(npFechaSel);
+  if(deliveryDay==null)return 'ilimitado';
+  var todayDay=_npHoyAR();
+  if(deliveryDay<todayDay)return 'real';
+  var todayDow=new Date(todayDay).getUTCDay();
+  var daysToFriday=(5-todayDow+7)%7;
+  var proximoVie=todayDay+daysToFriday*86400000;
+  var siguienteVie=proximoVie+7*86400000;
+  if(deliveryDay<proximoVie)return 'real';
+  if(deliveryDay>=siguienteVie)return 'ilimitado';
+  // cutoff de la OC: el jueves anterior a las 12hs AR (= 15hs UTC).
+  var cutoffOC=proximoVie-86400000+15*3600*1000;
+  return Date.now()<cutoffOC?'ilimitado':'proyectado';
+}
+/* Cuanto se puede vender de ese producto hoy. null = sin tope. */
+function npCap(abbr){
+  var m=npStockMode();
+  if(m==='ilimitado')return null;
+  if(!NP_STOCK||!NP_STOCK[abbr])return null;   // sin dato no se inventa un tope
+  var v=(m==='real')?NP_STOCK[abbr].f:NP_STOCK[abbr].p;
+  return (typeof v==='number')?v:null;
+}
+/* Los productos del carrito que se pasan del tope. [] si no hay ninguno. */
+function npExcedidos(){
+  var out=[];
+  NP_CAT_FLAT.forEach(function(p){
+    var q=npCart[p.id]||0; if(q<=0)return;
+    var cap=npCap(p.abbr); if(cap===null)return;
+    if(q>cap)out.push({n:p.n,abbr:p.abbr,pide:q,hay:cap});
+  });
+  return out;
+}
 function npFetchPrecios(){
   fetch(RUT_APPS_SCRIPT_URL+'?action=precios&t='+Date.now())
     .then(function(r){return r.json()})
@@ -5870,6 +5988,19 @@ function npGuardar(){
   if(npSaving)return;
   var nombre=document.getElementById('npNombre').value.trim();
   if(!nombre){showToast('Falta el nombre');return}
+  // Ultimo control antes de grabar: si algo se pasa del stock, que sea una
+  // decision tomada y no un descuido. No bloquea.
+  var _exc=npExcedidos();
+  if(_exc.length){
+    var _m=npStockMode();
+    var _msg='\u26a0\ufe0f '+_exc.length+(_exc.length===1?' producto se pasa del stock':' productos se pasan del stock')+'\n\n';
+    _exc.forEach(function(e){ _msg+='\u2022 '+e.n+': ped\u00eds '+e.pide+', hay '+e.hay+'\n'; });
+    _msg+='\n'+(_m==='real'
+      ? 'Es el stock del freezer y la entrega es antes del pr\u00f3ximo viernes: no hay reposici\u00f3n en el medio.'
+      : 'Ya cont\u00e1ndole lo que viene del proveedor. El cutoff de compra fue el jueves 12:00, as\u00ed que esta entrega se sirve con lo que ya est\u00e1 comprado.');
+    _msg+='\n\n\u00bfGuardar igual?';
+    if(!confirm(_msg))return;
+  }
   if(Object.keys(npCart).length===0){showToast('Agrega al menos un producto');return}
   if(!npFechaSel){showToast('Elegi una fecha de entrega');return}
 

@@ -455,6 +455,20 @@ body{font-family:'Inter',-apple-system,'Segoe UI',system-ui,sans-serif;backgroun
 .vt-bot{display:flex;gap:4px;flex-wrap:wrap;margin-top:4px}
 .vt-pago{font-size:11px;color:var(--ink3);margin-top:3px;font-variant-numeric:tabular-nums}
 .vt-pago b{color:var(--ink2);font-weight:700}
+/* Desglose de la venta. La fila mostraba nombre, monto y estado y nada mas:
+   no se sabia a donde fue la entrega, si dejo propina, ni que margen deja. */
+.vt{cursor:pointer}
+.vt.abierta{border-color:var(--bl)}
+.vt-det{margin-top:9px;padding-top:9px;border-top:1px dashed var(--cd);font-size:12.5px}
+.vt-det-r{display:flex;justify-content:space-between;gap:10px;padding:3px 0;font-variant-numeric:tabular-nums}
+.vt-det-r span{color:var(--bl)}
+.vt-det-r b{color:var(--ink);font-weight:700}
+.vt-det-r.sangria span{padding-left:12px;font-size:11.5px}
+.vt-det-r.marg b{font-weight:800}
+.vt-det-h{font-size:10px;font-weight:800;letter-spacing:.6px;text-transform:uppercase;color:#9AA0A6;margin:8px 0 2px}
+.vt-det-tel{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.vt-det-btn{height:34px;padding:0 12px;border:1px solid var(--cd);background:#fff;border-radius:8px;font-family:inherit;font-size:12px;font-weight:700;color:var(--ink);cursor:pointer}
+.vt-det-btn.full{width:100%;height:40px;margin-top:9px}
 
 /* ── TOAST ── */
 .toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:var(--ink);color:#fff;padding:10px 18px;border-radius:6px;font-size:13px;font-weight:500;z-index:1300;opacity:0;transition:opacity .3s;pointer-events:none;box-shadow:var(--shadow-lg)}
@@ -1036,6 +1050,12 @@ body{font-family:'Inter',-apple-system,'Segoe UI',system-ui,sans-serif;backgroun
 .crm-anot-hint{font-size:11px;color:var(--ink3);margin-top:4px;line-height:1.45}
 .crm-anot-tag{display:inline-flex;align-items:center;gap:6px;background:#fff;border:1.5px solid var(--border);border-radius:999px;padding:7px 13px;font-size:12px;font-weight:700;color:var(--ink2);cursor:pointer;min-height:36px}
 .crm-anot-tag.on{background:#EDE7F6;border-color:#B39DDB;color:#4527A0}
+/* El "✓ Le escribi" de la fila donde se acaba de copiar el mensaje: es el paso
+   que sigue. Late tres veces y se queda resaltado — sin animacion infinita, que
+   en una lista de 20 filas es ruido. */
+.hoy-act-esc.recien-copiado{border-color:#2E7D32;background:#E8F5E9;color:#1B5E20;animation:recienCopiado 1s ease-in-out 3}
+@keyframes recienCopiado{0%,100%{transform:scale(1)}50%{transform:scale(1.06)}}
+@media (prefers-reduced-motion: reduce){.hoy-act-esc.recien-copiado{animation:none}}
 .hoy-row-tag{font-size:10px;font-weight:800;color:#4527A0;background:#EDE7F6;border-radius:999px;padding:1px 7px;margin-left:5px;white-space:nowrap}
 .hoy-act-reg{background:#fff;border-color:var(--border);color:var(--ink2)}
 .hoy-act-reg:hover{border-color:#5E35B1;color:#5E35B1}
@@ -14542,6 +14562,111 @@ function updateDDLabel(ddId,filtKey){
 }
 
 
+/* ═══ DESGLOSE DE UNA VENTA (tab Ventas) ═══   (3/9/2026)
+   La fila decia "Iñaki Ustariz · $50.000 · Venta Directa · Home · Cobrado ·
+   Ef $50.000" y nada mas. No se podia saber a donde fue la entrega, si dejo
+   propina, cuanto costo ni que margen deja.
+
+   [!] El costo, el margen y las propinas YA viajaban en `action=ventas`: solo no
+   se dibujaban. Lo que se agrego al backend fue `h`, `n`, `tel` y `dir` — con que
+   identificar el pedido y a donde fue.
+
+   [!] NO depende de `D` (el volcado grande, ~20 s). Se arma con lo que la propia
+   venta trae, asi que abre al instante y anda de la copia guardada. El boton "Ver
+   el pedido completo" — que necesita D para los productos y el origen — aparece
+   solo si D ya esta cargado. Un boton que tarda 20 s en contestar no se usa.
+
+   [!] El telefono va como texto con "copiar", no como link de WhatsApp: los links
+   wa.me uno-a-uno hacen que Meta congele la cuenta. */
+var _vtAbierta = null;   // clave de la fila abierta; una sola a la vez
+
+function _vtClave(v){ return (v.h||v.canal)+'|'+(v.n||'')+'|'+(v.fecha||'')+'|'+v.$; }
+
+/* esc NO es global en este bloque: las definiciones que hay viven adentro de
+   otras funciones. Se define aca para no depender del scope. */
+function _vtEsc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
+
+function _vtDetalle(v){
+  var esc = _vtEsc;
+  var f = function(n){ return '$'+f$(Math.round(Number(n)||0)); };
+  var ef=Number(v.ef)||0, tr=Number(v.tr)||0, pEf=Number(v.pEf)||0, pTr=Number(v.pTr)||0;
+  var costo=Number(v.costo)||0, margen=Number(v.margen)||0, fact=Number(v.$)||0;
+  var cobrado = ef+tr+Math.max(0,pEf)+Math.max(0,pTr);
+  var h='<div class="vt-det">';
+
+  // Donde y con quien
+  if(v.dir||v.tel||v.n){
+    h+='<div class="vt-det-h">La entrega</div>';
+    if(v.dir) h+='<div class="vt-det-r"><span>📍</span><b style="text-align:right">'+esc(v.dir)+'</b></div>';
+    if(v.tel){
+      h+='<div class="vt-det-r"><span>📞</span><span class="vt-det-tel"><b>'+esc(v.tel)+'</b>'+
+         '<button class="vt-det-btn" onclick="event.stopPropagation();vtCopiarTel(\''+esc(v.tel)+'\')">copiar</button></span></div>';
+    }
+    if(v.n) h+='<div class="vt-det-r"><span>Pedido</span><b>'+esc(v.h||v.canal)+' #'+esc(v.n)+'</b></div>';
+  }
+
+  // La plata
+  h+='<div class="vt-det-h">La plata</div>';
+  h+='<div class="vt-det-r"><span>Facturado</span><b>'+f(fact)+'</b></div>';
+  if(ef>0) h+='<div class="vt-det-r sangria"><span>Efectivo</span><b>'+f(ef)+'</b></div>';
+  if(tr>0) h+='<div class="vt-det-r sangria"><span>MP / Transferencia</span><b>'+f(tr)+'</b></div>';
+  // La propina se dice SIEMPRE, tambien cuando es cero: "no dejo propina" es un
+  // dato, y era una de las preguntas que la fila no contestaba.
+  if(pEf>0||pTr>0){
+    h+='<div class="vt-det-r sangria"><span>Propina</span><b>'+f(Math.max(0,pEf)+Math.max(0,pTr))+
+       (pEf>0&&pTr>0?' <span style="font-weight:600;font-size:11px">(ef '+f(pEf)+' + mp '+f(pTr)+')</span>':(pEf>0?' <span style="font-weight:600;font-size:11px">en efectivo</span>':' <span style="font-weight:600;font-size:11px">en MP</span>'))+'</b></div>';
+  } else if(Math.min(0,pEf)+Math.min(0,pTr) < 0){
+    // Propina negativa = ajuste de redondeo, no es plata que entro.
+    h+='<div class="vt-det-r sangria"><span>Ajuste de redondeo</span><b>-'+f(Math.abs(Math.min(0,pEf)+Math.min(0,pTr)))+'</b></div>';
+  } else {
+    h+='<div class="vt-det-r sangria"><span>Propina</span><b style="color:var(--bl);font-weight:600">no dejó</b></div>';
+  }
+  if(cobrado!==fact) h+='<div class="vt-det-r"><span>'+(cobrado<fact?'Falta cobrar':'Cobrado de más')+'</span><b style="color:var(--r)">'+f(Math.abs(fact-cobrado))+'</b></div>';
+  h+='<div class="vt-det-r"><span>Forma de pago</span><b>'+esc(v.fp||'—')+(v.ep?' · '+esc(v.ep):'')+'</b></div>';
+
+  // Lo que deja
+  h+='<div class="vt-det-h">Lo que deja</div>';
+  if(costo>0){
+    var pct = fact>0 ? Math.round(margen*100/fact) : 0;
+    h+='<div class="vt-det-r"><span>Costo (CMV)</span><b style="color:#8B3A0E">'+f(costo)+'</b></div>';
+    h+='<div class="vt-det-r marg"><span>Margen bruto</span><b style="color:'+(margen>=0?'var(--gd)':'var(--r)')+'">'+f(margen)+
+       ' <span style="font-size:11px;font-weight:600;opacity:.8">('+pct+'%)</span></b></div>';
+  } else {
+    // Sin costo cargado el margen es el facturado entero, y eso INFLA el margen.
+    // Decirlo es mejor que mostrar un numero que no es.
+    h+='<div class="vt-det-r"><span>Costo (CMV)</span><b style="color:var(--r)">sin cargar</b></div>';
+    h+='<div class="vt-det-r"><span></span><span style="font-size:11px">Sin costo, el margen de esta venta no se puede saber.</span></div>';
+  }
+  if(v.canal==='Red') h+='<div class="vt-det-r"><span></span><span style="font-size:11px">En Red el facturado ya es neto de la comisión del 17%.</span></div>';
+
+  // El pedido completo (productos, origen, estado): eso vive en D.
+  var _hayD = (typeof D!=='undefined' && D && D.pedidos && D.pedidos.length);
+  if(v.n && v.h && _hayD){
+    h+='<button class="vt-det-btn full" onclick="event.stopPropagation();openOrdDetail(\''+esc(v.h)+'\',\''+esc(String(v.n))+'\')">📋 Ver el pedido completo</button>';
+  }
+  h+='</div>';
+  return h;
+}
+window.vtCopiarTel=function(t){
+  var ok=function(){ if(typeof toast==='function')toast('Teléfono copiado'); };
+  if(navigator.clipboard&&navigator.clipboard.writeText){ navigator.clipboard.writeText(t).then(ok).catch(function(){}); return; }
+  var ta=document.createElement('textarea'); ta.value=t; document.body.appendChild(ta); ta.select();
+  try{ document.execCommand('copy'); ok(); }catch(e){}
+  document.body.removeChild(ta);
+};
+window.vtToggle=function(el){
+  var v = el.__venta; if(!v) return;
+  var k = _vtClave(v);
+  var det = el.querySelector('.vt-det');
+  if(det){ det.remove(); el.classList.remove('abierta'); _vtAbierta=null; return; }
+  // Una sola abierta: si no, la lista se vuelve ilegible en el celular.
+  var otra=document.querySelector('#vList .vt.abierta');
+  if(otra){ var d2=otra.querySelector('.vt-det'); if(d2)d2.remove(); otra.classList.remove('abierta'); }
+  el.insertAdjacentHTML('beforeend', _vtDetalle(v));
+  el.classList.add('abierta');
+  _vtAbierta = k;
+};
+
 function rVentas(){
   if(!VD)return;
   var filtered=VD.filter(function(v){
@@ -14647,6 +14772,19 @@ function rVentas(){
         '<span class="tg" style="background:var(--cd);color:var(--bl)">Sem '+v.sem+'</span>'+
         '<span class="tg" style="background:'+(v.ep==='Cobrado'?'var(--gb);color:var(--gd)':'var(--ol);color:#E65100')+'">'+v.ep+'</span>'+
       '</div>'+pagoLine;
+    // El objeto de la venta se cuelga del elemento en vez de serializarse en el
+    // onclick: meter el nombre del cliente en un atributo obliga a escapar
+    // comillas dentro de comillas, que es justo como se rompio el boton del
+    // telefono la primera vez.
+    el.__venta = v;
+    el.setAttribute('role','button');
+    el.setAttribute('tabindex','0');
+    el.onclick = function(){ vtToggle(el); };
+    el.onkeydown = function(e){ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); vtToggle(el); } };
+    if(_vtAbierta && _vtClave(v)===_vtAbierta){
+      el.insertAdjacentHTML('beforeend', _vtDetalle(v));
+      el.classList.add('abierta');
+    }
     ct.appendChild(el);
   });
 }
@@ -15841,6 +15979,11 @@ if('serviceWorker' in navigator){
   // ── F3: Bitácora de interacciones ──
   var crmInteracciones = null;   // [{id,fecha,key,tel,nombre,resultado,prox,nota,origen}]
   var CRM_SILENCE_DIAS = 3;      // si lo contactaste hace <=N dias, no reaparece en el cockpit
+  /* Cuantos dias antes avisa un cumpleanos en ☀️ Hoy. Estaba en 7 y avisaba con
+     demasiada anticipacion: un cumple "en 5d" no es algo que le debas a nadie
+     HOY, y Hoy es la pantalla de lo que estas en deuda de contactar. Con 1 la
+     banda muestra el de hoy y el de manana. (Tadeo, 3/9/2026) */
+  var CRM_CUMPLE_DIAS = 1;
 
   function fmt$(n){ return (Number(n)||0).toLocaleString('es-AR'); }
   function el(id){ return document.getElementById(id); }
@@ -17625,7 +17768,7 @@ if('serviceWorker' in navigator){
   function _hoyBandaUnit(u, umbral){
     var lim = (typeof umbral === 'number') ? umbral : crmHoyUmbral;
     if (u.deuda > 0) return 'deuda';
-    if (u.cumpleDias !== null && u.cumpleDias <= 7) return 'cumple';
+    if (u.cumpleDias !== null && u.cumpleDias <= CRM_CUMPLE_DIAS) return 'cumple';
     if (u.diasUltima >= 0 && u.diasUltima > lim){
       if (u.entregados >= 2){
         // "Lotes dormidos" es SOLO Estancias del Pilar. Pilar/Alcanfores/Río van
@@ -17764,7 +17907,7 @@ if('serviceWorker' in navigator){
       {k:'esperando', ic:'⏳', t:'Esperando respuesta', d:'Les escribiste y todavía no sabés — marcá el desenlace cuando te contesten'},
       {k:'seguimiento', ic:'📌', t:'Seguimientos de hoy', d:'Quedaron en algo — toca cumplir tu palabra'},
       {k:'deuda', ic:'🔴', t:'Deudas a cobrar', d:'Con saldo pendiente'},
-      {k:'cumple', ic:'🎂', t:'Cumpleaños', d:'Próximos 7 días — excusa perfecta para aparecer'}
+      {k:'cumple', ic:'🎂', t:'Cumpleaños', d:'Hoy y mañana — excusa perfecta para aparecer'}
     ];
 
     var total = defs.reduce(function(s,def){ return s + bandas[def.k].length; }, 0);
@@ -17850,7 +17993,18 @@ if('serviceWorker' in navigator){
       + ' data-key="'+escHtml(c.key)+'" data-tel="'+escHtml(waTel)+'" data-nombre="'+escHtml(u.nombre)+'"'
       + ' data-origen="'+escHtml(origen)+'" title="Marcar que le escribiste (el resultado lo cargás cuando te contesten)">✓ Le escribí</button>';
   }
+  /* [!] Sin telefono no hay boton, a proposito. La meta del cliente (Notas, Tags,
+     rol, residencia) esta keyeada POR TELEFONO en la hoja `Clientes Meta`: es la
+     identidad del cliente en el CRM. Sin numero, `crmSetNotasTags` responde
+     "falta tel" y la nota no se guarda en ninguna parte — y antes de este cambio
+     la escritura optimista local, que matchea `x.tel === st.tel`, se la ponia a
+     TODOS los clientes sin telefono a la vez (13 al 3/9/2026). Se veian dos avisos
+     contradictorios: "✓ Anotado" y despues "⚠️ No se guardo".
+     Mismo criterio que "✓ Le escribi" y "Copiar", que ya piden telefono.
+     "Registrar" SI queda: `crmLogInteraccion` acepta key O tel, asi que la fila
+     nunca se queda sin ninguna accion. */
   function _hoyAnotarBtn(c, u){
+    if (!String((c && c.tel) || '').trim()) return '';
     return '<button class="hoy-act hoy-act-anot" onclick="event.stopPropagation();crmAnotar(this)"'
       + ' data-key="'+escHtml(c.key)+'" data-tel="'+escHtml(c.tel||'')+'" data-nombre="'+escHtml(u.nombre)+'"'
       + ' data-barrio="'+escHtml(u.barrio||'')+'" title="Anotar algo de esta persona sin salir de acá">Anotar</button>';
@@ -17869,9 +18023,22 @@ if('serviceWorker' in navigator){
     return _casaSinRitmo(u) ? ' <span class="hoy-row-tag" title="Compra por evento: no entra en recompra ni en riesgo">⚡ sin ritmo</span>' : '';
   }
 
+  /* Copiar el mensaje es el PRIMER paso de dos: se copia, se pega en WhatsApp y
+     recien ahi se marca "✓ Le escribi". Antes el segundo paso no se sugeria en
+     ningun lado: la casa quedaba en la cola como si no se hubiera hecho nada, y
+     eso es exactamente la friccion por la que la bitacora tenia 0 cargas propias.
+     No se marca solo — copiar no es mandar — pero el boton que sigue queda
+     senalado y el aviso lo dice. */
   window.crmHoyCopiarMsg = function(btn){
     var msg = btn.getAttribute('data-msg') || '';
-    var ok = function(){ if(typeof toast==='function') toast('Mensaje copiado'); };
+    var fila = btn.closest ? btn.closest('.hoy-row') : null;
+    var esc = fila ? fila.querySelector('.hoy-act-esc') : null;
+    var ok = function(){
+      if (esc){
+        esc.classList.add('recien-copiado');
+        if(typeof toast==='function') toast('Mensaje copiado — mandáselo y tocá «✓ Le escribí»');
+      } else if(typeof toast==='function') toast('Mensaje copiado');
+    };
     try {
       if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(msg).then(ok, function(){ _crmCopyFallback(msg, ok); });
       else _crmCopyFallback(msg, ok);
@@ -18149,9 +18316,17 @@ if('serviceWorker' in navigator){
   }
 
   // Jugada de la semana para un hogar. d = días desde la última compra del hogar.
+  //
+  // [!] NO corta por deuda ni por cumpleaños, y eso es deliberado (3/9/2026).
+  // Antes devolvía 'deuda' o 'cumple' con prioridad sobre todo lo demás. Desde que
+  // esas dos bandas viven solo en ☀️ Hoy, sus DOS consumidores —🗓️ Plan semana
+  // (`if (j && bandas[j])`) y 🎯 Segmentos (`_jug === seg.id`)— no tienen esa
+  // jugada en su lista, así que la casa no se dibujaba en ninguna de las dos y
+  // desaparecía SIN ERROR. Medido sobre los datos reales: Vicky Demartini (El
+  // Recuerdo 27) es `reactivable` y quedaba escondida por un cumple a 5 días, y
+  // Javier Sánchez de la Puente perdía su segmento por una deuda de $38.100.
+  // El compromiso se cobra o se saluda en Hoy; acá se mira el estado de la casa.
   function _semJugada(u){
-    if (u.deuda > 0) return 'deuda';
-    if (u.cumpleDias !== null && u.cumpleDias <= 7) return 'cumple';
     var d = u.diasUltima;
     if (d < 0) return null;                         // sin pedidos
     if (d > crmSemUmbral) return (u.entregados >= 2) ? 'dormido' : 'reactivable';
@@ -18723,6 +18898,12 @@ if('serviceWorker' in navigator){
     var c = null;
     (crmClientes||[]).forEach(function(x){ if (!c && (x.key===key || (tel && x.tel===tel))) c = x; });
     if (!c){ toast('No encontré a ' + (nombre||'esa persona')); return; }
+    // Segundo candado: si la fila igual llamara sin telefono, decir POR QUE en vez
+    // de abrir un panel que no puede guardar.
+    if (!String(c.tel || '').trim()){
+      toast('Para anotar hace falta el teléfono: es la identidad del cliente en el CRM. Cargáselo desde la ficha de uno de sus pedidos.', 6000);
+      return;
+    }
     if (!c.tel){ toast('Sin teléfono no puedo guardar notas — cargale uno desde su ficha'); return; }
     _anotState = {tel: c.tel, key: c.key, nombre: c.nombre || nombre};
     var tags = String(c.tags||'');
@@ -18764,6 +18945,13 @@ if('serviceWorker' in navigator){
     var notas = (el('anotNotas') ? el('anotNotas').value : '').trim();
     var tags  = (el('anotTags')  ? el('anotTags').value  : '').trim();
     var st = _anotState;
+    // Tercer candado, el que evita el dano: sin telefono la escritura optimista
+    // matchearia `x.tel === ''` y le pondria la nota a todos los clientes sin
+    // numero. Se corta antes de tocar nada.
+    if (!String(st.tel || '').trim()){
+      toast('⚠️ No se puede anotar sin teléfono — no se guardó nada.');
+      _anotState = null; crmCloseDrawer(); return;
+    }
     // Optimista: el rol y la residencia ya se guardaron solos al tocarlos (cada uno
     // tiene su endpoint); acá va lo que falta.
     try {

@@ -84,7 +84,14 @@ const PREPARAR_PRUEBA = `<script>
 (function(){
   window.__maleuAuth = true;              /* el ERP no instala su interceptor */
   window.alert = function(m){ (window.__avisos = window.__avisos || []).push(String(m)); };
-  window.confirm = function(){ return false; };
+  /* El confirm ANOTA lo que pregunta y devuelve lo que le digan (false por
+     default, igual que antes). Con un "return false" pelado no habia forma de
+     revisar lo que pasa DESPUES de aceptar —el camino que mas importa— ni de
+     leer el texto de la pregunta. Es el mismo criterio que el alert de arriba:
+     no se traga el mensaje, lo guarda. */
+  window.__confirms = [];
+  window.__confirmDevuelve = false;
+  window.confirm = function(m){ window.__confirms.push(String(m)); return !!window.__confirmDevuelve; };
   try{
     localStorage.setItem('maleu_panel_session', JSON.stringify({
       usuario:'prueba', nombre:'Modo Prueba', rol:'admin',
