@@ -2144,6 +2144,30 @@ body.role-single .statusbar{font-size:11px}
 .plan-refresh-badge{display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:600;color:var(--ink3);background:var(--cd);padding:4px 9px;border-radius:12px;white-space:nowrap;animation:planPulse 1.1s ease-in-out infinite}
 @keyframes planPulse{0%,100%{opacity:.55}50%{opacity:1}}
 /* ── El objetivo del mes, en CASAS ── */
+/* El objetivo de la SEMANA. Va arriba de todo porque es lo que se mira todos los
+   dias; el del mes queda abajo. En el celular las tres medidas se apilan. */
+.plan-sem-hero{background:var(--b);color:var(--tx);border-radius:8px;padding:16px 18px;margin-bottom:12px;border:2px solid #D97706}
+.plan-sm-h{font-size:13px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:#fff;display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+.plan-sm-r{font-size:12px;font-weight:600;text-transform:none;letter-spacing:0;color:rgba(242,232,199,.75)}
+.plan-sm-d{margin-left:auto;font-size:12px;font-weight:700;text-transform:none;letter-spacing:0;color:#F0A020;white-space:nowrap}
+.plan-sm-g{display:grid;grid-template-columns:minmax(0,1fr);gap:12px}
+@media(min-width:640px){.plan-sm-g{grid-template-columns:repeat(3,minmax(0,1fr))}}
+.plan-sm-c{min-width:0}
+.plan-sm-rot{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:rgba(242,232,199,.75)}
+.plan-sm-rot small{font-size:10px;font-weight:600;text-transform:none;letter-spacing:0}
+.plan-sm-n{font-size:26px;font-weight:800;color:#fff;font-variant-numeric:tabular-nums;line-height:1.15;margin-top:2px}
+.plan-sm-n small{font-size:13px;font-weight:600;color:rgba(242,232,199,.7)}
+.plan-sm-bar{height:8px;background:rgba(242,232,199,.18);border-radius:4px;overflow:hidden;margin:8px 0 5px;position:relative}
+.plan-sm-f{height:100%;border-radius:4px;background:#D97706;transition:width .4s;position:relative;z-index:1}
+.plan-sm-f.ok{background:var(--g)}
+/* Lo cargado y sin entregar: rayado, atras, para que se vea que esta comprometido
+   pero no facturado. */
+.plan-sm-x{position:absolute;left:0;top:0;height:100%;border-radius:4px;opacity:.45;
+  background:repeating-linear-gradient(45deg,rgba(242,232,199,.55) 0 4px,transparent 4px 8px)}
+.plan-sm-s{font-size:12px;font-weight:700;color:#F0A020;font-variant-numeric:tabular-nums}
+.plan-sm-s.ok{color:var(--g)}
+.plan-sm-pend{margin-top:12px;font-size:12px;line-height:1.5;color:rgba(242,232,199,.85)}
+.plan-sm-pie{margin-top:8px;font-size:11px;line-height:1.5;color:rgba(242,232,199,.6)}
 .plan-casas{background:var(--b);color:var(--tx);border-radius:8px;padding:16px 18px;margin-bottom:12px}
 .plan-casas-top{display:flex;justify-content:space-between;align-items:baseline;gap:12px;flex-wrap:wrap}
 .plan-casas-t{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:rgba(242,232,199,.75)}
@@ -11042,7 +11066,13 @@ var _SECCION={
   pedidoshome: function(){rPedidosHome();},
   caja       : function(){rCaja();},
   egresos    : function(){rEgresos();},
-  stock      : function(){rStock();}
+  stock      : function(){rStock();},
+  /* Planificacion vive de `action=planMes` PERO el objetivo de la semana y las
+     casas del mes salen del volcado, asi que hay que repintarla cuando D llega.
+     Sin esto, entrar directo a la tab mostraba "todavia no llego el volcado"
+     para siempre: D llegaba a los ~25 s y nadie le avisaba a la pantalla.
+     El guard vive del lado de la tab porque `planData` esta en su propio scope. */
+  planificacion: function(){ if(typeof window.planRepintarPorD==='function') window.planRepintarPorD(); }
 };
 var _pintadas={};      /* secciones al dia con el D de ahora */
 var _colaPintar=null;
@@ -24909,6 +24939,66 @@ if('serviceWorker' in navigator){
     return metas[metas.length-1];
   }
 
+  /* ── EL OBJETIVO DE LA SEMANA ─────────────────────────────────────────────
+   * Tadeo y Lucas abren el ERP para ver cuanto falta ESTA SEMANA, no en el mes:
+   * es lo que miran los lunes y hasta ahora lo calculaban a mano.
+   *
+   * Los tramos salen de los mismos cortes que la curva de casas —cada domingo,
+   * mas el ultimo dia si no cae domingo—, asi que en septiembre 2026 dan
+   * 1-6, 7-13, 14-20, 21-27 y 28-30, que es como esta escrito el plan.
+   */
+  function _planTramos(){
+    var cortes = _planCortes(), out = [], desde = 1;
+    for(var i=0;i<cortes.length;i++){ out.push({ desde:desde, hasta:cortes[i] }); desde = cortes[i]+1; }
+    return out;
+  }
+  function _planTramoDe(dia){
+    var t = _planTramos();
+    for(var i=0;i<t.length;i++) if(dia >= t[i].desde && dia <= t[i].hasta) return i;
+    return Math.max(0, t.length-1);
+  }
+  /* "1881079,3248754,…" -> [1881079, …]. A diferencia de las casas, estos NO son
+     acumulados: cada valor es lo de ESE tramo y los cinco suman el mes. */
+  function _planLista(txt){
+    return String(txt||'').split(/[,;]/)
+      .map(function(x){ return parseFloat(String(x).replace(/[^\d.-]/g,''))||0; })
+      .filter(function(x){ return x>0; });
+  }
+  function _planSemanalesM(){ var m=_planMetaRetail(); return m ? _planLista(m.semanalesM) : []; }
+  function _planSemanalesP(){ var m=_planMetaRetail(); return m ? _planLista(m.semanalesP) : []; }
+
+  /* Plata y pedidos del RETAIL en un tramo de dias, del volcado.
+   *
+   * Retail = Home + Pilar, que es como esta armado el plan ($10,4 M para los
+   * dos). Ojo con la asimetria y esta dicha en pantalla: las CASAS se cuentan
+   * solo en Estancias del Pilar, porque esa es la definicion de `_hogBuild`.
+   *
+   * El dia sale de `dee` (dia de entrega elegido) y no de `mc`: `mc` es "aaaa-mm"
+   * y no trae el dia, y un pedido sin `dee` no se puede ubicar en una semana.
+   * `fe` jamas: viaja como "dd/MM" SIN anio.
+   *
+   * Separa ENTREGADO de CARGADO-SIN-ENTREGAR. Los dos numeros importan y son
+   * distintos: lo entregado es lo que facturo, lo cargado es lo que ya esta
+   * comprometido para esos dias. Mezclarlos infla la semana. */
+  function _planRetailTramo(desde, hasta){
+    var peds = (typeof D!=='undefined' && D && D.pedidos && D.pedidos.length) ? D.pedidos : null;
+    if(!peds) return null;
+    var mesTxt = planData.yyyy + '-' + (planData.mm<10?'0':'') + planData.mm;
+    var out = { ent:0, entPed:0, pend:0, pendPed:0, sinDia:0 };
+    peds.forEach(function(p){
+      if(p.h !== 'Home' && p.h !== 'Pilar') return;
+      if(p.es === 'Cancelado') return;
+      var dee = String(p.dee||'');
+      if(dee.slice(0,7) !== mesTxt){ if(!dee && String(p.mc||'')===mesTxt) out.sinDia++; return; }
+      var dia = parseInt(dee.slice(8,10),10);
+      if(!dia || dia < desde || dia > hasta) return;
+      var monto = Number(p.$)||0;
+      if(p.es === 'Entregado'){ out.ent += monto; out.entPed++; }
+      else { out.pend += monto; out.pendPed++; }
+    });
+    return out;
+  }
+
   /* Las casas del mes que se muestran. Se guarda para que renderAcciones no lo
      recalcule (recorre los ~1000 pedidos del volcado). */
   var _planCasas = null;
@@ -24921,20 +25011,133 @@ if('serviceWorker' in navigator){
     return _planCasas;
   }
 
+  /* Plata con separador de miles. Propio y no `fmt$`: esa vive en el scope del
+     panel y desde este bloque no se ve — usarla tiraba un ReferenceError que el
+     try/catch del repintado se comia, dejando la tab EN BLANCO. */
+  function _planPesos(n){ return Math.round(Number(n)||0).toLocaleString('es-AR'); }
+
+  /* "1 al 6" / "7 al 13". Con el nombre del dia si el tramo es de un dia solo. */
+  function _planRotuloTramo(t){ return t.desde===t.hasta ? ('el '+t.desde) : (t.desde+' al '+t.hasta); }
+
+  /* Una barra con lo hecho contra la meta del tramo. `extra` es lo cargado y sin
+     entregar, que se dibuja rayado atras: esta comprometido pero no facturo. */
+  function _planMedidor(rot, hechoTxt, metaTxt, pctH, pctX, faltaTxt, ok){
+    return '<div class="plan-sm-c">'
+      + '<div class="plan-sm-rot">'+rot+'</div>'
+      + '<div class="plan-sm-n">'+hechoTxt+' <small>de '+metaTxt+'</small></div>'
+      + '<div class="plan-sm-bar">'
+        + (pctX>pctH ? '<div class="plan-sm-x" style="width:'+Math.min(100,pctX)+'%"></div>' : '')
+        + '<div class="plan-sm-f'+(ok?' ok':'')+'" style="width:'+Math.min(100,pctH)+'%"></div>'
+      + '</div>'
+      + '<div class="plan-sm-s'+(ok?' ok':'')+'">'+faltaTxt+'</div>'
+      + '</div>';
+  }
+
+  /* EL BLOQUE DE LA SEMANA. Contesta, para el tramo en curso: cuanto lleva y
+     cuanto falta, en plata, en pedidos y en casas. */
+  function _planBloqueSemana(hoy, cortes, metasCasas, casasDelMes){
+    var tramos = _planTramos();
+    if(!tramos.length) return '';
+    var i = _planTramoDe(hoy||1), t = tramos[i];
+    var mM = _planSemanalesM(), mP = _planSemanalesP();
+    var metaM = mM[i]||0, metaP = mP[i]||0;
+    var metaC = (metasCasas && metasCasas[i]!=null) ? metasCasas[i] : 0;   // ACUMULADA
+    var real = _planRetailTramo(t.desde, t.hasta);
+    var faltanDias = Math.max(0, t.hasta - (hoy||1));
+
+    if(!metaM && !metaP && !metaC){
+      return '<div class="plan-sem-hero"><div class="plan-sm-h">Esta semana</div>'
+        + '<div class="plan-casas-pie">Este mes no tiene metas semanales cargadas. Se cargan en la hoja '
+        + '<b>Plan Ventas</b>, columnas <b>Metas Semanales</b> (casas, acumuladas), '
+        + '<b>Metas Semanales $</b> y <b>Metas Semanales Pedidos</b> (por tramo).</div></div>';
+    }
+
+    var h = '<div class="plan-sem-hero">'
+      + '<div class="plan-sm-h">Esta semana <span class="plan-sm-r">'+_planRotuloTramo(t)+' de '+esc(planData.mes)+'</span>'
+      + '<span class="plan-sm-d">'+(faltanDias===0 ? 'ultimo dia' : (faltanDias===1?'queda 1 dia':'quedan '+faltanDias+' dias'))+'</span></div>';
+
+    if(!real){
+      h += '<div class="plan-aviso">Todavia no llego el volcado de pedidos, asi que no puedo decir cuanto lleva la semana. '
+         + 'Se actualiza solo en cuanto llegue.</div></div>';
+      return h;
+    }
+
+    h += '<div class="plan-sm-g">';
+    // PLATA — la fila ancha, es el numero que se mira primero
+    var faltaM = Math.max(0, metaM - real.ent);
+    h += _planMedidor('Facturado', '$'+_planPesos(real.ent), '$'+_planPesos(metaM),
+          metaM? Math.round(real.ent*100/metaM):0,
+          metaM? Math.round((real.ent+real.pend)*100/metaM):0,
+          faltaM ? ('faltan $'+_planPesos(faltaM)) : 'llegaste', !faltaM);
+    // PEDIDOS
+    var faltaP = Math.max(0, metaP - real.entPed);
+    h += _planMedidor('Pedidos', String(real.entPed), String(metaP),
+          metaP? Math.round(real.entPed*100/metaP):0,
+          metaP? Math.round((real.entPed+real.pendPed)*100/metaP):0,
+          faltaP ? ('faltan '+faltaP) : 'llegaste', !faltaP);
+    /* CASAS — acumuladas del mes, no del tramo. `null` significa que el CRM
+       todavia no volvio: se dice, no se muestra un cero que se leeria como
+       "ninguna casa compro". */
+    if(casasDelMes === null){
+      h += '<div class="plan-sm-c"><div class="plan-sm-rot">Casas <small>(acum. del mes)</small></div>'
+        + '<div class="plan-sm-n">— <small>de '+metaC+'</small></div>'
+        + '<div class="plan-sm-bar"></div>'
+        + '<div class="plan-sm-s">contandolas…</div></div>';
+    } else {
+      var casasHoy = casasDelMes.length;
+      var faltaC = Math.max(0, metaC - casasHoy);
+      h += _planMedidor('Casas <small>(acum. del mes)</small>', String(casasHoy), String(metaC),
+            metaC? Math.round(casasHoy*100/metaC):0, 0,
+            faltaC ? ('faltan '+faltaC) : 'llegaste', !faltaC);
+    }
+    h += '</div>';
+
+    /* Lo cargado y sin entregar no se suma al facturado —no facturo— pero
+       tampoco se puede callar: cambia por completo la lectura de un lunes a la
+       mañana, cuando casi todo el finde esta cargado y nada entregado. */
+    if(real.pend > 0){
+      h += '<div class="plan-sm-pend">Ademas hay <b>$'+_planPesos(real.pend)+'</b> en <b>'+real.pendPed
+         + (real.pendPed===1?' pedido':' pedidos')+'</b> ya cargados para estos dias y todavia sin entregar. '
+         + 'No cuentan como facturado, pero ya estan comprometidos.</div>';
+    }
+    h += '<div class="plan-sm-pie">La plata y los pedidos son de <b>todo el retail</b> (Home + Pilar) y del tramo. '
+       + 'Las casas son solo de <b>Estancias del Pilar</b> y van acumuladas en el mes, '
+       + 'que es como esta escrito el plan.</div>';
+    return h + '</div>';
+  }
+
+  /* El panel llama a esto cuando llega el volcado (ver `_SECCION`). El guard va
+     acá porque `planData` vive en este scope y desde afuera no se ve. */
+  window.planRepintarPorD = function(){
+    if(!planData || !planData.ok) return;
+    /* El error NO se traga: un repintado que falla en silencio deja la pantalla
+       vacia y parece que la tab no tiene datos. */
+    try{ renderObjetivo(); renderAcciones(); renderOrigen(); }
+    catch(e){ console.error('planRepintarPorD ->', e); }
+  };
+
   function renderObjetivo(){
     var cont = el('planObjetivo'); if(!cont) return;
     _planAsegurarCrm();
     var metaCasas = _planMetaCasas();
     var r = _planCasasDelMes();
+    var cortes = _planCortes(), metas = _planSemanales();
+    var hoy = planData.diasTrans || 0;
+
+    /* El bloque de la semana se arma PRIMERO y sale SIEMPRE, aun sin el CRM: la
+       plata y los pedidos salen del volcado y no dependen de los clientes. Si
+       quedara atras de los `return` de abajo, lo mas importante de la pantalla se
+       lo llevaria puesto una carga del CRM que todavia no volvio. */
+    var semana = _planBloqueSemana(hoy, cortes, metas, (r && r.ok) ? (r.casas||[]) : null);
 
     if(!metaCasas){
-      cont.innerHTML = '<div class="plan-casas"><div class="plan-casas-t">Objetivo del mes</div>'
+      cont.innerHTML = semana + '<div class="plan-casas"><div class="plan-casas-t">Objetivo del mes</div>'
         + '<div class="plan-casas-pie" style="margin-top:8px">Este mes no tiene meta de casas cargada. '
         + 'Se carga en la hoja <b>Plan Ventas</b>, columnas <b>Meta Casas</b> y <b>Metas Semanales</b>.</div></div>';
       return;
     }
     if(!r || !r.ok){
-      cont.innerHTML = '<div class="plan-casas"><div class="plan-casas-t">Casas comprando en '+esc(planData.mes)+'</div>'
+      cont.innerHTML = semana + '<div class="plan-casas"><div class="plan-casas-t">Casas comprando en '+esc(planData.mes)+'</div>'
         + '<div class="plan-casas-n">— <small>de '+metaCasas+'</small></div>'
         + '<div class="plan-aviso">No puedo contarlas todavia: '+esc((r&&r.motivo)||'faltan los datos del CRM')
         + '. Los datos se estan trayendo; en unos segundos se actualiza solo.</div></div>';
@@ -24944,13 +25147,12 @@ if('serviceWorker' in navigator){
     var casas = r.casas || [];
     var hechas = casas.length;
     var pct = Math.round(hechas*100/metaCasas);
-    var cortes = _planCortes(), metas = _planSemanales();
-    var hoy = planData.diasTrans || 0;
+    var h = semana;
     var objHoy = metas.length ? _planObjetivoAlDia(hoy, cortes, metas) : Math.round(metaCasas*hoy/(planData.diasMes||30));
     var delta = hechas - objHoy;
     var color = delta >= 0 ? 'var(--g)' : (delta >= -5 ? '#D97706' : 'var(--r)');
 
-    var h = '<div class="plan-casas">'
+    h += '<div class="plan-casas">'
       + '<div class="plan-casas-top">'
         + '<div><div class="plan-casas-t">Casas comprando en '+esc(planData.mes)+'</div>'
         + '<div class="plan-casas-n">'+hechas+' <small>de '+metaCasas+'</small></div></div>'
