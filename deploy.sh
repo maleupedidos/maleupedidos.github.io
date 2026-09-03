@@ -107,6 +107,20 @@ else
   echo "    (ningun .html modificado)"
 fi
 
+# ── 3e. Los precios del AUTOPEDIDO, contra la hoja Productos ─────────────────
+#  La tab AUTOPEDIDO decide el precio del pedido con la tabla escrita adentro de
+#  ruta.html, y el backend guarda el total que le manda el celular: no recalcula.
+#  Esa tabla se refresca por `action=precios`, pero eso viaja 3-7 s y puede
+#  fallar; mientras tanto vale lo del archivo. El 3/9/2026 la Margarita decia
+#  $11.200 y la hoja $11.500: un mes desfasada, sin un solo error en consola.
+#  Si no hay internet, el chequeo se saltea solo — no frena un arreglo urgente.
+echo "→ [3e/8] Precios del AUTOPEDIDO…"
+if echo "$HTMLS" | grep -q "ruta.html" || [ -n "${PRECIOS_SIEMPRE:-}" ]; then
+  node _tools/precios.js | sed 's/^/    /' || fallar "Los precios del AUTOPEDIDO no coinciden con la hoja — corre: node _tools/precios.js --escribir"
+else
+  echo "    (no se toco ruta.html)"
+fi
+
 # ── 4. Service worker al dia ─────────────────────────────────────────────────
 #  Si cambio el HTML de una PWA, su CACHE_NAME tiene que cambiar tambien, o el
 #  celular que ya tiene ese nombre cacheado no invalida nada.

@@ -16471,13 +16471,44 @@ if('serviceWorker' in navigator){
 
   // Carga la bitácora de interacciones (F3). Al volver, re-pinta el sub activo
   // si los clientes ya están (así el cockpit aplica silencio + seguimientos).
+  /* ── Las marcas de ESTA sesión que el servidor todavía no devolvió ─────────
+     `loadCrmInteracciones` REEMPLAZA el array entero. Si su respuesta venía en
+     vuelo cuando tocaste "✓ Le escribí" —y ese endpoint tarda entre 2 y 40 s—,
+     al llegar borraba tu marca de la pantalla: la casa volvía a Plan semana y no
+     aparecía en ☀️ Hoy, aunque la fila SÍ estaba guardada en la planilla.
+     Peor: la respuesta puede ser de una lectura anterior a tu POST, así que ni
+     siquiera hace falta que el backend haya fallado.
+     Era intermitente —depende de si el fetch termina antes o después del toque—,
+     que es la peor forma de fallar: parece que el botón "a veces no anda".
+     Se fusiona por id: lo que ya volvió del servidor sale de acá. */
+  var _interLocales = [];
+  function _crmInterLocalAdd(it){
+    if (!it || !it.id) return;
+    _interLocales.push(it);
+    crmInteracciones = (crmInteracciones || []).concat([it]);
+  }
+  function _crmInterLocalDrop(id){
+    _interLocales = _interLocales.filter(function(x){ return x.id !== id; });
+  }
+  function _crmInterFusion(delServidor){
+    var vistos = {};
+    (delServidor || []).forEach(function(i){ if (i && i.id) vistos[i.id] = 1; });
+    var ahora = Date.now(), DIA = 86400000;
+    _interLocales = _interLocales.filter(function(i){
+      if (vistos[i.id]) return false;                      // ya volvió del servidor
+      var t = _crmFechaSort(i.fecha);
+      return !t || (ahora - t) < DIA;   // red por si alguna nunca vuelve: no se acumulan
+    });
+    return (delServidor || []).concat(_interLocales);
+  }
+
   function loadCrmInteracciones(){
     // Pintado instantáneo desde cache local (la bitácora ya aparece en la ficha) + refresco bg.
     if (!crmInteracciones){ try{ var ic=JSON.parse(localStorage.getItem('maleu_crm_inter_v1')||'null'); if(ic){ crmInteracciones=ic; _crmIndexInteracciones(); } }catch(e){} }
     fetch(CRM_API + '?action=crmInteracciones')
       .then(function(r){ return r.json(); })
       .then(function(d){
-        crmInteracciones = d.interacciones || [];
+        crmInteracciones = _crmInterFusion(d.interacciones || []);
         try{ localStorage.setItem('maleu_crm_inter_v1', JSON.stringify(crmInteracciones)); }catch(e){}
         _crmIndexInteracciones();
         if (crmClientes) _crmRenderActiveSub();
@@ -19233,7 +19264,7 @@ if('serviceWorker' in navigator){
       .then(function(r){ return r.json(); })
       .then(function(d){
         if (d.ok && d.interacciones){
-          crmInteracciones = (crmInteracciones||[]).concat(d.interacciones);
+          d.interacciones.forEach(_crmInterLocalAdd);
           _crmIndexInteracciones();
           toast(d.n+' marcados como enviados ✅');
           renderCrmSegmentos();
@@ -19320,8 +19351,7 @@ if('serviceWorker' in navigator){
         btn.disabled = false; btn.textContent = 'Guardar contacto';
         if (d.ok && d.interaccion){
           // Insertar en cache local sin recargar todo (optimista).
-          crmInteracciones = crmInteracciones || [];
-          crmInteracciones.push(d.interaccion);
+          _crmInterLocalAdd(d.interaccion);
           _crmIndexInteracciones();
           crmLogClose();
           toast('Contacto registrado');
@@ -19364,8 +19394,8 @@ if('serviceWorker' in navigator){
           return;
         }
         // Optimista: entra en la cache local y se repinta, sin recargar todo.
-        crmInteracciones = crmInteracciones || [];
-        crmInteracciones.push(res.interaccion);
+        // Va por _crmInterLocalAdd para que una carga en vuelo no se la lleve.
+        _crmInterLocalAdd(res.interaccion);
         _crmIndexInteracciones();
         toast(aviso.replace('{n}', _hoyPrimerNombre(d.nombre)));
         if (crmCurSub === 'hoy' && crmClientes) renderCrmHoy();
@@ -19375,7 +19405,9 @@ if('serviceWorker' in navigator){
       .catch(function(err){ btn.disabled = false; btn.textContent = txt; toast('Error: '+err.message); });
   }
   window.crmMarcarEscribi = function(btn){
-    _crmLogRapido(btn, 'Le escribi', '✓ Le escribiste a {n} — queda en «Esperando respuesta»');
+    // El aviso dice DONDE quedó: la fila desaparece de Plan semana y si no se
+    // nombra la pantalla parece que se perdió.
+    _crmLogRapido(btn, 'Le escribi', '✓ Le escribiste a {n} — pasa a ⏳ Esperando respuesta, en ☀️ Hoy');
   };
   window.crmDesenlace = function(btn){
     var r = (btn && btn.getAttribute('data-r')) || '';
@@ -19523,6 +19555,7 @@ if('serviceWorker' in navigator){
       .then(function(d){
         if (d.ok){
           crmInteracciones = (crmInteracciones||[]).filter(function(x){ return x.id !== id; });
+          _crmInterLocalDrop(id);   // si era de esta sesión, que no vuelva en la próxima fusión
           _crmIndexInteracciones();
           toast('Contacto borrado');
           if (crmFichaActual && crmFichaActual.tipo === 'cliente') _crmRenderBitacora(crmFichaActual.data);

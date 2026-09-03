@@ -319,6 +319,8 @@ body.embed .tabs{top:0}
 .np-input{width:100%;padding:14px 14px;border:1.5px solid var(--border);border-radius:10px;font-family:inherit;font-size:16px;font-weight:600;background:var(--white);outline:none;color:var(--brown);-webkit-appearance:none;appearance:none}
 .np-input:focus{border-color:var(--orange)}
 select.np-input{background:var(--white) url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6' fill='%23331C1C'><path d='M0 0l5 6 5-6z'/></svg>") no-repeat right 14px center/10px 6px;padding-right:34px}
+.np-aviso{margin:0 0 10px;padding:10px 12px;border:1.5px solid #f0a020;background:#fff6e5;color:#7a4a00;border-radius:10px;font-size:13px;line-height:1.45}
+.np-aviso-btn{margin-left:6px;min-height:34px;padding:6px 12px;border:1.5px solid #f0a020;background:#fff;color:#7a4a00;border-radius:8px;font-family:inherit;font-size:13px;font-weight:800;cursor:pointer;touch-action:manipulation}
 .np-chips{display:flex;gap:6px}
 .np-chip{flex:1;padding:13px 6px;border:1.5px solid var(--border);background:var(--white);color:var(--brown);border-radius:10px;font-family:inherit;font-size:14px;font-weight:800;cursor:pointer;touch-action:manipulation;transition:.1s}
 .np-chip.active{background:var(--orange);color:#fff;border-color:var(--orange)}
@@ -461,6 +463,8 @@ select.np-input{background:var(--white) url("data:image/svg+xml;utf8,<svg xmlns=
 <!-- NUEVO PEDIDO — form express para alta rapida (mostrador/auto/anciana) -->
 <div id="nuevoView" class="hidden">
   <div class="np-wrap">
+    <!-- Precios sin confirmar: solo aparece si el fetch a la hoja Productos fallo -->
+    <div id="npAvisoPrecios" class="np-aviso hidden"></div>
     <!-- Zona -->
     <div class="np-chips" id="npZonaChips">
       <button type="button" class="np-chip active" data-zona="Home" onclick="npSetZona('Home')">Home</button>
@@ -1017,17 +1021,28 @@ function _cmpProdAbbr(a,b){var ra=_prodRank(a),rb=_prodRank(b);if(ra!==rb)return
 function _sortProds(arr){return (arr||[]).slice().sort(function(x,y){return _cmpProdAbbr(x.a,y.a);});}
 var NP_CLUBES_IDS=[19,1,2,3,4,5,6,7];
 var NP_CLUBES_WEB_ID={19:'pmu',1:'pma',2:'pjq',3:'pcc',4:'pjm',5:'pp1',6:'pp2',7:'pp3'};
+/* PRECIOS DE ARRANQUE — la fuente de verdad es la hoja Productos, que llega por
+   `action=precios`. Esta tabla es lo que se ve MIENTRAS ese fetch viaja (3-7 s) y
+   lo unico que queda si el fetch falla.
+   Estuvo un mes desfasada (5/8 -> 3/9/2026): la hoja decia 11.500 para la
+   Margarita y la app arrancaba mostrando 11.200. Por eso ahora hay dos redes:
+   `npPreciosConfirmados` avisa en pantalla cuando no se pudo confirmar, y
+   `node _tools/precios.js` corta el deploy si esta tabla se despega de la hoja.
+   Para actualizarla: `node _tools/precios.js --escribir`. */
 var NP_PRECIOS={
   PPM:{p:17000,c:9200,pc:13000},PPJyQ:{p:17000,c:9200,pc:13000},PPCyQ:{p:17000,c:9200,pc:13000},
   SQB:{p:22100,c:17100},SL:{p:22100,c:17100},SCo:{p:19800,c:14800},SPyP:{p:18300,c:13300},
   SJyQ:{p:18300,c:13300},SE:{p:17000,c:12000},SCa:{p:16500,c:11500},
-  ECaC:{p:21000,c:14700},EJyQ:{p:18000,c:11900},ECyQ:{p:18000,c:11900},EV:{p:18000,c:11900},
+  ECaC:{p:20000,c:14700},EJyQ:{p:18000,c:11900},ECyQ:{p:18000,c:11900},EV:{p:18000,c:11900},
   TG:{p:26000,c:20800},TLC:{p:26000,c:20800},TC:{p:26000,c:20800},F:{p:9000,c:5350},
-  PMu:{p:11000,c:6200,pc:7900},PMa:{p:11200,c:6500,pc:8000},PJyQ:{p:11200,c:6800,pc:8300},
-  PCC:{p:11200,c:6500,pc:8000},PJyM:{p:12000,c:7000,pc:8000},
+  PMu:{p:11200,c:6200,pc:7900},PMa:{p:11500,c:6500,pc:8000},PJyQ:{p:11800,c:6800,pc:8300},
+  PCC:{p:11500,c:6500,pc:8000},PJyM:{p:12000,c:7000,pc:8000},
   TP:{p:12000,c:7000},TJyQ:{p:12000,c:7000},TCa:{p:12000,c:7000},TV:{p:12000,c:7000},
   RC:{p:13000,c:8000},RP:{p:13000,c:8000}
 };
+/* false hasta que `action=precios` conteste. Mientras este en false, el catalogo
+   muestra precios que NO estan confirmados contra la hoja, y hay que decirlo. */
+var npPreciosConfirmados=false;
 var NP_FAMILIA={
   tadeo:{nombre:'Tadeo Ustariz',tel:'+5491136887500',lote:'289',sb:'Champagnat Alto'},
   alejandra:{nombre:'Alejandra Basualdo',tel:'+5491136887405',lote:'289',sb:'Champagnat Alto'},
@@ -4186,7 +4201,7 @@ function _refrescarPreciosSilencioso(){
   if(_preciosFresh)return;
   fetch(RUT_APPS_SCRIPT_URL+'?action=precios&t='+Date.now())
     .then(function(r){return r.json()})
-    .then(function(d){if(d&&Object.keys(d).length>0){NP_PRECIOS=d;_preciosFresh=true;}})
+    .then(function(d){if(d&&Object.keys(d).length>0){NP_PRECIOS=d;_preciosFresh=true;npPreciosConfirmados=true;}})
     .catch(function(){});
 }
 
@@ -5241,11 +5256,14 @@ function renderNuevo(){
   if(!document.getElementById('npProductos').dataset.rendered){
     npRenderCatalogo();
     npRenderFechas();
-    npFetchPrecios();
     document.getElementById('npProductos').dataset.rendered='1';
   } else {
     npRenderFechas();
   }
+  // Los precios se piden SIEMPRE al abrir, no solo la primera vez. La PWA queda
+  // abierta dias: si el fetch corriera una sola vez, entrar el lunes y volver el
+  // viernes serviria el precio del lunes. Es un GET chico y no bloquea nada.
+  npFetchPrecios();
   npFetchStock();
   npUpdateTotal();
   // Aplicar estado del footer colapsado (persistido)
@@ -5977,17 +5995,50 @@ function npExcedidos(){
   });
   return out;
 }
+/* Trae los precios de la hoja Productos. Hasta que conteste, el catalogo muestra
+   los de arranque — que pueden estar viejos — y por eso npPintarAvisoPrecios()
+   lo dice en pantalla en vez de callarlo. */
 function npFetchPrecios(){
   fetch(RUT_APPS_SCRIPT_URL+'?action=precios&t='+Date.now())
     .then(function(r){return r.json()})
-    .then(function(data){if(data&&Object.keys(data).length>0){NP_PRECIOS=data;npRenderCatalogo();npUpdateTotal()}})
-    .catch(function(){});
+    .then(function(data){
+      if(data&&Object.keys(data).length>0){
+        NP_PRECIOS=data;npPreciosConfirmados=true;
+        npRenderCatalogo();npUpdateTotal();
+      }
+      npPintarAvisoPrecios();
+    })
+    .catch(function(){npPintarAvisoPrecios()});
+}
+
+/* El cartel de "estos precios no los pude confirmar". Aparece solo cuando hace
+   falta: si los precios llegaron, no molesta. Cobrar con un precio viejo y no
+   avisar es la misma mentira por omision que mostrar una copia guardada sin
+   decir de cuando es. */
+function npPintarAvisoPrecios(){
+  var el=document.getElementById('npAvisoPrecios');
+  if(!el)return;
+  if(npPreciosConfirmados){el.classList.add('hidden');el.textContent='';return}
+  el.innerHTML='<b>Ojo: precios sin confirmar.</b> No pude leer la hoja Productos, '+
+               'asi que estos son los de la ultima version de la app y pueden estar viejos. '+
+               '<button type="button" class="np-aviso-btn" onclick="npFetchPrecios()">Reintentar</button>';
+  el.classList.remove('hidden');
 }
 
 function npGuardar(){
   if(npSaving)return;
   var nombre=document.getElementById('npNombre').value.trim();
   if(!nombre){showToast('Falta el nombre');return}
+  // El precio de este pedido lo decide ESTA tabla: el backend guarda el total que
+  // le mandamos, no lo recalcula. Si no la pudimos confirmar contra la hoja, el
+  // pedido y el mensaje que le llega al cliente pueden salir con un precio viejo.
+  // Avisa y deja seguir: a veces hay que cargarlo igual y despues corregir.
+  if(!npPreciosConfirmados){
+    if(!confirm('⚠️ No pude confirmar los precios con la hoja Productos.\n\n'+
+                'Estos son los de la ultima version de la app y pueden estar viejos: '+
+                'el pedido, el total y el mensaje al cliente saldrian con ESE precio.\n\n'+
+                '¿Guardar igual?'))return;
+  }
   // Ultimo control antes de grabar: si algo se pasa del stock, que sea una
   // decision tomada y no un descuido. No bloquea.
   var _exc=npExcedidos();
