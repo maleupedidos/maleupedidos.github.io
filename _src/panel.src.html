@@ -7065,16 +7065,74 @@ function getWeek(d){
 // "sumame 1 pack más", "cerrame con 3") cuenta como 1 VENTA, no como N. El Panel no
 // trae el teléfono en los pedidos, así que agrupamos por nombre normalizado + día de
 // entrega (fe→f). Facturado y margen NO cambian; solo el CONTEO de ventas y el ticket.
-function _ventaKey(p){
-  var cli=String(p.c||'').toLowerCase().trim().replace(/\s+/g,' ');
+/* ── QUE ES UNA VENTA ────────────────────────────────────────────────────
+   Una venta es una ENTREGA, no un pedido ni un dia. Tadeo lo planteo asi:
+
+     "si me pide a las 19:00 y a las 19:05 para el mismo dia, es 1 hecho nomas.
+      Pero si me pide para el mediodia, se lo entrego el mediodia, y despues ese
+      mismo dia me pide para la noche, ahi si son dos ventas: se lo entrego en
+      dos momentos, en dos hechos diferentes."
+
+   Hasta el 3/9/2026 la clave era cliente+dia, asi que la primera mitad ya estaba
+   bien (Cape Brave, 3 pedidos entregados juntos a las 21:41 = 1 venta) y la
+   segunda no: dos entregas separadas por horas contaban como una.
+
+   Medido sobre los 864 pedidos de Home y Pilar: 12 clientes tienen 2+ pedidos el
+   mismo dia, 26 pedidos en total. La hora de entrega los separa bien.
+
+   `he` (hora de entrega) lo manda el volcado desde la v521. Si no viene —un
+   pedido viejo, o un Apps Script anterior— la clave cae a cliente+dia, que es
+   exactamente el comportamiento de antes: nunca puede contar MENOS ventas que
+   el criterio viejo. */
+var _VENTA_MISMO_VIAJE_MIN = 60;   // dos entregas a menos de esto son el mismo hecho
+
+function _ventaKey(p, tramo){
+  /* Identidad por TELEFONO, con el nombre de respaldo: el mismo numero es la
+     misma persona aunque el nombre venga tipeado distinto ("Tadeo Ustariz" /
+     "tadeo ustariz " / "Tadeo"). Es el criterio que ya usaba la tarjeta semanal
+     de Estancias; las otras dos pantallas contaban por nombre y por eso podian
+     dar distinto sobre los mismos pedidos. */
+  var tel=String(p.tel||'').replace(/\D/g,''); if(tel.length>10)tel=tel.slice(-10);
+  var cli=tel||String(p.c||'').toLowerCase().trim().replace(/\s+/g,' ');
   var dia=String(p.fe||p.f||'');
-  return cli+'|'+dia;
+  return cli+'|'+dia+(tramo?('|'+tramo):'');
 }
-function _contarVentas(peds){
-  var s={};
-  for(var i=0;i<peds.length;i++){var k=_ventaKey(peds[i]);if(k&&k!=='|')s[k]=true;}
-  return Object.keys(s).length;
+function _minutosDe(hhmm){
+  var m=String(hhmm||'').match(/^(\d{1,2}):(\d{2})/);
+  return m ? (Number(m[1])*60+Number(m[2])) : null;
 }
+/* Agrupa los pedidos en ocasiones. Se recorre EN ORDEN de hora y se corta cuando
+   el salto contra la entrega ANTERIOR supera la ventana — no contra la primera:
+   la cercania no es transitiva y un viaje que se estira de 10:00 a 12:00 en
+   pasos de una hora sigue siendo un viaje. */
+function _ocasiones(peds){
+  var porCliDia={};
+  for(var i=0;i<peds.length;i++){
+    var p=peds[i], base=_ventaKey(p);
+    if(!base||base==='|')continue;
+    (porCliDia[base]||(porCliDia[base]=[])).push(p);
+  }
+  var claves={};
+  Object.keys(porCliDia).forEach(function(base){
+    var lst=porCliDia[base];
+    var conHora=[], sinHora=[];
+    lst.forEach(function(p){ (_minutosDe(p.he)===null?sinHora:conHora).push(p); });
+    // Sin hora no se puede separar: quedan todos juntos, como antes.
+    if(sinHora.length) claves[base]=true;
+    if(!conHora.length) return;
+    conHora.sort(function(a,b){ return _minutosDe(a.he)-_minutosDe(b.he); });
+    var tramo=0, prev=_minutosDe(conHora[0].he);
+    claves[base+'|t0']=true;
+    for(var j=1;j<conHora.length;j++){
+      var m=_minutosDe(conHora[j].he);
+      if(m-prev>_VENTA_MISMO_VIAJE_MIN) tramo++;
+      prev=m;
+      claves[base+'|t'+tramo]=true;
+    }
+  });
+  return Object.keys(claves);
+}
+function _contarVentas(peds){ return _ocasiones(peds||[]).length; }
 
 // ── DATE HELPERS dd/mm/aaaa ──
 // Backend exige ISO YYYY-MM-DD; UI muestra dd/mm/aaaa. Convertimos en ambos lados.
@@ -9527,7 +9585,10 @@ function rInicio(){
       var d=new Date(nowYear,Number(pp[1])-1,Number(pp[0]));
       var w=getWeek(d), wd=(d.getDay()+6)%7, cli=(p.c||'').trim().toLowerCase().replace(/\s+/g,' ');
       var mb=(Number(p.$||0)-(Number(p.co||0)));
-      var vk=cli+'|'+f; // clave de venta: cliente + día (compra dividida en momentos = 1 venta)
+      // Una sola definicion de venta para todo el ERP: ver `_ocasiones`.
+      // Antes esta linea rearmaba la clave a mano y por eso no se entero del
+      // cambio de criterio — es la tercera vez que una copia se despega.
+      var vk=_ocasiones([p])[0]||(cli+'|'+f);
       if(!agg[w])agg[w]={fact:0,mg:0,cli:{},ventas:{},wd:{}};
       agg[w].fact+=Number(p.$||0);agg[w].mg+=mb;if(cli){agg[w].cli[cli]=true;agg[w].ventas[vk]=true;}
       var kd='d'+wd;
@@ -23553,9 +23614,13 @@ if('serviceWorker' in navigator){
       // el nombre venga tipeado distinto); si no hay tel, cae al nombre normalizado.
       var _tel=String(p.tel||'').replace(/\D/g,''); if(_tel.length>10)_tel=_tel.slice(-10);
       var ck=_tel||(p.c||'').trim().toLowerCase(); if(ck)o.cli[ck]=true;
-      // Venta = ocasión de compra = cliente + día (compra partida en momentos = 1 venta).
-      // o.n se fija después del loop como cantidad de ventas únicas.
-      if(ck)o.ventas[ck+'|'+d.getFullYear()+'-'+(d.getMonth()+1)+'-'+d.getDate()]=true;
+      /* Venta = una ENTREGA. Sale de `_ocasiones`, la unica definicion del ERP:
+         dos pedidos que salen en el mismo viaje son una venta, dos entregas
+         separadas por mas de una hora son dos. Antes esta linea armaba la clave
+         a mano (cliente+dia) y por eso no se enteraba del criterio nuevo. */
+      var _oc=_ocasiones([p])[0];
+      if(_oc)o.ventas[_oc]=true;
+      else if(ck)o.ventas[ck+'|'+d.getFullYear()+'-'+(d.getMonth()+1)+'-'+d.getDate()]=true;
       if(d.getTime()<o.minTs)o.minTs=d.getTime(); if(d.getTime()>o.maxTs)o.maxTs=d.getTime();
       o.day[d.getDay()]=(o.day[d.getDay()]||0)+1;
       var sb=String(p.br||'').trim()||'(sin sub-barrio)';   // p.br = sub-barrio del pedido
