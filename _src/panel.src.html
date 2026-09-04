@@ -1091,6 +1091,10 @@ body{font-family:'Inter',-apple-system,'Segoe UI',system-ui,sans-serif;backgroun
 .v-filtros-btn{display:none;align-items:center;gap:6px;background:var(--cr);border:1px solid var(--border);border-radius:9px;color:var(--ink2);font:inherit;font-size:12.5px;font-weight:600;cursor:pointer;padding:0 14px;min-height:44px;margin:0 0 12px}
 .v-filtros-btn.on{display:inline-flex}
 .v-filtros-btn .cnt{background:var(--o);color:#fff;border-radius:20px;font-size:10.5px;padding:1px 7px}
+/* El sello de la copia guardada de una ficha. Va pegado abajo del titulo del
+   cajon, antes del cuerpo: si estuviera adentro del cuerpo, cada repintado de
+   la ficha lo borraria. */
+.crm-ficha-sello{padding:7px 16px;background:#FFF8E1;border-bottom:1px solid #FFE082;color:#8D6E63;font-size:11.5px;font-weight:700;line-height:1.4}
 .crm-busq{position:relative;margin:10px 0 14px}
 .crm-busq input{width:100%;box-sizing:border-box;padding:11px 34px 11px 36px;border:1px solid var(--border);border-radius:9px;font-size:14px;font-family:inherit;color:var(--ink);background:#fff;min-height:44px}
 .crm-busq input:focus{outline:none;border-color:var(--o)}
@@ -4654,6 +4658,7 @@ function ajPermisoSet(rol,tab,acceso){
     <button class="bbdd-drawer-back" onclick="crmDrawerBack()" aria-label="Volver / cerrar">&#8592;</button>
     <div class="bbdd-drawer-title" id="crmDrawerTitle">Ficha</div>
   </div>
+  <div class="crm-ficha-sello" id="crmFichaSello" style="display:none"></div>
   <div class="bbdd-drawer-body" id="crmDrawerBody"></div>
 </div>
 
@@ -20465,8 +20470,57 @@ if('serviceWorker' in navigator){
       .catch(function(err){ toast('Error: '+err.message); });
   };
 
+  /* ── LA FICHA, RAPIDA (4/9/2026) ────────────────────────────────────────
+     Medido: crmCliente tarda 17,4 s en frio y 2,3 s despues; crmClientes son
+     311 KB y 11-15 s. Todo lo que evite pegarle al server se nota. */
+
+  /* Mueve la identidad de un cliente en la lista local. Sin esto, despues de
+     cargarle el telefono la lista sigue con la key vieja y la ficha se va al
+     camino lento — que es el caso de Fernandez que reporto Tadeo. */
+  function _crmReKey(keyVieja, keyNueva, tel){
+    if (!crmClientes || keyVieja === keyNueva) return false;
+    var movido = false;
+    for (var i = 0; i < crmClientes.length; i++){
+      if (crmClientes[i].key !== keyVieja) continue;
+      crmClientes[i].key = keyNueva;
+      if (tel) crmClientes[i].tel = tel;
+      movido = true;
+      break;
+    }
+    if (movido){
+      try { window._lsSetSafe('maleu_crm_clientes_v1', JSON.stringify(crmClientes)); } catch(e){}
+    }
+    return movido;
+  }
+
+  /* La copia guardada de una ficha. Se usa `_swrGuardar`/`_swrLeer`, que son
+     los del panel y ya podan solos cuando localStorage se llena: un segundo
+     mecanismo de cache se despegaria del primero. */
+  function _fichaGuardar(key, cliente){
+    try { window._swrGuardar('crmFicha_' + key, cliente); } catch(e){}
+  }
+  function _fichaLeer(key){
+    try { return window._swrLeer('crmFicha_' + key) || null; } catch(e){ return null; }
+  }
+  /* Toda pantalla que muestre una copia tiene que decir de cuando es: mostrarla
+     callado seria mentir por omision. */
+  /* Que ficha se esta pidiendo ahora mismo. Sirve para descartar una respuesta
+     que llega tarde, cuando el usuario ya abrio otra. */
+  var _fichaPidiendo = null;
+
+  function _fichaSello(cuando){
+    var c = el('crmFichaSello');
+    if (!c) return;
+    if (!cuando){ c.style.display = 'none'; return; }
+    c.style.display = '';
+    var h = '';
+    try { h = window._hace(cuando); } catch(e){ h = ''; }
+    c.textContent = 'Mostrando lo guardado' + (h ? ' (' + h + ')' : '') + ' — buscando lo de ahora…';
+  }
+
   window.crmOpenCliente = function(keyEnc){
     var key = decodeURIComponent(keyEnc);
+    _fichaPidiendo = key;
     openDrawer();
     // Render instantaneo desde la lista ya cacheada (sin esperar al server).
     // El server solo aporta el historial pesado, que llega en 2do plano.
@@ -20479,8 +20533,19 @@ if('serviceWorker' in navigator){
       // Solo se busca en el server si no hay pedidos en memoria (fallback).
       if (_crmHistLocalHtml(li) != null) return;
     } else {
-      el('crmDrawerTitle').textContent = 'Cargando...';
-      el('crmDrawerBody').innerHTML = '<div class="loading">Cargando ficha...</div>';
+      /* Sin `li` estamos en el camino lento (17-30 s). Antes eso era una
+         pantalla en blanco con "Cargando ficha...". Si ya abrimos esta ficha
+         alguna vez, la pintamos YA de la copia y refrescamos por atras. */
+      var guardada = _fichaLeer(key);
+      if (guardada && guardada.d){
+        el('crmDrawerTitle').textContent = (guardada.d.nombre || 'Ficha') + (guardada.d.vip ? '  -  VIP' : '');
+        crmFichaActual = {tipo:'cliente', data: guardada.d};
+        renderFichaCliente(guardada.d);
+        _fichaSello(guardada.t);
+      } else {
+        el('crmDrawerTitle').textContent = 'Cargando...';
+        el('crmDrawerBody').innerHTML = '<div class="loading">Cargando ficha…<br><span style="font-size:12px;font-weight:600;opacity:.7">la primera vez tarda unos segundos</span></div>';
+      }
     }
     fetch(CRM_API + '?action=crmCliente&key=' + encodeURIComponent(key))
       .then(function(r){ return r.json(); })
@@ -20489,11 +20554,36 @@ if('serviceWorker' in navigator){
           if (!li) el('crmDrawerBody').innerHTML = '<div class="empty"><p>'+escHtml(d.error||'No encontrado')+'</p></div>';
           return;
         }
+        _fichaGuardar(key, d.cliente);
+        /* Si mientras viajaba la respuesta el usuario abrio OTRA ficha, no le
+           pisamos la pantalla con esta: la copia queda guardada igual.
+           Se compara contra la key que se esta PIDIENDO, no contra la que esta
+           pintada: al abrir una ficha nunca vista, la pintada todavia es la
+           anterior y comparar con ella descartaba la respuesta correcta. */
+        if (_fichaPidiendo !== key) return;
         crmFichaActual = {tipo:'cliente', data:d.cliente};
-        renderFichaCliente(d.cliente);
+        /* El pintado va en su PROPIO try. Si se mezcla con el catch del fetch,
+           un error de `renderFichaCliente` se confunde con uno de red — y como
+           esa rama chequea `_fichaLeer(key)`, que ya existe porque la copia se
+           guardo dos lineas arriba, caia en el else y no pintaba nada: la
+           pantalla quedaba en "Cargando ficha..." para siempre, sin un error
+           a la vista. */
+        try {
+          renderFichaCliente(d.cliente);
+          _fichaSello(null);
+        } catch(errPintar){
+          console.error('renderFichaCliente', errPintar);
+          el('crmDrawerBody').innerHTML = '<div class="empty"><p>No pude dibujar la ficha de <b>' +
+            escHtml(d.cliente.nombre || 'este cliente') + '</b>.</p>' +
+            '<p style="font-size:12px;opacity:.75">' + escHtml(String(errPintar && errPintar.message || errPintar)) + '</p></div>';
+          _fichaSello(null);
+        }
       })
       .catch(function(err){
-        if (!li) el('crmDrawerBody').innerHTML = '<div class="empty"><p>Error: '+escHtml(err.message)+'</p></div>';
+        /* Aca solo llegan errores de RED. Si ya hay algo pintado (de la lista o
+           de la copia), se deja: mejor lo de antes que una pantalla de error. */
+        if (!li && !_fichaLeer(key)) el('crmDrawerBody').innerHTML = '<div class="empty"><p>Error: '+escHtml(err.message)+'</p></div>';
+        else _fichaSello(null);
       });
   };
 
@@ -20851,6 +20941,11 @@ if('serviceWorker' in navigator){
         toast('Teléfono guardado en ' + (d.totalFilas || 0) + ' pedido' + ((d.totalFilas === 1) ? '' : 's'));
         // La identidad del cliente cambió: la ficha vieja ya no existe.
         try { CRM_DATA = null; } catch(e){}
+        /* Y la LISTA local todavía lo tiene con la key vieja. Sin mover la key
+           acá, `crmOpenCliente(telNuevo)` no lo encuentra, cae al camino lento
+           y son 17-30 s de pantalla en blanco — el caso de Fernández. */
+        _crmReKey(c.key, d.telNuevo, d.telNuevo);
+        if (c.tel !== d.telNuevo) c.tel = d.telNuevo;
         crmOpenCliente(encodeURIComponent(d.telNuevo));
       })
       .catch(function(err){ toast('Error: ' + err.message); });
