@@ -2875,6 +2875,28 @@ function renderCobros(){
   fetchCobrosPendientes();
 }
 
+/* ¿Entro el cobro? Le pregunta al server y lo DICE (4/9/2026).
+   El server es la fuente de verdad: si el pedido ya no esta en la lista de
+   cobros pendientes, es porque quedo cobrado. Reintenta un par de veces porque
+   Apps Script atiende de a una consulta y puede tardar. */
+function _verificarCobroEntro(pc,intento){
+  if(!pc)return;
+  var id=(pc.h||'')+'|'+(pc.id||'');
+  var quien=String(pc.c||'').split(' ')[0]||'el cliente';
+  fetchCobrosPendientes(true).then(function(ok){
+    if(ok){
+      var sigue=(pendientesCobro||[]).some(function(x){return (x.h||'')+'|'+(x.id||'')===id;});
+      if(!sigue){ showToast('✅ Listo — el cobro de '+quien+' quedó registrado'); return; }
+    }
+    /* Todavia figura pendiente (o no se pudo consultar): puede ser que el
+       reintento no salio aun. Se vuelve a mirar, sin apurar al server. */
+    if(intento<2){ setTimeout(function(){_verificarCobroEntro(pc,intento+1);},9000); return; }
+    /* No se bloquea ni se revierte: la accion esta en la cola y se reintenta
+       sola. Lo unico que NO hay que hacer es tocar el boton de nuevo. */
+    showToast('El cobro de '+quien+' sigue en camino — se reintenta solo, no lo toques de nuevo');
+  });
+}
+
 function fetchCobrosPendientes(fresh){
   // fresh=true saltea el cache de 20s del backend (igual que refresh() para entregas).
   // Importante cuando se cobró algo desde Panel u otro dispositivo y queremos verlo ya.
@@ -4888,7 +4910,11 @@ function _commitCobroPendiente(payload,saldoPayload,pc){
       syncQueue.push(payload);if(saldoPayload)syncQueue.push(saldoPayload);saveLocal();
       setTimeout(processSyncQueue,1500);
       showToast(msg||'⏳ No confirmó a tiempo — reintentando y verificando…');
-      setTimeout(function(){fetchCobrosPendientes(true);},4000);
+      /* Antes esto era `fetchCobrosPendientes(true)` a secas: verificaba en
+         SILENCIO. El ultimo cartel que quedaba era "verificando...", asi que
+         uno se queda con la duda de si el cobro entro. Si avisas que estas
+         esperando, tenes que avisar como termino. */
+      setTimeout(function(){_verificarCobroEntro(pc,0);},4000);
     }
 
     if(!isOnline){
