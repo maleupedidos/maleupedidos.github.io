@@ -3265,8 +3265,47 @@ function confirmarCompra() {
 /* ── SYNC QUEUE ────────────────────────────────────────── */
 // Fetch en modo cors con reintentos exponenciales (2s→4s→8s→16s→32s).
 // Si el backend responde ok:false o tira excepción, NO se borra el item de la cola.
+/* Cambia el texto del loader sin tocar el contador de abaShowLoader/HideLoader:
+   llamar a abaShowLoader de nuevo solo para cambiar el mensaje desbalancearia
+   el contador y el loader quedaria pegado. */
+function _abaLoaderMsg(txt) {
+  var el = document.getElementById('abaLoaderMsg');
+  if (el) el.textContent = txt;
+}
+
+/* Mantiene el loader hasta que el refresh repinto la pantalla.
+   El tope existe porque un loader pegado es PEOR que el problema que arregla:
+   deja el ERP inutilizable. abaRefresh ya atrapa sus propios errores, pero si
+   alguna vez dejara de hacerlo, esto igual destraba. */
+function _abaEsperarRefresh(prom) {
+  var cerrado = false;
+  var cerrar = function(aviso) {
+    if (cerrado) return;
+    cerrado = true;
+    abaHideLoader(true);
+    if (aviso) abaShowToast(aviso);
+  };
+  var tope = setTimeout(function() {
+    cerrar('La lista puede estar desactualizada — toca ↻ para verla al dia');
+  }, 30000);
+  var fin = function() { clearTimeout(tope); cerrar(); };
+  if (prom && typeof prom.then === 'function') prom.then(fin, function() {
+    clearTimeout(tope);
+    cerrar('No se pudo actualizar la lista — toca ↻');
+  });
+  else fin();
+}
+
 function abaProcessSyncQueue() {
-  if (!abaIsOnline || abaSyncQueue.length === 0) return;
+  /* Si no hay nada que mandar, o no hay internet, no hay nada que esperar: el
+     loader que acaba de mostrar quien nos llamo tiene que irse. Antes esto era
+     un `return` seco y la pantalla quedaba trabada hasta recargar la app. */
+  if (abaSyncQueue.length === 0) { abaHideLoader(true); return; }
+  if (!abaIsOnline) {
+    abaHideLoader(true);
+    abaShowToast('Sin conexion — queda guardado y se sincroniza solo');
+    return;
+  }
   var item = abaSyncQueue[0];
   var attempt = item._attempt || 0;
 
@@ -3316,10 +3355,20 @@ function abaProcessSyncQueue() {
       abaSaveLocal();
       document.getElementById('abaSyncBanner').className = 'sync-banner' + (abaSyncQueue.length > 0 ? ' visible' : '');
       if (abaSyncQueue.length > 0) setTimeout(abaProcessSyncQueue, 1000);
-      else {
+      else if (abaIsOnline) {
+        /* El POST volvio, pero la PANTALLA todavia muestra la lista vieja: el
+           refresh es SILENT y tarda 8-12 s. Cerrar el loader aca dejaba a Tadeo
+           tocando botones sobre datos desactualizados — el proveedor que acababa
+           de marcar "seguia apareciendo ahi". El loader se cierra cuando la
+           pantalla esta lista, no cuando contesta el server. */
+        _abaLoaderMsg('Actualizando la lista…');
+        _abaEsperarRefresh(abaRefresh(true));
+      } else {
+        /* Sin conexion no hay nada que esperar: la accion ya quedo en la cola y
+           se sincroniza sola cuando vuelva internet. Dejar el loader seria
+           trabar la pantalla para siempre. */
         abaHideLoader(true);
-        // Refresh de datos del server al terminar de sincronizar
-        if (abaIsOnline) abaRefresh(true);
+        abaShowToast('Sin conexion — queda guardado y se sincroniza solo');
       }
     }
   }).catch(function(err) {
