@@ -2778,7 +2778,8 @@ body.role-single .statusbar{font-size:11px}
   <!-- Ajustar saldo (oculto por defecto) -->
   <div class="form-card hidden" id="ajusteForm">
     <div class="form-title">Ajustar saldo real</div>
-    <p style="font-size:11px;color:var(--bl);margin-bottom:12px;line-height:1.4">Ingresa cuanta plata tenes <b>ahora mismo</b> en cada medio. A partir de aca, cada cobro, gasto e ingreso se suma o resta automaticamente.</p>
+    <p style="font-size:11px;color:var(--bl);margin-bottom:10px;line-height:1.45">Pone cuanta plata tenes <b>ahora mismo</b>. A partir de aca, cada cobro, gasto e ingreso se suma o resta solo.</p>
+    <p style="font-size:11px;color:#1B5E20;background:#E8F5E9;border:1px solid #A5D6A7;border-radius:8px;padding:8px 10px;margin-bottom:12px;line-height:1.45"><b>Contas solo el efectivo?</b> Llena nada mas ese campo. <b>Lo que dejes vacio queda como esta</b> — no hace falta tocar toda la caja.</p>
     <div class="fg-row">
       <div class="fg"><label>🔒 Caja fuerte ($)</label><input type="text" id="ajCF" placeholder="0" inputmode="decimal" oninput="chkAjuste()"><div id="ajCFHint" class="aj-hint"></div></div>
       <div class="fg"><label>👛 Billetera ($)</label><input type="text" id="ajBil" placeholder="0" inputmode="decimal" oninput="chkAjuste()"><div id="ajBilHint" class="aj-hint"></div></div>
@@ -2902,7 +2903,7 @@ body.role-single .statusbar{font-size:11px}
   </div>
   <div id="cobranzasCard"></div>
   <div style="display:flex;align-items:center;justify-content:space-between;margin:14px 0 6px">
-    <div class="st" style="margin:0">&#128196; Movimientos</div>
+    <div class="st" style="margin:0">&#128196; Movimientos <span id="cajaFresco" style="font-size:11px;font-weight:600;color:var(--bl);text-transform:none;letter-spacing:0"></span></div>
     <button id="btnReloadCaja" type="button" onclick="actualizarCaja()" class="btn-reload-caja" title="Buscar movimientos nuevos">
       <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2.2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 4v6h-6"/></svg>
       <span>Actualizar</span>
@@ -6843,7 +6844,16 @@ function refreshContextual(){
   // actual sigue usable y se re-pinta sola cuando llegan los datos frescos.
   // Se usa loadRapido() (3 endpoints ligeros ~5s) salvo tabs que necesitan el
   // admin completo (stock/OC/vendedores).
-  var usaRapido=(active==='inicio'||active==='pedidos'||active==='caja'||active==='egresos'||active==='estancias');
+  /* En Caja el ↻ pide SOLO cajaLight. loadRapido() trae ademas pedidosLight
+     (603 KB), cobrosPendientes y ocLight — 665 KB que esta pantalla no dibuja.
+     Corren en paralelo, asi que no cambia mucho el reloj (medido: 14,5 s los
+     cuatro contra 12,7 s cajaLight sola), pero en el celular de Tadeo con datos
+     son 665 KB de descarga que no sirven para nada. */
+  if(active==='caja'){
+    _recargarCaja().then(function(r){done(r.ok!==false);},function(){done(false);});
+    return;
+  }
+  var usaRapido=(active==='inicio'||active==='pedidos'||active==='egresos'||active==='estancias');
   var ps=[];
   if(usaRapido && typeof loadRapido==='function')ps.push(loadRapido());
   else if(typeof load==='function')ps.push(load());
@@ -7693,6 +7703,8 @@ function loadRapido(){
       _ocFrescas=true;   // recién ahora se puede afirmar que a un pedido le falta la OC
     }
     if(cajaData){
+      _cajaTs=Date.now();
+      try{localStorage.setItem('mc_cajaTs',String(_cajaTs));}catch(e){}
       if(cajaData.caja)D.caja=cajaData.caja;
       if(cajaData.saldoBase)D.saldoBase=cajaData.saldoBase;
       if(Array.isArray(cajaData.gastos))D.gastos=cajaData.gastos;
@@ -7716,64 +7728,92 @@ function loadRapido(){
     return {ok:false, fallaron:3, total:3, red:false, pinto:false};
   });
 }
-// Refresh manual desde tab Caja: usa endpoint cajaLight (~5s vs ~17s admin).
-// Mergea solo movimientos/caja/saldoBase/gastos/ingresos en D y re-renderiza
-// el tab Caja. Si hay edición activa en otro tab, no toca nada.
+/* ── LA CAJA SE REFRESCA SOLA, SIN EL VOLCADO GRANDE ──
+   `cajaLight` trae caja, saldoBase, movimientos, gastos e ingresos: TODO lo que
+   la tab Caja dibuja. Medido contra el backend vivo el 4/9/2026: 7 a 12 s,
+   contra los 21-27 s de `admin`.
+
+   Hasta ese dia NUEVE acciones de esta tab (guardar un gasto, un ingreso,
+   ajustar, dar cambio, mover, los sobres, invertir) llamaban a `load()` — el
+   volcado entero de 924 KB — para reflejar un cambio que vive en cinco campos.
+   Eso es lo que Tadeo sentia como "la tab Caja tarda un monton".
+
+   `_cajaTs` guarda CUANDO llegaron estos datos, para poder decirlo en pantalla:
+   mostrar una copia sin decir de cuando es, es mentir por omision. */
+var _cajaTs=(function(){try{return Number(localStorage.getItem('mc_cajaTs'))||0;}catch(e){return 0;}})();
+// Cada cuanto se considera vieja la foto de la caja. Arriba de esto el sello se
+// pone en naranja: no bloquea nada, solo avisa que lo que ves puede no ser lo
+// que hay. Mostrar una copia sin decir de cuando es seria mentir por omision.
+var CAJA_VIEJA_MIN=20;
+function _pintarFrescoCaja(){
+  var el=$('cajaFresco');if(!el)return;
+  if(!_cajaTs){el.textContent='';return;}
+  var min=(Date.now()-_cajaTs)/60000;
+  el.textContent='· '+_hace(_cajaTs);
+  el.style.color=(min>CAJA_VIEJA_MIN)?'var(--o)':'var(--bl)';
+  el.title='Los movimientos y el saldo son de '+new Date(_cajaTs).toLocaleString('es-AR');
+}
+function _cajaAplicar(d){
+  if(!D)D={};
+  D.caja=d.caja||D.caja;
+  D.saldoBase=d.saldoBase||D.saldoBase;
+  D.gastos=d.gastos||D.gastos;
+  D.ingresos=d.ingresos||D.ingresos;
+  D.gastosHist=d.gastosHist||D.gastosHist;
+  if(Array.isArray(d.movimientos))D.movimientos=d.movimientos;
+  if(d.sobres)D.sobres=d.sobres;
+  _cajaTs=Date.now();
+  try{localStorage.setItem('ma3',JSON.stringify(D));}catch(e){}
+  try{localStorage.setItem('mc_cajaTs',String(_cajaTs));}catch(e){}
+  try{sync();}catch(e){}
+}
+// Devuelve una promesa con {ok, red} — quien la llama tiene que poder
+// distinguir "no hay senal" de "llego y no se pudo dibujar".
+function _recargarCaja(){
+  return fetch(API+'?action=cajaLight&t='+Date.now())
+    .then(function(r){return r.json();})
+    .then(function(d){
+      if(!d||!Array.isArray(d.movimientos))return {ok:false,red:true};
+      _cajaAplicar(d);
+      if(_hayEditorAbierto()){_pendingLoadRender=true;return {ok:true};}
+      try{ rCaja(); }catch(e){ console.error('rCaja()',e); return {ok:false,red:true,pinto:false}; }
+      try{ if(typeof rEgresos==='function')rEgresos(); }catch(e){}
+      return {ok:true};
+    })
+    .catch(function(){return {ok:false,red:false};});
+}
+// Boton "Actualizar" de la tab Caja. No tapa la pantalla: la lista de abajo
+// sigue siendo valida (es la de recien) y se repinta sola cuando llega.
 function actualizarCaja(){
   var btn=$('btnReloadCaja');
   var lbl=btn?btn.querySelector('span'):null;
-  var lblOrig=lbl?lbl.textContent:'';
+  var lblOrig=(lbl&&lbl.textContent)||'Actualizar';
+  if(btn&&btn.disabled)return Promise.resolve({ok:false});
   if(btn){btn.disabled=true;btn.classList.add('loading');if(lbl)lbl.textContent='Buscando…';}
   var antes={};
   if(D&&Array.isArray(D.movimientos)){
-    D.movimientos.forEach(function(m){if(m){var k=(m.tipo||'')+'|'+(m.ts||0)+'|'+(m.con||'')+'|'+(m.met||'')+'|'+(m.$||0);antes[k]=true;}});
+    D.movimientos.forEach(function(m){if(m){antes[(m.tipo||'')+'|'+(m.ts||0)+'|'+(m.con||'')+'|'+(m.met||'')+'|'+(m.$||0)]=true;}});
   }
-  function _restoreBtn(){if(btn){btn.disabled=false;btn.classList.remove('loading');if(lbl)lbl.textContent=lblOrig||'Actualizar';}}
-  function _aplicar(d){
-    _restoreBtn();
-    if(!d||!Array.isArray(d.movimientos)){toast('Sin respuesta del servidor');return;}
-    if(!D)D={};
-    D.caja=d.caja||D.caja;
-    D.saldoBase=d.saldoBase||D.saldoBase;
-    D.gastos=d.gastos||D.gastos;
-    D.ingresos=d.ingresos||D.ingresos;
-    D.gastosHist=d.gastosHist||D.gastosHist;
-    D.movimientos=d.movimientos;
-    try{localStorage.setItem('ma3',JSON.stringify(D));}catch(e){}
-    sync();
+  // Aviso a los 15 s: el backend tarda 7-12 s y a veces mas. Sin esto, un dia
+  // lento se lee como "el boton no anda" y Tadeo lo toca de nuevo — y cada
+  // toque es OTRA consulta. Igual que el ↻ del topbar: avisa, no se rinde.
+  var _tarde=setTimeout(function(){ if(lbl)lbl.textContent='Sigo buscando…'; },15000);
+  return _recargarCaja().then(function(r){
+    clearTimeout(_tarde);
+    if(btn){btn.disabled=false;btn.classList.remove('loading');if(lbl)lbl.textContent=lblOrig;}
+    if(!r.ok){toast(r.red===false?'📴 Sin conexion — seguis viendo lo de antes':'⚠️ No se pudo actualizar — seguis viendo lo de antes');return r;}
     var nuevos=0;
-    d.movimientos.forEach(function(m){
+    (D.movimientos||[]).forEach(function(m){
       if(!m)return;
-      var k=(m.tipo||'')+'|'+(m.ts||0)+'|'+(m.con||'')+'|'+(m.met||'')+'|'+(m.$||0);
-      if(!antes[k])nuevos++;
+      if(!antes[(m.tipo||'')+'|'+(m.ts||0)+'|'+(m.con||'')+'|'+(m.met||'')+'|'+(m.$||0)])nuevos++;
     });
-    if(_hayEditorAbierto()){
-      if(nuevos>0)toast('+'+nuevos+' movimiento'+(nuevos>1?'s':'')+' nuevo'+(nuevos>1?'s':'')+' (aparecen al cerrar la edición)');
-      else toast('Sin movimientos nuevos');
-      _pendingLoadRender=true;
-    } else {
-      if(nuevos>0)toast('+'+nuevos+' movimiento'+(nuevos>1?'s':'')+' nuevo'+(nuevos>1?'s':'')+' ✨');
-      else toast('Sin movimientos nuevos');
-      try{rCaja();}catch(e){render();}
-    }
-  }
-  // Intento cajaLight (rápido). Si el backend aún no lo tiene desplegado y devuelve
-  // 'ok' (texto plano), caer a admin completo automáticamente.
-  fetch(API+'?action=cajaLight&t='+Date.now())
-    .then(function(r){return r.text();})
-    .then(function(txt){
-      var d=null;try{d=JSON.parse(txt);}catch(e){}
-      if(d&&Array.isArray(d.movimientos)){return _aplicar(d);}
-      if(lbl)lbl.textContent='Buscando (modo lento)…';
-      return fetch(API+'?action=admin&t='+Date.now())
-        .then(function(r){return r.json();})
-        .then(_aplicar);
-    })
-    .catch(function(){
-      _restoreBtn();
-      toast('Error al actualizar');
-    });
+    var extra=_hayEditorAbierto()?' (aparecen al cerrar la edición)':' ✨';
+    toast(nuevos>0?('+'+nuevos+' movimiento'+(nuevos>1?'s':'')+' nuevo'+(nuevos>1?'s':'')+extra):'Sin movimientos nuevos');
+    if(typeof _markRefreshTime==='function')_markRefreshTime();
+    return r;
+  });
 }
+
 // Refresh manual desde tab Pedidos: usa endpoint LIGHT (~5s vs ~17s admin).
 // SIN loader fullscreen — solo cambia el texto del botón a "Buscando…" para
 // que el usuario pueda seguir scrolleando / mirando los pedidos actuales
@@ -8549,7 +8589,7 @@ function guardarGasto(e){
         toast('Gasto $'+f$(total)+' ('+parts.join(' + ')+')');
         saveNota(notas);saveConcepto(cat,con);
         $('gCat').value='';$('gCon').value='';$('gEf').value='';$('gMP').value='';$('gNotas').value='';
-        load();
+        _recargarCaja();
         btn.disabled=false;btn.textContent='Guardar gasto';
         return;
       }
@@ -8568,7 +8608,7 @@ function guardarGasto(e){
             toast('Gasto $'+f$(ef+mp)+' (EF $'+f$(ef)+' + MP $'+f$(mp)+')');
             saveNota(notas);saveConcepto(cat,con);
             $('gCat').value='';$('gCon').value='';$('gEf').value='';$('gMP').value='';$('gNotas').value='';
-            load();
+            _recargarCaja();
           })
           .catch(function(){hideLoader(true);toast('Sin conexion');})
           .finally(function(){btn.disabled=false;btn.textContent='Guardar gasto';});
@@ -8609,7 +8649,7 @@ function guardarIngreso(e){
         toast('Ingreso $'+f$(total)+' ('+parts.join(' + ')+')');
         saveNota(notas);saveConcepto(cat,con);
         $('iCat').value='';$('iCon').value='';$('iEf').value='';$('iMP').value='';$('iNotas').value='';
-        load();
+        _recargarCaja();
         btn.disabled=false;btn.textContent='Guardar ingreso';
         return;
       }
@@ -8626,7 +8666,7 @@ function guardarIngreso(e){
             toast('Ingreso $'+f$(ef+mp)+' (EF $'+f$(ef)+' + MP $'+f$(mp)+')');
             saveNota(notas);saveConcepto(cat,con);
             $('iCat').value='';$('iCon').value='';$('iEf').value='';$('iMP').value='';$('iNotas').value='';
-            load();
+            _recargarCaja();
           })
           .catch(function(){hideLoader(true);toast('Sin conexion');})
           .finally(function(){btn.disabled=false;btn.textContent='Guardar ingreso';});
@@ -8666,6 +8706,7 @@ function toggleAjuste(){
     $('ajMpHint').onclick=function(){$('ajMP').value=Math.round(c.mp);chkAjuste();};
     $('ajInvHint').onclick=function(){$('ajInv').value=Math.round(c.inv||0);chkAjuste();};
     $('ajSobNota').innerHTML='✉️ Sobres (proveedores): <b>$'+f$(Math.round(c.sob))+'</b> — se gestionan desde el botón ✉️ Sobres, no se cargan acá.';
+    $('ajBtn').textContent='Confirmar saldo';
     $('ajWarn').classList.add('hidden');
   }
 }
@@ -8683,15 +8724,38 @@ function chkAjuste(){
   else w.classList.add('hidden');
 }
 function guardarAjuste(){
-  var cf=parseM($('ajCF').value),bil=parseM($('ajBil').value),mp=parseM($('ajMP').value),inv=parseM($('ajInv').value);
-  var sob=Number((_calcSaldo().sob)||0); // los sobres se mantienen (se gestionan desde ✉️ Sobres)
-  var ef=cf+bil+sob; // efectivo total = caja fuerte + billetera + sobres
+  var c=_calcSaldo();
+  var raw={cf:$('ajCF').value.trim(),bil:$('ajBil').value.trim(),
+           mp:$('ajMP').value.trim(),inv:$('ajInv').value.trim()};
+  if(!raw.cf&&!raw.bil&&!raw.mp&&!raw.inv){
+    toast('Cargá al menos un campo — lo que dejes vacío se queda como está');return;
+  }
+  /* Lo que se deja vacio se manda con el valor que el Panel YA calcula.
+     (4/9/2026 — Tadeo: "si tengo que ajustar solo el efectivo tengo que ajustar
+     TODA la caja y eso es choto".)
+
+     Antes se mandaban los cuatro campos siempre, y un input vacio parsea a 0:
+     ajustar solo el efectivo le ponia Mercado Pago e Inversiones en CERO. No
+     era solo incomodo, borraba plata sin decirlo.
+
+     Y va el CALCULADO, no un campo ausente para que el backend herede el
+     snapshot: heredar traeria el numero del ultimo ajuste e ignoraria los
+     cobros posteriores, o sea que ajustar el efectivo le bajaria el MP a lo que
+     valia ayer. El calculado es exactamente el numero que Tadeo esta mirando y
+     dando por bueno. La herencia del backend queda igual, como red. */
+  var cf =raw.cf !==''?parseM(raw.cf) :Math.round(c.cf);
+  var bil=raw.bil!==''?parseM(raw.bil):Math.round(c.bil);
+  var mp =raw.mp !==''?parseM(raw.mp) :Math.round(c.mp);
+  var inv=raw.inv!==''?parseM(raw.inv):Math.round(c.inv||0);
+  var sob=Math.round(Number(c.sob)||0); // los sobres se gestionan desde ✉️ Sobres
+  var ef=cf+bil+sob;                    // efectivo total = caja fuerte + billetera + sobres
+  var tocaEf=(raw.cf!==''||raw.bil!=='');
   // Segundo freno: si hay diferencia grande, pedir confirmación explícita antes de pisar la base.
-  var c=_calcSaldo();var dEf=ef-c.ef,dMp=mp-c.mp;
-  if(_ajDiffGrande(dEf,c.ef)||_ajDiffGrande(dMp,c.mp)){
+  var dEf=ef-c.ef,dMp=mp-c.mp;
+  if((tocaEf&&_ajDiffGrande(dEf,c.ef))||(raw.mp!==''&&_ajDiffGrande(dMp,c.mp))){
     var det='';
-    if(_ajDiffGrande(dEf,c.ef))det+='\n• Efectivo: calculado $'+f$(Math.round(c.ef))+' → cargás $'+f$(ef)+' ('+(dEf>=0?'+':'')+'$'+f$(Math.round(dEf))+')';
-    if(_ajDiffGrande(dMp,c.mp))det+='\n• Mercado Pago: calculado $'+f$(Math.round(c.mp))+' → cargás $'+f$(mp)+' ('+(dMp>=0?'+':'')+'$'+f$(Math.round(dMp))+')';
+    if(tocaEf&&_ajDiffGrande(dEf,c.ef))det+='\n• Efectivo: calculado $'+f$(Math.round(c.ef))+' → cargás $'+f$(ef)+' ('+(dEf>=0?'+':'')+'$'+f$(Math.round(dEf))+')';
+    if(raw.mp!==''&&_ajDiffGrande(dMp,c.mp))det+='\n• Mercado Pago: calculado $'+f$(Math.round(c.mp))+' → cargás $'+f$(mp)+' ('+(dMp>=0?'+':'')+'$'+f$(Math.round(dMp))+')';
     if(!confirm('Estás por ajustar con una diferencia grande contra lo que el Panel calcula:'+det+'\n\nEsto suele ser un saldo viejo mal tipeado. ¿Confirmás igual?'))return;
   }
   var btn=$('ajBtn');btn.disabled=true;btn.textContent='Guardando...';
@@ -8707,9 +8771,15 @@ function guardarAjuste(){
         D.saldoBase={ef:ef,mp:mp,bil:(r.bil!==undefined?r.bil:bil),sob:(r.sob!==undefined?r.sob:sob),inv:(r.inv!==undefined?r.inv:inv),fecha:fStr};
         D.caja={cobradoEf:0,cobradoMP:0,gastosEf:0,gastosMP:0,ingresosEf:0,ingresosMP:0};
         render();hideLoader(true);
-        toast('Saldo: EF $'+f$(ef)+' · MP $'+f$(mp));
+        // Decir QUE se ajusto: si toco un solo campo, un toast con los dos
+        // numeros lo hace dudar de si le movio el otro.
+        var toco=[];
+        if(tocaEf)toco.push('Efectivo $'+f$(ef));
+        if(raw.mp!=='')toco.push('MP $'+f$(mp));
+        if(raw.inv!=='')toco.push('Inversiones $'+f$(inv));
+        toast('✓ Ajustado '+toco.join(' · ')+(toco.length<3?' — el resto quedó como estaba':''));
         $('ajusteForm').classList.add('hidden');$('ajCF').value='';$('ajBil').value='';$('ajMP').value='';$('ajInv').value='';$('ajWarn').classList.add('hidden');
-        load();
+        _recargarCaja();
       }else{hideLoader(true);toast('Error al ajustar');}
     })
     .catch(function(){hideLoader(true);toast('Sin conexion');})
@@ -8735,7 +8805,7 @@ function diCambio(){
         if(D.saldoBase){D.saldoBase.bil=r.bil;D.saldoBase.sob=r.sob;}
         render();hideLoader(true);
         toast('Di cambio: $'+f$(monto)+' · Billetera: $'+f$(r.bil));
-        load();
+        _recargarCaja();
       }else{hideLoader(true);toast(r.err||'Error');}
     })
     .catch(function(){hideLoader(true);toast('Sin conexion');});
@@ -8772,7 +8842,7 @@ function guardarMover(){
         render();hideLoader(true);
         toast('Movido $'+f$(monto)+' → '+_MOVER_LBL[hacia]);
         $('moverForm').classList.add('hidden');$('movMonto').value='';
-        load();
+        _recargarCaja();
       }else{hideLoader(true);toast(r.err||'Error al mover');}
     })
     .catch(function(){hideLoader(true);toast('Sin conexion');})
@@ -8826,7 +8896,7 @@ function prepararSobre(){
         if(!D.sobres)D.sobres=[];D.sobres.push({r:r.row,prov:prov,monto:monto});
         render();hideLoader(true);toast('Sobre: '+prov+' · $'+f$(monto));
         $('sobMonto').value='';$('sobProv').value='';_renderSobresList();_chkSobre();
-        load();
+        _recargarCaja();
       }else{hideLoader(true);toast(r.err||'Error');}
     })
     .catch(function(){hideLoader(true);toast('Sin conexion');})
@@ -8843,7 +8913,7 @@ function eliminarSobre(row){
         if(s&&D.saldoBase){D.saldoBase.sob=Math.max(0,(Number(D.saldoBase.sob)||0)-(Number(s.monto)||0));}
         D.sobres=(D.sobres||[]).filter(function(x){return x.r!==row;});
         render();hideLoader(true);toast('Sobre cancelado');_renderSobresList();
-        load();
+        _recargarCaja();
       }else{hideLoader(true);toast(r.err||'Error');}
     })
     .catch(function(){hideLoader(true);toast('Sin conexion');});
@@ -8874,7 +8944,7 @@ function guardarInvertir(){
         render();hideLoader(true);
         toast(_invDir==='invertir'?'Invertido $'+f$(monto)+' (MP → Inversiones)':'Rescatado $'+f$(monto)+' (Inversiones → MP)');
         $('invertirForm').classList.add('hidden');$('invMonto').value='';
-        load();
+        _recargarCaja();
       }else{hideLoader(true);toast(r.err||'Error');}
     })
     .catch(function(){hideLoader(true);toast('Sin conexión');})
@@ -10617,6 +10687,11 @@ function rCaja(){
   // Fuente: D.movimientos del backend (vista derivada, sin hoja física de movimientos).
   // Fallback: si el backend viejo no manda movimientos, armar desde gastos+ingresos.
   rCobranzas();
+  _pintarFrescoCaja();
+  if(!window._cajaFrescoT)window._cajaFrescoT=setInterval(function(){
+    var pg=document.getElementById('p-caja');
+    if(pg&&pg.classList.contains('on'))_pintarFrescoCaja();
+  },60000);
   var gl=$('gList');gl.innerHTML='';
   var movs=D.movimientos;
   if(!movs){
