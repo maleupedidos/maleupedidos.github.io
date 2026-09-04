@@ -3157,7 +3157,7 @@ function marcarEntregado(key){
         pendientesCobro.push({key:k,h:p.h,id:String(p.id),r:p.r,c:p.c,t:p.t,$:p.$,fp:p.fp,ts:Date.now()});
       }
     });
-    saveLocal();rutShowLoader('Marcando '+peds.length+' entregados...');processSyncQueue();if(navigator.vibrate)navigator.vibrate(50);
+    saveLocal();processSyncQueue();if(navigator.vibrate)navigator.vibrate(50);
     showToast('Entregado a '+nombre+' ('+peds.length+' pedidos)');
     rutRender();
     return;
@@ -3171,7 +3171,12 @@ function marcarEntregado(key){
       pendientesCobro.push({key:key,h:ent.h,id:String(ent.id),r:ent.r,c:ent.c,t:ent.t,$:ent.$,fp:ent.fp,ts:Date.now()});
     }
   }
-  saveLocal();rutShowLoader('Marcando entregado...');processSyncQueue();if(navigator.vibrate)navigator.vibrate(50);
+  /* SIN loader: la marca ya esta en `entregados`, en la cola y en localStorage,
+     y la card se repinta abajo. Tapar la pantalla hasta que conteste Apps
+     Script (3-25 s) no protege nada — el dato sobrevive aunque se cierre la
+     app — y es lo que hacia sentir lento el flujo. El syncBanner de arriba
+     muestra que queda algo por sincronizar. */
+  saveLocal();processSyncQueue();if(navigator.vibrate)navigator.vibrate(50);
   showToast('Entregado a '+((ent&&ent.c)||'').split(' ')[0]);
   rutRender();
 }
@@ -4818,7 +4823,11 @@ function _commitCobroPendiente(payload,saldoPayload,pc){
 // Commit endurecido de un cobro PARCIAL desde el modal (action=cobrarParcial).
 function _commitCobroParcialModal(payload,pc){
   rutShowLoader('Registrando parcial...');
-  var _guard=setTimeout(function(){try{rutHideLoader(true);}catch(_){}try{showToast('⏳ El servidor tardó demasiado — probá de nuevo');}catch(_){}},25000);
+  /* 12 s y sin "proba de nuevo": el POST ya salio y el backend es idempotente,
+     asi que reintentar no arregla nada y encola otra consulta de 25 s (Apps
+     Script las atiende de a una). Si fallo de verdad, el catch de abajo lo
+     manda a la cola y se reintenta solo. */
+  var _guard=setTimeout(function(){try{rutHideLoader(true);}catch(_){}try{showToast('⏳ Está tardando — sigue en segundo plano, ya podés seguir');}catch(_){}},12000);
   if(!isOnline){
     syncQueue.push(payload);saveLocal();
     clearTimeout(_guard);rutHideLoader(true);
@@ -4870,7 +4879,10 @@ function marcarCobrado(key){
   // NO borramos propinas[key]: queremos seguir viendo el total cobrado CON propina
   // en la card de Ruta despues del cobrado. Antes hacian delete y el badge volvia
   // al total sin propina (bug visual reportado por Tadeo 24/05/2026).
-  saveLocal();rutShowLoader('Marcando cobrado...');processSyncQueue();rutRenderRuta();
+  // Mismo criterio que Entregado: la marca ya esta guardada y `marcarCobrado`
+  // corta de entrada si la key ya estaba cobrada, asi que el doble toque no
+  // duplica. El loader solo agregaba espera.
+  saveLocal();processSyncQueue();rutRenderRuta();
   showToast('Cobrado '+((ent&&ent.c)||'').split(' ')[0]);
   if(navigator.vibrate)navigator.vibrate(30);
 }
@@ -5168,8 +5180,13 @@ function _armarGuardLoaderSync(){
   _syncLoaderGuard=setTimeout(function(){
     _syncLoaderGuard=null;
     if(syncQueue.length>0){
+      /* El aviso solo tiene sentido si hay un loader tapando: es para explicar
+         por que la pantalla esta trabada. Desde que Entregado y Cobrado no lo
+         ponen, avisar igual seria interrumpir a alguien que ya siguio con lo
+         suyo — y el syncBanner ya dice que queda algo en cola. */
+      var _tapando = rutLoaderCount > 0;
       try{rutHideLoader(true);}catch(_){}
-      try{showToast('⏳ Está tardando — sigue sincronizando en segundo plano');}catch(_){}
+      if(_tapando){ try{showToast('⏳ Está tardando — sigue sincronizando en segundo plano');}catch(_){} }
     }
   },12000);
 }
