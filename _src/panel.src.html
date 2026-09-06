@@ -9483,11 +9483,18 @@ function rInicio(){
     // Tracking aparte: pedidos ENTREGADOS de Estancias del Pilar, agrupados por fecha
     // de entrega (no de cobro). Es el indicador operativo del corazón del negocio.
     if(p.h==='Home'&&p.es==='Entregado'&&String(p.bar||'').toLowerCase()==='estancias del pilar'){
-      var kFe=p.fe||p.f||'';
+      /* Va por el DIA DE ENTREGA ELEGIDO (`dee`), igual que el detalle de la
+         semana en curso y que la tab Planificacion. Hasta el 6/9/2026 esto
+         usaba `fe` (la entrega real) y el de la semana en curso usaba `dee`:
+         el MISMO indicador cambiaba de criterio cuando la semana se cerraba.
+         Medido sobre las 33 semanas del ano: cambia en 4, por un pedido cada
+         una, y el total anual es identico (792 = 792). */
+      var _mDee=String(p.dee||'').match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+      var kFe=_mDee ? (String(Number(_mDee[3])).padStart(2,'0')+'/'+String(Number(_mDee[2])).padStart(2,'0')) : '';
       if(kFe){
         var pFe=String(kFe).split('/');
         if(pFe.length>=2){
-          var dFe=new Date(nowYear,Number(pFe[1])-1,Number(pFe[0]));
+          var dFe=new Date(_mDee?Number(_mDee[1]):nowYear,Number(pFe[1])-1,Number(pFe[0]));
           var semFe=getWeek(dFe);
           if(!estPilarPorSemana[semFe])estPilarPorSemana[semFe]={tot:0,dias:{}};
           estPilarPorSemana[semFe].tot++;
@@ -9890,6 +9897,12 @@ function rInicio(){
       return String(Number(m[3])).padStart(2,'0')+'/'+String(Number(m[2])).padStart(2,'0');
     }
     var ventasPorDia={};
+    /* Lo FACTURADO por las entregas de ese dia, y cuanto de eso sigue sin
+       cobrar. No es lo mismo que el "Cobrado" de mas abajo, que se atribuye por
+       FECHA DE COBRO: un pedido entregado el viernes y cobrado el domingo suma
+       en el domingo. Medido el 6/9/2026: el viernes entrego $1.521.640 y la
+       tarjeta mostraba $600.840 — se leia como que habia vendido eso. */
+    var facturadoPorDia={}, sinCobrarPorDia={};
     var ventasPorDiaCanal={}; // {dia: {Home:n, Pilar:n, Clubes:n, Red:n}}
     var entregEstPorDia={}; // Pedidos ENTREGADOS de Estancias del Pilar por día (foco operativo)
     pvSem.forEach(function(p){
@@ -9898,6 +9911,8 @@ function rInicio(){
       var canal=p.h||'Otro';
       if(!ventasPorDiaCanal[k])ventasPorDiaCanal[k]={};
       ventasPorDiaCanal[k][canal]=(ventasPorDiaCanal[k][canal]||0)+1;
+      facturadoPorDia[k]=(facturadoPorDia[k]||0)+(Number(p.$)||0);
+      if(p.ep!=='Cobrado')sinCobrarPorDia[k]=(sinCobrarPorDia[k]||0)+(Number(p.$)||0);
       // Estancias del Pilar entregados (corazón del negocio)
       if(p.h==='Home'&&p.es==='Entregado'&&String(p.bar||'').toLowerCase()==='estancias del pilar'){
         entregEstPorDia[k]=(entregEstPorDia[k]||0)+1;
@@ -9910,6 +9925,13 @@ function rInicio(){
       if(!_esSemActual(p))return;
       var v=String(p.br||'').trim()||'Sin vendedor';
       if(!redByVend[v]||(p.dee&&p.dee<redByVend[v].dee))redByVend[v]=p;
+      /* El CONTEO de Red va por vendedor (una entrega al vendedor es un evento),
+         pero la PLATA son todos los pedidos: la plata no se agrupa. */
+      var kR=_deeKey(p);
+      if(kR){
+        facturadoPorDia[kR]=(facturadoPorDia[kR]||0)+(Number(p.$)||0);
+        if(p.ep!=='Cobrado')sinCobrarPorDia[kR]=(sinCobrarPorDia[kR]||0)+(Number(p.$)||0);
+      }
     });
     Object.keys(redByVend).forEach(function(v){
       var k=_deeKey(redByVend[v]);if(!k)return;
@@ -9929,7 +9951,12 @@ function rInicio(){
     }
     var _totEstSem=0;Object.keys(entregEstPorDia).forEach(function(k){_totEstSem+=entregEstPorDia[k];});
     cbHtml+='<div onclick="toggleSem(\'actual\')" style="margin-top:8px;padding:10px 12px;background:#fff;border:2px solid var(--cd);border-radius:12px;cursor:pointer;display:flex;justify-content:space-between;align-items:center">';
-    cbHtml+='<span style="font-weight:800;font-size:12px;color:var(--o);text-transform:uppercase;letter-spacing:.06em">&#128197; Semana '+semActual+' \u00b7 Por d\u00eda</span>';
+    /* El rango explicito. Sin el, "Semana 36" y el "1 al 6" de Planificacion
+       parecen el mismo periodo y no lo son: la semana ISO arranca el lunes,
+       aunque ese lunes sea del mes anterior. */
+    var _domSem=new Date(lun.getFullYear(),lun.getMonth(),lun.getDate()+6);
+    var _fq=function(d){return d.getDate()+'/'+(d.getMonth()+1);};
+    cbHtml+='<span style="font-weight:800;font-size:12px;color:var(--o);text-transform:uppercase;letter-spacing:.06em">&#128197; Semana '+semActual+' \u00b7 lun '+_fq(lun)+' \u2192 dom '+_fq(_domSem)+'</span>';
     cbHtml+='<span style="display:flex;align-items:center;gap:10px">'+(_totEstSem>0?'<span style="font-size:11px;color:var(--o);font-weight:700">\ud83c\udfd8\ufe0f '+_totEstSem+' Estancias</span>':'')+'<span id="sem-chev-actual" style="font-size:14px;color:var(--bl)">\u25BC</span></span>';
     cbHtml+='</div>';
     var bodyH='';
@@ -9943,7 +9970,7 @@ function rInicio(){
       bodyH+='<div class="card" style="margin-bottom:6px;padding:10px 12px'+(isHoy?';border:2px solid var(--b)':'')+'">';
       bodyH+='<div style="display:flex;justify-content:space-between;align-items:center">';
       bodyH+='<span style="font-weight:800;font-size:13px">'+diaAb+' '+k+(isHoy?' · HOY':'')+'</span>';
-      bodyH+='<span style="font-weight:800;font-size:16px">'+n+'</span>';
+      bodyH+='<span style="font-weight:800;font-size:16px">'+n+' <small style="font-size:10px;font-weight:700;color:var(--ink3)">'+(n===1?'entrega':'entregas')+'</small></span>';
       bodyH+='</div>';
       var _byC=ventasPorDiaCanal[k]||{};
       var _ordK=_ordCanales(_byC);
@@ -9958,9 +9985,21 @@ function rInicio(){
       // Efectivo EN MANO = neto + vueltos dados de la billetera ese día (lo físico que
       // contás al cerrar). El neto del Sheets es lo que se queda Maleu; el vuelto salió
       // de tu billetera y está de más en el bolso. Igual criterio que las cards de caja.
+      /* Lo que dejaron las entregas de ESE dia. Va primero porque es lo que uno
+         busca cuando mira "el viernes hice 16 entregas": cuanto facturaron. */
+      var _facD=facturadoPorDia[k]||0;
+      if(_facD>0){
+        bodyH+='<div style="display:flex;justify-content:space-between;align-items:center;margin-top:5px;font-size:11px"><span style="color:var(--ink2);font-weight:700">Entregado ese d\u00eda</span><span style="font-weight:800">$'+f$(_facD)+'</span></div>';
+        var _scD=sinCobrarPorDia[k]||0;
+        if(_scD>0)bodyH+='<div style="font-size:10px;color:#E65100;font-weight:600;margin-top:2px">de esas entregas, $'+f$(_scD)+' todav\u00eda sin cobrar</div>';
+      }
       var _vd=vueltosPorDia[k]||0;
       var _efMano=dd.ef+_vd, _totMano=dd.tot+_vd;
-      bodyH+='<div style="display:flex;justify-content:space-between;align-items:center;margin-top:4px;font-size:11px"><span style="color:var(--bl);font-weight:700">Cobrado'+(_vd>0?' (en mano)':'')+'</span><span style="font-weight:800">$'+f$(_totMano)+'</span></div>';
+      /* Y esto es OTRA cosa: la plata que ENTRO ese dia, sin importar de que
+         entrega venga. Las dos cifras casi nunca coinciden y por eso las dos
+         llevan rotulo — un numero pelado al lado de "16 entregas" se lee como
+         lo que vendio ese dia. */
+      bodyH+='<div style="display:flex;justify-content:space-between;align-items:center;margin-top:3px;font-size:11px"><span style="color:var(--bl);font-weight:700">Cobrado ese d\u00eda'+(_vd>0?' (en mano)':'')+'</span><span style="font-weight:800">$'+f$(_totMano)+'</span></div>';
       bodyH+='<div style="font-size:10px;color:var(--bl);margin-top:2px">EF $'+f$(_efMano)+' · TR $'+f$(dd.tr)+'</div>';
       var _ddP=_vueltoDescDia(k);
       if(_ddP)bodyH+='<div style="font-size:10px;color:#9A3412;font-weight:600;margin-top:2px">👛 Incluye '+_ddP+' · neto Maleu EF $'+f$(dd.ef)+'</div>';
@@ -23474,8 +23513,16 @@ if('serviceWorker' in navigator){
        El pie SI se queda, corto: plata y casas tienen universos distintos, y dos
        numeros con universos distintos en el mismo recuadro, sin decirlo, se leen
        como un bug. */
+    /* Y por que este tramo no es "la semana" que muestra Inicio > Resumen. El
+       plan corta por MES, asi que el primer tramo y el ultimo casi nunca caen
+       lunes a domingo. Sin decirlo, los dos numeros parecen el mismo periodo y
+       no lo son. */
+    var _d1 = new Date(planData.yyyy, (planData.mm||1)-1, t.desde);
+    var _d2 = new Date(planData.yyyy, (planData.mm||1)-1, t.hasta);
+    var _pieSem = (_d1.getDay()===1 && _d2.getDay()===0) ? ''
+      : ' Va del '+t.desde+' al '+t.hasta+' porque el plan corta por <b>mes</b>: no es la semana de Inicio, que arranca el lunes.';
     h += '<div class="plan-sm-pie">Plata y pedidos: <b>todo el retail</b> (Home + Pilar) del tramo. '
-       + 'Casas: solo <b>Estancias del Pilar</b>, acumuladas del mes.</div>';
+       + 'Casas: solo <b>Estancias del Pilar</b>, acumuladas del mes.' + _pieSem + '</div>';
     return h + '</div>';
   }
 
