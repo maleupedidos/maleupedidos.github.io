@@ -1110,6 +1110,7 @@ body{font-family:'Inter',-apple-system,'Segoe UI',system-ui,sans-serif;backgroun
 /* ── F3: Bitácora de interacciones ── */
 .hoy-band-seguimiento{border-left-color:#5E35B1}
 .hoy-band-esperando{border-left-color:#00897B}
+.hoy-band-tibio{border-left-color:#0288D1}
 .hoy-band-dormidoOtros{border-left-color:#B0641E}
 /* -- EL BUSCADOR DE LA TAB VENTAS (4/9/2026) -----------------------------
    Clase propia a proposito: `.crm-busq` es el buscador de Estancias, y
@@ -1149,7 +1150,9 @@ body{font-family:'Inter',-apple-system,'Segoe UI',system-ui,sans-serif;backgroun
 .hoy-act-si{background:#E8F5E9;border-color:#C8E6C9;color:#2E7D32}
 .hoy-act-quedo{background:#FFF8E1;border-color:#FFECB3;color:#8D6E00}
 .hoy-act-no{background:#FAFAFA;border-color:var(--border);color:var(--ink3)}
+.hoy-act-resp{background:#E1F5FE;border-color:#B3E5FC;color:#01579B}
 .hoy-row-esperando{font-size:11px;font-weight:700;color:#00695C;white-space:nowrap}
+.hoy-row-tibio{font-size:11px;font-weight:700;color:#0288D1;white-space:nowrap}
 .crm-anot-hint{font-size:11px;color:var(--ink3);margin-top:4px;line-height:1.45}
 .crm-anot-tag{display:inline-flex;align-items:center;gap:6px;background:#fff;border:1.5px solid var(--border);border-radius:999px;padding:7px 13px;font-size:12px;font-weight:700;color:var(--ink2);cursor:pointer;min-height:36px}
 .crm-anot-tag.on{background:#EDE7F6;border-color:#B39DDB;color:#4527A0}
@@ -19485,6 +19488,11 @@ if('serviceWorker' in navigator){
   // ── F3: Bitácora de interacciones ──
   var crmInteracciones = null;   // [{id,fecha,key,tel,nombre,resultado,prox,nota,origen}]
   var CRM_SILENCE_DIAS = 3;      // si lo contactaste hace <=N dias, no reaparece en el cockpit
+  // "Contesto pero no compro": la charla queda abierta. No se la molesta unos
+  // dias, despues vuelve a ☀️ Hoy para retomarla, y pasado el tope se enfrio y
+  // vuelve al circuito normal de 🗓️ Plan semana por su ritmo.
+  var CRM_TIBIO_DIAS = 4;        // aire antes de retomar la charla
+  var CRM_TIBIO_TOPE = 21;       // pasado esto ya no es una charla abierta
   /* Cuantos dias antes avisa un cumpleanos en ☀️ Hoy. Estaba en 7 y avisaba con
      demasiada anticipacion: un cumple "en 5d" no es algo que le debas a nadie
      HOY, y Hoy es la pantalla de lo que estas en deuda de contactar. Con 1 la
@@ -21421,6 +21429,31 @@ if('serviceWorker' in navigator){
     return (String(est.last.resultado || '').trim() === 'Le escribi') ? est : null;
   }
 
+  /* "Te contesto buena onda pero no sabes si va a comprar" — el desenlace que
+     faltaba (7/9/2026). Antes habia tres: pidio, quedo en pedir, no contesto, y
+     ninguno describia el caso mas comun. Marcar "no contesto" ensucia el dato y
+     dejar el hilo abierto satura ⏳ Esperando con conversaciones que ya pasaron.
+
+     [!] Una charla abierta NO puede quedar sin pantalla. Es el bug que este ERP
+     ya pago dos veces (los 18 que Tadeo y Lucas escribieron y se evaporaron).
+     Por eso `_charlaTibia` cubre TODA la vida del estado y las dos pantallas la
+     miran: mientras devuelve algo, 🗓️ Plan semana la cuenta trabajada y ☀️ Hoy
+     la tiene — primero callada (el aire), despues en su banda. */
+  var RES_TIBIO = 'Respondio, sin cerrar';
+  function _charlaTibia(u){
+    var est = u && u._inter;
+    if (!est || !est.last) return null;
+    if (String(est.last.resultado || '').trim() !== RES_TIBIO) return null;
+    if (est.prox) return null;                       // con fecha agendada manda el seguimiento
+    if (est.diasDesde === null || est.diasDesde > CRM_TIBIO_TOPE) return null;
+    return est;
+  }
+  // La misma charla, pero ya paso el aire: toca retomarla.
+  function _charlaParaRetomar(u){
+    var est = _charlaTibia(u);
+    return (est && est.diasDesde >= CRM_TIBIO_DIAS) ? est : null;
+  }
+
   // Miembro objetivo del mensaje: en cumple, el que cumple; si no, el contacto.
   function _hoyTarget(banda, u){ return (banda==='cumple' && u.cumpleMember) ? u.cumpleMember : u.contacto; }
 
@@ -21569,6 +21602,7 @@ if('serviceWorker' in navigator){
     if (banda==='reactivable') return 'Hola '+n+'! Soy Tadeo de Maleu 🧡 Probaste con nosotros hace un tiempo y me encantaria que vuelvas a tener algo rico y listo en la heladera. Te muestro lo nuevo de esta semana?';
     if (banda==='nuevo') return 'Hola '+n+'! Soy Tadeo de Maleu 🧡 Gracias por tu pedido! Para lo que necesites resolver de comida contas conmigo. Te cuento las novedades de la semana?';
     if (banda==='seguimiento') return 'Hola '+n+'! Como va? Te escribo por lo que habiamos quedado 🧡 Tengo todo listo para armarte el pedido cuando quieras. Lo cerramos para esta semana?';
+    if (banda==='tibio') return 'Hola '+n+'! Como va? Te habia escrito hace unos dias y quedamos ahi 🧡 Si te sirve, te armo un pedido para esta semana. Que dia te queda comodo?';
     return 'Hola '+n+'!';
   }
 
@@ -21589,7 +21623,7 @@ if('serviceWorker' in navigator){
     // ritmo o antigüedad (riesgo, recompra, segunda, dormidos, reactivables) es
     // 🗓️ Plan semana. Hasta el 2/9/2026 cuatro de las siete bandas estaban en las
     // dos pantallas y no se sabía en cuál pararse.
-    var bandas = {esperando:[], seguimiento:[], deuda:[], cumple:[]};
+    var bandas = {esperando:[], seguimiento:[], tibio:[], deuda:[], cumple:[]};
     var silenciados = 0;  // contactados hace poco / con seguimiento futuro — ocultos a propósito
     unidades.forEach(function(u){
       // F3: la bitácora manda por encima de las bandas automáticas.
@@ -21601,6 +21635,9 @@ if('serviceWorker' in navigator){
         // Le escribiste y todavía no sabés → el hilo queda ABIERTO y a la vista,
         // no escondido 3 días para volver mezclado con el resto.
         if (_esperandoRespuesta(u)){ bandas.esperando.push(u); return; }
+        // Te contesto y no compro: se la dejo respirar CRM_TIBIO_DIAS y despues
+        // vuelve acá. Va antes del silencio para que gane sobre el.
+        if (_charlaParaRetomar(u)){ bandas.tibio.push(u); return; }
         // Seguimiento futuro agendado → ya tenés un plan, no lo molestes hasta la fecha.
         if (est.diasHasta !== null && est.diasHasta > 0){ silenciados++; return; }
         // Contactado hace poco y sin plan → no escribir de nuevo todavía.
@@ -21615,12 +21652,14 @@ if('serviceWorker' in navigator){
     // Primero los que hace más que esperan: son los que se están enfriando.
     bandas.esperando.sort(function(a,b){ return (b._inter.diasDesde||0) - (a._inter.diasDesde||0); });
     bandas.seguimiento.sort(function(a,b){ return (a._inter.diasHasta) - (b._inter.diasHasta); });
+    bandas.tibio.sort(function(a,b){ return (b._inter.diasDesde||0) - (a._inter.diasDesde||0); });
     bandas.deuda.sort(function(a,b){ return b.deuda - a.deuda; });
     bandas.cumple.sort(function(a,b){ return a.cumpleDias - b.cumpleDias; });
 
     var defs = [
       {k:'esperando', ic:'⏳', t:'Esperando respuesta', d:'Les escribiste y todavía no sabés — marcá el desenlace cuando te contesten'},
       {k:'seguimiento', ic:'📌', t:'Seguimientos de hoy', d:'Quedaron en algo — toca cumplir tu palabra'},
+      {k:'tibio', ic:'💬', t:'Respondieron, sin cerrar', d:'Te contestaron y todavía no compraron — retomá la charla'},
       {k:'deuda', ic:'🔴', t:'Deudas a cobrar', d:'Con saldo pendiente'},
       {k:'cumple', ic:'🎂', t:'Cumpleaños', d:'Hoy y mañana — excusa perfecta para aparecer'}
     ];
@@ -21675,6 +21714,7 @@ if('serviceWorker' in navigator){
     else if (banda==='cumple'){ var dc=u.cumpleDias; var who=u.cumpleMember?_hoyPrimerNombre(u.cumpleMember.nombre):''; right = '<span class="hoy-row-bday">'+(dc===0?'HOY':(dc===1?'manana':'en '+dc+'d'))+(who?' &middot; '+escHtml(who):'')+'</span>'; }
     else if (banda==='seguimiento' && u._inter){ var dh=u._inter.diasHasta; var lbl = dh<0?('vencio hace '+(-dh)+'d'):(dh===0?'para HOY':'para '+u._inter.prox); right = '<span class="hoy-row-prox'+(dh<0?' vencido':'')+'">'+escHtml(lbl)+'</span>'; }
     else if (banda==='esperando' && u._inter){ var dd=u._inter.diasDesde; right = '<span class="hoy-row-esperando">le escribiste '+(dd===0?'hoy':(dd===1?'ayer':'hace '+dd+'d'))+'</span>'; }
+    else if (banda==='tibio' && u._inter){ var dt=u._inter.diasDesde; right = '<span class="hoy-row-tibio">respondió hace '+dt+'d</span>'; }
     // F3: rastro del último contacto (resultado + nota) bajo el nombre.
     var lastLine = '';
     if (u._inter && u._inter.last){
@@ -21727,12 +21767,18 @@ if('serviceWorker' in navigator){
       + ' data-key="'+escHtml(c.key)+'" data-tel="'+escHtml(c.tel||'')+'" data-nombre="'+escHtml(u.nombre)+'"'
       + ' data-barrio="'+escHtml(u.barrio||'')+'" title="Anotar algo de esta persona sin salir de acá">Anotar</button>';
   }
-  var _DESENLACES = [['Pidio 🎉','si','🎉 Pidió'], ['Quedo en pedir','quedo','Quedó en pedir'], ['No contesto','no','No contestó']];
+  // De mejor a peor. El 3ro es el que faltaba: contesto, no se comprometio a nada.
+  var _DESENLACES = [
+    ['Pidio 🎉','si','🎉 Pidió','Cerro: hizo el pedido'],
+    ['Quedo en pedir','quedo','Quedó en pedir','Se comprometio a pedir'],
+    [RES_TIBIO,'resp','💬 Respondió','Contesto pero no compro todavia — la charla queda abierta y vuelve en unos dias'],
+    ['No contesto','no','🔇 No contestó','No hubo respuesta']
+  ];
   function _hoyDesenlaceBtns(c, u, origen){
     return _DESENLACES.map(function(d){
       return '<button class="hoy-act hoy-act-'+d[1]+'" onclick="event.stopPropagation();crmDesenlace(this)"'
         + ' data-key="'+escHtml(c.key)+'" data-tel="'+escHtml(c.tel||'')+'" data-nombre="'+escHtml(u.nombre)+'"'
-        + ' data-origen="'+escHtml(origen)+'" data-r="'+escHtml(d[0])+'">'+d[2]+'</button>';
+        + ' data-origen="'+escHtml(origen)+'" data-r="'+escHtml(d[0])+'" title="'+escHtml(d[3])+'">'+d[2]+'</button>';
     }).join('');
   }
   // La casa que compra por evento lo dice en la fila: si no, no aparecer en la
@@ -22120,6 +22166,10 @@ if('serviceWorker' in navigator){
         if (est.diasHasta !== null && est.diasHasta > 0){ trabajados++; return; }
         // Contactado hace poco sin plan → trabajado, no reaparece.
         if (est.diasHasta === null && est.diasDesde !== null && est.diasDesde <= CRM_SILENCE_DIAS){ trabajados++; return; }
+        // La charla sigue abierta en ☀️ Hoy (respirando o en su banda): ya la
+        // trabajaste. Sin esto la casa aparece en las dos pantallas a la vez, que
+        // es exactamente el problema que se arreglo el 2/9/2026.
+        if (_charlaTibia(u)){ trabajados++; return; }
       }
       var j = _semJugada(u);
       if (j && bandas[j]) bandas[j].push(u);
@@ -22462,7 +22512,7 @@ if('serviceWorker' in navigator){
   };
 
   // ════════ F3: MODAL "REGISTRAR CONTACTO" ════════
-  var CRM_RESULTADOS = ['Le escribi', 'No contesto', 'Quedo en pedir', 'Pidio 🎉', 'No le interesa', 'Otro'];
+  var CRM_RESULTADOS = ['Le escribi', 'No contesto', RES_TIBIO, 'Quedo en pedir', 'Pidio 🎉', 'No le interesa', 'Otro'];
   var _crmLogState = null;   // {key, tel, nombre, origen, resultado}
 
   function _crmFechaAR(d){
@@ -22599,7 +22649,11 @@ if('serviceWorker' in navigator){
   };
   window.crmDesenlace = function(btn){
     var r = (btn && btn.getAttribute('data-r')) || '';
-    var avisos = {'Pidio 🎉':'🎉 {n} pidió — bien ahí', 'Quedo en pedir':'Anotado: {n} quedó en pedir', 'No contesto':'Anotado: {n} no contestó'};
+    var avisos = {'Pidio 🎉':'🎉 {n} pidió — bien ahí', 'Quedo en pedir':'Anotado: {n} quedó en pedir',
+      'No contesto':'Anotado: {n} no contestó'};
+    // El aviso nombra la pantalla: la fila desaparece de ⏳ Esperando y sin decir
+    // adonde fue parece que se perdio.
+    avisos[RES_TIBIO] = 'Anotado: {n} respondió pero no cerró — vuelve a ☀️ Hoy en '+CRM_TIBIO_DIAS+' días para retomarla';
     _crmLogRapido(btn, r, avisos[r] || 'Anotado');
   };
 
