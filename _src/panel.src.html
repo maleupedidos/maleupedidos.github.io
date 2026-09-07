@@ -1079,6 +1079,16 @@ body{font-family:'Inter',-apple-system,'Segoe UI',system-ui,sans-serif;backgroun
 .hoy-band.abierta .sem-band-tog .car{transform:rotate(180deg)}
 
 /* ── Segmentos (campañas WATI) ── */
+.seg-env{background:#fff;border:1px solid var(--cd);border-left:3px solid #F4511E;border-radius:10px;padding:12px 14px;margin-bottom:9px}
+.seg-env-h{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
+.seg-env-d{font-size:13px;font-weight:800;color:var(--ink)}
+.seg-env-t{font-size:12px;font-weight:700;color:#BF360C;background:#FBE9E7;border-radius:20px;padding:2px 9px}
+.seg-env-n{font-size:12px;color:var(--ink3);margin-top:5px;line-height:1.5}
+.seg-env-n b{color:var(--ink)}
+.seg-env-ok{font-size:12px;font-weight:700;color:#2E7D32}
+.seg-env-ver{background:none;border:none;font:inherit;font-size:12px;font-weight:700;color:var(--o);cursor:pointer;padding:8px 0 2px;min-height:38px}
+.seg-env-l{font-size:11.5px;color:var(--ink2);line-height:1.6;border-top:1px solid var(--cd);margin-top:7px;padding-top:7px}
+.seg-env-l em{font-style:normal;color:#2E7D32;font-weight:700}
 .seg-sub-toggle{display:flex;gap:5px}
 .seg-intro{font-size:12px;color:var(--ink2);background:var(--cr);border-radius:6px;padding:9px 12px;margin-bottom:12px;line-height:1.5}
 .seg-note{font-size:12px;color:var(--ink3);margin-bottom:10px}
@@ -3587,6 +3597,7 @@ body.role-single .statusbar{font-size:11px}
       <div class="seg-sub-toggle">
         <button class="hoy-thresh-chip on" data-segv="cross" onclick="segSwitchVista('cross')">Cross-sell</button>
         <button class="hoy-thresh-chip" data-segv="cond" onclick="segSwitchVista('cond')">Por estado</button>
+        <button class="hoy-thresh-chip" data-segv="enviadas" onclick="segSwitchVista('enviadas')">📣 Enviadas</button>
       </div>
     </div>
     <div class="seg-intro">Cada segmento es una <b>campaña concreta</b>: a quién, qué template de WATI y con qué producto/incentivo. <b>Copiá los teléfonos</b> y mandá el broadcast desde WATI (legal). Lo enviado se registra en la bitácora.</div>
@@ -19956,8 +19967,79 @@ if('serviceWorker' in navigator){
     return us;
   }
 
+  /* Las campanias YA enviadas, agrupadas por dia y template.
+     Segmentos servia para ARMAR la proxima y no habia ninguna pantalla que dijera
+     que salio: lo unico que miraba de lo enviado era si habia sido HOY, para no
+     mandar dos difusiones el mismo dia. */
+  function _segEnviadas(){
+    if (!crmInteracciones) return null;
+    var porCasa = {};                      // tel10 -> unidad de Estancias
+    _crmUnidadesEstancias().forEach(function(u){
+      (u.tels||[]).forEach(function(t){ if(t) porCasa[t] = u; });
+    });
+    var g = {};
+    crmInteracciones.forEach(function(it){
+      if (!_esCampania(it)) return;
+      var dia = String(it.fecha||'').split(' ')[0];
+      if (!dia) return;
+      var tpl = (String(it.nota||'').match(/Campa[nñ]a:\s*(.+)$/) || [])[1] || '(sin nombre)';
+      var k = dia + '|' + tpl.trim();
+      var e = g[k] || (g[k] = {dia:dia, tpl:tpl.trim(), gente:[], casas:{}, quien:it.usuario||''});
+      e.gente.push(it);
+      var u = porCasa[String(it.tel||'').replace(/\D/g,'').slice(-10)];
+      if (u) e.casas[u.key || u.id] = u;
+    });
+    var arr = Object.keys(g).map(function(k){ return g[k]; });
+    arr.sort(function(a,b){ return _crmFechaSort(b.dia) - _crmFechaSort(a.dia); });
+    return arr;
+  }
+
+  /* Cuantas de las casas alcanzadas compraron dentro de los 3 dias. NO prueba que
+     la campania lo haya causado —ya esta medido que el lift no aparece— pero es el
+     numero que uno quiere ver al lado de cada envio. La pantalla lo aclara. */
+  function _segCompraron(e){
+    var d0 = _crmFechaSort(e.dia);
+    if (!d0) return null;
+    var out = {};
+    /* [!] NO se puede depender de `D`: la tab Estancias no pide el volcado, asi
+       que en esta pantalla `D.pedidos` casi nunca esta y el renglon no salia
+       nunca. Se usa `ultimaFecha` de la casa, que el CRM ya trae siempre, y se
+       afina con `D` solo si por casualidad ya llego. */
+    Object.keys(e.casas).forEach(function(k){
+      var u = e.casas[k];
+      var f = _crmFechaSort(u.ultimaFecha);
+      if (!f) return;
+      var dias = Math.round((f - d0) / 86400000);
+      if (dias >= 0 && dias <= 3) out[k] = u.nombre || '';
+    });
+    if (typeof D !== 'undefined' && D && D.pedidos && D.pedidos.length){
+      var tels = {};
+      Object.keys(e.casas).forEach(function(k){
+        (e.casas[k].tels||[]).forEach(function(t){ if(t) tels[t] = k; });
+      });
+      D.pedidos.forEach(function(p){
+        if (p.es === 'Cancelado') return;
+        var k = tels[String(p.tel||'').replace(/\D/g,'').slice(-10)];
+        if (!k) return;
+        var pd = _crmFechaSort(String(p.dee||'').split('T')[0].split(' ')[0].split('-').reverse().join('/'));
+        if (!pd) return;
+        var dd2 = Math.round((pd - d0) / 86400000);
+        if (dd2 >= 0 && dd2 <= 3) out[k] = e.casas[k].nombre || '';
+      });
+    }
+    return out;
+  }
+
+  window.segVerEnviada = function(i){
+    var b = document.getElementById('segenv-' + i);
+    if (b) b.style.display = (b.style.display === 'none') ? '' : 'none';
+    var v = document.getElementById('segenvb-' + i);
+    if (v) v.textContent = (b && b.style.display === 'none') ? 'ver a quiénes ▾' : 'ocultar ▴';
+  };
+
   window.renderCrmSegmentos = function(){
     if (!crmClientes) return;
+    if (crmSegVista === 'enviadas') return _renderSegEnviadas();
     var us = _estHouseholds();
     _segCache = {};
     var lbl = crmSegExcluirDias===1?'el mismo día':(crmSegExcluirDias===0?'(desactivado)':'los últimos '+crmSegExcluirDias+' días');
@@ -19988,6 +20070,49 @@ if('serviceWorker' in navigator){
 
     el('segList').innerHTML = cards.join('') || '<div class="hoy-empty"><p>Sin segmentos para mostrar.</p></div>';
   };
+
+  function _renderSegEnviadas(){
+    var arr = _segEnviadas();
+    if (!arr){ el('segList').innerHTML = '<div class="loading">Cargando la bitácora…</div>'; return; }
+    if (!arr.length){
+      el('segList').innerHTML = '<div class="hoy-empty"><div class="hoy-empty-ic">📣</div>'
+        + '<p>Todavía no hay ninguna campaña registrada.</p>'
+        + '<p style="font-size:12.5px;color:var(--ink3);margin-top:8px">Las que mandás desde acá con «Marcar enviada» quedan solas. '
+        + 'Las que salen a mano desde WATI hay que importarlas.</p></div>';
+      return;
+    }
+    var h = '<div class="seg-note">Lo que ya salió. Una campaña entra sola si la marcás enviada desde acá; '
+      + 'las que mandás a mano desde el panel de WATI hay que <b>importarlas</b>, si no el ERP no las ve.</div>';
+    arr.slice(0, 24).forEach(function(e, i){
+      var nCasas = Object.keys(e.casas).length;
+      var comp = _segCompraron(e);
+      var nComp = comp ? Object.keys(comp).length : null;
+      var dd = _crmDiasDesde(e.dia);
+      var cuando = dd === 0 ? 'hoy' : (dd === 1 ? 'ayer' : 'hace ' + dd + ' días');
+      h += '<div class="seg-env">'
+        + '<div class="seg-env-h"><span class="seg-env-d">' + escHtml(e.dia) + '</span>'
+        + '<span class="seg-env-t">' + escHtml(e.tpl) + '</span>'
+        + '<span style="font-size:11.5px;color:var(--ink3)">' + cuando + (e.quien ? ' · ' + escHtml(e.quien) : '') + '</span></div>'
+        + '<div class="seg-env-n"><b>' + e.gente.length + '</b> ' + (e.gente.length === 1 ? 'persona' : 'personas')
+        + (nCasas ? ' · <b>' + nCasas + '</b> ' + (nCasas === 1 ? 'casa' : 'casas') + ' de Estancias' : '')
+        + (nComp !== null && nCasas ? ' · <span class="seg-env-ok">' + nComp + ' compraron dentro de 3 días</span>' : '')
+        + '</div>';
+      if (nCasas){
+        h += '<button class="seg-env-ver" id="segenvb-' + i + '" onclick="segVerEnviada(' + i + ')">ver a quiénes ▾</button>'
+          + '<div class="seg-env-l" id="segenv-' + i + '" style="display:none">'
+          + Object.keys(e.casas).map(function(k){
+              return (comp && comp[k] ? '<em>✓ ' : '<span>') + escHtml(e.casas[k].nombre || '')
+                   + (comp && comp[k] ? '</em>' : '</span>');
+            }).join(' &middot; ')
+          + '</div>';
+      }
+      h += '</div>';
+    });
+    h += '<div class="seg-note" style="margin-top:12px">Que una casa comprara después <b>no prueba</b> que la campaña lo haya '
+      + 'causado: se mandan dos por semana, así que casi siempre hay otra campaña en el medio. '
+      + 'Para saberlo de verdad hay que dejar un grupo sin recibir nada durante tres semanas.</div>';
+    el('segList').innerHTML = h;
+  }
 
   function _segCard(id, titulo, hh, hook, tpl, color){
     var disp = hh.filter(function(u){ return !u._reservado; });
