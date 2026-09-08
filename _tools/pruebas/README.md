@@ -15,6 +15,7 @@ sobreviven. Estos cuatro no.
 | `escanear_general.js` | Recorre las 18 tabs midiendo controles chicos, texto cortado y desborde |
 | `ver_cortados.js` | Los textos cortados de una tab, con su clase y cuánto sobra |
 | `medir_endpoint.py` | Cuánto tarda un endpoint, N veces seguidas. **Es como se ve si el cache del servidor anda**: si no baja del 2º toque, no hay un solo acierto |
+| `probar_resumen.js` | La sub-tab **Inicio > Resumen** entera: el bloque de la orden de compra (que ordene por lo que se vende), el gráfico de línea, el universo de la base de clientes y el hero. Incluye la **dirección contraria**: simula la demanda para ver que un producto por encargo sube a la lista cuando empieza a venderse |
 
 ## Cómo se usan
 
