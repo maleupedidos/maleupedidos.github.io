@@ -11577,6 +11577,48 @@ function render(){
   _pintarEnLosRatosLibres();
 }
 
+/* ── LO QUE FALTA COBRAR: una sola definición ──
+   Hasta el 7/9/2026 esto vivía copiado en CUATRO lugares (el KPI de Inicio, el
+   patrimonial del Cierre, el insight "Plata en la calle" y el EERR financiero),
+   y los cuatro hacían `if(p.h==='Red')return;`. Pero el desglose por semana de
+   la MISMA pantalla de Inicio sí cuenta Red (`pvAllConRed`, más arriba): el KPI
+   decía $182.000 y tres centímetros más abajo decía $374.560, por lo mismo.
+
+   Gana el que incluye Red: el vendedor recibió mercadería de Maleu y todavía no
+   la pagó, que es literalmente lo que el KPI dice medir. Y con Red afuera la
+   Posición Neta quedaba $192.560 corta.
+
+   El criterio de Red es `es!=='Cancelado'`, NO `es==='Entregado'`, por dos
+   razones: es el mismo filtro que usa `pvAllConRed` —así los dos números de la
+   pantalla coinciden por construcción y no por casualidad— y porque en Red
+   "Pendiente" casi nunca significa "no entregado" (los vendedores no usan el
+   ERP y nadie marca la entrega).
+
+   NO se usa `v.deudaPorSemana`, que sería el FIFO del backend: medido el
+   7/9/2026, `D.vendedores` llega a los ~25 s y `D.pedidos` a los ~12 s. El KPI
+   mostraría un número durante 13 segundos y otro después. `p.$` de Red ya viaja
+   NETO del 17% de comisión, o sea que es exactamente lo que Maleu tiene por
+   cobrar. */
+function _porCobrar(){
+  var r={vd:0,red:0,total:0,nVD:0,nRed:0,detVD:[],detRed:[]};
+  if(!D||!D.pedidos)return r;
+  D.pedidos.forEach(function(p){
+    if(p.ep==='Cobrado')return;
+    if(!(Number(p.$)>0))return;
+    if(!(p.c&&String(p.c).trim()))return;
+    var m=Number(p.$||0);
+    if(p.h==='Red'){
+      if(p.es==='Cancelado')return;
+      r.red+=m;r.nRed++;r.detRed.push({n:p.n,c:p.c,br:p.br||'',m:m});
+    }else{
+      if(p.es!=='Entregado')return;
+      r.vd+=m;r.nVD++;r.detVD.push({n:p.n,c:p.c,h:p.h||'',m:m});
+    }
+  });
+  r.total=r.vd+r.red;
+  return r;
+}
+
 // ── SNAPSHOT DIARIO (Inicio): 5 números clave del estado del negocio hoy ──
 // Facturado mes (devengado) · Cobrado mes · Quemado mes · Saldo de caja · Días de pista
 // Reusa eerrFlujoMes() y eerrConfig() para mantener un solo origen de verdad.
@@ -11659,14 +11701,10 @@ function rHSnap(){
   var burnDiario=quemadoMes/Math.max(diaActual,1);
   var diasPista=null;
   if(burnDiario>0&&saldoTot>0)diasPista=Math.round(saldoTot/burnDiario);
-  // 6. A Cobrar Pendiente — pedidos Entregados sin Cobrar (excluye Red, lo cobra el vendedor)
-  var aCobrar=0;
-  ((D.pedidos)||[]).forEach(function(p){
-    if(p.h==='Red')return;
-    if(p.es!=='Entregado')return;
-    if(p.ep==='Cobrado')return;
-    aCobrar+=Number(p.$||0);
-  });
+  // 6. A Cobrar Pendiente — clientes que recibieron y no pagaron + lo que los
+  //    vendedores de Red le deben a Maleu. Una sola definición: ver _porCobrar().
+  var _pc=_porCobrar();
+  var aCobrar=_pc.total;
   // 7. Deuda Proveedores — fetch async, cache global. Si no llegó todavía, dispara fetch + re-render.
   var deudaProv=null;
   if(typeof window._eerrDeudaProv!=='undefined')deudaProv=window._eerrDeudaProv;
@@ -11709,7 +11747,16 @@ function rHSnap(){
   html+=card(sCobrado,'Cobrado mes',fmoney(cobradoMes),fm.cobertura?(fm.cobertura+'% cobertura FC'):'caja real');
   html+=card(sFlujo,'Gastado mes',fmoney(quemadoMes),(flujoMes>=0?'+':'')+fmoney(flujoMes)+' flujo neto');
   html+=card(sSaldo,'Saldo de caja',fmoney(saldoTot),(saldoTot>=cajaMin?'sobre caja mín ':'bajo caja mín ')+fmoney(cajaMin));
-  html+=card(aCobrar>0?'wrn':'g','A cobrar',fmoney(aCobrar),aCobrar>0?'recibieron Maleu, no pagaron':'todo cobrado');
+  /* El pie dice de dónde sale cuando hay de los dos: "recibieron Maleu y no
+     pagaron" es cierto de los dos, pero un vendedor y un cliente no se cobran
+     en la misma pantalla ni con la misma llamada. */
+  var _pcPie='todo cobrado';
+  if(aCobrar>0){
+    if(_pc.red>0&&_pc.vd>0)_pcPie='clientes '+fmoney(_pc.vd)+' · vendedores '+fmoney(_pc.red);
+    else if(_pc.red>0)_pcPie=(_pc.nRed===1?'un vendedor':_pc.nRed+' vendedores')+' sin rendir';
+    else _pcPie='recibieron Maleu, no pagaron';
+  }
+  html+=card(aCobrar>0?'wrn':'g','A cobrar',fmoney(aCobrar),_pcPie);
   html+=card('g','Stock (al costo)',fmoney(stockTot),stockN+' productos en freezer');
   html+=card(sDeuda,'Deuda proveedores',deudaProv===null?'…':fmoney(deudaProv),deudaProv===null?'cargando':(deudaProv>0?'FIFO por semana':'al día'));
   html+='</div>';
@@ -14959,11 +15006,8 @@ function _ckRenderPatrimonial(){
   var saldoEf=Number(sb.ef||0)+Number(cj.cobradoEf||0)+Number(cj.ingresosEf||0)-Number(cj.gastosEf||0);
   var saldoMP=Number(sb.mp||0)+Number(cj.cobradoMP||0)+Number(cj.ingresosMP||0)-Number(cj.gastosMP||0);
   var saldoTot=saldoEf+saldoMP;
-  var aCobrar=0;
-  ((D&&D.pedidos)||[]).forEach(function(p){
-    if(p.h==='Red'||p.es!=='Entregado'||p.ep==='Cobrado')return;
-    aCobrar+=Number(p.$||0);
-  });
+  var _pcC=_porCobrar();
+  var aCobrar=_pcC.total;
   var stockTot=0;((D&&D.stock)||[]).forEach(function(s){stockTot+=Number(s.iv||0);});
   var deudaProv=(typeof window._eerrDeudaProv!=='undefined'&&window._eerrDeudaProv!==null)?window._eerrDeudaProv:null;
   if(deudaProv===null&&typeof eerrFetchDeudaProv==='function'){
@@ -14975,7 +15019,7 @@ function _ckRenderPatrimonial(){
   return '<div class="ck-block"><div class="ck-block-h">💰 Estado patrimonial al cierre</div>'+
     '<div class="ck-grid">'+
       '<div class="ck-card o"><div class="ck-card-t">Caja real</div><div class="ck-card-v">'+_ckMoneyShort(saldoTot)+'</div><div class="ck-card-s">Ef '+_ckMoneyShort(saldoEf)+' · MP '+_ckMoneyShort(saldoMP)+'</div></div>'+
-      '<div class="ck-card"><div class="ck-card-t">(+) A cobrar</div><div class="ck-card-v">'+_ckMoneyShort(aCobrar)+'</div><div class="ck-card-s">'+(aCobrar>0?'clientes pendientes':'todo cobrado')+'</div></div>'+
+      '<div class="ck-card"><div class="ck-card-t">(+) A cobrar</div><div class="ck-card-v">'+_ckMoneyShort(aCobrar)+'</div><div class="ck-card-s">'+(aCobrar>0?(_pcC.red>0?'clientes '+_ckMoneyShort(_pcC.vd)+' \u00b7 vendedores '+_ckMoneyShort(_pcC.red):'clientes pendientes'):'todo cobrado')+'</div></div>'+
       '<div class="ck-card g"><div class="ck-card-t">(+) Stock al costo</div><div class="ck-card-v">'+_ckMoneyShort(stockTot)+'</div><div class="ck-card-s">freezer cargado</div></div>'+
       '<div class="ck-card r"><div class="ck-card-t">(−) Deuda proveedores</div><div class="ck-card-v">'+(deudaProv===null?'…':_ckMoneyShort(deudaProv))+'</div><div class="ck-card-s">'+(deudaProv===null?'cargando':(deudaProv>0?'FIFO por semana':'al día'))+'</div></div>'+
     '</div>'+
@@ -15651,8 +15695,14 @@ function rCierreInsights(box){
     else ins.push({sev:'good',ico:'⛽',tit:'Caja holgada',txt:'~'+Math.round(runway)+' días de pista con la posición actual ('+_ckMoneyShort(posNeta)+').',pri:3});
   }
   // A cobrar pendiente
-  if(esMesActual&&D){var aCobrar=0;((D.pedidos)||[]).forEach(function(p){if(p.h==='Red'||p.es!=='Entregado'||p.ep==='Cobrado')return;aCobrar+=Number(p.$||0);});
-    if(aCobrar>50000)ins.push({sev:'opp',ico:'💵',tit:'Plata en la calle',txt:'Hay <b>'+_ckMoneyShort(aCobrar)+'</b> entregado y sin cobrar. Salir a cerrar esos cobros mejora la caja ya.',pri:2});
+  if(esMesActual&&D){var _pcI=_porCobrar();
+    /* Nombra dónde está la plata: salir a cobrarle a un cliente y pedirle la
+       rendición a un vendedor son dos gestiones distintas. */
+    if(_pcI.total>50000){
+      var _donde=(_pcI.red>0&&_pcI.vd>0)?(' — '+_ckMoneyShort(_pcI.vd)+' de clientes y '+_ckMoneyShort(_pcI.red)+' sin rendir de Red')
+                :(_pcI.red>0?' — todo de vendedores de Red, sin rendir':'');
+      ins.push({sev:'opp',ico:'💵',tit:'Plata en la calle',txt:'Hay <b>'+_ckMoneyShort(_pcI.total)+'</b> entregado y sin cobrar'+_donde+'. Salir a cerrar esos cobros mejora la caja ya.',pri:2});
+    }
   }
 
   // Orden: bad → warn → opp → good; dentro, por prioridad
@@ -15941,17 +15991,13 @@ function rEERR_financiero(body){
     });
     deudaProv=0; // mostrar "calculando..." en el primer render
   }
-  // Cuentas por cobrar (pedidos Entregados sin Cobrar). Excluye Red (lo cobra el vendedor).
-  // Backend usa p.es / p.ep / p.$ (no p.estado / p.pago / p.t).
-  var cxcTotal=0,cxcDet=[];
-  ((D&&D.pedidos)||[]).forEach(function(p){
-    if(p.h==='Red')return;
-    if(p.es!=='Entregado')return;
-    if(p.ep==='Cobrado')return;
-    var m=Number(p.$||p.t||p.total||0);if(!m)return;
-    cxcTotal+=m;
-    cxcDet.push({h:p.h||'',n:p.n||'?',cli:p.c||'?',m:m,fe:p.fe||''});
-  });
+  /* Cuentas por cobrar. INCLUYE Red: lo que el vendedor todavía no rindió es un
+     activo de Maleu igual que la factura de un cliente. Una sola definición para
+     todo el ERP — ver _porCobrar(). */
+  var _pcF=_porCobrar();
+  var cxcTotal=_pcF.total,cxcDet=[];
+  _pcF.detVD.forEach(function(x){cxcDet.push({h:x.h,n:x.n||'?',cli:x.c||'?',m:x.m,fe:''});});
+  _pcF.detRed.forEach(function(x){cxcDet.push({h:'Red',n:x.n||'?',cli:(x.br||x.c||'?'),m:x.m,fe:''});});
   cxcDet.sort(function(a,b){return b.m-a.m;});
   // Posición Financiera Neta = Caja real + Cuentas por Cobrar − Deuda Proveedores
   var cajaNeta=saldoActualReal+cxcTotal-deudaProv;
