@@ -14,6 +14,7 @@ sobreviven. Estos cuatro no.
 | `leer_sesion.py` | Saca un token válido de la hoja `Sesiones` con la service account |
 | `escanear_general.js` | Recorre las 18 tabs midiendo controles chicos, texto cortado y desborde |
 | `ver_cortados.js` | Los textos cortados de una tab, con su clase y cuánto sobra |
+| `medir_endpoint.py` | Cuánto tarda un endpoint, N veces seguidas. **Es como se ve si el cache del servidor anda**: si no baja del 2º toque, no hay un solo acierto |
 
 ## Cómo se usan
 
@@ -72,6 +73,6 @@ const PREP = require('./sesion_prep.js')(process.argv[2]);
 ## Lo que no entra acá
 
 Este repo es **público** por GitHub Pages: no entran tokens, ni el detalle de
-clientes, ni teléfonos, ni lotes. Los cuatro `.js` no tienen ningún dato adentro
+clientes, ni teléfonos, ni lotes. Los `.js` no tienen ningún dato adentro
 y `leer_sesion.py` **no sirve sin la credencial** de `C:\Users\tadeu\`, que no
 está versionada y no puede estarlo.
