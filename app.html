@@ -501,6 +501,32 @@ body{font-family:'Inter',-apple-system,'Segoe UI',system-ui,sans-serif;backgroun
 .vt-tip.on{opacity:1}
 .vt-pie{font-size:11px;color:var(--ink3);line-height:1.5;padding:9px 2px 0;border-top:1px solid var(--cd);margin-top:8px}
 .vt-pie b{color:var(--ink2);font-weight:700}
+.vt-rank{margin-top:12px;border-top:1px solid var(--cd);padding-top:10px}
+.vt-rank-h{display:flex;justify-content:space-between;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:8px}
+.vt-rank-h b{font-size:12.5px;color:var(--ink)}
+.vt-rank-h .vt-rank-lapso{font-size:10.5px;color:var(--ink3);font-weight:600}
+.vt-rank-chips{display:flex;gap:5px}
+.vt-rank-chip{min-height:30px;padding:0 10px;border-radius:999px;border:1px solid var(--border);background:transparent;color:var(--ink2);font-size:11px;font-weight:700;cursor:pointer}
+.vt-rank-chip.on{background:var(--o);border-color:var(--o);color:#fff}
+@media(max-width:700px){ .vt-rank-chip{min-height:38px;padding:0 12px} }
+.vt-rank-row{display:grid;grid-template-columns:22px minmax(0,1fr) minmax(60px,2fr) 64px;align-items:center;gap:8px;padding:5px 6px;border-radius:5px;cursor:pointer;transition:background .12s}
+.vt-rank-row:hover{background:var(--ol)}
+.vt-rank-row.top .vt-rank-n{font-weight:800}
+.vt-rank-pos{font-size:10px;font-weight:800;color:var(--ink3);text-align:center;font-variant-numeric:tabular-nums}
+.vt-rank-row.top .vt-rank-pos{color:var(--o)}
+.vt-rank-n{font-size:12px;font-weight:600;color:var(--ink);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.vt-rank-n small{display:block;font-size:9.5px;font-weight:600;color:var(--ink3);text-transform:none}
+.vt-rank-bar{height:8px;background:var(--cd);border-radius:999px;overflow:hidden}
+.vt-rank-bar i{display:block;height:100%;background:var(--o);border-radius:999px}
+.vt-rank-row.top .vt-rank-bar i{background:#E5662F}
+.vt-rank-q{font-size:12.5px;font-weight:800;color:var(--ink);text-align:right;font-variant-numeric:tabular-nums}
+.vt-rank-q small{display:block;font-size:9.5px;font-weight:600;color:var(--ink3)}
+@media(max-width:700px){
+  /* En el celular la barra se va: con 390px el nombre y el numero necesitan
+     todo el ancho, y la barra sin lugar no comunica nada. */
+  .vt-rank-row{grid-template-columns:20px minmax(0,1fr) 60px}
+  .vt-rank-bar{display:none}
+}
 .vt-pie-prom{color:#B99A5E;font-weight:800;letter-spacing:-1px}
 .vt-palancas{display:flex;align-items:baseline;gap:5px;flex-wrap:wrap;font-size:15px}
 .vt-palancas span{font-weight:800;font-variant-numeric:tabular-nums}
@@ -4662,7 +4688,19 @@ body.role-single .statusbar{font-size:11px}
           <option value="mb">Margen Bruto</option>
           <option value="ped">Cantidad de pedidos</option>
           <option value="ticket">Ticket promedio</option>
+          <option value="prod">Unidades vendidas</option>
         </select>
+      </div>
+      <!-- Categoria y Producto: solo con la metrica "Unidades vendidas". Se
+           esconden con las otras porque no filtran nada, y un control que no
+           hace nada es peor que no tenerlo. -->
+      <div class="vt-sel-wrap" id="vtCatWrap" style="display:none">
+        <label class="vt-sel-lbl">Categoría</label>
+        <select id="vtCat" class="vt-sel" onchange="tendCatChange()"></select>
+      </div>
+      <div class="vt-sel-wrap" id="vtProdWrap" style="display:none">
+        <label class="vt-sel-lbl">Producto</label>
+        <select id="vtProd" class="vt-sel" onchange="rTendencia()"></select>
       </div>
       <div class="vt-sel-wrap">
         <label class="vt-sel-lbl">Ventana</label>
@@ -17738,6 +17776,138 @@ function loadVentas(){
 //  Compara un canal a lo largo del tiempo, agregado por día puntual,
 //  semana o mes según el selector de "Período".
 // ═══════════════════════════════════════
+/* ── EL CATALOGO: abreviatura → nombre y categoria ──
+   Sale de `action=catalogo`, que ya devuelve {a, n, cat} por producto agrupado
+   por proveedor. NO se copia `NP_CAT` de ruta.html: esa lista vive en el IIFE de
+   la sub-app (no esta en window si no abriste Ruta) y una segunda copia se
+   despega de la primera — ya paso cuatro veces en este ERP. La hoja Productos,
+   la otra candidata, NO tiene columna de categoria (verificado). */
+var _tendCat=null, _tendCatPidiendo=false;
+
+function _tendCargarCatalogo(cb){
+  /* Copia guardada primero, igual que el resto del ERP. */
+  if(!_tendCat){
+    try{
+      var g=localStorage.getItem('mc_catalogoProd');
+      if(g)_tendCat=JSON.parse(g);
+    }catch(e){}
+  }
+  if(_tendCat){ if(cb)cb(); return; }
+  if(_tendCatPidiendo)return;
+  _tendCatPidiendo=true;
+  fetch(API+'?action=catalogo&t='+Date.now())
+    .then(function(r){return r.json();})
+    .then(function(d){
+      var map={};
+      var prods=(d&&d.productos)||{};
+      Object.keys(prods).forEach(function(prov){
+        (prods[prov]||[]).forEach(function(it){
+          if(it&&it.a)map[it.a]={n:it.n||it.a, cat:it.cat||'Otros'};
+        });
+      });
+      _tendCat=map;
+      try{localStorage.setItem('mc_catalogoProd',JSON.stringify(map));}catch(e){}
+      _tendCatPidiendo=false;
+      if(cb)cb();
+    })
+    .catch(function(e){
+      _tendCatPidiendo=false;
+      console.error('catalogo de productos',e);
+      if(cb)cb();
+    });
+}
+
+/* El nombre corto para la pantalla: el catalogo trae "Sorrentinos — Queso Brie"
+   y en un desplegable agrupado por categoria alcanza con "Queso Brie". */
+function _tendNombreCorto(nom,cat){
+  var s=String(nom||'');
+  var i=s.indexOf('—');                       /* raya larga */
+  if(i<0)i=s.indexOf(' - ');
+  if(i>=0)return s.slice(i+1).replace(/^[\s—-]+/,'').trim()||s;
+  if(cat&&s.indexOf(cat)===0)return s.slice(cat.length).trim()||s;
+  return s;
+}
+
+/* Que abreviaturas existen DE VERDAD en los pedidos: el desplegable lista lo que
+   se puede graficar, no el catalogo entero. Un producto que nunca se vendio
+   dibuja una linea plana en cero y ensucia la lista. */
+function _tendAbrevsUsadas(){
+  var vis={};
+  if(D&&D.pedidos)D.pedidos.forEach(function(p){
+    if(p.es==='Cancelado'||p.hist)return;
+    (p.p||[]).forEach(function(it){ if(it&&it.a)vis[it.a]=true; });
+  });
+  return vis;
+}
+
+function _tendLlenarCatProd(){
+  var selC=document.getElementById('vtCat'), selP=document.getElementById('vtProd');
+  if(!selC||!selP)return;
+  var usadas=_tendAbrevsUsadas();
+  var cats={};
+  Object.keys(usadas).forEach(function(a){
+    var info=(_tendCat&&_tendCat[a])||null;
+    var cat=info?info.cat:'Sin categoría';
+    (cats[cat]=cats[cat]||[]).push({a:a, n:info?_tendNombreCorto(info.n,cat):a});
+  });
+  var nombres=Object.keys(cats).sort();
+
+  var catPrev=selC.value||'__all';
+  selC.innerHTML='<option value="__all">Todas</option>'+
+    nombres.map(function(c){return '<option value="'+_tendEsc(c)+'">'+_tendEsc(c)+'</option>';}).join('');
+  selC.value=(catPrev==='__all'||cats[catPrev])?catPrev:'__all';
+
+  /* El desplegable de producto muestra SOLO los de la categoria elegida: si
+     listara los 34 siempre, elegir una categoria no serviria de nada. */
+  var prodPrev=selP.value||'__all';
+  var lista=[];
+  if(selC.value==='__all')nombres.forEach(function(c){
+    lista.push({grupo:c, items:cats[c].slice().sort(function(x,y){return x.n.localeCompare(y.n);})});
+  });
+  else lista.push({grupo:selC.value, items:cats[selC.value].slice().sort(function(x,y){return x.n.localeCompare(y.n);})});
+
+  var h='<option value="__all">Todos</option>';
+  lista.forEach(function(g){
+    h+='<optgroup label="'+_tendEsc(g.grupo)+'">';
+    g.items.forEach(function(it){ h+='<option value="'+_tendEsc(it.a)+'">'+_tendEsc(it.n)+'</option>'; });
+    h+='</optgroup>';
+  });
+  selP.innerHTML=h;
+  var existe=[].slice.call(selP.options).some(function(o){return o.value===prodPrev;});
+  selP.value=existe?prodPrev:'__all';
+}
+
+/* Alcance del ranking: el ultimo periodo (lo que se pregunta casi siempre) o
+   toda la ventana dibujada. */
+var _tendRankAlcance='ultimo';
+function tendRankAlcance(v){
+  _tendRankAlcance=v;
+  rTendencia();
+}
+
+/* Tocar una fila del ranking filtra el grafico por ese producto. Si ya estaba
+   elegido, vuelve a Todos: el mismo toque prende y apaga, sin un boton extra. */
+function tendVerProducto(abbr){
+  var selP=document.getElementById('vtProd'), selC=document.getElementById('vtCat');
+  if(!selP)return;
+  if(selP.value===abbr){ selP.value='__all'; rTendencia(); return; }
+  /* Si el producto no esta en la lista es porque hay otra categoria elegida:
+     se pasa a Todas y se rearma antes de seleccionarlo. */
+  var hay=[].slice.call(selP.options).some(function(o){return o.value===abbr;});
+  if(!hay&&selC){ selC.value='__all'; _tendLlenarCatProd(); }
+  selP.value=abbr;
+  rTendencia();
+}
+
+/* Cambiar de categoria rearma la lista de productos y vuelve a "Todos": dejar
+   elegido un producto de otra categoria daria un grafico vacio sin explicacion. */
+function tendCatChange(){
+  var selP=document.getElementById('vtProd');
+  if(selP)selP.value='__all';
+  _tendLlenarCatProd();
+  rTendencia();
+}
+
 /* `esc()` vive en el bloque de Planificacion, NO en el del panel: usarla aca
    tiraba un ReferenceError. Es la misma trampa que `fmt$` el 3/9 — antes de usar
    un helper en un bloque nuevo, chequea de que scope es. */
@@ -17792,7 +17962,7 @@ function _tendObservar(box){
 /* Las marcas del eje Y van cortas: "$2,9M" y no "$2.973.690", que a 46px de
    canaleta no entra y ademas obliga a leer siete cifras para captar una escala. */
 function _tendEjeY(v,metric){
-  if(metric==='ped')return String(Math.round(v));
+  if(metric==='ped'||metric==='prod')return String(Math.round(v));
   var a=Math.abs(v);
   if(a>=1000000)return '$'+(v/1000000).toFixed(a>=10000000?0:1).replace('.',',')+'M';
   if(a>=1000)return '$'+Math.round(v/1000)+'k';
@@ -17904,8 +18074,53 @@ function rTendencia(){
   var win=parseInt(document.getElementById('vtWindow').value,10);
   var isWeek=(period==='week'), isMonth=(period==='month');
   var dow=(!isWeek && !isMonth)?parseInt(period,10):-1;
+
+  /* ── UNIDADES VENDIDAS ──
+     Es la unica metrica que NO sale de `VD` (action=ventas), porque ese endpoint
+     no manda el detalle de productos — verificado: 0 de 1051 ventas lo traen. Sale
+     de `D.pedidos[].p`, que es `[{a:'PPM',q:3}]` y lo traen los 1069.
+
+     Eso obliga a agrupar por `dee` (dia de entrega ELEGIDO) en vez de por la
+     entrega real que usa `VD.fecha`. Medido pedido por pedido sobre los 951
+     emparejables: **949 caen en la misma semana ISO (99,79%) y ninguno cambia de
+     mes**. Los 2 que se corren son de un dia. Con esa medicion, agrupar por `dee`
+     es seguro para una vista semanal o mensual — y por eso no se toco el backend
+     para meter los productos en `action=ventas`. */
+  var esProd=(metric==='prod');
+  var prodCat=esProd?(document.getElementById('vtCat')||{}).value||'__all':'__all';
+  var prodAbbr=esProd?(document.getElementById('vtProd')||{}).value||'__all':'__all';
+  /* Los dos desplegables solo tienen sentido con esta metrica. */
+  var wC=document.getElementById('vtCatWrap'), wP=document.getElementById('vtProdWrap');
+  if(wC)wC.style.display=esProd?'':'none';
+  if(wP)wP.style.display=esProd?'':'none';
+
+  if(esProd){
+    var chartBoxP=document.getElementById('vtChart');
+    if(!D||!D.pedidos||!D.pedidos.length){
+      /* No saber NO es lo mismo que no haber vendido: si el volcado no llego, se
+         dice, y se lo pide. */
+      document.getElementById('vtKpis').innerHTML='';
+      document.getElementById('vtTable').innerHTML='';
+      if(chartBoxP)chartBoxP.innerHTML='<div class="empty">Las unidades salen del volcado de pedidos, que todavía no llegó. Tarda unos 20 segundos.</div>';
+      if(typeof _pedirD==='function'){try{_pedirD();}catch(e){}}
+      setTimeout(function(){ if(cur==='ventas'&&vTab==='tendencia'&&document.getElementById('vtMetric').value==='prod')rTendencia(); },4000);
+      return;
+    }
+    if(!_tendCat){
+      _tendCargarCatalogo(function(){
+        if(cur==='ventas'&&vTab==='tendencia'&&document.getElementById('vtMetric').value==='prod'){
+          _tendLlenarCatProd(); rTendencia();
+        }
+      });
+      if(chartBoxP)chartBoxP.innerHTML='<div class="empty">Cargando el catálogo de productos…</div>';
+      return;
+    }
+    _tendLlenarCatProd();
+    prodCat=(document.getElementById('vtCat')||{}).value||'__all';
+    prodAbbr=(document.getElementById('vtProd')||{}).value||'__all';
+  }
   // 1. Filtrar (canal + día puntual si aplica)
-  var rows=VD.filter(function(v){
+  var rows=esProd?[]:VD.filter(function(v){
     if(v.ep==='Cancelado')return false;
     if(sub!=='__all' && _tendSubcanal(v)!==sub)return false;
     if(bar!=='__all' && getBarrio(v)!==bar)return false;
@@ -17916,6 +18131,58 @@ function rTendencia(){
   });
   // 2. Agrupar según modo
   var grp={};
+
+  /* Las unidades entran por su propio camino —otra fuente, otra fecha— pero al
+     MISMO `grp`, asi que los KPIs, el grafico y la tabla son exactamente los
+     mismos. Duplicar el render seria la quinta copia de algo en este ERP. */
+  if(esProd){
+    D.pedidos.forEach(function(p){
+      if(p.es==='Cancelado'||p.hist)return;
+      /* En D.pedidos el canal es `h` (Home/Pilar/Clubes/Red), que ya coincide
+         con lo que devuelve `_tendSubcanal` para esos cuatro. */
+      if(sub!=='__all' && String(p.h||'')!==sub)return;
+      if(bar!=='__all' && String(p.bar||'')!==bar)return;
+      var items=p.p||[]; if(!items.length)return;
+      var u=0;
+      items.forEach(function(it){
+        if(!it||!it.a)return;
+        if(prodAbbr!=='__all'){ if(it.a!==prodAbbr)return; }
+        else if(prodCat!=='__all'){
+          var inf=_tendCat&&_tendCat[it.a];
+          if(!inf||inf.cat!==prodCat)return;
+        }
+        u+=Number(it.q)||0;
+      });
+      if(u<=0)return;
+      var m=String(p.dee||'').match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+      if(!m)return;
+      var d=new Date(Number(m[1]),Number(m[2])-1,Number(m[3]));
+      if(!isWeek && !isMonth && dow>=0 && d.getDay()!==dow)return;
+      var k,item;
+      if(isWeek){
+        var sem=_tendISOWeek(d), anio=d.getFullYear();
+        k=anio+'-W'+String(sem).padStart(2,'0');
+        if(!grp[k])grp[k]={key:k,sem:sem,anio:anio,n:0,fact:0,mb:0,u:0,minD:d,maxD:d,sortKey:anio*100+sem};
+        item=grp[k];
+        if(d<item.minD)item.minD=d;
+        if(d>item.maxD)item.maxD=d;
+      }else if(isMonth){
+        var mIdx=d.getMonth(), anioM=d.getFullYear();
+        k=anioM+'-M'+String(mIdx).padStart(2,'0');
+        if(!grp[k])grp[k]={key:k,mes:TEND_MS_FULL[mIdx],mIdx:mIdx,anio:anioM,n:0,fact:0,mb:0,u:0,sortKey:anioM*100+mIdx};
+        item=grp[k];
+      }else{
+        k=String(m[3]).padStart(2,'0')+'/'+String(m[2]).padStart(2,'0')+'/'+m[1];
+        if(!grp[k])grp[k]={key:k,fecha:k,d:d,n:0,fact:0,mb:0,u:0,sortKey:d.getTime()};
+        item=grp[k];
+      }
+      item.n++;                                  /* pedidos que llevaron el producto */
+      item.u+=u;                                 /* unidades */
+      item.fact+=Number(p['$'])||0;
+      item.mb+=(Number(p['$'])||0)-(Number(p.co)||0);
+    });
+  }
+
   rows.forEach(function(v){
     var d=_tendParseDMY(v.fecha);
     var k, item;
@@ -17943,12 +18210,14 @@ function rTendencia(){
   var serie=Object.keys(grp).map(function(k){return grp[k];}).sort(function(a,b){return a.sortKey-b.sortKey;});
   if(win>0 && serie.length>win)serie=serie.slice(-win);
   function val(p){
+    if(metric==='prod')return p.u||0;
     if(metric==='ped')return p.n;
     if(metric==='ticket')return p.n>0?p.fact/p.n:0;
     if(metric==='mb')return p.mb;
     return p.fact;
   }
   function valFmt(x){
+    if(metric==='prod')return Math.round(x)+' u.';
     if(metric==='ped')return String(Math.round(x));
     return '$'+f$(Math.round(x));
   }
@@ -18214,7 +18483,7 @@ function rTendencia(){
     var x0=Math.max(padL, xc-mitad), x1=Math.min(padL+chartW, xc+mitad);
     svg+='<rect class="vt-hit" x="'+x0+'" y="'+padT+'" width="'+Math.max(1,x1-x0)+'" height="'+chartH+'"'
       +' data-i="'+i+'" data-lbl="'+_tendEsc(kpiLbl(p))+'" data-val="'+_tendEsc(valFmt(values[i]))+'"'
-      +' data-ped="'+p.n+'" data-fact="$'+f$(Math.round(p.fact))+'"/>';
+      +' data-ped="'+p.n+'" data-fact="'+(esProd?((p.u||0)+' unidades'):('$'+f$(Math.round(p.fact))))+'"/>';
   });
   svg+='</svg>';
 
@@ -18245,16 +18514,102 @@ function rTendencia(){
     }
   }
   /* Qué es la línea punteada. Va acá y no encima de la línea, donde tapaba. */
+  /* `valFmt` de unidades ya termina en punto ("558 u."): agregar otro daba "558 u..". */
+  var _pAvg=valFmt(avg);
   pie+=(pie?' ':'')+'<span class="vt-pie-prom">- - -</span> el promedio de los '
-    +values.length+' períodos: '+valFmt(avg)+'.';
+    +values.length+' períodos: '+_pAvg+(/\.$/.test(_pAvg)?'':'.');
+  /* De dónde salen las unidades. Es otra fuente y otra fecha que el resto de las
+     métricas, y callarlo sería mentir por omisión. */
+  if(esProd)pie+=' Las unidades salen del detalle de cada pedido y se cuentan por'
+    +' <b>día de entrega elegido</b> (99,8% cae en la misma semana que la entrega real).';
+  /* ── EL RANKING ──
+     El grafico contesta "como viene X en el tiempo". La pregunta de Tadeo era
+     otra: *"¿que producto fue el mas vendido en septiembre? me costo mucho
+     buscar ese dato"*. Eso no lo contesta una linea — hay que ver todos los
+     productos juntos, ordenados. Va abajo del grafico, sobre la MISMA ventana
+     de periodos que se esta mirando. */
+  var rankHtml='';
+  if(esProd&&prodAbbr==='__all'){
+    /* El alcance arranca en el ULTIMO periodo porque "¿que fue lo mas vendido?"
+       casi siempre se pregunta del mes o la semana en curso — que es
+       literalmente como lo planteo Tadeo: *"¿que producto fue el mas vendido por
+       ahora en septiembre?"*. El otro chip abre a toda la ventana dibujada. */
+    var soloUlt=(_tendRankAlcance!=='ventana');
+    var desde=serie.length?(soloUlt?serie[serie.length-1]:serie[0]):null;
+    var hasta=serie.length?serie[serie.length-1]:null;
+    var claves={};
+    (soloUlt?serie.slice(-1):serie).forEach(function(p){claves[p.key]=true;});
+    var acum={}, totU=0;
+    D.pedidos.forEach(function(p){
+      if(p.es==='Cancelado'||p.hist)return;
+      if(sub!=='__all' && String(p.h||'')!==sub)return;
+      if(bar!=='__all' && String(p.bar||'')!==bar)return;
+      var m=String(p.dee||'').match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+      if(!m)return;
+      var d=new Date(Number(m[1]),Number(m[2])-1,Number(m[3]));
+      if(!isWeek && !isMonth && dow>=0 && d.getDay()!==dow)return;
+      /* Se cuenta SOLO lo que cae en los periodos dibujados, para que el ranking
+         y el grafico hablen exactamente del mismo lapso. */
+      var k=isWeek?(d.getFullYear()+'-W'+String(_tendISOWeek(d)).padStart(2,'0'))
+           :(isMonth?(d.getFullYear()+'-M'+String(d.getMonth()).padStart(2,'0'))
+           :(String(m[3]).padStart(2,'0')+'/'+String(m[2]).padStart(2,'0')+'/'+m[1]));
+      if(!claves[k])return;
+      (p.p||[]).forEach(function(it){
+        if(!it||!it.a)return;
+        if(prodCat!=='__all'){
+          var inf=_tendCat&&_tendCat[it.a];
+          if(!inf||inf.cat!==prodCat)return;
+        }
+        var q=Number(it.q)||0;
+        if(q<=0)return;
+        acum[it.a]=(acum[it.a]||0)+q; totU+=q;
+      });
+    });
+    var rank=Object.keys(acum).map(function(a){
+      var inf=_tendCat&&_tendCat[a];
+      return {a:a, q:acum[a], n:inf?_tendNombreCorto(inf.n,inf.cat):a, cat:inf?inf.cat:'Sin categoría'};
+    }).sort(function(x,y){return y.q-x.q;});
+    if(rank.length){
+      var tope=rank[0].q||1;
+      var lapso=soloUlt
+        ? (hasta?_tendEsc(kpiLbl(hasta)):'')
+        : ((desde&&hasta)?(_tendEsc(kpiLbl(desde))+' → '+_tendEsc(kpiLbl(hasta))):'');
+      var rotUlt=isWeek?'Última semana':(isMonth?'Último mes':'Último día');
+      rankHtml='<div class="vt-rank"><div class="vt-rank-h">'
+        +'<b>🏆 Lo más vendido</b>'
+        +'<span class="vt-rank-chips">'
+        +'<button class="vt-rank-chip'+(soloUlt?' on':'')+'" onclick="tendRankAlcance(\'ultimo\')">'+rotUlt+'</button>'
+        +'<button class="vt-rank-chip'+(soloUlt?'':' on')+'" onclick="tendRankAlcance(\'ventana\')">Los '+serie.length+'</button>'
+        +'</span>'
+        +'<span class="vt-rank-lapso">'+_tendEsc(lapso)+' · '+totU+' unidades</span></div>';
+      rank.forEach(function(it,i){
+        var pct=Math.round(it.q*100/tope);
+        var share=totU>0?(it.q*100/totU):0;
+        /* Cada fila filtra el grafico por ese producto: es el paso siguiente
+           natural despues de ver quien encabeza. */
+        rankHtml+='<div class="vt-rank-row'+(i===0?' top':'')+'" onclick="tendVerProducto(\''+_tendEsc(it.a)+'\')" title="Ver solo este producto">'
+          +'<span class="vt-rank-pos">'+(i+1)+'</span>'
+          +'<span class="vt-rank-n">'+_tendEsc(it.n)+'<small>'+_tendEsc(it.cat)+'</small></span>'
+          +'<span class="vt-rank-bar"><i style="width:'+pct+'%"></i></span>'
+          +'<span class="vt-rank-q">'+it.q+'<small>'+share.toFixed(1)+'%</small></span>'
+          +'</div>';
+      });
+      rankHtml+='</div>';
+    }
+  }
+
   chartBox.innerHTML='<div class="vt-wrap">'+svg+'<div class="vt-tip" id="vtTip"></div></div>'
-    +(pie?'<div class="vt-pie">'+pie+'</div>':'');
+    +(pie?'<div class="vt-pie">'+pie+'</div>':'')+rankHtml;
   _tendEnganchar(chartBox);
   _tendUltimoAncho=wBox;
   _tendObservar(chartBox);
   // Tabla resumen
   var col1Lbl=isWeek?'Semana':(isMonth?'Mes':'Fecha');
-  var thead='<div class="row h"><div>'+col1Lbl+'</div><div class="num">Pedidos</div><div class="num">Facturado</div><div class="num">Δ vs anterior</div></div>';
+  /* Con la metrica en unidades, la 2da columna son UNIDADES y no pedidos: dejar
+     el rotulo "Pedidos" al lado de un numero de unidades se lee como un bug. */
+  var thead='<div class="row h"><div>'+col1Lbl+'</div><div class="num">'
+    +(metric==='prod'?'Unidades':'Pedidos')+'</div><div class="num">'
+    +(metric==='prod'?'Pedidos':'Facturado')+'</div><div class="num">Δ vs anterior</div></div>';
   var rows2=serie.slice().reverse().map(function(p,i){
     var realIdx=serie.length-1-i;
     var vv=values[realIdx];
@@ -18268,7 +18623,10 @@ function rTendencia(){
     } else if(prev===0 && vv>0){
       delta='▲ nuevo'; dCls='delta-up';
     }
-    return '<div class="row"><div>'+tabLbl(p)+'</div><div class="num">'+p.n+'</div><div class="num">$'+f$(Math.round(p.fact))+'</div><div class="num '+dCls+'">'+delta+'</div></div>';
+    return '<div class="row"><div>'+tabLbl(p)+'</div><div class="num">'
+      +(metric==='prod'?(p.u||0):p.n)+'</div><div class="num">'
+      +(metric==='prod'?p.n:('$'+f$(Math.round(p.fact))))
+      +'</div><div class="num '+dCls+'">'+delta+'</div></div>';
   }).join('');
   tableBox.innerHTML=thead+rows2;
 }
