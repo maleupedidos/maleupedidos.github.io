@@ -495,7 +495,7 @@ body{font-family:'Inter',-apple-system,'Segoe UI',system-ui,sans-serif;backgroun
 .vt-xsub{font-size:9px;font-weight:600;fill:var(--ink3);text-anchor:middle;font-family:inherit}
 .vt-hit{fill:transparent;cursor:pointer}
 .vt-hit.on{fill:var(--o);fill-opacity:.07}
-.vt-tip{position:absolute;top:2px;left:0;pointer-events:none;opacity:0;transition:opacity .12s;
+.vt-tip{position:absolute;top:2px;left:0;pointer-events:none;opacity:0;transition:opacity .12s,left .14s ease-out;
   background:var(--ink);color:#fff;border-radius:6px;padding:7px 10px;font-size:11px;line-height:1.45;
   white-space:nowrap;box-shadow:0 4px 14px rgba(0,0,0,.22);z-index:5}
 .vt-tip.on{opacity:1}
@@ -17756,12 +17756,30 @@ function _tendEsc(s){
    El guard de 2px evita el bucle: repintar cambia el alto (aparece o se va el
    pie), el observer se dispara de nuevo, y sin el guard no pararia nunca. */
 var _tendRO=null, _tendUltimoAncho=0, _tendResizeT=null;
+
+/* El ancho UTIL de la caja: el mismo numero que usa el render. El guard tiene
+   que comparar lo mismo que se guardo, o no frena nunca. */
+function _tendAnchoUtil(box){
+  if(!box)return 0;
+  var cs=getComputedStyle(box);
+  return Math.floor((box.clientWidth||0)-(parseFloat(cs.paddingLeft)||0)-(parseFloat(cs.paddingRight)||0));
+}
+
 function _tendObservar(box){
   if(typeof ResizeObserver==='undefined'||!box)return;
   if(_tendRO)_tendRO.disconnect();
   _tendRO=new ResizeObserver(function(){
     if(cur!=='ventas'||vTab!=='tendencia')return;
-    var w=Math.floor(box.clientWidth||0);
+    /* NUNCA repintar mientras el cartel esta abierto: repintar destruye el SVG
+       y lo vuelve a crear, el mouse cae sobre una franja nueva, se dispara otro
+       mouseenter y arranca de nuevo. Medido con el mouse QUIETO: 17 repintados
+       en 3 segundos — eso es el titileo que se veia. */
+    var tip=box.querySelector('.vt-tip');
+    if(tip&&tip.classList.contains('on'))return;
+    /* Y el guard comparaba `clientWidth` (que INCLUYE el padding) contra el
+       ancho de contenido guardado: difieren siempre en el padding, asi que no
+       frenaba una sola vez. */
+    var w=_tendAnchoUtil(box);
     if(!w||Math.abs(w-_tendUltimoAncho)<=2)return;
     clearTimeout(_tendResizeT);
     _tendResizeT=setTimeout(function(){
@@ -18071,10 +18089,7 @@ function rTendencia(){
      ese incluye el padding, y el SVG (que va a `width:100%`) termina renderizando
      mas angosto que su propio viewBox. Medido: declaraba 1321 y pintaba 1295, o
      sea un 2% de escalado sobre toda la tipografia. */
-  var _csBox=getComputedStyle(chartBox);
-  var wBox=Math.max(300, Math.floor(
-    (chartBox.clientWidth||chartBox.getBoundingClientRect().width||720)
-    - (parseFloat(_csBox.paddingLeft)||0) - (parseFloat(_csBox.paddingRight)||0)));
+  var wBox=Math.max(300, _tendAnchoUtil(chartBox)||720);
   var esMovil=wBox<560;
   var h=esMovil?250:300;
   var padL=esMovil?46:58, padR=esMovil?12:18, padT=30, padB=esMovil?42:48;
@@ -18128,13 +18143,17 @@ function rTendencia(){
     svg+='<circle class="vt-dot'+(esUlt?' cur':'')+'" cx="'+X(i)+'" cy="'+Y(values[i])+'" r="'+(esUlt?5:3.5)+'"/>';
   });
 
-  /* Por orden de importancia: el ULTIMO primero (es "ahora"), despues el maximo
-     y por ultimo el minimo. Si una etiqueta se solapa con otra ya puesta, se
-     descarta — con solo tres rotulos igual se pisan cuando dos caen cerca:
-     medido a 390px en "Solo viernes · Ticket", $41.457 y $44.222 se tocaban. */
+  /* Se rotulan TODOS los puntos que entren. Con 12 semanas en ~1295px hay 107px
+     por punto y "$1.752.630" mide ~68: en la compu entran todos. En el celular
+     (24px por punto) no, y ahi el descarte por solapamiento deja los que quepan.
+
+     El orden es el de prioridad, porque el que se coloca primero gana el lugar:
+     el ULTIMO (es "ahora"), despues el maximo y el minimo, y despues el resto de
+     derecha a izquierda — lo mas reciente importa mas. */
+  var _orden=[n-1, iMax, iMin];
+  for(var _k=n-1;_k>=0;_k--)if(_orden.indexOf(_k)<0)_orden.push(_k);
   var _puestos=[];
-  [[n-1,'cur'],[iMax,'max'],[iMin,'min']].forEach(function(par){
-    var i=par[0];
+  _orden.forEach(function(i){
     if(i==null||i<0)return;
     if(_puestos.some(function(q){return q.i===i;}))return;   /* ya rotulado */
     var vv=values[i], x=X(i), y=Y(vv), esUlt=(i===n-1), txt=valFmt(vv);
