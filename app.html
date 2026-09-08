@@ -477,14 +477,34 @@ body{font-family:'Inter',-apple-system,'Segoe UI',system-ui,sans-serif;backgroun
 .vt-chart{background:#fff;border:1px solid var(--border);border-radius:6px;padding:14px;margin-bottom:10px;box-shadow:var(--shadow);overflow-x:auto}
 .vt-chart svg{display:block;max-width:100%;height:auto}
 .vt-chart .empty{padding:32px 12px;text-align:center;color:var(--ink3);font-style:italic;font-size:13px}
-.vt-bar-rect{fill:var(--o);transition:fill .12s}
-.vt-bar-rect.cur{fill:#E5662F}
-.vt-bar-rect.recent{fill:#F07D47}
-.vt-bar-rect.prev{fill:#CBB07A}
-.vt-bar-lbl{font-size:10px;font-weight:700;fill:var(--ink2);text-anchor:middle;font-family:inherit}
-.vt-bar-val{font-size:10px;font-weight:700;fill:var(--ink);text-anchor:middle;font-family:inherit;font-variant-numeric:tabular-nums}
-.vt-axis{stroke:var(--border);stroke-width:1}
-.vt-axis-lbl{font-size:9px;fill:var(--ink3);font-family:inherit;font-variant-numeric:tabular-nums}
+/* Grafico de Tendencia: linea + area. Reemplazo las barras el 8/9/2026 —
+   con 46px de barra y 14 de gap, "15/06-21/06" (65px) y "$1.471.410" (68px) no
+   entraban en el slot de 60px y se pisaban entre vecinos. */
+.vt-wrap{position:relative;width:100%}
+.vt-svg{display:block;width:100%;height:auto;overflow:visible;font-family:inherit}
+.vt-grid{stroke:var(--cd);stroke-width:1}
+.vt-ytick{font-size:9.5px;fill:var(--ink3);font-family:inherit;font-variant-numeric:tabular-nums}
+.vt-avg{stroke:#CBB07A;stroke-dasharray:4 4;stroke-width:1}
+.vt-line{fill:none;stroke:var(--o);stroke-width:2.5;stroke-linejoin:round;stroke-linecap:round}
+.vt-dot{fill:#fff;stroke:var(--o);stroke-width:2}
+.vt-dot.cur{fill:#E5662F;stroke:#fff;stroke-width:2.5}
+.vt-val{font-size:10.5px;font-weight:800;fill:var(--ink);font-family:inherit;font-variant-numeric:tabular-nums}
+.vt-val.cur{fill:#E5662F}
+.vt-xlbl{font-size:10px;font-weight:700;fill:var(--ink2);text-anchor:middle;font-family:inherit}
+.vt-xlbl.cur{fill:#E5662F;font-weight:800}
+.vt-xsub{font-size:9px;font-weight:600;fill:var(--ink3);text-anchor:middle;font-family:inherit}
+.vt-hit{fill:transparent;cursor:pointer}
+.vt-hit.on{fill:var(--o);fill-opacity:.07}
+.vt-tip{position:absolute;top:2px;left:0;pointer-events:none;opacity:0;transition:opacity .12s;
+  background:var(--ink);color:#fff;border-radius:6px;padding:7px 10px;font-size:11px;line-height:1.45;
+  white-space:nowrap;box-shadow:0 4px 14px rgba(0,0,0,.22);z-index:5}
+.vt-tip.on{opacity:1}
+.vt-pie{font-size:11px;color:var(--ink3);line-height:1.5;padding:9px 2px 0;border-top:1px solid var(--cd);margin-top:8px}
+.vt-pie b{color:var(--ink2);font-weight:700}
+.vt-pie-prom{color:#B99A5E;font-weight:800;letter-spacing:-1px}
+.vt-tip b{display:block;font-size:10px;font-weight:700;opacity:.75}
+.vt-tip span{display:block;font-size:14px;font-weight:800;font-variant-numeric:tabular-nums}
+.vt-tip small{display:block;font-size:10px;opacity:.75}
 .vt-table{background:#fff;border:1px solid var(--border);border-radius:6px;overflow:hidden;font-size:12px}
 .vt-table .row{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;padding:8px 12px;border-bottom:1px solid var(--border);align-items:center}
 .vt-table .row:last-child{border-bottom:none}
@@ -17712,6 +17732,80 @@ function loadVentas(){
 //  Compara un canal a lo largo del tiempo, agregado por día puntual,
 //  semana o mes según el selector de "Período".
 // ═══════════════════════════════════════
+/* `esc()` vive en el bloque de Planificacion, NO en el del panel: usarla aca
+   tiraba un ReferenceError. Es la misma trampa que `fmt$` el 3/9 — antes de usar
+   un helper en un bloque nuevo, chequea de que scope es. */
+function _tendEsc(s){
+  return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+/* El SVG se dibuja al ancho real del contenedor. Si esa caja cambia de ancho
+   despues, el viewBox queda con el valor viejo y el navegador lo ESCALA — la
+   tipografia se agranda o se achica, que es justo lo que hacia el grafico de
+   barras. No alcanza con escuchar el `resize` de la ventana: la caja tambien
+   cambia cuando aparece la barra de scroll (15px) y cuando se abre el cajon
+   lateral, que corre el contenido 208px. Un ResizeObserver cubre los tres.
+
+   El guard de 2px evita el bucle: repintar cambia el alto (aparece o se va el
+   pie), el observer se dispara de nuevo, y sin el guard no pararia nunca. */
+var _tendRO=null, _tendUltimoAncho=0, _tendResizeT=null;
+function _tendObservar(box){
+  if(typeof ResizeObserver==='undefined'||!box)return;
+  if(_tendRO)_tendRO.disconnect();
+  _tendRO=new ResizeObserver(function(){
+    if(cur!=='ventas'||vTab!=='tendencia')return;
+    var w=Math.floor(box.clientWidth||0);
+    if(!w||Math.abs(w-_tendUltimoAncho)<=2)return;
+    clearTimeout(_tendResizeT);
+    _tendResizeT=setTimeout(function(){
+      try{rTendencia();}catch(e){console.error('rTendencia/resize',e);}
+    },140);
+  });
+  _tendRO.observe(box);
+}
+
+/* Las marcas del eje Y van cortas: "$2,9M" y no "$2.973.690", que a 46px de
+   canaleta no entra y ademas obliga a leer siete cifras para captar una escala. */
+function _tendEjeY(v,metric){
+  if(metric==='ped')return String(Math.round(v));
+  var a=Math.abs(v);
+  if(a>=1000000)return '$'+(v/1000000).toFixed(a>=10000000?0:1).replace('.',',')+'M';
+  if(a>=1000)return '$'+Math.round(v/1000)+'k';
+  return '$'+Math.round(v);
+}
+
+/* El detalle al pasar o tocar. Las zonas de toque son franjas del alto del
+   grafico: un punto de 3,5px de radio no se puede tocar en un celular. */
+function _tendEnganchar(box){
+  var tip=box.querySelector('.vt-tip'), wrap=box.querySelector('.vt-wrap');
+  if(!tip||!wrap)return;
+  function mostrar(r){
+    var d=r.dataset;
+    tip.innerHTML='<b>'+d.lbl+'</b><span>'+d.val+'</span>'
+      +'<small>'+d.ped+(d.ped==='1'?' pedido':' pedidos')+' · '+d.fact+'</small>';
+    tip.classList.add('on');
+    var b=r.getBoundingClientRect(), w=wrap.getBoundingClientRect();
+    var x=b.left-w.left+b.width/2;
+    /* Se acota a los bordes para que no se salga del recuadro. */
+    tip.style.left=Math.max(4, Math.min(x-tip.offsetWidth/2, w.width-tip.offsetWidth-4))+'px';
+    box.querySelectorAll('.vt-hit').forEach(function(o){o.classList.remove('on');});
+    r.classList.add('on');
+  }
+  function ocultar(){
+    tip.classList.remove('on');
+    box.querySelectorAll('.vt-hit').forEach(function(o){o.classList.remove('on');});
+  }
+  box.querySelectorAll('.vt-hit').forEach(function(r){
+    r.addEventListener('mouseenter',function(){mostrar(r);});
+    /* passive: no se hace preventDefault, asi que el scroll de la pagina no se
+       traba al arrastrar sobre el grafico. */
+    r.addEventListener('touchstart',function(){mostrar(r);},{passive:true});
+  });
+  wrap.addEventListener('mouseleave',ocultar);
+  box.addEventListener('touchend',function(){setTimeout(ocultar,2600);},{passive:true});
+}
+
 function _tendSubcanal(v){
   if(v.canal==='Venta Directa'){
     var z=String(v.zona||'').trim();
@@ -17835,23 +17929,36 @@ function rTendencia(){
     return '$'+f$(Math.round(x));
   }
   function _fmtDM(d){return String(d.getDate()).padStart(2,'0')+'/'+String(d.getMonth()+1).padStart(2,'0');}
+  /* El rango de la SEMANA (lunes a domingo), no el de los dias que tuvieron
+     ventas. Hasta el 8/9/2026 se usaban `minD`/`maxD`, o sea el primer y el
+     ultimo dia CON VENTAS: la semana 29 se rotulaba "14/07-18/07" cuando va del
+     13 al 19. Medido sobre los datos reales, 4 de 12 etiquetas mentian sobre el
+     periodo, y dos semanas identicas quedaban rotuladas distinto — se lee como
+     que una fue mas corta que la otra. */
+  function _lunDom(p){
+    var d=p.minD;
+    var lun=new Date(d.getFullYear(),d.getMonth(),d.getDate());
+    lun.setDate(lun.getDate()-((lun.getDay()+6)%7));
+    var dom=new Date(lun.getFullYear(),lun.getMonth(),lun.getDate()+6);
+    return {lun:lun, dom:dom};
+  }
   function topLbl(p){
     if(isWeek)return 'Sem '+p.sem;
     if(isMonth)return TEND_MS_SHORT[p.mIdx];
     return TEND_DAYS[p.d.getDay()];
   }
   function botLbl(p){
-    if(isWeek)return _fmtDM(p.minD)+'-'+_fmtDM(p.maxD);
+    if(isWeek){var r=_lunDom(p);return _fmtDM(r.lun)+'-'+_fmtDM(r.dom);}
     if(isMonth)return "'"+String(p.anio).slice(-2);
     return _fmtDM(p.d);
   }
   function kpiLbl(p){
-    if(isWeek)return 'Sem '+p.sem+' · '+_fmtDM(p.minD)+'-'+_fmtDM(p.maxD);
+    if(isWeek){var r=_lunDom(p);return 'Sem '+p.sem+' · '+_fmtDM(r.lun)+'-'+_fmtDM(r.dom);}
     if(isMonth)return TEND_MS_SHORT[p.mIdx]+" '"+String(p.anio).slice(-2);
     return p.fecha;
   }
   function tabLbl(p){
-    if(isWeek)return 'Sem '+p.sem+' ('+_fmtDM(p.minD)+'-'+_fmtDM(p.maxD)+')';
+    if(isWeek){var r=_lunDom(p);return 'Sem '+p.sem+' ('+_fmtDM(r.lun)+'-'+_fmtDM(r.dom)+')';}
     if(isMonth)return p.mes+' '+p.anio;
     return TEND_DAYS[p.d.getDay()]+' '+_fmtDM(p.d);
   }
@@ -17894,35 +18001,186 @@ function rTendencia(){
     '<div class="v-kpi pend"><div class="v-kpi-v">'+valFmt(minV)+'</div><div class="v-kpi-l">Mínimo · '+kpiLbl(serie[iMin])+'</div></div>'+
     deltaHtml+
     '<div class="v-kpi"><div class="v-kpi-v">'+values.length+'</div><div class="v-kpi-l">'+unitLbl+'</div></div>';
-  // Gráfico SVG
-  var barW=46, gap=14, padL=14, padR=14, padT=28, padB=44, h=260;
+  /* ── El grafico: una LINEA, no barras ──
+     Las barras tenian un ancho fijo de 46px + 14 de gap, o sea 60px por periodo.
+     Una etiqueta como "15/06-21/06" mide ~65px y un monto como "$1.471.410" ~68:
+     no entraban, y se pisaban con las del vecino. No era un problema de escala
+     — era que el texto no entra en el slot, pasara lo que pasara con el zoom.
+
+     La linea resuelve las dos cosas a la vez: la forma de la tendencia se lee de
+     un vistazo sin necesitar un numero encima de cada punto, y el eje Y (que las
+     barras no tenian) da la magnitud. Los valores exactos siguen estando, uno por
+     uno, en la tabla de abajo. */
   var n=serie.length;
-  var w=padL+padR+n*barW+(n-1)*gap;
-  if(w<340)w=340;
-  var chartH=h-padT-padB;
-  var maxBar=Math.max(maxV,1);
-  var nRec=Math.min(4, Math.floor(n/2));
-  var svg='<svg viewBox="0 0 '+w+' '+h+'" preserveAspectRatio="xMinYMid meet" style="width:'+w+'px;min-width:100%">';
-  svg+='<line class="vt-axis" x1="'+padL+'" y1="'+(h-padB)+'" x2="'+(w-padR)+'" y2="'+(h-padB)+'"/>';
-  var yAvg=(h-padB) - (avg/maxBar)*chartH;
-  svg+='<line x1="'+padL+'" y1="'+yAvg+'" x2="'+(w-padR)+'" y2="'+yAvg+'" stroke="#CBB07A" stroke-dasharray="4 4" stroke-width="1"/>';
-  svg+='<text class="vt-axis-lbl" x="'+(w-padR)+'" y="'+(yAvg-3)+'" text-anchor="end">prom '+valFmt(avg)+'</text>';
+  /* El SVG se dibuja al ancho REAL del contenedor y no se escala. El grafico
+     viejo hacia `width:734px;min-width:100%`: en una pantalla ancha el navegador
+     lo estiraba y agrandaba tambien la tipografia. */
+  /* El ancho tiene que ser el del AREA DE CONTENIDO, no `clientWidth` a secas:
+     ese incluye el padding, y el SVG (que va a `width:100%`) termina renderizando
+     mas angosto que su propio viewBox. Medido: declaraba 1321 y pintaba 1295, o
+     sea un 2% de escalado sobre toda la tipografia. */
+  var _csBox=getComputedStyle(chartBox);
+  var wBox=Math.max(300, Math.floor(
+    (chartBox.clientWidth||chartBox.getBoundingClientRect().width||720)
+    - (parseFloat(_csBox.paddingLeft)||0) - (parseFloat(_csBox.paddingRight)||0)));
+  var esMovil=wBox<560;
+  var h=esMovil?250:300;
+  var padL=esMovil?46:58, padR=esMovil?12:18, padT=30, padB=esMovil?42:48;
+  var chartH=h-padT-padB, chartW=wBox-padL-padR;
+
+  /* La escala arranca en 0 a proposito: con un piso recortado, una caida del 10%
+     parece un derrumbe. */
+  var top=maxV>0?maxV*1.12:1;
+  var X=function(i){ return n===1 ? padL+chartW/2 : padL+(i*chartW/(n-1)); };
+  var Y=function(v){ return padT+chartH-(v/top)*chartH; };
+
+  var svg='<svg class="vt-svg" viewBox="0 0 '+wBox+' '+h+'" width="'+wBox+'" height="'+h+'" preserveAspectRatio="none">';
+
+  /* Grilla horizontal + eje Y: es lo que las barras no tenian. Sin una escala,
+     una barra sola no dice cuanto vale. */
+  var LINEAS=4;
+  for(var g=0;g<=LINEAS;g++){
+    var vG=top*g/LINEAS, yG=Y(vG);
+    svg+='<line class="vt-grid" x1="'+padL+'" y1="'+yG+'" x2="'+(padL+chartW)+'" y2="'+yG+'"/>';
+    svg+='<text class="vt-ytick" x="'+(padL-7)+'" y="'+(yG+3)+'" text-anchor="end">'+_tendEjeY(vG,metric)+'</text>';
+  }
+
+  /* El promedio. La etiqueta va a la IZQUIERDA y pegada al eje: en el grafico
+     viejo se dibujaba en el extremo derecho y se superponia con el valor del
+     ultimo punto cada vez que ese punto estaba alto. */
+  /* La linea del promedio va SIN etiqueta encima. Cualquier posicion dentro del
+     lienzo termina pisando la linea o un punto —en el celular quedaba ilegible,
+     y ni el fondo blanco alcanzaba porque los puntos se dibujan despues—, y el
+     valor exacto ya esta arriba, en el KPI "PROMEDIO", en grande. Lo que aporta
+     la linea es la referencia visual; que es el promedio se dice en el pie.
+
+     Ojo: el detector de choques del test no agarra esto, porque compara texto
+     contra texto y una linea no es un texto. Lo vi en la captura. */
+  var yAvg=Y(avg);
+  svg+='<line class="vt-avg" x1="'+padL+'" y1="'+yAvg+'" x2="'+(padL+chartW)+'" y2="'+yAvg+'"/>';
+
+  /* El area bajo la linea, para que se lea el volumen sin tapar la grilla. */
+  var pts=values.map(function(v,i){return X(i)+','+Y(v);});
+  var areaD='M'+X(0)+','+Y(0)+' L'+pts.join(' L')+' L'+X(n-1)+','+Y(0)+' Z';
+  svg+='<defs><linearGradient id="vtGrad" x1="0" y1="0" x2="0" y2="1">'
+    +'<stop offset="0%" stop-color="#F07D47" stop-opacity=".26"/>'
+    +'<stop offset="100%" stop-color="#F07D47" stop-opacity="0"/></linearGradient></defs>';
+  svg+='<path class="vt-area" d="'+areaD+'" fill="url(#vtGrad)"/>';
+  svg+='<path class="vt-line" d="M'+pts.join(' L')+'"/>';
+
+  /* Solo se rotulan tres puntos: el maximo, el minimo y el ultimo. Rotular los
+     12 es exactamente lo que hacia que se chocaran. Y si el ultimo COINCIDE con
+     el maximo o el minimo, no se dibuja dos veces encima. */
   serie.forEach(function(p,i){
-    var vv=values[i];
-    var bh=(vv/maxBar)*chartH;
-    if(bh<2 && vv>0)bh=2;
-    var x=padL+i*(barW+gap);
-    var y=h-padB-bh;
-    var isCur=(i===n-1);
-    var isRecent=(i>=n-nRec);
-    var cls=isCur?'cur':(isRecent?'recent':'prev');
-    svg+='<rect class="vt-bar-rect '+cls+'" x="'+x+'" y="'+y+'" width="'+barW+'" height="'+bh+'" rx="3"/>';
-    svg+='<text class="vt-bar-val" x="'+(x+barW/2)+'" y="'+(y-4)+'">'+valFmt(vv)+'</text>';
-    svg+='<text class="vt-bar-lbl" x="'+(x+barW/2)+'" y="'+(h-padB+14)+'">'+topLbl(p)+'</text>';
-    svg+='<text class="vt-bar-lbl" x="'+(x+barW/2)+'" y="'+(h-padB+28)+'" style="font-weight:600;fill:var(--ink3)">'+botLbl(p)+'</text>';
+    var esUlt=(i===n-1);
+    svg+='<circle class="vt-dot'+(esUlt?' cur':'')+'" cx="'+X(i)+'" cy="'+Y(values[i])+'" r="'+(esUlt?5:3.5)+'"/>';
+  });
+
+  /* Por orden de importancia: el ULTIMO primero (es "ahora"), despues el maximo
+     y por ultimo el minimo. Si una etiqueta se solapa con otra ya puesta, se
+     descarta — con solo tres rotulos igual se pisan cuando dos caen cerca:
+     medido a 390px en "Solo viernes · Ticket", $41.457 y $44.222 se tocaban. */
+  var _puestos=[];
+  [[n-1,'cur'],[iMax,'max'],[iMin,'min']].forEach(function(par){
+    var i=par[0];
+    if(i==null||i<0)return;
+    if(_puestos.some(function(q){return q.i===i;}))return;   /* ya rotulado */
+    var vv=values[i], x=X(i), y=Y(vv), esUlt=(i===n-1), txt=valFmt(vv);
+    var anc='middle', dx=0;
+    if(x<padL+42){anc='start';dx=-6;}
+    else if(x>padL+chartW-42){anc='end';dx=6;}
+    var arriba=(y-16)>padT;
+    var ty=arriba?(y-11):(y+18);
+    /* Ancho estimado: 10,5px en negrita tabular dan ~6,4px por caracter. Se mide
+       a ojo de fuente porque el texto todavia no existe en el DOM. */
+    var wTxt=txt.length*6.4, cx=x-dx;
+    var x0=anc==='start'?cx:(anc==='end'?cx-wTxt:cx-wTxt/2);
+    var caja={i:i,x0:x0-3,x1:x0+wTxt+3,y0:ty-11,y1:ty+4};
+    var choca=_puestos.some(function(q){
+      return caja.x0<q.x1 && q.x0<caja.x1 && caja.y0<q.y1 && q.y0<caja.y1;
+    });
+    if(choca)return;
+    _puestos.push(caja);
+    svg+='<text class="vt-val'+(esUlt?' cur':'')+'" x="'+cx+'" y="'+ty+'" text-anchor="'+anc+'">'+txt+'</text>';
+  });
+
+  /* Eje X. Con poco lugar por punto, la fecha se saltea de a N — pero el
+     rotulo de arriba ("Sem 36") se muestra SIEMPRE: es el que ubica. */
+  var porPunto=n>1?chartW/(n-1):chartW;
+  /* Cerca de los bordes el rotulo se ancla adentro: centrado, "31/08-06/09"
+     (~62px) se salia del lienzo en el celular y se cortaba a la mitad. */
+  function _anclaX(x,ancho){
+    if(x-ancho/2 < 2) return {a:'start', x:Math.max(2,x-ancho/2)};
+    if(x+ancho/2 > wBox-2) return {a:'end', x:Math.min(wBox-2,x+ancho/2)};
+    return {a:'middle', x:x};
+  }
+  /* Se colocan DESDE EL FINAL y se descarta la que choque con una ya puesta.
+     Antes se calculaba un "paso" fijo a partir del ancho estimado del texto, y
+     eso no contempla que el ultimo se ancle en `end`: ese anclaje lo corre ~31px
+     a la izquierda e invade al vecino. Medido a 390px, "10/08-16/08" y
+     "31/08-06/09" se tocaban 4px. Con descarte por solapamiento no depende de
+     estimar ningun paso, y el ultimo —el que se mira primero— entra siempre. */
+  function _rotularEjeX(texto, y, cls, anchoChar){
+    var puestas=[], out='';
+    for(var k=n-1;k>=0;k--){
+      var t=texto(serie[k]); if(!t) continue;
+      var w=t.length*anchoChar, a=_anclaX(X(k), w);
+      var x0=(a.a==='start')?a.x:((a.a==='end')?a.x-w:a.x-w/2);
+      var caja={x0:x0-4, x1:x0+w+4};
+      if(puestas.some(function(q){return caja.x0<q.x1 && q.x0<caja.x1;}))continue;
+      puestas.push(caja);
+      out+='<text class="'+cls+((k===n-1)?' cur':'')+'" x="'+a.x+'" y="'+y+'" style="text-anchor:'+a.a+'">'+t+'</text>';
+    }
+    return out;
+  }
+  svg+=_rotularEjeX(topLbl, h-padB+16, 'vt-xlbl', 5.9);
+  svg+=_rotularEjeX(botLbl, h-padB+30, 'vt-xsub', 5.4);
+
+  /* Zonas de toque: una franja por punto, invisible, para el detalle. En el
+     celular un punto de 3,5px de radio no se puede tocar. */
+  serie.forEach(function(p,i){
+    var xc=X(i), mitad=porPunto/2;
+    var x0=Math.max(padL, xc-mitad), x1=Math.min(padL+chartW, xc+mitad);
+    svg+='<rect class="vt-hit" x="'+x0+'" y="'+padT+'" width="'+Math.max(1,x1-x0)+'" height="'+chartH+'"'
+      +' data-i="'+i+'" data-lbl="'+_tendEsc(kpiLbl(p))+'" data-val="'+_tendEsc(valFmt(values[i]))+'"'
+      +' data-ped="'+p.n+'" data-fact="$'+f$(Math.round(p.fact))+'"/>';
   });
   svg+='</svg>';
-  chartBox.innerHTML=svg;
+
+  /* Qué pasa con el período EN CURSO. Un período sin ninguna venta no genera
+     grupo, así que no se dibuja — y el gráfico terminaba en la última semana
+     cerrada sin decirlo. El martes 8/9/2026 el último punto era la semana 36,
+     que cerró el domingo, y nada avisaba que la 37 venía en cero.
+
+     No se dibuja como un punto en 0 a propósito: una semana que recién arranca
+     no es una caída, y la línea mostraría un desplome que no ocurrió. */
+  var pie='';
+  if(isWeek||isMonth){
+    var hoyD=new Date();
+    var ultP=serie[n-1];
+    var enCurso, rotCur;
+    if(isWeek){
+      enCurso=(_tendISOWeek(hoyD)===ultP.sem && hoyD.getFullYear()===ultP.anio);
+      rotCur='la semana en curso';
+    }else{
+      enCurso=(hoyD.getMonth()===ultP.mIdx && hoyD.getFullYear()===ultP.anio);
+      rotCur='el mes en curso';
+    }
+    if(enCurso){
+      pie='<b>El último punto es '+rotCur+'</b> y todavía no cerró: va a seguir subiendo.';
+    }else{
+      pie='<b>'+_tendEsc(kpiLbl(ultP))+' es el último período con ventas.</b> '
+        +'Todavía no hay ninguna en '+rotCur+'.';
+    }
+  }
+  /* Qué es la línea punteada. Va acá y no encima de la línea, donde tapaba. */
+  pie+=(pie?' ':'')+'<span class="vt-pie-prom">- - -</span> el promedio de los '
+    +values.length+' períodos: '+valFmt(avg)+'.';
+  chartBox.innerHTML='<div class="vt-wrap">'+svg+'<div class="vt-tip" id="vtTip"></div></div>'
+    +(pie?'<div class="vt-pie">'+pie+'</div>':'');
+  _tendEnganchar(chartBox);
+  _tendUltimoAncho=wBox;
+  _tendObservar(chartBox);
   // Tabla resumen
   var col1Lbl=isWeek?'Semana':(isMonth?'Mes':'Fecha');
   var thead='<div class="row h"><div>'+col1Lbl+'</div><div class="num">Pedidos</div><div class="num">Facturado</div><div class="num">Δ vs anterior</div></div>';
