@@ -100,6 +100,8 @@ body.embed .tabs{top:0}
 .armado-entregar-btn{display:block;width:calc(100% - 24px);margin:10px 12px 6px;padding:11px 14px;background:#7B1FA2;color:#fff;border:none;border-radius:8px;font-family:inherit;font-size:14px;font-weight:700;cursor:pointer;letter-spacing:.01em;box-shadow:0 2px 6px rgba(123,31,162,.3)}
 .armado-entregar-btn:hover{background:#6A1B8C}
 .armado-entregar-btn:active{transform:scale(.98)}
+.armado-otrodep{display:inline-block;font-size:10px;font-weight:700;color:#9A3412;
+  background:#FFEDD5;border-radius:6px;padding:1px 6px;margin-left:4px;white-space:nowrap}
 .armado-oc-tag{display:inline-block;font-size:11px;font-weight:700;color:#1565C0;background:#E3F2FD;padding:5px 10px;border-radius:6px;margin:8px 0 0 38px;border:1px dashed #1565C0;letter-spacing:.02em}
 .armado-retira-tag{display:inline-block;font-size:10px;font-weight:800;background:#7B1FA2;color:#fff;padding:2px 8px;border-radius:50px;margin-left:6px;letter-spacing:.04em;text-transform:uppercase}
 
@@ -1787,7 +1789,60 @@ function getHoySinArmar(){return getHoyPendientes().filter(function(e){
   if(_origenTipo(e)==='oc')return false;
   return true;
 })}
-function prodText(p){return _sortProds(p).map(function(x){return'<span>'+x.q+'x</span> '+(PROD_NAMES[x.a]||x.a)}).join('<br>')}
+/* ══ De que freezer sale cada cosa (9/9/2026) ══
+   Desde que hay dos depositos —Ustariz y Moresco— armar un pedido puede requerir
+   mercaderia que NO esta en tu freezer. Sin decirlo, moverle stock a Lucas la
+   vuelve invisible justo cuando la vas a buscar. */
+var RUT_DEP = null, RUT_DEP_TS = 0;
+
+function rutDepPedir(force){
+  if(!force && RUT_DEP && (Date.now()-RUT_DEP_TS)<300000) return;
+  fetch(RUT_APPS_SCRIPT_URL+'?action=depositos&t='+Date.now())
+    .then(function(r){return r.json();})
+    .then(function(d){
+      if(d&&d.deps&&d.productos){
+        RUT_DEP=d; RUT_DEP_TS=Date.now();
+        var av=document.getElementById('armadoView');
+        if(av&&!av.classList.contains('hidden'))renderArmado();
+      }
+    })
+    .catch(function(){});   // sin el dato, ARMADO se ve como siempre
+}
+
+function _depCorto(d){
+  var n=String((d&&(d.dueno||d.nombre))||'').trim().split(/\s+/)[0];
+  return n||(d&&d.id)||'?';
+}
+
+/** Avisa si un producto NO alcanza en su deposito por defecto y SI hay en otro.
+ *
+ *  Muestra DONDE ESTA, no de donde va a salir. Predecir el reparto seria una
+ *  segunda copia de la regla de `_moverFisico_` en el backend, que es el error
+ *  que este ERP ya pago cuatro veces. Y lo que uno necesita saber armando es
+ *  otra cosa: si tiene que pedirselo a Lucas.
+ *
+ *  Si no hay en NINGUN lado no dice nada: eso no es un problema de deposito, es
+ *  falta de stock, y de eso ya avisa el control de la tab «+». */
+function _depMarca(abbr,qty){
+  if(!RUT_DEP||!RUT_DEP.productos)return '';
+  var pr=null,l=RUT_DEP.productos;
+  for(var i=0;i<l.length;i++)if(l[i].a===abbr){pr=l[i];break;}
+  if(!pr||!pr.dep)return '';
+  var mio=Number((pr.porDep||{})[pr.dep])||0;
+  if(mio>=(Number(qty)||0))return '';
+  var otros=[];
+  for(var j=0;j<(RUT_DEP.deps||[]).length;j++){
+    var d=RUT_DEP.deps[j];
+    if(d.id===pr.dep)continue;
+    var q=Number((pr.porDep||{})[d.id])||0;
+    if(q>0)otros.push(q+' en lo de '+_depCorto(d));
+  }
+  if(!otros.length)return '';
+  return ' <span class="armado-otrodep">\u26A0 '+otros.join(' \u00B7 ')+'</span>';
+}
+
+function prodText(p,conDep){return _sortProds(p).map(function(x){
+  return'<span>'+x.q+'x</span> '+(PROD_NAMES[x.a]||x.a)+(conDep?_depMarca(x.a,x.q):'')}).join('<br>')}
 function formatMoney(n){return'$'+n.toLocaleString('es-AR')}
 function getZonaSummary(list){
   var s={};list.forEach(function(e){var b=e.b||'Otros';if(!s[b])s[b]={total:0,subs:{}};s[b].total++;var sb=e.sb||b;if(!s[b].subs[sb])s[b].subs[sb]=0;s[b].subs[sb]++});return s;
@@ -1934,6 +1989,7 @@ function _esArmadoDep(e){
 }
 
 function renderArmado(){
+  rutDepPedir();   // una vez cada 5 min; si no llego, ARMADO se ve como siempre
   document.getElementById('armadoView').classList.remove('hidden');document.getElementById('rutaView').classList.add('hidden');document.getElementById('cobrosView').classList.add('hidden');document.getElementById('nuevoView').classList.add('hidden');
   var hoy=getDiaHoy(),pedAtr=sortByZona(getAtrasados()),pedH=sortByZona(getHoyPendientes()),pedO=sortByZona(getOtrosDias());
 
@@ -2083,7 +2139,7 @@ function _renderArmadoCardCombo(cli,pedidos){
     +'<span class="armado-saldo" data-cliente="'+cliEsc+'" style="display:none"></span>'
     +'</span>'
     +'</div>'
-    +'<div class="armado-prods" onclick="toggleArmadoMasivo(\''+keysList+'\')">'+prodText(prodsToShow)+'</div>'
+    +'<div class="armado-prods" onclick="toggleArmadoMasivo(\''+keysList+'\')">'+prodText(prodsToShow,true)+'</div>'
     +ocTag
     +'</div>';
 }
@@ -2117,7 +2173,7 @@ function _renderArmadoCard(e){
     +'<span class="armado-saldo" data-cliente="'+(e.c||'').replace(/"/g,'&quot;')+'" style="display:none"></span>'
     +retiraTag+'</span>'
     +'</div>'
-    +'<div class="armado-prods" onclick="toggleArmado(\''+key+'\')">'+prodText(prodsToShow)+'</div>'
+    +'<div class="armado-prods" onclick="toggleArmado(\''+key+'\')">'+prodText(prodsToShow,true)+'</div>'
     +ocTag
     +'</div>';
 }
@@ -2169,7 +2225,11 @@ function _renderArmadoRedAggregate(lista,dayKey){
         +'</div>';
       return;
     }
-    var prodLines=keys.map(function(a){return '<span>'+pack.totals[a]+'x</span> '+(PROD_NAMES[a]||a)}).join('<br>');
+    // Red tiene su propio armador de lineas: es el segundo renderer de ARMADO
+    // y ya se pago una vez arreglar solo uno de los dos (4/9/2026).
+    var prodLines=keys.map(function(a){
+      return '<span>'+pack.totals[a]+'x</span> '+(PROD_NAMES[a]||a)+_depMarca(a,pack.totals[a]);
+    }).join('<br>');
     html+='<div class="armado-card red'+(allDone?' done':'')+'">'
       +'<div class="armado-head" onclick="toggleArmadoMasivo(\''+keysList+'\',\''+(dayKey||'')+'\',\''+vEsc+'\')">'
       +'<div class="armado-check">'+(allDone?'&#x2713;':'')+'</div>'
