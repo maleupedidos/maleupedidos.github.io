@@ -210,6 +210,10 @@ body.embed .sem-tabs{top:48px}
 .stock-low{background:#fff3e0;color:#e67e22}
 .stock-out{background:#fce8e8;color:#c0392b}
 .np-prod-future{font-size:10px;font-weight:800;padding:2px 7px;border-radius:50px;display:inline-block;margin-left:5px;background:#FFE4D0;color:#E5662F;border:1px solid #F07D47}
+.np-prod-otrodep{display:inline-block;font-size:10px;font-weight:700;color:#9A3412;
+  background:#FFEDD5;border:1px solid #FDBA74;border-radius:6px;padding:1px 6px;
+  margin-left:4px;white-space:nowrap}
+.res-td-num .np-marca-dep{color:#9A3412;font-weight:800}
 .np-prod-sug{font-size:10px;font-weight:800;padding:2px 7px;border-radius:50px;display:inline-block;margin-left:5px;background:#E3F2FD;color:#0D47A1;border:1px solid #1565C0;cursor:pointer}
 .np-prod-sug:active{background:#1565C0;color:#fff}
 .np-prod-yapedi{font-size:10px;font-weight:800;padding:2px 7px;border-radius:50px;display:inline-block;margin-left:5px;background:#FFE0B2;color:#E65100;border:1px solid #F07D47}
@@ -1083,6 +1087,7 @@ function renderResumen() {
     html += '<span class="res-prov-total">' + (provDep > 0 ? provDep + ' u. para depo' : '— sin pedidos depo —') + '</span></div>';
     // Tabla con cols: Producto · Stock · Pedí · Voy a tener
     html += '<div class="res-aclara">&laquo;Libre&raquo; es lo que hay en el freezer menos lo ya reservado para pedidos cargados. Puede haber más unidades de las que dice.</div>';
+    var hayOtroDep = false;   // se prende abajo si algun producto tiene stock en otro deposito
     html += '<table class="res-tbl"><thead><tr>' +
       '<th class="res-th-name">Producto</th>' +
       '<th>Libre</th>' +
@@ -1092,15 +1097,21 @@ function renderResumen() {
     ordenCat.forEach(function(c){
       html += '<tr class="res-cat-row"><td colspan="4">' + c + '</td></tr>';
       porCat[c].forEach(function(it){
-        var stock = (it.s !== null && it.s !== undefined) ? Number(it.s) : 0;
+        /* "Libre" es lo que podes agarrar del freezer. Lo que esta en el otro
+           deposito existe pero no esta aca: se cuenta aparte y se marca. */
+        var _dd = npDispDep(it);
+        var stock = _dd.aca;
         var yp = _ypOf(it.a, provName);
         var dep = yp.dep;
         var vat = stock + dep;
         var saborTxt = (it.n || '').split(' — ').slice(1).join(' — ') || it.n;
         var stockClass = stock <= 0 ? 'cell-zero' : (stock <= 3 ? 'cell-low' : 'cell-ok');
+        var marca = _dd.otros > 0
+          ? '<span class="np-marca-dep" title="' + _dd.txt + '"> +' + _dd.otros + '*</span>' : '';
+        if (_dd.otros > 0) hayOtroDep = true;
         html += '<tr class="aba-res-row">' +
           '<td class="res-td-name">' + saborTxt + '</td>' +
-          '<td class="res-td-num ' + stockClass + '">' + stock + '</td>' +
+          '<td class="res-td-num ' + stockClass + '">' + stock + marca + '</td>' +
           '<td class="res-td-num' + (dep > 0 ? ' cell-pedi' : ' cell-mute') + '">' + (dep > 0 ? dep : '—') + '</td>' +
           '<td class="res-td-num cell-vat">' + vat + '</td>' +
           '</tr>';
@@ -1111,6 +1122,11 @@ function renderResumen() {
       });
     });
     html += '</tbody></table>';
+    /* Solo si de verdad hay algo en otro freezer: una aclaracion que sale
+       siempre se deja de leer. */
+    if (hayOtroDep) {
+      html += '<div class="res-aclara">El <b>+N*</b> es mercadería que existe pero está en otro depósito: no la tenés a mano hasta que la traigas.</div>';
+    }
     html += '</div>';
   });
   // Header sticky arriba: total depósito (lo que Tadeo querría saber)
@@ -2938,14 +2954,16 @@ function renderStockOverview() {
     if (items.length === 0) return;
     html += '<tr class="stock-prov-header"><td colspan="5">' + prov + '</td></tr>';
     items.forEach(function(it) {
-      var stock = (it.s !== null) ? it.s : 0;
+      var _dd = npDispDep(it);
+      var stock = _dd.aca;
       var pedido = ocPending[it.a] || 0;
       var total = stock + pedido;
       var cls = total === 0 ? 'zero' : total <= 3 ? 'low' : 'ok';
       var sug = npSugerido(it);
       html += '<tr>' +
         '<td>' + it.a + '</td>' +
-        '<td class="val-stock">' + stock + '</td>' +
+        '<td class="val-stock">' + stock +
+          (_dd.otros > 0 ? '<span class="np-marca-dep" title="' + _dd.txt + '"> +' + _dd.otros + '*</span>' : '') + '</td>' +
         '<td class="val-pedido">' + (pedido > 0 ? '+' + pedido : '-') + '</td>' +
         '<td class="val-total ' + cls + '">' + total + '</td>' +
         '<td class="val-sug">' + (sug > 0 ? '<b>' + sug + '</b>' : '-') + '</td>' +
@@ -3000,7 +3018,12 @@ function onNpProvChange() {
       html += '<div class="np-cat-title">' + cat + '</div>';
     }
     grupos[cat].forEach(function(it){
-      var defaultOrigen = (it.s !== null && it.s > 0) ? 'Deposito' : 'Orden de Compra';
+      /* El origen por defecto decide si al guardar se DESCUENTA del freezer.
+         Tiene que mirar lo que hay en el deposito del producto, no el total: con
+         3 packs en lo de Lucas y 0 aca, nacia en "Deposito (tengo)" y el pedido
+         descontaba mercaderia que no estaba delante. */
+      var _dd = npDispDep(it);
+      var defaultOrigen = (it.s !== null && _dd.aca > 0) ? 'Deposito' : 'Orden de Compra';
       npOrigins[it.a] = defaultOrigen;
       var isOC = defaultOrigen === 'Orden de Compra';
 
@@ -3013,10 +3036,18 @@ function onNpProvChange() {
         var proy = stockNow + yp.dep;
         var stockCls = stockNow === 0 ? 'stock-out' : (stockNow <= 3 ? 'stock-low' : 'stock-ok');
         var tip = 'Depósito hoy: ' + stockNow + (yp.dep > 0 ? ' + ya pedido: ' + yp.dep + ' = ' + proy : '');
+        /* Con dos depositos, "Depo: 5" miente si 3 estan en otra casa. El chip
+           muestra lo que hay ACA y el resto se dice aparte. */
+        var mostrar = _dd.otros > 0 ? _dd.aca : stockNow;
+        stockCls = mostrar === 0 ? 'stock-out' : (mostrar <= 3 ? 'stock-low' : 'stock-ok');
+        if (_dd.otros > 0) tip += ' — ' + _dd.txt;
         if (yp.dep > 0) {
-          stockHtml = '<span class="np-prod-stock ' + stockCls + '" title="' + tip + '">Depo: ' + stockNow + ' → ' + proy + '</span>';
+          stockHtml = '<span class="np-prod-stock ' + stockCls + '" title="' + tip + '">Depo: ' + mostrar + ' → ' + (mostrar + yp.dep) + '</span>';
         } else {
-          stockHtml = '<span class="np-prod-stock ' + stockCls + '" title="' + tip + '">' + (stockNow === 0 ? 'Sin depo' : 'Depo: ' + stockNow) + '</span>';
+          stockHtml = '<span class="np-prod-stock ' + stockCls + '" title="' + tip + '">' + (mostrar === 0 ? 'Sin depo' : 'Depo: ' + mostrar) + '</span>';
+        }
+        if (_dd.otros > 0) {
+          stockHtml += '<span class="np-prod-otrodep" title="Existe, pero no esta en este freezer">\u26A0 ' + _dd.txt + '</span>';
         }
         futuroHtml = '<span class="np-prod-future hidden" id="npf_' + it.a + '"></span>';
       }
@@ -3026,7 +3057,13 @@ function onNpProvChange() {
         var sug = npSugerido(it);
         var wkTxt = (it.wk && it.wk.length === 3) ? it.wk.join('/') : '';
         if (sug > 0) {
-          sugHtml = '<span class="np-prod-sug" onclick="npAplicarSugerido(\'' + it.a + '\')" title="Home 3 sem: ' + it.dem + ' u/sem (' + wkTxt + ') · cobertura ' + NP_COBERTURA + ' sem — tap para cargar">💡 Pedir ' + sug + '</span>';
+          sugHtml = '<span class="np-prod-sug" onclick="npAplicarSugerido(\'' + it.a + '\')" title="Home 3 sem: ' + it.dem + ' u/sem (' + wkTxt + ') · cobertura ' + NP_COBERTURA + ' sem — cuenta solo lo que tenés acá — tap para cargar">💡 Pedir ' + sug + '</span>';
+          /* La alternativa, sin elegir por Tadeo: traer lo del otro freezer en
+             vez de comprarlo. Solo si de verdad cambia el numero. */
+          var sugTodo = npSugeridoConTodo(it);
+          if (_dd.otros > 0 && sugTodo < sug) {
+            sugHtml += '<span class="np-prod-otrodep" title="Si traés lo del otro freezer, con esto alcanza">o traelo y pedí ' + sugTodo + '</span>';
+          }
         } else {
           sugHtml = '<span class="np-prod-sug" style="background:#e8f5e8;color:#2e7d32;border-color:#a5d6a7;cursor:default" title="Home 3 sem: ' + it.dem + ' u/sem (' + wkTxt + ') — stock + en camino ya cubre la cobertura">✓ cubierto</span>';
         }
@@ -3112,6 +3149,51 @@ function npSetQty(abbr, val) {
    Solo aplica al vendedor "Tadeo — Stock". */
 var NP_COBERTURA = 1.5; // semanas de stock objetivo en el freezer
 
+/* ══ De que freezer es este stock (9/9/2026) ══
+   Desde que hay dos depositos, `it.s` (fisico - reservado) es la SUMA de los
+   dos: no dice cuanto tenes vos a mano el jueves.
+
+   Esta es la unica funcion que reparte, y replica la regla de `_moverFisico_`
+   en el backend: una salida sale PRIMERO del deposito por defecto del producto
+   y se derrama al otro solo si no alcanza. O sea que lo reservado se descuenta
+   primero de "aca". Calcularlo de otra forma seria una segunda definicion de la
+   misma regla, que es el error que este ERP ya pago cuatro veces.
+
+   Sin la hoja Depositos configurada devuelve {aca: it.s, otros: 0}: identico al
+   comportamiento anterior al 9/9/2026. */
+function npDepCorto(id) {
+  var l = (typeof catalogo !== 'undefined' && catalogo && catalogo.deps) || [];
+  for (var i = 0; i < l.length; i++) {
+    if (l[i].id === id) {
+      var n = String(l[i].dueno || l[i].nombre || id).trim().split(/\s+/)[0];
+      return n || id;
+    }
+  }
+  return id;
+}
+
+function npDispDep(it) {
+  var disp = (it && it.s !== null && it.s !== undefined) ? Number(it.s) : 0;
+  var pd = (it && it.pd) || {};
+  var ids = [];
+  for (var k in pd) if (Object.prototype.hasOwnProperty.call(pd, k)) ids.push(k);
+  if (!ids.length || !it.dep) return { aca: disp, otros: 0, txt: '' };
+
+  var fis = 0;
+  for (var i = 0; i < ids.length; i++) fis += Number(pd[ids[i]]) || 0;
+  var reservado = Math.max(0, fis - disp);
+  var aca = Math.max(0, (Number(pd[it.dep]) || 0) - reservado);
+  var otros = Math.max(0, disp - aca);
+
+  var partes = [];
+  for (var j = 0; j < ids.length; j++) {
+    if (ids[j] === it.dep) continue;
+    var q = Number(pd[ids[j]]) || 0;
+    if (q > 0) partes.push(q + ' en lo de ' + npDepCorto(ids[j]));
+  }
+  return { aca: aca, otros: otros, txt: partes.join(' \u00B7 ') };
+}
+
 function npEnCamino(abbr) {
   var n = 0;
   if (typeof busqueda !== 'undefined' && busqueda && busqueda.ocs) {
@@ -3146,9 +3228,20 @@ function npYaPedido(abbr, provName) {
   return { total: total, dep: breakdown.dep, cli: breakdown.cli };
 }
 
+/* Cuanto pedir contando SOLO lo que hay en el deposito del producto. Lo que
+   esta en el otro freezer existe, pero no llena este: si se contara, el jueves
+   te quedarias corto con la mercaderia en otra casa. */
 function npSugerido(it) {
   if (!it || it.dem === undefined || it.dem === null || it.dem <= 0) return 0;
-  var disp = (it.s !== null && it.s !== undefined) ? it.s : 0;
+  var s = Math.round(it.dem * NP_COBERTURA - npDispDep(it).aca - npEnCamino(it.a));
+  return s > 0 ? s : 0;
+}
+
+/* Cuanto pedir SI vas a buscar lo del otro freezer. No reemplaza al de arriba:
+   se muestra al lado para que la decision -traerlo o comprarlo- sea de Tadeo. */
+function npSugeridoConTodo(it) {
+  if (!it || it.dem === undefined || it.dem === null || it.dem <= 0) return 0;
+  var disp = (it.s !== null && it.s !== undefined) ? Number(it.s) : 0;
   var s = Math.round(it.dem * NP_COBERTURA - disp - npEnCamino(it.a));
   return s > 0 ? s : 0;
 }
