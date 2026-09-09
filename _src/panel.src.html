@@ -491,6 +491,14 @@ body{font-family:'Inter',-apple-system,'Segoe UI',system-ui,sans-serif;backgroun
   color:var(--ink);padding:4px 6px;font-family:inherit}
 .stc-in:focus{border-color:var(--o);outline:none}
 .stc-u{font-size:12px;color:var(--ink3);min-width:22px}
+.stm-ruta{display:flex;gap:8px;align-items:stretch;margin:10px 0 4px;flex-wrap:wrap}
+.stm-lado{flex:1 1 130px;min-height:52px;padding:8px 12px;border-radius:12px;
+  border:1px solid var(--border);background:var(--surface);line-height:1.25}
+.stm-lado b{display:block;font-size:13px;font-weight:700;color:var(--ink)}
+.stm-lado small{font-size:11px;color:var(--ink3)}
+.stm-flip{min-width:52px;min-height:52px;border-radius:12px;border:1px solid var(--border);
+  background:var(--surface);color:var(--o);font-size:20px;cursor:pointer;font-family:inherit}
+.stm-vacio{font-size:12px;color:var(--ink3);padding:16px 14px;text-align:center}
 
 /* ── TENDENCIA ── */
 .vt-toolbar{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin-bottom:12px}
@@ -3222,6 +3230,7 @@ body.role-single .statusbar{font-size:11px}
   <div class="v-tabs">
     <button class="v-tab on" data-stt="productos" onclick="stSwitchTab('productos')">&#128230; PRODUCTOS</button>
     <button class="v-tab" data-stt="contar" onclick="stSwitchTab('contar')">&#9995; CONTAR</button>
+    <button class="v-tab" data-stt="mover" onclick="stSwitchTab('mover')">&#8646; MOVER</button>
   </div>
   <div id="stProductos">
     <div class="kg" id="sKpi"></div>
@@ -3229,6 +3238,7 @@ body.role-single .statusbar{font-size:11px}
     <div id="sList"></div>
   </div>
   <div id="stContar" style="display:none"></div>
+  <div id="stMover" style="display:none"></div>
 </div>
 
 <!-- ═══ METRICAS (accesible desde pedidos/caja pero no en nav) ═══ -->
@@ -12889,7 +12899,8 @@ function stSwitchTab(t){
   for(var i=0;i<bs.length;i++)bs[i].classList.toggle('on',bs[i].getAttribute('data-stt')===t);
   if($('stProductos'))$('stProductos').style.display=(t==='productos')?'':'none';
   if($('stContar'))$('stContar').style.display=(t==='contar')?'':'none';
-  if(t==='contar')stDepPedir();
+  if($('stMover'))$('stMover').style.display=(t==='mover')?'':'none';
+  if(t==='contar'||t==='mover')stDepPedir();
 }
 
 function stDepPedir(forzar){
@@ -12899,6 +12910,7 @@ function stDepPedir(forzar){
     DEP_DATA=d;
     if(!DEP_SEL)DEP_SEL=d.deps[0].id;
     if(ST_TAB==='contar')renderStContar();
+    if(ST_TAB==='mover')renderStMover();
     if(typeof rStockReparto==='function')rStockReparto();
   };
   DEP_PEDIDO=true;
@@ -13022,6 +13034,105 @@ function stContarBlur(abbr,inp){
       inp.value=stFmt(antes,pr.u);
       if(fila)fila.classList.remove('listo');
       toast('No se pudo guardar '+pr.n+': '+e.message,4000);
+    });
+}
+
+/* ══ MOVER de un freezer al otro (9/9/2026) ══
+   Sin esto el desglose por deposito solo se puede cambiar CONTANDO, o sea que
+   "le deje 10 packs a Lucas" habria que reflejarlo contando los dos freezers a
+   mano. Un traspaso es un hecho, no un ajuste — y por eso el TOTAL no cambia. */
+var DEP_DESDE='', DEP_HACIA='';
+
+function renderStMover(){
+  var c=$('stMover'); if(!c)return;
+  if(!DEP_DATA){
+    c.innerHTML='<div class="empty"><i>&#8646;</i><p>Trayendo los dep&oacute;sitos&hellip;</p></div>';
+    return;
+  }
+  var deps=DEP_DATA.deps||[], prods=DEP_DATA.productos||[];
+  if(deps.length<2){
+    c.innerHTML='<div class="stm-vacio">Hay un solo dep&oacute;sito: no hay a d&oacute;nde mover.</div>';
+    return;
+  }
+  if(!DEP_DESDE||!DEP_HACIA||DEP_DESDE===DEP_HACIA){DEP_DESDE=deps[0].id;DEP_HACIA=deps[1].id;}
+
+  var h='<div class="stm-ruta">'
+    +'<div class="stm-lado"><small>De</small><b>'+stEsc(stDepNombre(DEP_DESDE))+'</b></div>'
+    +'<button class="stm-flip" onclick="stMoverDarVuelta()" title="Dar vuelta">&#8646;</button>'
+    +'<div class="stm-lado"><small>A</small><b>'+stEsc(stDepNombre(DEP_HACIA))+'</b></div>'
+    +'</div>';
+  h+='<div class="stc-ayuda">Escrib&iacute; <b>cu&aacute;nto le pas&aacute;s</b>. '
+    +'El total de Maleu no cambia: la mercader&iacute;a cambia de freezer, no aparece ni desaparece.</div>';
+
+  var conStock=[], sin=0;
+  for(var i=0;i<prods.length;i++){
+    if((Number((prods[i].porDep||{})[DEP_DESDE])||0)>0)conStock.push(prods[i]); else sin++;
+  }
+  if(!conStock.length){
+    h+='<div class="stm-vacio">No hay nada en '+stEsc(stDepNombre(DEP_DESDE))+' para mover.</div>';
+    c.innerHTML=h; return;
+  }
+  h+='<div class="stc-prog">'+conStock.length+' con stock en '+stEsc(stDepNombre(DEP_DESDE))+'</div>';
+  for(var p=0;p<conStock.length;p++){
+    var pr=conStock[p];
+    var aca=Number((pr.porDep||{})[DEP_DESDE])||0, alla=Number((pr.porDep||{})[DEP_HACIA])||0;
+    h+='<div class="stc-row" id="stmR_'+stEsc(pr.a)+'">'
+      +'<div class="stc-n">'+stEsc(pr.n)
+      +'<span class="stc-sub">ten&eacute;s '+stFmt(aca,pr.u)+' &middot; all&aacute; '+stFmt(alla,pr.u)+'</span></div>'
+      +'<input class="stc-in" type="text" inputmode="decimal" value="" placeholder="0" '
+      +'onblur="stMoverBlur(\''+stEsc(pr.a)+'\',this)">'
+      +'<span class="stc-u">'+(pr.u==='kg'?'kg':'u')+'</span>'
+      +'</div>';
+  }
+  if(sin)h+='<div class="stm-vacio">'+sin+' producto(s) m&aacute;s no tienen nada en '
+    +stEsc(stDepNombre(DEP_DESDE))+'.</div>';
+  c.innerHTML=h;
+}
+
+function stMoverDarVuelta(){
+  var a=DEP_DESDE; DEP_DESDE=DEP_HACIA; DEP_HACIA=a;
+  renderStMover();
+}
+
+/** El campo arranca VACIO a proposito: aca se escribe cuanto MOVER, no cuanto
+    hay. Arrancarlo con el stock invitaria a mover todo sin querer. */
+function stMoverBlur(abbr,inp){
+  if(!DEP_DATA)return;
+  var pr=null,prods=DEP_DATA.productos||[];
+  for(var i=0;i<prods.length;i++)if(prods[i].a===abbr)pr=prods[i];
+  if(!pr)return;
+  var v=stNum(inp.value);
+  if(v===null||v<=0){inp.value='';return;}
+
+  var aca=Number((pr.porDep||{})[DEP_DESDE])||0;
+  if(v>aca+1e-9){
+    toast('En '+stDepNombre(DEP_DESDE)+' hay '+stFmt(aca,pr.u)+' de '+pr.n+', no '+stFmt(v,pr.u),4000);
+    inp.value='';
+    return;   // se frena ACA: el backend lo rechazaria igual, y avisar antes es mas rapido
+  }
+
+  var desde=DEP_DESDE, hacia=DEP_HACIA;   // se congelan: se pueden dar vuelta mientras viaja
+  inp.disabled=true;
+  fetch(API,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},
+    body:JSON.stringify({action:'stockTraspaso',abbr:abbr,desde:desde,hacia:hacia,cantidad:v})})
+    .then(function(r){return r.json();})
+    .then(function(d){
+      inp.disabled=false; inp.value='';
+      if(d&&d.ok){
+        pr.porDep[desde]=(typeof d.ahoraDesde==='number')?d.ahoraDesde:(aca-v);
+        pr.porDep[hacia]=(typeof d.ahoraHacia==='number')?d.ahoraHacia:((Number(pr.porDep[hacia])||0)+v);
+        // El toast escribe con textContent, asi que una entidad HTML se veria
+        // literal ("&rarr;"). Va la flecha de verdad.
+        toast(stFmt(v,pr.u)+' '+(pr.u==='kg'?'kg':'u')+' de '+pr.n+' → '+stDepNombre(hacia));
+        renderStMover();
+        if(typeof rStockReparto==='function')rStockReparto();
+      } else {
+        toast('No se pudo mover: '+((d&&d.error)||'?'),4000);
+      }
+    })
+    .catch(function(e){
+      inp.disabled=false; inp.value='';
+      toast('No se pudo mover: '+e.message,4000);
     });
 }
 
@@ -22254,7 +22365,7 @@ if('serviceWorker' in navigator){
 
   window.segCopiarTels = function(id){
     var disp = _segDispAvail(id);
-    if (!disp.length){ toast('Sin tel&eacute;fonos disponibles'); return; }
+    if (!disp.length){ toast('Sin teléfonos disponibles'); return; }
     var tels = disp.map(function(u){ return '549'+u.contacto.tel; });
     _segCopiar(tels.join('\n'), tels.length+' tel&eacute;fonos copiados');
   };
@@ -22355,7 +22466,7 @@ if('serviceWorker' in navigator){
 
   window.crmLogGuardar = function(){
     if (!_crmLogState){ return; }
-    if (!_crmLogState.resultado){ toast('Eleg&iacute; qu&eacute; pas&oacute;'); return; }
+    if (!_crmLogState.resultado){ toast('Elegí qué pasó'); return; }
     var prox = (el('crmLogProx').value || '').trim();
     if (prox && !/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(prox)){ toast('Fecha: usá dd/mm/aaaa'); return; }
     var body = {
@@ -23009,7 +23120,7 @@ if('serviceWorker' in navigator){
   window.crmFusionarGrupo = function(gi, keysJsonEnc, btn){
     var keys = JSON.parse(decodeURIComponent(keysJsonEnc));
     var sel = document.querySelector('input[name="dup'+gi+'"]:checked');
-    if (!sel){ toast('Eleg&iacute; el cliente que queda'); return; }
+    if (!sel){ toast('Elegí el cliente que queda'); return; }
     var canonical = decodeURIComponent(sel.value);
     var aliases = keys.filter(function(k){ return k !== canonical; });
     if (!aliases.length){ toast('Nada para fusionar'); return; }
