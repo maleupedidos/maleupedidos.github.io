@@ -1220,6 +1220,42 @@ try{var __ve=document.getElementById('appVer');if(__ve)__ve.textContent=APP_VERS
   }catch(_){}
 })();
 var entregas=[], entregados={}, cobrados={}, propinas={}, syncQueue=[], armadoDone={}, pendientesCobro=[];
+/* Declarada ACA y no mas abajo: con `var` el hoisting sube la declaracion pero
+   NO la asignacion, asi que hasta su linea original valia undefined — y si la
+   funcion que la usa corre durante el arranque, `undefined.forEach` tumba la
+   sub-app entera sin un error a la vista. Es la misma familia del bug del
+   9/9/2026 (una entrega guardada sin `p`). */
+var _rutSinCerrar=[];
+
+/* ── UN PEDIDO GUARDADO SIN `p` TUMBABA LA TAB ENTERA (9/9/2026) ────────────
+   Tadeo: "la tab Ruta no anda... tengo que eliminarme la app, entrar a Safari y
+   todo el proceso de vuelta". Y el dato que destrabo el diagnostico: con la
+   cuenta de Lucas, EN SU MISMA COMPUTADORA, andaba — porque cerrar sesion le
+   limpio el estado guardado.
+
+   La cadena, reproducida con el stack completo:
+     localStorage tiene una entrega sin el campo `p` (productos)
+       -> rutRender() -> getSorted() -> _origenTipo() -> _itemsDepDe()
+       -> `e.p.forEach` sobre undefined -> TypeError
+       -> _abrirSubapp lo atrapa y la sub-app NO publica sus globales
+       -> el ↻ contesta "Entra una vez a Ruta" (mintiendo: ya estabas en Ruta)
+       -> y como el dato malo sigue guardado, REVIENTA EN CADA APERTURA.
+
+   Por eso la unica salida era borrar la app: ni el ↻ ni refreshDuro tocan
+   localStorage. Se cura en la PUERTA y no con guards desparramados — las
+   entregas entran por exactamente dos lugares (loadLocal y refresh), y un
+   pedido sin productos es un pedido sin items, nunca un crash. */
+function _sanearEntregas(lista){
+  if(!Array.isArray(lista))return [];
+  var out=[];
+  for(var i=0;i<lista.length;i++){
+    var e=lista[i];
+    if(!e||typeof e!=='object')continue;
+    if(!Array.isArray(e.p))e.p=[];
+    out.push(e);
+  }
+  return out;
+}
 // pendientesGuardarStock: OCs "Tadeo — Stock" con Estado=Recibido y col Y (Guardado) vacía.
 // Una sola card sintética en RUTA agrupa todas. Se completa cuando Tadeo confirma que
 // la mercadería ya está físicamente en el freezer.
@@ -1377,7 +1413,7 @@ if('serviceWorker' in navigator && !_IS_EMBED){navigator.serviceWorker.register(
 function updateOnlineStatus(){document.getElementById('statusDot').className='status-dot '+(isOnline?'online':'offline')}
 function updateLastSync(){var n=new Date();document.getElementById('lastSync').textContent=n.getHours()+':'+String(n.getMinutes()).padStart(2,'0');localStorage.setItem('maleu_ruta_sync',n.getTime())}
 function saveLocal(){try{localStorage.setItem('maleu_ruta',JSON.stringify({_v:STORAGE_VERSION,entregas:entregas,entregados:entregados,cobrados:cobrados,propinas:propinas,syncQueue:syncQueue,armadoDone:armadoDone,pendientesCobro:pendientesCobro,currentTab:rutCurrentTab,rutaIndex:rutaIndex,rutaOrden:rutaOrden,ts:Date.now()}))}catch(e){}}
-function loadLocal(){try{var d=JSON.parse(localStorage.getItem('maleu_ruta')||'{}');if(d._v!==STORAGE_VERSION){d.entregados={};d.cobrados={};d.propinas={};d.armadoDone={};d.syncQueue=[]}if(d.entregas)entregas=d.entregas;if(d.entregados)entregados=d.entregados;if(d.cobrados)cobrados=d.cobrados;if(d.propinas)propinas=d.propinas;if(d.syncQueue)syncQueue=d.syncQueue;if(d.armadoDone)armadoDone=d.armadoDone;if(d.pendientesCobro)pendientesCobro=d.pendientesCobro;if(d.currentTab)rutCurrentTab=d.currentTab;if(d.rutaIndex!==undefined)rutaIndex=d.rutaIndex;if(d.rutaOrden)rutaOrden=d.rutaOrden;
+function loadLocal(){try{var d=JSON.parse(localStorage.getItem('maleu_ruta')||'{}');if(d._v!==STORAGE_VERSION){d.entregados={};d.cobrados={};d.propinas={};d.armadoDone={};d.syncQueue=[]}if(d.entregas)entregas=_sanearEntregas(d.entregas);if(d.entregados)entregados=d.entregados;if(d.cobrados)cobrados=d.cobrados;if(d.propinas)propinas=d.propinas;if(d.syncQueue)syncQueue=d.syncQueue;if(d.armadoDone)armadoDone=d.armadoDone;if(d.pendientesCobro)pendientesCobro=d.pendientesCobro;if(d.currentTab)rutCurrentTab=d.currentTab;if(d.rutaIndex!==undefined)rutaIndex=d.rutaIndex;if(d.rutaOrden)rutaOrden=d.rutaOrden;
   // SyncQueue: limpieza forzada UNA VEZ al pasar a v58 — purga la cola heredada de
   // versiones anteriores que reprocesaba cobros viejos automaticamente al cargar
   // (bug Iñaki+Gonzalo 27/05). Despues de la purga, solo descartar items >30 min.
@@ -1434,7 +1470,7 @@ function refresh(silent,fresh){
   var btn=document.getElementById('btnRefresh');btn.classList.add('spinning');
   var url=RUT_APPS_SCRIPT_URL+'?action=entregas&t='+Date.now()+(fresh?'&fresh=1':'');
   return fetch(url).then(function(r){return r.json()}).then(function(data){
-    btn.classList.remove('spinning');var se=data.e||[];var prev=getPendientes().length;entregas=se;
+    btn.classList.remove('spinning');var se=_sanearEntregas(data.e||[]);var prev=getPendientes().length;entregas=se;
     var sk={};entregas.forEach(function(e){sk[eKey(e)]=true});
     Object.keys(entregados).forEach(function(k){if(!sk[k])delete entregados[k]});
     Object.keys(cobrados).forEach(function(k){if(!sk[k])delete cobrados[k]});
@@ -1829,7 +1865,7 @@ function _ocMapDe(e){
   var oD=e.oD||{};
   var hasOD=Object.keys(oD).length>0;
   if(hasOD){
-    e.p.forEach(function(p){
+    (e.p||[]).forEach(function(p){
       var v=oD[p.a];
       var qOC=0;
       if(v==='OC')qOC=p.q;
@@ -1848,7 +1884,7 @@ function _itemsDepDe(e){
   // DEP = total del pedido - OC. Si todo es OC, queda vacío.
   var ocMap=_ocMapDe(e);
   var out=[];
-  e.p.forEach(function(p){
+  (e.p||[]).forEach(function(p){
     var qOC=ocMap[p.a]||0;
     var qD=Math.max(0,(p.q||0)-qOC);
     if(qD>0)out.push({a:p.a,q:qD});
@@ -2817,7 +2853,7 @@ function rutRenderRuta(){
   // ── Card especial: bloque "Para Depósito" (OCs Tadeo-Stock recibidas, pendientes de guardar en freezer) ──
   if(e._depAgg){
     var nProds=(e.p||[]).length;
-    var totalUnidades=0;e.p.forEach(function(p){totalUnidades+=p.q});
+    var totalUnidades=0;(e.p||[]).forEach(function(p){totalUnidades+=p.q});
     h+='<div style="font-size:46px;margin-bottom:6px">📥</div>';
     h+='<div class="ruta-origen-tag" style="background:#FFF3E0;color:#BF360C;border:1.5px solid #E65100">PARA DEPÓSITO</div>';
     h+='<div style="font-size:22px;font-weight:900;color:var(--brown);margin-bottom:4px">Guardar en freezer</div>';
@@ -3605,7 +3641,6 @@ var _billeteraRuta=0;  // saldo de la billetera (fondo de cambio), lo trae cobro
    Los vendedores no usan el ERP, asi que nadie los cierra: el 6/9/2026 habia 13
    acumulados desde julio y ninguna pantalla los mostraba. Lo manda
    `cobrosPendientes` agrupado por vendedor. */
-var _rutSinCerrar=[];
 var _rutCerrando='';   // vendedor en curso, para no disparar dos veces
 var _rutVerPeds='';    // vendedor con el detalle desplegado
 var _billeteraRutaTs=0;  // timestamp ms de la ultima actualizacion de _billeteraRuta

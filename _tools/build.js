@@ -351,6 +351,71 @@ const MOTOR = `
    arranca la primera vez que abris su tab, igual que antes.
    ══════════════════════════════════════════════════════════ */
 var _subappsVivas = {};
+/* Qué sub-apps quedaron rotas. Lo mira el ↻ del panel para no contestar
+   "Entra una vez a X" cuando ya estás parado adentro de X. */
+var _subappsRotas = {};
+
+/* ── SALIR DE UNA SECCION ROTA SIN BORRAR LA APP (9/9/2026) ────────────────
+   Tadeo, con Ruta caida en el celular: "tengo que eliminarme la app, entrar a
+   Safari y todo el proceso de vuelta". Y era cierto: una entrega guardada sin
+   el campo "p" tumbaba _SUBAPP_ruta en CADA apertura, y ni el ↻ ni refreshDuro
+   tocan localStorage — los dos borran caches, que no era el problema.
+
+   El aviso era un toast que se iba en 3 segundos y mandaba a un boton que no
+   podia arreglarlo. Ahora el cartel se queda en la pantalla y trae la accion.
+
+   NO borra el estado entero, a proposito: adentro de maleu_ruta vive
+   syncQueue, que son cobros y entregas que TODAVIA NO LLEGARON A LA PLANILLA.
+   Es lo unico que no existe en ningun otro lado. Se conserva y se tira el
+   resto, que se vuelve a bajar del servidor. */
+var _SUBAPP_ESTADO = {
+  ruta:     { clave: 'maleu_ruta',     conservar: ['_v', 'syncQueue'] },
+  busqueda: { clave: 'maleu_busqueda', conservar: [] },
+  miportal: { clave: 'maleu_red',      conservar: [] }
+};
+function _reiniciarSubapp(clave){
+  var cfg = _SUBAPP_ESTADO[clave];
+  try{
+    if(cfg){
+      var prev = {};
+      try{ prev = JSON.parse(localStorage.getItem(cfg.clave) || '{}') || {}; }catch(_e){ prev = {}; }
+      var limpio = {};
+      cfg.conservar.forEach(function(k){ if(prev[k] !== undefined) limpio[k] = prev[k]; });
+      localStorage.setItem(cfg.clave, JSON.stringify(limpio));
+    }
+  }catch(_e){ /* si no se puede escribir, recargar igual */ }
+  location.reload();
+}
+function _carteSubappRota(clave, e){
+  var cont = document.getElementById('pg-' + clave);
+  if(!cont) return;
+  var cfg = _SUBAPP_ESTADO[clave];
+  var quedan = '';
+  if(cfg && cfg.conservar.indexOf('syncQueue') >= 0){
+    var n = 0;
+    try{ n = ((JSON.parse(localStorage.getItem(cfg.clave) || '{}') || {}).syncQueue || []).length; }catch(_e){}
+    quedan = n > 0
+      ? '<div style="font-size:13px;margin-top:8px;color:#1B5E20;background:#E8F5E9;border-radius:8px;padding:8px 10px">Tenés <b>' + n + '</b> cobro(s)/entrega(s) sin sincronizar. <b>No se pierden</b>: reiniciar la sección los conserva.</div>'
+      : '<div style="font-size:13px;margin-top:8px;color:#555">No hay nada sin sincronizar: no se pierde ningún dato.</div>';
+  }
+  var caja = document.createElement('div');
+  caja.id = 'subappRota-' + clave;
+  caja.setAttribute('style','margin:16px;padding:16px;border:2px solid #C62828;border-radius:12px;background:#FFEBEE;font-family:system-ui,-apple-system,sans-serif;max-width:560px');
+  caja.innerHTML =
+    '<div style="font-size:16px;font-weight:800;color:#B71C1C;margin-bottom:6px">Esta sección no cargó bien</div>' +
+    '<div style="font-size:14px;color:#333;line-height:1.45">Quedó un dato viejo guardado en este teléfono que la traba. ' +
+    'Se arregla desde acá — <b>no hace falta borrar la app</b>.</div>' + quedan +
+    '<button type="button" id="btnReiniciar-' + clave + '" ' +
+      'style="margin-top:12px;width:100%;min-height:48px;font-size:15px;font-weight:800;color:#fff;background:#C62828;border:0;border-radius:10px;cursor:pointer">' +
+      'Reiniciar esta sección</button>' +
+    '<div style="font-size:11px;color:#777;margin-top:10px;word-break:break-word">Detalle técnico: ' +
+      String((e && e.message) || e || '').slice(0,160) + '</div>';
+  var viejo = document.getElementById(caja.id);
+  if(viejo) viejo.parentNode.removeChild(viejo);
+  cont.insertBefore(caja, cont.firstChild);
+  var btn = document.getElementById('btnReiniciar-' + clave);
+  if(btn) btn.addEventListener('click', function(){ _reiniciarSubapp(clave); });
+}
 function _abrirSubapp(clave){
   if(_subappsVivas[clave])return;
   var f = window['_SUBAPP_' + clave];
@@ -359,8 +424,9 @@ function _abrirSubapp(clave){
   try{ f(); }
   catch(e){
     _subappsVivas[clave] = false;
+    _subappsRotas[clave] = e;
     console.error('La tab ' + clave + ' no arranco:', e);
-    if(typeof toast === 'function') toast('No pude abrir esa seccion — mante apretado el boton de actualizar');
+    try{ _carteSubappRota(clave, e); }catch(_e){ console.error('y tampoco pude avisarlo:', _e); }
   }
 }
 /* Una sub-app pedia location.reload() cuando se le vencia la sesion. Ahora
