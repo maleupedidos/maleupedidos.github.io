@@ -77,3 +77,18 @@ Este repo es **público** por GitHub Pages: no entran tokens, ni el detalle de
 clientes, ni teléfonos, ni lotes. Los `.js` no tienen ningún dato adentro
 y `leer_sesion.py` **no sirve sin la credencial** de `C:\Users\tadeu\`, que no
 está versionada y no puede estarlo.
+
+## orden_declaraciones.js — variables usadas antes de declararse
+
+    node _tools/pruebas/orden_declaraciones.js ruta.html
+
+Con `var` el hoisting sube la declaracion pero **no la asignacion**: hasta esa
+linea la variable vale `undefined`, y `undefined.forEach(...)` **tumba la sub-app
+entera sin un error a la vista** (`_abrirSubapp` se traga la excepcion).
+
+Salio del bug del 9/9/2026, cuando la tab Ruta dejo de andar. Hoy el build ya lo
+chequea solo (`chequearOrdenDeclaraciones`, paso 1) y **corta** si aparece uno;
+este script queda para correrlo suelto sobre un archivo cualquiera.
+
+Solo marca usos peligrosos (un metodo o un indexado). Leer una variable que vale
+`undefined` no rompe nada.
