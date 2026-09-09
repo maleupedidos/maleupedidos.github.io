@@ -8485,6 +8485,39 @@ function _dgcEstado(c) {
   if (c.estado === 'nuevo') return 'nue';
   return 'falta';
 }
+
+/* "Maleu no lo tiene" son DOS cosas, y conviene mirarlas juntas: los que
+   marcaste vos como nuevos, y los que el ERP no pudo emparejar con nadie.
+   Los segundos no están confirmados —por eso su fila sigue mostrando los
+   botones de resolver— pero de hecho son los que Maleu no tiene. */
+function _dgcNoLoTiene(c) {
+  var e = _dgcEstado(c);
+  return e === 'nue' || (e === 'falta' && !(c.cand || []).length);
+}
+
+/* La lista para trabajarlos afuera (una campaña de WATI, una planilla).
+   Va con tabulaciones para que se pegue en columnas, y dice el barrio: sin eso
+   no se distingue a quién le podés vender de a quién no. */
+function dgcCopiarNuevos() {
+  var cl = (DGC && DGC.clientes) || [], filas = [];
+  for (var i = 0; i < cl.length; i++) {
+    var c = cl[i];
+    if (!_dgcNoLoTiene(c) || !c.tel) continue;
+    filas.push(c.nombre + '\t' + c.tel + '\t' + (c.reparto ? 'Estancias del Pilar' : 'fuera del reparto') +
+      '\t' + _dgMoney(c.facturado) + ' en carne');
+  }
+  if (!filas.length) { if (typeof toast === 'function') toast('Ninguno tiene teléfono cargado todavía'); return; }
+  var txt = 'Nombre\tTeléfono\tBarrio\tCompró\n' + filas.join('\n');
+  var ok = function () { if (typeof toast === 'function') toast('✓ ' + filas.length + ' copiados — pegalos donde los vayas a trabajar'); };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(txt).then(ok).catch(function () {});
+    return;
+  }
+  var ta = document.createElement('textarea');
+  ta.value = txt; document.body.appendChild(ta); ta.select();
+  try { document.execCommand('copy'); ok(); } catch (e) {}
+  document.body.removeChild(ta);
+}
 function _dgcNorm(s) {
   s = String(s || '').toLowerCase();
   if (s.normalize) s = s.normalize('NFD').replace(/[̀-ͯ]/g, '');
@@ -8509,6 +8542,9 @@ function _dgcRender() {
   var listos = 0, nuevos = 0;
   cl.forEach(function (c) { var e = _dgcEstado(c); if (e === 'res') listos++; else if (e === 'nue') nuevos++; });
   var resueltos = listos + nuevos, total = cl.length;
+  // Los que Maleu no tiene, y lo que de verdad importa de ellos: dónde viven.
+  var noT = cl.filter(_dgcNoLoTiene);
+  var noTRep = noT.filter(function (c) { return c.reparto; });
   var pct = total ? Math.round(resueltos / total * 100) : 0;
 
   var h = '<div class="dgc-head"><h3>¿Quién de estos ya le compra a Maleu?</h3>' +
@@ -8529,8 +8565,28 @@ function _dgcRender() {
 
   h += '<div class="dgc-chips">' +
     _dgcChip('falta', 'Faltan (' + (total - resueltos) + ')') +
+    _dgcChip('nuevos', '★ Maleu no los tiene (' + noT.length + ')') +
     _dgcChip('listos', 'Resueltos (' + resueltos + ')') +
     _dgcChip('todos', 'Todos (' + total + ')') + '</div>';
+
+  /* La vista que contesta "¿a quién le puedo vender?". No es una lista más:
+     de los que Maleu no tiene, los que viven en Estancias son a los que se les
+     puede vender mañana; el resto está fuera del reparto y es otra decisión. */
+  if (DGC_FILTRO === 'nuevos') {
+    var fRep = 0, fFue = 0, conTel = 0;
+    noT.forEach(function (c) {
+      if (c.reparto) fRep += c.facturado || 0; else fFue += c.facturado || 0;
+      if (c.tel) conTel++;
+    });
+    h += '<div class="dgc-aviso">' +
+      '<b>' + noT.length + ' compraron carne y no le compran a Maleu</b> — ' + _dgMoney(fRep + fFue) + ' en total.<br>' +
+      '<b>' + noTRep.length + ' viven en Estancias del Pilar</b>, donde ya repartís: ' + _dgMoney(fRep) + '. ' +
+      'Los otros ' + (noT.length - noTRep.length) + ' están fuera (' + _dgMoney(fFue) + ').' +
+      (conTel ? '<br><button class="dgc-btn pri" style="margin-top:8px" onclick="dgcCopiarNuevos()">' +
+        '📋 Copiar los ' + conTel + ' con teléfono</button>' : '') +
+      '<br><small>El barrio sale de la dirección que escribe Lucas, así que es una pista, no un dato de Maleu. ' +
+      'Y esta lista todavía se mueve: cada uno que resolvés arriba puede entrar o salir de acá.</small></div>';
+  }
 
   h += '<div class="dgc-busq"><span>&#128269;</span><input type="search" autocomplete="off" ' +
     'placeholder="Buscar un nombre…" value="' + _dgEsc(DGC_BUSQ) + '" oninput="dgcBuscar(this.value)"></div>';
@@ -8541,15 +8597,17 @@ function _dgcRender() {
     var c = cl[i], e = _dgcEstado(c);
     if (DGC_FILTRO === 'falta' && e !== 'falta') continue;
     if (DGC_FILTRO === 'listos' && e === 'falta') continue;
+    if (DGC_FILTRO === 'nuevos' && !_dgcNoLoTiene(c)) continue;
     if (q && _dgcNorm(c.nombre + ' ' + (c.nombreMaleu || '')).indexOf(q) < 0) continue;
     cuerpo += _dgcFilaHTML(c, i);
     dibujadas++;
   }
 
   if (!dibujadas) {
-    h += '<div class="dg-empty"><div class="dg-empty-i">' + (DGC_FILTRO === 'falta' && !q ? '🎉' : '🔍') + '</div>' +
-      (DGC_FILTRO === 'falta' && !q ? '<b>No queda ninguno por resolver.</b><br>Ya sabés quién es cada cliente de carne.'
-        : 'No hay ninguno que coincida.') + '</div>';
+    var vacio = 'No hay ninguno que coincida.', ico = '🔍';
+    if (!q && DGC_FILTRO === 'falta') { ico = '🎉'; vacio = '<b>No queda ninguno por resolver.</b><br>Ya sabés quién es cada cliente de carne.'; }
+    else if (!q && DGC_FILTRO === 'nuevos') { ico = '🤝'; vacio = '<b>Todos los que compran carne ya le compran a Maleu.</b><br>No hay ninguno para captar.'; }
+    h += '<div class="dg-empty"><div class="dg-empty-i">' + ico + '</div>' + vacio + '</div>';
   } else h += cuerpo;
   box.innerHTML = h;
 }
@@ -8593,6 +8651,15 @@ function _dgcFilaHTML(c, i) {
   if (c.sub) meta.push(_dgEsc(c.sub));
   if (c.tel) meta.push('tel ' + _dgEsc(c.tel));
   h += '<div class="dgc-meta">' + meta.join(' · ') + '</div>';
+
+  /* Dónde vive, pero SOLO en los que Maleu no tiene: es ahí donde decide si le
+     podés vender mañana o no. En un cliente que ya es de Maleu sería ruido. */
+  if (_dgcNoLoTiene(c)) {
+    h += c.reparto
+      ? '<div class="dgc-meta" style="color:var(--g);font-weight:700">🏠 Vive en Estancias del Pilar — le repartís</div>'
+      : '<div class="dgc-meta" style="color:var(--ink3)">📍 Fuera del reparto' +
+        (c.dir ? ' &middot; ' + _dgEsc(c.dir) : '') + '</div>';
+  }
 
   if (est === 'res') {
     h += '<div class="dgc-ok">✓ Es <b>' + _dgEsc(c.nombreMaleu || '—') + '</b> ' +
