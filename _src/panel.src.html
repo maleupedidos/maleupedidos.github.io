@@ -9950,13 +9950,19 @@ function _semprepDemanda(){
   if(_semprepPidio)return;
   _semprepPidio=true;
   traer('semprepDem', API+'?action=catalogo&t='+Date.now(), function(d){
-    var map={}, prods=(d&&d.productos)||{};
+    var map={}, prov1={}, uni={}, prods=(d&&d.productos)||{};
     Object.keys(prods).forEach(function(prov){
       (prods[prov]||[]).forEach(function(it){
-        if(it&&it.a&&map[it.a]===undefined)map[it.a]=Number(it.dem)||0;
+        if(!it||!it.a||map[it.a]!==undefined)return;
+        map[it.a]=Number(it.dem)||0;
+        /* El proveedor es lo que decide el CALENDARIO de reposicion, y la unidad
+           lo que decide si se muestra "5" o "5,610 kg". Sin los dos, la carne se
+           lee como un producto de Maleu que se compra el jueves. */
+        prov1[it.a]=prov;
+        uni[it.a]=it.u==='kg'?'kg':'u';
       });
     });
-    SEMPREP_DEM=map;
+    SEMPREP_DEM=map; SEMPREP_PROV=prov1; SEMPREP_UNI=uni;
     try{rSemanaPrep();}catch(e){console.error('rSemanaPrep/dem',e);}
   },{valido:function(d){return !!(d&&d.productos&&Object.keys(d.productos).length);}})
    .catch(function(e){console.error('catalogo/demanda',e);});
@@ -9971,14 +9977,113 @@ function _semprepEsc(s){
     return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});
 }
 /* "quedan 2" se lee más rápido que "stock: 2". */
-function _semprepQuedan(n){
+var SEMPREP_PROV={}, SEMPREP_UNI={};
+
+/* ══ Proveedores con calendario propio (9/9/2026) ══
+   Maleu cierra su orden de compra el jueves 12:00. La carne NO entra ahi: Lucas
+   le pide a su proveedor los MARTES, le llega los JUEVES, y dura 2 semanas.
+   Mezclar los dos calendarios en el mismo cartel manda a comprar carne en una
+   orden que no la incluye.
+
+   Vive aca y no en Config_Maleu porque hoy es un solo proveedor y el dato no
+   existe en ninguna planilla. Si aparece un segundo, es el momento de sacarlo. */
+var SEMPREP_OTRO_PROV={
+  'Maleu Carnes':{dia:2, quien:'Lucas', llegaDia:4, vidaSem:2}
+};
+
+/* El proximo <dia> de la semana (0 dom … 6 sab) desde `ahora`. Si hoy ES ese
+   dia, devuelve hoy. Generaliza `_proxCutoff`, que hace lo mismo con el jueves
+   y ademas mira la hora. */
+function _proxDiaSem(ahora,dia){
+  var d=new Date(ahora.getFullYear(),ahora.getMonth(),ahora.getDate());
+  d.setDate(d.getDate()+((dia-d.getDay()+7)%7));
+  return d;
+}
+
+/* Un numero con su unidad. Los kilos van con coma y al gramo: "5,61 kg" —
+   escribir "5.61" mezcla el separador decimal ingles en una pantalla en
+   castellano, y sin la unidad se lee como cinco paquetes. */
+function _semprepNum(n,uni){
+  if(uni!=='kg')return String(n);
+  var s=(Math.round(n*1000)/1000).toString().replace('.',',');
+  return s+' kg';
+}
+
+function _semprepQuedan(n,uni){
   if(n<=0)return 'sin stock';
+  if(uni==='kg')return 'quedan '+_semprepNum(n,uni);
   return n===1?'queda 1':'quedan '+n;
 }
 /* 15,3 → "15/sem" · 0,7 → "0,7/sem". El decimal sólo cuando cambia la lectura. */
-function _semprepPorSem(v){
-  if(v>=1)return Math.round(v)+'/sem';
-  return String(v.toFixed(1)).replace('.',',')+'/sem';
+function _semprepPorSem(v,uni){
+  var s=v>=1?String(Math.round(v)):String(v.toFixed(1)).replace('.',',');
+  return s+(uni==='kg'?' kg':'')+'/sem';
+}
+
+/* El bloque de un proveedor con calendario propio. Hoy, Maleu Carnes.
+
+   Lo que contesta es "cuanto le queda a Lucas y cuando repone", que es otra
+   pregunta que "que le compro yo al proveedor el jueves". Por eso es una caja
+   aparte y no un renglon mas del cartel del jueves. */
+function _semprepOtrosProv(otros,ahora){
+  var out='';
+  Object.keys(otros||{}).forEach(function(pv){
+    var cfg=SEMPREP_OTRO_PROV[pv]; if(!cfg)return;
+    var l=otros[pv].filter(function(p){return p.dem>0;});
+    /* Sin demanda medida no hay nada que decir: un producto en cero que no se
+       vende no es un problema, y gritarlo es la clase de alarma que en dos dias
+       se deja de mirar. */
+    if(!l.length)return;
+
+    /* Cobertura: cuantas semanas de venta hay en el freezer. Es el dato
+       accionable — "quedan 5,61 kg" no dice nada sin saber que vende 16 por
+       semana. */
+    l.forEach(function(p){p.cob=p.dem>0?p.d/p.dem:0;});
+    var cortos=l.filter(function(p){return p.cob<1;});
+    cortos.sort(function(a,b){return b.dem-a.dem;});
+
+    var DIAS=['domingo','lunes','martes','miércoles','jueves','viernes','sábado'];
+    var hoyD=ahora.getDay(), prox=_proxDiaSem(ahora,cfg.dia);
+    var cuando=DIAS[cfg.dia]+' '+prox.getDate()+'/'+(prox.getMonth()+1);
+    var msg, urg=false;
+    if(hoyD===cfg.dia){
+      msg='<b>Hoy</b> es el día de pedido — le llega el '+DIAS[cfg.llegaDia];
+      urg=true;
+    }else if(hoyD>cfg.dia&&hoyD<=cfg.llegaDia){
+      /* Entre el pedido y la llegada, un freezer bajo es NORMAL: la reposicion
+         viene en camino. Alarmar aca seria alarmar todas las semanas. */
+      msg='El pedido de esta semana ya tendría que estar hecho — la mercadería '
+         +(hoyD===cfg.llegaDia?'llega <b>hoy</b>':'llega el <b>'+DIAS[cfg.llegaDia]+'</b>');
+    }else{
+      msg='El próximo pedido es el <b>'+cuando+'</b> — le llega el '+DIAS[cfg.llegaDia];
+    }
+
+    var det;
+    if(cortos.length){
+      det=cortos.slice(0,6).map(function(p){
+        return '<span class="semprep-p"><b>'+_semprepEsc(p.n)+'</b> '
+          +_semprepQuedan(p.d,p.u)+' · vende '+_semprepPorSem(p.dem,p.u)+'</span>';
+      }).join('')
+      +(cortos.length>6?'<span class="semprep-p mas">+'+(cortos.length-6)+' más</span>':'');
+      det='<div class="semprep-lst">'+det+'</div>';
+    }else{
+      det='Los '+l.length+' cortes llegan a la próxima reposición.';
+    }
+
+    out+='<div class="semprep'+(urg?' urg':'')+'" style="margin-top:10px">'
+      +'<div class="semprep-h"><span>🥩 '+_semprepEsc(pv)+' · '+_semprepEsc(cfg.quien)
+      +' pide los '+DIAS[cfg.dia]+'</span></div>'
+      +'<div class="semprep-row '+(cortos.length?'w':'g')+'">'
+      +'<span class="semprep-ic">'+(cortos.length?'📉':'✅')+'</span><div>'
+      +'<div class="semprep-t">'+(cortos.length
+          ? cortos.length+(cortos.length===1?' corte no llega':' cortes no llegan')+' a la próxima reposición'
+          : 'El freezer de '+_semprepEsc(cfg.quien)+' está cubierto')+'</div>'
+      +'<div class="semprep-d">'+det+'</div></div></div>'
+      +'<div class="semprep-pie">'+msg+'. Dura hasta '+cfg.vidaSem+' semanas en el freezer, '
+      +'así que no conviene pedir de más.</div>'
+      +'</div>';
+  });
+  return out;
 }
 
 function rSemanaPrep(){
@@ -10013,9 +10118,17 @@ function rSemanaPrep(){
   });
 
   var dem=SEMPREP_DEM;
-  var reponer=[], encargo=[], simples=[];
+  var reponer=[], encargo=[], simples=[], otros={};
   D.stock.forEach(function(s){
     var disp=Number(s.d||0), nom=s.n||s.a||'?';
+    /* Los productos de un proveedor con calendario propio salen de este bloque y
+       van al suyo: la orden del jueves de Maleu no los incluye. */
+    var pv=SEMPREP_PROV[s.a];
+    if(pv&&SEMPREP_OTRO_PROV[pv]){
+      if(!otros[pv])otros[pv]=[];
+      otros[pv].push({n:nom,a:s.a,d:disp,dem:(dem&&dem[s.a])||0,u:SEMPREP_UNI[s.a]||'u'});
+      return;
+    }
     if(!dem){
       /* Todavía no llegó la demanda: sin ella no se puede ordenar ni separar lo
          que se mueve de lo que va por encargo, y rankear al azar sería peor que
@@ -10054,7 +10167,7 @@ function rSemanaPrep(){
   var filas=[];
   if(reponer.length){
     var lis=reponer.slice(0,6).map(function(p){
-      return '<span class="semprep-p"><b>'+_semprepEsc(p.n)+'</b> '+_semprepQuedan(p.d)+' · vendés '+_semprepPorSem(p.dem)+'</span>';
+      return '<span class="semprep-p"><b>'+_semprepEsc(p.n)+'</b> '+_semprepQuedan(p.d,'u')+' · vendés '+_semprepPorSem(p.dem,'u')+'</span>';
     }).join('');
     if(reponer.length>6)lis+='<span class="semprep-p mas">+'+(reponer.length-6)+' más</span>';
     filas.push({ic:'🛒',cls:'r',
@@ -10094,7 +10207,8 @@ function rSemanaPrep(){
     filas.push({ic:'🧾',cls:'w',t:'No hay ninguna orden de compra generada',
                 d:'Con productos que no llegan al viernes y el cierre encima, esto es lo que hay que armar.'});
   }
-  if(!filas.length){box.innerHTML='';return;}
+  var hOtros=_semprepOtrosProv(otros,ahora);
+  if(!filas.length){box.innerHTML=hOtros;return;}
 
   /* El pie NO es una alarma: es el denominador. Sin saber cuántos pedidos hay
      por entregar, "6 productos que no llegan" no dice si es grave o da lo mismo. */
@@ -10118,6 +10232,7 @@ function rSemanaPrep(){
      y los dejaba en 38px. Está excluida en esa lista, que existe para esto. */
   if(_tengoTab('busqueda'))h+='<div class="semprep-acc"><button class="semprep-btn" onclick="go(\'busqueda\')">Ir a Abastecimiento</button>'
     +(_tengoTab('stock')?'<button class="semprep-btn sec" onclick="go(\'stock\')">Ver el stock</button>':'')+'</div>';
+  h+=hOtros;
   h+='</div>';
   box.innerHTML=h;
 }
