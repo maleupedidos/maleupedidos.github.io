@@ -101,7 +101,11 @@ const PREPARAR_PRUEBA = `<script>
          'estancias' el 2/9/2026. */
       tabs:['inicio','ventas','planificacion','pedidos','pedidoshome','mireparto','caja','egresos',
             'stock','metricas','resumen','pagos','ruta','busqueda','miportal','bbdd','estancias',
-            'proveedores','ajustes'],
+            'proveedores','ajustes',
+            /* Y las de Diagonal Carnes, el segundo negocio: faltaban, asi que en
+               localhost salian en blanco — el mismo caso que el comentario de
+               arriba describe con 'estancias'. */
+            'dgventas','dgcompras','dginventario','dgcaja'],
       token:'modo-prueba', exp: Date.now()+86400000
     }));
     localStorage.setItem('maleu_token','modo-prueba');
