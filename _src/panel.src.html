@@ -1506,6 +1506,12 @@ body.sb-open{padding-left:var(--sidebar-w-open);--erp-izq:var(--sidebar-w-open)}
   background:var(--surface);color:var(--ink2);font-size:12px;font-weight:700;cursor:pointer;font-family:inherit}
 .dgc-chip.on{background:var(--o);border-color:var(--o);color:#fff}
 
+.dgc-per{display:flex;align-items:center;gap:10px;margin-bottom:10px}
+.dgc-per label{font-size:11px;font-weight:800;color:var(--ink3);text-transform:uppercase;letter-spacing:.4px;flex:0 0 auto}
+.dgc-per select{flex:1;min-width:0;min-height:44px;padding:0 10px;border:1px solid var(--border);border-radius:8px;
+  background:var(--surface);color:var(--ink);font-family:inherit;font-size:13px;font-weight:700}
+.dgc-perres{margin-top:8px;padding-top:8px;border-top:1px solid var(--border);font-size:12px;color:var(--ink2);line-height:1.55}
+.dgc-perres small{color:var(--ink3)}
 .dgc-busq{display:flex;align-items:center;gap:8px;background:var(--surface);border:1px solid var(--border);
   border-radius:8px;padding:0 12px;margin-bottom:10px;min-height:44px}
 .dgc-busq input{flex:1;border:none;background:transparent;font-family:inherit;font-size:13px;color:var(--ink);outline:none;min-height:42px}
@@ -2650,7 +2656,7 @@ body.role-single .statusbar{font-size:11px}
   }
   /* Los <select> quedaban afuera de la regla de arriba: los filtros de semana y
      mes de Movimientos median 30px en el celular, que es donde se tocan. */
-  .pg select{ min-height:38px; }
+  .pg select:not(.dgc-persel){ min-height:38px; }
 
   /* La plata no se corta. "$46.453.470" a 24px mide 153px y la tarjeta tiene
      141px: el numero quedaba cortado sin ningun aviso, que es la peor forma de
@@ -5900,6 +5906,77 @@ var DGC_FILTRO = 'falta';         // falta · listos · todos
 var DGC_BUSQ = '';
 var DGC_ABIERTO = -1;             // índice del cliente con el buscador manual abierto
 var DGC_SELBUSQ = '';
+var DGC_PER = '';                 // '' = todo · 'mes:2026-09' · 'sem:2026-S36'
+var DGC_TOCADO = false;           // ¿el usuario ya eligió un filtro a mano?
+
+/* Los períodos que existen en los datos, sumados de todos los clientes. Salen
+   del desglose que ya manda el backend: acá no se vuelve a decidir qué mes ni
+   qué semana es una fecha. */
+function _dgcPeriodos() {
+  var meses = {}, sems = {};
+  (DGC && DGC.clientes || []).forEach(function (c) {
+    var pm = c.porMes || {}, ps = c.porSem || {};
+    Object.keys(pm).forEach(function (k) {
+      if (!meses[k]) meses[k] = { c: 0, f: 0 };
+      meses[k].c += pm[k].c; meses[k].f += pm[k].f;
+    });
+    Object.keys(ps).forEach(function (k) {
+      if (!sems[k]) sems[k] = { c: 0, f: 0, r: ps[k].r || '' };
+      sems[k].c += ps[k].c; sems[k].f += ps[k].f;
+    });
+  });
+  return { meses: meses, sems: sems };
+}
+
+function _dgcMesTxt(k) {          // '2026-09' → 'Septiembre 2026'
+  var p = String(k).split('-');
+  return (MSU[Number(p[1]) - 1] || k) + ' ' + p[0];
+}
+
+/* Lo que compró este cliente EN el período elegido. `hay` es lo que decide si
+   la fila se dibuja: sin compras en ese período, no tiene nada que hacer ahí. */
+function _dgcDelPeriodo(c) {
+  if (!DGC_PER) return { c: c.compras, f: c.facturado, hay: true };
+  var p = DGC_PER.split(':');
+  var v = (p[0] === 'mes' ? (c.porMes || {}) : (c.porSem || {}))[p[1]];
+  return v ? { c: v.c, f: v.f, hay: true } : { c: 0, f: 0, hay: false };
+}
+
+function dgcPeriodo(v) { DGC_PER = v; DGC_ABIERTO = -1; _dgcRender(); }
+
+function _dgcPerTxt() {
+  if (!DGC_PER) return '';
+  var p = DGC_PER.split(':');
+  if (p[0] === 'mes') return _dgcMesTxt(p[1]);
+  var per = _dgcPeriodos(), s = per.sems[p[1]];
+  return 'la semana ' + p[1].split('-')[1] + (s && s.r ? ' (' + s.r + ')' : '');
+}
+
+/* Con un período elegido, la pregunta deja de ser "cuántos resolví" y pasa a
+   ser **cuánto de la carne de ese mes es de gente que ya le compra a Maleu**.
+   Ese es el número del cruce, y sólo se puede contestar con la conciliación
+   hecha — por eso vive acá y no en la tab de ventas de Diagonal. */
+function _dgcResumenPeriodo(cl) {
+  if (!DGC_PER) return '';
+  var tot = 0, deMaleu = 0, nuev = 0, pend = 0, n = 0, nM = 0, nN = 0;
+  cl.forEach(function (c) {
+    var p = _dgcDelPeriodo(c);
+    if (!p.hay) return;
+    n++; tot += p.f;
+    var e = _dgcEstado(c);
+    if (e === 'res') { deMaleu += p.f; nM++; }
+    else if (e === 'nue') { nuev += p.f; nN++; }
+    else pend += p.f;
+  });
+  if (!n) return '<div class="dgc-perres">En ' + _dgEsc(_dgcPerTxt()) + ' no compró carne nadie.</div>';
+  var pct = tot > 0 ? Math.round(deMaleu / tot * 100) : 0;
+  return '<div class="dgc-perres"><b>' + _dgEsc(_dgcPerTxt()) + '</b>: ' + n +
+    (n === 1 ? ' cliente' : ' clientes') + ' · ' + _dgMoney(tot) + '<br>' +
+    '<b>' + _dgMoney(deMaleu) + ' (' + pct + '%)</b> es de ' + nM + ' que también le compran a Maleu' +
+    (nN ? ' · ' + _dgMoney(nuev) + ' de ' + nN + ' que no' : '') +
+    (pend ? '<br><span style="color:var(--o)">' + _dgMoney(pend) + ' todavía sin resolver quién es.</span>' : '') +
+    '<br><small>El contador de arriba es de <b>todo</b> el historial, no de este período.</small></div>';
+}
 
 function dgSubSwitch(sub) {
   DGC_SUB = sub;
@@ -6054,6 +6131,9 @@ function _dgcRender() {
   var listos = 0, nuevos = 0;
   cl.forEach(function (c) { var e = _dgcEstado(c); if (e === 'res') listos++; else if (e === 'nue') nuevos++; });
   var resueltos = listos + nuevos, total = cl.length;
+  /* Con todo resuelto, arrancar en "Faltan" es abrir una pantalla vacia. Pasa a
+     "Todos" sola, pero solo si el usuario no eligio un filtro: su eleccion manda. */
+  if (!DGC_TOCADO && DGC_FILTRO === 'falta' && resueltos === total && total > 0) DGC_FILTRO = 'todos';
   // Los que Maleu no tiene, y lo que de verdad importa de ellos: dónde viven.
   var noT = cl.filter(_dgcNoLoTiene);
   var noTRep = noT.filter(function (c) { return c.reparto; });
@@ -6065,7 +6145,7 @@ function _dgcRender() {
     'decidir solo. Van ordenados por lo que compraron.</p>' +
     '<div class="dgc-barra"><i style="width:' + pct + '%"></i></div>' +
     '<div class="dgc-prog">' + resueltos + ' de ' + total + ' resueltos · ' + listos + ' ya le compran a Maleu' +
-    (nuevos ? ' · ' + nuevos + ' son nuevos' : '') + '</div></div>';
+    (nuevos ? ' · ' + nuevos + ' son nuevos' : '') + '</div>' + _dgcResumenPeriodo(cl) + '</div>';
 
   // Nombres repetidos dentro de la propia planilla de Lucas. Se avisa y no se
   // toca: la hoja es de él.
@@ -6100,13 +6180,47 @@ function _dgcRender() {
       'Y esta lista todavía se mueve: cada uno que resolvés arriba puede entrar o salir de acá.</small></div>';
   }
 
+  /* El período. Lo pidió Lucas: "poder separarlo por mes y por semana, como
+     hacés con lo demás". Un solo control porque en el celular dos no entran. */
+  var per = _dgcPeriodos();
+  var kMeses = Object.keys(per.meses).sort().reverse();
+  var kSems = Object.keys(per.sems).sort().reverse();
+  if (kMeses.length || kSems.length) {
+    h += '<div class="dgc-per"><label>Período</label><select class="dgc-persel" onchange="dgcPeriodo(this.value)">' +
+      '<option value=""' + (DGC_PER ? '' : ' selected') + '>Todo el historial de carne</option>';
+    if (kMeses.length) {
+      h += '<optgroup label="Por mes">';
+      kMeses.forEach(function (k) {
+        h += '<option value="mes:' + k + '"' + (DGC_PER === 'mes:' + k ? ' selected' : '') + '>' +
+          _dgEsc(_dgcMesTxt(k)) + ' — ' + _dgMoney(per.meses[k].f) + '</option>';
+      });
+      h += '</optgroup>';
+    }
+    if (kSems.length) {
+      h += '<optgroup label="Por semana">';
+      kSems.forEach(function (k) {
+        h += '<option value="sem:' + k + '"' + (DGC_PER === 'sem:' + k ? ' selected' : '') + '>' +
+          _dgEsc(k.split('-')[1] + (per.sems[k].r ? ' · ' + per.sems[k].r : '')) + ' — ' + _dgMoney(per.sems[k].f) + '</option>';
+      });
+      h += '</optgroup>';
+    }
+    h += '</select></div>';
+  }
+
   h += '<div class="dgc-busq"><span>&#128269;</span><input type="search" autocomplete="off" ' +
     'placeholder="Buscar un nombre…" value="' + _dgEsc(DGC_BUSQ) + '" oninput="dgcBuscar(this.value)"></div>';
 
   var q = _dgcNorm(DGC_BUSQ), dibujadas = 0;
   var cuerpo = '';
-  for (var i = 0; i < cl.length; i++) {
-    var c = cl[i], e = _dgcEstado(c);
+  /* Con un período elegido se ordena por lo que compró EN ese período, no por
+     el total. Se ordenan los ÍNDICES y no el array: la fila usa su índice en
+     DGC.clientes para vincular, así que reordenar el array rompería los toques. */
+  var orden = [];
+  for (var oi = 0; oi < cl.length; oi++) orden.push(oi);
+  if (DGC_PER) orden.sort(function (x, y) { return _dgcDelPeriodo(cl[y]).f - _dgcDelPeriodo(cl[x]).f; });
+  for (var oj = 0; oj < orden.length; oj++) {
+    var i = orden[oj], c = cl[i], e = _dgcEstado(c);
+    if (!_dgcDelPeriodo(c).hay) continue;
     if (DGC_FILTRO === 'falta' && e !== 'falta') continue;
     if (DGC_FILTRO === 'listos' && e === 'falta') continue;
     if (DGC_FILTRO === 'nuevos' && !_dgcNoLoTiene(c)) continue;
@@ -6127,7 +6241,7 @@ function _dgcRender() {
 function _dgcChip(id, txt) {
   return '<button class="dgc-chip' + (DGC_FILTRO === id ? ' on' : '') + '" onclick="dgcFiltro(&quot;' + id + '&quot;)">' + txt + '</button>';
 }
-function dgcFiltro(f) { DGC_FILTRO = f; DGC_ABIERTO = -1; _dgcRender(); }
+function dgcFiltro(f) { DGC_FILTRO = f; DGC_TOCADO = true; DGC_ABIERTO = -1; _dgcRender(); }
 
 /* El input se redibuja con el render, así que hay que devolverle el foco y el
    cursor: sin esto se pierde la escritura en la mitad de una palabra. */
@@ -6154,10 +6268,15 @@ function dgcElegir(i) { DGC_ABIERTO = (DGC_ABIERTO === i ? -1 : i); DGC_SELBUSQ 
 function _dgcFilaHTML(c, i) {
   var est = _dgcEstado(c);
   var h = '<div class="dgc-fila ' + (est === 'falta' ? '' : est) + '">';
+  /* Con un período elegido, el monto grande es el DE ESE PERÍODO. El total va
+     al lado en chico: si el número grande cambiara sin decir de qué es, se
+     leería como que el cliente compró menos. */
+  var pd = _dgcDelPeriodo(c);
   h += '<div class="dgc-cab"><span class="dgc-nom">' + _dgEsc(c.nombre) + '</span>' +
-    '<span class="dgc-fact">' + _dgMoney(c.facturado) + '</span></div>';
+    '<span class="dgc-fact">' + _dgMoney(pd.f) + '</span></div>';
 
-  var meta = [c.compras + (c.compras === 1 ? ' compra' : ' compras')];
+  var meta = [pd.c + (pd.c === 1 ? ' compra' : ' compras')];
+  if (DGC_PER) meta.push('de ' + _dgMoney(c.facturado) + ' en total');
   if (c.ultima) meta.push('última ' + _dgEsc(c.ultima));
   if (c.lote) meta.push('lote ' + _dgEsc(c.lote));
   if (c.sub) meta.push(_dgEsc(c.sub));
