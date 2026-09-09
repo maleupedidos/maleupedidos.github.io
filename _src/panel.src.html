@@ -5893,6 +5893,8 @@ function _dgEsc(v) {
    el atributo, y es exactamente como se rompió el botón de reiniciar el 9/9. */
 
 var DGC = null, DGC_ERR = null, DGC_PIDIENDO = false;
+var DGC_TS = 0;                   // de cuándo son los datos que estoy mostrando
+var DGC_CBS = [];                 // quién está esperando que lleguen
 var DGC_SUB = 'ventas';           // sub-tab abierta de Diagonal → Ventas
 var DGC_FILTRO = 'falta';         // falta · listos · todos
 var DGC_BUSQ = '';
@@ -5912,22 +5914,83 @@ function dgSubSwitch(sub) {
 /* Pinta la copia guardada al instante y repinta cuando llega lo nuevo, igual
    que el resto del ERP. Este endpoint arma el índice entero del CRM, o sea que
    es de los lentos: sin la copia, entrar sería mirar una pantalla vacía. */
+function _dgcAvisar() {
+  var l = DGC_CBS; DGC_CBS = [];
+  for (var i = 0; i < l.length; i++) { try { l[i](); } catch (e) { console.error('dgc/cb', e); } }
+}
+
 function _dgcPedir(forzar, cb) {
-  if (DGC_PIDIENDO) { if (cb) cb(); return; }
+  /* Si ya hay un pedido en vuelo, el que llega se ENCOLA. Antes se le
+     contestaba en el acto, o sea que el ↻ decía "listo" con los datos todavía
+     en camino y la ficha del CRM se dibujaba sin la carne. */
+  if (DGC_PIDIENDO) { if (cb) DGC_CBS.push(cb); return; }
   DGC_PIDIENDO = true;
+  if (cb) DGC_CBS.push(cb);
   _dgcRender();
   var url = API + '?action=diagonalClientes&t=' + Date.now();
-  var pintar = function (d) {
+  var pintar = function (d, info) {
     DGC_PIDIENDO = false;
-    if (d && d.ok) { DGC = d; DGC_ERR = null; }
+    if (d && d.ok) { DGC = d; DGC_ERR = null; DGC_TS = (info && info.cuando) || Date.now(); }
     else DGC_ERR = (d && (d.error || d.err)) || 'No pude traer los clientes de Diagonal.';
     _dgcRender();
-    if (cb) { var f = cb; cb = null; f(); }
+    _dgcAvisar();
   };
   if (typeof traer === 'function' && !forzar) traer('diagonalClientes', url, pintar);
   else fetch(url).then(function (r) { return r.json(); }).then(pintar)
-    .catch(function (e) { DGC_PIDIENDO = false; DGC_ERR = e.message; _dgcRender(); if (cb) { var g = cb; cb = null; g(); } });
+    .catch(function (e) { DGC_PIDIENDO = false; DGC_ERR = e.message; _dgcRender(); _dgcAvisar(); });
 }
+
+/* ─── La carne adentro de Maleu ──────────────────────────────────────────────
+   El resumen de Diagonal de un cliente del CRM, para su ficha.
+
+   Sale del MISMO endpoint que la pantalla QUIÉN ES QUIÉN, a propósito: una
+   segunda cuenta de "cuánto compró de carne" es exactamente como este ERP ya se
+   equivocó cuatro veces. */
+var DGRES_PEDIDO = false;
+
+function _dgFechaOrd(f) {          // 'dd/MM/yyyy' → 'aaaammdd', para comparar
+  var m = String(f || '').match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  return m ? m[3] + m[2] + m[1] : '';
+}
+
+/* Sólo cuenta lo VINCULADO — a mano o por nombre idéntico. Mostrarle carne a
+   alguien que todavía no confirmaste sería inventarle una compra.
+   Suma varias filas de Diagonal si apuntan al mismo cliente: "Peter blouson" y
+   "Peter blousson" son la misma persona escrita dos veces. */
+function dgResumenDe(key) {
+  if (!key || !DGC || !DGC.clientes) return null;
+  var r = null;
+  for (var i = 0; i < DGC.clientes.length; i++) {
+    var c = DGC.clientes[i];
+    if (c.key !== key) continue;
+    if (c.estado !== 'vinculado' && c.estado !== 'auto') continue;
+    if (!r) r = {
+      facturado: 0, compras: 0, primera: '', ultima: '', nombres: [], por: c.por || '', ts: DGC_TS,
+      // El sello se arma acá: `_hace` es del panel y la ficha vive en otro scope.
+      hace: (DGC_TS && typeof _hace === 'function') ? _hace(DGC_TS) : ''
+    };
+    r.facturado += c.facturado || 0;
+    r.compras += c.compras || 0;
+    if (c.nombre && r.nombres.indexOf(c.nombre) < 0) r.nombres.push(c.nombre);
+    if (!r.primera || (_dgFechaOrd(c.primera) && _dgFechaOrd(c.primera) < _dgFechaOrd(r.primera))) r.primera = c.primera;
+    if (!r.ultima || _dgFechaOrd(c.ultima) > _dgFechaOrd(r.ultima)) r.ultima = c.ultima;
+  }
+  return r;
+}
+
+/* Lo pide una sola vez por sesión: son ~12 s y 47 KB. Con traer() la segunda
+   apertura pinta de la copia al instante.
+   Si no tenés la tab de Diagonal no se pide nada — la carne no es tuya. */
+function dgAsegurarResumen(cb) {
+  if (typeof _tengoTab === 'function' && !_tengoTab('dgventas')) return false;
+  if (DGC) { if (cb) cb(); return true; }
+  if (DGC_ERR && !DGC_PIDIENDO) return false;
+  if (cb) DGC_CBS.push(cb);
+  if (!DGRES_PEDIDO) { DGRES_PEDIDO = true; _dgcPedir(); }
+  return false;
+}
+window.dgResumenDe = dgResumenDe;
+window.dgAsegurarResumen = dgAsegurarResumen;
 
 function _dgcEstado(c) {
   if (c.estado === 'vinculado' || c.estado === 'auto') return 'res';
@@ -22884,7 +22947,72 @@ if('serviceWorker' in navigator){
     var loadingSec = _crmHistLocalHtml(li) || '<div class="crm-section"><div class="crm-section-h">Historial</div><div class="loading">Cargando historial...</div></div>';
     el('crmDrawerBody').innerHTML = '<div class="crm-ficha-name">'+escHtml(li.nombre)+'</div>'
       + '<div class="crm-ficha-meta">'+(li.tel?'<span>+54 9 '+escHtml(li.tel)+'</span>':'')+'<span>'+escHtml(li.estado)+'</span>'+(li.vip?'<span style="color:var(--o);font-weight:700">VIP</span>':'')+'</div>'
-      + actions + alertH + kpis + datos + '<div id="crmBitacora">'+_crmBitacoraHtml(li)+'</div>' + loadingSec;
+      + actions + alertH + kpis
+      + '<div id="crmCarne">'+_crmCarneHtml(li)+'</div>'
+      + datos + '<div id="crmBitacora">'+_crmBitacoraHtml(li)+'</div>' + loadingSec;
+    _crmCarnePedir();
+  }
+
+  /* 🥩 Lo que este cliente compró en Diagonal Carnes.
+     El monto NO está en ninguna hoja de Maleu: sale de la planilla de Lucas,
+     cruzada por el vínculo que se confirma en Diagonal › Ventas › QUIÉN ES
+     QUIÉN. Por eso la ficha dice de dónde salió, de cuándo es y por qué se le
+     atribuye a esta persona — un número que no se puede rastrear a ninguna hoja
+     de acá se lee como un bug.
+     Si el cliente no tiene carne vinculada, no se dibuja nada. */
+  var _crmCarneCli = null;
+  function _crmCarneHtml(c){
+    _crmCarneCli = c || null;
+    if (!c || typeof window.dgResumenDe !== 'function') return '';
+    var r = window.dgResumenDe(c.key || c.tel);
+    if (!r || !r.facturado) return '';
+    /* Normalizador local a propósito: es una comparación cosmética de nombres
+       para no repetir el mismo, no una definición de identidad — esa la
+       resuelve el backend y no se duplica de este lado. */
+    var nn = function(s){
+      s = String(s||'').toLowerCase();
+      if (s.normalize) s = s.normalize('NFD').replace(/[̀-ͯ]/g,'');
+      return s.replace(/[^a-z0-9]/g,'');
+    };
+    var alias = (r.nombres||[]).filter(function(n){ return nn(n) !== nn(c.nombre); });
+    var rango = (r.primera && r.ultima)
+      ? (r.primera === r.ultima ? 'el ' + r.primera : 'del ' + r.primera + ' al ' + r.ultima) : '';
+    /* Sin denominador, "$309.575 en carne" no dice si es mucho o poco. Los dos
+       renderers de ficha guardan el facturado de Maleu con nombres distintos
+       (`totalFacturado` el completo, `facturado` el skeleton): se aceptan los dos. */
+    var fMaleu = Number(c.totalFacturado != null ? c.totalFacturado : c.facturado) || 0;
+    var comp = '';
+    if (fMaleu > 0) {
+      var veces = r.facturado / fMaleu;
+      comp = veces >= 1
+        ? String(Math.round(veces * 10) / 10).replace('.', ',') + '&times; lo que compró en Maleu'
+        : Math.round(veces * 100) + '% de lo que compró en Maleu';
+    }
+    return '<div class="crm-section">'
+      + '<div class="crm-section-h">🥩 Diagonal Carnes</div>'
+      + '<div class="crm-row"><span class="crm-row-l">Compró en carne</span><span class="crm-row-v">$'+fmt$(r.facturado)+'</span></div>'
+      + '<div class="crm-row"><span class="crm-row-l">Compras</span><span class="crm-row-v">'+r.compras
+        + (rango ? ' <span style="color:var(--ink3);font-weight:500">'+escHtml(rango)+'</span>' : '')+'</span></div>'
+      + (comp ? '<div class="crm-row"><span class="crm-row-l">Contra Maleu</span><span class="crm-row-v">'+comp+'</span></div>' : '')
+      + (alias.length ? '<div class="crm-row"><span class="crm-row-l">Allá figura como</span><span class="crm-row-v">'+escHtml(alias.join(' / '))+'</span></div>' : '')
+      + '<div style="font-size:11px;color:var(--ink3);padding:7px 2px 2px;line-height:1.5">'
+        + 'Sale de la planilla de Diagonal Carnes' + (r.hace ? ' &middot; ' + escHtml(r.hace) : '')
+        + '. Se le atribuye por: ' + escHtml(r.por || 'lo confirmaste vos') + '.</div>'
+    + '</div>';
+  }
+
+  /* Diagonal tarda ~12 s. En vez de hacer esperar a la ficha entera, se pide por
+     atrás y se rellena SÓLO ese div cuando llega: repintar la ficha completa le
+     movería el scroll al que ya está leyendo.
+     La llaman LOS DOS renderers de ficha — el skeleton (que es el camino normal,
+     con D en memoria) y el completo. Cubrir uno solo dejaba el bloque invisible
+     justo en el camino que se usa siempre. */
+  function _crmCarnePedir(){
+    if (typeof window.dgAsegurarResumen !== 'function') return;
+    window.dgAsegurarResumen(function(){
+      var n = el('crmCarne');
+      if (n && _crmCarneCli) n.innerHTML = _crmCarneHtml(_crmCarneCli);
+    });
   }
 
   function renderFichaCliente(c){
@@ -22998,7 +23126,10 @@ if('serviceWorker' in navigator){
 
     el('crmDrawerBody').innerHTML = '<div class="crm-ficha-name">'+escHtml(c.nombre)+'</div>'
       + '<div class="crm-ficha-meta">'+(c.tel?'<span>+54 9 '+escHtml(c.tel)+'</span>':'')+'<span>'+escHtml(k.estado)+'</span>'+(k.vip?'<span style="color:var(--o);font-weight:700">VIP</span>':'')+'</div>'
-      + actionsHtml + alertHtml + kpisHtml + datosHtml + '<div id="crmBitacora">'+_crmBitacoraHtml(c)+'</div>' + prodsHtml + pedHtml;
+      + actionsHtml + alertHtml + kpisHtml
+      + '<div id="crmCarne">'+_crmCarneHtml(c)+'</div>'
+      + datosHtml + '<div id="crmBitacora">'+_crmBitacoraHtml(c)+'</div>' + prodsHtml + pedHtml;
+    _crmCarnePedir();
   }
 
   window.crmEditarMeta = function(){
