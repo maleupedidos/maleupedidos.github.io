@@ -444,6 +444,14 @@ select.np-input{background:var(--white) url("data:image/svg+xml;utf8,<svg xmlns=
 .np-qty-btn{width:38px;height:38px;border:1.5px solid var(--border);background:var(--white);border-radius:9px;font-family:inherit;font-size:20px;font-weight:900;cursor:pointer;touch-action:manipulation;-webkit-user-select:none;user-select:none;padding:0;color:var(--brown);display:flex;align-items:center;justify-content:center;line-height:1}
 .np-qty-btn:active{background:var(--beige);transform:scale(.93)}
 .np-qty-num{min-width:24px;text-align:center;font-size:17px;font-weight:800;color:var(--brown)}
+/* Por peso: un campo para tipear lo que marco la balanza, no botones +/-. */
+.np-qty-kg{gap:4px}
+.np-kg-in{width:72px;height:44px;border:1.5px solid var(--border);background:var(--white);border-radius:9px;
+  font-family:inherit;font-size:17px;font-weight:800;color:var(--brown);text-align:center;padding:0 6px;
+  -moz-appearance:textfield;appearance:textfield}
+.np-kg-in:focus{outline:none;border-color:var(--brown)}
+.np-kg-u{font-size:13px;font-weight:800;color:var(--brown);opacity:.65}
+.np-por{font-size:12px;font-weight:700;opacity:.7}
 .np-extras{margin-top:14px;background:var(--white);border:1.5px solid var(--border);border-radius:10px;padding:12px 14px}
 .np-extras summary{font-size:13px;font-weight:700;color:var(--muted);cursor:pointer;list-style:none;padding:2px 0}
 .np-extras summary::-webkit-details-marker{display:none}
@@ -6030,14 +6038,24 @@ function _npCardProd(p,esEncargo){
     if(f!==null)stkHtml='<div class="np-stk '+(f>0?'poco':'cero')+'">'
       +(f>0?('hay '+f+' en el freezer'):'no hay en el freezer')+'</div>';
   }
+  /* Por peso no van los +/-: nadie compra "1 kilo redondo" de colita. Va un
+     campo para tipear lo que marco la balanza. */
+  var uni = npUni(p.abbr);
+  var ctrl = uni === 'kg'
+    ? '<div class="np-qty np-qty-kg">'
+      + '<input type="text" inputmode="decimal" class="np-kg-in" id="npQty_'+p.id+'"'
+      + ' value="'+(qty?String(qty).replace('.',','):'')+'" placeholder="0"'
+      + ' oninput="npSetKg('+p.id+',this.value)"'
+      + ' onblur="npBlurKg('+p.id+',this,\''+p.abbr+'\')"><span class="np-kg-u">kg</span></div>'
+    : '<div class="np-qty">'
+      + '<button type="button" class="np-qty-btn" onclick="npQty('+p.id+',-1)">&minus;</button>'
+      + '<span class="np-qty-num" id="npQty_'+p.id+'">'+qty+'</span>'
+      + '<button type="button" class="np-qty-btn" onclick="npQty('+p.id+',1)">+</button>'
+      + '</div>';
   return '<div class="np-prod'+(qty>0?' has-qty':'')+((cap!==null&&qty>cap)?' sobrepasa':'')+'" id="npProd_'+p.id+'">'
     +'<div class="np-prod-info"><div class="np-prod-name">'+p.n+'</div>'
-    +'<div class="np-prod-price">'+npMoney(precio)+'</div>'+stkHtml+'</div>'
-    +'<div class="np-qty">'
-    +'<button type="button" class="np-qty-btn" onclick="npQty('+p.id+',-1)">&minus;</button>'
-    +'<span class="np-qty-num" id="npQty_'+p.id+'">'+qty+'</span>'
-    +'<button type="button" class="np-qty-btn" onclick="npQty('+p.id+',1)">+</button>'
-    +'</div></div>';
+    +'<div class="np-prod-price">'+npMoney(precio)+(uni==='kg'?' <span class="np-por">/kg</span>':'')+'</div>'+stkHtml+'</div>'
+    + ctrl + '</div>';
 }
 
 function npRenderFechas(){
@@ -6065,6 +6083,57 @@ function npSetFecha(iso){
   // proyectado y al reves, asi que hay que repintar el catalogo.
   setTimeout(function(){ npFetchStock(); npRenderCatalogo(); },0);
   document.querySelectorAll('.np-fecha-btn').forEach(function(b){b.classList.toggle('active',b.dataset.iso===iso)});
+}
+
+/* ─── Productos que se venden por PESO (9/9/2026) ───────────────────────────
+   Maleu vende unidades (una pizza) y Maleu Carnes vende por kilo. La unidad la
+   dice el propio producto: sale de `action=precios`, que la lee de la col
+   Unidad de la hoja Productos.
+   Default 'u' SIEMPRE: si el dato no llegó todavía o vino raro, el producto se
+   comporta como se comportó siempre. */
+function npUni(abbr){
+  var p = NP_PRECIOS && NP_PRECIOS[abbr];
+  return (p && p.u === 'kg') ? 'kg' : 'u';
+}
+
+/* "1,723 kg" o "2". Con COMA, que es como se escribe acá — y con la unidad al
+   lado, porque un "1,723" pelado no dice si son kilos o unidades. */
+function npFmtCant(v, uni){
+  v = Number(v) || 0;
+  if (uni !== 'kg') return String(v);
+  var s = (Math.round(v * 1000) / 1000).toString().replace('.', ',');
+  return s + ' kg';
+}
+
+/* Acepta coma o punto: en el celular el teclado decimal da uno u otro segun el
+   idioma, y escribir "1.723" pensando en 1,723 no puede dar 1723. */
+function npNumCant(txt){
+  var s = String(txt == null ? '' : txt).trim().replace(',', '.').replace(/[^\d.]/g, '');
+  var v = parseFloat(s);
+  if (!isFinite(v) || v < 0) return 0;
+  return Math.round(v * 1000) / 1000;   // al gramo; mas precision no la da ninguna balanza
+}
+
+/* El input de kilos NO re-renderiza el catalogo: perderia el foco en la mitad
+   de un numero. Solo actualiza el carrito y el total. */
+function npSetKg(id, txt){
+  var v = npNumCant(txt);
+  if (v === 0) delete npCart[id]; else npCart[id] = v;
+  var card = document.getElementById('npProd_' + id);
+  if (card) card.classList.toggle('has-qty', v > 0);
+  npUpdateTotal();
+}
+
+/* Al salir del campo se normaliza lo escrito ("1.5" → "1,5") y recien ahi se
+   avisa si se paso del stock: hacerlo en cada tecla seria ruido. */
+function npBlurKg(id, el, abbr){
+  var v = npNumCant(el.value);
+  el.value = v ? String(v).replace('.', ',') : '';
+  var cap = npCap(abbr);
+  if (cap !== null && v > cap) {
+    showToast(cap === 0 ? ('\u26a0\ufe0f No hay stock \u2014 lo pod\u00e9s cargar igual')
+                        : ('\u26a0\ufe0f Te pasaste: hay ' + npFmtCant(cap, 'kg')), 3500);
+  }
 }
 
 function npQty(id,delta){
