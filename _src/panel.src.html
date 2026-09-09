@@ -472,6 +472,25 @@ body{font-family:'Inter',-apple-system,'Segoe UI',system-ui,sans-serif;backgroun
 .v-tab{padding:10px 18px;border:none;background:transparent;color:var(--ink3);cursor:pointer;font-weight:700;font-size:13px;letter-spacing:.05em;text-transform:uppercase;font-family:inherit;border-bottom:2px solid transparent;margin-bottom:-1px;transition:.12s}
 .v-tab:hover{color:var(--ink2)}
 .v-tab.on{color:var(--o);border-bottom-color:var(--o)}
+/* ═══ CONTAR EL FREEZER (9/9/2026) ═══ */
+.stc-deps{display:flex;gap:8px;margin:10px 0 4px;flex-wrap:wrap}
+.stc-dep-btn{flex:1 1 150px;min-height:52px;padding:9px 12px;border-radius:12px;
+  border:1px solid var(--border);background:var(--surface);color:var(--ink);
+  font-size:13px;font-weight:700;text-align:left;line-height:1.25;cursor:pointer;font-family:inherit}
+.stc-dep-btn.on{border-color:var(--o);background:var(--ol);color:var(--b)}
+.stc-dep-btn small{display:block;font-weight:400;font-size:11px;color:var(--ink3);margin-top:3px}
+.stc-ayuda{font-size:12px;color:var(--ink3);line-height:1.45;margin:10px 0}
+.stc-prog{font-size:12px;color:var(--ink2);font-weight:700;margin:0 0 8px}
+.stc-row{display:grid;grid-template-columns:1fr auto auto;gap:10px;align-items:center;
+  padding:10px 14px;border-bottom:1px solid var(--border)}
+.stc-row.listo{background:var(--gb)}
+.stc-n{font-size:13px;font-weight:600;line-height:1.25;min-width:0}
+.stc-sub{display:block;font-size:11px;font-weight:400;color:var(--ink3);margin-top:2px}
+.stc-in{width:86px;min-height:44px;text-align:center;font-size:15px;font-weight:700;
+  border:1px solid var(--borderstrong);border-radius:10px;background:var(--surface);
+  color:var(--ink);padding:4px 6px;font-family:inherit}
+.stc-in:focus{border-color:var(--o);outline:none}
+.stc-u{font-size:12px;color:var(--ink3);min-width:22px}
 
 /* ── TENDENCIA ── */
 .vt-toolbar{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin-bottom:12px}
@@ -3200,9 +3219,16 @@ body.role-single .statusbar{font-size:11px}
 
 <!-- ═══ STOCK ═══ -->
 <div class="pg" id="p-stock" data-roles="admin,empleado">
-  <div class="kg" id="sKpi"></div>
-  <div class="st">&#128230; Productos</div>
-  <div id="sList"></div>
+  <div class="v-tabs">
+    <button class="v-tab on" data-stt="productos" onclick="stSwitchTab('productos')">&#128230; PRODUCTOS</button>
+    <button class="v-tab" data-stt="contar" onclick="stSwitchTab('contar')">&#9995; CONTAR</button>
+  </div>
+  <div id="stProductos">
+    <div class="kg" id="sKpi"></div>
+    <div class="st">&#128230; Productos</div>
+    <div id="sList"></div>
+  </div>
+  <div id="stContar" style="display:none"></div>
 </div>
 
 <!-- ═══ METRICAS (accesible desde pedidos/caja pero no en nav) ═══ -->
@@ -12842,6 +12868,185 @@ function _stCab(largo,corto){
   return '<div style="text-align:center"><span class="st-lg">'+largo+'</span>'+
          '<span class="st-sm">'+corto+'</span></div>';
 }
+/** El escape propio. `esc` en este archivo esta declarado DENTRO de otras
+    funciones, asi que desde aca seria un ReferenceError — y el try/catch del
+    repintado se lo come, dejando la tab en blanco sin un solo error a la vista. */
+function stEsc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){
+  return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
+
+/* ══ CONTAR EL FREEZER, por deposito (9/9/2026) ══
+   Hasta hoy el unico modo de ajustar el stock fisico era tocar la celda F en el
+   Sheets. Con UN freezer eso era una molestia ([[feedback_erp_no_sheets]]); con
+   DOS es un bloqueo, porque el de Lucas lo cuenta Lucas y Lucas no toca la
+   planilla. */
+var ST_TAB = 'productos', DEP_DATA = null, DEP_SEL = '', DEP_PEDIDO = false;
+var DEP_CONTADOS = {};   // abbr|dep de lo contado en esta sesion, para marcar la fila
+
+function stSwitchTab(t){
+  if(ST_TAB===t)return;
+  ST_TAB=t;
+  var bs=document.querySelectorAll('#p-stock .v-tab');
+  for(var i=0;i<bs.length;i++)bs[i].classList.toggle('on',bs[i].getAttribute('data-stt')===t);
+  if($('stProductos'))$('stProductos').style.display=(t==='productos')?'':'none';
+  if($('stContar'))$('stContar').style.display=(t==='contar')?'':'none';
+  if(t==='contar')stDepPedir();
+}
+
+function stDepPedir(forzar){
+  var url=API+'?action=depositos&t='+Date.now();
+  var pintar=function(d){
+    if(!d||!d.deps||!d.deps.length)return;
+    DEP_DATA=d;
+    if(!DEP_SEL)DEP_SEL=d.deps[0].id;
+    if(ST_TAB==='contar')renderStContar();
+    if(typeof rStockReparto==='function')rStockReparto();
+  };
+  DEP_PEDIDO=true;
+  if(typeof traer==='function'&&!forzar)traer('depositos1',url,pintar);
+  else fetch(url).then(function(r){return r.json();}).then(pintar).catch(function(e){
+    console.error('depositos',e);
+  });
+}
+
+/** El numero como lo escribe una persona: acepta coma Y punto, porque el teclado
+    decimal del celular da uno u otro segun el idioma. Devuelve null si no se
+    entiende — y entonces no se pisa lo que habia. */
+function stNum(txt){
+  var s=String(txt==null?'':txt).trim().replace(',','.').replace(/[^\d.]/g,'');
+  if(!s)return null;
+  var v=parseFloat(s);
+  if(!isFinite(v)||v<0)return null;
+  return Math.round(v*1000)/1000;
+}
+function stFmt(v,uni){
+  var n=Number(v)||0;
+  if(uni==='kg')return String(Math.round(n*1000)/1000).replace('.',',');
+  return String(Math.round(n));
+}
+
+function renderStContar(){
+  var c=$('stContar'); if(!c)return;
+  if(!DEP_DATA){
+    c.innerHTML='<div class="empty"><i>&#128230;</i><p>Trayendo los dep&oacute;sitos&hellip;</p></div>';
+    return;
+  }
+  var deps=DEP_DATA.deps||[], prods=DEP_DATA.productos||[];
+  var sel=null; for(var i=0;i<deps.length;i++)if(deps[i].id===DEP_SEL)sel=deps[i];
+  if(!sel){sel=deps[0];DEP_SEL=sel.id;}
+
+  var h='<div class="stc-deps">';
+  for(var j=0;j<deps.length;j++){
+    var d=deps[j], tot=0;
+    for(var k=0;k<prods.length;k++)tot+=Number((prods[k].porDep||{})[d.id])||0;
+    h+='<button class="stc-dep-btn'+(d.id===DEP_SEL?' on':'')+'" onclick="stDepElegir(\''+d.id+'\')">'
+      +stEsc(d.nombre)+'<small>'+(d.dueno?stEsc(d.dueno)+' &middot; ':'')
+      +'hoy el ERP cuenta '+stFmt(tot,'u')+'</small></button>';
+  }
+  h+='</div>';
+
+  h+='<div class="stc-ayuda">Escrib&iacute; lo que hay <b>en '+stEsc(sel.nombre)+'</b>. '
+    +'Reemplaza lo que el ERP cree que hay ac&aacute;, y <b>no toca el otro dep&oacute;sito</b>: '
+    +'contar un freezer no dice nada del que no ten&eacute;s delante.</div>';
+
+  var listos=0;
+  for(var m=0;m<prods.length;m++)if(DEP_CONTADOS[prods[m].a+'|'+DEP_SEL])listos++;
+  h+='<div class="stc-prog">'+prods.length+' productos &middot; '
+    +(listos?listos+' contados reci&eacute;n':'ninguno contado todav&iacute;a')+'</div>';
+
+  for(var p=0;p<prods.length;p++){
+    var pr=prods[p], hay=Number((pr.porDep||{})[DEP_SEL])||0;
+    var suyo=(pr.dep===DEP_SEL);
+    var otro=Number(pr.f)-hay;
+    var sub=suyo?'vive ac&aacute;':'su lugar es el otro dep&oacute;sito';
+    if(otro>0.0001)sub+=' &middot; '+stFmt(otro,pr.u)+' en el otro';
+    h+='<div class="stc-row'+(DEP_CONTADOS[pr.a+'|'+DEP_SEL]?' listo':'')+'" id="stcR_'+stEsc(pr.a)+'">'
+      +'<div class="stc-n">'+stEsc(pr.n)+'<span class="stc-sub">'+sub+'</span></div>'
+      +'<input class="stc-in" type="text" inputmode="decimal" value="'+stFmt(hay,pr.u)+'" '
+      +'onblur="stContarBlur(\''+stEsc(pr.a)+'\',this)">'
+      +'<span class="stc-u">'+(pr.u==='kg'?'kg':'u')+'</span>'
+      +'</div>';
+  }
+  c.innerHTML=h;
+}
+
+function stDepElegir(id){
+  if(DEP_SEL===id)return;
+  DEP_SEL=id;
+  renderStContar();
+}
+
+/** Guarda al salir del campo, no en cada tecla: re-renderizar mientras escribis
+    te saca el foco en la mitad de un numero. */
+function stContarBlur(abbr,inp){
+  if(!DEP_DATA)return;
+  var pr=null,prods=DEP_DATA.productos||[];
+  for(var i=0;i<prods.length;i++)if(prods[i].a===abbr)pr=prods[i];
+  if(!pr)return;
+  var antes=Number((pr.porDep||{})[DEP_SEL])||0;
+  var v=stNum(inp.value);
+  if(v===null){inp.value=stFmt(antes,pr.u);return;}   // no se entiende: se deja como estaba
+  inp.value=stFmt(v,pr.u);
+  if(Math.abs(v-antes)<1e-9)return;                    // no cambio: no se molesta al backend
+
+  // Optimista: la fila se marca ya y vuelve sola si el backend dice que no.
+  pr.porDep[DEP_SEL]=v;
+  pr.f=Number(pr.f)+(v-antes);
+  DEP_CONTADOS[abbr+'|'+DEP_SEL]=true;
+  var fila=$('stcR_'+abbr); if(fila)fila.classList.add('listo');
+  inp.disabled=true;
+
+  fetch(API,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},
+    body:JSON.stringify({action:'stockContar',abbr:abbr,deposito:DEP_SEL,cantidad:v})})
+    .then(function(r){return r.json();})
+    .then(function(d){
+      inp.disabled=false;
+      if(d&&d.ok){
+        // Solo si el backend mando el total. Un `{ok:true}` pelado —un Apps
+        // Script viejo, o un stub de prueba— dejaria el stock en NaN.
+        if(typeof d.total==='number'&&isFinite(d.total))pr.f=d.total;
+        toast(pr.n+': '+stFmt(v,pr.u)+' '+(pr.u==='kg'?'kg':'u')+' en '+stDepNombre(DEP_SEL));
+      } else {
+        pr.porDep[DEP_SEL]=antes;
+        pr.f=Number(pr.f)-(v-antes);
+        delete DEP_CONTADOS[abbr+'|'+DEP_SEL];
+        inp.value=stFmt(antes,pr.u);
+        if(fila)fila.classList.remove('listo');
+        toast('No se pudo guardar '+pr.n+': '+((d&&d.error)||'?'),4000);
+      }
+    })
+    .catch(function(e){
+      inp.disabled=false;
+      pr.porDep[DEP_SEL]=antes;
+      pr.f=Number(pr.f)-(v-antes);
+      delete DEP_CONTADOS[abbr+'|'+DEP_SEL];
+      inp.value=stFmt(antes,pr.u);
+      if(fila)fila.classList.remove('listo');
+      toast('No se pudo guardar '+pr.n+': '+e.message,4000);
+    });
+}
+
+function stDepNombre(id){
+  var deps=(DEP_DATA&&DEP_DATA.deps)||[];
+  for(var i=0;i<deps.length;i++)if(deps[i].id===id)return deps[i].nombre;
+  return id;
+}
+
+/** La card de reparto en los KPIs de PRODUCTOS. Sin esto, la tab sigue diciendo
+    un solo numero de stock y no se ve que hay dos freezers. */
+function rStockReparto(){
+  var cont=$('sKpiDep'); if(!cont)return;
+  if(!DEP_DATA||!DEP_DATA.deps||!DEP_DATA.deps.length){cont.innerHTML='';return;}
+  var deps=DEP_DATA.deps, prods=DEP_DATA.productos||[], partes=[];
+  for(var i=0;i<deps.length;i++){
+    var tot=0;
+    for(var k=0;k<prods.length;k++)tot+=Number((prods[k].porDep||{})[deps[i].id])||0;
+    partes.push(stEsc(deps[i].nombre.replace(/^Dep(o|ó)sito /,''))+' '+stFmt(tot,'u'));
+  }
+  cont.innerHTML='<div class="card"><div class="kl">D&oacute;nde est&aacute;</div>'
+    +'<div class="kv" style="font-size:16px">'+partes.join(' &middot; ')+'</div>'
+    +'<div class="ks">unidades en cada dep&oacute;sito &middot; <a href="#" onclick="stSwitchTab(\'contar\');return false;">contar</a></div></div>';
+}
+
 function rStock(){
   /* El stock llega solo en el volcado grande. En frio pintamos primero con los
      endpoints livianos, que no lo traen: en vez de reventar, avisamos. */
@@ -12878,6 +13083,11 @@ function rStock(){
     '<div class="card"><div class="kl">Valor del stock</div><div class="kv">$'+f$(Math.round(sumInv))+'</div><div class="ks">'+totProd+' productos en catálogo</div></div>'+
     '<div class="card"><div class="kl">Movimiento sem '+sem+'</div><div class="kv">'+sumVen+' vend</div><div class="ks">'+sumComp+' comprados · '+sumIni+' inicial</div></div>'+
     '<div class="card'+(sinStock>0?' wrn':'')+'"><div class="kl">Sin stock</div><div class="kv">'+sinStock+'</div><div class="ks">'+(bajos>0?bajos+' bajos (≤3)':'sin alertas bajas')+'</div></div>';
+
+  // Donde esta cada cosa. Se pide una sola vez por sesion (3,7 KB) y se pinta
+  // cuando llega: la tab no espera por esto.
+  $('sKpi').innerHTML+='<div id="sKpiDep" style="display:contents"></div>';
+  if(!DEP_PEDIDO)stDepPedir(); else rStockReparto();
 
   var sc=$('sList');sc.innerHTML='';
   if(!D.stock||!D.stock.length){sc.innerHTML='<div class="empty"><i>&#128230;</i><p>Sin datos</p></div>';return;}
