@@ -139,6 +139,54 @@ const REFRESCO = {
  * arreglo silencioso por un error ruidoso: el build se niega a publicar un ERP
  * con dos funciones peleandose el mismo nombre.
  */
+/* Corta el build si una global de una sub-app se USA antes de declararse.
+ *
+ * POR QUE (9/9/2026). Con `var` el hoisting sube la declaracion pero NO la
+ * asignacion: hasta su linea la variable vale undefined. Si la funcion que la
+ * usa corre durante el arranque de la sub-app, `undefined.forEach` tumba el
+ * modulo ENTERO — y como _abrirSubapp atrapa la excepcion, no queda ni un
+ * error a la vista: la tab se ve pero no anda, y el boton actualizar contesta
+ * un mensaje que miente.
+ *
+ * Salio buscando la causa del dia que Tadeo no podia usar Ruta. Habia dos
+ * asi: _rutSinCerrar (324 lineas de hueco) y pedLevel (1195).
+ *
+ * Solo mira usos peligrosos (metodo o indexado), no una lectura suelta: `x`
+ * valiendo undefined no rompe, `x.forEach(...)` si.
+ */
+function chequearOrdenDeclaraciones() {
+  const malos = [];
+  for (const [clave, app] of Object.entries(APPS)) {
+    const archivo = path.join(RAIZ, app.archivo);
+    if (!fs.existsSync(archivo)) continue;
+    const lineas = fs.readFileSync(archivo, 'utf8').split('\n');
+    const decl = {};
+    lineas.forEach((ln, i) => {
+      const m = ln.match(/^var\s+([A-Za-z_$][\w$]*)\s*=/);   // sin indentar = nivel superior
+      if (m && decl[m[1]] === undefined) decl[m[1]] = i + 1;
+    });
+    const esc = t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    for (const n of Object.keys(decl)) {
+      const dl = decl[n];
+      const re = new RegExp('(?<![\\w$.])' + esc(n) + '\\s*(?:\\.\\s*(\\w+)\\s*\\(|\\[)');
+      for (let i = 0; i < dl - 1; i++) {
+        const ln = lineas[i];
+        if (/^\s*(\/\/|\*|\/\*)/.test(ln)) continue;
+        const m = ln.match(re);
+        if (m) { malos.push([clave, n, i + 1, dl, m[1] || '[ ]']); break; }
+      }
+    }
+  }
+  if (!malos.length) return;
+  console.error('\n✗ ' + malos.length + ' variable(s) usadas ANTES de declararse:');
+  malos.forEach(([app, n, uso, dl, met]) =>
+    console.error('    ' + app.padEnd(10) + n.padEnd(22) + 'uso L' + uso + '  →  decl L' + dl + '   (.' + met + ')'));
+  console.error('\n  Con `var` la asignacion no se hoistea: hasta esa linea vale undefined.');
+  console.error('  Si esa funcion corre en el arranque, tumba la sub-app SIN error visible.');
+  console.error('  Arreglo: mover la declaracion arriba, antes del primer uso.\n');
+  process.exit(1);
+}
+
 function chequearColisiones(fus) {
   const donde = {};   // nombre → [sub-apps que lo declaran]
   for (const [tab, r] of Object.entries(fus)) {
@@ -273,7 +321,7 @@ function main() {
   // (se fusiona una sola vez y se guarda: fusionar() no es barato)
   const _fus = {};
   tabs.forEach((tab) => { _fus[tab] = fusionar(TAB[tab]); });
-  if (tabs.length === Object.keys(TAB).length) { chequearColisiones(_fus); chequearIds(_fus); }
+  if (tabs.length === Object.keys(TAB).length) { chequearOrdenDeclaraciones(); chequearColisiones(_fus); chequearIds(_fus); }
 
   tabs.forEach((tab) => {
     const clave = TAB[tab];
