@@ -719,7 +719,7 @@ select.np-input{background:var(--white) url("data:image/svg+xml;utf8,<svg xmlns=
          corresponde antes de elegirlo, en vez de avisar recien al guardar. -->
     <div id="npAvisoEncargo" class="np-aviso-enc hidden"></div>
     <div class="np-row-2">
-      <select id="npOrigen" class="np-input" onchange="npAvisoEncargoRender()">
+      <select id="npOrigen" class="np-input" onchange="npOrigenManual()">
         <option value="Pendiente">Origen: Pendiente</option>
         <option value="Deposito">Origen: Depósito</option>
         <option value="Orden de Compra">Origen: Orden de Compra</option>
@@ -6726,55 +6726,179 @@ function npFisico(abbr){
   var v=NP_STOCK[abbr].f;
   return (typeof v==='number')?v:null;
 }
-/* Los del carrito que son por encargo, con lo que hay en el freezer. */
-function npEncargoEnCarrito(){
-  var out=[];
-  NP_CAT_FLAT.forEach(function(p){
-    var q=npCart[p.id]||0; if(q<=0||!npEsEncargo(p))return;
-    out.push({n:p.n,abbr:p.abbr,pide:q,hay:npFisico(p.abbr)});
-  });
-  return out;
+/* ── DE QUE DEPOSITO SALE ──────────────────────────────────────────────────
+   Cuanto hay de ese producto EN SU deposito y cuanto en el otro.
+
+   Es la misma regla que `npDispDep()` de busqueda.html (Abastecimiento), con
+   otro nombre porque las dos sub-apps se fusionan en UN documento y dos
+   funciones homonimas se pisan en silencio —lo corta `chequearColisiones()`—.
+   Compartirla via `window` seria peor: la global de una sub-app recien existe
+   cuando alguien abrio su tab.
+   Lo que evita que se despeguen es `npm run depositos`, que saca las dos de sus
+   archivos y las corre sobre los mismos casos.
+
+   Lo reservado no viene abierto por deposito, asi que se descuenta primero de
+   "aca": es el MISMO orden con el que `_moverFisico_` saca la mercaderia en el
+   backend. Calcularlo distinto seria una segunda definicion de esa regla.
+
+   Sin `pd`/`dep` (un Apps Script anterior al 9/9/2026, o la hoja Depositos
+   vacia) devuelve todo en `aca`: el comportamiento de siempre. */
+function npDepStock(abbr){
+  var it=(NP_STOCK&&NP_STOCK[abbr])||null;
+  var disp=(it&&typeof it.f==='number')?it.f:0;
+  var pd=(it&&it.pd)||{};
+  var ids=[];
+  for(var k in pd) if(Object.prototype.hasOwnProperty.call(pd,k)) ids.push(k);
+  if(!it||!ids.length||!it.dep) return {aca:disp,otros:0,txt:''};
+  var fis=0;
+  for(var i=0;i<ids.length;i++) fis+=Number(pd[ids[i]])||0;
+  var reservado=Math.max(0,fis-disp);
+  var aca=Math.max(0,(Number(pd[it.dep])||0)-reservado);
+  var otros=Math.max(0,disp-aca);
+  var partes=[];
+  for(var j=0;j<ids.length;j++){
+    if(ids[j]===it.dep)continue;
+    var q=Number(pd[ids[j]])||0;
+    if(q>0)partes.push(q+' en lo de '+npDepNombre(ids[j]));
+  }
+  return {aca:aca,otros:otros,txt:partes.join(' · ')};
 }
-/* ¿Cuantos productos del carrito NO son por encargo? Decide si el pedido es
-   todo-encargo (el origen es OC y punto) o mixto (que es el caso peligroso). */
-function npNormalesEnCarrito(){
-  var n=0;
-  NP_CAT_FLAT.forEach(function(p){
-    if((npCart[p.id]||0)>0 && !npEsEncargo(p))n++;
-  });
-  return n;
+/* El nombre corto del deposito. Abastecimiento lo saca del dueno que manda
+   `action=catalogo` ("Lucas"); `stock_full` no trae esa lista, asi que aca se
+   capitaliza el id ("Moresco"). Los dos nombran el mismo freezer sin ambiguedad,
+   y el id sale del backend — no de una lista escrita a mano que se despegue. */
+function npDepNombre(id){
+  var s=String(id||'').trim();
+  return s?s.charAt(0).toUpperCase()+s.slice(1):'';
 }
+/* De donde sale cada cosa del carrito: `dep` = ya esta en su freezer,
+   `oc` = hay que comprarlo.
+
+   La regla es la MISMA que usa Abastecimiento (busqueda.html:3039): si hay
+   stock en el deposito DEL PRODUCTO, sale de ahi. Por eso un corte de carne
+   con stock en el Deposito Moresco es Deposito y no una compra — esa
+   mercaderia ya es de Maleu, esta en el freezer de Lucas. */
+function npOrigenDeCarrito(){
+  var dep=[],oc=[];
+  NP_CAT_FLAT.forEach(function(p){
+    if((npCart[p.id]||0)<=0)return;
+    var hay=npFisico(p.abbr);
+    var d=npDepStock(p.abbr);
+    /* Sin dato de stock no se concluye nada y cae del lado de "hay que
+       comprarlo": es el unico de los dos que no descuenta un freezer por las
+       dudas. No saber no es lo mismo que no hay. */
+    ((hay!==null&&d.aca>0)?dep:oc).push({n:p.n,abbr:p.abbr,dd:d,hay:hay,pide:npCart[p.id]});
+  });
+  return {dep:dep,oc:oc};
+}
+/* El origen que corresponde, o '' si la pantalla no lo puede decidir sola.
+   El mixto devuelve '' A PROPOSITO: el backend escribe UNA marca para todo el
+   pedido, asi que elegir cualquiera de las dos estaria mal para la mitad. Eso
+   se resuelve producto por producto desde Pedidos. */
+function npOrigenSugerido(){
+  var r=npOrigenDeCarrito();
+  if(!r.dep.length&&!r.oc.length)return '';
+  if(!r.oc.length)return 'Deposito';
+  if(!r.dep.length)return 'Orden de Compra';
+  return '';
+}
+/* Si la persona todavia no eligio el origen a mano, lo pone el ERP. Su eleccion
+   manda siempre: `npOrigenTocado` es el mismo patron que DGC_TOCADO. */
+var npOrigenTocado=false;
+function npOrigenAuto(){
+  if(npOrigenTocado)return;
+  var el=document.getElementById('npOrigen'); if(!el)return;
+  var sug=npOrigenSugerido();
+  if(sug&&el.value!==sug)el.value=sug;
+  else if(!sug&&el.value!=='Pendiente')el.value='Pendiente';
+}
+/* Lo eligio una persona: a partir de acá el ERP no se lo vuelve a tocar. */
+function npOrigenManual(){ npOrigenTocado=true; npAvisoEncargoRender(); }
+/* `npEncargoEnCarrito` y `npNormalesEnCarrito` se borraron el 9/9/2026: decidian
+   el origen por si el producto era del catalogo de Pilar (`soloPilar`), y eso
+   dejaba a la carne del lado equivocado —esta en el Deposito Moresco, o sea en
+   un freezer de Maleu, no es una compra—. Hoy lo decide el STOCK, en
+   `npOrigenDeCarrito`. Ser o no del catalogo de Estancias sigue marcandose en
+   el catalogo con `npEsEncargo`: es otra pregunta y las dos se dicen. */
 /* El renglon que dice que origen corresponde. Se dibuja al cargar productos y
    al cambiar el origen, no recien al guardar: elegir mal el origen hace dano
    REAL —descontar stock que no existe, o comprarle al proveedor lo que ya
    tenes— y avisarlo despues de tomar la decision llega tarde. */
+/* El deposito "de casa": el que tiene la mayoria de los productos del catalogo.
+   Se DERIVA del dato en vez de estar escrito a mano, asi el dia que se sume un
+   tercer deposito —o que la carne pase a otro lado— esto no hay que tocarlo.
+   Hoy: 29 productos en ustariz contra 5 en moresco. */
+function npDepPrincipal(){
+  if(!NP_STOCK)return '';
+  var cuenta={},mejor='',max=0;
+  NP_CAT_FLAT.forEach(function(p){
+    var it=NP_STOCK[p.abbr]; if(!it||!it.dep)return;
+    cuenta[it.dep]=(cuenta[it.dep]||0)+1;
+    if(cuenta[it.dep]>max){max=cuenta[it.dep];mejor=it.dep;}
+  });
+  return mejor;
+}
 function npAvisoEncargoRender(){
   var box=document.getElementById('npAvisoEncargo'); if(!box)return;
-  var enc=npEncargoEnCarrito();
-  if(!enc.length){ box.className='np-aviso-enc hidden'; box.innerHTML=''; return; }
+  var esconder=function(){ box.className='np-aviso-enc hidden'; box.innerHTML=''; };
+  npOrigenAuto();
+  var r=npOrigenDeCarrito();
+  if(!r.dep.length&&!r.oc.length)return esconder();
   var origen=(document.getElementById('npOrigen')||{}).value||'Pendiente';
-  var mixto=npNormalesEnCarrito()>0;
-  var nombres=enc.map(function(e){return e.n}).join(', ');
+  var nomOC=r.oc.map(function(e){return e.n}).join(', ');
   var txt,tono='info';
-  if(origen==='Deposito'){
-    // El peor caso: descuenta del freezer una mercaderia que no es de Estancias.
-    tono='mal';
-    txt='<b>Origen Depósito no corresponde.</b> '+nombres+' no sale'+(enc.length>1?'n':'')
-       +' del freezer de Estancias: el ERP se lo va a descontar al stock igual.';
-  } else if(!mixto){
-    txt=origen==='Orden de Compra'
-      ? '<b>Bien.</b> Todo el pedido es por encargo y va como Orden de Compra.'
-      : '<b>Todo este pedido es por encargo</b> ('+nombres+'). Poné <b>Origen: Orden de Compra</b>.';
-  } else {
-    // El mixto no lo puede resolver esta pantalla: el backend escribe UNA marca
-    // para todo el pedido. El split por producto se hace en Pedidos.
+
+  if(r.oc.length&&r.dep.length){
+    /* El mixto no lo puede resolver esta pantalla: el backend escribe UNA marca
+       para todo el pedido. El split por producto se hace en Pedidos. */
     tono='ojo';
-    txt='<b>Este pedido mezcla.</b> '+nombres+' hay que comprarlo, el resto está en el freezer. '
+    txt='<b>Este pedido mezcla.</b> '+nomOC+' hay que comprarlo, el resto ya está en el freezer. '
        +'Guardalo y confirmá el origen producto por producto desde <b>Pedidos</b>: '
        +'si lo dejás todo en Orden de Compra, le pedís al proveedor también lo que ya tenés.';
+  } else if(r.oc.length){
+    if(origen==='Deposito'){
+      // El peor caso: descuenta de un freezer una mercaderia que no esta ahi.
+      tono='mal';
+      txt='<b>Origen Depósito no corresponde.</b> '+nomOC+' no está en ningún freezer: '
+         +'el ERP se lo va a descontar al stock igual.';
+    } else {
+      txt=origen==='Orden de Compra'
+        ? '<b>Bien.</b> Nada de esto está en el freezer, así que va como Orden de Compra.'
+        : '<b>Nada de esto está en el freezer</b> ('+nomOC+'). Poné <b>Origen: Orden de Compra</b>.';
+    }
+  } else {
+    /* Todo sale de un freezer. Se avisa SOLO si hay algo que no es obvio: que
+       parte del pedido esta en otro deposito, o que el origen elegido no es
+       Deposito. Un cartel que sale en todos los pedidos normales se deja de
+       leer en dos dias. */
+    var casa=npDepPrincipal();
+    var afuera={},ids=[];
+    r.dep.forEach(function(e){
+      var it=(NP_STOCK&&NP_STOCK[e.abbr])||{};
+      var id=it.dep||'';
+      if(!id||id===casa)return;
+      if(!afuera[id]){afuera[id]=[];ids.push(id);}
+      afuera[id].push(e.n);
+    });
+    if(origen!=='Deposito'){
+      txt='<b>Todo esto ya está en el freezer.</b> Poné <b>Origen: Depósito</b> '
+         +'para que se descuente del stock.';
+      if(ids.length)txt+=' '+npAfueraTxt(afuera,ids)+'.';
+    } else if(ids.length){
+      txt='<b>'+npAfueraTxt(afuera,ids)+'</b> — acordate de pedírselo antes de salir.';
+    } else {
+      return esconder();
+    }
   }
   box.className='np-aviso-enc '+tono;
   box.innerHTML=txt;
+}
+/* "Carne Lomo, Carne Vacío están en lo de Moresco" */
+function npAfueraTxt(afuera,ids){
+  return ids.map(function(id){
+    var l=afuera[id];
+    return l.join(', ')+' '+(l.length>1?'están':'está')+' en lo de '+npDepNombre(id);
+  }).join(' · ');
 }
 /* Cuanto se puede vender de ese producto hoy. null = sin tope. */
 function npCap(abbr){
@@ -6866,19 +6990,20 @@ function npGuardar(){
     _msg+='\n\n\u00bfGuardar igual?';
     if(!confirm(_msg))return;
   }
-  // Origen Depósito con productos por encargo: el backend marca TODO el pedido
-  // como "D" y le descuenta el freezer una mercadería que en Estancias no está.
-  // Es el unico de los tres origenes que hace dano en el acto, asi que es el
-  // unico que frena. Los otros ya se avisaron en pantalla al elegirlos.
-  var _enc=npEncargoEnCarrito();
-  if(_enc.length && ((document.getElementById('npOrigen')||{}).value==='Deposito')){
-    var _me='⚠️ Origen: Depósito, pero hay productos por encargo\n\n';
-    _enc.forEach(function(e){
+  /* Origen Depósito con algo que no está en NINGÚN freezer: el backend marca
+     todo el pedido como "D" y descuenta stock que no existe. Es el único de los
+     tres orígenes que hace daño en el acto, así que es el único que frena; los
+     otros ya se avisaron en pantalla al elegirlos.
+     El criterio es el mismo que el del aviso —`npOrigenDeCarrito`— a propósito:
+     dos definiciones de "hay que comprarlo" se despegan. */
+  var _oc=npOrigenDeCarrito().oc;
+  if(_oc.length && ((document.getElementById('npOrigen')||{}).value==='Deposito')){
+    var _me='⚠️ Origen: Depósito, pero esto no está en el freezer\n\n';
+    _oc.forEach(function(e){
       _me+='• '+e.n+': pedís '+e.pide
-         +(e.hay===null?'' : (e.hay>0?(', en el freezer hay '+e.hay):', no hay en el freezer'))+'\n';
+         +(e.hay===null?' (no sé cuánto hay)' : (e.hay>0?(', en el freezer hay '+e.hay):', no hay en el freezer'))+'\n';
     });
-    _me+='\nEstos no se venden en Estancias. Con Depósito, el ERP los descuenta '
-       + 'del stock igual.\n\n¿Guardar así?';
+    _me+='\nCon Origen: Depósito, el ERP se lo descuenta al stock igual.\n\n¿Guardar así?';
     if(!confirm(_me))return;
   }
   if(Object.keys(npCart).length===0){showToast('Agrega al menos un producto');return}
@@ -7088,6 +7213,7 @@ function npReset(){
   var bp=document.getElementById('npBarrioPrivado');if(bp){bp.value='Estancias del Pilar';npBarrioPrivadoChange()}
   document.getElementById('npTipo').value='normal';
   var elOr=document.getElementById('npOrigen');if(elOr)elOr.value='Pendiente';
+  npOrigenTocado=false;   // el pedido nuevo vuelve a dejar que el ERP lo elija
   var elEs=document.getElementById('npEstadoEntrega');if(elEs)elEs.value='Pendiente';
   npSetPago('Efectivo');
   npEncargoAbierto=false;   // antes del render: el pedido nuevo arranca plegado

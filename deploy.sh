@@ -121,6 +121,21 @@ else
   echo "    (no se toco ruta.html)"
 fi
 
+# ── 3f. El reparto entre depositos, en las dos pantallas que lo deciden ──────
+#  De ese numero sale el ORIGEN del pedido, y la regla vive DOS veces:
+#  npDispDep() en busqueda.html y npDepStock() en ruta.html. No se pueden
+#  compartir —fusionadas en un documento, dos nombres iguales se pisan— asi que
+#  lo unico que evita que se despeguen es este test.
+#  Si se despegan, una pantalla dice "sale del freezer" y la otra "hay que
+#  comprarlo" sobre el mismo producto, y con Origen: Deposito el backend
+#  descuenta stock que no existe sin dar ningun error.
+echo "→ [3f/8] Reparto entre depositos…"
+if echo "$HTMLS" | grep -qE "ruta.html|busqueda.html"; then
+  node _tools/probar-depositos.js | sed 's/^/    /' || fallar "El AUTOPEDIDO y Abastecimiento reparten distinto entre depositos — corre: npm run depositos"
+else
+  echo "    (no se tocaron ruta.html ni busqueda.html)"
+fi
+
 # ── 4. Service worker al dia ─────────────────────────────────────────────────
 #  Si cambio el HTML de una PWA, su CACHE_NAME tiene que cambiar tambien, o el
 #  celular que ya tiene ese nombre cacheado no invalida nada.
