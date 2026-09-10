@@ -5308,12 +5308,122 @@ var API='https://script.google.com/macros/s/AKfycbxmrG5YVSshcYezk8lXFx_uxb7NFGcb
       location.reload();
     }
   }
+  /* ── COLA DE CONCURRENCIA (10/09/2026) ─────────────────────────────────
+     Apps Script atiende de a una por usuario, y pasado un tope NO encola
+     limpio: se degrada. Medido contra produccion, los mismos 6 endpoints que
+     el ERP disparaba al abrir:
+
+       de a uno, en fila ....   45,6 s   (admin 23,9 · ventas 8,7 · resto 2-4)
+       4 a la vez ...........   18,2 s
+       6 a la vez ........... >184,6 s   ← lo que hacia el ERP
+
+     O sea que pedirlos juntos tarda CUATRO VECES MAS que pedirlos en fila, y
+     el codo entre 4 y 6 es de diez veces. `_pedirD` disparaba `loadRapido`
+     (4 livianos) y `load` (el volcado) a la vez, y la tab Ventas sumaba el
+     sexto: la tab Caja quedaba TRES MINUTOS mostrando la copia guardada de la
+     ultima vez — que es lo que se ve como "la caja no se actualiza".
+
+     Solo se encolan los GET al backend. Un POST es una accion de la persona y
+     sale siempre ya: ponerlo detras de una fila de GETs seria cambiar un
+     problema por otro peor. */
+  /* El tope es 2 por medicion, no por gusto. Los mismos endpoints en paralelo
+     y todos con `fresh=1` (si no, el que corre segundo gana por cache y la
+     comparacion no dice nada):
+        1 solo ... 14,9 s     2 ... 11,3 s     3 ... 14,9 s     4 ... 18,2 s
+     Con 2 nunca es peor y queda lejos del codo de 6. Apps Script tiene mucha
+     varianza —por eso pedir uno solo puede tardar mas que pedir dos—, asi que
+     si algun dia se toca este numero, se remide con fresh=1 y no a ojo. */
+  var _TOPE_GET = 2;
+  var _MAX_VUELO_MS = 120000; /* una cola trancada es peor que no tener cola */
+  var _enVuelo = 0, _cola = [];
+
+  /* Saca de la fila el de mayor prioridad EN ESTE MOMENTO. La prioridad se
+     calcula al elegir y no al encolar, porque depende de que tab se esta
+     mirando: si alguien entra a Caja mientras la fila esta llena, su pedido
+     tiene que adelantarse aunque se haya encolado ultimo. Entre dos de la
+     misma prioridad gana el que pidio primero. */
+  function _sacarMejor(){
+    var mejor = 0, pMejor = _prioridadDe(_cola[0].url);
+    for (var i = 1; i < _cola.length; i++){
+      var p = _prioridadDe(_cola[i].url);
+      if (p > pMejor){ mejor = i; pMejor = p; }
+    }
+    return _cola.splice(mejor, 1)[0];
+  }
+
+  function _bombear(){
+    while (_enVuelo < _TOPE_GET && _cola.length){
+      var it = _sacarMejor();
+      _enVuelo++;
+      (function(it){
+        var soltado = false;
+        function soltar(){
+          if (soltado) return;            /* el timeout puede haber soltado ya */
+          soltado = true; _enVuelo--; _bombear();
+        }
+        /* Red de seguridad: si un pedido se cuelga, a los 120 s deja de ocupar
+           lugar en la fila. No se aborta el fetch — si vuelve, su promesa
+           resuelve igual; lo unico que se libera es el cupo. */
+        var reloj = setTimeout(soltar, _MAX_VUELO_MS);
+        it.fn().then(function(r){ clearTimeout(reloj); soltar(); it.res(r); },
+                     function(e){ clearTimeout(reloj); soltar(); it.rej(e); });
+      })(it);
+    }
+  }
+
+  /* Los dos endpoints caros van al fondo de la fila. Si el volcado (24 s) sale
+     primero, se lleva un cupo de los tres y los livianos —que son los que
+     pintan la pantalla— esperan detras de el. Al revés, cada tab pinta con su
+     endpoint liviano en ~3 s y el volcado llega despues, que es justo lo que
+     `usaRapido` viene haciendo desde el 21/8. */
+  var _CAROS = { admin: 1, ventas: 1 };
+
+  /* Y el endpoint que pinta la tab ABIERTA va primero de todos. Sin esto la
+     cola igual mejora —de 184 s a 20— pero `cajaLight` sale en el primer lote
+     compartiendo los tres cupos y tarda 20 s en vez de 3: el que espera es
+     justo el unico que le importa a quien esta mirando la pantalla.
+     El mapa es tab -> el endpoint del que sale su contenido. Una tab que no
+     este aca no pierde nada: queda en prioridad normal. */
+  var _PINTA_TAB = {
+    caja: 'cajaLight', egresos: 'cajaLight',
+    inicio: 'pedidosLight', pedidos: 'pedidosLight', estancias: 'pedidosLight',
+    busqueda: 'busqueda', ventas: 'ventas'
+  };
+  /* El contenedor de cada tab lleva la CLASE `pg` y el ID `p-<tab>`: son dos
+     prefijos distintos y es facil confundirlos. Con `^pg-` esto devolvia
+     "p-caja", `_PINTA_TAB` no matcheaba nunca y la prioridad quedaba muerta —
+     y el primer test la dio por buena porque el cache del servidor estaba
+     caliente y `cajaLight` volvia en 3 s de todos modos. */
+  function _tabAbierta(){
+    try{
+      var e = document.querySelector('.pg.on');
+      return e ? String(e.id || '').replace(/^p-/, '') : '';
+    }catch(e){ return ''; }
+  }
+  function _prioridadDe(url){
+    var m = String(url).match(/[?&]action=([a-zA-Z_]+)/);
+    var a = m ? m[1] : '';
+    if (a && _PINTA_TAB[_tabAbierta()] === a) return 2;   /* lo que se esta mirando */
+    return (a && _CAROS[a]) ? -1 : 0;
+  }
+
+  function _encolar(url, init){
+    return new Promise(function(res, rej){
+      _cola.push({ url: url,
+                   fn: function(){ return _pedir(url, init, 0); },
+                   res: res, rej: rej });
+      _bombear();
+    });
+  }
+
   window.fetch = function(input, init){
+    var esBackend = false, esPost = false;
     try{
       var t = ''; try { t = localStorage.getItem('maleu_token') || ''; } catch(e){}
       var url = (typeof input === 'string') ? input : ((input && input.url) || '');
-      if (t && url.indexOf('script.google.com/macros') > -1){
-        var esPost = !!(init && init.method && String(init.method).toUpperCase() === 'POST');
+      esBackend = url.indexOf('script.google.com/macros') > -1;
+      esPost = !!(init && init.method && String(init.method).toUpperCase() === 'POST');
+      if (t && esBackend){
         if (esPost && init && typeof init.body === 'string'){
           var b = JSON.parse(init.body);
           if (b && typeof b === 'object' && !b.token){ b.token = t; init.body = JSON.stringify(b); }
@@ -5323,8 +5433,14 @@ var API='https://script.google.com/macros/s/AKfycbxmrG5YVSshcYezk8lXFx_uxb7NFGcb
       }
     }catch(e){}
     /* _pedir se encarga de dos cosas: sesion vencida y reintento ante traba. */
+    if (esBackend && !esPost && typeof input === 'string'){
+      return _encolar(input, init);
+    }
     return _pedir(input, init, 0);
   };
+
+  /* Para medir desde una prueba: cuantos hay en vuelo y cuantos esperando. */
+  window.__colaGet = function(){ return { vuelo: _enVuelo, cola: _cola.length }; };
 })();
 
 
@@ -12457,7 +12573,21 @@ function rCaja(){
       +'<div style="display:flex;justify-content:space-between;gap:8px;color:var(--bl)"><span>\ud83d\udcc8 Inversiones</span><b style="color:#2E7D32">$'+f$(inv)+'</b></div>'
       +'<button onclick="toggleInvertir()" style="width:100%;margin-top:6px;padding:6px 8px;background:transparent;border:1px dashed #2E7D32;border-radius:6px;font-family:inherit;font-size:11px;font-weight:700;color:#2E7D32;cursor:pointer">\ud83d\udcc8 Invertir / Rescatar</button>'
       +'</div></div></div>'+
-    '<div class="bal-card total"><div class="bal-label">Posici\u00f3n total</div><div class="bal-val">$'+f$(saldoTotal)+'</div><button class="btn-adjust" onclick="toggleAjuste()">'+(sb.fecha?'Ajustado '+sb.fecha+' \u00b7 ':'')+'Ajustar</button></div>';
+    /* El sello del ultimo conteo NO va adentro del boton (10/09/2026). Decia
+       "Ajustado 04/09 19:24 \u00b7 Ajustar" pegado al numero, y eso se lee como
+       "este saldo es del 4 de septiembre" \u2014 con seis dias en el medio parece
+       que la caja no se actualiza. Y es al rev\u00e9s: el saldo esta al dia, porque
+       desde ese conteo el ERP le suma cada cobro y le resta cada gasto solo.
+       Lo que es del 4/9 es el ultimo conteo A MANO, no el saldo. */
+    '<div class="bal-card total"><div class="bal-label">Posici\u00f3n total</div><div class="bal-val">$'+f$(saldoTotal)+'</div>'
+      +(sb.fecha?'<div style="font-size:10px;line-height:1.35;color:rgba(242,232,199,.72);margin:2px 0 6px;max-width:230px">'
+        /* Sin `esc()`: esa funcion vive DENTRO de otras funciones del panel y en
+           este scope es un ReferenceError que el try/catch del repintado se
+           come — la tab quedaria en blanco sin un solo error a la vista. La
+           fecha la formatea el backend como "dd/MM HH:mm", asi que quitarle
+           estos cuatro caracteres no le saca nada legitimo. */
+        +'Contaste la caja a mano el <b>'+String(sb.fecha).replace(/[<>&"]/g,'')+'</b>. Desde ahi cada cobro y cada gasto se suma o resta solo.</div>':'')
+      +'<button class="btn-adjust" onclick="toggleAjuste()">Contar de nuevo</button></div>';
   // Movimientos: libro diario unificado (cobros de pedidos + ingresos no-venta + gastos).
   // Fuente: D.movimientos del backend (vista derivada, sin hoja física de movimientos).
   // Fallback: si el backend viejo no manda movimientos, armar desde gastos+ingresos.
