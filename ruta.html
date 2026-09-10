@@ -4925,8 +4925,13 @@ function confirmarCobroRuta(){
     // OJO: NO tocamos cobrados[key] ni ent.ep. El pedido queda entregado pero
     // debiendo el saldo — el backend lo cierra solo cuando los parciales cubren
     // el total. Si lo marcáramos cobrado acá, volveríamos al mismo bug.
+    // La cuenta va acá igual que en el parcial de COBROS (mismo `_ctaDeCobro`).
+    // Faltaba, y el efecto era silencioso: el cuadro te preguntaba a qué cuenta
+    // entró, vos elegías, y este payload la tiraba → el parcial se imputaba a la
+    // default. Es la misma línea escrita dos veces, con una sola arreglada.
     var payloadPar={action:'cobrarParcial',hoja:ent.h,id:String(ent.id),row:ent.r||0,
-      formaPago:fpPar,monto:montoPar,notas:'Parcial desde Ruta/ENTREGA',ts:Date.now()};
+      formaPago:fpPar,cuenta:_ctaDeCobro(st,fpPar),
+      monto:montoPar,notas:'Parcial desde Ruta/ENTREGA',ts:Date.now()};
     cerrarCobroRuta();
     _commitCobroParcialModal(payloadPar,ent);
     rutRenderRuta();
@@ -5580,6 +5585,59 @@ function _cvPlan(monto){
   return out;
 }
 
+/* ── A qué cuenta te rindió el vendedor (10/9/2026) ──────────────────────────
+   Por este camino pasaron 11 de las 12 rendiciones con origen registrado y
+   $923.784 de transferencias, todas imputadas a la cuenta por defecto porque el
+   payload no llevaba la cuenta. El backend ya la aceptaba (`_ctaRend`): el
+   agujero era del front. */
+var _cvCtaPint='';
+
+/** La cuenta a mandar en la rendición. Mismo criterio que `_ctaDeCobro` del
+ *  cuadro de Cobros: vacía si no hubo transferencia —esa columna describe sólo
+ *  la parte digital— y vacía con una sola cuenta, que el backend resuelve al
+ *  default. Escribir el id igual dejaría la columna llena de algo que nadie
+ *  eligió. */
+function _ctaDeRendicion(ctx,tr){
+  if(!(Number(tr)>0))return '';
+  if(_ctasDigitales().length<2)return '';
+  return (ctx&&ctx.cta)||'';
+}
+
+/** Dibuja —o esconde— el selector. Sale sólo si hay parte digital Y hay más de
+ *  una cuenta donde pueda entrar: con una sola no hay nada que elegir, y un
+ *  botón que se contesta siempre igual es fricción sin dato. */
+function _cvPintarCtas(){
+  var sec=_cvEl('cvCtaSec'),box=_cvEl('cvCtaBox');
+  if(!sec||!box)return;
+  var dig=_ctasDigitales();
+  var tr=_cvMonto(_cvEl('cvTr')&&_cvEl('cvTr').value);
+  var mostrar=tr>0&&dig.length>1;
+  if(mostrar&&_cvCtx&&!_cvCtx.cta)_cvCtx.cta=_ctaDefault();
+  // `_cvSync` corre en cada tecla del monto: sin la firma, esto reescribiría el
+  // mismo HTML una vez por pulsación.
+  var firma=mostrar?('1|'+((_cvCtx&&_cvCtx.cta)||'')+'|'+dig.length):'0';
+  if(firma===_cvCtaPint)return;
+  _cvCtaPint=firma;
+  sec.style.display=mostrar?'':'none';
+  if(!mostrar){box.innerHTML='';return}
+  var h='';
+  dig.forEach(function(c){
+    var on=(_cvCtx&&_cvCtx.cta)===c.id;
+    h+='<button type="button" data-cvcta="'+c.id+'" onclick="_cvSetCta(\''+c.id+'\')"'
+      +' style="flex:1;min-width:calc(50% - 3px);min-height:40px;padding:8px 6px;font-size:11px;'
+      +'font-weight:800;font-family:inherit;cursor:pointer;border-radius:8px;border:1.5px solid '
+      +(on?'#1976d2':'#ddd')+';background:'+(on?'#E3F2FD':'#fff')+';color:'+(on?'#1976d2':'#777')+'">'
+      +(c.id==='mp'?'📱 ':'🏦 ')+String(c.nombre||c.id).replace(/[<>&"]/g,'')+'</button>';
+  });
+  box.innerHTML=h;
+}
+
+function _cvSetCta(id){
+  if(!_cvCtx)return;
+  _cvCtx.cta=id;
+  _cvPintarCtas();
+}
+
 function confirmarCobroVendedor(vendedor){
   var nombre=_vendNombreLimpio(vendedor);
   var pc=_cobroVendReg[nombre];
@@ -5589,7 +5647,11 @@ function confirmarCobroVendedor(vendedor){
   var comision=Number(pc.comision)||0;
   var ya=Number(pc.yaPagado)||0;
   var nPedidos=(pc.pedidosIds||[]).length;
-  _cvCtx={vendedor:nombre,saldo:saldo,sems:(pc.sems||[])};
+  _cvCtx={vendedor:nombre,saldo:saldo,sems:(pc.sems||[]),cta:_ctaDefault()};
+  // El overlay se rehace entero abajo (`o.innerHTML=html`), así que el box de
+  // cuentas nace vacío: sin resetear la firma, `_cvPintarCtas` creería que ya
+  // está pintado y el selector no aparecería en la segunda apertura.
+  _cvCtaPint='';
   var pctReal=bruto>0?(comision*100/bruto):0;
   var pctStr=pctReal>0?pctReal.toFixed(pctReal===Math.round(pctReal)?0:1)+'%':'';
   var inp='width:100%;box-sizing:border-box;padding:10px 9px;font-size:17px;font-weight:800;font-family:inherit;'
@@ -5625,6 +5687,10 @@ function confirmarCobroVendedor(vendedor){
     +      '<button type="button" style="'+chip+'" onclick="_cvQuick(\'ef\')">Todo efectivo</button>'
     +      '<button type="button" style="'+chip+'" onclick="_cvQuick(\'tr\')">Todo transfer.</button>'
     +      '<button type="button" style="'+chip+'" onclick="_cvQuick(\'x\')">Limpiar</button>'
+    +    '</div>'
+    +    '<div id="cvCtaSec" style="display:none;margin-top:10px">'
+    +      '<div style="font-size:11px;font-weight:800;color:#5D4037;margin-bottom:6px">¿A qué cuenta te transfirió?</div>'
+    +      '<div id="cvCtaBox" style="display:flex;gap:6px;flex-wrap:wrap"></div>'
     +    '</div>'
     +    '<div id="cvSum" style="display:flex;justify-content:space-between;align-items:baseline;margin-top:10px;padding:9px 11px;border-radius:9px;background:#F5F0E1;font-size:12px;font-weight:800;color:#5D4037">'
     +      '<span id="cvSumLbl">Total a registrar</span><span id="cvSumVal">'+formatMoney(0)+'</span></div>'
@@ -5669,6 +5735,10 @@ function _cvSync(){
   var l=_cvEl('cvSumLbl');if(l)l.textContent=lbl;
   var v=_cvEl('cvSumVal');if(v)v.textContent=val;
   var b=_cvEl('cvOk');if(b){b.disabled=!ok;b.style.opacity=ok?'1':'.45';}
+  // El selector aparece y desaparece con el monto de transferencia, así que se
+  // repinta acá: es el único lugar por el que pasan los dos caminos que lo mueven
+  // (tipear un monto y los chips Todo efectivo / Todo transfer.).
+  _cvPintarCtas();
 }
 
 function _cvQuick(modo){
@@ -5692,11 +5762,12 @@ function _cvConfirm(){
   if(suma<=0&&_cvCtx.saldo>0){showToast('Ingresá un monto');return}
   if(suma>_cvCtx.saldo){showToast('El monto excede el saldo');return}
   var ctx=_cvCtx;
+  var cta=_ctaDeRendicion(ctx,tr);
   cerrarConfirm();
-  cobrarVendedorRed(ctx.vendedor,ef,tr,suma>=ctx.saldo);
+  cobrarVendedorRed(ctx.vendedor,ef,tr,suma>=ctx.saldo,cta);
 }
 
-function cobrarVendedorRed(vendedor,ef,tr,esTotal){
+function cobrarVendedorRed(vendedor,ef,tr,esTotal,cuenta){
   ef=Number(ef)||0; tr=Number(tr)||0;
   // El backend espera el nombre EXACTO como está en la col Vendedor del Sheets
   // (sin sufijos). Acá venía "Marcos Bottcher (Vendedor Red)" que el frontend
@@ -5706,8 +5777,14 @@ function cobrarVendedorRed(vendedor,ef,tr,esTotal){
   // Mandamos MONTOS, no una forma de pago: así el backend puede registrar mixto
   // (ef>0 y tr>0) y parcial (ef+tr < saldo), repartiendo por semana igual que el
   // portal del vendedor. El campo formaPago quedó como camino viejo del backend.
-  var payload={action:'cobrarVendedorRed',vendedor:vendedorLimpio,ef:ef,tr:tr,ts:Date.now()};
-  var metodoTxt=(ef>0&&tr>0)?'mixto':(ef>0?'efectivo':'MP');
+  var payload={action:'cobrarVendedorRed',vendedor:vendedorLimpio,ef:ef,tr:tr,
+    cuenta:cuenta||'',ts:Date.now()};
+  // El aviso nombra la cuenta SÓLO cuando no es la habitual: decir "MP" sobre una
+  // transferencia que entró al Brubank es la misma mentira que este cambio saca
+  // una pantalla más abajo, en la Caja.
+  var _ctaTxt=(cuenta&&cuenta!==_ctaDefault())?_ctaNombre(cuenta):'';
+  var metodoTxt=(ef>0&&tr>0)?('mixto'+(_ctaTxt?' → '+_ctaTxt:''))
+               :(ef>0?'efectivo':(_ctaTxt||'MP'));
   // UI optimista SOLO si se liquida todo. En un cobro parcial el vendedor sigue
   // debiendo, así que la card tiene que quedar — la refrescamos contra el server.
   var backup=[];

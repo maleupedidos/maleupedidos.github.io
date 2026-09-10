@@ -524,6 +524,15 @@
     .modal-field.ef input:focus { border-color: #2e7d32; }
     .modal-field.tr input { border-color: #bbdefb; }
     .modal-field.tr input:focus { border-color: #1565c0; }
+    /* El selector de cuenta de la liquidación. Clase propia y no reusada de otro
+       componente: apoyarse en la clase de al lado es exactamente como se rompió
+       el chip Dormidos el 3/9. Está excluida del `.pg button:not(...)` del panel
+       —que pondría 38px— porque esta pantalla la usa el vendedor en el celular. */
+    .liq-cta-box { display: flex; gap: .4rem; flex-wrap: wrap; }
+    .liq-cta-btn { flex: 1; min-width: calc(50% - .2rem); min-height: 44px; padding: .55rem .5rem;
+                   border: 2px solid #ddd; border-radius: 10px; background: #fafafa; color: #777;
+                   font-family: inherit; font-size: .8rem; font-weight: 800; cursor: pointer; }
+    .liq-cta-btn.on { border-color: #1565c0; background: #e3f2fd; color: #1565c0; }
     .modal-target { background: #fff3e0; border-radius: 10px; padding: .7rem .9rem; margin-bottom: .8rem; display: flex; justify-content: space-between; font-weight: 700; font-size: .9rem; }
     .modal-target .lbl { color: #e65100; }
     .modal-sum { background: #f5f5f5; border-radius: 10px; padding: .7rem .9rem; margin-bottom: 1rem; display: flex; justify-content: space-between; font-weight: 800; font-size: .95rem; }
@@ -976,6 +985,10 @@
     <div class="modal-field tr">
       <label>🏦 Pagás por Transferencia</label>
       <input type="text" inputmode="numeric" id="liq-tr" placeholder="0" oninput="liqUpdateSum()" />
+    </div>
+    <div class="modal-field" id="liq-cta-field" style="display:none">
+      <label>¿A qué cuenta transferís?</label>
+      <div class="liq-cta-box" id="liq-cta-box"></div>
     </div>
     <div class="modal-sum" id="liq-sum">
       <span>Total ingresado</span><span id="liq-sum-val">$0</span>
@@ -2619,7 +2632,11 @@ function renderCaja() {
 }
 
 /* ═══════ MODAL LIQUIDACIÓN (EF + TR) — PAGOS PARCIALES ═══════ */
-let _liqCtx = null; // { year, sem, aPagarTotal, yaPagadoEf, yaPagadoTr, saldo }
+let _liqCtx = null; // { year, sem, aPagarTotal, yaPagadoEf, yaPagadoTr, saldo, cta }
+// Firma de lo último que pintó `_redPintarCtas`. Va acá arriba y no al lado de
+// esa función: con `let` declarado más abajo, cualquier uso previo sería un
+// ReferenceError por TDZ — el mismo modo de fallo que corta `chequearOrdenDeclaraciones`.
+let _redCtaPint = '';
 
 function _parseMonto(s) {
   return Number(String(s || '').replace(/[^\d.-]/g, '')) || 0;
@@ -2636,7 +2653,9 @@ function _yaPagado(year, sem) {
 function liqOpen(year, sem, aPagarTotal, cantidad) {
   const ya = _yaPagado(year, sem);
   const saldo = Math.max(0, aPagarTotal - ya.total);
-  _liqCtx = { year, sem, aPagarTotal, yaPagadoEf: ya.ef, yaPagadoTr: ya.tr, saldo };
+  _liqCtx = { year, sem, aPagarTotal, yaPagadoEf: ya.ef, yaPagadoTr: ya.tr, saldo,
+              cta: _redCtaDefault() };
+  _redCtaPint = '';   // el modal es estático: sin esto la firma sobrevive al cierre
   const dates = _isoWeekDates(year, sem);
   const fmtDM = d => String(d.getDate()).padStart(2,'0') + '/' + String(d.getMonth()+1).padStart(2,'0');
   $id('liq-sub').textContent = 'Semana ' + sem + ' · ' + fmtDM(dates.mon) + ' al ' + fmtDM(dates.dom);
@@ -2651,6 +2670,70 @@ function liqOpen(year, sem, aPagarTotal, cantidad) {
   liqUpdateSum();
   $id('liq-modal').classList.remove('hidden');
   setTimeout(() => $id('liq-ef').focus(), 50);
+}
+
+/* ── A qué cuenta le transfiere el vendedor (10/9/2026) ──────────────────────
+   Las cuentas llegan pegadas a `dashboardVendedor`, el endpoint que este portal
+   ya pide. Si no llegaron —un Apps Script anterior a hoy— el selector no se
+   dibuja y el pago cae en la cuenta por defecto: el comportamiento de siempre. */
+function _redCtasDigitales() {
+  const cs = (lastDashboardData && lastDashboardData.cuentas) || [];
+  return cs.filter(c => c && c.tipo === 'digital');
+}
+
+/** La default la marca el BACKEND con `def`, no se deriva de "la primera de la
+ *  lista": si dependiera del orden de las filas de la hoja, reordenarla movería
+ *  la historia de una cuenta a otra sin avisar. */
+function _redCtaDefault() {
+  const d = _redCtasDigitales();
+  const def = d.find(c => c.def);
+  return def ? def.id : (d.length ? d[0].id : '');
+}
+
+function _redCtaNombre(id) {
+  const c = _redCtasDigitales().find(x => x.id === id);
+  return c ? (c.nombre || c.id) : '';
+}
+
+/** La cuenta a mandar. Vacía si no hay transferencia —esa columna describe sólo
+ *  la parte digital— y vacía con una sola cuenta, que el backend resuelve al
+ *  default. Mismo criterio que `_ctaDeCobro` y `_ctaDeRendicion` de Ruta. */
+function _redCtaDePago(tr) {
+  if (!(Number(tr) > 0)) return '';
+  if (_redCtasDigitales().length < 2) return '';
+  return (_liqCtx && _liqCtx.cta) || '';
+}
+
+/** Dibuja —o esconde— el selector. Sale sólo si el vendedor puso algo en
+ *  Transferencia Y hay más de una cuenta donde pueda entrar: con una sola no hay
+ *  nada que elegir, y un botón que se contesta siempre igual es fricción. */
+function _redPintarCtas() {
+  const field = $id('liq-cta-field'), box = $id('liq-cta-box');
+  if (!field || !box) return;
+  const dig = _redCtasDigitales();
+  const tr = _parseMonto($id('liq-tr').value);
+  const mostrar = tr > 0 && dig.length > 1;
+  if (mostrar && _liqCtx && !_liqCtx.cta) _liqCtx.cta = _redCtaDefault();
+  // `liqUpdateSum` corre en cada tecla del monto: sin la firma esto reescribiría
+  // el mismo HTML una vez por pulsación.
+  const firma = mostrar ? ('1|' + ((_liqCtx && _liqCtx.cta) || '') + '|' + dig.length) : '0';
+  if (firma === _redCtaPint) return;
+  _redCtaPint = firma;
+  field.style.display = mostrar ? '' : 'none';
+  if (!mostrar) { box.innerHTML = ''; return; }
+  box.innerHTML = dig.map(c => {
+    const on = (_liqCtx && _liqCtx.cta) === c.id;
+    return '<button type="button" class="liq-cta-btn' + (on ? ' on' : '') + '"' +
+           ' data-cta="' + c.id + '" onclick="_redSetCta(\'' + c.id + '\')">' +
+           (c.id === 'mp' ? '📱 ' : '🏦 ') +
+           String(c.nombre || c.id).replace(/[<>&"]/g, '') + '</button>';
+  }).join('');
+}
+
+function _redSetCta(id) {
+  if (!_liqCtx) return;
+  _liqCtx.cta = id;
+  _redPintarCtas();
 }
 
 function liqClose(force) {
@@ -2701,6 +2784,9 @@ function liqUpdateSum() {
   }
   // Permitir registrar cualquier monto > 0 y <= saldo
   $id('liq-confirm').disabled = !(suma > 0 && suma <= saldo);
+  // El selector aparece y desaparece con el monto de transferencia, y este es el
+  // único lugar por el que pasan los dos campos.
+  _redPintarCtas();
 }
 
 function liqConfirm() {
@@ -2711,8 +2797,9 @@ function liqConfirm() {
   if (suma <= 0) { redToast('Ingresá un monto'); return; }
   if (suma > _liqCtx.saldo) { redToast('Excede lo que falta pagar'); return; }
   const ctx = _liqCtx;
+  const cta = _redCtaDePago(tr);
   liqClose(true);
-  registrarPagoParcial(ctx.year, ctx.sem, ef, tr);
+  registrarPagoParcial(ctx.year, ctx.sem, ef, tr, cta);
 }
 
 function renderPagos() {
@@ -2911,7 +2998,7 @@ function renderPagos() {
   cont.innerHTML = html;
 }
 
-function registrarPagoParcial(year, semana, ef, tr) {
+function registrarPagoParcial(year, semana, ef, tr, cuenta) {
   if (!session) return;
   ef = Number(ef) || 0;
   tr = Number(tr) || 0;
@@ -2921,7 +3008,11 @@ function registrarPagoParcial(year, semana, ef, tr) {
       action: 'marcarSemanaPagadaRed',
       vendedor: session.nombre,
       year: year, semana: semana,
-      ef: ef, tr: tr
+      ef: ef, tr: tr,
+      // El backend ya la aceptaba (`_cuentaDigitalValida_`): lo que faltaba era
+      // mandarla. Vacía = la cuenta por defecto, que para las rendiciones
+      // anteriores al 10/9/2026 es la verdad.
+      cuenta: cuenta || ''
     })
   })
     .then(r => r.json())
@@ -2929,7 +3020,10 @@ function registrarPagoParcial(year, semana, ef, tr) {
       if (!d.ok) { redToast('Error: ' + (d.err || 'no se pudo guardar')); return; }
       const parts = [];
       if (ef > 0) parts.push(ars(ef) + ' EF');
-      if (tr > 0) parts.push(ars(tr) + ' TR');
+      // Nombra la cuenta sólo cuando no es la habitual: un pago que entró a otro
+      // lugar y no lo dice es mentir por omisión.
+      const ctaTxt = (cuenta && cuenta !== _redCtaDefault()) ? _redCtaNombre(cuenta) : '';
+      if (tr > 0) parts.push(ars(tr) + ' TR' + (ctaTxt ? ' → ' + ctaTxt : ''));
       const msg = '✓ Pago registrado: ' + parts.join(' + ');
       if (d.semanaCerrada) redToast(msg + ' · semana cerrada 🎉');
       else redToast(msg + ' · falta ' + ars(d.saldoRestante));
