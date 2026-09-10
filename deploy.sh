@@ -136,6 +136,18 @@ else
   echo "    (no se tocaron ruta.html ni busqueda.html)"
 fi
 
+# ── 3g. El bloque de carne de Inicio ─────────────────────────────────────────
+#  Ese cartel decide si Tadeo llama a Lucas un martes. Hasta el 10/9/2026
+#  afirmaba "el pedido ya tendria que estar hecho" mirando SOLO el dia de la
+#  semana, con la ultima compra cargada de hace 16 dias. Corre la funcion real
+#  con el reloj congelado, asi el resultado no depende del dia del deploy.
+echo "→ [3g/8] Bloque de carne de Inicio…"
+if echo "$HTMLS" | grep -qE "panel.src.html|app.html"; then
+  node _tools/probar-carne-repo.js | sed 's/^/    /' || fallar "El bloque de carne no dice la verdad sobre la reposicion — corre: npm run carne"
+else
+  echo "    (no se toco el panel)"
+fi
+
 # ── 4. Service worker al dia ─────────────────────────────────────────────────
 #  Si cambio el HTML de una PWA, su CACHE_NAME tiene que cambiar tambien, o el
 #  celular que ya tiene ese nombre cacheado no invalida nada.

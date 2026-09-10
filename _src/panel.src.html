@@ -9997,6 +9997,10 @@ function _semprepDemanda(){
       });
     });
     SEMPREP_DEM=map; SEMPREP_PROV=prov1; SEMPREP_UNI=uni;
+    /* Cuando fue la ultima compra del proveedor de carne, y de cuando es el
+       stock de cada deposito. Sin esto el bloque afirmaba "el pedido ya tendria
+       que estar hecho" mirando solo el dia de la semana. */
+    SEMPREP_REPO=(d&&d.repo)||{}; SEMPREP_DEPTS=(d&&d.depTs)||{};
     try{rSemanaPrep();}catch(e){console.error('rSemanaPrep/dem',e);}
   },{valido:function(d){return !!(d&&d.productos&&Object.keys(d.productos).length);}})
    .catch(function(e){console.error('catalogo/demanda',e);});
@@ -10011,7 +10015,20 @@ function _semprepEsc(s){
     return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});
 }
 /* "quedan 2" se lee más rápido que "stock: 2". */
-var SEMPREP_PROV={}, SEMPREP_UNI={};
+var SEMPREP_PROV={}, SEMPREP_UNI={}, SEMPREP_REPO={}, SEMPREP_DEPTS={};
+
+/* Una fecha 'aaaa-mm-dd' a "hoy" / "ayer" / "hace 16 días".
+   Se arma por COMPONENTES: `new Date("2026-09-10")` se interpreta UTC y en
+   Argentina devuelve el día anterior. */
+function _semprepHace(iso){
+  var p=String(iso||'').split('-');
+  if(p.length!==3)return null;
+  var d=new Date(+p[0],+p[1]-1,+p[2]);
+  if(isNaN(d.getTime()))return null;
+  var h=new Date(), hoy=new Date(h.getFullYear(),h.getMonth(),h.getDate());
+  var n=Math.round((hoy-d)/86400000);
+  return {dias:n, txt:n<=0?'hoy':(n===1?'ayer':'hace '+n+' días')};
+}
 
 /* ══ Proveedores con calendario propio (9/9/2026) ══
    Maleu cierra su orden de compra el jueves 12:00. La carne NO entra ahi: Lucas
@@ -10022,7 +10039,8 @@ var SEMPREP_PROV={}, SEMPREP_UNI={};
    Vive aca y no en Config_Maleu porque hoy es un solo proveedor y el dato no
    existe en ninguna planilla. Si aparece un segundo, es el momento de sacarlo. */
 var SEMPREP_OTRO_PROV={
-  'Maleu Carnes':{dia:2, quien:'Lucas', llegaDia:4, vidaSem:2}
+  'Maleu Carnes':{dia:2, quien:'Lucas', llegaDia:4, vidaSem:2,
+                  repoKey:'carne', dep:'moresco'}
 };
 
 /* El proximo <dia> de la semana (0 dom … 6 sab) desde `ahora`. Si hoy ES ese
@@ -10032,6 +10050,20 @@ function _proxDiaSem(ahora,dia){
   var d=new Date(ahora.getFullYear(),ahora.getMonth(),ahora.getDate());
   d.setDate(d.getDate()+((dia-d.getDay()+7)%7));
   return d;
+}
+/* El ULTIMO <dia> de la semana: hoy si es ese día, si no el mas reciente hacia
+   atras. Es contra el que se mide si el pedido de esta semana ya se cargo. */
+function _semprepUltDiaPedido(ahora,dia){
+  var d=new Date(ahora.getFullYear(),ahora.getMonth(),ahora.getDate());
+  d.setDate(d.getDate()-((d.getDay()-dia+7)%7));
+  return d;
+}
+function _semprep2(n){ return (n<10?'0':'')+n; }
+/* 'aaaa-mm-dd' → "25/8". Por componentes, nunca `new Date(iso)`: eso se
+   interpreta UTC y en Argentina devuelve el dia anterior. */
+function _semprepDMY(iso){
+  var p=String(iso||'').split('-');
+  return p.length===3?(Number(p[2])+'/'+Number(p[1])):'';
 }
 
 /* Un numero con su unidad. Los kilos van con coma y al gramo: "5,61 kg" —
@@ -10079,17 +10111,62 @@ function _semprepOtrosProv(otros,ahora){
     var DIAS=['domingo','lunes','martes','miércoles','jueves','viernes','sábado'];
     var hoyD=ahora.getDay(), prox=_proxDiaSem(ahora,cfg.dia);
     var cuando=DIAS[cfg.dia]+' '+prox.getDate()+'/'+(prox.getMonth()+1);
+
+    /* ¿El pedido de esta semana está CARGADO? Hasta el 10/9/2026 el cartel lo
+       afirmaba mirando sólo el día de la semana: ese jueves decía "ya tendría
+       que estar hecho" con la última compra cargada del 25/8, hace 16 días.
+       Un aviso que afirma algo sin mirar el dato tapa justo lo que tiene que
+       mostrar — es la misma regla del cartel falso de "OC sin generar". */
+    var rep=(SEMPREP_REPO||{})[cfg.repoKey]||{};
+    var ultPed=_semprepUltDiaPedido(ahora,cfg.dia);
+    var isoPed=ultPed.getFullYear()+'-'+_semprep2(ultPed.getMonth()+1)+'-'+_semprep2(ultPed.getDate());
+    var hayCompra=!!(rep.ultCompra&&rep.ultCompra>=isoPed);
+    var hc=_semprepHace(rep.ultCompra);
+    /* Sin dato no se concluye nada: si la planilla de Lucas no se pudo leer, el
+       cartel se comporta como antes en vez de inventar una alarma. */
+    var sinDato=!rep.ultCompra;
+
     var msg, urg=false;
     if(hoyD===cfg.dia){
       msg='<b>Hoy</b> es el día de pedido — le llega el '+DIAS[cfg.llegaDia];
       urg=true;
     }else if(hoyD>cfg.dia&&hoyD<=cfg.llegaDia){
-      /* Entre el pedido y la llegada, un freezer bajo es NORMAL: la reposicion
-         viene en camino. Alarmar aca seria alarmar todas las semanas. */
-      msg='El pedido de esta semana ya tendría que estar hecho — la mercadería '
-         +(hoyD===cfg.llegaDia?'llega <b>hoy</b>':'llega el <b>'+DIAS[cfg.llegaDia]+'</b>');
+      if(sinDato||hayCompra){
+        /* Entre el pedido y la llegada, un freezer bajo es NORMAL: la reposicion
+           viene en camino. Alarmar aca seria alarmar todas las semanas. */
+        msg='El pedido de esta semana ya está cargado'+(hc?' ('+hc.txt+')':'')
+           +' — la mercadería '
+           +(hoyD===cfg.llegaDia?'llega <b>hoy</b>':'llega el <b>'+DIAS[cfg.llegaDia]+'</b>');
+      }else{
+        /* El caso que el cartel viejo tapaba. NO dice cuál de las dos es: el ERP
+           no puede saber si Lucas repuso y no lo cargó, o si no repuso. */
+        urg=true;
+        msg='⚠️ <b>No hay ninguna compra cargada esta semana</b> — la última es '
+           +'del '+_semprepDMY(rep.ultCompra)+(hc?', '+hc.txt:'')+'. '
+           +'Si repuso, falta cargarla; si no repuso, hoy no llega nada.';
+      }
     }else{
       msg='El próximo pedido es el <b>'+cuando+'</b> — le llega el '+DIAS[cfg.llegaDia];
+      if(!sinDato&&!hayCompra&&hc&&hc.dias>cfg.vidaSem*7){
+        urg=true;
+        msg+='. ⚠️ La última compra cargada es del <b>'+_semprepDMY(rep.ultCompra)
+            +'</b>, '+hc.txt;
+      }
+    }
+
+    /* De cuándo es el número del freezer. Para el Depósito Moresco es LA
+       pregunta: sus ventas se cargan en la planilla de Lucas, así que este
+       stock sólo cambia cuando alguien lo cuenta. */
+    var dts=_semprepHace((SEMPREP_DEPTS||{})[cfg.dep]);
+    var selloTxt='';
+    if(dts){
+      selloTxt=' Contado <b>'+dts.txt+'</b>';
+      // Si Lucas cargó ventas DESPUÉS del conteo, este número ya no vale.
+      if(rep.ultVenta&&(SEMPREP_DEPTS||{})[cfg.dep]&&rep.ultVenta>(SEMPREP_DEPTS||{})[cfg.dep]){
+        selloTxt+=' — pero '+_semprepEsc(cfg.quien)+' cargó ventas después, así que '
+                 +'ya vendió parte de esto';
+      }
+      selloTxt+='.';
     }
 
     var det;
@@ -10113,8 +10190,11 @@ function _semprepOtrosProv(otros,ahora){
           ? cortos.length+(cortos.length===1?' corte no llega':' cortes no llegan')+' a la próxima reposición'
           : 'El freezer de '+_semprepEsc(cfg.quien)+' está cubierto')+'</div>'
       +'<div class="semprep-d">'+det+'</div></div></div>'
-      +'<div class="semprep-pie">'+msg+'. Dura hasta '+cfg.vidaSem+' semanas en el freezer, '
-      +'así que no conviene pedir de más.</div>'
+      /* El punto sólo si el mensaje no lo trae: el aviso de la compra faltante
+         termina en punto y quedaba un ".." a la vista. */
+      +'<div class="semprep-pie">'+msg+(/[.!?]$/.test(msg)?'':'.')+selloTxt
+      +' Dura hasta '+cfg.vidaSem
+      +' semanas en el freezer, así que no conviene pedir de más.</div>'
       +'</div>';
   });
   return out;
