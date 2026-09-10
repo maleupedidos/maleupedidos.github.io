@@ -813,6 +813,15 @@ select.np-input{background:var(--white) url("data:image/svg+xml;utf8,<svg xmlns=
       </div>
     </div>
 
+    <!-- A que cuenta entro la parte digital. Se muestra solo si hay algo
+         digital que cobrar Y hay mas de una cuenta donde pueda entrar: con una
+         sola no hay nada que elegir, y un boton que se contesta siempre igual
+         es friccion sin dato. -->
+    <div class="cobro-ruta-section" id="cobroCtaSection" style="display:none">
+      <label class="cobro-ruta-lbl">¿A qué cuenta entró?</label>
+      <div class="cobro-ruta-pills" id="cobroRutaCta"></div>
+    </div>
+
     <div class="cobro-ruta-section">
       <label class="cobro-ruta-lbl">¿Cuánto recibiste?</label>
       <div class="cobro-ruta-grid">
@@ -1501,7 +1510,7 @@ function refresh(silent,fresh){
   var btn=document.getElementById('btnRefresh');btn.classList.add('spinning');
   var url=RUT_APPS_SCRIPT_URL+'?action=entregas&t='+Date.now()+(fresh?'&fresh=1':'');
   return fetch(url).then(function(r){return r.json()}).then(function(data){
-    btn.classList.remove('spinning');var se=_sanearEntregas(data.e||[]);var prev=getPendientes().length;entregas=se;
+    btn.classList.remove('spinning');_ctasDe(data);var se=_sanearEntregas(data.e||[]);var prev=getPendientes().length;entregas=se;
     var sk={};entregas.forEach(function(e){sk[eKey(e)]=true});
     Object.keys(entregados).forEach(function(k){if(!sk[k])delete entregados[k]});
     Object.keys(cobrados).forEach(function(k){if(!sk[k])delete cobrados[k]});
@@ -1793,6 +1802,45 @@ function getHoySinArmar(){return getHoyPendientes().filter(function(e){
    Desde que hay dos depositos —Ustariz y Moresco— armar un pedido puede requerir
    mercaderia que NO esta en tu freezer. Sin decirlo, moverle stock a Lucas la
    vuelve invisible justo cuando la vas a buscar. */
+/* Las cuentas de cobro. Llegan pegadas a `cobrosPendientes` y a `entregas`
+   —los dos endpoints que esta sub-app ya pide— y se guardan en localStorage
+   para que el cuadro las tenga desde el primer toque, sin esperar un fetch.
+   Si nunca llegaron, el selector no se dibuja y el cobro cae en la cuenta por
+   defecto: el comportamiento anterior al 10/9/2026. */
+var RUT_CTAS = (function(){
+  try { return JSON.parse(localStorage.getItem('maleu_ruta_ctas') || 'null'); }
+  catch(e){ return null; }
+})();
+
+/** Guarda las cuentas si la respuesta las trajo. Un backend viejo no las manda,
+ *  y en ese caso hay que dejar las que ya estaban en vez de vaciar la lista. */
+function _ctasDe(d){
+  if(!d || !Array.isArray(d.cuentas) || !d.cuentas.length) return;
+  RUT_CTAS = d.cuentas;
+  try { localStorage.setItem('maleu_ruta_ctas', JSON.stringify(RUT_CTAS)); } catch(e){}
+}
+
+/** Las cuentas donde puede entrar una transferencia. El efectivo no cuenta:
+ *  ese no tiene a donde elegir. */
+function _ctasDigitales(){
+  return (RUT_CTAS || []).filter(function(c){ return c && c.tipo === 'digital'; });
+}
+
+/** La cuenta por defecto la marca el BACKEND con `def`. No se deriva de "la
+ *  primera de la lista": si dependiera del orden de las filas de la hoja,
+ *  reordenarla movería toda la historia de una cuenta a otra sin avisar. */
+function _ctaDefault(){
+  var d = _ctasDigitales();
+  for(var i=0;i<d.length;i++) if(d[i].def) return d[i].id;
+  return d.length ? d[0].id : '';
+}
+
+function _ctaNombre(id){
+  var d = _ctasDigitales();
+  for(var i=0;i<d.length;i++) if(d[i].id === id) return d[i].nombre || d[i].id;
+  return '';
+}
+
 var RUT_DEP = null, RUT_DEP_TS = 0;
 
 function rutDepPedir(force){
@@ -3134,6 +3182,7 @@ function fetchCobrosPendientes(fresh){
       if(!data||data.ok===false||!Array.isArray(data.cobros)){
         throw new Error((data&&(data.err||data.error))||'respuesta sin cobros');
       }
+      _ctasDe(data);
       if(typeof data.billetera==='number')_billeteraRuta=data.billetera; // fondo de cambio para el cuadro de Cobros
       /* Solo si vino el campo: un backend viejo no lo manda, y en ese caso hay
          que dejar lo que ya estaba en vez de vaciar la banda. */
@@ -3206,7 +3255,7 @@ function abrirCobroComboCobros(idxsCsv){
   // detalle de productos ni el cartel de 10% de un solo pedido (el total ya viene sumado).
   _renderCobroProds(null);
   _renderCobroDescInfo();
-  document.getElementById('cobroRutaOverlay').classList.remove('hidden');
+  _mostrarCuadroCobro();
   _recalcCobroRuta();
   _refrescarBilleteraRuta();
   // Traer saldo a favor previo del cliente (mismo cliente en todos los pedidos del combo)
@@ -3247,7 +3296,7 @@ function abrirCobroPendiente(idx){
   _setMoneyInput('cobroRecMP',_autoCargaMP(fp,total));
   _resetCobroSeccionesColapsables();
   _refrescarPreciosSilencioso();
-  document.getElementById('cobroRutaOverlay').classList.remove('hidden');
+  _mostrarCuadroCobro();
   _renderCobroProds(pc.p);
   _renderCobroDescInfo();
   _recalcCobroRuta();
@@ -4105,7 +4154,7 @@ function abrirCobroRuta(key){
     _setMoneyInput('cobroRecMP',_autoCargaMP(fp,totalC));
     _resetCobroSeccionesColapsables();
   _refrescarPreciosSilencioso();
-    document.getElementById('cobroRutaOverlay').classList.remove('hidden');
+    _mostrarCuadroCobro();
     var _mc={};peds.forEach(function(pp){(pp.p||[]).forEach(function(x){_mc[x.a]=(_mc[x.a]||0)+x.q;});});
     _renderCobroProds(Object.keys(_mc).map(function(a){return {a:a,q:_mc[a]};}));
     _renderCobroDescInfo();
@@ -4133,7 +4182,7 @@ function abrirCobroRuta(key){
   _setMoneyInput('cobroRecMP',_autoCargaMP(fp,total));
   _resetCobroSeccionesColapsables();
   _refrescarPreciosSilencioso();
-  document.getElementById('cobroRutaOverlay').classList.remove('hidden');
+  _mostrarCuadroCobro();
   _renderCobroProds(ent.p);
   _renderCobroDescInfo();
   _recalcCobroRuta();
@@ -4147,11 +4196,71 @@ function cerrarCobroRuta(){
   _cobroRutaState=null;
 }
 
+/** Dibuja —o esconde— el selector de cuenta segun el metodo elegido.
+ *
+ *  Se llama al abrir el cuadro y en cada cambio de metodo. Esta acotado a
+ *  `#cobroRutaCta`: `_setCobroFp` recorre `#cobroRutaFp .cobro-pill`, asi que
+ *  los dos grupos de pills no se pisan aunque compartan la clase.
+ */
+/** La cuenta a mandar en el payload.
+ *
+ *  Vacia si el cobro no tiene parte digital: esa columna describe unicamente a
+ *  donde fue la transferencia, y llenarla en un cobro en efectivo imputaria
+ *  plata a una cuenta que no recibio nada.
+ *
+ *  Con una sola cuenta digital tambien va vacia, y es lo correcto: el backend
+ *  la resuelve al default, que es esa misma. Escribir el id igual dejaria la
+ *  columna llena de un dato que nadie eligio.
+ */
+function _ctaDeCobro(st, fpFinal){
+  if(fpFinal==='Efectivo')return '';
+  if(_ctasDigitales().length<2)return '';
+  return (st && st.cta) || '';
+}
+
+function _pintarCobroCtas(){
+  var sec=document.getElementById('cobroCtaSection');
+  var box=document.getElementById('cobroRutaCta');
+  if(!sec||!box)return;
+  var st=_cobroRutaState;
+  var dig=_ctasDigitales();
+  /* Con una sola cuenta digital no hay nada que preguntar, y en un cobro que
+     es todo efectivo tampoco: esa columna describe solo la parte digital. */
+  var mostrar = !!st && (st.fp==='Transferencia'||st.fp==='Mixto') && dig.length>1;
+  sec.style.display = mostrar ? '' : 'none';
+  if(!mostrar){ box.innerHTML=''; return; }
+  if(!st.cta) st.cta=_ctaDefault();
+  var h='';
+  dig.forEach(function(c){
+    h+='<button type="button" class="cobro-pill'+(st.cta===c.id?' on':'')+
+       '" data-cta="'+c.id+'" onclick="_setCobroCta(\''+c.id+'\')">'+
+       (c.id==='mp'?'📱 ':'🏦 ')+String(c.nombre||c.id).replace(/[<>&"]/g,'')+'</button>';
+  });
+  box.innerHTML=h;
+}
+
+function _setCobroCta(id){
+  if(!_cobroRutaState)return;
+  _cobroRutaState.cta=id;
+  document.querySelectorAll('#cobroRutaCta .cobro-pill').forEach(function(p){
+    p.classList.toggle('on',p.getAttribute('data-cta')===id);
+  });
+}
+
+/** Abre el cuadro. Los cuatro caminos pasan por aca para que el selector de
+ *  cuenta no dependa de que cada uno se acuerde de pintarlo. */
+function _mostrarCuadroCobro(){
+  var ov=document.getElementById('cobroRutaOverlay');
+  if(ov)ov.classList.remove('hidden');
+  _pintarCobroCtas();
+}
+
 function _setCobroFp(fp){
   if(!_cobroRutaState)return;
   var st=_cobroRutaState;
   st.fp=fp;
   document.querySelectorAll('#cobroRutaFp .cobro-pill').forEach(function(p){p.classList.toggle('on',p.getAttribute('data-fp')===fp)});
+  _pintarCobroCtas();
   // Recalcular total. Combo: respeta el descuento del combo (noDisc / % / propio).
   // "Al costo" NO depende de la forma de pago (no le aplica el 10% OFF), así que
   // se conserva tal cual — si no, cambiar de Efectivo a MP lo borraba en silencio.
@@ -4882,6 +4991,7 @@ function confirmarCobroRuta(){
     action:'marcarCobrado',
     hoja:ent.h,id:String(ent.id),row:ent.r,
     formaPago:fpFinal,
+    cuenta:_ctaDeCobro(st,fpFinal),
     ef:ef,tr:tr,
     propina:prop,propMet:propMet,
     aFavor:aFav,
@@ -5019,6 +5129,7 @@ function _confirmarCobroComboRuta(st,r){
       action:'marcarCobrado',
       hoja:p.h,id:String(p.id),row:p.r,
       formaPago:fpComboFinal,
+      cuenta:_ctaDeCobro(st,fpComboFinal),
       ef:efP,tr:trP,
       propina:propP,propMet:propMet,
       aFavor:aFavP,
@@ -5133,7 +5244,7 @@ function _confirmarCobroPendiente(st,r){
     var monto=Math.round(r.neto);
     if(monto<=0)return;
     var fpPar=(fp==='Mixto')?(r.recMP>=r.recEf?'Transferencia':'Efectivo'):fp;
-    var payloadPar={action:'cobrarParcial',hoja:pc.h,id:String(pc.id),row:pc.r||0,formaPago:fpPar,monto:monto,notas:'Parcial desde Ruta/COBROS',ts:Date.now()};
+    var payloadPar={action:'cobrarParcial',hoja:pc.h,id:String(pc.id),row:pc.r||0,formaPago:fpPar,cuenta:_ctaDeCobro(st,fpPar),monto:monto,notas:'Parcial desde Ruta/COBROS',ts:Date.now()};
     cerrarCobroRuta();
     _commitCobroParcialModal(payloadPar,pc);
     return;
@@ -5166,7 +5277,7 @@ function _confirmarCobroPendiente(st,r){
   var recalcular=(Number(st.total)||0)!==(Number(st.totalOriginal)||0);
 
   var payload={action:'marcarCobrado',hoja:pc.h,id:String(pc.id),row:pc.r||0,
-    formaPago:fpFinal,ef:ef,tr:tr,propina:propina,propMet:propMet,
+    formaPago:fpFinal,cuenta:_ctaDeCobro(st,fpFinal),ef:ef,tr:tr,propina:propina,propMet:propMet,
     aFavor:aFavorPos,aplicacion:aplicacionPos,cliente:pc.c||'',
     repartidor:_rutaUser(),ts:Date.now()};
   if(recalcular)payload.recalcular=true;
@@ -5274,7 +5385,12 @@ function _commitCobroPendiente(payload,saldoPayload,pc){
         if(_settled)return;_settled=true;clearTimeout(_hardTimer);clearTimeout(_guard);
         rutHideLoader(true);
         if(res&&res.ok){
-          showToast(res.already?('✓ Ya estaba cobrado '+((pc.c||'').split(' ')[0])):('✓ Cobrado a '+((pc.c||'').split(' ')[0])));
+          /* Nombrar la cuenta cuando de verdad se eligio una: un cobro que
+             entra a un lugar distinto del habitual y no lo dice es la misma
+             mentira por omision que una copia guardada sin fecha. */
+          var _nCta=_ctaNombre(payload.cuenta||'');
+          var _sufCta=(_nCta&&payload.cuenta!==_ctaDefault())?(' · '+_nCta):'';
+          showToast(res.already?('✓ Ya estaba cobrado '+((pc.c||'').split(' ')[0])):('✓ Cobrado a '+((pc.c||'').split(' ')[0])+_sufCta));
           if(navigator.vibrate)navigator.vibrate(30);
           if(saldoPayload){syncQueue.push(saldoPayload);saveLocal();setTimeout(processSyncQueue,500);}
           if(rutCurrentTab==='cobros')fetchCobrosPendientes(true);
