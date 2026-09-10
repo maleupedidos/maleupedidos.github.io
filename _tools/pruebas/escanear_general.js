@@ -124,6 +124,14 @@ const MEDIR = `(function(){
   console.log('     errores: ' + ((err || []).length ? '\n       ' + [...new Set(err)].slice(0, 8).join('\n       ') : 'ninguno'));
   console.log('     avisos:  ' + ((warn || []).length ? '\n       ' + [...new Set(warn)].slice(0, 6).join('\n       ') : 'ninguno'));
 
-  require('fs').writeFileSync(__dirname + '/escaneo_' + ANCHO + '.json', JSON.stringify(res, null, 1));
+  /* FUERA DEL REPO, a proposito. Esto captura el texto de cada pantalla con los
+     datos REALES —nombres de clientes, montos de caja, direcciones— y este repo
+     es PUBLICO por Pages. El 10/9/2026 una corrida dejo `escaneo_390.json`
+     versionado con 7 nombres de clientes adentro y se pusheo; hubo que
+     reescribir el commit. Escribirlo en __dirname era el defecto de raiz.
+     El .gitignore lo cubre igual, como red. */
+  const salida = require('path').join(require('os').tmpdir(), 'maleu-escaneo-' + ANCHO + '.json');
+  require('fs').writeFileSync(salida, JSON.stringify(res, null, 1));
+  console.log('\n  detalle completo: ' + salida);
   cli.matar(); process.exit(0);
 })();
