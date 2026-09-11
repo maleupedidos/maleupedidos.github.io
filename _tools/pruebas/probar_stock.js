@@ -217,15 +217,44 @@ function chk(cond, txt, extra) {
     const inp = document.getElementById('stcarPeso');
     if (inp) { inp.value = '2,5'; window.stCarneAgregar(); await new Promise(r => setTimeout(r, 300)); }
     window.__confirmDevuelve = true;
+    /* Desde el 11/9/2026 la tanda pregunta a que deposito entra, y sin elegirlo
+       NO se guarda: cualquier producto puede estar en cualquiera de los dos. */
+    const info = {};
+    const depbs = [...document.querySelectorAll('#stCarne .stcar-depb')];
+    info.nDeps = depbs.length;
+    info.depAlto = depbs.length ? Math.min(...depbs.map(b => Math.round(b.getBoundingClientRect().height))) : 0;
+    info.depOnAntes = document.querySelectorAll('#stCarne .stcar-depb.on').length;
+    const b0 = document.getElementById('stcarGuardar');
+    info.sinDepDisabled = !!(b0 && b0.disabled);
+    info.sinDepTxt = b0 ? b0.textContent.trim() : '';
+    if (b0) { b0.disabled = false; b0.click(); await new Promise(r => setTimeout(r, 600)); }
+    info.postsSinDep = (window.__posts || []).length;
+    // elegir Ustariz
+    const ust = [...document.querySelectorAll('#stCarne .stcar-depb')].find(b => /ustariz/i.test(b.textContent));
+    info.hayUst = !!ust;
+    if (ust) { ust.click(); await new Promise(r => setTimeout(r, 300)); }
+    info.depOn = [...document.querySelectorAll('#stCarne .stcar-depb.on')].map(b => b.textContent.trim());
     const btn = document.getElementById('stcarGuardar');
-    const info = { hayBoton: !!btn, txtBoton: btn ? btn.textContent.trim().slice(0, 40) : '',
-                   altoBoton: btn ? Math.round(btn.getBoundingClientRect().height) : 0 };
+    info.hayBoton = !!btn; info.txtBoton = btn ? btn.textContent.trim().slice(0, 80) : '';
+    info.altoBoton = btn ? Math.round(btn.getBoundingClientRect().height) : 0;
+    info.conDepDisabled = !!(btn && btn.disabled);
     if (btn) { btn.click(); await new Promise(r => setTimeout(r, 1500)); }
+    info.depOnDespues = document.querySelectorAll('#stCarne .stcar-depb.on').length;
+    info.grupos = [...document.querySelectorAll('#stCarne .stcar-depgrp')].map(g => g.textContent.trim());
     /* __posts guarda el body YA parseado. Volver a parsearlo daba
        {crudo:"undefined"} y 1 rojo que era del test, no del ERP. */
     info.posts = window.__posts || [];
     return info;
   })()`);
+  chk(pay.nDeps >= 2, 'pregunta a que deposito entra (un boton por deposito)', String(pay.nDeps));
+  chk(pay.depAlto >= 44, 'los botones del deposito se tocan con el dedo (' + pay.depAlto + 'px)');
+  chk(pay.depOnAntes === 0, 'arranca SIN deposito elegido (no se hereda de nada)', String(pay.depOnAntes));
+  chk(pay.sinDepDisabled, 'sin deposito, el boton de guardar esta apagado', pay.sinDepTxt);
+  chk(/eleg/i.test(pay.sinDepTxt), 'y dice que falta elegirlo', pay.sinDepTxt);
+  chk(pay.postsSinDep === 0, 'aunque se fuerce el toque, sin deposito NO manda nada', String(pay.postsSinDep));
+  chk(pay.hayUst && pay.depOn.length === 1, 'se elige Ustariz', JSON.stringify(pay.depOn));
+  chk(!pay.conDepDisabled, 'con deposito elegido, el boton se prende');
+  chk(/ustariz/i.test(pay.txtBoton), 'el boton dice a que deposito van', pay.txtBoton);
   chk(pay.hayBoton, 'hay boton de guardar', pay.txtBoton);
   chk(pay.altoBoton >= PISO, 'el boton de guardar se puede tocar (' + pay.altoBoton + 'px)');
   const post = (pay.posts || []).find(p => p.action === 'piezasRecibir');
@@ -236,10 +265,14 @@ function chk(cond, txt, extra) {
     chk(post.piezas.every(p => p.abbr && p.peso > 0), 'cada pieza va con su corte y su peso',
       JSON.stringify(post.piezas));
     chk(post.proveedor === 'Caco', 'manda el proveedor que se escribio', String(post.proveedor));
-    chk(!post.deposito, 'NO manda deposito: entra al de cada producto',
+    chk(post.deposito === 'ustariz', 'manda el deposito ELEGIDO (ustariz)',
       'manda ' + JSON.stringify(post.deposito));
     chk(!!post.token, 'manda el token de sesion');
   }
+  chk(pay.depOnDespues === 0, 'despues de guardar, la proxima tanda se vuelve a elegir',
+    String(pay.depOnDespues));
+  chk(pay.grupos.length >= 1 && pay.grupos.every(g => /^En /.test(g)),
+    'lo que ya hay se lista POR DEPOSITO', JSON.stringify(pay.grupos));
 
   console.log('\n=== Volver a Stock con el volcado YA cargado (el caso de todos los dias) ===');
   const otra = await evaluar(cli, `(async () => {

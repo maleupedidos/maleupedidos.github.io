@@ -566,6 +566,15 @@ body{font-family:'Inter',-apple-system,'Segoe UI',system-ui,sans-serif;backgroun
   background:var(--g);color:#fff;font-size:16px;font-weight:800;cursor:pointer;font-family:inherit}
 .stcar-guardar:disabled{opacity:.4;cursor:default}
 .stcar-vacio{font-size:12px;color:var(--ink3);padding:14px;text-align:center;font-style:italic}
+.stcar-dep{margin:12px 0 4px}
+.stcar-dep-l{font-size:12px;font-weight:800;color:var(--ink2);margin-bottom:6px}
+.stcar-dep-bs{display:grid;gap:8px}
+.stcar-depb{min-height:48px;border-radius:12px;border:1.5px solid var(--border);background:#fff;
+  font-family:inherit;font-size:14px;font-weight:800;color:var(--ink2);cursor:pointer;padding:0 10px}
+.stcar-depb.on{border-color:var(--o);background:var(--ol);color:var(--b)}
+.stcar-dep.falta .stcar-depb{border-color:#F4B183}
+.stcar-dep.falta .stcar-dep-l{color:#C2410C}
+.stcar-depgrp{font-size:11.5px;font-weight:800;color:var(--ink3);margin:10px 0 2px}
 
 /* ── TENDENCIA ── */
 .vt-toolbar{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin-bottom:12px}
@@ -2706,7 +2715,7 @@ body.role-single .statusbar{font-size:11px}
      38px es el piso; los que ya tienen 44 no se mueven. Se excluye lo que esta
      fuera del flujo (barras fijas, cajones) para no desarmar sus alturas. */
 
-  .pg button:not(.hdr-refresh):not(.bn):not(.v-filtros-btn):not(.semprep-btn):not(.tend-base-btn):not(.pes-btn):not(.stcar-corte):not(.stcar-add):not(.stcar-guardar):not(.liq-cta-btn):not([class*="cerrar"]):not([class*="close"]){
+  .pg button:not(.hdr-refresh):not(.bn):not(.v-filtros-btn):not(.semprep-btn):not(.tend-base-btn):not(.pes-btn):not(.stcar-corte):not(.stcar-add):not(.stcar-guardar):not(.stcar-depb):not(.liq-cta-btn):not([class*="cerrar"]):not([class*="close"]){
     min-height:38px;
   }
   /* Los <select> quedaban afuera de la regla de arriba: los filtros de semana y
@@ -12941,6 +12950,11 @@ function stContarBlur(abbr,inp){
    serian minuto y medio de espera repartidos en medio del trabajo. Y si se cierra
    la app a mitad de pesar, lo pesado sigue ahi. */
 var CARNE_DATA=null, CARNE_COLA=[], CARNE_CORTE='', CARNE_PROV='', CARNE_GUARDANDO=false;
+/* El deposito al que entra la tanda. Se elige EN CADA TANDA y no se guarda:
+   cualquier producto puede estar en cualquiera de los dos freezers (Tadeo,
+   11/9/2026), y un deposito que se hereda de la tanda anterior —o de otra
+   pantalla— es la forma callada de anotar la carne en el freezer equivocado. */
+var CARNE_DEP='';
 var CARNE_COLA_KEY='mc_carneCola', CARNE_PROV_KEY='mc_carneProv';
 
 function _carneColaLeer(){
@@ -13026,12 +13040,26 @@ function renderStCarne(){
   var h='';
 
   h+='<div class="stcar-ayuda">Las piezas vienen envasadas y <b>cada una pesa distinto</b>. '
-    +'Pesalas de a una: eleg&iacute; el corte, escrib&iacute; lo que marca la balanza y toc&aacute; Enter. '
-    +'Entran a <b>'+stEsc(depNom)+'</b>.</div>';
+    +'Pesalas de a una: eleg&iacute; el corte, escrib&iacute; lo que marca la balanza y toc&aacute; Enter.</div>';
 
   h+='<div class="stcar-prov"><label for="stcarProv">Proveedor</label>'
     +'<input id="stcarProv" type="text" placeholder="Caco" value="'+stEsc(CARNE_PROV)+'" '
     +'onchange="stCarneProv(this.value)"></div>';
+
+  /* ¿A que deposito entra? Con un solo deposito no hay nada que preguntar. */
+  var dps=stCarneDepsTodos();
+  if(dps.length===1)CARNE_DEP=dps[0].id;
+  if(dps.length>1){
+    var falta=!CARNE_DEP&&CARNE_COLA.length>0;
+    h+='<div class="stcar-dep'+(falta?' falta':'')+'"><div class="stcar-dep-l">'
+      +(falta?'Eleg&iacute; a qu&eacute; dep&oacute;sito entra esta tanda':'&iquest;A qu&eacute; dep&oacute;sito entra esta tanda?')
+      +'</div><div class="stcar-dep-bs" style="grid-template-columns:repeat('+dps.length+',minmax(0,1fr))">';
+    for(var dq=0;dq<dps.length;dq++){
+      h+='<button class="stcar-depb'+(CARNE_DEP===dps[dq].id?' on':'')+'" onclick="stCarneDep(\''+stEsc(dps[dq].id)+'\')">'
+        +stEsc(dps[dq].nombre||dps[dq].id)+'</button>';
+    }
+    h+='</div></div>';
+  }
 
   // ── Los cortes ──
   h+='<div class="stcar-cortes">';
@@ -13075,24 +13103,38 @@ function renderStCarne(){
         +'<div class="stcar-n" style="text-align:right">'+mias.length+' pz<span class="stcar-sub">'
         +stFmt(kg,'kg')+' kg</span></div></div>';
     }
-    h+='<button class="stcar-guardar" id="stcarGuardar" onclick="stCarneGuardar()">'
-      +'Guardar las '+CARNE_COLA.length+' pieza'+(CARNE_COLA.length===1?'':'s')
-      +' &middot; '+stFmt(totKg,'kg')+' kg</button>';
+    var sinDep=(dps.length>1&&!CARNE_DEP);
+    h+='<button class="stcar-guardar" id="stcarGuardar" onclick="stCarneGuardar()"'+(sinDep?' disabled':'')+'>'
+      +(sinDep
+        ? 'Eleg&iacute; arriba a qu&eacute; dep&oacute;sito entra'
+        : 'Guardar las '+CARNE_COLA.length+' pieza'+(CARNE_COLA.length===1?'':'s')
+          +' &middot; '+stFmt(totKg,'kg')+' kg en '+stEsc(stCarneDepNom(CARNE_DEP)))
+      +'</button>';
   }
 
-  // ── Lo que ya esta cargado en el freezer ──
-  h+='<div class="stcar-tit">Lo que ya hay en '+stEsc(depNom)+'</div>';
+  // ── Lo que ya esta cargado en el freezer, POR DEPOSITO ──
+  /* Cada pieza dice en que deposito esta. Con carne en los dos, una sola lista
+     titulada con un deposito mentiria sobre el otro. */
+  h+='<div class="stcar-tit">Lo que ya hay en el freezer</div>';
   var hayAlgo=false;
-  for(var s=0;s<cortes.length;s++){
+  var grupos=[];
+  for(var gq=0;gq<dps.length;gq++)grupos.push({id:dps[gq].id,nombre:dps[gq].nombre||dps[gq].id});
+  grupos.push({id:'',nombre:'Sin dep\u00f3sito anotado'});
+  for(var gi=0;gi<grupos.length;gi++){
+   var gr=grupos[gi], cabecera=false;
+   for(var s=0;s<cortes.length;s++){
     var cr=cortes[s];
     var g=(CARNE_DATA.porCorte||{})[cr.a];
     var pzs=[];
     if(g&&g.piezas)for(var u=0;u<g.piezas.length;u++){
       var pz=g.piezas[u];
-      if(pz.estado==='Disponible'||pz.estado==='Asignada')pzs.push(pz);
+      var pdep=String(pz.dep||'').toLowerCase();
+      var enGrupo=gr.id?(pdep===gr.id):!grupos.some(function(x){return x.id&&x.id===pdep;});
+      if(enGrupo&&(pz.estado==='Disponible'||pz.estado==='Asignada'))pzs.push(pz);
     }
     if(!pzs.length)continue;
     hayAlgo=true;
+    if(!cabecera){h+='<div class="stcar-depgrp">En '+stEsc(gr.nombre)+'</div>';cabecera=true;}
     var kgh=0, ch='';
     for(var v=0;v<pzs.length;v++){
       kgh+=pzs[v].peso;
@@ -13105,6 +13147,7 @@ function renderStCarne(){
       +'<span class="stcar-sub">'+ch+'</span></div>'
       +'<div class="stcar-n" style="text-align:right">'+pzs.length+' pz<span class="stcar-sub">'
       +stFmt(kgh,'kg')+' kg</span></div></div>';
+   }
   }
   if(!hayAlgo)h+='<div class="stcar-vacio">Todav&iacute;a no hay ninguna pieza cargada.</div>';
 
@@ -13134,6 +13177,15 @@ function renderStCarne(){
     repetir "Carne" cinco veces come el ancho que necesita el nombre. */
 function _carneCorto(n){
   return String(n||'').replace(/^Carne\s+/i,'');
+}
+
+/** Los depositos activos, de lo que manda `carnePiezas`. */
+function stCarneDepsTodos(){
+  return ((CARNE_DATA&&CARNE_DATA.deps)||[]).filter(function(d){return d&&d.id;});
+}
+function stCarneDep(id){
+  CARNE_DEP=String(id||'');
+  renderStCarne();
 }
 
 function stCarneProv(v){
@@ -13176,6 +13228,9 @@ function stCarneQuitar(i){
     unico lugar del ERP que escribe el stock de un deposito. */
 function stCarneGuardar(){
   if(CARNE_GUARDANDO||!CARNE_COLA.length)return;
+  var depsT=stCarneDepsTodos();
+  if(depsT.length>1&&!CARNE_DEP){toast('Eleg\u00ed a qu\u00e9 dep\u00f3sito entra la tanda');renderStCarne();return;}
+  var depEnvio=CARNE_DEP, depNomEnvio=stCarneDepNom(CARNE_DEP);
   var n=CARNE_COLA.length, envio=CARNE_COLA.slice();
   var totKg=0; for(var i=0;i<envio.length;i++)totKg+=envio[i].peso;
 
@@ -13184,10 +13239,12 @@ function stCarneGuardar(){
   if(b){b.disabled=true;b.textContent='Guardando '+n+'\u2026';}
 
   fetch(API,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},
-    /* Sin `deposito`: el backend pone cada pieza en el deposito por defecto de su
-       producto. Mandar uno solo para toda la tanda obligaria a elegirlo, y la
-       respuesta correcta ya esta escrita en la hoja Productos. */
-    body:JSON.stringify({action:'piezasRecibir',proveedor:CARNE_PROV,piezas:envio})})
+    /* CON `deposito` desde el 11/9/2026. Antes iba sin el, y el backend ponia cada
+       pieza en el deposito por defecto de su producto (la col U, "moresco" para
+       la carne). Pero cualquier producto puede estar en cualquiera de los dos
+       freezers: la tanda que entraba a lo de Tadeo quedaba anotada en lo de
+       Lucas. Ahora se elige en cada tanda. */
+    body:JSON.stringify({action:'piezasRecibir',proveedor:CARNE_PROV,deposito:depEnvio||undefined,piezas:envio})})
     .then(function(r){return r.json();})
     .then(function(d){
       CARNE_GUARDANDO=false;
@@ -13197,12 +13254,17 @@ function stCarneGuardar(){
            medir: la carne ya esta guardada en el freezer. */
         CARNE_COLA=[];
         _carneColaGuardar();
+        CARNE_DEP='';   // la proxima tanda se vuelve a elegir
+        /* Se repinta YA: sin esto la pantalla seguia mostrando la tanda guardada,
+           con el boton en "Guardando..." y el deposito marcado, hasta que volvia
+           el refresco de carnePiezas (5-8 s). */
+        renderStCarne();
         var malas=(d.malas||[]).length;
         /* El front sabe cuantas mando. Un `{ok:true}` pelado \u2014un Apps Script
            viejo, o un stub de prueba\u2014 dejaria el toast en "undefined piezas". */
         var cuantas=(typeof d.agregadas==='number'&&isFinite(d.agregadas))?d.agregadas:n;
-        toast('\u2713 '+cuantas+' pieza'+(cuantas===1?'':'s')+' &middot; '
-          +stFmt(totKg,'kg')+' kg en '+stCarneDepTxt()
+        toast('\u2713 '+cuantas+' pieza'+(cuantas===1?'':'s')+' \u00b7 '
+          +stFmt(totKg,'kg')+' kg en '+(depNomEnvio||stCarneDepTxt())
           +(malas?' \u2014 '+malas+' no entraron':''),malas?5000:3000);
         stCarnePedir(true);
         if(DEP_DATA&&typeof stDepPedir==='function')stDepPedir(true);

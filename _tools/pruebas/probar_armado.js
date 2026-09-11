@@ -155,15 +155,60 @@ const EXTRA = `
     cli.matar(); process.exit(mal ? 0 : 1);   // con el bug puesto SE ESPERA que falle
   }
 
+  // ══ 2b. El rediseño del 11/9/2026: nada pisado, y una sola cuenta ══
+  console.log('\n--- 2b. nada se pisa y los tres numeros de hoy coinciden ---');
+  const pisados = await evaluar(cli, `(function(){
+    function R(e){return e.getBoundingClientRect();}
+    var out=[], n=0;
+    [].forEach.call(document.querySelectorAll('#armadoSummary, .armado-day-header, .armado-canal-header, .armado-oc-info'),function(z){
+      if(!z.offsetParent) return;
+      var hs=[].filter.call(z.querySelectorAll('*'),function(e){
+        if(!e.offsetParent) return false;
+        if(/^(BUTTON|INPUT)$/.test(e.tagName)) return true;
+        return [].some.call(e.childNodes,function(x){return x.nodeType===3&&x.textContent.trim();});
+      });
+      for(var i=0;i<hs.length;i++)for(var j=i+1;j<hs.length;j++){
+        if(hs[i].contains(hs[j])||hs[j].contains(hs[i])) continue;
+        n++;
+        var a=R(hs[i]), b=R(hs[j]);
+        var x=Math.min(a.right,b.right)-Math.max(a.left,b.left), y=Math.min(a.bottom,b.bottom)-Math.max(a.top,b.top);
+        if(x>1&&y>1) out.push(hs[i].textContent.trim().slice(0,20)+' / '+hs[j].textContent.trim().slice(0,20));
+      }
+    });
+    return {pares:n, pisados:out};})()`);
+  chk('examino pares de verdad (' + pisados.pares + ')', pisados.pares > 10, String(pisados.pares));
+  chk('NINGUN texto ni boton queda encima de otro', pisados.pisados.length === 0, pisados.pisados.join(' | '));
+  const cuentas = await evaluar(cli, `(function(){
+    var tile=document.querySelector('#armadoSummary .arm-res-t.hoy b');
+    var tab=document.getElementById('tabArmadoCount');
+    var h=document.querySelector('.armado-day-header[data-collapse-key="dia:'+getHoyISO()+'"] .day-count');
+    var m=h ? h.textContent.match(/(\\d+)\\/(\\d+)/) : null;
+    return { tile: tile ? tile.textContent.replace(/[^0-9]/g,'') : null,
+             tab: tab ? tab.textContent.trim() : null,
+             dia: m ? String((+m[2])-(+m[1])) : (h ? h.textContent : null),
+             listo: !!(tile && /\\u2713/.test(tile.textContent)) };})()`);
+  const hayHoy = cuentas.dia !== null;
+  chk('el tile de hoy, la pestaña y el dia dicen lo mismo',
+      !hayHoy || cuentas.listo || (cuentas.tile === cuentas.dia && (cuentas.tab || '0') === cuentas.tile),
+      JSON.stringify(cuentas));
+  const anim = await evaluar(cli, `[].map.call(document.querySelectorAll('.armado-day-header *'),function(e){return getComputedStyle(e).animationName;}).filter(function(a){return a&&a!=='none';})`);
+  chk('ningun cartel titila (sin animacion infinita)', anim.length === 0, JSON.stringify(anim));
+
   // ══ 3. El boton de reprogramar ══
   console.log('\n--- 3. el boton de cambiar la fecha ---');
+  /* Desde el 11/9/2026 el boton vive ADENTRO del dia, en el aviso rojo, y no en
+     el encabezado: en 390px el encabezado no tenia lugar y el cartel "NO
+     ENTREGADO" quedaba ENCIMA del boton (114x20 px pisados). */
   const btns = await evaluar(cli, `(function(){
     var out=[];
     [].forEach.call(document.querySelectorAll('.armado-day-header'),function(h){
+      var k=h.getAttribute('data-collapse-key');
+      var cont=document.querySelector('.armado-day-content[data-collapse-key="'+k+'"]');
+      var b=cont && cont.querySelector('.armado-dia-aviso .day-btn-fecha');
       out.push({ atras:h.classList.contains('atrasado'),
         titulo:(h.querySelector('.day-title')||{}).textContent||'',
-        btn: !!h.querySelector('.day-btn-fecha'),
-        alto: h.querySelector('.day-btn-fecha') ? Math.round(h.querySelector('.day-btn-fecha').getBoundingClientRect().height) : 0 });
+        btn: !!b, enHeader: !!h.querySelector('.day-btn-fecha'),
+        alto: b ? Math.round(b.getBoundingClientRect().height) : 0 });
     });
     return out;})()`);
   const atrasados = btns.filter(b => b.atras);
@@ -172,8 +217,9 @@ const EXTRA = `
   chk('TODOS los atrasados tienen el boton', atrasados.every(b => b.btn),
       JSON.stringify(atrasados));
   chk('NINGUN dia al dia lo tiene', alDia.every(b => !b.btn), JSON.stringify(alDia));
-  chk('el boton llega a 38px', atrasados.every(b => b.alto >= 38),
+  chk('el boton llega a 44px', atrasados.every(b => b.alto >= 44),
       JSON.stringify(atrasados.map(b => b.alto)));
+  chk('y ya NO esta en el encabezado', btns.every(b => !b.enHeader), JSON.stringify(btns));
 
   // El boton NO puede colapsar el dia (stopPropagation)
   const dk = await evaluar(cli, `(function(){
@@ -182,7 +228,7 @@ const EXTRA = `
   const abiertoAntes = await evaluar(cli, `(function(){
     var c=document.querySelector('.armado-day-content');
     return c ? !c.classList.contains('collapsed') : null;})()`);
-  await evaluar(cli, `document.querySelector('.armado-day-header.atrasado .day-btn-fecha').click()`);
+  await evaluar(cli, `document.querySelector('.armado-day-content .armado-dia-aviso .day-btn-fecha').click()`);
   await pausa(500);
   const panel = await evaluar(cli, `(function(){
     var p=document.querySelector('.reprog');
@@ -260,7 +306,7 @@ const EXTRA = `
     if(h.classList.contains('collapsed')) toggleCollapse(k); })()`);
   await pausa(300);
   await evaluar(cli, `(function(){
-    var b=document.querySelector('.armado-day-header.atrasado .day-btn-fecha');
+    var b=document.querySelector('.armado-day-content .armado-dia-aviso .day-btn-fecha');
     if(b && !document.querySelector('.reprog')) b.click(); })()`);
   await pausa(500);
 
@@ -295,7 +341,13 @@ const EXTRA = `
   // ══ 5. El campo de fecha a mano ══
   console.log('\n--- 5. el campo dd/mm/aaaa ---');
   await evaluar(cli, `(function(){
-    var h=document.querySelector('.armado-day-header.atrasado .day-btn-fecha');
+    /* El boton vive adentro del dia: si el dia esta plegado, se abre primero. */
+    var hd=document.querySelector('.armado-day-header.atrasado');
+    if(!hd) return;
+    var k=hd.getAttribute('data-collapse-key');
+    if(hd.classList.contains('collapsed')) toggleCollapse(k);
+    var c=document.querySelector('.armado-day-content[data-collapse-key="'+k+'"]');
+    var h=c && c.querySelector('.armado-dia-aviso .day-btn-fecha');
     if(h)h.click();})()`);
   await pausa(500);
   const hayPanel2 = await evaluar(cli, `!!document.querySelector('#reprogOtra')`);
