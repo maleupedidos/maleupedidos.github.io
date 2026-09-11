@@ -223,6 +223,7 @@ body{font-family:'Inter',-apple-system,'Segoe UI',system-ui,sans-serif;backgroun
 .semprep-acc{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
 .semprep-acc button.semprep-btn{min-height:38px;padding:0 14px;border-radius:6px;border:0;background:var(--o);color:#fff;font-weight:700;font-size:12px;cursor:pointer}
 .semprep-acc button.sec{background:transparent;color:var(--ink2);border:1px solid var(--border)}
+.semprep-acc button.tog{background:transparent;color:var(--ink2);border:1px dashed var(--border);font-size:11.5px;padding:0 12px;font-weight:600}
 @media(max-width:700px){
   .semprep-acc button.semprep-btn{min-height:44px;flex:1 1 auto}
   .semprep-h{font-size:12px}
@@ -9497,6 +9498,29 @@ function _semprepEsc(s){
 /* "quedan 2" se lee más rápido que "stock: 2". */
 var SEMPREP_PROV={}, SEMPREP_UNI={}, SEMPREP_REPO={}, SEMPREP_DEPTS={}, SEMPREP_DEP={};
 
+/* ══ Cuanto detalle se abre lo decide la URGENCIA (10/9/2026) ══
+   Este bloque es lo primero que se ve al abrir el ERP. Mostraba SIEMPRE la
+   lista completa de nombres, con el cutoff a 6 dias igual que con el cutoff a
+   6 horas: quince renglones que tapaban el resto del Resumen.
+
+   Los TITULOS se ven siempre —"7 productos no llegan al viernes" es la
+   informacion—; lo que se pliega es la lista de CUALES. Con el cierre encima
+   (<48 h, el mismo umbral que ya pinta el bloque en rojo) se abre solo, porque
+   ahi la lista es justo lo que hace falta para llamar al proveedor.
+
+   `null` = "decidilo por urgencia". Un toque a mano lo pisa, y NO se
+   persiste: cada apertura de la app vuelve a decidir sola, asi que un
+   "cerrado" de hoy no puede esconder la lista el dia del cutoff. */
+var SEMPREP_VER={jueves:null,carne:null};
+function _semprepTog(k){
+  var box=$('hSemana'); if(!box)return;
+  /* Se resuelve el estado EFECTIVO antes de invertirlo: con `null` hay que
+     mirar lo que se esta viendo, no asumir que estaba cerrado. */
+  var vis=box.querySelector('[data-semprep="'+k+'"]');
+  SEMPREP_VER[k] = !(vis && vis.getAttribute('data-abierto')==='1');
+  try{rSemanaPrep();}catch(e){console.error('_semprepTog',e);}
+}
+
 /* Una fecha 'aaaa-mm-dd' a "hoy" / "ayer" / "hace 16 días".
    Se arma por COMPONENTES: `new Date("2026-09-10")` se interpreta UTC y en
    Argentina devuelve el día anterior. */
@@ -9630,9 +9654,14 @@ function _semprepOtrosProv(otros,ahora){
       if(sinDato||hayCompra){
         /* Entre el pedido y la llegada, un freezer bajo es NORMAL: la reposicion
            viene en camino. Alarmar aca seria alarmar todas las semanas. */
-        msg='El pedido de esta semana ya está cargado'+(hc?' ('+hc.txt+')':'')
-           +' — la mercadería '
-           +(hoyD===cfg.llegaDia?'llega <b>hoy</b>':'llega el <b>'+DIAS[cfg.llegaDia]+'</b>');
+        /* Lo accionable va ADELANTE: cuando ya esta cargado, lo que importa
+           es cuando llega. Y la fecha de carga solo si no fue hoy —"ya esta
+           cargado (hoy) — la mercadería llega hoy" decia "hoy" dos veces en
+           una frase, y el sello de abajo lo repetia una tercera. */
+        msg='La mercadería '
+           +(hoyD===cfg.llegaDia?'llega <b>hoy</b>':'llega el <b>'+DIAS[cfg.llegaDia]+'</b>')
+           +' — el pedido ya está cargado'
+           +(hc&&hc.dias>=2?' (del '+_semprepDMY(rep.ultCompra)+')':'');
       }else{
         /* El caso que el cartel viejo tapaba. NO dice cuál de las dos es: el ERP
            no puede saber si Lucas repuso y no lo cargó, o si no repuso. */
@@ -9656,7 +9685,18 @@ function _semprepOtrosProv(otros,ahora){
        que el ERP no ve: una venta de carne descuenta el depósito como cualquier
        otro producto, porque los pedidos viven en Home y Pilar. */
     var dts=_semprepHace((SEMPREP_DEPTS||{})[depId]);
-    var selloTxt=dts?(' Último movimiento <b>'+dts.txt+'</b>.'):'';
+    /* Solo si es de hace 2 dias o mas: "último movimiento hoy" es lo esperable
+       y no agrega nada, mientras "hace 9 días" cambia como se lee el numero. */
+    var selloTxt=(dts&&dts.dias>=2)?(' Último movimiento <b>'+dts.txt+'</b>.'):'';
+
+    /* El consejo de no pedir de mas solo aplica cuando hay un pedido POR
+       HACER. Con la compra ya cargada y en camino no hay nada que decidir, y
+       este bloque es lo primero que se ve al abrir el ERP. */
+    var consejo=(hoyD===cfg.dia||urg)
+      ? ' Dura hasta '+cfg.vidaSem+' semanas en el freezer, así que no conviene pedir de más.'
+      : '';
+    /* Con el freezer cubierto no hay nada que plegar: el titulo lo dice todo. */
+    var abiertoC=(SEMPREP_VER.carne===null)?urg:SEMPREP_VER.carne;
 
     var det;
     if(cortos.length){
@@ -9670,7 +9710,8 @@ function _semprepOtrosProv(otros,ahora){
       det='Los '+l.length+' cortes llegan a la próxima reposición.';
     }
 
-    out+='<div class="semprep'+(urg?' urg':'')+'" style="margin-top:10px">'
+    out+='<div class="semprep'+(urg?' urg':'')+'" style="margin-top:10px"'
+      +' data-semprep="carne" data-abierto="'+(abiertoC?'1':'0')+'">'
       +'<div class="semprep-h"><span>🥩 '+_semprepEsc(pv)+' · '+_semprepEsc(cfg.quien)
       +' pide los '+DIAS[cfg.dia]+'</span></div>'
       +'<div class="semprep-row '+(cortos.length?'w':'g')+'">'
@@ -9678,12 +9719,15 @@ function _semprepOtrosProv(otros,ahora){
       +'<div class="semprep-t">'+(cortos.length
           ? cortos.length+(cortos.length===1?' corte no llega':' cortes no llegan')+' a la próxima reposición'
           : 'El freezer de '+_semprepEsc(cfg.quien)+' está cubierto')+'</div>'
-      +'<div class="semprep-d">'+det+'</div></div></div>'
+      +((abiertoC||!cortos.length)?'<div class="semprep-d">'+det+'</div>':'')
+      +'</div></div>'
       /* El punto sólo si el mensaje no lo trae: el aviso de la compra faltante
          termina en punto y quedaba un ".." a la vista. */
-      +'<div class="semprep-pie">'+msg+(/[.!?]$/.test(msg)?'':'.')+selloTxt
-      +' Dura hasta '+cfg.vidaSem
-      +' semanas en el freezer, así que no conviene pedir de más.</div>'
+      +'<div class="semprep-pie">'+msg+(/[.!?]$/.test(msg)?'':'.')+selloTxt+consejo+'</div>'
+      +(cortos.length?'<div class="semprep-acc"><button class="semprep-btn sec tog" '
+        +'onclick="_semprepTog(\'carne\')">'
+        +(abiertoC?'▴ Ocultar los cortes':'▾ Ver los '+cortos.length+' cortes')
+        +'</button></div>':'')
       +'</div>';
   });
   return out;
@@ -9804,13 +9848,16 @@ function rSemanaPrep(){
       +(pedidos.length
         ? ' — no se stockean: hay que comprarlas para ese pedido'
         : ' — no se stockean: se compran cuando alguien los pide, y hoy nadie los pidió');
-    filas.push({ic:pedidos.length?'⚠️':'🕓',cls:pedidos.length?'w':'g',
+    /* `fijo` = el detalle NO se pliega. Se pliega lo que AMPLIA el titulo;
+       no lo que agrega una condicion que el titulo no menciona. Acá, que haya
+       un pedido vivo esperando esa mercadería es lo segundo. */
+    filas.push({ic:pedidos.length?'⚠️':'🕓',cls:pedidos.length?'w':'g',fijo:!!pedidos.length,
       t:encargo.length+(encargo.length===1?' producto por encargo en cero':' productos por encargo en cero'),d:det});
   }
   /* Cero OC vivas sólo es un problema si además falta mercadería: si el freezer
      está lleno, no comprar es la decisión correcta y no hay nada que avisar. */
   if(ocVivas===0&&(reponer.length||simples.length)){
-    filas.push({ic:'🧾',cls:'w',t:'No hay ninguna orden de compra generada',
+    filas.push({ic:'🧾',cls:'w',fijo:true,t:'No hay ninguna orden de compra generada',
                 d:'Con productos que no llegan al viernes y el cierre encima, esto es lo que hay que armar.'});
   }
   var hOtros=_semprepOtrosProv(otros,ahora);
@@ -9823,12 +9870,19 @@ function rSemanaPrep(){
     : 'Todavía no hay ningún pedido cargado con entrega de hoy en adelante';
 
   var urgente=falta<48*3600000;
-  var h='<div class="semprep'+(urgente?' urg':'')+'">'
+  /* Con el cierre encima se abre solo; a 6 dias, solo los titulos. El mismo
+     umbral que pinta el bloque en rojo decide cuanto se muestra. */
+  var abierto=(SEMPREP_VER.jueves===null)?urgente:SEMPREP_VER.jueves;
+  var plegables=filas.filter(function(f){return !f.fijo;}).length;
+
+  var h='<div class="semprep'+(urgente?' urg':'')+'" data-semprep="jueves" data-abierto="'+(abierto?'1':'0')+'">'
     +'<div class="semprep-h"><span>⏳ La orden de compra cierra el '+cuando+'</span>'
     +'<b>'+_faltaTexto(falta)+'</b></div>';
   filas.forEach(function(f){
     h+='<div class="semprep-row '+f.cls+'"><span class="semprep-ic">'+f.ic+'</span>'
-      +'<div><div class="semprep-t">'+f.t+'</div><div class="semprep-d">'+f.d+'</div></div></div>';
+      +'<div><div class="semprep-t">'+f.t+'</div>'
+      +((abierto||f.fijo)?'<div class="semprep-d">'+f.d+'</div>':'')
+      +'</div></div>';
   });
   h+='<div class="semprep-pie">'+pie+'</div>';
   /* El botón sólo si la persona tiene dónde resolverlo: un cartel que manda a
@@ -9836,8 +9890,14 @@ function rSemanaPrep(){
   /* La clase `semprep-btn` no es decorativa: la regla táctil genérica del celular
      (`.pg button:not(...)`, especificidad 0-6-1) le gana a `.semprep-acc button`
      y los dejaba en 38px. Está excluida en esa lista, que existe para esto. */
-  if(_tengoTab('busqueda'))h+='<div class="semprep-acc"><button class="semprep-btn" onclick="go(\'busqueda\')">Ir a Abastecimiento</button>'
-    +(_tengoTab('stock')?'<button class="semprep-btn sec" onclick="go(\'stock\')">Ver el stock</button>':'')+'</div>';
+  var acc='';
+  if(_tengoTab('busqueda'))acc+='<button class="semprep-btn" onclick="go(\'busqueda\')">Ir a Abastecimiento</button>'
+    +(_tengoTab('stock')?'<button class="semprep-btn sec" onclick="go(\'stock\')">Ver el stock</button>':'');
+  /* El toggle va ULTIMO y secundario: la accion principal sigue siendo ir a
+     resolverlo. Y solo si hay algo plegado que mostrar. */
+  if(plegables)acc+='<button class="semprep-btn sec tog" onclick="_semprepTog(\'jueves\')">'
+    +(abierto?'▴ Ocultar el detalle':'▾ Ver qué falta')+'</button>';
+  if(acc)h+='<div class="semprep-acc">'+acc+'</div>';
   h+=hOtros;
   h+='</div>';
   box.innerHTML=h;

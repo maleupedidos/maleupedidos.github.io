@@ -57,13 +57,18 @@ function chk(t, c, x) {
 }
 
 /* Corre el bloque con el reloj congelado en `hoy` y los datos sembrados. */
-function correr(hoy, repo, depTs, stock) {
+function correr(hoy, repo, depTs, stock, ver) {
+  if (ver === undefined) ver = null;
   const ctx = { console };
   vm.createContext(ctx);
   const RealDate = Date;
   const src2 = CFG + '\n' + FNS + `
     SEMPREP_REPO = ${JSON.stringify(repo)};
     SEMPREP_DEPTS = ${JSON.stringify(depTs)};
+    /* Desde el 10/9/2026 el detalle arranca plegado o abierto segun la
+       urgencia. \`null\` = "decidilo vos", que es como lo ve alguien que abre
+       la app; \`ver\` fuerza el otro estado para probar el toggle. */
+    var SEMPREP_VER = {jueves:null, carne:${JSON.stringify(ver)}};
     var RealDate = Date;
     var HOY = new RealDate(${hoy[0]}, ${hoy[1]}, ${hoy[2]}, 9, 0).getTime();
     function Fake(a, b, c, d, e) {
@@ -106,7 +111,12 @@ chk('  y dice de cuándo es la última', /25\/8/.test(h) && /hace 16 días/.test
 chk('  sin afirmar si repuso o no', /Si repuso, falta cargarla/.test(h));
 chk('  la caja va en urgente', /class="semprep urg"/.test(h));
 chk('  NO dice que la mercadería llega hoy', !/llega <b>hoy<\/b>/.test(h), h.slice(0, 400));
-chk('dice de cuándo es el número del freezer', /Último movimiento <b>ayer<\/b>/.test(h), h.slice(-300));
+/* El conteo es de AYER. Desde el 10/9/2026 el sello sale solo desde 2 dias:
+   "ultimo movimiento ayer" es lo esperable y no cambia como se lee el
+   numero, y este bloque es lo primero que se ve al abrir el ERP. Lo que el
+   cartel SI tiene que decir es que falta cargar la compra (chequeo de arriba). */
+chk('  NO pone el sello con un conteo de ayer (es lo esperable)',
+  !/Último movimiento/.test(h), h.slice(-300));
 chk('  y no dice que Lucas vendió después (el conteo es posterior)',
   !/cargó ventas después/.test(h));
 chk('los 5 cortes salen como cortos', /5 cortes no llegan/.test(h), h.slice(0, 300));
@@ -118,7 +128,11 @@ h = correr(JUE, { carne: { ultCompra: '2026-09-08', ultVenta: '2026-09-09', comp
 chk('dice que el pedido ya está cargado', /ya está cargado/.test(h), h.slice(-400));
 chk('  y que la mercadería llega hoy', /llega <b>hoy<\/b>/.test(h));
 chk('  NO va en urgente', !/class="semprep urg"/.test(h));
-chk('  el freezer se movió hoy', /Último movimiento <b>hoy<\/b>/.test(h), h.slice(-300));
+chk('  NO pone el sello con un conteo de hoy (idem)',
+  !/Último movimiento/.test(h), h.slice(-300));
+chk('  y el pie entra en un renglon', h.indexOf('semprep-pie') > 0
+  && h.split('semprep-pie')[1].split('</div>')[0].length < 160,
+  h.split('semprep-pie')[1] ? h.split('semprep-pie')[1].split('</div>')[0] : '?');
 
 /* ── 3. EL CASO DE "VENTAS DESPUÉS DEL CONTEO" YA NO EXISTE (11/9/2026) ────
    Hasta ese día el bloque avisaba *"pero Lucas cargó ventas después, así que ya
@@ -130,8 +144,9 @@ chk('  el freezer se movió hoy', /Último movimiento <b>hoy<\/b>/.test(h), h.sl
    depósito como cualquier otro producto. `repo.ultVenta` vuelve siempre vacío y
    el aviso se sacó, así que este caso no tiene nada que verificar: dejar el
    chequeo sería exigir un aviso que ya no tiene por qué existir.
-   Lo que SÍ se sigue exigiendo es el sello del último movimiento, que está en
-   el caso 2. */
+   Y el sello del último movimiento se verifica en el caso 【11】, que es donde
+   se ejercitan las dos ramas: un conteo fresco no lo muestra y uno de hace 10
+   días sí. */
 
 // ── 4. SIN DATO: se comporta como antes ────────────────────────────────────
 console.log('\n' + D + '  【4】 la planilla de Lucas no se pudo leer' + X);
@@ -192,6 +207,52 @@ chk('  los kilos van con coma, no con punto', !/\d+\.\d+ kg/.test(h),
    número — los tests miden lo que se les pide. */
 chk('  sin puntuación doble', !/\.\.|\. \./.test(h.replace(/<[^>]*>/g, '')),
   (h.replace(/<[^>]*>/g, '').match(/.{0,50}\.\..{0,30}/) || [''])[0]);
+
+
+// ── 10. El plegado: el detalle depende de la URGENCIA (10/9/2026) ──────
+/* Tadeo: "Demasiada info al principio de todo". El bloque es lo primero que se
+   ve al abrir el ERP y mostraba la lista completa siempre. Ahora el dia del
+   pedido (urgente) se abre solo, y el resto de la semana quedan los titulos. */
+console.log('\n' + D + '  【10】 el detalle se pliega cuando NO es urgente' + X);
+
+// martes = dia de pedido = urgente → abierto solo
+h = correr(MAR, { carne: { ultCompra: '2026-09-01', ultVenta: '2026-09-07', compras: 5 } },
+  { moresco: '2026-09-07' }, STOCK);
+chk('el martes (dia de pedido) se abre solo', /data-abierto="1"/.test(h), h.slice(0, 260));
+chk('  y nombra los cortes', /Carne Lomo/.test(h));
+chk('  sin boton de "ver"', !/Ver los \d+ cortes/.test(h));
+chk('  y da el consejo de no pedir de mas', /no conviene pedir de más/.test(h));
+
+// sabado con la compra al dia = no urgente → plegado
+h = correr(SAB, { carne: { ultCompra: '2026-09-08', ultVenta: '2026-09-11', compras: 5 } },
+  { moresco: '2026-09-11' }, STOCK);
+chk('el sabado (sin urgencia) arranca plegado', /data-abierto="0"/.test(h), h.slice(0, 260));
+chk('  NO nombra ningun corte', !/Carne Lomo/.test(h));
+chk('  pero el titulo sigue diciendo cuantos', /5 cortes no llegan/.test(h));
+chk('  y ofrece el boton para abrirlos', /Ver los 5 cortes/.test(h));
+chk('  sin el consejo de no pedir de mas (no hay nada que pedir)',
+  !/no conviene pedir de más/.test(h));
+
+// el toque a mano pisa a la urgencia, en las dos direcciones
+h = correr(SAB, { carne: { ultCompra: '2026-09-08', ultVenta: '2026-09-11', compras: 5 } },
+  { moresco: '2026-09-11' }, STOCK, true);
+chk('un toque a mano lo ABRE aunque no sea urgente', /data-abierto="1"/.test(h));
+chk('  y aparecen los cortes', /Carne Lomo/.test(h));
+chk('  con el boton para ocultarlos', /Ocultar los cortes/.test(h));
+h = correr(MAR, { carne: { ultCompra: '2026-09-01', ultVenta: '2026-09-07', compras: 5 } },
+  { moresco: '2026-09-07' }, STOCK, false);
+chk('y un toque lo CIERRA aunque sea el dia del pedido', /data-abierto="0"/.test(h));
+chk('  sin nombrar los cortes', !/Carne Lomo/.test(h));
+
+// ── 11. El sello del freezer no repite lo obvio ───────────────────
+console.log('\n' + D + '  【11】 el sello solo si el conteo es viejo' + X);
+h = correr(SAB, { carne: { ultCompra: '2026-09-08', ultVenta: '', compras: 5 } },
+  { moresco: '2026-09-12' }, STOCK);
+chk('contado hoy: no dice "último movimiento" (es lo esperable)',
+  !/Último movimiento/.test(h), h.slice(-320));
+h = correr(SAB, { carne: { ultCompra: '2026-09-08', ultVenta: '', compras: 5 } },
+  { moresco: '2026-09-02' }, STOCK);
+chk('contado hace 10 dias: SI lo dice', /Último movimiento/.test(h) && /hace 10 días/.test(h));
 
 console.log('\n' + (mal ? R : V) + '  ' + ok + ' ok · ' + mal + ' mal' + X + '\n');
 process.exit(mal ? 1 : 0);
