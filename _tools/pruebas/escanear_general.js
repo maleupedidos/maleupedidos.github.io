@@ -53,6 +53,18 @@ const MEDIR = `(function(){
     var b=el.getBoundingClientRect(); if(b.width<=0) return;
     if(!_visible(el)) return;
     var cs=getComputedStyle(el);
+    /* Un <text> de SVG no tiene un scrollWidth que signifique algo: Chrome
+       devuelve 48, 1279 o 1092 para rotulos que caben perfecto, y el 11/9/2026
+       el eje del grafico de 6 meses salia como "25 textos cortados". Para un SVG
+       el corte que existe es otro —el rotulo que se sale del lienzo— y es uno de
+       los tres modos de fallo reales de un grafico (ver graficos-del-erp). */
+    var svg=el.ownerSVGElement;
+    if(svg){
+      var S=svg.getBoundingClientRect();
+      if(b.left<S.left-1||b.right>S.right+1||b.top<S.top-1||b.bottom>S.bottom+1)
+        cortados.push(t.slice(0,22));
+      return;
+    }
     /* Lo que scrollea no esta cortado, y ellipsis es un corte DELIBERADO. */
     if(cs.overflowX==='auto'||cs.overflowX==='scroll') return;
     if(cs.textOverflow==='ellipsis') return;
