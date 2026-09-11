@@ -61,9 +61,11 @@ const ENTREGAS = [
          o: 'Orden de Compra', fe: iso(ATR), de: DIAS[ATR.getDay()], f: dmy(hace(3)), es: 'Reservado', ep: 'Cobrado', $: 30000, p: [{ a: 'SE', q: 3 }] }),
   // 3. Mixto, con kilos, lote de texto y SIN telefono
   base({ id: 9103, h: 'Home', r: 9003, c: 'Prueba Mixto', b: 'Estancias del Pilar', sb: 'La Pionera', l: 'Townhouses 4', o: 'Mixto',
-         oD: { SE: { d: 0, oc: 2 } }, $: 70000, p: [{ a: 'PPM', q: 1 }, { a: 'CCo', q: 1.234 }, { a: 'SE', q: 2 }] }),
+         oD: { SE: { d: 0, oc: 2 } }, $: 70000, p: [{ a: 'PPM', q: 1 }, { a: 'CCo', q: 1.234 }, { a: 'SE', q: 2 }],
+         pz: [{ a: 'CCo', id: 'P-0100', kg: 1.234 }] }),
   // 4 y 5. Combo: mismo telefono, mismo dia, Pilar
-  base({ id: 9104, h: 'Pilar', r: 9004, c: 'Prueba Combo', t: '1133332222', b: 'La Escondida', sb: 'La Escondida', l: '12', o: 'Orden de Compra', $: 20000, p: [{ a: 'PMu', q: 2 }] }),
+  base({ id: 9104, h: 'Pilar', r: 9004, c: 'Prueba Combo', t: '1133332222', b: 'La Escondida', sb: 'La Escondida', l: '12', o: 'Orden de Compra', $: 20000, p: [{ a: 'PMu', q: 2 }, { a: 'CVa', q: 2.624 }],
+         pz: [{ a: 'CVa', id: 'P-0005', kg: 1.383 }, { a: 'CVa', id: 'P-0003', kg: 1.241 }] }),
   base({ id: 9105, h: 'Pilar', r: 9005, c: 'Prueba Combo', t: '1133332222', b: 'La Escondida', sb: 'La Escondida', l: '12', o: 'Orden de Compra', $: 11500, p: [{ a: 'PMa', q: 1 }], hr: '12:10' }),
   // 6. Club con apostrofe en el nombre (el onclick del filtro tiene que aguantarlo)
   base({ id: 9106, h: 'Clubes', r: 9006, c: "Prueba O'Club", t: '1122221111', d: "St. Brendan's · Rugby · M15", b: "St. Brendan's", sb: "St. Brendan's", l: '',
@@ -76,7 +78,7 @@ const ENTREGAS = [
 ];
 const ARMAR = ['Home|R9001', 'Home|R9003', 'Red|R9007'];
 const GUARDAR = { ok: true, items: [{ abbr: 'PPM', qty: 6, rows: [950, 951] }, { abbr: 'SE', qty: 4, rows: [952] }] };
-const PRODS = { CCo: { n: 'Carne Colita de Cuadril', u: 'kg' }, SE: { n: 'Sorrentinos Espinaca', u: 'u' } };
+const PRODS = { CCo: { n: 'Carne Colita de Cuadril', u: 'kg' }, CVa: { n: 'Carne Vacío', u: 'kg' }, SE: { n: 'Sorrentinos Espinaca', u: 'u' } };
 
 const EXTRA = `
   window.__posts=[]; window.__errores=[]; window.__copiado=null;
@@ -226,12 +228,14 @@ async function irA(cli, texto) {
   chk('los kilos van con su unidad y el nombre completo', /Carne Colita de Cuadril/.test(b) && /1,234 kg/.test(b), b);
   chk('las cuentas no suman kilos con unidades: "3 unidades · 1,234 kg"', /3 unidades · 1,234 kg/.test(b), b);
   chk('un lote de texto no va en letra de 46px', await evaluar(cli, `!document.querySelector('#rutaBody .rtc-lote') && /Townhouses 4/.test(document.querySelector('#rutaBody .rtc-titulo').textContent)`));
+  chk('la carne dice la PIEZA exacta que hay que buscar: "1 pieza de 1,234 kg"', /1 pieza de 1,234 kg/.test(b), b);
   chk('sin teléfono lo dice, y no dibuja Copiar ni Llamar', /Sin teléfono cargado/.test(b) && await evaluar(cli, `!document.querySelector('#rutaBody .rtc-tel')`));
 
   // ── Parada: combo ──
   chk('llega al combo', await irA(cli, 'Prueba Combo'));
   b = await evaluar(cli, cuerpo);
   chk('el canal nombra los dos pedidos', /Pilar #9104 \+ #9105/.test(b), b.slice(0, 120));
+  chk('el combo junta las piezas de sus pedidos, de la más liviana: "2 piezas: 1,241 y 1,383 kg"', /2 piezas: 1,241 y 1,383 kg/.test(b), b);
   chk('el cobro desglosa los dos pedidos y suma $31.500', /2 pedidos del mismo cliente/.test(b) && /\$31\.500/.test(b) && /\$20\.000/.test(b) && /\$11\.500/.test(b), b);
   await evaluar(cli, `document.querySelector('#rutaActions .rtc-cta.entregar').click()`); await pausa(200);
   const confC = await evaluar(cli, `(document.getElementById('confirmOverlay').innerText||'').replace(/\\s+/g,' ')`);
@@ -304,6 +308,16 @@ async function irA(cli, texto) {
   await evaluar(cli, `document.querySelectorAll('#rutaBody .rtc-fila-ir')[2].click()`); await pausa(300);
   t = await evaluar(cli, barra);
   chk('tocar la 3ª parada va a la 3ª', /Parada 3 de/.test(t), t);
+
+  // ── ARMADO también dice la pieza ──
+  await evaluar(cli, 'switchTab("armado")'); await pausa(500);
+  await evaluar(cli, `[].forEach.call(document.querySelectorAll('.armado-day-header[data-collapse-key]'),function(h){ if(!h.nextElementSibling||getComputedStyle(h.nextElementSibling).display==='none'||h.classList.contains('collapsed')) toggleCollapse(h.getAttribute('data-collapse-key')); })`);
+  await pausa(300);
+  await evaluar(cli, `[].forEach.call(document.querySelectorAll('.armado-canal-header.collapsed[data-collapse-key]'),function(h){toggleCollapse(h.getAttribute('data-collapse-key'));})`);
+  await pausa(300);
+  const armPz = await evaluar(cli, `(function(){var c=[].find.call(document.querySelectorAll('#armadoList .armado-card'),function(x){return /Prueba Mixto/.test(x.textContent)});return c?(c.querySelector('.armado-prods')||{}).textContent||'':'no esta la card';})()`);
+  chk('ARMADO dice la pieza exacta junto a la carne', /Carne Colita de Cuadril · 1 pieza de 1,234 kg/.test(armPz), armPz);
+  await evaluar(cli, 'switchTab("ruta")'); await pausa(400);
 
   // ── Nada se pisa, nada chico, nada desborda ──
   let peor = { cruces: [], chicos: [], pares: 0 };
