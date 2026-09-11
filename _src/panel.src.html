@@ -8980,6 +8980,7 @@ function _cajaCuentas(){
     var c=lista[i];
     if(c.def)hayDef=true;
     out.push({id:c.id,nombre:c.nombre||c.id,tipo:c.tipo,
+      banco:c.banco||'',alias:c.alias||'',
       def:c.def===true,inv:c.inv===true,
       /* El saldo de una cuenta: lo que se conto a mano, mas lo que entro,
          menos lo que salio. Es la misma cuenta que hacia `saldoEf`/`saldoMP`,
@@ -9004,6 +9005,37 @@ function _cajaCuentas(){
     }
   }
   return out;
+}
+/** El nombre corto de una cuenta, para los renglones apretados: "Ef", "MP",
+ *  "Brubank". Solo de pantalla — el nombre de verdad es el de la hoja. */
+function _ctaCorto(c){
+  if(!c)return '';
+  if(c.tipo==='efectivo')return 'Ef';
+  if(c.id==='mp')return 'MP';
+  return String(c.banco||c.nombre||c.id);
+}
+/** La plata que hay HOY, sin las Inversiones: el efectivo mas TODAS las cuentas
+ *  digitales. Sale de `_cajaCuentas`, la misma funcion que dibuja las tarjetas
+ *  de la tab Caja, asi que Inicio, el Cierre y el EERR no pueden decir un numero
+ *  distinto. Sin cuentas (un Apps Script viejo) cae a la formula de siempre.
+ *
+ *  Hasta el 11/9/2026 esas tres pantallas sumaban el conteo de MERCADO PAGO
+ *  (`sb.mp`) mas los movimientos de TODAS las digitales (`cobradoMP` y
+ *  `gastosMP` incluyen el Brubank): el Brubank entraba con lo que se movio pero
+ *  sin lo que tenia contado. Medido ese dia: Inicio decia $5.623.572 de caja y
+ *  la tab Caja $6.182.703 — los $559.131 del Brubank. */
+function _saldoLiquido(){
+  var sb=(D&&D.saldoBase)||{},cj=(D&&D.caja)||{};
+  var ef=Number(sb.ef||0)+Number(cj.cobradoEf||0)+Number(cj.ingresosEf||0)-Number(cj.gastosEf||0);
+  var dig=Number(sb.mp||0)+Number(cj.cobradoMP||0)+Number(cj.ingresosMP||0)-Number(cj.gastosMP||0);
+  var cts=_cajaCuentas();
+  if(cts){
+    ef=0;dig=0;
+    for(var i=0;i<cts.length;i++){
+      if(cts[i].tipo==='efectivo')ef+=cts[i].saldo;else dig+=cts[i].saldo;
+    }
+  }
+  return {ef:ef,dig:dig,total:ef+dig,cuentas:cts};
 }
 /** La cuenta que lleva las Inversiones, o null. */
 function _ctaInv(cts){
@@ -10072,12 +10104,13 @@ function rHSnap(){
   var cobradoMes=fm.cobranzas||0;
   var quemadoMes=fm.salidas||0;
   var flujoMes=fm.flujo||0;
-  // 4. Saldo vivo (mismo cálculo que rCaja)
+  // 4. Saldo vivo: el mismo que las tarjetas de la tab Caja, con TODAS las
+  //    cuentas (ver _saldoLiquido). Sin las Inversiones, como siempre aca.
   var sb=D.saldoBase||{ef:0,mp:0};
   var cj=D.caja||{};
-  var saldoEf=Number(sb.ef||0)+Number(cj.cobradoEf||0)+Number(cj.ingresosEf||0)-Number(cj.gastosEf||0);
-  var saldoMP=Number(sb.mp||0)+Number(cj.cobradoMP||0)+Number(cj.ingresosMP||0)-Number(cj.gastosMP||0);
-  var saldoTot=saldoEf+saldoMP;
+  var _sl=_saldoLiquido();
+  var saldoEf=_sl.ef,saldoMP=_sl.dig;
+  var saldoTot=_sl.total;
   // 5. Días de pista — burn diario = quemado del mes / días transcurridos
   var diaActual=now.getDate();
   var burnDiario=quemadoMes/Math.max(diaActual,1);
@@ -12131,18 +12164,33 @@ function rCaja(){
     var on=tiposSel.indexOf(t)>=0,c=_tipoColor(t);
     return '<button type="button" data-t="'+t+'" style="padding:6px 12px;border-radius:50px;border:2px solid '+c+';background:'+(on?c:'transparent')+';color:'+(on?'#fff':c)+';font-size:11px;font-weight:800;cursor:pointer;white-space:nowrap;font-family:inherit">'+_tipoIco(t)+' '+_tipoLbl(t)+'</button>';
   }
-  // Filtro de M\u00c9TODO (radio: Todos / Efectivo / Mercado Pago).
-  // window._movMet: '' (todos) | 'ef' | 'mp'.
+  // Filtro de CUENTA (11/9/2026): uno por cuenta de la hoja Cuentas. Antes era
+  // Efectivo / Mercado Pago, y "Mercado Pago" mostraba tambien lo del Brubank.
+  // window._movMet: '' (todos) | id de cuenta. Sin cuentas: 'ef' | 'mp' de antes.
   if(typeof window._movMet!=='string')window._movMet='';
   var metSel=window._movMet;
+  var _mcts=_cajaCuentas();
+  /* La cuenta de un movimiento la manda el backend (`cta`, con la misma
+     traduccion con la que la caja lo suma). Si una copia vieja no la trae, lo
+     que no es efectivo va a la digital por defecto: lo que hacia el filtro. */
+  var _mIdEf='efectivo',_mIdDef='mp';
+  if(_mcts){for(var _q=0;_q<_mcts.length;_q++){if(_mcts[_q].tipo==='efectivo')_mIdEf=_mcts[_q].id;if(_mcts[_q].def)_mIdDef=_mcts[_q].id;}}
+  function _ctaDeMov(m){return m.cta||(m.met==='Efectivo'?_mIdEf:_mIdDef);}
+  if(_mcts&&metSel&&!_mcts.some(function(c){return c.id===metSel;})){window._movMet='';metSel='';}
   function _btnMet(val,lbl,ico,color){
     var on=metSel===val;
     return '<button type="button" data-m="'+val+'" style="padding:6px 12px;border-radius:50px;border:2px solid '+color+';background:'+(on?color:'transparent')+';color:'+(on?'#fff':color)+';font-size:11px;font-weight:800;cursor:pointer;white-space:nowrap;font-family:inherit">'+ico+' '+lbl+'</button>';
   }
   fltDiv.innerHTML=_btnTipo('cobro')+_btnTipo('ingreso')+_btnTipo('gasto')
     +'<span style="display:inline-block;width:1px;height:18px;background:var(--border);margin:0 2px"></span>'
-    +_btnMet('ef','EFECTIVO','\ud83d\udcb5','#E65100')
-    +_btnMet('mp','MERCADO PAGO','\ud83d\udcf1','#5E35B1');
+    +(_mcts?_mcts.map(function(c,i){
+        var colores=['#5E35B1','#00897B','#1565C0','#6D4C41'];
+        var dig=_mcts.filter(function(x){return x.tipo!=='efectivo';});
+        var col=c.tipo==='efectivo'?'#E65100':colores[Math.max(0,dig.indexOf(c))%colores.length];
+        var lbl=c.tipo==='efectivo'?'EFECTIVO':String(c.banco||c.nombre||c.id).toUpperCase().replace(/[<>&"]/g,'');
+        return _btnMet(c.id,lbl,c.tipo==='efectivo'?'\ud83d\udcb5':(c.id==='mp'?'\ud83d\udcf1':'\ud83c\udfe6'),col);
+      }).join('')
+      :(_btnMet('ef','EFECTIVO','\ud83d\udcb5','#E65100')+_btnMet('mp','MERCADO PAGO','\ud83d\udcf1','#5E35B1')));
   fltDiv.querySelectorAll('button[data-t]').forEach(function(btn){
     btn.onclick=function(){
       var t=btn.getAttribute('data-t');
@@ -12290,9 +12338,14 @@ function rCaja(){
   var movsF=movs.filter(function(m){
     if(tiposSel.length>0 && tiposSel.indexOf(m.tipo)<0)return false;
     if(!_enPeriodo(m))return false;
-    // Filtro por método: 'ef' solo Efectivo, 'mp' solo no-Efectivo (MP/Transferencia)
-    if(window._movMet==='ef' && m.met!=='Efectivo')return false;
-    if(window._movMet==='mp' && m.met==='Efectivo')return false;
+    // Filtro por cuenta. Sin cuentas: 'ef' solo Efectivo, 'mp' todo lo demas (lo de antes).
+    if(window._movMet){
+      if(_mcts){ if(_ctaDeMov(m)!==window._movMet)return false; }
+      else {
+        if(window._movMet==='ef' && m.met!=='Efectivo')return false;
+        if(window._movMet==='mp' && m.met==='Efectivo')return false;
+      }
+    }
     return true;
   });
   // Orden controlado por window._movOrden ('desc' = más reciente arriba · 'asc' = inverso).
@@ -12307,6 +12360,15 @@ function rCaja(){
   });
   var hdr=document.createElement('div');
   hdr.style.cssText='font-size:11px;color:var(--bl);margin-bottom:8px;font-weight:700';
+  /* Un total por cuenta: "MP" sumaba tambien el Brubank. */
+  if(_mcts){
+    var _porC={};
+    movsF.forEach(function(m){var sg=m.tipo==='gasto'?-1:1,id=_ctaDeMov(m);_porC[id]=(_porC[id]||0)+sg*m.$;});
+    var _pts=[];
+    _mcts.forEach(function(c){if(_porC[c.id]===undefined)return;var v=_porC[c.id];
+      _pts.push(String(_ctaCorto(c)).replace(/[<>&"]/g,'')+' '+(v>=0?'+':'')+'$'+f$(Math.round(v)));});
+    hdr.innerHTML=movsF.length+' movimiento(s)'+(_pts.length?' \u00b7 '+_pts.join(' \u00b7 '):'');
+  } else
   hdr.innerHTML=movsF.length+' movimiento(s) \u00b7 Ef '+(tEf>=0?'+':'')+'$'+f$(Math.round(tEf))+' \u00b7 MP '+(tMp>=0?'+':'')+'$'+f$(Math.round(tMp));
   gl.appendChild(hdr);
   // Separador por día: al cambiar de fecha mientras scrolleás, header con el día + el neto de ese día (en el filtro actual).
@@ -12648,7 +12710,8 @@ function rEgresos(){
   $('egrKpi').innerHTML=
     '<div class="card acc"><div class="kl">'+lblTot+'</div><div class="kv">$'+f$(tot)+'</div><div class="ks">'+n+' movimiento(s)</div>'+deltaTotalLine+'</div>'+
     '<div class="card"><div class="kl">Efectivo</div><div class="kv">$'+f$(totEf)+'</div></div>'+
-    '<div class="card"><div class="kl">Mercado Pago</div><div class="kv">$'+f$(totMp)+'</div></div>'+
+    /* Es todo lo que no fue efectivo, el Brubank incluido: "Mercado Pago" mentia. */
+    '<div class="card"><div class="kl">Transferencias</div><div class="kv">$'+f$(totMp)+'</div></div>'+
     kpi4+
     kpiTicket;
   // Breakdown ordenado desc por monto
@@ -14309,9 +14372,13 @@ function _ckRenderMixCanales(mesNom,anioN){
 function _ckRenderPatrimonial(){
   var sb=(D&&D.saldoBase)||{ef:0,mp:0};
   var cj=(D&&D.caja)||{};
-  var saldoEf=Number(sb.ef||0)+Number(cj.cobradoEf||0)+Number(cj.ingresosEf||0)-Number(cj.gastosEf||0);
-  var saldoMP=Number(sb.mp||0)+Number(cj.cobradoMP||0)+Number(cj.ingresosMP||0)-Number(cj.gastosMP||0);
-  var saldoTot=saldoEf+saldoMP;
+  var _slC=_saldoLiquido();
+  var saldoEf=_slC.ef,saldoMP=_slC.dig;
+  var saldoTot=_slC.total;
+  /* El desglose de la tarjeta, una por cuenta: "Ef · MP" a secas escondia el
+     Brubank adentro de "MP". */
+  var _desgC=_slC.cuentas?_slC.cuentas.map(function(c){return _ctaCorto(c)+' '+_ckMoneyShort(c.saldo);}).join(' · ')
+                         :('Ef '+_ckMoneyShort(saldoEf)+' · MP '+_ckMoneyShort(saldoMP));
   var _pcC=_porCobrar();
   var aCobrar=_pcC.total;
   var stockTot=0;((D&&D.stock)||[]).forEach(function(s){stockTot+=Number(s.iv||0);});
@@ -14324,7 +14391,7 @@ function _ckRenderPatrimonial(){
   var cajaMin=eerrConfig('CAJA_MINIMA',ymKpi)||1500000;
   return '<div class="ck-block"><div class="ck-block-h">💰 Estado patrimonial al cierre</div>'+
     '<div class="ck-grid">'+
-      '<div class="ck-card o"><div class="ck-card-t">Caja real</div><div class="ck-card-v">'+_ckMoneyShort(saldoTot)+'</div><div class="ck-card-s">Ef '+_ckMoneyShort(saldoEf)+' · MP '+_ckMoneyShort(saldoMP)+'</div></div>'+
+      '<div class="ck-card o"><div class="ck-card-t">Caja real</div><div class="ck-card-v">'+_ckMoneyShort(saldoTot)+'</div><div class="ck-card-s">'+_desgC+'</div></div>'+
       '<div class="ck-card"><div class="ck-card-t">(+) A cobrar</div><div class="ck-card-v">'+_ckMoneyShort(aCobrar)+'</div><div class="ck-card-s">'+(aCobrar>0?(_pcC.red>0?'clientes '+_ckMoneyShort(_pcC.vd)+' \u00b7 vendedores '+_ckMoneyShort(_pcC.red):'clientes pendientes'):'todo cobrado')+'</div></div>'+
       '<div class="ck-card g"><div class="ck-card-t">(+) Stock al costo</div><div class="ck-card-v">'+_ckMoneyShort(stockTot)+'</div><div class="ck-card-s">freezer cargado</div></div>'+
       '<div class="ck-card r"><div class="ck-card-t">(−) Deuda proveedores</div><div class="ck-card-v">'+(deudaProv===null?'…':_ckMoneyShort(deudaProv))+'</div><div class="ck-card-s">'+(deudaProv===null?'cargando':(deudaProv>0?'FIFO por semana':'al día'))+'</div></div>'+
@@ -15284,9 +15351,10 @@ function rEERR_financiero(body){
   // Misma fórmula que usa la tab Caja, para que coincida.
   var sb=(D&&D.saldoBase)||{ef:0,mp:0,fecha:''};
   var cj=(D&&D.caja)||{cobradoEf:0,cobradoMP:0,gastosEf:0,gastosMP:0,ingresosEf:0,ingresosMP:0};
-  var saldoEfVivo=Number(sb.ef||0)+Number(cj.cobradoEf||0)+Number(cj.ingresosEf||0)-Number(cj.gastosEf||0);
-  var saldoMPVivo=Number(sb.mp||0)+Number(cj.cobradoMP||0)+Number(cj.ingresosMP||0)-Number(cj.gastosMP||0);
-  var saldoActualReal=saldoEfVivo+saldoMPVivo;
+  /* Con TODAS las cuentas: la misma cuenta que la tab Caja (_saldoLiquido). */
+  var _slE=_saldoLiquido();
+  var saldoEfVivo=_slE.ef,saldoMPVivo=_slE.dig;
+  var saldoActualReal=_slE.total;
   // Deuda viva con proveedores (FIFO por semana). Dispara fetch async — al volver, re-render del Financiero.
   var deudaProv=_eerrDeudaProv;
   var deudaProvDet=_eerrDeudaProvDet;
@@ -16841,11 +16909,27 @@ function getTipo(canal){
   return canal;
 }
 
+/* Las cuentas de cobro, como las manda `action=ventas` (11/9/2026). Se guardan
+   aparte para que la primera pintada de la copia ya sepa nombrarlas. */
+var VCTAS=(function(){try{return JSON.parse(localStorage.getItem('ma3vctas')||'null');}catch(e){return null;}})();
+function _vCtasLista(){return VCTAS||((D&&D.caja&&D.caja.cuentas)||null);}
+/** La cuenta a la que entro la parte digital de una venta, o null. El backend
+ *  la manda ya RESUELTA (una vacia es la digital por defecto): la pantalla no
+ *  repite esa regla. */
+function _vCtaDe(v){
+  if(!v||!v.cta)return null;
+  var l=_vCtasLista()||[];
+  for(var i=0;i<l.length;i++)if(l[i]&&l[i].id===v.cta)return l[i];
+  return null;
+}
+function _vCtaTxt(c){return String((c&&(c.nombre||c.id))||'').replace(/[<>&"]/g,'');}
 function loadVentas(){
   var cached=localStorage.getItem('ma3v2');
   if(cached){try{VD=JSON.parse(cached);buildVFilters();rVentas();if(vTab==='tendencia')rTendencia();if(cur==='inicio'&&curSI==='eerr')rEERR();}catch(e){}}
   fetch(API+'?action=ventas&t='+Date.now()).then(function(r){return r.json();}).then(function(d){
-    VD=d.v||[];localStorage.setItem('ma3v2',JSON.stringify(VD));buildVFilters();rVentas();
+    VD=d.v||[];localStorage.setItem('ma3v2',JSON.stringify(VD));
+    if(Array.isArray(d.cuentas)&&d.cuentas.length){VCTAS=d.cuentas;try{localStorage.setItem('ma3vctas',JSON.stringify(VCTAS));}catch(e){}}
+    buildVFilters();rVentas();
     if(vTab==='tendencia')rTendencia();
     if(cur==='inicio'&&curSI==='eerr')rEERR();
   }).catch(function(){});
@@ -17786,7 +17870,11 @@ function buildVFilters(){
     return a.localeCompare(b);
   });
   var fechaArr=Object.keys(opts.fecha).sort(function(a,b){return _fNum(b).localeCompare(_fNum(a));});
-  var pagoArr=['Efectivo','MP','Mixto','Pendiente'].filter(function(p){return opts.pago[p];});
+  /* Una opcion por cuenta digital (11/9/2026): "MP" juntaba todo lo que no era
+     efectivo, el Brubank incluido. "Transferencia" queda para lo que no dice a
+     que cuenta entro (Red: esa plata la cobra el vendedor). */
+  var _ctsPago=(_vCtasLista()||[]).filter(function(c){return c&&c.tipo!=='efectivo';}).map(function(c){return c.nombre||c.id;});
+  var pagoArr=['Efectivo'].concat(_ctsPago,['Transferencia','Mixto','Pendiente']).filter(function(p){return opts.pago[p];});
   var epArr=Object.keys(opts.ep).sort();
   // Limpiar selecciones huerfanas (que ya no aparecen tras los otros filtros)
   vFilt.mes  =vFilt.mes.filter(function(x){return opts.mes[x];});
@@ -17842,7 +17930,7 @@ function metodoPago(v){
   var ef=Number(v.ef)||0,tr=Number(v.tr)||0;
   if(ef>0&&tr>0)return 'Mixto';
   if(ef>0)return 'Efectivo';
-  if(tr>0)return 'MP';
+  if(tr>0){var _c=_vCtaDe(v);return _c?(_c.nombre||_c.id):'Transferencia';}
   return 'Pendiente';
 }
 
@@ -17984,12 +18072,14 @@ function _vtDetalle(v){
   h+='<div class="vt-blq"><div class="vt-det-h">La plata</div>';
   h+='<div class="vt-det-r"><span>Facturado</span><b>'+f(fact)+'</b></div>';
   if(ef>0) h+='<div class="vt-det-r sangria"><span>Efectivo</span><b>'+f(ef)+'</b></div>';
-  if(tr>0) h+='<div class="vt-det-r sangria"><span>MP / Transferencia</span><b>'+f(tr)+'</b></div>';
+  /* A que cuenta entro (11/9/2026): "MP / Transferencia" no lo decia. */
+  var _vc=_vCtaDe(v);
+  if(tr>0) h+='<div class="vt-det-r sangria"><span>'+(_vc?('Transferencia · '+_vCtaTxt(_vc)):'Transferencia')+'</span><b>'+f(tr)+'</b></div>';
   // La propina se dice SIEMPRE, tambien cuando es cero: "no dejo propina" es un
   // dato, y era una de las preguntas que la fila no contestaba.
   if(pEf>0||pTr>0){
     h+='<div class="vt-det-r sangria"><span>Propina</span><b>'+f(Math.max(0,pEf)+Math.max(0,pTr))+
-       (pEf>0&&pTr>0?' <span style="font-weight:600;font-size:11px">(ef '+f(pEf)+' + mp '+f(pTr)+')</span>':(pEf>0?' <span style="font-weight:600;font-size:11px">en efectivo</span>':' <span style="font-weight:600;font-size:11px">en MP</span>'))+'</b></div>';
+       (pEf>0&&pTr>0?' <span style="font-weight:600;font-size:11px">(ef '+f(pEf)+' + transf. '+f(pTr)+')</span>':(pEf>0?' <span style="font-weight:600;font-size:11px">en efectivo</span>':' <span style="font-weight:600;font-size:11px">'+(_vc?('a '+_vCtaTxt(_vc)):'por transferencia')+'</span>'))+'</b></div>';
   } else if(Math.min(0,pEf)+Math.min(0,pTr) < 0){
     // Propina negativa = ajuste de redondeo, no es plata que entro.
     h+='<div class="vt-det-r sangria"><span>Ajuste de redondeo</span><b>-'+f(Math.abs(Math.min(0,pEf)+Math.min(0,pTr)))+'</b></div>';
@@ -18259,7 +18349,7 @@ function rVentas(){
     if(totEf>0||totTr>0||ajuste<0){
       var parts=[];
       if(totEf>0)parts.push('<b>Ef</b> $'+f$(totEf));
-      if(totTr>0)parts.push('<b>MP</b> $'+f$(totTr));
+      if(totTr>0){var _cv=_vCtaDe(v);parts.push('<b>'+(_cv?String(_ctaCorto(_cv)).replace(/[<>&"]/g,''):'Transf.')+'</b> $'+f$(totTr));}
       if(ajuste<0)parts.push('<b>Ajuste</b> -$'+f$(Math.abs(ajuste)));
       pagoLine='<div class="vt-pago">'+parts.join(' &middot; ')+'</div>';
     }

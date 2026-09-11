@@ -167,9 +167,16 @@ const esperar = async (cli, expr, ms = 60000, cada = 500) => {
       'y NO se le pasan al Brubank', cBr.txt.slice(0, 90));
     chequear(!/Caja fuerte/.test(cBr.txt) && !/Caja fuerte/.test(cMp.txt),
       'ni el desglose del efectivo');
-    chequear(/no la contaste/i.test(cBr.txt),
-      'el Brubank dice que todavia no se conto (su $0 no es un saldo)',
-      cBr.txt.slice(0, 110));
+    /* Depende del DATO: el aviso sale solo si la celda del conteo esta vacia.
+       Desde el 10/9/2026 16:13 el Brubank esta contado, asi que se chequea en
+       la direccion que corresponda a lo que dice la planilla hoy. */
+    const _sinContarBr = await evaluar(cli, `((D.saldoBase||{}).sinContar||[]).indexOf('brubank')>-1`);
+    if (_sinContarBr)
+      chequear(/no la contaste/i.test(cBr.txt),
+        'el Brubank dice que todavia no se conto (su $0 no es un saldo)', cBr.txt.slice(0, 110));
+    else
+      chequear(!/no la contaste/i.test(cBr.txt),
+        'el Brubank esta contado y NO dice que falta contarlo', cBr.txt.slice(0, 110));
 
     console.log('\n── LAYOUT ──');
     const desb = await evaluar(cli, `(function(){
@@ -341,9 +348,13 @@ const esperar = async (cli, expr, ms = 60000, cada = 500) => {
       var o='';document.querySelectorAll('#cBal .bal-card.total').forEach(function(c){
         var v=c.querySelector('.bal-val');o=v?v.textContent.trim():'';});return o;})()`);
     console.log('     posición total ahora: ' + totDesp + '  (antes ' + tot.val + ')');
-    chequear(Math.abs(leer(totDesp) - (N.total + 150000)) < 1,
-      'la Posición total sube los $150.000 del Brubank',
-      totDesp + ' — esperaba ' + money(N.total + 150000));
+    /* El total cambia en (lo nuevo - lo que habia). Hasta que el Brubank se
+       conto eso era +150.000; con $559.131 contados es -409.131. Escrito asi
+       vale para cualquier dato. */
+    const _espTot = N.total - (N.porCta.brubank || 0) + 150000;
+    chequear(Math.abs(leer(totDesp) - _espTot) < 1,
+      'la Posición total se mueve exactamente lo que cambió el Brubank',
+      totDesp + ' — esperaba ' + money(_espTot));
 
     console.log('\n── EL GASTO: se puede pagar desde el Brubank ──');
     await evaluar(cli, `toggleCajaForm('gasto')`);

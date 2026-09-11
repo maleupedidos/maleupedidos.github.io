@@ -533,6 +533,9 @@
                    border: 2px solid #ddd; border-radius: 10px; background: #fafafa; color: #777;
                    font-family: inherit; font-size: .8rem; font-weight: 800; cursor: pointer; }
     .liq-cta-btn.on { border-color: #1565c0; background: #e3f2fd; color: #1565c0; }
+    .liq-cta-btn small { display: block; font-weight: 600; font-size: .72rem; opacity: .8; margin-top: 2px; }
+    #liq-cta-field.falta label { color: #c62828; }
+    #liq-cta-field.falta .liq-cta-btn { border-style: dashed; border-color: #e65100; }
     .modal-target { background: #fff3e0; border-radius: 10px; padding: .7rem .9rem; margin-bottom: .8rem; display: flex; justify-content: space-between; font-weight: 700; font-size: .9rem; }
     .modal-target .lbl { color: #e65100; }
     .modal-sum { background: #f5f5f5; border-radius: 10px; padding: .7rem .9rem; margin-bottom: 1rem; display: flex; justify-content: space-between; font-weight: 800; font-size: .95rem; }
@@ -2653,8 +2656,11 @@ function _yaPagado(year, sem) {
 function liqOpen(year, sem, aPagarTotal, cantidad) {
   const ya = _yaPagado(year, sem);
   const saldo = Math.max(0, aPagarTotal - ya.total);
+  /* Sin cuenta preseleccionada (11/9/2026): el que sabe a donde transfirio es
+     el vendedor. Con Mercado Pago de entrada, un pago al Brubank que no se
+     corregia quedaba imputado a la otra cuenta. */
   _liqCtx = { year, sem, aPagarTotal, yaPagadoEf: ya.ef, yaPagadoTr: ya.tr, saldo,
-              cta: _redCtaDefault() };
+              cta: '' };
   _redCtaPint = '';   // el modal es estático: sin esto la firma sobrevive al cierre
   const dates = _isoWeekDates(year, sem);
   const fmtDM = d => String(d.getDate()).padStart(2,'0') + '/' + String(d.getMonth()+1).padStart(2,'0');
@@ -2713,27 +2719,38 @@ function _redPintarCtas() {
   const dig = _redCtasDigitales();
   const tr = _parseMonto($id('liq-tr').value);
   const mostrar = tr > 0 && dig.length > 1;
-  if (mostrar && _liqCtx && !_liqCtx.cta) _liqCtx.cta = _redCtaDefault();
   // `liqUpdateSum` corre en cada tecla del monto: sin la firma esto reescribiría
   // el mismo HTML una vez por pulsación.
-  const firma = mostrar ? ('1|' + ((_liqCtx && _liqCtx.cta) || '') + '|' + dig.length) : '0';
+  const firma = mostrar ? ('1|' + ((_liqCtx && _liqCtx.cta) || '') + '|' + dig.length +
+                           '|' + dig.map(c => c.alias || '').join(',')) : '0';
   if (firma === _redCtaPint) return;
   _redCtaPint = firma;
   field.style.display = mostrar ? '' : 'none';
+  field.classList.toggle('falta', mostrar && !(_liqCtx && _liqCtx.cta));
   if (!mostrar) { box.innerHTML = ''; return; }
+  /* Con el alias abajo: al vendedor le sirve para transferir, no solo para
+     decir a donde transfirio. */
   box.innerHTML = dig.map(c => {
     const on = (_liqCtx && _liqCtx.cta) === c.id;
+    const al = String(c.alias || '').replace(/[<>&"]/g, '');
     return '<button type="button" class="liq-cta-btn' + (on ? ' on' : '') + '"' +
            ' data-cta="' + c.id + '" onclick="_redSetCta(\'' + c.id + '\')">' +
            (c.id === 'mp' ? '📱 ' : '🏦 ') +
-           String(c.nombre || c.id).replace(/[<>&"]/g, '') + '</button>';
+           String(c.nombre || c.id).replace(/[<>&"]/g, '') +
+           (al ? '<small>alias ' + al + '</small>' : '') + '</button>';
   }).join('');
 }
 
 function _redSetCta(id) {
   if (!_liqCtx) return;
   _liqCtx.cta = id;
-  _redPintarCtas();
+  liqUpdateSum();   // repinta las pastillas Y destraba el boton
+}
+
+/** ¿Falta decir a que cuenta transfirio? Solo con parte por transferencia y
+ *  mas de una cuenta donde pueda entrar. */
+function _redFaltaCta(tr) {
+  return Number(tr) > 0 && _redCtasDigitales().length > 1 && !(_liqCtx && _liqCtx.cta);
 }
 
 function liqClose(force) {
@@ -2782,8 +2799,9 @@ function liqUpdateSum() {
     $id('liq-sum-val').textContent = ars(suma) + ' · excede por ' + ars(suma - saldo);
     sumEl.querySelector('span:first-child').textContent = 'Sobrepago';
   }
-  // Permitir registrar cualquier monto > 0 y <= saldo
-  $id('liq-confirm').disabled = !(suma > 0 && suma <= saldo);
+  // Permitir registrar cualquier monto > 0 y <= saldo, y con la cuenta dicha
+  // si hay transferencia (11/9/2026).
+  $id('liq-confirm').disabled = !(suma > 0 && suma <= saldo) || _redFaltaCta(tr);
   // El selector aparece y desaparece con el monto de transferencia, y este es el
   // único lugar por el que pasan los dos campos.
   _redPintarCtas();
@@ -2796,6 +2814,7 @@ function liqConfirm() {
   const suma = ef + tr;
   if (suma <= 0) { redToast('Ingresá un monto'); return; }
   if (suma > _liqCtx.saldo) { redToast('Excede lo que falta pagar'); return; }
+  if (_redFaltaCta(tr)) { redToast('¿A qué cuenta transferiste? Elegila arriba'); return; }
   const ctx = _liqCtx;
   const cta = _redCtaDePago(tr);
   liqClose(true);
@@ -3020,9 +3039,9 @@ function registrarPagoParcial(year, semana, ef, tr, cuenta) {
       if (!d.ok) { redToast('Error: ' + (d.err || 'no se pudo guardar')); return; }
       const parts = [];
       if (ef > 0) parts.push(ars(ef) + ' EF');
-      // Nombra la cuenta sólo cuando no es la habitual: un pago que entró a otro
-      // lugar y no lo dice es mentir por omisión.
-      const ctaTxt = (cuenta && cuenta !== _redCtaDefault()) ? _redCtaNombre(cuenta) : '';
+      // Nombra la cuenta siempre que haya una: desde el 11/9/2026 la elige el
+      // vendedor, y el aviso es la confirmacion de que quedo donde quiso.
+      const ctaTxt = cuenta ? _redCtaNombre(cuenta) : '';
       if (tr > 0) parts.push(ars(tr) + ' TR' + (ctaTxt ? ' → ' + ctaTxt : ''));
       const msg = '✓ Pago registrado: ' + parts.join(' + ');
       if (d.semanaCerrada) redToast(msg + ' · semana cerrada 🎉');

@@ -1,23 +1,29 @@
 /**
- * El cuadro de Cobros preguntando a que cuenta entro la transferencia.
+ * El flujo de cobro con dos cuentas (Mercado Pago Tadeo y Brubank Lucas).
  *
  * Corre en un Chrome de verdad con TODOS los POST interceptados: la planilla
- * no se toca.
+ * no se toca. Clientes, vendedores y direcciones son inventados: este repo es
+ * publico por Pages.
  *
- * Los clientes y las direcciones son inventados: este repo es publico por
- * Pages y no entra ningun dato de un cliente real.
+ * Lo que exige (11/9/2026):
+ *   · NINGUNA cuenta viene elegida de antemano. Desde que la tienda le ofrece
+ *     al cliente los dos alias, preseleccionar Mercado Pago imputaba ahi cada
+ *     pago al Brubank que nadie corregia, sin un solo error.
+ *   · En "¿Cómo te pagó?" cada cuenta es su pastilla: un toque dice que fue
+ *     transferencia Y a donde. Mixto pregunta aparte a donde fue lo digital.
+ *   · Sin cuenta, el cobro NO se confirma: ni el cuadro, ni el parcial, ni el
+ *     combo, ni la rendicion del vendedor, ni el "Ya me pagó" del AUTOPEDIDO.
+ *   · El mensaje al cliente lleva los dos alias, y "Pedir comprobante" copia el
+ *     texto en vez de abrir un link wa.me (prohibido).
  *
- * Se abre `ruta.html?standalone=1` a proposito: en el `app.html` fusionado el
- * estado de la sub-app (`_cobroRutaState`, `RUT_CTAS`) vive dentro de un IIFE
- * y no se puede leer desde afuera. `npm run auditar` ya verifica que suelta y
- * fusionada se ven igual.
+ * Se abre `ruta.html?standalone=1`: en el `app.html` fusionado el estado de la
+ * sub-app vive dentro de un IIFE y no se puede leer desde afuera.
  *
- * CADA CASO ARRANCA EN UNA PAGINA NUEVA, y no es por prolijidad: confirmar un
- * cobro deja una cadena de promesas que termina llamando a `cerrarCobroRuta()`,
- * y esa llamada le pone `null` al cuadro que el caso siguiente acaba de abrir.
- * Encadenar los casos hacia que fallara uno distinto en cada corrida.
+ * CADA CASO ARRANCA EN UNA PAGINA NUEVA: confirmar un cobro deja una cadena de
+ * promesas que termina en `cerrarCobroRuta()`, y esa llamada le pone `null` al
+ * cuadro que el caso siguiente acaba de abrir.
  *
- *   node probar_cta_cobro.js [ancho]
+ *   node probar_cuenta_cobro.js [ancho] [archivo]
  */
 const path = require('path');
 const PRU = 'c:/Tadeo Ustariz/Trabajo/Grupo Matriz/Maleu/maleupedidos.github.io/_tools/pruebas';
@@ -25,13 +31,8 @@ const { abrir, evaluar } = require(path.join(PRU, 'cdp.js'));
 
 const ANCHO = Number(process.argv[2]) || 390;
 /* `&prueba=1` NO es opcional: sin el, el interceptor de sesion ve un
-   authRequired, hace alert + location.reload() y la pagina se recarga a
-   mitad de la medicion. El sintoma es que `_cobroRutaState` pasa a null
-   sin que nadie llame a cerrarCobroRuta, y falla un caso distinto en cada
-   corrida. Es la trampa ya anotada del 3/9/2026. */
-/* El archivo a servir. Se parametriza para poder correr el MISMO test
-   sobre una copia con un bug adentro: un test que da verde con el bug
-   puesto no prueba nada. */
+   authRequired, hace alert + location.reload() y la pagina se recarga a mitad
+   de la medicion. */
 const ARCH = process.argv[3] || 'ruta.html';
 const BASE = 'http://localhost:8080/' + ARCH + '?standalone=1&prueba=1';
 
@@ -41,27 +42,30 @@ const chequear = (cond, txt, det) => {
   else { mal++; console.log('  MAL   ' + txt + (det !== undefined ? '  -> ' + det : '')); }
 };
 
-/* Dos pedidos pendientes, inventados. Nombres y direcciones falsos a proposito:
-   este archivo puede terminar en el repo, que es publico por Pages. */
 const COBROS = [
-  { h: 'Home', id: '9001', r: 900, c: 'Prueba Uno', t: '', $: 50000,
+  { h: 'Home', id: '9001', r: 900, c: 'Prueba Uno', t: '1100000001', $: 50000,
     totalOriginal: 50000, fp: 'Transferencia', dir: 'Golf · Lote 1' },
-  { h: 'Home', id: '9002', r: 901, c: 'Prueba Dos', t: '', $: 30000,
-    totalOriginal: 30000, fp: 'Efectivo', dir: 'Golf · Lote 2' }
+  /* Con subtotal: asi el cuadro puede recalcular el 10% de efectivo al pasar
+     a transferencia, que es lo que hace con un pedido real. */
+  { h: 'Home', id: '9002', r: 901, c: 'Prueba Dos', t: '', $: 29997, sub: 33330, env: 0, desc: 3333,
+    totalOriginal: 29997, fp: 'Efectivo', dir: 'Golf · Lote 2' }
 ];
 
 const CUENTAS = [
-  { id: 'efectivo', nombre: 'Efectivo', tipo: 'efectivo', col: 2, def: false, inv: false },
-  { id: 'mp', nombre: 'Mercado Pago Tadeo', tipo: 'digital', col: 3, def: true, inv: true },
-  { id: 'brubank', nombre: 'Brubank Lucas', tipo: 'digital', col: 7, def: false, inv: false }
+  { id: 'efectivo', nombre: 'Efectivo', tipo: 'efectivo', col: 2, alias: '', banco: '', def: false, inv: false },
+  { id: 'mp', nombre: 'Mercado Pago Tadeo', tipo: 'digital', col: 3, alias: 'maleump', banco: 'Mercado Pago', def: true, inv: true },
+  { id: 'brubank', nombre: 'Brubank Lucas', tipo: 'digital', col: 7, alias: 'maleubru', banco: 'Brubank', def: false, inv: false }
 ];
+const UNA_SOLA = CUENTAS.filter(c => c.id !== 'brubank');
 
-/** El PREP: intercepta la red ANTES de que corra el ERP.
- *  `cts` es la lista de cuentas que va a "mandar" el backend. */
 function prep(cts) {
   return `
-    window.__posts = []; window.__avisos = []; window.__errores = [];
+    window.__posts = []; window.__avisos = []; window.__errores = []; window.__copiado = null;
     window.addEventListener('error', function(e){ window.__errores.push(String(e.message)); });
+    try {
+      Object.defineProperty(navigator, 'clipboard', { configurable: true,
+        value: { writeText: function(t){ window.__copiado = String(t); return Promise.resolve(); } } });
+    } catch(e) {}
     (function(){
       var of = window.fetch;
       window.fetch = function(u, o){
@@ -70,11 +74,13 @@ function prep(cts) {
           var b = o.body;
           try { b = (typeof b === 'string') ? JSON.parse(b) : b; } catch(e){}
           window.__posts.push(b);
-          /* Se contesta lo que el ERP espera de verdad: un {ok:true} pelado
-             hace fallar codigo que anda. Ya paso tres veces. */
           return Promise.resolve(new Response(
-            JSON.stringify({ ok: true, total: null, aFavor: 0, aplicacion: 0,
-                             cambioMP: 0, cambioEf: 0,
+            /* Lo que el backend de verdad contesta: cobrarParcial devuelve
+               restante, y sin el el aviso revienta y el parcial se re-encola —
+               un rojo que seria del stub, no del ERP. */
+            JSON.stringify({ ok: true, n: 999, total: (b && (Number(b.ef||0)+Number(b.tr||0))) || null,
+                             restante: 30000, cerrado: false, totalCobrado: 20000,
+                             aFavor: 0, aplicacion: 0, cambioMP: 0, cambioEf: 0,
                              cuenta: (b && b.cuenta) || '' }),
             { status: 200, headers: { 'Content-Type': 'application/json' } }));
         }
@@ -100,7 +106,6 @@ function prep(cts) {
 }
 
 const dormir = ms => new Promise(r => setTimeout(r, ms));
-
 async function esperar(cli, expr, ms) {
   const t0 = Date.now();
   while (Date.now() - t0 < (ms || 15000)) {
@@ -110,18 +115,13 @@ async function esperar(cli, expr, ms) {
   return false;
 }
 
-/** Pagina nueva, con las cuentas que se le indiquen, ya parada en COBROS.
- *
- *  Quita el PREP anterior antes de poner el nuevo: los scripts de
- *  `addScriptToEvaluateOnNewDocument` se ACUMULAN, asi que sin esto la cuarta
- *  navegacion corre cuatro interceptores de fetch anidados. Eso hacia que
- *  fallara un caso distinto en cada corrida.
- */
+/* Los scripts de `addScriptToEvaluateOnNewDocument` se ACUMULAN: sin quitar el
+   anterior, la cuarta navegacion corre cuatro interceptores anidados. */
 let _prepId = null;
-async function arrancar(cli, cts) {
+async function arrancar(cli, cts, tab) {
   if (_prepId) {
     try { await cli.enviar('Page.removeScriptToEvaluateOnNewDocument', { identifier: _prepId }); }
-    catch (e) { /* si no se puede quitar, igual seguimos */ }
+    catch (e) { }
   }
   const r = await cli.enviar('Page.addScriptToEvaluateOnNewDocument',
     { source: 'try{localStorage.clear()}catch(e){}\n' + prep(cts) });
@@ -130,17 +130,18 @@ async function arrancar(cli, cts) {
   await dormir(3200);
   if (!await esperar(cli, 'typeof window.switchTab === "function"'))
     throw new Error('la sub-app no arranco');
-  await evaluar(cli, 'switchTab("cobros")');
+  /* `_tools/servir.js` inyecta su propio `window.confirm` DESPUES del PREP y
+     arranca contestando que NO: sin esto, cada pregunta del AUTOPEDIDO (los
+     precios sin confirmar, el stock) frena el guardado y el test mide su
+     propio freno. */
+  await evaluar(cli, 'window.__confirmDevuelve = true');
+  await evaluar(cli, 'switchTab("' + (tab || 'cobros') + '")');
   if (!await esperar(cli,
       '(function(){try{return pendientesCobro && pendientesCobro.length===2}catch(e){return false}})()'))
     throw new Error('los pedidos de prueba no llegaron');
-  /* Que no quede ningun fetch de cobrosPendientes en vuelo: si uno llega
-     despues de abrir el cuadro, repinta la lista debajo. */
   await dormir(1500);
 }
 
-/** El indice de un pedido por su N. La lista se ordena, asi que asumir que [0]
- *  es tal pedido es asumir un orden que nadie promete. */
 async function idxDe(cli, id) {
   const i = await evaluar(cli,
     '(function(){try{for(var i=0;i<pendientesCobro.length;i++)' +
@@ -149,31 +150,17 @@ async function idxDe(cli, id) {
   return i;
 }
 
-/** Abre el cuadro y EXIGE que quede abierto: con el estado en null, "el
- *  selector no aparece" da ok — y es un ok falso. */
+/** Abre el cuadro y EXIGE que quede abierto: con el estado en null, "no hay
+ *  error" da ok — y es un ok falso. */
 async function abrirCuadro(cli, id) {
   await evaluar(cli, 'abrirCobroPendiente(' + (await idxDe(cli, id)) + ')');
-  if (!await esperar(cli, '!!_cobroRutaState', 8000)) {
-    const t = await evaluar(cli,
-      '(function(){var e=document.getElementById("rutToast")||document.getElementById("toast");return e?e.textContent:"-"})()');
-    throw new Error('el cuadro de ' + id + ' no abrio (toast: ' + t + ')');
-  }
+  if (!await esperar(cli, '!!_cobroRutaState', 8000))
+    throw new Error('el cuadro de ' + id + ' no abrio');
   await dormir(300);
 }
 
-/** Confirma y devuelve lo que quedo REGISTRADO: la cola o el POST, lo que
- *  aparezca primero. `marcarCobrado` es optimista —marca local, encola, guarda
- *  y despues manda—, y la cola procesa de a uno: exigir que el POST ya haya
- *  salido es medir la impaciencia del test. (Leccion del 3/9/2026.) */
-async function confirmarYEsperar(cli, accion) {
-  await evaluar(cli, 'window.__posts=[]; window.__avisos=[];');
-  /* El cuadro tiene que seguir abierto: `confirmarCobroRuta` arranca con
-     `if(!st)return`, asi que con el estado en null no hace NADA y el test
-     reporta un rojo que es suyo, no del ERP. */
-  if (!await evaluar(cli, '!!_cobroRutaState'))
-    throw new Error('el cuadro se cerro antes de confirmar: el test perdio el estado');
-  const r = await evaluar(cli,
-    '(function(){try{confirmarCobroRuta();return "OK"}catch(e){return "THROW: "+e.message}})()');
+/** Lo que quedo REGISTRADO: la cola o el POST, lo que aparezca primero. */
+async function registrado(cli, accion, ms) {
   const leer = async () => {
     const txt = await evaluar(cli,
       '(function(){var a=(window.__posts||[]).filter(function(p){return p&&p.action==="' + accion + '"});' +
@@ -183,31 +170,39 @@ async function confirmarYEsperar(cli, accion) {
   };
   const t0 = Date.now();
   let out = [];
-  while (Date.now() - t0 < 12000) {
+  while (Date.now() - t0 < (ms || 12000)) {
     out = await leer();
     if (out.length) break;
     await dormir(200);
   }
-  if (!out.length) {
-    console.log('       (nada registrado) confirmar=' + r +
-      ' estado=' + await evaluar(cli, '(_cobroRutaState?"abierto":"null")') +
-      ' avisos=' + await evaluar(cli, 'JSON.stringify(window.__avisos||[])'));
-  }
   return out;
 }
+async function confirmarYEsperar(cli, accion) {
+  await evaluar(cli, 'window.__posts=[]; window.__avisos=[];');
+  if (!await evaluar(cli, '!!_cobroRutaState'))
+    throw new Error('el cuadro se cerro antes de confirmar: el test perdio el estado');
+  await evaluar(cli, '(function(){try{confirmarCobroRuta()}catch(e){window.__errores.push("CONF: "+e.message)}})()');
+  return registrado(cli, accion);
+}
 
-/** Carga en el input el total QUE EL ERP dice, no uno adivinado: al cambiar de
- *  metodo el total se recalcula (el 10% OFF de efectivo), y un monto de menos
- *  hace que `confirmarCobroRuta` frene sin decir nada al test. */
+/** El total QUE EL ERP dice, no uno adivinado: al cambiar de metodo el total
+ *  se recalcula (el 10% OFF de efectivo). */
 async function cargarTotal(cli, campo) {
   const t = await evaluar(cli, '_cobroRutaState.total');
   await evaluar(cli, '_setMoneyInput("' + campo + '", ' + Number(t) + '); _recalcCobroRuta();');
-  await dormir(400);
+  await dormir(300);
   return Number(t);
 }
 
-const display = cli => evaluar(cli,
-  'document.getElementById("cobroCtaSection").style.display');
+const J = o => JSON.stringify(o);
+const filaFp = cli => evaluar(cli,
+  'Array.prototype.map.call(document.querySelectorAll("#cobroRutaFp .cobro-pill"),function(p){' +
+  'return (p.getAttribute("data-fp")||("cta:"+p.getAttribute("data-cta")))+(p.classList.contains("on")?"*":"")}).join(",")');
+const seccion = cli => evaluar(cli, 'document.getElementById("cobroCtaSection").style.display');
+const boton = cli => evaluar(cli,
+  '(function(){var b=document.getElementById("btnCobroRutaOk");return (b.disabled?"OFF:":"ON:")+b.textContent})()');
+const tocar = (cli, sel) => evaluar(cli,
+  '(function(){var e=document.querySelector(' + J(sel) + ');if(!e)return false;e.click();return true})()');
 
 (async () => {
   const cli = await abrir({});
@@ -218,138 +213,256 @@ const display = cli => evaluar(cli,
       { width: ANCHO, height: 900, deviceScaleFactor: 1, mobile: ANCHO < 700 });
 
     console.log('\n' + '='.repeat(70));
-    console.log('LA CUENTA DEL COBRO  ·  ' + ANCHO + 'px');
+    console.log('EL COBRO CON DOS CUENTAS  ·  ' + ANCHO + 'px  ·  ' + ARCH);
     console.log('='.repeat(70));
 
-    // ── 1. las cuentas llegan y se leen bien ────────────────────────────────
+    // ── 1. las cuentas llegan con sus alias ─────────────────────────────────
     console.log('\n-- las cuentas llegan por cobrosPendientes --');
     await arrancar(cli, CUENTAS);
-    chequear(await evaluar(cli, '(RUT_CTAS||[]).length') === 3,
-      'llegan las 3 cuentas');
-    chequear(await evaluar(cli, '_ctasDigitales().length') === 2,
-      'y 2 son digitales: el efectivo no se elige');
-    chequear(await evaluar(cli, '_ctaDefault()') === 'mp',
-      'la default sale de la marca `def` del backend, no del orden de la hoja');
+    chequear(await evaluar(cli, '(RUT_CTAS||[]).length') === 3, 'llegan las 3 cuentas');
+    chequear(await evaluar(cli, '_ctasDigitales().length') === 2, 'y 2 son digitales');
+    chequear(await evaluar(cli, '(RUT_CTAS||[])[2].alias') === 'maleubru', 'con su alias');
 
-    // ── 2. un pedido por transferencia ──────────────────────────────────────
-    console.log('\n-- un pedido por TRANSFERENCIA --');
+    // ── 2. un pedido por transferencia: nada elegido de antemano ───────────
+    console.log('\n-- un pedido por TRANSFERENCIA: ninguna cuenta preseleccionada --');
     await abrirCuadro(cli, '9001');
-    chequear(await display(cli) !== 'none', 'el selector APARECE',
-      await evaluar(cli, '"["+document.getElementById("cobroCtaSection").style.display+"] fp="+_cobroRutaState.fp'));
-    const pills = await evaluar(cli,
-      'Array.prototype.map.call(document.querySelectorAll("#cobroRutaCta .cobro-pill"),' +
-      'function(p){return p.getAttribute("data-cta")}).join(",")');
-    chequear(pills === 'mp,brubank', 'con las 2 cuentas digitales', pills);
-    const txt = await evaluar(cli, 'document.getElementById("cobroRutaCta").textContent');
-    chequear(/Mercado Pago Tadeo/.test(txt) && /Brubank Lucas/.test(txt),
-      'y con el nombre de cada una, no el id', txt);
-    chequear(await evaluar(cli,
-      '!!document.querySelector("#cobroRutaCta .cobro-pill.on[data-cta=mp]")'),
-      'la default viene preseleccionada');
-
-    const altos = await evaluar(cli,
-      'Array.prototype.map.call(document.querySelectorAll("#cobroRutaCta .cobro-pill"),' +
+    const f2 = await filaFp(cli);
+    chequear(f2 === 'Efectivo,Mixto,cta:mp,cta:brubank',
+      'en "¿Cómo te pagó?" cada cuenta es su pastilla', f2);
+    chequear(!/\*/.test(f2), 'y NINGUNA viene prendida', f2);
+    chequear(await evaluar(cli, 'document.getElementById("cobroRutaFp").classList.contains("falta")'),
+      'la fila avisa que falta elegir');
+    chequear(await seccion(cli) === 'none', 'la seccion de Mixto no aparece en una transferencia');
+    const b2 = await boton(cli);
+    chequear(/^OFF:Elegí a qué cuenta entró/.test(b2), 'el boton se traba y dice que falta', b2);
+    chequear(/A qué cuenta entró/.test(await evaluar(cli, 'document.getElementById("cobroRutaErr").textContent')),
+      'y el cartel lo explica nombrando las dos');
+    const c2 = await confirmarYEsperar(cli, 'marcarCobrado');
+    chequear(c2.length === 0, 'confirmar sin cuenta NO registra nada', c2.length);
+    const txt2 = await evaluar(cli, 'document.getElementById("cobroRutaFp").textContent');
+    chequear(/Mercado Pago Tadeo/.test(txt2) && /Brubank Lucas/.test(txt2), 'las pastillas dicen el nombre', txt2);
+    const alt = await evaluar(cli,
+      'Array.prototype.map.call(document.querySelectorAll("#cobroRutaFp .cobro-pill"),' +
       'function(p){return Math.round(p.getBoundingClientRect().height)}).join(",")');
-    chequear(Math.min(...String(altos).split(',').map(Number)) >= 38,
-      'los pills llegan al minimo tactil del ERP (38px)', altos);
+    chequear(Math.min(...String(alt).split(',').map(Number)) >= 38, 'todas llegan al minimo tactil (38px)', alt);
     chequear(!await evaluar(cli,
-      '(function(){var b=document.getElementById("cobroRutaCta");return b.scrollWidth>b.clientWidth+2})()'),
+      '(function(){var b=document.getElementById("cobroRutaFp");return b.scrollWidth>b.clientWidth+2})()'),
       'y no desbordan la caja');
 
-    // ── 3. elegir el Brubank ────────────────────────────────────────────────
-    console.log('\n-- elegir el Brubank y cobrar --');
-    await evaluar(cli, '_setCobroCta("brubank")');
-    chequear(await evaluar(cli, '_cobroRutaState.cta') === 'brubank',
-      'el estado guarda la eleccion');
-    chequear(await evaluar(cli,
-      '!!document.querySelector("#cobroRutaCta .cobro-pill.on[data-cta=brubank]")'),
-      'y el pill queda marcado');
+    // un monto ya tipeado no se pierde al elegir la cuenta
+    const tot2 = await evaluar(cli, '_cobroRutaState.total');
+    await evaluar(cli, '_setMoneyInput("cobroRecMP",' + (Number(tot2) + 1000) + ');_recalcCobroRuta();');
+    chequear(await tocar(cli, '#cobroRutaFp [data-cta=brubank]'), 'toco "Brubank Lucas"');
+    await dormir(300);
+    chequear(await evaluar(cli, '_parseMoneyInput(document.getElementById("cobroRecMP"))') === Number(tot2) + 1000,
+      'el monto que habia tipeado NO se pisa', await evaluar(cli, 'document.getElementById("cobroRecMP").value'));
     await cargarTotal(cli, 'cobroRecMP');
-    const c1 = await confirmarYEsperar(cli, 'marcarCobrado');
-    chequear(c1.length === 1, 'quedo UN cobro registrado', c1.length);
-    chequear(c1.length === 1 && c1[0].cuenta === 'brubank',
-      'y lleva cuenta:"brubank"', c1.length ? JSON.stringify(c1[0].cuenta) : '-');
-    chequear(c1.length === 1 && c1[0].formaPago === 'Transferencia',
-      'con la forma de pago intacta', c1.length ? c1[0].formaPago : '-');
+    const f2b = await filaFp(cli);
+    chequear(/cta:brubank\*/.test(f2b) && !/cta:mp\*/.test(f2b), 'queda prendida SOLO la elegida', f2b);
+    chequear(!await evaluar(cli, 'document.getElementById("cobroRutaFp").classList.contains("falta")'),
+      'y deja de avisar');
+    chequear(/^ON:/.test(await boton(cli)), 'el boton se destraba', await boton(cli));
+    const c2b = await confirmarYEsperar(cli, 'marcarCobrado');
+    chequear(c2b.length === 1 && c2b[0].cuenta === 'brubank' && c2b[0].formaPago === 'Transferencia',
+      'se registra con cuenta:"brubank" y forma Transferencia', J(c2b[0] && { c: c2b[0].cuenta, fp: c2b[0].formaPago }));
+    await dormir(600);
+    const toast2 = await evaluar(cli, '(document.getElementById("rutToast")||{}).textContent||""');
+    chequear(/Brubank Lucas/.test(toast2), 'y el aviso nombra la cuenta', toast2);
 
-    // ── 4. un pedido en efectivo (pagina nueva) ─────────────────────────────
+    // ── 3. un pedido en efectivo ────────────────────────────────────────────
     console.log('\n-- un pedido en EFECTIVO: no se pregunta nada --');
     await arrancar(cli, CUENTAS);
     await abrirCuadro(cli, '9002');
-    chequear(await display(cli) === 'none', 'el selector NO aparece',
-      await evaluar(cli, '"fp="+_cobroRutaState.fp'));
+    const f3 = await filaFp(cli);
+    chequear(f3 === 'Efectivo*,Mixto,cta:mp,cta:brubank', 'Efectivo prendido, las cuentas apagadas', f3);
+    /* $29.997 no es un monto "redondo", asi que el cuadro no lo precarga: se
+       carga el total que el ERP dice, como haria la persona. */
     await cargarTotal(cli, 'cobroRecEf');
-    const c2 = await confirmarYEsperar(cli, 'marcarCobrado');
-    chequear(c2.length === 1 && c2[0].cuenta === '',
-      'y manda cuenta VACIA: el efectivo no elige cuenta',
-      c2.length ? JSON.stringify(c2[0].cuenta) : '-');
+    chequear(/^ON:/.test(await boton(cli)), 'y se puede cobrar directo', await boton(cli));
+    const c3 = await confirmarYEsperar(cli, 'marcarCobrado');
+    chequear(c3.length === 1 && c3[0].cuenta === '', 'cuenta VACIA: el efectivo no elige', J(c3[0] && c3[0].cuenta));
 
-    // ── 5. cambiar de metodo prende y apaga el selector ─────────────────────
-    console.log('\n-- cambiar de metodo prende y apaga el selector --');
+    // ── 4. un pedido en efectivo que te pagaron por MP: UN toque ───────────
+    console.log('\n-- era efectivo y te transfirio a Mercado Pago: un solo toque --');
     await arrancar(cli, CUENTAS);
     await abrirCuadro(cli, '9002');
-    chequear(await display(cli) === 'none', 'arranca escondido (pedido en efectivo)');
-    await evaluar(cli, '_setCobroFp("Transferencia")'); await dormir(300);
-    chequear(await display(cli) !== 'none', 'al pasar a Transferencia APARECE',
-      await evaluar(cli, '"["+document.getElementById("cobroCtaSection").style.display+"] fp="+_cobroRutaState.fp'));
-    chequear(await evaluar(cli, '_cobroRutaState.cta') === 'mp',
-      'y se preselecciona la default');
-    await evaluar(cli, '_setCobroFp("Mixto")'); await dormir(300);
-    chequear(await display(cli) !== 'none', 'en Mixto tambien: hay una parte digital');
-    await evaluar(cli, '_setCobroFp("Efectivo")'); await dormir(300);
-    chequear(await display(cli) === 'none', 'y al volver a Efectivo se esconde');
+    const antes4 = await evaluar(cli, '_cobroRutaState.total');
+    await tocar(cli, '#cobroRutaFp [data-cta=mp]');
+    await dormir(300);
+    chequear(await evaluar(cli, '_cobroRutaState.fp') === 'Transferencia' && await evaluar(cli, '_cobroRutaState.cta') === 'mp',
+      'queda Transferencia a Mercado Pago');
+    chequear(await evaluar(cli, '_cobroRutaState.total') > antes4, 'y el total pierde el 10% de efectivo',
+      antes4 + ' -> ' + await evaluar(cli, '_cobroRutaState.total'));
+    chequear(await evaluar(cli, '_parseMoneyInput(document.getElementById("cobroRecMP"))') === await evaluar(cli, '_cobroRutaState.total'),
+      '"¿Cuánto recibiste?" se carga en la parte digital');
+    const c4 = await confirmarYEsperar(cli, 'marcarCobrado');
+    chequear(c4.length === 1 && c4[0].cuenta === 'mp', 'se registra con cuenta:"mp"', J(c4[0] && c4[0].cuenta));
 
-    // ── 5b. elegir una cuenta y DESPUES pasar a efectivo ───────────────────
-    /* El caso real: te equivocas de metodo, elegis el Brubank, y despues lo
-       corregis a Efectivo. La cuenta ya quedo en el estado, asi que el payload
-       tiene que mandarla VACIA igual — si no, un cobro en efectivo le suma
-       plata al Brubank. */
+    // ── 5. Mixto elegido ────────────────────────────────────────────────────
+    console.log('\n-- MIXTO: pregunta a donde fue lo transferido --');
+    await arrancar(cli, CUENTAS);
+    await abrirCuadro(cli, '9001');
+    await tocar(cli, '#cobroRutaFp [data-fp=Mixto]');
+    await dormir(300);
+    chequear(await seccion(cli) !== 'none', 'aparece "¿A qué cuenta entró lo transferido?"');
+    chequear(!await evaluar(cli, '!!document.querySelector("#cobroRutaCta .on")'), 'sin nada elegido');
+    const t5 = await evaluar(cli, '_cobroRutaState.total');
+    await evaluar(cli, '_setMoneyInput("cobroRecEf",20000);_setMoneyInput("cobroRecMP",' + (Number(t5) - 20000) + ');_recalcCobroRuta();');
+    await dormir(300);
+    chequear(/^OFF:Elegí a qué cuenta entró/.test(await boton(cli)), 'traba el boton', await boton(cli));
+    await tocar(cli, '#cobroRutaCta [data-cta=brubank]');
+    await dormir(300);
+    chequear(/^ON:/.test(await boton(cli)), 'al elegir se destraba', await boton(cli));
+    const c5 = await confirmarYEsperar(cli, 'marcarCobrado');
+    chequear(c5.length === 1 && c5[0].formaPago === 'Mixto' && c5[0].cuenta === 'brubank',
+      'se registra Mixto con cuenta:"brubank"', J(c5[0] && { fp: c5[0].formaPago, c: c5[0].cuenta }));
+
+    // ── 5b. Mixto DEDUCIDO de los montos ───────────────────────────────────
+    console.log('\n-- con plata en los dos campos es Mixto aunque diga Efectivo --');
+    await arrancar(cli, CUENTAS);
+    await abrirCuadro(cli, '9002');
+    const t5b = await evaluar(cli, '_cobroRutaState.total');
+    await evaluar(cli, '_setMoneyInput("cobroRecEf",10000);_setMoneyInput("cobroRecMP",' + (Number(t5b) - 10000) + ');_recalcCobroRuta();');
+    await dormir(300);
+    chequear(await seccion(cli) !== 'none', 'aparece la pregunta de la cuenta, aunque el pill diga Efectivo');
+    chequear(/^OFF:/.test(await boton(cli)), 'y traba hasta que se conteste', await boton(cli));
+    await tocar(cli, '#cobroRutaCta [data-cta=mp]');
+    await dormir(300);
+    const c5b = await confirmarYEsperar(cli, 'marcarCobrado');
+    chequear(c5b.length === 1 && c5b[0].formaPago === 'Mixto' && c5b[0].cuenta === 'mp',
+      'se registra Mixto con cuenta:"mp"', J(c5b[0] && { fp: c5b[0].formaPago, c: c5b[0].cuenta }));
+
+    // ── 5c. elegir Brubank y corregir a efectivo ───────────────────────────
     console.log('\n-- elegir Brubank y despues corregir a EFECTIVO --');
     await arrancar(cli, CUENTAS);
     await abrirCuadro(cli, '9001');
-    await evaluar(cli, '_setCobroCta("brubank")');
-    chequear(await evaluar(cli, '_cobroRutaState.cta') === 'brubank',
-      'la cuenta quedo elegida');
-    await evaluar(cli, '_setCobroFp("Efectivo")'); await dormir(300);
-    chequear(await display(cli) === 'none', 'y al corregir a Efectivo se esconde');
-    chequear(await evaluar(cli, '_cobroRutaState.cta') === 'brubank',
-      'el estado CONSERVA la eleccion (por si vuelve a Transferencia)');
+    await tocar(cli, '#cobroRutaFp [data-cta=brubank]');
+    await tocar(cli, '#cobroRutaFp [data-fp=Efectivo]');
+    await dormir(300);
+    chequear(await seccion(cli) === 'none', 'no queda nada preguntando');
     await cargarTotal(cli, 'cobroRecEf');
-    const c2b = await confirmarYEsperar(cli, 'marcarCobrado');
-    chequear(c2b.length === 1 && c2b[0].cuenta === '',
-      'pero el payload manda cuenta VACIA: en efectivo no se imputa a ninguna',
-      c2b.length ? JSON.stringify(c2b[0].cuenta) : '-');
+    const c5c = await confirmarYEsperar(cli, 'marcarCobrado');
+    chequear(c5c.length === 1 && c5c[0].cuenta === '',
+      'y el payload manda cuenta VACIA: en efectivo no se imputa a ninguna', J(c5c[0] && c5c[0].cuenta));
 
-    // ── 6. una sola cuenta digital: nada que elegir ─────────────────────────
-    console.log('\n-- con UNA sola cuenta digital no hay nada que elegir --');
-    await arrancar(cli, CUENTAS.filter(c => c.id !== 'brubank'));
-    chequear(await evaluar(cli, '_ctasDigitales().length') === 1,
-      'llego una sola cuenta digital');
+    // ── 6. el PARCIAL tambien exige la cuenta ──────────────────────────────
+    console.log('\n-- un pago PARCIAL por transferencia --');
+    await arrancar(cli, CUENTAS);
     await abrirCuadro(cli, '9001');
-    chequear(await display(cli) === 'none',
-      'el selector NO se dibuja: un boton que se contesta solo es friccion sin dato');
-    await cargarTotal(cli, 'cobroRecMP');
-    const c3 = await confirmarYEsperar(cli, 'marcarCobrado');
-    chequear(c3.length === 1 && c3[0].cuenta === '',
-      'y manda cuenta vacia: el backend la resuelve al default, que es esa misma',
-      c3.length ? JSON.stringify(c3[0].cuenta) : '-');
+    await tocar(cli, '#cobroTogglePartial');
+    await dormir(300);
+    await evaluar(cli, '_setMoneyInput("cobroRecMP",20000);_recalcCobroRuta();');
+    await dormir(300);
+    chequear(/^OFF:Elegí a qué cuenta entró/.test(await boton(cli)), 'sin cuenta no se registra el parcial', await boton(cli));
+    await tocar(cli, '#cobroRutaFp [data-cta=brubank]');
+    await dormir(300);
+    const c6 = await confirmarYEsperar(cli, 'cobrarParcial');
+    chequear(c6.length === 1 && c6[0].cuenta === 'brubank' && Number(c6[0].monto) === 20000,
+      'el parcial va con cuenta:"brubank"', J(c6[0] && { c: c6[0].cuenta, m: c6[0].monto }));
 
-    // ── 7. sin cuentas: como antes del 10/9 ─────────────────────────────────
-    console.log('\n-- sin cuentas (un backend viejo): todo como antes del 10/9 --');
+    // ── 7. una sola cuenta digital / sin cuentas ───────────────────────────
+    console.log('\n-- con UNA sola cuenta digital: como siempre --');
+    await arrancar(cli, UNA_SOLA);
+    await abrirCuadro(cli, '9001');
+    const f7 = await filaFp(cli);
+    chequear(f7 === 'Efectivo,Transferencia*,Mixto', 'la fila de siempre, con Transferencia prendida', f7);
+    chequear(/^ON:/.test(await boton(cli)), 'nada que elegir: se cobra directo', await boton(cli));
+    const c7 = await confirmarYEsperar(cli, 'marcarCobrado');
+    chequear(c7.length === 1 && c7[0].cuenta === '', 'cuenta vacia: el backend la resuelve', J(c7[0] && c7[0].cuenta));
+
+    console.log('\n-- sin cuentas (un backend viejo) --');
     await arrancar(cli, []);
     await abrirCuadro(cli, '9001');
-    chequear(await display(cli) === 'none', 'no se dibuja nada');
-    await cargarTotal(cli, 'cobroRecMP');
-    const c4 = await confirmarYEsperar(cli, 'marcarCobrado');
-    chequear(c4.length === 1 && c4[0].cuenta === '',
-      'y el cobro sale igual, con cuenta vacia',
-      c4.length ? JSON.stringify(c4[0].cuenta) : '-');
+    chequear(await filaFp(cli) === 'Efectivo,Transferencia*,Mixto', 'la fila de siempre');
+    const c7b = await confirmarYEsperar(cli, 'marcarCobrado');
+    chequear(c7b.length === 1 && c7b[0].cuenta === '', 'y el cobro sale igual', J(c7b[0] && c7b[0].cuenta));
 
-    // ── 8. la consola ───────────────────────────────────────────────────────
+    // ── 8. la rendicion del vendedor ────────────────────────────────────────
+    console.log('\n-- la RENDICION de un vendedor --');
+    await arrancar(cli, CUENTAS);
+    await evaluar(cli, '_cobroVendReg["Prueba Vendedor"]={$:100000,totalBruto:120482,comision:20482,yaPagado:0,' +
+      'pedidosIds:["1","2"],sems:[{sem:36,y:2026,saldo:100000,n:2}]};confirmarCobroVendedor("Prueba Vendedor")');
+    await dormir(400);
+    await evaluar(cli, '_cvQuick("tr")');
+    await dormir(300);
+    chequear(await evaluar(cli, 'document.getElementById("cvCtaSec").style.display') !== 'none', 'pregunta a que cuenta');
+    chequear(!await evaluar(cli, '!!_cvCtx.cta'), 'sin ninguna elegida');
+    chequear(await evaluar(cli, 'document.getElementById("cvOk").disabled'), 'el boton queda trabado');
+    chequear(/Elegí a qué cuenta/.test(await evaluar(cli, 'document.getElementById("cvSumLbl").textContent')),
+      'y dice por que', await evaluar(cli, 'document.getElementById("cvSumLbl").textContent'));
+    await tocar(cli, '#cvCtaBox [data-cvcta=brubank]');
+    await dormir(300);
+    chequear(!await evaluar(cli, 'document.getElementById("cvOk").disabled'), 'al elegir se destraba');
+    await evaluar(cli, 'window.__posts=[];_cvConfirm()');
+    const c8 = await registrado(cli, 'cobrarVendedorRed');
+    chequear(c8.length === 1 && c8[0].cuenta === 'brubank', 'la rendicion va con cuenta:"brubank"', J(c8[0] && c8[0].cuenta));
+    await dormir(800);
+    chequear(/Brubank Lucas/.test(await evaluar(cli, '(document.getElementById("rutToast")||{}).textContent||""')),
+      'y el aviso la nombra', await evaluar(cli, '(document.getElementById("rutToast")||{}).textContent||""'));
+
+    // ── 9. COBROS: nada de wa.me ────────────────────────────────────────────
+    console.log('\n-- "Pedir comprobante" copia el mensaje, no abre WhatsApp --');
+    await arrancar(cli, CUENTAS);
+    chequear(await evaluar(cli, 'document.querySelectorAll("a[href*=\'wa.me\']").length') === 0,
+      'no queda ningun link wa.me en la pantalla');
+    const nb = await evaluar(cli, 'Array.prototype.filter.call(document.querySelectorAll("#cobrosContent button"),function(b){return /Pedir comprobante/.test(b.textContent)}).length');
+    chequear(nb >= 2, 'cada pedido tiene "Pedir comprobante", tenga telefono o no', nb);
+    await evaluar(cli, 'cobroPedirComprobante(' + (await idxDe(cli, '9001')) + ')');
+    await dormir(500);
+    const cop = await evaluar(cli, 'window.__copiado');
+    chequear(/maleump/.test(cop || '') && /maleubru/.test(cop || ''), 'el mensaje lleva los dos alias', cop);
+    chequear(/comprobante/.test(cop || ''), 'y pide el comprobante');
+
+    // ── 10. AUTOPEDIDO ──────────────────────────────────────────────────────
+    console.log('\n-- AUTOPEDIDO: "Ya me pagó" por transferencia --');
+    await arrancar(cli, CUENTAS, 'nuevo');
+    await evaluar(cli, 'document.getElementById("npNombre").value="Prueba Autopedido";' +
+      'npCart={5:1};npFechaSel=(function(){var d=new Date();d.setDate(d.getDate()+1);' +
+      'return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0")})();' +
+      'npSetPago("Transferencia");npUpdateTotal();');
+    const msg10 = await evaluar(cli, 'npResumenTextoWA()');
+    chequear(/maleump/.test(msg10) && /maleubru/.test(msg10), 'el mensaje al cliente lleva los dos alias', msg10.split('\n').slice(-4).join(' | '));
+    await evaluar(cli, 'var y=document.getElementById("npYaCobrado");y.checked=true;npToggleYaCobrado();');
+    await dormir(200);
+    chequear(!await evaluar(cli, 'document.getElementById("npCtaWrap").classList.contains("hidden")'),
+      'al marcar "Ya me pagó" pregunta a que cuenta');
+    chequear(await evaluar(cli, 'document.querySelectorAll("#npCtaChips .np-chip").length') === 2 &&
+      !await evaluar(cli, '!!document.querySelector("#npCtaChips .active")'), 'con las 2, ninguna elegida');
+    await evaluar(cli, 'window.__posts=[];npGuardar()');
+    await dormir(1200);
+    chequear((await evaluar(cli, 'window.__posts.length')) === 0, 'sin cuenta NO guarda el pedido');
+    chequear(/A qué cuenta/.test(await evaluar(cli, '(document.getElementById("rutToast")||{}).textContent||""')), 'y dice que falta');
+    await tocar(cli, '#npCtaChips [data-cta=brubank]');
+    await evaluar(cli, 'window.__posts=[];npGuardar()');
+    await esperar(cli, 'window.__posts.length>0', 8000);
+    const p10 = await evaluar(cli, 'JSON.stringify(window.__posts[0]||{})');
+    let o10 = {}; try { o10 = JSON.parse(p10); } catch (e) { }
+    chequear(o10.estadoPago === 'Cobrado' && o10.cuenta === 'brubank',
+      'el pedido se guarda cobrado con cuenta:"brubank"', J({ ep: o10.estadoPago, c: o10.cuenta }));
+
+    console.log('\n-- AUTOPEDIDO: "Ya me pagó" en EFECTIVO no pregunta --');
+    await arrancar(cli, CUENTAS, 'nuevo');
+    await evaluar(cli, 'document.getElementById("npNombre").value="Prueba Efectivo";npCart={5:1};' +
+      'npFechaSel=(function(){var d=new Date();d.setDate(d.getDate()+1);' +
+      'return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0")})();' +
+      'npSetPago("Efectivo");npUpdateTotal();var y=document.getElementById("npYaCobrado");y.checked=true;npToggleYaCobrado();');
+    chequear(await evaluar(cli, 'document.getElementById("npCtaWrap").classList.contains("hidden")'), 'no aparece la pregunta');
+    await evaluar(cli, 'window.__posts=[];npGuardar()');
+    await esperar(cli, 'window.__posts.length>0', 8000);
+    let o11 = {}; try { o11 = JSON.parse(await evaluar(cli, 'JSON.stringify(window.__posts[0]||{})')); } catch (e) { }
+    chequear(o11.estadoPago === 'Cobrado' && !o11.cuenta, 'se guarda cobrado y sin cuenta', J({ ep: o11.estadoPago, c: o11.cuenta }));
+
+    console.log('\n-- AUTOPEDIDO con UNA sola cuenta: el alias de siempre --');
+    await arrancar(cli, UNA_SOLA, 'nuevo');
+    await evaluar(cli, 'npCart={5:1};npSetPago("Transferencia");npUpdateTotal();');
+    const msg12 = await evaluar(cli, 'npResumenTextoWA()');
+    chequear(/alias: \*maleump\*/.test(msg12) && !/maleubru/.test(msg12), 'un solo alias, con el formato de siempre',
+      msg12.split('\n').slice(-2).join(' | '));
+
+    // ── 11. la consola ──────────────────────────────────────────────────────
     console.log('\n-- la consola --');
-    const errs = await evaluar(cli,
-      '(window.__errores||[]).filter(function(e){return /_ctaDe|_pintarCobroCtas|RUT_CTAS|_ctasDigitales|_mostrarCuadroCobro/.test(e)}).length');
-    chequear(Number(errs || 0) === 0, 'sin errores de las piezas nuevas', errs);
+    const errs = await evaluar(cli, 'JSON.stringify(window.__errores||[])');
+    chequear(errs === '[]', 'sin errores en la consola', errs);
 
   } finally {
     cli.matar();
