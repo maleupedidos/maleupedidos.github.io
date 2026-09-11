@@ -5,7 +5,7 @@ Las pruebas del ERP se escriben en el scratchpad de cada sesión de Claude Code 
 rescatada el 8/9/2026: las piezas que toda prueba vuelve a necesitar.
 
 Los tests puntuales siguen siendo desechables — se escriben para un bug y no
-sobreviven. Estos cuatro no.
+sobreviven. Los de acá no.
 
 | Archivo | Qué hace |
 |---|---|
@@ -26,6 +26,10 @@ sobreviven. Estos cuatro no.
 | `probar_ruta.js` | **RUTA > RUTA, la parada, botón por botón**: la barra de arriba (Parada N de M, cuál sigue), los filtros por zona, cada tipo de card (del freezer, atrasada, mixta con kilos, sin teléfono, combo, club, vendedor Red, depósito), el confirm y el POST de Entregado, Cobrar, la lista de paradas y ordenar. Con `entregas` y `pendientesGuardarStock` **stubbeados con datos inventados** (el repo es público) sobre el ERP fusionado y la sesión real. Mide lo que nadie más mira: que la barra de Cobrar/Entregado se vea **sin scrollear** (y arriba del statusbar en la compu), que al final del scroll no tape la card, y que no haya un solo `wa.me`. **Ojo:** `entregas` y `pendientesGuardarStock` viven en el IIFE — desde afuera se lee la COPIA que publica el build; se pregunta por `getPendientes()` / `getSorted()` |
 | `probar_reprog.py` | **`reprogramarEntrega` contra produccion, ida y vuelta.** El camino que ESCRIBE se prueba reprogramando un pedido **a la fecha que ya tiene**: ejercita el `setValue` de verdad y no mueve un solo dato. La celda se lee antes y despues con la service account. Incluye los 5 rechazos — entre ellos un pedido ya entregado, que es el corte que evita moverle el mes a una venta hecha |
 | `probar_categorias.js` | **La categoria de un producto sale de la hoja Proveedores.** Saca `_catPorAbbr_` / `_prodCategoria` / `_prodSubcat` del `Code.js` real y las corre con la hoja simulada: los 34 productos, que los 27 que ya se clasificaban bien NO se muevan, y que una categoria nueva entre sola. `--viejo` reinyecta el mapa de prefijos (30 ok → 17 ok / 13 mal) |
+| `probar_pieza_sale.js` | **La pieza de carne sigue al estado del pedido.** Saca `_piezasMoverEstado_` y sus tres envoltorios del `Code.js` real con la hoja simulada. El chequeo que importa es **la propiedad**: el freezer baja exactamente los kilos entregados. Cubre que una ref **parecida** (`Home #93` contra `Home #937`) no matchee, el lock ocupado, la hoja inexistente, y **que los CUATRO caminos esten enganchados** — el conteo de llamadas fue lo que destapo que faltaban los tres onEdit de cancelacion. Acepta un `Code.js` anterior como argumento (42 ok -> 11 ok / 26 mal) |
+| `probar_cross_cat.js` | **La categoria para los segmentos cross-sell, desde la hoja Proveedores.** El hermano de `probar_categorias.js` para `_crmCategoriaDe`: que la carne exista, que las tortas sigan cayendo en Postres (el segmento no cambia de nombre) y que el `catMap` se pase al loop — **cuenta las lecturas del CacheService**: 20 llamadas con catMap leen 0 veces |
+| `probar_seg_carne.js` | **El cross-sell de 🎯 Segmentos en Chrome**, con la sesion real y la respuesta de `crmClientes` parcheada al vuelo para simular el contrato nuevo. Cuatro escenarios: con carne, sin que nadie la haya probado, una categoria que el panel no conoce, y un **control sin interceptor**. Ojo: cada escenario **remueve los scripts del anterior** (se acumulan) y el piso de 38px se exige **solo a 390px** |
+| `regularizar_piezas.py` | **Un conjunto cerrado**: las piezas que quedaron `Asignada` sobre un pedido ya entregado antes de que el backend lo hiciera solo. En seco por defecto; al escribir **muestra el cuadre** releyendo la planilla, corte por corte |
 
 ## Cómo se usan
 
@@ -93,6 +97,22 @@ const PREP = require('./sesion_prep.js')(process.argv[2]);
 > Un escenario sin el stub, midiendo lo mismo, es lo único que dice si un error
 > de consola es del ERP o de tu propio interceptor. Sin el control, un
 > `"Script error."` te hace perseguir un bug que no existe.
+
+## Las piezas de carne y los segmentos (11/9/2026)
+
+    node probar_pieza_sale.js                  # el ciclo de la pieza, con la hoja simulada
+    node probar_cross_cat.js                   # la categoria de un producto, desde la hoja Proveedores
+    node probar_seg_carne.js <token> [390|1440] # el cross-sell en Chrome, 4 escenarios
+    python regularizar_piezas.py [--escribir]  # pone al dia las piezas de pedidos ya entregados
+
+Los dos primeros sacan las funciones del **`Code.js` real** y simulan la hoja, asi
+que corren sin red y aceptan un `Code.js` anterior como argumento para probar la
+direccion contraria.
+
+`regularizar_piezas.py` es de **un conjunto cerrado**: las piezas que quedaron
+`Asignada` sobre un pedido ya entregado antes de que el backend lo hiciera solo.
+Corre en seco por defecto y al escribir **muestra el cuadre** releyendo la
+planilla (suma de piezas contra la col R/S, corte por corte).
 
 ## Lo que no entra acá
 
