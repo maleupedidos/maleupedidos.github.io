@@ -77,9 +77,22 @@ const PREP = require('./sesion_prep.js')(process.argv[2]);
 > prueba escribe en la planilla de producción: el 3/9/2026 un test llamó a
 > `npGuardar()` y creó un pedido real.
 
+> [!danger] Los scripts de `addScriptToEvaluateOnNewDocument` se ACUMULAN
+> Si una prueba corre varios escenarios con un stub distinto en cada uno, el
+> del escenario 1 **sigue activo** en el 2: hay que guardar el `identifier` que
+> devuelve el add y borrarlo con `Page.removeScriptToEvaluateOnNewDocument`
+> antes de inyectar el siguiente. Pasó el 11/9/2026 — el escenario *"y si nadie
+> hubiera comprado carne"* corría con la carne ya inyectada, o sea que medía lo
+> contrario de lo que decía.
+
 > [!tip] Un test que da verde con el bug adentro no prueba nada
 > Probá en las dos direcciones: reproducí el bug y comprobá que el test lo
 > agarra. Y si un test falla sobre código que no tocaste, sospechá del test.
+
+> [!tip] Cuando un escenario simula un contrato nuevo, hacé el CONTROL
+> Un escenario sin el stub, midiendo lo mismo, es lo único que dice si un error
+> de consola es del ERP o de tu propio interceptor. Sin el control, un
+> `"Script error."` te hace perseguir un bug que no existe.
 
 ## Lo que no entra acá
 
@@ -102,3 +115,17 @@ este script queda para correrlo suelto sobre un archivo cualquiera.
 
 Solo marca usos peligrosos (un metodo o un indexado). Leer una variable que vale
 `undefined` no rompe nada.
+
+> [!warning] No distingue el SCOPE: un uso adentro de una funcion es un falso positivo
+> Lo que importa es si ese codigo corre **mientras el script se evalua**. Un uso
+> adentro de una funcion que se llama despues -al tocar una tab, por ejemplo- es
+> inofensivo: cuando corre, la variable ya esta asignada.
+>
+> Ejemplo real: sobre `_src/panel.src.html` marca **`_SECCION` usada en la L5780 y
+> declarada en la L9447**, y es correcto que este asi — el uso vive dentro de
+> `go(p)`, que se llama al cambiar de tab. Si fuera un bug, el ERP estaria roto
+> desde el 21/8/2026.
+>
+> El chequeo del build (`chequearOrdenDeclaraciones`) recorre **solo las tres
+> sub-apps**, no el panel, y por eso no lo marca. Antes de arreglar lo que este
+> script reporte, mira **quien llama** a esa funcion.

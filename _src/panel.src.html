@@ -1288,6 +1288,7 @@ body{font-family:'Inter',-apple-system,'Segoe UI',system-ui,sans-serif;backgroun
 .seg-card-n{font-size:12px;font-weight:700;color:var(--tx);background:var(--b);border-radius:11px;padding:1px 9px;min-width:24px;text-align:center}
 .seg-card-exp{font-size:11px;color:var(--ink3);font-weight:600;white-space:nowrap}
 .seg-card-hook{font-size:12.5px;color:var(--ink2);margin-top:7px;line-height:1.45;font-style:italic}
+.seg-card-ojo{font-size:12px;color:#8D4E00;background:#FFF8E1;border:1px solid #FFE0A3;border-radius:6px;padding:7px 9px;margin-top:7px;line-height:1.45}
 .seg-card-tpl{font-size:11px;color:var(--ink3);margin-top:6px}
 .seg-card-tpl b{color:#5E35B1;font-weight:700;font-family:'SF Mono','Cascadia Mono',Menlo,monospace}
 .seg-card-acts{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
@@ -22729,15 +22730,27 @@ if('serviceWorker' in navigator){
   var crmSegExcluirDias = 1;   // no mandar 2 difusiones al mismo cliente dentro de N días (1 = mismo día)
   var _segCache = {};          // id → {all, disp, tpl}
   var _segExcl = {};           // id → {key:1} exclusiones manuales (los que NO mandé)
-  var SEG_CATS = ['Sorrentinos','Postres','Tartas','Empanadas','Pizzas','Wraps'];
+  /* Las categorías NO son una lista escrita a mano: salen de lo que los clientes
+     COMPRARON (`cats`, que el backend arma de la hoja Proveedores). Hasta el
+     11/9/2026 eran seis fijas y por eso la carne no tenía segmento — medido ese
+     día, 229 de los 262 clientes de Estancias nunca la probaron: la audiencia
+     más grande de las ocho. Una categoría nueva aparece sola. */
+  function _segCats(){
+    var set = {};
+    (crmClientes||[]).forEach(function(c){ (c.cats||[]).forEach(function(k){ if(k) set[k]=1; }); });
+    return Object.keys(set);
+  }
   // Hook concreto + template (los que armó Tadeo) por categoría que NO probó.
+  // `ojo` es una advertencia INTERNA para armar la oferta, no parte del mensaje.
   var SEG_CROSS = {
     Sorrentinos: {hook:'No probaste los sorrentinos? Cordero al Malbec, J&Q, Calabaza. Listos en 4 min. 20% off para que los pruebes.', tpl:'cross_sorrentinos'},
     Postres:     {hook:'Compra salado pero nunca un postre. Franui o Torta Golosa, 20% off.', tpl:'cross_postres'},
     Tartas:      {hook:'Nunca probó las tartas. Pollo y verdeo, J&Q, Calabaza. 20% off la primera.', tpl:'cross_tartas'},
     Empanadas:   {hook:'Nunca probó las empanadas x8 (carne, J&Q, verdura). 20% off para estrenarlas.', tpl:'cross_empanadas'},
     Pizzas:      {hook:'Nunca pidió nuestras pizzas artesanales. 20% off para probarlas.', tpl:'(falta template)'},
-    Wraps:       {hook:'Nunca probó los wraps de carne o pollo. 20% off.', tpl:'(falta template)'}
+    Wraps:       {hook:'Nunca probó los wraps de carne o pollo. 20% off.', tpl:'(falta template)'},
+    Carnes:      {hook:'Nunca probó la carne: lomo, colita, picaña, entraña y vacío. Fresca, envasada al vacío, y elegís la pieza sabiendo el peso exacto antes de pedirla.', tpl:'(falta template)',
+                  ojo:'Acá NO va el 20% off de las otras: el margen de la carne es 10% a 31% según el corte (entraña 10,1% · lomo 12,5% · colita 23,3% · vacío 28,5% · picaña 30,6%), así que un 20% vende a pérdida en casi todos. El gancho es el producto: pieza elegida y peso exacto.'}
   };
   // Segmentos conductuales → template.
   var SEG_COND = [
@@ -22870,12 +22883,18 @@ if('serviceWorker' in navigator){
     if (crmSegVista === 'cross'){
       var activos = us.filter(function(u){ return u._activo; });
       cards.push('<div class="seg-note">'+activos.length+' hogares <b>activos</b> en Estancias del Pilar. A cada uno le falta probar algo — ofrecele <b>eso</b>, no un genérico.</div>');
-      SEG_CATS.forEach(function(cat){
-        var hh = activos.filter(function(u){ return !u._cats[cat]; });
-        if (!hh.length) return;
-        var info = SEG_CROSS[cat];
-        cards.push(_segCard('cross_'+cat, 'Nunca probó ' + cat, hh, info.hook, info.tpl, '#5E35B1'));
-      });
+      /* De mayor a menor audiencia: arriba queda la campaña más grande que se
+         puede armar hoy. El orden no estaba curado antes -era el de la lista- y
+         con la carne adentro el tamaño es justamente el dato que importa. */
+      _segCats().map(function(cat){
+        return {cat: cat, hh: activos.filter(function(u){ return !u._cats[cat]; })};
+      }).filter(function(x){ return x.hh.length; })
+        .sort(function(a, b){ return b.hh.length - a.hh.length; })
+        .forEach(function(x, i){
+          var info = SEG_CROSS[x.cat] || {hook:'Nunca probó ' + x.cat + '. Falta escribir el gancho y el template de WATI.', tpl:'(falta template)'};
+          var sid = 'cross_' + (String(x.cat).replace(/[^A-Za-z0-9]/g, '') || ('c' + i));
+          cards.push(_segCard(sid, 'Nunca probó ' + x.cat, x.hh, info.hook, info.tpl, '#5E35B1', info.ojo));
+        });
     } else {
       cards.push('<div class="seg-note">'+us.length+' hogares en Estancias del Pilar por estado de relación. Cada estado tiene su template.</div>');
       SEG_COND.forEach(function(seg){
@@ -22931,7 +22950,7 @@ if('serviceWorker' in navigator){
     el('segList').innerHTML = h;
   }
 
-  function _segCard(id, titulo, hh, hook, tpl, color){
+  function _segCard(id, titulo, hh, hook, tpl, color, ojo){
     var disp = hh.filter(function(u){ return !u._reservado; });
     var reservados = hh.length - disp.length;
     _segCache[id] = {all: hh, disp: disp, tpl: tpl};
@@ -22948,6 +22967,7 @@ if('serviceWorker' in navigator){
         + '<span class="seg-card-exp" id="segexp-'+id+'">ver ▾</span>'
       + '</div>'
       + '<div class="seg-card-hook">'+escHtml(hook)+'</div>'
+      + (ojo ? '<div class="seg-card-ojo">⚠️ '+escHtml(ojo)+'</div>' : '')
       + '<div class="seg-card-tpl">Template WATI: <b>'+escHtml(tpl)+'</b></div>'
       + '<div class="seg-card-acts">'
         + '<button class="seg-copy" id="segcopy-'+id+'" onclick="segCopiarTels(\''+id+'\')">📋 Copiar '+conTel+' tel&eacute;fonos</button>'
