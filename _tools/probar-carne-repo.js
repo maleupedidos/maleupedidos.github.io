@@ -83,12 +83,12 @@ function correr(hoy, repo, depTs, stock) {
 
 /* El estado real del 10/9/2026: los 5 cortes por debajo de una semana. */
 const STOCK = {
-  'Maleu Carnes': [
-    { n: 'Carne Lomo', d: 0, dem: 19, u: 'kg' },
-    { n: 'Carne Colita de Cuadril', d: 0, dem: 16.5, u: 'kg' },
-    { n: 'Carne Vacío', d: 5.61, dem: 16.1, u: 'kg' },
-    { n: 'Carne Entraña', d: 1.163, dem: 10.2, u: 'kg' },
-    { n: 'Carne Picaña', d: 0, dem: 5.7, u: 'kg' }
+  'moresco': [
+    { n: 'Carne Lomo', d: 0, dem: 19, u: 'kg', prov: 'Caco' },
+    { n: 'Carne Colita de Cuadril', d: 0, dem: 16.5, u: 'kg', prov: 'Caco' },
+    { n: 'Carne Vacío', d: 5.61, dem: 16.1, u: 'kg', prov: 'Caco' },
+    { n: 'Carne Entraña', d: 1.163, dem: 10.2, u: 'kg', prov: 'Caco' },
+    { n: 'Carne Picaña', d: 0, dem: 5.7, u: 'kg', prov: 'Caco' }
   ]
 };
 const JUE = [2026, 8, 10];      // jueves 10/9/2026
@@ -106,7 +106,7 @@ chk('  y dice de cuándo es la última', /25\/8/.test(h) && /hace 16 días/.test
 chk('  sin afirmar si repuso o no', /Si repuso, falta cargarla/.test(h));
 chk('  la caja va en urgente', /class="semprep urg"/.test(h));
 chk('  NO dice que la mercadería llega hoy', !/llega <b>hoy<\/b>/.test(h), h.slice(0, 400));
-chk('dice de cuándo es el número del freezer', /Contado <b>ayer<\/b>/.test(h), h.slice(-300));
+chk('dice de cuándo es el número del freezer', /Último movimiento <b>ayer<\/b>/.test(h), h.slice(-300));
 chk('  y no dice que Lucas vendió después (el conteo es posterior)',
   !/cargó ventas después/.test(h));
 chk('los 5 cortes salen como cortos', /5 cortes no llegan/.test(h), h.slice(0, 300));
@@ -118,21 +118,27 @@ h = correr(JUE, { carne: { ultCompra: '2026-09-08', ultVenta: '2026-09-09', comp
 chk('dice que el pedido ya está cargado', /ya está cargado/.test(h), h.slice(-400));
 chk('  y que la mercadería llega hoy', /llega <b>hoy<\/b>/.test(h));
 chk('  NO va en urgente', !/class="semprep urg"/.test(h));
-chk('  el freezer se contó hoy', /Contado <b>hoy<\/b>/.test(h), h.slice(-300));
+chk('  el freezer se movió hoy', /Último movimiento <b>hoy<\/b>/.test(h), h.slice(-300));
 
-// ── 3. VENTAS DESPUÉS DEL CONTEO: el número ya no vale ─────────────────────
-console.log('\n' + D + '  【3】 Lucas cargó ventas después del último conteo' + X);
-h = correr(JUE, { carne: { ultCompra: '2026-09-08', ultVenta: '2026-09-10', compras: 6 } },
-  { moresco: '2026-09-09' }, STOCK);
-chk('avisa que ya vendió parte de eso', /cargó ventas después/.test(h), h.slice(-350));
-chk('  nombrando a quién', /Lucas cargó ventas/.test(h));
+/* ── 3. EL CASO DE "VENTAS DESPUÉS DEL CONTEO" YA NO EXISTE (11/9/2026) ────
+   Hasta ese día el bloque avisaba *"pero Lucas cargó ventas después, así que ya
+   vendió parte de esto"*, comparando `repo.ultVenta` contra el conteo. Ese aviso
+   era necesario SÓLO mientras las ventas de carne vivían en la planilla de
+   Lucas: el stock del ERP no las veía y el número quedaba viejo sin que nadie se
+   enterara.
+   Hoy los pedidos de carne están en Home y Pilar, y una venta descuenta el
+   depósito como cualquier otro producto. `repo.ultVenta` vuelve siempre vacío y
+   el aviso se sacó, así que este caso no tiene nada que verificar: dejar el
+   chequeo sería exigir un aviso que ya no tiene por qué existir.
+   Lo que SÍ se sigue exigiendo es el sello del último movimiento, que está en
+   el caso 2. */
 
 // ── 4. SIN DATO: se comporta como antes ────────────────────────────────────
 console.log('\n' + D + '  【4】 la planilla de Lucas no se pudo leer' + X);
 h = correr(JUE, {}, {}, STOCK);
 chk('no inventa ninguna alarma', !/No hay ninguna compra cargada/.test(h), h.slice(-350));
 chk('  y sigue diciendo que la mercadería llega hoy', /llega <b>hoy<\/b>/.test(h));
-chk('  sin sello de conteo (no lo sabe)', !/Contado/.test(h));
+chk('  sin sello de movimiento (no lo sabe)', !/Último movimiento/.test(h));
 chk('  y NO va en urgente', !/class="semprep urg"/.test(h));
 
 // ── 5. MARTES: es el día de pedido ─────────────────────────────────────────
@@ -160,9 +166,9 @@ chk('  y NO va en urgente', !/class="semprep urg"/.test(h));
 // ── 8. EL FREEZER LLENO: el bloque no grita ────────────────────────────────
 console.log('\n' + D + '  【8】 el freezer cubierto' + X);
 const LLENO = {
-  'Maleu Carnes': [
-    { n: 'Carne Lomo', d: 40, dem: 19, u: 'kg' },
-    { n: 'Carne Vacío', d: 35, dem: 16.1, u: 'kg' }
+  'moresco': [
+    { n: 'Carne Lomo', d: 40, dem: 19, u: 'kg', prov: 'Caco' },
+    { n: 'Carne Vacío', d: 35, dem: 16.1, u: 'kg', prov: 'Caco' }
   ]
 };
 h = correr(JUE, { carne: { ultCompra: '2026-09-08', ultVenta: '2026-09-09', compras: 6 } },
@@ -182,7 +188,7 @@ chk('  las etiquetas abren y cierran parejo',
 chk('  los kilos van con coma, no con punto', !/\d+\.\d+ kg/.test(h),
   (h.match(/.{0,40}\d+\.\d+ kg.{0,20}/) || [''])[0]);
 /* El aviso de la compra faltante termina en punto y el pie agregaba otro: se
-   veía "hoy no llega nada.. Contado ayer". Lo encontró leer el texto, no un
+   veía "hoy no llega nada.. Último movimiento ayer". Lo encontró leer el texto, no un
    número — los tests miden lo que se les pide. */
 chk('  sin puntuación doble', !/\.\.|\. \./.test(h.replace(/<[^>]*>/g, '')),
   (h.replace(/<[^>]*>/g, '').match(/.{0,50}\.\..{0,30}/) || [''])[0]);
