@@ -44,6 +44,30 @@ async function correr(cli, demStub) {
   return await esperar(cli, 'typeof D!=="undefined" && D && D.pedidos && D.pedidos.length>0', 90000);
 }
 
+/* Abre la lista de productos del bloque del jueves si esta plegada. El estado
+   lo decide la URGENCIA: a mas de 48 h del cutoff arranca cerrada, asi que un
+   test que mida chips tiene que abrirla o no mide nada.
+
+   ESPERA a que el bloque exista antes de tocarlo: `rSemanaPrep` vive de
+   `D.stock`, que llega con el volcado (21-27 s), y `correr()` recarga la
+   pagina. Sin la espera esto corria sobre un `#hSemana` vacio, devolvia "sin
+   bloque" y los chequeos de abajo median 0 chips igual que antes. */
+async function abrirDetalle(cli) {
+  const hay = await esperar(cli,
+    'document.querySelector(\'#hSemana [data-semprep="jueves"]\')!==null', 90000);
+  if (!hay) return 'el bloque del jueves no se dibujo';
+  try {
+    return await evaluar(cli, `(function(){
+      var box=document.querySelector('#hSemana [data-semprep="jueves"]');
+      if(box.getAttribute('data-abierto')==='1') return 'ya estaba abierto';
+      if(typeof _semprepTog!=='function') return 'no hay toggle';
+      _semprepTog('jueves');
+      var b2=document.querySelector('#hSemana [data-semprep="jueves"]');
+      return (b2 && b2.getAttribute('data-abierto')==='1') ? 'abierto' : 'no se abrio';
+    })()`);
+  } catch (e) { return 'fallo: ' + e.message; }
+}
+
 (async () => {
   const cli = await abrir();
   await cli.enviar('Page.enable'); await cli.enviar('Runtime.enable');
@@ -56,6 +80,13 @@ async function correr(cli, demStub) {
   if (!await correr(cli, null)) { console.error('el volcado no llego'); cli.matar(); process.exit(1); }
   const llegoDem = await esperar(cli, 'SEMPREP_DEM && Object.keys(SEMPREP_DEM).length>0', 60000);
   chk(llegoDem, 'la demanda Home llega desde action=catalogo');
+  /* Desde v290 (10/9/2026) la lista de productos arranca PLEGADA cuando el
+     cutoff esta lejos: con 6 dias por delante `.semprep-lst` no se dibuja y los
+     chips dan 0. Se abre el detalle antes de medir -es lo que hace un toque en
+     "Ver que falta"-, y si no hay nada plegado el toggle no existe y la lista
+     ya esta. Sin esto el test daba 4 "mal" que eran suyos, no del ERP. */
+  const _det = await abrirDetalle(cli);
+  console.log('     (detalle del bloque del jueves: ' + _det + ')');
   await esperar(cli, 'document.querySelector("#hSemana .semprep-lst")!==null', 20000);
 
   // ── PUNTO 1: el bloque del jueves ──
@@ -223,6 +254,13 @@ async function correr(cli, demStub) {
   console.log('\n5) La direccion contraria');
   if (!await correr(cli, { SQB: 9, PPM: 0.1, SL: 0, PPCyQ: 0 })) { console.error('no cargo'); }
   await esperar(cli, 'SEMPREP_DEM && SEMPREP_DEM.SQB===9', 40000);
+  /* Desde v290 (10/9/2026) la lista de productos arranca PLEGADA cuando el
+     cutoff esta lejos: con 6 dias por delante `.semprep-lst` no se dibuja y los
+     chips dan 0. Se abre el detalle antes de medir -es lo que hace un toque en
+     "Ver que falta"-, y si no hay nada plegado el toggle no existe y la lista
+     ya esta. Sin esto el test daba 4 "mal" que eran suyos, no del ERP. */
+  const _det2 = await abrirDetalle(cli);
+  console.log('     (detalle del bloque del jueves: ' + _det2 + ')');
   await esperar(cli, 'document.querySelector("#hSemana .semprep-lst")!==null', 20000);
   const b5 = await evaluar(cli, `(function(){
     var box=document.querySelector('#hSemana .semprep'); if(!box)return null;
@@ -232,8 +270,21 @@ async function correr(cli, demStub) {
   chk(!!b5 && b5.prods.some(p => /Queso Brie/.test(p)),
     'con demanda 9/sem, Queso Brie SI aparece en la lista de reponer', b5 && b5.prods.join(' | ').slice(0, 200));
   chk(!!b5 && /Langostinos/.test(b5.gris), 'y Langostinos (demanda 0) sigue en la fila gris', b5 && b5.gris.slice(0, 140));
-  chk(!!b5 && !b5.prods.some(p => /Muzzarella x2/.test(p)),
-    'y Pack Muzzarella, con 2 en stock y 0,1/sem, ya no aparece');
+  /* Este chequeo prueba la REGLA -se marca lo que no llega a la proxima
+     reposicion, o sea menos de una semana de venta en el freezer-, no un stock
+     escrito a mano. Cuando se escribio, PPM tenia 2 unidades; el 11/9/2026
+     tiene 0, y con 0 en stock y 0,1/sem APARECER es lo correcto. Un test que
+     hardcodea el stock de un producto se rompe solo a los dos dias. */
+  const ppm = await evaluar(cli, `(function(){
+    var s=(D.stock||[]).filter(function(x){return x.a==='PPM';})[0];
+    return s ? {disp:Number(s.d)||0, dem:Number((SEMPREP_DEM||{}).PPM)||0} : null;})()`);
+  const apareceEsperado = !!ppm && ppm.disp < ppm.dem;
+  const aparece = !!b5 && b5.prods.some(p => /Muzzarella x2/.test(p));
+  chk(!!ppm && aparece === apareceEsperado,
+    'Pack Muzzarella con 0,1/sem: ' + (apareceEsperado ? 'aparece' : 'NO aparece')
+      + ' (tiene ' + (ppm ? ppm.disp : '?') + ' en stock, cubre '
+      + (ppm && ppm.dem ? (ppm.disp / ppm.dem).toFixed(0) : '?') + ' semanas)',
+    'esperaba ' + apareceEsperado + ', dio ' + aparece);
 
   console.log('\n' + (mal ? '\x1b[31m' : '\x1b[32m') + ok + ' ok · ' + mal + ' mal\x1b[0m\n');
   cli.matar();
