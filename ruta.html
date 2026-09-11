@@ -611,6 +611,18 @@ select.np-input{background:var(--white) url("data:image/svg+xml;utf8,<svg xmlns=
 .np-stk.cero{color:#c0392b}
 .np-stk.pasado{color:#c0392b;background:#FDECEA;border-radius:4px;padding:1px 5px;display:inline-block}
 .np-prod.sobrepasa{border-color:#c0392b;background:#FFF6F5}
+/* Las piezas de carne en el AUTOPEDIDO (11/9/2026): se toca la pieza, no se tipean los kilos */
+.np-prod.np-prod-pz{flex-wrap:wrap}
+.np-pz{flex-basis:100%;min-width:0}
+.np-pz-l{display:flex;flex-wrap:wrap;gap:6px;margin-top:4px}
+.np-pz-c{min-width:66px;min-height:44px;padding:4px 8px;border:1.5px solid var(--border);background:var(--white);border-radius:9px;font-size:14px;font-weight:800;color:var(--brown);display:flex;flex-direction:column;align-items:center;justify-content:center;line-height:1.1;cursor:pointer;font-family:inherit}
+.np-pz-c small{font-size:10px;font-weight:700;opacity:.6;margin-top:1px}
+.np-pz-c.vieja{border-style:dashed;border-color:#E65100}
+.np-pz-c.on{background:var(--orange);border-color:var(--orange);color:#fff}
+.np-pz-c.on small{opacity:.9}
+.np-pz-c.fue{background:#FDECEA;border-color:#c0392b;color:#c0392b}
+.np-pz-tot{font-size:12px;font-weight:700;color:var(--muted);margin-top:6px}
+.np-pz-tot b{color:var(--brown)}
 .np-qty{display:flex;align-items:center;gap:6px;flex-shrink:0}
 .np-qty-btn{width:38px;height:38px;border:1.5px solid var(--border);background:var(--white);border-radius:9px;font-family:inherit;font-size:20px;font-weight:900;cursor:pointer;touch-action:manipulation;-webkit-user-select:none;user-select:none;padding:0;color:var(--brown);display:flex;align-items:center;justify-content:center;line-height:1}
 .np-qty-btn:active{background:var(--beige);transform:scale(.93)}
@@ -1434,6 +1446,9 @@ var NP_DIA_NOMBRE=['Domingo','Lunes','Martes','Mi\u00E9rcoles','Jueves','Viernes
 var NP_DIA_CORTO=['DOM','LUN','MAR','MIE','JUE','VIE','SAB'];
 var NP_MES_CORTO=['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
 var npCart={}, npZona='Home', npPago='Efectivo', npFechaSel='', npSaving=false;
+/* Las piezas de carne del AUTOPEDIDO (11/9/2026): ver npFetchPiezas. */
+var NP_PIEZAS=null, NP_PIEZAS_TS=0;
+var npPzSel={};   // { id de producto: [{id:'P-0007', kg:1.286}] }
 var npGlobalPct=0;   // % de descuento sobre todo el pedido (tab "+")
 var npCatDisc={};    // { 'Tartas': 20, ... } % de descuento por categoría
 var npNoDisc=false;  // toggle "Sin 10% OFF": desactiva el descuento automático aunque sea Efectivo o supere $100K
@@ -2082,7 +2097,24 @@ function _depCorto(d){
   return n||(d&&d.id)||'?';
 }
 
-/** Avisa si un producto NO alcanza en su deposito por defecto y SI hay en otro.
+/* El deposito "de casa": donde se arma, o sea el que tiene la mayoria de los
+   productos (hoy ustariz, 29 contra 5). Se deriva del dato, igual que
+   `npDepPrincipal` en el AUTOPEDIDO. */
+function _depCasa(){
+  if(!RUT_DEP||!RUT_DEP.productos)return '';
+  var c={},mejor='',max=0;
+  RUT_DEP.productos.forEach(function(pr){
+    if(!pr||!pr.dep)return;
+    c[pr.dep]=(c[pr.dep]||0)+1;
+    if(c[pr.dep]>max){max=c[pr.dep];mejor=pr.dep;}
+  });
+  return mejor;
+}
+
+/** Avisa si un producto NO alcanza en el deposito de CASA (donde se arma) y SI
+ *  hay en otro. Hasta el 11/9/2026 comparaba contra el deposito por defecto del
+ *  producto: con la carne en lo de Tadeo y su defecto en lo de Lucas, cada linea
+ *  de carne decia "en lo de Tadeo" armando en lo de Tadeo.
  *
  *  Muestra DONDE ESTA, no de donde va a salir. Predecir el reparto seria una
  *  segunda copia de la regla de `_moverFisico_` en el backend, que es el error
@@ -2096,12 +2128,13 @@ function _depMarca(abbr,qty){
   var pr=null,l=RUT_DEP.productos;
   for(var i=0;i<l.length;i++)if(l[i].a===abbr){pr=l[i];break;}
   if(!pr||!pr.dep)return '';
-  var mio=Number((pr.porDep||{})[pr.dep])||0;
+  var casa=_depCasa()||pr.dep;
+  var mio=Number((pr.porDep||{})[casa])||0;
   if(mio>=(Number(qty)||0))return '';
   var otros=[];
   for(var j=0;j<(RUT_DEP.deps||[]).length;j++){
     var d=RUT_DEP.deps[j];
-    if(d.id===pr.dep)continue;
+    if(d.id===casa)continue;
     var q=Number((pr.porDep||{})[d.id])||0;
     if(q>0)otros.push(q+' en lo de '+_depCorto(d));
   }
@@ -7058,12 +7091,22 @@ function _npCardProd(p,esEncargo){
   var cap=npCap(p.abbr);
   var stkHtml='';
   var _uni=npUni(p.abbr);
-  /* Los productos por kilo NO se stockean en el freezer de Maleu: el stock lo
-     lleva Maleu Carnes. Decir "sin stock" en rojo es cierto sobre el freezer y
-     engañoso sobre la realidad — y una alarma que salta SIEMPRE se deja de
-     mirar en dos días. Se dice de dónde sale, que es lo único honesto. */
+  /* Los productos por kilo se venden POR PIEZA (11/9/2026): si el corte tiene
+     piezas cargadas se elige la pieza, no se tipean los kilos. Sin piezas
+     todavia (o sin el dato) queda el campo de kilos de siempre. */
+  var _pzs=(_uni==='kg')?npPzDisp(p.abbr):[];
+  var _sel=(_uni==='kg')?(npPzSel[p.id]||[]):[];
+  var _conPz=(_uni==='kg')&&NP_PIEZAS!==null&&(_pzs.length>0||_sel.length>0);
   if(_uni==='kg'){
-    stkHtml='<div class="np-stk">lo trae Maleu Carnes</div>';
+    if(NP_PIEZAS===null){
+      stkHtml='';
+    } else if(_pzs.length){
+      var _nv=_pzs.filter(function(x){return x.v;}).length;
+      stkHtml='<div class="np-stk">'+_pzs.length+(_pzs.length===1?' pieza':' piezas')+' en el freezer'
+        +(_nv?(' · '+_nv+' de la tanda anterior, van primero'):'')+'</div>';
+    } else if(!_sel.length){
+      stkHtml='<div class="np-stk cero">no hay piezas cargadas</div>';
+    }
   } else if(cap!==null){
     if(qty>cap){
       stkHtml='<div class="np-stk pasado">\u26a0\ufe0f Ped\u00eds '+qty+' y hay '+cap+'</div>';
@@ -7082,7 +7125,7 @@ function _npCardProd(p,esEncargo){
   /* Por peso no van los +/-: nadie compra "1 kilo redondo" de colita. Va un
      campo para tipear lo que marco la balanza. */
   var uni = npUni(p.abbr);
-  var ctrl = uni === 'kg'
+  var ctrl = _conPz ? '' : uni === 'kg'
     ? '<div class="np-qty np-qty-kg">'
       + '<input type="text" inputmode="decimal" class="np-kg-in" id="npQty_'+p.id+'"'
       + ' value="'+(qty?String(qty).replace('.',','):'')+'" placeholder="0"'
@@ -7093,10 +7136,10 @@ function _npCardProd(p,esEncargo){
       + '<span class="np-qty-num" id="npQty_'+p.id+'">'+qty+'</span>'
       + '<button type="button" class="np-qty-btn" onclick="npQty('+p.id+',1)">+</button>'
       + '</div>';
-  return '<div class="np-prod'+(qty>0?' has-qty':'')+((cap!==null&&qty>cap)?' sobrepasa':'')+'" id="npProd_'+p.id+'">'
+  return '<div class="np-prod'+(qty>0?' has-qty':'')+(_conPz?' np-prod-pz':'')+((cap!==null&&qty>cap)?' sobrepasa':'')+'" id="npProd_'+p.id+'">'
     +'<div class="np-prod-info"><div class="np-prod-name">'+p.n+'</div>'
     +'<div class="np-prod-price">'+npMoney(precio)+(uni==='kg'?' <span class="np-por">/kg</span>':'')+'</div>'+stkHtml+'</div>'
-    + ctrl + '</div>';
+    + ctrl + (_conPz?npPzHtml(p,_pzs,_sel):'') + '</div>';
 }
 
 function npRenderFechas(){
@@ -7411,14 +7454,17 @@ function npDetalleRender(){
   var caja=document.getElementById('npDetalle'), btn=document.getElementById('npDetalleBtn');
   if(!caja||!btn)return;
   /* Cuantos productos y cuantas unidades hay cargadas. */
-  var unid=0, lineas=0;
+  var unid=0, kgs=0, lineas=0;
   NP_CAT.forEach(function(cat){ cat.items.forEach(function(it){
-    var q=npCart[it.id]; if(q>0){ unid+=q; lineas++; } }); });
+    var q=npCart[it.id]; if(q>0){ if(npUni(it.abbr)==='kg')kgs+=q; else unid+=q; lineas++; } }); });
+  var _cuanto=[];
+  if(unid)_cuanto.push(unid+(unid===1?' unidad':' unidades'));
+  if(kgs)_cuanto.push(npFmtCant(kgs,'kg'));
 
   if(!lineas){ caja.style.display='none'; btn.style.display='none'; return; }
   btn.style.display='';
   btn.textContent=(_npDetAbierto?'▲ Ocultar el detalle':'▼ Ver el detalle')
-    +'  ·  '+unid+(unid===1?' unidad':' unidades')+' en '+lineas+(lineas===1?' producto':' productos');
+    +'  ·  '+_cuanto.join(' + ')+' en '+lineas+(lineas===1?' producto':' productos');
   if(!_npDetAbierto){ caja.style.display='none'; return; }
 
   /* Agrupado por categoria, igual que el resumen de WhatsApp: es el mismo
@@ -7429,7 +7475,7 @@ function npDetalleRender(){
     cat.items.forEach(function(it){
       var q=npCart[it.id]; if(!q)return;
       filas+='<div class="np-det-row"><span>'+(PROD_NAMES[it.abbr]||it.n||it.abbr)+'</span>'
-           + '<span class="np-det-q">'+q+'</span></div>';
+           + '<span class="np-det-q">'+(npUni(it.abbr)==='kg'?npFmtCant(q,'kg'):q)+'</span></div>';
     });
     if(filas) h+='<div class="np-det-cat">'+cat.cat+'</div>'+filas;
   });
@@ -7509,7 +7555,7 @@ function npResumenTextoWA(){
   var sub=0,hayItems=false;
   var catDescDetalle=[]; // [{name, pct, monto}] para el summary
   NP_CAT.forEach(function(cat){
-    var catLineas=[],catQty=0,subCat=0;
+    var catLineas=[],catQty=0,catKg=0,subCat=0;
     cat.items.forEach(function(item){
       var q=npCart[item.id];if(!q)return;
       var pr=NP_PRECIOS[item.abbr];if(!pr)return;
@@ -7517,13 +7563,21 @@ function npResumenTextoWA(){
       var lineaTotal=precio*q;
       sub+=lineaTotal;
       subCat+=lineaTotal;
-      catQty+=q;
       var nombreLargo=PROD_NAMES[item.abbr]||item.n||item.abbr;
-      catLineas.push('• '+q+'× '+nombreLargo+' — '+npMoney(lineaTotal));
+      if(npUni(item.abbr)==='kg'){
+        /* La carne va con el peso de cada pieza: es lo que el cliente paga. */
+        catKg+=q;
+        var _sw=npPzSel[item.id]||[];
+        var _dw=_sw.length?_pzTxt(item.abbr,_sw.map(function(x){return {a:item.abbr,kg:x.kg};})):npFmtCant(q,'kg');
+        catLineas.push('• '+nombreLargo+' — '+_dw+' · '+npMoney(lineaTotal));
+      } else {
+        catQty+=q;
+        catLineas.push('• '+q+'× '+nombreLargo+' — '+npMoney(lineaTotal));
+      }
     });
     if(catLineas.length===0)return;
     hayItems=true;
-    var catName=cat.cat.replace(/\s*x\d+\s*$/i,'').trim();
+    var catName=cat.cat.replace(/\s*x\d+\s*$/i,'').replace(/\s*\(por kilo\)\s*$/i,'').trim();
     var pctCat=(npZona==='Clubes')?0:(Number(npCatDisc[cat.cat])||0);
     // Extras dentro del paréntesis del header (concatenados con ·)
     var extras=[];
@@ -7532,7 +7586,8 @@ function npResumenTextoWA(){
       extras.push(pctCat+'% OFF');
       catDescDetalle.push({name:catName,pct:pctCat,monto:Math.round(subCat*pctCat/100)});
     }
-    var header=catName+' = '+catQty+(extras.length?' ('+extras.join(' · ')+')':'');
+    var _cant=(catQty&&catKg)?(catQty+' + '+npFmtCant(catKg,'kg')):(catKg?npFmtCant(catKg,'kg'):String(catQty));
+    var header=catName+' = '+_cant+(extras.length?' ('+extras.join(' · ')+')':'');
     lines.push(header);
     lines=lines.concat(catLineas);
     lines.push(''); // separador entre categorías
@@ -7624,7 +7679,76 @@ function npCopiarResumen(){
 var NP_STOCK=null;        // { abbr: {f: fisico, p: proyectado} }
 var NP_STOCK_TS=0;
 
+/* LAS PIEZAS DE CARNE EN EL AUTOPEDIDO (11/9/2026). La carne se vende POR
+   PIEZA: cada una tiene su peso y su precio, y la tienda deja elegir cual. Aca
+   se cargaba por KILO, sin decir cual pieza, y entonces la que Lucas le daba a
+   un cliente seguia "Disponible" en la tienda: la podia comprar otro.
+   Ahora, si el corte tiene piezas cargadas, se toca la pieza en vez de tipear
+   los kilos. El pedido manda `items[].piezas` —el mismo campo que la tienda— y
+   el backend las pasa a Asignada con "Home #N": dejan de ofrecerse.
+   Sale de `action=piezas_full`, el endpoint PUBLICO de la tienda (id, kg y la
+   marca de tanda anterior): lo que ve el cliente y lo que ve Lucas es lo mismo. */
+/* NP_PIEZAS y npPzSel se declaran arriba, junto a npCart: la card los lee. */
+function npFetchPiezas(force){
+  if(!force && NP_PIEZAS && (Date.now()-NP_PIEZAS_TS)<60000) return;
+  fetch(RUT_APPS_SCRIPT_URL+'?action=piezas_full&_='+Date.now(),{cache:'no-store'})
+    .then(function(r){return r.json()})
+    .then(function(d){
+      /* {ok:false} es un error: se deja lo que habia (o el campo de kilos si no
+         habia nada). {} es "no hay piezas cargadas", que es un dato. */
+      if(d&&typeof d==='object'&&d.ok!==false){ NP_PIEZAS=d; NP_PIEZAS_TS=Date.now(); npRenderCatalogo(); npUpdateTotal(); }
+    })
+    .catch(function(){});
+}
+/* Las piezas que se ofrecen de un corte: primero las de la tanda anterior
+   (Lucas: "entregarle la de la semana pasada"), y adentro de cada tanda de la
+   mas liviana a la mas pesada. */
+function npPzDisp(abbr){
+  var l=((NP_PIEZAS&&NP_PIEZAS[abbr])||[]).slice();
+  l.sort(function(a,b){ return ((b.v?1:0)-(a.v?1:0)) || (Number(a.kg)-Number(b.kg)); });
+  return l;
+}
+function npPzKgTxt(kg){
+  return (Math.round((Number(kg)||0)*1000)/1000).toLocaleString('es-AR',{minimumFractionDigits:3,maximumFractionDigits:3});
+}
+function npPzChip(pid,x,on,fue){
+  return '<button type="button" class="np-pz-c'+(on?' on':'')+(x.v?' vieja':'')+(fue?' fue':'')+'"'
+    +' data-pid="'+pid+'" data-pz="'+String(x.id).replace(/[^A-Za-z0-9_-]/g,'')+'" data-kg="'+Number(x.kg)+'"'
+    +' onclick="npPzTap(this)">'+npPzKgTxt(x.kg)
+    +'<small>'+(fue?'ya no está':(x.v?'anterior':'kg'))+'</small></button>';
+}
+function npPzHtml(p,pzs,sel){
+  var enSel={}, h='<div class="np-pz"><div class="np-pz-l">';
+  sel.forEach(function(x){enSel[x.id]=true;});
+  /* Una elegida que dejo de estar en la lista (la compraron en la tienda
+     mientras cargabas) se sigue mostrando ELEGIDA y en rojo: sacarla sola
+     cambiaria el pedido sin que te enteres. El backend dice si no la pudo
+     reservar. */
+  sel.forEach(function(x){
+    if(!pzs.some(function(y){return y.id===x.id;})) h+=npPzChip(p.id,x,true,true);
+  });
+  pzs.forEach(function(x){ h+=npPzChip(p.id,x,!!enSel[x.id],false); });
+  var tot=0; sel.forEach(function(x){tot+=Number(x.kg)||0;});
+  h+='</div><div class="np-pz-tot">'+(sel.length
+      ? ('Elegiste '+sel.length+(sel.length===1?' pieza':' piezas')+' · <b>'+npPzKgTxt(tot)+' kg</b>')
+      : 'Tocá las piezas que le das')+'</div></div>';
+  return h;
+}
+/* Tocar una pieza la suma o la saca. Los kilos del pedido son la SUMA de las
+   piezas elegidas: no hay otra cantidad que se pueda desincronizar. */
+function npPzTap(el){
+  var pid=Number(el.getAttribute('data-pid')), pz=el.getAttribute('data-pz'), kg=Number(el.getAttribute('data-kg'))||0;
+  if(!pid||!pz)return;
+  var sel=(npPzSel[pid]||[]).slice(), i=-1;
+  for(var k=0;k<sel.length;k++) if(sel[k].id===pz) i=k;
+  if(i>=0) sel.splice(i,1); else sel.push({id:pz,kg:kg});
+  var tot=0; sel.forEach(function(x){tot+=x.kg;}); tot=Math.round(tot*1000)/1000;
+  if(sel.length&&tot>0){ npPzSel[pid]=sel; npCart[pid]=tot; }
+  else { delete npPzSel[pid]; delete npCart[pid]; }
+  npRenderCatalogo(); npUpdateTotal();
+}
 function npFetchStock(force){
+  npFetchPiezas(force);
   if(!force && NP_STOCK && (Date.now()-NP_STOCK_TS)<60000) return;
   fetch(RUT_APPS_SCRIPT_URL+'?action=stock_full&_='+Date.now(),{cache:'no-store'})
     .then(function(r){return r.json()})
@@ -7740,7 +7864,13 @@ function npOrigenDeCarrito(){
     /* Sin dato de stock no se concluye nada y cae del lado de "hay que
        comprarlo": es el unico de los dos que no descuenta un freezer por las
        dudas. No saber no es lo mismo que no hay. */
-    ((hay!==null&&d.aca>0)?dep:oc).push({n:p.n,abbr:p.abbr,dd:d,hay:hay,pide:npCart[p.id]});
+    /* Esta en un freezer de Maleu si hay en CUALQUIERA de los depositos, no
+       solo en el suyo por defecto (11/9/2026). Con la carne en lo de Tadeo y
+       su deposito por defecto en lo de Lucas, `d.aca` daba 0 y el pedido salia
+       como Orden de Compra: el backend le generaba una compra a Caco por carne
+       que estaba en el freezer. Al entregar, `_moverFisico_` saca del deposito
+       que la tenga; donde esta se dice en el aviso. */
+    ((hay!==null&&hay>0)?dep:oc).push({n:p.n,abbr:p.abbr,dd:d,hay:hay,pide:npCart[p.id]});
   });
   return {dep:dep,oc:oc};
 }
@@ -7826,12 +7956,18 @@ function npAvisoEncargoRender(){
        leer en dos dias. */
     var casa=npDepPrincipal();
     var afuera={},ids=[];
+    /* Afuera es lo que NO alcanza en el freezer de casa y SI hay en otro,
+       mirando donde esta de verdad (`pd`), no el deposito por defecto del
+       producto: con la carne en lo de Tadeo, el por defecto (lo de Lucas)
+       decia "acordate de pedirselo a Lucas" sobre carne que estaba en casa. */
     r.dep.forEach(function(e){
       var it=(NP_STOCK&&NP_STOCK[e.abbr])||{};
-      var id=it.dep||'';
-      if(!id||id===casa)return;
-      if(!afuera[id]){afuera[id]=[];ids.push(id);}
-      afuera[id].push(e.n);
+      var pd=it.pd||{};
+      if(!casa||(Number(pd[casa])||0)>=(Number(e.pide)||0))return;
+      for(var k in pd){
+        if(!Object.prototype.hasOwnProperty.call(pd,k)||k===casa)continue;
+        if((Number(pd[k])||0)>0){ if(!afuera[k]){afuera[k]=[];ids.push(k);} afuera[k].push(e.n); break; }
+      }
     });
     if(origen!=='Deposito'){
       txt='<b>Todo esto ya está en el freezer.</b> Poné <b>Origen: Depósito</b> '
@@ -7975,7 +8111,13 @@ function npGuardar(){
     if(npZona==='Clubes'){
       if(NP_CLUBES_IDS.indexOf(n)<0)return;
       items.push({id:NP_CLUBES_WEB_ID[n],qty:q});
-    } else items.push({id:n,qty:q});
+    } else {
+      /* Las piezas elegidas viajan igual que desde la tienda: el backend las
+         reserva para este pedido y dejan de ofrecerse. */
+      var _it={id:n,qty:q}, _sp=npPzSel[n];
+      if(_sp&&_sp.length)_it.piezas=_sp.map(function(x){return x.id;});
+      items.push(_it);
+    }
   });
   if(items.length===0){showToast('Los productos no aplican al canal');return}
 
@@ -8117,6 +8259,13 @@ function npGuardar(){
          si NO se generó hay que decirlo tambien: hasta el 8/9/2026 un pedido
          con Origen "Orden de Compra" cargado desde aca no generaba la OC, y el
          hueco se veia recien el jueves, cuando faltaba pedir la mercaderia. */
+      /* Las piezas que quedaron reservadas: dejan de ofrecerse en la tienda.
+         Si alguna ya no estaba (la compraron mientras cargabas), el pedido
+         entra igual y se dice. */
+      var _pzMsg='', _pzR=res&&res.pz;
+      if(_pzR&&_pzR.ok)_pzMsg+='<div class="np-ok-oc">🥩 '+_pzR.ok+(_pzR.ok===1?' pieza reservada':' piezas reservadas')+' para este pedido — ya no se ofrecen en la tienda</div>';
+      if(_pzR&&_pzR.faltan)_pzMsg+='<div class="np-ok-oc mal">⚠️ '+_pzR.faltan+(_pzR.faltan===1?' pieza ya no estaba':' piezas ya no estaban')
+        +' (se vendieron en la tienda mientras cargabas). El pedido se guardó igual; te llega un mail con cuáles.</div>';
       var _ocMsg='';
       var _oc=res&&res.oc;
       if(_oc==='creada')         _ocMsg='<div class="np-ok-oc">📦 Se generó la Orden de Compra — mirala en Abastecimiento</div>';
@@ -8124,11 +8273,12 @@ function npGuardar(){
       else if(_oc==='ocupado'||_oc==='error')
         _ocMsg='<div class="np-ok-oc mal">⚠️ El pedido se guardó, pero NO se pudo generar la Orden de Compra. '
               +'Generala desde Pedidos con «Confirmar origen».</div>';
-      s.innerHTML='<div style="margin-bottom:8px">Pedido guardado en Sheets · '+nombre+' · '+npMoney(total)+'</div>'+_ocMsg+
+      s.innerHTML='<div style="margin-bottom:8px">Pedido guardado en Sheets · '+nombre+' · '+npMoney(total)+'</div>'+_pzMsg+_ocMsg+
         '<button type="button" class="np-btn-copy" style="margin:0" onclick="npCopiarResumen()">📋 Copiar resumen para WhatsApp</button>'+
         '<button type="button" class="np-btn-listo" onclick="npListo()">Listo →</button>';
       btn.textContent='GUARDAR PEDIDO';btn.disabled=false;npSaving=false;
       npReset();
+      npFetchPiezas(true); npFetchStock(true);   // las reservadas salen de la lista
       // El salto a ARMADO se disparaba solo a los 6s (antes 2s, para dar tiempo a
       // copiar el resumen). Eso es tiempo muerto: si ya copiaste, esperás al pedo.
       // Ahora "Listo →" lo hace en el acto y los 6s quedan solo de red.
@@ -8162,6 +8312,7 @@ function npListo(automatico){
 
 function npReset(){
   npCart={};
+  npPzSel={};
   npGlobalPct=0;npCatDisc={};
   npNoDisc=false;
   var nd=document.getElementById('npChipNoDisc');if(nd)nd.classList.remove('active');
