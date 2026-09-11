@@ -21515,6 +21515,15 @@ if('serviceWorker' in navigator){
       html+='<button class="ord-btn'+(p.crd?'':' full')+'" onclick="_ordCruceDiagonal(\''+p.h+'\',\''+p.n+'\','+(p.r||0)+','+(p.crd?0:1)+')">'+
             (p.crd?'🥩 Sacar la marca de cruce':'🥩 Marc\u00f3 tambi\u00e9n en Diagonal')+'</button>';
     }
+    /* El pedido figura entregado y NO se entrego (11/9/2026): vuelve a Pendiente y
+       lo que habia salido del freezer vuelve al freezer. Hasta ese dia solo se podia
+       cambiando la celda en el Sheets. Red no: ahi el stock sale cuando se lo lleva el
+       vendedor, y para eso esta "Me devolvio la mercaderia". Va entero salvo que la
+       marca de cruce haya quedado en media fila, para no dejar un hueco en la grilla. */
+    if((p.h==='Home'||p.h==='Pilar'||p.h==='Clubes')&&p.es==='Entregado'){
+      var _crdMedia=(p.crd&&(p.h==='Home'||p.h==='Pilar'));
+      html+='<button class="ord-btn'+(_crdMedia?'':' full')+'" onclick="_ordDeshacerEntrega(\''+p.h+'\',\''+p.n+'\','+(p.r||0)+')">↩ No se entregó</button>';
+    }
     /* Pesar: solo si el pedido lleva algo que se vende POR KILO. La unidad la
        decide la hoja Productos (col Unidad), que viaja en `D.stock[].u` — no hay
        una lista de cortes escrita aca, asi que un producto nuevo por kilo entra
@@ -22012,6 +22021,44 @@ if('serviceWorker' in navigator){
         if(d&&d.ok){
           if(d.devuelto===false){ toast(d.msg||'No hab\u00eda nada que devolver'); }
           else toast(d.stock?'Devuelto \u2014 la mercader\u00eda volvi\u00f3 al freezer':'Devoluci\u00f3n registrada');
+          closeOrdDetail();
+          if(typeof load==='function')load();
+        } else {
+          toast('Error: '+((d&&d.err)||'?'));
+          for(var j=0;j<btns.length;j++) btns[j].disabled=false;
+        }
+      })
+      .catch(function(e){
+        toast('Error: '+e.message);
+        for(var j=0;j<btns.length;j++) btns[j].disabled=false;
+      });
+  };
+  /* Deshacer una entrega de Home/Pilar/Clubes (backend: deshacerEntrega, 11/9/2026).
+     El backend decide si devuelve el stock con la MISMA regla que marcar la entrega:
+     si el sello es de otra semana, el conteo de esa semana ya absorbio la salida y no
+     lo toca. Lo dice en la respuesta, y aca se dice en pantalla: no tocarlo callado
+     seria cambiar un error por otro. */
+  window._ordDeshacerEntrega=function(hoja,n,row){
+    var p=_findPed(hoja,n);
+    var cli=(p&&p.c)||'este cliente', origen=(p&&p.o)||'';
+    var msg='¿El pedido de '+cli+' (N° '+n+') NO se entregó?\n\n'+
+            'Vuelve a Pendiente y se borra la fecha de entrega.';
+    msg+=(origen==='Deposito'||origen==='Mixto')
+      ? '\n\nLo que había salido del freezer vuelve al freezer.'
+      : '\n\nEl freezer no cambia: este pedido no salía del depósito.';
+    msg+='\n\nEl cobro no cambia. Si además hay que cancelarlo, usá el botón de cancelar después.';
+    if(!confirm(msg))return;
+    var btns=document.querySelectorAll('.ord-actions .ord-btn');
+    for(var i=0;i<btns.length;i++) btns[i].disabled=true;
+    fetch(API,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},
+      body:JSON.stringify({action:'deshacerEntrega',hoja:hoja,id:String(n),row:row})})
+      .then(function(r){return r.json();})
+      .then(function(d){
+        if(d&&d.ok){
+          if(d.ya) toast('Ya estaba pendiente');
+          else if(d.stockOmitido) toast('Volvió a Pendiente. No toqué el stock: la entrega figuraba en la semana '+
+            d.semana+'. Si contaste el freezer desde entonces, esos productos ya están en el conteo; si no, ajustalo en Stock → CONTAR.',9000);
+          else toast(d.stockDevuelto?'Volvió a Pendiente — la mercadería volvió al freezer':'Volvió a Pendiente');
           closeOrdDetail();
           if(typeof load==='function')load();
         } else {
