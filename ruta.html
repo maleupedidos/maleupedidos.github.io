@@ -1454,7 +1454,7 @@ var NP_PIEZAS=null, NP_PIEZAS_TS=0;
 var npPzSel={};   // { id de producto: [{id:'P-0007', kg:1.286}] }
 var npGlobalPct=0;   // % de descuento sobre todo el pedido (tab "+")
 var npCatDisc={};    // { 'Tartas': 20, ... } % de descuento por categoría
-var npNoDisc=false;  // toggle "Sin 10% OFF": desactiva el descuento automático aunque sea Efectivo o supere $100K
+var npNoDisc=false;  // toggle "Sin 10% OFF": desactiva el 10% automático del Efectivo (el de +$100K se sacó el 11/9/2026)
 var _npClientesCache=null, _npClientesCacheTs=0, _npClickHandlerInstalled=false, _npFetchingClientes=false;
 
 /* ── LOADING OVERLAYS (dos distintos: GUARDAR y CARGAR) ── */
@@ -4527,11 +4527,26 @@ function _renderCobroProds(prods){
   } else { el.style.display='none'; el.innerHTML=''; }
 }
 
-// Calcula el total del pedido según la FP. Replica la regla del checkout:
-// 10% OFF si Efectivo O subtotal >= $100.000.
+/* El 10% automatico de un COBRO (11/9/2026). Desde ese dia es solo el del
+   efectivo: Tadeo saco el de los pedidos de mas de $100.000.
+   Pero mientras se cobre con la forma de pago con la que se CARGO, vale lo que el
+   pedido tiene guardado: el cliente paga el precio que acepto. Asi un pedido que
+   se cargo con el 10% de los $100.000 lo conserva (Chiesa #931, Consuelo #939,
+   Ines Canale #944 al 11/9), y uno que se cargo en efectivo con "Sin 10% OFF" no
+   lo recupera en el cobro. Si cambia la forma de pago, manda la regla.
+   `previo` = es el 10% que el pedido ya traia sin pagar en efectivo, para decirlo. */
+function _descAutoCobro(ent,fp){
+  var sub=Number(ent&&ent.sub)||0, diez=Math.round(sub*0.10);
+  var guardado=Number(ent&&ent.desc)||0;
+  if(ent&&fp===ent.fp&&(guardado===0||guardado===diez)){
+    return {d:guardado, previo:(guardado>0&&fp!=='Efectivo')};
+  }
+  return {d:(fp==='Efectivo')?diez:0, previo:false};
+}
+// Calcula el total del pedido según la FP, con la regla de _descAutoCobro.
 // noDisc=true      → forzar SIN descuento (aunque la regla lo aplicaría)
 // forzarDesc=true  → forzar CON descuento 10% (aunque la regla no lo aplicaría,
-//                    ej. MP con subtotal < $100k). Pedido Tadeo 11/07 caso
+//                    ej. por transferencia). Pedido Tadeo 11/07 caso
 //                    Carolina Ageitos: quiere ofrecer 10% OFF aunque el
 //                    autopedido fuera guardado sin la regla automática.
 function _totalSegunFp(ent,fp,noDisc,forzarDesc){
@@ -4552,14 +4567,11 @@ function _totalSegunFp(ent,fp,noDisc,forzarDesc){
   // Si noDisc=true, ignorar también el descuento especial y cobrar precio normal.
   var descGuardado=Number(ent.desc)||0;
   if(descGuardado>0 && descGuardado!==Math.round(sub*0.10))return noDisc?(sub+env):orig;
-  // noDisc: Tadeo quitó manualmente el descuento (10% OFF efectivo o +$100K) → cobra precio normal.
+  // noDisc: Tadeo quitó manualmente el descuento → cobra precio normal.
   if(noDisc)return sub+env;
-  // forzarDesc: aplicar 10% aunque la regla automática no toque (fp Transferencia con sub<$100K).
+  // forzarDesc: aplicar 10% aunque la regla automática no toque (ej. por transferencia).
   if(forzarDesc)return sub+env-Math.round(sub*0.10);
-  var aplicaCash=(fp==='Efectivo');
-  var aplicaBulk=(sub>=100000);
-  var desc=(aplicaCash||aplicaBulk)?Math.round(sub*0.10):0;
-  return sub+env-desc;
+  return sub+env-_descAutoCobro(ent,fp).d;
 }
 
 // ── DESCUENTO A NIVEL COMBO (pedidos juntos del mismo cliente/día) ──
@@ -4651,8 +4663,8 @@ function _renderComboDescInfo(el,st){
   el.innerHTML=h;
 }
 // Pinta una caja informativa debajo de "Forma de pago" explicando POR QUÉ el total
-// es el que es. Casos: 10% OFF Efectivo (sub<$100K), 10% OFF +$100K (sub>=$100K
-// en cualquier FP), o sin descuento. Si el pedido tiene parcial previo, no se
+// es el que es: 10% OFF efectivo, el 10% con el que se cargó el pedido, o sin
+// descuento (la regla es _descAutoCobro). Si el pedido tiene parcial previo, no se
 // recalcula nada (el descuento se aplicó al primer cobro).
 function _renderCobroDescInfo(){
   var el=document.getElementById('cobroRutaDescInfo');
@@ -4693,21 +4705,20 @@ function _renderCobroDescInfo(){
     return;
   }
   var fp=st.fp||'Efectivo';
-  var aplicaCash=(fp==='Efectivo');
-  var aplicaBulk=(sub>=100000);
-  var reglaAuto=(aplicaCash||aplicaBulk);
+  var _da=_descAutoCobro(ent,fp);
+  var reglaAuto=(_da.d>0);
   var descEstandar=Math.round(sub*0.10);
   // Estado ACTUAL del descuento: aplicado o no. Puede ser por regla auto, por
   // forzarDesc manual, o ninguno (noDisc o regla no toca sin forzar).
   var descAplicado = st.noDisc ? 0
                    : st.forzarDesc ? descEstandar
-                   : (reglaAuto ? descEstandar : 0);
+                   : _da.d;
   var total=sub+env-descAplicado;
   el.style.display='block';
   var motivo='';
   if(descAplicado>0){
     if(st.forzarDesc) motivo='<b>10% OFF aplicado manualmente</b>';
-    else if(aplicaBulk) motivo='<b>10% OFF +$100K</b> automático';
+    else if(_da.previo) motivo='<b>10% OFF</b> con el que se cargó el pedido';
     else motivo='<b>10% OFF efectivo</b> automático';
   }
   // Botón único: aplicar o quitar según estado actual
@@ -4887,7 +4898,7 @@ function abrirCobroRuta(key){
   }
   var fp=ent.fp||'Efectivo';
   // Total según la FP actual. Si Tadeo cambia la FP en el modal, _setCobroFp
-  // recalcula con la regla 10% OFF (Efectivo o subtotal >= $100K).
+  // recalcula con la regla de _descAutoCobro.
   var total=_totalSegunFp(ent,fp);
   _cobroRutaState={key:key,combo:false,ent:ent,total:total,totalOriginal:Number(ent.$)||0,fp:fp,cambioOpen:false,aFavOpen:false};
 
@@ -5079,8 +5090,8 @@ function _setCobroFp(fp){
   _recalcCobroRuta();
 }
 
-// Quitar / volver a aplicar el descuento (10% OFF efectivo o +$100K) en este cobro.
-// Le da libertad a Tadeo de cobrar precio normal aunque el cliente pague efectivo o supere $100K.
+// Quitar / volver a aplicar el descuento del 10% en este cobro.
+// Le da libertad a Tadeo de cobrar precio normal aunque el cliente pague en efectivo.
 function _toggleCobroNoDisc(){
   var st=_cobroRutaState; if(!st||st.combo)return;
   if(st.esParcialPrev){showToast('El saldo ya tiene el descuento del primer cobro');return;}
@@ -5088,7 +5099,7 @@ function _toggleCobroNoDisc(){
   if(st.noDisc)st.forzarDesc=false; // mutuamente exclusivos
   _reaplicarTotalYCobro();
 }
-// Aplicar 10% OFF manual (aunque la regla automática no toque, ej. MP <$100k).
+// Aplicar 10% OFF manual (aunque la regla automática no toque, ej. por transferencia).
 // Pedido Tadeo 11/07 Carolina Ageitos: quiere ofrecer el 10% siempre desde el
 // cuadro de cobros, sin importar cómo se guardó el pedido original.
 function _toggleCobroForzarDesc(){
@@ -7079,7 +7090,7 @@ function npPintarCta(){
 }
 function npSetCta(id){npCta=id;npPintarCta();}
 
-// Toggle "Sin 10% OFF" — al activarlo, anula el descuento automatico (Efectivo o >$100K).
+// Toggle "Sin 10% OFF" — al activarlo, anula el 10% automatico del Efectivo.
 // Util para clientes a los que se les cobra precio normal aunque paguen en efectivo.
 // Los descuentos manuales (% al pedido / % por categoria / regalo) se mantienen siempre.
 function npToggleNoDisc(){
@@ -7379,7 +7390,11 @@ function npSubtotal(){
 function npDescuento(subtotal,tipo){
   if(tipo!=='normal')return 0;
   if(npNoDisc)return 0;
-  if(npPago==='Efectivo'||subtotal>100000)return Math.round(subtotal*0.10);
+  /* Solo el del efectivo (11/9/2026). Tadeo saco el de +$100.000: "con la carne
+     ahora es muy facil... tengamos la libertad en AUTOPEDIDO para armar el
+     descuento que querramos". Para eso estan el % al pedido, el % por categoria
+     y el Regalo $. */
+  if(npPago==='Efectivo')return Math.round(subtotal*0.10);
   return 0;
 }
 
@@ -7441,7 +7456,7 @@ function npDiscountInfo(){
   var pctDisc=catDiscP+globalDiscP;
   if(pctDisc>sub)pctDisc=sub;
   var auto=0;
-  if(pctDisc===0&&tipo==='normal'&&!npNoDisc&&(npPago==='Efectivo'||sub>100000))auto=Math.round(sub*0.10);
+  if(pctDisc===0&&tipo==='normal'&&!npNoDisc&&npPago==='Efectivo')auto=Math.round(sub*0.10);
   var effDisc=pctDisc>0?pctDisc:auto;
   var regalo=npDescuentoManualValor();
   var total=Math.max(0,sub-effDisc-regalo);

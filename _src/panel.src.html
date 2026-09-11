@@ -8181,10 +8181,12 @@ function _stockDisponible(abbr){
 var _DESC_CAT_OF_ABBR={PPM:'Pack Pizzas x2',PPJyQ:'Pack Pizzas x2',PPCyQ:'Pack Pizzas x2',PMu:'Pizzas Individuales',PMa:'Pizzas Individuales',PJyQ:'Pizzas Individuales',PCC:'Pizzas Individuales',PJyM:'Pizzas Individuales',RC:'Wraps',RP:'Wraps',ECaC:'Empanadas',EJyQ:'Empanadas',ECyQ:'Empanadas',EV:'Empanadas',SCo:'Sorrentinos',SJyQ:'Sorrentinos',SCa:'Sorrentinos',SQB:'Sorrentinos',SL:'Sorrentinos',SPyP:'Sorrentinos',SE:'Sorrentinos',TP:'Tartas',TJyQ:'Tartas',TCa:'Tartas',TV:'Tartas',F:'Franuis',TG:'Tortas',TLC:'Tortas',TC:'Tortas'};
 function _parseRecetaPanel(raw){if(!raw)return null;try{var o=typeof raw==='object'?raw:JSON.parse(raw);return (o&&typeof o==='object')?o:null;}catch(e){return null;}}
 // Devuelve {sub, desc, total} aplicando la receta a las lineas [{a,q,precio}]. Mirror exacto del backend.
-// hoja: los descuentos (auto 10% efectivo/+100k y receta manual) SOLO aplican a Home/Pilar.
+// hoja: los descuentos (auto 10% efectivo y receta manual) SOLO aplican a Home/Pilar.
+// diezPrevio: el pedido se cargo con el 10% de +$100.000 (antes del 11/9/2026) y lo
+// conserva mientras siga arriba de $100.000. Mirror de editarPedido en el backend.
 // Red y Clubes nunca tienen descuento — Red la comisión 17% de Marcos es aparte y ya viene
 // neteada en el precio. Sin este guard, el editor mostraba "Descuento -10%" en pedidos Red.
-function _calcDescRecetaPanel(receta,lineas,pago,hoja){
+function _calcDescRecetaPanel(receta,lineas,pago,hoja,diezPrevio){
   var sub=0,catDiscP=0;
   lineas.forEach(function(l){var line=(Number(l.precio)||0)*(Number(l.q)||0);sub+=line;if(receta){var cp=(receta.c&&Number(receta.c[_DESC_CAT_OF_ABBR[l.a]]))||0;if(cp>0)catDiscP+=line*cp/100;}});
   catDiscP=Math.round(catDiscP);
@@ -8196,10 +8198,10 @@ function _calcDescRecetaPanel(receta,lineas,pago,hoja){
     var globalDiscP=Math.round(Math.max(0,sub-catDiscP)*g/100);
     var pctDisc=catDiscP+globalDiscP; if(pctDisc>sub)pctDisc=sub;
     var auto=0;
-    if(receta.auto10&&pctDisc===0&&(pago==='Efectivo'||sub>=100000))auto=Math.round(sub*0.10);
+    if(receta.auto10&&pctDisc===0&&pago==='Efectivo')auto=Math.round(sub*0.10);
     var eff=pctDisc>0?pctDisc:auto; var regalo=Math.max(0,Number(receta.r)||0);
     desc=Math.min(sub,eff+regalo);
-  } else if(pago==='Efectivo'||sub>=100000){ desc=Math.round(sub*0.10); }
+  } else if(pago==='Efectivo'||(diezPrevio&&sub>=100000)){ desc=Math.round(sub*0.10); }
   return {sub:sub,desc:desc,total:Math.max(0,sub-desc)};
 }
 // HTML del box de totales del editor (incluye descuento de la receta en vivo)
@@ -8207,7 +8209,7 @@ function _editorTotalsHTML(uid){
   var ed=window['_ed_'+uid]; if(!ed) return '';
   var costoCalc=0;
   var lineas=ed.lineas.map(function(l){costoCalc+=l.q*(l.costo||0);return {a:l.a,q:l.q,precio:l.precio};});
-  var d=_calcDescRecetaPanel(ed.receta,lineas,ed.fp,ed.hoja);
+  var d=_calcDescRecetaPanel(ed.receta,lineas,ed.fp,ed.hoja,ed.diezPrevio);
   var margenCalc=d.total-costoCalc;
   var margenPctCalc=d.total>0?Math.round(margenCalc/d.total*100):0;
   var h='';
@@ -8251,6 +8253,11 @@ function abrirEditorPedido(hoja, id, row, uidEd){
   if(!ped){toast('Pedido no encontrado');return;}
   // Estado del editor: lineas: [{a, q, precio, costo}], receta de descuento, forma de pago, estado
   var ed={hoja:hoja,id:id,row:row,uid:uidEd,lineas:[],receta:_parseRecetaPanel(ped.dd),fp:ped.fp||'',es:ped.es||''};
+  /* El 10% de +$100.000 con el que se cargo el pedido (antes del 11/9/2026): el
+     10% exacto de su subtotal sin pagar en efectivo. Lo conserva al editarlo,
+     igual que en el backend (editarPedido). */
+  var _dsP=Number(ped.desc)||0, _sbP=Number(ped.subt)||0;
+  ed.diezPrevio=(ped.fp!=='Efectivo'&&_dsP>0&&_sbP>0&&_dsP===Math.round(_sbP*0.10));
   (ped.p||[]).forEach(function(pr){
     // qOrig = cantidad original del pedido. Si ya estaba reservada (origen=Deposito),
     // el stock disponible la descontó, así que el cap real es disponible+qOrig.
@@ -18874,12 +18881,12 @@ if('serviceWorker' in navigator){
           if(Number(_rec.g)>0) _parts.push(_rec.g+'% al pedido');
           if(_rec.c){Object.keys(_rec.c).forEach(function(k){if(Number(_rec.c[k])>0)_parts.push(_rec.c[k]+'% '+k);});}
           if(Number(_rec.r)>0) _parts.push('regalo $'+_ars(Number(_rec.r)));
-          if(!_parts.length && _rec.auto10!==false) _parts.push('10% '+(p.fp==='Efectivo'?'efectivo':'+$100k'));
+          if(!_parts.length && _rec.auto10!==false) _parts.push('10%'+(p.fp==='Efectivo'?' efectivo':''));
         }
         if(_parts.length) descLabel='Descuento ('+_parts.join(' · ')+')';
       }catch(_e){}
     } else if(desc>0){
-      descLabel='Descuento (10% '+(p.fp==='Efectivo'?'efectivo':'+$100k')+')';
+      descLabel='Descuento (10%'+(p.fp==='Efectivo'?' efectivo':'')+')';
     }
     html+='<div class="ord-money">';
     html+='<div class="ord-money-row"><span>Subtotal productos</span><b>'+_ars(subRaw)+'</b></div>';
