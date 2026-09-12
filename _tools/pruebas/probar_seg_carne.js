@@ -41,9 +41,15 @@ function interceptor(modo) {
             c.cats = c.cats || [];
             i++;
             if (${JSON.stringify(modo)} === 'carne') {
-              if (i % 10 === 0) { c.cats.push('Carnes'); n++; }
+              if (i % 10 === 0 && c.cats.indexOf('Carnes') < 0) { c.cats.push('Carnes'); n++; }
             } else if (${JSON.stringify(modo)} === 'nueva') {
               if (n < 3 && c.cats.length) { c.cats.push('Milanesas'); n++; }
+            } else if (${JSON.stringify(modo)} === 'nada') {
+              /* Desde el backend @583 el CRM trae Carnes DE VERDAD, asi que para
+                 simular "nadie probo carne" hay que SACARLA: dejar de agregarla
+                 no alcanza, y el chequeo daba rojo sobre un ERP que estaba bien. */
+              var k = c.cats.indexOf('Carnes');
+              if (k >= 0) { c.cats.splice(k, 1); n++; }
             }
           });
           window.__patchInfo = {modo:${JSON.stringify(modo)}, tocados:n, total:lista.length};
@@ -170,7 +176,8 @@ async function correr(cli, modo) {
   chk('ningún texto cortado en las cards', !lay.cortados.length, lay.cortados);
   const errCarne = await evaluar(cli, 'window.__err');
 
-  // ══ 2. la direccion contraria: si NADIE probo carne, la card no aparece ══
+  // ══ 2. la direccion contraria: si NADIE probo carne, la card no aparece.
+  //    Se le SACA Carnes al payload: desde @583 el backend la manda de verdad.
   console.log('\n  -- y si nadie hubiera comprado carne --');
   cs = await correr(cli, 'nada');
   chk('sin nadie que la haya probado, la card de Carnes NO se dibuja', !cs.some(c => /Carnes/.test(c.t)), cs.map(c => c.t));

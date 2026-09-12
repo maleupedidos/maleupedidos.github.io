@@ -118,10 +118,25 @@ async function abrirDetalle(cli) {
     const prem = ['Queso Brie', 'Langostinos'];
     chk(prem.every(n => !b1.prods.some(p => p.indexOf(n) >= 0)),
       'los sorrentinos que NO se venden en Estancias no estan en la lista roja');
+    /* La fila de "por encargo" tiene DOS formas y las dos son correctas: gris
+       cuando nadie pidio esos productos, AMBAR cuando hay un pedido vivo que los
+       necesita. Exigir una hacia depender el test del dato del dia. */
     const gris = b1.filas.find(f => /por encargo/.test(f.t));
-    chk(!!gris && /por encargo/.test(gris.t), 'hay una fila gris de "por encargo"', gris && gris.t);
-    chk(!!gris && /no se stockean/.test(gris.d), 'explica que se compran cuando alguien los pide');
-    chk(!!gris && prem.every(n => gris.d.indexOf(n) >= 0), 'y los nombra ahi', gris && gris.d);
+    if (gris) {
+      chk(/no se stockean/.test(gris.d), 'la fila de "por encargo" explica que no se stockean', gris.d);
+      const conPedido = /hay que comprarlas para ese pedido/.test(gris.d);
+      chk(conPedido || /hoy nadie los pidi/.test(gris.d),
+        conPedido ? '  y dice que hay un pedido vivo esperandolas' : '  y dice que hoy nadie los pidio', gris.d);
+      /* Los premium de Pilar estan aca SOLO si hoy estan en cero: si alguno tiene
+         stock no aparece, y eso no es una falla. Se exige que los que aparezcan
+         esten NOMBRADOS, no que aparezcan todos. */
+      const enCero = prem.filter(n => (b1.stock[({ 'Queso Brie': 'SQB', 'Langostinos': 'SL' })[n]] || {}).d <= 0);
+      if (enCero.length) chk(enCero.every(n => gris.d.indexOf(n) >= 0),
+        '  y nombra los que estan en cero (' + enCero.join(', ') + ')', gris.d);
+    } else {
+      chk(!Object.keys(b1.stock).some(a => (b1.stock[a].d || 0) <= 0 && (b1.dem[a] || 0) === 0),
+        'no hay fila de "por encargo" porque no hay ningun producto de esos en cero');
+    }
     // el caso que el corte viejo (<=2) no veia
     const sjyq = b1.stock['SJyQ'];
     if (sjyq && b1.dem['SJyQ'] > sjyq.d) {
@@ -134,6 +149,11 @@ async function abrirDetalle(cli) {
 
   // ── PUNTO 2: el grafico ──
   console.log('\n2) El grafico de los 6 meses');
+  /* `action=tendencia` va en prioridad 0 y sale detras del volcado: medido el
+     11/9/2026, el grafico y la banda de abajo llegan a los 28 s. Sin esperarlos,
+     `b2` y `b3` vienen null y el test dice que la pantalla esta rota. */
+  const llegoGraf = await esperar(cli, `!!document.querySelector('.tend-graf svg.vt-svg')`, 90000);
+  chk(llegoGraf, 'el grafico llego (action=tendencia tarda ~28 s)');
   const b2 = await evaluar(cli, `(function(){
     var g=document.querySelector('.tend-graf'); if(!g)return null;
     var svg=g.querySelector('svg.vt-svg'); if(!svg)return {svg:false};
@@ -178,6 +198,8 @@ async function abrirDetalle(cli) {
 
   // ── PUNTO 3: la base de clientes ──
   console.log('\n3) Mi base de clientes');
+  const llegoBase = await esperar(cli, `!!document.querySelector('.tend-base')`, 90000);
+  chk(llegoBase, 'la banda llego (sale del mismo endpoint que el grafico)');
   const b3 = await evaluar(cli, `(function(){
     var b=document.querySelector('.tend-base'); if(!b)return null;
     var btn=b.querySelector('.tend-base-acc button');
@@ -269,7 +291,23 @@ async function abrirDetalle(cli) {
   })()`);
   chk(!!b5 && b5.prods.some(p => /Queso Brie/.test(p)),
     'con demanda 9/sem, Queso Brie SI aparece en la lista de reponer', b5 && b5.prods.join(' | ').slice(0, 200));
-  chk(!!b5 && /Langostinos/.test(b5.gris), 'y Langostinos (demanda 0) sigue en la fila gris', b5 && b5.gris.slice(0, 140));
+  /* Langostinos cae en la fila de "por encargo" SOLO si hoy esta en cero: con
+     stock no aparece, y eso es lo correcto. El test pregunta por el stock real
+     antes de exigirlo — hardcodear que un producto esta en cero se rompe solo a
+     los dos dias, que es justo lo que le paso al chequeo de PPM de abajo. */
+  const slEnCero = await evaluar(cli, `(function(){
+    var s=((window.D&&D.stock)||[]).filter(function(x){return x.a==='SL';})[0];
+    return s ? (Number(s.d||0) <= 0) : null;
+  })()`);
+  if (slEnCero === true) {
+    chk(!!b5 && /Langostinos/.test(b5.gris), 'y Langostinos (demanda 0, en cero) esta en la fila de por encargo',
+        b5 && b5.gris.slice(0, 140));
+  } else {
+    chk(!!b5 && !/Langostinos/.test(b5.prods.join(' ')),
+        'Langostinos (demanda 0) NO entra en la lista de reponer' +
+        (slEnCero === false ? ' — hoy tiene stock, asi que tampoco va en la de por encargo' : ''),
+        b5 && b5.prods.join(' | ').slice(0, 160));
+  }
   /* Este chequeo prueba la REGLA -se marca lo que no llega a la proxima
      reposicion, o sea menos de una semana de venta en el freezer-, no un stock
      escrito a mano. Cuando se escribio, PPM tenia 2 unidades; el 11/9/2026
