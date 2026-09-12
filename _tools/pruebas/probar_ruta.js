@@ -259,7 +259,9 @@ async function irA(cli, texto) {
   chk('Clubes va en azul', await evaluar(cli, `!!document.querySelector('#rutaBody .rtc-dest.cl')`));
 
   // ── Filtros por zona y ‹ › adentro de la zona ──
-  const chips = await evaluar(cli, `[].map.call(document.querySelectorAll('#rutaResumen .rtc-chip'),function(x){return x.textContent.replace(/\\s+/g,' ').trim();})`);
+  /* Solo los filtros de ZONA: desde el 12/9/2026 la fila empieza con "👥 Repartir"
+     (y, si hay reparto, Mías / Todos), que son otra cosa. */
+  const chips = await evaluar(cli, `[].map.call(document.querySelectorAll('#rutaResumen .rtc-chip:not(.rep-chip):not(.rep-chip-sin)'),function(x){return x.textContent.replace(/\\s+/g,' ').trim();}).filter(function(t){return !/^(Mías|Todos) /.test(t);})`);
   chk('los filtros arrancan en "Todas 7"', /^Todas 7$/.test(chips[0]), chips);
   await evaluar(cli, `[].find.call(document.querySelectorAll('#rutaResumen .rtc-chip'),function(x){return /Brendan/.test(x.textContent)}).click()`); await pausa(300);
   t = await evaluar(cli, barra);
