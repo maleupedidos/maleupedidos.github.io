@@ -1601,8 +1601,13 @@ document.getElementById('loadingView').classList.add('hidden');
 // Decision Tadeo (21/8/2026): el loader que tapa es para cuando SE REGISTRA
 // algo (cobrar, entregar, guardar). Para entrar, un cartelito inline y la
 // pantalla libre; si querés datos frescos a proposito, esta el ↻ de arriba.
-if(entregas.length>0){rutRender();updateLastSync();refresh(true)}
-else{refresh(false)}
+/* La primera pintada NO va aca: va al final del script, en `_arrancarRuta()`.
+   Con `var` la asignacion no se hoistea, asi que cualquier tabla declarada mas
+   abajo —`_RTC_ICO` esta en la 3447— todavia vale `undefined` en este punto, y
+   `rutRender()` la revienta: `_abrirSubapp` se traga la excepcion y la sub-app
+   no publica sus globales. La tab queda muerta y el ↻ no actualiza nada.
+   (Bug del 11/9/2026; ya habia pasado con `armadoCollapseState`, que se parcho
+   moviendo esa sola variable. Al final del script el problema no existe.) */
 // SIN auto-refresh por visibilitychange/focus: arruinaba la edición — Tadeo
 // expandía un grupo y el refresh silencioso lo cerraba al rerender. La única
 // forma de actualizar es tocar el botón ↻ flotante del Panel padre.
@@ -1748,7 +1753,7 @@ function refresh(silent,fresh){
   var btn=document.getElementById('btnRefresh');btn.classList.add('spinning');
   var url=RUT_APPS_SCRIPT_URL+'?action=entregas&t='+Date.now()+(fresh?'&fresh=1':'');
   return fetch(url).then(function(r){return r.json()}).then(function(data){
-    btn.classList.remove('spinning');_ctasDe(data);_prodsDelBackend(data.prods);var se=_sanearEntregas(data.e||[]);var prev=getPendientes().length;entregas=se;
+    btn.classList.remove('spinning');_ctasDe(data);_saldosDelBackend(data);_prodsDelBackend(data.prods);var se=_sanearEntregas(data.e||[]);var prev=getPendientes().length;entregas=se;
     var sk={};entregas.forEach(function(e){sk[eKey(e)]=true});
     Object.keys(entregados).forEach(function(k){if(!sk[k])delete entregados[k]});
     Object.keys(cobrados).forEach(function(k){if(!sk[k])delete cobrados[k]});
@@ -2110,6 +2115,73 @@ function _ctasDe(d){
   if(!d || !Array.isArray(d.cuentas) || !d.cuentas.length) return;
   RUT_CTAS = d.cuentas;
   try { localStorage.setItem('maleu_ruta_ctas', JSON.stringify(RUT_CTAS)); } catch(e){}
+}
+
+/* ── SALDOS A FAVOR ──────────────────────────────────────────────────────────
+   El mapa viene en `entregas` y en `cobrosPendientes`, keyeado por nombre en
+   minuscula. Hasta el 11/9/2026 el front pedia `action=saldoCliente` **uno por
+   cliente**, y sin guard de "ya lo estoy pidiendo" (el cache se escribe recien
+   en el .then): medido, **15 GET en una corrida** con 7 clientes pendientes.
+   La cola tiene 2 cupos, asi que esos 15 tapaban la fila y el ↻ de COBROS
+   tardaba 47 s — el dato llegaba, pero detras de 15 consultas de un cartelito.
+   Al 11/9/2026 la hoja tiene 19 filas y **2 clientes con saldo**. */
+var RUT_SALDOS = null;   /* null = el backend todavia no lo mando */
+/* Declarada ACA y no 2.200 lineas abajo: `chequearOrdenDeclaraciones()` corta
+   el build si se indexa una `var` antes de su declaracion, porque hasta esa
+   linea vale `undefined` y eso tumba la sub-app sin un solo error visible
+   (el bug del 9/9/2026). Sigue siendo el cache del camino viejo, para cuando
+   el backend no manda el mapa. */
+window._saldosClienteCache = window._saldosClienteCache || {};
+var _saldosClienteCache = window._saldosClienteCache; // alias local
+var _saldosPidiendo = {};
+try{
+  var _sg = JSON.parse(localStorage.getItem('maleu_ruta_saldos')||'null');
+  if(_sg && typeof _sg === 'object') RUT_SALDOS = _sg;
+}catch(e){}
+
+function _saldosDelBackend(d){
+  /* Solo si vino el campo: un Apps Script anterior no lo manda, y en ese caso
+     hay que dejar lo que estaba en vez de vaciar los carteles. Un objeto vacio
+     SI es una respuesta valida — significa "nadie tiene saldo". */
+  if(!d || !d.saldos || typeof d.saldos !== 'object') return;
+  RUT_SALDOS = d.saldos;
+  try{ localStorage.setItem('maleu_ruta_saldos', JSON.stringify(RUT_SALDOS)); }catch(e){}
+}
+
+/** El saldo del mapa. `null` = el mapa no llego todavia, que NO es lo mismo que
+ *  "no tiene saldo": con null hay que preguntarle al backend. */
+function _saldoDelMapa(cliente){
+  if(!RUT_SALDOS) return null;
+  var k = String(cliente||'').toLowerCase().trim();
+  if(!k) return 0;
+  return Number(RUT_SALDOS[k]) || 0;
+}
+
+/** El saldo a favor de un cliente, por el camino mas barato que haya.
+ *  Del mapa (cero requests) y, solo si el mapa no llego, el GET de antes. */
+function _saldoPara(cliente, cb){
+  var k = String(cliente||'').toLowerCase().trim();
+  if(!k){ cb(0); return; }
+  var m = _saldoDelMapa(cliente);
+  if(m !== null){ cb(m); return; }
+
+  if(!_saldosClienteCache){_saldosClienteCache=window._saldosClienteCache={};}
+  var ck = 'c:'+k;
+  var cached = _saldosClienteCache[ck];
+  if(cached && (Date.now()-cached.ts) < 300000){ cb(cached.saldo); return; }
+  /* El guard que faltaba: sin esto, dos renders seguidos piden el mismo cliente
+     dos veces, porque el cache se escribe recien al volver la respuesta. */
+  if(_saldosPidiendo[ck]){ _saldosPidiendo[ck].push(cb); return; }
+  _saldosPidiendo[ck] = [cb];
+  fetch(RUT_APPS_SCRIPT_URL+'?action=saldoCliente&cliente='+encodeURIComponent(cliente)+'&t='+Date.now())
+    .then(function(r){return r.json()})
+    .then(function(data){
+      var sv=(data&&data.ok)?(Number(data.saldo)||0):0;
+      _saldosClienteCache[ck]={saldo:sv,ts:Date.now()};
+      (_saldosPidiendo[ck]||[]).forEach(function(f){ try{f(sv);}catch(e){} });
+      delete _saldosPidiendo[ck];
+    })
+    .catch(function(){ delete _saldosPidiendo[ck]; });
 }
 
 /** Las cuentas donde puede entrar una transferencia. El efectivo no cuenta:
@@ -3844,6 +3916,7 @@ function fetchCobrosPendientes(fresh){
         throw new Error((data&&(data.err||data.error))||'respuesta sin cobros');
       }
       _ctasDe(data);
+      _saldosDelBackend(data);
       if(typeof data.billetera==='number')_billeteraRuta=data.billetera; // fondo de cambio para el cuadro de Cobros
       /* Solo si vino el campo: un backend viejo no lo manda, y en ese caso hay
          que dejar lo que ya estaba en vez de vaciar la banda. */
@@ -4337,8 +4410,6 @@ function renderCobrosFromServer(){
 
 // Cache de saldos a favor por teléfono (para no spamear el backend al renderear cobros)
 // Forzar inicialización en window para que sobreviva re-ejecuciones del script en iframe.
-window._saldosClienteCache = window._saldosClienteCache || {};
-var _saldosClienteCache = window._saldosClienteCache; // alias local
 
 function rutaNext(){var s=_rutaVista();if(!s.length)return;rutaIndex=(rutaIndex+1)%s.length;saveLocal();rutRenderRuta()}
 function rutaPrev(){var s=_rutaVista();if(!s.length)return;rutaIndex=(rutaIndex-1+s.length)%s.length;saveLocal();rutRenderRuta()}
@@ -5490,12 +5561,12 @@ function _fetchSaldoPrevioModal(tel,cliente){
   var key=name?('c:'+name.toLowerCase()):('t:'+rawTel);
   if(key==='c:'||key==='t:')return;
   if(!_saldosClienteCache){_saldosClienteCache=window._saldosClienteCache={};}
+  /* Con nombre va por el mapa (cero requests). Sin nombre no hay nada que
+     buscar ahi —el mapa se keyea por nombre— asi que queda el GET por tel. */
+  if(name){ _saldoPara(name, function(s){ _renderCobroSaldoPrevio(s); }); return; }
   var cached=_saldosClienteCache[key];
   if(cached&&(Date.now()-cached.ts)<60000){_renderCobroSaldoPrevio(cached.saldo);return;}
-  var q='?action=saldoCliente&t='+Date.now();
-  if(name)q+='&cliente='+encodeURIComponent(name);
-  else if(rawTel)q+='&tel='+encodeURIComponent(rawTel);
-  fetch(RUT_APPS_SCRIPT_URL+q)
+  fetch(RUT_APPS_SCRIPT_URL+'?action=saldoCliente&tel='+encodeURIComponent(rawTel)+'&t='+Date.now())
     .then(function(r){return r.json()})
     .then(function(data){var s=(data&&data.ok)?(Number(data.saldo)||0):0;_saldosClienteCache[key]={saldo:s,ts:Date.now()};_renderCobroSaldoPrevio(s);})
     .catch(function(){});
@@ -5519,19 +5590,7 @@ function _populateArmadoSaldos(){
   }
   Object.keys(grupos).forEach(function(k){
     var g=grupos[k];
-    var cached=_saldosClienteCache[k];
-    if(cached && (Date.now()-cached.ts)<300000){
-      _renderArmadoSaldoBadges(g.els, cached.saldo);
-      return;
-    }
-    fetch(RUT_APPS_SCRIPT_URL+'?action=saldoCliente&cliente='+encodeURIComponent(g.cli)+'&t='+Date.now())
-      .then(function(r){return r.json()})
-      .then(function(data){
-        var s=(data&&data.ok)?(Number(data.saldo)||0):0;
-        _saldosClienteCache[k]={saldo:s,ts:Date.now()};
-        _renderArmadoSaldoBadges(g.els, s);
-      })
-      .catch(function(){});
+    _saldoPara(g.cli, function(s){ _renderArmadoSaldoBadges(g.els, s); });
   });
 }
 function _renderArmadoSaldoBadges(elements, saldo){
@@ -5560,19 +5619,7 @@ function _populateRutaSaldoPrevio(){
   }
   Object.keys(grupos).forEach(function(k){
     var g=grupos[k];
-    var cached=_saldosClienteCache[k];
-    if(cached && (Date.now()-cached.ts)<300000){
-      _renderRutaSaldoBanner(g.els, cached.saldo);
-      return;
-    }
-    fetch(RUT_APPS_SCRIPT_URL+'?action=saldoCliente&cliente='+encodeURIComponent(g.cli)+'&t='+Date.now())
-      .then(function(r){return r.json()})
-      .then(function(data){
-        var s=(data&&data.ok)?(Number(data.saldo)||0):0;
-        _saldosClienteCache[k]={saldo:s,ts:Date.now()};
-        _renderRutaSaldoBanner(g.els, s);
-      })
-      .catch(function(){});
+    _saldoPara(g.cli, function(s){ _renderRutaSaldoBanner(g.els, s); });
   });
 }
 function _renderRutaSaldoBanner(elements, saldo){
@@ -8448,6 +8495,24 @@ function npReset(){
   window.addEventListener('resize',medir);
   medir();
 })();
+
+/* ── LA PRIMERA PINTADA, al final y a proposito ──────────────────────────────
+   Aca abajo ya corrieron TODAS las declaraciones del script, asi que ninguna
+   tabla puede valer `undefined`. Ponerlo arriba —donde estaba hasta el
+   11/9/2026— hacia que un telefono con paradas guardadas y la sub-tab RUTA
+   abierta no pudiera arrancar la sub-app, sin dejar un solo error a la vista.
+
+   Arranque en frio (primera vez, sin cache local): antes tapabamos toda la
+   pantalla con el loader de Maleu hasta que contestara el backend — 5 a 15
+   segundos mirando un velo por el solo hecho de ENTRAR a la tab.
+   Decision Tadeo (21/8/2026): el loader que tapa es para cuando SE REGISTRA
+   algo (cobrar, entregar, guardar). Para entrar, un cartelito inline y la
+   pantalla libre; si querés datos frescos a proposito, esta el ↻ de arriba. */
+function _arrancarRuta(){
+  if(entregas.length>0){rutRender();updateLastSync();refresh(true);}
+  else{refresh(false);}
+}
+_arrancarRuta();
 
 /* ── TOAST ── */
 function showToast(msg){var t=document.getElementById('rutToast');t.textContent=msg;t.classList.add('show');setTimeout(function(){t.classList.remove('show')},3000)}

@@ -6911,6 +6911,42 @@ function _msgSubappCaida(clave, quien, art){
   if(rotas && rotas[clave]) return quien + ' no cargo bien — toca "Reiniciar esta seccion" ahi arriba';
   return 'Entra una vez a ' + quien + ' antes de actualizar' + art;
 }
+/* Cada sub-app se refresca por SU propia funcion, y el mapa vive en UN solo
+   lugar porque lo usan DOS caminos: el ↻ del topbar y el refresco automatico
+   al volver a la app.
+
+   Hasta el 11/9/2026 el automatico llamaba a `loadRapido()` sin mirar la tab.
+   Medido estando en RUTA: pedia `pedidosLight` + `cajaLight` + `ocLight` +
+   `cobrosPendientes` —~900 KB que esa pantalla no dibuja— y NO pedia
+   `entregas`. Volver al celular despues de un rato dejaba las entregas viejas.
+
+   Las funciones se resuelven por su nombre GLOBAL y no por `window[...]`: el
+   build publica una copia de las globales de cada sub-app, y ademas
+   `chequearCosturas()` corta la publicacion si a una de estas tres le cambian
+   el nombre. Escritas asi, el chequeo las encuentra. */
+var _REFRESCO_SUBAPP = {
+  ruta: { nom: 'Ruta', g: 'la',
+          hay: function(){ return typeof refresh === 'function'; },
+          fn:  function(){ return refresh(true, true); } },
+  busqueda: { nom: 'Abastecimiento', g: 'lo',
+          hay: function(){ return typeof abaRefresh === 'function'; },
+          fn:  function(){ return abaRefresh(true); } },
+  miportal: { nom: 'Mi Portal', g: 'lo',
+          hay: function(){ return typeof refreshPortal === 'function'; },
+          fn:  function(){ return refreshPortal(); } }
+};
+
+/* La tab abierta. Sale de `cur` y no del DOM a proposito: `go()` llama al
+   refresco automatico ANTES de mover las clases `.pg.on`, asi que mirar el DOM
+   ahi devuelve la tab de la que te estas YENDO — y refrescaria la equivocada. */
+function _tabActual(){
+  if (typeof cur === 'string' && cur) return cur;
+  try{
+    var e = document.querySelector('.pg.on');
+    return e ? String(e.id || '').replace(/^p-/, '') : '';
+  }catch(e){ return ''; }
+}
+
 function refreshContextual(){
   var btn=document.getElementById('hdrRefresh');
   if(btn&&btn.classList.contains('spinning'))return;
@@ -6983,21 +7019,10 @@ function refreshContextual(){
      eso le salio estando PARADO adentro de Ruta: un mensaje que miente sobre
      un boton que no anda. La sub-app habia reventado al arrancar por un dato
      viejo en localStorage, y el cartel correcto lo pone _abrirSubapp. */
-  if(active==='ruta'){
-    if(typeof refresh!=='function'){ done(false,_msgSubappCaida('ruta','Ruta','la')); return; }
-    Promise.resolve(refresh(true,true))
-      .then(function(){done(true);},function(){done(false);});
-    return;
-  }
-  if(active==='busqueda'){
-    if(typeof abaRefresh!=='function'){ done(false,_msgSubappCaida('busqueda','Abastecimiento','lo')); return; }
-    Promise.resolve(abaRefresh(true))
-      .then(function(){done(true);},function(){done(false);});
-    return;
-  }
-  if(active==='miportal'){
-    if(typeof refreshPortal!=='function'){ done(false,_msgSubappCaida('miportal','Mi Portal','lo')); return; }
-    Promise.resolve(refreshPortal())
+  var _sa=_REFRESCO_SUBAPP[active];
+  if(_sa){
+    if(!_sa.hay()){ done(false,_msgSubappCaida(active,_sa.nom,_sa.g)); return; }
+    Promise.resolve(_sa.fn())
       .then(function(){done(true);},function(){done(false);});
     return;
   }
@@ -18605,6 +18630,24 @@ function rVentas(){
     if(navigator.onLine === false) return;
     if(typeof _hayEditorAbierto === 'function' && _hayEditorAbierto()) return;
     if(Date.now() - _ultimoRefrescoAuto < _REFRESCO_MIN_MS) return;
+    /* Lo que se refresca es lo que se esta MIRANDO. Estando en una sub-app,
+       `loadRapido()` pedia ~900 KB del panel que esa pantalla no dibuja y
+       dejaba sus propios datos viejos: eso es "volvi al celular y no se
+       actualizo". El mapa es el mismo que usa el ↻. */
+    var _tab = (typeof _tabActual === 'function') ? _tabActual() : '';
+    var _sa = _REFRESCO_SUBAPP[_tab];
+    var _p = null;
+    if(_sa && _sa.hay()){
+      _p = _sa.fn();
+      /* La sub-app no devuelve `{ok}`: si su promesa resuelve, refresco.
+         Es el mismo criterio con el que el ↻ estampa la hora. */
+      _refrescandoAuto = true;
+      _ultimoRefrescoAuto = Date.now();
+      Promise.resolve(_p).then(function(){
+        if(typeof _markRefreshTime === 'function') _markRefreshTime();
+      }, function(){}).then(function(){ _refrescandoAuto = false; });
+      return;
+    }
     if(typeof loadRapido !== 'function') return;
     _refrescandoAuto = true;
     _ultimoRefrescoAuto = Date.now();
