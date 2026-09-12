@@ -448,6 +448,14 @@ button.rtc-stop:active{background:var(--beige)}
 .cobro-ruta-btn-si{flex:2;padding:14px;background:var(--green);color:#fff;border:none;border-radius:12px;font-family:inherit;font-size:15px;font-weight:800;cursor:pointer;min-height:52px;letter-spacing:.02em}
 .cobro-ruta-btn-si:disabled{background:#9CA3AF;cursor:not-allowed}
 .cobro-ruta-btn-si:active:not(:disabled){background:#2d6a2d;transform:scale(.98)}
+/* "Y ya se lo entregue": en la puerta del cliente cobrar ES entregar, asi que
+   las dos cosas van en el mismo toque. El label entero es el area tactil (52px),
+   no el checkbox de 24 -- manejando no se apunta a un cuadradito. */
+.cobro-ruta-ent{display:flex;align-items:center;gap:11px;background:#F1F8E9;border:1.5px solid var(--green);border-radius:12px;padding:11px 13px;margin-bottom:10px;min-height:52px;cursor:pointer}
+.cobro-ruta-ent input{width:24px;height:24px;flex:0 0 24px;accent-color:var(--green);cursor:pointer;margin:0}
+.cobro-ruta-ent b{display:block;font-size:14px;color:#1B5E20;line-height:1.25}
+.cobro-ruta-ent small{display:block;font-size:11.5px;color:#33691E;line-height:1.35;margin-top:2px;font-weight:600}
+.cobro-ruta-btn-si small{display:block;font-size:11.5px;font-weight:700;letter-spacing:0;opacity:.92;margin-top:2px}
 
 /* ── CONFIRM ── */
 .confirm-overlay{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:300;display:flex;align-items:center;justify-content:center;padding:20px}
@@ -1126,6 +1134,14 @@ select.np-input{background:var(--white) url("data:image/svg+xml;utf8,<svg xmlns=
     </div>
 
     <div class="cobro-ruta-err" id="cobroRutaErr" style="display:none"></div>
+
+    <!-- Tildada por defecto y destildable. La pinta `_pintarCobroEnt()`, que
+         decide si corresponde: nunca desde COBROS (ahi el pedido ya se
+         entrego) ni en pago parcial. -->
+    <label class="cobro-ruta-ent" id="cobroEntSection" style="display:none">
+      <input type="checkbox" id="cobroYaEntregado" checked onchange="_onCobroEntChange(this)">
+      <span><b>Y ya se lo entregué</b><small id="cobroEntHint">Lo marco entregado junto con el cobro</small></span>
+    </label>
 
     <div class="cobro-ruta-btns">
       <button type="button" class="cobro-ruta-btn-no" onclick="cerrarCobroRuta()">Cancelar</button>
@@ -4591,41 +4607,50 @@ function confirmarEntregado(key){
 function cerrarConfirm(){document.getElementById('confirmOverlay').classList.add('hidden')}
 
 /* ── MARCAR ENTREGADO ── */
+/* ── EL NUCLEO DE MARCAR ENTREGADO ──
+   La marca local, el POST y el registro para la vuelta atras. SIN toast, sin
+   repintar y sin guardar: de eso se encarga el que llama, asi el cobro+entrega
+   hace UN `saveLocal()` y UNA pasada de la cola en vez de dos.
+
+   Es el UNICO lugar que escribe `entregados`, para que los dos caminos -- el
+   boton Entregado y la casilla del cuadro de cobro -- no se despeguen. Contar
+   cuantos lugares hacen lo mismo ya se pago cuatro veces en este ERP. */
+function _entregarCore(ped){
+  if(!ped)return false;
+  var k=eKey(ped);
+  if(entregados[k])return false;
+  entregados[k]=true;
+  syncQueue.push({action:'marcarEntregado',hoja:ped.h,id:String(ped.id),row:ped.r,
+    cobrado:!!cobrados[k],propina:propinas[k]||0,repartidor:_rutaUser(),ts:Date.now()});
+  /* Si queda sin cobrar va a COBROS para el seguimiento. Llamado desde el cuadro
+     de cobro `cobrados[k]` ya es true, asi que no entra: es la misma condicion de
+     siempre y no un caso aparte. Red se liquida por vendedor en Panel > Caja. */
+  if(!cobrados[k]&&ped.ep!=='Cobrado'&&ped.h!=='Red'){
+    pendientesCobro.push({key:k,h:ped.h,id:String(ped.id),r:ped.r,c:ped.c,t:ped.t,$:ped.$,fp:ped.fp,ts:Date.now()});
+  }
+  _rutHechaAgregar(ped);
+  return true;
+}
+
 function marcarEntregado(key){
   // Combo: iterar y marcar cada pedido individual.
   if(_esCombo(key)){
     var peds=_pedidosDelCombo(key);
     if(peds.length===0)return;
     var nombre=(peds[0].c||'').split(' ')[0];
-    peds.forEach(function(p){
-      var k=eKey(p);
-      entregados[k]=true;
-      syncQueue.push({action:'marcarEntregado',hoja:p.h,id:String(p.id),row:p.r,cobrado:!!cobrados[k],propina:propinas[k]||0,repartidor:_rutaUser(),ts:Date.now()});
-      if(!cobrados[k]&&p.ep!=='Cobrado'&&p.h!=='Red'){
-        pendientesCobro.push({key:k,h:p.h,id:String(p.id),r:p.r,c:p.c,t:p.t,$:p.$,fp:p.fp,ts:Date.now()});
-      }
-    });
-    peds.forEach(function(p){_rutHechaAgregar(p);});
+    peds.forEach(function(p){_entregarCore(p);});
     saveLocal();processSyncQueue();if(navigator.vibrate)navigator.vibrate(50);
     showToast('Entregado a '+nombre+' ('+peds.length+' pedidos)');
     rutRender();
     return;
   }
-  entregados[key]=true;
   var ent=findByKey(key);
-  if(ent){
-    syncQueue.push({action:'marcarEntregado',hoja:ent.h,id:String(ent.id),row:ent.r,cobrado:!!cobrados[key],propina:propinas[key]||0,repartidor:_rutaUser(),ts:Date.now()});
-    // Si no está cobrado, guardar para seguimiento (Red se liquida aparte en Panel→Caja)
-    if(!cobrados[key]&&ent.ep!=='Cobrado'&&ent.h!=='Red'){
-      pendientesCobro.push({key:key,h:ent.h,id:String(ent.id),r:ent.r,c:ent.c,t:ent.t,$:ent.$,fp:ent.fp,ts:Date.now()});
-    }
-  }
+  _entregarCore(ent);
   /* SIN loader: la marca ya esta en `entregados`, en la cola y en localStorage,
      y la card se repinta abajo. Tapar la pantalla hasta que conteste Apps
      Script (3-25 s) no protege nada — el dato sobrevive aunque se cierre la
      app — y es lo que hacia sentir lento el flujo. El syncBanner de arriba
      muestra que queda algo por sincronizar. */
-  if(ent)_rutHechaAgregar(ent);
   saveLocal();processSyncQueue();if(navigator.vibrate)navigator.vibrate(50);
   showToast('Entregado a '+((ent&&ent.c)||'').split(' ')[0]);
   rutRender();
@@ -5132,7 +5157,7 @@ function abrirCobroRuta(key){
     if(yaCobrados){showToast('Los pedidos ya están cobrados');return;}
     var totalC=peds.reduce(function(s,p){return s+(Number(p.$)||0);},0);
     var fp=peds[0].fp||'Efectivo';
-    _cobroRutaState={key:key,combo:true,pedidos:peds,total:totalC,totalOriginal:totalC,fp:fp,cambioOpen:false,aFavOpen:false,comboNoDisc:false,comboPct:0};
+    _cobroRutaState={key:key,combo:true,pedidos:peds,total:totalC,totalOriginal:totalC,fp:fp,cambioOpen:false,aFavOpen:false,comboNoDisc:false,comboPct:0,entregar:true};
 
     document.getElementById('cobroRutaTitle').textContent='Cobrar a '+peds[0].c;
     document.getElementById('cobroRutaSub').textContent=peds.length+' pedidos juntos · Total '+formatMoney(totalC);
@@ -5159,7 +5184,7 @@ function abrirCobroRuta(key){
   // Total según la FP actual. Si Tadeo cambia la FP en el modal, _setCobroFp
   // recalcula con la regla de _descAutoCobro.
   var total=_totalSegunFp(ent,fp);
-  _cobroRutaState={key:key,combo:false,ent:ent,total:total,totalOriginal:Number(ent.$)||0,fp:fp,cambioOpen:false,aFavOpen:false};
+  _cobroRutaState={key:key,combo:false,ent:ent,total:total,totalOriginal:Number(ent.$)||0,fp:fp,cambioOpen:false,aFavOpen:false,entregar:true};
 
   // Setear UI
   document.getElementById('cobroRutaTitle').textContent='Cobrar a '+ent.c;
@@ -5307,10 +5332,64 @@ function _rutSufCta(id){
 
 /** Abre el cuadro. Los cuatro caminos pasan por aca para que el selector de
  *  cuenta no dependa de que cada uno se acuerde de pintarlo. */
+/* ── "Y YA SE LO ENTREGUE" ─────────────────────────────────────────────────
+   Una parada eran 5 toques: Cobrar > metodo > Confirmar > Entregado > Si. En la
+   puerta del cliente las dos cosas pasan en el mismo momento, asi que la casilla
+   las une y quedan 3.
+
+   Tildada por defecto porque es lo que pasa el 95% de las veces, y DESTILDABLE
+   porque marcar entregado algo que no se entrego es peor que un toque de mas.
+   Solo sale donde la entrega es cierta. */
+function _cobroEntAplica(st){
+  /* Desde COBROS no: el pedido llego ahi justamente porque ya se entrego.
+     En pago parcial tampoco -- ese camino deja el pedido debiendo y el monto
+     pendiente lo reconcilia el backend, asi que empujarlo a `pendientesCobro`
+     desde aca le pondria el total en vez del saldo. Ahi la entrega se marca
+     con el boton de siempre: es un caso raro y un toque de mas no es el
+     problema, cobrar de mas si. */
+  if(!st||st.fromCobros||st.partial)return false;
+  if(st.combo)return (st.pedidos||[]).some(function(p){return !isEntregado(p);});
+  return !!st.ent && !isEntregado(st.ent);
+}
+function _pintarCobroEnt(){
+  var sec=document.getElementById('cobroEntSection');
+  if(!sec)return;
+  var st=_cobroRutaState,aplica=_cobroEntAplica(st);
+  sec.style.display=aplica?'flex':'none';
+  if(!aplica)return;
+  var chk=document.getElementById('cobroYaEntregado');
+  if(chk)chk.checked=!!st.entregar;
+  var hint=document.getElementById('cobroEntHint');
+  /* Dice que va a pasar con la PARADA, que es lo que se ve despues: sin eso, la
+     card desaparece del recorrido y parece que se perdio. */
+  if(hint)hint.textContent=st.entregar
+    ?(st.combo?('Marco entregados los '+st.pedidos.length+' pedidos y la parada sale del recorrido')
+              :'Marco entregado y la parada sale del recorrido')
+    :'Queda cobrado pero sin entregar: la parada se queda en el recorrido';
+}
+function _onCobroEntChange(chk){
+  var st=_cobroRutaState; if(!st)return;
+  st.entregar=!!(chk&&chk.checked);
+  _pintarCobroEnt();
+  _recalcCobroRuta();
+}
+/* El boton nombra las DOS cosas que el toque va a hacer. Si dijera solo
+   "COBRADO", la parada saldria del recorrido sin que nadie lo hubiera leido. El
+   monto baja a un segundo renglon porque "COBRADO Y ENTREGADO $34.000" no entra
+   en una linea a 390px. */
+function _setBtnCobro(btn,txt){
+  if(!btn)return;
+  var st=_cobroRutaState;
+  if(!(st&&st.entregar&&_cobroEntAplica(st))){btn.textContent=txt;return;}
+  btn.innerHTML='\u2713 COBRADO Y ENTREGADO<small>'
+    +_rtcEsc(String(txt).replace(/^\u2713 COBRADO\s*/,''))+'</small>';
+}
+
 function _mostrarCuadroCobro(){
   var ov=document.getElementById('cobroRutaOverlay');
   if(ov)ov.classList.remove('hidden');
   _pintarCobroCtas();
+  _pintarCobroEnt();
 }
 
 function _setCobroFp(fp){
@@ -5627,6 +5706,7 @@ function _recalcCobroRuta(){
   if(faltaCta)errors.push('¿A qué cuenta entró la transferencia? Tocá '+_ctasDigitales().map(function(c){
     return '<b>'+String(c.nombre||c.id).replace(/[<>&"]/g,'')+'</b>';}).join(' o ')+' arriba.');
   _pintarCobroCtas();
+  _pintarCobroEnt();
   // Cero tolerancia: cualquier faltante bloquea (así no se cuelan descuentos
   // tácitos por redondeo — bug 10/07 Lucia $480 + Martina $160 = $640 perdidos
   // silenciosamente por la vieja tolerancia $500). Opciones para cerrar igual:
@@ -5684,11 +5764,11 @@ function _recalcCobroRuta(){
     if(partial){
       btn.textContent='Registrar parcial '+formatMoney(neto);
     } else if(st.aceptaDescuento && faltante>0){
-      btn.textContent='✓ COBRADO '+formatMoney(neto)+' (descuento '+formatMoney(faltante)+')';
+      _setBtnCobro(btn,'✓ COBRADO '+formatMoney(neto)+' (descuento '+formatMoney(faltante)+')');
     } else {
       // El botón muestra la PLATA QUE ENTRA en este cobro (cash recibido neto),
       // no el facturado del pedido. Con saldo previo aplicado: neto < facturado.
-      btn.textContent='✓ COBRADO '+formatMoney(neto);
+      _setBtnCobro(btn,'✓ COBRADO '+formatMoney(neto));
     }
   }
   _renderAFavCalc(); // mantener vivo el desglose del sobrante (a-favor + propina)
@@ -6084,6 +6164,12 @@ function confirmarCobroRuta(){
     });
   }
 
+  /* Y LA ENTREGA, si la casilla quedo tildada. Va DESPUES de `cobrados[key]`
+     para que el POST viaje con `cobrado:true` y el pedido no entre a COBROS --
+     es la misma condicion de `_entregarCore`, no un caso especial. En la cola
+     queda detras del `marcarCobrado`, que se procesa de a uno y en orden. */
+  var _entregoTambien=(st.entregar&&_cobroEntAplica(st))?_entregarCore(ent):false;
+
   saveLocal();
   cerrarCobroRuta();
   /* SIN loader, el mismo criterio que Entregado (3/9/2026): `cobrados[key]`,
@@ -6096,7 +6182,7 @@ function confirmarCobroRuta(){
   processSyncQueue();
   rutRenderRuta();
   var nombre=(ent.c||'').split(' ')[0];
-  var msg='Cobrado a '+nombre+' · '+formatMoney(facturadoTotal)+_rutSufCta(payload.cuenta);
+  var msg=(_entregoTambien?'Cobrado y entregado a ':'Cobrado a ')+nombre+' · '+formatMoney(facturadoTotal)+_rutSufCta(payload.cuenta);
   if(r.camMP>0)msg+=' (cambio $'+formatMoney(r.camMP).replace('$','')+' por '+(_ctaNombre(payload.cuenta)||'transferencia')+')';
   showToast(msg);
   if(navigator.vibrate)navigator.vibrate(30);
@@ -6227,6 +6313,9 @@ function _confirmarCobroComboRuta(st,r){
       });
     }
   });
+  /* La entrega de los N pedidos, con el mismo criterio que el cobro suelto. */
+  var _nEnt=0;
+  if(st.entregar&&_cobroEntAplica(st))peds.forEach(function(p){if(_entregarCore(p))_nEnt++;});
   var elBC=document.getElementById('tabCobrosCount');
   if(elBC)elBC.textContent=pendientesCobro.length||'';
   var fromCobros=st.fromCobros;
@@ -6236,7 +6325,7 @@ function _confirmarCobroComboRuta(st,r){
   if(fromCobros && rutCurrentTab==='cobros')renderCobrosFromServer();
   else rutRenderRuta();
   // Commit por FETCH DIRECTO endurecido (backend idempotente v404 → reintento seguro).
-  _commitCobroComboDirecto(_comboPayloads, peds);
+  _commitCobroComboDirecto(_comboPayloads, peds, _nEnt);
 }
 
 // Envía los N cobros de un combo por fetch directo (NO syncQueue, que se traba en el
@@ -6244,7 +6333,7 @@ function _confirmarCobroComboRuta(st,r){
 // Backend idempotente: reintentar un pedido ya cobrado no duplica. Ante falla transitoria,
 // reencola SOLO los fallidos y reconcilia con el server (la card vuelve solo si de verdad
 // no se cobró).
-function _commitCobroComboDirecto(payloads, peds){
+function _commitCobroComboDirecto(payloads, peds, nEnt){
   if(!payloads||!payloads.length)return;
   var nombre=(peds&&peds[0]&&peds[0].c||'').split(' ')[0];
   rutShowLoader('Cobrando '+peds.length+' pedidos de '+nombre+'...');
@@ -6271,7 +6360,7 @@ function _commitCobroComboDirecto(payloads, peds){
     var fallidos=[];
     results.forEach(function(res,i){if(!(res&&res.ok))fallidos.push(payloads[i]);});
     if(fallidos.length===0){
-      showToast('✓ Cobrados '+peds.length+' pedidos de '+nombre+_rutSufCta(payloads[0]&&payloads[0].cuenta));
+      showToast('✓ Cobrados'+(nEnt?' y entregados':'')+' '+peds.length+' pedidos de '+nombre+_rutSufCta(payloads[0]&&payloads[0].cuenta));
       if(navigator.vibrate)navigator.vibrate(30);
       if(rutCurrentTab==='cobros')fetchCobrosPendientes(true);
     } else {

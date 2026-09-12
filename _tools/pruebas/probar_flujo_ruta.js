@@ -157,6 +157,19 @@ async function medir(cli, disparar) {
     chk('el cuadro de cobro abre', abrio);
     const tot = await evaluar(cli, `document.getElementById('cobroRutaSub').textContent`);
     chk('  y dice el pedido y el monto', /\$/.test(tot), tot);
+    /* Desde el 12/9/2026 el cuadro trae "Y ya se lo entregue" TILDADA: una parada
+       eran 5 toques y pasaron a 3. Acá se destilda a propósito — este test mide
+       cuánto tapa CADA acción por separado, y con la casilla puesta el cobro
+       entregaba también: "Ya entregadas hoy" pasaba a 3 y la fila que busca más
+       abajo quedaba plegada. La acción combinada tiene su propio test
+       (`probar_cobro_entrega.js`).
+       El chequeo del default queda igual, así este test se rompe si alguien lo
+       cambia sin querer. */
+    chk('  la casilla "ya se lo entregué" viene tildada',
+      await evaluar(cli, `!!(document.getElementById('cobroYaEntregado')||{}).checked`));
+    await evaluar(cli, `(function(){var c=document.getElementById('cobroYaEntregado');
+      if(c){c.checked=false;c.onchange({target:c});} return true;})()`);
+    await pausa(300);
     r = await medir(cli, 'confirmarCobroRuta()');
     chk('COBRAR no tapa la pantalla', r.tapa <= TOPE_TAPA, r.tapa + ' ms');
     chk('  y queda en la cola de localStorage', r.cola.some(x => /marcarCobrado.*9202/.test(x)), r.cola);
