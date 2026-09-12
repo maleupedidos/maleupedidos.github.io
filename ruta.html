@@ -1800,16 +1800,28 @@ function refresh(silent,fresh){
 // Trae OCs Tadeo-Stock recibidas pendientes de confirmar guardado en freezer.
 // Endpoint independiente del de entregas porque la fuente es la hoja OC, no las
 // hojas operativas. Falla silenciosa: si no hay conexión, no se actualiza.
-function fetchPendientesGuardarStock(){
+/* Se llama desde TRES lugares: el `.then` de `refresh()`, el `switchTab` a RUTA
+   y la confirmacion del guardado. Medido el 12/9/2026, salia **2 veces** por
+   cada ↻ (4 con la cola del arranque a medio vaciar), y la cola tiene 2 cupos
+   con un piso de 3,4 s por GET: cada repetido es ~4 s de fila ocupada con un
+   pedido que devuelve exactamente lo mismo.
+   `forzar` es para el unico caso que necesita el dato fresco: justo despues de
+   confirmar el guardado en el freezer, donde la lista ACABA de cambiar. */
+var _pgsPidiendo=false, _pgsUltimo=0;
+function fetchPendientesGuardarStock(forzar){
+  if(_pgsPidiendo)return;
+  if(!forzar && Date.now()-_pgsUltimo < 8000)return;
+  _pgsPidiendo=true; _pgsUltimo=Date.now();
   fetch(RUT_APPS_SCRIPT_URL+'?action=pendientesGuardarStock&t='+Date.now())
     .then(function(r){return r.json()})
     .then(function(data){
+      _pgsPidiendo=false;
       if(!data||!data.ok)return;
       pendientesGuardarStock=data.items||[];
       // Re-render solo si estamos viendo la tab Ruta (la única donde aparece la card)
       if(rutCurrentTab==='ruta')rutRender();
     })
-    .catch(function(){});
+    .catch(function(){ _pgsPidiendo=false; });
 }
 
 /* ── HELPERS ── */
@@ -3177,7 +3189,7 @@ function confirmarGuardadoStock(rowsCsv,nProds,totalUnid){
            arrancaria toda en verde y el tildado dejaria de decir nada. */
         _rdepOk = {}; _rdepGuardar();
         showToast('Guardado confirmado ('+(res.n||rows.length)+' OCs)');
-        if(isOnline)fetchPendientesGuardarStock();
+        if(isOnline)fetchPendientesGuardarStock(true);
       } else {
         syncQueue.push(payload);saveLocal();processSyncQueue();
         showToast('Sin conexion — se reintenta');
