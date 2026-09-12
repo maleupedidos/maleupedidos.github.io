@@ -211,6 +211,9 @@ body.embed .tabs{top:0}
 .armado-saldo{display:inline-block;margin-left:6px;padding:2px 8px;background:#FFF8E1;color:#5D4037;border:1.5px solid #F9A825;border-radius:50px;font-size:10px;font-weight:800;vertical-align:middle;white-space:nowrap}
 .armado-lote{position:absolute;top:8px;right:48px;font-size:12px;font-weight:800;color:var(--orange);background:rgba(240,125,71,.12);padding:3px 9px;border-radius:50px;line-height:1.2}
 .armado-prods{margin-top:8px;padding-left:46px;font-size:13px;line-height:1.6;color:#555}
+/* Quien armo la bolsa y a que hora (12/9/2026): con dos celulares armando a la
+   vez, un tilde sin nombre no dice si lo hiciste vos o si ya lo hizo el otro. */
+.armado-quien{margin-top:4px;padding-left:46px;font-size:11.5px;font-weight:700;color:#2E7D32;line-height:1.3}
 .armado-prods span{font-weight:700;color:var(--brown)}
 /* La pieza exacta de carne: que se lea, pero que no compita con la cantidad */
 .armado-prods .armado-pz{font-style:normal;font-weight:700;color:#8D4B2A}
@@ -1803,15 +1806,28 @@ function _rutAviso(estado){
   try{ if(typeof _tabCargando==='function') _tabCargando('ruta',estado); }catch(e){}
 }
 
-function refresh(silent,fresh){
+/* `auto` = la sincronizacion entre celulares (12/9/2026). No gira el ↻, no
+   avisa si falla (se reintenta sola en 15 s) y, si lo que vino es IGUAL a lo
+   que ya estaba dibujado, no repinta: repintar cada 15 s sin motivo mueve la
+   pantalla debajo del dedo. */
+function refresh(silent,fresh,auto){
   if(!silent)document.getElementById('loadingView').classList.remove('hidden');
   // El cartel sale SOLO si no hay nada en pantalla. Con entregas del cache, lo
   // unico que se mueve es el ↻ girando arriba — la regla del 22/8/2026.
-  _rutAviso(entregas.length>0 ? null : 'yendo');
-  var btn=document.getElementById('btnRefresh');btn.classList.add('spinning');
+  if(!auto)_rutAviso(entregas.length>0 ? null : 'yendo');
+  var btn=document.getElementById('btnRefresh');if(!auto)btn.classList.add('spinning');
   var url=RUT_APPS_SCRIPT_URL+'?action=entregas&t='+Date.now()+(fresh?'&fresh=1':'');
   return fetch(url).then(function(r){return r.json()}).then(function(data){
-    btn.classList.remove('spinning');_ctasDe(data);_saldosDelBackend(data);_prodsDelBackend(data.prods);var se=_sanearEntregas(data.e||[]);var prev=getPendientes().length;entregas=se;
+    /* Una respuesta sin la lista NO es "no hay entregas": sin esto un
+       {ok:false} vaciaba ARMADO y RUTA — y la sincronizacion lo pediria cada
+       15 s. Mismo criterio que fetchCobrosPendientes. */
+    if(!data||!Array.isArray(data.e))throw new Error('respuesta sin entregas');
+    if(!auto)btn.classList.remove('spinning');
+    var firma=_rutFirmaDe(data);
+    if(auto&&firma===_rutFirma){updateLastSync();processSyncQueue();return true;}
+    _rutFirma=firma;
+    var parada=silent?_rutParadaActual():null;
+    _ctasDe(data);_saldosDelBackend(data);_prodsDelBackend(data.prods);var se=_sanearEntregas(data.e||[]);var prev=getPendientes().length;entregas=se;
     var sk={};entregas.forEach(function(e){sk[eKey(e)]=true});
     Object.keys(entregados).forEach(function(k){if(!sk[k])delete entregados[k]});
     Object.keys(cobrados).forEach(function(k){if(!sk[k])delete cobrados[k]});
@@ -1821,13 +1837,16 @@ function refresh(silent,fresh){
     // Limpiar rutaOrden de pedidos que ya no existen (entregados/cancelados/movidos)
     Object.keys(rutaOrden).forEach(function(k){if(!sk[k])delete rutaOrden[k]});
     Object.keys(propinas).forEach(function(k){if(!sk[k])delete propinas[k]});
-    try{var bus=JSON.parse(localStorage.getItem('maleu_busqueda')||'{}');if(bus.armadoChecked){var activeBusKeys={};Object.keys(sk).forEach(function(k){activeBusKeys[k.replace(/[^a-zA-Z0-9]/g,'_')]=true});Object.keys(bus.armadoChecked).forEach(function(bk){if(!activeBusKeys[bk])delete bus.armadoChecked[bk]});localStorage.setItem('maleu_busqueda',JSON.stringify(bus))}}catch(e){}
-    mergeArmadoBusqueda();saveLocal();rutRender();updateLastSync();
+    _armDelBackend(data);
+    if(parada)_rutVolverAParada(parada,auto);
+    saveLocal();rutRender();updateLastSync();
     var nc=getPendientes().length;if(silent&&nc>prev)showToast('+'+(nc-prev)+' pedido(s) nuevo(s)');
-    document.getElementById('loadingView').classList.add('hidden');_rutAviso(null);processSyncQueue();
+    document.getElementById('loadingView').classList.add('hidden');if(!auto)_rutAviso(null);processSyncQueue();
     // En paralelo: pendientes de guardar en stock (OCs Tadeo-Stock recibidas no guardadas)
     fetchPendientesGuardarStock();
+    return true;
   }).catch(function(){
+    if(auto)return false;
     btn.classList.remove('spinning');document.getElementById('loadingView').classList.add('hidden');
     if(entregas.length>0){rutRender();showToast('Sin conexion — cache');_rutAviso(null)}else{document.getElementById('errorView').classList.remove('hidden');_rutAviso('error')}
   });
@@ -2744,6 +2763,7 @@ function _renderArmadoCardCombo(cli,pedidos){
     +'</span>'
     +'</div>'
     +'<div class="armado-prods" onclick="toggleArmadoMasivo(\''+keysList+'\')">'+prodText(prodsToShow,true,pedidos.reduce(function(a,p){return a.concat(p.pz||[]);},[]))+'</div>'
+    +(allDone?_armQuien(armadoDone[allKeys[allKeys.length-1]]):'')
     +ocTag
     +'</div>';
 }
@@ -2778,6 +2798,7 @@ function _renderArmadoCard(e){
     +retiraTag+'</span>'
     +'</div>'
     +'<div class="armado-prods" onclick="toggleArmado(\''+key+'\')">'+prodText(prodsToShow,true,_pzDe(e))+'</div>'
+    +(isDone?_armQuien(isDone):'')
     +ocTag
     +'</div>';
 }
@@ -3010,13 +3031,87 @@ function renderArmadoGroup(pedidos,titulo,isOther,dayKey,esHoy,esAtrasado){
 
 function toggleArmado(key){
   if(armadoDone[key]){
-    delete armadoDone[key];syncArmadoBusqueda(key,false);saveLocal();rutRender();
+    _armarMarcar([key],false);
   } else {
     var o=document.getElementById('confirmOverlay');o.className='confirm-overlay';
     o.innerHTML='<div class="confirm-box"><h3>Pedido armado?</h3><p>Bolsa lista para entregar</p><div class="confirm-btns"><button class="btn-no" onclick="cerrarConfirm()">No</button><button class="btn-si" onclick="cerrarConfirm();confirmarArmado(\''+key+'\')">Si, armado</button></div></div>';
   }
 }
-function confirmarArmado(key){armadoDone[key]=true;syncArmadoBusqueda(key,true);saveLocal();rutRender();if(navigator.vibrate)navigator.vibrate(30)}
+function confirmarArmado(key){_armarMarcar([key],true);if(navigator.vibrate)navigator.vibrate(30)}
+
+/* ══ ARMADO COMPARTIDO (12/9/2026) ═══════════════════════════════════════════
+   Tadeo y Lucas armaron juntos en el cuartito, tildando desde el celular de
+   Tadeo. Lucas abrio la tab en el suyo y ARMADO no tenia nada armado — y como
+   RUTA solo muestra lo armado, su recorrido tampoco. El tilde vivia SOLO en el
+   localStorage del celular que lo tocaba.
+
+   Ahora va a la cola como cualquier otra accion (`marcarArmado`, sin loader:
+   la cola sobrevive a cerrar la app y el endpoint es idempotente) y el estado
+   vuelve en `entregas`, con quien lo armo. El otro celular lo ve en la proxima
+   sincronizacion. */
+function _hhmmAhora(){var d=new Date();return String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0');}
+function _armarMarcar(keys,armado){
+  var peds=[];
+  keys.forEach(function(k){
+    var e=findByKey(k);
+    if(armado)armadoDone[k]={u:_rutaUser(),hr:_hhmmAhora(),local:1};else delete armadoDone[k];
+    if(e)peds.push({h:e.h,id:String(e.id),r:e.r,c:e.c});
+  });
+  if(peds.length)syncQueue.push({action:'marcarArmado',pedidos:peds,armado:!!armado,usuario:_rutaUser(),ts:Date.now()});
+  _rutFirma='';   /* lo local ya no es la ultima foto del servidor: ver la sincronizacion */
+  saveLocal();rutRender();processSyncQueue();
+}
+
+/* Lo que ya se confirmo contra el servidor hace poco. Una respuesta de
+   `entregas` que se armo ANTES de que el POST llegara no lo trae, y el item ya
+   salio de la cola: sin esto el tilde recien puesto desapareceria 15 s y
+   volveria — el bug de "la escritura optimista se pisa". */
+var _armRecientes=[];
+function _armConfirmado(item){
+  _armRecientes.push({pedidos:item.pedidos||[],armado:!!item.armado,u:item.usuario||'',t:Date.now()});
+  var corte=Date.now()-180000;
+  _armRecientes=_armRecientes.filter(function(x){return x.t>corte;});
+}
+
+/* El servidor es la verdad; encima va lo de ESTE celular que todavia no llego.
+   Devuelve false (y deja lo local) si la respuesta no trae el armado: un
+   backend anterior al 12/9/2026, o uno que no pudo leer la hoja (`arm:null`). */
+var _ARM_MIGRADO='maleu_arm_compartido_v1';
+function _armDelBackend(data){
+  if(!data||!data.arm||typeof data.arm!=='object')return false;
+  var previo=armadoDone||{}, nuevo={};
+  entregas.forEach(function(e){var k=eKey(e);if(data.arm[k])nuevo[k]=data.arm[k];});
+  var tsResp=Number(data.ts)||0;
+  function aplicar(peds,arm,u){
+    (peds||[]).forEach(function(p){
+      var k=p.h+'|R'+p.r;
+      if(arm){if(!nuevo[k])nuevo[k]={u:u||_rutaUser(),local:1};}else delete nuevo[k];
+    });
+  }
+  _armRecientes.forEach(function(x){if(tsResp<x.t)aplicar(x.pedidos,x.armado,x.u);});
+  syncQueue.forEach(function(it){if(it&&it.action==='marcarArmado')aplicar(it.pedidos,it.armado,it.usuario);});
+  /* UNA vez por celular: lo que tenia tildado antes de que el armado se
+     compartiera sube al servidor, en vez de desaparecer en la primera
+     sincronizacion. Solo lo que sigue pendiente (entregas ya viene limpio). */
+  var migrado=false;try{migrado=localStorage.getItem(_ARM_MIGRADO)==='1';}catch(x){}
+  if(!migrado){
+    var sube=[];
+    entregas.forEach(function(e){
+      var k=eKey(e);
+      if(previo[k]&&!nuevo[k]){sube.push({h:e.h,id:String(e.id),r:e.r,c:e.c});nuevo[k]={u:_rutaUser(),local:1};}
+    });
+    if(sube.length)syncQueue.push({action:'marcarArmado',pedidos:sube,armado:true,usuario:_rutaUser(),ts:Date.now(),migracion:1});
+    try{localStorage.setItem(_ARM_MIGRADO,'1');}catch(x){}
+  }
+  armadoDone=nuevo;
+  return true;
+}
+/* El renglon "Armo Lucas · 17:05". Solo cuando el dato dice quien: un tilde
+   guardado antes del 12/9/2026 es un `true` pelado y no inventa un nombre. */
+function _armQuien(v){
+  if(!v||typeof v!=='object'||!v.u)return '';
+  return '<div class="armado-quien">\u2713 Arm\u00f3 '+_rtcEsc(String(v.u).split(' ')[0])+(v.hr?' \u00b7 '+_rtcEsc(v.hr):'')+'</div>';
+}
 
 /* Marca / desmarca varios pedidos de una sola vez (usado por el bloque agregado de Red).
    dayKey opcional: si es bloque Red, sirve para que el backend marque tambien los Red
@@ -3148,8 +3243,7 @@ function toggleArmadoMasivo(keysCsv,dayKey,vendedor){
   if(keys.length===0)return;
   var allDone=keys.every(function(k){return armadoDone[k]});
   if(allDone){
-    keys.forEach(function(k){delete armadoDone[k];syncArmadoBusqueda(k,false)});
-    saveLocal();rutRender();
+    _armarMarcar(keys,false);
   } else {
     var quien=vendedor?String(vendedor):'el vendedor';
     var o=document.getElementById('confirmOverlay');o.className='confirm-overlay';
@@ -3161,8 +3255,7 @@ function confirmarArmadoMasivo(keysCsv,dayKey){
   if(keys.length===0)return;
   // Solo marca armado local (sacaste del freezer, lo cargaste al auto).
   // El "Entregado al Vendedor" es un paso aparte (botón en la card o tab Ruta).
-  keys.forEach(function(k){armadoDone[k]=true;syncArmadoBusqueda(k,true)});
-  saveLocal();rutRender();if(navigator.vibrate)navigator.vibrate(30);
+  _armarMarcar(keys,true);if(navigator.vibrate)navigator.vibrate(30);
 }
 
 // POST: "ya guardé los productos Tadeo-Stock en el freezer". Marca col Y de
@@ -3385,29 +3478,11 @@ function rutaResetOrden(){
   rutaOrden={};saveLocal();rutRenderRuta();
 }
 
-// Sincronizar armado con Búsqueda (bidireccional)
-function syncArmadoBusqueda(key,done){
-  try{
-    var bus=JSON.parse(localStorage.getItem('maleu_busqueda')||'{}');
-    if(!bus.armadoChecked)bus.armadoChecked={};
-    var busKey=key.replace(/[^a-zA-Z0-9]/g,'_');
-    if(done)bus.armadoChecked[busKey]=true;else delete bus.armadoChecked[busKey];
-    localStorage.setItem('maleu_busqueda',JSON.stringify(bus));
-  }catch(e){}
-}
-
-// Al cargar, leer armados de Búsqueda y mergear
-function mergeArmadoBusqueda(){
-  try{
-    var bus=JSON.parse(localStorage.getItem('maleu_busqueda')||'{}');
-    if(bus.armadoChecked){
-      entregas.forEach(function(e){
-        var busKey=eKey(e).replace(/[^a-zA-Z0-9]/g,'_');
-        if(bus.armadoChecked[busKey])armadoDone[eKey(e)]=true;
-      });
-    }
-  }catch(e){}
-}
+/* syncArmadoBusqueda / mergeArmadoBusqueda se borraron el 12/9/2026. Copiaban
+   el tilde al localStorage de Abastecimiento y lo volvian a leer, pero las dos
+   tabs usan claves distintas (`Home_R933` contra `canal|ped|cliente|dir`), asi
+   que solo daban la vuelta sobre si mismas. Con el armado en el servidor, esa
+   vuelta revivia tildes que el otro celular ya habia sacado. */
 
 /* ── RUTA ── */
 
@@ -7048,7 +7123,12 @@ function processSyncQueue(){
       syncBusy=false;
       if(res&&res.ok){
         // Éxito: remover de la cola, resetear backoff
-        syncQueue.shift();saveLocal();
+        syncQueue.shift();if(item&&item.action==='marcarArmado')_armConfirmado(item);
+        /* Cualquier escritura propia invalida la firma: si el otro celular la
+           deshace, el servidor vuelve a quedar IGUAL a la ultima foto que vio
+           este, y sin esto la sincronizacion diria "nada cambio" y dejaria el
+           estado local viejo para siempre (lo agarro probar_armado_compartido). */
+        _rutFirma='';saveLocal();
         syncBackoffMs=2000;
         document.getElementById('syncBanner').className='sync-banner'+(syncQueue.length>0?' visible':'');
         if(syncQueue.length>0)setTimeout(processSyncQueue,800);
@@ -8793,9 +8873,72 @@ function npReset(){
    Decision Tadeo (21/8/2026): el loader que tapa es para cuando SE REGISTRA
    algo (cobrar, entregar, guardar). Para entrar, un cartelito inline y la
    pantalla libre; si querés datos frescos a proposito, esta el ↻ de arriba. */
+/* ══ SINCRONIZACION ENTRE CELULARES (12/9/2026) ═══════════════════════════════
+   Hasta hoy RUTA se actualizaba solo al tocar ↻ (se saco el refresco por foco en
+   mayo/2026 porque cerraba lo que Tadeo tenia abierto). Con dos celulares
+   trabajando a la vez eso es lo contrario de lo que hace falta: lo que marca uno
+   el otro no lo ve.
+
+   Cada 15 s, mientras la tab esta a la vista, se pide `entregas`. Desde el
+   12/9/2026 el backend la cachea con una version que cambia con cada escritura:
+   si nadie escribio vuelve en ~2 s desde el cache, y si algo cambio trae lo nuevo.
+
+   Lo que la hace segura, y no es negociable:
+   - no corre con la app en segundo plano ni en AUTOPEDIDO;
+   - no corre con un cuadro abierto ni escribiendo en un campo;
+   - no repinta si lo que llego es igual a lo dibujado;
+   - espera 4 s desde el ultimo toque: no se repinta debajo del dedo;
+   - RUTA vuelve a la MISMA parada aunque el otro haya entregado una de antes. */
+var RUT_SYNC_MS=15000;
+var _rutFirma='', _rutSyncEnVuelo=false, _rutUltimoToque=0, _rutSyncReintento=null;
+function _rutFirmaDe(data){
+  try{return JSON.stringify([data.e,data.arm||null,data.saldos||null]);}catch(x){return String(Math.random());}
+}
+function _rutEstaMirando(){
+  if(document.hidden)return false;
+  if(typeof _tabActual==='function'&&_tabActual()!=='ruta')return false;
+  return rutCurrentTab!=='nuevo';
+}
+function _rutOcupado(){
+  var o=document.getElementById('confirmOverlay');if(o&&!o.classList.contains('hidden'))return true;
+  var c=document.getElementById('cobroRutaOverlay');if(c&&!c.classList.contains('hidden'))return true;
+  var ae=document.activeElement;if(ae&&/^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName))return true;
+  return false;
+}
+function _rutParadaActual(){
+  if(rutCurrentTab!=='ruta'||rutaModoLista)return null;
+  try{
+    var sv=_rutaVista();if(!sv.length)return null;
+    var e=sv[Math.min(Math.max(rutaIndex,0),sv.length-1)];
+    return e?{k:_rtcKey(e),c:e._combo?(e.c||''):(e.c||e._vendedor||'')}:null;
+  }catch(x){return null;}
+}
+function _rutVolverAParada(p,avisar){
+  try{
+    var sv=_rutaVista();
+    for(var i=0;i<sv.length;i++){if(_rtcKey(sv[i])===p.k){rutaIndex=i;return;}}
+    if(avisar&&p.c)showToast(p.c+' ya no está en el recorrido: lo cambiaron desde otro celular');
+  }catch(x){}
+}
+function rutSincronizar(motivo){
+  if(!isOnline||_rutSyncEnVuelo||!_rutEstaMirando())return Promise.resolve(false);
+  var btn=document.getElementById('btnRefresh');if(btn&&btn.classList.contains('spinning'))return Promise.resolve(false);
+  var falta=4000-(Date.now()-_rutUltimoToque);
+  if(_rutOcupado()||falta>0){
+    if(!_rutSyncReintento)_rutSyncReintento=setTimeout(function(){_rutSyncReintento=null;rutSincronizar('reintento');},Math.max(falta,4000));
+    return Promise.resolve(false);
+  }
+  _rutSyncEnVuelo=true;
+  return refresh(true,false,true).then(function(r){_rutSyncEnVuelo=false;return r;},function(){_rutSyncEnVuelo=false;return false;});
+}
 function _arrancarRuta(){
   if(entregas.length>0){rutRender();updateLastSync();refresh(true);}
   else{refresh(false);}
+  ['pointerdown','touchstart','keydown','wheel'].forEach(function(ev){
+    document.addEventListener(ev,function(){_rutUltimoToque=Date.now();},{passive:true,capture:true});
+  });
+  setInterval(function(){rutSincronizar('reloj');},RUT_SYNC_MS);
+  document.addEventListener('visibilitychange',function(){if(!document.hidden)rutSincronizar('vuelta');});
 }
 _arrancarRuta();
 
