@@ -1901,6 +1901,10 @@ body.sb-open .sb-toggle .sb-toggle-lbl{display:inline}
 .ord-status.ok{background:var(--gb);color:var(--gd);border:1px solid #C8E6C9}
 .ord-status.wait{background:var(--ol);color:#8B3A0E;border:1px solid #FFCC80}
 .ord-status.cob{background:#E3F2FD;color:#0D47A1;border:1px solid #90CAF9}
+/* El detalle copiado, a la vista: si el navegador no deja copiar, hay que poder
+   seleccionarlo a mano. Arranca oculto y se muestra al copiar. */
+.ord-msg{display:none;white-space:pre-wrap;font-size:12px;line-height:1.5;background:#FFFCF5;border:1.5px dashed var(--cd);border-radius:10px;padding:10px 12px;margin:0 20px 14px;color:var(--ink);user-select:text;-webkit-user-select:text}
+.ord-msg.on{display:block}
 .ord-actions{position:sticky;bottom:0;background:#fff;padding:14px 20px;border-top:1px solid var(--border);display:grid;grid-template-columns:1fr 1fr;gap:8px;box-shadow:0 -4px 12px rgba(0,0,0,.04);padding-bottom:calc(14px + var(--sab))}
 .ord-btn{padding:11px 12px;border-radius:8px;border:1px solid var(--border);background:#fff;color:var(--ink2);font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;letter-spacing:.01em;display:inline-flex;align-items:center;justify-content:center;gap:5px;transition:.12s;min-height:42px}
 .ord-btn:hover{border-color:var(--ink4);color:var(--ink);background:var(--cr)}
@@ -11273,6 +11277,10 @@ function cancelarEditor(uid){
   delete window['_ed_'+uid];
   _flushPendingLoadRender();
 }
+/* Que pedidos se editaron en esta sesion, para que el detalle que se le copia
+   al cliente diga "te actualizo el pedido" solo cuando de verdad cambio algo.
+   En memoria y sin persistir: al recargar cae al texto neutro, que nunca miente. */
+window._ordEditados={};
 function guardarEditor(uid){
   var ed=window['_ed_'+uid]; if(!ed) return;
   var lineas=ed.lineas.filter(function(l){return l.q>0;});
@@ -11308,6 +11316,7 @@ function guardarEditor(uid){
         if(r.autoReReservado){_patch.o='Deposito';_patch.es='Reservado';}
         else if(r.origenReseteado){_patch.o='Pendiente';_patch.oDet='';}
         _patchPedidoLocal(_edHoja,_edId,_patch);
+        try{ window._ordEditados[_edHoja+'|'+_edId]=Date.now(); }catch(_e){}
         // Limpiar state residual + render forzado (mismo motivo que antes)
         document.querySelectorAll('.origen-box[data-touched="1"]').forEach(function(b){delete b.dataset.touched;});
         _pendingLoadRender=false;
@@ -11315,6 +11324,9 @@ function guardarEditor(uid){
         var msg='Pedido actualizado';
         if(r.autoReReservado) msg+=' · Auto-reservado ✓';
         else if(r.origenReseteado) msg+=' (origen reseteado)';
+        /* El cliente pidio el cambio y espera que le cuenten como quedo: sin
+           esto, el detalle actualizado esta a un toque y nadie se enteraria. */
+        msg+=' — abr\u00ed la ficha y copi\u00e1 el detalle para el cliente';
         toast(msg);
         // Reconciliar en background — sin loader visible
         load().then(function(){window._forceTopOnRender=false;});
@@ -21789,8 +21801,20 @@ if('serviceWorker' in navigator){
     }
     html+='</div>';
 
+    /* La caja del detalle copiado va ANTES de la botonera: `.ord-actions` es
+       una barra sticky pegada abajo, y un texto de diez renglones ahi adentro
+       taparia media pantalla. */
+    html+='<div id="ordMsg" class="ord-msg"></div>';
+
     // Botonera contextual
     html+='<div class="ord-actions">';
+    /* Primero, porque es lo que se hace justo despues de editar un pedido: el
+       cliente pidio el cambio por WhatsApp y hay que contarle como quedo.
+       Red queda afuera: ahi el telefono es el cliente final del VENDEDOR, que
+       nunca le escribio a Maleu. */
+    if(p.es!=='Cancelado'&&p.h!=='Red'){
+      html+='<button class="ord-btn full" onclick="_ordCopiarDetalle(\''+p.h+'\',\''+String(p.n).replace(/\\/g,"\\\\").replace(/'/g,"\\'")+'\')">\ud83d\udccb Copiar el detalle para el cliente</button>';
+    }
     // Red: si la mercaderia esta en poder del vendedor (col BE), se puede registrar
     // que la devolvio. Antes esto habia que hacerlo a mano en el Sheets — y el Sheets
     // es el motor, no la pantalla: todo lo que Tadeo opera tiene que estar acá.
@@ -22150,6 +22174,159 @@ if('serviceWorker' in navigator){
     /* devolver el foco donde estaba: `onchange` dispara al tabular al campo
        siguiente, y repintar sin esto te saca del formulario. */
     if(id){var e=document.getElementById(id); if(e&&e!==document.activeElement) e.focus();}
+  };
+
+  /* ── EL DETALLE DEL PEDIDO, PARA PEGARSELO AL CLIENTE (12/9/2026) ────────
+     Tadeo edita un pedido porque el cliente le pidio sacar o agregar algo por
+     WhatsApp, y despues le tiene que contar como quedo.
+
+     Sale del pedido GUARDADO (`p`), no del editor: asi no se puede mandar un
+     detalle que el backend rechazo. Y usa los MISMOS numeros que la ficha
+     muestra en pantalla (`p.$`, `p.desc`, `p.env`), asi que no hay forma de que
+     el mensaje y la ficha digan cosas distintas.
+
+     El AUTOPEDIDO tiene su propio resumen (`npResumenTextoWA` en ruta.html) y
+     no se puede compartir: vive en el IIFE de otra sub-app, que ni siquiera
+     existe si nadie abrio esa tab. Aquel arma el texto desde el CARRITO —con
+     categorias y descuentos por categoria en vivo—; este, desde la fila ya
+     guardada. Lo que si se mantiene igual a proposito es el marco: los cuatro
+     momentos y el "*hoy*" en negrita de WhatsApp. */
+  function _ordPesos(n){return '$'+Math.round(Number(n)||0).toLocaleString('es-AR');}
+  /* Kilos con coma, al gramo: es como se escriben en castellano. */
+  function _ordCant(q,uni){
+    var n=Number(q)||0;
+    if(uni!=='kg')return n+'\u00d7';
+    return n.toFixed(3).replace(/0+$/,'').replace(/\.$/,'').replace('.',',')+' kg';
+  }
+  /* "el sabado 12/9", pero "*hoy*, sabado 12/9" si la entrega es de hoy y
+     "manana, domingo 13/9" si es de manana. El asterisco es la negrita de
+     WhatsApp: si es para hoy el cliente tiene que verlo de un vistazo.
+     Se arma con los COMPONENTES del ISO -- `new Date(iso)` se interpreta UTC y
+     en Argentina devuelve el dia anterior. */
+  function _ordCuando(dee){
+    var m=String(dee||'').match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+    if(!m)return '';
+    var d=new Date(Number(m[1]),Number(m[2])-1,Number(m[3]));
+    if(isNaN(d.getTime()))return '';
+    var dias=['domingo','lunes','martes','mi\u00e9rcoles','jueves','viernes','s\u00e1bado'];
+    var txt=dias[d.getDay()]+' '+Number(m[3])+'/'+Number(m[2]);
+    d.setHours(0,0,0,0);
+    var hoy=new Date();hoy.setHours(0,0,0,0);
+    var dif=Math.round((d-hoy)/86400000);
+    if(dif===0)return '*hoy*, '+txt;
+    if(dif===1)return 'ma\u00f1ana, '+txt;
+    return 'el '+txt;
+  }
+  /* Los alias salen de la hoja `Cuentas` (una sola fuente, la misma que las
+     tarjetas de la Caja). Si el volcado todavia no llego, la lista viene vacia
+     y el mensaje NO promete un alias que no puede escribir. */
+  function _ordAlias(){
+    var cj=(typeof D!=='undefined'&&D&&D.caja)||{};
+    var lista=cj.cuentas||[];
+    var out=[];
+    for(var i=0;i<lista.length;i++){
+      var c=lista[i];
+      if(c&&c.tipo!=='efectivo'&&c.alias)out.push(c.alias+(c.banco?' ('+c.banco+')':''));
+    }
+    return out;
+  }
+  function _ordMensajeCliente(p){
+    if(!p)return '';
+    var nom=String(p.c||'').trim().split(/\s+/)[0]||'';
+    var entregado=(p.es==='Entregado'), pagado=(p.ep==='Cobrado');
+    /* El mismo pedido se cuenta distinto segun donde este: confirmarle algo que
+       ya se llevo suena a que no nos enteramos de que se lo dimos. */
+    /* "Te actualizo" SOLO si el pedido se edito en esta sesion: el boton
+       tambien sirve para contestarle "¿que me habias anotado?" sin cambiar
+       nada, y ahi decir que se actualizo seria inventar algo que no paso. */
+    var editado=false;
+    try{ editado=!!(window._ordEditados&&window._ordEditados[p.h+'|'+p.n]); }catch(_e){}
+    var hola='\u00a1Hola'+(nom?' '+nom:'')+'! ';
+    var l=[entregado
+      ? (pagado ? hola+'Te dejo el detalle de tu compra \ud83e\udde1'
+                : hola+'Te dejo el detalle de lo que te llevaste \ud83e\udde1')
+      : hola+(editado?'Te actualizo el pedido \ud83e\udde1':'Te paso el detalle de tu pedido \ud83e\udde1'), ''];
+
+    /* Los precios de linea se muestran SOLO si suman el subtotal guardado. La
+       lista de precios pudo cambiar despues de cargarse el pedido, y un detalle
+       cuyas lineas no cierran con el total es peor que un detalle sin precios. */
+    var lineas=[], suma=0, hayPrecio=true;
+    ((p.p)||[]).forEach(function(pr){
+      var inf=_pesInfo(pr.a)||{};
+      var uni=inf.u||'u';
+      var nombre=inf.n||(typeof PN!=='undefined'&&PN&&PN[pr.a])||pr.a;
+      var precio=(typeof _precioCatalogo==='function')?Number(_precioCatalogo(p.h,pr.a))||0:0;
+      if(!precio)hayPrecio=false;
+      var monto=precio*(Number(pr.q)||0);
+      suma+=monto;
+      /* Por kilo, el nombre va PRIMERO y el peso despues: es como lo escribe
+         el resumen del AUTOPEDIDO, y "1,221 kg Colita" se lee al reves. */
+      lineas.push({t:(uni==='kg')
+        ? '\u2022 '+nombre+' \u2014 '+_ordCant(pr.q,uni)
+        : '\u2022 '+_ordCant(pr.q,uni)+' '+nombre, m:monto, kg:(uni==='kg')});
+    });
+    var subt=Number(p.subt)||0;
+    if(!subt||Math.abs(suma-subt)>1)hayPrecio=false;
+    lineas.forEach(function(x){
+      /* El separador del precio: con el nombre y el peso ya unidos por un
+         guion, un segundo guion seria ilegible. */
+      l.push(x.t+(hayPrecio?(x.kg?' \u00b7 ':' \u2014 ')+_ordPesos(x.m):''));
+    });
+    if(!lineas.length)l.push('(sin productos cargados)');
+    l.push('');
+
+    /* El dia solo si todavia NO se entrego: decirle "te lo llevo el sabado" a
+       alguien que ya lo tiene suena a que no nos enteramos. */
+    if(!entregado){
+      var cuando=_ordCuando(p.dee);
+      if(cuando)l.push('\ud83d\ude9a Te lo llevo '+cuando);
+    }
+    var dirP=[];
+    if(p.h==='Clubes'){ if(p.club)dirP.push(p.club); if(p.gr)dirP.push(p.gr); }
+    else if(p.h!=='Red'){ if(p.bp)dirP.push(p.bp); if(p.lo)dirP.push('Lote '+p.lo); }
+    if(dirP.length)l.push('\ud83d\udccd '+dirP.join(' \u00b7 '));
+
+    var tot=Number(p.$)||0, desc=Number(p.desc)||0, env=Number(p.env)||0;
+    l.push('\ud83d\udcb3 Total: '+_ordPesos(tot)+(p.fp?' ('+p.fp+')':''));
+    /* El desglose solo cuando hay algo que explicar: un "Subtotal = Total" es
+       una linea que no dice nada. */
+    if(desc>0||env>0){
+      var d=[];
+      if(subt)d.push('Subtotal '+_ordPesos(subt));
+      if(desc>0)d.push('descuento \u2212'+_ordPesos(desc));
+      if(env>0)d.push('env\u00edo '+_ordPesos(env));
+      l.push('   '+d.join(' \u00b7 '));
+    }
+    l.push('');
+
+    /* El alias SOLO si de verdad falta cobrar: mandarselo a alguien que ya pago
+       lo hace dudar de si pago bien. */
+    if(pagado){
+      l.push(entregado?'Ya est\u00e1 todo pago. \u00a1Gracias!':'Ya est\u00e1 pago, as\u00ed que no hay nada que transferir.');
+    } else {
+      var al=_ordAlias();
+      if(al.length)l.push('Para abonar: '+al.join(' o '));
+      l.push(entregado?'Cuando puedas me transfer\u00eds.':'');
+    }
+    l.push('Si algo no coincide, decime y lo corrijo.');
+    return l.filter(function(x,i,a){return !(x===''&&a[i-1]==='');}).join('\n');
+  }
+  /* Copia el detalle al portapapeles. El texto se deja tambien a la vista: si
+     el navegador no deja copiar (pasa en un iframe o sin permiso), hay que
+     poder seleccionarlo a mano en vez de quedarse sin nada. */
+  window._ordCopiarDetalle=function(hoja,n){
+    var p=_findPed(hoja,n);
+    if(!p){toast('No tengo ese pedido en la copia \u2014 actualiz\u00e1 con \u21bb');return;}
+    var txt=_ordMensajeCliente(p);
+    var caja=document.getElementById('ordMsg');
+    if(caja){caja.textContent=txt;caja.classList.add('on');}
+    var faltaAlias=(p.ep!=='Cobrado'&&!_ordAlias().length);
+    var ok=function(){toast(faltaAlias?'Copiado \u2014 ojo: no pude poner el alias (falta el volcado)':'Copiado \u2014 peg\u00e1selo por WhatsApp');};
+    try{
+      if(navigator.clipboard&&navigator.clipboard.writeText){
+        navigator.clipboard.writeText(txt).then(ok,function(){toast('No pude copiar: est\u00e1 abajo para seleccionarlo');});
+      } else { toast('Est\u00e1 abajo para seleccionarlo'); }
+    }catch(e){toast('Est\u00e1 abajo para seleccionarlo');}
   };
 
   /* El mensaje que Lucas le manda al cliente ANTES de entregar. Es el paso que el
