@@ -112,6 +112,43 @@ const chk = (c, t, x) => { if (c) { ok++; console.log('  ok   ' + t); } else { m
   chk(iDep >= 0 && (iAdm < 0 || iDep < iAdm), '  antes que el volcado, que esa sub-tab no dibuja',
       'depositos=' + iDep + ' admin=' + iAdm);
 
+  /* ── RUTA: la tab que se usa MANEJANDO, y que tampoco estaba en `_PINTA_TAB`.
+     Sus sub-tabs viven en `ruta.html` y usan `.tab.active` con `data-tab`, o sea
+     otro selector: si `_subAbierta` no lo contempla, la prioridad queda muerta y
+     el sintoma es solo que la pantalla tarda. */
+  console.log('\n-- y la tab RUTA, con sus cuatro sub-tabs --');
+  const rutaOrden = await evaluar(cli, `(async () => {
+    /* switchTab la publica la sub-app al ARRANCAR, o sea al entrar a la tab:
+       preguntar por ella antes del go da siempre "no arranco".
+       (Nada de backticks aca: estamos dentro de un template literal.) */
+    go('ruta');
+    const t1 = Date.now();
+    while (Date.now() - t1 < 20000 && typeof window.switchTab !== 'function') {
+      await new Promise(r => setTimeout(r, 150));
+    }
+    if (typeof window.switchTab !== 'function') return { err: 'la sub-app de ruta no arranco en 20 s' };
+    /* COBROS pide un endpoint DISTINTO que ARMADO: es el caso que prueba que la
+       prioridad mira la sub-tab y no la tab. */
+    switchTab('cobros');
+    const antes = window.__salidas.length;
+    const t0 = Date.now();
+    while (Date.now() - t0 < ${DEMORA * 3}) {
+      if (window.__salidas.length >= antes + 1) break;
+      await new Promise(r => setTimeout(r, 120));
+    }
+    const act = document.querySelector('#p-ruta .tab.active');
+    return { nuevas: window.__salidas.slice(antes).map(x => x.a),
+             sub: act ? act.getAttribute('data-tab') : '(sin sub-tab activa)' };
+  })()`);
+  if (rutaOrden.err) {
+    console.log('  --   ' + rutaOrden.err + ' (RUTA se mide en otra corrida)');
+  } else {
+    chk(rutaOrden.sub === 'cobros', 'la sub-tab abierta es COBROS', JSON.stringify(rutaOrden));
+    console.log('  solto: ' + JSON.stringify(rutaOrden.nuevas));
+    chk((rutaOrden.nuevas || [])[0] === 'cobrosPendientes',
+      '  y la cola suelta `cobrosPendientes`, el endpoint de COBROS', JSON.stringify(rutaOrden.nuevas));
+  }
+
   console.log('\n' + (mal ? '  ' + ok + ' ok · ' + mal + ' MAL' : '  ' + ok + ' ok, todo bien') + '\n');
   process.exit(mal ? 1 : 0);
 })().catch(e => { console.error('revento el test:', e); process.exit(2); });

@@ -181,7 +181,7 @@ echo "→ [5/8] Publicando…"
 git add -A
 git diff --cached --quiet || git -c commit.gpgsign=false commit -q -m "$MSG
 
-Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
+Co-Authored-By: ${CO_AUTHOR:-Claude Opus 5 (1M context)} <noreply@anthropic.com>"
 # El helper es Git Credential Manager y la identidad la decide la carpeta via
 # includeIf en ~/.gitconfig (Trabajo\ -> maleupedidos). No hace falta forzar
 # token ni correr `gh auth switch`: un push que falla NO es por la cuenta activa.
