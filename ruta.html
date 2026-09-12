@@ -2469,21 +2469,41 @@ function _esArmadoDep(e){
    de cada canal y la pestaña. Agrupa con la MISMA clave que el render
    (canal + barrio + sub-barrio + cliente; en Red, el vendedor), asi que el
    numero coincide con las cards que se ven. */
+/* La clave de una ENTREGA: lo que se lleva junto a un lugar. Es la misma con
+   la que se agrupan las bolsas de ARMADO y las paradas de RUTA.
+   La FECHA va adentro a proposito: dentro de un dia es redundante, pero el
+   tile de "otros dias" junta varios y sin ella dos tandas del mismo vendedor
+   en dias distintos se contaban como UNA.
+   Red va por VENDEDOR y no cliente por cliente, porque Tadeo le da una sola
+   tanda -- el mismo criterio con el que cuenta Inicio > Resumen. */
+function _armClaveEntrega(e,lug){
+  var dia=e.fe||e.de||'';
+  if(e.h==='Red')return 'R|'+(e.retira||'Vendedor')+'|'+dia;
+  var L=_lugarDe(e,lug);
+  return _canalOf(e)+'|'+(L.b||e.h)+'|'+(((L.b===L.sb)||!L.sb)?'_main':L.sb)+'|'+_claveCombo(e,lug);
+}
 function _armCuenta(pedidos){
-  var bol={}, nOC=0, lista=pedidos||[];
-  var lug=_lugares(lista.filter(function(e){return _origenTipo(e)!=='oc';}));
+  var lista=pedidos||[];
+  /* Los lugares se calculan sobre la lista COMPLETA -- las que vienen enteras
+     del proveedor incluidas -- para que una bolsa de ARMADO sea la misma
+     parada que RUTA: un pedido sin direccion tiene que poder caer en la parada
+     de otro del mismo cliente, salga del freezer o del proveedor. */
+  var lug=_lugares(lista);
+  var bol={}, ent={}, nOC=0;
   lista.forEach(function(e){
+    var k=_armClaveEntrega(e,lug);
+    ent[k]=true;                       // ENTREGA: lo que hay que llevar
     if(_origenTipo(e)==='oc'){nOC++;return;}
-    var L=_lugarDe(e,lug);
-    var k=(e.h==='Red')
-      ? 'R|'+(e.retira||'Vendedor')
-      : _canalOf(e)+'|'+(L.b||e.h)+'|'+(((L.b===L.sb)||!L.sb)?'_main':L.sb)+'|'+_claveCombo(e,lug);
-    if(!bol[k])bol[k]=true;
+    /* `k in bol` y no `!bol[k]`: con dos pedidos en la misma bolsa y solo el
+       SEGUNDO tildado, `!false` volvia a ponerla en true y la bolsa figuraba
+       LISTA. Dependia del orden, o sea que fallaba a veces. */
+    if(!(k in bol))bol[k]=true;        // BOLSA: lo que hay que armar
     if(!armadoDone[eKey(e)])bol[k]=false;
   });
   var ks=Object.keys(bol), listas=0;
   ks.forEach(function(k){if(bol[k])listas++;});
-  return {bolsas:ks.length, listas:listas, faltan:ks.length-listas, pedidos:lista.length, oc:nOC};
+  return {bolsas:ks.length, listas:listas, faltan:ks.length-listas,
+          entregas:Object.keys(ent).length, pedidos:lista.length, oc:nOC};
 }
 var _armChev='<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M6 9l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 /* Dias entre una fecha ISO y hoy. Por COMPONENTES: new Date(iso) es UTC y en
@@ -2515,10 +2535,10 @@ function renderArmado(){
   /* Tiles en el mismo orden que la lista de abajo: atrasados, hoy, proximos.
      Los atrasados y los proximos se cuentan en PEDIDOS (lo que falta entregar);
      hoy, en BOLSAS (lo que falta armar). Cada tile lo dice. */
-  var cH=_armCuenta(pedH), tiles=[];
+  var cH=_armCuenta(pedH), cA=_armCuenta(pedAtr), cO=_armCuenta(pedO), tiles=[];
   if(pedAtr.length>0){
-    tiles.push('<div class="arm-res-t atr" role="button" tabindex="0" onclick="_armIr(\'atr\')"><b>'+pedAtr.length+'</b><span>'
-      +(pedAtr.length===1?'pedido atrasado':'pedidos atrasados')+'</span></div>');
+    tiles.push('<div class="arm-res-t atr" role="button" tabindex="0" onclick="_armIr(\'atr\')"><b>'+cA.entregas+'</b><span>'
+      +(cA.entregas===1?'entrega atrasada':'entregas atrasadas')+'</span></div>');
   }
   var tHoy;
   if(cH.bolsas===0){
@@ -2527,14 +2547,22 @@ function renderArmado(){
   } else if(cH.faltan===0){
     tHoy='<div class="arm-res-t hoy listo" role="button" tabindex="0" onclick="_armIr(\'hoy\')"><b>\u2713 '+cH.listas+'</b><span>hoy est\u00e1 todo armado</span></div>';
   } else {
+    /* Sin el "\u00b7 N lista": el progreso ya lo dice el contador del dia, tres
+       centimetros abajo, y aca hacia que el tile ocupara tres renglones. */
     tHoy='<div class="arm-res-t hoy" role="button" tabindex="0" onclick="_armIr(\'hoy\')"><b>'+cH.faltan+'</b><span>'
-      +(cH.faltan===1?'bolsa por armar hoy':'bolsas por armar hoy')
-      +(cH.listas?' \u00b7 '+cH.listas+(cH.listas===1?' lista':' listas'):'')+'</span></div>';
+      +(cH.faltan===1?'bolsa por armar hoy':'bolsas por armar hoy')+'</span></div>';
   }
   tiles.push(tHoy);
   if(pedO.length>0){
-    tiles.push('<div class="arm-res-t prox" role="button" tabindex="0" onclick="_armIr(\'prox\')"><b>'+pedO.length+'</b><span>'
-      +(pedO.length===1?'pedido para otro d\u00eda':'pedidos para otros d\u00edas')+'</span></div>');
+    /* Cuando todo lo que viene cae en un solo dia, decirlo: "1 entrega \u00b7
+       domingo 13/9" sirve mas que "para otros dias", y ocupa lo mismo. */
+    var diasO={};
+    pedO.forEach(function(e){diasO[entregaKey(e)]=1;});
+    var kO=Object.keys(diasO), lblO=(kO.length===1)
+      ? (labelFecha(kO[0])||'otro d\u00eda').toLowerCase()
+      : 'en '+kO.length+' d\u00edas';
+    tiles.push('<div class="arm-res-t prox" role="button" tabindex="0" onclick="_armIr(\'prox\')"><b>'+cO.entregas+'</b><span>'
+      +(cO.entregas===1?'entrega':'entregas')+' \u00b7 '+lblO+'</span></div>');
   }
   var summaryHtml='<div class="arm-res" style="--n:'+tiles.length+'">'+tiles.join('')+'</div>';
   document.getElementById('armadoSummary').innerHTML=summaryHtml;
@@ -2794,7 +2822,11 @@ function _renderArmadoBarrios(lista){
      falta uno. (Caso Marcos Bottcher, 4/9/2026.) */
   var soloOC=[];
   lista=lista.filter(function(e){
-    if(e.o==='Orden de Compra' && _itemsDepDe(e).length===0){soloOC.push(e);return false;}
+    /* `_origenTipo` y no `e.o==='Orden de Compra' && sin items del deposito`:
+       eran DOS criterios para el mismo "esto no se arma aca", y el contador ya
+       usaba este. Un pedido marcado Deposito cuyo Origen Detalle diga que todo
+       viene del proveedor dibujaba una card que el contador no contaba. */
+    if(_origenTipo(e)==='oc'){soloOC.push(e);return false;}
     return true;
   });
   if(lista.length===0 && totalIn>0){
@@ -2869,12 +2901,19 @@ function renderArmadoGroup(pedidos,titulo,isOther,dayKey,esHoy,esAtrasado){
     var pillHoy=esHoy?'<span class="day-pill-hoy">HOY</span>':'';
     var meta;
     if(esAtrasado){
-      var dAtr=_armDiasDesde(dayKey), nP=cD.pedidos;
+      var dAtr=_armDiasDesde(dayKey), nP=cD.entregas;
       meta='\u26A0\uFE0F '+nP+' sin entregar \u00b7 '
         +(dAtr===1?(nP===1?'era para ayer':'eran para ayer'):(dAtr>1?'hace '+dAtr+' d\u00edas':'atrasado'));
     } else {
-      meta=cD.pedidos+(cD.pedidos===1?' pedido':' pedidos');
-      if(cD.oc) meta+=' \u00b7 '+(cD.oc===cD.pedidos?(cD.oc===1?'viene del proveedor':'todos del proveedor'):cD.oc+' del proveedor');
+      /* ENTREGAS, que es lo que hay que llevar ese dia: dos pedidos del mismo
+         cliente se llevan juntos y son una. El contador de al lado cuenta
+         BOLSAS, que es otra cosa, y por eso cada numero lleva su palabra.
+         El "N del proveedor" salio de aca: los que no se arman estan nombrados
+         uno por uno adentro del dia, y aca sobraba en cada encabezado. Queda
+         solo el caso en que NADA se arma, porque si no el contador dice
+         "sin armado" y no se entiende por que. */
+      meta=cD.entregas+(cD.entregas===1?' entrega':' entregas');
+      if(cD.bolsas===0&&cD.oc) meta+=' \u00b7 '+(cD.entregas===1?'viene del proveedor':'todo del proveedor');
     }
     html+='<div class="armado-day-header'+(isOther?' other-day':'')+(esAtrasado?' atrasado':'')+(dayCollapsed?' collapsed':'')+'" data-collapse-key="'+dKey+'" onclick="toggleCollapse(\''+dKey+'\')">'
       +'<span class="day-title"><span class="dh-l1"><span class="dh-dia">'+titulo+'</span>'+pillHoy+'</span>'
@@ -2894,7 +2933,7 @@ function renderArmadoGroup(pedidos,titulo,isOther,dayKey,esHoy,esAtrasado){
   /* Solo en los dias ATRASADOS: en un dia que todavia no llego, cambiar la
      fecha es una operacion normal que se hace desde la ficha del pedido. */
   if(esAtrasado&&dayKey){
-    var nA=cD.pedidos, fechaTxt=String(titulo||'').toLowerCase();
+    var nA=cD.entregas, fechaTxt=String(titulo||'').toLowerCase();
     html+='<div class="armado-dia-aviso"><b>'+(nA===1?'Era':'Eran')+' para el '+fechaTxt+' y '+(nA===1?'sigue':'siguen')+' sin entregar.</b> '
       +'Si ya '+(nA===1?'lo':'los')+' entregaste, '+(nA===1?'tildalo':'tildalos')+' y marc\u00e1 la entrega en RUTA. Si no, '+(nA===1?'pasalo':'pasalos')+' a otro d\u00eda.'
       +'<button type="button" class="day-btn-fecha" onclick="_reprogToggle(\''+dayKey+'\',event)">\uD83D\uDCC5 Cambiar la fecha</button>'
@@ -2916,10 +2955,12 @@ function renderArmadoGroup(pedidos,titulo,isOther,dayKey,esHoy,esAtrasado){
     var canalKey='can:'+dayKey+':'+canal;
     var canalCollapsed=_isCollapsed(canalKey,true);
     var cC=_armCuenta(lista);
-    var chSub=(cC.bolsas===0)?'todo del proveedor':(cC.oc?cC.oc+' del proveedor':'');
+    /* Igual que el encabezado del dia: el "N del proveedor" sobraba. Se queda
+       el caso en que ese canal entero no se arma. */
+    var chSub=(cC.bolsas===0)?'todo del proveedor':'';
     html+='<div class="armado-canal-header '+canal+(canalCollapsed?' collapsed':'')+'" data-collapse-key="'+canalKey+'" onclick="toggleCollapse(\''+canalKey+'\')">'
       +'<span class="ch-lbl"><span class="ch-nom">'+_canalLabel(canal)+'</span>'+(chSub?'<span class="ch-sub">'+chSub+'</span>':'')+'</span>'
-      +'<span class="ch-count">'+lista.length+'</span>'
+      +'<span class="ch-count">'+cC.entregas+'</span>'
       +'<span class="ch-arrow">'+_armChev+'</span>'
       +'</div>';
     html+='<div class="armado-canal-content'+(canalCollapsed?' collapsed':'')+'" data-collapse-key="'+canalKey+'">';
