@@ -69,6 +69,14 @@ const K = { entregar: 'Home|R9201', cobrar: 'Home|R9202', reservar: 'Home|R9203'
 const EXTRA = `
   window.__posts=[]; window.__errores=[];
   window.addEventListener('error',function(e){window.__errores.push(String(e.message));});
+  /* El backend simulado APLICA cada escritura recien cuando contesta el POST,
+     como el de verdad: hasta entonces sigue devolviendo lo de antes. Desde que
+     RUTA se sincroniza sola cada 15 s (12/9/2026), un stub fijo devolvia un
+     pedido cancelado para siempre y el test media un backend que no existe.
+     Vive en sessionStorage para sobrevivir al reload del test. */
+  var __srv={fuera:{},es:{}};
+  try{ __srv=JSON.parse(sessionStorage.getItem('__rutTestSrv')||'')||__srv; }catch(e){}
+  function __srvGuardar(){ try{ sessionStorage.setItem('__rutTestSrv',JSON.stringify(__srv)); }catch(e){} }
   (function(){ var o=window.fetch; window.fetch=function(u,x){
     var url=String((u&&u.url)||u||'');
     if(x && String(x.method||'').toUpperCase()==='POST'){
@@ -77,11 +85,18 @@ const EXTRA = `
       /* El POST tarda ${DEMORA} ms: con un backend instantaneo, un loader que
          tapa hasta que la cola se vacia no se distingue de uno que no tapa. */
       return new Promise(function(res){ setTimeout(function(){
+        var id=String(b.id||'');
+        if(b.action==='cancelarPedido'||b.action==='marcarEntregado')__srv.fuera[id]=1;
+        if(b.action==='deshacerEntrega')delete __srv.fuera[id];
+        if(b.action==='cambiarEstadoEntrega')__srv.es[id]=b.estado;
+        __srvGuardar();
         res(new Response(JSON.stringify({ok:true}),{status:200,headers:{'Content-Type':'application/json'}}));
       }, ${DEMORA}); });
     }
     if(url.indexOf('action=entregas')>-1){
-      return Promise.resolve(new Response(JSON.stringify({ts:Date.now(), e:${JSON.stringify(ENTREGAS)}}),{status:200,headers:{'Content-Type':'application/json'}}));
+      var lista=${JSON.stringify(ENTREGAS)}.filter(function(p){return !__srv.fuera[String(p.id)];})
+        .map(function(p){ if(__srv.es[String(p.id)])p.es=__srv.es[String(p.id)]; return p; });
+      return Promise.resolve(new Response(JSON.stringify({ts:Date.now(), e:lista}),{status:200,headers:{'Content-Type':'application/json'}}));
     }
     if(url.indexOf('action=pendientesGuardarStock')>-1){
       return Promise.resolve(new Response(JSON.stringify({ok:true,items:[]}),{status:200,headers:{'Content-Type':'application/json'}}));
@@ -94,6 +109,7 @@ const EXTRA = `
      media su propia siembra. (Y ojo: un backtick aca cierra el template.) */
   try{ if(!sessionStorage.getItem('__rutTestSembrado')){
     localStorage.removeItem('maleu_ruta'); localStorage.removeItem('maleu_ruta_orden_modo');
+    sessionStorage.removeItem('__rutTestSrv'); __srv={fuera:{},es:{}};
     sessionStorage.setItem('__rutTestSembrado','1');
   } }catch(e){}
 `;
@@ -118,14 +134,25 @@ const COLA = `(function(){ try{ var d=JSON.parse(localStorage.getItem('maleu_rut
    POST viaja — leerla despues da [] siempre, porque al volver el ok la accion
    sale de la cola y el test no distingue "se guardo" de "no se guardo nunca".
    Recien entonces espera a que el POST conteste y devuelve el tapado. */
-async function medir(cli, disparar) {
+async function medir(cli, disparar, enViaje) {
   await evaluar(cli, ARRANCAR);
   await evaluar(cli, disparar);
   await pausa(900);
   const cola = await evaluar(cli, COLA);
+  /* Con el POST todavia en viaje, se pide `entregas` como lo hace el ↻ (sin
+     `auto`, asi se aplica aunque la respuesta sea igual a la anterior): el
+     backend simulado sigue devolviendo lo de antes, que es exactamente la
+     respuesta armada antes de procesar la escritura. */
+  let viaje;
+  if (enViaje) {
+    await evaluar(cli, 'refresh(true,false)');
+    await pausa(700);
+    viaje = await evaluar(cli, enViaje);
+  }
   await pausa(DEMORA + 2000);
-  return { tapa: await evaluar(cli, LEER_TAPA), cola: cola };
+  return { tapa: await evaluar(cli, LEER_TAPA), cola: cola, viaje: viaje };
 }
+const TIENE = nombre => `getSorted().some(function(x){return /${nombre}/.test(JSON.stringify(x));})`;
 
 (async () => {
   const cli = await abrir();
@@ -176,14 +203,17 @@ async function medir(cli, disparar) {
     chk('  el cuadro se cerró', await evaluar(cli, `document.getElementById('cobroRutaOverlay').classList.contains('hidden')`));
 
     // ── 3. Reservar ──
-    r = await medir(cli, 'cambiarEstadoRuta(' + JSON.stringify(K.reservar) + ',"Reservado")');
+    r = await medir(cli, 'cambiarEstadoRuta(' + JSON.stringify(K.reservar) + ',"Reservado")',
+      '(findByKey(' + JSON.stringify(K.reservar) + ')||{}).es');
     chk('RESERVAR no tapa la pantalla', r.tapa <= TOPE_TAPA, r.tapa + ' ms');
     chk('  y queda en la cola de localStorage', r.cola.some(x => /cambiarEstadoEntrega.*9203/.test(x)), r.cola);
+    chk('  sincronizar con el POST en viaje no le saca la reserva', r.viaje === 'Reservado', r.viaje);
 
     // ── 4. Cancelar ──
-    r = await medir(cli, 'cancelarRuta(' + JSON.stringify(K.cancelar) + ')');
+    r = await medir(cli, 'cancelarRuta(' + JSON.stringify(K.cancelar) + ')', '!' + TIENE('Flujo Cancelar'));
     chk('CANCELAR no tapa la pantalla', r.tapa <= TOPE_TAPA, r.tapa + ' ms');
     chk('  y queda en la cola de localStorage', r.cola.some(x => /cancelarPedido.*9204/.test(x)), r.cola);
+    chk('  sincronizar con el POST en viaje no lo trae de vuelta', r.viaje === true, r.viaje);
 
     // ── 5. El loader nunca queda pegado ──
     chk('el loader no quedó pegado al final', await evaluar(cli, `!document.getElementById('rutLoaderOverlay').classList.contains('visible')`));
@@ -246,6 +276,11 @@ async function medir(cli, disparar) {
     chk('deshacer devuelve la parada al recorrido', nDespD === nAntesD + 1, { nAntesD, nDespD });
     const colaD = await evaluar(cli, COLA);
     chk('  y encola deshacerEntrega del pedido', colaD.some(x => /deshacerEntrega.*9201/.test(x)), colaD);
+    /* El servidor todavia la tiene como Entregado y no la manda en `e`: sin la
+       copia local, la parada desaparecia de la ruta Y de "Ya entregadas". */
+    await evaluar(cli, 'refresh(true,false)');
+    await pausa(700);
+    chk('  sincronizar con el POST en viaje no la hace desaparecer', await evaluar(cli, TIENE('Flujo Entregar')));
     L = await lista();
     chk('  y sale de "Ya entregadas"', !/Flujo Entregar/.test(L.split('Ya entregadas')[1] || ''), L.slice(0, 220));
     const vuelta = await evaluar(cli, `(function(){ try{

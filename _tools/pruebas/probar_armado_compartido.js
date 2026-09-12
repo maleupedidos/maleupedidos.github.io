@@ -62,7 +62,9 @@ const K = id => 'Home|R' + id;
 const clave = p => p.h + '|' + p.id + '|' + String(p.c || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 const armado = {};                       // clave -> {u, hr}
 const posts = [];                        // lo que llego al "servidor"
-const SRV = { demoraGet: 1200, demoraPost: 900, sinArm: false, gets: 0, log: {} };
+const SRV = { demoraGet: 1200, demoraPost: 900, sinArm: false, gets: 0, getsCob: 0, log: {} };
+let HECHAS = [];                         // entregadas hoy (el sello de la planilla)
+let COBROS = [];                         // lo que devuelve cobrosPendientes
 function armParaEnt() {
   const out = {};
   ENT.forEach(e => { const x = armado[clave(e)]; if (x) out[e.h + '|R' + e.r] = x; });
@@ -90,7 +92,21 @@ function engancharBackend(cli, quien) {
       if (b.action === 'marcarArmado') {
         (b.pedidos || []).forEach(x => { const k = clave(x); if (b.armado) armado[k] = { u: quien === 'A' ? 'Tadeo Ustariz' : 'Lucas Moresco', hr: hhmm() }; else delete armado[k]; });
       } else if (b.action === 'marcarEntregado') {
-        ENT = ENT.filter(e => !(e.h === b.hoja && String(e.id) === String(b.id)));
+        const ped = ENT.find(e => e.h === b.hoja && String(e.id) === String(b.id));
+        ENT = ENT.filter(e => e !== ped);
+        if (ped) {
+          HECHAS.push(Object.assign({}, ped, { es: 'Entregado', he: hhmm() }));
+          if (!b.cobrado) COBROS.push({ key: ped.h + '|' + ped.id, h: ped.h, id: String(ped.id), r: ped.r, c: ped.c, t: ped.t,
+            $: ped.$, totalOriginal: ped.$, cobradoParcial: 0, parciales: [], fp: ped.fp, de: ped.de, fe: ped.fe,
+            fePed: ped.f, feEnt: dmy(hoyAR), es: 'Entregado', sub: ped.$, env: 0, desc: 0, p: ped.p });
+        }
+      } else if (b.action === 'marcarCobrado') {
+        COBROS = COBROS.filter(c => !(c.h === b.hoja && String(c.id) === String(b.id)));
+      } else if (b.action === 'deshacerEntrega') {
+        const ped = HECHAS.find(e => e.h === b.hoja && String(e.id) === String(b.id));
+        HECHAS = HECHAS.filter(e => e !== ped);
+        COBROS = COBROS.filter(c => !(c.h === b.hoja && String(c.id) === String(b.id)));
+        if (ped) ENT.push(Object.assign({}, ped, { es: 'Pendiente', he: undefined }));
       }
       return responder(cli, id, { ok: true });
     }
@@ -98,11 +114,11 @@ function engancharBackend(cli, quien) {
       SRV.gets++; (SRV.log[quien] = SRV.log[quien] || []).push(Date.now());
       const tsInicio = Date.now();           // el volcado se "arma" al empezar, como en Apps Script
       const foto = { ts: tsInicio, e: JSON.parse(JSON.stringify(ENT)), cuentas: [], saldos: {} };
-      if (!SRV.sinArm) foto.arm = armParaEnt();
+      if (!SRV.sinArm) { foto.arm = armParaEnt(); foto.hechas = JSON.parse(JSON.stringify(HECHAS)); }
       return responder(cli, id, foto, SRV.demoraGet);
     }
     if (/action=(pendientesGuardarStock)/.test(url)) return responder(cli, id, { ok: true, items: [] });
-    if (/action=cobrosPendientes/.test(url)) return responder(cli, id, { ok: true, cobros: [] });
+    if (/action=cobrosPendientes/.test(url)) { SRV.getsCob++; return responder(cli, id, { ok: true, ts: Date.now(), cobros: JSON.parse(JSON.stringify(COBROS)), sinCerrar: [], billetera: 0, cuentas: [], saldos: {} }, SRV.demoraGet); }
     try { await cli.enviar('Fetch.continueRequest', { requestId: id }); } catch (e) {}
   });
 }
@@ -246,6 +262,65 @@ async function celular(quien, nombre, usuario, sembrar) {
     await pausa(800);
     chk('  y SIGUE en su parada (' + nombreB + '), no salto a otra', await evaluar(B, 'document.getElementById("rutaView").textContent.indexOf(' + JSON.stringify(nombreB) + ')>-1'));
 
+    // ── 7b. "Ya entregadas hoy" en los dos celulares ───────────────────────
+    console.log('\n-- 7b. ya entregadas hoy, compartido');
+    const HECHAS_DE = q => `(function(){ try{ var d=JSON.parse(localStorage.getItem('maleu_ruta')||'{}');
+      return (d.rutHechas||[]).filter(function(x){return x&&x.ped&&x.ped.c===${JSON.stringify(q)};}).map(function(x){return x.key;}); }catch(e){ return []; } })()`;
+    const tH = await esperar(B, HECHAS_DE(primera) + '.length>0', 40000);
+    chk('B tiene en "Ya entregadas hoy" lo que entrego A', tH >= 0, tH);
+    const kH = (await evaluar(B, HECHAS_DE(primera)))[0];
+    /* La lista vive en el RECORRIDO (tocando "Parada N de M"), no en la card. */
+    await evaluar(B, 'toggleRutaListaModo()'); await pausa(600);
+    chk('  y la fila se ve en el recorrido, con su "No se entregó"', await evaluar(B, '(function(){var r=[].slice.call(document.querySelectorAll("#rutaView .rtc-hecha"));return r.some(function(x){return x.textContent.indexOf(' + JSON.stringify(primera) + ')>-1&&!!x.querySelector("button")})})()'));
+    await evaluar(B, 'toggleRutaListaModo()'); await pausa(400);
+    await evaluar(B, 'rutDeshacerEntrega(' + JSON.stringify(kH) + ')');
+    chk('B lo deshace: vuelve a su recorrido', (await evaluar(B, 'getPendientes().map(eKey)')).indexOf(kH) > -1);
+    const tU = await esperar(A, '(function(){return getPendientes().map(eKey).indexOf(' + JSON.stringify(kH) + ')>-1})()', 40000);
+    chk('A lo ve de vuelta en el recorrido, solo', tU >= 0, tU);
+    const tU2 = await esperar(A, HECHAS_DE(primera) + '.indexOf(' + JSON.stringify(kH) + ')===-1', 20000);
+    chk('  y ya no figura en su "Ya entregadas hoy"', tU2 >= 0, tU2);
+
+    // ── 7c. COBROS se sincroniza sola ──────────────────────────────────────
+    console.log('\n-- 7c. cobros');
+    await evaluar(B, 'switchTab("cobros")'); await pausa(2500);
+    const PEND_DE = q => `(function(){ try{ var d=JSON.parse(localStorage.getItem('maleu_ruta')||'{}');
+      return (d.pendientesCobro||[]).some(function(p){return p.c===${JSON.stringify(q)};}); }catch(e){ return false; } })()`;
+    chk('al empezar, B no tiene a Tercera Parada en COBROS', !(await evaluar(B, PEND_DE('Tercera Parada'))));
+    await evaluar(A, 'marcarEntregado(' + JSON.stringify(K(9503)) + ')');
+    const tCo = await esperar(B, PEND_DE('Tercera Parada'), 40000);
+    chk('A entrega sin cobrar y a B le aparece en COBROS solo', tCo >= 0, tCo);
+    await pausa(800);
+    chk('  y se ve en la pantalla de COBROS', await evaluar(B, 'document.getElementById("cobrosView").textContent.indexOf("Tercera Parada")>-1'));
+    await evaluar(B, `(function(){ window.__mutC=0; var v=document.getElementById('cobrosView');
+      if(window.__moC)window.__moC.disconnect(); window.__moC=new MutationObserver(function(l){window.__mutC+=l.length;});
+      window.__moC.observe(v,{childList:true,subtree:true}); return true; })()`);
+    const gc0 = SRV.getsCob;
+    await pausa(34000);
+    chk('COBROS siguio sincronizando (' + (SRV.getsCob - gc0) + ' GET)', SRV.getsCob - gc0 >= 2, SRV.getsCob - gc0);
+    chk('  sin tocar la pantalla si nada cambio: 0 mutaciones', (await evaluar(B, 'window.__mutC')) === 0, await evaluar(B, 'window.__mutC'));
+
+    // ── 7d. Lo que se esta cobrando no reaparece ───────────────────────────
+    /* El POST tarda MAS que el guard del loader (12 s): despues de que el loader
+       se va, la sincronizacion pide COBROS y el servidor todavia lo lista. Sin
+       el filtro, el pedido volvia a la lista con el cobro en viaje. */
+    console.log('\n-- 7d. cobrando');
+    SRV.demoraPost = 20000;
+    const idxT = await evaluar(B, '(function(){var d=JSON.parse(localStorage.getItem("maleu_ruta")||"{}");return (d.pendientesCobro||[]).findIndex(function(p){return p.c==="Tercera Parada"})})()');
+    await evaluar(B, 'abrirCobroPendiente(' + idxT + ')'); await pausa(700);
+    chk('B abre el cobro de Tercera Parada desde COBROS', await evaluar(B, '!document.getElementById("cobroRutaOverlay").classList.contains("hidden")'));
+    await evaluar(B, 'confirmarCobroRuta()');
+    let volvio = 0, mTot = 0;
+    const g7 = SRV.getsCob, t7 = Date.now();
+    while (Date.now() - t7 < 36000) {
+      if (await evaluar(B, PEND_DE('Tercera Parada'))) volvio++;
+      mTot++; await pausa(500);
+    }
+    chk('con el cobro en viaje, COBROS siguio sincronizando (' + (SRV.getsCob - g7) + ' GET)', SRV.getsCob - g7 >= 1, SRV.getsCob - g7);
+    chk('  y Tercera Parada NO volvio a la lista ni una vez (' + mTot + ' muestras)', volvio === 0, volvio);
+    SRV.demoraPost = 900;
+    await pausa(3000);
+    chk('  el cobro llego al servidor', posts.some(p => p.action === 'marcarCobrado' && p.pedidos === undefined && String(p.id) === '9503'));
+
     // ── 8. Backend sin `arm`: no borra nada ────────────────────────────────
     console.log('\n-- 8. backend viejo');
     await evaluar(B, 'switchTab("armado")');
@@ -269,7 +344,7 @@ async function celular(quien, nombre, usuario, sembrar) {
     const errA = (await evaluar(A, 'window.__err')).filter(e => /ruta|arm|Sincron|rutaVista|getSorted/i.test(e));
     const errB = (await evaluar(B, 'window.__err')).filter(e => /ruta|arm|Sincron|rutaVista|getSorted/i.test(e));
     chk('sin errores de la sub-app en ninguno de los dos', errA.length + errB.length === 0, { errA, errB });
-    const otros = posts.filter(p => p.action && ['marcarArmado', 'marcarEntregado'].indexOf(p.action) === -1);
+    const otros = posts.filter(p => p.action && ['marcarArmado', 'marcarEntregado', 'deshacerEntrega', 'marcarCobrado'].indexOf(p.action) === -1);
     chk('ningun POST inesperado', otros.length === 0, otros.map(p => p.action));
   } catch (e) {
     mal++; console.log('  EXPLOTO: ' + e.message);

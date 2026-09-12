@@ -1827,7 +1827,7 @@ function refresh(silent,fresh,auto){
     if(auto&&firma===_rutFirma){updateLastSync();processSyncQueue();return true;}
     _rutFirma=firma;
     var parada=silent?_rutParadaActual():null;
-    _ctasDe(data);_saldosDelBackend(data);_prodsDelBackend(data.prods);var se=_sanearEntregas(data.e||[]);var prev=getPendientes().length;entregas=se;
+    _ctasDe(data);_saldosDelBackend(data);_prodsDelBackend(data.prods);var se=_rutEnViajeSobre(_sanearEntregas(data.e||[]),data,entregas);var prev=getPendientes().length;entregas=se;
     var sk={};entregas.forEach(function(e){sk[eKey(e)]=true});
     Object.keys(entregados).forEach(function(k){if(!sk[k])delete entregados[k]});
     Object.keys(cobrados).forEach(function(k){if(!sk[k])delete cobrados[k]});
@@ -1838,6 +1838,7 @@ function refresh(silent,fresh,auto){
     Object.keys(rutaOrden).forEach(function(k){if(!sk[k])delete rutaOrden[k]});
     Object.keys(propinas).forEach(function(k){if(!sk[k])delete propinas[k]});
     _armDelBackend(data);
+    _hechasDelBackend(data);
     if(parada)_rutVolverAParada(parada,auto);
     saveLocal();rutRender();updateLastSync();
     var nc=getPendientes().length;if(silent&&nc>prev)showToast('+'+(nc-prev)+' pedido(s) nuevo(s)');
@@ -4109,25 +4110,13 @@ function renderCobros(){
    El server es la fuente de verdad: si el pedido ya no esta en la lista de
    cobros pendientes, es porque quedo cobrado. Reintenta un par de veces porque
    Apps Script atiende de a una consulta y puede tardar. */
-function _verificarCobroEntro(pc,intento){
-  if(!pc)return;
-  var id=(pc.h||'')+'|'+(pc.id||'');
-  var quien=String(pc.c||'').split(' ')[0]||'el cliente';
-  fetchCobrosPendientes(true).then(function(ok){
-    if(ok){
-      var sigue=(pendientesCobro||[]).some(function(x){return (x.h||'')+'|'+(x.id||'')===id;});
-      if(!sigue){ showToast('✅ Listo — el cobro de '+quien+' quedó registrado'); return; }
-    }
-    /* Todavia figura pendiente (o no se pudo consultar): puede ser que el
-       reintento no salio aun. Se vuelve a mirar, sin apurar al server. */
-    if(intento<2){ setTimeout(function(){_verificarCobroEntro(pc,intento+1);},9000); return; }
-    /* No se bloquea ni se revierte: la accion esta en la cola y se reintenta
-       sola. Lo unico que NO hay que hacer es tocar el boton de nuevo. */
-    showToast('El cobro de '+quien+' sigue en camino — se reintenta solo, no lo toques de nuevo');
-  });
-}
+/* Los cobros confirmados hace poco: ver el filtro de fetchCobrosPendientes. */
+var _cobRecientes=[];
+function _cobConfirmado(p){if(p&&p.action==='marcarCobrado')_cobRecientes.push({k:(p.hoja||'')+'|'+(p.id||''),t:Date.now()});}
+/* _verificarCobroEntro se borro el 12/9/2026: la usaba solo el fetch directo del
+   cobro de COBROS, que paso a la cola. */
 
-function fetchCobrosPendientes(fresh){
+function fetchCobrosPendientes(fresh,auto){
   // fresh=true saltea el cache de 20s del backend (igual que refresh() para entregas).
   // Importante cuando se cobró algo desde Panel u otro dispositivo y queremos verlo ya.
   return fetch(RUT_APPS_SCRIPT_URL+'?action=cobrosPendientes&t='+Date.now()+(fresh?'&fresh=1':''))
@@ -4142,6 +4131,10 @@ function fetchCobrosPendientes(fresh){
       if(!data||data.ok===false||!Array.isArray(data.cobros)){
         throw new Error((data&&(data.err||data.error))||'respuesta sin cobros');
       }
+      /* La sincronizacion (auto) no repinta si nada cambio. */
+      var _fc='';try{_fc=JSON.stringify([data.cobros,data.sinCerrar||null,data.billetera]);}catch(x){}
+      if(auto&&_fc&&_fc===_cobFirma)return true;
+      _cobFirma=_fc;
       _ctasDe(data);
       _saldosDelBackend(data);
       if(typeof data.billetera==='number')_billeteraRuta=data.billetera; // fondo de cambio para el cuadro de Cobros
@@ -4149,6 +4142,17 @@ function fetchCobrosPendientes(fresh){
          que dejar lo que ya estaba en vez de vaciar la banda. */
       if(Array.isArray(data.sinCerrar))_rutSinCerrar=data.sinCerrar;
       var cobros=data.cobros||[];
+      /* Lo que se esta cobrando desde ESTE celular no vuelve a aparecer
+         (12/9/2026). Con la sincronizacion cada 15 s, una respuesta armada
+         antes de que el servidor registre el cobro traia el pedido de vuelta a
+         la lista — y un pedido cobrable a la vista invita a cobrarlo dos veces.
+         Se saca si su `marcarCobrado` sigue en la cola, o si se confirmo despues
+         de que se armara esta respuesta. */
+      var _cobrando={}, _tsCob=Number(data.ts)||0;
+      syncQueue.forEach(function(q){if(q&&q.action==='marcarCobrado')_cobrando[(q.hoja||'')+'|'+(q.id||'')]=1;});
+      _cobRecientes=_cobRecientes.filter(function(x){return Date.now()-x.t<180000;});
+      _cobRecientes.forEach(function(x){if(_tsCob<x.t)_cobrando[x.k]=1;});
+      cobros=cobros.filter(function(c){return !_cobrando[(c.h||'')+'|'+(c.id||'')];});
       // Server = fuente de verdad. Solo agregar locales que aun estan en syncQueue
       // (entregados offline que aun no sincronizaron con el server)
       // Identidad estable hoja|id (N° de pedido) — sirve aunque las keys locales y del
@@ -4746,6 +4750,88 @@ function _rutHechaAgregar(ped){
      volver a la ruta con sus productos, y despues de un ↻ ya no esta en
      `entregas` (el backend no manda los Entregado). */
   rutHechas.push({key:k,dia:getHoyISO(),ts:Date.now(),ped:ped});
+}
+/* ══ "YA ENTREGADAS HOY", COMPARTIDO (12/9/2026) ══════════════════════════════
+   La lista vivia en el celular que entregaba: si Lucas entregaba, Tadeo no lo
+   veia, y un toque equivocado del otro no se podia deshacer. `entregas` manda
+   ahora tambien lo ENTREGADO HOY (el sello de entrega de la planilla).
+   El servidor es la verdad; encima va lo de ESTE celular que todavia no llego,
+   y se saca lo que este celular deshizo y el servidor todavia no sabe. Sin el
+   campo (backend anterior al 12/9/2026) queda la lista local, como antes. */
+/* ══ LO QUE VIAJA EN LA COLA NO SE PISA (12/9/2026) ══════════════════════════
+   `refresh` reemplaza `entregas` con lo que manda el servidor. Con el ↻ eso
+   pasaba solo si uno lo tocaba; con la sincronizacion cada 15 s pasa solo, y la
+   respuesta puede haberse armado ANTES de que el servidor procese la escritura:
+   · un pedido recien CANCELADO volvia al recorrido;
+   · una RESERVA recien puesta (o sacada) volvia al estado anterior;
+   · una entrega recien DESHECHA desaparecia de la ruta y de "Ya entregadas" a
+     la vez, porque el servidor todavia la tiene como Entregado.
+   Mismo criterio que el armado y las entregas: lo que sigue en la cola manda
+   sobre el servidor, y lo confirmado hace menos de 3 minutos manda solo si la
+   respuesta se armo antes (`data.ts < t`). Lo agarro probar_flujo_ruta.js. */
+var _estRecientes=[];
+/* Funcion y no un objeto `var`: una asignacion `var` no se hoistea, y la cola
+   puede procesarse antes de que corra esta linea. */
+function _estAccion(a){return a==='cancelarPedido'||a==='cambiarEstadoEntrega'||a==='deshacerEntrega';}
+function _estConfirmado(item){
+  if(!item||!_estAccion(item.action))return;
+  (_estRecientes=_estRecientes||[]).push({a:item.action,k:item.hoja+'|R'+item.row,es:item.estado,t:Date.now()});
+}
+function _rutEnViajeSobre(se,data,prev){
+  var ahora=Date.now(), tsResp=Number(data&&data.ts)||0, ops={};
+  _estRecientes=(_estRecientes||[]).filter(function(x){return ahora-x.t<180000;});
+  _estRecientes.forEach(function(x){if(tsResp<x.t)ops[x.k]=x;});
+  /* La cola va DESPUES: es mas nueva que lo confirmado, y dentro de la cola
+     gana la ultima accion sobre el mismo pedido (reservar y quitar). */
+  (syncQueue||[]).forEach(function(it){
+    if(it&&_estAccion(it.action))ops[it.hoja+'|R'+it.row]={a:it.action,k:it.hoja+'|R'+it.row,es:it.estado};
+  });
+  if(!Object.keys(ops).length)return se;
+  var prevBy={};(prev||[]).forEach(function(e){if(e)prevBy[eKey(e)]=e;});
+  var out=[], vistos={};
+  se.forEach(function(e){
+    var k=eKey(e), op=ops[k]; vistos[k]=1;
+    if(op&&op.a==='cancelarPedido')return;
+    if(op&&op.a==='cambiarEstadoEntrega'&&op.es)e.es=op.es;
+    if(op&&op.a==='deshacerEntrega'&&e.es==='Entregado')e.es='Pendiente';
+    out.push(e);
+  });
+  /* La entrega deshecha que el servidor todavia no devuelve: vuelve la copia
+     local, que es el pedido ENTERO (rutDeshacerEntrega lo empuja a `entregas`). */
+  Object.keys(ops).forEach(function(k){
+    var op=ops[k];
+    if(op.a==='deshacerEntrega'&&!vistos[k]&&prevBy[k]){prevBy[k].es='Pendiente';out.push(prevBy[k]);}
+  });
+  return out;
+}
+var _desRecientes=[];
+function _hechasDelBackend(data){
+  if(!data||!Array.isArray(data.hechas))return false;
+  var hoy=getHoyISO(), tsResp=Number(data.ts)||0, ahora=Date.now(), porKey={};
+  data.hechas.forEach(function(p){
+    if(!p||p.h==='Red')return;
+    var k=eKey(p), ts=0, m=String(p.he||'').match(/^(\d{1,2}):(\d{2})/);
+    if(m){var d=new Date();d.setHours(+m[1],+m[2],0,0);ts=d.getTime();}
+    porKey[k]={key:k,dia:hoy,ts:ts,ped:p,srv:1};
+  });
+  var enCola={}, desCola={};
+  syncQueue.forEach(function(it){
+    if(!it)return;
+    var k=it.hoja+'|R'+it.row;
+    if(it.action==='marcarEntregado')enCola[k]=1;
+    if(it.action==='deshacerEntrega')desCola[k]=1;
+  });
+  (rutHechas||[]).forEach(function(x){
+    if(!x||!x.ped||x.dia!==hoy||porKey[x.key]||x.srv)return;
+    /* Lo entregado aca: si sigue en la cola, o se confirmo hace menos de 3
+       minutos (la respuesta puede haberse armado antes del POST). */
+    if(enCola[x.key]||ahora-Math.max(x.ts||0,x.conf||0)<180000)porKey[x.key]=x;
+  });
+  Object.keys(desCola).forEach(function(k){delete porKey[k];});
+  _desRecientes=_desRecientes.filter(function(x){return ahora-x.t<180000;});
+  _desRecientes.forEach(function(x){if(tsResp<x.t)delete porKey[x.key];});
+  rutHechas=Object.keys(porKey).map(function(k){return porKey[k];});
+  return true;
 }
 function rutDeshacerEntrega(key){
   var h=null;
@@ -6270,7 +6356,7 @@ function confirmarCobroRuta(){
    primero (acumula todo). Cada pedido recibe su POST marcarCobrado. */
 function _confirmarCobroComboRuta(st,r){
   var peds=st.pedidos,fp=st.fp;
-  var _comboPayloads=[]; // se envían por FETCH DIRECTO (no syncQueue, que se traba en el iframe)
+  var _comboPayloads=[]; // van a la COLA (12/9/2026); los parciales siguen por fetch directo
 
   // ── PAGO PARCIAL de un combo → N × action=cobrarParcial, repartido FIFO ──
   // El monto recibido se asigna del primer pedido al último: los que quedan
@@ -6388,6 +6474,13 @@ function _confirmarCobroComboRuta(st,r){
       });
     }
   });
+  /* A la COLA (12/9/2026), igual que el cobro suelto: el combo tapaba la
+     pantalla hasta 45 s con un fetch directo cuyo motivo —"la cola se traba en
+     el iframe"— dejo de existir el 21/8/2026. Los cobros van PRIMERO y la
+     entrega detras, asi el `marcarEntregado` viaja con cobrado:true y el
+     backend los ve en orden. */
+  _comboPayloads.forEach(function(p){syncQueue.push(p);});
+  _rutFirma='';_cobFirma='';
   /* La entrega de los N pedidos, con el mismo criterio que el cobro suelto. */
   var _nEnt=0;
   if(st.entregar&&_cobroEntAplica(st))peds.forEach(function(p){if(_entregarCore(p))_nEnt++;});
@@ -6399,12 +6492,13 @@ function _confirmarCobroComboRuta(st,r){
   // Si el combo se abrió desde subtab COBROS, refrescar esa vista. Sino, RUTA.
   if(fromCobros && rutCurrentTab==='cobros')renderCobrosFromServer();
   else rutRenderRuta();
-  // Commit por FETCH DIRECTO endurecido (backend idempotente v404 → reintento seguro).
-  _commitCobroComboDirecto(_comboPayloads, peds, _nEnt);
+  processSyncQueue();
+  if(navigator.vibrate)navigator.vibrate(30);
+  showToast('✓ Cobrados'+(_nEnt?' y entregados':'')+' '+peds.length+' pedidos de '+nombre+_rutSufCta(_comboPayloads[0]&&_comboPayloads[0].cuenta)+(isOnline?'':' — se sincroniza al volver la señal'));
 }
 
-// Envía los N cobros de un combo por fetch directo (NO syncQueue, que se traba en el
-// iframe del Panel — mismo motivo por el que los cobros sueltos usan fetch directo).
+// Desde el 12/9/2026 lo usan SOLO los PARCIALES de un combo: `cobrarParcial` no es
+// idempotente, asi que no puede ir a la cola, que reintenta. El cobro completo va a la cola.
 // Backend idempotente: reintentar un pedido ya cobrado no duplica. Ante falla transitoria,
 // reencola SOLO los fallidos y reconcilia con el server (la card vuelve solo si de verdad
 // no se cobró).
@@ -6433,7 +6527,8 @@ function _commitCobroComboDirecto(payloads, peds, nEnt){
   })).then(function(results){
     if(_settled)return;_settled=true;clearTimeout(_timer);clearTimeout(_guard);rutHideLoader(true);
     var fallidos=[];
-    results.forEach(function(res,i){if(!(res&&res.ok))fallidos.push(payloads[i]);});
+    results.forEach(function(res,i){if(!(res&&res.ok))fallidos.push(payloads[i]);else _cobConfirmado(payloads[i]);});
+    _cobFirma='';
     if(fallidos.length===0){
       showToast('✓ Cobrados'+(nEnt?' y entregados':'')+' '+peds.length+' pedidos de '+nombre+_rutSufCta(payloads[0]&&payloads[0].cuenta));
       if(navigator.vibrate)navigator.vibrate(30);
@@ -6539,104 +6634,40 @@ function _confirmarCobroPendiente(st,r){
   _commitCobroPendiente(payload,saldoPayload,pc);
 }
 
-// Commit endurecido de un cobro de COBROS: loader inmediato, guarda 25s, timeout
-// 15s, hard-timeout 20s, UI optimista con revert ante ok:false/error. Fetch directo.
+/* ══ EL COBRO DE COBROS, A LA COLA Y SIN LOADER (12/9/2026) ══════════════════
+   Hasta hoy iba por fetch directo, con un loader que tapaba la pantalla hasta
+   12 s. La regla "todo cobro por fetch directo, nunca por la cola" venia del
+   20/7/2026 y tenia dos motivos, y los dos ya no valen:
+   · "la cola se traba en el iframe del Panel": no hay iframe desde el 21/8/2026;
+   · "items viejos cobran solos": `marcarCobrado` y `crearSaldoCliente` son
+     idempotentes desde el 29/6/2026, y la cola purga lo de mas de 30 min.
+   Y el cobro de la card de RUTA ya va por la cola desde el 3/9/2026, sin un
+   solo reporte.
+
+   Lo que la cola agrega y el fetch directo no tenia: SOBREVIVE a cerrar la app.
+   Con fetch directo, el loader era lo unico que impedia cerrar con el cobro en
+   viaje — que es el bug del 27/5/2026, "sale de la lista pero no escribe".
+   Y la sincronizacion entre celulares no lo trae de vuelta a la lista mientras
+   viaja: el filtro de fetchCobrosPendientes mira la cola.
+
+   Los PARCIALES siguen por fetch directo: `cobrarParcial` NO es idempotente, y
+   la cola reintenta. */
 function _commitCobroPendiente(payload,saldoPayload,pc){
   var pcKey=(pc.h||'')+'|'+(pc.id||'');
-  try{rutShowLoader('Cobrando a '+((pc.c||'').split(' ')[0])+'...');}catch(_){}
-  // Guard de UI a 12s. La UI ya es optimista (el pedido salió de la lista) y el
-  // modal está cerrado, así que dejar el loader puesto 45s no protege de nada:
-  // sólo hace que Tadeo mire una pantalla trabada. Lo sacamos temprano y avisamos
-  // que sigue en segundo plano; la confirmación real llega igual más abajo.
-  var _guard=setTimeout(function(){try{rutHideLoader(true);}catch(_){}try{showToast('⏳ Está tardando — sigue en segundo plano, ya podés seguir');}catch(_){}},12000);
-  try{
-    // UI optimista: sacar de la lista local
-    cobrados[pcKey]=true;
-    var idxRem=-1;
-    for(var j=0;j<pendientesCobro.length;j++){var p=pendientesCobro[j];if(((p.h||'')+'|'+(p.id||''))===pcKey){idxRem=j;break;}}
-    var pcBackup=idxRem>=0?pendientesCobro[idxRem]:null;
-    if(idxRem>=0)pendientesCobro.splice(idxRem,1);
-    saveLocal();
-    if(rutCurrentTab==='cobros')renderCobrosFromServer();
-    var elB=document.getElementById('tabCobrosCount');if(elB)elB.textContent=pendientesCobro.length||'';
-    if(navigator.vibrate)navigator.vibrate(30);
-
-    function _revert(){delete cobrados[pcKey];if(pcBackup)pendientesCobro.push(pcBackup);saveLocal();if(rutCurrentTab==='cobros')renderCobrosFromServer();var e2=document.getElementById('tabCobrosCount');if(e2)e2.textContent=pendientesCobro.length||'';}
-
-    // Falla transitoria (timeout / red / respuesta no-JSON de Apps Script): el server
-    // PUDO haber escrito igual. El backend es IDEMPOTENTE (no duplica), así que en vez de
-    // revertir a ciegas y mostrar el pedido cobrable de nuevo (riesgo de doble cobro que
-    // reportó Tadeo), reencolamos para reintentar y reconciliamos con la verdad del server:
-    // si ya se cobró NO reaparece; si de verdad falló, vuelve solo.
-    function _onFailTransitorio(msg){
-      syncQueue.push(payload);if(saldoPayload)syncQueue.push(saldoPayload);saveLocal();
-      setTimeout(processSyncQueue,1500);
-      showToast(msg||'⏳ No confirmó a tiempo — reintentando y verificando…');
-      /* Antes esto era `fetchCobrosPendientes(true)` a secas: verificaba en
-         SILENCIO. El ultimo cartel que quedaba era "verificando...", asi que
-         uno se queda con la duda de si el cobro entro. Si avisas que estas
-         esperando, tenes que avisar como termino. */
-      setTimeout(function(){_verificarCobroEntro(pc,0);},4000);
-    }
-
-    if(!isOnline){
-      syncQueue.push(payload);
-      if(saldoPayload)syncQueue.push(saldoPayload);
-      saveLocal();
-      clearTimeout(_guard);rutHideLoader(true);
-      showToast('Cobrado offline — se sincroniza al volver señal');
-      return;
-    }
-
-    var _aborter=(typeof AbortController!=='undefined')?new AbortController():null;
-    var _timer=setTimeout(function(){if(_aborter)_aborter.abort();},30000);
-    var _settled=false;
-    var _hardTimer=setTimeout(function(){
-      if(_settled)return;_settled=true;clearTimeout(_guard);
-      rutHideLoader(true);
-      _onFailTransitorio('⏳ El servidor no respondió — reintentando en segundo plano…');
-    },40000);
-    var _fopts={method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(payload),redirect:'follow'};
-    if(_aborter)_fopts.signal=_aborter.signal;
-    fetch(RUT_APPS_SCRIPT_URL,_fopts)
-      .then(function(rs){clearTimeout(_timer);return rs.json().catch(function(){return{ok:false,_parseError:true,error:'InvalidJSON'};});})
-      .then(function(res){
-        if(_settled)return;_settled=true;clearTimeout(_hardTimer);clearTimeout(_guard);
-        rutHideLoader(true);
-        if(res&&res.ok){
-          /* Nombrar la cuenta cuando de verdad se eligio una: un cobro que
-             entra a un lugar distinto del habitual y no lo dice es la misma
-             mentira por omision que una copia guardada sin fecha. */
-          var _sufCta=_rutSufCta(payload.cuenta);
-          showToast(res.already?('✓ Ya estaba cobrado '+((pc.c||'').split(' ')[0])):('✓ Cobrado a '+((pc.c||'').split(' ')[0])+_sufCta));
-          if(navigator.vibrate)navigator.vibrate(30);
-          if(saldoPayload){syncQueue.push(saldoPayload);saveLocal();setTimeout(processSyncQueue,500);}
-          if(rutCurrentTab==='cobros')fetchCobrosPendientes(true);
-        } else if(res&&res._parseError){
-          // Apps Script devolvió HTML/no-JSON (error transitorio de Google): tratar como timeout.
-          _onFailTransitorio('⏳ Respuesta inválida del servidor — reintentando y verificando…');
-        } else {
-          // Error REAL del backend (validación): este sí revierte y avisa (no se arregla solo).
-          _revert();
-          showToast('❌ Error: '+((res&&res.error)||'sin respuesta')+' — probá de nuevo');
-        }
-      })
-      .catch(function(err){
-        if(_settled)return;_settled=true;clearTimeout(_timer);clearTimeout(_hardTimer);clearTimeout(_guard);
-        rutHideLoader(true);
-        // Mensaje honesto: el POST ya salió, así que lo más probable es que el
-        // cobro HAYA entrado y sólo se haya perdido la confirmación. Decir "se
-        // acabó el tiempo" sugiere que no se registró y asusta al pedo — abortar
-        // el fetch no cancela nada del lado del servidor.
-        _onFailTransitorio(err&&err.name==='AbortError'
-          ? '⏳ No llegó la confirmación (>30s). El cobro probablemente ya entró — verificando…'
-          : '⏳ Sin respuesta. Verificando si el cobro entró…');
-      });
-  } catch(_ex_){
-    clearTimeout(_guard);rutHideLoader(true);
-    try{console.error('_commitCobroPendiente error:',_ex_);}catch(_){}
-    showToast('❌ Error interno: '+((_ex_&&_ex_.message)||'desconocido')+' — recargá la página');
-  }
+  var quien=(pc.c||'').split(' ')[0];
+  cobrados[pcKey]=true;
+  pendientesCobro=pendientesCobro.filter(function(p){return ((p.h||'')+'|'+(p.id||''))!==pcKey;});
+  syncQueue.push(payload);
+  if(saldoPayload)syncQueue.push(saldoPayload);
+  _rutFirma='';_cobFirma='';
+  saveLocal();
+  if(rutCurrentTab==='cobros')renderCobrosFromServer();
+  var elB=document.getElementById('tabCobrosCount');if(elB)elB.textContent=pendientesCobro.length||'';
+  if(navigator.vibrate)navigator.vibrate(30);
+  /* Nombrar la cuenta cuando de verdad se eligio una: un cobro que entra a un
+     lugar distinto del habitual y no lo dice es mentir por omision. */
+  showToast('\u2713 Cobrado a '+quien+_rutSufCta(payload.cuenta)+(isOnline?'':' \u2014 se sincroniza al volver la se\u00f1al'));
+  processSyncQueue();
 }
 
 // Commit endurecido de un cobro PARCIAL desde el modal (action=cobrarParcial).
@@ -7128,7 +7159,14 @@ function processSyncQueue(){
            deshace, el servidor vuelve a quedar IGUAL a la ultima foto que vio
            este, y sin esto la sincronizacion diria "nada cambio" y dejaria el
            estado local viejo para siempre (lo agarro probar_armado_compartido). */
-        _rutFirma='';saveLocal();
+        _rutFirma='';_cobFirma='';
+        if(item&&item.action==='deshacerEntrega')_desRecientes.push({key:item.hoja+'|R'+item.row,t:Date.now()});
+        _cobConfirmado(item);_estConfirmado(item);
+        if(item&&item.action==='marcarEntregado'){
+          var _kc=item.hoja+'|R'+item.row;
+          (rutHechas||[]).forEach(function(x){if(x&&x.key===_kc)x.conf=Date.now();});
+        }
+        saveLocal();
         syncBackoffMs=2000;
         document.getElementById('syncBanner').className='sync-banner'+(syncQueue.length>0?' visible':'');
         if(syncQueue.length>0)setTimeout(processSyncQueue,800);
@@ -8890,9 +8928,9 @@ function npReset(){
    - espera 4 s desde el ultimo toque: no se repinta debajo del dedo;
    - RUTA vuelve a la MISMA parada aunque el otro haya entregado una de antes. */
 var RUT_SYNC_MS=15000;
-var _rutFirma='', _rutSyncEnVuelo=false, _rutUltimoToque=0, _rutSyncReintento=null;
+var _rutFirma='', _cobFirma='', _rutSyncEnVuelo=false, _rutUltimoToque=0, _rutSyncReintento=null;
 function _rutFirmaDe(data){
-  try{return JSON.stringify([data.e,data.arm||null,data.saldos||null]);}catch(x){return String(Math.random());}
+  try{return JSON.stringify([data.e,data.arm||null,data.saldos||null,data.hechas||null]);}catch(x){return String(Math.random());}
 }
 function _rutEstaMirando(){
   if(document.hidden)return false;
@@ -8902,6 +8940,7 @@ function _rutEstaMirando(){
 function _rutOcupado(){
   var o=document.getElementById('confirmOverlay');if(o&&!o.classList.contains('hidden'))return true;
   var c=document.getElementById('cobroRutaOverlay');if(c&&!c.classList.contains('hidden'))return true;
+  var lo=document.getElementById('rutLoaderOverlay');if(lo&&lo.classList.contains('visible'))return true;
   var ae=document.activeElement;if(ae&&/^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName))return true;
   return false;
 }
@@ -8929,7 +8968,11 @@ function rutSincronizar(motivo){
     return Promise.resolve(false);
   }
   _rutSyncEnVuelo=true;
-  return refresh(true,false,true).then(function(r){_rutSyncEnVuelo=false;return r;},function(){_rutSyncEnVuelo=false;return false;});
+  var ps=[refresh(true,false,true)];
+  /* COBROS sale de otro endpoint: si esa es la sub-tab abierta, tambien. Sin
+     `fresh`: desde el 12/9/2026 su cache se tira con cada escritura. */
+  if(rutCurrentTab==='cobros')ps.push(fetchCobrosPendientes(false,true));
+  return Promise.all(ps).then(function(r){_rutSyncEnVuelo=false;return r[0];},function(){_rutSyncEnVuelo=false;return false;});
 }
 function _arrancarRuta(){
   if(entregas.length>0){rutRender();updateLastSync();refresh(true);}
