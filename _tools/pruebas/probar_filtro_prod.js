@@ -75,7 +75,9 @@ const fmtPlata = n => Math.round(n).toLocaleString('es-AR');
    cierra, y eso rompio este mismo archivo hace cinco minutos. */
 const LEER = `(function(){
   function num(t){ return Number(String(t||'').replace(/[^0-9,.\\-]/g,'').replace(/\\./g,'').replace(',','.'))||0; }
-  function pct(t){ return Number(String(t||'').replace(/[^0-9.\\-]/g,''))||0; }
+  /* El porcentaje va con COMA desde el 13/9/2026 ("31,0%"): sacarle todo menos
+     digitos y punto leia 310. */
+  function pct(t){ return Number(String(t||'').replace(/[^0-9,\\-]/g,'').replace(',','.'))||0; }
   var filas=[];
   [].forEach.call(document.querySelectorAll('#prodTablaBody tr'),function(tr){
     var c=tr.cells; if(!c||c.length<7) return;

@@ -152,7 +152,10 @@ const MEDIR_PARES = `(function(raiz, tope){
   [].forEach.call(document.querySelectorAll(raiz + ' div, ' + raiz + ' li, ' + raiz + ' tr'), function(e){
     var cs = getComputedStyle(e);
     var reparte = cs.display === 'flex' && cs.justifyContent === 'space-between';
-    var esGrid  = cs.display === 'grid' && /auto|max-content/.test(cs.gridTemplateColumns);
+    /* getComputedStyle devuelve las columnas RESUELTAS en px, nunca "auto": con el
+       regex de antes ninguna grilla se medía (13/9/2026). Una grilla con dos hijos
+       visibles en la misma linea es un par, igual que un flex space-between. */
+    var esGrid  = cs.display === 'grid';
     if (!reparte && !esGrid) return;
     var hijos = [].filter.call(e.children, function(c){
       var r = c.getBoundingClientRect(); return r.width > 0 && c.textContent.trim(); });
@@ -321,6 +324,11 @@ async function main() {
          reales que se corre a mano desde el scratchpad. */
       if (!c.mob) {
         await ev('go("ventas")'); await pausa(700);
+        /* Con un desglose ABIERTO: sus renglones son pares label→valor. La fila de
+           la lista es una tabla con encabezados (13/9/2026) y ya no tiene pares
+           propios, asi que sin esto el barrido no tendria nada que medir. */
+        await ev(`(function(){ var e=document.querySelector('#vList .vt'); if(e&&!e.classList.contains('abierta')) vtToggle(e); return 1; })()`);
+        await pausa(260);
         const pintado = await ev(`(function(){var e=document.querySelector('#p-ventas');
           return e ? e.querySelectorAll('div,li,tr').length : -1;})()`);
         chequeo(pintado > 20, 'la tab Ventas esta pintada (' + pintado + ' elementos)');
