@@ -77,7 +77,9 @@ const EXTRA = `
       var m = url.match(/action=([a-zA-Z_]+)/); var a = m ? m[1] : '?';
       window.__gets.push({a:a, t:performance.now()});
       var cuerpo = null;
-      if (a === 'pedidosLight') cuerpo = window.__LIGHT;
+      if (a === 'pedidosLight' && window.__FALLA_LIGHT) return Promise.resolve(new Response('<html>Service error</html>',{status:200,headers:{'Content-Type':'text/html'}}));
+      if (a === 'cajaLight' && window.__FALLA_LIGHT) cuerpo = {ts:1, caja:{}, saldoBase:{}, gastos:[], ingresos:[], movimientos:[]};
+      else if (a === 'pedidosLight') cuerpo = window.__LIGHT;
       else if (a === 'pedidosNew') cuerpo = {ts:2, pedidos: window.__LIGHT.pedidos.slice(-10), tail:10};
       else if (a === 'ocLight') cuerpo = ${JSON.stringify(OCS)};
       else if (a === 'tendencia') cuerpo = ${JSON.stringify(TEND)};
@@ -215,6 +217,24 @@ const EXTRA = `
       _SECCION.inicio=o; return {mientras:mientras, despues:pint.length, espero:pint.length?Math.round(pint[0]-t2):null}; })()`);
     chk('mientras se toca la pantalla no se pintan tabs cerradas', fondoP.mientras === 0, fondoP);
     chk('cuando se deja de tocar, se pintan', fondoP.despues >= 1, fondoP);
+
+    // ── fase 2: arranque en frio con pedidosLight caido y la caja bien ──
+    /* Visto contra produccion el 12/9/2026 con Apps Script lento: `loadRapido`
+       armaba D={} con la caja sola y Inicio/Pedidos/Pedidos Home reventaban
+       ("undefined (reading 'filter')") y quedaban marcadas como pintadas. */
+    console.log('  -- fase 2: pedidosLight caido en frio, la caja bien --');
+    await cli.enviar('Page.addScriptToEvaluateOnNewDocument', { source: ';window.__FALLA_LIGHT=true;' });
+    await evaluar(cli, `(()=>{ try{ localStorage.removeItem('ma3'); localStorage.setItem('maleu_tab','pedidos'); }catch(e){} return 1; })()`);
+    await cli.enviar('Page.navigate', { url: BASE + '/' + APP });
+    await esperar(cli, `typeof go==='function' && window.__gets && window.__gets.some(function(x){return x.a==='cajaLight';})`, 60000);
+    await pausa(6000);
+    const f2 = await evaluar(cli, `({err:(window.__err||[]).filter(function(e){return /render ->/.test(e);}), D:!!window.D, ped:!!(window.D&&window.D.pedidos)})`);
+    chk('fase 2: el ERP quedo con la caja y SIN pedidos (si no, esto no mide nada)', f2.D === true && f2.ped === false, f2);
+    chk('fase 2: ninguna seccion revienta por la lista que falta', f2.err.length === 0, f2.err);
+    await evaluar(cli, `(()=>{ window.__FALLA_LIGHT=false; go('pedidos'); refreshContextual(); return 1; })()`);
+    chk('fase 2: cuando llegan los pedidos, la lista se pinta',
+      await esperar(cli, `document.querySelectorAll('#pList>.pc').length===${ESPERADAS}`, 30000),
+      await evaluar(cli, `document.querySelectorAll('#pList>.pc').length`));
 
     console.log('\n' + ok + ' ok · ' + mal + ' mal');
     salir(mal ? 1 : 0);
