@@ -1850,11 +1850,11 @@ function manualRefresh(){
   // fresh=true: salteamos el cache de 20s del backend para que el pull-to-refresh y el
   // boton de refresh siempre traigan datos REALES del Sheet (importante si el user marco
   // entregado desde otra herramienta como el Panel admin).
-  var promises=[refresh(true,true)];
+  var promises=[refresh(true,false)];   /* sin fresh: ver _pedirEntregasTxt */
   // El ↻ SIEMPRE re-pide los cobros, no solo estando en su tab: son un endpoint
   // aparte y si fallaron una vez hay que poder reintentar desde donde estes.
   _cobrosIntentados=false;
-  promises.push(fetchCobrosPendientes(true).then(function(ok){
+  promises.push(fetchCobrosPendientes(false).then(function(ok){
     _cobrosIntentados=true; _cobrosOk=(ok!==false);
   }));
   var p=Promise.all(promises.map(function(x){return (x&&x.then)?x:Promise.resolve()}));
@@ -1873,14 +1873,36 @@ function _rutAviso(estado){
    avisa si falla (se reintenta sola en 15 s) y, si lo que vino es IGUAL a lo
    que ya estaba dibujado, no repinta: repintar cada 15 s sin motivo mueve la
    pantalla debajo del dedo. */
+/* UN pedido de `entregas` por vez (12/9/2026).
+   Tadeo, entregando: "Tab ruta > Ruta cuando pongo actualizar tarda MUCHISIMO".
+   Medido con la sesion real: el ↻ pedia `entregas` con `fresh=1` y tardaba 8 a
+   11 s SIEMPRE, mientras la sincronizacion de cada 15 s —sin `fresh`— volvia en
+   2-2,5 s del cache. `fresh` no agregaba nada: desde el 12/9/2026 el cache se
+   keyea por una VERSION que cambia con cada escritura del ERP (doPost y la
+   edicion a mano), asi que nunca sirve algo viejo de una escritura del ERP. Lo
+   unico que no la cambia es un script con la service account, y eso lo acota
+   el TTL de 120 s.
+   Y si ya hay uno en vuelo (la sincronizacion arranco hace 3 s), el ↻ lo reusa
+   en vez de sumar otro calculo de 9 s en paralelo. Se comparte el TEXTO y cada
+   uno lo parsea: asi nadie procesa un objeto que otro ya modifico. */
+var _rutEntVuelo=null;
+function _pedirEntregasTxt(fresh){
+  if(_rutEntVuelo&&Date.now()-_rutEntVuelo.t<45000&&(!fresh||_rutEntVuelo.fresh))return _rutEntVuelo.p;
+  var reg={t:Date.now(),fresh:!!fresh,p:null};
+  reg.p=fetch(RUT_APPS_SCRIPT_URL+'?action=entregas&t='+Date.now()+(fresh?'&fresh=1':''))
+    .then(function(r){return r.text()});
+  var fin=function(){if(_rutEntVuelo===reg)_rutEntVuelo=null;};
+  reg.p.then(fin,fin);
+  _rutEntVuelo=reg;
+  return reg.p;
+}
 function refresh(silent,fresh,auto){
   if(!silent)document.getElementById('loadingView').classList.remove('hidden');
   // El cartel sale SOLO si no hay nada en pantalla. Con entregas del cache, lo
   // unico que se mueve es el ↻ girando arriba — la regla del 22/8/2026.
   if(!auto)_rutAviso(entregas.length>0 ? null : 'yendo');
   var btn=document.getElementById('btnRefresh');if(!auto)btn.classList.add('spinning');
-  var url=RUT_APPS_SCRIPT_URL+'?action=entregas&t='+Date.now()+(fresh?'&fresh=1':'');
-  return fetch(url).then(function(r){return r.json()}).then(function(data){
+  return _pedirEntregasTxt(fresh).then(function(t){return JSON.parse(t)}).then(function(data){
     /* Una respuesta sin la lista NO es "no hay entregas": sin esto un
        {ok:false} vaciaba ARMADO y RUTA — y la sincronizacion lo pediria cada
        15 s. Mismo criterio que fetchCobrosPendientes. */
@@ -3515,7 +3537,7 @@ function _reprogAplicar(dayKey,iso,ev){
         var fall=(res.resultados||[]).filter(function(x){return x&&!x.ok;});
         showToast((res.movidos||0)+' pedido'+((res.movidos||0)===1?'':'s')+' al '+_isoLindo(iso)
           +(fall.length?(' \u00b7 '+fall.length+' no se pudo: '+(fall[0].err||'')):''));
-        if(isOnline)refresh(true,true);
+        if(isOnline)refresh(true,false);
       }else{
         showToast('No se pudo: '+((res&&res.err)||'sin respuesta'));
       }
@@ -3687,7 +3709,7 @@ function entregarAVendedor(keysCsv,dayKey,vendedorNombre){
         keys.forEach(function(k){var ent=findByKey(k);if(ent)entregados[k]=true});
         saveLocal();rutRender();
         showToast('Entregado a '+(vendedorNombre||'vendedor')+' ('+(res.n||rows.length)+' pedidos)');
-        if(isOnline)refresh(true,true);
+        if(isOnline)refresh(true,false);
       } else {
         syncQueue.push(payload);saveLocal();processSyncQueue();
         showToast('Sin conexion — se reintenta');

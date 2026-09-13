@@ -291,6 +291,12 @@ body{font-family:'Inter',-apple-system,'Segoe UI',system-ui,sans-serif;backgroun
 
 /* ── PEDIDO CARD ── */
 .pc{background:#fff;border-radius:6px;padding:10px 14px;margin-bottom:6px;border:1px solid var(--border);box-shadow:var(--shadow);transition:background .15s,border-color .15s}
+/* Las listas de Pedidos tienen ~1.200 tarjetas y el navegador calculaba estilo y
+   layout de TODAS al pintar: medido con la CPU de un celular, 2,1 s despues de
+   que terminaba el JS (12/9/2026). Con esto solo calcula las que estan cerca de
+   la pantalla: 85 ms. `auto` recuerda el alto real de cada una despues de verla,
+   asi el scroll no salta. Un navegador que no lo entiende lo ignora entero. */
+#pList>.pc,#pListHome>.pc{content-visibility:auto;contain-intrinsic-size:auto 86px}
 .pc.unseen{border-left:3px solid var(--o);background:#FFFBF6;padding-left:11px}
 .pc.unseen .pc-c{display:flex;align-items:center;gap:8px}
 .pc.unseen .pc-c::before{content:'';display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--o);flex-shrink:0;box-shadow:0 0 0 3px rgba(240,125,71,.18)}
@@ -5379,6 +5385,13 @@ var API='https://script.google.com/macros/s/AKfycbxmrG5YVSshcYezk8lXFx_uxb7NFGcb
      justo el unico que le importa a quien esta mirando la pantalla.
      El mapa es tab -> el endpoint del que sale su contenido. Una tab que no
      este aca no pierde nada: queda en prioridad normal. */
+  /* Tabs que dibujan de MAS de un endpoint (12/9/2026). Pedidos pinta con
+     `pedidosLight` y ademas con las OCs (el aviso de "OC sin generar") y con el
+     boton "Actualizar pedidos" (`pedidosNew`). Pedidos Home, igual. */
+  var _PINTA_TAB_MAS = {
+    pedidos:     { ocLight: 1, pedidosNew: 1 },
+    pedidoshome: { ocLight: 1, pedidosNew: 1, pedidosLight: 1 }
+  };
   var _PINTA_TAB = {
     caja: 'cajaLight', egresos: 'cajaLight',
     inicio: 'pedidosLight', pedidos: 'pedidosLight', estancias: 'pedidosLight',
@@ -5449,6 +5462,7 @@ var API='https://script.google.com/macros/s/AKfycbxmrG5YVSshcYezk8lXFx_uxb7NFGcb
       }
     }
     if (a && _PINTA_TAB[tab] === a) return 2;   /* lo que se esta mirando */
+    if (a && _PINTA_TAB_MAS[tab] && _PINTA_TAB_MAS[tab][a]) return 2;
     return (a && _CAROS[a]) ? -1 : 0;
   }
 
@@ -6834,6 +6848,11 @@ function loadMiReparto(){
 // Refresh forzado de un iframe con cache-bust + loader Maleu mientras carga.
 // Marca el timestamp de la última actualización (HH:MM) en el botón global.
 function _markRefreshTime(){
+  /* Un refresco que termino bien cuenta para el freno de 90 s del automatico.
+     Sin esto, el `go(active)` del final del ↻ disparaba OTRO loadRapido apenas
+     terminaba el primero: los cuatro endpoints y la pantalla pintados dos
+     veces (medido el 12/9/2026). */
+  try{ if(typeof window._anotarRefresco==='function') window._anotarRefresco(); }catch(e){}
   var el=document.getElementById('hdrRefreshTime');
   if(!el)return;
   var n=new Date();
@@ -6982,12 +7001,15 @@ function _msgSubappCaida(clave, quien, art){
 var _REFRESCO_SUBAPP = {
   ruta: { nom: 'Ruta', g: 'la',
           hay: function(){ return typeof refresh === 'function'; },
-          fn:  function(){ return refresh(true, true); },
+          /* Sin `fresh` (12/9/2026): el cache de `entregas` se invalida con cada
+             escritura, asi que forzarlo solo obligaba a recalcular — 8 a 11 s
+             contra 2 s. Ver _pedirEntregasTxt en ruta.html. */
+          fn:  function(){ return refresh(true, false); },
           /* El refresco AUTOMATICO (volver a la app, entrar a la tab) usa la
              sincronizacion entre celulares del 12/9/2026: pide sin `fresh`, asi
              que si nadie escribio vuelve del cache en ~2 s en vez de 8. El ↻
              sigue pidiendo fresco. */
-          auto: function(){ return (typeof rutSincronizar === 'function') ? rutSincronizar('panel') : refresh(true, true); } },
+          auto: function(){ return (typeof rutSincronizar === 'function') ? rutSincronizar('panel') : refresh(true, false); } },
   busqueda: { nom: 'Abastecimiento', g: 'lo',
           hay: function(){ return typeof abaRefresh === 'function'; },
           fn:  function(){ return abaRefresh(true); } },
@@ -7126,9 +7148,11 @@ function refreshContextual(){
     _recargarCaja().then(function(r){done(r.ok!==false);},function(){done(false);});
     return;
   }
-  var usaRapido=(active==='inicio'||active==='pedidos'||active==='egresos'||active==='estancias');
+  var usaRapido=(active==='inicio'||active==='pedidos'||active==='pedidoshome'||active==='egresos'||active==='estancias');
   var ps=[];
-  if(usaRapido && typeof loadRapido==='function')ps.push(loadRapido());
+  /* Pedidos Home (el repartidor) caia en load(): el volcado entero, ~28 s. */
+  var _soloPedidos=(active==='pedidos'||active==='pedidoshome');
+  if(usaRapido && typeof loadRapido==='function')ps.push(loadRapido({soloPedidos:_soloPedidos}));
   else if(typeof load==='function')ps.push(load());
   // En Inicio queremos también ventas (por la sección histórica embedida)
   if(active==='inicio'&&typeof loadVentas==='function')ps.push(loadVentas());
@@ -7989,6 +8013,12 @@ function traer(clave,url,pintar,opts){
 
 function load(){
   return fetch(API+'?action=admin&t='+Date.now()).then(function(r){return r.json();}).then(function(d){
+    /* Una respuesta SIN la lista de pedidos no es el volcado (12/9/2026). Hasta
+       hoy esto hacia `D=d` con lo que llegara: un `{ok:false, forbidden:true}`
+       del backend reemplazaba TODOS los datos del ERP por ese objeto, y todas
+       las tabs quedaban vacias hasta la proxima carga buena. El volcado completo
+       trae `pedidos` siempre. Se conserva lo que habia y se avisa en el punto. */
+    if(!d||!Array.isArray(d.pedidos)){ $('dot').className='hdr-dot off'; _ldSync(); return {ok:false, red:true, pinto:false}; }
     D=d;if(d&&d.oc&&d.oc.lista)_ocFrescas=true;try{localStorage.setItem('ma3',JSON.stringify(d));}catch(e){}try{sync();}catch(e){}_ldSync();$('dot').className='hdr-dot';try{sbUpdateMetrics();}catch(e){}
     var _pinto=true;
     if(_hayEditorAbierto()){_pendingLoadRender=true;}
@@ -8016,15 +8046,21 @@ function load(){
    urgente para el dia a dia). Foco: lo que Tadeo necesita ver YA.
    Reportado por Tadeo (25/05/2026): "actualizar pedidos cuando Estado de
    Entrega = Pendiente. Y deudores cuando Estado de Pago = No Cobrado." */
-function loadRapido(){
+function loadRapido(opts){
   var tsBase=Date.now();
+  /* `soloPedidos` (12/9/2026): el ↻ estando en Pedidos o Pedidos Home. Esas dos
+     pantallas dibujan pedidos y OCs; la caja y los cobros pendientes son de
+     OTRAS tabs. Esperarlos era esperar al mas lento de los cuatro por la cola
+     de 2 cupos: medido con la sesion real, el ↻ giraba 13 a 19 s. */
+  var _soloPed=!!(opts&&opts.soloPedidos);
   return Promise.all([
     fetch(API+'?action=pedidosLight&t='+tsBase).then(function(r){return r.json();}).catch(function(){return null;}),
-    fetch(API+'?action=cobrosPendientes&t='+tsBase).then(function(r){return r.json();}).catch(function(){return null;}),
+    _soloPed ? Promise.resolve('omitido')
+      : fetch(API+'?action=cobrosPendientes&t='+tsBase).then(function(r){return r.json();}).catch(function(){return null;}),
     // La caja es plata: si el rol no tiene la tab, ni la pedimos. El backend
     // ademas la niega (Fase 1) — pedirla igual seria un 401 que el usuario
     // veria como "no se pudo actualizar" sin entender por que.
-    _tengoTab('caja')
+    (_tengoTab('caja') && !_soloPed)
       ? fetch(API+'?action=cajaLight&t='+tsBase).then(function(r){return r.json();}).catch(function(){return null;})
       : Promise.resolve('sin-caja'),
     /* Las OCs viajan con los pedidos, o el cruce queda con una punta nueva y la
@@ -8039,8 +8075,10 @@ function loadRapido(){
     // sobre datos viejos.
     var _pidoCaja=(cajaData!=='sin-caja');
     if(!_pidoCaja)cajaData=null;              // omitida a proposito, no es una falla
-    var _total=_pidoCaja?3:2;
-    var _fallaron=[lightData,cobrosData].filter(function(x){return !x;}).length
+    var _pidoCob=(cobrosData!=='omitido');
+    if(!_pidoCob)cobrosData=null;
+    var _total=1+(_pidoCob?1:0)+(_pidoCaja?1:0);
+    var _fallaron=(lightData?0:1)+((_pidoCob&&!cobrosData)?1:0)
                  +((_pidoCaja&&!cajaData)?1:0);
     if(!D)D={};
     if(lightData && Array.isArray(lightData.pedidos)){
@@ -8219,7 +8257,12 @@ function actualizarPedidos(){
       } else {
         if(nuevos>0)toast('+'+nuevos+' pedido'+(nuevos>1?'s':'')+' nuevo'+(nuevos>1?'s':'')+' ✨');
         else toast('Sin pedidos nuevos');
-        try{rPedidos();rPedidosHome();}catch(e){render();}
+        /* Solo la pantalla que se esta mirando: pintar tambien la otra lista
+           (Pedidos / Pedidos Home) era el doble de pantalla congelada para una
+           tab cerrada. Las demas quedan marcadas como viejas y se pintan al
+           abrirlas (`go` -> `_pintarSeccion`). */
+        _pintadas={};
+        try{ _pintarSeccion(cur); }catch(e){ render(); }
       }
     })
     .catch(function(){
@@ -8805,6 +8848,7 @@ function togglePc(ev, elt){
   if(ev && ev.target && ev.target.closest('input,select,button,a,textarea,.pc-fe-wrap,.pc-fe-input'))return;
   var card=elt.closest('.pc');
   if(!card)return;
+  _pcCuerpo(card);
   card.classList.toggle('collapsed');
   // Al expandir: marcar como visto y quitar el highlight de "nuevo"
   if(!card.classList.contains('collapsed')){
@@ -9614,6 +9658,10 @@ var _SECCION={
   planificacion: function(){ if(typeof window.planRepintarPorD==='function') window.planRepintarPorD(); }
 };
 var _pintadas={};      /* secciones al dia con el D de ahora */
+/* El ultimo toque/scroll en el panel: el pintado en segundo plano lo respeta. */
+['pointerdown','touchstart','wheel','keydown','scroll'].forEach(function(ev){
+  window.addEventListener(ev,function(){window.__ultimoToquePanel=Date.now();},{passive:true,capture:true});
+});
 var _colaPintar=null;
 /* Que tabs abriste en esta sesion: van primero en la cola de adelantado,
    asi las que usas de verdad estan listas antes que las que no mirás. */
@@ -9634,6 +9682,14 @@ function _pintarEnLosRatosLibres(){
   _colaPintar=idle(function(){
     _colaPintar=null;
     if(_hayEditorAbierto())return;     /* mientras edita no le tocamos el DOM */
+    /* Cada seccion es un bloque de JS de 1,5 a 3 s con la CPU de un celular, y
+       `requestIdleCallback` solo espera a que el navegador este libre AL EMPEZAR:
+       si arranca mientras scrolleas, la pantalla se congela debajo del dedo.
+       Medido el 12/9/2026 despues de un ↻ en Pedidos: 16,6 s de pantalla trabada
+       en medio minuto, pintando Inicio, Pedidos Home y Caja que no se miraban.
+       Ahora espera a que pasen 4 s sin tocar la pantalla. */
+    var _quieto=Date.now()-(window.__ultimoToquePanel||0);
+    if(_quieto<4000){ _colaPintar=setTimeout(function(){_colaPintar=null;_pintarEnLosRatosLibres();},4200-_quieto); return; }
     _pintarSeccion(pend[0]);
     _pintarEnLosRatosLibres();
   });
@@ -10386,7 +10442,15 @@ function rSeisMeses(){
 }
 
 function _m6Bajar(box){
-  if(window.__m6Bajando) return; window.__m6Bajando = true;
+  if(window.__m6Bajando) return;
+  /* Solo si Inicio esta A LA VISTA, y no mas de una vez por minuto (12/9/2026).
+     rSeisMeses corre cada vez que se pinta Inicio, y eso incluye el pintado en
+     segundo plano estando en OTRA tab. Medido: un ↻ en Pedidos terminaba
+     disparando `tendencia`, que tiene el cache tirado por cada escritura y tardo
+     6 a 42 s ocupando uno de los 2 cupos de la cola. Sin ningun dato guardado,
+     se pide igual: la pantalla no puede quedar en "Cargando…". */
+  if(M6 && (cur!=='inicio' || Date.now()-(window.__m6Ultimo||0) < 60000)) return;
+  window.__m6Bajando = true; window.__m6Ultimo = Date.now();
   fetch(API + '?action=tendencia')
     .then(function(r){ return r.json(); })
     .then(function(d){
@@ -11663,6 +11727,8 @@ function rInicio(){
 //   opts.homeOnly  → filtra a canal Home, oculta canal-pills + origen-box + Reservar + Deshacer.
 //                    Usa fRowHome/pListHome y muestra solo Editar productos + Cancelar.
 //                    Vista para rol Repartidor (Santos/Carpinachi) en delivery vie/sáb pico.
+/* El numero de pintada de cada lista de pedidos: ver las tandas de rPedidos. */
+var _rpGen={};
 function rPedidos(opts){
   opts = opts || {};
   var homeOnly = !!opts.homeOnly;
@@ -11821,7 +11887,7 @@ function rPedidos(opts){
   // como backup: si Tadeo expande la card sin cambiar nada, también la limpia.
   if(_orphanBanner)ct.innerHTML=_orphanBanner;
   var __vistos=_pcVistos();
-  fl.forEach(function(p){
+  function _pintarUna(p, _dest){
     var card=document.createElement('div');
     var pcKey=_pcKey(p);
     var origenPendiente=(p.o==='Pendiente');
@@ -11924,7 +11990,20 @@ function rPedidos(opts){
     html+=  '</div>';
     html+='</div>';
 
-    // ─── BODY (colapsable) ───
+    /* ─── BODY (colapsable) — se ARMA AL ABRIR LA TARJETA (12/9/2026) ───
+       Tadeo: "anda lentisimo tab Pedidos actualizada". rPedidos dibujaba las
+       ~1.200 tarjetas con el cuerpo entero adentro —la fecha editable, el
+       reparto de origen con un <select> de proveedores POR PRODUCTO y cuatro
+       botones— aunque todas nacen plegadas. Medido con la CPU de un celular:
+       2 a 2,5 s por pintada, y "Actualizar pedidos" pintaba dos (Pedidos y
+       Pedidos Home): 4,2 s con la pantalla congelada.
+       Ahora el resumen se dibuja siempre y el cuerpo lo arma `_pcCuerpo(card)`
+       la primera vez que se abre. En pantalla queda IDENTICO: lo unico que mira
+       adentro de un cuerpo son sus propios botones, y los dos lugares que abren
+       una tarjeta (togglePc y _ordGo) pasan antes por `_pcCuerpo`. */
+    var _hSum=html;
+    function _cuerpoPc(){
+    var html='';
     html+='<div class="pc-body">';
     html+='<div class="pc-head"><span class="pc-fe"><span style="font-weight:800;color:var(--b)">Entrega:</span> '+dateInput+'</span>'+(pedidoInfo?'<span class="pc-when">'+pedidoInfo+'</span>':'')+'</div>';
     if(p.br)html+='<div style="font-size:11px;color:var(--bl);margin-top:3px">&#128205; '+p.br+'</div>';
@@ -12020,9 +12099,34 @@ function rPedidos(opts){
     }
 
     html+='</div>'; // cierra .pc-body
-    card.innerHTML=html;
-    ct.appendChild(card);
-  });
+    return html;
+    }
+    card.innerHTML=_hSum;
+    card._cuerpoPc=_cuerpoPc;
+    _dest.appendChild(card);
+  }
+  /* EN TANDAS (12/9/2026). Armar las ~1.200 tarjetas de un saque era 1,3-1,6 s
+     de JS con la CPU de un celular, con la pantalla congelada. Ahora van primero
+     las 40 de arriba —lo que se ve— y el resto de a 60, cediendo entre tanda y
+     tanda para que el scroll y los toques no esperen. La lista final es la misma.
+     Si empieza otra pintada de esta lista (un filtro, un ↻), la tanda vieja se
+     descarta por su numero: sin eso dos pintadas se intercalarian. */
+  var _gen=(_rpGen[listId]=(_rpGen[listId]||0)+1), _iP=0;
+  function _tanda(n){
+    if(_rpGen[listId]!==_gen)return;
+    var fin=Math.min(fl.length,_iP+n), frag=document.createDocumentFragment();
+    for(;_iP<fin;_iP++)_pintarUna(fl[_iP], frag);
+    ct.appendChild(frag);
+    if(_iP<fl.length)setTimeout(function(){_tanda(60);},0);
+  }
+  _tanda(40);
+}
+/* Arma el cuerpo de una tarjeta de pedido si todavia no lo tiene. Idempotente. */
+function _pcCuerpo(card){
+  if(!card||typeof card._cuerpoPc!=='function')return;
+  var f=card._cuerpoPc; card._cuerpoPc=null;
+  if(card.querySelector('.pc-body'))return;
+  try{ card.insertAdjacentHTML('beforeend', f()); }catch(e){ console.error('_pcCuerpo',e); }
 }
 
 // ── Análisis de Cobranzas: composición efectivo vs digital en las dos puntas ──
@@ -18736,6 +18840,7 @@ function rVentas(){
   var _REFRESCO_MIN_MS = 90000;
   var _ultimoRefrescoAuto = Date.now();
   var _refrescandoAuto = false;
+  window._anotarRefresco = function(){ _ultimoRefrescoAuto = Date.now(); };
   window._refrescarSiEstaViejo = function(){
     if(!_REFRESCO_AUTO || _refrescandoAuto) return;
     if(navigator.onLine === false) return;
@@ -19339,13 +19444,19 @@ if('serviceWorker' in navigator){
   window._ordGo=function(tab,hoja,n){
     closeOrdDetail();
     if(typeof go==='function')go(tab);
-    setTimeout(function(){
+    /* La lista se pinta en tandas: la tarjeta puede tardar un poco en existir.
+       Se busca hasta 4 s en vez de una sola vez a los 150 ms. */
+    var _t0=Date.now();
+    (function _buscar(){
       var card=document.querySelector('.pc[data-pc-key="'+hoja+'|'+n+'"]');
       if(card){
+        _pcCuerpo(card);
         card.classList.remove('collapsed');
         card.scrollIntoView({behavior:'smooth',block:'center'});
+        return;
       }
-    },150);
+      if(Date.now()-_t0<4000)setTimeout(_buscar,150);
+    })();
   };
   // Marcar un pedido Red como entregado al cliente final. Se sella con el DIA DE
   // ENTREGA del pedido, no con el momento del clic: casi siempre se marca despues,
