@@ -668,6 +668,7 @@ body{font-family:'Inter',-apple-system,'Segoe UI',system-ui,sans-serif;backgroun
 .vt-rank-row.top .vt-rank-bar i{background:#E5662F}
 .vt-rank-q{font-size:12.5px;font-weight:800;color:var(--ink);text-align:right;font-variant-numeric:tabular-nums}
 .vt-rank-q small{display:block;font-size:9.5px;font-weight:600;color:var(--ink3)}
+.vt-rank-sub{font-size:11px;font-weight:700;color:var(--ink3);margin:12px 0 4px;padding-top:10px;border-top:1px solid #F3F4F6}
 @media(max-width:700px){
   /* En el celular la barra se va: con 390px el nombre y el numero necesitan
      todo el ancho, y la barra sin lugar no comunica nada. */
@@ -17362,7 +17363,9 @@ function _tendCargarCatalogo(cb){
   /* Copia guardada primero, igual que el resto del ERP. */
   if(!_tendCat){
     try{
-      var g=localStorage.getItem('mc_catalogoProd');
+      /* _v2 (13/9/2026): trae la UNIDAD de cada producto. La copia vieja no la tenia
+         y con ella la carne volveria a sumarse como unidades. */
+      var g=localStorage.getItem('mc_catalogoProd_v2');
       if(g)_tendCat=JSON.parse(g);
     }catch(e){}
   }
@@ -17376,11 +17379,11 @@ function _tendCargarCatalogo(cb){
       var prods=(d&&d.productos)||{};
       Object.keys(prods).forEach(function(prov){
         (prods[prov]||[]).forEach(function(it){
-          if(it&&it.a)map[it.a]={n:it.n||it.a, cat:it.cat||'Otros'};
+          if(it&&it.a)map[it.a]={n:it.n||it.a, cat:it.cat||'Otros', u:(it.u==='kg'?'kg':'u')};
         });
       });
       _tendCat=map;
-      try{localStorage.setItem('mc_catalogoProd',JSON.stringify(map));}catch(e){}
+      try{localStorage.setItem('mc_catalogoProd_v2',JSON.stringify(map));}catch(e){}
       _tendCatPidiendo=false;
       if(cb)cb();
     })
@@ -17495,6 +17498,16 @@ function _tendFechaVentaISO(p){
   if((p.h==='Home'||p.h==='Pilar')&&('fex' in p))return String(p.fex||'')||dmy(p.f);
   return String(p.dee||'')||dmy(p.f);
 }
+/* La unidad de cada producto, 'kg' o 'u' (13/9/2026). Manda el CATALOGO, que
+   Tendencia espera antes de dibujar; `D.stock` completa lo que falte. Depender solo
+   de `D.stock` fallaba a veces: `pedidosLight` trae los pedidos antes que el volcado
+   traiga el stock, y con el mapa vacio la carne volvia a sumarse como unidades. */
+function _tendUniMapa(){
+  var m={};
+  ((typeof D!=='undefined'&&D&&D.stock)||[]).forEach(function(x){ if(x&&x.a) m[x.a]=(x.u==='kg'?'kg':'u'); });
+  Object.keys(_tendCat||{}).forEach(function(a){ var u=_tendCat[a]&&_tendCat[a].u; if(u) m[a]=u; });
+  return m;
+}
 function _tendEsc(s){
   return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;')
     .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
@@ -17546,6 +17559,7 @@ function _tendObservar(box){
 /* Las marcas del eje Y van cortas: "$2,9M" y no "$2.973.690", que a 46px de
    canaleta no entra y ademas obliga a leer siete cifras para captar una escala. */
 function _tendEjeY(v,metric){
+  if(metric==='kg')return (v&&Math.abs(v)<10)?_dec(v,1):String(Math.round(v));
   if(metric==='ped'||metric==='prod')return String(Math.round(v));
   var a=Math.abs(v);
   if(a>=1000000)return '$'+(v/1000000).toFixed(a>=10000000?0:1).replace('.',',')+'M';
@@ -17673,6 +17687,11 @@ function rTendencia(){
   var esProd=(metric==='prod');
   var prodCat=esProd?(document.getElementById('vtCat')||{}).value||'__all':'__all';
   var prodAbbr=esProd?(document.getElementById('vtProd')||{}).value||'__all':'__all';
+  /* Unidades y kilos NO se suman (13/9/2026). Con "todos los productos" se miden las
+     unidades y la carne queda afuera —dicha en el pie—; con un producto o una
+     categoria que se pesa, se miden kilos. Hasta hoy una semana con 249 unidades y
+     53,755 kg de carne decia "303 u.". */
+  var uniProd='u', kgPorClave={}, _uniMapa={};
   /* Los dos desplegables solo tienen sentido con esta metrica. */
   var wC=document.getElementById('vtCatWrap'), wP=document.getElementById('vtProdWrap');
   if(wC)wC.style.display=esProd?'':'none';
@@ -17702,6 +17721,12 @@ function rTendencia(){
     _tendLlenarCatProd();
     prodCat=(document.getElementById('vtCat')||{}).value||'__all';
     prodAbbr=(document.getElementById('vtProd')||{}).value||'__all';
+    _uniMapa=_tendUniMapa();
+    if(prodAbbr!=='__all') uniProd=_uniMapa[prodAbbr]||'u';
+    else if(prodCat!=='__all'){
+      var _abCat=Object.keys(_tendCat||{}).filter(function(a){ return _tendCat[a].cat===prodCat; });
+      uniProd=(_abCat.length&&_abCat.every(function(a){ return _uniMapa[a]==='kg'; }))?'kg':'u';
+    }
   }
   // 1. Filtrar (canal + día puntual si aplica)
   var rows=esProd?[]:VD.filter(function(v){
@@ -17732,7 +17757,7 @@ function rTendencia(){
       if(sub!=='__all' && String(p.h||'')!==sub)return;
       if(bar!=='__all' && String(p.bar||'')!==bar)return;
       var items=p.p||[]; if(!items.length)return;
-      var u=0;
+      var u=0, otra=0;
       items.forEach(function(it){
         if(!it||!it.a)return;
         if(prodAbbr!=='__all'){ if(it.a!==prodAbbr)return; }
@@ -17740,13 +17765,23 @@ function rTendencia(){
           var inf=_tendCat&&_tendCat[it.a];
           if(!inf||inf.cat!==prodCat)return;
         }
-        u+=Number(it.q)||0;
+        var q=Number(it.q)||0;
+        if((_uniMapa[it.a]||'u')===uniProd) u+=q; else otra+=q;
       });
-      if(u<=0)return;
+      if(u<=0&&otra<=0)return;
       var m=_tendFechaVentaISO(p).match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
       if(!m)return;
       var d=new Date(Number(m[1]),Number(m[2])-1,Number(m[3]));
       if(!isWeek && !isMonth && dow>=0 && d.getDay()!==dow)return;
+      /* Lo que se pesa y quedo afuera, por periodo: el pie lo dice sobre la misma
+         ventana que se dibuja. La clave es la del agrupado de abajo. */
+      if(otra>0){
+        var kk=isWeek?(d.getFullYear()+'-W'+String(_tendISOWeek(d)).padStart(2,'0'))
+          :(isMonth?(d.getFullYear()+'-M'+String(d.getMonth()).padStart(2,'0'))
+          :(String(m[3]).padStart(2,'0')+'/'+String(m[2]).padStart(2,'0')+'/'+m[1]));
+        kgPorClave[kk]=(kgPorClave[kk]||0)+otra;
+      }
+      if(u<=0)return;
       var k,item;
       if(isWeek){
         var sem=_tendISOWeek(d), anio=d.getFullYear();
@@ -17806,7 +17841,7 @@ function rTendencia(){
     return p.fact;
   }
   function valFmt(x){
-    if(metric==='prod')return Math.round(x)+' u.';
+    if(metric==='prod')return uniProd==='kg'?(_dec(x,1)+' kg'):(Math.round(x)+' u.');
     if(metric==='ped')return String(Math.round(x));
     return '$'+f$(Math.round(x));
   }
@@ -17967,7 +18002,7 @@ function rTendencia(){
   for(var g=0;g<=LINEAS;g++){
     var vG=top*g/LINEAS, yG=Y(vG);
     svg+='<line class="vt-grid" x1="'+padL+'" y1="'+yG+'" x2="'+(padL+chartW)+'" y2="'+yG+'"/>';
-    svg+='<text class="vt-ytick" x="'+(padL-7)+'" y="'+(yG+3)+'" text-anchor="end">'+_tendEjeY(vG,metric)+'</text>';
+    svg+='<text class="vt-ytick" x="'+(padL-7)+'" y="'+(yG+3)+'" text-anchor="end">'+_tendEjeY(vG,(esProd&&uniProd==='kg')?'kg':metric)+'</text>';
   }
 
   /* El promedio. La etiqueta va a la IZQUIERDA y pegada al eje: en el grafico
@@ -18111,6 +18146,11 @@ function rTendencia(){
      métricas, y callarlo sería mentir por omisión. */
   if(esProd)pie+=' Cuenta sólo lo <b>entregado</b>, por el <b>día que se entregó</b>:'
     +' lo mismo que el Facturado y que PRODUCTOS. Un pedido cargado y sin entregar todavía no suma.';
+  if(esProd&&uniProd==='u'){
+    var _kgF=0; serie.forEach(function(p){ _kgF+=kgPorClave[p.key]||0; });
+    if(_kgF>0) pie+=' La carne se pesa y no se suma con las unidades: en estos períodos fueron <b>'
+      +_dec(_kgF,1)+' kg</b>. Elegí la categoría Carnes para verla en kilos.';
+  }
   /* ── EL RANKING ──
      El grafico contesta "como viene X en el tiempo". La pregunta de Tadeo era
      otra: *"¿que producto fue el mas vendido en septiembre? me costo mucho
@@ -18128,7 +18168,7 @@ function rTendencia(){
     var hasta=serie.length?serie[serie.length-1]:null;
     var claves={};
     (soloUlt?serie.slice(-1):serie).forEach(function(p){claves[p.key]=true;});
-    var acum={}, totU=0;
+    var acum={}, totU=0, acumK={}, totK=0;
     D.pedidos.forEach(function(p){
       /* El ranking cuenta lo MISMO que el grafico: solo lo entregado, por el dia
          que se entrego. Si contara distinto, el #1 del ranking y la linea del
@@ -18154,15 +18194,18 @@ function rTendencia(){
         }
         var q=Number(it.q)||0;
         if(q<=0)return;
-        acum[it.a]=(acum[it.a]||0)+q; totU+=q;
+        if((_uniMapa[it.a]||'u')==='kg'){ acumK[it.a]=(acumK[it.a]||0)+q; totK+=q; }
+        else { acum[it.a]=(acum[it.a]||0)+q; totU+=q; }
       });
     });
-    var rank=Object.keys(acum).map(function(a){
-      var inf=_tendCat&&_tendCat[a];
-      return {a:a, q:acum[a], n:inf?_tendNombreCorto(inf.n,inf.cat):a, cat:inf?inf.cat:'Sin categoría'};
-    }).sort(function(x,y){return y.q-x.q;});
-    if(rank.length){
-      var tope=rank[0].q||1;
+    var _rankDe=function(ac){
+      return Object.keys(ac).map(function(a){
+        var inf=_tendCat&&_tendCat[a];
+        return {a:a, q:ac[a], n:inf?_tendNombreCorto(inf.n,inf.cat):a, cat:inf?inf.cat:'Sin categoría'};
+      }).sort(function(x,y){return y.q-x.q;});
+    };
+    var rank=_rankDe(acum), rankK=_rankDe(acumK);
+    if(rank.length||rankK.length){
       var lapso=soloUlt
         ? (hasta?_tendEsc(kpiLbl(hasta)):'')
         : ((desde&&hasta)?(_tendEsc(kpiLbl(desde))+' → '+_tendEsc(kpiLbl(hasta))):'');
@@ -18173,19 +18216,30 @@ function rTendencia(){
         +'<button class="vt-rank-chip'+(soloUlt?' on':'')+'" onclick="tendRankAlcance(\'ultimo\')">'+rotUlt+'</button>'
         +'<button class="vt-rank-chip'+(soloUlt?'':' on')+'" onclick="tendRankAlcance(\'ventana\')">Los '+serie.length+'</button>'
         +'</span>'
-        +'<span class="vt-rank-lapso">'+_tendEsc(lapso)+' · '+totU+' unidades</span></div>';
-      rank.forEach(function(it,i){
+        +'<span class="vt-rank-lapso">'+_tendEsc(lapso)+' · '
+        +[totU?(totU+' unidades'):'', totK?(_dec(totK,1)+' kg'):''].filter(Boolean).join(' · ')+'</span></div>';
+      /* Los kilos se rankean aparte: 24 kg de lomo contra 15 packs no se comparan, y
+         el % de cada uno es sobre lo de su misma unidad. */
+      var _filasRank=function(lista, tot, kg, primero){
+      var tope=(lista[0]&&lista[0].q)||1;
+      lista.forEach(function(it,i){
         var pct=Math.round(it.q*100/tope);
-        var share=totU>0?(it.q*100/totU):0;
+        var share=tot>0?(it.q*100/tot):0;
         /* Cada fila filtra el grafico por ese producto: es el paso siguiente
            natural despues de ver quien encabeza. */
-        rankHtml+='<div class="vt-rank-row'+(i===0?' top':'')+'" onclick="tendVerProducto(\''+_tendEsc(it.a)+'\')" title="Ver solo este producto">'
+        rankHtml+='<div class="vt-rank-row'+((primero&&i===0)?' top':'')+'" onclick="tendVerProducto(\''+_tendEsc(it.a)+'\')" title="Ver solo este producto">'
           +'<span class="vt-rank-pos">'+(i+1)+'</span>'
           +'<span class="vt-rank-n">'+_tendEsc(it.n)+'<small>'+_tendEsc(it.cat)+'</small></span>'
           +'<span class="vt-rank-bar"><i style="width:'+pct+'%"></i></span>'
-          +'<span class="vt-rank-q">'+it.q+'<small>'+_dec(share,1)+'%</small></span>'
+          +'<span class="vt-rank-q">'+(kg?(_dec(it.q,1)+' kg'):it.q)+'<small>'+_dec(share,1)+'%</small></span>'
           +'</div>';
       });
+      };
+      _filasRank(rank, totU, false, true);
+      if(rankK.length){
+        if(rank.length) rankHtml+='<div class="vt-rank-sub">Por kilo · la carne se pesa y no se compara con las unidades</div>';
+        _filasRank(rankK, totK, true, !rank.length);
+      }
       rankHtml+='</div>';
     }
   }
@@ -18200,7 +18254,7 @@ function rTendencia(){
   /* Con la metrica en unidades, la 2da columna son UNIDADES y no pedidos: dejar
      el rotulo "Pedidos" al lado de un numero de unidades se lee como un bug. */
   var thead='<div class="row h"><div>'+col1Lbl+'</div><div class="num">'
-    +(metric==='prod'?'Unidades':'Pedidos')+'</div><div class="num">'
+    +(metric==='prod'?(uniProd==='kg'?'Kilos':'Unidades'):'Pedidos')+'</div><div class="num">'
     +(metric==='prod'?'Pedidos':'Facturado')+'</div><div class="num">Δ vs anterior</div></div>';
   var rows2=serie.slice().reverse().map(function(p,i){
     var realIdx=serie.length-1-i;
@@ -18216,7 +18270,7 @@ function rTendencia(){
       delta='▲ nuevo'; dCls='delta-up';
     }
     return '<div class="row"><div>'+tabLbl(p)+'</div><div class="num">'
-      +(metric==='prod'?(p.u||0):p.n)+'</div><div class="num">'
+      +(metric==='prod'?(uniProd==='kg'?_dec(p.u||0,3):(p.u||0)):p.n)+'</div><div class="num">'
       +(metric==='prod'?p.n:('$'+f$(Math.round(p.fact))))
       +'</div><div class="num '+dCls+'">'+delta+'</div></div>';
   }).join('');

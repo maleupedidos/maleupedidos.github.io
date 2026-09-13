@@ -56,7 +56,7 @@ const DIGITOS = s => Number(String(s).replace(/[^\d,]/g, '').replace(',', '.')) 
     if (!await esperar(cli, `typeof go==='function' && !(document.getElementById('loginScreen')&&document.getElementById('loginScreen').offsetParent)`, 60000)) { console.log('  el ERP no arranco'); salir(1); }
     await evaluar(cli, `go('ventas')`); await pausa(1500);
     await evaluar(cli, `vSwitchTab('productos')`);
-    if (!await esperar(cli, `!!window.__pa && !!document.querySelector('#prodEvol .evo-leyenda, #prodEvol .evol-row')`, 150000)) {
+    if (!await esperar(cli, `!!window.__pa && !!document.querySelector('#prodEvol .evo-leyenda, #prodEvol .evol-row')`, 240000)) {
       console.log('  no llego productosAnalytics: ' + await evaluar(cli, `JSON.stringify({pa:!!window.__pa})`));
       salir(1);
     }
@@ -151,6 +151,10 @@ const DIGITOS = s => Number(String(s).replace(/[^\d,]/g, '').replace(',', '.')) 
     } else {
       await evaluar(cli, `vSwitchTab('tendencia')`); await pausa(1500);
       await esperar(cli, `document.getElementById('vtMetric') && document.getElementById('vtSubcanal').options.length>0`, 60000);
+      /* El orden MALO a proposito: `pedidosLight` puede traer los pedidos antes de que el
+         volcado traiga `D.stock`. La unidad de cada producto no puede depender de eso
+         (13/9/2026: con el mapa vacio la carne se sumaba como unidades, a veces). */
+      await evaluar(cli, `(()=>{ window.__stk=D.stock; D.stock=[]; return 1; })()`);
       await evaluar(cli, `(()=>{ function set(id,v){ var s=document.getElementById(id); if(s){ s.value=v; } }
         set('vtSubcanal','__all'); set('vtBarrio','__all'); set('vtDow','week'); set('vtWindow','12'); set('vtMetric','prod'); rTendencia();
         setTimeout(function(){ set('vtCat','__all'); if(typeof tendCatChange==='function') tendCatChange(); set('vtProd','__all'); rTendencia(); }, 1500); return 1; })()`);
@@ -160,14 +164,37 @@ const DIGITOS = s => Number(String(s).replace(/[^\d,]/g, '').replace(',', '.')) 
         return document.querySelectorAll('#vtTable .row:not(.h)').length>=6; })()`, 90000);
       if (!enUnid) console.log('     la tabla no llego a Unidades: ' + await evaluar(cli, `JSON.stringify({met:document.getElementById('vtMetric').value, head:(document.querySelector('#vtTable .row.h')||{}).textContent||null, chart:(document.getElementById('vtChart').textContent||'').slice(0,160), filas:document.querySelectorAll('#vtTable .row:not(.h)').length, VD:(typeof VD!=='undefined'&&VD)?VD.length:null})`));
       await pausa(1500);
-      const cruce = await evaluar(cli, `(()=>{
+      /* Los kilos NO se suman con las unidades (13/9/2026): con "todos los productos"
+         Tendencia mide solo lo que va por unidad, asi que del backend se suma solo eso. */
+      const CRUCE = (uni) => `(()=>{
         var back={}; __pa.evolSemanas.forEach(function(iso,i){ var p=iso.split('-'); var k=('0'+Number(p[2])).slice(-2)+'/'+('0'+Number(p[1])).slice(-2);
-          back[k]=__pa.productos.reduce(function(a,q){return a+(Number(q.evol8sem[i])||0);},0); });
+          back[k]=__pa.productos.reduce(function(a,q){ return ((q.uni||'u')===${JSON.stringify(uni)}) ? a+(Number(q.evol8sem[i])||0) : a; },0); });
         var front={}; [].forEach.call(document.querySelectorAll('#vtTable .row:not(.h)'),function(r){ var c=r.querySelectorAll('div'); var m=c[0].textContent.match(/\\((\\d{2}\\/\\d{2})-/); if(m) front[m[1]]=Number(String(c[1].textContent).replace(',','.'))||0; });
         var filas=[], dif=0; Object.keys(back).forEach(function(k){ if(!(k in front)&&back[k]===0) return; var a=Math.round(back[k]*1000)/1000, b=Math.round((front[k]||0)*1000)/1000; filas.push(k+' back '+a+' / tendencia '+b); if(Math.abs(a-b)>0.001) dif++; });
-        return {filas:filas, dif:dif, n:filas.length}; })()`);
+        return {filas:filas, dif:dif, n:filas.length}; })()`;
+      const cruce = await evaluar(cli, CRUCE('u'));
       console.log('     ' + cruce.filas.join('\n     '));
-      chk('Unidades por semana: TENDENCIA (volcado) = PRODUCTOS (backend), ' + cruce.n + ' semanas', cruce.dif === 0 && cruce.n >= 6, cruce);
+      chk('Unidades por semana: TENDENCIA (volcado) = PRODUCTOS (backend), sin kilos, ' + cruce.n + ' semanas', cruce.dif === 0 && cruce.n >= 6, cruce);
+      const tabla = await evaluar(cli, `[].map.call(document.querySelectorAll('#vtTable .row:not(.h)'),function(r){return r.querySelectorAll('div')[1].textContent;})`);
+      chk('con todos los productos la columna Unidades es entera (no mezcla kilos)', tabla.length >= 6 && tabla.every(t => /^\d+$/.test(t.trim())), tabla);
+      const hayKgBack = await evaluar(cli, `__pa.productos.some(function(q){return q.uni==='kg'&&q.evol8sem.some(function(x){return x>0;});})`);
+      if (hayKgBack) {
+        chk('el pie dice que la carne se pesa y no se suma', await evaluar(cli, `/La carne se pesa y no se suma/.test(document.getElementById('vTend').textContent)`));
+        const rk = await evaluar(cli, `(()=>{ var sub=document.querySelector('#vTend .vt-rank-sub'); var qs=[].map.call(document.querySelectorAll('#vTend .vt-rank-q'),function(e){return e.childNodes[0].textContent;}); return {sub:!!sub, kg:qs.filter(function(t){return / kg$/.test(t);}).length, u:qs.filter(function(t){return /^\\d+$/.test(t);}).length, raros:qs.filter(function(t){return !/ kg$/.test(t)&&!/^\\d+$/.test(t);})}; })()`);
+        chk('el ranking pone los kilos aparte y cada fila con su unidad', rk.raros.length === 0 && (rk.kg === 0 || rk.sub), rk);
+        await evaluar(cli, `(()=>{ var s=document.getElementById('vtCat'); var o=[].find.call(s.options,function(x){return x.value==='Carnes';}); if(o){ s.value='Carnes'; tendCatChange(); } return !!o; })()`);
+        const enKg = await esperar(cli, `(()=>{ var h=document.querySelector('#vtTable .row.h'); return !!h && /Kilos/i.test(h.textContent) && document.querySelectorAll('#vtTable .row:not(.h)').length>=3; })()`, 30000);
+        chk('con la categoria Carnes la tabla pasa a Kilos', enKg, await evaluar(cli, `(document.querySelector('#vtTable .row.h')||{}).textContent||null`));
+        if (enKg) {
+          await pausa(800);
+          const cruceK = await evaluar(cli, CRUCE('kg'));
+          console.log('     ' + cruceK.filas.join('\n     '));
+          chk('Kilos de carne por semana: TENDENCIA = PRODUCTOS, ' + cruceK.n + ' semanas', cruceK.dif === 0 && cruceK.n >= 3, cruceK);
+          chk('el eje y los valores dicen kg', await evaluar(cli, `/ kg/.test(document.getElementById('vtKpis').textContent)`));
+        }
+        await evaluar(cli, `(()=>{ var s=document.getElementById('vtCat'); s.value='__all'; tendCatChange(); return 1; })()`);
+      }
+      await evaluar(cli, `(()=>{ if(window.__stk&&(!D.stock||!D.stock.length)) D.stock=window.__stk; return 1; })()`);
       chk('el pie de Tendencia dice que cuenta sólo lo entregado', await evaluar(cli, `/sólo lo entregado|sólo lo <b>entregado/i.test(document.getElementById('vTend').innerHTML) || /Cuenta sólo lo entregado/.test(document.getElementById('vTend').textContent)`));
     }
 
