@@ -404,6 +404,12 @@ select,input[type="number"]{font-size:16px}
 .pago-fp-pill{flex:1;min-width:90px;padding:8px 10px;border:1.5px solid #E8DFC4;background:#fff;color:#7A4A4A;border-radius:14px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;letter-spacing:.02em;line-height:1.3;text-align:center}
 .pago-fp-pill:hover{border-color:#F07D47;color:#F07D47}
 .pago-fp-pill.on{background:#F07D47;color:#fff;border-color:#F07D47}
+/* De que cuenta salio la transferencia (13/9/2026). */
+.aba-pago-cta{margin-top:8px;padding:10px;border:1.5px dashed #E8DFC4;border-radius:10px;background:#FFFCF3}
+.aba-pago-cta-t{font-size:12px;font-weight:800;color:#7A4A4A;margin-bottom:6px}
+.aba-pago-cta-bs{display:flex;gap:6px;flex-wrap:wrap}
+.aba-pago-cta-b{flex:1;min-width:120px;min-height:44px;padding:8px 10px;border:1.5px solid #E8DFC4;background:#fff;color:#7A4A4A;border-radius:12px;font-size:13px;font-weight:700;cursor:pointer;font-family:inherit}
+.aba-pago-cta-b.on{background:#F07D47;color:#fff;border-color:#F07D47}
 .pago-row{display:flex;gap:8px;margin-bottom:8px}
 .pago-input-wrap{flex:1}
 .pago-input-label{font-size:10px;font-weight:700;color:#7A4A4A;text-transform:uppercase;margin-bottom:3px}
@@ -940,6 +946,10 @@ function loadCatalogo() {
   fetch(ABA_APPS_SCRIPT_URL + '?action=catalogo&t=' + Date.now())
     .then(function(r) { return r.json(); })
     .then(function(data) {
+      /* Una respuesta de error ({ok:false}, sesion vencida) NO reemplaza el
+         catalogo (13/9/2026): lo pisaba, lo guardaba roto en el celular y
+         `catalogo.proveedores.length` reventaba. Lo agarro la prueba de Pagos. */
+      if (!data || !Array.isArray(data.proveedores)) return;
       catalogo = data;
       abaSaveLocal();
       populateProvSelect();
@@ -1689,7 +1699,25 @@ function _renderPagosInner() {
   document.getElementById('pagosList').innerHTML = html;
 }
 
+/* Las cuentas digitales que manda `action=busqueda` (13/9/2026). Con una sola no
+   hay nada que elegir; un Apps Script anterior no las manda y el pago va, como
+   siempre, a la digital por defecto. */
+var abaPagoCta = {};
+function abaCuentasDigitales() {
+  var cs = (busqueda && Array.isArray(busqueda.cuentas)) ? busqueda.cuentas : [];
+  return cs.filter(function (c) { return c && c.tipo === 'digital'; });
+}
+function abaPagoCuenta(key, id) {
+  abaPagoCta[key] = id;
+  document.querySelectorAll('.aba-pago-cta-b[data-key="' + key + '"]').forEach(function (b) {
+    var on = b.getAttribute('data-cta') === id;
+    b.classList.toggle('on', on); b.setAttribute('aria-pressed', on ? 'true' : 'false');
+  });
+  var mont = document.getElementById('pagoRestante_' + key);
+  updatePagoTotal(key, Number((mont && mont.getAttribute('data-sug')) || 0));
+}
 function renderPagoForm(key, idx, semana, montoSugerido) {
+  delete abaPagoCta[key];
   var titulo = semana ? 'Pago semana ' + semana : 'Pago a cuenta (se descuenta de la deuda más vieja)';
   var html = '<div class="pago-form" id="pagoForm_' + key + '">';
   html += '<div class="pago-form-title">' + titulo + '</div>';
@@ -1702,8 +1730,17 @@ function renderPagoForm(key, idx, semana, montoSugerido) {
     '</div>';
   html += '<div class="pago-row">';
   html += '<div class="pago-input-wrap"><div class="pago-input-label">Efectivo</div><input class="pago-input" id="pagoEf_' + key + '" type="number" inputmode="numeric" placeholder="0" oninput="updatePagoTotal(\'' + key + '\',' + montoSugerido + ')"></div>';
-  html += '<div class="pago-input-wrap"><div class="pago-input-label">Mercado Pago</div><input class="pago-input" id="pagoMp_' + key + '" type="number" inputmode="numeric" placeholder="0" oninput="updatePagoTotal(\'' + key + '\',' + montoSugerido + ')"></div>';
+  html += '<div class="pago-input-wrap"><div class="pago-input-label">Transferencia</div><input class="pago-input" id="pagoMp_' + key + '" type="number" inputmode="numeric" placeholder="0" oninput="updatePagoTotal(\'' + key + '\',' + montoSugerido + ')"></div>';
   html += '</div>';
+  var ctasD = abaCuentasDigitales();
+  if (ctasD.length > 1) {
+    html += '<div class="aba-pago-cta" id="pagoCta_' + key + '" hidden><div class="aba-pago-cta-t">¿De qué cuenta salió la transferencia?</div><div class="aba-pago-cta-bs">';
+    ctasD.forEach(function (c) {
+      var nom = String(c.nombre || c.id).replace(/[&<>"]/g, function (x) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[x]; });
+      html += '<button type="button" class="aba-pago-cta-b" data-key="' + key + '" data-cta="' + c.id + '" aria-pressed="false" onclick="abaPagoCuenta(\'' + key + '\',\'' + c.id + '\')">' + nom + '</button>';
+    });
+    html += '</div></div>';
+  }
   // Bonificación del proveedor: descuento/regalo que cubre deuda sin sacar plata de caja.
   // Caso típico: te regalan 1 unidad o te perdonan diferencias chicas.
   html += '<div class="pago-input-wrap" style="margin-top:8px">' +
@@ -1712,7 +1749,7 @@ function renderPagoForm(key, idx, semana, montoSugerido) {
     '</div>';
   html += '<textarea class="pago-notas" id="pagoNotas_' + key + '" rows="2" placeholder="Notas (opcional · ej: 1 J&Morrón de regalo)"></textarea>';
   html += '<div class="pago-total-line"><span>Pagando</span><span class="amount" id="pagoTotalLabel_' + key + '">$0</span></div>';
-  html += '<div class="pago-total-line sub"><span>Queda pendiente ' + (semana ? 'sem ' + semana : '') + '</span><span id="pagoRestante_' + key + '">' + abaFormatMoney(montoSugerido) + '</span></div>';
+  html += '<div class="pago-total-line sub"><span>Queda pendiente ' + (semana ? 'sem ' + semana : '') + '</span><span id="pagoRestante_' + key + '" data-sug="' + montoSugerido + '">' + abaFormatMoney(montoSugerido) + '</span></div>';
   html += '<button class="btn-pagar" id="btnPagar_' + key + '" onclick="confirmarPago(\'' + key + '\',' + idx + ',\'' + semana + '\')" disabled>Confirmar pago</button>';
   html += '</div>';
   return html;
@@ -1770,7 +1807,14 @@ function updatePagoTotal(key, montoSugerido) {
   }
   var restante = Math.max(0, montoSugerido - total);
   document.getElementById('pagoRestante_' + key).textContent = abaFormatMoney(restante);
-  document.getElementById('btnPagar_' + key).disabled = total <= 0;
+  /* Con plata en Transferencia y mas de una cuenta, no se confirma sin elegir de
+     cual salio: el boton lo dice. */
+  var ctaBox = document.getElementById('pagoCta_' + key);
+  var faltaCta = !!ctaBox && mp > 0 && !abaPagoCta[key];
+  if (ctaBox) ctaBox.hidden = !(mp > 0);
+  var btnP = document.getElementById('btnPagar_' + key);
+  btnP.disabled = total <= 0 || faltaCta;
+  btnP.textContent = faltaCta ? 'Elegí de qué cuenta salió' : 'Confirmar pago';
 }
 
 function confirmarPago(key, idx, semana) {
@@ -1785,6 +1829,8 @@ function confirmarPago(key, idx, semana) {
   var notas = document.getElementById('pagoNotas_' + key).value || '';
   var total = ef + mp + bonif;
   if (total <= 0) return;
+  var ctaBoxC = document.getElementById('pagoCta_' + key);
+  if (ctaBoxC && mp > 0 && !abaPagoCta[key]) { abaShowToast('Elegí de qué cuenta salió la transferencia'); return; }
 
   var btn = document.getElementById('btnPagar_' + key);
   btn.disabled = true;
@@ -1797,7 +1843,9 @@ function confirmarPago(key, idx, semana) {
     mp: mp,
     bonif: bonif,
     semana: semana || '',
-    notas: notas
+    notas: notas,
+    /* Vacia = la digital por defecto (lo de siempre). Solo viaja si hubo transferencia. */
+    cuenta: mp > 0 ? (abaPagoCta[key] || '') : ''
   };
 
   abaShowLoader('Registrando pago...');

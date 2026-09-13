@@ -94,6 +94,15 @@ const esperar = async (cli, expr, ms = 60000, cada = 500) => {
     const llego = await esperar(cli,
       `!!(window.D&&D.caja&&D.caja.cuentas&&D.caja.cuentas.length)`, 90000);
     if (!llego) throw new Error('no llegaron las cuentas — cajaLight no contesto');
+    /* Y que no quede NADA de la carga en vuelo (13/9/2026). Las cuentas pueden
+       llegar con el volcado mientras `cajaLight` todavia viaja (o al reves), y la
+       respuesta que llega despues PISA la actualizacion optimista que se mide abajo:
+       la tarjeta del Brubank volvia a su saldo real y daba 4 rojos que no eran del
+       ERP. Pasaba cuando la cache del servidor estaba fria (despues de un deploy).
+       Se espera a que las DOS fuentes se hayan marcado frescas en esta carga. */
+    const quieto = await esperar(cli, `(function(){ try{ var f=JSON.parse(localStorage.getItem('maleu_fresco')||'{}').ok||{};
+      return f.caja>performance.timeOrigin && f.volcado>performance.timeOrigin; }catch(e){ return false; } })()`, 150000);
+    if (!quieto) throw new Error('la caja o el volcado no terminaron de llegar (sin esto lo optimista se pisa)');
 
     await evaluar(cli, `go('caja')`);
     await esperar(cli, `!!document.querySelector('#cBal .bal-card')`, 20000);
