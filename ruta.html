@@ -628,6 +628,7 @@ select.np-input{background:var(--white) url("data:image/svg+xml;utf8,<svg xmlns=
 .np-productos{display:flex;flex-direction:column;gap:6px}
 .np-cat{font-size:11px;font-weight:800;color:var(--orange);text-transform:uppercase;letter-spacing:.08em;margin:8px 2px 2px}
 .np-cat-row{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:8px 2px 2px}
+.np-copia{font-size:11px;font-weight:600;color:#6b5d55;background:#F4EFEA;border-radius:8px;padding:7px 10px;margin-bottom:8px}
 .np-cat-row .np-cat{margin:0}
 .np-cat-disc{display:inline-flex;align-items:center;gap:1px;border:1.5px dashed var(--border);border-radius:8px;padding:3px 8px;background:var(--white);opacity:.55;transition:.12s}
 .np-cat-disc.on{border-style:solid;border-color:var(--orange);opacity:1;background:#FFF8F0}
@@ -7997,6 +7998,12 @@ function npRenderCatalogo(){
         : '🧊 Lo que ves es el <b>stock proyectado</b> (freezer + lo que ya est\u00e1 comprado al proveedor). El cutoff de compra fue el <b>jueves 12:00</b>, as\u00ed que esta entrega se sirve con eso.')
       +'</div>';
   }
+  /* De cuando es lo que se ve. Solo mientras se muestra la copia: con el de
+     ahora no hay nada que aclarar. */
+  if(NP_STOCK_COPIA||NP_PIEZAS_COPIA){
+    var _ts=Math.min(NP_STOCK_COPIA||Infinity,NP_PIEZAS_COPIA||Infinity);
+    html+='<div class="np-copia" id="npCopiaSello">🕓 Stock de '+_npHaceTxt(_ts)+' — trayendo el de ahora…</div>';
+  }
   var encargo=[];   // los que no son del catalogo de esta zona: van al final
   NP_CAT.forEach(function(c){
     var items=c.items.filter(function(p){
@@ -8178,6 +8185,13 @@ function npBlurKg(id, el, abbr){
   }
 }
 
+/* Hay algo cargado en el AUTOPEDIDO? Lo pregunta el panel antes de recargar la
+   app por una version nueva: el carrito no se guarda en el celular, y recargar
+   en el medio le borraba el pedido a quien lo estaba armando (13/9/2026). */
+function npHayCarrito(){
+  for(var k in npCart){ if(Number(npCart[k])>0)return true; }
+  return false;
+}
 function npQty(id,delta){
   var v=(npCart[id]||0)+delta;if(v<0)v=0;
   if(v===0)delete npCart[id];else npCart[id]=v;
@@ -8650,6 +8664,33 @@ function npCopiarResumen(){
    pasar es que ocurra sin que nadie se entere. */
 var NP_STOCK=null;        // { abbr: {f: fisico, p: proyectado} }
 var NP_STOCK_TS=0;
+/* ══ El stock abre de la copia guardada (13/9/2026) ══
+   Tadeo: "Entro a la app desde el celu y en AUTOPEDIDO me tarda 10 segundos en
+   ver el stock real". Medido con la app recien abierta: 26 s. El stock no vivia
+   en ningun lado del celular — cada apertura empezaba sin nada que mostrar.
+
+   Ahora la pestaña pinta al instante lo ultimo que llego, DICE de cuando es, y
+   lo reemplaza apenas vuelve el de ahora. Mientras la copia esta en pantalla
+   (`NP_STOCK_COPIA` = el momento en que se guardo), NO decide nada: el origen
+   del pedido y el aviso de "te pasaste del stock" esperan el dato de ahora. Una
+   copia de anoche puede decir que hay algo que ya se vendio, y con Origen
+   Deposito el backend descontaria un freezer que no lo tiene. Mostrar, si;
+   concluir, no. */
+var NP_STOCK_COPIA=0, NP_PIEZAS_COPIA=0;
+function _npCopiaLeer(k){
+  try{
+    var o=JSON.parse(localStorage.getItem(k)||'null');
+    if(o&&o.ts&&o.d&&typeof o.d==='object'&&Date.now()-o.ts<24*3600000)return o;
+  }catch(e){}
+  return null;
+}
+function _npCopiaGuardar(k,d){ try{ localStorage.setItem(k,JSON.stringify({ts:Date.now(),d:d})); }catch(e){} }
+function _npHaceTxt(ts){
+  var m=Math.round((Date.now()-ts)/60000);
+  if(m<1)return 'recién';
+  if(m<60)return 'hace '+m+' min';
+  var h=Math.floor(m/60); return 'hace '+h+(h===1?' hora':' horas');
+}
 
 /* LAS PIEZAS DE CARNE EN EL AUTOPEDIDO (11/9/2026). La carne se vende POR
    PIEZA: cada una tiene su peso y su precio, y la tienda deja elegir cual. Aca
@@ -8662,13 +8703,18 @@ var NP_STOCK_TS=0;
    mismo orden: lo que ve el cliente y lo que ve Lucas es lo mismo. */
 /* NP_PIEZAS y npPzSel se declaran arriba, junto a npCart: la card los lee. */
 function npFetchPiezas(force){
-  if(!force && NP_PIEZAS && (Date.now()-NP_PIEZAS_TS)<60000) return;
+  /* La copia de las piezas se muestra igual que la del stock: al instante y
+     reemplazada apenas llega lo de ahora. Una pieza de la copia que ya se vendio
+     no es un riesgo de doble venta: la reserva la resuelve el backend al
+     guardar, y si ya no esta el pedido entra igual y lo dice. */
+  if(!NP_PIEZAS){ var c=_npCopiaLeer('mc_np_piezas'); if(c){ NP_PIEZAS=c.d; NP_PIEZAS_COPIA=c.ts; } }
+  if(!force && NP_PIEZAS && !NP_PIEZAS_COPIA && (Date.now()-NP_PIEZAS_TS)<60000) return;
   fetch(RUT_APPS_SCRIPT_URL+'?action=piezas_full&_='+Date.now(),{cache:'no-store'})
     .then(function(r){return r.json()})
     .then(function(d){
       /* {ok:false} es un error: se deja lo que habia (o el campo de kilos si no
          habia nada). {} es "no hay piezas cargadas", que es un dato. */
-      if(d&&typeof d==='object'&&d.ok!==false){ NP_PIEZAS=d; NP_PIEZAS_TS=Date.now(); npRenderCatalogo(); npUpdateTotal(); }
+      if(d&&typeof d==='object'&&d.ok!==false){ NP_PIEZAS=d; NP_PIEZAS_TS=Date.now(); NP_PIEZAS_COPIA=0; _npCopiaGuardar('mc_np_piezas',d); npRenderCatalogo(); npUpdateTotal(); }
     })
     .catch(function(){});
 }
@@ -8722,14 +8768,19 @@ function npPzTap(el){
 }
 function npFetchStock(force){
   npFetchPiezas(force);
-  if(!force && NP_STOCK && (Date.now()-NP_STOCK_TS)<60000) return;
+  if(!NP_STOCK){
+    var c=_npCopiaLeer('mc_np_stock');
+    /* Se pinta YA: el catalogo se dibujo antes de llegar aca, sin nada. */
+    if(c){ NP_STOCK=c.d; NP_STOCK_COPIA=c.ts; try{ npRenderCatalogo(); npUpdateTotal(); }catch(e){} }
+  }
+  if(!force && NP_STOCK && !NP_STOCK_COPIA && (Date.now()-NP_STOCK_TS)<60000) return;
   fetch(RUT_APPS_SCRIPT_URL+'?action=stock_full&_='+Date.now(),{cache:'no-store'})
     .then(function(r){return r.json()})
     /* Al llegar el stock se vuelve a decidir el origen (npUpdateTotal ->
        npAvisoEncargoRender -> npOrigenAuto, que respeta si alguien lo eligio a
        mano). Sin esto, lo cargado antes de que llegara quedaba en Orden de
        Compra aunque estuviera en el freezer (11/9/2026). */
-    .then(function(d){ if(d&&typeof d==='object'){ NP_STOCK=d; NP_STOCK_TS=Date.now(); npRenderCatalogo(); npUpdateTotal(); } })
+    .then(function(d){ if(d&&typeof d==='object'&&d.ok!==false){ NP_STOCK=d; NP_STOCK_TS=Date.now(); NP_STOCK_COPIA=0; _npCopiaGuardar('mc_np_stock',d); npRenderCatalogo(); npUpdateTotal(); } })
     .catch(function(){});
 }
 function _npHoyAR(){
@@ -8836,7 +8887,8 @@ function npOrigenDeCarrito(){
   var dep=[],oc=[];
   NP_CAT_FLAT.forEach(function(p){
     if((npCart[p.id]||0)<=0)return;
-    var hay=npFisico(p.abbr);
+    /* Con la copia guardada en pantalla no se concluye que HAY: es de antes. */
+    var hay=NP_STOCK_COPIA?null:npFisico(p.abbr);
     var d=npDepStock(p.abbr);
     /* Sin dato de stock no se concluye nada y cae del lado de "hay que
        comprarlo": es el unico de los dos que no descuenta un freezer por las
@@ -8850,7 +8902,7 @@ function npOrigenDeCarrito(){
     /* Una pieza elegida es la prueba de que esta en un freezer: no depende de
        que `stock_full` haya llegado. Las piezas llegan antes (son 1 KB) y sin
        esto, tocar una en los primeros segundos daba Orden de Compra. */
-    var _conPz=(npPzSel[p.id]||[]).length>0;
+    var _conPz=!NP_PIEZAS_COPIA&&(npPzSel[p.id]||[]).length>0;
     ((_conPz||(hay!==null&&hay>0))?dep:oc).push({n:p.n,abbr:p.abbr,dd:d,hay:hay,pide:npCart[p.id]});
   });
   return {dep:dep,oc:oc};
@@ -9054,7 +9106,7 @@ function npGuardar(){
   }
   // Ultimo control antes de grabar: si algo se pasa del stock, que sea una
   // decision tomada y no un descuido. No bloquea.
-  var _exc=npExcedidos();
+  var _exc=NP_STOCK_COPIA?[]:npExcedidos();
   if(_exc.length){
     var _m=npStockMode();
     var _msg='\u26a0\ufe0f '+_exc.length+(_exc.length===1?' producto se pasa del stock':' productos se pasan del stock')+'\n\n';

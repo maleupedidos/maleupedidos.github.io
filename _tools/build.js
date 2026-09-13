@@ -315,6 +315,25 @@ function main() {
   console.log('  fusionando: ' + tabs.join(', ') + '\n');
 
   let html = fs.readFileSync(FUENTE, 'utf8');
+
+  /* La pagina sabe que version es (13/9/2026). Se le escribe adentro el
+     CACHE_NAME de sw-panel.js, el mismo que deploy.sh obliga a subir en cada
+     cambio: si lo publicado dice otro, la pagina que lo corre es vieja y se
+     actualiza sola. Sin esto, una pestaña abierta en la compu quedaba dias en una
+     version anterior sin enterarse (le paso a Tadeo con la v320). */
+  {
+    const sw = fs.readFileSync(path.join(RAIZ, 'sw-panel.js'), 'utf8');
+    const m = sw.match(/var CN='([^']+)'/);
+    if (!m) { console.error("\n✗ No encontre var CN='...' en sw-panel.js"); process.exit(1); }
+    const PH = "_APP_CN_PAGINA='@@APP_CN@@'";
+    if (html.split(PH).length !== 2) {
+      console.error('\n✗ El panel tiene que declarar UNA vez ' + PH + ' — es como la pagina sabe su version');
+      process.exit(1);
+    }
+    html = html.replace(PH, "_APP_CN_PAGINA='" + m[1] + "'");
+    console.log('  version escrita en la pagina: ' + m[1]);
+  }
+
   const cssTodo = [];
   const jsTodo = [];
 

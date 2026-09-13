@@ -24,12 +24,18 @@
  * Y si alguien igual queda pegado: mantener apretado el ↻ borra todo y
  * recarga de cero (refreshDuro).
  */
-var CN='maleu-panel-v323';
+var CN='maleu-panel-v324';
 
 self.addEventListener('install',function(e){
   e.waitUntil(caches.open(CN).then(function(c){
     // Estos tres SON la app: si falta uno, la instalacion tiene que fallar.
-    return c.addAll(['/app.html','/panel-manifest.json','/img/favicon.png']).then(function(){
+    /* `cache:'reload'` (13/9/2026): sin eso el service worker nuevo podia llenar
+       su copia con el app.html que el navegador tenia en su cache HTTP —GitHub
+       Pages lo sirve con max-age=600—, o sea con la version VIEJA. La app nueva
+       habria abierto la pagina anterior. */
+    return c.addAll(['/app.html','/panel-manifest.json','/img/favicon.png'].map(function(u){
+      return new Request(u,{cache:'reload'});
+    })).then(function(){
       // El indice de ubicaciones va aparte y con catch a proposito: es lo que
       // hace andar el boton "Ubicacion" de Ruta sin senal (Tadeo maneja por
       // adentro del barrio). Pero addAll es atomico: si este 404eara, se caeria
@@ -58,6 +64,11 @@ self.addEventListener('fetch',function(e){
   // nueva. Servirlo de la copia guardada seria decirle "no cambio nada" para
   // siempre.
   if(u.pathname==='/sw-panel.js')return;
+
+  /* `?fresco=` es el pedido con el que la pagina trae el HTML nuevo antes de
+     recargarse (13/9/2026): va derecho a la red. Pasarlo por aca devolveria la
+     copia vieja y, peor, guardaria 2 MB nuevos en la cache por cada chequeo. */
+  if(u.searchParams.has('fresco'))return;
 
   if(e.request.mode==='navigate'||u.pathname.endsWith('.html')){
     e.respondWith(caches.open(CN).then(function(c){

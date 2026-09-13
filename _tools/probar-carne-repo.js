@@ -19,7 +19,7 @@ const path = require('path');
 const vm = require('vm');
 
 const V = '\x1b[32m', R = '\x1b[31m', D = '\x1b[2m', B = '\x1b[1m', X = '\x1b[0m';
-const SRC = path.join(__dirname, '..', '_src', 'panel.src.html');
+const SRC = process.env.SRC || path.join(__dirname, '..', '_src', 'panel.src.html');
 const src = fs.readFileSync(SRC, 'utf8');
 
 /* Saca `function NOMBRE(...){...}` contando llaves. */
@@ -47,7 +47,7 @@ function sacarVar(nombre) {
 
 const FNS = ['_proxDiaSem', '_semprepUltDiaPedido', '_semprep2', '_semprepDMY',
   '_semprepHace', '_semprepEsc', '_semprepNum', '_semprepQuedan',
-  '_semprepPorSem', '_semprepOtrosProv'].map(sacar).join('\n');
+  '_semprepPorSem', '_semprepMin', '_semprepOtrosProv'].map(sacar).join('\n');
 const CFG = sacarVar('SEMPREP_OTRO_PROV');
 
 let ok = 0, mal = 0;
@@ -123,8 +123,13 @@ chk('los 5 cortes salen como cortos', /5 cortes no llegan/.test(h), h.slice(0, 3
 
 // ── 2. CON LA COMPRA CARGADA: el mensaje de siempre ────────────────────────
 console.log('\n' + D + '  【2】 jueves 10/9 · con la compra del martes 8/9 cargada' + X);
+/* Sin urgencia arranca plegado en UNA linea (13/9/2026): se mira el renglon, y
+   el detalle se abre a mano para verificar el mensaje completo. */
 h = correr(JUE, { carne: { ultCompra: '2026-09-08', ultVenta: '2026-09-09', compras: 6 } },
   { moresco: '2026-09-10' }, STOCK);
+chk('plegado, el renglon dice que la mercaderia llega hoy', /data-abierto="0"/.test(h) && /llega <b>hoy<\/b>/.test(h), h);
+h = correr(JUE, { carne: { ultCompra: '2026-09-08', ultVenta: '2026-09-09', compras: 6 } },
+  { moresco: '2026-09-10' }, STOCK, true);
 chk('dice que el pedido ya está cargado', /ya está cargado/.test(h), h.slice(-400));
 chk('  y que la mercadería llega hoy', /llega <b>hoy<\/b>/.test(h));
 chk('  NO va en urgente', !/class="semprep urg"/.test(h));
@@ -229,7 +234,10 @@ h = correr(SAB, { carne: { ultCompra: '2026-09-08', ultVenta: '2026-09-11', comp
 chk('el sabado (sin urgencia) arranca plegado', /data-abierto="0"/.test(h), h.slice(0, 260));
 chk('  NO nombra ningun corte', !/Carne Lomo/.test(h));
 chk('  pero el titulo sigue diciendo cuantos', /5 cortes no llegan/.test(h));
-chk('  y ofrece el boton para abrirlos', /Ver los 5 cortes/.test(h));
+chk('  y todo el renglon es el boton para abrirlos', /role="button"/.test(h) && /_semprepTog\('carne'\)/.test(h));
+chk('  en UNA linea: sin pie, sin renglones de detalle ni botones',
+  !/semprep-pie|semprep-row|semprep-acc/.test(h), h);
+chk('  y el renglon dice cuando es el pedido', /pedido mar 15\/9/.test(h), h);
 chk('  sin el consejo de no pedir de mas (no hay nada que pedir)',
   !/no conviene pedir de más/.test(h));
 
@@ -238,7 +246,7 @@ h = correr(SAB, { carne: { ultCompra: '2026-09-08', ultVenta: '2026-09-11', comp
   { moresco: '2026-09-11' }, STOCK, true);
 chk('un toque a mano lo ABRE aunque no sea urgente', /data-abierto="1"/.test(h));
 chk('  y aparecen los cortes', /Carne Lomo/.test(h));
-chk('  con el boton para ocultarlos', /Ocultar los cortes/.test(h));
+chk('  con el boton para plegarlo', /▴ Plegar/.test(h));
 h = correr(MAR, { carne: { ultCompra: '2026-09-01', ultVenta: '2026-09-07', compras: 5 } },
   { moresco: '2026-09-07' }, STOCK, false);
 chk('y un toque lo CIERRA aunque sea el dia del pedido', /data-abierto="0"/.test(h));
@@ -247,11 +255,11 @@ chk('  sin nombrar los cortes', !/Carne Lomo/.test(h));
 // ── 11. El sello del freezer no repite lo obvio ───────────────────
 console.log('\n' + D + '  【11】 el sello solo si el conteo es viejo' + X);
 h = correr(SAB, { carne: { ultCompra: '2026-09-08', ultVenta: '', compras: 5 } },
-  { moresco: '2026-09-12' }, STOCK);
+  { moresco: '2026-09-12' }, STOCK, true);
 chk('contado hoy: no dice "último movimiento" (es lo esperable)',
   !/Último movimiento/.test(h), h.slice(-320));
 h = correr(SAB, { carne: { ultCompra: '2026-09-08', ultVenta: '', compras: 5 } },
-  { moresco: '2026-09-02' }, STOCK);
+  { moresco: '2026-09-02' }, STOCK, true);
 chk('contado hace 10 dias: SI lo dice', /Último movimiento/.test(h) && /hace 10 días/.test(h));
 
 console.log('\n' + (mal ? R : V) + '  ' + ok + ' ok · ' + mal + ' mal' + X + '\n');

@@ -251,6 +251,13 @@ body{font-family:'Inter',-apple-system,'Segoe UI',system-ui,sans-serif;backgroun
 .semprep-p.mas{color:var(--ink3);font-style:italic}
 .semprep-pie{font-size:11px;color:var(--ink2);font-weight:600;padding-top:9px;border-top:1px solid var(--cd);margin-top:2px}
 .semprep-acc{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+.semprep-min{display:flex;align-items:center;flex-wrap:wrap;gap:4px 12px;cursor:pointer;padding:10px 14px;min-height:44px;box-sizing:border-box}
+.semprep-min:hover{background:#fffaf5}
+.semprep-min-t{font-size:12.5px;font-weight:700;color:var(--ink)}
+.semprep-min-s{font-size:12px;font-weight:600;color:var(--wrn)}
+.semprep.urg .semprep-min-s{color:var(--r)}
+.semprep-min-s b{color:inherit}
+.semprep-min-ch{margin-left:auto;font-size:13px;color:var(--ink3);padding-left:6px}
 .semprep-acc button.semprep-btn{min-height:38px;padding:0 14px;border-radius:6px;border:0;background:var(--o);color:#fff;font-weight:700;font-size:12px;cursor:pointer}
 .semprep-acc button.sec{background:transparent;color:var(--ink2);border:1px solid var(--border)}
 .semprep-acc button.tog{background:transparent;color:var(--ink2);border:1px dashed var(--border);font-size:11.5px;padding:0 12px;font-weight:600}
@@ -5488,7 +5495,14 @@ var API='https://script.google.com/macros/s/AKfycbxmrG5YVSshcYezk8lXFx_uxb7NFGcb
        `.v-tab.on`: por eso el selector es un campo y no una plantilla fija. */
     ruta: { sel: '#p-ruta .tab.active', attr: 'data-tab',
             armado: 'entregas', ruta: 'entregas',
-            cobros: 'cobrosPendientes', nuevo: 'precios' }
+            cobros: 'cobrosPendientes',
+            /* El AUTOPEDIDO dibuja de TRES endpoints, no de uno (13/9/2026).
+               Con solo `precios` en el mapa, `stock_full` y `piezas_full` quedaban
+               en prioridad 0 y salian ULTIMOS: medido con la sesion real y la app
+               recien abierta, el stock llegaba **26 s despues** de tocar la
+               pestaña, detras de la caja, los cobros, las OCs y las entregas —
+               seis consultas que esa pantalla no usa. */
+            nuevo: { precios: 1, stock_full: 1, piezas_full: 1 } }
   };
   function _subAbierta(tab, cfg){
     try{
@@ -5518,7 +5532,8 @@ var API='https://script.google.com/macros/s/AKfycbxmrG5YVSshcYezk8lXFx_uxb7NFGcb
     if (sub){
       var s = _subAbierta(tab, sub);
       if (s && sub[s]){
-        if (sub[s] === a) return 2;
+        var fu = sub[s];
+        if (fu === a || (typeof fu === 'object' && a && fu[a])) return 2;
         return (a && _CAROS[a]) ? -1 : 0;
       }
     }
@@ -7079,83 +7094,126 @@ function _markRefreshTime(fuentes){
 var _APPS=[
   {k:'panel', sw:'/sw-panel.js', re:/CN\s*=\s*'([^']+)'/, frame:null, url:null}
 ];
-var _APP_VER={};
 function _leerVersion(app){
   return fetch(app.sw+'?v='+Date.now(),{cache:'no-store'})
     .then(function(r){return r.text();})
     .then(function(t){var m=t.match(app.re);return m?m[1]:null;})
     .catch(function(){return null;});
 }
-(function(){ _APPS.forEach(function(a){ _leerVersion(a).then(function(v){ if(v)_APP_VER[a.k]=v; }); }); })();
 
-/* Avisar solo cuando hay version nueva, sin esperar a que toquen el ↻.
-   (27/8/2026 — junto con el cambio del service worker)
+/* ══ LA PAGINA SABE QUE VERSION ES (13/9/2026) ═════════════════════════════
+   Tadeo, un domingo a las 13:43, con una captura de la compu que decia SEM 38,
+   el puntito naranja y la hora pelada del ↻: tres cosas que se habian arreglado
+   esa MADRUGADA (v321-v323). Su pestaña seguia corriendo una version de antes
+   de las 5 de la mañana, y no habia forma de que se enterara. Dos bugs:
 
-   Desde hoy la app abre de la copia guardada en el celular, que es lo que la
-   hace instantanea. El precio es que podes estar mirando la version de ayer sin
-   enterarte. Esto lo cubre: le pedimos al navegador que chequee si hay una
-   version nueva publicada y, cuando termina de bajarla, avisamos.
+   · El aviso se enganchaba al ciclo de vida del service worker A LOS 4
+     SEGUNDOS de abrir. Pero el navegador busca version nueva APENAS abris la
+     pagina: la encontraba, la instalaba en silencio (skipWaiting) y el evento
+     `updatefound` salia antes de que hubiera nadie escuchando. La pagina vieja
+     quedaba viva hasta cerrarla — y en la compu la pestaña no se cierra nunca.
+   · El chequeo del ↻ comparaba contra lo publicado AL ABRIR, no contra lo que
+     la pagina corre. Abierta la vieja con la nueva ya publicada, sellaba la
+     nueva y creia estar al dia para siempre.
 
-   Se usa el ciclo de vida del service worker y no una comparacion de numeros
-   a mano, porque el HTML no sabe que version es: el que lo sabe es el navegador.
+   "El HTML no sabe que version es" dejo de ser cierto: el build le escribe
+   adentro el CACHE_NAME de sw-panel.js, el mismo que deploy.sh obliga a subir en
+   cada cambio. Si lo publicado dice otra cosa, esta pagina es vieja. Punto. */
+var _APP_CN_PAGINA='@@APP_CN@@';
 
-   _aplicarVersionNueva respeta si estas editando — si tenes algo a medio cargar
-   te deja el cartel y espera. */
-(function(){
-  if(!('serviceWorker' in navigator))return;
-  var avisado=false;
-  var mirar=function(){
-    navigator.serviceWorker.getRegistration().then(function(reg){
-      if(!reg)return;
-      reg.addEventListener('updatefound',function(){
-        var nuevo=reg.installing;
-        if(!nuevo)return;
-        nuevo.addEventListener('statechange',function(){
-          // 'installed' con un controller ya presente = hay version nueva lista
-          // y la que estamos viendo es la anterior. Sin controller es la primera
-          // instalacion: no hay nada que avisar.
-          if(nuevo.state==='installed'&&navigator.serviceWorker.controller&&!avisado){
-            avisado=true;
-            try{_aplicarVersionNueva([{k:'panel'}]);}catch(e){}
-          }
-        });
-      });
-      // update() devuelve una PROMESA: el try/catch no atrapa su rechazo y
-      // quedaba un "Uncaught (in promise) InvalidStateError" en la consola.
-      // Que un chequeo falle no es un problema: se reintenta en 10 minutos.
-      try{ var _u=reg.update(); if(_u&&_u.catch)_u.catch(function(){}); }catch(e){}
-    }).catch(function(){});
-  };
-  // A los 4 s: que el arranque respire primero. La app ya se ve; esto es de fondo.
-  setTimeout(mirar,4000);
-  // Y cada 10 minutos, para el que deja la app abierta todo el dia.
-  setInterval(mirar,600000);
-})();
-
-/* Devuelve que cambio desde que arranco la sesion. */
+/* Devuelve [{k,v}] si lo publicado no es lo que esta pagina corre. */
 function _chequearVersiones(){
-  return Promise.all(_APPS.map(function(a){
-    return _leerVersion(a).then(function(v){
-      if(!v)return null;
-      if(!_APP_VER[a.k]){_APP_VER[a.k]=v;return null;}  // primera lectura: solo sella
-      if(v===_APP_VER[a.k])return null;
-      _APP_VER[a.k]=v;
-      return a;
-    });
-  })).then(function(arr){return arr.filter(Boolean);});
+  return _leerVersion(_APPS[0]).then(function(v){
+    if(!v || !_APP_CN_PAGINA || _APP_CN_PAGINA.indexOf('@@')===0) return [];
+    return v!==_APP_CN_PAGINA ? [{k:'panel', v:v}] : [];
+  });
 }
 
-/* Hay version nueva: se recarga la app entera, salvo que estes editando.
-   El ERP es un solo archivo, asi que no hay nada mas fino que hacer — antes
-   esto recargaba el iframe de Ruta o el de Abastecimiento por separado. */
+/* Hay version nueva: se recarga la app entera, salvo que estes en el medio de
+   algo. Tres cosas la hacen segura:
+   · NUNCA recarga con un editor abierto, un carrito a medio cargar, ni mientras
+     estas tocando la pantalla (los ultimos 8 s): espera y reintenta sola.
+   · ANTES de recargar trae el HTML nuevo y verifica que ya diga la version
+     publicada — GitHub Pages tarda un rato en servirlo en todos lados — y lo deja
+     en las copias del service worker. Sin eso, la recarga podia volver a servir
+     la copia vieja guardada en el celular y quedar en un bucle.
+   · Y un tope: si ya recargo dos veces por la misma version en media hora y
+     sigue vieja, no insiste — avisa que se puede recargar de cero manteniendo
+     apretado el ↻. Una app que se recarga sola en bucle es peor que una vieja. */
+var _verAplicando=false, _verReintento=null, _verAvisado=false;
 function _aplicarVersionNueva(cambiados){
-  if(!cambiados.length)return;
-  if(typeof _hayEditorAbierto==='function' && _hayEditorAbierto()){
-    toast('🆕 Hay una version nueva — recarga cuando termines de editar');return;
+  if(!cambiados||!cambiados.length||_verAplicando)return;
+  var vivo=String(cambiados[0].v||'');
+  if(!vivo)return;
+  var marca=null;
+  try{ marca=JSON.parse(sessionStorage.getItem('maleu_ver_recarga')||'null'); }catch(e){}
+  if(marca&&marca.v===vivo&&marca.n>=2&&Date.now()-marca.t<30*60000){
+    if(!_verAvisado){ _verAvisado=true;
+      toast('🆕 Hay una version nueva y no la pude traer — mantene apretado el ↻ para recargar de cero',9000); }
+    return;
   }
-  toast('🆕 Version nueva — actualizando la app…');
-  setTimeout(function(){location.reload();},1400);
+  var editando=(typeof _hayEditorAbierto==='function' && _hayEditorAbierto());
+  var tocando=(Date.now()-(window.__ultimoToquePanel||0))<8000;
+  if(editando||tocando){
+    if(editando&&!_verAvisado){ _verAvisado=true; toast('🆕 Hay una version nueva — se actualiza sola cuando termines',6000); }
+    clearTimeout(_verReintento);
+    _verReintento=setTimeout(function(){ _aplicarVersionNueva(cambiados); },15000);
+    return;
+  }
+  _verAplicando=true;
+  fetch('/app.html?fresco='+Date.now(),{cache:'no-store'})
+    .then(function(r){ if(!r.ok)throw new Error('HTTP '+r.status); return r.text(); })
+    .then(function(txt){
+      if(txt.indexOf("_APP_CN_PAGINA='"+vivo+"'")<0)throw new Error('el HTML publicado todavia no es '+vivo);
+      if(!('caches' in window))return;
+      return caches.keys().then(function(ks){
+        return Promise.all(ks.filter(function(k){return k.indexOf('maleu-panel-')===0;}).map(function(k){
+          return caches.open(k).then(function(c){
+            return c.put('/app.html',new Response(txt,{headers:{'Content-Type':'text/html; charset=utf-8'}}));
+          });
+        }));
+      });
+    })
+    .then(function(){
+      try{ sessionStorage.setItem('maleu_ver_recarga',JSON.stringify({v:vivo,n:((marca&&marca.v===vivo)?marca.n:0)+1,t:Date.now()})); }catch(e){}
+      toast('🆕 Version nueva — actualizando la app…');
+      setTimeout(function(){ location.reload(); },1200);
+    })
+    .catch(function(){
+      /* Todavia no esta en todos lados, o no hay red: se vuelve a mirar en un
+         minuto. No es un error que haya que mostrarle a nadie. */
+      _verAplicando=false;
+      clearTimeout(_verReintento);
+      _verReintento=setTimeout(function(){ _chequearVersiones().then(_aplicarVersionNueva); },60000);
+    });
 }
+
+/* Cuando se mira. Al abrir, cada 5 minutos, al volver a la app y en cada ↻.
+   El service worker se sigue actualizando por su lado (reg.update), que es lo
+   que baja la version nueva al celular; pero el que decide si ESTA pagina es
+   vieja es la comparacion de arriba, no un evento que puede salir antes de que
+   alguien lo escuche. */
+(function(){
+  var ultima=0;
+  var mirar=function(){
+    ultima=Date.now();
+    try{
+      if('serviceWorker' in navigator){
+        navigator.serviceWorker.getRegistration().then(function(reg){
+          if(!reg)return;
+          // update() devuelve una PROMESA: el try/catch no atrapa su rechazo.
+          try{ var _u=reg.update(); if(_u&&_u.catch)_u.catch(function(){}); }catch(e){}
+        }).catch(function(){});
+      }
+    }catch(e){}
+    _chequearVersiones().then(_aplicarVersionNueva).catch(function(){});
+  };
+  setTimeout(mirar,4000);
+  setInterval(mirar,300000);
+  document.addEventListener('visibilitychange',function(){
+    if(document.visibilityState==='visible'&&Date.now()-ultima>60000)mirar();
+  });
+})();
 
 /* Recarga dura, la salida de emergencia en modo app: limpia las caches del
    service worker y vuelve a pedir todo al server. Se dispara manteniendo
@@ -7245,7 +7303,6 @@ function refreshContextual(){
   _pintarFresco();
 
   var _cerrado=false;
-  var _t0=Date.now();
   /* DOS frenos, y el primero NO se rinde. (3/9/2026)
      Antes habia uno solo, a los 25 s, que hacia done(false): dejaba el ↻ en
      rojo, NO estampaba la hora y decia "Tardo demasiado - proba de nuevo".
@@ -7256,25 +7313,21 @@ function refreshContextual(){
      "toco refrescar y no me actualiza".
      Y el consejo era el peor posible: cada toque es OTRA consulta de 20 s, y
      Apps Script las atiende de a una por usuario. Tocar de nuevo hace todo mas
-     lento, justo cuando ya venia lento. Por eso ahora el primer freno solo
-     AVISA y sigue esperando (el boton queda girando, y eso bloquea otro toque),
-     y el que se rinde esta a los 90 s. */
-  var _tarde=false;
-  var _aviso=setTimeout(function(){
-    if(_cerrado)return;
-    _tarde=true;
-    toast('⏳ El servidor esta tardando mas de lo normal. Sigo esperando — no toques de nuevo, cada toque es otra consulta y lo hace mas lento.',7000);
-  },25000);
+     lento, justo cuando ya venia lento. Por eso el que se rinde esta a los 90 s.
+
+     Y el aviso de los 25 s se SACO el 13/9/2026. Tadeo lo mando en una captura
+     como una falla ("estas fallas no deberian estar mas"), y tenia razon: desde
+     la v323 el propio boton dice "Actualizando…" mientras gira, y girando no se
+     puede tocar de nuevo. Un cartel negro encima de los numeros no agregaba nada
+     que el boton no dijera, y se leia como que algo andaba mal. Lo que de verdad
+     lo hacia salir —la foto del servidor duraba 90 s— se arreglo en el backend. */
   var _tope=setTimeout(function(){
     done(false,'⏱️ El servidor no contesto en 90 s — seguis viendo los datos de antes');
   },90000);
 
   var done=function(ok,msg){
     if(_cerrado)return; _cerrado=true;
-    clearTimeout(_tope); clearTimeout(_aviso);
-    // Si aviso que estaba tardando, cerrar el circulo: sin esto queda el "sigo
-    // esperando" como ultima palabra y no se sabe si termino.
-    if(ok!==false&&_tarde&&!msg)msg='✅ Actualizado — el servidor tardo '+Math.round((Date.now()-_t0)/1000)+' s';
+    clearTimeout(_tope);
     try{hideLoader(true);}catch(_){}
     if(btn)btn.classList.remove('spinning');
     if(ok===false){
@@ -8116,6 +8169,11 @@ function _hayEditorAbierto(){
   // asi que una recarga no le borra nada — pero sacarlo del cobro a mitad si molesta.)
   var _cob=document.querySelector('#pg-ruta .cobro-ruta-box');
   if(_cob&&_cob.getBoundingClientRect().height>0)return true;
+  /* AUTOPEDIDO con un carrito a medio cargar (13/9/2026). `npCart` no se guarda
+     en el celular: una recarga por version nueva le borraba a Lucas el pedido
+     que estaba armando. La funcion la publica la sub-app; si no entraste nunca a
+     Ruta, no existe y no hay carrito. */
+  try{ if(typeof window.npHayCarrito==='function' && window.npHayCarrito())return true; }catch(e){}
   return false;
 }
 // Marcar como "tocada" cualquier .origen-box donde el user interactúe.
@@ -10070,6 +10128,26 @@ function _semprepTog(k){
   try{rSemanaPrep();}catch(e){console.error('_semprepTog',e);}
 }
 
+/* ══ Plegado = UNA linea (13/9/2026) ══
+   Tadeo, un domingo: "esto es lo primero que veo del Resumen de Inicio. Todo
+   bien que es importante pero deberia solo ver el titulo y que salga un
+   desplegable. Ocupa demasiado arriba de todo cuando por ejemplo el fin de
+   semana no es importante". Plegado seguia mostrando el titulo, el renglon del
+   dato, el pie con la fecha y el boton: 170 px en la compu para decir "el martes
+   hay que pedir carne".
+
+   Ahora plegado es un solo renglon tocable —de que se trata y el dato que lo
+   hace importante— y la urgencia sigue decidiendo cuando se abre solo: el dia de
+   pedido de la carne, o con el cierre de compra de Maleu a menos de 48 h. */
+function _semprepMin(k,titulo,resumen,urg){
+  return '<div class="semprep semprep-min'+(urg?' urg':'')+'" data-semprep="'+k+'" data-abierto="0"'
+    +' role="button" tabindex="0" onclick="_semprepTog(\''+k+'\')"'
+    +' onkeydown="if(event.key===\'Enter\'||event.key===\' \'){event.preventDefault();_semprepTog(\''+k+'\')}">'
+    +'<span class="semprep-min-t">'+titulo+'</span>'
+    +(resumen?'<span class="semprep-min-s">'+resumen+'</span>':'')
+    +'<span class="semprep-min-ch" aria-hidden="true">▾</span></div>';
+}
+
 /* Una fecha 'aaaa-mm-dd' a "hoy" / "ayer" / "hace 16 días".
    Se arma por COMPONENTES: `new Date("2026-09-10")` se interpreta UTC y en
    Argentina devuelve el día anterior. */
@@ -10195,9 +10273,14 @@ function _semprepOtrosProv(otros,ahora){
        cartel se comporta como antes en vez de inventar una alarma. */
     var sinDato=!rep.ultCompra;
 
-    var msg, urg=false;
+    /* `corto` es lo mismo que `msg` en pocas palabras: lo que dice el renglon
+       plegado. Se arma al lado de cada mensaje para que no puedan decir cosas
+       distintas. */
+    var msg, corto, urg=false;
+    var DC=['dom','lun','mar','mié','jue','vie','sáb'];
     if(hoyD===cfg.dia){
       msg='<b>Hoy</b> es el día de pedido — le llega el '+DIAS[cfg.llegaDia];
+      corto='<b>hoy</b> es el día de pedido';
       urg=true;
     }else if(hoyD>cfg.dia&&hoyD<=cfg.llegaDia){
       if(sinDato||hayCompra){
@@ -10211,6 +10294,7 @@ function _semprepOtrosProv(otros,ahora){
            +(hoyD===cfg.llegaDia?'llega <b>hoy</b>':'llega el <b>'+DIAS[cfg.llegaDia]+'</b>')
            +' — el pedido ya está cargado'
            +(hc&&hc.dias>=2?' (del '+_semprepDMY(rep.ultCompra)+')':'');
+        corto='la mercadería '+(hoyD===cfg.llegaDia?'llega <b>hoy</b>':'llega el '+DIAS[cfg.llegaDia]);
       }else{
         /* El caso que el cartel viejo tapaba. NO dice cuál de las dos es: el ERP
            no puede saber si Lucas repuso y no lo cargó, o si no repuso. */
@@ -10218,13 +10302,16 @@ function _semprepOtrosProv(otros,ahora){
         msg='⚠️ <b>No hay ninguna compra cargada esta semana</b> — la última es '
            +'del '+_semprepDMY(rep.ultCompra)+(hc?', '+hc.txt:'')+'. '
            +'Si repuso, falta cargarla; si no repuso, hoy no llega nada.';
+        corto='⚠️ no hay compra cargada esta semana';
       }
     }else{
       msg='El próximo pedido es el <b>'+cuando+'</b> — le llega el '+DIAS[cfg.llegaDia];
+      corto='pedido '+DC[cfg.dia]+' '+prox.getDate()+'/'+(prox.getMonth()+1);
       if(!sinDato&&!hayCompra&&hc&&hc.dias>cfg.vidaSem*7){
         urg=true;
         msg+='. ⚠️ La última compra cargada es del <b>'+_semprepDMY(rep.ultCompra)
             +'</b>, '+hc.txt;
+        corto+=' · ⚠️ la última compra es del '+_semprepDMY(rep.ultCompra);
       }
     }
 
@@ -10259,6 +10346,14 @@ function _semprepOtrosProv(otros,ahora){
       det='Los '+l.length+' cortes llegan a la próxima reposición.';
     }
 
+    var titC='🥩 '+_semprepEsc(pv)+' · '+_semprepEsc(cfg.quien)+' pide los '+DIAS[cfg.dia];
+    if(!abiertoC){
+      var resC=(cortos.length
+          ? cortos.length+(cortos.length===1?' corte no llega':' cortes no llegan')+' a la reposición'
+          : 'el freezer está cubierto')+' · '+corto;
+      out+=_semprepMin('carne',titC,resC,urg);
+      return;
+    }
     out+='<div class="semprep'+(urg?' urg':'')+'" style="margin-top:10px"'
       +' data-semprep="carne" data-abierto="'+(abiertoC?'1':'0')+'">'
       +'<div class="semprep-h"><span>🥩 '+_semprepEsc(pv)+' · '+_semprepEsc(cfg.quien)
@@ -10273,10 +10368,8 @@ function _semprepOtrosProv(otros,ahora){
       /* El punto sólo si el mensaje no lo trae: el aviso de la compra faltante
          termina en punto y quedaba un ".." a la vista. */
       +'<div class="semprep-pie">'+msg+(/[.!?]$/.test(msg)?'':'.')+selloTxt+consejo+'</div>'
-      +(cortos.length?'<div class="semprep-acc"><button class="semprep-btn sec tog" '
-        +'onclick="_semprepTog(\'carne\')">'
-        +(abiertoC?'▴ Ocultar los cortes':'▾ Ver los '+cortos.length+' cortes')
-        +'</button></div>':'')
+      +'<div class="semprep-acc"><button class="semprep-btn sec tog" '
+        +'onclick="_semprepTog(\'carne\')">▴ Plegar</button></div>'
       +'</div>';
   });
   return out;
@@ -10422,8 +10515,15 @@ function rSemanaPrep(){
   /* Con el cierre encima se abre solo; a 6 dias, solo los titulos. El mismo
      umbral que pinta el bloque en rojo decide cuanto se muestra. */
   var abierto=(SEMPREP_VER.jueves===null)?urgente:SEMPREP_VER.jueves;
-  var plegables=filas.filter(function(f){return !f.fijo;}).length;
 
+  if(!abierto){
+    var avisosFijos=filas.filter(function(f){return f.fijo;}).length;
+    var resJ=filas.map(function(f){return f.t;}).slice(0,2).join(' · ')
+      +(filas.length>2?' · +'+(filas.length-2):'')
+      +(avisosFijos?' · ⚠️':'');
+    box.innerHTML=_semprepMin('jueves','⏳ La orden de compra cierra el '+cuando+' — '+_faltaTexto(falta),resJ,urgente)+hOtros;
+    return;
+  }
   var h='<div class="semprep'+(urgente?' urg':'')+'" data-semprep="jueves" data-abierto="'+(abierto?'1':'0')+'">'
     +'<div class="semprep-h"><span>⏳ La orden de compra cierra el '+cuando+'</span>'
     +'<b>'+_faltaTexto(falta)+'</b></div>';
@@ -10444,8 +10544,7 @@ function rSemanaPrep(){
     +(_tengoTab('stock')?'<button class="semprep-btn sec" onclick="go(\'stock\')">Ver el stock</button>':'');
   /* El toggle va ULTIMO y secundario: la accion principal sigue siendo ir a
      resolverlo. Y solo si hay algo plegado que mostrar. */
-  if(plegables)acc+='<button class="semprep-btn sec tog" onclick="_semprepTog(\'jueves\')">'
-    +(abierto?'▴ Ocultar el detalle':'▾ Ver qué falta')+'</button>';
+  acc+='<button class="semprep-btn sec tog" onclick="_semprepTog(\'jueves\')">▴ Plegar</button>';
   if(acc)h+='<div class="semprep-acc">'+acc+'</div>';
   h+=hOtros;
   h+='</div>';
@@ -11189,8 +11288,14 @@ function rInicio(){
     } else {
       // No cobrados: siempre cuentan solo en la SEMANA ACTUAL como "por cobrar".
       // (no se asignan a semanas anteriores — están abiertos hasta que se cobren)
+      /* "Por cobrar" es la MISMA cuenta que la tarjeta A cobrar de arriba
+         (`_porCobrar`): entregado y no cobrado, y en Red lo no cancelado. Hasta el
+         13/9/2026 sumaba tambien lo cargado y sin entregar —una reserva de $97.600—
+         y la misma pantalla decia $790.269 arriba y $887.869 aca. Lo cargado se dice
+         aparte: todavia nadie lo debe. */
       if(!porSemana[semActual])porSemana[semActual]={ef:0,tr:0,tot:0,pend:0,n:0,mg:0,dias:{},minD:now,maxD:now};
-      porSemana[semActual].pend+=monto;
+      if(p.h==='Red'||p.es==='Entregado')porSemana[semActual].pend+=monto;
+      else porSemana[semActual].sinEnt=(porSemana[semActual].sinEnt||0)+monto;
     }
   });
 
@@ -11291,7 +11396,7 @@ function rInicio(){
   var vueltoSem=0;Object.keys(semData.dias||{}).forEach(function(k){vueltoSem+=(vueltosPorDia[k]||0);});
 
   var cb=$('hCaja');var cbHtml='';
-  function cajaCard(titulo,ef,tr,tot,pend,highlight,vuelto,detId,descKey){
+  function cajaCard(titulo,ef,tr,tot,pend,highlight,vuelto,detId,descKey,sinEnt){
     // EF físico = EF neto del Sheets + ajuste por cambios (billetera + cambioMP −
     // cruzadoEf) del período. El "tot" que recibimos es el neto (ef+tr). Le sumamos
     // el ajuste para mostrar lo que se cuenta en mano al cerrar; la sub-línea aclara.
@@ -11310,6 +11415,7 @@ function rInicio(){
       html+='<div style="margin-top:6px;padding-top:6px;border-top:1px dashed var(--cd);font-size:10px;color:#9A3412;line-height:1.4">👛 Cambios en efectivo: '+(v>0?'+':'−')+'$'+f$(Math.abs(v))+' en mano'+(_desc?'<br>↳ '+_desc:'')+'<br>↳ Neto cobrado: $'+f$(tot)+'</div>';
     }
     if(pend>0)html+='<div style="margin-top:6px;padding-top:6px;border-top:1px dashed var(--cd);font-size:10px;color:#E65100;font-weight:700">+$'+f$(pend)+' por cobrar</div>';
+    if(sinEnt>0)html+='<div style="margin-top:3px;font-size:10px;color:var(--bl)">y $'+f$(sinEnt)+' cargado sin entregar</div>';
     html+='</div>';
     return html;
   }
@@ -11557,7 +11663,7 @@ function rInicio(){
   // Cards HOY + SEMANA ACTUAL
   cbHtml+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:10px 0">';
   cbHtml+=cajaCard('HOY \u00b7 EN MANO',hoyD.ef,hoyD.tr,hoyD.tot,hoyD.pend,hoyD.tot>0,vueltoHoy,'hoyEnManoDet',hoyKey);
-  cbHtml+=cajaCard('SEMANA '+semActual+' \u00b7 EN MANO',semData.ef,semData.tr,semData.tot,semData.pend,true,vueltoSem);
+  cbHtml+=cajaCard('SEMANA '+semActual+' \u00b7 EN MANO',semData.ef,semData.tr,semData.tot,semData.pend,true,vueltoSem,null,null,semData.sinEnt||0);
   cbHtml+='</div>';
   // Detalle clickeable de HOY \u2014 reconciliar pedido por pedido contra la caja f\u00edsica.
   cbHtml+=detalleCobrosHTML(hoyKey, hoyD.peds||[], vueltoHoy, 'hoyEnManoDet');
@@ -14116,20 +14222,24 @@ function rStock(){
 
   // KPIs agregados
   var totProd=D.stock.length;
-  var sumInv=0,sumIni=0,sumVen=0,sumComp=0,sinStock=0,bajos=0;
+  /* Las unidades y los kilos van por separado (13/9/2026). "225.797 vend" eran 164
+     unidades + 61,797 kg de carne sumados, y con el punto decimal se leia como
+     doscientos veinticinco mil. Es el quinto lugar del ERP donde se escapaba. */
+  var sumInv=0,sumIni=0,sumVen=0,sumComp=0,sinStock=0,bajos=0,venKg=0,compKg=0,iniKg=0;
   D.stock.forEach(function(s){
     sumInv+=Number(s.iv)||0;
-    sumIni+=Number(s.i)||0;
-    sumVen+=Number(s.v)||0;
-    sumComp+=Number(s.c)||0;
+    var kg=(s.u==='kg');
+    if(kg){iniKg+=Number(s.i)||0;venKg+=Number(s.v)||0;compKg+=Number(s.c)||0;}
+    else{sumIni+=Number(s.i)||0;sumVen+=Number(s.v)||0;sumComp+=Number(s.c)||0;}
     if(s.d<=0)sinStock++;
-    else if(s.d<=3)bajos++;
+    else if(!kg&&s.d<=3)bajos++;
   });
+  var _stUK=function(u,k){return f$(Math.round(u))+' u'+(k>0?' · '+stFmt(k,'kg')+' kg':'');};
 
   $('sKpi').innerHTML=
     '<div style="grid-column:1/-1;font-size:11px;color:var(--ink3);margin:-4px 0 6px;letter-spacing:.02em;font-weight:500">'+headerTxt+'</div>'+
     '<div class="card"><div class="kl">Valor del stock</div><div class="kv">$'+f$(Math.round(sumInv))+'</div><div class="ks">'+totProd+' productos en catálogo</div></div>'+
-    '<div class="card"><div class="kl">Movimiento sem '+sem+'</div><div class="kv">'+sumVen+' vend</div><div class="ks">'+sumComp+' comprados · '+sumIni+' inicial</div></div>'+
+    '<div class="card"><div class="kl">Movimiento sem '+sem+'</div><div class="kv">'+_stUK(sumVen,venKg)+'</div><div class="ks">vendido · '+_stUK(sumComp,compKg)+' comprado · '+_stUK(sumIni,iniKg)+' inicial</div></div>'+
     '<div class="card'+(sinStock>0?' wrn':'')+'"><div class="kl">Sin stock</div><div class="kv">'+sinStock+'</div><div class="ks">'+(bajos>0?bajos+' bajos (≤3)':'sin alertas bajas')+'</div></div>';
 
   // Donde esta cada cosa. Se pide una sola vez por sesion (3,7 KB) y se pinta
@@ -14160,11 +14270,11 @@ function rStock(){
   // Agrupar por categoría
   var cats={};
   D.stock.forEach(function(s){
-    var cat=PROD_CATS[s.a]||'Otros';
+    var cat=PROD_CATS[s.a]||(s.u==='kg'?'Carnes (por kilo)':'Otros');
     if(!cats[cat])cats[cat]=[];
     cats[cat].push(s);
   });
-  var catOrder=['Pack Pizzas x2','Pizzas Individuales','Wraps','Empanadas','Sorrentinos','Tartas','Franuis','Tortas','Otros'];
+  var catOrder=['Pack Pizzas x2','Pizzas Individuales','Wraps','Empanadas','Sorrentinos','Tartas','Franuis','Tortas','Carnes (por kilo)','Otros'];
   var html='<div class="st-carril"><div class="st-tabla">'+headRow;
   catOrder.forEach(function(cat){
     var items=cats[cat];if(!items||!items.length)return;
@@ -14173,12 +14283,14 @@ function rStock(){
       var cls=s.d<=0?'zero':s.d<=3?'low':'ok';
       html+='<div class="si" style="'+gridCols+';padding:10px 14px">'+
         '<div class="si-n st-fija">'+s.n+'</div>'+
-        '<div class="si-v" style="color:var(--ink3)">'+(s.i||0)+'</div>'+
-        '<div class="si-v" style="color:var(--ink3)">'+(s.c||0)+'</div>'+
-        '<div class="si-v" style="color:var(--ink3)">'+(s.v||0)+'</div>'+
-        '<div class="si-v">'+s.f+'</div>'+
-        '<div class="si-v">'+s.r+'</div>'+
-        '<div class="si-v st-fija-der '+cls+'">'+s.d+'</div>'+
+        /* Los kilos al gramo y con coma: "21.134999999999998" y "5.182" (cinco kilos,
+           no cinco mil) salian tal cual del punto flotante. */
+        '<div class="si-v" style="color:var(--ink3)">'+stFmt(s.i,s.u)+'</div>'+
+        '<div class="si-v" style="color:var(--ink3)">'+stFmt(s.c,s.u)+'</div>'+
+        '<div class="si-v" style="color:var(--ink3)">'+stFmt(s.v,s.u)+'</div>'+
+        '<div class="si-v">'+stFmt(s.f,s.u)+'</div>'+
+        '<div class="si-v">'+stFmt(s.r,s.u)+'</div>'+
+        '<div class="si-v st-fija-der '+cls+'">'+stFmt(s.d,s.u)+'</div>'+
       '</div>';
     });
   });
@@ -14703,6 +14815,29 @@ function _ckDelta(actual,prev){
   if(!prev||prev===0)return null;
   return (actual-prev)/Math.abs(prev)*100;
 }
+/* EL MES EN CURSO SE COMPARA CONTRA LOS MISMOS DIAS DEL ANTERIOR (13/9/2026).
+   El Cierre decia "Facturacion -34,4% vs mes ant." y "Bajada: vale revisar si es
+   estacional o señal" un 13 de septiembre: eran 13 dias contra agosto entero.
+   Inicio > Resumen ya lo hacia bien. Devuelve el dia hasta el que cortar, o null
+   si el mes que se mira ya cerro. */
+function _ckCorteDia(){
+  var hoy=new Date();
+  if(!cierreMes||cierreMes.getFullYear()!==hoy.getFullYear()||cierreMes.getMonth()!==hoy.getMonth())return null;
+  return hoy.getDate();
+}
+function _ckHastaDia(ventas,dia){
+  if(!dia)return ventas;
+  return ventas.filter(function(v){
+    var d=Number(String(v.fecha||'').split('/')[0]);
+    return d>0&&d<=dia;
+  });
+}
+function _ckVsTxt(){
+  var prev=MES_ORD[new Date(cierreMes.getFullYear(),cierreMes.getMonth()-1,1).getMonth()].substring(0,3);
+  var c=_ckCorteDia();
+  return 'vs '+prev+(c?' al '+c:'');
+}
+
 function rCierre(){
   if(!cierreMes){cierreInit();return;}
   var mesNom=MES_ORD[cierreMes.getMonth()],anioN=cierreMes.getFullYear();
@@ -14737,8 +14872,15 @@ function rCierreResumen(box){
   // Targets
   var ymKpi=anioN+'-'+String(mn).padStart(2,'0');
   var ebitdaTarget=(eerrConfig('EBITDA_REALISTA',ymKpi)||0.08)*100;
-  // Cálculo deltas vs mes anterior
-  var deltaFact=_ckDelta(k.totFact,kPrev?kPrev.totFact:0);
+  // Cálculo deltas vs mes anterior. La facturacion del mes en curso se compara
+  // contra los mismos dias del anterior (ver _ckCorteDia).
+  var _cd=_ckCorteDia();
+  var factPrevCmp=kPrev?kPrev.totFact:0;
+  if(_cd&&typeof VD!=='undefined'&&VD){
+    var _pn=MES_ORD[prevD.getMonth()];
+    factPrevCmp=_ckHastaDia(VD.filter(function(v){return v.mes===_pn;}),_cd).reduce(function(a,v){return a+(Number(v.$)||0);},0);
+  }
+  var deltaFact=_ckDelta(k.totFact,factPrevCmp);
   var deltaMB=kPrev?k.mbPct-kPrev.mbPct:null;
   var deltaMC=kPrev?k.mcPct-kPrev.mcPct:null;
   var deltaEbitda=kPrev?k.ebitdaPct-kPrev.ebitdaPct:null;
@@ -14770,7 +14912,7 @@ function rCierreResumen(box){
     '<div class="ck-card-t">Facturación</div>'+
     '<div class="ck-card-v">'+_ckMoneyShort(k.totFact)+'</div>'+
     '<div class="ck-card-s">'+f$(Math.round(k.totFact))+'</div>'+
-    (deltaFact!==null?'<div class="ck-card-d '+(deltaFact>=0?'pos':'neg')+'">'+_ckPct(deltaFact)+' vs mes ant.</div>':'')+
+    (deltaFact!==null?'<div class="ck-card-d '+(deltaFact>=0?'pos':'neg')+'">'+_ckPct(deltaFact)+' '+_ckVsTxt()+'</div>':'')+
   '</div>';
   // Margen Bruto
   var mbCls=k.mbPct>=30?'g':(k.mbPct>=20?'wrn':'r');
@@ -15028,10 +15170,16 @@ function _ckRenderLectura(k,kPrev,ebitdaTarget,esMesActual){
     lecturas.push('<b><span class="ck-flag r">−</span> EBITDA negativo:</b> '+_ckPct(k.ebitdaPct)+'. La operación no es rentable este mes.');
   }
   if(kPrev){
-    var dF=_ckDelta(k.totFact,kPrev.totFact);
+    var _cdL=_ckCorteDia(), _fpL=kPrev.totFact;
+    if(_cdL&&typeof VD!=='undefined'&&VD){
+      var _pnL=MES_ORD[new Date(cierreMes.getFullYear(),cierreMes.getMonth()-1,1).getMonth()];
+      _fpL=_ckHastaDia(VD.filter(function(v){return v.mes===_pnL;}),_cdL).reduce(function(a,v){return a+(Number(v.$)||0);},0);
+    }
+    var dF=_ckDelta(k.totFact,_fpL);
+    var _vsL=_cdL?('los mismos '+_cdL+' días del mes anterior'):'mes anterior';
     if(dF!==null){
-      if(dF>=5)lecturas.push('<b><span class="ck-flag o">↑</span> Crecimiento:</b> facturación +'+dF.toFixed(0)+'% vs mes anterior.');
-      else if(dF<=-5)lecturas.push('<b><span class="ck-flag wrn">↓</span> Bajada:</b> facturación '+dF.toFixed(0)+'% vs mes anterior. Vale revisar si es estacional o señal.');
+      if(dF>=5)lecturas.push('<b><span class="ck-flag o">↑</span> Crecimiento:</b> facturación +'+dF.toFixed(0)+'% vs '+_vsL+'.');
+      else if(dF<=-5)lecturas.push('<b><span class="ck-flag wrn">↓</span> Bajada:</b> facturación '+dF.toFixed(0)+'% vs '+_vsL+'. Vale revisar si es estacional o señal.');
     }
     var dMB=k.mbPct-kPrev.mbPct;
     if(dMB>=2)lecturas.push('<b><span class="ck-flag g">▲</span> MB mejoró:</b> '+(dMB>=0?'+':'')+_dec(dMB,1)+'pp. Mejor mix de canales o pricing.');
@@ -15057,7 +15205,7 @@ function rCierreVentas(box){
   // Datos mes anterior para comparativa
   var prevD=new Date(cierreMes.getFullYear(),cierreMes.getMonth()-1,1);
   var prevMesNom=MES_ORD[prevD.getMonth()];
-  var ventasPrev=((typeof VD!=='undefined'&&VD)||[]).filter(function(v){return v.mes===prevMesNom;});
+  var ventasPrev=_ckHastaDia(((typeof VD!=='undefined'&&VD)||[]).filter(function(v){return v.mes===prevMesNom;}),_ckCorteDia());
 
   var h='';
   h+=_ckVentasHeader(ventasMes,ventasPrev);
@@ -15088,7 +15236,7 @@ function _ckVentasHeader(ventasMes,ventasPrev){
   function pill(v,isPP){
     if(v===null||isNaN(v))return '';
     var cls=v>=0?'pos':'neg';var pref=v>=0?'+':'';var suf=isPP?'pp':'%';
-    return '<div class="ck-card-d '+cls+'">'+pref+_dec(v,1)+suf+' vs '+MES_ORD[new Date(cierreMes.getFullYear(),cierreMes.getMonth()-1,1).getMonth()].substring(0,3)+'</div>';
+    return '<div class="ck-card-d '+cls+'">'+pref+_dec(v,1)+suf+' '+_ckVsTxt()+'</div>';
   }
   var h='<div class="ck-grid" style="margin-bottom:12px">';
   h+='<div class="ck-card o"><div class="ck-card-t">Facturación</div><div class="ck-card-v">'+_ckMoneyShort(s.fact)+'</div><div class="ck-card-s">'+f$(Math.round(s.fact))+'</div>'+pill(dFact)+'</div>';
@@ -15329,24 +15477,33 @@ function rCierreClientes(box){
 
   var COLORS={Home:'#F07D47',Pilar:'#5C3A2A',Clubes:'#7A4A4A',Red:'#A89880',Catering:'#4CAF50',B2B:'#7B6BD9'};
   // Construir historia por cliente (toda la data)
+  /* UN CLIENTE ES SU TELEFONO, no como se escribio su nombre (13/9/2026). Con el
+     nombre crudo la cartera daba 478 clientes contra los 367 de Inicio, y el mismo
+     cliente tipeado distinto contaba como NUEVO. Es la identidad del resto del
+     ERP (`_ocasiones`, el CRM): los ultimos 10 digitos, y el nombre solo si no hay
+     telefono. */
   var hist={};
   vd.forEach(function(v){
     var cli=String(v.cliente||'').trim();if(!cli)return;
     var d=_ckParseDMY(v.fecha);if(!d)return;
     var m=cli.match(/^(.+?)\s*\(([^)]+)\)$/);
     var nom=m?m[1].trim():cli,extra=m?m[2].trim():'';
-    if(!hist[cli])hist[cli]={nom:nom,extra:extra,canal:_ckVentasCanalKey(v),dates:[],fMes:0,nMes:0,fTot:0,nTot:0};
-    var h=hist[cli];
+    var _tel=String(v.tel||'').replace(/\D/g,'');
+    var key=_tel.length>=8?('T'+_tel.slice(-10)):('N'+nom.toLowerCase().replace(/\s+/g,' '));
+    if(!hist[key])hist[key]={nom:nom,extra:extra,canal:_ckVentasCanalKey(v),dates:[],fMes:0,nMes:0,fTot:0,nTot:0};
+    var h=hist[key];
     h.dates.push(d.getTime());h.fTot+=+v.$||0;h.nTot++;
     if(d.getFullYear()===y&&d.getMonth()===mo){h.fMes+=+v.$||0;h.nMes++;h.canal=_ckVentasCanalKey(v);}
   });
   // Contar activos de cualquier mes (para comparativa)
-  function cliMes(yy,mm){
+  /* `corte` = contar solo hasta ese dia del mes (el mes en curso se compara contra
+     los mismos dias del anterior, ver _ckCorteDia). */
+  function cliMes(yy,mm,corte){
     var ms=new Date(yy,mm,1).getTime();
     var r={act:0,nue:0,rea:0,rec:0};
     Object.keys(hist).forEach(function(k){
       var ds=hist[k].dates;
-      var inm=false;for(var i=0;i<ds.length;i++){var dt=new Date(ds[i]);if(dt.getFullYear()===yy&&dt.getMonth()===mm){inm=true;break;}}
+      var inm=false;for(var i=0;i<ds.length;i++){var dt=new Date(ds[i]);if(dt.getFullYear()===yy&&dt.getMonth()===mm&&(!corte||dt.getDate()<=corte)){inm=true;break;}}
       if(!inm)return;r.act++;
       var before=ds.filter(function(t){return t<ms;});
       if(!before.length)r.nue++;
@@ -15376,8 +15533,8 @@ function rCierreClientes(box){
   var carteraTot=Object.keys(hist).length;
   // Comparativa mes anterior
   var pd=new Date(y,mo-1,1);
-  var prev=cliMes(pd.getFullYear(),pd.getMonth());
-  function dPill(a,b){if(!b||b===0)return '';var dv=(a-b)/Math.abs(b)*100;return '<div class="ck-card-d '+(dv>=0?'pos':'neg')+'">'+(dv>=0?'+':'')+dv.toFixed(0)+'% vs '+MES_ORD[pd.getMonth()].substring(0,3)+'</div>';}
+  var prev=cliMes(pd.getFullYear(),pd.getMonth(),_ckCorteDia());
+  function dPill(a,b){if(!b||b===0)return '';var dv=(a-b)/Math.abs(b)*100;return '<div class="ck-card-d '+(dv>=0?'pos':'neg')+'">'+(dv>=0?'+':'')+dv.toFixed(0)+'% '+_ckVsTxt()+'</div>';}
 
   var h='';
   // HERO
@@ -15519,7 +15676,7 @@ function rCierreCaja(box){
   h+='<div class="ck-card r"><div class="ck-card-t">Egresos de caja</div><div class="ck-card-v">'+_ckMoneyShort(outTot)+'</div><div class="ck-card-s">gastos + pagos a proveedores</div></div>';
   h+='<div class="ck-card '+(neto>=0?'o':'r')+'"><div class="ck-card-t">Flujo neto</div><div class="ck-card-v '+netoCls+'">'+(neto>=0?'+':'')+_ckMoneyShort(neto)+'</div><div class="ck-card-s">'+(neto>=0?'la caja creció':'la caja se achicó')+'</div></div>';
   var tasaEf=inTot>0?inEf/inTot*100:0;
-  h+='<div class="ck-card"><div class="ck-card-t">Mix de cobro</div><div class="ck-card-v">'+tasaEf.toFixed(0)+'% ef</div><div class="ck-card-s">Ef '+_ckMoneyShort(inEf)+' · MP '+_ckMoneyShort(inMp)+'</div></div>';
+  h+='<div class="ck-card"><div class="ck-card-t">Mix de cobro</div><div class="ck-card-v">'+tasaEf.toFixed(0)+'% ef</div><div class="ck-card-s">Ef '+_ckMoneyShort(inEf)+' · Transf. '+_ckMoneyShort(inMp)+'</div></div>';
   h+='</div>';
 
   // FLUJO DIARIO — barras netas por día
@@ -15824,6 +15981,25 @@ function eerrKpisMes(mn,anio){
 //   - Sueldo del dueño: solo lo efectivamente girado, no el piso.
 //   - Comisiones MP estimadas tampoco (no son egreso real, son cálculo).
 // ═══════════════════════════════════════════════════════════════
+/* ── QUE MOVIMIENTO DE EGRESOS/INGRESOS ES PLATA QUE ENTRA O SALE (13/9/2026) ──
+   Dos categorias de las hojas Egresos e Ingresos NO son una entrada ni una salida
+   del negocio, y hasta ese dia se sumaban igual:
+   · "Cambio cruzado" (los vueltos): el cliente paga de mas por una cuenta y se le
+     devuelve por otra. Hay una fila en Egresos y su espejo en Ingresos: es plata
+     que cambia de bolsillo, no un gasto ni un ingreso.
+   · "Liquidacion Red": lo que un vendedor rinde. Ese mismo cobro ya esta contado
+     en los pedidos de Red (Estado de Pago = Cobrado). Sumarlo como "otro ingreso"
+     lo contaria dos veces — en abril, $230.408 de Marcos Bottcher.
+   Los rendimientos de Mercado Pago SI son un ingreso, y siguen entrando. */
+function _catMov(c){
+  var s=String(c||'').trim().toLowerCase();
+  try{ s=s.normalize('NFD').replace(/[\u0300-\u036f]/g,''); }catch(e){}
+  if(s.length>3&&s.charAt(s.length-1)==='s')s=s.substring(0,s.length-1);
+  return s;
+}
+function _esVuelto(m){ return _catMov(m&&m.cat)==='cambio cruzado'; }
+function _esLiqRed(m){ return _catMov(m&&m.cat)==='liquidacion red'; }
+
 // Helper: calcula el flujo neto financiero de cualquier mes (sin renderizar).
 // Se usa para los 3 meses previos al mes actual en el bloque Estado de Caja.
 function eerrFlujoMes(mn,anio){
@@ -15848,11 +16024,11 @@ function eerrFlujoMes(mn,anio){
   });
   var coberturaFC=cobr>0?Math.round((1-cobrEst/cobr)*100):0;
   var otros=0;
-  ((D&&D.ingresos)||[]).filter(function(i){return i.mes===mesNom;}).forEach(function(i){otros+=Number(i.$)||0;});
+  ((D&&D.ingresos)||[]).filter(function(i){return i.mes===mesNom&&!_esVuelto(i)&&!_esLiqRed(i);}).forEach(function(i){otros+=Number(i.$)||0;});
   var entradas=cobr+otros;
-  // Egresos (todos del mes, sin imputados/provisiones)
+  // Egresos (todos del mes, sin imputados/provisiones). Un vuelto no es un gasto.
   var salidas=0;
-  ((D&&D.gastos)||[]).filter(function(g){return g.mes===mesNom;}).forEach(function(g){
+  ((D&&D.gastos)||[]).filter(function(g){return g.mes===mesNom&&!_esVuelto(g);}).forEach(function(g){
     salidas+=Number(g.$)||0;
   });
   return {entradas:entradas,salidas:salidas,flujo:entradas-salidas,cobranzas:cobr,cobertura:coberturaFC};
@@ -15894,7 +16070,7 @@ function rEERR_financiero(body){
 
   // Otros ingresos no-venta (D.ingresos del mes) — incluye liquidaciones Red, rendimientos, etc.
   var otrosIng=0,otrosIngDet=[];
-  ((D&&D.ingresos)||[]).filter(function(i){return i.mes===mesNom;}).forEach(function(i){
+  ((D&&D.ingresos)||[]).filter(function(i){return i.mes===mesNom&&!_esVuelto(i)&&!_esLiqRed(i);}).forEach(function(i){
     var m=Number(i.$)||0;otrosIng+=m;otrosIngDet.push({con:i.con||'',not:i.not||'',m:m});
   });
   var totEntradas=totCobr+otrosIng;
@@ -15914,7 +16090,7 @@ function rEERR_financiero(body){
   var pagExt=0,pagExtD=[];
   var pagCapex=0,pagCapexD=[];
 
-  ((D&&D.gastos)||[]).filter(function(g){return g.mes===mesNom;}).forEach(function(g){
+  ((D&&D.gastos)||[]).filter(function(g){return g.mes===mesNom&&!_esVuelto(g);}).forEach(function(g){
     var rawCat=g.cat||'Otro',m=Number(g.$)||0;
     var cat=normCat(rawCat);
     var con=String(g.con||'').toLowerCase(),not=String(g.not||'').toLowerCase();
@@ -16780,6 +16956,12 @@ function rEERR_dual(body){
     var con=String(g.con||'').toLowerCase(),not=String(g.not||'').toLowerCase();
     var txt=con+' '+not;
     if(cat==='proveedor')return; // ya en CMV devengado
+    /* Un vuelto (Cambio cruzado) NO es un gasto (13/9/2026): el cliente pago de
+       mas en efectivo y se le devolvio por transferencia, o al reves. La plata
+       entra por una cuenta y sale por otra, y su espejo esta en Ingresos. Hasta
+       ese dia caia en "Otros gastos administrativos": septiembre restaba $36.900
+       que no se gastaron. */
+    if(_esVuelto(g))return;
     // Detección extraordinarios por keyword
     if(isExtraord(txt)){
       if(txt.indexOf('regalo')>=0){ext_regalos+=m;pushDet(ext_regalosD,g,m);}
@@ -17366,7 +17548,7 @@ function _rEERREconomicoStub(body){ // dejado por compat — no usar
     }
   });
   // Gastos operativos del mes (D.gastos viene del backend con campo mes)
-  var gastos=((D&&D.gastos)||[]).filter(function(g){return g.mes===mesNom;});
+  var gastos=((D&&D.gastos)||[]).filter(function(g){return g.mes===mesNom&&!_esVuelto(g);});
   var gPorCat={},totGastos=0;
   gastos.forEach(function(g){var cat=g.cat||'Otro';var m=Number(g.$)||0;gPorCat[cat]=(gPorCat[cat]||0)+m;totGastos+=m;});
 
@@ -18978,9 +19160,17 @@ function rVentas(){
   //   ef = solo Efectivo del Total (sin propina)    pEf = Propina en efectivo
   //   tr = solo Trans/MP del Total (sin propina)    pTr = Propina en MP/transf
   //   Cobrado real = ef + tr + pEf + pTr  → debe cuadrar con Facturado si esta todo cobrado.
-  var totalFact=0,totalPed=filtered.length,totalEf=0,totalTr=0,totalPropEf=0,totalPropTr=0;
+  /* LO COBRADO ES SOLO LO QUE DICE COBRADO (13/9/2026). Un pedido cargado ya trae
+     escrito cuanto va a pagar y por donde —Efectivo/Transferencia se llenan al
+     cargarlo—, asi que sumar ef+tr de TODAS las ventas contaba como cobrado lo que
+     todavia no entro: $405.130 el 13/9, con "Pendiente cobrar" en $56.644 cuando
+     eran $612.566. Ahora el efectivo, la transferencia y las propinas se suman
+     solo de lo cobrado, y lo pendiente es el facturado de lo que NO se cobro —
+     la misma cuenta que "A cobrar" de Inicio. */
+  var totalFact=0,totalPed=filtered.length,totalEf=0,totalTr=0,totalPropEf=0,totalPropTr=0,totalPendNoCob=0;
   filtered.forEach(function(v){
     totalFact+=v.$;
+    if(v.ep!=='Cobrado'){totalPendNoCob+=Number(v.$)||0;return;}
     totalEf+=Number(v.ef)||0;
     totalTr+=Number(v.tr)||0;
     totalPropEf+=Number(v.pEf)||0;
@@ -18994,7 +19184,7 @@ function rVentas(){
   var totalCob=totalEf+totalTr+totalPropPos;
   var totalEfRecibido=totalEf+Math.max(0,totalPropEf);
   var totalTrRecibido=totalTr+Math.max(0,totalPropTr);
-  var totalPend=Math.max(0,totalFact-totalCob);
+  var totalPend=totalPendNoCob;
   var sumPropinas=totalPropinas!==0
     ? '<div class="v-kpi prop"><div class="v-kpi-v">'+(totalPropinas<0?'-':'')+'$'+f$(Math.abs(totalPropinas))+'</div><div class="v-kpi-l">Propinas / Ajustes</div></div>'
     : '';
@@ -25765,7 +25955,10 @@ if('serviceWorker' in navigator){
       '<div class="pv-kpi"><div class="lbl">$ Mes actual</div><div class="val">$'+fmtU(Math.round(R.costoMesAct||0))+'</div><div class="sub">'+deltaTxt(deltaMes)+' vs mes ant.</div></div>'+
       '<div class="pv-kpi"><div class="lbl">Ticket promedio / OC</div><div class="val">$'+fmtU(Math.round(ticketProm))+'</div><div class="sub">YTD '+anioAct+'</div></div>'+
       '<div class="pv-kpi"><div class="lbl">Costo unit. promedio</div><div class="val">$'+fmtU(Math.round(costoUnitProm))+'</div><div class="sub">ponderado YTD</div></div>'+
-      '<div class="pv-kpi"><div class="lbl">$ Pagado YTD</div><div class="val">$'+fmtU(Math.round(R.pagadoYtd||0))+'</div><div class="sub">'+(R.costoYtd>0?Math.round((R.pagadoYtd||0)/R.costoYtd*100):0)+'% del comprado</div></div>'+
+      /* Sin "% del comprado" (13/9/2026): lo pagado sale del ledger, que arranca el
+         27/4, y lo comprado es todo el año. Sevuchitas daba "91% del comprado" con
+         la deuda en otro lado; la deuda de verdad es la tarjeta de al lado. */
+      '<div class="pv-kpi"><div class="lbl">$ Pagado YTD</div><div class="val">$'+fmtU(Math.round(R.pagadoYtd||0))+'</div><div class="sub">registrado desde el 27/4</div></div>'+
       '<div class="pv-kpi"><div class="lbl">Deuda viva</div><div class="val" style="color:'+((R.deudaCalc||0)>0?'#dc2626':'#16a34a')+'">$'+fmtU(Math.round(R.deudaCalc||0))+'</div><div class="sub">Concentración: '+Math.round(conc*100)+'%</div></div>';
   }
 

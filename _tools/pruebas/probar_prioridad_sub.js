@@ -147,6 +147,27 @@ const chk = (c, t, x) => { if (c) { ok++; console.log('  ok   ' + t); } else { m
     console.log('  solto: ' + JSON.stringify(rutaOrden.nuevas));
     chk((rutaOrden.nuevas || [])[0] === 'cobrosPendientes',
       '  y la cola suelta `cobrosPendientes`, el endpoint de COBROS', JSON.stringify(rutaOrden.nuevas));
+
+    /* ── AUTOPEDIDO dibuja de TRES endpoints (13/9/2026). Con solo `precios` en
+       el mapa, `stock_full` y `piezas_full` salian ULTIMOS: con la app recien
+       abierta el stock llegaba 26 s despues de tocar la pestaña. */
+    console.log('\n-- y el AUTOPEDIDO, que dibuja de tres endpoints --');
+    const npOrden = await evaluar(cli, `(async () => {
+      switchTab('nuevo');
+      const antes = window.__salidas.length;
+      const t0 = Date.now();
+      while (Date.now() - t0 < ${DEMORA * 4}) {
+        if (window.__salidas.length >= antes + 3) break;
+        await new Promise(r => setTimeout(r, 120));
+      }
+      return { nuevas: window.__salidas.slice(antes).map(x => x.a), fila: window.__colaGet() };
+    })()`);
+    console.log('  solto: ' + JSON.stringify(npOrden.nuevas) + '  (quedan ' + (npOrden.fila && npOrden.fila.cola) + ' en la fila)');
+    const tres = (npOrden.nuevas || []).slice(0, 3);
+    chk(tres.indexOf('stock_full') >= 0, '  `stock_full` sale entre los tres primeros', JSON.stringify(npOrden.nuevas));
+    chk(tres.indexOf('piezas_full') >= 0, '  `piezas_full` tambien', JSON.stringify(npOrden.nuevas));
+    chk(tres.every(a => ['precios', 'stock_full', 'piezas_full'].indexOf(a) >= 0),
+      '  y nada que esa pantalla no use se les adelanta', JSON.stringify(tres));
   }
 
   console.log('\n' + (mal ? '  ' + ok + ' ok · ' + mal + ' MAL' : '  ' + ok + ' ok, todo bien') + '\n');
