@@ -93,6 +93,11 @@ if not ESCRIBIR:
     sys.exit(0)
 
 hoy = __import__('datetime').datetime.now().strftime('%d/%m/%Y')
+# --salida=dd/mm/aaaa: la fecha REAL de la entrega, si no fue hoy (13/9/2026: los
+# pedidos cargados ya Entregados del 12/9 se regularizaron pasada la medianoche).
+for _a in sys.argv:
+    if _a.startswith('--salida='):
+        hoy = _a.split('=', 1)[1].strip()
 datos = []
 for x in mover:
     datos.append({'range': "'Piezas Carne'!E%d" % x['fila'], 'values': [['Entregada']]})
