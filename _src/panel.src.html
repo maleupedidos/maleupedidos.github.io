@@ -172,6 +172,20 @@ body{font-family:'Inter',-apple-system,'Segoe UI',system-ui,sans-serif;backgroun
 .st-fija-der{position:sticky;right:0;z-index:2;background:#fff}
 .st-lg{display:inline}
 .st-sm{display:none}
+/* En el encabezado la celda clavada lleva el fondo del encabezado, no el blanco de
+   las filas: en escritorio se veia una barra blanca al lado de "PRODUCTO". Hasta
+   el 13/9/2026 esta regla vivia solo en el media query del celular. */
+.st-cab .st-fija,.st-cab .st-fija-der{background:var(--cr)}
+.si-v.st-aj{color:var(--ink4)}
+.si-v.st-aj.mas,.si-v.st-aj.menos{color:var(--wrn)}
+.st-dep{white-space:nowrap}
+.st-pie{font-size:11.5px;color:var(--ink3);line-height:1.5;margin:10px 2px 4px}
+.st-aviso{grid-column:1/-1;background:var(--wrnb);border:1px solid #F4D48A;border-radius:6px;
+  padding:9px 12px;font-size:12.5px;color:var(--ink2);line-height:1.45}
+.st-aviso b{color:var(--ink)}
+.st-contar{border:1px solid var(--border);background:#fff;color:var(--o);font-weight:700;
+  font-size:12px;border-radius:5px;padding:4px 10px;min-height:30px;cursor:pointer;
+  font-family:inherit;margin-left:6px}
 .st{font-size:13px;font-weight:700;color:var(--ink);text-transform:none;letter-spacing:0;padding:18px 0 10px;display:flex;align-items:center;gap:8px}
 .st::before{content:'';width:3px;height:14px;background:var(--o);border-radius:2px}
 
@@ -3398,7 +3412,7 @@ body.role-single .statusbar{font-size:11px}
   </div>
   <div id="stProductos">
     <div class="kg" id="sKpi"></div>
-    <div class="st">&#128230; Productos</div>
+    <div class="st" id="sTitulo">&#128230; Productos</div>
     <div id="sList"></div>
   </div>
   <div id="stContar" style="display:none"></div>
@@ -13696,6 +13710,9 @@ function stEsc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){
    DOS es un bloqueo, porque el de Lucas lo cuenta Lucas y Lucas no toca la
    planilla. */
 var ST_TAB = 'productos', DEP_DATA = null, DEP_SEL = '', DEP_PEDIDO = false;
+/* Cuando algo cambio el stock desde CONTAR / MOVER / RECIBIR CARNE (ms), cuando se
+   intento traer el volcado por ese cambio, y si esta viajando. Ver rStock. */
+var ST_SUCIO = 0, ST_INTENTO = 0, ST_RECARGANDO = false;
 var DEP_CONTADOS = {};   // abbr|dep de lo contado en esta sesion, para marcar la fila
 
 function stSwitchTab(t){
@@ -13707,6 +13724,9 @@ function stSwitchTab(t){
   if($('stContar'))$('stContar').style.display=(t==='contar')?'':'none';
   if($('stMover'))$('stMover').style.display=(t==='mover')?'':'none';
   if($('stCarne'))$('stCarne').style.display=(t==='carne')?'':'none';
+  /* Volver a PRODUCTOS repinta: si algo se conto o se movio mientras tanto, es
+     rStock el que lo dice y trae el stock nuevo. */
+  if(t==='productos'&&typeof rStock==='function'){ try{ rStock(); }catch(e){ console.error('rStock',e); } }
   if(t==='contar'||t==='mover')stDepPedir();
   if(t==='carne')stCarnePedir();
 }
@@ -13852,6 +13872,7 @@ function stContarBlur(abbr,inp){
         // Solo si el backend mando el total. Un `{ok:true}` pelado —un Apps
         // Script viejo, o un stub de prueba— dejaria el stock en NaN.
         if(typeof d.total==='number'&&isFinite(d.total))pr.f=d.total;
+        ST_SUCIO=Date.now();
         toast(pr.n+': '+stFmt(v,pr.u)+' '+(pr.u==='kg'?'kg':'u')+' en '+stDepNombre(DEP_SEL));
       } else {
         pr.porDep[DEP_SEL]=antes;
@@ -14193,6 +14214,7 @@ function stCarneGuardar(){
         CARNE_COLA=[];
         _carneColaGuardar();
         CARNE_DEP='';   // la proxima tanda se vuelve a elegir
+        ST_SUCIO=Date.now();
         /* Se repinta YA: sin esto la pantalla seguia mostrando la tanda guardada,
            con el boton en "Guardando..." y el deposito marcado, hasta que volvia
            el refresco de carnePiezas (5-8 s). */
@@ -14232,6 +14254,7 @@ function stCarneBaja(id,peso){
     .then(function(r){return r.json();})
     .then(function(d){
       if(d&&d.ok){
+        if(!d.yaEstaba)ST_SUCIO=Date.now();
         toast(d.yaEstaba?'Esa pieza ya no estaba en el freezer':'\u2713 Pieza de '+peso+' kg dada de baja');
         stCarnePedir(true);
         /* Refresca tambien el reparto por deposito de la tab PRODUCTOS, que mira
@@ -14329,6 +14352,7 @@ function stMoverBlur(abbr,inp){
       if(d&&d.ok){
         pr.porDep[desde]=(typeof d.ahoraDesde==='number')?d.ahoraDesde:(aca-v);
         pr.porDep[hacia]=(typeof d.ahoraHacia==='number')?d.ahoraHacia:((Number(pr.porDep[hacia])||0)+v);
+        ST_SUCIO=Date.now();
         // El toast escribe con textContent, asi que una entidad HTML se veria
         // literal ("&rarr;"). Va la flecha de verdad.
         toast(stFmt(v,pr.u)+' '+(pr.u==='kg'?'kg':'u')+' de '+pr.n+' → '+stDepNombre(hacia));
@@ -14354,13 +14378,19 @@ function stDepNombre(id){
     un solo numero de stock y no se ve que hay dos freezers. */
 function rStockReparto(){
   var cont=$('sKpiDep'); if(!cont)return;
-  if(!DEP_DATA||!DEP_DATA.deps||!DEP_DATA.deps.length){cont.innerHTML='';return;}
-  var deps=DEP_DATA.deps, prods=DEP_DATA.productos||[], partes=[], hayKg=false;
+  /* La fuente es el volcado (`stock[].pd`) cuando lo trae: la misma foto que la
+     tabla. Si no, lo que trajo `action=depositos`. */
+  var mismo=_stTienePd(), deps=null, prods=null;
+  if(mismo){
+    deps=D.stockDeps;
+    prods=D.stock.map(function(s){return {n:s.n,a:s.a,u:s.u,f:s.f,porDep:s.pd||{}};});
+  }else if(DEP_DATA&&DEP_DATA.deps&&DEP_DATA.deps.length){
+    deps=DEP_DATA.deps; prods=DEP_DATA.productos||[];
+  }
+  if(!deps){cont.innerHTML='';return;}
+  var partes=[], hayKg=false;
   for(var i=0;i<deps.length;i++){
-    /* Los kilos NO se suman con las unidades. Un "214" que son 168 packs mas 46
-       kg de carne no significa nada, y el rotulo decia "unidades" para las dos
-       cosas. Es el mismo error que ya se arreglo en la barra de la tab «+» y en
-       el KPI de Ventas > PRODUCTOS. */
+    /* Los kilos NO se suman con las unidades. */
     var totU=0, totK=0;
     for(var k=0;k<prods.length;k++){
       var q=Number((prods[k].porDep||{})[deps[i].id])||0;
@@ -14370,12 +14400,32 @@ function rStockReparto(){
     if(totK>0.0001)hayKg=true;
     var val=stFmt(totU,'u')+' u';
     if(totK>0.0001)val+=' &middot; '+stFmt(totK,'kg')+' kg';
-    partes.push(stEsc(deps[i].nombre.replace(/^Dep(o|ó)sito /,''))+' '+val);
+    // Un deposito por renglon: en una card de 170px los numeros se partian a la mitad.
+    partes.push('<div class="st-dep">'+stEsc(deps[i].nombre.replace(/^Dep(o|ó)sito /,''))+' '+val+'</div>');
   }
-  cont.innerHTML='<div class="card"><div class="kl">D&oacute;nde est&aacute;</div>'
-    +'<div class="kv" style="font-size:16px">'+partes.join(' &middot; ')+'</div>'
+  /* El total de un producto (col F) y lo que suman sus depositos tienen que dar lo
+     mismo: los dos los escribe `_moverFisico_`. Si no dan es porque alguien toco
+     la col F a mano en el Sheets. El 13/9/2026 pasaba con las Empanadas de Jamon y
+     Queso: la tabla decia 1 y los depositos 0, y "Donde esta" sumaba una unidad
+     menos que la tabla sin decir por que. Contar en CONTAR lo cuadra. Solo se
+     compara con el reparto del MISMO volcado: con otra foto seria un falso aviso. */
+  var desc=[];
+  if(mismo)prods.forEach(function(p){
+    var sum=0; for(var z=0;z<deps.length;z++)sum+=Number((p.porDep||{})[deps[z].id])||0;
+    if(Math.abs((Number(p.f)||0)-sum)>(p.u==='kg'?0.0005:0.5))desc.push(p);
+  });
+  var h='<div class="card"><div class="kl">D&oacute;nde est&aacute;</div>'
+    +'<div class="kv" style="font-size:16px">'+partes.join('')+'</div>'
     +'<div class="ks">'+(hayKg?'lo que hay en cada dep&oacute;sito':'unidades en cada dep&oacute;sito')
-    +' &middot; <a href="#" onclick="stSwitchTab(\'contar\');return false;">contar</a></div></div>';
+    +'<button class="st-contar" onclick="stSwitchTab(\'contar\')">Contar</button></div></div>';
+  if(desc.length){
+    h+='<div class="st-aviso">\u26a0\ufe0f '+desc.map(function(p){
+      var sum=0; for(var z=0;z<deps.length;z++)sum+=Number((p.porDep||{})[deps[z].id])||0;
+      return '<b>'+stEsc(p.n)+'</b>: el total dice '+stFmt(p.f,p.u)+' y los dep&oacute;sitos suman '+stFmt(sum,p.u);
+    }).join(' &middot; ')+'. Suele pasar cuando se toca esa columna a mano en la planilla: '
+    +(desc.length===1?'contalo':'contalos')+' en CONTAR y queda cuadrado.</div>';
+  }
+  cont.innerHTML=h;
 }
 
 function rStock(){
@@ -14386,65 +14436,98 @@ function rStock(){
     if(_sc&&!_sc.innerHTML.trim())_sc.innerHTML='<div class="si" style="justify-content:center;color:var(--bl);padding:26px">Trayendo el stock\u2026</div>';
     return;
   }
-  // Header: semana actual + día + rango Lun→Dom
+  /* La semana de la tabla. Sale del reloj del aparato y va en el titulo: arriba de
+     los KPIs repetia el dia de hoy dos veces ("Dom 13/09 · Lun 07/09 → Dom 13/09"). */
   var now=new Date();
   var sem=getWeek(now);
-  var diasN=['Dom','Lun','Mar','Mié','Jue','Vie','Sáb'];
-  var diaTxt=diasN[now.getDay()];
   var dn=now.getDay()||7;
-  var lun=new Date(now);lun.setDate(now.getDate()-(dn-1));
-  var dom=new Date(lun);dom.setDate(lun.getDate()+6);
-  var fmt=function(d){return String(d.getDate()).padStart(2,'0')+'/'+String(d.getMonth()+1).padStart(2,'0');};
-  var headerTxt='Semana '+sem+' · '+diaTxt+' '+fmt(now)+' · Lun '+fmt(lun)+' → Dom '+fmt(dom);
+  var lun=new Date(now.getFullYear(),now.getMonth(),now.getDate()-(dn-1));
+  var dom=new Date(lun.getFullYear(),lun.getMonth(),lun.getDate()+6);
+  var fmt=function(d){return d.getDate()+'/'+(d.getMonth()+1);};
+  var tit=$('sTitulo');
+  if(tit)tit.innerHTML='&#128230; Semana '+sem+' \u00b7 lun '+fmt(lun)+' \u2192 dom '+fmt(dom);
 
-  // KPIs agregados
-  var totProd=D.stock.length;
-  /* Las unidades y los kilos van por separado (13/9/2026). "225.797 vend" eran 164
-     unidades + 61,797 kg de carne sumados, y con el punto decimal se leia como
-     doscientos veinticinco mil. Es el quinto lugar del ERP donde se escapaba. */
-  var sumInv=0,sumIni=0,sumVen=0,sumComp=0,sinStock=0,bajos=0,venKg=0,compKg=0,iniKg=0;
+  /* Inicial, Comprado y Vendidos son "de la semana" segun las formulas de la hoja,
+     que reescribe el cierre de cada lunes 00:00. Si la foto es de antes de este
+     lunes, o si el cierre no corrio, esas tres columnas son de la semana anterior
+     y la pantalla lo tiene que decir: mostrarlas con el rotulo de esta semana
+     seria mentir. Dos horas de margen: el disparador corre adentro de la hora. */
+  var avisos=[];
+  var lunMs=lun.getTime();
+  if(Number(D.ts)&&Number(D.ts)<lunMs)
+    avisos.push('Esta foto del stock es de la semana pasada. Toc\u00e1 \u21bb para traer la de ahora.');
+  else if(D.stockCierre&&now.getTime()>lunMs+2*3600e3){
+    var tc=new Date(D.stockCierre).getTime();
+    if(isFinite(tc)&&tc<lunMs)
+      avisos.push('El cierre de semana del lunes no corri\u00f3: <b>Inicial, Comprado y Vendidos</b> todav\u00eda son de la semana anterior.');
+  }
+  /* Algo se conto, se movio o se recibio en las otras sub-tabs DESPUES de esta foto.
+     Esas pantallas actualizan lo suyo al instante, pero la tabla vive del volcado:
+     sin esto, volver a PRODUCTOS mostraba el fisico de antes de contar. Se trae el
+     volcado UNA vez por cambio — si falla, se dice y no se reintenta en bucle. */
+  var sucio=ST_SUCIO&&ST_SUCIO>((typeof _frescoTs==='function'&&_frescoTs('volcado'))||0);
+  if(sucio){
+    var mirando=(ST_TAB==='productos')&&$('p-stock')&&$('p-stock').classList.contains('on');
+    if(mirando&&!ST_RECARGANDO&&ST_INTENTO!==ST_SUCIO&&typeof load==='function'){
+      ST_RECARGANDO=true; ST_INTENTO=ST_SUCIO;
+      var _fin=function(){ ST_RECARGANDO=false; try{rStock();}catch(e){console.error('rStock',e);} };
+      Promise.resolve(load()).then(_fin,_fin);
+    }
+    avisos.push(ST_RECARGANDO
+      ? 'Contaste o moviste mercader\u00eda hace un momento: trayendo el stock nuevo\u2026'
+      : 'Hubo cambios de stock despu\u00e9s de esta foto y no se pudieron traer. Toc\u00e1 \u21bb.');
+  }
+
+  /* KPIs. Las unidades y los kilos van por separado (13/9/2026): "225.797 vend"
+     eran 164 unidades + 61,797 kg de carne sumados. */
+  var sumInv=0,conStock=0,sinDisp=0,sinFis=0,bajos=0,hayPz=false;
+  var ven={u:0,k:0},comp={u:0,k:0},ini={u:0,k:0};
   D.stock.forEach(function(s){
-    sumInv+=Number(s.iv)||0;
-    var kg=(s.u==='kg');
-    if(kg){iniKg+=Number(s.i)||0;venKg+=Number(s.v)||0;compKg+=Number(s.c)||0;}
-    else{sumIni+=Number(s.i)||0;sumVen+=Number(s.v)||0;sumComp+=Number(s.c)||0;}
-    if(s.d<=0)sinStock++;
-    else if(!kg&&s.d<=3)bajos++;
+    var iv=Number(s.iv)||0; sumInv+=iv; if(iv>0)conStock++;
+    var b=(s.u==='kg')?'k':'u';
+    ven[b]+=Number(s.v)||0; comp[b]+=Number(s.c)||0; ini[b]+=Number(s.i)||0;
+    if(s.pz)hayPz=true;
+    var d=Number(s.d)||0, f=Number(s.f)||0;
+    if(d<=0){ sinDisp++; if(f<=0)sinFis++; }
+    else if(b==='u'&&d<=3)bajos++;   // "3 o menos" es una cuenta de unidades: en kilos no dice nada
   });
-  var _stUK=function(u,k){return f$(Math.round(u))+' u'+(k>0?' · '+stFmt(k,'kg')+' kg':'');};
+  var _stUK=function(x){
+    var k=Math.round(x.k*1000)/1000;
+    return f$(Math.round(x.u))+' u'+(k>0?' \u00b7 '+stFmt(k,'kg')+' kg':'');
+  };
+  var ksDisp=[];
+  if(sinFis>0)ksDisp.push(sinFis+' sin nada en el freezer');
+  if(sinDisp-sinFis>0)ksDisp.push((sinDisp-sinFis)+' todo reservado');
+  if(bajos>0)ksDisp.push(bajos+' con 3 u o menos');
 
   $('sKpi').innerHTML=
-    '<div style="grid-column:1/-1;font-size:11px;color:var(--ink3);margin:-4px 0 6px;letter-spacing:.02em;font-weight:500">'+headerTxt+'</div>'+
-    '<div class="card"><div class="kl">Valor del stock</div><div class="kv">$'+f$(Math.round(sumInv))+'</div><div class="ks">'+totProd+' productos en catálogo</div></div>'+
-    '<div class="card"><div class="kl">Movimiento sem '+sem+'</div><div class="kv">'+_stUK(sumVen,venKg)+'</div><div class="ks">vendido · '+_stUK(sumComp,compKg)+' comprado · '+_stUK(sumIni,iniKg)+' inicial</div></div>'+
-    '<div class="card'+(sinStock>0?' wrn':'')+'"><div class="kl">Sin stock</div><div class="kv">'+sinStock+'</div><div class="ks">'+(bajos>0?bajos+' bajos (≤3)':'sin alertas bajas')+'</div></div>';
+    avisos.map(function(a){return '<div class="st-aviso">\u26a0\ufe0f '+a+'</div>';}).join('')+
+    '<div class="card"><div class="kl">Valor del stock</div><div class="kv">$'+f$(Math.round(sumInv))+'</div><div class="ks">al costo \u00b7 '+conStock+' producto'+(conStock===1?'':'s')+' con stock</div></div>'+
+    '<div class="card"><div class="kl">Vendido esta semana</div><div class="kv">'+_stUK(ven)+'</div><div class="ks">entr\u00f3 '+_stUK(comp)+' \u00b7 arranc\u00f3 con '+_stUK(ini)+'</div></div>'+
+    '<div class="card'+(sinDisp>0?' wrn':'')+'"><div class="kl">Sin disponible</div><div class="kv">'+sinDisp+'</div><div class="ks">'+(ksDisp.length?ksDisp.join(' \u00b7 '):'todos tienen algo para vender')+'</div></div>';
 
-  // Donde esta cada cosa. Se pide una sola vez por sesion (3,7 KB) y se pinta
-  // cuando llega: la tab no espera por esto.
+  /* Donde esta cada cosa. Desde el 13/9/2026 el reparto viaja en el MISMO volcado
+     (`stock[].pd`), asi la card y la tabla son la misma foto. Un Apps Script
+     anterior no lo manda: ahi se sigue pidiendo `action=depositos` como antes. */
   $('sKpi').innerHTML+='<div id="sKpiDep" style="display:contents"></div>';
-  if(!DEP_PEDIDO)stDepPedir(); else rStockReparto();
+  if(_stTienePd()) rStockReparto();
+  else if(!DEP_PEDIDO)stDepPedir(); else rStockReparto();
 
   var sc=$('sList');sc.innerHTML='';
-  if(!D.stock||!D.stock.length){sc.innerHTML='<div class="empty"><i>&#128230;</i><p>Sin datos</p></div>';return;}
+  if(!D.stock.length){sc.innerHTML='<div class="empty"><i>&#128230;</i><p>Sin datos</p></div>';return;}
 
-  // Grilla tabular: 1 col producto + 6 cols numéricas centradas (Inicial, Comprado, Vendidos, Físico, Reservado, Disponible)
-  /* La grilla mide ~640px (producto + 6 numeros). En un celular de 390 se
-     cortaba en la 2da columna y encima no se podia deslizar, porque .pg
-     recorta el desborde. Ahora la tabla vive en su propio carril que SI se
-     desliza, y la columna del producto queda clavada a la izquierda para no
-     perder de vista que fila estas mirando. Reportado por Tadeo (21/8/2026). */
-  var gridCols='display:grid;grid-template-columns:var(--st-c1,minmax(180px,1fr)) repeat(6,var(--st-cn,72px));gap:8px;align-items:center';
+  /* La grilla mide ~700px (producto + 7 numeros). En un celular de 390 vive en su
+     propio carril que SI se desliza, con el producto clavado a la izquierda y el
+     Disponible a la derecha (Tadeo, 21/8/2026). */
+  var gridCols='display:grid;grid-template-columns:var(--st-c1,minmax(180px,1fr)) repeat(7,var(--st-cn,72px));gap:8px;align-items:center';
   var headRow=
     '<div class="st-cab" style="'+gridCols+';padding:8px 14px;font-size:10px;color:var(--ink3);text-transform:uppercase;letter-spacing:.06em;font-weight:600;border-bottom:1px solid var(--border);margin-bottom:4px">'+
       '<div class="st-fija">Producto</div>'+
-      // En 56px de ancho "Reservado" y "Disponible" se pisaban entre si. Cada
-      // encabezado lleva su version larga y su version corta; el CSS elige.
       _stCab('Inicial','Ini')+_stCab('Comprado','Comp')+_stCab('Vendidos','Vend')+
-      _stCab('Físico','Físico')+_stCab('Reservado','Res')+
+      _stCab('Ajuste','Aj')+_stCab('F\u00edsico','F\u00edsico')+_stCab('Reservado','Res')+
       '<div class="st-fija-der" style="text-align:center"><span class="st-lg">Disponible</span><span class="st-sm">Disp</span></div>'+
     '</div>';
 
-  // Agrupar por categoría
   var cats={};
   D.stock.forEach(function(s){
     var cat=PROD_CATS[s.a]||(s.u==='kg'?'Carnes (por kilo)':'Otros');
@@ -14452,26 +14535,51 @@ function rStock(){
     cats[cat].push(s);
   });
   var catOrder=['Pack Pizzas x2','Pizzas Individuales','Wraps','Empanadas','Sorrentinos','Tartas','Franuis','Tortas','Carnes (por kilo)','Otros'];
-  var html='<div class="st-carril"><div class="st-tabla">'+headRow;
+  var html='<div class="st-carril"><div class="st-tabla">'+headRow, conAjuste=0;
   catOrder.forEach(function(cat){
     var items=cats[cat];if(!items||!items.length)return;
     html+='<div class="st" style="padding:14px 0 6px"><span class="st-cat-txt">'+cat+'</span></div>';
     items.forEach(function(s){
-      var cls=s.d<=0?'zero':s.d<=3?'low':'ok';
+      var kg=(s.u==='kg');
+      var d=Number(s.d)||0;
+      var cls=d<=0?'zero':(!kg&&d<=3)?'low':'ok';
+      var aj=_stAjuste(s);
+      if(aj!==0)conAjuste++;
+      var ajTxt=aj===0?'\u00b7':(aj>0?'+':'\u2212')+stFmt(Math.abs(aj),s.u);
       html+='<div class="si" style="'+gridCols+';padding:10px 14px">'+
-        '<div class="si-n st-fija">'+s.n+'</div>'+
-        /* Los kilos al gramo y con coma: "21.134999999999998" y "5.182" (cinco kilos,
-           no cinco mil) salian tal cual del punto flotante. */
+        '<div class="si-n st-fija" title="'+stEsc(s.n)+'">'+stEsc(s.n)+'</div>'+
         '<div class="si-v" style="color:var(--ink3)">'+stFmt(s.i,s.u)+'</div>'+
         '<div class="si-v" style="color:var(--ink3)">'+stFmt(s.c,s.u)+'</div>'+
         '<div class="si-v" style="color:var(--ink3)">'+stFmt(s.v,s.u)+'</div>'+
+        '<div class="si-v st-aj'+(aj>0?' mas':aj<0?' menos':'')+'">'+ajTxt+'</div>'+
         '<div class="si-v">'+stFmt(s.f,s.u)+'</div>'+
         '<div class="si-v">'+stFmt(s.r,s.u)+'</div>'+
         '<div class="si-v st-fija-der '+cls+'">'+stFmt(s.d,s.u)+'</div>'+
       '</div>';
     });
   });
-  sc.innerHTML=html+'</div></div>';
+  /* La cuenta de cada fila, dicha. Sin esto, una fila donde Inicial + Comprado −
+     Vendidos no da el Fisico se lee como un error del ERP, cuando casi siempre es
+     un conteo: el 13/9/2026 eran 3 productos, los 3 contados a mano. */
+  html+='</div></div><div class="st-pie">Inicial + Comprado \u2212 Vendidos \u00b1 Ajuste = F\u00edsico. '
+    +'El <b>ajuste</b> es lo que se corrigi\u00f3 contando o sali\u00f3 sin ser una venta'
+    +(conAjuste?' ('+conAjuste+' producto'+(conAjuste===1?'':'s')+' esta semana)':'')
+    +': el detalle de cada movimiento est\u00e1 en el Kardex.'
+    +(hayPz?' En la carne, <b>comprado</b> son los kilos de las piezas recibidas en la semana.':'')
+    +'</div>';
+  sc.innerHTML=html;
+}
+
+/** Lo que Inicial + Comprado − Vendidos no explica del Fisico, al gramo o a la
+    unidad. 0 si cierra. */
+function _stAjuste(s){
+  var aj=(Number(s.f)||0)-((Number(s.i)||0)+(Number(s.c)||0)-(Number(s.v)||0));
+  return (s.u==='kg')?Math.round(aj*1000)/1000:Math.round(aj);
+}
+/** ¿El volcado trae el reparto por deposito? (backend desde el 13/9/2026) */
+function _stTienePd(){
+  return !!(D&&Array.isArray(D.stock)&&D.stock.length&&D.stock[0]&&D.stock[0].pd&&
+            Array.isArray(D.stockDeps)&&D.stockDeps.length);
 }
 
 function rMetricas(){
@@ -14501,7 +14609,12 @@ function _vFechaField(v){return vTab==='cobros'?(v.fCob||v.fecha):v.fecha;}
 function vSwitchTab(t){
   if(vTab===t)return;
   vTab=t;
-  document.querySelectorAll('.v-tab').forEach(function(b){b.classList.toggle('on',b.getAttribute('data-vt')===t);});
+  /* Acotado a Ventas (13/9/2026). `.v-tab` es tambien la clase de las sub-tabs de
+     Stock: sin el `#p-ventas`, tocar una sub-tab de Ventas les sacaba el `on` a
+     PRODUCTOS/CONTAR/MOVER, y como `stSwitchTab` no hace nada si ya esta en esa
+     sub-tab, el resaltado no volvia. Y sin sub-tab marcada, `_subAbierta` no la
+     encontraba y la cola perdia la prioridad de lo que se esta mirando. */
+  document.querySelectorAll('#p-ventas .v-tab').forEach(function(b){b.classList.toggle('on',b.getAttribute('data-vt')===t);});
   var ddfAny=document.querySelector('#p-ventas .dd-filters');
   // Se apaga desde una sola linea en vez de sumar un display:none a cada rama: si
   // manana entra otra sub-tab, olvidarse de una rama la deja pintada encima.
