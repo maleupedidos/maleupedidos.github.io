@@ -1043,13 +1043,30 @@ button.rt-chip.on{background:var(--o);border-color:var(--o);color:#fff}
 .rs-tbl th{text-align:left;font-size:10px;color:#7A4A4A;text-transform:uppercase;letter-spacing:.06em;padding:6px 8px;border-bottom:1.5px solid #F2E8C7;font-weight:800}
 .rs-tbl td{padding:8px;border-bottom:1px solid #F8F2DF;color:#331C1C}
 .rs-tbl td.num{text-align:right;font-weight:700;font-variant-numeric:tabular-nums}
+.rs-tbl th.num{text-align:right}
 .rs-tbl tr:last-child td{border-bottom:none}
+/* Con anchos por columna (14/9/2026): el texto baja de renglon adentro de su
+   columna y no puede salirse de la hoja. */
+.rs-tbl.fija{table-layout:fixed}
+.rs-tbl td,.rs-tbl th{overflow-wrap:break-word;word-wrap:break-word}
+.rs-doc{-webkit-text-size-adjust:100%;text-size-adjust:100%}
+/* El documento que se captura para el PDF: sin el scroll de las tablas del
+   celular (con overflow la captura cortaba lo que no entraba) y sin el marco. */
+#rsHiddenWrap .rs-doc{border:none;border-radius:0}
+#rsHiddenWrap .rs-section{overflow:visible}
+#rsHiddenWrap .rs-tbl{min-width:0}
 
 .rs-pl{display:grid;grid-template-columns:1fr;gap:6px;margin-top:8px}
 .rs-pl-row{display:flex;justify-content:space-between;font-size:13px;padding:8px 12px;background:#FFFBF2;border-radius:8px;border:1px solid #F2E8C7}
 .rs-pl-row.total{background:linear-gradient(135deg,#5C3A2A,#331C1C);color:#F2E8C7;border:none;font-size:15px;font-weight:800;padding:12px}
 .rs-pl-row.total.neg{background:linear-gradient(135deg,#8B2222,#5C1818)}
 .rs-pl-row.total.pos{background:linear-gradient(135deg,#2E5C2E,#1B3818)}
+.rs-pl-row.sub{background:#F8F2DF;font-weight:800}
+.rs-pl-row .rs-pl-l{min-width:0;padding-right:10px}
+.rs-pl-row .rs-pl-v{white-space:nowrap;font-variant-numeric:tabular-nums}
+.rs-pl-row .rs-pl-d{display:block;font-size:10px;color:#7A4A4A;font-weight:600;margin-top:2px}
+.rs-pl-row.total .rs-pl-d{color:rgba(242,232,199,.75)}
+.rs-pl-row .rs-pl-p{font-size:11px;color:#7A4A4A;font-weight:700;margin-left:4px}
 
 .rs-nuevos{display:grid;grid-template-columns:1fr;gap:6px;margin-top:6px}
 .rs-nuevo{background:#FFF3E0;border:1.5px solid #F07D47;border-radius:10px;padding:8px 12px;display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:12px}
@@ -10290,7 +10307,7 @@ function _leerVersion(app){
    "El HTML no sabe que version es" dejo de ser cierto: el build le escribe
    adentro el CACHE_NAME de sw-panel.js, el mismo que deploy.sh obliga a subir en
    cada cambio. Si lo publicado dice otra cosa, esta pagina es vieja. Punto. */
-var _APP_CN_PAGINA='maleu-panel-v338';
+var _APP_CN_PAGINA='maleu-panel-v339';
 
 /* Devuelve [{k,v}] si lo publicado no es lo que esta pagina corre. */
 function _chequearVersiones(){
@@ -19661,12 +19678,40 @@ function rCierreInsights(box){
 
 // Helper: KPIs económicos clave (totFact, totMB, totMC, ebitda, resNeto, totEstr) de cualquier mes.
 // Pure-function: usado por la tendencia 6 meses en el EERR económico.
+/* LOS GASTOS DE UN MES, por renglon, con las provisiones del EERR (14/9/2026).
+   Lo usan los KPIs del EERR y el PDF de la semana, que reparte los fijos del mes por
+   dia. El mismo criterio que la pantalla del EERR: `_gastoLinea` para cada gasto, y
+   max(real, piso) para sueldo, servicios, ocupacion y monotributo, mas la
+   amortizacion imputada. Filtra por el NOMBRE del mes, como el EERR (el año es un
+   pendiente de todo el EERR, ver "Filtros de mes sin año").
+   `estr`: estructura (fijos) · `amort` · `imp`: impuestos · `ext`: extraordinarios. */
+function _eerrMesGastos(mn,anio){
+  var MES=['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'][mn-1];
+  var L={}, amort=0;
+  ((typeof D!=='undefined'&&D&&D.gastos)||[]).forEach(function(g){
+    if(g.mes!==MES)return;
+    var k=_gastoLinea(g).linea;L[k]=(L[k]||0)+(Number(g.$)||0);
+  });
+  eerrProvisiones(mn,anio).forEach(function(p){
+    var monto=Number(p.monto)||0;
+    if(p.cat==='sueldo')L.sueldo=Math.max(L.sueldo||0,monto);
+    else if(p.cat==='servicios')L.servicios=Math.max(L.servicios||0,monto);
+    else if(p.cat==='ocupacion')L.ocupacion=Math.max(L.ocupacion||0,monto);
+    else if(p.cat==='amortizacion')amort+=monto;
+    else if(p.cat==='impuesto_monotributo')L.mono=Math.max(L.mono||0,monto);
+  });
+  function v(k){return L[k]||0;}
+  return {L:L,amort:amort,
+    estr:v('vehiculo')+v('software')+v('software_com')+v('servicios')+v('honorarios')+v('ocupacion')+v('sueldo')+v('otros'),
+    imp:v('iibb')+v('mono')+v('impuesto'),ext:v('regalo')+v('perdida')+v('extra'),
+    camp:v('campanas'),delivery:v('delivery')};
+}
+
 // Replica la clasificación de calcEcon() pero standalone (no depende de mesNom outer).
 function eerrKpisMes(mn,anio){
   var MES_NOMBRES=['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
   var mesNom=MES_NOMBRES[mn-1];
   function _norm(c){var s=String(c||'').trim().toLowerCase();if(s.length>3&&s.charAt(s.length-1)==='s')s=s.substring(0,s.length-1);return s;}
-  function _isExt(t){return t.indexOf('regalo')>=0||t.indexOf('perd')>=0||t.indexOf('falt')>=0||t.indexOf('robo')>=0||t.indexOf('extraord')>=0;}
   if(!window.VD)return null;
   var ventas=VD.filter(function(v){return v.mes===mesNom;});
   var totFact=0,totCMV=0;
@@ -19676,48 +19721,11 @@ function eerrKpisMes(mn,anio){
     if(_norm(g.cat||'')==='catering')totCMV+=Number(g.$)||0;
   });
   var totMB=totFact-totCMV;
-  var f_sw=0,f_mk=0,f_hon=0,f_serv=0,f_oc=0,f_su=0,f_otr=0,f_veh=0;
-  var v_fl=0,v_pk=0;
-  var er=0,ep=0,eo=0,ii=0,im=0,io=0;
-  ((D&&D.gastos)||[]).filter(function(g){return g.mes===mesNom;}).forEach(function(g){
-    var c=_norm(g.cat||'Otro'),m=Number(g.$)||0;
-    var con=String(g.con||'').toLowerCase(),not=String(g.not||'').toLowerCase();
-    var txt=con+' '+not;
-    if(c==='proveedor'||c==='catering')return;
-    if(_isExt(txt)){
-      if(txt.indexOf('regalo')>=0)er+=m;
-      else if(txt.indexOf('perd')>=0||txt.indexOf('robo')>=0)ep+=m;
-      else eo+=m;
-      return;
-    }
-    if(c==='repartidor')v_fl+=m;
-    else if(c==='nafta')f_veh+=m;  // Vehículo/nafta = semi-variable → estructura (no variable), Fede 02/07
-    else if(c==='bolsa'){/* packaging se imputa por pedido, no por compra */}
-    else if(c==='marketing')f_mk+=m;
-    else if(c==='herramienta'){if(eerrEsServicio(txt))f_serv+=m;else f_sw+=m;}
-    else if(c==='sueldo')f_su+=m;
-    else if(c==='impuesto'){
-      if(txt.indexOf('iibb')>=0||txt.indexOf('ingresos brutos')>=0)ii+=m;
-      else if(txt.indexOf('mono')>=0)im+=m;
-      else io+=m;
-    }
-    else {
-      if(txt.indexOf('honorario')>=0||txt.indexOf('contador')>=0)f_hon+=m;
-      else if(txt.indexOf('luz')>=0||txt.indexOf('internet')>=0||txt.indexOf('telef')>=0||txt.indexOf('gas ')>=0||txt.indexOf('servicio')>=0)f_serv+=m;
-      else if(txt.indexOf('alquiler')>=0||txt.indexOf('ocupac')>=0||txt.indexOf('imputado')>=0)f_oc+=m;
-      else f_otr+=m;
-    }
-  });
-  // Provisiones imputadas
-  var provs=eerrProvisiones(mn,anio);
-  var amortE=0;
-  provs.forEach(function(p){
-    var monto=Number(p.monto)||0;
-    if(p.cat==='sueldo')f_su+=Math.max(monto-f_su,0);
-    else if(p.cat==='servicios')f_serv+=Math.max(monto-f_serv,0);
-    else if(p.cat==='ocupacion')f_oc+=Math.max(monto-f_oc,0);
-    else if(p.cat==='amortizacion')amortE+=monto;
-  });
+  /* Los gastos del mes con la regla y las provisiones de `_eerrMesGastos`, la misma
+     cuenta que reparte los fijos en el PDF de la semana (14/9/2026). */
+  var GM=_eerrMesGastos(mn,anio);
+  var v_fl=GM.delivery,v_pk=0,v_camp=GM.camp,amortE=GM.amort;
+  var er=GM.L.regalo||0,ep=GM.L.perdida||0,eo=GM.L.extra||0,ii=GM.L.iibb||0,im=GM.L.mono||0,io=GM.L.impuesto||0;
   // Maleu NO paga comisión Mercado Pago (los cobros llegan netos).
   // Antes se calculaba 3% sobre cobros TR pero era incorrecto — sacado del EERR
   // económico real hace varias sesiones. Acá también queda excluido.
@@ -19730,9 +19738,9 @@ function eerrKpisMes(mn,anio){
     return dee.length>=2&&Number(dee[1])===mn;
   }).length;
   v_pk=Math.round(pedPk*(eerrConfig('COSTO_PACKAGING_PEDIDO',ymPk)||0));
-  var totVar=v_fl+v_pk;
+  var totVar=v_fl+v_pk+v_camp;
   var totMC=totMB-totVar;
-  var totEstr=f_veh+f_sw+f_mk+f_hon+f_serv+f_oc+f_su+f_otr;
+  var totEstr=GM.estr;
   var ebitda=totMC-totEstr;
   var resOper=ebitda-amortE;
   // Resultados financieros (rendimientos MP / intereses ganados)
@@ -19787,6 +19795,44 @@ function _catMov(c){
 }
 function _esVuelto(m){ return _catMov(m&&m.cat)==='cambio cruzado'; }
 function _esLiqRed(m){ return _catMov(m&&m.cat)==='liquidacion red'; }
+
+/* DONDE VA CADA GASTO DE EGRESOS en lo ECONOMICO (14/9/2026). Una sola regla para
+   el EERR, sus KPIs y el PDF de la semana. Hasta hoy eran copias que no decian lo
+   mismo: los KPIs contaban los vueltos como gasto y cualquier "Creditos" (los de
+   Openrouter tambien) caia en Marketing.
+   `tipo`: 'cmv' (ya esta en el costo) · 'fuera' (un vuelto no es gasto) ·
+   'variable' (crece con cada venta) · 'estructura' (fijo o semi-fijo) ·
+   'impuesto' · 'extra' (one-off). `linea`: el renglon del EERR.
+   CAMPAÑAS ES VARIABLE (Fede y Tadeo, 14/9/2026): WATI —la suscripcion y los
+   creditos— y la pauta existen para vender, asi que se restan antes del Margen de
+   Contribucion. Hasta hoy iban en Gastos Comerciales, con los fijos.
+   La nafta sigue en estructura: es semi-variable, no un costo por pedido (Fede, 2/7). */
+function _gastoLinea(g){
+  var cat=_catMov(g&&g.cat||'Otro');
+  var txt=(String(g&&g.con||'')+' '+String(g&&g.not||'')).toLowerCase();
+  try{txt=txt.normalize('NFD').replace(/[̀-ͯ]/g,'');}catch(e){}
+  function T(t,l){return {tipo:t,linea:l};}
+  function hay(ks){for(var i=0;i<ks.length;i++)if(txt.indexOf(ks[i])>=0)return true;return false;}
+  if(cat==='proveedor')return T('cmv','proveedor');
+  if(cat==='catering')return T('cmv','catering');
+  if(cat==='cambio cruzado')return T('fuera','vuelto');
+  if(hay(['regalo','perd','falt','robo','extraord','one off','one-off']))
+    return T('extra',hay(['regalo'])?'regalo':(hay(['perd','robo'])?'perdida':'extra'));
+  if(cat==='marketing'||hay(['wati','meta ads','facebook ads','instagram ads','pauta','publicidad']))return T('variable','campanas');
+  if(cat==='repartidor')return T('variable','delivery');
+  if(cat==='bolsa')return T('variable','bolsas');
+  if(cat==='nafta')return T('estructura','vehiculo');
+  if(cat==='sueldo')return T('estructura','sueldo');
+  if(cat==='impuesto')return T('impuesto',hay(['iibb','ingresos brutos'])?'iibb':(hay(['mono'])?'mono':'impuesto'));
+  var appCom=hay(['claude','anthropic','chatgpt','chat gpt','openai']);
+  if(cat==='herramienta')return T('estructura',eerrEsServicio(txt)?'servicios':(appCom?'software_com':'software'));
+  if(hay(['nafta','combustible','mecanic','taller','patente','vtv','cubierta','neumatic','lubricentro','seguro auto','seguro del auto','service auto','service del auto','arreglo auto','arreglo del auto']))return T('estructura','vehiculo');
+  if(appCom)return T('estructura','software_com');
+  if(hay(['honorario','contador']))return T('estructura','honorarios');
+  if(hay(['luz','internet','telef','gas ','servicio']))return T('estructura','servicios');
+  if(hay(['alquiler','ocupac','imputado']))return T('estructura','ocupacion');
+  return T('estructura','otros');
+}
 
 // Helper: calcula el flujo neto financiero de cualquier mes (sin renderizar).
 // Se usa para los 3 meses previos al mes actual en el bloque Estado de Caja.
@@ -19869,8 +19915,8 @@ function rEERR_financiero(body){
   function isCapex(t){return t.indexOf('freezer')>=0||t.indexOf('heladera')>=0||t.indexOf('horno')>=0||t.indexOf('auto')>=0||t.indexOf('vehic')>=0||t.indexOf('notebook')>=0||t.indexOf('computad')>=0||t.indexOf('mobiliario')>=0||t.indexOf('mueble')>=0;}
 
   var pagProv=0,pagProvD=[];
-  var pagFletes=0,pagPack=0,pagOtroVar=0;
-  var pagFletesD=[],pagPackD=[],pagOtroVarD=[];
+  var pagFletes=0,pagPack=0,pagOtroVar=0,pagCamp=0;
+  var pagFletesD=[],pagPackD=[],pagOtroVarD=[],pagCampD=[];
   var pagSoftware=0,pagMarketing=0,pagHonorarios=0,pagServicios=0,pagAlquiler=0,pagOtroEst=0;
   var pagSoftwareD=[],pagMarketingD=[],pagHonorariosD=[],pagServiciosD=[],pagAlquilerD=[],pagOtroEstD=[];
   var sueldoGirado=0,sueldoGiradoD=[];
@@ -19893,6 +19939,8 @@ function rEERR_financiero(body){
     // Extraordinarios (one-off)
     if(isExtraord(txt)){pagExt+=m;pagExtD.push(det);return;}
     // Variables comerciales
+    /* Campañas (WATI y pauta): variables desde el 14/9/2026, la regla de `_gastoLinea`. */
+    if(_gastoLinea(g).linea==='campanas'){pagCamp+=m;pagCampD.push(det);return;}
     if(cat==='repartidor'||cat==='nafta'){pagFletes+=m;pagFletesD.push(det);return;}
     if(cat==='bolsa'){pagPack+=m;pagPackD.push(det);return;}
     // Estructura
@@ -19913,7 +19961,7 @@ function rEERR_financiero(body){
     pagOtroEst+=m;pagOtroEstD.push(det);
   });
 
-  var totVar=pagFletes+pagPack+pagOtroVar;
+  var totVar=pagFletes+pagPack+pagCamp+pagOtroVar;
   var totEstr=pagSoftware+pagMarketing+pagHonorarios+pagServicios+pagAlquiler+pagOtroEst;
   var totSalidas=pagProv+totVar+totEstr+sueldoGirado+pagImp+pagExt+pagCapex;
   var flujoNeto=totEntradas-totSalidas;
@@ -20599,6 +20647,7 @@ function rEERR_financiero(body){
   html+=leaf('Pagos variables comerciales',-totVar);
   if(pagFletes>0){html+=subleaf('Repartidor / fletes / nafta',-pagFletes);html+=detailRows(pagFletesD);}
   if(pagPack>0){html+=subleaf('Packaging',-pagPack);html+=detailRows(pagPackD);}
+  if(pagCamp>0){html+=subleaf('Campañas y mensajería (WATI, pauta)',-pagCamp);html+=detailRows(pagCampD);}
 
   // Estructura
   html+=leaf('Pagos de estructura',-totEstr);
@@ -20710,78 +20759,31 @@ function rEERR_dual(body){
   var imp_iibb=0,imp_mono=0,imp_otros=0;
   var imp_iibbD=[],imp_monoD=[],imp_otrosD=[];
   function pushDet(arr,g,m){arr.push({con:g.con||'(sin concepto)',not:g.not||'',m:m,f:g.f||''});}
-  function isExtraord(txt){
-    return txt.indexOf('regalo')>=0||txt.indexOf('perd')>=0||txt.indexOf('falt')>=0||txt.indexOf('robo')>=0||txt.indexOf('extraord')>=0||txt.indexOf('one off')>=0||txt.indexOf('one-off')>=0;
-  }
-  // Créditos de WATI (mensajería/pauta a clientes) → son Marketing, NO la suscripción de la herramienta.
-  // "Créditos", "WATI · Créditos" son lo mismo.
-  function esCreditoComercial(txt){
-    return txt.indexOf('credito')>=0||txt.indexOf('crédito')>=0;
-  }
-  // Herramienta/App/IA comercial: la suscripción mensual de la herramienta (no sus créditos) → Gastos Comerciales.
-  function esHerramientaComercial(txt){
-    return txt.indexOf('wati')>=0||txt.indexOf('claude')>=0||txt.indexOf('anthropic')>=0||
-      txt.indexOf('chatgpt')>=0||txt.indexOf('chat gpt')>=0||txt.indexOf('openai')>=0;
-  }
-  // Gasto de vehículo (auto de reparto): nafta ya viene por categoría; acá cazamos arreglos/seguro/patente
-  // que suelen cargarse como "Otro". "arreglo" a secas es muy genérico → exigimos que mencione el auto.
-  function esVehiculo(txt){
-    return txt.indexOf('nafta')>=0||txt.indexOf('combustible')>=0||txt.indexOf('mecanic')>=0||txt.indexOf('taller')>=0||
-      txt.indexOf('patente')>=0||txt.indexOf('vtv')>=0||txt.indexOf('cubierta')>=0||txt.indexOf('neumatic')>=0||
-      txt.indexOf('lubricentro')>=0||txt.indexOf('seguro auto')>=0||txt.indexOf('seguro del auto')>=0||
-      txt.indexOf('service auto')>=0||txt.indexOf('service del auto')>=0||txt.indexOf('arreglo auto')>=0||txt.indexOf('arreglo del auto')>=0;
-  }
-  // Normalización: case-insensitive y plural-insensitive (Herramienta = Herramientas = HERRAMIENTAS)
-  function normCat(c){
-    var s=String(c||'').trim().toLowerCase();
-    // Quitar 's' final si la hubiera (plural simple)
-    if(s.length>3&&s.charAt(s.length-1)==='s')s=s.substring(0,s.length-1);
-    return s;
-  }
+  /* Campañas: WATI (suscripcion y creditos) y la pauta. Variable desde el 14/9/2026. */
+  var v_campanas=0,v_campanasD=[];
+  /* La regla vive en `_gastoLinea`, compartida con los KPIs del EERR y el PDF de la
+     semana (14/9/2026). */
   gastosMes.forEach(function(g){
-    var rawCat=g.cat||'Otro',m=Number(g.$)||0;
-    var cat=normCat(rawCat);
-    var con=String(g.con||'').toLowerCase(),not=String(g.not||'').toLowerCase();
-    var txt=con+' '+not;
-    if(cat==='proveedor')return; // ya en CMV devengado
-    /* Un vuelto (Cambio cruzado) NO es un gasto (13/9/2026): el cliente pago de
-       mas en efectivo y se le devolvio por transferencia, o al reves. La plata
-       entra por una cuenta y sale por otra, y su espejo esta en Ingresos. Hasta
-       ese dia caia en "Otros gastos administrativos": septiembre restaba $36.900
-       que no se gastaron. */
-    if(_esVuelto(g))return;
-    // Detección extraordinarios por keyword
-    if(isExtraord(txt)){
-      if(txt.indexOf('regalo')>=0){ext_regalos+=m;pushDet(ext_regalosD,g,m);}
-      else if(txt.indexOf('perd')>=0||txt.indexOf('robo')>=0){ext_perdidas+=m;pushDet(ext_perdidasD,g,m);}
-      else {ext_otros+=m;pushDet(ext_otrosD,g,m);}
-      return;
-    }
-    // Créditos (WATI · Créditos) → Marketing, antes de que el keyword 'wati' los mande a herramientas.
-    if(esCreditoComercial(txt)){f_marketing+=m;pushDet(f_marketingD,g,m);return;}
-    if(cat==='repartidor'){v_delivery+=m;pushDet(v_deliveryD,g,m);}
-    else if(cat==='nafta'){v_vehiculo+=m;pushDet(v_vehiculoD,g,m);}
-    else if(cat==='bolsa'){v_packagingCompras+=m;pushDet(v_packagingComprasD,g,m);} // memo; el packaging se imputa por pedido (abajo)
-    else if(cat==='catering'){/* movido a CMV (cmvCateringDirecto) */}
-    else if(cat==='marketing'){f_marketing+=m;pushDet(f_marketingD,g,m);}
-    else if(cat==='herramienta'){
-      if(eerrEsServicio(txt)){f_servicios+=m;pushDet(f_serviciosD,g,m);}
-      else if(esHerramientaComercial(txt)){f_softwareCom+=m;pushDet(f_softwareComD,g,m);}
-      else {f_software+=m;pushDet(f_softwareD,g,m);}
-    }
-    else if(cat==='sueldo'){f_sueldo+=m;pushDet(f_sueldoD,g,m);}
-    else if(cat==='impuesto'){
-      if(txt.indexOf('iibb')>=0||txt.indexOf('ingresos brutos')>=0){imp_iibb+=m;pushDet(imp_iibbD,g,m);}
-      else if(txt.indexOf('mono')>=0){imp_mono+=m;pushDet(imp_monoD,g,m);}
-      else {imp_otros+=m;pushDet(imp_otrosD,g,m);}
-    }
-    else {
-      if(esVehiculo(txt)){v_vehiculo+=m;pushDet(v_vehiculoD,g,m);}
-      else if(esHerramientaComercial(txt)){f_softwareCom+=m;pushDet(f_softwareComD,g,m);}
-      else if(txt.indexOf('honorario')>=0||txt.indexOf('contador')>=0){f_honorarios+=m;pushDet(f_honorariosD,g,m);}
-      else if(txt.indexOf('luz')>=0||txt.indexOf('internet')>=0||txt.indexOf('telef')>=0||txt.indexOf('gas ')>=0||txt.indexOf('servicio')>=0){f_servicios+=m;pushDet(f_serviciosD,g,m);}
-      else if(txt.indexOf('alquiler')>=0||txt.indexOf('ocupac')>=0||txt.indexOf('imputado')>=0){f_ocupacion+=m;pushDet(f_ocupacionD,g,m);}
-      else {f_otrosEst+=m;pushDet(f_otrosEstD,g,m);}
+    var m=Number(g.$)||0, L=_gastoLinea(g).linea;
+    switch(L){
+      case 'proveedor': case 'catering': case 'vuelto': return;   /* CMV devengado / no es gasto */
+      case 'regalo': ext_regalos+=m;pushDet(ext_regalosD,g,m);return;
+      case 'perdida': ext_perdidas+=m;pushDet(ext_perdidasD,g,m);return;
+      case 'extra': ext_otros+=m;pushDet(ext_otrosD,g,m);return;
+      case 'campanas': v_campanas+=m;pushDet(v_campanasD,g,m);return;
+      case 'delivery': v_delivery+=m;pushDet(v_deliveryD,g,m);return;
+      case 'bolsas': v_packagingCompras+=m;pushDet(v_packagingComprasD,g,m);return; // memo; el packaging se imputa por pedido (abajo)
+      case 'vehiculo': v_vehiculo+=m;pushDet(v_vehiculoD,g,m);return;
+      case 'sueldo': f_sueldo+=m;pushDet(f_sueldoD,g,m);return;
+      case 'iibb': imp_iibb+=m;pushDet(imp_iibbD,g,m);return;
+      case 'mono': imp_mono+=m;pushDet(imp_monoD,g,m);return;
+      case 'impuesto': imp_otros+=m;pushDet(imp_otrosD,g,m);return;
+      case 'servicios': f_servicios+=m;pushDet(f_serviciosD,g,m);return;
+      case 'software_com': f_softwareCom+=m;pushDet(f_softwareComD,g,m);return;
+      case 'software': f_software+=m;pushDet(f_softwareD,g,m);return;
+      case 'honorarios': f_honorarios+=m;pushDet(f_honorariosD,g,m);return;
+      case 'ocupacion': f_ocupacion+=m;pushDet(f_ocupacionD,g,m);return;
+      default: f_otrosEst+=m;pushDet(f_otrosEstD,g,m);
     }
   });
 
@@ -20844,9 +20846,9 @@ function rEERR_dual(body){
 
   // Nafta/Vehículo NO es variable por pedido (Fede, 02/07/2026): es semi-variable → gasto administrativo.
   // No reduce el Margen de Contribución; se resta como estructura antes del EBITDA.
-  var totVar=v_delivery+v_packaging+v_comRed+v_comCobro+v_otrosVar;
+  var totVar=v_delivery+v_packaging+v_campanas+v_comRed+v_comCobro+v_otrosVar;
   var totMC=totMB-totVar;
-  var totEstr=v_vehiculo+f_software+f_softwareCom+f_marketing+f_honorarios+f_servicios+f_ocupacion+f_sueldo+f_otrosEst;
+  var totEstr=v_vehiculo+f_software+f_softwareCom+f_honorarios+f_servicios+f_ocupacion+f_sueldo+f_otrosEst;
   var ebitda=totMC-totEstr;
   var amort=amortProv;
   var resOper=ebitda-amort;
@@ -20994,12 +20996,14 @@ function rEERR_dual(body){
   html+=ln(eL('= MARGEN BRUTO','Ventas menos el costo del producto que le pagás al proveedor (Sevuchitas, Bernardo Pisano, Le Unike, etc.). Responde la pregunta: "¿mi precio de venta le gana al costo?" Es tu primer indicador de salud de pricing. Depende mucho del mix de canales: Home 30%, Pilar 40%, Clubes 15%, Red 20% son valores típicos.'),totMB,'totsub',eerrPct(totMB,pctBase));
 
   // GASTOS VARIABLES (de cada venta) — sin Comisión MP (Maleu no paga)
-  html+=ln(eL('(−) Gastos Variables (de cada venta)','Gastos que crecen con cada pedido entregado: delivery, vehículo, bolsas. Si vendés 0, no los tenés.'),-totVar,'sub neg');
+  html+=ln(eL('(−) Gastos Variables (de cada venta)','Gastos que crecen con cada venta: delivery, bolsas y las campañas para vender (WATI, pauta). Si vendés 0, no los tenés.'),-totVar,'sub neg');
   html+=leaf(eL('Delivery','Lo que les pagás a los repartidores de Estancias (Santos Bullrich, Agustín Carpinacci) por llevar los pedidos. Escala con cada entrega.'),-v_delivery);
   html+=detailRows(v_deliveryD);
   html+=leaf(eL('Bolsas y packaging','Bolsas (naranja/blancas) + stickers. Se imputa por pedido entregado de Home/Pilar, no por compra, para que cada pedido "pague" su bolsa (Fede). Costo unitario estimado en Config; ajustable.'),-v_packaging);
   html+=subleaf('Imputado: '+pedidosPackHP+' pedidos Home/Pilar × $'+f$(Math.round(costoPackU)),-v_packaging,true);
   if(v_packagingCompras>0)html+=subleaf('(memo) compras reales de bolsas este mes: $'+f$(Math.round(v_packagingCompras))+' — van a la caja, no acá',0,true);
+  html+=leaf(eL('Campañas y mensajería','WATI —la suscripción y los créditos de los envíos— y la pauta. Son para vender: se restan antes del Margen de Contribución, no con los fijos (Fede, 14/9/2026).'),-v_campanas);
+  html+=detailRows(v_campanasD);
   if(v_otrosVar>0){html+=leaf('Otros variables',-v_otrosVar);html+=detailRows(v_otrosVarD);}
 
   // MARGEN DE CONTRIBUCIÓN (rename de "Margen Operativo")
@@ -21008,15 +21012,13 @@ function rEERR_dual(body){
   // ─── GASTOS DE ESTRUCTURA (FIJOS) = Comerciales + Administrativos ───
   // Son los costos que NO varían con cada venta. Es lo que se resta al Margen de
   // Contribución para llegar al EBITDA. Se desglosan en dos sub-grupos.
-  var gtosCom=f_marketing+f_softwareCom;
+  var gtosCom=f_softwareCom;
   var gtosAdm=v_vehiculo+f_software+f_honorarios+f_servicios+f_ocupacion+f_sueldo+f_otrosEst;
   html+=ln(eL('(−) Gastos de Estructura (Fijos)','Los gastos que tenés sí o sí para que Maleu funcione, vendas mucho o poco: marketing, herramientas, sueldo, alquiler, servicios. El Margen de Contribución tiene que alcanzar para cubrirlos. Se dividen en Comerciales (captar/retener clientes) y Administrativos (operar el negocio).'),-(gtosCom+gtosAdm),'sub neg');
 
   // Sub-grupo 1: COMERCIALES
   html+=grpCap('Comerciales · captar y retener clientes',gtosCom);
-  html+=leaf(eL('Marketing y publicidad','Juana Peña (diseño), pauta, flyers, contenido y los créditos de WATI (mensajería/campañas). Hoy bajo, históricamente clave para crecer.'),-f_marketing);
-  html+=detailRows(f_marketingD);
-  html+=leaf(eL('Apps/Herramientas/IA','Suscripciones mensuales de las apps que usás para vender y atender: Claude, WATI, Chat GPT. Los créditos de WATI van en Marketing.'),-f_softwareCom);
+  html+=leaf(eL('Apps/Herramientas/IA','Suscripciones mensuales de las apps que usás para vender y atender: Claude, Chat GPT. WATI va en Campañas, con los variables.'),-f_softwareCom);
   html+=detailRows(f_softwareComD,abrevApp);
 
   // Sub-grupo 2: ADMINISTRATIVOS
@@ -21282,11 +21284,11 @@ function rEERR_dual(body){
     {t:'(−) Gastos Variables Comerciales',d:'Gastos que crecen con cada venta. Mientras más vendés, más gastás. Compuestos por:'},
     {t:'· Fletes y logística',d:'Pagos al repartidor + nafta del mes. Sale del Sheets <code>Egresos</code>, categorías <code>Repartidor</code> y <code>Nafta</code>.'},
     {t:'· Packaging',d:'Bolsas, cajas, sticker, todo lo que va con el pedido. Sale del Sheets <code>Egresos</code>, categoría <code>Bolsas</code>.'},
+    {t:'· Campañas y mensajería',d:'WATI —la suscripción y los créditos de los envíos— y la pauta (categoría <code>Marketing</code>). Existen para vender, así que van con los variables y no con los fijos (Fede, 14/9/2026).'},
     {t:'· Comisiones de cobro (MP, transferencias)',d:'Estimadas como <b>3% sobre cobros por transferencia del mes</b> (el promedio de comisión de Mercado Pago según plan). Se calcula automáticamente desde los pedidos cobrados con fecha de cobro en el mes (campo <code>p.tr</code>). No requiere que cargues nada; ya queda devengado.'},
     {t:'= MARGEN DE CONTRIBUCIÓN',d:'Lo que queda después de los variables. Cada venta nueva agrega este monto al pozo común que cubre los fijos. Es el indicador clave para decisiones de volumen y pricing.'},
     {t:'(−) Gastos de Estructura (fijos)',d:'Costos que existen sí o sí, vendas o no. La "maquinaria" del negocio:'},
-    {t:'· Software',d:'N8N, Claude API, Canva, WATI, hosting, Apps Script si tuviera costo. Sale del Sheets <code>Egresos</code>, categoría <code>Herramienta</code>.'},
-    {t:'· Marketing y publicidad',d:'Diseñadora (Juana Peña), flyers, pauta, contenido. Sale del Sheets <code>Egresos</code>, categoría <code>Marketing</code>.'},
+    {t:'· Software',d:'N8N, Claude, Canva, hosting, Apps Script si tuviera costo. Sale del Sheets <code>Egresos</code>, categoría <code>Herramienta</code>. WATI no: va en Campañas, con los variables.'},
     {t:'· Honorarios profesionales',d:'Contador, abogado, asesores. <b>Hoy en $0:</b> falta cargar. Cuando lo cargues con concepto que diga "honorario" o "contador" cae acá automáticamente.'},
     {t:'· Servicios',d:'Luz, internet, telefonía, gas. Hoy hay una <b>provisión fija de $50.000/mes (Movistar celular Maleu)</b> cargada en la hoja <code>Provisiones_Fijas</code>. Si en algún mes la factura real supera el piso, se usa el real. Otros servicios (luz, internet del depósito) se suman si los cargás como gasto con esos keywords en el concepto.'},
     {t:'· Costo de ocupación imputado',d:'<b>Costo imputado de $50.000/mes</b> (alquiler equivalente del cuartito del depósito en Estancias del Pilar) cargado en <code>Provisiones_Fijas</code>. Aunque hoy no pagues alquiler, económicamente ese espacio tiene un costo. El día que arranques a alquilar real, se cierra la provisión (columna "Activa hasta") y empezás a cargar la factura real.'},
@@ -24752,6 +24754,29 @@ if('serviceWorker' in navigator){
   }
 
   /* ───────── Los datos de la semana que empieza el lunes `lunIso` ───────── */
+  var MESES=['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+  var PLAN_RETAIL='Venta Directa|Estancias del Pilar';
+  var PLAN_CACHE='maleu_plan_cache_';
+  /* Como se llama en el PDF cada renglon de `_gastoLinea`. */
+  var LINEA_NOM={proveedor:'Proveedores de mercadería',catering:'Catering',campanas:'Campañas y mensajería',delivery:'Delivery',bolsas:'Bolsas',
+    vehiculo:'Nafta y vehículo',sueldo:'Sueldo',iibb:'Impuestos',mono:'Impuestos',impuesto:'Impuestos',servicios:'Servicios',
+    software:'Herramientas',software_com:'Herramientas',honorarios:'Honorarios',ocupacion:'Alquiler',
+    regalo:'Extraordinarios',perdida:'Extraordinarios',extra:'Extraordinarios',otros:'Otros gastos'};
+  /* "1881079,3248754,…" -> [1881079, 3248754, …], con su posicion: el tramo i es el valor i. */
+  function lista(txt){return String(txt||'').split(/[,;]/).map(function(x){return parseFloat(String(x).replace(/[^\d.-]/g,''))||0;});}
+  function planGuardado(label){try{return JSON.parse(localStorage.getItem(PLAN_CACHE+label)||'null');}catch(e){return null;}}
+  /* Los meses que toca la semana (hasta `hasta`), con cuantos dias de cada uno. */
+  function mesesDe(lun,hasta){
+    var out={};
+    for(var i=0;i<7;i++){
+      var di=_rtDia(lun,i);if(di>hasta)break;
+      var k=di.getFullYear()+'-'+pad(di.getMonth()+1);
+      if(!out[k])out[k]={mn:di.getMonth()+1,an:di.getFullYear(),dias:0,d0:di.getDate(),diasMes:new Date(di.getFullYear(),di.getMonth()+1,0).getDate()};
+      out[k].dias++;
+    }
+    return Object.keys(out).sort().map(function(k){var x=out[k];x.label=MESES[x.mn-1]+' '+x.an;return x;});
+  }
+
   function armar(lunIso){
     var lun=isoADate(lunIso);if(!lun)throw new Error('semana invalida');
     lun=_rtDia(lun,-((lun.getDay()+6)%7));
@@ -24763,6 +24788,7 @@ if('serviceWorker' in navigator){
     var semN=getWeek(lun), anioIso=_rtDia(lun,3).getFullYear();
     var g=_rtSumar(d,h);
     var gc=_rtSumar(_rtIso(_rtDia(lun,-7)),_rtIso(_rtDia(hasta,-7)));
+    var meses=mesesDe(lun,hasta);
 
     var dias=[];
     for(var i=0;i<7;i++){
@@ -24782,13 +24808,14 @@ if('serviceWorker' in navigator){
       var dia=_tendFechaVentaISO(p);
       return !!dia&&dia>=d&&dia<=h;
     });
+    var pedHP=peds.filter(function(p){return p.h==='Home'||p.h==='Pilar';});
+    var claveCli=function(p){var tel=String(p.tel||'').replace(/\D/g,'').slice(-10);return tel||('N:'+String(p.c).trim().toLowerCase());};
 
     /* Los clientes que mas compraron. Red no: el cliente final es del vendedor. */
     var porCli={};
     peds.forEach(function(p){
       if(p.h==='Red')return;
-      var tel=String(p.tel||'').replace(/\D/g,'').slice(-10);
-      var k=tel||('N:'+String(p.c).trim().toLowerCase());
+      var k=claveCli(p);
       var o=porCli[k]||(porCli[k]={c:String(p.c).trim(),h:canalDe(p),f:0,peds:[]});
       o.f+=Number(p.$)||0;o.peds.push(p);
     });
@@ -24818,51 +24845,89 @@ if('serviceWorker' in navigator){
     prodU.sort(function(a,b){return b.q-a.q;});prodK.sort(function(a,b){return b.q-a.q;});
     var totU=prodU.reduce(function(s,o){return s+o.q;},0), totK=prodK.reduce(function(s,o){return s+o.q;},0);
 
-    /* La carne y lo de siempre (14/9/2026, para la reunion con Fede): de cada cliente
-       con alguna entrega en la semana, si llevo carne, productos de siempre o las dos
-       cosas. Carne = la categoria Carnes del catalogo; sin catalogo, lo que se pesa.
-       Un producto sin catalogo ni unidad no decide nada. Por telefono, todos los
-       canales (Red con el nombre del cliente final). */
+    /* Carne = la categoria Carnes del catalogo; sin catalogo, lo que se pesa. Un
+       producto sin catalogo ni unidad no decide nada (null). */
     var esCarne=function(a){return cat[a]?/carne/i.test(String(cat[a].cat||'')):(uni[a]==='kg'?true:(uni[a]==='u'?false:null));};
+    /* Lo que llevo, por categoria: "Carnes 8,181 kg · Sorrentinos 2". Con `sinCarne`,
+       solo lo que no es carne. La categoria y no el producto: con el producto la
+       celda de un pedido grande no entra en el renglon. */
+    function detalle(ps,sinCarne){
+      var porC={},orden=[];
+      ps.forEach(function(p){(p.p||[]).forEach(function(it){
+        var a=it&&it.a, q=Number(it&&it.q)||0;if(!a||!(q>0))return;
+        var ec=esCarne(a);if(sinCarne&&ec!==false)return;
+        var cn=(cat[a]&&cat[a].cat)||(ec===true?'Carnes':nombre(a)), pesa=uni[a]==='kg', k=cn+(pesa?'|kg':'|u');
+        if(!porC[k]){porC[k]={n:cn,q:0,kg:pesa,carne:ec===true};orden.push(k);}
+        porC[k].q+=q;
+      });});
+      orden.sort(function(x,y){return (porC[y].carne-porC[x].carne)||(porC[y].q-porC[x].q);});
+      return orden.map(function(k){var o=porC[k];return esc(o.n)+' '+(o.kg?kg(o.q):(Math.round(o.q*1000)/1000));}).join(' · ');
+    }
+    function sumarItems(o,ps){
+      ps.forEach(function(p){(p.p||[]).forEach(function(it){
+        var a=it&&it.a, q=Number(it&&it.q)||0;if(!a||!(q>0))return;
+        var ec=esCarne(a);if(ec===true)o.kg+=q;else if(ec===false)o.u+=q;else o.x=1;
+      });});
+    }
+    function dondeDe(p){
+      if(p.h==='Home'||p.h==='Pilar')return _rtBarrio(p.bar)||String(p.bar||'').trim()||canalDe(p);
+      return p.h+(String(p.br||'').trim()?' · '+String(p.br).trim():'');
+    }
+
+    /* QUIENES son los nuevos y los que volvieron: el servidor dice quienes y con que
+       pedidos ("Hoja|N°"); aca se buscan esos pedidos para decir donde viven, que
+       llevaron y la plata. Se cruza por referencia, no por nombre. */
+    var porRef={};
+    (D.pedidos||[]).forEach(function(p){if(p&&p.h&&p.n)porRef[p.h+'|'+String(p.n).trim()]=p;});
+    function quien(x){
+      var ps=(x.r||[]).map(function(r){return porRef[r];}).filter(Boolean);
+      var o={c:String(x.c||'').trim(),ok:ps.length>0,h:ps.length?canalDe(ps[0]):'',donde:ps.length?dondeDe(ps[0]):'',
+        f:0,kg:0,u:0,det:detalle(ps,false),sem:Number(x.sem)||0,luego:Number(x.luego)||0};
+      ps.forEach(function(p){o.f+=Number(p.$)||0;});
+      sumarItems(o,ps);
+      return o;
+    }
+    var nuevos=(cl&&Array.isArray(cl.nuevosL))?cl.nuevosL.map(quien).sort(function(a,b){return b.f-a.f;}):null;
+    var volvieron=(cl&&Array.isArray(cl.reactL))?cl.reactL.map(quien).sort(function(a,b){return (b.sem-a.sem)||(b.f-a.f);}):null;
+    /* El estado de cada pedido de Home y Otras zonas: nuevo, volvio o ya compraba. */
+    var estRef={}, hayEstado=!!(cl&&Array.isArray(cl.nuevosL)&&Array.isArray(cl.reactL));
+    if(hayEstado){
+      cl.reactL.forEach(function(x){(x.r||[]).forEach(function(r){estRef[r]={t:'volvio',sem:Number(x.sem)||0};});});
+      cl.nuevosL.forEach(function(x){(x.r||[]).forEach(function(r){estRef[r]={t:'nuevo'};});});
+    }
+    function estadoDe(ps){
+      var e=null;
+      ps.forEach(function(p){var s=estRef[p.h+'|'+String(p.n).trim()];if(s&&(!e||s.t==='nuevo'))e=s;});
+      if(e)return e;
+      if(!ps.some(function(p){return p.h==='Home'||p.h==='Pilar';}))return {t:'otro'};
+      return {t:hayEstado?'ya':'?'};
+    }
+
+    /* La carne y lo demas (14/9/2026, para la reunion con Fede): de cada cliente
+       con alguna entrega en la semana, si llevo carne, otros productos o las dos
+       cosas, y si ya era cliente. Por telefono, todos los canales. */
     var mezcla={};
     peds.forEach(function(p){
-      var tel=String(p.tel||'').replace(/\D/g,'').slice(-10);
-      var k=tel||('N:'+String(p.c).trim().toLowerCase());
-      var o=mezcla[k]||(mezcla[k]={c:String(p.c).trim(),h:canalDe(p),kg:0,u:0,cats:{}});
-      (p.p||[]).forEach(function(it){
-        var a=it&&it.a, q=Number(it&&it.q)||0;if(!a||!(q>0))return;
-        var ec=esCarne(a);
-        if(ec===true)o.kg+=q;
-        else if(ec===false){o.u+=q;var cn=(cat[a]&&cat[a].cat)||'';if(cn)o.cats[cn]=1;}
-        else o.x=1;
-      });
+      var k=claveCli(p);
+      var o=mezcla[k]||(mezcla[k]={c:String(p.c).trim(),h:canalDe(p),kg:0,u:0,peds:[]});
+      o.peds.push(p);
     });
     /* sinDato: clientes con algun producto que no se sabe si es carne. Con uno solo
-       ya no se puede decir "solo carne" ni "solo lo de siempre": se dice que falta. */
+       ya no se puede decir "solo carne" ni "sin carne": se dice que falta. */
     var carne={cli:0,solo:0,ambos:0,siempre:0,lista:[],sinDato:0};
     Object.keys(mezcla).forEach(function(k){
-      var o=mezcla[k];carne.cli++;if(o.x)carne.sinDato++;
-      if(o.kg>0){o.ambos=o.u>0;if(o.ambos)carne.ambos++;else carne.solo++;carne.lista.push(o);}
+      var o=mezcla[k];sumarItems(o,o.peds);carne.cli++;if(o.x)carne.sinDato++;
+      if(o.kg>0){
+        o.ambos=o.u>0;if(o.ambos)carne.ambos++;else carne.solo++;
+        o.est=estadoDe(o.peds);o.ademas=detalle(o.peds,true);
+        carne.lista.push(o);
+      }
       else if(o.u>0)carne.siempre++;
     });
     carne.lista.sort(function(a,b){return (b.ambos-a.ambos)||(b.kg-a.kg);});
-
-    /* Quienes son los nuevos: el servidor dice quienes y con que pedidos ("Hoja|N°");
-       aca se buscan esos pedidos para decir la zona, la plata y que llevaron. */
-    var nuevos=null;
-    if(cl&&Array.isArray(cl.nuevosL)){
-      var porRef={};
-      (D.pedidos||[]).forEach(function(p){if(p&&p.h&&p.n)porRef[p.h+'|'+String(p.n).trim()]=p;});
-      nuevos=cl.nuevosL.map(function(x){
-        var ps=(x.r||[]).map(function(r){return porRef[r];}).filter(Boolean);
-        var o={c:String(x.c||'').trim(),h:ps.length?canalDe(ps[0]):'',f:0,kg:0,u:0,ok:ps.length>0};
-        ps.forEach(function(p){
-          o.f+=Number(p.$)||0;
-          (p.p||[]).forEach(function(it){var a=it&&it.a, q=Number(it&&it.q)||0;if(!a||!(q>0))return;var ec=esCarne(a);if(ec===true)o.kg+=q;else if(ec===false)o.u+=q;});
-        });
-        return o;
-      }).sort(function(a,b){return b.f-a.f;});
-    }
+    carne.otras=[];
+    Object.keys(cat).forEach(function(a){var cn=cat[a]&&cat[a].cat;if(cn&&!/carne/i.test(cn)&&carne.otras.indexOf(cn)<0)carne.otras.push(cn);});
+    carne.otras.sort();
 
     /* Lo que quedo por cobrar AL CIERRE de la semana (14/9/2026). Hasta hoy miraba
        el estado de AHORA: abierto el lunes, lo cobrado el mismo lunes ya no
@@ -24904,20 +24969,37 @@ if('serviceWorker' in navigator){
       cob.tot+=s.t;cob.ef+=s.ef;cob.tr+=s.tr;cob.n++;
     });
 
-    /* Gastos e ingresos de la semana, por la fecha del movimiento. */
+    /* ═══ ECONOMICO y FINANCIERO (14/9/2026, Fede) ═══
+       ECONOMICO = devengado: la venta el dia que se entrega y cada costo en el
+       periodo al que pertenece. Margen bruto − variables (bolsas imputadas por
+       entrega como el EERR, campañas y delivery) = contribucion; menos la parte de
+       los fijos del mes que le toca a la semana por sus dias.
+       FINANCIERO = percibido: la plata el dia que entro o salio.
+       Hasta hoy el PDF restaba al margen "los gastos de la semana" por fecha de
+       pago: la suscripcion de WATI entera en la semana que se pago, y como gasto
+       fijo. La regla de cada gasto es `_gastoLinea`, la del EERR. */
     var hayMov=Array.isArray(D.gastos)&&Array.isArray(D.ingresos);
-    var gas={tot:0,porCat:{},det:[],prov:0,catering:0,vueltos:0};
+    var costoPack=0;try{costoPack=Number(eerrConfig('COSTO_PACKAGING_PEDIDO',d.slice(0,7)))||0;}catch(e){}
+    var eco={mb:g.tot.f-g.tot.c,pedPack:pedHP.length,costoPack:costoPack,bolsas:Math.round(pedHP.length*costoPack),
+      camp:0,campD:[],deliv:0,delivD:[],fijos:0,fijosMes:[]};
+    var fin={pagos:0,porLinea:{},det:[],vueltos:0};
     (D.gastos||[]).forEach(function(m){
       var iso=dmyAIso(m.f);if(!iso||iso<d||iso>h)return;
-      var monto=Number(m.$)||0, c=_catMov(m.cat);
-      if(_esVuelto(m)){gas.vueltos+=monto;return;}
-      if(c==='proveedor'){gas.prov+=monto;return;}
-      if(c==='catering'){gas.catering+=monto;return;}
-      var nom=String(m.cat||'Otro').trim()||'Otro';
-      gas.tot+=monto;gas.porCat[nom]=(gas.porCat[nom]||0)+monto;
-      gas.det.push({iso:iso,cat:nom,con:m.con||'',met:m.met||'',f:monto});
+      var monto=Number(m.$)||0, L=_gastoLinea(m).linea;
+      if(L==='vuelto'){fin.vueltos+=monto;return;}
+      var con=String(m.con||m.cat||'').trim();
+      if(L==='campanas'){eco.camp+=monto;eco.campD.push(con);}
+      else if(L==='delivery'){eco.deliv+=monto;eco.delivD.push(con);}
+      var nom=LINEA_NOM[L]||'Otros gastos';
+      fin.pagos+=monto;fin.porLinea[nom]=(fin.porLinea[nom]||0)+monto;
+      fin.det.push({iso:iso,tipo:nom,con:con,met:m.met||'',f:monto});
     });
-    gas.det.sort(function(a,b){return a.iso<b.iso?-1:(a.iso>b.iso?1:b.f-a.f);});
+    fin.det.sort(function(a,b){return a.iso<b.iso?-1:(a.iso>b.iso?1:b.f-a.f);});
+    meses.forEach(function(x){
+      var G=_eerrMesGastos(x.mn,x.an), total=G.estr+G.amort+G.imp;
+      var parte=Math.round(total*x.dias/x.diasMes);
+      eco.fijos+=parte;eco.fijosMes.push({mn:x.mn,an:x.an,dias:x.dias,diasMes:x.diasMes,total:total,parte:parte});
+    });
     var ing={tot:0,det:[]};
     (D.ingresos||[]).forEach(function(m){
       var iso=dmyAIso(m.f);if(!iso||iso<d||iso>h)return;
@@ -24925,10 +25007,41 @@ if('serviceWorker' in navigator){
       var monto=Number(m.$)||0;
       ing.tot+=monto;ing.det.push({iso:iso,cat:m.cat||'',con:m.con||'',f:monto});
     });
+    eco.contrib=eco.mb-eco.bolsas-eco.camp-eco.deliv;
+    eco.res=eco.contrib-eco.fijos+ing.tot;
+    fin.entro=cob.tot+ing.tot;fin.flujo=fin.entro-fin.pagos;
+
+    /* ═══ CONTRA EL PLAN DE VENTAS ═══ El objetivo RETAIL (Home y Otras zonas, las
+       hojas Home y Pilar) de cada tramo del mes, como la tab Planificacion: los
+       tramos cortan cada domingo, asi que una semana es un tramo por mes. El plan
+       se lee de la copia que guarda esa tab (`descargarPDFSemana` la refresca). */
+    var plan=null;
+    (function(){
+      var P={m:0,p:0,tramos:[],falta:[]};
+      meses.forEach(function(x){
+        var pd=planGuardado(x.label), meta=pd&&pd.metas&&pd.metas[PLAN_RETAIL];
+        if(!meta){P.falta.push(x.label);return;}
+        var cortes=[];
+        for(var dd=1;dd<=x.diasMes;dd++)if(new Date(x.an,x.mn-1,dd).getDay()===0)cortes.push(dd);
+        if(cortes[cortes.length-1]!==x.diasMes)cortes.push(x.diasMes);
+        var ti=0;while(ti<cortes.length-1&&cortes[ti]<x.d0)ti++;
+        P.m+=lista(meta.semanalesM)[ti]||0;P.p+=lista(meta.semanalesP)[ti]||0;
+        P.tramos.push({label:x.label,desde:ti>0?cortes[ti-1]+1:1,hasta:cortes[ti],metaFact:Number(meta.metaFact)||0,metaPed:Number(meta.metaPedidos)||0});
+      });
+      if(!P.tramos.length&&!P.falta.length)return;
+      P.realM=g.dom.f;P.realP=pedHP.length;
+      var ult=P.tramos.filter(function(t){return t.label===MESES[hasta.getMonth()]+' '+hasta.getFullYear();})[0];
+      if(ult){
+        var ini=_rtIso(new Date(hasta.getFullYear(),hasta.getMonth(),1));
+        P.mes={label:ult.label,meta:ult.metaFact,real:_rtSumar(ini,h).dom.f};
+      }
+      plan=P;
+    })();
 
     return {lun:lun,dom:dom,hasta:hasta,enCurso:enCurso,d:d,h:h,semN:semN,semAnt:getWeek(_rtDia(lun,-7)),
       g:g,gc:gc,dias:dias,cl:cl,topCli:topCli,prodU:prodU,prodK:prodK,prodX:prodX,totU:totU,totK:totK,porCat:porCat,
-      pend:pend,pendTot:pendTot,pendYa:pendYa,redSin:redSin,carne:carne,nuevos:nuevos,cob:cob,hayMov:hayMov,gas:gas,ing:ing,
+      pend:pend,pendTot:pendTot,pendYa:pendYa,redSin:redSin,carne:carne,nuevos:nuevos,volvieron:volvieron,cob:cob,
+      hayMov:hayMov,eco:eco,fin:fin,ing:ing,plan:plan,
       generado:pad(ahora.getDate())+'/'+pad(ahora.getMonth()+1)+'/'+ahora.getFullYear()+' '+pad(ahora.getHours())+':'+pad(ahora.getMinutes())};
   }
   window._rsArmar=armar;
@@ -24936,6 +25049,7 @@ if('serviceWorker' in navigator){
   /* ───────── El documento ───────── */
   function section(t,c){return '<div class="rs-section"><div class="rs-h">'+t+'</div>'+c+'</div>';}
   function kpi(l,v,s){return '<div class="rs-kpi"><div class="rs-kpi-l">'+l+'</div><div class="rs-kpi-v">'+v+'</div>'+(s?'<div class="rs-kpi-s">'+s+'</div>':'')+'</div>';}
+  function comp(l,v,s,cls){return '<div class="rs-comp-c"><div class="rs-comp-l">'+l+'</div><div class="rs-comp-d'+(cls?' '+cls:'')+'">'+v+'</div>'+(s?'<div class="rs-kpi-s">'+s+'</div>':'')+'</div>';}
   function delta(a,b,cant,vs){
     if(!(b>0))return 'sin semana anterior para comparar';
     var dd=a-b;
@@ -24952,11 +25066,22 @@ if('serviceWorker' in navigator){
       +'<div class="rs-rama-m">'+(x.f>0?'costo '+fmt$(x.c)+' · margen '+fmt$(m)+' <b>'+pct(m,x.f)+'%</b> · '+x.ent+(x.ent===1?' entrega':' entregas'):'sin ventas')+'</div>'
       +'</div>';
   }
-  function tabla(cab,filas,clsNum){
-    return '<table class="rs-tbl"><thead><tr>'+cab.map(function(c,i){return '<th'+(clsNum.indexOf(i)>=0?' class="num"':'')+'>'+c+'</th>';}).join('')+'</tr></thead><tbody>'
+  /* `anchos`: el % de cada columna. Con anchos la tabla va con `table-layout:fixed`:
+     el texto largo baja de renglon adentro de su columna y no puede salirse de la
+     hoja (en el iPhone la columna de lo que llevo cada cliente se cortaba). */
+  function tabla(cab,filas,clsNum,anchos){
+    return '<table class="rs-tbl'+(anchos?' fija':'')+'">'
+      +(anchos?'<colgroup>'+anchos.map(function(w){return '<col style="width:'+w+'%">';}).join('')+'</colgroup>':'')
+      +'<thead><tr>'+cab.map(function(c,i){return '<th'+(clsNum.indexOf(i)>=0?' class="num"':'')+'>'+c+'</th>';}).join('')+'</tr></thead><tbody>'
       +filas.map(function(f){return '<tr>'+f.map(function(c,i){return '<td'+(clsNum.indexOf(i)>=0?' class="num"':'')+'>'+c+'</td>';}).join('')+'</tr>';}).join('')
       +'</tbody></table>';
   }
+  /* Un renglon del estado de resultados. `det`: la aclaracion chica abajo. */
+  function fila(lbl,v,cls,det){
+    return '<div class="rs-pl-row'+(cls?' '+cls:'')+'"><span class="rs-pl-l">'+lbl+(det?'<span class="rs-pl-d">'+det+'</span>':'')+'</span><span class="rs-pl-v">'+v+'</span></div>';
+  }
+  function menos(n){return n>0?'−'+fmt$(n):fmt$(0);}
+  function conSigno(n){return (n<0?'−':'')+fmt$(Math.abs(n));}
 
   function render(R){
     var g=R.g, t=g.tot, gc=R.gc, mT=t.f-t.c, mC=gc.tot.f-gc.tot.c;
@@ -24985,6 +25110,77 @@ if('serviceWorker' in navigator){
       +kpi('Clientes domiciliarios',R.cl?R.cl.total:'—',R.cl?R.cl.nuevos+' nuevos · '+R.cl.recompra+' recompra · '+R.cl.react+' reactivados':'el dato de esta semana no llegó')
       +'</div>');
 
+    /* Contra el plan de ventas */
+    var P=R.plan;
+    if(P){
+      var ph='';
+      if(P.tramos.length){
+        var cumple=P.m>0?pct(P.realM,P.m):0;
+        ph+='<div class="rs-comp">'
+          +comp('Objetivo retail',fmt$(P.m),P.tramos.map(function(x){return 'del '+x.desde+' al '+x.hasta+' de '+x.label.split(' ')[0].toLowerCase();}).join(' + '))
+          +comp('Entregado',fmt$(P.realM),cumple+'% del objetivo'+(R.enCurso?' (hasta hoy)':''),P.m>0?(P.realM>=P.m?'up':'dn'):'')
+          +comp('Pedidos',P.realP+(P.p>0?' <small>de '+P.p+'</small>':''),P.p>0?pct(P.realP,P.p)+'% del objetivo':'',P.p>0?(P.realP>=P.p?'up':'dn'):'')
+          +'</div>'
+          +(P.m>0?'<div class="rs-meta-bar"><div class="rs-meta-fill'+(P.realM>=P.m?' full':'')+'" style="width:'+Math.min(100,cumple)+'%"></div></div>':'');
+        ph+='<div class="rs-nota">Del Plan de Ventas: retail es Home y Otras zonas (las hojas Home y Pilar), lo entregado por el día de entrega.'
+          +(P.mes&&P.mes.meta>0?' En '+esc(P.mes.label.split(' ')[0].toLowerCase())+', '+fmt$(P.mes.real)+' de '+fmt$(P.mes.meta)+' ('+pct(P.mes.real,P.mes.meta)+'%) al '+DIAS[R.hasta.getDay()]+' '+dm(R.hasta)+'.':'')
+          +'</div>';
+      }
+      if(P.falta.length)ph+='<div class="rs-nota">No llegó el plan de '+esc(P.falta.join(' y '))+': abrí Planificación una vez con conexión y volvé a generar el PDF.</div>';
+      h+=section('Contra el plan',ph);
+    }
+
+    /* Economico */
+    if(R.hayMov){
+      var E=R.eco;
+      var ingNom=R.ing.det.map(function(x){return x.cat||x.con;}).filter(function(v,i,a){return v&&a.indexOf(v)===i;}).join(', ');
+      var eh='<div class="rs-pl">'
+        +fila('Facturado',fmt$(t.f),'','lo entregado en la semana')
+        +fila('Costo de la mercadería',menos(t.c))
+        +fila('= Margen bruto',fmt$(E.mb)+' <span class="rs-pl-p">'+pct(E.mb,t.f)+'%</span>','sub')
+        +fila('Bolsas',menos(E.bolsas),'',E.pedPack+(E.pedPack===1?' pedido':' pedidos')+' de Home y Otras zonas × '+fmt$(E.costoPack)+', como el EERR')
+        +fila('Campañas y mensajería',menos(E.camp),'',E.campD.length?esc(E.campD.join(' + ')):'sin pagos en la semana')
+        +fila('Delivery',menos(E.deliv),'',E.delivD.length?esc(E.delivD.join(' + ')):'sin pagos a repartidores en la semana')
+        +fila('= Margen de contribución',conSigno(E.contrib)+' <span class="rs-pl-p">'+pct(E.contrib,t.f)+'%</span>','sub')
+        +fila('Fijos: la parte de la semana',menos(E.fijos),'',E.fijosMes.map(function(x){return x.dias+' de '+x.diasMes+' días de '+MESES[x.mn-1].toLowerCase()+' ('+fmt$(x.total)+' en el mes)';}).join(' + '))
+        +(R.ing.tot>0?fila('Otros ingresos','+'+fmt$(R.ing.tot),'',esc(ingNom)):'')
+        +fila('Resultado económico de la semana',conSigno(E.res),'total '+(E.res>=0?'pos':'neg'))
+        +'</div><div class="rs-nota"><b>Económico</b> = lo que ganó la semana: la venta cuenta el día que se entrega y cada costo en el período al que pertenece, no el día que se paga. Bolsas, campañas (WATI y pauta) y delivery son <b>variables</b>: crecen con lo que se vende. Los <b>fijos</b> son los del EERR del mes —lo cargado en Egresos hasta hoy, con el piso de sueldo, servicios y alquiler imputado, el monotributo y la amortización— repartidos por día.</div>';
+      h+=section('Resultado económico',eh);
+
+      /* Financiero */
+      var F=R.fin;
+      var lineas=Object.keys(F.porLinea).sort(function(a,b){return F.porLinea[b]-F.porLinea[a];});
+      var fh='<div class="rs-comp">'
+        +comp('Entró',fmt$(F.entro),R.cob.n+(R.cob.n===1?' cobro':' cobros')+(R.ing.tot>0?' y otros ingresos':''))
+        +comp('Salió',fmt$(F.pagos),F.det.length+(F.det.length===1?' pago':' pagos'))
+        +comp('Flujo de caja',conSigno(F.flujo),'lo que entró menos lo que salió',F.flujo>=0?'up':'dn')
+        +'</div><div class="rs-pl">'
+        +fila('Cobrado',fmt$(R.cob.tot),'','efectivo '+fmt$(R.cob.ef)+' · transferencia '+fmt$(R.cob.tr))
+        +(R.ing.tot>0?fila('Otros ingresos','+'+fmt$(R.ing.tot),'',esc(ingNom)):'')
+        +lineas.map(function(k){return fila(esc(k),menos(F.porLinea[k]));}).join('')
+        +fila('Flujo de caja de la semana',conSigno(F.flujo),'total '+(F.flujo>=0?'pos':'neg'))
+        +'</div><div class="rs-nota"><b>Financiero</b> = la plata el día que entró o salió, sea de la venta o del mes que sea. Lo cobrado es la tarjeta "Cobrado en la semana" de Inicio; los pagos, los de Egresos.'
+        +(F.vueltos>0?' Los vueltos ('+fmt$(F.vueltos)+') no cuentan: entran por una cuenta y salen por otra.':'')+'</div>';
+      if(F.det.length){
+        fh+='<div class="rs-sub-h">Los pagos, uno por uno</div>'
+          +tabla(['Fecha','Qué es','Concepto','Cuenta','Monto'],F.det.map(function(x){var dd=isoADate(x.iso);return [dm(dd),esc(x.tipo),esc(x.con),esc(x.met),fmt$(x.f)];}),[4],[9,22,39,15,15]);
+      }
+      fh+=(R.pendTot>0
+          ?'<div class="rs-sub-h">'+(R.enCurso?'Hasta hoy queda por cobrar de lo entregado en la semana: ':'Al cierre de la semana quedó por cobrar de lo entregado: ')+fmt$(R.pendTot)+'</div>'
+            +tabla(['Cliente','Canal','Monto','Hoy'],R.pend.map(function(o){
+              var dc=o.cob?isoADate(o.cob):null;
+              return [esc(o.c),esc(o.h),fmt$(o.f),dc?'cobrado '+DIAS_C[dc.getDay()]+' '+dm(dc):(o.h==='Red'?'sin rendir':'sin cobrar')];
+            }),[2],[40,18,17,25])
+            +(R.pendYa>0?'<div class="rs-nota">De eso ya entró '+fmt$(R.pendYa)+' después del domingo; falta '+fmt$(R.pendTot-R.pendYa)+'.</div>':'')
+          :'<div class="rs-nota">Todo lo entregado en la semana está cobrado.</div>')
+        +(R.redSin.length?'<div class="rs-nota">Aparte, Red en poder del vendedor y sin rendir (figura Pendiente: no está en lo facturado): '
+          +R.redSin.map(function(o){return esc(o.v)+' '+o.n+(o.n===1?' pedido ':' pedidos ')+fmt$(o.f);}).join(' · ')+'.</div>':'');
+      h+=section('Financiero',fh);
+    }else{
+      h+=section('Resultado económico','<div class="rs-nota">Los gastos todavía no llegaron al ERP: sin ellos no se puede separar lo económico de lo financiero.</div>');
+    }
+
     var arbol='<div class="rs-arbol"><div>'
       +rama('g','🏠 Venta Mercado Domiciliario','',g.dom,t.f)
       +rama('h','Home','Estancias del Pilar y Estancias del Río',g.home,g.dom.f)
@@ -25005,58 +25201,69 @@ if('serviceWorker' in navigator){
         +'<div class="rs-bar-val">'+(x.ent>0?x.ent+(x.ent===1?' entrega':' entregas')+' · '+fmt$(x.f):'—')+'</div></div>';
     }).join(''));
 
+    /* Clientes */
     var clH=R.cl
       ?'<div class="rs-comp">'
-        +'<div class="rs-comp-c"><div class="rs-comp-l">🆕 Nuevos</div><div class="rs-comp-d">'+R.cl.nuevos+'</div><div class="rs-kpi-s">primera compra</div></div>'
-        +'<div class="rs-comp-c"><div class="rs-comp-l">🔁 Recompra</div><div class="rs-comp-d">'+R.cl.recompra+'</div><div class="rs-kpi-s">compró en las 4 semanas anteriores</div></div>'
-        +'<div class="rs-comp-c"><div class="rs-comp-l">⏰ Reactivados</div><div class="rs-comp-d">'+R.cl.react+'</div><div class="rs-kpi-s">volvió después de más tiempo</div></div>'
-        +'</div><div class="rs-nota">'+R.cl.total+' clientes de Venta Mercado Domiciliario (Home y Otras zonas), por teléfono.</div>'
+        +comp('🆕 Nuevos',R.cl.nuevos,'primera entrega')
+        +comp('🔁 Recompra',R.cl.recompra,'compró en las 4 semanas anteriores')
+        +comp('⏰ Reactivados',R.cl.react,'5 semanas o más sin comprar')
+        +'</div><div class="rs-nota">'+R.cl.total+' clientes de Venta Mercado Domiciliario (Home y Otras zonas), por teléfono. <b>Nuevo</b>: su primera entrega. <b>Recompra</b>: la anterior fue en alguna de las 4 semanas previas. <b>Reactivado</b>: volvió después de 5 semanas o más sin recibir nada — un dormido que se despertó.</div>'
       :'<div class="rs-nota">El dato de clientes de esta semana no llegó: no se recalcula acá.</div>';
-    if(R.cl&&R.cl.nuevos>0){
-      if(R.nuevos&&R.nuevos.length){
-        clH+='<div class="rs-sub-h">🆕 Quiénes son los nuevos</div>'
-          +tabla(['Cliente','Zona','Qué llevó','Facturado'],R.nuevos.map(function(o){return [esc(o.c),o.ok?esc(o.h):'—',o.ok?llevo(o):'—',o.ok?fmt$(o.f):'—'];}),[3]);
-        var sinPed=R.nuevos.filter(function(o){return !o.ok;}).length;
-        if(sinPed)clH+='<div class="rs-nota">De '+sinPed+(sinPed===1?' no llegó el pedido':' no llegaron los pedidos')+' a este celular: se sabe el nombre, no qué llevó.</div>';
+    function tablaQuien(lista,cab4,col4){
+      var h2=tabla(['Cliente','Dónde','Qué llevó','Facturado',cab4],lista.map(function(o){
+        return [esc(o.c),o.ok?esc(o.donde):'—',o.ok?(o.det||'—'):'—',o.ok?fmt$(o.f):'—',col4(o)];
+      }),[3],[21,17,35,13,14]);
+      var sinPed=lista.filter(function(o){return !o.ok;}).length;
+      if(sinPed)h2+='<div class="rs-nota">De '+sinPed+(sinPed===1?' no llegó el pedido':' no llegaron los pedidos')+' a este celular: se sabe el nombre, no qué llevó.</div>';
+      return h2;
+    }
+    if(R.cl&&(R.cl.nuevos>0||R.cl.react>0)){
+      if(R.nuevos&&R.volvieron){
+        if(R.nuevos.length)clH+='<div class="rs-sub-h">🆕 Quiénes son los nuevos</div>'
+          +tablaQuien(R.nuevos,'¿Volvió?',function(o){return o.luego>0?'sí, '+o.luego+(o.luego===1?' semana':' semanas'):'todavía no';});
+        if(R.volvieron.length)clH+='<div class="rs-sub-h">⏰ Quiénes volvieron</div>'
+          +tablaQuien(R.volvieron,'Sin comprar',function(o){return o.sem+' semanas';});
       }else{
-        clH+='<div class="rs-nota">Los nombres de los nuevos no llegaron (el servidor todavía no los manda o la copia es de antes): tocá ↻ y volvé a generar el PDF.</div>';
+        clH+='<div class="rs-nota">Los nombres de los nuevos y de los que volvieron no llegaron: tocá ↻ y volvé a generar el PDF.</div>';
       }
     }
     if(R.topCli.length){
       clH+='<div class="rs-sub-h">Los que más compraron (sin Red: el cliente final es del vendedor)</div>'
-        +tabla(['Cliente','Canal','Entregas','Facturado'],R.topCli.map(function(o){return [esc(o.c),esc(o.h),o.ent,fmt$(o.f)];}),[2,3]);
+        +tabla(['Cliente','Canal','Entregas','Facturado'],R.topCli.map(function(o){return [esc(o.c),esc(o.h),o.ent,fmt$(o.f)];}),[2,3],[44,22,14,20]);
     }
     h+=section('Clientes',clH);
 
+    /* Carne y algo mas */
     var ca=R.carne;
     if(ca&&ca.cli>0&&ca.sinDato>0){
-      h+=section('Carne y lo de siempre','<div class="rs-nota">No llegó el catálogo de todos los productos de la semana: no se puede separar quién llevó carne y quién lo de siempre.</div>');
+      h+=section('Carne y algo más','<div class="rs-nota">No llegó el catálogo de todos los productos de la semana: no se puede separar quién llevó carne y quién no.</div>');
     }else if(ca&&ca.cli>0){
       var caH='<div class="rs-comp">'
-        +'<div class="rs-comp-c"><div class="rs-comp-l">🥩 Solo carne</div><div class="rs-comp-d">'+ca.solo+'</div></div>'
-        +'<div class="rs-comp-c"><div class="rs-comp-l">🥩🍕 Las dos cosas</div><div class="rs-comp-d">'+ca.ambos+'</div><div class="rs-kpi-s">carne y lo de siempre</div></div>'
-        +'<div class="rs-comp-c"><div class="rs-comp-l">🍕 Solo lo de siempre</div><div class="rs-comp-d">'+ca.siempre+'</div></div>'
-        +'</div><div class="rs-nota">'+ca.cli+' clientes con alguna entrega en la semana, todos los canales, por teléfono. Lo de siempre es todo lo que no es carne.</div>';
+        +comp('🥩 Solo carne',ca.solo)
+        +comp('🥩 Carne y algo más',ca.ambos)
+        +comp('Sin carne',ca.siempre)
+        +'</div><div class="rs-nota">'+ca.cli+' clientes con alguna entrega en la semana, todos los canales, por teléfono. <b>Algo más</b> es cualquier producto que no es carne'
+        +(ca.otras.length?' ('+esc(ca.otras.join(', ').toLowerCase())+')':'')+'.</div>';
       if(ca.lista.length){
+        var estTxt=function(e){return e.t==='nuevo'?'🆕 nuevo':(e.t==='volvio'?'⏰ volvió tras '+e.sem+' sem.':(e.t==='ya'?'ya compraba':'—'));};
         caH+='<div class="rs-sub-h">Los que llevaron carne</div>'
-          +tabla(['Cliente','Canal','Carne','Lo de siempre'],ca.lista.map(function(o){
-            var cs=Object.keys(o.cats).sort();
-            return [esc(o.c),esc(o.h),kg(o.kg),o.u>0?o.u+' u.'+(cs.length?' · '+esc(cs.join(', ')):''):'—'];
-          }),[2]);
+          +tabla(['Cliente','Canal','¿Cliente?','Carne','Además llevó'],ca.lista.map(function(o){
+            return [esc(o.c),esc(o.h),estTxt(o.est||{t:'?'}),kg(o.kg),o.ademas||'—'];
+          }),[3],[24,13,17,13,33]);
       }
-      h+=section('Carne y lo de siempre',caH);
+      h+=section('Carne y algo más',caH);
     }
 
     var prodH='';
     if(R.prodU.length){
-      prodH+=tabla(['Producto','Unidades','% de las unidades'],R.prodU.slice(0,10).map(function(o){return [esc(o.n),o.q,pct(o.q,R.totU)+'%'];}),[1,2]);
+      prodH+=tabla(['Producto','Unidades','% de las unidades'],R.prodU.slice(0,10).map(function(o){return [esc(o.n),o.q,pct(o.q,R.totU)+'%'];}),[1,2],[60,20,20]);
       prodH+='<div class="rs-nota">'+R.totU+' unidades en total'
         +(Object.keys(R.porCat).length?' · '+Object.keys(R.porCat).sort(function(a,b){return R.porCat[b]-R.porCat[a];}).map(function(k){return esc(k)+' '+R.porCat[k];}).join(' · '):'')
         +(R.prodU.length>10?' · y '+(R.prodU.length-10)+' productos más':'')+'</div>';
     }
     if(R.prodK.length){
       prodH+='<div class="rs-sub-h">Por kilo</div>'
-        +tabla(['Producto','Kilos','% de los kilos'],R.prodK.map(function(o){return [esc(o.n),kg(o.q),pct(o.q,R.totK)+'%'];}),[1,2])
+        +tabla(['Producto','Kilos','% de los kilos'],R.prodK.map(function(o){return [esc(o.n),kg(o.q),pct(o.q,R.totK)+'%'];}),[1,2],[60,20,20])
         +'<div class="rs-nota">'+kg(R.totK)+' en total. Los kilos no se suman con las unidades.</div>';
     }
     if(R.prodX.length){
@@ -25065,49 +25272,7 @@ if('serviceWorker' in navigator){
     }
     h+=section('Qué se vendió',prodH||'<div class="rs-nota">Sin productos entregados.</div>');
 
-    if(R.hayMov){
-      var gas=R.gas, gh='';
-      if(gas.tot>0){
-        var cats=Object.keys(gas.porCat).sort(function(a,b){return gas.porCat[b]-gas.porCat[a];});
-        gh+=tabla(['Categoría','Monto'],cats.map(function(c){return [esc(c),fmt$(gas.porCat[c])];}).concat([['<b>Total</b>','<b>'+fmt$(gas.tot)+'</b>']]),[1]);
-        gh+='<div class="rs-sub-h">Uno por uno</div>'
-          +tabla(['Fecha','Categoría','Concepto','Método','Monto'],gas.det.map(function(x){var dd=isoADate(x.iso);return [dm(dd),esc(x.cat),esc(x.con),esc(x.met),fmt$(x.f)];}),[4]);
-      }else gh+='<div class="rs-nota">No hubo gastos cargados en la semana.</div>';
-      var fuera=[];
-      if(gas.prov>0)fuera.push('pagos a proveedores '+fmt$(gas.prov)+' (la mercadería ya está en el costo)');
-      if(gas.catering>0)fuera.push('Catering '+fmt$(gas.catering)+' (es su costo)');
-      if(gas.vueltos>0)fuera.push('vueltos '+fmt$(gas.vueltos)+' (no son un gasto)');
-      if(fuera.length)gh+='<div class="rs-nota">No cuentan como gasto: '+fuera.join(' · ')+'.</div>';
-      h+=section('Gastos de la semana',gh);
-
-      var res=mT-gas.tot+R.ing.tot;
-      h+=section('Lo que dejó la semana','<div class="rs-pl">'
-        +'<div class="rs-pl-row"><span>Margen bruto</span><span>'+fmt$(mT)+'</span></div>'
-        +'<div class="rs-pl-row"><span>Gastos de la semana</span><span>−'+fmt$(gas.tot)+'</span></div>'
-        +(R.ing.tot>0?'<div class="rs-pl-row"><span>Otros ingresos ('+esc(R.ing.det.map(function(x){return x.cat||x.con;}).filter(function(v,i,a){return v&&a.indexOf(v)===i;}).join(', ')||'rendimientos')+')</span><span>+'+fmt$(R.ing.tot)+'</span></div>':'')
-        +'<div class="rs-pl-row total '+(res>=0?'pos':'neg')+'"><span>Margen menos gastos</span><span>'+(res<0?'−':'')+fmt$(Math.abs(res))+'</span></div>'
-        +'</div><div class="rs-nota">No incluye lo que el EERR reparte por mes (sueldos y alquiler imputados, amortizaciones): el cierre completo es el EERR del mes.</div>');
-    }else{
-      h+=section('Gastos de la semana','<div class="rs-nota">Los gastos todavía no llegaron al ERP: este PDF no los incluye.</div>');
-    }
-
-    h+=section('La plata de la semana','<div class="rs-comp">'
-        +'<div class="rs-comp-c"><div class="rs-comp-l">Cobrado</div><div class="rs-comp-d">'+fmt$(R.cob.tot)+'</div><div class="rs-kpi-s">'+R.cob.n+(R.cob.n===1?' cobro':' cobros')+'</div></div>'
-        +'<div class="rs-comp-c"><div class="rs-comp-l">Efectivo</div><div class="rs-comp-d">'+fmt$(R.cob.ef)+'</div></div>'
-        +'<div class="rs-comp-c"><div class="rs-comp-l">Transferencia</div><div class="rs-comp-d">'+fmt$(R.cob.tr)+'</div></div>'
-        +'</div><div class="rs-nota">Por la fecha en que entró la plata, sea de la entrega que sea. Es la tarjeta "Cobrado en la semana" de Inicio.</div>'
-        +(R.pendTot>0
-          ?'<div class="rs-sub-h">'+(R.enCurso?'Hasta hoy queda por cobrar de lo entregado en la semana: ':'Al cierre de la semana quedó por cobrar de lo entregado: ')+fmt$(R.pendTot)+'</div>'
-            +tabla(['Cliente','Canal','Monto','Hoy'],R.pend.map(function(o){
-              var dc=o.cob?isoADate(o.cob):null;
-              return [esc(o.c),esc(o.h),fmt$(o.f),dc?'cobrado '+DIAS_C[dc.getDay()]+' '+dm(dc):(o.h==='Red'?'sin rendir':'sin cobrar')];
-            }),[2])
-            +(R.pendYa>0?'<div class="rs-nota">De eso ya entró '+fmt$(R.pendYa)+' después del domingo; falta '+fmt$(R.pendTot-R.pendYa)+'.</div>':'')
-          :'<div class="rs-nota">Todo lo entregado en la semana está cobrado.</div>')
-        +(R.redSin.length?'<div class="rs-nota">Aparte, Red en poder del vendedor y sin rendir (figura Pendiente: no está en lo facturado): '
-          +R.redSin.map(function(o){return esc(o.v)+' '+o.n+(o.n===1?' pedido ':' pedidos ')+fmt$(o.f);}).join(' · ')+'.</div>':''));
-
-    h+='<div class="rs-foot">Generado '+R.generado+' · <b>Maleu</b> · Lo entregado, por el día de entrega; Red neto de la comisión del vendedor. Son los números de Inicio › Resumen › Ventas retail.</div>';
+    h+='<div class="rs-foot">Generado '+R.generado+' · <b>Maleu</b> · Lo entregado, por el día de entrega; Red neto de la comisión del vendedor. Son los números de Inicio › Resumen › Ventas retail y del EERR.</div>';
     return '<div class="rs-doc" id="rsDoc">'+h+'</div>';
   }
   window._rsRender=render;
@@ -25132,26 +25297,112 @@ if('serviceWorker' in navigator){
   }
   function datosListos(){return typeof D!=='undefined'&&D&&Array.isArray(D.pedidos)&&D.pedidos.length>0;}
 
+  /* Un GET que no traba el PDF: a los `ms` sigue con lo que haya. */
+  function traerJson(q,ms,alLlegar){
+    return new Promise(function(res){
+      var hecho=false, fin=function(){if(!hecho){hecho=true;res();}}, t=setTimeout(fin,ms);
+      fetch(API+'?action='+q+'&t='+Date.now()).then(function(r){return r.json();})
+        .then(function(j){if(hecho)return;clearTimeout(t);try{alLlegar(j);}catch(e){}fin();})
+        .catch(function(){clearTimeout(t);fin();});
+    });
+  }
+  /* Lo que el PDF necesita fresco (14/9/2026): los nombres de los nuevos y de los
+     que volvieron, si la copia del celular es de antes de que el servidor los
+     mandara (el PDF salia sin la tabla aunque la version fuera la nueva), y el plan
+     de ventas de los meses de la semana. */
+  function prepararDatos(lunIso,cb){
+    var lun=isoADate(lunIso);if(!lun){cb();return;}
+    lun=_rtDia(lun,-((lun.getDay()+6)%7));
+    var tareas=[], s=D.saludSem&&D.saludSem[_rtDia(lun,3).getFullYear()+'-'+getWeek(lun)];
+    if(s&&(s.nuevos>0||s.react>0)&&!(Array.isArray(s.nuevosL)&&Array.isArray(s.reactL))){
+      tareas.push(traerJson('saludClientes',30000,function(j){if(j&&j.ok&&j.sem){D.saludSem=j.sem;if(j.mes)D.saludMes=j.mes;}}));
+    }
+    mesesDe(lun,_rtDia(lun,6)).forEach(function(x){
+      tareas.push(traerJson('planMes&mes='+encodeURIComponent(x.label),20000,function(j){
+        if(j&&j.ok&&j.metas){try{localStorage.setItem(PLAN_CACHE+x.label,JSON.stringify(j));}catch(e){}}
+      }));
+    });
+    Promise.all(tareas).then(function(){cb();},function(){cb();});
+  }
+
+  window._rsPreparar=prepararDatos;
+
   // ───────── PDF ─────────
+  /* El PDF, en alta y sin cortar un renglon por la mitad (14/9/2026). Hasta hoy
+     era UNA captura del documento entero a escala 2, rebanada cada 297 mm donde
+     cayera: salia pixelado, partia filas al medio, y en el iPhone la captura de
+     un documento largo pasa el limite de tamaño de un canvas de Safari (16,7 M de
+     pixeles). Ahora se captura BLOQUE por bloque (portada, cada seccion, el pie)
+     a escala 3, y un bloque que no entra en lo que queda de la hoja se corta en
+     el ultimo renglon que entra, o pasa entero a la hoja siguiente.
+     `ignoreElements` deja afuera del clon todo lo que no es el bloque: el ERP
+     entero son 3 MB de HTML y clonarlo en cada captura tardaba. */
+  var PDF_ESCALA=3, PDF_MAX_PX=16000000;
+  function _pdfIgnorar(bloque){
+    return function(el){
+      if(el===bloque||el.contains(bloque)||bloque.contains(el))return false;
+      if(el.closest&&el.closest('head'))return false;
+      return true;
+    };
+  }
+  /* Donde se puede cortar un bloque, en px desde su borde de arriba: antes de un
+     renglon, de un subtitulo, de una nota. La primera fila de una tabla no: se
+     quedaria el encabezado solo al pie de la hoja. */
+  function _pdfCortes(bloque){
+    var top=bloque.getBoundingClientRect().top, out=[];
+    [].forEach.call(bloque.querySelectorAll('tbody tr, .rs-sub-h, .rs-nota, .rs-comp, .rs-kpis, .rs-pl-row, .rs-bar-row, .rs-rama, .rs-meta-bar'),function(el){
+      if(el.tagName==='TR'&&!el.previousElementSibling)return;
+      var y=el.getBoundingClientRect().top-top;
+      if(y>1)out.push(y);
+    });
+    return out.sort(function(a,b){return a-b;});
+  }
+  window._rsPdfCortes=_pdfCortes;
   function _generarPDFFromDoc(doc,R){
-    return html2canvas(doc,{scale:2,useCORS:true,backgroundColor:'#ffffff',windowWidth:800}).then(function(canvas){
-      var jp=window.jspdf.jsPDF;
-      var pdf=new jp({orientation:'portrait',unit:'mm',format:'a4'});
-      var pageW=210,pageH=297,margin=8;
-      var imgW=pageW-margin*2;
-      var pxPerMm=canvas.width/imgW;
-      var pageHpx=Math.floor((pageH-margin*2)*pxPerMm);
-      var y=0,first=true;
-      while(y<canvas.height){
-        var sliceH=Math.min(pageHpx,canvas.height-y);
-        var slice=document.createElement('canvas');
-        slice.width=canvas.width;slice.height=sliceH;
-        slice.getContext('2d').drawImage(canvas,0,y,canvas.width,sliceH,0,0,canvas.width,sliceH);
-        if(!first)pdf.addPage();
-        pdf.addImage(slice.toDataURL('image/jpeg',0.92),'JPEG',margin,margin,imgW,sliceH/pxPerMm);
-        y+=sliceH;first=false;
+    var jp=window.jspdf.jsPDF;
+    var pdf=new jp({orientation:'portrait',unit:'mm',format:'a4',compress:true});
+    var pageW=210,pageH=297,margin=10,imgW=pageW-margin*2;
+    var bloques=[].slice.call(doc.children).filter(function(b){return b.getBoundingClientRect().height>0;});
+    if(!bloques.length)return Promise.reject(new Error('documento vacío'));
+    var anchoCss=bloques[0].getBoundingClientRect().width||800;
+    var mmPorCss=imgW/anchoCss, altoPag=(pageH-margin*2-6)/mmPorCss;   /* 6 mm para el numero de pagina */
+    var y=0, paginas=1;
+    function nuevaPagina(){pdf.addPage();paginas++;y=0;}
+    function pegar(cv,esc,desde,alto){
+      var sy=Math.round(desde*esc), sh=Math.min(cv.height-sy,Math.round(alto*esc));if(sh<=0)return;
+      var sl=document.createElement('canvas');sl.width=cv.width;sl.height=sh;
+      var cx=sl.getContext('2d');cx.fillStyle='#ffffff';cx.fillRect(0,0,sl.width,sh);
+      cx.drawImage(cv,0,sy,cv.width,sh,0,0,cv.width,sh);
+      pdf.addImage(sl.toDataURL('image/jpeg',0.92),'JPEG',margin,margin+y*mmPorCss,imgW,(sh/esc)*mmPorCss,undefined,'FAST');
+      sl.width=sl.height=0;
+    }
+    return bloques.reduce(function(prom,bl){
+      return prom.then(function(){
+        var r=bl.getBoundingClientRect(), alto=r.height, cortes=_pdfCortes(bl);
+        var escala=Math.min(PDF_ESCALA,Math.sqrt(PDF_MAX_PX/Math.max(1,r.width*alto)));
+        return html2canvas(bl,{scale:escala,useCORS:true,backgroundColor:'#ffffff',windowWidth:800,logging:false,ignoreElements:_pdfIgnorar(bl)}).then(function(cv){
+          var esc=cv.height/alto, desde=0, vueltas=0;
+          while(desde<alto-0.5&&vueltas++<200){
+            var lugar=altoPag-y;
+            if(alto-desde<=lugar){pegar(cv,esc,desde,alto-desde);y+=alto-desde;break;}
+            var c=null;
+            for(var i=0;i<cortes.length;i++)if(cortes[i]>desde+1&&cortes[i]-desde<=lugar)c=cortes[i];
+            if(c===null){
+              if(y>0){nuevaPagina();continue;}
+              c=desde+lugar;
+            }
+            pegar(cv,esc,desde,c-desde);desde=c;nuevaPagina();
+          }
+          cv.width=cv.height=0;
+        });
+      });
+    },Promise.resolve()).then(function(){
+      for(var p=1;p<=paginas;p++){
+        pdf.setPage(p);pdf.setFontSize(8);pdf.setTextColor(122,74,74);
+        pdf.text('Maleu - Semana '+R.semN+' - pagina '+p+' de '+paginas,pageW/2,pageH-5,{align:'center'});
       }
       pdf.save(nombreArchivo(R));
+      return paginas;
     });
   }
 
@@ -25165,6 +25416,7 @@ if('serviceWorker' in navigator){
     }
     if(!datosListos()){toast('Todavía no llegaron los pedidos: probá en unos segundos');return;}
     showLoader('Armando el PDF…');
+    prepararDatos(lunIso,function(){
     conCatalogo(function(){
       var R;
       try{R=armar(lunIso);}catch(e){hideLoader(true);toast('No se pudo armar el resumen: '+e.message);return;}
@@ -25180,6 +25432,7 @@ if('serviceWorker' in navigator){
           hideLoader(true);toast('Error PDF: '+err.message);hidden.innerHTML='';
         });
       },120);
+    });
     });
   };
 
