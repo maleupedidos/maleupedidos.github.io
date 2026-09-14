@@ -4469,6 +4469,9 @@ function fetchCobrosPendientes(fresh,auto){
       _cobFirma=_fc;
       _ctasDe(data);
       _saldosDelBackend(data);
+      /* Sin esto la carne de un cobro salia "0.668x CEn" si no se habia abierto
+         RUTA antes: los nombres y los kilos llegaban solo con `entregas`. */
+      _prodsDelBackend(data.prods);
       if(typeof data.billetera==='number')_billeteraRuta=data.billetera; // fondo de cambio para el cuadro de Cobros
       /* Solo si vino el campo: un backend viejo no lo manda, y en ese caso hay
          que dejar lo que ya estaba en vez de vaciar la banda. */
@@ -5302,22 +5305,55 @@ function _refrescarBilleteraRuta(){
    Los precios salen SOLO si suman el subtotal guardado: la lista pudo cambiar
    despues de cargar el pedido, y una linea que no cierra con el total es peor
    que una sin precio. */
+/* El dia de entrega de un pedido del cuadro de cobro, 'aaaa-mm-dd'. En COBROS
+   viene "dd/MM/aaaa" y en RUTA "aaaa-mm-dd". */
+function _diaDeEntregaCobro(p){
+  var x=String((p&&(p.feEnt||p.fe||p.fePed))||'').trim();
+  var m=x.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if(m)return m[1]+'-'+('0'+m[2]).slice(-2)+'-'+('0'+m[3]).slice(-2);
+  m=x.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if(m)return m[3]+'-'+('0'+m[2]).slice(-2)+'-'+('0'+m[1]).slice(-2);
+  return x;
+}
+/* "mié 3/9" para el renglon de cada pedido. */
+function _diaCortoCobro(p){
+  var k=_diaDeEntregaCobro(p), m=k.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if(!m)return '';
+  var d=new Date(Number(m[1]),Number(m[2])-1,Number(m[3]));
+  return ['dom','lun','mar','mié','jue','vie','sáb'][d.getDay()]+' '+d.getDate()+'/'+(d.getMonth()+1);
+}
+/* Lo que se lleva cada pedido del cobro (14/9/2026).
+   Tadeo: "en el detalle de cobros de un cliente no aparece la carne", y con PMO
+   —dos pedidos, "Cobrar los 2 juntos"— queria "ver todo el detalle de ambos
+   pedidos en uno". Salia vacio por dos lados: el servidor armaba los productos con
+   una lista escrita a mano sin la carne, y aca se descartaba todo pedido que
+   llegara sin productos, asi que un pedido SOLO de carne no aparecia.
+   Ahora van TODOS los pedidos del cobro, cada uno con su dia (si son de dias
+   distintos) y su subtotal, y sus productos con la pieza de carne que se llevo. */
 function _renderCobroPedidos(peds){
   var el=document.getElementById('cobroRutaProds');
   if(!el)return;
-  peds=(peds||[]).filter(function(p){return p&&p.p&&p.p.length;});
-  if(!peds.length){el.style.display='none';el.innerHTML='';return;}
-  var multi=peds.length>1;
-  var h='<div class="cobro-prods-h">\ud83e\uddfe '+(multi?peds.length+' pedidos, una sola entrega':'Pedido')+'</div>';
+  peds=(peds||[]).filter(function(p){return !!p;});
+  var alguno=peds.some(function(p){return p.p&&p.p.length;});
+  if(!peds.length||!alguno){el.style.display='none';el.innerHTML='';return;}
+  var multi=peds.length>1, dias={};
+  peds.forEach(function(p){dias[_diaDeEntregaCobro(p)]=1;});
+  var unDia=Object.keys(dias).length<=1;
+  var h='<div class="cobro-prods-h">\ud83e\uddfe '+(multi?(unDia?peds.length+' pedidos, una sola entrega':'Los '+peds.length+' pedidos'):'Pedido')+'</div>';
   peds.forEach(function(p){
-    var items=_sortProds(p.p), sub=Number(p.sub)||0, suma=0, conPrecio=sub>0;
+    var items=_sortProds(p.p||[]), sub=Number(p.sub)||0, suma=0, conPrecio=sub>0&&items.length>0;
     var precios=items.map(function(x){
       var pr=NP_PRECIOS[x.a], v=(pr&&Number(pr.p)>0)?Math.round(Number(pr.p)*(Number(x.q)||0)):null;
       if(v===null)conPrecio=false;else suma+=v;
       return v;
     });
     if(conPrecio&&Math.abs(suma-sub)>items.length)conPrecio=false;
-    if(multi)h+='<div class="cobro-prods-ped"><span>'+_rtcEsc(p.h)+' #'+_rtcEsc(p.id)+'</span>'+((!conPrecio&&sub>0)?'<b>'+formatMoney(sub)+'</b>':'')+'</div>';
+    if(multi){
+      var dc=unDia?'':_diaCortoCobro(p);
+      var plata=sub||Number(p.totalOriginal)||Number(p['$'])||0;
+      h+='<div class="cobro-prods-ped"><span>'+_rtcEsc(p.h)+' #'+_rtcEsc(p.id)+(dc?' \u00b7 '+_rtcEsc(dc):'')+'</span>'+(plata>0?'<b>'+formatMoney(plata)+'</b>':'')+'</div>';
+    }
+    if(!items.length)h+='<div class="cobro-prods-l"><span><i>sin el detalle de productos</i></span></div>';
     items.forEach(function(x,i){
       var pzt=_pzTxt(x.a,p.pz);
       h+='<div class="cobro-prods-l"><span>'+_cantTxt(x.q,x.a)+' '+_rtcEsc(PROD_NAMES[x.a]||x.a)
@@ -5483,12 +5519,20 @@ function _descDelCombo(st){
   var fp=st.fp||'', d=st.desc, mot='';
   var envMax=filas.reduce(function(m,f){return Math.max(m,f.envOrig);},0);
   var nEnv=filas.filter(function(f){return f.envOrig>0;}).length;
-  /* El envio de UNA entrega: el mas alto, en el primer pedido que lo tenia. */
-  var puesto=false;
-  filas.forEach(function(f){
-    if(st.partial){f.env=f.envOrig;return;}
-    if(st.envRegalo||envMax<=0){f.env=0;return;}
-    if(!puesto&&f.envOrig===envMax){f.env=envMax;puesto=true;}else f.env=0;
+  /* El envio de UNA entrega: el mas alto, en el primer pedido que lo tenia. Y es
+     por DIA (14/9/2026): en COBROS se juntan pedidos de un mismo cliente de dias
+     distintos, que fueron entregas distintas y cada una lleva su envio. Con uno
+     solo para todos, cobrar juntos le perdonaba un envio al cliente. */
+  var porDia={}, envJuntado=false;
+  filas.forEach(function(f){var k=_diaDeEntregaCobro(f.p);(porDia[k]=porDia[k]||[]).push(f);});
+  Object.keys(porDia).forEach(function(k){
+    var fs=porDia[k], mx=fs.reduce(function(m,f){return Math.max(m,f.envOrig);},0), puesto=false;
+    if(fs.filter(function(f){return f.envOrig>0;}).length>1&&!st.partial&&!st.envRegalo)envJuntado=true;
+    fs.forEach(function(f){
+      if(st.partial){f.env=f.envOrig;return;}
+      if(st.envRegalo||mx<=0){f.env=0;return;}
+      if(!puesto&&f.envOrig===mx){f.env=mx;puesto=true;}else f.env=0;
+    });
   });
   var custom=filas.some(function(f){return f.guard>0&&f.guard!==f.diez;});
   if(st.partial){
@@ -5539,7 +5583,7 @@ function _descDelCombo(st){
   });
   var monto=sumar('desc'),sub=sumar('sub'),env=sumar('env');
   return {calc:true,combo:true,monto:monto,total:sub+env-monto,base:sub+env,sub:sub,env:env,
-    envOrig:sumar('envOrig'),envMax:envMax,nEnv:nEnv,guardado:sumar('guard'),diez:sumar('diez'),
+    envOrig:sumar('envOrig'),envMax:envMax,nEnv:nEnv,envJuntado:envJuntado,guardado:sumar('guard'),diez:sumar('diez'),
     custom:custom,mot:mot,filas:filas};
 }
 /* Lo que el POST de UN pedido del combo le dice al backend: explicito, igual que
@@ -5605,7 +5649,7 @@ function _renderCobroDescInfo(){
       +(d.monto>0?' − '+formatMoney(d.monto):'')+' = <b>'+formatMoney(d.total)+'</b></div>';
   }
   h+='<div class="cobro-desc-mot">'+_rtcEsc(d.mot)+'</div>';
-  if(d.combo&&!st.envRegalo&&!st.partial&&d.nEnv>1)
+  if(d.combo&&!st.envRegalo&&!st.partial&&d.envJuntado)
     h+='<div class="cobro-desc-mot">\ud83d\ude9a El envío va una sola vez: es la misma entrega (cada pedido tenía '+formatMoney(d.envMax)+').</div>';
   el.className='cobro-desc'+(d.monto>0?' con':'');
   el.style.display='block';
