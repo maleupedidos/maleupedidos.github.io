@@ -435,11 +435,17 @@ var _subappsRotas = {};
    syncQueue, que son cobros y entregas que TODAVIA NO LLEGARON A LA PLANILLA.
    Es lo unico que no existe en ningun otro lado. Se conserva y se tira el
    resto, que se vuelve a bajar del servidor. */
+/* La clave es la de abrirTab(): Abastecimiento abre como 'abast', no como
+   'busqueda' (13/9/2026). Con la clave vieja, "Reiniciar esta sección" recargaba
+   sin limpiar nada —y la tab volvia a caerse— y el ↻ no sabia que estaba rota.
+   Y conserva su syncQueue: ahi viven pagos, compras y recepciones que TODAVIA
+   no llegaron a la planilla. */
 var _SUBAPP_ESTADO = {
-  ruta:     { clave: 'maleu_ruta',     conservar: ['_v', 'syncQueue'] },
-  busqueda: { clave: 'maleu_busqueda', conservar: [] },
+  ruta:     { clave: 'maleu_ruta',     conservar: ['_v', 'syncQueue'], que: 'cobro(s)/entrega(s)' },
+  abast:    { clave: 'maleu_busqueda', conservar: ['syncQueue'],       que: 'compra(s), pago(s) o recepción(es)' },
   miportal: { clave: 'maleu_red',      conservar: [] }
 };
+_SUBAPP_ESTADO.busqueda = _SUBAPP_ESTADO.abast;
 function _reiniciarSubapp(clave){
   var cfg = _SUBAPP_ESTADO[clave];
   try{
@@ -462,7 +468,7 @@ function _carteSubappRota(clave, e){
     var n = 0;
     try{ n = ((JSON.parse(localStorage.getItem(cfg.clave) || '{}') || {}).syncQueue || []).length; }catch(_e){}
     quedan = n > 0
-      ? '<div style="font-size:13px;margin-top:8px;color:#1B5E20;background:#E8F5E9;border-radius:8px;padding:8px 10px">Tenés <b>' + n + '</b> cobro(s)/entrega(s) sin sincronizar. <b>No se pierden</b>: reiniciar la sección los conserva.</div>'
+      ? '<div style="font-size:13px;margin-top:8px;color:#1B5E20;background:#E8F5E9;border-radius:8px;padding:8px 10px">Tenés <b>' + n + '</b> ' + (cfg.que || 'acción(es)') + ' sin sincronizar. <b>No se pierden</b>: reiniciar la sección los conserva.</div>'
       : '<div style="font-size:13px;margin-top:8px;color:#555">No hay nada sin sincronizar: no se pierde ningún dato.</div>';
   }
   var caja = document.createElement('div');

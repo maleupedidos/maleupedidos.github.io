@@ -51,7 +51,10 @@ const srcBusq = fs.readFileSync(BUSQ, 'utf8');
 /* El nombre corto se stubea a la identidad en los dos lados: sólo afecta a
    `txt`, que difiere a propósito (ver arriba). */
 const STUB = 'function npDepCorto(id){return String(id||"")}\n' +
-             'function npDepNombre(id){return String(id||"")}\n';
+             'function npDepNombre(id){return String(id||"")}\n' +
+             /* Desde el 13/9/2026 Abastecimiento escribe la cantidad de `txt` con
+                _abaCant (kilos con coma y "kg"). Tambien es solo de `txt`. */
+             'function _abaCant(q,u){return String(q)}\n';
 
 /* `sacar` devuelve una DECLARACION de función, y `return function f(){}` no la
    devuelve: hay que nombrarla explícitamente en el return. */
