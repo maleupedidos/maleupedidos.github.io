@@ -163,6 +163,7 @@ const EXTRA = `
       // buscador
       await evaluar(cli, `(function(){ var i=document.getElementById('crmCliSearch'); i.value='jose iniguez'; i.dispatchEvent(new Event('input')); })()`);
       await pausa(500);
+      chk('con un solo resultado, "Ver más" no deja una barra vacia', await evaluar(cli, `document.getElementById('crmCliMas').getBoundingClientRect().height===0`));
       chk('"jose iniguez" encuentra a José Iñiguez (sin acentos)', await evaluar(cli, `document.querySelectorAll('#crmCliList .crm-card').length===1 && /Iñiguez/.test(document.getElementById('crmCliList').textContent)`));
       await evaluar(cli, `(function(){ var i=document.getElementById('crmCliSearch'); i.value='${CLIS[20].tel.slice(-6)}'; i.dispatchEvent(new Event('input')); })()`);
       await pausa(500);
@@ -275,7 +276,9 @@ const EXTRA = `
       chk('B · y tiene Reintentar', await evaluar(cli, `!!document.querySelector('#crmCliEstado button')`));
       await evaluar(cli, `window.__clientesOk=true; (function(b){ if(b) b.click(); })(document.querySelector('#crmCliEstado button')); 1`);
       chk('B · al reintentar bien aparece la lista', await esperar(cli, `document.querySelectorAll('#crmCliList .crm-card').length>0`, 8000));
-      chk('B · y el aviso se va', await evaluar(cli, `document.getElementById('crmCliEstado').hidden===true`));
+      /* Se mide si se VE, no la propiedad: con `display:flex` en la clase, `hidden`
+         no ocultaba nada y quedaba una barra vacia arriba de la lista. */
+      chk('B · y el aviso se va (no queda una barra vacia)', await evaluar(cli, `document.getElementById('crmCliEstado').getBoundingClientRect().height===0`));
     }
 
     if (FASES.indexOf('c') >= 0) {
