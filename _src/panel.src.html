@@ -21826,6 +21826,8 @@ if('serviceWorker' in navigator){
   function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
   function pad(n){return String(n).padStart(2,'0');}
   function kg(n){return (Math.round((Number(n)||0)*1000)/1000).toLocaleString('es-AR',{minimumFractionDigits:0,maximumFractionDigits:3})+' kg';}
+  /* Los kilos y las unidades van por separado: no se suman. */
+  function llevo(o){var a=[];if(o.kg>0)a.push('🥩 '+kg(o.kg));if(o.u>0)a.push(o.u+' u.');return a.join(' + ')||'—';}
   var DIAS=['domingo','lunes','martes','miércoles','jueves','viernes','sábado'];
   var DIAS_C=['Dom','Lun','Mar','Mié','Jue','Vie','Sáb'];
   function dm(d){return d.getDate()+'/'+(d.getMonth()+1);}
@@ -21842,6 +21844,18 @@ if('serviceWorker' in navigator){
     for(var i=0;i<ys.length;i++){var x=ys[i]+'-'+pad(m[2])+'-'+pad(m[1]);if(x>=desde&&x<=hasta)return x;}
     return '';
   }
+  /* Una fecha de cobro "dd/MM" sin año, puesta en el año que la deja mas cerca de
+     la entrega: un cobro del 2/1 de algo entregado el 30/12 es del año siguiente. */
+  function dmCerca(s,refIso){
+    var t=String(s||'').trim(), c=dmyAIso(t);
+    if(c)return c;
+    var m=t.match(/^(\d{1,2})\/(\d{1,2})$/), r=isoADate(refIso);if(!m||!r)return '';
+    var y=r.getFullYear(), best='', bd=Infinity;
+    [y-1,y,y+1].forEach(function(yy){var x=new Date(yy,Number(m[2])-1,Number(m[1]));var dd=Math.abs(x-r);if(dd<bd){bd=dd;best=_rtIso(x);}});
+    return best;
+  }
+  /* Home y Otras zonas como en "Ventas por mercado": lo decide el barrio, no la hoja. */
+  function canalDe(p){return (p.h==='Home'||p.h==='Pilar')?(_rtEsHome(p)?'Home':'Otras zonas'):p.h;}
   function top(det,max){
     var ks=Object.keys(det||{}).filter(function(x){return x;}).sort(function(a,b){return det[b]-det[a]||a.localeCompare(b);});
     if(!ks.length)return '';
@@ -21886,7 +21900,7 @@ if('serviceWorker' in navigator){
       if(p.h==='Red')return;
       var tel=String(p.tel||'').replace(/\D/g,'').slice(-10);
       var k=tel||('N:'+String(p.c).trim().toLowerCase());
-      var o=porCli[k]||(porCli[k]={c:String(p.c).trim(),h:p.h,f:0,peds:[]});
+      var o=porCli[k]||(porCli[k]={c:String(p.c).trim(),h:canalDe(p),f:0,peds:[]});
       o.f+=Number(p.$)||0;o.peds.push(p);
     });
     var topCli=Object.keys(porCli).map(function(k){var o=porCli[k];o.ent=_contarVentas(o.peds);return o;})
@@ -21915,12 +21929,80 @@ if('serviceWorker' in navigator){
     prodU.sort(function(a,b){return b.q-a.q;});prodK.sort(function(a,b){return b.q-a.q;});
     var totU=prodU.reduce(function(s,o){return s+o.q;},0), totK=prodK.reduce(function(s,o){return s+o.q;},0);
 
-    /* Lo que quedo por cobrar de lo entregado en la semana. En Red, lo que el
-       vendedor todavia no rindio. */
-    var pend=peds.filter(function(p){return p.ep!=='Cobrado';})
-      .map(function(p){return {c:String(p.c).trim(),h:p.h,f:Number(p.$)||0};})
-      .sort(function(a,b){return b.f-a.f;});
+    /* La carne y lo de siempre (14/9/2026, para la reunion con Fede): de cada cliente
+       con alguna entrega en la semana, si llevo carne, productos de siempre o las dos
+       cosas. Carne = la categoria Carnes del catalogo; sin catalogo, lo que se pesa.
+       Un producto sin catalogo ni unidad no decide nada. Por telefono, todos los
+       canales (Red con el nombre del cliente final). */
+    var esCarne=function(a){return cat[a]?/carne/i.test(String(cat[a].cat||'')):(uni[a]==='kg'?true:(uni[a]==='u'?false:null));};
+    var mezcla={};
+    peds.forEach(function(p){
+      var tel=String(p.tel||'').replace(/\D/g,'').slice(-10);
+      var k=tel||('N:'+String(p.c).trim().toLowerCase());
+      var o=mezcla[k]||(mezcla[k]={c:String(p.c).trim(),h:canalDe(p),kg:0,u:0,cats:{}});
+      (p.p||[]).forEach(function(it){
+        var a=it&&it.a, q=Number(it&&it.q)||0;if(!a||!(q>0))return;
+        var ec=esCarne(a);
+        if(ec===true)o.kg+=q;
+        else if(ec===false){o.u+=q;var cn=(cat[a]&&cat[a].cat)||'';if(cn)o.cats[cn]=1;}
+        else o.x=1;
+      });
+    });
+    /* sinDato: clientes con algun producto que no se sabe si es carne. Con uno solo
+       ya no se puede decir "solo carne" ni "solo lo de siempre": se dice que falta. */
+    var carne={cli:0,solo:0,ambos:0,siempre:0,lista:[],sinDato:0};
+    Object.keys(mezcla).forEach(function(k){
+      var o=mezcla[k];carne.cli++;if(o.x)carne.sinDato++;
+      if(o.kg>0){o.ambos=o.u>0;if(o.ambos)carne.ambos++;else carne.solo++;carne.lista.push(o);}
+      else if(o.u>0)carne.siempre++;
+    });
+    carne.lista.sort(function(a,b){return (b.ambos-a.ambos)||(b.kg-a.kg);});
+
+    /* Quienes son los nuevos: el servidor dice quienes y con que pedidos ("Hoja|N°");
+       aca se buscan esos pedidos para decir la zona, la plata y que llevaron. */
+    var nuevos=null;
+    if(cl&&Array.isArray(cl.nuevosL)){
+      var porRef={};
+      (D.pedidos||[]).forEach(function(p){if(p&&p.h&&p.n)porRef[p.h+'|'+String(p.n).trim()]=p;});
+      nuevos=cl.nuevosL.map(function(x){
+        var ps=(x.r||[]).map(function(r){return porRef[r];}).filter(Boolean);
+        var o={c:String(x.c||'').trim(),h:ps.length?canalDe(ps[0]):'',f:0,kg:0,u:0,ok:ps.length>0};
+        ps.forEach(function(p){
+          o.f+=Number(p.$)||0;
+          (p.p||[]).forEach(function(it){var a=it&&it.a, q=Number(it&&it.q)||0;if(!a||!(q>0))return;var ec=esCarne(a);if(ec===true)o.kg+=q;else if(ec===false)o.u+=q;});
+        });
+        return o;
+      }).sort(function(a,b){return b.f-a.f;});
+    }
+
+    /* Lo que quedo por cobrar AL CIERRE de la semana (14/9/2026). Hasta hoy miraba
+       el estado de AHORA: abierto el lunes, lo cobrado el mismo lunes ya no
+       figuraba y la semana 37 decia $231.230 (2 clientes) cuando al cierre del
+       domingo faltaban $408.630 (6: cuatro se cobraron el lunes 14/9). Lo cobrado
+       despues del domingo figura, y dice cuando entro. En Red, lo que el vendedor
+       todavia no rindio. */
+    var pend=peds.map(function(p){
+        var fc=p.ep==='Cobrado'?dmCerca(_cobroFechaDM(p),_tendFechaVentaISO(p)):'';
+        if(p.ep==='Cobrado'&&!(fc&&fc>h))return null;
+        return {c:String(p.c).trim(),h:canalDe(p),f:Number(p.$)||0,cob:p.ep==='Cobrado'?fc:''};
+      }).filter(Boolean)
+      .sort(function(a,b){return (a.cob?1:0)-(b.cob?1:0)||b.f-a.f;});
     var pendTot=pend.reduce(function(s,o){return s+o.f;},0);
+    var pendYa=pend.reduce(function(s,o){return s+(o.cob?o.f:0);},0);
+
+    /* Red que figura Pendiente y sin pagarle a Maleu: la mercaderia sigue en poder
+       del vendedor. No esta en lo facturado (no se entrego), pero es plata afuera.
+       Un Pendiente que ya pago esta entregado: el vendedor no marca la entrega. */
+    var redSin={};
+    (D.pedidos||[]).forEach(function(p){
+      if(p.h!=='Red'||p.hist||p.es==='Entregado'||p.es==='Cancelado'||p.ep==='Cobrado')return;
+      if(!(Number(p.$)>0))return;
+      var dia=_tendFechaVentaISO(p);if(!dia||dia<d||dia>h)return;
+      var v=String(p.br||'').trim()||'sin vendedor';
+      var o=redSin[v]||(redSin[v]={v:v,n:0,f:0});
+      o.n++;o.f+=Number(p.$)||0;
+    });
+    redSin=Object.keys(redSin).map(function(k){return redSin[k];}).sort(function(a,b){return b.f-a.f;});
 
     /* La plata que entro en la semana, por la fecha de cobro. La MISMA cuenta que
        la tarjeta "Cobrado en la semana" de Inicio (`_cobroSplit`, `_cobroFechaDM`). */
@@ -21957,7 +22039,7 @@ if('serviceWorker' in navigator){
 
     return {lun:lun,dom:dom,hasta:hasta,enCurso:enCurso,d:d,h:h,semN:semN,semAnt:getWeek(_rtDia(lun,-7)),
       g:g,gc:gc,dias:dias,cl:cl,topCli:topCli,prodU:prodU,prodK:prodK,prodX:prodX,totU:totU,totK:totK,porCat:porCat,
-      pend:pend,pendTot:pendTot,cob:cob,hayMov:hayMov,gas:gas,ing:ing,
+      pend:pend,pendTot:pendTot,pendYa:pendYa,redSin:redSin,carne:carne,nuevos:nuevos,cob:cob,hayMov:hayMov,gas:gas,ing:ing,
       generado:pad(ahora.getDate())+'/'+pad(ahora.getMonth()+1)+'/'+ahora.getFullYear()+' '+pad(ahora.getHours())+':'+pad(ahora.getMinutes())};
   }
   window._rsArmar=armar;
@@ -22041,11 +22123,40 @@ if('serviceWorker' in navigator){
         +'<div class="rs-comp-c"><div class="rs-comp-l">⏰ Reactivados</div><div class="rs-comp-d">'+R.cl.react+'</div><div class="rs-kpi-s">volvió después de más tiempo</div></div>'
         +'</div><div class="rs-nota">'+R.cl.total+' clientes de Venta Mercado Domiciliario (Home y Otras zonas), por teléfono.</div>'
       :'<div class="rs-nota">El dato de clientes de esta semana no llegó: no se recalcula acá.</div>';
+    if(R.cl&&R.cl.nuevos>0){
+      if(R.nuevos&&R.nuevos.length){
+        clH+='<div class="rs-sub-h">🆕 Quiénes son los nuevos</div>'
+          +tabla(['Cliente','Zona','Qué llevó','Facturado'],R.nuevos.map(function(o){return [esc(o.c),o.ok?esc(o.h):'—',o.ok?llevo(o):'—',o.ok?fmt$(o.f):'—'];}),[3]);
+        var sinPed=R.nuevos.filter(function(o){return !o.ok;}).length;
+        if(sinPed)clH+='<div class="rs-nota">De '+sinPed+(sinPed===1?' no llegó el pedido':' no llegaron los pedidos')+' a este celular: se sabe el nombre, no qué llevó.</div>';
+      }else{
+        clH+='<div class="rs-nota">Los nombres de los nuevos no llegaron (el servidor todavía no los manda o la copia es de antes): tocá ↻ y volvé a generar el PDF.</div>';
+      }
+    }
     if(R.topCli.length){
       clH+='<div class="rs-sub-h">Los que más compraron (sin Red: el cliente final es del vendedor)</div>'
         +tabla(['Cliente','Canal','Entregas','Facturado'],R.topCli.map(function(o){return [esc(o.c),esc(o.h),o.ent,fmt$(o.f)];}),[2,3]);
     }
     h+=section('Clientes',clH);
+
+    var ca=R.carne;
+    if(ca&&ca.cli>0&&ca.sinDato>0){
+      h+=section('Carne y lo de siempre','<div class="rs-nota">No llegó el catálogo de todos los productos de la semana: no se puede separar quién llevó carne y quién lo de siempre.</div>');
+    }else if(ca&&ca.cli>0){
+      var caH='<div class="rs-comp">'
+        +'<div class="rs-comp-c"><div class="rs-comp-l">🥩 Solo carne</div><div class="rs-comp-d">'+ca.solo+'</div></div>'
+        +'<div class="rs-comp-c"><div class="rs-comp-l">🥩🍕 Las dos cosas</div><div class="rs-comp-d">'+ca.ambos+'</div><div class="rs-kpi-s">carne y lo de siempre</div></div>'
+        +'<div class="rs-comp-c"><div class="rs-comp-l">🍕 Solo lo de siempre</div><div class="rs-comp-d">'+ca.siempre+'</div></div>'
+        +'</div><div class="rs-nota">'+ca.cli+' clientes con alguna entrega en la semana, todos los canales, por teléfono. Lo de siempre es todo lo que no es carne.</div>';
+      if(ca.lista.length){
+        caH+='<div class="rs-sub-h">Los que llevaron carne</div>'
+          +tabla(['Cliente','Canal','Carne','Lo de siempre'],ca.lista.map(function(o){
+            var cs=Object.keys(o.cats).sort();
+            return [esc(o.c),esc(o.h),kg(o.kg),o.u>0?o.u+' u.'+(cs.length?' · '+esc(cs.join(', ')):''):'—'];
+          }),[2]);
+      }
+      h+=section('Carne y lo de siempre',caH);
+    }
 
     var prodH='';
     if(R.prodU.length){
@@ -22097,10 +22208,15 @@ if('serviceWorker' in navigator){
         +'<div class="rs-comp-c"><div class="rs-comp-l">Transferencia</div><div class="rs-comp-d">'+fmt$(R.cob.tr)+'</div></div>'
         +'</div><div class="rs-nota">Por la fecha en que entró la plata, sea de la entrega que sea. Es la tarjeta "Cobrado en la semana" de Inicio.</div>'
         +(R.pendTot>0
-          ?'<div class="rs-sub-h">Quedó por cobrar de lo entregado en la semana: '+fmt$(R.pendTot)+'</div>'
-            +tabla(['Cliente','Canal','Monto'],R.pend.slice(0,15).map(function(o){return [esc(o.c),esc(o.h)+(o.h==='Red'?' (sin rendir)':''),fmt$(o.f)];}),[2])
-            +(R.pend.length>15?'<div class="rs-nota">y '+(R.pend.length-15)+' más.</div>':'')
-          :'<div class="rs-nota">Todo lo entregado en la semana está cobrado.</div>'));
+          ?'<div class="rs-sub-h">'+(R.enCurso?'Hasta hoy queda por cobrar de lo entregado en la semana: ':'Al cierre de la semana quedó por cobrar de lo entregado: ')+fmt$(R.pendTot)+'</div>'
+            +tabla(['Cliente','Canal','Monto','Hoy'],R.pend.map(function(o){
+              var dc=o.cob?isoADate(o.cob):null;
+              return [esc(o.c),esc(o.h),fmt$(o.f),dc?'cobrado '+DIAS_C[dc.getDay()]+' '+dm(dc):(o.h==='Red'?'sin rendir':'sin cobrar')];
+            }),[2])
+            +(R.pendYa>0?'<div class="rs-nota">De eso ya entró '+fmt$(R.pendYa)+' después del domingo; falta '+fmt$(R.pendTot-R.pendYa)+'.</div>':'')
+          :'<div class="rs-nota">Todo lo entregado en la semana está cobrado.</div>')
+        +(R.redSin.length?'<div class="rs-nota">Aparte, Red en poder del vendedor y sin rendir (figura Pendiente: no está en lo facturado): '
+          +R.redSin.map(function(o){return esc(o.v)+' '+o.n+(o.n===1?' pedido ':' pedidos ')+fmt$(o.f);}).join(' · ')+'.</div>':''));
 
     h+='<div class="rs-foot">Generado '+R.generado+' · <b>Maleu</b> · Lo entregado, por el día de entrega; Red neto de la comisión del vendedor. Son los números de Inicio › Resumen › Ventas retail.</div>';
     return '<div class="rs-doc" id="rsDoc">'+h+'</div>';
