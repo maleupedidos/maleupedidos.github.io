@@ -79,7 +79,7 @@ const PEDIDOS = [
 ];
 const EXTRA = [{ h: 'B2B', c: 'Empresa Prueba', fx: '2026-09-10', $: 192000, co: 140800 }, { h: 'Catering', c: 'Evento', fx: '2026-09-08', $: 300000, co: 200000 }];
 const SALUD = { '2026-37': { total: 4, nuevos: 1, recompra: 2, react: 1,
-  nuevosL: [{ c: 'Fede Prueba', r: ['Pilar|77'], luego: 0 }], reactL: [{ c: 'Beto Prueba', r: ['Home|60'], sem: 9, luego: 0 }] } };
+  nuevosL: [{ c: 'Fede Prueba', r: ['Pilar|77'], luego: 0 }], reactL: [{ c: 'Beto Prueba', r: ['Home|60'], sem: 9, dias: 63, luego: 0 }] } };
 const LIGHT = { ts: 1, pedidos: PEDIDOS, canales: [], light: true, saludSem: SALUD, saludMes: {}, ventasExtra: EXTRA };
 const G = (f, cat, con, $) => ({ f: f, fFull: f + ' 10:00', ts: 1, mes: 'Septiembre', anio: 2026, cat: cat, con: con, met: 'Mercado Pago', $: $, not: '' });
 const CAJA = { ts: 1, caja: {}, saldoBase: {}, movimientos: [], efMano: [],
@@ -192,7 +192,7 @@ async function abrirFase(cli, fase) {
     chk('carne: 5 clientes · 1 solo carne (Fede) · 1 carne y algo mas (Beto) · 3 sin carne', !!RR && JSON.stringify(RR.carne) === '[5,1,1,3]', RR && RR.carne);
     chk('la lista de carne: primero Beto (volvio, con el pack), despues Fede (nuevo, solo carne)', !!RR && JSON.stringify(RR.carneL) === JSON.stringify(['Beto Prueba|Home|1.5|1|volvio|Pack Pizzas x2 1', 'Fede Prueba|Otras zonas|0.75|0|nuevo|']), RR && RR.carneL);
     chk('los nuevos se cruzan por REFERENCIA: Fede, en Pilara, $40.000, "Carnes 0,75 kg", todavia no volvio', !!RR && Array.isArray(RR.nuevos) && RR.nuevos.length === 1 && RR.nuevos[0].c === 'Fede Prueba' && RR.nuevos[0].donde === 'Pilara' && RR.nuevos[0].f === 40000 && RR.nuevos[0].det === 'Carnes 0,75 kg' && RR.nuevos[0].luego === 0 && RR.nuevos[0].ok === true, RR && RR.nuevos);
-    chk('los que volvieron: Beto, Estancias del Pilar, 9 semanas sin comprar, carne primero y el pack', !!RR && Array.isArray(RR.volvieron) && RR.volvieron.length === 1 && RR.volvieron[0].donde === 'Estancias del Pilar' && RR.volvieron[0].sem === 9 && RR.volvieron[0].det === 'Carnes 1,5 kg · Pack Pizzas x2 1', RR && RR.volvieron);
+    chk('los que volvieron: Beto, Estancias del Pilar, 63 dias sin comprar, carne primero y el pack', !!RR && Array.isArray(RR.volvieron) && RR.volvieron.length === 1 && RR.volvieron[0].donde === 'Estancias del Pilar' && RR.volvieron[0].dias === 63 && RR.volvieron[0].det === 'Carnes 1,5 kg · Pack Pizzas x2 1', RR && RR.volvieron);
 
     const card = await ev(cli, `(function(){try{go('inicio');}catch(e){}var c=[].slice.call(document.querySelectorAll('#sem-body-prev .card')).filter(function(x){return /Semana 37/.test(x.textContent);})[0];if(!c)return null;
       var m=c.textContent.match(/Cobrado en la semana\\s*\\$([\\d.]+)/),e=c.textContent.match(/EF \\$([\\d.]+) · TR \\$([\\d.]+)/);
@@ -214,8 +214,8 @@ async function abrirFase(cli, fase) {
     chk('el documento: "Al cierre de la semana quedó por cobrar" $91.500, "cobrado Lun 14/9" y cuanto falta', /Al cierre de la semana quedó por cobrar de lo entregado: \$91\.500/.test(T) && /cobrado Lun 14\/9/.test(T) && /De eso ya entró \$10\.000 después del domingo; falta \$81\.500/.test(T), (T.match(/Al cierre.{0,300}/) || [])[0]);
     chk('el documento: Red en poder del vendedor, "Vendedor Dos 1 pedido $30.000"', /Red en poder del vendedor.{0,80}Vendedor Dos 1 pedido \$30\.000/.test(T) && !/Final Tres/.test(T), (T.match(/Aparte, Red.{0,160}/) || [])[0]);
     chk('el documento: quienes son los nuevos, donde viven, que llevaron y si volvieron', /Quiénes son los nuevos/.test(T) && /Fede PruebaPilaraCarnes 0,75 kg\$40\.000todavía no/.test(T), (T.match(/Quiénes son los nuevos.{0,160}/) || [])[0]);
-    chk('el documento: quienes volvieron y hace cuanto', /Quiénes volvieron/.test(T) && /Beto PruebaEstancias del PilarCarnes 1,5 kg · Pack Pizzas x2 1\$50\.0009 semanas/.test(T) && /un dormido que se despertó/.test(T), (T.match(/Quiénes volvieron.{0,160}/) || [])[0]);
-    chk('el documento: "Carne y algo más" con el estado de cada cliente', /Carne y algo más/.test(T) && /Beto PruebaHome⏰ volvió tras 9 sem\.1,5 kgPack Pizzas x2 1/.test(T) && /Fede PruebaOtras zonas🆕 nuevo0,75 kg—/.test(T) && !/Lo de siempre/.test(T), (T.match(/Los que llevaron carne.{0,200}/) || [])[0]);
+    chk('el documento: quienes volvieron y hace cuanto', /Quiénes volvieron/.test(T) && /Beto PruebaEstancias del PilarCarnes 1,5 kg · Pack Pizzas x2 1\$50\.00063 días/.test(T) && /un dormido que se despertó/.test(T), (T.match(/Quiénes volvieron.{0,160}/) || [])[0]);
+    chk('el documento: "Carne y algo más" con el estado de cada cliente', /Carne y algo más/.test(T) && /Beto PruebaHome⏰ volvió tras 63 días1,5 kgPack Pizzas x2 1/.test(T) && /Fede PruebaOtras zonas🆕 nuevo0,75 kg—/.test(T) && !/Lo de siempre/.test(T), (T.match(/Los que llevaron carne.{0,200}/) || [])[0]);
     chk('el documento: el plan que falta se dice', /No llegó el plan de Septiembre 2026/.test(T), (T.match(/Contra el plan.{0,120}/) || [])[0]);
     /* Si el servidor no manda los nombres o el pedido no esta en el celular, se dice. */
     const nv = await ev(cli, `(function(){var s=D.saludSem['2026-37'],w=document.getElementById('rsHiddenWrap'),bk=s.nuevosL,bk2=s.reactL;
