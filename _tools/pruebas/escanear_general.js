@@ -73,7 +73,7 @@ const MEDIR = `(function(){
   return {
     chars: txt.length,
     txt: txt.slice(0,240),
-    cargando: /cargando|armando|calculando|esperando el volcado|todav.a no lleg/i.test(txt),
+    cargando: /cargando|trayendo|armando|calculando|esperando el volcado|todav.a no lleg/i.test(txt),
     vacio: txt.length < 60,
     chicos: chicos.slice(0,8), nChicos: chicos.length,
     cortados: cortados.slice(0,5), nCortados: cortados.length,
