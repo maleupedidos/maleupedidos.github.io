@@ -163,7 +163,7 @@ const LEER = `(function(){
       var b=document.querySelector('#sKpiDep .st-contar'); var cab=document.querySelector('#sList .st-cab .st-fija');
       return { btn:b?Math.round(b.getBoundingClientRect().height):0, bgCab:cab?getComputedStyle(cab).backgroundColor:'',
         desborde: document.documentElement.scrollWidth-document.documentElement.clientWidth,
-        carril: (function(c){ return c? c.scrollWidth>c.clientWidth : null; })(document.querySelector('#sList .st-carril')) }; })()`);
+        carril: (function(c){ return c? c.scrollWidth>c.clientWidth : null; })(document.querySelector('#sList .st-cuerpo')||document.querySelector('#sList .st-carril')) }; })()`);
     chk('el boton Contar de "Donde esta" se toca (' + geo.btn + 'px)', geo.btn >= (ANCHO <= 560 ? 38 : 26), geo);
     chk('el encabezado de la columna Producto no es una barra blanca', geo.bgCab && geo.bgCab !== 'rgb(255, 255, 255)', geo.bgCab);
     chk('la pagina no desborda a lo ancho', geo.desborde <= 0, geo.desborde);
