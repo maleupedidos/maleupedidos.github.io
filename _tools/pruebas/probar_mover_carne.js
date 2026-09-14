@@ -59,6 +59,11 @@ const ADMIN = { ts: Date.now(), pedidos: [], canales: [], totales: {}, oc: { lis
 const EXTRA = `
   (function(){
     window.__listo=1;
+    /* Lo que en localhost pone _tools/servir.js con ?prueba=1: contra el ERP
+       publicado (BASE=https://app.maleu.com.ar) hace falta ponerlo aca. */
+    window.__maleuAuth=true;
+    if(!window.__confirms){ window.__confirms=[]; window.__confirmDevuelve=false;
+      window.confirm=function(m){ window.__confirms.push(String(m)); return !!window.__confirmDevuelve; }; }
     try{
       localStorage.setItem('maleu_tab','stock');
       var sembrar=location.search.indexOf('sembrar=1')>-1;
