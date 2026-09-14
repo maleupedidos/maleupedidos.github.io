@@ -60,11 +60,16 @@ async function esperar(cli, expr, ms = 120000) {
       cards.forEach(function(c,i){
         var f=new Date(lun.getFullYear(),lun.getMonth(),lun.getDate()+i);
         var iso=f.getFullYear()+'-'+String(f.getMonth()+1).padStart(2,'0')+'-'+String(f.getDate()).padStart(2,'0');
-        var peds=D.pedidos.filter(function(p){return p.c&&p.c.trim()&&p.$>0&&p.h!=='Red'&&p.es!=='Cancelado'&&!p.hist&&String(p.dee||'').slice(0,10)===iso;});
+        /* 14/9/2026: cuenta lo ENTREGADO, por el dia de la venta. Hasta ese dia esta
+           prueba esperaba los pedidos con entrega ELEGIDA ese dia, entregados o no, que
+           era justo el bug (Carolina, Reservada, figuraba como "1 entrega"). */
+        var peds=D.pedidos.filter(function(p){return p.c&&p.c.trim()&&p.$>0&&p.h!=='Red'&&p.es==='Entregado'&&!p.hist&&_tendFechaVentaISO(p)===iso;});
         /* el numero grande de la cabecera, no textContent entero: pega "07/09" con "0 entregas" y lee 90 */
         var cab=c.querySelector(':scope > div > span:last-child');
         var m=cab&&cab.textContent.match(/^\\s*(\\d+)\\s*entregas?/); var shown=m?Number(m[1]):null;
-        var noRed=shown===null?null:shown - ((c.textContent.match(/Red\\s*(\\d+)/)||[0,0])[1]*1);
+        /* Red sale del renglon de canales, no del texto entero: "Falta entregar · Red 1" no son entregas */
+        var lin=[].filter.call(c.querySelectorAll(':scope > div'),function(x){return !x.className&&/^(Home|Pilar|Clubes|Red|Otro)\\b/.test(x.textContent.trim());})[0];
+        var noRed=shown===null?null:shown - (((lin&&lin.textContent.match(/Red\\s*(\\d+)/))||[0,0])[1]*1);
         var expN=peds.length?_contarVentas(peds):0;
         dias.push({iso:iso,shown:shown,noRed:noRed,expN:expN,filas:peds.length,estancias:/en Estancias/.test(c.textContent)});
       });

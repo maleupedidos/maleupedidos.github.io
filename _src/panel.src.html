@@ -256,6 +256,7 @@ button.rt-chip.on{background:var(--o);border-color:var(--o);color:#fff}
 .rt-cat{font-size:11px;color:var(--ink3);margin-top:10px;padding-top:8px;border-top:1px dashed var(--cd)}
 .rt-vacio{font-size:13px;color:var(--bl);padding:12px 0}
 .rt-pie{font-size:10.5px;color:var(--ink4);margin-top:10px;line-height:1.4}
+.dia-falta{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:5px;font-size:11px;color:#E65100;font-weight:700}.dia-falta b{font-weight:800;color:var(--ink)}.dia-falta.pas{color:#B91C1C}.dia-falta-pie{font-size:10px;color:var(--ink3);margin-top:2px}
 .rt-cl{margin:4px 0 6px 14px;padding:9px 10px;background:#FFFBF2;border:1px solid #EFE6CC;border-radius:10px}
 .rt-cl-h{font-size:12px;font-weight:800;color:var(--ink)}
 .rt-cl-c{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;margin-top:6px}
@@ -11646,17 +11647,6 @@ function rInicio(){
     fD.setDate(fD.getDate()+diff);
     return fD;
   }
-  // Regla: una venta pertenece a la semana actual si su DÍA DE ENTREGA ELEGIDO
-  // (p.dee del backend, ISO yyyy-MM-dd) cae dentro de la semana ISO actual.
-  // No depende de si está entregado ni cobrado. Excluye pedidos sin fecha elegida.
-  function _esSemActual(p){
-    if(!p.dee)return false;
-    var m=String(p.dee).match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
-    if(!m)return false;
-    var d=new Date(Number(m[1]),Number(m[2])-1,Number(m[3]));
-    return d.getFullYear()===now.getFullYear() && getWeek(d)===semActual;
-  }
-  var pvSem=pv.filter(_esSemActual);
 
   /* ── El mes del hero sale de `_mesDePedido`, igual que el KPI de arriba ──
      Hasta el 8/9/2026 acá se filtraba por `p.fe||p.f` y sólo por el NÚMERO de
@@ -12000,59 +11990,69 @@ function rInicio(){
     var offset=(lun.getDay()+6)%7; // JS Dom=0..Sab=6 → ISO Lun=0..Dom=6
     lun.setDate(lun.getDate()-offset);
     var DIAS_FULL=['Domingo','Lunes','Martes','Miércoles','Jueves','Viernes','Sábado'];
-    function _deeKey(p){
-      if(!p.dee)return null;
-      var m=String(p.dee).match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+    function _isoAKey(iso){
+      var m=String(iso||'').match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
       if(!m)return null;
       return String(Number(m[3])).padStart(2,'0')+'/'+String(Number(m[2])).padStart(2,'0');
     }
-    var ventasPorDia={};
-    /* Lo FACTURADO por las entregas de ese dia, y cuanto de eso sigue sin
-       cobrar. No es lo mismo que el "Cobrado" de mas abajo, que se atribuye por
-       FECHA DE COBRO: un pedido entregado el viernes y cobrado el domingo suma
-       en el domingo. Medido el 6/9/2026: el viernes entrego $1.521.640 y la
-       tarjeta mostraba $600.840 — se leia como que habia vendido eso. */
-    var facturadoPorDia={}, sinCobrarPorDia={};
-    var ventasPorDiaCanal={}; // {dia: {Home:n, Pilar:n, Clubes:n, Red:n}} — ENTREGAS
-    /* La tarjeta dice "N entregas" y hasta el 12/9/2026 contaba FILAS: dos pedidos
-       del mismo cliente en el mismo viaje sumaban 2. Se cuentan con `_contarVentas`,
-       la misma definicion que el KPI "Ventas" del Resumen y que ARMADO. La plata
-       sigue sumando todos los pedidos. */
-    var _pedsDia={}, _pedsDiaCanal={};
-    pvSem.forEach(function(p){
-      var k=_deeKey(p);if(!k)return;
-      (_pedsDia[k]||(_pedsDia[k]=[])).push(p);
-      var canal=p.h||'Otro';
-      if(!_pedsDiaCanal[k])_pedsDiaCanal[k]={};
-      (_pedsDiaCanal[k][canal]||(_pedsDiaCanal[k][canal]=[])).push(p);
-      facturadoPorDia[k]=(facturadoPorDia[k]||0)+(Number(p.$)||0);
-      if(p.ep!=='Cobrado')sinCobrarPorDia[k]=(sinCobrarPorDia[k]||0)+(Number(p.$)||0);
+    /* La tarjeta de cada dia cuenta lo ENTREGADO, por el dia de la venta
+       (`_tendFechaVentaISO`: la fecha real de entrega en Home y Pilar, la elegida en
+       Clubes y Red). Es la regla del EERR y de "Ventas retail", asi que el dia y la
+       semana cierran entre si.
+       Hasta el 14/9/2026 contaba todo pedido con entrega ELEGIDA ese dia, entregado o
+       no, y lo rotulaba "Entregado ese dia": Carolina Llorente (Pilar #64,
+       Reservado y pagado por adelantado) figuraba como "1 entrega · $97.600"
+       antes de salir de casa. Lo que no se entrego va aparte, en `_faltaDia`, por
+       su dia elegido.
+       · N entregas: `_contarVentas` (dos pedidos del mismo viaje son una); en Red,
+         una bolsa por vendedor por dia, igual que Ventas retail.
+       · El Cobrado de mas abajo es OTRA cosa (la plata que entro ese dia) y no se toca. */
+    var _semDesde=_rtIso(lun), _semHasta=_rtIso(new Date(lun.getFullYear(),lun.getMonth(),lun.getDate()+6)), _hoyIso=_rtIso(now);
+    var ventasPorDia={}, facturadoPorDia={}, sinCobrarPorDia={}, ventasPorDiaCanal={};
+    var _pedsDia={}, _pedsDiaCanal={}, _bolsasDia={}, _faltaDia={};
+    D.pedidos.forEach(function(p){
+      if(p.hist||p.es==='Cancelado')return;
+      if(!p.c||!String(p.c).trim()||!(Number(p.$)>0))return;
+      var f=Number(p.$)||0;
+      if(p.es==='Entregado'){
+        var dia=_tendFechaVentaISO(p);
+        if(!dia||dia<_semDesde||dia>_semHasta)return;
+        var k=_isoAKey(dia);if(!k)return;
+        facturadoPorDia[k]=(facturadoPorDia[k]||0)+f;
+        if(p.ep!=='Cobrado')sinCobrarPorDia[k]=(sinCobrarPorDia[k]||0)+f;
+        if(p.h==='Red'){
+          (_bolsasDia[k]||(_bolsasDia[k]={}))[String(p.br||'').trim()||'sin vendedor']=1;
+        }else{
+          (_pedsDia[k]||(_pedsDia[k]=[])).push(p);
+          var cn=p.h||'Otro';
+          if(!_pedsDiaCanal[k])_pedsDiaCanal[k]={};
+          (_pedsDiaCanal[k][cn]||(_pedsDiaCanal[k][cn]=[])).push(p);
+        }
+        return;
+      }
+      var de=String(p.dee||'').slice(0,10);
+      if(!de||de<_semDesde||de>_semHasta)return;
+      var kf=_isoAKey(de);if(!kf)return;
+      var x=_faltaDia[kf]||(_faltaDia[kf]={f:0,cob:0,peds:{},bolsas:{}});
+      x.f+=f;if(p.ep==='Cobrado')x.cob+=f;
+      if(p.h==='Red')x.bolsas[String(p.br||'').trim()||'sin vendedor']=1;
+      else{var cf=p.h||'Otro';(x.peds[cf]||(x.peds[cf]=[])).push(p);}
     });
     Object.keys(_pedsDia).forEach(function(k){
       ventasPorDia[k]=_contarVentas(_pedsDia[k]);
       ventasPorDiaCanal[k]={};
       Object.keys(_pedsDiaCanal[k]).forEach(function(c){ventasPorDiaCanal[k][c]=_contarVentas(_pedsDiaCanal[k][c]);});
     });
-    var redByVend={};
-    D.pedidos.forEach(function(p){
-      if(p.h!=='Red'||p.es==='Cancelado'||p.hist)return;
-      if(!p.c||!p.c.trim()||!(p.$>0))return;
-      if(!_esSemActual(p))return;
-      var v=String(p.br||'').trim()||'Sin vendedor';
-      if(!redByVend[v]||(p.dee&&p.dee<redByVend[v].dee))redByVend[v]=p;
-      /* El CONTEO de Red va por vendedor (una entrega al vendedor es un evento),
-         pero la PLATA son todos los pedidos: la plata no se agrupa. */
-      var kR=_deeKey(p);
-      if(kR){
-        facturadoPorDia[kR]=(facturadoPorDia[kR]||0)+(Number(p.$)||0);
-        if(p.ep!=='Cobrado')sinCobrarPorDia[kR]=(sinCobrarPorDia[kR]||0)+(Number(p.$)||0);
-      }
-    });
-    Object.keys(redByVend).forEach(function(v){
-      var k=_deeKey(redByVend[v]);if(!k)return;
-      ventasPorDia[k]=(ventasPorDia[k]||0)+1;
+    Object.keys(_bolsasDia).forEach(function(k){
+      var nb=Object.keys(_bolsasDia[k]).length;
+      ventasPorDia[k]=(ventasPorDia[k]||0)+nb;
       if(!ventasPorDiaCanal[k])ventasPorDiaCanal[k]={};
-      ventasPorDiaCanal[k]['Red']=(ventasPorDiaCanal[k]['Red']||0)+1;
+      ventasPorDiaCanal[k]['Red']=nb;
+    });
+    Object.keys(_faltaDia).forEach(function(k){
+      var x=_faltaDia[k];x.canal={};x.n=0;
+      Object.keys(x.peds).forEach(function(c){var nn=_contarVentas(x.peds[c]);x.canal[c]=nn;x.n+=nn;});
+      var nb=Object.keys(x.bolsas).length;if(nb){x.canal['Red']=nb;x.n+=nb;}
     });
     // Orden canónico de canales (Home -> Pilar -> Clubes -> Red -> resto)
     var CANAL_ORDER=['Home','Pilar','Clubes','Red'];
@@ -12084,7 +12084,9 @@ function rInicio(){
       bodyH+='<div class="card" style="margin-bottom:6px;padding:10px 12px'+(isHoy?';border:2px solid var(--b)':'')+'">';
       bodyH+='<div style="display:flex;justify-content:space-between;align-items:center">';
       bodyH+='<span style="font-weight:800;font-size:13px">'+diaAb+' '+k+(isHoy?' · HOY':'')+'</span>';
-      bodyH+='<span style="font-weight:800;font-size:16px">'+n+' <small style="font-size:10px;font-weight:700;color:var(--ink3)">'+(n===1?'entrega':'entregas')+'</small></span>';
+      var _fxN=(_faltaDia[k]&&_faltaDia[k].n)||0;
+      if(n>0||!_fxN)bodyH+='<span style="font-weight:800;font-size:16px">'+n+' <small style="font-size:10px;font-weight:700;color:var(--ink3)">'+(n===1?'entrega':'entregas')+'</small></span>';
+      else bodyH+='<span style="font-weight:800;font-size:13px;color:#E65100">'+_fxN+' <small style="font-size:10px;font-weight:700">por entregar</small></span>';
       bodyH+='</div>';
       var _byC=ventasPorDiaCanal[k]||{};
       var _ordK=_ordCanales(_byC);
@@ -12102,6 +12104,18 @@ function rInicio(){
         bodyH+='<div style="display:flex;justify-content:space-between;align-items:center;margin-top:5px;font-size:11px"><span style="color:var(--ink2);font-weight:700">Entregado ese d\u00eda</span><span style="font-weight:800">$'+f$(_facD)+'</span></div>';
         var _scD=sinCobrarPorDia[k]||0;
         if(_scD>0)bodyH+='<div style="font-size:10px;color:#E65100;font-weight:600;margin-top:2px">de esas entregas, $'+f$(_scD)+' todav\u00eda sin cobrar</div>';
+      }
+      /* Lo que todavia NO se entrego y tenia entrega elegida ese dia (14/9/2026).
+         No suma arriba: una venta cuenta cuando se entrega. Antes sumaba y la
+         tarjeta decia "1 entrega · Entregado $97.600" con el pedido Reservado. */
+      var _fx=_faltaDia[k];
+      if(_fx&&_fx.n>0){
+        var _dIso=_rtIso(d), _pas=_dIso<_hoyIso;
+        var _fxTit=_pas?'Qued\u00f3 sin marcar entregado':(_dIso===_hoyIso?'Falta entregar hoy':'Para entregar');
+        var _fxCan=_ordCanales(_fx.canal).map(function(c){return c+' '+_fx.canal[c];}).join(' \u00b7 ');
+        bodyH+='<div class="dia-falta'+(_pas?' pas':'')+'"><span>'+(_pas?'\u26A0 ':'\uD83D\uDCE6 ')+_fxTit+' \u00b7 '+_fxCan+'</span><b>$'+f$(_fx.f)+'</b></div>';
+        var _fxCob=_fx.cob>=_fx.f?'ya est\u00e1 cobrado':(_fx.cob>0?'$'+f$(_fx.cob)+' ya cobrado':'');
+        bodyH+='<div class="dia-falta-pie">No suma a lo entregado hasta que se marque'+(_fxCob?' \u00b7 '+_fxCob:'')+'</div>';
       }
       var _vd=vueltosPorDia[k]||0;
       var _efMano=dd.ef+_vd, _totMano=dd.tot+_vd;
