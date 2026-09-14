@@ -88,8 +88,10 @@ const EXTRA = [
   { h: 'Catering', c: 'Evento Prueba', fx: '2026-09-08', $: 300000, co: 200000 }
 ];
 /* Solo la 37: la 36 NO viene, a proposito — no se tiene que inventar por nombre. */
-const SALUD = { '2026-38': { total: 0, nuevos: 0, recompra: 0, react: 0 }, '2026-37': { total: 9, nuevos: 2, recompra: 5, react: 2 } };
-const LIGHT = { ts: 1, pedidos: PEDIDOS, canales: [{ nombre: 'Home', pedidos: 10 }], light: true, saludSem: SALUD, ventasExtra: EXTRA };
+const SALUD = { '2026-38': { total: 1, nuevos: 0, recompra: 1, react: 0 }, '2026-37': { total: 9, nuevos: 2, recompra: 5, react: 2 } };
+/* Por mes (14/9/2026, a la tarde): septiembre viene, agosto NO — tampoco se inventa. */
+const SALUD_MES = { '2026-09': { total: 12, nuevos: 3, recompra: 7, react: 2 } };
+const LIGHT = { ts: 1, pedidos: PEDIDOS, canales: [{ nombre: 'Home', pedidos: 10 }], light: true, saludSem: SALUD, saludMes: SALUD_MES, ventasExtra: EXTRA };
 const CAJA = { ts: 1, caja: {}, saldoBase: {}, gastos: [], ingresos: [], movimientos: [], efMano: [] };
 const TEND = { ok: true, meses: [{ m: '2026-09', facturado: 1000, nuevos: 1 }], base: { total: 1 } };
 
@@ -165,18 +167,30 @@ const txt = (cli, sel) => ev(cli, `window.__tx(document.querySelector(${JSON.str
     chk('Catering se dice aparte y no suma', /Catering \$300\.000/.test(cat) && /no es retail/.test(cat), cat);
     const copia = await ev(cli, `decodeURIComponent((document.querySelector('#hRetail .rt-copy')||{getAttribute:function(){return ''}}).getAttribute('data-copy')||'')`);
     chk('"Copiar" arma el resumen con los mismos numeros', /Facturado \$492\.400/.test(copia || '') && /Home \$115\.000 · Otras zonas \$80\.000/.test(copia || ''), copia);
+    /* 14/9/2026, a la tarde: Lucas abrio el Resumen el lunes y el cuadro de clientes no
+       estaba — vivia en la semana EN CURSO, que recien arrancaba. Ahora va adentro del
+       bloque y sigue al periodo elegido. */
+    const cl37 = await txt(cli, '#hRetail .rt-cl') || '';
+    chk('los clientes de la semana que cerro, adentro de Domiciliario: 9 · 2 nuevos · 5 recompra · 2 reactivados', /9 clientes domiciliarios 2 🆕 Nuevos 5 🔁 Recompra 2 ⏰ Reactivados/.test(cl37), cl37);
+    chk('y "Copiar" los dice', /👥 9 clientes: 2 nuevos · 5 recompra · 2 reactivados/.test(copia || ''), copia);
 
     console.log('\n-- los otros periodos --');
     await ev(cli, `rtPer('mes')`); await pausa(300);
     let k2 = await ev(cli, `window.__tx(document.querySelector('#hRetail .rt-k'))`);
     chk('Este mes: Septiembre 2026 · del 1 al 14 · $609.400, contra agosto hasta el 14 ($50.000)', /Septiembre 2026 · del 1 al 14/.test(await txt(cli, '#hRetail .rt-sub') || '') && /\$609\.400/.test(k2 || '') && /▲ \+1119%/.test(k2 || ''), k2);
+    const clMes = await txt(cli, '#hRetail .rt-cl') || '';
+    chk('Este mes: los clientes del MES (12 · 3 · 7 · 2), no la suma de semanas', /12 clientes domiciliarios 3 🆕 Nuevos 7 🔁 Recompra 2 ⏰ Reactivados/.test(clMes), clMes);
     await ev(cli, `rtPer('mesAnt')`); await pausa(300);
     k2 = await ev(cli, `window.__tx(document.querySelector('#hRetail .rt-k'))`);
     chk('Mes pasado: Agosto 2026 · cerrado · $80.000', /Agosto 2026 · cerrado/.test(await txt(cli, '#hRetail .rt-sub') || '') && /\$80\.000/.test(k2 || ''), k2);
+    chk('agosto no vino del servidor: el cuadro de clientes no se dibuja (no se inventa)', await ev(cli, `!document.querySelector('#hRetail .rt-cl')`) === true);
     await ev(cli, `rtPer('sem')`); await pausa(300);
     k2 = await ev(cli, `window.__tx(document.querySelector('#hRetail .rt-k'))`);
     chk('Esta semana: $17.000, y sin nada que comparar el lunes pasado lo dice', /\$17\.000/.test(k2 || '') && /sin datos para comparar/.test(k2 || ''), k2);
+    chk('Esta semana: los clientes de la 38 (1 · recompra)', /1 cliente domiciliario 0 🆕 Nuevos 1 🔁 Recompra 0 ⏰ Reactivados/.test(await txt(cli, '#hRetail .rt-cl') || ''), await txt(cli, '#hRetail .rt-cl'));
     await ev(cli, `rtPer('semAnt')`); await pausa(300);
+    chk('volviendo a la semana pasada, el cuadro vuelve', await ev(cli, `!!document.querySelector('#hRetail .rt-cl')`) === true);
+    chk('y ya no hay un cuadro de clientes suelto en la semana en curso (el lunes se iba solo)', await ev(cli, `[].filter.call(document.querySelectorAll('#p-inicio-resumen .rt-cli'),function(e){return !e.closest('#sem-body-prev');}).length`) === 0);
 
     console.log('\n-- las tarjetas de cada semana --');
     const s37 = await ev(cli, `(function(){var c=[].slice.call(document.querySelectorAll('#sem-body-prev .card')).filter(function(x){return /Semana 37/.test(x.textContent);})[0];return c?window.__tx(c):null;})()`);
@@ -187,7 +201,7 @@ const txt = (cli, sel) => ev(cli, `window.__tx(document.querySelector(${JSON.str
     const s36 = await ev(cli, `(function(){var c=[].slice.call(document.querySelectorAll('#sem-body-prev .card')).filter(function(x){return /Semana 36/.test(x.textContent);})[0];return c?window.__tx(c):null;})()`);
     chk('la semana 36 existe (tiene un cobro)', !!s36, s36);
     chk('pero el servidor no mando sus clientes: NO se recalculan por nombre', !!s36 && !/Clientes/.test(s36), s36);
-    chk('la carga rapida guardo saludSem y ventasExtra (el volcado contesto error)', await ev(cli, `!!(D.saludSem&&D.saludSem['2026-37']&&Array.isArray(D.ventasExtra))`) === true);
+    chk('la carga rapida guardo saludSem, saludMes y ventasExtra (el volcado contesto error)', await ev(cli, `!!(D.saludSem&&D.saludSem['2026-37']&&D.saludMes&&D.saludMes['2026-09']&&Array.isArray(D.ventasExtra))`) === true);
 
     console.log('\n-- lo que salio --');
     const fuera = await ev(cli, `({kpi:!!document.getElementById('hKpi'),can:!!document.getElementById('hCanales'),como:/C[oó]mo (fue|va) la semana/.test(document.getElementById('p-inicio-resumen').textContent),porCanal:/Por canal/.test(document.getElementById('p-inicio-resumen').textContent)})`);
