@@ -183,7 +183,9 @@ function chk(cond, txt, extra) {
     }
     out.cola = (window.CARNE_COLA || []).map(p => ({ abbr: p.abbr, peso: p.peso }));
     // sobrevive a recargar? (la cola vive en localStorage)
-    out.enLS = localStorage.getItem('mc_carneCola');
+    /* Desde el 13/9/2026 la clave NO lleva el prefijo mc_: ese prefijo lo poda
+       _swrPodar cuando el celular se llena, y la cola era lo primero que se iba. */
+    out.enLS = localStorage.getItem('maleu_carneCola');
     // el texto que muestra
     out.txt = document.getElementById('stCarne').innerText;
     // quitar una
