@@ -72,7 +72,9 @@ const EXTRA = `
         var m = url.match(/action=([a-zA-Z_]+)/); var a = m ? m[1] : '?';
         var cuerpo = a === 'cajaLight' ? ${JSON.stringify(CAJA)}
                    : a === 'pedidosLight' ? ${JSON.stringify(LIGHT)}
-                   : a === 'admin' ? Object.assign({}, ${JSON.stringify(LIGHT)}, ${JSON.stringify(CAJA)}, {oc:{lista:[]}, stock:[]})
+                   /* El volcado real NO trae efMano (solo cajaLight). Con efMano en el stub
+                      esta prueba no veia que load() lo borraba (13/9/2026). */
+                   : a === 'admin' ? Object.assign({}, ${JSON.stringify(LIGHT)}, ${JSON.stringify(CAJA)}, {oc:{lista:[]}, stock:[], efMano: undefined})
                    : a === 'ocLight' ? {ok:true, oc:{lista:[]}} : a === 'cobrosPendientes' ? {ok:true, cobros:[]}
                    : {ok:false, error:'stub'};
         var txt = JSON.stringify(cuerpo);

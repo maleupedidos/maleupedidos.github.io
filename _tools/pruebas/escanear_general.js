@@ -94,9 +94,13 @@ const MEDIR = `(function(){
   /* Las tabs son los `div.pg` con id `p-<clave>`; se navega con `go(clave)`.
      Se saltean las 4 de Diagonal Carnes: son otro negocio y viven detrás del
      switch de arriba, no del cajón. */
-  const lista = await evaluar(cli, '(function(){return [].slice.call(document.querySelectorAll(".pg"))' +
+  const lista = (await evaluar(cli, '(function(){return [].slice.call(document.querySelectorAll(".pg"))' +
     '.map(function(e){return {k:String(e.id||"").replace(/^p-/,""), t:String(e.id||"")};})' +
-    '.filter(function(x){return x.k && x.k.indexOf("dg")!==0;});})()');
+    '.filter(function(x){return x.k && x.k.indexOf("dg")!==0;});})()'))
+    /* 4to argumento opcional: las tabs a escanear, separadas por coma
+       (`node escanear_general.js <token> 390 caja,egresos`). Una auditoria de
+       una tab no necesita pegarle al backend real con las 18. */
+    .filter(x => !process.argv[4] || process.argv[4].split(',').indexOf(x.k) >= 0);
   console.log('  tabs visibles: ' + lista.length + '  (' + ANCHO + 'px)\n');
 
   const res = [];

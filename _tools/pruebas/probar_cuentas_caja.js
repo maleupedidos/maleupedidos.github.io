@@ -20,6 +20,8 @@ const ANCHO = Number(process.argv[3] || 390);
 if (!TOKEN) { console.error('falta el token'); process.exit(2); }
 
 let ok = 0, mal = 0;
+/* Los POST se imprimen SIN el token: la sesion es la real y no puede quedar en un log (13/9/2026). */
+const sinToken = x => JSON.stringify(x, (k, v) => (k === 'token' ? '(oculto)' : v));
 const chequear = (cond, txt, det) => {
   if (cond) { ok++; console.log('  ok   ' + txt); }
   else { mal++; console.log('  MAL  ' + txt + (det ? '  → ' + det : '')); }
@@ -319,7 +321,7 @@ const esperar = async (cli, expr, ms = 60000, cada = 500) => {
     await new Promise(r => setTimeout(r, 900));
     const pj = await evaluar(cli, `JSON.stringify((window.__posts||[]).filter(function(p){return p.action==='ajusteSaldo';})[0]||null)`);
     const P = JSON.parse(pj);
-    console.log('     body: ' + JSON.stringify(P));
+    console.log('     body: ' + sinToken(P));
     chequear(!!P, 'salio el POST de ajuste');
     if (P) {
       chequear(Number(P.cta_brubank) === 150000, 'manda cta_brubank = 150000', String(P.cta_brubank));
@@ -403,7 +405,7 @@ const esperar = async (cli, expr, ms = 60000, cada = 500) => {
     await new Promise(r => setTimeout(r, 900));
     const gpj = await evaluar(cli, `JSON.stringify((window.__posts||[]).filter(function(p){return p.action==='gasto';}))`);
     const GP = JSON.parse(gpj);
-    console.log('     ' + GP.length + ' POST: ' + JSON.stringify(GP));
+    console.log('     ' + GP.length + ' POST: ' + sinToken(GP));
     chequear(GP.length === 1, 'un solo POST (no uno por cuenta)', 'salieron ' + GP.length);
     if (GP.length) {
       const g = GP[0];
@@ -440,7 +442,7 @@ const esperar = async (cli, expr, ms = 60000, cada = 500) => {
     await new Promise(r => setTimeout(r, 700));
     const g2j = await evaluar(cli, `JSON.stringify((window.__posts||[]).filter(function(p){return p.action==='gasto';})[0]||null)`);
     const G2 = JSON.parse(g2j);
-    console.log('     body: ' + JSON.stringify(G2));
+    console.log('     body: ' + sinToken(G2));
     chequear(!!G2 && G2.montos === undefined,
       'sin cuentas extra NO manda `montos`', JSON.stringify(G2 && G2.montos));
     chequear(!!G2 && Number(G2.montoEf) === 1000 && G2.metodo === 'Efectivo',
@@ -465,7 +467,7 @@ const esperar = async (cli, expr, ms = 60000, cada = 500) => {
     await new Promise(r => setTimeout(r, 900));
     const ipj = await evaluar(cli, `JSON.stringify((window.__posts||[]).filter(function(p){return p.action==='ingreso';})[0]||null)`);
     const IP = JSON.parse(ipj);
-    console.log('     body: ' + JSON.stringify(IP));
+    console.log('     body: ' + sinToken(IP));
     chequear(!!IP && !!IP.montos && Number(IP.montos.brubank) === 3000,
       'el ingreso manda montos.brubank = 3000', JSON.stringify(IP && IP.montos));
     const brI = await evaluar(cli, `(function(){
