@@ -10979,8 +10979,8 @@ function _porCobrar(){
   return r;
 }
 
-// ── SNAPSHOT DIARIO (Inicio): 5 números clave del estado del negocio hoy ──
-// Facturado mes (devengado) · Cobrado mes · Quemado mes · Saldo de caja · Días de pista
+// ── SNAPSHOT DIARIO (Inicio): los números clave del estado del negocio hoy ──
+// Facturado mes · Margen mes · Gastado mes · Saldo de caja · A cobrar · Stock · Deuda proveedores
 /* ── El mes contable de un pedido: UNA sola definición ──
    `p.mc` lo calcula el backend con `_mesContable_` (mes de ENTREGA, con fallback
    al de pedido), la misma regla que el EERR y `action=ventas`. El fallback de
@@ -11029,12 +11029,17 @@ function rHSnap(){
   // facturadoMesCobrado: de ese MISMO facturado, cuánto ya está Cobrado. Sirve para el %
   // "ya cobrado" honesto (devengado vs devengado). NO usar cobranzas de caja del mes:
   // esas incluyen cobros de pedidos de meses previos y harían pasar el % de 100%.
-  var facturadoMes=0, facturadoMesCobrado=0;
+  //
+  // margenMes: facturado − costo de esos MISMOS pedidos. Medido el 14/9/2026 contra
+  // eerrKpisMes: $2.932.457 los dos (26,7%). Se calcula acá y no con eerrKpisMes
+  // porque ese necesita `VD` (las ventas), que no siempre llegó cuando se pinta Inicio.
+  var facturadoMes=0, facturadoMesCobrado=0, margenMes=0;
   ((D.pedidos)||[]).forEach(function(p){
     if(p.es!=='Entregado'||p.hist)return;
     if(!p.c||!p.c.trim()||!(p.$>0))return;
-    if(_mesDePedido(p)!==ym)return;   /* mismo criterio que el hero */
+    if(_mesDePedido(p)!==ym)return;
     facturadoMes+=Number(p.$||0);
+    margenMes+=Number(p.$||0)-Number(p.co||0);
     if(p.ep==='Cobrado')facturadoMesCobrado+=Number(p.$||0);
   });
   // Pedidos Red que siguen en "Pendiente". Son DOS cosas distintas y hay que
@@ -11057,9 +11062,11 @@ function rHSnap(){
     if(p.fc&&String(p.fc).trim()){redSinMarcar+=Number(p.$||0);redSinMarcarN++;}
     else{redEnPoderDeVendedor+=Number(p.$||0);redEnPoderN++;}
   });
-  // 2 y 3: Cobrado y Quemado del mes — del cálculo validado de eerrFlujoMes
+  // 2 y 3: Gastado del mes y flujo neto — del cálculo validado de eerrFlujoMes.
+  // "Cobrado mes" tuvo cuadrito propio hasta el 14/9/2026: repetía el "% ya cobrado"
+  // de Facturado ($10,95M contra $10,99M) y su pie era un control del dato
+  // ("cobertura FC"). Lo cobrado sigue adentro del flujo neto.
   var fm=(typeof eerrFlujoMes==='function')?eerrFlujoMes(mn,anioN):{cobranzas:0,salidas:0,flujo:0};
-  var cobradoMes=fm.cobranzas||0;
   var quemadoMes=fm.salidas||0;
   var flujoMes=fm.flujo||0;
   // 4. Saldo vivo: el mismo que las tarjetas de la tab Caja, con TODAS las
@@ -11102,7 +11109,6 @@ function rHSnap(){
   var sSaldo=saldoTot>=cajaMin?'g':(saldoTot>=cajaMin*0.5?'wrn':'r');
   var sPista=(diasPista===null)?'':(diasPista>=90?'g':(diasPista>=30?'wrn':'r'));
   var sFlujo=flujoMes>=0?'g':'r';
-  var sCobrado=cobradoMes>=quemadoMes?'g':(cobradoMes>=quemadoMes*0.7?'wrn':'r');
   var sDeuda=(deudaProv===null)?'':(deudaProv>saldoTot?'r':(deudaProv>saldoTot*0.5?'wrn':'g'));
   // % cobrado vs facturado del mes (calidad de cobranza) — sobre el MISMO facturado del mes,
   // no sobre las cobranzas de caja (que incluyen pedidos viejos y pasarían de 100%).
@@ -11117,7 +11123,10 @@ function rHSnap(){
   }
   var html='<div class="snap">';
   html+=card('','Facturado mes',fmoney(facturadoMes),pctCobr>0?(pctCobr+'% ya cobrado'):'entregado');
-  html+=card(sCobrado,'Cobrado mes',fmoney(cobradoMes),fm.cobertura?(fm.cobertura+'% cobertura FC'):'caja real');
+  /* Sin semáforo a propósito: el margen de la carne (~20%) y el de Maleu (~31%) son
+     distintos, y un umbral único pintaría de rojo un mes que vende más carne. */
+  var pctMargen=facturadoMes>0?Math.round(margenMes/facturadoMes*100):0;
+  html+=card('','Margen mes',fmoney(margenMes),facturadoMes>0?(pctMargen+'% de lo facturado'):'sin entregas');
   html+=card(sFlujo,'Gastado mes',fmoney(quemadoMes),(flujoMes>=0?'+':'')+fmoney(flujoMes)+' flujo neto');
   html+=card(sSaldo,'Saldo de caja',fmoney(saldoTot),(saldoTot>=cajaMin?'sobre caja mín ':'bajo caja mín ')+fmoney(cajaMin));
   /* El pie dice de dónde sale cuando hay de los dos: "recibieron Maleu y no
@@ -11131,7 +11140,28 @@ function rHSnap(){
   }
   html+=card(aCobrar>0?'wrn':'g','A cobrar',fmoney(aCobrar),_pcPie);
   html+=card('g','Stock (al costo)',fmoney(stockTot),stockN+' productos en freezer');
-  html+=card(sDeuda,'Deuda proveedores',deudaProv===null?'…':fmoney(deudaProv),deudaProv===null?'cargando':(deudaProv>0?'FIFO por semana':'al día'));
+  /* El pie dice DESDE CUÁNDO se debe, que es lo que decide si hay que pagar ya.
+     Hasta el 14/9/2026 decía "FIFO por semana": cómo se calcula, no qué te dice. */
+  var _deudaPie='cargando';
+  if(deudaProv!==null){
+    if(!(deudaProv>0))_deudaPie='al día';
+    else{
+      var _semV=0,_nProv=0;
+      (window._eerrDeudaProvDet||[]).forEach(function(x){
+        _nProv++;
+        if(x.sem>0&&(!_semV||x.sem<_semV))_semV=x.sem;
+      });
+      var _iw=_isoWeek(now);
+      if(!_semV)_deudaPie=_nProv===1?'a un proveedor':('a '+_nProv+' proveedores');
+      else if(_semV===_iw[1])_deudaPie='toda de esta semana';
+      else{
+        /* La semana no trae año: si es mayor que la actual, es del año anterior. */
+        var _lun=_isoWeekRange(_semV>_iw[1]?_iw[0]-1:_iw[0],_semV)[0];
+        _deudaPie='la más vieja: semana del '+_lun.getUTCDate()+'/'+(_lun.getUTCMonth()+1);
+      }
+    }
+  }
+  html+=card(sDeuda,'Deuda proveedores',deudaProv===null?'…':fmoney(deudaProv),_deudaPie);
   html+='</div>';
   // Línea de Posición Financiera Neta (Caja + A Cobrar + Stock − Deuda Prov)
   if(deudaProv!==null){
@@ -11714,7 +11744,6 @@ function rInicio(){
   var diaHoy=DIAS_ES[now.getDay()];
   var ddH=now.getDate(),mmH=MS[now.getMonth()],yyH=now.getFullYear();
   var semActual=getWeek(now);
-  var _ymHero=yyH+'-'+String(now.getMonth()+1).padStart(2,'0');
   // Filtrar pv por Día de Entrega Elegido. El backend devuelve p.de como texto:
   // puede ser "24/04/2026", un Date toString, o nombre del día ("Miércoles").
   // En el último caso, calcular la próxima ocurrencia del día desde la fecha del pedido.
@@ -11735,41 +11764,11 @@ function rInicio(){
     return fD;
   }
 
-  /* ── El mes del hero sale de `_mesDePedido`, igual que el KPI de arriba ──
-     Hasta el 8/9/2026 acá se filtraba por `p.fe||p.f` y sólo por el NÚMERO de
-     mes. Tiene los dos agujeros que ya costaron caro en agosto: 173 pedidos
-     (78 de Clubes y 95 de Red) no traen `fe` y se contaban por fecha de PEDIDO
-     —el desfasaje que separó $574.979 entre Inicio y el EERR—, y `fe` viaja como
-     "dd/MM" sin año, así que en septiembre de 2027 iba a sumar también el de
-     2026. Medido el 8/9/2026 antes de tocarlo: los dos criterios dan idéntico
-     ($2.773.936 de facturado, $843.886 de margen, 39 pedidos), o sea que esto no
-     mueve ningún número hoy — tapa el agujero antes de que se abra. */
-  var factMesT=0, margenMesT=0;
-  D.pedidos.forEach(function(p){
-    if(!p.c||!p.c.trim()||!(p.$>0))return;
-    if(p.es!=='Entregado'||p.hist)return;
-    if(_mesDePedido(p)!==_ymHero)return;
-    factMesT+=p.$;
-    margenMesT+=(p.$-(p.co||0));
-  });
-  var margenPctMes=factMesT>0?Math.round((margenMesT/factMesT)*100):0;
-
-  // Margen bruto FINANCIERO (percibido): mismo margen facturado−costo, pero sobre lo
-  // COBRADO en el mes (por fecha de cobro), entregado o no. Es la lectura de caja:
-  // reconoce el resultado cuando entra la plata, no cuando se entrega. El económico
-  // es el devengado: solo lo entregado. Difieren por cobros de pedidos aún no
-  // entregados (o de otro mes) y por entregados todavía sin cobrar.
-  var factFinMes=0, margenFinMes=0;
-  D.pedidos.forEach(function(p){
-    if(!p.c||!p.c.trim()||!(p.$>0))return;
-    if(p.ep!=='Cobrado'||p.es==='Cancelado'||p.hist)return;
-    var f=p.fc||p.fe||p.f;if(!f)return; // fecha de cobro (fallback entrega/pedido)
-    var pp=String(f).split('/');if(pp.length<2)return;
-    if(Number(pp[1])!==(now.getMonth()+1))return;
-    factFinMes+=p.$;
-    margenFinMes+=(p.$-(p.co||0));
-  });
-  var margenFinPctMes=factFinMes>0?Math.round((margenFinMes/factFinMes)*100):0;
+  /* El MARGEN BRUTO DEL MES vivio en este hero hasta el 14/9/2026, con el
+     "percibido" abajo. Se mudo a los cuadritos de arriba (`rHSnap`, "Margen mes"),
+     al lado de Facturado y con los MISMOS pedidos: tenerlo en los dos lugares era
+     el mismo numero dos veces en la misma pantalla. El percibido se fue sin
+     reemplazo: filtraba por numero de mes sin año y no lo leia ninguna decision. */
 
   /* ── Lo que se entrega HOY ──
      El hero mostraba la fecha de hoy en grande y debajo "5 ventas · $849.100",
@@ -11798,12 +11797,6 @@ function rInicio(){
         '<div class="hero-sub">HOY</div>'+
         '<div class="hero-t">'+diaHoy+' '+ddH+' de '+mmH+' '+yyH+'</div>'+
         '<div class="hero-d">'+txtHoy+' &middot; semana '+semActual+' (lun '+_dm(_rgSem[0])+' → dom '+_dm(_rgSem[1])+')</div>'+
-      '</div>'+
-      '<div style="flex:1 1 260px;min-width:0;border-left:1px solid var(--border);padding-left:14px">'+
-        '<div class="hero-sub">MARGEN BRUTO DEL MES <span style="font-weight:600;opacity:.7">· devengado</span></div>'+
-        '<div class="hero-t">$'+f$(margenMesT)+'</div>'+
-        '<div class="hero-d">'+margenPctMes+'% sobre $'+f$(factMesT)+' entregado<br>'+
-          '<span style="opacity:.8">percibido: $'+f$(margenFinMes)+' &middot; '+margenFinPctMes+'% sobre $'+f$(factFinMes)+' cobrado</span></div>'+
       '</div>'+
     '</div>';
 
@@ -15606,7 +15599,15 @@ function eerrFetchDeudaProv(cb){
       var deudaProv=Number(p.total)||0;
       if(deudaProv>0.01){
         total+=deudaProv;
-        det.push({n:p.n||p.nombre||'?',m:deudaProv});
+        /* `sem`: la semana ISO mas vieja que todavia tiene algo sin pagar. La usa
+           el pie del cuadrito de Inicio (14/9/2026), que decia "FIFO por semana":
+           como se calcula, no que te dice. */
+        var semVieja=0;
+        (p.semanas||[]).forEach(function(s){
+          var n=Number(s.sem)||0;
+          if(n>0&&Number(s.pendiente)>0.01&&(!semVieja||n<semVieja))semVieja=n;
+        });
+        det.push({n:p.n||p.nombre||'?',m:deudaProv,sem:semVieja});
       }
     });
     det.sort(function(a,b){return b.m-a.m;});

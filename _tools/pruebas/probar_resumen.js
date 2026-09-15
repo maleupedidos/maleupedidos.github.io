@@ -40,7 +40,7 @@ async function correr(cli, demStub) {
       + 'try{localStorage.removeItem("mc_semprepDem");}catch(e){}';
   }
   await cli.enviar('Page.addScriptToEvaluateOnNewDocument', { source: prep(TOKEN, extra) });
-  await cli.enviar('Page.navigate', { url: 'http://localhost:8080/app.html' });
+  await cli.enviar('Page.navigate', { url: process.env.URL || 'http://localhost:8080/app.html' });
   return await esperar(cli, 'typeof D!=="undefined" && D && D.pedidos && D.pedidos.length>0', 90000);
 }
 
@@ -246,9 +246,56 @@ async function abrirDetalle(cli) {
     chk(/entregas? por \$|Sin entregas cargadas/.test(b4.txt), 'dice que se entrega HOY', b4.txt.slice(0, 160));
     chk(/semana \d+ \(lun \d+\/\d+ → dom \d+\/\d+\)/.test(b4.txt), 'dice el rango de la semana');
     chk(!/\d+ ventas · \$/.test(b4.txt), 'ya NO repite las ventas de la semana (viven en el bloque de abajo)');
-    chk(b4.cols === 2, 'quedan 2 tarjetas, no 3', String(b4.cols));
-    chk(/MARGEN BRUTO DEL MES/.test(b4.txt) && /percibido:/.test(b4.txt),
-      'el margen es una sola tarjeta con el percibido adentro');
+    /* Desde el 14/9/2026 el margen del mes vive en los cuadritos de arriba: el
+       hero queda con HOY solo, para no mostrar el mismo numero dos veces. */
+    chk(b4.cols === 1, 'el hero queda con una sola tarjeta (HOY)', String(b4.cols));
+    chk(!/MARGEN BRUTO DEL MES|percibido:/.test(b4.txt), 'el margen ya NO se repite en el hero');
+  }
+
+  // ── PUNTO 5: los cuadritos (14/9/2026) ──
+  console.log('\n5) Los cuadritos');
+  /* La deuda sale del endpoint mas lento (busqueda): sin esperarla, el pie dice
+     "cargando" y el chequeo de la semana no probaria nada. */
+  await esperar(cli, 'window._eerrDeudaProv!==null', 150000, 1000);
+  await new Promise(r => setTimeout(r, 1500));
+  const cu5 = await evaluar(cli, `(function(){try{
+    var t={};[].forEach.call(document.querySelectorAll('#hSnap .snap-c'),function(c){
+      var l=c.querySelector('.snap-l'),v=c.querySelector('.snap-v'),s=c.querySelector('.snap-s');
+      t[(l?l.textContent:'').trim().toUpperCase()]={v:v?v.textContent:'',s:s?s.textContent:''};});
+    /* El margen se recalcula aca, sin leer nada de rHSnap */
+    var now=new Date(), ym=now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0');
+    var f=0,c=0;(D.pedidos||[]).forEach(function(p){
+      if(p.es!=='Entregado'||p.hist||!p.c||!p.c.trim()||!(p.$>0))return;
+      if(_mesDePedido(p)!==ym)return; f+=p.$; c+=(p.co||0);});
+    var k=(typeof eerrKpisMes==='function')?eerrKpisMes(now.getMonth()+1,now.getFullYear()):null;
+    /* La semana mas vieja, desde la respuesta CRUDA del backend (no desde el detalle
+       que arma el panel, que es lo que se esta probando) */
+    var g=(typeof _swrLeer==='function')?_swrLeer('deudaprov'):null, semV=0, deuda=0;
+    ((g&&g.d&&g.d.deudas)||[]).forEach(function(p){ if(!(Number(p.total)>0.01))return; deuda+=Number(p.total);
+      (p.semanas||[]).forEach(function(s){var n=Number(s.sem)||0; if(n>0&&Number(s.pendiente)>0.01&&(!semV||n<semV))semV=n;});});
+    var iw=_isoWeek(now), lun=semV?_isoWeekRange(semV>iw[1]?iw[0]-1:iw[0],semV)[0]:null;
+    return {t:t, margen:Math.round(f-c), pct:f?Math.round((f-c)/f*100):0,
+            eerr:k?Math.round(k.totMB):null, hayCruda:!!(g&&g.d), deuda:Math.round(deuda), semV:semV, semAct:iw[1],
+            lun:lun?(lun.getUTCDate()+'/'+(lun.getUTCMonth()+1)):''};
+  }catch(e){return {err:String(e)}}})()`);
+  chk(cu5 && !cu5.err, 'los cuadritos se leen', cu5 && cu5.err);
+  if (cu5 && !cu5.err) {
+    const n = s => Number(String(s || '').replace(/[^\d-]/g, '')) || 0;
+    chk(Object.keys(cu5.t).length === 7, 'son 7 cuadritos', Object.keys(cu5.t).join(' | '));
+    chk(!cu5.t['COBRADO MES'], 'ya NO esta "Cobrado mes" (repetia el % cobrado de Facturado)');
+    const m = cu5.t['MARGEN MES'];
+    chk(!!m, 'esta "Margen mes"');
+    if (m) {
+      chk(n(m.v) === cu5.margen, 'el margen es facturado − costo de los mismos pedidos', m.v + ' vs $' + cu5.margen);
+      chk(cu5.eerr === null || Math.abs(cu5.eerr - cu5.margen) <= 1, 'y da lo mismo que el EERR', 'EERR $' + cu5.eerr);
+      chk(new RegExp('^' + cu5.pct + '% de lo facturado$').test(m.s.trim()), 'el pie dice el % sobre lo facturado', m.s);
+    }
+    const d = cu5.t['DEUDA PROVEEDORES'];
+    chk(!!d && !/FIFO/.test(d.s), 'el pie de la deuda ya no dice "FIFO por semana"', d && d.s);
+    if (d && cu5.hayCruda && cu5.deuda > 0 && cu5.semV) {
+      const esp = cu5.semV === cu5.semAct ? 'toda de esta semana' : 'la más vieja: semana del ' + cu5.lun;
+      chk(d.s.trim() === esp, 'y dice desde cuando se debe, sacado de la respuesta cruda', d.s + ' vs ' + esp);
+    } else console.log('     (la deuda no llego cruda o es 0: el pie de la semana no se chequea)');
   }
   // el facturado del hero tiene que ser el MISMO que el del KPI de arriba
   const cuad = await evaluar(cli, `(function(){
@@ -264,7 +311,6 @@ async function abrirDetalle(cli) {
     return {nuevo:a, viejo:b};
   })()`);
   chk(cuad.nuevo > 0, 'el facturado del mes del hero da un numero', '$' + cuad.nuevo);
-  chk(!/MARGEN BRUTO MES<|MARGEN BRUTO FINANCIERO<\/div>/.test(b4 ? b4.txt : ''), 'no quedaron las dos tarjetas viejas');
   console.log('     (mes contable $' + cuad.nuevo + ' vs criterio viejo $' + cuad.viejo +
     ' → ' + (cuad.nuevo === cuad.viejo ? 'iguales hoy, como estaba medido' : 'DIFIEREN') + ')');
 
