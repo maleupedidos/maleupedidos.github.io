@@ -10338,7 +10338,7 @@ function _leerVersion(app){
    "El HTML no sabe que version es" dejo de ser cierto: el build le escribe
    adentro el CACHE_NAME de sw-panel.js, el mismo que deploy.sh obliga a subir en
    cada cambio. Si lo publicado dice otra cosa, esta pagina es vieja. Punto. */
-var _APP_CN_PAGINA='maleu-panel-v343';
+var _APP_CN_PAGINA='maleu-panel-v344';
 
 /* Devuelve [{k,v}] si lo publicado no es lo que esta pagina corre. */
 function _chequearVersiones(){
@@ -11745,6 +11745,17 @@ function _cajaAplicar(d){
   try{sync();}catch(e){}
   _marcarFresco(['caja']);
 }
+/* ¿Hay algo que rCaja/rEgresos PISARIAN? (15/9/2026)
+   Hasta hoy la Caja usaba `_hayEditorAbierto()`, que mira TODO el ERP: un pago a
+   medio tipear en Abastecimiento —una tab que ni se estaba mirando— congelaba la
+   Caja. Traia la caja nueva y seguia dibujando la vieja, sin decir nada. rCaja
+   redibuja `#cBal` y `#gList` (a sus formularios abiertos les repone lo suyo) y
+   rEgresos la tab Pagos: solo frena si el cursor esta en algo de eso. */
+function _editandoEnCaja(){
+  var ae=document.activeElement;
+  if(!ae||!(ae.tagName==='INPUT'||ae.tagName==='SELECT'||ae.tagName==='TEXTAREA'))return false;
+  return !!(ae.closest&&ae.closest('#cBal, #gList, #p-egresos'));
+}
 // Devuelve una promesa con {ok, red} — quien la llama tiene que poder
 // distinguir "no hay senal" de "llego y no se pudo dibujar".
 function _recargarCaja(){
@@ -11755,7 +11766,7 @@ function _recargarCaja(){
     .then(function(d){
       if(!d||!Array.isArray(d.movimientos))return {ok:false,red:true};
       _cajaAplicar(d);
-      if(_hayEditorAbierto()){_pendingLoadRender=true;return {ok:true};}
+      if(_editandoEnCaja()){_pendingLoadRender=true;return {ok:true};}
       try{ rCaja(); }catch(e){ console.error('rCaja()',e); return {ok:false,red:true,pinto:false}; }
       /* Si Pagos revienta al pintar, se dice en la consola: tragarlo dejaba la tab
          con los numeros viejos y sin un solo error a la vista. */
@@ -48478,10 +48489,25 @@ function confirmarPago(key, idx, semana) {
   };
 
   var label = semana ? 'sem ' + semana : 'a cuenta';
+  /* El pago ya salio (lo confirmo el servidor o quedo en la cola): el formulario se
+     cierra y se vacia YA, no cuando llega la lista de deudas (15/9/2026). Antes solo
+     se cerraba si la lista llegaba en 12 s; si tardaba mas, quedaba abierto con el
+     monto tipeado, `abaHayEditor()` lo leia como "esta editando" y el ERP entero
+     dejaba de repintar: la tab Caja traia la caja nueva y mostraba la vieja. */
+  var cerrarForm = function () {
+    var f = document.getElementById('pagoForm_' + key);
+    if (f) {
+      f.classList.remove('open');
+      f.querySelectorAll('input, textarea').forEach(function (i) { i.value = ''; });
+    }
+    delete abaPagoCta[key];
+    try { if (typeof window._flushPendingLoadRender === 'function') window._flushPendingLoadRender(); } catch (e) {}
+  };
   var aLaCola = function (msg) {
     abaSyncQueue.push(payload);
     abaSaveLocal();
     btn.textContent = 'Guardado — se sincroniza solo';
+    cerrarForm();
     abaShowToast(msg);
     abaProcessSyncQueue();
   };
@@ -48511,6 +48537,7 @@ function confirmarPago(key, idx, semana) {
     // Mantener loader visible hasta que el refresh actualice la deuda en pantalla
     _abaLoaderMsg('Actualizando la deuda…');
     if (navigator.vibrate) navigator.vibrate([50, 50, 50]);
+    cerrarForm();
     var _donePago = false;
     var _safetyPago = setTimeout(function() {
       if (_donePago) return;
@@ -48522,10 +48549,18 @@ function confirmarPago(key, idx, semana) {
       fetch(ABA_APPS_SCRIPT_URL + '?action=busqueda&t=' + Date.now())
         .then(function(r) { return r.json(); })
         .then(function(data) {
-          if (_donePago) return;
+          /* La lista que llega DESPUES del tope de 12 s tambien se usa: tirarla
+             dejaba el pago figurando como pendiente hasta tocar ↻. Si para
+             entonces se esta cargando otro pago, se guarda sin repintar encima. */
+          var tarde = _donePago;
           _donePago = true;
           clearTimeout(_safetyPago);
-          if (_abaEsBusqueda(data)) { _abaAplicarBusqueda(data); abaRender(); abaUpdateLastSync(); }
+          if (_abaEsBusqueda(data)) {
+            _abaAplicarBusqueda(data);
+            if (!tarde || !abaHayEditor()) abaRender();
+            abaUpdateLastSync();
+          }
+          if (tarde) return;
           abaHideLoader(true);
           abaShowToast('Pago a ' + d.n + ' (' + label + '): ' + abaFormatMoney(total));
           abaProcessSyncQueue();
@@ -50064,10 +50099,16 @@ function confirmarCompra() {
     fetch(ABA_APPS_SCRIPT_URL + '?action=busqueda&t=' + Date.now())
       .then(function(r) { return r.json(); })
       .then(function(data) {
-        if (_doneCompra) return;
+        /* Igual que el pago (15/9/2026): la lista que llega tarde tambien se usa. */
+        var tarde = _doneCompra;
         _doneCompra = true;
         clearTimeout(_safetyCompra);
-        if (_abaEsBusqueda(data)) { _abaAplicarBusqueda(data); abaRender(); abaUpdateLastSync(); }
+        if (_abaEsBusqueda(data)) {
+          _abaAplicarBusqueda(data);
+          if (!tarde || !abaHayEditor()) abaRender();
+          abaUpdateLastSync();
+        }
+        if (tarde) return;
         abaHideLoader(true);
         // Si se creó el pedido Red, decir cuál y por cuánto: es una venta.
         if (resp.pedidoRed) {
