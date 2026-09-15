@@ -148,6 +148,24 @@ else
   echo "    (no se toco el panel)"
 fi
 
+# ── 3h. Maleu - Lectura: el resultado oficial, igual en la copia ────────────
+#  El resultado oficial de Maleu es el del panel (rEERR_dual, rEERR_financiero,
+#  _gastoLinea, _porCobrar, _cajaCuentas, Planificacion). El exportador de la copia
+#  de solo lectura que consulta Claude las tiene COPIADAS en el Code.js del backend
+#  (_mlReglasPanel_). Si se cambia una aca y no alla, Claude y el panel darian
+#  numeros distintos sin ningun error. Contrato de Datos de Maleu v0.2 (15/9/2026).
+echo "→ [3h/8] Reglas del resultado copiadas en Maleu - Lectura…"
+LECTURA_REGLAS="../estancias/_tools/probar_lectura_reglas.js"
+if echo "$HTMLS" | grep -qE "panel.src.html|app.html"; then
+  if [ -f "$LECTURA_REGLAS" ]; then
+    node "$LECTURA_REGLAS" | sed 's/^/    /' || fallar "Cambiaste una regla del resultado que Maleu - Lectura copia — la sesion Backend tiene que regenerar _mlReglasPanel_ (node _tools/lectura_copiar_reglas.js en estancias) y publicar el backend antes."
+  else
+    echo "    (sin el repo estancias al lado: se saltea)"
+  fi
+else
+  echo "    (no se toco el panel)"
+fi
+
 # ── 4. Service worker al dia ─────────────────────────────────────────────────
 #  Si cambio el HTML de una PWA, su CACHE_NAME tiene que cambiar tambien, o el
 #  celular que ya tiene ese nombre cacheado no invalida nada.
