@@ -4669,6 +4669,7 @@ function _auTol(a){
   if(!a) return 0;
   if(a.tipo==='semanal') return 24*8;
   if(a.tipo==='diario') return 36;
+  if(a.tipo==='minutos') return 1;
   return Math.max(3,(a.cada||1)*3);
 }
 var _AU_DIAS = [null,'lunes','martes','miércoles','jueves','viernes','sábado','domingo'];
@@ -4676,6 +4677,7 @@ function _auCuando(a){
   var dd=function(n){return (n<10?'0':'')+n;};
   if(a.tipo==='semanal') return _AU_DIAS[a.dia]+' entre '+dd(a.hora)+':00 y '+dd(a.hora)+':59';
   if(a.tipo==='diario'){ var m=a.min||0; return 'todos los días entre '+dd(a.hora)+':'+dd(m)+' y '+dd(a.hora)+':'+dd(Math.min(59,m+15)); }
+  if(a.tipo==='minutos') return 'cada '+(a.cada||1)+' minuto'+((a.cada||1)>1?'s':'');
   return 'cada '+(a.cada||1)+' hora'+((a.cada||1)>1?'s':'');
 }
 function _auFila(o){
@@ -5905,10 +5907,53 @@ var API='https://script.google.com/macros/s/AKfycbxmrG5YVSshcYezk8lXFx_uxb7NFGcb
     return (a && _CAROS[a]) ? -1 : 0;
   }
 
+  /* ── UNA LECTURA TRABADA SE CORTA A LOS 20 s Y SE VUELVE A PEDIR (15/9/2026)
+     Medido esa noche contra produccion, uno por vez: el script contesta en 2-3 s
+     cuando la foto ya esta hecha y hasta 27 s en frio, pero DOS de 42 pedidos se
+     colgaron en la entrega de Google — 117 s para traer 379 KB que el script
+     habia calculado en 10, y 137 s para terminar en 404. Eso es "el servidor no
+     contesto en 90 s" y "no se pudo actualizar".
+
+     El navegador no puede cortar SOLO la entrega (sigue la redireccion por
+     dentro), asi que se corta el pedido entero y se pide de nuevo. Lo que lo
+     hace barato es el backend del mismo dia: el segundo pedido NO recalcula
+     nada — si el primero todavia esta calculando, espera ese resultado, y si ya
+     termino, sale de la foto en ~3 s.
+
+     Solo lecturas (nunca un POST: repetir una escritura seria cobrar dos veces)
+     y nunca con `fresh=1`, que si obliga a recalcular. */
+  var CORTE_GET_MS = 20000, CORTE_GET_INTENTOS = 2;
+  var _corte = window.__corteGet = { cortes: 0, salvados: 0 };
+  var _CORTABLE = { admin:1, pedidosLight:1, cajaLight:1, ocLight:1, ventas:1, tendencia:1,
+    stock_full:1, piezas_full:1, precios:1, catalogo:1, cobrosPendientes:1, entregas:1,
+    busqueda:1, crmClientes:1, crmInteracciones:1, crmProductos:1, crmLotes:1, crmZonas:1,
+    crmPuntos:1, hogaresMerge:1, productosAnalytics:1, depositos:1, carnePiezas:1, planMes:1,
+    saldosClientes:1, billetera:1, pendientesGuardarStock:1, vendedores:1, stock:1,
+    combosEval:1, saludClientes:1, comprasCarne:1, ver:1 };
+  function _seCorta(url){
+    var u = String(url || '');
+    if (u.indexOf('fresh=1') > -1) return false;
+    var m = u.match(/[?&]action=([a-zA-Z_]+)/);
+    return !!(m && _CORTABLE[m[1]] && typeof AbortController === 'function');
+  }
+  function _pedirConCorte(url, init, intento){
+    intento = intento || 0;
+    if (intento >= CORTE_GET_INTENTOS || !_seCorta(url)) return _pedir(url, init, 0);
+    var ac = new AbortController(), cortado = false;
+    var i2 = {}; if (init) for (var k in init) i2[k] = init[k];
+    i2.signal = ac.signal;
+    var reloj = setTimeout(function(){ cortado = true; _corte.cortes++; try{ ac.abort(); }catch(e){} }, CORTE_GET_MS);
+    return _pedir(url, i2, 0).then(function(r){ clearTimeout(reloj); return r; }, function(e){
+      clearTimeout(reloj);
+      if (!cortado) throw e;               /* se cayo la red: eso no se reintenta aca */
+      return _pedirConCorte(url, init, intento + 1).then(function(r2){ _corte.salvados++; return r2; });
+    });
+  }
+
   function _encolar(url, init){
     return new Promise(function(res, rej){
       _cola.push({ url: url,
-                   fn: function(){ return _pedir(url, init, 0); },
+                   fn: function(){ return _pedirConCorte(url, init, 0); },
                    res: res, rej: rej });
       _bombear();
     });
@@ -5933,6 +5978,15 @@ var API='https://script.google.com/macros/s/AKfycbxmrG5YVSshcYezk8lXFx_uxb7NFGcb
     /* _pedir se encarga de dos cosas: sesion vencida y reintento ante traba. */
     if (esBackend && !esPost && typeof input === 'string'){
       return _encolar(input, init);
+    }
+    /* Cuando ESTE aparato escribio. Lo mira el vigia de datos nuevos: la
+       pantalla ya se refresca sola despues de guardar, no hace falta que el
+       cambio de version dispare otro refresco encima. */
+    if (esBackend && esPost){
+      var _marcar = function(){ try{ window.__ultimoPostBackend = Date.now(); }catch(e){} };
+      _marcar();
+      return _pedir(input, init, 0).then(function(r){ _marcar(); return r; },
+                                         function(e){ _marcar(); throw e; });
     }
     return _pedir(input, init, 0);
   };
@@ -21017,7 +21071,13 @@ function _vListaClick(e){
   var _ultimoRefrescoAuto = Date.now();
   var _refrescandoAuto = false;
   window._anotarRefresco = function(){ _ultimoRefrescoAuto = Date.now(); };
-  window._refrescarSiEstaViejo = function(){
+  /* Para el vigia de datos nuevos: no pedir un refresco encima de otro. */
+  window._refrescoAutoOcupado = function(){ return _refrescandoAuto; };
+  /* `forzar` (15/9/2026): saltea SOLO el freno de los 90 s. Lo usa el vigia
+     cuando el backend dice que alguien escribio — ahi no es "por las dudas",
+     hay datos nuevos seguro. Los otros dos candados (editor abierto, refresco
+     en curso) siguen valiendo. */
+  window._refrescarSiEstaViejo = function(forzar){
     if(!_REFRESCO_AUTO || _refrescandoAuto) return;
     if(navigator.onLine === false) return;
     if(typeof _hayEditorAbierto === 'function' && _hayEditorAbierto()) return;
@@ -21027,7 +21087,7 @@ function _vListaClick(e){
     var _tabA = (typeof _tabActual === 'function') ? _tabActual() : '';
     var _saA = _REFRESCO_SUBAPP[_tabA];
     if(_saA && _saA.auto && _saA.hay()){ try{ _saA.auto(); }catch(eA){} return; }
-    if(Date.now() - _ultimoRefrescoAuto < _REFRESCO_MIN_MS) return;
+    if(!forzar && Date.now() - _ultimoRefrescoAuto < _REFRESCO_MIN_MS) return;
     /* Lo que se refresca es lo que se esta MIRANDO. Estando en una sub-app,
        `loadRapido()` pedia ~900 KB del panel que esa pantalla no dibuja y
        dejaba sus propios datos viejos: eso es "volvi al celular y no se
@@ -21090,6 +21150,55 @@ function _vListaClick(e){
   };
   document.addEventListener('visibilitychange',function(){
     if(document.visibilityState === 'visible') window._refrescarSiEstaViejo();
+  });
+
+  /* ── EL VIGIA DE DATOS NUEVOS (15/9/2026) ───────────────────────────────
+     Tadeo: "que este actualizado SIEMPRE". Hasta hoy la pantalla abierta se
+     renovaba al cambiar de tab, al volver a la app o tocando ↻: si Lucas
+     cobraba en su compu, en la pantalla de Tadeo eso no aparecia hasta que el
+     hiciera algo. Ahora el ERP pregunta cada 40 s si cambio algo —`action=ver`,
+     que devuelve un numero y NO lee la planilla, ~2,5 s— y si cambio, renueva
+     lo que se esta mirando.
+
+     Cuatro candados: solo con la app a la vista, nunca con un editor abierto,
+     nunca encima de un refresco en curso, y nunca en los 25 s siguientes a una
+     escritura de este mismo aparato (esa pantalla ya se refresco sola al
+     guardar). Si alguno frena, el cambio queda PENDIENTE y se intenta en la
+     vuelta siguiente: no se pierde. */
+  var VIGIA_MS = 40000;
+  var _verVista = '', _verPend = false, _verEnVuelo = false;
+  var _vigia = window.__vigia = { miradas: 0, cambios: 0, refrescos: 0 };
+  function _vigiaPuede(){
+    if(document.visibilityState !== 'visible') return false;
+    if(typeof _hayEditorAbierto === 'function' && _hayEditorAbierto()) return false;
+    if(_refrescandoAuto) return false;
+    var p = window.__ultimoPostBackend || 0;
+    return !(p && Date.now() - p < 25000);
+  }
+  function _vigiaRefrescar(){
+    _vigia.refrescos++;
+    try{ window._refrescarSiEstaViejo(true); }catch(e){}
+    /* Estancias dibuja de la lista de clientes y de las interacciones, que no
+       viajan en `loadRapido`: sin esto, una nota que cargo Lucas no aparecia. */
+    var t = (typeof _tabActual === 'function') ? _tabActual() : '';
+    if(t === 'estancias' && typeof window.estRefreshActivo === 'function'){ try{ estRefreshActivo(); }catch(e){} }
+  }
+  function _vigiaMirar(){
+    if(_verEnVuelo || document.visibilityState !== 'visible') return;
+    if(navigator.onLine === false) return;
+    try{ if(!localStorage.getItem('maleu_token')) return; }catch(e){}
+    _verEnVuelo = true; _vigia.miradas++;
+    fetch(API + '?action=ver&t=' + Date.now()).then(function(r){ return r.json(); }).then(function(d){
+      if(!d || !d.ok || !d.ver) return;
+      if(_verVista && d.ver !== _verVista){ _verPend = true; _vigia.cambios++; }
+      _verVista = d.ver;
+      if(_verPend && _vigiaPuede()){ _verPend = false; _vigiaRefrescar(); }
+    }).catch(function(){}).then(function(){ _verEnVuelo = false; });
+  }
+  setInterval(_vigiaMirar, VIGIA_MS);
+  setTimeout(_vigiaMirar, 6000);
+  document.addEventListener('visibilitychange',function(){
+    if(document.visibilityState === 'visible') setTimeout(_vigiaMirar, 800);
   });
   window.addEventListener('online',function(){$('dot').className='hdr-dot';_refresh(true);});
   window.addEventListener('offline',function(){$('dot').className='hdr-dot off';});
