@@ -11140,28 +11140,7 @@ function rHSnap(){
   }
   html+=card(aCobrar>0?'wrn':'g','A cobrar',fmoney(aCobrar),_pcPie);
   html+=card('g','Stock (al costo)',fmoney(stockTot),stockN+' productos en freezer');
-  /* El pie dice DESDE CUÁNDO se debe, que es lo que decide si hay que pagar ya.
-     Hasta el 14/9/2026 decía "FIFO por semana": cómo se calcula, no qué te dice. */
-  var _deudaPie='cargando';
-  if(deudaProv!==null){
-    if(!(deudaProv>0))_deudaPie='al día';
-    else{
-      var _semV=0,_nProv=0;
-      (window._eerrDeudaProvDet||[]).forEach(function(x){
-        _nProv++;
-        if(x.sem>0&&(!_semV||x.sem<_semV))_semV=x.sem;
-      });
-      var _iw=_isoWeek(now);
-      if(!_semV)_deudaPie=_nProv===1?'a un proveedor':('a '+_nProv+' proveedores');
-      else if(_semV===_iw[1])_deudaPie='toda de esta semana';
-      else{
-        /* La semana no trae año: si es mayor que la actual, es del año anterior. */
-        var _lun=_isoWeekRange(_semV>_iw[1]?_iw[0]-1:_iw[0],_semV)[0];
-        _deudaPie='la más vieja: semana del '+_lun.getUTCDate()+'/'+(_lun.getUTCMonth()+1);
-      }
-    }
-  }
-  html+=card(sDeuda,'Deuda proveedores',deudaProv===null?'…':fmoney(deudaProv),_deudaPie);
+  html+=card(sDeuda,'Deuda proveedores',deudaProv===null?'…':fmoney(deudaProv),_deudaProvPie(deudaProv));
   html+='</div>';
   // Línea de Posición Financiera Neta (Caja + A Cobrar + Stock − Deuda Prov)
   if(deudaProv!==null){
@@ -15587,13 +15566,23 @@ function eerrEsServicio(txt){
 // Deuda viva con proveedores (FIFO por semana, igual que Abastecimiento).
 // Fetch al mismo endpoint que la tab Abastecimiento. Cache en memoria.
 var _eerrDeudaProv=null,_eerrDeudaProvDet=[];
+/* Cuando fallo el ultimo pedido (ms), o 0. Hasta el 15/9/2026 un error dejaba la
+   deuda en 0: Inicio y Cierre decian "$0 · al día" en verde, y como la respuesta
+   {ok:false} tambien se guardaba como copia, lo seguian diciendo al reabrir la app.
+   Ahora la deuda queda en null ("no se pudo calcular") y se reintenta pasado un
+   minuto: los que llaman vuelven a pedir cuando es null, y sin esa espera
+   entrarian en loop con un backend caido. */
+var _eerrDeudaProvFallo=0;
 function eerrFetchDeudaProv(cb){
   if(_eerrDeudaProv!==null){cb(_eerrDeudaProv,_eerrDeudaProvDet);return;}
+  if(_eerrDeudaProvFallo&&Date.now()-_eerrDeudaProvFallo<60000)return;
   // Con copia guardada: contesta al instante con lo de la ultima vez y vuelve a
   // llamar al callback cuando llega lo nuevo. El backend de `busqueda` es de los
   // mas lentos (arma la deuda FIFO por semana).
   traer('deudaprov', API+'?action=busqueda&t='+Date.now(), function(d){
     // Backend devuelve d.deudas[] (no d.provs). Cada item: {n, total (deuda viva FIFO), semanas[]}.
+    /* Una copia mala guardada antes del 15/9/2026 ({ok:false}) no se pinta como deuda 0 */
+    if(!d||!Array.isArray(d.deudas))return;
     var total=0,det=[];
     (d.deudas||[]).forEach(function(p){
       var deudaProv=Number(p.total)||0;
@@ -15611,9 +15600,35 @@ function eerrFetchDeudaProv(cb){
       }
     });
     det.sort(function(a,b){return b.m-a.m;});
-    _eerrDeudaProv=total;_eerrDeudaProvDet=det;
+    _eerrDeudaProv=total;_eerrDeudaProvDet=det;_eerrDeudaProvFallo=0;
     cb(total,det);
-  }).catch(function(){_eerrDeudaProv=0;_eerrDeudaProvDet=[];cb(0,[]);});
+  },{valido:function(d){return !!d&&Array.isArray(d.deudas);}}).then(function(){
+    /* Fallo el pedido pero habia copia: `traer` devuelve la copia sin error. Si
+       esa copia tampoco servia, es lo mismo que un error. */
+    if(_eerrDeudaProv===null){_eerrDeudaProvFallo=Date.now();cb(null,[]);}
+  }).catch(function(){
+    _eerrDeudaProv=null;_eerrDeudaProvDet=[];_eerrDeudaProvFallo=Date.now();
+    cb(null,[]);
+  });
+}
+
+/* El pie de "Deuda proveedores": DESDE CUÁNDO se debe, que es lo que decide si hay
+   que pagar ya. Hasta el 14/9/2026 decía "FIFO por semana" —cómo se calcula, no qué
+   te dice— en Inicio y en Cierre > Estado patrimonial. Una sola función para las dos. */
+function _deudaProvPie(deudaProv){
+  if(deudaProv===null)return _eerrDeudaProvFallo?'no se pudo calcular':'cargando';
+  if(!(deudaProv>0))return 'al día';
+  var semV=0,nProv=0;
+  (_eerrDeudaProvDet||[]).forEach(function(x){
+    nProv++;
+    if(x.sem>0&&(!semV||x.sem<semV))semV=x.sem;
+  });
+  var iw=_isoWeek(new Date());
+  if(!semV)return nProv===1?'a un proveedor':('a '+nProv+' proveedores');
+  if(semV===iw[1])return 'toda de esta semana';
+  /* La semana no trae año: si es mayor que la actual, es del año anterior. */
+  var lun=_isoWeekRange(semV>iw[1]?iw[0]-1:iw[0],semV)[0];
+  return 'la más vieja: semana del '+lun.getUTCDate()+'/'+(lun.getUTCMonth()+1);
 }
 
 // Config_Maleu: parámetros editables desde Sheets con trazabilidad por "Activo desde".
@@ -16092,7 +16107,7 @@ function _ckRenderPatrimonial(){
       '<div class="ck-card o"><div class="ck-card-t">Caja real</div><div class="ck-card-v">'+_ckMoneyShort(saldoTot)+'</div><div class="ck-card-s">'+_desgC+'</div></div>'+
       '<div class="ck-card"><div class="ck-card-t">(+) A cobrar</div><div class="ck-card-v">'+_ckMoneyShort(aCobrar)+'</div><div class="ck-card-s">'+(aCobrar>0?(_pcC.red>0?'clientes '+_ckMoneyShort(_pcC.vd)+' \u00b7 vendedores '+_ckMoneyShort(_pcC.red):'clientes pendientes'):'todo cobrado')+'</div></div>'+
       '<div class="ck-card g"><div class="ck-card-t">(+) Stock al costo</div><div class="ck-card-v">'+_ckMoneyShort(stockTot)+'</div><div class="ck-card-s">freezer cargado</div></div>'+
-      '<div class="ck-card r"><div class="ck-card-t">(−) Deuda proveedores</div><div class="ck-card-v">'+(deudaProv===null?'…':_ckMoneyShort(deudaProv))+'</div><div class="ck-card-s">'+(deudaProv===null?'cargando':(deudaProv>0?'FIFO por semana':'al día'))+'</div></div>'+
+      '<div class="ck-card r"><div class="ck-card-t">(−) Deuda proveedores</div><div class="ck-card-v">'+(deudaProv===null?'…':_ckMoneyShort(deudaProv))+'</div><div class="ck-card-s">'+_deudaProvPie(deudaProv)+'</div></div>'+
     '</div>'+
     '<div style="margin-top:6px;padding:14px 16px;background:linear-gradient(135deg,#5C3A2A,#331C1C);color:#F2E8C7;border-radius:8px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">'+
       '<div><div style="font-size:11px;color:rgba(242,232,199,.65);font-weight:700;text-transform:uppercase;letter-spacing:.06em">= Posición Financiera Neta</div>'+
