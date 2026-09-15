@@ -309,6 +309,11 @@ button.rt-chip.on{background:var(--o);border-color:var(--o);color:#fff}
 .semprep-p{font-size:11px;color:var(--ink3);white-space:nowrap}
 .semprep-p b{color:var(--ink);font-weight:700}
 .semprep-p.mas{color:var(--ink3);font-style:italic}
+/* El estimativo de carne (15/9/2026): corte · kilos · plata, alineado en columnas */
+.semprep-est{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:3px 14px;margin:5px 0 3px;font-size:12.5px;font-variant-numeric:tabular-nums}
+.semprep-est-n{color:var(--ink2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.semprep-est-q{color:var(--ink);text-align:right}
+.semprep-est-c{color:var(--ink3);text-align:right}
 .semprep-pie{font-size:11px;color:var(--ink2);font-weight:600;padding-top:9px;border-top:1px solid var(--cd);margin-top:2px}
 .semprep-acc{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
 .semprep-min{display:flex;align-items:center;flex-wrap:wrap;gap:4px 12px;cursor:pointer;padding:10px 14px;min-height:44px;box-sizing:border-box}
@@ -8610,7 +8615,18 @@ var API='https://script.google.com/macros/s/AKfycbxmrG5YVSshcYezk8lXFx_uxb7NFGcb
         return _echoDeNuevo(r2, n + 1);
       }, function(){ return r; });
   }
-  function _pedir(input, init, intento){
+  /* ── LA SESION NO SE CIERRA POR UNA SOLA RESPUESTA (15/9/2026) ────────────
+     Tadeo repartiendo folletos: el ERP lo echo 5 veces en media hora, y a Lucas
+     en otra compu. Una sola respuesta con authRequired borraba el token y pedia
+     el PIN. Ahora:
+     · `sesionNoVerificada` (el backend no pudo leer la hoja Sesiones) se
+       reintenta como la traba, y NUNCA cierra la sesion;
+     · `authRequired` se confirma con UN segundo pedido a los 1,5 s antes de
+       cerrar. Es seguro tambien para un POST: el backend chequea la sesion antes
+       de escribir, asi que un authRequired no escribio nada. */
+  var ESPERAS_SESION = [1500, 4000, 8000];
+  function _pedir(input, init, intento, authIntento){
+    authIntento = authIntento || 0;
     return _fetch(input, init).then(function(r){ return _echoDeNuevo(r, 0); }).then(function(r){
       if (!r || !r.ok || String(r.url || '').indexOf('script.google') < 0) return r;
       return r.clone().text().then(function(txt){
@@ -8620,10 +8636,22 @@ var API='https://script.google.com/macros/s/AKfycbxmrG5YVSshcYezk8lXFx_uxb7NFGcb
           try{ console.warn('Sin permiso para esa accion (lo decide la hoja Permisos).'); }catch(e){}
           return r;
         }
-        if (txt && txt.indexOf('"authRequired":true') > -1){ _sesionVencida(); return r; }
+        if (txt && txt.indexOf('"sesionNoVerificada":true') > -1){
+          if (authIntento < ESPERAS_SESION.length){
+            return _dormir(ESPERAS_SESION[authIntento]).then(function(){ return _pedir(input, init, intento, authIntento + 1); });
+          }
+          _avisar('Google no contestó y no pude verificar tu sesión. Seguís adentro: probá de nuevo en un minuto.');
+          return r;
+        }
+        if (txt && txt.indexOf('"authRequired":true') > -1){
+          if (authIntento === 0){
+            return _dormir(1500).then(function(){ return _pedir(input, init, intento, 1); });
+          }
+          _sesionVencida(); return r;
+        }
         if (txt && txt.indexOf('"error":"LockTimeout"') > -1){
           if (intento < ESPERAS.length){
-            return _dormir(ESPERAS[intento]).then(function(){ return _pedir(input, init, intento + 1); });
+            return _dormir(ESPERAS[intento]).then(function(){ return _pedir(input, init, intento + 1, authIntento); });
           }
           _avisar('La planilla esta ocupada con otra operacion. No se guardo nada: proba de nuevo en unos segundos.');
         }
@@ -8639,7 +8667,8 @@ var API='https://script.google.com/macros/s/AKfycbxmrG5YVSshcYezk8lXFx_uxb7NFGcb
     }catch(e){}
     if (!window.__maleuAuthAviso){
       window.__maleuAuthAviso = true;
-      alert('Tu sesion vencio. Entra de nuevo con tu usuario y PIN.');
+      /* Las sesiones duran 90 dias: "vencio" mentia (15/9/2026). */
+      alert('El servidor no reconoció tu sesión dos veces seguidas. Entrá de nuevo con tu usuario y PIN.');
       location.reload();
     }
   }
@@ -10431,7 +10460,7 @@ function _leerVersion(app){
    "El HTML no sabe que version es" dejo de ser cierto: el build le escribe
    adentro el CACHE_NAME de sw-panel.js, el mismo que deploy.sh obliga a subir en
    cada cambio. Si lo publicado dice otra cosa, esta pagina es vieja. Punto. */
-var _APP_CN_PAGINA='maleu-panel-v349';
+var _APP_CN_PAGINA='maleu-panel-v350';
 
 /* Devuelve [{k,v}] si lo publicado no es lo que esta pagina corre. */
 function _chequearVersiones(){
@@ -13452,7 +13481,7 @@ function _semprepDemanda(){
   if(_semprepPidio)return;
   _semprepPidio=true;
   traer('semprepDem', API+'?action=catalogo&t='+Date.now(), function(d){
-    var map={}, prov1={}, uni={}, dep1={}, prods=(d&&d.productos)||{};
+    var map={}, prov1={}, uni={}, dep1={}, wk1={}, cos1={}, prods=(d&&d.productos)||{};
     Object.keys(prods).forEach(function(prov){
       (prods[prov]||[]).forEach(function(it){
         if(!it||!it.a||map[it.a]!==undefined)return;
@@ -13466,9 +13495,13 @@ function _semprepDemanda(){
         prov1[it.a]=prov;
         dep1[it.a]=String(it.dep||'').toLowerCase();
         uni[it.a]=it.u==='kg'?'kg':'u';
+        /* Las 3 semanas por separado y el costo, para el estimativo de lo que hay
+           que pedir (15/9/2026). Salen del mismo `catalogo`: no es otra demanda. */
+        wk1[it.a]=Array.isArray(it.wk)?it.wk.map(Number):null;
+        cos1[it.a]=Number(it.c)||0;
       });
     });
-    SEMPREP_DEM=map; SEMPREP_PROV=prov1; SEMPREP_UNI=uni; SEMPREP_DEP=dep1;
+    SEMPREP_DEM=map; SEMPREP_PROV=prov1; SEMPREP_UNI=uni; SEMPREP_DEP=dep1; SEMPREP_WK=wk1; SEMPREP_COSTO=cos1;
     /* Cuando fue la ultima compra del proveedor de carne, y de cuando es el
        stock de cada deposito. Sin esto el bloque afirmaba "el pedido ya tendria
        que estar hecho" mirando solo el dia de la semana. */
@@ -13487,7 +13520,7 @@ function _semprepEsc(s){
     return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});
 }
 /* "quedan 2" se lee más rápido que "stock: 2". */
-var SEMPREP_PROV={}, SEMPREP_UNI={}, SEMPREP_REPO={}, SEMPREP_DEPTS={}, SEMPREP_DEP={};
+var SEMPREP_PROV={}, SEMPREP_UNI={}, SEMPREP_REPO={}, SEMPREP_DEPTS={}, SEMPREP_DEP={}, SEMPREP_WK={}, SEMPREP_COSTO={};
 
 /* ══ Cuanto detalle se abre lo decide la URGENCIA (10/9/2026) ══
    Este bloque es lo primero que se ve al abrir el ERP. Mostraba SIEMPRE la
@@ -13612,6 +13645,62 @@ function _semprepPorSem(v,uni){
   return s+(uni==='kg'?' kg':'')+'/sem';
 }
 
+/* ══ CUANTO PEDIRLE (15/9/2026) ══
+   Tadeo, el martes a la tarde: "debería saltar un estimativo a pedir de carnes.
+   hoy a más tardar noche deberíamos hacerle el pedido a Caco". El bloque decia
+   cuanto queda y cuanto se vende, y la cuenta la hacia el de cabeza.
+
+   La cuenta, por corte:
+     pedir = venta por semana × semanas a cubrir − lo que hay en el freezer
+   · VENTA POR SEMANA: el promedio de las semanas CON venta de las 3 que manda
+     `catalogo` (`wk`, Home + Pilar). Una semana en cero con el corte sin stock es
+     falta de mercaderia, no de demanda: la picaña vendio 7,3 · 9,8 · 0 y su
+     promedio de 3 (5,7) la pedia corta justo por haberse quedado sin.
+   · SEMANAS A CUBRIR: desde hoy hasta la llegada SIGUIENTE a la de este pedido
+     (hoy martes → llega el jueves → la proxima llega el otro jueves: 9 dias). Con
+     tope en la vida del freezer (`vidaSem`): nunca mas de lo que dura.
+   · EN EL FREEZER: el FISICO (`f`), no el disponible. Lo reservado es de pedidos
+     que ya estan dentro de la venta por semana: restar solo el disponible lo
+     contaria dos veces.
+   Los kilos se redondean a medio kilo para arriba: Caco entrega piezas enteras,
+   es un estimativo y asi lo dice la pantalla. */
+function _semprepEstimar(lista,cfg,ahora){
+  var hoy0=new Date(ahora.getFullYear(),ahora.getMonth(),ahora.getDate());
+  var diaPed=_proxDiaSem(ahora,cfg.dia);
+  var llega=new Date(diaPed.getFullYear(),diaPed.getMonth(),diaPed.getDate()+((cfg.llegaDia-cfg.dia+7)%7));
+  var dias=Math.round((llega-hoy0)/86400000)+7;
+  var sem=Math.min(dias/7,cfg.vidaSem||2);
+  var lineas=[], kg=0, plata=0;
+  (lista||[]).forEach(function(p){
+    var ws=(p.wk||[]).filter(function(x){return Number(x)>0;});
+    var vende=ws.length?ws.reduce(function(a,b){return a+Number(b);},0)/ws.length:(Number(p.dem)||0);
+    if(!(vende>0))return;
+    var falta=vende*sem-(Number(p.f)||0);
+    var pedir=p.u==='kg'?Math.ceil(falta*2-1e-9)/2:Math.ceil(falta-1e-9);
+    if(!(pedir>0))return;
+    var costo=Math.round(pedir*(Number(p.c)||0));
+    lineas.push({n:p.n,a:p.a,u:p.u,vende:vende,f:Number(p.f)||0,pedir:pedir,costo:costo});
+    if(p.u==='kg')kg+=pedir;
+    plata+=costo;
+  });
+  lineas.sort(function(a,b){return b.pedir-a.pedir;});
+  return {lineas:lineas,kg:kg,plata:plata,llega:llega,dias:dias};
+}
+/* El texto para pegarle al proveedor por WhatsApp. Sin wa.me (regla del ERP):
+   se copia y se pega. */
+var SEMPREP_COPIA='';
+function _semprepCopiarCarne(btn){
+  var t=SEMPREP_COPIA; if(!t)return;
+  var lbl=btn&&btn.textContent;
+  function ok(){ if(btn){btn.textContent='✓ Copiado';setTimeout(function(){btn.textContent=lbl;},1800);} }
+  function mal(){ if(btn){btn.textContent='No pude copiar';setTimeout(function(){btn.textContent=lbl;},1800);} }
+  if(navigator.clipboard&&navigator.clipboard.writeText){ navigator.clipboard.writeText(t).then(ok,mal); return; }
+  try{ var ta=document.createElement('textarea');ta.value=t;ta.style.position='fixed';ta.style.left='-9999px';
+    document.body.appendChild(ta);ta.select();document.execCommand('copy');document.body.removeChild(ta);ok(); }catch(e){mal();}
+}
+/* "$1.784.850" */
+function _semprepPlata(n){ return '$'+f$(Math.round(n)); }
+
 /* El bloque de un proveedor con calendario propio. Hoy, Maleu Carnes.
 
    Lo que contesta es "cuanto le queda a Lucas y cuando repone", que es otra
@@ -13718,6 +13807,37 @@ function _semprepOtrosProv(otros,ahora){
     /* Con el freezer cubierto no hay nada que plegar: el titulo lo dice todo. */
     var abiertoC=(SEMPREP_VER.carne===null)?urg:SEMPREP_VER.carne;
 
+    /* El estimativo, solo con un pedido POR HACER: el dia de pedido o el
+       anterior, y sin la compra de esta semana ya cargada. Con la compra cargada
+       no hay nada que decidir, y el resto de la semana seria ruido. */
+    var hoy0C=new Date(ahora.getFullYear(),ahora.getMonth(),ahora.getDate());
+    var diasAlPed=Math.round((prox-hoy0C)/86400000);
+    var est=null, estHtml='';
+    SEMPREP_COPIA='';
+    if(!hayCompra&&(hoyD===cfg.dia||diasAlPed===1)){
+      est=_semprepEstimar(otros[depId],cfg,ahora);
+      if(!est.lineas.length)est=null;
+    }
+    if(est){
+      var corte=function(n){return String(n||'').replace(/^Carnes?\s*[·\-–]\s*/i,'');};
+      var sig=new Date(est.llega.getFullYear(),est.llega.getMonth(),est.llega.getDate()+7);
+      SEMPREP_COPIA='Hola! Te paso el pedido de carne para el '+DIAS[est.llega.getDay()]+' '
+        +est.llega.getDate()+'/'+(est.llega.getMonth()+1)+':\n'
+        +est.lineas.map(function(x){return '• '+corte(x.n)+': '+_semprepNum(x.pedir,x.u);}).join('\n');
+      corto+=' · pedir ~'+_semprepNum(est.kg,'kg');
+      estHtml='<div class="semprep-row o semprep-estim"><span class="semprep-ic">🧾</span><div style="flex:1;min-width:0">'
+        +'<div class="semprep-t">Estimativo para pedir: ~'+_semprepNum(est.kg,'kg')+' · '+_semprepPlata(est.plata)+'</div>'
+        +'<div class="semprep-est">'+est.lineas.map(function(x){
+            return '<span class="semprep-est-n">'+_semprepEsc(corte(x.n))+'</span>'
+              +'<b class="semprep-est-q">'+_semprepNum(x.pedir,x.u)+'</b>'
+              +'<span class="semprep-est-c">'+_semprepPlata(x.costo)+'</span>';
+          }).join('')+'</div>'
+        +'<div class="semprep-d">Para llegar a la reposición del '+DIAS[sig.getDay()]+' '+sig.getDate()+'/'+(sig.getMonth()+1)
+        +' ('+est.dias+' días): lo que se vende por semana (promedio de las últimas 3, sin las semanas en cero) menos lo que hay en el freezer. '
+        +'Kilos aproximados: '+_semprepEsc(pv)+' entrega piezas enteras.</div>'
+        +'</div></div>';
+    }
+
     var det;
     if(cortos.length){
       det=cortos.slice(0,6).map(function(p){
@@ -13749,10 +13869,13 @@ function _semprepOtrosProv(otros,ahora){
           : 'El freezer de '+_semprepEsc(cfg.quien)+' está cubierto')+'</div>'
       +((abiertoC||!cortos.length)?'<div class="semprep-d">'+det+'</div>':'')
       +'</div></div>'
+      +estHtml
       /* El punto sólo si el mensaje no lo trae: el aviso de la compra faltante
          termina en punto y quedaba un ".." a la vista. */
       +'<div class="semprep-pie">'+msg+(/[.!?]$/.test(msg)?'':'.')+selloTxt+consejo+'</div>'
-      +'<div class="semprep-acc"><button class="semprep-btn sec tog" '
+      +'<div class="semprep-acc">'
+        +(est?'<button class="semprep-btn" onclick="_semprepCopiarCarne(this)">📋 Copiar pedido para '+_semprepEsc(pv)+'</button>':'')
+        +'<button class="semprep-btn sec tog" '
         +'onclick="_semprepTog(\'carne\')">▴ Plegar</button></div>'
       +'</div>';
   });
@@ -13802,7 +13925,10 @@ function rSemanaPrep(){
     if(dp&&SEMPREP_OTRO_PROV[dp]){
       if(!otros[dp])otros[dp]=[];
       otros[dp].push({n:nom,a:s.a,d:disp,dem:(dem&&dem[s.a])||0,
-                      u:SEMPREP_UNI[s.a]||'u',prov:SEMPREP_PROV[s.a]||''});
+                      u:SEMPREP_UNI[s.a]||'u',prov:SEMPREP_PROV[s.a]||'',
+                      /* físico, las 3 semanas y el costo: para el estimativo */
+                      f:(s.f!==undefined&&s.f!==null&&s.f!=='')?Number(s.f):disp,
+                      wk:SEMPREP_WK[s.a]||null,c:SEMPREP_COSTO[s.a]||0});
       return;
     }
     if(!dem){
@@ -18543,7 +18669,9 @@ function eerrPct(n,d){return d>0?_dec(n/d*100,1)+'%':'—';}
    sueldo decia $1.000.000 y la hoja $1.200.000. Queda solo como respaldo si el
    dato no llego — con los mismos montos de la hoja. */
 var EERR_PROV_DEFAULT=[
-  {concepto:'Sueldo dueño imputado',cat:'sueldo',monto:1200000,desde:'2026-01',hasta:null},
+  {concepto:'Sueldo Tadeo',cat:'sueldo',monto:1200000,desde:'2026-01',hasta:'2026-08'},
+  {concepto:'Sueldo Tadeo',cat:'sueldo',monto:1500000,desde:'2026-09',hasta:null},
+  {concepto:'Sueldo Lucas',cat:'sueldo',monto:1000000,desde:'2026-09',hasta:null},
   {concepto:'Ocupación imputada',cat:'ocupacion',monto:50000,desde:'2026-01',hasta:null},
   {concepto:'Amortización freezers',cat:'amortizacion',monto:35000,desde:'2026-01',hasta:null},
   {concepto:'Monotributo',cat:'impuesto_monotributo',monto:42386.74,desde:'2026-01',hasta:null}
@@ -18575,50 +18703,124 @@ function eerrProvisiones(mesNum,anio){
    Arranca en marzo 2026: el primer giro cargado en Egresos es del 10/3. Contar
    enero y febrero seria inventar deuda sobre meses sin datos. */
 var SUELDO_CUENTA_DESDE='2026-03';
-function _sueldoFijoMes(mn,anio){
+/* UNA FILA DE SUELDO POR PERSONA (15/9/2026, a la noche). Tadeo: "en septiembre
+   los sueldos quedan 1M para Lucas y 1,5M para mí". La persona sale del CONCEPTO
+   de la fila de Provisiones_Fijas: "Sueldo Tadeo" → tadeo, "Sueldo Lucas" →
+   lucas. La fila de antes se llamaba "Sueldo dueño imputado": "dueño" es Tadeo.
+   El monto del EERR es la suma de todos; la cuenta es de cada uno. */
+function _sueldoNorm(s){
+  s=String(s||'').toLowerCase();
+  try{s=s.normalize('NFD').replace(/[̀-ͯ]/g,'');}catch(e){}
+  return s;
+}
+function _sueldoPersona(concepto){
+  var w=_sueldoNorm(concepto).replace(/[^a-z0-9]+/g,' ')
+    .replace(/\b(sueldos?|imputad[oa]s?|fijos?|del?|mensual)\b/g,' ').trim().split(/\s+/)[0]||'';
+  return (!w||w==='dueno'||w==='duena')?'tadeo':w;
+}
+function _sueldoNombre(k){ return k&&k!=='?'?k.charAt(0).toUpperCase()+k.slice(1):''; }
+function _sueldoFijoMes(mn,anio,persona){
   var t=0;
-  eerrProvisiones(mn,anio).forEach(function(p){ if(p.cat==='sueldo')t+=Number(p.monto)||0; });
+  eerrProvisiones(mn,anio).forEach(function(p){
+    if(p.cat!=='sueldo')return;
+    if(persona&&_sueldoPersona(p.concepto)!==persona)return;
+    t+=Number(p.monto)||0;
+  });
   return t;
 }
-/* Los giros por mes, con el AÑO (de `g.f`, dd/mm/aaaa): la cuenta cruza meses, y
-   filtrar por el nombre del mes mezclaria marzo 2026 con marzo 2027. */
+/* Las personas con sueldo, en el orden de la hoja, y desde cuando cobra cada una. */
+function _sueldoPersonas(){
+  var src=(typeof D!=='undefined'&&D&&D.provisiones&&D.provisiones.length)?D.provisiones:EERR_PROV_DEFAULT;
+  var o=[],vis={};
+  src.forEach(function(p){
+    if(p.cat!=='sueldo'||!(Number(p.monto)>0))return;
+    var k=_sueldoPersona(p.concepto);
+    if(!vis[k]){vis[k]={k:k,nombre:_sueldoNombre(k),desde:p.desde||''};o.push(vis[k]);}
+    else if(p.desde&&(!vis[k].desde||p.desde<vis[k].desde))vis[k].desde=p.desde;
+  });
+  return o;
+}
+/* Los giros por mes y por persona, con el AÑO (de `g.f`, dd/mm/aaaa): la cuenta
+   cruza meses, y filtrar por el nombre del mes mezclaria marzo 2026 con marzo 2027.
+   Un giro es de la persona cuyo nombre esta en el concepto o las notas ("Tadeo
+   Ustariz"). Si no nombra a nadie: con UNA sola persona cobrando ese mes es de
+   ella; con varias queda SIN ASIGNAR ('?') y la pantalla lo dice — repartirlo
+   seria inventar. `__total` es todo lo girado del mes. */
 function _sueldoGirosPorMes(){
-  var o={};
+  var o={}, pers=_sueldoPersonas();
   ((typeof D!=='undefined'&&D&&D.gastos)||[]).forEach(function(g){
     if(_gastoLinea(g).linea!=='sueldo')return;
     var m=String(g.f||'').match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
     if(!m)return;
-    var ym=m[3]+'-'+('0'+m[2]).slice(-2);
-    o[ym]=(o[ym]||0)+(Number(g.$)||0);
+    var ym=m[3]+'-'+('0'+m[2]).slice(-2), mn=Number(m[2]), an=Number(m[3]), $=Number(g.$)||0;
+    var txt=' '+_sueldoNorm((g.con||'')+' '+(g.not||'')).replace(/[^a-z0-9]+/g,' ')+' ';
+    var quien='';
+    pers.forEach(function(p){ if(!quien&&txt.indexOf(' '+p.k+' ')>=0)quien=p.k; });
+    if(!quien){
+      var cobran=pers.filter(function(p){return _sueldoFijoMes(mn,an,p.k)>0;});
+      quien=cobran.length===1?cobran[0].k:(pers.length===1?pers[0].k:'?');
+    }
+    if(!o[ym])o[ym]={__total:0};
+    o[ym][quien]=(o[ym][quien]||0)+$;
+    o[ym].__total+=$;
   });
   return o;
 }
-/* La cuenta hasta el mes (mn, anio) inclusive. `null` si el mes es anterior al
-   arranque. `mes`: el renglon de ese mes — `sueldo` es lo girado que cubre sueldo
-   (del mes o atrasado) y `adelanto` lo que paso de lo que te tocaba. */
-function _sueldoCuenta(mn,anio){
-  var p=SUELDO_CUENTA_DESDE.split('-'),y=Number(p[0]),m=Number(p[1]);
+/* La cuenta hasta el mes (mn, anio) inclusive: de UNA persona, o de todos si no
+   se pasa. Arranca en SUELDO_CUENTA_DESDE o cuando empezo a cobrar esa persona.
+   `null` si el mes es anterior. `mes`: el renglon de ese mes — `sueldo` es lo
+   girado que cubre sueldo (del mes o atrasado) y `adelanto` lo que paso. */
+function _sueldoCuenta(mn,anio,persona){
+  var ini=SUELDO_CUENTA_DESDE;
+  if(persona){
+    var pp=_sueldoPersonas().filter(function(x){return x.k===persona;})[0];
+    if(!pp)return null;
+    if(pp.desde&&pp.desde>ini)ini=pp.desde;
+  }
+  var p=ini.split('-'),y=Number(p[0]),m=Number(p[1]);
   if(anio*12+mn<y*12+m)return null;
   var giros=_sueldoGirosPorMes(),saldo=0,dev=0,gir=0,meses=[];
   while(y*12+m<=anio*12+mn){
-    var ym=y+'-'+('0'+m).slice(-2),fijo=_sueldoFijoMes(m,y),g=giros[ym]||0;
+    var ym=y+'-'+('0'+m).slice(-2),fijo=_sueldoFijoMes(m,y,persona),gm=giros[ym]||{};
+    var g=persona?(gm[persona]||0):(gm.__total||0);
     var tocaba=saldo+fijo;
     var cubre=Math.min(g,Math.max(tocaba,0));
     saldo=tocaba-g;dev+=fijo;gir+=g;
     meses.push({ym:ym,fijo:fijo,girado:g,sueldo:cubre,adelanto:g-cubre,saldo:saldo});
     m++;if(m>12){m=1;y++;}
   }
-  return {desde:SUELDO_CUENTA_DESDE,meses:meses,devengado:dev,girado:gir,saldo:saldo,mes:meses[meses.length-1]};
+  return {persona:persona||'',nombre:_sueldoNombre(persona),desde:ini,meses:meses,devengado:dev,girado:gir,saldo:saldo,mes:meses[meses.length-1]};
 }
-/* La frase de la cuenta, igual en el EERR y en el Estado de Caja. */
+/* Una cuenta por persona, las que ya arrancaron a ese mes. */
+function _sueldoCuentas(mn,anio){
+  return _sueldoPersonas().map(function(p){return _sueldoCuenta(mn,anio,p.k);}).filter(Boolean);
+}
+/* Lo girado ese mes que no nombra a nadie, con mas de una persona cobrando. */
+function _sueldoSinAsignar(mn,anio){
+  var g=_sueldoGirosPorMes()[anio+'-'+('0'+mn).slice(-2)]||{};
+  return g['?']||0;
+}
+/* La frase de la cuenta, igual en el EERR y en el Estado de Caja. Con una sola
+   persona le habla a Tadeo ("te debe"); con varias, nombra a cada una. */
 function _sueldoCuentaTxt(c){
   if(!c)return '';
   var MS=['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
   var d=c.desde.split('-'),desde=MS[Number(d[1])-1]+' '+d[0];
-  var s=Math.round(c.saldo);
-  if(s>0)return 'Cuenta del sueldo desde '+desde+': te tocaban $'+f$(Math.round(c.devengado))+' y te giraste $'+f$(Math.round(c.girado))+' → <b>Maleu te debe $'+f$(s)+'</b>.';
-  if(s<0)return 'Cuenta del sueldo desde '+desde+': te tocaban $'+f$(Math.round(c.devengado))+' y te giraste $'+f$(Math.round(c.girado))+' → <b style="color:var(--r)">te adelantaste $'+f$(-s)+'</b>. No es costo de Maleu: se compensa girándote menos. Si no se compensa, es sacar ganancia, y Fede fue claro: los primeros dos años no hay.';
-  return 'Cuenta del sueldo desde '+desde+': al día.';
+  var s=Math.round(c.saldo), tu=!c.nombre;
+  var cab=(tu?'Cuenta':'<b>'+_semprepEsc(c.nombre)+'</b> — cuenta')+' del sueldo desde '+desde+': '
+    +(tu?'te tocaban':'le tocaban')+' $'+f$(Math.round(c.devengado))+' y '+(tu?'te giraste':'se giró')+' $'+f$(Math.round(c.girado));
+  if(s>0)return cab+' → <b>Maleu '+(tu?'te':'le')+' debe $'+f$(s)+'</b>.';
+  if(s<0)return cab+' → <b style="color:var(--r)">'+(tu?'te adelantaste':'se adelantó')+' $'+f$(-s)+'</b>. No es costo de Maleu: se compensa '+(tu?'girándote':'girándose')+' menos. Si no se compensa, es sacar ganancia, y Fede fue claro: los primeros dos años no hay.';
+  return cab+': al día.';
+}
+/* Las frases de todas las cuentas de un mes, con el aviso de lo sin asignar. */
+function _sueldoCuentasTxt(mn,anio){
+  var pers=_sueldoPersonas(), out=[];
+  if(pers.length<=1){ var c=_sueldoCuenta(mn,anio); if(c)out.push(_sueldoCuentaTxt(c)); }
+  else _sueldoCuentas(mn,anio).forEach(function(c){ out.push(_sueldoCuentaTxt(c)); });
+  var sa=_sueldoSinAsignar(mn,anio);
+  if(sa>0)out.push('<b style="color:var(--r)">⚠ $'+f$(Math.round(sa))+' girados como sueldo no dicen de quién son</b>: poné el nombre en el concepto del gasto.');
+  return out;
 }
 // Detecta movimiento "Herramienta" que es realmente Servicios (telefonía)
 function eerrEsServicio(txt){
@@ -20484,7 +20686,7 @@ function rEERR_financiero(body){
     var totalSalidas=totSalidas;
     var CATS=[
       {n:'Proveedores de mercadería',v:pagProv,det:pagProvD,icon:'📦',col:'#F07D47'},
-      {n:'Sueldo girado a Tadeo',v:sueldoGirado,det:sueldoGiradoD,icon:'👤',col:'#5C3A2A'},
+      {n:(_sueldoPersonas().length>1?'Sueldos girados':'Sueldo girado a Tadeo'),v:sueldoGirado,det:sueldoGiradoD,icon:'👤',col:'#5C3A2A'},
       {n:'Delivery / Fletes / Nafta',v:pagFletes,det:pagFletesD,icon:'🚚',col:'#7A4A4A'},
       {n:'Software y herramientas',v:pagSoftware,det:pagSoftwareD,icon:'💻',col:'#A89880'},
       {n:'Marketing',v:pagMarketing,det:pagMarketingD,icon:'📣',col:'#4CAF50'},
@@ -20636,7 +20838,12 @@ function rEERR_financiero(body){
     // Sueldo del mes
     html+='<div style="padding:0 14px 14px"><div style="border-top:1px solid var(--cd);padding-top:10px"><div style="font-size:11px;font-weight:700;color:var(--b);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">Sueldo del dueño · '+mesNom+'</div>';
     html+='<table style="width:100%;font-size:12px;font-variant-numeric:tabular-nums;border-collapse:collapse">';
-    html+='<tr><td style="padding:4px 0;color:var(--ink2)">Sueldo fijo</td><td style="padding:4px 0;text-align:right;color:var(--ink);font-weight:600">$'+f$(Math.round(SUELDO_MENSUAL))+'</td></tr>';
+    (function(){
+      var ps=_sueldoPersonas(), mnC=eerrMes.getMonth()+1, anC=eerrMes.getFullYear();
+      var cobran=ps.filter(function(p){return _sueldoFijoMes(mnC,anC,p.k)>0;});
+      var det=cobran.length>1?' <span style="color:var(--ink3);font-weight:400">('+cobran.map(function(p){return _semprepEsc(p.nombre)+' $'+f$(Math.round(_sueldoFijoMes(mnC,anC,p.k)));}).join(' · ')+')</span>':'';
+      html+='<tr><td style="padding:4px 0;color:var(--ink2)">'+(cobran.length>1?'Sueldos fijos':'Sueldo fijo')+'</td><td style="padding:4px 0;text-align:right;color:var(--ink);font-weight:600">$'+f$(Math.round(SUELDO_MENSUAL))+det+'</td></tr>';
+    })();
     html+='<tr><td style="padding:4px 0;color:var(--ink2)">Programa quincenal</td><td style="padding:4px 0;text-align:right;color:var(--ink);font-weight:600">$'+f$(GIRO_QUINCENAL)+' día '+DIA_PRIMER_GIRO+' · $'+f$(GIRO_QUINCENAL)+' día '+DIA_SEGUNDO_GIRO+'</td></tr>';
     html+='<tr><td style="padding:4px 0;color:var(--ink2)">Girado en lo que va</td><td style="padding:4px 0;text-align:right;color:var(--ink);font-weight:600">$'+f$(Math.round(sueldoGirado))+'</td></tr>';
     html+='<tr><td style="padding:4px 0;color:var(--ink2)">Pendiente de girar</td><td style="padding:4px 0;text-align:right;color:'+(sueldoPendiente>0?'var(--o)':'var(--gd)')+';font-weight:700">$'+f$(Math.round(sueldoPendiente))+'</td></tr>';
@@ -20653,8 +20860,8 @@ function rEERR_financiero(body){
       html+='<tr><td colspan="2" style="padding-top:8px"><div style="background:'+bg+';color:'+color+';padding:8px 10px;border-radius:4px;font-size:12px;font-weight:600;border:1px solid '+color+'">'+icon+' '+msg+'</div></td></tr>';
     }
     /* La cuenta acumulada (15/9/2026): el mes solo no dice si Maleu te debe. */
-    var _cSue=_sueldoCuenta(eerrMes.getMonth()+1,eerrMes.getFullYear());
-    if(_cSue)html+='<tr><td colspan="2" class="eerr-sueldo-cuenta" style="padding-top:8px;font-size:12px;color:var(--ink2);line-height:1.5">'+_sueldoCuentaTxt(_cSue)+'</td></tr>';
+    var _cSue=_sueldoCuentasTxt(eerrMes.getMonth()+1,eerrMes.getFullYear());
+    if(_cSue.length)html+='<tr><td colspan="2" class="eerr-sueldo-cuenta" style="padding-top:8px;font-size:12px;color:var(--ink2);line-height:1.5">'+_cSue.join('<br>')+'</td></tr>';
     html+='</table></div></div>';
 
     // ── Sub-indicadores: alerta de flujo recurrente + proyección de cierre ──
@@ -20916,10 +21123,17 @@ function rEERR_financiero(body){
   if(pagOtroEst>0){html+=subleaf('Otros estructura',-pagOtroEst);html+=detailRows(pagOtroEstD);}
 
   // Sueldo girado (15/9/2026: lo de mas es adelanto, no ganancia que se reparte)
-  html+=leaf('Sueldo girado a Tadeo',-sueldoGirado);
+  var _variosS=_sueldoPersonas().length>1;
+  html+=leaf(_variosS?'Sueldos girados':'Sueldo girado a Tadeo',-sueldoGirado);
   (function(){
-    var c=_sueldoCuenta(mesNum,anioN);
-    if(c&&c.mes&&c.mes.adelanto>0)html+=subleaf('de eso, adelanto: más de lo que te tocaba (no es costo)',-c.mes.adelanto,true);
+    if(!_variosS){
+      var c=_sueldoCuenta(mesNum,anioN);
+      if(c&&c.mes&&c.mes.adelanto>0)html+=subleaf('de eso, adelanto: más de lo que te tocaba (no es costo)',-c.mes.adelanto,true);
+      return;
+    }
+    _sueldoCuentas(mesNum,anioN).forEach(function(c){
+      if(c.mes&&c.mes.adelanto>0)html+=subleaf('de eso, adelanto de '+_semprepEsc(c.nombre)+': más de lo que le tocaba (no es costo)',-c.mes.adelanto,true);
+    });
   })();
   html+=detailRows(sueldoGiradoD);
 
@@ -21070,7 +21284,6 @@ function rEERR_dual(body){
   var provs=eerrProvisiones(mesNum,eerrMes.getFullYear());
   var sueldoGiradoMes=f_sueldo,sueldoFijo=_sueldoFijoMes(mesNum,eerrMes.getFullYear());
   if(sueldoFijo>0)f_sueldo=sueldoFijo;
-  var sueldoCuenta=_sueldoCuenta(mesNum,eerrMes.getFullYear());
   var serviciosProv=0,serviciosProvCon='';
   var ocupacionProv=0,ocupacionProvCon='';
   var amortProv=0,amortProvCon='';
@@ -21299,12 +21512,22 @@ function rEERR_dual(body){
   html+=detailRows(f_ocupacionD);
   if(ocupacionProv>0)html+=subleaf('+ Provisión: alquiler equivalente del cuartito ('+ocupacionProvCon+')',-ocupacionProv,true);
   if(sueldoFijo>0){
-    html+=leaf(eL('Tu sueldo fijo','Lo que Maleu te paga por trabajar: $'+f$(Math.round(sueldoFijo))+' por mes (hoja Provisiones_Fijas). Va acá te lo gires o no: lo que te giraste de más o de menos no toca la ganancia, va a la cuenta del sueldo. Fede: el sueldo paga el trabajo; lo que queda es del negocio.'),-f_sueldo);
+    var _persS=_sueldoPersonas(), _anS=eerrMes.getFullYear();
+    html+=leaf(eL(_persS.length>1?'Sueldos fijos':'Tu sueldo fijo','Lo que Maleu paga por trabajar: $'+f$(Math.round(sueldoFijo))+' este mes (hoja Provisiones_Fijas, una fila por persona). Va acá se lo giren o no: lo girado de más o de menos no toca la ganancia, va a la cuenta del sueldo de cada uno. Fede: el sueldo paga el trabajo; lo que queda es del negocio.'),-f_sueldo);
     /* Una fila de texto y no un numero: un -$1.400.000 abajo del -$1.200.000 se
        leeria como que suma. */
-    var _gm=Math.round(sueldoGiradoMes),_fj=Math.round(sueldoFijo),_dif=_gm-_fj;
-    var _txtS='Te giraste $'+f$(_gm)+' en '+mesNom.toLowerCase()+(_dif>0?': $'+f$(_dif)+' más que el fijo, que no son costo.':(_dif<0?': $'+f$(-_dif)+' menos, que Maleu te queda debiendo.':'.'));
-    html+='<tr class="subleaf calc eerr-sueldo-mes"><td colspan="2">'+_txtS+(sueldoCuenta?'<br>'+_sueldoCuentaTxt(sueldoCuenta):'')+'</td></tr>';
+    var _txtS;
+    if(_persS.length<=1){
+      var _gm=Math.round(sueldoGiradoMes),_fj=Math.round(sueldoFijo),_dif=_gm-_fj;
+      _txtS='Te giraste $'+f$(_gm)+' en '+mesNom.toLowerCase()+(_dif>0?': $'+f$(_dif)+' más que el fijo, que no son costo.':(_dif<0?': $'+f$(-_dif)+' menos, que Maleu te queda debiendo.':'.'));
+    } else {
+      var _gmP=_sueldoGirosPorMes()[_anS+'-'+('0'+mesNum).slice(-2)]||{};
+      _txtS=_persS.filter(function(p){return _sueldoFijoMes(mesNum,_anS,p.k)>0||(_gmP[p.k]||0)>0;}).map(function(p){
+        return '<b>'+_semprepEsc(p.nombre)+'</b>: fijo $'+f$(Math.round(_sueldoFijoMes(mesNum,_anS,p.k)))+' · se giró $'+f$(Math.round(_gmP[p.k]||0));
+      }).join(' · ')+' (en '+mesNom.toLowerCase()+').';
+    }
+    var _ctsS=_sueldoCuentasTxt(mesNum,_anS);
+    html+='<tr class="subleaf calc eerr-sueldo-mes"><td colspan="2">'+_txtS+(_ctsS.length?'<br>'+_ctsS.join('<br>'):'')+'</td></tr>';
   } else {
     html+=leaf(eL('Tu sueldo','No hay sueldo fijo cargado para este mes en Provisiones_Fijas: se muestra lo girado.'),-f_sueldo);
   }

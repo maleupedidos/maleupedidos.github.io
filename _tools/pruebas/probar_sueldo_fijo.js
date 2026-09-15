@@ -170,6 +170,30 @@ const FILA = `function(pref){var rs=[].slice.call(document.querySelectorAll('#ee
     const F3 = await ev(cli, `(function(){var b=document.getElementById('eerrBody').textContent;return {adel:/adelanto: más de lo que te tocaba/.test(b)};})()`);
     chk('septiembre con 3.500.000 girados: aparece el adelanto aparte', !!F3 && F3.adel === true, F3);
 
+    console.log('\n-- dos personas: desde septiembre Tadeo 1.500.000 y Lucas 1.000.000 --');
+    await ev(cli, `D.gastos=${JSON.stringify(GASTOS)}.concat([{f:'12/09/2026',fFull:'12/09/2026 10:00',ts:1,mes:'Septiembre',cat:'Sueldo',con:'Varios',$:100000,not:''}]);
+      D.provisiones=[{concepto:'Sueldo Tadeo',cat:'sueldo',monto:1200000,desde:'2026-01',hasta:'2026-08'},{concepto:'Sueldo Tadeo',cat:'sueldo',monto:1500000,desde:'2026-09',hasta:null},
+        {concepto:'Sueldo Lucas',cat:'sueldo',monto:1000000,desde:'2026-09',hasta:null}].concat(${JSON.stringify(PROV.slice(1))});`);
+    const P = await ev(cli, `(function(){var t=_sueldoCuenta(9,2026,'tadeo'),l=_sueldoCuenta(9,2026,'lucas');
+      return {pers:_sueldoPersonas().map(function(p){return p.k+':'+p.desde;}),f9:_sueldoFijoMes(9,2026),f8:_sueldoFijoMes(8,2026),L9:_eerrMesGastos(9,2026).L.sueldo,
+        t:[t.desde,t.devengado,t.girado,t.saldo],l:[l.desde,l.devengado,l.girado,l.saldo],lAgo:_sueldoCuenta(8,2026,'lucas'),sin:_sueldoSinAsignar(9,2026),
+        dueno:_sueldoPersona('Sueldo dueño imputado')};})()`);
+    chk('las personas salen del concepto: tadeo (desde 2026-01) y lucas (desde 2026-09); "dueño" es Tadeo', !!P && JSON.stringify(P.pers) === '["tadeo:2026-01","lucas:2026-09"]' && P.dueno === 'tadeo', P);
+    chk('septiembre carga 2.500.000 de sueldos en el EERR; agosto 1.200.000', !!P && P.f9 === 2500000 && P.L9 === 2500000 && P.f8 === 1200000, P);
+    chk('cuenta de Tadeo: desde marzo, 6 × 1.200.000 + 1.500.000 = 8.700.000, giró 6.600.000 → le deben 2.100.000', !!P && JSON.stringify(P.t) === '["2026-03",8700000,6600000,2100000]', P && P.t);
+    chk('cuenta de Lucas: desde septiembre, 1.000.000, giró 0 → le deben 1.000.000; en agosto no existe', !!P && JSON.stringify(P.l) === '["2026-09",1000000,0,1000000]' && P.lAgo === null, P && [P.l, P.lAgo]);
+    chk('un giro de 100.000 que no nombra a nadie, con dos cobrando, queda SIN ASIGNAR', !!P && P.sin === 100000, P && P.sin);
+    await pint(8, 'economico');
+    const E3 = await ev(cli, `(function(){var f=${FILA};return {sueldo:f('Sueldos fijos'),mes:(document.querySelector('.eerr-sueldo-mes')||{}).textContent||''};})()`);
+    chk('EERR de septiembre: "Sueldos fijos" -2.500.000', !!E3 && Math.abs(E3.sueldo) === 2500000, E3);
+    chk('y por persona: Tadeo fijo 1.500.000 · Lucas fijo 1.000.000, las dos cuentas y el aviso de lo sin asignar',
+      !!E3 && /Tadeo: fijo \$1\.500\.000 · se giró \$500\.000/.test(E3.mes) && /Lucas: fijo \$1\.000\.000 · se giró \$0/.test(E3.mes)
+      && /Tadeo — cuenta del sueldo desde marzo 2026.*Maleu le debe \$2\.100\.000/.test(E3.mes) && /Lucas — cuenta del sueldo desde septiembre 2026.*Maleu le debe \$1\.000\.000/.test(E3.mes)
+      && /\$100\.000 girados como sueldo no dicen de quién son/.test(E3.mes), E3 && E3.mes);
+    await pint(8, 'financiero');
+    const F4 = await ev(cli, `(function(){var b=document.getElementById('eerrBody').textContent;return {girados:/Sueldos girados/.test(b),fijos:/Sueldos fijos\\s*\\$2\\.500\\.000/.test(b),quinc:/\\$1\\.250\\.000 día 5/.test(b)};})()`);
+    chk('financiero con dos: "Sueldos girados", Estado de Caja con 2.500.000 y quincenal 1.250.000', !!F4 && F4.girados && F4.fijos && F4.quinc, F4);
+
     const err = await ev(cli, `(window.__err||[]).filter(function(e){return /sueldo|eerr|EERR|_sueldo/i.test(e);})`);
     chk('sin errores de JS del EERR', Array.isArray(err) && err.length === 0, err);
   } catch (e) { console.log('  REVENTO: ' + (e && e.message)); mal++; }

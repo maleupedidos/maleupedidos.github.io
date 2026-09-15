@@ -47,7 +47,9 @@ function sacarVar(nombre) {
 
 const FNS = ['_proxDiaSem', '_semprepUltDiaPedido', '_semprep2', '_semprepDMY',
   '_semprepHace', '_semprepEsc', '_semprepNum', '_semprepQuedan',
-  '_semprepPorSem', '_semprepMin', '_semprepOtrosProv'].map(sacar).join('\n');
+  '_semprepPorSem', '_semprepMin', '_semprepOtrosProv',
+  /* el estimativo de lo que hay que pedir (15/9/2026) */
+  '_semprepEstimar', '_semprepPlata', 'f$'].map(sacar).join('\n') + "\nvar SEMPREP_COPIA='';";
 const CFG = sacarVar('SEMPREP_OTRO_PROV');
 
 let ok = 0, mal = 0;
