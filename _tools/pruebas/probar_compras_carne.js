@@ -1,21 +1,31 @@
-/* Abastecimiento → 🥩 CARNE: las compras a los proveedores de carne (15/9/2026).
+/* Abastecimiento → + NUEVO → proveedor de carne: la factura de la carne (15/9/2026).
 
    node probar_compras_carne.js [390|1440]
    APP=app_viejo_tmp.html node probar_compras_carne.js 390    ← la direccion contraria
 
+   A la mañana del 15/9 fue una sub-tab propia (🥩 CARNE); a la tarde se metio adentro
+   de + NUEVO, que es donde ya se elegia a Caco y se veia cuanta carne falta.
+
    Todo el backend va STUBBEADO con datos inventados (el repo es publico). Sin token.
    Sostiene:
-   · la sub-tab existe y entra en la barra sin desbordar;
-   · arriba dice lo que se debe de carne, sacado de la MISMA deuda que PAGOS;
+   · vuelven a ser 5 sub-tabs, sin achicar la letra, y quien tenia guardada CARNE cae
+     en + NUEVO;
+   · la factura aparece SOLO con un proveedor de carne elegido: arriba lo que se debe
+     (la MISMA deuda que PAGOS) y el boton; abajo de los cortes, las facturas;
    · cada compra dice su estado: debe (con la semana), pagada antes del libro, anulada;
    · el cruce con las piezas pesadas dice el % contra la factura;
-   · el formulario trae la lista de precios del proveedor (y la variante "entero"),
-     deja tipear kilos con coma sin perder el foco, suma, y ofrece actualizar el
-     costo de Productos cuando cambio;
-   · con el formulario tocado, el ERP sabe que se esta editando (no repinta encima);
-   · el POST lleva lo tipeado y un clientOpId, y al guardar el formulario se cierra;
-   · sin precio no manda nada y lo dice;
-   · anular manda el id;
+   · el formulario trae el proveedor elegido en + NUEVO; para el proveedor del corte el
+     precio sugerido es el costo de Productos (la picaña a 18.000 aunque la ultima
+     factura diga 17.500), y para otro proveedor su ultima factura;
+   · deja tipear kilos con coma sin perder el foco, suma, y ofrece actualizar el costo
+     cuando el precio cambia;
+   · con el formulario tocado el ERP sabe que se esta editando; cambiar de proveedor
+     pregunta antes de descartarlo (y si no, vuelve al proveedor de antes);
+   · el POST lleva lo tipeado y un clientOpId; al guardar se cierra y el aviso dice
+     cuantos pedidos se corrigieron;
+   · sin precio no manda nada y lo dice; anular manda el id;
+   · la lista de precios: "Cambiar" manda compraCarneCosto, y un dato que llega mientras
+     se tipea no borra lo tipeado;
    · si el libro no llega, dice que no pudo (no "no hay compras");
    · PAGOS avisa si el servidor no pudo leer las compras, y el detalle dice "cortes";
    · minimo tactil y sin errores de JS. */
@@ -53,15 +63,26 @@ const COMPRAS = {
     { id: 'CC-0007', fecha: '14/09/2026', t: 2, sem: 38, prov: 'Caco', estado: 'Anulada', fuera: false, nota: '', cargo: 'Tadeo',
       lineas: [L('CLo', 'Carne Lomo', '', 1, 1)], kg: 1, total: 1, piezas: { n: 0, kg: 0, porCorte: {} } },
     { id: 'CC-0005', fecha: '01/09/2026', t: 0, sem: 36, prov: 'Caco', estado: 'Recibida', fuera: true, nota: '', cargo: 'Tadeo',
-      lineas: [L('CCo', 'Carne Colita de Cuadril', '', 13.86, 18800)], kg: 13.86, total: 260568, piezas: { n: 0, kg: 0, porCorte: {} } }
+      lineas: [L('CCo', 'Carne Colita de Cuadril', '', 13.86, 18800), L('CPi', 'Carne Picaña', '', 9.8, 17500)], kg: 23.66, total: 432068, piezas: { n: 0, kg: 0, porCorte: {} } }
   ],
-  cortes: [{ abbr: 'CCo', nombre: 'Carne Colita de Cuadril', costo: 18800, prov: 'Caco' }, { abbr: 'CEn', nombre: 'Carne Entraña', costo: 30000, prov: 'Caco' },
-    { abbr: 'CLo', nombre: 'Carne Lomo', costo: 28500, prov: 'Caco' }, { abbr: 'CPi', nombre: 'Carne Picaña', costo: 17500, prov: 'Caco' }, { abbr: 'CVa', nombre: 'Carne Vacío', costo: 18200, prov: 'Caco' }],
+  /* Los costos de hoy: la factura del 11/9 ya los movio, y la picaña se cambio a mano. */
+  cortes: [{ abbr: 'CCo', nombre: 'Carne Colita de Cuadril', costo: 19000, prov: 'Caco' }, { abbr: 'CEn', nombre: 'Carne Entraña', costo: 31000, prov: 'Caco' },
+    { abbr: 'CLo', nombre: 'Carne Lomo', costo: 28500, prov: 'Caco' }, { abbr: 'CPi', nombre: 'Carne Picaña', costo: 18000, prov: 'Caco' }, { abbr: 'CVa', nombre: 'Carne Vacío', costo: 18200, prov: 'Caco' }],
   provs: ['Caco', 'Grupo Tresnal'],
   precios: { 'Caco|CLo|': { precio: 28500, fecha: '11/09/2026' }, 'Caco|CCo|': { precio: 19000, fecha: '11/09/2026' }, 'Caco|CEn|': { precio: 31000, fecha: '11/09/2026' },
-    'Caco|CVa|': { precio: 18200, fecha: '11/09/2026' }, 'Caco|CVa|entero': { precio: 18500, fecha: '11/09/2026' }, 'Grupo Tresnal|CLo|': { precio: 28500, fecha: '20/08/2026' } }
+    'Caco|CVa|': { precio: 18200, fecha: '11/09/2026' }, 'Caco|CVa|entero': { precio: 18500, fecha: '11/09/2026' }, 'Caco|CPi|': { precio: 17500, fecha: '01/09/2026' },
+    'Grupo Tresnal|CLo|': { precio: 28000, fecha: '20/08/2026' } }
 };
 COMPRAS.compras.sort((a, b) => b.t - a.t);
+const corte = (a, n, c) => ({ a, n: 'Carnes — ' + n, cat: 'Carnes', c, s: 2, u: 'kg', dem: 10, wk: [9, 10, 11], dep: 'ustariz', pd: { ustariz: 2, moresco: 0 } });
+const CAT = {
+  ts: 1, proveedores: ['Prov Uno', 'Caco'],
+  deps: [{ id: 'ustariz', nombre: 'Depósito Ustariz', dueno: 'Tadeo' }, { id: 'moresco', nombre: 'Depósito Moresco', dueno: 'Lucas' }],
+  productos: {
+    'Prov Uno': [{ a: 'PPM', n: 'Pack Pizzas — Muzzarella', cat: 'Pack Pizzas', c: 9000, s: 0, u: 'u', dem: 10, wk: [9, 10, 11], dep: 'ustariz', pd: { ustariz: 0, moresco: 0 } }],
+    'Caco': [corte('CCo', 'Colita de Cuadril', 19000), corte('CEn', 'Entraña', 31000), corte('CLo', 'Lomo', 28500), corte('CPi', 'Picaña', 18000), corte('CVa', 'Vacío', 18200)]
+  }
+};
 const itemsCaco = lin6.map(l => ({ r: 0, prod: 'Carnes — ' + l.corte.replace(/^Carne /, '') + (l.det ? ' ' + l.det : ''), abbr: l.abbr, q: l.kg, costoU: l.precio, costo: l.total, sem: '37', canal: 'Compra de carne', cliente: 'CC-0006 del 11/09', nped: '', cc: 'CC-0006' }));
 const BUSQ = (ccError) => ({ ts: Date.now() + 60000, provs: [], clientes: [], total: 0, ocs: [], semActual: 38, anioActual: 2026, stocksProductos: {}, enPoderVend: [], ccError: ccError || '',
   deudas: [{ n: 'Caco', total: 1709470, original: 1709470, pagado: 0, pagosLibres: [], saldoLibreSobrante: 0,
@@ -74,14 +95,16 @@ const EXTRA = `
   (function(){
     var fase=(location.search.match(/fase=([a-z])/)||[])[1]||'a';
     window.__fase=fase; window.__gets=[]; window.__posts=[];
-    try{ localStorage.removeItem('maleu_busqueda'); localStorage.removeItem('maleu_compras_carne'); localStorage.setItem('maleu_busqueda_tab','proveedores'); }catch(e){}
+    try{ localStorage.removeItem('maleu_busqueda'); localStorage.removeItem('maleu_compras_carne'); localStorage.setItem('maleu_busqueda_tab', fase==='p' ? 'carne' : 'proveedores'); }catch(e){}
     var o=window.fetch; window.fetch=function(u,x){
       var url=String((u&&u.url)||u||'');
       var post=x&&String(x.method||'').toUpperCase()==='POST';
       if(url.indexOf('script.google.com')>-1&&post){
         var b={}; try{ b=JSON.parse(x.body); }catch(e){ b={crudo:String(x.body)}; } window.__posts.push(b);
-        var r = b.action==='compraCarneGuardar' ? {ok:true,id:b.id||'CC-0008',editada:!!b.id,fuera:false,total:(b.lineas||[]).reduce(function(a,l){return a+Math.round(l.kg*l.precio);},0),kg:1,lineas:(b.lineas||[]).length,costos:(b.costos||[]).map(function(c){return {abbr:c.abbr,antes:1,ahora:c.precio};})}
-          : b.action==='compraCarneAnular' ? {ok:true,id:b.id,total:1} : {ok:true};
+        var r = b.action==='compraCarneGuardar' ? {ok:true,id:b.id||'CC-0008',editada:!!b.id,fuera:false,total:(b.lineas||[]).reduce(function(a,l){return a+Math.round(l.kg*l.precio);},0),kg:1,lineas:(b.lineas||[]).length,costos:(b.costos||[]).map(function(c){return {abbr:c.abbr,antes:1,ahora:c.precio};}),
+                costeo:{piezas:35,pedidos:[{ref:'Home #934',antes:17747.2,ahora:17936},{ref:'Pilar #60',antes:167824,ahora:169120}],error:''}}
+          : b.action==='compraCarneAnular' ? {ok:true,id:b.id,total:1}
+          : b.action==='compraCarneCosto' ? {ok:true,abbr:b.abbr,antes:18000,ahora:b.precio,cambio:true} : {ok:true};
         return new Promise(function(res){ setTimeout(function(){ res(new Response(JSON.stringify(r),{status:200,headers:{'Content-Type':'application/json'}})); },300); });
       }
       if(url.indexOf('script.google.com')>-1){
@@ -90,7 +113,7 @@ const EXTRA = `
           : a==='busqueda' ? (fase==='p' ? ${JSON.stringify(BUSQ('Service Spreadsheets timed out'))} : ${JSON.stringify(BUSQ(''))})
           : a==='pedidosLight' ? ${JSON.stringify(LIGHT)}
           : a==='admin' ? Object.assign({}, ${JSON.stringify(LIGHT)}, {oc:{lista:[]}, stock:[]})
-          : a==='catalogo' ? {proveedores:[],productos:{}}
+          : a==='catalogo' ? ${JSON.stringify(CAT)}
           : a==='ocLight' ? {ok:true,oc:{lista:[]}} : a==='cobrosPendientes' ? {ok:true,cobros:[]}
           : {ok:false,error:'stub'};
         var txt=JSON.stringify(cuerpo);
@@ -109,11 +132,14 @@ const EXTRA = `
     await cli.enviar('Page.navigate', { url: BASE + '/' + APP + '?prueba=1&fase=' + fase });
     if (!await esperar(cli, `typeof go==='function' && window.__fase===${JSON.stringify(fase)}`, 60000)) { console.log('  el ERP no arranco'); salir(1); }
   };
-  const aCarne = async () => {
+  const elegirProv = async prov => evaluar(cli, `(function(){ var s=document.getElementById('npProv'); s.value=${JSON.stringify(prov)}; s.dispatchEvent(new Event('change',{bubbles:true})); return s.value; })()`);
+  const aNuevo = async () => {
     await evaluar(cli, `go('busqueda'); 1`);
     await esperar(cli, `typeof abaSwitchTab==='function'`, 30000);
-    await evaluar(cli, `abaSwitchTab('carne'); 1`);
+    await evaluar(cli, `abaSwitchTab('nuevo'); 1`);
+    await esperar(cli, `[].some.call(document.querySelectorAll('#npProv option'),function(o){return o.value==='Caco';})`, 15000);
   };
+  const oculto = id => `(function(){ var e=document.getElementById(${JSON.stringify(id)}); return !e || e.classList.contains('hidden') || e.getBoundingClientRect().height===0; })()`;
   const tipear = async (sel, txt) => {
     await evaluar(cli, `(function(){ var e=document.querySelector(${JSON.stringify(sel)}); e.focus(); e.select && e.select(); return 1; })()`);
     for (const ch of txt) { await cli.enviar('Input.insertText', { text: ch }); await pausa(40); }
@@ -122,35 +148,47 @@ const EXTRA = `
     await cli.enviar('Page.enable'); await cli.enviar('Runtime.enable');
     await cli.enviar('Emulation.setDeviceMetricsOverride', { width: ANCHO, height: ANCHO <= 560 ? 844 : 900, deviceScaleFactor: 1, mobile: ANCHO <= 560 });
     await cli.enviar('Page.addScriptToEvaluateOnNewDocument', { source: prep('x') + EXTRA });
-    console.log('\n== Abastecimiento → CARNE · ' + ANCHO + 'px · ' + APP + ' ==');
+    console.log('\n== Abastecimiento → + NUEVO → factura de la carne · ' + ANCHO + 'px · ' + APP + ' ==');
 
     await ir('a');
-    await aCarne();
-    const pinto = await esperar(cli, `document.querySelectorAll('#abaCcListBox .cc-card').length===3 && !!document.querySelector('#abaCcTop .cc-deuda-prov')`, 30000);
-    chk('la sub-tab CARNE dibuja las 3 compras y la deuda (sin esto lo de abajo no mide nada)', pinto);
-    if (!pinto) { chk('sin errores de JS', errores.length === 0, errores.slice(0, 3)); throw new Error('no pinto'); }
+    await aNuevo();
 
     /* ── La barra de sub-tabs ── */
     const tabs = await evaluar(cli, `(function(){ var ts=[].slice.call(document.querySelectorAll('#pg-abast .tabs .tab, .tabs .tab')).filter(function(t){return t.getBoundingClientRect().width>0;});
       var bar=ts[0]&&ts[0].parentElement; return { n: ts.length, txt: ts.map(function(t){return t.textContent.trim();}),
+        letra: ts[0] ? parseFloat(getComputedStyle(ts[0]).fontSize) : 0,
         corta: ts.filter(function(t){ return t.scrollWidth>t.clientWidth+1 || t.getBoundingClientRect().height>60; }).map(function(t){return t.textContent+' '+t.scrollWidth+'/'+t.clientWidth+' h'+Math.round(t.getBoundingClientRect().height);}),
         barDesb: bar ? bar.scrollWidth>bar.clientWidth+1 : null, activa: (document.querySelector('.tabs .tab.active')||{}).textContent }; })()`);
-    chk('hay 6 sub-tabs y la sexta es 🥩 CARNE', tabs.n === 6 && /CARNE/.test(tabs.txt[5]), tabs.txt);
+    chk('vuelven a ser 5 sub-tabs, ninguna es CARNE', tabs.n === 5 && !tabs.txt.some(t => /CARNE/.test(t)), tabs.txt);
+    chk('sin achicar la letra (el 11,5 px era por la sexta)', tabs.letra >= 12, tabs.letra);
     chk('ninguna se corta ni se parte en dos renglones', tabs.corta.length === 0 && tabs.barDesb === false, tabs);
-    chk('CARNE queda marcada', /CARNE/.test(tabs.activa || ''), tabs.activa);
+
+    /* ── Solo con un proveedor de carne ── */
+    chk('sin proveedor elegido no hay factura de carne', await evaluar(cli, oculto('abaCcArriba') + ' && ' + oculto('abaCcAbajo')));
+    await elegirProv('Prov Uno');
+    await esperar(cli, `!!document.querySelector('#npProductsList .np-prod-card')`, 5000);
+    chk('con un proveedor que no es de carne tampoco', await evaluar(cli, oculto('abaCcArriba') + ' && ' + oculto('abaCcAbajo')));
+    await elegirProv('Caco');
+    const pinto = await esperar(cli, `document.querySelectorAll('#abaCcListBox .cc-card').length===3 && !!document.querySelector('#abaCcTop .cc-deuda-prov')`, 30000);
+    chk('eligiendo a Caco aparecen las 3 facturas y la deuda (sin esto lo de abajo no mide nada)', pinto);
+    if (!pinto) { chk('sin errores de JS', errores.length === 0, errores.slice(0, 3)); throw new Error('no pinto'); }
+    const orden = await evaluar(cli, `(function(){ var y=function(id){ var e=document.getElementById(id); return e ? Math.round(e.getBoundingClientRect().top + window.scrollY) : -1; };
+      return { arriba:y('abaCcArriba'), cortes:y('npProductsList'), abajo:y('abaCcAbajo'), nota:/factura se carga acá arriba/.test(document.getElementById('npProductsList').textContent) }; })()`);
+    chk('la deuda y el botón arriba de los cortes, las facturas abajo', orden.arriba >= 0 && orden.arriba < orden.cortes && orden.cortes < orden.abajo, orden);
+    chk('el aviso de los cortes dice que la factura se carga ahí arriba', orden.nota, orden);
 
     /* ── Arriba: lo que se debe ── */
     const top = await evaluar(cli, `(function(){ var t=document.getElementById('abaCcTop'); return { txt:t.textContent.replace(/\\s+/g,' '), provs:[].map.call(t.querySelectorAll('.cc-deuda-prov'),function(x){return x.textContent.replace(/\\s+/g,' ');}),
-      pagar: !!t.querySelector('.cc-b-pagar'), nueva: !!t.querySelector('.cc-nueva') }; })()`);
+      pagar: !!t.querySelector('.cc-b-pagar'), nueva: (t.querySelector('.cc-nueva')||{}).textContent||'' }; })()`);
     chk('la deuda de carne: Caco $1.709.470, semana 37 (y no Prov Uno, que no es de carne)', top.provs.length === 1 && /Caco/.test(top.provs[0]) && /1\.709\.470/.test(top.provs[0]) && /semana 37/.test(top.txt) && !/Prov Uno/.test(top.txt), top);
-    chk('con el boton para ir a pagar y el de cargar compra', top.pagar && top.nueva, top);
+    chk('con el botón para ir a pagar y el de cargar la factura', top.pagar && /Cargar la factura de la carne/.test(top.nueva), top);
 
     /* ── Las tarjetas ── */
     const cards = await evaluar(cli, `[].map.call(document.querySelectorAll('#abaCcListBox .cc-card'),function(c){ return { txt:c.textContent.replace(/\\s+/g,' '),
       est:(c.querySelector('.cc-estado')||{}).textContent, filas:c.querySelectorAll('.cc-tabla tbody tr').length, anu:c.classList.contains('cc-anulada'),
       botones:[].map.call(c.querySelectorAll('.cc-acc button'),function(b){return b.textContent;}), cruce:(c.querySelector('.cc-cruce')||{}).textContent||'' }; })`);
     const c6 = cards.find(c => /CC-0006/.test(c.txt)) || {}, c7 = cards.find(c => /CC-0007/.test(c.txt)) || {}, c5 = cards.find(c => /CC-0005/.test(c.txt)) || {};
-    chk('la mas nueva que vale primero, y la anulada (aunque sea del 14/9) al final', /CC-0006/.test((cards[0] || {}).txt || '') && /CC-0007/.test((cards[2] || {}).txt || ''), cards.map(c => c.txt.slice(0, 30)));
+    chk('la más nueva que vale primero, y la anulada (aunque sea del 14/9) al final', /CC-0006/.test((cards[0] || {}).txt || '') && /CC-0007/.test((cards[2] || {}).txt || ''), cards.map(c => c.txt.slice(0, 30)));
     chk('la del 11/9: "Vie 11/09 · Caco", $1.709.470, 5 cortes', /Vie 11\/09 · Caco/.test(c6.txt) && /1\.709\.470/.test(c6.txt) && c6.filas === 5, c6);
     chk('dice que se debe, con la semana', /Debés \$1\.709\.470 · semana 37/.test(c6.est || ''), c6.est);
     chk('el cruce con las piezas: 71,414 kg en 49 piezas, +2,1% (balanza)', /71,414 kg/.test(c6.cruce) && /49 piezas/.test(c6.cruce) && /\+2,1%/.test(c6.cruce) && /balanza/.test(c6.cruce), c6.cruce);
@@ -158,21 +196,37 @@ const EXTRA = `
     chk('la anulada lo dice y no tiene botones', /Anulada/.test(c7.est || '') && c7.anu && c7.botones.length === 0, c7);
     chk('la vieja dice que se pagó antes del libro (Egresos)', /Pagada antes de este libro/.test(c5.est || '') && !/piezas pesadas/.test(c5.cruce), c5);
 
+    /* ── La lista de precios ── */
+    const lp = await evaluar(cli, `(function(){ var d=document.querySelector('#abaCcListBox .cc-precios'); if(!d) return null; d.open=true;
+      return [].map.call(d.querySelectorAll('.cc-pr-fila'),function(f){ return f.textContent.replace(/\\s+/g,' ').trim(); }); })()`);
+    const fPi = (lp || []).find(t => /^Picaña/.test(t)) || '';
+    chk('la lista de precios dice el costo de hoy y la última factura: Picaña $18.000/kg, última $17.500 (Caco, 01/09)', /\$18\.000\/kg/.test(fPi) && /última factura \$17\.500 \(Caco, 01\/09\)/.test(fPi), lp);
+    chk('y la variante entero con su precio de la última factura', (lp || []).some(t => /Vacío entero/.test(t) && /\$18\.500\/kg/.test(t)), lp);
+
     /* ── El formulario ── */
     await evaluar(cli, `document.querySelector('#abaCcTop .cc-nueva').click(); 1`);
     const abrio = await esperar(cli, `!!document.getElementById('abaCcFormIn')`, 5000);
-    chk('+ Cargar compra abre el formulario', abrio);
-    let fm = await evaluar(cli, `(function(){ var f=document.getElementById('abaCcFormIn'); return { prov:document.getElementById('abaCcProv').value, fecha:document.getElementById('abaCcFecha').value,
-      tipoFecha:document.getElementById('abaCcFecha').type, lins:[].map.call(f.querySelectorAll('.cc-lin'),function(l,i){ return { n:l.querySelector('.cc-lin-n').textContent.trim(), pr:document.getElementById('abaCcPre'+i).value }; }),
-      nuevaVisible: !!document.querySelector('#abaCcTop .cc-nueva') }; })()`);
-    chk('proveedor Caco y la fecha de hoy, en texto dd/mm/aaaa (nunca type=date)', fm.prov === 'Caco' && fm.fecha === hoyAR && fm.tipoFecha === 'text', fm);
-    chk('una linea por corte mas la variante "entero" que Caco ya facturó', fm.lins.length === 6 && fm.lins.some(l => /Vacío\s*entero/.test(l.n)), fm.lins);
-    const pr = n => (fm.lins.find(l => l.n.replace(/\s+/g, ' ') === n) || {}).pr;
-    chk('los precios vienen de la última compra (Colita 19000, entero 18500) y la Picaña del costo (17500)', pr('Colita de Cuadril') === '19000' && pr('Vacío entero') === '18500' && pr('Picaña') === '17500', fm.lins);
+    chk('+ Cargar la factura abre el formulario', abrio);
+    const leerForm = `(function(){ var f=document.getElementById('abaCcFormIn'); return { prov:document.getElementById('abaCcProv').value, fecha:document.getElementById('abaCcFecha').value,
+      tipoFecha:document.getElementById('abaCcFecha').type, lins:[].map.call(f.querySelectorAll('.cc-lin'),function(l,i){ return { n:l.querySelector('.cc-lin-n').textContent.replace(/\\s+/g,' ').trim(), pr:document.getElementById('abaCcPre'+i).value }; }),
+      nuevaVisible: !!document.querySelector('#abaCcTop .cc-nueva') }; })()`;
+    let fm = await evaluar(cli, leerForm);
+    chk('proveedor Caco (el elegido en + NUEVO) y la fecha de hoy, en texto dd/mm/aaaa (nunca type=date)', fm.prov === 'Caco' && fm.fecha === hoyAR && fm.tipoFecha === 'text', fm);
+    chk('una línea por corte más la variante "entero" que Caco ya facturó', fm.lins.length === 6 && fm.lins.some(l => /Vacío entero/.test(l.n)), fm.lins);
+    let pr = n => (fm.lins.find(l => l.n === n) || {}).pr;
+    chk('los precios: Colita 19000, entero 18500 (su última factura)', pr('Colita de Cuadril') === '19000' && pr('Vacío entero') === '18500', fm.lins);
+    chk('la Picaña sugiere el costo de hoy (18000), no los 17500 de su última factura', pr('Picaña') === '18000', fm.lins);
     chk('con el formulario abierto no se ofrece otro', !fm.nuevaVisible);
     chk('abierto y sin tocar NO cuenta como editando (si no, el ERP deja de repintar)', await evaluar(cli, `abaHayEditor()===false`));
+    await evaluar(cli, `(function(){ var s=document.getElementById('abaCcProv'); s.value='Grupo Tresnal'; s.dispatchEvent(new Event('change',{bubbles:true})); return 1; })()`);
+    await esperar(cli, `document.getElementById('abaCcProv').value==='Grupo Tresnal'`, 3000);
+    fm = await evaluar(cli, leerForm);
+    chk('para otro proveedor el Lomo sugiere SU última factura (28000), no el costo de Caco', pr('Lomo') === '28000', fm.lins);
+    await evaluar(cli, `(function(){ var s=document.getElementById('abaCcProv'); s.value='Caco'; s.dispatchEvent(new Event('change',{bubbles:true})); return 1; })()`);
+    await esperar(cli, `document.getElementById('abaCcProv').value==='Caco'`, 3000);
+    fm = await evaluar(cli, leerForm);
 
-    const idx = n => fm.lins.findIndex(l => l.n.replace(/\s+/g, ' ') === n);
+    const idx = n => fm.lins.findIndex(l => l.n === n);
     const iLo = idx('Lomo'), iCo = idx('Colita de Cuadril');
     await tipear('#abaCcKg' + iLo, '24,3');
     let st = await evaluar(cli, `({ v:document.getElementById('abaCcKg${iLo}').value, foco:document.activeElement===document.getElementById('abaCcKg${iLo}'),
@@ -184,8 +238,16 @@ const EXTRA = `
     chk('el ERP sabe que se está editando (no repinta encima)', st.editando === true);
     chk('el Lomo al mismo costo no ofrece cambiar nada', st.costos === '', st.costos);
     await tipear('#abaCcKg' + iCo, '17.02');
+    await tipear('#abaCcPre' + iCo, '19500');
     st = await evaluar(cli, `({ costos:document.getElementById('abaCcCostos').textContent.replace(/\\s+/g,' '), marcado:(document.querySelector('#abaCcCostos input[type=checkbox]')||{}).checked })`);
-    chk('la Colita a $19.000 ofrece actualizar el costo ($18.800 → $19.000), tildado por ser la más nueva', /Colita de Cuadril: \$18\.800 → \$19\.000/.test(st.costos) && st.marcado === true, st);
+    chk('la Colita a $19.500 ofrece actualizar el costo ($19.000 → $19.500), tildado por ser la más nueva', /Colita de Cuadril: \$19\.000 → \$19\.500/.test(st.costos) && st.marcado === true, st);
+    chk('y avisa que los pedidos que ya se llevaron piezas se corrigen solos', /se corrigen solos/.test(st.costos), st.costos);
+
+    /* cambiar de proveedor en + NUEVO con la factura a medio cargar */
+    await evaluar(cli, `window.confirm=function(){return false;}; 1`);
+    await elegirProv('Prov Uno');
+    st = await evaluar(cli, `({ prov:document.getElementById('npProv').value, form:!!document.getElementById('abaCcFormIn'), kg:(document.getElementById('abaCcKg${iLo}')||{}).value, visible:!(${oculto('abaCcArriba')}) })`);
+    chk('cambiar de proveedor con la factura a medio cargar pregunta, y si no se descarta vuelve a Caco con lo tipeado', st.prov === 'Caco' && st.form && st.kg === '24,3' && st.visible, st);
 
     /* sin precio no manda */
     const iPi = idx('Picaña');
@@ -195,26 +257,28 @@ const EXTRA = `
     await pausa(500);
     st = await evaluar(cli, `({ err:document.getElementById('abaCcErr').textContent, posts:window.__posts.length, abierto:!!document.getElementById('abaCcFormIn') })`);
     chk('sin precio no manda nada y dice cuál falta', st.posts === 0 && /Falta el precio por kilo de Picaña/.test(st.err) && st.abierto, st);
-    await tipear('#abaCcKg' + iPi, '');
     await evaluar(cli, `(function(){ var e=document.getElementById('abaCcKg${iPi}'); e.value=''; e.dispatchEvent(new Event('input',{bubbles:true})); return 1; })()`);
 
     /* tamaños, con el formulario abierto */
-    const tam = await evaluar(cli, `(function(){ var chicos=[].slice.call(document.querySelectorAll('#carneView input:not([type=checkbox]), #carneView button, #carneView select')).filter(function(e){ var r=e.getBoundingClientRect(); return r.width>0 && r.height<40; })
+    const tam = await evaluar(cli, `(function(){ var sel='#abaCcArriba input:not([type=checkbox]), #abaCcArriba button, #abaCcArriba select, #abaCcAbajo button';
+      var chicos=[].slice.call(document.querySelectorAll(sel)).filter(function(e){ var r=e.getBoundingClientRect(); return r.width>0 && r.height<36; })
       .map(function(e){return (e.id||e.className)+' '+Math.round(e.getBoundingClientRect().height);});
-      var fuera=[].slice.call(document.querySelectorAll('#carneView *')).filter(function(e){ var r=e.getBoundingClientRect(); return r.width>0 && r.right>window.innerWidth+1; }).map(function(e){return e.id||e.className;}).slice(0,5);
+      var fuera=[].slice.call(document.querySelectorAll('#abaCcArriba *, #abaCcAbajo *')).filter(function(e){ var r=e.getBoundingClientRect(); return r.width>0 && r.right>window.innerWidth+1; }).map(function(e){return e.id||e.className;}).slice(0,5);
       return { chicos:chicos, fuera:fuera, desb: document.documentElement.scrollWidth>window.innerWidth+1 }; })()`);
-    if (ANCHO <= 560) chk('campos y botones miden 40px o más', tam.chicos.length === 0, tam.chicos);
+    if (ANCHO <= 560) chk('campos y botones miden 36px o más', tam.chicos.length === 0, tam.chicos);
     chk('nada se sale de la pantalla a lo ancho', tam.fuera.length === 0 && !tam.desb, tam);
 
     await evaluar(cli, `window.__posts=[]; document.getElementById('abaCcGuardar').click(); 1`);
     await esperar(cli, `window.__posts.some(function(p){return p.action==='compraCarneGuardar';})`, 8000);
     const post = await evaluar(cli, `window.__posts.filter(function(p){return p.action==='compraCarneGuardar';})[0]||null`);
     chk('el POST lleva Caco, la fecha, sólo las líneas con kilos (en número) y un clientOpId', !!post && post.proveedor === 'Caco' && post.fecha === hoyAR && post.id === '' &&
-      post.lineas.length === 2 && post.lineas.some(l => l.abbr === 'CLo' && l.kg === 24.3 && l.precio === 28500 && l.det === '') && post.lineas.some(l => l.abbr === 'CCo' && l.kg === 17.02 && l.precio === 19000) &&
+      post.lineas.length === 2 && post.lineas.some(l => l.abbr === 'CLo' && l.kg === 24.3 && l.precio === 28500 && l.det === '') && post.lineas.some(l => l.abbr === 'CCo' && l.kg === 17.02 && l.precio === 19500) &&
       /^cc_/.test(post.clientOpId || ''), post);
-    chk('y el costo a actualizar: sólo la Colita', !!post && JSON.stringify(post.costos) === JSON.stringify([{ abbr: 'CCo', precio: 19000 }]), post && post.costos);
+    chk('y el costo a actualizar: sólo la Colita', !!post && JSON.stringify(post.costos) === JSON.stringify([{ abbr: 'CCo', precio: 19500 }]), post && post.costos);
     const cerro = await esperar(cli, `!document.getElementById('abaCcFormIn') && !abaHayEditor()`, 8000);
     chk('al guardar el formulario se cierra y el ERP deja de estar "editando"', cerro);
+    const toast = await evaluar(cli, `document.getElementById('abaToast').textContent`);
+    chk('el aviso dice cuántos pedidos se corrigieron y cuánto (+$1.485)', /corregí el costo de 2 pedidos que ya se la llevaron \(\+\$1\.485\)/.test(toast), toast);
     chk('y vuelve a pedir el libro y la deuda', await esperar(cli, `window.__gets.filter(function(a){return a==='comprasCarne';}).length>=2 && window.__gets.indexOf('busqueda')>=0`, 8000), await evaluar(cli, `window.__gets.slice(-6)`));
 
     /* ── Corregir trae la compra ── */
@@ -232,6 +296,27 @@ const EXTRA = `
     const pa = await evaluar(cli, `window.__posts.filter(function(p){return p.action==='compraCarneAnular';})[0]||null`);
     chk('Anular manda el id de la compra', !!pa && pa.id === 'CC-0006', pa);
 
+    /* ── Cambiar el costo de un corte (lista nueva) ── */
+    await esperar(cli, `!!document.querySelector('#abaCcListBox .cc-precios') && !document.getElementById('abaLoaderOverlay').classList.contains('show')`, 8000);
+    await pausa(800);
+    await evaluar(cli, `(function(){ var f=[].slice.call(document.querySelectorAll('#abaCcListBox .cc-pr-fila')).filter(function(x){return /^Picaña/.test(x.textContent.trim());})[0]; f.querySelector('button').click(); return 1; })()`);
+    const abrioCosto = await esperar(cli, `!!document.getElementById('abaCcCostoIn')`, 3000);
+    chk('Cambiar abre el campo con el costo de hoy (18000)', abrioCosto && await evaluar(cli, `document.getElementById('abaCcCostoIn').value==='18000'`));
+    await tipear('#abaCcCostoIn', '18500');
+    await evaluar(cli, `abaCcCargar(true); 1`);
+    await esperar(cli, `abaCc.estado==='ok'`, 5000);
+    await pausa(300);
+    /* El valor solo no alcanza: se guarda en el estado y un repintado lo vuelve a poner.
+       Lo que se pierde es el FOCO, y en el celular se cierra el teclado a mitad del numero. */
+    chk('un dato que llega mientras se tipea no borra lo tipeado ni saca el foco', await evaluar(cli, `!!document.getElementById('abaCcCostoIn') && document.getElementById('abaCcCostoIn').value==='18500' && document.activeElement===document.getElementById('abaCcCostoIn')`),
+      await evaluar(cli, `({ v:(document.getElementById('abaCcCostoIn')||{}).value, foco:(document.activeElement||{}).id })`));
+    await evaluar(cli, `window.__posts=[]; document.getElementById('abaCcCostoOk').click(); 1`);
+    await esperar(cli, `window.__posts.some(function(p){return p.action==='compraCarneCosto';})`, 5000);
+    const pc = await evaluar(cli, `window.__posts.filter(function(p){return p.action==='compraCarneCosto';})[0]||null`);
+    chk('Guardar manda compraCarneCosto con la Picaña a 18500 y un clientOpId', !!pc && pc.abbr === 'CPi' && pc.precio === 18500 && /^ccc_/.test(pc.clientOpId || ''), pc);
+    const tc = await esperar(cli, `!document.getElementById('abaCcCostoIn') && /Picaña: \\$18\\.000 → \\$18\\.500 por kilo/.test(document.getElementById('abaToast').textContent)`, 5000);
+    chk('al guardar se cierra y el aviso dice el antes y el ahora', tc, await evaluar(cli, `document.getElementById('abaToast').textContent`));
+
     /* ── PAGOS: el detalle de una compra de carne ── */
     await evaluar(cli, `abaSwitchTab('pagos'); 1`);
     await esperar(cli, `!!document.querySelector('#pagosList .deuda-card')`, 10000);
@@ -239,23 +324,37 @@ const EXTRA = `
     chk('en PAGOS Caco tiene su semana y el detalle dice "5 cortes" (no "OCs")', pg.hay && /Ver detalle \(5 cortes\)/.test(pg.det || ''), pg);
     chk('sin error del servidor no hay aviso de carne', await evaluar(cli, `!/compras de carne/.test(document.getElementById('pagosList').textContent)`));
 
+    /* ── Descartar la factura al cambiar de proveedor ── */
+    await evaluar(cli, `abaSwitchTab('nuevo'); 1`);
+    await esperar(cli, `!(${oculto('abaCcArriba')})`, 5000);
+    await evaluar(cli, `abaCcAbrir(); 1`);
+    await esperar(cli, `!!document.getElementById('abaCcKg0')`, 3000);
+    await tipear('#abaCcKg0', '3');
+    await evaluar(cli, `window.confirm=function(){return true;}; 1`);
+    await elegirProv('Prov Uno');
+    st = await evaluar(cli, `({ prov:document.getElementById('npProv').value, form:!!document.getElementById('abaCcFormIn'), editando:abaHayEditor(), oculta:${oculto('abaCcArriba')} })`);
+    chk('si se descarta: otro proveedor, sin formulario, sin "editando" y sin la caja de la carne', st.prov === 'Prov Uno' && !st.form && st.editando === false && st.oculta, st);
+
     chk('sin errores de JS (fase a)', errores.length === 0, errores.slice(0, 3));
 
-    /* ── Si el servidor no pudo leer las compras ── */
+    /* ── Si el servidor no pudo leer las compras (y la tab guardada era CARNE) ── */
     await ir('p');
     await evaluar(cli, `go('busqueda'); 1`);
     await esperar(cli, `typeof abaSwitchTab==='function'`, 30000);
+    chk('quien tenía guardada la sub-tab CARNE cae en + NUEVO', await evaluar(cli, `abaCurrentTab==='nuevo'`), await evaluar(cli, `abaCurrentTab`));
     await evaluar(cli, `abaSwitchTab('pagos'); 1`);
     await esperar(cli, `!!document.querySelector('#pagosList .deuda-card')`, 10000);
     chk('PAGOS avisa que la deuda de la carne no está en el total', await evaluar(cli, `/No se pudieron leer las compras de carne/.test(document.getElementById('pagosList').textContent)`));
-    await evaluar(cli, `abaSwitchTab('carne'); 1`);
+    await aNuevo();
+    await elegirProv('Caco');
     await esperar(cli, `document.querySelectorAll('#abaCcListBox .cc-card').length===3`, 10000);
     const tp = await evaluar(cli, `({ top:document.getElementById('abaCcTop').textContent, est:(document.querySelector('#abaCcListBox .cc-card .cc-estado')||{}).textContent })`);
-    chk('y CARNE no dice "al día": dice que no se pudo calcular', /No se pudo calcular/.test(tp.top) && !/Al día/.test(tp.top), tp);
+    chk('y la factura de la carne no dice "al día": dice que no se pudo calcular', /No se pudo calcular/.test(tp.top) && !/Al día/.test(tp.top), tp);
 
     /* ── Si el libro no llega ── */
     await ir('e');
-    await aCarne();
+    await aNuevo();
+    await elegirProv('Caco');
     await esperar(cli, `/No pude traer las compras de carne/.test((document.getElementById('abaCcTop')||{}).textContent||'')`, 15000);
     const fe = await evaluar(cli, `({ top:document.getElementById('abaCcTop').textContent, lista:document.getElementById('abaCcListBox').textContent, boton:!!document.querySelector('#abaCcTop .aba-reintentar') })`);
     chk('si el libro no llega dice que no pudo, con Reintentar, y no "no hay compras"', /No pude traer las compras de carne/.test(fe.top) && fe.boton && !/Todavía no hay/.test(fe.lista), fe);
