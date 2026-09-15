@@ -5628,8 +5628,36 @@ var API='https://script.google.com/macros/s/AKfycbxmrG5YVSshcYezk8lXFx_uxb7NFGcb
   var ESPERAS = [1200, 2600, 5000];   /* 3 reintentos, cada vez esperando mas */
   function _dormir(ms){ return new Promise(function(res){ setTimeout(res, ms); }); }
   function _avisar(txt){ try { if (typeof toast === 'function') toast(txt); else alert(txt); } catch(e){} }
+  /* ── EL 404 DE GOOGLE, NO DEL SCRIPT (15/9/2026) ─────────────────────────
+     Un pedido a Apps Script son DOS saltos: `/exec` corre el script y contesta
+     302, y el navegador va a buscar la respuesta ya armada a
+     `script.googleusercontent.com/macros/echo`. En las caidas del 15/9 (12:20,
+     13:47, 14:47 y 15:08) el primer salto andaba y el segundo devolvia
+     **404 "No se encontro la pagina"** a los 20-30 s — tambien para un
+     `stock_full` de 600 bytes, asi que no es el tamaño.
+     Medido ese dia con un script aparte: pedir **la misma URL del echo otra
+     vez** devolvio 200 en 3,9 s. La respuesta existia; Google no la encontro
+     la primera vez. Hasta hoy el ERP lo tomaba como falla ("El servidor no
+     contesto en 90 s").
+     Se reintenta SOLO el echo: no vuelve a correr el script, asi que es seguro
+     tambien despues de un POST — no puede escribir dos veces.
+     `window.__echo` cuenta cuantas veces paso y cuantas se salvo. */
+  var ECHO_ESPERAS = [800, 2500];
+  var _echo = window.__echo = { cuatrocientos: 0, salvados: 0 };
+  function _echoDeNuevo(r, n){
+    if (!r || r.status !== 404) return r;
+    var u = String(r.url || '');
+    if (u.indexOf('script.googleusercontent.com/macros/echo') < 0) return r;
+    if (n === 0) _echo.cuatrocientos++;
+    if (n >= ECHO_ESPERAS.length) return r;
+    return _dormir(ECHO_ESPERAS[n]).then(function(){ return _fetch(u); })
+      .then(function(r2){
+        if (r2 && r2.ok){ _echo.salvados++; return r2; }
+        return _echoDeNuevo(r2, n + 1);
+      }, function(){ return r; });
+  }
   function _pedir(input, init, intento){
-    return _fetch(input, init).then(function(r){
+    return _fetch(input, init).then(function(r){ return _echoDeNuevo(r, 0); }).then(function(r){
       if (!r || !r.ok || String(r.url || '').indexOf('script.google') < 0) return r;
       return r.clone().text().then(function(txt){
         /* 403 del backend: sos vos, pero tu rol no puede. NO es sesion vencida
