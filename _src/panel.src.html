@@ -4959,7 +4959,7 @@ function ajProvRow(p,isNew){
 }
 function ajProvHTML(){
   var pr=AJ_DATA.provisiones||[];
-  var h='<div class="aj-note">🧾 Costos fijos imputados que entran al <b>EERR económico</b> (aunque no siempre haya salida de caja). Ej: sueldo piso, ocupación, amortización, monotributo.</div>';
+  var h='<div class="aj-note">🧾 Costos fijos imputados que entran al <b>EERR económico</b> (aunque no siempre haya salida de caja). Ej: sueldo fijo, ocupación, amortización, monotributo.</div>';
   h+='<div class="aj-card"><h3>Provisiones fijas</h3><div class="desc">Se devengan mes a mes. Cerrá una provisión poniéndole fecha en "Hasta".</div>';
   h+='<div id="ajNewProvWrap"></div>';
   h+='<div class="aj-add"><button class="aj-btn ghost sm" onclick="ajAddProv()">+ Nueva provisión</button></div>';
@@ -8724,6 +8724,8 @@ function load(){
        desaparecia sin un solo error hasta tocar Actualizar. */
     if(D){
       if(!Array.isArray(d.efMano)&&Array.isArray(D.efMano))d.efMano=D.efMano;
+      if(!Array.isArray(d.provisiones)&&Array.isArray(D.provisiones))d.provisiones=D.provisiones;
+      if(!Array.isArray(d.config)&&Array.isArray(D.config))d.config=D.config;
     }
     D=d;_volcadoPedidoEn=_pedidoEn;if(d&&d.oc&&d.oc.lista)_ocFrescas=true;try{localStorage.setItem('ma3',JSON.stringify(d));}catch(e){}try{sync();}catch(e){}_ldSync();$('dot').className='hdr-dot';try{sbUpdateMetrics();}catch(e){}
     var _pinto=true;
@@ -8875,6 +8877,9 @@ function _cajaCampos(d){
   if(Array.isArray(d.movimientos))D.movimientos=d.movimientos;
   if(Array.isArray(d.sobres))D.sobres=d.sobres;
   if(Array.isArray(d.efMano))D.efMano=d.efMano;
+  /* Provisiones_Fijas y Config_Maleu, para el EERR (15/9/2026). */
+  if(Array.isArray(d.provisiones))D.provisiones=d.provisiones;
+  if(Array.isArray(d.config))D.config=d.config;
 }
 function _cajaAplicar(d){
   _cajaCampos(d);
@@ -15579,11 +15584,12 @@ function eerrClasif(cat){return EERR_CLAS[cat]||'semi';}
 function eerrPct(n,d){return d>0?_dec(n/d*100,1)+'%':'—';}
 
 // Provisiones fijas devengadas (fuente: hoja Provisiones_Fijas).
-// Mientras el Apps Script no exponga D.provisiones, usamos este fallback con
-// los mismos valores cargados en la hoja. Si actualizás un monto, también
-// actualizá esta tabla.
+/* Desde el 15/9/2026 la hoja llega en `cajaLight` y en el volcado (D.provisiones).
+   Hasta ese dia el backend no la mandaba y el EERR usaba SIEMPRE esta tabla: el
+   sueldo decia $1.000.000 y la hoja $1.200.000. Queda solo como respaldo si el
+   dato no llego — con los mismos montos de la hoja. */
 var EERR_PROV_DEFAULT=[
-  {concepto:'Sueldo dueño imputado',cat:'sueldo',monto:1000000,desde:'2026-01',hasta:null},
+  {concepto:'Sueldo dueño imputado',cat:'sueldo',monto:1200000,desde:'2026-01',hasta:null},
   {concepto:'Ocupación imputada',cat:'ocupacion',monto:50000,desde:'2026-01',hasta:null},
   {concepto:'Amortización freezers',cat:'amortizacion',monto:35000,desde:'2026-01',hasta:null},
   {concepto:'Monotributo',cat:'impuesto_monotributo',monto:42386.74,desde:'2026-01',hasta:null}
@@ -15596,6 +15602,69 @@ function eerrProvisiones(mesNum,anio){
     if(p.hasta&&ym>p.hasta)return false;
     return Number(p.monto||0)>0;
   });
+}
+
+/* ── SUELDO FIJO, NO GANANCIA (15/9/2026) ────────────────────────────────
+   Fede: el sueldo es remuneracion al TRABAJO y va arriba del resultado; lo que
+   queda despues es del negocio, no del socio. Hasta hoy el EERR contaba como
+   sueldo max(lo girado, el piso): en julio 2026 Tadeo se giro $1.400.000 y los
+   $400.000 de mas le bajaron la ganancia a Maleu como si fueran costo; y los
+   meses en que se giro menos, la diferencia se provisionaba ese mes y despues
+   nadie sabia que Maleu la debia.
+
+   Ahora son dos cosas separadas:
+   · el EERR carga SIEMPRE el sueldo fijo del mes (Provisiones_Fijas, cat sueldo);
+   · lo girado va a una CUENTA DEL SUELDO acumulada: lo que te tocaba menos lo que
+     te giraste. Positiva = Maleu te debe. Negativa = te adelantaste (le debes a
+     Maleu). Un giro primero paga el sueldo atrasado; lo que pasa de ahi es
+     adelanto, nunca costo.
+   Arranca en marzo 2026: el primer giro cargado en Egresos es del 10/3. Contar
+   enero y febrero seria inventar deuda sobre meses sin datos. */
+var SUELDO_CUENTA_DESDE='2026-03';
+function _sueldoFijoMes(mn,anio){
+  var t=0;
+  eerrProvisiones(mn,anio).forEach(function(p){ if(p.cat==='sueldo')t+=Number(p.monto)||0; });
+  return t;
+}
+/* Los giros por mes, con el AÑO (de `g.f`, dd/mm/aaaa): la cuenta cruza meses, y
+   filtrar por el nombre del mes mezclaria marzo 2026 con marzo 2027. */
+function _sueldoGirosPorMes(){
+  var o={};
+  ((typeof D!=='undefined'&&D&&D.gastos)||[]).forEach(function(g){
+    if(_gastoLinea(g).linea!=='sueldo')return;
+    var m=String(g.f||'').match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+    if(!m)return;
+    var ym=m[3]+'-'+('0'+m[2]).slice(-2);
+    o[ym]=(o[ym]||0)+(Number(g.$)||0);
+  });
+  return o;
+}
+/* La cuenta hasta el mes (mn, anio) inclusive. `null` si el mes es anterior al
+   arranque. `mes`: el renglon de ese mes — `sueldo` es lo girado que cubre sueldo
+   (del mes o atrasado) y `adelanto` lo que paso de lo que te tocaba. */
+function _sueldoCuenta(mn,anio){
+  var p=SUELDO_CUENTA_DESDE.split('-'),y=Number(p[0]),m=Number(p[1]);
+  if(anio*12+mn<y*12+m)return null;
+  var giros=_sueldoGirosPorMes(),saldo=0,dev=0,gir=0,meses=[];
+  while(y*12+m<=anio*12+mn){
+    var ym=y+'-'+('0'+m).slice(-2),fijo=_sueldoFijoMes(m,y),g=giros[ym]||0;
+    var tocaba=saldo+fijo;
+    var cubre=Math.min(g,Math.max(tocaba,0));
+    saldo=tocaba-g;dev+=fijo;gir+=g;
+    meses.push({ym:ym,fijo:fijo,girado:g,sueldo:cubre,adelanto:g-cubre,saldo:saldo});
+    m++;if(m>12){m=1;y++;}
+  }
+  return {desde:SUELDO_CUENTA_DESDE,meses:meses,devengado:dev,girado:gir,saldo:saldo,mes:meses[meses.length-1]};
+}
+/* La frase de la cuenta, igual en el EERR y en el Estado de Caja. */
+function _sueldoCuentaTxt(c){
+  if(!c)return '';
+  var MS=['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
+  var d=c.desde.split('-'),desde=MS[Number(d[1])-1]+' '+d[0];
+  var s=Math.round(c.saldo);
+  if(s>0)return 'Cuenta del sueldo desde '+desde+': te tocaban $'+f$(Math.round(c.devengado))+' y te giraste $'+f$(Math.round(c.girado))+' → <b>Maleu te debe $'+f$(s)+'</b>.';
+  if(s<0)return 'Cuenta del sueldo desde '+desde+': te tocaban $'+f$(Math.round(c.devengado))+' y te giraste $'+f$(Math.round(c.girado))+' → <b style="color:var(--r)">te adelantaste $'+f$(-s)+'</b>. No es costo de Maleu: se compensa girándote menos. Si no se compensa, es sacar ganancia, y Fede fue claro: los primeros dos años no hay.';
+  return 'Cuenta del sueldo desde '+desde+': al día.';
 }
 // Detecta movimiento "Herramienta" que es realmente Servicios (telefonía)
 function eerrEsServicio(txt){
@@ -15674,7 +15743,7 @@ function _deudaProvPie(deudaProv){
 // Fallback hardcoded mientras D.config no venga del backend; mantener en sync con la hoja.
 var EERR_CONFIG_DEFAULT=[
   {param:'CAJA_MINIMA',valor:1500000,desde:'2026-01'},
-  {param:'SUELDO_MENSUAL',valor:1000000,desde:'2026-01'},
+  {param:'SUELDO_MENSUAL',valor:1200000,desde:'2026-01'},
   {param:'GIRO_QUINCENAL',valor:500000,desde:'2026-01'},
   {param:'DIA_GIRO_1',valor:5,desde:'2026-01'},
   {param:'DIA_GIRO_2',valor:20,desde:'2026-01'},
@@ -16897,9 +16966,9 @@ function rCierreInsights(box){
 // Pure-function: usado por la tendencia 6 meses en el EERR económico.
 /* LOS GASTOS DE UN MES, por renglon, con las provisiones del EERR (14/9/2026).
    Lo usan los KPIs del EERR y el PDF de la semana, que reparte los fijos del mes por
-   dia. El mismo criterio que la pantalla del EERR: `_gastoLinea` para cada gasto, y
-   max(real, piso) para sueldo, servicios, ocupacion y monotributo, mas la
-   amortizacion imputada. Filtra por el NOMBRE del mes, como el EERR (el año es un
+   dia. El mismo criterio que la pantalla del EERR: `_gastoLinea` para cada gasto,
+   el sueldo FIJO del mes (no lo girado, ver `_sueldoCuenta`), max(real, piso) para
+   servicios, ocupacion y monotributo, mas la amortizacion imputada. Filtra por el NOMBRE del mes, como el EERR (el año es un
    pendiente de todo el EERR, ver "Filtros de mes sin año").
    `estr`: estructura (fijos) · `amort` · `imp`: impuestos · `ext`: extraordinarios. */
 function _eerrMesGastos(mn,anio){
@@ -16909,9 +16978,11 @@ function _eerrMesGastos(mn,anio){
     if(g.mes!==MES)return;
     var k=_gastoLinea(g).linea;L[k]=(L[k]||0)+(Number(g.$)||0);
   });
+  var fijoS=_sueldoFijoMes(mn,anio);
+  if(fijoS>0)L.sueldo=fijoS;
   eerrProvisiones(mn,anio).forEach(function(p){
     var monto=Number(p.monto)||0;
-    if(p.cat==='sueldo')L.sueldo=Math.max(L.sueldo||0,monto);
+    if(p.cat==='sueldo')return;   /* ya esta: el fijo, arriba */
     else if(p.cat==='servicios')L.servicios=Math.max(L.servicios||0,monto);
     else if(p.cat==='ocupacion')L.ocupacion=Math.max(L.ocupacion||0,monto);
     else if(p.cat==='amortizacion')amort+=monto;
@@ -17266,15 +17337,18 @@ function rEERR_financiero(body){
     });
     // Provisiones imputadas
     var provs=eerrProvisiones(mesNum,eerrMes.getFullYear());
-    var sueldoProvE=0,servProvE=0,ocupProvE=0,amortE=0;
+    var sueldoProvE=0,sueldoDeMasE=0,servProvE=0,ocupProvE=0,amortE=0;
     provs.forEach(function(p){
       var monto=Number(p.monto)||0;
-      if(p.cat==='sueldo')sueldoProvE=Math.max(monto-f_su,0);
-      else if(p.cat==='servicios')servProvE=Math.max(monto-f_serv,0);
+      if(p.cat==='servicios')servProvE=Math.max(monto-f_serv,0);
       else if(p.cat==='ocupacion')ocupProvE=Math.max(monto-f_oc,0);
       else if(p.cat==='amortizacion')amortE+=monto;
     });
-    f_su+=sueldoProvE;f_serv+=servProvE;f_oc+=ocupProvE;
+    f_serv+=servProvE;f_oc+=ocupProvE;
+    /* El sueldo es el FIJO (15/9/2026). Lo girado de menos no salio de la caja
+       (sueldoProvE); lo girado de mas salio de la caja sin ser costo (sueldoDeMasE). */
+    var fijoE=_sueldoFijoMes(mesNum,eerrMes.getFullYear());
+    if(fijoE>0){sueldoProvE=Math.max(fijoE-f_su,0);sueldoDeMasE=Math.max(f_su-fijoE,0);f_su=fijoE;}
     // Comisiones MP estimadas
     var cobrosTr=0;
     ((D&&D.pedidos)||[]).forEach(function(p){
@@ -17303,7 +17377,7 @@ function rEERR_financiero(body){
     var resNeto=resAImp-(ii+im+io);
     return {
       resNeto:resNeto,totFact:totFact,totCMV:totCMV,
-      sueldoProvE:sueldoProvE,servProvE:servProvE,ocupProvE:ocupProvE,amortE:amortE,
+      sueldoProvE:sueldoProvE,sueldoDeMasE:sueldoDeMasE,servProvE:servProvE,ocupProvE:ocupProvE,amortE:amortE,
       v_cmpE:v_cmp
     };
   }
@@ -17315,7 +17389,7 @@ function rEERR_financiero(body){
   // ΔCxP: si las cuentas a pagar SUBEN (te financiaste con proveedores) → suma al flujo.
   //   Definida como CMV devengado − Pagos a Proveedor (positivo cuando CxP sube).
   // Otros ingresos no están en el Resultado Neto económico, por eso se suman acá.
-  var imputadosTot=econ.sueldoProvE+econ.servProvE+econ.ocupProvE+econ.amortE+econ.v_cmpE;
+  var imputadosTot=econ.sueldoProvE-econ.sueldoDeMasE+econ.servProvE+econ.ocupProvE+econ.amortE+econ.v_cmpE;
   var varCxC=econ.totFact-totCobr;
   var varCxP=econ.totCMV-pagProv;
   var flujoReconc=econ.resNeto+imputadosTot+otrosIng-varCxC+varCxP-pagCapex;
@@ -17456,7 +17530,7 @@ function rEERR_financiero(body){
     var totalSalidas=totSalidas;
     var CATS=[
       {n:'Proveedores de mercadería',v:pagProv,det:pagProvD,icon:'📦',col:'#F07D47'},
-      {n:'Retiros del dueño (sueldo girado)',v:sueldoGirado,det:sueldoGiradoD,icon:'👤',col:'#5C3A2A'},
+      {n:'Sueldo girado a Tadeo',v:sueldoGirado,det:sueldoGiradoD,icon:'👤',col:'#5C3A2A'},
       {n:'Delivery / Fletes / Nafta',v:pagFletes,det:pagFletesD,icon:'🚚',col:'#7A4A4A'},
       {n:'Software y herramientas',v:pagSoftware,det:pagSoftwareD,icon:'💻',col:'#A89880'},
       {n:'Marketing',v:pagMarketing,det:pagMarketingD,icon:'📣',col:'#4CAF50'},
@@ -17550,8 +17624,12 @@ function rEERR_financiero(body){
   if(esMesActual){
     var ym=eerrMes.getFullYear()+'-'+String(eerrMes.getMonth()+1).padStart(2,'0');
     var CAJA_MINIMA=eerrConfig('CAJA_MINIMA',ym);
-    var SUELDO_MENSUAL=eerrConfig('SUELDO_MENSUAL',ym);
-    var GIRO_QUINCENAL=eerrConfig('GIRO_QUINCENAL',ym);
+    /* Un solo monto de sueldo: el de Provisiones_Fijas, el mismo que carga el EERR
+       (15/9/2026). Config_Maleu tenia otro (SUELDO_MENSUAL) y el giro quincenal
+       escrito a mano ($500.000 con un sueldo de $1.200.000): la nota de la hoja
+       dice "Sueldo/2", asi que sale del sueldo. */
+    var SUELDO_MENSUAL=_sueldoFijoMes(eerrMes.getMonth()+1,eerrMes.getFullYear())||eerrConfig('SUELDO_MENSUAL',ym);
+    var GIRO_QUINCENAL=Math.round(SUELDO_MENSUAL/2);
     var DIA_PRIMER_GIRO=eerrConfig('DIA_GIRO_1',ym);
     var DIA_SEGUNDO_GIRO=eerrConfig('DIA_GIRO_2',ym);
     var hoyDia=hoyD.getDate();
@@ -17604,6 +17682,7 @@ function rEERR_financiero(body){
     // Sueldo del mes
     html+='<div style="padding:0 14px 14px"><div style="border-top:1px solid var(--cd);padding-top:10px"><div style="font-size:11px;font-weight:700;color:var(--b);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">Sueldo del dueño · '+mesNom+'</div>';
     html+='<table style="width:100%;font-size:12px;font-variant-numeric:tabular-nums;border-collapse:collapse">';
+    html+='<tr><td style="padding:4px 0;color:var(--ink2)">Sueldo fijo</td><td style="padding:4px 0;text-align:right;color:var(--ink);font-weight:600">$'+f$(Math.round(SUELDO_MENSUAL))+'</td></tr>';
     html+='<tr><td style="padding:4px 0;color:var(--ink2)">Programa quincenal</td><td style="padding:4px 0;text-align:right;color:var(--ink);font-weight:600">$'+f$(GIRO_QUINCENAL)+' día '+DIA_PRIMER_GIRO+' · $'+f$(GIRO_QUINCENAL)+' día '+DIA_SEGUNDO_GIRO+'</td></tr>';
     html+='<tr><td style="padding:4px 0;color:var(--ink2)">Girado en lo que va</td><td style="padding:4px 0;text-align:right;color:var(--ink);font-weight:600">$'+f$(Math.round(sueldoGirado))+'</td></tr>';
     html+='<tr><td style="padding:4px 0;color:var(--ink2)">Pendiente de girar</td><td style="padding:4px 0;text-align:right;color:'+(sueldoPendiente>0?'var(--o)':'var(--gd)')+';font-weight:700">$'+f$(Math.round(sueldoPendiente))+'</td></tr>';
@@ -17619,6 +17698,9 @@ function rEERR_financiero(body){
       else {icon='⛔';color='var(--r)';bg='var(--rb)';msg='Caja por debajo del mínimo. Posponer retiros hasta recuperar nivel.';}
       html+='<tr><td colspan="2" style="padding-top:8px"><div style="background:'+bg+';color:'+color+';padding:8px 10px;border-radius:4px;font-size:12px;font-weight:600;border:1px solid '+color+'">'+icon+' '+msg+'</div></td></tr>';
     }
+    /* La cuenta acumulada (15/9/2026): el mes solo no dice si Maleu te debe. */
+    var _cSue=_sueldoCuenta(eerrMes.getMonth()+1,eerrMes.getFullYear());
+    if(_cSue)html+='<tr><td colspan="2" class="eerr-sueldo-cuenta" style="padding-top:8px;font-size:12px;color:var(--ink2);line-height:1.5">'+_sueldoCuentaTxt(_cSue)+'</td></tr>';
     html+='</table></div></div>';
 
     // ── Sub-indicadores: alerta de flujo recurrente + proyección de cierre ──
@@ -17775,6 +17857,9 @@ function rEERR_financiero(body){
     var ocupNoPag=Number(econ.ocupProvE||0);
     var amortE=Number(econ.amortE||0);
     var imputadosNoCash=sueldoNoGirado+servNoPag+ocupNoPag+amortE;
+    /* Lo que te giraste por encima del sueldo fijo del mes: salio de la caja y no
+       es costo (paga sueldo atrasado o es un adelanto). 15/9/2026. */
+    var sueldoDeMas=Number(econ.sueldoDeMasE||0);
     // Variación de cuentas: facturé vs cobré, debí vs pagué
     var varCxC2=totFactE-totCobr; // si >0: facturé más de lo que cobré → drena caja
     var varCxP2=totCMVe-pagProv; // si >0: aprovisioné más de lo que pagué → libera caja
@@ -17786,7 +17871,7 @@ function rEERR_financiero(body){
     // Otros ingresos no operativos
     var otrosIngE=Number(otrosIng||0);
     // Flujo de caja calculado por el EOAF (debería igualar flujoNeto del bloque de caja)
-    var flujoEOAF=rnEcon+imputadosNoCash+otrosIngE-varCxC2+varCxP2-varStock-capex;
+    var flujoEOAF=rnEcon+imputadosNoCash-sueldoDeMas+otrosIngE-varCxC2+varCxP2-varStock-capex;
     function fm(v){return (v<0?'−$':'$')+f$(Math.abs(Math.round(v||0)));}
     function rowEOAF(lbl,val,cls,explain){
       var signColor=val>0?'var(--gd)':(val<0?'var(--r)':'var(--ink2)');
@@ -17801,6 +17886,7 @@ function rEERR_financiero(body){
     html+='<table style="width:100%;border-collapse:collapse;font-size:13px"><tbody>';
     html+=rowEOAF('Resultado Neto Económico (devengado)',rnEcon,'sub','Lo que ganó/perdió Maleu este mes según el EERR');
     html+=rowEOAF('(+) Provisiones imputadas (no-cash)',imputadosNoCash,'','Costos económicos que NO salieron de la caja (sueldo no girado, alquiler imputado, amortización)');
+    if(sueldoDeMas>0)html+=rowEOAF('(−) Te giraste más que el sueldo fijo',-sueldoDeMas,'','Salió de la caja pero no es costo de Maleu: paga sueldo que Maleu te debía o es un adelanto (ver la cuenta del sueldo)');
     if(otrosIngE>0)html+=rowEOAF('(+) Otros ingresos no operativos',otrosIngE,'','Rendimientos MP, liquidaciones Red, devoluciones');
     html+=rowEOAF((varCxC2>=0?'(−)':'(+)')+' Variación cuentas por cobrar',-varCxC2,'',varCxC2>=0?'Facturaste $'+f$(Math.round(varCxC2))+' más de lo que cobraste — la plata quedó en clientes':'Cobraste $'+f$(Math.round(-varCxC2))+' más de lo que facturaste — entró plata de meses previos');
     html+=rowEOAF((varCxP2>=0?'(+)':'(−)')+' Variación cuentas por pagar (proveedores)',varCxP2,'',varCxP2>=0?'Los proveedores te financiaron $'+f$(Math.round(varCxP2))+' (devengaste más CMV que pagos)':'Pagaste $'+f$(Math.round(-varCxP2))+' más de lo que debíste — redujiste deuda');
@@ -17875,8 +17961,12 @@ function rEERR_financiero(body){
   if(pagAlquiler>0){html+=subleaf('Alquiler real',-pagAlquiler);html+=detailRows(pagAlquilerD);}
   if(pagOtroEst>0){html+=subleaf('Otros estructura',-pagOtroEst);html+=detailRows(pagOtroEstD);}
 
-  // Retiros del dueño
-  html+=leaf('Retiros del dueño (sueldo girado)',-sueldoGirado);
+  // Sueldo girado (15/9/2026: lo de mas es adelanto, no ganancia que se reparte)
+  html+=leaf('Sueldo girado a Tadeo',-sueldoGirado);
+  (function(){
+    var c=_sueldoCuenta(mesNum,anioN);
+    if(c&&c.mes&&c.mes.adelanto>0)html+=subleaf('de eso, adelanto: más de lo que te tocaba (no es costo)',-c.mes.adelanto,true);
+  })();
   html+=detailRows(sueldoGiradoD);
 
   // Impuestos
@@ -17905,7 +17995,7 @@ function rEERR_financiero(body){
     {t:'Cobranzas por canal',d:'Pedidos con Estado de Pago = Cobrado, agrupados por mes de la <b>Fecha de Cobro</b>. Si un pedido no tiene fecha de cobro cargada, se usa la fecha de entrega como proxy y se marca con <span style="color:var(--wrn)">% estimado</span>.'},
     {t:'Otros ingresos',d:'Ingresos no asociados a un pedido: rendimientos MP, liquidaciones Red (cuando Marcos rinde), reintegros, devoluciones de impuestos. Sale del Sheets, hoja <code>Ingresos</code>.'},
     {t:'Pagos a proveedores',d:'Egresos del Sheets con cat <code>Proveedor</code> o <code>Catering</code> (insumos de eventos), filtrados por mes de la fecha de pago.'},
-    {t:'Retiros del dueño',d:'Sueldo <b>efectivamente girado</b> en el mes (cat <code>Sueldo</code>). El piso imputado de $1M del económico NO entra acá — solo lo que salió de caja.'},
+    {t:'Sueldo girado a Tadeo',d:'Lo que te <b>giraste</b> en el mes (cat <code>Sueldo</code>): la plata que salió de la caja. El económico no usa este número, usa el <b>sueldo fijo</b>. La diferencia va a la <b>cuenta del sueldo</b>: si te giraste menos, Maleu te lo debe; si te giraste más de lo que te tocaba, es un adelanto — nunca un costo ni ganancia repartida.'},
     {t:'Inversiones en bienes de uso',d:'CAPEX: compra de freezers, equipos durables, vehículos. Detectado por keyword. Se separa porque es egreso de caja pero NO es gasto operativo (se consume vía amortización en el económico).'},
     {t:'Ratio cobranzas/facturación',d:'Cuánto de lo que facturaste cobraste en el mes. Sano: 80-95% para Maleu. Lo que falta queda como cuentas por cobrar.'},
     {t:'Días de caja',d:'Saldo actual / egresos promedio diarios. Cuántos días podés operar si dejara de entrar plata.'},
@@ -18020,9 +18110,13 @@ function rEERR_dual(body){
   // 2) Provisiones fijas devengadas (hoja Provisiones_Fijas).
   //    Regla max(real, piso): si el real cargado del mes ya cubre el piso,
   //    se usa el real; si está por debajo, se agrega la diferencia como provisión.
-  //    Aplica a: Sueldo dueño, Servicios, Ocupación, Amortización.
+  //    Aplica a: Servicios, Ocupación, Amortización.
+  //    El SUELDO no (15/9/2026): es el fijo del mes, se haya girado lo que se haya
+  //    girado. Ver "SUELDO FIJO, NO GANANCIA" arriba de `_sueldoFijoMes`.
   var provs=eerrProvisiones(mesNum,eerrMes.getFullYear());
-  var sueldoReal=f_sueldo,sueldoProv=0,sueldoProvCon='';
+  var sueldoGiradoMes=f_sueldo,sueldoFijo=_sueldoFijoMes(mesNum,eerrMes.getFullYear());
+  if(sueldoFijo>0)f_sueldo=sueldoFijo;
+  var sueldoCuenta=_sueldoCuenta(mesNum,eerrMes.getFullYear());
   var serviciosProv=0,serviciosProvCon='';
   var ocupacionProv=0,ocupacionProvCon='';
   var amortProv=0,amortProvCon='';
@@ -18030,8 +18124,7 @@ function rEERR_dual(body){
   provs.forEach(function(p){
     var monto=Number(p.monto)||0;
     if(p.cat==='sueldo'){
-      var d=Math.max(monto-f_sueldo,0);
-      if(d>0){f_sueldo+=d;sueldoProv=d;sueldoProvCon=p.concepto;}
+      /* el fijo, arriba */
     } else if(p.cat==='servicios'){
       var d=Math.max(monto-f_servicios,0);
       if(d>0){f_servicios+=d;serviciosProv=d;serviciosProvCon=p.concepto;}
@@ -18251,9 +18344,17 @@ function rEERR_dual(body){
   html+=leaf(eL('Alquiler del depósito (cuartito Estancias)','Hoy no pagás alquiler real, pero el espacio TIENE un valor. Se imputa para no inflar el resultado.'),-f_ocupacion);
   html+=detailRows(f_ocupacionD);
   if(ocupacionProv>0)html+=subleaf('+ Provisión: alquiler equivalente del cuartito ('+ocupacionProvCon+')',-ocupacionProv,true);
-  html+=leaf(eL('Tu sueldo (lo que vale tu tiempo)','El objetivo de sueldo del fundador: $1.000.000/mes. Si te giraste menos, Maleu te queda debiendo la diferencia.'),-f_sueldo);
+  if(sueldoFijo>0){
+    html+=leaf(eL('Tu sueldo fijo','Lo que Maleu te paga por trabajar: $'+f$(Math.round(sueldoFijo))+' por mes (hoja Provisiones_Fijas). Va acá te lo gires o no: lo que te giraste de más o de menos no toca la ganancia, va a la cuenta del sueldo. Fede: el sueldo paga el trabajo; lo que queda es del negocio.'),-f_sueldo);
+    /* Una fila de texto y no un numero: un -$1.400.000 abajo del -$1.200.000 se
+       leeria como que suma. */
+    var _gm=Math.round(sueldoGiradoMes),_fj=Math.round(sueldoFijo),_dif=_gm-_fj;
+    var _txtS='Te giraste $'+f$(_gm)+' en '+mesNom.toLowerCase()+(_dif>0?': $'+f$(_dif)+' más que el fijo, que no son costo.':(_dif<0?': $'+f$(-_dif)+' menos, que Maleu te queda debiendo.':'.'));
+    html+='<tr class="subleaf calc eerr-sueldo-mes"><td colspan="2">'+_txtS+(sueldoCuenta?'<br>'+_sueldoCuentaTxt(sueldoCuenta):'')+'</td></tr>';
+  } else {
+    html+=leaf(eL('Tu sueldo','No hay sueldo fijo cargado para este mes en Provisiones_Fijas: se muestra lo girado.'),-f_sueldo);
+  }
   html+=detailRows(f_sueldoD);
-  if(sueldoProv>0)html+=subleaf('+ Sueldo que Maleu te quedó debiendo este mes (te giraste $'+f$(Math.round(sueldoReal))+' de $1.000.000)',-sueldoProv,true);
   if(f_otrosEst>0){html+=leaf('Otros gastos administrativos',-f_otrosEst);html+=detailRows(f_otrosEstD);}
 
   // EBITDA
@@ -18509,7 +18610,7 @@ function rEERR_dual(body){
     {t:'· Honorarios profesionales',d:'Contador, abogado, asesores. <b>Hoy en $0:</b> falta cargar. Cuando lo cargues con concepto que diga "honorario" o "contador" cae acá automáticamente.'},
     {t:'· Servicios',d:'Luz, internet, telefonía, gas. Hoy hay una <b>provisión fija de $50.000/mes (Movistar celular Maleu)</b> cargada en la hoja <code>Provisiones_Fijas</code>. Si en algún mes la factura real supera el piso, se usa el real. Otros servicios (luz, internet del depósito) se suman si los cargás como gasto con esos keywords en el concepto.'},
     {t:'· Costo de ocupación imputado',d:'<b>Costo imputado de $50.000/mes</b> (alquiler equivalente del cuartito del depósito en Estancias del Pilar) cargado en <code>Provisiones_Fijas</code>. Aunque hoy no pagues alquiler, económicamente ese espacio tiene un costo. El día que arranques a alquilar real, se cierra la provisión (columna "Activa hasta") y empezás a cargar la factura real.'},
-    {t:'· Sueldo del dueño imputado',d:'Piso fijo de <b>$1.000.000/mes</b> (lo que tendrías que ganar como sueldo digno). Sale de los movimientos cargados con categoría <code>Sueldo</code>. Si en el mes te giraste menos, la diferencia se carga como <b>provisión devengada</b> (ej: en abril te giraste $758.972 → provisión $241.028 → total devengado $1.000.000). Esto es <b>devengado</b>: el costo de tu trabajo existe igual aunque no te lo hayas pagado.'},
+    {t:'· Tu sueldo fijo',d:'El monto de la hoja <code>Provisiones_Fijas</code> (categoría <code>sueldo</code>), <b>siempre el mismo</b>, te lo hayas girado o no. Es remuneración al trabajo y va arriba del resultado; lo que queda después es del negocio (Fede). Lo que te giraste (Egresos, categoría <code>Sueldo</code>) va a la <b>cuenta del sueldo</b>, que acumula desde marzo 2026: si te giraste menos, <b>Maleu te debe</b> la diferencia; si te giraste más de lo que te tocaba, es un <b>adelanto</b>, no un costo. Hasta el 15/9/2026 la línea era max(girado, piso): girarte de más le bajaba la ganancia a Maleu.'},
     {t:'¿Qué es una "provisión devengada"?',d:'Costo que existe económicamente en el mes aunque la factura/pago no haya pasado todavía. Ejemplo: el contador trabaja en mayo pero te factura el 5 de junio. El costo es de mayo. <b>Para gastos recurrentes con piso conocido</b> (sueldo dueño, software, comisiones MP) el EERR provisiona automáticamente sin esperar el pago real. Cuando el pago entra al Sheets, reemplaza la provisión.'},
     {t:'= EBITDA',d:'<b>E</b>arnings <b>B</b>efore <b>I</b>nterest, <b>T</b>axes, <b>D</b>epreciation and <b>A</b>mortization. Resultado operativo "puro" antes de financieros, impuestos y amortizaciones. Es el indicador que más mira un inversor para comparar negocios entre sí.'},
     {t:'(−) Amortizaciones',d:'Si compraste un freezer de $500.000 con vida útil de 5 años, no es justo cargar todo el costo el mes que lo compraste. Se "consume" $8.333 por mes durante 60 meses. <b>Provisión actual: $35.000/mes</b> (3 freezers, estimado provisorio hasta confirmar costo de adquisición real). Cargado en <code>Provisiones_Fijas</code>.'},

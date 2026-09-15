@@ -84,7 +84,12 @@ const LIGHT = { ts: 1, pedidos: PEDIDOS, canales: [], light: true, saludSem: SAL
 const G = (f, cat, con, $) => ({ f: f, fFull: f + ' 10:00', ts: 1, mes: 'Septiembre', anio: 2026, cat: cat, con: con, met: 'Mercado Pago', $: $, not: '' });
 const CAJA = { ts: 1, caja: {}, saldoBase: {}, movimientos: [], efMano: [],
   gastos: [G('09/09/2026', 'Herramienta', 'WATI · Mensual', 10000), G('10/09/2026', 'Proveedor', 'Pago Le Unike', 50000), G('11/09/2026', 'Cambio cruzado', 'Vuelto', 3000), G('12/09/2026', 'Catering', 'Evento', 7000), G('03/09/2026', 'Nafta', 'Shell', 99999)],
-  ingresos: [G('10/09/2026', 'Rendimientos', 'MP', 1200), G('11/09/2026', 'Liquidación Red', 'Vendedor Uno', 40000), G('11/09/2026', 'Cambio cruzado', 'Vuelto', 3000)] };
+  ingresos: [G('10/09/2026', 'Rendimientos', 'MP', 1200), G('11/09/2026', 'Liquidación Red', 'Vendedor Uno', 40000), G('11/09/2026', 'Cambio cruzado', 'Vuelto', 3000)],
+  /* Desde el 15/9/2026 `cajaLight` trae Provisiones_Fijas: el EERR usa la hoja, no la tabla del codigo. */
+  provisiones: [{ concepto: 'Sueldo dueño imputado', cat: 'sueldo', monto: 1200000, desde: '2026-01', hasta: null },
+    { concepto: 'Ocupación imputada', cat: 'ocupacion', monto: 50000, desde: '2026-01', hasta: null },
+    { concepto: 'Amortización freezers', cat: 'amortizacion', monto: 35000, desde: '2026-01', hasta: null },
+    { concepto: 'Monotributo', cat: 'impuesto_monotributo', monto: 42386.74, desde: '2026-01', hasta: null }] };
 const CATALOGO = { ok: true, productos: { Prueba: [{ a: 'PPM', n: 'Pack Muzzarella', cat: 'Pack Pizzas x2', u: 'u', dem: 1 }, { a: 'CLo', n: 'Carne Lomo', cat: 'Carnes', u: 'kg', dem: 1 }] } };
 const PLAN = { ok: true, mes: 'Septiembre 2026', yyyy: 2026, mm: 9, diasMes: 30, metas: { 'Venta Directa|Estancias del Pilar': { metaFact: 2000000, metaPedidos: 40, semanalesM: '100000,400000,500000,600000,400000', semanalesP: '5,10,10,10,5' } } };
 
@@ -171,11 +176,12 @@ async function abrirFase(cli, fase) {
 
     /* ECONOMICO. A mano: margen 389.500 − 280.800 = 108.700; bolsas 4 pedidos de Home/Pilar × $850 = 3.400;
        WATI $10.000 es campaña (variable); contribucion 95.300. Fijos de septiembre: nafta 99.999 + sueldo
-       (piso 1.000.000) + ocupacion 50.000 + monotributo 42.386,74 + amortizacion 35.000 = 1.227.385,74;
-       7 de 30 dias = 286.390. Mas rendimientos 1.200: resultado −189.890. */
+       (el FIJO de Provisiones_Fijas, 1.200.000, desde el 15/9/2026; antes piso 1.000.000 del codigo) + ocupacion
+       50.000 + monotributo 42.386,74 + amortizacion 35.000 = 1.427.385,74; 7 de 30 dias = 333.057.
+       Mas rendimientos 1.200: resultado −236.557. */
     chk('economico: margen 108.700 · bolsas 4 × 850 = 3.400 · campañas (WATI) 10.000 · delivery 0 · contribucion 95.300', !!RR && JSON.stringify(RR.eco.slice(0, 6)) === '[108700,4,3400,10000,0,95300]', RR && RR.eco);
-    chk('fijos: la parte de la semana de los de septiembre (7/30 de 1.227.386) = 286.390; resultado −189.890', !!RR && RR.eco[6] === 286390 && RR.eco[7] === -189890 && RR.fijosMes.length === 1 && RR.fijosMes[0].dias === 7 && RR.fijosMes[0].diasMes === 30, RR && [RR.eco, RR.fijosMes]);
-    chk('WATI NO esta en los fijos: la nafta si (vehiculo es estructura)', !!RR && Math.round(RR.fijosMes[0].total) === 1227386, RR && RR.fijosMes);
+    chk('fijos: la parte de la semana de los de septiembre (7/30 de 1.427.386) = 333.057; resultado −236.557', !!RR && RR.eco[6] === 333057 && RR.eco[7] === -236557 && RR.fijosMes.length === 1 && RR.fijosMes[0].dias === 7 && RR.fijosMes[0].diasMes === 30, RR && [RR.eco, RR.fijosMes]);
+    chk('WATI NO esta en los fijos: la nafta si (vehiculo es estructura)', !!RR && Math.round(RR.fijosMes[0].total) === 1427386, RR && RR.fijosMes);
     /* FINANCIERO */
     chk('financiero: entro 126.000 + 1.200 = 127.200 · salio 67.000 (sin el vuelto de 3.000) · flujo 60.200', !!RR && JSON.stringify(RR.fin) === '[127200,67000,60200,3000]', RR && RR.fin);
     chk('los pagos por renglon: proveedores 50.000 · campañas 10.000 · catering 7.000', !!RR && JSON.stringify(RR.porLinea) === JSON.stringify({ 'Campañas y mensajería': 10000, 'Proveedores de mercadería': 50000, 'Catering': 7000 }), RR && RR.porLinea);
@@ -207,7 +213,7 @@ async function abrirFase(cli, fase) {
     const T = typeof doc === 'string' ? doc : '';
     chk('el documento: portada, facturado y margen', /Semana 37/.test(T) && /Facturado \$389\.500/.test(T) && /margen \$108\.700 \(28%\)/.test(T), T.slice(0, 300));
     chk('el documento: la carne "2,25 kg" y "Carne Lomo"', /Carne Lomo/.test(T) && /2,25 kg/.test(T));
-    chk('el documento: resultado economico con contribucion, fijos de septiembre y el resultado', /= Margen de contribución\$95\.300/.test(T) && /7 de 30 días de septiembre/.test(T) && /Resultado económico de la semana−\$189\.890/.test(T), (T.match(/Resultado económico.{0,500}/) || [])[0]);
+    chk('el documento: resultado economico con contribucion, fijos de septiembre y el resultado', /= Margen de contribución\$95\.300/.test(T) && /7 de 30 días de septiembre/.test(T) && /Resultado económico de la semana−\$236\.557/.test(T), (T.match(/Resultado económico.{0,500}/) || [])[0]);
     chk('el documento: WATI esta en Campañas y mensajería, no en un gasto de la semana', /Campañas y mensajeríaWATI · Mensual−\$10\.000/.test(T) && !/Gastos de la semana/.test(T), (T.match(/Campañas y mensajería.{0,60}/) || [])[0]);
     chk('el documento: el financiero con el flujo de caja y los vueltos aparte', /Flujo de caja de la semana\$60\.200/.test(T) && /Los vueltos \(\$3\.000\) no cuentan/.test(T) && /Los pagos, uno por uno/.test(T), (T.match(/Financiero.{0,400}/) || [])[0]);
     chk('sin undefined, NaN ni centavos', T.length > 500 && !/undefined|NaN|\[object/.test(T) && !/\$\s?\d{1,3}(\.\d{3})*,\d/.test(T));
