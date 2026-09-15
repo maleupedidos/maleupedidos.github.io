@@ -10,8 +10,8 @@
    Sostiene:
    · vuelven a ser 5 sub-tabs, sin achicar la letra, y quien tenia guardada CARNE cae
      en + NUEVO;
-   · la factura aparece SOLO con un proveedor de carne elegido: arriba lo que se debe
-     (la MISMA deuda que PAGOS) y el boton; abajo de los cortes, las facturas;
+   · la factura aparece SOLO con un proveedor de carne elegido: arriba el boton de cargar
+     (sin la deuda ni "Pagar en PAGOS": se paga en PAGOS); abajo de los cortes, las facturas;
    · cada compra dice su estado: debe (con la semana), pagada antes del libro, anulada;
    · el cruce con las piezas pesadas dice el % contra la factura;
    · el formulario trae el proveedor elegido en + NUEVO; para el proveedor del corte el
@@ -169,19 +169,19 @@ const EXTRA = `
     await esperar(cli, `!!document.querySelector('#npProductsList .np-prod-card')`, 5000);
     chk('con un proveedor que no es de carne tampoco', await evaluar(cli, oculto('abaCcArriba') + ' && ' + oculto('abaCcAbajo')));
     await elegirProv('Caco');
-    const pinto = await esperar(cli, `document.querySelectorAll('#abaCcListBox .cc-card').length===3 && !!document.querySelector('#abaCcTop .cc-deuda-prov')`, 30000);
-    chk('eligiendo a Caco aparecen las 3 facturas y la deuda (sin esto lo de abajo no mide nada)', pinto);
+    const pinto = await esperar(cli, `document.querySelectorAll('#abaCcListBox .cc-card').length===3 && !!document.querySelector('#abaCcTop .cc-nueva')`, 30000);
+    chk('eligiendo a Caco aparecen las 3 facturas y el botón de cargar (sin esto lo de abajo no mide nada)', pinto);
     if (!pinto) { chk('sin errores de JS', errores.length === 0, errores.slice(0, 3)); throw new Error('no pinto'); }
     const orden = await evaluar(cli, `(function(){ var y=function(id){ var e=document.getElementById(id); return e ? Math.round(e.getBoundingClientRect().top + window.scrollY) : -1; };
       return { arriba:y('abaCcArriba'), cortes:y('npProductsList'), abajo:y('abaCcAbajo'), nota:/factura se carga acá arriba/.test(document.getElementById('npProductsList').textContent) }; })()`);
-    chk('la deuda y el botón arriba de los cortes, las facturas abajo', orden.arriba >= 0 && orden.arriba < orden.cortes && orden.cortes < orden.abajo, orden);
+    chk('el botón arriba de los cortes, las facturas abajo', orden.arriba >= 0 && orden.arriba < orden.cortes && orden.cortes < orden.abajo, orden);
     chk('el aviso de los cortes dice que la factura se carga ahí arriba', orden.nota, orden);
 
-    /* ── Arriba: lo que se debe ── */
-    const top = await evaluar(cli, `(function(){ var t=document.getElementById('abaCcTop'); return { txt:t.textContent.replace(/\\s+/g,' '), provs:[].map.call(t.querySelectorAll('.cc-deuda-prov'),function(x){return x.textContent.replace(/\\s+/g,' ');}),
-      pagar: !!t.querySelector('.cc-b-pagar'), nueva: (t.querySelector('.cc-nueva')||{}).textContent||'' }; })()`);
-    chk('la deuda de carne: Caco $1.709.470, semana 37 (y no Prov Uno, que no es de carne)', top.provs.length === 1 && /Caco/.test(top.provs[0]) && /1\.709\.470/.test(top.provs[0]) && /semana 37/.test(top.txt) && !/Prov Uno/.test(top.txt), top);
-    chk('con el botón para ir a pagar y el de cargar la factura', top.pagar && /Cargar la factura de la carne/.test(top.nueva), top);
+    /* ── Arriba: solo cargar. La deuda se ve en cada factura y se paga en PAGOS ── */
+    const top = await evaluar(cli, `(function(){ var t=document.getElementById('abaCcTop'); return { txt:t.textContent.replace(/\s+/g,' '),
+      pagar: /Pagar en PAGOS/.test(t.textContent), nueva: (t.querySelector('.cc-nueva')||{}).textContent||'' }; })()`);
+    chk('arriba solo el botón de cargar la factura: sin la deuda ni "Pagar en PAGOS" (no se paga desde acá)', /Cargar la factura de la carne/.test(top.nueva) && !top.pagar && !/se le debe|1\.709\.470/.test(top.txt), top);
+    chk('en + NUEVO no hay ningún botón que pague', await evaluar(cli, `!/Pagar/.test(document.getElementById('abaNuevoView').textContent)`));
 
     /* ── Las tarjetas ── */
     const cards = await evaluar(cli, `[].map.call(document.querySelectorAll('#abaCcListBox .cc-card'),function(c){ return { txt:c.textContent.replace(/\\s+/g,' '),
@@ -348,8 +348,8 @@ const EXTRA = `
     await aNuevo();
     await elegirProv('Caco');
     await esperar(cli, `document.querySelectorAll('#abaCcListBox .cc-card').length===3`, 10000);
-    const tp = await evaluar(cli, `({ top:document.getElementById('abaCcTop').textContent, est:(document.querySelector('#abaCcListBox .cc-card .cc-estado')||{}).textContent })`);
-    chk('y la factura de la carne no dice "al día": dice que no se pudo calcular', /No se pudo calcular/.test(tp.top) && !/Al día/.test(tp.top), tp);
+    const tp = await evaluar(cli, `({ est:(document.querySelector('#abaCcListBox .cc-card .cc-estado')||{}).textContent })`);
+    chk('y la factura de la carne no dice "pagada": dice que no se pudo calcular la deuda', /No se pudo calcular la deuda/.test(tp.est || ''), tp);
 
     /* ── Si el libro no llega ── */
     await ir('e');
