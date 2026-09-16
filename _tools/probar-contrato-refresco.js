@@ -18,5 +18,9 @@ ok('Inicio refresca ventas además de pedidos y caja', /_tab === 'inicio'[\s\S]*
 ok('Ventas respeta Productos, Combos y Cruce', /_vsubA==='productos'[\s\S]*loadProductosAnalytics[\s\S]*_vsubA==='combos'[\s\S]*loadCombosEval[\s\S]*_vsubA==='cruce'/.test(src));
 ok('Mi Reparto evita la carga duplicada al entrar', /_refrescoAutoOcupado[\s\S]*loadMiReparto/.test(src));
 ok('Ajustes comparte una única consulta en vuelo', /AJ_PEDIDO[\s\S]*if\(AJ_PEDIDO\)return AJ_PEDIDO/.test(src));
-console.log('\n  ' + (tabs.length + 4 - mal) + ' ok · ' + mal + ' mal\n');
+ok('una lectura colgada deja de mostrar Actualizando antes del tope manual',
+  /FRESCO_MAX_VUELO_MS=85000/.test(src) &&
+  /Date\.now\(\)-\(_frescoVueloDesde\[f\]\|\|0\)<FRESCO_MAX_VUELO_MS/.test(src) &&
+  /Date\.now\(\)-\(_frescoVueloDesde\[f\]\|\|0\)>=FRESCO_MAX_VUELO_MS/.test(src));
+console.log('\n  ' + (tabs.length + 5 - mal) + ' ok · ' + mal + ' mal\n');
 process.exit(mal ? 1 : 0);
