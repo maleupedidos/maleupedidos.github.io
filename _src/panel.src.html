@@ -7512,11 +7512,11 @@ function _pintarFresco(){
 
 // Marca que una o varias fuentes llegaron bien, y cuenta para el freno de 90 s.
 function _markRefreshTime(fuentes){
-  /* Un refresco que termino bien cuenta para el freno de 90 s del automatico.
-     Sin esto, el `go(active)` del final del ↻ disparaba OTRO loadRapido apenas
-     terminaba el primero: los cuatro endpoints y la pantalla pintados dos
-     veces (medido el 12/9/2026). */
-  try{ if(typeof window._anotarRefresco==='function') window._anotarRefresco(); }catch(e){}
+  /* El freno automatico es por FUENTE, no por ERP entero. Si Pedidos acaba de
+     llegar, entrar a Caja tiene que poder pedir Caja; son fotos distintas.
+     Mantener este sello por fuente evita el doble pedido al terminar un ↻ sin
+     volver a dejar una tab con datos viejos por culpa de otra. */
+  try{ if(typeof window._anotarRefresco==='function') window._anotarRefresco(fuentes); }catch(e){}
   _marcarFresco(fuentes);
 }
 
@@ -21068,9 +21068,31 @@ function _vListaClick(e){
        3. nunca tapa la pantalla — el único movimiento es el reloj del ↻ */
   var _REFRESCO_AUTO = true;
   var _REFRESCO_MIN_MS = 90000;
-  var _ultimoRefrescoAuto = Date.now();
+  /* No existe un "ultimo refresco" global: Pedidos, Caja, Stock y CRM son
+     fuentes independientes. Un único reloj hacia que navegar a una tab con su
+     foto vieja no hiciera nada durante 90 s porque OTRA tab se había renovado.
+     La espera se conserva, pero para cada fuente que realmente se pidió. */
+  var _ultimoRefrescoAutoPorFuente = {};
   var _refrescandoAuto = false;
-  window._anotarRefresco = function(){ _ultimoRefrescoAuto = Date.now(); };
+  function _fuentesRefrescoAuto(tab){
+    var fs=[];
+    try{ fs=(typeof _fuentesDeTab==='function')?_fuentesDeTab(tab):[]; }catch(e){}
+    return fs&&fs.length?fs.slice():['_panel'];
+  }
+  function _anotarInicioRefresco(tab){
+    var ahora=Date.now();
+    _fuentesRefrescoAuto(tab).forEach(function(f){ _ultimoRefrescoAutoPorFuente[f]=ahora; });
+  }
+  function _debeRefrescarAuto(tab){
+    var ahora=Date.now(), fs=_fuentesRefrescoAuto(tab);
+    /* Basta una fuente vieja para actualizar la tab: Inicio, por ejemplo,
+       depende tanto de Pedidos como de Caja. */
+    return fs.some(function(f){ return ahora-(_ultimoRefrescoAutoPorFuente[f]||0)>=_REFRESCO_MIN_MS; });
+  }
+  window._anotarRefresco = function(fuentes){
+    var ahora=Date.now(), fs=(fuentes&&fuentes.length)?fuentes:_fuentesRefrescoAuto((typeof _tabActual==='function')?_tabActual():'');
+    fs.forEach(function(f){ _ultimoRefrescoAutoPorFuente[f]=ahora; });
+  };
   /* Para el vigia de datos nuevos: no pedir un refresco encima de otro. */
   window._refrescoAutoOcupado = function(){ return _refrescandoAuto; };
   /* `forzar` (15/9/2026): saltea SOLO el freno de los 90 s. Lo usa el vigia
@@ -21087,12 +21109,12 @@ function _vListaClick(e){
     var _tabA = (typeof _tabActual === 'function') ? _tabActual() : '';
     var _saA = _REFRESCO_SUBAPP[_tabA];
     if(_saA && _saA.auto && _saA.hay()){ try{ _saA.auto(); }catch(eA){} return; }
-    if(!forzar && Date.now() - _ultimoRefrescoAuto < _REFRESCO_MIN_MS) return;
     /* Lo que se refresca es lo que se esta MIRANDO. Estando en una sub-app,
        `loadRapido()` pedia ~900 KB del panel que esa pantalla no dibuja y
        dejaba sus propios datos viejos: eso es "volvi al celular y no se
        actualizo". El mapa es el mismo que usa el ↻. */
     var _tab = (typeof _tabActual === 'function') ? _tabActual() : '';
+    if(!forzar && !_debeRefrescarAuto(_tab)) return;
     var _sa = _REFRESCO_SUBAPP[_tab];
     var _p = null;
     if(_sa && _sa.hay()){
@@ -21100,7 +21122,7 @@ function _vListaClick(e){
       /* La sub-app no devuelve `{ok}`: si su promesa resuelve, refresco.
          Es el mismo criterio con el que el ↻ estampa la hora. */
       _refrescandoAuto = true;
-      _ultimoRefrescoAuto = Date.now();
+      _anotarInicioRefresco(_tab);
       /* La sub-app marca su propia fuente cuando le llegan los datos
          (window._marcarFresco): estampar aca contaria una falla como exito. */
       Promise.resolve(_p).then(function(){}, function(){}).then(function(){ _refrescandoAuto = false; });
@@ -21111,7 +21133,7 @@ function _vListaClick(e){
        como estaban. */
     if(_tab === 'stock' && typeof ST_TAB === 'string' && ST_TAB !== 'productos'){
       _refrescandoAuto = true;
-      _ultimoRefrescoAuto = Date.now();
+      _anotarInicioRefresco(_tab);
       Promise.resolve(ST_TAB === 'carne' ? stCarnePedir(true) : stDepPedir(true)).then(function(){}, function(){}).then(function(){ _refrescandoAuto = false; });
       return;
     }
@@ -21119,7 +21141,7 @@ function _vListaClick(e){
        `loadRapido` (pedidos y caja, ~900 KB) y dejaba las ventas como estaban. */
     if(_tab === 'ventas' && typeof loadVentas === 'function'){
       _refrescandoAuto = true;
-      _ultimoRefrescoAuto = Date.now();
+      _anotarInicioRefresco(_tab);
       Promise.resolve(loadVentas()).then(function(){}, function(){}).then(function(){ _refrescandoAuto = false; });
       return;
     }
@@ -21130,20 +21152,30 @@ function _vListaClick(e){
        dejaba los clientes como estaban. (14/9/2026) */
     if(_tab === 'bbdd' && typeof window.crmRefrescarSub === 'function'){
       _refrescandoAuto = true;
-      _ultimoRefrescoAuto = Date.now();
+      _anotarInicioRefresco(_tab);
       var _bbt = document.querySelector('#p-bbdd .bbdd-tab.on');
       Promise.resolve(window.crmRefrescarSub((_bbt && _bbt.dataset.sub) || 'clientes')).then(function(){}, function(){}).then(function(){ _refrescandoAuto = false; });
       return;
     }
     if((_tab === 'caja' || _tab === 'egresos') && typeof _recargarCaja === 'function'){
       _refrescandoAuto = true;
-      _ultimoRefrescoAuto = Date.now();
+      _anotarInicioRefresco(_tab);
       Promise.resolve(_recargarCaja()).then(function(){}, function(){}).then(function(){ _refrescandoAuto = false; });
+      return;
+    }
+    /* Stock, Planificacion, Proveedores y otras tabs que viven del volcado no
+       se actualizan con `loadRapido`: ese camino solo trae pedidos/caja. Si ya
+       hay una copia D, pedir el admin completo las renueva sin duplicar la
+       carga de arranque que hace _pedirD(). */
+    if(_fuentesRefrescoAuto(_tab).indexOf('volcado')>=0 && D && typeof load === 'function'){
+      _refrescandoAuto = true;
+      _anotarInicioRefresco(_tab);
+      Promise.resolve(load()).then(function(){}, function(){}).then(function(){ _refrescandoAuto = false; });
       return;
     }
     if(typeof loadRapido !== 'function') return;
     _refrescandoAuto = true;
-    _ultimoRefrescoAuto = Date.now();
+    _anotarInicioRefresco(_tab);
     /* loadRapido marca sus fuentes. Antes esto estampaba la hora de la tab
        abierta: en Stock ponia "recien" sobre un volcado que no se pidio. */
     Promise.resolve(loadRapido()).then(function(){}, function(){}).then(function(){ _refrescandoAuto = false; });
