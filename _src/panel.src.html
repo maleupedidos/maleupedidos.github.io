@@ -4432,7 +4432,7 @@ body.role-single .statusbar{font-size:11px}
 /* ════════════════ AJUSTES — front (solo admin) ════════════════
  * Edita las hojas de configuración desde el Panel: Usuarios, Config_Maleu,
  * Provisiones_Fijas, Config (negocio), Vendedores, Permisos. */
-var AJ_DATA=null, AJ_SEC='usuarios';
+var AJ_DATA=null, AJ_SEC='usuarios', AJ_PEDIDO=null;
 function ajEsc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 /* ── Sesión: salir para entrar con otra cuenta ────────────────────────────
    Pedido de Tadeo (21/8/2026): poder cambiarse a la cuenta de un repartidor o
@@ -4553,18 +4553,27 @@ function ajCerrarSesion(){
   panelDoLogout();
 }
 function ajLoad(opts){
+  opts=opts||{};
   var b=document.getElementById('ajBody');
-  if(AJ_DATA){ ajRender(); return; } // ya cargado en esta sesion
+  if(AJ_DATA&&!opts.forzar){ ajRender(); return Promise.resolve(AJ_DATA); }
+  // Entrar, volver a la app y el vigía pueden pedir Ajustes casi juntos. Un
+  // solo viaje alcanza; los demás esperan la misma respuesta.
+  if(AJ_PEDIDO)return AJ_PEDIDO;
   b.innerHTML='<div class="aj-loading">Cargando configuración…</div>';
   // Antes esto esperaba al backend con la pantalla en "Cargando…". Ahora pinta
   // la copia de la ultima vez al instante y la reemplaza cuando llega la nueva.
-  traer('ajustes', API+'?action=ajustesData&_t='+Date.now(), function(d,info){
+  AJ_PEDIDO=traer('ajustes', API+'?action=ajustesData&_t='+Date.now(), function(d,info){
     AJ_DATA=d; ajRender();
     _ajSello(info);
-  }, { valido:function(d){return d&&d.ok;}, sinCache:opts&&opts.sinCache })
+    // Una copia local se pinta al instante, pero no se hace pasar por datos
+    // nuevos: el reloj del ERP se estampa solo cuando respondió el servidor.
+    if(!info.viejo&&typeof _marcarFresco==='function')_marcarFresco(['ajustes']);
+  }, { valido:function(d){return d&&d.ok;}, sinCache:opts.sinCache })
   .catch(function(){
     if(!AJ_DATA)b.innerHTML='<div class="aj-loading">No se pudo cargar. Fijate la conexión.</div>';
-  });
+    return null;
+  }).then(function(d){ AJ_PEDIDO=null; return d; },function(e){ AJ_PEDIDO=null; throw e; });
+  return AJ_PEDIDO;
 }
 /* Deja dicho de cuando son los datos que se estan viendo. Sin esto, mostrar una
    copia guardada seria mentir por omision. */
@@ -4578,7 +4587,7 @@ function _ajSello(info){
   }else if(s.parentNode!==b){ b.appendChild(s); }
   s.textContent=info.viejo?('Datos de '+info.hace+' · actualizando…'):('Actualizado '+info.hace);
 }
-function ajReload(){ AJ_DATA=null; ajLoad({sinCache:true}); }
+function ajReload(){ AJ_DATA=null; return ajLoad({sinCache:true,forzar:true}); }
 function ajGo(sec){
   AJ_SEC=sec;
   document.querySelectorAll('#p-ajustes .aj-pill').forEach(function(p){p.classList.toggle('on',p.dataset.sec===sec);});
@@ -6480,7 +6489,9 @@ function go(p){
     }
     // Adaptar UI a rol admin (oculta montos, mantiene actividad)
     mrApplyRoleMode();
-    loadMiReparto();
+    /* Si el refresco automático ya pidió esta vista, no duplicar la consulta
+       apenas termina de entrar a la tab. */
+    if(!(typeof window._refrescoAutoOcupado==='function'&&window._refrescoAutoOcupado()))loadMiReparto();
     var sub='dia';try{sub=localStorage.getItem('maleu_mr_sub')||'dia';}catch(e){}
     mrShowSub(sub);
   }
@@ -6578,7 +6589,7 @@ function mrShowSub(which){
     if(d)d.style.display='none';if(h)h.style.display='block';
     if(bD){bD.style.color='#888';bD.style.borderBottomColor='transparent';}
     if(bH){bH.style.color='var(--b)';bH.style.borderBottomColor='var(--b)';}
-    loadMiRepartoHistorial();
+    if(!(typeof window._refrescoAutoOcupado==='function'&&window._refrescoAutoOcupado()))loadMiRepartoHistorial();
   }else{
     if(d)d.style.display='block';if(h)h.style.display='none';
     if(bH){bH.style.color='#888';bH.style.borderBottomColor='transparent';}
@@ -6742,11 +6753,12 @@ function loadMiRepartoHistorial(){
   if(listEl)listEl.innerHTML='<div style="text-align:center;padding:20px;color:#888">Cargando...</div>';
   if(emEl)emEl.style.display='none';
   var url=API+'?action=miRepartoHistorial&usuario='+encodeURIComponent(usuario);
-  fetch(url).then(function(r){return r.json();}).then(function(d){
+  return fetch(url).then(function(r){return r.json();}).then(function(d){
     if(!d||!d.ok){
       if(listEl)listEl.innerHTML='<div style="color:#d33;padding:14px">Error: '+((d&&d.err)||'desconocido')+'</div>';
       return;
     }
+    try{_marcarFresco(['mireparto']);}catch(e){}
     _mrhData=d;
     // Restaurar filtro persistido (puede ser string 'todo'/'hoy' o objeto {t,v})
     var saved='todo';try{saved=localStorage.getItem('maleu_mrh_filter')||'todo';}catch(e){}
@@ -6760,6 +6772,7 @@ function loadMiRepartoHistorial(){
     _mrhUpdateActiveUI();
     _mrhRender(d);
   }).catch(function(){
+    try{_marcarFallo(['mireparto']);}catch(e){}
     if(listEl)listEl.innerHTML='<div style="color:#d33;padding:14px">Error de red.</div>';
   });
 }
@@ -7122,12 +7135,13 @@ function loadMiReparto(){
   if(emEl)emEl.style.display='none';
   _mrSetLoading(true);
   var url=API+'?action=miReparto&usuario='+encodeURIComponent(usuario)+'&fecha='+encodeURIComponent(fechaISO);
-  fetch(url).then(function(r){return r.json();}).then(function(d){
+  return fetch(url).then(function(r){return r.json();}).then(function(d){
     _mrSetLoading(false);
     if(!d||!d.ok){
       if(listEl)listEl.innerHTML='<div style="color:#d33;padding:14px">Error: '+((d&&d.err)||'desconocido')+'</div>';
       return;
     }
+    try{_marcarFresco(['mireparto']);}catch(e){}
     var fmt=function(n){return '$'+Number(n||0).toLocaleString('es-AR');};
     var isAdmin=mrIsAdmin();
 
@@ -7350,6 +7364,7 @@ function loadMiReparto(){
     if(listEl)listEl.innerHTML=html;
   }).catch(function(err){
     _mrSetLoading(false);
+    try{_marcarFallo(['mireparto']);}catch(e){}
     if(listEl)listEl.innerHTML='<div style="color:#d33;padding:14px">Error de red.</div>';
   });
 }
@@ -7373,7 +7388,7 @@ function loadMiReparto(){
    en `maleu_fresco` (sin el prefijo `mc_`, que `_swrPodar` tira) para que al
    abrir la app diga de cuando es la copia en vez de inventar "ahora". */
 var FRESCO_VIEJO_MIN=20;   /* el mismo umbral que el sello de la Caja */
-var _FRESCO_NOM={pedidos:'Pedidos',caja:'Caja',volcado:'Datos del ERP',ventas:'Ventas',ruta:'Entregas',busqueda:'Abastecimiento',miportal:'Mi Portal',depositos:'Dep\u00f3sitos',carnePiezas:'Piezas de carne',crmClientes:'Clientes',crmProductos:'Productos'};
+var _FRESCO_NOM={pedidos:'Pedidos',caja:'Caja',volcado:'Datos del ERP',ventas:'Ventas',ruta:'Entregas',busqueda:'Abastecimiento',miportal:'Mi Portal',depositos:'Dep\u00f3sitos',carnePiezas:'Piezas de carne',crmClientes:'Clientes',crmProductos:'Productos',ajustes:'Ajustes',productosAnalytics:'Productos',combosEval:'Combos',mireparto:'Mi Reparto'};
 /* El volcado completo (`admin`) trae tambien los pedidos y la caja. */
 var _FRESCO_EN_VOLCADO={pedidos:1,caja:1};
 var _fresco=(function(){
@@ -7388,13 +7403,21 @@ var _frescoVuelo={}, _frescoVueloDesde={}, _frescoListoHasta=0, _frescoListoT=nu
 function _fuentesDeTab(tab){
   if(!tab)return [];
   if(tab==='ruta'||tab==='busqueda'||tab==='miportal')return [tab];
+  if(tab==='ajustes')return ['ajustes'];
+  if(tab==='mireparto')return ['mireparto'];
   if(tab==='pedidos'||tab==='pedidoshome'||tab==='estancias')return ['pedidos'];
   if(tab==='caja'||tab==='egresos')return ['caja'];
-  if(tab==='inicio')return _tengoTab('caja')?['pedidos','caja']:['pedidos'];
+  if(tab==='inicio'){
+    var _fi=['pedidos'];
+    if(_tengoTab('caja'))_fi.push('caja');
+    if(_tengoTab('ventas'))_fi.push('ventas');
+    return _fi;
+  }
   if(tab==='ventas'){
     var _vs=(typeof vTab==='string')?vTab:'ventas';
     if(_vs==='cruce')return ['volcado'];
-    if(_vs==='productos'||_vs==='combos')return [];
+    if(_vs==='productos')return ['productosAnalytics'];
+    if(_vs==='combos')return ['combosEval'];
     return ['ventas'];
   }
   /* BBDD dice de cuando es su lista (14/9/2026). */
@@ -15683,11 +15706,13 @@ function loadCombosEval(force){
      `_combosEvalCache=d` se guardaba aunque viniera {ok:false}, y el ↻ no
      reintentaba nunca. Devuelve {ok} para que el ↻ sepa si salio bien. */
   return fetch(API+'?action=combosEval&t='+Date.now()).then(function(r){return r.json();}).then(function(d){
-    if(d&&d.ok){ _combosEvalCache=d; renderCombosEval(d); return {ok:true}; }
+    if(d&&d.ok){ _combosEvalCache=d; renderCombosEval(d); try{_marcarFresco(['combosEval']);}catch(e){} return {ok:true}; }
     if(!_combosEvalCache) renderCombosEval(d);
+    try{_marcarFallo(['combosEval']);}catch(e){}
     return {ok:false};
   }).catch(function(){
     if(kp && !_combosEvalCache) kp.innerHTML='<div style="padding:14px;color:#c0392b">No se pudo cargar la evaluación de combos. Tocá actualizar para reintentar.</div>';
+    try{_marcarFallo(['combosEval']);}catch(e){}
     return {ok:false};
   });
 }
@@ -21138,11 +21163,53 @@ function _vListaClick(e){
       return;
     }
     /* Ventas no vive del volcado: volver al celular estando ahi pedia
-       `loadRapido` (pedidos y caja, ~900 KB) y dejaba las ventas como estaban. */
+       `loadRapido` (pedidos y caja, ~900 KB) y dejaba las ventas como estaban.
+       Cada sub-tab tiene además su propia fuente: el automático debe seguir
+       exactamente el mismo contrato que el botón manual. */
     if(_tab === 'ventas' && typeof loadVentas === 'function'){
       _refrescandoAuto = true;
       _anotarInicioRefresco(_tab);
-      Promise.resolve(loadVentas()).then(function(){}, function(){}).then(function(){ _refrescandoAuto = false; });
+      var _vsubA=(typeof vTab==='string')?vTab:'ventas', _pva=null;
+      if(_vsubA==='productos'&&typeof loadProductosAnalytics==='function')_pva=loadProductosAnalytics();
+      else if(_vsubA==='combos'&&typeof loadCombosEval==='function')_pva=loadCombosEval(true);
+      else if(_vsubA==='cruce'&&typeof load==='function')_pva=load().then(function(r){try{renderCruce();}catch(e){}return r;});
+      else _pva=loadVentas();
+      Promise.resolve(_pva).then(function(){}, function(){}).then(function(){ _refrescandoAuto = false; });
+      return;
+    }
+    /* Inicio mezcla operación (pedidos/caja) con el resumen de ventas. Antes
+       el refresco automático renovaba solo la primera parte: el reloj podía
+       decir "recién" mientras los indicadores de ventas seguían viejos. */
+    if(_tab === 'inicio' && typeof loadRapido === 'function'){
+      _refrescandoAuto = true;
+      _anotarInicioRefresco(_tab);
+      var _pi=[loadRapido()];
+      if(_tengoTab('ventas')&&typeof loadVentas === 'function')_pi.push(loadVentas());
+      Promise.all(_pi).then(function(){}, function(){}).then(function(){ _refrescandoAuto = false; });
+      return;
+    }
+    /* Mi Reparto tiene dos fuentes visuales (día e historial) pero una misma
+       promesa de frescura para el repartidor: renovar exactamente la que está
+       visible evita pedir el historial entero cuando se está cerrando el día. */
+    if(_tab === 'mireparto' && typeof loadMiReparto === 'function'){
+      _refrescandoAuto = true;
+      _anotarInicioRefresco(_tab);
+      /* `go()` todavía está completando fecha, rol y sub-tab. Esperar un tick
+         conserva el orden de entrada y evita consultar con una fecha vacía. */
+      var _pmr=new Promise(function(resolve){setTimeout(function(){
+        var _mrSub='dia';try{_mrSub=localStorage.getItem('maleu_mr_sub')||'dia';}catch(e){}
+        var p=(_mrSub==='hist'&&typeof loadMiRepartoHistorial==='function')?loadMiRepartoHistorial():loadMiReparto();
+        Promise.resolve(p).then(resolve,resolve);
+      },0);});
+      Promise.resolve(_pmr).then(function(){}, function(){}).then(function(){ _refrescandoAuto = false; });
+      return;
+    }
+    /* Ajustes también es información operativa. Conserva una copia para abrir
+       instantáneo, pero al entrar o detectar cambios la reemplaza sola. */
+    if(_tab === 'ajustes' && typeof ajReload === 'function'){
+      _refrescandoAuto = true;
+      _anotarInicioRefresco(_tab);
+      Promise.resolve(ajReload()).then(function(){}, function(){}).then(function(){ _refrescandoAuto = false; });
       return;
     }
     /* Caja y Pagos viven de `cajaLight`, que es lo mismo que pide su ↻
@@ -29195,11 +29262,13 @@ if('serviceWorker' in navigator){
       prodState.data = d;
       prodFillBarrios(d.filtros);
       renderProdAll();
+      try{_marcarFresco(['productosAnalytics']);}catch(e){}
       return {ok:true};
     }).catch(function(e){
       if(myReq !== prodState._seq) return {ok:false};
       if(_vp)_vp.classList.remove('prod-viejo');
       document.getElementById('prodKpis').innerHTML = '<div style="grid-column:1/-1;padding:20px;color:#B91C1C">No pude traer los productos (' + escHtml(e.message||e) + '). Lo de abajo es del período anterior.</div>';
+      try{_marcarFallo(['productosAnalytics']);}catch(e2){}
       return {ok:false};
     });
   };
