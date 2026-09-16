@@ -1,0 +1,22 @@
+#!/usr/bin/env node
+/* Evita volver a publicar una tab que no sepa de qué datos depende ni cómo
+ * actualizarse. El botón manual y el refresco automático deben cubrir la misma
+ * pantalla, incluso cuando tiene sub-tabs con fuentes propias. */
+'use strict';
+const fs = require('fs'), path = require('path');
+const src = fs.readFileSync(path.join(__dirname, '..', '_src', 'panel.src.html'), 'utf8');
+const tabs = ['inicio','ventas','planificacion','pedidos','caja','egresos','stock','ruta','busqueda','bbdd','estancias','proveedores','ajustes','miportal','pedidoshome','mireparto'];
+const definicionTabsConDatos = (src.match(/var _TABS_CON_DATOS=\[([\s\S]*?)\];/) || ['', ''])[1];
+const usaVolcado = new Set((definicionTabsConDatos.match(/'[^']+'/g) || []).map(x => x.slice(1, -1)));
+let mal = 0;
+function ok(nombre, condicion) { console.log((condicion ? '  OK  ' : '  MAL ') + nombre); if (!condicion) mal++; }
+console.log('\n== CONTRATO DE REFRESCO DEL ERP ==\n');
+tabs.forEach(t => ok(t + ' tiene fuente o refresco propio',
+  new RegExp("tab==='" + t + "'|_tab === '" + t + "'|active==='" + t + "'|p==='" + t + "'").test(src) ||
+  (usaVolcado.has(t) && /return _tabUsaD\(tab\)\?\['volcado'\]/.test(src))));
+ok('Inicio refresca ventas además de pedidos y caja', /_tab === 'inicio'[\s\S]*loadRapido\(\)[\s\S]*loadVentas/.test(src));
+ok('Ventas respeta Productos, Combos y Cruce', /_vsubA==='productos'[\s\S]*loadProductosAnalytics[\s\S]*_vsubA==='combos'[\s\S]*loadCombosEval[\s\S]*_vsubA==='cruce'/.test(src));
+ok('Mi Reparto evita la carga duplicada al entrar', /_refrescoAutoOcupado[\s\S]*loadMiReparto/.test(src));
+ok('Ajustes comparte una única consulta en vuelo', /AJ_PEDIDO[\s\S]*if\(AJ_PEDIDO\)return AJ_PEDIDO/.test(src));
+console.log('\n  ' + (tabs.length + 4 - mal) + ' ok · ' + mal + ' mal\n');
+process.exit(mal ? 1 : 0);
