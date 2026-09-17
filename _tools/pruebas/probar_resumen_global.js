@@ -192,7 +192,7 @@ const txt = (cli, sel) => ev(cli, `window.__tx(document.querySelector(${JSON.str
     k2 = await ev(cli, `window.__tx(document.querySelector('#hRetail .rt-k'))`);
     chk('Esta semana: $17.000, y sin nada que comparar el lunes pasado lo dice', /\$17\.000/.test(k2 || '') && /sin datos para comparar/.test(k2 || ''), k2);
     const kpSem = await ev(cli, `[].map.call(document.querySelectorAll('#hRetail .rt-k'),function(k){return window.__tx(k);})`);
-    chk('Esta semana: proyecta $43.000 al entregar el pedido ya cargado de $26.000, sin inflar Facturado', Array.isArray(kpSem) && /Facturado \$17\.000/.test(kpSem[0] || '') && /Proyección \$43\.000/.test(kpSem[4] || '') && /\+\$26\.000 si entregás 1 pedido/.test(kpSem[4] || ''), kpSem);
+    chk('Esta semana: proyecta $43.000 y margen bruto estimado $19.000 (44%), sin inflar Facturado', Array.isArray(kpSem) && /Facturado \$17\.000/.test(kpSem[0] || '') && /Proyección \$43\.000/.test(kpSem[4] || '') && /\+\$26\.000 si entregás 1 pedido/.test(kpSem[4] || '') && /margen bruto est\. \$19\.000 \(44%\)/.test(kpSem[4] || ''), kpSem);
     chk('Esta semana: los clientes de la 38 (1 · recompra)', /1 cliente domiciliario 0 🆕 Nuevos 1 🔁 Recompra 0 ⏰ Reactivados/.test(await txt(cli, '#hRetail .rt-cl') || ''), await txt(cli, '#hRetail .rt-cl'));
     await ev(cli, `rtPer('semAnt')`); await pausa(300);
     chk('volviendo a la semana pasada, el cuadro vuelve', await ev(cli, `!!document.querySelector('#hRetail .rt-cl')`) === true);
