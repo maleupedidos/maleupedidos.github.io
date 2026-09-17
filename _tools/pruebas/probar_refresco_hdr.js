@@ -194,6 +194,10 @@ const HORA = /\b\d{1,2}:\d{2}\b/;
     await ir('c');
     await esperar(cli, `window.D && Array.isArray(D.pedidos) && D.pedidos.length===30`, 20000);
     await evaluar(cli, `go('inicio')`); await pausa(1500);
+    const comp = await evaluar(cli, `(async()=>{ window.__gets=[]; var a=loadRapido(),b=loadRapido(); await Promise.all([a,b]);
+      return window.__gets.slice(); })()`);
+    chk('dos refrescos rápidos iguales comparten un solo viaje de Pedidos', comp.filter(function(a){return a==='pedidosLight';}).length === 1, comp);
+    chk('y no duplican Caja ni OCs mientras la misma foto está en vuelo', comp.filter(function(a){return a==='cajaLight';}).length <= 1 && comp.filter(function(a){return a==='ocLight';}).length <= 1, comp);
     const tocar = async () => evaluar(cli, `(async()=>{ refreshContextual(); var b=document.getElementById('hdrRefresh'); var t=performance.now();
       await new Promise(r=>setTimeout(r,60)); while(performance.now()-t<20000){ if(!b.classList.contains('spinning'))break; await new Promise(r=>setTimeout(r,40)); }
       var r=${LEER}; r.giro=Math.round(performance.now()-t); return r; })()`);
