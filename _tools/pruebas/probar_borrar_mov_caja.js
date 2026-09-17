@@ -68,7 +68,7 @@ const CAJA = {
 const EXTRA = `
   (function(){
     try{ localStorage.removeItem('ma3'); localStorage.removeItem('ma3v3'); localStorage.setItem('maleu_tab','caja'); }catch(e){}
-    window.__posts=[]; window.__modo='ok';       /* 'ok' | 'cambio' */
+    window.__posts=[]; window.__modo='ok';       /* 'ok' | 'cambio' | 'colgado' */
     var CAJA=${JSON.stringify(CAJA)};
     /* OJO: el confirm y el alert los reemplaza el servidor de pruebas
        (_tools/servir.js, solo con ?prueba=1): anota en __confirms / __avisos y
@@ -86,6 +86,15 @@ const EXTRA = `
         window.__posts.push(b);
         if (b.action==='borrarMovimientoCaja'){
           if (window.__modo==='cambio') return resp({ok:false, cambio:true, error:'Esa fila cambio desde que la viste.'});
+          /* El caso del 17/9: el servidor borro y Google nunca entrego la
+             respuesta. En produccion eso lo corta el corte de POST de Caja y
+             llega ACA como un rechazo; se simula asi porque con ?prueba=1 el
+             ERP no instala su interceptor (__maleuAuth) y el corte no corre
+             en localhost. Que el borrado ESTE en _POST_IDEMPOTENTE —lo que le
+             da el reloj, se chequea aparte sobre el app.html generado. */
+          if (window.__modo==='colgado') return new Promise(function(res,rej){
+            setTimeout(function(){ rej(new Error('No pude confirmar el movimiento a tiempo')); }, 300);
+          });
           CAJA.movimientos = CAJA.movimientos.filter(function(m){ return !(m.tipo===b.tipo && Number(m.r)===Number(b.row)); });
           CAJA.gastos = CAJA.gastos.filter(function(g){ return Number(g.r)!==Number(b.row); });
           CAJA.ingresos = CAJA.ingresos.filter(function(g){ return Number(g.r)!==Number(b.row); });
@@ -166,6 +175,29 @@ const FILAS = `(()=>[].slice.call(document.querySelectorAll('#gList .gl')).map(f
     const avisos = await evaluar(cli, `window.__avisos||[]`);
     chk('avisa al usuario que no borro nada', avisos.some(a => /cambio/i.test(a)), avisos);
     chk('el movimiento SIGUE en la lista', filas.some(f => /Rendimientos/.test(f.t)), filas.map(f => f.t.slice(0, 40)));
+
+    /* ── Si la respuesta no vuelve, la pantalla TERMINA y no miente ── */
+    await evaluar(cli, `window.__modo='colgado'; window.__avisos=[]; window.__confirmDevuelve=true; 1`);
+    await evaluar(cli, `document.querySelector('#gList .gl-x:not(.gl-x-no)').click(); 1`);
+    const termino = await esperar(cli, `(window.__avisos||[]).length>0`, 30000);
+    chk('no queda "Borrando..." para siempre: avisa y termina', termino === true);
+    const aviso = await evaluar(cli, `(window.__avisos||[])[0]||''`);
+    chk('NO dice que no se borro (puede haberse borrado): dice que no pudo confirmar',
+      /no pude confirmar/i.test(aviso) && !/no se borr/i.test(aviso), aviso);
+    /* El overlay se prende y se apaga con la clase `visible` (no con `hidden`
+       ni con display): buscar la clase equivocada daba TAPADO siempre. */
+    const tapa = await evaluar(cli, `(function(){var l=document.getElementById('loaderOverlay');if(!l)return 'sin overlay';var e=getComputedStyle(l);return (l.classList.contains('visible')&&e.visibility!=='hidden'&&Number(e.opacity)>0)?'TAPADO':'destapado';})()`);
+    chk('el cartel de "Borrando..." se fue de la pantalla', tapa !== 'TAPADO', tapa);
+    await esperar(cli, `(window.__gets2||0)>=0`, 500);
+
+    /* ── El reloj de verdad: que el borrado este en la lista de POST que se
+       pueden repetir. Es lo que le da corte y reintento en produccion, y es lo
+       que faltaba el 17/9. No se puede medir con ?prueba=1, asi que se mide
+       sobre el archivo generado. ── */
+    const fuente = require('fs').readFileSync(require('path').join(__dirname, '..', '..', APP), 'utf8');
+    const linea = (fuente.match(/var _POST_IDEMPOTENTE = {[^}]*}/) || [''])[0];
+    chk('borrarMovimientoCaja esta en _POST_IDEMPOTENTE (sin eso el POST no tiene reloj)',
+      /borrarMovimientoCaja\s*:\s*1/.test(linea), linea);
 
     const err = errores.filter(e => !/stub|Failed to fetch/i.test(String(e)));
     chk('sin errores de JS', err.length === 0, err.slice(0, 3));
