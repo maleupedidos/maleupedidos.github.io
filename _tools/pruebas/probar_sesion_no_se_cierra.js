@@ -5,7 +5,9 @@
    cuando NO PUDO LEER la hoja Sesiones, y el panel borraba el token con una sola
    respuesta. Ahora el backend distingue `sesionNoVerificada`, y el panel:
    · la reintenta y nunca cierra la sesion por eso;
-   · ante authRequired pregunta una segunda vez antes de cerrar.
+   · ante authRequired pregunta una segunda vez, pero conserva el trabajo y la
+     sesión local: el servidor puede seguir rechazando operaciones, pero nunca
+     echa a alguien a mitad de una carga.
 
    Corre el bloque AUTH REAL, sacado del archivo, en un Chrome headless con el
    backend simulado por CDP (nada sale a produccion).
@@ -83,7 +85,7 @@ async function main() {
 
     console.log('4. authRequired dos veces');
     r = await correr([AUTH, AUTH]);
-    chk(r.tok === null, 'recien ahi cierra la sesion', r.tok);
+    chk(r.tok === 'tok', 'conserva la sesión y no destruye el formulario', r.tok);
     chk(r.pedidos.length === 2, 'con 2 pedidos, no mas', r.pedidos);
 
     console.log('5. un POST con authRequired suelto');

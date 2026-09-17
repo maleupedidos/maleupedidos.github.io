@@ -8676,16 +8676,17 @@ var API='https://script.google.com/macros/s/AKfycbxmrG5YVSshcYezk8lXFx_uxb7NFGcb
     });
   }
   function _sesionVencida(){
-    try{
-      localStorage.removeItem('maleu_token');
-      localStorage.removeItem('maleu_panel_session');
-      localStorage.removeItem('maleu_red_session');
-    }catch(e){}
+    /* El servidor puede equivocarse —la captura de Tadeo al guardar el
+       recorrido devolvió dos authRequired en una misma operación—. Borrar el
+       token y recargar en ese instante destruye el formulario que estaba
+       trabajando y obliga a volver a empezar. No concede acceso extra: los
+       próximos POST siguen rechazados por el servidor; sólo conserva la
+       pantalla y las notas para que la persona pueda reintentar o salir ella.
+       El cierre explícito del menú de usuario sí limpia la sesión. */
+    window.__maleuSesionDudosa=true;
     if (!window.__maleuAuthAviso){
       window.__maleuAuthAviso = true;
-      /* Las sesiones duran 90 dias: "vencio" mentia (15/9/2026). */
-      alert('El servidor no reconoció tu sesión dos veces seguidas. Entrá de nuevo con tu usuario y PIN.');
-      location.reload();
+      alert('El servidor no pudo confirmar tu sesión. No cerré tu cuenta ni borré lo que estabas cargando. Podés reintentar; si sigue fallando, cerrá sesión desde tu usuario y entrá de nuevo.');
     }
   }
   /* ── COLA DE CONCURRENCIA (10/09/2026) ─────────────────────────────────
@@ -10572,7 +10573,7 @@ function _leerVersion(app){
    "El HTML no sabe que version es" dejo de ser cierto: el build le escribe
    adentro el CACHE_NAME de sw-panel.js, el mismo que deploy.sh obliga a subir en
    cada cambio. Si lo publicado dice otra cosa, esta pagina es vieja. Punto. */
-var _APP_CN_PAGINA='maleu-panel-v360';
+var _APP_CN_PAGINA='maleu-panel-v361';
 
 /* Devuelve [{k,v}] si lo publicado no es lo que esta pagina corre. */
 function _chequearVersiones(){
@@ -36356,7 +36357,7 @@ if('serviceWorker' in navigator){
         +'<div class="est-fol-list">'+a.map(function(x){return '<div class="est-fol-row"><b>Lote '+_folEsc(x.lote)+'</b><span>'+_folEsc(_folTipoTxt(x.tipo))+'</span><small>'+_folEsc((fecha?fecha+' · ':'')+x.nota)+'</small></div>';}).join('')+'</div>'
       : '<div style="font-size:12px;color:var(--ink3);padding:10px 0">Pegá las notas: por ejemplo, <b>16 entregado a una madre</b> o <b>Lote 13 nadie</b>.</div>';
   }
-  function _folGuardarUno(sub, x, fecha){
+  function _folPayload(sub, x, fecha){
     var rec=(window.crmLoteGetLocal?window.crmLoteGetLocal(sub,x.lote):null)||{};
     var comp=rec.composicion||{}; if(typeof comp!=='string') comp=JSON.stringify(comp);
     var nota=(fecha?fecha+' · ':'')+'Recorrido con Lucas · '+x.nota;
@@ -36367,17 +36368,13 @@ if('serviceWorker' in navigator){
     var estado=rec.estadoContacto||'';
     if(x.tipo==='pendiente'&&!estado) estado='Visita pendiente';
     var body={action:'crmLoteSave',sub:sub,lote:x.lote,familia:rec.familia||'',titular:rec.titular||'',tel:rec.tel||'',reside:rec.reside||'',notas:rec.notas||'',estadoContacto:estado,sobreEstado:sobre,sobreNota:prevNota?(prevNota+'\n'+nota):nota,integrantes:rec.integrantes||'',composicion:comp};
-    return fetch(EST_API,{method:'POST',mode:'cors',body:JSON.stringify(body)}).then(function(r){return r.json();}).then(function(d){
-      if(!(d&&d.ok)) throw new Error((d&&d.error)||'no se pudo guardar');
-      if(window.crmLoteSetLocal)window.crmLoteSetLocal(sub,x.lote,{familia:body.familia,titular:body.titular,tel:body.tel,reside:body.reside,notas:body.notas,estadoContacto:body.estadoContacto,sobreEstado:body.sobreEstado,sobreNota:body.sobreNota,integrantes:body.integrantes,composicion:rec.composicion||{}});
-      return true;
-    });
+    return {body:body,rec:rec};
   }
   window.estFolAbrir=function(){
     var hoy=new Date(), iso=hoy.getFullYear()+'-'+String(hoy.getMonth()+1).padStart(2,'0')+'-'+String(hoy.getDate()).padStart(2,'0');
     var h='<div class="est-modal-ov on" id="folOv" onclick="if(event.target===this)estFolCerrar()"><div class="est-modal" style="max-width:620px">'
       +'<div style="font-size:16px;font-weight:800;color:var(--ink)">🚪 Cargar recorrido de folletos</div>'
-      +'<div style="font-size:12px;color:var(--ink2);line-height:1.5;margin:5px 0 12px">Pegá las notas tal como quedaron en WhatsApp. El ERP muestra qué va a guardar antes de hacerlo y manda una casa por vez.</div>'
+      +'<div style="font-size:12px;color:var(--ink2);line-height:1.5;margin:5px 0 12px">Pegá las notas tal como quedaron en WhatsApp. El ERP muestra qué va a guardar antes de hacerlo y guarda el recorrido completo en una sola operación.</div>'
       +'<div class="fg"><label>Sub-barrio</label><select id="folSub"><option>La Pionera</option><option>Golf</option><option>Argentina 4</option><option>Champagnat Alto</option><option>Champagnat Bajo</option><option>El Recuerdo</option><option>La Paz</option></select></div>'
       +'<div class="fg"><label>Fecha del recorrido</label><input id="folFecha" type="date" value="'+iso+'" onchange="estFolPreview()"></div>'
       +'<div class="fg"><label>Notas</label><textarea id="folRaw" rows="10" placeholder="151 nadie\n1 vieja simpática. Entregado\nLote 13 nadie" oninput="estFolPreview()"></textarea></div>'
@@ -36389,14 +36386,15 @@ if('serviceWorker' in navigator){
   window.estFolGuardar=function(){
     var a=window._folPendientes||[], sub=E$('folSub')&&E$('folSub').value, fecha=_folFecha(E$('folFecha')&&E$('folFecha').value), btn=E$('folGuardar');
     if(!a.length||!sub)return;
-    if(!confirm('¿Guardar '+a.length+' casas del recorrido en '+sub+'?\n\nSe registran una por una para no trabar el ERP.'))return;
-    if(btn){btn.disabled=true;btn.textContent='Guardando 0 / '+a.length+'…';}
-    var ok=0, malos=[];
-    (function siguiente(i){
-      if(i>=a.length){ if(btn)btn.textContent='Listo'; var msg=ok+' casas guardadas'+(malos.length?' · '+malos.length+' con error':''); _toast(msg); if(malos.length){var p=E$('folPreview');if(p)p.innerHTML+='<div style="color:var(--r);margin-top:8px">No se guardaron: '+_folEsc(malos.join(', '))+'. Podés reintentarlas.</div>';}else setTimeout(estFolCerrar,600); return; }
-      if(btn)btn.textContent='Guardando '+(i+1)+' / '+a.length+'…';
-      _folGuardarUno(sub,a[i],fecha).then(function(){ok++;siguiente(i+1);},function(){malos.push('Lote '+a[i].lote);siguiente(i+1);});
-    })(0);
+    if(!confirm('¿Guardar '+a.length+' casas del recorrido en '+sub+'?\n\nSe guarda todo junto: una sesión y una operación.'))return;
+    if(btn){btn.disabled=true;btn.textContent='Guardando '+a.length+' casas…';}
+    var cargas=a.map(function(x){return _folPayload(sub,x,fecha);});
+    fetch(EST_API,{method:'POST',mode:'cors',body:JSON.stringify({action:'crmLotesSaveBatch',items:cargas.map(function(x){return x.body;})})})
+      .then(function(r){return r.json();}).then(function(d){
+        if(!(d&&d.ok))throw new Error((d&&d.error)||'no se pudo guardar');
+        cargas.forEach(function(x){var b=x.body;if(window.crmLoteSetLocal)window.crmLoteSetLocal(sub,b.lote,{familia:b.familia,titular:b.titular,tel:b.tel,reside:b.reside,notas:b.notas,estadoContacto:b.estadoContacto,sobreEstado:b.sobreEstado,sobreNota:b.sobreNota,integrantes:b.integrantes,composicion:x.rec.composicion||{}});});
+        if(btn)btn.textContent='Listo';_toast((d.n||a.length)+' casas guardadas');setTimeout(estFolCerrar,600);
+      }).catch(function(e){if(btn){btn.disabled=false;btn.textContent='Reintentar guardado';}var p=E$('folPreview');if(p)p.innerHTML+='<div style="color:var(--r);margin-top:8px">No se guardó el recorrido: '+_folEsc(e.message)+'. Las notas siguen acá para reintentar.</div>';});
   };
 
   function _recRenderList(){
