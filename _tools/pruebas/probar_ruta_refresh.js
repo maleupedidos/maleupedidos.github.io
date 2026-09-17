@@ -43,7 +43,7 @@ const ped = (id, c) => ({ id, h: 'Home', r: id, c, t: '11' + id, b: 'Estancias d
   oD: {}, oc: [], hr: '10:00', f: '', de: '', fe: HOY, es: 'Pendiente', d: '', ep: 'No Cobrado', fp: 'Transferencia', $: 20000, p: [{ a: 'PMu', q: 1 }] });
 
 const EXTRA = `
-  window.__ent = []; window.__version = 1;
+  window.__ent = []; window.__cob = []; window.__version = 1;
   try{ localStorage.removeItem('maleu_ruta'); localStorage.setItem('maleu_tab','ruta'); }catch(e){}
   (function(){ var o = window.fetch; window.fetch = function(u, x){
     var url = String((u && u.url) || u || '');
@@ -56,7 +56,7 @@ const EXTRA = `
         if (window.__version >= 2) e.push(${JSON.stringify(ped(9202, 'Prueba Nueva'))});
         cuerpo = {ts: Date.now(), e: e};
       } else if (a === 'pendientesGuardarStock') cuerpo = {ok:true, items:[]};
-      else if (a === 'cobrosPendientes') cuerpo = {ok:true, ts:Date.now(), cobros:[]};
+      else if (a === 'cobrosPendientes') { window.__cob.push({fresh:/fresh=1/.test(url),t:performance.now()}); cuerpo = {ok:true, ts:Date.now(), cobros:[]}; }
       else cuerpo = {ok:false, error:'stub'};
       var txt = JSON.stringify(cuerpo), dem = (a === 'entregas') ? (window.__demoraEnt||300) : 150;
       return new Promise(function(res){ setTimeout(function(){ res(new Response(txt,{status:200,headers:{'Content-Type':'application/json'}})); }, dem); });
@@ -119,6 +119,30 @@ const EXTRA = `
     await pausa(800);
     const r4 = await evaluar(cli, `(async()=>{ var d=window.__ent.length; refreshContextual(); await new Promise(r=>setTimeout(r,1200)); return window.__ent.length-d; })()`);
     chk('terminado, un ↻ nuevo si vuelve a pedir', r4 === 1, r4);
+
+    // 5. Cobros no tiene que esperar la lectura de entregas: es otra fuente y
+    // el usuario está mirando plata, no Armado/Ruta.
+    await evaluar(cli, `switchTab('cobros')`);
+    /* switchTab('cobros') termina una sincronización que podía venir pendiente
+       de la prueba anterior. La dejamos cerrar antes de medir ESTE click: no
+       queremos atribuirle al ↻ una entrega que ya estaba en vuelo. */
+    await pausa(1200);
+    /* La condición que decide el destino del botón es el estado de la sub-tab.
+       La fijamos explícitamente después de dejar cerrar el trabajo anterior. */
+    await evaluar(cli, `rutCurrentTab='cobros'`);
+    const r5 = await evaluar(cli, `(async()=>{ var c=window.__cob.length, propias=0, original=refresh;
+      /* No contamos __ent: una entrega iniciada ANTES de este click puede
+         terminar mientras medimos. Interceptamos la función que el ↻ usaría
+         para iniciar una NUEVA entrega. */
+      window.refresh=function(){propias++;return Promise.resolve(true);};
+      try { refreshContextual();
+        var b=document.getElementById('hdrRefresh'),t=performance.now();
+        while(performance.now()-t<10000){if(!b.classList.contains('spinning'))break;await new Promise(r=>setTimeout(r,40));}
+        return {entregasPropias:propias,cobros:window.__cob.length-c,giro:Math.round(performance.now()-t)};
+      } finally { window.refresh=original; } })()`);
+    chk('en COBROS el ↻ no inicia entregas ajenas', r5.entregasPropias === 0, r5);
+    chk('en COBROS el ↻ pide cobrosPendientes', r5.cobros === 1, r5);
+    chk('en COBROS el ↻ termina con la fuente de esa pantalla', r5.giro < 1000, r5);
 
     console.log('\n' + ok + ' ok · ' + mal + ' mal');
     salir(mal ? 1 : 0);
