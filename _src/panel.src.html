@@ -5946,6 +5946,12 @@ var API='https://script.google.com/macros/s/AKfycbxmrG5YVSshcYezk8lXFx_uxb7NFGcb
      Solo lecturas (nunca un POST: repetir una escritura seria cobrar dos veces)
      y nunca con `fresh=1`, que si obliga a recalcular. */
   var CORTE_GET_MS = 20000, CORTE_GET_INTENTOS = 2, CORTE_GET_FINAL_MS = 45000;
+  /* Gasto e ingreso se identifican antes de salir del navegador. A diferencia
+     de un cobro viejo, se pueden pedir de nuevo: el backend devuelve el mismo
+     resultado y nunca vuelve a escribir. Eso nos permite poner un reloj tambien
+     a un POST que Google deje colgado, sin arriesgar duplicar plata. */
+  var CORTE_POST_CAJA_MS = 25000, CORTE_POST_CAJA_INTENTOS = 1;
+  var _POST_IDEMPOTENTE = { gasto: 1, ingreso: 1 };
   var _corte = window.__corteGet = { cortes: 0, salvados: 0 };
   var _CORTABLE = { admin:1, pedidosLight:1, cajaLight:1, ocLight:1, ventas:1, tendencia:1,
     stock_full:1, piezas_full:1, precios:1, catalogo:1, cobrosPendientes:1, entregas:1,
@@ -5980,6 +5986,25 @@ var API='https://script.google.com/macros/s/AKfycbxmrG5YVSshcYezk8lXFx_uxb7NFGcb
     });
   }
 
+  function _pedirPostCajaConCorte(input, init, intento){
+    intento = intento || 0;
+    if (typeof AbortController !== 'function') return _pedir(input, init, 0);
+    var ac = new AbortController(), cortado = false;
+    var i2 = {}; if (init) for (var k in init) i2[k] = init[k];
+    i2.signal = ac.signal;
+    var reloj = setTimeout(function(){ cortado = true; try{ ac.abort(); }catch(e){} }, CORTE_POST_CAJA_MS);
+    return _pedir(input, i2, 0).then(function(r){
+      clearTimeout(reloj); return r;
+    }, function(e){
+      clearTimeout(reloj);
+      if (!cortado) throw e;
+      if (intento >= CORTE_POST_CAJA_INTENTOS) {
+        throw new Error('No pude confirmar el movimiento a tiempo');
+      }
+      return _pedirPostCajaConCorte(input, init, intento + 1);
+    });
+  }
+
   function _encolar(url, init){
     return new Promise(function(res, rej){
       _cola.push({ url: url,
@@ -5990,7 +6015,7 @@ var API='https://script.google.com/macros/s/AKfycbxmrG5YVSshcYezk8lXFx_uxb7NFGcb
   }
 
   window.fetch = function(input, init){
-    var esBackend = false, esPost = false;
+    var esBackend = false, esPost = false, postIdempotente = false;
     try{
       var t = ''; try { t = localStorage.getItem('maleu_token') || ''; } catch(e){}
       var url = (typeof input === 'string') ? input : ((input && input.url) || '');
@@ -6000,6 +6025,7 @@ var API='https://script.google.com/macros/s/AKfycbxmrG5YVSshcYezk8lXFx_uxb7NFGcb
         if (esPost && init && typeof init.body === 'string'){
           var b = JSON.parse(init.body);
           if (b && typeof b === 'object' && !b.token){ b.token = t; init.body = JSON.stringify(b); }
+          postIdempotente = !!(b && b.clientOpId && _POST_IDEMPOTENTE[b.action]);
         } else if (!esPost && typeof input === 'string' && input.indexOf('token=') < 0){
           input += (input.indexOf('?') > -1 ? '&' : '?') + 'token=' + encodeURIComponent(t);
         }
@@ -6015,8 +6041,8 @@ var API='https://script.google.com/macros/s/AKfycbxmrG5YVSshcYezk8lXFx_uxb7NFGcb
     if (esBackend && esPost){
       var _marcar = function(){ try{ window.__ultimoPostBackend = Date.now(); }catch(e){} };
       _marcar();
-      return _pedir(input, init, 0).then(function(r){ _marcar(); return r; },
-                                         function(e){ _marcar(); throw e; });
+      var pedirPost = postIdempotente ? _pedirPostCajaConCorte(input, init, 0) : _pedir(input, init, 0);
+      return pedirPost.then(function(r){ _marcar(); return r; }, function(e){ _marcar(); throw e; });
     }
     return _pedir(input, init, 0);
   };
@@ -9949,11 +9975,21 @@ function aplicarMovLocal(tipo,fecha,cat,con,met,monto,notas,cuentaId){
    de ~5 s — mandar un POST por cuenta serian 15, y Apps Script los atiende de a
    uno. Si el backend no lo entiende, contesta `monto vacio` y NO escribe nada:
    entonces lo unico honesto es decir que no se guardo. */
+function _movClientOp(btn, payload){
+  var firma=JSON.stringify(payload);
+  if(btn&&btn.dataset&&btn.dataset.maleuMovFirma===firma&&btn.dataset.maleuMovOp)return btn.dataset.maleuMovOp;
+  var op='mov_'+Date.now().toString(36)+'_'+Math.random().toString(36).slice(2,10);
+  if(btn&&btn.dataset){btn.dataset.maleuMovFirma=firma;btn.dataset.maleuMovOp=op;}
+  return op;
+}
+function _movClientOpLimpiar(btn){
+  if(btn&&btn.dataset){delete btn.dataset.maleuMovFirma;delete btn.dataset.maleuMovOp;}
+}
 function _guardarMovPorCuenta(tipo,mv,fecha,cat,con,notas,btn,btnTxt){
   var pref=(tipo==='gasto')?'g':'i';
-  fetch(API,{method:'POST',body:JSON.stringify({
-    action:tipo,fecha:fecha,categoria:cat,concepto:con,notas:notas,montos:mv.porCta
-  })})
+  var payload={action:tipo,fecha:fecha,categoria:cat,concepto:con,notas:notas,montos:mv.porCta};
+  payload.clientOpId=_movClientOp(btn,payload);
+  fetch(API,{method:'POST',body:JSON.stringify(payload)})
     .then(function(r){return r.json();})
     .then(function(r){
       var esperadas=Object.keys(mv.porCta).length;
@@ -9969,6 +10005,7 @@ function _guardarMovPorCuenta(tipo,mv,fecha,cat,con,notas,btn,btnTxt){
         $(pref+'Cat').value='';$(pref+'Con').value='';$(pref+'Notas').value='';
         if(pref==='g'&&$('gProvAviso'))$('gProvAviso').hidden=true;
         _movLimpiar(pref);
+        _movClientOpLimpiar(btn);
         _recargarCaja();
       }else{
         hideLoader(true);
@@ -9978,7 +10015,7 @@ function _guardarMovPorCuenta(tipo,mv,fecha,cat,con,notas,btn,btnTxt){
         toast('No se pudo guardar'+det+' — mirá la hoja antes de cargarlo de nuevo');
       }
     })
-    .catch(function(){hideLoader(true);toast('Sin conexion — no se guardó');})
+    .catch(function(){hideLoader(true);toast('No pude confirmar el movimiento. Tocá el mismo botón otra vez: no se va a duplicar.');})
     .finally(function(){btn.disabled=false;btn.textContent=btnTxt;});
   return false;
 }
@@ -10010,13 +10047,15 @@ function guardarGasto(e){
      entiende y perder la del Brubank sin decirlo. */
   if(_mv.extra)return _guardarMovPorCuenta('gasto',_mv,fecha,cat,con,notas,btn,'Guardar gasto');
   // Single POST batch + fallback legacy si el backend no lo soporta (rows undefined o rows=0)
-  fetch(API,{method:'POST',body:JSON.stringify({
+  var payload={
     action:'gasto',fecha:fecha,categoria:cat,concepto:con,notas:notas,
     montoEf:ef, montoMp:mp,
     // Compatibilidad con backend v200: si solo hay un método, también va por formato viejo
     metodo:(ef>0&&mp===0)?'Efectivo':((mp>0&&ef===0)?'Mercado Pago':''),
     monto:(ef>0&&mp===0)?ef:((mp>0&&ef===0)?mp:0)
-  })})
+  };
+  payload.clientOpId=_movClientOp(btn,payload);
+  fetch(API,{method:'POST',body:JSON.stringify(payload)})
     .then(function(r){return r.json();})
     .then(function(r){
       if(r.ok){
@@ -10027,6 +10066,7 @@ function guardarGasto(e){
         toast('Gasto $'+f$(total)+' ('+parts.join(' + ')+')');
         saveNota(notas);saveConcepto(cat,con);
         $('gCat').value='';if($('gProvAviso'))$('gProvAviso').hidden=true;$('gCon').value='';$('gNotas').value='';_movLimpiar('g');
+        _movClientOpLimpiar(btn);
         _recargarCaja();
         btn.disabled=false;btn.textContent='Guardar gasto';
         return;
@@ -10034,7 +10074,7 @@ function guardarGasto(e){
       hideLoader(true);toast('Error: '+(r.err||'?'));
       btn.disabled=false;btn.textContent='Guardar gasto';
     })
-    .catch(function(){hideLoader(true);toast('Sin conexion');btn.disabled=false;btn.textContent='Guardar gasto';});
+    .catch(function(){hideLoader(true);toast('No pude confirmar el gasto. Tocá Guardar gasto otra vez: no se va a duplicar.');btn.disabled=false;btn.textContent='Guardar gasto';});
   return false;
 }
 
@@ -10051,12 +10091,14 @@ function guardarIngreso(e){
   var cat=$('iCat').value, con=$('iCon').value, notas=$('iNotas').value;
   /* Mismo criterio que el gasto: con una cuenta extra va SOLO `montos`. */
   if(_mv.extra)return _guardarMovPorCuenta('ingreso',_mv,fecha,cat,con,notas,btn,'Guardar ingreso');
-  fetch(API,{method:'POST',body:JSON.stringify({
+  var payload={
     action:'ingreso',fecha:fecha,categoria:cat,concepto:con,notas:notas,
     montoEf:ef, montoMp:mp,
     metodo:(ef>0&&mp===0)?'Efectivo':((mp>0&&ef===0)?'Mercado Pago':''),
     monto:(ef>0&&mp===0)?ef:((mp>0&&ef===0)?mp:0)
-  })})
+  };
+  payload.clientOpId=_movClientOp(btn,payload);
+  fetch(API,{method:'POST',body:JSON.stringify(payload)})
     .then(function(r){return r.json();})
     .then(function(r){
       if(r.ok){
@@ -10067,6 +10109,7 @@ function guardarIngreso(e){
         toast('Ingreso $'+f$(total)+' ('+parts.join(' + ')+')');
         saveNota(notas);saveConcepto(cat,con);
         $('iCat').value='';$('iCon').value='';$('iNotas').value='';_movLimpiar('i');
+        _movClientOpLimpiar(btn);
         _recargarCaja();
         btn.disabled=false;btn.textContent='Guardar ingreso';
         return;
@@ -10074,7 +10117,7 @@ function guardarIngreso(e){
       hideLoader(true);toast('Error: '+(r.err||'?'));
       btn.disabled=false;btn.textContent='Guardar ingreso';
     })
-    .catch(function(){hideLoader(true);toast('Sin conexion');btn.disabled=false;btn.textContent='Guardar ingreso';});
+    .catch(function(){hideLoader(true);toast('No pude confirmar el ingreso. Tocá Guardar ingreso otra vez: no se va a duplicar.');btn.disabled=false;btn.textContent='Guardar ingreso';});
   return false;
 }
 

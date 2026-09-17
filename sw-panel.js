@@ -24,7 +24,7 @@
  * Y si alguien igual queda pegado: mantener apretado el ↻ borra todo y
  * recarga de cero (refreshDuro).
  */
-var CN='maleu-panel-v363';
+var CN='maleu-panel-v364';
 
 self.addEventListener('install',function(e){
   e.waitUntil(caches.open(CN).then(function(c){
