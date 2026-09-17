@@ -557,6 +557,13 @@ button.rt-chip.on{background:var(--o);border-color:var(--o);color:#fff}
 .gl-con{font-size:13px;font-weight:500;color:var(--ink)}
 .gl-meta{font-size:11px;color:var(--ink3);margin-top:2px}
 .gl-m{font-size:14px;font-weight:700;white-space:nowrap;color:var(--ink);font-variant-numeric:tabular-nums}
+/* La ✕ de borrar un movimiento (17/9/2026). 32px de lado: es el minimo que se
+   toca bien en el celular sin agrandar la fila. Gris hasta que la tocas, para
+   que no compita con el monto. */
+.gl-x{flex:0 0 auto;width:32px;height:32px;display:flex;align-items:center;justify-content:center;background:transparent;border:none;border-radius:8px;color:var(--bl);font-size:15px;line-height:1;cursor:pointer;padding:0;opacity:.55}
+.gl-x:hover,.gl-x:focus-visible{background:#FDECEC;color:var(--r);opacity:1}
+.gl-x-no{cursor:default;font-size:12px;opacity:.35}
+.gl-x-no:hover{background:transparent;color:var(--bl);opacity:.35}
 
 /* ── CANAL BAR ── */
 .cb{background:#fff;border-radius:6px;padding:12px 14px;margin-bottom:8px;border:1px solid var(--border);box-shadow:var(--shadow)}
@@ -10622,7 +10629,7 @@ function _leerVersion(app){
    "El HTML no sabe que version es" dejo de ser cierto: el build le escribe
    adentro el CACHE_NAME de sw-panel.js, el mismo que deploy.sh obliga a subir en
    cada cambio. Si lo publicado dice otra cosa, esta pagina es vieja. Punto. */
-var _APP_CN_PAGINA='maleu-panel-v364';
+var _APP_CN_PAGINA='maleu-panel-v365';
 
 /* Devuelve [{k,v}] si lo publicado no es lo que esta pagina corre. */
 function _chequearVersiones(){
@@ -16820,7 +16827,15 @@ function rMovimientos(){
         conHtml='<span class="ord-link" onclick="event.stopPropagation();openOrdDetail(\''+_jsq(hojaCobro)+'\',\''+_jsq(pedCobro)+'\')" title="Ver detalle del pedido">'+conSafe+'</span>';
       }
     }
-    el.innerHTML='<div class="gl-info"><div class="gl-cat" style="color:'+color+'">'+ico+' '+_egrEsc(m.cat)+'</div><div class="gl-con">'+conHtml+'</div><div class="gl-meta">'+meta+'</div></div><div class="gl-m" style="color:'+color+'">'+signo+'$'+f$(m.$)+'</div>';
+    /* La ✕ sólo en lo que se carga a mano (gastos e ingresos). Un cobro no se
+       borra desde acá: se deshace desde el pedido, que es donde vive. Y un pago
+       a proveedor viene con `noBorrar` del backend, porque tiene su fila en
+       Pagos Proveedores y la deuda quedaría mal. */
+    var _borrable=(m.tipo==='gasto'||m.tipo==='ingreso')&&(Number(m.r)||0)>1&&!m.noBorrar;
+    var _x=_borrable
+      ? '<button type="button" class="gl-x" title="Borrar este movimiento" aria-label="Borrar" onclick="event.stopPropagation();borrarMovCaja(\''+m.tipo+'\','+(Number(m.r)||0)+')">✕</button>'
+      : (m.noBorrar?'<span class="gl-x gl-x-no" title="Es un pago a proveedor: se revierte desde Abastecimiento">🔒</span>':'');
+    el.innerHTML='<div class="gl-info"><div class="gl-cat" style="color:'+color+'">'+ico+' '+_egrEsc(m.cat)+'</div><div class="gl-con">'+conHtml+'</div><div class="gl-meta">'+meta+'</div></div><div class="gl-m" style="color:'+color+'">'+signo+'$'+f$(m.$)+'</div>'+_x;
     gl.appendChild(el);
   }
   var _hecho=0;
@@ -16837,6 +16852,46 @@ function rMovimientos(){
   }
   _tramo(Math.max(MOV_LOTE,Number(window._movMostrar)||MOV_LOTE));
   _restoreScroll();
+}
+
+/* Borrar un gasto o un ingreso cargado a mano (17/9/2026).
+   Tadeo: "deberia tener esa libertad. tengo que hacer unos ajustes que estan mal".
+
+   La plata vuelve sola: el saldo de Caja no es un numero guardado, se calcula
+   con el ultimo Saldo Base mas los movimientos posteriores. Sacada la fila, el
+   gasto deja de restar en la lectura siguiente — por eso al final se recarga.
+
+   Ojo con el `r`: al borrar una fila, las de abajo suben un lugar, asi que los
+   `r` que quedaron en pantalla estan corridos. No se arregla acá: el backend
+   reverifica concepto, monto y dia antes de borrar, y si no coincide no borra
+   nada y avisa. */
+function borrarMovCaja(tipo,row){
+  var m=((D&&D.movimientos)||[]).filter(function(x){return x.tipo===tipo&&Number(x.r)===Number(row);})[0];
+  if(!m){toast('No encuentro ese movimiento. Actualizá Caja.');return;}
+  var que=(tipo==='gasto')?'gasto':'ingreso';
+  if(!confirm('¿Borrar este '+que+'?\n\n'+(m.con||'(sin concepto)')+'\n$'+f$(m.$)+' · '+(m.met||'')+'\n'+(m.f||'')+
+              '\n\nVuelve a la caja y se va del EERR. Se puede recuperar del historial de la planilla.'))return;
+  showLoader('Borrando el '+que+'...');
+  fetch(API,{method:'POST',body:JSON.stringify({action:'borrarMovimientoCaja',tipo:tipo,row:Number(row),
+    con:m.con||'',monto:Number(m.$)||0,f:m.f||'',
+    /* Si Google pierde la respuesta y el panel repite, no borra dos filas. */
+    clientOpId:'bmc-'+tipo+'-'+row+'-'+(Number(m.$)||0)+'-'+(m.ts||0)})})
+    .then(function(r){return r.json();})
+    .then(function(r){
+      hideLoader(true);
+      if(r&&r.ok){
+        D.movimientos=(D.movimientos||[]).filter(function(x){return !(x.tipo===tipo&&Number(x.r)===Number(row));});
+        var _fuera=function(a){return (a||[]).filter(function(x){return Number(x.r)!==Number(row);});};
+        if(tipo==='gasto')D.gastos=_fuera(D.gastos); else D.ingresos=_fuera(D.ingresos);
+        render();
+        toast('Borrado · $'+f$(m.$)+' vuelve a la caja');
+        _recargarCaja();
+      }else{
+        alert((r&&r.error)||'No se pudo borrar. Probá de nuevo.');
+        if(r&&(r.cambio||r.yaNoEsta))_recargarCaja();
+      }
+    })
+    .catch(function(){hideLoader(true);toast('Sin conexión: no se borró nada.');});
 }
 
 // ═══ EGRESOS (en el cajón: "Pagos") ═══
