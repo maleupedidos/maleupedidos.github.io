@@ -1124,6 +1124,10 @@ button.rt-chip.on{background:var(--o);border-color:var(--o);color:#fff}
    Los botones van a 44px porque se tocan en movimiento — es el minimo tactil. */
 .rec-sub-h{position:sticky;top:0;z-index:2;background:var(--bg,#faf8f5);padding:10px 2px 6px;font-size:11px;font-weight:800;letter-spacing:.6px;text-transform:uppercase;color:#6b7280;border-bottom:1px solid var(--cd)}
 .rec-row{padding:10px 2px;border-bottom:1px solid var(--cd)}
+.est-fol-list{border:1px solid var(--cd);border-radius:10px;overflow:hidden;max-height:240px;overflow-y:auto}
+.est-fol-row{display:grid;grid-template-columns:74px 145px minmax(0,1fr);gap:8px;align-items:start;padding:8px 10px;border-bottom:1px solid var(--cd);font-size:12px}
+.est-fol-row:last-child{border-bottom:0}.est-fol-row b{color:var(--ink)}.est-fol-row span{font-weight:700;color:var(--o)}.est-fol-row small{font-size:11px;line-height:1.35;color:var(--ink2)}
+@media(max-width:520px){.est-fol-row{grid-template-columns:72px 1fr}.est-fol-row small{grid-column:1/-1}}
 .rec-row-t{display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-bottom:8px}
 .rec-lote{font-size:16px;font-weight:800;color:var(--ink)}
 .rec-fam{font-size:12px;color:#6b7280;font-weight:600;text-align:right;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -33354,6 +33358,93 @@ if('serviceWorker' in navigator){
   window.estRecSaltear=function(key){ _recHechas[key]='skip'; _recRenderList(); };
   window.estRecReiniciar=function(){ _recHechas={}; _recRenderList(); _toast('Vuelven las salteadas'); };
 
+  /* ───────── RECORRIDO DE FOLLETOS ─────────
+     Una salida no se puede perder porque el servidor se puso lento. Este
+     importador convierte las notas de WhatsApp en una vista previa, y recién
+     después las guarda de a UNA (nunca quince POST compitiendo por la traba de
+     la planilla). No interpreta lo que no está dicho: una casa "buena onda"
+     queda como nota; sólo "entregado", "nadie/cerrada" y "no fuimos" cambian
+     el estado de la campaña. */
+  function _folEsc(v){ return esc(String(v==null?'':v)); }
+  function _folLinea(l){
+    /* WhatsApp antepone "[hora, fecha] Nombre:"; para el ERP importa la nota. */
+    return String(l||'').replace(/^\s*\[[^\]]+\]\s*[^:]{0,80}:\s*/, '').trim();
+  }
+  function _folParse(txt){
+    var porLote={}, orden=[];
+    String(txt||'').replace(/\r/g,'').split('\n').forEach(function(raw){
+      var l=_folLinea(raw), m=l.match(/^(?:lote\s*)?(\d+)\s*(.*)$/i);
+      if(!m) return;                         // costo, hora o texto suelto: no es un lote
+      var lote=String(Number(m[1])), nota=String(m[2]||'').trim();
+      if(!nota) return;                      // "3" o "21" no inventan una visita
+      var x=porLote[lote];
+      if(!x){ x=porLote[lote]={lote:lote,nota:'',tipo:'nota'}; orden.push(x); }
+      x.nota=x.nota ? (x.nota+' · '+nota) : nota;
+      var n=nota.toLowerCase();
+      if(/no fuimos|no fuimos/.test(n)) x.tipo='pendiente';
+      else if(/entregad/.test(n)) x.tipo='mano';
+      else if(/nadie|cerrad|abandonad/.test(n)) x.tipo='nadie';
+    });
+    return orden;
+  }
+  function _folTipoTxt(t){ return t==='mano'?'Entregado en mano':(t==='nadie'?'Toqué, no había nadie':(t==='pendiente'?'Visita pendiente':'Sólo nota')); }
+  function _folFecha(v){
+    var m=String(v||'').match(/^(\d{4})-(\d\d)-(\d\d)$/);
+    return m ? (m[3]+'/'+m[2]+'/'+m[1]) : String(v||'');
+  }
+  function _folPreview(){
+    var raw=E$('folRaw'), out=E$('folPreview'), btn=E$('folGuardar'); if(!raw||!out)return;
+    var a=_folParse(raw.value), fecha=_folFecha(E$('folFecha')&&E$('folFecha').value);
+    window._folPendientes=a;
+    if(btn)btn.disabled=!a.length;
+    out.innerHTML=a.length
+      ? '<div style="font-size:12px;color:var(--ink2);margin:8px 0">'+a.length+' casas detectadas. Revisá antes de guardar: las líneas sin resultado quedan sólo como nota.</div>'
+        +'<div class="est-fol-list">'+a.map(function(x){return '<div class="est-fol-row"><b>Lote '+_folEsc(x.lote)+'</b><span>'+_folEsc(_folTipoTxt(x.tipo))+'</span><small>'+_folEsc((fecha?fecha+' · ':'')+x.nota)+'</small></div>';}).join('')+'</div>'
+      : '<div style="font-size:12px;color:var(--ink3);padding:10px 0">Pegá las notas: por ejemplo, <b>16 entregado a una madre</b> o <b>Lote 13 nadie</b>.</div>';
+  }
+  function _folGuardarUno(sub, x, fecha){
+    var rec=(window.crmLoteGetLocal?window.crmLoteGetLocal(sub,x.lote):null)||{};
+    var comp=rec.composicion||{}; if(typeof comp!=='string') comp=JSON.stringify(comp);
+    var nota=(fecha?fecha+' · ':'')+'Recorrido con Lucas · '+x.nota;
+    var prevNota=String(rec.sobreNota||'').trim();
+    var sobre=rec.sobreEstado||'';
+    if(x.tipo==='mano') sobre='Entregado en mano';
+    else if(x.tipo==='nadie') sobre='Toqué, no había nadie';
+    var estado=rec.estadoContacto||'';
+    if(x.tipo==='pendiente'&&!estado) estado='Visita pendiente';
+    var body={action:'crmLoteSave',sub:sub,lote:x.lote,familia:rec.familia||'',titular:rec.titular||'',tel:rec.tel||'',reside:rec.reside||'',notas:rec.notas||'',estadoContacto:estado,sobreEstado:sobre,sobreNota:prevNota?(prevNota+'\n'+nota):nota,integrantes:rec.integrantes||'',composicion:comp};
+    return fetch(EST_API,{method:'POST',mode:'cors',body:JSON.stringify(body)}).then(function(r){return r.json();}).then(function(d){
+      if(!(d&&d.ok)) throw new Error((d&&d.error)||'no se pudo guardar');
+      if(window.crmLoteSetLocal)window.crmLoteSetLocal(sub,x.lote,{familia:body.familia,titular:body.titular,tel:body.tel,reside:body.reside,notas:body.notas,estadoContacto:body.estadoContacto,sobreEstado:body.sobreEstado,sobreNota:body.sobreNota,integrantes:body.integrantes,composicion:rec.composicion||{}});
+      return true;
+    });
+  }
+  window.estFolAbrir=function(){
+    var hoy=new Date(), iso=hoy.getFullYear()+'-'+String(hoy.getMonth()+1).padStart(2,'0')+'-'+String(hoy.getDate()).padStart(2,'0');
+    var h='<div class="est-modal-ov on" id="folOv" onclick="if(event.target===this)estFolCerrar()"><div class="est-modal" style="max-width:620px">'
+      +'<div style="font-size:16px;font-weight:800;color:var(--ink)">🚪 Cargar recorrido de folletos</div>'
+      +'<div style="font-size:12px;color:var(--ink2);line-height:1.5;margin:5px 0 12px">Pegá las notas tal como quedaron en WhatsApp. El ERP muestra qué va a guardar antes de hacerlo y manda una casa por vez.</div>'
+      +'<div class="fg"><label>Sub-barrio</label><select id="folSub"><option>La Pionera</option><option>Golf</option><option>Argentina 4</option><option>Champagnat Alto</option><option>Champagnat Bajo</option><option>El Recuerdo</option><option>La Paz</option></select></div>'
+      +'<div class="fg"><label>Fecha del recorrido</label><input id="folFecha" type="date" value="'+iso+'" onchange="estFolPreview()"></div>'
+      +'<div class="fg"><label>Notas</label><textarea id="folRaw" rows="10" placeholder="151 nadie\n1 vieja simpática. Entregado\nLote 13 nadie" oninput="estFolPreview()"></textarea></div>'
+      +'<div id="folPreview"></div><div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px"><button class="crm-edit-btn" onclick="estFolCerrar()">Cancelar</button><button class="btn-submit" id="folGuardar" disabled onclick="estFolGuardar()">Guardar recorrido</button></div></div></div>';
+    document.body.insertAdjacentHTML('beforeend',h); _folPreview();
+  };
+  window.estFolCerrar=function(){ var e=E$('folOv'); if(e)e.remove(); };
+  window.estFolPreview=function(){ _folPreview(); };
+  window.estFolGuardar=function(){
+    var a=window._folPendientes||[], sub=E$('folSub')&&E$('folSub').value, fecha=_folFecha(E$('folFecha')&&E$('folFecha').value), btn=E$('folGuardar');
+    if(!a.length||!sub)return;
+    if(!confirm('¿Guardar '+a.length+' casas del recorrido en '+sub+'?\n\nSe registran una por una para no trabar el ERP.'))return;
+    if(btn){btn.disabled=true;btn.textContent='Guardando 0 / '+a.length+'…';}
+    var ok=0, malos=[];
+    (function siguiente(i){
+      if(i>=a.length){ if(btn)btn.textContent='Listo'; var msg=ok+' casas guardadas'+(malos.length?' · '+malos.length+' con error':''); _toast(msg); if(malos.length){var p=E$('folPreview');if(p)p.innerHTML+='<div style="color:var(--r);margin-top:8px">No se guardaron: '+_folEsc(malos.join(', '))+'. Podés reintentarlas.</div>';}else setTimeout(estFolCerrar,600); return; }
+      if(btn)btn.textContent='Guardando '+(i+1)+' / '+a.length+'…';
+      _folGuardarUno(sub,a[i],fecha).then(function(){ok++;siguiente(i+1);},function(){malos.push('Lote '+a[i].lote);siguiente(i+1);});
+    })(0);
+  };
+
   function _recRenderList(){
     var host=E$('estRecList'); if(!host)return;
     var todas=_recPendientes();
@@ -33408,7 +33499,7 @@ if('serviceWorker' in navigator){
       var chips='<button class="est-chip'+(_recSub?'':' on')+'" data-rs="" onclick="estRecSub(\'\')">Todos '+todas.length+'</button>'
         +subs.map(function(s){ return '<button class="est-chip'+(_recSub===s?' on':'')+'" data-rs="'+esc(s)+'" onclick="estRecSub(\''+esc(s)+'\')">'+esc(s)+' '+porSub[s]+'</button>'; }).join('');
       host.innerHTML='<div style="background:#fff;border:1px solid var(--cd);border-radius:12px;padding:14px">'
-        +'<div style="font-size:15px;font-weight:800;color:var(--ink);margin-bottom:4px">🚗 Recorrida</div>'
+        +'<div style="display:flex;align-items:center;justify-content:space-between;gap:10px"><div style="font-size:15px;font-weight:800;color:var(--ink);margin-bottom:4px">🚗 Recorrida</div><button class="est-chip" onclick="estFolAbrir()">🚪 Cargar recorrido</button></div>'
         +'<div style="font-size:12px;color:#6b7280;line-height:1.5;margin-bottom:10px">Las casas que todavía no tienen residencia cargada, por sub-barrio y por lote. '
         +'Tocás y la casa sale de la lista — no se abre ninguna ficha. '
         +'El ⏭ la esconde hasta que recargues, sin guardar nada.</div>'
