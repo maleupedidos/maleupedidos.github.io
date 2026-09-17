@@ -231,6 +231,15 @@ const HORA = /\b\d{1,2}:\d{2}\b/;
     const c5 = await evaluar(cli, LEER);
     chk('Ajustes no inventa una hora (queda "Actualizar" solo)', c5.txt === '' && c5.estado === 'nada', c5);
 
+    // Mi Reparto: el ↻ tiene que esperar SU respuesta. Antes llamaba la carga y
+    // ejecutaba done(true) de inmediato, por lo que decía "recién" con la lista
+    // aún viajando.
+    await evaluar(cli, `go('mireparto'); window.__mrTermino=false; window.loadMiReparto=function(){return new Promise(function(res){setTimeout(function(){window.__mrTermino=true;res(true);},700);});}; 1`);
+    await pausa(150);
+    const cMr1 = await evaluar(cli, `(async()=>{ refreshContextual(); await new Promise(function(r){setTimeout(r,180);}); return ${LEER}; })()`);
+    chk('Mi Reparto: el ↻ sigue girando mientras viaja su propia lista', cMr1.gira === true && cMr1.estado === 'yendo' && !await evaluar(cli, 'window.__mrTermino'), cMr1);
+    chk('Mi Reparto: termina cuando llega su lista', await esperar(cli, `window.__mrTermino && !document.getElementById('hdrRefresh').classList.contains('spinning')`, 5000), await evaluar(cli, LEER));
+
     // Ruta
     await evaluar(cli, `go('ruta')`);
     if (!await esperar(cli, `typeof getPendientes==='function' && getPendientes().length===1`, 40000)) { console.log('  la sub-app de RUTA no arranco'); }
