@@ -68,6 +68,9 @@ const PEDIDOS = [
   P({ h: 'Pilar', es: 'Entregado', c: 'Gabi Prueba', bar: 'La Escondida', fex: '2026-09-13', dee: '2026-09-13', mc: '2026-09', $: 25000, co: 20000 }),
   // no cuentan
   H({ c: 'Pendiente Prueba', bar: 'Estancias del Pilar', es: 'Pendiente', fex: '', dee: '2026-09-12', $: 99000, co: 50000 }),
+  // Está cargado para esta semana, pero no es venta hasta que se entregue:
+  // el Resumen lo suma sólo a la proyección, nunca al Facturado.
+  H({ c: 'Pendiente Semana 38', bar: 'Estancias del Pilar', es: 'Pendiente', fex: '', dee: '2026-09-18', $: 26000, co: 15000 }),
   H({ c: 'Cancelado Prueba', bar: 'Estancias del Pilar', es: 'Cancelado', fex: '2026-09-12', $: 88000, co: 40000 }),
   // Clubes: el mismo socio dos veces el mismo dia = una entrega
   P({ h: 'Clubes', es: 'Entregado', c: 'Socio Club (Champagnat)', br: 'Champagnat', dee: '2026-09-12', mc: '2026-09', $: 26000, co: 18000 }),
@@ -151,6 +154,7 @@ const txt = (cli, sel) => ev(cli, `window.__tx(document.querySelector(${JSON.str
     chk('Costo $356.800', /Costo \$356\.800/.test(k[1] || ''), k[1]);
     chk('Margen $135.600 · 28%', /Margen \$135\.600 28%/.test(k[2] || ''), k[2]);
     chk('Entregas 10 (Ana 1 viaje, Clubes 1, Red 1 bolsa, B2B 1)', /Entregas 10/.test(k[3] || ''), k[3]);
+    chk('Semana cerrada: Pendiente $99.000, no reescribe lo facturado ni simula una proyección tardía', /Pendiente \$99\.000/.test(k[4] || '') && /1 pedido de ese período sin entregar/.test(k[4] || ''), k[4]);
     chk('contra la semana 36: ▲ +392% facturado y ▲ +9 entregas', /▲ \+392%/.test(k[0] || '') && /▲ \+9/.test(k[3] || ''), [k[0], k[3]]);
 
     const filas = await ev(cli, `[].map.call(document.querySelectorAll('#hRetail .rt-fila'),function(f){return window.__tx(f);})`);
@@ -187,6 +191,8 @@ const txt = (cli, sel) => ev(cli, `window.__tx(document.querySelector(${JSON.str
     await ev(cli, `rtPer('sem')`); await pausa(300);
     k2 = await ev(cli, `window.__tx(document.querySelector('#hRetail .rt-k'))`);
     chk('Esta semana: $17.000, y sin nada que comparar el lunes pasado lo dice', /\$17\.000/.test(k2 || '') && /sin datos para comparar/.test(k2 || ''), k2);
+    const kpSem = await ev(cli, `[].map.call(document.querySelectorAll('#hRetail .rt-k'),function(k){return window.__tx(k);})`);
+    chk('Esta semana: proyecta $43.000 al entregar el pedido ya cargado de $26.000, sin inflar Facturado', Array.isArray(kpSem) && /Facturado \$17\.000/.test(kpSem[0] || '') && /Proyección \$43\.000/.test(kpSem[4] || '') && /\+\$26\.000 si entregás 1 pedido/.test(kpSem[4] || ''), kpSem);
     chk('Esta semana: los clientes de la 38 (1 · recompra)', /1 cliente domiciliario 0 🆕 Nuevos 1 🔁 Recompra 0 ⏰ Reactivados/.test(await txt(cli, '#hRetail .rt-cl') || ''), await txt(cli, '#hRetail .rt-cl'));
     await ev(cli, `rtPer('semAnt')`); await pausa(300);
     chk('volviendo a la semana pasada, el cuadro vuelve', await ev(cli, `!!document.querySelector('#hRetail .rt-cl')`) === true);

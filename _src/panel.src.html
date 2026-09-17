@@ -229,8 +229,9 @@ button.rt-copy,button.rt-pdf{background:var(--ink);color:#fff;border:0;border-ra
 .rt-per{display:flex;gap:6px;flex-wrap:wrap;margin:10px 0}
 button.rt-chip{border:1px solid var(--cd);background:#fff;color:var(--ink2);border-radius:999px;padding:0 12px;min-height:34px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit}
 button.rt-chip.on{background:var(--o);border-color:var(--o);color:#fff}
-.rt-kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
+.rt-kpis{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px}
 .rt-k{background:#fff;border:1px solid var(--cd);border-radius:10px;padding:9px 10px;min-width:0}
+.rt-k.proy{border-color:#F6C98C;background:#FFF9F0}
 .rt-kl{font-size:10px;color:var(--bl);font-weight:800;text-transform:uppercase;letter-spacing:.04em}
 .rt-kv{font-size:19px;font-weight:800;color:var(--ink);margin-top:3px;font-variant-numeric:tabular-nums;line-height:1.15}
 .rt-kv small{font-size:12px;color:var(--gd);font-weight:800}
@@ -11883,6 +11884,27 @@ function _rtSumar(desde,hasta){
   g.hayExtra=hayExtra;
   return g;
 }
+/* Lo comprometido no es venta todavía: son pedidos ya cargados que, si se
+   entregan, se suman a lo efectivamente facturado. Para el período vivo miramos
+   hasta el cierre natural (domingo/fin de mes), no sólo hasta "hoy"; si no, el
+   número ignoraría justo los pedidos de viernes y sábado que Tadeo necesita ver.
+   En períodos cerrados conserva sólo los que quedaron pendientes de ese tramo. */
+function _rtComprometido(P,hoy){
+  var hasta=P.h;
+  if(P.k==='sem')hasta=_rtIso(_rtDia(P.desde,6));
+  else if(P.k==='mes')hasta=_rtIso(new Date(hoy.getFullYear(),hoy.getMonth()+1,0));
+  var o={f:0,ped:0,sinFecha:0,hasta:hasta};
+  ((typeof D!=='undefined'&&D&&D.pedidos)||[]).forEach(function(p){
+    if(!p||p.hist||p.es==='Entregado'||p.es==='Cancelado')return;
+    if(['Home','Pilar','Clubes','Red','B2B'].indexOf(p.h)<0)return;
+    if(!p.c||!String(p.c).trim()||!(Number(p.$)>0))return;
+    var dia=String(p.dee||'').slice(0,10);
+    if(!/^\d{4}-\d\d-\d\d$/.test(dia)){o.sinFecha++;return;}
+    if(dia<P.d||dia>hasta)return;
+    o.f+=Number(p.$)||0;o.ped++;
+  });
+  return o;
+}
 window.rtPer=function(k){_rtPer=k;try{rRetail();}catch(e){console.error('rRetail()',e);}};
 window.copyResumenSemana=function(btn){
   try{
@@ -11900,6 +11922,7 @@ function rRetail(){
   var k=_rtPer||((((hoy.getDay()+6)%7)===0)?'semAnt':'sem');
   var P=_rtPeriodo(k,hoy);
   var g=_rtSumar(P.d,P.h),gc=_rtSumar(P.cd,P.ch);
+  var cp=_rtComprometido(P,hoy);
   function pct(n,d){return d>0?Math.round(n/d*100):0;}
   function ent(n){return n+' '+(n===1?'entrega':'entregas');}
   function delta(a,b,cant){
@@ -11934,11 +11957,18 @@ function rRetail(){
   var chips=[['sem','Esta semana'],['semAnt','Semana pasada'],['mes','Este mes'],['mesAnt','Mes pasado']].map(function(c){
     return '<button type="button" class="rt-chip'+(c[0]===P.k?' on':'')+'" onclick="rtPer(\''+c[0]+'\')">'+c[1]+'</button>';
   }).join('');
-  var t=g.tot,mT=t.f-t.c,mC=gc.tot.f-gc.tot.c;
+  var t=g.tot,mT=t.f-t.c,mC=gc.tot.f-gc.tot.c,proy=t.f+cp.f;
+  /* No reescribimos la historia: para semana/mes cerrados mostramos lo que
+     quedó pendiente; sólo un período vivo tiene una proyección de cierre. */
+  var rtVivo=(P.k==='sem'||P.k==='mes');
+  var cpTit=rtVivo?'Proyección':'Pendiente';
+  var cpMonto=rtVivo?proy:cp.f;
+  var cpPie=cp.ped?(rtVivo?('+$'+f$(cp.f)+' si entregás '+cp.ped+' '+(cp.ped===1?'pedido':'pedidos')):(cp.ped+' '+(cp.ped===1?'pedido':'pedidos')+' de ese período sin entregar')):'sin pedidos pendientes';
   var cl=_rtClientes(P);
   if(cl&&!(cl.total>0))cl=null;
   var copia='💰 Ventas retail · '+P.tit+'\n'
     +'Facturado $'+f$(t.f)+' · Costo $'+f$(t.c)+' · Margen $'+f$(mT)+' ('+pct(mT,t.f)+'%) · '+ent(t.ent)+'\n'
+    +cpTit+' $'+f$(cpMonto)+(cp.ped?(rtVivo?(' si entregás '+cp.ped+' '+(cp.ped===1?'pedido':'pedidos')+' ya cargado'+(cp.ped===1?'':'s')+' (+$'+f$(cp.f)+')'):(' · '+cp.ped+' '+(cp.ped===1?'pedido':'pedidos')+' de ese período sin entregar')):' · sin pedidos pendientes del período')+'\n'
     +'🏠 Venta Mercado Domiciliario $'+f$(g.dom.f)+' (margen '+pct(g.dom.f-g.dom.c,g.dom.f)+'%)\n'
     +'   Home $'+f$(g.home.f)+' · Otras zonas $'+f$(g.otras.f)+'\n'
     +(cl?'   👥 '+cl.total+' clientes: '+cl.nuevos+' nuevos · '+cl.recompra+' recompra · '+cl.react+' reactivados\n':'')
@@ -11958,6 +11988,7 @@ function rRetail(){
       +'<div class="rt-k"><div class="rt-kl">Costo</div><div class="rt-kv">$'+f$(t.c)+'</div><div class="rt-kd eq">'+pct(t.c,t.f)+'% de lo facturado</div></div>'
       +'<div class="rt-k"><div class="rt-kl">Margen</div><div class="rt-kv">$'+f$(mT)+' <small>'+pct(mT,t.f)+'%</small></div>'+delta(mT,mC)+'</div>'
       +'<div class="rt-k"><div class="rt-kl">Entregas</div><div class="rt-kv">'+t.ent+'</div>'+delta(t.ent,gc.tot.ent,true)+'</div>'
+      +'<div class="rt-k proy"><div class="rt-kl">'+cpTit+'</div><div class="rt-kv">$'+f$(cpMonto)+'</div><div class="rt-kd eq">'+cpPie+(cp.sinFecha?' · '+cp.sinFecha+' sin fecha':'')+'</div></div>'
       +'</div>';
     h+='<div class="rt-vs">Comparado con '+_rtEsc(P.vs)+': facturado $'+f$(gc.tot.f)+' · margen $'+f$(mC)+'</div>';
     h+='<div class="rt-arbol"><div class="rt-grupo">';
