@@ -22,5 +22,14 @@ ok('una lectura colgada deja de mostrar Actualizando antes del tope manual',
   /FRESCO_MAX_VUELO_MS=85000/.test(src) &&
   /Date\.now\(\)-\(_frescoVueloDesde\[f\]\|\|0\)<FRESCO_MAX_VUELO_MS/.test(src) &&
   /Date\.now\(\)-\(_frescoVueloDesde\[f\]\|\|0\)>=FRESCO_MAX_VUELO_MS/.test(src));
-console.log('\n  ' + (tabs.length + 5 - mal) + ' ok · ' + mal + ' mal\n');
+ok('ningun reintento de lectura queda sin reloj',
+  /CORTE_GET_FINAL_MS\s*=\s*45000/.test(src) &&
+  /var esFinal = intento >= CORTE_GET_INTENTOS;/.test(src) &&
+  /var limite = esFinal \? CORTE_GET_FINAL_MS : CORTE_GET_MS;/.test(src) &&
+  /if \(esFinal\) throw new Error\('Google no entrego la lectura a tiempo'\);/.test(src));
+ok('el fusible de la cola rechaza la promesa que esperaba la pantalla',
+  /function terminar\(err, valor\)/.test(src) &&
+  /terminar\(new Error\('La lectura excedio el tiempo maximo de espera'\)\);/.test(src) &&
+  /if \(err\) it\.rej\(err\); else it\.res\(valor\);/.test(src));
+console.log('\n  ' + (tabs.length + 7 - mal) + ' ok · ' + mal + ' mal\n');
 process.exit(mal ? 1 : 0);

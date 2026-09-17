@@ -5761,7 +5761,10 @@ var API='https://script.google.com/macros/s/AKfycbxmrG5YVSshcYezk8lXFx_uxb7NFGcb
      varianza —por eso pedir uno solo puede tardar mas que pedir dos—, asi que
      si algun dia se toca este numero, se remide con fresh=1 y no a ojo. */
   var _TOPE_GET = 2;
-  var _MAX_VUELO_MS = 120000; /* una cola trancada es peor que no tener cola */
+  /* La lectura ya tiene sus propios cortes (20 + 20 + 45 s = 85 s). Este es
+     el ultimo fusible: no puede quedar una promesa del panel esperando para
+     siempre aunque un navegador ignore el AbortController. */
+  var _MAX_VUELO_MS = 90000;
   var _enVuelo = 0, _cola = [];
 
   /* Saca de la fila el de mayor prioridad EN ESTE MOMENTO. La prioridad se
@@ -5783,17 +5786,22 @@ var API='https://script.google.com/macros/s/AKfycbxmrG5YVSshcYezk8lXFx_uxb7NFGcb
       var it = _sacarMejor();
       _enVuelo++;
       (function(it){
-        var soltado = false;
-        function soltar(){
-          if (soltado) return;            /* el timeout puede haber soltado ya */
-          soltado = true; _enVuelo--; _bombear();
+        var cerrado = false;
+        function terminar(err, valor){
+          if (cerrado) return;
+          cerrado = true;
+          clearTimeout(reloj);
+          _enVuelo--; _bombear();
+          if (err) it.rej(err); else it.res(valor);
         }
-        /* Red de seguridad: si un pedido se cuelga, a los 120 s deja de ocupar
-           lugar en la fila. No se aborta el fetch — si vuelve, su promesa
-           resuelve igual; lo unico que se libera es el cupo. */
-        var reloj = setTimeout(soltar, _MAX_VUELO_MS);
-        it.fn().then(function(r){ clearTimeout(reloj); soltar(); it.res(r); },
-                     function(e){ clearTimeout(reloj); soltar(); it.rej(e); });
+        /* Antes este reloj soltaba el cupo, pero dejaba pendiente la promesa
+           que esperaba la pantalla. Resultado: la cola seguia, mientras el ↻
+           quedaba en "Actualizando…" para siempre. Ahora el peor caso CIERRA
+           como error y conserva la pantalla con la foto anterior. */
+        var reloj = setTimeout(function(){
+          terminar(new Error('La lectura excedio el tiempo maximo de espera'));
+        }, _MAX_VUELO_MS);
+        it.fn().then(function(r){ terminar(null, r); }, function(e){ terminar(e); });
       })(it);
     }
   }
@@ -5937,7 +5945,7 @@ var API='https://script.google.com/macros/s/AKfycbxmrG5YVSshcYezk8lXFx_uxb7NFGcb
 
      Solo lecturas (nunca un POST: repetir una escritura seria cobrar dos veces)
      y nunca con `fresh=1`, que si obliga a recalcular. */
-  var CORTE_GET_MS = 20000, CORTE_GET_INTENTOS = 2;
+  var CORTE_GET_MS = 20000, CORTE_GET_INTENTOS = 2, CORTE_GET_FINAL_MS = 45000;
   var _corte = window.__corteGet = { cortes: 0, salvados: 0 };
   var _CORTABLE = { admin:1, pedidosLight:1, cajaLight:1, ocLight:1, ventas:1, tendencia:1,
     stock_full:1, piezas_full:1, precios:1, catalogo:1, cobrosPendientes:1, entregas:1,
@@ -5953,14 +5961,21 @@ var API='https://script.google.com/macros/s/AKfycbxmrG5YVSshcYezk8lXFx_uxb7NFGcb
   }
   function _pedirConCorte(url, init, intento){
     intento = intento || 0;
-    if (intento >= CORTE_GET_INTENTOS || !_seCorta(url)) return _pedir(url, init, 0);
+    if (!_seCorta(url)) return _pedir(url, init, 0);
+    /* Dos intentos cortos rescatan el echo de Google sin demorar a quien esta
+       trabajando. El ultimo tambien TIENE reloj: es mas amplio para una foto
+       fria, pero al vencerse rechaza. Sin este caso, el tercer fetch quedaba
+       crudo y podia dejar al ERP "Actualizando…" de manera indefinida. */
+    var esFinal = intento >= CORTE_GET_INTENTOS;
+    var limite = esFinal ? CORTE_GET_FINAL_MS : CORTE_GET_MS;
     var ac = new AbortController(), cortado = false;
     var i2 = {}; if (init) for (var k in init) i2[k] = init[k];
     i2.signal = ac.signal;
-    var reloj = setTimeout(function(){ cortado = true; _corte.cortes++; try{ ac.abort(); }catch(e){} }, CORTE_GET_MS);
+    var reloj = setTimeout(function(){ cortado = true; _corte.cortes++; try{ ac.abort(); }catch(e){} }, limite);
     return _pedir(url, i2, 0).then(function(r){ clearTimeout(reloj); return r; }, function(e){
       clearTimeout(reloj);
       if (!cortado) throw e;               /* se cayo la red: eso no se reintenta aca */
+      if (esFinal) throw new Error('Google no entrego la lectura a tiempo');
       return _pedirConCorte(url, init, intento + 1).then(function(r2){ _corte.salvados++; return r2; });
     });
   }
