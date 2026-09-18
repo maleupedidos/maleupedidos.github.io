@@ -8745,7 +8745,7 @@ var API='https://script.google.com/macros/s/AKfycbxmrG5YVSshcYezk8lXFx_uxb7NFGcb
   /* La lectura ya tiene sus propios cortes (20 + 20 + 45 s = 85 s). Este es
      el ultimo fusible: no puede quedar una promesa del panel esperando para
      siempre aunque un navegador ignore el AbortController. */
-  var _MAX_VUELO_MS = 90000;
+  var _MAX_VUELO_MS = 100000;
   var _enVuelo = 0, _cola = [];
 
   /* Saca de la fila el de mayor prioridad EN ESTE MOMENTO. La prioridad se
@@ -8926,7 +8926,37 @@ var API='https://script.google.com/macros/s/AKfycbxmrG5YVSshcYezk8lXFx_uxb7NFGcb
 
      Solo lecturas (nunca un POST: repetir una escritura seria cobrar dos veces)
      y nunca con `fresh=1`, que si obliga a recalcular. */
-  var CORTE_GET_MS = 20000, CORTE_GET_INTENTOS = 2, CORTE_GET_FINAL_MS = 45000;
+  /* ── EL PRIMER CORTE PASA DE 20 s A 45 s (18/9/2026) ───────────────────────
+     Tadeo: *"toco el botón de arriba y no se me actualiza la tab… me dice que
+     el servidor no puede"*. Medido esa madrugada EN EL NAVEGADOR contra
+     produccion (lo de arriba se habia medido con un cliente de Python que
+     agrega demoras propias — no vale para esto):
+
+       · con la foto hecha, toda lectura tarda **2,8 a 5 s**;
+       · la PRIMERA despues de una escritura tarda **~40 s**: se rehace el
+         volcado entero, y eso no se puede cortar;
+       · el 404 del segundo salto llega a los **10-44 s**, y el ERP lo salva
+         volviendo a pedir la MISMA respuesta (~4 s, sin correr el script).
+
+     Cortar a los 20 s caia justo en el medio de las dos cosas que SI iban a
+     terminar: mataba el calculo de 40 s (que el servidor sigue haciendo igual,
+     pero el panel ya no lo espera) y mataba el 404 antes de poder rescatarlo.
+     Cada corte ademas arranca OTRA ejecucion. Medido en el arranque: la misma
+     lectura cortada cinco veces (20+20+45+20+20) y recien la sexta trajo los
+     datos, dos minutos y medio despues.
+
+     45 s en el primer intento cubre el recalculo completo y le da lugar al
+     rescate del 404. No hace mas lenta la vida normal: una lectura con foto
+     vuelve en 3 s y el reloj ni se entera. */
+  var CORTE_GET_MS = 45000, CORTE_GET_INTENTOS = 2, CORTE_GET_FINAL_MS = 25000;
+  /* Los reintentos si van cortos: a esa altura el servidor ya termino de
+     calcular y la respuesta sale de la foto en ~3 s. La escalera entera queda
+     en 45 + 20 + 25 = 90 s, y de ahi salen los otros dos frenos: el cupo de la
+     fila (`_MAX_VUELO_MS`, 100 s) y el del ↻ (115 s). El orden importa: el que
+     cierra tiene que ser siempre el de mas adentro, con su motivo. Estaban al
+     revés —la fila cortaba a los 90 s una escalera de 110— y por eso ABAST
+     terminaba a los 90,1 s diciendo "no se pudo" con `admin` todavia en vuelo. */
+  var CORTE_GET_REINTENTO_MS = 20000;
   /* Gasto e ingreso se identifican antes de salir del navegador. A diferencia
      de un cobro viejo, se pueden pedir de nuevo: el backend devuelve el mismo
      resultado y nunca vuelve a escribir. Eso nos permite poner un reloj tambien
@@ -8962,7 +8992,7 @@ var API='https://script.google.com/macros/s/AKfycbxmrG5YVSshcYezk8lXFx_uxb7NFGcb
        fria, pero al vencerse rechaza. Sin este caso, el tercer fetch quedaba
        crudo y podia dejar al ERP "Actualizando…" de manera indefinida. */
     var esFinal = intento >= CORTE_GET_INTENTOS;
-    var limite = esFinal ? CORTE_GET_FINAL_MS : CORTE_GET_MS;
+    var limite = esFinal ? CORTE_GET_FINAL_MS : (intento === 0 ? CORTE_GET_MS : CORTE_GET_REINTENTO_MS);
     var ac = new AbortController(), cortado = false;
     var i2 = {}; if (init) for (var k in init) i2[k] = init[k];
     i2.signal = ac.signal;
@@ -8994,13 +9024,33 @@ var API='https://script.google.com/macros/s/AKfycbxmrG5YVSshcYezk8lXFx_uxb7NFGcb
     });
   }
 
+  /* ── DOS PEDIDOS IGUALES AL MISMO TIEMPO SON UNO SOLO (18/9/2026) ──────────
+     Medido en el arranque contra produccion: de 14 lecturas, CUATRO estaban
+     repetidas —`pedidosLight`, `ocLight`, `busqueda` y `ver` salian dos veces—
+     porque el arranque, la tab que se abre y el vigia piden lo mismo casi
+     juntos. Cada repetida es otra ejecucion de Apps Script, que se atienden de
+     a una por cuenta: ocupaba uno de los dos cupos de la fila y hacia esperar a
+     lo que faltaba de verdad.
+     Se comparte el pedido que YA esta en vuelo. La clave saca `t` y `token`,
+     que cambian en cada llamada y no cambian la respuesta. Cada uno recibe su
+     propia copia (`clone`), porque un Response se lee una sola vez. */
+  var _enVueloUrl = {};
+  function _claveVuelo(url){
+    return String(url).replace(/[?&](t|_|token)=[^&]*/g, '');
+  }
   function _encolar(url, init){
-    return new Promise(function(res, rej){
+    var k = _claveVuelo(url);
+    if (_enVueloUrl[k]) return _enVueloUrl[k].then(function(r){ return r && r.clone ? r.clone() : r; });
+    var p = new Promise(function(res, rej){
       _cola.push({ url: url,
                    fn: function(){ return _pedirConCorte(url, init, 0); },
                    res: res, rej: rej });
       _bombear();
     });
+    _enVueloUrl[k] = p;
+    var soltar = function(){ if (_enVueloUrl[k] === p) delete _enVueloUrl[k]; };
+    p.then(soltar, soltar);
+    return p.then(function(r){ return r && r.clone ? r.clone() : r; });
   }
 
   window.fetch = function(input, init){
@@ -10875,9 +10925,14 @@ function refreshContextual(){
      puede tocar de nuevo. Un cartel negro encima de los numeros no agregaba nada
      que el boton no dijera, y se leia como que algo andaba mal. Lo que de verdad
      lo hacia salir —la foto del servidor duraba 90 s— se arreglo en el backend. */
+  /* 18/9/2026: 115 s, no 90. Los reintentos de una lectura trabada suman
+     45+20+45 = 110 s, asi que el freno de 90 s se disparaba MIENTRAS los datos
+     venian en camino — decia "no se pudo" y un rato despues la pantalla se
+     actualizaba sola. Un freno que corta antes de que termine lo que esta
+     andando es el mismo error que ya se habia corregido con el de 25 s. */
   var _tope=setTimeout(function(){
-    done(false,'⏱️ El servidor no contesto en 90 s — seguis viendo los datos de antes');
-  },90000);
+    done(false,'⏱️ El servidor no contesto — seguis viendo los datos de antes');
+  },115000);
 
   var done=function(ok,msg){
     if(_cerrado)return; _cerrado=true;
@@ -22464,7 +22519,7 @@ function _catPintar(){
     var cost=Number(x.cost_actual);if(!isFinite(cost)||cost===0)cost=Number(x.cost_budget)||0;
     var mar=rev-cost;
     var when='📅 '+_catFecha(x.event_date); if(_catHora(x.service_starts_at))when+=' · '+_catHora(x.service_starts_at)+' h'; if(_catHora(x.food_ready_at))when+=' · servir '+_catHora(x.food_ready_at)+' h';
-    h+='<article class="cat-event '+(done?'done':'')+'"><div class="cat-event-top"><div><div class="cat-event-name">'+_catEsc(x.event_name||x.event_type||'Evento Catering')+'</div><div class="cat-event-client">'+_catEsc(x.client_name||'Cliente a confirmar')+(x.venue_name?' · '+_catEsc(x.venue_name):'')+'</div></div><span class="cat-status '+(done?'done':'')+'">'+_catEsc(_catEstado(x.status))+'</span></div><div class="cat-event-meta"><span>'+when+'</span><span>👥 '+(Number(x.guests_expected)||0)+' invitados</span></div><div class="cat-event-fin"><div><span>Venta</span><b>'+_catDinero(rev)+'</b></div><div><span>Costo</span><b>'+_catDinero(cost)+'</b></div><div><span>Margen bruto</span><b class="'+(mar>=0?'pos':'')+'">'+_catDinero(mar)+'</b></div></div></article>';
+    h+='<article class="cat-event '+(done?'done':'')+'" role="button" tabindex="0" onclick="catAbrir(\''+_catEsc(x.id)+'\')"><div class="cat-event-top"><div><div class="cat-event-name">'+_catEsc(x.event_name||x.event_type||'Evento Catering')+'</div><div class="cat-event-client">'+_catEsc(x.client_name||'Cliente a confirmar')+(x.venue_name?' · '+_catEsc(x.venue_name):'')+'</div></div><span class="cat-status '+(done?'done':'')+'">'+_catEsc(_catEstado(x.status))+'</span></div><div class="cat-event-meta"><span>'+when+'</span><span>👥 '+(Number(x.guests_expected)||0)+' invitados</span></div><div class="cat-event-fin"><div><span>Venta</span><b>'+_catDinero(rev)+'</b></div><div><span>Costo</span><b>'+_catDinero(cost)+'</b></div><div><span>Margen bruto</span><b class="'+(mar>=0?'pos':'')+'">'+_catDinero(mar)+'</b></div></div></article>';
   });
   el.innerHTML=h+'</div>';
 }
@@ -22482,6 +22537,30 @@ function rCatering(){
   });
   return _catPidiendo;
 }
+var _catDetalle=null;
+function _catId(){return (crypto&&crypto.randomUUID)?crypto.randomUUID():('00000000-0000-4000-8000-'+Date.now().toString(16).padStart(12,'0').slice(-12));}
+function _catOp(){return 'cat-'+Date.now()+'-'+Math.random().toString(36).slice(2);}
+function _catPost(entity,record){
+  return fetch(API,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({action:'cateringSave',entity:entity,record:record,clientOpId:_catOp(),actor:(SESSION&&SESSION.nombre)||''})}).then(function(r){return r.json();}).then(function(d){if(!d||!d.ok)throw new Error((d&&d.error)||'No se pudo guardar');return d;});
+}
+function catAbrir(id){
+  var el=$('catApp');if(!id||!el)return;el.innerHTML='<div class="cat-empty">Abriendo ficha del evento…</div>';
+  fetch(API+'?action=cateringDetail&id='+encodeURIComponent(id)+'&t='+Date.now()).then(function(r){return r.json();}).then(function(d){if(!d||!d.ok)throw new Error((d&&d.err)||'No se pudo abrir');_catDetalle=d;catPintarDetalle();}).catch(function(){el.innerHTML='<div class="cat-empty cat-error">No pude abrir esta ficha. Probá actualizar Catering.</div>';});
+}
+function _catLista(a,fn,vacio){return a&&a.length?a.map(fn).join(''):'<div class="cat-empty">'+vacio+'</div>';}
+function catPintarDetalle(){
+  var d=_catDetalle,e=d&&d.event,el=$('catApp');if(!e||!el)return;
+  function v(k){return _catEsc(e[k]||'');}
+  var h='<div class="cat-head"><div><button class="btn-reload-caja" type="button" onclick="_catDetalle=null;_catPintar()">← Eventos</button><div class="cat-title" style="margin-top:10px">'+v('event_name')+'</div><div class="cat-sub">Ficha operativa · '+_catFecha(e.event_date)+'</div></div></div>';
+  h+='<section class="card"><div class="st">Ficha del evento</div><form onsubmit="return catGuardarEvento(event)"><div class="fg-row"><div class="fg"><label>Cliente</label><input name="client_name" value="'+v('client_name')+'" required></div><div class="fg"><label>Estado</label><select name="status">'+['lead','quoted','confirmed','in_production','completed','cancelled'].map(function(x){return '<option '+(e.status===x?'selected':'')+'>'+x+'</option>';}).join('')+'</select></div></div><div class="fg-row"><div class="fg"><label>Evento</label><input name="event_name" value="'+v('event_name')+'"></div><div class="fg"><label>Fecha</label><input name="event_date" type="date" value="'+v('event_date').slice(0,10)+'" required></div></div><div class="fg-row"><div class="fg"><label>Invitados estimados</label><input name="guests_expected" type="number" min="0" value="'+(e.guests_expected||0)+'"></div><div class="fg"><label>Listo para servir</label><input name="food_ready_at" type="time" value="'+v('food_ready_at').slice(0,5)+'"></div></div><div class="fg"><label>Notas operativas</label><input name="notes" value="'+v('notes')+'"></div><button class="btn-submit" type="submit">Guardar ficha</button></form></section>';
+  h+='<section class="card"><div class="st">🍕 Menú</div><div class="cat-list">'+_catLista(d.menu,function(x){return '<div class="cat-event"><b>'+_catEsc(x.item_name)+'</b><div class="cat-sub">'+x.quantity_planned+' '+_catEsc(x.unit)+' · $'+f$(x.unit_sale_price||0)+' c/u</div></div>';},'Todavía no cargaste el menú.')+'</div><form class="fg-row" style="margin-top:10px" onsubmit="return catGuardarFila(event,\'menu\')"><input name="item_name" placeholder="Ej: Pizza muzzarella" required><input name="quantity_planned" type="number" min="0" step="0.5" placeholder="Cantidad" required><select name="unit"><option value="u">unidades</option><option value="porcion">porciones</option><option value="kg">kg</option></select><button class="btn-submit" type="submit">Agregar</button></form></section>';
+  h+='<section class="card"><div class="st">💰 Presupuesto y compras</div><div class="cat-list">'+_catLista(d.lines,function(x){return '<div class="cat-event"><b>'+_catEsc(x.description)+'</b><div class="cat-sub">'+_catEsc(x.stage)+' · '+_catEsc(x.line_kind)+' · '+_catEsc(x.category)+' · '+_catDinero(x.total_amount)+'</div></div>';},'Todavía no cargaste líneas de presupuesto.')+'</div><form class="fg-row" style="margin-top:10px" onsubmit="return catGuardarFila(event,\'line\')"><input name="description" placeholder="Ej: Servicio de pizzas" required><input name="total_amount" type="number" min="0" placeholder="$ total" required><select name="line_kind"><option value="revenue">Venta</option><option value="cost">Costo</option></select><select name="stage"><option value="budget">Presupuesto</option><option value="actual">Real</option></select><button class="btn-submit" type="submit">Agregar</button></form></section>';
+  h+='<section class="card"><div class="st">💳 Cobros</div><div class="cat-list">'+_catLista(d.payments,function(x){return '<div class="cat-event"><b>'+_catEsc(x.payment_kind)+'</b><div class="cat-sub">'+_catDinero(x.amount)+' · '+_catEsc(x.status)+' · '+_catFecha(x.due_on)+'</div></div>';},'Todavía no cargaste cobros.')+'</div><form class="fg-row" style="margin-top:10px" onsubmit="return catGuardarFila(event,\'payment\')"><input name="amount" type="number" min="0" placeholder="$ monto" required><select name="payment_kind"><option value="deposit">Seña</option><option value="balance">Saldo</option></select><select name="status"><option value="expected">Pendiente</option><option value="received">Recibido</option></select><button class="btn-submit" type="submit">Agregar</button></form></section>';
+  h+='<section class="card"><div class="st">✅ Tareas</div><div class="cat-list">'+_catLista(d.tasks,function(x){return '<div class="cat-event"><b>'+_catEsc(x.task_name)+'</b><div class="cat-sub">'+_catEsc(x.task_group)+' · '+_catEsc(x.owner_name||'Sin responsable')+'</div></div>';},'Todavía no cargaste tareas.')+'</div><form class="fg-row" style="margin-top:10px" onsubmit="return catGuardarFila(event,\'task\')"><input name="task_name" placeholder="Ej: Confirmar asistentes" required><input name="owner_name" placeholder="Responsable"><select name="task_group"><option value="commercial">Comercial</option><option value="purchases">Compras</option><option value="production">Producción</option><option value="service">Servicio</option><option value="close">Cierre</option></select><button class="btn-submit" type="submit">Agregar</button></form></section>';
+  el.innerHTML=h;
+}
+function catGuardarEvento(ev){ev.preventDefault();var f=new FormData(ev.target),e=_catDetalle.event,o={id:e.id,event_code:e.event_code,status:f.get('status'),client_name:f.get('client_name'),event_name:f.get('event_name'),event_type:e.event_type||'',venue_name:e.venue_name||'',venue_address:e.venue_address||'',event_date:f.get('event_date'),guests_expected:f.get('guests_expected'),food_ready_at:f.get('food_ready_at')||null,notes:f.get('notes')||''};_catPost('event',o).then(function(){return catAbrir(e.id);}).catch(function(){toast('No pude guardar la ficha');});return false;}
+function catGuardarFila(ev,entity){ev.preventDefault();var f=new FormData(ev.target),o={id:_catId(),event_id:_catDetalle.event.id};f.forEach(function(v,k){o[k]=v;});if(entity==='menu'){o.item_category='menu';o.unit_sale_price=0;}if(entity==='line'){o.category='menu';o.quantity=1;o.unit='u';o.unit_amount=o.total_amount;}if(entity==='payment'){o.due_on=null;}if(entity==='task'){o.sort_order=0;}_catPost(entity,o).then(function(){return catAbrir(_catDetalle.event.id);}).catch(function(){toast('No pude guardar este dato');});return false;}
 
 function loadVentas(){
   if(_vPidiendo)return _vPidiendo;                  // uno en vuelo alcanza
