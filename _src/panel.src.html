@@ -5966,7 +5966,7 @@ var API='https://script.google.com/macros/s/AKfycbxmrG5YVSshcYezk8lXFx_uxb7NFGcb
      "Borrando el gasto...". La fila YA estaba borrada (18:34:18 en Log Errores):
      lo que se colgo fue la entrega de Google, despues de que el servidor
      termino. Sin esta linea el POST no tenia ningun reloj. */
-  var _POST_IDEMPOTENTE = { gasto: 1, ingreso: 1, borrarMovimientoCaja: 1 };
+  var _POST_IDEMPOTENTE = { gasto: 1, ingreso: 1, borrarMovimientoCaja: 1, piezasRecibir: 1 };
   var _corte = window.__corteGet = { cortes: 0, salvados: 0 };
   var _CORTABLE = { admin:1, pedidosLight:1, cajaLight:1, ocLight:1, ventas:1, tendencia:1,
     stock_full:1, piezas_full:1, precios:1, catalogo:1, cobrosPendientes:1, entregas:1,
@@ -9322,7 +9322,15 @@ function confirmarDeshacerOrigen(btn){
 }
 
 // ── EDITOR DE PRODUCTOS DEL PEDIDO ──
-// Catálogo de productos disponibles según hoja
+/* Catálogo de productos disponibles según hoja.
+   17/9/2026: ESTAS LISTAS YA NO DECIDEN qué se puede agregar en Home, Pilar y
+   Red — son el respaldo para cuando el volcado todavía no llegó. Tadeo:
+   *"necesito que aparezcan todos los productos... no me aparece para poder
+   agregar al pedido por ejemplo los sorrentinos espinaca, brie, langostino,
+   pollo"*. Y era literal: `Home` no tenía `SQB`, `SL`, `SPyP` ni `SE`, mientras
+   que Pilar y Red sí. Una lista escrita a mano se desactualiza cada vez que
+   nace un producto, en silencio y sólo en la hoja que nadie miró.
+   Ahora sale de `D.stock`, que es la hoja Productos. Ver `_catalogoDe`. */
 var CATALOGO={
   Home:  ['PPM','PPJyQ','PPCyQ','SCo','SJyQ','SCa','ECaC','EJyQ','ECyQ','EV','TG','TLC','TC','F','PMu','PMa','PJyQ','PCC','PJyM','TP','TJyQ','TCa','TV','RC','RP'],
   Pilar: ['PPM','PPJyQ','PPCyQ','SQB','SL','SCo','SPyP','SJyQ','SE','SCa','ECaC','EJyQ','ECyQ','EV','TG','TLC','TC','F','PMu','PMa','PJyQ','PCC','PJyM','TP','TJyQ','TCa','TV','RC','RP'],
@@ -9332,6 +9340,28 @@ var CATALOGO={
 // Precios por hoja
 var CLUBES_PRECIOS={'PMu':7900,'PMa':8000,'PJyQ':8300,'PCC':8000,'PJyM':8000,'PPM':13000,'PPJyQ':13000,'PPCyQ':13000,'ECaC':18400,'EJyQ':16000,'ECyQ':16000,'EV':16000};
 
+/* Qué se puede agregar a un pedido de esta hoja.
+   Fuente: la hoja Productos (llega en `D.stock`), no una lista escrita a mano.
+   Dos excepciones, y las dos son reglas del negocio, no olvidos:
+   · **Clubes** vende un surtido acotado y con SUS precios (`CLUBES_PRECIOS`):
+     mostrarle todo el catálogo sería ofrecer productos sin precio de club.
+   · **Lo que se vende por kilo** (la carne) no entra acá: este editor cuenta
+     UNIDADES, y una pieza no es un kilo. La carne se agrega con su pesaje, que
+     es el único lugar que sabe la diferencia entre lo pedido y lo pesado.
+   Si el volcado todavía no llegó, `D.stock` está vacío y se cae a la lista de
+   siempre: mejor la de antes que un desplegable vacío. */
+function _catalogoDe(hoja){
+  if(hoja==='Clubes')return CATALOGO.Clubes||[];
+  var lista=[];
+  if(D&&Array.isArray(D.stock)){
+    D.stock.forEach(function(s){
+      if(!s||!s.a)return;
+      if(s.pz||String(s.u||'').toLowerCase()==='kg')return;
+      lista.push(s.a);
+    });
+  }
+  return lista.length?lista:(CATALOGO[hoja]||[]);
+}
 function _precioCatalogo(hoja, abbr){
   if(hoja==='Clubes') return CLUBES_PRECIOS[abbr]||0;
   if(D&&D.stock){
@@ -9501,7 +9531,7 @@ function renderEditor(uidEd){
   });
   // Agregar producto del catálogo
   var usados={};ed.lineas.forEach(function(l){usados[l.a]=true;});
-  var disponibles=(CATALOGO[ed.hoja]||[]).filter(function(a){return !usados[a];});
+  var disponibles=_catalogoDe(ed.hoja).filter(function(a){return !usados[a];});
   if(disponibles.length>0){
     html+='<div style="background:#fff;border:1px dashed var(--o);border-radius:10px;padding:10px;margin-bottom:10px">';
     html+='<div style="font-size:11px;color:var(--o);font-weight:700;margin-bottom:6px">+ Agregar producto</div>';
@@ -15115,8 +15145,16 @@ function stCarneGuardar(){
     envio.forEach(function(p){delete CARNE_ENVIANDO[p.uid];});
     CARNE_GUARDANDO=false;
   };
+  /* El `clientOpId` es la llave que le da RELOJ a este POST (`_POST_IDEMPOTENTE`):
+     sin el, si Google se cuelga entregando la respuesta, la tanda se queda en
+     "Guardando..." para siempre — le paso a Tadeo el 17/9 con un gasto de Caja.
+     Repetir es seguro y no depende de esta linea: cada pieza lleva su `uid` y el
+     backend los recuerda 6 h (vuelven como `repetidas`, no como piezas nuevas).
+     Va derivado de la tanda, no al azar, para que el reintento traiga el mismo. */
+  var _opTanda='pzr-'+(envio[0].uid||'')+'-'+envio.length+'-'+Math.round(totKg*1000);
   fetch(API,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},
     body:JSON.stringify({action:'piezasRecibir',proveedor:CARNE_PROV,deposito:depEnvio||undefined,
+      clientOpId:_opTanda,
       piezas:envio.map(function(p){return {abbr:p.abbr,peso:p.peso,uid:p.uid};})})})
     .then(function(r){return r.json();})
     .then(function(d){

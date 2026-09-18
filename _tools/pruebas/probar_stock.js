@@ -266,6 +266,13 @@ function chk(cond, txt, extra) {
       'manda las piezas en UNA sola tanda', JSON.stringify(post.piezas));
     chk(post.piezas.every(p => p.abbr && p.peso > 0), 'cada pieza va con su corte y su peso',
       JSON.stringify(post.piezas));
+    /* Sin clientOpId el POST no entra en `_POST_IDEMPOTENTE` y se queda sin
+       reloj: si Google se cuelga entregando la respuesta, la tanda queda en
+       "Guardando..." para siempre (17/9/2026). Repetir es seguro igual, porque
+       cada pieza lleva su uid y el backend las devuelve como repetidas. */
+    chk(!!post.clientOpId, 'la tanda va con clientOpId (es lo que le da reloj al POST)', post.clientOpId);
+    chk(post.piezas.every(p => !!p.uid), 'cada pieza con su uid (reintentar no duplica)',
+      JSON.stringify(post.piezas).slice(0, 200));
     chk(post.proveedor === 'Caco', 'manda el proveedor que se escribio', String(post.proveedor));
     chk(post.deposito === 'ustariz', 'manda el deposito ELEGIDO (ustariz)',
       'manda ' + JSON.stringify(post.deposito));
