@@ -94,16 +94,23 @@ const STUB = `
     if (!listo) { console.log('\n' + ok + ' ok, ' + mal + ' mal'); salir(1); }
     await pausa(3000);
 
-    console.log('\n-- 1. una lectura trabada se corta a los 20 s y se vuelve a pedir --');
+    /* El corte NO va escrito aca: se lee del app.html que se esta probando.
+       El 18/9/2026 paso de 20 a 45 s —una lectura en frio tarda ~40 s y
+       cortarla a los 20 mataba justo lo que iba a terminar— y este test, que
+       tenia el numero adentro, se puso en rojo diciendo que fallaba el ERP. */
+    const FUENTE = require('fs').readFileSync(require('path').join(__dirname, '..', '..', APP), 'utf8');
+    const CORTE = +((FUENTE.match(/var CORTE_GET_MS\s*=\s*(\d+)/) || [0, 20000])[1]);
+    console.log('\n-- 1. una lectura trabada se corta a los ' + (CORTE / 1000) + ' s y se vuelve a pedir --');
     await ev(cli, `window.__lento={entregas:600000}; window.__pedidos=[]; window.__corteGet.cortes=0; window.__corteGet.salvados=0;
       window.__r1=null; window.__t1=Date.now();
       fetch(API+'?action=entregas&t='+Date.now()).then(function(r){return r.json();}).then(function(d){window.__r1={ms:Date.now()-window.__t1, d:d};}); 1;`);
-    const vino = await esperar(cli, `!!window.__r1`, 45000);
+    const vino = await esperar(cli, `!!window.__r1`, CORTE + 30000);
     const r1 = await ev(cli, `window.__r1`);
     const c1 = await ev(cli, `window.__corteGet`);
     const p1 = await ev(cli, `window.__pedidos`);
     chk('la lectura llega igual', vino === true && !!r1 && r1.d && r1.d.ok === true, r1);
-    chk('llega en 20-26 s, no a los 10 min', !!r1 && r1.ms >= 19000 && r1.ms <= 26000, r1 && r1.ms);
+    chk('llega apenas pasado el corte (' + (CORTE / 1000) + ' s), no a los 10 min',
+      !!r1 && r1.ms >= CORTE - 1000 && r1.ms <= CORTE + 8000, r1 && r1.ms);
     chk('la salva el SEGUNDO pedido', !!r1 && r1.d && r1.d.intento === 2, r1 && r1.d);
     chk('queda contado (cortes 1, salvados 1)', c1 && c1.cortes === 1 && c1.salvados === 1, c1);
     chk('fueron dos pedidos, no mas', (p1 || []).filter(x => x === 'entregas').length === 2, p1);
