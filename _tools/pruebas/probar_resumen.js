@@ -53,6 +53,20 @@ async function correr(cli, demStub) {
    pagina. Sin la espera esto corria sobre un `#hSemana` vacio, devolvia "sin
    bloque" y los chequeos de abajo median 0 chips igual que antes. */
 async function abrirDetalle(cli) {
+  /* 19/9/2026: el bloque salio de Inicio > Resumen por pedido de Tadeo ("en
+     Resumen no deberia estar" — el aviso del cierre de OC ya sale por mail
+     solo). `rSemanaPrep` sigue entero y se defiende con `if(!box)return`, asi
+     que para seguir probando SU LOGICA —que no cambio— el test le devuelve su
+     <div> y lo llama a mano. El dia que el bloque vuelva a vivir en alguna
+     pantalla, esto sigue midiendo lo mismo. */
+  await evaluar(cli, `(function(){
+    if(document.getElementById('hSemana'))return 'ya estaba';
+    var c=document.getElementById('p-inicio-resumen')||document.body;
+    var d=document.createElement('div'); d.id='hSemana';
+    c.insertBefore(d,c.firstChild);
+    try{ rSemanaPrep(); }catch(e){ return 'exploto: '+e.message; }
+    return 'creado';
+  })()`);
   const hay = await esperar(cli,
     'document.querySelector(\'#hSemana [data-semprep="jueves"]\')!==null', 90000);
   if (!hay) return 'el bloque del jueves no se dibujo';

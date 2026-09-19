@@ -258,8 +258,15 @@ button.rt-chip.on{background:var(--o);border-color:var(--o);color:#fff}
 .rt-fila{padding:8px 0 6px}
 .rt-fila.h{padding-left:14px;border-top:1px dashed #EFE6CC}
 .rt-fila-a{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(36px,.8fr) auto;align-items:center;gap:10px}
-.rt-fila-n{font-weight:800;color:var(--ink);font-size:13px;min-width:0;line-height:1.25}
+.rt-fila-n{font-weight:800;color:var(--ink);font-size:13px;min-width:0;line-height:1.25;display:flex;align-items:baseline;gap:7px;flex-wrap:wrap}
 .rt-fila.g .rt-fila-n{font-size:14px}
+/* El número de ENTREGAS, grande al lado del canal (19/9/2026). Tadeo: "debería
+   decir en título Clubes, al costado el número de entregas bien grande". Es el
+   dato que dice cuántas veces salió el auto, que no se lee de la facturación. */
+.rt-ent{display:inline-flex;align-items:baseline;gap:3px;line-height:1}
+.rt-ent b{font-size:22px;font-weight:900;color:var(--o);font-variant-numeric:tabular-nums;letter-spacing:-.02em}
+.rt-fila.g .rt-ent b{font-size:26px}
+.rt-ent small{font-size:9.5px;font-weight:700;color:var(--ink3);text-transform:uppercase;letter-spacing:.04em}
 .rt-fila-f{font-weight:800;color:var(--ink);font-size:14px;white-space:nowrap;font-variant-numeric:tabular-nums;text-align:right}
 .rt-fila.g .rt-fila-f{font-size:16px}
 .rt-fila-s{font-size:11px;color:var(--ink3);margin-top:2px;line-height:1.35}
@@ -3295,7 +3302,12 @@ body.role-single .statusbar{font-size:11px}
     <button class="ist" data-st="cierre" onclick="goSubInicio('cierre')">&#128197; Cierre</button>
   </div>
   <div id="p-inicio-resumen">
-    <div id="hSemana"></div>
+    <!-- 19/9/2026: se sacó de acá el bloque de preparación de la semana (cierre
+         de OC + reposición de carne). Tadeo: "en Resumen no debería estar".
+         No se pierde nada: el aviso del cierre de OC ya sale por mail solo, todos
+         los jueves (`avisoCutoffOC` en Code.js, trigger de AGENDA_AUTOM). El
+         código de `rSemanaPrep` sigue entero por si vuelve en Abastecimiento;
+         sin su <div> no pinta ni pide `catalogo` al arrancar. -->
     <div id="hRetail"></div>
     <div id="hSnap"></div>
     <div id="hTend"></div>
@@ -12071,12 +12083,36 @@ function _rtClientes(P){
 }
 function _rtVacio(){return {f:0,c:0,ent:0,peds:[],det:{}};}
 /* Lo entregado entre dos dias 'aaaa-mm-dd', inclusive, repartido en el arbol. */
+/* ¿Este pedido YA es una venta de Maleu? (19/9/2026)
+ *
+ *  Para todos los canales, sí cuando está "Entregado".
+ *
+ *  Para RED, no: ahí "Entregado" (col L) quiere decir que **el vendedor** le
+ *  entregó a SU cliente final, que puede ser días después y que además depende
+ *  de un clic que el vendedor nunca hace —los vendedores no usan el ERP—. Para
+ *  Maleu la venta ocurre cuando le da la bolsa al vendedor, y eso está marcado
+ *  en la col BE "Entregado a Vendedor", que llega al panel como `ev`.
+ *
+ *  Es la misma regla que el backend ya usa para sacar un pedido de ARMADO
+ *  (Code.js: `canal === 'Red'` → `entVend === 'Entregado' || est === 'Entregado'`).
+ *
+ *  Medido el 19/9/2026 contra producción: de 103 pedidos de Red vivos, los 103
+ *  tienen la marca de entregado al vendedor, y 3 tenían col L todavía en
+ *  "Pendiente". Esos 3 ($314.985) figuraban a la vez como "Red $0 sin ventas"
+ *  y como pedidos pendientes que inflaban la Proyección. Estaban mal contados
+ *  dos veces. */
+function _rtEsVenta(p){
+  if(!p)return false;
+  if(p.h==='Red')return String(p.ev||'').trim()==='Entregado'||p.es==='Entregado';
+  return p.es==='Entregado';
+}
 function _rtSumar(desde,hasta){
   var g={tot:_rtVacio(),dom:_rtVacio(),home:_rtVacio(),otras:_rtVacio(),inst:_rtVacio(),
          clubes:_rtVacio(),red:_rtVacio(),b2b:_rtVacio(),cat:_rtVacio(),bolsas:{}};
   function mete(n,f,c,det){var x=g[n];x.f+=f;x.c+=c;if(det)x.det[det]=(x.det[det]||0)+1;}
   ((typeof D!=='undefined'&&D&&D.pedidos)||[]).forEach(function(p){
-    if(p.es!=='Entregado'||p.hist)return;
+    if(p.hist||p.es==='Cancelado')return;
+    if(!_rtEsVenta(p))return;
     if(!p.c||!String(p.c).trim()||!(Number(p.$)>0))return;
     var dia=_tendFechaVentaISO(p);
     if(!dia||dia<desde||dia>hasta)return;
@@ -12124,15 +12160,26 @@ function _rtComprometido(P,hoy){
   var hasta=P.h;
   if(P.k==='sem')hasta=_rtIso(_rtDia(P.desde,6));
   else if(P.k==='mes')hasta=_rtIso(new Date(hoy.getFullYear(),hoy.getMonth()+1,0));
-  var o={f:0,c:0,ped:0,sinFecha:0,hasta:hasta};
+  /* `det` (19/9/2026): de qué canal sale cada pedido pendiente. Antes la
+     Proyección decía "si entregás 6 pedidos" y no había forma de saber cuáles
+     eran los 6 — Tadeo tenía que adivinarlo. */
+  var o={f:0,c:0,ped:0,sinFecha:0,hasta:hasta,det:{},quien:[]};
   ((typeof D!=='undefined'&&D&&D.pedidos)||[]).forEach(function(p){
-    if(!p||p.hist||p.es==='Entregado'||p.es==='Cancelado')return;
+    if(!p||p.hist||p.es==='Cancelado')return;
+    /* Lo que ya es venta no está pendiente. Para Red eso incluye lo que ya le
+       dimos al vendedor aunque su col L siga en "Pendiente": si no, el mismo
+       pedido sumaba en la Proyección y encima no sumaba en Red. */
+    if(_rtEsVenta(p))return;
     if(['Home','Pilar','Clubes','Red','B2B'].indexOf(p.h)<0)return;
     if(!p.c||!String(p.c).trim()||!(Number(p.$)>0))return;
     var dia=String(p.dee||'').slice(0,10);
     if(!/^\d{4}-\d\d-\d\d$/.test(dia)){o.sinFecha++;return;}
     if(dia<P.d||dia>hasta)return;
     o.f+=Number(p.$)||0;o.c+=Number(p.co)||0;o.ped++;
+    var canal=(p.h==='Home'||p.h==='Pilar')?'Domiciliario':p.h;
+    o.det[canal]=o.det[canal]||{n:0,f:0};
+    o.det[canal].n++;o.det[canal].f+=Number(p.$)||0;
+    o.quien.push({canal:canal,c:String(p.c||'').split(' (Red:')[0].trim(),dia:dia,f:Number(p.$)||0});
   });
   return o;
 }
@@ -12174,12 +12221,16 @@ function rRetail(){
     var h='<div class="rt-fila '+cls+'">';
     /* nombre | barra | monto: la barra ocupa el hueco. En la compu, sin ella, el
        nombre quedaba a un metro de su monto. */
-    h+='<div class="rt-fila-a"><span class="rt-fila-n">'+nombre+'</span><span class="rt-bar">'
+    h+='<div class="rt-fila-a"><span class="rt-fila-n">'+nombre
+      +(x.ent>0?'<span class="rt-ent"><b>'+x.ent+'</b><small>'+(x.ent===1?'entrega':'entregas')+'</small></span>':'')
+      +'</span><span class="rt-bar">'
       +((x.f>0&&base>0)?'<span style="width:'+Math.max(2,pct(x.f,base))+'%"></span>':'')
       +'</span><span class="rt-fila-f">$'+f$(x.f)+'</span></div>';
     if(sub)h+='<div class="rt-fila-s">'+sub+'</div>';
     if(x.f>0){
-      h+='<div class="rt-fila-m">costo $'+f$(x.c)+' · margen $'+f$(m)+' <b>'+pct(m,x.f)+'%</b> · '+ent(x.ent)+'</div>';
+      /* Las entregas ya salen grandes al lado del nombre: repetirlas acá era
+         decir el mismo número dos veces en la misma fila. */
+      h+='<div class="rt-fila-m">costo $'+f$(x.c)+' · margen $'+f$(m)+' <b>'+pct(m,x.f)+'%</b></div>';
     }else{
       h+='<div class="rt-fila-m">'+(sinTxt||'sin ventas en el período')+'</div>';
     }
@@ -12195,7 +12246,14 @@ function rRetail(){
   var rtVivo=(P.k==='sem'||P.k==='mes');
   var cpTit=rtVivo?'Proyección':'Pendiente';
   var cpMonto=rtVivo?proy:cp.f;
-  var cpPie=cp.ped?(rtVivo?('+$'+f$(cp.f)+' si entregás '+cp.ped+' '+(cp.ped===1?'pedido':'pedidos')+' · margen bruto est. $'+f$(proyMarg)+' ('+pct(proyMarg,proy)+'%)'):(cp.ped+' '+(cp.ped===1?'pedido':'pedidos')+' de ese período sin entregar')):'sin pedidos pendientes';
+  /* De dónde salen esos pedidos (19/9/2026). Antes decía "si entregás 6
+     pedidos" y no había forma de saber cuáles: había que adivinarlo. */
+  function cpDesglose(d){
+    var ks=Object.keys(d||{}).sort(function(a,b){return d[b].n-d[a].n||a.localeCompare(b);});
+    return ks.map(function(k){return d[k].n+' '+_rtEsc(k);}).join(' · ');
+  }
+  var cpDet=cpDesglose(cp.det);
+  var cpPie=cp.ped?(rtVivo?('+$'+f$(cp.f)+' si entregás '+cp.ped+' '+(cp.ped===1?'pedido':'pedidos')+(cpDet?': '+cpDet:'')+' · margen bruto est. $'+f$(proyMarg)+' ('+pct(proyMarg,proy)+'%)'):(cp.ped+' '+(cp.ped===1?'pedido':'pedidos')+' de ese período sin entregar'+(cpDet?': '+cpDet:''))):'sin pedidos pendientes';
   var cl=_rtClientes(P);
   if(cl&&!(cl.total>0))cl=null;
   var copia='💰 Ventas retail · '+P.tit+'\n'
@@ -12238,18 +12296,25 @@ function rRetail(){
     h+='</div><div class="rt-grupo">';
     h+=fila('g','🏢 Venta Mercado Institucional','',g.inst,t.f);
     h+=fila('h','Clubes',top(g.clubes.det,3),g.clubes,g.inst.f);
-    h+=fila('h','Red',g.red.f>0?'neto de la comisión · '+top(g.red.det,3):'',g.red,g.inst.f);
+    /* Red: para Maleu una venta es UNA BOLSA que le dimos al vendedor, no las
+       ventas que él haga después. Con 0, "sin ventas" mentía por omisión: decía
+       que no pasó nada cuando lo que no pasó fue entregarle a un vendedor. */
+    h+=fila('h','Red',g.red.f>0?'1 venta = 1 bolsa que le dimos al vendedor · '+top(g.red.det,3):'',
+            g.red,g.inst.f,'no le entregamos ninguna bolsa a un vendedor en el período');
     h+=fila('h','B2B',top(g.b2b.det,3),g.b2b,g.inst.f,g.hayExtra?'':'todavía no llegó el dato');
     h+='</div></div>';
     if(g.cat.f>0)h+='<div class="rt-cat">Además, Catering $'+f$(g.cat.f)+' (margen '+pct(g.cat.f-g.cat.c,g.cat.f)+'%): no es retail y no suma arriba.</div>';
   }
-  h+='<div class="rt-pie">Lo entregado, por el día de entrega. Red va neto de la comisión del vendedor; el costo es lo que costó la mercadería.</div>';
+  h+='<div class="rt-pie">Lo entregado, por el día de entrega. El costo es lo que costó la mercadería. '
+    +'<b>En Red, la venta de Maleu es entregarle la bolsa al vendedor</b> —lo que él venda después es asunto suyo—, y va neta de su comisión.</div>';
   h+='</div>';
   box.innerHTML=h;
 }
 
 function rInicio(){
-  try{rSemanaPrep();}catch(e){console.error('rSemanaPrep()',e);}
+  /* `rSemanaPrep()` ya no se llama desde Resumen (19/9/2026) — ver el comentario
+     en el markup de #p-inicio-resumen. La función queda y se sigue defendiendo
+     sola (`if(!box)return`), así que reponerla es devolver su <div>. */
   try{rRetail();}catch(e){console.error('rRetail()',e);}
   rHSnap();
   rSeisMeses();

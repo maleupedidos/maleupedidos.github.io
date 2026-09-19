@@ -160,13 +160,23 @@ const txt = (cli, sel) => ev(cli, `window.__tx(document.querySelector(${JSON.str
     const filas = await ev(cli, `[].map.call(document.querySelectorAll('#hRetail .rt-fila'),function(f){return window.__tx(f);})`);
     const F = Array.isArray(filas) ? filas : [];
     const fila = re => F.find(x => re.test(x)) || '';
-    chk('Domiciliario $195.000 · 7 entregas', /Domiciliario \$195\.000/.test(fila(/Domiciliario/)) && /7 entregas/.test(fila(/Domiciliario/)), fila(/Domiciliario/));
-    chk('Home $115.000 · 4 entregas (Estancias del Rio sin tilde es Home; manda el sello de entrega)', /^Home \$115\.000/.test(fila(/^Home/)) && /4 entregas/.test(fila(/^Home/)), fila(/^Home/));
-    chk('Otras zonas $80.000 · 3 entregas, y dice que zonas (Los Alcanfores incluido)', /Otras zonas \$80\.000/.test(fila(/Otras zonas/)) && /3 entregas/.test(fila(/Otras zonas/)) && /Los Alcanfores 1/.test(fila(/Otras zonas/)) && /Pilara 1/.test(fila(/Otras zonas/)), fila(/Otras zonas/));
-    chk('Institucional $297.400', /Institucional \$297\.400/.test(fila(/Institucional/)), fila(/Institucional/));
-    chk('Clubes $39.000 · 1 entrega (el mismo socio el mismo dia)', /Clubes \$39\.000/.test(fila(/^Clubes/)) && /1 entrega\b/.test(fila(/^Clubes/)) && /Champagnat 1/.test(fila(/^Clubes/)), fila(/^Clubes/));
-    chk('Red $66.400 · 1 entrega, neto de la comision', /Red \$66\.400/.test(fila(/^Red/)) && /neto de la comisión/.test(fila(/^Red/)) && /1 entrega\b/.test(fila(/^Red/)), fila(/^Red/));
-    chk('B2B $192.000', /B2B \$192\.000/.test(fila(/^B2B/)), fila(/^B2B/));
+    /* 19/9/2026: el número de entregas pasó a ir GRANDE entre el nombre y el
+       monto ("Home 4 entregas $115.000"), así que estas comprobaciones ya no
+       pueden pedir que el monto siga pegado al nombre. Se chequea cada pieza
+       por separado: el monto, las entregas y el detalle. Los números NO
+       cambiaron — se verificó que los siete siguen dando lo mismo. */
+    const tiene = (re, ...partes) => { const t = fila(re); return partes.every(p => p.test(t)); };
+    chk('Domiciliario $195.000 · 7 entregas', tiene(/Domiciliario/, /\$195\.000/, /7 entregas/), fila(/Domiciliario/));
+    chk('Home $115.000 · 4 entregas (Estancias del Rio sin tilde es Home; manda el sello de entrega)', tiene(/^Home/, /\$115\.000/, /4 entregas/), fila(/^Home/));
+    chk('Otras zonas $80.000 · 3 entregas, y dice que zonas (Los Alcanfores incluido)', tiene(/Otras zonas/, /\$80\.000/, /3 entregas/, /Los Alcanfores 1/, /Pilara 1/), fila(/Otras zonas/));
+    chk('Institucional $297.400', tiene(/Institucional/, /\$297\.400/), fila(/Institucional/));
+    chk('Clubes $39.000 · 1 entrega (el mismo socio el mismo dia)', tiene(/^Clubes/, /\$39\.000/, /1 entrega\b/, /Champagnat 1/), fila(/^Clubes/));
+    /* Red ya no dice "neto de la comisión" arriba: ahora dice qué ES una venta
+       de Red para Maleu (la bolsa al vendedor). Lo de la comisión pasó al pie. */
+    chk('Red $66.400 · 1 entrega (= 1 bolsa al vendedor)', tiene(/^Red/, /\$66\.400/, /1 entrega\b/, /bolsa que le dimos al vendedor/), fila(/^Red/));
+    chk('   y el pie sigue aclarando que va neta de la comisión',
+        /neto de la comisión|neta de su comisión/.test(await txt(cli, '#hRetail .rt-pie') || ''), await txt(cli, '#hRetail .rt-pie'));
+    chk('B2B $192.000', tiene(/^B2B/, /\$192\.000/), fila(/^B2B/));
     const cat = await txt(cli, '#hRetail .rt-cat') || '';
     chk('Catering se dice aparte y no suma', /Catering \$300\.000/.test(cat) && /no es retail/.test(cat), cat);
     const copia = await ev(cli, `decodeURIComponent((document.querySelector('#hRetail .rt-copy')||{getAttribute:function(){return ''}}).getAttribute('data-copy')||'')`);
