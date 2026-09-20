@@ -6119,6 +6119,72 @@ var API='https://script.google.com/macros/s/AKfycbxmrG5YVSshcYezk8lXFx_uxb7NFGcb
     return p.then(function(r){ return r && r.clone ? r.clone() : r; });
   }
 
+  /* ── DESPUES DE ESCRIBIR, ADELANTARSE (20/9/2026) ───────────────────────
+     El problema, medido contra produccion: toda escritura deja frias las 23
+     lecturas operativas, y la PRIMERA que entra despues paga el recalculo
+     entero — `admin` 28 a 33 s, `pedidosLight` ~40. Si Tadeo cobra y toca ↻
+     enseguida, lo paga el.
+
+     El calentador del backend rehace eso por atras, pero llega tarde: 30 s de
+     calma + el freno de actividad + un disparador por minuto dan ~2 minutos
+     (medido el 20/9 con `?action=ver`). Apps Script no tiene disparadores mas
+     finos, asi que ese piso no se puede bajar desde el servidor.
+
+     Desde el panel si: el momento exacto en que sabemos que la foto quedo vieja
+     es cuando NOSOTROS escribimos. Entonces, apenas el POST vuelve bien, se
+     pide por atras la lectura pesada de la pantalla abierta y se tira el
+     resultado — lo unico que interesa es que quede hecha del lado del servidor.
+
+     Por que no cuesta de mas: ese calculo iba a pasar igual en el proximo ↻.
+     Lo unico que cambia es CUANDO. Y si Tadeo toca ↻ mientras esta en vuelo, el
+     unificador de pedidos iguales (`_enVueloUrl`) lo engancha al mismo pedido
+     en vez de arrancar otra ejecucion: espera lo que falta, no 28 s de nuevo.
+
+     Los tres frenos que lo hacen seguro:
+       · UNA sola lectura, la mas pesada de la pantalla — no las tres. Apps
+         Script atiende de a una por usuario: tres precalentamientos dejarian al
+         usuario haciendo cola atras de su propio ERP.
+       · nada si hubo otro hace menos de 20 s (marcar 10 entregas seguidas es
+         una rafaga de POSTs, no diez motivos para recalcular).
+       · nada si la pestaña no esta a la vista. */
+  var _PREWARM_DE = { volcado:'admin', pedidos:'pedidosLight', caja:'cajaLight',
+                      ventas:'ventas', entregas:'entregas' };
+  /* De mas pesada a mas liviana: si la pantalla vive de varias, se adelanta la
+     que duele. */
+  var _PREWARM_ORDEN = ['volcado','pedidos','caja','ventas','entregas'];
+  /* Las sub-apps no pasan por `_fuentesDeTab`: tienen su propio refresco.
+     `busqueda` es Abastecimiento (el id de su tab, no su nombre). */
+  var _PREWARM_TAB = { busqueda:'admin', ruta:'entregas' };
+  var _prewarmUlt = 0;
+  function _precalentarTrasEscribir(){
+    try{
+      if (document.hidden) return;
+      var ahora = Date.now();
+      if (ahora - _prewarmUlt < 20000) return;
+      var tab = (typeof _tabActual === 'function') ? _tabActual() : '';
+      if (!tab) return;
+      var accion = _PREWARM_TAB[tab] || '';
+      if (!accion && typeof _fuentesDeTab === 'function'){
+        var fs = _fuentesDeTab(tab) || [];
+        for (var i = 0; i < _PREWARM_ORDEN.length && !accion; i++){
+          if (fs.indexOf(_PREWARM_ORDEN[i]) >= 0) accion = _PREWARM_DE[_PREWARM_ORDEN[i]];
+        }
+      }
+      if (!accion) return;
+      _prewarmUlt = ahora;
+      /* El 1,2 s es para que la escritura termine de asentarse en el servidor:
+         `doPost` cambia la version de los datos al EMPEZAR y al TERMINAR, y una
+         lectura disparada en el medio se guardaria bajo una version que ya no
+         va a pedir nadie — o sea, calentar al pedo. */
+      setTimeout(function(){
+        try{
+          window.__prewarm = { accion: accion, t: Date.now() };
+          fetch(API + '?action=' + accion).then(function(){}, function(){});
+        }catch(e){}
+      }, 1200);
+    }catch(e){}
+  }
+
   window.fetch = function(input, init){
     var esBackend = false, esPost = false, postIdempotente = false;
     try{
@@ -6147,7 +6213,24 @@ var API='https://script.google.com/macros/s/AKfycbxmrG5YVSshcYezk8lXFx_uxb7NFGcb
       var _marcar = function(){ try{ window.__ultimoPostBackend = Date.now(); }catch(e){} };
       _marcar();
       var pedirPost = postIdempotente ? _pedirPostCajaConCorte(input, init, 0) : _pedir(input, init, 0);
-      return pedirPost.then(function(r){ _marcar(); return r; }, function(e){ _marcar(); throw e; });
+      return pedirPost.then(function(r){
+        _marcar();
+        /* Solo si la escritura salio bien. Y OJO con que es "bien": `r.ok` es el
+           200 de HTTP, no el `{ok:false}` del backend — un permiso denegado o un
+           pedido invalido vuelven 200 con el error adentro. Sin mirar el cuerpo,
+           esto precalentaba despues de CADA POST, incluidos los que no
+           escribieron nada. Se lee sobre un `clone()` para no consumir el cuerpo
+           que el que llamo todavia va a leer; las respuestas de un POST son
+           chicas, asi que parsearlas dos veces no cuesta. */
+        try{
+          if (r && r.ok && typeof r.clone === 'function'){
+            r.clone().json().then(function(j){
+              if (j && j.ok !== false) _precalentarTrasEscribir();
+            }, function(){});
+          }
+        }catch(e){}
+        return r;
+      }, function(e){ _marcar(); throw e; });
     }
     return _pedir(input, init, 0);
   };
