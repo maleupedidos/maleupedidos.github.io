@@ -153,7 +153,10 @@ const txt = (cli, sel) => ev(cli, `window.__tx(document.querySelector(${JSON.str
     chk('Facturado $492.400 (Home + Otras zonas + Clubes + Red + B2B)', /^Facturado \$492\.400/.test(k[0] || ''), k);
     chk('Costo $356.800', /Costo \$356\.800/.test(k[1] || ''), k[1]);
     chk('Margen $135.600 · 28%', /Margen \$135\.600 28%/.test(k[2] || ''), k[2]);
-    chk('Entregas 10 (Ana 1 viaje, Clubes 1, Red 1 bolsa, B2B 1)', /Entregas 10/.test(k[3] || ''), k[3]);
+    /* 20/9/2026: el KPI pasó a llamarse "Entregas Retail" — lo que cuenta es el
+       árbol retail y Catering queda aparte. Sin distinguir mayúsculas: el CSS
+       lo pinta en mayúscula. */
+    chk('Entregas Retail 10 (Ana 1 viaje, Clubes 1, Red 1 bolsa, B2B 1)', /entregas retail\s*10/i.test(k[3] || ''), k[3]);
     chk('Semana cerrada: Pendiente $99.000, no reescribe lo facturado ni simula una proyección tardía', /Pendiente \$99\.000/.test(k[4] || '') && /1 pedido de ese período sin entregar/.test(k[4] || ''), k[4]);
     chk('contra la semana 36: ▲ +392% facturado y ▲ +9 entregas', /▲ \+392%/.test(k[0] || '') && /▲ \+9/.test(k[3] || ''), [k[0], k[3]]);
 
@@ -171,16 +174,25 @@ const txt = (cli, sel) => ev(cli, `window.__tx(document.querySelector(${JSON.str
     chk('Otras zonas $80.000 · 3 entregas, y dice que zonas (Los Alcanfores incluido)', tiene(/Otras zonas/, /\$80\.000/, /3 entregas/, /Los Alcanfores 1/, /Pilara 1/), fila(/Otras zonas/));
     chk('Institucional $297.400', tiene(/Institucional/, /\$297\.400/), fila(/Institucional/));
     chk('Clubes $39.000 · 1 entrega (el mismo socio el mismo dia)', tiene(/^Clubes/, /\$39\.000/, /1 entrega\b/, /Champagnat 1/), fila(/^Clubes/));
-    /* Red ya no dice "neto de la comisión" arriba: ahora dice qué ES una venta
-       de Red para Maleu (la bolsa al vendedor). Lo de la comisión pasó al pie. */
-    chk('Red $66.400 · 1 entrega (= 1 bolsa al vendedor)', tiene(/^Red/, /\$66\.400/, /1 entrega\b/, /bolsa que le dimos al vendedor/), fila(/^Red/));
-    chk('   y el pie sigue aclarando que va neta de la comisión',
-        /neto de la comisión|neta de su comisión/.test(await txt(cli, '#hRetail .rt-pie') || ''), await txt(cli, '#hRetail .rt-pie'));
+    /* 20/9/2026: la fila de Red ya no explica la regla (Tadeo: "no hace falta
+       aclarar esto, poco profesional"). Muestra los vendedores con cuántos
+       PEDIDOS cargó cada uno — acá el mismo vendedor hizo 2 en una sola bolsa,
+       que es justo lo que ese número viene a decir. */
+    chk('Red $66.400 · 1 entrega (1 bolsa) con los 2 pedidos de su vendedor',
+        tiene(/^Red/, /\$66\.400/, /1 entrega\b/, /Vendedor Uno 2/), fila(/^Red/));
+    const pie = await txt(cli, '#hRetail .rt-pie');
+    chk('   y ya no hay un párrafo de notas al pie', pie === null || pie === '', pie);
+    chk('   de cuándo son los números se dice arriba',
+        /Lo entregado, por el día de entrega/.test(await txt(cli, '#hRetail .rt-hl') || ''),
+        await txt(cli, '#hRetail .rt-hl'));
     chk('B2B $192.000', tiene(/^B2B/, /\$192\.000/), fila(/^B2B/));
     const cat = await txt(cli, '#hRetail .rt-cat') || '';
     chk('Catering se dice aparte y no suma', /Catering \$300\.000/.test(cat) && /no es retail/.test(cat), cat);
     const copia = await ev(cli, `decodeURIComponent((document.querySelector('#hRetail .rt-copy')||{getAttribute:function(){return ''}}).getAttribute('data-copy')||'')`);
-    chk('"Copiar" arma el resumen con los mismos numeros', /Facturado \$492\.400/.test(copia || '') && /Home \$115\.000 · Otras zonas \$80\.000/.test(copia || ''), copia);
+    chk('"Copiar" arma el resumen con los mismos numeros', /Facturado \$492\.400/.test(copia || '') && /Home \$115\.000/.test(copia || '') && /Otras zonas \$80\.000/.test(copia || ''), copia);
+    /* El ticket también viaja en el texto que se copia: es el número por el que
+       Tadeo pregunta cuando dos semanas facturan parecido. */
+    chk('   y lleva el ticket', /ticket \$49\.240/.test(copia || ''), copia);
     /* 14/9/2026, a la tarde: Lucas abrio el Resumen el lunes y el cuadro de clientes no
        estaba — vivia en la semana EN CURSO, que recien arrancaba. Ahora va adentro del
        bloque y sigue al periodo elegido. */

@@ -78,10 +78,14 @@ const diaDelMes = n => iso(new Date(HOY.getFullYear(), HOY.getMonth(), n));
           dee: diaDelMes(5), fex: diaDelMes(5), es: 'Entregado', $: 40000, co: 24000 },
         { n: '6', h: 'Home', c: 'Casa Pendiente', bar: 'Estancias del Pilar',
           dee: diaDelMes(27), es: 'Reservado', $: 25000, co: 15000 },
-        /* Clubes: dos entregas. */
-        { n: '7', h: 'Clubes', c: 'Club Del Norte', br: 'Club Del Norte',
+        /* Clubes: dos entregas, del MISMO club pero de grupos distintos. `gr`
+           viene del backend (col K "Grupo"). La fila vieja de la planilla dice
+           "Linea" sin tilde: el panel tiene que mostrarlas como el mismo equipo. */
+        { n: '7', h: 'Clubes', c: 'Alguien (Club Del Norte)', br: 'Club Del Norte',
+          gr: 'Plantel Superior Linea C',
           dee: diaDelMes(6), es: 'Entregado', $: 200000, co: 140000 },
-        { n: '8', h: 'Clubes', c: 'Club Del Sur', br: 'Club Del Sur',
+        { n: '8', h: 'Clubes', c: 'Otra (Club Del Norte)', br: 'Club Del Norte',
+          gr: 'Infantiles',
           dee: diaDelMes(7), es: 'Entregado', $: 125000, co: 90000 },
         /* Cancelado: no cuenta ni como venta ni como pendiente. */
         { n: '9', h: 'Red', c: 'Cliente Cinco (Red: Vendedor Sur)', br: 'Vendedor Sur',
@@ -119,6 +123,12 @@ const diaDelMes = n => iso(new Date(HOY.getFullYear(), HOY.getMonth(), n));
     /* 4) Los otros canales no cambiaron. */
     chk('Clubes sigue contando solo lo Entregado (325.000)', g.clubes.f === 325000, g.clubes);
     chk('   y son 2 entregas', g.clubes.ent === 2, g.clubes);
+    /* 20/9/2026: adentro de un club, cada GRUPO se cuenta aparte. */
+    const dc = await evaluar(cli, `(function(){var P=_rtPeriodo('mes',new Date());return _rtSumar(P.d,P.h).clubes.det;})()`);
+    chk('Clubes separa por grupo, no solo por club',
+        !!(dc && dc['Club Del Norte Línea C'] && dc['Club Del Norte Infantiles']), dc);
+    chk('   y "Linea" sin tilde se muestra como "Línea"',
+        !!(dc && dc['Club Del Norte Línea C'] === 1), dc);
     chk('Home cuenta solo lo Entregado (40.000)', g.home.f === 40000, g.home);
     chk('el cancelado no entra en ningun lado', g.tot.f === 585000, g.tot);
 
@@ -141,7 +151,8 @@ const diaDelMes = n => iso(new Date(HOY.getFullYear(), HOY.getMonth(), n));
            Con /^Red\\b/ no matcheaba nunca y el test parecía un bug del ERP. */
         if(n&&(n.textContent||'').trim().indexOf('Red')===0)filaRed=(f.textContent||'');
       });
-      return {txt:(t||b.textContent||''), ents:ents, red:filaRed,
+      var cab=b.querySelector('.rt-hl'); cab=cab?(cab.textContent||''):'';
+      return {txt:(t||b.textContent||''), ents:ents, red:filaRed, cab:cab,
               px:(function(){var e=b.querySelector('.rt-ent b');return e?getComputedStyle(e).fontSize:'';})()};
     })()`);
     chk('el numero de entregas sale como elemento propio', !!(vista && vista.ents.length >= 3), vista && vista.ents);
@@ -150,8 +161,20 @@ const diaDelMes = n => iso(new Date(HOY.getFullYear(), HOY.getMonth(), n));
     chk('la fila de Red ya no dice "sin ventas en el periodo"',
         (vista.red || '').indexOf('sin ventas en el período') < 0, vista.red);
     chk('   y muestra sus $220.000', (vista.red || '').indexOf('220.000') >= 0, vista.red);
-    chk('explica que una venta de Red es la bolsa al vendedor',
-        vista.txt.indexOf('bolsa que le dimos al vendedor') >= 0, vista.txt.slice(0, 300));
+    /* 20/9/2026: el cartelito explicativo salió (Tadeo: "no hace falta aclarar
+       esto, poco profesional"). Lo que queda es el dato: quién y cuántos. */
+    chk('la fila de Red NO explica la regla, solo nombra a los vendedores',
+        (vista.red || '').indexOf('bolsa que le dimos al vendedor') < 0
+        && /Vendedora Norte/.test(vista.red || '') && /Vendedor Sur/.test(vista.red || ''), vista.red);
+    chk('   y dice cuantos PEDIDOS cargo cada uno (Norte 2, Sur 1)',
+        /Vendedora Norte 2/.test(vista.red || '') && /Vendedor Sur 1/.test(vista.red || ''), vista.red);
+    chk('el parrafo de notas al pie ya no esta',
+        vista.txt.indexOf('es asunto suyo') < 0 && vista.txt.indexOf('neta de su comisión') < 0, vista.txt.slice(-300));
+    chk('de cuando son los numeros se dice arriba',
+        /Lo entregado, por el día de entrega/.test(vista.cab || ''), vista.cab);
+    /* Sin distinguir mayusculas: el CSS lo pinta "ENTREGAS RETAIL". */
+    chk('el KPI dice "Entregas Retail"', /entregas retail/i.test(vista.txt), vista.txt.slice(0, 300));
+    chk('cada canal muestra su ticket', (vista.red || '').indexOf('ticket') >= 0, vista.red);
     chk('la proyeccion nombra los canales', /Red/.test(vista.txt) && /Domiciliario/.test(vista.txt), vista.txt.slice(0, 300));
 
     /* 6) El bloque de la OC y la carne ya no esta en Resumen. */

@@ -238,6 +238,14 @@ body{font-family:'Inter',-apple-system,'Segoe UI',system-ui,sans-serif;backgroun
 .rt-hb{display:flex;gap:6px;flex-shrink:0}
 .rt-t{font-size:15px;font-weight:800;color:var(--ink)}
 .rt-sub{font-size:11px;color:var(--bl);font-weight:700;margin-top:2px}
+/* De cuándo son estos números. Estaba al pie, en un párrafo largo con notas
+   aclaratorias; acá dice lo mismo en cinco palabras y donde se mira. */
+.rt-sub2{font-size:10px;color:var(--ink4);font-weight:600;margin-top:1px}
+/* La variación del ticket contra el período anterior. */
+.rt-tkd{font-weight:800;font-size:10px;white-space:nowrap}
+.rt-tkd.up{color:var(--gd)}
+.rt-tkd.dn{color:var(--r)}
+.rt-tkd.eq{color:var(--ink4)}
 button.rt-copy,button.rt-pdf{background:var(--ink);color:#fff;border:0;border-radius:8px;padding:0 12px;min-height:34px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap;font-family:inherit}
 .rt-per{display:flex;gap:6px;flex-wrap:wrap;margin:10px 0}
 button.rt-chip{border:1px solid var(--cd);background:#fff;color:var(--ink2);border-radius:999px;padding:0 12px;min-height:34px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit}
@@ -10725,7 +10733,7 @@ function _leerVersion(app){
    "El HTML no sabe que version es" dejo de ser cierto: el build le escribe
    adentro el CACHE_NAME de sw-panel.js, el mismo que deploy.sh obliga a subir en
    cada cambio. Si lo publicado dice otra cosa, esta pagina es vieja. Punto. */
-var _APP_CN_PAGINA='maleu-panel-v369';
+var _APP_CN_PAGINA='maleu-panel-v370';
 
 /* Devuelve [{k,v}] si lo publicado no es lo que esta pagina corre. */
 function _chequearVersiones(){
@@ -15055,6 +15063,18 @@ function _rtVacio(){return {f:0,c:0,ent:0,peds:[],det:{}};}
  *  "Pendiente". Esos 3 ($314.985) figuraban a la vez como "Red $0 sin ventas"
  *  y como pedidos pendientes que inflaban la Proyección. Estaban mal contados
  *  dos veces. */
+/* "Plantel Superior Línea C" → "Línea C" · "Plantel Superior" → "Superior".
+   En la planilla conviven "Linea" y "Línea" (las filas viejas van sin tilde),
+   así que se normaliza acá: si no, el mismo equipo saldría como dos. */
+function _rtGrupoCorto(gr){
+  var s=String(gr||'').trim();
+  if(!s)return '';
+  s=s.replace(/\bl[ií]nea\b/gi,'Línea');
+  var m=s.match(/Línea\s+([A-Za-z0-9]+)/);
+  if(m)return 'Línea '+m[1].toUpperCase();
+  if(/^plantel\s+superior$/i.test(s))return 'Superior';
+  return s;
+}
 function _rtEsVenta(p){
   if(!p)return false;
   if(p.h==='Red')return String(p.ev||'').trim()==='Entregado'||p.es==='Entregado';
@@ -15080,13 +15100,26 @@ function _rtSumar(desde,hasta){
     }else if(p.h==='Red'){
       var v=String(p.br||'').trim()||'sin vendedor';
       mete('inst',f,c);mete('red',f,c);
-      if(!g.bolsas[v+'|'+dia]){g.bolsas[v+'|'+dia]=1;g.red.det[v]=(g.red.det[v]||0)+1;}
+      /* Dos números distintos y los dos importan: `bolsas` son las ENTREGAS de
+         Maleu (vendedor + día, es lo que sale del freezer de una) y `det` son
+         los PEDIDOS que cargó cada vendedor — cuántos clientes suyos atendió.
+         Hasta el 20/9/2026 `det` contaba bolsas y decía siempre "Marcos 1". */
+      g.red.det[v]=(g.red.det[v]||0)+1;
+      if(!g.bolsas[v+'|'+dia])g.bolsas[v+'|'+dia]=1;
     }else return;
     mete('tot',f,c);
   });
-  /* Clubes: el detalle es por club, contando entregas y no pedidos. */
+  /* Clubes: el detalle es por club Y POR GRUPO, contando entregas y no pedidos.
+     Adentro de un club no es lo mismo la Línea A que los Infantiles: son
+     equipos distintos, con gente distinta. (20/9/2026, Tadeo: "para saber a
+     quién le entregué".) El grupo viene del backend en `p.gr`. */
   var porClub={};
-  g.clubes.peds.forEach(function(p){var k=String(p.br||'').trim()||'sin club';(porClub[k]=porClub[k]||[]).push(p);});
+  g.clubes.peds.forEach(function(p){
+    var club=String(p.br||'').trim()||'sin club';
+    var gr=_rtGrupoCorto(p.gr);
+    var k=club+(gr?' '+gr:'');
+    (porClub[k]=porClub[k]||[]).push(p);
+  });
   Object.keys(porClub).forEach(function(k){g.clubes.det[k]=_contarVentas(porClub[k]);});
   var hayExtra=(typeof D!=='undefined'&&D&&Array.isArray(D.ventasExtra));
   (hayExtra?D.ventasExtra:[]).forEach(function(x){
@@ -15164,13 +15197,36 @@ function rRetail(){
     var txt=cant?(dd===0?'igual':(dd>0?'+':'−')+Math.abs(dd)):(dd===0?'igual':(dd>0?'+':'−')+Math.abs(Math.round(dd/b*100))+'%');
     return '<div class="rt-kd '+cls+'">'+(dd>0?'▲ ':(dd<0?'▼ ':''))+txt+'</div>';
   }
+  /* 20/9/2026: muestra TODOS. Antes cortaba en 3 y decía "y 2 más", y Tadeo
+     no podía ver a dónde entregó — que es justo para lo que mira esta línea.
+     El tope de 14 es una red contra un período raro (un mes con 30 barrios),
+     no el comportamiento normal: en una semana nunca se llega. */
   function top(det,max){
+    max=max||14;
     var ks=Object.keys(det).filter(function(x){return x;}).sort(function(a,b){return det[b]-det[a]||a.localeCompare(b);});
     if(!ks.length)return '';
     var s=ks.slice(0,max).map(function(x){return _rtEsc(x)+' '+det[x];}).join(' · ');
     return s+(ks.length>max?' · y '+(ks.length-max)+' más':'');
   }
-  function fila(cls,nombre,sub,x,base,sinTxt){
+  /* El TICKET de cada canal, con su variación (20/9/2026).
+     Tadeo: *"tuve casi las mismas ventas entre esta semana y la anterior pero
+     en la anterior me fue muuucho mejor… entiendo que es por el ticket"*. Con
+     facturado y entregas solos no se ve: dos semanas de $2,4M con 33 y con 41
+     entregas son negocios distintos. `xc` es el MISMO canal en el período
+     contra el que se compara. */
+  function tk(x){ return (x&&x.ent>0)?Math.round(x.f/x.ent):0; }
+  function tkTxt(x,xc){
+    var a=tk(x); if(!a)return '';
+    var b=tk(xc);
+    var s=' · ticket <b>$'+f$(a)+'</b>';
+    if(b>0){
+      var dd=Math.round((a-b)/b*100);
+      s+=' <span class="rt-tkd '+(dd>0?'up':(dd<0?'dn':'eq'))+'">'
+        +(dd>0?'▲ +':(dd<0?'▼ −':''))+(dd===0?'igual':Math.abs(dd)+'%')+'</span>';
+    }
+    return s;
+  }
+  function fila(cls,nombre,sub,x,base,sinTxt,xc){
     var m=x.f-x.c;
     var h='<div class="rt-fila '+cls+'">';
     /* nombre | barra | monto: la barra ocupa el hueco. En la compu, sin ella, el
@@ -15184,7 +15240,7 @@ function rRetail(){
     if(x.f>0){
       /* Las entregas ya salen grandes al lado del nombre: repetirlas acá era
          decir el mismo número dos veces en la misma fila. */
-      h+='<div class="rt-fila-m">costo $'+f$(x.c)+' · margen $'+f$(m)+' <b>'+pct(m,x.f)+'%</b></div>';
+      h+='<div class="rt-fila-m">costo $'+f$(x.c)+' · margen $'+f$(m)+' <b>'+pct(m,x.f)+'%</b>'+tkTxt(x,xc)+'</div>';
     }else{
       h+='<div class="rt-fila-m">'+(sinTxt||'sin ventas en el período')+'</div>';
     }
@@ -15211,15 +15267,18 @@ function rRetail(){
   var cl=_rtClientes(P);
   if(cl&&!(cl.total>0))cl=null;
   var copia='💰 Ventas retail · '+P.tit+'\n'
-    +'Facturado $'+f$(t.f)+' · Costo $'+f$(t.c)+' · Margen $'+f$(mT)+' ('+pct(mT,t.f)+'%) · '+ent(t.ent)+'\n'
+    +'Facturado $'+f$(t.f)+' · Costo $'+f$(t.c)+' · Margen $'+f$(mT)+' ('+pct(mT,t.f)+'%) · '+ent(t.ent)+' retail'
+    +(tk(t)?' · ticket $'+f$(tk(t)):'')+'\n'
     +cpTit+' $'+f$(cpMonto)+(cp.ped?(rtVivo?(' si entregás '+cp.ped+' '+(cp.ped===1?'pedido':'pedidos')+' ya cargado'+(cp.ped===1?'':'s')+' (+$'+f$(cp.f)+') · margen bruto estimado $'+f$(proyMarg)+' ('+pct(proyMarg,proy)+'%)'):(' · '+cp.ped+' '+(cp.ped===1?'pedido':'pedidos')+' de ese período sin entregar')):' · sin pedidos pendientes del período')+'\n'
     +'🏠 Venta Mercado Domiciliario $'+f$(g.dom.f)+' (margen '+pct(g.dom.f-g.dom.c,g.dom.f)+'%)\n'
-    +'   Home $'+f$(g.home.f)+' · Otras zonas $'+f$(g.otras.f)+'\n'
+    +'   Home $'+f$(g.home.f)+(tk(g.home)?' (ticket $'+f$(tk(g.home))+')':'')
+    +' · Otras zonas $'+f$(g.otras.f)+(tk(g.otras)?' (ticket $'+f$(tk(g.otras))+')':'')+'\n'
     +(cl?'   👥 '+cl.total+' clientes: '+cl.nuevos+' nuevos · '+cl.recompra+' recompra · '+cl.react+' reactivados\n':'')
     +'🏢 Venta Mercado Institucional $'+f$(g.inst.f)+' (margen '+pct(g.inst.f-g.inst.c,g.inst.f)+'%)\n'
     +'   Clubes $'+f$(g.clubes.f)+' · Red $'+f$(g.red.f)+' · B2B $'+f$(g.b2b.f);
   var h='<div class="card rt">';
-  h+='<div class="rt-h"><div class="rt-hl"><div class="rt-t">💰 Ventas retail</div><div class="rt-sub">'+_rtEsc(P.tit)+'</div></div>'
+  h+='<div class="rt-h"><div class="rt-hl"><div class="rt-t">💰 Ventas retail</div><div class="rt-sub">'+_rtEsc(P.tit)+'</div>'
+    +'<div class="rt-sub2">Lo entregado, por el día de entrega</div></div>'
     +'<div class="rt-hb">'
     +((P.k==='sem'||P.k==='semAnt')?'<button type="button" class="rt-pdf" onclick="descargarPDFSemana(\''+P.d+'\')">📥 PDF</button>':'')
     +'<button type="button" class="rt-copy" onclick="copyResumenSemana(this)" data-lbl="📋 Copiar" data-copy="'+encodeURIComponent(copia)+'">📋 Copiar</button></div></div>';
@@ -15231,14 +15290,20 @@ function rRetail(){
       +'<div class="rt-k"><div class="rt-kl">Facturado</div><div class="rt-kv">$'+f$(t.f)+'</div>'+delta(t.f,gc.tot.f)+'</div>'
       +'<div class="rt-k"><div class="rt-kl">Costo</div><div class="rt-kv">$'+f$(t.c)+'</div><div class="rt-kd eq">'+pct(t.c,t.f)+'% de lo facturado</div></div>'
       +'<div class="rt-k"><div class="rt-kl">Margen</div><div class="rt-kv">$'+f$(mT)+' <small>'+pct(mT,t.f)+'%</small></div>'+delta(mT,mC)+'</div>'
-      +'<div class="rt-k"><div class="rt-kl">Entregas</div><div class="rt-kv">'+t.ent+'</div>'+delta(t.ent,gc.tot.ent,true)+'</div>'
+      /* "Entregas Retail" y no "Entregas" (20/9/2026): esta tarjeta cuenta el
+         árbol retail —Domiciliario + Institucional— y deja afuera Catering, que
+         se dice aparte abajo. Decir "Entregas" a secas invitaba a leerlo como
+         todas las entregas del negocio. */
+      +'<div class="rt-k"><div class="rt-kl">Entregas Retail</div><div class="rt-kv">'+t.ent+'</div>'+delta(t.ent,gc.tot.ent,true)+'</div>'
       +'<div class="rt-k proy"><div class="rt-kl">'+cpTit+'</div><div class="rt-kv">$'+f$(cpMonto)+'</div><div class="rt-kd eq">'+cpPie+(cp.sinFecha?' · '+cp.sinFecha+' sin fecha':'')+'</div></div>'
       +'</div>';
     h+='<div class="rt-vs">Comparado con '+_rtEsc(P.vs)+': facturado $'+f$(gc.tot.f)+' · margen $'+f$(mC)+'</div>';
     h+='<div class="rt-arbol"><div class="rt-grupo">';
-    h+=fila('g','🏠 Venta Mercado Domiciliario','',g.dom,t.f);
-    h+=fila('h','Home','Estancias del Pilar y Estancias del Río',g.home,g.dom.f);
-    h+=fila('h','Otras zonas',top(g.otras.det,3),g.otras,g.dom.f);
+    /* El último argumento es el MISMO canal en el período de comparación: es lo
+       que le deja a cada fila mostrar su ticket contra el de antes. */
+    h+=fila('g','🏠 Venta Mercado Domiciliario','',g.dom,t.f,'',gc.dom);
+    h+=fila('h','Home','Estancias del Pilar y Estancias del Río',g.home,g.dom.f,'',gc.home);
+    h+=fila('h','Otras zonas',top(g.otras.det),g.otras,g.dom.f,'',gc.otras);
     if(cl){
       h+='<div class="rt-cl"><div class="rt-cl-h">👥 '+cl.total+(cl.total===1?' cliente domiciliario':' clientes domiciliarios')+'</div>'
         +'<div class="rt-cl-c">'
@@ -15248,19 +15313,21 @@ function rRetail(){
         +'</div><div class="rt-cl-p">Nuevo: su primera compra. Recompra: la anterior fue hace '+CLI_DORMIDO_DIAS+' días o menos. Reactivado: volvió después de más de '+CLI_DORMIDO_DIAS+' días sin comprar (estaba dormido).</div></div>';
     }
     h+='</div><div class="rt-grupo">';
-    h+=fila('g','🏢 Venta Mercado Institucional','',g.inst,t.f);
-    h+=fila('h','Clubes',top(g.clubes.det,3),g.clubes,g.inst.f);
-    /* Red: para Maleu una venta es UNA BOLSA que le dimos al vendedor, no las
-       ventas que él haga después. Con 0, "sin ventas" mentía por omisión: decía
-       que no pasó nada cuando lo que no pasó fue entregarle a un vendedor. */
-    h+=fila('h','Red',g.red.f>0?'1 venta = 1 bolsa que le dimos al vendedor · '+top(g.red.det,3):'',
-            g.red,g.inst.f,'no le entregamos ninguna bolsa a un vendedor en el período');
-    h+=fila('h','B2B',top(g.b2b.det,3),g.b2b,g.inst.f,g.hayExtra?'':'todavía no llegó el dato');
+    h+=fila('g','🏢 Venta Mercado Institucional','',g.inst,t.f,'',gc.inst);
+    h+=fila('h','Clubes',top(g.clubes.det),g.clubes,g.inst.f,'',gc.clubes);
+    /* Red: el detalle son los vendedores con cuántos pedidos cargó cada uno.
+       La explicación de qué cuenta como venta de Red salió de acá el 20/9/2026
+       —Tadeo: "no hace falta aclarar esto, poco profesional"—; la REGLA sigue
+       viva en `_rtEsVenta`, que es donde tiene que estar. */
+    h+=fila('h','Red',top(g.red.det),g.red,g.inst.f,
+            'no le entregamos ninguna bolsa a un vendedor en el período',gc.red);
+    h+=fila('h','B2B',top(g.b2b.det),g.b2b,g.inst.f,g.hayExtra?'':'todavía no llegó el dato',gc.b2b);
     h+='</div></div>';
     if(g.cat.f>0)h+='<div class="rt-cat">Además, Catering $'+f$(g.cat.f)+' (margen '+pct(g.cat.f-g.cat.c,g.cat.f)+'%): no es retail y no suma arriba.</div>';
   }
-  h+='<div class="rt-pie">Lo entregado, por el día de entrega. El costo es lo que costó la mercadería. '
-    +'<b>En Red, la venta de Maleu es entregarle la bolsa al vendedor</b> —lo que él venda después es asunto suyo—, y va neta de su comisión.</div>';
+  /* El pie salió el 20/9/2026: era un párrafo de notas al pie arriba de números,
+     y lo que explicaba ya se lee en la propia pantalla. Lo único que valía la
+     pena —de cuándo son estos números— subió al encabezado. */
   h+='</div>';
   box.innerHTML=h;
 }
