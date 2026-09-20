@@ -267,8 +267,8 @@ body{font-family:'Inter',-apple-system,'Segoe UI',system-ui,sans-serif;backgroun
 .cmp-graf-t{font-size:10px;font-weight:800;color:var(--bl);text-transform:uppercase;letter-spacing:.05em;margin-bottom:5px}
 .cmp-lg{font-weight:700;color:var(--ink3);margin-left:10px;text-transform:none;letter-spacing:0}
 .cmp-lg i{display:inline-block;width:9px;height:9px;border-radius:2px;vertical-align:-1px;margin-right:3px}
-.cmp-lg i.b{background:#F07D47}
-.cmp-lg i.l{background:#8C6A4A;height:3px;border-radius:2px;vertical-align:2px}
+.cmp-lg i.b{background:#C99A63}
+.cmp-lg i.l{background:#7A4A4A;height:3px;border-radius:2px;vertical-align:2px}
 .cmp-lg.cmp-curso{color:var(--o);font-style:italic}
 .cmp-arbol{margin-top:12px;border-top:1px solid var(--cd);padding-top:10px}
 .cmp-arbol-t{font-size:10px;font-weight:800;color:var(--bl);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px}
@@ -16251,10 +16251,22 @@ function _cmpDMY(iso){
   var m=String(iso||'').match(/^(\d{4})-(\d\d)-(\d\d)$/);
   return m?(Number(m[3])+'/'+Number(m[2])+'/'+m[1]):'';
 }
-/* Las últimas 8 semanas: facturado en barras y el ticket como línea encima.
+/* Las últimas 8 semanas: facturado en barras y el ticket como línea.
    Son los dos números cuya separación explica todo lo demás; si el ticket baja
    mientras las barras se mantienen, el negocio se está ablandando aunque la
-   facturación no lo diga todavía. Tres series serían un adorno. */
+   facturación no lo diga todavía. Tres series serían un adorno.
+
+   Reescrito el 20/9/2026. Lo de antes no se podía leer, por tres motivos:
+   · `viewBox 320x110` + `height="110"` fijo + `meet` → el dibujo se escalaba
+     para CABER EN LA ALTURA, o sea a tamaño 1:1, y quedaba de 320px centrado
+     adentro de una caja de 1050. De ahí los dos huecos enormes a los costados.
+   · **ningún número en pantalla.** Los valores vivían en un `<title>`, que es
+     un tooltip: en el celular no existe.
+   · el ticket y el facturado compartían el dibujo con escalas distintas y sin
+     ejes, así que la línea subía y bajaba sin querer decir nada.
+
+   Ahora van en DOS BANDAS separadas —ticket arriba, facturado abajo— cada una
+   con su valor escrito encima, y el ancho se mide del contenedor. */
 function _cmpGrafico(){
   var hoy=new Date(), t=new Date(hoy.getFullYear(),hoy.getMonth(),hoy.getDate());
   var lun=_rtDia(t,-((t.getDay()+6)%7)), sem=[];
@@ -16263,20 +16275,60 @@ function _cmpGrafico(){
     var g=_rtSumar(_rtIso(d),_rtIso(h));
     sem.push({d:d,f:g.tot.f,ent:g.tot.ent,tk:g.tot.ent?Math.round(g.tot.f/g.tot.ent):0,n:getWeek(d)});
   }
+  /* El ancho sale del contenedor, no de una constante: así ocupa lo que hay y
+     las letras miden lo mismo en el celular que en la pantalla grande. Si la
+     sub-tab está oculta clientWidth es 0 y vale el 720 de reserva. */
+  var caja=$('vComparar');
+  var W=Math.max(340,Math.min(920,(caja&&caja.clientWidth>60)?caja.clientWidth-34:720));
+  var PAD=6, BW=(W-PAD*2)/sem.length;
+  var corto=BW<92;   /* en el celular los montos van abreviados; en escritorio, enteros */
+  var ab=function(n){
+    n=Math.round(n||0); var a=Math.abs(n);
+    if(!corto) return '$'+f$(n);
+    if(a>=1000000) return '$'+(n/1000000).toFixed(1).replace('.',',')+'M';
+    if(a>=1000) return '$'+Math.round(n/1000)+'k';
+    return '$'+f$(n);
+  };
+  var TY=20, TH=34;              /* banda del ticket: la línea vive entre y=20 y y=54 */
+  var BTOP=80, BH=88, EJE=BTOP+BH;   /* banda del facturado: barras de y=80 a y=168 */
+  var H=198;
   var maxF=Math.max.apply(null,sem.map(function(s){return s.f;}))||1;
-  var maxT=Math.max.apply(null,sem.map(function(s){return s.tk;}))||1;
-  var W=320,H=110,pad=14,bw=(W-pad*2)/sem.length;
-  var barras='',linea='',pts=[];
+  /* El ticket NO arranca en cero: entre $70k y $103k, una escala desde 0 aplana
+     la diferencia hasta que no se ve. Lo que evita que la escala mienta es que
+     cada punto lleva su número escrito. */
+  var tks=sem.map(function(s){return s.tk;}).filter(function(v){return v>0;});
+  var tMin=tks.length?Math.min.apply(null,tks):0;
+  var tMax=tks.length?Math.max.apply(null,tks):1;
+  if(tMax<=tMin)tMax=tMin+1;
+  var cx=function(i){return PAD+i*BW+BW/2;};
+  var ty=function(v){return TY+TH-((v-tMin)/(tMax-tMin))*TH;};
+
+  var barras='',rotulos='',tkTxt='',ejes='',hover='';
+  /* La línea del ticket se corta donde no hubo entregas, en vez de caer a cero:
+     una semana sin ventas no es una semana de ticket $0. */
+  var tramos=[],act=[];
   sem.forEach(function(s,i){
-    var x=pad+i*bw, hh=Math.round((s.f/maxF)*(H-34));
-    barras+='<rect x="'+(x+bw*0.18).toFixed(1)+'" y="'+(H-18-hh)+'" width="'+(bw*0.64).toFixed(1)+'" height="'+hh+'" rx="2"'
-      +' fill="'+(i===sem.length-1?'#F07D47':'#EBD9BF')+'"><title>Semana '+s.n+': $'+f$(s.f)+' · '+s.ent+' entregas · ticket $'+f$(s.tk)+'</title></rect>';
-    pts.push((x+bw/2).toFixed(1)+','+(H-18-Math.round((s.tk/maxT)*(H-34))).toFixed(1));
+    var x=PAD+i*BW, ultima=(i===sem.length-1);
+    var hh=Math.max(s.f>0?2:0,Math.round((s.f/maxF)*BH));
+    barras+='<rect class="cmp-b" x="'+(x+BW*0.16).toFixed(1)+'" y="'+(EJE-hh)+'" width="'+(BW*0.68).toFixed(1)+'" height="'+hh+'" rx="2" fill="'+(ultima?'#F07D47':'#C99A63')+'"/>';
+    if(s.f>0)rotulos+='<text x="'+cx(i).toFixed(1)+'" y="'+(EJE-hh-6)+'" text-anchor="middle" font-size="10.5" font-weight="700" fill="'+(ultima?'#C2410C':'#5C3A2A')+'">'+ab(s.f)+'</text>';
+    if(s.tk>0){
+      act.push(cx(i).toFixed(1)+','+ty(s.tk).toFixed(1));
+      tkTxt+='<circle cx="'+cx(i).toFixed(1)+'" cy="'+ty(s.tk).toFixed(1)+'" r="2.6" fill="#7A4A4A"/>'
+        +'<text x="'+cx(i).toFixed(1)+'" y="'+(ty(s.tk)-7).toFixed(1)+'" text-anchor="middle" font-size="10" font-weight="700" fill="#7A4A4A">'+ab(s.tk)+'</text>';
+    } else if(act.length){ tramos.push(act); act=[]; }
+    ejes+='<text x="'+cx(i).toFixed(1)+'" y="'+(EJE+14)+'" text-anchor="middle" font-size="10" font-weight="700" fill="'+(ultima?'#C2410C':'#7A6A58')+'">S'+s.n+'</text>'
+      +'<text x="'+cx(i).toFixed(1)+'" y="'+(EJE+25)+'" text-anchor="middle" font-size="8.5" fill="#A89880">'+s.d.getDate()+'/'+(s.d.getMonth()+1)+'</text>';
+    /* Una franja transparente por semana: el detalle completo al tocarla, sin
+       depender de apuntarle justo a la barra. */
+    hover+='<rect x="'+x.toFixed(1)+'" y="0" width="'+BW.toFixed(1)+'" height="'+H+'" fill="transparent"><title>Semana '+s.n+' · '+s.d.getDate()+'/'+(s.d.getMonth()+1)
+      +'\n$'+f$(s.f)+' · '+s.ent+' '+(s.ent===1?'entrega':'entregas')+' · ticket $'+f$(s.tk)+'</title></rect>';
   });
-  linea='<polyline points="'+pts.join(' ')+'" fill="none" stroke="#8C6A4A" stroke-width="2" stroke-linejoin="round"/>';
-  var ejes=sem.map(function(s,i){
-    return '<text x="'+(pad+i*bw+bw/2).toFixed(1)+'" y="'+(H-5)+'" text-anchor="middle" font-size="8" fill="#9B8B79">'+s.n+'</text>';
+  if(act.length)tramos.push(act);
+  var linea=tramos.filter(function(p){return p.length>1;}).map(function(p){
+    return '<polyline points="'+p.join(' ')+'" fill="none" stroke="#7A4A4A" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>';
   }).join('');
+  var base='<line x1="'+PAD+'" y1="'+EJE+'.5" x2="'+(W-PAD)+'" y2="'+EJE+'.5" stroke="#E8DFC4" stroke-width="1"/>';
   /* La última barra es la semana EN CURSO: un martes va a tener dos días contra
      siete de las otras. Sin decirlo, esa barra chica se lee como un derrumbe.
      Va naranja y con la aclaración al lado. */
@@ -16284,8 +16336,9 @@ function _cmpGrafico(){
   return '<div class="cmp-graf"><div class="cmp-graf-t">Las últimas 8 semanas '
     +'<span class="cmp-lg"><i class="b"></i> facturado</span><span class="cmp-lg"><i class="l"></i> ticket</span>'
     +(enCurso?'<span class="cmp-lg cmp-curso">la última va en curso</span>':'')+'</div>'
-    +'<svg viewBox="0 0 '+W+' '+H+'" width="100%" height="'+H+'" preserveAspectRatio="xMidYMid meet" role="img" '
-    +'aria-label="Facturado y ticket de las ultimas 8 semanas">'+barras+linea+ejes+'</svg></div>';
+    +'<svg viewBox="0 0 '+W+' '+H+'" style="width:100%;height:auto;display:block" preserveAspectRatio="xMidYMid meet" role="img" '
+    +'aria-label="Facturado y ticket de las ultimas 8 semanas">'
+    +base+barras+rotulos+linea+tkTxt+ejes+hover+'</svg></div>';
 }
 
 function rComparar(){

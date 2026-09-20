@@ -117,14 +117,32 @@ const ped = (o) => Object.assign({
     await pausa(400);
     const vista = await evaluar(cli, `(function(){
       var b=document.getElementById('vComparar'); if(!b)return null;
+      var g=b.querySelector('.cmp-graf svg');
+      var txts=g?[].map.call(g.querySelectorAll('text'),function(t){return t.textContent;}):[];
       return {txt:(b.innerText||b.textContent||''),
               porque:!!b.querySelector('.cmp-porque'),
-              graf:b.querySelectorAll('.cmp-graf svg rect').length,
+              graf:b.querySelectorAll('.cmp-graf svg rect.cmp-b').length,
+              /* Lo que el gráfico viejo NO hacía: escribir los números. Vivían
+                 en un <title>, o sea en un tooltip que en el celular no existe.
+                 [!] Las barras van DOBLES: esto viaja adentro de un template
+                 literal, y ahí \\$ y \\d se comen la barra antes de salir —
+                 la regex llegaba al navegador como /^$/ y /^Sd+$/. */
+              rotulos:txts.filter(function(s){return /^\\$/.test(s);}).length,
+              semanas:txts.filter(function(s){return /^S\\d+$/.test(s);}).length,
+              vb:g?g.getAttribute('viewBox'):'',
+              alto:g?(g.getAttribute('height')||''):'',
               canales:b.querySelectorAll('.cmp-c').length};
     })()`);
     chk('la pantalla arranca por "Por qué cambió"', vista.porque === true, vista && vista.txt.slice(0, 120));
     chk('   y nombra las dos causas', /entregas/i.test(vista.txt) && /ticket/i.test(vista.txt), vista.txt.slice(0, 400));
     chk('el gráfico dibuja 8 semanas', vista.graf === 8, { barras: vista.graf });
+    chk('   y rotula las 8 con su número de semana', vista.semanas === 8, vista);
+    /* Las dos semanas con datos tienen que traer su monto Y su ticket escritos:
+       2 barras rotuladas + 2 puntos de ticket = 4 como piso. */
+    chk('   los montos se ESCRIBEN, no viven en un tooltip', vista.rotulos >= 4, { rotulos: vista.rotulos });
+    /* El bug de fondo del gráfico viejo: alto fijo + viewBox chico = dibujo de
+       320px centrado en una caja de 1050. Sin `height`, el SVG usa todo el ancho. */
+    chk('   y usa todo el ancho (sin alto fijo que lo encoja)', vista.alto === '', { viewBox: vista.vb, height: vista.alto });
     chk('muestra el desglose por canal', vista.canales >= 1, { canales: vista.canales });
 
     /* ── 4. Las fechas a medida: dd/mm/aaaa, y una mala avisa ─────────── */
