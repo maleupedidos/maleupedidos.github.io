@@ -272,6 +272,32 @@ async function abrirFase(cli, fase) {
       return {m:R.plan.m,p:R.plan.p,realM:R.plan.realM,realP:R.plan.realP,mes:R.plan.mes,t:(t.match(/Contra el plan.{0,420}/)||[])[0]};})()`);
     chk('con el plan: objetivo retail del 7 al 13 $400.000 y 10 pedidos; entregado $130.000 (33%) y 4 pedidos; el mes $250.000 de $2.000.000', !!docPlan && docPlan.m === 400000 && docPlan.p === 10 && docPlan.realM === 130000 && docPlan.realP === 4 && docPlan.mes && docPlan.mes.real === 250000 && /del 7 al 13 de septiembre/.test(docPlan.t) && /33% del objetivo/.test(docPlan.t) && /\$250\.000 de \$2\.000\.000 \(13%\)/.test(docPlan.t), docPlan);
 
+    /* (21/9/2026) Los objetivos en LEADS los cuenta CRM › Leads: del mes hasta el
+       domingo de la semana del PDF (no hasta hoy), los de la semana dentro de la
+       semana, sin los que ya eran clientes; los demas quedan con su avance. */
+    const dObj = await ev(cli, `(function(){var K=Object.keys(localStorage).filter(function(k){return k.indexOf('maleu_plan_cache_')===0&&/Septiembre 2026$/.test(k);})[0];if(!K)return {sinPlan:true};
+      var bk=localStorage.getItem(K),bkL=localStorage.getItem('mc_crmLeads'),pl=JSON.parse(bk);
+      pl.objetivos=[{id:'O-001',periodo:'Mes',responsable:'Lucas',objetivo:'Generar 50 leads',meta:50,unidad:'leads',avance:9,estado:'En curso'},
+        {id:'O-002',periodo:'Semana 37',responsable:'Lucas Prueba',objetivo:'Generar 20 leads',meta:20,unidad:'leads',avance:9,estado:'En curso'},
+        {id:'O-003',periodo:'Semana 37',responsable:'Tadeo',objetivo:'Catalogo unico',meta:100,unidad:'%',avance:50,estado:'En curso'}];
+      localStorage.setItem(K,JSON.stringify(pl));
+      _swrGuardar('crmLeads',{ok:true,ts:1,leads:[
+        {id:'L-4',iso:'2026-09-15',responsable:'Lucas',compro:null,yaCliente:null},
+        {id:'L-3',iso:'2026-09-12',responsable:'Lucas',compro:{primera:'13/09/2026',facturado:40000},yaCliente:null},
+        {id:'L-9',iso:'2026-09-09',responsable:'Lucas',compro:null,yaCliente:{primera:'01/08/2026'}},
+        {id:'L-2',iso:'2026-09-08',responsable:'Lucas',compro:null,yaCliente:null},
+        {id:'L-7',iso:'2026-09-08',responsable:'Tadeo',compro:null,yaCliente:null},
+        {id:'L-1',iso:'2026-09-02',responsable:'Lucas',compro:null,yaCliente:null}]});
+      var R=_rsArmar('2026-09-07'),w=document.getElementById('rsHiddenWrap');w.innerHTML=_rsRender(R);var t=w.textContent.replace(/\\s+/g,' ');w.innerHTML='';
+      localStorage.setItem(K,bk);if(bkL===null)localStorage.removeItem('mc_crmLeads');else localStorage.setItem('mc_crmLeads',bkL);
+      var i=t.indexOf('Objetivos del equipo');return {t:i<0?null:t.slice(i,i+1000)};})()`);
+    /* textContent pega las celdas sin espacio: "LucasMes3 / 50". */
+    const tObj = (dObj && dObj.t) || '';
+    chk('el objetivo del mes en leads: 3 de Lucas hasta el 13/9 (ni el del 15/9, ni el que ya era cliente, ni el de Tadeo)', /O-001Generar 50 leads.{0,80}LucasMes3 \/ 50 leads6%/.test(tObj), dObj);
+    chk('el de la semana 37: 2 (del 7 al 13/9), aunque la hoja diga 9; "Lucas Prueba" es Lucas', /O-002Generar 20 leads.{0,80}Lucas PruebaSemana2 \/ 20 leads10%/.test(tObj), dObj);
+    chk('un objetivo en % queda con el avance de la hoja', /O-003Catalogo unicoTadeoSemana50 \/ 100%50%/.test(tObj) && /Avance contado por el ERP en CRM › Leads/.test(tObj), dObj);
+    chk('abajo, cuántos leads hubo y cuántos compraron: 3 en la semana (1 compró) y 4 en septiembre', /Leads cargados en CRM: 3 en la semana \(1 ya compró\) · 4 en septiembre \(1 ya compró\)/.test(tObj), dObj);
+
     /* Los cortes: bloque por bloque, el PDF mide cada captura. Se rearma el documento y se comprueba que todo lo
        pegado suma el alto de cada bloque y que cada corte interno cae en un renglon. */
     const cortes = await ev(cli, `(function(){var w=document.getElementById('rsHiddenWrap');w.innerHTML=_rsRender(_rsArmar('2026-09-07'));var doc=w.querySelector('#rsDoc');

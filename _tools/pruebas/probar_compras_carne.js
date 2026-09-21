@@ -28,7 +28,12 @@
      se tipea no borra lo tipeado;
    · si el libro no llega, dice que no pudo (no "no hay compras");
    · PAGOS avisa si el servidor no pudo leer las compras, y el detalle dice "cortes";
-   · minimo tactil y sin errores de JS. */
+   · minimo tactil y sin errores de JS;
+   · (21/9/2026) la compra en dos pasos: arriba "+ Cargar el pedido" (y la factura sin
+     pedido aparte); el pedido no es deuda ni ofrece mover costos; su tarjeta dice
+     "Confirmar lo que llegó", y ahi se carga el peso neto de cada caja: la linea dice
+     cuanto llego contra lo pedido, el total es lo que se paga, y el POST manda las
+     cajas (el backend las suma). */
 'use strict';
 const { abrir, evaluar } = require('./cdp.js');
 const prep = require('./sesion_prep.js');
@@ -101,7 +106,10 @@ const EXTRA = `
       var post=x&&String(x.method||'').toUpperCase()==='POST';
       if(url.indexOf('script.google.com')>-1&&post){
         var b={}; try{ b=JSON.parse(x.body); }catch(e){ b={crudo:String(x.body)}; } window.__posts.push(b);
-        var r = b.action==='compraCarneGuardar' ? {ok:true,id:b.id||'CC-0008',editada:!!b.id,fuera:false,total:(b.lineas||[]).reduce(function(a,l){return a+Math.round(l.kg*l.precio);},0),kg:1,lineas:(b.lineas||[]).length,costos:(b.costos||[]).map(function(c){return {abbr:c.abbr,antes:1,ahora:c.precio};}),
+        var kgL=function(l){ return Array.isArray(l.cajas) ? l.cajas.reduce(function(a,c){return a+c;},0) : l.kg; };
+        var r = b.action==='compraCarneGuardar' ? {ok:true,id:b.id||'CC-0008',editada:!!b.id,fuera:false,total:(b.lineas||[]).reduce(function(a,l){return a+Math.round(kgL(l)*l.precio);},0),
+                modo: b.recibir ? 'recibir' : (b.estado==='Pedida' ? 'pedido' : 'factura'), estado: b.estado==='Pedida' ? 'Pedida' : 'Recibida', kgPed: b.recibir ? 35 : 0,
+                kg:(b.lineas||[]).reduce(function(a,l){return a+kgL(l);},0),lineas:(b.lineas||[]).length,costos:(b.costos||[]).map(function(c){return {abbr:c.abbr,antes:1,ahora:c.precio};}),
                 costeo:{piezas:35,pedidos:[{ref:'Home #934',antes:17747.2,ahora:17936},{ref:'Pilar #60',antes:167824,ahora:169120}],error:''}}
           : b.action==='compraCarneAnular' ? {ok:true,id:b.id,total:1}
           : b.action==='compraCarneCosto' ? {ok:true,abbr:b.abbr,antes:18000,ahora:b.precio,cambio:true} : {ok:true};
@@ -178,9 +186,9 @@ const EXTRA = `
     chk('el aviso de los cortes dice que la factura se carga ahí arriba', orden.nota, orden);
 
     /* ── Arriba: solo cargar. La deuda se ve en cada factura y se paga en PAGOS ── */
-    const top = await evaluar(cli, `(function(){ var t=document.getElementById('abaCcTop'); return { txt:t.textContent.replace(/\s+/g,' '),
+    const top = await evaluar(cli, `(function(){ var t=document.getElementById('abaCcTop'); return { txt:t.textContent.replace(/\\s+/g,' '),
       pagar: /Pagar en PAGOS/.test(t.textContent), nueva: (t.querySelector('.cc-nueva')||{}).textContent||'' }; })()`);
-    chk('arriba solo el botón de cargar la factura: sin la deuda ni "Pagar en PAGOS" (no se paga desde acá)', /Cargar la factura de la carne/.test(top.nueva) && !top.pagar && !/se le debe|1\.709\.470/.test(top.txt), top);
+    chk('arriba el botón del PEDIDO, y aparte la factura sin pedido: sin la deuda ni "Pagar en PAGOS"', /Cargar el pedido de carne/.test(top.nueva) && /factura que ya llegó \(sin pedido\)/.test(top.txt) && !top.pagar && !/se le debe|1\.709\.470/.test(top.txt), top);
     chk('en + NUEVO no hay ningún botón que pague', await evaluar(cli, `!/Pagar/.test(document.getElementById('abaNuevoView').textContent)`));
 
     /* ── Las tarjetas ── */
@@ -204,9 +212,9 @@ const EXTRA = `
     chk('y la variante entero con su precio de la última factura', (lp || []).some(t => /Vacío entero/.test(t) && /\$18\.500\/kg/.test(t)), lp);
 
     /* ── El formulario ── */
-    await evaluar(cli, `document.querySelector('#abaCcTop .cc-nueva').click(); 1`);
+    await evaluar(cli, `document.querySelector('#abaCcTop .cc-top-2').click(); 1`);
     const abrio = await esperar(cli, `!!document.getElementById('abaCcFormIn')`, 5000);
-    chk('+ Cargar la factura abre el formulario', abrio);
+    chk('+ Cargar una factura (sin pedido) abre el formulario de factura', abrio && /Factura de carne/.test(await evaluar(cli, `document.querySelector('#abaCcFormIn .pago-form-title').textContent`) || ''));
     const leerForm = `(function(){ var f=document.getElementById('abaCcFormIn'); return { prov:document.getElementById('abaCcProv').value, fecha:document.getElementById('abaCcFecha').value,
       tipoFecha:document.getElementById('abaCcFecha').type, lins:[].map.call(f.querySelectorAll('.cc-lin'),function(l,i){ return { n:l.querySelector('.cc-lin-n').textContent.replace(/\\s+/g,' ').trim(), pr:document.getElementById('abaCcPre'+i).value }; }),
       nuevaVisible: !!document.querySelector('#abaCcTop .cc-nueva') }; })()`;
@@ -334,6 +342,54 @@ const EXTRA = `
     await elegirProv('Prov Uno');
     st = await evaluar(cli, `({ prov:document.getElementById('npProv').value, form:!!document.getElementById('abaCcFormIn'), editando:abaHayEditor(), oculta:${oculto('abaCcArriba')} })`);
     chk('si se descarta: otro proveedor, sin formulario, sin "editando" y sin la caja de la carne', st.prov === 'Prov Uno' && !st.form && st.editando === false && st.oculta, st);
+
+    /* ── (21/9/2026) La compra en dos pasos ── */
+    await elegirProv('Caco');
+    await esperar(cli, `!(${oculto('abaCcArriba')})`, 5000);
+    await evaluar(cli, `(function(){ abaCc.data.compras.unshift({id:'CC-0008',fecha:'22/09/2026',t:3,sem:39,prov:'Caco',estado:'Pedida',fuera:false,nota:'',cargo:'Lucas',recibio:'',
+      lineas:[{abbr:'CLo',corte:'Carne Lomo',det:'',kg:20,precio:28500,total:570000,kgPed:20,cajas:[]},{abbr:'CVa',corte:'Carne Vacío',det:'entero',kg:15,precio:17500,total:262500,kgPed:15,cajas:[]}],
+      kg:35,kgPed:35,total:832500,piezas:{n:0,kg:0,porCorte:{}}}); abaRenderCarne(); return 1; })()`);
+    const cP = await evaluar(cli, `(function(){ var c=[].slice.call(document.querySelectorAll('#abaCcListBox .cc-card')).filter(function(x){return /CC-0008/.test(x.textContent);})[0]; if(!c) return null;
+      return { txt:c.textContent.replace(/\\s+/g,' '), est:(c.querySelector('.cc-estado')||{}).textContent, bot:[].map.call(c.querySelectorAll('.cc-acc button'),function(b){return b.textContent;}), cruce:!!c.querySelector('.cc-cruce') }; })()`);
+    chk('el pedido dice que todavía no es deuda, con el total estimado y lo pedido', !!cP && /todavía no es deuda/.test(cP.est) && /≈ \$832\.500/.test(cP.txt) && /pediste 35 kg/.test(cP.txt) && /Pediste/.test(cP.txt), cP);
+    chk('sus botones: Confirmar lo que llegó, Corregir el pedido, Anular (sin cruce de piezas: no llegó)', !!cP && cP.bot.join('|') === 'Confirmar lo que llegó|Corregir el pedido|Anular' && !cP.cruce, cP && cP.bot);
+
+    await evaluar(cli, `window.__posts=[]; abaCcAbrir('', 'pedido'); 1`);
+    await esperar(cli, `!!document.getElementById('abaCcFormIn')`, 5000);
+    const fP = await evaluar(cli, `(function(){ var f=document.getElementById('abaCcFormIn'); return { t:f.querySelector('.pago-form-title').textContent, txt:f.textContent.replace(/\\s+/g,' ') }; })()`);
+    chk('+ Cargar el pedido: "Día que llega" y que todavía no es deuda', /Pedido de carne/.test(fP.t) && /Día que llega/.test(fP.txt) && /Todavía no es deuda/.test(fP.txt), fP);
+    const fmP = await evaluar(cli, leerForm);
+    const iCoP = fmP.lins.findIndex(l => l.n === 'Colita de Cuadril'), iLoP = fmP.lins.findIndex(l => l.n === 'Lomo');
+    await tipear('#abaCcKg' + iCoP, '20');
+    await tipear('#abaCcPre' + iCoP, '19500');
+    const stP = await evaluar(cli, `({ costos:document.getElementById('abaCcCostos').textContent, btn:document.getElementById('abaCcGuardar').textContent })`);
+    chk('un pedido NO ofrece mover el costo (aunque el precio cambie) y el botón dice "Guardar pedido"', stP.costos === '' && /^Guardar pedido · \$390\.000/.test(stP.btn), stP);
+    await evaluar(cli, `document.getElementById('abaCcGuardar').click(); 1`);
+    await esperar(cli, `window.__posts.some(function(p){return p.action==='compraCarneGuardar';})`, 5000);
+    const pP = await evaluar(cli, `JSON.stringify(window.__posts.filter(function(p){return p.action==='compraCarneGuardar';})[0])`);
+    const pPo = JSON.parse(pP || '{}');
+    chk('el POST del pedido va con estado "Pedida" y sin costos', pPo.estado === 'Pedida' && !pPo.recibir && Array.isArray(pPo.costos) && pPo.costos.length === 0 && pPo.lineas.length === 1 && pPo.lineas[0].kg === 20, pPo);
+    await esperar(cli, `!document.getElementById('abaCcFormIn')`, 5000);
+
+    await evaluar(cli, `window.__posts=[]; abaCcRecibir('CC-0008'); 1`);
+    await esperar(cli, `!!document.getElementById('abaCcCaja0_0')`, 5000);
+    const fR = await evaluar(cli, `(function(){ var f=document.getElementById('abaCcFormIn'); return { t:f.querySelector('.pago-form-title').textContent, txt:f.textContent.replace(/\\s+/g,' '), fecha:document.getElementById('abaCcFecha').value }; })()`);
+    chk('Confirmar lo que llegó: pide el peso NETO de cada caja, con lo pedido al lado y la fecha de hoy', /Confirmar lo que llegó · CC-0008/.test(fR.t) && /peso NETO/.test(fR.txt) && /pediste 20 kg/.test(fR.txt) && /pediste 15 kg/.test(fR.txt) && fR.fecha === hoyAR, fR);
+    await tipear('#abaCcCaja0_0', '18,84');
+    await evaluar(cli, `abaCcCajaMas(1); 1`);
+    await esperar(cli, `!!document.getElementById('abaCcCaja1_1')`, 3000);
+    await tipear('#abaCcCaja1_0', '9,5');
+    await tipear('#abaCcCaja1_1', '9,34');
+    const stR = await evaluar(cli, `({ s0:document.getElementById('abaCcSub0').textContent, s1:document.getElementById('abaCcSub1').textContent, tot:document.getElementById('abaCcTotal').textContent,
+      btn:document.getElementById('abaCcGuardar').textContent, foco:document.activeElement===document.getElementById('abaCcCaja1_1'), v:document.getElementById('abaCcCaja1_1').value })`);
+    chk('tecla por tecla, sin perder el foco', stR.foco && stR.v === '9,34', stR);
+    chk('el lomo: llegaron 18,84 kg (−1,16 kg) × $28.500 = $536.940', /llegaron 18,84 kg \(−1,16 kg\) × \$28\.500 = \$536\.940/.test(stR.s0), stR.s0);
+    chk('el vacío en dos cajas: llegaron 18,84 kg (+3,84 kg) × $17.500 = $329.700', /llegaron 18,84 kg \(\+3,84 kg\) × \$17\.500 = \$329\.700/.test(stR.s1), stR.s1);
+    chk('el total es lo que se paga, con lo pedido al lado: $866.640 · 37,68 kg (pediste 35 kg)', /\$866\.640 · 37,68 kg \(pediste 35 kg\)/.test(stR.tot) && /Confirmar · \$866\.640/.test(stR.btn), stR);
+    await evaluar(cli, `document.getElementById('abaCcGuardar').click(); 1`);
+    await esperar(cli, `window.__posts.some(function(p){return p.action==='compraCarneGuardar';})`, 5000);
+    const pR = JSON.parse(await evaluar(cli, `JSON.stringify(window.__posts.filter(function(p){return p.action==='compraCarneGuardar';})[0])`) || '{}');
+    chk('el POST manda recibir con las cajas de cada corte (el backend las suma)', pR.recibir === true && pR.id === 'CC-0008' && !pR.estado && JSON.stringify(pR.lineas.map(l => l.cajas)) === '[[18.84],[9.5,9.34]]' && pR.fecha === hoyAR, pR);
 
     chk('sin errores de JS (fase a)', errores.length === 0, errores.slice(0, 3));
 

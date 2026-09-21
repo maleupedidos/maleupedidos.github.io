@@ -484,6 +484,19 @@ select,input[type="number"]{font-size:16px}
 .cc-pr-form{display:flex;gap:6px;align-items:center;flex-wrap:wrap;padding:2px 0 10px}
 .cc-pr-form .cc-in{width:130px;flex:0 0 auto}
 .cc-pr-form .cc-form-err{flex-basis:100%;margin-top:0}
+/* La compra en dos pasos (21/9/2026) */
+.cc-e-ped{background:#E3F2FD;color:#1565C0}
+.cc-top-2{display:block;width:100%;margin-top:8px;font-size:13px}
+.cc-rec{padding:8px 0;border-bottom:1px solid #E8DFC4}
+.cc-rec-h{display:flex;justify-content:space-between;gap:8px;align-items:baseline;font-size:14px;font-weight:800;color:#331C1C}
+.cc-rec-h .np-select,.cc-rec-h .cc-in{min-height:40px;padding:6px 8px;font-size:14px;margin-top:4px}
+.cc-rec-ped{font-size:12px;font-weight:600;color:#7A4A4A;white-space:nowrap}
+.cc-cajas{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px;align-items:center}
+.cc-caja{width:92px;flex:0 0 auto}
+.cc-rec-f{display:flex;gap:6px;align-items:center;margin-top:6px}
+.cc-rec-f .cc-pr{width:112px;flex:0 0 auto}
+.cc-rec-t{font-size:12px;color:#7A4A4A;text-align:right;margin-top:4px;min-height:14px}
+.cc-recibio{font-size:11px;color:#7A4A4A;margin-top:4px}
 
 /* ── TOAST ── */
 .toast{position:fixed;bottom:calc(32px + var(--sab));left:50%;transform:translateX(-50%);background:#331C1C;color:#F2E8C7;padding:14px 22px;border-radius:50px;font-size:15px;font-weight:700;z-index:400;opacity:0;transition:opacity .3s;pointer-events:none;max-width:92vw;text-align:center;box-shadow:0 4px 12px rgba(0,0,0,.2)}
@@ -4088,6 +4101,7 @@ function _abaCcProvActual() { var f = abaCcForm; return f ? String(f.prov === '_
    semana tiene dos compras, lo pendiente es de las dos juntas, y se aclara. */
 function _abaCcEstado(c) {
   if (c.estado === 'Anulada') return { cls: 'cc-e-anu', txt: 'Anulada: no suma a la deuda' };
+  if (c.estado === 'Pedida') return { cls: 'cc-e-ped', txt: 'Pedido: todavía no es deuda. Cuando llegue, tocá «Confirmar lo que llegó».' };
   if (c.fuera) return { cls: 'cc-e-ok', txt: 'Pagada antes de este libro (está en Egresos)' };
   var bus = (busqueda && busqueda.ts) ? busqueda : null;
   if (!bus) return { cls: 'cc-e-nose', txt: 'La deuda todavía no llegó' };
@@ -4098,7 +4112,7 @@ function _abaCcEstado(c) {
   var s = dd ? (dd.semanas || []).filter(function (x) { return String(x.sem) === String(c.sem); })[0] : null;
   if (s && s.pendiente > 0.01) {
     var misma = ((abaCc.data && abaCc.data.compras) || []).filter(function (x) {
-      return x.prov === c.prov && String(x.sem) === String(c.sem) && x.estado !== 'Anulada' && !x.fuera;
+      return x.prov === c.prov && String(x.sem) === String(c.sem) && x.estado !== 'Anulada' && x.estado !== 'Pedida' && !x.fuera;
     }).length;
     var txt = 'Debés ' + abaFormatMoney(s.pendiente) + ' · semana ' + c.sem;
     if (s.pagado > 0.01) txt += ' (ya pagaste ' + abaFormatMoney(s.pagado) + ')';
@@ -4143,7 +4157,11 @@ function _abaCcPintarTop() {
   /* Aca NO va lo que se debe (15/9/2026, a la tarde): estaba la deuda de la carne con un
      "Pagar en PAGOS" y Tadeo vio "para pagar la carne" en dos lados. + NUEVO es para cargar
      lo que se compro; cada factura ya dice "Debés $X · semana N", y se paga en PAGOS. */
-  if (!abaCcForm) h += '<button type="button" class="btn-confirm cc-nueva" onclick="abaCcAbrir()">+ Cargar la factura de la carne</button>';
+  /* Dos puertas (21/9/2026). El PEDIDO es lo que se le pide al proveedor y todavia no es
+     deuda: cuando llega se confirma desde su tarjeta con el peso neto de cada caja, y
+     recien ahi se debe. La factura directa queda para lo que llega sin pedido cargado. */
+  if (!abaCcForm) h += '<button type="button" class="btn-confirm cc-nueva" onclick="abaCcAbrir(\'\',\'pedido\')">+ Cargar el pedido de carne</button>' +
+    '<button type="button" class="cc-b cc-top-2" onclick="abaCcAbrir(\'\',\'factura\')">+ Cargar una factura que ya llegó (sin pedido)</button>';
   document.getElementById('abaCcTop').innerHTML = h + '</div>';
 }
 
@@ -4167,16 +4185,17 @@ function _abaCcPintarLista() {
 
 function _abaCcCard(c) {
   var est = _abaCcEstado(c);
-  var cuentaPz = c.estado !== 'Anulada' && !c.fuera;
+  var cuentaPz = c.estado !== 'Anulada' && c.estado !== 'Pedida' && !c.fuera;
+  var esPed = c.estado === 'Pedida';
   var pz = (c.piezas && c.piezas.porCorte) || {};
   var conPz = cuentaPz && c.piezas && c.piezas.n > 0;
   var lineasDe = {};
   c.lineas.forEach(function (l) { lineasDe[l.abbr] = (lineasDe[l.abbr] || 0) + 1; });
   var h = '<div class="cc-card' + (c.estado === 'Anulada' ? ' cc-anulada' : '') + '">';
-  h += '<div class="cc-card-h"><span class="cc-card-t">' + _abaH(_abaCcDia(c.fecha) + ' · ' + c.prov) + '</span><span class="cc-card-tot">' + abaFormatMoney(c.total) + '</span></div>';
-  h += '<div class="cc-card-s">' + _abaCant(c.kg, 'kg') + ' · ' + _abaH(c.id) + (c.cargo ? ' · cargó ' + _abaH(c.cargo) : '') + '</div>';
+  h += '<div class="cc-card-h"><span class="cc-card-t">' + _abaH(_abaCcDia(c.fecha) + ' · ' + c.prov) + '</span><span class="cc-card-tot">' + (esPed ? '≈ ' : '') + abaFormatMoney(c.total) + '</span></div>';
+  h += '<div class="cc-card-s">' + (esPed ? 'pediste ' : '') + _abaCant(c.kg, 'kg') + (!esPed && c.kgPed > 0 ? ' (pediste ' + _abaCant(c.kgPed, 'kg') + ')' : '') + ' · ' + _abaH(c.id) + (c.cargo ? ' · cargó ' + _abaH(c.cargo) : '') + '</div>';
   h += '<div class="cc-estado ' + est.cls + '">' + _abaH(est.txt) + '</div>';
-  h += '<table class="cc-tabla"><thead><tr><th>Corte</th><th class="num">Kg</th><th class="num">$/kg</th><th class="num">Total</th></tr></thead><tbody>';
+  h += '<table class="cc-tabla"><thead><tr><th>Corte</th><th class="num">' + (esPed ? 'Pediste' : 'Kg') + '</th><th class="num">$/kg</th><th class="num">' + (esPed ? 'Estimado' : 'Total') + '</th></tr></thead><tbody>';
   var yaPz = {};
   c.lineas.forEach(function (l) {
     var nom = _abaCcNombre(l.abbr, l.corte) + (l.det ? ' ' + l.det : '');
@@ -4188,7 +4207,10 @@ function _abaCcCard(c) {
       var p = pz[l.abbr];
       sub = '<div class="cc-pz">' + (p ? 'pesaste ' + _abaCant(p.kg, 'kg') + (lineasDe[l.abbr] > 1 ? ' (todo el ' + _abaH(_abaCcNombre(l.abbr, l.corte).toLowerCase()) + ')' : '') : 'sin piezas pesadas') + '</div>';
     }
-    h += '<tr><td>' + _abaH(nom) + '</td><td class="num">' + _abaCant(l.kg, 'kg') + sub + '</td><td class="num">' + abaFormatMoney(l.precio) + '</td><td class="num"><b>' + abaFormatMoney(l.total) + '</b></td></tr>';
+    /* Lo pedido y las cajas, abajo de lo que llego. */
+    var ped = (!esPed && l.kgPed !== null && l.kgPed !== undefined)
+      ? '<div class="cc-pz">pediste ' + _abaCant(l.kgPed, 'kg') + ((l.cajas && l.cajas.length) ? ' · ' + l.cajas.length + ' caja' + (l.cajas.length === 1 ? '' : 's') : '') + '</div>' : '';
+    h += '<tr><td>' + _abaH(nom) + '</td><td class="num">' + _abaCant(l.kg, 'kg') + ped + sub + '</td><td class="num">' + abaFormatMoney(l.precio) + '</td><td class="num"><b>' + abaFormatMoney(l.total) + '</b></td></tr>';
   });
   h += '</tbody></table>';
   if (conPz) {
@@ -4200,9 +4222,16 @@ function _abaCcCard(c) {
     h += '<div class="cc-cruce">⚖️ No hay piezas pesadas del ' + _abaH(c.fecha.slice(0, 5)) + ' en Stock → RECIBIR CARNE.</div>';
   }
   if (c.nota) h += '<div class="cc-nota">' + _abaH(c.nota) + '</div>';
+  if (c.recibio) h += '<div class="cc-recibio">Recibió ' + _abaH(c.recibio) + '</div>';
   if (c.estado !== 'Anulada') {
     var idJs = _abaH(String(c.id).replace(/[^\w\-]/g, ''));
-    h += '<div class="cc-acc"><button type="button" class="cc-b" onclick="abaCcAbrir(\'' + idJs + '\')">Corregir</button>' +
+    /* Confirmar: el pedido siempre. Una compra cargada como factura sin confirmar (la
+       CC-0007 del 18/9 tenia los kilos del pedido) tambien, desde que existe este paso. */
+    var rec = esPed
+      ? '<button type="button" class="cc-b cc-b-ok" onclick="abaCcRecibir(\'' + idJs + '\')">Confirmar lo que llegó</button>'
+      : ((!c.fuera && !c.recibio && _abaCcFechaNum(c.fecha) >= 20260918)
+        ? '<button type="button" class="cc-b" onclick="abaCcRecibir(\'' + idJs + '\')">Confirmar con los pesos de las cajas</button>' : '');
+    h += '<div class="cc-acc">' + rec + '<button type="button" class="cc-b" onclick="abaCcAbrir(\'' + idJs + '\')">' + (esPed ? 'Corregir el pedido' : 'Corregir') + '</button>' +
       '<button type="button" class="cc-b cc-b-x" onclick="abaCcAnular(\'' + idJs + '\')">Anular</button></div>';
   }
   return h + '</div>';
@@ -4287,7 +4316,7 @@ function abaCcCostoGuardar() {
 }
 
 /* ── El formulario ── */
-function abaCcAbrir(id) {
+function abaCcAbrir(id, modo) {
   var d = abaCc.data;
   if (!d) { abaShowToast('Todavía no llegaron las compras de carne: esperá un segundo'); return; }
   if (abaCcForm && abaCcForm.sucio && !confirm('Tenés otra compra a medio cargar. ¿La descartás?')) return;
@@ -4296,7 +4325,10 @@ function abaCcAbrir(id) {
   var npSel = document.getElementById('npProv'), provNp = (npSel && _abaCcEsCarne(npSel.value)) ? npSel.value : '';
   var provDef = previa ? previa.prov : provNp || (d.compras[0] && d.compras[0].prov) || (d.cortes[0] && d.cortes[0].prov) || d.provs[0] || '';
   var conocido = (d.provs || []).indexOf(provDef) >= 0;
+  /* Corregir un pedido sigue siendo pedido; uno nuevo es pedido salvo que se pida factura. */
+  modo = previa ? (previa.estado === 'Pedida' ? 'pedido' : 'factura') : (modo === 'factura' ? 'factura' : 'pedido');
   abaCcForm = {
+    modo: modo,
     id: previa ? previa.id : '', prov: conocido || !provDef ? provDef : '__otro', otro: conocido ? '' : provDef,
     fecha: previa ? previa.fecha : _abaCcHoy(), nota: previa ? previa.nota : '',
     lineas: [], costos: {}, costosTocado: {}, sucio: false,
@@ -4354,17 +4386,22 @@ function _abaCcPintarForm() {
   /* NO lleva la clase pago-form: `abaHayEditor` cuenta como "editando" todo
      .pago-form.open con un campo lleno, y aca la fecha y los precios vienen puestos.
      Abierto y sin tocar trabaria el repintado del ERP entero. Cuenta `sucio`. */
+  if (f.modo === 'recibir') { _abaCcPintarRecibir(); return; }
+  var esPed = f.modo === 'pedido';
   var h = '<div class="cc-form" id="abaCcFormIn">';
-  h += '<div class="pago-form-title">' + (f.id ? 'Corregir la compra ' + _abaH(f.id) : 'Nueva compra de carne') + '</div>';
+  h += '<div class="pago-form-title">' + (esPed ? (f.id ? 'Corregir el pedido ' + _abaH(f.id) : 'Pedido de carne') : (f.id ? 'Corregir la compra ' + _abaH(f.id) : 'Factura de carne (sin pedido)')) + '</div>';
   h += '<div class="np-field"><div class="np-label">Proveedor</div><select class="np-select" id="abaCcProv" onchange="abaCcProv(this.value)">';
   provs.forEach(function (p) { h += '<option value="' + _abaH(p) + '"' + (f.prov === p ? ' selected' : '') + '>' + _abaH(p) + '</option>'; });
   h += '<option value="__otro"' + (f.prov === '__otro' ? ' selected' : '') + '>Otro proveedor…</option></select>';
   if (f.prov === '__otro') h += '<input class="cc-in cc-in-txt" id="abaCcProvOtro" style="margin-top:6px" placeholder="Nombre del proveedor" value="' + _abaH(f.otro) + '" oninput="abaCcCampo(\'otro\', this.value)">';
   h += '</div>';
-  h += '<div class="np-field"><div class="np-label">Día que llegó la mercadería (dd/mm/aaaa)</div>' +
+  h += '<div class="np-field"><div class="np-label">' + (esPed ? 'Día que llega (dd/mm/aaaa)' : 'Día que llegó la mercadería (dd/mm/aaaa)') + '</div>' +
     '<input class="cc-in cc-in-txt" id="abaCcFecha" inputmode="numeric" placeholder="dd/mm/aaaa" value="' + _abaH(f.fecha) + '" oninput="abaCcCampo(\'fecha\', this.value)"></div>';
-  h += '<div class="np-label">Kilos y precio de la factura</div>' +
-    '<div class="cc-aclara">Los kilos que <b>cobra el proveedor</b> (su balanza), no los que pesaste acá. Lo que no vino, dejalo vacío.</div>';
+  h += esPed
+    ? '<div class="np-label">Kilos que pediste y precio de la lista</div>' +
+      '<div class="cc-aclara"><b>Todavía no es deuda.</b> Cuando llegue la mercadería, tocá «Confirmar lo que llegó» en la tarjeta y cargás el peso neto de cada caja: eso es lo que se paga.</div>'
+    : '<div class="np-label">Kilos y precio de la factura</div>' +
+      '<div class="cc-aclara">Los kilos que <b>cobra el proveedor</b> (su balanza), no los que pesaste acá. Lo que no vino, dejalo vacío.</div>';
   h += '<div class="cc-lins">';
   f.lineas.forEach(function (l, i) {
     var nom = _abaCcNombre(l.abbr);
@@ -4383,12 +4420,12 @@ function _abaCcPintarForm() {
   });
   h += '</div>';
   h += '<button type="button" class="cc-b cc-b-add" onclick="abaCcAgregar()">+ Otra variante de un corte (ej. vacío entero)</button>';
-  h += '<div class="cc-total"><span>Total de la factura</span><span id="abaCcTotal">$0</span></div>';
+  h += '<div class="cc-total"><span>' + (esPed ? 'Total estimado del pedido' : 'Total de la factura') + '</span><span id="abaCcTotal">$0</span></div>';
   h += '<div id="abaCcCostos"></div>';
   h += '<div class="np-field"><div class="np-label">Nota (opcional)</div><textarea class="cc-in cc-in-txt" id="abaCcNota" rows="2" oninput="abaCcCampo(\'nota\', this.value)">' + _abaH(f.nota) + '</textarea></div>';
   h += '<div class="cc-form-err" id="abaCcErr"></div>';
   h += '<div class="cc-acc"><button type="button" class="cc-b" onclick="abaCcCerrar()">Cancelar</button>' +
-    '<button type="button" class="cc-b cc-b-ok" id="abaCcGuardar" onclick="abaCcGuardar()">Guardar compra</button></div>';
+    '<button type="button" class="cc-b cc-b-ok" id="abaCcGuardar" onclick="abaCcGuardar()">' + (esPed ? 'Guardar pedido' : 'Guardar compra') + '</button></div>';
   box.innerHTML = h + '</div>';
   _abaCcTotales();
 }
@@ -4418,19 +4455,30 @@ function _abaCcEsLaMasNueva() {
 function _abaCcTotales() {
   var f = abaCcForm;
   if (!f) return;
-  var tot = 0, kgT = 0;
+  var tot = 0, kgT = 0, kgPedT = 0, rec = f.modo === 'recibir';
   f.lineas.forEach(function (l, i) {
     var kg = _abaCantIn(l.kg, 'kg'), pr = _abaMonto(l.precio), el = document.getElementById('abaCcSub' + i);
     var sub = (kg > 0 && pr > 0) ? Math.round(kg * pr) : 0;
     tot += sub; if (kg > 0) kgT += kg;
-    if (el) el.textContent = kg > 0 ? (pr > 0 ? _abaCant(kg, 'kg') + ' × ' + abaFormatMoney(pr) + ' = ' + abaFormatMoney(sub) : 'falta el precio') : '';
+    if (rec && l.kgPed > 0) kgPedT += l.kgPed;
+    if (!el) return;
+    if (rec) {
+      /* Lo que llego contra lo que se pidio, corte por corte. */
+      var dif = kg - (l.kgPed || 0), difTxt = l.kgPed > 0 && kg > 0 && Math.abs(dif) >= 0.005 ? ' (' + (dif > 0 ? '+' : '−') + _abaCant(Math.round(Math.abs(dif) * 1000) / 1000, 'kg') + ')' : '';
+      el.textContent = kg > 0 ? 'llegaron ' + _abaCant(kg, 'kg') + difTxt + (pr > 0 ? ' × ' + abaFormatMoney(pr) + ' = ' + abaFormatMoney(sub) : ' · falta el precio') : (l.kgPed > 0 ? 'no llegó (vacío = 0)' : '');
+    } else {
+      el.textContent = kg > 0 ? (pr > 0 ? _abaCant(kg, 'kg') + ' × ' + abaFormatMoney(pr) + ' = ' + abaFormatMoney(sub) : 'falta el precio') : '';
+    }
   });
   var t = document.getElementById('abaCcTotal');
-  if (t) t.textContent = abaFormatMoney(tot) + (kgT > 0 ? ' · ' + _abaCant(Math.round(kgT * 1000) / 1000, 'kg') : '');
+  if (t) t.textContent = abaFormatMoney(tot) + (kgT > 0 ? ' · ' + _abaCant(Math.round(kgT * 1000) / 1000, 'kg') : '') + (rec && kgPedT > 0 ? ' (pediste ' + _abaCant(Math.round(kgPedT * 1000) / 1000, 'kg') + ')' : '');
   var b = document.getElementById('abaCcGuardar');
-  if (b && !b.disabled) b.textContent = tot > 0 ? 'Guardar compra · ' + abaFormatMoney(tot) : 'Guardar compra';
+  var bTxt = f.modo === 'pedido' ? 'Guardar pedido' : (rec ? 'Confirmar' : 'Guardar compra');
+  if (b && !b.disabled) b.textContent = tot > 0 ? bTxt + ' · ' + abaFormatMoney(tot) : bTxt;
   var box = document.getElementById('abaCcCostos');
   if (!box) return;
+  /* Un pedido no mueve costos: el precio real es el de lo que llega. */
+  if (f.modo === 'pedido') { box.innerHTML = ''; return; }
   var cambios = _abaCcCambiosCosto();
   if (!cambios.length) { box.innerHTML = ''; return; }
   var nueva = _abaCcEsLaMasNueva();
@@ -4503,22 +4551,37 @@ function abaCcGuardar() {
   if (!f) return;
   var btn = document.getElementById('abaCcGuardar');
   if (btn && btn.disabled) return;   // un segundo toque no manda otra compra
-  var prov = _abaCcProvActual(), fecha = _abaCcFechaNorm(f.fecha), err = '', lineas = [], total = 0;
+  var prov = _abaCcProvActual(), fecha = _abaCcFechaNorm(f.fecha), err = '', lineas = [], total = 0, rec = f.modo === 'recibir', algo = false;
   f.lineas.forEach(function (l) {
-    var kg = _abaCantIn(l.kg, 'kg'), pr = _abaMonto(l.precio), det = String(l.det || '').trim();
+    var pr = _abaMonto(l.precio), det = String(l.det || '').trim();
+    if (rec) {
+      /* Los pesos de las cajas: el backend los suma (no confia en un total tipeado). Un
+         corte pedido que no llego va igual, vacio: queda escrito que no vino. */
+      var cajas = (l.cajas || []).map(function (x) { return _abaCantIn(x, 'kg'); }).filter(function (n) { return n > 0; });
+      var kgR = cajas.reduce(function (a, b) { return a + b; }, 0);
+      if (!(kgR > 0) && !(l.kgPed > 0)) return;
+      if (kgR > 0 && !(pr > 0) && !err) err = 'Falta el precio por kilo de ' + _abaCcNombre(l.abbr) + (det ? ' ' + det : '') + '.';
+      if (kgR > 0) algo = true;
+      lineas.push({ abbr: l.abbr, det: det, cajas: cajas, precio: pr > 0 ? pr : _abaMonto(l.precioPed) });
+      total += Math.round(kgR * pr);
+      return;
+    }
+    var kg = _abaCantIn(l.kg, 'kg');
     if (!(kg > 0)) return;
     if (!(pr > 0) && !err) err = 'Falta el precio por kilo de ' + _abaCcNombre(l.abbr) + (det ? ' ' + det : '') + '.';
     lineas.push({ abbr: l.abbr, det: det, kg: kg, precio: pr });
     total += Math.round(kg * pr);
+    algo = true;
   });
   if (!prov) err = 'Elegí el proveedor.';
   else if (!fecha) err = 'La fecha tiene que ser dd/mm/aaaa.';
-  else if (!err && !lineas.length) err = 'Cargá los kilos de al menos un corte.';
+  else if (!err && !algo) err = rec ? 'Cargá el peso neto de al menos una caja. Si no llegó nada, anulá el pedido.' : 'Cargá los kilos de al menos un corte.';
   if (err) { _abaCcError(err); return; }
-  var costos = _abaCcCambiosCosto().filter(function (x) { return f.costos[x.abbr]; }).map(function (x) { return { abbr: x.abbr, precio: x.ahora }; });
+  var costos = f.modo === 'pedido' ? [] : _abaCcCambiosCosto().filter(function (x) { return f.costos[x.abbr]; }).map(function (x) { return { abbr: x.abbr, precio: x.ahora }; });
   var payload = {
     action: 'compraCarneGuardar', id: f.id || '', proveedor: prov, fecha: fecha, lineas: lineas,
     nota: String(f.nota || '').trim(), costos: costos,
+    estado: f.modo === 'pedido' ? 'Pedida' : undefined, recibir: rec ? true : undefined,
     /* El mismo id si se toca Guardar de nuevo despues de un corte: no se carga dos veces. */
     clientOpId: f.coid
   };
@@ -4530,7 +4593,7 @@ function abaCcGuardar() {
     _abaCcTotales();
     _abaCcError(msg);
   };
-  abaShowLoader(f.id ? 'Corrigiendo la compra…' : 'Guardando la compra…');
+  abaShowLoader(rec ? 'Confirmando lo que llegó…' : (f.modo === 'pedido' ? 'Guardando el pedido…' : (f.id ? 'Corrigiendo la compra…' : 'Guardando la compra…')));
   fetch(ABA_APPS_SCRIPT_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(payload) })
     .then(function (r) { return r.text(); })
     .then(function (txt) {
@@ -4542,8 +4605,10 @@ function abaCcGuardar() {
       abaCc.cambio = Date.now();
       _abaCcCerrarForm();
       if (navigator.vibrate) navigator.vibrate([50, 50, 50]);
-      var msg = 'Compra ' + resp.id + (resp.editada ? ' corregida' : ' guardada') + ': ' + abaFormatMoney(resp.total);
-      if (!resp.fuera) msg += ' · ya está en PAGOS';
+      var msg;
+      if (resp.modo === 'pedido') msg = 'Pedido ' + resp.id + (resp.editada ? ' corregido' : ' guardado') + ': ' + abaFormatMoney(resp.total) + ' estimado · todavía no es deuda';
+      else if (resp.modo === 'recibir') msg = 'Llegaron ' + _abaCant(resp.kg, 'kg') + (resp.kgPed > 0 ? ' (pediste ' + _abaCant(resp.kgPed, 'kg') + ')' : '') + ': ' + abaFormatMoney(resp.total) + ' · ya está en PAGOS';
+      else { msg = 'Compra ' + resp.id + (resp.editada ? ' corregida' : ' guardada') + ': ' + abaFormatMoney(resp.total); if (!resp.fuera) msg += ' · ya está en PAGOS'; }
       if (resp.costos && resp.costos.length) msg += ' · costo actualizado en ' + resp.costos.length + ' corte' + (resp.costos.length === 1 ? '' : 's');
       /* Los pedidos que ya se habian llevado piezas de esta compra, con el costo corregido. */
       var co = resp.costeo || {}, extra = 0;
@@ -4559,6 +4624,100 @@ function abaCcGuardar() {
     .catch(function () {
       volver('Sin conexión: no se guardó. Tocá Guardar de nuevo cuando vuelva la señal (no se carga dos veces).');
     });
+}
+
+/* CONFIRMAR LO QUE LLEGO (21/9/2026). El peso NETO de la etiqueta de cada caja (la caja
+   y la bolsa no se pagan): la suma es lo que se le debe al proveedor. Cada corte arranca
+   con lo que se pidio al lado para ver la diferencia. */
+function abaCcRecibir(id) {
+  var d = abaCc.data;
+  if (!d) { abaShowToast('Todavía no llegaron las compras de carne: esperá un segundo'); return; }
+  if (abaCcForm && abaCcForm.sucio && !confirm('Tenés otra compra a medio cargar. ¿La descartás?')) return;
+  var c = d.compras.filter(function (x) { return x.id === id; })[0];
+  if (!c) { abaShowToast('No encuentro la compra ' + id + ': tocá ↻'); return; }
+  abaCcForm = {
+    modo: 'recibir', id: c.id, prov: c.prov, otro: '', fecha: _abaCcHoy(), nota: c.nota || '',
+    lineas: c.lineas.map(function (l) {
+      var ped = (l.kgPed !== null && l.kgPed !== undefined) ? l.kgPed : l.kg;
+      var cajas = (l.cajas && l.cajas.length) ? l.cajas.map(function (x) { return String(x).replace('.', ','); }) : [''];
+      return { abbr: l.abbr, det: l.det || '', kgPed: ped, cajas: cajas, kg: '', precio: String(l.precio || ''), precioPed: String(l.precio || ''), tocado: true };
+    }),
+    costos: {}, costosTocado: {}, sucio: false,
+    coid: 'cc_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8)
+  };
+  abaCcForm.lineas.forEach(_abaCcRecKg);
+  var box0 = document.getElementById('abaCcFormBox'); if (box0) box0.innerHTML = '';
+  abaRenderCarne();
+  var box = document.getElementById('abaCcFormBox');
+  if (box && box.scrollIntoView) { try { box.scrollIntoView({ block: 'start', behavior: 'smooth' }); } catch (e) {} }
+}
+/* La suma de las cajas, en el formato del resto del formulario (coma decimal). */
+function _abaCcRecKg(l) {
+  var t = 0;
+  (l.cajas || []).forEach(function (x) { var n = _abaCantIn(x, 'kg'); if (n > 0) t += n; });
+  t = Math.round(t * 1000) / 1000;
+  l.kg = t > 0 ? String(t).replace('.', ',') : '';
+}
+function _abaCcPintarRecibir() {
+  var box = document.getElementById('abaCcFormBox'), f = abaCcForm, d = abaCc.data;
+  if (!box || !f || !d) return;
+  var h = '<div class="cc-form" id="abaCcFormIn">';
+  h += '<div class="pago-form-title">Confirmar lo que llegó · ' + _abaH(f.id) + ' · ' + _abaH(f.prov) + '</div>';
+  h += '<div class="cc-aclara">Cargá el <b>peso NETO</b> de la etiqueta de cada caja (no el bruto: la caja y la bolsa no se pagan). Lo que llegó es lo que le debés al proveedor. Un corte que no vino, dejalo vacío.</div>';
+  h += '<div class="np-field"><div class="np-label">Día que llegó (dd/mm/aaaa)</div>' +
+    '<input class="cc-in cc-in-txt" id="abaCcFecha" inputmode="numeric" placeholder="dd/mm/aaaa" value="' + _abaH(f.fecha) + '" oninput="abaCcCampo(\'fecha\', this.value)"></div>';
+  f.lineas.forEach(function (l, i) {
+    var nom = _abaCcNombre(l.abbr) + (l.det ? ' ' + l.det : '');
+    h += '<div class="cc-rec"><div class="cc-rec-h"><span style="min-width:0;flex:1">';
+    if (l.nuevo) {
+      h += '<select class="np-select" aria-label="Corte" onchange="abaCcLinea(' + i + ',\'abbr\',this.value)">';
+      (d.cortes || []).forEach(function (c) { h += '<option value="' + _abaH(c.abbr) + '"' + (c.abbr === l.abbr ? ' selected' : '') + '>' + _abaH(_abaCcNombre(c.abbr)) + '</option>'; });
+      h += '</select><input class="cc-in cc-in-txt" id="abaCcDet' + i + '" placeholder="variante (ej. entero)" value="' + _abaH(l.det) + '" oninput="abaCcLinea(' + i + ',\'det\',this.value)">';
+    } else {
+      h += _abaH(nom);
+    }
+    h += '</span><span class="cc-rec-ped">' + (l.kgPed > 0 ? 'pediste ' + _abaCant(l.kgPed, 'kg') : 'no estaba en el pedido') + '</span></div>';
+    h += '<div class="cc-cajas">';
+    l.cajas.forEach(function (x, j) {
+      h += '<input class="cc-in cc-caja" id="abaCcCaja' + i + '_' + j + '" inputmode="decimal" placeholder="kg neto" value="' + _abaH(x) + '" oninput="abaCcCaja(' + i + ',' + j + ',this.value)" aria-label="Caja ' + (j + 1) + ' de ' + _abaH(nom) + '">';
+    });
+    h += '<button type="button" class="cc-b cc-b-mini" onclick="abaCcCajaMas(' + i + ')">+ caja</button></div>';
+    h += '<div class="cc-rec-f"><span class="cc-aclara" style="margin:0;flex:1">Precio por kilo</span>' +
+      '<input class="cc-in cc-pr" id="abaCcPre' + i + '" inputmode="numeric" placeholder="$/kg" value="' + _abaH(l.precio) + '" oninput="abaCcLinea(' + i + ',\'precio\',this.value)" aria-label="Precio por kilo de ' + _abaH(nom) + '"></div>';
+    h += '<div class="cc-rec-t" id="abaCcSub' + i + '"></div></div>';
+  });
+  h += '<button type="button" class="cc-b cc-b-add" onclick="abaCcRecOtro()">+ Llegó un corte que no estaba en el pedido</button>';
+  h += '<div class="cc-total"><span>A pagar</span><span id="abaCcTotal">$0</span></div>';
+  h += '<div id="abaCcCostos"></div>';
+  h += '<div class="cc-form-err" id="abaCcErr"></div>';
+  h += '<div class="cc-acc"><button type="button" class="cc-b" onclick="abaCcCerrar()">Cancelar</button>' +
+    '<button type="button" class="cc-b cc-b-ok" id="abaCcGuardar" onclick="abaCcGuardar()">Confirmar</button></div>';
+  box.innerHTML = h + '</div>';
+  _abaCcTotales();
+}
+function abaCcCaja(i, j, v) {
+  var f = abaCcForm, l = f && f.lineas[i];
+  if (!l) return;
+  l.cajas[j] = v; f.sucio = true;
+  _abaCcRecKg(l);
+  _abaCcTotales();
+}
+function abaCcCajaMas(i) {
+  var f = abaCcForm, l = f && f.lineas[i];
+  if (!l) return;
+  l.cajas.push(''); f.sucio = true;
+  _abaCcPintarRecibir();
+  var el = document.getElementById('abaCcCaja' + i + '_' + (l.cajas.length - 1));
+  if (el) el.focus();
+}
+function abaCcRecOtro() {
+  var f = abaCcForm, d = abaCc.data;
+  if (!f || !d || !(d.cortes || []).length) return;
+  var l = { abbr: d.cortes[0].abbr, det: '', kgPed: 0, cajas: [''], kg: '', precio: '', precioPed: '', tocado: false, nuevo: true };
+  f.lineas.push(l);
+  l.precio = _abaCcPrecioSugerido(l);
+  f.sucio = true;
+  _abaCcPintarRecibir();
 }
 
 function abaCcAnular(id) {
