@@ -598,6 +598,16 @@ button.rt-chip.on{background:var(--o);border-color:var(--o);color:#fff}
 .efm-f .efm-m{font-size:15px;font-weight:800;color:var(--ink);font-variant-numeric:tabular-nums;white-space:nowrap}
 .efm-f .efm-x{grid-column:1/-1;font-size:11px;color:var(--bl);line-height:1.45}
 .efm-vacio{font-size:13px;color:var(--bl);line-height:1.5}
+/* El aviso de vueltos sin pedido. En ambar y no en rojo a proposito: no es un
+   error del sistema, es plata que sobra y hay que mirar. */
+.efm-huerf{margin-top:12px;border:1px solid #E8C79A;background:#FDF6EC;border-radius:10px;padding:10px 12px}
+.efm-huerf-t{font-size:13px;font-weight:800;color:#8A4A12;line-height:1.35}
+.efm-huerf-d{font-size:12px;color:#8A4A12;opacity:.9;line-height:1.5;margin-top:4px}
+.efm-huerf-f{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-top:8px;padding-top:8px;border-top:1px dashed #E8C79A;font-size:13px}
+.efm-huerf-s{font-size:11px;color:#8A4A12;opacity:.85;margin-top:2px}
+.efm-huerf-b{flex:0 0 auto;min-height:32px;padding:6px 14px;border:1px solid #B0641E;background:#fff;color:#8A4A12;border-radius:8px;font-size:12px;font-weight:700;font-family:inherit;cursor:pointer}
+.efm-huerf-b:hover{background:#B0641E;color:#fff}
+.efm-huerf-b:disabled{opacity:.5;cursor:default}
 .g-prov-aviso{margin:-2px 0 12px;padding:10px 12px;border-radius:8px;background:#FFF6E5;border:1px solid #F2D49A;color:#6B4A12;font-size:12px;line-height:1.5}
 .g-prov-aviso .g-prov-ir{display:block;margin-top:8px;min-height:40px;padding:8px 12px;border-radius:8px;border:1.5px solid #C9971F;background:#fff;color:#6B4A12;font-weight:800;font-size:12px;font-family:inherit;cursor:pointer}
 /* Quien tiene la plata (13/9/2026): cuando se reparten la ruta, cada uno cuenta lo suyo. */
@@ -6198,7 +6208,7 @@ var API='https://script.google.com/macros/s/AKfycbxmrG5YVSshcYezk8lXFx_uxb7NFGcb
      "Borrando el gasto...". La fila YA estaba borrada (18:34:18 en Log Errores):
      lo que se colgo fue la entrega de Google, despues de que el servidor
      termino. Sin esta linea el POST no tenia ningun reloj. */
-  var _POST_IDEMPOTENTE = { gasto: 1, ingreso: 1, borrarMovimientoCaja: 1, piezasRecibir: 1 };
+  var _POST_IDEMPOTENTE = { gasto: 1, ingreso: 1, borrarMovimientoCaja: 1, borrarVueltoHuerfano: 1, piezasRecibir: 1 };
   var _corte = window.__corteGet = { cortes: 0, salvados: 0 };
   var _CORTABLE = { admin:1, pedidosLight:1, cajaLight:1, ocLight:1, ventas:1, tendencia:1,
     stock_full:1, piezas_full:1, precios:1, catalogo:1, cobrosPendientes:1, entregas:1,
@@ -9316,6 +9326,10 @@ function load(){
        desaparecia sin un solo error hasta tocar Actualizar. */
     if(D){
       if(!Array.isArray(d.efMano)&&Array.isArray(D.efMano))d.efMano=D.efMano;
+      /* Igual que efMano, y por lo mismo: los vueltos huerfanos los manda solo
+         cajaLight. Sin esta linea el volcado los borraba y el aviso aparecia y
+         desaparecia solo, sin un error. (21/9/2026) */
+      if(!Array.isArray(d.efHuerfanos)&&Array.isArray(D.efHuerfanos))d.efHuerfanos=D.efHuerfanos;
       if(!Array.isArray(d.provisiones)&&Array.isArray(D.provisiones))d.provisiones=D.provisiones;
       if(!Array.isArray(d.config)&&Array.isArray(D.config))d.config=D.config;
     }
@@ -9486,6 +9500,7 @@ function _cajaCampos(d){
   if(Array.isArray(d.movimientos))D.movimientos=d.movimientos;
   if(Array.isArray(d.sobres))D.sobres=d.sobres;
   if(Array.isArray(d.efMano))D.efMano=d.efMano;
+  if(Array.isArray(d.efHuerfanos))D.efHuerfanos=d.efHuerfanos;
   /* Provisiones_Fijas y Config_Maleu, para el EERR (15/9/2026). */
   if(Array.isArray(d.provisiones))D.provisiones=d.provisiones;
   if(Array.isArray(d.config))D.config=d.config;
@@ -13838,9 +13853,77 @@ function rEfMano(){
   }else if(_efManoIdx>0){
     h+='<div class="efm-det efm-vacio">De este día guardo los totales, no el detalle por cliente.</div>';
   }
+  h+=_efHuerfanosHtml(d);
   h+='</div>';
   box.innerHTML=h;
 }
+
+/* Vueltos cuyo PEDIDO ya no existe (21/9/2026).
+
+   El vuelto de un cobro no vive en el pedido: vive en la hoja "Cambios
+   Billetera". Si alguien borra el pedido a mano en la planilla, esa fila queda
+   sola y sigue sumando al efectivo en mano para siempre — no hay endpoint que se
+   entere. Le paso a Tadeo el 21/9/2026 con un pedido de prueba: borro el pedido y
+   sus movimientos, y la tarjeta siguio marcando $4.000 que no eran de nadie.
+
+   No se borra solo: es plata, y un numero que desaparece sin que lo pidas es
+   peor que uno que sobra. Se muestra, se explica y se ofrece el boton. */
+function _efHuerfanosHtml(d){
+  var todos=(D&&Array.isArray(D.efHuerfanos))?D.efHuerfanos:[];
+  if(!todos.length)return '';
+  /* Solo los del dia que se esta mirando: la tarjeta navega por dias y un aviso
+     de otro dia al lado de este total no se entiende. `d.f` es 'dd/MM/yyyy'. */
+  var hoyF=String((d&&d.f)||'').trim();
+  var lista=todos.filter(function(x){ return String(x.f||'').trim().indexOf(hoyF)===0; });
+  if(!lista.length)return '';
+  var tot=lista.reduce(function(s,x){return s+(Number(x.$)||0);},0);
+  var h='<div class="efm-huerf">'
+    +'<div class="efm-huerf-t">⚠️ '+(lista.length===1?'Un vuelto de $'+f$(tot)+' quedó sin pedido'
+        :lista.length+' vueltos por $'+f$(tot)+' quedaron sin pedido')+'</div>'
+    +'<div class="efm-huerf-d">Está sumando a los $'+f$(d.entro)+' de arriba, pero su pedido ya no existe '
+    +'—se borró de la planilla y el vuelto se guarda aparte—. Revisalo y sacalo si sobra.</div>';
+  lista.forEach(function(x){
+    h+='<div class="efm-huerf-f">'
+      +'<div><b>'+_efEsc(x.c||'(sin nombre)')+'</b> <span style="color:var(--bl)">'+_efEsc(x.h)+' #'+_efEsc(x.id)+'</span>'
+      +'<div class="efm-huerf-s">$'+f$(x.$)+' · '+_efEsc(x.f)+(x.q?' · lo dio '+_efEsc(_efNombreCorto(x.q)):'')+'</div></div>'
+      +'<button type="button" class="efm-huerf-b" onclick="efBorrarHuerfano(this)"'
+      +' data-row="'+_efEsc(String(x.fila))+'" data-h="'+_efEsc(x.h)+'" data-id="'+_efEsc(x.id)
+      +'" data-monto="'+_efEsc(String(x.$))+'" data-c="'+_efEsc(x.c||'')+'">Sacarlo</button>'
+    +'</div>';
+  });
+  return h+'</div>';
+}
+
+/* Mismo camino que `borrarMovCaja`, a proposito: showLoader → POST con
+   `clientOpId` → `_recargarCaja()`. Incluido el criterio del catch — que no
+   llegue la respuesta NO quiere decir que no se haya borrado, asi que se trae
+   Caja de nuevo en vez de decirle que no paso nada y que lo toque otra vez. */
+window.efBorrarHuerfano=function(btn){
+  if(!btn||btn.disabled)return;
+  var row=Number(btn.getAttribute('data-row'))||0, hj=btn.getAttribute('data-h');
+  var id=btn.getAttribute('data-id'), monto=Number(btn.getAttribute('data-monto'))||0;
+  var c=btn.getAttribute('data-c')||'';
+  if(!confirm('¿Sacar el vuelto de $'+f$(monto)+' de '+(c||hj+' #'+id)+'?\n\n'
+    +'Su pedido ('+hj+' #'+id+') ya no existe, así que esta plata no es de nadie.\n'
+    +'El efectivo en mano del día baja $'+f$(monto)+'.\n\n'
+    +'Se puede recuperar del historial de la planilla.'))return;
+  showLoader('Sacando el vuelto...');
+  fetch(API,{method:'POST',body:JSON.stringify({action:'borrarVueltoHuerfano',
+    row:row, h:hj, id:id, monto:monto,
+    clientOpId:'bvh-'+hj+'-'+id+'-'+monto+'-'+row})})
+    .then(function(r){return r.json();})
+    .then(function(r){
+      hideLoader(true);
+      if(r&&r.ok){ toast('Listo · el efectivo en mano baja $'+f$(monto)); }
+      else{ alert((r&&r.error)||'No se pudo sacar. Probá de nuevo.'); }
+      _recargarCaja();
+    })
+    .catch(function(){
+      hideLoader(true);
+      alert('No pude confirmar si se sacó. Traigo Caja de nuevo para que veas cómo quedó: si el vuelto sigue ahí, volvé a intentar.');
+      _recargarCaja();
+    });
+};
 
 function rCobranzas(){
   var box=$('cobranzasCard');if(!box)return;
