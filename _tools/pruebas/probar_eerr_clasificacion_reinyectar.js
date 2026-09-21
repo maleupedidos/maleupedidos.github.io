@@ -57,6 +57,17 @@ const BUGS = [
     de: "if(hay(['dolarapp','dolar app'])&&hay(['credit','recarga','saldo']))", a: "if(hay(['dolarapp','dolar app']))",
     espera: /plan pagado DESDE DolarApp/ },
 
+  /* Las muestras vuelven al costo: el EERR no las muestra en ningun lado. */
+  { n: 'las muestras vuelven a Proveedor',
+    de: "if(hay(['muestra']))return T('extra','extra');", a: '',
+    espera: /muestra para probar/ },
+
+  /* La regla de muestras queda DEBAJO de la de proveedor: nunca se aplica. */
+  { n: 'la regla de muestras queda debajo de la de proveedor',
+    de: "  if(hay(['muestra']))return T('extra','extra');\n  if(cat==='proveedor')return T('cmv','proveedor');",
+    a: "  if(cat==='proveedor')return T('cmv','proveedor');\n  if(hay(['muestra']))return T('extra','extra');",
+    espera: /muestra para probar/ },
+
   /* Un renglon de Servicios en $0 vuelve a aparecer. */
   { n: 'Servicios se dibuja aunque este en cero',
     de: "if(f_servicios>0){html+=leaf(eL('Servicios (luz, agua, internet)'", a: "if(true){html+=leaf(eL('Servicios (luz, agua, internet)'",

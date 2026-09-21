@@ -50,6 +50,8 @@ const CASOS = [
   ['lo cargado en DolarApp es pauta de Meta: campañas', 'Herramienta', 'DolarApp · Créditos', '', 'variable', 'campanas'],
   ['"Dolar App" separado y en otra categoria tambien',  'Otro', 'Dolar App · Recarga', '',    'variable', 'campanas'],
   ['un plan pagado DESDE DolarApp sigue siendo un plan', 'Herramienta', 'Claude · Mensual', 'pagado con DolarApp', 'estructura', 'planes'],
+  ['una muestra para probar es extraordinaria, aunque sea Proveedor', 'Proveedor', 'Muestra de productos - Tartas', '', 'extra', 'extra'],
+  ['la seña de una muestra tambien',                   'Proveedor', 'Muestra de productos - Seña', 'proveedor nuevo', 'extra', 'extra'],
   ['la luz de otra categoria sigue en servicios',       'Otro', 'Luz Edenor', '',             'estructura', 'servicios'],
 
   // ── Lo que se corrigio antes el 21/9 ──
