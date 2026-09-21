@@ -73,7 +73,7 @@ const ped = o => Object.assign({
 const PROD = [{ a: 'PPM', q: 2 }, { a: 'CCo', q: 1.221 }];
 const PEDIDOS = [
   // 1 · pendiente y sin cobrar, con descuento
-  ped({ n: '9001', r: 9001, c: 'Prueba Vicky Fernandez', dee: iso(MAN), p: PROD, subt: 64525, desc: 6452, $: 58073 }),
+  ped({ n: '9001', r: 9001, c: 'Prueba Con Descuento', dee: iso(MAN), p: PROD, subt: 64525, desc: 6452, $: 58073 }),
   // 2 · entregado y sin cobrar
   ped({ n: '9002', r: 9002, c: 'Prueba Entregado', dee: iso(HOY), es: 'Entregado', p: PROD, subt: 64525, $: 64525 }),
   // 3 · entregado y cobrado

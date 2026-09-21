@@ -2,8 +2,8 @@
 
    node probar_parada.js <token> [390|1440]
 
-   Tadeo: "vicky fernandez aparece 2 veces para entregar hoy... deberiamos
-   juntarlos como lo juntaste solo el de Tadeo Chiesa". Tenia dos pedidos para el
+   Tadeo: "un cliente aparece 2 veces para entregar hoy... deberiamos juntarlos
+   como lo juntaste con el otro". Tenia dos pedidos para el
    mismo viernes y uno se habia cargado SIN direccion (sub-barrio = el barrio, sin
    lote). RUTA los juntaba por telefono, pero ARMADO arma una bolsa por
    sub-barrio: aparecia dos veces. Y la card de RUTA mostraba la direccion del que
