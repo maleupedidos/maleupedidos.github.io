@@ -113,24 +113,28 @@ const esperar = async (c, e, ms = 60000) => { const t = Date.now(); while (Date.
     chk('buscar "catálogo" (con tilde) sigue andando', (porTilde || []).indexOf('Productos') >= 0, porTilde);
 
     /* ── 3c) Los PEDIDOS, que es donde estan los nombres con enie ────────── */
-    /* Normalizar solo el lado de la consulta habria ROTO esto: "iñaki" se
-       aplana a "inaki" y no habria matcheado el nombre crudo. Sin backend, los
-       pedidos se ponen a mano: lo que se prueba es el filtro, no la carga. */
+    /* Normalizar solo el lado de la consulta habria ROTO esto: una enie se
+       aplana y no habria matcheado el nombre crudo. Sin backend, los pedidos se
+       ponen a mano: lo que se prueba es el filtro, no la carga.
+
+       Los nombres son INVENTADOS a proposito (este repo es publico por Pages):
+       lo unico que tienen que tener es una enie y una tilde. No poner clientes
+       de verdad aca aunque sea comodo. */
     const pedBusca = async q => await evaluar(cli, `(function(){
       D = D || {};
-      D.pedidos = [{cliente:'I\\u00f1aki Ustariz', n:'901', h:'Home', total:1000},
-                   {cliente:'Mart\\u00edn Gomez',  n:'902', h:'Home', total:2000}];
+      D.pedidos = [{cliente:'\\u00cd\\u00f1igo Prueba', n:'901', h:'Home', total:1000},
+                   {cliente:'Mart\\u00edn Ensayo',      n:'902', h:'Home', total:2000}];
       var i = document.getElementById('cmdInput');
       cmdOpen(); i.value = ${JSON.stringify(q)}; cmdRender();
       var r = [].map.call(document.querySelectorAll('#cmdList .cmd-item b'), function(b){ return b.textContent; });
       cmdClose(); return r;
     })()`);
-    const pInaki = await pedBusca('inaki');
-    chk('buscar "inaki" encuentra el pedido de Iñaki', (pInaki || []).join('|').indexOf('aki Ustariz') >= 0, pInaki);
-    const pEnie = await pedBusca('iñaki');
-    chk('buscar "iñaki" con enie tambien lo encuentra', (pEnie || []).join('|').indexOf('aki Ustariz') >= 0, pEnie);
+    const pSinEnie = await pedBusca('inigo');
+    chk('escrito sin enie encuentra el pedido de "Íñigo"', (pSinEnie || []).join('|').indexOf('Prueba') >= 0, pSinEnie);
+    const pEnie = await pedBusca('íñigo');
+    chk('escrito CON enie y tilde tambien lo encuentra', (pEnie || []).join('|').indexOf('Prueba') >= 0, pEnie);
     const pMartin = await pedBusca('martin');
-    chk('buscar "martin" encuentra a "Martín"', (pMartin || []).join('|').indexOf('Gomez') >= 0, pMartin);
+    chk('buscar "martin" encuentra a "Martín"', (pMartin || []).join('|').indexOf('Ensayo') >= 0, pMartin);
     const pNro = await pedBusca('902');
     chk('buscar por numero de pedido sigue andando', (pNro || []).join('|').indexOf('902') >= 0, pNro);
 

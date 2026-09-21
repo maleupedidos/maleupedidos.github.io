@@ -40,7 +40,7 @@ const BUGS = [
   { n: 'se normaliza la consulta pero NO el nombre del cliente',
     de: 'var c=_cmdPlano(p.cliente||p.c||p.Cliente);',
     a: "var c=String(p.cliente||p.c||p.Cliente||'').toLowerCase();",
-    espera: /inaki|Iñaki/ },
+    espera: /sin enie|CON enie/ },
 
   { n: 'el alias (los nombres viejos) deja de buscarse',
     de: "||_cmdPlano(x.al).indexOf(q)>=0", a: "",
