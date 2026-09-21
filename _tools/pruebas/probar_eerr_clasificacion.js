@@ -47,6 +47,9 @@ const CASOS = [
   ['un pago anual no es un plan mensual',               'Herramienta', 'Microsoft · Anual', '', 'estructura', 'software'],
   ['los CREDITOS de WATI siguen variables',             'Herramienta', 'WATI · Créditos', '', 'variable', 'campanas'],
   ['una recarga de WATI es credito: variable',          'Herramienta', 'WATI · Recarga', '',  'variable', 'campanas'],
+  ['lo cargado en DolarApp es pauta de Meta: campañas', 'Herramienta', 'DolarApp · Créditos', '', 'variable', 'campanas'],
+  ['"Dolar App" separado y en otra categoria tambien',  'Otro', 'Dolar App · Recarga', '',    'variable', 'campanas'],
+  ['un plan pagado DESDE DolarApp sigue siendo un plan', 'Herramienta', 'Claude · Mensual', 'pagado con DolarApp', 'estructura', 'planes'],
   ['la luz de otra categoria sigue en servicios',       'Otro', 'Luz Edenor', '',             'estructura', 'servicios'],
 
   // ── Lo que se corrigio antes el 21/9 ──

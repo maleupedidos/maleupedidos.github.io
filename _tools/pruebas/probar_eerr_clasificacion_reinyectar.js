@@ -47,6 +47,16 @@ const BUGS = [
     de: "if(_gastoLinea(g).linea==='planes'){pagPlanes+=m;", a: "if(_gastoLinea(g).linea==='planes_'){pagPlanes+=m;",
     espera: /lo financiero junta los planes/ },
 
+  /* Lo cargado en DolarApp (la pauta de Meta) vuelve a los fijos. */
+  { n: 'DolarApp deja de ser campañas',
+    de: "if(hay(['dolarapp','dolar app'])&&hay(['credit','recarga','saldo']))", a: "if(false)",
+    espera: /DolarApp es pauta/ },
+
+  /* Cualquier cosa que nombre DolarApp se toma como pauta: un plan pagado desde ahi tambien. */
+  { n: 'todo lo que diga DolarApp va a campañas, aunque sea un plan',
+    de: "if(hay(['dolarapp','dolar app'])&&hay(['credit','recarga','saldo']))", a: "if(hay(['dolarapp','dolar app']))",
+    espera: /plan pagado DESDE DolarApp/ },
+
   /* Un renglon de Servicios en $0 vuelve a aparecer. */
   { n: 'Servicios se dibuja aunque este en cero',
     de: "if(f_servicios>0){html+=leaf(eL('Servicios (luz, agua, internet)'", a: "if(true){html+=leaf(eL('Servicios (luz, agua, internet)'",

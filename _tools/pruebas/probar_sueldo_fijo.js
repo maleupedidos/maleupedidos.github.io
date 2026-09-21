@@ -17,7 +17,11 @@
      giro paga primero lo atrasado y lo que pasa de ahi es adelanto;
    · un cambio de sueldo con "Activa desde/hasta" se respeta mes a mes;
    · el financiero: EOAF con "te giraste mas que el fijo", el adelanto aparte, y el
-     Estado de Caja con el fijo de la hoja, el quincenal = fijo/2 y la cuenta. */
+     Estado de Caja con el fijo de la hoja, el quincenal = fijo/2 y la cuenta;
+   · EL CORTE (21/9/2026): Tadeo dijo que hasta agosto la cuenta quedo saldada, asi
+     que en produccion arranca en septiembre. La mecanica de arriba se prueba con
+     la cuenta arrancando en marzo a proposito (hay que ver meses que se arrastran);
+     el corte real se prueba al final. */
 'use strict';
 const { abrir, evaluar } = require('./cdp.js');
 const prep = require('./sesion_prep.js');
@@ -110,6 +114,11 @@ const FILA = `function(pref){var rs=[].slice.call(document.querySelectorAll('#ee
     await cli.enviar('Page.navigate', { url: BASE + '/' + APP });
     if (!await esperar(cli, `typeof go==='function' && window.D && Array.isArray(D.gastos) && D.gastos.length===${GASTOS.length}`, 90000)) throw new Error('el ERP no cargo la caja stubbeada');
 
+    /* La mecanica se prueba arrancando en marzo: con el corte real (septiembre) no
+       quedan meses que se arrastren. El corte se prueba al final. */
+    const CORTE = await ev(cli, `SUELDO_CUENTA_DESDE`);
+    await ev(cli, `SUELDO_CUENTA_DESDE='2026-03'`);
+
     console.log('\n-- la regla --');
     const R = await ev(cli, `(function(){
       var c=_sueldoCuenta(9,2026), j=c.meses.filter(function(x){return x.ym==='2026-07';})[0];
@@ -193,6 +202,24 @@ const FILA = `function(pref){var rs=[].slice.call(document.querySelectorAll('#ee
     await pint(8, 'financiero');
     const F4 = await ev(cli, `(function(){var b=document.getElementById('eerrBody').textContent;return {girados:/Sueldos girados/.test(b),fijos:/Sueldos fijos\\s*\\$2\\.500\\.000/.test(b),quinc:/\\$1\\.250\\.000 día 5/.test(b)};})()`);
     chk('financiero con dos: "Sueldos girados", Estado de Caja con 2.500.000 y quincenal 1.250.000', !!F4 && F4.girados && F4.fijos && F4.quinc, F4);
+
+    console.log('\n-- el corte del 21/9/2026: hasta agosto quedo saldada --');
+    await ev(cli, `SUELDO_CUENTA_DESDE=${JSON.stringify(CORTE)}`);
+    const K = await ev(cli, `(function(){var t=_sueldoCuenta(9,2026,'tadeo'),l=_sueldoCuenta(9,2026,'lucas');
+      return {t:t&&[t.desde,t.devengado,t.girado,t.saldo],l:l&&[l.desde,l.devengado,l.girado,l.saldo],ago:_sueldoCuenta(8,2026,'tadeo')};})()`);
+    chk('Tadeo: la cuenta arranca en septiembre — 1.500.000, se giró 500.000 → le deben 1.000.000 (no lo de marzo a agosto)',
+      !!K && JSON.stringify(K.t) === '["2026-09",1500000,500000,1000000]', K);
+    chk('en agosto no hay cuenta: quedó saldada', !!K && K.ago === null, K);
+    chk('Lucas sigue igual: desde septiembre, le deben 1.000.000', !!K && JSON.stringify(K.l) === '["2026-09",1000000,0,1000000]', K);
+    await pint(8, 'economico');
+    const E4 = await ev(cli, `(function(){return (document.querySelector('.eerr-sueldo-mes')||{}).textContent||'';})()`);
+    chk('el EERR de septiembre lo dice así, sin "desde marzo"',
+      /Tadeo — cuenta del sueldo desde septiembre 2026.*Maleu le debe \$1\.000\.000/.test(E4) && !/desde marzo/.test(E4), E4);
+    await ev(cli, `D.provisiones=${JSON.stringify(PROV)};D.gastos=${JSON.stringify(GASTOS)};`);
+    await pint(6, 'economico');
+    const E5 = await ev(cli, `(function(){return (document.querySelector('.eerr-sueldo-mes')||{}).textContent||'';})()`);
+    chk('el EERR de julio ya no arrastra una cuenta (dice lo girado del mes y nada más)',
+      /Te giraste \$1\.400\.000 en julio/.test(E5) && !/Cuenta del sueldo/.test(E5) && !/te debe/.test(E5), E5);
 
     const err = await ev(cli, `(window.__err||[]).filter(function(e){return /sueldo|eerr|EERR|_sueldo/i.test(e);})`);
     chk('sin errores de JS del EERR', Array.isArray(err) && err.length === 0, err);
