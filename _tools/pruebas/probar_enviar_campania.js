@@ -141,8 +141,14 @@ const ESPIA = '(function(){var f=window.fetch;window.__posts=[];'
     // ── 3. El preview es el TEXTO REAL de WATI (control independiente) ──
     const real = porNombre[elegida.tpl];
     if (real) {
-      const cuerpo = String(real.body || '').replace(/\{\{1\}\}/g, '').replace(/\*/g, '');
-      const trozo = cuerpo.split('\n')[0].trim().slice(0, 28);
+      /* El trozo se toma DESPUES de la variable, nunca del renglon que la
+         tiene: el ERP rellena {{1}} con el nombre real (bien) y el test lo
+         borraba (mal), asi que con un template que arranca en "Hola {{1}}!"
+         comparaba "Hola !" contra "Hola Lucia!" y daba rojo sobre un ERP
+         correcto. Paso el 20/9/2026 al cambiar la vista por defecto. */
+      const partes = String(real.body || '').replace(/\*/g, '').split(/\{\{\d+\}\}/);
+      const trozo = partes.map(function(p){ return p.replace(/\s+/g, ' ').trim(); })
+                          .sort(function(a, b){ return b.length - a.length; })[0].slice(0, 28);
       chk('el preview muestra el cuerpo real del template (contra la API de WATI)',
         !!modal && trozo.length > 6 && modal.prev.replace(/\s+/g, ' ').indexOf(trozo.replace(/\s+/g, ' ').slice(0, 20)) > -1,
         { esperaba: trozo, vi: (modal && modal.prev || '').slice(0, 120) });

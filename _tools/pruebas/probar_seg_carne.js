@@ -103,6 +103,10 @@ async function correr(cli, modo) {
     // fallback: el CRM no expone bandera; se espera a que Segmentos pinte algo
   }
   await evaluar(cli, 'estSwitch("segmentos")');
+  /* La vista se pide EXPLICITAMENTE: desde el 20/9/2026 Segmentos arranca en
+     'cond' (Recuperar), porque lo que mueve plata va primero. Este test mide el
+     cross-sell, asi que tiene que cambiarse de vista o mide la pantalla equivocada. */
+  await evaluar(cli, 'segSwitchVista("cross")');
   if (!await esperar(cli, 'document.querySelectorAll("#est-segmentos .seg-card").length>0', 200000)) throw new Error('Segmentos no pinto ninguna card');
   await pausa(400);
   return cards(cli);

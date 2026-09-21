@@ -293,6 +293,8 @@ body{font-family:'Inter',-apple-system,'Segoe UI',system-ui,sans-serif;backgroun
 .red-pie{font-size:11px;color:var(--ink3);line-height:1.5;padding:9px 2px 0;border-top:1px solid var(--cd);margin-top:10px}
 @media(max-width:620px){.red-det-b{grid-template-columns:1fr}}
 /* Enviar campana desde Segmentos (20/9/2026) */
+.seg-card-plata{font-size:11px;font-weight:700;color:var(--gd);background:#E8F5E9;
+  border-radius:10px;padding:2px 8px;white-space:nowrap}
 .seg-send{background:#1B5E20;color:#fff;border-color:#1B5E20;font-weight:700}
 .seg-send:hover{background:#2E7D32}
 .env-bg{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9000;display:none;
@@ -4431,9 +4433,9 @@ body.role-single .statusbar{font-size:11px}
     <div class="hoy-head">
       <div class="hoy-title">Segmentos &middot; Estancias del Pilar</div>
       <div class="seg-sub-toggle">
-        <button class="hoy-thresh-chip on" data-segv="cross" onclick="segSwitchVista('cross')">Cross-sell</button>
-        <button class="hoy-thresh-chip" data-segv="cond" onclick="segSwitchVista('cond')">Por estado</button>
-        <button class="hoy-thresh-chip" data-segv="enviadas" onclick="segSwitchVista('enviadas')">📣 Enviadas</button>
+        <button class="hoy-thresh-chip on" data-segv="cond" onclick="segSwitchVista('cond')">Recuperar</button>
+        <button class="hoy-thresh-chip" data-segv="cross" onclick="segSwitchVista('cross')">Vender m&aacute;s</button>
+        <button class="hoy-thresh-chip" data-segv="enviadas" onclick="segSwitchVista('enviadas')">Ya enviadas</button>
       </div>
     </div>
     <div class="seg-intro">Cada segmento es una <b>campaña concreta</b>: a quién, qué template de WATI y con qué producto/incentivo. <b>Copiá los teléfonos</b> y mandá el broadcast desde WATI (legal). Lo enviado se registra en la bitácora.</div>
@@ -24673,6 +24675,7 @@ if('serviceWorker' in navigator){
 
   // ════════ F2: MAPA DE LOTES (Estancias del Pilar) ════════
   var _mapaObj = null, _mapaLotes = [], _mapaZonas = [], _subZonas = [], _exclZonas = [], _mapaZonasLayer = null, _mapaLotesLayer = null, _mapaDrawHooked = false, _mapaSoloAsignados = false, _mapaDrawTipo = 'zona';
+  var _mapaCargando = false;   // leaflet en vuelo: evita el doble L.map()
   var _mapaColorMode = 'subbarrio', _mapaLoteCli = {}, _mapaLotesData = {};
   var _loteComp = {tipo:'', n1:'', n2:'', padre:'', madre:'', hijos:[]};
   var _loteResVal = '';   // residencia del hogar: 'Permanente' | 'Finde' | ''
@@ -25867,7 +25870,19 @@ if('serviceWorker' in navigator){
       setTimeout(function(){ try{ _mapaProcessLocate(); }catch(e){} }, 260);
       return;
     }
+    /* [!] El guard de arriba NO alcanza solo: `_ensureLeaflet` es ASINCRONO (baja
+       leaflet de unpkg), asi que dos llamadas seguidas encuentran `_mapaObj`
+       todavia en null y las dos llegan a `L.map()` — Leaflet tira "Map container
+       is already initialized". Como el script es de otro origen, en la consola
+       llega como un pelado "Script error." que no dice nada: se caza con
+       `Runtime.exceptionThrown` por CDP (20/9/2026).
+       Se ve en local, donde todo es mas rapido; en produccion la carrera casi no
+       se abre. La bandera cierra la ventana entre las dos llamadas. */
+    if (_mapaCargando) return;
+    _mapaCargando = true;
     _ensureLeaflet(function(){
+      _mapaCargando = false;
+      if (_mapaObj) return;            // otra llamada llego primero
       // Encerrado en Estancias del Pilar: no se puede alejar al mundo ni salir del barrio.
       _mapaObj = L.map('mapaMap', {preferCanvas:true, zoomControl:true, scrollWheelZoom:true, minZoom:14, maxZoom:20, maxBoundsViscosity:1.0});
       // maxNativeZoom: a partir de ahi Leaflet AGRANDA la ultima imagen (no "Map data not yet available").
@@ -27339,7 +27354,11 @@ if('serviceWorker' in navigator){
   // Cross-sell selectivo: a quien NUNCA probó una categoría, ofrecerle ESA con un
   // incentivo puntual (lo opuesto a la difusión genérica). Envío legal por WATI
   // con template aprobado → acá se arma la audiencia (copiar teléfonos).
-  var crmSegVista = 'cross';
+  /* Arranca en RECUPERAR, no en cross-sell: medido el 20/9/2026, el cuello de
+     botella es la segunda compra (44% de las casas compraron una sola vez y
+     traen el 15% de la plata), no venderle otra categoria al que ya esta
+     activo. Lo que mueve plata va primero. */
+  var crmSegVista = 'cond';
   var crmSegExcluirDias = 1;   // no mandar 2 difusiones al mismo cliente dentro de N días (1 = mismo día)
   var _segCache = {};          // id → {all, disp, tpl}
   var _segExcl = {};           // id → {key:1} exclusiones manuales (los que NO mandé)
@@ -27496,13 +27515,18 @@ if('serviceWorker' in navigator){
 
     if (crmSegVista === 'cross'){
       var activos = us.filter(function(u){ return u._activo; });
-      cards.push('<div class="seg-note">'+activos.length+' hogares <b>activos</b> en Estancias del Pilar. A cada uno le falta probar algo — ofrecele <b>eso</b>, no un genérico.</div>');
+      cards.push('<div class="seg-note">A los que YA compran, ofrecerles lo que todavía no probaron. '
+        +activos.length+' hogares activos en Estancias del Pilar. Ordenado por el tamanio de la audiencia.</div>');
       /* De mayor a menor audiencia: arriba queda la campaña más grande que se
          puede armar hoy. El orden no estaba curado antes -era el de la lista- y
          con la carne adentro el tamaño es justamente el dato que importa. */
       _segCats().map(function(cat){
         return {cat: cat, hh: activos.filter(function(u){ return !u._cats[cat]; })};
       }).filter(function(x){ return x.hh.length; })
+        /* Por AUDIENCIA, como se decidio el 11/9/2026: arriba la campania mas
+           grande que se puede armar. El 20/9 lo pase a plata en juego y eso
+           cambiaba un criterio ya decidido y documentado sin un motivo fuerte
+           -el test lo freno-. La plata va igual en la tarjeta, como dato. */
         .sort(function(a, b){ return b.hh.length - a.hh.length; })
         .forEach(function(x, i){
           var info = SEG_CROSS[x.cat] || {hook:'Nunca probó ' + x.cat + '. Falta escribir el gancho y el template de WATI.', tpl:'(falta template)'};
@@ -27510,12 +27534,23 @@ if('serviceWorker' in navigator){
           cards.push(_segCard(sid, 'Nunca probó ' + x.cat, x.hh, info.hook, info.tpl, '#5E35B1', info.ojo));
         });
     } else {
-      cards.push('<div class="seg-note">'+us.length+' hogares en Estancias del Pilar por estado de relación. Cada estado tiene su template.</div>');
-      SEG_COND.forEach(function(seg){
+      cards.push('<div class="seg-note"><b>Los que se están yendo, o no volvieron.</b> Es donde hay más plata: una casa que compró una sola vez deja $77.764, una que volvió deja $334.522. '
+        +'De las que llegan a la segunda compra, entre el 61% y el 88% llegan a la tercera. <span style=\"color:var(--ink4)\">Solo Estancias del Pilar ('+us.length+' hogares).</span></div>');
+      /* El orden lo fija el EMBUDO, no la plata: medido el 20/9/2026, el cuello de
+         botella es la segunda compra. Ordenar por plata es tentador y da el
+         resultado equivocado —los activos son los que mas facturaron—, asi que
+         esta curado a mano y con motivo, que es distinto de "el orden de la
+         lista". La plata va igual en la tarjeta, como dato. */
+      var SEG_ORDEN = ['segunda', 'reactivable', 'riesgo', 'dormido', 'recompra', 'al_dia'];
+      SEG_COND.map(function(seg){
         var hh = us.filter(function(u){ return u._jug === seg.id; });
-        if (!hh.length) return;
-        cards.push(_segCard('cond_'+seg.id, seg.t, hh, seg.hook, seg.tpl, '#2E7D32'));
-      });
+        var i = SEG_ORDEN.indexOf(seg.id);
+        return {seg: seg, hh: hh, orden: i < 0 ? 99 : i};
+      }).filter(function(x){ return x.hh.length; })
+        .sort(function(a, b){ return a.orden - b.orden; })
+        .forEach(function(x){
+          cards.push(_segCard('cond_'+x.seg.id, x.seg.t, x.hh, x.seg.hook, x.seg.tpl, '#2E7D32'));
+        });
     }
 
     el('segList').innerHTML = cards.join('') || '<div class="hoy-empty"><p>Sin segmentos para mostrar.</p></div>';
@@ -27564,12 +27599,38 @@ if('serviceWorker' in navigator){
     el('segList').innerHTML = h;
   }
 
+  /* La plata que mueve un grupo: lo que YA facturaron esas casas. No es lo que
+     se va a ganar mandando el mensaje — es el tamanio de lo que esta en juego, y
+     sirve para decidir a cual apretar primero. Las casas sueltas (sin lote) no
+     siempre traen `facturado`, de ahi el ||0. */
+  /* La plata EN JUEGO: lo que entra si cada casa del grupo hace UN pedido mas,
+     con su propio ticket. No es el facturado historico — ordenar por eso ponia
+     "Activos al dia" primero, que es exactamente al reves de lo que hay que
+     mirar: los que ya compran son, por definicion, los que mas facturaron.
+     Las casas sueltas no siempre traen `facturado`, de ahi los ||0. */
+  function _segPlata(hh){
+    return (hh || []).reduce(function(s, u){
+      var f = Number(u.facturado) || 0, n = Number(u.entregados) || 0;
+      return s + (n > 0 ? f / n : 0);
+    }, 0);
+  }
+  /* Abreviado, porque va en una chapita al lado del numero de casas y hay que
+     poder escanearlo de un vistazo. `money` no existe en este scope: es del
+     panel, no del bloque CRM (el 20/9/2026 tiro ReferenceError en la card). */
+  function _segPlataTxt(n){
+    n = Number(n) || 0;
+    if (n >= 1000000) return '$' + (Math.round(n / 100000) / 10).toString().replace('.', ',') + 'M';
+    if (n >= 1000) return '$' + Math.round(n / 1000) + 'k';
+    return '$' + Math.round(n);
+  }
+
   function _segCard(id, titulo, hh, hook, tpl, color, ojo){
     var disp = hh.filter(function(u){ return !u._reservado; });
     var reservados = hh.length - disp.length;
     _segCache[id] = {all: hh, disp: disp, tpl: tpl};
     _segExcl[id] = {};   // exclusiones manuales (los que NO mandé) — arrancan vacías
     var conTel = disp.filter(function(u){ return u.contacto && u.contacto.tel; }).length;
+    var plata = _segPlata(hh);
     var tplReal = tpl && tpl.indexOf('(') === -1;
     var resv = reservados>0 ? '<span class="seg-card-resv">'+reservados+' ya en campaña — excluidos</span>' : '';
     var marcar = tplReal
@@ -27582,7 +27643,8 @@ if('serviceWorker' in navigator){
       : '';
     return '<div class="seg-card" style="border-left-color:'+color+'">'
       + '<div class="seg-card-h" onclick="segToggle(\''+id+'\')">'
-        + '<div class="seg-card-tt"><span class="seg-card-t">'+escHtml(titulo)+'</span><span class="seg-card-n" id="segn-'+id+'">'+conTel+'</span>'+resv+'</div>'
+        + '<div class="seg-card-tt"><span class="seg-card-t">'+escHtml(titulo)+'</span><span class="seg-card-n" id="segn-'+id+'">'+conTel+'</span>'
+          + (plata>0 ? '<span class="seg-card-plata" title="Lo que entra si cada una de estas casas hace un pedido mas, con su ticket">'+_segPlataTxt(plata)+' en juego</span>' : '')+resv+'</div>'
         + '<span class="seg-card-exp" id="segexp-'+id+'">ver ▾</span>'
       + '</div>'
       + '<div class="seg-card-hook">'+escHtml(hook)+'</div>'
