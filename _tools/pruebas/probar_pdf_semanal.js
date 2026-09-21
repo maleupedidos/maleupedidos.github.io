@@ -83,7 +83,7 @@ const SALUD = { '2026-37': { total: 4, nuevos: 1, recompra: 2, react: 1,
 const LIGHT = { ts: 1, pedidos: PEDIDOS, canales: [], light: true, saludSem: SALUD, saludMes: {}, ventasExtra: EXTRA };
 const G = (f, cat, con, $) => ({ f: f, fFull: f + ' 10:00', ts: 1, mes: 'Septiembre', anio: 2026, cat: cat, con: con, met: 'Mercado Pago', $: $, not: '' });
 const CAJA = { ts: 1, caja: {}, saldoBase: {}, movimientos: [], efMano: [],
-  gastos: [G('09/09/2026', 'Herramienta', 'WATI · Mensual', 10000), G('10/09/2026', 'Proveedor', 'Pago Le Unike', 50000), G('11/09/2026', 'Cambio cruzado', 'Vuelto', 3000), G('12/09/2026', 'Catering', 'Evento', 7000), G('03/09/2026', 'Nafta', 'Shell', 99999)],
+  gastos: [G('09/09/2026', 'Herramienta', 'WATI · Créditos', 10000), G('10/09/2026', 'Proveedor', 'Pago Le Unike', 50000), G('11/09/2026', 'Cambio cruzado', 'Vuelto', 3000), G('12/09/2026', 'Catering', 'Evento', 7000), G('03/09/2026', 'Nafta', 'Shell', 99999)],
   ingresos: [G('10/09/2026', 'Rendimientos', 'MP', 1200), G('11/09/2026', 'Liquidación Red', 'Vendedor Uno', 40000), G('11/09/2026', 'Cambio cruzado', 'Vuelto', 3000)],
   /* Desde el 15/9/2026 `cajaLight` trae Provisiones_Fijas: el EERR usa la hoja, no la tabla del codigo. */
   provisiones: [{ concepto: 'Sueldo dueño imputado', cat: 'sueldo', monto: 1200000, desde: '2026-01', hasta: null },
@@ -175,13 +175,14 @@ async function abrirFase(cli, fase) {
     chk('clientes de saludSem: 4 · 1 nuevo', !!RR && RR.cl.total === 4 && RR.cl.nuevos === 1, RR && RR.cl);
 
     /* ECONOMICO. A mano: margen 389.500 − 280.800 = 108.700; bolsas 4 pedidos de Home/Pilar × $850 = 3.400;
-       WATI $10.000 es campaña (variable); contribucion 95.300. Fijos de septiembre: nafta 99.999 + sueldo
+       los CREDITOS de WATI $10.000 son campaña (variable; la suscripcion mensual es un plan fijo desde el
+       21/9/2026); contribucion 95.300. Fijos de septiembre: nafta 99.999 + sueldo
        (el FIJO de Provisiones_Fijas, 1.200.000, desde el 15/9/2026; antes piso 1.000.000 del codigo) + ocupacion
        50.000 + monotributo 42.386,74 + amortizacion 35.000 = 1.427.385,74; 7 de 30 dias = 333.057.
        Mas rendimientos 1.200: resultado −236.557. */
-    chk('economico: margen 108.700 · bolsas 4 × 850 = 3.400 · campañas (WATI) 10.000 · delivery 0 · contribucion 95.300', !!RR && JSON.stringify(RR.eco.slice(0, 6)) === '[108700,4,3400,10000,0,95300]', RR && RR.eco);
+    chk('economico: margen 108.700 · bolsas 4 × 850 = 3.400 · campañas (créditos de WATI) 10.000 · delivery 0 · contribucion 95.300', !!RR && JSON.stringify(RR.eco.slice(0, 6)) === '[108700,4,3400,10000,0,95300]', RR && RR.eco);
     chk('fijos: la parte de la semana de los de septiembre (7/30 de 1.427.386) = 333.057; resultado −236.557', !!RR && RR.eco[6] === 333057 && RR.eco[7] === -236557 && RR.fijosMes.length === 1 && RR.fijosMes[0].dias === 7 && RR.fijosMes[0].diasMes === 30, RR && [RR.eco, RR.fijosMes]);
-    chk('WATI NO esta en los fijos: la nafta si (vehiculo es estructura)', !!RR && Math.round(RR.fijosMes[0].total) === 1427386, RR && RR.fijosMes);
+    chk('los créditos de WATI NO están en los fijos: la nafta sí (vehiculo es estructura)', !!RR && Math.round(RR.fijosMes[0].total) === 1427386, RR && RR.fijosMes);
     /* FINANCIERO */
     chk('financiero: entro 126.000 + 1.200 = 127.200 · salio 67.000 (sin el vuelto de 3.000) · flujo 60.200', !!RR && JSON.stringify(RR.fin) === '[127200,67000,60200,3000]', RR && RR.fin);
     chk('los pagos por renglon: proveedores 50.000 · campañas 10.000 · catering 7.000', !!RR && JSON.stringify(RR.porLinea) === JSON.stringify({ 'Campañas y mensajería': 10000, 'Proveedores de mercadería': 50000, 'Catering': 7000 }), RR && RR.porLinea);
@@ -209,12 +210,25 @@ async function abrirFase(cli, fase) {
     const s53 = await ev(cli, `(function(){var R=_rsArmar('2026-12-28');return {semN:R.semN,cob:R.cob.tot,h:R.h,pend:R.pendTot,meses:R.eco.fijosMes.map(function(x){return x.mn+':'+x.dias;})};})()`);
     chk('semana 53 (28/12 a 3/1): el cobro del "02/01" sin año cae adentro, no queda por cobrar, y los fijos son 4 dias de diciembre y 3 de enero', s53 && s53.semN === 53 && s53.cob === 7000 && s53.h === '2027-01-03' && s53.pend === 0 && JSON.stringify(s53.meses) === '["12:4","1:3"]', s53);
 
+    /* COMO VIENE EL MES (21/9/2026): del 1 al ultimo dia de la semana contra el mes
+       anterior cortado el MISMO dia, con las reglas de la semana. */
+    const MS = await ev(cli, `(function(){var M=_rsArmar('2026-09-07').mesR,s=_rtSumar('2026-09-01','2026-09-13').tot,sa=_rtSumar('2026-08-01','2026-08-13').tot;
+      var G9=_eerrMesGastos(9,2026),G8=_eerrMesGastos(8,2026);
+      return {dia:M.dia,diaAnt:M.diaAnt,f:M.act.f,sf:s.f,fa:M.prev.f,sfa:sa.f,camp:M.act.camp,fij:M.act.fijos,esp:Math.round((G9.estr+G9.amort+G9.imp)*13/30),
+        fijA:M.prev.fijos,espA:Math.round((G8.estr+G8.amort+G8.imp)*13/31),res:M.act.res,cuenta:M.act.mb-M.act.bolsas-M.act.camp-M.act.deliv-M.act.fijos+M.act.ing};})()`);
+    chk('el mes: del 1 al 13 de septiembre contra el 1 al 13 de agosto, con la venta de Ventas retail', !!MS && MS.dia === 13 && MS.diaAnt === 13 && MS.f === MS.sf && MS.f > 0 && MS.fa === MS.sfa, MS);
+    chk('el mes: los créditos de WATI del mes van en campañas', !!MS && MS.camp === 10000, MS);
+    chk('el mes: los fijos de cada mes por los días que van (13/30 y 13/31)', !!MS && MS.fij === MS.esp && MS.fijA === MS.espA && MS.fij > 0, MS);
+    chk('el mes: resultado = margen − variables − fijos + otros ingresos', !!MS && MS.res === MS.cuenta, MS);
+
     const doc = await ev(cli, `(function(){var w=document.getElementById('rsHiddenWrap');w.innerHTML=_rsRender(_rsArmar('2026-09-07'));var t=w.textContent;w.innerHTML='';return t;})()`);
     const T = typeof doc === 'string' ? doc : '';
     chk('el documento: portada, facturado y margen', /Semana 37/.test(T) && /Facturado \$389\.500/.test(T) && /margen \$108\.700 \(28%\)/.test(T), T.slice(0, 300));
     chk('el documento: la carne "2,25 kg" y "Carne Lomo"', /Carne Lomo/.test(T) && /2,25 kg/.test(T));
+    chk('el documento: "Cómo viene septiembre" con los dos cortes y el aviso de por qué se corta', /Cómo viene septiembre/.test(T) && /1 al 13 de septiembre/.test(T) && /1 al 13 de agosto/.test(T) && /cortado el mismo día/.test(T), (T.match(/Cómo viene.{0,200}/) || [])[0]);
+    chk('el documento: la nota de los fijos ya no habla del "piso" de sueldo', /el sueldo fijo de cada uno/.test(T) && !/piso de sueldo/.test(T), (T.match(/Los fijos son.{0,200}/) || [])[0]);
     chk('el documento: resultado economico con contribucion, fijos de septiembre y el resultado', /= Margen de contribución\$95\.300/.test(T) && /7 de 30 días de septiembre/.test(T) && /Resultado económico de la semana−\$236\.557/.test(T), (T.match(/Resultado económico.{0,500}/) || [])[0]);
-    chk('el documento: WATI esta en Campañas y mensajería, no en un gasto de la semana', /Campañas y mensajeríaWATI · Mensual−\$10\.000/.test(T) && !/Gastos de la semana/.test(T), (T.match(/Campañas y mensajería.{0,60}/) || [])[0]);
+    chk('el documento: los créditos de WATI están en Campañas y mensajería, no en un gasto de la semana', /Campañas y mensajeríaWATI · Créditos−\$10\.000/.test(T) && !/Gastos de la semana/.test(T), (T.match(/Campañas y mensajería.{0,60}/) || [])[0]);
     chk('el documento: el financiero con el flujo de caja y los vueltos aparte', /Flujo de caja de la semana\$60\.200/.test(T) && /Los vueltos \(\$3\.000\) no cuentan/.test(T) && /Los pagos, uno por uno/.test(T), (T.match(/Financiero.{0,400}/) || [])[0]);
     chk('sin undefined, NaN ni centavos', T.length > 500 && !/undefined|NaN|\[object/.test(T) && !/\$\s?\d{1,3}(\.\d{3})*,\d/.test(T));
     chk('el documento: "Al cierre de la semana quedó por cobrar" $91.500, "cobrado Lun 14/9" y cuanto falta', /Al cierre de la semana quedó por cobrar de lo entregado: \$91\.500/.test(T) && /cobrado Lun 14\/9/.test(T) && /De eso ya entró \$10\.000 después del domingo; falta \$81\.500/.test(T), (T.match(/Al cierre.{0,300}/) || [])[0]);

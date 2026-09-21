@@ -11038,7 +11038,7 @@ function _leerVersion(app){
    "El HTML no sabe que version es" dejo de ser cierto: el build le escribe
    adentro el CACHE_NAME de sw-panel.js, el mismo que deploy.sh obliga a subir en
    cada cambio. Si lo publicado dice otra cosa, esta pagina es vieja. Punto. */
-var _APP_CN_PAGINA='maleu-panel-v402';
+var _APP_CN_PAGINA='maleu-panel-v403';
 
 /* Devuelve [{k,v}] si lo publicado no es lo que esta pagina corre. */
 function _chequearVersiones(){
@@ -27167,14 +27167,18 @@ if('serviceWorker' in navigator){
     var cl=(D.saludSem&&D.saludSem[anioIso+'-'+semN])||null;
     if(cl&&!(cl.total>0))cl=null;
 
-    /* Los pedidos entregados en la semana, con la misma regla que `_rtSumar`. */
-    var peds=(D.pedidos||[]).filter(function(p){
-      if(p.es!=='Entregado'||p.hist)return false;
-      if(!p.c||!String(p.c).trim()||!(Number(p.$)>0))return false;
-      if(['Home','Pilar','Clubes','Red'].indexOf(p.h)<0)return false;
-      var dia=_tendFechaVentaISO(p);
-      return !!dia&&dia>=d&&dia<=h;
-    });
+    /* Los pedidos entregados en un rango, con la misma regla que `_rtSumar`. La
+       usan la semana y el bloque del mes. */
+    function pedsRango(d0,h0){
+      return (D.pedidos||[]).filter(function(p){
+        if(p.es!=='Entregado'||p.hist)return false;
+        if(!p.c||!String(p.c).trim()||!(Number(p.$)>0))return false;
+        if(['Home','Pilar','Clubes','Red'].indexOf(p.h)<0)return false;
+        var dia=_tendFechaVentaISO(p);
+        return !!dia&&dia>=d0&&dia<=h0;
+      });
+    }
+    var peds=pedsRango(d,h);
     var pedHP=peds.filter(function(p){return p.h==='Home'||p.h==='Pilar';});
     var claveCli=function(p){var tel=String(p.tel||'').replace(/\D/g,'').slice(-10);return tel||('N:'+String(p.c).trim().toLowerCase());};
 
@@ -27406,10 +27410,49 @@ if('serviceWorker' in navigator){
       plan=P;
     })();
 
+    /* ═══ COMO VIENE EL MES (21/9/2026, para la reunion de Grupo Matriz) ═══
+       El mes del ultimo dia de la semana, del 1 a ese dia, con las MISMAS reglas
+       que la semana: la venta por el dia de entrega (`_rtSumar`), las bolsas
+       imputadas por pedido de Home y Otras zonas, las campañas y el delivery
+       pagados en el rango, y los fijos del EERR del mes por los dias que van.
+       Contra el mes anterior CORTADO EL MISMO DIA: un mes a medias contra uno
+       entero siempre da abajo (ver "Un periodo en curso se corta en hoy"). */
+    function ecoRango(d0,h0,mn,an,dias,diasMes){
+      var s=_rtSumar(d0,h0), t0=s.tot;
+      var nHP=pedsRango(d0,h0).filter(function(p){return p.h==='Home'||p.h==='Pilar';}).length;
+      var cp=0;try{cp=Number(eerrConfig('COSTO_PACKAGING_PEDIDO',d0.slice(0,7)))||0;}catch(e){}
+      var o={f:t0.f,c:t0.c,ent:t0.ent,dom:s.dom.f,inst:s.inst.f,mb:t0.f-t0.c,bolsas:Math.round(nHP*cp),camp:0,deliv:0,ing:0};
+      (D.gastos||[]).forEach(function(m){
+        var iso=dmyAIso(m.f);if(!iso||iso<d0||iso>h0)return;
+        var L=_gastoLinea(m).linea;
+        if(L==='campanas')o.camp+=Number(m.$)||0;
+        else if(L==='delivery')o.deliv+=Number(m.$)||0;
+      });
+      (D.ingresos||[]).forEach(function(m){
+        var iso=dmyAIso(m.f);if(!iso||iso<d0||iso>h0)return;
+        if(_esVuelto(m)||_esLiqRed(m))return;
+        o.ing+=Number(m.$)||0;
+      });
+      var G=_eerrMesGastos(mn,an);
+      o.fijosMes=G.estr+G.amort+G.imp;
+      o.fijos=Math.round(o.fijosMes*dias/diasMes);
+      o.contrib=o.mb-o.bolsas-o.camp-o.deliv;
+      o.res=o.contrib-o.fijos+o.ing;
+      return o;
+    }
+    var mesR=null;
+    if(hayMov){
+      var mAn=hasta.getFullYear(), mMn=hasta.getMonth()+1, mDia=hasta.getDate(), mDias=new Date(mAn,mMn,0).getDate();
+      var aIni=new Date(mAn,mMn-2,1), aDias=new Date(aIni.getFullYear(),aIni.getMonth()+1,0).getDate(), aDia=Math.min(mDia,aDias);
+      mesR={mes:MESES[mMn-1],ant:MESES[aIni.getMonth()],dia:mDia,dias:mDias,diaAnt:aDia,diasAnt:aDias,
+        act:ecoRango(_rtIso(new Date(mAn,mMn-1,1)),h,mMn,mAn,mDia,mDias),
+        prev:ecoRango(_rtIso(aIni),_rtIso(new Date(aIni.getFullYear(),aIni.getMonth(),aDia)),aIni.getMonth()+1,aIni.getFullYear(),aDia,aDias)};
+    }
+
     return {lun:lun,dom:dom,hasta:hasta,enCurso:enCurso,d:d,h:h,semN:semN,semAnt:getWeek(_rtDia(lun,-7)),
       g:g,gc:gc,dias:dias,cl:cl,topCli:topCli,prodU:prodU,prodK:prodK,prodX:prodX,totU:totU,totK:totK,porCat:porCat,
       pend:pend,pendTot:pendTot,pendYa:pendYa,redSin:redSin,carne:carne,nuevos:nuevos,volvieron:volvieron,cob:cob,
-      hayMov:hayMov,eco:eco,fin:fin,ing:ing,plan:plan,
+      hayMov:hayMov,eco:eco,fin:fin,ing:ing,plan:plan,mesR:mesR,
       generado:pad(ahora.getDate())+'/'+pad(ahora.getMonth()+1)+'/'+ahora.getFullYear()+' '+pad(ahora.getHours())+':'+pad(ahora.getMinutes())};
   }
   window._rsArmar=armar;
@@ -27498,6 +27541,35 @@ if('serviceWorker' in navigator){
       h+=section('Contra el plan',ph);
     }
 
+    /* Como viene el mes, contra el anterior cortado el mismo dia */
+    var M=R.mesR;
+    if(M&&M.act.f>0){
+      var A=M.act, B=M.prev;
+      var var$=function(a,b){if(!(b>0))return '—';var dd=Math.round((a-b)/b*100);return '<span class="rs-d '+(dd>0?'up':(dd<0?'dn':'eq'))+'">'+(dd>0?'▲ +':(dd<0?'▼ −':''))+Math.abs(dd)+'%</span>';};
+      var varR=function(a,b){var dd=a-b;return '<span class="rs-d '+(dd>0?'up':(dd<0?'dn':'eq'))+'">'+(dd>0?'▲ +':(dd<0?'▼ −':''))+fmt$(Math.abs(dd))+'</span>';};
+      var tkA=A.ent>0?A.f/A.ent:0, tkB=B.ent>0?B.f/B.ent:0;
+      var cabA='1 al '+M.dia+' de '+M.mes.toLowerCase(), cabB='1 al '+M.diaAnt+' de '+M.ant.toLowerCase();
+      var mh='<div class="rs-comp">'
+        +comp('Facturado',fmt$(A.f),var$(A.f,B.f)+' vs '+cabB+' ('+fmt$(B.f)+')',A.f>=B.f?'up':'dn')
+        +comp('Margen bruto',fmt$(A.mb)+' <small>'+pct(A.mb,A.f)+'%</small>',var$(A.mb,B.mb)+' ('+fmt$(B.mb)+')',A.mb>=B.mb?'up':'dn')
+        +comp('Resultado económico',conSigno(A.res),'en '+M.ant.toLowerCase()+' al '+M.diaAnt+': '+conSigno(B.res),A.res>=0?'up':'dn')
+        +'</div>'
+        +tabla(['',esc(cabA),esc(cabB),'Variación'],[
+          ['Facturado',fmt$(A.f),fmt$(B.f),var$(A.f,B.f)],
+          ['· Domiciliario (Home y Otras zonas)',fmt$(A.dom),fmt$(B.dom),var$(A.dom,B.dom)],
+          ['· Institucional (Clubes, Red, B2B)',fmt$(A.inst),fmt$(B.inst),var$(A.inst,B.inst)],
+          ['Entregas',A.ent,B.ent,var$(A.ent,B.ent)],
+          ['Ticket promedio',fmt$(tkA),fmt$(tkB),var$(tkA,tkB)],
+          ['Margen bruto',fmt$(A.mb)+' · '+pct(A.mb,A.f)+'%',fmt$(B.mb)+' · '+pct(B.mb,B.f)+'%',var$(A.mb,B.mb)],
+          ['Variables (bolsas, campañas, delivery)',menos(A.bolsas+A.camp+A.deliv),menos(B.bolsas+B.camp+B.deliv),''],
+          ['= Margen de contribución',conSigno(A.contrib),conSigno(B.contrib),varR(A.contrib,B.contrib)],
+          ['Fijos por los días que van',menos(A.fijos)+' <small>('+M.dia+'/'+M.dias+')</small>',menos(B.fijos)+' <small>('+M.diaAnt+'/'+M.diasAnt+')</small>',''],
+          ['= Resultado económico','<b>'+conSigno(A.res)+'</b>','<b>'+conSigno(B.res)+'</b>',varR(A.res,B.res)]
+        ],[1,2,3],[37,22,22,19])
+        +'<div class="rs-nota">El mes contra '+esc(M.ant.toLowerCase())+' <b>cortado el mismo día</b>: comparar un mes a medias con uno entero siempre da abajo. Mismas reglas que la semana: la venta por el día de entrega, las bolsas por pedido, las campañas y el delivery pagados en esos días, y los fijos del EERR de cada mes repartidos por los días que van'+(A.ing>0||B.ing>0?', más los otros ingresos':'')+'.</div>';
+      h+=section('Cómo viene '+esc(M.mes.toLowerCase()),mh);
+    }
+
     /* Economico */
     if(R.hayMov){
       var E=R.eco;
@@ -27513,7 +27585,7 @@ if('serviceWorker' in navigator){
         +fila('Fijos: la parte de la semana',menos(E.fijos),'',E.fijosMes.map(function(x){return x.dias+' de '+x.diasMes+' días de '+MESES[x.mn-1].toLowerCase()+' ('+fmt$(x.total)+' en el mes)';}).join(' + '))
         +(R.ing.tot>0?fila('Otros ingresos','+'+fmt$(R.ing.tot),'',esc(ingNom)):'')
         +fila('Resultado económico de la semana',conSigno(E.res),'total '+(E.res>=0?'pos':'neg'))
-        +'</div><div class="rs-nota"><b>Económico</b> = lo que ganó la semana: la venta cuenta el día que se entrega y cada costo en el período al que pertenece, no el día que se paga. Bolsas, campañas (créditos de WATI, pauta y folletos) y delivery son <b>variables</b>: crecen con lo que se vende. Los <b>fijos</b> son los del EERR del mes —lo cargado en Egresos hasta hoy, con el piso de sueldo, servicios y alquiler imputado, el monotributo y la amortización— repartidos por día.</div>';
+        +'</div><div class="rs-nota"><b>Económico</b> = lo que ganó la semana: la venta cuenta el día que se entrega y cada costo en el período al que pertenece, no el día que se paga. Bolsas, campañas (créditos de WATI, pauta y folletos) y delivery son <b>variables</b>: crecen con lo que se vende. Los <b>fijos</b> son los del EERR del mes —los planes mensuales y lo demás cargado en Egresos hasta hoy, el sueldo fijo de cada uno, el alquiler imputado, el monotributo y la amortización— repartidos por día.</div>';
       h+=section('Resultado económico',eh);
 
       /* Financiero */
