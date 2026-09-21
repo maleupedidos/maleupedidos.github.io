@@ -20,7 +20,11 @@
      guardar la meta de Clubes NO manda curvas (el backend conserva las que haya);
    · las casas acumuladas no pueden bajar;
    · el origen "cruce" ya no dice que lo deduce una casilla que no existe;
-   · con la tab abierta, `planMes` sale de la cola antes que la caja y las OCs. */
+   · con la tab abierta, `planMes` sale de la cola antes que la caja y las OCs;
+   · (21/9/2026) arriba, lo de TODO Maleu: la facturacion total del mes contra la
+     meta "Total" con la plata de `_rtSumar`, el ritmo medido con los dias CERRADOS
+     (hoy todavia no termino) y los objetivos del equipo, con el +/- que manda solo
+     el avance. */
 'use strict';
 const { abrir, evaluar } = require('./cdp.js');
 const prep = require('./sesion_prep.js');
@@ -62,8 +66,14 @@ const PLAN_SEP = { ok: true, mes: 'Septiembre 2026', yyyy: 2026, mm: 9, diasMes:
   metas: {
     [RETAIL]: { canal: 'Venta Directa', barrio: 'Estancias del Pilar', metaFact: 2000000, metaPedidos: 40, metaTicket: 50000, metaClientes: 0, metaCasas: 20,
       semanales: '4,8,12,16,20', semanalesM: '0,400000,600000,600000,400000', semanalesP: '0,10,10,12,8', notas: 'nota de prueba' },
-    'Clubes|': { canal: 'Clubes', barrio: '', metaFact: 500000, metaPedidos: 5, metaTicket: 100000, metaClientes: 4, metaCasas: 0, semanales: '', semanalesM: '', semanalesP: '', notas: '' }
+    'Clubes|': { canal: 'Clubes', barrio: '', metaFact: 500000, metaPedidos: 5, metaTicket: 100000, metaClientes: 4, metaCasas: 0, semanales: '', semanalesM: '', semanalesP: '', notas: '' },
+    'Total|': { canal: 'Total', barrio: '', metaFact: 3000000, metaPedidos: 0, metaTicket: 0, metaClientes: 0, metaCasas: 0, semanales: '', semanalesM: '', semanalesP: '', notas: '' }
   },
+  objetivos: [
+    { id: 'O-001', periodo: 'Mes', empresa: 'Maleu', foco: 'Vender', objetivo: 'Generar 50 leads nuevos', responsable: 'Vendedor Prueba', medida: 'leads del mes', meta: 50, unidad: 'leads', avance: 10, aporta: '', estado: 'En curso', notas: '' },
+    { id: 'O-002', periodo: 'Semana 38', empresa: 'Maleu', foco: 'Vender', objetivo: 'Generar 20 leads', responsable: 'Vendedor Prueba', medida: 'leads de la semana', meta: 20, unidad: 'leads', avance: 5, aporta: 'O-001', estado: 'En curso', notas: '' },
+    { id: 'O-003', periodo: 'Semana 37', empresa: 'Maleu', foco: 'Eficiencia', objetivo: 'Objetivo viejo', responsable: 'Otro', medida: '', meta: 100, unidad: '%', avance: 100, aporta: '', estado: 'Cumplido', notas: '' }
+  ],
   real: {
     '__hoja:Home|Estancias del Pilar': REAL([220000, 3, 30000, 1]), 'Venta Directa|Estancias del Pilar': REAL([220000, 3, 30000, 1]),
     '__hoja:Home|Pilara': REAL([15000, 1]), 'Venta Directa|Pilara': REAL([15000, 1]),
@@ -199,12 +209,35 @@ const STUB = `
       await ev(cli, `planCerrarMeta()`);
     }
 
+    console.log('\n-- arriba, lo de todo Maleu: el total y los objetivos del equipo --');
+    const TT = await ev(cli, `(function(){var t=(document.getElementById('planTotal')||{}).textContent||'';t=t.replace(/\\s+/g,' ');
+      return {t:t,s13:Math.round(_rtSumar('2026-09-01','2026-09-13').tot.f),s14:Math.round(_rtSumar('2026-09-01','2026-09-14').tot.f),
+        dom:Math.round(_rtSumar('2026-09-01','2026-09-14').dom.f)};})()`);
+    const pesos = n => '$' + Math.round(n).toLocaleString('es-AR');
+    chk('el total del mes es la plata de _rtSumar (Inicio, EERR y PDF) contra la meta "Total"', !!TT && TT.s14 > 0 && TT.t.indexOf(pesos(TT.s14) + ' de $3.000.000') >= 0, TT);
+    chk('el ritmo se mide con los días CERRADOS: al cierre de ayer (día 13) tendría que ir en $1.300.000', !!TT && /al cierre de ayer \(día 13\) tendría que ir en \$1\.300\.000/.test(TT.t), TT && TT.t.slice(0, 300));
+    chk('lo entregado hoy va aparte (si hubo) y el retail es Home + Otras zonas', !!TT && (TT.s14 === TT.s13 ? !/hoy ya van/.test(TT.t) : TT.t.indexOf('hoy ya van ' + pesos(TT.s14 - TT.s13)) >= 0) && TT.t.indexOf('Retail · Home y Otras zonas' + pesos(TT.dom)) >= 0, TT);
+    const EQ = await ev(cli, `(document.getElementById('planEquipo')||{}).textContent||''`);
+    chk('los objetivos: primero los del mes, después la semana en curso, después las viejas', typeof EQ === 'string' && EQ.indexOf('Del mes') >= 0 && EQ.indexOf('Del mes') < EQ.indexOf('Semana 38') && EQ.indexOf('Semana 38') < EQ.indexOf('Semana 37') && /Semana 38 · esta semana/.test(EQ), EQ && EQ.slice(0, 300));
+    chk('cada uno con su avance sobre la meta y su %', /10 \/ 50 leads/.test(EQ) && /20%/.test(EQ) && /5 \/ 20 leads/.test(EQ), EQ && EQ.slice(0, 400));
+    await ev(cli, `window.__posts=[];planObjAvance('O-001',1)`);
+    await esperar(cli, `window.__posts.length>0`, 5000);
+    const PA = await ev(cli, `JSON.stringify({post:window.__posts[0]||null,txt:(document.getElementById('planEquipo')||{}).textContent||''})`);
+    const PAo = JSON.parse(typeof PA === 'string' ? PA : '{}');
+    chk('el + manda SOLO el avance (no pisa el resto del objetivo) y la pantalla dice 11 enseguida',
+      !!PAo.post && PAo.post.action === 'planObjetivoSet' && PAo.post.id === 'O-001' && PAo.post.avance === 11 && Object.keys(PAo.post).filter(k => k !== 'token').sort().join() === 'action,avance,id' && /11 \/ 50 leads/.test(PAo.txt), PAo.post);
+    await ev(cli, `window.__posts=[];planEditarObjetivo('O-002');document.getElementById('objAv').value='7';planGuardarObjetivo('O-002')`);
+    await esperar(cli, `window.__posts.length>0`, 5000);
+    const PG = JSON.parse(await ev(cli, `JSON.stringify(window.__posts[0]||null)`) || 'null') || {};
+    chk('guardar desde el editor manda el objetivo entero, con su semana y a qué aporta', PG.action === 'planObjetivoSet' && PG.id === 'O-002' && PG.avance === 7 && PG.periodo === 'Semana 38' && PG.aporta === 'O-001' && PG.objetivo === 'Generar 20 leads' && PG.mes === 'Septiembre 2026', PG);
+
     console.log('\n-- julio: la meta era del barrio --');
     await ev(cli, `document.getElementById('planMesSel').value='Julio 2026';planLoad()`);
     await esperar(cli, `/Julio/.test((document.querySelector('#planMetaTitle')||{}).textContent||'') || /\\$5\\.000\\.000/.test((document.querySelector('#planResumen')||{}).textContent||'')`, 20000);
     await pausa(500);
     const heroJ = await ev(cli, txt('#planResumen .plan-progress-row'));
     chk('en julio el hero sigue siendo "Retail Home" contra la meta del barrio', /Retail Home/.test(heroJ || '') && /\$5\.000\.000 \/ \$9\.000\.000/.test(heroJ || ''), heroJ);
+    chk('julio no tiene objetivo total: lo dice, con el botón para cargarlo', /Sin objetivo de facturación total para julio/.test(await ev(cli, `(document.getElementById('planTotal')||{}).textContent||''`) || '') && /Cargar objetivo/.test(await ev(cli, `(document.getElementById('planTotal')||{}).textContent||''`) || ''));
     chk('y el boton "Metas del mes" no esta (julio no tiene tramos)', await ev(cli, `document.getElementById('planBtnMetas') ? document.getElementById('planBtnMetas').hidden===true : false`) === true);
 
     const errs = await ev(cli, 'JSON.stringify(Array.isArray(window.__err)?window.__err:["NO HAY __err"])');
