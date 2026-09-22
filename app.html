@@ -11175,7 +11175,7 @@ function loadMiReparto(){
    en `maleu_fresco` (sin el prefijo `mc_`, que `_swrPodar` tira) para que al
    abrir la app diga de cuando es la copia en vez de inventar "ahora". */
 var FRESCO_VIEJO_MIN=20;   /* el mismo umbral que el sello de la Caja */
-var _FRESCO_NOM={pedidos:'Pedidos',caja:'Caja',volcado:'Datos del ERP',ventas:'Ventas',ruta:'Entregas',busqueda:'Abastecimiento',miportal:'Mi Portal',depositos:'Dep\u00f3sitos',carnePiezas:'Piezas de carne',crmClientes:'Clientes',crmProductos:'Productos',ajustes:'Ajustes',productosAnalytics:'Productos',combosEval:'Combos',mireparto:'Mi Reparto'};
+var _FRESCO_NOM={pedidos:'Pedidos',caja:'Caja',volcado:'Datos del ERP',ventas:'Ventas',ruta:'Entregas',busqueda:'Abastecimiento',miportal:'Mi Portal',depositos:'Dep\u00f3sitos',carnePiezas:'Piezas de carne',crmClientes:'Clientes',crmProductos:'Productos',ajustes:'Ajustes',planMes:'Objetivo',productosAnalytics:'Productos',combosEval:'Combos',mireparto:'Mi Reparto'};
 /* El volcado completo (`admin`) trae tambien los pedidos y la caja. */
 var _FRESCO_EN_VOLCADO={pedidos:1,caja:1};
 var _fresco=(function(){
@@ -11216,6 +11216,10 @@ function _fuentesDeTab(tab){
   }
   /* BBDD dice de cuando es su lista (14/9/2026). */
   if(tab==='bbdd'){ var _bt=document.querySelector('#p-bbdd .bbdd-tab.on'); return [(_bt&&_bt.dataset.sub==='productos')?'crmProductos':'crmClientes']; }
+  /* Objetivo mira DOS cosas (22/9/2026): la plata sale del volcado y los
+     objetivos del equipo de `planMes`. Antes esta tab caia en el `return` de
+     abajo y declaraba solo el volcado, asi que el sello de frescura mentia. */
+  if(tab==='planificacion')return ['volcado','planMes'];
   if(tab==='mireparto')return [];
   /* CONTAR y MOVER miran los depositos; RECIBIR CARNE, las piezas. */
   if(tab==='stock'&&typeof ST_TAB==='string'&&ST_TAB!=='productos'){
@@ -11382,7 +11386,7 @@ function _leerVersion(app){
    "El HTML no sabe que version es" dejo de ser cierto: el build le escribe
    adentro el CACHE_NAME de sw-panel.js, el mismo que deploy.sh obliga a subir en
    cada cambio. Si lo publicado dice otra cosa, esta pagina es vieja. Punto. */
-var _APP_CN_PAGINA='maleu-panel-v413';
+var _APP_CN_PAGINA='maleu-panel-v414';
 
 /* Devuelve [{k,v}] si lo publicado no es lo que esta pagina corre. */
 function _chequearVersiones(){
@@ -11716,6 +11720,25 @@ function refreshContextual(){
      (13/9/2026). Iba por loadRapido y pedia pedidos, cobros y OCs de paso. */
   if(active==='caja'||active==='egresos'){
     _recargarCaja().then(function(r){done(r.ok!==false);},function(){done(false);});
+    return;
+  }
+  /* OBJETIVO: los objetivos y la plata, EN PARALELO (22/9/2026).
+     Esta tab no tenia rama propia. Igual se refrescaba: el final generico de
+     esta funcion vuelve a llamar a `go(active)`, y `go('planificacion')` llama
+     a `planLoad()`. O sea que los objetivos SI se actualizaban —me lo demostro
+     la prueba, que no se puso roja cuando saque esta rama para comprobarlo—,
+     pero **recien despues de que volviera el volcado entero**: ~28 s mirando
+     numeros viejos sin saberlo.
+     Aca se piden las dos cosas juntas, y el boton gira hasta que llegan las
+     dos. Lo unico que se pierde de `go()` es `_popularSelectorMes`, que solo
+     rellena el selector de mes y ya esta puesto. */
+  if(active==='planificacion'){
+    var _pp = [];
+    if(typeof planLoad==='function'){ try{ var _r = planLoad(); if(_r && _r.then) _pp.push(_r); }catch(e){} }
+    if(typeof load==='function') _pp.push(load());
+    if(!_pp.length){ done(true); return; }
+    Promise.all(_pp.map(function(x){ return Promise.resolve(x).catch(function(){ return null; }); }))
+      .then(function(){ done(true); }, function(){ done(false); });
     return;
   }
   var usaRapido=(active==='inicio'||active==='pedidos'||active==='pedidoshome'||active==='estancias');
@@ -36200,7 +36223,9 @@ if('serviceWorker' in navigator){
 
     // 2) Traer del backend y actualizar cache + vista. Con reloj: un pedido que no
     //    vuelve dejaba "actualizando…" para siempre y la copia vieja sin avisar.
-    Promise.race([
+    /* Devuelve la promesa (22/9/2026): sin esto el ↻ de Objetivo no tenia forma
+       de saber cuando habia terminado, y dejaba de girar antes de tiempo. */
+    return Promise.race([
       fetch(PLAN_API + '?action=planMes&mes=' + encodeURIComponent(label)).then(function(r){ return r.json(); }),
       new Promise(function(_, no){ setTimeout(function(){ no(new Error('el servidor no contestó en 45 s')); }, 45000); })
     ])
@@ -36221,10 +36246,12 @@ if('serviceWorker' in navigator){
         _planEstado('', null);
         _planRenderAll();
         el('planLoader').style.display='none';
+        try{ if(typeof _marcarFresco==='function') _marcarFresco(['planMes']); }catch(e){}
       })
       .catch(function(err){
         _planSetRefreshing(false);
         el('planLoader').style.display='none';
+        try{ if(typeof _marcarFallo==='function') _marcarFallo(['planMes']); }catch(e){}
         // Con cache mostrada, mejor quedarse con lo viejo que romper la vista, PERO decirlo
         if(!cached) el('planResumen').innerHTML = '<div class="empty"><p>Error: '+esc(err.message)+' <button class="plan-btn-metas" onclick="planLoad()">Reintentar</button></p></div>';
         else _planEstado(err.message, cached);
