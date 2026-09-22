@@ -120,6 +120,16 @@ function escena(reloj, hasta, diasTrans, conCat) {
 
     console.log('\n-- lunes 21/9, 15 h --');
     await abrirEscena(escena([2026, 8, 21, 15, 0, 0], '2026-09-21', 21, false));
+    /* HOY (22/9/2026). El lunes 21 a las 15 h: faltan $2.100.000 al cierre del
+       domingo 20 y quedan 10 días (del 21 al 30), así que hoy tienen que entrar
+       $210.000. Entregado hoy: nada. Cargado sin entregar para hoy: nada. */
+    const HOY = await ev(cli, txt('#planHoy'));
+    chk('HOY dice qué día es y cuánto tiene que entrar hoy para no perder el ritmo',
+      /Hoylunes 21 de septiembre/.test(HOY || '') && /\$210\.000tiene que entrar hoy para no perder el ritmo/.test(HOY || ''), HOY);
+    chk('dice cuánto se entregó hoy y que no hay nada cargado', /\$0 entregado · nada cargado todavía/.test(HOY || ''), HOY);
+    chk('y cuánto falta conseguir hoy', /quedan \$210\.000 por conseguir hoy/.test(HOY || ''), HOY);
+    chk('la tab se llama Objetivo, no Planificación', (await ev(cli, `(document.querySelector('[data-p="planificacion"] .bn-lbl')||{}).textContent`)) === 'Objetivo');
+
     const L = await ev(cli, txt('#planFinde'));
     chk('el título: el fin de semana del 25 al 27/09, el último del mes', /Fin de semana del 25\/09 al 27\/09 · el último del mes/.test(L || ''), L);
     chk('tiene que traer $2.100.000: lo que falta si no se vende nada más hasta el jueves', /Tiene que traer \$2\.100\.000: lo que falta para el objetivo si no se vende nada más hasta el jueves/.test(L || '') && /se recalcula solo/.test(L || ''), L);
