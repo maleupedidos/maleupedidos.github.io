@@ -11330,7 +11330,7 @@ function _leerVersion(app){
    "El HTML no sabe que version es" dejo de ser cierto: el build le escribe
    adentro el CACHE_NAME de sw-panel.js, el mismo que deploy.sh obliga a subir en
    cada cambio. Si lo publicado dice otra cosa, esta pagina es vieja. Punto. */
-var _APP_CN_PAGINA='maleu-panel-v410';
+var _APP_CN_PAGINA='maleu-panel-v411';
 
 /* Devuelve [{k,v}] si lo publicado no es lo que esta pagina corre. */
 function _chequearVersiones(){
@@ -26413,23 +26413,50 @@ function _vListaClick(e){
     var t = (typeof _tabActual === 'function') ? _tabActual() : '';
     if(t === 'estancias' && typeof window.estRefreshActivo === 'function'){ try{ estRefreshActivo(); }catch(e){} }
   }
+  /* EL VIGIA AFLOJA CUANDO NO PASA NADA (22/9/2026) ────────────────────────
+     Medido con la sesion real: `action=ver` se pidio 11 veces en un recorrido y
+     sumo 54 segundos. La pregunta en si es gratis —el backend lee dos valores de
+     cache—, pero Apps Script atiende de a UNO: cada "¿cambio algo?" se pone en
+     la misma fila que el volcado y que la caja, y espera. Un ERP abierto todo el
+     dia preguntaba 90 veces por hora, por celular, sin que pasara nada.
+
+     Ahora, cada vez que la respuesta viene IGUAL, el proximo control se espera
+     un 50% mas, hasta un tope de 5 minutos. Y vuelve a los 40 segundos apenas
+     algo cambia, o cuando volves a la app. O sea: rapido cuando hay movimiento,
+     callado cuando no. La cadena es de setTimeout y no un setInterval, para que
+     nunca se superpongan dos controles ni se pierda el proximo si uno falla. */
+  var VIGIA_MAX = 300000, _vigiaEspera = VIGIA_MS, _vigiaTimer = null;
+  function _vigiaProgramar(ms){
+    clearTimeout(_vigiaTimer);
+    /* El piso es de 800 ms y no de 5 s: `_vigiaAcelerar` pide mirar casi
+       enseguida al volver a la app, y un piso alto lo dejaba esperando. Piso
+       igual hay, para que un bucle no se dispare solo. */
+    _vigiaTimer = setTimeout(_vigiaMirar, Math.max(800, ms || _vigiaEspera));
+  }
+  /* Volver a mirar YA y desde cero: algo cambio, o la persona volvio a la app. */
+  function _vigiaAcelerar(ms){ _vigiaEspera = VIGIA_MS; _vigiaProgramar(ms == null ? 800 : ms); }
   function _vigiaMirar(){
-    if(_verEnVuelo || document.visibilityState !== 'visible') return;
-    if(navigator.onLine === false) return;
+    if(_verEnVuelo){ _vigiaProgramar(); return; }
+    /* Con la app en segundo plano no se programa nada: el `visibilitychange`
+       lo despierta. Sin esto, un celular en el bolsillo seguiria preguntando. */
+    if(document.visibilityState !== 'visible') return;
+    if(navigator.onLine === false){ _vigiaProgramar(); return; }
     try{ if(!localStorage.getItem('maleu_token')) return; }catch(e){}
     _verEnVuelo = true; _vigia.miradas++;
     fetch(API + '?action=ver&t=' + Date.now()).then(function(r){ return r.json(); }).then(function(d){
       if(!d || !d.ok || !d.ver) return;
-      if(_verVista && d.ver !== _verVista){ _verPend = true; _vigia.cambios++; }
+      if(_verVista && d.ver !== _verVista){ _verPend = true; _vigia.cambios++; _vigiaEspera = VIGIA_MS; }
+      else if(_verVista) _vigiaEspera = Math.min(VIGIA_MAX, Math.round(_vigiaEspera * 1.5));
       _verVista = d.ver;
       if(_verPend && _vigiaPuede()){ _verPend = false; _vigiaRefrescar(); }
-    }).catch(function(){}).then(function(){ _verEnVuelo = false; });
+    }).catch(function(){}).then(function(){ _verEnVuelo = false; _vigiaProgramar(); });
   }
-  setInterval(_vigiaMirar, VIGIA_MS);
   setTimeout(_vigiaMirar, 6000);
   document.addEventListener('visibilitychange',function(){
-    if(document.visibilityState === 'visible') setTimeout(_vigiaMirar, 800);
+    if(document.visibilityState === 'visible') _vigiaAcelerar();
   });
+  /* Despues de escribir algo, el otro celular tiene que enterarse rapido. */
+  window._vigiaAcelerar = _vigiaAcelerar;
   window.addEventListener('online',function(){$('dot').className='hdr-dot';_refresh(true);});
   window.addEventListener('offline',function(){$('dot').className='hdr-dot off';});
 
