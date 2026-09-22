@@ -38,6 +38,14 @@ const EVENTOS = [
   { id: 'bbbbbbbb-1111-4222-8333-444455556666', event_code: 'COT-261010-EFGH', status: 'lead', client_name: 'Otro Prueba', event_name: 'Casamiento', event_date: '2026-10-10', guests_expected: 80, revenue_budget: 1840000, cost_budget: 700000, revenue_actual: 0, cost_actual: 0, cash_received: 0, created_at: '2026-09-22T09:00:00Z' },
   { id: 'cccccccc-1111-4222-8333-444455556666', event_code: 'COT-260801-IJKL', status: 'completed', client_name: 'Viejo Prueba', event_name: 'Evento de agosto', event_date: '2026-08-01', guests_expected: 20, revenue_budget: 400000, cost_budget: 200000, revenue_actual: 420000, cost_actual: 210000, cash_received: 420000, created_at: '2026-08-01T10:00:00Z' }
 ];
+/* Cumpleanos inventados. Hoy es el martes 22/9: el foco son los que cumplen
+   entre 18 y 27 dias (la ventana del aviso de los lunes, con margen). */
+const CUMPLES = [
+  { tel: '1155550009', nombre: 'Cumple Hoy', fecha: '22/09', dia: 'martes', dias: 0, cumpleAnios: 30, pedidos: 4, ultima: '01/09/2026', facturado: 200000 },
+  { tel: '1155550001', nombre: 'Ana Prueba', fecha: '12/10', dia: 'lunes', dias: 20, cumpleAnios: 40, pedidos: 6, ultima: '15/09/2026', facturado: 480000 },
+  { tel: '1155550002', nombre: 'Beto Prueba', fecha: '18/10', dia: 'domingo', dias: 26, cumpleAnios: null, pedidos: 2, ultima: '12/09/2026', facturado: 100000 },
+  { tel: '1155550003', nombre: 'Clara Prueba', fecha: '25/10', dia: 'domingo', dias: 33, cumpleAnios: 28, pedidos: 0, ultima: '', facturado: 0 }
+];
 /* Los parametros por defecto del backend (Config_Maleu vacia). */
 const COTIZ_DEF = { PRECIO_CLASICO: 20000, PRECIO_PREMIUM: 23000, PIZZAS_POR_PERSONA: 0.6, PIZZAS_RESERVA: 3,
   COSTO_PIZZA: 3500, COSTO_TOPPINGS: 1800, COSTO_QUESOS: 1200, COSTO_JAMON: 900, COSTO_VERDULERIA: 600,
@@ -63,6 +71,7 @@ function escena(cotiz) {
         var m=url.match(/action=([a-zA-Z_]+)/), a=m?m[1]:'?';
         var cuerpo={ok:false,err:'stub'};
         if(a==='catering') cuerpo={ok:true,events:${JSON.stringify(EVENTOS)},cotiz:${JSON.stringify(cotiz)}};
+        else if(a==='cumplesCatering') cuerpo={ok:true,dias:35,foco:21,lista:${JSON.stringify(CUMPLES)}};
         else if(a==='cateringDetail') cuerpo={ok:true,event:${JSON.stringify(EVENTOS[0])},menu:[],lines:[],payments:[],crew:[],tasks:[]};
         else if(a==='pedidosLight') cuerpo={ts:1,pedidos:[],canales:[],light:true,saludSem:{},saludMes:{},ventasExtra:[]};
         else if(a==='cajaLight') cuerpo={ts:1,caja:{},saldoBase:{},movimientos:[],efMano:[],gastos:[],ingresos:[]};
@@ -215,7 +224,37 @@ const calc = 'JSON.stringify(_catCotizCalc(_catCotizLeer()))';
       LN.map(l => l.line_kind + ':' + l.total_amount));
     chk('después de guardar avisa con el código del evento', /Cotización guardada: COT-261212-WXYZ/.test(await ev(cli, txt('#toast')) || ''), await ev(cli, txt('#toast')));
 
-    /* ── 8. Sin errores en consola ───────────────────────────────── */
+    /* ── 8. Los cumpleaños para ofrecer catering ─────────────────── */
+    console.log('\n-- cumpleaños para ofrecer catering --');
+    await abrirEscena(COTIZ_DEF);
+    chk('el botón 🎂 Cumpleaños está en la cabecera', await ev(cli, `!!Array.prototype.find.call(document.querySelectorAll('#catApp .cat-acc button'),function(b){return /Cumplea/.test(b.textContent);})`) === true);
+    await ev(cli, `catCumples()`);
+    chk('se abre la lista', await esperar(cli, `!!document.querySelector('#catApp .cum-lista')`, 15000) === true);
+    let filas = JSON.parse(await ev(cli, `JSON.stringify([].map.call(document.querySelectorAll('#catApp .cum-fila'),function(f){return f.textContent.replace(/\\s+/g,' ').trim();}))`));
+    chk('arranca en "a tres semanas": Ana (20 días) y Beto (26), no el de hoy ni el de 33 días',
+      filas.length === 2 && /Ana Prueba/.test(filas[0]) && /Beto Prueba/.test(filas[1]), filas);
+    chk('cada uno dice cuándo cumple, cuántos años y en cuántos días', /lunes 12\/10 · cumple 40/.test(filas[0]) && /en 20 días/.test(filas[0]), filas[0]);
+    chk('y qué cliente es: pedidos, facturado y última compra', /6 pedidos · \$480\.000 · última el 15\/09\/2026/.test(filas[0]), filas[0]);
+    chk('el que nunca compró no se esconde: se ve en la lista larga',
+      (await ev(cli, `catCumSolo(false),[].slice.call(document.querySelectorAll('#catApp .cum-fila')).map(function(f){return f.textContent;}).join('|')`) || '').indexOf('Todavía no compró') > -1);
+    filas = JSON.parse(await ev(cli, `JSON.stringify([].map.call(document.querySelectorAll('#catApp .cum-fila'),function(f){return f.textContent.replace(/\\s+/g,' ').trim();}))`));
+    chk('la lista larga trae los 4, y el de hoy dice "hoy"', filas.length === 4 && /hoy/.test(filas[0]) && /Cumple Hoy/.test(filas[0]), filas.map(f => f.slice(0, 30)));
+    chk('los de la ventana de 3 semanas quedan marcados también en la lista larga',
+      await ev(cli, `document.querySelectorAll('#catApp .cum-fila.foco').length`) === 2);
+
+    const copiado = await ev(cli, `(function(){window.__copiado=null;
+      navigator.clipboard.writeText=function(t){window.__copiado=t;return Promise.resolve();};
+      catCumCopiar(); return 1;})()`);
+    await pausa(300);
+    chk('copia los teléfonos de lo que se está viendo, separados por coma',
+      await ev(cli, `window.__copiado`) === '1155550009, 1155550001, 1155550002, 1155550003', await ev(cli, `window.__copiado`));
+    chk('y avisa cuántos copió, para pegarlos en WATI', /Copiados 4 teléfonos/.test(await ev(cli, txt('#toast')) || ''), await ev(cli, txt('#toast')));
+    chk('NO hay ni un link de WhatsApp uno a uno en la pantalla',
+      await ev(cli, `document.querySelectorAll('#catApp a[href*="wa.me"],#catApp a[href*="api.whatsapp"]').length`) === 0);
+    chk('dice que el mensaje lo arma WATI y que nunca va uno por uno',
+      /WATI/.test(await ev(cli, txt('.cum-pie')) || '') && /nunca un mensaje uno por uno/.test(await ev(cli, txt('.cum-pie')) || ''), await ev(cli, txt('.cum-pie')));
+
+    /* ── 9. Sin errores en consola ───────────────────────────────── */
     console.log('\n-- la consola --');
     const errs = JSON.parse(await ev(cli, `JSON.stringify(window.__err||['SIN __err'])`));
     chk('ni un error en consola', Array.isArray(errs) && errs.length === 0, errs);
