@@ -8736,13 +8736,38 @@ function refreshContextual(){
      Aca se piden las dos cosas juntas, y el boton gira hasta que llegan las
      dos. Lo unico que se pierde de `go()` es `_popularSelectorMes`, que solo
      rellena el selector de mes y ya esta puesto. */
+  /* Cada fuente cuenta su propia suerte (23/9/2026). Esta rama tragaba los dos
+     errores que puede haber —un `catch` que devolvia `null`, y un `load()` que
+     RESUELVE `{ok:false}` en vez de rechazar— y terminaba siempre en
+     `done(true)`. O sea que si los objetivos no llegaban, el boton estampaba la
+     hora igual y decia "recien" con los numeros de antes en pantalla.
+     Mentir en verde es la unica mentira que este sello no puede permitirse: el
+     ↻ existe justo para poder decir "no pude". Reproducido y medido en
+     `probar_objetivo_sello.js`, que se pone rojo si esto vuelve atras. */
   if(active==='planificacion'){
-    var _pp = [];
-    if(typeof planLoad==='function'){ try{ var _r = planLoad(); if(_r && _r.then) _pp.push(_r); }catch(e){} }
-    if(typeof load==='function') _pp.push(load());
-    if(!_pp.length){ done(true); return; }
-    Promise.all(_pp.map(function(x){ return Promise.resolve(x).catch(function(){ return null; }); }))
-      .then(function(){ done(true); }, function(){ done(false); });
+    var _pfP=[], _pfQ=[];
+    if(typeof planLoad==='function'){
+      _pfQ.push('planMes');
+      _pfP.push(Promise.resolve().then(planLoad).then(function(r){ return r!==false; },function(){ return false; }));
+    }
+    if(typeof load==='function'){
+      _pfQ.push('volcado');
+      _pfP.push(Promise.resolve().then(load).then(function(r){ return !(r && r.ok===false); },function(){ return false; }));
+    }
+    if(!_pfP.length){ done(true); return; }
+    Promise.all(_pfP).then(function(res){
+      var _mal=[], _bien=[];
+      _pfQ.forEach(function(f,i){ (res[i] ? _bien : _mal).push(f); });
+      if(!_mal.length) return done(true);
+      /* Que falto, con nombre de persona: en el celular el detalle vive en el
+         tooltip del boton, que en un telefono no se puede abrir. */
+      var _nom={ planMes:'los objetivos', volcado:'la plata del mes' };
+      done(false,'⚠️ No pude actualizar '+_mal.map(function(f){ return _nom[f]||f; }).join(' ni ')+' — seguís viendo lo de antes');
+      /* `done(false)` marca las dos fuentes como fallidas. La que SI llego se
+         vuelve a sellar aca: el boton sigue en rojo —algo falta— pero el detalle
+         deja de acusar a la que anduvo bien. */
+      if(_bien.length){ try{ _marcarFresco(_bien); }catch(e){} }
+    },function(){ done(false); });
     return;
   }
   var usaRapido=(active==='inicio'||active==='pedidos'||active==='pedidoshome'||active==='estancias');
@@ -32875,10 +32900,15 @@ if('serviceWorker' in navigator){
           var motivo = (d && d.forbidden) ? 'tu usuario no tiene permiso para Planificación' : ((d && (d.error || d.err)) || 'el servidor contestó un error');
           if(!cached) el('planResumen').innerHTML = '<div class="empty"><p>'+esc(motivo)+'</p></div>';
           else _planEstado(motivo, cached);
-          return;
+          /* Un "no" del backend es una actualizacion que NO salio (23/9/2026):
+             hasta hoy salia por aca sin sellar nada, y el ↻ lo contaba como
+             exito. Ver el bloque de Objetivo en refreshContextual. */
+          try{ if(typeof _marcarFallo==='function') _marcarFallo(['planMes']); }catch(e){}
+          return false;
         }
-        // Si el usuario ya cambio de mes mientras cargaba, no pisar la vista
-        if(planCurMes && planCurMes.label !== label) return;
+        // Si el usuario ya cambio de mes mientras cargaba, no pisar la vista.
+        // No es una falla: es que el pedido quedo viejo. Cuenta como exito.
+        if(planCurMes && planCurMes.label !== label) return true;
         d._guardado = Date.now();
         planData = d;
         try { localStorage.setItem(cacheKey, JSON.stringify(d)); } catch(e){}
@@ -32886,6 +32916,7 @@ if('serviceWorker' in navigator){
         _planRenderAll();
         el('planLoader').style.display='none';
         try{ if(typeof _marcarFresco==='function') _marcarFresco(['planMes']); }catch(e){}
+        return true;
       })
       .catch(function(err){
         _planSetRefreshing(false);
@@ -32894,6 +32925,7 @@ if('serviceWorker' in navigator){
         // Con cache mostrada, mejor quedarse con lo viejo que romper la vista, PERO decirlo
         if(!cached) el('planResumen').innerHTML = '<div class="empty"><p>Error: '+esc(err.message)+' <button class="plan-btn-metas" onclick="planLoad()">Reintentar</button></p></div>';
         else _planEstado(err.message, cached);
+        return false;
       });
   };
   /* El cartel de arriba: vacio si lo que se ve es de recien; si es una copia que no se
