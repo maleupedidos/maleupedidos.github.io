@@ -59,7 +59,8 @@ const STUB = `
       replica:{ok:true,configurado:true,
         crm:{lastOkAt:String(ahora-9*60000)},
         inventario:{lastOkAt:String(ahora-4*60000)},
-        pedidos:{lastOkAt:String(ahora-2*60000)}}};
+        pedidos:{lastOkAt:String(ahora-2*60000)},
+        caja:{lastOkAt:String(ahora-1*60000)}}};
     if(window.__caso==='coinciden'){
       base.cruzado='ok';
       base.cruce={ok:true,lastAt:new Date(ahora-30000).toISOString(),lastErrorAt:'',ultimo:{ok:true,canales:canalesOk}};
@@ -72,7 +73,7 @@ const STUB = `
       base.cruce={ok:true,lastAt:'',lastErrorAt:'',ultimo:null};
     } else if(window.__caso==='sinConectar'){
       base.cruzado='sin configurar';
-      base.replica={ok:true,configurado:false,crm:{},inventario:{},pedidos:{}};
+      base.replica={ok:true,configurado:false,crm:{},inventario:{},pedidos:{},caja:{}};
       base.cruce={ok:true,lastAt:'',lastErrorAt:'',ultimo:null};
     }
     return base;
@@ -147,7 +148,8 @@ async function correr(cli, caso) {
     chk('con la plata de los dos lados', /\$56\.526\.275/.test(a.salida) && /\$56\.526\.274/.test(a.salida), a.salida);
     chk('ninguna fila marcada en rojo', !a.filas.some(f => /^mal\|/.test(f)), a.filas);
     chk('el estado dice cuándo fue la última copia de cada dominio',
-      /pedidos: <b>/.test(a.estado) && /stock: <b>/.test(a.estado) && /clientes: <b>/.test(a.estado), a.estado);
+      /pedidos: <b>/.test(a.estado) && /stock: <b>/.test(a.estado) &&
+      /clientes: <b>/.test(a.estado) && /caja: <b>/.test(a.estado), a.estado);
     chk('y no dice "todavía no" cuando hay sellos', !/todav/.test(a.estado), a.estado);
     chk('el botón vuelve a quedar usable', /Comparar la planilla/.test(a.btn), a.btn);
     const posts = await ev(cli, `JSON.stringify(window.__posts)`);
