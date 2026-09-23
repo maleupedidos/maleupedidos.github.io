@@ -51,7 +51,22 @@ const CUENTAS = [
 const pad = n => String(n).padStart(2, '0');
 const MOVS = [];
 let vueltosIn = 0, vueltosOut = 0, nVueltos = 0;
+/* El movimiento mas nuevo que fabrica esta prueba tiene que quedar SIEMPRE en
+   el pasado. (23/9/2026)
+
+   Estaba anclado a hoy a las 20:00 a secas, asi que corriendola de dia el
+   movimiento mas nuevo del stub quedaba EN EL FUTURO. La lista de movimientos
+   ordena por `ts` de mas nuevo a mas viejo, y entonces el gasto que la prueba
+   carga —con la hora de ahora— quedaba debajo de un cobro fechado a las 20:00.
+   El chequeo "el gasto recien cargado queda ARRIBA de la lista" se ponia rojo
+   acusando al ERP, que hacia lo correcto: a las 13:08 un movimiento de las
+   20:00 va primero. La prueba solo pasaba despues de las 20:00.
+
+   Se mantienen las 20:00 como hora base —hay chequeos que cuentan 15
+   movimientos por dia, con media hora entre uno y otro— pero si esa hora
+   todavia no llego, la tanda se corre al dia anterior. */
 const hoy = new Date(); hoy.setHours(20, 0, 0, 0);
+if (hoy.getTime() >= Date.now() - 60000) hoy.setDate(hoy.getDate() - 1);
 for (let i = 0; i < 1500; i++) {
   const d = new Date(hoy.getTime() - Math.floor(i / 15) * 86400000 - (i % 15) * 1800000);
   const f = pad(d.getDate()) + '/' + pad(d.getMonth() + 1) + '/' + d.getFullYear() + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
