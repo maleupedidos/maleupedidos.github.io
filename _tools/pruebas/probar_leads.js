@@ -174,7 +174,11 @@ const STUB = `
     if (!await esperar(cli, `/O-001/.test((document.getElementById('planEquipo')||{}).textContent||'') && /lo cuenta CRM/.test((document.getElementById('planEquipo')||{}).textContent||'')`, 30000)) throw new Error('planificacion no pinto los objetivos: ' + await ev(cli, txt('#planEquipo')));
     const O = JSON.parse(await ev(cli, `JSON.stringify([].map.call(document.querySelectorAll('#planEquipo .plan-obj'),function(e){return {t:e.textContent.replace(/\\s+/g,' ').trim(),b:e.querySelectorAll('.plan-obj-q button').length};}))`));
     const de = id => O.find(x => x.t.indexOf(id) >= 0) || {};
-    chk('el del mes de Lucas: 3 de 50 (los de septiembre, sin el que ya era cliente), sin +/−', /3 \/ 50 leads\s*lo cuenta CRM › Leads/.test(de('O-001').t) && de('O-001').b === 0, de('O-001'));
+    /* 3 son los de septiembre sin el que ya era cliente. Desde el 23/9/2026 un
+       objetivo en leads cuenta los de TODO el equipo, no los de su responsable;
+       acá no se nota porque a esta altura de la prueba los de septiembre son
+       todos de Lucas. Esa diferencia la mide `probar_leads_rapido.js`. */
+    chk('el del mes: 3 de 50 (los de septiembre, sin el que ya era cliente), sin +/−', /3 \/ 50 leads\s*lo cuenta CRM › Leads/.test(de('O-001').t) && de('O-001').b === 0, de('O-001'));
     chk('el de la semana 39: 2 (los del 21/9), aunque la hoja diga 0', /2 \/ 20 leads/.test(de('O-002').t), de('O-002'));
     chk('el de la semana 38: 1 (el del 15/9), aunque la hoja diga 7', /1 \/ 20 leads/.test(de('O-003').t), de('O-003'));
     chk('un objetivo en % sigue con su +/− y su avance de la hoja', de('O-004').b === 2 && /30 \/ 100%/.test(de('O-004').t), de('O-004'));
