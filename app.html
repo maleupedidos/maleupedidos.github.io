@@ -11200,10 +11200,11 @@ function _fuentesDeTab(tab){
     if(_vs==='combos')return ['combosEval'];
     return ['ventas'];
   }
-  /* Objetivo mira DOS cosas (22/9/2026): la plata sale del volcado y los
-     objetivos del equipo de `planMes`. Antes esta tab caia en el `return` de
-     abajo y declaraba solo el volcado, asi que el sello de frescura mentia. */
-  if(tab==='planificacion')return ['volcado','planMes'];
+  /* Objetivo mira DOS cosas: la plata, que sale de los pedidos, y los objetivos
+     del equipo, que salen de `planMes`. (22/9/2026; el 23/9 dejo de ser el
+     volcado entero y paso a ser `pedidos` — ver la rama de esta tab en
+     refreshContextual.) */
+  if(tab==='planificacion')return ['pedidos','planMes'];
   if(tab==='mireparto')return [];
   /* CONTAR y MOVER miran los depositos; RECIBIR CARNE, las piezas. */
   if(tab==='stock'&&typeof ST_TAB==='string'&&ST_TAB!=='productos'){
@@ -11370,7 +11371,7 @@ function _leerVersion(app){
    "El HTML no sabe que version es" dejo de ser cierto: el build le escribe
    adentro el CACHE_NAME de sw-panel.js, el mismo que deploy.sh obliga a subir en
    cada cambio. Si lo publicado dice otra cosa, esta pagina es vieja. Punto. */
-var _APP_CN_PAGINA='maleu-panel-v416';
+var _APP_CN_PAGINA='maleu-panel-v417';
 
 /* Devuelve [{k,v}] si lo publicado no es lo que esta pagina corre. */
 function _chequearVersiones(){
@@ -11718,18 +11719,41 @@ function refreshContextual(){
       _pfQ.push('planMes');
       _pfP.push(Promise.resolve().then(planLoad).then(function(r){ return r!==false; },function(){ return false; }));
     }
-    if(typeof load==='function'){
-      _pfQ.push('volcado');
-      _pfP.push(Promise.resolve().then(load).then(function(r){ return !(r && r.ok===false); },function(){ return false; }));
+    /* LOS PEDIDOS, NO EL VOLCADO ENTERO (23/9/2026). Esta tab pedia `load()`,
+       o sea `action=admin`: 924 KB y ~28 s. Dos motivos por los que era lo peor
+       que podia pedir:
+
+         1. de todo eso usa NUEVE cosas, y las nueve son `D.pedidos` (mas
+            `D.ventasExtra`, que usa el motor de plata). Stock, OCs, caja,
+            ingresos, egresos, movimientos y deuda de vendedores no los toca;
+         2. el volcado completo **no tiene cache del lado del servidor** — su
+            clave es `null` en `_doGetAdmin`, asi que se recalcula entero cada
+            vez. Y ademas es la anteultima de `CALENTAR_ORDEN`, con lo cual el
+            calentador no la alcanza nunca (ver la memoria del `admin` sin foto).
+
+       `pedidosLight` trae los mismos `pedidos` mas `ventasExtra`, guarda en
+       `admin_light_v1` por 15 min y el propio backend lo anota: "bajamos de ~12s
+       a ~3s". Es lo mismo que ya piden Inicio, Pedidos y Estancias, que calculan
+       la plata del mes con el MISMO `_rtSumar`. */
+    var _pfPed = (typeof loadRapido==='function')
+      ? function(){ return loadRapido({soloPedidos:true}); }
+      : ((typeof load==='function') ? load : null);
+    if(_pfPed){
+      _pfQ.push('pedidos');
+      _pfP.push(Promise.resolve().then(_pfPed).then(function(r){ return !(r && r.ok===false); },function(){ return false; }));
     }
     if(!_pfP.length){ done(true); return; }
     Promise.all(_pfP).then(function(res){
+      /* Las dos llegaron: recien ahora HOY y el fin de semana se pueden dibujar
+         con los pedidos de ahora. Sin esto, el que volvia primero pintaba con
+         los del otro todavia viejos. */
+      try{ if(typeof window.planRepintarPorD==='function') window.planRepintarPorD(); }catch(e){}
       var _mal=[], _bien=[];
       _pfQ.forEach(function(f,i){ (res[i] ? _bien : _mal).push(f); });
       if(!_mal.length) return done(true);
       /* Que falto, con nombre de persona: en el celular el detalle vive en el
          tooltip del boton, que en un telefono no se puede abrir. */
-      var _nom={ planMes:'los objetivos', volcado:'la plata del mes' };
+      var _nom={ planMes:'los objetivos', pedidos:'la plata del mes', volcado:'la plata del mes' };
       done(false,'⚠️ No pude actualizar '+_mal.map(function(f){ return _nom[f]||f; }).join(' ni ')+' — seguís viendo lo de antes');
       /* `done(false)` marca las dos fuentes como fallidas. La que SI llego se
          vuelve a sellar aca: el boton sigue en rojo —algo falta— pero el detalle
@@ -26247,10 +26271,12 @@ function _vListaClick(e){
       Promise.resolve(_recargarCaja()).then(function(){}, function(){}).then(function(){ _refrescandoAuto = false; });
       return;
     }
-    /* Stock, Planificacion, Proveedores y otras tabs que viven del volcado no
-       se actualizan con `loadRapido`: ese camino solo trae pedidos/caja. Si ya
-       hay una copia D, pedir el admin completo las renueva sin duplicar la
-       carga de arranque que hace _pedirD(). */
+    /* Stock, Proveedores y otras tabs que viven del volcado no se actualizan
+       con `loadRapido`: ese camino solo trae pedidos/caja. Si ya hay una copia
+       D, pedir el admin completo las renueva sin duplicar la carga de arranque
+       que hace _pedirD().
+       Objetivo salio de esta lista el 23/9/2026: solo usa `D.pedidos`, asi que
+       ahora declara `pedidos` y cae en `loadRapido`, que esta cacheado. */
     if(_fuentesRefrescoAuto(_tab).indexOf('volcado')>=0 && D && typeof load === 'function'){
       _refrescandoAuto = true;
       _anotarInicioRefresco(_tab);
@@ -36531,8 +36557,18 @@ if('serviceWorker' in navigator){
      acá porque `planData` vive en este scope y desde afuera no se ve. */
   window.planRepintarPorD = function(){
     if(!planData || !planData.ok) return;
-    /* El error NO se traga: un repintado que falla en silencio deja la pantalla
+    /* HOY y el fin de semana entraron el 23/9/2026, y faltaban desde que se
+       crearon. Los dos se calculan con `_rtSumar` sobre `D.pedidos`, o sea que
+       son JUSTO los que cambian cuando llegan pedidos nuevos — y eran los dos
+       unicos que esta funcion no repintaba. El renglon HOY se quedaba con la
+       foto del momento en que se habian pedido los objetivos: entraba una venta,
+       el resto de la tab se movia, y "entregado hoy" seguia igual.
+       Van PRIMERO y cada uno en su try: son los que Tadeo mira todos los dias.
+
+       El error NO se traga: un repintado que falla en silencio deja la pantalla
        vacia y parece que la tab no tiene datos. */
+    try{ renderHoy(); }   catch(e){ console.error('planRepintarPorD -> hoy', e); }
+    try{ renderFinde(); } catch(e){ console.error('planRepintarPorD -> finde', e); }
     try{ renderTotal(); renderObjetivo(); renderAcciones(); renderOrigen(); }
     catch(e){ console.error('planRepintarPorD ->', e); }
   };

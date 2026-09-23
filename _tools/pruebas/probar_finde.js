@@ -130,21 +130,17 @@ function escena(reloj, hasta, diasTrans, conCat) {
     chk('y cuánto falta conseguir hoy', /quedan \$210\.000 por conseguir hoy/.test(HOY || ''), HOY);
     chk('la tab se llama Objetivo, no Planificación', (await ev(cli, `(document.querySelector('[data-p="planificacion"] .bn-lbl')||{}).textContent`)) === 'Objetivo');
 
-    /* EL BOTÓN ACTUALIZAR (22/9/2026). Lo que se mide es el ORDEN: los objetivos
-       tienen que pedirse SIN esperar el volcado. Antes se pedían igual —el final
-       de `refreshContextual` vuelve a llamar a `go(active)`— pero recién después
-       del volcado entero, o sea ~28 s mirando metas viejas sin saberlo.
-       Medir "¿pidió planMes?" NO sirve acá: da verde con y sin el arreglo. */
-    chk('la tab declara sus dos fuentes: el volcado y los objetivos',
-      (await ev(cli, `JSON.stringify(_fuentesDeTab('planificacion'))`)) === '["volcado","planMes"]',
-      await ev(cli, `JSON.stringify(_fuentesDeTab('planificacion'))`));
+    /* EL BOTÓN ACTUALIZAR. Qué pide y qué dice cuando algo falla se mide en
+       `probar_objetivo_sello.js`, que para eso puede romper cada fuente por
+       separado. Acá quedó sólo que el botón termine: esta prueba es la del fin
+       de semana, y el ↻ entra nada más que como vecino.
+       (Las dos comprobaciones que vivían acá —"declara volcado y planMes" y
+       "pide planMes antes que admin"— se mudaron el 23/9/2026, cuando la tab
+       dejó de pedir el volcado entero y pasó a pedir `pedidosLight`.) */
     await ev(cli, `window.__gets=[]`);
     await ev(cli, `refreshContextual()`);
     await esperar(cli, `(window.__gets||[]).indexOf('planMes')>=0`, 30000);
     await pausa(800);
-    const pedidos = JSON.parse(await ev(cli, `JSON.stringify(window.__gets||[])`));
-    chk('tocar ↻ en Objetivo pide los objetivos SIN esperar el volcado',
-      pedidos.indexOf('planMes') >= 0 && pedidos.indexOf('planMes') < pedidos.indexOf('admin'), pedidos);
     chk('y el botón deja de girar cuando llegaron las dos cosas',
       await esperar(cli, `!document.getElementById('hdrRefresh') || !document.getElementById('hdrRefresh').classList.contains('spinning')`, 30000) === true);
     await pausa(500);
