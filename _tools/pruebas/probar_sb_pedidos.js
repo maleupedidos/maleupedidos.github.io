@@ -60,7 +60,15 @@ const ctx = {
   _frescoEnVuelo(f, d) { ctx._vuelo.push({ f: f, d: d }); },
   render() { ctx._renders++; },
   _hayEditorAbierto() { return ctx._editorAbierto; },
-  localStorage: { getItem: () => '', setItem() {} },
+  /* Guarda de verdad. Un localStorage que devuelve siempre '' no puede probar
+     que el permiso sobreviva a cerrar la app — daria verde sin mirar nada. */
+  _ls: {},
+  localStorage: {
+    getItem: k => (Object.prototype.hasOwnProperty.call(ctx._ls, k) ? ctx._ls[k] : null),
+    setItem(k, v) { ctx._ls[k] = String(v); },
+    removeItem(k) { delete ctx._ls[k]; }
+  },
+  SESSION: { usuario: 'tadeo' },
   fetch(url, init) {
     llamadas.push(url);
     if (url.indexOf('action=sbToken') >= 0) {
@@ -75,17 +83,22 @@ const ctx = {
 vm.createContext(ctx);
 vm.runInContext([
   'var _sbPerm=null,_sbPermHasta=0,_sbPidiendo=null;',
+  (src.match(/\nvar _SB_TOK_LS=[^;]*;/) || [''])[0],
+  sacar('_sbTokGuardar'), sacar('_sbTokLeer'), sacar('_sbTokBorrar'),
   sacar('_sbPermiso'),
   (src.match(/\nvar _SB_DIAS=\[[^\]]*\];/) || [''])[0],
   sacar('_sbDia'), sacar('_sbDdMm'), sacar('_sbAPedido'), sacar('_sbPedidos'), sacar('_sbAdelanto'),
   'var _sbCambioLocal=0;',
   (src.match(/\nvar _SB_ESPERA_TRAS_CAMBIO=[^;]*;/) || [''])[0],
-  sacar('_sbPuedePisar'), sacar('_sbEdad'), sacar('_sbCompletar'), sacar('_sbRefrescoPedidos'),
+  sacar('_sbPuedePisar'), sacar('_sbEdad'), sacar('_sbCompletar'),
+  sacar('_sbClavePedido'), sacar('_sbFusionar'), sacar('_sbRefrescoPedidos'),
 ].join('\n'), ctx);
 
 const tocarAhora = ms => vm.runInContext('_sbCambioLocal=' + ms + ';', ctx);
 
-const limpiar = () => vm.runInContext('_sbPerm=null;_sbPermHasta=0;_sbPidiendo=null;', ctx);
+const limpiar = () => { ctx._ls = {}; vm.runInContext('_sbPerm=null;_sbPermHasta=0;_sbPidiendo=null;', ctx); };
+/* Cerrar y volver a abrir la app: se pierde la memoria, NO el localStorage. */
+const reabrir = () => vm.runInContext('_sbPerm=null;_sbPermHasta=0;_sbPidiendo=null;', ctx);
 
 (async function () {
   console.log('\n== La lista de Pedidos desde Supabase ==\n');
@@ -173,17 +186,131 @@ const limpiar = () => vm.runInContext('_sbPerm=null;_sbPermHasta=0;_sbPidiendo=n
   const n2 = llamadas.filter(u => u.indexOf('sbToken') >= 0).length;
   chk('el permiso se pide UNA vez y se reusa una hora', n1 === 1 && n2 === 1, { n1, n2 });
 
+  /* ── El permiso sobrevive a cerrar la app (24/9/2026) ──
+     Vivía sólo en memoria: cada apertura lo pedía de cero, y medido en un
+     Chrome real eso eran 7.572 ms de uno de los DOS cupos de la cola, justo
+     en el arranque. `reabrir()` pierde la memoria pero NO el localStorage,
+     que es exactamente lo que pasa al cerrar y abrir la PWA. */
+  console.log('\n-- el permiso sobrevive a cerrar la app --');
+  limpiar(); reset(); ctx.D = null;
+  await ctx._sbAdelanto();
+  const _t1 = llamadas.filter(u => u.indexOf('sbToken') >= 0).length;
+  reabrir();                                  // cierra y abre: se va la memoria
+  ctx.D = null;
+  await ctx._sbAdelanto();
+  const _t2 = llamadas.filter(u => u.indexOf('sbToken') >= 0).length;
+  chk('al reabrir no se vuelve a pedir: sale del guardado', _t1 === 1 && _t2 === 1, { _t1, _t2 });
+
+  /* Atado al usuario. Hoy sólo `tadeo` recibe permiso, así que reusar el de
+     otro sería darle un acceso que el backend NO le dio. */
+  reabrir(); ctx.SESSION = { usuario: 'luqui' }; ctx.D = null;
+  await ctx._sbAdelanto();
+  const _t3 = llamadas.filter(u => u.indexOf('sbToken') >= 0).length;
+  chk('si en el mismo teléfono entra OTRO usuario, no se le presta', _t3 === 2, { _t3 });
+  ctx.SESSION = { usuario: 'tadeo' };
+
+  /* Vencido: no se usa. Un token de hace dos horas ya no vale contra Supabase,
+     y usarlo sería pedir con un 401 garantizado en vez de renovarlo. */
+  limpiar(); reset(); ctx.D = null;
+  await ctx._sbAdelanto();
+  const _g = JSON.parse(ctx._ls['mc_sbtok']);
+  ctx._ls['mc_sbtok'] = JSON.stringify(Object.assign({}, _g, { hasta: Date.now() - 1000 }));
+  reabrir(); ctx.D = null;
+  await ctx._sbAdelanto();
+  const _t4 = llamadas.filter(u => u.indexOf('sbToken') >= 0).length;
+  chk('un permiso vencido no se usa: se pide uno nuevo', _t4 === 2, { _t4 });
+
+  /* Un "no" del backend borra lo guardado. Si le sacaron el permiso a este
+     usuario, seguir con el de ayer sería pasar por arriba de esa decisión. */
+  limpiar(); reset(); ctx.D = null;
+  await ctx._sbAdelanto();
+  chk('con permiso, queda guardado', !!ctx._ls['mc_sbtok'], Object.keys(ctx._ls));
+  reabrir(); reset({ permiso: false }); ctx._ls['mc_sbtok'] = JSON.stringify(
+    { u: 'tadeo', sb: { token: 'VIEJO', url: 'https://p.supabase.co', key: 'k' }, hasta: 0 });
+  ctx.D = null;
+  await ctx._sbAdelanto();
+  chk('si el ERP le dice que no, se borra el guardado', !ctx._ls['mc_sbtok'], ctx._ls['mc_sbtok']);
+
+  /* El almacenamiento puede fallar (ventana privada, sitio bloqueado). Eso NO
+     puede romper la pantalla: se pide el permiso como siempre. */
+  limpiar(); reset(); ctx.D = null;
+  const _lsOrig = ctx.localStorage;
+  ctx.localStorage = { getItem() { throw new Error('bloqueado'); },
+                       setItem() { throw new Error('bloqueado'); },
+                       removeItem() { throw new Error('bloqueado'); } };
+  const _sinLs = await ctx._sbAdelanto();
+  ctx.localStorage = _lsOrig;
+  chk('sin poder guardar nada, el atajo funciona igual', _sinLs === true, _sinLs);
+
   /* ══ EL REFRESCO: LOS CUATRO FRENOS ════════════════════════════════════
      Esto pisa la lista que ya está en pantalla, así que acá es donde un error
      se lleva plata de la vista sin avisar. Cada freno tiene su assert. */
-  console.log('\n-- el refresco pisa la lista, con frenos --');
+  console.log('\n-- el refresco FUSIONA sobre la lista, con frenos --');
 
+  /* FUSIONAR, NO PISAR (24/9/2026). Supabase trae los 400 más nuevos y en la
+     planilla hay 1.264: asignar la lista derecho borraba 864 pedidos de la
+     pantalla y de todos los totales hasta que llegara Google. Se ve midiendo
+     el botón en un Chrome real: la lista arrancaba en 400 y terminaba en 1.264.
+     Acá está la forma chica del mismo problema — un pedido que Supabase NO
+     trajo tiene que seguir estando. */
   limpiar(); reset(); tocarAhora(0);
-  ctx.D = { pedidos: [{ n: 'VIEJO' }] }; ctx._renders = 0;
-  chk('SÍ reemplaza una lista que ya estaba (esto es lo nuevo)',
-    (await ctx._sbRefrescoPedidos({ llego: false })) === true
-    && ctx.D.pedidos.length === 2 && ctx.D.pedidos[0].n === '1023' && ctx._renders === 1,
+  ctx.D = { pedidos: [{ h: 'Home', n: 'VIEJO' }] }; ctx._renders = 0;
+  const _fus = (await ctx._sbRefrescoPedidos({ llego: false }));
+  chk('fusiona: el que Supabase no trajo NO desaparece',
+    _fus === true && ctx.D.pedidos.length === 3
+    && ctx.D.pedidos.some(p => p.n === 'VIEJO') && ctx._renders === 1,
     ctx.D.pedidos.map(p => p.n));
+  chk('y los que sí trajo están',
+    ctx.D.pedidos.some(p => p.n === '1023') && ctx.D.pedidos.some(p => p.n === '-'),
+    ctx.D.pedidos.map(p => p.n));
+
+  /* El mismo pedido por las dos puntas: gana el de Supabase y NO se duplica.
+     Si se duplicara, el conteo de "+N pedidos nuevos" del botón mentiría. */
+  limpiar(); reset(); tocarAhora(0);
+  ctx.D = { pedidos: [{ h: 'Home', n: '1023', c: 'NOMBRE VIEJO' }] };
+  await ctx._sbRefrescoPedidos({ llego: false });
+  chk('un pedido que viene por las dos puntas se actualiza, no se duplica',
+    ctx.D.pedidos.filter(p => p.n === '1023').length === 1
+    && ctx.D.pedidos.filter(p => p.n === '1023')[0].c === 'Sofía M',
+    ctx.D.pedidos.map(p => p.n + ':' + (p.c || '')));
+
+  /* LOS 14 CANCELADOS SIN NUMERO (24/9/2026). En la planilla traen '-' en la
+     columna N°, y los catorce son del canal Home: con la clave `h|n` los
+     catorce son `Home|-`, se pisan entre ellos y en pantalla queda UNO.
+     Medido contra producción: filas 268, 271, 276, 313, 316, 341, 381, 422…
+     La clave los desempata por la fila de la planilla, que traen los dos lados. */
+  chk('dos cancelados sin número NO comparten clave: los separa la fila',
+    ctx._sbClavePedido({ h: 'Home', n: '-', r: 268 }) !== ctx._sbClavePedido({ h: 'Home', n: '-', r: 271 }),
+    [ctx._sbClavePedido({ h: 'Home', n: '-', r: 268 }), ctx._sbClavePedido({ h: 'Home', n: '-', r: 271 })]);
+  chk('y el mismo cancelado, por las dos puntas, SÍ comparte clave',
+    ctx._sbClavePedido({ h: 'Home', n: '-', r: 268 }) === ctx._sbClavePedido({ h: 'Home', n: '', r: 268 }));
+  chk('sin número y sin fila no se inventa una clave',
+    ctx._sbClavePedido({ h: 'Home', n: '-', r: 0 }) === '');
+
+  /* El caso de verdad: los cancelados vienen POR LAS DOS PUNTAS. Con la clave
+     rota, el que trae Supabase se mete en el índice compartido `Home|-` y pisa
+     a OTRO cancelado distinto: queda uno repetido y desaparece un tercero.
+     El primer intento de esta prueba ponía los tres solo en la lista previa, y
+     la mutación se escapaba — el bug necesita las dos puntas para morder. */
+  limpiar();
+  reset({ filas: [{ channel: 'Home', order_number: '-', customer_name: 'Otro Cape (nuevo)',
+    customer_key: '1', order_state: 'Cancelado', payment_state: 'No Cobrado', payment_method: '',
+    source_type: '', ordered_at: '2026-09-10T10:00:00+00:00', planned_delivery_at: '2026-09-11',
+    delivered_at: null, billed_amount: '0', cash_amount: '0', transfer_amount: '0',
+    source_row: 271, source_updated_at: '2026-09-10T10:00:00+00:00' }] });
+  tocarAhora(0);
+  ctx.D = { pedidos: [
+    { h: 'Home', n: '-', r: 268, c: 'Cape Brave' },
+    { h: 'Home', n: '-', r: 271, c: 'Otro Cape' },
+    { h: 'Home', n: '-', r: 276, c: 'Poako' } ] };
+  await ctx._sbRefrescoPedidos({ llego: false });
+  const _rs = ctx.D.pedidos.filter(p => p.n === '-' && p.h === 'Home').map(p => p.r).sort();
+  chk('un cancelado de Supabase actualiza al SUYO, no a otro',
+    _rs.length === 3 && _rs.join(',') === '268,271,276',
+    ctx.D.pedidos.filter(p => p.n === '-').map(p => '#' + p.r + ':' + p.c));
+  chk('y el que actualizó es el de la fila 271',
+    (ctx.D.pedidos.filter(p => p.r === 271)[0] || {}).c === 'Otro Cape (nuevo)',
+    ctx.D.pedidos.filter(p => p.n === '-').map(p => '#' + p.r + ':' + p.c));
 
   /* FRENO 1 — un cobro recién hecho. La réplica tarda hasta 5 min en tenerlo. */
   limpiar(); reset(); tocarAhora(Date.now());
@@ -194,9 +321,10 @@ const limpiar = () => vm.runInContext('_sbPerm=null;_sbPermHasta=0;_sbPidiendo=n
   chk('y ni le pide permiso al ERP: se corta antes de salir', llamadas.length === 0, llamadas);
 
   limpiar(); reset(); tocarAhora(Date.now() - 7 * 60 * 1000);
-  ctx.D = { pedidos: [{ n: 'VIEJO' }] };
-  chk('pasados los 6 minutos sí pisa: la réplica ya lo alcanzó',
-    (await ctx._sbRefrescoPedidos({ llego: false })) === true && ctx.D.pedidos[0].n === '1023');
+  ctx.D = { pedidos: [{ h: 'Home', n: 'VIEJO' }] };
+  chk('pasados los 6 minutos sí entra: la réplica ya lo alcanzó',
+    (await ctx._sbRefrescoPedidos({ llego: false })) === true
+    && ctx.D.pedidos.some(p => p.n === '1023'), ctx.D.pedidos.map(p => p.n));
 
   /* FRENO 2 — Google ya llegó. Su dato sale de la planilla, que manda. */
   limpiar(); reset(); tocarAhora(0);
@@ -219,10 +347,11 @@ const limpiar = () => vm.runInContext('_sbPerm=null;_sbPermHasta=0;_sbPidiendo=n
 
   /* FRENO 4 — el editor abierto. */
   limpiar(); reset(); tocarAhora(0);
-  ctx.D = { pedidos: [{ n: 'VIEJO' }] }; ctx._renders = 0; ctx._editorAbierto = true;
+  ctx.D = { pedidos: [{ h: 'Home', n: 'VIEJO' }] }; ctx._renders = 0; ctx._editorAbierto = true;
   await ctx._sbRefrescoPedidos({ llego: false });
   chk('con un editor abierto no repinta, pero deja el dato listo',
-    ctx._renders === 0 && ctx._pendingLoadRender === true && ctx.D.pedidos[0].n === '1023');
+    ctx._renders === 0 && ctx._pendingLoadRender === true
+    && ctx.D.pedidos.some(p => p.n === '1023'), ctx.D.pedidos.map(p => p.n));
   ctx._editorAbierto = false; ctx._pendingLoadRender = false;
 
   /* ══ EL SELLO NO PUEDE MENTIR ═════════════════════════════════════════ */

@@ -6481,7 +6481,28 @@ var API='https://script.google.com/macros/s/AKfycbxmrG5YVSshcYezk8lXFx_uxb7NFGcb
      pintan la pantalla— esperan detras de el. Al revés, cada tab pinta con su
      endpoint liviano en ~3 s y el volcado llega despues, que es justo lo que
      `usaRapido` viene haciendo desde el 21/8. */
-  var _CAROS = { admin: 1, ventas: 1 };
+  /* `tendencia` y `busqueda` se suman el 24/9/2026, y son la mitad del problema
+     que Tadeo describe como "tarda un monton en actualizarse al abrir".
+
+     Medido en un Chrome de verdad, abriendo la app con la sesion real:
+
+       tendencia  ... 24.302 ms
+       busqueda   ... 23.833 ms
+
+     Las dos salen al abrir, porque las dos las pide la tab Inicio —que es la
+     que se abre— y ninguna estaba en esta lista: prioridad 0, o sea por delante
+     del volcado. Con solo DOS cupos, se los llevaban enteros los 24 s, y los
+     pedidos y el volcado miraban de afuera.
+
+     Ir al fondo no les saca nada, porque **las dos ya se pintan de la copia
+     guardada**: `tendencia` de `maleu_seismeses` y `busqueda` por `traer()`.
+     Lo que se pospone es el refresco de la tendencia de 6 meses y de la deuda
+     de proveedores — dos numeros que no se mueven en 20 segundos. Lo que se
+     adelanta es la lista de pedidos, que es lo primero que se mira.
+
+     `busqueda` no pierde prioridad en SU tab: `_PINTA_TAB['busqueda']` la
+     devuelve con prioridad 2 antes de que se llegue a mirar esta lista. */
+  var _CAROS = { admin: 1, ventas: 1, tendencia: 1, busqueda: 1 };
 
   /* Y el endpoint que pinta la tab ABIERTA va primero de todos. Sin esto la
      cola igual mejora —de 184 s a 20— pero `cajaLight` sale en el primer lote
@@ -6490,14 +6511,17 @@ var API='https://script.google.com/macros/s/AKfycbxmrG5YVSshcYezk8lXFx_uxb7NFGcb
      El mapa es tab -> el endpoint del que sale su contenido. Una tab que no
      este aca no pierde nada: queda en prioridad normal. */
   /* Tabs que dibujan de MAS de un endpoint (12/9/2026). Pedidos pinta con
-     `pedidosLight` y ademas con las OCs (el aviso de "OC sin generar") y con el
-     boton "Actualizar pedidos" (`pedidosNew`). Pedidos Home, igual. */
+     `pedidosLight` y ademas con las OCs (el aviso de "OC sin generar").
+     Pedidos Home, igual. El boton "Actualizar pedidos" figuraba aca con
+     `pedidosNew`: desde el 24/9/2026 ese endpoint no lo llama nadie — el boton
+     usa `loadRapido({soloPedidos:true})`, o sea `pedidosLight` + `ocLight`,
+     que ya estaban los dos en esta lista. */
   var _PINTA_TAB_MAS = {
     /* Planificacion (14/9/2026): la semana sale de los pedidos y las casas del CRM.
        Sin estar aca, `planMes` salia a los 8 s de entrar, detras de la caja. */
     planificacion: { pedidosLight: 1, crmClientes: 1, crmLotes: 1 },
-    pedidos:     { ocLight: 1, pedidosNew: 1 },
-    pedidoshome: { ocLight: 1, pedidosNew: 1, pedidosLight: 1 }
+    pedidos:     { ocLight: 1 },
+    pedidoshome: { ocLight: 1, pedidosLight: 1 }
   };
   var _PINTA_TAB = {
     caja: 'cajaLight', egresos: 'cajaLight',
@@ -7034,11 +7058,30 @@ function _pedirD(){
      Hacerlo pintar de verdad incremental trae el riesgo de "D a medias" —la
      Posicion Neta con la caja en $0— asi que es una decision con medicion, no un
      arreglo al pasar. La cola de `_prioridadDe` ya ordena quien sale primero. */
-  var hayCache=false;try{hayCache=!!localStorage.getItem('ma3');}catch(e){}
   /* En un arranque sin copia no disparamos Caja, Cobros y OCs junto al volcado
      grande. Para que Estancias/Pedidos sean utilizables alcanza primero con los
      pedidos; las otras fotos se piden al entrar a sus tabs. */
-  if(!hayCache){try{loadRapido({soloPedidos:true});}catch(e){}}
+
+  /* LOS PEDIDOS TAMBIEN CUANDO HAY COPIA (24/9/2026).
+     Hasta hoy este `if` dejaba afuera el caso que MAS pasa: el celular de Tadeo
+     siempre tiene copia, asi que al abrir la app se pintaba `ma3` al instante
+     y despues se pedia UNA sola cosa — `load()`, el volcado entero. Y el
+     volcado es lo mas caro que hay: trae caja, stock, CRM, vendedores y ventas
+     historicas. O sea que la lista de pedidos, que es lo primero que Tadeo
+     mira, esperaba detras de nueve cosas que no estaba mirando. Medido por el
+     con el cronometro: 12 segundos hasta que la pantalla dejaba de decir
+     "Actualizando...".
+
+     Pidiendo ademas el camino liviano, los pedidos llegan por `pedidosLight`
+     —que esta cacheado en el backend: 2,8 s medidos— y el volcado sigue su
+     camino por atras para la caja y el stock. `_prioridadDe` ya manda `admin`
+     al fondo de la cola, asi que el liviano sale primero.
+
+     Y de paso se engancha el atajo de Supabase: `loadRapido` lo dispara, y
+     hasta hoy en el celular de Tadeo NO CORRIA NUNCA — ni por aca (este `if`
+     lo salteaba) ni por `_sbAdelanto` (que solo pinta si `D.pedidos` esta
+     vacio, y con la copia de `ma3` nunca lo esta). */
+  try{loadRapido({soloPedidos:true});}catch(e){}
   /* Un arranque no puede quedar eternamente con el cartel de carga. Hay redes
      donde una respuesta de Google queda colgada entre el redirect del script y
      el navegador: no es una carga lenta, es una carga que no llegó. A los 45 s
@@ -10016,6 +10059,38 @@ function load(){
    filas; lo verificado esta en `estancias/docs/MAPEO-PEDIDOSLIGHT-SALES-ORDER.md`. */
 var _sbPerm=null,_sbPermHasta=0,_sbPidiendo=null;
 
+/* EL PERMISO SOBREVIVE A CERRAR LA APP (24/9/2026).
+   Vivia solo en memoria, asi que cada apertura lo pedia de cero. Medido en un
+   Chrome de verdad: `sbToken` tardo **7.572 ms** y se llevo uno de los DOS
+   cupos de la cola justo en el arranque, que es el momento en que hacen falta
+   los dos. O sea que el atajo que existe para que la lista llegue rapido
+   estaba, en el arranque, haciendola llegar mas tarde.
+
+   Dura una hora y se guarda con su vencimiento. Va atado al USUARIO: si en el
+   mismo telefono entra otro, el suyo no sirve y se pide uno nuevo — hoy solo
+   `tadeo` recibe permiso, asi que reusar el de otro seria darle un acceso que
+   el backend no le dio. Y se guarda con dos minutos de margen, igual que el de
+   memoria, para no usar uno que vence mientras viaja. */
+var _SB_TOK_LS='mc_sbtok';
+function _sbTokGuardar(sb,hasta){
+  try{
+    localStorage.setItem(_SB_TOK_LS,JSON.stringify({
+      u:(typeof SESSION!=='undefined'&&SESSION&&SESSION.usuario)||'', sb:sb, hasta:hasta
+    }));
+  }catch(e){}
+}
+function _sbTokLeer(){
+  try{
+    var g=JSON.parse(localStorage.getItem(_SB_TOK_LS)||'null');
+    if(!g||!g.sb||!g.sb.token||!g.sb.url||!g.sb.key)return null;
+    if(!(Number(g.hasta)>Date.now()))return null;
+    var yo=(typeof SESSION!=='undefined'&&SESSION&&SESSION.usuario)||'';
+    if(String(g.u||'')!==String(yo))return null;
+    return g;
+  }catch(e){ return null; }
+}
+function _sbTokBorrar(){ try{ localStorage.removeItem(_SB_TOK_LS); }catch(e){} }
+
 /* El permiso para hablarle a Supabase. Lo emite el ERP (`action=sbToken`) y
    dura una hora; se renueva dos minutos antes. Un "no" se recuerda 5 minutos
    para no preguntar en cada pantalla: hoy solo Tadeo recibe permiso, asi que
@@ -10024,13 +10099,25 @@ function _sbPermiso(){
   if(_sbPerm&&Date.now()<_sbPermHasta)return Promise.resolve(_sbPerm);
   if(_sbPerm===false&&Date.now()<_sbPermHasta)return Promise.resolve(null);
   if(_sbPidiendo)return _sbPidiendo;
+  /* El de la apertura anterior, si todavia vale. Cero llamadas, cero cupo. */
+  if(_sbPerm===null){
+    var _g=_sbTokLeer();
+    if(_g){ _sbPerm=_g.sb; _sbPermHasta=Number(_g.hasta); return Promise.resolve(_sbPerm); }
+  }
   _sbPidiendo=fetch(API+'?action=sbToken&t='+Date.now())
     .then(function(r){return r.json();})
     .then(function(d){
       _sbPidiendo=null;
       var sb=d&&d.sb;
-      if(!sb||!sb.token||!sb.url||!sb.key){_sbPerm=false;_sbPermHasta=Date.now()+300000;return null;}
+      if(!sb||!sb.token||!sb.url||!sb.key){
+        /* Un "no" tambien borra lo guardado: si el backend dejo de darle
+           permiso a este usuario, seguir usando el de ayer seria pasar por
+           arriba de esa decision hasta que venza solo. */
+        _sbTokBorrar();
+        _sbPerm=false;_sbPermHasta=Date.now()+300000;return null;
+      }
       _sbPerm=sb;_sbPermHasta=Date.now()+Math.max(60,(Number(sb.seg)||3600)-120)*1000;
+      _sbTokGuardar(sb,_sbPermHasta);
       return sb;
     })
     .catch(function(){_sbPidiendo=null;_sbPerm=false;_sbPermHasta=Date.now()+300000;return null;});
@@ -10154,6 +10241,63 @@ function _sbCompletar(){
   if(!Array.isArray(D.cobros))D.cobros=[];
 }
 
+/* LOS 400 DE SUPABASE SE FUSIONAN, NO PISAN (24/9/2026).
+
+   `_sbPedidos` pide los 400 mas nuevos (`order=ordered_at.desc&limit=400`) y
+   hasta hoy eso se asignaba derecho: `D.pedidos = lista`. En la planilla hay
+   **1.264**. O sea que cada vez que el atajo ganaba la carrera, la pantalla
+   perdia 864 pedidos hasta que llegaba Google — y no solo la lista: todo lo que
+   cuenta pedidos (los totales por canal, Estancias, Inicio) contaba sobre un
+   tercio de la base, sin decir nada.
+
+   Se vio midiendo el boton en un Chrome de verdad: la lista arrancaba en 400 y
+   terminaba en 1.264. De paso arreglaba mal otra cosa — el boton iba a cantar
+   "+864 pedidos nuevos", porque comparaba contra la foto recortada.
+
+   Fusionar es lo que el ERP ya hacia con `pedidosNew`: los que vienen pisan al
+   suyo por `h|n`, los que no vienen se quedan como estaban. Tiene el mismo
+   limite conocido que tenia aquel — un pedido borrado a mano en la planilla no
+   desaparece hasta el proximo paquete de Google — y es el precio correcto:
+   entre mostrar de mas por unos segundos y borrar 864 de la pantalla, se
+   muestra de mas. */
+/* La clave de un pedido para fusionar.
+
+   `h|n` alcanza para los 1.250 que tienen numero, pero NO para los 14 que
+   traen `'-'` en la columna N° — los cancelados, todos del canal Home. Con
+   `h|n` los catorce son `Home|-`: se pisan entre ellos y en la pantalla queda
+   UNO. Se ve medido contra produccion (`action=pedidosLight`, 24/9/2026):
+   filas 268, 271, 276, 313, 316, 341, 381, 422... catorce personas distintas
+   con el mismo guion.
+
+   Para esos se usa la FILA de la planilla (`r`), que los dos lados traen:
+   `pedidosLight` la manda como `r` y `_sbAPedido` la mapea desde `source_row`.
+   Sin numero y sin fila no hay con que identificarlo: devuelve '' y el que
+   fusiona lo agrega sin intentar cruzarlo, que es el error barato (aparece
+   repetido un rato) en vez del caro (desaparece). */
+function _sbClavePedido(p){
+  if(!p||!p.h)return '';
+  var n=String(p.n==null?'':p.n).trim();
+  if(n&&n!=='-')return p.h+'|'+n;
+  var r=Number(p.r)||0;
+  return r?(p.h+'|#'+r):'';
+}
+
+function _sbFusionar(previos,lista){
+  if(!Array.isArray(previos)||!previos.length)return lista;
+  var ix={},out=previos.slice();
+  for(var i=0;i<out.length;i++){
+    var k0=_sbClavePedido(out[i]);
+    if(k0)ix[k0]=i;
+  }
+  for(var j=0;j<lista.length;j++){
+    var q=lista[j];
+    var k=_sbClavePedido(q);
+    if(k&&ix[k]!=null)out[ix[k]]=q;
+    else { out.push(q); if(k)ix[k]=out.length-1; }
+  }
+  return out;
+}
+
 /* EL REFRESCO (23/9/2026, a la noche). El adelanto de mas abajo solo servia con
    la pantalla vacia — y la pantalla de Tadeo nunca esta vacia, porque el ERP le
    pinta la copia guardada del celular al instante. Medido con el: el atajo no
@@ -10174,7 +10318,7 @@ function _sbRefrescoPedidos(gen){
     if(gen&&gen.llego)return false;          // Google gano la carrera
     if(!_sbPuedePisar())return false;        // toco algo mientras viajaba
     if(typeof D==='undefined'||!D)D={};
-    D.pedidos=lista; D._pedidosDeSupabase=1;
+    D.pedidos=_sbFusionar(D.pedidos,lista); D._pedidosDeSupabase=1;
     _sbCompletar();
     var edad=_sbEdad(lista);
     try{
@@ -10444,69 +10588,80 @@ function actualizarCaja(){
   });
 }
 
-// Refresh manual desde tab Pedidos: usa endpoint LIGHT (~5s vs ~17s admin).
-// SIN loader fullscreen — solo cambia el texto del botón a "Buscando…" para
-// que el usuario pueda seguir scrolleando / mirando los pedidos actuales
-// mientras corre. Mergea solo pedidos+canales en D y re-renderiza el tab.
+/* El boton "Actualizar pedidos" ahora pide por el camino CACHEADO (24/9/2026).
+
+   Hasta hoy llamaba a `pedidosNew&tail=10`, que lee solo las ultimas 10 filas
+   de cada canal. Parecia la version liviana. Medido contra el backend vivo,
+   tres corridas de cada uno:
+
+     pedidosNew tail=10   (24 KB)    6.940 / 12.157 / 6.940 ms
+     pedidosNew tail=3     (7 KB)    5.572 /  8.384 / 6.564 ms
+     pedidosNew tail=50  (121 KB)   10.456 /  7.112 / 12.735 ms
+     pedidosLight cacheado (773 KB)  2.777 /  3.345 ms
+     pedidosLight sin cache          19.828 / 20.277 ms
+     solo llegar a Apps Script            ~2.200 ms
+
+   O sea: leer 17 veces mas filas cuesta 1,5 s, pero renunciar al cache cuesta
+   4. El modo tail lo hace A PROPOSITO (`_cacheKey = (_tail||_lecModo) ? null`)
+   para no servir un pedido viejo. Esa precaucion no hace falta: un pedido
+   nuevo de la tienda es un POST sin `action` y cae en `_invalidarCachesVolcado_`,
+   igual que una edicion a mano en Home/Pilar/Clubes/Red por `onEditHandler`.
+   Si hay algo nuevo, el cache ya no existe; si el cache existe, no hay nada
+   nuevo. El tail se cuidaba de un peligro que no estaba.
+
+   Y encima el tail perdia cosas que el camino cacheado trae: los stats por
+   canal (`canales[]` viaja vacio en modo tail), las OCs frescas —sin las que
+   el cruce marca "pedido sin OC" de mentira— y los pedidos de mas de 10 filas
+   atras, que no se refrescaban nunca.
+
+   Por eso esto ya no tiene fetch propio: se cuelga de `loadRapido({soloPedidos:true})`,
+   que es lo mismo que hace el boton de arriba. Si el de arriba ya esta en
+   vuelo, `_rapidoEnVuelo` devuelve esa misma promesa y no se pide dos veces. */
 function actualizarPedidos(){
-  var btn=$('btnReloadPed');
+  /* EL BOTON VISIBLE. Hay dos —`btnReloadPed` en Pedidos y `btnReloadPedHome`
+     en Pedidos Home— y hasta hoy esto agarraba SIEMPRE el primero. Tocandolo
+     desde Pedidos Home no cambiaba nada en pantalla: ni el "Buscando...", ni el
+     spinner, porque le estaba hablando a un boton que esta en display:none.
+     Desde afuera se ve como que el boton no hace nada. */
+  var btn=$(cur==='pedidoshome'?'btnReloadPedHome':'btnReloadPed')||$('btnReloadPed');
   var lbl=btn?btn.querySelector('span'):null;
   var lblOrig=lbl?lbl.textContent:'';
-  if(btn){btn.disabled=true;btn.classList.add('loading');if(lbl)lbl.textContent='Buscando…';}
+  if(btn){btn.disabled=true;btn.classList.add('loading');if(lbl)lbl.textContent='Buscando\u2026';}
+  function _restoreBtn(){if(btn){btn.disabled=false;btn.classList.remove('loading');if(lbl)lbl.textContent=lblOrig||'Actualizar pedidos';}}
+
+  /* La foto de ANTES, para poder decir cuantos entraron. Es lo unico que este
+     boton hace de mas que el de arriba, y es su razon de existir. */
   var antes={};
   if(D&&Array.isArray(D.pedidos)){
     D.pedidos.forEach(function(p){if(p&&p.h&&p.n)antes[p.h+'|'+p.n]=true;});
   }
   var editando=_hayEditorAbierto();
-  function _restoreBtn(){if(btn){btn.disabled=false;btn.classList.remove('loading');if(lbl)lbl.textContent=lblOrig||'Actualizar pedidos';}}
-  // pedidosNew: lee solo las últimas 10 filas de cada hoja operativa. ~400ms vs ~3s.
-  // Detecta cualquier pedido nuevo (entran al final) y refresca el estado de pedidos
-  // recientes. Pedidos viejos (>10 filas atrás en cada hoja) no se refrescan acá —
-  // para eso está el load() completo cada vez que se entra al tab o al cargar la app.
-  fetch(API+'?action=pedidosNew&tail=10&t='+Date.now())
-    .then(function(r){return r.json();})
-    .then(function(d){
-      _restoreBtn();
-      if(!d||!Array.isArray(d.pedidos)){toast('Sin respuesta del servidor');return;}
-      if(!D)D={};
-      if(!Array.isArray(D.pedidos))D.pedidos=[];
-      // Merge: por h|n. Los devueltos pisan a los que tenía (refresca estado/origen
-      // recientes); los no devueltos se mantienen intactos en D.pedidos.
-      var ix={};
-      D.pedidos.forEach(function(p,i){if(p&&p.h&&p.n)ix[p.h+'|'+p.n]=i;});
-      var nuevos=0;
-      d.pedidos.forEach(function(np){
-        if(!np||!np.h||!np.n)return;
-        var key=np.h+'|'+np.n;
-        if(ix[key]!=null){
-          D.pedidos[ix[key]]=np; // actualizar
-        }else{
-          D.pedidos.push(np);
-          if(np.es!=='Cancelado'&&!antes[key])nuevos++;
-        }
+
+  loadRapido({soloPedidos:true}).then(function(r){
+    _restoreBtn();
+    /* `pinto:false` es "llego y no se pudo dibujar"; `red:false` con fallas es
+       "no hubo senal". Son dos cosas distintas y el usuario tiene que poder
+       distinguirlas: con una no sirve reintentar, con la otra si. */
+    if(!r||(!r.ok&&!r.pinto)){
+      toast(r&&r.red?'No se pudo dibujar la lista':'Sin respuesta del servidor');
+      return;
+    }
+    var nuevos=0;
+    if(D&&Array.isArray(D.pedidos)){
+      D.pedidos.forEach(function(p){
+        if(!p||!p.h||!p.n)return;
+        if(p.es!=='Cancelado'&&!antes[p.h+'|'+p.n])nuevos++;
       });
-      // canales[] no viene en modo tail — los previos se mantienen.
-      try{localStorage.setItem('ma3',JSON.stringify(D));}catch(e){}
-      sync();
-      if(editando){
-        if(nuevos>0)toast('+'+nuevos+' pedido'+(nuevos>1?'s':'')+' nuevo'+(nuevos>1?'s':'')+' (aparecen al cerrar la edición)');
-        else toast('Sin pedidos nuevos');
-        _pendingLoadRender=true;
-      } else {
-        if(nuevos>0)toast('+'+nuevos+' pedido'+(nuevos>1?'s':'')+' nuevo'+(nuevos>1?'s':'')+' ✨');
-        else toast('Sin pedidos nuevos');
-        /* Solo la pantalla que se esta mirando: pintar tambien la otra lista
-           (Pedidos / Pedidos Home) era el doble de pantalla congelada para una
-           tab cerrada. Las demas quedan marcadas como viejas y se pintan al
-           abrirlas (`go` -> `_pintarSeccion`). */
-        _pintadas={};
-        try{ _pintarSeccion(cur); }catch(e){ render(); }
-      }
-    })
-    .catch(function(){
-      _restoreBtn();
-      toast('Error al actualizar');
-    });
+    }
+    var cola=editando?' (aparecen al cerrar la edici\u00f3n)':' \u2728';
+    toast(nuevos>0?('+'+nuevos+' pedido'+(nuevos>1?'s':'')+' nuevo'+(nuevos>1?'s':'')+cola)
+                 :'Sin pedidos nuevos');
+    /* El dibujo lo hizo `loadRapido`: render() pinta primero la seccion que
+       estas mirando y las demas en los ratos libres. No hay que repintar aca. */
+  },function(){
+    _restoreBtn();
+    toast('Error al actualizar');
+  });
 }
 // Rerender pendiente cuando se cierra el último editor
 function _flushPendingLoadRender(){
