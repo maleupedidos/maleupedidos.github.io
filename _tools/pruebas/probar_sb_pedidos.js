@@ -44,7 +44,8 @@ const FILAS = [
     ordered_at: '2026-09-23T14:05:00+00:00', planned_delivery_at: '2026-09-23',
     delivered_at: '2026-09-23T19:30:00+00:00', billed_amount: '58000.00',
     cash_amount: '58000.00', transfer_amount: '0.00', source_row: 1002,
-    source_updated_at: '2026-09-23T14:05:00+00:00' },
+    source_updated_at: '2026-09-23T14:05:00+00:00',
+    sales_order_item: [{ product_sku: 'ECaC', quantity: '2' }, { product_sku: 'EJyQ', quantity: '1' }] },
   { channel: 'Red', order_number: '-', customer_name: 'Cancelado X', customer_key: '1155550003',
     order_state: 'Cancelado', payment_state: 'No Cobrado', payment_method: '', source_type: '',
     ordered_at: '2026-09-01T10:00:00+00:00', planned_delivery_at: '2026-09-02',
@@ -98,6 +99,14 @@ const limpiar = () => vm.runInContext('_sbPerm=null;_sbPermHasta=0;_sbPidiendo=n
   chk('canal, número, cliente y estados', p.h === 'Home' && p.n === '1023' && p.es === 'Entregado' && p.ep === 'Cobrado');
   chk('la fila de la planilla viaja, para poder abrir el pedido', p.r === 1002);
   chk('queda marcado que viene de Supabase', p._deSupabase === 1);
+  /* SIN ESTO LA PANTALLA REVIENTA. `rPedidos` hace p.p.map / .length / .forEach,
+     y un undefined ahi tira un TypeError que no se ve: la lista se queda como
+     estaba y Tadeo sigue esperando. Medido en Chrome real el 23/9 a la noche. */
+  chk('los productos vienen como {a, q}, que es lo que dibuja la lista',
+    Array.isArray(p.p) && p.p.length === 2 && p.p[0].a === 'ECaC' && p.p[0].q === 2,
+    p.p);
+  chk('y si la consulta no los trajo, es un array vacío y NO undefined',
+    Array.isArray(ctx._sbAPedido({ order_number: '1' }).p), ctx._sbAPedido({ order_number: '1' }).p);
 
   const c = ctx._sbAPedido(FILAS[1]);
   chk('un cancelado sin número queda MARCADO, no con un guión suelto',
