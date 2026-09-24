@@ -11575,7 +11575,7 @@ function _leerVersion(app){
    "El HTML no sabe que version es" dejo de ser cierto: el build le escribe
    adentro el CACHE_NAME de sw-panel.js, el mismo que deploy.sh obliga a subir en
    cada cambio. Si lo publicado dice otra cosa, esta pagina es vieja. Punto. */
-var _APP_CN_PAGINA='maleu-panel-v430';
+var _APP_CN_PAGINA='maleu-panel-v431';
 
 /* Devuelve [{k,v}] si lo publicado no es lo que esta pagina corre. */
 function _chequearVersiones(){
@@ -13353,9 +13353,30 @@ function _sbAdelanto(){
 }
 
 var _rapidoEnVuelo={completo:null,soloPedidos:null};
+/* La promesa de los PEDIDOS de la corrida en vuelo, por separado de la corrida
+   entera. Existe por el `return` de dos lineas mas abajo: cuando ya hay un
+   refresco viajando, `loadRapido` devuelve esa promesa y no ejecuta nada mas,
+   asi que un `alLlegarPedidos` pasado en esa llamada se perderia y el boton se
+   quedaria esperando a que llegue TODO — que es exactamente el bug que esto
+   viene a arreglar. Guardandola, el que llega segundo se cuelga de los pedidos
+   de la primera. */
+var _pedEnVuelo={};
 function loadRapido(opts){
   var _claveRapido=(opts&&opts.soloPedidos)?'soloPedidos':'completo';
-  if(_rapidoEnVuelo[_claveRapido])return _rapidoEnVuelo[_claveRapido];
+  var _avisoPed=(opts&&typeof opts.alLlegarPedidos==='function')?opts.alLlegarPedidos:null;
+  if(_rapidoEnVuelo[_claveRapido]){
+    if(_avisoPed){
+      var _yaEnVuelo=_pedEnVuelo[_claveRapido];
+      if(_yaEnVuelo)_yaEnVuelo.then(function(d){ try{ _avisoPed(!!(d&&Array.isArray(d.pedidos))); }catch(e){} },
+                                    function(){ try{ _avisoPed(false); }catch(e){} });
+      /* Sin promesa de pedidos guardada no se puede avisar antes; se cuelga de
+         la corrida entera, que es el comportamiento de siempre. Peor seria no
+         avisar nunca y dejar el boton trabado. */
+      else _rapidoEnVuelo[_claveRapido].then(function(r){ try{ _avisoPed(!!(r&&r.ok)); }catch(e){} },
+                                             function(){ try{ _avisoPed(false); }catch(e){} });
+    }
+    return _rapidoEnVuelo[_claveRapido];
+  }
   var tsBase=Date.now();
   /* `soloPedidos` (12/9/2026): el ↻ estando en Pedidos o Pedidos Home. Esas dos
      pantallas dibujan pedidos y OCs; la caja y los cobros pendientes son de
@@ -13371,8 +13392,29 @@ function loadRapido(opts){
   var _vf=['pedidos']; if(!_soloPed&&_tengoTab('caja'))_vf.push('caja');
   _frescoEnVuelo(_vf,1);
   var _finR=function(){ _frescoEnVuelo(_vf,-1); };
+  /* LOS PEDIDOS AVISAN APENAS LLEGAN (24/9/2026).
+
+     `Promise.all` resuelve con el MAS LENTO de los cuatro. El boton
+     "Actualizar pedidos" se colgaba de ahi, asi que seguia diciendo
+     "Buscando..." hasta que tambien volvian las OCs — y eso, con dos cupos de
+     cola, es una espera detras de la otra. Medido contra produccion a las
+     10:57: `pedidosLight` 3,5 s y `ocLight` 3,0 s, o sea 6,5 s de piso, y
+     Tadeo cronometro **15 segundos** en su telefono con la v430 ya instalada.
+
+     Lo importante es que **la lista ya estaba pintada mucho antes**: el atajo
+     de Supabase la repinta a los ~200 ms y los pedidos de Google llegan a los
+     3,5 s. O sea que el boton giraba sobre datos que ya estaban en pantalla —
+     el mismo problema del cartel "Actualizando..." de anoche, un piso abajo.
+
+     Las OCs siguen su camino: lo unico que dibujan es el aviso de "OC sin
+     generar", y que aparezca tres segundos despues no le cambia la vida a
+     nadie. Lo que NO se puede hacer es liberar el boton antes de que los
+     pedidos esten volcados y dibujados: eso seria decir "listo" sobre la lista
+     vieja. Por eso el aviso cuelga de `_pedPromesa` y no de un reloj. */
+  var _pedPromesa=fetch(API+'?action=pedidosLight&t='+tsBase).then(function(r){return r.json();}).catch(function(){return null;});
+  _pedEnVuelo[_claveRapido]=_pedPromesa;
   var _rapido=Promise.all([
-    fetch(API+'?action=pedidosLight&t='+tsBase).then(function(r){return r.json();}).catch(function(){return null;}),
+    _pedPromesa,
     _soloPed ? Promise.resolve('omitido')
       : fetch(API+'?action=cobrosPendientes&t='+tsBase).then(function(r){return r.json();}).catch(function(){return null;}),
     // La caja es plata: si el rol no tiene la tab, ni la pedimos. El backend
@@ -13449,11 +13491,26 @@ function loadRapido(opts){
     $('dot').className='hdr-dot off';
     return {ok:false, fallaron:3, total:3, red:false, pinto:false};
   }).then(function(r){ _finR(); return r; },function(e){ _finR(); throw e; });
+  /* El aviso de "los pedidos ya estan". Se engancha DESPUES de armar `_rapido`
+     y eso no es un detalle: los `.then` sobre la misma promesa corren en el
+     orden en que se engancharon, y el de `_rapido` —el que vuelca a `D` y
+     dibuja— se engancho primero. Asi, cuando corre este, `D.pedidos` ya tiene
+     lo nuevo y la pantalla ya se repinto. Al reves, el callback recibiria la
+     lista vieja, que es peor que no avisar. */
+  if(_avisoPed){
+    _pedPromesa.then(function(d){
+      try{ _avisoPed(!!(d&&Array.isArray(d.pedidos))); }catch(e){}
+    },function(){
+      try{ _avisoPed(false); }catch(e){}
+    });
+  }
   _rapidoEnVuelo[_claveRapido]=_rapido.then(function(r){
     _rapidoEnVuelo[_claveRapido]=null;
+    _pedEnVuelo[_claveRapido]=null;
     return r;
   },function(e){
     _rapidoEnVuelo[_claveRapido]=null;
+    _pedEnVuelo[_claveRapido]=null;
     throw e;
   });
   return _rapidoEnVuelo[_claveRapido];
@@ -13621,13 +13678,32 @@ function actualizarPedidos(){
   }
   var editando=_hayEditorAbierto();
 
-  loadRapido({soloPedidos:true}).then(function(r){
+  /* EL BOTON TERMINA CON LOS PEDIDOS, NO CON TODO (24/9/2026).
+
+     Hasta hace un rato esto se colgaba de la promesa entera de `loadRapido`,
+     que resuelve con el MAS LENTO de sus cuatro pedidos. O sea que el boton
+     seguia diciendo "Buscando..." esperando a las OCs, con la lista de pedidos
+     ya dibujada hace rato. Tadeo cronometro **15 segundos** con la v430 puesta,
+     mientras el backend contestaba `pedidosLight` en 3,5 s.
+
+     Ahora termina cuando los pedidos estan volcados y en pantalla. Eso no es
+     apurar el cartel: es que el boton se llama "Actualizar pedidos" y los
+     pedidos ya estan. Las OCs siguen viajando y cuando lleguen actualizan su
+     aviso solas.
+
+     `hecho` esta porque las dos puntas pueden llegar —el aviso de pedidos y el
+     final de la corrida entera— y el toast tiene que salir UNA vez. Y el
+     segundo camino no sobra: si `loadRapido` revienta antes de disparar el
+     aviso, el boton quedaria trabado para siempre. */
+  var hecho=false;
+  var terminar=function(okPedidos, rFinal){
+    if(hecho)return;
+    hecho=true;
     _restoreBtn();
-    /* `pinto:false` es "llego y no se pudo dibujar"; `red:false` con fallas es
-       "no hubo senal". Son dos cosas distintas y el usuario tiene que poder
-       distinguirlas: con una no sirve reintentar, con la otra si. */
-    if(!r||(!r.ok&&!r.pinto)){
-      toast(r&&r.red?'No se pudo dibujar la lista':'Sin respuesta del servidor');
+    if(!okPedidos){
+      /* `pinto:false` es "llego y no se pudo dibujar"; sin `red` es "no hubo
+         senal". Son dos cosas distintas: con una no sirve reintentar. */
+      toast(rFinal&&rFinal.red?'No se pudo dibujar la lista':'Sin respuesta del servidor');
       return;
     }
     var nuevos=0;
@@ -13642,7 +13718,16 @@ function actualizarPedidos(){
                  :'Sin pedidos nuevos');
     /* El dibujo lo hizo `loadRapido`: render() pinta primero la seccion que
        estas mirando y las demas en los ratos libres. No hay que repintar aca. */
+  };
+
+  loadRapido({
+    soloPedidos:true,
+    alLlegarPedidos:function(ok){ terminar(ok, null); }
+  }).then(function(r){
+    terminar(!!(r&&(r.ok||r.pinto)), r);
   },function(){
+    if(hecho)return;
+    hecho=true;
     _restoreBtn();
     toast('Error al actualizar');
   });
