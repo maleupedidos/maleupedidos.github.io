@@ -8397,8 +8397,13 @@ function _frescoVolando(f){
 function _frescoGuardar(){ try{ localStorage.setItem('maleu_fresco',JSON.stringify(_fresco)); }catch(e){} }
 /* Lo llaman los que TRAEN datos, cuando llegaron bien. Las sub-apps lo llaman por
    `window._marcarFresco` (sueltas, con ?standalone=1, no existe y no pasa nada). */
-function _marcarFresco(fuentes){
-  var t=Date.now(), n=0;
+/* `ts` (23/9/2026): sellar con la edad REAL de lo que se pinto, no con "ahora".
+   Lo necesita la lista que viene de Supabase: la replica corre cada 5 minutos,
+   asi que estampar Date.now() sobre esa foto seria decirle a Tadeo "esto es de
+   recien" cuando puede ser de hace cuatro minutos. El ERP ya sabe mostrar
+   "hace 3 min"; lo unico que faltaba era poder decirle cual es el minuto. */
+function _marcarFresco(fuentes,ts){
+  var t=Number(ts)||Date.now(), n=0;
   (fuentes||[]).forEach(function(f){ if(f){ _fresco.ok[f]=t; n++; } });
   if(n)_frescoGuardar();
   _pintarFresco();
@@ -10062,6 +10067,9 @@ function _sbAPedido(o){
     $:Number(o.billed_amount)||0,
     ef:Number(o.cash_amount)||0, tr:Number(o.transfer_amount)||0,
     r:Number(o.source_row)||0,
+    /* De cuando es esta fila en la planilla. No lo dibuja nadie: lo usa
+       `_sbEdad` para que el sello diga la verdad. */
+    _ts:o.source_updated_at||'',
     /* Los 14 cancelados sin numero traen '-' en la planilla, y un guion solo
        bajo una columna que dice "N°" se lee como "se rompio". */
     _sinNum:(num===''||num==='-'),
@@ -10076,12 +10084,70 @@ function _sbPedidos(limite){
     if(!sb)return null;
     var cols='channel,order_number,customer_name,customer_key,order_state,payment_state,'
       +'payment_method,source_type,ordered_at,planned_delivery_at,delivered_at,'
-      +'billed_amount,cash_amount,transfer_amount,source_row';
+      +'billed_amount,cash_amount,transfer_amount,source_row,source_updated_at';
     return fetch(sb.url+'/rest/v1/sales_order?select='+cols+'&order=ordered_at.desc&limit='+(limite||400),
       {headers:{apikey:sb.key,Authorization:'Bearer '+sb.token}})
       .then(function(r){ if(!r.ok)throw new Error('sb '+r.status); return r.json(); })
       .then(function(filas){ return Array.isArray(filas)?filas.map(_sbAPedido):null; });
   }).catch(function(){ return null; });
+}
+
+/* La replica corre cada 5 minutos. Seis es el margen: pasado ese rato, lo que
+   Tadeo toco aca ya viajo a la planilla y de ahi a Supabase, asi que la foto de
+   la base lo incluye. Antes de eso, NO — y pisar un cobro recien hecho con una
+   foto que todavia no lo tiene es exactamente el bug que no se puede cometer:
+   la plata desaparece de la pantalla y no hay ningun error que lo avise. */
+var _SB_ESPERA_TRAS_CAMBIO=6*60*1000;
+function _sbPuedePisar(){
+  if(_sbCambioLocal&&Date.now()-_sbCambioLocal<_SB_ESPERA_TRAS_CAMBIO)return false;
+  return true;
+}
+
+/* De cuando es la foto: el sello mas nuevo de las filas que vinieron. Si
+   ninguna lo trae, se devuelve 0 y el que llama NO sella — antes dejar el
+   cartel como estaba que estampar una hora inventada. */
+function _sbEdad(filas){
+  var t=0;
+  for(var i=0;i<filas.length;i++){
+    var v=filas[i]&&filas[i]._ts;
+    if(!v)continue;
+    var d=Date.parse(v);
+    if(!isNaN(d)&&d>t)t=d;
+  }
+  return t;
+}
+
+/* EL REFRESCO (23/9/2026, a la noche). El adelanto de mas abajo solo servia con
+   la pantalla vacia — y la pantalla de Tadeo nunca esta vacia, porque el ERP le
+   pinta la copia guardada del celular al instante. Medido con el: el atajo no
+   se activaba NUNCA. Lo que el espera esos segundos no es la lista, es que el
+   cartel de "Actualizando..." termine, y eso iba a Google: 3 s en calma y hasta
+   40 en frio, contra ~300 ms de Supabase.
+
+   Esto reemplaza la lista aunque ya haya uno, con cuatro frenos:
+     · no pisa si hubo un cambio local hace menos de 6 minutos;
+     · no pisa si el paquete de Google ya llego en ESTE refresco (su dato es el
+       bueno: sale de la planilla, que sigue siendo la fuente de verdad);
+     · no repinta con un editor abierto;
+     · no sella "recien": sella la edad de verdad de la foto. */
+function _sbRefrescoPedidos(gen){
+  if(!_sbPuedePisar())return Promise.resolve(false);
+  return _sbPedidos(400).then(function(lista){
+    if(!lista||!lista.length)return false;
+    if(gen&&gen.llego)return false;          // Google gano la carrera
+    if(!_sbPuedePisar())return false;        // toco algo mientras viajaba
+    if(typeof D==='undefined'||!D)D={};
+    D.pedidos=lista; D._pedidosDeSupabase=1;
+    var edad=_sbEdad(lista);
+    try{
+      if(_hayEditorAbierto()){ _pendingLoadRender=true; }
+      else { render(); }
+    }catch(e){}
+    /* Solo se sella si sabemos de cuando es. Sin sello, el cartel sigue
+       diciendo lo de antes y Google lo corrige cuando llegue. */
+    try{ if(edad)_marcarFresco(['pedidos'],edad); }catch(e){}
+    return true;
+  }).catch(function(){ return false; });
 }
 
 /* El adelanto. Devuelve una promesa que NUNCA rechaza: quien la llama no tiene
@@ -10122,7 +10188,9 @@ function loadRapido(opts){
   /* El adelanto de Supabase sale EN PARALELO y no se espera: si llega primero
      pinta la lista, y si no, no pasa nada. No entra en la cuenta de fuentes
      frescas (`_vf`) porque no reemplaza a `pedidosLight` — lo adelanta. */
-  try{ _sbAdelanto(); }catch(e){}
+  /* `gen` es el testigo de esta carrera: el que llega segundo no pinta. */
+  var _sbGen={llego:false};
+  try{ _sbRefrescoPedidos(_sbGen); }catch(e){}
   var _vf=['pedidos']; if(!_soloPed&&_tengoTab('caja'))_vf.push('caja');
   _frescoEnVuelo(_vf,1);
   var _finR=function(){ _frescoEnVuelo(_vf,-1); };
@@ -10154,7 +10222,11 @@ function loadRapido(opts){
     var _fallaron=(lightData?0:1)+((_pidoCob&&!cobrosData)?1:0)
                  +((_pidoCaja&&!cajaData)?1:0);
     if(!D)D={};
+    /* Google llego: su lista sale de la planilla, que es la fuente de verdad.
+       Gana siempre, y desde aca el adelanto de Supabase ya no pinta. */
     if(lightData && Array.isArray(lightData.pedidos)){
+      _sbGen.llego=true;
+      D._pedidosDeSupabase=0;
       D.pedidos=lightData.pedidos;
       if(lightData.canales)D.canales=lightData.canales;
       /* Los clientes de cada semana y B2B/Catering (14/9/2026). pedidosLight traia
@@ -10967,7 +11039,12 @@ function _warnOCMsg(warn){
 }
 
 // Helper: actualiza un campo de un pedido en D.pedidos (UI optimista).
+/* Cuando fue el ultimo cambio hecho DESDE ACA (un cobro, una fecha, un estado).
+   La lista de Supabase no lo puede saber hasta que corra la replica, asi que
+   mientras esta marca este fresca el adelanto se abstiene. Ver `_sbPuedePisar`. */
+var _sbCambioLocal=0;
 function _patchPedidoLocal(hoja,id,patch){
+  _sbCambioLocal=Date.now();
   if(!D||!D.pedidos)return;
   for(var i=0;i<D.pedidos.length;i++){
     var p=D.pedidos[i];

@@ -43,11 +43,13 @@ const FILAS = [
     order_state: 'Entregado', payment_state: 'Cobrado', payment_method: 'Efectivo', source_type: 'Deposito',
     ordered_at: '2026-09-23T14:05:00+00:00', planned_delivery_at: '2026-09-23',
     delivered_at: '2026-09-23T19:30:00+00:00', billed_amount: '58000.00',
-    cash_amount: '58000.00', transfer_amount: '0.00', source_row: 1002 },
+    cash_amount: '58000.00', transfer_amount: '0.00', source_row: 1002,
+    source_updated_at: '2026-09-23T14:05:00+00:00' },
   { channel: 'Red', order_number: '-', customer_name: 'Cancelado X', customer_key: '1155550003',
     order_state: 'Cancelado', payment_state: 'No Cobrado', payment_method: '', source_type: '',
     ordered_at: '2026-09-01T10:00:00+00:00', planned_delivery_at: '2026-09-02',
-    delivered_at: null, billed_amount: '0.00', cash_amount: '0', transfer_amount: '0', source_row: 55 },
+    delivered_at: null, billed_amount: '0.00', cash_amount: '0', transfer_amount: '0', source_row: 55,
+    source_updated_at: '2026-09-01T10:00:00+00:00' },
 ];
 
 const ctx = {
@@ -74,7 +76,12 @@ vm.runInContext([
   sacar('_sbPermiso'),
   (src.match(/\nvar _SB_DIAS=\[[^\]]*\];/) || [''])[0],
   sacar('_sbDia'), sacar('_sbDdMm'), sacar('_sbAPedido'), sacar('_sbPedidos'), sacar('_sbAdelanto'),
+  'var _sbCambioLocal=0;',
+  (src.match(/\nvar _SB_ESPERA_TRAS_CAMBIO=[^;]*;/) || [''])[0],
+  sacar('_sbPuedePisar'), sacar('_sbEdad'), sacar('_sbRefrescoPedidos'),
 ].join('\n'), ctx);
+
+const tocarAhora = ms => vm.runInContext('_sbCambioLocal=' + ms + ';', ctx);
 
 const limpiar = () => vm.runInContext('_sbPerm=null;_sbPermHasta=0;_sbPidiendo=null;', ctx);
 
@@ -148,6 +155,85 @@ const limpiar = () => vm.runInContext('_sbPerm=null;_sbPermHasta=0;_sbPidiendo=n
   await ctx._sbAdelanto();
   const n2 = llamadas.filter(u => u.indexOf('sbToken') >= 0).length;
   chk('el permiso se pide UNA vez y se reusa una hora', n1 === 1 && n2 === 1, { n1, n2 });
+
+  /* ══ EL REFRESCO: LOS CUATRO FRENOS ════════════════════════════════════
+     Esto pisa la lista que ya está en pantalla, así que acá es donde un error
+     se lleva plata de la vista sin avisar. Cada freno tiene su assert. */
+  console.log('\n-- el refresco pisa la lista, con frenos --');
+
+  limpiar(); reset(); tocarAhora(0);
+  ctx.D = { pedidos: [{ n: 'VIEJO' }] }; ctx._renders = 0;
+  chk('SÍ reemplaza una lista que ya estaba (esto es lo nuevo)',
+    (await ctx._sbRefrescoPedidos({ llego: false })) === true
+    && ctx.D.pedidos.length === 2 && ctx.D.pedidos[0].n === '1023' && ctx._renders === 1,
+    ctx.D.pedidos.map(p => p.n));
+
+  /* FRENO 1 — un cobro recién hecho. La réplica tarda hasta 5 min en tenerlo. */
+  limpiar(); reset(); tocarAhora(Date.now());
+  ctx.D = { pedidos: [{ n: 'COBRADO_RECIEN' }] }; ctx._renders = 0;
+  chk('NO pisa si acabás de tocar algo: la réplica todavía no lo tiene',
+    (await ctx._sbRefrescoPedidos({ llego: false })) === false
+    && ctx.D.pedidos[0].n === 'COBRADO_RECIEN' && ctx._renders === 0, ctx.D.pedidos);
+  chk('y ni le pide permiso al ERP: se corta antes de salir', llamadas.length === 0, llamadas);
+
+  limpiar(); reset(); tocarAhora(Date.now() - 7 * 60 * 1000);
+  ctx.D = { pedidos: [{ n: 'VIEJO' }] };
+  chk('pasados los 6 minutos sí pisa: la réplica ya lo alcanzó',
+    (await ctx._sbRefrescoPedidos({ llego: false })) === true && ctx.D.pedidos[0].n === '1023');
+
+  /* FRENO 2 — Google ya llegó. Su dato sale de la planilla, que manda. */
+  limpiar(); reset(); tocarAhora(0);
+  ctx.D = { pedidos: [{ n: 'DE_GOOGLE' }] }; ctx._renders = 0;
+  chk('NO pisa si el paquete de Google ya llegó en este mismo refresco',
+    (await ctx._sbRefrescoPedidos({ llego: true })) === false
+    && ctx.D.pedidos[0].n === 'DE_GOOGLE' && ctx._renders === 0);
+
+  /* FRENO 3 — tocaste algo MIENTRAS la respuesta viajaba. */
+  limpiar(); reset(); tocarAhora(0);
+  ctx.D = { pedidos: [{ n: 'ANTES' }] };
+  const fetchOrig = ctx.fetch;
+  ctx.fetch = function (u, i) {
+    if (u.indexOf('sales_order') >= 0) tocarAhora(Date.now());   // cobra justo ahora
+    return fetchOrig.call(ctx, u, i);
+  };
+  chk('NO pisa si tocaste algo mientras la respuesta venía en camino',
+    (await ctx._sbRefrescoPedidos({ llego: false })) === false && ctx.D.pedidos[0].n === 'ANTES');
+  ctx.fetch = fetchOrig;
+
+  /* FRENO 4 — el editor abierto. */
+  limpiar(); reset(); tocarAhora(0);
+  ctx.D = { pedidos: [{ n: 'VIEJO' }] }; ctx._renders = 0; ctx._editorAbierto = true;
+  await ctx._sbRefrescoPedidos({ llego: false });
+  chk('con un editor abierto no repinta, pero deja el dato listo',
+    ctx._renders === 0 && ctx._pendingLoadRender === true && ctx.D.pedidos[0].n === '1023');
+  ctx._editorAbierto = false; ctx._pendingLoadRender = false;
+
+  /* ══ EL SELLO NO PUEDE MENTIR ═════════════════════════════════════════ */
+  console.log('\n-- el sello dice la edad de verdad --');
+  const AYER = '2026-09-22T18:00:00+00:00';
+  chk('la edad de la foto es el sello MÁS NUEVO de las filas',
+    ctx._sbEdad([{ _ts: AYER }, { _ts: '2026-09-23T20:00:00+00:00' }])
+      === Date.parse('2026-09-23T20:00:00+00:00'));
+  chk('sin ningún sello devuelve 0, y entonces NO se sella nada',
+    ctx._sbEdad([{ _ts: '' }, {}]) === 0);
+  chk('un sello ilegible no se toma por bueno', ctx._sbEdad([{ _ts: 'cualquier cosa' }]) === 0);
+
+  limpiar(); reset(); tocarAhora(0);
+  ctx.D = null; ctx._sellos = [];
+  ctx._marcarFresco = function (f, ts) { ctx._sellos.push({ f: f, ts: ts }); };
+  await ctx._sbRefrescoPedidos({ llego: false });
+  const sello = ctx._sellos[0];
+  chk('sella "pedidos" con la edad de la réplica, NO con la hora de ahora',
+    !!(sello && sello.f[0] === 'pedidos' && sello.ts === Date.parse(FILAS[0].ordered_at)),
+    sello);
+  chk('y esa hora es anterior a ahora: no dice "recién" sobre algo que no lo es',
+    !!(sello && sello.ts < Date.now()));
+
+  limpiar(); reset({ filas: [Object.assign({}, FILAS[0], { source_updated_at: null })] });
+  tocarAhora(0); ctx.D = null; ctx._sellos = [];
+  await ctx._sbRefrescoPedidos({ llego: false });
+  chk('si la réplica no dice de cuándo es, no se sella nada (mejor el cartel viejo que uno inventado)',
+    ctx._sellos.length === 0, ctx._sellos);
 
   console.log('\n  ' + ok + ' ok · ' + mal + ' mal\n');
   process.exit(mal ? 1 : 0);
