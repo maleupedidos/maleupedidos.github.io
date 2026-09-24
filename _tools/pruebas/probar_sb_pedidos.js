@@ -79,7 +79,7 @@ vm.runInContext([
   sacar('_sbDia'), sacar('_sbDdMm'), sacar('_sbAPedido'), sacar('_sbPedidos'), sacar('_sbAdelanto'),
   'var _sbCambioLocal=0;',
   (src.match(/\nvar _SB_ESPERA_TRAS_CAMBIO=[^;]*;/) || [''])[0],
-  sacar('_sbPuedePisar'), sacar('_sbEdad'), sacar('_sbRefrescoPedidos'),
+  sacar('_sbPuedePisar'), sacar('_sbEdad'), sacar('_sbCompletar'), sacar('_sbRefrescoPedidos'),
 ].join('\n'), ctx);
 
 const tocarAhora = ms => vm.runInContext('_sbCambioLocal=' + ms + ';', ctx);
@@ -121,6 +121,13 @@ const limpiar = () => vm.runInContext('_sbPerm=null;_sbPermHasta=0;_sbPidiendo=n
     (await ctx._sbAdelanto()) === true && ctx.D.pedidos.length === 2 && ctx._renders === 1,
     { n: ctx.D && ctx.D.pedidos && ctx.D.pedidos.length, renders: ctx._renders });
   chk('y queda anotado que esa foto es de Supabase', ctx.D._pedidosDeSupabase === 1);
+  /* Lo que render() recorre y Supabase no trae. Un undefined acá tira un
+     TypeError que el try/catch del render se traga: la pantalla se queda como
+     estaba y parece que el adelanto no hizo nada. Costó dos publicaciones. */
+  chk('deja listo lo que render() recorre: canales, OCs y cobros',
+    Array.isArray(ctx.D.canales) && ctx.D.oc && Array.isArray(ctx.D.oc.lista)
+    && Array.isArray(ctx.D.cobros),
+    { canales: ctx.D.canales, oc: ctx.D.oc, cobros: ctx.D.cobros });
 
   limpiar(); reset(); ctx.D = { pedidos: [{ n: '999' }] }; ctx._renders = 0;
   chk('si YA hay pedidos en pantalla, no toca nada (no pisa lo más fresco)',
