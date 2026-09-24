@@ -275,10 +275,19 @@ const reabrir = () => vm.runInContext('_sbPerm=null;_sbPermHasta=0;_sbPidiendo=n
     ctx.D.pedidos.map(p => p.n + ':' + (p.c || '')));
 
   /* LOS 14 CANCELADOS SIN NUMERO (24/9/2026). En la planilla traen '-' en la
-     columna N°, y los catorce son del canal Home: con la clave `h|n` los
-     catorce son `Home|-`, se pisan entre ellos y en pantalla queda UNO.
-     Medido contra producción: filas 268, 271, 276, 313, 316, 341, 381, 422…
-     La clave los desempata por la fila de la planilla, que traen los dos lados. */
+     columna N°. Con la clave `h|n` se pisan entre ellos y queda uno por canal.
+     Medido contra producción con los 1.264: las claves `(canal, número)` son
+     **1.253** y las `(canal, fila)` son **1.264** — se pierden ONCE pedidos.
+
+     **No son todos de Home: son Home 11, Clubes 2, Pilar 1.** Importa porque la
+     tentación obvia es escribir un caso especial para Home, y entonces Clubes
+     sigue perdiendo uno de $195.000. Por eso hay asserts de Clubes y de Pilar,
+     no sólo de Home: un test que mira un canal no caza un bug que mira un canal. */
+  chk('dos cancelados de CLUBES tampoco comparten clave',
+    ctx._sbClavePedido({ h: 'Clubes', n: '-', r: 35 }) !== ctx._sbClavePedido({ h: 'Clubes', n: '-', r: 77 }),
+    [ctx._sbClavePedido({ h: 'Clubes', n: '-', r: 35 }), ctx._sbClavePedido({ h: 'Clubes', n: '-', r: 77 })]);
+  chk('y la misma fila en DOS canales distintos no se confunde',
+    ctx._sbClavePedido({ h: 'Clubes', n: '-', r: 22 }) !== ctx._sbClavePedido({ h: 'Pilar', n: '-', r: 22 }));
   chk('dos cancelados sin número NO comparten clave: los separa la fila',
     ctx._sbClavePedido({ h: 'Home', n: '-', r: 268 }) !== ctx._sbClavePedido({ h: 'Home', n: '-', r: 271 }),
     [ctx._sbClavePedido({ h: 'Home', n: '-', r: 268 }), ctx._sbClavePedido({ h: 'Home', n: '-', r: 271 })]);
@@ -311,6 +320,28 @@ const reabrir = () => vm.runInContext('_sbPerm=null;_sbPermHasta=0;_sbPidiendo=n
   chk('y el que actualizó es el de la fila 271',
     (ctx.D.pedidos.filter(p => p.r === 271)[0] || {}).c === 'Otro Cape (nuevo)',
     ctx.D.pedidos.filter(p => p.n === '-').map(p => '#' + p.r + ':' + p.c));
+
+  /* El mismo escenario en CLUBES, que es donde está la plata si alguien escribe
+     el caso especial para Home. Supabase trae el de la fila 35 — a proposito el
+     que NO es el ultimo del indice: con la clave rota, `Clubes|-` apunta al
+     ultimo (el 77) y el 35 lo pisa, o sea que **desaparece Juampi Yofre y sus
+     $195.000**. Traer el 77 no cazaria nada: se pisaria a si mismo. */
+  limpiar();
+  reset({ filas: [{ channel: 'Clubes', order_number: '-', customer_name: 'Catalina Trevisan',
+    customer_key: '2', order_state: 'Cancelado', payment_state: 'No Cobrado', payment_method: '',
+    source_type: '', ordered_at: '2026-04-30T10:00:00+00:00', planned_delivery_at: '2026-05-01',
+    delivered_at: null, billed_amount: '77000', cash_amount: '0', transfer_amount: '0',
+    source_row: 35, source_updated_at: '2026-04-30T10:00:00+00:00' }] });
+  tocarAhora(0);
+  ctx.D = { pedidos: [
+    { h: 'Clubes', n: '-', r: 35, c: 'Catalina Trevisan', $: 77000 },
+    { h: 'Clubes', n: '-', r: 77, c: 'Juampi Yofre', $: 195000 } ] };
+  await ctx._sbRefrescoPedidos({ llego: false });
+  const _cl = ctx.D.pedidos.filter(p => p.h === 'Clubes' && p.n === '-');
+  chk('en Clubes tampoco se pierde el de $195.000',
+    _cl.length === 2 && _cl.map(p => p.r).sort().join(',') === '35,77'
+    && (_cl.filter(p => p.r === 77)[0] || {}).$ === 195000,
+    _cl.map(p => '#' + p.r + ':$' + p.$));
 
   /* FRENO 1 — un cobro recién hecho. La réplica tarda hasta 5 min en tenerlo. */
   limpiar(); reset(); tocarAhora(Date.now());
