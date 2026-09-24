@@ -7096,6 +7096,9 @@ function _pedirD(){
      lo salteaba) ni por `_sbAdelanto` (que solo pinta si `D.pedidos` esta
      vacio, y con la copia de `ma3` nunca lo esta). */
   try{loadRapido({soloPedidos:true});}catch(e){}
+  /* El permiso de Supabase, tarde y por atras: no compite con el arranque y
+     deja el atajo listo para el resto de la sesion. Ver `_sbPermisoTibio`. */
+  try{_sbPermisoTibio();}catch(e){}
   /* Un arranque no puede quedar eternamente con el cartel de carga. Hay redes
      donde una respuesta de Google queda colgada entre el redirect del script y
      el navegador: no es una carga lenta, es una carga que no llegó. A los 45 s
@@ -10132,7 +10135,21 @@ function _sbTokBorrar(){ try{ localStorage.removeItem(_SB_TOK_LS); }catch(e){} }
    dura una hora; se renueva dos minutos antes. Un "no" se recuerda 5 minutos
    para no preguntar en cada pantalla: hoy solo Tadeo recibe permiso, asi que
    para el resto del equipo esto tiene que costar CERO llamadas. */
-function _sbPermiso(){
+/* `soloSiLoTengo` (24/9/2026): devolve el permiso que ya esta, pero NO salgas a
+   pedirlo. Lo usa el atajo, que corre en el arranque.
+
+   Por que hace falta, medido contra produccion: `sbToken` tarda **3,5 s** y se
+   queda con uno de los DOS cupos de Apps Script justo cuando hacen falta los
+   dos. Con la cuenta a la vista, sin permiso guardado el atajo pierde:
+
+       con permiso : Supabase 300 ms
+       sin permiso : sbToken 3,5 s + Supabase 0,6 s = 4,1 s
+       por Google  : pedidosLight 3,5 s
+
+   O sea que pedirlo ahi hace que la lista llegue MAS TARDE que sin atajo, y de
+   paso atrasa 3,5 s a `cobrosPendientes`, `cajaLight` y `ocLight`. El permiso
+   se pide igual, pero por atras y con la cola vacia: ver `_sbPermisoTibio`. */
+function _sbPermiso(soloSiLoTengo){
   if(_sbPerm&&Date.now()<_sbPermHasta)return Promise.resolve(_sbPerm);
   if(_sbPerm===false&&Date.now()<_sbPermHasta)return Promise.resolve(null);
   if(_sbPidiendo)return _sbPidiendo;
@@ -10141,6 +10158,9 @@ function _sbPermiso(){
     var _g=_sbTokLeer();
     if(_g){ _sbPerm=_g.sb; _sbPermHasta=Number(_g.hasta); return Promise.resolve(_sbPerm); }
   }
+  /* No esta guardado y el que llama no puede pagar la espera. Null no es un
+     error: significa "esta pantalla va por Apps Script, como siempre". */
+  if(soloSiLoTengo)return Promise.resolve(null);
   _sbPidiendo=fetch(API+'?action=sbToken&t='+Date.now())
     .then(function(r){return r.json();})
     .then(function(d){
@@ -10159,6 +10179,48 @@ function _sbPermiso(){
     })
     .catch(function(){_sbPidiendo=null;_sbPerm=false;_sbPermHasta=Date.now()+300000;return null;});
   return _sbPidiendo;
+}
+
+/* EL PERMISO SE PIDE TARDE Y POR ATRAS (24/9/2026).
+
+   No sirve para la apertura en curso —ya paso— y esta bien: sirve para la
+   proxima, y para todo lo que Tadeo haga en esta sesion, que es lo que mas
+   pesa. A los 12 s del arranque la cola de Apps Script ya se vacio.
+
+   Y mientras la app queda abierta se renueva sola dos minutos antes de vencer.
+   Con eso, en uso normal el permiso esta SIEMPRE y el atajo corre SIEMPRE — que
+   es justo lo que el atajo necesita para no ser un adorno.
+
+   `_sbPermiso()` ya se defiende de los pedidos repetidos (`_sbPidiendo`) y de
+   los "no" (los recuerda 5 minutos), asi que esto no puede convertirse en una
+   catarata de llamadas para el resto del equipo, que no recibe permiso. */
+var _SB_RENOVAR_T=null;
+function _sbPermisoTibio(){
+  try{
+    setTimeout(function(){
+      try{ _sbPermiso(); }catch(e){}
+      _sbProgramarRenovacion();
+    },12000);
+  }catch(e){}
+}
+function _sbProgramarRenovacion(){
+  try{
+    clearTimeout(_SB_RENOVAR_T);
+    if(!_sbPerm||!_sbPermHasta)return;
+    /* Un minuto antes de que el front lo de por vencido, que a su vez ya va dos
+       minutos antes del vencimiento real. */
+    var falta=_sbPermHasta-Date.now()-60000;
+    /* `setTimeout` con mas de 24,8 dias desborda y dispara al instante. Una
+       hora no llega ni cerca, pero el tope deja el codigo a salvo de que
+       mañana alguien suba el JWT expiry sin mirar esto. */
+    if(falta<1000)falta=1000;
+    if(falta>1800000)falta=1800000;
+    _SB_RENOVAR_T=setTimeout(function(){
+      _sbPerm=null;_sbPermHasta=0;          /* que salga a buscar uno nuevo */
+      try{ _sbPermiso(); }catch(e){}
+      _sbProgramarRenovacion();
+    },falta);
+  }catch(e){}
 }
 
 var _SB_DIAS=['Domingo','Lunes','Martes','Miércoles','Jueves','Viernes','Sábado'];
@@ -10225,8 +10287,37 @@ function _sbAPedido(o){
 
 /* La lista, de la mas nueva a la mas vieja. `limite` existe porque la pantalla
    muestra las ultimas: traer las 1.264 son 1,4 s y no las necesita para pintar. */
+/* LA MISMA CONSULTA NO SALE DOS VECES (24/9/2026).
+
+   Medido en el arranque: `SUPABASE sales_order` salia **dos veces en el mismo
+   milisegundo** — `_sbAdelanto` y `_sbRefrescoPedidos` arrancan los dos y los
+   dos esperan al mismo permiso, asi que cuando llega salen juntos. El segundo
+   se cuelga del primero, igual que hace `loadRapido` con sus promesas.
+
+   La clave lleva el LIMITE y el USUARIO. El limite, porque dos consultas con
+   limites distintos no son la misma consulta y compartirlas le daria a una de
+   las dos menos filas de las que pidio. El usuario, porque **una consulta en
+   vuelo es el permiso de alguien, en uso**: lo mostro la reinyeccion, al romper
+   a proposito la liberacion del vuelo y ver ponerse rojo un caso de otro tema
+   —"el permiso de Tadeo NO se le presta a otro usuario"—. Hoy cambiar de
+   usuario recarga la pagina, asi que no se puede dar; la regla no depende de
+   ese accidente. */
+var _sbEnVuelo={};
 function _sbPedidos(limite){
-  return _sbPermiso().then(function(sb){
+  var _lim=(limite||400)+'|'+((typeof SESSION!=='undefined'&&SESSION&&SESSION.usuario)||'');
+  if(_sbEnVuelo[_lim])return _sbEnVuelo[_lim];
+  var _p=_sbPedidosAhora(limite||400);
+  _sbEnVuelo[_lim]=_p;
+  /* Se libera pase lo que pase. Sin esto, una consulta que falla dejaria el
+     atajo apagado para el resto de la sesion. */
+  var _libre=function(){ delete _sbEnVuelo[_lim]; };
+  _p.then(_libre,_libre);
+  return _p;
+}
+function _sbPedidosAhora(limite){
+  /* `true` = usá el permiso si lo tenés, pero no salgas a pedirlo. Ver
+     `_sbPermiso`: pedirlo acá atrasa el arranque entero 3,5 s. */
+  return _sbPermiso(true).then(function(sb){
     if(!sb)return null;
     var cols='channel,order_number,customer_name,customer_key,order_state,payment_state,'
       +'payment_method,source_type,ordered_at,planned_delivery_at,delivered_at,'

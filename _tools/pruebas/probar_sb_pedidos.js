@@ -92,7 +92,11 @@ vm.runInContext([
   sacar('_sbTokGuardar'), sacar('_sbTokLeer'), sacar('_sbTokBorrar'),
   sacar('_sbPermiso'),
   (src.match(/\nvar _SB_DIAS=\[[^\]]*\];/) || [''])[0],
-  sacar('_sbDia'), sacar('_sbDdMm'), sacar('_sbAPedido'), sacar('_sbPedidos'), sacar('_sbAdelanto'),
+  sacar('_sbDia'), sacar('_sbDdMm'), sacar('_sbAPedido'),
+  /* `_sbEnVuelo` y `_sbPedidosAhora` son del 24/9/2026: una sola consulta a
+     Supabase por vez. Van ANTES de `_sbPedidos`, que las usa. */
+  'var _sbEnVuelo={};',
+  sacar('_sbPedidosAhora'), sacar('_sbPedidos'), sacar('_sbAdelanto'),
   'var _sbCambioLocal=0;',
   (src.match(/\nvar _SB_ESPERA_TRAS_CAMBIO=[^;]*;/) || [''])[0],
   sacar('_sbPuedePisar'), sacar('_sbEdad'), sacar('_sbCompletar'),
@@ -101,7 +105,23 @@ vm.runInContext([
 
 const tocarAhora = ms => vm.runInContext('_sbCambioLocal=' + ms + ';', ctx);
 
-const limpiar = () => { ctx._ls = {}; vm.runInContext('_sbPerm=null;_sbPermHasta=0;_sbPidiendo=null;', ctx); };
+const limpiar = () => { ctx._ls = {}; vm.runInContext('_sbPerm=null;_sbPermHasta=0;_sbPidiendo=null;', ctx);
+  vm.runInContext('_sbEnVuelo={};', ctx); };
+/* EL PERMISO YA EN LA MANO, que es el estado normal (24/9/2026).
+
+   Desde hoy el atajo no pide el permiso — lo pide `_sbPermisoTibio` a los 12 s
+   del arranque, porque pedirlo en el camino critico atrasa todo 3,5 s. En la
+   vida de Tadeo eso significa que el permiso **ya esta** cuando el atajo corre.
+   Los casos que prueban el atajo tienen que arrancar de ese estado; los que
+   prueban la ausencia de permiso, del otro. */
+const conPermiso = async () => { await ctx._sbPermiso(); };
+/* El permiso en memoria SIN pasar por la red. Es el estado en que el atajo
+   corre de verdad —se lo dejo `_sbPermisoTibio` en la apertura anterior— y
+   sembrarlo sin `fetch` deja limpio el contador de `llamadas`, del que dependen
+   los asserts del bloque del permiso. */
+const permisoAMano = () => vm.runInContext(
+  "_sbPerm={token:'TOK',seg:3600,url:'https://p.supabase.co',key:'sb_publishable_x'};"
+  + "_sbPermHasta=Date.now()+3500000;_sbEnVuelo={};", ctx);
 /* Cerrar y volver a abrir la app: se pierde la memoria, NO el localStorage. */
 const reabrir = () => vm.runInContext('_sbPerm=null;_sbPermHasta=0;_sbPidiendo=null;', ctx);
 
@@ -135,7 +155,7 @@ const reabrir = () => vm.runInContext('_sbPerm=null;_sbPermHasta=0;_sbPidiendo=n
 
   /* ── El adelanto ── */
   console.log('\n-- el adelanto --');
-  limpiar(); reset(); ctx.D = null; ctx._renders = 0;
+  limpiar(); reset(); await conPermiso(); ctx.D = null; ctx._renders = 0;
   chk('con la pantalla vacía, trae la lista y repinta',
     (await ctx._sbAdelanto()) === true && ctx.D.pedidos.length === 2 && ctx._renders === 1,
     { n: ctx.D && ctx.D.pedidos && ctx.D.pedidos.length, renders: ctx._renders });
@@ -153,7 +173,7 @@ const reabrir = () => vm.runInContext('_sbPerm=null;_sbPermHasta=0;_sbPidiendo=n
     (await ctx._sbAdelanto()) === false && ctx.D.pedidos[0].n === '999' && ctx._renders === 0, ctx.D.pedidos);
   chk('y ni siquiera le pide permiso al ERP', llamadas.length === 0, llamadas);
 
-  limpiar(); reset(); ctx.D = null; ctx._renders = 0; ctx._editorAbierto = true;
+  limpiar(); reset(); await conPermiso(); ctx.D = null; ctx._renders = 0; ctx._editorAbierto = true;
   await ctx._sbAdelanto();
   chk('con un editor abierto NO repinta: se le borraría lo que está tipeando',
     ctx._renders === 0 && ctx._pendingLoadRender === true, { renders: ctx._renders });
@@ -170,24 +190,29 @@ const reabrir = () => vm.runInContext('_sbPerm=null;_sbPermHasta=0;_sbPidiendo=n
   chk('y el "no" se recuerda: no vuelve a preguntar en cada pantalla',
     llamadas.length === 0, llamadas);
 
+  /* Sin red al pedir el permiso. El que lo pide es `_sbPermiso`, asi que se le
+     pregunta a el; y el atajo, sin permiso, tiene que salir tranquilo. */
   limpiar(); reset({ fallaTok: true }); ctx.D = null;
-  chk('sin red al pedir permiso -> false, no una excepción', (await ctx._sbAdelanto()) === false);
+  chk('sin red al pedir permiso -> null, no una excepción',
+    (await ctx._sbPermiso()) === null);
+  chk('y el atajo, sin permiso, devuelve false sin romper nada',
+    (await ctx._sbAdelanto()) === false && ctx.D === null);
 
-  limpiar(); reset({ fallaSb: true }); ctx.D = null;
+  limpiar(); reset(); await conPermiso(); reset({ fallaSb: true }); ctx.D = null;
   chk('si Supabase contesta mal -> false, y la pantalla espera a Google',
     (await ctx._sbAdelanto()) === false && ctx.D === null);
 
-  limpiar(); reset({ filas: [] }); ctx.D = null; ctx._renders = 0;
+  limpiar(); reset(); await conPermiso(); reset({ filas: [] }); ctx.D = null; ctx._renders = 0;
   chk('una lista vacía no se pinta como si fuera la verdad',
     (await ctx._sbAdelanto()) === false && ctx._renders === 0);
 
   /* ── El permiso se reusa ── */
   console.log('\n-- el permiso se reusa --');
   limpiar(); reset(); ctx.D = null;
-  await ctx._sbAdelanto();
+  await ctx._sbPermiso();
   const n1 = llamadas.filter(u => u.indexOf('sbToken') >= 0).length;
   ctx.D = null;
-  await ctx._sbAdelanto();
+  await ctx._sbPermiso(); await ctx._sbAdelanto();
   const n2 = llamadas.filter(u => u.indexOf('sbToken') >= 0).length;
   chk('el permiso se pide UNA vez y se reusa una hora', n1 === 1 && n2 === 1, { n1, n2 });
 
@@ -198,47 +223,64 @@ const reabrir = () => vm.runInContext('_sbPerm=null;_sbPermHasta=0;_sbPidiendo=n
      que es exactamente lo que pasa al cerrar y abrir la PWA. */
   console.log('\n-- el permiso sobrevive a cerrar la app --');
   limpiar(); reset(); ctx.D = null;
-  await ctx._sbAdelanto();
+  await ctx._sbPermiso();
   const _t1 = llamadas.filter(u => u.indexOf('sbToken') >= 0).length;
   reabrir();                                  // cierra y abre: se va la memoria
   ctx.D = null;
-  await ctx._sbAdelanto();
+  /* El ATAJO, no `_sbPermiso`: la gracia es que al reabrir el atajo encuentra
+     el permiso guardado y corre SIN salir a la red. Si tuviera que pedirlo,
+     estariamos de vuelta en los 3,5 s del arranque. */
+  const _reab = await ctx._sbAdelanto();
   const _t2 = llamadas.filter(u => u.indexOf('sbToken') >= 0).length;
   chk('al reabrir no se vuelve a pedir: sale del guardado', _t1 === 1 && _t2 === 1, { _t1, _t2 });
+  chk('y el atajo corre igual, sin una sola llamada al ERP', _reab === true, _reab);
 
   /* Atado al usuario. Hoy sólo `tadeo` recibe permiso, así que reusar el de
      otro sería darle un acceso que el backend NO le dio. */
   reabrir(); ctx.SESSION = { usuario: 'luqui' }; ctx.D = null;
-  await ctx._sbAdelanto();
+  /* Primero el atajo: con el permiso de Tadeo guardado, a luqui NO se le presta
+     y —como el atajo ya no pide— ni siquiera sale a la red. Es mas fuerte que
+     antes: el permiso de otro no se usa Y no se pide uno en su lugar. */
+  const _luqui = await ctx._sbAdelanto();
+  const _t3a = llamadas.filter(u => u.indexOf('sbToken') >= 0).length;
+  chk('el permiso de Tadeo NO se le presta a otro usuario',
+    _luqui === false && ctx.D === null, { _luqui: _luqui, D: ctx.D });
+  chk('y al atajo no le cuesta ni una llamada averiguarlo', _t3a === 1, { _t3a });
+  /* Y cuando alguien SI lo pide para luqui, sale un pedido nuevo: el guardado
+     de Tadeo no sirve para el. */
+  await ctx._sbPermiso();
   const _t3 = llamadas.filter(u => u.indexOf('sbToken') >= 0).length;
-  chk('si en el mismo teléfono entra OTRO usuario, no se le presta', _t3 === 2, { _t3 });
+  chk('y si se le pide uno propio, es un pedido NUEVO', _t3 === 2, { _t3 });
   ctx.SESSION = { usuario: 'tadeo' };
 
   /* Vencido: no se usa. Un token de hace dos horas ya no vale contra Supabase,
      y usarlo sería pedir con un 401 garantizado en vez de renovarlo. */
   limpiar(); reset(); ctx.D = null;
-  await ctx._sbAdelanto();
+  await ctx._sbPermiso();
   const _g = JSON.parse(ctx._ls['mc_sbtok']);
   ctx._ls['mc_sbtok'] = JSON.stringify(Object.assign({}, _g, { hasta: Date.now() - 1000 }));
   reabrir(); ctx.D = null;
-  await ctx._sbAdelanto();
+  /* El atajo con un permiso vencido: no lo usa y tampoco pide uno. */
+  const _venc = await ctx._sbAdelanto();
+  chk('el atajo no usa un permiso vencido', _venc === false, _venc);
+  await ctx._sbPermiso();
   const _t4 = llamadas.filter(u => u.indexOf('sbToken') >= 0).length;
   chk('un permiso vencido no se usa: se pide uno nuevo', _t4 === 2, { _t4 });
 
   /* Un "no" del backend borra lo guardado. Si le sacaron el permiso a este
      usuario, seguir con el de ayer sería pasar por arriba de esa decisión. */
   limpiar(); reset(); ctx.D = null;
-  await ctx._sbAdelanto();
+  await ctx._sbPermiso();
   chk('con permiso, queda guardado', !!ctx._ls['mc_sbtok'], Object.keys(ctx._ls));
   reabrir(); reset({ permiso: false }); ctx._ls['mc_sbtok'] = JSON.stringify(
     { u: 'tadeo', sb: { token: 'VIEJO', url: 'https://p.supabase.co', key: 'k' }, hasta: 0 });
   ctx.D = null;
-  await ctx._sbAdelanto();
+  await ctx._sbPermiso();
   chk('si el ERP le dice que no, se borra el guardado', !ctx._ls['mc_sbtok'], ctx._ls['mc_sbtok']);
 
   /* El almacenamiento puede fallar (ventana privada, sitio bloqueado). Eso NO
      puede romper la pantalla: se pide el permiso como siempre. */
-  limpiar(); reset(); ctx.D = null;
+  limpiar(); reset(); await conPermiso(); ctx.D = null;
   const _lsOrig = ctx.localStorage;
   ctx.localStorage = { getItem() { throw new Error('bloqueado'); },
                        setItem() { throw new Error('bloqueado'); },
@@ -258,7 +300,7 @@ const reabrir = () => vm.runInContext('_sbPerm=null;_sbPermHasta=0;_sbPidiendo=n
      el botón en un Chrome real: la lista arrancaba en 400 y terminaba en 1.264.
      Acá está la forma chica del mismo problema — un pedido que Supabase NO
      trajo tiene que seguir estando. */
-  limpiar(); reset(); tocarAhora(0);
+  limpiar(); permisoAMano(); reset(); tocarAhora(0);
   ctx.D = { pedidos: [{ h: 'Home', n: 'VIEJO' }] }; ctx._renders = 0;
   const _fus = (await ctx._sbRefrescoPedidos({ llego: false }));
   chk('fusiona: el que Supabase no trajo NO desaparece',
@@ -271,7 +313,7 @@ const reabrir = () => vm.runInContext('_sbPerm=null;_sbPermHasta=0;_sbPidiendo=n
 
   /* El mismo pedido por las dos puntas: gana el de Supabase y NO se duplica.
      Si se duplicara, el conteo de "+N pedidos nuevos" del botón mentiría. */
-  limpiar(); reset(); tocarAhora(0);
+  limpiar(); permisoAMano(); reset(); tocarAhora(0);
   ctx.D = { pedidos: [{ h: 'Home', n: '1023', c: 'NOMBRE VIEJO' }] };
   await ctx._sbRefrescoPedidos({ llego: false });
   chk('un pedido que viene por las dos puntas se actualiza, no se duplica',
@@ -306,7 +348,7 @@ const reabrir = () => vm.runInContext('_sbPerm=null;_sbPermHasta=0;_sbPidiendo=n
      a OTRO cancelado distinto: queda uno repetido y desaparece un tercero.
      El primer intento de esta prueba ponía los tres solo en la lista previa, y
      la mutación se escapaba — el bug necesita las dos puntas para morder. */
-  limpiar();
+  limpiar(); permisoAMano();
   reset({ filas: [{ channel: 'Home', order_number: '-', customer_name: 'Otro Cape (nuevo)',
     customer_key: '1', order_state: 'Cancelado', payment_state: 'No Cobrado', payment_method: '',
     source_type: '', ordered_at: '2026-09-10T10:00:00+00:00', planned_delivery_at: '2026-09-11',
@@ -349,28 +391,28 @@ const reabrir = () => vm.runInContext('_sbPerm=null;_sbPermHasta=0;_sbPidiendo=n
     _cl.map(p => '#' + p.r + ':$' + p.$));
 
   /* FRENO 1 — un cobro recién hecho. La réplica tarda hasta 5 min en tenerlo. */
-  limpiar(); reset(); tocarAhora(Date.now());
+  limpiar(); permisoAMano(); reset(); tocarAhora(Date.now());
   ctx.D = { pedidos: [{ n: 'COBRADO_RECIEN' }] }; ctx._renders = 0;
   chk('NO pisa si acabás de tocar algo: la réplica todavía no lo tiene',
     (await ctx._sbRefrescoPedidos({ llego: false })) === false
     && ctx.D.pedidos[0].n === 'COBRADO_RECIEN' && ctx._renders === 0, ctx.D.pedidos);
   chk('y ni le pide permiso al ERP: se corta antes de salir', llamadas.length === 0, llamadas);
 
-  limpiar(); reset(); tocarAhora(Date.now() - 7 * 60 * 1000);
+  limpiar(); permisoAMano(); reset(); tocarAhora(Date.now() - 7 * 60 * 1000);
   ctx.D = { pedidos: [{ h: 'Home', n: 'VIEJO' }] };
   chk('pasados los 6 minutos sí entra: la réplica ya lo alcanzó',
     (await ctx._sbRefrescoPedidos({ llego: false })) === true
     && ctx.D.pedidos.some(p => p.n === '1023'), ctx.D.pedidos.map(p => p.n));
 
   /* FRENO 2 — Google ya llegó. Su dato sale de la planilla, que manda. */
-  limpiar(); reset(); tocarAhora(0);
+  limpiar(); permisoAMano(); reset(); tocarAhora(0);
   ctx.D = { pedidos: [{ n: 'DE_GOOGLE' }] }; ctx._renders = 0;
   chk('NO pisa si el paquete de Google ya llegó en este mismo refresco',
     (await ctx._sbRefrescoPedidos({ llego: true })) === false
     && ctx.D.pedidos[0].n === 'DE_GOOGLE' && ctx._renders === 0);
 
   /* FRENO 3 — tocaste algo MIENTRAS la respuesta viajaba. */
-  limpiar(); reset(); tocarAhora(0);
+  limpiar(); permisoAMano(); reset(); tocarAhora(0);
   ctx.D = { pedidos: [{ n: 'ANTES' }] };
   const fetchOrig = ctx.fetch;
   ctx.fetch = function (u, i) {
@@ -382,7 +424,7 @@ const reabrir = () => vm.runInContext('_sbPerm=null;_sbPermHasta=0;_sbPidiendo=n
   ctx.fetch = fetchOrig;
 
   /* FRENO 4 — el editor abierto. */
-  limpiar(); reset(); tocarAhora(0);
+  limpiar(); permisoAMano(); reset(); tocarAhora(0);
   ctx.D = { pedidos: [{ h: 'Home', n: 'VIEJO' }] }; ctx._renders = 0; ctx._editorAbierto = true;
   await ctx._sbRefrescoPedidos({ llego: false });
   chk('con un editor abierto no repinta, pero deja el dato listo',
@@ -400,7 +442,7 @@ const reabrir = () => vm.runInContext('_sbPerm=null;_sbPermHasta=0;_sbPidiendo=n
     ctx._sbEdad([{ _ts: '' }, {}]) === 0);
   chk('un sello ilegible no se toma por bueno', ctx._sbEdad([{ _ts: 'cualquier cosa' }]) === 0);
 
-  limpiar(); reset(); tocarAhora(0);
+  limpiar(); permisoAMano(); reset(); tocarAhora(0);
   ctx.D = null; ctx._sellos = []; ctx._vuelo = [];
   ctx._marcarFresco = function (f, ts) { ctx._sellos.push({ f: f, ts: ts }); };
   await ctx._sbRefrescoPedidos({ llego: false });
@@ -416,7 +458,7 @@ const reabrir = () => vm.runInContext('_sbPerm=null;_sbPermHasta=0;_sbPidiendo=n
   chk('y apaga el cartel "Actualizando…" al mismo tiempo',
     ctx._vuelo.some(v => v.f[0] === 'pedidos' && v.d === -1), ctx._vuelo);
 
-  limpiar(); reset({ filas: [Object.assign({}, FILAS[0], { updated_at: null })] });
+  limpiar(); permisoAMano(); reset({ filas: [Object.assign({}, FILAS[0], { updated_at: null })] });
   tocarAhora(0); ctx.D = null; ctx._sellos = []; ctx._vuelo = [];
   await ctx._sbRefrescoPedidos({ llego: false });
   chk('si la réplica no dice de cuándo es, no se sella nada (mejor el cartel viejo que uno inventado)',
@@ -435,7 +477,7 @@ const reabrir = () => vm.runInContext('_sbPerm=null;_sbPermHasta=0;_sbPidiendo=n
   console.log('\n-- la columna del sello es la que existe de verdad --');
 
   /* Una fila EXACTAMENTE como viene de produccion. */
-  limpiar();
+  limpiar(); permisoAMano();
   reset({ filas: [Object.assign({}, FILAS[0], {
     source_updated_at: null,                       // como en la base, siempre
     updated_at: '2026-09-24T21:15:00+00:00'        // el sello de la replica
@@ -451,13 +493,98 @@ const reabrir = () => vm.runInContext('_sbPerm=null;_sbPermHasta=0;_sbPidiendo=n
   /* La consulta, mirada por su URL y no por el texto del archivo: si alguien
      saca la columna del select, PostgREST no la manda y el sello se apaga sin
      que nada avise. */
-  limpiar(); reset(); tocarAhora(0); ctx.D = null;
+  limpiar(); permisoAMano(); reset(); tocarAhora(0); ctx.D = null;
   await ctx._sbPedidos(400);
   const consulta = llamadas.find(u => u.indexOf('/rest/v1/sales_order') >= 0) || '';
   chk('la consulta PIDE updated_at', /[?&,]updated_at/.test(consulta),
     consulta.slice(0, 200));
   chk('y NO pide source_updated_at, que volveria a estar en null',
     consulta.indexOf('source_updated_at') < 0, consulta.slice(0, 200));
+
+  /* ══ EL PERMISO NO SE PIDE EN EL CAMINO CRITICO ═════════════════
+     Medido en el arranque contra produccion: `sbToken` tarda 3,5 s y se queda
+     con uno de los DOS cupos de Apps Script. Con esa cuenta, sin permiso
+     guardado el atajo TARDA MAS que ir derecho a Google (4,1 s contra 3,5 s) y
+     encima atrasa a `cobrosPendientes`, `cajaLight` y `ocLight`.
+
+     Asi que el atajo usa el permiso si lo tiene y no lo pide si no lo tiene.
+     Pedirlo es tarea de `_sbPermisoTibio`, a los 12 s, con la cola vacia. */
+  console.log('\n-- el permiso no frena el arranque --');
+
+  /* SIN permiso a mano, a proposito: es lo que este bloque viene a probar. */
+  limpiar(); reset(); tocarAhora(0); ctx.D = null;
+  const sinPermiso = await ctx._sbPedidos(400);
+  chk('sin permiso guardado, el atajo devuelve null y no rompe nada',
+    sinPermiso === null, sinPermiso);
+  chk('y NO sale a pedir el permiso: cero llamadas a sbToken',
+    llamadas.filter(u => u.indexOf('action=sbToken') >= 0).length === 0, llamadas);
+  chk('ni consulta Supabase, claro',
+    llamadas.filter(u => u.indexOf('/rest/v1/') >= 0).length === 0, llamadas);
+
+  /* Pero alguien tiene que pedirlo, o el atajo no arranca nunca. */
+  limpiar(); reset();
+  const perm = await ctx._sbPermiso();
+  chk('_sbPermiso() a secas SI lo pide — es lo que hace el pedido tibio',
+    !!(perm && perm.token === 'TOK')
+    && llamadas.filter(u => u.indexOf('action=sbToken') >= 0).length === 1, llamadas);
+
+  /* ══ UNA SOLA CONSULTA EN VUELO ══════════════════════════
+     En el arranque `SUPABASE sales_order` salia dos veces en el mismo
+     milisegundo: `_sbAdelanto` y `_sbRefrescoPedidos` esperaban el mismo
+     permiso y salian juntos al llegar. */
+  console.log('\n-- la misma consulta no sale dos veces --');
+
+  limpiar(); permisoAMano(); reset(); tocarAhora(0); ctx.D = null;
+  const antes = llamadas.filter(u => u.indexOf('/rest/v1/') >= 0).length;
+  /* Las dos SIN await en el medio: es el caso real, los dos caminos arrancan
+     en el mismo tick. Con un await entre una y otra la primera ya termino y
+     esto no probaria nada. */
+  const dos = await Promise.all([ctx._sbPedidos(400), ctx._sbPedidos(400)]);
+  const despues = llamadas.filter(u => u.indexOf('/rest/v1/') >= 0).length;
+  chk('dos llamadas al mismo tiempo hacen UNA sola consulta',
+    despues - antes === 1, { antes: antes, despues: despues });
+  chk('y las dos reciben la misma lista',
+    !!(dos[0] && dos[1] && dos[0].length === dos[1].length && dos[0].length > 0));
+
+  /* Ya terminada, la siguiente vuelve a consultar: esto es compartir el vuelo,
+     no cachear la respuesta. */
+  const trasFin = llamadas.filter(u => u.indexOf('/rest/v1/') >= 0).length;
+  await ctx._sbPedidos(400);
+  chk('terminada la primera, la siguiente SI vuelve a consultar (no es un cache)',
+    llamadas.filter(u => u.indexOf('/rest/v1/') >= 0).length - trasFin === 1);
+
+  /* El candado se abre aunque la consulta falle. Sin esto, un error de red de
+     un segundo dejaria el atajo apagado por el resto de la sesion. */
+  limpiar(); permisoAMano(); reset({ fallaSb: true }); tocarAhora(0); ctx.D = null;
+  const fallo = await ctx._sbPedidos(400);
+  chk('una consulta que falla devuelve null, sin romper', fallo === null, fallo);
+  reset({ fallaSb: false });
+  ctx._ls = ctx._ls;                            // el permiso sigue en memoria
+  const trasFallo = llamadas.filter(u => u.indexOf('/rest/v1/') >= 0).length;
+  const despuesDelFallo = await ctx._sbPedidos(400);
+  chk('y el vuelo queda LIBRE: la siguiente vuelve a intentar',
+    llamadas.filter(u => u.indexOf('/rest/v1/') >= 0).length - trasFallo === 1);
+  chk('y esa si trae la lista', !!(despuesDelFallo && despuesDelFallo.length > 0));
+
+  /* El vuelo compartido va atado al USUARIO, no solo al limite. Una consulta
+     en vuelo es el permiso de alguien en uso: si dos usuarios comparten el
+     vuelo, el segundo se lleva la lista que pidio el primero.
+
+     Lo destapo la reinyeccion del 24/9/2026 (romper la liberacion del vuelo
+     puso rojo el caso de "no se le presta a otro usuario", que es de otro
+     bloque). Hoy cambiar de usuario recarga la pagina, asi que no se puede dar
+     en la practica — la regla no cuelga de ese accidente. */
+  limpiar(); permisoAMano(); reset(); tocarAhora(0); ctx.D = null;
+  const _cAntes = llamadas.filter(u => u.indexOf('/rest/v1/') >= 0).length;
+  /* En el MISMO tick, o no comparten vuelo y el caso no prueba nada. */
+  const _pTadeo = ctx._sbPedidos(400);
+  ctx.SESSION = { usuario: 'luqui' };
+  const _pLuqui = ctx._sbPedidos(400);
+  await Promise.all([_pTadeo, _pLuqui]);
+  ctx.SESSION = { usuario: 'tadeo' };
+  chk('dos usuarios distintos NO comparten la consulta en vuelo',
+    llamadas.filter(u => u.indexOf('/rest/v1/') >= 0).length - _cAntes === 2,
+    llamadas.filter(u => u.indexOf('/rest/v1/') >= 0).length - _cAntes);
 
   console.log('\n  ' + ok + ' ok · ' + mal + ' mal\n');
   process.exit(mal ? 1 : 0);
