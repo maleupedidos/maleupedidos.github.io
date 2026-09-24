@@ -56,7 +56,8 @@ const FILAS = [
 const ctx = {
   console, JSON, Math, Date, String, Number, Boolean, Array, Object, isNaN, Promise, Error,
   API: 'https://script.google.com/macros/s/X/exec',
-  D: null, _pendingLoadRender: false, _renders: 0, _editorAbierto: false,
+  D: null, _pendingLoadRender: false, _renders: 0, _editorAbierto: false, _vuelo: [],
+  _frescoEnVuelo(f, d) { ctx._vuelo.push({ f: f, d: d }); },
   render() { ctx._renders++; },
   _hayEditorAbierto() { return ctx._editorAbierto; },
   localStorage: { getItem: () => '', setItem() {} },
@@ -235,7 +236,7 @@ const limpiar = () => vm.runInContext('_sbPerm=null;_sbPermHasta=0;_sbPidiendo=n
   chk('un sello ilegible no se toma por bueno', ctx._sbEdad([{ _ts: 'cualquier cosa' }]) === 0);
 
   limpiar(); reset(); tocarAhora(0);
-  ctx.D = null; ctx._sellos = [];
+  ctx.D = null; ctx._sellos = []; ctx._vuelo = [];
   ctx._marcarFresco = function (f, ts) { ctx._sellos.push({ f: f, ts: ts }); };
   await ctx._sbRefrescoPedidos({ llego: false });
   const sello = ctx._sellos[0];
@@ -244,12 +245,19 @@ const limpiar = () => vm.runInContext('_sbPerm=null;_sbPermHasta=0;_sbPidiendo=n
     sello);
   chk('y esa hora es anterior a ahora: no dice "recién" sobre algo que no lo es',
     !!(sello && sello.ts < Date.now()));
+  /* El cartel tiene que apagarse JUNTO con el sello. Sin esto el atajo anda y
+     no se nota: los datos ya están pero "Actualizando…" sigue girando hasta
+     que vuelve Google. Medido en Chrome real: 215 ms contra 10 s. */
+  chk('y apaga el cartel "Actualizando…" al mismo tiempo',
+    ctx._vuelo.some(v => v.f[0] === 'pedidos' && v.d === -1), ctx._vuelo);
 
   limpiar(); reset({ filas: [Object.assign({}, FILAS[0], { source_updated_at: null })] });
-  tocarAhora(0); ctx.D = null; ctx._sellos = [];
+  tocarAhora(0); ctx.D = null; ctx._sellos = []; ctx._vuelo = [];
   await ctx._sbRefrescoPedidos({ llego: false });
   chk('si la réplica no dice de cuándo es, no se sella nada (mejor el cartel viejo que uno inventado)',
     ctx._sellos.length === 0, ctx._sellos);
+  chk('y tampoco se apaga el cartel: seguimos esperando a Google, que es la verdad',
+    !ctx._vuelo.some(v => v.d === -1), ctx._vuelo);
 
   console.log('\n  ' + ok + ' ok · ' + mal + ' mal\n');
   process.exit(mal ? 1 : 0);
