@@ -3405,6 +3405,18 @@ body.role-single .statusbar{font-size:11px}
 .plan-btn-metas.sec{background:#fff;color:var(--brown,#331C1C);border:1.5px solid var(--brown,#331C1C)}
 a.plan-btn-metas{display:inline-flex;align-items:center;text-decoration:none}
 .lead-orig{font-size:12px;color:#6b5a5a;margin:6px 0 2px;line-height:1.5}
+/* Los filtros de la lista de leads (24/9/2026). Scroll horizontal en el
+   celular: con seis origenes no entran en 390px, y apilarlos empuja la lista
+   fuera de la pantalla. */
+.lead-filtros{display:flex;gap:6px;align-items:center;margin:8px 0 10px;overflow-x:auto;padding-bottom:2px;-webkit-overflow-scrolling:touch}
+.lead-filtros::-webkit-scrollbar{height:0}
+.lead-chip{flex:0 0 auto;border:1px solid var(--border);background:#fff;color:var(--ink2);border-radius:999px;padding:5px 11px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap;font-family:inherit}
+.lead-chip b{font-weight:800;opacity:.65;margin-left:4px}
+.lead-chip.on{background:var(--ink);color:#fff;border-color:var(--ink)}
+.lead-chip.on b{opacity:.75}
+.lead-chip.mudo{opacity:.55}
+.lead-orden{flex:0 0 auto;margin-left:auto;border:1px solid var(--border);background:#fff;color:var(--ink2);border-radius:6px;padding:5px 8px;font-size:12px;font-weight:700;font-family:inherit}
+.lead-cuenta{font-size:11px;color:var(--ink3);margin:-4px 0 8px}
 .lead-orig-c{color:#2e7d32}
 .lead-prem{color:#b0521f;font-weight:600}
 .lead-prem.usado{color:#2e7d32}
@@ -4726,6 +4738,8 @@ a.plan-btn-metas{display:inline-flex;align-items:center;text-decoration:none}
     <div class="crm-busq"><span class="lupa">&#128269;</span>
       <input id="leadsBusq" type="search" autocomplete="off" placeholder="Buscar por nombre, teléfono, origen&hellip;" oninput="leadsBuscar(this.value)">
       <button class="x" onclick="leadsBuscar('')" title="Limpiar">&times;</button></div>
+    <div class="lead-filtros" id="leadsFiltros"></div>
+    <div class="lead-cuenta" id="leadsCuenta"></div>
     <div id="leadsList"><div class="loading">Cargando leads&hellip;</div></div>
   </div>
 
@@ -35714,6 +35728,25 @@ function _objRango(periodo, mesLabel){
   };
   window.leadsBuscar=function(q){ _busq=String(q||''); if(E('leadsBusq') && !q) E('leadsBusq').value=''; pintar(); };
 
+  /* FILTRAR Y ORDENAR (24/9/2026). El estado vive aca y no en el DOM: `pintar()`
+     redibuja los chips en cada refresco, asi que leerlos de la pantalla
+     perderia la eleccion cada vez que llega el servidor. */
+  var _fOrigen='', _sinClientes=false, _orden='nuevos';
+  window.leadsFiltroOrigen=function(o){ _fOrigen = (_fOrigen===o ? '' : o); pintar(); };
+  window.leadsSinClientes=function(){ _sinClientes=!_sinClientes; pintar(); };
+  window.leadsOrden=function(v){ _orden=String(v||'nuevos'); pintar(); };
+  /* El orden de la lista. El servidor ya la manda del mas nuevo al mas viejo
+     (`iso` desc), asi que "nuevos" no reordena nada y es el default.
+     "numero" es el que pidio Tadeo — "de menor a mayor"—: L-0001 primero, que
+     es como se leen cuando uno busca uno puntual. */
+  function ordenar(xs){
+    var v=xs.slice();
+    if(_orden==='viejos') v.sort(function(a,b){ return (a.iso||'')<(b.iso||'')?-1:((a.iso||'')>(b.iso||'')?1:((a.id||'')<(b.id||'')?-1:1)); });
+    else if(_orden==='numero') v.sort(function(a,b){ return String(a.id||'').localeCompare(String(b.id||''),'es',{numeric:true}); });
+    else if(_orden==='nombre') v.sort(function(a,b){ return String(a.nombre||'').localeCompare(String(b.nombre||''),'es',{sensitivity:'base'}); });
+    return v;
+  }
+
   function pintar(){
     rapPintar();   /* la carga rapida vive arriba de la lista y usa sus origenes */
     var box=E('leadsList'); if(!box) return;
@@ -35742,9 +35775,33 @@ function _objRango(periodo, mesLabel){
         + (ru.length ? '<div class="lead-orig"><b>🎡 Ruleta:</b> '+ru.length+(ru.length===1?' giró':' giraron')+' · '+ruP.length+' con premio · '+ruU.length+' ya '+(ruU.length===1?'lo usó':'lo usaron')+'</div>' : '')
       : '';
     if(!L.length){ box.innerHTML='<div class="plan-canal-empty">Todavía no hay leads cargados. Tocá «+ Lead» para cargar el primero.</div>'; return; }
+    /* LOS CHIPS DE ORIGEN salen de los datos, no de una lista escrita a mano:
+       el dia que aparezca un origen nuevo en la planilla, el chip aparece solo.
+       La cuenta va sobre TODOS los leads, no sobre los del mes, porque esto
+       filtra la lista entera. */
+    var cO={}; L.forEach(function(l){ var o=(l.origen||'Sin origen'); cO[o]=(cO[o]||0)+1; });
+    var origenes=Object.keys(cO).sort(function(a,b){ return cO[b]-cO[a]; });
+    var nCli=L.filter(function(l){ return l.yaCliente; }).length;
+    var chip=function(txt,n,on,fn,extra){ return '<button class="lead-chip'+(on?' on':'')+(extra||'')+'" onclick="'+fn+'">'+esc(txt)+(n!=null?'<b>'+n+'</b>':'')+'</button>'; };
+    if(E('leadsFiltros')) E('leadsFiltros').innerHTML =
+        chip('Todos', L.length, !_fOrigen, "leadsFiltroOrigen('')")
+      + origenes.map(function(o){ return chip(o, cO[o], _fOrigen===o, "leadsFiltroOrigen('"+esc(o).replace(/'/g,"\\'")+"')"); }).join('')
+      + (nCli ? chip('Sin los que ya eran clientes', nCli, _sinClientes, 'leadsSinClientes()', ' mudo') : '')
+      + '<select class="lead-orden" onchange="leadsOrden(this.value)">'
+      + [['nuevos','Más nuevos'],['viejos','Más viejos'],['numero','Por número'],['nombre','Por nombre']]
+          .map(function(o){ return '<option value="'+o[0]+'"'+(_orden===o[0]?' selected':'')+'>'+o[1]+'</option>'; }).join('')
+      + '</select>';
+
     var q=_busq.trim().toLowerCase();
     var xs=q ? L.filter(function(l){ return [l.nombre,l.tel,l.origen,l.responsable,l.barrio,l.notas,l.id].join(' ').toLowerCase().indexOf(q)>=0; }) : L;
-    if(!xs.length){ box.innerHTML='<div class="plan-canal-empty">Ningún lead coincide con «'+esc(_busq)+'».</div>'; return; }
+    if(_fOrigen) xs=xs.filter(function(l){ return (l.origen||'Sin origen')===_fOrigen; });
+    if(_sinClientes) xs=xs.filter(function(l){ return !l.yaCliente; });
+    xs=ordenar(xs);
+    /* Cuantos se estan viendo de cuantos hay: sin esto, un filtro puesto y
+       olvidado hace pensar que se perdieron leads. */
+    if(E('leadsCuenta')) E('leadsCuenta').textContent =
+      (xs.length===L.length ? L.length+(L.length===1?' lead':' leads') : xs.length+' de '+L.length+' leads');
+    if(!xs.length){ box.innerHTML='<div class="plan-canal-empty">Ningún lead coincide'+(_busq?' con «'+esc(_busq)+'»':' con el filtro')+'.</div>'; return; }
     box.innerHTML=xs.slice(0,300).map(function(l){
       var meta=[l.tel, l.origen, l.responsable ? 'lo trajo '+l.responsable : '', l.barrio, l.fecha].filter(Boolean).map(esc).join(' · ');
       var est = l.yaCliente
