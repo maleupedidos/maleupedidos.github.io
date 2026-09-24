@@ -63,6 +63,19 @@ window.__sb = { llamadas: [], pinto: null, t0: Date.now() };
       await dormir(500);
     }
 
+    /* ESPERAR A QUE ESTÉ QUIETO. Disparar un refresco encima del arranque deja
+       el contador de "en vuelo" en 2, y entonces el -1 del atajo no lo lleva a
+       cero: la medición dice que el cartel no se apagó cuando en realidad sí lo
+       haría con un solo refresco, que es lo que hace Tadeo al tocar el botón.
+       Medir sobre un estado sucio es medir otra cosa. */
+    const quieto = Date.now() + 40000;
+    while (Date.now() < quieto) {
+      const v = await evaluar(cli, `(function(){return (window._frescoVuelo&&window._frescoVuelo.pedidos)||0;})()`);
+      if (!v) break;
+      await dormir(500);
+    }
+    await dormir(1500);
+
     /* El refresco, igual que tocar el botón. Se limpia el cronómetro primero
        para medir SOLO este refresco y no el arranque. */
     await evaluar(cli, `(function(){ window.__sb.llamadas=[]; window.__sb.t0=Date.now();
