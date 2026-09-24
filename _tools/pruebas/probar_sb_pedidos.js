@@ -44,13 +44,18 @@ const FILAS = [
     ordered_at: '2026-09-23T14:05:00+00:00', planned_delivery_at: '2026-09-23',
     delivered_at: '2026-09-23T19:30:00+00:00', billed_amount: '58000.00',
     cash_amount: '58000.00', transfer_amount: '0.00', source_row: 1002,
-    source_updated_at: '2026-09-23T14:05:00+00:00',
+    /* `updated_at` y no `source_updated_at`: esta ultima esta en null en las
+       1.264 filas de produccion, porque la hoja de Pedidos no tiene columna
+       "Updated" y el backend la escribe `null` a proposito. Un fixture que la
+       llenaba era mas generoso que la realidad, y por eso este test estuvo
+       verde sobre el bug del cartel. */
+    updated_at: '2026-09-23T14:05:00+00:00',
     sales_order_item: [{ product_sku: 'ECaC', quantity: '2' }, { product_sku: 'EJyQ', quantity: '1' }] },
   { channel: 'Red', order_number: '-', customer_name: 'Cancelado X', customer_key: '1155550003',
     order_state: 'Cancelado', payment_state: 'No Cobrado', payment_method: '', source_type: '',
     ordered_at: '2026-09-01T10:00:00+00:00', planned_delivery_at: '2026-09-02',
     delivered_at: null, billed_amount: '0.00', cash_amount: '0', transfer_amount: '0', source_row: 55,
-    source_updated_at: '2026-09-01T10:00:00+00:00' },
+    updated_at: '2026-09-01T10:00:00+00:00' },
 ];
 
 const ctx = {
@@ -401,7 +406,7 @@ const reabrir = () => vm.runInContext('_sbPerm=null;_sbPermHasta=0;_sbPidiendo=n
   await ctx._sbRefrescoPedidos({ llego: false });
   const sello = ctx._sellos[0];
   chk('sella "pedidos" con la edad de la réplica, NO con la hora de ahora',
-    !!(sello && sello.f[0] === 'pedidos' && sello.ts === Date.parse(FILAS[0].ordered_at)),
+    !!(sello && sello.f[0] === 'pedidos' && sello.ts === Date.parse(FILAS[0].updated_at)),
     sello);
   chk('y esa hora es anterior a ahora: no dice "recién" sobre algo que no lo es',
     !!(sello && sello.ts < Date.now()));
@@ -411,13 +416,48 @@ const reabrir = () => vm.runInContext('_sbPerm=null;_sbPermHasta=0;_sbPidiendo=n
   chk('y apaga el cartel "Actualizando…" al mismo tiempo',
     ctx._vuelo.some(v => v.f[0] === 'pedidos' && v.d === -1), ctx._vuelo);
 
-  limpiar(); reset({ filas: [Object.assign({}, FILAS[0], { source_updated_at: null })] });
+  limpiar(); reset({ filas: [Object.assign({}, FILAS[0], { updated_at: null })] });
   tocarAhora(0); ctx.D = null; ctx._sellos = []; ctx._vuelo = [];
   await ctx._sbRefrescoPedidos({ llego: false });
   chk('si la réplica no dice de cuándo es, no se sella nada (mejor el cartel viejo que uno inventado)',
     ctx._sellos.length === 0, ctx._sellos);
   chk('y tampoco se apaga el cartel: seguimos esperando a Google, que es la verdad',
     !ctx._vuelo.some(v => v.d === -1), ctx._vuelo);
+
+  /* ══ LA COLUMNA DEL SELLO, REINYECTADA ═════════════════════
+     El bug del 24/9/2026: el front pedia `source_updated_at`, que el backend
+     escribe null a proposito (la hoja de Pedidos no tiene columna "Updated").
+     `_sbEdad` devolvia 0, el `if(edad)` no entraba nunca, y el atajo pintaba
+     la lista sin apagar el cartel. Medido en Chrome real: la lista a los
+     523 ms y "Actualizando..." girando hasta los 4.346 ms.
+
+     Funcionaba y no se notaba, que es la peor forma de estar roto. */
+  console.log('\n-- la columna del sello es la que existe de verdad --');
+
+  /* Una fila EXACTAMENTE como viene de produccion. */
+  limpiar();
+  reset({ filas: [Object.assign({}, FILAS[0], {
+    source_updated_at: null,                       // como en la base, siempre
+    updated_at: '2026-09-24T21:15:00+00:00'        // el sello de la replica
+  })] });
+  tocarAhora(0); ctx.D = null; ctx._sellos = []; ctx._vuelo = [];
+  await ctx._sbRefrescoPedidos({ llego: false });
+  const selloProd = ctx._sellos[0];
+  chk('una fila como las de produccion (source_updated_at null) SI sella',
+    !!(selloProd && selloProd.ts === Date.parse('2026-09-24T21:15:00+00:00')), selloProd);
+  chk('y apaga el cartel, que es lo que el bug no hacia',
+    ctx._vuelo.some(v => v.f[0] === 'pedidos' && v.d === -1), ctx._vuelo);
+
+  /* La consulta, mirada por su URL y no por el texto del archivo: si alguien
+     saca la columna del select, PostgREST no la manda y el sello se apaga sin
+     que nada avise. */
+  limpiar(); reset(); tocarAhora(0); ctx.D = null;
+  await ctx._sbPedidos(400);
+  const consulta = llamadas.find(u => u.indexOf('/rest/v1/sales_order') >= 0) || '';
+  chk('la consulta PIDE updated_at', /[?&,]updated_at/.test(consulta),
+    consulta.slice(0, 200));
+  chk('y NO pide source_updated_at, que volveria a estar en null',
+    consulta.indexOf('source_updated_at') < 0, consulta.slice(0, 200));
 
   console.log('\n  ' + ok + ' ok · ' + mal + ' mal\n');
   process.exit(mal ? 1 : 0);

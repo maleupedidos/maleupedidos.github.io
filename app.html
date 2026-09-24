@@ -11366,6 +11366,23 @@ var _fresco=(function(){
   return {ok:{},err:{}};
 })();
 var _frescoVuelo={}, _frescoVueloDesde={}, _frescoListoHasta=0, _frescoListoT=null;
+/* CUANDO LLEGO cada fuente, que NO es lo mismo que de cuando es su dato.
+   (24/9/2026)
+
+   `_fresco.ok[f]` guarda la hora del DATO —puede ser del pasado, porque el
+   atajo de Supabase sella con la edad real de la foto de la replica— y sirve
+   para el texto: "hace 5 min". Esto guarda la hora de la LLEGADA, siempre
+   `Date.now()`, y sirve para decidir si el cartel sigue girando.
+
+   Mezclarlas costo un bug mudo: con una foto de hace 49 minutos, la segunda
+   rama de `_frescoVolando` comparaba el sello del dato contra el momento en que
+   salio el volcado, nunca se cumplia, y el cartel esperaba los ~28 s del
+   volcado entero con la lista ya pintada hacia 2,6 s.
+
+   No va a `localStorage` a proposito: al abrir la app no llego nada todavia en
+   esta sesion. Una llegada de ayer contando como llegada de hoy apagaria el
+   cartel sobre datos que todavia no vinieron. */
+var _frescoLlego={};
 /* Un GET que Google no termina puede seguir vivo aunque el botón manual ya se
    rindió a los 90 s. No puede dejar el ERP diciendo "Actualizando…" para
    siempre: pasados 85 s deja de ser una lectura visualmente en vuelo. Si la
@@ -11422,7 +11439,11 @@ function _frescoErr(f){ return (_fresco.err[f]||0)>_frescoTs(f); }
    "Actualizando..." veinte segundos con sus datos ya frescos. */
 function _frescoVolando(f){
   if((_frescoVuelo[f]||0)>0)return Date.now()-(_frescoVueloDesde[f]||0)<FRESCO_MAX_VUELO_MS;
-  return !!_FRESCO_EN_VOLCADO[f] && (_frescoVuelo.volcado||0)>0 && (_fresco.ok[f]||0)<(_frescoVueloDesde.volcado||0);
+  /* La pregunta es "¿esto LLEGO despues de que salio el volcado?", asi que va
+     `_frescoLlego` y no `_fresco.ok`, que desde el 23/9 puede ser una hora del
+     pasado (la edad de la foto de Supabase). Con el sello del dato, una foto de
+     hace 49 min dejaba el cartel girando hasta que terminaba el volcado. */
+  return !!_FRESCO_EN_VOLCADO[f] && (_frescoVuelo.volcado||0)>0 && (_frescoLlego[f]||0)<(_frescoVueloDesde.volcado||0);
 }
 function _frescoGuardar(){ try{ localStorage.setItem('maleu_fresco',JSON.stringify(_fresco)); }catch(e){} }
 /* Lo llaman los que TRAEN datos, cuando llegaron bien. Las sub-apps lo llaman por
@@ -11433,8 +11454,10 @@ function _frescoGuardar(){ try{ localStorage.setItem('maleu_fresco',JSON.stringi
    recien" cuando puede ser de hace cuatro minutos. El ERP ya sabe mostrar
    "hace 3 min"; lo unico que faltaba era poder decirle cual es el minuto. */
 function _marcarFresco(fuentes,ts){
-  var t=Number(ts)||Date.now(), n=0;
-  (fuentes||[]).forEach(function(f){ if(f){ _fresco.ok[f]=t; n++; } });
+  var t=Number(ts)||Date.now(), n=0, ahora=Date.now();
+  /* `_fresco.ok` lleva la hora del dato (la que se muestra) y `_frescoLlego` la
+     de la llegada (la que decide). Ver el comentario de `_frescoLlego`. */
+  (fuentes||[]).forEach(function(f){ if(f){ _fresco.ok[f]=t; _frescoLlego[f]=ahora; n++; } });
   if(n)_frescoGuardar();
   _pintarFresco();
 }
@@ -11589,7 +11612,7 @@ function _leerVersion(app){
    "El HTML no sabe que version es" dejo de ser cierto: el build le escribe
    adentro el CACHE_NAME de sw-panel.js, el mismo que deploy.sh obliga a subir en
    cada cambio. Si lo publicado dice otra cosa, esta pagina es vieja. Punto. */
-var _APP_CN_PAGINA='maleu-panel-v432';
+var _APP_CN_PAGINA='maleu-panel-v433';
 
 /* Devuelve [{k,v}] si lo publicado no es lo que esta pagina corre. */
 function _chequearVersiones(){
@@ -13141,9 +13164,25 @@ function _sbAPedido(o){
     $:Number(o.billed_amount)||0,
     ef:Number(o.cash_amount)||0, tr:Number(o.transfer_amount)||0,
     r:Number(o.source_row)||0,
-    /* De cuando es esta fila en la planilla. No lo dibuja nadie: lo usa
-       `_sbEdad` para que el sello diga la verdad. */
-    _ts:o.source_updated_at||'',
+    /* De cuando es esta fila EN LA BASE. No lo dibuja nadie: lo usa `_sbEdad`
+       para que el sello diga la verdad.
+
+       Va `updated_at` y no `source_updated_at`, que es el que suena correcto y
+       estuvo aca hasta el 24/9/2026. `source_updated_at` **esta en null en las
+       1.264 filas**, y no por un olvido: el backend la escribe asi a proposito
+       (`source_updated_at: null` en el registro de `sales_order`) porque la
+       hoja de Pedidos no tiene columna "Updated". El CRM si la tiene; Pedidos
+       no la va a tener.
+
+       El sintoma era mudo y caro: `_sbEdad` devolvia 0, el `if(edad)` de
+       `_sbRefrescoPedidos` no entraba nunca, y el atajo pintaba la lista sin
+       anunciarse. Medido: la lista a los 523 ms y el cartel girando hasta los
+       4.346 ms. Funcionaba y no se notaba.
+
+       `updated_at` es cuando la REPLICA escribio esta fila, que es la respuesta
+       exacta a lo unico que el cartel tiene que contestar: de cuando es lo que
+       estoy viendo. */
+    _ts:o.updated_at||'',
     /* `{a:abreviatura, q:cantidad}`, igual que los arma el volcado. SIEMPRE un
        array: si la consulta no los trajo, va vacio y la lista dibuja el pedido
        sin el detalle — feo, pero vivo. Undefined la rompe entera. */
@@ -13164,7 +13203,7 @@ function _sbPedidos(limite){
     if(!sb)return null;
     var cols='channel,order_number,customer_name,customer_key,order_state,payment_state,'
       +'payment_method,source_type,ordered_at,planned_delivery_at,delivered_at,'
-      +'billed_amount,cash_amount,transfer_amount,source_row,source_updated_at'
+      +'billed_amount,cash_amount,transfer_amount,source_row,updated_at'
       /* LOS PRODUCTOS NO SON OPCIONALES. `rPedidos` hace `p.p.map`, `p.p.length`
          y `p.p.forEach`: sin ellos el dibujo revienta con un TypeError y la
          pantalla se queda como estaba — que es exactamente lo que pasaba la
