@@ -11527,7 +11527,7 @@ function _leerVersion(app){
    "El HTML no sabe que version es" dejo de ser cierto: el build le escribe
    adentro el CACHE_NAME de sw-panel.js, el mismo que deploy.sh obliga a subir en
    cada cambio. Si lo publicado dice otra cosa, esta pagina es vieja. Punto. */
-var _APP_CN_PAGINA='maleu-panel-v423';
+var _APP_CN_PAGINA='maleu-panel-v424';
 
 /* Devuelve [{k,v}] si lo publicado no es lo que esta pagina corre. */
 function _chequearVersiones(){
@@ -12953,6 +12953,135 @@ function load(){
    competían por la misma cola. Además de gastar cupos, el sello quedaba
    "Actualizando…" hasta que volvía el último duplicado. Quien llega después se
    cuelga de la promesa que ya está viajando. */
+
+/* ══ SUPABASE: LA LISTA DE PEDIDOS SIN ESPERAR A GOOGLE (23/9/2026) ═════════
+   Tadeo, esa noche: "es irreal lo que estamos haciendo ahora con las tabs,
+   tocando cada 2x3 la actualizacion". Tenia razon y el motivo es estructural:
+   `pedidosLight` abre una planilla de 60 hojas, y el piso de Apps Script son
+   ~3 s por pantalla — medido, y hasta 121 s en el rato posterior a un deploy.
+   La misma lista desde Supabase tarda **~300 ms**.
+
+   Esto NO reemplaza el paquete grande. `pedidosLight` sigue viajando igual y
+   trae lo que Supabase no tiene: las ordenes de compra, los canales, los stats,
+   el margen. Lo que cambia es que la lista se dibuja ANTES, con lo que ya esta
+   en la base, y cuando llega el paquete se repinta con todo.
+
+   TRES REGLAS QUE NO SE PUEDEN AFLOJAR:
+
+   1. **Solo adelanta cuando no hay nada.** Si `D.pedidos` ya tiene algo —una
+      copia guardada o una respuesta recien llegada— este adelanto no toca nada.
+      Pisar datos mas frescos con una foto de la replica seria mentir en verde.
+   2. **Si algo falla, no se muestra ni se dice.** No hay permiso, no hay red,
+      Supabase contesta mal: se sale en silencio y la pantalla espera a Google
+      como siempre. Un cartel de error sobre una optimizacion invisible seria
+      ruido sobre una pantalla que igual va a funcionar.
+   3. **La replica no borra.** Un pedido borrado de la planilla sigue vivo en
+      Supabase. Al 23/9 eso da CERO (cruzado contra la planilla), pero no esta
+      garantizado que de cero mañana, asi que esta foto se marca como tal y la
+      reemplaza la de Google apenas llega.
+
+   Los 8 campos que la lista dibuja vienen completos en el 100% de las 1.264
+   filas; lo verificado esta en `estancias/docs/MAPEO-PEDIDOSLIGHT-SALES-ORDER.md`. */
+var _sbPerm=null,_sbPermHasta=0,_sbPidiendo=null;
+
+/* El permiso para hablarle a Supabase. Lo emite el ERP (`action=sbToken`) y
+   dura una hora; se renueva dos minutos antes. Un "no" se recuerda 5 minutos
+   para no preguntar en cada pantalla: hoy solo Tadeo recibe permiso, asi que
+   para el resto del equipo esto tiene que costar CERO llamadas. */
+function _sbPermiso(){
+  if(_sbPerm&&Date.now()<_sbPermHasta)return Promise.resolve(_sbPerm);
+  if(_sbPerm===false&&Date.now()<_sbPermHasta)return Promise.resolve(null);
+  if(_sbPidiendo)return _sbPidiendo;
+  _sbPidiendo=fetch(API+'?action=sbToken&t='+Date.now())
+    .then(function(r){return r.json();})
+    .then(function(d){
+      _sbPidiendo=null;
+      var sb=d&&d.sb;
+      if(!sb||!sb.token||!sb.url||!sb.key){_sbPerm=false;_sbPermHasta=Date.now()+300000;return null;}
+      _sbPerm=sb;_sbPermHasta=Date.now()+Math.max(60,(Number(sb.seg)||3600)-120)*1000;
+      return sb;
+    })
+    .catch(function(){_sbPidiendo=null;_sbPerm=false;_sbPermHasta=Date.now()+300000;return null;});
+  return _sbPidiendo;
+}
+
+var _SB_DIAS=['Domingo','Lunes','Martes','Miércoles','Jueves','Viernes','Sábado'];
+/* Las fechas tienen que salir EXACTAMENTE como las manda el volcado, o al
+   llegar el paquete la lista entera parpadea con otro formato. `f` va 'dd/MM',
+   `dee` en ISO y `de` con el nombre del dia. */
+function _sbDia(iso){
+  if(!iso)return '';
+  var p=String(iso).slice(0,10).split('-');
+  if(p.length!==3)return '';
+  var d=new Date(Number(p[0]),Number(p[1])-1,Number(p[2]));
+  return isNaN(d.getTime())?'':_SB_DIAS[d.getDay()];
+}
+function _sbDdMm(ts){
+  if(!ts)return '';
+  var p=String(ts).slice(0,10).split('-');
+  return p.length===3?(p[2]+'/'+p[1]):'';
+}
+
+/* Una fila de `sales_order` con la forma que dibuja la lista del ERP. */
+function _sbAPedido(o){
+  var num=String(o.order_number==null?'':o.order_number).trim();
+  return {
+    h:o.channel||'', n:num, c:o.customer_name||'', tel:o.customer_key||'',
+    f:_sbDdMm(o.ordered_at), hr:'',
+    de:_sbDia(o.planned_delivery_at), dee:String(o.planned_delivery_at||'').slice(0,10),
+    fe:_sbDdMm(o.delivered_at), fex:String(o.delivered_at||'').slice(0,10),
+    es:o.order_state||'', ep:o.payment_state||'', fp:o.payment_method||'',
+    o:o.source_type||'',
+    $:Number(o.billed_amount)||0,
+    ef:Number(o.cash_amount)||0, tr:Number(o.transfer_amount)||0,
+    r:Number(o.source_row)||0,
+    /* Los 14 cancelados sin numero traen '-' en la planilla, y un guion solo
+       bajo una columna que dice "N°" se lee como "se rompio". */
+    _sinNum:(num===''||num==='-'),
+    _deSupabase:1
+  };
+}
+
+/* La lista, de la mas nueva a la mas vieja. `limite` existe porque la pantalla
+   muestra las ultimas: traer las 1.264 son 1,4 s y no las necesita para pintar. */
+function _sbPedidos(limite){
+  return _sbPermiso().then(function(sb){
+    if(!sb)return null;
+    var cols='channel,order_number,customer_name,customer_key,order_state,payment_state,'
+      +'payment_method,source_type,ordered_at,planned_delivery_at,delivered_at,'
+      +'billed_amount,cash_amount,transfer_amount,source_row';
+    return fetch(sb.url+'/rest/v1/sales_order?select='+cols+'&order=ordered_at.desc&limit='+(limite||400),
+      {headers:{apikey:sb.key,Authorization:'Bearer '+sb.token}})
+      .then(function(r){ if(!r.ok)throw new Error('sb '+r.status); return r.json(); })
+      .then(function(filas){ return Array.isArray(filas)?filas.map(_sbAPedido):null; });
+  }).catch(function(){ return null; });
+}
+
+/* El adelanto. Devuelve una promesa que NUNCA rechaza: quien la llama no tiene
+   que defenderse de esto. */
+function _sbAdelanto(){
+  try{
+    if(typeof D!=='undefined'&&D&&Array.isArray(D.pedidos)&&D.pedidos.length)return Promise.resolve(false);
+  }catch(e){ return Promise.resolve(false); }
+  return _sbPedidos(400).then(function(lista){
+    if(!lista||!lista.length)return false;
+    /* Se vuelve a mirar reción llegada la respuesta: en esos 300 ms el paquete
+       de Google pudo haber ganado la carrera, y el suyo es el bueno. */
+    if(typeof D!=='undefined'&&D&&Array.isArray(D.pedidos)&&D.pedidos.length)return false;
+    if(typeof D==='undefined'||!D)D={};
+    D.pedidos=lista; D._pedidosDeSupabase=1;
+    /* Se repinta con `render()`, que es el mismo que usa `loadRapido` al llegar
+       el paquete — y con la MISMA guarda: si hay un editor abierto no se toca
+       la pantalla, porque repintar encima de alguien que esta tipeando le borra
+       lo que escribio. Ahi se deja anotado y lo pinta el paquete cuando llegue. */
+    try{
+      if(_hayEditorAbierto()){ _pendingLoadRender=true; }
+      else { render(); }
+    }catch(e){}
+    return true;
+  }).catch(function(){ return false; });
+}
+
 var _rapidoEnVuelo={completo:null,soloPedidos:null};
 function loadRapido(opts){
   var _claveRapido=(opts&&opts.soloPedidos)?'soloPedidos':'completo';
@@ -12963,6 +13092,10 @@ function loadRapido(opts){
      OTRAS tabs. Esperarlos era esperar al mas lento de los cuatro por la cola
      de 2 cupos: medido con la sesion real, el ↻ giraba 13 a 19 s. */
   var _soloPed=!!(opts&&opts.soloPedidos);
+  /* El adelanto de Supabase sale EN PARALELO y no se espera: si llega primero
+     pinta la lista, y si no, no pasa nada. No entra en la cuenta de fuentes
+     frescas (`_vf`) porque no reemplaza a `pedidosLight` — lo adelanta. */
+  try{ _sbAdelanto(); }catch(e){}
   var _vf=['pedidos']; if(!_soloPed&&_tengoTab('caja'))_vf.push('caja');
   _frescoEnVuelo(_vf,1);
   var _finR=function(){ _frescoEnVuelo(_vf,-1); };
