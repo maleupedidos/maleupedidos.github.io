@@ -839,6 +839,8 @@ button.rt-chip.on{background:var(--o);border-color:var(--o);color:#fff}
 /* La ✕ de borrar un movimiento (17/9/2026). 32px de lado: es el minimo que se
    toca bien en el celular sin agrandar la fila. Gris hasta que la tocas, para
    que no compita con el monto. */
+.gl-fx{flex:0 0 auto;width:32px;height:32px;display:flex;align-items:center;justify-content:center;background:transparent;border:none;border-radius:8px;font-size:14px;line-height:1;cursor:pointer;padding:0;opacity:.5}
+.gl-fx:hover{opacity:1;background:#EFEBE4}
 .gl-x{flex:0 0 auto;width:32px;height:32px;display:flex;align-items:center;justify-content:center;background:transparent;border:none;border-radius:8px;color:var(--bl);font-size:15px;line-height:1;cursor:pointer;padding:0;opacity:.55}
 .gl-x:hover,.gl-x:focus-visible{background:#FDECEC;color:var(--r);opacity:1}
 .gl-x-no{cursor:default;font-size:12px;opacity:.35}
@@ -16093,6 +16095,18 @@ function rMovimientos(){
     var _x=_borrable
       ? '<button type="button" class="gl-x" title="Borrar este movimiento" aria-label="Borrar" onclick="event.stopPropagation();borrarMovCaja(\''+m.tipo+'\','+(Number(m.r)||0)+')">✕</button>'
       : (m.noBorrar?'<span class="gl-x gl-x-no" title="Es un pago a proveedor: se revierte desde Abastecimiento">🔒</span>':'');
+    /* CORREGIR EL DÍA DE UN COBRO (25/9/2026). Tadeo: "toqué el botón de cobrado
+       recién hoy, pero por equivocación mía, porque me olvidé de ponerlo en el
+       momento (…) podría tener la libertad de poder cambiar ese día".
+       Va acá y no en el pedido porque el problema se VE acá: es la tab Caja la
+       que le dice que juntó una plata hoy que en realidad entró ayer.
+       Sólo en Home/Pilar/Clubes, que es lo que el backend sabe corregir: en Red
+       la fecha que vale es la del pago del vendedor a Maleu, otra cosa. */
+    if(m.tipo==='cobro'&&m.hoja&&m.pedido&&['Home','Pilar','Clubes'].indexOf(String(m.hoja))>=0){
+      var _jq=function(x){return _egrEsc(String(x).replace(/[\\']/g,''));};
+      _x='<button type="button" class="gl-fx" title="Corregir el día de este cobro" aria-label="Corregir la fecha"'
+        +' onclick="event.stopPropagation();cobroCambiarFecha(\''+_jq(m.hoja)+'\',\''+_jq(m.pedido)+'\',\''+_jq(m.f)+'\')">📅</button>'+_x;
+    }
     el.innerHTML='<div class="gl-info"><div class="gl-cat" style="color:'+color+'">'+ico+' '+_egrEsc(m.cat)+'</div><div class="gl-con">'+conHtml+'</div><div class="gl-meta">'+meta+'</div></div><div class="gl-m" style="color:'+color+'">'+signo+'$'+f$(m.$)+'</div>'+_x;
     gl.appendChild(el);
   }
@@ -16123,6 +16137,56 @@ function rMovimientos(){
    `r` que quedaron en pantalla estan corridos. No se arregla acá: el backend
    reverifica concepto, monto y dia antes de borrar, y si no coincide no borra
    nada y avisa. */
+/* Corregir el DÍA en que entró un cobro (25/9/2026).
+ *
+ * La `Fecha de Cobro` se estampa cuando se toca el botón de cobrado, que es lo
+ * correcto casi siempre y una mentira cuando Tadeo cobró un día y se acordó de
+ * marcarlo al otro: la caja de hoy muestra plata que entró ayer, y hasta hoy no
+ * había forma de arreglarlo sin abrir la planilla.
+ *
+ * Pide la fecha por `prompt` en dd/mm/aaaa, que es como Tadeo escribe las
+ * fechas en todo el ERP — nunca un `<input type="date">`. El día de hoy y el de
+ * ayer se ofrecen escritos en el propio texto, porque "ayer" es el 90% de los
+ * casos y nadie quiere tipear una fecha completa para eso.
+ *
+ * NO toca el monto ni el método: eso se deshace desde el pedido. Acá se corrige
+ * un día, y el confirm lo dice con todas las letras.
+ */
+function cobroCambiarFecha(hoja,pedido,fActual){
+  var d=new Date(), ay=new Date(Date.now()-86400000);
+  var dm=function(x){return String(x.getDate()).padStart(2,'0')+'/'+String(x.getMonth()+1).padStart(2,'0')+'/'+x.getFullYear();};
+  var sug=dm(ay);
+  var txt=prompt('¿Qué día entró esta plata?\n\n'+(pedido?('Pedido #'+pedido+' · '):'')+hoja
+    +'\nHoy figura: '+(fActual||'(sin fecha)')
+    +'\n\nEscribilo dd/mm/aaaa.\nAyer fue '+sug+' · hoy es '+dm(d),sug);
+  if(txt===null)return;
+  txt=String(txt).trim();
+  if(!/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(txt)){toast('La fecha va dd/mm/aaaa');return;}
+  if(!confirm('Mover este cobro al '+txt+'?\n\nSale de la caja del día que figura ahora y entra en la del '+txt
+    +'.\nEl monto y el método NO cambian.'))return;
+  showLoader('Corrigiendo la fecha...');
+  fetch(API,{method:'POST',body:JSON.stringify({action:'cobroFecha',hoja:hoja,id:pedido,fecha:txt,
+    clientOpId:'cf-'+hoja+'-'+pedido+'-'+txt})})
+    .then(function(r){return r.json();})
+    .then(function(r){
+      hideLoader(true);
+      if(r&&r.ok){
+        toast('Cobro movido al '+txt);
+        /* Se recarga en vez de parchear el movimiento a mano: cambiar el día
+           mueve el cobro de una sección del libro a otra y recalcula los totales
+           de los dos días. Pintarlo a ojo sería dibujar algo que no es. */
+        _recargarCaja();
+      }else{
+        alert((r&&(r.error||r.err))||'No se pudo cambiar la fecha.');
+      }
+    })
+    .catch(function(){
+      hideLoader(true);
+      alert('No pude confirmar si se cambió. Traigo Caja de nuevo para que veas cómo quedó.');
+      _recargarCaja();
+    });
+}
+
 function borrarMovCaja(tipo,row){
   var m=((D&&D.movimientos)||[]).filter(function(x){return x.tipo===tipo&&Number(x.r)===Number(row);})[0];
   if(!m){toast('No encuentro ese movimiento. Actualizá Caja.');return;}
