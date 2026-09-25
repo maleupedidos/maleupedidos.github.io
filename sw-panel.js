@@ -24,7 +24,27 @@
  * Y si alguien igual queda pegado: mantener apretado el ↻ borra todo y
  * recarga de cero (refreshDuro).
  */
-var CN='maleu-panel-v434';
+var CN='maleu-panel-v435';
+
+/* LAS LIBRERIAS DE AFUERA (25/9/2026).
+ *
+ * El ERP las carga de `cdn.jsdelivr.net` y hasta hoy **no entraban a la cache**:
+ * una PWA que abre sin red con tres piezas que no. Medido bloqueando la CDN, el
+ * grafico de Proveedores quedaba vacio con el titulo prometiendolo, y en consola
+ * no habia nada — el try/catch del render se traga el ReferenceError.
+ *
+ * Lo que se rompe sin ellas: el grafico de Proveedores (chart.js), el PDF
+ * semanal (html2canvas + jspdf) y el dibujo de zonas del mapa (leaflet-draw,
+ * que se pide recien al abrir el mapa).
+ *
+ * La version va clavada en la URL, asi que no hay riesgo de quedarse con una
+ * vieja; al subir CN se limpian con el resto. Si alguna vez se cambia una
+ * version en el HTML, hay que cambiarla ACA TAMBIEN o se sirve la anterior. */
+var LIBS=[
+  'https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js',
+  'https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js',
+  'https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js'
+];
 
 self.addEventListener('install',function(e){
   e.waitUntil(caches.open(CN).then(function(c){
@@ -42,6 +62,24 @@ self.addEventListener('install',function(e){
       // la instalacion entera del service worker y la app se quedaria sin PWA.
       // Que falte el indice tiene que degradar el boton, no romper la app.
       return c.add('/data/lotes-ubicacion.json').catch(function(){});
+    }).then(function(){
+      /* LAS LIBRERIAS, CADA UNA CON SU CATCH.
+         No van en el `addAll` de arriba, que es atomico: si jsdelivr estuviera
+         caida en el momento exacto de instalar, se caeria la instalacion entera
+         y **el ERP se quedaria sin PWA**. Un grafico que falta degrada una
+         pantalla; eso dejaria la app sin abrir offline.
+
+         `mode:'cors'` explicito: sin eso el pedido sale no-cors y se guarda una
+         respuesta OPACA, con `status 0`, que no se distingue de un 404.
+         Verificado que jsdelivr manda `Access-Control-Allow-Origin: *`.
+
+         Se hacen en el install y no al pasar por `fetch` porque en la PRIMERA
+         visita los `<script>` salen antes de que el service worker tome
+         control: no pasarian por el, y la visita siguiente —que es cuando no
+         hay red— no tendria nada guardado. Medido. */
+      return Promise.all(LIBS.map(function(u){
+        return c.add(new Request(u,{mode:'cors'})).catch(function(){});
+      }));
     });
   }));
   self.skipWaiting();
@@ -69,6 +107,41 @@ self.addEventListener('fetch',function(e){
      recargarse (13/9/2026): va derecho a la red. Pasarlo por aca devolveria la
      copia vieja y, peor, guardaria 2 MB nuevos en la cache por cada chequeo. */
   if(u.searchParams.has('fresco'))return;
+
+  /* LAS LIBRERIAS DE AFUERA SE GUARDAN (25/9/2026).
+
+     El ERP cachea `app.html` entero para abrir sin red, pero chart.js,
+     html2canvas y jspdf venian de `cdn.jsdelivr.net` y **nunca entraban a la
+     cache**: pasaban derecho por el `fetch` de mas abajo. O sea una PWA que
+     "anda offline" con tres piezas que no.
+
+     Lo que se rompe sin ellas, y no avisa: el grafico de Proveedores, el PDF
+     semanal y el dibujo de zonas del mapa. Medido bloqueando la CDN: el canvas
+     queda vacio, el titulo sigue prometiendo el grafico, y en consola no hay
+     nada porque el try/catch del render se traga el ReferenceError.
+
+     Cache-first y se guarda lo que pase por la red. Las URLs tienen la version
+     clavada (`chart.js@4.4.0`), asi que no hay riesgo de quedarse con una
+     vieja; y al subir CN se limpian solas con el resto.
+
+     **Se guarda solo si `r.ok`**, y eso necesita que el `<script>` tenga
+     `crossorigin="anonymous"` — si no, la respuesta es OPACA, `status` es 0, y
+     guardariamos un 404 como si fuera la libreria. */
+  if(u.hostname==='cdn.jsdelivr.net'){
+    e.respondWith(caches.open(CN).then(function(c){
+      return c.match(e.request).then(function(guardado){
+        if(guardado)return guardado;
+        return fetch(e.request).then(function(r){
+          if(r&&r.ok)c.put(e.request,r.clone());
+          return r;
+        });
+        /* Sin catch a proposito: si no hay copia y no hay red, que falle como
+           fallaba antes. Tapar el error aca devolveria un 200 vacio y el
+           `typeof Chart === 'undefined'` del panel no llegaria a correr. */
+      });
+    }));
+    return;
+  }
 
   if(e.request.mode==='navigate'||u.pathname.endsWith('.html')){
     e.respondWith(caches.open(CN).then(function(c){
