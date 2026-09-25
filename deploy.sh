@@ -148,6 +148,23 @@ else
   echo "    (no se toco ruta.html)"
 fi
 
+# ── 3f3. La card de la descarga, DIBUJADA ──────────────────────────
+#  Los otros dos tests prueban la logica sin navegador. Este contesta lo unico
+#  que ninguno puede: si la card SE DIBUJA. Un error al renderizar deja la
+#  parada en blanco sin tirar nada —ya paso con los 14 ids repetidos— y ahi
+#  Tadeo llega al deposito y no tiene la lista.
+#  Levanta su propio Chrome y stubbea el backend: no toca produccion.
+echo "→ [3f3/8] La card «Descargar el auto» se dibuja…"
+if echo "$HTMLS" | grep -qE "ruta.html"; then
+  if curl -s -o /dev/null --max-time 2 http://localhost:8080/app.html; then
+    node _tools/pruebas/ver_descarga_auto.js | sed 's/^/    /' || fallar "La card de la descarga no se dibuja — corre: node _tools/pruebas/ver_descarga_auto.js"
+  else
+    echo "    (sin \`npm run dev\` levantado: se saltea)"
+  fi
+else
+  echo "    (no se toco ruta.html)"
+fi
+
 # ── 3g. El bloque de carne de Inicio ─────────────────────────────────────────
 #  Ese cartel decide si Tadeo llama a Lucas un martes. Hasta el 10/9/2026
 #  afirmaba "el pedido ya tendria que estar hecho" mirando SOLO el dia de la
