@@ -6465,6 +6465,31 @@ var API='https://script.google.com/macros/s/AKfycbxmrG5YVSshcYezk8lXFx_uxb7NFGcb
     return _cola.splice(mejor, 1)[0];
   }
 
+  /* EL BOMBEO DEL ENCOLADO ESPERA AL FINAL DEL TICK (25/9/2026).
+
+     `_encolar` bombeaba en la misma linea del push. Con DOS cupos libres, los
+     **dos primeros en encolarse salian sin compararse con nadie**: cuando se
+     encolaba el tercero ya no habia lugar, y la prioridad recien empezaba a
+     mandar a partir del cuarto.
+
+     Medido al abrir la app: `loadRapido` encola sus cuatro lecturas en el mismo
+     tick y salian las dos primeras del array — `pedidosLight` y
+     `cobrosPendientes`. Inicio **no dibuja los cobros pendientes**; ese cupo era
+     de `cajaLight` o de `ventas`, que si dibuja.
+
+     Un microtask (~0 ms) alcanza: no agrega latencia y deja que todo lo que se
+     encola junto compita junto, que es lo que la fila siempre quiso hacer.
+
+     Ojo: el bombeo de `terminar()` **no** pasa por aca, y esta bien. Alli acaba
+     de liberarse un cupo con alguien esperando; diferirlo seria dejar la fila
+     quieta sin motivo. */
+  var _bombeoPendiente = false;
+  function _bombearPronto(){
+    if (_bombeoPendiente) return;
+    _bombeoPendiente = true;
+    Promise.resolve().then(function(){ _bombeoPendiente = false; _bombear(); });
+  }
+
   function _bombear(){
     while (_enVuelo < _TOPE_GET && _cola.length){
       var it = _sacarMejor();
@@ -6534,6 +6559,22 @@ var API='https://script.google.com/macros/s/AKfycbxmrG5YVSshcYezk8lXFx_uxb7NFGcb
     /* Planificacion (14/9/2026): la semana sale de los pedidos y las casas del CRM.
        Sin estar aca, `planMes` salia a los 8 s de entrar, detras de la caja. */
     planificacion: { pedidosLight: 1, crmClientes: 1, crmLotes: 1 },
+    /* INICIO MIRA TRES, Y LA COLA CONOCIA UNA (25/9/2026).
+
+       `_fuentesDeTab('inicio')` devuelve `['pedidos','caja','ventas']`: el
+       cartel de esa tab no se apaga hasta que llegan las tres. Pero `ventas`
+       esta en `_CAROS`, o sea que la fila la mandaba **al fondo** — el cartel
+       esperaba justo lo que la cola postergaba.
+
+       Medido al abrir la app: `ventas` salia a los 10.647 ms, detras de
+       `cobrosPendientes`, `miSesion` y `ver`, que Inicio no dibuja, y el cartel
+       no podia apagarse antes de los 13.802 ms.
+
+       Esto no es una excepcion para `ventas`: es la misma regla que ya tienen
+       Planificacion, Pedidos y Pedidos Home. Si alguna vez Inicio deja de
+       mostrar la caja o las ventas, sale de aca **y** de `_fuentesDeTab`, que
+       son las dos mitades de la misma respuesta. */
+    inicio:      { cajaLight: 1, ventas: 1 },
     pedidos:     { ocLight: 1 },
     pedidoshome: { ocLight: 1, pedidosLight: 1 }
   };
@@ -6769,7 +6810,9 @@ var API='https://script.google.com/macros/s/AKfycbxmrG5YVSshcYezk8lXFx_uxb7NFGcb
       _cola.push({ url: url,
                    fn: function(){ return _pedirConCorte(url, init, 0); },
                    res: res, rej: rej });
-      _bombear();
+      /* Al final del tick, para que los que llegan juntos compitan juntos.
+         Ver `_bombearPronto`. */
+      _bombearPronto();
     });
     _enVueloUrl[k] = p;
     var soltar = function(){ if (_enVueloUrl[k] === p) delete _enVueloUrl[k]; };
@@ -7295,7 +7338,11 @@ document.addEventListener('visibilitychange',function(){ if(document.visibilityS
 
 // Si ya hay sesión, entrar directo. Si no, mostrar login.
 if(SESSION&&SESSION.usuario&&SESSION.rol){
-  document.addEventListener('DOMContentLoaded',function(){ setTimeout(function(){ _refrescarMiSesion(true); },3000); });
+  /* A los 20 s y no a los 3 (25/9/2026). Refresca permisos, que cambian una vez
+     cada varios dias; a los 3 s caia en el medio del arranque y costaba
+     **4.461 ms** de uno de los DOS cupos de Apps Script, medido. No se saca: un
+     rol que cambio tiene que llegar. Puede llegar veinte segundos despues. */
+  document.addEventListener('DOMContentLoaded',function(){ setTimeout(function(){ _refrescarMiSesion(true); },20000); });
   document.getElementById('loginScreen').classList.add('hidden');
   // applyRoles corre cuando el DOM esté listo (después de definir go())
   document.addEventListener('DOMContentLoaded',function(){applyRoles();var av=document.getElementById('hdrUserAv'),nm=document.getElementById('hdrUserName'),rl=document.getElementById('umRol');var firstName=(SESSION.nombre||SESSION.usuario||'?').split(' ')[0];if(av)av.textContent=firstName.charAt(0).toUpperCase();if(nm)nm.textContent=firstName;if(rl)rl.textContent=(SESSION.rol||'').toUpperCase();});
@@ -8582,6 +8629,9 @@ function _pintarFresco(){
     tit=ayuda;
   }else{
     estado=(Date.now()-ts>FRESCO_VIEJO_MIN*60000)?'viejo':'ok';
+    /* La tab abierta ya esta al dia: el vigia puede volver a preguntar sin
+       robarle la fila a nadie. Ver `_vigiaArranqueListo`. */
+    try{ if(window._vigiaArranqueListo)window._vigiaArranqueListo(); }catch(e){}
     txt=_frescoCuando(ts);
     tit='Actualizado — '+det+'. '+ayuda;
   }
@@ -10523,6 +10573,45 @@ function _sbAdelanto(){
   }).catch(function(){ return false; });
 }
 
+/* VARIAS LECTURAS EN UN SOLO VIAJE (25/9/2026).
+
+   Apps Script atiende de a DOS por cuenta, y el piso de cada viaje no es el
+   calculo: `action=ver` no lee la planilla y tarda 2,1-3,2 s igual. Cuatro
+   lecturas sueltas son ~10 s de puro ir y venir.
+
+   Devuelve **una promesa por accion**, con la misma forma que tenia cada
+   `fetch` suelto, para que quien las consume no tenga que cambiar. Eso no es
+   prolijidad: el `Promise.all` de `loadRapido` cuenta cuantas fallaron para no
+   estampar una hora nueva sobre datos viejos, y reescribirlo era la forma facil
+   de romper ese conteo. */
+var _LOTE_MAX=4;
+function _getSuelto(a,ts){
+  return fetch(API+'?action='+a+'&t='+ts).then(function(r){return r.json();}).catch(function(){return null;});
+}
+function _loteGets(accs,ts){
+  var res={}, dar={};
+  accs.forEach(function(a){ res[a]=new Promise(function(r){ dar[a]=r; }); });
+  /* Un solo viaje para todas. Si algo sale mal —no hay red, o el backend es
+     anterior a `action=lote`— cada una cae a su pedido propio: el camino de
+     siempre. Nunca queda una promesa sin resolver. */
+  fetch(API+'?action=lote&acciones='+accs.join(',')+'&t='+ts)
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      if(!d||d.ok!==true||!d.lote)throw new Error('sin lote');
+      accs.forEach(function(a){
+        /* Lo que el backend dejo en `faltan` (se quedo sin tiempo) se pide
+           suelto. Resolverlo con null seria pintar un vacio como si fuera el
+           dato. */
+        if(d.lote[a]!==undefined)dar[a](d.lote[a]);
+        else dar[a](_getSuelto(a,ts));
+      });
+    })
+    .catch(function(){
+      accs.forEach(function(a){ dar[a](_getSuelto(a,ts)); });
+    });
+  return res;
+}
+
 var _rapidoEnVuelo={completo:null,soloPedidos:null};
 /* La promesa de los PEDIDOS de la corrida en vuelo, por separado de la corrida
    entera. Existe por el `return` de dos lineas mas abajo: cuando ya hay un
@@ -10582,22 +10671,31 @@ function loadRapido(opts){
      nadie. Lo que NO se puede hacer es liberar el boton antes de que los
      pedidos esten volcados y dibujados: eso seria decir "listo" sobre la lista
      vieja. Por eso el aviso cuelga de `_pedPromesa` y no de un reloj. */
-  var _pedPromesa=fetch(API+'?action=pedidosLight&t='+tsBase).then(function(r){return r.json();}).catch(function(){return null;});
+  /* LAS CUATRO EN UN VIAJE (25/9/2026). Se arma la lista de lo que de verdad
+     hace falta y se pide junto; `_loteGets` devuelve una promesa por accion,
+     igual que los cuatro `fetch` sueltos de antes. Ver `_loteGets`.
+
+     La caja es plata: si el rol no tiene la tab, ni entra a la lista. El
+     backend ademas la niega — pedirla igual seria un 401 que el usuario ve como
+     "no se pudo actualizar" sin entender por que.
+
+     Las OCs viajan con los pedidos, o el cruce queda con una punta nueva y la
+     otra congelada en el ultimo load() completo — el bug de los "7 pedidos sin
+     OC generada". */
+  var _pidoCob0=!_soloPed, _pidoCaja0=(_tengoTab('caja') && !_soloPed);
+  var _accs=['pedidosLight'];
+  if(_pidoCob0)_accs.push('cobrosPendientes');
+  if(_pidoCaja0)_accs.push('cajaLight');
+  _accs.push('ocLight');
+  var _L=_loteGets(_accs.slice(0,_LOTE_MAX),tsBase);
+
+  var _pedPromesa=_L.pedidosLight;
   _pedEnVuelo[_claveRapido]=_pedPromesa;
   var _rapido=Promise.all([
     _pedPromesa,
-    _soloPed ? Promise.resolve('omitido')
-      : fetch(API+'?action=cobrosPendientes&t='+tsBase).then(function(r){return r.json();}).catch(function(){return null;}),
-    // La caja es plata: si el rol no tiene la tab, ni la pedimos. El backend
-    // ademas la niega (Fase 1) — pedirla igual seria un 401 que el usuario
-    // veria como "no se pudo actualizar" sin entender por que.
-    (_tengoTab('caja') && !_soloPed)
-      ? fetch(API+'?action=cajaLight&t='+tsBase).then(function(r){return r.json();}).catch(function(){return null;})
-      : Promise.resolve('sin-caja'),
-    /* Las OCs viajan con los pedidos, o el cruce queda con una punta nueva y la
-       otra congelada en el ultimo load() completo — que fue el bug de los "7
-       pedidos sin OC generada". Son 62 KB y 4 s: no cambia lo que tarda esto. */
-    fetch(API+'?action=ocLight&t='+tsBase).then(function(r){return r.json();}).catch(function(){return null;})
+    _pidoCob0 ? _L.cobrosPendientes : Promise.resolve('omitido'),
+    _pidoCaja0 ? _L.cajaLight : Promise.resolve('sin-caja'),
+    _L.ocLight
   ]).then(function(arr){
     var lightData=arr[0], cobrosData=arr[1], cajaData=arr[2], ocData=arr[3];
     // Cada fetch tiene su propio .catch(->null), asi que un endpoint caido no
@@ -24206,6 +24304,28 @@ function _vListaClick(e){
      callado cuando no. La cadena es de setTimeout y no un setInterval, para que
      nunca se superpongan dos controles ni se pierda el proximo si uno falla. */
   var VIGIA_MAX = 300000, _vigiaEspera = VIGIA_MS, _vigiaTimer = null;
+
+  /* EL VIGIA NO PREGUNTA DURANTE EL ARRANQUE (25/9/2026).
+
+     Su trabajo es avisar si algo cambio en la planilla. Pero al abrir la app
+     estamos trayendo todo igual, asi que su `action=ver` gasta uno de los DOS
+     cupos de Apps Script **para enterarnos de lo que ya vamos a saber**. Medido:
+     salia a los 8.499 ms y tardaba 2.148 ms, justo cuando `ventas` esperaba.
+
+     Se destraba solo por dos caminos, el que llegue primero: a los 25 s, o
+     apenas la tab abierta queda fresca (`_vigiaArranqueListo`, que llama
+     `_pintarFresco`). El segundo es el que manda casi siempre; el primero esta
+     para que un arranque que nunca termina de refrescar no deje al vigia mudo
+     para siempre. */
+  var _vigiaArranque = true;
+  function _vigiaArranqueListo(){
+    if(!_vigiaArranque)return;
+    _vigiaArranque = false;
+    /* No se dispara al toque: se le da un respiro a la fila, que viene de
+       vaciarse. */
+    _vigiaProgramar(3000);
+  }
+  setTimeout(_vigiaArranqueListo, 25000);
   function _vigiaProgramar(ms){
     clearTimeout(_vigiaTimer);
     /* El piso es de 800 ms y no de 5 s: `_vigiaAcelerar` pide mirar casi
@@ -24215,8 +24335,14 @@ function _vListaClick(e){
   }
   /* Volver a mirar YA y desde cero: algo cambio, o la persona volvio a la app. */
   function _vigiaAcelerar(ms){ _vigiaEspera = VIGIA_MS; _vigiaProgramar(ms == null ? 800 : ms); }
+  /* Lo llama `_pintarFresco` cuando la tab abierta deja de decir
+     "Actualizando...". Va por `window` porque estan en bloques distintos, igual
+     que `_marcarFresco` y `_frescoEnVuelo`. */
+  try { window._vigiaArranqueListo = _vigiaArranqueListo; } catch (e) {}
   function _vigiaMirar(){
     if(_verEnVuelo){ _vigiaProgramar(); return; }
+    /* Durante el arranque no compite por la fila. Ver `_vigiaArranqueListo`. */
+    if(_vigiaArranque){ _vigiaProgramar(5000); return; }
     /* Con la app en segundo plano no se programa nada: el `visibilitychange`
        lo despierta. Sin esto, un celular en el bolsillo seguiria preguntando. */
     if(document.visibilityState !== 'visible') return;
