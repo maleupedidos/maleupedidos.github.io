@@ -1684,10 +1684,18 @@ function _sanearEntregas(lista){
   }
   return out;
 }
-// pendientesGuardarStock: OCs "Tadeo — Stock" con Estado=Recibido y col Y (Guardado) vacía.
-// Una sola card sintética en RUTA agrupa todas. Se completa cuando Tadeo confirma que
-// la mercadería ya está físicamente en el freezer.
-var pendientesGuardarStock=[]; // [{abbr,prod,qty,rows:[r1,r2,...],proveedor}]
+/* LA DESCARGA DEL AUTO. Una sola card sintética en RUTA junta todo lo que Tadeo
+   compró en los últimos 14 días y todavía no descargó, partido en los dos montones
+   que arma de verdad al abrir el baúl: lo que va al freezer y lo que ya tiene dueño.
+
+   Hasta el 25/9/2026 esto mostraba SOLO la reposición, y sólo si antes había tocado
+   "Recibir mercadería" proveedor por proveedor. Nunca lo toca: contar 87 empanadas
+   en la puerta del proveedor es imposible, así que carga las cajas cerradas y cuenta
+   en casa. O sea que la única pantalla que le decía qué guardar estaba siempre vacía
+   justo cuando la necesitaba. Confirmar acá ahora también marca recibido — que es lo
+   que habilita pagarle al proveedor. */
+var pendientesGuardarStock=[]; // [{abbr,prod,qty,rows:[r1,r2,...],proveedor}]  ← al freezer
+var pendientesPedidosOC=[];    // [{cliente,canal,nPedido,qty,items:[...]}]      ← a separar
 // Filtro de zona en RUTA. null = todos. String = subbarrio/barrio. Las pills arriba
 // permiten elegir destino y la lista de Ruta se filtra a solo ese subbarrio.
 var rutaFiltroZona=null;
@@ -1994,7 +2002,10 @@ function fetchPendientesGuardarStock(forzar){
     .then(function(data){
       _pgsPidiendo=false;
       if(!data||!data.ok)return;
-      pendientesGuardarStock=data.items||[];
+      /* `deposito` con fallback a `items`: son el mismo array y el backend manda
+         los dos, para poder publicarse antes que este archivo sin dejar la card muda. */
+      pendientesGuardarStock=data.deposito||data.items||[];
+      pendientesPedidosOC=data.pedidos||[];
       // Re-render solo si estamos viendo la tab Ruta (la única donde aparece la card)
       if(rutCurrentTab==='ruta')rutRender();
     })
@@ -2313,12 +2324,22 @@ function getSorted(){
   // Append: card sintética "Para Depósito" si hay OCs Tadeo-Stock recibidas
   // sin confirmar guardado en freezer. Es la última estación del día: traer
   // todo del auto al depósito.
-  if(pendientesGuardarStock && pendientesGuardarStock.length>0){
-    var prods=_sortProds(pendientesGuardarStock.map(function(it){return {a:it.abbr,q:it.qty}}));
+  var _hayDep=pendientesGuardarStock&&pendientesGuardarStock.length>0;
+  var _hayPed=pendientesPedidosOC&&pendientesPedidosOC.length>0;
+  if(_hayDep||_hayPed){
+    var prods=_sortProds((pendientesGuardarStock||[]).map(function(it){return {a:it.abbr,q:it.qty}}));
+    /* Las filas de los pedidos también entran en `_rows`: confirmar la descarga
+       marca recibido TODO lo que venía en el auto, no sólo la reposición. Si sólo
+       se sellara el freezer, lo de los clientes seguiría figurando sin recibir y
+       no podría pagárselo al proveedor — que es el problema que esto vino a
+       resolver. */
     var allRows=[];
-    pendientesGuardarStock.forEach(function(it){(it.rows||[]).forEach(function(r){allRows.push(r)})});
+    (pendientesGuardarStock||[]).forEach(function(it){(it.rows||[]).forEach(function(r){allRows.push(r)})});
+    (pendientesPedidosOC||[]).forEach(function(g){
+      (g.items||[]).forEach(function(it){(it.rows||[]).forEach(function(r){allRows.push(r)})});
+    });
     clientes.push({
-      _depAgg:true,_rows:allRows,
+      _depAgg:true,_rows:allRows,_pedidos:pendientesPedidosOC||[],
       h:'OC',id:'dep-stock',r:0,
       c:'Tadeo — Stock (Depósito)',l:'',b:'Depósito',sb:'',
       de:'',es:'',o:'',oD:{},fp:'',ep:'',$:0,p:prods,t:'',retira:''
@@ -3720,12 +3741,18 @@ function rdepToggle(cat){
   rutRenderRuta();
 }
 
-function confirmarGuardadoStock(rowsCsv,nProds,totalUnid){
+function confirmarGuardadoStock(rowsCsv,nProds,totalUnid,unidPedidos){
   var rows=(rowsCsv||'').split(',').map(Number).filter(function(r){return r>=2});
   if(rows.length===0)return;
-  var msg='¿Confirmás que guardaste los '+nProds+' producto'+(nProds>1?'s':'')+' ('+totalUnid+' unidades) en el freezer?\n\nEsto los marca como verificados en el depósito.';
+  var uPed=Number(unidPedidos)||0;
+  var msg='¿Descargaste todo?\n\n· '+totalUnid+' unidades al freezer';
+  if(uPed>0)msg+='\n· '+uPed+' unidades separadas para pedidos';
+  /* Se avisa que marca recibido porque mueve plata: a partir de acá el proveedor
+     entra en la deuda y se le puede pagar. Un confirm que sólo dijera "guardado"
+     escondería el efecto que de verdad importa. */
+  msg+='\n\nEsto lo marca recibido: suma el stock y habilita el pago al proveedor.';
   if(!confirm(msg))return;
-  rutShowLoader('Marcando guardado en freezer...');
+  rutShowLoader('Descargando el auto...');
   var payload={action:'marcarGuardadoEnStock',rows:rows,repartidor:_rutaUser(),ts:Date.now()};
   fetch(RUT_APPS_SCRIPT_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(payload),redirect:'follow'})
     .then(function(r){return r.json().catch(function(){return{ok:false}})})
@@ -3734,6 +3761,7 @@ function confirmarGuardadoStock(rowsCsv,nProds,totalUnid){
       if(res&&res.ok){
         // Actualización optimista: vacío la lista local. El próximo refresh confirma.
         pendientesGuardarStock=[];
+        pendientesPedidosOC=[];
         rutRender();
         /* Los tildes son de ESTA tanda: si quedaran, la proxima card
            arrancaria toda en verde y el tildado dejaria de decir nada. */
@@ -4065,7 +4093,7 @@ function _rtcNombreParada(e){
   /* El mismo nombre que en la lista del recorrido y en la card: en la barra
      decia "guardar lo comprado en el freezer" y en la lista "Guardar en el
      freezer" — dos nombres para la misma parada. */
-  if(e._depAgg)return 'Guardar en el freezer';
+  if(e._depAgg)return 'Descargar el auto';
   if(e._redAgg)return e._vendedor+' (Red)';
   /* En Clubes lo que ubica es el club, no el deporte */
   var z=e.h==='Clubes'?(String(e.d||'').split(' · ')[0]||e.b||''):_rtcZonaLbl(e);
@@ -4200,9 +4228,9 @@ function _rtcLista(sorted,sortedAll,resumen,header,body,actions){
     var k=_rtcKey(e), sint=!!(e._redAgg||e._depAgg);
     var iMov=mov.indexOf(e), kOrd=sint?'':eKey(e);
     var prio=!sint&&rutaOrden&&rutaOrden[kOrd]!==undefined;
-    var nom=e._depAgg?'Guardar en el freezer':(e._redAgg?e._vendedor+' (Red)':String(e.c||'').trim());
+    var nom=e._depAgg?'Descargar el auto':(e._redAgg?e._vendedor+' (Red)':String(e.c||'').trim());
     var det;
-    if(e._depAgg)det='Depósito · la última parada';
+    if(e._depAgg)det='Descarga · la última parada';
     else if(e._redAgg)det='Vendedor Red · '+(e._keys||[]).length+' pedido'+((e._keys||[]).length===1?'':'s');
     else{
       var l=String(e.l||'').trim(); if(l==='-')l='';
@@ -4351,15 +4379,36 @@ function rutRenderRuta(){
   if(e._depAgg){
     var nProds=(e.p||[]).length;
     var totalUnidades=0;(e.p||[]).forEach(function(p){totalUnidades+=p.q});
+    var peds=e._pedidos||[];
+    var uPed=0;peds.forEach(function(g){uPed+=(g.qty||0)});
     h+='<article class="rtc-card">'
-      +'<section class="rtc-dest dep"><div class="rtc-dest-top"><span class="rtc-zona">Depósito · la última parada</span><span class="rtc-canal">'+nProds+' producto'+(nProds===1?'':'s')+'</span></div>'
-      +'<div class="rtc-titulo">Guardar en el freezer</div>'
-      +'<p class="rtc-nota">'+_rtcCuenta(e.p)+' que ya recibiste del proveedor. Ponelas en el freezer y confirmá abajo.</p></section>'
-      +_rdepGrupos(e.p)
-      +'</article>';
+      +'<section class="rtc-dest dep"><div class="rtc-dest-top"><span class="rtc-zona">Depósito · la última parada</span><span class="rtc-canal">'+(totalUnidades+uPed)+' unidades</span></div>'
+      +'<div class="rtc-titulo">Descargar el auto</div>'
+      +'<p class="rtc-nota">Todo lo que compraste y todavía no descargaste. Confirmá abajo cuando esté guardado: eso lo marca recibido y recién ahí podés pagarle al proveedor.</p></section>';
+    if(nProds>0){
+      h+='<section class="rtc-sec"><div class="rtc-sec-h"><span class="rtc-sec-t">Al freezer</span><span class="rtc-sec-n">'+_rtcCuenta(e.p)+'</span></div></section>'
+        +_rdepGrupos(e.p);
+    }
+    /* Lo que ya tiene dueño va aparte y POR CLIENTE, no mezclado por producto:
+       al abrir las cajas lo que se arma es una bolsa por persona. Verlo sumado
+       por producto obligaría a repartirlo de nuevo a mano. */
+    if(peds.length>0){
+      h+='<section class="rtc-sec"><div class="rtc-sec-h"><span class="rtc-sec-t">Separar — ya tienen dueño</span><span class="rtc-sec-n">'+uPed+' u.</span></div>';
+      peds.forEach(function(g){
+        var quien=String(g.cliente||'').trim()||'Sin nombre';
+        var det=[g.canal||'',g.nPedido?('#'+g.nPedido):''].filter(Boolean).join(' · ');
+        h+='<div class="rdep-grupo"><div class="rdep-head"><span class="rdep-cat">'+_rtcEsc(quien)+(det?' <span class="rtc-canal">'+_rtcEsc(det)+'</span>':'')+'</span><span class="rdep-sub">'+(g.qty||0)+'</span></div><div class="rdep-items" style="display:block">';
+        (g.items||[]).forEach(function(p){
+          h+='<div class="rdep-item"><span>'+(PROD_NAMES[p.abbr]||p.prod||p.abbr)+'</span><span class="rdep-q">'+p.qty+'</span></div>';
+        });
+        h+='</div></div>';
+      });
+      h+='</section>';
+    }
+    h+='</article>';
     body.innerHTML=h;
     var rowsCsv=(e._rows||[]).join(',');
-    actions.innerHTML='<div class="rtc-bar"><button type="button" class="rtc-cta dep" onclick="confirmarGuardadoStock(\''+rowsCsv+'\','+nProds+','+totalUnidades+')">'+_rtcIco('ok',22)+'<b>Guardado en el freezer</b></button></div>';
+    actions.innerHTML='<div class="rtc-bar"><button type="button" class="rtc-cta dep" onclick="confirmarGuardadoStock(\''+rowsCsv+'\','+nProds+','+totalUnidades+','+uPed+')">'+_rtcIco('ok',22)+'<b>Descargué todo</b></button></div>';
     return;
   }
 
