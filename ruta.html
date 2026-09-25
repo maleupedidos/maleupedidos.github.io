@@ -242,6 +242,15 @@ body.embed .tabs{top:0}
 .rdep-grupo.ok .rdep-item{opacity:.55;text-decoration:line-through}
 .rdep-q{font-weight:900;font-size:16px;color:#E65100;min-width:32px;text-align:right}
 .rdep-grupo.ok .rdep-q{color:#2E7D32}
+/* El conteo del depósito. El número es tocable para corregirlo, pero no grita:
+   9 de cada 10 veces el proveedor trajo lo que se le pidió y tocarlo sería
+   trabajo de más. El recuadro punteado alcanza para que se vea que se puede. */
+.rdep-qb{font-weight:900;font-size:16px;color:#E65100;min-width:44px;text-align:right;background:none;border:1px dashed #D9CBB0;border-radius:8px;padding:4px 8px;font-family:inherit;cursor:pointer}
+.rdep-qb:active{background:#F2E8C7}
+.rdep-grupo.ok .rdep-qb{color:#2E7D32}
+.rdep-qb.dif{color:#C62828;border-color:#C62828;border-style:solid;background:#FCE8E8}
+.rdep-ped{font-size:12px;color:#9A7B5A;margin-left:6px;font-weight:700}
+.rdep-aviso{margin:6px 13px 0;padding:8px 10px;background:#FCE8E8;border-radius:8px;font-size:13px;color:#7A2E2E;font-weight:700}
 .rdep-prog{font-size:12.5px;font-weight:800;color:var(--muted);margin-bottom:12px}
 .rdep-prog b{color:#2E7D32}
 
@@ -1992,6 +2001,35 @@ function refresh(silent,fresh,auto){
    pedido que devuelve exactamente lo mismo.
    `forzar` es para el unico caso que necesita el dato fresco: justo despues de
    confirmar el guardado en el freezer, donde la lista ACABA de cambiar. */
+/* LA COPIA GUARDADA. El endpoint tarda ~3 s y eso no se puede bajar desde el
+   backend: medido el 25/9/2026, cachear del lado del servidor no movio la aguja
+   (3151 ms → 3092 ms, con 1100 ms de ruido) porque los 3 segundos son el piso de
+   un GET a Apps Script, no la lectura de la hoja.
+   Lo que SI se puede es que Tadeo no los espere: se pinta lo de la vuelta
+   anterior al instante y se repinta cuando llega lo fresco. Es el mismo patrón
+   que `traer()` en el panel. Guardar que no se pueda NO es un error: la pantalla
+   funciona igual, sólo que esperando. */
+var _PGS_CACHE='maleu_pgs_v1';
+function _pgsGuardarCache(d){
+  try{ localStorage.setItem(_PGS_CACHE, JSON.stringify({ts:Date.now(),deposito:d.deposito||d.items||[],pedidos:d.pedidos||[]})); }catch(e){}
+}
+function _pgsLeerCache(){
+  try{
+    var c=JSON.parse(localStorage.getItem(_PGS_CACHE)||'null');
+    if(!c||!c.ts)return null;
+    /* Más de un día es de otra vuelta al depósito: mostrarlo sería decirle que
+       tiene en el auto cosas que ya guardó. Se prefiere la pantalla vacía. */
+    if(Date.now()-c.ts > 86400000)return null;
+    return c;
+  }catch(e){ return null; }
+}
+(function(){
+  var c=_pgsLeerCache();
+  if(!c)return;
+  pendientesGuardarStock=c.deposito||[];
+  pendientesPedidosOC=c.pedidos||[];
+})();
+
 var _pgsPidiendo=false, _pgsUltimo=0;
 function fetchPendientesGuardarStock(forzar){
   if(_pgsPidiendo)return;
@@ -2002,6 +2040,7 @@ function fetchPendientesGuardarStock(forzar){
     .then(function(data){
       _pgsPidiendo=false;
       if(!data||!data.ok)return;
+      _pgsGuardarCache(data);
       /* `deposito` con fallback a `items`: son el mismo array y el backend manda
          los dos, para poder publicarse antes que este archivo sin dejar la card muda. */
       pendientesGuardarStock=data.deposito||data.items||[];
@@ -3680,6 +3719,15 @@ function _rdepGuardar(){
   try { localStorage.setItem('maleu_rdep_ok', JSON.stringify(_rdepOk)); } catch(e){}
 }
 
+/* Lo CONTADO en el depósito, por abreviatura. Sobrevive a que se cierre la app:
+   contar 25 productos lleva un rato y el teléfono se bloquea solo. Se limpia al
+   confirmar la descarga, igual que los tildes. */
+var _rdepConteo = {};
+try { _rdepConteo = JSON.parse(localStorage.getItem('maleu_rdep_conteo') || '{}') || {}; } catch(e) { _rdepConteo = {}; }
+function _rdepConteoGuardar(){
+  try { localStorage.setItem('maleu_rdep_conteo', JSON.stringify(_rdepConteo)); } catch(e){}
+}
+
 /* La categoria de cada abreviatura sale de NP_CAT, que ya existe y tiene el
    orden curado. Una segunda lista de categorias se despegaria de la primera:
    en este ERP eso ya paso cuatro veces. */
@@ -3728,12 +3776,76 @@ function _rdepGrupos(prods){
       +    '<span class="rdep-sub">' + g.total + '</span>'
       +  '</div><div class="rdep-items">';
     g.items.forEach(function(p){
-      h += '<div class="rdep-item"><span>' + (PROD_NAMES[p.a] || p.a) + '</span>'
-        +  '<span class="rdep-q">' + (_esKg(p.a) ? _cantTxt(p.q,p.a) : p.q) + '</span></div>';
+      /* Los kilos no se cuentan por unidad, así que la carne no es corregible
+         acá: su pesaje tiene su propia pantalla. */
+      if (_esKg(p.a)){
+        h += '<div class="rdep-item"><span>' + (PROD_NAMES[p.a] || p.a) + '</span>'
+          +  '<span class="rdep-q">' + _cantTxt(p.q,p.a) + '</span></div>';
+        return;
+      }
+      var cont = _rdepConteo[p.a], hayDif = (cont !== undefined && cont !== p.q);
+      h += '<div class="rdep-item"><span>' + (PROD_NAMES[p.a] || p.a)
+        +  (hayDif ? '<span class="rdep-ped">pediste ' + p.q + '</span>' : '') + '</span>'
+        +  '<button type="button" class="rdep-qb' + (hayDif ? ' dif' : '') + '"'
+        +  ' onclick="rdepContar(\'' + p.a + '\',' + p.q + ')">'
+        +  (hayDif ? cont : p.q) + '</button></div>';
     });
     h += '</div></div>';
   });
   return h;
+}
+
+function rdepContar(abbr, pedido){
+  var actual = _rdepConteo[abbr] !== undefined ? _rdepConteo[abbr] : pedido;
+  var txt = prompt('¿Cuántas contaste?\n\n' + (PROD_NAMES[abbr] || abbr) + '\nPediste ' + pedido, String(actual));
+  if (txt === null) return;
+  txt = String(txt).trim().replace(',', '.');
+  if (txt === ''){ delete _rdepConteo[abbr]; _rdepConteoGuardar(); rutRender(); return; }
+  var n = Number(txt);
+  if (!isFinite(n) || n < 0){ showToast('Poné un número'); return; }
+  n = Math.round(n);
+  /* Se guarda incluso cuando coincide con lo pedido: que Tadeo haya contado y
+     dado igual es un dato distinto de que no haya contado, y el borde rojo solo
+     aparece si difiere. */
+  _rdepConteo[abbr] = n;
+  _rdepConteoGuardar();
+  if (navigator.vibrate) navigator.vibrate(30);
+  rutRender();
+}
+
+/* Reparte lo contado entre las OC que forman ese producto. Un producto puede
+   venir en dos órdenes (27 empanadas = 15 + 12) y la pantalla muestra el total.
+   Se descuenta desde la ÚLTIMA hacia atrás: es la regla más predecible: la
+   primera OC de la semana queda intacta y la diferencia cae en la más reciente.
+   Repartir a prorrata daría decimales sobre unidades que no se parten. */
+function _rdepAjustes(){
+  var out = [];
+  (pendientesGuardarStock || []).forEach(function(it){
+    var cont = _rdepConteo[it.abbr];
+    if (cont === undefined || cont === it.qty) return;
+    var rows = it.rows || [], qtys = it.qtys || [];
+    if (!rows.length) return;
+    /* Sin `qtys` (backend viejo) no se puede repartir sin inventar: va todo a la
+       primera fila y las otras a cero, que es lo único que no miente el total. */
+    if (qtys.length !== rows.length){
+      out.push({ r: rows[0], qty: cont });
+      for (var k = 1; k < rows.length; k++) out.push({ r: rows[k], qty: 0 });
+      return;
+    }
+    var resto = cont, nuevas = qtys.slice();
+    for (var i = 0; i < rows.length; i++){
+      var toma = Math.min(qtys[i], resto);
+      nuevas[i] = toma;
+      resto -= toma;
+    }
+    /* Si contó MÁS de lo que pidió, el sobrante va a la última: entró al
+       freezer igual y no anotarlo sería perder stock real. */
+    if (resto > 0) nuevas[rows.length - 1] += resto;
+    for (var j = 0; j < rows.length; j++){
+      if (nuevas[j] !== qtys[j]) out.push({ r: rows[j], qty: nuevas[j] });
+    }
+  });
+  return out;
 }
 
 function rdepToggle(cat){
@@ -3748,15 +3860,28 @@ function confirmarGuardadoStock(rowsCsv,nProds,totalUnid,unidPedidos){
   var rows=(rowsCsv||'').split(',').map(Number).filter(function(r){return r>=2});
   if(rows.length===0)return;
   var uPed=Number(unidPedidos)||0;
+  var ajustes=_rdepAjustes();
   var msg='¿Descargaste todo?\n\n· '+totalUnid+' unidades al freezer';
   if(uPed>0)msg+='\n· '+uPed+' unidades separadas para pedidos';
+  /* Lo contado distinto se nombra UNO POR UNO en el confirm. Es lo que corrige
+     cantidades y costos de la OC, o sea lo que después vas a pagar: enterarte
+     por un total agregado sería enterarte tarde. */
+  if(ajustes.length){
+    msg+='\n\nContaste distinto en:';
+    (pendientesGuardarStock||[]).forEach(function(it){
+      var c=_rdepConteo[it.abbr];
+      if(c===undefined||c===it.qty)return;
+      msg+='\n· '+(PROD_NAMES[it.abbr]||it.abbr)+': pediste '+it.qty+', contaste '+c;
+    });
+    msg+='\n\nSe corrige la orden de compra y su costo.';
+  }
   /* Se avisa que marca recibido porque mueve plata: a partir de acá el proveedor
      entra en la deuda y se le puede pagar. Un confirm que sólo dijera "guardado"
      escondería el efecto que de verdad importa. */
   msg+='\n\nEsto lo marca recibido: suma el stock y habilita el pago al proveedor.';
   if(!confirm(msg))return;
   rutShowLoader('Descargando el auto...');
-  var payload={action:'marcarGuardadoEnStock',rows:rows,repartidor:_rutaUser(),ts:Date.now()};
+  var payload={action:'marcarGuardadoEnStock',rows:rows,ajustes:ajustes,repartidor:_rutaUser(),ts:Date.now()};
   fetch(RUT_APPS_SCRIPT_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(payload),redirect:'follow'})
     .then(function(r){return r.json().catch(function(){return{ok:false}})})
     .then(function(res){
@@ -3765,10 +3890,16 @@ function confirmarGuardadoStock(rowsCsv,nProds,totalUnid,unidPedidos){
         // Actualización optimista: vacío la lista local. El próximo refresh confirma.
         pendientesGuardarStock=[];
         pendientesPedidosOC=[];
+        /* Y la copia guardada, o al reabrir la app volvería a pintar el auto
+           lleno: la pantalla diría que falta guardar lo que acaba de guardar. */
+        try{ localStorage.removeItem(_PGS_CACHE); }catch(e){}
         rutRender();
         /* Los tildes son de ESTA tanda: si quedaran, la proxima card
-           arrancaria toda en verde y el tildado dejaria de decir nada. */
+           arrancaria toda en verde y el tildado dejaria de decir nada. Lo mismo
+           el conteo: un "conté 14" de hoy aplicado a la compra de la semana que
+           viene corregiria una OC que nadie conto. */
         _rdepOk = {}; _rdepGuardar();
+        _rdepConteo = {}; _rdepConteoGuardar();
         showToast('Guardado confirmado ('+(res.n||rows.length)+' OCs)');
         if(isOnline)fetchPendientesGuardarStock(true);
       } else {

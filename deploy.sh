@@ -136,6 +136,18 @@ else
   echo "    (no se tocaron ruta.html ni busqueda.html)"
 fi
 
+# ── 3f2. El conteo del deposito ─────────────────────────────────
+#  Al descargar el auto, corregir un conteo cambia el Costo Total de una OC, o
+#  sea lo que despues se le paga al proveedor. La pantalla muestra el producto
+#  SUMADO, pero atras pueden ser dos ordenes distintas (27 = 15 + 12): repartir
+#  mal no rompe nada visible, descuadra la deuda.
+echo "→ [3f2/8] El conteo del deposito y su reparto entre OC…"
+if echo "$HTMLS" | grep -qE "ruta.html"; then
+  node _tools/pruebas/probar_conteo_descarga.js | sed 's/^/    /' || fallar "El conteo del deposito reparte mal entre las OC — corre: node _tools/pruebas/probar_conteo_descarga.js"
+else
+  echo "    (no se toco ruta.html)"
+fi
+
 # ── 3g. El bloque de carne de Inicio ─────────────────────────────────────────
 #  Ese cartel decide si Tadeo llama a Lucas un martes. Hasta el 10/9/2026
 #  afirmaba "el pedido ya tendria que estar hecho" mirando SOLO el dia de la
