@@ -96,7 +96,7 @@ vm.runInContext([
   /* `_sbEnVuelo` y `_sbPedidosAhora` son del 24/9/2026: una sola consulta a
      Supabase por vez. Van ANTES de `_sbPedidos`, que las usa. */
   'var _sbEnVuelo={};',
-  sacar('_sbPedidosAhora'), sacar('_sbPedidos'), sacar('_sbAdelanto'),
+  sacar('_sbPedidosAhora'), sacar('_sbPedidos'),
   'var _sbCambioLocal=0;',
   (src.match(/\nvar _SB_ESPERA_TRAS_CAMBIO=[^;]*;/) || [''])[0],
   sacar('_sbPuedePisar'), sacar('_sbEdad'), sacar('_sbCompletar'),
@@ -157,7 +157,7 @@ const reabrir = () => vm.runInContext('_sbPerm=null;_sbPermHasta=0;_sbPidiendo=n
   console.log('\n-- el adelanto --');
   limpiar(); reset(); await conPermiso(); ctx.D = null; ctx._renders = 0;
   chk('con la pantalla vacía, trae la lista y repinta',
-    (await ctx._sbAdelanto()) === true && ctx.D.pedidos.length === 2 && ctx._renders === 1,
+    (await ctx._sbRefrescoPedidos()) === true && ctx.D.pedidos.length === 2 && ctx._renders === 1,
     { n: ctx.D && ctx.D.pedidos && ctx.D.pedidos.length, renders: ctx._renders });
   chk('y queda anotado que esa foto es de Supabase', ctx.D._pedidosDeSupabase === 1);
   /* Lo que render() recorre y Supabase no trae. Un undefined acá tira un
@@ -170,11 +170,11 @@ const reabrir = () => vm.runInContext('_sbPerm=null;_sbPermHasta=0;_sbPidiendo=n
 
   limpiar(); reset(); ctx.D = { pedidos: [{ n: '999' }] }; ctx._renders = 0;
   chk('si YA hay pedidos en pantalla, no toca nada (no pisa lo más fresco)',
-    (await ctx._sbAdelanto()) === false && ctx.D.pedidos[0].n === '999' && ctx._renders === 0, ctx.D.pedidos);
+    (await ctx._sbRefrescoPedidos()) === false && ctx.D.pedidos[0].n === '999' && ctx._renders === 0, ctx.D.pedidos);
   chk('y ni siquiera le pide permiso al ERP', llamadas.length === 0, llamadas);
 
   limpiar(); reset(); await conPermiso(); ctx.D = null; ctx._renders = 0; ctx._editorAbierto = true;
-  await ctx._sbAdelanto();
+  await ctx._sbRefrescoPedidos();
   chk('con un editor abierto NO repinta: se le borraría lo que está tipeando',
     ctx._renders === 0 && ctx._pendingLoadRender === true, { renders: ctx._renders });
   ctx._editorAbierto = false; ctx._pendingLoadRender = false;
@@ -183,10 +183,10 @@ const reabrir = () => vm.runInContext('_sbPerm=null;_sbPermHasta=0;_sbPidiendo=n
   console.log('\n-- si falla, se sale en silencio --');
   limpiar(); reset({ permiso: false }); ctx.D = null; ctx._renders = 0;
   chk('sin permiso (cualquiera que no sea Tadeo) -> no pasa nada',
-    (await ctx._sbAdelanto()) === false && ctx.D === null && ctx._renders === 0);
+    (await ctx._sbRefrescoPedidos()) === false && ctx.D === null && ctx._renders === 0);
 
   reset({ permiso: false });
-  await ctx._sbAdelanto();
+  await ctx._sbRefrescoPedidos();
   chk('y el "no" se recuerda: no vuelve a preguntar en cada pantalla',
     llamadas.length === 0, llamadas);
 
@@ -196,15 +196,15 @@ const reabrir = () => vm.runInContext('_sbPerm=null;_sbPermHasta=0;_sbPidiendo=n
   chk('sin red al pedir permiso -> null, no una excepción',
     (await ctx._sbPermiso()) === null);
   chk('y el atajo, sin permiso, devuelve false sin romper nada',
-    (await ctx._sbAdelanto()) === false && ctx.D === null);
+    (await ctx._sbRefrescoPedidos()) === false && ctx.D === null);
 
   limpiar(); reset(); await conPermiso(); reset({ fallaSb: true }); ctx.D = null;
   chk('si Supabase contesta mal -> false, y la pantalla espera a Google',
-    (await ctx._sbAdelanto()) === false && ctx.D === null);
+    (await ctx._sbRefrescoPedidos()) === false && ctx.D === null);
 
   limpiar(); reset(); await conPermiso(); reset({ filas: [] }); ctx.D = null; ctx._renders = 0;
   chk('una lista vacía no se pinta como si fuera la verdad',
-    (await ctx._sbAdelanto()) === false && ctx._renders === 0);
+    (await ctx._sbRefrescoPedidos()) === false && ctx._renders === 0);
 
   /* ── El permiso se reusa ── */
   console.log('\n-- el permiso se reusa --');
@@ -212,7 +212,7 @@ const reabrir = () => vm.runInContext('_sbPerm=null;_sbPermHasta=0;_sbPidiendo=n
   await ctx._sbPermiso();
   const n1 = llamadas.filter(u => u.indexOf('sbToken') >= 0).length;
   ctx.D = null;
-  await ctx._sbPermiso(); await ctx._sbAdelanto();
+  await ctx._sbPermiso(); await ctx._sbRefrescoPedidos();
   const n2 = llamadas.filter(u => u.indexOf('sbToken') >= 0).length;
   chk('el permiso se pide UNA vez y se reusa una hora', n1 === 1 && n2 === 1, { n1, n2 });
 
@@ -230,7 +230,7 @@ const reabrir = () => vm.runInContext('_sbPerm=null;_sbPermHasta=0;_sbPidiendo=n
   /* El ATAJO, no `_sbPermiso`: la gracia es que al reabrir el atajo encuentra
      el permiso guardado y corre SIN salir a la red. Si tuviera que pedirlo,
      estariamos de vuelta en los 3,5 s del arranque. */
-  const _reab = await ctx._sbAdelanto();
+  const _reab = await ctx._sbRefrescoPedidos();
   const _t2 = llamadas.filter(u => u.indexOf('sbToken') >= 0).length;
   chk('al reabrir no se vuelve a pedir: sale del guardado', _t1 === 1 && _t2 === 1, { _t1, _t2 });
   chk('y el atajo corre igual, sin una sola llamada al ERP', _reab === true, _reab);
@@ -241,7 +241,7 @@ const reabrir = () => vm.runInContext('_sbPerm=null;_sbPermHasta=0;_sbPidiendo=n
   /* Primero el atajo: con el permiso de Tadeo guardado, a luqui NO se le presta
      y —como el atajo ya no pide— ni siquiera sale a la red. Es mas fuerte que
      antes: el permiso de otro no se usa Y no se pide uno en su lugar. */
-  const _luqui = await ctx._sbAdelanto();
+  const _luqui = await ctx._sbRefrescoPedidos();
   const _t3a = llamadas.filter(u => u.indexOf('sbToken') >= 0).length;
   chk('el permiso de Tadeo NO se le presta a otro usuario',
     _luqui === false && ctx.D === null, { _luqui: _luqui, D: ctx.D });
@@ -261,7 +261,7 @@ const reabrir = () => vm.runInContext('_sbPerm=null;_sbPermHasta=0;_sbPidiendo=n
   ctx._ls['mc_sbtok'] = JSON.stringify(Object.assign({}, _g, { hasta: Date.now() - 1000 }));
   reabrir(); ctx.D = null;
   /* El atajo con un permiso vencido: no lo usa y tampoco pide uno. */
-  const _venc = await ctx._sbAdelanto();
+  const _venc = await ctx._sbRefrescoPedidos();
   chk('el atajo no usa un permiso vencido', _venc === false, _venc);
   await ctx._sbPermiso();
   const _t4 = llamadas.filter(u => u.indexOf('sbToken') >= 0).length;
@@ -285,7 +285,7 @@ const reabrir = () => vm.runInContext('_sbPerm=null;_sbPermHasta=0;_sbPidiendo=n
   ctx.localStorage = { getItem() { throw new Error('bloqueado'); },
                        setItem() { throw new Error('bloqueado'); },
                        removeItem() { throw new Error('bloqueado'); } };
-  const _sinLs = await ctx._sbAdelanto();
+  const _sinLs = await ctx._sbRefrescoPedidos();
   ctx.localStorage = _lsOrig;
   chk('sin poder guardar nada, el atajo funciona igual', _sinLs === true, _sinLs);
 
