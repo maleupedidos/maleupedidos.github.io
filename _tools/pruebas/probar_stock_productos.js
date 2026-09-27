@@ -78,6 +78,14 @@ const EXTRA = `
       if(window.__nAdmin>1){ var n=JSON.parse(JSON.stringify(ADMIN_A)); n.stock.forEach(function(s){ if(s.a==='SL'){ s.f=4; s.d=4; s.pd.ustariz=4; } }); n.ts=Date.now(); return n; }
       return ADMIN_A;
     };
+    /* action=stockTab (27/9/2026): los cuatro campos que la tabla lee de D.
+       Sale de cuerpoAdmin() para que las cinco fases valgan para los dos
+       caminos y no haya que escribirlas dos veces. */
+    var cuerpoStockTab=function(){
+      var a=cuerpoAdmin();
+      if(!a||a.ok===false)return a;
+      return {ok:true,ts:a.ts,stock:a.stock,stockDeps:a.stockDeps,stockCierre:a.stockCierre};
+    };
     var o=window.fetch; window.fetch=function(u,x){
       var url=String((u&&u.url)||u||'');
       var post=x&&String(x.method||'').toUpperCase()==='POST';
@@ -86,6 +94,7 @@ const EXTRA = `
       if(url.indexOf('script.google.com')>-1){
         var m=url.match(/action=([a-zA-Z_]+)/); var a=m?m[1]:'?'; window.__gets.push(a);
         var cuerpo = a==='admin' ? cuerpoAdmin()
+          : a==='stockTab' ? cuerpoStockTab()
           : a==='depositos' ? ${JSON.stringify(DEPOSITOS)}
           : a==='pedidosLight' ? {ts:1,pedidos:[],canales:[],light:true}
           : a==='cajaLight' ? {ts:1,caja:{},saldoBase:{},gastos:[],ingresos:[],movimientos:[],efMano:[],cuentas:[]}
@@ -93,7 +102,7 @@ const EXTRA = `
           : a==='ventas' ? {ok:true,v:[]}
           : {ok:false,error:'stub'};
         var txt=JSON.stringify(cuerpo);
-        var demora = (a==='admin'&&window.__nAdmin>1) ? 2500 : 150;
+        var demora = ((a==='admin'||a==='stockTab')&&window.__nAdmin>1) ? 2500 : 150;
         return new Promise(function(res){ setTimeout(function(){ res(new Response(txt,{status:200,headers:{'Content-Type':'application/json'}})); },demora); });
       }
       return o.apply(this,arguments); };
@@ -155,6 +164,11 @@ const LEER = `(function(){
     chk('el titulo dice la semana y va de lunes a domingo', /^📦 Semana \d+ · lun \d+\/\d+ → dom \d+\/\d+$/.test(L.titulo.trim()), L.titulo);
     chk('"Donde esta" sale del volcado: Ustariz 7 u · 3,89 kg · Moresco 0 u', /Ustariz 7 u · 3,89 kg\s*Moresco 0 u/.test(L.dep), L.dep);
     chk('sin pedir action=depositos', L.gets.indexOf('depositos') < 0, L.gets);
+    /* LO QUE HACE QUE VALGA LA PENA (27/9/2026). Medido contra produccion ese
+       dia: `admin` son 1,29 MB y 28 s; `stockTab`, 5,4 KB. Sin este chequeo,
+       volver a meter 'stock' en _TABS_CON_DATOS deja la prueba verde y la
+       espera de 28 s de vuelta adentro. */
+    chk('la tabla pide stockTab y NO el volcado', L.gets.indexOf('stockTab') > -1 && L.gets.indexOf('admin') < 0, L.gets);
     chk('avisa que el total de las Empanadas no da lo de los depositos, y lo nombra', /Empanadas Jamon y Queso x8: el total dice 1 y los depósitos suman 0/.test(L.dep) && /CONTAR/.test(L.dep), L.dep);
     chk('y no avisa por los que si cierran', !/Pack Jamon|Sorrentinos|Carne Lomo/.test(L.dep.split('⚠')[1] || ''), L.dep);
     chk('sin avisos de semana ni de cierre', L.avisos.length === 0, L.avisos);

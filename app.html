@@ -10054,7 +10054,14 @@ function _enterApp(){
    y entrar pedia el volcado (1 MB, ~28 s) y ponia "Cargando Maleu..." arriba de
    una lista que ya estaba. La ficha usa el volcado si ya llego; si no, le pide el
    historial al servidor. */
-var _TABS_CON_DATOS=['inicio','pedidos','caja','egresos','stock',
+/* 'stock' salio el 27/9/2026: la tabla de PRODUCTOS trae lo suyo
+   (`action=stockTab`, 5,4 KB) y entrar pedia el volcado entero — medido ese
+   dia: 1,29 MB y 28 s para dibujar 34 productos. De las 23 claves del
+   volcado esta pantalla usa cuatro, y el endpoint nuevo devuelve esas
+   cuatro con el MISMO contenido (verificado campo por campo).
+   Las otras sub-tabs —CONTAR, MOVER, RECIBIR CARNE, CATALOGO— ya pedian lo
+   suyo desde el 13/9. */
+var _TABS_CON_DATOS=['inicio','pedidos','caja','egresos',
                      'pedidoshome','proveedores','planificacion','estancias','mireparto'];
 // true si la sesion tiene acceso a esa tab. Sin info de tabs (sesion vieja),
 // devolvemos true para no cambiarle nada a quien ya estaba adentro.
@@ -10494,6 +10501,18 @@ function go(p){
   _pintarSeccion(p);
   if((p==='ventas'||p==='inicio')&&_tengoTab(p))_pedirVentas();
   if(p==='catering')try{rCatering();}catch(e){}
+  /* Stock ya no vive del volcado: cada sub-tab pide lo suyo al entrar.
+     PRODUCTOS es la que cambio el 27/9/2026; las otras tres ya lo hacian
+     desde stSwitchTab, y entrar directo con una de ellas restaurada
+     tambien tiene que traerla. */
+  if(p==='stock'){
+    var _sst=(typeof ST_TAB==='string')?ST_TAB:'productos';
+    try{
+      if(_sst==='productos')loadStockTab();
+      else if(_sst==='carne')stCarnePedir();
+      else if(_sst!=='catalogo')stDepPedir();
+    }catch(e){ console.error('go/stock',e); }
+  }
   document.body.classList.toggle('mp-abierto',p==='miportal');
   _ldSync();
   document.querySelectorAll('.bn').forEach(function(e){e.classList.toggle('on',e.dataset.p===p);});
@@ -11470,7 +11489,7 @@ function loadMiReparto(){
 var FRESCO_VIEJO_MIN=20;   /* el mismo umbral que el sello de la Caja */
 var _FRESCO_NOM={pedidos:'Pedidos',caja:'Caja',volcado:'Datos del ERP',ventas:'Ventas',ruta:'Entregas',busqueda:'Abastecimiento',miportal:'Mi Portal',depositos:'Dep\u00f3sitos',carnePiezas:'Piezas de carne',crmClientes:'Clientes',crmProductos:'Productos',ajustes:'Ajustes',planMes:'Objetivo',productosAnalytics:'Productos',combosEval:'Combos',mireparto:'Mi Reparto'};
 /* El volcado completo (`admin`) trae tambien los pedidos y la caja. */
-var _FRESCO_EN_VOLCADO={pedidos:1,caja:1};
+var _FRESCO_EN_VOLCADO={pedidos:1,caja:1,stockTab:1};
 var _fresco=(function(){
   try{ var o=JSON.parse(localStorage.getItem('maleu_fresco')||'null'); if(o&&o.ok&&o.err)return o; }catch(e){}
   return {ok:{},err:{}};
@@ -11530,10 +11549,13 @@ function _fuentesDeTab(tab){
      refreshContextual.) */
   if(tab==='planificacion')return ['pedidos','planMes'];
   if(tab==='mireparto')return [];
-  /* CONTAR y MOVER miran los depositos; RECIBIR CARNE, las piezas. */
-  if(tab==='stock'&&typeof ST_TAB==='string'&&ST_TAB!=='productos'){
-    if(ST_TAB==='catalogo')return ['crmProductos'];
-    return [ST_TAB==='carne'?'carnePiezas':'depositos'];
+  /* CONTAR y MOVER miran los depositos; RECIBIR CARNE, las piezas; y desde
+     el 27/9/2026 PRODUCTOS mira `stockTab` en vez del volcado entero. */
+  if(tab==='stock'){
+    var _st=(typeof ST_TAB==='string')?ST_TAB:'productos';
+    if(_st==='productos')return ['stockTab'];
+    if(_st==='catalogo')return ['crmProductos'];
+    return [_st==='carne'?'carnePiezas':'depositos'];
   }
   return _tabUsaD(tab)?['volcado']:[];
 }
@@ -11725,7 +11747,7 @@ function _leerVersion(app){
    "El HTML no sabe que version es" dejo de ser cierto: el build le escribe
    adentro el CACHE_NAME de sw-panel.js, el mismo que deploy.sh obliga a subir en
    cada cambio. Si lo publicado dice otra cosa, esta pagina es vieja. Punto. */
-var _APP_CN_PAGINA='maleu-panel-v443';
+var _APP_CN_PAGINA='maleu-panel-v444';
 
 /* Devuelve [{k,v}] si lo publicado no es lo que esta pagina corre. */
 function _chequearVersiones(){
@@ -12044,8 +12066,12 @@ function refreshContextual(){
   /* Stock: CONTAR, MOVER y RECIBIR CARNE no viven del volcado (13/9/2026). El ↻
      pedia `load()` —el volcado entero— y no tocaba lo que esas pantallas dibujan:
      giraba, decia "recien" y los depositos y las piezas seguian como estaban. */
-  if(active==='stock'&&typeof ST_TAB==='string'&&ST_TAB!=='productos'){
-    var pS=(ST_TAB==='carne')?stCarnePedir(true):stDepPedir(true);
+  if(active==='stock'){
+    /* PRODUCTOS entro aca el 27/9/2026. Antes caia en el default y pedia el
+       volcado entero: 28 s girando para redibujar 34 filas. */
+    var _sa=(typeof ST_TAB==='string')?ST_TAB:'productos';
+    var pS=(_sa==='productos')?loadStockTab(true)
+         :(_sa==='carne')?stCarnePedir(true):stDepPedir(true);
     Promise.resolve(pS).then(function(ok){done(ok!==false);},function(){done(false);});
     return;
   }
@@ -20832,12 +20858,68 @@ function rStockReparto(){
   cont.innerHTML=h;
 }
 
+/* LA TABLA DE STOCK, SIN EL VOLCADO. (27/9/2026)
+
+   Pide `action=stockTab`, que devuelve exactamente los cuatro campos que
+   `rStock()` lee de D —`stock`, `stockDeps`, `stockCierre` y su propio sello—
+   y los mergea adentro de D con los mismos nombres. `rStock()` no se entera de
+   por donde vino la foto: dibuja igual si la trajo el volcado.
+
+   Medido el dia que se hizo: el volcado 1,29 MB y 28 s; esto, 5,4 KB.
+
+   `stockTs` va aparte de `D.ts` a proposito. `D.ts` es el sello del VOLCADO, y
+   `rStock` lo usa para avisar "esta foto es de la semana pasada": si la tabla
+   se actualiza sola y el volcado quedo viejo, mirar `D.ts` daria un aviso falso
+   sobre datos que acaban de llegar. */
+var ST_TENGO=false, ST_INFO=null;
+/* Cuando se PIDIO la ultima foto de stock que llego. Es el gemelo de
+   `_volcadoPedidoEn` y existe por el mismo motivo: la hora en que la foto LLEGO
+   no alcanza. Una pedida al entrar a Stock que vuelve DESPUES de que contaste
+   trae el numero de antes, y la tabla la mostraria como nueva.
+   Tampoco sirve el sello que manda el servidor (`d.ts`): dice cuando la armo el
+   backend, no cuando se la pedimos. */
+var _stockPedidoEn=0;
+/* UNO A LA VEZ. `_pedirD()` ya tenia este candado y por eso el volcado no se
+   pedia dos veces; aca hizo falta ponerlo: entrar a Stock puede llamar a `go()`
+   mas de una vez (al restaurar la tab y al tocarla), y sin esto salian dos
+   pedidos en paralelo. El ↻ pasa igual —`forzar`—: ahi la persona esta pidiendo
+   explicitamente la foto de ahora. */
+var _stockVuelo=null;
+function loadStockTab(forzar){
+  if(_stockVuelo&&!forzar)return _stockVuelo;
+  var _pedidoEn=Date.now();
+  var url=API+'?action=stockTab&t='+_pedidoEn;
+  var p=_stTraer('stockTab1',url,
+    function(d){ return !!(d&&d.ok&&Array.isArray(d.stock)); },
+    'stockTab', ST_TENGO,
+    function(d,info){
+      if(d&&!info.viejo)_stockPedidoEn=Math.max(_stockPedidoEn,_pedidoEn);
+      if(d){
+        if(typeof D!=='object'||!D)D={};
+        D.stock=d.stock; D.stockDeps=d.stockDeps;
+        D.stockCierre=d.stockCierre; D.stockTs=d.ts;
+        ST_TENGO=true;
+        /* La tabla se redibuja con la foto nueva. `_pintadas` es la marca de
+           "esta seccion ya esta al dia con el D de ahora": si no se borra, el
+           pintado en segundo plano la saltea y la tabla queda con lo viejo. */
+        try{ delete _pintadas.stock; }catch(e){}
+      }
+      ST_INFO=info.fallo?{fallo:true,t:(ST_INFO&&ST_INFO.t)||0}:info;
+      if((typeof ST_TAB!=='string'||ST_TAB==='productos')&&typeof rStock==='function'){
+        try{ rStock(); }catch(e){ console.error('rStock',e); }
+      }
+    },forzar);
+  _stockVuelo=p;
+  var _libre=function(r){ if(_stockVuelo===p)_stockVuelo=null; return r; };
+  return p.then(_libre,function(e){ _libre(); throw e; });
+}
 function rStock(){
   /* El stock llega solo en el volcado grande. En frio pintamos primero con los
      endpoints livianos, que no lo traen: en vez de reventar, avisamos. */
   if(!D||!Array.isArray(D.stock)){
     var _sc=$('sList');
-    if(_sc&&!_sc.innerHTML.trim())_sc.innerHTML='<div class="si" style="justify-content:center;color:var(--bl);padding:26px">Trayendo el stock\u2026</div>';
+    if(_sc&&!_sc.innerHTML.trim())_sc.innerHTML='<div class="si" style="justify-content:center;color:var(--bl);padding:26px">'
+      +(ST_INFO&&ST_INFO.fallo?'No se pudo traer el stock. Toc\u00e1 \u21bb.':'Trayendo el stock\u2026')+'</div>';
     return;
   }
   /* La semana de la tabla. Sale del reloj del aparato y va en el titulo: arriba de
@@ -20858,7 +20940,11 @@ function rStock(){
      seria mentir. Dos horas de margen: el disparador corre adentro de la hora. */
   var avisos=[];
   var lunMs=lun.getTime();
-  if(Number(D.ts)&&Number(D.ts)<lunMs)
+  /* El sello de ESTA foto: `stockTs` si vino por `stockTab`, `ts` si la
+     trajo el volcado. Mirar solo `D.ts` avisaba "es de la semana pasada"
+     sobre datos recien traidos, cuando el volcado habia quedado viejo. */
+  var _stTs=Number(D.stockTs||D.ts)||0;
+  if(_stTs&&_stTs<lunMs)
     avisos.push('Esta foto del stock es de la semana pasada. Toc\u00e1 \u21bb para traer la de ahora.');
   else if(D.stockCierre&&now.getTime()>lunMs+2*3600e3){
     var tc=new Date(D.stockCierre).getTime();
@@ -20869,13 +20955,22 @@ function rStock(){
      Esas pantallas actualizan lo suyo al instante, pero la tabla vive del volcado:
      sin esto, volver a PRODUCTOS mostraba el fisico de antes de contar. Se trae el
      volcado UNA vez por cambio — si falla, se dice y no se reintenta en bucle. */
-  var sucio=ST_SUCIO&&ST_SUCIO>(_volcadoPedidoEn||(typeof _frescoTs==='function'&&_frescoTs('volcado'))||0);
+  /* Contaste o moviste algo despues de esta foto. Se compara contra
+     cuando se PIDIO la foto que estamos mostrando: desde el 27/9/2026
+     esa puede ser la de `stockTab`, que es la que se trae aca abajo. */
+  var _fotoDesde=Math.max(Number(_stockPedidoEn)||0,
+    _volcadoPedidoEn||(typeof _frescoTs==='function'&&_frescoTs('volcado'))||0);
+  var sucio=ST_SUCIO&&ST_SUCIO>_fotoDesde;
   if(sucio){
     var mirando=(ST_TAB==='productos')&&$('p-stock')&&$('p-stock').classList.contains('on');
     if(mirando&&!ST_RECARGANDO&&ST_INTENTO!==ST_SUCIO&&typeof load==='function'){
       ST_RECARGANDO=true; ST_INTENTO=ST_SUCIO;
-      var _fin=function(){ ST_RECARGANDO=false; try{rStock();}catch(e){console.error('rStock',e);} };
-      Promise.resolve(load()).then(_fin,_fin);
+      /* `loadStockTab` y no `load()`: traer el volcado entero (1,29 MB,
+         28 s) para releer 34 filas era lo que hacia esperar despues de
+         contar. `loadStockTab` ya repinta solo, asi que aca solo se
+         baja la bandera. (27/9/2026) */
+      var _fin=function(){ ST_RECARGANDO=false; };
+      Promise.resolve(loadStockTab(true)).then(_fin,_fin);
     }
     avisos.push(ST_RECARGANDO
       ? 'Contaste o moviste mercader\u00eda hace un momento: trayendo el stock nuevo\u2026'
