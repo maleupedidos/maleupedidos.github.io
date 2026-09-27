@@ -170,15 +170,31 @@ const chk = (t, c, d) => {
     })()`);
     chk('Inicio se dibujo (no quedo en blanco)', pinto.hay && pinto.texto > 400, pinto);
 
-    /* El borde que rompio al hacer el cambio: `_pedirD` se frenaba con `D`, y
-       con las livianas armando `D` sin volcado, Objetivo y Proveedores —que si
-       lo necesitan— no lo pedian nunca. */
+    /* Objetivo y Proveedores tampoco lo piden ya (27/9/2026, de noche): fueron
+       las dos ultimas en salir, cuando `cajaLight` empezo a mandar la lista de
+       `proveedores`. */
     await evaluar(cli, `window.__gets=[]; 1`);
     await evaluar(cli, `try{ go('planificacion'); }catch(e){} 1`);
-    await esperar(cli, `window.__nAdmin>0`, 20000);
+    await pausa(2500);
+    await evaluar(cli, `try{ go('proveedores'); }catch(e){} 1`);
+    await pausa(2500);
+    const gPP = await evaluar(cli, `window.__gets.slice()`);
+    chk('Objetivo y Proveedores tampoco piden el volcado', gPP.indexOf('admin') < 0, gPP);
+
+    /* LA RED DE SEGURIDAD SIGUE VIVA. `_TABS_CON_DATOS` quedo vacia, pero el
+       mecanismo no se borro: una pantalla nueva que necesite algo que ningun
+       liviano trae se agrega ahi y tiene que andar.
+       Y prueba de paso el bug que aparecio al despegar Inicio: `_pedirD` se
+       frenaba con `if(D)`, y con las livianas armando `D` sin que el volcado
+       saliera nunca, una tab agregada a esa lista **no lo pedia jamas**. La
+       pregunta correcta es por `_volcadoPedidoEn`. */
+    await evaluar(cli, `window.__gets=[]; _TABS_CON_DATOS.push('planificacion'); 1`);
+    await evaluar(cli, `try{ go('inicio'); go('planificacion'); }catch(e){} 1`);
+    const vino = await esperar(cli, `window.__nAdmin>0`, 25000);
     await pausa(1200);
     const g2 = await evaluar(cli, `window.__gets.slice()`);
-    chk('entrar a Objetivo SI pide el volcado (lo necesita)', g2.indexOf('admin') > -1, g2);
+    chk('una tab puesta en _TABS_CON_DATOS SI lo pide (la red de seguridad)',
+        vino && g2.indexOf('admin') > -1, g2);
 
     /* Y una vez que llego, no se vuelve a pedir en cada entrada. */
     const n1 = await evaluar(cli, `window.__nAdmin`);
