@@ -37,13 +37,27 @@ const TABS = ['inicio', 'pedidos', 'pedidoshome', 'caja', 'egresos',
 /* Que trae cada endpoint liviano. Salido de pedirselos a produccion ese dia.
    Es lo que permite decir "esta tab ya podria vivir sin el volcado". */
 const LIVIANOS = {
-  pedidosLight: ['ts', 'pedidos', 'canales', 'saludSem', 'saludMes', 'ventasExtra'],
+  /* `totales` y `vendedores` se agregaron el 27/9/2026 (backend @710) y se
+     verificaron identicos a los del volcado: son los que le faltaban a Inicio,
+     la tab que ABRE la app. */
+  pedidosLight: ['ts', 'pedidos', 'canales', 'saludSem', 'saludMes', 'ventasExtra',
+                 'totales', 'vendedores'],
+  /* `vueltos` ya se calculaba en el modo caja y no se mandaba. */
   cajaLight: ['ts', 'caja', 'saldoBase', 'movimientos', 'gastos', 'gastosHist',
               'ingresos', 'efMano', 'efHuerfanos', 'sobres', 'cuentas',
-              'provisiones', 'config', 'cajaMode'],
+              'provisiones', 'config', 'cajaMode', 'vueltos'],
   ocLight: ['oc'],
-  stockTab: ['stock', 'stockDeps', 'stockCierre']
+  /* `stockTs` no viene del backend: lo pone `loadStockTab` en D para que la
+     tabla sepa de cuando es SU foto, distinta de la del volcado. */
+  stockTab: ['stock', 'stockDeps', 'stockCierre', 'stockTs']
 };
+
+/* Campos que el ERP lee y QUE NO EXISTEN EN NINGUN LADO. Verificado el
+   27/9/2026 contra el volcado real: tiene 23 claves y ninguna es esta. Son
+   restos de una version anterior — hoy el saldo de cada cuenta vive en
+   `cuentas[].saldo`. Leerlos da `undefined` siempre, asi que NO cuentan como
+   "le falta el volcado a esta tab": el volcado tampoco se los da. */
+const INEXISTENTES = ['saldo', 'saldoEf', 'saldoMP'];
 
 /* El espia.
  *
@@ -156,8 +170,8 @@ const EXTRA = `
       var m=url.match(/action=([a-zA-Z_]+)/); var a=m?m[1]:'?';
       var c;
       if(a==='admin')            c=S;
-      else if(a==='pedidosLight')c={ts:S.ts,pedidos:S.pedidos,canales:S.canales,saludSem:S.saludSem,saludMes:S.saludMes,ventasExtra:[],light:true};
-      else if(a==='cajaLight')   c={ts:S.ts,caja:S.caja,saldoBase:S.saldoBase,movimientos:S.movimientos,gastos:S.gastos,gastosHist:[],ingresos:[],efMano:[],efHuerfanos:[],sobres:[],cuentas:[],provisiones:[],config:{}};
+      else if(a==='pedidosLight')c={ts:S.ts,pedidos:S.pedidos,canales:S.canales,saludSem:S.saludSem,saludMes:S.saludMes,ventasExtra:[],totales:S.totales,vendedores:S.vendedores,light:true};
+      else if(a==='cajaLight')   c={ts:S.ts,caja:S.caja,saldoBase:S.saldoBase,movimientos:S.movimientos,gastos:S.gastos,gastosHist:[],ingresos:[],efMano:[],efHuerfanos:[],sobres:[],cuentas:[],provisiones:[],config:{},vueltos:S.vueltos};
       else if(a==='ocLight')     c={ok:true,oc:S.oc};
       else if(a==='stockTab')    c={ok:true,ts:S.ts,stock:[],stockDeps:[],stockCierre:''};
       else                       c={ok:true,ts:S.ts,lista:[],datos:[],items:[],v:[],cobros:[],deps:[],piezas:[]};
@@ -233,11 +247,13 @@ const esperar = async (cli, expr, ms) => {
     const campos = Object.keys(c).sort((a, b) => c[b] - c[a]);
     if (!campos.length) { console.log(`${t.padEnd(14)} — no leyo nada de D`); continue; }
     const cubiertos = campos.filter(k => enLiviano[k]);
-    const faltan = campos.filter(k => !enLiviano[k]);
+    const faltan = campos.filter(k => !enLiviano[k] && INEXISTENTES.indexOf(k) < 0);
+    const muertos = campos.filter(k => INEXISTENTES.indexOf(k) > -1);
     faltan.forEach(k => (faltantes[k] = faltantes[k] || []).push(t));
     console.log(`${t.padEnd(14)} ${campos.length} campos`);
     console.log(`  ya en un liviano : ${cubiertos.join(', ') || '—'}`);
     console.log(`  SOLO en el volcado: ${faltan.join(', ') || '— (esta tab ya se puede despegar)'}`);
+    if (muertos.length) console.log(`  lee campos que NO EXISTEN: ${muertos.join(', ')}`);
   }
 
   console.log(`\n== LO QUE FALTA, Y A QUIEN LE FALTA ==`);

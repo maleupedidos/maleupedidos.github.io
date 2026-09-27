@@ -10069,8 +10069,15 @@ function _enterApp(){
    dos, verificado contra produccion).
    El ↻ de estas dos ya usaba `cajaLight` desde el 13/9; lo que faltaba
    era ENTRAR sin arrastrar el volcado. */
-var _TABS_CON_DATOS=['inicio','pedidos',
-                     'pedidoshome','proveedores','planificacion','estancias','mireparto'];
+/* Al 27/9/2026 quedan DOS. Salieron, en orden: 'ventas' (13/9), 'bbdd'
+   (14/9), 'stock', 'caja', 'egresos' y — con los tres campos que se
+   agregaron a los livianos ese mismo dia — 'inicio', 'pedidos',
+   'pedidoshome', 'estancias' y 'mireparto'.
+   Inicio era el que importaba: es la tab con la que ABRE la app, asi que
+   mientras ella lo pidiera, despegar las otras no cambiaba el arranque.
+   Lo que le faltaba —`totales`, `vendedores`, `vueltos`— hoy viene en
+   `pedidosLight` y `cajaLight`, verificado identico al volcado. */
+var _TABS_CON_DATOS=['proveedores','planificacion'];
 // true si la sesion tiene acceso a esa tab. Sin info de tabs (sesion vieja),
 // devolvemos true para no cambiarle nada a quien ya estaba adentro.
 function _tengoTab(t){
@@ -10133,8 +10140,51 @@ function _ldSync(){
     : 'Cargando Maleu...';
 }
 /* Pide el volcado grande UNA sola vez y solo cuando alguna tab lo necesita. */
+/* Las tabs que arrancan la app sin el volcado (27/9/2026). Es la lista de
+   las que salieron de `_TABS_CON_DATOS` y que igual necesitan que alguien pida
+   los datos la primera vez. Sus fuentes concretas ya las sabe `_fuentesDeTab`,
+   que no hubo que tocar: Inicio pide pedidos+caja+ventas, Pedidos y Estancias
+   piden pedidos, Caja y Pagos piden caja.
+   Caja, Pagos y Stock NO estan aca: ya tienen su propio arranque unas lineas
+   mas abajo (`_recargarCaja` y `loadStockTab`), y meterlas pediria `cajaLight`
+   dos veces. */
+var _ARRANCAN_LIVIANO={inicio:1,pedidos:1,pedidoshome:1,estancias:1,mireparto:1};
+/* Lo mismo que `_pedirD` pero sin el volcado: pide las lecturas chicas y deja
+   el cartel de carga en su estado real cuando vuelven. Comparte `_dPidiendo` y
+   `_dEstado` con `_pedirD` a proposito — es el mismo arranque, con o sin
+   volcado, y dos banderas distintas dejarian el cartel girando. */
+var _livianasPedidas=false;
+function _pedirLivianas(){
+  /* `||D` importa y no es de mas. Esto reemplaza al `_pedirD` del arranque, y
+     aquel tambien se frenaba con `D`: cuando ya hay datos —la copia `ma3` del
+     celular los pone al instante— el que refresca es `_refrescarSiEstaViejo`,
+     que pide SOLO lo que la tab abierta necesita. Sin este freno, entrar a
+     Pedidos disparaba las cuatro lecturas al pedo y despues el ↻ se colgaba de
+     esa corrida: medido, giraba 3,1 s esperando la caja y los cobros que esa
+     tab no dibuja, y de paso repintaba Pedidos Home estando en Pedidos. */
+  if(_dPidiendo||_livianasPedidas||D)return;
+  if(!_necesitaDatosPanel())return;
+  _livianasPedidas=true;
+  _dPidiendo=true;_dEstado='yendo';_ldSync();
+  var _fin=function(ok){ _dPidiendo=false;_dEstado=ok?'ok':'error';_ldSync(); };
+  var p=null;
+  try{ p=loadRapido(); }catch(e){ console.error('_pedirLivianas',e); }
+  /* El permiso de Supabase, tarde y por atras: no compite con el arranque.
+     Lo hacia `_pedirD`, y sin esto el atajo dejaba de armarse en el arranque
+     normal — que desde hoy es este. */
+  try{_sbPermisoTibio();}catch(e){}
+  if(!p){ _fin(false); return; }
+  Promise.resolve(p).then(function(r){ _fin(!(r&&r.ok===false)); },function(){ _fin(false); });
+}
 function _pedirD(){
-  if(_dPidiendo||D)return;
+  /* La guarda era `D`. Con las cinco tabs despegadas (27/9/2026) `D` lo arma
+     `loadRapido` sin que el volcado haya salido nunca, asi que preguntar por
+     `D` dejaba a Proveedores y Objetivo —las dos que todavia lo necesitan— sin
+     pedirlo jamas: entraban y se quedaban con lo que hubiera.
+     La pregunta correcta es si el VOLCADO llego, y eso lo dice
+     `_volcadoPedidoEn`, que `load()` escribe recien cuando la respuesta trae
+     la lista de pedidos. */
+  if(_dPidiendo||_volcadoPedidoEn)return;
   if(!_necesitaDatosPanel())return;
   _dPidiendo=true;_dEstado='yendo';_ldSync();
   /* Arranque en frio (sin cache): en paralelo al volcado grande (~28s) pedimos
@@ -10505,6 +10555,12 @@ function go(p){
   try{ if(typeof window._refrescarSiEstaViejo==='function') window._refrescarSiEstaViejo(); }catch(e){}
   /* Los datos se piden por tab, no de arranque: ver _pedirD(). */
   if(_tabUsaD(p))_pedirD();
+  /* Y las despegadas piden LO SUYO (27/9/2026). `_pedirD` hace dos cosas:
+     dispara las lecturas livianas y ademas el volcado. Las tabs que ya no
+     necesitan el volcado siguen necesitando lo primero — sin esto, abrir la
+     app en Inicio no pedia absolutamente nada y la pantalla se quedaba con
+     la copia de `ma3` hasta que alguien tocara el boton. */
+  else if(_ARRANCAN_LIVIANO[p])_pedirLivianas();
   /* Caja y Pagos traen lo suyo (27/9/2026). `_recargarCaja` pide `cajaLight`
      y pinta las dos: es la misma funcion que usa el ↻ desde el 13/9.
      El guard es para no pedirla de nuevo si ya esta en pantalla — `go()`
@@ -11767,7 +11823,7 @@ function _leerVersion(app){
    "El HTML no sabe que version es" dejo de ser cierto: el build le escribe
    adentro el CACHE_NAME de sw-panel.js, el mismo que deploy.sh obliga a subir en
    cada cambio. Si lo publicado dice otra cosa, esta pagina es vieja. Punto. */
-var _APP_CN_PAGINA='maleu-panel-v445';
+var _APP_CN_PAGINA='maleu-panel-v446';
 
 /* Devuelve [{k,v}] si lo publicado no es lo que esta pagina corre. */
 function _chequearVersiones(){
@@ -13786,6 +13842,16 @@ function loadRapido(opts){
       if(lightData.saludSem)D.saludSem=lightData.saludSem;
       if(lightData.saludMes)D.saludMes=lightData.saludMes;
       if(Array.isArray(lightData.ventasExtra))D.ventasExtra=lightData.ventasExtra;
+      /* Los totales del negocio y la deuda de los vendedores (27/9/2026).
+         Con estos dos mas `vueltos` (que viene en cajaLight), Inicio dejo de
+         necesitar el volcado — y como es la tab que ABRE la app, es la unica
+         que lo pedia sin que nadie lo hubiera elegido.
+         Este merge copia campo por campo, asi que un campo nuevo en el backend
+         no llega solo: hay que nombrarlo aca. Se detecto con
+         `probar_arranque_sin_volcado.js`, que los tres dieron rojo estando el
+         backend ya publicado y mandandolos bien. */
+      if(lightData.totales)D.totales=lightData.totales;
+      if(Array.isArray(lightData.vendedores))D.vendedores=lightData.vendedores;
     }
     if(cobrosData && Array.isArray(cobrosData.cobros)){
       D.cobrosPendientes=cobrosData.cobros;
@@ -13888,6 +13954,11 @@ function _cajaCampos(d){
   /* Provisiones_Fijas y Config_Maleu, para el EERR (15/9/2026). */
   if(Array.isArray(d.provisiones))D.provisiones=d.provisiones;
   if(Array.isArray(d.config))D.config=d.config;
+  /* Los vueltos de la billetera (27/9/2026). El backend ya los calculaba en el
+     modo caja y no los mandaba; los usa el desglose por dia del Resumen de
+     Inicio, y eran uno de los TRES campos que obligaban a Inicio —la tab que
+     abre la app— a pedir el volcado entero. */
+  if(Array.isArray(d.vueltos))D.vueltos=d.vueltos;
 }
 function _cajaAplicar(d){
   _cajaCampos(d);
