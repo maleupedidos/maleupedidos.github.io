@@ -155,7 +155,14 @@ const EXTRA = `
     chk('una tarjeta por cuenta y la Posicion total (4)', tarj.length === 4, tarj);
     chk('Posicion total $7.400.000 (efectivo 1,2M + MP 5,1M + Brubank 0,6M + inversiones 0,5M)', /7\.400\.000/.test(tarj[3] || ''), tarj[3]);
 
-    /* ── Efectivo en mano, despues de que llega el volcado ── */
+    /* ── Efectivo en mano, despues de que llega el volcado ──
+       Desde el 27/9/2026 la tab Caja NO pide el volcado: vive de `cajaLight`,
+       que trae todo lo que dibuja. Pero el escenario que prueba esto sigue
+       siendo real y es el que rompia: arrancas en Inicio, el volcado sale, te
+       vas a Caja, y cuando llega **pisa D sin traer `efMano`** — la tarjeta de
+       Efectivo en mano desaparecia. Asi que aca se lo pide a mano, que es lo
+       que antes pasaba solo. */
+    await evaluar(cli, `try{ if(typeof load==='function')load(); }catch(e){} 1`);
     const llego = await esperar(cli, `window.__adminLlego===true`, 30000);
     await pausa(1800);
     const efm = await evaluar(cli, `!!document.querySelector('#efManoCard .efm') && document.getElementById('efManoCard').textContent.indexOf('50.000')>=0`);
@@ -284,6 +291,23 @@ const EXTRA = `
     await pausa(400);
     const gets = await evaluar(cli, `window.__gets.slice()`);
     chk('volver a la app estando en Caja pide solo cajaLight (no pedidos, cobros ni OCs)', gets.length === 1 && gets[0] === 'cajaLight', gets);
+
+    /* ENTRAR A CAJA TAMPOCO PIDE EL VOLCADO (27/9/2026).
+       Medido contra produccion ese dia: `action=admin` tardo 28 s con la foto
+       hecha y devolvio 404 a los 55-70 s sin ella. Caja no usa un solo campo
+       que `cajaLight` no traiga, asi que no tiene por que esperarlo.
+       Sin este chequeo, volver a meter 'caja' en `_TABS_CON_DATOS` deja todo
+       verde y la espera vuelve adentro. */
+    await evaluar(cli, `window.__gets=[]; try{ go('pedidoshome'); }catch(e){} 1`);
+    await pausa(300);
+    await evaluar(cli, `window.__gets=[]; try{ go('caja'); }catch(e){} 1`);
+    await pausa(1500);
+    const g2 = await evaluar(cli, `window.__gets.slice()`);
+    chk('entrar a Caja no pide el volcado', g2.indexOf('admin') < 0, g2);
+    await evaluar(cli, `window.__gets=[]; try{ go('egresos'); }catch(e){} 1`);
+    await pausa(1500);
+    const g3 = await evaluar(cli, `window.__gets.slice()`);
+    chk('entrar a Pagos tampoco', g3.indexOf('admin') < 0, g3);
 
     /* ── Celular: nada se sale ── */
     const desb = await evaluar(cli, `document.documentElement.scrollWidth - window.innerWidth`);
