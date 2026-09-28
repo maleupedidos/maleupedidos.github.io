@@ -87,7 +87,10 @@ const EFMANO = [
       { c: 'Clienta Rara',     id: '2003', h: 'Home', cobro: 46790, vto: 0,    tipo: '',          q: 'Tadeo Ustariz', rec: 46790 }
     ] }
 ];
-const CAJA = { ts: 1, caja: { ef: 0, mp: 0 }, saldoBase: {}, gastos: [], ingresos: [], gastosHist: [], movimientos: [], efMano: EFMANO };
+/* `saldoBase.bil` es el fondo de cambio, y sin el el renglon "tenes que tener
+   encima" no se dibuja: el chequeo daria verde sin ejercitar una linea. */
+const CAJA = { ts: 1, caja: { ef: 0, mp: 0 }, saldoBase: { ef: 500000, bil: 23980, sob: 0 },
+  gastos: [], ingresos: [], gastosHist: [], movimientos: [], efMano: EFMANO };
 const LIGHT = { ts: 1, pedidos: [], canales: [], light: true };
 
 const EXTRA = `
@@ -120,11 +123,12 @@ const LEER = `(()=>{
   var filas = [].slice.call(box.querySelectorAll('.efm-f .efm-c')).map(function(c){ return c.textContent; });
   var uno = (box.querySelector('.efm-quien1')||{}).textContent||'';
   var pie = [].slice.call(box.querySelectorAll('.efm-quien .efm-sub')).map(function(s){return s.textContent;}).join(' ');
+  var bolsillo=(box.querySelector('.efm-bolsillo')||{}).textContent||'';
   var alerta=(box.querySelector('.efm-alerta')||{}).textContent||'';
   var sub=(box.querySelector('.efm-sub')||{}).textContent||'';
   var detTxt=[].slice.call(box.querySelectorAll('.efm-f .efm-x')).map(function(x){return x.textContent;}).join(' | ');
   return { dia:(box.querySelector('.efm-dia')||{}).textContent||'', qs:qs, filas:filas, uno:uno, pie:pie,
-           alerta:alerta, sub:sub, detTxt:detTxt,
+           alerta:alerta, sub:sub, detTxt:detTxt, bolsillo:bolsillo,
            desborda: document.documentElement.scrollWidth > window.innerWidth + 1, txt: box.textContent.length };
 })()`;
 const num = t => Number(String(t || '').replace(/[^\d]/g, '')) || 0;
@@ -164,6 +168,16 @@ const num = t => Number(String(t || '').replace(/[^\d]/g, '')) || 0;
     chk('en el detalle, cada fila dice de quien es', v.filas.length === 5 && /Lucas/.test(v.filas[0]) && /Tadeo/.test(v.filas[1]) && /sin asignar/.test(v.filas[4]), v.filas);
     chk('ningun renglon esta elegido al arrancar', v.qs.every(q => !q.on));
 
+    /* ── LOS BILLETES QUE HAY QUE CONTAR (28/9/2026) ────────────────────
+       La card decia lo que entro de los CLIENTES, y encima esta el fondo de
+       cambio. Contar el bolsillo contra ese numero daba de mas siempre.
+           bolsillo = billetera actual + lo que entro
+       El viernes: $23.980 de fondo + $417.600 que entraron = $441.580. */
+    chk('dice el fondo de cambio', /23\.980/.test(v.bolsillo), v.bolsillo);
+    chk('y el total que tiene que haber encima ($441.580)',
+        /441\.580/.test(v.bolsillo), v.bolsillo);
+    chk('con la palabra que manda: contarlo', /tener encima/.test(v.bolsillo), v.bolsillo);
+
     /* ── Tocar a Lucas ── */
     await evaluar(cli, `document.querySelectorAll('#efManoCard .efm-q')[0].click(); 1`);
     await pausa(150);
@@ -195,6 +209,9 @@ const num = t => Number(String(t || '').replace(/[^\d]/g, '')) || 0;
     await pausa(150);
     const j = await evaluar(cli, LEER);
     chk('el jueves (una sola persona) no dibuja renglones', j.qs.length === 0, j.qs);
+    /* La billetera es un saldo de AHORA, no una serie por dia: pegarsela a la
+       foto de un dia viejo seria inventar. */
+    chk('y en un dia pasado NO se muestra el fondo de cambio', j.bolsillo === '', j.bolsillo);
     chk('dice "Lo juntó Tadeo Ustariz"', /Lo juntó\s*Tadeo Ustariz/.test(j.uno), j.uno);
     chk('y el filtro de Lucas se solto: se ve su cliente', j.filas.length === 1 && /Cliente Cinco/.test(j.filas[0]), j.filas);
 
