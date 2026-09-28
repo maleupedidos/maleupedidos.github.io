@@ -68,7 +68,24 @@ const EFMANO = [
   { f: '08/09/2026', cobrado: 101675, bil: 9000, cambioMP: 0, cruzado: 0, entro: 110675, salio: 9000, neto: 101675,
     porQuien: [{ q: 'Tadeo Ustariz', e: 110675, s: 9000, n: 2 }],
     det: [{ c: 'Clienta Imposible', id: '1032', h: 'Home', cobro: 56675, vto: 4000, tipo: 'Billetera', q: 'Tadeo Ustariz' },
-          { c: 'Clienta Redonda',   id: '1028', h: 'Home', cobro: 45000, vto: 5000, tipo: 'Billetera', q: 'Tadeo Ustariz' }] }
+          { c: 'Clienta Redonda',   id: '1028', h: 'Home', cobro: 45000, vto: 5000, tipo: 'Billetera', q: 'Tadeo Ustariz' }] },
+  /* CON EL BILLETE GUARDADO (28/9/2026). Desde que el cobro registra
+     `Recibido Efectivo`, el control deja de ser una sospecha —"ese monto no se
+     puede pagar con billetes"— y pasa a ser una resta:
+
+         billete  −  vuelto  =  lo cobrado
+
+     Tres cobros a proposito: uno que CIERRA (no se avisa), uno que no cierra
+     por $675 (la diferencia exacta, no un "podria estar mal"), y uno cuyo
+     bruto NO es multiplo de $100 pero CIERRA — con el billete guardado el
+     control viejo ya no tiene por que opinar. */
+  { f: '07/09/2026', cobrado: 151265, bil: 6200, cambioMP: 0, cruzado: 0, entro: 157465, salio: 6200, neto: 151265,
+    porQuien: [{ q: 'Tadeo Ustariz', e: 157465, s: 6200, n: 3 }],
+    det: [
+      { c: 'Clienta Cierra',   id: '2001', h: 'Home', cobro: 47800, vto: 2200, tipo: 'Billetera', q: 'Tadeo Ustariz', rec: 50000 },
+      { c: 'Clienta No Cierra', id: '2002', h: 'Home', cobro: 56675, vto: 4000, tipo: 'Billetera', q: 'Tadeo Ustariz', rec: 60000 },
+      { c: 'Clienta Rara',     id: '2003', h: 'Home', cobro: 46790, vto: 0,    tipo: '',          q: 'Tadeo Ustariz', rec: 46790 }
+    ] }
 ];
 const CAJA = { ts: 1, caja: { ef: 0, mp: 0 }, saldoBase: {}, gastos: [], ingresos: [], gastosHist: [], movimientos: [], efMano: EFMANO };
 const LIGHT = { ts: 1, pedidos: [], canales: [], light: true };
@@ -210,6 +227,26 @@ const num = t => Number(String(t || '').replace(/[^\d]/g, '')) || 0;
         /lo que cobraste más el vuelto/.test(z.sub), z.sub);
     chk('y el detalle no afirma un bruto: dice lo cobrado y lo devuelto',
         /cobraste .*y le diste .*de vuelto/.test(z.detTxt) && !/quedan/.test(z.detTxt), z.detTxt);
+
+    /* ── CON EL BILLETE GUARDADO, SE VERIFICA (28/9/2026) ───────────────
+       Desde que el cobro registra `Recibido Efectivo`, el control deja de ser
+       una sospecha y pasa a ser una resta. */
+    await evaluar(cli, `efManoIr(1); 1`);
+    await pausa(300);
+    const w = await evaluar(cli, LEER);
+    chk('llegamos al dia de los cobros con el billete guardado', /7\/9/.test(w.dia), w.dia);
+    chk('el que NO cierra se dice con la diferencia EXACTA, no con un "podria"',
+        /Clienta No Cierra/.test(w.alerta) && /faltan/.test(w.alerta) && /675/.test(w.alerta), w.alerta);
+    chk('y se cuenta lo que paso: te dio, devolviste, quedo',
+        /te dio \$60\.000/.test(w.alerta) && /\$56\.675/.test(w.alerta), w.alerta);
+    chk('el que SI cierra no se marca', !/Clienta Cierra/.test(w.alerta), w.alerta);
+    /* Este es el que separa el control nuevo del viejo: su bruto ($46.790) no
+       es multiplo de $100, pero el billete guardado dice que cierra. Con el
+       dato, la sospecha no tiene por que opinar. */
+    chk('y un bruto "raro" que CIERRA tampoco, porque ya no es una sospecha',
+        !/Clienta Rara/.test(w.alerta), w.alerta);
+    chk('en el detalle se dice el billete de verdad, no la suma',
+        /te dio \$50\.000, devolviste \$2\.200 y quedaron \$47\.800/.test(w.detTxt), w.detTxt);
 
     chk('sin errores de JS', errores.length === 0, errores.slice(0, 3));
   } catch (e) {
