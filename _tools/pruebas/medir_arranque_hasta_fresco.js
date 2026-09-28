@@ -90,7 +90,23 @@ window.__ar = { t0: Date.now(), gets: [], fresco: 0, muestras: [] };
   try {
     await cli.enviar('Page.enable');
     await cli.enviar('Runtime.enable');
-    await cli.enviar('Page.addScriptToEvaluateOnNewDocument', { source: prep(token) });
+    /* CON EL PERMISO DE SUPABASE YA GUARDADO. (27/9/2026)
+       El atajo a Supabase solo corre si el permiso esta en `localStorage` y
+       todavia vale: sin el, el arranque va entero por Apps Script. Y ese es
+       justo el caso que se quiere medir cuando el permiso dura mas de una
+       hora — abrir la app a la maniana con el de ayer todavia vivo.
+       Se pasa por variable de entorno para que ningun token termine escrito en
+       el repo, que es publico:
+         SB_TOK='{"token":"...","seg":43200,"url":"...","key":"..."}' node ... */
+    let siembra = '';
+    if (process.env.SB_TOK) {
+      const sb = JSON.parse(process.env.SB_TOK);
+      const hasta = Date.now() + Math.max(60, (Number(sb.seg) || 3600) - 120) * 1000;
+      siembra = 'try{localStorage.setItem("mc_sbtok",' +
+        JSON.stringify(JSON.stringify({ u: process.env.SB_USUARIO || 'tadeo', sb: sb, hasta: hasta })) +
+        ');}catch(e){}';
+    }
+    await cli.enviar('Page.addScriptToEvaluateOnNewDocument', { source: prep(token) + siembra });
     await cli.enviar('Page.addScriptToEvaluateOnNewDocument', { source: ESPIA });
     await cli.enviar('Page.navigate', { url: URL });
 
