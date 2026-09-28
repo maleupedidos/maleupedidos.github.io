@@ -40,6 +40,19 @@ const esperar = async (cli, expr, ms = 40000) => {
   return false;
 };
 
+/* El renglon de reparto de la card de un producto. '' si no esta, null si el
+   producto no esta en el catalogo (que es un rojo distinto: la prueba no midio
+   nada). */
+const REPARTO = abbr => `(function(){
+  for(var i=0;i<NP_CAT_FLAT.length;i++) if(NP_CAT_FLAT[i].abbr===${JSON.stringify(abbr)}){
+    var el=document.getElementById('npProd_'+NP_CAT_FLAT[i].id);
+    if(!el)return null;
+    var r=el.querySelector('.np-dep-rep');
+    return r?r.textContent.replace(/\\s+/g,' ').trim():'';
+  }
+  return null;
+})()`;
+
 /* Los dos freezers como los manda `stock_full` desde el 27/9/2026. */
 const DEPS = [{ id: 'ustariz', nombre: 'Deposito Ustariz', user: 'tadeo' },
               { id: 'moresco', nombre: 'Deposito Moresco', user: 'luqui' }];
@@ -119,6 +132,43 @@ async function conUsuario(cli, usuario, stock) {
     chk('el nombre corto sale de la hoja, sin el "Deposito "',
         v.nom === 'Moresco' && v.nomU === 'Ustariz', v);
 
+    /* 1b. LA CARD DICE EN QUE FREEZER ESTA CADA COSA. (28/9/2026)
+
+       Hasta hoy decia "quedan 9" y esos 9 podian ser 3 suyos y 6 de Lucas — o
+       los 10 del Pack Muzzarella, que estan ENTEROS en lo de Lucas y en el
+       freezer de Tadeo hay cero. El numero era cierto como total de Maleu y no
+       alcanzaba para decidir si lo podia entregar el mismo. */
+    await evaluar(cli, `npRenderCatalogo(); 1`);
+    const repMu = await evaluar(cli, REPARTO('PMu'));
+    chk('la card del producto existe (sin esto lo de abajo no mide nada)', repMu !== null, repMu);
+    chk('mirando Tadeo, la Pizza Muzzarella dice 3 acá y 6 en lo de Lucas',
+        repMu === '3 ac\u00e1 \u00b7 6 Moresco', repMu);
+    const repPPM = await evaluar(cli, REPARTO('PPM'));
+    chk('el que esta ENTERO en la otra casa lo dice, con el cero adelante',
+        repPPM === '0 ac\u00e1 \u00b7 10 Moresco', repPPM);
+    /* El tope sigue siendo el TOTAL: cualquiera puede vender de cualquier
+       freezer (Tadeo, 27/9) y al entregar `_moverFisico_` derrama al otro si el
+       primero no alcanza. Bajarlo al freezer propio prohibiria una venta que el
+       ERP sabe resolver.
+
+       La fecha de entrega se fija en AYER porque es el unico modo que mira el
+       fisico ('real'): con una fecha futura `npStockMode()` puede dar
+       'ilimitado' y `npCap()` devolver null —correcto— y entonces el chequeo
+       diria rojo por el dia de la semana en que se corrio. */
+    const topePPM = await evaluar(cli, `(function(){
+      var previo=npFechaSel;
+      var d=new Date(Date.now()-86400000);
+      npFechaSel=d.getFullYear()+'-'+('0'+(d.getMonth()+1)).slice(-2)+'-'+('0'+d.getDate()).slice(-2);
+      var r={modo:npStockMode(), cap:npCap('PPM')};
+      npFechaSel=previo;
+      return r;
+    })()`);
+    chk('el numero grande NO baja: se puede vender de cualquier freezer',
+        topePPM.modo === 'real' && topePPM.cap === 10, topePPM);
+    const repSCo = await evaluar(cli, REPARTO('SCo'));
+    chk('y el que esta todo en casa tambien se dice entero',
+        repSCo === '16 ac\u00e1 \u00b7 0 Moresco', repSCo);
+
     /* 2. Elegirlo a mano manda al otro, y el POST lo lleva. */
     await evaluar(cli, `document.getElementById('npDeposito').value='moresco'; npDepManual(); 1`);
     chk('elegido a mano, el pedido sale del otro freezer',
@@ -160,6 +210,11 @@ async function conUsuario(cli, usuario, stock) {
     v = await evaluar(cli, `({ eleg: npDepElegido(), sel: document.getElementById('npDeposito').value })`);
     chk('con el usuario luqui, el pedido sale del freezer de Lucas',
         v.eleg === 'moresco' && v.sel === 'moresco', v);
+    /* "acá" es de quien MIRA, no del selector: la card dice donde ESTA la
+       mercaderia y el selector de donde SALE el pedido. Son dos preguntas. */
+    await evaluar(cli, `npRenderCatalogo(); 1`);
+    chk('mirando Lucas, la misma pizza dice 3 Ustariz y 6 acá',
+        await evaluar(cli, REPARTO('PMu')) === '3 Ustariz \u00b7 6 ac\u00e1');
 
     /* 6. Sin el mapeo en la hoja, cae al principal: lo de antes del cambio. */
     const SIN_USER = JSON.parse(JSON.stringify(STOCK));
@@ -167,6 +222,9 @@ async function conUsuario(cli, usuario, stock) {
     await conUsuario(cli, 'luqui', SIN_USER);
     chk('sin la columna Usuario ERP, cae al deposito principal del catalogo',
         await evaluar(cli, `npDepElegido()`) === 'ustariz');
+    await evaluar(cli, `npRenderCatalogo(); 1`);
+    chk('y sin saber cual es el tuyo, el reparto se dice igual con los dos nombres',
+        await evaluar(cli, REPARTO('PMu')) === '3 Ustariz \u00b7 6 Moresco');
 
     /* 7. Un solo freezer: ni selector ni `deposito`. El backend entiende '' como
        "el default del producto", que es como venia funcionando. */
@@ -176,6 +234,8 @@ async function conUsuario(cli, usuario, stock) {
     v = await evaluar(cli, `({ eleg: npDepElegido(), oculto: /hidden/.test(document.getElementById('npDepWrap').className) })`);
     chk('con UN solo freezer no se pregunta nada y manda vacio',
         v.eleg === '' && v.oculto === true, v);
+    await evaluar(cli, `npRenderCatalogo(); 1`);
+    chk('y la card no dice un reparto de uno solo', await evaluar(cli, REPARTO('PMu')) === '');
 
     /* 8. Un Apps Script viejo (sin `_deps`) tampoco rompe. */
     const VIEJO = JSON.parse(JSON.stringify(STOCK));
@@ -184,6 +244,8 @@ async function conUsuario(cli, usuario, stock) {
     v = await evaluar(cli, `({ eleg: npDepElegido(), oculto: /hidden/.test(document.getElementById('npDepWrap').className), lista: npDepLista().length })`);
     chk('con un backend anterior al cambio, se comporta como antes',
         v.eleg === '' && v.oculto === true && v.lista === 0, v);
+    await evaluar(cli, `npRenderCatalogo(); 1`);
+    chk('y la card tampoco inventa un reparto', await evaluar(cli, REPARTO('PMu')) === '');
 
     const propios = errores.filter(e => !/favicon|manifest|sw-|ServiceWorker/i.test(String(e)));
     chk('ni un error en la consola', propios.length === 0, propios.slice(0, 3));

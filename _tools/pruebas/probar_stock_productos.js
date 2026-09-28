@@ -154,7 +154,16 @@ const LEER = `(function(){
     chk('se examinaron las ' + STOCK.length + ' filas', Object.keys(L.filas).length === STOCK.length, Object.keys(L.filas));
     chk('el encabezado tiene la columna Ajuste entre Vendidos y Fisico', L.cab.join('|').indexOf('Vendidos|Ajuste|Físico') > -1, L.cab);
     const fila = n => (Object.keys(L.filas).find(k => k.indexOf(n) === 0) && L.filas[Object.keys(L.filas).find(k => k.indexOf(n) === 0)]) || { celdas: [], cls: '' };
-    // celdas: Inicial, Comprado, Vendidos, Ajuste, Fisico, Reservado, Disponible
+    /* LA COLUMNA SE BUSCA POR SU ENCABEZADO, no por su posicion (28/9/2026).
+       Los chequeos de Disponible leian `celdas[6]`; el dia que se metio una
+       columna por freezer, Disponible paso a la 8 y esos chequeos habrian
+       medido la columna de Moresco sin decir una palabra. `cab[0]` es
+       "Producto" y `celdas` arranca despues, de ahi el −1. */
+    /* Una columna que no esta devuelve un MARCADOR, no undefined: un
+       `undefined.trim()` revienta la corrida entera y esconde los chequeos
+       de abajo — justo en la contraprueba, que es donde tiene que faltar. */
+    const cel = (nf, nc) => { const i = L.cab.indexOf(nc); return i > 0 ? ((fila(nf).celdas || [])[i - 1] || '') : ('(sin columna ' + nc + ')'); };
+    // celdas: Inicial, Comprado, Vendidos, Ajuste, Fisico, [un freezer c/u], Reservado, Disponible
     chk('Pack Muzzarella cierra: el ajuste es un punto', fila('Pack Muzzarella').celdas[3] === '·', fila('Pack Muzzarella').celdas);
     chk('Pack Jamon y Queso: 10 + 7 − 15 = 2 y hay 0, ajuste −2', fila('Pack Jamon').celdas[3] === '−2', fila('Pack Jamon').celdas);
     chk('Empanadas Jamon y Queso: ajuste +1', fila('Empanadas Jamon').celdas[3] === '+1', fila('Empanadas Jamon').celdas);
@@ -185,13 +194,35 @@ const LEER = `(function(){
        Muzzarella diciendo 10 con CERO en el freezer de Tadeo. */
     const cMu = fila('Pizza Muzzarella').celdas;
     chk('Disponible muestra lo ENTREGABLE (3), no la suma de los dos (9)',
-        /^3/.test((cMu[6] || '').trim()), cMu);
-    chk('y cuelga el resto como "+6"', /\+6/.test(cMu[6] || ''), cMu[6]);
-    chk('el Fisico sigue diciendo el total (9)', (cMu[4] || '').trim() === '9', cMu);
+        /^3/.test(cel('Pizza Muzzarella', 'Disponible').trim()), cMu);
+    chk('y cuelga el resto como "+6"', /\+6/.test(cel('Pizza Muzzarella', 'Disponible')), cMu);
+    chk('el Fisico sigue diciendo el total (9)', cel('Pizza Muzzarella', 'Físico').trim() === '9', cMu);
     const cWr = fila('Wrap Pollo');
     chk('un producto que esta ENTERO en la otra casa se pinta en rojo',
         /zero/.test(cWr.cls), cWr.cls);
-    chk('y su Disponible dice 0, no 10', /^0/.test((cWr.celdas[6] || '').trim()), cWr.celdas);
+    chk('y su Disponible dice 0, no 10', /^0/.test(cel('Wrap Pollo', 'Disponible').trim()), cWr.celdas);
+
+    /* ── UNA COLUMNA POR FREEZER (28/9/2026) ────────────────────────────
+       Tadeo: *"en tab productos solo me aparece el total de todo y no esta
+       separado por deposito"*. El dato viajaba desde el 13/9 y la unica
+       pantalla que lo mostraba era la card "Donde esta", que da el total de
+       cada freezer: producto por producto no se podia ver de quien era. */
+    chk('cada freezer tiene su columna, con el nombre de la hoja y pegada al Fisico',
+        L.cab.join('|').indexOf('Físico|Ustariz|Moresco|Reservado') > -1, L.cab);
+    chk('Pizza Muzzarella: 3 en lo de Tadeo y 6 en lo de Lucas',
+        cel('Pizza Muzzarella', 'Ustariz').trim() === '3'
+        && cel('Pizza Muzzarella', 'Moresco').trim() === '6', cMu);
+    chk('y las dos columnas suman el Fisico',
+        Number(cel('Pizza Muzzarella', 'Ustariz')) + Number(cel('Pizza Muzzarella', 'Moresco'))
+        === Number(cel('Pizza Muzzarella', 'Físico')), cMu);
+    chk('el que esta ENTERO en la otra casa lo dice: 0 y 10',
+        cel('Wrap Pollo', 'Ustariz').trim() === '0'
+        && cel('Wrap Pollo', 'Moresco').trim() === '10', cWr.celdas);
+    chk('la carne va en kilos con coma, tambien por freezer',
+        cel('Carne Lomo', 'Ustariz').trim() === '3,89'
+        && cel('Carne Lomo', 'Moresco').trim() === '0', fila('Carne Lomo').celdas);
+    chk('y el pie dice que esas columnas abren el Fisico',
+        /El Físico se abre por freezer: Ustariz y Moresco/.test(L.pie), L.pie);
     chk('se avisa arriba que hay 1 producto solo en la otra casa',
         L.avisos.some(a => /1 producto/.test(a) && /Moresco/.test(a)), L.avisos);
     chk('el pie explica de donde es el Disponible y que es el +N',
@@ -280,6 +311,12 @@ const LEER = `(function(){
     chk('con un backend sin reparto en el volcado, pide action=depositos', L.gets.indexOf('depositos') > -1, L.gets);
     chk('y "Donde esta" se dibuja igual', /Ustariz 10 u · 3,89 kg\s*Moresco 16 u/.test(L.dep), L.dep);
     chk('y no inventa un aviso de descuadre con otra foto', !/el total dice/.test(L.dep), L.dep);
+    /* Sin `pd` en el volcado no hay nada que abrir: la tabla tiene que quedar
+       con las 7 columnas de siempre, no con dos vacias. */
+    chk('sin reparto en el volcado, la tabla NO agrega columnas de freezer',
+        L.cab.indexOf('Ustariz') < 0 && L.cab.indexOf('Moresco') < 0
+        && L.cab.join('|').indexOf('Físico|Reservado') > -1, L.cab);
+    chk('y el pie no habla de freezers', !/se abre por freezer/.test(L.pie), L.pie);
 
     const propios = errores.filter(e => /rStock|rStockReparto|_stAjuste|_stTienePd|stSwitchTab/.test(e));
     chk('ni un error propio de Stock en la consola', propios.length === 0, propios);
