@@ -218,7 +218,12 @@ const esperar = async (c, e, ms = 60000) => { const t = Date.now(); while (Date.
       var box = document.getElementById('hRetail');
       return { hay: !!(box && box.innerHTML),
                chips: box ? box.querySelectorAll('.rt-per .rt-chip').length : 0,
-               flechas: box ? box.querySelectorAll('.rt-nav-b').length : 0,
+               /* Anclado al bloque de Ventas retail: desde el 28/9/2026 la
+                  card del Total Maleu tiene sus PROPIAS flechas arriba, y sin
+                  el ancla esto contaba 4 y despues leia las de arriba como si
+                  fueran estas. (Sin acentos graves adentro de un template
+                  literal: cierran el string y el test explota lejos de aca.) */
+               flechas: box ? box.querySelectorAll('.rt .rt-nav .rt-nav-b').length : 0,
                rango: _rtRangoDatos(),
                meses: _rtMesesConDatos() };
     })()`);
@@ -258,7 +263,7 @@ const esperar = async (c, e, ms = 60000) => { const t = Date.now(); while (Date.
     const bordes = await evaluar(cli, `(function(){
       function estado(k){
         _rtPer = k; rRetail();
-        var b = document.querySelectorAll('#hRetail .rt-nav-b');
+        var b = document.querySelectorAll('#hRetail .rt .rt-nav .rt-nav-b');
         return { atras: !b[0].disabled, adelante: !b[1].disabled };
       }
       return { viejo: estado('m:2026-06'), medio: estado('m:2026-07'), hoy: estado('sem') };
