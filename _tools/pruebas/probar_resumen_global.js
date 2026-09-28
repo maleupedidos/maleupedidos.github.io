@@ -151,14 +151,19 @@ const txt = (cli, sel) => ev(cli, `window.__tx(document.querySelector(${JSON.str
     const K = await ev(cli, `[].map.call(document.querySelectorAll('#hRetail .rt-k'),function(k){return window.__tx(k);})`);
     const k = Array.isArray(K) ? K : [];
     chk('Facturado $492.400 (Home + Otras zonas + Clubes + Red + B2B)', /^Facturado \$492\.400/.test(k[0] || ''), k);
-    chk('Costo $356.800', /Costo \$356\.800/.test(k[1] || ''), k[1]);
-    chk('Margen $135.600 · 28%', /Margen \$135\.600 28%/.test(k[2] || ''), k[2]);
+    /* Por ETIQUETA y no por posicion (28/9/2026). Las cards se reordenaron el
+       21/9 —entro "Ticket promedio" y el costo bajo abajo del margen— y estos
+       cuatro chequeos quedaron leyendo la card de al lado: 5 rojos permanentes
+       que no eran del ERP. Los numeros exigidos son los mismos. */
+    const kDe = re => k.find(x => re.test(x)) || '';
+    chk('el costo se lee abajo del margen: $356.800', /costo \$356\.800/i.test(kDe(/^Margen/)), kDe(/^Margen/));
+    chk('Margen $135.600 · 28%', /Margen \$135\.600 28%/.test(kDe(/^Margen/)), kDe(/^Margen/));
     /* 20/9/2026: el KPI pasó a llamarse "Entregas Retail" — lo que cuenta es el
        árbol retail y Catering queda aparte. Sin distinguir mayúsculas: el CSS
        lo pinta en mayúscula. */
-    chk('Entregas Retail 10 (Ana 1 viaje, Clubes 1, Red 1 bolsa, B2B 1)', /entregas retail\s*10/i.test(k[3] || ''), k[3]);
+    chk('Entregas Retail 10 (Ana 1 viaje, Clubes 1, Red 1 bolsa, B2B 1)', /entregas retail\s*10/i.test(kDe(/entregas retail/i)), kDe(/entregas retail/i));
     chk('Semana cerrada: Pendiente $99.000, no reescribe lo facturado ni simula una proyección tardía', /Pendiente \$99\.000/.test(k[4] || '') && /1 pedido de ese período sin entregar/.test(k[4] || ''), k[4]);
-    chk('contra la semana 36: ▲ +392% facturado y ▲ +9 entregas', /▲ \+392%/.test(k[0] || '') && /▲ \+9/.test(k[3] || ''), [k[0], k[3]]);
+    chk('contra la semana 36: ▲ +392% facturado y ▲ +9 entregas', /▲ \+392%/.test(kDe(/^Facturado/)) && /▲ \+9/.test(kDe(/entregas retail/i)), [kDe(/^Facturado/), kDe(/entregas retail/i)]);
 
     const filas = await ev(cli, `[].map.call(document.querySelectorAll('#hRetail .rt-fila'),function(f){return window.__tx(f);})`);
     const F = Array.isArray(filas) ? filas : [];
@@ -247,7 +252,9 @@ const txt = (cli, sel) => ev(cli, `window.__tx(document.querySelector(${JSON.str
       o.filas=box.querySelectorAll('.rt-fila-a').length;
       return o;})()`);
     chk('sin desborde a lo ancho', geo && geo.desborde === false, geo);
-    chk('los chips se tocan bien (38px en el celular; en la compu, el piso del ERP)', !!(geo && geo.chips && geo.chips.length === 4 && geo.chips.every(h => h >= (ANCHO <= 560 ? 38 : 30))), geo && geo.chips);
+    /* `>= 4` y no `=== 4`: el 21/9 entro el chip "Elegir..." y lo que este
+       chequeo mira es la ALTURA con la que se tocan, no cuantos son. */
+    chk('los chips se tocan bien (38px en el celular; en la compu, el piso del ERP)', !!(geo && geo.chips && geo.chips.length >= 4 && geo.chips.every(h => h >= (ANCHO <= 560 ? 38 : 30))), geo && geo.chips);
     chk('el nombre y el monto no se pisan (' + (geo && geo.filas) + ' filas)', !!(geo && geo.filas === 7 && geo.pisados && geo.pisados.length === 0), geo);
     if (ANCHO >= 1000) chk('en la compu el arbol va en dos columnas', geo && geo.cols === 2, geo && geo.cols);
     else chk('en el celular el arbol va en una columna', geo && geo.cols === 1, geo && geo.cols);
