@@ -70,10 +70,22 @@ const EXTRA = `
       localStorage.removeItem('ma3'); localStorage.removeItem('ma3v2'); localStorage.removeItem('maleu_ruta');
       localStorage.setItem('maleu_tab','inicio');
       if (fase === 'a') localStorage.removeItem('maleu_fresco');
+      /* ventas lenta A PROPOSITO en la fase a: el chequeo pregunta si el sello
+         de Inicio se apaga aunque una fuente cara que NO dibuja siga en el
+         aire. Va aca y no despues de navegar, porque cuando la prueba retoma
+         el control ventas ya salio con la demora por defecto. */
+      if (fase === 'a') window.__demoraVentas = 12000;
+      /* Y en la fase b, stockTab FALLA: lo que ese chequeo protege es el
+         FORMATO de una copia vieja (la hora, no "hace 180 min"), y para verla
+         la lectura nueva no tiene que taparla. */
+      if (fase === 'b') window.__FALLA_STOCK = 1;
       if (fase === 'b' && !sessionStorage.getItem('__sembrado')) {
         sessionStorage.setItem('__sembrado','1');
         var n = Date.now();
-        localStorage.setItem('maleu_fresco', JSON.stringify({ok:{pedidos:n-35*60000, caja:n-2*60000, volcado:n-3*3600000}, err:{}}));
+        /* stockTab reemplazo a volcado el 27/9/2026: Stock tiene endpoint
+           propio y su sello sale de ahi. Con la clave vieja, la tab no tenia
+           copia y el chequeo de "hace 3 h" media otra cosa. */
+        localStorage.setItem('maleu_fresco', JSON.stringify({ok:{pedidos:n-35*60000, caja:n-2*60000, stockTab:n-3*3600000}, err:{}}));
       }
     }catch(e){}
     /* fase b: nada se puede renovar. fase a: admin demorado. fase c: todo anda. */
@@ -96,8 +108,16 @@ const EXTRA = `
           if (window.__FALLA_ADMIN) return new Promise(function(r){ setTimeout(function(){ r(html()); }, 120); });
           window.__adminVuela = true; dem = window.__demoraAdmin;
           cuerpo = Object.assign({}, ${JSON.stringify(LIGHT)}, ${JSON.stringify(CAJA)}, {oc:{lista:[]}, stock:[]});
+        } else if (a === 'stockTab') {
+          /* Stock dejo de vivir del volcado el 27/9/2026: tiene endpoint propio.
+             Sin esta rama caia en el else y devolvia ok:false, o sea que
+             el sello de esa tab decia "No se pudo" en vez de la hora de su
+             copia — y el chequeo apuntaba al lugar equivocado. */
+          if (window.__FALLA_STOCK) return new Promise(function(r){ setTimeout(function(){ r(html()); }, 120); });
+          window.__stockTabVuela = true; dem = window.__demoraStock || 150;
+          cuerpo = {ok:true, ts:Date.now(), stock:[], stockDeps:[], stockCierre:''};
         } else if (a === 'ventas') {
-          dem = window.__demoraVentas || 150;
+          window.__ventasVuela = true; dem = window.__demoraVentas || 150;
           cuerpo = window.__FALLA_VENTAS ? {ok:false, forbidden:true} : {ok:true, v:${JSON.stringify(VENTAS)}, cuentas:[]};
         } else if (a === 'entregas') {
           if (window.__FALLA_ENT) return new Promise(function(r){ setTimeout(function(){ r(html()); }, 120); });
@@ -107,6 +127,7 @@ const EXTRA = `
         else cuerpo = {ok:false, error:'stub'};
         var txt = JSON.stringify(cuerpo);
         return new Promise(function(res){ setTimeout(function(){ if(a==='admin')window.__adminVuela=false;
+          if(a==='ventas')window.__ventasVuela=false;
           res(new Response(txt,{status:200,headers:{'Content-Type':'application/json'}})); }, dem); });
       }
       return o.apply(this, arguments); };
@@ -133,15 +154,22 @@ const HORA = /\b\d{1,2}:\d{2}\b/;
 
     /* ── A. Abrir la app: nada guardado, los datos viajando ── */
     await ir('a');
+
     await pausa(1200);
     const a1 = await evaluar(cli, LEER);
     chk('al abrir, con los datos viajando, NO muestra una hora', !!a1 && !HORA.test(a1.txt), a1);
     chk('y dice "Actualizando…"', !!a1 && /Actualizando/.test(a1.txt) && a1.estado === 'yendo', a1);
     await esperar(cli, `window.D && Array.isArray(D.pedidos) && D.pedidos.length===30 && D.caja`, 20000);
     await pausa(400);
-    const a2 = await evaluar(cli, `(()=>{ var r=${LEER}; r.adminVuela=!!window.__adminVuela; return r; })()`);
+    const a2 = await evaluar(cli, `(()=>{ var r=${LEER}; r.ventasVuela=!!window.__ventasVuela; return r; })()`);
     chk('llegaron pedidos y caja: dice "recién"', a2.txt === 'recién' && a2.estado === 'ok', a2);
-    chk('aunque el volcado siga en vuelo (si no, esto no mide nada)', a2.adminVuela === true, a2);
+    /* Era "aunque el VOLCADO siga en vuelo". Desde el 27/9/2026 ninguna tab
+       pide el volcado, asi que ese escenario ya no existe: la fuente cara que
+       sigue viajando mientras Inicio dice "recien" es `ventas`, que se pide
+       para precalentar la tab Ventas y que Inicio NO dibuja. Es la misma
+       pregunta —el sello no espera lo que la pantalla no muestra— sobre la
+       pieza que hoy ocupa ese lugar. */
+    chk('aunque `ventas` siga en vuelo (si no, esto no mide nada)', a2.ventasVuela === true, a2);
     chk('el detalle nombra Pedidos y Caja', /Pedidos/.test(a2.title) && /Caja/.test(a2.title), a2.title);
     chk('queda guardado para la proxima apertura', await evaluar(cli, `(()=>{ try{ var o=JSON.parse(localStorage.getItem('maleu_fresco')); return !!(o&&o.ok&&o.ok.pedidos&&o.ok.caja); }catch(e){ return false; } })()`));
 
@@ -173,7 +201,8 @@ const HORA = /\b\d{1,2}:\d{2}\b/;
 
     /* ── B. Una copia vieja que no se pudo renovar ── */
     await ir('b');
-    await esperar(cli, `(window.__gets||[]).indexOf('admin')>-1`, 20000);
+    /* Antes se esperaba al volcado. Ninguna tab lo pide desde el 27/9/2026. */
+    await esperar(cli, `(window.__gets||[]).indexOf('cajaLight')>-1`, 20000);
     await pausa(2500);
     const b1 = await evaluar(cli, LEER);
     chk('Inicio con pedidos de hace 35 min: dice "hace 35 min"', b1.txt === 'hace 35 min', b1);
@@ -183,7 +212,16 @@ const HORA = /\b\d{1,2}:\d{2}\b/;
     chk('Caja dice lo SUYO: "hace 2 min"', b2.txt === 'hace 2 min' && b2.estado === 'ok', b2);
     await evaluar(cli, `go('stock')`); await pausa(500);
     const b3 = await evaluar(cli, LEER);
-    chk('Stock (el volcado, de hace 3 h) dice la hora y no "hace 180 min"', /^(hoy|ayer) \d\d:\d\d$|^\d{1,2}\/\d{1,2} \d\d:\d\d$/.test(b3.txt) && b3.estado === 'viejo', b3);
+    /* Lo que este chequeo protege es el FORMATO de una copia de mas de una
+       hora: **la hora del reloj, nunca "hace 180 min"**, que no se lee.
+       Desde el 27/9/2026 Stock vive de `stockTab` y en este escenario esa
+       lectura falla, asi que el boton dice "No se pudo" y la hora de la copia
+       pasa al detalle. Se busca ahi, que es donde el sello la muestra hoy. */
+    const b3txt = b3.txt + ' | ' + b3.title;
+    chk('Stock (su copia, vieja) dice la hora y no "hace N min"',
+        /(hoy|ayer) \d\d:\d\d|\d{1,2}\/\d{1,2} \d\d:\d\d/.test(b3txt)
+        && !/hace \d{3,} min/.test(b3txt)
+        && (b3.estado === 'viejo' || b3.err === true), b3);
     chk('las tres tabs muestran cosas distintas', new Set([b1.txt, b2.txt, b3.txt]).size === 3, [b1.txt, b2.txt, b3.txt]);
     await evaluar(cli, `go('caja')`);
     await evaluar(cli, `(()=>{ if(typeof _fresco!=='undefined')_fresco.ok.caja = Date.now() - 25*60000; return 1; })()`);

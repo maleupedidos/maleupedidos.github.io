@@ -108,7 +108,11 @@ const SELLO = `JSON.stringify({ok:_fresco.ok,err:_fresco.err})`;
     /* ── De qué vive cada tab ─────────────────────────────────────── */
     console.log('\n-- las fuentes que comparten las tabs --');
     const fsInicio = JSON.parse(await ev(cli, `JSON.stringify(_fuentesDeTab('inicio'))`));
-    chk('Inicio declara pedidos, caja y ventas', fsInicio.indexOf('pedidos') >= 0 && fsInicio.indexOf('caja') >= 0 && fsInicio.indexOf('ventas') >= 0, fsInicio);
+    /* `ventas` salio el 27/9/2026: Inicio no dibuja `VD` y su cartel la
+       esperaba 21,7 s igual. Se chequea que NO este, porque volver a meterla
+       es exactamente el bug que se saco. */
+    chk('Inicio declara pedidos y caja', fsInicio.indexOf('pedidos') >= 0 && fsInicio.indexOf('caja') >= 0, fsInicio);
+    chk('y NO espera las ventas, que no dibuja', fsInicio.indexOf('ventas') < 0, fsInicio);
     chk('Pedidos y Estancias miran la MISMA fuente que Inicio',
       (await ev(cli, `JSON.stringify(_fuentesDeTab('pedidos'))`)) === '["pedidos"]' &&
       (await ev(cli, `JSON.stringify(_fuentesDeTab('estancias'))`)) === '["pedidos"]');
