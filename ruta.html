@@ -1189,15 +1189,17 @@ select.np-input{background:var(--white) url("data:image/svg+xml;utf8,<svg xmlns=
     </div>
 
     <div class="cobro-ruta-section">
-      <label class="cobro-ruta-lbl">¿Cuánto recibiste?</label>
+      <!-- "El billete" y no "el total": con vuelto, lo que va acá es lo que el
+           cliente puso en la mano. El ERP calcula el cambio solo. -->
+      <label class="cobro-ruta-lbl">¿Cuánto recibiste? <span id="cobroRecHint" style="font-weight:600;color:#8a7a72"></span></label>
       <div class="cobro-ruta-grid">
         <div class="cobro-ruta-field">
           <span class="cobro-ruta-prefix">💵 $</span>
-          <input type="text" id="cobroRecEf" inputmode="decimal" placeholder="0" oninput="_fmtMoneyInput(this);_recalcCobroRuta()">
+          <input type="text" id="cobroRecEf" inputmode="decimal" placeholder="0" oninput="_fmtMoneyInput(this);_cobroRecTocado();_recalcCobroRuta()">
         </div>
         <div class="cobro-ruta-field">
           <span class="cobro-ruta-prefix">📱 $</span>
-          <input type="text" id="cobroRecMP" inputmode="decimal" placeholder="0" oninput="_fmtMoneyInput(this);_recalcCobroRuta()">
+          <input type="text" id="cobroRecMP" inputmode="decimal" placeholder="0" oninput="_fmtMoneyInput(this);_cobroRecTocado();_recalcCobroRuta()">
         </div>
       </div>
     </div>
@@ -1207,11 +1209,11 @@ select.np-input{background:var(--white) url("data:image/svg+xml;utf8,<svg xmlns=
       <div class="cobro-ruta-grid">
         <div class="cobro-ruta-field">
           <span class="cobro-ruta-prefix">💵 $</span>
-          <input type="text" id="cobroCamEf" inputmode="decimal" placeholder="0" oninput="_fmtMoneyInput(this);_recalcCobroRuta()">
+          <input type="text" id="cobroCamEf" inputmode="decimal" placeholder="0" oninput="_fmtMoneyInput(this);_camTocado=true;_recalcCobroRuta()">
         </div>
         <div class="cobro-ruta-field">
           <span class="cobro-ruta-prefix">📱 $</span>
-          <input type="text" id="cobroCamMP" inputmode="decimal" placeholder="0" oninput="_fmtMoneyInput(this);_recalcCobroRuta()">
+          <input type="text" id="cobroCamMP" inputmode="decimal" placeholder="0" oninput="_fmtMoneyInput(this);_camTocado=true;_recalcCobroRuta()">
         </div>
       </div>
       <!-- De que cuenta salio el vuelto por transferencia (12/9/2026). Sale solo
@@ -6302,6 +6304,8 @@ function _resetCobroSeccionesColapsables(){
   _setMoneyInput('cobroCamMP',0);
   _setMoneyInput('cobroAFavInp',0);
   _setMoneyInput('cobroPropinaInp',0);
+  /* Cada cobro arranca sin memoria de lo que toco el anterior. */
+  _camTocado=false; _recTocado=false;
   var inpDM=document.getElementById('cobroDescInp');if(inpDM)inpDM.value='';
   var btnSig=document.querySelector('[data-prop-target="cobroPropinaInp"]');
   if(btnSig){btnSig.classList.remove('neg');btnSig.textContent='+';}
@@ -6771,6 +6775,44 @@ function _renderAFavCalc(){
   el.innerHTML='Recibiste '+formatMoney(neto)+' − pedido '+formatMoney(pedido)+' = <b>'+formatMoney(sobr)+'</b> de más<br>🎁 A favor: <b>'+formatMoney(aFav)+'</b>'+(prop>0?'  ·  💰 Propina: <b>'+formatMoney(prop)+'</b>':'');
 }
 
+/* ── EL VUELTO SALE DEL BILLETE ────────────────────────────────────────────
+   (28/9/2026)
+
+   `abrirCobroRuta` precarga "¿Cuanto recibiste?" con el total del pedido. Eso
+   esta bien para el cobro justo —que es la mayoria— y es una trampa apenas hay
+   vuelto: el cartel rojo se apaga subiendo ese numero, y el valor que lo apaga
+   es total + vuelto. Asi quedo registrado que Victoria entrego $60.675, que no
+   se puede armar con billetes argentinos; en la mano habia $56.000 y el ERP
+   creia tener $675 mas.
+
+   Estas dos banderas son el mismo patron que `npOrigenTocado`: lo que tipea una
+   persona no se vuelve a pisar nunca. */
+var _camTocado=false, _recTocado=false;
+function _cobroRecTocado(){ _recTocado=true; }
+
+/* El billete mas chico que circula es el de $100: un vuelto de $3.325 no se
+   puede dar. Se redondea PARA ABAJO —lo que sobra queda del lado de Maleu y el
+   cuadro obliga a decir que se hace con eso— en vez de para arriba, que seria
+   regalar plata sin que nadie lo decida. */
+function _vueltoEnBilletes(x){ return Math.max(0,Math.floor((Number(x)||0)/100)*100); }
+
+/* Con "Devolvi cambio" abierto y el billete tipeado, el vuelto lo calcula el
+   ERP. Nadie hace la resta de cabeza en la puerta de un cliente. */
+function _sugerirVuelto(){
+  if(_camTocado)return;
+  var sec=document.getElementById('cobroCambioSection');
+  if(!sec||sec.style.display==='none')return;
+  var st=_cobroRutaState; if(!st||st.partial)return;
+  var rec=Math.max(0,_parseMoneyInput(document.getElementById('cobroRecEf')))
+         +Math.max(0,_parseMoneyInput(document.getElementById('cobroRecMP')));
+  var aplicar=Math.max(0,Math.min(Number(st.aplicarSaldo)||0,st.total));
+  var requerido=Math.max(0,st.total-aplicar);
+  var sobra=rec-requerido;
+  if(sobra<=0)return;
+  var v=_vueltoEnBilletes(sobra);
+  if(v>0)_setMoneyInput('cobroCamEf',v);
+}
+
 function _toggleCobroSec(secId,btn){
   var sec=document.getElementById(secId);
   var open=sec.style.display!=='none';
@@ -6828,7 +6870,18 @@ function _toggleCobroSec(secId,btn){
       if(yaCam<=0){
         var rC=_recalcCobroRuta();
         var vuelto=rC?Math.max(0,(Number(rC.neto)||0)-(Number(rC.requerido)||0)):0;
-        if(vuelto>0)_setMoneyInput('cobroCamEf',vuelto);
+        if(vuelto>0){_setMoneyInput('cobroCamEf',vuelto);}
+        /* Si nadie toco el recibido, adentro esta el TOTAL que precargo el ERP:
+           con eso no hay nada que devolver y la resta da 0 para siempre. Se
+           vacia y se pide el billete — es el dato que falta, y mientras el campo
+           venga con la respuesta que hace cerrar, el camino corto es inventarla.
+           (Es lo que dejo a #1032 con $675 que no existen.) */
+        else if(!_recTocado){
+          _setMoneyInput('cobroRecEf',0);
+          _setMoneyInput('cobroRecMP',0);
+          var _inpR=document.getElementById('cobroRecEf');
+          if(_inpR){try{_inpR.focus();}catch(x){}}
+        }
       }
       _recalcCobroRuta();
       return;
@@ -6849,6 +6902,7 @@ function _recalcCobroRuta(){
   var aplicar=partial?0:Math.max(0,Math.min(Number(st.aplicarSaldo)||0,total));
   var requerido=Math.max(0,total-aplicar); // lo que el cliente debe pagar este cobro
   // Lectura con formato AR: "35.500,50" → 35500.50
+  _sugerirVuelto();
   var recEf=Math.max(0,_parseMoneyInput(document.getElementById('cobroRecEf')));
   var recMP=Math.max(0,_parseMoneyInput(document.getElementById('cobroRecMP')));
   var camEf=Math.max(0,_parseMoneyInput(document.getElementById('cobroCamEf')));
@@ -6867,6 +6921,11 @@ function _recalcCobroRuta(){
   _mostrarFila('cobroSumCamRow',camTot>0);
   // Indicador de billetera (fondo de cambio): el vuelto en efectivo cubierto por el efectivo
   // recibido sale de la billetera. Muestra saldo actual y cuánto quedará tras este vuelto.
+  var _rH=document.getElementById('cobroRecHint');
+  if(_rH){
+    var _camAb=document.getElementById('cobroCambioSection').style.display!=='none';
+    _rH.textContent=_camAb?'\u2014 el billete con el que te pag\u00f3':'';
+  }
   var _bilHint=document.getElementById('cobroBilleteraHint');
   if(_bilHint){
     var camBilletera=(camEf>0 && recEf>=camEf)?camEf:0; // vuelto que sale de la billetera (mismo método)
