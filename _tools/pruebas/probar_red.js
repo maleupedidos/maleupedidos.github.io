@@ -59,7 +59,10 @@ const chk = (n, c, d) => { if (c === true) { ok++; console.log('  ok   ' + n); }
     const vista = await evaluar(cli, `(function(){
       var b=document.getElementById('vRed');
       return {txt:(b.innerText||'').slice(0,300),
-              filas:b.querySelectorAll('.red-tabla tbody tr').length,
+              /* Anclado al wrap de la tabla de vendedores, que es la tabla de VENDEDORES. Sin eso
+                 tambien cuenta la de la liquidacion (28/9/2026) y da 6: un rojo
+                 que no es del ERP sino de un chequeo que mide de mas. */
+              filas:b.querySelectorAll('.red-tabla-wrap .red-tabla tbody tr').length,
               lineas:b.querySelectorAll('.red-graf svg polyline').length,
               kpis:b.querySelectorAll('.cmp-kpis .cmp-k').length,
               det:b.querySelectorAll('.red-det').length};
