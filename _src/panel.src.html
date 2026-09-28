@@ -279,6 +279,9 @@ body{font-family:'Inter',-apple-system,'Segoe UI',system-ui,sans-serif;backgroun
 /* El titulo de categoria ocupa todo el ancho de la tabla, asi que al deslizar
    se iba de pantalla y no sabias en que grupo estabas. Va adentro de un span
    pegado a la izquierda. */
+/* El "+N" de Disponible: lo que esta en el otro freezer. Chico y en gris,
+     colgado del numero grande sin robarle ancho a la grilla. */
+.st-otro{display:block;font-size:10px;font-weight:600;color:var(--ink3);line-height:1.1;margin-top:1px}
 .st-cat-txt{position:sticky;left:0;background:var(--cr);padding-right:10px;z-index:3}
 /* Disponible es EL numero del stock: se queda clavado a la derecha para verlo
    siempre, aunque estes mirando las columnas del medio. */
@@ -17897,6 +17900,13 @@ function stMoverEnviar(abbr){
     });
 }
 
+/* El nombre de un deposito sin el "Deposito " de adelante. La card "Donde
+   esta" ya lo hacia con un replace suelto; se comparte para que la tabla, el
+   aviso y la card digan lo mismo. */
+function _stDepNom(dep){
+  if(!dep)return '';
+  return String(dep.nombre||dep.id||'').replace(/^Dep(o|\u00f3)sito /,'');
+}
 function stDepNombre(id){
   var deps=(DEP_DATA&&DEP_DATA.deps)||[];
   for(var i=0;i<deps.length;i++)if(deps[i].id===id)return deps[i].nombre;
@@ -17930,7 +17940,7 @@ function rStockReparto(){
     var val=stFmt(totU,'u')+' u';
     if(totK>0.0001)val+=' &middot; '+stFmt(totK,'kg')+' kg';
     // Un deposito por renglon: en una card de 170px los numeros se partian a la mitad.
-    partes.push('<div class="st-dep">'+stEsc(deps[i].nombre.replace(/^Dep(o|ó)sito /,''))+' '+val+'</div>');
+    partes.push('<div class="st-dep">'+stEsc(_stDepNom(deps[i]))+' '+val+'</div>');
   }
   /* El total de un producto (col F) y lo que suman sus depositos tienen que dar lo
      mismo: los dos los escribe `_moverFisico_`. Si no dan es porque alguien toco
@@ -18012,6 +18022,45 @@ function loadStockTab(forzar){
   var _libre=function(r){ if(_stockVuelo===p)_stockVuelo=null; return r; };
   return p.then(_libre,function(e){ _libre(); throw e; });
 }
+/* CUAL DE LOS DOS FREEZERS ENTREGA. (27/9/2026)
+
+   Medido ese dia: Ustariz 270 unidades en 33 productos, Moresco 69 en 14. Ya
+   no es un freezer con un apendice, y la columna Disponible los sumaba: la
+   tabla mostraba mercaderia que la tienda no puede vender, porque la tienda
+   ofrece SOLO el de Tadeo (`tienda/app.js`: `ustariz - reservado`).
+
+   Al 27/9 eran 14 productos inflados y uno mentiroso del todo: Pack Muzzarella
+   x2 decia 10 disponibles y en el freezer de Tadeo habia CERO.
+
+   El que entrega es el PRIMER deposito de la hoja `Depositos` — hoy
+   Ustariz. No se hardcodea el id a proposito: la pantalla muestra su NOMBRE,
+   asi que si algun dia la hoja se reordena se ve en la pantalla en vez de
+   mentir en silencio. El dia que Lucas entregue algun barrio, esto deja de
+   alcanzar: ahi va a hacer falta saber QUE barrios, que es el dato que hoy no
+   existe en ningun lado. */
+function _stDepEntrega(){
+  var l=(D&&Array.isArray(D.stockDeps))?D.stockDeps:[];
+  return l.length?l[0]:null;
+}
+function _stOtrosDeps(){
+  var l=(D&&Array.isArray(D.stockDeps))?D.stockDeps:[];
+  return l.length>1?l.slice(1):[];
+}
+/* Lo que hay en los freezers que NO entregan. */
+function _stEnOtros(s){
+  var o=_stOtrosDeps(), pd=(s&&s.pd)||{}, t=0;
+  for(var i=0;i<o.length;i++)t+=Number(pd[o[i].id])||0;
+  return Math.round(t*1000)/1000;
+}
+/* Lo que se puede entregar hoy: el disponible menos lo que esta en otra casa.
+   Se recorta en 0 porque un negativo —mas reservado que stock propio— no es
+   una cantidad que alguien pueda sacar del freezer. */
+function _stEntregable(s){
+  var d=Number(s&&s.d)||0;
+  if(!_stOtrosDeps().length||!(s&&s.pd))return d;
+  var v=d-_stEnOtros(s);
+  return v>0?Math.round(v*1000)/1000:0;
+}
 function rStock(){
   /* El stock llega solo en el volcado grande. En frio pintamos primero con los
      endpoints livianos, que no lo traen: en vez de reventar, avisamos. */
@@ -18079,13 +18128,19 @@ function rStock(){
   /* KPIs. Las unidades y los kilos van por separado (13/9/2026): "225.797 vend"
      eran 164 unidades + 61,797 kg de carne sumados. */
   var sumInv=0,conStock=0,sinDisp=0,sinFis=0,bajos=0,hayPz=false;
+  var conOtros=0,soloOtros=0;   /* cuantos tienen algo en el otro freezer */
   var ven={u:0,k:0},comp={u:0,k:0},ini={u:0,k:0};
   D.stock.forEach(function(s){
     var iv=Number(s.iv)||0; sumInv+=iv; if(iv>0)conStock++;
     var b=(s.u==='kg')?'k':'u';
     ven[b]+=Number(s.v)||0; comp[b]+=Number(s.c)||0; ini[b]+=Number(s.i)||0;
     if(s.pz)hayPz=true;
-    var d=Number(s.d)||0, f=Number(s.f)||0;
+    /* Lo que se puede ENTREGAR, no la suma de los dos freezers (27/9/2026).
+       Con la suma, "Sin disponible" decia que estaba todo bien mientras el
+       Pack Muzzarella tenia sus 10 unidades en la casa de Lucas. */
+    var d=_stEntregable(s), f=Number(s.f)||0;
+    var enOtros=_stEnOtros(s);
+    if(enOtros>0){ conOtros++; if(d<=0&&(Number(s.d)||0)>0)soloOtros++; }
     if(d<=0){ sinDisp++; if(f<=0)sinFis++; }
     else if(b==='u'&&d<=3)bajos++;   // "3 o menos" es una cuenta de unidades: en kilos no dice nada
   });
@@ -18093,9 +18148,21 @@ function rStock(){
     var k=Math.round(x.k*1000)/1000;
     return f$(Math.round(x.u))+' u'+(k>0?' \u00b7 '+stFmt(k,'kg')+' kg':'');
   };
+  /* El que mas engania: la tabla decia que habia y no lo tenes vos. */
+  var _dEnt=_stDepEntrega(), _nOtro=_stOtrosDeps()[0];
+  if(soloOtros>0&&_nOtro){
+    avisos.push('<b>'+soloOtros+' producto'+(soloOtros===1?'':'s')+'</b> tiene'+(soloOtros===1?'':'n')
+      +' stock solo en <b>'+stEsc(_stDepNom(_nOtro))+'</b>: no lo pod'+(soloOtros===1?'\u00e9s':'\u00e9s')
+      +' entregar hasta traerlo.');
+  }
   var ksDisp=[];
   if(sinFis>0)ksDisp.push(sinFis+' sin nada en el freezer');
-  if(sinDisp-sinFis>0)ksDisp.push((sinDisp-sinFis)+' todo reservado');
+  /* "Todo reservado" y "esta en la otra casa" son dos cosas distintas y hasta
+     el 27/9/2026 se decian igual, porque con un solo freezer no existia la
+     segunda. Un producto que esta entero en lo de Lucas no esta reservado: hay
+     que ir a buscarlo. Decirle "reservado" manda a mirar los pedidos. */
+  if(soloOtros>0)ksDisp.push(soloOtros+' en '+stEsc(_stDepNom(_nOtro)));
+  if(sinDisp-sinFis-soloOtros>0)ksDisp.push((sinDisp-sinFis-soloOtros)+' todo reservado');
   if(bajos>0)ksDisp.push(bajos+' con 3 u o menos');
 
   $('sKpi').innerHTML=
@@ -18143,7 +18210,11 @@ function rStock(){
     html+='<div class="st" style="padding:14px 0 6px"><span class="st-cat-txt">'+cat+'</span></div>';
     items.forEach(function(s){
       var kg=(s.u==='kg');
-      var d=Number(s.d)||0;
+      /* El numero grande es lo ENTREGABLE (27/9/2026). Antes era la suma de los
+         dos freezers, y el color decia "verde" sobre mercaderia que estaba en
+         otra casa. */
+      var d=_stEntregable(s);
+      var _otro=_stEnOtros(s);
       var cls=d<=0?'zero':(!kg&&d<=3)?'low':'ok';
       var aj=_stAjuste(s);
       if(aj!==0)conAjuste++;
@@ -18156,14 +18227,24 @@ function rStock(){
         '<div class="si-v st-aj'+(aj>0?' mas':aj<0?' menos':'')+'">'+ajTxt+'</div>'+
         '<div class="si-v">'+stFmt(s.f,s.u)+'</div>'+
         '<div class="si-v">'+stFmt(s.r,s.u)+'</div>'+
-        '<div class="si-v st-fija-der '+cls+'">'+stFmt(s.d,s.u)+'</div>'+
+        '<div class="si-v st-fija-der '+cls+'">'+stFmt(d,s.u)
+          +(_otro>0?'<span class="st-otro" title="'+stFmt(_otro,s.u)+' en '+stEsc(_stDepNom(_stOtrosDeps()[0]))
+            +' \u00b7 total '+stFmt(s.d,s.u)+'">+'+stFmt(_otro,s.u)+'</span>':'')+'</div>'+
       '</div>';
     });
   });
   /* La cuenta de cada fila, dicha. Sin esto, una fila donde Inicial + Comprado −
      Vendidos no da el Fisico se lee como un error del ERP, cuando casi siempre es
      un conteo: el 13/9/2026 eran 3 productos, los 3 contados a mano. */
-  html+='</div></div><div class="st-pie">Inicial + Comprado \u2212 Vendidos \u00b1 Ajuste = F\u00edsico. '
+  /* Sin esto, el "+6" de una fila es un numero suelto que no significa nada.
+     Se dice una vez abajo, no en cada celda. */
+  var _pieDep='';
+  if(conOtros>0&&_dEnt&&_nOtro){
+    _pieDep='<b>Disponible</b> es lo que pod\u00e9s entregar desde <b>'+stEsc(_stDepNom(_dEnt))
+      +'</b>; el <span class="st-otro">+N</span> es lo que est\u00e1 en <b>'+stEsc(_stDepNom(_nOtro))
+      +'</b> y hay que ir a buscar ('+conOtros+' producto'+(conOtros===1?'':'s')+' hoy). ';
+  }
+  html+='</div></div><div class="st-pie">'+_pieDep+'Inicial + Comprado \u2212 Vendidos \u00b1 Ajuste = F\u00edsico. '
     +'El <b>ajuste</b> es lo que se corrigi\u00f3 contando o sali\u00f3 sin ser una venta'
     +(conAjuste?' ('+conAjuste+' producto'+(conAjuste===1?'':'s')+' esta semana)':'')
     +': el detalle de cada movimiento est\u00e1 en el Kardex.'

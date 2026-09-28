@@ -51,7 +51,15 @@ const STOCK = [
   P('Sorrentinos Langostinos', 'SL', 0, 3, 0, 3, 0, 'u', { ustariz: 3, moresco: 0 }),         // cierra, 3 o menos
   P('<img src=x onerror="window.__xss=1">Tarta', 'TV', 4, 0, 0, 4, 0, 'u', { ustariz: 4, moresco: 0 }),
   P('Carne Lomo', 'CLo', 0, 25.025, 21.135, 3.89, 0, 'kg', { ustariz: 3.89, moresco: 0 }, true),
-  P('Carne Picaña', 'CPi', 0, 0, 0, 0, 0, 'kg', { ustariz: 0, moresco: 0 }, false)
+  P('Carne Picaña', 'CPi', 0, 0, 0, 0, 0, 'kg', { ustariz: 0, moresco: 0 }, false),
+  /* LOS DOS DEPOSITOS DE VERDAD (27/9/2026). Hasta hoy el stub tenia
+     `moresco: 0` en los siete productos, asi que la tabla se probaba en un
+     mundo de un solo freezer — y el dia que Disponible dejo de sumar los dos
+     el test siguio verde sin ejercitar una linea del cambio.
+     Medido ese dia en produccion: 14 productos repartidos y uno entero en la
+     casa de Lucas. */
+  P('Pizza Muzzarella', 'PMu', 9, 0, 0, 9, 0, 'u', { ustariz: 3, moresco: 6 }),
+  P('Wrap Pollo', 'WPo', 10, 0, 0, 10, 0, 'u', { ustariz: 0, moresco: 10 })
 ];
 const DEPS = [{ id: 'ustariz', nombre: 'Deposito Ustariz' }, { id: 'moresco', nombre: 'Deposito Moresco' }];
 const DEPOSITOS = { deps: [{ id: 'ustariz', nombre: 'Deposito Ustariz', col: 18 }, { id: 'moresco', nombre: 'Deposito Moresco', col: 19 }],
@@ -158,20 +166,42 @@ const LEER = `(function(){
     chk('y dice que en la carne lo comprado son las piezas recibidas', /piezas recibidas en la semana/.test(L.pie), L.pie);
     chk('el nombre de un producto no se ejecuta como HTML', !L.xss && !L.img);
     chk('y se lee como texto', Object.keys(L.filas).some(k => /onerror/.test(k)));
-    chk('KPI "Sin disponible" = 4', L.k['Sin disponible'] && L.k['Sin disponible'].v === '4', L.k);
-    chk('dice 3 sin nada en el freezer, 1 todo reservado y 1 con 3 u o menos', !!L.k['Sin disponible'] && /3 sin nada en el freezer · 1 todo reservado · 1 con 3 u o menos/.test(L.k['Sin disponible'].s), L.k['Sin disponible']);
-    chk('KPI "Vendido esta semana": unidades y kilos separados', !!L.k['Vendido esta semana'] && /^50 u · 21,135 kg$/.test(L.k['Vendido esta semana'].v) && /entró 30 u · 25,025 kg · arrancó con 29 u/.test(L.k['Vendido esta semana'].s), L.k['Vendido esta semana']);
+    chk('KPI "Sin disponible" = 5', L.k['Sin disponible'] && L.k['Sin disponible'].v === '5', L.k);
+    chk('separa "en la otra casa" de "todo reservado"', !!L.k['Sin disponible'] && /3 sin nada en el freezer · 1 en Moresco · 1 todo reservado · 2 con 3 u o menos/.test(L.k['Sin disponible'].s), L.k['Sin disponible']);
+    chk('KPI "Vendido esta semana": unidades y kilos separados', !!L.k['Vendido esta semana'] && /^50 u · 21,135 kg$/.test(L.k['Vendido esta semana'].v) && /entró 30 u · 25,025 kg · arrancó con 48 u/.test(L.k['Vendido esta semana'].s), L.k['Vendido esta semana']);
     chk('el titulo dice la semana y va de lunes a domingo', /^📦 Semana \d+ · lun \d+\/\d+ → dom \d+\/\d+$/.test(L.titulo.trim()), L.titulo);
-    chk('"Donde esta" sale del volcado: Ustariz 7 u · 3,89 kg · Moresco 0 u', /Ustariz 7 u · 3,89 kg\s*Moresco 0 u/.test(L.dep), L.dep);
+    chk('"Donde esta" sale del volcado: Ustariz 10 u · 3,89 kg · Moresco 16 u', /Ustariz 10 u · 3,89 kg\s*Moresco 16 u/.test(L.dep), L.dep);
     chk('sin pedir action=depositos', L.gets.indexOf('depositos') < 0, L.gets);
     /* LO QUE HACE QUE VALGA LA PENA (27/9/2026). Medido contra produccion ese
        dia: `admin` son 1,29 MB y 28 s; `stockTab`, 5,4 KB. Sin este chequeo,
        volver a meter 'stock' en _TABS_CON_DATOS deja la prueba verde y la
        espera de 28 s de vuelta adentro. */
     chk('la tabla pide stockTab y NO el volcado', L.gets.indexOf('stockTab') > -1 && L.gets.indexOf('admin') < 0, L.gets);
+
+    /* ── LOS DOS FREEZERS (27/9/2026) ──────────────────────────────────
+       La tienda vende SOLO lo que esta en el de Tadeo, y hasta hoy la
+       columna Disponible sumaba los dos: mostraba mercaderia que no se
+       podia vender. Medido ese dia: 14 productos inflados y el Pack
+       Muzzarella diciendo 10 con CERO en el freezer de Tadeo. */
+    const cMu = fila('Pizza Muzzarella').celdas;
+    chk('Disponible muestra lo ENTREGABLE (3), no la suma de los dos (9)',
+        /^3/.test((cMu[6] || '').trim()), cMu);
+    chk('y cuelga el resto como "+6"', /\+6/.test(cMu[6] || ''), cMu[6]);
+    chk('el Fisico sigue diciendo el total (9)', (cMu[4] || '').trim() === '9', cMu);
+    const cWr = fila('Wrap Pollo');
+    chk('un producto que esta ENTERO en la otra casa se pinta en rojo',
+        /zero/.test(cWr.cls), cWr.cls);
+    chk('y su Disponible dice 0, no 10', /^0/.test((cWr.celdas[6] || '').trim()), cWr.celdas);
+    chk('se avisa arriba que hay 1 producto solo en la otra casa',
+        L.avisos.some(a => /1 producto/.test(a) && /Moresco/.test(a)), L.avisos);
+    chk('el pie explica de donde es el Disponible y que es el +N',
+        /podés entregar desde/.test(L.pie) && /Ustariz/.test(L.pie) && /Moresco/.test(L.pie), L.pie);
+    chk('"Sin disponible" cuenta por lo entregable (los 4 de siempre + el Wrap)',
+        (L.k['Sin disponible'] || {}).v === '5', L.k['Sin disponible']);
     chk('avisa que el total de las Empanadas no da lo de los depositos, y lo nombra', /Empanadas Jamon y Queso x8: el total dice 1 y los depósitos suman 0/.test(L.dep) && /CONTAR/.test(L.dep), L.dep);
     chk('y no avisa por los que si cierran', !/Pack Jamon|Sorrentinos|Carne Lomo/.test(L.dep.split('⚠')[1] || ''), L.dep);
-    chk('sin avisos de semana ni de cierre', L.avisos.length === 0, L.avisos);
+    chk('sin avisos de semana ni de cierre',
+        !L.avisos.some(a => /semana pasada|cierre de semana/.test(a)), L.avisos);
 
     const geo = await evaluar(cli, `(function(){
       var b=document.querySelector('#sKpiDep .st-contar'); var cab=document.querySelector('#sList .st-cab .st-fija');
@@ -206,7 +236,8 @@ const LEER = `(function(){
       await esperar(cli, `window.__nAdmin===${n0 + 1} && !document.querySelector('#sKpi .st-aviso')`, 15000);
       await pausa(300);
       L = await evaluar(cli, LEER);
-      chk('cuando llega, el aviso se va', L.avisos.length === 0, L.avisos);
+      chk('cuando llega, el aviso se va',
+          !L.avisos.some(a => /trayendo el stock|no se pudieron traer/.test(a)), L.avisos);
       chk('y la tabla muestra lo contado (4 sorrentinos)', fila('Sorrentinos Langostinos').celdas[4] === '4', fila('Sorrentinos Langostinos').celdas);
       await evaluar(cli, `rStock(); rStock(); 1`);
       await pausa(800);
@@ -247,7 +278,7 @@ const LEER = `(function(){
     await esperar(cli, `/Ustariz/.test((document.getElementById('sKpiDep')||{}).textContent||'')`, 15000);
     L = await evaluar(cli, LEER);
     chk('con un backend sin reparto en el volcado, pide action=depositos', L.gets.indexOf('depositos') > -1, L.gets);
-    chk('y "Donde esta" se dibuja igual', /Ustariz 7 u · 3,89 kg\s*Moresco 0 u/.test(L.dep), L.dep);
+    chk('y "Donde esta" se dibuja igual', /Ustariz 10 u · 3,89 kg\s*Moresco 16 u/.test(L.dep), L.dep);
     chk('y no inventa un aviso de descuadre con otra foto', !/el total dice/.test(L.dep), L.dep);
 
     const propios = errores.filter(e => /rStock|rStockReparto|_stAjuste|_stTienePd|stSwitchTab/.test(e));
