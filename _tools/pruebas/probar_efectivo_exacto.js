@@ -162,6 +162,42 @@ const enLaPuerta = (billete, opts) => `(function(){
         E.errores === 0 && /Cierra justo/.test(E.etiqueta), E);
     chk('y lo que registra es lo que hay en la mano', E.registra === E.enLaMano, E);
 
+    /* ── 6. Y EL BILLETE QUEDA GUARDADO (28/9/2026) ─────────────────────
+       Hasta hoy el bruto se reconstruia como cobrado + vuelto, asi que el
+       arqueo se comparaba contra si mismo. Con el billete guardado, contar la
+       plata pasa a ser una verificacion contra un dato. */
+    const post = await evaluar(cli, `(function(){
+      window.__fetches=[];
+      window._cobroRutaState={key:'k1',combo:false,
+        ent:{h:'Home',id:'999',r:2,c:'Prueba',fp:'Efectivo','$':${TOTAL}},
+        total:${TOTAL},totalOriginal:${TOTAL},fp:'Efectivo',
+        cambioOpen:false,aFavOpen:false,entregar:true,aceptaDescuento:false};
+      _resetCobroSeccionesColapsables();
+      _setMoneyInput('cobroRecEf',${TOTAL}); _setMoneyInput('cobroRecMP',0);
+      _recalcCobroRuta();
+      _toggleCobroSec('cobroCambioSection',document.getElementById('cobroToggleCambio'));
+      var inp=document.getElementById('cobroRecEf');
+      inp.value='50000'; _fmtMoneyInput(inp);
+      if(typeof _cobroRecTocado==='function')_cobroRecTocado();
+      _recalcCobroRuta();
+      try{ _marcarSobranteComoPropina(); }catch(e){}
+      _recalcCobroRuta();
+      try{ window.confirm=function(){return true}; confirmarCobroRuta(); }catch(e){ window.__revento=String(e); }
+      var L=(window.__fetches||[]).filter(function(f){return f.post;});
+      return L.length?L[L.length-1].body:{ error: window.__revento||'sin POST' };
+    })()`);
+    chk('el cobro manda un POST', !!post && !post.error, post);
+    chk('y lleva EL BILLETE que dio el cliente ($50.000)',
+        !!post && post.recibidoEf === 50000, post);
+    chk('junto con el vuelto que salio de la billetera ($2.200)',
+        !!post && post.cambioBilletera === 2200, post && post.cambioBilletera);
+    chk('y el cobrado del pedido sigue siendo el total, no el billete',
+        !!post && post.ef === TOTAL, post && post.ef);
+    /* La cuenta que cierra, ahora con datos guardados y no calculados. */
+    chk('BILLETE - VUELTO = lo que registra el pedido ($47.800)',
+        !!post && (post.recibidoEf - (post.cambioBilletera || 0)) === (post.ef + (post.propina || 0)),
+        post && { billete: post.recibidoEf, vuelto: post.cambioBilletera, ef: post.ef, propina: post.propina });
+
     console.log('\n' + ok + ' ok · ' + mal + ' mal\n');
     salir(mal ? 1 : 0);
   } catch (e) {
