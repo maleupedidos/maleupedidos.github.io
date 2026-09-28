@@ -58,7 +58,17 @@ const EFMANO = [
     porQuien: [{ q: 'Tadeo Ustariz', e: 51000, s: 0, n: 1 }],
     det: [{ c: 'Cliente Cinco', id: '8801', h: 'Home', cobro: 51000, vto: 0, tipo: '', q: 'Tadeo Ustariz' }] },
   { f: '09/09/2026', cobrado: 30000, bil: 0, cambioMP: 0, cruzado: 0, entro: 30000, salio: 0, neto: 30000,
-    det: [{ c: 'Cliente Seis', id: '8701', h: 'Home', cobro: 30000, vto: 0, tipo: '' }] }
+    det: [{ c: 'Cliente Seis', id: '8701', h: 'Home', cobro: 30000, vto: 0, tipo: '' }] },
+  /* EL COBRO QUE NO PUEDE SER (28/9/2026). Calcado del #1032 del 25/9: cobro
+     $56.675 con $4.000 de vuelto suma $60.675, y el billete mas chico que
+     circula es el de $100. Esa firma es la de un cobro donde el monto recibido
+     se retoco para que el cuadro cerrara.
+     Al lado va uno CORRECTO con vuelto, para que el aviso tenga que elegir: si
+     marcara los dos, estaria marcando "hubo vuelto" y no "no puede ser". */
+  { f: '08/09/2026', cobrado: 101675, bil: 9000, cambioMP: 0, cruzado: 0, entro: 110675, salio: 9000, neto: 101675,
+    porQuien: [{ q: 'Tadeo Ustariz', e: 110675, s: 9000, n: 2 }],
+    det: [{ c: 'Clienta Imposible', id: '1032', h: 'Home', cobro: 56675, vto: 4000, tipo: 'Billetera', q: 'Tadeo Ustariz' },
+          { c: 'Clienta Redonda',   id: '1028', h: 'Home', cobro: 45000, vto: 5000, tipo: 'Billetera', q: 'Tadeo Ustariz' }] }
 ];
 const CAJA = { ts: 1, caja: { ef: 0, mp: 0 }, saldoBase: {}, gastos: [], ingresos: [], gastosHist: [], movimientos: [], efMano: EFMANO };
 const LIGHT = { ts: 1, pedidos: [], canales: [], light: true };
@@ -93,7 +103,11 @@ const LEER = `(()=>{
   var filas = [].slice.call(box.querySelectorAll('.efm-f .efm-c')).map(function(c){ return c.textContent; });
   var uno = (box.querySelector('.efm-quien1')||{}).textContent||'';
   var pie = [].slice.call(box.querySelectorAll('.efm-quien .efm-sub')).map(function(s){return s.textContent;}).join(' ');
+  var alerta=(box.querySelector('.efm-alerta')||{}).textContent||'';
+  var sub=(box.querySelector('.efm-sub')||{}).textContent||'';
+  var detTxt=[].slice.call(box.querySelectorAll('.efm-f .efm-x')).map(function(x){return x.textContent;}).join(' | ');
   return { dia:(box.querySelector('.efm-dia')||{}).textContent||'', qs:qs, filas:filas, uno:uno, pie:pie,
+           alerta:alerta, sub:sub, detTxt:detTxt,
            desborda: document.documentElement.scrollWidth > window.innerWidth + 1, txt: box.textContent.length };
 })()`;
 const num = t => Number(String(t || '').replace(/[^\d]/g, '')) || 0;
@@ -113,7 +127,7 @@ const num = t => Number(String(t || '').replace(/[^\d]/g, '')) || 0;
     await cli.enviar('Page.navigate', { url: BASE + '/' + APP + '?prueba=1' });
     if (!await esperar(cli, `typeof go==='function'`, 60000)) { console.log('  el ERP no arranco'); salir(1); }
     await evaluar(cli, `go('caja'); 1`);
-    if (!await esperar(cli, `window.D && Array.isArray(D.efMano) && D.efMano.length===3 && document.querySelector('#efManoCard .efm')`, 30000)) {
+    if (!await esperar(cli, `window.D && Array.isArray(D.efMano) && D.efMano.length===${EFMANO.length} && document.querySelector('#efManoCard .efm')`, 30000)) {
       console.log('  la tarjeta de efectivo en mano no se dibujo (sin esto, lo de abajo no mide nada)'); salir(1);
     }
     await evaluar(cli, `typeof _efManoIdx!=='undefined' && (_efManoIdx=0); typeof _efManoQuien!=='undefined' && (_efManoQuien=null); rEfMano(); 1`);
@@ -173,6 +187,29 @@ const num = t => Number(String(t || '').replace(/[^\d]/g, '')) || 0;
     const m = await evaluar(cli, LEER);
     chk('sin porQuien no dibuja nada nuevo', m.qs.length === 0 && !m.uno && !m.pie, m);
     chk('y la tarjeta sigue entera', m.filas.length === 1 && /Cliente Seis/.test(m.filas[0]), m.filas);
+
+    /* ── EL COBRO QUE NO PUEDE SER (28/9/2026) ──────────────────────────
+       Un dia mas atras: el caso del #1032 del 25/9, donde el monto recibido
+       se retoco para que el cuadro cerrara y quedo apuntando a un billete de
+       $60.675. El ERP lo tiene que decir el mismo dia, no en la mesa contando
+       la plata con Lucas. */
+    await evaluar(cli, `efManoIr(1); 1`);
+    await pausa(300);
+    const z = await evaluar(cli, LEER);
+    /* La card escribe el dia como lo lee una persona: "martes 8/9". */
+    chk('llegamos al dia del cobro raro', /8\/9/.test(z.dia), z.dia);
+    chk('el ERP avisa que ese cobro no se puede pagar con billetes',
+        /no se puede pagar con billetes/.test(z.alerta), z.alerta);
+    chk('y lo nombra, con el monto imposible',
+        /Clienta Imposible/.test(z.alerta) && /60\.675/.test(z.alerta), z.alerta);
+    chk('al que SI da redondo no lo marca (el aviso no es "hubo vuelto")',
+        !/Clienta Redonda/.test(z.alerta), z.alerta);
+    chk('y dice como se arregla: propina, a favor o aceptar descuento',
+        /propina/.test(z.alerta) && /a favor/.test(z.alerta) && /descuento/.test(z.alerta), z.alerta);
+    chk('con vuelto, el numero grande deja de decir "es lo que te dieron"',
+        /lo que cobraste más el vuelto/.test(z.sub), z.sub);
+    chk('y el detalle no afirma un bruto: dice lo cobrado y lo devuelto',
+        /cobraste .*y le diste .*de vuelto/.test(z.detTxt) && !/quedan/.test(z.detTxt), z.detTxt);
 
     chk('sin errores de JS', errores.length === 0, errores.slice(0, 3));
   } catch (e) {
