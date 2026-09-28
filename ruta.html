@@ -1069,6 +1069,12 @@ select.np-input{background:var(--white) url("data:image/svg+xml;utf8,<svg xmlns=
       </select>
     </div>
 
+    <!-- De que freezer sale. Sale solo si hay mas de uno, y arranca en el de
+         quien esta cargando el pedido. (27/9/2026) -->
+    <div class="np-row hidden" id="npDepWrap">
+      <select id="npDeposito" class="np-input" onchange="npDepManual()"></select>
+    </div>
+
     <!-- Lo raro de verdad se queda colapsado. -->
     <details class="np-extras">
       <summary>Más opciones (propina, precio al costo)</summary>
@@ -1417,6 +1423,18 @@ var _RUTA_USER = (function(){
   return 'Tadeo';
 })();
 function _rutaUser(){return _RUTA_USER || 'Tadeo';}
+/* El USUARIO (`tadeo`, `luqui`), que es distinto del nombre ("Tadeo Ustariz").
+   Lo necesita el AUTOPEDIDO para arrancar en el freezer de quien esta cargando:
+   la hoja Depositos mapea el freezer contra el usuario, no contra el nombre.
+   Vacio en standalone, y ahi el selector cae al deposito principal. */
+var _RUTA_USER_ID = (function(){
+  try{
+    var s = JSON.parse(localStorage.getItem('maleu_panel_session') || 'null');
+    if (s && s.usuario) return String(s.usuario).trim().toLowerCase();
+  }catch(e){}
+  return '';
+})();
+function _rutaUserId(){return _RUTA_USER_ID;}
 
 var PROD_NAMES = {
   PPM:'Pack Muzza x2', PPJyQ:'Pack J&Q x2', PPCyQ:'Pack C&Q x2',
@@ -9448,7 +9466,7 @@ function npFetchStock(force){
   if(!NP_STOCK){
     var c=_npCopiaLeer('mc_np_stock');
     /* Se pinta YA: el catalogo se dibujo antes de llegar aca, sin nada. */
-    if(c){ NP_STOCK=c.d; NP_STOCK_COPIA=c.ts; try{ npRenderCatalogo(); npUpdateTotal(); }catch(e){} }
+    if(c){ NP_STOCK=c.d; NP_STOCK_COPIA=c.ts; try{ npDepRender(); npRenderCatalogo(); npUpdateTotal(); }catch(e){} }
   }
   if(!force && NP_STOCK && !NP_STOCK_COPIA && (Date.now()-NP_STOCK_TS)<60000) return;
   fetch(RUT_APPS_SCRIPT_URL+'?action=stock_full&_='+Date.now(),{cache:'no-store'})
@@ -9457,7 +9475,7 @@ function npFetchStock(force){
        npAvisoEncargoRender -> npOrigenAuto, que respeta si alguien lo eligio a
        mano). Sin esto, lo cargado antes de que llegara quedaba en Orden de
        Compra aunque estuviera en el freezer (11/9/2026). */
-    .then(function(d){ if(d&&typeof d==='object'&&d.ok!==false){ NP_STOCK=d; NP_STOCK_TS=Date.now(); NP_STOCK_COPIA=0; _npCopiaGuardar('mc_np_stock',d); npRenderCatalogo(); npUpdateTotal(); } })
+    .then(function(d){ if(d&&typeof d==='object'&&d.ok!==false){ NP_STOCK=d; NP_STOCK_TS=Date.now(); NP_STOCK_COPIA=0; _npCopiaGuardar('mc_np_stock',d); npDepRender(); npRenderCatalogo(); npUpdateTotal(); } })
     .catch(function(){});
 }
 function _npHoyAR(){
@@ -9551,7 +9569,67 @@ function npDepStock(abbr){
    y el id sale del backend — no de una lista escrita a mano que se despegue. */
 function npDepNombre(id){
   var s=String(id||'').trim();
-  return s?s.charAt(0).toUpperCase()+s.slice(1):'';
+  if(!s)return '';
+  /* Desde el 27/9/2026 `stock_full` manda la lista con los nombres de la hoja,
+     asi que se usa ese: "Deposito Moresco" -> "Moresco". Da lo mismo que
+     capitalizar el id mientras los dos coincidan, pero deja de depender de que
+     coincidan — el dia que un freezer se llame distinto de su id, esto sigue
+     nombrandolo bien en vez de inventar. */
+  var L=npDepLista();
+  for(var i=0;i<L.length;i++){
+    if(L[i].id===s){
+      var n=String(L[i].nombre||'').replace(/^Dep(o|\u00f3)sito /,'').trim();
+      if(n)return n;
+    }
+  }
+  return s.charAt(0).toUpperCase()+s.slice(1);
+}
+
+/* ── DE QUE FREEZER SALE ESTE PEDIDO ──────────────────────────────────────
+   (27/9/2026)
+
+   `stock_full` manda la lista de depositos en `_deps`. Arranca con guion bajo
+   porque el resto del objeto son abreviaturas de producto: leerlo asi no puede
+   chocar con ninguna, y nadie recorre las claves de NP_STOCK. */
+function npDepLista(){
+  var L=(NP_STOCK&&NP_STOCK._deps);
+  return (L&&L.length)?L:[];
+}
+/* El freezer en el que arranca el selector: el de quien esta cargando el
+   pedido. Que arranque solo es la mitad del valor — si hubiera que elegirlo en
+   cada pedido, en una semana nadie lo elige y todo vuelve a salir del mismo
+   lado. Sin el mapeo en la hoja cae al principal, que es lo de siempre. */
+function npDepPorDefecto(){
+  var L=npDepLista(), yo=_rutaUserId();
+  if(yo)for(var i=0;i<L.length;i++)if(L[i].user&&L[i].user===yo)return L[i].id;
+  var pr=npDepPrincipal();
+  if(pr)for(var j=0;j<L.length;j++)if(L[j].id===pr)return pr;
+  return L.length?L[0].id:'';
+}
+/* Lo que se va a mandar al backend. Con un solo deposito devuelve '' a
+   proposito: es el valor que `_moverFisico_` ya entiende como "el default del
+   producto", o sea exactamente el comportamiento anterior a este cambio. */
+function npDepElegido(){
+  if(npDepLista().length<2)return '';
+  var sel=document.getElementById('npDeposito');
+  return (sel&&sel.value)?sel.value:npDepPorDefecto();
+}
+var npDepTocado=false;
+function npDepManual(){ npDepTocado=true; npAvisoEncargoRender(); }
+function npDepRender(){
+  var wrap=document.getElementById('npDepWrap'), sel=document.getElementById('npDeposito');
+  if(!wrap||!sel)return;
+  var L=npDepLista();
+  /* Con un solo freezer el selector no se muestra: una pregunta con una sola
+     respuesta posible es ruido en una pantalla que se usa apurado. */
+  if(L.length<2){ wrap.className='np-row hidden'; return; }
+  var previo=npDepTocado?sel.value:'';
+  var html='';
+  for(var i=0;i<L.length;i++)
+    html+='<option value="'+L[i].id+'">Sale de: '+(L[i].nombre||L[i].id)+'</option>';
+  sel.innerHTML=html;
+  sel.value=previo||npDepPorDefecto()||L[0].id;
+  wrap.className='np-row';
 }
 /* De donde sale cada cosa del carrito: `dep` = ya esta en su freezer,
    `oc` = hay que comprarlo.
@@ -9664,7 +9742,11 @@ function npAvisoEncargoRender(){
        parte del pedido esta en otro deposito, o que el origen elegido no es
        Deposito. Un cartel que sale en todos los pedidos normales se deja de
        leer en dos dias. */
-    var casa=npDepPrincipal();
+    /* "Casa" es el freezer DEL QUE SALE ESTE PEDIDO, no el que tiene mas
+       productos del catalogo (27/9/2026). Con el pedido saliendo de lo de
+       Lucas, comparar contra el principal decia justo al reves: marcaba como
+       "anda a buscarlo" lo que estaba al lado, y callaba lo que no. */
+    var casa=npDepElegido()||npDepPrincipal();
     var afuera={},ids=[];
     /* Afuera es lo que NO alcanza en el freezer de casa y SI hay en otro,
        mirando donde esta de verdad (`pd`), no el deposito por defecto del
@@ -9896,6 +9978,10 @@ function npGuardar(){
     descuentoReceta:receta,
     propina:prop,
     tipoPedido:tipo,
+    /* De que freezer sale. El backend lo deja escrito en la fila del pedido
+       ANTES de mover el stock, asi la devolucion vuelve al mismo. Vacio = el
+       deposito por defecto de cada producto, que es lo de siempre. */
+    deposito:npDepElegido(),
     origen:(document.getElementById('npOrigen')||{}).value||'Pendiente',
     estadoEntrega:(document.getElementById('npEstadoEntrega')||{}).value||'Pendiente',
     estadoPago:'No Cobrado'
@@ -10035,6 +10121,7 @@ function npReset(){
   document.getElementById('npTipo').value='normal';
   var elOr=document.getElementById('npOrigen');if(elOr)elOr.value='Pendiente';
   npOrigenTocado=false;   // el pedido nuevo vuelve a dejar que el ERP lo elija
+  npDepTocado=false; npDepRender();   // y vuelve al freezer propio
   var elEs=document.getElementById('npEstadoEntrega');if(elEs)elEs.value='Pendiente';
   npSetPago('Efectivo');
   npEncargoAbierto=false;   // antes del render: el pedido nuevo arranca plegado

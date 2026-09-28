@@ -76,16 +76,46 @@ const EXTRA = `
     if (url.indexOf('script.google.com') > -1 && !(x && String(x.method||'').toUpperCase()==='POST')) {
       var m = url.match(/action=([a-zA-Z_]+)/); var a = m ? m[1] : '?';
       window.__gets.push({a:a, t:performance.now()});
+      var cuerpoDe = function(a){
+        if (a === 'cajaLight' && window.__FALLA_LIGHT) return {ts:1, caja:{}, saldoBase:{}, gastos:[], ingresos:[], movimientos:[]};
+        if (a === 'pedidosLight') return window.__LIGHT;
+        if (a === 'pedidosNew') return {ts:2, pedidos: window.__LIGHT.pedidos.slice(-10), tail:10};
+        if (a === 'ocLight') return ${JSON.stringify(OCS)};
+        if (a === 'tendencia') return ${JSON.stringify(TEND)};
+        if (a === 'admin') { window.__adminPedido = (window.__adminPedido||0) + 1;
+          return window.__ADMIN_OK ? Object.assign({}, window.__LIGHT, {oc:{lista:[]}}) : {ok:false, forbidden:true, err:'stub: el volcado contesta un error'}; }
+        return undefined;
+      };
       var cuerpo = null;
       if (a === 'pedidosLight' && window.__FALLA_LIGHT) return Promise.resolve(new Response('<html>Service error</html>',{status:200,headers:{'Content-Type':'text/html'}}));
-      if (a === 'cajaLight' && window.__FALLA_LIGHT) cuerpo = {ts:1, caja:{}, saldoBase:{}, gastos:[], ingresos:[], movimientos:[]};
-      else if (a === 'pedidosLight') cuerpo = window.__LIGHT;
-      else if (a === 'pedidosNew') cuerpo = {ts:2, pedidos: window.__LIGHT.pedidos.slice(-10), tail:10};
-      else if (a === 'ocLight') cuerpo = ${JSON.stringify(OCS)};
-      else if (a === 'tendencia') cuerpo = ${JSON.stringify(TEND)};
-      else if (a === 'admin') { window.__adminPedido = (window.__adminPedido||0) + 1;
-        cuerpo = window.__ADMIN_OK ? Object.assign({}, window.__LIGHT, {oc:{lista:[]}}) : {ok:false, forbidden:true, err:'stub: el volcado contesta un error'}; }
-      else cuerpo = {ok:false, error:'stub'};
+      /* EL VIAJE UNICO (25/9/2026). Desde ese dia loadRapido pide las cuatro
+         acciones juntas con action=lote. Un stub que no lo conoce hace que el
+         front vuelva a pedir cada una suelta, o sea DOS viajes donde en
+         produccion hay uno — y con la demora simulada eso daba el doble de
+         tiempo y un rojo que no era del ERP.
+         Las acciones del lote se anotan en __gets una por una: pedirlas
+         adentro del lote ES pedirlas, y los chequeos de "que pidio el boton"
+         tienen que verlas igual.
+         (Sin comillas invertidas: esto vive adentro de un template literal y
+         una sola lo corta en dos.) */
+      if (a === 'lote') {
+        var accs = decodeURIComponent((url.match(/acciones=([^&]+)/)||[])[1]||'').split(',').filter(Boolean);
+        var lote = {};
+        accs.forEach(function(k){
+          window.__gets.push({a:k, t:performance.now(), enLote:1});
+          /* Con __FALLA_LIGHT los pedidos se dejan AFUERA del lote, como hace el
+             backend con lo que no alcanzo a resolver (su campo "faltan"): el
+             front los pide sueltos y ahi el stub contesta el HTML de error.
+             Meter la falla adentro del lote probaria otro camino. */
+          if (k === 'pedidosLight' && window.__FALLA_LIGHT) return;
+          var c = cuerpoDe(k);
+          if (c !== undefined) lote[k] = c;
+        });
+        cuerpo = {ok:true, lote:lote};
+      } else {
+        cuerpo = cuerpoDe(a);
+        if (cuerpo === undefined) cuerpo = {ok:false, error:'stub'};
+      }
       var txt = JSON.stringify(cuerpo);
       return new Promise(function(res){ setTimeout(function(){ res(new Response(txt,{status:200,headers:{'Content-Type':'application/json'}})); }, window.__demora||200); });
     }
@@ -205,7 +235,11 @@ const EXTRA = `
     chk('el ↻ en Pedidos pide pedidos y OCs', cuenta('pedidosLight') >= 1 && cuenta('ocLight') >= 1, ref);
     chk('el ↻ en Pedidos NO pide la caja ni los cobros pendientes', cuenta('cajaLight') === 0 && cuenta('cobrosPendientes') === 0, ref);
     chk('el ↻ no vuelve a pedir los pedidos al terminar', cuenta('pedidosLight') === 1, ref);
-    chk('el ↻ gira lo que tardan pedidos+OCs, no los 4 endpoints', ref.giro < 2700, ref.giro);
+    /* Con el viaje unico esto mide que el ↻ haga UN pedido y no dos en
+       serie: la demora simulada es de 1.500 ms, asi que dos viajes no entran
+       en el tope. Hasta el 27/9/2026 el stub no conocia `action=lote` y el
+       front terminaba haciendo los dos — 3.136 ms de rojo que no eran del ERP. */
+    chk('el ↻ gira lo que tarda UN viaje, no dos en serie', ref.giro < 2700, ref.giro);
     chk('tendencia no se vuelve a pedir estando en Pedidos', cuenta('tendencia') === 0, ref);
 
     // ── el pintado de fondo espera a que no se toque la pantalla ──
