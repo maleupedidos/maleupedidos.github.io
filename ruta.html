@@ -1656,6 +1656,11 @@ var NP_DIA_NOMBRE=['Domingo','Lunes','Martes','Mi\u00E9rcoles','Jueves','Viernes
 var NP_DIA_CORTO=['DOM','LUN','MAR','MIE','JUE','VIE','SAB'];
 var NP_MES_CORTO=['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
 var npCart={}, npZona='Home', npPago='Efectivo', npFechaSel='', npSaving=false;
+/* El id de ESTE intento de guardar. Vive mientras el pedido no entro, asi
+   que si reintentas despues de que se corte, viaja el MISMO id y el backend
+   lo reconoce como repetido en vez de crear un pedido gemelo. Se limpia al
+   guardar bien: el pedido siguiente es otro intento. */
+var npCoid='';
 /* Las piezas de carne del AUTOPEDIDO (11/9/2026): ver npFetchPiezas. */
 var NP_PIEZAS=null, NP_PIEZAS_TS=0;
 var npPzSel={};   // { id de producto: [{id:'P-0007', kg:1.286}] }
@@ -10155,11 +10160,46 @@ function npGuardar(){
   btn.disabled=true;btn.textContent='Guardando...';
   rutShowLoader('Guardando pedido...');
 
-  fetch(RUT_APPS_SCRIPT_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(data),redirect:'follow'})
+  /* ══ EL POST TENIA EL LOADER Y NO TENIA RELOJ (28/9/2026) ══════════════
+
+     Un `fetch` sin `signal` NO SE CORTA NUNCA. Mientras Apps Script arranca de
+     cero —lo que pasa despues de cada publicacion del backend, y tarda hasta un
+     minuto— el loader se queda girando sin decir nada y sin salida. Le paso a
+     Tadeo cargando el pedido de Tobias Ambrosiano: el pedido no entro y no
+     quedo ni en `Log Pedidos` ni en `Log Errores`.
+
+     Tres cosas, y ninguna alcanza sola:
+
+     · A los 6 s el loader DICE que sigue vivo y por que tarda. Un loader mudo
+       a los 40 s es indistinguible de uno colgado, y lo unico que se puede
+       hacer con el es cerrar la app — que es perder el pedido.
+     · A los 90 s se corta. El numero no es redondo por gusto: el arranque en
+       frio medido es de ~60 s, asi que cortar antes tiraría pedidos que iban a
+       entrar bien.
+     · Y el `clientOrderId`, que es lo que hace que cortar sea SEGURO. Sin el,
+       ofrecer "reintenta" seria ofrecer duplicar el pedido, porque el que se
+       corto pudo haber entrado igual. */
+  if(!npCoid)npCoid='np-'+Date.now()+'-'+Math.random().toString(36).slice(2,8);
+  data.clientOrderId=npCoid;
+
+  var _npCtrl=(typeof AbortController!=='undefined')?new AbortController():null;
+  var _npAvisa=setTimeout(function(){
+    rutShowLoader('Sigue guardando\u2026 el servidor tarda en despertar. No cierres.');
+  },6000);
+  var _npCorta=setTimeout(function(){ if(_npCtrl)_npCtrl.abort(); },90000);
+  var _npFin=function(){ clearTimeout(_npAvisa); clearTimeout(_npCorta);
+    /* El aviso de los 6 s subio el contador del loader una segunda vez. */
+    rutHideLoader(true); };
+
+  var _npOpts={method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(data),redirect:'follow'};
+  if(_npCtrl)_npOpts.signal=_npCtrl.signal;
+  fetch(RUT_APPS_SCRIPT_URL,_npOpts)
     .then(function(r){return r.json().catch(function(){return{ok:false,error:'JSON invalido'}})})
     .then(function(res){
       if(!res||!res.ok){throw new Error((res&&res.error)||'Backend respondio ok=false')}
-      rutHideLoader(true);
+      _npFin();
+      /* Entro: el proximo pedido es otro intento y lleva id nuevo. */
+      npCoid='';
       // Stash el resumen ANTES de npReset() (que limpia el cart). Permite que el
       // botón "📋 Copiar resumen" siga funcionando después de guardar.
       _npLastResumen=npResumenTextoWA();
@@ -10196,9 +10236,18 @@ function npGuardar(){
       _npSaltoT=setTimeout(function(){ npListo(true); },6000);
     })
     .catch(function(err){
-      rutHideLoader(true);
+      _npFin();
       console.error('npGuardar fail',err);
-      showToast('Error al guardar: '+(err&&err.message||'red')+' - reintentar');
+      /* El pedido NO se perdio: el carrito y el formulario siguen como estaban
+         —`npReset()` corre solo al guardar bien—, asi que alcanza con volver a
+         tocar GUARDAR. Y es seguro: va el mismo `clientOrderId`, con lo cual si
+         el que se corto igual habia entrado, el backend contesta "repetido" en
+         vez de crear un gemelo. Decirlo importa tanto como que sea cierto: sin
+         esta linea uno no reintenta por miedo a duplicar. */
+      var _corto=(err&&(err.name==='AbortError'||/abort/i.test(String(err.message||''))));
+      showToast(_corto
+        ? 'El servidor no contest\u00f3 en 90s. Toc\u00e1 GUARDAR otra vez: no se duplica.'
+        : 'No se pudo guardar ('+(err&&err.message||'red')+'). Toc\u00e1 GUARDAR otra vez: no se duplica.');
       btn.textContent='GUARDAR PEDIDO';btn.disabled=false;npSaving=false;
     });
 }
