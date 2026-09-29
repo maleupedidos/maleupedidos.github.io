@@ -245,10 +245,15 @@ if [ -n "${CF_ACCESS_CLIENT_ID:-}" ] && [ -n "${CF_ACCESS_CLIENT_SECRET:-}" ]; t
   sleep 60
   node _tools/verificar.js --vivo | sed 's/^/   /' || true
 else
-  echo "   ${YEL}Para verificar el ERP publicado desde la terminal falta un service token${RST}"
-  echo "   de Cloudflare Access (se crea una vez):"
-  echo "     Zero Trust → Access → Service Auth → Create Service Token"
-  echo "     y agregarlo a la politica de la app de app.maleu.com.ar"
-  echo "   Despues:  export CF_ACCESS_CLIENT_ID=…  CF_ACCESS_CLIENT_SECRET=…"
-  echo "   Mientras tanto: abri app.maleu.com.ar/app.html y mira la consola."
+  echo "   ${YEL}El ERP publicado no se puede leer por app.maleu.com.ar: pide login.${RST}"
+  echo "   Pero el repo es publico, asi que se verifica sin ninguna credencial:"
+  echo ""
+  echo "     L=\$(tr -d '\\r' < app.html | sha256sum | cut -c1-16)"
+  echo "     R=\$(curl -s https://raw.githubusercontent.com/maleupedidos/maleupedidos.github.io/main/app.html | sha256sum | cut -c1-16)"
+  echo "     [ \"\$L\" = \"\$R\" ] && echo COINCIDE || echo NO-coincide"
+  echo ""
+  echo "   El 'tr -d' no es opcional: la copia local es CRLF y git guarda LF."
+  echo "   Sin eso los hashes difieren y parece un deploy fallado."
+  echo "   Y que el CDN lo entregue se confirma aparte, con un archivo que NO"
+  echo "   esta protegido:  curl -s https://app.maleu.com.ar/sw-panel.js"
 fi
