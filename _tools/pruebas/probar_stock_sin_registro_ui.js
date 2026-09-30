@@ -80,6 +80,53 @@ const LEER = `(function(){
     const v3 = await evaluar(cli, LEER);
     chk('los kilos van con coma decimal', v3.txt.indexOf('14,256') >= 0, v3.txt.slice(0, 200));
 
+    /* ── 2 bis. LO QUE HAY QUE HACER, SEPARADO DE LO QUE YA PASO (30/9/2026) ──
+       Tadeo abrio la tab y vio 29 renglones rojos juntos: "que es esta
+       desprolijidad". El largo no era el problema. La lista mezclaba 8
+       productos que hay que CONTAR con 21 movimientos viejos que solo se pueden
+       SABER, y un aviso donde no se distingue una cosa de la otra se ignora
+       entero — que es lo que estaba pasando. */
+    console.log('\n== Lo que hay que hacer, separado de lo que ya paso ==');
+    const SEP = `(function(){
+      var c=document.getElementById('sKpi').querySelector('.st-sinreg');
+      if(!c)return {hay:false};
+      var d=c.querySelector('details.st-sinreg-h');
+      var t=c.querySelector('.st-sinreg-t');
+      var total=c.querySelectorAll('.st-sinreg-l').length;
+      var dentro=d?d.querySelectorAll('.st-sinreg-l').length:0;
+      return {hay:true, titulo:t?(t.innerText||''):'', plegable:!!d,
+              abiertoDeEntrada:d?d.hasAttribute('open'):null,
+              resumen:d?(d.querySelector('summary').innerText||''):'',
+              arriba:total-dentro, dentro:dentro};
+    })()`;
+    await evaluar(cli, `D.stockSinReg={ok:true,total:3,
+      cola:[{a:'F',n:'Franui Leche',delta:-24,kardex:30,hoja:54,f:'25/09/2026'}],
+      saltos:[{a:'PPM',n:'Pack Muzzarella x2',delta:15,desde:16,hasta:31,f:'25/09/2026 19:32'},
+              {a:'F',n:'Franui Leche',delta:6,desde:0,hasta:6,f:'18/09/2026 10:00'}]}; rStock(); 1`);
+    await pausa(300);
+    const s1 = await evaluar(cli, SEP);
+    /* El titulo tiene que hablar de LA TAREA (1 producto para contar) y no del
+       total de renglones (3), que era lo que decia antes. */
+    chk('el titulo cuenta los que hay que contar, no los renglones',
+        /Un producto tiene el stock mal/.test(s1.titulo) && s1.titulo.indexOf('3') < 0, s1);
+    chk('lo viejo queda plegado aparte', s1.plegable === true, s1);
+    chk('y cerrado de entrada, para no tapar la tarea', s1.abiertoDeEntrada === false, s1);
+    chk('el resumen dice cuantos son y de cuando',
+        /2 movimientos viejos/.test(s1.resumen) && /18\/09/.test(s1.resumen) && /25\/09/.test(s1.resumen), s1);
+    chk('el producto para contar queda ARRIBA, fuera de lo plegado', s1.arriba === 1, s1);
+    chk('y los dos viejos adentro', s1.dentro === 2, s1);
+
+    /* Si el stock de hoy cuadra y solo hay historia, no hay ninguna tarea que
+       tapar: se muestra abierto y sin alarma. */
+    await evaluar(cli, `D.stockSinReg={ok:true,total:2,cola:[],
+      saltos:[{a:'PPM',n:'Pack Muzzarella x2',delta:15,desde:16,hasta:31,f:'25/09/2026 19:32'},
+              {a:'F',n:'Franui Leche',delta:6,desde:0,hasta:6,f:'18/09/2026 10:00'}]}; rStock(); 1`);
+    await pausa(300);
+    const s2 = await evaluar(cli, SEP);
+    chk('sin nada para contar, lo viejo NO se pliega', s2.hay === true && s2.plegable === false, s2);
+    chk('y avisa que el stock de hoy cuadra',
+        /cuadra/i.test((await evaluar(cli, LEER)).txt), s2);
+
     /* ── 3. CON LA HOJA SANA, SILENCIO ── */
     console.log('\n== Sin descuadres ==');
     await evaluar(cli, `D.stockSinReg={ok:true,total:0,saltos:[],cola:[]}; rStock(); 1`);
