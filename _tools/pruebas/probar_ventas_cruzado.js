@@ -175,7 +175,10 @@ function sbCfg() {
     const g = mG[clave(v)];
     if (!g) { faltantes++; return; }
     const dif = CAMPOS.filter((c) => String(g[c] === undefined ? '' : g[c]) !== String(v[c] === undefined ? '' : v[c]));
-    if (dif.length) distintas.push({ venta: clave(v), campos: dif.slice(0, 6),
+    /* `campos` va COMPLETO —el recuento por campo de mas abajo lo necesita— y
+       se recorta solo al mostrarlo. Cortarlo aca hacia que un campo roto a
+       partir del septimo no apareciera nunca en el conteo. */
+    if (dif.length) distintas.push({ venta: clave(v), campos: dif,
       ejemplo: dif[0] ? { campo: dif[0], appsScript: g[dif[0]], supabase: v[dif[0]] } : null });
   });
   /* UN CONTROL NO PUEDE DECIR QUE COINCIDE SOBRE LO QUE NO MIRO.
@@ -194,7 +197,26 @@ function sbCfg() {
     chk('toda venta del atajo existe en Apps Script (' + vS.length + ' miradas)',
       faltantes === 0, { sinPareja: faltantes });
     chk('y ninguna difiere campo por campo', distintas.length === 0,
-      { cuantas: distintas.length, primeras: distintas.slice(0, 3) });
+      { cuantas: distintas.length, primeras: distintas.slice(0, 2).map(function(d){return {venta:d.venta,campos:d.campos.slice(0,6)};}) });
+    /* EN QUE CAMPO difieren, y en cuantas ventas cada uno. "1295 distintas" no
+       dice donde mirar; "estado: 1295 · sem: 412 · $: 3" apunta al mapeo que
+       esta mal y separa lo sistematico (todas) de lo puntual (unas pocas). */
+    if (distintas.length) {
+      const porCampo = {}, muestra = {};
+      distintas.forEach((d) => d.campos.forEach((c) => {
+        porCampo[c] = (porCampo[c] || 0) + 1;
+        if (!muestra[c]) { const g = mG[d.venta], v = vS.find((x) => clave(x) === d.venta);
+          muestra[c] = { appsScript: g && g[c], supabase: v && v[c] }; }
+      }));
+      console.log('\n  en que campo difieren (de ' + vS.length + ' ventas):');
+      Object.keys(porCampo).sort((a, b) => porCampo[b] - porCampo[a]).forEach((c) => {
+        const m = muestra[c] || {};
+        console.log('    ' + c.padEnd(7) + String(porCampo[c]).padStart(5) +
+          '   ej: ' + JSON.stringify(m.appsScript) + ' vs ' + JSON.stringify(m.supabase));
+      });
+      console.log('\n  Un campo que difiere en TODAS es un mapeo mal traducido.');
+      console.log('  Uno que difiere en pocas es un dato raro en esas filas.');
+    }
   }
 
   console.log('\n' + ok + ' ok, ' + mal + ' mal');

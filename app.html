@@ -8009,6 +8009,11 @@ a.plan-btn-metas{display:inline-flex;align-items:center;text-decoration:none}
     #p-ajustes .aj-cruce td.aj-nomirado{text-align:right;color:#9E9E9E;font-style:italic;font-weight:400}
     #p-ajustes .mal{color:#B71C1C}
     #p-ajustes .aj-alerta{margin-top:12px;padding:11px 13px;border-radius:10px;background:#FFF3E0;border:1.5px solid #FFB74D;font-size:12.5px;line-height:1.5;color:#6D4C00}
+    /* El error crudo de la base. Va en monoespaciada y se puede seleccionar
+       para copiarlo tal cual: el que lo lee no lo interpreta, lo reenvia. */
+    #p-ajustes .aj-rep-err{margin-top:8px;padding:8px 10px;border-radius:8px;background:#FFF;border:1px solid #F0C98A;
+      font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11.5px;line-height:1.45;
+      color:#8B3A0E;word-break:break-word;user-select:text;-webkit-user-select:text}
     #p-ajustes .aj-actions{display:flex;gap:6px}
     #p-ajustes .aj-add{margin:4px 0 14px}
     #p-ajustes .aj-note{font-size:11px;color:var(--bl);background:var(--ol);border:1px solid var(--cd);border-radius:8px;padding:9px 11px;margin-bottom:12px;line-height:1.45}
@@ -8257,11 +8262,40 @@ function ajReplicaPintar(d){
     var ms=/^\d+$/.test(String(v))?Number(v):Date.parse(v);
     return isNaN(ms)?'todavía no':_hace(ms);
   }
-  var h='Última copia — pedidos: <b>'+ajEsc(cuando(rep.pedidos))+'</b> · stock: <b>'+ajEsc(cuando(rep.inventario))+
-        '</b> · clientes: <b>'+ajEsc(cuando(rep.crm))+'</b> · caja: <b>'+ajEsc(cuando(rep.caja))+'</b>';
+  /* Compras entró a la lista el 29/9/2026: es un dominio que se copia y que
+     puede fallar, y no estaba. Un dominio que falla sin figurar es el mismo
+     agujero que esto viene a tapar, un renglón más abajo. */
+  var DOM=[['pedidos',rep.pedidos],['stock',rep.inventario],['clientes',rep.crm],
+           ['caja',rep.caja],['compras',rep.compras]];
+  var h='Última copia — '+DOM.map(function(x){
+    return ajEsc(x[0])+': <b'+(x[1]&&x[1].fallando?' class="mal"':'')+'>'+ajEsc(cuando(x[1]))+'</b>';
+  }).join(' · ');
   var cms=cru.lastAt?Date.parse(cru.lastAt):NaN;
   h+='<br>Último control: <b>'+(isNaN(cms)?'todavía no':ajEsc(_hace(cms)))+'</b>';
   if(cru.ultimo&&cru.ultimo.ok===false) h+=' — <b class="mal">encontró diferencias</b>';
+  /* ── EL MOTIVO, EN PANTALLA (29/9/2026) ──────────────────────────────────
+     Hasta hoy esto mostraba "pedidos: hace 2 horas" y se quedaba callado. Es
+     exactamente lo que se vio la noche en que la réplica estuvo dos horas sin
+     subir un solo pedido: el número era viejo, pero nada decía que estuviera
+     FALLANDO, y el motivo sólo aparecía ejecutando la función a mano en el
+     editor de Apps Script. Ahora el error llega crudo hasta acá. */
+  var rotos=DOM.filter(function(x){return x[1]&&x[1].fallando;});
+  if(rotos.length){
+    h+='<div class="aj-alerta"><b>⚠️ La copia a la base nueva está fallando</b> — '+
+       ajEsc(rotos.map(function(x){return x[0];}).join(', '))+'.';
+    rotos.forEach(function(x){
+      var ems=Number(x[1].lastErrorAt);
+      /* El nombre del dominio sólo se repite adentro del recuadro cuando hay
+         más de uno roto. Con uno solo ya lo dice el renglón de arriba, y
+         repetirlo hace leer dos veces lo mismo antes de llegar al error. */
+      h+='<div class="aj-rep-err">'+(rotos.length>1?'<b>'+ajEsc(x[0])+'</b> · ':'')+
+         (isNaN(ems)||!ems?'':'falló '+ajEsc(_hace(ems)))+'<br>'+
+         ajEsc(x[1].lastError||'no quedó guardado el motivo')+'</div>';
+    });
+    h+='<div class="aj-nota">Eso es el error tal cual lo devolvió la base. '+
+       'Copialo y pasáselo a la sesión Backend: con ese texto alcanza para saber qué la frenó. '+
+       '<b>La planilla no corre riesgo</b> — la copia lee, no escribe.</div></div>';
+  }
   est.innerHTML=h;
 }
 function ajAvisosPrender(){
@@ -11993,7 +12027,7 @@ function _leerVersion(app){
    "El HTML no sabe que version es" dejo de ser cierto: el build le escribe
    adentro el CACHE_NAME de sw-panel.js, el mismo que deploy.sh obliga a subir en
    cada cambio. Si lo publicado dice otra cosa, esta pagina es vieja. Punto. */
-var _APP_CN_PAGINA='maleu-panel-v468';
+var _APP_CN_PAGINA='maleu-panel-v469';
 
 /* Devuelve [{k,v}] si lo publicado no es lo que esta pagina corre. */
 function _chequearVersiones(){
@@ -13825,6 +13859,179 @@ function _sbPedidosAhora(limite){
       return _pedir(cols.replace(',warehouse',''));
     })
       .then(function(filas){ return Array.isArray(filas)?filas.map(_sbAPedido):null; });
+  }).catch(function(){ return null; });
+}
+
+/* ══ LAS VENTAS, POR EL ATAJO (29/9/2026) ═══════════════════════════
+
+   `action=ventas` alimenta INICIO —la tab en la que la app abre siempre desde
+   el 28/9— y la tab Ventas. Medida el 11/9/2026: **414 KB y 6,9 s** contra un
+   piso de Apps Script de 2,7 s. No es la plataforma: lee las SEIS hojas de
+   canal enteras con `getDataRange()` y arma ~1.320 objetos.
+
+   Las 108 columnas que esa accion lee ya estan replicadas (migraciones 019,
+   020 y 021, medido con `estancias/_tools/contrato_ventas.js`). Esto arma la
+   misma lista desde `sales_order`.
+
+   ── LO QUE HAY QUE MIRAR ACA, Y NO ES EL RENDIMIENTO ──
+   Este mapeo es una SEGUNDA implementacion de reglas que ya viven en
+   `_doGetVentas`, y eso en este ERP siempre salio caro. Se acepta por una sola
+   razon: son los numeros que Tadeo mira todos los dias, asi que no se enciende
+   por confianza sino por comparacion. `probar_ventas_cruzado.js` trae las dos
+   listas —la de Apps Script y esta— y las compara venta por venta contra
+   produccion. Mientras no coincidan, esto no se llama desde ningun lado.
+
+   Las reglas que NO son obvias y por las que este mapeo existe:
+   · En Red el `$` de una venta es `net_amount` ('A Pagar'), no lo facturado:
+     el cliente le paga al vendedor y a Maleu le entra el neto.
+   · En Red la venta se reconoce cuando MALEU LE DA LA BOLSA al vendedor
+     (`handoff_state`), no cuando el vendedor le entrega a su cliente — eso
+     depende de que un tercero marque una casilla. El 20/9/2026 mirar la
+     columna equivocada dejo $201.939 afuera de la semana 38.
+   · Y el cobro de Red es la RENDICION (`settlement_*`), que es otro momento y
+     otra via que el pago del cliente. Sus propinas van 100% al vendedor, asi
+     que no suman al cobrado de Maleu. */
+/* ── LA FECHA SE PASA A HORA DE ARGENTINA ANTES DE CORTARLA (29/9/2026) ────
+   La réplica guarda los timestamps con su huso: `2026-08-14T21:00:00-03:00`.
+   **PostgREST los devuelve normalizados a UTC**, o sea `2026-08-15T00:00:00Z`.
+   Cortar ese texto por posición —que es lo que se hacía— daba el 15 para una
+   entrega del 14: toda entrega posterior a las 21:00 caía al día siguiente.
+
+   Medido el 29/9 contra `action=ventas`, que es el que manda: **181 de 1.293
+   ventas con la fecha corrida un día**, y 114 con la de cobro. Eso mueve
+   ventas de mes y de semana, que es de lo que viven Inicio y el Plan.
+
+   Argentina es UTC−3 todo el año (no mueve la hora desde 2009), así que
+   restar tres horas y leer en UTC da la fecha y la hora locales. */
+function _sbVenta$(iso){
+  var p=_sbArgPartes(iso);
+  return p?p.f:'';
+}
+/* Va DESPUES de `_sbVenta$` a propósito: `probar_ventas_cruzado.js` saca de
+   `app.html` el bloque que arranca en esa función, así que lo que se declare
+   antes le queda afuera y el test revienta con un ReferenceError que parece un
+   bug del mapeo y no lo es. */
+var SB_MS_ARG = 3 * 3600 * 1000;
+function _sbArgPartes(iso){
+  var s=String(iso||''); if(!s)return null;
+  /* Una fecha PELADA (sin hora) ya viene en el día que corresponde: moverla
+     la correría para atrás. Sólo se convierte lo que trae hora. */
+  if(s.length<=10)return {f:s.slice(8,10)+'/'+s.slice(5,7)+'/'+s.slice(0,4),h:''};
+  var ms=Date.parse(s); if(isNaN(ms))return null;
+  var d=new Date(ms-SB_MS_ARG), p=function(n){return ('0'+n).slice(-2);};
+  return {f:p(d.getUTCDate())+'/'+p(d.getUTCMonth()+1)+'/'+d.getUTCFullYear(),
+          h:p(d.getUTCHours())+':'+p(d.getUTCMinutes())};
+}
+/* Una fila de `sales_order` con la forma que devuelve `action=ventas`. */
+function _sbAVenta(o){
+  var canal=String(o.channel||'').trim();
+  var vd=(canal==='Home'||canal==='Pilar');
+  var esRed=(canal==='Red');
+  var zona=vd?canal:String(o.zone||'').trim();
+  /* La fecha de la venta es la de ENTREGA, con fallback a la del pedido para
+     el pedido recien entrado y sin agendar. Misma regla que `_fechaDeVenta`. */
+  var fIso=String(o.delivered_at||o.ordered_at||'');
+  var neto=Number(o.net_amount)||0;
+  var v={
+    canal: vd?'Venta Directa':canal,
+    zona: zona,
+    fecha: _sbVenta$(fIso),
+    mes: String(o.sale_month||'').trim(),
+    sem: Number(o.sale_week)||0,
+    cliente: (canal==='Clubes'&&zona)
+      ? (String(o.customer_name||'').trim()+' ('+zona+')')
+      : String(o.customer_name||'').trim(),
+    estado: String(o.order_state||'').trim(),
+    $: neto,
+    costo: Number(o.cost_amount)||0,
+    margen: Number(o.margin_amount)||0,
+    h: vd?canal:canal,
+    n: String(o.order_number||'').trim(),
+    tel: String(o.customer_key||'').trim(),
+    dir: String(o.delivery_address||'').trim()
+  };
+  if(o.neighborhood)v.barrio=String(o.neighborhood).trim();
+  if(o.sub_neighborhood)v.subBarrio=String(o.sub_neighborhood).trim();
+  /* La hora, por el mismo camino que la fecha: cortarla del texto en UTC daba
+     '03:00' en TODAS las ventas de medianoche —que son las 00:00 de acá con el
+     huso puesto— y las marcaba como si tuvieran hora de entrega cargada. */
+  var hePart=_sbArgPartes(fIso), he=hePart?hePart.h:'';
+  if(he&&he!=='00:00')v.he=he;
+  if(o.collection_account)v.cta=String(o.collection_account).trim();
+  if(esRed){
+    /* La rendicion del vendedor, que es lo que le entra a Maleu. */
+    var pagado=(String(o.settlement_state||'').trim()==='Pagado');
+    var forma=String(o.settlement_method||'').trim();
+    v.fp=forma||String(o.payment_method||'').trim();
+    v.ep=pagado?'Cobrado':'No Cobrado';
+    v.fCob=pagado?_sbVenta$(String(o.collected_at||'')):'';
+    v.ef=0;v.tr=0;v.pEf=0;v.pTr=0;
+    if(pagado){
+      /* 'Mixto' no guarda el reparto por pedido —eso vive en Pagos Red Liq,
+         por liquidacion—, asi que va entero en `mx` y la pantalla lo cuenta
+         como cobrado sin partirlo. */
+      if(forma==='Efectivo')v.ef=neto;
+      else if(forma==='Mixto')v.mx=neto;
+      else v.tr=neto;
+    }
+  }else{
+    v.fp=String(o.payment_method||'').trim();
+    v.ep=String(o.payment_state||'').trim();
+    v.fCob=_sbVenta$(String(o.collected_at||''));
+    v.ef=Number(o.cash_amount)||0;
+    v.tr=Number(o.transfer_amount)||0;
+    v.pEf=Number(o.tip_cash)||0;
+    v.pTr=Number(o.tip_transfer)||0;
+  }
+  return v;
+}
+/* Que fila es una VENTA, que no es lo mismo que que fila es un pedido. */
+function _sbEsVenta(o){
+  var canal=String(o.channel||'').trim();
+  if(o.deleted_at)return false;
+  if(canal==='Red'){
+    var est=String(o.order_state||'').trim();
+    if(est==='Cancelado')return false;
+    /* La bolsa ya salio hacia el vendedor. Se mantiene el estado de entrega
+       como respaldo para los pedidos viejos que nunca recibieron la BE. */
+    if(String(o.handoff_state||'').trim()!=='Entregado'&&est!=='Entregado')return false;
+    return !!(Number(o.net_amount)||0);
+  }
+  if(canal==='B2B'||canal==='Catering')return !!(Number(o.net_amount)||0);
+  /* Home, Pilar y Clubes: solo lo entregado, igual que `readOperativa`. */
+  if(String(o.order_state||'').trim()!=='Entregado')return false;
+  return !!(Number(o.net_amount)||0);
+}
+var _SB_VENTA_COLS='channel,order_number,customer_name,customer_key,order_state,'
+  +'payment_state,payment_method,ordered_at,delivered_at,collected_at,'
+  +'billed_amount,net_amount,cash_amount,transfer_amount,tip_cash,tip_transfer,'
+  +'cost_amount,margin_amount,neighborhood,sub_neighborhood,delivery_address,'
+  +'zone,sale_month,sale_week,collection_account,'
+  +'handoff_state,settlement_state,settlement_method,deleted_at';
+function _sbVentas(){
+  return _sbPermiso(true).then(function(sb){
+    if(!sb)return null;
+    /* PostgREST corta en 1000 filas SIN avisar, y hoy hay ~1.320 ventas: sin
+       paginar faltarian las mas viejas y el total del ano saldria mas chico
+       sin que nada falle. */
+    var out=[],paso=1000;
+    var traer=function(off){
+      return fetch(sb.url+'/rest/v1/sales_order?select='+_SB_VENTA_COLS
+          +'&order=order_key&limit='+paso+'&offset='+off,
+        {headers:{apikey:sb.key,Authorization:'Bearer '+sb.token}})
+        .then(function(r){ if(!r.ok)throw new Error('sb '+r.status); return r.json(); })
+        .then(function(filas){
+          if(!Array.isArray(filas))throw new Error('sb formato');
+          for(var i=0;i<filas.length;i++){
+            if(_sbEsVenta(filas[i]))out.push(_sbAVenta(filas[i]));
+          }
+          /* Tope de 20 paginas: si algo devolviera siempre 1000 filas, esto
+             se colgaria en un bucle infinito en vez de fallar. */
+          if(filas.length<paso||off>20000)return out;
+          return traer(off+paso);
+        });
+    };
+    return traer(0);
   }).catch(function(){ return null; });
 }
 
