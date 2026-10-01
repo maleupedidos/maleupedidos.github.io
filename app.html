@@ -12134,7 +12134,7 @@ function _leerVersion(app){
    "El HTML no sabe que version es" dejo de ser cierto: el build le escribe
    adentro el CACHE_NAME de sw-panel.js, el mismo que deploy.sh obliga a subir en
    cada cambio. Si lo publicado dice otra cosa, esta pagina es vieja. Punto. */
-var _APP_CN_PAGINA='maleu-panel-v483';
+var _APP_CN_PAGINA='maleu-panel-v484';
 
 /* Devuelve [{k,v}] si lo publicado no es lo que esta pagina corre. */
 function _chequearVersiones(){
@@ -43607,7 +43607,7 @@ function loadDashboard() {
     /* Llegó dato fresco del servidor: si había un envío sin confirmar, ya no
        hace falta adivinar. Es lo que hace del ↻ la salida del candado. NO se
        toca `redEnvioEnVuelo`: ese es de un POST que todavía está vivo. */
-    redEnvioSinVerificar = '';
+    redEnvioSinVerificar.clear();
     renderDashboard(d);
     var now = Date.now();
     try { localStorage.setItem('maleu_red_dash_' + session.nombre, JSON.stringify({ ts: now, data: d })); } catch(e) {}
@@ -44297,7 +44297,11 @@ function _rutaUpdate(updates) {
   }).then(r => r.json()).then(d => {
     if (d.ok) return;
     if (d.montoDistinto) { _redMontoDistinto(d, deshacer, () => { updateMainBadges(); renderRuta(); }); return; }
-    redToast('Error: ' + (d.err || 'no guardó'));
+    /* Un rechazo CONFIRMADO (ok:false: LockTimeout, sin permiso, pedido no
+       encontrado...) quiere decir que no se escribio nada: la pantalla vuelve
+       atras. El catch de red NO, porque ahi no sabemos si llego (1/10/2026). */
+    deshacer(); updateMainBadges(); renderRuta();
+    redToast('No se guardó: ' + _redErrTxt(d));
   }).catch(() => redToast('Sin conexión — reintentará al sync'));
   updateMainBadges();
   renderRuta();
@@ -44394,20 +44398,23 @@ function _envioSelloTxt(s) {
 
    Con una sola variable el candado se soltaba al ARRANCAR la verificación en
    vez de al terminarla, que es justo cuando menos se sabe. */
-let redEnvioEnVuelo = '';
-let redEnvioSinVerificar = '';
+/* CONJUNTOS, no una variable (1/10/2026, Codex sobre 547be09): con una sola,
+   anular A y despues B pisaba el numero de A, y el finally de B lo vaciaba —
+   A quedaba cobrable con su envio todavia en vuelo. Cada POST agrega y saca
+   SOLO su pedido. */
+const redEnvioEnVuelo = new Set();
+const redEnvioSinVerificar = new Set();
 
 /* ¿El envío de ESTE pedido está en un estado en el que cobrar miente? */
 function _envioTrabado(p) {
   if (!p) return false;
   const n = _normN(p.n);
-  return (!!redEnvioEnVuelo && redEnvioEnVuelo === n) ||
-         (!!redEnvioSinVerificar && redEnvioSinVerificar === n);
+  return redEnvioEnVuelo.has(n) || redEnvioSinVerificar.has(n);
 }
 
 /* El motivo, para decírselo en vez de dejar un botón que no responde. */
 function _envioTrabadoMsg(p) {
-  return (!!redEnvioSinVerificar && redEnvioSinVerificar === _normN(p && p.n))
+  return redEnvioSinVerificar.has(_normN(p && p.n))
     ? 'No pude confirmar el envío — tocá 🔄 Actualizado antes de cobrar'
     : 'Esperá: estoy guardando el envío';
 }
@@ -44451,7 +44458,8 @@ function rutaEnvioAnular(anular) {
      el total CON envío ($23.000 en vez de $20.000) y recién después la
      anulación se rechaza por "ya cobrado": el vendedor le cobró al cliente lo
      que la pantalla le dijo, y la rendición le va a dar de menos. */
-  redEnvioEnVuelo = _normN(p.n);
+  const nEnv = _normN(p.n);
+  redEnvioEnVuelo.add(nEnv);
   renderRuta();
 
   fetch(APPS_SCRIPT_URL, {
@@ -44476,15 +44484,15 @@ function rutaEnvioAnular(anular) {
        hasta que llegue un dashboard fresco: soltarlo al arrancar la
        verificación sería habilitar Cobrado en el único momento en que no
        sabemos cuánto hay que cobrar. */
-    redEnvioSinVerificar = _normN(p.n);
+    redEnvioSinVerificar.add(nEnv);
     redToast('No sé si se guardó — lo estoy verificando');
     const r = loadDashboard();
     return (r && typeof r.then === 'function' ? r : Promise.resolve(false))
       .then(ok => {
-        if (ok) redEnvioSinVerificar = '';
+        if (ok) redEnvioSinVerificar.delete(nEnv);
         else redToast('No pude verificar — tocá 🔄 Actualizado antes de cobrar');
       }, () => redToast('No pude verificar — tocá 🔄 Actualizado antes de cobrar'));
-  }).finally(() => { redEnvioEnVuelo = ''; renderRuta(); });
+  }).finally(() => { redEnvioEnVuelo.delete(nEnv); renderRuta(); });
 }
 
 function rutaSetFP(v) {
@@ -45691,6 +45699,13 @@ function _redMontoDistinto(d, deshacer, repintar) {
   loadDashboard();
 }
 
+/** El motivo de un ok:false, en palabras. LockTimeout es el backend ocupado,
+ *  no un error del vendedor: se le dice que reintente. */
+function _redErrTxt(d) {
+  if (d && (d.error === 'LockTimeout' || d.retry)) return 'el sistema estaba ocupado, tocá de nuevo';
+  return (d && (d.err || d.error)) || 'error';
+}
+
 function updatePedido(updates) {
   if (!currentPedido || !session) return;
   const p = currentPedido;
@@ -45713,7 +45728,9 @@ function updatePedido(updates) {
         _redMontoDistinto(d, deshacer, () => { if (currentPedido === p) showDetalle(p.n); });
         return;
       }
-      redToast('Error: ' + (d.err || 'no se pudo guardar'));
+      // Rechazo confirmado: no se escribio nada, la pantalla vuelve atras.
+      deshacer(); if (currentPedido === p) showDetalle(p.n);
+      redToast('No se guardó: ' + _redErrTxt(d));
     })
     .catch(() => redToast('Sin conexión — guardaré cuando vuelva'));
 }
@@ -46193,7 +46210,7 @@ try {
   showScreen('login');
 }
 
-try{window["APPS_SCRIPT_URL"]=APPS_SCRIPT_URL;}catch(e){}try{window["WA_NUMBER"]=WA_NUMBER;}catch(e){}try{window["PRODUCTOS"]=PRODUCTOS;}catch(e){}try{window["session"]=session;}catch(e){}try{window["comPct"]=comPct;}catch(e){}try{window["comLbl"]=comLbl;}catch(e){}try{window["cart"]=cart;}catch(e){}try{window["pago"]=pago;}catch(e){}try{window["ENVIO_RED"]=ENVIO_RED;}catch(e){}try{window["cobrarEnvio"]=cobrarEnvio;}catch(e){}try{window["$id"]=$id;}catch(e){}try{window["onEnvioToggle"]=onEnvioToggle;}catch(e){}try{window["ars"]=ars;}catch(e){}try{window["showScreen"]=showScreen;}catch(e){}try{window["redToast"]=redToast;}catch(e){}try{window["doLogin"]=doLogin;}catch(e){}try{window["doLogout"]=doLogout;}catch(e){}try{window["enterDashboard"]=enterDashboard;}catch(e){}try{window["_resolverNombreCanonico"]=_resolverNombreCanonico;}catch(e){}try{window["_fetchDashboardRetry"]=_fetchDashboardRetry;}catch(e){}try{window["_redAviso"]=_redAviso;}catch(e){}try{window["loadDashboard"]=loadDashboard;}catch(e){}try{window["_refreshingPortal"]=_refreshingPortal;}catch(e){}try{window["refreshPortal"]=refreshPortal;}catch(e){}try{window["_renderLastSync"]=_renderLastSync;}catch(e){}try{window["lastDashboardData"]=lastDashboardData;}catch(e){}try{window["currentTab"]=currentTab;}catch(e){}try{window["currentMainTab"]=currentMainTab;}catch(e){}try{window["rutaIdx"]=rutaIdx;}catch(e){}try{window["_esPagado"]=_esPagado;}catch(e){}try{window["parseMonto"]=parseMonto;}catch(e){}try{window["rutaMixtoOpen"]=rutaMixtoOpen;}catch(e){}try{window["_avisarAlPanel"]=_avisarAlPanel;}catch(e){}try{window["setMainTab"]=setMainTab;}catch(e){}try{window["_bloqueMontos"]=_bloqueMontos;}catch(e){}try{window["renderDashboard"]=renderDashboard;}catch(e){}try{window["renderClientes"]=renderClientes;}catch(e){}try{window["_weekRowHTML"]=_weekRowHTML;}catch(e){}try{window["renderWeeksList"]=renderWeeksList;}catch(e){}try{window["toggleWeeks"]=toggleWeeks;}catch(e){}try{window["renderMesesAnteriores"]=renderMesesAnteriores;}catch(e){}try{window["togglePrevMonths"]=togglePrevMonths;}catch(e){}try{window["filtrarClientes"]=filtrarClientes;}catch(e){}try{window["updateMainBadges"]=updateMainBadges;}catch(e){}try{window["_rutaAbierto"]=_rutaAbierto;}catch(e){}try{window["_rutaList"]=_rutaList;}catch(e){}try{window["_rutaTotalViernes"]=_rutaTotalViernes;}catch(e){}try{window["renderRuta"]=renderRuta;}catch(e){}try{window["rutaGo"]=rutaGo;}catch(e){}try{window["rutaJumpNext"]=rutaJumpNext;}catch(e){}try{window["_rutaCurrent"]=_rutaCurrent;}catch(e){}try{window["_rutaUpdate"]=_rutaUpdate;}catch(e){}try{window["redTituloReparto"]=redTituloReparto;}catch(e){}try{window["renderEscala"]=renderEscala;}catch(e){}try{window["_envioMontoSello"]=_envioMontoSello;}catch(e){}try{window["_envioSelloTxt"]=_envioSelloTxt;}catch(e){}try{window["redEnvioEnVuelo"]=redEnvioEnVuelo;}catch(e){}try{window["redEnvioSinVerificar"]=redEnvioSinVerificar;}catch(e){}try{window["_envioTrabado"]=_envioTrabado;}catch(e){}try{window["_envioTrabadoMsg"]=_envioTrabadoMsg;}catch(e){}try{window["rutaEnvioAnular"]=rutaEnvioAnular;}catch(e){}try{window["rutaSetFP"]=rutaSetFP;}catch(e){}try{window["rutaToggleCobrado"]=rutaToggleCobrado;}catch(e){}try{window["rutaToggleEntrega"]=rutaToggleEntrega;}catch(e){}try{window["rutaCancelar"]=rutaCancelar;}catch(e){}try{window["rutaCancelarCerrar"]=rutaCancelarCerrar;}catch(e){}try{window["rutaCancelarConfirmar"]=rutaCancelarConfirmar;}catch(e){}try{window["ABBR_TO_ID"]=ABBR_TO_ID;}catch(e){}try{window["editCart"]=editCart;}catch(e){}try{window["editOriginalTotal"]=editOriginalTotal;}catch(e){}try{window["editPedidoRef"]=editPedidoRef;}catch(e){}try{window["rutaEditar"]=rutaEditar;}catch(e){}try{window["rutaEditarRender"]=rutaEditarRender;}catch(e){}try{window["rutaEditarChangeQty"]=rutaEditarChangeQty;}catch(e){}try{window["rutaEditarTotal"]=rutaEditarTotal;}catch(e){}try{window["rutaEditarUpdateTotals"]=rutaEditarUpdateTotals;}catch(e){}try{window["rutaEditarCerrar"]=rutaEditarCerrar;}catch(e){}try{window["rutaEditarGuardar"]=rutaEditarGuardar;}catch(e){}try{window["showMaleuLoader"]=showMaleuLoader;}catch(e){}try{window["setLoaderText"]=setLoaderText;}catch(e){}try{window["hideMaleuLoader"]=hideMaleuLoader;}catch(e){}try{window["rutaAbrirCobroMixto"]=rutaAbrirCobroMixto;}catch(e){}try{window["rutaCerrarMixto"]=rutaCerrarMixto;}catch(e){}try{window["rutaMixtoActualizarSuma"]=rutaMixtoActualizarSuma;}catch(e){}try{window["rutaMixtoPendiente"]=rutaMixtoPendiente;}catch(e){}try{window["rutaConfirmarMixto"]=rutaConfirmarMixto;}catch(e){}try{window["rutaMixtoVolverAEditar"]=rutaMixtoVolverAEditar;}catch(e){}try{window["rutaMixtoElegirPropina"]=rutaMixtoElegirPropina;}catch(e){}try{window["_rutaCommitMixto"]=_rutaCommitMixto;}catch(e){}try{window["_isoWeekDates"]=_isoWeekDates;}catch(e){}try{window["_isoWeekNow"]=_isoWeekNow;}catch(e){}try{window["_pagosSemanas"]=_pagosSemanas;}catch(e){}try{window["_cobroCliente"]=_cobroCliente;}catch(e){}try{window["_splitPago"]=_splitPago;}catch(e){}try{window["renderCaja"]=renderCaja;}catch(e){}try{window["_liqCtx"]=_liqCtx;}catch(e){}try{window["_redCtaPint"]=_redCtaPint;}catch(e){}try{window["_parseMonto"]=_parseMonto;}catch(e){}try{window["_yaPagado"]=_yaPagado;}catch(e){}try{window["liqOpen"]=liqOpen;}catch(e){}try{window["_redCtasDigitales"]=_redCtasDigitales;}catch(e){}try{window["_redCtaDefault"]=_redCtaDefault;}catch(e){}try{window["_redCtaNombre"]=_redCtaNombre;}catch(e){}try{window["_redCtaDePago"]=_redCtaDePago;}catch(e){}try{window["_redPintarCtas"]=_redPintarCtas;}catch(e){}try{window["_redSetCta"]=_redSetCta;}catch(e){}try{window["_redFaltaCta"]=_redFaltaCta;}catch(e){}try{window["liqClose"]=liqClose;}catch(e){}try{window["liqUpdateSum"]=liqUpdateSum;}catch(e){}try{window["liqConfirm"]=liqConfirm;}catch(e){}try{window["renderPagos"]=renderPagos;}catch(e){}try{window["registrarPagoParcial"]=registrarPagoParcial;}catch(e){}try{window["showViernesTab"]=showViernesTab;}catch(e){}try{window["renderPedidosTab"]=renderPedidosTab;}catch(e){}try{window["currentPedido"]=currentPedido;}catch(e){}try{window["PROD_NAME_BY_ABBR"]=PROD_NAME_BY_ABBR;}catch(e){}try{window["_normN"]=_normN;}catch(e){}try{window["showDetalle"]=showDetalle;}catch(e){}try{window["callCliente"]=callCliente;}catch(e){}try{window["waCliente"]=waCliente;}catch(e){}try{window["savedInd"]=savedInd;}catch(e){}try{window["_redOptimista"]=_redOptimista;}catch(e){}try{window["_redMontoDistinto"]=_redMontoDistinto;}catch(e){}try{window["updatePedido"]=updatePedido;}catch(e){}try{window["_mapUpdatesToPedido"]=_mapUpdatesToPedido;}catch(e){}try{window["toggleEntrega"]=toggleEntrega;}catch(e){}try{window["toggleCobrado"]=toggleCobrado;}catch(e){}try{window["setFormaPago"]=setFormaPago;}catch(e){}try{window["savePropina"]=savePropina;}catch(e){}try{window["savePropinaMixto"]=savePropinaMixto;}catch(e){}try{window["ctrlMixtoActualizar"]=ctrlMixtoActualizar;}catch(e){}try{window["ctrlMixtoGuardar"]=ctrlMixtoGuardar;}catch(e){}try{window["setFormaMaleu"]=setFormaMaleu;}catch(e){}try{window["togglePagoMaleu"]=togglePagoMaleu;}catch(e){}try{window["showNuevoPedido"]=showNuevoPedido;}catch(e){}try{window["showDashboard"]=showDashboard;}catch(e){}try{window["renderProducts"]=renderProducts;}catch(e){}try{window["changeQty"]=changeQty;}catch(e){}try{window["updateCart"]=updateCart;}catch(e){}try{window["renderSummary"]=renderSummary;}catch(e){}try{window["setPago"]=setPago;}catch(e){}try{window["validateNuevo"]=validateNuevo;}catch(e){}try{window["enviar"]=enviar;}catch(e){}try{window["sendOrderWithRetry"]=sendOrderWithRetry;}catch(e){}try{window["_syncPreciosPortal"]=_syncPreciosPortal;}catch(e){}
+try{window["APPS_SCRIPT_URL"]=APPS_SCRIPT_URL;}catch(e){}try{window["WA_NUMBER"]=WA_NUMBER;}catch(e){}try{window["PRODUCTOS"]=PRODUCTOS;}catch(e){}try{window["session"]=session;}catch(e){}try{window["comPct"]=comPct;}catch(e){}try{window["comLbl"]=comLbl;}catch(e){}try{window["cart"]=cart;}catch(e){}try{window["pago"]=pago;}catch(e){}try{window["ENVIO_RED"]=ENVIO_RED;}catch(e){}try{window["cobrarEnvio"]=cobrarEnvio;}catch(e){}try{window["$id"]=$id;}catch(e){}try{window["onEnvioToggle"]=onEnvioToggle;}catch(e){}try{window["ars"]=ars;}catch(e){}try{window["showScreen"]=showScreen;}catch(e){}try{window["redToast"]=redToast;}catch(e){}try{window["doLogin"]=doLogin;}catch(e){}try{window["doLogout"]=doLogout;}catch(e){}try{window["enterDashboard"]=enterDashboard;}catch(e){}try{window["_resolverNombreCanonico"]=_resolverNombreCanonico;}catch(e){}try{window["_fetchDashboardRetry"]=_fetchDashboardRetry;}catch(e){}try{window["_redAviso"]=_redAviso;}catch(e){}try{window["loadDashboard"]=loadDashboard;}catch(e){}try{window["_refreshingPortal"]=_refreshingPortal;}catch(e){}try{window["refreshPortal"]=refreshPortal;}catch(e){}try{window["_renderLastSync"]=_renderLastSync;}catch(e){}try{window["lastDashboardData"]=lastDashboardData;}catch(e){}try{window["currentTab"]=currentTab;}catch(e){}try{window["currentMainTab"]=currentMainTab;}catch(e){}try{window["rutaIdx"]=rutaIdx;}catch(e){}try{window["_esPagado"]=_esPagado;}catch(e){}try{window["parseMonto"]=parseMonto;}catch(e){}try{window["rutaMixtoOpen"]=rutaMixtoOpen;}catch(e){}try{window["_avisarAlPanel"]=_avisarAlPanel;}catch(e){}try{window["setMainTab"]=setMainTab;}catch(e){}try{window["_bloqueMontos"]=_bloqueMontos;}catch(e){}try{window["renderDashboard"]=renderDashboard;}catch(e){}try{window["renderClientes"]=renderClientes;}catch(e){}try{window["_weekRowHTML"]=_weekRowHTML;}catch(e){}try{window["renderWeeksList"]=renderWeeksList;}catch(e){}try{window["toggleWeeks"]=toggleWeeks;}catch(e){}try{window["renderMesesAnteriores"]=renderMesesAnteriores;}catch(e){}try{window["togglePrevMonths"]=togglePrevMonths;}catch(e){}try{window["filtrarClientes"]=filtrarClientes;}catch(e){}try{window["updateMainBadges"]=updateMainBadges;}catch(e){}try{window["_rutaAbierto"]=_rutaAbierto;}catch(e){}try{window["_rutaList"]=_rutaList;}catch(e){}try{window["_rutaTotalViernes"]=_rutaTotalViernes;}catch(e){}try{window["renderRuta"]=renderRuta;}catch(e){}try{window["rutaGo"]=rutaGo;}catch(e){}try{window["rutaJumpNext"]=rutaJumpNext;}catch(e){}try{window["_rutaCurrent"]=_rutaCurrent;}catch(e){}try{window["_rutaUpdate"]=_rutaUpdate;}catch(e){}try{window["redTituloReparto"]=redTituloReparto;}catch(e){}try{window["renderEscala"]=renderEscala;}catch(e){}try{window["_envioMontoSello"]=_envioMontoSello;}catch(e){}try{window["_envioSelloTxt"]=_envioSelloTxt;}catch(e){}try{window["redEnvioEnVuelo"]=redEnvioEnVuelo;}catch(e){}try{window["redEnvioSinVerificar"]=redEnvioSinVerificar;}catch(e){}try{window["_envioTrabado"]=_envioTrabado;}catch(e){}try{window["_envioTrabadoMsg"]=_envioTrabadoMsg;}catch(e){}try{window["rutaEnvioAnular"]=rutaEnvioAnular;}catch(e){}try{window["rutaSetFP"]=rutaSetFP;}catch(e){}try{window["rutaToggleCobrado"]=rutaToggleCobrado;}catch(e){}try{window["rutaToggleEntrega"]=rutaToggleEntrega;}catch(e){}try{window["rutaCancelar"]=rutaCancelar;}catch(e){}try{window["rutaCancelarCerrar"]=rutaCancelarCerrar;}catch(e){}try{window["rutaCancelarConfirmar"]=rutaCancelarConfirmar;}catch(e){}try{window["ABBR_TO_ID"]=ABBR_TO_ID;}catch(e){}try{window["editCart"]=editCart;}catch(e){}try{window["editOriginalTotal"]=editOriginalTotal;}catch(e){}try{window["editPedidoRef"]=editPedidoRef;}catch(e){}try{window["rutaEditar"]=rutaEditar;}catch(e){}try{window["rutaEditarRender"]=rutaEditarRender;}catch(e){}try{window["rutaEditarChangeQty"]=rutaEditarChangeQty;}catch(e){}try{window["rutaEditarTotal"]=rutaEditarTotal;}catch(e){}try{window["rutaEditarUpdateTotals"]=rutaEditarUpdateTotals;}catch(e){}try{window["rutaEditarCerrar"]=rutaEditarCerrar;}catch(e){}try{window["rutaEditarGuardar"]=rutaEditarGuardar;}catch(e){}try{window["showMaleuLoader"]=showMaleuLoader;}catch(e){}try{window["setLoaderText"]=setLoaderText;}catch(e){}try{window["hideMaleuLoader"]=hideMaleuLoader;}catch(e){}try{window["rutaAbrirCobroMixto"]=rutaAbrirCobroMixto;}catch(e){}try{window["rutaCerrarMixto"]=rutaCerrarMixto;}catch(e){}try{window["rutaMixtoActualizarSuma"]=rutaMixtoActualizarSuma;}catch(e){}try{window["rutaMixtoPendiente"]=rutaMixtoPendiente;}catch(e){}try{window["rutaConfirmarMixto"]=rutaConfirmarMixto;}catch(e){}try{window["rutaMixtoVolverAEditar"]=rutaMixtoVolverAEditar;}catch(e){}try{window["rutaMixtoElegirPropina"]=rutaMixtoElegirPropina;}catch(e){}try{window["_rutaCommitMixto"]=_rutaCommitMixto;}catch(e){}try{window["_isoWeekDates"]=_isoWeekDates;}catch(e){}try{window["_isoWeekNow"]=_isoWeekNow;}catch(e){}try{window["_pagosSemanas"]=_pagosSemanas;}catch(e){}try{window["_cobroCliente"]=_cobroCliente;}catch(e){}try{window["_splitPago"]=_splitPago;}catch(e){}try{window["renderCaja"]=renderCaja;}catch(e){}try{window["_liqCtx"]=_liqCtx;}catch(e){}try{window["_redCtaPint"]=_redCtaPint;}catch(e){}try{window["_parseMonto"]=_parseMonto;}catch(e){}try{window["_yaPagado"]=_yaPagado;}catch(e){}try{window["liqOpen"]=liqOpen;}catch(e){}try{window["_redCtasDigitales"]=_redCtasDigitales;}catch(e){}try{window["_redCtaDefault"]=_redCtaDefault;}catch(e){}try{window["_redCtaNombre"]=_redCtaNombre;}catch(e){}try{window["_redCtaDePago"]=_redCtaDePago;}catch(e){}try{window["_redPintarCtas"]=_redPintarCtas;}catch(e){}try{window["_redSetCta"]=_redSetCta;}catch(e){}try{window["_redFaltaCta"]=_redFaltaCta;}catch(e){}try{window["liqClose"]=liqClose;}catch(e){}try{window["liqUpdateSum"]=liqUpdateSum;}catch(e){}try{window["liqConfirm"]=liqConfirm;}catch(e){}try{window["renderPagos"]=renderPagos;}catch(e){}try{window["registrarPagoParcial"]=registrarPagoParcial;}catch(e){}try{window["showViernesTab"]=showViernesTab;}catch(e){}try{window["renderPedidosTab"]=renderPedidosTab;}catch(e){}try{window["currentPedido"]=currentPedido;}catch(e){}try{window["PROD_NAME_BY_ABBR"]=PROD_NAME_BY_ABBR;}catch(e){}try{window["_normN"]=_normN;}catch(e){}try{window["showDetalle"]=showDetalle;}catch(e){}try{window["callCliente"]=callCliente;}catch(e){}try{window["waCliente"]=waCliente;}catch(e){}try{window["savedInd"]=savedInd;}catch(e){}try{window["_redOptimista"]=_redOptimista;}catch(e){}try{window["_redMontoDistinto"]=_redMontoDistinto;}catch(e){}try{window["_redErrTxt"]=_redErrTxt;}catch(e){}try{window["updatePedido"]=updatePedido;}catch(e){}try{window["_mapUpdatesToPedido"]=_mapUpdatesToPedido;}catch(e){}try{window["toggleEntrega"]=toggleEntrega;}catch(e){}try{window["toggleCobrado"]=toggleCobrado;}catch(e){}try{window["setFormaPago"]=setFormaPago;}catch(e){}try{window["savePropina"]=savePropina;}catch(e){}try{window["savePropinaMixto"]=savePropinaMixto;}catch(e){}try{window["ctrlMixtoActualizar"]=ctrlMixtoActualizar;}catch(e){}try{window["ctrlMixtoGuardar"]=ctrlMixtoGuardar;}catch(e){}try{window["setFormaMaleu"]=setFormaMaleu;}catch(e){}try{window["togglePagoMaleu"]=togglePagoMaleu;}catch(e){}try{window["showNuevoPedido"]=showNuevoPedido;}catch(e){}try{window["showDashboard"]=showDashboard;}catch(e){}try{window["renderProducts"]=renderProducts;}catch(e){}try{window["changeQty"]=changeQty;}catch(e){}try{window["updateCart"]=updateCart;}catch(e){}try{window["renderSummary"]=renderSummary;}catch(e){}try{window["setPago"]=setPago;}catch(e){}try{window["validateNuevo"]=validateNuevo;}catch(e){}try{window["enviar"]=enviar;}catch(e){}try{window["sendOrderWithRetry"]=sendOrderWithRetry;}catch(e){}try{window["_syncPreciosPortal"]=_syncPreciosPortal;}catch(e){}
 };
 
 /* ═══════════ ruta ═══════════ */

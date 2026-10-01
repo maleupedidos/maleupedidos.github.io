@@ -36,7 +36,7 @@ const PREP = `
     localStorage.setItem('maleu_red_session',JSON.stringify({nombre:'Vend Prueba',wa:'',comision:17}));
   }catch(e){}
   window.__posts=[]; window.__gets=0; window.__alerts=[]; window.__confirms=[];
-  window.__resp={ok:true};
+  window.__resp={ok:true}; window.__pend=[]; window.__diferir=false; window.__sinRed=false;
   window.alert=function(m){window.__alerts.push(String(m));};
   window.confirm=function(m){window.__confirms.push(String(m));return true;};
   window.fetch=function(u,i){
@@ -45,6 +45,13 @@ const PREP = `
       var b=null; try{b=JSON.parse(i.body);}catch(e){}
       window.__posts.push(b);
       var resp=window.__resp;
+      /* __diferir: el POST queda en vuelo hasta que la prueba lo suelte con
+         __pend[i]({...}). __sinRed: el fetch falla como sin conexion. */
+      if(window.__diferir&&b&&b.action==='redEnvioAnular'){
+        return new Promise(function(res){window.__pend.push(function(r){
+          res({ok:true,json:function(){return Promise.resolve(r);}});});});
+      }
+      if(window.__sinRed)return Promise.reject(new TypeError('Failed to fetch'));
       return Promise.resolve({ok:true,json:function(){return Promise.resolve(resp);}});
     }
     if(/dashboardVendedor/.test(url))window.__gets++;
@@ -57,8 +64,12 @@ const PED = { n: 'R-101', c: 'Cliente Prueba', $: 20000, env: 3000, es: 'Entrega
 const SEMBRAR = `(function(){
   lastDashboardData={pedidos:[${JSON.stringify(PED)}],stats:{semana:{}}};
   session={nombre:'Vend Prueba',wa:'',comision:17};
-  rutaIdx=0; redEnvioEnVuelo=''; if(typeof redEnvioSinVerificar!=='undefined')redEnvioSinVerificar='';
+  rutaIdx=0;
+  /* Contra la version vieja son strings (let); desde el 1/10 son Set (const). */
+  if(redEnvioEnVuelo&&redEnvioEnVuelo.clear)redEnvioEnVuelo.clear(); else redEnvioEnVuelo='';
+  if(redEnvioSinVerificar&&redEnvioSinVerificar.clear)redEnvioSinVerificar.clear(); else redEnvioSinVerificar='';
   __posts.length=0; __alerts.length=0; __confirms.length=0; __gets=0; __resp={ok:true};
+  __pend.length=0; __diferir=false; __sinRed=false;
   return true;})()`;
 const EP = `lastDashboardData.pedidos[0].ep`;
 
@@ -134,6 +145,53 @@ const EP = `lastDashboardData.pedidos[0].ep`;
     await evaluar(cli, `__posts.length=0; document.getElementById('ctrl-mix-ef').value='20000'; document.getElementById('ctrl-mix-tr').value='0'; ctrlMixtoGuardar()`);
     await pausa(200);
     chk('y aunque se llame igual, sin sumar el total no manda nada', (await evaluar(cli, '__posts')).length === 0, await evaluar(cli, '__posts'));
+
+    /* ── Codex sobre 547be09 (1/10/2026) ─────────────────────────────────── */
+    console.log('\n-- RUTA > Cobrado: un rechazo CONFIRMADO (LockTimeout) deshace --');
+    await evaluar(cli, SEMBRAR);
+    await evaluar(cli, `__resp={ok:false,error:'LockTimeout',retry:true}`);
+    await evaluar(cli, 'rutaToggleCobrado()');
+    await pausa(400);
+    chk('la pantalla vuelve a No Cobrado: el backend no escribio nada', await evaluar(cli, EP) === 'No Cobrado', await evaluar(cli, EP));
+    chk('  sin el alert del monto (no es una diferencia de plata)', (await evaluar(cli, '__alerts')).length === 0);
+
+    await evaluar(cli, SEMBRAR);
+    await evaluar(cli, `currentPedido=lastDashboardData.pedidos[0]; __resp={ok:false,error:'LockTimeout',retry:true}; toggleCobrado()`);
+    await pausa(400);
+    chk('updatePedido (detalle): el rechazo confirmado tambien deshace', await evaluar(cli, EP) === 'No Cobrado', await evaluar(cli, EP));
+
+    console.log('\n-- RUTA > Cobrado: sin conexion NO deshace (no sabemos si llego) --');
+    await evaluar(cli, SEMBRAR);
+    await evaluar(cli, `__sinRed=true`);
+    await evaluar(cli, 'rutaToggleCobrado()');
+    await pausa(400);
+    chk('sigue diciendo Cobrado', await evaluar(cli, EP) === 'Cobrado', await evaluar(cli, EP));
+
+    console.log('\n-- dos envios anulados en vuelo: el candado es POR PEDIDO --');
+    await evaluar(cli, SEMBRAR);
+    await evaluar(cli, `(function(){
+      var b=JSON.parse(JSON.stringify(lastDashboardData.pedidos[0])); b.n='R-102'; b.c='Cliente B'; b.l=2;
+      lastDashboardData.pedidos.push(b); __diferir=true; return true;})()`);
+    const idxDe = n => evaluar(cli, `_rutaList().findIndex(function(x){return x.n==='${n}';})`);
+    const iA = await idxDe('R-101'), iB = await idxDe('R-102');
+    chk('los dos pedidos estan en la ruta', iA >= 0 && iB >= 0, { iA, iB });
+    await evaluar(cli, `rutaIdx=${iA}; rutaEnvioAnular(true)`);
+    await evaluar(cli, `rutaIdx=${iB}; rutaEnvioAnular(true)`);
+    await pausa(200);
+    chk('salieron las dos anulaciones', (await evaluar(cli, '__pend.length')) === 2);
+    // Vuelve SOLO la de B.
+    await evaluar(cli, `__pend[1]({ok:true,sello:'3000 | Vend Prueba | hoy'})`);
+    await pausa(300);
+    const A = `_rutaList().find(function(x){return x.n==='R-101';})`;
+    chk('A sigue trabado mientras su POST vuela', await evaluar(cli, `_envioTrabado(${A})`) === true);
+    await evaluar(cli, `__posts.length=0; rutaIdx=_rutaList().findIndex(function(x){return x.n==='R-101';}); rutaToggleCobrado()`);
+    await pausa(300);
+    chk('y Cobrado sobre A no sale', (await evaluar(cli, `__posts.filter(function(p){return p.action==='updatePedidoRed';}).length`)) === 0,
+      await evaluar(cli, '__posts'));
+    chk('B (ya volvio) quedo libre', await evaluar(cli, `_envioTrabado(_rutaList().find(function(x){return x.n==='R-102';}))`) === false);
+    await evaluar(cli, `__pend[0]({ok:true,sello:'3000 | Vend Prueba | hoy'})`);
+    await pausa(300);
+    chk('cuando vuelve la de A, A se suelta', await evaluar(cli, `_envioTrabado(${A})`) === false);
   } catch (e) {
     mal++; console.log('  MAL  la prueba revento: ' + (e && e.message));
   }

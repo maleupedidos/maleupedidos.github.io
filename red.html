@@ -1410,7 +1410,7 @@ function loadDashboard() {
     /* Llegó dato fresco del servidor: si había un envío sin confirmar, ya no
        hace falta adivinar. Es lo que hace del ↻ la salida del candado. NO se
        toca `redEnvioEnVuelo`: ese es de un POST que todavía está vivo. */
-    redEnvioSinVerificar = '';
+    redEnvioSinVerificar.clear();
     renderDashboard(d);
     var now = Date.now();
     try { localStorage.setItem('maleu_red_dash_' + session.nombre, JSON.stringify({ ts: now, data: d })); } catch(e) {}
@@ -2100,7 +2100,11 @@ function _rutaUpdate(updates) {
   }).then(r => r.json()).then(d => {
     if (d.ok) return;
     if (d.montoDistinto) { _redMontoDistinto(d, deshacer, () => { updateMainBadges(); renderRuta(); }); return; }
-    redToast('Error: ' + (d.err || 'no guardó'));
+    /* Un rechazo CONFIRMADO (ok:false: LockTimeout, sin permiso, pedido no
+       encontrado...) quiere decir que no se escribio nada: la pantalla vuelve
+       atras. El catch de red NO, porque ahi no sabemos si llego (1/10/2026). */
+    deshacer(); updateMainBadges(); renderRuta();
+    redToast('No se guardó: ' + _redErrTxt(d));
   }).catch(() => redToast('Sin conexión — reintentará al sync'));
   updateMainBadges();
   renderRuta();
@@ -2197,20 +2201,23 @@ function _envioSelloTxt(s) {
 
    Con una sola variable el candado se soltaba al ARRANCAR la verificación en
    vez de al terminarla, que es justo cuando menos se sabe. */
-let redEnvioEnVuelo = '';
-let redEnvioSinVerificar = '';
+/* CONJUNTOS, no una variable (1/10/2026, Codex sobre 547be09): con una sola,
+   anular A y despues B pisaba el numero de A, y el finally de B lo vaciaba —
+   A quedaba cobrable con su envio todavia en vuelo. Cada POST agrega y saca
+   SOLO su pedido. */
+const redEnvioEnVuelo = new Set();
+const redEnvioSinVerificar = new Set();
 
 /* ¿El envío de ESTE pedido está en un estado en el que cobrar miente? */
 function _envioTrabado(p) {
   if (!p) return false;
   const n = _normN(p.n);
-  return (!!redEnvioEnVuelo && redEnvioEnVuelo === n) ||
-         (!!redEnvioSinVerificar && redEnvioSinVerificar === n);
+  return redEnvioEnVuelo.has(n) || redEnvioSinVerificar.has(n);
 }
 
 /* El motivo, para decírselo en vez de dejar un botón que no responde. */
 function _envioTrabadoMsg(p) {
-  return (!!redEnvioSinVerificar && redEnvioSinVerificar === _normN(p && p.n))
+  return redEnvioSinVerificar.has(_normN(p && p.n))
     ? 'No pude confirmar el envío — tocá 🔄 Actualizado antes de cobrar'
     : 'Esperá: estoy guardando el envío';
 }
@@ -2254,7 +2261,8 @@ function rutaEnvioAnular(anular) {
      el total CON envío ($23.000 en vez de $20.000) y recién después la
      anulación se rechaza por "ya cobrado": el vendedor le cobró al cliente lo
      que la pantalla le dijo, y la rendición le va a dar de menos. */
-  redEnvioEnVuelo = _normN(p.n);
+  const nEnv = _normN(p.n);
+  redEnvioEnVuelo.add(nEnv);
   renderRuta();
 
   fetch(APPS_SCRIPT_URL, {
@@ -2279,15 +2287,15 @@ function rutaEnvioAnular(anular) {
        hasta que llegue un dashboard fresco: soltarlo al arrancar la
        verificación sería habilitar Cobrado en el único momento en que no
        sabemos cuánto hay que cobrar. */
-    redEnvioSinVerificar = _normN(p.n);
+    redEnvioSinVerificar.add(nEnv);
     redToast('No sé si se guardó — lo estoy verificando');
     const r = loadDashboard();
     return (r && typeof r.then === 'function' ? r : Promise.resolve(false))
       .then(ok => {
-        if (ok) redEnvioSinVerificar = '';
+        if (ok) redEnvioSinVerificar.delete(nEnv);
         else redToast('No pude verificar — tocá 🔄 Actualizado antes de cobrar');
       }, () => redToast('No pude verificar — tocá 🔄 Actualizado antes de cobrar'));
-  }).finally(() => { redEnvioEnVuelo = ''; renderRuta(); });
+  }).finally(() => { redEnvioEnVuelo.delete(nEnv); renderRuta(); });
 }
 
 function rutaSetFP(v) {
@@ -3494,6 +3502,13 @@ function _redMontoDistinto(d, deshacer, repintar) {
   loadDashboard();
 }
 
+/** El motivo de un ok:false, en palabras. LockTimeout es el backend ocupado,
+ *  no un error del vendedor: se le dice que reintente. */
+function _redErrTxt(d) {
+  if (d && (d.error === 'LockTimeout' || d.retry)) return 'el sistema estaba ocupado, tocá de nuevo';
+  return (d && (d.err || d.error)) || 'error';
+}
+
 function updatePedido(updates) {
   if (!currentPedido || !session) return;
   const p = currentPedido;
@@ -3516,7 +3531,9 @@ function updatePedido(updates) {
         _redMontoDistinto(d, deshacer, () => { if (currentPedido === p) showDetalle(p.n); });
         return;
       }
-      redToast('Error: ' + (d.err || 'no se pudo guardar'));
+      // Rechazo confirmado: no se escribio nada, la pantalla vuelve atras.
+      deshacer(); if (currentPedido === p) showDetalle(p.n);
+      redToast('No se guardó: ' + _redErrTxt(d));
     })
     .catch(() => redToast('Sin conexión — guardaré cuando vuelva'));
 }

@@ -42,20 +42,22 @@ function sacar(nombre) {
 }
 
 const ctx = {
-  redEnvioEnVuelo: '',
-  redEnvioSinVerificar: '',
+  /* Conjuntos desde el 1/10/2026 (Codex sobre 547be09): con una sola variable,
+     anular A y despues B dejaba a A cobrable con su envio en vuelo. */
+  redEnvioEnVuelo: new Set(),
+  redEnvioSinVerificar: new Set(),
   _normN: (n) => String(n == null ? '' : n).trim().toUpperCase(),
 };
 vm.createContext(ctx);
 vm.runInContext(sacar('_envioTrabado') + '\n' + sacar('_envioTrabadoMsg'), ctx);
 
 console.log('== Sin nada en vuelo, cobrar se puede ==');
-ctx.redEnvioEnVuelo = ''; ctx.redEnvioSinVerificar = '';
+ctx.redEnvioEnVuelo.clear(); ctx.redEnvioSinVerificar.clear();
 chk('un pedido cualquiera no esta trabado', ctx._envioTrabado({ n: '1234' }) === false);
 chk('y sin pedido tampoco revienta', ctx._envioTrabado(null) === false);
 
 console.log('== Con el POST en vuelo, SOLO ese pedido queda trabado ==');
-ctx.redEnvioEnVuelo = '1234';
+ctx.redEnvioEnVuelo.add('1234');
 chk('el pedido del envio en vuelo esta trabado', ctx._envioTrabado({ n: '1234' }) === true);
 chk('otro pedido NO se traba de rebote', ctx._envioTrabado({ n: '9999' }) === false);
 chk('el N° se compara normalizado, no crudo', ctx._envioTrabado({ n: ' 1234 ' }) === true);
@@ -63,15 +65,15 @@ chk('el mensaje dice que espere', /Esperá/.test(ctx._envioTrabadoMsg({ n: '1234
 
 console.log('== Si la verificacion quedo sin respuesta, SIGUE trabado ==');
 /* Es el bug 2: el finally soltaba el candado al ARRANCAR loadDashboard(). */
-ctx.redEnvioEnVuelo = '';            // el fetch ya termino
-ctx.redEnvioSinVerificar = '1234';   // pero no sabemos si llego
+ctx.redEnvioEnVuelo.delete('1234');      // el fetch ya termino
+ctx.redEnvioSinVerificar.add('1234');    // pero no sabemos si llego
 chk('el pedido sigue trabado aunque el fetch termino', ctx._envioTrabado({ n: '1234' }) === true);
 chk('y el mensaje manda a refrescar, no a esperar',
     /Actualizado/.test(ctx._envioTrabadoMsg({ n: '1234' })));
 chk('otro pedido sigue libre', ctx._envioTrabado({ n: '9999' }) === false);
 
 console.log('== Cuando entra dato fresco, se suelta ==');
-ctx.redEnvioSinVerificar = '';
+ctx.redEnvioSinVerificar.clear();
 chk('ya se puede cobrar', ctx._envioTrabado({ n: '1234' }) === false);
 
 console.log('== Las CUATRO puertas que cobran consultan el candado ==');
@@ -88,11 +90,13 @@ PUERTAS.forEach((fn) => {
 
 console.log('== El catch NO suelta el candado, y el ↻ SI ==');
 const anular = sacar('rutaEnvioAnular');
-chk('el catch pasa a redEnvioSinVerificar', /redEnvioSinVerificar\s*=\s*_normN/.test(anular));
-chk('y solo lo limpia si la verificacion dio ok',
-    /if\s*\(ok\)\s*redEnvioSinVerificar\s*=\s*''/.test(anular));
+chk('el catch pasa a redEnvioSinVerificar', /redEnvioSinVerificar\.add\(nEnv\)/.test(anular));
+chk('y solo saca SU pedido si la verificacion dio ok',
+    /if\s*\(ok\)\s*redEnvioSinVerificar\.delete\(nEnv\)/.test(anular));
+chk('el finally saca SOLO su pedido del en-vuelo',
+    /finally\([^)]*\)\s*=>\s*\{\s*redEnvioEnVuelo\.delete\(nEnv\)/.test(anular));
 chk('loadDashboard limpia el sin-verificar cuando llega dato fresco',
-    /redEnvioSinVerificar\s*=\s*'';\s*\n\s*renderDashboard/.test(txt));
+    /redEnvioSinVerificar\.clear\(\);\s*\n\s*renderDashboard/.test(txt));
 chk('el catch NO revierte a ciegas (no quedo un aplicar(antes) ahi)',
     !/catch\s*\(\s*\)\s*=>\s*\{[^}]*aplicar\(antes\)/.test(anular));
 
