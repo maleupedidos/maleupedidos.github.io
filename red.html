@@ -1407,6 +1407,10 @@ function loadDashboard() {
 
   // 2) Fetch con reintentos.
   return _fetchDashboardRetry(4).then(function(d){
+    /* Llegó dato fresco del servidor: si había un envío sin confirmar, ya no
+       hace falta adivinar. Es lo que hace del ↻ la salida del candado. NO se
+       toca `redEnvioEnVuelo`: ese es de un POST que todavía está vivo. */
+    redEnvioSinVerificar = '';
     renderDashboard(d);
     var now = Date.now();
     try { localStorage.setItem('maleu_red_dash_' + session.nombre, JSON.stringify({ ts: now, data: d })); } catch(e) {}
@@ -2028,7 +2032,7 @@ function renderRuta() {
     /* Mientras se está guardando el envío de ESTE pedido el botón queda a la
        vista pero quieto, y lo dice. Lo que se cobra depende del envío, así que
        dejarlo tocable es por donde se pierde plata — ver rutaEnvioAnular. */
-    var _envBloq = !!redEnvioEnVuelo && redEnvioEnVuelo === _normN(p.n);
+    var _envBloq = _envioTrabado(p);
     html += '<button class="big-btn cobr' + (cobrado ? ' on' : '') + '" onclick="rutaToggleCobrado()"' +
       (_envBloq ? ' style="opacity:.55"' : '') + '>' +
       (_envBloq ? '⏳ Guardando el envío…'
@@ -2184,13 +2188,37 @@ function _envioSelloTxt(s) {
   return 'lo sacó ' + p[1] + ' el ' + dia;
 }
 
-/* El N° del pedido cuyo envío se está guardando ahora mismo, o ''. Es el
-   candado entre el envío y el cobro: ver rutaEnvioAnular. */
+/* El candado entre el envío y el cobro: ver rutaEnvioAnular. Son DOS estados y
+   no uno, porque se sueltan por motivos distintos:
+
+   · `redEnvioEnVuelo` — hay un POST vivo. Se suelta cuando el fetch termina.
+   · `redEnvioSinVerificar` — el POST falló y NO sabemos si llegó. Se suelta
+     recién cuando entra un dashboard fresco del servidor, por cualquier vía
+     (incluido el ↻ "Actualizado", que es la salida si la verificación falla).
+
+   Con una sola variable el candado se soltaba al ARRANCAR la verificación en
+   vez de al terminarla, que es justo cuando menos se sabe. */
 let redEnvioEnVuelo = '';
+let redEnvioSinVerificar = '';
+
+/* ¿El envío de ESTE pedido está en un estado en el que cobrar miente? */
+function _envioTrabado(p) {
+  if (!p) return false;
+  const n = _normN(p.n);
+  return (!!redEnvioEnVuelo && redEnvioEnVuelo === n) ||
+         (!!redEnvioSinVerificar && redEnvioSinVerificar === n);
+}
+
+/* El motivo, para decírselo en vez de dejar un botón que no responde. */
+function _envioTrabadoMsg(p) {
+  return (!!redEnvioSinVerificar && redEnvioSinVerificar === _normN(p && p.n))
+    ? 'No pude confirmar el envío — tocá 🔄 Actualizado antes de cobrar'
+    : 'Esperá: estoy guardando el envío';
+}
 
 function rutaEnvioAnular(anular) {
   const p = _rutaCurrent(); if (!p || !session) return;
-  if (redEnvioEnVuelo) { redToast('Esperá: estoy guardando el envío'); return; }
+  if (_envioTrabado(p)) { redToast(_envioTrabadoMsg(p)); return; }
   if (p.ep === 'Cobrado') { redToast('Ya está cobrado: el envío se arregla a mano'); return; }
   const monto = anular ? (Number(p.env) || 0) : _envioMontoSello(p.envAnu);
   if (!monto) { redToast(anular ? 'Este pedido no tiene envío' : 'No sé de cuánto era el envío'); return; }
@@ -2246,10 +2274,20 @@ function rutaEnvioAnular(anular) {
        falla puede ser un POST que nunca salió O uno que llegó y se perdió la
        respuesta. Revertir a ciegas deja la pantalla MINTIENDO sobre la
        planilla justo en el caso malo. Se deja lo optimista —que es lo correcto
-       en el caso más probable— y se le pregunta al servidor quién tiene razón:
-       loadDashboard() repinta la tab donde estés parado. */
+       en el caso más probable— y se le pregunta al servidor quién tiene razón.
+
+       EL CANDADO NO SE SUELTA ACÁ. Pasa a `redEnvioSinVerificar`, que vive
+       hasta que llegue un dashboard fresco: soltarlo al arrancar la
+       verificación sería habilitar Cobrado en el único momento en que no
+       sabemos cuánto hay que cobrar. */
+    redEnvioSinVerificar = _normN(p.n);
     redToast('No sé si se guardó — lo estoy verificando');
-    loadDashboard();
+    const r = loadDashboard();
+    return (r && typeof r.then === 'function' ? r : Promise.resolve(false))
+      .then(ok => {
+        if (ok) redEnvioSinVerificar = '';
+        else redToast('No pude verificar — tocá 🔄 Actualizado antes de cobrar');
+      }, () => redToast('No pude verificar — tocá 🔄 Actualizado antes de cobrar'));
   }).finally(() => { redEnvioEnVuelo = ''; renderRuta(); });
 }
 
@@ -2264,9 +2302,7 @@ function rutaToggleCobrado() {
   /* La otra mitad del candado del envío. El botón ya sale atenuado, pero el
      bloqueo tiene que estar acá también: el render puede ser viejo y un toque
      rápido llegaría igual. */
-  if (redEnvioEnVuelo && redEnvioEnVuelo === _normN(p.n)) {
-    redToast('Esperá: estoy guardando el envío'); return;
-  }
+  if (_envioTrabado(p)) { redToast(_envioTrabadoMsg(p)); return; }
   const nuevo = p.ep !== 'Cobrado';
   // Leer propina del input (solo aplica al MARCAR cobrado, no al deshacer)
   let propina = 0;
@@ -2563,6 +2599,9 @@ let rutaMixtoPendiente = null; // { ef, tr, total, dif }
 
 function rutaConfirmarMixto() {
   const p = _rutaCurrent(); if (!p) return;
+  /* El Mixto es otra puerta al mismo bug de los $3.000: tambien calcula contra
+     `_cobroCliente(p)`, que incluye el envio. */
+  if (_envioTrabado(p)) { redToast(_envioTrabadoMsg(p)); return; }
   const ef = parseMonto(document.getElementById('mix-ef').value);
   const tr = parseMonto(document.getElementById('mix-tr').value);
   if (ef + tr <= 0) { redToast('Ingresá al menos un monto'); return; }
@@ -2636,6 +2675,10 @@ function rutaMixtoElegirPropina(dir) {
 }
 
 function _rutaCommitMixto(o) {
+  /* Ultimo freno: a esta se llega por dos caminos (confirmar, y la pantalla de
+     la propina), asi que el chequeo va aca tambien y no solo en la entrada. */
+  var _p = _rutaCurrent();
+  if (_envioTrabado(_p)) { redToast(_envioTrabadoMsg(_p)); return; }
   rutaMixtoOpen = false;
   rutaMixtoPendiente = null;
   _rutaUpdate({
