@@ -101,33 +101,108 @@ const MEDIR = `(function(){
        (`node escanear_general.js <token> 390 caja,egresos`). Una auditoria de
        una tab no necesita pegarle al backend real con las 18. */
     .filter(x => !process.argv[4] || process.argv[4].split(',').indexOf(x.k) >= 0);
-  console.log('  tabs visibles: ' + lista.length + '  (' + ANCHO + 'px)\n');
 
-  const res = [];
-  for (const tab of lista) {
-    await evaluar(cli, 'go("' + tab.k + '")');
+  /* ── SOLO LAS QUE TIENEN ENTRADA EN EL MENU (1/10/2026) ──
+     No todo `div.pg` es una tab. `p-resumen` es la pagina suelta del resumen
+     semanal: `go('resumen')` hasta la abre, pero **nadie puede llegar** —el
+     PDF vive en Inicio desde el 14/9/2026— y su endpoint `resumenSemanal`
+     esta dado de baja. Medido: se abre, pinta 48 caracteres que no se ven, y
+     a los 45 s el chequeo de roles la vuelve a esconder.
+     El escaner la reportaba como "PANTALLA VACIA" en cada corrida. Un ⚠ que
+     nadie puede cerrar entrena a ignorar los ⚠ que si importan, y este costo
+     una hora de perseguir un fantasma. Se listan aparte, sin alarma. */
+  const enMenu = await evaluar(cli, '(function(){var s={};' +
+    '[].slice.call(document.querySelectorAll("[data-p]")).forEach(function(e){s[e.getAttribute("data-p")]=1;});' +
+    'return Object.keys(s);})()');
+  const sueltasDOM = lista.filter(x => enMenu.indexOf(x.k) < 0).map(x => x.k);
+  const navegables = lista.filter(x => enMenu.indexOf(x.k) >= 0);
+  console.log('  tabs del menu: ' + navegables.length + '  (' + ANCHO + 'px)'
+    + (sueltasDOM.length ? '  ·  ' + sueltasDOM.length + ' suelta(s): ' + sueltasDOM.join(', ') : '') + '\n');
+
+  /* ── UNA TAB: ABRIRLA Y ESPERAR A QUE DIGA ALGO ──
+     `tope` es cuantos segundos se le dan. Devuelve tambien si se agoto, que es
+     la diferencia entre "esta rota" y "no llegue a saber". */
+  async function mirarTab(k, tope) {
+    await evaluar(cli, 'go("' + k + '")');
+    /* ── QUE `go` HAYA ABIERTO ESA PAGINA, Y NO OTRA (1/10/2026) ──
+       La lista sale de los `div.pg` del DOM, pero no todos son tabs del menu.
+       `p-resumen` es la pagina suelta del resumen semanal: existe, y desde que
+       el PDF vive en Inicio **no tiene entrada en el menu**. `go('resumen')`
+       no la activa, la pantalla se queda en Inicio, y el escaner venia
+       reportandola como "PANTALLA VACIA tras 45 s" en cada corrida. No estaba
+       rota: no existe para el usuario. Un ⚠ permanente que nadie puede cerrar
+       entrena a ignorar los ⚠ que si importan. */
+    const activa = await evaluar(cli,
+      '(function(){var p=document.querySelector(".pg.on");return p?String(p.id||""):"";})()');
+    if (activa !== 'p-' + k) return { m: null, seg: '0.0', agotado: false, noNavegable: activa || '(ninguna)' };
     const t0 = Date.now();
     let m = null;
-    // Esperar a contenido util: hasta 45 s (el volcado tarda 21-27)
-    for (let i = 0; i < 30; i++) {
+    for (let i = 0; i < Math.ceil(tope / 1.5); i++) {
       await T(1500);
       m = await evaluar(cli, MEDIR);
       if (m && !m.cargando && !m.vacio) break;
     }
-    const seg = ((Date.now() - t0) / 1000).toFixed(1);
-    res.push({ tab: tab.k, nom: tab.t, seg, m });
-    const flag = (m && (m.cargando || m.vacio)) ? '  ⚠' : '';
-    console.log('  ' + tab.k.padEnd(16) + seg.padStart(5) + 's  ' + String(m && m.chars).padStart(6) + ' chars'
-      + '  chicos:' + String(m && m.nChicos).padStart(3) + '  cortados:' + String(m && m.nCortados).padStart(3)
-      + '  desb:' + String(m && m.desborde).padStart(4) + flag);
+    return { m, seg: ((Date.now() - t0) / 1000).toFixed(1),
+             agotado: !!(m && (m.cargando || m.vacio)) };
+  }
+  const linea = (k, seg, m, flag) =>
+    '  ' + k.padEnd(16) + String(seg).padStart(5) + 's  ' + String(m && m.chars).padStart(6) + ' chars'
+    + '  chicos:' + String(m && m.nChicos).padStart(3) + '  cortados:' + String(m && m.nCortados).padStart(3)
+    + '  desb:' + String(m && m.desborde).padStart(4) + (flag || '');
+
+  const res = [], sueltas = [];
+  for (const tab of navegables) {
+    const r = await mirarTab(tab.k, 45);   // el volcado tarda 21-27 s
+    if (r.noNavegable) {
+      sueltas.push({ tab: tab.k, quedo: r.noNavegable });
+      console.log('  ' + tab.k.padEnd(16) + '    —  no esta en el menu (go dejo ' + r.noNavegable + ')');
+      continue;
+    }
+    res.push({ tab: tab.k, nom: tab.t, seg: r.seg, m: r.m, agotado: r.agotado });
+    console.log(linea(tab.k, r.seg, r.m, r.agotado ? '  ⚠' : ''));
+    /* Un respiro entre tabs. Apps Script encola: nueve GET seguidos hicieron
+       que el siguiente tardara 169 s (medido el 21/9/2026). Sin esto, las
+       ultimas tabs del escaneo cargan la culpa de las primeras. */
+    await T(2500);
+  }
+
+  /* ── LA REPESCA: EL ESCANER NO PUEDE ACUSAR SIN SEGUNDA OPINION (1/10/2026) ──
+     El escaneo del 1/10 marco `resumen` y `miportal` como "PANTALLA VACIA tras
+     45 s". Medidas SOLAS despues, la primera pintaba entera en 8,2 s. O sea
+     que el escaner no habia encontrado un bug: habia encontrado su propia
+     cola. Costo una hora de perseguir un fantasma.
+     Ahora cada sospechosa se vuelve a abrir al final, en frio y con mas
+     tiempo. Si en la repesca pinta, lo que estaba lento era la medicion — y
+     eso se dice, en vez de dejar un ⚠ que el proximo que lea va a creer. */
+  const sospechosas = res.filter(r => r.agotado);
+  if (sospechosas.length) {
+    console.log('\n  ── Repesca: ' + sospechosas.length + ' tab(s) de nuevo, en frio ──');
+    await T(20000);
+    for (const r of sospechosas) {
+      const r2 = await mirarTab(r.tab, 90);
+      r.repesca = { seg: r2.seg, chars: r2.m && r2.m.chars, agotado: r2.agotado };
+      if (!r2.agotado) { r.m = r2.m; r.seg = r2.seg; r.agotado = false; r.eraLaCola = true; }
+      console.log(linea(r.tab, r2.seg, r2.m, r2.agotado ? '  ⚠ sigue vacia' : '  ✓ era la cola'));
+      await T(5000);
+    }
+  }
+
+  if (sueltasDOM.length || sueltas.length) {
+    console.log('\n  ── Paginas sueltas (existen en el DOM, no en el menu) ──');
+    sueltasDOM.forEach(k => console.log('     ' + k + ' — nadie puede abrirla desde la app'));
+    sueltas.forEach(s => console.log('     ' + s.tab + ' — go() dejo ' + s.quedo));
+    console.log('     (no se escanean: no son pantallas que alguien pueda ver)');
   }
 
   console.log('\n  ── Detalle de lo que hay que mirar ──');
   res.forEach(r => {
     const m = r.m || {};
     const cosas = [];
-    if (m.cargando) cosas.push('QUEDA EN "CARGANDO" tras ' + r.seg + 's');
-    if (m.vacio) cosas.push('PANTALLA CASI VACIA (' + m.chars + ' chars)');
+    /* Despues de la repesca, "cargando/vacia" quiere decir que NO pinto ni
+       sola y en frio. Antes se afirmaba sobre una sola pasada saturada. */
+    if (m.cargando) cosas.push('QUEDA EN "CARGANDO" tras ' + r.seg + 's, y tampoco sola');
+    if (m.vacio) cosas.push('PANTALLA CASI VACIA (' + m.chars + ' chars), y tampoco sola');
+    if (r.eraLaCola) cosas.push('tardo en el escaneo pero sola pinta en ' + r.seg + 's: era la cola del backend, no la pantalla');
     if (m.nChicos > 0) cosas.push(m.nChicos + ' controles chicos: ' + m.chicos.join(' · '));
     if (m.nCortados > 0) cosas.push(m.nCortados + ' textos cortados: ' + m.cortados.join(' · '));
     if (m.desborde > 0) cosas.push('desborda ' + m.desborde + 'px');
