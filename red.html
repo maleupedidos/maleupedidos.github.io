@@ -2025,8 +2025,14 @@ function renderRuta() {
       html += '</div>';
       html += '<div class="tip-hint">Si hay propina, se suma al cobro y aumenta tu comisión ' + comLbl() + '. Va a col ' + (metodoSel === 'Efectivo' ? 'S (Efectivo)' : 'T (Transferencia)') + '.</div>';
     }
-    html += '<button class="big-btn cobr' + (cobrado ? ' on' : '') + '" onclick="rutaToggleCobrado()">' +
-      (cobrado ? '✓ Cobrado · tocar para deshacer' : '💵 Marcar Cobrado') + '</button>';
+    /* Mientras se está guardando el envío de ESTE pedido el botón queda a la
+       vista pero quieto, y lo dice. Lo que se cobra depende del envío, así que
+       dejarlo tocable es por donde se pierde plata — ver rutaEnvioAnular. */
+    var _envBloq = !!redEnvioEnVuelo && redEnvioEnVuelo === _normN(p.n);
+    html += '<button class="big-btn cobr' + (cobrado ? ' on' : '') + '" onclick="rutaToggleCobrado()"' +
+      (_envBloq ? ' style="opacity:.55"' : '') + '>' +
+      (_envBloq ? '⏳ Guardando el envío…'
+                : (cobrado ? '✓ Cobrado · tocar para deshacer' : '💵 Marcar Cobrado')) + '</button>';
   }
   html += '<h4 style="margin-top:.8rem">🚚 Entrega</h4>';
   html += '<button class="big-btn entr' + (entregado ? ' on' : '') + '" onclick="rutaToggleEntrega()">' +
@@ -2178,8 +2184,13 @@ function _envioSelloTxt(s) {
   return 'lo sacó ' + p[1] + ' el ' + dia;
 }
 
+/* El N° del pedido cuyo envío se está guardando ahora mismo, o ''. Es el
+   candado entre el envío y el cobro: ver rutaEnvioAnular. */
+let redEnvioEnVuelo = '';
+
 function rutaEnvioAnular(anular) {
   const p = _rutaCurrent(); if (!p || !session) return;
+  if (redEnvioEnVuelo) { redToast('Esperá: estoy guardando el envío'); return; }
   if (p.ep === 'Cobrado') { redToast('Ya está cobrado: el envío se arregla a mano'); return; }
   const monto = anular ? (Number(p.env) || 0) : _envioMontoSello(p.envAnu);
   if (!monto) { redToast(anular ? 'Este pedido no tiene envío' : 'No sé de cuánto era el envío'); return; }
@@ -2208,6 +2219,17 @@ function rutaEnvioAnular(anular) {
     : { env: monto, envAnu: '' });
   savedInd();
 
+  /* EL CANDADO CON EL COBRO (1/10/2026, lo encontró Codex revisando 47e57ad).
+
+     Mientras este POST está en vuelo, Cobrado tiene que quedar quieto.
+     `rutaToggleCobrado` manda {cobroCliente:true} SIN el monto, así que el
+     backend lo calcula leyendo la planilla. Si el cobro llega primero, registra
+     el total CON envío ($23.000 en vez de $20.000) y recién después la
+     anulación se rechaza por "ya cobrado": el vendedor le cobró al cliente lo
+     que la pantalla le dijo, y la rendición le va a dar de menos. */
+  redEnvioEnVuelo = _normN(p.n);
+  renderRuta();
+
   fetch(APPS_SCRIPT_URL, {
     method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
     body: JSON.stringify({ action: 'redEnvioAnular', n: String(p.n), row: p.row, anular: !!anular })
@@ -2219,7 +2241,16 @@ function rutaEnvioAnular(anular) {
       aplicar(antes);
       redToast('No se pudo: ' + ((d && d.err) || 'error'));
     }
-  }).catch(() => { aplicar(antes); redToast('Sin conexión — no se guardó'); });
+  }).catch(() => {
+    /* NO revertir, y NO decir "no se guardó": no lo sabemos. Un fetch que
+       falla puede ser un POST que nunca salió O uno que llegó y se perdió la
+       respuesta. Revertir a ciegas deja la pantalla MINTIENDO sobre la
+       planilla justo en el caso malo. Se deja lo optimista —que es lo correcto
+       en el caso más probable— y se le pregunta al servidor quién tiene razón:
+       loadDashboard() repinta la tab donde estés parado. */
+    redToast('No sé si se guardó — lo estoy verificando');
+    loadDashboard();
+  }).finally(() => { redEnvioEnVuelo = ''; renderRuta(); });
 }
 
 function rutaSetFP(v) {
@@ -2230,6 +2261,12 @@ function rutaSetFP(v) {
 }
 function rutaToggleCobrado() {
   const p = _rutaCurrent(); if (!p) return;
+  /* La otra mitad del candado del envío. El botón ya sale atenuado, pero el
+     bloqueo tiene que estar acá también: el render puede ser viejo y un toque
+     rápido llegaría igual. */
+  if (redEnvioEnVuelo && redEnvioEnVuelo === _normN(p.n)) {
+    redToast('Esperá: estoy guardando el envío'); return;
+  }
   const nuevo = p.ep !== 'Cobrado';
   // Leer propina del input (solo aplica al MARCAR cobrado, no al deshacer)
   let propina = 0;
