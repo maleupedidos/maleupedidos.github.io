@@ -180,12 +180,12 @@ const tocarCta = (cli, cont, id) => ev(cli, `(function(){var b=document.querySel
     await ev(cli, `abrirCobroRuta('Home|R9705')`);
     await pausa(500);
     chk('pedido suelto en efectivo abierto', /Vuelto Transf/.test(await texto(cli, '#cobroRutaTitle') || ''), await texto(cli, '#cobroRutaTitle'));
-    await ev(cli, `_setMoneyInput('cobroRecEf',30000);_recalcCobroRuta();`);
+    await ev(cli, `_setMoneyInput('cobroRecEf',30000);if(typeof _cobroRecTocado==='function')_cobroRecTocado();_recalcCobroRuta();`);
     await ev(cli, `document.getElementById('cobroToggleCambio').click()`);
     await pausa(250);
     chk('al abrir "Devolví cambio" propone el vuelto en efectivo ($7.500)', await valor(cli, 'cobroCamEf') === '7.500', await valor(cli, 'cobroCamEf'));
     chk('en efectivo NO pregunta cuenta', !(await visible(cli, 'cobroCamCtaBox')));
-    await ev(cli, `_setMoneyInput('cobroCamEf',0);_setMoneyInput('cobroCamMP',7500);_recalcCobroRuta();`);
+    await ev(cli, `/* como el oninput del campo (desde el 28/9 el ERP sugiere el vuelto y solo respeta el que marca tocado) */ if(typeof _cobroCamTocado==='function')_cobroCamTocado();else _camTocado=true; _setMoneyInput('cobroCamEf',0);_setMoneyInput('cobroCamMP',7500);_recalcCobroRuta();`);
     await pausa(200);
     chk('por transferencia SÍ pregunta de qué cuenta salió', await visible(cli, 'cobroCamCtaBox'));
     chk('ninguna cuenta viene elegida', await ev(cli, `document.querySelectorAll('#cobroCamCta .cobro-pill.on').length`) === 0);

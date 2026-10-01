@@ -243,6 +243,48 @@ function chequearIds(fus) {
   process.exit(1);
 }
 
+/* Un handler inline (onclick="...", oninput="...") que ASIGNA una variable de
+ * la sub-app no la cambia: corre en window, y el build publica en window una
+ * COPIA de cada global de la sub-app. Escribe la copia; el codigo de adentro
+ * sigue leyendo la suya. Llamar funciones anda (las funciones son la misma
+ * cosa por referencia); asignar un primitivo no.
+ *
+ * Paso de verdad: `oninput="_camTocado=true"` en el vuelto de RUTA. Suelto
+ * andaba; fusionado, el vuelto volvia a $9.900 con cada tecla y no se podia
+ * editar ni borrar (1/10/2026). Ningun otro chequeo lo ve: parsea, no hay
+ * funcion inexistente, no tira error.
+ */
+const FUENTE_DE = { ruta: 'ruta.html', miportal: 'red.html', abast: 'busqueda.html' };
+function chequearAsignacionesInline(fus) {
+  const malos = [];
+  for (const [tab, r] of Object.entries(fus)) {
+    const archivo = FUENTE_DE[TAB[tab]];
+    if (!archivo) continue;
+    const globales = new Set(r.globales);
+    const src = fs.readFileSync(path.join(RAIZ, archivo), 'utf8');
+    // El cuerpo de cada on*="..." — en el markup y en los strings que arman HTML.
+    const reAttr = /\bon[a-z]+\s*=\s*\\?(["'])([\s\S]*?)\\?\1/g;
+    let m;
+    while ((m = reAttr.exec(src))) {
+      const cuerpo = m[2];
+      const reAsig = /(^|[^.\w$])([A-Za-z_$][\w$]*)\s*(\+\+|--|[+\-*/]?=(?!=))/g;
+      let a;
+      while ((a = reAsig.exec(cuerpo))) {
+        if (globales.has(a[2])) {
+          const linea = src.slice(0, m.index).split('\n').length;
+          malos.push(archivo + ':' + linea + '  ' + a[2] + a[3]);
+        }
+      }
+    }
+  }
+  if (!malos.length) return;
+  console.error('\n✗ ' + malos.length + ' handler(s) inline asignan una variable de la sub-app:');
+  malos.forEach(x => console.error('    ' + x));
+  console.error('\n  Fusionado, eso escribe una COPIA en window y la sub-app no se entera.');
+  console.error('  Arreglo: una funcion en la sub-app que haga la asignacion, y el handler la llama.');
+  process.exit(1);
+}
+
 /** Los ids que declara el markup de un archivo (sin <script> ni <style>). */
 function leerIds(html) {
   const cuerpo = html.replace(/<style[\s\S]*?<\/style>/gi, '')
@@ -340,7 +382,7 @@ function main() {
   // (se fusiona una sola vez y se guarda: fusionar() no es barato)
   const _fus = {};
   tabs.forEach((tab) => { _fus[tab] = fusionar(TAB[tab]); });
-  if (tabs.length === Object.keys(TAB).length) { chequearOrdenDeclaraciones(); chequearColisiones(_fus); chequearIds(_fus); }
+  if (tabs.length === Object.keys(TAB).length) { chequearOrdenDeclaraciones(); chequearColisiones(_fus); chequearIds(_fus); chequearAsignacionesInline(_fus); }
 
   tabs.forEach((tab) => {
     const clave = TAB[tab];
