@@ -12134,7 +12134,7 @@ function _leerVersion(app){
    "El HTML no sabe que version es" dejo de ser cierto: el build le escribe
    adentro el CACHE_NAME de sw-panel.js, el mismo que deploy.sh obliga a subir en
    cada cambio. Si lo publicado dice otra cosa, esta pagina es vieja. Punto. */
-var _APP_CN_PAGINA='maleu-panel-v480';
+var _APP_CN_PAGINA='maleu-panel-v481';
 
 /* Devuelve [{k,v}] si lo publicado no es lo que esta pagina corre. */
 function _chequearVersiones(){
@@ -43604,6 +43604,10 @@ function loadDashboard() {
 
   // 2) Fetch con reintentos.
   return _fetchDashboardRetry(4).then(function(d){
+    /* Llegó dato fresco del servidor: si había un envío sin confirmar, ya no
+       hace falta adivinar. Es lo que hace del ↻ la salida del candado. NO se
+       toca `redEnvioEnVuelo`: ese es de un POST que todavía está vivo. */
+    redEnvioSinVerificar = '';
     renderDashboard(d);
     var now = Date.now();
     try { localStorage.setItem('maleu_red_dash_' + session.nombre, JSON.stringify({ ts: now, data: d })); } catch(e) {}
@@ -44225,7 +44229,7 @@ function renderRuta() {
     /* Mientras se está guardando el envío de ESTE pedido el botón queda a la
        vista pero quieto, y lo dice. Lo que se cobra depende del envío, así que
        dejarlo tocable es por donde se pierde plata — ver rutaEnvioAnular. */
-    var _envBloq = !!redEnvioEnVuelo && redEnvioEnVuelo === _normN(p.n);
+    var _envBloq = _envioTrabado(p);
     html += '<button class="big-btn cobr' + (cobrado ? ' on' : '') + '" onclick="rutaToggleCobrado()"' +
       (_envBloq ? ' style="opacity:.55"' : '') + '>' +
       (_envBloq ? '⏳ Guardando el envío…'
@@ -44381,13 +44385,37 @@ function _envioSelloTxt(s) {
   return 'lo sacó ' + p[1] + ' el ' + dia;
 }
 
-/* El N° del pedido cuyo envío se está guardando ahora mismo, o ''. Es el
-   candado entre el envío y el cobro: ver rutaEnvioAnular. */
+/* El candado entre el envío y el cobro: ver rutaEnvioAnular. Son DOS estados y
+   no uno, porque se sueltan por motivos distintos:
+
+   · `redEnvioEnVuelo` — hay un POST vivo. Se suelta cuando el fetch termina.
+   · `redEnvioSinVerificar` — el POST falló y NO sabemos si llegó. Se suelta
+     recién cuando entra un dashboard fresco del servidor, por cualquier vía
+     (incluido el ↻ "Actualizado", que es la salida si la verificación falla).
+
+   Con una sola variable el candado se soltaba al ARRANCAR la verificación en
+   vez de al terminarla, que es justo cuando menos se sabe. */
 let redEnvioEnVuelo = '';
+let redEnvioSinVerificar = '';
+
+/* ¿El envío de ESTE pedido está en un estado en el que cobrar miente? */
+function _envioTrabado(p) {
+  if (!p) return false;
+  const n = _normN(p.n);
+  return (!!redEnvioEnVuelo && redEnvioEnVuelo === n) ||
+         (!!redEnvioSinVerificar && redEnvioSinVerificar === n);
+}
+
+/* El motivo, para decírselo en vez de dejar un botón que no responde. */
+function _envioTrabadoMsg(p) {
+  return (!!redEnvioSinVerificar && redEnvioSinVerificar === _normN(p && p.n))
+    ? 'No pude confirmar el envío — tocá 🔄 Actualizado antes de cobrar'
+    : 'Esperá: estoy guardando el envío';
+}
 
 function rutaEnvioAnular(anular) {
   const p = _rutaCurrent(); if (!p || !session) return;
-  if (redEnvioEnVuelo) { redToast('Esperá: estoy guardando el envío'); return; }
+  if (_envioTrabado(p)) { redToast(_envioTrabadoMsg(p)); return; }
   if (p.ep === 'Cobrado') { redToast('Ya está cobrado: el envío se arregla a mano'); return; }
   const monto = anular ? (Number(p.env) || 0) : _envioMontoSello(p.envAnu);
   if (!monto) { redToast(anular ? 'Este pedido no tiene envío' : 'No sé de cuánto era el envío'); return; }
@@ -44443,10 +44471,20 @@ function rutaEnvioAnular(anular) {
        falla puede ser un POST que nunca salió O uno que llegó y se perdió la
        respuesta. Revertir a ciegas deja la pantalla MINTIENDO sobre la
        planilla justo en el caso malo. Se deja lo optimista —que es lo correcto
-       en el caso más probable— y se le pregunta al servidor quién tiene razón:
-       loadDashboard() repinta la tab donde estés parado. */
+       en el caso más probable— y se le pregunta al servidor quién tiene razón.
+
+       EL CANDADO NO SE SUELTA ACÁ. Pasa a `redEnvioSinVerificar`, que vive
+       hasta que llegue un dashboard fresco: soltarlo al arrancar la
+       verificación sería habilitar Cobrado en el único momento en que no
+       sabemos cuánto hay que cobrar. */
+    redEnvioSinVerificar = _normN(p.n);
     redToast('No sé si se guardó — lo estoy verificando');
-    loadDashboard();
+    const r = loadDashboard();
+    return (r && typeof r.then === 'function' ? r : Promise.resolve(false))
+      .then(ok => {
+        if (ok) redEnvioSinVerificar = '';
+        else redToast('No pude verificar — tocá 🔄 Actualizado antes de cobrar');
+      }, () => redToast('No pude verificar — tocá 🔄 Actualizado antes de cobrar'));
   }).finally(() => { redEnvioEnVuelo = ''; renderRuta(); });
 }
 
@@ -44461,9 +44499,7 @@ function rutaToggleCobrado() {
   /* La otra mitad del candado del envío. El botón ya sale atenuado, pero el
      bloqueo tiene que estar acá también: el render puede ser viejo y un toque
      rápido llegaría igual. */
-  if (redEnvioEnVuelo && redEnvioEnVuelo === _normN(p.n)) {
-    redToast('Esperá: estoy guardando el envío'); return;
-  }
+  if (_envioTrabado(p)) { redToast(_envioTrabadoMsg(p)); return; }
   const nuevo = p.ep !== 'Cobrado';
   // Leer propina del input (solo aplica al MARCAR cobrado, no al deshacer)
   let propina = 0;
@@ -44760,6 +44796,9 @@ let rutaMixtoPendiente = null; // { ef, tr, total, dif }
 
 function rutaConfirmarMixto() {
   const p = _rutaCurrent(); if (!p) return;
+  /* El Mixto es otra puerta al mismo bug de los $3.000: tambien calcula contra
+     `_cobroCliente(p)`, que incluye el envio. */
+  if (_envioTrabado(p)) { redToast(_envioTrabadoMsg(p)); return; }
   const ef = parseMonto(document.getElementById('mix-ef').value);
   const tr = parseMonto(document.getElementById('mix-tr').value);
   if (ef + tr <= 0) { redToast('Ingresá al menos un monto'); return; }
@@ -44833,6 +44872,10 @@ function rutaMixtoElegirPropina(dir) {
 }
 
 function _rutaCommitMixto(o) {
+  /* Ultimo freno: a esta se llega por dos caminos (confirmar, y la pantalla de
+     la propina), asi que el chequeo va aca tambien y no solo en la entrada. */
+  var _p = _rutaCurrent();
+  if (_envioTrabado(_p)) { redToast(_envioTrabadoMsg(_p)); return; }
   rutaMixtoOpen = false;
   rutaMixtoPendiente = null;
   _rutaUpdate({
@@ -46106,7 +46149,7 @@ try {
   showScreen('login');
 }
 
-try{window["APPS_SCRIPT_URL"]=APPS_SCRIPT_URL;}catch(e){}try{window["WA_NUMBER"]=WA_NUMBER;}catch(e){}try{window["PRODUCTOS"]=PRODUCTOS;}catch(e){}try{window["session"]=session;}catch(e){}try{window["comPct"]=comPct;}catch(e){}try{window["comLbl"]=comLbl;}catch(e){}try{window["cart"]=cart;}catch(e){}try{window["pago"]=pago;}catch(e){}try{window["ENVIO_RED"]=ENVIO_RED;}catch(e){}try{window["cobrarEnvio"]=cobrarEnvio;}catch(e){}try{window["$id"]=$id;}catch(e){}try{window["onEnvioToggle"]=onEnvioToggle;}catch(e){}try{window["ars"]=ars;}catch(e){}try{window["showScreen"]=showScreen;}catch(e){}try{window["redToast"]=redToast;}catch(e){}try{window["doLogin"]=doLogin;}catch(e){}try{window["doLogout"]=doLogout;}catch(e){}try{window["enterDashboard"]=enterDashboard;}catch(e){}try{window["_resolverNombreCanonico"]=_resolverNombreCanonico;}catch(e){}try{window["_fetchDashboardRetry"]=_fetchDashboardRetry;}catch(e){}try{window["_redAviso"]=_redAviso;}catch(e){}try{window["loadDashboard"]=loadDashboard;}catch(e){}try{window["_refreshingPortal"]=_refreshingPortal;}catch(e){}try{window["refreshPortal"]=refreshPortal;}catch(e){}try{window["_renderLastSync"]=_renderLastSync;}catch(e){}try{window["lastDashboardData"]=lastDashboardData;}catch(e){}try{window["currentTab"]=currentTab;}catch(e){}try{window["currentMainTab"]=currentMainTab;}catch(e){}try{window["rutaIdx"]=rutaIdx;}catch(e){}try{window["_esPagado"]=_esPagado;}catch(e){}try{window["parseMonto"]=parseMonto;}catch(e){}try{window["rutaMixtoOpen"]=rutaMixtoOpen;}catch(e){}try{window["_avisarAlPanel"]=_avisarAlPanel;}catch(e){}try{window["setMainTab"]=setMainTab;}catch(e){}try{window["_bloqueMontos"]=_bloqueMontos;}catch(e){}try{window["renderDashboard"]=renderDashboard;}catch(e){}try{window["renderClientes"]=renderClientes;}catch(e){}try{window["_weekRowHTML"]=_weekRowHTML;}catch(e){}try{window["renderWeeksList"]=renderWeeksList;}catch(e){}try{window["toggleWeeks"]=toggleWeeks;}catch(e){}try{window["renderMesesAnteriores"]=renderMesesAnteriores;}catch(e){}try{window["togglePrevMonths"]=togglePrevMonths;}catch(e){}try{window["filtrarClientes"]=filtrarClientes;}catch(e){}try{window["updateMainBadges"]=updateMainBadges;}catch(e){}try{window["_rutaAbierto"]=_rutaAbierto;}catch(e){}try{window["_rutaList"]=_rutaList;}catch(e){}try{window["_rutaTotalViernes"]=_rutaTotalViernes;}catch(e){}try{window["renderRuta"]=renderRuta;}catch(e){}try{window["rutaGo"]=rutaGo;}catch(e){}try{window["rutaJumpNext"]=rutaJumpNext;}catch(e){}try{window["_rutaCurrent"]=_rutaCurrent;}catch(e){}try{window["_rutaUpdate"]=_rutaUpdate;}catch(e){}try{window["redTituloReparto"]=redTituloReparto;}catch(e){}try{window["renderEscala"]=renderEscala;}catch(e){}try{window["_envioMontoSello"]=_envioMontoSello;}catch(e){}try{window["_envioSelloTxt"]=_envioSelloTxt;}catch(e){}try{window["redEnvioEnVuelo"]=redEnvioEnVuelo;}catch(e){}try{window["rutaEnvioAnular"]=rutaEnvioAnular;}catch(e){}try{window["rutaSetFP"]=rutaSetFP;}catch(e){}try{window["rutaToggleCobrado"]=rutaToggleCobrado;}catch(e){}try{window["rutaToggleEntrega"]=rutaToggleEntrega;}catch(e){}try{window["rutaCancelar"]=rutaCancelar;}catch(e){}try{window["rutaCancelarCerrar"]=rutaCancelarCerrar;}catch(e){}try{window["rutaCancelarConfirmar"]=rutaCancelarConfirmar;}catch(e){}try{window["ABBR_TO_ID"]=ABBR_TO_ID;}catch(e){}try{window["editCart"]=editCart;}catch(e){}try{window["editOriginalTotal"]=editOriginalTotal;}catch(e){}try{window["editPedidoRef"]=editPedidoRef;}catch(e){}try{window["rutaEditar"]=rutaEditar;}catch(e){}try{window["rutaEditarRender"]=rutaEditarRender;}catch(e){}try{window["rutaEditarChangeQty"]=rutaEditarChangeQty;}catch(e){}try{window["rutaEditarTotal"]=rutaEditarTotal;}catch(e){}try{window["rutaEditarUpdateTotals"]=rutaEditarUpdateTotals;}catch(e){}try{window["rutaEditarCerrar"]=rutaEditarCerrar;}catch(e){}try{window["rutaEditarGuardar"]=rutaEditarGuardar;}catch(e){}try{window["showMaleuLoader"]=showMaleuLoader;}catch(e){}try{window["setLoaderText"]=setLoaderText;}catch(e){}try{window["hideMaleuLoader"]=hideMaleuLoader;}catch(e){}try{window["rutaAbrirCobroMixto"]=rutaAbrirCobroMixto;}catch(e){}try{window["rutaCerrarMixto"]=rutaCerrarMixto;}catch(e){}try{window["rutaMixtoActualizarSuma"]=rutaMixtoActualizarSuma;}catch(e){}try{window["rutaMixtoPendiente"]=rutaMixtoPendiente;}catch(e){}try{window["rutaConfirmarMixto"]=rutaConfirmarMixto;}catch(e){}try{window["rutaMixtoVolverAEditar"]=rutaMixtoVolverAEditar;}catch(e){}try{window["rutaMixtoElegirPropina"]=rutaMixtoElegirPropina;}catch(e){}try{window["_rutaCommitMixto"]=_rutaCommitMixto;}catch(e){}try{window["_isoWeekDates"]=_isoWeekDates;}catch(e){}try{window["_isoWeekNow"]=_isoWeekNow;}catch(e){}try{window["_pagosSemanas"]=_pagosSemanas;}catch(e){}try{window["_cobroCliente"]=_cobroCliente;}catch(e){}try{window["_splitPago"]=_splitPago;}catch(e){}try{window["renderCaja"]=renderCaja;}catch(e){}try{window["_liqCtx"]=_liqCtx;}catch(e){}try{window["_redCtaPint"]=_redCtaPint;}catch(e){}try{window["_parseMonto"]=_parseMonto;}catch(e){}try{window["_yaPagado"]=_yaPagado;}catch(e){}try{window["liqOpen"]=liqOpen;}catch(e){}try{window["_redCtasDigitales"]=_redCtasDigitales;}catch(e){}try{window["_redCtaDefault"]=_redCtaDefault;}catch(e){}try{window["_redCtaNombre"]=_redCtaNombre;}catch(e){}try{window["_redCtaDePago"]=_redCtaDePago;}catch(e){}try{window["_redPintarCtas"]=_redPintarCtas;}catch(e){}try{window["_redSetCta"]=_redSetCta;}catch(e){}try{window["_redFaltaCta"]=_redFaltaCta;}catch(e){}try{window["liqClose"]=liqClose;}catch(e){}try{window["liqUpdateSum"]=liqUpdateSum;}catch(e){}try{window["liqConfirm"]=liqConfirm;}catch(e){}try{window["renderPagos"]=renderPagos;}catch(e){}try{window["registrarPagoParcial"]=registrarPagoParcial;}catch(e){}try{window["showViernesTab"]=showViernesTab;}catch(e){}try{window["renderPedidosTab"]=renderPedidosTab;}catch(e){}try{window["currentPedido"]=currentPedido;}catch(e){}try{window["PROD_NAME_BY_ABBR"]=PROD_NAME_BY_ABBR;}catch(e){}try{window["_normN"]=_normN;}catch(e){}try{window["showDetalle"]=showDetalle;}catch(e){}try{window["callCliente"]=callCliente;}catch(e){}try{window["waCliente"]=waCliente;}catch(e){}try{window["savedInd"]=savedInd;}catch(e){}try{window["updatePedido"]=updatePedido;}catch(e){}try{window["_mapUpdatesToPedido"]=_mapUpdatesToPedido;}catch(e){}try{window["toggleEntrega"]=toggleEntrega;}catch(e){}try{window["toggleCobrado"]=toggleCobrado;}catch(e){}try{window["setFormaPago"]=setFormaPago;}catch(e){}try{window["savePropina"]=savePropina;}catch(e){}try{window["savePropinaMixto"]=savePropinaMixto;}catch(e){}try{window["ctrlMixtoActualizar"]=ctrlMixtoActualizar;}catch(e){}try{window["ctrlMixtoGuardar"]=ctrlMixtoGuardar;}catch(e){}try{window["setFormaMaleu"]=setFormaMaleu;}catch(e){}try{window["togglePagoMaleu"]=togglePagoMaleu;}catch(e){}try{window["showNuevoPedido"]=showNuevoPedido;}catch(e){}try{window["showDashboard"]=showDashboard;}catch(e){}try{window["renderProducts"]=renderProducts;}catch(e){}try{window["changeQty"]=changeQty;}catch(e){}try{window["updateCart"]=updateCart;}catch(e){}try{window["renderSummary"]=renderSummary;}catch(e){}try{window["setPago"]=setPago;}catch(e){}try{window["validateNuevo"]=validateNuevo;}catch(e){}try{window["enviar"]=enviar;}catch(e){}try{window["sendOrderWithRetry"]=sendOrderWithRetry;}catch(e){}try{window["_syncPreciosPortal"]=_syncPreciosPortal;}catch(e){}
+try{window["APPS_SCRIPT_URL"]=APPS_SCRIPT_URL;}catch(e){}try{window["WA_NUMBER"]=WA_NUMBER;}catch(e){}try{window["PRODUCTOS"]=PRODUCTOS;}catch(e){}try{window["session"]=session;}catch(e){}try{window["comPct"]=comPct;}catch(e){}try{window["comLbl"]=comLbl;}catch(e){}try{window["cart"]=cart;}catch(e){}try{window["pago"]=pago;}catch(e){}try{window["ENVIO_RED"]=ENVIO_RED;}catch(e){}try{window["cobrarEnvio"]=cobrarEnvio;}catch(e){}try{window["$id"]=$id;}catch(e){}try{window["onEnvioToggle"]=onEnvioToggle;}catch(e){}try{window["ars"]=ars;}catch(e){}try{window["showScreen"]=showScreen;}catch(e){}try{window["redToast"]=redToast;}catch(e){}try{window["doLogin"]=doLogin;}catch(e){}try{window["doLogout"]=doLogout;}catch(e){}try{window["enterDashboard"]=enterDashboard;}catch(e){}try{window["_resolverNombreCanonico"]=_resolverNombreCanonico;}catch(e){}try{window["_fetchDashboardRetry"]=_fetchDashboardRetry;}catch(e){}try{window["_redAviso"]=_redAviso;}catch(e){}try{window["loadDashboard"]=loadDashboard;}catch(e){}try{window["_refreshingPortal"]=_refreshingPortal;}catch(e){}try{window["refreshPortal"]=refreshPortal;}catch(e){}try{window["_renderLastSync"]=_renderLastSync;}catch(e){}try{window["lastDashboardData"]=lastDashboardData;}catch(e){}try{window["currentTab"]=currentTab;}catch(e){}try{window["currentMainTab"]=currentMainTab;}catch(e){}try{window["rutaIdx"]=rutaIdx;}catch(e){}try{window["_esPagado"]=_esPagado;}catch(e){}try{window["parseMonto"]=parseMonto;}catch(e){}try{window["rutaMixtoOpen"]=rutaMixtoOpen;}catch(e){}try{window["_avisarAlPanel"]=_avisarAlPanel;}catch(e){}try{window["setMainTab"]=setMainTab;}catch(e){}try{window["_bloqueMontos"]=_bloqueMontos;}catch(e){}try{window["renderDashboard"]=renderDashboard;}catch(e){}try{window["renderClientes"]=renderClientes;}catch(e){}try{window["_weekRowHTML"]=_weekRowHTML;}catch(e){}try{window["renderWeeksList"]=renderWeeksList;}catch(e){}try{window["toggleWeeks"]=toggleWeeks;}catch(e){}try{window["renderMesesAnteriores"]=renderMesesAnteriores;}catch(e){}try{window["togglePrevMonths"]=togglePrevMonths;}catch(e){}try{window["filtrarClientes"]=filtrarClientes;}catch(e){}try{window["updateMainBadges"]=updateMainBadges;}catch(e){}try{window["_rutaAbierto"]=_rutaAbierto;}catch(e){}try{window["_rutaList"]=_rutaList;}catch(e){}try{window["_rutaTotalViernes"]=_rutaTotalViernes;}catch(e){}try{window["renderRuta"]=renderRuta;}catch(e){}try{window["rutaGo"]=rutaGo;}catch(e){}try{window["rutaJumpNext"]=rutaJumpNext;}catch(e){}try{window["_rutaCurrent"]=_rutaCurrent;}catch(e){}try{window["_rutaUpdate"]=_rutaUpdate;}catch(e){}try{window["redTituloReparto"]=redTituloReparto;}catch(e){}try{window["renderEscala"]=renderEscala;}catch(e){}try{window["_envioMontoSello"]=_envioMontoSello;}catch(e){}try{window["_envioSelloTxt"]=_envioSelloTxt;}catch(e){}try{window["redEnvioEnVuelo"]=redEnvioEnVuelo;}catch(e){}try{window["redEnvioSinVerificar"]=redEnvioSinVerificar;}catch(e){}try{window["_envioTrabado"]=_envioTrabado;}catch(e){}try{window["_envioTrabadoMsg"]=_envioTrabadoMsg;}catch(e){}try{window["rutaEnvioAnular"]=rutaEnvioAnular;}catch(e){}try{window["rutaSetFP"]=rutaSetFP;}catch(e){}try{window["rutaToggleCobrado"]=rutaToggleCobrado;}catch(e){}try{window["rutaToggleEntrega"]=rutaToggleEntrega;}catch(e){}try{window["rutaCancelar"]=rutaCancelar;}catch(e){}try{window["rutaCancelarCerrar"]=rutaCancelarCerrar;}catch(e){}try{window["rutaCancelarConfirmar"]=rutaCancelarConfirmar;}catch(e){}try{window["ABBR_TO_ID"]=ABBR_TO_ID;}catch(e){}try{window["editCart"]=editCart;}catch(e){}try{window["editOriginalTotal"]=editOriginalTotal;}catch(e){}try{window["editPedidoRef"]=editPedidoRef;}catch(e){}try{window["rutaEditar"]=rutaEditar;}catch(e){}try{window["rutaEditarRender"]=rutaEditarRender;}catch(e){}try{window["rutaEditarChangeQty"]=rutaEditarChangeQty;}catch(e){}try{window["rutaEditarTotal"]=rutaEditarTotal;}catch(e){}try{window["rutaEditarUpdateTotals"]=rutaEditarUpdateTotals;}catch(e){}try{window["rutaEditarCerrar"]=rutaEditarCerrar;}catch(e){}try{window["rutaEditarGuardar"]=rutaEditarGuardar;}catch(e){}try{window["showMaleuLoader"]=showMaleuLoader;}catch(e){}try{window["setLoaderText"]=setLoaderText;}catch(e){}try{window["hideMaleuLoader"]=hideMaleuLoader;}catch(e){}try{window["rutaAbrirCobroMixto"]=rutaAbrirCobroMixto;}catch(e){}try{window["rutaCerrarMixto"]=rutaCerrarMixto;}catch(e){}try{window["rutaMixtoActualizarSuma"]=rutaMixtoActualizarSuma;}catch(e){}try{window["rutaMixtoPendiente"]=rutaMixtoPendiente;}catch(e){}try{window["rutaConfirmarMixto"]=rutaConfirmarMixto;}catch(e){}try{window["rutaMixtoVolverAEditar"]=rutaMixtoVolverAEditar;}catch(e){}try{window["rutaMixtoElegirPropina"]=rutaMixtoElegirPropina;}catch(e){}try{window["_rutaCommitMixto"]=_rutaCommitMixto;}catch(e){}try{window["_isoWeekDates"]=_isoWeekDates;}catch(e){}try{window["_isoWeekNow"]=_isoWeekNow;}catch(e){}try{window["_pagosSemanas"]=_pagosSemanas;}catch(e){}try{window["_cobroCliente"]=_cobroCliente;}catch(e){}try{window["_splitPago"]=_splitPago;}catch(e){}try{window["renderCaja"]=renderCaja;}catch(e){}try{window["_liqCtx"]=_liqCtx;}catch(e){}try{window["_redCtaPint"]=_redCtaPint;}catch(e){}try{window["_parseMonto"]=_parseMonto;}catch(e){}try{window["_yaPagado"]=_yaPagado;}catch(e){}try{window["liqOpen"]=liqOpen;}catch(e){}try{window["_redCtasDigitales"]=_redCtasDigitales;}catch(e){}try{window["_redCtaDefault"]=_redCtaDefault;}catch(e){}try{window["_redCtaNombre"]=_redCtaNombre;}catch(e){}try{window["_redCtaDePago"]=_redCtaDePago;}catch(e){}try{window["_redPintarCtas"]=_redPintarCtas;}catch(e){}try{window["_redSetCta"]=_redSetCta;}catch(e){}try{window["_redFaltaCta"]=_redFaltaCta;}catch(e){}try{window["liqClose"]=liqClose;}catch(e){}try{window["liqUpdateSum"]=liqUpdateSum;}catch(e){}try{window["liqConfirm"]=liqConfirm;}catch(e){}try{window["renderPagos"]=renderPagos;}catch(e){}try{window["registrarPagoParcial"]=registrarPagoParcial;}catch(e){}try{window["showViernesTab"]=showViernesTab;}catch(e){}try{window["renderPedidosTab"]=renderPedidosTab;}catch(e){}try{window["currentPedido"]=currentPedido;}catch(e){}try{window["PROD_NAME_BY_ABBR"]=PROD_NAME_BY_ABBR;}catch(e){}try{window["_normN"]=_normN;}catch(e){}try{window["showDetalle"]=showDetalle;}catch(e){}try{window["callCliente"]=callCliente;}catch(e){}try{window["waCliente"]=waCliente;}catch(e){}try{window["savedInd"]=savedInd;}catch(e){}try{window["updatePedido"]=updatePedido;}catch(e){}try{window["_mapUpdatesToPedido"]=_mapUpdatesToPedido;}catch(e){}try{window["toggleEntrega"]=toggleEntrega;}catch(e){}try{window["toggleCobrado"]=toggleCobrado;}catch(e){}try{window["setFormaPago"]=setFormaPago;}catch(e){}try{window["savePropina"]=savePropina;}catch(e){}try{window["savePropinaMixto"]=savePropinaMixto;}catch(e){}try{window["ctrlMixtoActualizar"]=ctrlMixtoActualizar;}catch(e){}try{window["ctrlMixtoGuardar"]=ctrlMixtoGuardar;}catch(e){}try{window["setFormaMaleu"]=setFormaMaleu;}catch(e){}try{window["togglePagoMaleu"]=togglePagoMaleu;}catch(e){}try{window["showNuevoPedido"]=showNuevoPedido;}catch(e){}try{window["showDashboard"]=showDashboard;}catch(e){}try{window["renderProducts"]=renderProducts;}catch(e){}try{window["changeQty"]=changeQty;}catch(e){}try{window["updateCart"]=updateCart;}catch(e){}try{window["renderSummary"]=renderSummary;}catch(e){}try{window["setPago"]=setPago;}catch(e){}try{window["validateNuevo"]=validateNuevo;}catch(e){}try{window["enviar"]=enviar;}catch(e){}try{window["sendOrderWithRetry"]=sendOrderWithRetry;}catch(e){}try{window["_syncPreciosPortal"]=_syncPreciosPortal;}catch(e){}
 };
 
 /* ═══════════ ruta ═══════════ */
