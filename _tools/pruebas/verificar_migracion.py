@@ -69,7 +69,7 @@ LECTOR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'leer_sesion.p
 DEFAULT = [
     ('purchase_order_line', 'order_no', 'lineas de OC (015)'),
     ('purchase_order_line', 'unit_cost', 'costo: el 403 es correcto, GRANT por columna'),
-    ('supplier_payment', 'supplier_name', 'pagos: 403 hasta que se aplique la 026'),
+    ('supplier_payment', 'supplier_name', 'pagos: 403 hasta que se aplique la 027'),
     ('supplier_payment_line', 'amount', 'lineas de pago: idem'),
     ('inventory_product', 'sku', 'catalogo'),
 ]
