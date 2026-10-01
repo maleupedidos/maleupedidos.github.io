@@ -658,7 +658,7 @@
       </div>
       <div class="field">
         <label>PIN</label>
-        <input type="password" id="f-login-pin" autocomplete="current-password" placeholder="••••" inputmode="numeric" />
+        <input type="password" id="f-login-pin" autocomplete="current-password" placeholder="••••••" inputmode="numeric" />
       </div>
       <label class="remember">
         <input type="checkbox" id="f-remember" checked /> Recordarme en este celular
@@ -2085,13 +2085,9 @@ function _rutaCurrent() {
 function _rutaUpdate(updates) {
   const p = _rutaCurrent();
   if (!p || !session) return;
-  // Actualizar localmente para optimistic UI
-  Object.assign(p, _mapUpdatesToPedido(updates));
-  if (lastDashboardData) {
-    const target = _normN(p.n);
-    const idx = lastDashboardData.pedidos.findIndex(x => _normN(x.n) === target);
-    if (idx >= 0) Object.assign(lastDashboardData.pedidos[idx], _mapUpdatesToPedido(updates));
-  }
+  // Actualizar localmente para optimistic UI; `deshacer` lo vuelve atras si el
+  // backend rechaza (hoy: el monto del cobro no coincide con la planilla).
+  const deshacer = _redOptimista(p, updates);
   savedInd();
   fetch(APPS_SCRIPT_URL, {
     method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
@@ -2101,8 +2097,11 @@ function _rutaUpdate(updates) {
       vendedor: session.nombre,
       updates: updates
     })
-  }).then(r => r.json()).then(d => { if (!d.ok) redToast('Error: ' + (d.err || 'no guardó')); })
-    .catch(() => redToast('Sin conexión — reintentará al sync'));
+  }).then(r => r.json()).then(d => {
+    if (d.ok) return;
+    if (d.montoDistinto) { _redMontoDistinto(d, deshacer, () => { updateMainBadges(); renderRuta(); }); return; }
+    redToast('Error: ' + (d.err || 'no guardó'));
+  }).catch(() => redToast('Sin conexión — reintentará al sync'));
   updateMainBadges();
   renderRuta();
 }
@@ -2321,7 +2320,9 @@ function rutaToggleCobrado() {
     msg = '¿Deshacer el cobro de ' + (p.c || 'este pedido') + '?';
   }
   if (!confirm(msg)) return;
-  const updates = { cobroCliente: nuevo };
+  /* `montoVisto`: lo que el vendedor acaba de confirmar en el cartel. El backend
+     lo compara con la planilla y no cobra si no coincide (1/10/2026). */
+  const updates = nuevo ? { cobroCliente: true, montoVisto: cobro } : { cobroCliente: false };
   if (nuevo && propina > 0) {
     if (metodo === 'Efectivo')      updates.propinaEf = propina;
     if (metodo === 'Transferencia') updates.propinaTr = propina;
@@ -3465,28 +3466,58 @@ function savedInd() {
   setTimeout(() => el.classList.remove('show'), 1200);
 }
 
+/** Aplica `updates` en pantalla (el pedido y su copia en lastDashboardData) y
+ *  devuelve la funcion que lo deshace. */
+function _redOptimista(p, updates) {
+  const cambios = _mapUpdatesToPedido(updates);
+  const copias = [p];
+  if (lastDashboardData) {
+    const target = _normN(p.n);
+    const idx = lastDashboardData.pedidos.findIndex(x => _normN(x.n) === target);
+    if (idx >= 0 && lastDashboardData.pedidos[idx] !== p) copias.push(lastDashboardData.pedidos[idx]);
+  }
+  const antes = copias.map(o => { const a = {}; Object.keys(cambios).forEach(k => { a[k] = o[k]; }); return a; });
+  copias.forEach(o => Object.assign(o, cambios));
+  return () => copias.forEach((o, i) => Object.assign(o, antes[i]));
+}
+
+/** EL MONTO NO COINCIDE (1/10/2026). El backend compara lo que el vendedor vio
+ *  contra la planilla y, si difieren, no escribe nada. La pantalla venia
+ *  diciendo "Cobrado": se deshace, se avisa con los dos numeros y se traen los
+ *  datos frescos para que vuelva a cobrar sobre el monto real. */
+function _redMontoDistinto(d, deshacer, repintar) {
+  deshacer();
+  repintar();
+  alert('🚫 No se cobró.\n\nVos viste ' + ars(d.montoVisto) + ' y la planilla dice ' +
+        ars(d.montoPlanilla) + '.\n\nAlgo del pedido cambió o se está guardando. ' +
+        'Actualizo los datos: revisá el monto y volvé a cobrar.');
+  loadDashboard();
+}
+
 function updatePedido(updates) {
   if (!currentPedido || !session) return;
-  // Actualizar localmente (optimistic)
-  Object.assign(currentPedido, _mapUpdatesToPedido(updates));
-  // También actualizar en lastDashboardData para que al volver se vea actualizado
-  if (lastDashboardData) {
-    const target = _normN(currentPedido.n);
-    const idx = lastDashboardData.pedidos.findIndex(x => _normN(x.n) === target);
-    if (idx >= 0) Object.assign(lastDashboardData.pedidos[idx], _mapUpdatesToPedido(updates));
-  }
+  const p = currentPedido;
+  // Actualizar localmente (optimistic), en el pedido y en lastDashboardData
+  const deshacer = _redOptimista(p, updates);
   savedInd();
   fetch(APPS_SCRIPT_URL, {
     method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
     body: JSON.stringify({
       action: 'updatePedidoRed',
-      pedidoId: String(currentPedido.n),
+      pedidoId: String(p.n),
       vendedor: session.nombre,
       updates: updates
     })
   })
     .then(r => r.json())
-    .then(d => { if (!d.ok) redToast('Error: ' + (d.err || 'no se pudo guardar')); })
+    .then(d => {
+      if (d.ok) return;
+      if (d.montoDistinto) {
+        _redMontoDistinto(d, deshacer, () => { if (currentPedido === p) showDetalle(p.n); });
+        return;
+      }
+      redToast('Error: ' + (d.err || 'no se pudo guardar'));
+    })
     .catch(() => redToast('Sin conexión — guardaré cuando vuelva'));
 }
 
@@ -3530,20 +3561,26 @@ function toggleEntrega() {
 function toggleCobrado() {
   if (!currentPedido) return;
   const nuevo = currentPedido.ep !== 'Cobrado';
+  if (nuevo && _envioTrabado(currentPedido)) { redToast(_envioTrabadoMsg(currentPedido)); return; }
+  /* Lo que paga el cliente es productos + envio: el cartel decia solo los
+     productos ($20.000 sobre un cobro de $23.000). Y el monto viaja como
+     `montoVisto` para que el backend lo compare con la planilla (1/10/2026). */
+  const cobro = _cobroCliente(currentPedido);
   const msg = nuevo
-    ? '¿Confirmás que cobraste ' + ars(currentPedido.$ || 0) + ' de ' + (currentPedido.c || 'este pedido') + '?'
+    ? '¿Confirmás que cobraste ' + ars(cobro) + ' de ' + (currentPedido.c || 'este pedido') + '?'
     : '¿Deshacer el cobro de ' + (currentPedido.c || 'este pedido') + '?';
   if (!confirm(msg)) return;
-  updatePedido({ cobroCliente: nuevo });
+  updatePedido(nuevo ? { cobroCliente: true, montoVisto: cobro } : { cobroCliente: false });
   showDetalle(currentPedido.n);
 }
 function setFormaPago(v) {
   if (!currentPedido) return;
+  /* Solo la forma de pago (1/10/2026). Antes mandaba tambien efectivoMonto /
+     transferenciaMonto = los productos SIN el envio, y el backend, al ver un
+     monto, marcaba el pedido COBRADO: elegir "Efectivo" en el detalle cobraba
+     el pedido sin que nadie tocara Cobrado, y por $3.000 menos. Medido ese dia:
+     47 de 104 cobros de Red tenian Q/R sin el envio. El cobro va por Cobrado. */
   updatePedido({ formaPagoCliente: v });
-  // Si cambia a Efectivo o Transferencia, limpiar montos mixtos (evita data sucia en Q/R)
-  if (v === 'Efectivo') updatePedido({ efectivoMonto: Number(currentPedido.$) || 0, transferenciaMonto: 0 });
-  else if (v === 'Transferencia') updatePedido({ efectivoMonto: 0, transferenciaMonto: Number(currentPedido.$) || 0 });
-  // Si pasa a Mixto, no seteamos montos — el vendedor los ingresa en el panel
   showDetalle(currentPedido.n);
   redToast('Forma de pago: ' + v);
 }
@@ -3571,7 +3608,8 @@ function ctrlMixtoActualizar() {
   if (!currentPedido) return;
   const ef = _parseMonto($id('ctrl-mix-ef').value);
   const tr = _parseMonto($id('ctrl-mix-tr').value);
-  const total = Number(currentPedido.$) || 0;
+  // Lo que paga el cliente: productos + envio, igual que en RUTA (1/10/2026).
+  const total = _cobroCliente(currentPedido);
   const suma = ef + tr;
   const fb = $id('ctrl-mix-feedback');
   const btn = $id('ctrl-mix-guardar');
@@ -3592,8 +3630,12 @@ function ctrlMixtoActualizar() {
   } else {
     fb.style.color = '#e65100';
     const dif = suma - total;
-    fb.textContent = ars(suma) + ' · ' + (dif > 0 ? 'excede por ' : 'falta ') + ars(Math.abs(dif));
-    btn.disabled = false; // permitimos guardar con diferencia (propinas, ajustes)
+    fb.textContent = ars(suma) + ' · ' + (dif > 0 ? 'excede por ' : 'falta ') + ars(Math.abs(dif)) +
+      ' · tiene que sumar el total; la propina va en su campo';
+    /* Ya no se guarda con diferencia (1/10/2026): el backend compara la suma con
+       la planilla y un Mixto que no cierra es un cobro que la rendicion no
+       entiende. La propina tiene sus dos campos aparte. */
+    btn.disabled = true;
   }
 }
 
@@ -3603,6 +3645,8 @@ function ctrlMixtoGuardar() {
   const tr = _parseMonto($id('ctrl-mix-tr').value);
   if (ef < 0 || tr < 0) { redToast('Montos negativos no permitidos'); return; }
   if (ef + tr <= 0) { redToast('Ingresá al menos un monto'); return; }
+  if (ef + tr !== _cobroCliente(currentPedido)) { redToast('Tiene que sumar ' + ars(_cobroCliente(currentPedido))); return; }
+  if (_envioTrabado(currentPedido)) { redToast(_envioTrabadoMsg(currentPedido)); return; }
   updatePedido({ efectivoMonto: ef, transferenciaMonto: tr });
   redToast('✓ Mixto guardado: ' + ars(ef) + ' EF + ' + ars(tr) + ' TR');
 }
