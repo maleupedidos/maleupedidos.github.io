@@ -371,6 +371,15 @@
     .ruta-lote { font-size: 2.2rem; font-weight: 900; color: #e65100; margin-top: .4rem; line-height: 1; }
     .ruta-total-big { font-size: 1.6rem; font-weight: 800; margin-top: .6rem; color: #1a1a1a; }
     .ruta-total-big .pay-method { font-size: .9rem; color: #666; font-weight: 600; display: block; margin-top: .1rem; }
+    /* El envio y el boton de perdonarlo (1/10/2026). El boton va PEGADO al
+       numero del envio y no abajo con el resto de las acciones: es sobre esa
+       plata, y suelto se parece a "cobrar" o "entregar", que son otra cosa. */
+    .ruta-envio { font-size: .72rem; color: #777; margin-top: -.2rem; margin-bottom: .4rem; line-height: 1.8; }
+    .ruta-envio.off { color: #8d6e63; }
+    .env-btn { font-size: .68rem; font-weight: 700; color: #6d4c41; background: #fff3e0;
+               border: 1px solid #ffcc80; border-radius: 999px; padding: .2rem .55rem;
+               margin-left: .25rem; cursor: pointer; white-space: nowrap; }
+    .env-btn:active { background: #ffe0b2; }
     .ruta-prods { margin-top: .8rem; padding-top: .8rem; border-top: 1px dashed #ddd; }
     .ruta-prod-row { display: flex; justify-content: space-between; font-size: .95rem; padding: .15rem 0; }
     .ruta-prod-row .q { color: #e65100; font-weight: 800; min-width: 30px; }
@@ -1896,8 +1905,25 @@ function renderRuta() {
   if (p.l) html += '<div class="ruta-lote">Lote ' + p.l + '</div>';
   html += '<div class="ruta-total-big">' + ars(_cobroCliente(p)) +
     '<span class="pay-method">Pago: ' + (p.fp || 'No definido') + ' · ' + (cobrado ? '✓ Cobrado' : 'Por cobrar') + '</span></div>';
-  if ((Number(p.env) || 0) > 0) {
-    html += '<div style="font-size:.72rem;color:#777;margin-top:-.2rem;margin-bottom:.4rem">Incluye envío ' + ars(p.env) + ' (tuyo) · productos ' + ars(p.$) + '</div>';
+  /* ── EL ENVIO: DE QUIEN ES Y QUIEN LO PUEDE PERDONAR (1/10/2026) ──
+     La ganancia del vendedor es comision + envio, asi que regalarselo a un
+     familiar le sale del PROPIO bolsillo, no del de Maleu. Por eso lo decide
+     el solo: sin tope y sin que nadie lo apruebe. Lo unico que queda es la
+     firma — el backend sella quien y cuando en la hoja.
+     Medido el 30/9: 55 de 106 pedidos de Red entraron sin envio y nadie podia
+     explicar por que. No era olvido de nadie: el dato nunca existio.
+     El boton desaparece si ya esta cobrado. No es desconfianza: Red no tiene
+     columna de saldo a favor, asi que devolver plata ya cobrada no tendria
+     donde anotarse. */
+  const _env = Number(p.env) || 0;
+  const _envBtn = (accion, texto) => cobrado ? '' :
+    ' <button class="env-btn" onclick="rutaEnvioAnular(' + accion + ')">' + texto + '</button>';
+  if (_env > 0) {
+    html += '<div class="ruta-envio">Incluye envío ' + ars(_env) + ' (tuyo) · productos ' + ars(p.$) +
+            _envBtn('true', 'No se lo cobro') + '</div>';
+  } else if (p.envAnu) {
+    html += '<div class="ruta-envio off">Envío sin cobrar · ' + _envioSelloTxt(p.envAnu) +
+            _envBtn('false', 'Volver a cobrarlo') + '</div>';
   }
   if (prodsHtml) html += '<div class="ruta-prods">' + prodsHtml + '</div>';
   html += '<div class="ruta-contact">';
@@ -2038,6 +2064,65 @@ function _rutaUpdate(updates) {
     .catch(() => redToast('Sin conexión — reintentará al sync'));
   updateMainBadges();
   renderRuta();
+}
+
+/* El sello que guarda la hoja: "3000 | fede | 01/10/2026 01:20". El monto va
+   primero para poder deshacer sin adivinarlo. */
+function _envioMontoSello(s) {
+  const m = String(s || '').trim().match(/^(-?\d+(?:[.,]\d+)?)/);
+  if (!m) return 0;
+  const n = Number(String(m[1]).replace(',', '.'));
+  return isFinite(n) && n > 0 ? Math.round(n) : 0;
+}
+function _envioSelloTxt(s) {
+  const p = String(s || '').split('|').map(x => x.trim());
+  if (p.length < 3) return 'lo sacaste vos';
+  const dia = (p[2].match(/^(\d{1,2}\/\d{1,2})/) || [, p[2]])[1];
+  return 'lo sacó ' + p[1] + ' el ' + dia;
+}
+
+function rutaEnvioAnular(anular) {
+  const p = _rutaCurrent(); if (!p || !session) return;
+  if (p.ep === 'Cobrado') { redToast('Ya está cobrado: el envío se arregla a mano'); return; }
+  const monto = anular ? (Number(p.env) || 0) : _envioMontoSello(p.envAnu);
+  if (!monto) { redToast(anular ? 'Este pedido no tiene envío' : 'No sé de cuánto era el envío'); return; }
+
+  const quien = p.c || 'este cliente';
+  /* El confirm dice de QUIEN sale la plata. Sin esa linea, un vendedor puede
+     creer que esta regalando plata de Maleu y usarlo distinto. */
+  const msg = anular
+    ? 'Le regalás el envío de ' + ars(monto) + ' a ' + quien + '.\n\n' +
+      'Esos ' + ars(monto) + ' salen de TU ganancia, no de Maleu.\n\n¿Lo hacés igual?'
+    : '¿Volver a cobrarle el envío de ' + ars(monto) + ' a ' + quien + '?';
+  if (!confirm(msg)) return;
+
+  /* Optimista con vuelta atras: la pantalla responde ya, y si el backend dice
+     que no (ej. se cobro desde otro telefono mientras tanto) se restaura. */
+  const antes = { env: p.env, envAnu: p.envAnu };
+  const copia = lastDashboardData
+    ? lastDashboardData.pedidos.find(x => _normN(x.n) === _normN(p.n)) : null;
+  const aplicar = (st) => {
+    p.env = st.env; p.envAnu = st.envAnu;
+    if (copia) { copia.env = st.env; copia.envAnu = st.envAnu; }
+    renderRuta(); updateMainBadges();
+  };
+  aplicar(anular
+    ? { env: 0, envAnu: monto + ' | ' + session.nombre + ' | hoy' }
+    : { env: monto, envAnu: '' });
+  savedInd();
+
+  fetch(APPS_SCRIPT_URL, {
+    method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify({ action: 'redEnvioAnular', n: String(p.n), row: p.row, anular: !!anular })
+  }).then(r => r.json()).then(d => {
+    if (d && d.ok) {
+      if (anular && d.sello) aplicar({ env: 0, envAnu: d.sello });
+      redToast(anular ? '✓ No le cobrás el envío' : '✓ El envío vuelve');
+    } else {
+      aplicar(antes);
+      redToast('No se pudo: ' + ((d && d.err) || 'error'));
+    }
+  }).catch(() => { aplicar(antes); redToast('Sin conexión — no se guardó'); });
 }
 
 function rutaSetFP(v) {
