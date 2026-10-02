@@ -205,6 +205,19 @@ const chk = (t, c, d) => {
     const n2 = await evaluar(cli, `window.__nAdmin`);
     chk('y no lo vuelve a pedir al reentrar', n2 === n1, { antes: n1, ahora: n2 });
 
+    /* Despues de ESCRIBIR desde la ficha del pedido (2/10/2026): 17 botones
+       terminaban en load() = el volcado en frio, 34 s. Se toca uno real. */
+    await evaluar(cli, `try{ go('inicio'); }catch(e){} 1`);
+    await pausa(800);
+    const nA = await evaluar(cli, `window.__nAdmin`);
+    const desde = await evaluar(cli, `window.__gets.length`);
+    await evaluar(cli, `try{ pedDep('Home', 5, ''); }catch(e){ window.__errPD=String(e); } 1`);
+    await pausa(2500);
+    const gW = await evaluar(cli, `window.__gets.slice(${desde})`);
+    const nB = await evaluar(cli, `window.__nAdmin`);
+    chk('cambiar el deposito de un pedido NO pide el volcado', nB === nA && gW.indexOf('admin') < 0, gW);
+    chk('y si recarga los pedidos por lo liviano', gW.indexOf('pedidosLight') > -1 || gW.indexOf('lote') > -1, gW);
+
     const propios = errores.filter(e => !/favicon|manifest/i.test(String(e)));
     chk('ni un error en la consola', propios.length === 0, propios.slice(0, 3));
 
