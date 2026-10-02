@@ -14489,6 +14489,19 @@ function _sbClavePedido(p){
   return r?(p.h+'|#'+r):'';
 }
 
+/* ¿Esta fila de la base puede pisar al pedido de aca? Se decide POR PEDIDO
+   (2/10/2026): si a ESTE pedido se le cambio algo aca, la fila tiene que ser
+   posterior a ESE cambio. La fecha de las otras filas no dice nada de esta: la
+   replica copia de a una y puede cortar a la mitad. Sin fecha y con cambio
+   local, no pisa — no saber de cuando es no es saber que es posterior. */
+function _sbFilaPisa(q){
+  var k=_sbClavePedido(q);
+  var L=k?_sbCambiosPed[k]:0;
+  if(!L)return true;
+  var t=Date.parse(q&&q._ts||'');
+  return !isNaN(t)&&t>L;
+}
+
 function _sbFusionar(previos,lista){
   if(!Array.isArray(previos)||!previos.length)return lista;
   var ix={},out=previos.slice();
@@ -14499,7 +14512,7 @@ function _sbFusionar(previos,lista){
   for(var j=0;j<lista.length;j++){
     var q=lista[j];
     var k=_sbClavePedido(q);
-    if(k&&ix[k]!=null)out[ix[k]]=q;
+    if(k&&ix[k]!=null){ if(_sbFilaPisa(q))out[ix[k]]=q; }
     else { out.push(q); if(k)ix[k]=out.length-1; }
   }
   return out;
@@ -14523,8 +14536,11 @@ function _sbRefrescoPedidos(gen){
   return _sbPedidos(400).then(function(lista){
     if(!lista||!lista.length)return false;
     if(gen&&gen.llego)return false;          // Google gano la carrera
+    if(!_sbPuedePisar())return false;        // tocaste algo mientras la respuesta venia en camino
     var edad=_sbEdad(lista);
-    if(!_sbFotoPosterior(edad))return false; // hubo un cambio aca que la base todavia no tiene
+    /* Ya NO se autoriza con `_sbFotoPosterior(edad)`: `edad` es la fila MAS
+       NUEVA y no dice nada de las otras 399. La proteccion va pedido por pedido
+       adentro de `_sbFusionar` (`_sbFilaPisa`); `edad` queda solo para el sello. */
     /* La foto de `pedidosLight` llego primero y es mas nueva que estas filas:
        fusionarlas encima seria volver atras pedido por pedido (2/10/2026). */
     if(gen&&gen.fotoTs&&edad<=gen.fotoTs)return false;
@@ -15952,12 +15968,22 @@ function _warnOCMsg(warn){
    La lista de Supabase no lo puede saber hasta que corra la replica, asi que
    mientras esta marca este fresca el adelanto se abstiene. Ver `_sbPuedePisar`. */
 var _sbCambioLocal=0;
+/* Y la misma marca POR PEDIDO (2/10/2026, lo marco Codex). Con una sola marca
+   global, la lista de `sales_order` se autorizaba con la fecha MAS NUEVA de sus
+   400 filas: si la replica copio el pedido A y corto antes de copiar el B recien
+   cobrado, la fila de A habilitaba pisar a B con su fila vieja — «No Cobrado».
+   Clave = `_sbClavePedido`, la misma con la que se fusiona. Ver `_sbFilaPisa`. */
+var _sbCambiosPed={};
 function _patchPedidoLocal(hoja,id,patch){
   _sbCambioLocal=Date.now();
+  var kc=_sbClavePedido({h:hoja,n:id});
+  if(kc)_sbCambiosPed[kc]=_sbCambioLocal;
   if(!D||!D.pedidos)return;
   for(var i=0;i<D.pedidos.length;i++){
     var p=D.pedidos[i];
     if(p&&p.h===hoja&&String(p.n)===String(id)){
+      var kp=_sbClavePedido(p);
+      if(kp)_sbCambiosPed[kp]=_sbCambioLocal;
       Object.keys(patch).forEach(function(k){p[k]=patch[k];});
       return;
     }

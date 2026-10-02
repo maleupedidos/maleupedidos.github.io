@@ -102,17 +102,20 @@ vm.runInContext([
   (src.match(/\nvar _sbSinWarehouse=[^;]*;/) || [''])[0],
   (src.match(/\nvar _SB_CANALES_PEDIDO=[^;]*;/) || [''])[0],
   sacar('_sbPedidosAhora'), sacar('_sbPedidos'),
-  'var _sbCambioLocal=0;',
+  'var _sbCambioLocal=0; var _sbCambiosPed={};',
   (src.match(/\nvar _SB_ESPERA_TRAS_CAMBIO=[^;]*;/) || [''])[0],
   sacar('_sbPuedePisar'), sacar('_sbFotoPosterior'), sacar('_sbGuardarCopia'),
   sacar('_sbEdad'), sacar('_sbCompletar'),
-  sacar('_sbClavePedido'), sacar('_sbFusionar'), sacar('_sbRefrescoPedidos'),
+  sacar('_sbClavePedido'), sacar('_sbFilaPisa'), sacar('_sbFusionar'), sacar('_sbRefrescoPedidos'),
   /* Desde 6abf333 el cartel lo apaga esta; sin ella el ReferenceError quedaba
      adentro del try y los dos chequeos del cartel daban MAL sin decir por qué. */
   sacar('_apagarCartelUnaVez'),
 ].join('\n'), ctx);
 
-const tocarAhora = ms => vm.runInContext('_sbCambioLocal=' + ms + ';', ctx);
+/* `clave` (opcional) = el pedido que se toco, como en `_patchPedidoLocal`. Desde el
+   2/10/2026 la proteccion contra la replica atrasada es POR PEDIDO (`_sbFilaPisa`). */
+const tocarAhora = (ms, clave) => vm.runInContext('_sbCambioLocal=' + ms + ';'
+  + (ms ? '' : '_sbCambiosPed={};') + (clave ? '_sbCambiosPed[' + JSON.stringify(clave) + ']=' + ms + ';' : ''), ctx);
 
 const limpiar = () => { ctx._ls = {}; vm.runInContext('_sbPerm=null;_sbPermHasta=0;_sbPidiendo=null;', ctx);
   vm.runInContext('_sbEnVuelo={};', ctx); };
@@ -411,11 +414,16 @@ const reabrir = () => vm.runInContext('_sbPerm=null;_sbPermHasta=0;_sbPidiendo=n
      afirmaba "pasados los 6 minutos sí entra" con filas del 23/9 — o sea, daba
      por bueno el bug: la réplica corre cada 10 min y a los 7 todavía puede no
      tener el cobro. Manda la FECHA de las filas contra la del cambio. */
-  limpiar(); permisoAMano(); reset(); tocarAhora(Date.now() - 7 * 60 * 1000);
-  ctx.D = { pedidos: [{ h: 'Home', n: 'VIEJO' }] };
-  chk('pasados 6 min, filas ANTERIORES al cambio NO entran: la réplica todavía no lo copió',
-    (await ctx._sbRefrescoPedidos({ llego: false })) === false
-    && ctx.D.pedidos[0].n === 'VIEJO', ctx.D.pedidos.map(p => p.n));
+  /* Y es POR PEDIDO (2/10/2026, Codex sobre ce5a645): la fila anterior al cambio
+     no pisa A ESE pedido; las de los demas entran igual. Antes se rechazaba o se
+     aceptaba la lista entera con la fecha mas nueva, y una fila copiada de otro
+     pedido habilitaba pisar el cobrado. El caso de la replica cortada a la mitad
+     esta en `probar_adelanto_por_pedido.js`. */
+  limpiar(); permisoAMano(); reset(); tocarAhora(0); tocarAhora(Date.now() - 7 * 60 * 1000, 'Home|1023');
+  ctx.D = { pedidos: [{ h: 'Home', n: '1023', c: 'COBRADO ACA' }, { h: 'Home', n: 'VIEJO' }] };
+  await ctx._sbRefrescoPedidos({ llego: false });
+  chk('pasados 6 min, la fila ANTERIOR al cambio NO pisa a ESE pedido: la réplica todavía no lo copió',
+    ctx.D.pedidos[0].c === 'COBRADO ACA' && ctx.D.pedidos.some(p => p.n === 'VIEJO'), ctx.D.pedidos.map(p => p.n + ':' + p.c));
 
   limpiar(); permisoAMano();
   reset({ filas: [Object.assign({}, FILAS[0], { updated_at: new Date(Date.now() - 60 * 1000).toISOString() })] });
