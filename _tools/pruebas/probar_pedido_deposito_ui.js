@@ -198,6 +198,41 @@ const DEPS = [{ id: 'ustariz', nombre: 'Deposito Ustariz' }, { id: 'moresco', no
     chk('   y los botones se destraban, con su nombre', !!e2 && e2.dis === 0 &&
         await evaluar(cli, `!!Array.prototype.some.call(document.querySelectorAll('#__depPrueba button.ped-dep-x'),function(b){return b.textContent.trim()==='Ustariz';})`), e2);
 
+    /* CODEX SOBRE ec3c322 (2/10/2026).
+       (a) Dos pedidos Home sin numero ("-") compartian id de bloque: tocar uno
+           repintaba el del otro. Se identifica por FILA.
+       (b) El cambio vivia solo en memoria: ni `ma3` ni `_sbCambioLocal`, asi
+           que al reabrir volvia el freezer viejo. */
+    await evaluar(cli, `(function(){
+      window.__depResp={ok:true};
+      try{localStorage.removeItem('ma3');}catch(e){}
+      _sbCambioLocal=0;
+      D.pedidos=[{h:'Home',n:'-',r:140,o:'Deposito',es:'Pendiente',dep:'',p:[]},
+                 {h:'Home',n:'-',r:141,o:'Deposito',es:'Pendiente',dep:'ustariz',p:[]}];
+      var w=document.getElementById('__depPrueba'); w.innerHTML='';
+      var a=document.createElement('div'); a.id='__depA'; a.innerHTML=_pedDepHTML(D.pedidos[0],false);
+      var b=document.createElement('div'); b.id='__depB'; b.innerHTML=_pedDepHTML(D.pedidos[1],false);
+      w.appendChild(a); w.appendChild(b); return 1;
+    })()`);
+    const ids = await evaluar(cli, `[document.querySelector('#__depA .ped-dep').id, document.querySelector('#__depB .ped-dep').id]`);
+    chk('(a) dos pedidos Home "-" tienen bloques con id distinto', !!ids && ids[0] !== ids[1], ids);
+    await evaluar(cli, `(function(){var bs=document.querySelectorAll('#__depA button.ped-dep-x');
+      for(var i=0;i<bs.length;i++)if(bs[i].textContent.trim()==='Moresco'){bs[i].click();return 1;}return 0;})()`);
+    await esperar(cli, `!document.querySelector('#__depPrueba button.va')`, 10000);
+    const ab = await evaluar(cli, `(function(){
+      var oa=document.querySelector('#__depA button.ped-dep-x.on'), ob=document.querySelector('#__depB button.ped-dep-x.on');
+      return {a:oa?oa.textContent.trim():'', b:ob?ob.textContent.trim():'', da:D.pedidos[0].dep, db:D.pedidos[1].dep};
+    })()`);
+    chk('   tocar el de la fila 140 marca ESE bloque', !!ab && ab.a === 'Moresco' && ab.da === 'moresco', ab);
+    chk('   y el de la fila 141 queda como estaba', !!ab && ab.b === 'Ustariz' && ab.db === 'ustariz', ab);
+    const per = await evaluar(cli, `(function(){
+      var c=null; try{c=JSON.parse(localStorage.getItem('ma3')||'null');}catch(e){}
+      var f=c&&c.pedidos?c.pedidos.filter(function(p){return Number(p.r)===140;})[0]:null;
+      return {ma3:f?f.dep:null, marca:_sbCambioLocal>0&&(Date.now()-_sbCambioLocal)<60000};
+    })()`);
+    chk('(b) el freezer nuevo queda guardado en la copia del celular (ma3)', !!per && per.ma3 === 'moresco', per);
+    chk('   y se marca el cambio local: Supabase no lo pisa con la foto vieja', !!per && per.marca === true, per);
+
     const err = await evaluar(cli, `(window.__err||[]).length`);
     chk('sin errores de consola', err === 0, { errores: err });
 
