@@ -107,6 +107,10 @@ function adelanto(filaHaceMin) {
     var ahora = Date.now();
     D = { pedidos: [{ h:'Home', n:'900001', c:'Prueba', ep:'Cobrado', $:1000, r:2 }] };
     _sbCambioLocal = ahora - 7*60000;
+    /* Desde 1573aa3 la regla es POR PEDIDO: un cobro real pasa por
+       _patchPedidoLocal, que anota las dos marcas. Con solo la global la prueba
+       simulaba un cobro que el ERP ya no hace. */
+    if (typeof _sbCambiosPed === 'object') { _sbCambiosPed = {}; _sbCambiosPed[_sbClavePedido(D.pedidos[0])] = _sbCambioLocal; }
     var fila = { h:'Home', n:'900001', c:'Prueba', ep:'No Cobrado', $:1000, r:2,
                  _ts: new Date(ahora - ${filaHaceMin}*60000).toISOString() };
     _sbPedidos = function(){ return Promise.resolve([fila]); };
@@ -125,7 +129,9 @@ function adelanto(filaHaceMin) {
     try {
       const viejo = JSON.parse(await evaluar(cli, adelanto(8)));
       console.log('   fila de hace 8 min (réplica ANTES del cobro): ' + JSON.stringify(viejo));
-      ok(viejo.pinto === false && viejo.ep === 'Cobrado', 'la fila vieja NO pisa el cobro');
+      /* Desde 1573aa3 la lista SÍ se pinta (las otras filas pueden ser nuevas);
+         lo que no puede pasar es que ESTE pedido vuelva a "No Cobrado". */
+      ok(viejo.ep === 'Cobrado', 'la fila vieja NO pisa el cobro');
       const nuevo = JSON.parse(await evaluar(cli, adelanto(1)));
       console.log('   fila de hace 1 min (réplica DESPUÉS del cobro): ' + JSON.stringify(nuevo));
       ok(nuevo.pinto === true && nuevo.ep === 'No Cobrado', 'la fila posterior SÍ pisa (el freno no es un candado)');

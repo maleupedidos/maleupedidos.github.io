@@ -228,10 +228,13 @@ const DEPS = [{ id: 'ustariz', nombre: 'Deposito Ustariz' }, { id: 'moresco', no
     const per = await evaluar(cli, `(function(){
       var c=null; try{c=JSON.parse(localStorage.getItem('ma3')||'null');}catch(e){}
       var f=c&&c.pedidos?c.pedidos.filter(function(p){return Number(p.r)===140;})[0]:null;
-      return {ma3:f?f.dep:null, marca:_sbCambioLocal>0&&(Date.now()-_sbCambioLocal)<60000};
+      var kp=(typeof _sbClavePedido==='function')?_sbClavePedido(D.pedidos[0]):'';
+      return {ma3:f?f.dep:null, marca:_sbCambioLocal>0&&(Date.now()-_sbCambioLocal)<60000,
+              porPedido:(typeof _sbCambiosPed==='object'&&kp)?!!_sbCambiosPed[kp]:false};
     })()`);
     chk('(b) el freezer nuevo queda guardado en la copia del celular (ma3)', !!per && per.ma3 === 'moresco', per);
     chk('   y se marca el cambio local: Supabase no lo pisa con la foto vieja', !!per && per.marca === true, per);
+    chk('   también POR PEDIDO (_sbCambiosPed), que es como decide _sbFilaPisa', !!per && per.porPedido === true, per);
 
     const err = await evaluar(cli, `(window.__err||[]).length`);
     chk('sin errores de consola', err === 0, { errores: err });
