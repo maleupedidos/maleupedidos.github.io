@@ -55838,6 +55838,13 @@ var _ABA_FUSIONADO = !!document.getElementById('pg-abast');
 var _abaUniCache = {}, _abaUniDe = null;
 /* Lo que PAGOS dibuja recien cuando se abre (el detalle de cada semana). */
 var _abaLazy = {}, _abaLazyN = 0;
+/* Cuántos minutos de atraso hacen que la foto de PostgreSQL además pida fresco.
+   Va ACÁ ARRIBA y no al lado de `_abaFotoLeer`, aunque ahí se leería mejor: el
+   INIT llama a `abaArranque` unas líneas más abajo, y un `var` declarado después
+   vale `undefined` hasta que el script termina de evaluarse. Hoy no se notaría
+   —se lee dentro de un `.then()`, que corre más tarde— y eso es justo lo que lo
+   hace peligroso: el día que se lea sincrónico, falla sin un solo error. */
+var ABA_FOTO_VIEJA_MS = 15 * 60 * 1000;
 
 /* ── INIT ──────────────────────────────────────────────── */
 abaLoadLocal();
@@ -55852,11 +55859,13 @@ window.addEventListener('offline', function() { abaIsOnline = false; abaUpdateOn
 // padre muestra su propio loader si hace falta y la UI vacia se rellena al toque.
 var _cacheValid = (busqueda.provs && busqueda.provs.length > 0) || (busqueda.ocs && busqueda.ocs.length > 0);
 var _IS_EMBED_INIT = (function(){try{return new URLSearchParams('?embed=1&standalone=1').get('embed')==='1';}catch(e){return false;}})();
+/* `abaArranque` y no `abaRefresh`: lee la foto de PostgreSQL (~200 ms) y sólo si
+   no está va a Apps Script (9,2 s). Ver el comentario de `_abaFotoLeer`. */
 if (_cacheValid || _IS_EMBED_INIT) {
   abaRender();
-  abaRefresh(true); // silent refresh en background
+  abaArranque(true); // silent en background
 } else {
-  abaRefresh(false);
+  abaArranque(false);
 }
 
 // Cargar catalogo para tab Nuevo
@@ -55960,6 +55969,139 @@ function abaReintentar() {
   if (typeof refreshContextual === 'function') { try { refreshContextual(); return; } catch (e) {} }
   abaRefresh(true);
   if (abaCurrentTab === 'resumen' || abaCurrentTab === 'nuevo') loadCatalogo(true);
+}
+
+/* ── LA FOTO DE ABASTECIMIENTO: PostgreSQL en vez de esperar 9 s (2/10/2026) ──
+   `action=busqueda` tardó **9.237 ms** medido el 2/10 en producción y pesa
+   181,6 KB, de los cuales `deudas` es el 87,5%. El ERP ahora deja ese mismo
+   payload calculado en `erp_screen_snapshot` (migración 030) y acá se lee de
+   ahí: una sola fila, sin recalcular nada.
+
+   **El cálculo no se movió de lugar.** Lo sigue haciendo Apps Script, con su
+   FIFO y sus reglas; esto sólo lee el resultado. Y lo que llega es una COPIA,
+   así que se muestra **de cuándo es** — la regla de la casa para toda copia
+   guardada, y la razón por la que una foto sin `computed_at` legible no se usa.
+
+   El ↻ NO pasa por acá a propósito: cuando Tadeo lo toca quiere el dato de
+   ahora, y eso es `abaRefresh`, que va a Apps Script. */
+/* `ABA_FOTO_VIEJA_MS` se declara arriba, junto al INIT: ver ahí por qué. */
+
+/* PostgREST devuelve `timestamptz` CON offset (`…+00:00`), pero si alguna vez
+   llegara sin zona, `Date.parse` lo leería como hora LOCAL y el sello diría
+   «hace 3 horas» sobre una foto de ahora. Por eso la Z se pone explícita. */
+function _abaFechaUtc(s) {
+  var t = String(s || '');
+  if (t && !/[Zz]$|[+-]\d{2}:?\d{2}$/.test(t)) t += 'Z';
+  var n = Date.parse(t);
+  return isFinite(n) ? n : 0;
+}
+
+/* El sello del encabezado. Con `_hace` del panel si está —es la misma frase que
+   usa el resto del ERP—, y con la hora si no: una copia sin fecha no se muestra
+   callada. */
+function _abaSello(ts) {
+  var el = document.getElementById('abaLastSync');
+  if (!el) return;
+  var txt = '';
+  try { if (typeof _hace === 'function') txt = _hace(ts); } catch (e) {}
+  if (!txt) {
+    var d = new Date(ts);
+    txt = d.getHours() + ':' + String(d.getMinutes()).padStart(2, '0');
+  }
+  el.textContent = txt;
+}
+
+/* Devuelve la foto o null. Null no es un error: significa «esta pantalla va por
+   Apps Script, como siempre». Pasa cuando este usuario no tiene permiso de
+   Supabase, cuando la 030 no está aplicada, o cuando la policy no lo deja leer
+   (devuelve una lista vacía, no un 403). */
+/* Por qué la última lectura de la foto no sirvió. Un fallback MUDO es el que no
+   se arregla nunca, porque desde afuera se ve igual que «no hay foto todavía»:
+   la pantalla anda, va por Apps Script, y nadie se entera de que el atajo está
+   roto. Esto se lee con `window.__abaFoto` en la consola. */
+var __abaFoto = { estado: 'sin intentar', motivo: '' };
+function _abaFotoNota(estado, motivo) {
+  __abaFoto = { estado: estado, motivo: String(motivo || '') };
+  try { window.__abaFoto = __abaFoto; } catch (e) {}
+  if (motivo) { try { console.warn('[busqueda] la foto no se usó: ' + estado + ' ' + motivo); } catch (e) {} }
+}
+
+function _abaFotoLeer() {
+  try {
+    if (typeof _sbPermiso !== 'function') {
+      _abaFotoNota('sin _sbPermiso', 'el panel no lo expone en este contexto');
+      return Promise.resolve(null);
+    }
+    /* `true` = sólo si ya lo tengo. Pedir el permiso cuesta 3,5 s y se lleva uno
+       de los dos pedidos en vuelo: pagarlo acá haría que la pantalla llegue MÁS
+       TARDE que sin atajo. El panel lo pide por atrás (`_sbPermisoTibio`). */
+    return _sbPermiso(true).then(function (sb) {
+      if (!sb || !sb.url || !sb.key || !sb.token) {
+        _abaFotoNota('sin permiso', 'este usuario no tiene token de Supabase, o todavía no llegó');
+        return null;
+      }
+      return fetch(sb.url + '/rest/v1/erp_screen_snapshot'
+          + '?select=payload,computed_at,warning,source&screen=eq.busqueda',
+        { headers: { apikey: sb.key, Authorization: 'Bearer ' + sb.token } })
+        .then(function (r) {
+          if (!r.ok) { _abaFotoNota('HTTP ' + r.status, 'la 030 sin aplicar, o la policy no deja leer'); return null; }
+          return r.json();
+        })
+        .then(function (filas) {
+          if (!filas) return null;
+          var f = filas[0];
+          /* Lista vacía es lo que devuelve RLS cuando la policy no deja pasar la
+             fila: no es un 403. Y también es lo que hay si el ERP nunca escribió
+             la foto. Las dos van por Apps Script, que es lo correcto. */
+          if (!f) { _abaFotoNota('no hay foto', 'la tabla está vacía o la policy la filtró'); return null; }
+          /* El mismo guardia que el camino de Apps Script: una respuesta que no
+             es un payload de búsqueda no reemplaza lo que había. */
+          if (!_abaEsBusqueda(f.payload)) { _abaFotoNota('payload raro', 'sin provs/ocs'); return null; }
+          var cuando = _abaFechaUtc(f.computed_at);
+          if (!cuando) { _abaFotoNota('sin fecha', 'computed_at ilegible: ' + f.computed_at); return null; }
+          _abaFotoNota('ok', '');
+          return { data: f.payload, cuando: cuando,
+                   warning: String(f.warning || ''), source: String(f.source || '') };
+        });
+    }).catch(function (e) {
+      _abaFotoNota('error', (e && e.message) || e);
+      return null;
+    });
+  } catch (e) {
+    /* Acá cae un ReferenceError de los que el `try/catch` se traga: una función
+       del panel que en este contexto no existe. Sin el motivo escrito, esto se
+       ve exactamente igual que «no hay foto». */
+    _abaFotoNota('error sincrónico', (e && e.message) || e);
+    return Promise.resolve(null);
+  }
+}
+
+/* La puerta del ARRANQUE: la foto si está, Apps Script si no. */
+function abaArranque(silent) {
+  return _abaFotoLeer().then(function (foto) {
+    if (!foto) return abaRefresh(silent);
+    _abaAplicarBusqueda(foto.data);
+    abaCargaEstado = 'ok'; abaCargaError = '';
+    abaRender();
+    _abaSello(foto.cuando);
+    var lv = document.getElementById('abaLoadingView');
+    if (lv) lv.classList.add('hidden');
+    _abaAviso(null);
+    abaProcessSyncQueue();
+    /* NO se llama a `_marcarFresco`, y es a propósito: esto es una copia, no el
+       dato de ahora. Si se lo dijera, el ↻ del panel se pondría verde sobre
+       datos de hace rato. */
+    /* Una foto vieja se pinta igual —es mejor que la pantalla en blanco— pero
+       además se pide fresco por atrás. Con el trigger corriendo cada 5 minutos,
+       15 minutos de atraso significan que algo no está corriendo. */
+    if (Date.now() - foto.cuando > ABA_FOTO_VIEJA_MS) {
+      try { abaRefresh(true); } catch (e) {}
+    }
+    return true;
+  }).catch(function (e) {
+    _abaFotoNota('error al aplicar', (e && e.message) || e);
+    return abaRefresh(silent);
+  });
 }
 
 function abaRefresh(silent) {
@@ -59831,7 +59973,7 @@ function abaShowToast(msg, ms) {
   abaShowToast._t = setTimeout(function() { t.classList.remove('show'); }, ms || 3000);
 }
 
-try{window["pedLevel"]=pedLevel;}catch(e){}try{window["ABA_APPS_SCRIPT_URL"]=ABA_APPS_SCRIPT_URL;}catch(e){}try{window["_abaOpenOrdInPanel"]=_abaOpenOrdInPanel;}catch(e){}try{window["busqueda"]=busqueda;}catch(e){}try{window["catalogo"]=catalogo;}catch(e){}try{window["abaSyncQueue"]=abaSyncQueue;}catch(e){}try{window["marcadosPedido"]=marcadosPedido;}catch(e){}try{window["marcadosRecibido"]=marcadosRecibido;}catch(e){}try{window["waCopied"]=waCopied;}catch(e){}try{window["armadoChecked"]=armadoChecked;}catch(e){}try{window["vendedoresMap"]=vendedoresMap;}catch(e){}try{window["VEND_RED_SIN_ID"]=VEND_RED_SIN_ID;}catch(e){}try{window["_vendRed"]=_vendRed;}catch(e){}try{window["semSel"]=semSel;}catch(e){}try{window["_semOf"]=_semOf;}catch(e){}try{window["_semActual"]=_semActual;}catch(e){}try{window["_matchSem"]=_matchSem;}catch(e){}try{window["switchSemSel"]=switchSemSel;}catch(e){}try{window["abaCurrentTab"]=abaCurrentTab;}catch(e){}try{window["abaIsOnline"]=abaIsOnline;}catch(e){}try{window["npQtys"]=npQtys;}catch(e){}try{window["npOrigins"]=npOrigins;}catch(e){}try{window["abaCargaEstado"]=abaCargaEstado;}catch(e){}try{window["abaCargaError"]=abaCargaError;}catch(e){}try{window["abaCatEstado"]=abaCatEstado;}catch(e){}try{window["abaCatError"]=abaCatError;}catch(e){}try{window["_abaCatVuelo"]=_abaCatVuelo;}catch(e){}try{window["abaCc"]=abaCc;}catch(e){}try{window["_abaCcVuelo"]=_abaCcVuelo;}catch(e){}try{window["abaCcForm"]=abaCcForm;}catch(e){}try{window["abaCcCostoForm"]=abaCcCostoForm;}catch(e){}try{window["_npProvPrevio"]=_npProvPrevio;}catch(e){}try{window["_ABA_FUSIONADO"]=_ABA_FUSIONADO;}catch(e){}try{window["_abaUniCache"]=_abaUniCache;}catch(e){}try{window["_abaUniDe"]=_abaUniDe;}catch(e){}try{window["_abaLazy"]=_abaLazy;}catch(e){}try{window["_abaLazyN"]=_abaLazyN;}catch(e){}try{window["_cacheValid"]=_cacheValid;}catch(e){}try{window["_IS_EMBED_INIT"]=_IS_EMBED_INIT;}catch(e){}try{window["_ABA_IS_EMBED"]=_ABA_IS_EMBED;}catch(e){}try{window["abaLoaderCount"]=abaLoaderCount;}catch(e){}try{window["abaShowLoader"]=abaShowLoader;}catch(e){}try{window["abaHideLoader"]=abaHideLoader;}catch(e){}try{window["abaUpdateOnlineStatus"]=abaUpdateOnlineStatus;}catch(e){}try{window["abaUpdateLastSync"]=abaUpdateLastSync;}catch(e){}try{window["abaSaveLocal"]=abaSaveLocal;}catch(e){}try{window["abaLoadLocal"]=abaLoadLocal;}catch(e){}try{window["_abaAviso"]=_abaAviso;}catch(e){}try{window["_abaAplicarBusqueda"]=_abaAplicarBusqueda;}catch(e){}try{window["abaReintentar"]=abaReintentar;}catch(e){}try{window["abaRefresh"]=abaRefresh;}catch(e){}try{window["populateNpVendedor"]=populateNpVendedor;}catch(e){}try{window["loadVendedores"]=loadVendedores;}catch(e){}try{window["loadCatalogo"]=loadCatalogo;}catch(e){}try{window["populateProvSelect"]=populateProvSelect;}catch(e){}try{window["abaFormatMoney"]=abaFormatMoney;}catch(e){}try{window["_rotArmar"]=_rotArmar;}catch(e){}try{window["esc"]=esc;}catch(e){}try{window["_abaH"]=_abaH;}catch(e){}try{window["_abaUni"]=_abaUni;}catch(e){}try{window["_abaCant"]=_abaCant;}catch(e){}try{window["_abaTot"]=_abaTot;}catch(e){}try{window["_abaMonto"]=_abaMonto;}catch(e){}try{window["_abaCantIn"]=_abaCantIn;}catch(e){}try{window["_esOcDep"]=_esOcDep;}catch(e){}try{window["_abaNomCuenta"]=_abaNomCuenta;}catch(e){}try{window["_abaCopiar"]=_abaCopiar;}catch(e){}try{window["_abaHayDatos"]=_abaHayDatos;}catch(e){}try{window["_abaEsBusqueda"]=_abaEsBusqueda;}catch(e){}try{window["getSemanaISO"]=getSemanaISO;}catch(e){}try{window["abaRender"]=abaRender;}catch(e){}try{window["renderResumen"]=renderResumen;}catch(e){}try{window["_ocsRecibibles"]=_ocsRecibibles;}catch(e){}try{window["_abaMarcaKey"]=_abaMarcaKey;}catch(e){}try{window["renderProveedores"]=renderProveedores;}catch(e){}try{window["_hoyISO"]=_hoyISO;}catch(e){}try{window["_addDias"]=_addDias;}catch(e){}try{window["_labelDia"]=_labelDia;}catch(e){}try{window["_diasHasta"]=_diasHasta;}catch(e){}try{window["_primerDiaSemSelISO"]=_primerDiaSemSelISO;}catch(e){}try{window["renderProgChip"]=renderProgChip;}catch(e){}try{window["openProgModal"]=openProgModal;}catch(e){}try{window["cerrarProgModal"]=cerrarProgModal;}catch(e){}try{window["programarBusqueda"]=programarBusqueda;}catch(e){}try{window["buildWaText"]=buildWaText;}catch(e){}try{window["copyWA"]=copyWA;}catch(e){}try{window["dismissWA"]=dismissWA;}catch(e){}try{window["marcarPedido"]=marcarPedido;}catch(e){}try{window["_abaLazyHtml"]=_abaLazyHtml;}catch(e){}try{window["_abaLazyAbrir"]=_abaLazyAbrir;}catch(e){}try{window["abaRenderPagos"]=abaRenderPagos;}catch(e){}try{window["_abaDetalleSemana"]=_abaDetalleSemana;}catch(e){}try{window["_renderPagosInner"]=_renderPagosInner;}catch(e){}try{window["abaPagoCta"]=abaPagoCta;}catch(e){}try{window["abaCuentasDigitales"]=abaCuentasDigitales;}catch(e){}try{window["abaPagoCuenta"]=abaPagoCuenta;}catch(e){}try{window["renderPagoForm"]=renderPagoForm;}catch(e){}try{window["setPagoFp"]=setPagoFp;}catch(e){}try{window["togglePagoForm"]=togglePagoForm;}catch(e){}try{window["updatePagoTotal"]=updatePagoTotal;}catch(e){}try{window["confirmarPago"]=confirmarPago;}catch(e){}try{window["getOcsByProv"]=getOcsByProv;}catch(e){}try{window["agruparOcsPorProducto"]=agruparOcsPorProducto;}catch(e){}try{window["toggleRecibir"]=toggleRecibir;}catch(e){}try{window["onRecQtyChange"]=onRecQtyChange;}catch(e){}try{window["recQtyStep"]=recQtyStep;}catch(e){}try{window["isTadeoStockCli"]=isTadeoStockCli;}catch(e){}try{window["getOcRowDetails"]=getOcRowDetails;}catch(e){}try{window["distribState"]=distribState;}catch(e){}try{window["confirmarRecibir"]=confirmarRecibir;}catch(e){}try{window["enviarGroups"]=enviarGroups;}catch(e){}try{window["openDistribModal"]=openDistribModal;}catch(e){}try{window["renderDistribList"]=renderDistribList;}catch(e){}try{window["distribStep"]=distribStep;}catch(e){}try{window["updateDistribRemaining"]=updateDistribRemaining;}catch(e){}try{window["cancelDistrib"]=cancelDistrib;}catch(e){}try{window["confirmDistrib"]=confirmDistrib;}catch(e){}try{window["classifyClientes"]=classifyClientes;}catch(e){}try{window["CAT_ORDEN"]=CAT_ORDEN;}catch(e){}try{window["CAT_REMAP"]=CAT_REMAP;}catch(e){}try{window["splitProducto"]=splitProducto;}catch(e){}try{window["agruparItems"]=agruparItems;}catch(e){}try{window["cardKeyFor"]=cardKeyFor;}catch(e){}try{window["getZone"]=getZone;}catch(e){}try{window["_bandaEnPoderVend"]=_bandaEnPoderVend;}catch(e){}try{window["renderPedidos"]=renderPedidos;}catch(e){}try{window["_renderPedidosInner"]=_renderPedidosInner;}catch(e){}try{window["_ckRedVend"]=_ckRedVend;}catch(e){}try{window["_abaPodarArmado"]=_abaPodarArmado;}catch(e){}try{window["_abaContacto"]=_abaContacto;}catch(e){}try{window["renderRedConsolidadoCard"]=renderRedConsolidadoCard;}catch(e){}try{window["askArmadoRedConsolidado"]=askArmadoRedConsolidado;}catch(e){}try{window["toggleArmadoRedConsolidado"]=toggleArmadoRedConsolidado;}catch(e){}try{window["pedidoGrupoReg"]=pedidoGrupoReg;}catch(e){}try{window["mergeClientesMismoPedido"]=mergeClientesMismoPedido;}catch(e){}try{window["countGruposArmados"]=countGruposArmados;}catch(e){}try{window["renderClienteCardMerged"]=renderClienteCardMerged;}catch(e){}try{window["askArmadoGrupo"]=askArmadoGrupo;}catch(e){}try{window["toggleArmadoGrupo"]=toggleArmadoGrupo;}catch(e){}try{window["askConfirm"]=askConfirm;}catch(e){}try{window["pedNav"]=pedNav;}catch(e){}try{window["_porProveedorAgregado"]=_porProveedorAgregado;}catch(e){}try{window["marcarArmadoProveedor"]=marcarArmadoProveedor;}catch(e){}try{window["abaRenderNuevo"]=abaRenderNuevo;}catch(e){}try{window["onNpVendedorChange"]=onNpVendedorChange;}catch(e){}try{window["renderStockOverview"]=renderStockOverview;}catch(e){}try{window["onNpProvChange"]=onNpProvChange;}catch(e){}try{window["_npPintarProductos"]=_npPintarProductos;}catch(e){}try{window["npUpdateFuturo"]=npUpdateFuturo;}catch(e){}try{window["npSetOrigen"]=npSetOrigen;}catch(e){}try{window["npChangeQty"]=npChangeQty;}catch(e){}try{window["npSetQty"]=npSetQty;}catch(e){}try{window["NP_COBERTURA"]=NP_COBERTURA;}catch(e){}try{window["npDepCorto"]=npDepCorto;}catch(e){}try{window["npDispDep"]=npDispDep;}catch(e){}try{window["npEnCamino"]=npEnCamino;}catch(e){}try{window["npYaPedido"]=npYaPedido;}catch(e){}try{window["npSugerido"]=npSugerido;}catch(e){}try{window["npSugeridoConTodo"]=npSugeridoConTodo;}catch(e){}try{window["npEsStock"]=npEsStock;}catch(e){}try{window["npAplicarSugerido"]=npAplicarSugerido;}catch(e){}try{window["npCargarSugeridos"]=npCargarSugeridos;}catch(e){}try{window["getNpItems"]=getNpItems;}catch(e){}try{window["updateNpSummary"]=updateNpSummary;}catch(e){}try{window["confirmarCompra"]=confirmarCompra;}catch(e){}try{window["_abaLoaderMsg"]=_abaLoaderMsg;}catch(e){}try{window["_abaEsperarRefresh"]=_abaEsperarRefresh;}catch(e){}try{window["abaProcessSyncQueue"]=abaProcessSyncQueue;}catch(e){}try{window["scheduleRetry"]=scheduleRetry;}catch(e){}try{window["ABA_CC_LS"]=ABA_CC_LS;}catch(e){}try{window["_abaCcLeerLocal"]=_abaCcLeerLocal;}catch(e){}try{window["abaCcCargar"]=abaCcCargar;}catch(e){}try{window["_abaCcP2"]=_abaCcP2;}catch(e){}try{window["_abaCcHoy"]=_abaCcHoy;}catch(e){}try{window["_abaCcFechaNorm"]=_abaCcFechaNorm;}catch(e){}try{window["_abaCcFechaNum"]=_abaCcFechaNum;}catch(e){}try{window["_abaCcDia"]=_abaCcDia;}catch(e){}try{window["_abaCcHace"]=_abaCcHace;}catch(e){}try{window["_abaCcCorte"]=_abaCcCorte;}catch(e){}try{window["_abaCcNombre"]=_abaCcNombre;}catch(e){}try{window["_abaCcFormSucio"]=_abaCcFormSucio;}catch(e){}try{window["_abaCcEsCarne"]=_abaCcEsCarne;}catch(e){}try{window["_abaCcVisible"]=_abaCcVisible;}catch(e){}try{window["_abaCcMostrar"]=_abaCcMostrar;}catch(e){}try{window["_abaCcProvActual"]=_abaCcProvActual;}catch(e){}try{window["_abaCcEstado"]=_abaCcEstado;}catch(e){}try{window["abaRenderCarne"]=abaRenderCarne;}catch(e){}try{window["_abaCcPintarTop"]=_abaCcPintarTop;}catch(e){}try{window["_abaCcPintarLista"]=_abaCcPintarLista;}catch(e){}try{window["_abaCcCard"]=_abaCcCard;}catch(e){}try{window["_abaCcListaPrecios"]=_abaCcListaPrecios;}catch(e){}try{window["abaCcPreciosToggle"]=abaCcPreciosToggle;}catch(e){}try{window["abaCcCostoAbrir"]=abaCcCostoAbrir;}catch(e){}try{window["abaCcCostoCampo"]=abaCcCostoCampo;}catch(e){}try{window["abaCcCostoCancelar"]=abaCcCostoCancelar;}catch(e){}try{window["abaCcCostoGuardar"]=abaCcCostoGuardar;}catch(e){}try{window["abaCcAbrir"]=abaCcAbrir;}catch(e){}try{window["_abaCcArmarLineas"]=_abaCcArmarLineas;}catch(e){}try{window["_abaCcPrecioSugerido"]=_abaCcPrecioSugerido;}catch(e){}try{window["_abaCcPintarForm"]=_abaCcPintarForm;}catch(e){}try{window["_abaCcCambiosCosto"]=_abaCcCambiosCosto;}catch(e){}try{window["_abaCcEsLaMasNueva"]=_abaCcEsLaMasNueva;}catch(e){}try{window["_abaCcTotales"]=_abaCcTotales;}catch(e){}try{window["abaCcCampo"]=abaCcCampo;}catch(e){}try{window["abaCcProv"]=abaCcProv;}catch(e){}try{window["abaCcLinea"]=abaCcLinea;}catch(e){}try{window["abaCcAgregar"]=abaCcAgregar;}catch(e){}try{window["abaCcCosto"]=abaCcCosto;}catch(e){}try{window["_abaCcCerrarForm"]=_abaCcCerrarForm;}catch(e){}try{window["abaCcCerrar"]=abaCcCerrar;}catch(e){}try{window["_abaCcError"]=_abaCcError;}catch(e){}try{window["abaCcGuardar"]=abaCcGuardar;}catch(e){}try{window["abaCcRecibir"]=abaCcRecibir;}catch(e){}try{window["_abaCcRecKg"]=_abaCcRecKg;}catch(e){}try{window["_abaCcPintarRecibir"]=_abaCcPintarRecibir;}catch(e){}try{window["abaCcCaja"]=abaCcCaja;}catch(e){}try{window["abaCcCajaMas"]=abaCcCajaMas;}catch(e){}try{window["abaCcRecOtro"]=abaCcRecOtro;}catch(e){}try{window["abaCcAnular"]=abaCcAnular;}catch(e){}try{window["abaSwitchTab"]=abaSwitchTab;}catch(e){}try{window["abaHayEditor"]=abaHayEditor;}catch(e){}try{window["abaShowToast"]=abaShowToast;}catch(e){}
+try{window["pedLevel"]=pedLevel;}catch(e){}try{window["ABA_APPS_SCRIPT_URL"]=ABA_APPS_SCRIPT_URL;}catch(e){}try{window["_abaOpenOrdInPanel"]=_abaOpenOrdInPanel;}catch(e){}try{window["busqueda"]=busqueda;}catch(e){}try{window["catalogo"]=catalogo;}catch(e){}try{window["abaSyncQueue"]=abaSyncQueue;}catch(e){}try{window["marcadosPedido"]=marcadosPedido;}catch(e){}try{window["marcadosRecibido"]=marcadosRecibido;}catch(e){}try{window["waCopied"]=waCopied;}catch(e){}try{window["armadoChecked"]=armadoChecked;}catch(e){}try{window["vendedoresMap"]=vendedoresMap;}catch(e){}try{window["VEND_RED_SIN_ID"]=VEND_RED_SIN_ID;}catch(e){}try{window["_vendRed"]=_vendRed;}catch(e){}try{window["semSel"]=semSel;}catch(e){}try{window["_semOf"]=_semOf;}catch(e){}try{window["_semActual"]=_semActual;}catch(e){}try{window["_matchSem"]=_matchSem;}catch(e){}try{window["switchSemSel"]=switchSemSel;}catch(e){}try{window["abaCurrentTab"]=abaCurrentTab;}catch(e){}try{window["abaIsOnline"]=abaIsOnline;}catch(e){}try{window["npQtys"]=npQtys;}catch(e){}try{window["npOrigins"]=npOrigins;}catch(e){}try{window["abaCargaEstado"]=abaCargaEstado;}catch(e){}try{window["abaCargaError"]=abaCargaError;}catch(e){}try{window["abaCatEstado"]=abaCatEstado;}catch(e){}try{window["abaCatError"]=abaCatError;}catch(e){}try{window["_abaCatVuelo"]=_abaCatVuelo;}catch(e){}try{window["abaCc"]=abaCc;}catch(e){}try{window["_abaCcVuelo"]=_abaCcVuelo;}catch(e){}try{window["abaCcForm"]=abaCcForm;}catch(e){}try{window["abaCcCostoForm"]=abaCcCostoForm;}catch(e){}try{window["_npProvPrevio"]=_npProvPrevio;}catch(e){}try{window["_ABA_FUSIONADO"]=_ABA_FUSIONADO;}catch(e){}try{window["_abaUniCache"]=_abaUniCache;}catch(e){}try{window["_abaUniDe"]=_abaUniDe;}catch(e){}try{window["_abaLazy"]=_abaLazy;}catch(e){}try{window["_abaLazyN"]=_abaLazyN;}catch(e){}try{window["ABA_FOTO_VIEJA_MS"]=ABA_FOTO_VIEJA_MS;}catch(e){}try{window["_cacheValid"]=_cacheValid;}catch(e){}try{window["_IS_EMBED_INIT"]=_IS_EMBED_INIT;}catch(e){}try{window["_ABA_IS_EMBED"]=_ABA_IS_EMBED;}catch(e){}try{window["abaLoaderCount"]=abaLoaderCount;}catch(e){}try{window["abaShowLoader"]=abaShowLoader;}catch(e){}try{window["abaHideLoader"]=abaHideLoader;}catch(e){}try{window["abaUpdateOnlineStatus"]=abaUpdateOnlineStatus;}catch(e){}try{window["abaUpdateLastSync"]=abaUpdateLastSync;}catch(e){}try{window["abaSaveLocal"]=abaSaveLocal;}catch(e){}try{window["abaLoadLocal"]=abaLoadLocal;}catch(e){}try{window["_abaAviso"]=_abaAviso;}catch(e){}try{window["_abaAplicarBusqueda"]=_abaAplicarBusqueda;}catch(e){}try{window["abaReintentar"]=abaReintentar;}catch(e){}try{window["_abaFechaUtc"]=_abaFechaUtc;}catch(e){}try{window["_abaSello"]=_abaSello;}catch(e){}try{window["__abaFoto"]=__abaFoto;}catch(e){}try{window["_abaFotoNota"]=_abaFotoNota;}catch(e){}try{window["_abaFotoLeer"]=_abaFotoLeer;}catch(e){}try{window["abaArranque"]=abaArranque;}catch(e){}try{window["abaRefresh"]=abaRefresh;}catch(e){}try{window["populateNpVendedor"]=populateNpVendedor;}catch(e){}try{window["loadVendedores"]=loadVendedores;}catch(e){}try{window["loadCatalogo"]=loadCatalogo;}catch(e){}try{window["populateProvSelect"]=populateProvSelect;}catch(e){}try{window["abaFormatMoney"]=abaFormatMoney;}catch(e){}try{window["_rotArmar"]=_rotArmar;}catch(e){}try{window["esc"]=esc;}catch(e){}try{window["_abaH"]=_abaH;}catch(e){}try{window["_abaUni"]=_abaUni;}catch(e){}try{window["_abaCant"]=_abaCant;}catch(e){}try{window["_abaTot"]=_abaTot;}catch(e){}try{window["_abaMonto"]=_abaMonto;}catch(e){}try{window["_abaCantIn"]=_abaCantIn;}catch(e){}try{window["_esOcDep"]=_esOcDep;}catch(e){}try{window["_abaNomCuenta"]=_abaNomCuenta;}catch(e){}try{window["_abaCopiar"]=_abaCopiar;}catch(e){}try{window["_abaHayDatos"]=_abaHayDatos;}catch(e){}try{window["_abaEsBusqueda"]=_abaEsBusqueda;}catch(e){}try{window["getSemanaISO"]=getSemanaISO;}catch(e){}try{window["abaRender"]=abaRender;}catch(e){}try{window["renderResumen"]=renderResumen;}catch(e){}try{window["_ocsRecibibles"]=_ocsRecibibles;}catch(e){}try{window["_abaMarcaKey"]=_abaMarcaKey;}catch(e){}try{window["renderProveedores"]=renderProveedores;}catch(e){}try{window["_hoyISO"]=_hoyISO;}catch(e){}try{window["_addDias"]=_addDias;}catch(e){}try{window["_labelDia"]=_labelDia;}catch(e){}try{window["_diasHasta"]=_diasHasta;}catch(e){}try{window["_primerDiaSemSelISO"]=_primerDiaSemSelISO;}catch(e){}try{window["renderProgChip"]=renderProgChip;}catch(e){}try{window["openProgModal"]=openProgModal;}catch(e){}try{window["cerrarProgModal"]=cerrarProgModal;}catch(e){}try{window["programarBusqueda"]=programarBusqueda;}catch(e){}try{window["buildWaText"]=buildWaText;}catch(e){}try{window["copyWA"]=copyWA;}catch(e){}try{window["dismissWA"]=dismissWA;}catch(e){}try{window["marcarPedido"]=marcarPedido;}catch(e){}try{window["_abaLazyHtml"]=_abaLazyHtml;}catch(e){}try{window["_abaLazyAbrir"]=_abaLazyAbrir;}catch(e){}try{window["abaRenderPagos"]=abaRenderPagos;}catch(e){}try{window["_abaDetalleSemana"]=_abaDetalleSemana;}catch(e){}try{window["_renderPagosInner"]=_renderPagosInner;}catch(e){}try{window["abaPagoCta"]=abaPagoCta;}catch(e){}try{window["abaCuentasDigitales"]=abaCuentasDigitales;}catch(e){}try{window["abaPagoCuenta"]=abaPagoCuenta;}catch(e){}try{window["renderPagoForm"]=renderPagoForm;}catch(e){}try{window["setPagoFp"]=setPagoFp;}catch(e){}try{window["togglePagoForm"]=togglePagoForm;}catch(e){}try{window["updatePagoTotal"]=updatePagoTotal;}catch(e){}try{window["confirmarPago"]=confirmarPago;}catch(e){}try{window["getOcsByProv"]=getOcsByProv;}catch(e){}try{window["agruparOcsPorProducto"]=agruparOcsPorProducto;}catch(e){}try{window["toggleRecibir"]=toggleRecibir;}catch(e){}try{window["onRecQtyChange"]=onRecQtyChange;}catch(e){}try{window["recQtyStep"]=recQtyStep;}catch(e){}try{window["isTadeoStockCli"]=isTadeoStockCli;}catch(e){}try{window["getOcRowDetails"]=getOcRowDetails;}catch(e){}try{window["distribState"]=distribState;}catch(e){}try{window["confirmarRecibir"]=confirmarRecibir;}catch(e){}try{window["enviarGroups"]=enviarGroups;}catch(e){}try{window["openDistribModal"]=openDistribModal;}catch(e){}try{window["renderDistribList"]=renderDistribList;}catch(e){}try{window["distribStep"]=distribStep;}catch(e){}try{window["updateDistribRemaining"]=updateDistribRemaining;}catch(e){}try{window["cancelDistrib"]=cancelDistrib;}catch(e){}try{window["confirmDistrib"]=confirmDistrib;}catch(e){}try{window["classifyClientes"]=classifyClientes;}catch(e){}try{window["CAT_ORDEN"]=CAT_ORDEN;}catch(e){}try{window["CAT_REMAP"]=CAT_REMAP;}catch(e){}try{window["splitProducto"]=splitProducto;}catch(e){}try{window["agruparItems"]=agruparItems;}catch(e){}try{window["cardKeyFor"]=cardKeyFor;}catch(e){}try{window["getZone"]=getZone;}catch(e){}try{window["_bandaEnPoderVend"]=_bandaEnPoderVend;}catch(e){}try{window["renderPedidos"]=renderPedidos;}catch(e){}try{window["_renderPedidosInner"]=_renderPedidosInner;}catch(e){}try{window["_ckRedVend"]=_ckRedVend;}catch(e){}try{window["_abaPodarArmado"]=_abaPodarArmado;}catch(e){}try{window["_abaContacto"]=_abaContacto;}catch(e){}try{window["renderRedConsolidadoCard"]=renderRedConsolidadoCard;}catch(e){}try{window["askArmadoRedConsolidado"]=askArmadoRedConsolidado;}catch(e){}try{window["toggleArmadoRedConsolidado"]=toggleArmadoRedConsolidado;}catch(e){}try{window["pedidoGrupoReg"]=pedidoGrupoReg;}catch(e){}try{window["mergeClientesMismoPedido"]=mergeClientesMismoPedido;}catch(e){}try{window["countGruposArmados"]=countGruposArmados;}catch(e){}try{window["renderClienteCardMerged"]=renderClienteCardMerged;}catch(e){}try{window["askArmadoGrupo"]=askArmadoGrupo;}catch(e){}try{window["toggleArmadoGrupo"]=toggleArmadoGrupo;}catch(e){}try{window["askConfirm"]=askConfirm;}catch(e){}try{window["pedNav"]=pedNav;}catch(e){}try{window["_porProveedorAgregado"]=_porProveedorAgregado;}catch(e){}try{window["marcarArmadoProveedor"]=marcarArmadoProveedor;}catch(e){}try{window["abaRenderNuevo"]=abaRenderNuevo;}catch(e){}try{window["onNpVendedorChange"]=onNpVendedorChange;}catch(e){}try{window["renderStockOverview"]=renderStockOverview;}catch(e){}try{window["onNpProvChange"]=onNpProvChange;}catch(e){}try{window["_npPintarProductos"]=_npPintarProductos;}catch(e){}try{window["npUpdateFuturo"]=npUpdateFuturo;}catch(e){}try{window["npSetOrigen"]=npSetOrigen;}catch(e){}try{window["npChangeQty"]=npChangeQty;}catch(e){}try{window["npSetQty"]=npSetQty;}catch(e){}try{window["NP_COBERTURA"]=NP_COBERTURA;}catch(e){}try{window["npDepCorto"]=npDepCorto;}catch(e){}try{window["npDispDep"]=npDispDep;}catch(e){}try{window["npEnCamino"]=npEnCamino;}catch(e){}try{window["npYaPedido"]=npYaPedido;}catch(e){}try{window["npSugerido"]=npSugerido;}catch(e){}try{window["npSugeridoConTodo"]=npSugeridoConTodo;}catch(e){}try{window["npEsStock"]=npEsStock;}catch(e){}try{window["npAplicarSugerido"]=npAplicarSugerido;}catch(e){}try{window["npCargarSugeridos"]=npCargarSugeridos;}catch(e){}try{window["getNpItems"]=getNpItems;}catch(e){}try{window["updateNpSummary"]=updateNpSummary;}catch(e){}try{window["confirmarCompra"]=confirmarCompra;}catch(e){}try{window["_abaLoaderMsg"]=_abaLoaderMsg;}catch(e){}try{window["_abaEsperarRefresh"]=_abaEsperarRefresh;}catch(e){}try{window["abaProcessSyncQueue"]=abaProcessSyncQueue;}catch(e){}try{window["scheduleRetry"]=scheduleRetry;}catch(e){}try{window["ABA_CC_LS"]=ABA_CC_LS;}catch(e){}try{window["_abaCcLeerLocal"]=_abaCcLeerLocal;}catch(e){}try{window["abaCcCargar"]=abaCcCargar;}catch(e){}try{window["_abaCcP2"]=_abaCcP2;}catch(e){}try{window["_abaCcHoy"]=_abaCcHoy;}catch(e){}try{window["_abaCcFechaNorm"]=_abaCcFechaNorm;}catch(e){}try{window["_abaCcFechaNum"]=_abaCcFechaNum;}catch(e){}try{window["_abaCcDia"]=_abaCcDia;}catch(e){}try{window["_abaCcHace"]=_abaCcHace;}catch(e){}try{window["_abaCcCorte"]=_abaCcCorte;}catch(e){}try{window["_abaCcNombre"]=_abaCcNombre;}catch(e){}try{window["_abaCcFormSucio"]=_abaCcFormSucio;}catch(e){}try{window["_abaCcEsCarne"]=_abaCcEsCarne;}catch(e){}try{window["_abaCcVisible"]=_abaCcVisible;}catch(e){}try{window["_abaCcMostrar"]=_abaCcMostrar;}catch(e){}try{window["_abaCcProvActual"]=_abaCcProvActual;}catch(e){}try{window["_abaCcEstado"]=_abaCcEstado;}catch(e){}try{window["abaRenderCarne"]=abaRenderCarne;}catch(e){}try{window["_abaCcPintarTop"]=_abaCcPintarTop;}catch(e){}try{window["_abaCcPintarLista"]=_abaCcPintarLista;}catch(e){}try{window["_abaCcCard"]=_abaCcCard;}catch(e){}try{window["_abaCcListaPrecios"]=_abaCcListaPrecios;}catch(e){}try{window["abaCcPreciosToggle"]=abaCcPreciosToggle;}catch(e){}try{window["abaCcCostoAbrir"]=abaCcCostoAbrir;}catch(e){}try{window["abaCcCostoCampo"]=abaCcCostoCampo;}catch(e){}try{window["abaCcCostoCancelar"]=abaCcCostoCancelar;}catch(e){}try{window["abaCcCostoGuardar"]=abaCcCostoGuardar;}catch(e){}try{window["abaCcAbrir"]=abaCcAbrir;}catch(e){}try{window["_abaCcArmarLineas"]=_abaCcArmarLineas;}catch(e){}try{window["_abaCcPrecioSugerido"]=_abaCcPrecioSugerido;}catch(e){}try{window["_abaCcPintarForm"]=_abaCcPintarForm;}catch(e){}try{window["_abaCcCambiosCosto"]=_abaCcCambiosCosto;}catch(e){}try{window["_abaCcEsLaMasNueva"]=_abaCcEsLaMasNueva;}catch(e){}try{window["_abaCcTotales"]=_abaCcTotales;}catch(e){}try{window["abaCcCampo"]=abaCcCampo;}catch(e){}try{window["abaCcProv"]=abaCcProv;}catch(e){}try{window["abaCcLinea"]=abaCcLinea;}catch(e){}try{window["abaCcAgregar"]=abaCcAgregar;}catch(e){}try{window["abaCcCosto"]=abaCcCosto;}catch(e){}try{window["_abaCcCerrarForm"]=_abaCcCerrarForm;}catch(e){}try{window["abaCcCerrar"]=abaCcCerrar;}catch(e){}try{window["_abaCcError"]=_abaCcError;}catch(e){}try{window["abaCcGuardar"]=abaCcGuardar;}catch(e){}try{window["abaCcRecibir"]=abaCcRecibir;}catch(e){}try{window["_abaCcRecKg"]=_abaCcRecKg;}catch(e){}try{window["_abaCcPintarRecibir"]=_abaCcPintarRecibir;}catch(e){}try{window["abaCcCaja"]=abaCcCaja;}catch(e){}try{window["abaCcCajaMas"]=abaCcCajaMas;}catch(e){}try{window["abaCcRecOtro"]=abaCcRecOtro;}catch(e){}try{window["abaCcAnular"]=abaCcAnular;}catch(e){}try{window["abaSwitchTab"]=abaSwitchTab;}catch(e){}try{window["abaHayEditor"]=abaHayEditor;}catch(e){}try{window["abaShowToast"]=abaShowToast;}catch(e){}
 };
 
 /* -- Si tocaste una tab antes de que llegara este script -----------------
