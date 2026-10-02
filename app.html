@@ -9806,6 +9806,21 @@ var API='https://script.google.com/macros/s/AKfycbxmrG5YVSshcYezk8lXFx_uxb7NFGcb
 
   function _bombear(){
     while (_enVuelo < _TOPE_GET && _cola.length){
+      /* UN CARO NUNCA OCUPA EL ULTIMO CUPO LIBRE (1/10/2026). Los de `_CAROS`
+         (precalentar Ventas, la tendencia, la deuda a proveedores) ya iban al
+         fondo de la fila, pero si no habia nadie mas esperando se llevaban
+         los DOS cupos. Un segundo despues tocabas Stock y su `stockTab`
+         esperaba 4-10 s a que terminaran: medido al abrir la app, `ventas`
+         salio a los 0,4 s junto con `lote` y `stockTab` recien a los 4,4 s.
+         Ahora el segundo cupo queda para lo que la pantalla necesita; los
+         caros salen de a uno, por atras. */
+      if (_enVuelo > 0 && _enVuelo === _TOPE_GET - 1){
+        var _hayLiviano = false;
+        for (var _ic = 0; _ic < _cola.length; _ic++){
+          if (_prioridadDe(_cola[_ic].url) >= 0){ _hayLiviano = true; break; }
+        }
+        if (!_hayLiviano) break;
+      }
       var it = _sacarMejor();
       _enVuelo++;
       (function(it){
@@ -9913,6 +9928,14 @@ var API='https://script.google.com/macros/s/AKfycbxmrG5YVSshcYezk8lXFx_uxb7NFGcb
     stock: 'admin', proveedores: 'admin',
     planificacion: 'planMes'
   };
+  /* EL MAPA DE ARRIBA QUEDO VIEJO (1/10/2026). Desde el 27/9 Stock y
+     Proveedores NO piden el volcado: PRODUCTOS pide `stockTab` y Proveedores
+     `analisisProveedor`. Con `admin` aca, su endpoint de verdad quedaba en
+     prioridad 0, y medido al abrir la app en Stock: `stockTab` recien salia a
+     los 10,8 s, detras de `ventas` — que solo se pide para precalentar. La tab
+     quedaba al dia a los 14,5 s. Se deja el texto de arriba como historia. */
+  _PINTA_TAB.stock = 'stockTab';
+  _PINTA_TAB.proveedores = 'analisisProveedor';
 
   /* Y para la tab que tiene VARIAS fuentes, la sub-tab abierta.
      `_PINTA_TAB` alcanza para las demas: las sub-tabs de Inicio salen de
@@ -9932,7 +9955,7 @@ var API='https://script.google.com/macros/s/AKfycbxmrG5YVSshcYezk8lXFx_uxb7NFGcb
               ventas: 'ventas', cobros: 'ventas', tendencia: 'ventas',
               productos: 'productosAnalytics', combos: 'combosEval' },
     stock: { attr: 'data-stt',
-             productos: 'admin', contar: 'depositos',
+             productos: 'stockTab', contar: 'depositos',
              mover: 'depositos', carne: 'carnePiezas' },
     /* RUTA es la tab que se usa MANEJANDO, y no estaba ni en `_PINTA_TAB`:
        `action=entregas` quedaba en prioridad 0 y salia detras de lo que hubiera
@@ -10590,6 +10613,7 @@ function _necesitaDatosPanel(){
   for(var i=0;i<t.length;i++){if(_TABS_CON_DATOS.indexOf(t[i])>=0)return true;}
   return false;
 }
+var _rolesYaAplicados=false;
 function applyRoles(){
   if(!SESSION)return;
   var rol=SESSION.rol||'empleado';
@@ -10618,7 +10642,14 @@ function applyRoles(){
      así que un repartidor —que no tiene Inicio— cae solo en su única tab,
      igual que siempre. Forzarlo después lo habría mandado a una pantalla
      vacía. */
-  if(_APP_NUEVA)saved='inicio';
+  /* SOLO LA PRIMERA VEZ (1/10/2026). applyRoles vuelve a correr cuando el
+     refresco de permisos (`miSesion`, a los 20 s de abrir) trae un cambio, y
+     `_APP_NUEVA` sigue en true toda la vida de la pagina: te sacaba de la tab
+     que estabas mirando y te mandaba a Inicio. Visto midiendo Stock: a los
+     25 s la app salto sola a Inicio. Despues de la primera, se queda donde esta. */
+  if(_rolesYaAplicados&&cur)saved=cur;
+  else if(_APP_NUEVA)saved='inicio';
+  _rolesYaAplicados=true;
   var allowed=Array.prototype.map.call(document.querySelectorAll('.bn:not(.role-hidden)[data-p]'),function(el){return el.dataset.p;});
   if(!allowed.length){
     var l0=document.getElementById('ld');
@@ -10924,7 +10955,14 @@ function go(p){
      &&!_cajaVuelo&&!(D&&Array.isArray(D.movimientos))){
     _cajaVuelo=true;
     var _libCaja=function(){ _cajaVuelo=false; };
-    try{ Promise.resolve(_recargarCaja()).then(_libCaja,_libCaja); }
+    try{
+      /* Si el lote del arranque ya la trae, se lo espera; solo si al volver
+         sigue sin caja (fallo, o no la traia) se pide suelta. */
+      var _antes=_cajaLoteVuelo?Promise.resolve(_cajaLoteVuelo).then(null,function(){}):null;
+      (_antes||Promise.resolve())
+        .then(function(){ return (_antes&&D&&Array.isArray(D.movimientos))?null:_recargarCaja(); })
+        .then(_libCaja,_libCaja);
+    }
     catch(e){ _cajaVuelo=false; console.error('go/caja',e); }
   }
   if(_SECCION[p])_visitadas[p]=true;
@@ -12192,7 +12230,7 @@ function _leerVersion(app){
    "El HTML no sabe que version es" dejo de ser cierto: el build le escribe
    adentro el CACHE_NAME de sw-panel.js, el mismo que deploy.sh obliga a subir en
    cada cambio. Si lo publicado dice otra cosa, esta pagina es vieja. Punto. */
-var _APP_CN_PAGINA='maleu-panel-v487';
+var _APP_CN_PAGINA='maleu-panel-v488';
 
 /* Devuelve [{k,v}] si lo publicado no es lo que esta pagina corre. */
 function _chequearVersiones(){
@@ -14737,6 +14775,14 @@ function loadRapido(opts){
       try{ _avisoPed(false); }catch(e){}
     });
   }
+  /* Si este lote trae la caja, Caja lo espera en vez de pedirla otra vez
+     (ver `_cajaLoteVuelo`). */
+  if(_pidoCaja0){
+    var _cajaP=_rapido;
+    _cajaLoteVuelo=_cajaP;
+    var _sueltaCaja=function(){ if(_cajaLoteVuelo===_cajaP)_cajaLoteVuelo=null; };
+    _cajaP.then(_sueltaCaja,_sueltaCaja);
+  }
   _rapidoEnVuelo[_claveRapido]=_rapido.then(function(r){
     _rapidoEnVuelo[_claveRapido]=null;
     _pedEnVuelo[_claveRapido]=null;
@@ -14825,6 +14871,12 @@ function _editandoEnCaja(){
    saca `go()`; el ↻ no lo mira, porque ahi la persona esta pidiendo
    explicitamente la foto de ahora. */
 var _cajaVuelo=false;
+/* LA CAJA QUE YA VIENE EN CAMINO (1/10/2026). Al abrir la app, `loadRapido`
+   pide `cajaLight` adentro de `lote`. Si entrabas a Caja antes de que volviera,
+   `go()` veia que no habia movimientos y pedia OTRO `cajaLight` suelto: medido,
+   el cartel de Caja esperaba ese segundo viaje (~3,3 s de mas) y ocupaba un
+   cupo de los dos. Aca queda la promesa del lote para que Caja la espere. */
+var _cajaLoteVuelo=null;
 function _recargarCaja(){
   _frescoEnVuelo(['caja'],1);
   var _finC=function(){ _frescoEnVuelo(['caja'],-1); };

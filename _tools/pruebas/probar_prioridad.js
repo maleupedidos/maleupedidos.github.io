@@ -81,15 +81,19 @@ function chk(cond, txt, extra) {
   const nombres = r.orden.map(s => s.split('@')[0]);
   const nuevos = nombres.slice(r.yaSalieron.length);
   console.log('  soltados DESPUES de entrar a Stock: ' + JSON.stringify(nuevos));
-  chk(nuevos[0] === 'admin',
-    'el volcado sale PRIMERO de la fila con Stock abierta',
+  /* Desde el 27/9/2026 Stock > PRODUCTOS pide `stockTab`, no el volcado
+     (`admin`). Con `admin` aca, `iAdmin` daba -1 y los "antes que" daban ok
+     sin medir nada: -1 es menor que cualquier posicion. (1/10/2026) */
+  chk(nuevos[0] === 'stockTab',
+    'stockTab sale PRIMERO de la fila con Stock abierta',
     'salio primero ' + nuevos[0]);
 
-  const iAdmin = nombres.indexOf('admin');
+  const iStock = nuevos.indexOf('stockTab');
+  chk(iStock >= 0, 'stockTab salio despues de entrar a Stock', JSON.stringify(nuevos));
   ['cajaLight', 'ocLight', 'ventas', 'catalogo', 'tendencia'].forEach(a => {
-    const i = nombres.indexOf(a);
-    if (i >= 0) chk(iAdmin < i, 'y antes que ' + a + ' (que Stock no usa)',
-      'admin ' + iAdmin + ' vs ' + a + ' ' + i);
+    const i = nuevos.indexOf(a);
+    if (i >= 0) chk(iStock >= 0 && iStock < i, 'y antes que ' + a + ' (que Stock no usa)',
+      'stockTab ' + iStock + ' vs ' + a + ' ' + i);
   });
 
   console.log('\n' + ok + ' ok - ' + mal + ' mal');

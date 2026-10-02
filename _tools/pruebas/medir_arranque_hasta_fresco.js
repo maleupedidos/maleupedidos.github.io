@@ -115,7 +115,11 @@ window.__ar = { t0: Date.now(), gets: [], fresco: 0, muestras: [] };
          la tab. Esperar a que cargue todo mediría otra cosa. */
       const lim = Date.now() + 20000;
       while (Date.now() < lim) {
-        if (await ev(cli, `(function(){return typeof go==='function';})()`) === true) break;
+        /* Que la app este LISTA, no solo que `go` exista (1/10/2026). Tocar antes
+           de DOMContentLoaded es imposible para una persona —la pantalla de
+           carga tapa todo— y ahi `applyRoles()` corre DESPUES y manda a Inicio:
+           la medicion terminaba midiendo el cartel de Inicio en todas las tabs. */
+        if (await ev(cli, `(function(){return typeof go==='function' && document.readyState!=='loading' && !!document.querySelector('.pg.on');})()`) === true) break;
         await dormir(200);
       }
       await ev(cli, `(function(){ try{ go('${TAB}'); }catch(e){} return 1; })()`);

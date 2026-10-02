@@ -123,7 +123,8 @@ Object.defineProperty(ctx, '__SUB', { get: () => SUB });
 (function () {
   TAB = 'inicio';
   const p = a => ctx._prioridadDe('https://x/exec?action=' + a + '&t=1');
-  const esperado = { pedidosLight: 2, cajaLight: 2, ventas: 2, cobrosPendientes: 0 };
+  /* `ventas` dejo de ser fuente de Inicio el 27/9/2026 y paso a `_CAROS`: -1. */
+  const esperado = { pedidosLight: 2, cajaLight: 2, ventas: -1, cobrosPendientes: 0 };
   const mal = Object.keys(esperado).filter(a => p(a) !== esperado[a]);
   if (mal.length) {
     console.log('\n  ‼ NO PUEDO MEDIR: la fila no esta priorizando.');
@@ -174,8 +175,36 @@ const tick = () => Promise.resolve().then(() => {}).then(() => {});
   /* Y al liberarse un cupo, entra el que sigue por prioridad — no el más viejo. */
   terminar('pedidosLight');
   await tick();
-  chk('al terminar uno entra otro de la tab abierta antes que los cobros',
-    salidas.length === 3 && salidas[2] !== 'cobrosPendientes', salidas);
+  /* Desde el 27/9/2026 `ventas` es un CARO en Inicio (-1): lo que entra es
+     `cobrosPendientes` (0), y `ventas` espera. */
+  chk('al terminar uno entra el liviano, no el caro',
+    salidas.length === 3 && salidas[2] === 'cobrosPendientes', salidas);
+
+  /* ══ UN CARO NUNCA OCUPA EL ULTIMO CUPO LIBRE (1/10/2026) ═══════════════
+     Abrir la app en Inicio y tocar Stock un segundo despues: `ventas` se
+     llevaba el segundo cupo y `stockTab` esperaba 4-10 s. */
+  console.log('\n-- un caro no ocupa el ultimo cupo libre --');
+  limpiar(); TAB = 'inicio';
+  encolar('pedidosLight'); encolar('ventas'); encolar('tendencia');
+  await tick();
+  chk('con un liviano en vuelo, los caros esperan (sale uno solo)',
+    salidas.length === 1 && salidas[0] === 'pedidosLight', salidas);
+  TAB = 'stock';
+  encolar('stockTab');
+  await tick();
+  chk('y lo que toca la tab nueva sale AL TOQUE, sin esperar a nadie',
+    salidas.length === 2 && salidas[1] === 'stockTab', salidas);
+  terminar('pedidosLight');
+  await tick();
+  chk('con stockTab todavia en vuelo, el caro sigue esperando',
+    salidas.length === 2, salidas);
+  terminar('stockTab');
+  await tick();
+  chk('con la fila libre, el caro sale (no se queda colgado)',
+    salidas.length === 3 && (salidas[2] === 'ventas' || salidas[2] === 'tendencia'), salidas);
+  terminar(salidas[2]);
+  await tick();
+  chk('y los caros terminan saliendo todos, de a uno', salidas.length === 4, salidas);
 
   /* ══ LA TAB ABIERTA MANDA, Y PUEDE CAMBIAR ══════════════════════════════
      La prioridad se calcula al SACAR y no al encolar, justamente para esto:
