@@ -5140,7 +5140,7 @@ function ajAvisosHTML(){
      el silencio también necesita un lugar donde verse. */
   h+='<div class="aj-card">';
   h+='<h3>La copia a la base nueva</h3>';
-  h+='<div class="desc">Pedidos, stock y clientes se copian solos a la base nueva cada 5 minutos. <b>La planilla sigue mandando</b>: la base es una copia. Todas las noches a las 4 se comparan los números y te llega un mail <b>solo si no coinciden</b>.</div>';
+  h+='<div class="desc">Pedidos, stock y clientes se copian solos a la base nueva cada 10 minutos. <b>La planilla sigue mandando</b>: la base es una copia. Todas las noches a las 4 se comparan los números y te llega un mail <b>solo si no coinciden</b>.</div>';
   h+='<div id="ajRepEstado" class="aj-nota">Tocá el botón para comparar ahora.</div>';
   h+='<button class="aj-btn aj-btn-full" id="ajRepBtn" onclick="ajReplicaCruzar()">⚖️ Comparar la planilla con la base ahora</button>';
   h+='<div id="ajRepOut" class="aj-nota hidden"></div>';
@@ -10934,7 +10934,7 @@ window.pedDep=function(hoja,row,dep,btn){
          y el adelanto de Supabase —que no lo tiene hasta que corra la replica—
          lo volvia a pisar. Lo mismo que hace `_patchPedidoLocal` con un cobro. */
       _sbCambioLocal=Date.now();
-      if(ps.length){ try{localStorage.setItem('ma3',JSON.stringify(D));}catch(e){} }
+      if(ps.length)_sbGuardarCopia();
       toast(dep?('Sale del '+_pedDepNombre(dep)):'Vuelve al freezer por defecto');
       if(!pint){ destrabar(); _recargarPedidos(); }
     })
@@ -11333,15 +11333,44 @@ function _sbOCs(){
   }).catch(function(){ return null; });
 }
 
-/* La replica corre cada 5 minutos. Seis es el margen: pasado ese rato, lo que
-   Tadeo toco aca ya viajo a la planilla y de ahi a Supabase, asi que la foto de
-   la base lo incluye. Antes de eso, NO — y pisar un cobro recien hecho con una
-   foto que todavia no lo tiene es exactamente el bug que no se puede cometer:
-   la plata desaparece de la pantalla y no hay ningun error que lo avise. */
+/* Pisar un cobro recien hecho con una foto que todavia no lo tiene es el bug que
+   no se puede cometer: la plata desaparece de la pantalla y no hay ningun error
+   que lo avise.
+
+   El reloj solo NO alcanza (2/10/2026, lo marco Codex). Esto nacio cuando la
+   replica corria cada 5 minutos y 6 era el margen; desde que corre cada 10, un
+   cobro hecho justo despues de una replica no llega a la base hasta 10 min mas
+   tarde, y a los 7 el reloj ya dejaba pisar: volvia «No Cobrado».
+
+   La regla que manda es la de las FECHAS: lo que viene de la base pisa solo si
+   es POSTERIOR al ultimo cambio hecho aca — `_sbFotoPosterior(ts)`. Lo usan los
+   dos adelantos (la lista de `sales_order` y la foto de `pedidosLight`). Los 6
+   minutos quedan como margen para la carrera de la propia replica: lee la
+   planilla, tarda unos segundos y escribe, asi que una fila puede salir con hora
+   posterior al cobro y datos de antes. */
 var _SB_ESPERA_TRAS_CAMBIO=6*60*1000;
 function _sbPuedePisar(){
   if(_sbCambioLocal&&Date.now()-_sbCambioLocal<_SB_ESPERA_TRAS_CAMBIO)return false;
   return true;
+}
+/* `ts` = de cuando es lo que vino de la base. Sin fecha (0) y con un cambio
+   local, no pisa: no saber de cuando es no es saber que es posterior. */
+function _sbFotoPosterior(ts){
+  if(!_sbPuedePisar())return false;
+  return !_sbCambioLocal || (Number(ts)||0)>_sbCambioLocal;
+}
+
+/* La copia del celular (`ma3`) tiene que ir JUNTO con el sello (2/10/2026, lo
+   marco Codex). Los adelantos sellaban `_fresco` —que se guarda— y no guardaban
+   `D`: si se cerraba la app antes de que llegara Google, al reabrir se pintaban
+   los pedidos VIEJOS de `ma3` con el sello NUEVO, y la foto siguiente se
+   rechazaba por «mas vieja» que lo que se veia. Una mentira que ademas se
+   protegia sola.
+   Devuelve false si no entro: el que llama entonces NO sella, para que el sello
+   nunca diga mas de lo que la copia tiene. */
+function _sbGuardarCopia(){
+  try{ localStorage.setItem('ma3',JSON.stringify(D)); return true; }catch(e){}
+  try{ return !!(window._lsSetSafe && window._lsSetSafe('ma3',JSON.stringify(D))); }catch(e){ return false; }
 }
 
 /* De cuando es la foto: el sello mas nuevo de las filas que vinieron. Si
@@ -11468,11 +11497,14 @@ function _sbRefrescoPedidos(gen){
   return _sbPedidos(400).then(function(lista){
     if(!lista||!lista.length)return false;
     if(gen&&gen.llego)return false;          // Google gano la carrera
-    if(!_sbPuedePisar())return false;        // toco algo mientras viajaba
+    var edad=_sbEdad(lista);
+    if(!_sbFotoPosterior(edad))return false; // hubo un cambio aca que la base todavia no tiene
+    /* La foto de `pedidosLight` llego primero y es mas nueva que estas filas:
+       fusionarlas encima seria volver atras pedido por pedido (2/10/2026). */
+    if(gen&&gen.fotoTs&&edad<=gen.fotoTs)return false;
     if(typeof D==='undefined'||!D)D={};
     D.pedidos=_sbFusionar(D.pedidos,lista); D._pedidosDeSupabase=1;
     _sbCompletar();
-    var edad=_sbEdad(lista);
     try{
       if(_hayEditorAbierto()){ _pendingLoadRender=true; }
       else { render(); }
@@ -11488,10 +11520,146 @@ function _sbRefrescoPedidos(gen){
        "recien", que para entonces es verdad. Lo que no se puede hacer es
        apagarlo sin decir de cuando es la foto — por eso van juntos. */
     try{
-      if(edad){ _marcarFresco(['pedidos'],edad); _frescoEnVuelo(['pedidos'],-1); }
+      if(edad&&_sbGuardarCopia()){ _marcarFresco(['pedidos'],edad); _apagarCartelUnaVez(gen); }
     }catch(e){}
     return true;
   }).catch(function(){ return false; });
+}
+
+/* El cartel de «Actualizando…» lo apaga el PRIMER adelanto que pinta, y nada
+   mas que el primero. `_frescoEnVuelo` es un contador: con dos adelantos (la
+   lista de `sales_order` y la foto) bajaba dos veces por un solo pedido a
+   Google, y el `_finR` de `loadRapido` lo bajaba una tercera — si en el medio
+   habia salido otro refresco, el suyo quedaba en cero sin haber vuelto. */
+function _apagarCartelUnaVez(gen){
+  if(gen){ if(gen.cartel)return; gen.cartel=true; }
+  _frescoEnVuelo(['pedidos'],-1);
+}
+
+/* ══ LA FOTO DE PEDIDOS / INICIO: `pedidosLight` ENTERO DESDE POSTGRESQL (2/10/2026) ══
+   `pedidosLight` es el endpoint mas caro de los que pintan una pantalla —medido
+   el 2/10 en produccion, **15,4 y 20,6 s** y 849 KB— y pinta TRES: Inicio,
+   Pedidos y Estancias. El ERP deja ese mismo payload calculado en
+   `erp_screen_snapshot` (`screen = 'pedidos'`, migracion 030) cada vez que
+   corre la replica, y aca se lee: una fila, ~300 ms.
+
+   QUE TRAE QUE EL ADELANTO DE `sales_order` NO. Aquel pinta la lista (8 campos,
+   los 400 mas nuevos). Inicio dibuja ademas `totales`, `vendedores`,
+   `saludSem`/`saludMes`, `canales` y `ventasExtra`, que salen solo de
+   `pedidosLight`. Sin la foto, esos numeros esperaban a Google aunque la lista
+   ya estuviera.
+
+   ADELANTA, NO REEMPLAZA. Tadeo pidio que Pedidos vaya fresco SIEMPRE, asi que
+   el pedido a Apps Script sale igual y gana cuando llega. Lo que hace la foto es
+   que lo que se ve mientras tanto sea de hace minutos y no de la ultima vez que
+   se abrio la app.
+
+   LAS REGLAS, y cada una tapa un caso que miente:
+     · no pinta si Google ya llego en este refresco (`gen.llego`);
+     · no pinta si hubo un cambio local que la foto puede no tener: lo dice
+       `_sbPuedePisar()` (6 min) Y ademas la foto tiene que ser POSTERIOR al
+       cambio. Un cobro recien hecho no puede desaparecer de la pantalla;
+     · no pinta la lista si es mas vieja que la que se ve (`_frescoTs`): un
+       adelanto que vuelve atras es peor que ninguno;
+     · los campos de Inicio van con su propia edad (`D._lightTs`), porque el
+       adelanto de `sales_order` renueva la lista pero no los totales;
+     · no sella «recien»: sella `computed_at`, la hora en que el ERP calculo.
+     · no se llama `_marcarFresco` como dato de AHORA ni `_markRefreshTime`: el
+       ↻ no se pone verde sobre una copia.
+
+   La policy de la 030 deja leer solo al rol `admin`. Para el resto la consulta
+   vuelve vacia y todo sigue por Google, que es lo correcto. Por que no se uso:
+   `window.__fotoPed` en la consola. */
+var __fotoPed={estado:'sin intentar',motivo:''};
+function _fotoPedNota(estado,motivo){
+  __fotoPed={estado:estado,motivo:String(motivo||''),t:Date.now()};
+  try{ window.__fotoPed=__fotoPed; }catch(e){}
+}
+
+/* Vuelca un payload de `pedidosLight` en `D`. Lo usan Google y la foto: el merge
+   copia campo por campo, y un campo nuevo del backend no llega solo — tiene que
+   estar nombrado aca, y una sola vez. `conLista=false` vuelca solo lo de Inicio.
+   `ts` es la edad del payload: queda en `D._lightTs` para que una foto no
+   pise numeros mas nuevos. `sinInicio=true` vuelca solo la lista. */
+function _volcarLight(d,ts,conLista,sinInicio){
+  if(!D)D={};
+  if(conLista)D.pedidos=d.pedidos;
+  if(sinInicio)return;
+  if(d.canales)D.canales=d.canales;
+  /* Los clientes de cada semana y B2B/Catering (14/9/2026). pedidosLight traia
+     `saludHome` desde siempre y esto NO lo copiaba: el cuadro de clientes solo
+     se renovaba con el volcado completo, y en un celular la semana 37 quedo
+     congelada en la foto de un dia de esa semana (9 clientes contra 42). */
+  if(d.saludSem)D.saludSem=d.saludSem;
+  if(d.saludMes)D.saludMes=d.saludMes;
+  if(Array.isArray(d.ventasExtra))D.ventasExtra=d.ventasExtra;
+  /* Los totales del negocio y la deuda de los vendedores (27/9/2026).
+     Con estos dos mas `vueltos` (que viene en cajaLight), Inicio dejo de
+     necesitar el volcado — y como es la tab que ABRE la app, es la unica
+     que lo pedia sin que nadie lo hubiera elegido.
+     Se detecto que faltaban con `probar_arranque_sin_volcado.js`, que los tres
+     dieron rojo estando el backend ya publicado y mandandolos bien. */
+  if(d.totales)D.totales=d.totales;
+  if(Array.isArray(d.vendedores))D.vendedores=d.vendedores;
+  if(d.canales)D._lightTs=Number(ts)||Date.now();   // en modo tail no hay totales nuevos
+}
+
+/* PostgREST devuelve `timestamptz` con offset; si llegara sin zona, `Date.parse`
+   lo leeria como hora LOCAL y el sello diria «hace 3 h» sobre una foto de ahora. */
+function _fotoFechaUtc(s){
+  var t=String(s||'');
+  if(t&&!/[Zz]$|[+-]\d{2}:?\d{2}$/.test(t))t+='Z';
+  var n=Date.parse(t);
+  return isFinite(n)?n:0;
+}
+
+function _fotoPedidos(gen){
+  if(!_sbPuedePisar()){ _fotoPedNota('cambio local','hace menos de 6 min'); return Promise.resolve(false); }
+  /* `true` = el permiso si ya esta; pedirlo cuesta 3,5 s y un cupo del servidor
+     justo en el arranque. Ver `_sbPermiso`. */
+  return _sbPermiso(true).then(function(sb){
+    if(!sb||!sb.url||!sb.key||!sb.token){ _fotoPedNota('sin permiso','sin token de Supabase'); return false; }
+    return fetch(sb.url+'/rest/v1/erp_screen_snapshot?select=payload,computed_at&screen=eq.pedidos',
+      {headers:{apikey:sb.key,Authorization:'Bearer '+sb.token}})
+      .then(function(r){
+        if(!r.ok){ _fotoPedNota('HTTP '+r.status,'la 030 sin aplicar, o la policy no deja leer'); return null; }
+        return r.json();
+      })
+      .then(function(filas){
+        if(!filas)return false;
+        var f=filas[0];
+        if(!f){ _fotoPedNota('no hay foto','tabla vacia o la policy la filtro'); return false; }
+        var d=f.payload;
+        if(!d||!Array.isArray(d.pedidos)||!d.pedidos.length||d.tail){ _fotoPedNota('payload raro','sin pedidos, o en modo tail'); return false; }
+        var cuando=_fotoFechaUtc(f.computed_at);
+        if(!cuando){ _fotoPedNota('sin fecha','computed_at ilegible: '+f.computed_at); return false; }
+        if(gen&&gen.llego){ _fotoPedNota('Google llego antes',''); return false; }
+        if(!_sbFotoPosterior(cuando)){
+          _fotoPedNota('cambio local','la foto es anterior a un cambio hecho aca'); return false;
+        }
+        if(typeof D==='undefined'||!D)D={};
+        var conLista=cuando>_frescoTs('pedidos');
+        /* Una copia guardada de antes de este cambio no trae `_lightTs`: su
+           edad es la de la lista que se ve. */
+        var conInicio=cuando>(Number(D._lightTs)||_frescoTs('pedidos'));
+        if(!conLista&&!conInicio){ _fotoPedNota('mas vieja','lo que se ve es mas nuevo que la foto'); return false; }
+        _volcarLight(d,cuando,conLista,!conInicio);
+        if(conLista){ D._pedidosDeSupabase=1; if(gen)gen.fotoTs=cuando; }
+        _sbCompletar();
+        try{
+          if(_hayEditorAbierto()){ _pendingLoadRender=true; }
+          else { render(); }
+        }catch(e){ _fotoPedNota('render',(e&&e.message)||e); }
+        /* Guardar ANTES de sellar: ver `_sbGuardarCopia`. Va aunque sea solo
+           Inicio, porque `D._lightTs` tambien vive en la copia. */
+        if(!_sbGuardarCopia()){ _fotoPedNota('sin copia','ma3 no entro: pinta pero no sella'); return true; }
+        if(conLista){
+          try{ _marcarFresco(['pedidos'],cuando); _apagarCartelUnaVez(gen); }catch(e){}
+        }
+        _fotoPedNota('ok',conLista&&conInicio?'lista e Inicio':(conLista?'solo la lista':'solo Inicio'));
+        return true;
+      });
+  }).catch(function(e){ _fotoPedNota('error',(e&&e.message)||e); return false; });
 }
 
 /* `_sbAdelanto` vivio aca hasta el 25/9/2026. La reemplazo `_sbRefrescoPedidos`
@@ -11591,6 +11759,9 @@ function loadRapido(opts){
   /* `gen` es el testigo de esta carrera: el que llega segundo no pinta. */
   var _sbGen={llego:false};
   try{ _sbRefrescoPedidos(_sbGen); }catch(e){}
+  /* La foto de `pedidosLight` sale por el mismo carril y con el mismo testigo:
+     adelanta, no reemplaza. Ver `_fotoPedidos`. */
+  try{ _fotoPedidos(_sbGen); }catch(e){ _fotoPedNota('error sincrónico',(e&&e.message)||e); }
   var _vf=['pedidos']; if(!_soloPed&&_tengoTab('caja'))_vf.push('caja');
   _frescoEnVuelo(_vf,1);
   var _finR=function(){ _frescoEnVuelo(_vf,-1); };
@@ -11702,25 +11873,7 @@ function loadRapido(opts){
     if(lightData && Array.isArray(lightData.pedidos)){
       _sbGen.llego=true;
       D._pedidosDeSupabase=0;
-      D.pedidos=lightData.pedidos;
-      if(lightData.canales)D.canales=lightData.canales;
-      /* Los clientes de cada semana y B2B/Catering (14/9/2026). pedidosLight traia
-         `saludHome` desde siempre y esto NO lo copiaba: el cuadro de clientes solo
-         se renovaba con el volcado completo, y en un celular la semana 37 quedo
-         congelada en la foto de un dia de esa semana (9 clientes contra 42). */
-      if(lightData.saludSem)D.saludSem=lightData.saludSem;
-      if(lightData.saludMes)D.saludMes=lightData.saludMes;
-      if(Array.isArray(lightData.ventasExtra))D.ventasExtra=lightData.ventasExtra;
-      /* Los totales del negocio y la deuda de los vendedores (27/9/2026).
-         Con estos dos mas `vueltos` (que viene en cajaLight), Inicio dejo de
-         necesitar el volcado — y como es la tab que ABRE la app, es la unica
-         que lo pedia sin que nadie lo hubiera elegido.
-         Este merge copia campo por campo, asi que un campo nuevo en el backend
-         no llega solo: hay que nombrarlo aca. Se detecto con
-         `probar_arranque_sin_volcado.js`, que los tres dieron rojo estando el
-         backend ya publicado y mandandolos bien. */
-      if(lightData.totales)D.totales=lightData.totales;
-      if(Array.isArray(lightData.vendedores))D.vendedores=lightData.vendedores;
+      _volcarLight(lightData,Number(lightData.ts)||Date.now(),true);
     }
     if(cobrosData && Array.isArray(cobrosData.cobros)){
       D.cobrosPendientes=cobrosData.cobros;

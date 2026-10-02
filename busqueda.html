@@ -882,6 +882,23 @@ var _ABA_FUSIONADO = !!document.getElementById('pg-abast');
 var _abaUniCache = {}, _abaUniDe = null;
 /* Lo que PAGOS dibuja recien cuando se abre (el detalle de cada semana). */
 var _abaLazy = {}, _abaLazyN = 0;
+/* Cuántos minutos de atraso hacen que la foto de PostgreSQL además pida fresco.
+   Va ACÁ ARRIBA y no al lado de `_abaFotoLeer`, aunque ahí se leería mejor: el
+   INIT llama a `abaArranque` unas líneas más abajo, y un `var` declarado después
+   vale `undefined` hasta que el script termina de evaluarse. Hoy no se notaría
+   —se lee dentro de un `.then()`, que corre más tarde— y eso es justo lo que lo
+   hace peligroso: el día que se lea sincrónico, falla sin un solo error.
+
+   25 MINUTOS, Y EL NÚMERO SALE DEL TRIGGER. La foto la rehace
+   `syncCrmPostgresIfDirty`, que pasó de correr cada 5 minutos a **cada 10** (el
+   2/10/2026, por el cupo de `UrlFetchApp`). Con el umbral en 15 min —como nació,
+   cuando el trigger era de 5— una foto de 11 o 12 minutos es NORMAL y una sola
+   corrida saltada ya disparaba el pedido caro de 9 s a Apps Script. 25 min son
+   dos ciclos y medio: deja pasar un salteo y sigue avisando si la réplica se
+   cayó de verdad.
+
+   Si el trigger vuelve a cambiar de frecuencia, esto cambia con él. */
+var ABA_FOTO_VIEJA_MS = 25 * 60 * 1000;
 
 /* ── INIT ──────────────────────────────────────────────── */
 abaLoadLocal();
@@ -896,11 +913,13 @@ window.addEventListener('offline', function() { abaIsOnline = false; abaUpdateOn
 // padre muestra su propio loader si hace falta y la UI vacia se rellena al toque.
 var _cacheValid = (busqueda.provs && busqueda.provs.length > 0) || (busqueda.ocs && busqueda.ocs.length > 0);
 var _IS_EMBED_INIT = (function(){try{return new URLSearchParams(location.search).get('embed')==='1';}catch(e){return false;}})();
+/* `abaArranque` y no `abaRefresh`: lee la foto de PostgreSQL (~200 ms) y sólo si
+   no está va a Apps Script (9,2 s). Ver el comentario de `_abaFotoLeer`. */
 if (_cacheValid || _IS_EMBED_INIT) {
   abaRender();
-  abaRefresh(true); // silent refresh en background
+  abaArranque(true); // silent en background
 } else {
-  abaRefresh(false);
+  abaArranque(false);
 }
 
 // Cargar catalogo para tab Nuevo
@@ -1004,6 +1023,139 @@ function abaReintentar() {
   if (typeof refreshContextual === 'function') { try { refreshContextual(); return; } catch (e) {} }
   abaRefresh(true);
   if (abaCurrentTab === 'resumen' || abaCurrentTab === 'nuevo') loadCatalogo(true);
+}
+
+/* ── LA FOTO DE ABASTECIMIENTO: PostgreSQL en vez de esperar 9 s (2/10/2026) ──
+   `action=busqueda` tardó **9.237 ms** medido el 2/10 en producción y pesa
+   181,6 KB, de los cuales `deudas` es el 87,5%. El ERP ahora deja ese mismo
+   payload calculado en `erp_screen_snapshot` (migración 030) y acá se lee de
+   ahí: una sola fila, sin recalcular nada.
+
+   **El cálculo no se movió de lugar.** Lo sigue haciendo Apps Script, con su
+   FIFO y sus reglas; esto sólo lee el resultado. Y lo que llega es una COPIA,
+   así que se muestra **de cuándo es** — la regla de la casa para toda copia
+   guardada, y la razón por la que una foto sin `computed_at` legible no se usa.
+
+   El ↻ NO pasa por acá a propósito: cuando Tadeo lo toca quiere el dato de
+   ahora, y eso es `abaRefresh`, que va a Apps Script. */
+/* `ABA_FOTO_VIEJA_MS` se declara arriba, junto al INIT: ver ahí por qué. */
+
+/* PostgREST devuelve `timestamptz` CON offset (`…+00:00`), pero si alguna vez
+   llegara sin zona, `Date.parse` lo leería como hora LOCAL y el sello diría
+   «hace 3 horas» sobre una foto de ahora. Por eso la Z se pone explícita. */
+function _abaFechaUtc(s) {
+  var t = String(s || '');
+  if (t && !/[Zz]$|[+-]\d{2}:?\d{2}$/.test(t)) t += 'Z';
+  var n = Date.parse(t);
+  return isFinite(n) ? n : 0;
+}
+
+/* El sello del encabezado. Con `_hace` del panel si está —es la misma frase que
+   usa el resto del ERP—, y con la hora si no: una copia sin fecha no se muestra
+   callada. */
+function _abaSello(ts) {
+  var el = document.getElementById('abaLastSync');
+  if (!el) return;
+  var txt = '';
+  try { if (typeof _hace === 'function') txt = _hace(ts); } catch (e) {}
+  if (!txt) {
+    var d = new Date(ts);
+    txt = d.getHours() + ':' + String(d.getMinutes()).padStart(2, '0');
+  }
+  el.textContent = txt;
+}
+
+/* Devuelve la foto o null. Null no es un error: significa «esta pantalla va por
+   Apps Script, como siempre». Pasa cuando este usuario no tiene permiso de
+   Supabase, cuando la 030 no está aplicada, o cuando la policy no lo deja leer
+   (devuelve una lista vacía, no un 403). */
+/* Por qué la última lectura de la foto no sirvió. Un fallback MUDO es el que no
+   se arregla nunca, porque desde afuera se ve igual que «no hay foto todavía»:
+   la pantalla anda, va por Apps Script, y nadie se entera de que el atajo está
+   roto. Esto se lee con `window.__abaFoto` en la consola. */
+var __abaFoto = { estado: 'sin intentar', motivo: '' };
+function _abaFotoNota(estado, motivo) {
+  __abaFoto = { estado: estado, motivo: String(motivo || '') };
+  try { window.__abaFoto = __abaFoto; } catch (e) {}
+  if (motivo) { try { console.warn('[busqueda] la foto no se usó: ' + estado + ' ' + motivo); } catch (e) {} }
+}
+
+function _abaFotoLeer() {
+  try {
+    if (typeof _sbPermiso !== 'function') {
+      _abaFotoNota('sin _sbPermiso', 'el panel no lo expone en este contexto');
+      return Promise.resolve(null);
+    }
+    /* `true` = sólo si ya lo tengo. Pedir el permiso cuesta 3,5 s y se lleva uno
+       de los dos pedidos en vuelo: pagarlo acá haría que la pantalla llegue MÁS
+       TARDE que sin atajo. El panel lo pide por atrás (`_sbPermisoTibio`). */
+    return _sbPermiso(true).then(function (sb) {
+      if (!sb || !sb.url || !sb.key || !sb.token) {
+        _abaFotoNota('sin permiso', 'este usuario no tiene token de Supabase, o todavía no llegó');
+        return null;
+      }
+      return fetch(sb.url + '/rest/v1/erp_screen_snapshot'
+          + '?select=payload,computed_at,warning,source&screen=eq.busqueda',
+        { headers: { apikey: sb.key, Authorization: 'Bearer ' + sb.token } })
+        .then(function (r) {
+          if (!r.ok) { _abaFotoNota('HTTP ' + r.status, 'la 030 sin aplicar, o la policy no deja leer'); return null; }
+          return r.json();
+        })
+        .then(function (filas) {
+          if (!filas) return null;
+          var f = filas[0];
+          /* Lista vacía es lo que devuelve RLS cuando la policy no deja pasar la
+             fila: no es un 403. Y también es lo que hay si el ERP nunca escribió
+             la foto. Las dos van por Apps Script, que es lo correcto. */
+          if (!f) { _abaFotoNota('no hay foto', 'la tabla está vacía o la policy la filtró'); return null; }
+          /* El mismo guardia que el camino de Apps Script: una respuesta que no
+             es un payload de búsqueda no reemplaza lo que había. */
+          if (!_abaEsBusqueda(f.payload)) { _abaFotoNota('payload raro', 'sin provs/ocs'); return null; }
+          var cuando = _abaFechaUtc(f.computed_at);
+          if (!cuando) { _abaFotoNota('sin fecha', 'computed_at ilegible: ' + f.computed_at); return null; }
+          _abaFotoNota('ok', '');
+          return { data: f.payload, cuando: cuando,
+                   warning: String(f.warning || ''), source: String(f.source || '') };
+        });
+    }).catch(function (e) {
+      _abaFotoNota('error', (e && e.message) || e);
+      return null;
+    });
+  } catch (e) {
+    /* Acá cae un ReferenceError de los que el `try/catch` se traga: una función
+       del panel que en este contexto no existe. Sin el motivo escrito, esto se
+       ve exactamente igual que «no hay foto». */
+    _abaFotoNota('error sincrónico', (e && e.message) || e);
+    return Promise.resolve(null);
+  }
+}
+
+/* La puerta del ARRANQUE: la foto si está, Apps Script si no. */
+function abaArranque(silent) {
+  return _abaFotoLeer().then(function (foto) {
+    if (!foto) return abaRefresh(silent);
+    _abaAplicarBusqueda(foto.data);
+    abaCargaEstado = 'ok'; abaCargaError = '';
+    abaRender();
+    _abaSello(foto.cuando);
+    var lv = document.getElementById('abaLoadingView');
+    if (lv) lv.classList.add('hidden');
+    _abaAviso(null);
+    abaProcessSyncQueue();
+    /* NO se llama a `_marcarFresco`, y es a propósito: esto es una copia, no el
+       dato de ahora. Si se lo dijera, el ↻ del panel se pondría verde sobre
+       datos de hace rato. */
+    /* Una foto vieja se pinta igual —es mejor que la pantalla en blanco— pero
+       además se pide fresco por atrás. Con el trigger corriendo cada 5 minutos,
+       15 minutos de atraso significan que algo no está corriendo. */
+    if (Date.now() - foto.cuando > ABA_FOTO_VIEJA_MS) {
+      try { abaRefresh(true); } catch (e) {}
+    }
+    return true;
+  }).catch(function (e) {
+    _abaFotoNota('error al aplicar', (e && e.message) || e);
+    return abaRefresh(silent);
+  });
 }
 
 function abaRefresh(silent) {
