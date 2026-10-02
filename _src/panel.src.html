@@ -743,7 +743,7 @@ button.rt-chip.on{background:var(--o);border-color:var(--o);color:#fff}
 .red-com-btn{display:block;width:100%;margin-top:8px;min-height:42px;border-radius:10px;border:1.5px dashed var(--bl);background:transparent;color:var(--bl);font-size:12px;font-weight:700;cursor:pointer}
 .red-com-form{margin-top:8px;display:grid;gap:8px}
 .red-com-form label{display:grid;gap:4px;font-size:11px;font-weight:700}
-.red-com-form input{min-height:42px;padding:8px 10px;border:1.5px solid var(--border);border-radius:8px;font-size:14px;width:100%;box-sizing:border-box}
+.red-com-form input,.red-com-form select{min-height:42px;background:#fff;padding:8px 10px;border:1.5px solid var(--border);border-radius:8px;font-size:14px;width:100%;box-sizing:border-box}
 .red-com-acc{display:flex;gap:8px;flex-wrap:wrap}
 .red-com-acc button{flex:1 1 140px;min-height:42px;border:0;border-radius:10px;background:var(--o);color:#fff;font-weight:800;cursor:pointer}
 .red-com-acc button.sec{background:transparent;color:var(--bl);border:1.5px solid var(--bl)}
@@ -12431,6 +12431,65 @@ function _redComHtml(p,pre){
       +'</div></div>';
   }
   return h+'</div>';
+}
+/* PASAR UN PEDIDO A UN VENDEDOR (2/10/2026). Tadeo: "todas las ordenes de
+   venta pasan por el sistema primero, y nosotros dirigimos la orden hacia el
+   vendedor especifico". La bandeja de Red solo veia lo que la tienda manda a Red
+   por barrio; esto lo hace con cualquier pedido de Home o Pilar. El backend
+   (`pasarAVendedor`) crea el pedido en Red, le pasa las OC y las piezas, avisa
+   al vendedor y cancela el original. Solo admin; el backend lo vuelve a mirar. */
+var _PV_DIAS=['Domingo','Lunes','Martes','Miércoles','Jueves','Viernes','Sábado'];
+function _pasarVendHtml(p){
+  if(!p||(p.h!=='Home'&&p.h!=='Pilar'))return '';
+  if(p.es==='Entregado'||p.es==='Cancelado'||p.ep==='Cobrado')return '';
+  if(typeof SESSION==='undefined'||!SESSION||SESSION.rol!=='admin')return '';
+  var uid='pv-'+p.h+'-'+String(p.n).replace(/[^A-Za-z0-9]/g,'');
+  return '<div class="red-com pv-box"><button type="button" class="red-com-btn" onclick="pasarVendAbrir(\''+uid+'\')">\ud83d\udef5 Pasar a un vendedor</button>'
+    +'<div id="'+uid+'" class="red-com-form hidden" data-h="'+p.h+'" data-n="'+_rtEsc(String(p.n))+'" data-r="'+(p.r||0)+'" data-de="'+_rtEsc(String(p.dee||''))+'" data-c="'+_rtEsc(String(p.c||''))+'"></div></div>';
+}
+function _pasarVendForm(box){
+  var V=(_rbDatos&&_rbDatos.vendedores)||[];
+  var de=String(box.dataset.de||''), dia='';
+  if(/^\d{4}-\d{2}-\d{2}$/.test(de)){var x=de.split('-');dia=_PV_DIAS[new Date(+x[0],+x[1]-1,+x[2]).getDay()];}
+  var opts=V.map(function(v){
+    var reparte=!dia||!(v.dias&&v.dias.length)||v.dias.indexOf(dia)>=0;
+    return '<option value="'+_rtEsc(v.nombre)+'"'+(reparte?'':' disabled')+'>'+_rtEsc(v.nombre)
+      +' ('+_rtEsc((v.dias||[]).map(function(d){return d.slice(0,3).toLowerCase();}).join(', '))+')'+(reparte?'':' · no reparte el '+dia.toLowerCase())+'</option>';
+  }).join('');
+  box.innerHTML='<label>Vendedor'+(dia?' (el cliente eligió el '+dia.toLowerCase()+')':'')+'<select data-role="v"><option value="">Elegí…</option>'+opts+'</select></label>'
+    +'<label>¿Quién trajo a este cliente?<select data-role="t"><option value="Maleu">Maleu: al vendedor le toca el envío</option><option value="Vendedor">El vendedor: comisión y envío</option></select></label>'
+    +'<div class="red-com-mot">Se crea el pedido en Red con los mismos productos y el mismo total, le pasan las órdenes de compra y las piezas, le avisamos al vendedor y este pedido se cancela.</div>'
+    +'<div class="red-com-acc"><button type="button" onclick="pasarVendGuardar(\''+box.id+'\')">Pasar el pedido</button></div>';
+}
+function pasarVendAbrir(uid){
+  var box=$(uid);if(!box)return;
+  box.classList.toggle('hidden');
+  if(box.classList.contains('hidden')||box.childElementCount)return;
+  if(_rbDatos&&_rbDatos.vendedores){_pasarVendForm(box);return;}
+  box.innerHTML='<div class="red-com-mot">Cargando los vendedores…</div>';
+  fetch(API+'?action=redBandeja&t='+Date.now()).then(function(r){return r.json();}).then(function(d){
+    if(d&&d.ok&&Array.isArray(d.vendedores)){_rbDatos=d;_pasarVendForm(box);}
+    else box.innerHTML='<div class="red-com-mot">No pude traer los vendedores. Cerrá y abrí de nuevo.</div>';
+  }).catch(function(){box.innerHTML='<div class="red-com-mot">No pude traer los vendedores. Cerrá y abrí de nuevo.</div>';});
+}
+function pasarVendGuardar(uid){
+  var box=$(uid);if(!box||box._enviando)return;
+  var v=String((box.querySelector('[data-role=v]')||{}).value||'');
+  var t=String((box.querySelector('[data-role=t]')||{}).value||'Maleu');
+  if(!v){toast('Elegí el vendedor');return;}
+  if(!confirm('¿Pasar el pedido de '+(box.dataset.c||'')+' a '+v+'?\n\nSe crea en Red, le avisamos y este pedido se cancela.'))return;
+  box._enviando=true;showLoader('Pasando el pedido a '+v.split(' ')[0]+'...');
+  fetch(API,{method:'POST',body:JSON.stringify({action:'pasarAVendedor',hoja:box.dataset.h,id:box.dataset.n,row:Number(box.dataset.r)||0,vendedor:v,trajo:t,
+    clientOpId:'pav_'+Date.now()+'_'+Math.random().toString(36).slice(2,8)})})
+    .then(function(r){return r.json();})
+    .then(function(r){
+      box._enviando=false;hideLoader(true);
+      if(!r.ok){toast('No se pasó: '+(r.err||'?'),5000);return;}
+      toast('✓ Ahora es Red #'+r.red.n+' de '+r.vendedor.split(' ')[0]+(r.ocMovidas?' · '+r.ocMovidas+' OC':'')+(r.piezasMovidas?' · '+r.piezasMovidas+' pieza'+(r.piezasMovidas===1?'':'s'):''),5000);
+      try{if(typeof closeOrdDetail==='function')closeOrdDetail();}catch(e){}
+      _recargarPedidos();
+    })
+    .catch(function(){box._enviando=false;hideLoader(true);toast('No se pudo pasar. Reintentá: no se duplica.');});
 }
 /* La comision fuera de escala de un pedido de Red (2/10/2026). Solo admin: el
    backend lo vuelve a chequear. */
@@ -26862,6 +26921,7 @@ if('serviceWorker' in navigator){
         +'</div></div>';
       html+=_redComHtml(p,'fi');
     }
+    html+=_pasarVendHtml(p);
 
     // Estado consolidado
     html+='<div class="ord-status '+status.cls+'"><span class="ic">'+status.ic+'</span><span>'+status.msg+'</span></div>';
