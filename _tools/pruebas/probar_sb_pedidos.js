@@ -96,11 +96,20 @@ vm.runInContext([
   /* `_sbEnVuelo` y `_sbPedidosAhora` son del 24/9/2026: una sola consulta a
      Supabase por vez. Van ANTES de `_sbPedidos`, que las usa. */
   'var _sbEnVuelo={};',
+  /* Se sumaron al código después de esta prueba y no las traía: `_sbPedidosAhora`
+     tiraba ReferenceError, el catch devolvía null y el adelanto daba MAL sin
+     decir por qué (visto el 2/10/2026). Salen de la fuente, no copiadas. */
+  (src.match(/\nvar _sbSinWarehouse=[^;]*;/) || [''])[0],
+  (src.match(/\nvar _SB_CANALES_PEDIDO=[^;]*;/) || [''])[0],
   sacar('_sbPedidosAhora'), sacar('_sbPedidos'),
   'var _sbCambioLocal=0;',
   (src.match(/\nvar _SB_ESPERA_TRAS_CAMBIO=[^;]*;/) || [''])[0],
-  sacar('_sbPuedePisar'), sacar('_sbEdad'), sacar('_sbCompletar'),
+  sacar('_sbPuedePisar'), sacar('_sbFotoPosterior'), sacar('_sbGuardarCopia'),
+  sacar('_sbEdad'), sacar('_sbCompletar'),
   sacar('_sbClavePedido'), sacar('_sbFusionar'), sacar('_sbRefrescoPedidos'),
+  /* Desde 6abf333 el cartel lo apaga esta; sin ella el ReferenceError quedaba
+     adentro del try y los dos chequeos del cartel daban MAL sin decir por qué. */
+  sacar('_apagarCartelUnaVez'),
 ].join('\n'), ctx);
 
 const tocarAhora = ms => vm.runInContext('_sbCambioLocal=' + ms + ';', ctx);
@@ -398,9 +407,21 @@ const reabrir = () => vm.runInContext('_sbPerm=null;_sbPermHasta=0;_sbPidiendo=n
     && ctx.D.pedidos[0].n === 'COBRADO_RECIEN' && ctx._renders === 0, ctx.D.pedidos);
   chk('y ni le pide permiso al ERP: se corta antes de salir', llamadas.length === 0, llamadas);
 
+  /* El reloj solo no alcanza (2/10/2026, Codex sobre 6abf333). Hasta ese día esto
+     afirmaba "pasados los 6 minutos sí entra" con filas del 23/9 — o sea, daba
+     por bueno el bug: la réplica corre cada 10 min y a los 7 todavía puede no
+     tener el cobro. Manda la FECHA de las filas contra la del cambio. */
   limpiar(); permisoAMano(); reset(); tocarAhora(Date.now() - 7 * 60 * 1000);
   ctx.D = { pedidos: [{ h: 'Home', n: 'VIEJO' }] };
-  chk('pasados los 6 minutos sí entra: la réplica ya lo alcanzó',
+  chk('pasados 6 min, filas ANTERIORES al cambio NO entran: la réplica todavía no lo copió',
+    (await ctx._sbRefrescoPedidos({ llego: false })) === false
+    && ctx.D.pedidos[0].n === 'VIEJO', ctx.D.pedidos.map(p => p.n));
+
+  limpiar(); permisoAMano();
+  reset({ filas: [Object.assign({}, FILAS[0], { updated_at: new Date(Date.now() - 60 * 1000).toISOString() })] });
+  tocarAhora(Date.now() - 7 * 60 * 1000);
+  ctx.D = { pedidos: [{ h: 'Home', n: 'VIEJO' }] };
+  chk('pasados 6 min, filas POSTERIORES al cambio sí entran: la réplica ya lo alcanzó',
     (await ctx._sbRefrescoPedidos({ llego: false })) === true
     && ctx.D.pedidos.some(p => p.n === '1023'), ctx.D.pedidos.map(p => p.n));
 

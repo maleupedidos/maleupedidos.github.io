@@ -8232,7 +8232,7 @@ function ajAvisosHTML(){
      el silencio también necesita un lugar donde verse. */
   h+='<div class="aj-card">';
   h+='<h3>La copia a la base nueva</h3>';
-  h+='<div class="desc">Pedidos, stock y clientes se copian solos a la base nueva cada 5 minutos. <b>La planilla sigue mandando</b>: la base es una copia. Todas las noches a las 4 se comparan los números y te llega un mail <b>solo si no coinciden</b>.</div>';
+  h+='<div class="desc">Pedidos, stock y clientes se copian solos a la base nueva cada 10 minutos. <b>La planilla sigue mandando</b>: la base es una copia. Todas las noches a las 4 se comparan los números y te llega un mail <b>solo si no coinciden</b>.</div>';
   h+='<div id="ajRepEstado" class="aj-nota">Tocá el botón para comparar ahora.</div>';
   h+='<button class="aj-btn aj-btn-full" id="ajRepBtn" onclick="ajReplicaCruzar()">⚖️ Comparar la planilla con la base ahora</button>';
   h+='<div id="ajRepOut" class="aj-nota hidden"></div>';
@@ -14359,15 +14359,44 @@ function _sbOCs(){
   }).catch(function(){ return null; });
 }
 
-/* La replica corre cada 5 minutos. Seis es el margen: pasado ese rato, lo que
-   Tadeo toco aca ya viajo a la planilla y de ahi a Supabase, asi que la foto de
-   la base lo incluye. Antes de eso, NO — y pisar un cobro recien hecho con una
-   foto que todavia no lo tiene es exactamente el bug que no se puede cometer:
-   la plata desaparece de la pantalla y no hay ningun error que lo avise. */
+/* Pisar un cobro recien hecho con una foto que todavia no lo tiene es el bug que
+   no se puede cometer: la plata desaparece de la pantalla y no hay ningun error
+   que lo avise.
+
+   El reloj solo NO alcanza (2/10/2026, lo marco Codex). Esto nacio cuando la
+   replica corria cada 5 minutos y 6 era el margen; desde que corre cada 10, un
+   cobro hecho justo despues de una replica no llega a la base hasta 10 min mas
+   tarde, y a los 7 el reloj ya dejaba pisar: volvia «No Cobrado».
+
+   La regla que manda es la de las FECHAS: lo que viene de la base pisa solo si
+   es POSTERIOR al ultimo cambio hecho aca — `_sbFotoPosterior(ts)`. Lo usan los
+   dos adelantos (la lista de `sales_order` y la foto de `pedidosLight`). Los 6
+   minutos quedan como margen para la carrera de la propia replica: lee la
+   planilla, tarda unos segundos y escribe, asi que una fila puede salir con hora
+   posterior al cobro y datos de antes. */
 var _SB_ESPERA_TRAS_CAMBIO=6*60*1000;
 function _sbPuedePisar(){
   if(_sbCambioLocal&&Date.now()-_sbCambioLocal<_SB_ESPERA_TRAS_CAMBIO)return false;
   return true;
+}
+/* `ts` = de cuando es lo que vino de la base. Sin fecha (0) y con un cambio
+   local, no pisa: no saber de cuando es no es saber que es posterior. */
+function _sbFotoPosterior(ts){
+  if(!_sbPuedePisar())return false;
+  return !_sbCambioLocal || (Number(ts)||0)>_sbCambioLocal;
+}
+
+/* La copia del celular (`ma3`) tiene que ir JUNTO con el sello (2/10/2026, lo
+   marco Codex). Los adelantos sellaban `_fresco` —que se guarda— y no guardaban
+   `D`: si se cerraba la app antes de que llegara Google, al reabrir se pintaban
+   los pedidos VIEJOS de `ma3` con el sello NUEVO, y la foto siguiente se
+   rechazaba por «mas vieja» que lo que se veia. Una mentira que ademas se
+   protegia sola.
+   Devuelve false si no entro: el que llama entonces NO sella, para que el sello
+   nunca diga mas de lo que la copia tiene. */
+function _sbGuardarCopia(){
+  try{ localStorage.setItem('ma3',JSON.stringify(D)); return true; }catch(e){}
+  try{ return !!(window._lsSetSafe && window._lsSetSafe('ma3',JSON.stringify(D))); }catch(e){ return false; }
 }
 
 /* De cuando es la foto: el sello mas nuevo de las filas que vinieron. Si
@@ -14494,8 +14523,8 @@ function _sbRefrescoPedidos(gen){
   return _sbPedidos(400).then(function(lista){
     if(!lista||!lista.length)return false;
     if(gen&&gen.llego)return false;          // Google gano la carrera
-    if(!_sbPuedePisar())return false;        // toco algo mientras viajaba
     var edad=_sbEdad(lista);
+    if(!_sbFotoPosterior(edad))return false; // hubo un cambio aca que la base todavia no tiene
     /* La foto de `pedidosLight` llego primero y es mas nueva que estas filas:
        fusionarlas encima seria volver atras pedido por pedido (2/10/2026). */
     if(gen&&gen.fotoTs&&edad<=gen.fotoTs)return false;
@@ -14517,7 +14546,7 @@ function _sbRefrescoPedidos(gen){
        "recien", que para entonces es verdad. Lo que no se puede hacer es
        apagarlo sin decir de cuando es la foto — por eso van juntos. */
     try{
-      if(edad){ _marcarFresco(['pedidos'],edad); _apagarCartelUnaVez(gen); }
+      if(edad&&_sbGuardarCopia()){ _marcarFresco(['pedidos'],edad); _apagarCartelUnaVez(gen); }
     }catch(e){}
     return true;
   }).catch(function(){ return false; });
@@ -14631,7 +14660,7 @@ function _fotoPedidos(gen){
         var cuando=_fotoFechaUtc(f.computed_at);
         if(!cuando){ _fotoPedNota('sin fecha','computed_at ilegible: '+f.computed_at); return false; }
         if(gen&&gen.llego){ _fotoPedNota('Google llego antes',''); return false; }
-        if(!_sbPuedePisar()||(_sbCambioLocal&&cuando<=_sbCambioLocal)){
+        if(!_sbFotoPosterior(cuando)){
           _fotoPedNota('cambio local','la foto es anterior a un cambio hecho aca'); return false;
         }
         if(typeof D==='undefined'||!D)D={};
@@ -14647,6 +14676,9 @@ function _fotoPedidos(gen){
           if(_hayEditorAbierto()){ _pendingLoadRender=true; }
           else { render(); }
         }catch(e){ _fotoPedNota('render',(e&&e.message)||e); }
+        /* Guardar ANTES de sellar: ver `_sbGuardarCopia`. Va aunque sea solo
+           Inicio, porque `D._lightTs` tambien vive en la copia. */
+        if(!_sbGuardarCopia()){ _fotoPedNota('sin copia','ma3 no entro: pinta pero no sella'); return true; }
         if(conLista){
           try{ _marcarFresco(['pedidos'],cuando); _apagarCartelUnaVez(gen); }catch(e){}
         }
