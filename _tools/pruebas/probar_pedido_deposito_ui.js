@@ -65,7 +65,7 @@ const DEPS = [{ id: 'ustariz', nombre: 'Deposito Ustariz' }, { id: 'moresco', no
     chk('   ofrece los dos freezers', !!h1 && h1.indexOf('Ustariz') >= 0 && h1.indexOf('Moresco') >= 0, h1);
     chk('   y la opción de volver al default', !!h1 && h1.indexOf('Por defecto') >= 0, h1);
     chk('el POST lleva hoja, fila y depósito',
-        !!h1 && h1.indexOf("pedDep('Home',120,'ustariz')") >= 0, h1);
+        !!h1 && h1.indexOf("pedDep('Home',120,'ustariz',this)") >= 0, h1);
 
     /* ── 2. Sin elegir: no es una falta ── */
     const h2 = await pintar(cli, { h: 'Home', n: '901', r: 121, o: 'Deposito', es: 'Pendiente', dep: '' });
@@ -115,6 +115,88 @@ const DEPS = [{ id: 'ustariz', nombre: 'Deposito Ustariz' }, { id: 'moresco', no
       return _sbAPedido({channel:'Home',order_number:'908',customer_name:'X'}).dep;
     }catch(e){return null;}})()`);
     chk('   y sin la columna (migración sin aplicar) queda vacío, no undefined', sbv === '', { dep: sbv });
+
+    /* ── 9. EL TOQUE, de punta a punta (2/10/2026) ──
+       Tadeo: *"los botones andan muy lentos, aun despues de v489"*. El boton
+       recien cambiaba cuando volvia `_recargarPedidos()` — `pedidosLight` en
+       frio, 12-17 s — y hasta ahi la pantalla no decia nada.
+       Backend simulado ADENTRO de la pagina: el POST `pedidoDeposito` tarda
+       1,5 s y contesta lo que diga `__depResp`; todo otro fetch se cuenta y
+       se contesta vacio, asi nada sale a produccion. */
+    await evaluar(cli, `(function(){
+      window.__depPosts=0; window.__otros=[]; window.__depResp={ok:true};
+      var f0=window.fetch;
+      window.fetch=function(u,o){
+        var b=(o&&o.body)||'';
+        if(String(b).indexOf('pedidoDeposito')>=0){
+          window.__depPosts++;
+          return new Promise(function(r){ setTimeout(function(){
+            r(new Response(JSON.stringify(window.__depResp),{headers:{'Content-Type':'application/json'}}));
+          },1500); });
+        }
+        window.__otros.push(String(u).slice(0,120));
+        return Promise.resolve(new Response('{"ok":false}',{headers:{'Content-Type':'application/json'}}));
+      };
+      /* La recarga NO sale por window.fetch (va por la cola de GETs, que se
+         guardo su fetch al arrancar): mirando solo el fetch, este chequeo daba
+         verde contra v489, con el bug adentro. Se espia la funcion. */
+      window.__recargas=0;
+      var r0=window._recargarPedidos;
+      window._recargarPedidos=function(){ window.__recargas++; return Promise.resolve(); };
+      window.__r0=r0;
+      D.pedidos=[{h:'Home',n:'910',r:130,o:'Deposito',es:'Pendiente',dep:'',p:[]}];
+      var w=document.createElement('div'); w.id='__depPrueba';
+      w.innerHTML=_pedDepHTML(D.pedidos[0],false);
+      document.body.appendChild(w);
+      return 1;
+    })()`);
+    const tocar = nombre => evaluar(cli, `(function(){
+      var bs=document.querySelectorAll('#__depPrueba button.ped-dep-x');
+      for(var i=0;i<bs.length;i++)if(bs[i].textContent.trim()==='${nombre}'){
+        window.__t0=performance.now(); bs[i].click(); return true; }
+      return false;
+    })()`);
+    const estado = () => evaluar(cli, `(function(){
+      var b=document.querySelector('#__depPrueba .ped-dep');
+      if(!b)return null;
+      var on=b.querySelector('button.ped-dep-x.on');
+      var bs=b.querySelectorAll('button.ped-dep-x'), dis=0;
+      for(var i=0;i<bs.length;i++)if(bs[i].disabled)dis++;
+      return {on:on?on.textContent.trim():'', va:!!b.querySelector('button.va'),
+              txt:(b.querySelector('button.va')||{}).textContent||'', dis:dis, n:bs.length,
+              v:(b.querySelector('.ped-dep-v')||{}).textContent||'', dep:D.pedidos[0].dep};
+    })()`);
+
+    chk('el toque encuentra el botón', await tocar('Moresco') === true);
+    const e0 = await estado();
+    chk('al instante (sin esperar al servidor) el botón dice "Guardando…"',
+        !!e0 && e0.va && e0.txt.indexOf('Guardando') >= 0, e0);
+    chk('   y el bloque queda trabado: no se puede tocar otro mientras viaja',
+        !!e0 && e0.dis === e0.n, e0);
+    chk('   pero NO adelanta el resultado: el freezer sigue sin cambiar',
+        !!e0 && e0.dep === '' && e0.v.indexOf('Sin elegir') >= 0, e0);
+    await tocar('Ustariz');
+    const listo = await esperar(cli, `(function(){var o=document.querySelector('#__depPrueba button.ped-dep-x.on');
+      return !!o && o.textContent.trim()==='Moresco' && !document.querySelector('#__depPrueba button.va');})()`, 25000);
+    const ms = await evaluar(cli, `Math.round(performance.now()-window.__t0)`);
+    console.log('         toque → freezer marcado: ' + ms + ' ms (el POST simulado tarda 1500)');
+    chk('con el OK, el freezer queda marcado en cuanto contesta el POST', listo && ms < 2500, { ms: ms });
+    const e1 = await estado();
+    chk('   y el bloque lo dice, con los botones vivos de nuevo',
+        !!e1 && e1.v.indexOf('Moresco') >= 0 && e1.dis === 0 && e1.dep === 'moresco', e1);
+    chk('un doble toque manda UN solo POST', await evaluar(cli, `window.__depPosts`) === 1,
+        { posts: await evaluar(cli, `window.__depPosts`) });
+    const recargas = await evaluar(cli, `window.__recargas`);
+    chk('NO recarga la lista entera (era lo que costaba 12-17 s)', recargas === 0, { recargas: recargas });
+
+    /* El servidor lo rechaza (p. ej. alguien lo entrego desde otro celular). */
+    await evaluar(cli, `window.__depResp={ok:false,err:'el pedido ya se entrego'}; 1`);
+    await tocar('Ustariz');
+    await esperar(cli, `!document.querySelector('#__depPrueba button.va')`, 10000);
+    const e2 = await estado();
+    chk('rechazado: el freezer queda como estaba', !!e2 && e2.dep === 'moresco' && e2.on === 'Moresco', e2);
+    chk('   y los botones se destraban, con su nombre', !!e2 && e2.dis === 0 &&
+        await evaluar(cli, `!!Array.prototype.some.call(document.querySelectorAll('#__depPrueba button.ped-dep-x'),function(b){return b.textContent.trim()==='Ustariz';})`), e2);
 
     const err = await evaluar(cli, `(window.__err||[]).length`);
     chk('sin errores de consola', err === 0, { errores: err });
