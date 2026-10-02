@@ -48,7 +48,7 @@ function armar() {
   vm.runInContext([
     'var _SB_ESPERA_TRAS_CAMBIO=6*60*1000; var _sbCambioLocal=0; var _sbCambiosPed={};',
     sacar('_sbPuedePisar'), sacar('_sbFotoPosterior'), sacar('_sbEdad'), sacar('_sbClavePedido'),
-    sacar('_sbFilaPisa', true), sacar('_sbFusionar'), sacar('_patchPedidoLocal'), sacar('_sbRefrescoPedidos'),
+    sacar('_sbVistoTs', true), sacar('_sbFilaPisa', true), sacar('_sbFusionar'), sacar('_patchPedidoLocal'), sacar('_sbRefrescoPedidos'),
   ].join('\n'), ctx);
   return ctx;
 }

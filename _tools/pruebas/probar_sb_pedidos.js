@@ -106,7 +106,7 @@ vm.runInContext([
   (src.match(/\nvar _SB_ESPERA_TRAS_CAMBIO=[^;]*;/) || [''])[0],
   sacar('_sbPuedePisar'), sacar('_sbFotoPosterior'), sacar('_sbGuardarCopia'),
   sacar('_sbEdad'), sacar('_sbCompletar'),
-  sacar('_sbClavePedido'), sacar('_sbFilaPisa'), sacar('_sbFusionar'), sacar('_sbRefrescoPedidos'),
+  sacar('_sbClavePedido'), sacar('_sbVistoTs'), sacar('_sbFilaPisa'), sacar('_sbFusionar'), sacar('_sbRefrescoPedidos'),
   /* Desde 6abf333 el cartel lo apaga esta; sin ella el ReferenceError quedaba
      adentro del try y los dos chequeos del cartel daban MAL sin decir por qué. */
   sacar('_apagarCartelUnaVez'),
