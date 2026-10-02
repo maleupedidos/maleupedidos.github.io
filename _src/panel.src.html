@@ -853,6 +853,7 @@ button.rt-chip.on{background:var(--o);border-color:var(--o);color:#fff}
 button.ped-dep-x{border:1px solid var(--cd);background:#fff;color:var(--ink2);border-radius:999px;padding:0 13px;min-height:36px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit}
 button.ped-dep-x.on{background:var(--gd);border-color:var(--gd);color:#fff}
 button.ped-dep-x:disabled{opacity:.45;cursor:default}
+button.ped-dep-x.va,button.ped-dep-x.va:disabled{opacity:1;background:#E3EFE3;border-color:var(--gd);color:var(--gd)}
 .ped-dep-n{font-size:10.5px;color:var(--ink4);margin-top:6px;line-height:1.35}
 .origen-box{margin-top:10px;background:var(--cr);border-radius:10px;padding:10px}
 .origen-help{font-size:11px;color:var(--bl);margin-bottom:8px;line-height:1.35}
@@ -10842,16 +10843,18 @@ function _pedDepHTML(p,homeOnly){
   if(p.o==='Orden de Compra')return '';
   var id=String(p.dep||'').trim().toLowerCase();
   var cerrado=_pedDepCerrado(p);
-  var uid=String(p.h||'').replace(/ /g,'')+String(p.n||'');
+  /* Por FILA, no por numero (2/10/2026, Codex): dos pedidos Home sin numero
+     ("-") daban el mismo id, y el repintado de uno caia en el bloque del otro. */
+  var uid=_pedDepUid(p);
   var h='<div class="ped-dep" id="pdep-'+uid+'">'
     +'<div class="ped-dep-t">\u2744\ufe0f De qu\u00e9 freezer sale</div>'
     +'<div class="ped-dep-v">'+(id?_pedDepEsc(_pedDepNombre(id)):'Sin elegir <small>\u2014 sale del freezer por defecto de cada producto</small>')+'</div>';
   if(!cerrado){
     h+='<div class="ped-dep-b">';
     deps.forEach(function(d){
-      h+='<button type="button" class="ped-dep-x'+(id===d.id?' on':'')+'" onclick="pedDep(\''+_pedDepEsc(p.h)+'\','+(p.r||0)+',\''+_pedDepEsc(d.id)+'\')">'+_pedDepEsc(_pedDepCorto(d.nombre||d.id))+'</button>';
+      h+='<button type="button" class="ped-dep-x'+(id===d.id?' on':'')+'" onclick="pedDep(\''+_pedDepEsc(p.h)+'\','+(p.r||0)+',\''+_pedDepEsc(d.id)+'\',this)">'+_pedDepEsc(_pedDepCorto(d.nombre||d.id))+'</button>';
     });
-    h+='<button type="button" class="ped-dep-x'+(id?'':' on')+'" onclick="pedDep(\''+_pedDepEsc(p.h)+'\','+(p.r||0)+',\'\')">Por defecto</button>';
+    h+='<button type="button" class="ped-dep-x'+(id?'':' on')+'" onclick="pedDep(\''+_pedDepEsc(p.h)+'\','+(p.r||0)+',\'\',this)">Por defecto</button>';
     h+='</div>';
   }else{
     h+='<div class="ped-dep-n">Ya se entreg\u00f3: la mercader\u00eda sali\u00f3 de un freezer y cambiar esto no la mueve. Para pasarla de uno a otro, us\u00e1 un traspaso en Productos.</div>';
@@ -10860,18 +10863,82 @@ function _pedDepHTML(p,homeOnly){
 }
 /* Cambiarlo. No pinta optimista a proposito: el backend RECHAZA el cambio en
    un pedido ya entregado, y adelantar un estado que puede volver atras es
-   justo lo que deja la pantalla diciendo una cosa y la planilla otra. */
-window.pedDep=function(hoja,row,dep){
+   justo lo que deja la pantalla diciendo una cosa y la planilla otra.
+
+   LENTO AUN DESPUES DE v489 (2/10/2026). Tadeo: *"los botones andan muy
+   lentos"*. Un toque era: el POST (~3-4 s, piso de Apps Script) y despues
+   `_recargarPedidos()`, que trae `pedidosLight` EN FRIO porque el POST acaba
+   de tirar sus copias: 12-17 s. Y el boton recien cambiaba de color cuando
+   volvia esa recarga — durante ~15-20 s la pantalla no decia nada.
+   Ahora:
+     · al tocar, el boton dice "guardando" al instante y el bloque se traba
+       (sin adelantar el resultado: lo de arriba sigue valiendo);
+     · con el OK del servidor se corrige `p.dep` en memoria y se redibuja SOLO
+       este bloque. El resto de la ficha no depende del freezer.
+   La recarga entera queda como red, para cuando no encuentro el pedido en
+   memoria. */
+function _pedDepUid(p){
+  return String(p.h||'').replace(/[^A-Za-z0-9]/g,'')+'-r'+(Number(p.r)||0);
+}
+function _pedDepBloques(p){
+  var uid=_pedDepUid(p);
+  /* Por atributo y no getElementById: el mismo pedido puede estar dibujado en
+     Pedidos y en Pedidos Home a la vez, y getElementById devuelve el primero. */
+  return document.querySelectorAll('[id="pdep-'+uid.replace(/["\\]/g,'')+'"]');
+}
+function _pedDepRepintar(p){
+  var bl=_pedDepBloques(p);
+  for(var i=0;i<bl.length;i++){
+    var tmp=document.createElement('div');
+    tmp.innerHTML=_pedDepHTML(p,false);
+    if(tmp.firstChild)bl[i].parentNode.replaceChild(tmp.firstChild,bl[i]);
+  }
+  return bl.length;
+}
+function _pedDepEnMemoria(hoja,row){
+  var l=(typeof D!=='undefined'&&D&&Array.isArray(D.pedidos))?D.pedidos:[], out=[];
+  for(var i=0;i<l.length;i++)if(l[i]&&l[i].h===hoja&&Number(l[i].r)===Number(row))out.push(l[i]);
+  return out;
+}
+window.pedDep=function(hoja,row,dep,btn){
   if(!row){toast('No puedo ubicar la fila de este pedido');return;}
+  var box=(btn&&btn.closest)?btn.closest('.ped-dep'):null;
+  if(box){
+    if(box.getAttribute('data-va'))return;      /* ya hay uno en vuelo */
+    box.setAttribute('data-va','1');
+    var bs=box.querySelectorAll('button.ped-dep-x');
+    for(var i=0;i<bs.length;i++)bs[i].disabled=true;
+    btn.classList.add('va');
+    btn.setAttribute('data-txt',btn.textContent);
+    btn.textContent='Guardando\u2026';
+  }
+  var t0=Date.now();
+  var destrabar=function(){
+    if(!box)return;
+    box.removeAttribute('data-va');
+    var bs=box.querySelectorAll('button.ped-dep-x');
+    for(var i=0;i<bs.length;i++)bs[i].disabled=false;
+    btn.classList.remove('va');
+    if(btn.getAttribute('data-txt'))btn.textContent=btn.getAttribute('data-txt');
+  };
   fetch(API,{method:'POST',headers:{'Content-Type':'text/plain'},
     body:JSON.stringify({action:'pedidoDeposito',hoja:hoja,row:row,deposito:dep})})
     .then(function(r){return r.json();})
     .then(function(d){
       if(!d||!d.ok)throw new Error((d&&d.err)||'no se pudo');
+      window._pedDepUltMs=Date.now()-t0;
+      var ps=_pedDepEnMemoria(hoja,row), pint=0;
+      for(var i=0;i<ps.length;i++){ ps[i].dep=String(dep||'').toLowerCase(); pint+=_pedDepRepintar(ps[i]); }
+      /* Que sobreviva a cerrar la app (2/10/2026, Codex): sin esto el cambio
+         vivia solo en memoria. Al reabrir se pintaba `ma3` con el freezer viejo,
+         y el adelanto de Supabase —que no lo tiene hasta que corra la replica—
+         lo volvia a pisar. Lo mismo que hace `_patchPedidoLocal` con un cobro. */
+      _sbCambioLocal=Date.now();
+      if(ps.length)_sbGuardarCopia();
       toast(dep?('Sale del '+_pedDepNombre(dep)):'Vuelve al freezer por defecto');
-      _recargarPedidos();
+      if(!pint){ destrabar(); _recargarPedidos(); }
     })
-    .catch(function(e){ toast(String(e&&e.message||e)); });
+    .catch(function(e){ destrabar(); toast(String(e&&e.message||e)); });
 };
 
 /* Una fila de `sales_order` con la forma que dibuja la lista del ERP. */
