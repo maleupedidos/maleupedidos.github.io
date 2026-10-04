@@ -41,9 +41,15 @@ const ANOTADOR = `
     await cli.enviar('Page.addScriptToEvaluateOnNewDocument', { source: prep(TOKEN) + ANOTADOR });
     await cli.enviar('Page.navigate', { url: BASE + '/app.html' });
     if (!await esperar(cli, "typeof go==='function'", 60000)) { console.log('  el ERP no arranco'); process.exit(1); }
-    await evaluar(cli, 'go("estancias")');
-    await pausa(1500);
-    await evaluar(cli, 'window.estSwitch && estSwitch("clientes")');
+    /* El arranque puede devolver la pantalla a Inicio despues del primer go()
+       (4/10/2026: la prueba quedaba mirando una pantalla oculta). Se insiste hasta
+       que CRM este a la vista. */
+    for (let i = 0; i < 20; i++) {
+      await evaluar(cli, 'go("estancias")'); await pausa(1500);
+      await evaluar(cli, 'window.estSwitch && estSwitch("clientes")'); await pausa(500);
+      if (await evaluar(cli, "!!(document.getElementById('estClientes')||{}).offsetParent")) break;
+    }
+    await evaluar(cli, "window.estCliVista && estCliVista('tabla')");
     if (!await esperar(cli, "document.querySelectorAll('#estCliList tbody tr').length > 5")) {
       console.log('  la tabla no dibujo'); process.exit(1);
     }
@@ -117,18 +123,43 @@ const ANOTADOR = `
     await evaluar(cli, 'estCliDlConfirmar()'); await pausa(200);
     chk('sin nombre de campaña no descarga ni registra', (await evaluar(cli, 'window.__posts.length')) === 0 && (await evaluar(cli, "!!document.getElementById('cliDlModal')")), await evaluar(cli, 'window.__posts.length'));
     await evaluar(cli, "estCliDlSet('nombre','prueba-claude'); estCliDlConfirmar()");
-    await esperar(cli, 'window.__posts.length>=2', 8000);
+    await esperar(cli, 'window.__posts.length>=1', 8000);
     await pausa(800);
-    const posts = await evaluar(cli, 'window.__posts.map(function(p){return {a:p.action,t:p.template,o:p.origen,n:(p.items||[]).length};})');
-    const por = {}; posts.forEach(p => { por[p.o] = p; });
-    const nIncl = filasPrev - off2;
-    const nCtrl = (por.control || { n: 0 }).n;
-    chk('registra a los que van (campaña)', por['campaña'] && por['campaña'].a === 'crmLogCampania' && por['campaña'].t === 'prueba-claude', posts);
-    chk('registra a los sacados (excluido)', por.excluido && por.excluido.n === off2, { posts, off2 });
-    chk('van + control = los tildados', (por['campaña'] ? por['campaña'].n : 0) + nCtrl === nIncl, { posts, nIncl });
-    chk('control del 15% si son 20 o mas', nIncl >= 20 ? nCtrl === Math.round(nIncl * 0.15) : nCtrl === 0, { nIncl, nCtrl });
+    /* Desde el 4/10/2026: UNA llamada con los tres grupos, los destinatarios
+       como lista pendiente, y el control sorteado por CASA. */
+    const posts = await evaluar(cli, 'window.__posts');
+    const p0 = posts[0] || {}, g = p0.grupos || {};
+    const nV = (g.destinatarios || []).length, nC = (g.control || []).length, nX = (g.excluidos || []).length;
+    chk('una sola llamada, crmLogCampania, como lista pendiente y con lote', posts.length === 1 && p0.action === 'crmLogCampania'
+        && p0.template === 'prueba-claude' && p0.pendiente === true && /^\d{13}$/.test(p0.lote), posts.map(x => ({a: x.action, p: x.pendiente, l: x.lote})));
+    chk('los sacados van como excluidos', nX === off2, { nX, off2 });
+    chk('van + control = los tildados', nV + nC === filasPrev - off2, { nV, nC, nIncl: filasPrev - off2 });
+    const casas = await evaluar(cli, `(function(g){
+      var porKey={}; (window.estClientesSync()||[]).forEach(function(c){ porKey[c.key]=c; });
+      var casa=function(it){ var c=porKey[it.key]; return c ? window.crmCasaDe(c) : 'key|'+it.key; };
+      var v={}, k={}; (g.destinatarios||[]).forEach(function(it){ v[casa(it)]=1; }); (g.control||[]).forEach(function(it){ k[casa(it)]=1; });
+      var ambas=Object.keys(k).filter(function(x){ return v[x]; });
+      return {casasV:Object.keys(v).length, casasK:Object.keys(k).length, partidas:ambas, conocidas:Object.keys(porKey).length};
+    })(${JSON.stringify(g)})`);
+    chk('ninguna casa queda partida entre campaña y control', casas.conocidas > 0 && casas.partidas.length === 0, casas);
+    const nCasas = casas.casasV + casas.casasK;
+    chk('control del 15% de las CASAS si son 20 o mas', nCasas >= 20 ? casas.casasK === Math.round(nCasas * 0.15) : nC === 0, casas);
+    chk('ningun vendedor en la lista', await evaluar(cli, `(function(g){ var L=(g.destinatarios||[]).concat(g.control||[]);
+      var porKey={}; (window.estClientesSync()||[]).forEach(function(c){ porKey[c.key]=c; });
+      return L.every(function(it){ return !(porKey[it.key]||{}).esVendedor; }); })(${JSON.stringify(g)})`));
     console.log('       resumen de la vista previa: ' + res);
-    console.log('       POST: ' + JSON.stringify(posts));
+
+    // El aviso de la lista sin confirmar y sus dos botones.
+    await evaluar(cli, `window.crmInterAgregar([{id:'E1791130000000-0', fecha:'04/10/2026 12:00', key:'x', tel:'1140000001', nombre:'X',
+      resultado:'📋 Lista bajada, sin confirmar', prox:'', nota:'Campaña: prueba-aviso', origen:'lista', usuario:'Tadeo'}]); rClientes();`);
+    const hayAviso = await esperar(cli, "/prueba-aviso/.test((document.getElementById('cliListas')||{}).textContent||'')", 8000);
+    chk('arriba de Personas aparece la lista que espera «Ya la mandé»', hayAviso, await evaluar(cli, "(document.getElementById('cliListas')||{}).textContent"));
+    await evaluar(cli, 'window.__posts.length=0; document.querySelector("#cliListas .est-chip.on").click()');
+    await esperar(cli, 'window.__posts.length>=1', 5000);
+    const pc = await evaluar(cli, 'window.__posts[0]');
+    chk('«Ya la mandé» pide confirmar ESE lote como mandado', pc && pc.action === 'crmCampaniaConfirmar' && pc.lote === '1791130000000' && pc.mandada === true, pc);
+    const enCampania = await evaluar(cli, "window.crmCampaniasDe('x','1140000001')");
+    chk('mientras es lista, esa persona NO figura como que recibio una campaña', Array.isArray(enCampania) && enCampania.length === 0, enCampania);
 
     const err = await evaluar(cli, 'JSON.stringify((window.__err||[]).slice(0,5))');
     chk('sin errores de consola', err === '[]', err);

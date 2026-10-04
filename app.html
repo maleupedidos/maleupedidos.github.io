@@ -1740,6 +1740,10 @@ button.ped-dep-x.va,button.ped-dep-x.va:disabled{opacity:1;background:#E3EFE3;bo
 .cli-dl-row small{font-size:11px;color:var(--bl)}
 .cli-dl-foot{display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:space-between;padding-top:10px}
 .cli-dl-res{font-size:13px;color:var(--ink2)}
+/* Las listas bajadas que esperan «Ya la mandé» (4/10/2026) */
+.cli-lista{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px;background:#FFF8E1;border:1px solid #F3D27A;border-radius:10px;padding:10px 12px;margin:0 0 10px}
+.cli-lista-t{font-size:13.5px;color:var(--ink);flex:1 1 220px}
+.cli-lista-b{display:flex;gap:6px;flex-wrap:wrap}
 .cli-dl-go{padding:12px 16px;background:#1f7a3d;color:#fff;border:none;border-radius:10px;font:inherit;font-weight:800;font-size:14px;cursor:pointer}
 @media(max-width:600px){
   .cli-t{font-size:12px}.cli-t td,.cli-t th{padding:8px 7px}
@@ -12311,7 +12315,7 @@ function _leerVersion(app){
    "El HTML no sabe que version es" dejo de ser cierto: el build le escribe
    adentro el CACHE_NAME de sw-panel.js, el mismo que deploy.sh obliga a subir en
    cada cambio. Si lo publicado dice otra cosa, esta pagina es vieja. Punto. */
-var _APP_CN_PAGINA='maleu-panel-v498';
+var _APP_CN_PAGINA='maleu-panel-v499';
 
 /* Devuelve [{k,v}] si lo publicado no es lo que esta pagina corre. */
 function _chequearVersiones(){
@@ -33896,7 +33900,10 @@ if('serviceWorker' in navigator){
      alguien le escribio (2/10/2026). Su nota dice "Campaña: X" — por eso va antes. */
   function _esFueraDeCampania(it){
     var o = String((it && it.origen) || '');
-    return o === 'excluido' || o === 'control';
+    /* 'lista' = un Excel bajado que nadie confirmo que salio; 'descartada' = no
+       salio. Hasta el 4/10/2026 bajar la lista ya la anotaba como campaña y esa
+       gente quedaba fuera de las difusiones una semana sin haber recibido nada. */
+    return o === 'excluido' || o === 'control' || o === 'lista' || o === 'descartada';
   }
   window.crmEsCampania = _esCampania;
   /* Las campañas que RECIBIO una persona, para que CRM › Personas pueda sacar a
@@ -33906,6 +33913,65 @@ if('serviceWorker' in navigator){
     return _crmInterDe(key ? [key] : [], tel ? [tel] : []).filter(_esCampania);
   };
   window.crmDiasDesdeTxt = function(s){ return _crmDiasDesde(s); };
+
+  /* LA CASA DE UNA PERSONA (4/10/2026). Se mide por casa (memoria
+     la-unidad-es-la-casa): el grupo de control y los atajos de "ya recibio" o
+     "ya compro" tienen que mirar la casa entera, si no la mamá queda en la
+     campaña y la hija en el control y la medicion no vale nada.
+     En Estancias la casa es sub-barrio + lote, la misma llave que `_hogBuild`.
+     Afuera, barrio + lote si hay lote. Si no, la persona es su propia casa. Una
+     visita (no vive ahi) nunca es la casa que visita. */
+  window.crmCasaDe = function(c){
+    if (!c) return '';
+    var ubic = !c.visitante && !c.sinUbicacion && c.lote;
+    if (ubic && c.subBarrio && _crmNormName(c.barrio) === 'estancias del pilar')
+      return 'est|' + _crmNormName(c.subBarrio) + '|' + _loteNorm(c.lote);
+    if (ubic && c.barrio && !/^[-–—.]*$/.test(String(c.barrio).trim()))
+      return 'bar|' + _crmNormName(c.barrio) + '|' + _loteNorm(c.lote);
+    var t = String(c.tel || '').replace(/\D/g, '').slice(-10);
+    return t ? 'tel|' + t : 'key|' + String(c.key || '');
+  };
+  function _campNombre(it){
+    return ((String((it && it.nota) || '').match(/Campa[nñ]a:\s*(.+)$/) || [])[1] || '(sin nombre)').trim();
+  }
+  window.crmCampNombre = _campNombre;
+  /* Las listas BAJADAS que nadie confirmo si salieron (origen 'lista').
+     null = la bitacora todavia no cargo. */
+  window.crmListasAbiertas = function(){
+    if (!crmInteracciones){ try{ if(!_bitPidiendo){ _bitPidiendo = true; loadCrmInteracciones(); } }catch(e){} return null; }
+    var g = {};
+    crmInteracciones.forEach(function(it){
+      if (!it || it.origen !== 'lista') return;
+      var m = /^E(\d{10,14})-/.exec(String(it.id || '')); if (!m) return;
+      var e = g[m[1]] || (g[m[1]] = {lote: m[1], nombre: _campNombre(it), fecha: it.fecha, n: 0, quien: it.usuario || ''});
+      e.n++;
+    });
+    return Object.keys(g).map(function(k){ return g[k]; }).sort(function(a, b){ return b.lote.localeCompare(a.lote); });
+  };
+  /* Lo que devolvio el backend al registrar, para que se vea sin recargar. */
+  window.crmInterAgregar = function(lst){
+    (lst || []).forEach(_crmInterLocalAdd);
+    try{ localStorage.setItem('maleu_crm_inter_v1', JSON.stringify(crmInteracciones)); }catch(e){}
+    _crmIndexInteracciones();
+  };
+  /* «Ya la mandé» / «No la mandé» sobre una lista bajada. */
+  window.crmCampaniaConfirmar = function(lote, mandada, cb){
+    fetch(CRM_API, {method:'POST', mode:'cors', body: JSON.stringify({action:'crmCampaniaConfirmar', lote: lote, mandada: !!mandada})})
+      .then(function(r){ return r.json(); })
+      .then(function(d){
+        if (d && d.ok){
+          var porId = {};
+          (d.interacciones || []).forEach(function(x){ porId[x.id] = x; });
+          (crmInteracciones || []).forEach(function(it){
+            var x = porId[it.id]; if (x){ it.origen = x.origen; it.resultado = x.resultado; it.fecha = x.fecha; }
+          });
+          try{ localStorage.setItem('maleu_crm_inter_v1', JSON.stringify(crmInteracciones)); }catch(e){}
+          _crmIndexInteracciones();
+        }
+        if (cb) cb(d || {ok:false, error:'sin respuesta'});
+      })
+      .catch(function(err){ if (cb) cb({ok:false, error: err.message}); });
+  };
 
   // F3: estado relacional de una unidad a partir de su interacción más reciente.
   // Devuelve {last, prox, diasDesde, diasHasta} o null si nunca la contactaste.
@@ -42676,7 +42742,11 @@ function _objRango(periodo, mesLabel){
     // (2+ entregas) deja de ser nuevo aunque su 1ª compra sea reciente → es un Activo/recompra.
     var _ent1=_H?(c.entregadosHome||0):(c.entregados||0);
     if(est==='activo' && _ent1<=1){ var pf=_parseFecha(_H?c.primeraFechaHome:c.primeraFecha); if(pf && ((new Date()-pf)/86400000)<=35) est='nuevo'; }
-    var pend=c.pendientesHome||0;
+    /* Pedidos en curso del ALCANCE (4/10/2026): con todo Maleu contaba solo Home,
+       y alguien con un pedido de Red o de Clubes para mañana salia "sin pedido".
+       `pendientes` lo manda el backend desde la v de ese dia; una copia vieja no
+       lo trae y cae en el de Home, como hasta hoy. */
+    var pend=_H ? (c.pendientesHome||0) : ((typeof c.pendientes==='number') ? c.pendientes : (c.pendientesHome||0));
     // Un cliente sin entregas pero con pedido en curso (ej. Su, pidió para mañana)
     // NO está "sin compras": está pendiente. Los que ya tienen historial conservan
     // su estado real (activo/dormido/…) y muestran el pendiente como chip aparte.
@@ -42692,7 +42762,7 @@ function _objRango(periodo, mesLabel){
       ticket:_H?(c.ticketHome||0):(c.ticket||0),
       deuda:_H?(c.deudaHome||0):(c.deuda||0), diasUltima:dias,
       ultimaFecha:(_H?c.ultimaFechaHome:c.ultimaFecha)||'', estado:est,
-      pend:pend, proxEntrega:c.proxEntregaHome||'', freqH:freqH, riesgo:riesgo,
+      pend:pend, proxEntrega:(_H ? c.proxEntregaHome : (c.proxEntrega||c.proxEntregaHome))||'', freqH:freqH, riesgo:riesgo,
       facturadoAll:c.facturado||0 };
   }
   // Título del cliente en title-case respetando partículas (de, del, la, los, van…).
@@ -43040,23 +43110,50 @@ function _objRango(periodo, mesLabel){
     arr.forEach(function(it){ var d=window.crmDiasDesdeTxt(it.fecha); if(d!==null && d>=0 && (min<0 || d<min)) min=d; });
     return min;   // -1 = nunca recibió
   }
+  /* POR CASA (4/10/2026). Los atajos y el control miraban a la persona: si la
+     mamá recibio una campaña ayer, la hija igual entraba; y el sorteo dejaba a
+     una en la campaña y a la otra en el control. La casa la define el CRM
+     (`crmCasaDe`) y se miran TODOS los integrantes de la base, no solo los que
+     estan en esta lista. */
+  function _dlCasa(c){ return (typeof window.crmCasaDe==='function') ? window.crmCasaDe(c) : ('key|'+c.key); }
+  function _dlIntegrantes(c){ return (_dl && _dl.casas && _dl.casas[_dlCasa(c)]) || [c]; }
+  function _dlUltCampaniaCasa(c){
+    var mem=_dlIntegrantes(c), min=-1;
+    for(var i=0;i<mem.length;i++){
+      var d=_dlUltCampania(mem[i]);
+      if(d===null) return null;
+      if(d>=0 && (min<0 || d<min)) min=d;
+    }
+    return min;
+  }
+  function _dlCompraCasa(c, n){
+    return _dlIntegrantes(c).some(function(m){ var v=_cliH(m); return (v.diasUltima>=0 && v.diasUltima<=n) || v.pend>0; });
+  }
   window.estCliDescargarCSV=function(){
     var arr=(typeof _cliFilteredSorted==='function')?_cliFilteredSorted():[];
     if(!arr.length){ _toast('No hay personas con estos filtros'); return; }
-    var con=[], sinTel=0;
-    arr.forEach(function(c){ if(_telWati(c.telDisplay||c.tel)) con.push(c); else sinTel++; });
+    var con=[], sinTel=0, vend=0;
+    arr.forEach(function(c){
+      /* El telefono de un vendedor de Red no va a una campaña (4/10/2026). El
+         backend ya no agrupa a sus clientes bajo su numero, pero un vendedor
+         que compra para su casa sigue siendo del equipo. */
+      if(c.esVendedor){ vend++; return; }
+      if(_telWati(c.telDisplay||c.tel)) con.push(c); else sinTel++;
+    });
     if(!con.length){ _toast('Nadie de la lista tiene teléfono válido'); return; }
-    _dl={arr:con, sinTel:sinTel, fuera:{}, ctrl:15, nombre:(_dl&&_dl.nombre)||''};
+    var casas={};
+    (_estCli||[]).forEach(function(c){ var k=_dlCasa(c); (casas[k]||(casas[k]=[])).push(c); });
+    _dl={arr:con, sinTel:sinTel, vend:vend, casas:casas, fuera:{}, ctrl:15, nombre:(_dl&&_dl.nombre)||''};
     var ov=document.createElement('div'); ov.id='cliDlModal'; ov.className='est-modal-ov';
     ov.innerHTML='<div class="est-modal cli-dl">'
       +'<div class="est-modal-h"><div><b>Revisar la lista antes de descargar</b>'
-      +'<div class="est-modal-sub">Destildá a quien no querés que reciba. Queda registrado en el ERP.</div></div>'
+      +'<div class="est-modal-sub">Destildá a quien no querés que reciba. Queda anotada como lista: cuando la mandes en WATI, tocá «Ya la mandé» arriba de Personas.</div></div>'
       +'<button class="est-modal-x" onclick="estCliDlClose()">✕</button></div>'
       +'<label class="cli-f cli-f-blk"><span>Nombre de la campaña</span><input id="cliDlNombre" class="cli-in" style="width:100%" placeholder="ej: carne-estancias-octubre" value="'+esc(_dl.nombre)+'" oninput="estCliDlSet(\'nombre\',this.value)"></label>'
       +'<div class="cli-dl-atajos">'
-      +'<div>Sacar a los que compraron en los últimos <input id="cliDlN1" class="cli-in" style="width:44px" inputmode="numeric" value="7"> días <button class="est-chip" onclick="estCliDlSacar(\'compra\')">Sacar</button></div>'
-      +'<div>Sacar a los que recibieron una campaña en los últimos <input id="cliDlN2" class="cli-in" style="width:44px" inputmode="numeric" value="7"> días <button class="est-chip" onclick="estCliDlSacar(\'campania\')">Sacar</button></div>'
-      +'<div>Grupo de control al azar (no reciben nada, sirven para medir): <select class="cli-in" onchange="estCliDlSet(\'ctrl\',Number(this.value))"><option value="0">Sin control</option><option value="15" selected>15%</option><option value="25">25%</option></select></div>'
+      +'<div>Sacar las casas que compraron en los últimos <input id="cliDlN1" class="cli-in" style="width:44px" inputmode="numeric" value="7"> días <button class="est-chip" onclick="estCliDlSacar(\'compra\')">Sacar</button></div>'
+      +'<div>Sacar las casas que recibieron una campaña en los últimos <input id="cliDlN2" class="cli-in" style="width:44px" inputmode="numeric" value="7"> días <button class="est-chip" onclick="estCliDlSacar(\'campania\')">Sacar</button></div>'
+      +'<div>Casas de control al azar (no reciben nada, sirven para medir): <select class="cli-in" onchange="estCliDlSet(\'ctrl\',Number(this.value))"><option value="0">Sin control</option><option value="15" selected>15%</option><option value="25">25%</option></select></div>'
       +'<div><button class="est-chip" onclick="estCliDlTodos(1)">Tildar a todos</button> <button class="est-chip" onclick="estCliDlTodos(0)">Destildar a todos</button></div>'
       +'</div>'
       +'<div id="cliDlList" class="cli-dl-list"></div>'
@@ -43069,23 +43166,28 @@ function _objRango(periodo, mesLabel){
   };
   window.estCliDlSet=function(k,v){ if(!_dl) return; _dl[k]=v; if(k==='ctrl') estCliDlPintar(); };
   window.estCliDlClose=function(){ var m=document.getElementById('cliDlModal'); if(m) m.remove(); };
-  function _dlCtrlN(incl){ return (_dl.ctrl>0 && incl>=20) ? Math.round(incl*_dl.ctrl/100) : 0; }
+  /* El control se cuenta en CASAS: con menos de 20 casas no mide nada. */
+  function _dlCtrlN(nCasas){ return (_dl.ctrl>0 && nCasas>=20) ? Math.round(nCasas*_dl.ctrl/100) : 0; }
+  function _dlCasasDe(L){ var m={}; L.forEach(function(c){ m[_dlCasa(c)]=1; }); return Object.keys(m).length; }
   window.estCliDlPintar=function(){
     if(!_dl) return;
     var box=document.getElementById('cliDlList'); if(!box) return;
     var hayBit=(typeof window.crmCampaniasDe==='function');
     box.innerHTML=_dl.arr.map(function(c,i){
-      var v=_cliH(c), off=!!_dl.fuera[c.key], uc=hayBit?_dlUltCampania(c):null;
+      var v=_cliH(c), off=!!_dl.fuera[c.key], uc=hayBit?_dlUltCampaniaCasa(c):null;
       var bar=String(c.barrio||'').trim(); if(/^[-–—.]*$/.test(bar)) bar='';
       return '<label class="cli-dl-row'+(off?' off':'')+'"><input type="checkbox"'+(off?'':' checked')+' onchange="estCliDlTilde('+i+',this.checked)">'
         +'<span class="cli-dl-n"><b>'+esc(_tcNombre(c.nombre))+'</b><small>'+esc(bar||'sin barrio')+(c.lote?' · Lote '+esc(c.lote):'')+'</small></span>'
         +'<span class="cli-dl-m">'+_cliDiasTxt(v)+'<small>'+(v.entregados||0)+' compras</small></span>'
-        +'<span class="cli-dl-m">'+(uc>=0&&uc!==null?'📣 hace '+uc+' d':'')+'<small>'+(v.pend>0?'🕒 pedido en curso':'')+'</small></span>'
+        +'<span class="cli-dl-m">'+(uc>=0&&uc!==null?'📣 la casa, hace '+uc+' d':'')+'<small>'+(v.pend>0?'🕒 pedido en curso':'')+'</small></span>'
         +'</label>';
     }).join('');
-    var fuera=Object.keys(_dl.fuera).length, incl=_dl.arr.length-fuera, k=_dlCtrlN(incl);
+    var fuera=Object.keys(_dl.fuera).length;
+    var inclL=_dl.arr.filter(function(c){ return !_dl.fuera[c.key]; }), nCasas=_dlCasasDe(inclL), k=_dlCtrlN(nCasas);
     var r=document.getElementById('cliDlRes');
-    if(r) r.innerHTML='<b>'+(incl-k)+'</b> van al Excel · '+fuera+' sacados'+(k?' · '+k+' de control':(_dl.ctrl>0&&incl<20?' · <span title="Con menos de 20 el control no mide nada">sin control (son pocos)</span>':''))+(_dl.sinTel?' · '+_dl.sinTel+' sin teléfono':'');
+    if(r) r.innerHTML='<b>'+inclL.length+'</b> personas de <b>'+nCasas+'</b> casas · '+fuera+' sacados'
+      +(k?' · '+k+' casas de control':(_dl.ctrl>0&&nCasas<20?' · <span title="Con menos de 20 casas el control no mide nada">sin control (son pocas)</span>':''))
+      +(_dl.sinTel?' · '+_dl.sinTel+' sin teléfono':'')+(_dl.vend?' · '+_dl.vend+' vendedor'+(_dl.vend>1?'es':'')+' fuera':'');
   };
   window.estCliDlTilde=function(i,on){
     var c=_dl&&_dl.arr[i]; if(!c) return;
@@ -43102,17 +43204,16 @@ function _objRango(periodo, mesLabel){
     var antes=Object.keys(_dl.fuera).length, sinBit=false;
     _dl.arr.forEach(function(c){
       if(tipo==='compra'){
-        var v=_cliH(c);
-        if((v.diasUltima>=0 && v.diasUltima<=n) || v.pend>0) _dl.fuera[c.key]=1;
+        if(_dlCompraCasa(c, n)) _dl.fuera[c.key]=1;
       } else {
-        var d=_dlUltCampania(c);
+        var d=_dlUltCampaniaCasa(c);
         if(d===null){ sinBit=true; return; }
         if(d>=0 && d<=n) _dl.fuera[c.key]=1;
       }
     });
     if(sinBit){ _toast('Estoy trayendo las campañas anteriores, probá de nuevo en unos segundos'); estCliDlPintar(); return; }
     estCliDlPintar();
-    _toast('Saqué '+(Object.keys(_dl.fuera).length-antes)+' personas'+(tipo==='compra'?' (incluye pedidos en curso)':''));
+    _toast('Saqué '+(Object.keys(_dl.fuera).length-antes)+' personas'+(tipo==='compra'?' (por casa, incluye pedidos en curso)':' (por casa)'));
   };
   window.estCliDlConfirmar=function(){
     var nombre=String(_dl.nombre||'').trim();
@@ -43120,10 +43221,13 @@ function _objRango(periodo, mesLabel){
     var incl=_dl.arr.filter(function(c){ return !_dl.fuera[c.key]; });
     var excl=_dl.arr.filter(function(c){ return !!_dl.fuera[c.key]; });
     if(!incl.length){ _toast('No quedó nadie tildado'); return; }
-    // Control al azar (Fisher-Yates sobre una copia).
-    var k=_dlCtrlN(incl.length), mez=incl.slice();
-    for(var j=mez.length-1;j>0;j--){ var r=Math.floor(Math.random()*(j+1)); var t=mez[j]; mez[j]=mez[r]; mez[r]=t; }
-    var ctrlSet={}; mez.slice(0,k).forEach(function(c){ ctrlSet[c.key]=1; });
+    // Control al azar, POR CASA (Fisher-Yates sobre las casas): la casa entera
+    // va a un lado o al otro.
+    var porCasa={}, casasL=[];
+    incl.forEach(function(c){ var ck=_dlCasa(c); if(!porCasa[ck]){ porCasa[ck]=[]; casasL.push(ck); } porCasa[ck].push(c); });
+    var k=_dlCtrlN(casasL.length);
+    for(var j=casasL.length-1;j>0;j--){ var r=Math.floor(Math.random()*(j+1)); var t=casasL[j]; casasL[j]=casasL[r]; casasL[r]=t; }
+    var ctrlSet={}; casasL.slice(0,k).forEach(function(ck){ porCasa[ck].forEach(function(c){ ctrlSet[c.key]=1; }); });
     var envia=incl.filter(function(c){ return !ctrlSet[c.key]; });
     var ctrl=incl.filter(function(c){ return !!ctrlSet[c.key]; });
     var rows=[['Name','CountryCode','Phone','AllowCampaign','AllowSMS','Apodo']];
@@ -43137,24 +43241,42 @@ function _objRango(periodo, mesLabel){
     a.href=url; a.download=fname; document.body.appendChild(a); a.click();
     setTimeout(function(){ document.body.removeChild(a); URL.revokeObjectURL(url); }, 400);
     estCliDlClose();
-    _toast('⬇️ '+envia.length+' contactos → '+fname+' · registrando…');
-    // Registro: tres tandas, cada una con su origen. Si una falla, se dice cuál.
+    _toast('⬇️ '+envia.length+' contactos → '+fname+' · anotando la lista…');
+    /* Una sola llamada con los tres grupos y el mismo lote (4/10/2026). Antes eran
+       tres y los destinatarios quedaban como 'campaña' al BAJAR: si no la
+       mandabas, igual quedaban fuera de las difusiones y sumaban al tope del
+       dia. Ahora quedan como 'lista' hasta que toques «Ya la mandé». */
     var items=function(L){ return L.map(function(c){ return {key:c.key, tel:c.tel||'', nombre:_tcNombre(c.nombre||'')}; }); };
-    var tandas=[['campaña',envia],['excluido',excl],['control',ctrl]].filter(function(t){ return t[1].length; });
-    var fallo=[];
-    var sig=function(i){
-      if(i>=tandas.length){
-        _toast(fallo.length ? ('⚠️ El Excel bajó, pero no se registró: '+fallo.join(', ')+'. Avisale a Backend.')
-          : ('✅ Registrado «'+nombre+'»: '+envia.length+' van · '+excl.length+' sacados · '+ctrl.length+' control'));
-        return;
-      }
-      fetch(EST_API,{method:'POST',mode:'cors',body:JSON.stringify({action:'crmLogCampania',template:nombre,origen:tandas[i][0],items:items(tandas[i][1])})})
-        .then(function(r){ return r.json(); })
-        .then(function(d){ if(!(d&&d.ok)) fallo.push(tandas[i][0]); })
-        .catch(function(){ fallo.push(tandas[i][0]); })
-        .then(function(){ sig(i+1); });
-    };
-    sig(0);
+    fetch(EST_API,{method:'POST',mode:'cors',body:JSON.stringify({action:'crmLogCampania', template:nombre, lote:String(Date.now()), pendiente:true,
+        grupos:{destinatarios:items(envia), control:items(ctrl), excluidos:items(excl)}})})
+      .then(function(r){ return r.json(); })
+      .then(function(d){
+        if(!(d&&d.ok)) throw new Error((d&&d.error)||'no se pudo');
+        if(window.crmInterAgregar) window.crmInterAgregar(d.interacciones);
+        _toast('✅ Lista «'+nombre+'» anotada: '+envia.length+' van · '+excl.length+' sacados · '+ctrl.length+' control. Cuando la mandes, tocá «Ya la mandé».');
+        _cliPintarListas();
+      })
+      .catch(function(err){ _toast('⚠️ El Excel bajó, pero la lista no se anotó ('+err.message+'). Avisale a Backend.'); });
+  };
+  /* Las listas bajadas que esperan que digas si salieron. Van arriba de todo:
+     una lista sin cerrar no bloquea a nadie, pero tampoco se puede medir. */
+  function _cliPintarListas(intento){
+    var box=document.getElementById('cliListas'); if(!box) return;
+    var L=(typeof window.crmListasAbiertas==='function') ? window.crmListasAbiertas() : [];
+    if(L===null){ if((intento||0)<8) setTimeout(function(){ _cliPintarListas((intento||0)+1); }, 1500); return; }
+    box.innerHTML=L.map(function(l){
+      return '<div class="cli-lista"><div class="cli-lista-t">📋 Bajaste <b>«'+esc(l.nombre)+'»</b> ('+l.n+' '+(l.n===1?'persona':'personas')+') el '+esc(String(l.fecha||'').split(' ')[0])
+        +'. ¿Salió?</div><div class="cli-lista-b"><button class="est-chip on" onclick="estCliListaCerrar(\''+l.lote+'\',1,this)">✅ Ya la mandé</button>'
+        +'<button class="est-chip" onclick="estCliListaCerrar(\''+l.lote+'\',0,this)">No la mandé</button></div></div>';
+    }).join('');
+  }
+  window.estCliListaCerrar=function(lote, mandada, btn){
+    if(btn){ btn.disabled=true; btn.textContent='…'; }
+    window.crmCampaniaConfirmar(lote, !!mandada, function(d){
+      if(d && d.ok) _toast(mandada ? '✅ Anotada como enviada: cuenta desde ahora'+(d.aviso?' · '+d.aviso:'') : 'Listo: esa lista no cuenta para nada');
+      else _toast('⚠️ No se pudo: '+((d&&d.error)||'error'));
+      _cliPintarListas();
+    });
   };
   // Tipo de integrante (residencia): 'vive' | 'finde' | 'visita' | '' (sin clasificar).
   // La "visita" no reside (pidió a casa ajena) → sale de Clientes/Hogares (deriva
@@ -43252,7 +43374,7 @@ function _objRango(periodo, mesLabel){
         if((v.deuda||0)>0)deudaN++;
         deudaTot+=(v.deuda||0); fact+=(v.facturado||0);
       });
-      var html='<div class="est-kpis">'
+      var html='<div id="cliListas"></div><div class="est-kpis">'
         +'<div class="est-kpi"><div class="est-kpi-l">Clientes</div><div class="est-kpi-v">'+resid+'</div><div class="est-kpi-s" style="color:var(--bl)">residentes'+((viveN||findeN)?(' · 🏠'+viveN+' · 📅'+findeN):'')+(visN>0?' · 🚶'+visN+' visitas':'')+'</div></div>'
         +'<div class="est-kpi"><div class="est-kpi-l">Activos</div><div class="est-kpi-v" style="color:var(--gd)">'+act+'</div><div class="est-kpi-s" style="color:var(--bl)">'+enf+' enfriándose · '+dorm+' dormidos · '+inact+' inactivos'+(riesgoN>0?' · <b style="color:#C62828">'+riesgoN+' ⚠️ se estiran</b>':'')+'</div></div>'
         +'<div class="est-kpi"><div class="est-kpi-l">Nuevos</div><div class="est-kpi-v" style="color:#2563EB">'+nuev+'</div><div class="est-kpi-s" style="color:var(--bl)">recientes</div></div>'
@@ -43338,6 +43460,7 @@ function _objRango(periodo, mesLabel){
       document.querySelectorAll('#estClientes .est-chip[data-i]').forEach(function(b){b.classList.toggle('on',b.dataset.i===(_cliFiltro.integrante||''));});
       document.querySelectorAll('#estClientes .est-chip[data-m]').forEach(function(b){b.classList.toggle('on',b.dataset.m===(_cliFiltro.marca||''));});
       _cliRenderList();
+      _cliPintarListas();
     });
   };
 
