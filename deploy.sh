@@ -144,6 +144,9 @@ fi
 echo "→ [3f2/8] El conteo del deposito y su reparto entre OC…"
 if echo "$HTMLS" | grep -qE "ruta.html"; then
   node _tools/pruebas/probar_conteo_descarga.js | sed 's/^/    /' || fallar "El conteo del deposito reparte mal entre las OC — corre: node _tools/pruebas/probar_conteo_descarga.js"
+  # El confirm dice cuanto suma de verdad (4/10/2026): con todo ya recibido
+  # decia "suma el stock" y Tadeo no se animaba a tocar el boton.
+  node _tools/pruebas/probar_confirm_descarga.js | sed 's/^/    /' || fallar "El confirm de Descargue todo no dice lo que suma — corre: node _tools/pruebas/probar_confirm_descarga.js"
 else
   echo "    (no se toco ruta.html)"
 fi

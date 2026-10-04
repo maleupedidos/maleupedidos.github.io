@@ -4024,6 +4024,62 @@ function _rdepAjustes(){
   return out;
 }
 
+/* Lo que el botón le va a hacer al stock, producto por producto (4/10/2026).
+   Es la MISMA cuenta que hace `marcarGuardadoEnStock`, fila por fila:
+     · sin recibir y mueve el freezer → suma lo contado (o lo pedido);
+     · ya recibida → su stock YA entró: suma solo la diferencia del conteo;
+     · no mueve el freezer → nada.
+   Devuelve null si el backend no mandó `recs`/`mueve` (versión vieja): sin
+   eso cualquier número sería inventado. */
+var _RDEP_DIAS=['dom','lun','mar','mié','jue','vie','sáb'];
+function _rdepFechaCorta(iso){
+  var m=/^(\d{4})-(\d{2})-(\d{2})$/.exec(iso||'');
+  if(!m)return '';
+  var d=new Date(+m[1],+m[2]-1,+m[3]);
+  return _RDEP_DIAS[d.getDay()]+' '+m[3]+'/'+m[2];
+}
+function _rdepEfecto(ajustes){
+  var items=pendientesGuardarStock||[];
+  if(!items.length)return null;
+  for(var x=0;x<items.length;x++){
+    var t=items[x];
+    if(!t.recs||!t.mueve||t.recs.length!==(t.rows||[]).length||t.mueve.length!==(t.rows||[]).length)return null;
+  }
+  var nueva={};
+  (ajustes||[]).forEach(function(a){nueva[a.r]=a.qty;});
+  var lineas=[], hayAjuste=false, sinRecibir=0;
+  items.forEach(function(it){
+    var nom=PROD_NAMES[it.abbr]||it.prod||it.abbr;
+    var suma=0, yaEstaba=0, fechas=[], mueve=false;
+    for(var i=0;i<it.rows.length;i++){
+      var q=(it.qtys||[])[i]; if(q===undefined)q=it.qty;
+      var n=(nueva[it.rows[i]]!==undefined)?nueva[it.rows[i]]:q;
+      if(!it.recs[i])sinRecibir++;
+      if(!it.mueve[i])continue;
+      mueve=true;
+      if(!it.recs[i]){ suma+=n; }
+      else {
+        suma+=n-q; yaEstaba+=q;
+        var f=_rdepFechaCorta((it.fRecs||[])[i]);
+        if(f&&fechas.indexOf(f)<0)fechas.push(f);
+      }
+    }
+    var c=_rdepConteo[it.abbr], contoDistinto=(c!==undefined&&c!==it.qty);
+    if(contoDistinto)hayAjuste=true;
+    var cuando=fechas.length?' (recibido '+fechas.join(' y ')+')':'';
+    var conteo=contoDistinto?' · pediste '+it.qty+', contaste '+c:'';
+    var l;
+    if(!mueve) l=nom+': no mueve el stock, solo se guarda';
+    else if(yaEstaba===0) l=nom+': +'+suma+' al stock'+conteo;
+    else if(suma===0) l=nom+': ya estaba'+cuando+', solo se guarda';
+    else if(yaEstaba===it.qty) l=nom+': ya estaba'+cuando+conteo+' → '+(suma>0?'+':'')+suma+' al stock';
+    else l=nom+': '+(suma>0?'+':'')+suma+' al stock ('+yaEstaba+' ya estaba'+(fechas.length?', recibido '+fechas.join(' y '):'')+')'+conteo;
+    lineas.push(l);
+  });
+  (pendientesPedidosOC||[]).forEach(function(g){sinRecibir+=Number(g.sinRecibir)||0;});
+  return {lineas:lineas, hayAjuste:hayAjuste, sinRecibir:sinRecibir};
+}
+
 function rdepToggle(cat){
   if (_rdepOk[cat]) delete _rdepOk[cat];
   else _rdepOk[cat] = 1;
@@ -4039,10 +4095,19 @@ function confirmarGuardadoStock(rowsCsv,nProds,totalUnid,unidPedidos){
   var ajustes=_rdepAjustes();
   var msg='¿Descargaste todo?\n\n· '+totalUnid+' unidades al freezer';
   if(uPed>0)msg+='\n· '+uPed+' unidades separadas para pedidos';
-  /* Lo contado distinto se nombra UNO POR UNO en el confirm. Es lo que corrige
-     cantidades y costos de la OC, o sea lo que después vas a pagar: enterarte
-     por un total agregado sería enterarte tarde. */
-  if(ajustes.length){
+  /* CUÁNTO SUMA DE VERDAD, producto por producto (4/10/2026). Antes decía
+     siempre "suma el stock", y el 4/10 Tadeo no se animó a tocarlo: las 135
+     unidades ya estaban recibidas desde el viernes y el botón sumaba CERO.
+     Con un backend viejo (sin `recs`) no se puede saber: se dice como antes. */
+  var ef=_rdepEfecto(ajustes);
+  if(ef){
+    msg+='\n\nAl stock:';
+    ef.lineas.forEach(function(l){msg+='\n· '+l;});
+    if(ef.hayAjuste)msg+='\n\nLo contado distinto corrige la orden de compra y su costo.';
+  } else if(ajustes.length){
+    /* Lo contado distinto se nombra UNO POR UNO en el confirm. Es lo que corrige
+       cantidades y costos de la OC, o sea lo que después vas a pagar: enterarte
+       por un total agregado sería enterarte tarde. */
     msg+='\n\nContaste distinto en:';
     (pendientesGuardarStock||[]).forEach(function(it){
       var c=_rdepConteo[it.abbr];
@@ -4068,7 +4133,9 @@ function confirmarGuardadoStock(rowsCsv,nProds,totalUnid,unidPedidos){
     });
     msg+='\n\nEso deja de estar disponible en la tienda.';
   }
-  msg+='\n\nEsto lo marca recibido: suma el stock y habilita el pago al proveedor.';
+  if(!ef) msg+='\n\nEsto lo marca recibido: suma el stock y habilita el pago al proveedor.';
+  else if(ef.sinRecibir>0) msg+='\n\nLo que no estaba recibido queda recibido (con fecha de hoy) y se habilita el pago al proveedor.';
+  else msg+='\n\nYa estaba todo recibido: no cambia la fecha de recibido ni el pago, solo queda guardado.';
   if(!confirm(msg))return;
   rutShowLoader('Descargando el auto...');
   var payload={action:'marcarGuardadoEnStock',rows:rows,ajustes:ajustes,aLucas:aLucas,repartidor:_rutaUser(),ts:Date.now()};
@@ -4099,8 +4166,12 @@ function confirmarGuardadoStock(rowsCsv,nProds,totalUnid,unidPedidos){
           showToast('Guardado, pero NO pude repartir: '+res.repartoErr.join(' · '),8000);
         } else if(nLucas>0){
           showToast('Guardado ('+(res.n||rows.length)+' OCs) · '+nLucas+' al freezer de Lucas');
-        } else
-        showToast('Guardado confirmado ('+(res.n||rows.length)+' OCs)');
+        } else {
+          /* Lo que el backend dice que movió, no lo que la pantalla calculó. */
+          var nMov=res.stock?Object.keys(res.stock).filter(function(k){return res.stock[k];}).length:-1;
+          showToast('Guardado confirmado ('+(res.n||rows.length)+' OCs)'+
+            (nMov===0?' · el stock no cambió':nMov>0?' · stock movido en '+nMov+' producto'+(nMov>1?'s':''):''));
+        }
         if(isOnline)fetchPendientesGuardarStock(true);
       } else {
         syncQueue.push(payload);saveLocal();processSyncQueue();
