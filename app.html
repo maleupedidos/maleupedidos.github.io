@@ -12332,7 +12332,7 @@ function _leerVersion(app){
    "El HTML no sabe que version es" dejo de ser cierto: el build le escribe
    adentro el CACHE_NAME de sw-panel.js, el mismo que deploy.sh obliga a subir en
    cada cambio. Si lo publicado dice otra cosa, esta pagina es vieja. Punto. */
-var _APP_CN_PAGINA='maleu-panel-v500';
+var _APP_CN_PAGINA='maleu-panel-v501';
 
 /* Devuelve [{k,v}] si lo publicado no es lo que esta pagina corre. */
 function _chequearVersiones(){
@@ -31964,8 +31964,64 @@ if('serviceWorker' in navigator){
   var CRM_CLI_LS = 'maleu_crm_clientes_v1', CRM_CLI_TS = 'maleu_crm_clientes_ts';
   var _crmCliPromesa = null, _crmCliError = '', _crmCliTrayendo = false;
   function _crmCliTs(){ try { return Number(localStorage.getItem(CRM_CLI_TS)) || 0; } catch(e){ return 0; } }
+  /* ══ LA FOTO DEL CRM: `crmClientes` ENTERO DESDE POSTGRESQL (4/10/2026) ══
+     Los 435 clientes los usan seis sub-tabs, y pedirlos a Apps Script es lo mas
+     caro del CRM: medido ese dia, 9,2 s de calculo en frio y 491 KB (2,3 a 4,6 s
+     con el cache caliente). El ERP deja ese mismo payload en `erp_screen_snapshot`
+     (`screen = 'crmClientes'`) en el mismo upsert que Inicio y Abastecimiento —
+     sin sumar llamadas de urlfetch— y aca se lee: una fila.
+
+     ADELANTA, NO REEMPLAZA: el pedido a Apps Script sale igual y gana cuando
+     llega. Las reglas, cada una tapa un caso que miente:
+       · solo al ABRIR el CRM, nunca con el ↻: el que toca ↻ quiere lo de ahora;
+       · no pinta si Google ya llego;
+       · no pinta si es mas vieja que lo que ya hay en el celular, ni que la
+         ultima edicion hecha aca (`maleu_crm_cambio_ts`): una ficha recien
+         editada no puede volver atras;
+       · no llama a `_marcarFresco`: el ↻ no se pone verde sobre una copia.
+     Solo el rol admin puede leer la fila (policy de la 030). Por que no se uso:
+     `window.__fotoCrm` en la consola. */
+  var CRM_CAMBIO_TS = 'maleu_crm_cambio_ts';
+  var _crmFotoYa = false;
+  function _crmFotoNota(estado, motivo){
+    try { window.__fotoCrm = {estado: estado, motivo: String(motivo || ''), t: Date.now()}; } catch(e){}
+  }
+  function _crmFotoClientes(gen){
+    if (typeof _sbPermiso !== 'function' || typeof _fotoFechaUtc !== 'function'){ _crmFotoNota('sin helpers', ''); return Promise.resolve(false); }
+    return _sbPermiso(true).then(function(sb){
+      if (!sb || !sb.url || !sb.key || !sb.token){ _crmFotoNota('sin permiso', 'sin token de Supabase'); return false; }
+      return fetch(sb.url + '/rest/v1/erp_screen_snapshot?select=payload,computed_at&screen=eq.crmClientes',
+        {headers: {apikey: sb.key, Authorization: 'Bearer ' + sb.token}})
+        .then(function(r){ if (!r.ok){ _crmFotoNota('HTTP ' + r.status, 'la policy o la tabla'); return null; } return r.json(); })
+        .then(function(filas){
+          if (!filas) return false;
+          var f = filas[0];
+          if (!f){ _crmFotoNota('no hay foto', 'tabla vacia o la policy la filtro'); return false; }
+          var d = f.payload;
+          if (!d || d.lite || !Array.isArray(d.clientes) || !d.clientes.length){ _crmFotoNota('payload raro', 'sin clientes'); return false; }
+          var cuando = _fotoFechaUtc(f.computed_at);
+          if (!cuando){ _crmFotoNota('sin fecha', f.computed_at); return false; }
+          if (gen.llego){ _crmFotoNota('Google llego antes', ''); return false; }
+          var cambio = Number(localStorage.getItem(CRM_CAMBIO_TS)) || 0;
+          if (cuando <= _crmCliTs() || cuando <= cambio){ _crmFotoNota('mas vieja', 'lo del celular es mas nuevo'); return false; }
+          crmClientes = d.clientes;
+          _crmDupMemo = null; _crmCanalBarrioFilled = false;
+          if (Array.isArray(d.kg)){ var o = {}; d.kg.forEach(function(a){ o[a] = 1; }); _crmKg = o; }
+          if (d.nombres && typeof d.nombres === 'object') _crmNombres = d.nombres;
+          /* La copia del celular queda con la fecha de la FOTO, no la de ahora. */
+          try { window._lsSetSafe(CRM_CLI_LS, JSON.stringify(crmClientes)); localStorage.setItem(CRM_CLI_TS, String(cuando)); } catch(e){}
+          try { _crmRenderActiveSub(); } catch(e){ _crmFotoNota('render', (e && e.message) || e); }
+          _crmCliEstadoPintar();
+          _crmFotoNota('ok', 'de ' + new Date(cuando).toLocaleTimeString());
+          return true;
+        });
+    }).catch(function(e){ _crmFotoNota('error', (e && e.message) || e); return false; });
+  }
+
   function _crmPedirClientes(){
     if (_crmCliPromesa) return _crmCliPromesa;
+    var _gen = {llego: false};
+    if (!_crmFotoYa){ _crmFotoYa = true; _crmFotoClientes(_gen); }
     _crmCliTrayendo = true; _crmCliError = '';
     _crmCliEstadoPintar();
     try { if (typeof window._frescoEnVuelo === 'function') window._frescoEnVuelo(['crmClientes'], 1); } catch(e){}
@@ -31976,6 +32032,7 @@ if('serviceWorker' in navigator){
         if (!Array.isArray(l) || !l.length){
           throw new Error((d && d.authRequired) ? 'se venció la sesión' : (d && d.forbidden) ? 'tu usuario no tiene permiso' : ((d && d.error) || 'el servidor no mandó la lista'));
         }
+        _gen.llego = true;
         crmClientes = l;
         _crmDupMemo = null;
         if (Array.isArray(d.kg)){ var o = {}; d.kg.forEach(function(a){ o[a] = 1; }); _crmKg = o; try { localStorage.setItem('maleu_crm_kg', JSON.stringify(o)); } catch(e){} }
@@ -36348,7 +36405,11 @@ if('serviceWorker' in navigator){
      `window.crmClientes` no existe. Por eso elegir la residencia desde la ficha no
      se reflejaba en la lista ni en la copia, y al reabrir la ficha se veia la de antes. */
   window.crmClientesPorTel = function(tel){ return (crmClientes || []).filter(function(c){ return c.tel === tel; }); };
-  window.crmClientesGuardarCopia = function(){ try { window._lsSetSafe(CRM_CLI_LS, JSON.stringify(crmClientes)); } catch(e){} };
+  window.crmClientesGuardarCopia = function(){
+    try { window._lsSetSafe(CRM_CLI_LS, JSON.stringify(crmClientes)); } catch(e){}
+    // Una edicion hecha aca: ninguna foto anterior a esto puede pisarla.
+    try { localStorage.setItem(CRM_CAMBIO_TS, String(Date.now())); } catch(e){}
+  };
   // Fusión optimista en memoria: combina alias dentro de canónico (para no esperar al backend).
   function _crmMergeEnMemoria(canonKey, aliasKey){
     if (!crmClientes) return;
