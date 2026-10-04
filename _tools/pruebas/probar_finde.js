@@ -110,9 +110,18 @@ function escena(reloj, hasta, diasTrans, conCat) {
     await cli.enviar('Page.navigate', { url: BASE + '/' + APP + '?tab=inicio&t=' + Date.now() });
     if (!await esperar(cli, `typeof go==='function' && window.D && D.pedidos && D.pedidos.length===${e.n}`, 90000)) throw new Error('el ERP no cargo los pedidos stubbeados');
     await ev(cli, `go('planificacion')`);
+    /* En el celular el fin de semana arranca PLEGADO (4/10/2026): una linea con
+       lo que tiene que traer y como va. Se mide que diga eso, y se despliega
+       para medir el detalle igual que en compu. */
+    if (ANCHO < 900) {
+      if (!await esperar(cli, `!!document.querySelector('#planFinde .plan-finde-res')`, 30000)) throw new Error('no se dibujo el fin de semana plegado');
+      plegado.push(await ev(cli, `(document.getElementById('planFinde')||{}).textContent||''`));
+      await ev(cli, `planFindeToggle()`);
+    }
     if (!await esperar(cli, `!!document.querySelector('#planFinde .plan-finde-tabla') || /objetivo del mes ya/.test((document.getElementById('planFinde')||{}).textContent||'')`, 30000)) throw new Error('no se dibujo la meta del fin de semana');
     await pausa(600);
   }
+  const plegado = [];
   try {
     await cli.enviar('Page.enable'); await cli.enviar('Runtime.enable');
     await cli.enviar('Emulation.setDeviceMetricsOverride', { width: ANCHO, height: 900, deviceScaleFactor: 1, mobile: ANCHO <= 560 });
@@ -155,7 +164,8 @@ function escena(reloj, hasta, diasTrans, conCat) {
     chk('el corte: viernes $840.000 (40%), sábado $1.575.000 (75%), domingo $2.100.000 (100%)',
       FL.length === 3 && /Viernes 25\/09\s*\$840\.000 \(40% del finde\)/.test(FL[0]) && /Sábado 26\/09\s*\$1\.575\.000 \(75% del finde\)/.test(FL[1]) && /Domingo 27\/09\s*\$2\.100\.000 \(100% del finde\)/.test(FL[2]), FL);
     chk('lo ya cargado para el finde: $100.000 el viernes y $90.000 el domingo', /\$100\.000 \(1 pedido\)/.test(FL[0] || '') && /\$90\.000 \(1 pedido\)/.test(FL[2] || '') && /——$/.test(FL[1] || ''), FL);
-    chk('la nota dice de dónde sale el corte y que el Catering no suma', /viernes 40% · sábado 35% · domingo 25%/.test(L || '') && /Sin Catering: no suma al objetivo/.test(L || ''), L);
+    /* Desde el 4/10/2026 el catering SUMA siempre (el de la hoja, como Inicio y el EERR). */
+    chk('la nota dice de dónde sale el corte y que lo que va es lo entregado, con catering', /viernes 40% · sábado 35% · domingo 25%/.test(L || '') && /como arriba \(con catering\)/.test(L || ''), L);
 
     console.log('\n-- sábado 26/9, 13 h --');
     await abrirEscena(escena([2026, 8, 26, 13, 0, 0], '2026-09-26', 26, false));
@@ -169,20 +179,26 @@ function escena(reloj, hasta, diasTrans, conCat) {
       !!FS[1] && FS[1].hoy && /\$1\.500\.000 \(75% del finde\)/.test(FS[1].t) && /hoy van \$1\.000\.000 · faltan \$500\.000 para el corte/.test(FS[1].t) && /\$160\.000 \(2 pedidos\)/.test(FS[1].t), FS[1]);
     chk('el domingo todavía no "va" nada: su corte y lo cargado', !!FS[2] && /\$2\.000\.000 \(100% del finde\)/.test(FS[2].t) && /—/.test(FS[2].t) && /\$90\.000 \(1 pedido\)/.test(FS[2].t), FS[2]);
     const tot = await ev(cli, txt('#planTotal .plan-tot-v'));
-    chk('arriba, la facturación del mes sigue sin Catering: $4.400.000 de $5.400.000', /\$4\.400\.000\s*de \$5\.400\.000/.test(tot || ''), tot);
+    chk('arriba, la facturación del mes: $4.400.000 de $5.400.000 (la hoja Catering de la escena está vacía)', /\$4\.400\.000\s*de \$5\.400\.000/.test(tot || ''), tot);
     const geo = await ev(cli, `(function(){var b=document.getElementById('planFinde').getBoundingClientRect();return JSON.stringify({w:Math.round(b.width),sw:document.documentElement.scrollWidth,cw:document.documentElement.clientWidth});})()`);
     const G = JSON.parse(typeof geo === 'string' ? geo : '{}');
     chk('sin scroll de costado', G.sw <= G.cw + 1, G);
 
-    console.log('\n-- con OBJETIVO_CON_CATERING --');
+    /* El MODULO de eventos (PostgreSQL) ya no se suma, ni con OBJETIVO_CON_CATERING
+       prendido (4/10/2026): el catering sale de la HOJA, como en Inicio y el EERR.
+       Sumar los dos contaba dos veces un evento cargado en los dos lados. */
+    console.log('\n-- con OBJETIVO_CON_CATERING y un evento en el modulo --');
     await abrirEscena(escena([2026, 8, 26, 13, 0, 0], '2026-09-26', 26, true));
-    await esperar(cli, `/1\\.505\\.000/.test((document.getElementById('planFinde')||{}).textContent||'')`, 8000);
+    await pausa(1500);
     const C = await ev(cli, txt('#planFinde'));
     const tC = await ev(cli, txt('#planTotal'));
-    chk('el total del mes suma el evento confirmado del viernes ($805.000) y no el solo cotizado: $5.205.000, "y Catering"',
-      /\$5\.205\.000\s*de \$5\.400\.000/.test(tC || '') && /todos los canales y Catering/.test(tC || ''), tC);
-    chk('y el viernes del fin de semana va $1.505.000: adelante', /\$1\.505\.000/.test(C || '') && /\$705\.000 adelante/.test(C || '') && /Incluye Catering/.test(C || ''), C);
+    chk('el total NO suma el evento del modulo ($805.000): sigue $4.400.000, con catering en el titulo',
+      /\$4\.400\.000\s*de \$5\.400\.000/.test(tC || '') && !/5\.205\.000/.test(tC || '') && /todos los canales y catering/.test(tC || ''), tC);
+    chk('y el viernes del fin de semana sigue en $700.000 (sin el evento del modulo)', /\$700\.000/.test(C || '') && !/1\.505\.000/.test(C || ''), C);
 
+    if (ANCHO < 900) {
+      chk('en el celular, plegado, dice lo que tiene que traer y cómo va, en una línea', plegado.length >= 2 && plegado.every(t => /Tiene que traer \$[\d.]+/.test(t) && /Ver día por día/.test(t)) && /va \$1\.000\.000/.test(plegado[1] || ''), plegado);
+    }
     const errs = await ev(cli, 'JSON.stringify(window.__err||[])');
     chk('sin errores de JS', errs === '[]', errs);
   } catch (e) {
