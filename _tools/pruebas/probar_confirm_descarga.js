@@ -146,6 +146,11 @@ console.log('\n3. Una fila YA recibida, contada distinto');
   chk('dice que ya estaba y que el conteo baja 2',
     t.indexOf('Pack Pizzas x2 — Muzzarella: ya estaba (recibido vie 02/10) · pediste 20, contaste 18 → -2 al stock') >= 0, t);
   chk('avisa que corrige la orden de compra', t.indexOf('corrige la orden de compra y su costo') >= 0);
+  /* Hallazgo de Codex (4/10/2026): todo recibido + conteo corregido decia
+     "no cambia el pago", y SI cambia: baja el costo de la OC y la deuda. */
+  chk('NO dice "ni el pago" cuando el conteo corrige la OC', t.indexOf('ni el pago') < 0, t.slice(-160));
+  chk('dice que cambia el costo y lo que se le debe al proveedor',
+    t.indexOf('SÍ cambia el costo de la orden de compra y lo que le debés al proveedor') >= 0, t.slice(-160));
   const t2 = leer([L('PPM', 'Pack Pizzas x2 — Muzzarella', [{ r: 10, q: 20, rec: V }])], { PPM: 22 });
   chk('contada de más (20 → 22): +2', t2.indexOf('contaste 22 → +2 al stock') >= 0, t2);
 }
@@ -178,6 +183,7 @@ if (process.env.MALEU_HIJO) {
     ['sumando lo ya recibido como si fuera nuevo', 'suma+=n-q; yaEstaba+=q;', 'suma+=n; yaEstaba+=q;'],
     ['ignorando el conteo sobre lo recibido', 'suma+=n-q; yaEstaba+=q;', 'yaEstaba+=q;'],
     ['volviendo al cartel fijo', 'var ef=_rdepEfecto(ajustes);', 'var ef=null;'],
+    ['volviendo a "no cambia el pago" con conteo corregido', "else if(ef.hayAjuste) msg+=", "else if(false) msg+="],
   ];
   casos.forEach(([nombre, de, a]) => {
     if (SRC.split(de).length - 1 !== 1) { chk('[NO PUDE MEDIR: ancla] ' + nombre, false, de); return; }
