@@ -106,23 +106,27 @@ const ANOTADOR = `
     const fija = await evaluar(cli, "getComputedStyle(document.querySelector('#estCliList tbody td')).position");
     chk('la columna Persona queda fija al deslizar', fija === 'sticky', fija);
 
-    // 5) Vista previa: sacar a mano, atajo por compra reciente, control y registro.
+    // 5) La ventana de campaña (la misma de Segmentos desde el 4/10/2026):
+    //    sacar a mano, atajo por compra reciente, control por casa y registro.
     await nDe([barrios[0]]);
     const nLista = await cuenta();
     await evaluar(cli, 'estCliDescargarCSV()'); await pausa(400);
-    const filasPrev = await evaluar(cli, "document.querySelectorAll('#cliDlList .cli-dl-row').length");
-    chk('la vista previa muestra a todos los que tienen telefono', filasPrev > 0 && filasPrev <= nLista, { filasPrev, nLista });
-    await evaluar(cli, "document.querySelectorAll('#cliDlList .cli-dl-row input')[0].click()"); await pausa(150);
-    const off1 = await evaluar(cli, "document.querySelectorAll('#cliDlList .cli-dl-row.off').length");
+    // Una persona por casa se apaga para poder contar los tildes uno a uno; se prueba aparte.
+    await evaluar(cli, "cmpSet('uno', false)"); await pausa(150);
+    const filasPrev = await evaluar(cli, "document.querySelectorAll('#cmpList .cli-dl-row').length");
+    chk('la ventana muestra a todos los que tienen telefono', filasPrev > 0 && filasPrev <= nLista, { filasPrev, nLista });
+    await evaluar(cli, "document.querySelectorAll('#cmpList .cli-dl-row input')[0].click()"); await pausa(150);
+    const off1 = await evaluar(cli, "document.querySelectorAll('#cmpList .cli-dl-row.off').length");
     chk('un tilde saca a una persona', off1 === 1, off1);
-    await evaluar(cli, "document.getElementById('cliDlN1').value='30'; estCliDlSacar('compra')"); await pausa(200);
-    const off2 = await evaluar(cli, "document.querySelectorAll('#cliDlList .cli-dl-row.off').length");
+    await evaluar(cli, "document.getElementById('cmpN1').value='30'; cmpSacar('compra')"); await pausa(200);
+    const off2 = await evaluar(cli, "document.querySelectorAll('#cmpList .cli-dl-row.off').length");
     chk('el atajo "compraron en los ultimos 30 dias" saca a mas', off2 > off1, { off1, off2 });
-    const res = await evaluar(cli, "document.getElementById('cliDlRes').textContent");
+    const res = await evaluar(cli, "document.getElementById('cmpRes').textContent");
+    chk('sin template, "Enviar por WhatsApp" esta apagado', await evaluar(cli, "[].slice.call(document.querySelectorAll('#cmpModal .env-go')).every(function(b){return b.disabled;})"));
     // Sin nombre no descarga.
-    await evaluar(cli, 'estCliDlConfirmar()'); await pausa(200);
-    chk('sin nombre de campaña no descarga ni registra', (await evaluar(cli, 'window.__posts.length')) === 0 && (await evaluar(cli, "!!document.getElementById('cliDlModal')")), await evaluar(cli, 'window.__posts.length'));
-    await evaluar(cli, "estCliDlSet('nombre','prueba-claude'); estCliDlConfirmar()");
+    await evaluar(cli, 'cmpExcel()'); await pausa(200);
+    chk('sin nombre de campaña no descarga ni registra', (await evaluar(cli, 'window.__posts.length')) === 0 && (await evaluar(cli, "!!document.getElementById('cmpModal')")), await evaluar(cli, 'window.__posts.length'));
+    await evaluar(cli, "cmpSet('nombre','prueba-claude'); cmpExcel()");
     await esperar(cli, 'window.__posts.length>=1', 8000);
     await pausa(800);
     /* Desde el 4/10/2026: UNA llamada con los tres grupos, los destinatarios
@@ -143,7 +147,7 @@ const ANOTADOR = `
     })(${JSON.stringify(g)})`);
     chk('ninguna casa queda partida entre campaña y control', casas.conocidas > 0 && casas.partidas.length === 0, casas);
     const nCasas = casas.casasV + casas.casasK;
-    chk('control del 15% de las CASAS si son 20 o mas', nCasas >= 20 ? casas.casasK === Math.round(nCasas * 0.15) : nC === 0, casas);
+    chk('control del 15% de las CASAS, siempre al menos una', casas.casasK === Math.max(1, Math.round(nCasas * 0.15)), casas);
     chk('ningun vendedor en la lista', await evaluar(cli, `(function(g){ var L=(g.destinatarios||[]).concat(g.control||[]);
       var porKey={}; (window.estClientesSync()||[]).forEach(function(c){ porKey[c.key]=c; });
       return L.every(function(it){ return !(porKey[it.key]||{}).esVendedor; }); })(${JSON.stringify(g)})`));
@@ -160,6 +164,31 @@ const ANOTADOR = `
     chk('«Ya la mandé» pide confirmar ESE lote como mandado', pc && pc.action === 'crmCampaniaConfirmar' && pc.lote === '1791130000000' && pc.mandada === true, pc);
     const enCampania = await evaluar(cli, "window.crmCampaniasDe('x','1140000001')");
     chk('mientras es lista, esa persona NO figura como que recibio una campaña', Array.isArray(enCampania) && enCampania.length === 0, enCampania);
+
+    // 6) El mismo filtro, ahora por WhatsApp desde el ERP: una por casa, template aprobado, confirmar con el numero.
+    await evaluar(cli, 'window.__posts.length=0; estCliDescargarCSV()'); await pausa(400);
+    await esperar(cli, "!!document.getElementById('cmpTpl')", 30000);
+    const unaPorCasa = await evaluar(cli, `(function(){ var r=document.getElementById('cmpRes').textContent; return r; })()`);
+    const tpl = await evaluar(cli, "(function(){ var o=document.querySelectorAll('#cmpTpl option'); return o.length>1 ? o[1].value : ''; })()");
+    chk('el selector trae los templates aprobados de WATI', !!tpl, tpl);
+    await evaluar(cli, 'cmpSet("tpl",' + JSON.stringify(tpl) + ')'); await pausa(200);
+    chk('elegido el template, muestra como le llega', await evaluar(cli, "!!document.querySelector('#cmpModal .env-prev, #cmpModal .env-sin')"));
+    await evaluar(cli, "cmpPaso('enviar')"); await pausa(150);
+    const nGo = await evaluar(cli, "Number((document.getElementById('cmpGo').textContent.match(/\\d+/)||[])[0])");
+    chk('el boton final arranca apagado', await evaluar(cli, "document.getElementById('cmpGo').disabled"));
+    await evaluar(cli, "var i=document.getElementById('cmpNum'); i.value='" + nGo + "'; cmpChk()");
+    chk('escribiendo el numero se prende', !(await evaluar(cli, "document.getElementById('cmpGo').disabled")));
+    await evaluar(cli, "document.getElementById('cmpGo').click()");
+    await esperar(cli, 'window.__posts.length>=1', 8000);
+    const pe = await evaluar(cli, 'window.__posts[0]');
+    chk('manda crmEnviarCampania con el template, lote, control y excluidos', pe && pe.action === 'crmEnviarCampania' && pe.template === tpl
+        && /^\d{13}$/.test(pe.lote) && Array.isArray(pe.control) && Array.isArray(pe.excluidos) && pe.items.length === nGo, { a: pe && pe.action, n: pe && pe.items.length, nGo });
+    const casasApi = await evaluar(cli, `(function(p){ var porKey={}; (window.estClientesSync()||[]).forEach(function(c){ porKey[c.key]=c; });
+      var cs=function(L){ return L.map(function(it){ var c=porKey[it.key]; return c?window.crmCasaDe(c):'key|'+it.key; }); };
+      var a=cs(p.items), k=cs(p.control), sa={}, rep=0; a.forEach(function(x){ if(sa[x]) rep++; sa[x]=1; });
+      return {rep:rep, partidas:k.filter(function(x){ return sa[x]; }).length, n:a.length}; })(${JSON.stringify(pe || {items:[],control:[]})})`);
+    chk('una persona por casa: ninguna casa recibe dos mensajes, ninguna partida con el control', casasApi.rep === 0 && casasApi.partidas === 0 && casasApi.n > 0, casasApi);
+    console.log('       ' + unaPorCasa);
 
     const err = await evaluar(cli, 'JSON.stringify((window.__err||[]).slice(0,5))');
     chk('sin errores de consola', err === '[]', err);

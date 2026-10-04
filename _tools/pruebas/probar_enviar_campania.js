@@ -34,7 +34,12 @@ const esperar = async (cli, expr, ms = 180000) => {
 
 /* El control independiente: los templates leídos de WATI, no del ERP. */
 function watiTemplates() {
-  const TK = 'wati_6cac1b8c-07cc-4946-b954-5f52df8ba948.iRUrSg_H28yY_zWU3jyMYFu96ErdgwhsnhNA-1_yHN5simg3-rUejn_ROEAGRhIOp2ulVLp4t-7g5VCyD2mMwXqqWGYn0_SahlRTLVoPczz3xwIH8bXV5NkyJob-dPKn';
+  /* El token NO va escrito aca: este repo es PUBLICO. Hasta el 4/10/2026 estaba
+     pegado en esta linea (desde el commit df5d7fa del 20/9). Se lee del Code.js
+     del repo privado `estancias`, que esta al lado. */
+  const CODE = require('path').join(__dirname, '..', '..', '..', 'estancias', '.clasp-src', 'Code.js');
+  const TK = (/const WATI_TOKEN_ = '([^']+)'/.exec(require('fs').readFileSync(CODE, 'utf8')) || [])[1];
+  if (!TK) throw new Error('no encuentro WATI_TOKEN_ en ' + CODE);
   return new Promise((res, rej) => {
     https.get({
       host: 'live-mt-server.wati.io',
@@ -110,7 +115,7 @@ const ESPIA = '(function(){var f=window.fetch;window.__posts=[];'
     chk('las que NO tienen template no lo muestran',
       sinTpl.every(c => !c.send), sinTpl.filter(c => c.send));
 
-    // ── 2. El modal abre y dice qué template es ──
+    // ── 2. La ventana de campaña (la misma de Personas desde el 4/10/2026) ──
     const elegida = conTpl.sort((a, b) => b.n - a.n)[0];
     console.log('\n  -> abro "' + elegida.t + '" (' + elegida.tpl + ', ' + elegida.n + ' personas)');
     const idSeg = await evaluar(cli, `(function(){
@@ -121,31 +126,23 @@ const ESPIA = '(function(){var f=window.fetch;window.__posts=[];'
       }
       return false;
     })()`);
-    chk('el botón Enviar abre algo', idSeg === true);
-    /* El modal abre al toque, pero el PREVIEW viaja a Apps Script. Con una pausa
-       fija el test medía el modal antes de que llegara el texto. */
-    await esperar(cli, `(function(){var b=document.getElementById('segEnvBox');
-      return !!(b&&b.classList.contains('on')&&b.querySelector('.env-prev-b'));})()`, 60000);
+    chk('el botón abre la ventana de campaña', idSeg === true);
+    // El preview viaja a Apps Script: se espera el texto, no una pausa fija.
+    await esperar(cli, `!!document.querySelector('#cmpModal .env-prev-b')`, 60000);
     const modal = await evaluar(cli, `(function(){
-      var b=document.getElementById('segEnvBox');
-      if(!b||!b.classList.contains('on'))return null;
-      return {txt:(b.innerText||''),
-              prev:(b.querySelector('.env-prev-b')||{}).innerText||'',
+      var b=document.getElementById('cmpModal'); if(!b) return null;
+      return {txt:(b.innerText||''), prev:(b.querySelector('.env-prev-b')||{}).innerText||'',
               titulo:(b.querySelector('.env-prev-t')||{}).innerText||'',
-              chips:b.querySelectorAll('.env-pcts .hoy-thresh-chip').length,
-              goDisabled:(document.getElementById('segEnvGo')||{}).disabled};
+              tpl:(document.getElementById('cmpTpl')||{}).value||''};
     })()`);
-    chk('el modal está abierto', !!modal, modal);
-    chk('dice qué template manda', !!modal && modal.txt.indexOf(elegida.tpl) > -1);
+    chk('la ventana está abierta', !!modal, modal);
+    chk('trae elegido el template de la tarjeta', !!modal && modal.tpl === elegida.tpl, modal && modal.tpl);
 
     // ── 3. El preview es el TEXTO REAL de WATI (control independiente) ──
     const real = porNombre[elegida.tpl];
     if (real) {
-      /* El trozo se toma DESPUES de la variable, nunca del renglon que la
-         tiene: el ERP rellena {{1}} con el nombre real (bien) y el test lo
-         borraba (mal), asi que con un template que arranca en "Hola {{1}}!"
-         comparaba "Hola !" contra "Hola Lucia!" y daba rojo sobre un ERP
-         correcto. Paso el 20/9/2026 al cambiar la vista por defecto. */
+      /* El trozo se toma DESPUES de la variable: el ERP rellena {{1}} con un
+         nombre real y comparar "Hola !" contra "Hola Lucia!" da rojo en falso. */
       const partes = String(real.body || '').replace(/\*/g, '').split(/\{\{\d+\}\}/);
       const trozo = partes.map(function(p){ return p.replace(/\s+/g, ' ').trim(); })
                           .sort(function(a, b){ return b.length - a.length; })[0].slice(0, 28);
@@ -153,59 +150,39 @@ const ESPIA = '(function(){var f=window.fetch;window.__posts=[];'
         !!modal && trozo.length > 6 && modal.prev.replace(/\s+/g, ' ').indexOf(trozo.replace(/\s+/g, ' ').slice(0, 20)) > -1,
         { esperaba: trozo, vi: (modal && modal.prev || '').slice(0, 120) });
       const hdr = (real.header && real.header.text) ? String(real.header.text).trim() : '';
-      if (hdr) {
-        chk('y el título del template', !!modal && modal.titulo.trim() === hdr,
-          { esperaba: hdr, vi: modal && modal.titulo });
-      }
+      if (hdr) chk('y el título del template', !!modal && modal.titulo.trim() === hdr, { esperaba: hdr, vi: modal && modal.titulo });
     } else {
       chk('el template de la tarjeta existe en WATI', false, elegida.tpl);
     }
 
-    // ── 4. El reparto: manda + control = todos, y nadie en los dos ──
-    const rep = await evaluar(cli, `(function(){
-      var b=document.getElementById('segEnvBox');
-      var m=(b.innerText||'').match(/Le llega a\\s+(\\d+)/);
-      var c=(b.innerText||'').match(/(\\d+)\\s+no reciben nada/);
-      return {manda:m?+m[1]:null, control:c?+c[1]:0, total:${elegida.n}};
-    })()`);
+    // ── 4. El reparto, en CASAS: Segmentos manda un contacto por casa ──
+    const leer = `(function(){ var t=(document.getElementById('cmpRes')||{}).textContent||'';
+      var m=t.match(/(\\d+)\\s+reciben?/), c=t.match(/(\\d+)\\s+casas de control/), k=t.match(/(\\d+)\\s+casas(?! de)/);
+      return {manda:m?+m[1]:null, control:c?+c[1]:0, casas:k?+k[1]:null, txt:t}; })()`;
+    const rep = await evaluar(cli, leer);
     console.log('  ' + JSON.stringify(rep));
     chk('el default deja un grupo de control', rep.control > 0, rep);
-    chk('manda + control = la audiencia entera',
-      rep.manda !== null && (rep.manda + rep.control) === rep.total, rep);
-    chk('el control es el 15% (redondeado para abajo)',
-      rep.control === Math.max(1, Math.floor(rep.total * 0.15)), rep);
+    chk('manda + control = la audiencia entera', rep.manda !== null && (rep.manda + rep.control) === elegida.n, { rep, n: elegida.n });
+    chk('el control es el 15% de las casas', rep.control === Math.max(1, Math.round(rep.casas * 0.15)), rep);
 
-    // ── 5. El botón no se habilita hasta escribir el número exacto ──
-    chk('Enviar arranca deshabilitado', modal.goDisabled === true, modal);
-    await evaluar(cli, `(function(){var i=document.getElementById('segEnvNum');
-      i.value='${rep.manda - 1}'; segEnvChk(); return 1;})()`);
-    chk('con el número equivocado sigue deshabilitado',
-      await evaluar(cli, `document.getElementById('segEnvGo').disabled`) === true);
-    await evaluar(cli, `(function(){var i=document.getElementById('segEnvNum');
-      i.value='${rep.manda}'; segEnvChk(); return 1;})()`);
-    chk('con el número exacto se habilita',
-      await evaluar(cli, `document.getElementById('segEnvGo').disabled`) === false);
+    // ── 5. El botón final no se habilita hasta escribir el número exacto ──
+    await evaluar(cli, `cmpPaso('enviar'); 1`); await pausa(200);
+    chk('Enviar arranca deshabilitado', await evaluar(cli, `document.getElementById('cmpGo').disabled`) === true);
+    await evaluar(cli, `(function(){var i=document.getElementById('cmpNum'); i.value='${rep.manda - 1}'; cmpChk(); return 1;})()`);
+    chk('con el número equivocado sigue deshabilitado', await evaluar(cli, `document.getElementById('cmpGo').disabled`) === true);
+    await evaluar(cli, `(function(){var i=document.getElementById('cmpNum'); i.value='${rep.manda}'; cmpChk(); return 1;})()`);
+    chk('con el número exacto se habilita', await evaluar(cli, `document.getElementById('cmpGo').disabled`) === false);
 
     // ── 6. Sin control, va a todos ──
-    await evaluar(cli, `segEnvPct(0); 1`); await pausa(300);
-    const sinCtrl = await evaluar(cli, `(function(){
-      var b=document.getElementById('segEnvBox');
-      var m=(b.innerText||'').match(/Le llega a\\s+(\\d+)/);
-      return {manda:m?+m[1]:null, dice:(b.innerText||'').indexOf('todos reciben')>-1};
-    })()`);
-    chk('sin control le llega a todos', sinCtrl.manda === rep.total, { sinCtrl, total: rep.total });
-    chk('y lo dice', sinCtrl.dice === true, sinCtrl);
-    await evaluar(cli, `segEnvPct(15); var i=document.getElementById('segEnvNum');
-      i.value=String(${rep.manda}); segEnvChk(); 1`);
-    await pausa(300);
+    await evaluar(cli, `cmpPaso('armar'); cmpSet('ctrl',0); 1`); await pausa(300);
+    const sinCtrl = await evaluar(cli, leer);
+    chk('sin control le llega a todos', sinCtrl.manda === elegida.n && sinCtrl.control === 0, sinCtrl);
+    await evaluar(cli, `cmpSet('ctrl',15); 1`); await pausa(300);
+    const rep2 = await evaluar(cli, leer);
 
     // ── 7. El payload: lo que SALDRÍA (el POST lo corta el PREP) ──
-    await evaluar(cli, `window.__posts=[]; 1`);
-    const nAhora = await evaluar(cli, `(function(){
-      var b=document.getElementById('segEnvBox');
-      var m=(b.innerText||'').match(/Le llega a\\s+(\\d+)/); return m?+m[1]:0;})()`);
-    await evaluar(cli, `(function(){var i=document.getElementById('segEnvNum');
-      i.value=String(${nAhora}); segEnvChk(); document.getElementById('segEnvGo').click(); return 1;})()`);
+    await evaluar(cli, `window.__posts=[]; cmpPaso('enviar'); 1`); await pausa(200);
+    await evaluar(cli, `(function(){var i=document.getElementById('cmpNum'); i.value=String(${rep2.manda}); cmpChk(); document.getElementById('cmpGo').click(); return 1;})()`);
     await pausa(900);
     const posts = await evaluar(cli, `window.__posts||[]`);
     const env = posts.filter(p => p && p.action === 'crmEnviarCampania');
@@ -213,14 +190,12 @@ const ESPIA = '(function(){var f=window.fetch;window.__posts=[];'
     if (env.length === 1) {
       const p = env[0];
       chk('lleva el template de la tarjeta', p.template === elegida.tpl, p.template);
-      chk('items = los que reciben', (p.items || []).length === nAhora, { items: (p.items || []).length, esperaba: nAhora });
-      chk('control = los que no', (p.control || []).length === rep.total - nAhora,
-        { control: (p.control || []).length, esperaba: rep.total - nAhora });
-      chk('todos los items tienen teléfono',
-        (p.items || []).every(i => i.tel && String(i.tel).replace(/\D/g, '').length >= 8),
+      chk('lleva lote', /^\d{13}$/.test(String(p.lote)), p.lote);
+      chk('items = los que reciben', (p.items || []).length === rep2.manda, { items: (p.items || []).length, esperaba: rep2.manda });
+      chk('control = los que no', (p.control || []).length === elegida.n - rep2.manda, { control: (p.control || []).length });
+      chk('todos los items tienen teléfono', (p.items || []).every(i => i.tel && String(i.tel).replace(/\D/g, '').length >= 8),
         (p.items || []).filter(i => !i.tel).slice(0, 3));
-      const tels = {};
-      let choque = 0;
+      const tels = {}; let choque = 0;
       (p.items || []).forEach(i => { tels[i.tel] = 1; });
       (p.control || []).forEach(i => { if (tels[i.tel]) choque++; });
       chk('nadie está en los dos grupos a la vez', choque === 0, { choque });
