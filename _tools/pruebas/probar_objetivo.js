@@ -167,6 +167,9 @@ const pesos = s => Number(String(s || '').replace(/[^\d]/g, '')) || 0;
   const ci = await evaluar(cli, `({txt:(document.getElementById('planCierre')||{}).innerText||'', acc:document.querySelectorAll('#planCierre .plan-cierre-a input:checked').length,
      obj:document.querySelectorAll('#planCierre .plan-cierre-o').length, btn:!!document.getElementById('planCierreBtn')})`);
   chk(ci.btn && ci.acc === 7 && /\$19\.392\.829 de \$22\.000\.000/.test(ci.txt) && /88%/.test(ci.txt), 'septiembre terminó: el cierre ofrece pasar sus 7 acciones abiertas, con la facturacion 88% del objetivo', [ci.acc, ci.txt.slice(0, 160)]);
+  /* 4 (Codex): se cierra recien DESDE el dia siguiente al ultimo. */
+  const cer = await evaluar(cli, "[_planMesCerrable(2026,9,new Date(2026,8,30,23,30)), _planMesCerrable(2026,9,new Date(2026,9,1,0,1)), _planMesCerrable(2026,12,new Date(2026,11,31,22,0)), _planMesCerrable(2026,12,new Date(2027,0,1,8,0))]");
+  chk(JSON.stringify(cer) === '[false,true,false,true]', 'el 30/9 a las 23:30 septiembre NO se puede cerrar; el 1/10 sí (y diciembre recién el 1/1)', cer);
   /* Sin las ventas en el telefono NO se puede cerrar: mandaba facturacion $0 (4/10/2026). */
   const sinD = await evaluar(cli, "(function(){var p=D.pedidos;D.pedidos=[];planRepintarPorD();var b=document.getElementById('planCierreBtn');var r={dis:!!(b&&b.disabled),t:b?b.textContent:''};D.pedidos=p;planRepintarPorD();return r;})()");
   chk(sinD.dis && /Esperando las ventas/.test(sinD.t), 'sin las ventas del mes el boton de cerrar queda trabado y dice que espera (no cierra con $0)', sinD);
@@ -178,11 +181,26 @@ const pesos = s => Number(String(s || '').replace(/[^\d]/g, '')) || 0;
   for (let i = 0; i < 90; i++) { if (await evaluar(cli, "!(document.getElementById('planCierreBtn')||{}).disabled")) break; await sleep(500); }
   const btnC = await evaluar(cli, "(function(){var b=document.getElementById('planCierreBtn');return {dis:!!(b&&b.disabled),t:b?b.textContent:''}})()");
   chk(!btnC.dis && /^Cerrar septiembre$/.test(btnC.t), 'con todo medido (ventas y leads) el boton de cerrar se habilita', btnC);
+  /* 3 (Codex): la propuesta se recalcula si llegan datos nuevos, salvo lo cambiado a mano.
+     Se le sacan leads de septiembre a la copia guardada: O-001 (51/50) tiene que bajar. */
+  const estO1 = () => evaluar(cli, "(function(){var b=[].filter.call(document.querySelectorAll('#planCierre .plan-cierre-o'),function(x){return /O-001/.test(x.textContent)})[0];return b?(b.querySelector('.plan-cierre-e')||{}).textContent:''})()");
+  const e0 = await estO1();
+  await evaluar(cli, "(function(){var g=_swrLeer('crmLeads');window.__leadsOk=g.d;var n=0;var L=g.d.leads.filter(function(l){if(!l.yaCliente&&String(l.iso).slice(0,7)==='2026-09'&&n<5){n++;return false;}return true;});_swrGuardar('crmLeads',{ok:true,ts:Date.now(),leads:L});planRepintarPorD();})(),1");
+  await sleep(300);
+  const e1 = await estO1();
+  chk(e0 === 'Cumplido' && e1 === 'No cumplido', 'si cambia la medicion (leads de menos), la propuesta de O-001 cambia sola', [e0, e1]);
+  await evaluar(cli, "_swrGuardar('crmLeads',window.__leadsOk);planRepintarPorD();1"); await sleep(300);
+  await evaluar(cli, "planCierreObj('O-001'),1"); await sleep(200);
+  const e2 = await estO1();
+  await evaluar(cli, "planRepintarPorD(),1"); await sleep(300);
+  const e3 = await estO1();
+  chk(e2 === 'No cumplido' && e3 === 'No cumplido', 'lo que se cambia a mano NO lo pisa un repintado', [e2, e3]);
+  await evaluar(cli, "planCierreObj('O-001'),1");
   await evaluar(cli, "window.confirm=function(){return true};window.__posts=[];planCerrarMes();1");
   for (let i = 0; i < 20; i++) { if ((await evaluar(cli, 'window.__posts.length')) >= 1) break; await sleep(200); }
   const pc = (await evaluar(cli, 'window.__posts'))[0] || {};
-  chk(pc.action === 'planCerrarMes' && pc.mes === 'Septiembre 2026' && pc.siguiente === 'Octubre 2026' && (pc.mover || []).length === 7 && pc.facturacion === 19392829 && pc.meta === 22000000 && (pc.objetivos || []).length === ci.obj,
-    'cerrar septiembre manda UNA llamada: las 7 acciones a octubre, la facturacion, la meta y como termino cada objetivo', pc);
+  chk(pc.action === 'planCerrarMes' && pc.mes === 'Septiembre 2026' && pc.siguiente === 'Octubre 2026' && (pc.mover || []).length === 7 && !('facturacion' in pc) && !('meta' in pc) && (pc.objetivos || []).length === ci.obj,
+    'cerrar septiembre manda UNA llamada: las 7 acciones y como termino cada objetivo, SIN facturacion ni meta (las pone el backend)', pc);
   if (process.env.PREVIA) require('fs').writeFileSync(process.env.PREVIA, JSON.stringify(pc, null, 1));
   await sleep(2500);
   /* Un mes ya cerrado muestra el registro, sin boton */

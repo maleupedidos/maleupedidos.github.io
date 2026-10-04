@@ -12261,7 +12261,7 @@ function _leerVersion(app){
    "El HTML no sabe que version es" dejo de ser cierto: el build le escribe
    adentro el CACHE_NAME de sw-panel.js, el mismo que deploy.sh obliga a subir en
    cada cambio. Si lo publicado dice otra cosa, esta pagina es vieja. Punto. */
-var _APP_CN_PAGINA='maleu-panel-v508';
+var _APP_CN_PAGINA='maleu-panel-v509';
 
 /* Devuelve [{k,v}] si lo publicado no es lo que esta pagina corre. */
 function _chequearVersiones(){
@@ -39962,10 +39962,19 @@ if('serviceWorker' in navigator){
     if(/^leads?$/i.test(String(o.unidad||'').trim())){ _planPedirLeadsSiHaceFalta(); return objAvanceLeads(o, planData.mes); }
     return Number(o.avance)||0;
   }
+  /* Un mes se cierra recien DESDE EL DIA SIGUIENTE al ultimo (4/10/2026, hallazgo de
+     Codex): el ultimo dia todavia se entrega y se cobra. Antes alcanzaba con
+     "dia transcurrido = dias del mes", o sea el 30/9 a la manana ya dejaba cerrar.
+     El backend lo valida igual (`planCerrarMes`). */
+  function _planMesCerrable(yyyy, mm, ahoraAR){
+    return ahoraAR >= new Date(Number(yyyy), Number(mm), 1);   // mm es 1-12: (yyyy, mm, 1) = el 1 del mes siguiente
+  }
+  window._planMesCerrable = _planMesCerrable;   // para las pruebas
   function renderCierre(){
     var box = el('planCierre'); if(!box) return;
-    var dias = Number(planData && planData.diasMes)||30, tr = Number(planData && planData.diasTrans)||0;
-    if(!planData || !planData.ok || planData._esqueleto || tr < dias){ box.innerHTML = ''; return; }
+    var dias = Number(planData && planData.diasMes)||30;
+    var ahoraAR = new Date(new Date().toLocaleString('en-US',{timeZone:'America/Argentina/Buenos_Aires'}));
+    if(!planData || !planData.ok || planData._esqueleto || !_planMesCerrable(planData.yyyy, planData.mm, ahoraAR)){ box.innerHTML = ''; return; }
     var mesTxt = String(planData.mes).split(' ')[0], sig = _planSiguiente();
     var C = planData.cierre;
     if(C){
@@ -39982,7 +39991,7 @@ if('serviceWorker' in navigator){
     if(!objs.length && !abiertas.length && !M){ box.innerHTML = ''; return; }
     /* La seleccion vive aca y no en el DOM: un repintado (llegan pedidos) no la pierde. */
     if(_planCierreMes !== planData.mes){
-      _planCierreMes = planData.mes; _planCierreSel = {}; _planCierreMover = {};
+      _planCierreMes = planData.mes; _planCierreSel = {}; _planCierreMano = {}; _planCierreMover = {};
       abiertas.forEach(function(a){ _planCierreMover[a.id] = true; });
     }
     var fact = _planDHay() ? _planFact(_rtSumar(_planIsoDia(1), _planIsoDia(dias))) : null;
@@ -39993,10 +40002,14 @@ if('serviceWorker' in navigator){
       h += '<div class="plan-cierre-h">Cómo terminó cada objetivo <small>(lo medido contra la meta; tocá para cambiarlo)</small></div>';
       objs.forEach(function(o){
         var v = _planObjValorFinal(o), meta = Number(o.meta)||0, ya = (o.estado==='Cumplido' || o.estado==='No cumplido');
-        if(!_planCierreSel[o.id]){
+        /* Lo propuesto se RECALCULA en cada repintado (4/10/2026, hallazgo de Codex):
+           si llegan leads o pedidos, la medicion cambia y la propuesta con ella.
+           Solo se respeta lo que Tadeo cambio a mano (`_planCierreMano`). */
+        if(!_planCierreMano[o.id]){
           if(ya) _planCierreSel[o.id] = o.estado;
           else if(!meta) _planCierreSel[o.id] = 'No cumplido';
           else if(v!==null) _planCierreSel[o.id] = v>=meta ? 'Cumplido' : 'No cumplido';
+          else delete _planCierreSel[o.id];
         }
         var s = _planCierreSel[o.id], u = _planUnidad(o);
         if(!s) faltan.push(o.id);
@@ -40019,7 +40032,8 @@ if('serviceWorker' in navigator){
       + '<div class="plan-tot-nota">Se cierra una sola vez. Las acciones que pasan cambian de mes (no se copian) y quedan marcadas «viene de '+esc(mesTxt.toLowerCase())+'».</div></div>';
     box.innerHTML = h;
   }
-  window.planCierreObj = function(id){ _planCierreSel[id] = _planCierreSel[id]==='Cumplido' ? 'No cumplido' : 'Cumplido'; renderCierre(); };
+  var _planCierreMano = {};
+  window.planCierreObj = function(id){ _planCierreSel[id] = _planCierreSel[id]==='Cumplido' ? 'No cumplido' : 'Cumplido'; _planCierreMano[id] = true; renderCierre(); };
   window.planCierreAcc = function(id, on){ _planCierreMover[id] = !!on; renderCierre(); };
   window.planCerrarMes = function(){
     var btn = el('planCierreBtn'); if(!btn || btn.disabled) return;
@@ -40027,9 +40041,10 @@ if('serviceWorker' in navigator){
     var mover = Object.keys(_planCierreMover).filter(function(k){ return _planCierreMover[k]; });
     var objs = Object.keys(_planCierreSel).map(function(k){ return { id:k, estado:_planCierreSel[k] }; });
     if(!confirm('¿Cerrar '+mesTxt+'? '+(mover.length ? mover.length+(mover.length===1?' acción pasa':' acciones pasan')+' a '+sig.toLowerCase()+'. ' : '')+'Se cierra una sola vez.')) return;
+    /* La facturacion y la meta NO van (4/10/2026, hallazgo de Codex): las calcula el
+       backend con la misma cuenta que Inicio y el EERR. La pantalla puede tener los
+       pedidos a medias (sin `ventasExtra` no hay catering) y el cierre no se deshace. */
     var body = { action:'planCerrarMes', mes:planData.mes, siguiente:sig, objetivos:objs, mover:mover,
-      facturacion: _planDHay() ? Math.round(_planFact(_rtSumar(_planIsoDia(1), _planIsoDia(dias)))) : 0,
-      meta: Number(((planData.metas||{})[PLAN_KEY_TOTAL]||{}).metaFact)||0,
       por: String((window.SESSION && (SESSION.nombre||SESSION.usuario)) || '').split(/\s+/)[0] };
     btn.disabled = true; btn.textContent = 'Cerrando…';
     _planPost(body).then(function(d){
