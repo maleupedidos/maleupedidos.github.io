@@ -10202,8 +10202,23 @@ function npGuardar(){
      · Y el `clientOrderId`, que es lo que hace que cortar sea SEGURO. Sin el,
        ofrecer "reintenta" seria ofrecer duplicar el pedido, porque el que se
        corto pudo haber entrado igual. */
-  if(!npCoid)npCoid='np-'+Date.now()+'-'+Math.random().toString(36).slice(2,8);
+  /* ══ EL MISMO PEDIDO, CARGADO DE NUEVO, LLEVA EL MISMO ID (4/10/2026) ═══
+
+     Sabado 3/10, Lucas, Pilar #92 y #93 (Marcelo Moresco, $9.000): el candado
+     estuvo tomado 4 minutos, el celular corto a los 90 s y dijo "no contesto"
+     mientras el tercer reintento del interceptor ya estaba adentro guardandolo.
+     Lucas no toco GUARDAR de nuevo: volvio a CARGAR el pedido (con telefono y
+     otra forma de pago), y un pedido cargado de nuevo nacia con id nuevo. El
+     dedup del backend no tenia como reconocerlo.
+
+     Ahora el intento que no se confirmo queda anotado en el celular (sobrevive
+     a cerrar la app). Si en 30 min se carga otra vez el mismo pedido —mismo
+     canal, cliente y productos— viaja con el MISMO id, y si el primero entro el
+     backend contesta "ya estaba" en vez de crear el gemelo. Se borra al
+     confirmar: un segundo pedido igual DESPUES de uno confirmado es otro pedido. */
+  if(!npCoid)npCoid=npPendienteCoid(data)||('np-'+Date.now()+'-'+Math.random().toString(36).slice(2,8));
   data.clientOrderId=npCoid;
+  npPendienteAnotar(data,npCoid);
 
   var _npCtrl=(typeof AbortController!=='undefined')?new AbortController():null;
   var _npAvisa=setTimeout(function(){
@@ -10216,13 +10231,11 @@ function npGuardar(){
 
   var _npOpts={method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(data),redirect:'follow'};
   if(_npCtrl)_npOpts.signal=_npCtrl.signal;
-  fetch(RUT_APPS_SCRIPT_URL,_npOpts)
-    .then(function(r){return r.json().catch(function(){return{ok:false,error:'JSON invalido'}})})
-    .then(function(res){
-      if(!res||!res.ok){throw new Error((res&&res.error)||'Backend respondio ok=false')}
+  var _npExito=function(res){
       _npFin();
       /* Entro: el proximo pedido es otro intento y lleva id nuevo. */
       npCoid='';
+      npPendienteBorrar();
       // Stash el resumen ANTES de npReset() (que limpia el cart). Permite que el
       // botón "📋 Copiar resumen" siga funcionando después de guardar.
       _npLastResumen=npResumenTextoWA();
@@ -10247,7 +10260,13 @@ function npGuardar(){
       else if(_oc==='ocupado'||_oc==='error')
         _ocMsg='<div class="np-ok-oc mal">⚠️ El pedido se guardó, pero NO se pudo generar la Orden de Compra. '
               +'Generala desde Pedidos con «Confirmar origen».</div>';
-      s.innerHTML='<div style="margin-bottom:8px">Pedido guardado en Sheets · '+nombre+' · '+npMoney(total)+'</div>'+_pzMsg+_ocMsg+
+      /* "Ya estaba": el backend reconocio el id (o se pregunto y entro). Se
+         dice cual es, para que nadie lo cargue una tercera vez. */
+      var _yaMsg='';
+      if(res&&(res.dedup||res.verificado))
+        _yaMsg='<div class="np-ok-oc">✅ Este pedido ya había entrado'+(res.ref?' ('+res.ref+')':'')
+              +': no se cargó dos veces. Si querías cambiarle algo, editalo desde Pedidos.</div>';
+      s.innerHTML='<div style="margin-bottom:8px">Pedido guardado en Sheets · '+nombre+' · '+npMoney(total)+'</div>'+_yaMsg+_pzMsg+_ocMsg+
         '<button type="button" class="np-btn-copy" style="margin:0" onclick="npCopiarResumen()">📋 Copiar resumen para WhatsApp</button>'+
         '<button type="button" class="np-btn-listo" onclick="npListo()">Listo →</button>';
       btn.textContent='GUARDAR PEDIDO';btn.disabled=false;npSaving=false;
@@ -10257,10 +10276,33 @@ function npGuardar(){
       // copiar el resumen). Eso es tiempo muerto: si ya copiaste, esperás al pedo.
       // Ahora "Listo →" lo hace en el acto y los 6s quedan solo de red.
       _npSaltoT=setTimeout(function(){ npListo(true); },6000);
+  };
+  fetch(RUT_APPS_SCRIPT_URL,_npOpts)
+    .then(function(r){return r.json().catch(function(){return{ok:false,error:'JSON invalido'}})})
+    .then(function(res){
+      if(!res||!res.ok){var _eB=new Error((res&&res.error)||'Backend respondio ok=false');_eB.backend=true;throw _eB}
+      _npExito(res);
     })
     .catch(function(err){
-      _npFin();
       console.error('npGuardar fail',err);
+      /* ANTES DE DECIR "NO SE PUDO", PREGUNTAR (4/10/2026). Que el celular se
+         canse de esperar no dice nada de si el pedido entro: el sabado entro
+         20 s DESPUES de que el ERP le dijera a Lucas que no. Se le pregunta al
+         backend por el id (`pedidoEntro`, la misma marca del dedup).
+         · Corte por reloj o por red: un intento puede seguir adentro del
+           servidor (hasta 30 s de candado + el guardado), asi que se pregunta
+           varias veces durante 75 s.
+         · El backend contesto un error: no queda nada en vuelo, alcanza con
+           una pregunta (la fila pudo escribirse antes del error). */
+      clearTimeout(_npAvisa); clearTimeout(_npCorta);
+      rutShowLoader('No contest\u00f3 todav\u00eda. Me fijo si el pedido entr\u00f3\u2026');
+      npPreguntarSiEntro(npCoid,(err&&err.backend)?0:NP_ENTRO_MS,function(r){
+        if(r&&r.entro){ _npExito({ok:true,verificado:true,ref:r.ref||''}); return; }
+        _npFallo(err);
+      });
+    });
+  function _npFallo(err){
+      _npFin();
       /* El pedido NO se perdio: el carrito y el formulario siguen como estaban
          —`npReset()` corre solo al guardar bien—, asi que alcanza con volver a
          tocar GUARDAR. Y es seguro: va el mismo `clientOrderId`, con lo cual si
@@ -10272,7 +10314,47 @@ function npGuardar(){
         ? 'El servidor no contest\u00f3 en 90s. Toc\u00e1 GUARDAR otra vez: no se duplica.'
         : 'No se pudo guardar ('+(err&&err.message||'red')+'). Toc\u00e1 GUARDAR otra vez: no se duplica.');
       btn.textContent='GUARDAR PEDIDO';btn.disabled=false;npSaving=false;
-    });
+  }
+}
+
+/* ── El intento sin confirmar y la pregunta "¿entró?" (4/10/2026) ──────────
+   Ver el comentario de `npGuardar` donde se usa. */
+var NP_PEND_KEY='maleu_np_pendiente', NP_PEND_MS=30*60*1000;
+/* Cuanto se sigue preguntando "¿entro?" despues de un corte, y cada cuanto.
+   75 s = 30 s de candado + ~25 s de guardado + margen. Las pruebas lo achican. */
+var NP_ENTRO_MS=75000, NP_ENTRO_CADA=5000;
+function npFirmaPedido(d){
+  var it=(d.items||[]).map(function(x){return String(x.id)+':'+String(x.qty)+(x.pz?'/'+String(x.pz):'')}).sort().join(',');
+  return [d.canal||'',String(d.nombre||'').trim().toLowerCase().replace(/\s+/g,' '),it].join('|');
+}
+function npPendienteCoid(d){
+  try{
+    var p=JSON.parse(localStorage.getItem(NP_PEND_KEY)||'null');
+    if(p&&p.coid&&p.firma===npFirmaPedido(d)&&(Date.now()-p.ts)<NP_PEND_MS)return p.coid;
+  }catch(e){}
+  return '';
+}
+function npPendienteAnotar(d,coid){
+  try{localStorage.setItem(NP_PEND_KEY,JSON.stringify({coid:coid,firma:npFirmaPedido(d),ts:Date.now()}))}catch(e){}
+}
+function npPendienteBorrar(){ try{localStorage.removeItem(NP_PEND_KEY)}catch(e){} }
+/* Pregunta cada 5 s hasta `plazoMs` (0 = una sola vez). cb(null) = no se
+   sabe o no entro; cb({entro:true,ref}) = esta guardado. */
+function npPreguntarSiEntro(coid,plazoMs,cb){
+  var hasta=Date.now()+plazoMs, listo=false;
+  function fin(r){ if(!listo){listo=true;cb(r)} }
+  function una(){
+    var c=(typeof AbortController!=='undefined')?new AbortController():null;
+    var t=setTimeout(function(){if(c)c.abort()},15000);
+    var o={method:'GET'}; if(c)o.signal=c.signal;
+    fetch(RUT_APPS_SCRIPT_URL+'?action=pedidoEntro&coid='+encodeURIComponent(coid),o)
+      .then(function(r){return r.json()})
+      .then(function(r){ clearTimeout(t); if(r&&r.ok&&r.entro)return fin(r); otra(); })
+      .catch(function(){ clearTimeout(t); otra(); });
+  }
+  function otra(){ if(Date.now()+NP_ENTRO_CADA>hasta)return fin(null); setTimeout(una,NP_ENTRO_CADA); }
+  if(!coid)return fin(null);
+  una();
 }
 
 /* El salto a ARMADO despues de guardar. Sale de un boton y ademas, de red, a los

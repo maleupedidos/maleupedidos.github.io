@@ -89,6 +89,10 @@ const esperar = async (cli, e, ms = 60000) => {
          (Y el comentario va SIN acentos graves a proposito: esta adentro de
          un template literal, y un acento grave lo cierra.) */
       window.__confirmDevuelve=true;
+      /* Desde el 4/10/2026, antes de decir "no se pudo" npGuardar le pregunta
+         al backend si el pedido entro, durante 75 s. Aca se achica: lo que se
+         mide es el mensaje del final, no la espera. */
+      try{ NP_ENTRO_MS=1500; NP_ENTRO_CADA=300; }catch(e){}
       return 1;
     })()`);
 
@@ -149,14 +153,15 @@ const esperar = async (cli, e, ms = 60000) => {
     })()`);
 
     await evaluar(cli, `try{npSaving=false;npGuardar();}catch(e){} 1`);
-    await pausa(900);
+    await esperar(cli, `/no se duplica/i.test((document.getElementById('rutToast')||{}).textContent||'')`, 6000);
 
     const toast = await evaluar(cli, `(document.getElementById('rutToast')||{}).textContent||''`);
     chk('al cortarse, el mensaje dice que se puede reintentar sin duplicar',
       /no se duplica/i.test(toast), { toast });
     chk('   y nombra la causa, no un "error" generico', /90s|servidor/i.test(toast), { toast });
 
-    const cap2 = await evaluar(cli, `window.__cap[window.__cap.length-1]`);
+    /* El ultimo POST con cuerpo: las preguntas "¿entro?" son GET sin cuerpo. */
+    const cap2 = await evaluar(cli, `(function(){for(var i=window.__cap.length-1;i>=0;i--)if(window.__cap[i].body)return window.__cap[i];return null})()`);
     let coid2 = null;
     if (cap2 && cap2.body) { try { coid2 = JSON.parse(cap2.body).clientOrderId || null; } catch (e) {} }
     chk('EL REINTENTO MANDA EL MISMO id: no crea un pedido gemelo',
