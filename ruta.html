@@ -4088,6 +4088,34 @@ function rdepToggle(cat){
   rutRenderRuta();
 }
 
+/* Lo que salió mal en una descarga, dicho en pantalla (4/10/2026). Lo usan los
+   DOS caminos que pueden recibir la respuesta: el toque directo y la cola de
+   reintentos. Antes la cola sacaba el ítem con ok:true sin mirar nada más, y
+   una falla de stock o un reparto que no se hizo pasaban callados justo cuando
+   la descarga había entrado por un reintento (hallazgo de Codex).
+   · stockErr → alert, no toast (dura 3 s): hay que corregirlo a mano en
+     Productos, y para eso hay que haberlo leído. La OC ya quedó sellada.
+   · repartoErr / repartoOmitido → toast.
+   Devuelve true si avisó algo. */
+function _rdepAvisosDescarga(res){
+  if(!res)return false;
+  var dijo=false;
+  if(res.stockErr&&res.stockErr.length){
+    alert('Guardado, pero el stock de esto NO se movió bien:\n\n'+res.stockErr.map(function(e){
+      return '· '+(PROD_NAMES[e.abbr]||e.abbr)+': '+e.tipo+' '+e.qty+(e.movido?' (se movió '+e.movido+')':'')+' — OC '+e.ref;
+    }).join('\n')+'\n\nCorregilo desde Productos: la orden ya quedó guardada y no se vuelve a procesar.');
+    dijo=true;
+  }
+  if(res.repartoErr&&res.repartoErr.length){
+    showToast('Guardado, pero NO pude repartir: '+res.repartoErr.join(' · '),8000);
+    dijo=true;
+  } else if(res.repartoOmitido){
+    showToast('Guardado · el reparto a Lucas NO se repitió ('+res.repartoOmitido+')');
+    dijo=true;
+  }
+  return dijo;
+}
+
 function confirmarGuardadoStock(rowsCsv,nProds,totalUnid,unidPedidos){
   var rows=(rowsCsv||'').split(',').map(Number).filter(function(r){return r>=2});
   if(rows.length===0)return;
@@ -4165,18 +4193,8 @@ function confirmarGuardadoStock(rowsCsv,nProds,totalUnid,unidPedidos){
            —la mercaderia entro—, pero esa mercaderia quedo en el freezer de
            Tadeo, o sea disponible en la tienda, y eso hay que saberlo ahora y
            no cuando alguien la pida. */
-        /* Un movimiento de stock que falló NO se reintenta solo: la OC ya quedó
-           sellada. Va en un alert y no en un toast (que dura 3 s) porque hay que
-           corregirlo a mano en Productos, y para eso hay que haberlo leído. */
-        if(res.stockErr&&res.stockErr.length){
-          alert('Guardado, pero el stock de esto NO se movió bien:\n\n'+res.stockErr.map(function(e){
-            return '· '+(PROD_NAMES[e.abbr]||e.abbr)+': '+e.tipo+' '+e.qty+(e.movido?' (se movió '+e.movido+')':'')+' — OC '+e.ref;
-          }).join('\n')+'\n\nCorregilo desde Productos: la orden ya quedó guardada y no se vuelve a procesar.');
-        }
-        if(res.repartoErr&&res.repartoErr.length){
-          showToast('Guardado, pero NO pude repartir: '+res.repartoErr.join(' · '),8000);
-        } else if(res.repartoOmitido&&nLucas>0){
-          showToast('Guardado · el reparto a Lucas NO se repitió ('+res.repartoOmitido+')');
+        if(_rdepAvisosDescarga(res)){
+          /* ya avisó lo que salió mal */
         } else if(nLucas>0){
           showToast('Guardado ('+(res.n||rows.length)+' OCs) · '+nLucas+' al freezer de Lucas');
         } else {
@@ -8393,6 +8411,8 @@ function processSyncQueue(){
         _rutFirma='';_cobFirma='';
         if(item&&item.action==='deshacerEntrega')_desRecientes.push({key:item.hoja+'|R'+item.row,t:Date.now()});
         _cobConfirmado(item);_estConfirmado(item);
+        /* Una descarga que entró por la cola también dice lo que salió mal. */
+        if(item&&item.action==='marcarGuardadoEnStock'){ try{ _rdepAvisosDescarga(res); }catch(eAv){} }
         if(item&&item.action==='marcarEntregado'){
           var _kc=item.hoja+'|R'+item.row;
           (rutHechas||[]).forEach(function(x){if(x&&x.key===_kc)x.conf=Date.now();});
