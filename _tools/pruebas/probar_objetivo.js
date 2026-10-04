@@ -45,7 +45,7 @@ const FALSO = {
     { id: 'A-901', desc: 'Llamar a los leads de septiembre', objetivo: 'O-901', responsable: 'Lucas', fechaObjetivo: dmy(ayer), estado: 'Pendiente' },
     { id: 'A-902', desc: 'Folleto en La Pionera', objetivo: 'O-904', responsable: 'Tadeo', fechaObjetivo: '30/' + ('0' + (M0 + 1)).slice(-2) + '/' + Y, estado: 'En curso' },
     { id: 'A-903', desc: 'Renegociar el precio de la carne', objetivo: 'O-902', responsable: 'Tadeo', fechaObjetivo: '', estado: 'Hecho' },
-    { id: 'A-904', desc: 'Una suelta, sin objetivo', objetivo: '', responsable: 'Ambos', fechaObjetivo: '', estado: 'Pendiente' }
+    { id: 'A-904', desc: 'Una suelta, sin objetivo', objetivo: '', responsable: 'Ambos', fechaObjetivo: '', estado: 'Pendiente', vieneDe: 'Septiembre 2026' }
   ]
 };
 /* El planMes del mes en curso es el armado; el resto va al servidor. Los POST
@@ -53,6 +53,7 @@ const FALSO = {
 const EXTRA = '(function(){var FALSO=' + JSON.stringify(FALSO) + ';window.__posts=[];var o=window.fetch;window.fetch=function(u,x){'
   + 'if(x&&String(x.method||"").toUpperCase()==="POST"){try{window.__posts.push(JSON.parse(x.body));}catch(e){}}'
   + 'if(String(u).indexOf("action=planMes")>=0&&String(u).indexOf(encodeURIComponent(FALSO.mes))>=0)return Promise.resolve(new Response(JSON.stringify(FALSO),{status:200,headers:{"Content-Type":"application/json"}}));'
+  + 'if(window.__sepCierre&&String(u).indexOf("action=planMes")>=0&&String(u).indexOf("Septiembre%202026")>=0)return o.apply(this,arguments).then(function(r){return r.json();}).then(function(d){d.cierre=window.__sepCierre;return new Response(JSON.stringify(d),{status:200,headers:{"Content-Type":"application/json"}});});'
   + 'return o.apply(this,arguments);};})();'
   + 'try{Object.keys(localStorage).forEach(function(k){if(k.indexOf("maleu_plan_cache_")===0)localStorage.removeItem(k);});}catch(e){}';
 
@@ -101,6 +102,7 @@ const pesos = s => Number(String(s || '').replace(/[^\d]/g, '')) || 0;
   chk(/%/.test(area('Operaciones').v) && /28%/.test(area('Operaciones').v), 'Operaciones: el margen bruto en % sobre 28%', area('Operaciones').v);
   chk(/a mano/.test(area('Tecnología').txt) && /^60%/.test(area('Tecnología').v), 'Tecnologia: a mano, con su avance de la hoja (60%)', [area('Tecnología').v]);
   chk(a.sueltas === 1, 'la accion sin objetivo va aparte, no se pierde', a.sueltas);
+  chk(await evaluar(cli, "/viene de septiembre 2026/.test(document.querySelector('#planAreas .plan-accs.sueltas').textContent)"), 'la que paso de mes dice de donde viene');
   if (ancho >= 900) {
     chk(area('Comercial').acc === 1 && /venció/.test(area('Comercial').txt), 'en compu las acciones se ven abiertas, y la vencida lo dice', area('Comercial').txt);
   } else {
@@ -136,10 +138,11 @@ const pesos = s => Number(String(s || '').replace(/[^\d]/g, '')) || 0;
 
   /* 5. Septiembre, contra lo medido en el diagnostico */
   await evaluar(cli, "planMesShift(-2),1");
-  for (let i = 0; i < 60; i++) { if (await evaluar(cli, "/septiembre/i.test((document.querySelector('#planTotal .plan-tot-l')||{}).textContent||'')&&!!document.querySelector('#planAreas .plan-obj')")) break; await sleep(500); }
+  for (let i = 0; i < 120; i++) { if (await evaluar(cli, "/septiembre/i.test((document.querySelector('#planTotal .plan-tot-l')||{}).textContent||'')&&!!document.querySelector('#planAreas .plan-obj')")) break; await sleep(500); }
   const s = await evaluar(cli, `({t:(document.querySelector('#planTotal .plan-tot-v')||{}).textContent, mb:(document.querySelector('#planTotal .plan-tot-mb')||{}).textContent,
      otros:document.querySelectorAll('#planAreas .plan-obj').length, sueltas:document.querySelectorAll('#planAreas .plan-accs.sueltas .plan-acc').length,
      venc:(document.querySelector('#planAreas').innerText.match(/venció/g)||[]).length,
+     diag:{estado:(document.getElementById('planEstado')||{}).textContent, areas:((document.getElementById('planAreas')||{}).textContent||'').slice(0,60), badge:(document.getElementById('planRefreshBadge')||{}).style.display, cola:window.__colaGet?window.__colaGet():null, sel:(document.getElementById('planMesSel')||{}).value},
      casas:_planIndicadorMes('casas',2026,8,30), nuevas:_planIndicadorMes('casas_nuevas',2026,8,30),
      cel:[].map.call(document.querySelectorAll('#planTotal .plan-tot-c-v'),function(x){return x.textContent}),
      eerr:(eerrKpisMes(9,2026)||{}).totFact, inicio:(function(g){return g.tot.f+g.cat.f})(_rtSumar('2026-09-01','2026-09-30'))})`);
@@ -151,7 +154,46 @@ const pesos = s => Number(String(s || '').replace(/[^\d]/g, '')) || 0;
   chk(sT === Math.round(s.inicio) && Math.abs(sT - s.eerr) < 1, 'septiembre: = Inicio › Total Maleu = EERR', [sT, s.inicio, s.eerr]);
   chk(/27,7%/.test(s.mb), 'septiembre: margen bruto 27,7%', s.mb);
   chk(s.casas === 148 && s.nuevas === 57, 'septiembre: 148 casas y 57 nuevas, lo medido en el diagnostico', [s.casas, s.nuevas]);
-  chk(s.otros >= 6 && s.sueltas === 7 && s.venc >= 7, 'septiembre: los objetivos del tablero y las 7 acciones vencidas siguen ahi (para el cierre)', [s.otros, s.sueltas, s.venc]);
+  chk(s.otros >= 6 && s.sueltas === 7 && s.venc >= 7, 'septiembre: los objetivos del tablero y las 7 acciones vencidas siguen ahi (para el cierre)', [s.otros, s.sueltas, s.venc, s.diag]);
+
+  /* 5b. FASE 2 sobre septiembre real: la foto de cada domingo y el cierre */
+  await evaluar(cli, "planSemToggle&&(document.querySelector('#planSemanas .plan-sem-t')||planSemToggle()),1"); await sleep(300);
+  const sem = await evaluar(cli, `({th:[].map.call(document.querySelectorAll('#planSemanas thead th'),function(x){return x.textContent}),
+    filas:[].map.call(document.querySelectorAll('#planSemanas tbody tr'),function(tr){return [].map.call(tr.children,function(c){return c.textContent})})})`);
+  chk(sem.th.slice(1).join('|') === 'dom 6/9|dom 13/9|dom 20/9|dom 27/9|cierre 30/9', 'septiembre: la foto de cada domingo y el cierre del 30', sem.th);
+  const fFac = (sem.filas.filter(f => /^Facturaci/.test(f[0]))[0] || []), fCas = (sem.filas.filter(f => /^Casas(?! nuevas)/.test(f[0]))[0] || []), fNue = (sem.filas.filter(f => /^Casas nuevas/.test(f[0]))[0] || []);
+  chk(/19,39M/.test(fFac[5] || '') && /^148/.test(fCas[5] || '') && /^57/.test(fNue[5] || ''), 'el cierre de la tabla da lo mismo que las tarjetas: $19,39M, 148 casas, 57 nuevas', [fFac[5], fCas[5], fNue[5]]);
+  chk(pesos(fFac[1]) > 0 && fFac.slice(1, 5).every((x, i, a) => i === 0 || parseFloat(x.replace(/[^\d,]/g, '').replace(',', '.')) >= parseFloat(a[i - 1].replace(/[^\d,]/g, '').replace(',', '.'))), 'la facturacion va creciendo domingo a domingo (es acumulada)', fFac);
+  const ci = await evaluar(cli, `({txt:(document.getElementById('planCierre')||{}).innerText||'', acc:document.querySelectorAll('#planCierre .plan-cierre-a input:checked').length,
+     obj:document.querySelectorAll('#planCierre .plan-cierre-o').length, btn:!!document.getElementById('planCierreBtn')})`);
+  chk(ci.btn && ci.acc === 7 && /\$19\.392\.829 de \$22\.000\.000/.test(ci.txt) && /88%/.test(ci.txt), 'septiembre terminó: el cierre ofrece pasar sus 7 acciones abiertas, con la facturacion 88% del objetivo', [ci.acc, ci.txt.slice(0, 160)]);
+  /* Sin las ventas en el telefono NO se puede cerrar: mandaba facturacion $0 (4/10/2026). */
+  const sinD = await evaluar(cli, "(function(){var p=D.pedidos;D.pedidos=[];planRepintarPorD();var b=document.getElementById('planCierreBtn');var r={dis:!!(b&&b.disabled),t:b?b.textContent:''};D.pedidos=p;planRepintarPorD();return r;})()");
+  chk(sinD.dis && /Esperando las ventas/.test(sinD.t), 'sin las ventas del mes el boton de cerrar queda trabado y dice que espera (no cierra con $0)', sinD);
+  /* Y si llegan sin que nadie avise, la tab se redibuja sola (se quedaba en "Esperando…"). */
+  await evaluar(cli, "window.__pp=D.pedidos;D.pedidos=[];planRepintarPorD();setTimeout(function(){D.pedidos=window.__pp;},300);1");
+  await sleep(3500);
+  chk(await evaluar(cli, "/\\$19\\.392\\.829/.test((document.querySelector('#planTotal .plan-tot-v')||{}).textContent||'')&&!(document.getElementById('planCierreBtn')||{}).disabled"),
+    'si los pedidos vuelven sin aviso, la tab se redibuja sola en segundos (no se queda en «Esperando»)');
+  for (let i = 0; i < 90; i++) { if (await evaluar(cli, "!(document.getElementById('planCierreBtn')||{}).disabled")) break; await sleep(500); }
+  const btnC = await evaluar(cli, "(function(){var b=document.getElementById('planCierreBtn');return {dis:!!(b&&b.disabled),t:b?b.textContent:''}})()");
+  chk(!btnC.dis && /^Cerrar septiembre$/.test(btnC.t), 'con todo medido (ventas y leads) el boton de cerrar se habilita', btnC);
+  await evaluar(cli, "window.confirm=function(){return true};window.__posts=[];planCerrarMes();1");
+  for (let i = 0; i < 20; i++) { if ((await evaluar(cli, 'window.__posts.length')) >= 1) break; await sleep(200); }
+  const pc = (await evaluar(cli, 'window.__posts'))[0] || {};
+  chk(pc.action === 'planCerrarMes' && pc.mes === 'Septiembre 2026' && pc.siguiente === 'Octubre 2026' && (pc.mover || []).length === 7 && pc.facturacion === 19392829 && pc.meta === 22000000 && (pc.objetivos || []).length === ci.obj,
+    'cerrar septiembre manda UNA llamada: las 7 acciones a octubre, la facturacion, la meta y como termino cada objetivo', pc);
+  if (process.env.PREVIA) require('fs').writeFileSync(process.env.PREVIA, JSON.stringify(pc, null, 1));
+  await sleep(2500);
+  /* Un mes ya cerrado muestra el registro, sin boton */
+  /* Que no quede un planMes de septiembre en vuelo: la cola del ERP junta dos
+     pedidos iguales en uno, y el nuestro recibiria la respuesta del anterior. */
+  for (let i = 0; i < 120; i++) { if (await evaluar(cli, "(document.getElementById('planRefreshBadge')||{style:{}}).style.display==='none'")) break; await sleep(500); }
+  await evaluar(cli, "window.__sepCierre={mes:'Septiembre 2026',cerradoEl:'04/10/2026 19:30',por:'Tadeo',facturacion:19392829,meta:22000000,objetivos:'O-001 Cumplido',acciones:'A-001, A-002',a:'Octubre 2026'};try{localStorage.removeItem('maleu_plan_cache_Septiembre 2026')}catch(e){};planLoad();1");
+  for (let i = 0; i < 60; i++) { if (await evaluar(cli, "!!document.querySelector('#planCierre .plan-cierre.hecho')")) break; await sleep(300); }
+  const ch = await evaluar(cli, "({t:(document.getElementById('planCierre')||{}).textContent||'', btn:!!document.getElementById('planCierreBtn')})");
+  chk(!ch.btn && /cerrado el 04\/10\/2026 por Tadeo/.test(ch.t) && /88%/.test(ch.t) && /Pasaron a octubre 2026: A-001, A-002/.test(ch.t), 'un mes cerrado muestra su registro y no deja volver a cerrarlo', ch);
+  await evaluar(cli, "window.__sepCierre=null;1");
 
   /* 6. Layout y errores, de vuelta en el mes en curso */
   await evaluar(cli, "planMesShift(1),1");

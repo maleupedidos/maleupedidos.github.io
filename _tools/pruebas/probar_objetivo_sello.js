@@ -47,7 +47,13 @@ const ped = (n, tot) => ({ n: String(n), c: 'Cliente ' + n, h: 'Home', es: 'Entr
   ep: 'Cobrado', fp: 'Efectivo', co: 0, bar: 'Estancias del Pilar', o: 'Deposito',
   p: [{ a: 'PPM', q: 1 }], $: tot, fex: hoyIso(), dee: hoyIso(),
   mc: hoyIso().slice(0, 7), f: hoyIso().slice(8, 10) + '/' + hoyIso().slice(5, 7) });
-const PLAN = { ok: true, mes: 'Septiembre 2026', yyyy: 2026, mm: 9, diasMes: 30, diasTrans: 23,
+/* EL MES EN CURSO, no uno fijo (4/10/2026). Decia septiembre, dia 23: el renglon
+   HOY solo se dibuja en el mes en curso, asi que desde el 1/10 esta prueba daba
+   rojo con el boton andando bien. Ver la memoria "una prueba anclada a una hora fija". */
+const _AR = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Argentina/Buenos_Aires' }));
+const _MS = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+const PLAN = { ok: true, mes: _MS[_AR.getMonth()] + ' ' + _AR.getFullYear(), yyyy: _AR.getFullYear(), mm: _AR.getMonth() + 1,
+  diasMes: new Date(_AR.getFullYear(), _AR.getMonth() + 1, 0).getDate(), diasTrans: _AR.getDate(),
   metas: { 'Total|': { canal: 'Total', barrio: '', metaFact: 22000000, metaPedidos: 0, metaTicket: 0, metaClientes: 0, metaCasas: 0, semanales: '', semanalesM: '', semanalesP: '', notas: '' } },
   objetivos: [], real: {}, acciones: [], origen: [], barriosHome: ['Estancias del Pilar'], canalesPrincipales: ['Venta Directa'] };
 
@@ -93,9 +99,16 @@ const SELLO = `JSON.stringify({ok:_fresco.ok,err:_fresco.err,err_planMes:_fresco
     await cli.enviar('Emulation.setDeviceMetricsOverride', { width: ANCHO, height: 900, deviceScaleFactor: 1, mobile: ANCHO <= 560 });
     await cli.enviar('Page.addScriptToEvaluateOnNewDocument', { source: prep('x') + STUB });
     await cli.enviar('Page.navigate', { url: BASE + '/' + APP + '?tab=inicio&t=' + Date.now() });
-    if (!await esperar(cli, `typeof go==='function' && typeof refreshContextual==='function'`, 90000)) throw new Error('el ERP no arrancó');
+    /* QUE TERMINE DE ARRANCAR antes de ir a la tab (4/10/2026). Esto esperaba solo
+       a que existiera `go`: el ERP todavia estaba arrancando, y su propio
+       `go('inicio')` (el ?tab=inicio) llegaba DESPUES y se llevaba la pantalla.
+       Con Inicio abierto el ↻ hace lo de Inicio, y la prueba medía eso: 5 rojos
+       con el boton de Objetivo andando bien. */
+    if (!await esperar(cli, `typeof go==='function' && typeof refreshContextual==='function' && !!document.querySelector('.pg.on') && !!(window.D && Array.isArray(D.pedidos) && D.pedidos.length)`, 90000)) throw new Error('el ERP no arrancó');
+    await pausa(2500);
     await ev(cli, `go('planificacion')`);
     await pausa(1500);
+    if ((await ev(cli, `(document.querySelector('.pg.on')||{}).id`)) !== 'p-planificacion') throw new Error('la tab abierta no es Objetivo: la prueba mediría otra tab');
     console.log('\n== Objetivo · qué pide el ↻ y qué dice · ' + ANCHO + 'px ==');
 
     async function tocar(romper) {
