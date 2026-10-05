@@ -148,6 +148,12 @@ const tocar = (cli, sel) => evaluar(cli, `(function(){var e=document.querySelect
       var r=b.getBoundingClientRect(); var top=document.elementFromPoint(r.left+r.width/2, r.top+r.height/2);
       out.push({t:(b.innerText||'').trim().slice(0,8), libre: !!top && (b===top||b.contains(top))});}); return out;})()`);
     chk('ningun boton de la barra queda tapado por el cajon', esc.length === 5 && esc.every(x => x.libre), esc);
+    /* El CENTRO libre no alcanza: la barra de estado del ERP (22 px) le tapaba
+       las etiquetas y el centro del boton seguia libre. Se mide la etiqueta. */
+    const etq = await evaluar(cli, `(function(){var out=[]; [].forEach.call(document.querySelectorAll('.main-tabs .mtab[data-mtab] > span:last-child'),function(s){
+      var r=s.getBoundingClientRect(); var top=document.elementFromPoint(r.left+r.width/2, r.bottom-2);
+      out.push({t:(s.innerText||'').trim().slice(0,8), libre: !!top && (s===top||s.contains(top)||top.contains(s)||(top.closest&&top.closest('.mtab')===s.closest('.mtab')))});}); return out;})()`);
+    chk('las etiquetas de la barra se leen enteras (la barra de estado no las tapa)', etq.length === 4 && etq.every(x => x.libre), etq);
     r = await tocar(cli, '.mtab[data-mtab="clientes"]'); await T(300);
     chk('a 1440 tambien se navega', r === true && (await evaluar(cli, VISIBLE('#mview-clientes'))) === true, r);
   } catch (e) { mal++; console.log('  MAL  excepcion: ' + (e && e.stack || e)); }
