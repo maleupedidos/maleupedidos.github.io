@@ -228,9 +228,16 @@ const VIS = sel => `(function(){var e=document.querySelector(${JSON.stringify(se
     const plus = await evaluar(cli, `(function(){ var b=[].filter.call(document.querySelectorAll('#npProductsList .np-qty-btn'),function(x){ var oc=x.getAttribute('onclick')||''; return oc.indexOf('PPM')>=0 && oc.slice(-3)===',1)'; })[0];
       if(!b)return null; b.scrollIntoView({block:'center'}); var r=b.getBoundingClientRect(); return {x:r.left+r.width/2,y:r.top+r.height/2,h:r.height}; })()`);
     if (plus) {
+      /* En la compu se cliquea con el mouse: un toque de dedo a 1440 (sin pantalla
+         tactil) no genera el click y la prueba daba rojo con el boton andando. */
       for (let i = 0; i < 2; i++) {
-        await cli.enviar('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: plus.x, y: plus.y }] });
-        await cli.enviar('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+        if (CEL) {
+          await cli.enviar('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: plus.x, y: plus.y }] });
+          await cli.enviar('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+        } else {
+          await cli.enviar('Input.dispatchMouseEvent', { type: 'mousePressed', x: plus.x, y: plus.y, button: 'left', clickCount: 1 });
+          await cli.enviar('Input.dispatchMouseEvent', { type: 'mouseReleased', x: plus.x, y: plus.y, button: 'left', clickCount: 1 });
+        }
         await pausa(180);
       }
       await pausa(500);
@@ -323,7 +330,8 @@ const VIS = sel => `(function(){var e=document.querySelector(${JSON.stringify(se
     chk('la bolsa del mismo vendedor la semana que viene NO hereda el tilde', /0\/1/.test(prox) && !/Armado ✓/.test(prox), prox.slice(0, 200));
     await evaluar(cli, `switchSemSel('actual'); pedNav('root'); 1`);
 
-    console.log('\n-- tirar para refrescar --');
+    console.log('\n-- tirar para refrescar --' + (CEL ? '' : ' (gesto de celular: en la compu no se mide)'));
+    if (CEL) {
     await evaluar(cli, `abaSwitchTab('proveedores'); window.scrollTo(0,0); window.__demora=3000; window.__gets=[]; 1`);
     await pausa(300);
     const tp = (type, y) => cli.enviar('Input.dispatchTouchEvent', { type, touchPoints: type === 'touchEnd' ? [] : [{ x: ANCHO / 2, y }] });
@@ -336,6 +344,7 @@ const VIS = sel => `(function(){var e=document.querySelector(${JSON.stringify(se
     chk('y no tapa el ERP con el loader de pantalla completa', !ptr.tapa, ptr);
     await evaluar(cli, `window.__demora=120; 1`);
     await pausa(3500);
+    }
 
     const desb = await evaluar(cli, `document.documentElement.scrollWidth - document.documentElement.clientWidth`);
     chk('nada desborda a lo ancho', desb <= 0, desb);
