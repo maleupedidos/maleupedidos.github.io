@@ -237,7 +237,7 @@ else {
   chk('quitarla la saca del portal', r.ok === true && o.foco === null, o.foco);
 }
 
-console.log('\n== El Marcador: historia, racha, récord y aplauso (6/10/2026) ==');
+console.log('\n== El Marcador: historia, racha, récord y aplauso (5/10/2026) ==');
 if (!existe('_roHistoria_') || !existe('_doPostRedAplauso')) { chk('el Code.js tiene la historia y los aplausos del Marcador', false); }
 else {
   /* Tres semanas cerradas con objetivo: la -1 (2, hizo 4: las 3 de aca mas «Cliente F» de arriba) y la -2 (1, hizo 1)
