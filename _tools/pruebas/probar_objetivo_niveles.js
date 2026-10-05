@@ -39,14 +39,16 @@ const MSA = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','
 const Y = AR.getFullYear(), M0 = AR.getMonth(), HOY = AR.getDate();
 const LBL = MSA[M0] + ' ' + Y;
 const fila = (canal, f, v, mg) => ({ canal: canal, barrio: '', metaFact: f, metaPedidos: v, metaTicket: Math.round(f / v), metaMargen: mg });
-/* Los numeros de octubre que propone `Objetivos Octubre 2026.md` (BASE). */
+/* Octubre tal como quedo en la planilla el 4/10/2026: el BASE de `Objetivos
+   Octubre 2026.md` con los $9.735 que faltaban sumados a Home, para que el total
+   y los canales cierren al peso (276 ventas, margen 27,3% = el ponderado). */
 const METAS = {
-  'Total|': { canal: 'Total', barrio: '', metaFact: 23300000, metaPedidos: 277, metaMargen: 27.5 },
-  'Home|': fila('Home', 14219587, 209, 27), 'Pilar|': fila('Pilar', 4966086, 44, 27),
+  'Total|': { canal: 'Total', barrio: '', metaFact: 23300000, metaPedidos: 276, metaMargen: 27.3 },
+  'Home|': fila('Home', 14229322, 209, 27), 'Pilar|': fila('Pilar', 4966086, 44, 27),
   'Clubes|': fila('Clubes', 2050500, 12, 26.5), 'Red|': fila('Red', 1502092, 10, 26.5),
   'Catering|': fila('Catering', 552000, 1, 43)
 };
-const SUMA = 14219587 + 4966086 + 2050500 + 1502092 + 552000;   // 23.290.265
+const SUMA = 14229322 + 4966086 + 2050500 + 1502092 + 552000;   // 23.300.000
 const FALSO = { ok: true, mes: LBL, yyyy: Y, mm: M0 + 1, diasMes: new Date(Y, M0 + 1, 0).getDate(), diasTrans: HOY,
   metas: METAS, real: {}, origen: [], objetivos: [], acciones: [], arbol: ARBOL };
 const EXTRA = '(function(){var FALSO=' + JSON.stringify(FALSO) + ',ARBOL=' + JSON.stringify(ARBOL) + ';window.__posts=[];var o=window.fetch;window.fetch=function(u,x){'
@@ -97,7 +99,7 @@ async function arbolDe(cli) {
   const A = await arbolDe(cli);
   chk(!!A && A.cuadra.nodos === 5 && A.cuadra.malos.length === 0, 'mes en curso: canales = mercado = unidad = total, al peso (meta, real, costo y ventas) en los 5 nodos con hijos', A && A.cuadra);
   chk(!!A && A.raiz === A.fact && A.fact > 0, 'el TOTAL real del arbol es el de Inicio y el EERR (_rtSumar con catering)', A && [A.raiz, A.fact]);
-  chk(!!A && A.meta === SUMA, 'la meta del TOTAL del arbol es la suma de los canales ($23.290.265), no el cargado', A && A.meta);
+  chk(!!A && A.meta === SUMA, 'la meta del TOTAL del arbol es la suma de los canales ($23.300.000)', A && A.meta);
   const K = await evaluar(cli, `(function(){ var K=eerrKpisMes(${M0 + 1},${Y}); return K?K.totFact:null; })()`);
   chk(A && K !== null && Math.abs(A.raiz - K) < 1, 'y el del EERR del mes', [A && A.raiz, K]);
 
@@ -108,9 +110,9 @@ async function arbolDe(cli) {
     return {dif:(b.querySelector('.pn-dif')||{}).textContent||'', rows:rows, cards:document.querySelectorAll('#planTotal .plan-tot-c').length,
       sw:document.documentElement.scrollWidth, iw:window.innerWidth};
   })()`);
-  chk(!!V && /Objetivo cargado \$23\.300\.000 · 277 ventas · margen 27,5%/.test(V.dif), 'muestra el total cargado con ventas y margen', V && V.dif);
-  chk(!!V && /Suma de los canales \$23\.290\.265 · 276 ventas · margen 27,3%/.test(V.dif), 'y la suma de los canales', V && V.dif);
-  chk(!!V && /\+\$9\.735 que no tiene canal · \+1 venta · margen \+0,2 pts/.test(V.dif), 'y la diferencia, sin elegir uno', V && V.dif);
+  chk(!!V && /Objetivo cargado \$23\.300\.000 · 276 ventas · margen 27,3%/.test(V.dif), 'muestra el total cargado con ventas y margen', V && V.dif);
+  chk(!!V && /Suma de los canales \$23\.300\.000 · 276 ventas · margen 27,3%/.test(V.dif), 'y la suma de los canales', V && V.dif);
+  chk(!!V && /Diferencia: cierran al peso$/.test(V.dif.trim()), 'octubre cierra al peso: sin diferencia de plata, ventas ni margen', V && V.dif);
   chk(!!V && V.rows.length === 11, 'once filas: total, 2 unidades, 2 mercados, 6 canales', V && V.rows);
   chk(!!V && V.cards === 0, 'las tarjetas de canal se reemplazan (no dos versiones del mismo numero)', V && V.cards);
   const fmt = n => '$' + Math.round(n).toLocaleString('es-AR');
@@ -123,17 +125,17 @@ async function arbolDe(cli) {
     home:document.getElementById('ppCf0').value, homeM:document.getElementById('ppCm0').value, totV:document.getElementById('ppTotV').value, totM:document.getElementById('ppTotM').value,
     suma:document.getElementById('ppSuma').textContent, sw:document.getElementById('planMetaBody').scrollWidth, cw:document.getElementById('planMetaBody').clientWidth})`);
   chk(E.n === 6, 'el editor tiene una fila por canal (Home, Pilar, Clubes, Red, B2B, Catering)', E.n);
-  chk(E.home === '14.219.587' && E.homeM === '27' && E.totV === '277' && E.totM === '27,5', 'arranca con lo cargado', E);
-  chk(/Suma de los canales \$23\.290\.265 · 276 ventas · margen 27,3%/.test(E.suma) && /\+\$9\.735/.test(E.suma) && /\+1 ventas/.test(E.suma), 'y muestra la suma contra el total, en vivo', E.suma);
+  chk(E.home === '14.229.322' && E.homeM === '27' && E.totV === '276' && E.totM === '27,3', 'arranca con lo cargado', E);
+  chk(/Suma de los canales \$23\.300\.000 · 276 ventas · margen 27,3%/.test(E.suma) && /cierran al peso$/.test(E.suma), 'y muestra la suma contra el total, en vivo', E.suma);
   chk(E.sw <= E.cw + 1, 'el editor entra sin scroll horizontal', [E.sw, E.cw]);
   await evaluar(cli, "var i=document.getElementById('ppCf3');i.value='1.600.000';i.dispatchEvent(new Event('input')),1");
   const s2 = await evaluar(cli, "document.getElementById('ppSuma').textContent");
-  chk(/\$23\.388\.173/.test(s2), 'cambiar un canal recalcula la suma (Red 1.502.092 → 1.600.000)', s2);
+  chk(/\$23\.397\.908/.test(s2) && /−\$97\.908/.test(s2), 'cambiar un canal recalcula la suma y la diferencia (Red 1.502.092 → 1.600.000)', s2);
   await evaluar(cli, "window.__posts=[],document.getElementById('ppGuardar').click(),1");
   for (let i = 0; i < 40; i++) { if ((await evaluar(cli, 'window.__posts.filter(function(p){return p.action==="planMetaSet"}).length')) >= 6) break; await sleep(300); }
   const ps = (await evaluar(cli, 'window.__posts')).filter(p => p.action === 'planMetaSet');
   const pc = c => ps.filter(p => p.canal === c)[0] || {};
-  chk(pc('Total').metaFact === 23300000 && pc('Total').metaPedidos === 277 && pc('Total').metaMargen === 27.5, 'guarda el Total con sus ventas y su margen', pc('Total'));
+  chk(pc('Total').metaFact === 23300000 && pc('Total').metaPedidos === 276 && pc('Total').metaMargen === 27.3, 'guarda el Total con sus ventas y su margen', pc('Total'));
   chk(pc('Red').metaFact === 1600000 && pc('Red').metaPedidos === 10 && pc('Red').metaMargen === 26.5 && pc('Red').barrio === '', 'y cada canal por su nombre de hoja, con plata, ventas y margen', pc('Red'));
   chk(ps.length === 6 && !pc('B2B').canal, 'B2B vacio y sin fila previa no se manda', ps.map(p => p.canal));
   await sleep(1500);
