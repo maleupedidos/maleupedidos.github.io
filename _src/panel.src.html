@@ -36564,8 +36564,8 @@ if('serviceWorker' in navigator){
       var m = metas[k], c = String(m.canal || k.split('|')[0]).trim();
       if(!c || c === A.total) return;
       var f = Number(m.metaFact)||0, mg = Number(m.metaMargen)||0;
-      var x = out[c] || (out[c] = { f:0, v:0, mb:0, sinMargen:false });
-      x.f += f; x.v += Number(m.metaPedidos)||0; x.mb += f*mg/100;
+      var x = out[c] || (out[c] = { f:0, v:0, mb:0, sinMargen:false, ca:0 });
+      x.f += f; x.v += Number(m.metaPedidos)||0; x.mb += f*mg/100; x.ca += Number(m.metaCasas)||0;
       if(f > 0 && !mg) x.sinMargen = true;
     });
     return out;
@@ -36586,22 +36586,29 @@ if('serviceWorker' in navigator){
     return r;
   }
   /* El arbol con meta y real en cada nodo. Cada nodo es la SUMA de sus hijos:
-     ningun nivel tiene un numero propio. `gc` = lo real a los dias cerrados. */
-  function _planNiveles(g, gc){
-    var A = _planArbol(); if(!A || !g) return null;
-    var MC = _planMetasCanal(A), RC = _planRealCanal(g), RCc = gc ? _planRealCanal(gc) : null;
-    var solo = A.soloMeta || [];
-    function vacio(){ return { meta:{ f:0, v:0, mb:0, sinMargen:false }, real:{ f:0, c:0, v:0 }, cerr:{ f:0 } }; }
+     ningun nivel tiene un numero propio. `RC` = lo real por canal; `RCc` = lo
+     mismo a los dias cerrados. Lo usan la tab (real de `_rtSumar`) y la copia
+     «Maleu - Lectura» (real de `planMes`): el arbol, las metas y el alias
+     `Venta Directa` son UNO para las dos (4/10/2026). Lo real se suma por clave,
+     sea cual sea: la tab trae f/c/v y Lectura ademas lo pendiente. */
+  function _planArbolSumar(RC, RCc){
+    var A = _planArbol(); if(!A) return null;
+    var MC = _planMetasCanal(A), solo = A.soloMeta || [];
+    function vacio(){ return { meta:{ f:0, v:0, mb:0, sinMargen:false, ca:0 }, real:{ f:0, c:0, v:0 }, cerr:{ f:0 } }; }
     function sumar(a, b){
-      a.meta.f += b.meta.f; a.meta.v += b.meta.v; a.meta.mb += b.meta.mb; a.meta.sinMargen = a.meta.sinMargen || b.meta.sinMargen;
-      a.real.f += b.real.f; a.real.c += b.real.c; a.real.v += b.real.v; a.cerr.f += b.cerr.f;
+      a.meta.f += b.meta.f; a.meta.v += b.meta.v; a.meta.mb += b.meta.mb; a.meta.ca += b.meta.ca; a.meta.sinMargen = a.meta.sinMargen || b.meta.sinMargen;
+      Object.keys(b.real).forEach(function(k){ a.real[k] = (a.real[k]||0) + (b.real[k]||0); });
+      a.cerr.f += b.cerr.f;
     }
     function nodo(n, prof){
       var o = vacio(); o.id = n.id; o.t = n.t; o.sub = n.sub || ''; o.nivel = n.nivel || 'total'; o.prof = prof; o.hijos = [];
       (n.canales||[]).forEach(function(c){
         var x = vacio(); x.id = c; x.t = c; x.canal = true; x.prof = prof + 1; x.soloMeta = solo.indexOf(c) >= 0; x.hijos = [];
-        var mc = MC[c]; if(mc){ x.meta.f = mc.f; x.meta.v = mc.v; x.meta.mb = mc.mb; x.meta.sinMargen = mc.sinMargen; }
-        if(!x.soloMeta){ var rc = RC[c] || { f:0, c:0, v:0 }; x.real = { f:rc.f, c:rc.c, v:rc.v }; x.cerr.f = RCc && RCc[c] ? RCc[c].f : 0; }
+        var mc = MC[c]; if(mc){ x.meta.f = mc.f; x.meta.v = mc.v; x.meta.mb = mc.mb; x.meta.sinMargen = mc.sinMargen; x.meta.ca = mc.ca; }
+        if(!x.soloMeta){
+          var rc = RC[c] || {}; Object.keys(rc).forEach(function(k){ x.real[k] = Number(rc[k])||0; });
+          x.cerr.f = RCc && RCc[c] ? RCc[c].f : 0;
+        }
         if(x.soloMeta && !x.meta.f && !x.meta.v) return;     // el nombre viejo, solo si tiene meta
         o.hijos.push(x); sumar(o, x);
       });
@@ -36612,6 +36619,11 @@ if('serviceWorker' in navigator){
     /* Metas de un canal que el arbol no conoce: no se pierden callado. */
     var conocidos = _planCanalesDe(A);
     T.fuera = Object.keys(MC).filter(function(c){ return conocidos.indexOf(c) < 0 && (MC[c].f || MC[c].v); });
+    return T;
+  }
+  function _planNiveles(g, gc){
+    if(!g) return null;
+    var T = _planArbolSumar(_planRealCanal(g), gc ? _planRealCanal(gc) : null); if(!T) return null;
     var mt = (planData.metas||{})[PLAN_KEY_TOTAL];
     T.cargado = mt ? { f:Number(mt.metaFact)||0, v:Number(mt.metaPedidos)||0, mg:Number(mt.metaMargen)||0 } : null;
     return T;
@@ -37316,16 +37328,42 @@ if('serviceWorker' in navigator){
     var h = '<div class="plan-ppc"><div class="plan-pp-k">Metas por canal</div>'
       + '<div class="plan-base" style="margin:0 0 6px">Se cargan solo acá. Retail, Domiciliario e Institucional se suman solos. Gris: lo que hizo el canal en '+MSA[m0].toLowerCase()+'.</div>'
       + '<div class="plan-ppc-r"><span class="plan-ppc-h">Canal</span><span class="plan-ppc-h">Facturación $</span><span class="plan-ppc-h">Ventas</span><span class="plan-ppc-h">Margen %</span></div>';
+    /* Un mes con la fila vieja `Venta Directa` (junio-septiembre 2026) tiene la
+       meta de Home + Pilar JUNTA (4/10/2026). Hasta ese dia el editor la
+       escondia, mostraba Home y Pilar vacios y al guardar creaba sus filas sin
+       sacar la vieja: Domiciliario sumaba las tres. Ahora se edita la vieja
+       (es la misma fila, `barrio` incluido) y Home y Pilar no aparecen salvo que
+       ya tengan meta. Si la vieja esta partida por barrio (junio, julio) se
+       muestra la suma sin dejar tocarla: repartir un numero nuevo entre barrios
+       seria inventar. */
+    var vd = Object.keys(metas).filter(function(k){
+      var m = metas[k]; return String(m.canal || k.split('|')[0]).trim() === 'Venta Directa' && (Number(m.metaFact) || Number(m.metaPedidos));
+    }).map(function(k){ return metas[k]; });
+    var vdT = vd.length ? { metaFact:0, metaPedidos:0, metaMargen:0 } : null;
+    vd.forEach(function(m){ vdT.metaFact += Number(m.metaFact)||0; vdT.metaPedidos += Number(m.metaPedidos)||0; });
+    if(vd.length === 1) vdT.metaMargen = Number(vd[0].metaMargen)||0;
+    function fila(c, etq, mt, b, x){
+      var i = _planPpCan.length, ro = x.soloLectura ? ' disabled' : '';
+      _planPpCan.push(x);
+      h += '<div class="plan-ppc-r"><span>'+etq+'</span>'
+        + '<input id="ppCf'+i+'" type="text" inputmode="numeric"'+ro+' value="'+(mt?_planPesosTxt(mt.metaFact):'')+'" placeholder="'+(b?_planPesosTxt(b.f):'')+'" onblur="planPesosFmt(this);planPpSuma()" oninput="planPpSuma()">'
+        + '<input id="ppCv'+i+'" type="text" inputmode="numeric"'+ro+' value="'+(mt&&mt.metaPedidos?mt.metaPedidos:'')+'" placeholder="'+(b&&b.v?b.v:'')+'" oninput="planPpSuma()">'
+        + '<input id="ppCm'+i+'" type="text" inputmode="decimal"'+ro+' value="'+(mt&&mt.metaMargen?String(mt.metaMargen).replace('.',','):'')+'" placeholder="'+(b&&b.f?_planPctTxt((b.f-b.c)/b.f*100).replace('%',''):'')+'" oninput="planPpSuma()"></div>';
+    }
     (function rec(n, grupo){
       if(n.canales && n.canales.some(function(c){ return solo.indexOf(c) < 0; })) h += '<div class="plan-ppc-g">'+esc(grupo ? grupo+' · '+n.t : n.t)+'</div>';
       (n.canales||[]).forEach(function(c){
-        if(solo.indexOf(c) >= 0) return;
-        var i = _planPpCan.length, mt = metas[c+'|'], b = RB && RB[c];
-        _planPpCan.push({ canal:c, existe:!!mt });
-        h += '<div class="plan-ppc-r"><span>'+esc(c)+'</span>'
-          + '<input id="ppCf'+i+'" type="text" inputmode="numeric" value="'+(mt?_planPesosTxt(mt.metaFact):'')+'" placeholder="'+(b?_planPesosTxt(b.f):'')+'" onblur="planPesosFmt(this);planPpSuma()" oninput="planPpSuma()">'
-          + '<input id="ppCv'+i+'" type="text" inputmode="numeric" value="'+(mt&&mt.metaPedidos?mt.metaPedidos:'')+'" placeholder="'+(b&&b.v?b.v:'')+'" oninput="planPpSuma()">'
-          + '<input id="ppCm'+i+'" type="text" inputmode="decimal" value="'+(mt&&mt.metaMargen?String(mt.metaMargen).replace('.',','):'')+'" placeholder="'+(b&&b.f?_planPctTxt((b.f-b.c)/b.f*100).replace('%',''):'')+'" oninput="planPpSuma()"></div>';
+        if(solo.indexOf(c) >= 0){
+          if(c !== 'Venta Directa' || !vdT) return;
+          var bH = RB && RB.Home, bP = RB && RB.Pilar;
+          var bVD = (bH || bP) ? { f:(bH?bH.f:0)+(bP?bP.f:0), c:(bH?bH.c:0)+(bP?bP.c:0), v:(bH?bH.v:0)+(bP?bP.v:0) } : null;
+          fila(c, 'Home + Pilar <small>'+(vd.length > 1 ? 'meta vieja por barrio: se cambia en la planilla' : 'meta vieja, una sola fila')+'</small>', vdT, bVD,
+               vd.length > 1 ? { canal:c, soloLectura:true } : { canal:c, barrio:String(vd[0].barrio||''), existe:true });
+          return;
+        }
+        var mt = metas[c+'|'];
+        if(vdT && !mt && (c === 'Home' || c === 'Pilar')) return;
+        fila(c, esc(c), mt, RB && RB[c], { canal:c, existe:!!mt });
       });
       (n.hijos||[]).forEach(function(x){ rec(x, n.id==='total' ? '' : n.t); });
     })(A, '');
@@ -37397,9 +37435,10 @@ if('serviceWorker' in navigator){
     /* Las metas por canal: las que tienen algo, y las que ya existian (para poder
        borrarlas dejandolas en cero). */
     _planPpCan.forEach(function(x, i){
+      if(x.soloLectura) return;
       var cf = _planPesosNum(el('ppCf'+i).value), cv = _planNum(el('ppCv'+i).value), cm = _planNum(el('ppCm'+i).value);
       if(!cf && !cv && !cm && !x.existe) return;
-      envios.push({ action:'planMetaSet', mes:planData.mes, canal:x.canal, barrio:'', metaFact:cf, metaPedidos:cv, metaMargen:cm });
+      envios.push({ action:'planMetaSet', mes:planData.mes, canal:x.canal, barrio:x.barrio||'', metaFact:cf, metaPedidos:cv, metaMargen:cm });
     });
     var faltan = [];
     document.querySelectorAll('#planMetaBody .plan-pp').forEach(function(box, i){
@@ -37585,26 +37624,13 @@ if('serviceWorker' in navigator){
   });
 
   /* ═══ REGLAS QUE COPIA «MALEU - LECTURA» ════════════════════════════════════
-     La pantalla ya no las usa (4/10/2026): eran del bloque «Meta vs Real por
-     canal». Se quedan porque el exportador de la copia de solo lectura que
-     consulta Claude las tiene COPIADAS letra por letra en el backend
-     (`_mlReglasPlan_`) y `deploy.sh` corta si difieren
-     (`estancias/_tools/probar_lectura_reglas.js`). Sacarlas es cambiar el
-     contrato de esa copia: va en una sesion aparte. */
-  var PLAN_KEY_RETAIL = 'Venta Directa|Estancias del Pilar';
-  function _planEsRetail(){ return !!planData && (Number(planData.yyyy)*100 + Number(planData.mm)) >= 202609; }
-  function _planMetaRetail(){ return (planData.metas || {})[PLAN_KEY_RETAIL] || null; }
-  function _planRetailReal(){
-    var t = { fact:0, pedidos:0, pend:0, pendPedidos:0, clientesUnicos:0 };
-    Object.keys((planData && planData.real) || {}).forEach(function(k){
-      if(k.indexOf('__hoja:Home|') !== 0 && k !== '__hoja:Pilar|') return;
-      var r = planData.real[k];
-      t.fact += r.fact || 0; t.pedidos += r.pedidos || 0;
-      t.pend += r.pend || 0; t.pendPedidos += r.pendPedidos || 0;
-      t.clientesUnicos += r.clientesUnicos || 0;
-    });
-    return t;
-  }
+     El exportador de la copia de solo lectura que consulta Claude las tiene
+     COPIADAS letra por letra en el backend (`_mlReglasPlan_`), junto con el
+     arbol (`_planArbol`, `_planCanalesDe`, `_planMetasCanal`, `_planArbolSumar`),
+     y `deploy.sh` corta si difieren (`estancias/_tools/probar_lectura_reglas.js`).
+     El 4/10/2026 se sacaron `PLAN_KEY_RETAIL`, `_planEsRetail`, `_planMetaRetail`,
+     `_planRetailReal` y `_realFila`: eran del criterio viejo (el retail como una
+     fila `Venta Directa | Estancias del Pilar`) y ya no los usaba nadie. */
   /* LA META DEL MES ES LA FILA TOTAL (4/10/2026). Hasta ese dia sumaba TODAS las
      filas, incluida `Total`: septiembre decia $34,9M (22M + los canales) y octubre
      iba a decir $46,6M. Si el mes tiene fila Total, esa es la meta; si no (junio,
@@ -37633,44 +37659,33 @@ if('serviceWorker' in navigator){
     });
     return tot;
   }
-  function _filasCanales(){
-    var filas = [];
-    /* En un mes de retail la meta es UNA (la del retail) y los barrios y la hoja Pilar
-       son su detalle: se muestra cuanto aporta cada uno, sin una meta propia. Si no,
-       la tarjeta "Estancias del Pilar" comparaba el barrio contra la meta de todo. */
-    var retail = _planEsRetail();
-    if(retail) filas.push({ tipoLabel: 'Retail', sub: 'Home + Pilar · la meta del mes', canal: 'Venta Directa', barrio: 'Estancias del Pilar', key: PLAN_KEY_RETAIL, retail: true });
-    (planData.barriosHome || []).forEach(function(b){
-      filas.push({ tipoLabel: 'Home', canal: 'Venta Directa', barrio: b, key: 'Venta Directa|'+b, hojaKey: '__hoja:Home|'+b, detalle: retail });
+  /* Plan_vs_Real de «Maleu - Lectura» = EL MISMO ARBOL DE LA TAB (4/10/2026).
+     Hasta ese dia las filas eran las de antes del arbol: `Venta Directa` por
+     barrio y el retail como una fila aparte. En octubre la meta vive en Home y
+     Pilar, y esas filas no existian: Home y Pilar salian sin meta y el desglose
+     no cerraba con la pantalla. Ahora se aplana `_planArbolSumar`, el mismo que
+     dibuja la tab, con lo real de `planMes` (por hoja) en vez de `_rtSumar`.
+     `Venta Directa` (junio-septiembre) es una fila de solo meta adentro de
+     Domiciliario, igual que en la tab: un alias, no un canal con real propio. */
+  function _planRealPd(){
+    var r = (planData && planData.real) || {}, out = {};
+    Object.keys(r).forEach(function(k){
+      var hoja = k.indexOf('__hoja:') === 0, c = (hoja ? k.slice(7) : k).split('|')[0];
+      if(!hoja && c === 'Venta Directa') return;   // Home y Pilar ya estan en su __hoja:
+      var x = out[c] || (out[c] = { f:0, v:0, cl:0, p:0, pv:0 }), q = r[k];
+      x.f += q.fact||0; x.v += q.pedidos||0; x.cl += q.clientesUnicos||0; x.p += q.pend||0; x.pv += q.pendPedidos||0;
     });
-    filas.push({ tipoLabel: 'Home (otros barrios)', canal: 'Venta Directa', barrio: '__OTROS_HOME__', key: 'Venta Directa|__OTROS_HOME__', hojaKey: '__hoja:Home|__OTROS__', detalle: retail });
-    filas.push({ tipoLabel: 'Pilar', canal: 'Venta Directa', barrio: '__PILAR__', key: 'Venta Directa|__PILAR__', hojaKey: '__hoja:Pilar|', detalle: retail });
-    ['Clubes','Red','Catering','B2B'].forEach(function(c){
-      filas.push({ tipoLabel: c, canal: c, barrio: '', key: c+'|', hojaKey: c+'|' });
-    });
-    return filas;
+    return out;
   }
-  function _realFila(fila){
-    var r = planData.real || {};
-    if(fila.retail) return _planRetailReal();
-    if(fila.canal === 'Venta Directa' && fila.barrio === '__PILAR__'){
-      return r['__hoja:Pilar|'] || { fact: 0, pedidos: 0, clientesUnicos: 0 };
-    }
-    if(fila.canal === 'Venta Directa' && fila.barrio === '__OTROS_HOME__'){
-      // Suma todos los Home con barrio que NO esté en la lista canónica
-      var tot = { fact: 0, pedidos: 0, clientesUnicos: 0 };
-      var conocidos = planData.barriosHome || [];
-      Object.keys(r).forEach(function(k){
-        if(k.indexOf('__hoja:Home|') !== 0) return;
-        var b = k.substring('__hoja:Home|'.length);
-        if(conocidos.indexOf(b) >= 0) return; // ya está cubierto por una fila propia
-        tot.fact += r[k].fact;
-        tot.pedidos += r[k].pedidos;
-        tot.clientesUnicos += r[k].clientesUnicos;
-      });
-      return tot;
-    }
-    return r[fila.hojaKey] || r[fila.key] || { fact: 0, pedidos: 0, clientesUnicos: 0 };
+  function _filasCanales(){
+    var T = _planArbolSumar(_planRealPd(), null); if(!T) return [];
+    var filas = [];
+    (function rec(n, padre){
+      if(n.prof > 0) filas.push({ tipoLabel: n.t, nivel: n.canal ? 'canal' : n.nivel, padre: padre, canal: n.canal ? n.id : '',
+        soloMeta: !!n.soloMeta, meta: n.meta, real: n.real });
+      n.hijos.forEach(function(x){ rec(x, n.prof > 0 ? n.t : ''); });
+    })(T, '');
+    return filas;
   }
   /* Para las pruebas: el indicador de cualquier mes, con el mismo codigo. */
   window._planIndicadorMes = function(ind, y, m0, hasta){ return _planIndicador(ind, y, m0, hasta, null); };
