@@ -214,5 +214,27 @@ else {
   chk('trae la semana (lunes y domingo)', /^\d{4}-\d{2}-\d{2}$/.test(r.lun) && /^\d{4}-\d{2}-\d{2}$/.test(r.dom), { lun: r.lun, dom: r.dom });
 }
 
+console.log('\n== La acción foco (parte 6) ==');
+if (!existe('_doPostRedFocoSet')) { chk('el Code.js tiene redFocoSet', false); }
+else {
+  sesion('uno', 'vendedor');
+  r = llamar('_doPostRedFocoSet', { txt: 'Degustación el sábado' });
+  chk('un vendedor no puede cargarla', r.ok === false && r.forbidden === true, r);
+  sesion('lucas', 'admin');
+  const filasAntes = filasObj.length;
+  r = llamar('_doPostRedFocoSet', { txt: 'Degustación el sábado' });
+  chk('el admin la carga (una fila con Vendedor = *)', r.ok === true && filasObj.length === filasAntes + 1 && filasObj[filasObj.length - 1][1] === '*', filasObj.map(f => f[1]));
+  r = llamar('_doPostRedFocoSet', { txt: 'Degustación el domingo' });
+  chk('cambiarla pisa la misma fila', r.ok === true && filasObj.length === filasAntes + 1 && /domingo/.test(filasObj[filasObj.length - 1][3]), filasObj.length);
+  o = vm.runInContext('_roObjetivoPortal_', sandbox)(CTX({}));
+  chk('el vendedor la ve en su portal', o.foco && o.foco.txt === 'Degustación el domingo', o.foco);
+  chk('la fila * no cuenta como un vendedor del equipo', o.equipo.conMeta === 2, o.equipo);
+  r = vm.runInContext('_doGetRedObjetivosEquipo()', sandbox);
+  chk('el panel del admin la trae, y * no aparece como vendedor', r.foco && r.foco.txt === 'Degustación el domingo' && !r.vendedores.some(v => v.nombre === '*'), r.foco);
+  r = llamar('_doPostRedFocoSet', { txt: '' });
+  o = vm.runInContext('_roObjetivoPortal_', sandbox)(CTX({}));
+  chk('quitarla la saca del portal', r.ok === true && o.foco === null, o.foco);
+}
+
 console.log('\n' + ok + ' ok · ' + mal + ' mal');
 process.exit(mal ? 1 : 0);
