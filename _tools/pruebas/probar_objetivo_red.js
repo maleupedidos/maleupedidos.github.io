@@ -187,5 +187,32 @@ chk('no sugiere al que esta al dia', !sug.some(s => s.includes('AlDia')), sug);
 chk('cada sugerida trae texto, detalle y telefono', o.sugeridas.every(s => s.txt && s.det && 't' in s), o.sugeridas);
 chk('trae la lista de resultados para los botones', Array.isArray(o.resultados) && o.resultados.includes('Hecho'), o.resultados);
 
+console.log('\n== Lo que ven Tadeo y Lucas (parte 5) ==');
+if (!existe('_doGetRedObjetivosEquipo')) { chk('el Code.js tiene redObjetivosEquipo', false); }
+else {
+  /* La hoja Red con las mismas filas de arriba, y los vendedores (uno inactivo). */
+  const hojaRed = { getLastRow: () => DATA.length + 1, getRange: (f, c, nf, nc) => ({ getValues: () => DATA.map(r => r.slice(c - 1, c - 1 + nc)) }) };
+  SS_SIM.getSheetByName = n => (n === 'Objetivos Red' && hojaObjExiste ? hojaObj : n === 'Red' ? hojaRed : null);
+  vm.runInContext(`
+    _rbCols_ = function () { return { estado: ${COL_EST} }; };
+    _colsRedOrigen_ = function () { return { trajo: ${COL_TRAJO} }; };
+    _rbVendedores_ = function () { return { lista: [
+      { nombre: 'Vendedor Uno', activo: true }, { nombre: 'Vendedor Dos', activo: true },
+      { nombre: 'Vendedor Tres', activo: true }, { nombre: 'Vendedor Baja', activo: false } ] }; };
+  `, sandbox);
+  sesion('dos', 'vendedor');
+  r = vm.runInContext('_doGetRedObjetivosEquipo()', sandbox);
+  chk('un vendedor NO lo puede pedir (forbidden, no authRequired)', r.ok === false && r.forbidden === true && !r.authRequired, r);
+  sesion('lucas', 'admin');
+  r = vm.runInContext('_doGetRedObjetivosEquipo()', sandbox);
+  const por = {}; (r.vendedores || []).forEach(v => { por[v.nombre] = v; });
+  chk('el admin lo ve, solo con los activos', r.ok === true && r.vendedores.length === 3 && !por['Vendedor Baja'], r.vendedores && r.vendedores.map(v => v.nombre));
+  chk('Uno: objetivo 8, lleva 2, le pasamos 2, con sus acciones y resultados', por['Vendedor Uno'] && por['Vendedor Uno'].meta === 8 && por['Vendedor Uno'].lleva === 2
+    && por['Vendedor Uno'].pasadas === 2 && por['Vendedor Uno'].acciones.length === 2 && por['Vendedor Uno'].acciones[0].res === 'Compró', por['Vendedor Uno']);
+  chk('Dos: objetivo 4, lleva 2', por['Vendedor Dos'] && por['Vendedor Dos'].meta === 4 && por['Vendedor Dos'].lleva === 2, por['Vendedor Dos']);
+  chk('Tres: sin objetivo (null) y 0 ventas, pero aparece', por['Vendedor Tres'] && por['Vendedor Tres'].meta === null && por['Vendedor Tres'].lleva === 0, por['Vendedor Tres']);
+  chk('trae la semana (lunes y domingo)', /^\d{4}-\d{2}-\d{2}$/.test(r.lun) && /^\d{4}-\d{2}-\d{2}$/.test(r.dom), { lun: r.lun, dom: r.dom });
+}
+
 console.log('\n' + ok + ' ok · ' + mal + ' mal');
 process.exit(mal ? 1 : 0);
