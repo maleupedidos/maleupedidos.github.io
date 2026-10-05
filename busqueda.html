@@ -2223,8 +2223,36 @@ function abaPagoCuenta(key, id) {
   var mont = document.getElementById('pagoRestante_' + key);
   updatePagoTotal(key, Number((mont && mont.getAttribute('data-sug')) || 0));
 }
+/* De que LUGAR salio el efectivo (5/10/2026, billeteras de cambio): la caja
+   fuerte, la billetera o lo cobrado de alguien. Ninguno viene elegido. Sin
+   personas en la respuesta (Apps Script viejo o planilla sin billeteras) no se
+   pregunta y el pago sale de la caja fuerte, que es lo de antes. Si hay una
+   reserva para este proveedor, se usa sola cuando sale de la caja fuerte. */
+var abaPagoLug = {};
+function abaPersonasCaja() {
+  return (busqueda && Array.isArray(busqueda.personasCaja)) ? busqueda.personasCaja : [];
+}
+function abaLugaresPago() {
+  var out = [{ id: 'cf', t: '🔒 Caja fuerte' }];
+  abaPersonasCaja().forEach(function (p) {
+    var n = String(p).split(' ')[0];
+    out.push({ id: 'bil:' + p, t: '👛 Billetera ' + n });
+    out.push({ id: 'cob:' + p, t: '💰 Cobrado ' + n });
+  });
+  return out;
+}
+function abaPagoLugar(key, id) {
+  abaPagoLug[key] = id;
+  document.querySelectorAll('.aba-pago-lug-b[data-key="' + key + '"]').forEach(function (b) {
+    var on = b.getAttribute('data-lug') === id;
+    b.classList.toggle('on', on); b.setAttribute('aria-pressed', on ? 'true' : 'false');
+  });
+  var mont = document.getElementById('pagoRestante_' + key);
+  updatePagoTotal(key, Number((mont && mont.getAttribute('data-sug')) || 0));
+}
 function renderPagoForm(key, idx, semana, montoSugerido) {
   delete abaPagoCta[key];
+  delete abaPagoLug[key];
   var titulo = semana ? 'Pago semana ' + semana : 'Pago a cuenta (se descuenta de la deuda más vieja)';
   var html = '<div class="pago-form" id="pagoForm_' + key + '">';
   html += '<div class="pago-form-title">' + titulo + '</div>';
@@ -2245,6 +2273,13 @@ function renderPagoForm(key, idx, semana, montoSugerido) {
     ctasD.forEach(function (c) {
       var nom = String(c.nombre || c.id).replace(/[&<>"]/g, function (x) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[x]; });
       html += '<button type="button" class="aba-pago-cta-b" data-key="' + key + '" data-cta="' + c.id + '" aria-pressed="false" onclick="abaPagoCuenta(\'' + key + '\',\'' + c.id + '\')">' + nom + '</button>';
+    });
+    html += '</div></div>';
+  }
+  if (abaPersonasCaja().length) {
+    html += '<div class="aba-pago-cta" id="pagoLug_' + key + '" hidden><div class="aba-pago-cta-t">¿De dónde salió el efectivo?</div><div class="aba-pago-cta-bs">';
+    abaLugaresPago().forEach(function (l) {
+      html += '<button type="button" class="aba-pago-cta-b aba-pago-lug-b" data-key="' + key + '" data-lug="' + _abaH(l.id) + '" aria-pressed="false" onclick="abaPagoLugar(this.getAttribute(\'data-key\'),this.getAttribute(\'data-lug\'))">' + _abaH(l.t) + '</button>';
     });
     html += '</div></div>';
   }
@@ -2324,9 +2359,12 @@ function updatePagoTotal(key, montoSugerido) {
   var ctaBox = document.getElementById('pagoCta_' + key);
   var faltaCta = !!ctaBox && mp > 0 && !abaPagoCta[key];
   if (ctaBox) ctaBox.hidden = !(mp > 0);
+  var lugBox = document.getElementById('pagoLug_' + key);
+  var faltaLug = !!lugBox && ef > 0 && !abaPagoLug[key];
+  if (lugBox) lugBox.hidden = !(ef > 0);
   var btnP = document.getElementById('btnPagar_' + key);
-  btnP.disabled = total <= 0 || faltaCta;
-  btnP.textContent = faltaCta ? 'Elegí de qué cuenta salió' : 'Confirmar pago';
+  btnP.disabled = total <= 0 || faltaCta || faltaLug;
+  btnP.textContent = faltaCta ? 'Elegí de qué cuenta salió' : (faltaLug ? 'Elegí de dónde salió el efectivo' : 'Confirmar pago');
 }
 
 function confirmarPago(key, idx, semana) {
@@ -2351,6 +2389,8 @@ function confirmarPago(key, idx, semana) {
   if (total <= 0) return;
   var ctaBoxC = document.getElementById('pagoCta_' + key);
   if (ctaBoxC && mp > 0 && !abaPagoCta[key]) { abaShowToast('Elegí de qué cuenta salió la transferencia'); return; }
+  var lugBoxC = document.getElementById('pagoLug_' + key);
+  if (lugBoxC && ef > 0 && !abaPagoLug[key]) { abaShowToast('Elegí de dónde salió el efectivo'); return; }
 
   var btn = document.getElementById('btnPagar_' + key);
   if (btn.disabled) return;   // un segundo toque no manda otro pago
@@ -2367,6 +2407,8 @@ function confirmarPago(key, idx, semana) {
     notas: notas,
     /* Vacia = la digital por defecto (lo de siempre). Solo viaja si hubo transferencia. */
     cuenta: mp > 0 ? (abaPagoCta[key] || '') : '',
+    /* De que lugar salio el efectivo (5/10/2026). Vacio = caja fuerte. */
+    lugar: ef > 0 ? (abaPagoLug[key] || '') : '',
     /* El mismo id en todos los reintentos: el servidor no carga dos veces un pago
        que ya escribio (13/9/2026). Antes, si se cortaba la red despues de que
        Apps Script escribiera, la cola lo volvia a mandar y el pago quedaba doble. */
@@ -2386,6 +2428,7 @@ function confirmarPago(key, idx, semana) {
       f.querySelectorAll('input, textarea').forEach(function (i) { i.value = ''; });
     }
     delete abaPagoCta[key];
+    delete abaPagoLug[key];
     try { if (typeof window._flushPendingLoadRender === 'function') window._flushPendingLoadRender(); } catch (e) {}
   };
   var aLaCola = function (msg) {

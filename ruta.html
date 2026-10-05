@@ -1033,6 +1033,12 @@ select.np-input{background:var(--white) url("data:image/svg+xml;utf8,<svg xmlns=
       <div class="np-lbl-mini">¿A qué cuenta te transfirió?</div>
       <div class="np-chips" id="npCtaChips"></div>
     </div>
+    <!-- Quien tiene el efectivo de un pedido "ya pagado" (5/10/2026, billeteras
+         de cambio): entra a lo cobrado de esa persona. Ninguna viene elegida. -->
+    <div id="npQuienWrap" class="hidden" style="margin-top:8px">
+      <div class="np-lbl-mini">¿Quién cobró el efectivo?</div>
+      <div class="np-chips" id="npQuienChips"></div>
+    </div>
     <!-- Aca estaba la casilla "Tambien compro en Diagonal Carnes" (promo del
          5/9/2026). Se saco el 11/9/2026: con la carne adentro de Maleu el cruce
          ya esta en el pedido mismo (Tadeo: "quedo obsoleto"). La col "Cruce
@@ -1202,6 +1208,16 @@ select.np-input{background:var(--white) url("data:image/svg+xml;utf8,<svg xmlns=
           <input type="text" id="cobroRecMP" inputmode="decimal" placeholder="0" oninput="_fmtMoneyInput(this);_cobroRecTocado();_recalcCobroRuta()">
         </div>
       </div>
+    </div>
+
+    <!-- QUIEN TIENE EL EFECTIVO (5/10/2026, billeteras de cambio). El billete
+         entra a lo cobrado de esa persona y el vuelto sale de SU billetera. No
+         viene nada marcado: el usuario logueado no siempre es quien tiene la
+         plata (Santos reparte y se la da a Tadeo o a Lucas). Sale solo si hay
+         efectivo en juego y la planilla tiene billeteras por persona. -->
+    <div class="cobro-ruta-section" id="cobroQuienSection" style="display:none">
+      <label class="cobro-ruta-lbl">¿Quién cobró el efectivo?</label>
+      <div class="cobro-ruta-pills" id="cobroQuien"></div>
     </div>
 
     <div class="cobro-ruta-section" id="cobroCambioSection" style="display:none">
@@ -5022,6 +5038,7 @@ function fetchCobrosPendientes(fresh,auto){
          tabla de arranque hasta que alguien abria un cuadro de cobro. */
       _refrescarPreciosSilencioso();
       if(typeof data.billetera==='number')_billeteraRuta=data.billetera; // fondo de cambio para el cuadro de Cobros
+      if(data.billeteras)_bilVivasRuta=data.billeteras;
       /* Solo si vino el campo: un backend viejo no lo manda, y en ese caso hay
          que dejar lo que ya estaba en vez de vaciar la banda. */
       if(Array.isArray(data.sinCerrar))_rutSinCerrar=data.sinCerrar;
@@ -5839,10 +5856,46 @@ var _billeteraRutaTs=0;  // timestamp ms de la ultima actualizacion de _billeter
 // al abrir el modal de Cobros: el sub-saldo billetera cambia con cada vuelto
 // entregado y cobrosPendientes esta cacheado 30s — la PWA puede tener el valor
 // stale si quedo abierta o si se ajusto la billetera desde otra pestania.
+/* ── QUIEN COBRO EL EFECTIVO (5/10/2026, billeteras de cambio) ──
+   La lista de personas con billetera la dice el backend (action=billetera y
+   cobrosPendientes), no este archivo: sale de las columnas "Billetera <Nombre>"
+   de Saldo Base. Sin billeteras en la planilla, la pregunta no aparece y el
+   backend usa el usuario logueado, que es lo de antes. */
+var _bilVivasRuta=null;   // {activo, personas:[...], bil:{<nombre>:$}}
+function _personasCaja(){return (_bilVivasRuta&&_bilVivasRuta.personas)||[];}
+function _nombreCorto(n){return String(n||'').split(' ')[0].replace(/[<>&"]/g,'');}
+function _quienCobro(st){return (st&&st.quien)||'';}
+function _setCobroQuien(n){if(!_cobroRutaState)return;_cobroRutaState.quien=n;_recalcCobroRuta();}
+/** Pinta las pastillas y devuelve true si FALTA elegir. */
+function _pintarCobroQuien(hayEf){
+  var sec=document.getElementById('cobroQuienSection'),box=document.getElementById('cobroQuien');
+  var ps=_personasCaja(),ver=!!hayEf&&ps.length>0;
+  if(sec)sec.style.display=ver?'':'none';
+  if(!ver||!box||!_cobroRutaState)return false;
+  var q=_cobroRutaState.quien||'';
+  var html=ps.map(function(p){
+    var lp=String(p).replace(/[<>&"]/g,'');
+    return '<button type="button" class="cobro-pill'+(p===q?' on':'')+'" data-p="'+lp+'" onclick="_setCobroQuien(this.dataset.p)">👛 '+_nombreCorto(p)+'</button>';
+  }).join('');
+  if(box.innerHTML!==html)box.innerHTML=html;
+  return !q;
+}
+/** La billetera de quien da el vuelto: con billeteras por persona, la suya (o
+ *  null si todavia no eligio); sin ellas, la unica de antes. */
+function _bilDeQuienRuta(){
+  var v=_bilVivasRuta;
+  if(v&&v.activo){
+    var q=_cobroRutaState&&_cobroRutaState.quien;
+    return q?(Number((v.bil||{})[q])||0):null;
+  }
+  return _billeteraRuta;
+}
+
 function _refrescarBilleteraRuta(){
   return fetch(RUT_APPS_SCRIPT_URL+'?action=billetera&t='+Date.now())
     .then(function(r){return r.json()})
     .then(function(data){
+      if(data && data.billeteras)_bilVivasRuta=data.billeteras;
       if(data && typeof data.billetera==='number'){
         _billeteraRuta=data.billetera;
         _billeteraRutaTs=Date.now();
@@ -7072,12 +7125,17 @@ function _recalcCobroRuta(){
   var _bilHint=document.getElementById('cobroBilleteraHint');
   if(_bilHint){
     var camBilletera=(camEf>0 && recEf>=camEf)?camEf:0; // vuelto que sale de la billetera (mismo método)
-    if(camBilletera>0){
-      var queda=_billeteraRuta-camBilletera;
-      _bilHint.textContent='👛 Billetera: '+formatMoney(_billeteraRuta)+' → das '+formatMoney(camBilletera)+' de vuelto → queda '+formatMoney(queda);
+    var _bilQ=_bilDeQuienRuta();
+    var _deQ=(_bilVivasRuta&&_bilVivasRuta.activo&&_cobroRutaState&&_cobroRutaState.quien)?' de '+_nombreCorto(_cobroRutaState.quien):'';
+    if(_bilQ===null){
+      _bilHint.textContent='👛 Elegí quién cobró el efectivo para ver su billetera';
+      _bilHint.style.color='#5D4037';
+    } else if(camBilletera>0){
+      var queda=_bilQ-camBilletera;
+      _bilHint.textContent='👛 Billetera'+_deQ+': '+formatMoney(_bilQ)+' → das '+formatMoney(camBilletera)+' de vuelto → queda '+formatMoney(queda);
       _bilHint.style.color=queda<0?'#C62828':'#5D4037';
     } else {
-      _bilHint.textContent='👛 Billetera disponible para cambio: '+formatMoney(_billeteraRuta);
+      _bilHint.textContent='👛 Billetera'+_deQ+' para cambio: '+formatMoney(_bilQ);
       _bilHint.style.color='#5D4037';
     }
   }
@@ -7119,6 +7177,11 @@ function _recalcCobroRuta(){
     return '<b>'+String(c.nombre||c.id).replace(/[<>&"]/g,'')+'</b>';}).join(' o ')+' arriba.');
   _pintarCobroCtas();
   _pintarCobroEnt();
+  /* De quien es el efectivo (5/10/2026): frena igual que la cuenta. Sin esto el
+     billete entraria a lo cobrado de quien esta logueado, que no siempre es
+     quien lo tiene en la mano. */
+  if(_pintarCobroQuien(recEf>0||camEf>0))errors.push('¿Quién cobró el efectivo? Tocá '+_personasCaja().map(function(p){
+    return '<b>'+_nombreCorto(p)+'</b>';}).join(' o ')+' arriba.');
   // Cero tolerancia: cualquier faltante bloquea (así no se cuelan descuentos
   // tácitos por redondeo — bug 10/07 Lucia $480 + Martina $160 = $640 perdidos
   // silenciosamente por la vieja tolerancia $500). Opciones para cerrar igual:
@@ -7456,7 +7519,7 @@ function confirmarCobroRuta(){
     // Faltaba, y el efecto era silencioso: el cuadro te preguntaba a qué cuenta
     // entró, vos elegías, y este payload la tiraba → el parcial se imputaba a la
     // default. Es la misma línea escrita dos veces, con una sola arreglada.
-    var payloadPar={action:'cobrarParcial',hoja:ent.h,id:String(ent.id),row:ent.r||0,
+    var payloadPar={action:'cobrarParcial',quien:_quienCobro(st),hoja:ent.h,id:String(ent.id),row:ent.r||0,
       formaPago:fpPar,cuenta:_ctaDeCobro(st,fpPar),
       monto:montoPar,notas:'Parcial desde Ruta/ENTREGA',ts:Date.now()};
     payloadPar.clientOpId=_opIdParcial(payloadPar);
@@ -7522,6 +7585,7 @@ function confirmarCobroRuta(){
   // Payload backend
   var payload={
     action:'marcarCobrado',
+    quien:_quienCobro(st),   // de quien es el efectivo (5/10/2026)
     hoja:ent.h,id:String(ent.id),row:ent.r,
     formaPago:fpFinal,
     cuenta:_ctaDeCobro(st,fpFinal),
@@ -7627,7 +7691,7 @@ function _confirmarCobroComboRuta(st,r){
       /* La cuenta faltaba aca (11/9/2026): era la cuarta copia de este payload
          y la unica sin ella. El parcial de un combo pagado al Brubank se
          imputaba a la cuenta por defecto. */
-      var _payParC={action:'cobrarParcial',hoja:pPar.h,id:String(pPar.id),row:pPar.r||0,
+      var _payParC={action:'cobrarParcial',quien:_quienCobro(st),hoja:pPar.h,id:String(pPar.id),row:pPar.r||0,
         formaPago:fpParC,cuenta:_ctaDeCobro(st,fpParC),monto:asigPar,notas:'Parcial desde Ruta/COMBO',ts:Date.now()};
       _payParC.clientOpId=_opIdParcial(_payParC);
       parPayloads.push(_payParC);
@@ -7680,6 +7744,7 @@ function _confirmarCobroComboRuta(st,r){
     var aplicP=(idx===0)?aplicacion:0;
     var payload={
       action:'marcarCobrado',
+      quien:_quienCobro(st),   // de quien es el efectivo (5/10/2026)
       hoja:p.h,id:String(p.id),row:p.r,
       formaPago:fpComboFinal,
       cuenta:_ctaDeCobro(st,fpComboFinal),
@@ -7814,7 +7879,7 @@ function _confirmarCobroPendiente(st,r){
     var monto=Math.round(r.neto);
     if(monto<=0)return;
     var fpPar=(fp==='Mixto')?(r.recMP>=r.recEf?'Transferencia':'Efectivo'):fp;
-    var payloadPar={action:'cobrarParcial',hoja:pc.h,id:String(pc.id),row:pc.r||0,formaPago:fpPar,cuenta:_ctaDeCobro(st,fpPar),monto:monto,notas:'Parcial desde Ruta/COBROS',ts:Date.now()};
+    var payloadPar={action:'cobrarParcial',quien:_quienCobro(st),hoja:pc.h,id:String(pc.id),row:pc.r||0,formaPago:fpPar,cuenta:_ctaDeCobro(st,fpPar),monto:monto,notas:'Parcial desde Ruta/COBROS',ts:Date.now()};
     payloadPar.clientOpId=_opIdParcial(payloadPar);
     cerrarCobroRuta();
     _commitCobroParcialModal(payloadPar,pc);
@@ -7846,7 +7911,7 @@ function _confirmarCobroPendiente(st,r){
   var propMet=(fpFinal==='Transferencia')?'Transferencia':'Efectivo';
   if(fpFinal==='Mixto')propMet=(tr>ef)?'Transferencia':'Efectivo';
 
-  var payload={action:'marcarCobrado',hoja:pc.h,id:String(pc.id),row:pc.r||0,
+  var payload={action:'marcarCobrado',quien:_quienCobro(st),hoja:pc.h,id:String(pc.id),row:pc.r||0,
     formaPago:fpFinal,cuenta:_ctaDeCobro(st,fpFinal),ef:ef,tr:tr,propina:propina,propMet:propMet,
     aFavor:aFavorPos,aplicacion:aplicacionPos,cliente:pc.c||'',
     recibidoEf:Math.max(0,r.recEf),   // el billete, igual que en ENTREGA
@@ -8172,7 +8237,7 @@ function confirmarCobroVendedor(vendedor){
   /* Sin cuenta preseleccionada (11/9/2026): la elige quien registra, mirando
      el comprobante. Con el Mercado Pago de entrada, una rendicion al Brubank
      que nadie corregia quedaba imputada a la otra cuenta. */
-  _cvCtx={vendedor:nombre,saldo:saldo,sems:(pc.sems||[]),cta:''};
+  _cvCtx={vendedor:nombre,saldo:saldo,sems:(pc.sems||[]),cta:'',quien:''};
   // El overlay se rehace entero abajo (`o.innerHTML=html`), así que el box de
   // cuentas nace vacío: sin resetear la firma, `_cvPintarCtas` creería que ya
   // está pintado y el selector no aparecería en la segunda apertura.
@@ -8216,6 +8281,10 @@ function confirmarCobroVendedor(vendedor){
     +    '<div id="cvCtaSec" style="display:none;margin-top:10px">'
     +      '<div style="font-size:11px;font-weight:800;color:#5D4037;margin-bottom:6px">¿A qué cuenta te transfirió?</div>'
     +      '<div id="cvCtaBox" style="display:flex;gap:6px;flex-wrap:wrap"></div>'
+    +    '</div>'
+    +    '<div id="cvQuienSec" style="display:none;margin-top:10px">'
+    +      '<div style="font-size:11px;font-weight:800;color:#5D4037;margin-bottom:6px">¿Quién recibió el efectivo?</div>'
+    +      '<div id="cvQuienBox" style="display:flex;gap:6px;flex-wrap:wrap"></div>'
     +    '</div>'
     +    '<div id="cvSum" style="display:flex;justify-content:space-between;align-items:baseline;margin-top:10px;padding:9px 11px;border-radius:9px;background:#F5F0E1;font-size:12px;font-weight:800;color:#5D4037">'
     +      '<span id="cvSumLbl">Total a registrar</span><span id="cvSumVal">'+formatMoney(0)+'</span></div>'
@@ -8265,7 +8334,31 @@ function _cvSync(){
   // repinta acá: es el único lugar por el que pasan los dos caminos que lo mueven
   // (tipear un monto y los chips Todo efectivo / Todo transfer.).
   _cvPintarCtas();
+  _cvPintarQuien();
 }
+
+/* Quien recibio el efectivo que entrego el vendedor (5/10/2026, billeteras de
+   cambio): entra a lo cobrado de esa persona. Desde el 5/10 el vendedor entrega
+   en mano lo que cobro en efectivo "la proxima vez que nos ve", y lo recibe
+   cualquiera de los dos. Ninguno viene elegido. */
+function _cvPintarQuien(){
+  var sec=_cvEl('cvQuienSec'),box=_cvEl('cvQuienBox');
+  if(!sec||!box||!_cvCtx)return;
+  var ef=_cvMonto(_cvEl('cvEf')&&_cvEl('cvEf').value);
+  var ps=_personasCaja(),mostrar=ef>0&&ps.length>0;
+  sec.style.display=mostrar?'':'none';
+  if(!mostrar){box.innerHTML='';return}
+  var q=_cvCtx.quien||'';
+  var h=ps.map(function(p){
+    var lp=String(p).replace(/[<>&"]/g,''),on=(p===q);
+    return '<button type="button" data-p="'+lp+'" onclick="_cvSetQuien(this.dataset.p)"'
+      +' style="flex:1;min-width:calc(50% - 3px);min-height:40px;padding:8px 6px;font-size:11px;'
+      +'font-weight:800;font-family:inherit;cursor:pointer;border-radius:8px;border:1.5px solid '
+      +(on?'#2E7D32':'#ddd')+';background:'+(on?'#E8F5E9':'#fff')+';color:'+(on?'#2E7D32':'#777')+'">👛 '+_nombreCorto(p)+'</button>';
+  }).join('');
+  if(box.innerHTML!==h)box.innerHTML=h;
+}
+function _cvSetQuien(n){if(!_cvCtx)return;_cvCtx.quien=n;_cvSync();}
 
 function _cvQuick(modo){
   if(!_cvCtx)return;
@@ -8288,13 +8381,14 @@ function _cvConfirm(){
   if(suma<=0&&_cvCtx.saldo>0){showToast('Ingresá un monto');return}
   if(suma>_cvCtx.saldo){showToast('El monto excede el saldo');return}
   if(_cvFaltaCta(tr)){showToast('¿A qué cuenta te transfirió? Elegila arriba');return}
+  if(ef>0&&_personasCaja().length&&!_cvCtx.quien){showToast('¿Quién recibió el efectivo? Elegilo arriba');return}
   var ctx=_cvCtx;
   var cta=_ctaDeRendicion(ctx,tr);
   cerrarConfirm();
-  cobrarVendedorRed(ctx.vendedor,ef,tr,suma>=ctx.saldo,cta);
+  cobrarVendedorRed(ctx.vendedor,ef,tr,suma>=ctx.saldo,cta,ef>0?ctx.quien:'');
 }
 
-function cobrarVendedorRed(vendedor,ef,tr,esTotal,cuenta){
+function cobrarVendedorRed(vendedor,ef,tr,esTotal,cuenta,quien){
   ef=Number(ef)||0; tr=Number(tr)||0;
   // El backend espera el nombre EXACTO como está en la col Vendedor del Sheets
   // (sin sufijos). Acá venía "<vendedor> (Vendedor Red)" que el frontend
@@ -8305,7 +8399,7 @@ function cobrarVendedorRed(vendedor,ef,tr,esTotal,cuenta){
   // (ef>0 y tr>0) y parcial (ef+tr < saldo), repartiendo por semana igual que el
   // portal del vendedor. El campo formaPago quedó como camino viejo del backend.
   var payload={action:'cobrarVendedorRed',vendedor:vendedorLimpio,ef:ef,tr:tr,
-    cuenta:cuenta||'',ts:Date.now()};
+    cuenta:cuenta||'',quien:quien||'',ts:Date.now()};
   // El aviso nombra la cuenta SÓLO cuando no es la habitual: decir "MP" sobre una
   // transferencia que entró al Brubank es la misma mentira que este cambio saca
   // una pantalla más abajo, en la Caja.
@@ -8784,7 +8878,35 @@ function npCtaDePedido(){
 function npFaltaCta(){
   return _npTrYaPagado()>0&&_ctasDigitales().length>1&&!npCta;
 }
+/* ── Quien cobro el efectivo de un pedido "ya pagado" (5/10/2026) ──
+   Misma regla que el cuadro de cobro: ninguna persona viene elegida. La lista
+   la manda el backend (`_personasCaja`); si todavia no llego, se pide. */
+var npQuien='';
+function _npEfYaPagado(){
+  var ya=(document.getElementById('npYaCobrado')||{}).checked;
+  if(!ya||npPago==='Transferencia')return 0;
+  if(npPago==='Mixto')return parseInt((document.getElementById('npEfMixto')||{}).value)||0;
+  return 1;   // Efectivo: todo el pedido
+}
+function npFaltaQuien(){return _npEfYaPagado()>0&&_personasCaja().length>0&&!npQuien;}
+function npPintarQuien(){
+  var w=document.getElementById('npQuienWrap'),box=document.getElementById('npQuienChips');
+  if(!w||!box)return;
+  var ya=(document.getElementById('npYaCobrado')||{}).checked;
+  if(ya&&npPago!=='Transferencia'&&!_bilVivasRuta){_refrescarBilleteraRuta().then(function(){if(_bilVivasRuta)npPintarQuien();});}
+  var ps=_personasCaja();
+  var mostrar=!!ya&&npPago!=='Transferencia'&&ps.length>0;
+  w.classList.toggle('hidden',!mostrar);
+  if(!mostrar){box.innerHTML='';return;}
+  box.innerHTML=ps.map(function(p){
+    var lp=String(p).replace(/[<>&"]/g,'');
+    return '<button type="button" class="np-chip'+(npQuien===p?' active':'')+'" data-p="'+lp+'" onclick="npSetQuien(this.dataset.p)">👛 '+_nombreCorto(p)+'</button>';
+  }).join('');
+}
+function npSetQuien(n){npQuien=n;npPintarQuien();}
+
 function npPintarCta(){
+  npPintarQuien();
   var w=document.getElementById('npCtaWrap'),box=document.getElementById('npCtaChips');
   if(!w||!box)return;
   var ya=(document.getElementById('npYaCobrado')||{}).checked;
@@ -10114,6 +10236,8 @@ function npGuardar(){
      decirte que falta una. */
   if(npFaltaCta()){showToast('¿A qué cuenta te transfirió? Elegila abajo de "Ya me pagó"');npPintarCta();
     var _w=document.getElementById('npCtaWrap');if(_w&&_w.scrollIntoView)_w.scrollIntoView({block:'center'});return}
+  if(npFaltaQuien()){showToast('¿Quién cobró el efectivo? Elegilo abajo de "Ya me pagó"');npPintarQuien();
+    var _wq=document.getElementById('npQuienWrap');if(_wq&&_wq.scrollIntoView)_wq.scrollIntoView({block:'center'});return}
   // El precio de este pedido lo decide ESTA tabla: el backend guarda el total que
   // le mandamos, no lo recalcula. Si no la pudimos confirmar contra la hoja, el
   // pedido y el mensaje que le llega al cliente pueden salir con un precio viejo.
@@ -10278,6 +10402,7 @@ function npGuardar(){
     }
     var _ctaYa=npCtaDePedido();
     if(_ctaYa)data.cuenta=_ctaYa;
+    if(_npEfYaPagado()>0&&npQuien)data.quien=npQuien;   // de quien es el efectivo (5/10/2026)
   }
   if(npZona==='Home'){
     data.barrioPrivado=(document.getElementById('npBarrioPrivado')||{}).value||'Estancias del Pilar';
@@ -10500,7 +10625,7 @@ function npReset(){
   var nd=document.getElementById('npChipNoDisc');if(nd)nd.classList.remove('active');
   ['npNombre','npLote','npPilarBarrio','npPilarLote','npTel','npPropina','npDescuentoManual','npGlobalPct','npEfMixto','npTrMixto'].forEach(function(id){var el=document.getElementById(id);if(el)el.value=''});
   var yc=document.getElementById('npYaCobrado');if(yc)yc.checked=false;
-  npCta='';npPintarCta();
+  npCta='';npQuien='';npPintarCta();
   var er=document.getElementById('npEnvioRegalo');if(er)er.checked=false;
   var split=document.getElementById('npMixtoSplit');if(split){split.classList.add('hidden');split.style.display='';}
   ['npSubBarrio','npClub','npDeporte','npGrupo'].forEach(function(id){var el=document.getElementById(id);if(el)el.value=''});
