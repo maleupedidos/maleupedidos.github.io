@@ -12296,7 +12296,7 @@ function _leerVersion(app){
    "El HTML no sabe que version es" dejo de ser cierto: el build le escribe
    adentro el CACHE_NAME de sw-panel.js, el mismo que deploy.sh obliga a subir en
    cada cambio. Si lo publicado dice otra cosa, esta pagina es vieja. Punto. */
-var _APP_CN_PAGINA='maleu-panel-v513';
+var _APP_CN_PAGINA='maleu-panel-v514';
 
 /* Devuelve [{k,v}] si lo publicado no es lo que esta pagina corre. */
 function _chequearVersiones(){
@@ -13880,10 +13880,13 @@ function _sbPermiso(soloSiLoTengo){
            permiso a este usuario, seguir usando el de ayer seria pasar por
            arriba de esa decision hasta que venza solo. */
         _sbTokBorrar();
+        /* El «no» del BACKEND (no el de la red) se recuerda 12 h: ver `_sbPermisoYaSiHaceFalta`. */
+        try{ localStorage.setItem(_SB_NO_LS,JSON.stringify({ u:(typeof SESSION!=='undefined'&&SESSION&&SESSION.usuario)||'', hasta:Date.now()+12*3600e3 })); }catch(e){}
         _sbPerm=false;_sbPermHasta=Date.now()+300000;return null;
       }
       _sbPerm=sb;_sbPermHasta=Date.now()+Math.max(60,(Number(sb.seg)||3600)-120)*1000;
       _sbTokGuardar(sb,_sbPermHasta);
+      try{ localStorage.removeItem(_SB_NO_LS); }catch(e){}
       return sb;
     })
     .catch(function(){_sbPidiendo=null;_sbPerm=false;_sbPermHasta=Date.now()+300000;return null;});
@@ -13904,6 +13907,36 @@ function _sbPermiso(soloSiLoTengo){
    los "no" (los recuerda 5 minutos), asi que esto no puede convertirse en una
    catarata de llamadas para el resto del equipo, que no recibe permiso. */
 var _SB_RENOVAR_T=null;
+/* LA PRIMERA APERTURA DEL DIA (5/10/2026). El permiso dura una hora: la app
+   cerrada toda la noche abre SIN permiso, la foto de Supabase no se puede leer,
+   y la pantalla espera a Google en frio — Objetivo e Inicio con «Actualizando…»
+   12-20 s (Tadeo, 8:10). Ahi la cuenta de arriba se da vuelta:
+
+       sbToken 3,5 s + foto 0,6 s  ≈ 4 s     contra     pedidosLight en frio 12-20 s
+
+   Por eso, si lo que se ve es VIEJO (la copia de pedidos tiene mas de 10 min),
+   el permiso se pide YA —desde `loadRapido`, en paralelo al lote— y la foto
+   sale apenas llega.
+   Con la copia fresca (reabrir al rato) se sigue esperando a los 12 s, como
+   siempre. El «no» de quien no recibe permiso se recuerda 12 h en el telefono:
+   si no, cada apertura de Lucas o de un vendedor pagaria una llamada de mas. */
+var _sbGenUlt=null, _SB_NO_LS='mc_sbtok_no', _SB_COPIA_VIEJA_MS=10*60*1000;
+function _sbNoGuardado(){
+  try{
+    var g=JSON.parse(localStorage.getItem(_SB_NO_LS)||'null');
+    var yo=(typeof SESSION!=='undefined'&&SESSION&&SESSION.usuario)||'';
+    return !!(g&&String(g.u||'')===String(yo)&&Number(g.hasta)>Date.now());
+  }catch(e){ return false; }
+}
+function _sbPermisoYaSiHaceFalta(){
+  if(_sbPerm||_sbPidiendo||_sbTokLeer()||_sbNoGuardado())return false;
+  if(typeof _frescoTs==='function'&&Date.now()-_frescoTs('pedidos')<_SB_COPIA_VIEJA_MS)return false;
+  var gen=_sbGenUlt;
+  _sbPermiso().then(function(sb){
+    if(sb&&gen&&!gen.llego){ try{ _fotoPedidos(gen); }catch(e){} }
+  });
+  return true;
+}
 function _sbPermisoTibio(){
   try{
     setTimeout(function(){
@@ -14949,10 +14982,14 @@ function loadRapido(opts){
      frescas (`_vf`) porque no reemplaza a `pedidosLight` — lo adelanta. */
   /* `gen` es el testigo de esta carrera: el que llega segundo no pinta. */
   var _sbGen={llego:false};
+  _sbGenUlt=_sbGen;   /* lo usa el permiso de la mañana: ver `_sbPermisoTibio` */
   try{ _sbRefrescoPedidos(_sbGen); }catch(e){}
   /* La foto de `pedidosLight` sale por el mismo carril y con el mismo testigo:
      adelanta, no reemplaza. Ver `_fotoPedidos`. */
   try{ _fotoPedidos(_sbGen); }catch(e){ _fotoPedNota('error sincrónico',(e&&e.message)||e); }
+  /* Sin permiso y con una copia vieja (la primera apertura del dia), el permiso
+     se pide YA y la foto sale cuando llega. Ver `_sbPermisoYaSiHaceFalta`. */
+  try{ _sbPermisoYaSiHaceFalta(); }catch(e){}
   var _vf=['pedidos']; if(!_soloPed&&_tengoTab('caja'))_vf.push('caja');
   _frescoEnVuelo(_vf,1);
   var _finR=function(){ _frescoEnVuelo(_vf,-1); };
