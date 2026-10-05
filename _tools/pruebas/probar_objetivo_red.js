@@ -41,6 +41,7 @@ const hojaObj = {
     return {
       getValues() { const o = []; for (let i = 0; i < (nf || 1); i++) o.push((filasObj[f - 2 + i] || []).slice(c - 1, c - 1 + (nc || 1))); return o; },
       setValues(v) { v.forEach((r, i) => { if (f - 2 + i < 0) return; const fila = filasObj[f - 2 + i] || (filasObj[f - 2 + i] = []); r.forEach((x, j) => { fila[c - 1 + j] = x; }); }); return this; },
+      setValue(x) { const fila = filasObj[f - 2] || (filasObj[f - 2] = []); fila[c - 1] = x; return this; },
       setNumberFormat() { return this; }, setFontWeight() { return this; },
     };
   },
@@ -234,6 +235,29 @@ else {
   r = llamar('_doPostRedFocoSet', { txt: '' });
   o = vm.runInContext('_roObjetivoPortal_', sandbox)(CTX({}));
   chk('quitarla la saca del portal', r.ok === true && o.foco === null, o.foco);
+}
+
+console.log('\n== El Marcador: historia, racha, récord y aplauso (5/10/2026) ==');
+if (!existe('_roHistoria_') || !existe('_doPostRedAplauso')) { chk('el Code.js tiene la historia y los aplausos del Marcador', false); }
+else {
+  /* Tres semanas cerradas con objetivo: la -1 (2, hizo 4: las 3 de aca mas «Cliente F» de arriba) y la -2 (1, hizo 1)
+     cumplidas; la -3 (3, hizo 1) no. La racha es 2 y el récord 4. */
+  const semK = n => vm.runInContext('_rtSemanaKey_', sandbox)(dia(-7 * n));
+  filasObj.push([semK(1), 'Vendedor Uno', 2, '[]', ''], [semK(2), 'Vendedor Uno', 1, '[]', ''], [semK(3), 'Vendedor Uno', 3, '[]', '']);
+  DATA.push(fila('Vendedor Uno', 'Hist A', dia(-6)), fila('Vendedor Uno', 'Hist B', dia(-5)), fila('Vendedor Uno', 'Hist C', dia(-2)),
+            fila('Vendedor Uno', 'Hist D', dia(-12)), fila('Vendedor Uno', 'Hist E', dia(-20)));
+  sesion('lucas', 'admin');
+  r = llamar('_doPostRedAplauso', { vendedor: 'Vendedor Uno', tipo: 'aplauso', txt: 'Gran semana' });
+  chk('el admin aplaude (sin Telegram igual queda guardado)', r.ok === true, r);
+  sesion('uno', 'vendedor');
+  r = llamar('_doPostRedAplauso', { vendedor: 'Vendedor Dos', tipo: 'aplauso' });
+  chk('un vendedor no puede aplaudir', r.ok === false && r.forbidden === true, r);
+  o = vm.runInContext('_roObjetivoPortal_', sandbox)(CTX({}));
+  const ult = o.hist[o.hist.length - 1];
+  chk('8 semanas de historia; la última es la pasada (meta 2, hizo 4)', o.hist.length === 8 && ult.meta === 2 && ult.lleva === 4, o.hist);
+  chk('racha 2 (la -3 no llegó y corta); récord 4; cumplió 2 de 3', o.racha === 2 && o.record === 4 && o.cumplidas === 2 && o.conMeta === 3,
+    { racha: o.racha, record: o.record, cumplidas: o.cumplidas, conMeta: o.conMeta });
+  chk('el vendedor ve el aplauso de Lucas', o.aplauso && o.aplauso.por === 'Lucas' && o.aplauso.txt === 'Gran semana' && o.aplauso.pasada === false, o.aplauso);
 }
 
 console.log('\n' + ok + ' ok · ' + mal + ' mal');

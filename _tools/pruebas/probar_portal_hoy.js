@@ -137,8 +137,9 @@ const chicos = cli => evaluar(cli, `[].filter.call(document.querySelectorAll('#o
     chk('«Arrancar la semana» manda la meta y las dos acciones', !!ps && ps.meta === 6 && ps.acciones.length === 2
       && ps.acciones[0].tipo === 'reponer' && ps.acciones[0].clave === 'Cliente Repone' && ps.acciones[1].tipo === 'libre', posts);
     t = await txt(cli);
-    chk('queda «Llevás 2 de 6 ventas» con la barra', /Llevás 2 de 6 ventas/.test(t) && (await evaluar(cli, VISIBLE('#obj-card .ob-bar-fill'))), t);
-    chk('«Si llegás, ganás unos $90.000»', /Si llegás, ganás unos \$90\.000/.test(t), t);
+    chk('queda el Marcador: 2/6, faltan 4, con 6 barras y 2 prendidas', /2\s*\/6/.test(t) && /faltan 4/i.test(t)
+      && (await evaluar(cli, `document.querySelectorAll('#obj-card .mk-segs i').length + ':' + document.querySelectorAll('#obj-card .mk-segs i.on').length`)) === '6:2', t);
+    chk('la plata aproximada: si llegás $90.000, y cuándo se cobra', /si llegás, aprox\.?\s*\$90\.000/i.test(t) && /se paga el \d+\/\d+/.test(t), t);
     chk('el equipo sumado, sin nombres (3 de 10)', /El equipo: 3 de 10 ventas/.test(t) && !/Vendedor/.test(t), t);
     /* Se mide en la pantalla: lastDashboardData vive adentro de la sub-app
        fusionada y desde afuera no se ve. */
@@ -169,7 +170,11 @@ const chicos = cli => evaluar(cli, `[].filter.call(document.querySelectorAll('#o
     console.log('\n== Llegó al objetivo ==');
     await cargar(cli, prep(DASH(Object.assign({}, OBJ_BASE, { meta: 2, lleva: 3, pasadas: 0, acciones: [] }))));
     t = await txt(cli);
-    chk('festeja y dice lo que gana con lo que lleva (3 × $15.000)', /¡Llegaste!/.test(t) && /Llevás 3 de 2 ventas/.test(t) && /\$45\.000/.test(t), t);
+    chk('el Marcador en verde: 3/2, +1 de yapa, ganó aprox. $45.000', /3\s*\/2/.test(t) && /\+1 de yapa/i.test(t) && /\$45\.000/.test(t)
+      && (await evaluar(cli, `!!document.querySelector('#obj-card .mk-board.meta')`)), t);
+    await T(500);
+    const fe = await evaluar(cli, `(function(){var f=document.querySelector('.mk-fest'); return f ? f.innerText.replace(/\\s+/g,' ') : '';})()`);
+    chk('festeja UNA vez: «¡Cumpliste la semana, Vendedor!» con lo que ganó', /Cumpliste la semana, Vendedor/.test(fe) && /\$45\.000/.test(fe), fe);
     chk('sin entregas pasadas, no muestra la línea', !/Entregas que te pasamos/.test(t), t);
 
     console.log('\n== 1440 px ==');
