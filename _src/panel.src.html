@@ -7220,6 +7220,18 @@ var API='https://script.google.com/macros/s/AKfycbxmrG5YVSshcYezk8lXFx_uxb7NFGcb
       return v + '|' + ap + '-' + (app ? 'app' : 'web');
     }catch(e){ return ''; }
   }
+  /* Lo del panel que un vendedor nunca puede recibir (ver el corte de abajo).
+     Lista cerrada a proposito: una accion que no esta aca viaja como siempre,
+     y el que decide es el backend. */
+  var _NO_ES_DEL_VENDEDOR = { sbToken: 1, lote: 1, pedidosLight: 1, cobrosPendientes: 1, cajaLight: 1,
+                              ocLight: 1, admin: 1, ventas: 1, tendencia: 1 };
+  function _esSesionVendedor(){
+    try{
+      var s = (typeof SESSION !== 'undefined' && SESSION) ? SESSION
+            : JSON.parse(localStorage.getItem('maleu_panel_session') || 'null');
+      return !!(s && s.rol === 'vendedor');
+    }catch(e){ return false; }
+  }
   window.fetch = function(input, init){
     var esBackend = false, esPost = false, postIdempotente = false;
     try{
@@ -7239,6 +7251,26 @@ var API='https://script.google.com/macros/s/AKfycbxmrG5YVSshcYezk8lXFx_uxb7NFGcb
         }
       }
     }catch(e){}
+    /* EL VENDEDOR NO HACE FILA PARA LO QUE NO LE TOCA (5/10/2026).
+       Medido con la sesion real de Marcos: al abrir Mi Portal el ERP salia a
+       buscar lo del panel (`sbToken`, `lote`, `pedidosLight`, `cobrosPendientes`,
+       `ocLight`) y el backend contestaba los cinco "sin permiso", 3,5-5,7 s
+       cada uno. Apps Script atiende de a DOS: `sbToken` y `lote` ocupaban la
+       fila los primeros 6 s y su `dashboardVendedor` salia recien ahi. Abrir
+       el portal en frio tardaba 14,4 s.
+       Se contesta aca lo mismo que contestaria el backend —`forbidden`, que
+       el ERP ya sabe manejar y nunca es "sesion vencida"—, sin viajar. Va por
+       ROL y no por pantalla: es el mismo criterio que la hoja Permisos, donde
+       el vendedor tiene una sola tab. El admin en «Ver como» no es vendedor y
+       no se toca. Ninguna de estas acciones tiene la tab `miportal`. */
+    if (esBackend && !esPost && typeof input === 'string' && _esSesionVendedor()){
+      var _accV = (input.match(/[?&]action=([A-Za-z]+)/) || [])[1] || '';
+      if (_NO_ES_DEL_VENDEDOR[_accV]){
+        try{ window.__noViajoVendedor = (window.__noViajoVendedor || 0) + 1; }catch(e){}
+        return Promise.resolve(new Response(JSON.stringify({ ok: false, forbidden: true, omitido: true,
+          err: 'Tu usuario no tiene permiso para esto' }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+      }
+    }
     /* _pedir se encarga de dos cosas: sesion vencida y reintento ante traba. */
     if (esBackend && !esPost && typeof input === 'string'){
       return _encolar(input, init);
