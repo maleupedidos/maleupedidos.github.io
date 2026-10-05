@@ -75,6 +75,9 @@ function stub(lug) {
       if (x && String(x.method||'').toUpperCase()==='POST') {
         var b={}; try{ b=JSON.parse(x.body); }catch(e){}
         window.__posts.push(b);
+        /* La primera rendicion se pierde en la red: la pantalla tiene que poder
+           reintentar con el MISMO clientOpId (hallazgo de Codex sobre v519). */
+        if (b.action==='cobrarVendedorRed' && !window.__cvrPerdida) { window.__cvrPerdida=true; return Promise.reject(new TypeError('Failed to fetch')); }
         if (b.action==='gasto'||b.action==='ingreso') return resp({ok:true, rows:1}, 30);
         return resp({ok:true}, 30);
       }
@@ -192,7 +195,11 @@ const ultimoPost = (cli) => evaluar(cli, `JSON.stringify(window.__posts[window._
     b = await evaluar(cli, `({t:document.getElementById('lugMvBtn').textContent, d:document.getElementById('lugMvBtn').disabled})`);
     chk('sin decir quien lo recibio, no se confirma', b.d === true && /Quién/.test(b.t), b);
     await click(cli, `document.querySelector('#lugMvQuien .lug-chip[data-l="${L}"]')`);
-    await click(cli, `document.getElementById('lugMvBtn')`); await pausa(300);
+    await click(cli, `document.getElementById('lugMvBtn')`); await pausa(400);
+    // la primera se perdio: la pantalla queda abierta y se toca de nuevo
+    await click(cli, `document.getElementById('lugMvBtn')`); await pausa(400);
+    const cvr = JSON.parse(await evaluar(cli, `JSON.stringify(window.__posts.filter(function(x){return x.action==='cobrarVendedorRed';}))`));
+    chk('si se pierde la respuesta, el reintento manda el MISMO clientOpId (el backend no la registra dos veces)', cvr.length === 2 && !!cvr[0].clientOpId && cvr[0].clientOpId === cvr[1].clientOpId, cvr.map(function (x) { return x.clientOpId; }));
     p = await ultimoPost(cli);
     chk('manda la rendicion de siempre con quien: Lucas', p && p.action === 'cobrarVendedorRed' && p.vendedor === 'Vendedor Uno' && p.ef === 42000 && p.tr === 0 && p.quien === L, p);
 

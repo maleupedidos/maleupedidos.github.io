@@ -157,6 +157,7 @@ const estado = cli => evaluar(cli, `JSON.stringify({
     await evaluar(cli, `_cvSetQuien(${JSON.stringify(T)}); _cvConfirm()`);
     p = await posts(cli, 'cobrarVendedorRed');
     chequear(p.length === 1 && p[0].quien === T && Number(p[0].ef) === 42000, 'con Tadeo elegido, cobrarVendedorRed lleva quien: Tadeo', JSON.stringify(p[0] || {}).slice(0, 200));
+    chequear(p.length === 1 && /^cvr_/.test(p[0].clientOpId || ''), 'y lleva clientOpId: si la cola reintenta, el backend no la registra dos veces', p[0] && p[0].clientOpId);
 
     /* 5. "Ya me pagó" del AUTOPEDIDO en efectivo */
     await arrancar(cli, BIL);
