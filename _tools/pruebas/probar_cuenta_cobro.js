@@ -34,7 +34,7 @@ const ANCHO = Number(process.argv[2]) || 390;
    authRequired, hace alert + location.reload() y la pagina se recarga a mitad
    de la medicion. */
 const ARCH = process.argv[3] || 'ruta.html';
-const BASE = 'http://localhost:8080/' + ARCH + '?standalone=1&prueba=1';
+const BASE = (process.env.BASE || 'http://localhost:8080') + '/' + ARCH + '?standalone=1&prueba=1';
 
 let ok = 0, mal = 0;
 const chequear = (cond, txt, det) => {
@@ -458,6 +458,52 @@ const tocar = (cli, sel) => evaluar(cli,
     const msg12 = await evaluar(cli, 'npResumenTextoWA()');
     chequear(/alias: \*maleump\*/.test(msg12) && !/maleubru/.test(msg12), 'un solo alias, con el formato de siempre',
       msg12.split('\n').slice(-2).join(' | '));
+
+    // ── 12. el vuelto por transferencia, pague como pague (5/10/2026) ──────
+    /* Agus Camiña, Home #1071: pago por MP y se le devolvio por transferencia.
+       El cuadro preguntaba la cuenta del vuelto solo si el cliente pagaba en
+       efectivo. */
+    console.log('\n-- pago por TRANSFERENCIA con vuelto por transferencia: pregunta de que cuenta salio --');
+    await arrancar(cli, CUENTAS);
+    await abrirCuadro(cli, '9001');
+    chequear(await tocar(cli, '#cobroRutaFp [data-cta=mp]'), 'toco "Mercado Pago Tadeo" (entro ahi)');
+    await dormir(300);
+    const t12 = Number(await evaluar(cli, '_cobroRutaState.total'));
+    await evaluar(cli, '_setMoneyInput("cobroRecEf",0);_setMoneyInput("cobroRecMP",' + (t12 + 10000) + ');_recalcCobroRuta();' +
+      '_cobroCamTocado();_setMoneyInput("cobroCamEf",0);_setMoneyInput("cobroCamMP",10000);_recalcCobroRuta();');
+    await dormir(400);
+    chequear(await evaluar(cli, 'document.getElementById("cobroCamCtaBox").style.display') !== 'none',
+      'aparece "¿De qué cuenta salió el vuelto?"');
+    chequear(!await evaluar(cli, '!!document.querySelector("#cobroCamCta .cobro-pill-cta.on")'),
+      'sin ninguna cuenta preseleccionada');
+    const b12 = await boton(cli);
+    chequear(/^OFF:Elegí de qué cuenta salió el vuelto/.test(b12), 'y el boton se traba hasta elegirla', b12);
+    const c12a = await confirmarYEsperar(cli, 'marcarCobrado');
+    chequear(c12a.length === 0, 'confirmar sin elegir NO registra nada', c12a.length);
+    chequear(await tocar(cli, '#cobroCamCta [data-cta=brubank]'), 'toco "Brubank Lucas" para el vuelto');
+    await dormir(300);
+    const c12 = await confirmarYEsperar(cli, 'marcarCobrado');
+    const o12 = c12[0] || {};
+    chequear(o12.cuenta === 'mp' && o12.vueltoTransf === 10000 && o12.cuentaCambio === 'brubank' && !o12.cambioMP,
+      'manda el cobro a MP y el vuelto de $10.000 desde Brubank (no como cambio cruzado)',
+      J({ cuenta: o12.cuenta, vt: o12.vueltoTransf, cc: o12.cuentaCambio, cmp: o12.cambioMP, tr: o12.tr }));
+    chequear(Number(o12.tr) === t12, 'la transferencia del cobro es el neto (' + t12 + ')', o12.tr);
+
+    console.log('\n-- pago en EFECTIVO con vuelto por transferencia: sigue siendo cambio cruzado --');
+    await arrancar(cli, CUENTAS);
+    await abrirCuadro(cli, '9002');
+    chequear(await tocar(cli, '#cobroRutaFp [data-fp=Efectivo]'), 'toco Efectivo');
+    await dormir(300);
+    const t13 = Number(await evaluar(cli, '_cobroRutaState.total'));
+    await evaluar(cli, '_setMoneyInput("cobroRecEf",' + (t13 + 5000) + ');_recalcCobroRuta();' +
+      '_cobroCamTocado();_setMoneyInput("cobroCamEf",0);_setMoneyInput("cobroCamMP",5000);_recalcCobroRuta();');
+    await dormir(400);
+    chequear(await evaluar(cli, 'document.getElementById("cobroCamCtaBox").style.display') !== 'none', 'pregunta la cuenta');
+    await tocar(cli, '#cobroCamCta [data-cta=mp]');
+    await dormir(300);
+    const o13 = (await confirmarYEsperar(cli, 'marcarCobrado'))[0] || {};
+    chequear(o13.cambioMP === 5000 && o13.cuentaCambio === 'mp' && !o13.vueltoTransf,
+      'manda cambioMP con la cuenta, como antes', J({ cmp: o13.cambioMP, cc: o13.cuentaCambio, vt: o13.vueltoTransf }));
 
     // ── 11. la consola ──────────────────────────────────────────────────────
     console.log('\n-- la consola --');
