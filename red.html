@@ -4474,17 +4474,9 @@ function ctrlMixtoGuardar() {
   updatePedido({ efectivoMonto: ef, transferenciaMonto: tr });
   redToast('✓ Mixto guardado: ' + ars(ef) + ' EF + ' + ars(tr) + ' TR');
 }
-function setFormaMaleu(v) {
-  if (!currentPedido) return;
-  updatePedido({ formaPagoMaleu: v });
-  showDetalle(currentPedido.n);
-}
-function togglePagoMaleu() {
-  if (!currentPedido) return;
-  const nuevo = !_esPagado(currentPedido.epm);
-  updatePedido({ estadoPagoMaleu: nuevo });
-  showDetalle(currentPedido.n);
-}
+/* setFormaMaleu / togglePagoMaleu se borraron el 6/10/2026: marcaban «Pagado a
+   Maleu» por pedido sin registrar la plata, y ya no tenian boton. Lo que el
+   vendedor entrega se registra con la rendicion por semana o con el «Recibí». */
 
 /* ═══════ NUEVO PEDIDO ═══════ */
 function showNuevoPedido() {
@@ -4876,7 +4868,9 @@ function redAbiertoHTML(p, iv, ip) {
     h += '<button type="button" onclick="redAbiertoMarcar(' + iv + ',' + ip + ',\'cobroTr\')">Cobrado · transf. a Maleu</button>'
       + '<button type="button" onclick="redAbiertoMarcar(' + iv + ',' + ip + ',\'cobroEf\')">Cobrado · efectivo al vendedor</button>';
   }
-  if (ent && debe > 0 && !pag) h += '<button type="button" onclick="redAbiertoMarcar(' + iv + ',' + ip + ',\'pagado\')">Pagado a Maleu</button>';
+  /* «Pagado a Maleu» ya no se marca a mano (6/10/2026): se registra con el
+     «Recibí» de Ruta › Cobros, que deja la plata en la caja. */
+  if (ent && debe > 0 && !pag) h += '<button type="button" onclick="redIrARecibir(' + iv + ')">Recibí la plata (' + ars(debe) + ')</button>';
   h += '</div>';
   if (p.marcadoPor) h += '<div class="va-mp">Marcado por ' + redEsc(p.marcadoPor) + '</div>';
   return h + '</div>';
@@ -4889,7 +4883,6 @@ function redAbiertoMarcar(iv, ip, que) {
   if (que === 'entrega') { updates = { entrega: true }; msg = '¿' + quien + ' entregó el pedido #' + p.n + ' de ' + (p.c || '—') + '?'; }
   else if (que === 'cobroTr') { updates = { formaPagoCliente: 'Transferencia', cobroCliente: true, montoVisto: p.cobro }; msg = '¿' + (p.c || 'El cliente') + ' le transfirió ' + ars(p.cobro) + ' a Maleu (pedido #' + p.n + ')?'; }
   else if (que === 'cobroEf') { updates = { formaPagoCliente: 'Efectivo', cobroCliente: true, montoVisto: p.cobro }; msg = '¿' + (p.c || 'El cliente') + ' le pagó ' + ars(p.cobro) + ' en efectivo a ' + quien + ' (pedido #' + p.n + ')?\n\nQueda como plata que ' + quien + ' le tiene que entregar a Maleu.'; }
-  else if (que === 'pagado') { updates = { estadoPagoMaleu: true }; msg = '¿' + quien + ' ya le entregó a Maleu los ' + ars(p.debe) + ' del pedido #' + p.n + '?\n\nEsto solo marca el pedido. Si te dio plata ahora, registrala en Ruta › Cobros › Recibí: así entra en la caja.'; }
   if (!updates || !confirm(msg)) return;
   const card = document.querySelector('#va-box [data-va="' + iv + '-' + ip + '"]');
   if (card) card.querySelectorAll('button').forEach(function (b) { b.disabled = true; });
@@ -4905,6 +4898,31 @@ function redAbiertoMarcar(iv, ip, que) {
     if (card) card.querySelectorAll('button').forEach(function (b) { b.disabled = false; });
     redToast('Sin conexión: no sé si se guardó. Tocá ↻ antes de volver a marcar.');
   });
+}
+/* Lo que el vendedor le entrega a Maleu se registra en UN solo lugar: el «Recibí»
+   de Ruta › Cobros (6/10/2026, Diagnóstico ERP arreglo 3). Ese cuadro pregunta
+   cuánto, en qué y quién lo recibió, deja la fila en «Pagos Red Liq» y la plata en
+   la caja, y recién ahí marca los pedidos «Pagado». Desde acá se salta a ese cuadro
+   ya abierto para el vendedor; el backend no acepta marcar «Pagado» a mano. */
+function redIrARecibir(iv) {
+  const v = _vaData && _vaData.vendedores[iv];
+  if (!v) return;
+  const nombre = v.nombre;
+  /* Fusionado en el ERP hay `go`; suelto (?standalone=1) no hay Ruta. Las
+     funciones de Ruta (switchTab, confirmarCobroVendedor) recien aparecen en
+     window cuando la tab Ruta arranca la primera vez: se esperan, no se exigen. */
+  if (typeof window.go !== 'function') { redToast('Abrí Ruta › Cobros y tocá «Recibí» en ' + nombre); return; }
+  window.go('ruta');
+  const t0 = Date.now();
+  let enCobros = false;
+  (function intentar() {
+    if (!enCobros && typeof window.switchTab === 'function') { try { window.switchTab('cobros'); enCobros = true; } catch (e) {} }
+    const hay = typeof window.confirmarCobroVendedor === 'function'
+      && [].some.call(document.querySelectorAll('.cobro-card'), function (c) { return c.textContent.indexOf(nombre) >= 0; });
+    if (hay) { window.confirmarCobroVendedor(nombre); return; }
+    if (Date.now() - t0 > 60000) { redToast('Cobros no terminó de cargar: tocá «Recibí» en ' + nombre); return; }
+    setTimeout(intentar, 400);
+  })();
 }
 /* LA SEMANA DE CADA VENDEDOR, PARA TADEO Y LUCAS (portal nuevo, parte 5, 5/10/2026).
    Lo que se propuso cada uno, cuanto lleva, lo que le pasamos y que acciones
