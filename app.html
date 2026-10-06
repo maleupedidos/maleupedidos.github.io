@@ -15812,6 +15812,32 @@ function _pedDesdePg(filas, estado, ahora){
   if(od&&od.ok&&od.oc&&Array.isArray(od.oc.lista)&&od.oc.lista.length&&_pedDiaAr(_fotoFechaUtc(of.computed_at))===_pedDiaAr(ahora))oc=od;
   return {ok:true,ped:d,oc:oc,alDia:alDia};
 }
+/* EL SELLO DE ESCRITURA DEL BACKEND (6/10/2026). La foto la rehace la replica,
+   que da una vuelta cada 10 min; el latido confirmado ANTES de que Lucas o un
+   repartidor escribieran sigue valiendo hasta 15. En ese hueco la tab mostraba
+   la foto sin lo que escribio el otro aparato — y el vigia, que se entera a los
+   40 s por `action=ver`, refrescaba... leyendo la misma foto.
+   `entregas_ver` cambia con CADA escritura —todo doPost salvo catering, y toda
+   edicion a mano— y empieza con la hora en ms. Si es posterior al latido, la
+   foto no lo tiene: va a Apps Script. Se reusa lo que vio el vigia hace menos
+   de 30 s; si no, se pregunta (en paralelo con la base: no suma espera).
+   Sin sello no se sabe: va a Apps Script. Devuelve los ms, o 0. */
+var PED_SELLO_RECIENTE_MS=30000;
+function _pedSelloMs(v){
+  var n=Number(String(v||'').slice(0,13));
+  return (isFinite(n)&&n>1e12)?n:0;
+}
+function _pedSelloEscritura(){
+  try{
+    var vb=window.__verBackend;
+    if(vb&&vb.v&&Date.now()-vb.t<PED_SELLO_RECIENTE_MS)return Promise.resolve(_pedSelloMs(vb.v));
+  }catch(e){}
+  return fetch(API+'?action=ver&t='+Date.now()).then(function(r){ return r.json(); }).then(function(d){
+    if(!d||!d.ok||!d.ver)return 0;
+    try{ window.__verBackend={v:String(d.ver),t:Date.now()}; }catch(e){}
+    return _pedSelloMs(d.ver);
+  }).catch(function(){ return 0; });
+}
 function _pedDeLaBase(){
   var no=function(porque){ return {usado:false,palanca:true,porque:porque}; };
   return _sbPermiso(true).then(function(sb){
@@ -15827,11 +15853,15 @@ function _pedDeLaBase(){
     };
     return Promise.all([
       g('erp_screen_snapshot?select=screen,payload,computed_at&screen=in.(pedidos,ocLight)'),
-      g('replica_status?select=domain,confirmed_at&domain=eq.foto')
+      g('replica_status?select=domain,confirmed_at&domain=eq.foto'),
+      _pedSelloEscritura()
     ]).then(function(rs){
       clearTimeout(reloj);
       var o=_pedDesdePg(rs[0],rs[1],Date.now());
       if(!o.ok)return no(o.porque);
+      var sello=rs[2];
+      if(!sello)return no('no se pudo saber cu\u00e1ndo se escribi\u00f3 por \u00faltima vez');
+      if(sello>o.alDia)return no('se escribi\u00f3 algo '+_hace(sello)+', despu\u00e9s de que la base confirm\u00f3 las fotos');
       var post=0; try{ post=Number(localStorage.getItem('maleu_ult_post'))||0; }catch(e){}
       if(Math.max(post,Number(_sbCambioLocal)||0)>o.alDia)return no('cambiaste algo despu\u00e9s de que la base confirm\u00f3 las fotos');
       return {usado:true,palanca:true,ped:o.ped,oc:o.oc,t:o.alDia};
@@ -31112,6 +31142,8 @@ function _vListaClick(e){
     _verEnVuelo = true; _vigia.miradas++;
     fetch(API + '?action=ver&t=' + Date.now()).then(function(r){ return r.json(); }).then(function(d){
       if(!d || !d.ok || !d.ver) return;
+      /* El sello de la ultima escritura, para `_pedSelloEscritura` (6/10/2026). */
+      try { window.__verBackend = { v: String(d.ver), t: Date.now() }; } catch(e){}
       if(_verVista && d.ver !== _verVista){ _verPend = true; _vigia.cambios++; _vigiaEspera = VIGIA_MS; }
       else if(_verVista) _vigiaEspera = Math.min(VIGIA_MAX, Math.round(_vigiaEspera * 1.5));
       _verVista = d.ver;

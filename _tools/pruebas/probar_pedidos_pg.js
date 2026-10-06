@@ -17,7 +17,15 @@
      frescura es la hora del latido; el ↻ (`dePlanilla`) SI va a Apps Script;
    · vuelve SOLA a Apps Script, y dice por que, si: el latido tiene 20 min ·
      no hay latido · la base da 500 · la base no contesta en 6 s · escribiste
-     algo desde este aparato despues del latido. */
+     algo desde este aparato despues del latido.
+
+   OTRO APARATO ESCRIBE (6/10/2026). `action=ver` (el sello de la ultima
+   escritura del backend) tambien va simulado, con la hora en `window.__verT`:
+   · «otro»: alguien escribio DESPUES del latido → no usa la foto, va a Apps
+     Script y lo dice;
+   · «vigia»: abre con la foto; despues otro aparato escribe y el vigia se
+     entera → el refresco que dispara va a Apps Script, no a la misma foto;
+   · «sinsello»: no se puede saber el sello → Apps Script. */
 'use strict';
 const { abrir, evaluar } = require('./cdp.js');
 const prep = require('./sesion_prep.js');
@@ -46,6 +54,8 @@ const STUB = esc => `(function(){
     if(esc==='post')localStorage.setItem('maleu_ult_post', String(Date.now()-60e3));
   }catch(e){}
   var latido = esc==='vieja' ? Date.now()-20*60e3 : Date.now()-2*60e3;
+  /* La ultima escritura del backend: antes del latido, salvo en «otro». */
+  window.__verT = esc==='otro' ? Date.now()-60e3 : Date.now()-10*60e3;
   function resp(txt,st){ return Promise.resolve(new Response(txt,{status:st||200,headers:{'Content-Type':'application/json'}})); }
   function colgar(x){ return new Promise(function(ok,no){ var s=x&&x.signal; if(s)s.addEventListener('abort',function(){ var e=new Error('aborted'); e.name='AbortError'; no(e); }); }); }
   var o=window.fetch; window.fetch=function(u,x){
@@ -70,6 +80,10 @@ const STUB = esc => `(function(){
       var m=url.match(/action=([a-zA-Z_]+)/), a=m?m[1]:'?';
       if(a==='lote'){ var ac=(url.match(/acciones=([^&]+)/)||[])[1]||''; ac.split(',').forEach(function(z){ window.__lotes.push(z); }); }
       else window.__lotes.push(a);
+      if(a==='ver'){
+        if(esc==='sinsello')return resp('{"ok":false}',500);
+        return resp(JSON.stringify({ok:true,ver:String(window.__verT)+'abcd',t:Date.now()}));
+      }
       if(a==='sbToken')return o.apply(this,arguments).then(function(r){ return r.json().then(function(d){
         d=d||{}; d.palancas=d.palancas||{}; d.palancas.pedidosPg=(esc!=='off');
         return new Response(JSON.stringify(d),{status:200,headers:{'Content-Type':'application/json'}}); }); });
@@ -100,7 +114,7 @@ const LEER = `({ lotes: window.__lotes.slice(), fuente: window.__pedFuente||null
 
 (async () => {
   console.log('\n== La tab Pedidos desde la base (datos reales) ==\n');
-  const casos = ['off', 'ok', 'vieja', 'sinlatido', 'e500', 'colgada', 'post'];
+  const casos = ['off', 'ok', 'vieja', 'sinlatido', 'e500', 'colgada', 'post', 'otro', 'sinsello', 'vigia'];
   const solo = process.env.CASO ? process.env.CASO.split(',') : casos;
   const ocN = ((OC && OC.oc && OC.oc.lista) || []).length;
   for (const esc of solo) {
@@ -120,9 +134,18 @@ const LEER = `({ lotes: window.__lotes.slice(), fuente: window.__pedFuente||null
       for (let i = 0; i < 240; i++) { if (await evaluar(cli, 'window.__rf===1')) break; await pausa(250); }
       const r2 = await evaluar(cli, LEER);
       chk('ok: el ↻ va a Apps Script (lo de este minuto)', r2.lotes.indexOf('pedidosLight') > -1 && r2.n > 100, r2.lotes);
+    } else if (esc === 'vigia') {
+      chk('vigia: abre con la foto, sin pedirle pedidos a Apps Script', !pidioPed && !!r.fuente && r.fuente.de === 'pg', r.lotes);
+      /* Otro aparato escribe AHORA; el vigia pregunta y se entera. */
+      await evaluar(cli, 'window.__verT=Date.now(); window.__lotes=[]; window._vigiaArranqueListo&&window._vigiaArranqueListo(); window._vigiaAcelerar&&window._vigiaAcelerar(0); 1');
+      for (let i = 0; i < 240; i++) { if (await evaluar(cli, "window.__lotes.indexOf('pedidosLight')>-1 && !_rapidoEnVuelo.completo")) break; await pausa(250); }
+      const v = await evaluar(cli, LEER);
+      chk('vigia: el refresco que dispara va a Apps Script', v.lotes.indexOf('pedidosLight') > -1, v.lotes);
+      chk('vigia: y dice que se escribió después del latido', !!v.fuente && v.fuente.de === 'planilla' && /se escribió algo/.test(v.fuente.porque), v.fuente);
     } else {
       const porque = { vieja: /confirmó las fotos hace/, sinlatido: /no confirma/, e500: /contestó 500/,
-        colgada: /no contestó en 6 s/, post: /cambiaste algo/ }[esc];
+        colgada: /no contestó en 6 s/, post: /cambiaste algo/, otro: /se escribió algo/,
+        sinsello: /no se pudo saber/ }[esc];
       chk(esc + ': vuelve a Apps Script', pidioPed && pidioOc && r.n > 100, r.lotes);
       chk(esc + ': y dice por qué', !!r.fuente && r.fuente.de === 'planilla' && porque.test(r.fuente.porque), r.fuente);
     }
