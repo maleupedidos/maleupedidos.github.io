@@ -16347,6 +16347,33 @@ function calMetaSemana(metaMes,s,pesos){
   var tm=pd(new Date(s.y,s.m0,1),new Date(s.y,s.m0+1,0));
   return tm>0?(Number(metaMes)||0)*pd(s.desde,s.hasta)/tm:0;
 }
+/* Que parte del mes deberia estar hecha al cierre del dia `dia`: el peso de los
+   dias 1..dia sobre el del mes entero. Reemplaza al `dia/diasMes` parejo, que el
+   jueves 1 pedia el 3% de la meta cuando el finde se lleva casi todo. */
+function calFraccionMes(y,m0,dia,pesos){
+  if(!(dia>0))return 0;
+  var fin=new Date(y,m0+1,0).getDate(),hechos=0,tot=0;
+  for(var i=1;i<=fin;i++){var w=pesos[new Date(y,m0,i).getDay()];tot+=w;if(i<=dia)hechos+=w;}
+  return tot>0?hechos/tot:0;
+}
+/* Los pesos de Maleu: lo vendido en las ultimas 12 semanas cerradas, con los
+   mismos filtros que el Resumen (`_rtRangoDatos`). Memoizado por largo de
+   `D.pedidos`. */
+var _calPesosMemo=null,_calPesosN=-1;
+function calPesosMaleu(){
+  var ps=(typeof D!=='undefined'&&D&&D.pedidos)||[];
+  if(_calPesosN===ps.length&&_calPesosMemo)return _calPesosMemo;
+  var hoy=new Date(),t=new Date(hoy.getFullYear(),hoy.getMonth(),hoy.getDate());
+  var lunes=_rtDia(t,-((t.getDay()+6)%7)),desde=_rtIso(_rtDia(lunes,-84)),hasta=_rtIso(_rtDia(lunes,-1)),v=[];
+  ps.forEach(function(p){
+    if(p.hist||p.es==='Cancelado'||!_rtEsVenta(p))return;
+    if(!p.c||!String(p.c).trim()||!(Number(p.$)>0))return;
+    var d=_tendFechaVentaISO(p);
+    if(d&&d>=desde&&d<=hasta)v.push({d:d,f:Number(p.$)});
+  });
+  _calPesosN=ps.length;_calPesosMemo=calPesosDias(v);
+  return _calPesosMemo;
+}
 function _rtEsc(t){return String(t==null?'':t).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
 function _rtBarrio(b){
   var t=String(b||'').trim();if(!t||t==='-')return '';
@@ -38008,9 +38035,13 @@ if('serviceWorker' in navigator){
     var h = '<div class="plan-tot">' + top
       + '<div class="plan-tot-v">$'+f$(real)+(M?' <small>de $'+f$(M)+'</small>':'')+'</div>';
     if(M){
-      var pct = Math.round(real/M*100), alDia = Math.round(M*cerr/dias), pAlDia = Math.min(100, Math.round(cerr/dias*100));
+      /* Donde tendria que ir, por el PESO de los dias que pasaron (6/10/2026), no
+         por cuantos pasaron: el finde se lleva casi todo, y un jueves 1 no tiene
+         que llevar el 3% de la meta. La proyeccion usa la misma cuenta. */
+      var fr = calFraccionMes(Number(planData.yyyy), Number(planData.mm)-1, cerr, calPesosMaleu());
+      var pct = Math.round(real/M*100), alDia = Math.round(M*fr), pAlDia = Math.min(100, Math.round(fr*100));
       var falta = Math.max(M-real,0), quedan = Math.max(dias-cerr,0), ritmo = cerr ? realCerr/cerr : 0;
-      var proy = Math.round(ritmo*dias), necesita = quedan ? falta/quedan : 0;
+      var proy = fr>0 ? Math.round(realCerr/fr) : 0, necesita = quedan ? falta/quedan : 0;
       var cuando = enCurso ? 'al cierre de ayer (día '+cerr+')' : 'al día '+cerr;
       h += '<div class="plan-bar"><span style="width:'+Math.min(100,pct)+'%"></span><i style="left:'+pAlDia+'%" title="Donde tendría que ir '+cuando+'"></i></div>'
         + '<div class="plan-tot-stats">'
@@ -38168,18 +38199,19 @@ if('serviceWorker' in navigator){
     }
     if(T.fuera.length) h += '<div class="pn-dif plan-mal">Hay metas de '+esc(T.fuera.join(', '))+' que no cuelgan de ningún nivel: no se suman.</div>';
     h += '<div class="pn-hd"><span>Nivel</span><span>Facturación</span><span>Ventas</span><span>Ticket</span><span>Margen</span><span>'+(enCurso?'Para llegar':'Cumplió')+'</span></div>';
+    var frC = calFraccionMes(Number(planData.yyyy), Number(planData.mm)-1, cerr, calPesosMaleu());
     function fila(n){
       var M = n.meta, R = n.real, tieneMeta = M.f > 0;
       var pct = tieneMeta ? Math.round(R.f/M.f*100) : null;
       var juicio = '';
-      if(tieneMeta && cerr > 0 && !n.soloMeta) juicio = (enCurso ? (n.cerr.f >= M.f*cerr/dias) : (R.f >= M.f)) ? 'plan-ok' : 'plan-mal';
+      if(tieneMeta && cerr > 0 && !n.soloMeta) juicio = (enCurso ? (n.cerr.f >= M.f*frC) : (R.f >= M.f)) ? 'plan-ok' : 'plan-mal';
       var tR = R.v ? R.f/R.v : 0, tM = M.v ? M.f/M.v : 0;
       var mR = R.f ? (R.f-R.c)/R.f*100 : null, mM = (M.f && !M.sinMargen && M.mb) ? M.mb/M.f*100 : null;
       var cls = 'pn-row pn-d'+Math.min(n.prof,2)+(n.prof===0?' pn-tot':'');
       var nom = esc(n.t)+(n.prof===0&&T.cargado?' <small>suma de canales</small>':'')+(n.sub?' <small>'+esc(n.sub)+'</small>':'')+(n.soloMeta?' <small>meta vieja: Home + Pilar</small>':'');
       var fac = n.soloMeta ? '<span class="pn-sin">—</span> <small>de $'+f$(M.f)+'</small>'
         : '$'+f$(R.f)+(tieneMeta?' <small>de $'+f$(M.f)+'</small> <b class="'+juicio+'">'+pct+'%</b>':' <small class="pn-sin">sin meta</small>');
-      var bar = (tieneMeta && !n.soloMeta) ? '<div class="plan-bar sm"><span style="width:'+Math.min(100,pct)+'%"></span>'+(enCurso?'<i style="left:'+Math.min(100,Math.round(cerr/dias*100))+'%"></i>':'')+'</div>' : '';
+      var bar = (tieneMeta && !n.soloMeta) ? '<div class="plan-bar sm"><span style="width:'+Math.min(100,pct)+'%"></span>'+(enCurso?'<i style="left:'+Math.min(100,Math.round(frC*100))+'%"></i>':'')+'</div>' : '';
       var falta = Math.max(M.f - R.f, 0), ult;
       if(!tieneMeta || n.soloMeta) ult = '<span class="pn-sin">—</span>';
       else if(falta <= 0) ult = '<b class="plan-ok">cumplido</b>';
@@ -38545,7 +38577,7 @@ if('serviceWorker' in navigator){
         var v = (f.ind==='manual' || f.ind==='leads') ? (d===dias || d>=cerr ? _planIndicador(f.ind, y, m0, d, f.o) : null) : _planIndicador(f.ind, y, m0, d, f.o);
         var cls = '', deb = '';
         if(v!==null && f.meta){
-          if(I.ritmo==='acum'){ var alD = f.meta*d/dias; cls = v >= alD ? 'ok' : 'mal'; deb = '<small>tendría '+_planNumTxt(alD, u)+'</small>'; }
+          if(I.ritmo==='acum'){ var alD = f.meta*calFraccionMes(y, m0, d, calPesosMaleu()); cls = v >= alD ? 'ok' : 'mal'; deb = '<small>tendría '+_planNumTxt(alD, u)+'</small>'; }
           else if(I.ritmo==='nivel' || d===dias){ cls = v >= f.meta ? 'ok' : 'mal'; }
         }
         h += '<td class="'+cls+'">'+(v===null ? '<small>al cierre</small>' : _planNumTxt(v, u)+deb)+'</td>';
@@ -39251,6 +39283,10 @@ function _objRango(periodo, mesLabel){
   var iso=function(d){ return d.getFullYear()+'-'+('0'+(d.getMonth()+1)).slice(-2)+'-'+('0'+d.getDate()).slice(-2); };
   if(!periodo || periodo==='Mes') return { d:iso(new Date(y,m,1)), h:iso(new Date(y,m+1,0)) };
   var w=Number(String(periodo).replace(/\D/g,'')); if(!w) return null;
+  /* «Semana 1» a «Semana 6» son las semanas de Maleu de ESE mes (6/10/2026): la
+     del mes, cortada en las puntas. Un numero mas grande es de antes, cuando el
+     periodo era la semana ISO («Semana 38» de septiembre): se lee como era. */
+  if(w<=6){ var sM=calSemanasMes(y,m)[w-1]; return sM ? { d:sM.d, h:sM.h } : null; }
   if(m===11 && w<10) y++; else if(m===0 && w>50) y--;
   var j4=new Date(y,0,4), lun=new Date(y,0,4-((j4.getDay()||7)-1)+(w-1)*7);
   return { d:iso(lun), h:iso(new Date(lun.getFullYear(),lun.getMonth(),lun.getDate()+6)) };
@@ -39318,7 +39354,7 @@ function _objRango(periodo, mesLabel){
     var L=_datos||[];
     if(E('leadsSello')) E('leadsSello').textContent=_sello ? (_sello.viejo ? '· copia '+_sello.hace : '· recién') : '';
     /* Arriba: cuantos trajo cada uno en el mes y en la semana, y cuantos compraron. */
-    var hoy=hoyIso(), mes=hoy.slice(0,7), wk=_objRango('Semana '+getWeek(new Date()), ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'][Number(hoy.slice(5,7))-1]+' '+hoy.slice(0,4));
+    var hoy=hoyIso(), mes=hoy.slice(0,7), wk=_objRango('Semana '+calSemanaDe(new Date()).n, ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'][Number(hoy.slice(5,7))-1]+' '+hoy.slice(0,4));
     var del=L.filter(function(l){ return !l.yaCliente && l.iso && l.iso.slice(0,7)===mes; });
     var quienes=[]; del.forEach(function(l){ var q=l.responsable||'Sin responsable'; if(quienes.indexOf(q)<0) quienes.push(q); });
     quienes.sort(function(a,b){ return del.filter(function(l){return (l.responsable||'Sin responsable')===b;}).length - del.filter(function(l){return (l.responsable||'Sin responsable')===a;}).length; });
