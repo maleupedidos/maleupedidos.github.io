@@ -9952,10 +9952,18 @@ function ajPermisoSet(rol,tab,acceso){
       <!-- Rentabilidad de productos del proveedor -->
       <div class="pv-info-card" style="margin-bottom:14px">
         <h3 class="pv-section-title" style="margin-top:0">💰 Rentabilidad de productos de este proveedor</h3>
-        <div class="pv-section-sub">Cu&aacute;nto te deja hoy cada producto, y cu&aacute;nto m&aacute;s te dejar&iacute;a si negociaras el costo para llegar al 40%. El costo es el de tu <b>&uacute;ltima compra</b>, con su fecha al lado.</div>
+        <div class="pv-section-sub">Cu&aacute;nto te deja hoy cada producto, y cu&aacute;nto m&aacute;s te dejar&iacute;a si negociaras el costo para llegar al 40%. El costo es el de tu <b>&uacute;ltima compra</b>, con su fecha al lado. <b>Vendido</b> son las entregas del per&iacute;odo (mismo criterio que Cat&aacute;logo) y <b>Stock</b> es el f&iacute;sico de hoy.</div>
+        <div class="crm-period-bar" id="pvPerBar">
+          <span class="crm-period-lbl">Vendido en:</span>
+          <button class="crm-period-chip" data-dias="7" onclick="pvSetPer(7)">7d</button>
+          <button class="crm-period-chip on" data-dias="30" onclick="pvSetPer(30)">30d</button>
+          <button class="crm-period-chip" data-dias="90" onclick="pvSetPer(90)">90d</button>
+        </div>
         <table class="pv-evol-tabla" id="pvRentTabla">
           <thead><tr>
             <th>Producto</th>
+            <th class="num" id="pvRentVendTh">Vendido 30d</th>
+            <th class="num">Stock</th>
             <th class="num">Costo</th>
             <th class="num">Precio Retail</th>
             <th class="num">Margen %</th>
@@ -9963,7 +9971,7 @@ function ajPermisoSet(rol,tab,acceso){
             <th class="num">Costo objetivo</th>
           </tr></thead>
           <tbody id="pvRentBody"></tbody>
-          <tfoot><tr style="background:#FFF8F0;font-weight:800"><td colspan="4" style="padding:10px 6px">TOTAL por mes si renegociaras todo a 40%</td><td class="num" id="pvRentTotal" style="padding:10px 6px;color:#16a34a">—</td><td></td></tr></tfoot>
+          <tfoot><tr style="background:#FFF8F0;font-weight:800"><td colspan="6" style="padding:10px 6px">TOTAL por mes si renegociaras todo a 40%</td><td class="num" id="pvRentTotal" style="padding:10px 6px;color:#16a34a">—</td><td></td></tr></tfoot>
         </table>
       </div>
 
@@ -12853,7 +12861,7 @@ function _leerVersion(app){
    "El HTML no sabe que version es" dejo de ser cierto: el build le escribe
    adentro el CACHE_NAME de sw-panel.js, el mismo que deploy.sh obliga a subir en
    cada cambio. Si lo publicado dice otra cosa, esta pagina es vieja. Punto. */
-var _APP_CN_PAGINA='maleu-panel-v529';
+var _APP_CN_PAGINA='maleu-panel-v530';
 
 /* Devuelve [{k,v}] si lo publicado no es lo que esta pagina corre. */
 function _chequearVersiones(){
@@ -38575,6 +38583,12 @@ if('serviceWorker' in navigator){
   var fGran = 'week';     // week | month | day
   var fMetric = 'qty';    // qty | costo
   var fEstado = 'all';    // all | rec (solo Recibidas)
+  var _pvPer = (function(){ try{ var v = Number(localStorage.getItem('maleu_pv_per')); return (v===7||v===90) ? v : 30; }catch(e){ return 30; } })();
+  window.pvSetPer = function(d){
+    _pvPer = d;
+    try{ localStorage.setItem('maleu_pv_per', String(d)); }catch(e){}
+    if (DATA && fProv) renderRentabilidad();
+  };
 
   function $(id){return document.getElementById(id);}
   function fmt$(n){return '$' + Math.round(n||0).toLocaleString('es-AR');}
@@ -38946,6 +38960,16 @@ if('serviceWorker' in navigator){
       if (e.proveedor === fProv && e.ultimo > 0) _ultCosto[e.abr] = {v:e.ultimo, f:e.fechaUlt};
     });
 
+    /* Vendido y Stock (6/10/2026): vienen en DATA.ventasProd, del mismo
+       analisisProveedor, para que la tab alcance sola sin permiso de Stock ni
+       de Catalogo. Si no llegaron (copia vieja o el backend fallo) es "—":
+       no saber no es cero. */
+    var VP = (DATA.ventasProd && DATA.ventasProd.ok) ? (DATA.ventasProd.prods||{}) : null;
+    var _th = $('pvRentVendTh'); if (_th) _th.textContent = 'Vendido ' + _pvPer + 'd';
+    document.querySelectorAll('#pvPerBar .crm-period-chip').forEach(function(b){
+      b.classList.toggle('on', String(b.getAttribute('data-dias')) === String(_pvPer));
+    });
+
     var META = 0.40;
     var html = '';
     var totalUpside = 0;
@@ -38962,8 +38986,13 @@ if('serviceWorker' in navigator){
       totalUpside += upside;
       var mgCls = mg<0.25 ? 'pv-evol-delta-up' : (mg>=0.40 ? 'pv-evol-delta-down' : 'pv-evol-delta-flat');
       var lbl = c.producto + ' · ' + (c.gustos || c.abr);
+      var _vp = VP ? (VP[c.abr] || null) : null;
+      var _vend = VP ? (_vp ? (_vp['v'+_pvPer]||0) : 0) : null;
+      var _stk = _vp && _vp.stock != null ? _vp.stock : null;
       html += '<tr>'
-        +'<td><b>'+esc(lbl)+'</b> <span style="color:#9ca3af;font-size:10px">'+pvCant(qty)+'/mes</span></td>'
+        +'<td><b>'+esc(lbl)+'</b> <span style="color:#9ca3af;font-size:10px">compr&eacute; '+pvCant(qty)+' este mes</span></td>'
+        +'<td class="num">'+(_vend==null ? '—' : pvCant(_vend))+'</td>'
+        +'<td class="num"'+(_stk!=null && _stk<=0 ? ' style="color:#dc2626"' : '')+'>'+(_stk==null ? '—' : pvCant(_stk))+'</td>'
         +'<td class="num">'+fmt$(_costo)
           + (_uc ? ' <span style="color:#9ca3af;font-size:10px">'+esc(_uc.f.slice(0,5))+'</span>' : '')
           + (_viejo ? '<br><span style="color:#9ca3af;font-size:10px">la hoja dice '+fmt$(_viejo)+'</span>' : '')
@@ -38974,7 +39003,7 @@ if('serviceWorker' in navigator){
         +'<td class="num">'+fmt$(costoObj)+' <span style="color:#9ca3af;font-size:10px">('+(_costo>costoObj?'bajar -':'+')+fmt$(Math.abs(_costo-costoObj))+')</span></td>'
         +'</tr>';
     });
-    if (!html) html = '<tr><td colspan="6" style="text-align:center;color:#9ca3af;padding:16px">Sin productos en catálogo</td></tr>';
+    if (!html) html = '<tr><td colspan="8" style="text-align:center;color:#9ca3af;padding:16px">Sin productos en catálogo</td></tr>';
     $('pvRentBody').innerHTML = html;
     $('pvRentTotal').innerHTML = totalUpside>0 ? '+'+fmt$(totalUpside)+' / mes' : '$0';
   }
