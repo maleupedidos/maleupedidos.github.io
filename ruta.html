@@ -5285,27 +5285,38 @@ function cobroPedirComprobante(idx){
 var _cobroVendReg={};
 function _vendNombreLimpio(s){return String(s||'').replace(/\s*\(Vendedor Red\)\s*$/,'').trim()}
 
-// HTML de la card de un vendedor Red (liquida todos sus pedidos entregados).
-// Muestra el desglose por semana ISO porque la liquidación es semana por semana,
-// igual que en el portal del vendedor — si Tadeo cobra de menos, cierra las
-// semanas viejas y la última queda abierta con saldo.
+// HTML de la card de un vendedor Red.
+// REGLA NUEVA (6/10/2026): desde el 5/10 el cliente de Red le paga a MALEU y la
+// comision se le paga al vendedor por quincena. El vendedor ya no «junta» nada:
+// solo puede tener EFECTIVO que le dio un cliente, y eso lo entrega entero. La
+// card muestra eso, y aparte lo que queda de la regla vieja (pedidos entregados
+// hasta el 4/10, que se rinden como siempre: total menos comision) hasta que se
+// cierre. El backend parte las dos (`efNuevo` / `nViejo`, _redDebeAMaleu_).
 function _cobroVendedorHTML(pc){
   var vName=_vendNombreLimpio(pc.c);
   _cobroVendReg[vName]=pc;
   var sems=pc.sems||[];
   var ya=Number(pc.yaPagado)||0;
-  var nPed=(pc.pedidosIds||[]).length;
+  var efN=Number(pc.efNuevo)||0,nN=Number(pc.nNuevo)||0;
+  var nV=pc.nViejo!=null?Number(pc.nViejo):(pc.pedidosIds||[]).length;
   var c='<div class="cobro-card" style="border-color:#c62828">';
   c+='<div class="cobro-card-head">'
     +'<span class="cobro-card-name">'+_rtcEsc(vName)
     +' <span style="font-size:9px;background:#c62828;color:#fff;padding:2px 6px;border-radius:50px;font-weight:700;vertical-align:middle">VENDEDOR RED</span></span>'
     +'<span class="cobro-card-total">'+formatMoney(pc.$)+'</span></div>';
-  c+='<div style="font-size:11px;color:var(--muted);padding:3px 0">'+nPed+' pedido'+(nPed!==1?'s':'')
-    +' &middot; Bruto '+formatMoney(pc.totalBruto||0)
-    +' &middot; Comisión '+(pc.comisionPct||17)+'% −'+formatMoney(pc.comision||0)+'</div>';
+  c+='<div style="font-size:11px;color:var(--muted);padding:3px 0">Te tiene que entregar</div>';
+  if(efN>0){
+    c+='<div style="font-size:12px;color:#1B5E20;padding:3px 0"><b>💵 '+formatMoney(efN)+'</b> en efectivo que le dieron '+nN+' cliente'+(nN!==1?'s':'')
+      +' <span style="color:var(--muted)">· va entero: su comisión se le paga por quincena</span></div>';
+  }
+  if(nV>0){
+    c+='<div style="font-size:11px;color:#5D4037;background:#F5F0E1;border-radius:6px;padding:5px 8px;margin:2px 0">'
+      +'<b>Regla vieja</b> (entregados hasta el 4/10) &middot; '+nV+' pedido'+(nV!==1?'s':'')
+      +' &middot; Bruto '+formatMoney(pc.totalBruto||0)+' &middot; Comisión −'+formatMoney(pc.comision||0)+'</div>';
+  }
   if(ya>0){
     c+='<div style="background:#E8F5E9;border-left:3px solid #2E7D32;padding:6px 9px;border-radius:6px;font-size:11px;color:#1B5E20;font-weight:700;margin:2px 0">'
-      +'✓ Ya rindió '+formatMoney(ya)+' &middot; saldo '+formatMoney(pc.$)+'</div>';
+      +'✓ Ya entregó '+formatMoney(ya)+' &middot; falta '+formatMoney(pc.$)+'</div>';
   }
   if(sems.length){
     c+='<div style="display:flex;flex-wrap:wrap;gap:5px;padding:4px 0">';
@@ -5316,7 +5327,11 @@ function _cobroVendedorHTML(pc){
     });
     c+='</div>';
   }
-  c+='<div class="cobro-card-actions"><button type="button" class="cobro-btn-cobrado" style="flex:1" onclick="confirmarCobroVendedor(\''+vName.replace(/'/g,'')+'\')">Cobrar</button></div></div>';
+  /* El nombre va escapado, NO limpiado (6/10/2026): hasta acá se le borraban
+     los apóstrofos y «Federico D'Andrea» buscaba «Federico DAndrea» en el
+     registro → «No tengo los datos de…». */
+  var jsN=vName.replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/"/g,'&quot;');
+  c+='<div class="cobro-card-actions"><button type="button" class="cobro-btn-cobrado" style="flex:1" onclick="confirmarCobroVendedor(\''+jsN+'\')">Recibí</button></div></div>';
   return c;
 }
 // Banner "COBRAR JUNTOS" para un cliente con 2+ pedidos en el mismo día.
@@ -8251,18 +8266,19 @@ function confirmarCobroVendedor(vendedor){
   var html=''
     +'<div class="confirm-box" style="padding:0;overflow:hidden;max-width:360px;text-align:left">'
     +  '<div style="padding:15px 18px 11px;border-bottom:1px solid #eee">'
-    +    '<div style="font-size:10px;font-weight:800;color:#c62828;text-transform:uppercase;letter-spacing:.6px">Liquidación &middot; Vendedor Red</div>'
+    +    '<div style="font-size:10px;font-weight:800;color:#c62828;text-transform:uppercase;letter-spacing:.6px">Lo que entrega &middot; Vendedor Red</div>'
     +    '<div style="font-size:19px;font-weight:800;color:#1a1a1a;line-height:1.2;margin-top:2px">'+nombre+'</div>'
     +  '</div>'
     +  '<div style="padding:13px 18px 2px;text-align:center">'
-    +    '<div style="font-size:10px;font-weight:800;color:#888;text-transform:uppercase;letter-spacing:.6px">Saldo a cobrar</div>'
+    +    '<div style="font-size:10px;font-weight:800;color:#888;text-transform:uppercase;letter-spacing:.6px">Te tiene que entregar</div>'
     +    '<div style="font-size:31px;font-weight:800;color:#2E7D32;line-height:1.1;margin-top:1px">'+formatMoney(saldo)+'</div>'
     +  '</div>'
     +  '<div style="padding:8px 18px 12px;font-size:12px;color:#555">'
     +    (bruto>0?'<div style="display:flex;justify-content:space-between;padding:2px 0"><span>Bruto</span><b>'+formatMoney(bruto)+'</b></div>'
     +      '<div style="display:flex;justify-content:space-between;padding:2px 0;color:#C62828"><span>Comisión'+(pctStr?' ('+pctStr+')':'')+'</span><b>−'+formatMoney(comision)+'</b></div>':'')
-    +    (ya>0?'<div style="display:flex;justify-content:space-between;padding:2px 0;color:#2E7D32"><span>✓ Ya rindió</span><b>'+formatMoney(ya)+'</b></div>':'')
-    +    '<div style="font-size:11px;color:#999;margin-top:5px">'+nPedidos+' pedido'+(nPedidos!==1?'s':'')+' pendiente'+(nPedidos!==1?'s':'')+' de liquidar</div>'
+    +    (ya>0?'<div style="display:flex;justify-content:space-between;padding:2px 0;color:#2E7D32"><span>✓ Ya entregó</span><b>'+formatMoney(ya)+'</b></div>':'')
+    +    '<div style="font-size:11px;color:#999;margin-top:5px">'+nPedidos+' pedido'+(nPedidos!==1?'s':'')+' pendiente'+(nPedidos!==1?'s':'')+'</div>'
+    +    ((Number(pc.efNuevo)||0)>0?'<div style="display:flex;justify-content:space-between;padding:2px 0;color:#1B5E20"><span>💵 Efectivo de sus clientes (desde el 5/10)</span><b>'+formatMoney(pc.efNuevo)+'</b></div>':'')
     +  '</div>'
     +  '<div style="padding:0 18px 12px"><div id="cvSemanas" style="font-size:11px"></div></div>'
     +  '<div style="padding:13px 18px 16px;background:#fafafa;border-top:1px solid #eee">'
