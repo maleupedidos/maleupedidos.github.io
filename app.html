@@ -9248,8 +9248,11 @@ function ajAutomHTML(){
    ['GUARDIA_HORAS_VARADO','Horas que un pedido puede estar sin origen antes de avisar',null],
    ['GUARDIA_MIN_DEMORA','Minutos que puede tardar un pedido de la tienda en llegar',null]
   ].forEach(function(p){
-    h += _auFila({ que: p[1], cuando: '<span class="au-nd">Config_Maleu → '+p[0]+'</span>',
-      accion: _auPalanca(p[0], cfg, p[2]) });
+    /* Las de seguridad se ven pero no se tocan desde acá (6/10/2026): «permisivo»
+       abre el backend sin login. Solo en la planilla, que guarda quién y cuándo. */
+    var seg = /^AUTH_/.test(p[0]);
+    h += _auFila({ que: p[1], cuando: '<span class="au-nd">Config_Maleu → '+p[0]+(seg?' · se cambia solo en la planilla':'')+'</span>',
+      accion: seg ? '<b>'+ajEsc((cfg[p[0]]&&cfg[p[0]].valor)||'—')+'</b>' : _auPalanca(p[0], cfg, p[2]) });
   });
   h += '</div>';
 
@@ -10999,6 +11002,13 @@ function panelDoLogout(){
      Se borra TODO lo de Maleu de este telefono y se reinicia la app: es la
      unica forma honesta de garantizar que el que entra empieza limpio.
      (21/8/2026) */
+  /* Y le avisa al servidor, que hasta el 6/10/2026 no se enteraba: el token
+     seguia valiendo 90 dias. `keepalive` para que el reload no lo corte. */
+  try{
+    var tkL=localStorage.getItem('maleu_token')||'';
+    if(tkL) fetch(API,{method:'POST',keepalive:true,headers:{'Content-Type':'text/plain;charset=utf-8'},
+      body:JSON.stringify({action:'logout',token:tkL})}).catch(function(){});
+  }catch(e){}
   try{
     var borrar=[];
     for(var i=0;i<localStorage.length;i++){
@@ -11439,6 +11449,19 @@ window.addEventListener('message',function(e){
    abrir y al volver a la app (como mucho cada 5 minutos) y, si cambiaron, vuelve
    a armar el menu. Un usuario desactivado queda afuera. */
 var _miSesionT=0;
+/* Cartel rojo si la seguridad del backend está floja (6/10/2026). Solo al admin:
+   es el único que puede volverla a «estricto» en la planilla. */
+function _cartelSeguridad(authModo, rolesModo){
+  var flojo=[];
+  if(authModo && authModo!=='estricto') flojo.push('AUTH_MODO = '+authModo+' (entra cualquiera sin login)');
+  if(rolesModo && rolesModo!=='estricto') flojo.push('AUTH_ROLES = '+rolesModo+' (no se bloquean permisos)');
+  var el=document.getElementById('cartelSeguridad');
+  if(!flojo.length || !SESSION || SESSION.rol!=='admin'){ if(el) el.remove(); return; }
+  if(!el){ el=document.createElement('div'); el.id='cartelSeguridad';
+    el.style.cssText='position:fixed;left:0;right:0;bottom:0;z-index:99999;background:#b00020;color:#fff;font:600 13px/1.35 system-ui,sans-serif;padding:8px 14px;text-align:center';
+    document.body.appendChild(el); }
+  el.textContent='⚠️ Seguridad floja: '+flojo.join(' · ')+'. Volvelo a «estricto» en la planilla, hoja Config_Maleu.';
+}
 function _refrescarMiSesion(forzar){
   if(!SESSION||!SESSION.usuario) return;
   try{ if(!localStorage.getItem('maleu_token')) return; }catch(e){ return; }
@@ -11447,6 +11470,7 @@ function _refrescarMiSesion(forzar){
   fetch(API+'?action=miSesion&t='+Date.now()).then(function(r){return r.json();}).then(function(d){
     if(!d||d.ok!==true||!SESSION) return;
     if(d.activo===false){ try{ toast('Tu usuario quedó desactivado'); }catch(e){} setTimeout(function(){ try{ panelDoLogout(); }catch(e){} },1500); return; }
+    _cartelSeguridad(d.authModo, d.rolesModo);
     var tabs=Array.isArray(d.tabs)?d.tabs:null;
     var orden=function(x){ return JSON.stringify((x||[]).slice().sort()); };
     if(d.rol===SESSION.rol && orden(tabs)===orden(SESSION.tabs)) return;
@@ -12908,7 +12932,7 @@ function _leerVersion(app){
    "El HTML no sabe que version es" dejo de ser cierto: el build le escribe
    adentro el CACHE_NAME de sw-panel.js, el mismo que deploy.sh obliga a subir en
    cada cambio. Si lo publicado dice otra cosa, esta pagina es vieja. Punto. */
-var _APP_CN_PAGINA='maleu-panel-v536';
+var _APP_CN_PAGINA='maleu-panel-v537';
 
 /* Devuelve [{k,v}] si lo publicado no es lo que esta pagina corre. */
 function _chequearVersiones(){
@@ -17024,7 +17048,7 @@ function confirmarDeshacerOrigen(btn){
           }
         }
         render();hideLoader(true);
-        toast('Origen deshecho · '+(r.ocBorradas||0)+' OC borrada'+(r.ocBorradas===1?'':'s'));
+        toast('Origen deshecho · '+(r.ocBorradas||0)+' OC borrada'+(r.ocBorradas===1?'':'s')+(r.aviso?' · ⚠️ '+r.aviso:''),r.aviso?9000:undefined);
         _recargarPedidos().then(function(){window._forceTopOnRender=false;});
       } else {
         hideLoader(true);window._forceTopOnRender=false;
@@ -17467,10 +17491,11 @@ function guardarEditor(uid){
         var msg='Pedido actualizado';
         if(r.autoReReservado) msg+=' · Auto-reservado ✓';
         else if(r.origenReseteado) msg+=' (origen reseteado)';
+        if(r.aviso) msg+=' · ⚠️ '+r.aviso;
         /* El cliente pidio el cambio y espera que le cuenten como quedo: sin
            esto, el detalle actualizado esta a un toque y nadie se enteraria. */
         msg+=' — abr\u00ed la ficha y copi\u00e1 el detalle para el cliente';
-        toast(msg);
+        toast(msg,r.aviso?9000:undefined);
         // Reconciliar en background — sin loader visible
         _recargarPedidos().then(function(){window._forceTopOnRender=false;});
       }else{
@@ -17583,7 +17608,8 @@ function confirmarOrigen(btn){
         render();hideLoader(true);
         var _m='Origen guardado';
         if(r.ocBorradas>0) _m+=' · '+r.ocBorradas+' OC quitada'+(r.ocBorradas>1?'s':'');
-        toast(_m);
+        if(r.aviso) _m+=' · ⚠️ '+r.aviso;   // OC pedida anulada / recibida intacta (6/10/2026)
+        toast(_m,r.aviso?9000:undefined);
         _recargarPedidos().then(function(){window._forceTopOnRender=false;}); // reconciliar en background
       }
       else{hideLoader(true);window._forceTopOnRender=false;btn.disabled=false;btn.textContent='ERROR: '+(r.error||r.err||'?');btn.classList.remove('saving');}
@@ -45739,6 +45765,13 @@ function doLogout() {
   /* En «Ver como», Salir es salir del portal ajeno, no cerrarle la sesion del
      ERP al admin (este doLogout borra el token). */
   if (redVerComo) { redVerComoSalir(); return; }
+  /* Le avisa al servidor que cierre este token (6/10/2026): antes seguia
+     valiendo 90 dias aunque el vendedor tocara Salir. */
+  try {
+    var tkL = localStorage.getItem('maleu_token') || '';
+    if (tkL) fetch(APPS_SCRIPT_URL, { method: 'POST', keepalive: true, headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({ action: 'logout', token: tkL }) }).catch(function(){});
+  } catch(e) {}
   try {
     localStorage.removeItem('maleu_token');
     localStorage.removeItem('maleu_red_session');
