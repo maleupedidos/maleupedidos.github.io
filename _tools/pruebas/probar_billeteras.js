@@ -96,7 +96,7 @@ async function abrirCon(cli, lug) {
   await cli.enviar('Page.navigate', { url: BASE + '/' + APP + '?prueba=1' });
   if (!await esperar(cli, `typeof go==='function'`, 60000)) return false;
   await evaluar(cli, `go('caja'); 1`);
-  return await esperar(cli, `document.querySelectorAll('#cBal .bal-card').length>=4`, 30000);
+  return await esperar(cli, `!!document.querySelector('#cBal .cj-ef')`, 30000);
 }
 const texto = (cli, sel) => evaluar(cli, `(document.querySelector(${JSON.stringify(sel)})||{}).textContent||''`);
 const click = (cli, js) => evaluar(cli, `(()=>{ var e=${js}; if(!e) return false; e.click(); return true; })()`);
@@ -118,20 +118,19 @@ const ultimoPost = (cli) => evaluar(cli, `JSON.stringify(window.__posts[window._
     await evaluar(cli, `SESSION.nombre=${JSON.stringify(T)}; rCaja(); 1`);
 
     /* ── La tarjeta ── */
-    const ef = (await texto(cli, '#cBal .bal-card')).replace(/\s+/g, ' ');
+    const ef = (await texto(cli, '#cBal')).replace(/\s+/g, ' ');
     chk('la tarjeta de Efectivo dice $1.135.000', /1\.135\.000/.test(ef), ef);
-    for (const [t, re] of [['Billetera Tadeo $20.000', /Billetera Tadeo\s*\$20\.000/], ['Billetera Lucas $15.000', /Billetera Lucas\s*\$15\.000/],
-      ['Sin guardar · Tadeo $120.000', /Sin guardar · Tadeo\s*\$120\.000/], ['Sin guardar · Lucas $80.000', /Sin guardar · Lucas\s*\$80\.000/],
+    for (const [t, re] of [['lo mío: Billetera $20.000 y Sin guardar $120.000', /Lo mío · Tadeo.*Billetera\s*\$20\.000.*Sin guardar\s*\$120\.000/], ['lo de Lucas en chico: 👛 $15.000 · 💰 $80.000', /Lucas\s*👛 \$15\.000 · 💰 \$80\.000/],
       ['Caja fuerte $900.000', /Caja fuerte\s*\$900\.000/], ['la reserva del proveedor $300.000 (el nombre llega sin < > &, como en todo el panel)', /Proveedor bA\/b\s*\$300\.000/], ['libre $600.000', /libre\s*\$600\.000/]]) {
       chk('muestra ' + t, re.test(ef), ef);
     }
-    chk('el nombre del proveedor va escapado (no hay <b> adentro de la tarjeta)', await evaluar(cli, `!document.querySelector('#cBal .bal-card b b')`) === true);
+    chk('el nombre del proveedor va escapado (no hay <b> adentro de la tarjeta)', await evaluar(cli, `!document.querySelector('#cBal .cj-ef b b')`) === true);
     chk('no estan los botones viejos (Di cambio, Mover, Sobres)', !/Di cambio|Sobres|↔ Mover/.test(ef), ef);
     chk('Tadeo tiene cobrado sin guardar: aparece "Guardé lo cobrado"', /Guardé lo cobrado/.test(ef), ef);
     chk('sin descuadre no hay aviso', !/no suman el total/.test(ef));
 
     /* ── Mover efectivo: abrir sin atajo ── */
-    await click(cli, `[].slice.call(document.querySelectorAll('#cBal button')).filter(function(b){return /Mover efectivo/.test(b.textContent);})[0]`);
+    await click(cli, `document.getElementById('cjBMover')`);
     await pausa(150);
     const m0 = await evaluar(cli, `(()=>({ abierto: !document.getElementById('lugMoverForm').classList.contains('hidden'),
       elegidos: document.querySelectorAll('#lugMoverForm .lug-chip.on').length,
@@ -231,7 +230,7 @@ const ultimoPost = (cli) => evaluar(cli, `JSON.stringify(window.__posts[window._
 
     /* ── Descuadre a la vista ── */
     await evaluar(cli, `D.lugares.descuadre=1500; rCaja(); 1`); await pausa(100);
-    chk('si los lugares no suman el total, la tarjeta lo dice', /no suman el total/.test(await texto(cli, '#cBal .bal-card')));
+    chk('si los lugares no suman el total, la tarjeta lo dice', /no suman el total/.test(await texto(cli, '#cBal')));
 
     /* ── Medidas ── */
     await evaluar(cli, `D.lugares.descuadre=0; rCaja(); abrirMoverLug(''); 1`); await pausa(200);
@@ -245,7 +244,7 @@ const ultimoPost = (cli) => evaluar(cli, `JSON.stringify(window.__posts[window._
     /* ── Sin arrancar: el conteo de arranque ── */
     await cli.enviar('Page.addScriptToEvaluateOnNewDocument', { source: '' });
     if (!await abrirCon(cli, { activo: false, personas: [T, L], sinAsignar: true })) { console.log('  la caja (sin arrancar) no se dibujo'); salir(1); }
-    const ef2 = (await texto(cli, '#cBal .bal-card')).replace(/\s+/g, ' ');
+    const ef2 = (await texto(cli, '#cBal .cj-ef')).replace(/\s+/g, ' ');
     chk('sin arrancar: la tarjeta de siempre con "Arrancar billeteras"', /Arrancar billeteras/.test(ef2) && /Caja fuerte/.test(ef2), ef2);
     await evaluar(cli, `toggleAjuste(); 1`); await pausa(200);
     await evaluar(cli, `(()=>{ var i=document.getElementById('ajMP'); i.value='5000000'; i.dispatchEvent(new Event('input')); return 1; })()`);
