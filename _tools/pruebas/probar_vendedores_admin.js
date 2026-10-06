@@ -46,7 +46,7 @@ setTimeout(() => { console.log('TIMEOUT global'); process.exit(2); }, 200000);
     console.log('   ' + v.vend.join(' | '));
     chk('los 4 vendedores en una sola pantalla', v.vend.length === 4, v.vend);
     chk('los 6 pedidos abiertos (Marcos 4, Rufino 1, Fede 1)', v.peds === 6, v.peds);
-    chk('Fede #112: debe la liquidación vieja y ofrece «Pagado a Maleu»', /Debe a Maleu \$965\.420 \(regla vieja\)/.test(v.fede || '') && /Pagado a Maleu/.test(v.fede || ''), v.fede);
+    chk('Fede #112: debe la liquidación vieja y ofrece «Recibí la plata»', /Debe a Maleu \$965\.420 \(regla vieja\)/.test(v.fede || '') && /Recibí la plata/.test(v.fede || ''), v.fede);
     chk('botones de 44 px o más (' + v.botones + ')', v.botones > 0 && v.chicos === 0, v.chicos);
     chk('sin scroll horizontal', v.ancho <= W, v.ancho);
     // Marcar entregado un pedido de Marcos, sin entrar con «Ver como»
@@ -62,13 +62,17 @@ setTimeout(() => { console.log('TIMEOUT global'); process.exit(2); }, 200000);
     posts = await evaluar(cli, 'window.__posts');
     const p2 = posts.filter((x) => x.action === 'updatePedidoRed').find((x) => x.pedidoId === '107');
     chk('Cobrado · efectivo: forma Efectivo, cobroCliente y montoVisto $39.600 + envío', p2 && p2.updates.formaPagoCliente === 'Efectivo' && p2.updates.cobroCliente === true && p2.updates.montoVisto > 0, p2);
-    // Pagado a Maleu de Fede
-    await evaluar(cli, `(function(){var c=[].filter.call(document.querySelectorAll('#va-box .va-p'),function(x){return /#112/.test(x.textContent)})[0];[].filter.call(c.querySelectorAll('button'),function(b){return /Pagado a Maleu/.test(b.textContent)})[0].click();return 1})()`);
-    await sleep(800);
+    // Lo que debe Fede: ya no se marca «Pagado» a mano, se salta al «Recibí» de Ruta › Cobros (6/10/2026)
+    const bt = await evaluar(cli, `(function(){var c=[].filter.call(document.querySelectorAll('#va-box .va-p'),function(x){return /#112/.test(x.textContent)})[0];
+      var b=[].filter.call(c.querySelectorAll('button'),function(b){return /Recibí la plata/.test(b.textContent)})[0];var hayPag=[].some.call(document.querySelectorAll('#va-box button'),function(b){return /^Pagado a Maleu$/.test(b.textContent.trim())});
+      if(b)setTimeout(function(){b.click()},0);return {txt:b?b.textContent:'',hayPag:hayPag}})()`);
+    chk('no queda ningún botón «Pagado a Maleu»', bt.hayPag === false, bt);
+    chk('Fede #112 ofrece «Recibí la plata ($965.420)»', /Recibí la plata \(\$965\.420\)/.test(bt.txt), bt);
+    const tR = await esperar(cli, `(function(){var o=document.getElementById('confirmOverlay');return o&&/Federico D'Andrea/.test(o.textContent)&&/Te tiene que entregar/.test(o.textContent)})()`, 90000);
+    console.log('   cuadro de Recibí abierto en ' + tR + ' ms');
+    chk('abre Ruta › Cobros con el cuadro de Recibí de Fede', tR >= 0, await evaluar(cli, '(document.getElementById("confirmOverlay")||{}).textContent'));
     posts = await evaluar(cli, 'window.__posts');
-    const p3 = posts.filter((x) => x.action === 'updatePedidoRed').find((x) => x.pedidoId === '112');
-    chk("Pagado a Maleu: estadoPagoMaleu para Federico D'Andrea", p3 && p3.vendedor === "Federico D'Andrea" && p3.updates.estadoPagoMaleu === true, p3);
-    chk('avisa que la plata se registra en Ruta › Cobros › Recibí', dialogos.some((m) => /Ruta › Cobros › Recibí/.test(m)));
+    chk('no mandó ningún «Pagado» por pedido', !posts.some((x) => x.updates && ('estadoPagoMaleu' in x.updates)), posts);
     const err = await evaluar(cli, 'window.__err');
     chk('sin errores de JS', !err.length, err);
   } finally { cli.matar(); }
