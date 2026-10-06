@@ -70,7 +70,7 @@ const STUB = esc => `(function(){
       var q=url.split('/rest/v1/')[1]||url;
       if(/erp_screen_snapshot|replica_status/.test(q))window.__pg.push(q.split('?')[0]+(q.indexOf('domain=eq.foto')>-1?':foto':''));
       /* «sinlatido» devuelve vacio: desde @804 la fila real existe. */
-      if(q.indexOf('replica_status')===0&&q.indexOf('domain=eq.foto')>-1)
+      if(q.indexOf('replica_status')===0)
         return resp(esc==='sinlatido'?'[]':JSON.stringify([{domain:'foto',confirmed_at:new Date(latido).toISOString()}]));
       var mr=q.match(/screen=eq\.(crm[A-Za-z]+)/);
       if(q.indexOf('erp_screen_snapshot')===0&&mr&&FOTOS[mr[1]]){
@@ -179,7 +179,12 @@ const LEER = `({ n:(window.estClientesSync()||[]).length, pgN:window.__pgN, gets
       chk('ok: con otro período (7 días) va a Apps Script, como siempre', p7.gets.indexOf('crmProductos') > -1 && p7.filas > 0, p7);
     } else if (esc === 'vigia') {
       chk('vigia: abre con la foto, sin pedirle la lista a Apps Script', !pidioPlanilla && /^De la base/.test(r.cartel), r);
-      await evaluar(cli, 'window.__verT=Date.now(); window.__gets=[]; window._vigiaArranqueListo&&window._vigiaArranqueListo(); window._vigiaAcelerar&&window._vigiaAcelerar(0); 1');
+      /* En dos pasos: el vigia compara contra lo que vio la vez anterior, asi que
+         primero mira con el sello viejo y recien despues ve el cambio. */
+      await evaluar(cli, 'window.__t0vig=Date.now(); window._vigiaArranqueListo&&window._vigiaArranqueListo(); window._vigiaAcelerar&&window._vigiaAcelerar(0); 1');
+      for (let i = 0; i < 80; i++) { if (await evaluar(cli, "!!(window.__verBackend&&window.__verBackend.t>window.__t0vig)")) break; await pausa(250); }
+      await pausa(300);
+      await evaluar(cli, 'window.__verT=Date.now(); window.__gets=[]; window._vigiaAcelerar&&window._vigiaAcelerar(0); 1');
       for (let i = 0; i < 240; i++) { if (await evaluar(cli, "window.__gets.indexOf('crmClientes')>-1")) break; await pausa(250); }
       const v = await evaluar(cli, LEER);
       chk('vigia: otro aparato escribe y el refresco del vigía va a Apps Script', v.gets.indexOf('crmClientes') > -1, v.gets);
