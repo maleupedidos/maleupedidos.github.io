@@ -12347,6 +12347,7 @@ function _volcarLight(d,ts,conLista,sinInicio){
      se renovaba con el volcado completo, y en un celular la semana 37 quedo
      congelada en la foto de un dia de esa semana (9 clientes contra 42). */
   if(d.saludSem)D.saludSem=d.saludSem;
+  if(d.saludSemM)D.saludSemM=d.saludSemM;
   if(d.saludMes)D.saludMes=d.saludMes;
   if(Array.isArray(d.ventasExtra))D.ventasExtra=d.ventasExtra;
   /* Los totales del negocio y la deuda de los vendedores (27/9/2026).
@@ -16268,6 +16269,84 @@ function _rtPerGuardado(hoy){
 var RT_MESES=['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
 function _rtIso(d){return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');}
 function _rtDia(d,n){return new Date(d.getFullYear(),d.getMonth(),d.getDate()+n);}
+/* ═══ EL CALENDARIO DE MALEU (6/10/2026) ═══════════════════════════════════════
+   Manda el MES calendario, partido en semanas de lunes a domingo; las de las
+   puntas quedan cortas. Sem 1 de octubre 2026 = jue 1 a dom 4; la sem 1 de
+   noviembre 2026 es solo el domingo 1. Decidido el 5/10 (Fede, Lucas, Tadeo): la
+   semana 28/9–4/10 se presento entera como de octubre y mezclaba 3 dias de
+   septiembre.
+
+   Es LA cuenta de semanas para reportar. Espejo exacto en Code.js
+   (`_calSemanasMes_`), y `_tools/probar_calendario.js` corre las dos sobre los
+   mismos bordes: si una se corre, el test lo dice.
+
+   NO lo usan, a proposito:
+   - el objetivo semanal de los vendedores (Mi Portal, Red, Telegram del viernes):
+     para ellos la semana es la ISO entera, el corte de mes no les cambia nada;
+   - las series continuas (Ventas > Tendencia, el grafico de 8 semanas): partir
+     una serie mete una caida falsa cada fin de mes.
+
+   Una semana corta no se compara pelada contra una entera: el Resumen la compara
+   contra los MISMOS dias de la semana anterior, y su meta sale de `calMetaSemana`,
+   que reparte por el peso historico de cada dia (Maleu vende casi todo vie/sab). */
+var CAL_MES=['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'];
+function _calSem(y,m0,n,desde,hasta){
+  var dias=Math.round((hasta-desde)/864e5)+1;
+  var rango=desde.getDate()===hasta.getDate()?String(desde.getDate()):(desde.getDate()+'–'+hasta.getDate());
+  return {y:y,m0:m0,n:n,k:y+'-'+String(m0+1).padStart(2,'0')+'-'+n,desde:desde,hasta:hasta,
+          d:_rtIso(desde),h:_rtIso(hasta),dias:dias,corta:dias<7,
+          rango:rango+' '+CAL_MES[m0],
+          tit:'Sem '+n+' · '+rango+' '+CAL_MES[m0]+' · '+dias+(dias===1?' día':' días')};
+}
+/* Las semanas del mes `m0` (0-11) de `y`, en orden. */
+function calSemanasMes(y,m0){
+  var out=[],d=new Date(y,m0,1),fin=new Date(y,m0+1,0);
+  while(d<=fin){
+    var h=_rtDia(d,(7-d.getDay())%7);   // el domingo de esa semana
+    if(h>fin)h=fin;
+    out.push(_calSem(y,m0,out.length+1,d,h));
+    d=_rtDia(h,1);
+  }
+  return out;
+}
+/* La semana de Maleu que contiene la fecha `f` (Date o 'aaaa-mm-dd'). */
+function calSemanaDe(f){
+  var d=(typeof f==='string')?_rtDeIso(f):new Date(f.getFullYear(),f.getMonth(),f.getDate());
+  if(!d)return null;
+  var ss=calSemanasMes(d.getFullYear(),d.getMonth());
+  for(var i=0;i<ss.length;i++)if(d<=ss[i].hasta)return ss[i];
+  return null;
+}
+/* '2026-10-1' → la semana 1 de octubre 2026, o null si no existe. */
+function calSemanaPorClave(k){
+  var m=String(k||'').match(/^(\d{4})-(\d{1,2})-(\d)$/);if(!m)return null;
+  return calSemanasMes(+m[1],+m[2]-1)[+m[3]-1]||null;
+}
+/* `paso` semanas para adelante (o para atras, si es negativo). */
+function calMover(s,paso){
+  for(var i=0;s&&i<Math.abs(paso);i++)s=calSemanaDe(paso>0?_rtDia(s.hasta,1):_rtDia(s.desde,-1));
+  return s;
+}
+/* Cuanto pesa cada dia de la semana en la venta, de `ventas` = [{d:'aaaa-mm-dd',
+   f:$}]. Devuelve 7 numeros (indice = getDay, 0 = domingo) que suman 1. Sin
+   historia, pesan igual: repartir parejo es mejor que no repartir. */
+function calPesosDias(ventas){
+  var p=[0,0,0,0,0,0,0],tot=0;
+  (ventas||[]).forEach(function(v){
+    var d=_rtDeIso(v.d),f=Number(v.f)||0;
+    if(!d||!(f>0))return;
+    p[d.getDay()]+=f;tot+=f;
+  });
+  return p.map(function(x){return tot>0?x/tot:1/7;});
+}
+/* La parte de `metaMes` que le toca a la semana `s`: el peso de SUS dias sobre
+   el peso de todos los dias del mes. Sem 1 de octubre (jue-dom) se lleva mucho
+   mas que 4/31 de la meta, porque tiene un viernes y un sabado. */
+function calMetaSemana(metaMes,s,pesos){
+  var pd=function(a,b){var t=0;for(var d=a;d<=b;d=_rtDia(d,1))t+=pesos[d.getDay()];return t;};
+  var tm=pd(new Date(s.y,s.m0,1),new Date(s.y,s.m0+1,0));
+  return tm>0?(Number(metaMes)||0)*pd(s.desde,s.hasta)/tm:0;
+}
 function _rtEsc(t){return String(t==null?'':t).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
 function _rtBarrio(b){
   var t=String(b||'').trim();if(!t||t==='-')return '';
@@ -16304,7 +16383,9 @@ function _rtDeIso(s){
    asi que un periodo elegido sobrevive a recargar la pantalla:
 
      sem · semAnt · mes · mesAnt     los atajos
-     w:2026-38                       una semana ISO concreta
+     s:2026-10-1                     una semana de Maleu (sem 1 de octubre)
+     w:2026-38                       VIEJA (semana ISO): se traduce sola a la
+                                     semana de Maleu de su jueves
      m:2026-09                       un mes concreto
      r:2026-09-01:2026-09-15         un rango a medida                        */
 function _rtPeriodo(k,hoy){
@@ -16314,18 +16395,25 @@ function _rtPeriodo(k,hoy){
   var dm=function(d){return d.getDate()+'/'+(d.getMonth()+1);};
   var o={k:k};
   var mw=String(k||'').match(/^w:(\d{4})-(\d{1,2})$/);
+  var ms=String(k||'').match(/^s:(\d{4}-\d{1,2}-\d)$/);
+  /* Las semanas son las del calendario de Maleu (6/10/2026): la del mes, cortada
+     en las puntas. Se comparan contra los MISMOS dias de la semana anterior —la
+     sem 1 de octubre (jue 1 a dom 4) contra jue 24 a dom 27/9—, nunca una semana
+     corta pelada contra una entera. */
+  var semDe=function(S){
+    o.tipo='sem';o.sem=S;
+    o.desde=S.desde;o.hasta=S.hasta;
+    if(o.hasta>t){o.hasta=t;o.enCurso=true;}
+    o.cDesde=_rtDia(o.desde,-7);o.cHasta=_rtDia(o.hasta,-7);
+    o.tit=S.tit+(o.enCurso?(' · hasta hoy '+DIA[t.getDay()]):' · cerrada');
+    o.vs='los mismos días de la semana anterior ('+dm(o.cDesde)+' → '+dm(o.cHasta)+')';
+  };
   var mM=String(k||'').match(/^m:(\d{4})-(\d{1,2})$/);
   var mr=String(k||'').match(/^r:(\d{4}-\d{2}-\d{2}):(\d{4}-\d{2}-\d{2})$/);
   if(k==='sem'){
-    o.tipo='sem';
-    o.desde=lun;o.hasta=t;o.cDesde=_rtDia(lun,-7);o.cHasta=_rtDia(t,-7);
-    o.tit='Semana '+getWeek(lun)+' · lun '+dm(lun)+' → hoy '+DIA[t.getDay()];
-    o.vs='la semana '+getWeek(o.cDesde)+' hasta el '+DIA[t.getDay()];
+    semDe(calSemanaDe(t));
   }else if(k==='semAnt'){
-    o.tipo='sem';
-    o.desde=_rtDia(lun,-7);o.hasta=_rtDia(lun,-1);o.cDesde=_rtDia(lun,-14);o.cHasta=_rtDia(lun,-8);
-    o.tit='Semana '+getWeek(o.desde)+' · lun '+dm(o.desde)+' → dom '+dm(o.hasta)+' · cerrada';
-    o.vs='la semana '+getWeek(o.cDesde);
+    semDe(calMover(calSemanaDe(t),-1));
   }else if(k==='mes'){
     o.tipo='mes';
     o.desde=new Date(t.getFullYear(),t.getMonth(),1);o.hasta=t;
@@ -16334,16 +16422,10 @@ function _rtPeriodo(k,hoy){
     o.cHasta=new Date(t.getFullYear(),t.getMonth()-1,Math.min(t.getDate(),ult));
     o.tit=RT_MESES[t.getMonth()]+' '+t.getFullYear()+' · del 1 al '+t.getDate();
     o.vs=RT_MESES[o.cDesde.getMonth()].toLowerCase()+' hasta el '+o.cHasta.getDate();
+  }else if(ms&&calSemanaPorClave(ms[1])&&calSemanaPorClave(ms[1]).desde<=t){
+    semDe(calSemanaPorClave(ms[1]));
   }else if(mw){
-    o.tipo='sem';
-    var L=_rtLunesISO(+mw[1],+mw[2]);
-    o.desde=L;o.hasta=_rtDia(L,6);o.cDesde=_rtDia(L,-7);o.cHasta=_rtDia(L,-1);
-    /* Si la semana elegida es la que esta corriendo, se corta en HOY: mostrarla
-       entera sumaria dias que todavia no pasaron y el total caeria por abajo
-       sin motivo. Y se compara contra los MISMOS dias de la anterior. */
-    if(o.hasta>t){ o.hasta=t; o.cHasta=_rtDia(t,-7); o.enCurso=true; }
-    o.tit='Semana '+getWeek(L)+' · lun '+dm(L)+' → '+(o.enCurso?('hoy '+DIA[t.getDay()]):('dom '+dm(o.hasta)+' · cerrada'));
-    o.vs='la semana '+getWeek(o.cDesde)+(o.enCurso?(' hasta el '+DIA[t.getDay()]):'');
+    semDe(calSemanaDe(_rtDia(_rtLunesISO(+mw[1],+mw[2]),3)));
   }else if(mM){
     o.tipo='mes';
     var y=+mM[1],mi=+mM[2]-1;
@@ -16383,8 +16465,7 @@ function _rtPeriodo(k,hoy){
 function _rtMover(k,hoy,paso){
   var P=_rtPeriodo(k,hoy);
   if(P.tipo==='sem'){
-    var L=_rtDia(P.desde,paso*7);
-    return 'w:'+_rtDia(L,3).getFullYear()+'-'+getWeek(L);
+    return 's:'+calMover(P.sem,paso).k;
   }
   if(P.tipo==='mes'){
     var d=new Date(P.desde.getFullYear(),P.desde.getMonth()+paso,1);
@@ -16432,18 +16513,11 @@ function _rtMesesConDatos(){
   }
   return out;
 }
-/* Las semanas ISO que TOCAN ese mes. Una semana a caballo de dos meses —la del
-   29/9 al 5/10— sale en los dos a proposito: esconderla en uno haria que desde
-   ese mes no se pueda llegar a ella. */
+/* Las semanas de Maleu de ese mes (6/10/2026). Hasta ese dia eran las semanas
+   ISO que TOCABAN el mes, y la del 28/9 al 4/10 salia entera en los dos. */
 function _rtSemanasDelMes(ym){
   var m=String(ym).match(/^(\d{4})-(\d{2})$/);if(!m)return [];
-  var y=+m[1],mi=+m[2]-1,fin=new Date(y,mi+1,0),out=[],vis={};
-  for(var d=new Date(y,mi,1);d<=fin;d=_rtDia(d,1)){
-    var L=_rtDia(d,-((d.getDay()+6)%7));
-    var k=_rtDia(L,3).getFullYear()+'-'+getWeek(L);
-    if(!vis[k]){vis[k]=1;out.push({k:k,lun:L,n:getWeek(L)});}
-  }
-  return out;
+  return calSemanasMes(+m[1],+m[2]-1);
 }
 /* Los clientes domiciliarios del periodo que se mira (14/9/2026, a la tarde).
    Lucas abrio el Resumen el lunes y el cuadro de clientes no estaba: vivia en la
@@ -16459,8 +16533,10 @@ function _rtClientes(P){
      cliente que compro dos veces tiene que contarse una sola y eso no se puede
      rearmar sumando. Antes que inventarlo, no se dibuja. */
   if(P.tipo==='libre')return null;
+  /* Por semana de Maleu (6/10/2026): `D.saludSemM`, "aaaa-mm-n". Si el servidor
+     todavia no lo manda, no se dibuja: el de la semana ISO seria OTRA semana. */
   if(P.tipo==='sem'){
-    return (D.saludSem&&D.saludSem[_rtDia(P.desde,3).getFullYear()+'-'+getWeek(P.desde)])||null;
+    return (D.saludSemM&&P.sem&&D.saludSemM[P.sem.k])||null;
   }
   return (D.saludMes&&D.saludMes[P.desde.getFullYear()+'-'+String(P.desde.getMonth()+1).padStart(2,'0')])||null;
 }
@@ -16738,10 +16814,10 @@ function rRetail(){
          del año, que no se puede leer. */
       var ymAct=P.desde.getFullYear()+'-'+String(P.desde.getMonth()+1).padStart(2,'0');
       panel+='<div class="rt-eleg-f"><span class="rt-eleg-l">Semanas de '+RT_MESES[P.desde.getMonth()].toLowerCase()+'</span><span class="rt-eleg-r">'
-        +_rtSemanasDelMes(ymAct).map(function(s){
-            var fin=_rtDia(s.lun,6);
-            return '<button type="button" class="rt-chip'+(P.k==='w:'+s.k?' on':'')+'" onclick="rtPer(\'w:'+s.k+'\')" title="'
-              +s.lun.getDate()+'/'+(s.lun.getMonth()+1)+' → '+fin.getDate()+'/'+(fin.getMonth()+1)+'">'+s.n+'</button>';
+        +_rtSemanasDelMes(ymAct).filter(function(s){return s.desde<=hoy;}).map(function(s){
+            var on=P.sem&&P.sem.k===s.k;
+            return '<button type="button" class="rt-chip'+(on?' on':'')+'" onclick="rtPer(\'s:'+s.k+'\')" title="'+s.tit+'">'
+              +'Sem '+s.n+' · '+s.rango+'</button>';
           }).join('')+'</span></div>';
       panel+='<div class="rt-eleg-f"><span class="rt-eleg-l">A medida</span><span class="rt-eleg-r rt-eleg-lib">'
         +'<input id="rtRd" placeholder="dd/mm/aaaa" inputmode="numeric" value="'+_cmpDMY(P.d)+'">'
@@ -29820,7 +29896,7 @@ if('serviceWorker' in navigator){
     lun=_rtDia(lun,-((lun.getDay()+6)%7));
     var tareas=[], s=D.saludSem&&D.saludSem[_rtDia(lun,3).getFullYear()+'-'+getWeek(lun)];
     if(s&&(s.nuevos>0||s.react>0)&&!(Array.isArray(s.nuevosL)&&Array.isArray(s.reactL))){
-      tareas.push(traerJson('saludClientes',30000,function(j){if(j&&j.ok&&j.sem){D.saludSem=j.sem;if(j.mes)D.saludMes=j.mes;}}));
+      tareas.push(traerJson('saludClientes',30000,function(j){if(j&&j.ok&&j.sem){D.saludSem=j.sem;if(j.semM)D.saludSemM=j.semM;if(j.mes)D.saludMes=j.mes;}}));
     }
     tareas.push(traerJson('crmLeads',20000,function(j){
       if(j&&j.ok===true&&Array.isArray(j.leads)){ _rsLeads=j.leads; try{ _swrGuardar('crmLeads',j); }catch(e){} }
