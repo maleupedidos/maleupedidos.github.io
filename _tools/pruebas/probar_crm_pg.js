@@ -24,7 +24,17 @@
    asi que la prueba le pide a Apps Script esas cuatro respuestas UNA vez, al
    arrancar, y la base simulada las devuelve como foto: los datos son los de
    verdad, lo simulado es el camino. Con la palanca: ninguna de las cuatro se le
-   pide a Apps Script, el mapa se dibuja y la ficha abre sin `crmCliente`. */
+   pide a Apps Script, el mapa se dibuja y la ficha abre sin `crmCliente`.
+
+   OTRO APARATO ESCRIBE (6/10/2026). `action=ver` (el sello de la ultima
+   escritura) va simulado con la hora en `window.__verT`, antes del latido salvo:
+   · «otro»: alguien escribio despues del latido → la lista va a Apps Script;
+   · «vigia»: abre con la foto; otro aparato escribe; el refresco del vigia va a
+     Apps Script.
+
+   Si `__crmListo` no llega es que `crmClientes` no volvio de Apps Script (con el
+   servidor saturado tarda mas que la espera): la prueba lo dice con ese nombre
+   en vez de fallar sin explicacion. */
 'use strict';
 const { abrir, evaluar } = require('./cdp.js');
 const prep = require('./sesion_prep.js');
@@ -51,6 +61,7 @@ const STUB = esc => `(function(){
   var FOTOS=${JSON.stringify(FOTOS)};
   try{ ['maleu_crm_clientes_v1','maleu_crm_clientes_ts','maleu_crm_cambio_ts','maleu_ult_post'].forEach(function(k){ localStorage.removeItem(k); }); }catch(e){}
   var latido = esc==='vieja' ? Date.now()-40*60e3 : Date.now()-2*60e3;
+  window.__verT = esc==='otro' ? Date.now()-60e3 : Date.now()-10*60e3;
   if(esc==='post'){ try{ localStorage.setItem('maleu_ult_post', String(Date.now()-60e3)); }catch(e){} }
   function resp(txt,st){ return Promise.resolve(new Response(txt,{status:st||200,headers:{'Content-Type':'application/json'}})); }
   var o=window.fetch; window.fetch=function(u,x){
@@ -75,6 +86,7 @@ const STUB = esc => `(function(){
     }
     if(url.indexOf('script.google.com')>-1){
       var m=url.match(/action=([a-zA-Z_]+)/); var a=m?m[1]:'?'; window.__gets.push(a); (window.__getsTodo=window.__getsTodo||[]).push(a);
+      if(a==='ver')return resp(JSON.stringify({ok:true,ver:String(window.__verT)+'abcd',t:Date.now()}));
       if(a==='sbToken')return o.apply(this,arguments).then(function(r){ return r.json().then(function(d){
         d=d||{}; d.palancas=d.palancas||{}; d.palancas.crmPg=(esc!=='off');
         return new Response(JSON.stringify(d),{status:200,headers:{'Content-Type':'application/json'}}); }); });
@@ -94,10 +106,12 @@ async function abrirCrm(esc) {
   for (let i = 0; i < 120; i++) { if (await evaluar(cli, "window.__gets.indexOf('sbToken')>-1 && !_sbPidiendo")) break; await pausa(250); }
   await evaluar(cli, 'window.__gets=[]; window.__pg=[]; window.__crmListo=0; go("estancias"); estSwitch("clientes"); 1');
   /* Listo cuando la lista termino de pedirse por el camino que sea. */
+  let listo = false;
   for (let i = 0; i < 480; i++) {
-    if (await evaluar(cli, "window.__crmListo>0")) break;
+    if (await evaluar(cli, "window.__crmListo>0")) { listo = true; break; }
     await pausa(250);
   }
+  if (!listo) console.log('  !!   la lista no terminó de pedirse en 120 s: crmClientes no volvió de Apps Script (¿servidor saturado?). Lo que sigue mide sobre eso.');
   return cli;
 }
 const LEER = `({ n:(window.estClientesSync()||[]).length, pgN:window.__pgN, gets:window.__gets.slice(), pg:window.__pg.slice(),
@@ -106,7 +120,7 @@ const LEER = `({ n:(window.estClientesSync()||[]).length, pgN:window.__pgN, gets
 
 (async () => {
   console.log('\n== La tab CRM desde la base (datos reales) ==\n');
-  const casos = ['off', 'ok', 'vieja', 'sinlatido', 'e500', 'colgada', 'post'];
+  const casos = ['off', 'ok', 'vieja', 'sinlatido', 'e500', 'colgada', 'post', 'otro', 'vigia'];
   const solo = process.env.CASO ? process.env.CASO.split(',') : casos;
   for (const esc of solo) {
     console.log('-- ' + esc);
@@ -163,9 +177,16 @@ const LEER = `({ n:(window.estClientesSync()||[]).length, pgN:window.__pgN, gets
       for (let i = 0; i < 240; i++) { if (await evaluar(cli, "window.__gets.indexOf('crmProductos')>-1 && !document.querySelector('#crmProdList .loading')")) break; await pausa(250); }
       const p7 = await evaluar(cli, `({ gets: window.__gets.slice(), filas: document.querySelectorAll('#crmProdList > *').length })`);
       chk('ok: con otro período (7 días) va a Apps Script, como siempre', p7.gets.indexOf('crmProductos') > -1 && p7.filas > 0, p7);
+    } else if (esc === 'vigia') {
+      chk('vigia: abre con la foto, sin pedirle la lista a Apps Script', !pidioPlanilla && /^De la base/.test(r.cartel), r);
+      await evaluar(cli, 'window.__verT=Date.now(); window.__gets=[]; window._vigiaArranqueListo&&window._vigiaArranqueListo(); window._vigiaAcelerar&&window._vigiaAcelerar(0); 1');
+      for (let i = 0; i < 240; i++) { if (await evaluar(cli, "window.__gets.indexOf('crmClientes')>-1")) break; await pausa(250); }
+      const v = await evaluar(cli, LEER);
+      chk('vigia: otro aparato escribe y el refresco del vigía va a Apps Script', v.gets.indexOf('crmClientes') > -1, v.gets);
+      chk('vigia: y dice que se escribió después del latido', !!v.fuente && v.fuente.de === 'planilla' && /se escribió algo/.test(v.fuente.porque), v.fuente);
     } else {
       const porque = { vieja: /confirmó la foto hace/, sinlatido: /no confirma/, e500: /contestó 500/,
-        colgada: /no contestó en 6 s/, post: /cambiaste algo/ }[esc];
+        colgada: /no contestó en 6 s/, post: /cambiaste algo/, otro: /se escribió algo/ }[esc];
       chk(esc + ': vuelve a la planilla', pidioPlanilla && r.n > 100, r.gets);
       chk(esc + ': y dice por qué', /^De la planilla/.test(r.cartel) && porque.test(r.cartel), r.cartel);
       chk(esc + ': el historial también vuelve a la planilla', /^planilla/.test(r.fotos.crmInteracciones || '')

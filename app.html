@@ -13323,7 +13323,8 @@ function refreshContextual(){
      En la práctica era la causa de "Actualizando…" mientras la pantalla ya
      estaba lista para trabajar. */
   var _soloPedidos=(active==='pedidos'||active==='pedidoshome'||active==='estancias');
-  if(usaRapido && typeof loadRapido==='function')ps.push(loadRapido({soloPedidos:_soloPedidos}));
+  /* El ↻ quiere lo de este minuto: con `PEDIDOS_DESDE_PG`, igual va a Apps Script. */
+  if(usaRapido && typeof loadRapido==='function')ps.push(loadRapido({soloPedidos:_soloPedidos,dePlanilla:true}));
   /* El volcado solo si el rol tiene alguna tab que lo puede pedir: si no, es un
      forbidden seguro y el ↻ en rojo sobre una pantalla que esta bien. La lista
      es la de ACCION_TABS.admin en Code.js. (6/10/2026) */
@@ -15760,6 +15761,152 @@ function _fotoPedidos(gen){
    datos— y quedo sin que nadie la llamara. Se fue con sus 15 chequeos, que
    pasaron a medir el camino vivo. */
 
+/* ══ LA TAB PEDIDOS DESDE SUPABASE, CON PALANCA (6/10/2026, rama supabase) ══
+
+   Con `Config_Maleu > PEDIDOS_DESDE_PG = si` (viaja con el permiso de
+   `sbToken`), al abrir y en el refresco automatico `pedidosLight` y `ocLight`
+   salen de las fotos de `erp_screen_snapshot` —las calcula el ERP con el MISMO
+   codigo— y no se le piden a Apps Script. Medido el 6/10 con la sesion real:
+   pedidosLight 3,4-4,6 s y ocLight 2,5-3,8 s; las dos fotos, ~0,6 s.
+
+   Lo que decide si se usan es el LATIDO (`replica_status('foto')`): el ultimo
+   momento en que el ERP confirmo que las fotos son la planilla. Va a Apps
+   Script, como siempre, si:
+     · la palanca esta en «no», o no hay permiso guardado (no se lo espera);
+     · el que pide es el ↻ o «Actualizar pedidos» (`dePlanilla`): quiere lo de
+       este minuto;
+     · la base no contesta o tarda mas de PED_PG_ESPERA_MS;
+     · falta el latido o tiene mas de PED_PG_VIEJA_MS (15 min y no 30 como el
+       CRM: aca entran pedidos nuevos);
+     · la foto de pedidos viene vacia o es de otro dia (el mes y la semana de
+       Inicio cambian a la medianoche);
+     · se escribio algo desde este aparato despues del latido.
+   Las OCs de la base se usan SOLO si los pedidos tambien salieron de la base:
+   el aviso de «OC sin generar» cruza las dos listas, y mezclar una foto con
+   una lectura de ahora es inventar faltantes (una compra duplicada).
+   Por que se uso o no: `window.__pedFuente` en la consola. */
+var PED_PG_VIEJA_MS=15*60e3, PED_PG_ESPERA_MS=6000;
+function _pedDiaAr(t){ try{ return new Date(t).toLocaleDateString('sv-SE',{timeZone:'America/Argentina/Buenos_Aires'}); }catch(e){ return ''; } }
+/* Sin esperar a nada: el permiso guardado y su palanca. Con «no» (o sin
+   permiso) el lote sale en el mismo instante que siempre. */
+function _pedPalancaYa(){
+  try{
+    if(typeof _sbPidiendo!=='undefined'&&_sbPidiendo)return false;
+    var sb=(_sbPerm&&Date.now()<_sbPermHasta)?_sbPerm:null;
+    if(!sb&&_sbPerm===null){ var g=_sbTokLeer(); if(g&&Number(g.hasta)>Date.now())sb=g.sb; }
+    return !!(sb&&sb.pal&&sb.pal.pedidosPg);
+  }catch(e){ return false; }
+}
+/* Lo que la base trae, ya mirado. `ahora` va de afuera para poder probarlo. */
+function _pedDesdePg(filas, estado, ahora){
+  var by={}; (filas||[]).forEach(function(f){ if(f&&f.screen)by[f.screen]=f; });
+  var e=estado&&estado[0], alDia=e?_fotoFechaUtc(e.confirmed_at):0;
+  if(!alDia)return {ok:false,porque:'la base todav\u00eda no confirma las fotos'};
+  if(ahora-alDia>PED_PG_VIEJA_MS)return {ok:false,porque:'la base confirm\u00f3 las fotos '+_hace(alDia)};
+  var pf=by.pedidos, d=pf&&pf.payload;
+  if(!d||!Array.isArray(d.pedidos)||!d.pedidos.length||d.tail)return {ok:false,porque:'la foto de pedidos vino vac\u00eda'};
+  var calc=_fotoFechaUtc(pf.computed_at);
+  if(!calc)return {ok:false,porque:'la foto de pedidos no dice de cu\u00e1ndo es'};
+  if(_pedDiaAr(calc)!==_pedDiaAr(ahora))return {ok:false,porque:'la foto de pedidos es de otro d\u00eda'};
+  var of=by.ocLight, od=of&&of.payload, oc=null;
+  if(od&&od.ok&&od.oc&&Array.isArray(od.oc.lista)&&od.oc.lista.length&&_pedDiaAr(_fotoFechaUtc(of.computed_at))===_pedDiaAr(ahora))oc=od;
+  return {ok:true,ped:d,oc:oc,alDia:alDia};
+}
+/* EL SELLO DE ESCRITURA DEL BACKEND (6/10/2026). La foto la rehace la replica,
+   que da una vuelta cada 10 min; el latido confirmado ANTES de que Lucas o un
+   repartidor escribieran sigue valiendo hasta 15. En ese hueco la tab mostraba
+   la foto sin lo que escribio el otro aparato — y el vigia, que se entera a los
+   40 s por `action=ver`, refrescaba... leyendo la misma foto.
+   `entregas_ver` cambia con CADA escritura —todo doPost salvo catering, y toda
+   edicion a mano— y empieza con la hora en ms. Si es posterior al latido, la
+   foto no lo tiene: va a Apps Script. Se reusa lo que vio el vigia hace menos
+   de 30 s; si no, se pregunta (en paralelo con la base: no suma espera).
+   Sin sello no se sabe: va a Apps Script. Devuelve los ms, o 0. */
+var PED_SELLO_RECIENTE_MS=30000;
+function _pedSelloMs(v){
+  var n=Number(String(v||'').slice(0,13));
+  return (isFinite(n)&&n>1e12)?n:0;
+}
+/* Lo usan Pedidos y el CRM (6/10/2026): el CRM pide hasta seis fotos juntas, y
+   todas comparten UNA pregunta en vuelo. */
+var _pedSelloVuelo=null;
+function _pedSelloEscritura(){
+  try{
+    var vb=window.__verBackend;
+    if(vb&&vb.v&&Date.now()-vb.t<PED_SELLO_RECIENTE_MS)return Promise.resolve(_pedSelloMs(vb.v));
+  }catch(e){}
+  if(_pedSelloVuelo)return _pedSelloVuelo;
+  var p=fetch(API+'?action=ver&t='+Date.now()).then(function(r){ return r.json(); }).then(function(d){
+    if(!d||!d.ok||!d.ver)return 0;
+    try{ window.__verBackend={v:String(d.ver),t:Date.now()}; }catch(e){}
+    return _pedSelloMs(d.ver);
+  }).catch(function(){ return 0; });
+  _pedSelloVuelo=p;
+  var suelta=function(){ if(_pedSelloVuelo===p)_pedSelloVuelo=null; };
+  p.then(suelta,suelta);
+  return p;
+}
+function _pedDeLaBase(){
+  var no=function(porque){ return {usado:false,palanca:true,porque:porque}; };
+  return _sbPermiso(true).then(function(sb){
+    if(!sb||!sb.pal||!sb.pal.pedidosPg)return {usado:false,palanca:false};
+    var H={apikey:sb.key,Authorization:'Bearer '+sb.token};
+    var ctl=(typeof AbortController==='function')?new AbortController():null;
+    var reloj=setTimeout(function(){ try{ if(ctl)ctl.abort(); }catch(e){} },PED_PG_ESPERA_MS);
+    var g=function(q){
+      return fetch(sb.url+'/rest/v1/'+q,{headers:H,signal:ctl?ctl.signal:undefined}).then(function(r){
+        if(!r.ok)throw new Error('la base contest\u00f3 '+r.status);
+        return r.json();
+      });
+    };
+    return Promise.all([
+      g('erp_screen_snapshot?select=screen,payload,computed_at&screen=in.(pedidos,ocLight)'),
+      g('replica_status?select=domain,confirmed_at&domain=eq.foto'),
+      _pedSelloEscritura()
+    ]).then(function(rs){
+      clearTimeout(reloj);
+      var o=_pedDesdePg(rs[0],rs[1],Date.now());
+      if(!o.ok)return no(o.porque);
+      var sello=rs[2];
+      if(!sello)return no('no se pudo saber cu\u00e1ndo se escribi\u00f3 por \u00faltima vez');
+      if(sello>o.alDia)return no('se escribi\u00f3 algo '+_hace(sello)+', despu\u00e9s de que la base confirm\u00f3 las fotos');
+      var post=0; try{ post=Number(localStorage.getItem('maleu_ult_post'))||0; }catch(e){}
+      if(Math.max(post,Number(_sbCambioLocal)||0)>o.alDia)return no('cambiaste algo despu\u00e9s de que la base confirm\u00f3 las fotos');
+      return {usado:true,palanca:true,ped:o.ped,oc:o.oc,t:o.alDia};
+    }).catch(function(e){
+      clearTimeout(reloj);
+      return no((e&&e.name==='AbortError')?'la base no contest\u00f3 en '+(PED_PG_ESPERA_MS/1000)+' s':String((e&&e.message)||e));
+    });
+  }).catch(function(){ return {usado:false,palanca:false}; });
+}
+/* Como `_loteGets`: una promesa por accion. Con la palanca, `pedidosLight` y
+   `ocLight` se resuelven con las fotos y a Apps Script va solo el resto.
+   `res._fuente` dice de donde salieron los pedidos (lo lee `loadRapido` para
+   sellar con la hora del latido, no con la de ahora). */
+function _lotePedidosPg(accs,ts,dePlanilla){
+  var nota=function(f){ try{ window.__pedFuente=f; }catch(e){} return f; };
+  var quiere=accs.indexOf('pedidosLight')>-1;
+  if(!quiere||!_pedPalancaYa()){ nota(null); return _loteGets(accs,ts); }
+  if(dePlanilla){ nota({de:'planilla',porque:'lo pediste con \u21bb'}); return _loteGets(accs,ts); }
+  var res={}, dar={};
+  accs.forEach(function(a){ res[a]=new Promise(function(r){ dar[a]=r; }); });
+  res._fuente=null;
+  _pedDeLaBase().then(function(r){
+    var resto=accs;
+    if(r&&r.usado){
+      res._fuente=nota({de:'pg',t:r.t,oc:!!r.oc});
+      dar.pedidosLight(r.ped);
+      resto=accs.filter(function(a){ return a!=='pedidosLight'&&!(a==='ocLight'&&r.oc); });
+      if(dar.ocLight&&r.oc)dar.ocLight(r.oc);
+    } else nota(r&&r.palanca?{de:'planilla',porque:r.porque||''}:null);
+    if(resto.length){
+      var L=_loteGets(resto,ts);
+      resto.forEach(function(a){ L[a].then(dar[a],function(){ dar[a](null); }); });
+    }
+  });
+  return res;
+}
+
 /* VARIAS LECTURAS EN UN SOLO VIAJE (25/9/2026).
 
    Apps Script atiende de a DOS por cuenta, y el piso de cada viaje no es el
@@ -15855,7 +16002,12 @@ function loadRapido(opts){
   try{ _sbRefrescoPedidos(_sbGen); }catch(e){}
   /* La foto de `pedidosLight` sale por el mismo carril y con el mismo testigo:
      adelanta, no reemplaza. Ver `_fotoPedidos`. */
-  try{ _fotoPedidos(_sbGen); }catch(e){ _fotoPedNota('error sincrónico',(e&&e.message)||e); }
+  /* Con `PEDIDOS_DESDE_PG` la foto ya es la fuente (ver `_lotePedidosPg`):
+     pedirla tambien como adelanto seria bajar el mismo mega dos veces. */
+  var _dePlanilla=!!(opts&&opts.dePlanilla);
+  if(!_pedPalancaYa()||_dePlanilla){
+    try{ _fotoPedidos(_sbGen); }catch(e){ _fotoPedNota('error sincrónico',(e&&e.message)||e); }
+  }
   /* Sin permiso y con una copia vieja (la primera apertura del dia), el permiso
      se pide YA y la foto sale cuando llega. Ver `_sbPermisoYaSiHaceFalta`. */
   try{ _sbPermisoYaSiHaceFalta(); }catch(e){}
@@ -15897,7 +16049,7 @@ function loadRapido(opts){
   if(_pidoCob0)_accs.push('cobrosPendientes');
   if(_pidoCaja0)_accs.push('cajaLight');
   _accs.push('ocLight');
-  var _L=_loteGets(_accs.slice(0,_LOTE_MAX),tsBase);
+  var _L=_lotePedidosPg(_accs.slice(0,_LOTE_MAX),tsBase,_dePlanilla);
 
   /* ══ LAS OCs, CADA UNA POR SU LADO ═══════════════════════════
 
@@ -15998,6 +16150,8 @@ function loadRapido(opts){
       if(lightData&&Array.isArray(lightData.pedidos))_fOk.push('pedidos');
       if(cajaData&&(cajaData.caja||Array.isArray(cajaData.movimientos)))_fOk.push('caja');
       if(_fallaron===0)_markRefreshTime(_fOk); else _marcarFresco(_fOk);
+      /* De la base: el sello es la hora del LATIDO, no la de ahora. */
+      if(_L._fuente&&_L._fuente.de==='pg'&&_fOk.indexOf('pedidos')>-1)_marcarFresco(['pedidos'],_L._fuente.t);
     }
     if(_fallaron>0)$('dot').className='hdr-dot off';
     return {ok:_fallaron===0&&_pinto, fallaron:_fallaron, total:_total, red:_fallaron<_total, pinto:_pinto};
@@ -16564,6 +16718,7 @@ function actualizarPedidos(){
 
   loadRapido({
     soloPedidos:true,
+    dePlanilla:true,   /* «Actualizar pedidos»: lo de este minuto, aun con PEDIDOS_DESDE_PG */
     alLlegarPedidos:function(ok){ terminar(ok, null); }
   }).then(function(r){
     terminar(!!(r&&(r.ok||r.pinto)), r);
@@ -30995,6 +31150,8 @@ function _vListaClick(e){
     _verEnVuelo = true; _vigia.miradas++;
     fetch(API + '?action=ver&t=' + Date.now()).then(function(r){ return r.json(); }).then(function(d){
       if(!d || !d.ok || !d.ver) return;
+      /* El sello de la ultima escritura, para `_pedSelloEscritura` (6/10/2026). */
+      try { window.__verBackend = { v: String(d.ver), t: Date.now() }; } catch(e){}
       if(_verVista && d.ver !== _verVista){ _verPend = true; _vigia.cambios++; _vigiaEspera = VIGIA_MS; }
       else if(_verVista) _vigiaEspera = Math.min(VIGIA_MAX, Math.round(_vigiaEspera * 1.5));
       _verVista = d.ver;
@@ -33349,13 +33506,22 @@ if('serviceWorker' in navigator){
           return r.json();
         });
       };
+      /* EL SELLO DE ESCRITURA (6/10/2026), igual que Pedidos: una nota, un lote
+         o un pedido que cargo OTRO aparato no estan en la foto hasta la vuelta
+         siguiente de la replica, y el latido de antes sigue valiendo hasta 30
+         min. Si la ultima escritura es posterior al latido, o no se sabe, va a
+         Apps Script. Ver `_pedSelloEscritura`. */
       return Promise.all([
         g('erp_screen_snapshot?select=payload,computed_at&screen=eq.' + encodeURIComponent(screen)),
-        g('replica_status?select=domain,confirmed_at&domain=eq.foto')
+        g('replica_status?select=domain,confirmed_at&domain=eq.foto'),
+        (typeof _pedSelloEscritura === 'function') ? _pedSelloEscritura() : Promise.resolve(0)
       ]).then(function(rs){
         clearTimeout(reloj);
         var o = _crmDesdePg(rs[0], rs[1], Date.now(), valida);
         if (!o.ok) return no(o.porque);
+        var sello = rs[2];
+        if (!sello) return no('no se pudo saber cu\u00e1ndo se escribi\u00f3 por \u00faltima vez');
+        if (sello > o.alDia) return no('se escribi\u00f3 algo ' + _crmHaceTxt(sello) + ', despu\u00e9s de que la base confirm\u00f3 la foto');
         var post = 0, cambio = 0;
         try { post = Number(localStorage.getItem('maleu_ult_post')) || 0; cambio = Number(localStorage.getItem(CRM_CAMBIO_TS)) || 0; } catch(e){}
         if (Math.max(post, cambio) > o.alDia) return no('cambiaste algo despu\u00e9s de que la base confirm\u00f3 la foto');
