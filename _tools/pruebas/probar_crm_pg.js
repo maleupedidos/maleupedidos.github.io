@@ -42,6 +42,9 @@ for (const a of RESTO) {
     API + '?action=' + a + '&token=' + encodeURIComponent(process.env.TOKEN) + '&t=' + Date.now()]);
   FOTOS[a] = JSON.parse(out.toString('utf8'));
 }
+/* La sub-pestaña Productos (6/10/2026): su foto es la vista por defecto, 30 dias. */
+FOTOS.crmProductos = JSON.parse(require('child_process').execFileSync('curl', ['-sL', '--max-time', '120',
+  API + '?action=crmProductos&dias=30&token=' + encodeURIComponent(process.env.TOKEN) + '&t=' + Date.now()]).toString('utf8'));
 
 const STUB = esc => `(function(){
   var esc=${JSON.stringify(esc)}; window.__gets=[]; window.__pg=[]; window.__pgN=0; window.__k1='';
@@ -148,6 +151,18 @@ const LEER = `({ n:(window.estClientesSync()||[]).length, pgN:window.__pgN, gets
       await pausa(1500);
       const f = await evaluar(cli, `({ gets: window.__gets.slice(), peds: document.querySelectorAll('#crmDrawerBody .crm-ped').length })`);
       chk('ok: la ficha abre con su historial (' + f.peds + ' pedidos) sin pedir crmCliente', !!k1 && f.peds > 0 && f.gets.indexOf('crmCliente') < 0, f);
+      /* La sub-pestaña Productos: la vista de 30 dias de la base; otro periodo, a Apps Script. */
+      await evaluar(cli, 'try{crmCloseDrawer();}catch(e){} window.__gets=[]; window.__pl=0; crmReintentarProductos().then(function(){ window.__pl=Date.now(); }); 1');
+      for (let i = 0; i < 120; i++) { if (await evaluar(cli, 'window.__pl>0')) break; await pausa(250); }
+      const pr = await evaluar(cli, `({ gets: window.__gets.slice(), nota: (window.__crmFotos||{}).crmProductos||'',
+        filas: document.querySelectorAll('#crmProdList > *').length, cargando: !!document.querySelector('#crmProdList .loading'),
+        err:(window.__err||[]).slice(0,5) })`);
+      chk('ok: Productos (30 días) sale de la base sin pedir crmProductos (' + pr.filas + ' filas)',
+        pr.nota === 'base' && pr.gets.indexOf('crmProductos') < 0 && pr.filas > 10 && !pr.cargando, pr);
+      await evaluar(cli, 'window.__gets=[]; setCrmProdPeriodo(7); 1');
+      for (let i = 0; i < 240; i++) { if (await evaluar(cli, "window.__gets.indexOf('crmProductos')>-1 && !document.querySelector('#crmProdList .loading')")) break; await pausa(250); }
+      const p7 = await evaluar(cli, `({ gets: window.__gets.slice(), filas: document.querySelectorAll('#crmProdList > *').length })`);
+      chk('ok: con otro período (7 días) va a Apps Script, como siempre', p7.gets.indexOf('crmProductos') > -1 && p7.filas > 0, p7);
     } else {
       const porque = { vieja: /confirmó la foto hace/, sinlatido: /no confirma/, e500: /contestó 500/,
         colgada: /no contestó en 6 s/, post: /cambiaste algo/ }[esc];
