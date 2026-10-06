@@ -62,7 +62,7 @@ const STUB = esc => `(function(){
     var url=String((u&&u.url)||u||'');
     if(url.indexOf('supabase.co')>-1){
       var q=url.split('/rest/v1/')[1]||url;
-      if(q.indexOf('replica_status')===0&&q.indexOf('domain=eq.foto')>-1)
+      if(q.indexOf('replica_status')===0)
         return resp(esc==='sinlatido'?'[]':JSON.stringify([{domain:'foto',confirmed_at:new Date(latido).toISOString()}]));
       if(q.indexOf('erp_screen_snapshot')===0&&q.indexOf('ocLight')>-1){
         if(esc==='e500')return resp('{"message":"boom"}',500);
@@ -137,7 +137,12 @@ const LEER = `({ lotes: window.__lotes.slice(), fuente: window.__pedFuente||null
     } else if (esc === 'vigia') {
       chk('vigia: abre con la foto, sin pedirle pedidos a Apps Script', !pidioPed && !!r.fuente && r.fuente.de === 'pg', r.lotes);
       /* Otro aparato escribe AHORA; el vigia pregunta y se entera. */
-      await evaluar(cli, 'window.__verT=Date.now(); window.__lotes=[]; window._vigiaArranqueListo&&window._vigiaArranqueListo(); window._vigiaAcelerar&&window._vigiaAcelerar(0); 1');
+      /* En dos pasos: el vigia compara contra lo que vio la vez anterior, asi que
+         primero mira con el sello viejo y recien despues ve el cambio. */
+      await evaluar(cli, 'window.__t0vig=Date.now(); window._vigiaArranqueListo&&window._vigiaArranqueListo(); window._vigiaAcelerar&&window._vigiaAcelerar(0); 1');
+      for (let i = 0; i < 80; i++) { if (await evaluar(cli, "!!(window.__verBackend&&window.__verBackend.t>window.__t0vig)")) break; await pausa(250); }
+      await pausa(300);
+      await evaluar(cli, 'window.__verT=Date.now(); window.__lotes=[]; window._vigiaAcelerar&&window._vigiaAcelerar(0); 1');
       for (let i = 0; i < 240; i++) { if (await evaluar(cli, "window.__lotes.indexOf('pedidosLight')>-1 && !_rapidoEnVuelo.completo")) break; await pausa(250); }
       const v = await evaluar(cli, LEER);
       chk('vigia: el refresco que dispara va a Apps Script', v.lotes.indexOf('pedidosLight') > -1, v.lotes);

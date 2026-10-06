@@ -45,7 +45,7 @@ const STUB = esc => `(function(){
     var url=String((u&&u.url)||u||'');
     if(url.indexOf('supabase.co')>-1){
       var q=url.split('/rest/v1/')[1]||url;
-      if(q.indexOf('replica_status')===0&&q.indexOf('domain=eq.foto')>-1)
+      if(q.indexOf('replica_status')===0)
         return resp(JSON.stringify([{domain:'foto',confirmed_at:new Date(latido).toISOString()}]));
       return o.apply(this,arguments);   /* las fotos, las de produccion */
     }
@@ -91,9 +91,10 @@ const LEER = `({ gets: window.__gets.slice(), fuente: window.__crmFuente||null, 
       chk('vigia: abre de la base', !!r.fuente && r.fuente.de === 'pg' && !pidio, r);
       /* El vigia compara contra lo que vio la vez anterior: primero tiene que
          mirar una vez con el sello viejo, y recien despues ver el cambio. */
-      await evaluar(cli, 'window.__gets=[]; window._vigiaArranqueListo&&window._vigiaArranqueListo(); window._vigiaAcelerar&&window._vigiaAcelerar(0); 1');
-      for (let i = 0; i < 60; i++) { if (await evaluar(cli, "window.__gets.indexOf('ver')>-1")) break; await pausa(250); }
-      await pausa(500);
+      await evaluar(cli, 'window.__t0vig=Date.now(); window.__gets=[]; window._vigiaArranqueListo&&window._vigiaArranqueListo(); window._vigiaAcelerar&&window._vigiaAcelerar(0); 1');
+      /* Esperar a que la respuesta VUELVA y el vigia la anote (no a que salga). */
+      for (let i = 0; i < 80; i++) { if (await evaluar(cli, "!!(window.__verBackend&&window.__verBackend.t>window.__t0vig)")) break; await pausa(250); }
+      await pausa(300);
       await evaluar(cli, 'window.__verT=Date.now(); window.__gets=[]; window.__crmListo=0; window._vigiaAcelerar&&window._vigiaAcelerar(0); 1');
       for (let i = 0; i < 160; i++) { if (await evaluar(cli, "window.__gets.indexOf('crmClientes')>-1 && window.__crmListo>0")) break; await pausa(250); }
       const v = await evaluar(cli, LEER);

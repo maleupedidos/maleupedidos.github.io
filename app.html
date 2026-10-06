@@ -12908,7 +12908,7 @@ function _leerVersion(app){
    "El HTML no sabe que version es" dejo de ser cierto: el build le escribe
    adentro el CACHE_NAME de sw-panel.js, el mismo que deploy.sh obliga a subir en
    cada cambio. Si lo publicado dice otra cosa, esta pagina es vieja. Punto. */
-var _APP_CN_PAGINA='maleu-panel-v534';
+var _APP_CN_PAGINA='maleu-panel-v535';
 
 /* Devuelve [{k,v}] si lo publicado no es lo que esta pagina corre. */
 function _chequearVersiones(){
@@ -15839,18 +15839,34 @@ var PED_PG_VIEJA_MS=15*60e3, PED_PG_ESPERA_MS=6000;
 function _pedDiaAr(t){ try{ return new Date(t).toLocaleDateString('sv-SE',{timeZone:'America/Argentina/Buenos_Aires'}); }catch(e){ return ''; } }
 /* Sin esperar a nada: el permiso guardado y su palanca. Con «no» (o sin
    permiso) el lote sale en el mismo instante que siempre. */
-function _pedPalancaYa(){
+function _palancaYa(nombre){
   try{
     if(typeof _sbPidiendo!=='undefined'&&_sbPidiendo)return false;
     var sb=(_sbPerm&&Date.now()<_sbPermHasta)?_sbPerm:null;
     if(!sb&&_sbPerm===null){ var g=_sbTokLeer(); if(g&&Number(g.hasta)>Date.now())sb=g.sb; }
-    return !!(sb&&sb.pal&&sb.pal.pedidosPg);
+    return !!(sb&&sb.pal&&sb.pal[nombre]);
   }catch(e){ return false; }
+}
+function _pedPalancaYa(){ return _palancaYa('pedidosPg'); }
+/* LA CONFIRMACION DE UNA PANTALLA (6/10/2026): la mas nueva entre la global
+   (`foto`) y la suya (`foto:<pantalla>`). Desde ese dia el ERP confirma cada
+   foto por su lado: una cara que no entra en el tope ya no frena a las otras. */
+function _fotoConf(estado,screen){
+  var m=0;
+  (estado||[]).forEach(function(e){
+    if(e&&(e.domain==='foto'||e.domain==='foto:'+screen)){ var t=_fotoFechaUtc(e.confirmed_at); if(t>m)m=t; }
+  });
+  return m;
+}
+/* La pregunta a la base por el estado de esas pantallas: global + una por cada. */
+function _fotoConfQuery(screens){
+  return 'replica_status?select=domain,confirmed_at&domain=in.('
+    +encodeURIComponent(['"foto"'].concat(screens.map(function(x){ return '"foto:'+x+'"'; })).join(','))+')';
 }
 /* Lo que la base trae, ya mirado. `ahora` va de afuera para poder probarlo. */
 function _pedDesdePg(filas, estado, ahora){
   var by={}; (filas||[]).forEach(function(f){ if(f&&f.screen)by[f.screen]=f; });
-  var e=estado&&estado[0], alDia=e?_fotoFechaUtc(e.confirmed_at):0;
+  var alDia=_fotoConf(estado,'pedidos');
   if(!alDia)return {ok:false,porque:'la base todav\u00eda no confirma las fotos'};
   if(ahora-alDia>PED_PG_VIEJA_MS)return {ok:false,porque:'la base confirm\u00f3 las fotos '+_hace(alDia)};
   var pf=by.pedidos, d=pf&&pf.payload;
@@ -15858,9 +15874,35 @@ function _pedDesdePg(filas, estado, ahora){
   var calc=_fotoFechaUtc(pf.computed_at);
   if(!calc)return {ok:false,porque:'la foto de pedidos no dice de cu\u00e1ndo es'};
   if(_pedDiaAr(calc)!==_pedDiaAr(ahora))return {ok:false,porque:'la foto de pedidos es de otro d\u00eda'};
-  var of=by.ocLight, od=of&&of.payload, oc=null;
-  if(od&&od.ok&&od.oc&&Array.isArray(od.oc.lista)&&od.oc.lista.length&&_pedDiaAr(_fotoFechaUtc(of.computed_at))===_pedDiaAr(ahora))oc=od;
-  return {ok:true,ped:d,oc:oc,alDia:alDia};
+  var of=by.ocLight, od=of&&of.payload, oc=null, confOc=_fotoConf(estado,'ocLight');
+  if(od&&od.ok&&od.oc&&Array.isArray(od.oc.lista)&&od.oc.lista.length&&_pedDiaAr(_fotoFechaUtc(of.computed_at))===_pedDiaAr(ahora)
+     &&confOc&&ahora-confOc<=PED_PG_VIEJA_MS)oc=od;
+  /* Con las OCs, lo que vale es la MAS VIEJA de las dos confirmaciones. */
+  return {ok:true,ped:d,oc:oc,alDia:oc?Math.min(alDia,confOc):alDia};
+}
+/* LA CAJA DESDE LA BASE (6/10/2026). `quiere` = {cajaLight:1, cobrosPendientes:1}
+   segun lo que pida el lote. Cada una con su confirmacion, del mismo dia y de
+   menos de CAJA_PG_VIEJA_MS; vale la mas vieja. Si una falla, ninguna: es plata,
+   y mostrar los cobros de una hora con la caja de otra es inventar un descuadre. */
+var CAJA_PG_VIEJA_MS=15*60e3;
+function _cajaValida(sc,d){
+  if(!d)return false;
+  if(sc==='cajaLight')return !!(d.caja&&Array.isArray(d.movimientos)&&d.movimientos.length);
+  if(sc==='cobrosPendientes')return !!(Array.isArray(d.cobros)&&Array.isArray(d.cuentas)&&d.cuentas.length);
+  return false;
+}
+function _cajaDesdePg(filas, estado, ahora, quiere){
+  var by={}; (filas||[]).forEach(function(f){ if(f&&f.screen)by[f.screen]=f; });
+  var out={ok:true,d:{},alDia:Infinity}, ks=Object.keys(quiere||{});
+  for(var i=0;i<ks.length;i++){
+    var sc=ks[i], f=by[sc], d=f&&f.payload, conf=_fotoConf(estado,sc);
+    if(!conf)return {ok:false,porque:'la base todav\u00eda no confirma '+sc};
+    if(ahora-conf>CAJA_PG_VIEJA_MS)return {ok:false,porque:'la base confirm\u00f3 '+sc+' '+_hace(conf)};
+    if(!_cajaValida(sc,d))return {ok:false,porque:'la foto de '+sc+' vino vac\u00eda'};
+    if(_pedDiaAr(_fotoFechaUtc(f.computed_at))!==_pedDiaAr(ahora))return {ok:false,porque:'la foto de '+sc+' es de otro d\u00eda'};
+    out.d[sc]=d; if(conf<out.alDia)out.alDia=conf;
+  }
+  return out;
 }
 /* EL SELLO DE ESCRITURA DEL BACKEND (6/10/2026). La foto la rehace la replica,
    que da una vuelta cada 10 min; el latido confirmado ANTES de que Lucas o un
@@ -15880,26 +15922,50 @@ function _pedSelloMs(v){
 /* Lo usan Pedidos y el CRM (6/10/2026): el CRM pide hasta seis fotos juntas, y
    todas comparten UNA pregunta en vuelo. */
 var _pedSelloVuelo=null;
+/* EL SELLO POR TEMA (6/10/2026). Devuelve {g, f}: `g` la ultima escritura de
+   cualquier cosa (ms), `f` la de cada foto de pantalla (la de su tema), o null
+   si el backend todavia no la manda. Una nota del CRM ya no manda Pedidos a la
+   planilla. Usar con `_selloDe`. */
+function _pedSelloInfo(v,f){ return {g:_pedSelloMs(v), f:(f&&typeof f==='object')?f:null}; }
+function _selloDe(info,screens){
+  if(!info||!info.g)return 0;
+  if(info.f){
+    var m=0, todas=true;
+    (screens||[]).forEach(function(sc){ var x=Number(info.f[sc]); if(isFinite(x)&&x>0){ if(x>m)m=x; } else todas=false; });
+    if(todas&&m)return m;
+  }
+  return info.g;
+}
 function _pedSelloEscritura(){
   try{
     var vb=window.__verBackend;
-    if(vb&&vb.v&&Date.now()-vb.t<PED_SELLO_RECIENTE_MS)return Promise.resolve(_pedSelloMs(vb.v));
+    if(vb&&vb.v&&Date.now()-vb.t<PED_SELLO_RECIENTE_MS)return Promise.resolve(_pedSelloInfo(vb.v,vb.f));
   }catch(e){}
   if(_pedSelloVuelo)return _pedSelloVuelo;
   var p=fetch(API+'?action=ver&t='+Date.now()).then(function(r){ return r.json(); }).then(function(d){
-    if(!d||!d.ok||!d.ver)return 0;
-    try{ window.__verBackend={v:String(d.ver),t:Date.now()}; }catch(e){}
-    return _pedSelloMs(d.ver);
-  }).catch(function(){ return 0; });
+    if(!d||!d.ok||!d.ver)return null;
+    try{ window.__verBackend={v:String(d.ver),t:Date.now(),f:(d.fotos&&typeof d.fotos==='object')?d.fotos:null}; }catch(e){}
+    return _pedSelloInfo(d.ver,d.fotos);
+  }).catch(function(){ return null; });
   _pedSelloVuelo=p;
   var suelta=function(){ if(_pedSelloVuelo===p)_pedSelloVuelo=null; };
   p.then(suelta,suelta);
   return p;
 }
-function _pedDeLaBase(){
-  var no=function(porque){ return {usado:false,palanca:true,porque:porque}; };
+/* Lo que tiene que pasar DESPUES de que el contenido sirve: el sello de
+   escritura y lo escrito desde este aparato. '' = se puede usar. */
+function _pgNoUsar(alDia,sello){
+  if(!sello)return 'no se pudo saber cu\u00e1ndo se escribi\u00f3 por \u00faltima vez';
+  if(sello>alDia)return 'se escribi\u00f3 algo '+_hace(sello)+', despu\u00e9s de que la base confirm\u00f3 las fotos';
+  var post=0; try{ post=Number(localStorage.getItem('maleu_ult_post'))||0; }catch(e){}
+  if(Math.max(post,Number(_sbCambioLocal)||0)>alDia)return 'cambiaste algo despu\u00e9s de que la base confirm\u00f3 las fotos';
+  return '';
+}
+/* Las fotos de esas pantallas, su estado y el sello, en paralelo. Nunca rechaza:
+   {ok, filas, estado, sello} o {ok:false, porque}. */
+function _fotosDeLaBase(screens){
   return _sbPermiso(true).then(function(sb){
-    if(!sb||!sb.pal||!sb.pal.pedidosPg)return {usado:false,palanca:false};
+    if(!sb)return {ok:false,porque:'sin permiso de la base'};
     var H={apikey:sb.key,Authorization:'Bearer '+sb.token};
     var ctl=(typeof AbortController==='function')?new AbortController():null;
     var reloj=setTimeout(function(){ try{ if(ctl)ctl.abort(); }catch(e){} },PED_PG_ESPERA_MS);
@@ -15910,24 +15976,17 @@ function _pedDeLaBase(){
       });
     };
     return Promise.all([
-      g('erp_screen_snapshot?select=screen,payload,computed_at&screen=in.(pedidos,ocLight)'),
-      g('replica_status?select=domain,confirmed_at&domain=eq.foto'),
+      g('erp_screen_snapshot?select=screen,payload,computed_at&screen=in.('+screens.join(',')+')'),
+      g(_fotoConfQuery(screens)),
       _pedSelloEscritura()
     ]).then(function(rs){
       clearTimeout(reloj);
-      var o=_pedDesdePg(rs[0],rs[1],Date.now());
-      if(!o.ok)return no(o.porque);
-      var sello=rs[2];
-      if(!sello)return no('no se pudo saber cu\u00e1ndo se escribi\u00f3 por \u00faltima vez');
-      if(sello>o.alDia)return no('se escribi\u00f3 algo '+_hace(sello)+', despu\u00e9s de que la base confirm\u00f3 las fotos');
-      var post=0; try{ post=Number(localStorage.getItem('maleu_ult_post'))||0; }catch(e){}
-      if(Math.max(post,Number(_sbCambioLocal)||0)>o.alDia)return no('cambiaste algo despu\u00e9s de que la base confirm\u00f3 las fotos');
-      return {usado:true,palanca:true,ped:o.ped,oc:o.oc,t:o.alDia};
+      return {ok:true,filas:rs[0],estado:rs[1],sello:rs[2]};
     }).catch(function(e){
       clearTimeout(reloj);
-      return no((e&&e.name==='AbortError')?'la base no contest\u00f3 en '+(PED_PG_ESPERA_MS/1000)+' s':String((e&&e.message)||e));
+      return {ok:false,porque:(e&&e.name==='AbortError')?'la base no contest\u00f3 en '+(PED_PG_ESPERA_MS/1000)+' s':String((e&&e.message)||e)};
     });
-  }).catch(function(){ return {usado:false,palanca:false}; });
+  }).catch(function(){ return {ok:false,porque:'sin permiso de la base'}; });
 }
 /* Como `_loteGets`: una promesa por accion. Con la palanca, `pedidosLight` y
    `ocLight` se resuelven con las fotos y a Apps Script va solo el resto.
@@ -15935,20 +15994,48 @@ function _pedDeLaBase(){
    sellar con la hora del latido, no con la de ahora). */
 function _lotePedidosPg(accs,ts,dePlanilla){
   var nota=function(f){ try{ window.__pedFuente=f; }catch(e){} return f; };
-  var quiere=accs.indexOf('pedidosLight')>-1;
-  if(!quiere||!_pedPalancaYa()){ nota(null); return _loteGets(accs,ts); }
-  if(dePlanilla){ nota({de:'planilla',porque:'lo pediste con \u21bb'}); return _loteGets(accs,ts); }
+  var notaC=function(f){ try{ window.__cajaFuente=f; }catch(e){} return f; };
+  var quierePed=accs.indexOf('pedidosLight')>-1&&_palancaYa('pedidosPg');
+  /* La caja (6/10/2026): cobros pendientes y caja, con `CAJA_DESDE_PG`. */
+  var cajaAccs=accs.filter(function(a){ return a==='cajaLight'||a==='cobrosPendientes'; });
+  var quiereCaja=cajaAccs.length>0&&_palancaYa('cajaPg');
+  if(!quierePed&&!quiereCaja){ nota(null); notaC(null); return _loteGets(accs,ts); }
+  if(dePlanilla){
+    var r0={de:'planilla',porque:'lo pediste con \u21bb'};
+    nota(quierePed?r0:null); notaC(quiereCaja?r0:null);
+    return _loteGets(accs,ts);
+  }
   var res={}, dar={};
   accs.forEach(function(a){ res[a]=new Promise(function(r){ dar[a]=r; }); });
-  res._fuente=null;
-  _pedDeLaBase().then(function(r){
-    var resto=accs;
-    if(r&&r.usado){
-      res._fuente=nota({de:'pg',t:r.t,oc:!!r.oc});
-      dar.pedidosLight(r.ped);
-      resto=accs.filter(function(a){ return a!=='pedidosLight'&&!(a==='ocLight'&&r.oc); });
-      if(dar.ocLight&&r.oc)dar.ocLight(r.oc);
-    } else nota(r&&r.palanca?{de:'planilla',porque:r.porque||''}:null);
+  res._fuente=null; res._fuenteCaja=null;
+  var screens=[];
+  if(quierePed){ screens.push('pedidos'); if(accs.indexOf('ocLight')>-1)screens.push('ocLight'); }
+  if(quiereCaja)cajaAccs.forEach(function(a){ screens.push(a); });
+  _fotosDeLaBase(screens).then(function(r){
+    var usados={}, ahora=Date.now();
+    if(!r.ok){
+      if(quierePed)nota({de:'planilla',porque:r.porque||''});
+      if(quiereCaja)notaC({de:'planilla',porque:r.porque||''});
+    } else {
+      if(quierePed){
+        var o=_pedDesdePg(r.filas,r.estado,ahora), no=o.ok?_pgNoUsar(o.alDia,_selloDe(r.sello,o.oc?['pedidos','ocLight']:['pedidos'])):o.porque;
+        if(!no){
+          usados.pedidosLight=o.ped;
+          if(o.oc&&accs.indexOf('ocLight')>-1)usados.ocLight=o.oc;
+          res._fuente=nota({de:'pg',t:o.alDia,oc:!!o.oc});
+        } else nota({de:'planilla',porque:no});
+      }
+      if(quiereCaja){
+        var q={}; cajaAccs.forEach(function(a){ q[a]=1; });
+        var c=_cajaDesdePg(r.filas,r.estado,ahora,q), noC=c.ok?_pgNoUsar(c.alDia,_selloDe(r.sello,cajaAccs)):c.porque;
+        if(!noC){
+          cajaAccs.forEach(function(a){ usados[a]=c.d[a]; });
+          res._fuenteCaja=notaC({de:'pg',t:c.alDia});
+        } else notaC({de:'planilla',porque:noC});
+      }
+    }
+    Object.keys(usados).forEach(function(a){ dar[a](usados[a]); });
+    var resto=accs.filter(function(a){ return !(a in usados); });
     if(resto.length){
       var L=_loteGets(resto,ts);
       resto.forEach(function(a){ L[a].then(dar[a],function(){ dar[a](null); }); });
@@ -16181,7 +16268,8 @@ function loadRapido(opts){
        Promise.all. Se deja la variable para no mover el resto del bloque. */
     if(cajaData){
       _cajaCampos(cajaData);
-      _cajaTs=Date.now();
+      /* De la base (`CAJA_DESDE_PG`): la hora del latido, no la de ahora. */
+      _cajaTs=(_L._fuenteCaja&&_L._fuenteCaja.de==='pg')?_L._fuenteCaja.t:Date.now();
       try{localStorage.setItem('mc_cajaTs',String(_cajaTs));}catch(e){}
     }
     try{localStorage.setItem('ma3',JSON.stringify(D));}catch(e){}
@@ -16202,6 +16290,7 @@ function loadRapido(opts){
       if(_fallaron===0)_markRefreshTime(_fOk); else _marcarFresco(_fOk);
       /* De la base: el sello es la hora del LATIDO, no la de ahora. */
       if(_L._fuente&&_L._fuente.de==='pg'&&_fOk.indexOf('pedidos')>-1)_marcarFresco(['pedidos'],_L._fuente.t);
+      if(_L._fuenteCaja&&_L._fuenteCaja.de==='pg'&&_fOk.indexOf('caja')>-1)_marcarFresco(['caja'],_L._fuenteCaja.t);
     }
     if(_fallaron>0)$('dot').className='hdr-dot off';
     return {ok:_fallaron===0&&_pinto, fallaron:_fallaron, total:_total, red:_fallaron<_total, pinto:_pinto};
@@ -31301,7 +31390,7 @@ function _vListaClick(e){
     fetch(API + '?action=ver&t=' + Date.now()).then(function(r){ return r.json(); }).then(function(d){
       if(!d || !d.ok || !d.ver) return;
       /* El sello de la ultima escritura, para `_pedSelloEscritura` (6/10/2026). */
-      try { window.__verBackend = { v: String(d.ver), t: Date.now() }; } catch(e){}
+      try { window.__verBackend = { v: String(d.ver), t: Date.now(), f: (d.fotos && typeof d.fotos === 'object') ? d.fotos : null }; } catch(e){}
       if(_verVista && d.ver !== _verVista){ _verPend = true; _vigia.cambios++; _vigiaEspera = VIGIA_MS; }
       else if(_verVista) _vigiaEspera = Math.min(VIGIA_MAX, Math.round(_vigiaEspera * 1.5));
       _verVista = d.ver;
@@ -33635,7 +33724,7 @@ if('serviceWorker' in navigator){
   /* Lo que la base trae, ya mirado. `fotos` y `estado` son las respuestas de
      PostgREST tal cual; `ahora` va de afuera para poder probarlo. */
   function _crmValidaClientes(d){ return !!(d && !d.lite && Array.isArray(d.clientes) && d.clientes.length); }
-  function _crmDesdePg(fotos, estado, ahora, valida){
+  function _crmDesdePg(fotos, estado, ahora, valida, screen){
     var f = fotos && fotos[0];
     if (!f) return {ok: false, porque: 'la base no tiene esa foto'};
     var d = f.payload;
@@ -33643,7 +33732,8 @@ if('serviceWorker' in navigator){
     var calc = _fotoFechaUtc(f.computed_at);
     if (!calc) return {ok: false, porque: 'la foto de la base no dice de cu\u00e1ndo es'};
     if (_crmDiaAr(calc) !== _crmDiaAr(ahora)) return {ok: false, porque: 'la foto de la base es de otro d\u00eda'};
-    var e = estado && estado[0], alDia = e ? _fotoFechaUtc(e.confirmed_at) : 0;
+    /* La confirmacion de ESTA pantalla (6/10/2026): global o la suya. */
+    var alDia = _fotoConf(estado, screen || 'crmClientes');
     if (!alDia) return {ok: false, porque: 'la base todav\u00eda no confirma que la foto est\u00e9 al d\u00eda'};
     if (ahora - alDia > CRM_PG_VIEJA_MS) return {ok: false, porque: 'la base confirm\u00f3 la foto ' + _crmHaceTxt(alDia)};
     return {ok: true, d: d, alDia: alDia, calc: calc};
@@ -33676,13 +33766,13 @@ if('serviceWorker' in navigator){
          Apps Script. Ver `_pedSelloEscritura`. */
       return Promise.all([
         g('erp_screen_snapshot?select=payload,computed_at&screen=eq.' + encodeURIComponent(screen)),
-        g('replica_status?select=domain,confirmed_at&domain=eq.foto'),
-        (typeof _pedSelloEscritura === 'function') ? _pedSelloEscritura() : Promise.resolve(0)
+        g(_fotoConfQuery([screen])),
+        (typeof _pedSelloEscritura === 'function') ? _pedSelloEscritura() : Promise.resolve(null)
       ]).then(function(rs){
         clearTimeout(reloj);
-        var o = _crmDesdePg(rs[0], rs[1], Date.now(), valida);
+        var o = _crmDesdePg(rs[0], rs[1], Date.now(), valida, screen);
         if (!o.ok) return no(o.porque);
-        var sello = rs[2];
+        var sello = (typeof _selloDe === 'function') ? _selloDe(rs[2], [screen]) : 0;
         if (!sello) return no('no se pudo saber cu\u00e1ndo se escribi\u00f3 por \u00faltima vez');
         if (sello > o.alDia) return no('se escribi\u00f3 algo ' + _crmHaceTxt(sello) + ', despu\u00e9s de que la base confirm\u00f3 la foto');
         var post = 0, cambio = 0;
