@@ -34,16 +34,17 @@ const BANDEJA = {
   decidir: [
     { h: 'Pilar', n: '98', row: 100, c: 'Clara Tortugas', b: 'Tortugas Country', l: '77', de: 'Viernes 09/10', dia: 'Viernes',
       hor: '10 a 13 hs', prods: ['2 Pizza Jamón y Queso', '1 Pastel de papa'], tot: 31000, env: 3000, pago: 'Efectivo', cobrado: false,
-      desde: Date.now() - 6 * 60000,
+      desde: Date.now() - 6 * 60000, sug: 'Marcos Bottcher', zona: 'Marcos Bottcher', cup: '', sale: Date.now() + 114 * 60000,
       vs: [{ v: 'Marcos Bottcher', ok: true, bloq: false, mot: '', tg: true },
            { v: "Federico D'Andrea", ok: false, bloq: false, mot: 'no reparte en Tortugas Country', tg: true },
            { v: 'Fini Mihailovitch', ok: false, bloq: false, mot: 'no reparte en Tortugas Country', tg: false }] },
     { h: 'Home', n: '1120', row: 1121, c: 'Hugo Home', b: 'El Recuerdo', l: '12', de: 'Sábado 10/10', dia: 'Sábado',
-      hor: '', prods: ['3 Pizza Muzzarella'], tot: 24000, env: 0, pago: 'Transferencia', cobrado: false, desde: Date.now() - 60000,
+      hor: '', prods: ['3 Pizza Muzzarella'], tot: 24000, env: 0, pago: 'Transferencia', cobrado: false, desde: Date.now() - 60000, sug: '', zona: '', cup: '', sale: Date.now() + 119 * 60000,
       vs: [{ v: "Federico D'Andrea", ok: false, bloq: false, mot: 'no reparte en El Recuerdo', tg: true },
            { v: 'Fini Mihailovitch', ok: false, bloq: true, mot: 'no reparte en El Recuerdo · no reparte el sábado', tg: false },
            { v: 'Marcos Bottcher', ok: false, bloq: true, mot: 'no reparte en El Recuerdo · no reparte el sábado', tg: true }] },
   ],
+  reps: ['Tadeo Ustariz', 'Lucas Moresco', 'Santos Panelo'], horas: 2,
   decididos: [{ h: 'Home', n: '1119', row: 1120, c: 'Nora Nosotros', de: 'Viernes 09/10', por: 'luqui', el: '05/10/2026 13:10', t: Date.now() - 600000, puede: true }],
   recientes: [{ n: '120', c: 'Rita Red', v: 'Marcos Bottcher', de: 'Viernes 09/10', dia: 'Viernes', por: 'tadeo · era Pilar #95', el: '05/10/2026 13:00', aviso: 'Telegram a Marcos', row: 121, puede: true, tEl: Date.now() - 1200000 }],
 };
@@ -127,9 +128,13 @@ async function escenario(ancho, ok) {
     ok(v.btns.length >= 4 && v.btns.every((h) => h >= 44), ancho + 'px: botones de un dedo (≥44 px): ' + v.btns.join(','));
     ok(v.desborda === false && v.pagina === false, ancho + 'px: nada se sale de la pantalla');
 
-    /* Pasar a vendedor: se abre la lista */
-    let r = await tocar(cli, '#pd-Pilar-98 .pd-pas');
-    ok(r.libre, ancho + 'px: «Pasar a vendedor» se puede tocar' + (r.libre ? '' : ' (lo tapa ' + r.arriba + ')'));
+    /* TODO PASA POR ACA (5/10/2026, a la noche): la sugerencia y el reloj */
+    ok(/Sugerido: Marcos Bottcher \(es su zona\)/.test(v.t) && /sale a Marcos/.test(v.t) && /Pasar a Marcos/.test(v.t), ancho + 'px: Clara: sugerido Marcos (su zona), cuándo sale solo y el botón «Pasar a Marcos»');
+    const tH = await evaluar(cli, "document.getElementById('pd-Home-1120').innerText");
+    ok(/Sugerido: nosotros \(es Estancias\)/.test(tH) && /queda nuestro/.test(tH) && !/Pasar a Marcos/.test(tH), ancho + 'px: Hugo (Estancias): sugerido nosotros y «queda nuestro»');
+    /* Otro vendedor: se abre la lista */
+    let r = await tocar(cli, '#pd-Pilar-98 .pd-otro');
+    ok(r.libre, ancho + 'px: «Otro vendedor» se puede tocar' + (r.libre ? '' : ' (lo tapa ' + r.arriba + ')'));
     const l = JSON.parse(await evaluar(cli, `(function(){
       var bs = Array.prototype.slice.call(document.querySelectorAll('#pdv-Pilar-98 .pd-v'));
       return JSON.stringify(bs.map(function(b){ return { t: b.innerText.replace(/\\s+/g,' '), ok: b.classList.contains('ok'), dis: b.disabled, fondo: getComputedStyle(b).backgroundColor }; }));
@@ -141,24 +146,28 @@ async function escenario(ancho, ok) {
     await new Promise((res) => setTimeout(res, 500));
     let P = JSON.parse(await evaluar(cli, 'JSON.stringify(window.__posts)'));
     const pas = P.filter((x) => x.action === 'pasarAVendedor');
-    ok(pas.length === 1 && pas[0].vendedor === 'Marcos Bottcher' && pas[0].trajo === 'Maleu' && pas[0].hoja === 'Pilar' && pas[0].id === '98' && /^pav_/.test(pas[0].clientOpId || ''),
-      ancho + 'px: manda pasarAVendedor a Marcos con trajo Maleu y un id para no duplicar');
+    ok(pas.length === 1 && pas[0].vendedor === 'Marcos Bottcher' && pas[0].trajo === 'Maleu' && pas[0].igual === true && pas[0].hoja === 'Pilar' && pas[0].id === '98' && /^pav_/.test(pas[0].clientOpId || ''),
+      ancho + 'px: manda pasarAVendedor a Marcos con trajo Maleu, «igual» (ya avisó) y un id para no duplicar');
     ok(await evaluar(cli, "!document.getElementById('pd-Pilar-98')"), ancho + 'px: el pedido sale de la lista');
     const cf = JSON.parse(await evaluar(cli, 'JSON.stringify(window.__confirms || [])'));
     ok(cf.some((m) => /Marcos Bottcher/.test(m) && /cobra solo el envío/.test(m) && /Telegram/.test(m)), ancho + 'px: antes de pasar avisa: Telegram, portal y que cobra solo el envío');
 
-    /* El de sabado: Marcos y Fini no se pueden tocar */
+    /* El de sabado: Marcos y Fini no reparten ese dia, pero se pueden elegir
+       igual (avisa, pero deja — 5/10/2026, a la noche). */
     await tocar(cli, '#pd-Home-1120 .pd-pas');
-    const s = JSON.parse(await evaluar(cli, `JSON.stringify(Array.prototype.slice.call(document.querySelectorAll('#pdv-Home-1120 .pd-v')).map(function(b){ return { t: b.innerText, dis: b.disabled }; }))`));
-    ok(s.filter((x) => x.dis).length === 2 && s.filter((x) => x.dis).every((x) => /no reparte el sábado/.test(x.t)), ancho + 'px: sábado: los que no reparten ese día, deshabilitados y con el motivo');
+    const s = JSON.parse(await evaluar(cli, `JSON.stringify(Array.prototype.slice.call(document.querySelectorAll('#pdv-Home-1120 .pd-v')).map(function(b){ return { t: b.innerText, dis: b.disabled, bloq: b.classList.contains('bloq') }; }))`));
+    ok(s.length === 3 && s.every((x) => !x.dis) && s.filter((x) => x.bloq).length === 2 && s.filter((x) => x.bloq).every((x) => /no reparte el sábado/.test(x.t)), ancho + 'px: sábado: los que no reparten ese día se pueden elegir igual, con el motivo a la vista');
     ok(/Nadie reparte El Recuerdo/.test(await evaluar(cli, "document.querySelector('#pdv-Home-1120 .pd-vt').innerText")), ancho + 'px: dice que nadie reparte ese barrio');
 
-    /* Lo entregamos nosotros */
+    /* Nosotros, y quien lo lleva */
     r = await tocar(cli, '#pdn-Home-1120');
-    ok(r.libre, ancho + 'px: «Lo entregamos nosotros» se puede tocar');
+    ok(r.libre, ancho + 'px: «Nosotros» se puede tocar');
+    const rp = await evaluar(cli, "Array.prototype.slice.call(document.querySelectorAll('#pdr-Home-1120 button')).map(function(b){return b.innerText+'@'+Math.round(b.getBoundingClientRect().height);}).join('|')");
+    ok(/^Tadeo@\d+\|Lucas@\d+\|Santos@\d+\|Después vemos quién@\d+$/.test(rp) && rp.split('|').every((x) => Number(x.split('@')[1]) >= 44), ancho + 'px: abre quién lo lleva (los de la tab Ruta) y «Después vemos quién», de un dedo: ' + rp);
+    r = await tocar(cli, '#pdr-Home-1120 button:nth-child(3)');
     await new Promise((res) => setTimeout(res, 400));
     P = JSON.parse(await evaluar(cli, 'JSON.stringify(window.__posts)'));
-    ok(P.some((x) => x.action === 'pedidoDecidir' && x.decision === 'nosotros' && x.hoja === 'Home' && x.id === '1120'), ancho + 'px: manda «nosotros» para Home #1120');
+    ok(P.some((x) => x.action === 'pedidoDecidir' && x.decision === 'nosotros' && x.hoja === 'Home' && x.id === '1120' && x.lleva === 'Santos Panelo'), ancho + 'px: manda «nosotros» para Home #1120, lo lleva Santos');
 
     /* Deshacer: Recién decididos */
     await evaluar(cli, "(function(){ var d = document.querySelector('.pd-card details'); if (d) d.open = true; return 1; })()");
