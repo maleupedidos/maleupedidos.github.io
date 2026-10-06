@@ -12489,16 +12489,24 @@ function _pedSelloMs(v){
   var n=Number(String(v||'').slice(0,13));
   return (isFinite(n)&&n>1e12)?n:0;
 }
+/* Lo usan Pedidos y el CRM (6/10/2026): el CRM pide hasta seis fotos juntas, y
+   todas comparten UNA pregunta en vuelo. */
+var _pedSelloVuelo=null;
 function _pedSelloEscritura(){
   try{
     var vb=window.__verBackend;
     if(vb&&vb.v&&Date.now()-vb.t<PED_SELLO_RECIENTE_MS)return Promise.resolve(_pedSelloMs(vb.v));
   }catch(e){}
-  return fetch(API+'?action=ver&t='+Date.now()).then(function(r){ return r.json(); }).then(function(d){
+  if(_pedSelloVuelo)return _pedSelloVuelo;
+  var p=fetch(API+'?action=ver&t='+Date.now()).then(function(r){ return r.json(); }).then(function(d){
     if(!d||!d.ok||!d.ver)return 0;
     try{ window.__verBackend={v:String(d.ver),t:Date.now()}; }catch(e){}
     return _pedSelloMs(d.ver);
   }).catch(function(){ return 0; });
+  _pedSelloVuelo=p;
+  var suelta=function(){ if(_pedSelloVuelo===p)_pedSelloVuelo=null; };
+  p.then(suelta,suelta);
+  return p;
 }
 function _pedDeLaBase(){
   var no=function(porque){ return {usado:false,palanca:true,porque:porque}; };
@@ -30160,13 +30168,22 @@ if('serviceWorker' in navigator){
           return r.json();
         });
       };
+      /* EL SELLO DE ESCRITURA (6/10/2026), igual que Pedidos: una nota, un lote
+         o un pedido que cargo OTRO aparato no estan en la foto hasta la vuelta
+         siguiente de la replica, y el latido de antes sigue valiendo hasta 30
+         min. Si la ultima escritura es posterior al latido, o no se sabe, va a
+         Apps Script. Ver `_pedSelloEscritura`. */
       return Promise.all([
         g('erp_screen_snapshot?select=payload,computed_at&screen=eq.' + encodeURIComponent(screen)),
-        g('replica_status?select=domain,confirmed_at&domain=eq.foto')
+        g('replica_status?select=domain,confirmed_at&domain=eq.foto'),
+        (typeof _pedSelloEscritura === 'function') ? _pedSelloEscritura() : Promise.resolve(0)
       ]).then(function(rs){
         clearTimeout(reloj);
         var o = _crmDesdePg(rs[0], rs[1], Date.now(), valida);
         if (!o.ok) return no(o.porque);
+        var sello = rs[2];
+        if (!sello) return no('no se pudo saber cu\u00e1ndo se escribi\u00f3 por \u00faltima vez');
+        if (sello > o.alDia) return no('se escribi\u00f3 algo ' + _crmHaceTxt(sello) + ', despu\u00e9s de que la base confirm\u00f3 la foto');
         var post = 0, cambio = 0;
         try { post = Number(localStorage.getItem('maleu_ult_post')) || 0; cambio = Number(localStorage.getItem(CRM_CAMBIO_TS)) || 0; } catch(e){}
         if (Math.max(post, cambio) > o.alDia) return no('cambiaste algo despu\u00e9s de que la base confirm\u00f3 la foto');
