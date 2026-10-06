@@ -20455,7 +20455,10 @@ function loadStockTab(forzar){
      · lo que ya se ve es MAS NUEVO que la copia;
      · no hay un costo de la planilla de menos de un dia (ver `_stCostos`).
    Devuelve {usado, palanca, porque}. Nunca rechaza. */
-var ST_PG_VIEJA_MS=20*60e3, ST_PG_ESPERA_MS=6000;
+/* 30 min y no 20 (6/10/2026): la replica da una vuelta cada 10 y confirma en
+   cada una; con 20, una sola vuelta que no pudo confirmar (un POST en el medio,
+   el candado ocupado) ya mandaba la tab a la planilla. Igual que el CRM. */
+var ST_PG_VIEJA_MS=30*60e3, ST_PG_ESPERA_MS=6000;
 function _stDeLaBase(){
   var no=function(porque){ return {usado:false,palanca:true,porque:porque}; };
   if(typeof _sbPermiso!=='function')return Promise.resolve(null);
@@ -29973,11 +29976,12 @@ if('serviceWorker' in navigator){
   function _crmHaceTxt(t){ try { return window._hace(t); } catch(e){ return new Date(t).toLocaleTimeString(); } }
   /* Lo que la base trae, ya mirado. `fotos` y `estado` son las respuestas de
      PostgREST tal cual; `ahora` va de afuera para poder probarlo. */
-  function _crmDesdePg(fotos, estado, ahora){
+  function _crmValidaClientes(d){ return !!(d && !d.lite && Array.isArray(d.clientes) && d.clientes.length); }
+  function _crmDesdePg(fotos, estado, ahora, valida){
     var f = fotos && fotos[0];
-    if (!f) return {ok: false, porque: 'la base no tiene la foto de los clientes'};
+    if (!f) return {ok: false, porque: 'la base no tiene esa foto'};
     var d = f.payload;
-    if (!d || d.lite || !Array.isArray(d.clientes) || !d.clientes.length) return {ok: false, porque: 'la foto de la base vino sin clientes'};
+    if (!(valida || _crmValidaClientes)(d)) return {ok: false, porque: 'la foto de la base vino vac\u00eda'};
     var calc = _fotoFechaUtc(f.computed_at);
     if (!calc) return {ok: false, porque: 'la foto de la base no dice de cu\u00e1ndo es'};
     if (_crmDiaAr(calc) !== _crmDiaAr(ahora)) return {ok: false, porque: 'la foto de la base es de otro d\u00eda'};
@@ -29986,7 +29990,11 @@ if('serviceWorker' in navigator){
     if (ahora - alDia > CRM_PG_VIEJA_MS) return {ok: false, porque: 'la base confirm\u00f3 la foto ' + _crmHaceTxt(alDia)};
     return {ok: true, d: d, alDia: alDia, calc: calc};
   }
-  function _crmDeLaBase(){
+  /* UNA FOTO CUALQUIERA DE LA TAB CRM (6/10/2026): `screen` de
+     `erp_screen_snapshot` y la funcion que dice si el payload sirve. Las mismas
+     reglas para todas —palanca, latido, dia, edicion local—, asi una pantalla no
+     puede quedar mas laxa que otra. Devuelve {usado, palanca, porque, d, t}. */
+  function _crmFotoBase(screen, valida){
     var no = function(porque){ return {usado: false, palanca: true, porque: porque}; };
     if (typeof _sbPermiso !== 'function' || typeof _fotoFechaUtc !== 'function') return Promise.resolve(null);
     /* Si el permiso se esta pidiendo recien (3,5 s), no se lo espera: la tab
@@ -30004,30 +30012,55 @@ if('serviceWorker' in navigator){
         });
       };
       return Promise.all([
-        g('erp_screen_snapshot?select=payload,computed_at&screen=eq.crmClientes'),
+        g('erp_screen_snapshot?select=payload,computed_at&screen=eq.' + encodeURIComponent(screen)),
         g('replica_status?select=domain,confirmed_at&domain=eq.foto')
       ]).then(function(rs){
         clearTimeout(reloj);
-        var o = _crmDesdePg(rs[0], rs[1], Date.now());
+        var o = _crmDesdePg(rs[0], rs[1], Date.now(), valida);
         if (!o.ok) return no(o.porque);
         var post = 0, cambio = 0;
         try { post = Number(localStorage.getItem('maleu_ult_post')) || 0; cambio = Number(localStorage.getItem(CRM_CAMBIO_TS)) || 0; } catch(e){}
         if (Math.max(post, cambio) > o.alDia) return no('cambiaste algo despu\u00e9s de que la base confirm\u00f3 la foto');
-        var tengo = _crmCliTs();
-        if (crmClientes && crmClientes.length && tengo > o.alDia) return {usado: true, palanca: true, de: 'celular', t: tengo};
-        crmClientes = o.d.clientes;
-        _crmDupMemo = null; _crmCanalBarrioFilled = false;
-        if (Array.isArray(o.d.kg)){ var k = {}; o.d.kg.forEach(function(a){ k[a] = 1; }); _crmKg = k; try { localStorage.setItem('maleu_crm_kg', JSON.stringify(k)); } catch(e){} }
-        if (o.d.nombres && typeof o.d.nombres === 'object'){ _crmNombres = o.d.nombres; try { localStorage.setItem('maleu_crm_nombres', JSON.stringify(o.d.nombres)); } catch(e){} }
-        /* La copia del celular queda con la fecha del LATIDO, no la de ahora. */
-        try { window._lsSetSafe(CRM_CLI_LS, JSON.stringify(crmClientes)); localStorage.setItem(CRM_CLI_TS, String(o.alDia)); } catch(e){}
-        try { if (typeof window._marcarFresco === 'function') window._marcarFresco(['crmClientes'], o.alDia); } catch(e){}
-        return {usado: true, palanca: true, de: 'pg', t: o.alDia};
+        return {usado: true, palanca: true, d: o.d, t: o.alDia};
       }).catch(function(e){
         clearTimeout(reloj);
         return no((e && e.name === 'AbortError') ? 'la base no contest\u00f3 en ' + (CRM_PG_ESPERA_MS / 1000) + ' s' : String((e && e.message) || e));
       });
     }).catch(function(){ return {usado: false, palanca: false}; });
+  }
+  /* Lo que no viene de la base por la tab CRM, anotado por pantalla: por que se
+     uso la planilla. `window.__crmFotos` en la consola. */
+  function _crmFotoNotaPantalla(screen, r){
+    try { (window.__crmFotos = window.__crmFotos || {})[screen] = r && r.palanca ? (r.usado ? 'base' : 'planilla: ' + (r.porque || '')) : 'sin palanca'; } catch(e){}
+  }
+  /* Para las que pasan por `traer` (zonas, puntos): con la base pinta y guarda
+     la copia igual que `traer`; sin ella, `traer` de siempre. */
+  function _crmTraer(screen, valida, clave, url, pintar){
+    return _crmFotoBase(screen, valida).then(function(r){
+      _crmFotoNotaPantalla(screen, r);
+      if (r && r.usado){
+        try { _swrGuardar(clave, r.d); } catch(e){}
+        try { pintar(r.d, {viejo: false, cuando: r.t, hace: _crmHaceTxt(r.t)}); } catch(e){ console.error('crm/' + screen, e); }
+        return r.d;
+      }
+      return traer(clave, url, pintar);
+    });
+  }
+  function _crmDeLaBase(){
+    return _crmFotoBase('crmClientes', _crmValidaClientes).then(function(r){
+      if (!r || !r.usado) return r;
+      var o = {d: r.d, alDia: r.t};
+      var tengo = _crmCliTs();
+      if (crmClientes && crmClientes.length && tengo > o.alDia) return {usado: true, palanca: true, de: 'celular', t: tengo};
+      crmClientes = o.d.clientes;
+      _crmDupMemo = null; _crmCanalBarrioFilled = false;
+      if (Array.isArray(o.d.kg)){ var k = {}; o.d.kg.forEach(function(a){ k[a] = 1; }); _crmKg = k; try { localStorage.setItem('maleu_crm_kg', JSON.stringify(k)); } catch(e){} }
+      if (o.d.nombres && typeof o.d.nombres === 'object'){ _crmNombres = o.d.nombres; try { localStorage.setItem('maleu_crm_nombres', JSON.stringify(o.d.nombres)); } catch(e){} }
+      /* La copia del celular queda con la fecha del LATIDO, no la de ahora. */
+      try { window._lsSetSafe(CRM_CLI_LS, JSON.stringify(crmClientes)); localStorage.setItem(CRM_CLI_TS, String(o.alDia)); } catch(e){}
+      try { if (typeof window._marcarFresco === 'function') window._marcarFresco(['crmClientes'], o.alDia); } catch(e){}
+      return {usado: true, palanca: true, de: 'pg', t: o.alDia};
+    });
   }
 
   function _crmPedirClientes(){
@@ -30179,8 +30212,15 @@ if('serviceWorker' in navigator){
     // Pintado instantáneo desde cache local (la bitácora ya aparece en la ficha) + refresco bg.
     if (!crmInteracciones){ try{ var ic=JSON.parse(localStorage.getItem('maleu_crm_inter_v1')||'null'); if(ic){ crmInteracciones=ic; _crmIndexInteracciones(); } }catch(e){} }
     if (_crmInterPromesa) return _crmInterPromesa;
-    _crmInterPromesa = fetch(CRM_API + '?action=crmInteracciones')
-      .then(function(r){ return r.json(); })
+    /* Con `CRM_DESDE_PG`, de la foto de la base (6/10/2026). Un «✓ Le escribi»
+       hecho aca es un POST: despues de eso va a la planilla hasta que la base
+       vuelva a confirmar, y la marca local se fusiona igual. */
+    _crmInterPromesa = _crmFotoBase('crmInteracciones', function(d){ return !!(d && Array.isArray(d.interacciones) && d.interacciones.length); })
+      .then(function(r){
+        _crmFotoNotaPantalla('crmInteracciones', r);
+        if (r && r.usado) return r.d;
+        return fetch(CRM_API + '?action=crmInteracciones').then(function(x){ return x.json(); });
+      })
       .then(function(d){
         /* Una respuesta de error (sesion vencida, permiso) NO trae la lista: antes
            se tomaba como "no hay contactos" y se guardaba vacia, borrando la
@@ -30509,8 +30549,12 @@ if('serviceWorker' in navigator){
 
   // Carga la capa editable de lotes (hoja Lotes Estancias).
   function _mapaLoadLotesData(cb){
-    fetch(CRM_API + '?action=crmLotes')
-      .then(function(r){ return r.json(); })
+    _crmFotoBase('crmLotes', function(d){ return !!(d && d.ok && Array.isArray(d.lotes) && d.lotes.length); })
+      .then(function(r){
+        _crmFotoNotaPantalla('crmLotes', r);
+        if (r && r.usado) return r.d;
+        return fetch(CRM_API + '?action=crmLotes').then(function(x){ return x.json(); });
+      })
       .then(function(d){
         var L=(d&&d.lotes)||null;
         if(!(L && L.length)){ if(cb)cb(); return; }   // vacío/fallido → NO pisar el roster bueno
@@ -31422,7 +31466,8 @@ if('serviceWorker' in navigator){
   function _cargarZonas(){
     // Las zonas del mapa casi no cambian: guardarlas es lo que hace que el mapa
     // de Estancias se dibuje al toque en vez de esperar al backend.
-    traer('crmzonas', CRM_API + '?action=crmZonas',
+    _crmTraer('crmZonas', function(d){ return !!(d && d.ok && Array.isArray(d.zonas) && d.zonas.length); },
+      'crmzonas', CRM_API + '?action=crmZonas',
       function(d){
         _mapaZonas = (d.zonas||[]).filter(function(z){ return z.poly && z.poly.length>=3; });
         _subZonas = _mapaZonas.filter(function(z){ return z.tipo !== 'excluir'; });
@@ -31521,7 +31566,8 @@ if('serviceWorker' in navigator){
 
   // Carga las correcciones de puntos (hoja Lotes Puntos) keyeadas por id.
   function _mapaLoadPuntos(cb){
-    traer('crmpuntos', CRM_API + '?action=crmPuntos',
+    _crmTraer('crmPuntos', function(d){ return !!(d && d.ok && Array.isArray(d.puntos) && d.puntos.length); },
+      'crmpuntos', CRM_API + '?action=crmPuntos',
       function(d){
         _mapaPuntosOv = {};
         (d.puntos||[]).forEach(function(p){ _mapaPuntosOv[p.id] = p; });
