@@ -10119,7 +10119,9 @@ function sbUpdateMetrics(){
     /* La semana ISO, la misma de Inicio, de la hoja Productos y del Kardex (13/9/2026).
        La cuenta vieja arrancaba la semana el domingo: un domingo decia una semana
        mas que el resto del ERP. */
-    if(sw){sw.textContent=String(_isoWeek(new Date())[1]);}
+    /* Desde el 6/10/2026, la semana del calendario de Maleu, la misma del Resumen:
+       «Sem 2 · oct». La ISO (41) queda para el stock y la Red, que no se cortan por mes. */
+    if(sw){var _sbS=calSemanaDe(new Date());sw.textContent=_sbS.n+' · '+calMesCorto(_sbS.m0);}
     if(D&&D.pedidos&&D.pedidos.length){
       /* En el volcado `p.f` viaja "dd/MM", sin anio: compararla contra "aaaa-mm-dd"
          daba 0 siempre. Como las hojas son acumulativas, el anio se pide al dia de
@@ -12376,6 +12378,7 @@ function _volcarLight(d,ts,conLista,sinInicio){
      se renovaba con el volcado completo, y en un celular la semana 37 quedo
      congelada en la foto de un dia de esa semana (9 clientes contra 42). */
   if(d.saludSem)D.saludSem=d.saludSem;
+  if(d.saludSemM)D.saludSemM=d.saludSemM;
   if(d.saludMes)D.saludMes=d.saludMes;
   if(Array.isArray(d.ventasExtra))D.ventasExtra=d.ventasExtra;
   /* Los totales del negocio y la deuda de los vendedores (27/9/2026).
@@ -16297,6 +16300,111 @@ function _rtPerGuardado(hoy){
 var RT_MESES=['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
 function _rtIso(d){return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');}
 function _rtDia(d,n){return new Date(d.getFullYear(),d.getMonth(),d.getDate()+n);}
+/* ═══ EL CALENDARIO DE MALEU (6/10/2026) ═══════════════════════════════════════
+   Manda el MES calendario, partido en semanas de lunes a domingo; las de las
+   puntas quedan cortas. Sem 1 de octubre 2026 = jue 1 a dom 4; la sem 1 de
+   noviembre 2026 es solo el domingo 1. Decidido el 5/10 (Fede, Lucas, Tadeo): la
+   semana 28/9–4/10 se presento entera como de octubre y mezclaba 3 dias de
+   septiembre.
+
+   Es LA cuenta de semanas para reportar. Espejo exacto en Code.js
+   (`_calSemanasMes_`), y `_tools/probar_calendario.js` corre las dos sobre los
+   mismos bordes: si una se corre, el test lo dice.
+
+   NO lo usan, a proposito:
+   - el objetivo semanal de los vendedores (Mi Portal, Red, Telegram del viernes):
+     para ellos la semana es la ISO entera, el corte de mes no les cambia nada;
+   - las series continuas (Ventas > Tendencia, el grafico de 8 semanas): partir
+     una serie mete una caida falsa cada fin de mes.
+
+   Una semana corta no se compara pelada contra una entera: el Resumen la compara
+   contra los MISMOS dias de la semana anterior, y su meta sale de `calMetaSemana`,
+   que reparte por el peso historico de cada dia (Maleu vende casi todo vie/sab). */
+function calMesCorto(m0){return ['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'][m0];}
+function _calSem(y,m0,n,desde,hasta){
+  var dias=Math.round((hasta-desde)/864e5)+1;
+  var rango=desde.getDate()===hasta.getDate()?String(desde.getDate()):(desde.getDate()+'–'+hasta.getDate());
+  return {y:y,m0:m0,n:n,k:y+'-'+String(m0+1).padStart(2,'0')+'-'+n,desde:desde,hasta:hasta,
+          d:_rtIso(desde),h:_rtIso(hasta),dias:dias,corta:dias<7,
+          rango:rango+' '+calMesCorto(m0),
+          tit:'Sem '+n+' · '+rango+' '+calMesCorto(m0)+' · '+dias+(dias===1?' día':' días')};
+}
+/* Las semanas del mes `m0` (0-11) de `y`, en orden. */
+function calSemanasMes(y,m0){
+  var out=[],d=new Date(y,m0,1),fin=new Date(y,m0+1,0);
+  while(d<=fin){
+    var h=_rtDia(d,(7-d.getDay())%7);   // el domingo de esa semana
+    if(h>fin)h=fin;
+    out.push(_calSem(y,m0,out.length+1,d,h));
+    d=_rtDia(h,1);
+  }
+  return out;
+}
+/* La semana de Maleu que contiene la fecha `f` (Date o 'aaaa-mm-dd'). */
+function calSemanaDe(f){
+  var d=(typeof f==='string')?_rtDeIso(f):new Date(f.getFullYear(),f.getMonth(),f.getDate());
+  if(!d)return null;
+  var ss=calSemanasMes(d.getFullYear(),d.getMonth());
+  for(var i=0;i<ss.length;i++)if(d<=ss[i].hasta)return ss[i];
+  return null;
+}
+/* '2026-10-1' → la semana 1 de octubre 2026, o null si no existe. */
+function calSemanaPorClave(k){
+  var m=String(k||'').match(/^(\d{4})-(\d{1,2})-(\d)$/);if(!m)return null;
+  return calSemanasMes(+m[1],+m[2]-1)[+m[3]-1]||null;
+}
+/* `paso` semanas para adelante (o para atras, si es negativo). */
+function calMover(s,paso){
+  for(var i=0;s&&i<Math.abs(paso);i++)s=calSemanaDe(paso>0?_rtDia(s.hasta,1):_rtDia(s.desde,-1));
+  return s;
+}
+/* Cuanto pesa cada dia de la semana en la venta, de `ventas` = [{d:'aaaa-mm-dd',
+   f:$}]. Devuelve 7 numeros (indice = getDay, 0 = domingo) que suman 1. Sin
+   historia, pesan igual: repartir parejo es mejor que no repartir. */
+function calPesosDias(ventas){
+  var p=[0,0,0,0,0,0,0],tot=0;
+  (ventas||[]).forEach(function(v){
+    var d=_rtDeIso(v.d),f=Number(v.f)||0;
+    if(!d||!(f>0))return;
+    p[d.getDay()]+=f;tot+=f;
+  });
+  return p.map(function(x){return tot>0?x/tot:1/7;});
+}
+/* La parte de `metaMes` que le toca a la semana `s`: el peso de SUS dias sobre
+   el peso de todos los dias del mes. Sem 1 de octubre (jue-dom) se lleva mucho
+   mas que 4/31 de la meta, porque tiene un viernes y un sabado. */
+function calMetaSemana(metaMes,s,pesos){
+  var pd=function(a,b){var t=0;for(var d=a;d<=b;d=_rtDia(d,1))t+=pesos[d.getDay()];return t;};
+  var tm=pd(new Date(s.y,s.m0,1),new Date(s.y,s.m0+1,0));
+  return tm>0?(Number(metaMes)||0)*pd(s.desde,s.hasta)/tm:0;
+}
+/* Que parte del mes deberia estar hecha al cierre del dia `dia`: el peso de los
+   dias 1..dia sobre el del mes entero. Reemplaza al `dia/diasMes` parejo, que el
+   jueves 1 pedia el 3% de la meta cuando el finde se lleva casi todo. */
+function calFraccionMes(y,m0,dia,pesos){
+  if(!(dia>0))return 0;
+  var fin=new Date(y,m0+1,0).getDate(),hechos=0,tot=0;
+  for(var i=1;i<=fin;i++){var w=pesos[new Date(y,m0,i).getDay()];tot+=w;if(i<=dia)hechos+=w;}
+  return tot>0?hechos/tot:0;
+}
+/* Los pesos de Maleu: lo vendido en las ultimas 12 semanas cerradas, con los
+   mismos filtros que el Resumen (`_rtRangoDatos`). Memoizado por largo de
+   `D.pedidos`. */
+var _calPesosMemo=null,_calPesosN=-1;
+function calPesosMaleu(){
+  var ps=(typeof D!=='undefined'&&D&&D.pedidos)||[];
+  if(_calPesosN===ps.length&&_calPesosMemo)return _calPesosMemo;
+  var hoy=new Date(),t=new Date(hoy.getFullYear(),hoy.getMonth(),hoy.getDate());
+  var lunes=_rtDia(t,-((t.getDay()+6)%7)),desde=_rtIso(_rtDia(lunes,-84)),hasta=_rtIso(_rtDia(lunes,-1)),v=[];
+  ps.forEach(function(p){
+    if(p.hist||p.es==='Cancelado'||!_rtEsVenta(p))return;
+    if(!p.c||!String(p.c).trim()||!(Number(p.$)>0))return;
+    var d=_tendFechaVentaISO(p);
+    if(d&&d>=desde&&d<=hasta)v.push({d:d,f:Number(p.$)});
+  });
+  _calPesosN=ps.length;_calPesosMemo=calPesosDias(v);
+  return _calPesosMemo;
+}
 function _rtEsc(t){return String(t==null?'':t).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
 function _rtBarrio(b){
   var t=String(b||'').trim();if(!t||t==='-')return '';
@@ -16333,7 +16441,9 @@ function _rtDeIso(s){
    asi que un periodo elegido sobrevive a recargar la pantalla:
 
      sem · semAnt · mes · mesAnt     los atajos
-     w:2026-38                       una semana ISO concreta
+     s:2026-10-1                     una semana de Maleu (sem 1 de octubre)
+     w:2026-38                       VIEJA (semana ISO): se traduce sola a la
+                                     semana de Maleu de su jueves
      m:2026-09                       un mes concreto
      r:2026-09-01:2026-09-15         un rango a medida                        */
 function _rtPeriodo(k,hoy){
@@ -16343,18 +16453,25 @@ function _rtPeriodo(k,hoy){
   var dm=function(d){return d.getDate()+'/'+(d.getMonth()+1);};
   var o={k:k};
   var mw=String(k||'').match(/^w:(\d{4})-(\d{1,2})$/);
+  var ms=String(k||'').match(/^s:(\d{4}-\d{1,2}-\d)$/);
+  /* Las semanas son las del calendario de Maleu (6/10/2026): la del mes, cortada
+     en las puntas. Se comparan contra los MISMOS dias de la semana anterior —la
+     sem 1 de octubre (jue 1 a dom 4) contra jue 24 a dom 27/9—, nunca una semana
+     corta pelada contra una entera. */
+  var semDe=function(S){
+    o.tipo='sem';o.sem=S;
+    o.desde=S.desde;o.hasta=S.hasta;
+    if(o.hasta>t){o.hasta=t;o.enCurso=true;}
+    o.cDesde=_rtDia(o.desde,-7);o.cHasta=_rtDia(o.hasta,-7);
+    o.tit=S.tit+(o.enCurso?(' · hasta hoy '+DIA[t.getDay()]):' · cerrada');
+    o.vs='los mismos días de la semana anterior ('+dm(o.cDesde)+' → '+dm(o.cHasta)+')';
+  };
   var mM=String(k||'').match(/^m:(\d{4})-(\d{1,2})$/);
   var mr=String(k||'').match(/^r:(\d{4}-\d{2}-\d{2}):(\d{4}-\d{2}-\d{2})$/);
   if(k==='sem'){
-    o.tipo='sem';
-    o.desde=lun;o.hasta=t;o.cDesde=_rtDia(lun,-7);o.cHasta=_rtDia(t,-7);
-    o.tit='Semana '+getWeek(lun)+' · lun '+dm(lun)+' → hoy '+DIA[t.getDay()];
-    o.vs='la semana '+getWeek(o.cDesde)+' hasta el '+DIA[t.getDay()];
+    semDe(calSemanaDe(t));
   }else if(k==='semAnt'){
-    o.tipo='sem';
-    o.desde=_rtDia(lun,-7);o.hasta=_rtDia(lun,-1);o.cDesde=_rtDia(lun,-14);o.cHasta=_rtDia(lun,-8);
-    o.tit='Semana '+getWeek(o.desde)+' · lun '+dm(o.desde)+' → dom '+dm(o.hasta)+' · cerrada';
-    o.vs='la semana '+getWeek(o.cDesde);
+    semDe(calMover(calSemanaDe(t),-1));
   }else if(k==='mes'){
     o.tipo='mes';
     o.desde=new Date(t.getFullYear(),t.getMonth(),1);o.hasta=t;
@@ -16363,16 +16480,10 @@ function _rtPeriodo(k,hoy){
     o.cHasta=new Date(t.getFullYear(),t.getMonth()-1,Math.min(t.getDate(),ult));
     o.tit=RT_MESES[t.getMonth()]+' '+t.getFullYear()+' · del 1 al '+t.getDate();
     o.vs=RT_MESES[o.cDesde.getMonth()].toLowerCase()+' hasta el '+o.cHasta.getDate();
+  }else if(ms&&calSemanaPorClave(ms[1])&&calSemanaPorClave(ms[1]).desde<=t){
+    semDe(calSemanaPorClave(ms[1]));
   }else if(mw){
-    o.tipo='sem';
-    var L=_rtLunesISO(+mw[1],+mw[2]);
-    o.desde=L;o.hasta=_rtDia(L,6);o.cDesde=_rtDia(L,-7);o.cHasta=_rtDia(L,-1);
-    /* Si la semana elegida es la que esta corriendo, se corta en HOY: mostrarla
-       entera sumaria dias que todavia no pasaron y el total caeria por abajo
-       sin motivo. Y se compara contra los MISMOS dias de la anterior. */
-    if(o.hasta>t){ o.hasta=t; o.cHasta=_rtDia(t,-7); o.enCurso=true; }
-    o.tit='Semana '+getWeek(L)+' · lun '+dm(L)+' → '+(o.enCurso?('hoy '+DIA[t.getDay()]):('dom '+dm(o.hasta)+' · cerrada'));
-    o.vs='la semana '+getWeek(o.cDesde)+(o.enCurso?(' hasta el '+DIA[t.getDay()]):'');
+    semDe(calSemanaDe(_rtDia(_rtLunesISO(+mw[1],+mw[2]),3)));
   }else if(mM){
     o.tipo='mes';
     var y=+mM[1],mi=+mM[2]-1;
@@ -16412,8 +16523,7 @@ function _rtPeriodo(k,hoy){
 function _rtMover(k,hoy,paso){
   var P=_rtPeriodo(k,hoy);
   if(P.tipo==='sem'){
-    var L=_rtDia(P.desde,paso*7);
-    return 'w:'+_rtDia(L,3).getFullYear()+'-'+getWeek(L);
+    return 's:'+calMover(P.sem,paso).k;
   }
   if(P.tipo==='mes'){
     var d=new Date(P.desde.getFullYear(),P.desde.getMonth()+paso,1);
@@ -16461,18 +16571,11 @@ function _rtMesesConDatos(){
   }
   return out;
 }
-/* Las semanas ISO que TOCAN ese mes. Una semana a caballo de dos meses —la del
-   29/9 al 5/10— sale en los dos a proposito: esconderla en uno haria que desde
-   ese mes no se pueda llegar a ella. */
+/* Las semanas de Maleu de ese mes (6/10/2026). Hasta ese dia eran las semanas
+   ISO que TOCABAN el mes, y la del 28/9 al 4/10 salia entera en los dos. */
 function _rtSemanasDelMes(ym){
   var m=String(ym).match(/^(\d{4})-(\d{2})$/);if(!m)return [];
-  var y=+m[1],mi=+m[2]-1,fin=new Date(y,mi+1,0),out=[],vis={};
-  for(var d=new Date(y,mi,1);d<=fin;d=_rtDia(d,1)){
-    var L=_rtDia(d,-((d.getDay()+6)%7));
-    var k=_rtDia(L,3).getFullYear()+'-'+getWeek(L);
-    if(!vis[k]){vis[k]=1;out.push({k:k,lun:L,n:getWeek(L)});}
-  }
-  return out;
+  return calSemanasMes(+m[1],+m[2]-1);
 }
 /* Los clientes domiciliarios del periodo que se mira (14/9/2026, a la tarde).
    Lucas abrio el Resumen el lunes y el cuadro de clientes no estaba: vivia en la
@@ -16488,8 +16591,10 @@ function _rtClientes(P){
      cliente que compro dos veces tiene que contarse una sola y eso no se puede
      rearmar sumando. Antes que inventarlo, no se dibuja. */
   if(P.tipo==='libre')return null;
+  /* Por semana de Maleu (6/10/2026): `D.saludSemM`, "aaaa-mm-n". Si el servidor
+     todavia no lo manda, no se dibuja: el de la semana ISO seria OTRA semana. */
   if(P.tipo==='sem'){
-    return (D.saludSem&&D.saludSem[_rtDia(P.desde,3).getFullYear()+'-'+getWeek(P.desde)])||null;
+    return (D.saludSemM&&P.sem&&D.saludSemM[P.sem.k])||null;
   }
   return (D.saludMes&&D.saludMes[P.desde.getFullYear()+'-'+String(P.desde.getMonth()+1).padStart(2,'0')])||null;
 }
@@ -16767,10 +16872,10 @@ function rRetail(){
          del año, que no se puede leer. */
       var ymAct=P.desde.getFullYear()+'-'+String(P.desde.getMonth()+1).padStart(2,'0');
       panel+='<div class="rt-eleg-f"><span class="rt-eleg-l">Semanas de '+RT_MESES[P.desde.getMonth()].toLowerCase()+'</span><span class="rt-eleg-r">'
-        +_rtSemanasDelMes(ymAct).map(function(s){
-            var fin=_rtDia(s.lun,6);
-            return '<button type="button" class="rt-chip'+(P.k==='w:'+s.k?' on':'')+'" onclick="rtPer(\'w:'+s.k+'\')" title="'
-              +s.lun.getDate()+'/'+(s.lun.getMonth()+1)+' → '+fin.getDate()+'/'+(fin.getMonth()+1)+'">'+s.n+'</button>';
+        +_rtSemanasDelMes(ymAct).filter(function(s){return s.desde<=hoy;}).map(function(s){
+            var on=P.sem&&P.sem.k===s.k;
+            return '<button type="button" class="rt-chip'+(on?' on':'')+'" onclick="rtPer(\'s:'+s.k+'\')" title="'+s.tit+'">'
+              +'Sem '+s.n+' · '+s.rango+'</button>';
           }).join('')+'</span></div>';
       panel+='<div class="rt-eleg-f"><span class="rt-eleg-l">A medida</span><span class="rt-eleg-r rt-eleg-lib">'
         +'<input id="rtRd" placeholder="dd/mm/aaaa" inputmode="numeric" value="'+_cmpDMY(P.d)+'">'
@@ -16977,7 +17082,10 @@ function rInicio(){
   var hb=$('heroBox');
   var diaHoy=DIAS_ES[now.getDay()];
   var ddH=now.getDate(),mmH=MS[now.getMonth()],yyH=now.getFullYear();
-  var semActual=getWeek(now);
+  /* Las semanas de esta pantalla son las del calendario de Maleu (6/10/2026): la
+     del mes, cortada en las puntas. La clave es "aaaa-mm-n"; hasta ese dia era el
+     numero ISO sin año. */
+  var SEMH=calSemanaDe(now), semActual=SEMH.k;
   // Filtrar pv por Día de Entrega Elegido. El backend devuelve p.de como texto:
   // puede ser "24/04/2026", un Date toString, o nombre del día ("Miércoles").
   // En el último caso, calcular la próxima ocurrencia del día desde la fecha del pedido.
@@ -17019,8 +17127,6 @@ function rInicio(){
     if(new Date(Number(m[1]),Number(m[2])-1,Number(m[3])).getTime()!==_hoy0)return;
     entHoy++; montoHoy+=Number(p.$||0);
   });
-  var _rgSem=_isoWeekRange(yyH,semActual);
-  var _dm=function(d){return d.getUTCDate()+'/'+(d.getUTCMonth()+1);};
   var txtHoy=entHoy>0
     ? '<b>'+entHoy+(entHoy===1?' entrega':' entregas')+'</b> por $'+f$(montoHoy)
     : 'Sin entregas cargadas para hoy';
@@ -17030,7 +17136,7 @@ function rInicio(){
       '<div style="flex:1 1 260px;min-width:0">'+
         '<div class="hero-sub">HOY</div>'+
         '<div class="hero-t">'+diaHoy+' '+ddH+' de '+mmH+' '+yyH+'</div>'+
-        '<div class="hero-d">'+txtHoy+' &middot; semana '+semActual+' (lun '+_dm(_rgSem[0])+' → dom '+_dm(_rgSem[1])+')</div>'+
+        '<div class="hero-d">'+txtHoy+' &middot; '+SEMH.tit+'</div>'+
       '</div>'+
     '</div>';
 
@@ -17060,7 +17166,7 @@ function rInicio(){
       if(!k)return;
       var parts=k.split('/');if(parts.length<2)return;
       var d=new Date(nowYear,Number(parts[1])-1,Number(parts[0]));
-      var sem=getWeek(d);
+      var sem=calSemanaDe(d).k;
       if(!porSemana[sem])porSemana[sem]={ef:0,tr:0,tot:0,pend:0,n:0,mg:0,dias:{},minD:d,maxD:d};
       if(d<porSemana[sem].minD)porSemana[sem].minD=d;
       if(d>porSemana[sem].maxD)porSemana[sem].maxD=d;
@@ -17092,7 +17198,7 @@ function rInicio(){
      por NOMBRE y con el numero de semana sin año: la semana 37 decia 42 en un
      celular y 9 en otro. Si el dato no llego, no se dibuja: no se inventa. */
   function saludClientesHTML(w){
-    var s=D&&D.saludSem&&D.saludSem[nowYear+'-'+w];
+    var s=D&&D.saludSemM&&D.saludSemM[w];
     if(!s||!s.total)return '';
     function chip(emoji,n,lbl,col){
       return '<div style="flex:1;background:#fff;border:1px solid var(--cd);border-radius:10px;padding:7px 4px;text-align:center">'
@@ -17283,7 +17389,7 @@ function rInicio(){
   // Cards HOY + SEMANA ACTUAL
   cbHtml+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:10px 0">';
   cbHtml+=cajaCard('HOY \u00b7 EN MANO',hoyD.ef,hoyD.tr,hoyD.tot,hoyD.pend,hoyD.tot>0,vueltoHoy,'hoyEnManoDet',hoyKey);
-  cbHtml+=cajaCard('SEMANA '+semActual+' \u00b7 EN MANO',semData.ef,semData.tr,semData.tot,semData.pend,true,vueltoSem,null,null,semData.sinEnt||0);
+  cbHtml+=cajaCard('SEM '+SEMH.n+' \u00b7 '+SEMH.rango.toUpperCase()+' \u00b7 EN MANO',semData.ef,semData.tr,semData.tot,semData.pend,true,vueltoSem,null,null,semData.sinEnt||0);
   cbHtml+='</div>';
   // Detalle clickeable de HOY \u2014 reconciliar pedido por pedido contra la caja f\u00edsica.
   cbHtml+=detalleCobrosHTML(hoyKey, hoyD.peds||[], vueltoHoy, 'hoyEnManoDet');
@@ -17292,9 +17398,9 @@ function rInicio(){
   // Días de semana actual (expandido)
   // Semana actual: SIEMPRE Lunes a Domingo, incluso días sin facturación
   (function(){
-    var lun=new Date(now.getFullYear(),now.getMonth(),now.getDate());
-    var offset=(lun.getDay()+6)%7; // JS Dom=0..Sab=6 → ISO Lun=0..Dom=6
-    lun.setDate(lun.getDate()-offset);
+    /* Desde el 6/10/2026, los dias de la semana de Maleu: la sem 1 de octubre
+       muestra del jue 1 al dom 4, no del lun 28/9. */
+    var lun=SEMH.desde;
     var DIAS_FULL=['Domingo','Lunes','Martes','Miércoles','Jueves','Viernes','Sábado'];
     function _isoAKey(iso){
       var m=String(iso||'').match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
@@ -17371,16 +17477,12 @@ function rInicio(){
       });
     }
     cbHtml+='<div onclick="toggleSem(\'actual\')" style="margin-top:8px;padding:10px 12px;background:#fff;border:2px solid var(--cd);border-radius:12px;cursor:pointer;display:flex;justify-content:space-between;align-items:center">';
-    /* El rango explicito. Sin el, "Semana 36" y el "1 al 6" de Planificacion
-       parecen el mismo periodo y no lo son: la semana ISO arranca el lunes,
-       aunque ese lunes sea del mes anterior. */
-    var _domSem=new Date(lun.getFullYear(),lun.getMonth(),lun.getDate()+6);
-    var _fq=function(d){return d.getDate()+'/'+(d.getMonth()+1);};
-    cbHtml+='<span style="font-weight:800;font-size:12px;color:var(--o);text-transform:uppercase;letter-spacing:.06em">&#128197; Semana '+semActual+' \u00b7 lun '+_fq(lun)+' \u2192 dom '+_fq(_domSem)+'</span>';
+    /* El rango y los dias, explicitos: «Sem 1 · 1–4 oct · 4 días». */
+    cbHtml+='<span style="font-weight:800;font-size:12px;color:var(--o);text-transform:uppercase;letter-spacing:.06em">&#128197; '+SEMH.tit+'</span>';
     cbHtml+='<span id="sem-chev-actual" style="font-size:14px;color:var(--bl)">\u25BC</span>';
     cbHtml+='</div>';
     var bodyH='';
-    for(var i=0;i<7;i++){
+    for(var i=0;i<SEMH.dias;i++){
       var d=new Date(lun.getFullYear(),lun.getMonth(),lun.getDate()+i);
       var k=String(d.getDate()).padStart(2,'0')+'/'+String(d.getMonth()+1).padStart(2,'0');
       var diaAb=DIAS_FULL[d.getDay()].substring(0,3);
@@ -17453,7 +17555,7 @@ function rInicio(){
       if(dmy)dt=new Date(dmy[3]?Number(dmy[3]):now.getFullYear(),Number(dmy[2])-1,Number(dmy[1]));
     }
     if(!dt||isNaN(dt))return null;
-    return getWeek(dt);
+    return calSemanaDe(dt).k;
   }
   pvAll.forEach(function(p){
     if(p.h==='Red')return; // Red entra por deudaPorSemana del backend
@@ -17468,9 +17570,12 @@ function rInicio(){
   ((D&&D.vendedores)||[]).forEach(function(v){
     var dps=v.deudaPorSemana||{};
     Object.keys(dps).forEach(function(k){
-      // k puede ser "2026-18" o "18"
-      var sem=Number(String(k).split('-').pop())||0;
-      if(!sem)return;
+      /* k es la semana ISO del vendedor ("2026-18" o "18"): para Red la semana es
+         entera. Aca se ubica en la semana de Maleu de su VIERNES, que es el dia
+         en que Red reparte. */
+      var kp=String(k).split('-'), wN=Number(kp.pop())||0, wY=Number(kp.pop())||nowYear;
+      if(!wN)return;
+      var sem=calSemanaDe(_rtDia(_rtLunesISO(wY,wN),4)).k;
       var monto=Math.round(Number(dps[k])||0);
       if(monto<=0)return;
       if(!pendPorSem[sem])pendPorSem[sem]={vd:[],red:[],totVD:0,totRed:0,total:0};
@@ -17482,7 +17587,7 @@ function rInicio(){
 
   // Semanas previas (acordeón)
   var MS_SHORT=['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
-  var semsOrd=Object.keys(porSemana).map(Number).filter(function(s){return s!==semActual;}).sort(function(a,b){return b-a;});
+  var semsOrd=Object.keys(porSemana).filter(function(s){return s!==semActual&&calSemanaPorClave(s);}).sort().reverse();
   if(semsOrd.length>0){
     cbHtml+='<div onclick="toggleSem(\'prev\')" style="margin-top:14px;padding:10px 12px;background:#fff;border:2px solid var(--cd);border-radius:12px;cursor:pointer;display:flex;justify-content:space-between;align-items:center">';
     cbHtml+='<span style="font-weight:800;font-size:12px;color:var(--o);text-transform:uppercase;letter-spacing:.06em">&#128336; Semanas anteriores ('+semsOrd.length+')</span>';
@@ -17496,17 +17601,15 @@ function rInicio(){
          dice FACTURADO sobre otra cosa, y ninguno de los dos era lo entregado: la
          semana 37 decia $5.595.081 aca y $6.060.073 en el PDF, y lo entregado fue
          $5.593.151. Ahora dice las dos cosas y cada una con su nombre. */
-      var _rgS=_isoWeekRange(nowYear,s);
-      var r=_rgS[0].getUTCDate()+' '+MS_SHORT[_rgS[0].getUTCMonth()]+' \u2013 '+_rgS[1].getUTCDate()+' '+MS_SHORT[_rgS[1].getUTCMonth()];
-      var gS=_rtSumar(_rgS[0].toISOString().slice(0,10),_rgS[1].toISOString().slice(0,10)).tot;
+      var SS=calSemanaPorClave(s);
+      var gS=_rtSumar(SS.d,SS.h).tot;
       var mgS=gS.f-gS.c;
       cbHtml+='<div class="card" style="margin-bottom:6px;padding:0;overflow:hidden">';
-      cbHtml+='<div onclick="toggleSem('+s+')" style="padding:12px;cursor:pointer">';
+      cbHtml+='<div onclick="toggleSem(\''+s+'\')" style="padding:12px;cursor:pointer">';
       cbHtml+='<div style="display:flex;justify-content:space-between;align-items:center">';
-      cbHtml+='<div style="font-weight:800;font-size:14px">Semana '+s+'</div>';
+      cbHtml+='<div style="font-weight:800;font-size:14px">'+SS.tit+'</div>';
       cbHtml+='<span id="sem-chev-'+s+'" style="font-size:14px;color:var(--bl)">\u25BC</span>';
       cbHtml+='</div>';
-      cbHtml+='<div style="font-size:11px;color:var(--bl);margin-top:2px">lun '+r+'</div>';
       cbHtml+='<div style="margin-top:8px;font-size:10px;color:var(--bl);font-weight:700;letter-spacing:.4px;text-transform:uppercase">Entregado en la semana</div>';
       cbHtml+='<div style="font-weight:800;font-size:18px;margin-top:1px">$'+f$(gS.f)+'</div>';
       cbHtml+='<div style="font-size:11px;color:var(--bl);margin-top:2px">'+gS.ent+(gS.ent===1?' entrega':' entregas')+(gS.f>0?' \u00b7 margen <b style="color:'+(mgS>=0?'var(--gd)':'var(--r)')+'">$'+f$(mgS)+' ('+Math.round(mgS/gS.f*100)+'%)</b>':'')+'</div>';
@@ -17530,7 +17633,7 @@ function rInicio(){
       cbHtml+='</div>';
       cbHtml+='<div id="sem-body-'+s+'" class="hidden" style="padding:0 10px 10px">'+renderDiasList(d.dias,false,s)+'</div>';
       // Botón PDF SIEMPRE visible (fuera del acordeón hidden)
-      cbHtml+='<div style="padding:0 12px 12px"><button onclick="event.stopPropagation();descargarPDFSemana(\''+_rgS[0].toISOString().slice(0,10)+'\')" style="display:block;width:100%;padding:12px;background:var(--o);color:#fff;border:none;border-radius:10px;font-size:13px;font-weight:800;cursor:pointer">&#128229; Descargar PDF Semana '+s+'</button></div>';
+      cbHtml+='<div style="padding:0 12px 12px"><button onclick="event.stopPropagation();descargarPDFSemana(\''+SS.d+'\')" style="display:block;width:100%;padding:12px;background:var(--o);color:#fff;border:none;border-radius:10px;font-size:13px;font-weight:800;cursor:pointer">&#128229; Descargar PDF Semana '+s+'</button></div>';
       cbHtml+='</div>';
     });
     cbHtml+='</div>';
@@ -29167,15 +29270,18 @@ if('serviceWorker' in navigator){
     return Object.keys(out).sort().map(function(k){var x=out[k];x.label=MESES[x.mn-1]+' '+x.an;return x;});
   }
 
+  /* `lunIso` es CUALQUIER dia de la semana: desde el 6/10/2026 la semana es la del
+     calendario de Maleu (la del mes, cortada en las puntas), asi que `lun` es su
+     primer dia —el 1/10 en la sem 1 de octubre— y no siempre un lunes. */
   function armar(lunIso){
-    var lun=isoADate(lunIso);if(!lun)throw new Error('semana invalida');
-    lun=_rtDia(lun,-((lun.getDay()+6)%7));
-    var dom=_rtDia(lun,6);
+    var f0=isoADate(lunIso);if(!f0)throw new Error('semana invalida');
+    var S=calSemanaDe(f0);
+    var lun=S.desde, dom=S.hasta;
     var ahora=new Date(), hoy=new Date(ahora.getFullYear(),ahora.getMonth(),ahora.getDate());
     var enCurso=hoy>=lun&&hoy<=dom;
     var hasta=enCurso?hoy:dom;
     var d=_rtIso(lun), h=_rtIso(hasta);
-    var semN=getWeek(lun), anioIso=_rtDia(lun,3).getFullYear();
+    var semN=S.n;
     var g=_rtSumar(d,h);
     var gc=_rtSumar(_rtIso(_rtDia(lun,-7)),_rtIso(_rtDia(hasta,-7)));
     var meses=mesesDe(lun,hasta);
@@ -29187,7 +29293,7 @@ if('serviceWorker' in navigator){
       dias.push({d:di,ent:x.ent,f:x.f,c:x.c});
     }
 
-    var cl=(D.saludSem&&D.saludSem[anioIso+'-'+semN])||null;
+    var cl=(D.saludSemM&&D.saludSemM[S.k])||null;
     if(cl&&!(cl.total>0))cl=null;
 
     /* Los pedidos entregados en un rango, con la misma regla que `_rtSumar`. La
@@ -29492,7 +29598,14 @@ if('serviceWorker' in navigator){
          copia): el avance y la nota salen de la MISMA lista. */
       var LL=Array.isArray(_rsLeads)?_rsLeads:(function(){var g=_swrLeer('crmLeads');return g&&g.d&&Array.isArray(g.d.leads)?g.d.leads:null;})();
       objMes={metaTotal:mt?(Number(mt.metaFact)||0):0,
-        lista:(pdM.objetivos||[]).filter(function(o){return o.periodo==='Mes'||o.periodo==='Semana '+semN;}).map(function(o){
+        /* Los de la semana, por su RANGO y no por el nombre (6/10/2026): «Semana 2»
+           es la sem 2 del mes y un «Semana 37» viejo es la ISO; `_objRango` sabe
+           leer los dos, y entra el que se cruza con esta semana. */
+        lista:(pdM.objetivos||[]).filter(function(o){
+          if(o.periodo==='Mes')return true;
+          var r=_objRango(o.periodo,MESES[hasta.getMonth()]+' '+hasta.getFullYear());
+          return !!r&&r.d<=_rtIso(dom)&&r.h>=_rtIso(lun);
+        }).map(function(o){
           var a=objAvanceLeads(o,MESES[hasta.getMonth()]+' '+hasta.getFullYear(),LL,_rtIso(hasta));if(a===null)return o;
           var c={};for(var k in o)c[k]=o[k];c.avance=a;c._auto=true;return c;
         }),leads:null};
@@ -29507,7 +29620,7 @@ if('serviceWorker' in navigator){
       }
     })();
 
-    return {lun:lun,dom:dom,hasta:hasta,enCurso:enCurso,d:d,h:h,semN:semN,semAnt:getWeek(_rtDia(lun,-7)),
+    return {lun:lun,dom:dom,hasta:hasta,enCurso:enCurso,d:d,h:h,semN:semN,S:S,
       g:g,gc:gc,dias:dias,cl:cl,topCli:topCli,prodU:prodU,prodK:prodK,prodX:prodX,totU:totU,totK:totK,porCat:porCat,
       pend:pend,pendTot:pendTot,pendYa:pendYa,redSin:redSin,carne:carne,nuevos:nuevos,volvieron:volvieron,cob:cob,
       hayMov:hayMov,eco:eco,fin:fin,ing:ing,plan:plan,mesR:mesR,redVend:redVend,objMes:objMes,
@@ -29554,15 +29667,18 @@ if('serviceWorker' in navigator){
 
   function render(R){
     var g=R.g, t=g.tot, gc=R.gc, mT=t.f-t.c, mC=gc.tot.f-gc.tot.c;
-    var vs='vs semana '+R.semAnt+(R.enCurso?' hasta el '+DIAS[R.hasta.getDay()]:'');
-    var periodo='lun '+dm(R.lun)+' → dom '+dm(R.dom)+'/'+R.dom.getFullYear()
+    /* Contra los MISMOS dias de la semana anterior: una semana corta no se
+       compara pelada contra una entera. */
+    var vs='vs los mismos días de la semana anterior';
+    var periodo=DIAS[R.lun.getDay()].slice(0,3)+' '+dm(R.lun)+' → '+DIAS[R.dom.getDay()].slice(0,3)+' '+dm(R.dom)+'/'+R.dom.getFullYear()
+      +' · '+R.S.dias+(R.S.dias===1?' día':' días')
       +(R.enCurso?' · en curso, hasta hoy '+DIAS[R.hasta.getDay()]+' '+dm(R.hasta):'');
 
     var h='';
     h+='<div class="rs-cover">'
       +'<img src="/img/logo-white.png" alt="Maleu">'
       +'<div class="rs-cover-eyebrow">Resumen semanal</div>'
-      +'<div class="rs-cover-title">Semana '+R.semN+'</div>'
+      +'<div class="rs-cover-title">Sem '+R.semN+' de '+MESES[R.S.m0].toLowerCase()+'</div>'
       +'<div class="rs-cover-period">'+periodo+'</div>'
       +'<div class="rs-cover-headline">'+(t.f>0
           ?'Facturado <b>'+fmt$(t.f)+'</b> · margen <b>'+fmt$(mT)+' ('+pct(mT,t.f)+'%)</b> · <b>'+t.ent+'</b> '+(t.ent===1?'entrega':'entregas')
@@ -29805,7 +29921,7 @@ if('serviceWorker' in navigator){
   window._rsRender=render;
 
   function nombreArchivo(R){
-    return 'Maleu - Resumen Semana '+R.semN+' ('+pad(R.lun.getDate())+'-'+pad(R.lun.getMonth()+1)+'-'+R.lun.getFullYear()
+    return 'Maleu - Resumen Sem '+R.semN+' '+MESES[R.S.m0].toLowerCase()+' ('+pad(R.lun.getDate())+'-'+pad(R.lun.getMonth()+1)+'-'+R.lun.getFullYear()
       +' a '+pad(R.dom.getDate())+'-'+pad(R.dom.getMonth()+1)+'-'+R.dom.getFullYear()+').pdf';
   }
 
@@ -29846,10 +29962,10 @@ if('serviceWorker' in navigator){
   var _rsLeads=null;
   function prepararDatos(lunIso,cb){
     var lun=isoADate(lunIso);if(!lun){cb();return;}
-    lun=_rtDia(lun,-((lun.getDay()+6)%7));
-    var tareas=[], s=D.saludSem&&D.saludSem[_rtDia(lun,3).getFullYear()+'-'+getWeek(lun)];
+    var SP=calSemanaDe(lun);lun=SP.desde;
+    var tareas=[], s=D.saludSemM&&D.saludSemM[SP.k];
     if(s&&(s.nuevos>0||s.react>0)&&!(Array.isArray(s.nuevosL)&&Array.isArray(s.reactL))){
-      tareas.push(traerJson('saludClientes',30000,function(j){if(j&&j.ok&&j.sem){D.saludSem=j.sem;if(j.mes)D.saludMes=j.mes;}}));
+      tareas.push(traerJson('saludClientes',30000,function(j){if(j&&j.ok&&j.sem){D.saludSem=j.sem;if(j.semM)D.saludSemM=j.semM;if(j.mes)D.saludMes=j.mes;}}));
     }
     tareas.push(traerJson('crmLeads',20000,function(j){
       if(j&&j.ok===true&&Array.isArray(j.leads)){ _rsLeads=j.leads; try{ _swrGuardar('crmLeads',j); }catch(e){} }
@@ -29939,7 +30055,7 @@ if('serviceWorker' in navigator){
     },Promise.resolve()).then(function(){
       for(var p=1;p<=paginas;p++){
         pdf.setPage(p);pdf.setFontSize(8);pdf.setTextColor(122,74,74);
-        pdf.text('Maleu - Semana '+R.semN+' - pagina '+p+' de '+paginas,pageW/2,pageH-5,{align:'center'});
+        pdf.text('Maleu - Sem '+R.semN+' de '+MESES[R.S.m0].toLowerCase()+' - pagina '+p+' de '+paginas,pageW/2,pageH-5,{align:'center'});
       }
       pdf.save(nombreArchivo(R));
       return paginas;
@@ -29967,7 +30083,7 @@ if('serviceWorker' in navigator){
         var doc=hidden.querySelector('#rsDoc');
         if(!doc||typeof html2canvas!=='function'||!window.jspdf){hideLoader(true);hidden.innerHTML='';toast('No se pudo generar el PDF (falta la librería)');return;}
         _generarPDFFromDoc(doc,R).then(function(){
-          hideLoader(true);toast('PDF de la semana '+R.semN+' descargado');hidden.innerHTML='';
+          hideLoader(true);toast('PDF de la sem '+R.semN+' de '+MESES[R.S.m0].toLowerCase()+' descargado');hidden.innerHTML='';
         }).catch(function(err){
           hideLoader(true);toast('Error PDF: '+err.message);hidden.innerHTML='';
         });
@@ -29986,7 +30102,7 @@ if('serviceWorker' in navigator){
     if(!box)return;
     if(!datosListos()){box.innerHTML='<div class="rs-nota">Trayendo los pedidos…</div>';return;}
     conCatalogo(function(){
-      var hoy=new Date(), lun=_rtDia(new Date(hoy.getFullYear(),hoy.getMonth(),hoy.getDate()),-((hoy.getDay()+6)%7)+off*7);
+      var hoy=new Date(), lun=calMover(calSemanaDe(hoy),off).desde;
       RS_DATA=armar(_rtIso(lun));
       box.innerHTML=render(RS_DATA);
       if(btn)btn.disabled=false;
@@ -37957,9 +38073,13 @@ if('serviceWorker' in navigator){
     var h = '<div class="plan-tot">' + top
       + '<div class="plan-tot-v">$'+f$(real)+(M?' <small>de $'+f$(M)+'</small>':'')+'</div>';
     if(M){
-      var pct = Math.round(real/M*100), alDia = Math.round(M*cerr/dias), pAlDia = Math.min(100, Math.round(cerr/dias*100));
+      /* Donde tendria que ir, por el PESO de los dias que pasaron (6/10/2026), no
+         por cuantos pasaron: el finde se lleva casi todo, y un jueves 1 no tiene
+         que llevar el 3% de la meta. La proyeccion usa la misma cuenta. */
+      var fr = calFraccionMes(Number(planData.yyyy), Number(planData.mm)-1, cerr, calPesosMaleu());
+      var pct = Math.round(real/M*100), alDia = Math.round(M*fr), pAlDia = Math.min(100, Math.round(fr*100));
       var falta = Math.max(M-real,0), quedan = Math.max(dias-cerr,0), ritmo = cerr ? realCerr/cerr : 0;
-      var proy = Math.round(ritmo*dias), necesita = quedan ? falta/quedan : 0;
+      var proy = fr>0 ? Math.round(realCerr/fr) : 0, necesita = quedan ? falta/quedan : 0;
       var cuando = enCurso ? 'al cierre de ayer (día '+cerr+')' : 'al día '+cerr;
       h += '<div class="plan-bar"><span style="width:'+Math.min(100,pct)+'%"></span><i style="left:'+pAlDia+'%" title="Donde tendría que ir '+cuando+'"></i></div>'
         + '<div class="plan-tot-stats">'
@@ -38117,18 +38237,19 @@ if('serviceWorker' in navigator){
     }
     if(T.fuera.length) h += '<div class="pn-dif plan-mal">Hay metas de '+esc(T.fuera.join(', '))+' que no cuelgan de ningún nivel: no se suman.</div>';
     h += '<div class="pn-hd"><span>Nivel</span><span>Facturación</span><span>Ventas</span><span>Ticket</span><span>Margen</span><span>'+(enCurso?'Para llegar':'Cumplió')+'</span></div>';
+    var frC = calFraccionMes(Number(planData.yyyy), Number(planData.mm)-1, cerr, calPesosMaleu());
     function fila(n){
       var M = n.meta, R = n.real, tieneMeta = M.f > 0;
       var pct = tieneMeta ? Math.round(R.f/M.f*100) : null;
       var juicio = '';
-      if(tieneMeta && cerr > 0 && !n.soloMeta) juicio = (enCurso ? (n.cerr.f >= M.f*cerr/dias) : (R.f >= M.f)) ? 'plan-ok' : 'plan-mal';
+      if(tieneMeta && cerr > 0 && !n.soloMeta) juicio = (enCurso ? (n.cerr.f >= M.f*frC) : (R.f >= M.f)) ? 'plan-ok' : 'plan-mal';
       var tR = R.v ? R.f/R.v : 0, tM = M.v ? M.f/M.v : 0;
       var mR = R.f ? (R.f-R.c)/R.f*100 : null, mM = (M.f && !M.sinMargen && M.mb) ? M.mb/M.f*100 : null;
       var cls = 'pn-row pn-d'+Math.min(n.prof,2)+(n.prof===0?' pn-tot':'');
       var nom = esc(n.t)+(n.prof===0&&T.cargado?' <small>suma de canales</small>':'')+(n.sub?' <small>'+esc(n.sub)+'</small>':'')+(n.soloMeta?' <small>meta vieja: Home + Pilar</small>':'');
       var fac = n.soloMeta ? '<span class="pn-sin">—</span> <small>de $'+f$(M.f)+'</small>'
         : '$'+f$(R.f)+(tieneMeta?' <small>de $'+f$(M.f)+'</small> <b class="'+juicio+'">'+pct+'%</b>':' <small class="pn-sin">sin meta</small>');
-      var bar = (tieneMeta && !n.soloMeta) ? '<div class="plan-bar sm"><span style="width:'+Math.min(100,pct)+'%"></span>'+(enCurso?'<i style="left:'+Math.min(100,Math.round(cerr/dias*100))+'%"></i>':'')+'</div>' : '';
+      var bar = (tieneMeta && !n.soloMeta) ? '<div class="plan-bar sm"><span style="width:'+Math.min(100,pct)+'%"></span>'+(enCurso?'<i style="left:'+Math.min(100,Math.round(frC*100))+'%"></i>':'')+'</div>' : '';
       var falta = Math.max(M.f - R.f, 0), ult;
       if(!tieneMeta || n.soloMeta) ult = '<span class="pn-sin">—</span>';
       else if(falta <= 0) ult = '<b class="plan-ok">cumplido</b>';
@@ -38494,7 +38615,7 @@ if('serviceWorker' in navigator){
         var v = (f.ind==='manual' || f.ind==='leads') ? (d===dias || d>=cerr ? _planIndicador(f.ind, y, m0, d, f.o) : null) : _planIndicador(f.ind, y, m0, d, f.o);
         var cls = '', deb = '';
         if(v!==null && f.meta){
-          if(I.ritmo==='acum'){ var alD = f.meta*d/dias; cls = v >= alD ? 'ok' : 'mal'; deb = '<small>tendría '+_planNumTxt(alD, u)+'</small>'; }
+          if(I.ritmo==='acum'){ var alD = f.meta*calFraccionMes(y, m0, d, calPesosMaleu()); cls = v >= alD ? 'ok' : 'mal'; deb = '<small>tendría '+_planNumTxt(alD, u)+'</small>'; }
           else if(I.ritmo==='nivel' || d===dias){ cls = v >= f.meta ? 'ok' : 'mal'; }
         }
         h += '<td class="'+cls+'">'+(v===null ? '<small>al cierre</small>' : _planNumTxt(v, u)+deb)+'</td>';
@@ -39200,6 +39321,10 @@ function _objRango(periodo, mesLabel){
   var iso=function(d){ return d.getFullYear()+'-'+('0'+(d.getMonth()+1)).slice(-2)+'-'+('0'+d.getDate()).slice(-2); };
   if(!periodo || periodo==='Mes') return { d:iso(new Date(y,m,1)), h:iso(new Date(y,m+1,0)) };
   var w=Number(String(periodo).replace(/\D/g,'')); if(!w) return null;
+  /* «Semana 1» a «Semana 6» son las semanas de Maleu de ESE mes (6/10/2026): la
+     del mes, cortada en las puntas. Un numero mas grande es de antes, cuando el
+     periodo era la semana ISO («Semana 38» de septiembre): se lee como era. */
+  if(w<=6){ var sM=calSemanasMes(y,m)[w-1]; return sM ? { d:sM.d, h:sM.h } : null; }
   if(m===11 && w<10) y++; else if(m===0 && w>50) y--;
   var j4=new Date(y,0,4), lun=new Date(y,0,4-((j4.getDay()||7)-1)+(w-1)*7);
   return { d:iso(lun), h:iso(new Date(lun.getFullYear(),lun.getMonth(),lun.getDate()+6)) };
@@ -39267,7 +39392,7 @@ function _objRango(periodo, mesLabel){
     var L=_datos||[];
     if(E('leadsSello')) E('leadsSello').textContent=_sello ? (_sello.viejo ? '· copia '+_sello.hace : '· recién') : '';
     /* Arriba: cuantos trajo cada uno en el mes y en la semana, y cuantos compraron. */
-    var hoy=hoyIso(), mes=hoy.slice(0,7), wk=_objRango('Semana '+getWeek(new Date()), ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'][Number(hoy.slice(5,7))-1]+' '+hoy.slice(0,4));
+    var hoy=hoyIso(), mes=hoy.slice(0,7), wk=_objRango('Semana '+calSemanaDe(new Date()).n, ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'][Number(hoy.slice(5,7))-1]+' '+hoy.slice(0,4));
     var del=L.filter(function(l){ return !l.yaCliente && l.iso && l.iso.slice(0,7)===mes; });
     var quienes=[]; del.forEach(function(l){ var q=l.responsable||'Sin responsable'; if(quienes.indexOf(q)<0) quienes.push(q); });
     quienes.sort(function(a,b){ return del.filter(function(l){return (l.responsable||'Sin responsable')===b;}).length - del.filter(function(l){return (l.responsable||'Sin responsable')===a;}).length; });

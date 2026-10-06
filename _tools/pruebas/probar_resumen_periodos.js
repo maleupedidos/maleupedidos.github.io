@@ -62,8 +62,34 @@ const esperar = async (c, e, ms = 60000) => { const t = Date.now(); while (Date.
       var P = _rtPeriodo('w:2026-1', new Date(2026,5,15));
       return { lun: _rtIso(L), d: P.d, h: P.h, tit: P.tit };
     })()`);
-    chk('la semana 1 de 2026 arranca el lunes 29/12/2025',
-      borde && borde.lun === '2025-12-29' && borde.d === '2025-12-29' && borde.h === '2026-01-04', borde);
+    /* Desde el 6/10/2026 manda el calendario de Maleu: una clave vieja `w:` cae en
+       la semana de Maleu de su JUEVES, y el 29-31/12 son de diciembre. */
+    chk('una clave vieja w:2026-1 cae en la sem 1 de enero (1 a 4/1), no arranca el 29/12',
+      borde && borde.lun === '2025-12-29' && borde.d === '2026-01-01' && borde.h === '2026-01-04', borde);
+
+    /* Los bordes del encargo (6/10/2026): la semana del 28/9 al 4/10 son DOS. */
+    const cal = await evaluar(cli, `(function(){
+      var r = function(k, hoy){ var P = _rtPeriodo(k, hoy); return { d:P.d, h:P.h, cd:P.cd, ch:P.ch, tit:P.tit, en:!!P.enCurso }; };
+      return { oct1: r('s:2026-10-1', new Date(2026,11,1)), sep5: r('s:2026-09-5', new Date(2026,11,1)),
+               nov1: r('s:2026-11-1', new Date(2026,11,1)), dic5: r('s:2026-12-5', new Date(2027,0,15)),
+               hoy: r('sem', new Date(2026,9,6)), ant: r('semAnt', new Date(2026,9,6)),
+               futura: _rtPeriodo('s:2026-12-1', new Date(2026,9,6)).k };
+    })()`);
+    chk('la sem 1 de octubre va del jue 1 al dom 4 y dice sus 4 dias',
+      cal && cal.oct1.d === '2026-10-01' && cal.oct1.h === '2026-10-04' && /Sem 1 · 1–4 oct · 4 días/.test(cal.oct1.tit), cal && cal.oct1);
+    chk('y se compara contra los MISMOS dias de la anterior (jue 24 a dom 27/9)',
+      cal && cal.oct1.cd === '2026-09-24' && cal.oct1.ch === '2026-09-27', cal && cal.oct1);
+    chk('el 28-30/9 son la sem 5 de septiembre, 3 dias',
+      cal && cal.sep5.d === '2026-09-28' && cal.sep5.h === '2026-09-30' && /3 días/.test(cal.sep5.tit), cal && cal.sep5);
+    chk('la sem 1 de noviembre es solo el domingo 1',
+      cal && cal.nov1.d === '2026-11-01' && cal.nov1.h === '2026-11-01' && /1 día/.test(cal.nov1.tit), cal && cal.nov1);
+    chk('la sem 5 de diciembre termina el jue 31, no el dom 3/1',
+      cal && cal.dic5.d === '2026-12-28' && cal.dic5.h === '2026-12-31', cal && cal.dic5);
+    chk('hoy martes 6/10 es la sem 2, cortada en hoy',
+      cal && cal.hoy.d === '2026-10-05' && cal.hoy.h === '2026-10-06' && cal.hoy.en === true && /Sem 2/.test(cal.hoy.tit), cal && cal.hoy);
+    chk('y la semana anterior es la sem 1 de octubre, no la del 28/9',
+      cal && cal.ant.d === '2026-10-01' && cal.ant.h === '2026-10-04', cal && cal.ant);
+    chk('una semana del futuro no se puede elegir', cal && cal.futura === 'mesAnt', cal && cal.futura);
 
     // ── 3) Un periodo elegido se compara contra el anterior ───────────────
     const w38 = await evaluar(cli, `(function(){
@@ -138,17 +164,17 @@ const esperar = async (c, e, ms = 60000) => { const t = Date.now(); while (Date.
       return { a:a, b:b, c:c, d:d, e:e, f:f, g:g };
     })()`);
     chk('desde "esta semana" la flecha lleva a la semana concreta anterior',
-      flechas && flechas.a === 'w:2026-38', flechas);
-    chk('y se puede seguir yendo para atras', flechas && flechas.b === 'w:2026-37', flechas);
+      flechas && flechas.a === 's:2026-09-3', flechas);
+    chk('y se puede seguir yendo para atras', flechas && flechas.b === 's:2026-09-2', flechas);
     chk('desde "este mes" lleva a agosto', flechas && flechas.c === 'm:2026-08', flechas);
     chk('y para adelante a octubre', flechas && flechas.d === 'm:2026-10', flechas);
     /* Un rango se corre por su PROPIO largo: 10 dias saltan 10 dias. */
     chk('un rango a medida se mueve por su propio largo',
       flechas && flechas.e === 'r:2026-08-22:2026-08-31', flechas);
-    chk('en el borde de año la flecha usa el año del JUEVES, no el del lunes',
-      flechas && flechas.f === 'w:2026-1', flechas && flechas.f);
-    chk('y desde la semana 1 de 2026 se pasa a la ultima de 2025',
-      flechas && flechas.g === 'w:2025-52', flechas && flechas.g);
+    chk('en el borde de año la flecha va de la sem 2 a la sem 1 de enero',
+      flechas && flechas.f === 's:2026-01-1', flechas && flechas.f);
+    chk('y desde la sem 1 de enero 2026 se pasa a la sem 5 de diciembre 2025 (29 a 31)',
+      flechas && flechas.g === 's:2025-12-5', flechas && flechas.g);
 
     // ── 7) El rango a medida ─────────────────────────────────────────────
     const libre = await evaluar(cli, `(function(){
@@ -167,21 +193,26 @@ const esperar = async (c, e, ms = 60000) => { const t = Date.now(); while (Date.
       var s = _rtSemanasDelMes('2026-09');
       return { n: s.length, ks: s.map(function(x){ return x.k; }) };
     })()`);
-    /* Septiembre 2026 lo tocan las semanas 36 a 40: la 36 arranca el 31/8 y la
-       40 termina el 4/10. Salen en los dos meses a proposito. */
-    chk('septiembre ofrece las 5 semanas que lo tocan, incluidas las de borde',
-      sem9 && sem9.n === 5 && sem9.ks[0] === '2026-36' && sem9.ks[4] === '2026-40', sem9);
+    /* Septiembre 2026 son 5 semanas de Maleu: 1-6, 7-13, 14-20, 21-27 y 28-30.
+       Hasta el 6/10/2026 eran las ISO que lo TOCABAN (36 a 40), y la 40 salia
+       entera en septiembre y en octubre. */
+    chk('septiembre ofrece sus 5 semanas, cortadas en el mes',
+      sem9 && sem9.n === 5 && sem9.ks[0] === '2026-09-1' && sem9.ks[4] === '2026-09-5', sem9);
 
     // ── 9) El cuadro de clientes no se inventa ───────────────────────────
     /* Viene precalculado POR SEMANA y POR MES: un cliente que compro dos veces
        cuenta una sola, y eso no se puede rearmar para un rango cualquiera. */
     const cli9 = await evaluar(cli, `(function(){
-      D = D || {}; D.saludSem = {'2026-38':{total:9}}; D.saludMes = {'2026-09':{total:40}};
-      return { sem: (_rtClientes(_rtPeriodo('w:2026-38', new Date(2026,11,1)))||{}).total || 0,
+      /* Por semana de Maleu (6/10/2026): \`saludSemM\`. La ISO 38 (14-20/9) es la
+         sem 3 de septiembre. Y si solo llega el ISO viejo, no se dibuja. */
+      D = D || {}; D.saludSem = {'2026-38':{total:7}}; D.saludSemM = {'2026-09-3':{total:9}}; D.saludMes = {'2026-09':{total:40}};
+      var soloIso = (function(){ var g = D.saludSemM; D.saludSemM = null; var r = _rtClientes(_rtPeriodo('w:2026-38', new Date(2026,11,1))); D.saludSemM = g; return r; })();
+      return { soloIso: soloIso, sem: (_rtClientes(_rtPeriodo('w:2026-38', new Date(2026,11,1)))||{}).total || 0,
                mes: (_rtClientes(_rtPeriodo('m:2026-09', new Date(2026,11,1)))||{}).total || 0,
                libre: _rtClientes(_rtPeriodo('r:2026-09-01:2026-09-10', new Date(2026,11,1))) };
     })()`);
-    chk('una semana elegida a mano SI trae su cuadro de clientes', cli9 && cli9.sem === 9, cli9);
+    chk('una semana elegida a mano SI trae su cuadro de clientes (por semana de Maleu)', cli9 && cli9.sem === 9, cli9);
+    chk('con solo el dato ISO viejo no lo dibuja (seria otra semana)', cli9 && cli9.soloIso === null, cli9);
     chk('un mes elegido tambien', cli9 && cli9.mes === 40, cli9);
     chk('un rango a medida no lo dibuja en vez de inventarlo', cli9 && cli9.libre === null, cli9);
 
@@ -280,14 +311,14 @@ const esperar = async (c, e, ms = 60000) => { const t = Date.now(); while (Date.
       var sems = [].map.call(document.querySelectorAll('#hRetail .rt-eleg-f:nth-child(2) .rt-chip'), function(b){ return b.textContent; });
       var lbl = (document.querySelector('#hRetail .rt-eleg-f:nth-child(2) .rt-eleg-l')||{}).textContent || '';
       /* y elegir una de esas semanas cambia el titulo de arriba */
-      rtPer('w:2026-28');
+      rtPer('s:2026-07-2');
       var tit = (document.querySelector('#hRetail .rt-sub')||{}).textContent || '';
       var pdf = !!document.querySelector('#hRetail .rt-pdf');
       return { sems: sems, lbl: lbl, tit: tit, pdf: pdf, abierto: !!document.querySelector('#hRetail .rt-eleg') };
     })()`);
     chk('el panel ofrece las semanas del mes que se esta mirando',
       panel && /julio/i.test(panel.lbl) && panel.sems.length >= 4, panel);
-    chk('elegir una semana cambia el titulo a esa semana', panel && /Semana 28/.test(panel.tit), panel && panel.tit);
+    chk('elegir una semana cambia el titulo a esa semana', panel && /Sem 2 · 6–12 jul/.test(panel.tit), panel && panel.tit);
     /* El PDF es de una semana: antes miraba la clave del atajo y una semana
        elegida a mano se quedaba sin el. */
     chk('una semana elegida a mano tambien ofrece el PDF', panel && panel.pdf === true, panel);

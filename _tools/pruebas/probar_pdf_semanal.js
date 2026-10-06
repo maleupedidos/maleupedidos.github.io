@@ -78,9 +78,9 @@ const PEDIDOS = [
   H({ c: 'Enero Prueba', bar: 'Estancias del Pilar', fex: '2027-01-01', $: 7000, co: 5000, ep: 'Cobrado', fc: '02/01', fp: 'Efectivo' })
 ];
 const EXTRA = [{ h: 'B2B', c: 'Empresa Prueba', fx: '2026-09-10', $: 192000, co: 140800 }, { h: 'Catering', c: 'Evento', fx: '2026-09-08', $: 300000, co: 200000 }];
-const SALUD = { '2026-37': { total: 4, nuevos: 1, recompra: 2, react: 1,
+const SALUD = { '2026-09-2': { total: 4, nuevos: 1, recompra: 2, react: 1,
   nuevosL: [{ c: 'Fede Prueba', r: ['Pilar|77'], luego: 0 }], reactL: [{ c: 'Beto Prueba', r: ['Home|60'], sem: 9, dias: 63, luego: 0 }] } };
-const LIGHT = { ts: 1, pedidos: PEDIDOS, canales: [], light: true, saludSem: SALUD, saludMes: {}, ventasExtra: EXTRA };
+const LIGHT = { ts: 1, pedidos: PEDIDOS, canales: [], light: true, saludSem: {}, saludSemM: SALUD, saludMes: {}, ventasExtra: EXTRA };
 const G = (f, cat, con, $) => ({ f: f, fFull: f + ' 10:00', ts: 1, mes: 'Septiembre', anio: 2026, cat: cat, con: con, met: 'Mercado Pago', $: $, not: '' });
 const CAJA = { ts: 1, caja: {}, saldoBase: {}, movimientos: [], efMano: [],
   gastos: [G('09/09/2026', 'Herramienta', 'WATI · Créditos', 10000), G('10/09/2026', 'Proveedor', 'Pago Le Unike', 50000), G('11/09/2026', 'Cambio cruzado', 'Vuelto', 3000), G('12/09/2026', 'Catering', 'Evento', 7000), G('03/09/2026', 'Nafta', 'Shell', 99999)],
@@ -116,7 +116,7 @@ const STUB = `
       else if(a==='ocLight') cuerpo={ok:true,oc:{lista:[]}};
       else if(a==='cobrosPendientes') cuerpo={ts:1,cobros:[]};
       else if(a==='tendencia') cuerpo={ok:true,meses:[],base:{total:1}};
-      else if(a==='saludClientes') cuerpo={ok:true,ts:1,sem:${JSON.stringify(SALUD)},mes:{}};
+      else if(a==='saludClientes') cuerpo={ok:true,ts:1,sem:{},semM:${JSON.stringify(SALUD)},mes:{}};
       else if(a==='planMes') cuerpo=${JSON.stringify(PLAN)};
       else if(a==='catalogo'){ if(__fase==='c') cuerpo={ok:false,error:'caido'}; else { cuerpo=${JSON.stringify(CATALOGO)}; if(__fase==='b') demora=12000; } }
       else if(a==='admin') cuerpo={ok:false,forbidden:true};
@@ -168,11 +168,12 @@ async function abrirFase(cli, fase) {
         top:R.topCli.map(function(o){return o.c+':'+o.ent;})};})()`).then(x => (x && !x.__err) ? x : x);
     const RR = (R && !R.__err) ? R : null;
     if (!RR) console.log('  (armar revento: ' + JSON.stringify(R) + ')');
-    chk('semana 37', !!RR && RR.semN === 37, R);
+    /* Desde el 6/10/2026 es la sem 2 de septiembre (7-13/9): la ISO 37. */
+    chk('sem 2 de septiembre', !!RR && RR.semN === 2, R);
     chk('lo mismo que Ventas retail: $389.500 (B2B incluido, Catering no) · costo $280.800 · 6 entregas', !!RR && JSON.stringify(RR.tot) === JSON.stringify(RR.rt) && RR.tot[0] === 389500 && RR.tot[1] === 280800 && RR.tot[2] === 6, RR && [RR.tot, RR.rt]);
     chk('contra la semana 36: $120.000 · 2 entregas', !!RR && RR.ant[0] === 120000 && RR.ant[1] === 2, RR && RR.ant);
     chk('los dias suman la semana', !!RR && RR.dias[0] === 6 && RR.dias[1] === 389500, RR && RR.dias);
-    chk('clientes de saludSem: 4 · 1 nuevo', !!RR && RR.cl.total === 4 && RR.cl.nuevos === 1, RR && RR.cl);
+    chk('clientes de saludSemM: 4 · 1 nuevo', !!RR && RR.cl.total === 4 && RR.cl.nuevos === 1, RR && RR.cl);
 
     /* ECONOMICO. A mano: margen 389.500 − 280.800 = 108.700; bolsas 4 pedidos de Home/Pilar × $850 = 3.400;
        los CREDITOS de WATI $10.000 son campaña (variable; la suscripcion mensual es un plan fijo desde el
@@ -201,14 +202,19 @@ async function abrirFase(cli, fase) {
     chk('los nuevos se cruzan por REFERENCIA: Fede, en Pilara, $40.000, "Carnes 0,75 kg", todavia no volvio', !!RR && Array.isArray(RR.nuevos) && RR.nuevos.length === 1 && RR.nuevos[0].c === 'Fede Prueba' && RR.nuevos[0].donde === 'Pilara' && RR.nuevos[0].f === 40000 && RR.nuevos[0].det === 'Carnes 0,75 kg' && RR.nuevos[0].luego === 0 && RR.nuevos[0].ok === true, RR && RR.nuevos);
     chk('los que volvieron: Beto, Estancias del Pilar, 63 dias sin comprar, carne primero y el pack', !!RR && Array.isArray(RR.volvieron) && RR.volvieron.length === 1 && RR.volvieron[0].donde === 'Estancias del Pilar' && RR.volvieron[0].dias === 63 && RR.volvieron[0].det === 'Carnes 1,5 kg · Pack Pizzas x2 1', RR && RR.volvieron);
 
-    const card = await ev(cli, `(function(){try{go('inicio');}catch(e){}var c=[].slice.call(document.querySelectorAll('#sem-body-prev .card')).filter(function(x){return /Semana 37/.test(x.textContent);})[0];if(!c)return null;
+    const card = await ev(cli, `(function(){try{go('inicio');}catch(e){}var c=[].slice.call(document.querySelectorAll('#sem-body-prev .card')).filter(function(x){return /Sem 2 · 7–13 sep/.test(x.textContent);})[0];if(!c)return null;
       var m=c.textContent.match(/Cobrado en la semana\\s*\\$([\\d.]+)/),e=c.textContent.match(/EF \\$([\\d.]+) · TR \\$([\\d.]+)/);
       return {t:m?Number(m[1].replace(/\\./g,'')):null,ef:e?Number(e[1].replace(/\\./g,'')):null,tr:e?Number(e[2].replace(/\\./g,'')):null,
         pdf:(c.innerHTML.match(/descargarPDFSemana\\(([^)]*)\\)/)||[])[1]};})()`);
     chk('lo cobrado = la tarjeta "Cobrado en la semana" (total, EF y TR)', !!RR && !!card && card.t === RR.cob[0] && card.ef === RR.cob[1] && card.tr === RR.cob[2] && RR.cob[0] === 126000, [RR && RR.cob, card]);
     chk('el boton de la semana manda el lunes con su año', !!card && /2026-09-07/.test(card.pdf || ''), card && card.pdf);
-    const s53 = await ev(cli, `(function(){var R=_rsArmar('2026-12-28');return {semN:R.semN,cob:R.cob.tot,h:R.h,pend:R.pendTot,meses:R.eco.fijosMes.map(function(x){return x.mn+':'+x.dias;})};})()`);
-    chk('semana 53 (28/12 a 3/1): el cobro del "02/01" sin año cae adentro, no queda por cobrar, y los fijos son 4 dias de diciembre y 3 de enero', s53 && s53.semN === 53 && s53.cob === 7000 && s53.h === '2027-01-03' && s53.pend === 0 && JSON.stringify(s53.meses) === '["12:4","1:3"]', s53);
+    /* El borde de año (6/10/2026): la que era la semana 53 (28/12 a 3/1) son DOS
+       semanas de Maleu. La sem 5 de diciembre termina el 31 y no se lleva el
+       cobro del "02/01"; la sem 1 de enero 2027 si, aunque la fecha venga sin
+       año, y sus fijos son 3 dias de enero. */
+    const s53 = await ev(cli, `(function(){var f=function(R){return {semN:R.semN,cob:R.cob.tot,h:R.h,pend:R.pendTot,meses:R.eco.fijosMes.map(function(x){return x.mn+':'+x.dias;})};};return {dic:f(_rsArmar('2026-12-28')),ene:f(_rsArmar('2027-01-01'))};})()`);
+    chk('sem 5 de diciembre (28 a 31/12): termina el jueves 31 y sus fijos son 4 dias de diciembre', s53 && s53.dic.semN === 5 && s53.dic.h === '2026-12-31' && s53.dic.cob === 0 && JSON.stringify(s53.dic.meses) === '["12:4"]', s53 && s53.dic);
+    chk('sem 1 de enero 2027 (1 a 3/1): el cobro del "02/01" sin año cae adentro, no queda por cobrar, y los fijos son 3 dias de enero', s53 && s53.ene.semN === 1 && s53.ene.cob === 7000 && s53.ene.h === '2027-01-03' && s53.ene.pend === 0 && JSON.stringify(s53.ene.meses) === '["1:3"]', s53 && s53.ene);
 
     /* COMO VIENE EL MES (21/9/2026): del 1 al ultimo dia de la semana contra el mes
        anterior cortado el MISMO dia, con las reglas de la semana. */
@@ -223,7 +229,7 @@ async function abrirFase(cli, fase) {
 
     const doc = await ev(cli, `(function(){var w=document.getElementById('rsHiddenWrap');w.innerHTML=_rsRender(_rsArmar('2026-09-07'));var t=w.textContent;w.innerHTML='';return t;})()`);
     const T = typeof doc === 'string' ? doc : '';
-    chk('el documento: portada, facturado y margen', /Semana 37/.test(T) && /Facturado \$389\.500/.test(T) && /margen \$108\.700 \(28%\)/.test(T), T.slice(0, 300));
+    chk('el documento: portada, facturado y margen', /Sem 2 de septiembre/.test(T) && /7 días/.test(T) && /Facturado \$389\.500/.test(T) && /margen \$108\.700 \(28%\)/.test(T), T.slice(0, 300));
     chk('el documento: la carne "2,25 kg" y "Carne Lomo"', /Carne Lomo/.test(T) && /2,25 kg/.test(T));
     chk('el documento: "Cómo viene septiembre" con los dos cortes y el aviso de por qué se corta', /Cómo viene septiembre/.test(T) && /1 al 13 de septiembre/.test(T) && /1 al 13 de agosto/.test(T) && /cortado el mismo día/.test(T), (T.match(/Cómo viene.{0,200}/) || [])[0]);
     chk('el documento: la nota de los fijos ya no habla del "piso" de sueldo', /el sueldo fijo de cada uno/.test(T) && !/piso de sueldo/.test(T), (T.match(/Los fijos son.{0,200}/) || [])[0]);
@@ -238,7 +244,7 @@ async function abrirFase(cli, fase) {
     chk('el documento: "Carne y algo más" con el estado de cada cliente', /Carne y algo más/.test(T) && /Beto PruebaHome⏰ volvió tras 63 días1,5 kgPack Pizzas x2 1/.test(T) && /Fede PruebaOtras zonas🆕 nuevo0,75 kg—/.test(T) && !/Lo de siempre/.test(T), (T.match(/Los que llevaron carne.{0,200}/) || [])[0]);
     chk('el documento: el plan que falta se dice', /No llegó el plan de Septiembre 2026/.test(T), (T.match(/Contra el plan.{0,120}/) || [])[0]);
     /* Si el servidor no manda los nombres o el pedido no esta en el celular, se dice. */
-    const nv = await ev(cli, `(function(){var s=D.saludSem['2026-37'],w=document.getElementById('rsHiddenWrap'),bk=s.nuevosL,bk2=s.reactL;
+    const nv = await ev(cli, `(function(){var s=D.saludSemM['2026-09-2'],w=document.getElementById('rsHiddenWrap'),bk=s.nuevosL,bk2=s.reactL;
       s.nuevosL=[{c:'Fede Prueba',r:['Pilar|77']},{c:'Lejano Prueba',r:['Home|99999']}];w.innerHTML=_rsRender(_rsArmar('2026-09-07'));var a=w.textContent;
       delete s.nuevosL;delete s.reactL;w.innerHTML=_rsRender(_rsArmar('2026-09-07'));var b=w.textContent;s.nuevosL=bk;s.reactL=bk2;w.innerHTML='';
       return {sinPed:/Lejano Prueba———/.test(a)&&/De 1 no llegó el pedido/.test(a),viejo:/no llegaron: tocá ↻/.test(b)&&!/Quiénes son los nuevos/.test(b)};})()`);
@@ -255,12 +261,12 @@ async function abrirFase(cli, fase) {
     chk('los botones del encabezado no pisan el titulo, se tocan bien y no desborda', !!geo && !geo.__err && !geo.pisa && !geo.desb && Array.isArray(geo.alto) && geo.alto.length === 2 && geo.alto.every(h => h >= (ANCHO <= 560 ? 38 : 30)), geo);
 
     /* El PDF de verdad: sin los nombres en la copia (los pide a saludClientes) y sin el plan guardado (lo pide). */
-    await ev(cli, `delete D.saludSem['2026-37'].nuevosL;delete D.saludSem['2026-37'].reactL;window.__gets=[];window.__img=[];window.__escalas=[];
+    await ev(cli, `delete D.saludSemM['2026-09-2'].nuevosL;delete D.saludSemM['2026-09-2'].reactL;window.__gets=[];window.__img=[];window.__escalas=[];
       var _b=document.querySelector('#hRetail .rt-pdf');if(_b)_b.click();`);
     const salio = await esperar(cli, `!!window.__pdf`, 90000);
     const pdf = await ev(cli, `({pdf:window.__pdf,gets:window.__gets,toasts:window.__toasts,img:window.__img,esc:window.__escalas,
-      nuevos:Array.isArray((D.saludSem['2026-37']||{}).nuevosL),plan:!!localStorage.getItem('maleu_plan_cache_Septiembre 2026')})`);
-    chk('el PDF sale: "Maleu - Resumen Semana 37 (07-09-2026 a 13-09-2026).pdf"', salio && pdf.pdf && pdf.pdf.nombre === 'Maleu - Resumen Semana 37 (07-09-2026 a 13-09-2026).pdf' && pdf.pdf.paginas >= 2, pdf && pdf.pdf);
+      nuevos:Array.isArray((D.saludSemM['2026-09-2']||{}).nuevosL),plan:!!localStorage.getItem('maleu_plan_cache_Septiembre 2026')})`);
+    chk('el PDF sale: "Maleu - Resumen Sem 2 septiembre (07-09-2026 a 13-09-2026).pdf"', salio && pdf.pdf && pdf.pdf.nombre === 'Maleu - Resumen Sem 2 septiembre (07-09-2026 a 13-09-2026).pdf' && pdf.pdf.paginas >= 2, pdf && pdf.pdf);
     chk('sin pedirle el resumen al servidor; si pide los clientes (faltaban los nombres) y el plan', !!pdf && Array.isArray(pdf.gets) && pdf.gets.indexOf('resumenSemanal') < 0 && pdf.gets.indexOf('saludClientes') >= 0 && pdf.gets.indexOf('planMes') >= 0 && pdf.nuevos === true && pdf.plan === true, pdf && [pdf.gets, pdf.nuevos, pdf.plan]);
     chk('cada bloque se captura a escala 3', !!pdf && Array.isArray(pdf.esc) && pdf.esc.length >= 8 && pdf.esc.every(e => e.scale === 3), pdf && pdf.esc);
     const img = (pdf && pdf.img) || [];
@@ -293,8 +299,10 @@ async function abrirFase(cli, fase) {
       var i=t.indexOf('Objetivos del equipo');return {t:i<0?null:t.slice(i,i+1000)};})()`);
     /* textContent pega las celdas sin espacio: "LucasMes3 / 50". */
     const tObj = (dObj && dObj.t) || '';
-    chk('el objetivo del mes en leads: 3 de Lucas hasta el 13/9 (ni el del 15/9, ni el que ya era cliente, ni el de Tadeo)', /O-001Generar 50 leads.{0,80}LucasMes3 \/ 50 leads6%/.test(tObj), dObj);
-    chk('el de la semana 37: 2 (del 7 al 13/9), aunque la hoja diga 9; "Lucas Prueba" es Lucas', /O-002Generar 20 leads.{0,80}Lucas PruebaSemana2 \/ 20 leads10%/.test(tObj), dObj);
+    /* Desde el 23/9/2026 cuentan los leads de TODO el equipo («no importa de quien
+       fue el lead»): el de Tadeo suma. Estas dos estaban rojas desde ese dia. */
+    chk('el objetivo del mes en leads: 4 del equipo hasta el 13/9 (ni el del 15/9 ni el que ya era cliente)', /O-001Generar 50 leads.{0,80}LucasMes4 \/ 50 leads8%/.test(tObj), dObj);
+    chk('un objetivo viejo «Semana 37» se lee como la ISO (7 al 13/9): 3, aunque la hoja diga 9', /O-002Generar 20 leads.{0,80}Lucas PruebaSemana3 \/ 20 leads15%/.test(tObj), dObj);
     chk('un objetivo en % queda con el avance de la hoja', /O-003Catalogo unicoTadeoSemana50 \/ 100%50%/.test(tObj) && /Avance contado por el ERP en CRM › Leads/.test(tObj), dObj);
     chk('abajo, cuántos leads hubo y cuántos compraron: 3 en la semana (1 compró) y 4 en septiembre', /Leads cargados en CRM: 3 en la semana \(1 ya compró\) · 4 en septiembre \(1 ya compró\)/.test(tObj), dObj);
 
