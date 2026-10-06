@@ -7484,6 +7484,11 @@ var API='https://script.google.com/macros/s/AKfycbxmrG5YVSshcYezk8lXFx_uxb7NFGcb
                  + (cv ? '&cv=' + encodeURIComponent(cv) : '');
         }
       }
+      /* La ultima escritura hecha DESDE ESTE APARATO (6/10/2026). Una foto de la
+         base anterior a esto no la tiene: la tab CRM con `CRM_DESDE_PG` no la
+         usa. Se anota al SALIR el POST, no al volver: si vuelve con error igual
+         pudo haber escrito. */
+      if (esBackend && esPost){ try { localStorage.setItem('maleu_ult_post', String(Date.now())); } catch(e){} }
     }catch(e){}
     /* EL VENDEDOR NO HACE FILA PARA LO QUE NO LE TOCA (5/10/2026).
        Medido con la sesion real de Marcos: al abrir Mi Portal el ERP salia a
@@ -29889,14 +29894,118 @@ if('serviceWorker' in navigator){
     }).catch(function(e){ _crmFotoNota('error', (e && e.message) || e); return false; });
   }
 
+  /* ══ LA TAB CRM DESDE SUPABASE, CON PALANCA (6/10/2026, rama supabase) ══
+     Con `Config_Maleu > CRM_DESDE_PG = si` (viaja con el permiso de `sbToken`)
+     la lista de clientes sale de la foto de `erp_screen_snapshot` y NO se le
+     pide `crmClientes` a Apps Script (9,2 s en frio). Con «no», esto no consulta
+     nada y todo sigue como antes, adelanto incluido.
+
+     La foto la calcula el ERP con el MISMO `_doGetCrmClientes` (la regla de quien
+     es cliente, sus ventas y su deuda sigue en un solo lugar). Lo que decide si
+     se usa es el LATIDO (`replica_status('foto')`): el ultimo momento en que el
+     ERP confirmo que las fotos son la planilla. Vuelve SOLA a la planilla, y lo
+     dice, si:
+       · no hay permiso guardado (no se sale a pedirlo: ver `_sbPermiso`);
+       · la base no contesta, o tarda mas de CRM_PG_ESPERA_MS;
+       · no hay foto, viene sin clientes, o no dice de cuando es;
+       · la foto es de otro dia (los dias desde la ultima compra cambian a la
+         medianoche);
+       · falta el latido, o tiene mas de CRM_PG_VIEJA_MS;
+       · escribiste algo desde este aparato despues del latido.
+     Si lo que ya esta en el celular es MAS NUEVO que el latido, se queda con
+     eso y no pide nada. Devuelve {usado, palanca, porque, de, t}. Nunca rechaza.
+     Por que se uso o no: `window.__crmFuente` en la consola. */
+  var CRM_PG_VIEJA_MS = 30 * 60e3, CRM_PG_ESPERA_MS = 6000;
+  var CRM_FUENTE = null;
+  function _crmDiaAr(t){ try { return new Date(t).toLocaleDateString('sv-SE', {timeZone: 'America/Argentina/Buenos_Aires'}); } catch(e){ return ''; } }
+  function _crmHaceTxt(t){ try { return window._hace(t); } catch(e){ return new Date(t).toLocaleTimeString(); } }
+  /* Lo que la base trae, ya mirado. `fotos` y `estado` son las respuestas de
+     PostgREST tal cual; `ahora` va de afuera para poder probarlo. */
+  function _crmDesdePg(fotos, estado, ahora){
+    var f = fotos && fotos[0];
+    if (!f) return {ok: false, porque: 'la base no tiene la foto de los clientes'};
+    var d = f.payload;
+    if (!d || d.lite || !Array.isArray(d.clientes) || !d.clientes.length) return {ok: false, porque: 'la foto de la base vino sin clientes'};
+    var calc = _fotoFechaUtc(f.computed_at);
+    if (!calc) return {ok: false, porque: 'la foto de la base no dice de cu\u00e1ndo es'};
+    if (_crmDiaAr(calc) !== _crmDiaAr(ahora)) return {ok: false, porque: 'la foto de la base es de otro d\u00eda'};
+    var e = estado && estado[0], alDia = e ? _fotoFechaUtc(e.confirmed_at) : 0;
+    if (!alDia) return {ok: false, porque: 'la base todav\u00eda no confirma que la foto est\u00e9 al d\u00eda'};
+    if (ahora - alDia > CRM_PG_VIEJA_MS) return {ok: false, porque: 'la base confirm\u00f3 la foto ' + _crmHaceTxt(alDia)};
+    return {ok: true, d: d, alDia: alDia, calc: calc};
+  }
+  function _crmDeLaBase(){
+    var no = function(porque){ return {usado: false, palanca: true, porque: porque}; };
+    if (typeof _sbPermiso !== 'function' || typeof _fotoFechaUtc !== 'function') return Promise.resolve(null);
+    /* Si el permiso se esta pidiendo recien (3,5 s), no se lo espera: la tab
+       va por la planilla, como siempre. */
+    if (typeof _sbPidiendo !== 'undefined' && _sbPidiendo) return Promise.resolve(null);
+    return _sbPermiso(true).then(function(sb){
+      if (!sb || !sb.pal || !sb.pal.crmPg) return {usado: false, palanca: false};
+      var H = {apikey: sb.key, Authorization: 'Bearer ' + sb.token};
+      var ctl = (typeof AbortController === 'function') ? new AbortController() : null;
+      var reloj = setTimeout(function(){ try { if (ctl) ctl.abort(); } catch(e){} }, CRM_PG_ESPERA_MS);
+      var g = function(q){
+        return fetch(sb.url + '/rest/v1/' + q, {headers: H, signal: ctl ? ctl.signal : undefined}).then(function(r){
+          if (!r.ok) throw new Error('la base contest\u00f3 ' + r.status);
+          return r.json();
+        });
+      };
+      return Promise.all([
+        g('erp_screen_snapshot?select=payload,computed_at&screen=eq.crmClientes'),
+        g('replica_status?select=domain,confirmed_at&domain=eq.foto')
+      ]).then(function(rs){
+        clearTimeout(reloj);
+        var o = _crmDesdePg(rs[0], rs[1], Date.now());
+        if (!o.ok) return no(o.porque);
+        var post = 0, cambio = 0;
+        try { post = Number(localStorage.getItem('maleu_ult_post')) || 0; cambio = Number(localStorage.getItem(CRM_CAMBIO_TS)) || 0; } catch(e){}
+        if (Math.max(post, cambio) > o.alDia) return no('cambiaste algo despu\u00e9s de que la base confirm\u00f3 la foto');
+        var tengo = _crmCliTs();
+        if (crmClientes && crmClientes.length && tengo > o.alDia) return {usado: true, palanca: true, de: 'celular', t: tengo};
+        crmClientes = o.d.clientes;
+        _crmDupMemo = null; _crmCanalBarrioFilled = false;
+        if (Array.isArray(o.d.kg)){ var k = {}; o.d.kg.forEach(function(a){ k[a] = 1; }); _crmKg = k; try { localStorage.setItem('maleu_crm_kg', JSON.stringify(k)); } catch(e){} }
+        if (o.d.nombres && typeof o.d.nombres === 'object'){ _crmNombres = o.d.nombres; try { localStorage.setItem('maleu_crm_nombres', JSON.stringify(o.d.nombres)); } catch(e){} }
+        /* La copia del celular queda con la fecha del LATIDO, no la de ahora. */
+        try { window._lsSetSafe(CRM_CLI_LS, JSON.stringify(crmClientes)); localStorage.setItem(CRM_CLI_TS, String(o.alDia)); } catch(e){}
+        try { if (typeof window._marcarFresco === 'function') window._marcarFresco(['crmClientes'], o.alDia); } catch(e){}
+        return {usado: true, palanca: true, de: 'pg', t: o.alDia};
+      }).catch(function(e){
+        clearTimeout(reloj);
+        return no((e && e.name === 'AbortError') ? 'la base no contest\u00f3 en ' + (CRM_PG_ESPERA_MS / 1000) + ' s' : String((e && e.message) || e));
+      });
+    }).catch(function(){ return {usado: false, palanca: false}; });
+  }
+
   function _crmPedirClientes(){
     if (_crmCliPromesa) return _crmCliPromesa;
-    var _gen = {llego: false};
-    if (!_crmFotoYa){ _crmFotoYa = true; _crmFotoClientes(_gen); }
     _crmCliTrayendo = true; _crmCliError = '';
     _crmCliEstadoPintar();
+    _crmCliPromesa = _crmDeLaBase().then(function(r){
+      if (r && r.usado){
+        CRM_FUENTE = {de: r.de, t: r.t};
+        try { window.__crmFuente = CRM_FUENTE; } catch(e){}
+        return true;
+      }
+      CRM_FUENTE = (r && r.palanca) ? {de: 'planilla', porque: r.porque || ''} : null;
+      try { window.__crmFuente = CRM_FUENTE; } catch(e){}
+      /* El adelanto de la foto (4/10) es para la palanca en «no»: con «si» la
+         base ya se miro y se descarto por algo. */
+      return _crmDeLaPlanilla(!(r && r.palanca));
+    }).then(function(ok){
+      _crmCliPromesa = null; _crmCliTrayendo = false;
+      _crmCliEstadoPintar();
+      try { window.__crmListo = Date.now(); } catch(e){}   /* para las pruebas: termino de pedirse */
+      return ok;
+    });
+    return _crmCliPromesa;
+  }
+  function _crmDeLaPlanilla(conAdelanto){
+    var _gen = {llego: false};
+    if (conAdelanto && !_crmFotoYa){ _crmFotoYa = true; _crmFotoClientes(_gen); }
     try { if (typeof window._frescoEnVuelo === 'function') window._frescoEnVuelo(['crmClientes'], 1); } catch(e){}
-    _crmCliPromesa = fetch(CRM_API + '?action=crmClientes')
+    return fetch(CRM_API + '?action=crmClientes')
       .then(function(r){ return r.json(); })
       .then(function(d){
         var l = d && d.clientes;
@@ -29919,12 +30028,9 @@ if('serviceWorker' in navigator){
         return false;
       })
       .then(function(ok){
-        _crmCliPromesa = null; _crmCliTrayendo = false;
         try { if (typeof window._frescoEnVuelo === 'function') window._frescoEnVuelo(['crmClientes'], -1); } catch(e){}
-        _crmCliEstadoPintar();
         return ok;
       });
-    return _crmCliPromesa;
   }
   /* Lo que dice arriba de la lista: de cuando es la copia, o que no se pudo. */
   function _crmCliEstadoPintar(){
@@ -29947,6 +30053,15 @@ if('serviceWorker' in navigator){
         var st = el('crmCliStats'); if (st) st.textContent = '';
         var m = el('crmCliMas'); if (m) m.hidden = true;
       }
+      return;
+    }
+    /* Con `CRM_DESDE_PG`: de donde salio lo que se ve. Con la palanca en «no»
+       CRM_FUENTE es null y el cartel queda como siempre. */
+    if (!_crmCliTrayendo && CRM_FUENTE && hay){
+      box.className = 'crm-cli-estado'; box.hidden = false;
+      box.textContent = CRM_FUENTE.de === 'pg' ? 'De la base \u00b7 al d\u00eda ' + _crmHaceTxt(CRM_FUENTE.t)
+        : CRM_FUENTE.de === 'celular' ? 'Lo guardado en este celular \u00b7 ' + _crmHaceTxt(CRM_FUENTE.t)
+        : 'De la planilla \u00b7 ' + (hace || 'reci\u00e9n') + (CRM_FUENTE.porque ? ' (no us\u00e9 la base: ' + CRM_FUENTE.porque + ')' : '');
       return;
     }
     box.hidden = true;
@@ -30195,9 +30310,9 @@ if('serviceWorker' in navigator){
     // NUNCA pisar con []: un fetch vacío/fallido envenena _hogBuild (todo en 0). Si no vino
     // nada, caemos a la cache local y dejamos crmClientes como estaba (null → reintenta luego).
     function fallback(){ if(!(crmClientes&&crmClientes.length)){ try{ var cc=JSON.parse(localStorage.getItem('maleu_crm_clientes_v1')||'null'); if(cc&&cc.length)crmClientes=cc; }catch(e){} } cb(); }
-    fetch(CRM_API + '?action=crmClientes').then(function(r){return r.json();})
-      .then(function(d){ var l=(d&&d.clientes)||null; if(l&&l.length)crmClientes=l; fallback(); })
-      .catch(function(){ fallback(); });
+    /* Por la misma puerta que el resto del CRM (6/10/2026): con `CRM_DESDE_PG`
+       tambien sale de la base, y la pedida en vuelo se comparte. */
+    _crmPedirClientes().then(function(){ fallback(); }, function(){ fallback(); });
   }
 
   // Busca el punto del mapa que corresponde a (sub-barrio, lote) de un cliente.

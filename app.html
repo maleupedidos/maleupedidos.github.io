@@ -10822,6 +10822,11 @@ var API='https://script.google.com/macros/s/AKfycbxmrG5YVSshcYezk8lXFx_uxb7NFGcb
                  + (cv ? '&cv=' + encodeURIComponent(cv) : '');
         }
       }
+      /* La ultima escritura hecha DESDE ESTE APARATO (6/10/2026). Una foto de la
+         base anterior a esto no la tiene: la tab CRM con `CRM_DESDE_PG` no la
+         usa. Se anota al SALIR el POST, no al volver: si vuelve con error igual
+         pudo haber escrito. */
+      if (esBackend && esPost){ try { localStorage.setItem('maleu_ult_post', String(Date.now())); } catch(e){} }
     }catch(e){}
     /* EL VENDEDOR NO HACE FILA PARA LO QUE NO LE TOCA (5/10/2026).
        Medido con la sesion real de Marcos: al abrir Mi Portal el ERP salia a
@@ -14703,6 +14708,10 @@ function _sbPermiso(soloSiLoTengo){
         try{ localStorage.setItem(_SB_NO_LS,JSON.stringify({ u:(typeof SESSION!=='undefined'&&SESSION&&SESSION.usuario)||'', hasta:Date.now()+12*3600e3 })); }catch(e){}
         _sbPerm=false;_sbPermHasta=Date.now()+300000;return null;
       }
+      /* Las palancas que dicen que pantallas leen de la base viajan con el
+         permiso (5/10/2026). Se guardan pegadas a el: un permiso de antes de
+         esta version no las trae, y entonces todo va por Apps Script. */
+      sb.pal=(d&&d.palancas)||{};
       _sbPerm=sb;_sbPermHasta=Date.now()+Math.max(60,(Number(sb.seg)||3600)-120)*1000;
       _sbTokGuardar(sb,_sbPermHasta);
       try{ localStorage.removeItem(_SB_NO_LS); }catch(e){}
@@ -23712,8 +23721,128 @@ var _stockPedidoEn=0;
    pedidos en paralelo. El ↻ pasa igual —`forzar`—: ahi la persona esta pidiendo
    explicitamente la foto de ahora. */
 var _stockVuelo=null;
+/* DE DONDE SALIO LA FOTO QUE SE VE (5/10/2026). Solo se llena con la palanca
+   `PRODUCTOS_DESDE_PG` prendida: con la palanca en «no» la pantalla es la de
+   siempre y no dice nada nuevo.
+   {de:'pg', t:<latido>, costoT:<de cuando es el costo>}
+   {de:'planilla', porque:'<por que no se uso la base>'} */
+var ST_FUENTE=null;
 function loadStockTab(forzar){
   if(_stockVuelo&&!forzar)return _stockVuelo;
+  var p=_stDeLaBase().then(function(r){
+    if(r&&r.usado)return true;
+    if(r&&r.palanca)ST_FUENTE={de:'planilla',porque:r.porque||''};
+    else ST_FUENTE=null;
+    return _stDeLaPlanilla(forzar);
+  });
+  _stockVuelo=p;
+  var _libre=function(x){ if(_stockVuelo===p)_stockVuelo=null; return x; };
+  return p.then(_libre,function(e){ _libre(); throw e; });
+}
+/* LA TAB PRODUCTOS DESDE SUPABASE (5/10/2026, rama supabase).
+
+   Con `Config_Maleu > PRODUCTOS_DESDE_PG = si` (viaja con el permiso de
+   `sbToken`) la tabla se arma de las tablas de inventario en ~0,3 s en vez de
+   pedirle `stockTab` a Apps Script. Vuelve a la planilla SOLA, y lo dice, si:
+     · no hay permiso guardado (no se sale a pedirlo: ver `_sbPermiso`);
+     · la base no contesta, o tarda mas de ST_PG_ESPERA_MS;
+     · le falta algo que la pantalla dibuja (031 sin aplicar, sin latido);
+     · la copia es vieja: el latido tiene mas de ST_PG_VIEJA_MS;
+     · moviste stock en este aparato despues de la copia;
+     · lo que ya se ve es MAS NUEVO que la copia;
+     · no hay un costo de la planilla de menos de un dia (ver `_stCostos`).
+   Devuelve {usado, palanca, porque}. Nunca rechaza. */
+var ST_PG_VIEJA_MS=20*60e3, ST_PG_ESPERA_MS=6000;
+function _stDeLaBase(){
+  var no=function(porque){ return {usado:false,palanca:true,porque:porque}; };
+  if(typeof _sbPermiso!=='function')return Promise.resolve(null);
+  return _sbPermiso(true).then(function(sb){
+    if(!sb||!sb.pal||!sb.pal.productosPg)return {usado:false,palanca:false};
+    var H={apikey:sb.key,Authorization:'Bearer '+sb.token};
+    var ctl=(typeof AbortController==='function')?new AbortController():null;
+    var reloj=setTimeout(function(){ try{ if(ctl)ctl.abort(); }catch(e){} },ST_PG_ESPERA_MS);
+    var g=function(q){
+      return fetch(sb.url+'/rest/v1/'+q,{headers:H,signal:ctl?ctl.signal:undefined}).then(function(r){
+        if(!r.ok)throw new Error('la base contest\u00f3 '+r.status);
+        return r.json();
+      });
+    };
+    var _pedidoEn=Date.now();
+    /* SIN `deleted_at=is.null` A PROPOSITO. La pantalla no tiene permiso de
+       leer esa columna, y filtrar por una columna que no se puede leer da 403
+       (medido el 5/10/2026 con el token de la pantalla). No hace falta: la
+       policy de la 028 ya esconde las bajas para este rol. */
+    return Promise.all([
+      g('inventory_product?select='+ST_PG_PROD+'&limit=1000'),
+      g('inventory_stock_snapshot?select='+ST_PG_SNAP+'&limit=5000'),
+      g('inventory_warehouse?select='+ST_PG_DEP+'&active=is.true'),
+      g('replica_status?select='+ST_PG_EST+'&domain=eq.inventario')
+    ]).then(function(rs){
+      clearTimeout(reloj);
+      var o=_stDesdePg({prods:rs[0],snaps:rs[1],deps:rs[2],estado:rs[3]});
+      if(!o.completo)return no('a la base le falta '+o.faltan.join(', '));
+      if(Date.now()-o.alDia>ST_PG_VIEJA_MS)return no('la copia de la base es de '+_hace(o.alDia));
+      if(ST_SUCIO&&ST_SUCIO>o.alDia)return no('moviste stock despu\u00e9s de la copia de la base');
+      var _ya=Math.max(Number(_stockPedidoEn)||0,Number(_volcadoPedidoEn)||0);
+      if(ST_TENGO&&_ya>o.alDia)return no('lo que ya ten\u00e9s es m\u00e1s nuevo que la copia de la base');
+      var cos=_stCostos();
+      if(!cos)return no('no hay un costo de la planilla de hoy para el valor del stock');
+      for(var i=0;i<o.stock.length;i++){
+        var s=o.stock[i], co=cos.map[s.a];
+        if(co===undefined)return no('falta el costo de '+s.a);
+        s.co=co; s.iv=Math.max(0,s.f)*co;   /* igual que `_armarStock_` */
+      }
+      if(typeof D!=='object'||!D)D={};
+      D.stock=o.stock; D.stockDeps=o.stockDeps; D.stockCierre=o.stockCierre;
+      /* El sello de la foto es el LATIDO, no la hora en que llego: la base
+         dice como estaba la planilla a esa hora. */
+      D.stockTs=o.alDia; D.stockSinReg=o.sinRegistro; D.stockFuente='pg';
+      _stockPedidoEn=Math.max(Number(_stockPedidoEn)||0,o.alDia);
+      ST_TENGO=true; ST_INFO={viejo:false,t:_pedidoEn};
+      ST_FUENTE={de:'pg',t:o.alDia,costoT:cos.t};
+      try{ delete _pintadas.stock; }catch(e){}
+      if((typeof ST_TAB!=='string'||ST_TAB==='productos')&&typeof rStock==='function'){
+        try{ rStock(); }catch(e){ console.error('rStock',e); }
+      }
+      return {usado:true,palanca:true};
+    }).catch(function(e){
+      clearTimeout(reloj);
+      var m=(e&&e.name==='AbortError')?'la base no contest\u00f3 en '+(ST_PG_ESPERA_MS/1000)+' s':String((e&&e.message)||e);
+      return no(m);
+    });
+  }).catch(function(){ return {usado:false,palanca:false}; });
+}
+/* EL COSTO NO VIAJA POR LA BASE. (5/10/2026)
+
+   `unit_cost` esta oculto para la pantalla por GRANT desde la 012, y sigue
+   oculto. El valor del stock (`iv` = fisico x costo) se arma con el fisico de
+   la base y el COSTO DE LA ULTIMA FOTO DE APPS SCRIPT, que ya lo trae hoy a
+   los mismos usuarios (`stockTab` y el volcado mandan `co`). O sea: la base no
+   destapa nada que la pantalla no tuviera.
+
+   El costo cambia poco (con una factura nueva), pero cambia: una copia de mas
+   de un dia no se usa, y entonces la tab va a la planilla — que de paso
+   renueva el costo. Con uso diario es UNA ida a la planilla por dia. */
+var ST_COSTO_MAX_MS=24*3600e3;
+var _stCosto=null;
+function _stCostosAnotar(stock,t){
+  if(!Array.isArray(stock)||!stock.length)return;
+  var m={},n=0;
+  stock.forEach(function(s){ if(s&&s.a&&s.co!==undefined&&s.co!==null){ m[s.a]=Number(s.co)||0; n++; } });
+  if(n&&(!_stCosto||t>=_stCosto.t))_stCosto={map:m,t:t};
+}
+function _stCostos(){
+  if(!_stCosto){
+    /* La del volcado, si es la que esta en memoria. */
+    if(typeof D==='object'&&D&&Array.isArray(D.stock)&&D.stockFuente!=='pg')
+      _stCostosAnotar(D.stock,Number(_volcadoPedidoEn)||Number(_stockPedidoEn)||0);
+    var g=(typeof _swrLeer==='function')?_swrLeer('stockTab1'):null;
+    if(g&&g.d&&Array.isArray(g.d.stock))_stCostosAnotar(g.d.stock,Number(g.t)||0);
+  }
+  if(!_stCosto||!(Date.now()-_stCosto.t<ST_COSTO_MAX_MS))return null;
+  return _stCosto;
+}
+function _stDeLaPlanilla(forzar){
   var _pedidoEn=Date.now();
   var url=API+'?action=stockTab&t='+_pedidoEn;
   var p=_stTraer('stockTab1',url,
@@ -23730,6 +23859,11 @@ function loadStockTab(forzar){
            Un backend anterior no lo manda: queda undefined y no se dibuja nada,
            que es lo correcto — callar antes que inventar. */
         D.stockSinReg=d.sinRegistro;
+        D.stockFuente='planilla';
+        /* El costo de esta foto es el que usa la base para el valor del
+           stock. Solo una foto de AHORA, no la copia guardada que se pinta
+           mientras tanto: esa ya quedo anotada el dia que llego. */
+        if(!info.viejo)_stCostosAnotar(d.stock,_pedidoEn);
         ST_TENGO=true;
         /* La tabla se redibuja con la foto nueva. `_pintadas` es la marca de
            "esta seccion ya esta al dia con el D de ahora": si no se borra, el
@@ -23741,10 +23875,83 @@ function loadStockTab(forzar){
         try{ rStock(); }catch(e){ console.error('rStock',e); }
       }
     },forzar);
-  _stockVuelo=p;
-  var _libre=function(r){ if(_stockVuelo===p)_stockVuelo=null; return r; };
-  return p.then(_libre,function(e){ _libre(); throw e; });
+  return p;
 }
+/*PG-STOCK-INI*/
+/* LA TAB PRODUCTOS DESDE SUPABASE. (5/10/2026, rama supabase)
+
+   Arma la MISMA foto que `action=stockTab` —`stock`, `stockDeps`,
+   `stockCierre`, `sinRegistro`— leyendo las tablas de inventario. `rStock()`
+   no se entera de donde vino, igual que con el volcado.
+
+   No reconstruye ninguna regla: los numeros derivados (el comprado de la
+   carne, que son kilos de piezas recibidas; el reservado por freezer; el
+   control de stock sin registro) los calcula Apps Script con el MISMO codigo
+   que arma `stockTab` y los escribe en la base (migracion 031). Aca solo se
+   cambian los nombres de los campos.
+
+   Lo que NO viaja: el costo. `unit_cost` esta oculto por GRANT desde la 012 y
+   sigue oculto. El valor del stock (`iv` = fisico x costo) se arma afuera de
+   esta funcion, con el costo que ya trae Apps Script (`_stPonerCosto`).
+
+   Devuelve `completo:false` y la lista de lo que falta si la base no trae algo
+   que la pantalla dibuja: con un campo de menos, la tab vuelve a la planilla.
+   Mostrar un cero donde no se sabe es lo que este ERP ya pago varias veces. */
+var ST_PG_PROD='sku,name,unit,sale_price,observed_physical_quantity,observed_reserved_quantity,'
+  +'observed_available_quantity,weekly_initial_quantity,weekly_sold_quantity,'
+  +'sheet_order,screen_purchased_quantity,tracked_by_piece';
+var ST_PG_SNAP='product_sku,warehouse_key,physical_quantity,reserved_quantity';
+var ST_PG_DEP='warehouse_key,name,sort_order,user_key';
+var ST_PG_EST='domain,confirmed_at,detail';
+function _stDesdePg(x){
+  var faltan=[], num=function(v){ var n=Number(v); return isFinite(n)?n:0; };
+  var prods=(x&&x.prods)||[], snaps=(x&&x.snaps)||[], deps=(x&&x.deps)||[], est=(x&&x.estado)||[];
+  if(!prods.length)return {completo:false,faltan:['productos']};
+  /* Una columna que la base no trae llega como `undefined`, no como null:
+     PostgREST manda las que se pidieron, y si se pidio una que no existe el
+     pedido entero da 400 antes de llegar aca. Se mira igual por si alguien
+     acorta el select. */
+  ['sheet_order','screen_purchased_quantity','tracked_by_piece','observed_physical_quantity',
+   'observed_reserved_quantity','observed_available_quantity','weekly_initial_quantity',
+   'weekly_sold_quantity'].forEach(function(k){ if(!(k in prods[0]))faltan.push(k); });
+  var dl=deps.slice().sort(function(a,b){ return num(a.sort_order)-num(b.sort_order); });
+  var stockDeps=dl.map(function(d){ return {id:String(d.warehouse_key||'').toLowerCase(),
+    nombre:String(d.name||d.warehouse_key||''), user:String(d.user_key||'').toLowerCase()}; });
+  if(!stockDeps.length)faltan.push('depositos');
+  var porSku={};
+  snaps.forEach(function(s){
+    if(!('reserved_quantity' in s)&&faltan.indexOf('reserved_quantity')<0)faltan.push('reserved_quantity');
+    (porSku[s.product_sku]=porSku[s.product_sku]||{})[String(s.warehouse_key||'').toLowerCase()]=s;
+  });
+  var r3=function(v){ return Math.round(v*1000)/1000; };
+  var stock=prods.slice().sort(function(a,b){ return num(a.sheet_order)-num(b.sheet_order); }).map(function(p){
+    var pd={},pr={},pdd={},sn=porSku[p.sku]||{};
+    stockDeps.forEach(function(d){
+      var s=sn[d.id]||{};
+      pd[d.id]=num(s.physical_quantity); pr[d.id]=num(s.reserved_quantity);
+      /* Igual que `_armarStock_`: nunca negativo. */
+      pdd[d.id]=Math.max(0,r3(pd[d.id]-pr[d.id]));
+    });
+    var u=String(p.unit||'').trim().toLowerCase();
+    return {n:String(p.name||''), a:String(p.sku||''),
+      f:num(p.observed_physical_quantity), r:num(p.observed_reserved_quantity),
+      d:num(p.observed_available_quantity), p:num(p.sale_price),
+      i:num(p.weekly_initial_quantity), v:num(p.weekly_sold_quantity),
+      c:num(p.screen_purchased_quantity), u:(u==='kg'||u==='u')?u:'u',
+      pd:pd, pr:pr, pdd:pdd, pz:p.tracked_by_piece?1:0};
+  });
+  var e={}; est.forEach(function(r){ e[r.domain]=r; });
+  /* DE CUANDO ES. `confirmed_at` lo escribe Apps Script cuando confirma que la
+     base y la planilla son lo mismo: despues de copiar, o en una vuelta sin
+     nada pendiente. Sin esa fila no se sabe de cuando es: no se usa. */
+  var inv=e.inventario||null, alDia=inv?Date.parse(inv.confirmed_at):NaN;
+  if(!isFinite(alDia))faltan.push('latido');
+  var det=(inv&&inv.detail)||{};
+  return {completo:!faltan.length, faltan:faltan, stock:stock, stockDeps:stockDeps,
+    alDia:isFinite(alDia)?alDia:0,
+    stockCierre:det.cierre||'', sinRegistro:det.sinRegistro};
+}
+/*PG-STOCK-FIN*/
 /* CUAL DE LOS DOS FREEZERS ENTREGA. (27/9/2026)
 
    Medido ese dia: Ustariz 270 unidades en 33 productos, Moresco 69 en 14. Ya
@@ -23961,10 +24168,22 @@ function rStock(){
     if(_h)_sinReg='<div class="st-sinreg">'+_h+'</div>';
   })();
 
+  /* De donde salio y de cuando es (5/10/2026). Solo con la palanca prendida:
+     con la palanca en «no» no hay nada que contar. */
+  var _fuente='';
+  if(ST_FUENTE&&ST_FUENTE.de==='pg'){
+    _fuente='<div class="st-sello">Copia de Supabase · igual a la planilla '+_hace(ST_FUENTE.t)+'</div>';
+  }else if(ST_FUENTE&&ST_FUENTE.de==='planilla'){
+    _fuente='<div class="st-sello">De la planilla'+(_stTs?' · '+_hace(_stTs):'')
+      +(ST_FUENTE.porque?' · no se usó Supabase: '+stEsc(ST_FUENTE.porque):'')+'</div>';
+  }
+  var _ksValor='al costo · '+conStock+' producto'+(conStock===1?'':'s')+' con stock';
+  if(ST_FUENTE&&ST_FUENTE.de==='pg'&&ST_FUENTE.costoT)_ksValor+=' · costo de la planilla '+_hace(ST_FUENTE.costoT);
   $('sKpi').innerHTML=
+    _fuente+
     _sinReg+
     avisos.map(function(a){return '<div class="st-aviso">\u26a0\ufe0f '+a+'</div>';}).join('')+
-    '<div class="card"><div class="kl">Valor del stock</div><div class="kv">$'+f$(Math.round(sumInv))+'</div><div class="ks">al costo \u00b7 '+conStock+' producto'+(conStock===1?'':'s')+' con stock</div></div>'+
+    '<div class="card"><div class="kl">Valor del stock</div><div class="kv">$'+f$(Math.round(sumInv))+'</div><div class="ks">'+_ksValor+'</div></div>'+
     '<div class="card"><div class="kl">Vendido esta semana</div><div class="kv">'+_stUK(ven)+'</div><div class="ks">entr\u00f3 '+_stUK(comp)+' \u00b7 arranc\u00f3 con '+_stUK(ini)+'</div></div>'+
     '<div class="card'+(sinDisp>0?' wrn':'')+'"><div class="kl">Sin disponible</div><div class="kv">'+sinDisp+'</div><div class="ks">'+(ksDisp.length?ksDisp.join(' \u00b7 '):'todos tienen algo para vender')+'</div></div>';
 
@@ -33013,14 +33232,118 @@ if('serviceWorker' in navigator){
     }).catch(function(e){ _crmFotoNota('error', (e && e.message) || e); return false; });
   }
 
+  /* ══ LA TAB CRM DESDE SUPABASE, CON PALANCA (6/10/2026, rama supabase) ══
+     Con `Config_Maleu > CRM_DESDE_PG = si` (viaja con el permiso de `sbToken`)
+     la lista de clientes sale de la foto de `erp_screen_snapshot` y NO se le
+     pide `crmClientes` a Apps Script (9,2 s en frio). Con «no», esto no consulta
+     nada y todo sigue como antes, adelanto incluido.
+
+     La foto la calcula el ERP con el MISMO `_doGetCrmClientes` (la regla de quien
+     es cliente, sus ventas y su deuda sigue en un solo lugar). Lo que decide si
+     se usa es el LATIDO (`replica_status('foto')`): el ultimo momento en que el
+     ERP confirmo que las fotos son la planilla. Vuelve SOLA a la planilla, y lo
+     dice, si:
+       · no hay permiso guardado (no se sale a pedirlo: ver `_sbPermiso`);
+       · la base no contesta, o tarda mas de CRM_PG_ESPERA_MS;
+       · no hay foto, viene sin clientes, o no dice de cuando es;
+       · la foto es de otro dia (los dias desde la ultima compra cambian a la
+         medianoche);
+       · falta el latido, o tiene mas de CRM_PG_VIEJA_MS;
+       · escribiste algo desde este aparato despues del latido.
+     Si lo que ya esta en el celular es MAS NUEVO que el latido, se queda con
+     eso y no pide nada. Devuelve {usado, palanca, porque, de, t}. Nunca rechaza.
+     Por que se uso o no: `window.__crmFuente` en la consola. */
+  var CRM_PG_VIEJA_MS = 30 * 60e3, CRM_PG_ESPERA_MS = 6000;
+  var CRM_FUENTE = null;
+  function _crmDiaAr(t){ try { return new Date(t).toLocaleDateString('sv-SE', {timeZone: 'America/Argentina/Buenos_Aires'}); } catch(e){ return ''; } }
+  function _crmHaceTxt(t){ try { return window._hace(t); } catch(e){ return new Date(t).toLocaleTimeString(); } }
+  /* Lo que la base trae, ya mirado. `fotos` y `estado` son las respuestas de
+     PostgREST tal cual; `ahora` va de afuera para poder probarlo. */
+  function _crmDesdePg(fotos, estado, ahora){
+    var f = fotos && fotos[0];
+    if (!f) return {ok: false, porque: 'la base no tiene la foto de los clientes'};
+    var d = f.payload;
+    if (!d || d.lite || !Array.isArray(d.clientes) || !d.clientes.length) return {ok: false, porque: 'la foto de la base vino sin clientes'};
+    var calc = _fotoFechaUtc(f.computed_at);
+    if (!calc) return {ok: false, porque: 'la foto de la base no dice de cu\u00e1ndo es'};
+    if (_crmDiaAr(calc) !== _crmDiaAr(ahora)) return {ok: false, porque: 'la foto de la base es de otro d\u00eda'};
+    var e = estado && estado[0], alDia = e ? _fotoFechaUtc(e.confirmed_at) : 0;
+    if (!alDia) return {ok: false, porque: 'la base todav\u00eda no confirma que la foto est\u00e9 al d\u00eda'};
+    if (ahora - alDia > CRM_PG_VIEJA_MS) return {ok: false, porque: 'la base confirm\u00f3 la foto ' + _crmHaceTxt(alDia)};
+    return {ok: true, d: d, alDia: alDia, calc: calc};
+  }
+  function _crmDeLaBase(){
+    var no = function(porque){ return {usado: false, palanca: true, porque: porque}; };
+    if (typeof _sbPermiso !== 'function' || typeof _fotoFechaUtc !== 'function') return Promise.resolve(null);
+    /* Si el permiso se esta pidiendo recien (3,5 s), no se lo espera: la tab
+       va por la planilla, como siempre. */
+    if (typeof _sbPidiendo !== 'undefined' && _sbPidiendo) return Promise.resolve(null);
+    return _sbPermiso(true).then(function(sb){
+      if (!sb || !sb.pal || !sb.pal.crmPg) return {usado: false, palanca: false};
+      var H = {apikey: sb.key, Authorization: 'Bearer ' + sb.token};
+      var ctl = (typeof AbortController === 'function') ? new AbortController() : null;
+      var reloj = setTimeout(function(){ try { if (ctl) ctl.abort(); } catch(e){} }, CRM_PG_ESPERA_MS);
+      var g = function(q){
+        return fetch(sb.url + '/rest/v1/' + q, {headers: H, signal: ctl ? ctl.signal : undefined}).then(function(r){
+          if (!r.ok) throw new Error('la base contest\u00f3 ' + r.status);
+          return r.json();
+        });
+      };
+      return Promise.all([
+        g('erp_screen_snapshot?select=payload,computed_at&screen=eq.crmClientes'),
+        g('replica_status?select=domain,confirmed_at&domain=eq.foto')
+      ]).then(function(rs){
+        clearTimeout(reloj);
+        var o = _crmDesdePg(rs[0], rs[1], Date.now());
+        if (!o.ok) return no(o.porque);
+        var post = 0, cambio = 0;
+        try { post = Number(localStorage.getItem('maleu_ult_post')) || 0; cambio = Number(localStorage.getItem(CRM_CAMBIO_TS)) || 0; } catch(e){}
+        if (Math.max(post, cambio) > o.alDia) return no('cambiaste algo despu\u00e9s de que la base confirm\u00f3 la foto');
+        var tengo = _crmCliTs();
+        if (crmClientes && crmClientes.length && tengo > o.alDia) return {usado: true, palanca: true, de: 'celular', t: tengo};
+        crmClientes = o.d.clientes;
+        _crmDupMemo = null; _crmCanalBarrioFilled = false;
+        if (Array.isArray(o.d.kg)){ var k = {}; o.d.kg.forEach(function(a){ k[a] = 1; }); _crmKg = k; try { localStorage.setItem('maleu_crm_kg', JSON.stringify(k)); } catch(e){} }
+        if (o.d.nombres && typeof o.d.nombres === 'object'){ _crmNombres = o.d.nombres; try { localStorage.setItem('maleu_crm_nombres', JSON.stringify(o.d.nombres)); } catch(e){} }
+        /* La copia del celular queda con la fecha del LATIDO, no la de ahora. */
+        try { window._lsSetSafe(CRM_CLI_LS, JSON.stringify(crmClientes)); localStorage.setItem(CRM_CLI_TS, String(o.alDia)); } catch(e){}
+        try { if (typeof window._marcarFresco === 'function') window._marcarFresco(['crmClientes'], o.alDia); } catch(e){}
+        return {usado: true, palanca: true, de: 'pg', t: o.alDia};
+      }).catch(function(e){
+        clearTimeout(reloj);
+        return no((e && e.name === 'AbortError') ? 'la base no contest\u00f3 en ' + (CRM_PG_ESPERA_MS / 1000) + ' s' : String((e && e.message) || e));
+      });
+    }).catch(function(){ return {usado: false, palanca: false}; });
+  }
+
   function _crmPedirClientes(){
     if (_crmCliPromesa) return _crmCliPromesa;
-    var _gen = {llego: false};
-    if (!_crmFotoYa){ _crmFotoYa = true; _crmFotoClientes(_gen); }
     _crmCliTrayendo = true; _crmCliError = '';
     _crmCliEstadoPintar();
+    _crmCliPromesa = _crmDeLaBase().then(function(r){
+      if (r && r.usado){
+        CRM_FUENTE = {de: r.de, t: r.t};
+        try { window.__crmFuente = CRM_FUENTE; } catch(e){}
+        return true;
+      }
+      CRM_FUENTE = (r && r.palanca) ? {de: 'planilla', porque: r.porque || ''} : null;
+      try { window.__crmFuente = CRM_FUENTE; } catch(e){}
+      /* El adelanto de la foto (4/10) es para la palanca en «no»: con «si» la
+         base ya se miro y se descarto por algo. */
+      return _crmDeLaPlanilla(!(r && r.palanca));
+    }).then(function(ok){
+      _crmCliPromesa = null; _crmCliTrayendo = false;
+      _crmCliEstadoPintar();
+      try { window.__crmListo = Date.now(); } catch(e){}   /* para las pruebas: termino de pedirse */
+      return ok;
+    });
+    return _crmCliPromesa;
+  }
+  function _crmDeLaPlanilla(conAdelanto){
+    var _gen = {llego: false};
+    if (conAdelanto && !_crmFotoYa){ _crmFotoYa = true; _crmFotoClientes(_gen); }
     try { if (typeof window._frescoEnVuelo === 'function') window._frescoEnVuelo(['crmClientes'], 1); } catch(e){}
-    _crmCliPromesa = fetch(CRM_API + '?action=crmClientes')
+    return fetch(CRM_API + '?action=crmClientes')
       .then(function(r){ return r.json(); })
       .then(function(d){
         var l = d && d.clientes;
@@ -33043,12 +33366,9 @@ if('serviceWorker' in navigator){
         return false;
       })
       .then(function(ok){
-        _crmCliPromesa = null; _crmCliTrayendo = false;
         try { if (typeof window._frescoEnVuelo === 'function') window._frescoEnVuelo(['crmClientes'], -1); } catch(e){}
-        _crmCliEstadoPintar();
         return ok;
       });
-    return _crmCliPromesa;
   }
   /* Lo que dice arriba de la lista: de cuando es la copia, o que no se pudo. */
   function _crmCliEstadoPintar(){
@@ -33071,6 +33391,15 @@ if('serviceWorker' in navigator){
         var st = el('crmCliStats'); if (st) st.textContent = '';
         var m = el('crmCliMas'); if (m) m.hidden = true;
       }
+      return;
+    }
+    /* Con `CRM_DESDE_PG`: de donde salio lo que se ve. Con la palanca en «no»
+       CRM_FUENTE es null y el cartel queda como siempre. */
+    if (!_crmCliTrayendo && CRM_FUENTE && hay){
+      box.className = 'crm-cli-estado'; box.hidden = false;
+      box.textContent = CRM_FUENTE.de === 'pg' ? 'De la base \u00b7 al d\u00eda ' + _crmHaceTxt(CRM_FUENTE.t)
+        : CRM_FUENTE.de === 'celular' ? 'Lo guardado en este celular \u00b7 ' + _crmHaceTxt(CRM_FUENTE.t)
+        : 'De la planilla \u00b7 ' + (hace || 'reci\u00e9n') + (CRM_FUENTE.porque ? ' (no us\u00e9 la base: ' + CRM_FUENTE.porque + ')' : '');
       return;
     }
     box.hidden = true;
@@ -33319,9 +33648,9 @@ if('serviceWorker' in navigator){
     // NUNCA pisar con []: un fetch vacío/fallido envenena _hogBuild (todo en 0). Si no vino
     // nada, caemos a la cache local y dejamos crmClientes como estaba (null → reintenta luego).
     function fallback(){ if(!(crmClientes&&crmClientes.length)){ try{ var cc=JSON.parse(localStorage.getItem('maleu_crm_clientes_v1')||'null'); if(cc&&cc.length)crmClientes=cc; }catch(e){} } cb(); }
-    fetch(CRM_API + '?action=crmClientes').then(function(r){return r.json();})
-      .then(function(d){ var l=(d&&d.clientes)||null; if(l&&l.length)crmClientes=l; fallback(); })
-      .catch(function(){ fallback(); });
+    /* Por la misma puerta que el resto del CRM (6/10/2026): con `CRM_DESDE_PG`
+       tambien sale de la base, y la pedida en vuelo se comparte. */
+    _crmPedirClientes().then(function(){ fallback(); }, function(){ fallback(); });
   }
 
   // Busca el punto del mapa que corresponde a (sub-barrio, lote) de un cliente.
