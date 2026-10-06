@@ -18,10 +18,9 @@ function sacar(src, nombre) {
   return src.slice(i, j + 1);
 }
 const F = new Function(
-  ['_rtIso', '_rtDia', '_rtDeIso', '_calSem', 'calSemanasMes', 'calSemanaDe', 'calSemanaPorClave', 'calMover', 'calPesosDias', 'calMetaSemana']
+  ['_rtIso', '_rtDia', '_rtDeIso', 'calMesCorto', '_calSem', 'calSemanasMes', 'calSemanaDe', 'calSemanaPorClave', 'calMover', 'calPesosDias', 'calMetaSemana', 'calFraccionMes']
     .map(n => sacar(panel, n)).join('\n') +
-  '\nvar CAL_MES=' + panel.match(/var CAL_MES=(\[[^\]]*\]);/)[1] + ';' +
-  '\nreturn {calSemanasMes, calSemanaDe, calSemanaPorClave, calMover, calPesosDias, calMetaSemana};')();
+  '\nreturn {calSemanasMes, calSemanaDe, calSemanaPorClave, calMover, calPesosDias, calMetaSemana, calFraccionMes};')();
 const B = new Function(
   sacar(code, '_calSemanasMes_') + '\n' + sacar(code, '_calSemanaDe_') +
   '\nreturn {_calSemanasMes_, _calSemanaDe_};')();
@@ -91,6 +90,12 @@ const parejo = F.calPesosDias([]);
 ok(Math.abs(F.calMetaSemana(310, s1, parejo) - 40) < 1e-6, 'sin historia: parejo, 4/31');
 const sumaOct = F.calSemanasMes(2026, 9).reduce((a, s) => a + F.calMetaSemana(1000, s, pesos), 0);
 ok(Math.abs(sumaOct - 1000) < 1e-6, 'las semanas de octubre suman la meta del mes');
+// El "tendria que ir" del Plan: al cierre del jueves 1 de octubre, 0 (no hubo vie/sab);
+// al cierre del domingo 4, 1/5 (un vie y un sab de los cinco); el ultimo dia, todo.
+ok(F.calFraccionMes(2026, 9, 1, pesos) === 0, 'jue 1/10: nada de la meta todavia');
+ok(Math.abs(F.calFraccionMes(2026, 9, 4, pesos) - 0.2) < 1e-9, 'dom 4/10: 20% de la meta');
+ok(Math.abs(F.calFraccionMes(2026, 9, 31, pesos) - 1) < 1e-9, 'sab 31/10: el 100%');
+ok(Math.abs(F.calFraccionMes(2026, 9, 4, parejo) - 4 / 31) < 1e-9, 'sin historia: parejo, 4/31');
 
 console.log(`\n${chequeos - fallas}/${chequeos} chequeos OK`);
 process.exit(fallas ? 1 : 0);
