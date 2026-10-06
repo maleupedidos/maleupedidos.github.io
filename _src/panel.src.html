@@ -7700,6 +7700,9 @@ function _tengoTab(t){
   return l.indexOf(t)>=0 || (t==='catering' && SESSION&&SESSION.rol==='admin'&&l.indexOf('ventas')>=0);
 }
 function _tabUsaD(t){return _TABS_CON_DATOS.indexOf(t)>=0;}
+/* Las tabs que dejan pedir el volcado (`action=admin`): copia de
+   ACCION_TABS.admin en Code.js. Si cambia alla, cambia aca. */
+var _ADMIN_TABS=['inicio','ventas','pedidos','caja','egresos','stock','bbdd','pedidoshome'];
 /* ── EL CARTEL "Cargando Maleu..." ES DE LAS TABS QUE VIVEN DE D ──────────
    Antes tapaba la app entera hasta que volviera el volcado grande (~20s).
    A un repartidor eso le dejaba un cartel muerto encima de una Ruta que ya
@@ -9236,7 +9239,7 @@ function loadMiReparto(){
    en `maleu_fresco` (sin el prefijo `mc_`, que `_swrPodar` tira) para que al
    abrir la app diga de cuando es la copia en vez de inventar "ahora". */
 var FRESCO_VIEJO_MIN=20;   /* el mismo umbral que el sello de la Caja */
-var _FRESCO_NOM={pedidos:'Pedidos',caja:'Caja',volcado:'Datos del ERP',ventas:'Ventas',ruta:'Entregas',busqueda:'Abastecimiento',miportal:'Mi Portal',depositos:'Dep\u00f3sitos',carnePiezas:'Piezas de carne',crmClientes:'Clientes',crmProductos:'Productos',ajustes:'Ajustes',planMes:'Objetivo',productosAnalytics:'Productos',combosEval:'Combos',mireparto:'Mi Reparto'};
+var _FRESCO_NOM={pedidos:'Pedidos',caja:'Caja',volcado:'Datos del ERP',ventas:'Ventas',ruta:'Entregas',busqueda:'Abastecimiento',miportal:'Mi Portal',depositos:'Dep\u00f3sitos',carnePiezas:'Piezas de carne',crmClientes:'Clientes',crmProductos:'Productos',ajustes:'Ajustes',planMes:'Objetivo',productosAnalytics:'Productos',combosEval:'Combos',mireparto:'Mi Reparto',proveedores:'Proveedores'};
 /* El volcado completo (`admin`) trae tambien los pedidos y la caja. */
 var _FRESCO_EN_VOLCADO={pedidos:1,caja:1,stockTab:1};
 var _fresco=(function(){
@@ -9309,7 +9312,10 @@ function _fuentesDeTab(tab){
      que desde hoy viene en `cajaLight`. Sin esta rama caia en el default, que
      al vaciarse `_TABS_CON_DATOS` devuelve `[]`: el sello se quedaba sin nada
      que mirar y el boton no sabria nunca si esta al dia. */
-  if(tab==='proveedores')return ['caja'];
+  /* 6/10/2026: su fuente propia es `proveedores` (analisisProveedor). `caja`
+     se suma solo si el rol tiene Caja: Joaquin entra SOLO a Proveedores,
+     cajaLight le da forbidden y el ↻ quedaba en "No se pudo" para siempre. */
+  if(tab==='proveedores'){ var _fp=['proveedores']; if(_tengoTab('caja'))_fp.push('caja'); return _fp; }
   if(tab==='mireparto')return [];
   /* CONTAR y MOVER miran los depositos; RECIBIR CARNE, las piezas; y desde
      el 27/9/2026 PRODUCTOS mira `stockTab` en vez del volcado entero. */
@@ -9953,6 +9959,16 @@ function refreshContextual(){
     },function(){ done(false); });
     return;
   }
+  /* Proveedores pide lo SUYO (6/10/2026). Caia en load(), el volcado `admin`,
+     que el backend solo da a Inicio/Ventas/Pedidos/Caja/Pagos/Stock/BBDD:
+     a un rol con solo Proveedores le daba forbidden y el ↻ quedaba en "No se
+     pudo". Caja va solo si el rol la tiene. */
+  if(active==='proveedores'&&typeof window.pvRecargar==='function'){
+    var _pps=[window.pvRecargar()];
+    if(_tengoTab('caja'))_pps.push(_recargarCaja().then(function(r){return r.ok!==false;},function(){return false;}));
+    Promise.all(_pps).then(function(res){ done(res.every(function(x){return x;})); },function(){ done(false); });
+    return;
+  }
   var usaRapido=(active==='inicio'||active==='pedidos'||active==='pedidoshome'||active==='estancias');
   var ps=[];
   /* Pedidos Home (el repartidor) caia en load(): el volcado entero, ~28 s. */
@@ -9962,7 +9978,10 @@ function refreshContextual(){
      estaba lista para trabajar. */
   var _soloPedidos=(active==='pedidos'||active==='pedidoshome'||active==='estancias');
   if(usaRapido && typeof loadRapido==='function')ps.push(loadRapido({soloPedidos:_soloPedidos}));
-  else if(typeof load==='function')ps.push(load());
+  /* El volcado solo si el rol tiene alguna tab que lo puede pedir: si no, es un
+     forbidden seguro y el ↻ en rojo sobre una pantalla que esta bien. La lista
+     es la de ACCION_TABS.admin en Code.js. (6/10/2026) */
+  else if(typeof load==='function'&&_ADMIN_TABS.some(_tengoTab))ps.push(load());
   // En Inicio queremos también ventas (por la sección histórica embedida)
   if(active==='inicio'&&typeof loadVentas==='function')ps.push(loadVentas());
   Promise.all(ps).then(function(res){
@@ -27502,6 +27521,17 @@ function _vListaClick(e){
       Promise.resolve(_recargarCaja()).then(function(){}, function(){}).then(function(){ _refrescandoAuto = false; });
       return;
     }
+    /* Proveedores: lo suyo, y Caja solo si el rol la tiene (6/10/2026). Caia
+       en loadRapido(): pedidos, cobros y caja, todo forbidden para un rol con
+       solo Proveedores, y el ↻ se ponia rojo sin que nadie tocara nada. */
+    if(_tab === 'proveedores' && typeof window.pvRecargar === 'function'){
+      _refrescandoAuto = true;
+      _anotarInicioRefresco(_tab);
+      var _pa=[window.pvRecargar()];
+      if(_tengoTab('caja') && typeof _recargarCaja === 'function')_pa.push(_recargarCaja());
+      Promise.all(_pa).then(function(){}, function(){}).then(function(){ _refrescandoAuto = false; });
+      return;
+    }
     /* Stock, Proveedores y otras tabs que viven del volcado no se actualizan
        con `loadRapido`: ese camino solo trae pedidos/caja. Si ya hay una copia
        D, pedir el admin completo las renueva sin duplicar la carga de arranque
@@ -35243,6 +35273,20 @@ if('serviceWorker' in navigator){
     return base + (abr && !g ? ' · ' + abr : '');
   }
 
+  /* Para el ↻ y el refresco automatico (6/10/2026): pide de nuevo y dice si
+     llego del servidor. traer() resuelve OK con la copia aunque falle la red,
+     asi que "llego" se mide con el sello, no con la promesa. */
+  var _pvFrescoEn = 0;
+  window.pvRecargar = function(){
+    var t = Date.now();
+    if (typeof _frescoEnVuelo === 'function') _frescoEnVuelo(['proveedores'], 1);
+    return Promise.resolve(loadData()).then(function(){ return _pvFrescoEn >= t; }, function(){ return false; })
+      .then(function(ok){
+        if (typeof _frescoEnVuelo === 'function') _frescoEnVuelo(['proveedores'], -1);
+        return ok;
+      });
+  };
+
   function loadData(){
     /* Tardaba 10,8 s en pintar (medido el 21/9/2026 con el cronometro del
        navegador): el backend lee cuatro hojas y devuelve 360 KB. Ahora pinta la
@@ -35260,6 +35304,10 @@ if('serviceWorker' in navigator){
         render();
         var sello = $('pvFresco');
         if (sello) sello.textContent = meta && meta.hace ? ('datos ' + meta.hace) : '';
+        if (meta && !meta.viejo) {
+          _pvFrescoEn = Date.now();
+          if (typeof _marcarFresco === 'function') _marcarFresco(['proveedores']);
+        }
       },
       { valido: function(d){ return !!(d && d.resumen && d.ocs); } })
       .catch(function(err){
