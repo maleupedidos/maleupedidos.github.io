@@ -22,7 +22,12 @@
      es de hace 2 → la caja sale de la base (una cara no frena a las otras);
    · «unafalla»: la de cobros falta y la global es vieja → caja Y cobros a Apps
      Script (es plata: no se mezclan dos horas);
-   · «otro»: alguien escribio despues del latido → todo a Apps Script, y lo dice. */
+   · «otro»: alguien escribio despues del latido → todo a Apps Script, y lo dice
+     (backend sin sello por tema: `action=ver` sin `fotos`);
+   · «tema» (sello por tema, 6/10/2026): la ultima escritura fue del CRM, despues
+     del latido; la de pedidos y la de caja, antes → los dos salen de la base;
+   · «temacaja»: la ultima escritura fue de caja → caja y cobros a Apps Script,
+     pedidos de la base. */
 'use strict';
 const { abrir, evaluar } = require('./cdp.js');
 const prep = require('./sesion_prep.js');
@@ -78,7 +83,15 @@ const STUB = esc => `(function(){
       var m=url.match(/action=([a-zA-Z_]+)/), a=m?m[1]:'?';
       if(a==='lote'){ ((url.match(/acciones=([^&]+)/)||[])[1]||'').split(',').forEach(function(z){ window.__gets.push(z); }); }
       else window.__gets.push(a);
-      if(a==='ver')return resp(JSON.stringify({ok:true,ver:String(window.__verT)+'abcd',t:Date.now()}));
+      if(a==='ver'){
+        var dv={ok:true,ver:String(window.__verT)+'abcd',t:Date.now()};
+        if(esc==='tema'||esc==='temacaja'){
+          var viejo=Date.now()-10*60e3, nuevo=Date.now()-60e3;
+          dv.ver=String(nuevo)+'abcd';
+          dv.fotos={pedidos:viejo,ocLight:viejo,cajaLight:esc==='temacaja'?nuevo:viejo,cobrosPendientes:esc==='temacaja'?nuevo:viejo,crmClientes:nuevo};
+        }
+        return resp(JSON.stringify(dv));
+      }
       if(a==='sbToken')return resp(JSON.stringify({ok:true,sb:SB,palancas:{pedidosPg:true,cajaPg:esc!=='sincaja'}}));
       return resp('{"ok":false,"error":"sin Apps Script en esta prueba"}');
     }
@@ -104,7 +117,7 @@ const LEER = `({ gets: window.__gets.slice(), ped: window.__pedFuente||null, caj
 
 (async () => {
   console.log('\n== La caja desde la base, en la carga completa (casi sin cargar Apps Script) ==\n');
-  for (const esc of (process.env.CASO ? process.env.CASO.split(',') : ['ok', 'sincaja', 'porpantalla', 'unafalla', 'otro'])) {
+  for (const esc of (process.env.CASO ? process.env.CASO.split(',') : ['ok', 'sincaja', 'porpantalla', 'unafalla', 'otro', 'tema', 'temacaja'])) {
     console.log('-- ' + esc);
     const cli = await abrirErp(esc);
     const r = await evaluar(cli, LEER);
@@ -122,6 +135,12 @@ const LEER = `({ gets: window.__gets.slice(), ped: window.__pedFuente||null, caj
     } else if (esc === 'unafalla') {
       chk('unafalla: caja Y cobros a Apps Script (no se mezclan dos horas)', pidio('cajaLight') && pidio('cobrosPendientes') && !cajaBase, r);
       chk('unafalla: y dice cuál falta', !!r.caja && /cobrosPendientes/.test(r.caja.porque || ''), r.caja);
+    } else if (esc === 'tema') {
+      chk('tema: una nota del CRM no manda pedidos ni caja a la planilla',
+        !pidio('pedidosLight') && !pidio('cajaLight') && !pidio('cobrosPendientes') && cajaBase && !!r.ped && r.ped.de === 'pg', r);
+    } else if (esc === 'temacaja') {
+      chk('temacaja: caja y cobros a Apps Script', pidio('cajaLight') && pidio('cobrosPendientes') && !cajaBase, r);
+      chk('temacaja: pedidos siguen de la base', !pidio('pedidosLight') && !!r.ped && r.ped.de === 'pg', r.ped);
     } else if (esc === 'otro') {
       chk('otro: todo a Apps Script', pidio('pedidosLight') && pidio('cajaLight') && pidio('cobrosPendientes'), r.gets);
       chk('otro: y dice que se escribió después', !!r.caja && /se escribió algo/.test(r.caja.porque || '') && /se escribió algo/.test((r.ped || {}).porque || ''), { ped: r.ped, caja: r.caja });

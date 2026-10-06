@@ -12534,17 +12534,31 @@ function _pedSelloMs(v){
 /* Lo usan Pedidos y el CRM (6/10/2026): el CRM pide hasta seis fotos juntas, y
    todas comparten UNA pregunta en vuelo. */
 var _pedSelloVuelo=null;
+/* EL SELLO POR TEMA (6/10/2026). Devuelve {g, f}: `g` la ultima escritura de
+   cualquier cosa (ms), `f` la de cada foto de pantalla (la de su tema), o null
+   si el backend todavia no la manda. Una nota del CRM ya no manda Pedidos a la
+   planilla. Usar con `_selloDe`. */
+function _pedSelloInfo(v,f){ return {g:_pedSelloMs(v), f:(f&&typeof f==='object')?f:null}; }
+function _selloDe(info,screens){
+  if(!info||!info.g)return 0;
+  if(info.f){
+    var m=0, todas=true;
+    (screens||[]).forEach(function(sc){ var x=Number(info.f[sc]); if(isFinite(x)&&x>0){ if(x>m)m=x; } else todas=false; });
+    if(todas&&m)return m;
+  }
+  return info.g;
+}
 function _pedSelloEscritura(){
   try{
     var vb=window.__verBackend;
-    if(vb&&vb.v&&Date.now()-vb.t<PED_SELLO_RECIENTE_MS)return Promise.resolve(_pedSelloMs(vb.v));
+    if(vb&&vb.v&&Date.now()-vb.t<PED_SELLO_RECIENTE_MS)return Promise.resolve(_pedSelloInfo(vb.v,vb.f));
   }catch(e){}
   if(_pedSelloVuelo)return _pedSelloVuelo;
   var p=fetch(API+'?action=ver&t='+Date.now()).then(function(r){ return r.json(); }).then(function(d){
-    if(!d||!d.ok||!d.ver)return 0;
-    try{ window.__verBackend={v:String(d.ver),t:Date.now()}; }catch(e){}
-    return _pedSelloMs(d.ver);
-  }).catch(function(){ return 0; });
+    if(!d||!d.ok||!d.ver)return null;
+    try{ window.__verBackend={v:String(d.ver),t:Date.now(),f:(d.fotos&&typeof d.fotos==='object')?d.fotos:null}; }catch(e){}
+    return _pedSelloInfo(d.ver,d.fotos);
+  }).catch(function(){ return null; });
   _pedSelloVuelo=p;
   var suelta=function(){ if(_pedSelloVuelo===p)_pedSelloVuelo=null; };
   p.then(suelta,suelta);
@@ -12616,7 +12630,7 @@ function _lotePedidosPg(accs,ts,dePlanilla){
       if(quiereCaja)notaC({de:'planilla',porque:r.porque||''});
     } else {
       if(quierePed){
-        var o=_pedDesdePg(r.filas,r.estado,ahora), no=o.ok?_pgNoUsar(o.alDia,r.sello):o.porque;
+        var o=_pedDesdePg(r.filas,r.estado,ahora), no=o.ok?_pgNoUsar(o.alDia,_selloDe(r.sello,o.oc?['pedidos','ocLight']:['pedidos'])):o.porque;
         if(!no){
           usados.pedidosLight=o.ped;
           if(o.oc&&accs.indexOf('ocLight')>-1)usados.ocLight=o.oc;
@@ -12625,7 +12639,7 @@ function _lotePedidosPg(accs,ts,dePlanilla){
       }
       if(quiereCaja){
         var q={}; cajaAccs.forEach(function(a){ q[a]=1; });
-        var c=_cajaDesdePg(r.filas,r.estado,ahora,q), noC=c.ok?_pgNoUsar(c.alDia,r.sello):c.porque;
+        var c=_cajaDesdePg(r.filas,r.estado,ahora,q), noC=c.ok?_pgNoUsar(c.alDia,_selloDe(r.sello,cajaAccs)):c.porque;
         if(!noC){
           cajaAccs.forEach(function(a){ usados[a]=c.d[a]; });
           res._fuenteCaja=notaC({de:'pg',t:c.alDia});
@@ -27888,7 +27902,7 @@ function _vListaClick(e){
     fetch(API + '?action=ver&t=' + Date.now()).then(function(r){ return r.json(); }).then(function(d){
       if(!d || !d.ok || !d.ver) return;
       /* El sello de la ultima escritura, para `_pedSelloEscritura` (6/10/2026). */
-      try { window.__verBackend = { v: String(d.ver), t: Date.now() }; } catch(e){}
+      try { window.__verBackend = { v: String(d.ver), t: Date.now(), f: (d.fotos && typeof d.fotos === 'object') ? d.fotos : null }; } catch(e){}
       if(_verVista && d.ver !== _verVista){ _verPend = true; _vigia.cambios++; _vigiaEspera = VIGIA_MS; }
       else if(_verVista) _vigiaEspera = Math.min(VIGIA_MAX, Math.round(_vigiaEspera * 1.5));
       _verVista = d.ver;
@@ -30252,12 +30266,12 @@ if('serviceWorker' in navigator){
       return Promise.all([
         g('erp_screen_snapshot?select=payload,computed_at&screen=eq.' + encodeURIComponent(screen)),
         g(_fotoConfQuery([screen])),
-        (typeof _pedSelloEscritura === 'function') ? _pedSelloEscritura() : Promise.resolve(0)
+        (typeof _pedSelloEscritura === 'function') ? _pedSelloEscritura() : Promise.resolve(null)
       ]).then(function(rs){
         clearTimeout(reloj);
         var o = _crmDesdePg(rs[0], rs[1], Date.now(), valida, screen);
         if (!o.ok) return no(o.porque);
-        var sello = rs[2];
+        var sello = (typeof _selloDe === 'function') ? _selloDe(rs[2], [screen]) : 0;
         if (!sello) return no('no se pudo saber cu\u00e1ndo se escribi\u00f3 por \u00faltima vez');
         if (sello > o.alDia) return no('se escribi\u00f3 algo ' + _crmHaceTxt(sello) + ', despu\u00e9s de que la base confirm\u00f3 la foto');
         var post = 0, cambio = 0;
