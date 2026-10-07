@@ -24,6 +24,14 @@ html{background:#331C1C}
         border-top-color:#E8763A;border-radius:50%;animation:bootgira .8s linear infinite}
 @keyframes bootgira{to{transform:rotate(360deg)}}
 html.listo #boot{opacity:0;pointer-events:none;transition:opacity .25s}
+/* Cancelar un pedido cobrado: que paso con la plata (7/10/2026). */
+.cpl-bg{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px}
+.cpl-box{background:var(--bg,#fff);color:var(--ink,#222);border-radius:14px;padding:18px;width:100%;max-width:380px;box-shadow:0 10px 30px rgba(0,0,0,.25)}
+.cpl-tit{font-weight:700;font-size:16px;margin-bottom:6px}
+.cpl-txt{font-size:14px;color:var(--ink2,#555);margin-bottom:14px}
+.cpl-btn,.cpl-no{display:block;width:100%;padding:12px;border-radius:10px;font-size:15px;margin-top:8px;cursor:pointer}
+.cpl-btn{border:1px solid var(--ink3,#bbb);background:var(--bg,#fff);color:var(--ink,#222);font-weight:600}
+.cpl-no{border:none;background:transparent;color:var(--ink2,#555)}
 </style>
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
@@ -17768,21 +17776,71 @@ function cambiarEstado(btn){
 }
 
 // ── CANCELAR PEDIDO (con confirmación) — UI optimista ──
+/* UN PEDIDO COBRADO NO SE CANCELA EN SILENCIO (7/10/2026, arreglo 2 del
+   Diagnostico ERP). Si la copia local dice Cobrado, se pregunta ANTES que paso
+   con la plata: «La devolví» (el backend deshace el cobro) o «Queda a favor»
+   (Credito en Saldos Clientes). Si la copia estaba vieja y el servidor contesta
+   `necesitaPlata`, se deshace lo optimista y se pregunta igual. */
+var _CPL_HOJAS={Home:1,Pilar:1,Clubes:1};
+function _cplPedido(hoja,id){
+  if(!D||!D.pedidos)return null;
+  for(var i=0;i<D.pedidos.length;i++){var p=D.pedidos[i];if(p&&p.h===hoja&&String(p.n)===String(id))return p;}
+  return null;
+}
+function _cplEsc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
+function _cplElegir(cli,id,monto,cb){
+  var bg=document.createElement('div');
+  bg.className='cpl-bg';
+  bg.innerHTML='<div class="cpl-box" role="dialog" aria-modal="true">'
+    +'<div class="cpl-tit">El pedido de '+_cplEsc(cli)+' (N° '+_cplEsc(id)+') está cobrado</div>'
+    +'<div class="cpl-txt">'+(monto>0?'Entraron $'+Math.round(monto).toLocaleString('es-AR')+'. ':'')+'¿Qué pasó con la plata?</div>'
+    +'<button type="button" class="cpl-btn" data-v="devolvi">La devolví</button>'
+    +'<button type="button" class="cpl-btn" data-v="a_favor">Queda a favor del cliente</button>'
+    +'<button type="button" class="cpl-no" data-v="">No cancelar</button></div>';
+  bg.addEventListener('click',function(e){
+    var t=e.target, v=(t&&t.getAttribute)?t.getAttribute('data-v'):null;
+    if(v===null&&t!==bg)return;            /* un toque en el texto no cierra */
+    if(bg.parentNode)bg.parentNode.removeChild(bg);
+    if(v)cb(v);
+  });
+  document.body.appendChild(bg);
+}
 function confirmarCancelarPed(btn){
   var hoja=btn.dataset.h, id=btn.dataset.n, row=Number(btn.dataset.r)||0, cli=btn.dataset.c||'';
+  var p=_cplPedido(hoja,id);
+  if(p&&p.ep==='Cobrado'&&_CPL_HOJAS[hoja]){
+    _cplElegir(cli,id,Number(p.$)||0,function(v){btn.disabled=true;_cancelarPedEnviar(btn,hoja,id,row,cli,v);});
+    return;
+  }
   if(!confirm('¿Cancelar el pedido de '+cli+' (N° '+id+')?\n\nEsta acción no se puede deshacer.'))return;
   btn.disabled=true;
+  _cancelarPedEnviar(btn,hoja,id,row,cli,'');
+}
+function _cancelarPedEnviar(btn,hoja,id,row,cli,plata){
+  var _pAntes=_cplPedido(hoja,id), _esAntes=(_pAntes&&_pAntes.es)||'Pendiente';
   // Tras la acción, scroll al top para que Tadeo no tenga que volver arriba a mano.
   window._forceTopOnRender=true;
   _patchPedidoLocal(hoja,id,{es:'Cancelado'});
   render();
   toast('Pedido cancelado');
   showLoader('Cancelando pedido...');
-  fetch(API,{method:'POST',body:JSON.stringify({action:'cancelarPedido',hoja:hoja,id:id,row:row})})
+  var _body={action:'cancelarPedido',hoja:hoja,id:id,row:row};
+  if(plata)_body.plata=plata;
+  fetch(API,{method:'POST',body:JSON.stringify(_body)})
     .then(function(r){return r.json();})
     .then(function(r){
       hideLoader(true);
+      if(r&&r.necesitaPlata){
+        /* La copia local no sabia que estaba cobrado: se vuelve atras y se pregunta. */
+        _patchPedidoLocal(hoja,id,{es:_esAntes,ep:'Cobrado'});
+        render();
+        btn.disabled=false;
+        _cplElegir(cli,id,Number(r.cobrado)||0,function(v){btn.disabled=true;_cancelarPedEnviar(btn,hoja,id,row,cli,v);});
+        return;
+      }
       if(r.ok){
+        if(plata==='devolvi')toast('Cobro deshecho: la plata salió de la caja');
+        else if(plata==='a_favor')toast('La plata queda a favor del cliente');
         // Qué pasó con la mercadería que este pedido tenía pedida al proveedor.
         // Antes esto no se decía y las líneas quedaban vivas: se le compraba al
         // proveedor para un pedido que ya no existía (caso Latugaye, $59.700).
@@ -56617,6 +56675,18 @@ function processSyncQueue(){
       }else{
         // Backend respondió pero falló (ok:false). Log + retry con backoff.
         console.warn('sync fail',item,res);
+        /* `sinReintento` (7/10/2026): el backend dice que reintentar no lo va a
+           arreglar. Hoy es cancelar un pedido COBRADO, que exige decir que paso
+           con la plata, y aca no hay donde elegirlo: se saca de la cola y se
+           avisa a donde ir. Cinco reintentos solo demoraban el mismo error. */
+        if(res&&res.sinReintento){
+          syncQueue.shift();
+          if(typeof showToast==='function')showToast((res.err||'No se pudo')+(item&&item.action==='cancelarPedido'?' — cancelalo desde el panel, en Pedidos':''),7000);
+          saveLocal();
+          if(syncQueue.length===0){_limpiarGuardLoaderSync();rutHideLoader(true);}
+          setTimeout(processSyncQueue,300);
+          return;
+        }
         if(attempts>=5){
           // Dar por perdido después de 5 intentos, mover al final y avisar
           syncQueue.shift();
