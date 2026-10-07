@@ -113,7 +113,10 @@ async function arbolDe(cli) {
   chk(!!V && /Objetivo cargado \$23\.300\.000 · 276 ventas · margen 27,3%/.test(V.dif), 'muestra el total cargado con ventas y margen', V && V.dif);
   chk(!!V && /Suma de los canales \$23\.300\.000 · 276 ventas · margen 27,3%/.test(V.dif), 'y la suma de los canales', V && V.dif);
   chk(!!V && /Diferencia: cierran al peso$/.test(V.dif.trim()), 'octubre cierra al peso: sin diferencia de plata, ventas ni margen', V && V.dif);
-  chk(!!V && V.rows.length === 11, 'once filas: total, 2 unidades, 2 mercados, 6 canales', V && V.rows);
+  /* Eran 11 hasta el 6/10/2026: Catering es unidad Y canal, y se dibujaba dos
+     veces. La unidad con un solo canal del mismo nombre va una sola vez. */
+  chk(!!V && V.rows.length === 10, 'diez filas: total, 2 unidades, 2 mercados, 5 canales de retail', V && V.rows);
+  chk(!!V && V.rows.filter(r => /^Catering /.test(r)).length === 1, 'Catering aparece UNA vez', V && V.rows);
   chk(!!V && V.cards === 0, 'las tarjetas de canal se reemplazan (no dos versiones del mismo numero)', V && V.cards);
   const fmt = n => '$' + Math.round(n).toLocaleString('es-AR');
   chk(!!V && !!A && V.rows[0].indexOf(fmt(A.raiz)) >= 0 && V.rows[0].indexOf('de ' + fmt(SUMA)) >= 0, 'la fila TOTAL dice el real y la meta del arbol', V && V.rows[0]);

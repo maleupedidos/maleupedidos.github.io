@@ -62,14 +62,14 @@ function pedidos(hasta) {
   out.push(H({ c: 'Pend Dom', es: 'Pendiente', fex: '', dee: '2026-09-27', $: 90000 }));
   return out;
 }
-const plan = (diasTrans, conCat) => ({ ok: true, mes: 'Septiembre 2026', yyyy: 2026, mm: 9, diasMes: 30, diasTrans: diasTrans, conCatering: !!conCat,
-  metas: { 'Total|': { canal: 'Total', barrio: '', metaFact: 5400000, metaPedidos: 0, metaTicket: 0, metaClientes: 0, metaCasas: 0, semanales: '', semanalesM: '', semanalesP: '', notas: '' } },
+const plan = (diasTrans, conCat, M) => ({ ok: true, mes: 'Septiembre 2026', yyyy: 2026, mm: 9, diasMes: 30, diasTrans: diasTrans, conCatering: !!conCat,
+  metas: { 'Total|': { canal: 'Total', barrio: '', metaFact: M || 5400000, metaPedidos: 0, metaTicket: 0, metaClientes: 0, metaCasas: 0, semanales: '', semanalesM: '', semanalesP: '', notas: '' } },
   objetivos: [], real: {}, acciones: [], origen: [], barriosHome: ['Estancias del Pilar'], canalesPrincipales: ['Venta Directa'] });
 const CATERING = { ok: true, events: [
   { id: 'e1', status: 'confirmed', client_name: 'Cliente Evento', event_date: '2026-09-25', revenue_budget: 805000, cost_budget: 400000, revenue_actual: 0 },
   { id: 'e2', status: 'quoted', client_name: 'Solo cotizado', event_date: '2026-09-26', revenue_budget: 999000, revenue_actual: 0 } ] };
 
-function escena(reloj, hasta, diasTrans, conCat) {
+function escena(reloj, hasta, diasTrans, conCat, M) {
   const P = pedidos(hasta);
   const RELOJ = `(function(){var AH=new Date(${reloj.join(',')}).getTime();var _D=Date;
     function FD(){var a=[].slice.call(arguments);if(!(this instanceof FD))return new _D(AH).toString();if(a.length===0)return new _D(AH);return new (Function.prototype.bind.apply(_D,[null].concat(a)))();}
@@ -89,7 +89,7 @@ function escena(reloj, hasta, diasTrans, conCat) {
         else if(a==='cajaLight') cuerpo={ts:1,caja:{},saldoBase:{},movimientos:[],efMano:[],gastos:[],ingresos:[]};
         else if(a==='ocLight') cuerpo={ok:true,oc:{lista:[]}};
         else if(a==='cobrosPendientes') cuerpo={ts:1,cobros:[]};
-        else if(a==='planMes') cuerpo=${JSON.stringify(plan(diasTrans, conCat))};
+        else if(a==='planMes') cuerpo=${JSON.stringify(plan(diasTrans, conCat, M))};
         else if(a==='catering') cuerpo=${JSON.stringify(CATERING)};
         else if(a==='crmLeads') cuerpo={ok:true,ts:1,leads:[]};
         else if(a==='admin') cuerpo={ok:false,forbidden:true};
@@ -129,14 +129,17 @@ function escena(reloj, hasta, diasTrans, conCat) {
 
     console.log('\n-- lunes 21/9, 15 h --');
     await abrirEscena(escena([2026, 8, 21, 15, 0, 0], '2026-09-21', 21, false));
-    /* HOY (22/9/2026). El lunes 21 a las 15 h: faltan $2.100.000 al cierre del
-       domingo 20 y quedan 10 días (del 21 al 30), así que hoy tienen que entrar
-       $210.000. Entregado hoy: nada. Cargado sin entregar para hoy: nada. */
+    /* HOY (22/9/2026; con peso por dia desde el 6/10/2026). El lunes 21 a las
+       15 h faltan $2.100.000 al cierre del domingo 20. Hasta el 6/10 se repartia
+       parejo entre los 10 dias que quedan ($210.000 hoy). Ahora va con el peso de
+       cada dia de la semana de las 8 semanas anteriores —el mismo que el fin de
+       semana—, y en esta historia los lunes no venden: hoy no tiene que entrar
+       nada. Entregado hoy: nada. Cargado sin entregar para hoy: nada. */
     const HOY = await ev(cli, txt('#planHoy'));
-    chk('HOY dice qué día es y cuánto tiene que entrar hoy para no perder el ritmo',
-      /Hoylunes 21 de septiembre/.test(HOY || '') && /\$210\.000tiene que entrar hoy para no perder el ritmo/.test(HOY || ''), HOY);
+    chk('HOY dice qué día es y, con el peso del lunes (cero en la historia), que hoy no tiene que entrar nada',
+      /Hoylunes 21 de septiembre/.test(HOY || '') && /\$0tiene que entrar hoy para no perder el ritmo/.test(HOY || ''), HOY);
     chk('dice cuánto se entregó hoy y que no hay nada cargado', /\$0 entregado · nada cargado todavía/.test(HOY || ''), HOY);
-    chk('y cuánto falta conseguir hoy', /quedan \$210\.000 por conseguir hoy/.test(HOY || ''), HOY);
+    chk('y que el día cierra bien', /el día cierra bien/.test(HOY || ''), HOY);
     chk('la tab se llama Objetivo, no Planificación', (await ev(cli, `(document.querySelector('[data-p="planificacion"] .bn-lbl')||{}).textContent`)) === 'Objetivo');
 
     /* EL BOTÓN ACTUALIZAR. Qué pide y qué dice cuando algo falla se mide en
@@ -169,6 +172,15 @@ function escena(reloj, hasta, diasTrans, conCat) {
 
     console.log('\n-- sábado 26/9, 13 h --');
     await abrirEscena(escena([2026, 8, 26, 13, 0, 0], '2026-09-26', 26, false));
+    /* HOY con peso: al cierre del viernes 25 van $4.100.000, faltan $1.300.000
+       en 5 dias (sab 26 a mie 30). Pesos de la historia: sabado $350.000, domingo
+       $250.000, lunes y martes 0, miercoles $100.000 -> al sabado le toca
+       350/700 = $650.000. Parejo eran $260.000. Entregado hoy $300.000 + cargado
+       $160.000 = $460.000: quedan $190.000 por conseguir. */
+    const HS = await ev(cli, txt('#planHoy'));
+    chk('HOY sábado: $650.000 (el peso del sábado sobre lo que queda del mes), no $260.000 parejo',
+      /Hoysábado 26 de septiembre/.test(HS || '') && /\$650\.000tiene que entrar hoy/.test(HS || ''), HS);
+    chk('y entregando lo cargado quedan $190.000 por conseguir hoy', /quedan \$190\.000 por conseguir hoy/.test(HS || ''), HS);
     const S = await ev(cli, txt('#planFinde'));
     chk('tiene que traer $2.000.000: lo que faltaba al cierre del jueves', /Tiene que traer \$2\.000\.000: lo que falta para el objetivo al cierre del jueves/.test(S || '') && !/se recalcula solo/.test(S || ''), S);
     const filasS = await ev(cli, `JSON.stringify([].map.call(document.querySelectorAll('#planFinde .plan-finde-fila:not(.cab)'),function(f){return {t:f.textContent.replace(/\\s+/g,' ').trim(),hoy:f.classList.contains('hoy')};}))`);
@@ -195,6 +207,13 @@ function escena(reloj, hasta, diasTrans, conCat) {
     chk('el total NO suma el evento del modulo ($805.000): sigue $4.400.000, con catering en el titulo',
       /\$4\.400\.000\s*de \$5\.400\.000/.test(tC || '') && !/5\.205\.000/.test(tC || '') && /todos los canales y catering/.test(tC || ''), tC);
     chk('y el viernes del fin de semana sigue en $700.000 (sin el evento del modulo)', /\$700\.000/.test(C || '') && !/1\.505\.000/.test(C || ''), C);
+
+    /* "faltan unos 1 pedidos más" (6/10/2026): con un objetivo de $4.350.000 el
+       lunes 21 faltan $1.050.000 -> 15 pedidos de $71.429; uno normal trae 14. */
+    console.log('\n-- lunes 21/9 con objetivo de $4.350.000 --');
+    await abrirEscena(escena([2026, 8, 21, 15, 0, 0], '2026-09-21', 21, false, 4350000));
+    const U = await ev(cli, txt('#planFinde'));
+    chk('falta 1 pedido más (en singular, sin "unos")', /Son unos 15 pedidos/.test(U || '') && /: falta 1 pedido más\./.test(U || '') && !/unos 1 pedidos/.test(U || ''), U);
 
     if (ANCHO < 900) {
       chk('en el celular, plegado, dice lo que tiene que traer y cómo va, en una línea', plegado.length >= 2 && plegado.every(t => /Tiene que traer \$[\d.]+/.test(t) && /Ver día por día/.test(t)) && /va \$1\.000\.000/.test(plegado[1] || ''), plegado);
