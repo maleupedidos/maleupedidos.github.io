@@ -6188,8 +6188,12 @@ function _descDelCobro(st){
     mot=d.costo?'Al costo: le cobrás lo que te costó':'Un monto fijo que elegiste vos';
   } else { monto=guardado; mot=''; }
   monto=Math.max(0,Math.min(monto,base));
-  return {calc:true,monto:monto,total:base-monto,base:base,sub:sub,env:env,envOrig:envOrig,
-          guardado:guardado,diez:diez,custom:custom,mot:mot};
+  /* El saldo a favor que la tienda ya le aplico al crear el pedido (BI/BL, 6/10/2026).
+     Ya se le desconto en Saldos Clientes: sin restarlo, el cuadro le cobraba el
+     total completo y el cliente perdia el saldo. */
+  var sAp=Math.max(0,Math.min(Number(ent.sAp)||0,base-monto));
+  return {calc:true,monto:monto,total:base-monto-sAp,base:base,sub:sub,env:env,envOrig:envOrig,
+          guardado:guardado,diez:diez,custom:custom,mot:mot,sAp:sAp};
 }
 /* El total a cobrar de un pedido suelto. Sin subtotal, el que tiene guardado. */
 function _cobroTotal(st){
@@ -6330,10 +6334,12 @@ function _descDelCombo(st){
   }
   filas.forEach(function(f){
     f.desc=Math.max(0,Math.min(f.desc,f.sub+f.env));
-    f.total=f.sub+f.env-f.desc;
+    /* Menos el saldo a favor que la tienda ya le aplico (ver _descDelCobro). */
+    f.sAp=Math.max(0,Math.min(Number(f.p.sAp)||0,f.sub+f.env-f.desc));
+    f.total=f.sub+f.env-f.desc-f.sAp;
   });
-  var monto=sumar('desc'),sub=sumar('sub'),env=sumar('env');
-  return {calc:true,combo:true,monto:monto,total:sub+env-monto,base:sub+env,sub:sub,env:env,
+  var monto=sumar('desc'),sub=sumar('sub'),env=sumar('env'),sAp=sumar('sAp');
+  return {calc:true,combo:true,monto:monto,total:sub+env-monto-sAp,sAp:sAp,base:sub+env,sub:sub,env:env,
     envOrig:sumar('envOrig'),envMax:envMax,nEnv:nEnv,envJuntado:envJuntado,guardado:sumar('guard'),diez:sumar('diez'),
     custom:custom,mot:mot,filas:filas};
 }
@@ -6397,7 +6403,8 @@ function _renderCobroDescInfo(){
       +'" id="cobroEnvRegalo" onclick="_setCobroEnvRegalo()">\ud83c\udf81 Envío de regalo</button></div>';
     var envTxt=(st.envRegalo&&d.envOrig>0)?' + envío de regalo':(d.env>0?' + envío '+formatMoney(d.env):'');
     h+='<div class="cobro-desc-cuenta">Subtotal '+formatMoney(d.sub)+envTxt
-      +(d.monto>0?' − '+formatMoney(d.monto):'')+' = <b>'+formatMoney(d.total)+'</b></div>';
+      +(d.monto>0?' − '+formatMoney(d.monto):'')
+      +(d.sAp>0?' − '+formatMoney(d.sAp)+' de saldo a favor (ya aplicado en la tienda)':'')+' = <b>'+formatMoney(d.total)+'</b></div>';
   }
   h+='<div class="cobro-desc-mot">'+_rtcEsc(d.mot)+'</div>';
   if(d.combo&&!st.envRegalo&&!st.partial&&d.envJuntado)
@@ -7477,7 +7484,7 @@ function _toggleCobroAlCosto(btn){
   // en vez de fingir una venta a precio pleno.
   var descCosto=totalBase-nuevoTotal;
   st.desc={modo:'monto',valor:descCosto,costo:true};
-  st.total=nuevoTotal;
+  st.total=Math.max(0,nuevoTotal-(Number(st.ent.sAp)||0)); // menos el saldo ya aplicado en la tienda
   if(btn)btn.classList.add('on');
   _afterAlCostoChange(st);
   showToast('Al costo: '+formatMoney(nuevoTotal)+' (te ahorrás cobrarle '+formatMoney(descCosto)+')');
