@@ -1288,7 +1288,7 @@
     <h3>💳 Liquidar semana a Maleu</h3>
     <div class="mod-sub" id="liq-sub">—</div>
     <div class="modal-target">
-      <span class="lbl">A pagar (83%)</span>
+      <span class="lbl">A pagar</span>
       <span id="liq-target">$0</span>
     </div>
     <div class="modal-field ef">
@@ -1862,7 +1862,6 @@ function _bloqueMontos(s) {
   var com   = (s.comision != null) ? Number(s.comision) : Math.round(fact * comPct() / 100);
   var gan   = (s.ganancia != null) ? Number(s.ganancia) : (com + envio);
   var cobrado = fact + envio;                            // lo que paga el cliente
-  var aMaleu  = fact - com;                              // 83% de productos
   var nEnv    = envio > 0 ? Math.round(envio / ENVIO_RED) : 0;
   var h = '';
   h += '<div class="mc-hero"><div class="mc-hero-lbl">Mi ganancia</div><div class="mc-hero-val">' + ars(gan) + '</div></div>';
@@ -1878,7 +1877,9 @@ function _bloqueMontos(s) {
     h += '<div class="mc-brow"><span>Envío (tuyo)</span><span>' + ars(envio) + '</span></div>';
     h += '</div>';
   }
-  h += '<div class="mc-line dim"><span>Le rendís a Maleu</span><b>' + ars(aMaleu) + '</b></div>';
+  /* 7/10/2026: lo que el cliente te paga se entrega ENTERO a Maleu; tu
+     ganancia te la paga Maleu en la quincena. Ya no se rinde «sin comisión». */
+  h += '<div class="mc-line dim"><span>Tu ganancia te la paga Maleu</span><b>en la quincena</b></div>';
   return h;
 }
 
@@ -3566,16 +3567,18 @@ function renderCaja() {
   let aPagarPendTotal = 0;
 
   semanas.forEach(g => {
-    // Pedidos pendientes de esa semana
-    const pendientes = g.pedidos.filter(p => p.ep === 'Cobrado' && !_esPagado(p.epm));
+    /* 7/10/2026: `aPg` es lo que debe, por la regla unica del backend (el
+       Facturado entero, o el efectivo desde el 5/10). Un pedido con aPg 0 lo
+       cobro Maleu: esa plata no esta en su caja. Y su comision ya no se
+       descuenta: Maleu se la debe y se la paga en la quincena (`mDebe`). */
+    g.pedidos.forEach(p => { if (p.es === 'Entregado' && p.ep === 'Cobrado') miComision += _redComMaleu(p); });
+    const pendientes = g.pedidos.filter(p => p.ep === 'Cobrado' && !_esPagado(p.epm) && (Number(p.aPg) || 0) > 0);
     pendientes.forEach(p => {
       const spl = _splitPago(p);
       const aPg = Number(p.aPg) || 0;
-      const total = _cobroCliente(p);
       efCobradoPend += spl.ef;
       trCobradoPend += spl.tr;
       aPagarPendTotal += aPg;
-      miComision += (total - aPg);
     });
     // Pagos parciales registrados PARA esta semana (aplican a los pendientes de arriba)
     const k = g.y + '-' + String(g.sem).padStart(2, '0');
@@ -3599,8 +3602,11 @@ function renderCaja() {
   html += '<div class="caja-hero">';
   html += '<div class="ch-label">💰 Plata en tu caja (cobrada sin liquidar)</div>';
   html += '<div class="ch-row"><div class="ch-val">' + ars(saldoTotal) + '</div></div>';
-  if (aPagarMaleu > 0 || miComision > 0) {
-    html += '<div class="ch-label" style="margin-top:.6rem">De la cual: ' + ars(miComision) + ' es tuya · ' + ars(aPagarMaleu) + ' le debés a Maleu</div>';
+  if (aPagarMaleu > 0) {
+    html += '<div class="ch-label" style="margin-top:.6rem">Le debés a Maleu ' + ars(aPagarMaleu) + ': se entrega entera, sin descontar tu comisión</div>';
+  }
+  if (miComision > 0) {
+    html += '<div class="ch-label" style="margin-top:.3rem">💚 Maleu te debe ' + ars(miComision) + ' de comisión · se paga el ' + _mkCobro() + '</div>';
   }
   if (yaPagadoTotal > 0) {
     html += '<div class="ch-label" style="margin-top:.3rem;opacity:.75">✓ Ya le pagaste a Maleu: ' + ars(yaPagadoTotal) + '</div>';
@@ -3630,7 +3636,7 @@ function renderCaja() {
     html += '<div class="caja-split-row"><span class="lbl">Total cobrado</span><span class="val">' + ars(efCobrado + trCobrado) + '</span></div>';
     html += '<div class="caja-split-row"><span class="lbl">✓ Ya pagaste a Maleu</span><span class="val" style="color:#2e7d32">' + ars(yaPagadoTotal) + '</span></div>';
     html += '<div class="caja-split-row"><span class="lbl">💸 Falta pagar a Maleu</span><span class="val" style="color:#c62828">' + ars(aPagarMaleu) + '</span></div>';
-    html += '<div class="caja-split-row tot"><span class="lbl">✅ Tu ganancia (comisión + envío)</span><span class="val" style="color:#2e7d32">' + ars(miComision) + '</span></div>';
+    html += '<div class="caja-split-row tot"><span class="lbl">💚 Maleu te debe (comisión, en tu quincena)</span><span class="val" style="color:#2e7d32">' + ars(miComision) + '</span></div>';
     html += '</div>';
   }
 
@@ -3656,7 +3662,7 @@ function renderCaja() {
         const aPg = Number(p.aPg) || 0;
         const total = _cobroCliente(p);
         efS += spl.ef; trS += spl.tr;
-        aPgS += aPg; comS += (total - aPg);
+        aPgS += aPg; comS += _redComMaleu(p);
       });
 
       const dates = _isoWeekDates(g.y, g.sem);
@@ -3680,7 +3686,7 @@ function renderCaja() {
       html += '<div class="caja-sem-cell"><div class="csc-lbl">💵 Efectivo cobrado</div><div class="csc-val" style="color:#2e7d32">' + ars(efS) + '</div></div>';
       html += '<div class="caja-sem-cell"><div class="csc-lbl">🏦 Transfer cobrada</div><div class="csc-val" style="color:#1565c0">' + ars(trS) + '</div></div>';
       html += '<div class="caja-sem-cell"><div class="csc-lbl">A pagar Maleu</div><div class="csc-val" style="color:#c62828">' + ars(aPgS) + '</div></div>';
-      html += '<div class="caja-sem-cell"><div class="csc-lbl">Tu ganancia</div><div class="csc-val">' + ars(comS) + '</div></div>';
+      html += '<div class="caja-sem-cell"><div class="csc-lbl">Maleu te debe</div><div class="csc-val">' + ars(comS) + '</div></div>';
       html += '</div>';
 
       if (pagadoSem > 0) {
@@ -3723,6 +3729,17 @@ function _yaPagado(year, sem) {
   return { ef: liq[k].ef || 0, tr: liq[k].tr || 0, total: liq[k].total || 0 };
 }
 
+/* La comision de un pedido (7/10/2026). Hasta el 6/10 el vendedor se la quedaba
+   al rendir (Facturado − A Pagar); desde el 7/10 rinde el Facturado entero y
+   Maleu se la debe (`mDebe`). `cv` = se cerro con la regla vieja. Sin `mDebe`
+   (un backend anterior) se calcula como antes. */
+function _redComDe(p) {
+  if (p.mDebe == null || p.cv) return Math.max(0, (Number(p.$) || 0) - (Number(p.aPg) || 0));
+  return Number(p.mDebe) || 0;
+}
+/* Lo que Maleu todavia le debe por el pedido: lo cerrado con la regla vieja ya lo cobro. */
+function _redComMaleu(p) { return (p.mDebe == null || p.cv) ? 0 : (Number(p.mDebe) || 0); }
+
 function liqOpen(year, sem, aPagarTotal, cantidad) {
   if (redVerComo) { redToast('La semana la liquida el vendedor desde su portal'); return; }
   const ya = _yaPagado(year, sem);
@@ -3738,7 +3755,7 @@ function liqOpen(year, sem, aPagarTotal, cantidad) {
   $id('liq-sub').textContent = 'Semana ' + sem + ' · ' + fmtDM(dates.mon) + ' al ' + fmtDM(dates.dom);
   $id('liq-target').innerHTML =
     '<div style="display:flex;flex-direction:column;gap:.2rem;width:100%">' +
-      '<div style="display:flex;justify-content:space-between"><span class="lbl">A pagar total (83%)</span><span>' + ars(aPagarTotal) + '</span></div>' +
+      '<div style="display:flex;justify-content:space-between"><span class="lbl">A pagar total</span><span>' + ars(aPagarTotal) + '</span></div>' +
       (ya.total > 0 ? '<div style="display:flex;justify-content:space-between;font-size:.8rem;color:#2e7d32"><span>✓ Ya pagaste</span><span>' + ars(ya.total) + ' (' + ars(ya.ef) + ' EF + ' + ars(ya.tr) + ' TR)</span></div>' : '') +
       '<div style="display:flex;justify-content:space-between;font-size:.95rem;font-weight:900;color:#c62828;margin-top:.2rem"><span>💸 Falta pagar</span><span>' + ars(saldo) + '</span></div>' +
     '</div>';
@@ -4018,7 +4035,7 @@ function renderPagos() {
       const liq = liqIdx[k] || { total: 0 };
       totalPagadoHist += liq.total || sc.aPagarDone;
       totalFacturadoHist += sc.totalFacturado;
-      totalComisionHist += (sc.totalFacturado - sc.aPagarDone);
+      totalComisionHist += sc.peds.reduce((s, p) => s + _redComDe(p), 0);
     });
 
     html += '<div class="pagos-hist">';
@@ -4034,7 +4051,7 @@ function renderPagos() {
       const dates = _isoWeekDates(sc.g.y, sc.g.sem);
       const rango = fmtDM(dates.mon) + ' al ' + fmtDM(dates.dom);
       const pagadoTotal = liq.total || sc.aPagarDone;
-      const comision = sc.totalFacturado - sc.aPagarDone;
+      const comision = sc.peds.reduce((s, p) => s + _redComDe(p), 0);
       const _fmtFechaPago = (raw) => {
         if (!raw) return '';
         if (raw instanceof Date) {
@@ -4853,6 +4870,9 @@ function redAbiertosPintar(d, ts) {
   h += '<p>' + (total ? total + ' pedido' + (total !== 1 ? 's' : '') + ' a los que les falta algo. Lo que marques queda a tu nombre en «Marcado por».' : 'Ningún pedido abierto: todo entregado, cobrado y rendido.') + '</p>';
   vs.forEach(function (v, iv) {
     h += '<div class="va-vend"><b>' + redEsc(v.nombre) + ' <span>· ' + (v.pedidos.length ? v.pedidos.length + ' abierto' + (v.pedidos.length !== 1 ? 's' : '') : 'al día') + '</span></b>';
+    /* Lo que Maleu le debe (7/10/2026): sus comisiones, que ya no se descuentan
+       de lo que entrega. Se le pagan en la quincena. */
+    if (v.maleuLeDebe > 0) h += '<div class="va-chips"><span class="va-chip ok">💚 Maleu le debe ' + ars(v.maleuLeDebe) + ' de comisión · quincena del ' + _mkCobro() + '</span></div>';
     v.pedidos.forEach(function (p, ip) { h += redAbiertoHTML(p, iv, ip); });
     h += '</div>';
   });
@@ -4865,7 +4885,7 @@ function redAbiertoHTML(p, iv, ip) {
   h += '<div class="va-chips">'
     + '<span class="va-chip ' + (ent ? 'ok' : 'no') + '">' + (ent ? '✓ Entregado' : 'Sin entregar') + '</span>'
     + '<span class="va-chip ' + (cob ? 'ok' : 'no') + '">' + (cob ? '✓ Cobrado' + (p.fp ? ' · ' + redEsc(p.fp) : '') : 'Sin cobrar · ' + ars(p.cobro)) + '</span>'
-    + (debe > 0 ? '<span class="va-chip ' + (pag ? 'ok' : 'no') + '">' + (pag ? '✓ Pagado a Maleu' : 'Debe a Maleu ' + ars(debe) + (p.nueva ? ' (efectivo)' : ' (regla vieja)')) + '</span>' : '')
+    + (debe > 0 ? '<span class="va-chip ' + (pag ? 'ok' : 'no') + '">' + (pag ? '✓ Pagado a Maleu' : 'Debe a Maleu ' + ars(debe) + (p.nueva ? ' (efectivo)' : ' (entero, sin comisión)')) + '</span>' : '')
     + '</div><div class="va-btns">';
   if (!ent) h += '<button type="button" class="prim" onclick="redAbiertoMarcar(' + iv + ',' + ip + ',\'entrega\')">Entregado</button>';
   if (!cob) {
