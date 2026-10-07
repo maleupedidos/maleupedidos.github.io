@@ -114,9 +114,9 @@ const CASOS = [
                software: G.L.software || 0, servicios: G.L.servicios || 0 };
     })()`);
     chk('Claude y Movistar suman JUNTOS en planes', bloques && bloques.planes === 180000 && bloques.servicios === 0, bloques);
-    chk('el pago anual queda aparte, en otras herramientas', bloques && bloques.software === 48000, bloques);
+    chk('el pago anual queda aparte, en otras herramientas, y en su mes cuenta 1/12', bloques && bloques.software === 4000, bloques);
     chk('los planes cuentan en los fijos (estructura = planes + otras, sin ajustes)',
-      bloques && bloques.estr === 228000 && bloques.otros === 0, bloques);
+      bloques && bloques.estr === 184000 && bloques.otros === 0, bloques);
     chk('los "Créditos" sueltos suman en campañas, no en los fijos', bloques && bloques.camp === 75000, bloques);
 
     /* ── Que el EERR lo DIBUJE junto ──
@@ -140,7 +140,7 @@ const CASOS = [
     chk('el EERR dibuja "Planes mensuales" con Claude + Movistar juntos', dib && dib.planes.indexOf('-$180.000') >= 0, dib);
     chk('y abajo, uno por uno: Claude y Movistar',
       dib && dib.claude.indexOf('-$150.000') >= 0 && dib.movistar.indexOf('-$30.000') >= 0, dib);
-    chk('el pago anual se dibuja aparte, en "Otras herramientas"', dib && dib.otras.indexOf('-$48.000') >= 0, dib);
+    chk('el pago anual se dibuja aparte, en "Otras herramientas", con la cuota', dib && dib.otras.indexOf('-$4.000') >= 0, dib);
     chk('sin luz ni agua no aparece un renglon de Servicios en $0', dib && dib.servicios === false, dib);
     chk('ya no quedan los renglones viejos (Comerciales, Apps/Herramientas/IA)', dib && !dib.comerciales && !dib.apps, dib);
 
@@ -154,7 +154,44 @@ const CASOS = [
       return { planes: tras('Planes mensuales'), otras: tras('Otras herramientas') };
     })()`);
     chk('lo financiero junta los planes: $180k', fin && fin.planes.indexOf('$180k') >= 0, fin);
-    chk('y el pago anual aparte: $48k', fin && fin.otras.indexOf('$48k') >= 0, fin);
+    chk('y el pago anual aparte, ENTERO el dia que salio: $48k', fin && fin.otras.indexOf('$48k') >= 0, fin);
+
+    /* ── Pagos anuales (6/10/2026) ──
+       "Microsoft · Anual" $49.040 pagado el 21/07/2026: el economico lo reparte
+       en 12 cuotas desde julio (jul-2026 a jun-2027), el financiero lo ve entero
+       en julio, y el puente economico → caja explica la diferencia. */
+    const an = await evaluar(cli, `(function(){
+      D.gastos = [
+        {mes:'Julio', f:'21/07/2026 10:00', cat:'Herramienta', con:'Microsoft · Anual', not:'', $:49040},
+        {mes:'Julio', f:'22/07/2026', cat:'Herramienta', con:'Claude · Mensual', not:'', $:150000},
+        {mes:'Julio', f:'23/07/2026', cat:'Herramienta', con:'Microsoft', not:'renovacion anual', $:1000},
+        {mes:'Octubre', f:'05/10/2026', cat:'Nafta', con:'Shell', not:'', $:1000}
+      ];
+      function sw(mn, an){ return Math.round((_eerrMesGastos(mn, an).L.software || 0) * 100) / 100; }
+      var cuotas = 0; for(var k = 0; k < 14; k++){ var mn = (6 + k) % 12 + 1, a = 2026 + Math.floor((6 + k) / 12); cuotas += _eerrGastosEcon(mn, a).filter(function(g){ return g.anual; }).reduce(function(s, g){ return s + g.$; }, 0); }
+      eerrMes = new Date(2026, 6, 1);
+      var d1 = document.createElement('div'); rEERR_dual(d1);
+      var t1 = d1.textContent.split(String.fromCharCode(160)).join(' ');
+      var d2 = document.createElement('div'); rEERR_financiero(d2);
+      var t2 = d2.textContent.split(String.fromCharCode(160)).join(' ');
+      eerrMes = new Date(2026, 9, 1);
+      var d3 = document.createElement('div'); rEERR_financiero(d3);
+      var t3 = d3.textContent.split(String.fromCharCode(160)).join(' ');
+      function tras(t, lbl, n){ var i = t.indexOf(lbl); return i < 0 ? '' : t.slice(i + lbl.length, i + lbl.length + (n || 40)); }
+      return { jun: sw(6, 2026), jul: sw(7, 2026), oct: sw(10, 2026), jun27: sw(6, 2027), jul27: _eerrGastosEcon(7, 2027).filter(function(g){ return g.anual; }).length, cuotas: Math.round(cuotas * 100) / 100,
+               dual: tras(t1, 'Otras herramientas'), cuotaTxt: t1.indexOf('cuota 1 de 12') >= 0,
+               finJul: tras(t2, 'Otras herramientas', 30), puenteJul: tras(t2, 'Pagos anuales por adelantado', 160),
+               puenteOct: tras(t3, 'Cuotas de pagos anuales de meses anteriores', 160) };
+    })()`);
+    chk('julio: la cuota $4.086,67 + "Microsoft" a secas $1.000 (sin "· Anual" no se reparte)', an && an.jul === 5086.67, an);
+    chk('junio (antes de pagarlo): nada', an && an.jun === 0, an);
+    chk('octubre: la cuota', an && an.oct === 4086.67, an);
+    chk('junio 2027: la ultima cuota; julio 2027: ninguna cuota', an && an.jun27 === 4086.67 && an.jul27 === 0, an);
+    chk('las 12 cuotas suman lo pagado, ni un peso mas', an && an.cuotas === 49040, an);
+    chk('el EERR economico de julio dibuja la cuota y dice que es la 1 de 12', an && an.dual.indexOf('-$5.087') >= 0 && an.cuotaTxt, an);
+    chk('el financiero de julio lo ve entero ($50k con el de $1.000)', an && an.finJul.indexOf('$50k') >= 0, an);
+    chk('el puente de julio resta lo pagado por adelantado ($44.953)', an && an.puenteJul.indexOf('44.953') >= 0, an);
+    chk('el puente de octubre suma la cuota de julio ($4.087)', an && an.puenteOct.indexOf('4.087') >= 0, an);
 
     const err = await evaluar(cli, 'JSON.stringify((window.__err||[]).slice(0,5))');
     chk('sin errores de consola', err === '[]', err);

@@ -27004,11 +27004,31 @@ function rCierreInsights(box){
    servicios, ocupacion y monotributo, mas la amortizacion imputada. Filtra por el NOMBRE del mes, como el EERR (el año es un
    pendiente de todo el EERR, ver "Filtros de mes sin año").
    `estr`: estructura (fijos) · `amort` · `imp`: impuestos · `ext`: extraordinarios. */
-function _eerrMesGastos(mn,anio){
+/* Pagos anuales (6/10/2026). Un egreso con "· Anual" en el concepto (Microsoft
+   · Anual) se paga una vez y sirve doce meses: el ECONOMICO lo reparte en 12
+   cuotas iguales desde el mes en que salio. El financiero lo sigue viendo entero
+   el dia que se pago. `_eerrGastosEcon` son los egresos que el economico imputa
+   a un mes: los del mes, salvo los anuales, mas la cuota de cada anual vivo.
+   Cada cuota es una copia del asiento con `$` = 1/12 y `anual` = lo pagado. */
+function _esAnual(g){return /·\s*anual\b/i.test(String(g&&g.con||''));}
+function _eerrGastosEcon(mn,anio){
   var MES=['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'][mn-1];
-  var L={}, amort=0;
+  var out=[], k=anio*12+mn-1;
   ((typeof D!=='undefined'&&D&&D.gastos)||[]).forEach(function(g){
-    if(g.mes!==MES)return;
+    var f=_esAnual(g)?String(g.f||'').match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/):null;
+    if(!f){if(g.mes===MES)out.push(g);return;}
+    var c=k-(Number(f[3])*12+Number(f[2])-1);
+    if(c<0||c>11)return;
+    var x={};for(var q in g)x[q]=g[q];
+    x.anual=Number(g.$)||0;x.$=x.anual/12;x.cuota=c+1;
+    x.con=String(g.con||'')+' (cuota '+(c+1)+' de 12 del '+String(g.f).slice(0,10)+')';
+    out.push(x);
+  });
+  return out;
+}
+function _eerrMesGastos(mn,anio){
+  var L={}, amort=0;
+  _eerrGastosEcon(mn,anio).forEach(function(g){
     var k=_gastoLinea(g).linea;L[k]=(L[k]||0)+(Number(g.$)||0);
   });
   var fijoS=_sueldoFijoMes(mn,anio);
@@ -27398,7 +27418,12 @@ function rEERR_financiero(body){
     var f_sw=0,f_mk=0,f_hon=0,f_serv=0,f_oc=0,f_su=0,f_otr=0,f_veh=0;
     var v_fl=0,v_pk=0;
     var er=0,ep=0,eo=0;var ii=0,im=0,io=0;
-    ((D&&D.gastos)||[]).filter(function(g){return g.mes===mesNom;}).forEach(function(g){
+    /* Los anuales en cuotas, como el economico (6/10/2026): lo pagado de mas
+       este mes, o la cuota de uno pagado antes, va al puente como `anualDif`. */
+    var anualDif=0;
+    ((D&&D.gastos)||[]).forEach(function(g){if(g.mes===mesNom&&_esAnual(g))anualDif+=Number(g.$)||0;});
+    _eerrGastosEcon(mesNum,eerrMes.getFullYear()).forEach(function(g){
+      if(g.anual!==undefined)anualDif-=Number(g.$)||0;
       var c=normCat(g.cat||'Otro'),m=Number(g.$)||0;
       var con=String(g.con||'').toLowerCase(),not=String(g.not||'').toLowerCase();
       var txt=con+' '+not;
@@ -27470,7 +27495,7 @@ function rEERR_financiero(body){
     return {
       resNeto:resNeto,totFact:totFact,totCMV:totCMV,
       sueldoProvE:sueldoProvE,sueldoDeMasE:sueldoDeMasE,servProvE:servProvE,ocupProvE:ocupProvE,amortE:amortE,
-      v_cmpE:v_cmp
+      v_cmpE:v_cmp,anualDif:anualDif
     };
   }
   var econ=calcEcon();
@@ -27969,7 +27994,8 @@ function rEERR_financiero(body){
     // Otros ingresos no operativos
     var otrosIngE=Number(otrosIng||0);
     // Flujo de caja calculado por el EOAF (debería igualar flujoNeto del bloque de caja)
-    var flujoEOAF=rnEcon+imputadosNoCash-sueldoDeMas+otrosIngE-varCxC2+varCxP2-varStock-capex;
+    var anualDif=Number(econ.anualDif||0);
+    var flujoEOAF=rnEcon+imputadosNoCash-sueldoDeMas-anualDif+otrosIngE-varCxC2+varCxP2-varStock-capex;
     function fm(v){return (v<0?'−$':'$')+f$(Math.abs(Math.round(v||0)));}
     function rowEOAF(lbl,val,cls,explain){
       var signColor=val>0?'var(--gd)':(val<0?'var(--r)':'var(--ink2)');
@@ -27985,6 +28011,7 @@ function rEERR_financiero(body){
     html+=rowEOAF('Resultado Neto Económico (devengado)',rnEcon,'sub','Lo que ganó/perdió Maleu este mes según el EERR');
     html+=rowEOAF('(+) Provisiones imputadas (no-cash)',imputadosNoCash,'','Costos económicos que NO salieron de la caja (sueldo no girado, alquiler imputado, amortización)');
     if(sueldoDeMas>0)html+=rowEOAF('(−) Te giraste más que el sueldo fijo',-sueldoDeMas,'','Salió de la caja pero no es costo de Maleu: paga sueldo que Maleu te debía o es un adelanto (ver la cuenta del sueldo)');
+    if(Math.round(anualDif)!==0)html+=rowEOAF(anualDif>0?'(−) Pagos anuales por adelantado':'(+) Cuotas de pagos anuales de meses anteriores',-anualDif,'',anualDif>0?'Salieron enteros de la caja este mes; el económico solo cuenta 1/12 por mes':'El económico cuenta la cuota de un pago anual que salió de la caja otro mes');
     if(otrosIngE>0)html+=rowEOAF('(+) Otros ingresos no operativos',otrosIngE,'','Rendimientos MP, liquidaciones Red, devoluciones');
     html+=rowEOAF((varCxC2>=0?'(−)':'(+)')+' Variación cuentas por cobrar',-varCxC2,'',varCxC2>=0?'Facturaste $'+f$(Math.round(varCxC2))+' más de lo que cobraste — la plata quedó en clientes':'Cobraste $'+f$(Math.round(-varCxC2))+' más de lo que facturaste — entró plata de meses previos');
     html+=rowEOAF((varCxP2>=0?'(+)':'(−)')+' Variación cuentas por pagar (proveedores)',varCxP2,'',varCxP2>=0?'Los proveedores te financiaron $'+f$(Math.round(varCxP2))+' (devengaste más CMV que pagos)':'Pagaste $'+f$(Math.round(-varCxP2))+' más de lo que debíste — redujiste deuda');
@@ -28151,7 +28178,7 @@ function rEERR_dual(body){
   var pctBase=ventasNetas;
 
   // ── Gastos del mes mapeados al modelo profesional ──
-  var gastosMes=((D&&D.gastos)||[]).filter(function(g){return g.mes===mesNom;});
+  var gastosMes=_eerrGastosEcon(eerrMes.getMonth()+1,anioN);   /* los anuales, en cuotas (6/10/2026) */
   // Variables comerciales
   // Fletes desagregado: Delivery (repartidores de Estancias — Santos Bullrich, Agustín Carpinacci)
   // vs Vehículo (nafta, arreglos, patente, seguro del auto de reparto). Son cosas distintas.
@@ -28483,6 +28510,21 @@ function rEERR_dual(body){
   html+=ln(eL('(+/−) Resultados Financieros','Intereses ganados (rendimientos MP, plazo fijo) menos intereses pagados (tarjeta corporativa, préstamos). Maleu hoy solo gana, no paga.'),rFinanc-costosFinancieros,'sub');
   html+=leaf(eL('Intereses ganados','Lo que generó Maleu de plata parada en MP o plazo fijo.'),r_intereses);
   if(r_interesesD.length)html+=detailRows(r_interesesD);
+  /* En cero no es un error de calculo (6/10/2026): esta linea son los
+     rendimientos de MP que se cargan A MANO en Ingresos (categoria Rendimientos),
+     y desde el 21/7/2026 no se cargo ninguno. Lo dice para que no se lea como
+     "MP dejo de rendir" ni se busque una comision que no existe. */
+  else{
+    var ultRend='';
+    ((D&&D.ingresos)||[]).forEach(function(i){
+      var t=(String(i.con||'')+' '+String(i.not||'')+' '+String(i.cat||'')).toLowerCase();
+      if(t.indexOf('rendimiento')<0&&t.indexOf('interes')<0)return;
+      var m=String(i.f||'').match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);if(!m)return;
+      var iso=m[3]+'-'+('0'+m[2]).slice(-2)+'-'+('0'+m[1]).slice(-2);if(iso>ultRend)ultRend=iso;
+    });
+    html+='<tr class="subleaf"><td colspan="2" style="font-style:italic;white-space:normal">En cero porque no hay rendimientos cargados este mes. Los de Mercado Pago se cargan a mano en Ingresos (categoría Rendimientos)'
+      +(ultRend?'; el último cargado es del '+ultRend.slice(8,10)+'/'+ultRend.slice(5,7)+'/'+ultRend.slice(0,4):'')+'.</td></tr>';
+  }
   // Línea vacía mantenida para el día que Maleu use financiamiento
   if(costosFinancieros>0)html+=leaf(eL('Costos financieros','Intereses pagados por créditos, tarjeta corporativa, descuento de cheques.'),-costosFinancieros);
 
@@ -41734,6 +41776,9 @@ if('serviceWorker' in navigator){
         + c('Margen', mR!==null?_planPctTxt(mR):'—', mM!==null?_planPctTxt(mM):'')
         + c(enCurso?'Por día':'Cumplió', ult, '')
         + '</span></div>';
+      /* Una unidad con un solo canal del mismo nombre (Catering) es la misma
+         fila dos veces: el canal no se dibuja (6/10/2026). La suma no cambia. */
+      if(n.hijos.length === 1 && n.hijos[0].canal && n.hijos[0].t === n.t) return;
       n.hijos.forEach(fila);
     }
     fila(T);
@@ -41767,7 +41812,12 @@ if('serviceWorker' in navigator){
     var real = _planFact(_rtSumar(ini, hoyIso));
     var realCerr = cerr ? _planFact(_rtSumar(ini, _rtIso(new Date(y,m,cerr)))) : 0;
     var falta = Math.max(M - realCerr, 0), quedan = Math.max(dias - cerr, 0);
-    var necesita = quedan ? Math.round(falta/quedan) : 0;
+    /* Lo que le toca a hoy, con el peso de cada dia de la semana de las 8
+       semanas anteriores: el mismo que reparte el fin de semana (6/10/2026).
+       Parejo, un martes pedia lo mismo que un sabado. */
+    var pd = _planPorDia(new Date(y, m, cerr+1)), wHoy = 0, wR = 0;
+    for(var dd = cerr+1; dd <= dias; dd++){ var wd = pd[(new Date(y, m, dd).getDay()+6)%7]; wR += wd; if(dd === cerr+1) wHoy = wd; }
+    var necesita = !quedan ? 0 : (wR > 0 ? Math.round(falta * wHoy / wR) : Math.round(falta/quedan));
     var hoyVend = _planFact(_rtSumar(hoyIso, hoyIso));
     var comp = (typeof _rtComprometido==='function') ? _rtComprometido({d:hoyIso, h:hoyIso, k:'dia'}, ahora) : {f:0, ped:0};
     return { M:M, necesita:necesita, hoyVend:hoyVend, carg:comp.f, cargN:comp.ped,
@@ -41805,6 +41855,17 @@ if('serviceWorker' in navigator){
      semana), cuantos pedidos son, el corte por dia y como va, en vivo.
      La historia se mide sin Catering: es un evento suelto, no el ritmo del
      fin de semana. Lo que "va" si lo incluye, como el total de arriba. */
+  /* La venta de cada dia de la semana (lun=0) en las 8 semanas completas
+     anteriores a la del dia `h0`. Es el peso con que se reparte lo que falta:
+     lo usan el fin de semana y Hoy (6/10/2026). */
+  function _planPorDia(h0){
+    var lun = _rtDia(h0, -((h0.getDay()+6)%7)), porDia = [0,0,0,0,0,0,0];
+    for(var w=1; w<=8; w++){
+      var l = _rtDia(lun, -7*w);
+      for(var k=0; k<7; k++){ var dk = _rtIso(_rtDia(l,k)); porDia[k] += _rtSumar(dk, dk).tot.f; }
+    }
+    return porDia;
+  }
   function _planFindeCalc(ahora){
     if(!planData || !planData.ok || !_planDHay()) return null;
     var y = Number(planData.yyyy), m = Number(planData.mm)-1;
@@ -41817,11 +41878,10 @@ if('serviceWorker' in navigator){
     var ini = _rtIso(new Date(y, m, 1));
     var baseReal = jue < new Date(y, m, 1) ? 0 : _planFact(_rtSumar(ini, _rtIso(jue)));
     /* La historia: las 8 semanas completas anteriores a esta. */
-    var porDia = [0,0,0,0,0,0,0], rep = [0,0,0], f4 = 0, e4 = 0;
-    for(var w=1; w<=8; w++){
+    var porDia = _planPorDia(h0), rep = porDia.slice(4), f4 = 0, e4 = 0;
+    for(var w=1; w<=4; w++){
       var l = _rtDia(lun, -7*w);
-      for(var k=0; k<7; k++){ var dk = _rtIso(_rtDia(l,k)); var gk = _rtSumar(dk, dk).tot.f; porDia[k] += gk; if(k>=4) rep[k-4] += gk; }
-      if(w<=4){ var gF = _rtSumar(_rtIso(_rtDia(l,4)), _rtIso(_rtDia(l,6))); f4 += gF.tot.f; e4 += gF.tot.ent; }
+      var gF = _rtSumar(_rtIso(_rtDia(l,4)), _rtIso(_rtDia(l,6))); f4 += gF.tot.f; e4 += gF.tot.ent;
     }
     var ultimo = _rtDia(vie, 7).getMonth()!==m;
     var falta = Math.max(M - baseReal, 0), metaF;
@@ -41876,7 +41936,7 @@ if('serviceWorker' in navigator){
     if(F.ticket){
       var extra = F.pedidos - F.habE;
       h += '<div class="plan-finde-ped">Son unos <b>'+F.pedidos+' pedidos</b> con el ticket de los últimos 4 fines de semana ($'+f$(F.ticket)+'). Un fin de semana normal trae <b>'+F.habE+' entregas</b> ($'+f$(F.habF)+')'
-        + (extra > 0 ? ': faltan unos <b class="plan-mal">'+extra+' pedidos más</b>.' : ': con uno normal alcanza.') + '</div>';
+        + (extra > 0 ? (extra === 1 ? ': falta <b class="plan-mal">1 pedido más</b>.' : ': faltan unos <b class="plan-mal">'+extra+' pedidos más</b>.') : ': con uno normal alcanza.') + '</div>';
     }
     var rs = F.sumRep > 0 ? F.rep.map(function(x){ return Math.round(x/F.sumRep*100); }) : null;
     h += '<div class="plan-finde-tabla"><div class="plan-finde-fila cab"><span>Día</span><span>Al cierre, tendría que ir</span><span>Va</span><span>Cargado sin entregar</span></div>';
