@@ -165,6 +165,11 @@ async function pasada(cli, ancho) {
   const wk = await evaluar(cli, `[].map.call(document.querySelectorAll('#plata-numeros .week-row'),function(e){return (e.innerText||'').replace(/\\s+/g,' ');})`);
   chk('octubre: 1 semana (las de $0 no)', wk.filter(x => /pedidos?/.test(x)).length >= 1 && !wk.some(x => /\b0 pedidos/.test(x)), wk);
   chk('las semanas dicen la fecha, no el numero', wk.length > 0 && wk.every(x => /Semana del /.test(x) && !/Semana \d/.test(x)), wk);
+  await evaluar(cli, `setPlataSub('pagos'); 1`); await T(400);
+  const pg = await evaluar(cli, TXT('#mview-plata'));
+  chk('Pagos a Maleu: «Semana del …», sin «Semana 40»', /Semana del /.test(pg) && !/Semana \d/.test(pg), pg.slice(0, 300));
+  chk('«Tus números» no repite «Por liquidar a Maleu» (lo dice Caja, regla del 7/10)', !/Por liquidar a Maleu/.test(pg) && (await evaluar(cli, `!document.getElementById('stats-ops')`)) === true, pg.slice(-200));
+  await evaluar(cli, `setPlataSub('caja'); 1`);
   await evaluar(cli, `setMainTab('hoy'); 1`);
 
   console.log('\n== 9. Pedidos dice de cuando son ==');
