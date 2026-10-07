@@ -227,6 +227,30 @@ async function abrirFase(cli, fase) {
     chk('el mes: los fijos de cada mes por los días que van (13/30 y 13/31)', !!MS && MS.fij === MS.esp && MS.fijA === MS.espA && MS.fij > 0, MS);
     chk('el mes: resultado = margen − variables − fijos + otros ingresos', !!MS && MS.res === MS.cuenta, MS);
 
+    /* ── La mercaderia regalada (7/10/2026) ──
+       Un pedido Entregado con facturado $0 (la ruleta del QR) suma su costo a
+       Campañas en el PDF igual que en el EERR: la MISMA `_eerrRegalados`. Se lo
+       mete en `D.pedidos` y se mide la diferencia contra el PDF sin el. Uno del
+       14/9 (fuera de la semana del 7 al 13) no tiene que entrar. */
+    const RG = await ev(cli, `(function(){
+      var antes=_rsArmar('2026-09-07'), mesE0=_eerrMesGastos(9,2026).camp;
+      var reg={n:'1024',h:'Home',es:'Entregado',$:0,co:53200,fex:'2026-09-10',dee:'2026-09-10',f:'10/09/2026',c:'Cliente QR',ep:'Cobrado',p:{}};
+      var fuera={n:'1025',h:'Home',es:'Entregado',$:0,co:7000,fex:'2026-09-14',dee:'2026-09-14',f:'14/09/2026',c:'Otro',ep:'Cobrado',p:{}};
+      D.pedidos.push(reg,fuera);
+      var R=_rsArmar('2026-09-07'), mesE1=_eerrMesGastos(9,2026).camp;
+      var w=document.getElementById('rsHiddenWrap');w.innerHTML=_rsRender(R);var t=w.textContent;w.innerHTML='';
+      D.pedidos.splice(D.pedidos.indexOf(reg),1);D.pedidos.splice(D.pedidos.indexOf(fuera),1);
+      return {sem:R.eco.camp-antes.eco.camp, contrib:antes.eco.contrib-R.eco.contrib, det:R.eco.campD,
+              mes:R.mesR.act.camp-antes.mesR.act.camp, eerrMes:mesE1-mesE0,
+              pagos:R.fin.pagos-antes.fin.pagos, txt:t.indexOf('mercadería regalada: pedido 1024')>=0};
+    })()`);
+    chk('PDF: el regalo de la semana suma sus $53.200 a campañas, y el del 14/9 no', !!RG && RG.sem === 53200, RG);
+    chk('PDF: la contribución baja lo mismo, $53.200', !!RG && RG.contrib === 53200, RG);
+    chk('PDF: el renglón de campañas lo nombra («mercadería regalada: pedido 1024»)', !!RG && RG.txt === true && RG.det.indexOf('mercadería regalada: pedido 1024') >= 0, RG);
+    chk('PDF: «cómo viene el mes» (1 al 13/9) también lo suma', !!RG && RG.mes === 53200, RG);
+    chk('PDF y EERR dicen lo mismo: el mes del EERR suma los dos de septiembre ($60.200)', !!RG && RG.eerrMes === 60200, RG);
+    chk('no es un pago: lo financiero no se mueve', !!RG && RG.pagos === 0, RG);
+
     const doc = await ev(cli, `(function(){var w=document.getElementById('rsHiddenWrap');w.innerHTML=_rsRender(_rsArmar('2026-09-07'));var t=w.textContent;w.innerHTML='';return t;})()`);
     const T = typeof doc === 'string' ? doc : '';
     chk('el documento: portada, facturado y margen', /Sem 2 de septiembre/.test(T) && /7 días/.test(T) && /Facturado \$389\.500/.test(T) && /margen \$108\.700 \(28%\)/.test(T), T.slice(0, 300));
