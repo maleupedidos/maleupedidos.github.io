@@ -105,24 +105,28 @@ const chicos = cli => evaluar(cli, `[].filter.call(document.querySelectorAll('#o
     console.log('\n== Lunes, sin objetivo ==');
     await cargar(cli, prep(DASH(Object.assign({}, OBJ_BASE)), { demoraDash: 8000 }), 400);
     let t = await txt(cli);
-    chk('abre con lo guardado: la tarjeta aparece antes que el backend', /¿Cuántas ventas vas a hacer esta semana\?/.test(t), t);
+    chk('abre con lo guardado: la tarjeta aparece antes que el backend', /¿Cuántas ventas vas a hacer\?/.test(t), t);
     chk('dice lo que lleva y lo que le pasamos aparte', /Llevás 2 ventas/.test(t) && /Entregas que te pasamos: 1/.test(t) && /no suman/.test(t), t);
-    chk('la tarjeta va antes que los vencidos, el nivel y las tareas', await evaluar(cli, `(function(){var o=document.getElementById('obj-card');
-      return ['venc-card','escala-card','tareas-card'].every(function(id){ return !!(o.compareDocumentPosition(document.getElementById(id)) & Node.DOCUMENT_POSITION_FOLLOWING); });})()`));
+    /* 7/10/2026: lo vencido va ANTES del objetivo (probar_portal_pulido.js). */
+    chk('la tarjeta va antes que el nivel y las tareas', await evaluar(cli, `(function(){var o=document.getElementById('obj-card');
+      return ['escala-card','tareas-card'].every(function(id){ return !!(o.compareDocumentPosition(document.getElementById(id)) & Node.DOCUMENT_POSITION_FOLLOWING); });})()`));
     const tk = await evaluar(cli, `({vis:${VISIBLE('#tareas-card')}, txt:(document.getElementById('tareas-card').innerText||'')})`);
     chk('los llamados sugeridos no se repiten en la tarjeta de tareas', !/Cliente Viejo/.test(tk.txt), tk);
 
     await cargar(cli, prep(DASH(Object.assign({}, OBJ_BASE))));
-    let r = await tocar(cli, '#obj-card .ob-btn');
-    chk('«Poner mi objetivo» abre el formulario', r === true && /Arrancar la semana/.test(await txt(cli)), r);
+    /* 7/10/2026: sin objetivo, el formulario ya viene abierto. */
+    let r = true;
+    chk('sin objetivo, el formulario viene abierto', /Arrancar la semana/.test(await txt(cli)) && !/Poner mi objetivo/.test(await txt(cli)));
     t = await txt(cli);
     chk('arranca en 5 y dice la plata como dato (5 × $15.000)', /\b5\b/.test(t) && /\$75\.000/.test(t), t);
     await tocar(cli, '#obj-card .ob-step', 1); await T(100);
     t = await txt(cli);
     chk('el + sube a 6 y la plata se recalcula', /\$90\.000/.test(t) && (await evaluar(cli, `document.querySelector('#obj-card .ob-num').textContent`)) === '6', t);
     chk('las sugeridas dicen por qué (le toca reponer, segunda compra)', /Le toca reponer/.test(t) && /Segunda compra/.test(t), t);
-    r = await tocar(cli, '#obj-card .ob-sug', 0); await T(100);
-    chk('una sugerida se elige de un toque', r === true && (await evaluar(cli, `document.querySelectorAll('#obj-card .ob-sug.on').length`)) === 1, r);
+    chk('las sugeridas vienen tildadas', (await evaluar(cli, `document.querySelectorAll('#obj-card .ob-sug.on').length`)) === 2);
+    r = await tocar(cli, '#obj-card .ob-sug', 1); await T(100);
+    chk('una sugerida se saca de un toque', r === true && (await evaluar(cli, `document.querySelectorAll('#obj-card .ob-sug.on').length`)) === 1, r);
+    await tocar(cli, '#obj-card .ob-mas'); await T(100);
     await evaluar(cli, `document.getElementById('ob-libre-in').value='Degustación en el club'; 1`);
     r = await tocar(cli, '#obj-card .ob-add button'); await T(100);
     chk('escribe su propia acción', r === true && /Degustación en el club/.test(await txt(cli)), r);
