@@ -543,6 +543,19 @@ html,body{overscroll-behavior:none;-webkit-overflow-scrolling:touch}
 .aba-err-t{font-size:16px;font-weight:800;margin-bottom:6px}
 .aba-err-s{font-size:13px;line-height:1.45}
 .aba-reintentar{margin-top:12px;min-height:44px;padding:0 22px;border:0;border-radius:12px;background:#E65100;color:#fff;font-family:inherit;font-size:15px;font-weight:800;cursor:pointer}
+/* Faltan para entregar (7/10/2026) */
+.aba-falt{margin:10px 12px 12px;padding:12px 12px 10px;border:2px solid #C62828;border-radius:14px;background:#FFEBEE;color:#4A1010}
+.aba-falt.aba-falt-ok{border-color:#C8E6C9;background:#F1F8E9;color:#1B5E20;padding:9px 12px}
+.aba-falt.aba-falt-gris{border-color:#E8DFC4;background:#FAF7EE;color:#7A4A4A;padding:9px 12px}
+.aba-falt-t{font-size:15px;font-weight:800;margin-bottom:2px}
+.aba-falt-s{font-size:12px;line-height:1.4;opacity:.85}
+.aba-falt-it{margin-top:10px;padding-top:9px;border-top:1px solid rgba(198,40,40,.22)}
+.aba-falt-fila{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
+.aba-falt-q{font-size:18px;font-weight:900;color:#B71C1C;min-width:44px}
+.aba-falt-n{font-size:14px;font-weight:800;flex:1 1 160px}
+.aba-falt-det{font-size:12px;line-height:1.45;margin-top:3px;color:#5D2A2A}
+.aba-falt-btn{margin-top:7px;min-height:40px;padding:0 14px;border:0;border-radius:10px;background:#331C1C;color:#fff;font-family:inherit;font-size:13px;font-weight:800;cursor:pointer;max-width:100%}
+.aba-falt-nota{margin-top:6px;font-size:11.5px;color:#7A4A4A}
 .aba-ent-aviso{margin:10px 0 4px;padding:9px 11px;border-radius:10px;background:#FFF8E1;border:1.5px solid #F9A825;color:#5D4037;font-size:13px;line-height:1.45}
 .aba-ent-pagos{margin:8px}
 .aba-contacto{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:10px}
@@ -623,6 +636,10 @@ body *{touch-action:manipulation}
     <div class="loader-msg">Cargando…</div>
   </div>
 </div>
+<!-- Faltan para entregar (7/10/2026): pedidos abiertos contra freezer + OC. Va
+     afuera de provView a proposito: tiene que verse aunque BUSQUEDA no tenga
+     ninguna OC, que es justo cuando un pedido sin OC no lo ve nadie. -->
+<div id="abaFaltBox" class="hidden"></div>
 <!-- Esta pantalla mira los PEDIDOS, no el freezer. El 7/9/2026 decia "no hay
      productos para buscar esta semana" con 8 productos en cero: cierto respecto
      de los pedidos, y engañoso como conclusion — el que lo lee entiende "no hay
@@ -1141,6 +1158,7 @@ function _abaFotoLeer() {
 
 /* La puerta del ARRANQUE: la foto si está, Apps Script si no. */
 function abaArranque(silent) {
+  try { abaFaltCargar(); } catch (e) {}
   return _abaFotoLeer().then(function (foto) {
     if (!foto) return abaRefresh(silent);
     _abaAplicarBusqueda(foto.data);
@@ -1168,6 +1186,7 @@ function abaArranque(silent) {
 }
 
 function abaRefresh(silent) {
+  try { abaFaltCargar(); } catch (e) {}
   var habia = _abaHayDatos();
   if (!silent && !_ABA_FUSIONADO) document.getElementById('abaLoadingView').classList.remove('hidden');
   // El cartel sale SOLO si no hay nada en pantalla. Si ya hay datos del cache,
@@ -1214,6 +1233,115 @@ function abaRefresh(silent) {
   if (abaCurrentTab === 'nuevo' && _abaCcVisible()) return Promise.all([pBus, loadCatalogo(true), abaCcCargar(true)]).then(function (r) { return r[0] !== false && r[1] !== false && r[2] !== false; });
   if (abaCurrentTab !== 'resumen' && abaCurrentTab !== 'nuevo') return pBus;
   return Promise.all([pBus, loadCatalogo(true)]).then(function (r) { return r[0] !== false && r[1] !== false; });
+}
+
+/* ── FALTAN PARA ENTREGAR (7/10/2026, Diagnóstico ERP #8) ──────────
+   Por producto: lo que piden los pedidos abiertos (los cuatro canales) y no
+   tiene ni freezer ni OC que lo cubra. Lo calcula el backend (`faltantes`);
+   aca se pinta arriba de BUSQUEDA y el boton lleva a + NUEVO con el proveedor
+   elegido y la cantidad cargada. La copia guardada se muestra con su hora:
+   mostrarla callada seria mentir por omision. */
+var abaFalt = null, abaFaltEstado = '', abaFaltErr = '', _abaFaltVuelo = null;
+try {
+  var _abaFaltG = JSON.parse(localStorage.getItem('maleu_faltantes') || 'null');
+  if (_abaFaltG && _abaFaltG.data && _abaFaltG.data.ok) { abaFalt = _abaFaltG.data; abaFalt._cuando = _abaFaltG.cuando; }
+} catch (e) {}
+
+function abaFaltCargar() {
+  if (_abaFaltVuelo) return _abaFaltVuelo;
+  abaFaltEstado = 'yendo';
+  _abaFaltVuelo = fetch(ABA_APPS_SCRIPT_URL + '?action=faltantes&t=' + Date.now())
+    .then(function (r) { return r.json(); })
+    .then(function (data) {
+      if (!data || !data.ok || !Array.isArray(data.faltan)) throw new Error((data && (data.error || data.err)) || 'el servidor contestó otra cosa');
+      data._cuando = Date.now();
+      abaFalt = data; abaFaltEstado = 'ok'; abaFaltErr = '';
+      try { localStorage.setItem('maleu_faltantes', JSON.stringify({ cuando: data._cuando, data: data })); } catch (e) {}
+    })
+    .catch(function (err) { abaFaltEstado = 'error'; abaFaltErr = String((err && err.message) || err || ''); })
+    .then(function () { _abaFaltVuelo = null; try { abaRenderFalt(); } catch (e) {} });
+  return _abaFaltVuelo;
+}
+
+/* El proveedor de un producto, del catalogo (null si el catalogo no llego). */
+function _abaFaltProv(abbr) {
+  var provs = (catalogo && catalogo.proveedores) || [];
+  for (var i = 0; i < provs.length; i++) {
+    var its = (catalogo.productos && catalogo.productos[provs[i]]) || [];
+    for (var j = 0; j < its.length; j++) if (its[j].a === abbr) return provs[i];
+  }
+  return null;
+}
+
+function abaRenderFalt() {
+  var box = document.getElementById('abaFaltBox');
+  if (!box) return;
+  if (abaCurrentTab !== 'proveedores') { box.classList.add('hidden'); return; }
+  box.classList.remove('hidden');
+  if (!abaFalt) {
+    /* No saber no es «no falta nada». */
+    box.className = 'aba-falt aba-falt-gris';
+    box.innerHTML = abaFaltEstado === 'error'
+      ? '<div class="aba-falt-t">No pude calcular qué falta para entregar</div><div class="aba-falt-s">' + _abaH(abaFaltErr || 'sin conexión') + '</div>' +
+        '<button type="button" class="aba-falt-btn" onclick="abaFaltCargar()">Reintentar</button>'
+      : '<div class="aba-falt-s">Calculando qué falta para entregar…</div>';
+    return;
+  }
+  var ex = abaFalt.examinados || {}, f = abaFalt.faltan || [];
+  var sello = _abaCcHace(abaFalt._cuando) + (abaFaltEstado === 'yendo' ? ' · actualizando…' : abaFaltEstado === 'error' ? ' · no se pudo actualizar' : '');
+  var sobre = (ex.pedidos || 0) + ' pedido' + (ex.pedidos === 1 ? '' : 's') + ' abierto' + (ex.pedidos === 1 ? '' : 's');
+  if (!f.length) {
+    box.className = 'aba-falt aba-falt-ok';
+    box.innerHTML = '<div class="aba-falt-t">✓ No falta nada para entregar</div>' +
+      '<div class="aba-falt-s">Miré ' + sobre + ' de los cuatro canales contra el freezer y las OC · ' + _abaH(sello) + '</div>';
+    return;
+  }
+  var h = '<div class="aba-falt-t">⚠️ Faltan para entregar: ' + f.length + ' producto' + (f.length === 1 ? '' : 's') + '</div>' +
+    '<div class="aba-falt-s">Lo piden ' + sobre + ' y no lo cubre ni el freezer ni una OC · ' + _abaH(sello) + '</div>';
+  f.forEach(function (x) {
+    var u = x.u === 'kg' ? 'kg' : 'u';
+    var porPed = (x.pedidos || []).map(function (p) {
+      var por = p.por === 'freezer' ? 'del freezer' : (p.por === 'Orden de Compra' ? 'OC sin generar' : 'origen sin elegir');
+      return _abaH(p.hoja + ' #' + p.n + (p.cli ? ' ' + p.cli : '')) + ' · ' + _abaCant(p.q, u) + ' (' + por + ')';
+    });
+    var cuentas = 'Disponible ' + _abaCant(x.disponible, u) + (x.repo > 0 ? ' · en camino ' + _abaCant(x.repo, u) : '');
+    var prov = _abaFaltProv(x.a);
+    h += '<div class="aba-falt-it"><div class="aba-falt-fila"><span class="aba-falt-q">' + _abaCant(x.falta, u) + '</span>' +
+      '<span class="aba-falt-n">' + _abaH(x.n) + '</span></div>' +
+      '<div class="aba-falt-det">' + cuentas + (porPed.length ? '<br>' + porPed.join('<br>') : '') + '</div>';
+    if (u === 'kg') h += '<div class="aba-falt-nota">La carne no se compra desde acá: va en el pedido de carne.</div>';
+    else if (prov) h += '<button type="button" class="aba-falt-btn" onclick="abaFaltAgregar(\'' + _abaH(x.a) + '\')">Agregar a la compra de ' + _abaH(prov) + '</button>';
+    else h += '<div class="aba-falt-nota">' + (catalogo && catalogo.proveedores && catalogo.proveedores.length ? 'No tiene proveedor en el catálogo.' : 'Trayendo el catálogo para saber a quién comprarle…') + '</div>';
+    h += '</div>';
+  });
+  box.className = 'aba-falt';
+  box.innerHTML = h;
+}
+
+/* Lleva a + NUEVO con «Tadeo — Stock», el proveedor del producto y lo que falta
+   cargado. Si ya habia algo cargado de ese producto, deja lo mayor. */
+function abaFaltAgregar(abbr) {
+  var x = null;
+  ((abaFalt && abaFalt.faltan) || []).forEach(function (y) { if (y.a === abbr) x = y; });
+  var prov = _abaFaltProv(abbr);
+  if (!x || !prov) { abaShowToast('No encontré el proveedor de ese producto'); return; }
+  abaSwitchTab('nuevo');
+  var sv = document.getElementById('npVendedor');
+  if (sv && sv.value !== 'Tadeo — Stock') { sv.value = 'Tadeo — Stock'; onNpVendedorChange(); }
+  var sp = document.getElementById('npProv');
+  if (sp.value !== prov) {
+    sp.value = prov;
+    onNpProvChange();
+    if (sp.value !== prov) return;   // eligio no descartar la factura de carne
+  }
+  var q = Math.max(Number(npQtys[abbr]) || 0, Math.ceil(x.falta));
+  npSetOrigen(abbr, 'Orden de Compra');
+  var input = document.getElementById('npq_' + abbr);
+  if (input) { input.value = q; try { input.scrollIntoView({ block: 'center' }); } catch (e) {} }
+  npQtys[abbr] = q;
+  npUpdateFuturo(abbr);
+  updateNpSummary();
+  abaShowToast(_abaCant(q, 'u') + ' ' + x.n + ' cargado en la compra de ' + prov);
 }
 
 /* ── LOAD VENDEDORES RED (para botón WA al vendedor) ────── */
@@ -1272,6 +1400,7 @@ function loadCatalogo(forzar) {
       abaCatEstado = 'ok'; abaCatError = '';
       abaSaveLocal();
       populateProvSelect();
+      try { abaRenderFalt(); } catch (e) {}   // el boton de faltantes necesita saber el proveedor
       // Si el usuario está en "+ NUEVO", re-renderizar para refrescar costos/stock.
       if (abaCurrentTab === 'nuevo') {
         try { abaRenderNuevo(); var pv = document.getElementById('npProv').value; if (pv) _npPintarProductos(pv); } catch(e) { console.warn('[busqueda] renderNuevo post-catalogo:', e); }
@@ -1412,6 +1541,7 @@ function getSemanaISO() {
 
 /* ── RENDER ────────────────────────────────────────────── */
 function abaRender() {
+  try { abaRenderFalt(); } catch (e) {}
   var hasProv = busqueda.provs && busqueda.provs.length > 0;
   var hasCli = busqueda.clientes && busqueda.clientes.length > 0;
 
@@ -3842,7 +3972,7 @@ function npSetQty(abbr, val) {
 
 /* ── SUGERIDOR DE COMPRA (depósito) ─────────────────────────
    Sugerido = máx(0, demandaHomeSemanal × COBERTURA − disponible − enCamino)
-   · demandaHomeSemanal: prom de unidades vendidas en Home las últimas 3 sem (backend, it.dem)
+   · demandaHomeSemanal: prom de lo que SALIO DEL FREEZER las últimas 3 sem, en los cuatro canales (backend, it.dem; desde el 7/10/2026 — antes era Home y Pilar, todo origen)
    · disponible: it.s (físico − reservado; lo reservado ya está vendido para el finde)
    · enCamino: OCs "Tadeo — Stock" pendientes de ese producto
    Solo aplica al vendedor "Tadeo — Stock". */
