@@ -15952,34 +15952,26 @@ function rHSnap(){
   // margenMes: facturado − costo de esos MISMOS pedidos. Medido el 14/9/2026 contra
   // eerrKpisMes: $2.932.457 los dos (26,7%). Se calcula acá y no con eerrKpisMes
   // porque ese necesita `VD` (las ventas), que no siempre llegó cuando se pinta Inicio.
-  var facturadoMes=0, facturadoMesCobrado=0, margenMes=0;
+  /* UN SOLO facturado del mes (7/10/2026). Hasta este dia Inicio mostraba tres:
+     Total Maleu (Red por la bolsa al vendedor, con catering y B2B), este cuadro
+     (solo "Entregado", sin catering ni B2B, Red por la col L) y un aviso de Red
+     que decia "no está en el facturado" debajo de una tarjeta que si lo contaba.
+     Medido ese dia: $5.482.391 contra $5.167.391. Ahora es `_rtSumar` + catering
+     (`_planFact`), la cuenta de Total Maleu, Objetivo y el EERR: Red cuenta
+     cuando le damos la bolsa al vendedor (`_rtEsVenta`).
+     `facturadoMesCobrado`: de esos MISMOS pedidos, lo ya cobrado (B2B y catering
+     se cobran al entregar). */
+  var _snP=_rtPeriodo('m:'+ym,now), _snG=_rtSumar(_snP.d,_snP.h);
+  var facturadoMes=_snG.tot.f+_snG.cat.f;
+  var margenMes=facturadoMes-(_snG.tot.c+_snG.cat.c);
+  var facturadoMesCobrado=_snG.b2b.f+_snG.cat.f;
   ((D.pedidos)||[]).forEach(function(p){
-    if(p.es!=='Entregado'||p.hist)return;
-    if(!p.c||!p.c.trim()||!(p.$>0))return;
-    if(_mesDePedido(p)!==ym)return;
-    facturadoMes+=Number(p.$||0);
-    margenMes+=Number(p.$||0)-Number(p.co||0);
-    if(p.ep==='Cobrado')facturadoMesCobrado+=Number(p.$||0);
-  });
-  // Pedidos Red que siguen en "Pendiente". Son DOS cosas distintas y hay que
-  // separarlas, porque los vendedores no usan el ERP y casi nunca marcan la entrega:
-  //
-  //   • con Fecha de Pago a Maleu (`fc`) → el vendedor YA cobró y YA rindió. Nadie
-  //     paga por mercadería que no entregó: está entregado, sin marcar. Y como el
-  //     facturado del mes cuenta solo "Entregado", esa venta NO se está contando.
-  //   • sin `fc` → mercadería de verdad en poder del vendedor, todavía sin vender.
-  //
-  // Verificado sobre la hoja Red entera el 31/8/2026: los 80 pedidos "Entregado"
-  // tienen fecha de pago, los 7 "Pendiente" de Fini también (ya había entregado y
-  // rendido), y los 3 sin fecha eran los de Rufino — que efectivamente no había
-  // entregado. 87 de 87. Por eso `fc` sirve como señal.
-  var redSinMarcar=0, redSinMarcarN=0;      // entregado y rendido, falta el clic
-  var redEnPoderDeVendedor=0, redEnPoderN=0; // de verdad sin entregar
-  ((D.pedidos)||[]).forEach(function(p){
-    if(p.h!=='Red'||p.es==='Entregado'||p.es==='Cancelado'||p.hist)return;
-    if(!(p.$>0))return;
-    if(p.fc&&String(p.fc).trim()){redSinMarcar+=Number(p.$||0);redSinMarcarN++;}
-    else{redEnPoderDeVendedor+=Number(p.$||0);redEnPoderN++;}
+    if(p.hist||p.es==='Cancelado'||!_rtEsVenta(p)||p.ep!=='Cobrado')return;
+    if(!p.c||!String(p.c).trim()||!(Number(p.$)>0))return;
+    var dia=_tendFechaVentaISO(p);
+    if(!dia||dia<_snP.d||dia>_snP.h)return;
+    if(['Home','Pilar','Clubes','Red'].indexOf(p.h)<0)return;
+    facturadoMesCobrado+=Number(p.$)||0;
   });
   // 2 y 3: Gastado del mes y flujo neto — del cálculo validado de eerrFlujoMes.
   // "Cobrado mes" tuvo cuadrito propio hasta el 14/9/2026: repetía el "% ya cobrado"
@@ -16041,11 +16033,11 @@ function rHSnap(){
       '</div>';
   }
   var html='<div class="snap">';
-  html+=card('','Facturado mes',fmoney(facturadoMes),pctCobr>0?(pctCobr+'% ya cobrado'):'entregado');
+  html+=card('','Facturado mes',fmoney(facturadoMes),(pctCobr>0?(pctCobr+'% cobrado · '):'')+'retail y catering, Red por bolsa');
   /* Sin semáforo a propósito: el margen de la carne (~20%) y el de Maleu (~31%) son
      distintos, y un umbral único pintaría de rojo un mes que vende más carne. */
   var pctMargen=facturadoMes>0?Math.round(margenMes/facturadoMes*100):0;
-  html+=card('','Margen mes',fmoney(margenMes),facturadoMes>0?(pctMargen+'% de lo facturado'):'sin entregas');
+  html+=card('','Margen mes',fmoney(margenMes),facturadoMes>0?(pctMargen+'% · igual que Total Maleu'):'sin entregas');
   html+=card(sFlujo,'Gastado mes',fmoney(quemadoMes),(flujoMes>=0?'+':'')+fmoney(flujoMes)+' flujo neto');
   html+=card(sSaldo,'Saldo de caja',fmoney(saldoTot),(saldoTot>=cajaMin?'sobre caja mín ':'bajo caja mín ')+fmoney(cajaMin));
   /* El pie dice de dónde sale cuando hay de los dos: "recibieron Maleu y no
@@ -16069,16 +16061,6 @@ function rHSnap(){
       '<b style="color:var(--ink)">Posición Neta real:</b> '+fmoney(saldoTot)+' caja + '+fmoney(aCobrar)+' a cobrar + '+fmoney(stockTot)+' stock − '+fmoney(deudaProv)+' deuda = '+
       '<b style="color:'+posColor+';font-variant-numeric:tabular-nums">'+fmoney(posNeta)+'</b>'+
       '<div style="font-size:10px;color:var(--ink3);margin-top:3px;font-style:italic">Capital de trabajo total — distribuido entre caja, mercadería y cuentas pendientes</div>'+
-      (redSinMarcar>0
-        ? '<div style="font-size:10px;color:var(--r);margin-top:5px;padding-top:5px;border-top:1px dashed var(--cd)">'+
-          '⚠ <b>'+fmoney(redSinMarcar)+'</b> de Red ya cobrado y rendido pero sin marcar Entregado ('+redSinMarcarN+
-          (redSinMarcarN===1?' pedido':' pedidos')+'). <b>No está en el facturado del mes.</b></div>'
-        : '')+
-      (redEnPoderDeVendedor>0
-        ? '<div style="font-size:10px;color:var(--wrn);margin-top:5px;'+(redSinMarcar>0?'':'padding-top:5px;border-top:1px dashed var(--cd)')+'">'+
-          '● <b>'+fmoney(redEnPoderDeVendedor)+'</b> de mercadería en poder de vendedores Red, todavía sin vender ('+redEnPoderN+
-          (redEnPoderN===1?' pedido':' pedidos')+'). Salió del freezer y no es venta.</div>'
-        : '')+
     '</div>';
   }
   box.innerHTML=html;
@@ -17306,7 +17288,7 @@ function rInicio(){
       var k=_cobroFechaDM(p);
       if(!k)return;
       var parts=k.split('/');if(parts.length<2)return;
-      var d=new Date(nowYear,Number(parts[1])-1,Number(parts[0]));
+      var d=new Date(_dmAnio(k,p)||nowYear,Number(parts[1])-1,Number(parts[0]));
       var sem=calSemanaDe(d).k;
       if(!porSemana[sem])porSemana[sem]={ef:0,tr:0,tot:0,pend:0,n:0,mg:0,dias:{},minD:d,maxD:d};
       if(d<porSemana[sem].minD)porSemana[sem].minD=d;
@@ -22652,7 +22634,7 @@ function rCierreResumen(box){
   var factPrevCmp=kPrev?kPrev.totFact:0;
   if(_cd&&typeof VD!=='undefined'&&VD){
     var _pn=MES_ORD[prevD.getMonth()];
-    factPrevCmp=_ckHastaDia(VD.filter(function(v){return v.mes===_pn;}),_cd).reduce(function(a,v){return a+(Number(v.$)||0);},0);
+    factPrevCmp=_ckHastaDia(VD.filter(function(v){return _esDelMes(v,_pn,prevD.getFullYear());}),_cd).reduce(function(a,v){return a+(Number(v.$)||0);},0);
   }
   var deltaFact=_ckDelta(k.totFact,factPrevCmp);
   var deltaMB=kPrev?k.mbPct-kPrev.mbPct:null;
@@ -22841,7 +22823,7 @@ function _ckRenderMixCanales(mesNom,anioN){
   var COLORS={Home:'#F07D47',Pilar:'#5C3A2A',Clubes:'#7A4A4A',Red:'#A89880',Catering:'#4CAF50',B2B:'#7B6BD9'};
   var canales={};var totFact=0,totCMV=0,totN=0;
   ((typeof VD!=='undefined'&&VD)||[]).forEach(function(v){
-    if(v.mes!==mesNom)return;
+    if(!_esDelMes(v,mesNom,anioN))return;
     var c=v.canal,z=v.zona,k=c;
     if(c==='Venta Directa')k=(z==='Pilar'?'Pilar':'Home');
     var f=Number(v.$)||0,cmv=Number(v.costo)||0;
@@ -22946,8 +22928,8 @@ function _ckRenderLectura(k,kPrev,ebitdaTarget,esMesActual){
   if(kPrev){
     var _cdL=_ckCorteDia(), _fpL=kPrev.totFact;
     if(_cdL&&typeof VD!=='undefined'&&VD){
-      var _pnL=MES_ORD[new Date(cierreMes.getFullYear(),cierreMes.getMonth()-1,1).getMonth()];
-      _fpL=_ckHastaDia(VD.filter(function(v){return v.mes===_pnL;}),_cdL).reduce(function(a,v){return a+(Number(v.$)||0);},0);
+      var _pdL=new Date(cierreMes.getFullYear(),cierreMes.getMonth()-1,1),_pnL=MES_ORD[_pdL.getMonth()];
+      _fpL=_ckHastaDia(VD.filter(function(v){return _esDelMes(v,_pnL,_pdL.getFullYear());}),_cdL).reduce(function(a,v){return a+(Number(v.$)||0);},0);
     }
     var dF=_ckDelta(k.totFact,_fpL);
     var _vsL=_cdL?('los mismos '+_cdL+' días del mes anterior'):'mes anterior';
@@ -22971,7 +22953,7 @@ function _ckRenderLectura(k,kPrev,ebitdaTarget,esMesActual){
 function rCierreVentas(box){
   var mesNom=MES_ORD[cierreMes.getMonth()],anioN=cierreMes.getFullYear();
   var mn=cierreMes.getMonth()+1;
-  var ventasMes=((typeof VD!=='undefined'&&VD)||[]).filter(function(v){return v.mes===mesNom;});
+  var ventasMes=((typeof VD!=='undefined'&&VD)||[]).filter(function(v){return _esDelMes(v,mesNom,anioN);});
   if(!ventasMes.length){
     box.innerHTML='<div class="ck-empty"><div class="ck-empty-i">💵</div>Sin ventas registradas en '+mesNom+' '+anioN+'.</div>';
     return;
@@ -22979,7 +22961,7 @@ function rCierreVentas(box){
   // Datos mes anterior para comparativa
   var prevD=new Date(cierreMes.getFullYear(),cierreMes.getMonth()-1,1);
   var prevMesNom=MES_ORD[prevD.getMonth()];
-  var ventasPrev=_ckHastaDia(((typeof VD!=='undefined'&&VD)||[]).filter(function(v){return v.mes===prevMesNom;}),_ckCorteDia());
+  var ventasPrev=_ckHastaDia(((typeof VD!=='undefined'&&VD)||[]).filter(function(v){return _esDelMes(v,prevMesNom,prevD.getFullYear());}),_ckCorteDia());
 
   var h='';
   h+=_ckVentasHeader(ventasMes,ventasPrev);
@@ -23680,13 +23662,54 @@ function rCierreInsights(box){
    el dia que se pago. `_eerrGastosEcon` son los egresos que el economico imputa
    a un mes: los del mes, salvo los anuales, mas la cuota de cada anual vivo.
    Cada cuota es una copia del asiento con `$` = 1/12 y `anual` = lo pagado. */
+/* El mes CON año (7/10/2026). Las hojas son acumulativas: desde enero de 2027
+   un "Enero" puede ser de dos años, y filtrar por el nombre solo sumaba los dos
+   (EERR, Cierre, Objetivo, cobros). El año sale de `mc` ("aaaa-mm"), de `anio`,
+   o de la fecha "dd/MM/aaaa" (corregida si el mes y la fecha cruzan el año).
+   0 = no se sabe (una copia guardada de antes): se acepta por el nombre, como antes. */
+function _anioMov(x){
+  if(!x)return 0;
+  var mc=String(x.mc||'').match(/^(\d{4})-(\d{1,2})/);if(mc)return Number(mc[1]);
+  if(Number(x.anio)>2000)return Number(x.anio);
+  var f=String(x.fecha||x.fFull||x.f||'').match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if(!f)return 0;
+  var y=Number(f[3]),fm=Number(f[2])-1;
+  var mm=['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'].indexOf(x.mes);
+  if(mm<0)return y;
+  if(mm-fm>6)return y-1;
+  if(fm-mm>6)return y+1;
+  return y;
+}
+function _esDelMes(x,mesNom,anio){
+  if(!x||x.mes!==mesNom)return false;
+  var a=_anioMov(x);
+  return !a||!anio||a===Number(anio);
+}
+/* Una fecha "dd/MM" sin año (la de cobro `fc`, la de entrega `fe` de un pedido):
+   va al año que la deja más cerca del mes contable del pedido (`mc`). Un cobro
+   del 2/1 de algo entregado el 30/12 es del año siguiente. */
+function _dmAnio(dm,p){
+  var m=String(dm||'').match(/^(\d{1,2})\/(\d{1,2})(?:\/(\d{4}))?/);if(!m)return 0;
+  if(m[3])return Number(m[3]);
+  var r=String((p&&p.mc)||'').match(/^(\d{4})-(\d{1,2})/);if(!r)return 0;
+  var mo=Number(m[2]),ry=Number(r[1]),ref=ry*12+Number(r[2]),best=0,bd=99;
+  [ry-1,ry,ry+1].forEach(function(y){var d=Math.abs(y*12+mo-ref);if(d<bd){bd=d;best=y;}});
+  return best;
+}
+/* null = no hay fecha legible (el que llama prueba con otra) · true/false = cae o no en mn/anio. */
+function _dmEnMes(dm,p,mn,anio){
+  var m=String(dm||'').match(/^(\d{1,2})\/(\d{1,2})/);if(!m)return null;
+  if(Number(m[2])!==Number(mn))return false;
+  var a=_dmAnio(dm,p);
+  return !a||!anio||a===Number(anio);
+}
 function _esAnual(g){return /·\s*anual\b/i.test(String(g&&g.con||''));}
 function _eerrGastosEcon(mn,anio){
   var MES=['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'][mn-1];
   var out=[], k=anio*12+mn-1;
   ((typeof D!=='undefined'&&D&&D.gastos)||[]).forEach(function(g){
     var f=_esAnual(g)?String(g.f||'').match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/):null;
-    if(!f){if(g.mes===MES)out.push(g);return;}
+    if(!f){if(_esDelMes(g,MES,anio))out.push(g);return;}
     var c=k-(Number(f[3])*12+Number(f[2])-1);
     if(c<0||c>11)return;
     var x={};for(var q in g)x[q]=g[q];
@@ -23724,11 +23747,11 @@ function eerrKpisMes(mn,anio){
   var mesNom=MES_NOMBRES[mn-1];
   function _norm(c){var s=String(c||'').trim().toLowerCase();if(s.length>3&&s.charAt(s.length-1)==='s')s=s.substring(0,s.length-1);return s;}
   if(!window.VD)return null;
-  var ventas=VD.filter(function(v){return v.mes===mesNom;});
+  var ventas=VD.filter(function(v){return _esDelMes(v,mesNom,anio);});
   var totFact=0,totCMV=0;
   ventas.forEach(function(v){totFact+=Number(v.$)||0;totCMV+=Number(v.costo)||0;});
   // CMV catering directo
-  ((D&&D.gastos)||[]).filter(function(g){return g.mes===mesNom;}).forEach(function(g){
+  ((D&&D.gastos)||[]).filter(function(g){return _esDelMes(g,mesNom,anio);}).forEach(function(g){
     if(_norm(g.cat||'')==='catering')totCMV+=Number(g.$)||0;
   });
   var totMB=totFact-totCMV;
@@ -23756,7 +23779,7 @@ function eerrKpisMes(mn,anio){
   var resOper=ebitda-amortE;
   // Resultados financieros (rendimientos MP / intereses ganados)
   var rFinanc=0;
-  ((D&&D.ingresos)||[]).filter(function(i){return i.mes===mesNom;}).forEach(function(i){
+  ((D&&D.ingresos)||[]).filter(function(i){return _esDelMes(i,mesNom,anio);}).forEach(function(i){
     var con=String(i.con||'').toLowerCase(),not=String(i.not||'').toLowerCase();
     var txt=con+' '+not;
     if(txt.indexOf('liquid')>=0&&txt.indexOf('red')>=0)return;
@@ -23918,20 +23941,19 @@ function eerrFlujoMes(mn,anio){
     if(p.ep!=='Cobrado')return;
     if(!canalesValidos[p.h])return;
     var monto=Number(p.$||p.t||p.total||0);if(!monto)return;
-    var ms=null,estimado=false;
-    if(p.fc){var pp=String(p.fc).split('/');if(pp.length>=2)ms=Number(pp[1]);}
-    if(!ms&&p.fe){var pp2=String(p.fe).split('/');if(pp2.length>=2){ms=Number(pp2[1]);estimado=true;}}
-    if(ms!==mn)return;
+    var estimado=false,enMes=p.fc?_dmEnMes(p.fc,p,mn,anio):null;
+    if(enMes===null&&p.fe){enMes=_dmEnMes(p.fe,p,mn,anio);estimado=true;}
+    if(!enMes)return;
     cobr+=monto;
     if(estimado)cobrEst+=monto;
   });
   var coberturaFC=cobr>0?Math.round((1-cobrEst/cobr)*100):0;
   var otros=0;
-  ((D&&D.ingresos)||[]).filter(function(i){return i.mes===mesNom&&!_esVuelto(i)&&!_esLiqRed(i);}).forEach(function(i){otros+=Number(i.$)||0;});
+  ((D&&D.ingresos)||[]).filter(function(i){return _esDelMes(i,mesNom,anio)&&!_esVuelto(i)&&!_esLiqRed(i);}).forEach(function(i){otros+=Number(i.$)||0;});
   var entradas=cobr+otros;
   // Egresos (todos del mes, sin imputados/provisiones). Un vuelto no es un gasto.
   var salidas=0;
-  ((D&&D.gastos)||[]).filter(function(g){return g.mes===mesNom&&!_esVuelto(g);}).forEach(function(g){
+  ((D&&D.gastos)||[]).filter(function(g){return _esDelMes(g,mesNom,anio)&&!_esVuelto(g);}).forEach(function(g){
     salidas+=Number(g.$)||0;
   });
   return {entradas:entradas,salidas:salidas,flujo:entradas-salidas,cobranzas:cobr,cobertura:coberturaFC};
@@ -23956,11 +23978,9 @@ function rEERR_financiero(body){
     if(p.ep!=='Cobrado')return;
     var hoja=p.h||'';if(!canalMap[hoja])return;
     var monto=Number(p.$||p.t||p.total||0);if(!monto)return;
-    var mesPago=mesDe(p.fc);
-    var estimado=false;
-    if(!mesPago){mesPago=mesDe(p.fe);estimado=true;}
-    if(!mesPago)return;
-    if(mesPago!==mesNum)return;
+    var estimado=false,enMes=_dmEnMes(p.fc,p,mesNum,anioN);
+    if(enMes===null){enMes=_dmEnMes(p.fe,p,mesNum,anioN);estimado=true;}
+    if(!enMes)return;
     cobr[hoja]+=monto;cobrCount[hoja]++;
     if(estimado){cobrEstimado[hoja]+=monto;cobrEstCount[hoja]++;}
   });
@@ -23973,7 +23993,7 @@ function rEERR_financiero(body){
 
   // Otros ingresos no-venta (D.ingresos del mes) — incluye liquidaciones Red, rendimientos, etc.
   var otrosIng=0,otrosIngDet=[];
-  ((D&&D.ingresos)||[]).filter(function(i){return i.mes===mesNom&&!_esVuelto(i)&&!_esLiqRed(i);}).forEach(function(i){
+  ((D&&D.ingresos)||[]).filter(function(i){return _esDelMes(i,mesNom,anioN)&&!_esVuelto(i)&&!_esLiqRed(i);}).forEach(function(i){
     var m=Number(i.$)||0;otrosIng+=m;otrosIngDet.push({con:i.con||'',not:i.not||'',m:m});
   });
   var totEntradas=totCobr+otrosIng;
@@ -23993,7 +24013,7 @@ function rEERR_financiero(body){
   var pagExt=0,pagExtD=[];
   var pagCapex=0,pagCapexD=[];
 
-  ((D&&D.gastos)||[]).filter(function(g){return g.mes===mesNom&&!_esVuelto(g);}).forEach(function(g){
+  ((D&&D.gastos)||[]).filter(function(g){return _esDelMes(g,mesNom,anioN)&&!_esVuelto(g);}).forEach(function(g){
     var rawCat=g.cat||'Otro',m=Number(g.$)||0;
     var cat=normCat(rawCat);
     var con=String(g.con||'').toLowerCase(),not=String(g.not||'').toLowerCase();
@@ -24075,11 +24095,11 @@ function rEERR_financiero(body){
   // ── 4. RECONCILIACIÓN económico → financiero (necesita re-correr económico)
   // Calcular Resultado Neto Económico inline (mismo flujo que rEERR_dual pero sin renderizar).
   function calcEcon(){
-    var ventas=VD.filter(function(v){return v.mes===mesNom;});
+    var ventas=VD.filter(function(v){return _esDelMes(v,mesNom,anioN);});
     var totFact=0,totCMV=0;
     ventas.forEach(function(v){totFact+=Number(v.$)||0;totCMV+=Number(v.costo)||0;});
     var cmvCateringE=0;
-    ((D&&D.gastos)||[]).filter(function(g){return g.mes===mesNom;}).forEach(function(g){
+    ((D&&D.gastos)||[]).filter(function(g){return _esDelMes(g,mesNom,anioN);}).forEach(function(g){
       if(normCat(g.cat||'')==='catering')cmvCateringE+=Number(g.$)||0;
     });
     totCMV+=cmvCateringE;
@@ -24091,7 +24111,7 @@ function rEERR_financiero(body){
     /* Los anuales en cuotas, como el economico (6/10/2026): lo pagado de mas
        este mes, o la cuota de uno pagado antes, va al puente como `anualDif`. */
     var anualDif=0;
-    ((D&&D.gastos)||[]).forEach(function(g){if(g.mes===mesNom&&_esAnual(g))anualDif+=Number(g.$)||0;});
+    ((D&&D.gastos)||[]).forEach(function(g){if(_esDelMes(g,mesNom,anioN)&&_esAnual(g))anualDif+=Number(g.$)||0;});
     _eerrGastosEcon(mesNum,eerrMes.getFullYear()).forEach(function(g){
       if(g.anual!==undefined)anualDif-=Number(g.$)||0;
       var c=normCat(g.cat||'Otro'),m=Number(g.$)||0;
@@ -24814,7 +24834,7 @@ function rEERR_dual(body){
   var mesNom=MES_ORD[eerrMes.getMonth()],anioN=eerrMes.getFullYear();
 
   // ── FACTURACIÓN devengada del mes por canal ──
-  var ventas=VD.filter(function(v){return v.mes===mesNom;});
+  var ventas=VD.filter(function(v){return _esDelMes(v,mesNom,anioN);});
   var canales={Home:0,Pilar:0,Clubes:0,Red:0,B2B:0,Catering:0};
   // Tracking por canal para validar carga de costos (CMV).
   var canalFact={Home:0,Pilar:0,Clubes:0,Red:0,B2B:0,Catering:0};
@@ -24831,7 +24851,7 @@ function rEERR_dual(body){
   // Costos directos de catering (cat=Catering en Egresos): insumos + mano de obra
   // del evento. Se suman al CMV antes del Margen Bruto.
   var cmvCateringDirecto=0,cmvCateringDet=[];
-  ((D&&D.gastos)||[]).filter(function(g){return g.mes===mesNom;}).forEach(function(g){
+  ((D&&D.gastos)||[]).filter(function(g){return _esDelMes(g,mesNom,anioN);}).forEach(function(g){
     var c=String(g.cat||'').trim().toLowerCase();
     if(c.length>3&&c.charAt(c.length-1)==='s')c=c.substring(0,c.length-1);
     if(c==='catering'){
@@ -24970,7 +24990,7 @@ function rEERR_dual(body){
   // Resultados Financieros: rendimientos MP / intereses ganados detectados en D.ingresos por keyword.
   // Liquidaciones Red NO entran (son operativas, son cobros del canal Red diferidos).
   var r_intereses=0,r_interesesD=[];
-  ((D&&D.ingresos)||[]).filter(function(i){return i.mes===mesNom;}).forEach(function(i){
+  ((D&&D.ingresos)||[]).filter(function(i){return _esDelMes(i,mesNom,anioN);}).forEach(function(i){
     var con=String(i.con||'').toLowerCase(),not=String(i.not||'').toLowerCase();
     var txt=con+' '+not;
     if(txt.indexOf('liquid')>=0&&txt.indexOf('red')>=0)return; // liq Red = operativo
