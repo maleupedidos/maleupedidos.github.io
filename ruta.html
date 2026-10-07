@@ -780,6 +780,11 @@ select.np-input{background:var(--white) url("data:image/svg+xml;utf8,<svg xmlns=
 
 .sync-banner{background:#FFF3E0;color:#E65100;text-align:center;padding:7px;font-size:12px;font-weight:700;display:none}
 .sync-banner.visible{display:block}
+.sync-banner.sync-rechazo{background:#FFEBEE;color:#C62828;cursor:pointer}
+.rut-rech-box{max-height:80vh;overflow:auto;text-align:left}
+.rut-rech-fila{border-top:1px solid var(--border);padding:10px 0}
+.rut-rech-tit{font-weight:700;font-size:14px}
+.rut-rech-mot{font-size:12px;opacity:.75;margin:2px 0 6px}
 .hidden{display:none!important}
 .toast{position:fixed;bottom:calc(24px + var(--sab));left:calc(50% + var(--erp-izq,0px)/2);transform:translateX(-50%);background:var(--brown);color:var(--beige);padding:12px 22px;border-radius:50px;font-size:14px;font-weight:700;z-index:200;opacity:0;transition:opacity .3s;pointer-events:none;max-width:90%;text-align:center}
 .toast.show{opacity:1}
@@ -1733,7 +1738,7 @@ try{var __ve=document.getElementById('appVer');if(__ve)__ve.textContent=APP_VERS
     }
   }catch(_){}
 })();
-var entregas=[], entregados={}, cobrados={}, propinas={}, syncQueue=[], armadoDone={}, pendientesCobro=[];
+var entregas=[], entregados={}, cobrados={}, propinas={}, syncQueue=[], rutSyncRechazados=[], armadoDone={}, pendientesCobro=[];
 /* Declarada ACA y no mas abajo: con `var` el hoisting sube la declaracion pero
    NO la asignacion, asi que hasta su linea original valia undefined — y si la
    funcion que la usa corre durante el arranque, `undefined.forEach` tumba la
@@ -1947,8 +1952,8 @@ if('serviceWorker' in navigator && !_IS_EMBED){navigator.serviceWorker.register(
 /* ── UTILS ── */
 function updateOnlineStatus(){document.getElementById('statusDot').className='status-dot '+(isOnline?'online':'offline')}
 function updateLastSync(){var n=new Date();document.getElementById('lastSync').textContent=n.getHours()+':'+String(n.getMinutes()).padStart(2,'0');localStorage.setItem('maleu_ruta_sync',n.getTime())}
-function saveLocal(){try{localStorage.setItem('maleu_ruta',JSON.stringify({_v:STORAGE_VERSION,entregas:entregas,entregados:entregados,cobrados:cobrados,propinas:propinas,syncQueue:syncQueue,armadoDone:armadoDone,pendientesCobro:pendientesCobro,rutHechas:rutHechas,currentTab:rutCurrentTab,rutaIndex:rutaIndex,rutaOrden:rutaOrden,ts:Date.now()}))}catch(e){}}
-function loadLocal(){try{var d=JSON.parse(localStorage.getItem('maleu_ruta')||'{}');if(d._v!==STORAGE_VERSION){d.entregados={};d.cobrados={};d.propinas={};d.armadoDone={};d.syncQueue=[]}if(d.entregas)entregas=_sanearEntregas(d.entregas);if(d.entregados)entregados=d.entregados;if(d.cobrados)cobrados=d.cobrados;if(d.propinas)propinas=d.propinas;if(d.syncQueue)syncQueue=d.syncQueue;if(d.armadoDone)armadoDone=d.armadoDone;if(d.pendientesCobro)pendientesCobro=d.pendientesCobro;
+function saveLocal(){try{localStorage.setItem('maleu_ruta',JSON.stringify({_v:STORAGE_VERSION,entregas:entregas,entregados:entregados,cobrados:cobrados,propinas:propinas,syncQueue:syncQueue,rutSyncRechazados:rutSyncRechazados,armadoDone:armadoDone,pendientesCobro:pendientesCobro,rutHechas:rutHechas,currentTab:rutCurrentTab,rutaIndex:rutaIndex,rutaOrden:rutaOrden,ts:Date.now()}))}catch(e){}}
+function loadLocal(){try{var d=JSON.parse(localStorage.getItem('maleu_ruta')||'{}');if(d._v!==STORAGE_VERSION){d.entregados={};d.cobrados={};d.propinas={};d.armadoDone={};d.syncQueue=[]}if(d.entregas)entregas=_sanearEntregas(d.entregas);if(d.entregados)entregados=d.entregados;if(d.cobrados)cobrados=d.cobrados;if(d.propinas)propinas=d.propinas;if(d.syncQueue)syncQueue=d.syncQueue;if(Array.isArray(d.rutSyncRechazados)){rutSyncRechazados=d.rutSyncRechazados;if(rutSyncRechazados.length)setTimeout(function(){try{_rutPintarBanner();}catch(_){}},1500);}if(d.armadoDone)armadoDone=d.armadoDone;if(d.pendientesCobro)pendientesCobro=d.pendientesCobro;
     /* Solo las de HOY: el recorrido de ayer ya no se puede deshacer desde aca
        (el backend frena el stock de otra semana) y acumularlas seria una lista
        que crece sola. */
@@ -1965,8 +1970,17 @@ function loadLocal(){try{var d=JSON.parse(localStorage.getItem('maleu_ruta')||'{
       try{localStorage.setItem(_purgeKey,String(Date.now()));}catch(_){}
     } else {
       var _now=Date.now(),_maxAge=30*60*1000;
+      /* Lo viejo no se reenvia solo (por eso existe la purga), pero tampoco se
+         tira: pasa a "No se pudo guardar" para que la persona decida (7/10/2026). */
+      var _viejas=syncQueue.filter(function(it){var ts=Number(it&&it.ts)||0;return !(ts>0&&(_now-ts)<_maxAge);});
       syncQueue=syncQueue.filter(function(it){var ts=Number(it&&it.ts)||0;return ts>0&&(_now-ts)<_maxAge;});
-      _desc=_antes-syncQueue.length;
+      if(_viejas.length){var _motV='Quedó más de 30 min en el celular sin poder guardarse';
+        _viejas.forEach(function(it){var c=Object.assign({},it);delete c.__attempts;rutSyncRechazados.push({item:c,motivo:_motV,por:'vieja',t:_now});});
+        try{localStorage.setItem('maleu_ruta',JSON.stringify(Object.assign({},d,{syncQueue:syncQueue,rutSyncRechazados:rutSyncRechazados})));}catch(_){}
+        /* El banner se pinta aca y no solo en el render: con el dia vacio el
+           render sale antes y el aviso no aparecia (lo agarro probar_cola_no_tira). */
+        setTimeout(function(){_rutPintarBanner();_viejas.forEach(function(it){_rutLogRechazo(it,_motV,'vieja');});},1500);}
+      _desc=0;
     }
     if(_desc>0){try{localStorage.setItem('maleu_ruta',JSON.stringify(Object.assign({},d,{syncQueue:syncQueue})));}catch(_){}
       setTimeout(function(){if(typeof showToast==='function')showToast('Se descartaron '+_desc+' acciones en cola viejas.');},800);}
@@ -2710,7 +2724,7 @@ function rutRender(){
   document.getElementById('counterBadge').textContent=doneHoy+'/'+totalHoy;
   // Si estoy embebido, avisar counter al panel padre (statusbar item).
   if(_IS_EMBED){try{parent.postMessage({type:'maleu_ruta_counter',entregadas:doneHoy,total:totalHoy},'*');}catch(e){}}
-  document.getElementById('syncBanner').className='sync-banner'+(syncQueue.length>0?' visible':'');
+  _rutPintarBanner();
   document.getElementById('errorView').classList.add('hidden');
   // Tab counts:
   // - ARMADO: BOLSAS de hoy que faltan armar. Es _armCuenta, la misma cuenta
@@ -8517,6 +8531,90 @@ function _armarGuardLoaderSync(){
 }
 function _limpiarGuardLoaderSync(){if(_syncLoaderGuard){clearTimeout(_syncLoaderGuard);_syncLoaderGuard=null;}}
 
+/* ── NO SE PUDO GUARDAR (7/10/2026) ──
+   Hasta hoy, una escritura que el servidor rechazaba 5 veces se BORRABA de la
+   cola con un toast de 4 s, y al abrir la app se tiraba todo lo que tuviera mas
+   de 30 min. Un Entregado o Armado quedaba bien en el celular y mal en la
+   planilla (con el stock mal) sin que nadie lo viera. Ahora las dos van a esta
+   lista: no se reenvian solas (la purga de la v58 existe porque reenviar cobros
+   viejos solos hizo daño), quedan a la vista en el banner y se registran en Log
+   Errores. Reintentar o descartar lo decide la persona.
+   `rutSyncRechazados` se declara arriba, junto a syncQueue: loadLocal la llena
+   en el arranque y aca abajo todavia valdria undefined. */
+var _RUT_ACC_TXT={marcarEntregado:'Entregado',deshacerEntrega:'Deshacer entrega',marcarArmado:'Armado',asignarReparto:'Asignar reparto',
+  marcarCobrado:'Cobro',cobrarParcial:'Cobro parcial',descobrar:'Deshacer cobro',cancelarPedido:'Cancelar pedido',
+  marcarEntregadoAVendedor:'Bolsa al vendedor',cobrarVendedorRed:'Cobro al vendedor',marcarGuardadoEnStock:'Descarga al freezer'};
+function _rutEscR(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
+function _rutRechazoTxt(it){
+  var acc=_RUT_ACC_TXT[it&&it.action]||String(it&&it.action||'Acción');
+  var quien='';
+  if(it&&it.pedidos&&it.pedidos.length){quien=it.pedidos.map(function(p){return p.c||('#'+p.id);}).join(', ');}
+  else if(it){
+    var e=(entregas||[]).find(function(x){return x&&x.h===it.hoja&&String(x.id)===String(it.id);});
+    quien=(e&&e.c)||((it.hoja||'')+(it.id?' #'+it.id:''));
+  }
+  return {acc:acc,quien:quien};
+}
+function _rutRechazar(item,motivo,por){
+  var it=Object.assign({},item);delete it.__attempts;
+  rutSyncRechazados.push({item:it,motivo:String(motivo||'sin motivo'),por:por||'rechazo',t:Date.now()});
+  saveLocal();_rutPintarBanner();
+  _rutLogRechazo(it,motivo,por);
+}
+/* La constancia en Log Errores: si el celular se pierde o se borra, queda. */
+function _rutLogRechazo(it,motivo,por){
+  try{fetch(RUT_APPS_SCRIPT_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},
+    body:JSON.stringify({action:'syncRechazado',motivo:String(motivo||''),por:por||'rechazo',item:it,usuario:_rutaUser()}),redirect:'follow'}).catch(function(){});}catch(_){}
+}
+function _rutPintarBanner(){
+  var b=document.getElementById('syncBanner');if(!b)return;
+  var n=rutSyncRechazados.length;
+  if(n>0){
+    b.className='sync-banner visible sync-rechazo';
+    b.textContent='⚠️ '+n+(n===1?' cosa no se pudo guardar':' cosas no se pudieron guardar')+' — tocá para ver'+(syncQueue.length>0?' · '+syncQueue.length+' en cola':'');
+    b.onclick=rutVerRechazados;
+  }else{
+    b.className='sync-banner'+(syncQueue.length>0?' visible':'');
+    b.textContent='Entregas pendientes de sincronizar';
+    b.onclick=null;
+  }
+}
+function rutVerRechazados(){
+  var o=document.getElementById('confirmOverlay');
+  if(!rutSyncRechazados.length){o.classList.add('hidden');_rutPintarBanner();return;}
+  var filas=rutSyncRechazados.map(function(r,i){
+    var d=_rutRechazoTxt(r.item);
+    var cuando=new Date(r.t).toLocaleString('es-AR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'});
+    return '<div class="rut-rech-fila"><div class="rut-rech-tit">'+_rutEscR(d.acc)+' · '+_rutEscR(d.quien)+'</div>'+
+      '<div class="rut-rech-mot">'+_rutEscR(r.motivo)+' · '+_rutEscR(cuando)+'</div>'+
+      '<div class="confirm-btns"><button class="btn-no" onclick="rutDescartarRechazado('+i+')">Descartar</button>'+
+      '<button class="btn-si" onclick="rutReintentarRechazado('+i+')">Reintentar</button></div></div>';
+  }).join('');
+  o.className='confirm-overlay';
+  o.innerHTML='<div class="confirm-box rut-rech-box"><h3>No se pudo guardar</h3><p>Esto quedó hecho en el celular pero <b>no en la planilla</b>.</p>'+filas+
+    '<div class="confirm-btns"><button class="btn-no" onclick="cerrarConfirm()">Cerrar</button></div></div>';
+}
+function rutReintentarRechazado(i){
+  var r=rutSyncRechazados[i];if(!r)return;
+  rutSyncRechazados.splice(i,1);
+  var it=Object.assign({},r.item,{ts:Date.now()});delete it.__attempts;
+  syncQueue.push(it);saveLocal();_rutPintarBanner();
+  rutVerRechazados();
+  if(typeof showToast==='function')showToast('Reintentando…');
+  processSyncQueue();
+}
+function rutDescartarRechazado(i,ok){
+  var r=rutSyncRechazados[i];if(!r)return;
+  if(!ok){
+    var d=_rutRechazoTxt(r.item);
+    var o=document.getElementById('confirmOverlay');o.className='confirm-overlay';
+    o.innerHTML='<div class="confirm-box"><h3>¿Descartar?</h3><p>'+_rutEscR(d.acc)+' · '+_rutEscR(d.quien)+'<br>No va a quedar en la planilla. Si hacía falta, cargalo de nuevo.</p>'+
+      '<div class="confirm-btns"><button class="btn-no" onclick="rutVerRechazados()">Volver</button><button class="btn-si" onclick="rutDescartarRechazado('+i+',1)">Sí, descartar</button></div></div>';
+    return;
+  }
+  rutSyncRechazados.splice(i,1);saveLocal();_rutPintarBanner();rutVerRechazados();
+}
+
 function processSyncQueue(){
   if(!isOnline||syncQueue.length===0||syncBusy)return;
   syncBusy=true;
@@ -8552,7 +8650,7 @@ function processSyncQueue(){
         }
         saveLocal();
         syncBackoffMs=2000;
-        document.getElementById('syncBanner').className='sync-banner'+(syncQueue.length>0?' visible':'');
+        _rutPintarBanner();
         if(syncQueue.length>0)setTimeout(processSyncQueue,800);
         else {_limpiarGuardLoaderSync();rutHideLoader(true);}
       }else{
@@ -8571,11 +8669,10 @@ function processSyncQueue(){
           return;
         }
         if(attempts>=5){
-          // Dar por perdido después de 5 intentos, mover al final y avisar
+          // 5 rechazos: sale de la cola (para no trabar al resto) pero NO se pierde.
           syncQueue.shift();
-          var err='Error sync tras 5 intentos: '+(res&&res.error||'desconocido');
-          if(typeof showToast==='function')showToast(err);
-          saveLocal();
+          _rutRechazar(item,(res&&(res.err||res.error))||'El servidor no lo aceptó','rechazo');
+          if(typeof showToast==='function')showToast('⚠️ No se pudo guardar — quedó en el aviso de arriba',6000);
           if(syncQueue.length===0){_limpiarGuardLoaderSync();rutHideLoader(true);}
           setTimeout(processSyncQueue,1000);
         }else{
