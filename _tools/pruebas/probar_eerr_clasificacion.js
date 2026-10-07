@@ -193,6 +193,28 @@ const CASOS = [
     chk('el puente de julio resta lo pagado por adelantado ($44.953)', an && an.puenteJul.indexOf('44.953') >= 0, an);
     chk('el puente de octubre suma la cuota de julio ($4.087)', an && an.puenteOct.indexOf('4.087') >= 0, an);
 
+    /* ── La mercaderia regalada (7/10/2026, decision de Tadeo) ──
+       Un pedido Entregado con facturado $0 (la ruleta del QR) suma su costo a
+       Campanas, con su renglon de detalle. La tab y los KPIs usan la MISMA
+       `_eerrRegaladosMes`: se mide que las dos digan lo mismo. */
+    const rg = await evaluar(cli, `(function(){
+      D.gastos = [{mes:'Septiembre', f:'10/9/2026', cat:'Herramienta', con:'WATI · Créditos', not:'', $:1000}];
+      D.pedidos = [
+        {n:'1024', h:'Home', es:'Entregado', $:0, co:53200, mc:'2026-09', dee:'2026-09-24', c:'Cliente QR'},
+        {n:'1030', h:'Home', es:'Pendiente', $:0, co:9000, mc:'2026-09', dee:'2026-09-28'}
+      ];
+      D.ingresos = []; VD = []; eerrMes = new Date(2026, 8, 1);
+      var div = document.createElement('div'); rEERR_dual(div);
+      var t = div.textContent.split(String.fromCharCode(160)).join(' ');
+      function tras(lbl, n){ var i = t.indexOf(lbl); return i < 0 ? '' : t.slice(i + lbl.length, i + lbl.length + (n || 14)); }
+      return { camp: tras('Campañas y mensajería'), det: tras('mercadería regalada: pedido 1024', 40),
+               otro: t.indexOf('pedido 1030') >= 0, kpi: _eerrMesGastos(9, 2026).camp };
+    })()`);
+    chk('el EERR dibuja Campañas con el regalo: $1.000 + $53.200', rg && rg.camp.indexOf('-$54.200') >= 0, rg);
+    chk('y el renglon «mercadería regalada: pedido 1024» con $53.200', rg && rg.det.indexOf('53.200') >= 0, rg);
+    chk('un pedido en $0 que no se entrego no aparece', rg && rg.otro === false, rg);
+    chk('la tab y los KPIs dicen lo mismo', rg && rg.kpi === 54200, rg);
+
     const err = await evaluar(cli, 'JSON.stringify((window.__err||[]).slice(0,5))');
     chk('sin errores de consola', err === '[]', err);
     console.log('\n  ' + ok + ' ok · ' + mal + ' mal\n');
