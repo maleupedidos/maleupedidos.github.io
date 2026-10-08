@@ -5310,6 +5310,29 @@ function cobroPedirComprobante(idx){
 var _cobroVendReg={};
 function _vendNombreLimpio(s){return String(s||'').replace(/\s*\(Vendedor Red\)\s*$/,'').trim()}
 
+/* La semana de una rendicion, con el calendario de Maleu (8/10/2026): en las
+   pantallas de admin se dice «Sem 1 · oct», no «Semana 40». La unidad de la
+   rendicion sigue siendo la semana ISO (asi la parte el backend y asi la
+   cobra el vendedor); lo que cambia es el NOMBRE. `fd`/`fh` son las fechas del
+   primer y el ultimo pedido de esa semana: si caen en dos semanas de Maleu
+   (28/9-4/10 cruza el mes), se nombran las dos. Sin `calSemanaDe` (Ruta
+   suelta) o con un backend viejo sin fechas, queda el numero de antes. */
+function _rutSemLbl(s){
+  var dia=function(t){var m=String(t||'').match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);return m?new Date(+m[3],+m[2]-1,+m[1]):null;};
+  try{
+    if(s&&typeof calSemanaDe==='function'&&typeof calMesCorto==='function'){
+      var a=dia(s.fd),b=dia(s.fh);
+      if(a&&b){
+        var A=calSemanaDe(a),B=calSemanaDe(b);
+        if(A&&B){
+          var la='Sem '+A.n+' \u00b7 '+calMesCorto(A.m0);
+          return A.k===B.k?la:la+' y Sem '+B.n+' \u00b7 '+calMesCorto(B.m0);
+        }
+      }
+    }
+  }catch(e){}
+  return 'Semana '+(s&&s.sem);
+}
 // HTML de la card de un vendedor Red.
 // REGLA NUEVA (6/10/2026): desde el 5/10 el cliente de Red le paga a MALEU y la
 // comision se le paga al vendedor por quincena. El vendedor ya no «junta» nada:
@@ -5338,7 +5361,9 @@ function _cobroVendedorHTML(pc){
     c+='<div style="font-size:11px;color:#5D4037;background:#F5F0E1;border-radius:6px;padding:5px 8px;margin:2px 0">'
       +'<b>Entregados hasta el 4/10</b> &middot; '+nV+' pedido'+(nV!==1?'s':'')
       +' &middot; '+formatMoney(pc.totalBruto||0)+' entero'
-      +((Number(pc.leDebeViejo)||0)>0?' &middot; <span style="color:#1B5E20">Maleu le debe '+formatMoney(pc.leDebeViejo)+' de comisión (quincena)</span>':'')+'</div>';
+      +((Number(pc.leDebeViejo)||0)>0?' &middot; <span style="color:#1B5E20">Maleu le debe '+formatMoney(pc.leDebeViejo)+' de comisión (quincena)</span>':'')
+      /* La de lo que no marco entregado y cobrado (8/10/2026): se liquida cuando lo marque. */
+      +((Number(pc.leDebeSinMarcar)||0)>0?' &middot; <span style="color:var(--muted)">+ '+formatMoney(pc.leDebeSinMarcar)+' de comisión cuando marque entregado y cobrado</span>':'')+'</div>';
   }
   if(ya>0){
     c+='<div style="background:#E8F5E9;border-left:3px solid #2E7D32;padding:6px 9px;border-radius:6px;font-size:11px;color:#1B5E20;font-weight:700;margin:2px 0">'
@@ -5349,7 +5374,7 @@ function _cobroVendedorHTML(pc){
     sems.forEach(function(s){
       var abierta=(Number(s.yaPagado)||0)>0&&(Number(s.saldo)||0)>0;
       c+='<span style="font-size:10px;background:'+(abierta?'#FFF8E1':'#F5F0E1')+';border:1px solid '+(abierta?'#F9A825':'#E8DFC4')+';color:#5D4037;padding:2px 7px;border-radius:50px;font-weight:700">'
-        +'Sem '+s.sem+' &middot; '+s.n+'p &middot; '+formatMoney(s.saldo)+'</span>';
+        +_rutSemLbl(s)+' &middot; '+s.n+'p &middot; '+formatMoney(s.saldo)+'</span>';
     });
     c+='</div>';
   }
@@ -8210,7 +8235,7 @@ function _cvPlan(monto){
     var saldo=Number(s.saldo)||0;
     if(saldo<=0)return;
     var asign=Math.min(resto,saldo);resto-=asign;
-    out.push({sem:s.sem,n:s.n,saldo:saldo,asign:asign,cierra:asign+0.01>=saldo});
+    out.push({sem:s.sem,lbl:_rutSemLbl(s),n:s.n,saldo:saldo,asign:asign,cierra:asign+0.01>=saldo});
   });
   return out;
 }
@@ -8310,7 +8335,8 @@ function confirmarCobroVendedor(vendedor){
     +    (bruto>0?'<div style="display:flex;justify-content:space-between;padding:2px 0"><span>Bruto</span><b>'+formatMoney(bruto)+'</b></div>'
     /* 7/10/2026: la comision ya NO se descuenta. Entrega el bruto entero y
        Maleu le paga la comision en la quincena: se muestra como deuda de Maleu. */
-    +      (comision>0?'<div style="display:flex;justify-content:space-between;padding:2px 0;color:#1B5E20"><span>Maleu le debe de comisión (quincena)</span><b>'+formatMoney(comision)+'</b></div>':''):'')
+    +      (comision>0?'<div style="display:flex;justify-content:space-between;padding:2px 0;color:#1B5E20"><span>Maleu le debe de comisión (quincena)</span><b>'+formatMoney(comision)+'</b></div>':'')
+      +((Number(pc.leDebeSinMarcar)||0)>0?'<div style="display:flex;justify-content:space-between;padding:2px 0;color:#888"><span>Comisión cuando marque entregado y cobrado</span><b>'+formatMoney(pc.leDebeSinMarcar)+'</b></div>':''):'')
     +    (ya>0?'<div style="display:flex;justify-content:space-between;padding:2px 0;color:#2E7D32"><span>✓ Ya entregó</span><b>'+formatMoney(ya)+'</b></div>':'')
     +    '<div style="font-size:11px;color:#999;margin-top:5px">'+nPedidos+' pedido'+(nPedidos!==1?'s':'')+' pendiente'+(nPedidos!==1?'s':'')+'</div>'
     +    ((Number(pc.efNuevo)||0)>0?'<div style="display:flex;justify-content:space-between;padding:2px 0;color:#1B5E20"><span>💵 Efectivo de sus clientes (desde el 5/10)</span><b>'+formatMoney(pc.efNuevo)+'</b></div>':'')
@@ -8363,7 +8389,7 @@ function _cvSync(){
     var nota=!activa?'sin asignar':(p.cierra?'✓ cierra':'parcial · queda '+formatMoney(p.saldo-p.asign));
     h+='<div style="display:flex;justify-content:space-between;align-items:center;padding:5px 9px;margin-bottom:4px;'
       +'border-radius:7px;background:'+bg+';color:'+col+';font-weight:700">'
-      +'<span>Semana '+p.sem+' <span style="opacity:.7;font-weight:600">· '+p.n+' ped · '+formatMoney(p.saldo)+'</span></span>'
+      +'<span>'+p.lbl+' <span style="opacity:.7;font-weight:600">· '+p.n+' ped · '+formatMoney(p.saldo)+'</span></span>'
       +'<span>'+nota+'</span></div>';
   });
   var elS=_cvEl('cvSemanas');if(elS)elS.innerHTML=h;
