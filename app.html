@@ -1204,6 +1204,29 @@ button.ped-dep-x.va,button.ped-dep-x.va:disabled{opacity:1;background:#E3EFE3;bo
 .stcar-pv{display:inline-flex;align-items:center;gap:5px;font-size:10.5px;font-weight:800;padding:2px 8px;border-radius:999px;
   background:var(--pb,#F3F4F6);color:var(--pc,#4B5563);margin:4px 4px 2px 0;white-space:nowrap}
 .stcar-pv.sin{background:#FEE2E2;color:#B91C1C}
+/* La carne en «Editar productos» (8/10/2026) */
+.edc:empty{display:none}
+.edc{background:#fff;border:1px dashed #B45309;border-radius:10px;padding:12px;margin-bottom:10px}
+.edc-t{font-size:12px;font-weight:800;color:#B45309;margin-bottom:8px;display:flex;justify-content:space-between;gap:8px;align-items:baseline}
+.edc-est{font-size:10px;font-weight:600;color:var(--bl)}
+.edc-ln{border:1px solid var(--cd);border-radius:10px;padding:10px;margin-bottom:8px}
+.edc-lh{display:flex;justify-content:space-between;gap:10px;font-size:13px;color:var(--b);flex-wrap:wrap}
+.edc-lh span{font-weight:800;white-space:nowrap}
+.edc-sub{font-size:11px;color:var(--bl);margin-top:2px}
+.edc-pzs{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:4px}
+.edc-pzs .stcar-pvl{flex:0 0 100%;margin-top:4px}
+.edc-pz{display:inline-flex;align-items:center;gap:8px;min-height:42px;padding:6px 10px;border-radius:10px;border:1.5px solid var(--cd);
+  background:#fff;font-family:inherit;font-size:13px;color:var(--b);cursor:pointer}
+.edc-pz.mia{border-color:#B45309;background:#FFF8E1}
+.edc-pz.libre .edc-x{color:#047857}
+.edc-pz.mia .edc-x{color:var(--r)}
+.edc-x{font-size:18px;font-weight:800;line-height:1}
+.edc-dep{font-size:10px;color:var(--bl);font-weight:600}
+.edc-add{border-top:1px dashed var(--cd);padding-top:10px;margin-top:4px}
+.edc-addt{font-size:11px;color:#B45309;font-weight:700;margin-bottom:6px}
+.edc-sel{width:100%;min-height:44px;padding:10px;border:1.5px solid var(--cd);border-radius:8px;font-size:13px;background:#fff;font-family:inherit;box-sizing:border-box}
+.edc-nota{font-size:12px;color:var(--bl);margin-top:8px;line-height:1.4}
+.edc-nota.sin{color:#B91C1C;font-weight:700}
 .stcar-pvl{display:block;margin-top:4px}
 .stcar-cxs{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:0 12px;align-items:start}
 .stcar-cx{border:1px solid var(--border);border-radius:12px;padding:10px 12px;margin:8px 0;background:#fff}
@@ -13032,7 +13055,7 @@ function _leerVersion(app){
    "El HTML no sabe que version es" dejo de ser cierto: el build le escribe
    adentro el CACHE_NAME de sw-panel.js, el mismo que deploy.sh obliga a subir en
    cada cambio. Si lo publicado dice otra cosa, esta pagina es vieja. Punto. */
-var _APP_CN_PAGINA='maleu-panel-v556';
+var _APP_CN_PAGINA='maleu-panel-v557';
 
 /* Devuelve [{k,v}] si lo publicado no es lo que esta pagina corre. */
 function _chequearVersiones(){
@@ -17339,6 +17362,168 @@ function actualizarDescuentoEditor(uid){
   recalcularTotalesEditor(uid);
 }
 
+/* ═══ LA CARNE EN «EDITAR PRODUCTOS» (8/10/2026) ═══════════════════════════
+   La carne no se tipea: se tocan las PIEZAS. Los kilos, el costo y el margen
+   salen de ellas. Solo Home y Pilar, y solo si el pedido no esta entregado.
+   El backend (editarPedido + `piezas:{agregar,soltar}`) valida todo junto: si
+   una pieza ya no esta, no se guarda nada. */
+function _edEsKg(a){var s=_stockLinea(a);return !!(s&&String(s.u||'').toLowerCase()==='kg');}
+function _edCarneVa(ed){return ed.hoja==='Home'||ed.hoja==='Pilar';}
+function _edRef(ed){return ed.hoja+' #'+ed.id;}
+function _edPzDe(a){
+  var g=(typeof CARNE_DATA!=='undefined'&&CARNE_DATA&&CARNE_DATA.porCorte)?CARNE_DATA.porCorte[a]:null;
+  return (g&&g.piezas)||[];
+}
+function _edPzEsMia(ed,p){return p.estado==='Asignada'&&String(p.pedido||'').trim()===_edRef(ed);}
+/* Las piezas con las que el pedido QUEDA si se guarda ahora. */
+function _edPzMias(ed,a){
+  return _edPzDe(a).filter(function(p){
+    return (_edPzEsMia(ed,p)&&!ed.pzSol[p.id])||(p.estado==='Disponible'&&ed.pzAdd[p.id]);
+  });
+}
+/* Las que se pueden tomar: libres, mas las propias que se estan soltando. */
+function _edPzLibres(ed,a){
+  return _edPzDe(a).filter(function(p){
+    return (p.estado==='Disponible'&&!ed.pzAdd[p.id])||(_edPzEsMia(ed,p)&&ed.pzSol[p.id]);
+  });
+}
+/* Mirror de `_carneKgTrasPiezas_` del backend. */
+function _edKgTras(antes,delta,quedan){
+  var q=Math.round(((Number(antes)||0)+(Number(delta)||0))*1000)/1000;
+  if(!(quedan>0)&&q<0.1)q=0;
+  return q>0?q:0;
+}
+/* Recalcula kilos y costo de cada linea de carne desde las piezas elegidas. */
+function _edCarneSync(ed){
+  if(!_edCarneVa(ed))return;
+  var cortes={};
+  ed.lineas.forEach(function(l){if(l.kg)cortes[l.a]=1;});
+  var porId={};
+  Object.keys(ed.pzAdd).concat(Object.keys(ed.pzSol)).forEach(function(id){
+    var p=(typeof _carnePieza==='function')?_carnePieza(id):null;
+    if(p){porId[id]=p;cortes[p.abbr]=1;}
+  });
+  Object.keys(cortes).forEach(function(a){
+    var delta=0;
+    Object.keys(ed.pzAdd).forEach(function(id){if(porId[id]&&porId[id].abbr===a)delta+=porId[id].peso;});
+    Object.keys(ed.pzSol).forEach(function(id){if(porId[id]&&porId[id].abbr===a)delta-=porId[id].peso;});
+    var mias=_edPzMias(ed,a), kgM=0, plata=0, kgC=0;
+    mias.forEach(function(p){kgM+=p.peso;if(p.costo>0){kgC+=p.peso;plata+=p.peso*p.costo;}});
+    var ln=null;
+    ed.lineas.forEach(function(l){if(l.a===a)ln=l;});
+    if(!ln){
+      if(!(delta>0))return;
+      ln={a:a,q:0,qOrig:0,precio:_precioCatalogo(ed.hoja,a),costo:_costoCatalogo(a),kg:true};
+      ed.lineas.push(ln);
+    }
+    var tocado=Math.abs(delta)>0.0005;
+    ln.q=tocado?_edKgTras(ln.qOrig,delta,kgM):ln.qOrig;
+    var lista=_costoCatalogo(a);
+    if(ln.q>0&&kgC>0){
+      ln.costo=(kgC>ln.q+0.0015)?plata/kgC:(plata+Math.max(0,ln.q-kgC)*lista)/ln.q;
+    } else ln.costo=lista;
+  });
+}
+function _edKgTxt(n){return (Math.round((Number(n)||0)*1000)/1000).toFixed(3).replace('.',',');}
+/* El nombre del corte: PN no tiene la carne, sale de la hoja Productos. */
+function _edNom(a){var s=_stockLinea(a);return PN[a]||(s&&s.n)||a;}
+function _edPzChip(uid,p,modo){
+  var dep=(typeof stCarneDepNom==='function')?stCarneDepNom(p.dep):p.dep;
+  var fn=modo==='mia'?'edCarneSoltar':'edCarneTomar';
+  return '<button type="button" class="edc-pz '+modo+'" onclick="'+fn+'(\''+uid+'\',\''+_stJs(p.id)+'\')" aria-label="'
+    +(modo==='mia'?'Sacar del pedido':'Agregar al pedido')+' la pieza de '+_edKgTxt(p.peso)+' kg">'
+    +'<b>'+_edKgTxt(p.peso)+' kg</b>'+(dep?'<span class="edc-dep">'+stEsc(dep)+'</span>':'')
+    +'<span class="edc-x">'+(modo==='mia'?'&times;':'+')+'</span></button>';
+}
+/* Las piezas agrupadas por proveedor: el color nunca va solo, va con el nombre. */
+function _edPzGrupo(uid,pzs,modo){
+  pzs=pzs.slice().sort(function(x,y){
+    var kx=String(x.prov||'')+'|'+(x.costo||0), ky=String(y.prov||'')+'|'+(y.costo||0);
+    return kx<ky?-1:kx>ky?1:x.peso-y.peso;
+  });
+  var h='', ant=null;
+  pzs.forEach(function(p){
+    var k=String(p.prov||'')+'|'+(p.costo||0);
+    if(k!==ant){ant=k;h+='<span class="stcar-pvl">'+_carnePvTag(p.prov,p.costo)+'</span>';}
+    h+=_edPzChip(uid,p,modo);
+  });
+  return h;
+}
+function _edCarneHtml(uid){
+  var ed=window['_ed_'+uid]; if(!ed||!_edCarneVa(ed))return '';
+  var entregado=(ed.es==='Entregado');
+  var lin=ed.lineas.filter(function(l){return l.kg&&(l.q>0||l.qOrig>0);});
+  var cortes=[];
+  if(D&&Array.isArray(D.stock))D.stock.forEach(function(s){if(s&&s.a&&String(s.u||'').toLowerCase()==='kg')cortes.push(s.a);});
+  if(!lin.length&&!cortes.length)return '';
+  var hay=(typeof CARNE_DATA!=='undefined'&&CARNE_DATA&&CARNE_DATA.porCorte);
+  var h='<div class="edc-t">&#x1F969; Carne <span class="edc-est">'
+    +(ed.pzEst==='fallo'?'&#9888;&#65039; no pude actualizar las piezas':(ed.pzEst==='ok'?'':'actualizando piezas&hellip;'))+'</span></div>';
+  lin.forEach(function(l){
+    var mias=hay?_edPzMias(ed,l.a):[], kgM=0;
+    mias.forEach(function(p){kgM+=p.peso;});
+    h+='<div class="edc-ln"><div class="edc-lh"><b>'+stEsc(_edNom(l.a))+'</b><span>'
+      +(l.q>0?_edKgTxt(l.q)+' kg &middot; $'+f$(Math.round(l.q*l.precio)):'<i style="color:var(--r)">se saca al guardar</i>')+'</span></div>';
+    h+='<div class="edc-sub">$'+f$(l.precio)+' el kilo'+(l.q>0&&l.q-kgM>0.05?' &middot; '+_edKgTxt(Math.round((l.q-kgM)*1000)/1000)+' kg sin pieza elegida':'')+'</div>';
+    if(mias.length&&!entregado)h+='<div class="edc-pzs">'+_edPzGrupo(uid,mias,'mia')+'</div>';
+    h+='</div>';
+  });
+  if(entregado){
+    if(lin.length)h+='<div class="edc-nota">El pedido ya se entreg&oacute;: la carne no se cambia desde ac&aacute;.</div>';
+    return lin.length?h:'';
+  }
+  if(!hay){
+    h+='<div class="edc-nota">'+(ed.pzEst==='fallo'?'No pude traer las piezas del freezer. Cerr&aacute; el editor y volv&eacute; a abrirlo.':'Trayendo las piezas del freezer&hellip;')+'</div>';
+    return h;
+  }
+  h+='<div class="edc-add"><div class="edc-addt">+ Agregar carne</div><select class="edc-sel" onchange="edCarneCorte(\''+uid+'\',this.value)"><option value="">Eleg&iacute; el corte&hellip;</option>';
+  cortes.forEach(function(a){
+    var n=_edPzLibres(ed,a).length;
+    h+='<option value="'+a+'"'+(ed.pzCorte===a?' selected':'')+'>'+stEsc(_edNom(a))+' ('+(n?n+(n===1?' pieza':' piezas'):'sin piezas')+')</option>';
+  });
+  h+='</select>';
+  if(ed.pzCorte){
+    var lib=_edPzLibres(ed,ed.pzCorte);
+    if(lib.length)h+='<div class="edc-sub" style="margin-top:8px">Toc&aacute; las piezas que van:</div><div class="edc-pzs">'+_edPzGrupo(uid,lib,'libre')+'</div>';
+    else h+='<div class="edc-nota sin">No hay piezas disponibles de '+stEsc(_edNom(ed.pzCorte))+': no se puede agregar.</div>';
+  }
+  h+='</div>';
+  return h;
+}
+function _edCarnePintar(uid){
+  var ed=window['_ed_'+uid]; if(!ed)return;
+  _edCarneSync(ed);
+  var c=$(uid+'-carne'); if(c)c.innerHTML=_edCarneHtml(uid);
+  recalcularTotalesEditor(uid);
+}
+function edCarneCorte(uid,a){var ed=window['_ed_'+uid]; if(!ed)return; ed.pzCorte=a||''; _edCarnePintar(uid);}
+function edCarneTomar(uid,id){
+  var ed=window['_ed_'+uid]; if(!ed)return;
+  if(ed.pzSol[id])delete ed.pzSol[id]; else ed.pzAdd[id]=true;
+  _edCarnePintar(uid);
+}
+function edCarneSoltar(uid,id){
+  var ed=window['_ed_'+uid]; if(!ed)return;
+  if(ed.pzAdd[id])delete ed.pzAdd[id]; else ed.pzSol[id]=true;
+  _edCarnePintar(uid);
+}
+/* Las piezas se piden al abrir: lo que esta libre cambia con cada pedido que entra. */
+function _edCarneTraer(uid){
+  var ed=window['_ed_'+uid]; if(!ed||!_edCarneVa(ed)||typeof stCarnePedir!=='function')return;
+  ed.pzEst='';
+  stCarnePedir(!!CARNE_DATA).then(function(ok){
+    var e2=window['_ed_'+uid]; if(!e2)return;
+    e2.pzEst=ok?'ok':'fallo';
+    /* Una pieza elegida que ya no esta libre se cae de la seleccion, y se dice. */
+    var fuera=0;
+    Object.keys(e2.pzAdd).forEach(function(id){var p=_carnePieza(id); if(!p||p.estado!=='Disponible'){delete e2.pzAdd[id];fuera++;}});
+    Object.keys(e2.pzSol).forEach(function(id){var p=_carnePieza(id); if(!p||!_edPzEsMia(e2,p))delete e2.pzSol[id];});
+    if(fuera)toast(fuera===1?'Una pieza que elegiste ya no está libre: la saqué':fuera+' piezas que elegiste ya no están libres: las saqué');
+    _edCarnePintar(uid);
+  });
+  _edCarnePintar(uid);
+}
+
 function abrirEditorPedido(hoja, id, row, uidEd){
   var box=$(uidEd); if(!box) return;
   if(!box.classList.contains('hidden')){box.classList.add('hidden');box.innerHTML='';return;}
@@ -17350,6 +17535,24 @@ function abrirEditorPedido(hoja, id, row, uidEd){
     }
   }
   if(!ped){toast('Pedido no encontrado');return;}
+  /* SIN `D.stock` NO SE EDITA (8/10/2026). De ahi salen el precio, el costo y la
+     unidad de cada linea, y en Pedidos puede no haber llegado: el arranque ya no
+     trae el volcado. Abrir igual armaba el editor con todos los precios en $0, y
+     guardar asi escribia el pedido en $0. Se pide y se espera. */
+  if(!(D&&Array.isArray(D.stock)&&D.stock.length)){
+    if(box.dataset.trayendo)return;
+    box.dataset.trayendo='1';
+    box.classList.remove('hidden');
+    box.innerHTML='<div style="font-size:12px;color:var(--bl);padding:6px">Trayendo precios y stock&hellip;</div>';
+    var _fin=function(){
+      delete box.dataset.trayendo;
+      box.classList.add('hidden'); box.innerHTML='';
+      if(D&&Array.isArray(D.stock)&&D.stock.length)abrirEditorPedido(hoja,id,row,uidEd);
+      else toast('No pude traer los precios. Tocá ↻ y probá de nuevo.',5000);
+    };
+    Promise.resolve(typeof loadStockTab==='function'?loadStockTab():false).then(_fin,_fin);
+    return;
+  }
   // Estado del editor: lineas: [{a, q, precio, costo}], receta de descuento, forma de pago, estado
   var ed={hoja:hoja,id:id,row:row,uid:uidEd,lineas:[],receta:_parseRecetaPanel(ped.dd),fp:ped.fp||'',es:ped.es||''};
   /* El 10% de +$100.000 con el que se cargo el pedido (antes del 11/9/2026): el
@@ -17360,11 +17563,13 @@ function abrirEditorPedido(hoja, id, row, uidEd){
   (ped.p||[]).forEach(function(pr){
     // qOrig = cantidad original del pedido. Si ya estaba reservada (origen=Deposito),
     // el stock disponible la descontó, así que el cap real es disponible+qOrig.
-    ed.lineas.push({a:pr.a,q:pr.q,qOrig:pr.q,precio:_precioCatalogo(hoja,pr.a),costo:_costoCatalogo(pr.a)});
+    ed.lineas.push({a:pr.a,q:pr.q,qOrig:pr.q,precio:_precioCatalogo(hoja,pr.a),costo:_costoCatalogo(pr.a),kg:(_edCarneVa(ed)&&_edEsKg(pr.a))});
   });
+  ed.pzAdd={}; ed.pzSol={}; ed.pzCorte=''; ed.pzEst='';
   window['_ed_'+uidEd]=ed;
   box.classList.remove('hidden');
   renderEditor(uidEd);
+  _edCarneTraer(uidEd);
 }
 
 function renderEditor(uidEd){
@@ -17385,6 +17590,7 @@ function renderEditor(uidEd){
   html+='<select onchange="cambiarFPEditor(\''+uidEd+'\',this.value)" style="flex:1;padding:8px 10px;border:1.5px solid var(--cd);border-radius:8px;font-size:13px;background:#fff;font-weight:700;font-family:inherit;-webkit-appearance:none;background-image:url(\'data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%2212%22 height=%2212%22 viewBox=%220 0 12 12%22><path d=%22M2 4l4 4 4-4%22 stroke=%22%237A4A4A%22 stroke-width=%222%22 fill=%22none%22/></svg>\');background-repeat:no-repeat;background-position:right 10px center;padding-right:30px">'+fpOpts+'</select>';
   html+='</div>';
   ed.lineas.forEach(function(l,idx){
+    if(l.kg)return;   // la carne va en su seccion, por pieza
     var sub=l.q*l.precio; totalCalc+=sub;
     var subCo=l.q*(l.costo||0); costoCalc+=subCo;
     var subMargen=sub-subCo;
@@ -17445,6 +17651,7 @@ function renderEditor(uidEd){
     html+='<button onclick="agregarLineaEditor(\''+uidEd+'\')" style="padding:10px 16px;background:var(--o);color:#fff;border:none;border-radius:8px;font-size:18px;font-weight:800;cursor:pointer;line-height:1">+</button>';
     html+='</div></div>';
   }
+  if(_edCarneVa(ed)){ _edCarneSync(ed); html+='<div id="'+uidEd+'-carne" class="edc">'+_edCarneHtml(uidEd)+'</div>'; }
   // ── Descuento (receta) — solo Home/Pilar ──
   if(ed.hoja==='Home'||ed.hoja==='Pilar'){
     var rec=ed.receta||{g:0,c:{},r:0};
@@ -17576,7 +17783,14 @@ function guardarEditor(uid){
   var ed=window['_ed_'+uid]; if(!ed) return;
   var lineas=ed.lineas.filter(function(l){return l.q>0;});
   if(lineas.length===0){toast('Agregá al menos un producto');return;}
-  var resumen=lineas.map(function(l){return l.q+'x '+(PN[l.a]||l.a)+' @ $'+f$(l.precio);}).join('\n');
+  var _pzA=Object.keys(ed.pzAdd||{}), _pzS=Object.keys(ed.pzSol||{});
+  var resumen=lineas.map(function(l){
+    return l.kg?(_edKgTxt(l.q)+' kg '+_edNom(l.a)+' @ $'+f$(l.precio)+'/kg'):(l.q+'x '+(PN[l.a]||l.a)+' @ $'+f$(l.precio));
+  }).join('\n');
+  if(_pzA.length||_pzS.length)resumen+='\n\nCarne: '+(_pzA.length?'+'+_pzA.length+(_pzA.length===1?' pieza':' piezas'):'')
+    +(_pzA.length&&_pzS.length?' · ':'')+(_pzS.length?'−'+_pzS.length+(_pzS.length===1?' pieza que vuelve':' piezas que vuelven')+' al freezer':'');
+  /* La carne viaja SIN costo: lo pone el backend con el de sus piezas. */
+  var _lineasEnvio=lineas.map(function(l){return l.kg?{a:l.a,q:l.q,precio:l.precio}:l;});
   var _aviso=(ed.es==='Entregado')
     ? '⚠️ Estás editando un pedido YA ENTREGADO.\nEl stock se reajusta solo por la diferencia.\n\n'
     : 'Si solo bajaste cantidades, el origen se mantiene.\nSi agregaste productos o aumentaste, el origen se resetea a Pendiente.';
@@ -17591,7 +17805,10 @@ function guardarEditor(uid){
   var _edHoja=ed.hoja, _edId=ed.id;
   var _edLineas=lineas.map(function(l){return {a:l.a,q:l.q};});
   var _edFP=ed.fp||'';
-  fetch(API,{method:'POST',body:JSON.stringify({action:'editarPedido',hoja:ed.hoja,id:ed.id,row:ed.row,lineas:lineas,descuentoReceta:ed.receta||null,descuentoRecetaEditor:true,formaPago:_edFP})})
+  var _edRefPz=_edRef(ed);
+  var _cuerpo={action:'editarPedido',hoja:ed.hoja,id:ed.id,row:ed.row,lineas:_lineasEnvio,descuentoReceta:ed.receta||null,descuentoRecetaEditor:true,formaPago:_edFP};
+  if(_pzA.length||_pzS.length)_cuerpo.piezas={agregar:_pzA,soltar:_pzS};
+  fetch(API,{method:'POST',body:JSON.stringify(_cuerpo)})
     .then(function(r){return r.json();})
     .then(function(r){
       // Cerrar loader apenas responde el POST — no esperamos load() completo (~15s).
@@ -17599,6 +17816,16 @@ function guardarEditor(uid){
       hideLoader(true);
       if(r.ok){
         cancelarEditor(uid);
+        /* Los kilos de la carne son los que calculo el backend desde las piezas. */
+        if(r.kg){
+          _edLineas=_edLineas.filter(function(l){return !(l.a in r.kg);});
+          Object.keys(r.kg).forEach(function(a){if(r.kg[a]>0)_edLineas.push({a:a,q:r.kg[a]});});
+        }
+        if(_pzA.length||_pzS.length){
+          _pzA.forEach(function(id){var p=_carnePieza(id); if(p){p.estado='Asignada';p.pedido=_edRefPz;}});
+          _pzS.forEach(function(id){var p=_carnePieza(id); if(p){p.estado='Disponible';p.pedido='';}});
+          try{stCarnePedir(true);}catch(_ePz){}
+        }
         // Patch local del pedido con lo que devolvió el backend + lo que enviamos
         var _patch={p:_edLineas,fp:_edFP};
         if(typeof r.total==='number') _patch.$=r.total;
