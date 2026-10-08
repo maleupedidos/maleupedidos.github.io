@@ -88,6 +88,10 @@ try {
   build();
   if (!correrTest().verde) { console.log('  El test ya esta ROJO sin bugs. Arreglalo primero.'); process.exit(1); }
   console.log('  ok   en limpio da verde\n');
+  /* Un worktree con autocrlf saca el panel con CRLF: las anclas de varias lineas
+     no matchean y el bug "se escapa" sin haberse probado (8/10/2026). */
+  const NL = original.indexOf('\r\n') >= 0 ? '\r\n' : '\n';
+  BUGS.forEach(function (b) { b.de = b.de.split('\n').join(NL); b.a = b.a.split('\n').join(NL); });
   BUGS.forEach(function (b, i) {
     const n = original.split(b.de).length - 1;
     if (n !== 1) { console.log('  MAL  bug ' + (i + 1) + ': el ancla aparece ' + n + ' veces'); escapados.push(b.n + ' (ancla)'); return; }
