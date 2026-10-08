@@ -56,14 +56,24 @@ const CASOS = [
 
   // ── Lo que se corrigio antes el 21/9 ──
   ['Imprenta/Diseño ya no cae en "otros": folletos',    'Imprenta/Diseño', '100 Folletos Flyer', '', 'variable', 'campanas'],
-  ['Imprenta/Diseño: stickers impresos',                'Imprenta/Diseño', 'Imprenta · 30 planchas de Stickers', '', 'variable', 'campanas'],
+  ['Imprenta/Diseño: folletos siguen en campañas',      'Imprenta/Diseño', 'Imprenta · 200 Folletos', '', 'variable', 'campanas'],
+
+  // ── Los STICKERS son packaging (8/10/2026) ──
+  // Ya se cobran por pedido en COSTO_PACKAGING_PEDIDO ($850 = bolsa + sticker).
+  ['stickers en la NOTA, Imprenta (Egresos 208, jul)',  'Imprenta/Diseño', 'Imprenta', '30 planchas de Stickers', 'variable', 'bolsas'],
+  ['stickers en el CONCEPTO, Marketing (Egresos 90-91)','Marketing', 'Imprenta — Stickers Maleu', '', 'variable', 'bolsas'],
+  ['"Sticker" en singular y otra categoria tambien',    'Otro', 'Sticker logo', '',           'variable', 'bolsas'],
+  ['una muestra de stickers sigue extraordinaria',      'Marketing', 'Muestra de stickers', '', 'extra', 'extra'],
+  ['un proveedor de stickers sigue siendo costo',       'Proveedor', 'Stickers', '',          'cmv', 'proveedor'],
+  ['imanes y folletos (sin sticker) siguen en campañas','Marketing', 'Imprenta', 'Folletos, Sobres, Imanes', 'variable', 'campanas'],
+  ['las bolsas siguen en bolsas',                       'Bolsas', 'Papelera', 'Bolsas y biromes', 'variable', 'bolsas'],
   ['el manual de marca es extraordinario',              'Marketing', 'Diseñadora - Manual de Marca', '', 'extra', 'extra'],
   ['el diseño de una pieza es extraordinario',          'Marketing', 'Diseñadora · Diseño Folletos', '', 'extra', 'extra'],
   ['"Saque $X" es ajuste de caja, no gasto',            'Otro', 'Saque $20 pesos', '',       'fuera', 'ajuste'],
   ['un gasto ficticio para acomodar la caja: fuera',    'Otro', 'Gasto ficticio para acomodar caja', '', 'fuera', 'ajuste'],
 
   // ── Lo que NO se tenia que mover ──
-  ['la IMPRESION de marketing sigue en campañas',       'Marketing', 'Imprenta · Stickers Maleu', '', 'variable', 'campanas'],
+  ['la IMPRESION de marketing sigue en campañas',       'Marketing', 'Imprenta · Volantes Maleu', '', 'variable', 'campanas'],
   ['la pauta sigue en campañas',                        'Marketing', 'Pauta Publicitaria', '', 'variable', 'campanas'],
   ['un proveedor sigue en el costo',                    'Proveedor', 'Carne', '',             'cmv', 'proveedor'],
   ['un vuelto sigue fuera',                             'Cambio cruzado', 'Cambio cruzado', '(Home #901)', 'fuera', 'vuelto'],
@@ -214,6 +224,48 @@ const CASOS = [
     chk('y el renglon «mercadería regalada: pedido 1024» con $53.200', rg && rg.det.indexOf('53.200') >= 0, rg);
     chk('un pedido en $0 que no se entrego no aparece', rg && rg.otro === false, rg);
     chk('la tab y los KPIs dicen lo mismo', rg && rg.kpi === 54200, rg);
+
+    /* ── Los stickers no se cuentan dos veces (8/10/2026) ──
+       Abril: Egresos 90-91 «Pilar Gráfico — Stickers Maleu» $50.000 + $40.000.
+       Ya estan en el packaging imputado por pedido: Campañas no los suma, quedan
+       como memo de compras de packaging, y lo financiero los ve en Packaging. */
+    const st = await evaluar(cli, `(function(){
+      D.pedidos = []; D.ingresos = []; VD = [];
+      D.gastos = [
+        {mes:'Abril', f:'17/4/2026', cat:'Marketing', con:'Pilar Gráfico — Stickers Maleu', not:'', $:50000},
+        {mes:'Abril', f:'17/4/2026', cat:'Marketing', con:'Pilar Gráfico — Stickers Maleu', not:'', $:40000},
+        {mes:'Abril', f:'20/4/2026', cat:'Marketing', con:'Pilar Gráfico', not:'Folletos', $:10000}
+      ];
+      var G = _eerrMesGastos(4, 2026);
+      eerrMes = new Date(2026, 3, 1);
+      var d = document.createElement('div'); rEERR_financiero(d);
+      var t = d.textContent.split(String.fromCharCode(160)).join(' ');
+      var i = t.indexOf('Packaging');
+      return { camp: G.camp, bolsas: G.L.bolsas || 0, pack: i < 0 ? '' : t.slice(i, i + 40) };
+    })()`);
+    chk('abril: Campañas sólo con los folletos ($10.000), sin los $90.000 de stickers', st && st.camp === 10000, st);
+    chk('los stickers quedan como memo de compras de packaging ($90.000)', st && st.bolsas === 90000, st);
+    chk('lo financiero los ve en Packaging ($90k)', st && st.pack.indexOf('$90k') >= 0, st);
+
+    /* ── El respaldo de provisiones = la hoja, y avisa (8/10/2026) ── */
+    const pv = await evaluar(cli, `(function(){
+      D.gastos = []; D.provisiones = [];
+      function suma(mn, cat){ return eerrProvisiones(mn, 2026).filter(function(p){ return p.cat === cat; }).reduce(function(s, p){ return s + Number(p.monto); }, 0); }
+      eerrMes = new Date(2026, 9, 1);
+      var d1 = document.createElement('div'); rEERR_dual(d1);
+      D.provisiones = [{concepto:'Sueldo Tadeo', cat:'sueldo', monto:1, desde:'2026-01', hasta:null}];
+      var d2 = document.createElement('div'); rEERR_dual(d2);
+      D.provisiones = [];
+      return { sueOct: suma(10, 'sueldo'), sueAgo: suma(8, 'sueldo'), monoJul: suma(7, 'impuesto_monotributo'),
+               monoAgo: suma(8, 'impuesto_monotributo'), monoOct: suma(10, 'impuesto_monotributo'),
+               avisoSin: !!d1.querySelector('#eerrProvRespaldoAviso'), avisoCon: !!d2.querySelector('#eerrProvRespaldoAviso') };
+    })()`);
+    chk('respaldo: sueldos de octubre $1.200.000 + $1.200.000', pv && pv.sueOct === 2400000, pv);
+    chk('respaldo: agosto sólo Tadeo $1.200.000', pv && pv.sueAgo === 1200000, pv);
+    chk('respaldo: monotributo $42.386,74 hasta julio y $49.527,20 desde agosto, sin pisarse',
+      pv && pv.monoJul === 42386.74 && pv.monoAgo === 49527.2 && pv.monoOct === 49527.2, pv);
+    chk('sin la hoja, el EERR avisa que usa el respaldo', pv && pv.avisoSin === true, pv);
+    chk('con la hoja, no hay aviso', pv && pv.avisoCon === false, pv);
 
     const err = await evaluar(cli, 'JSON.stringify((window.__err||[]).slice(0,5))');
     chk('sin errores de consola', err === '[]', err);
