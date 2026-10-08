@@ -49,10 +49,18 @@ const DEPOSITOS = { deps: DEPS, productos: [
 const CARNE = { ok: true, ts: 1, deps: DEPS,
   cortes: [{ a: 'CCo', n: 'Carne Corte Uno', dep: 'moresco' }, { a: 'CEn', n: 'Carne Corte Dos', dep: 'moresco' }, { a: 'CLo', n: 'Carne Corte Tres', dep: 'moresco' }],
   porCorte: { CCo: { abbr: 'CCo', nombre: 'Carne Corte Uno', piezas: [
-    { id: 'P-9001', abbr: 'CCo', peso: 1.1, estado: 'Disponible', dep: 'ustariz' },
-    { id: 'P-9002', abbr: 'CCo', peso: 1.891, estado: 'Asignada', dep: 'ustariz', pedido: 'Home #1' },
-    { id: 'P-9003', abbr: 'CCo', peso: 2, estado: 'Disponible', dep: 'ustariz' }] } },
+    { id: 'P-9001', abbr: 'CCo', peso: 1.1, estado: 'Disponible', dep: 'ustariz', prov: 'Proveedor Uno', costo: 19900 },
+    { id: 'P-9002', abbr: 'CCo', peso: 1.891, estado: 'Asignada', dep: 'ustariz', pedido: 'Home #1', prov: 'Frigorífico Proveedor Dos', costo: 16600 },
+    { id: 'P-9003', abbr: 'CCo', peso: 2, estado: 'Disponible', dep: 'ustariz', prov: '', costo: 16600 }] } },
+  /* 8/10/2026: el costo es el de la pieza, y la pieza es de un proveedor. */
+  provs: ['Frigorífico Proveedor Dos', 'Proveedor Uno'],
+  costos: { CCo: { prom: 17771, sinCosto: 0,
+                   disp: [{ prov: '', costo: 16600, n: 1, kg: 2 }, { prov: 'Proveedor Uno', costo: 19900, n: 1, kg: 1.1 }],
+                   compras: [{ prov: 'Frigorífico Proveedor Dos', precio: 16600, fecha: '08/10/2026' }, { prov: 'Proveedor Uno', precio: 19900, fecha: '02/10/2026' }] },
+            CEn: { prom: 0, sinCosto: 0, disp: [], compras: [{ prov: 'Proveedor Uno', precio: 27200, fecha: '02/10/2026' }] },
+            CLo: { prom: 0, sinCosto: 0, disp: [], compras: [] } },
   difer: [] };
+CARNE.cortes[0].precio = 20750; CARNE.cortes[1].precio = 37625; CARNE.cortes[2].precio = 33000;
 const ADMIN = { ts: Date.now(), pedidos: [], canales: [], totales: {}, oc: { lista: [] }, caja: { cuentas: [] }, stock: [],
   stockDeps: DEPS };
 
@@ -151,7 +159,44 @@ const TOAST = `(document.getElementById('toast')||{}).textContent||''`;
       nueva:localStorage.getItem('maleu_carneCola'), vieja:localStorage.getItem('mc_carneCola'), prov:(document.getElementById('stcarProv')||{}).value})`);
     chk('la cola vieja (mc_carneCola) se mudo: siguen las 2 piezas', mud.cola.length === 2 && !!mud.nueva && mud.vieja === null, mud);
     chk('cada pieza de la cola tiene su uid', mud.cola.every(p => /^pz/.test(p.uid || '')), mud.cola);
-    chk('el proveedor viejo tambien se mudo', mud.prov === 'Proveedor viejo', mud.prov);
+    /* 8/10/2026: el proveedor ya NO se hereda de la tanda anterior. */
+    chk('el proveedor de la tanda anterior NO se hereda: no hay ninguno elegido', !mud.prov && (await evaluar(cli, `CARNE_PROV`)) === '', mud.prov);
+
+    // ══ el proveedor es obligatorio y nada viene preseleccionado ══
+    const pv0 = await evaluar(cli, `(function(){ var bs=[].slice.call(document.querySelectorAll('#stCarne .stcar-pvb'));
+      var g=document.getElementById('stcarGuardar');
+      return {botones:bs.map(function(b){return b.textContent.trim();}), on:bs.filter(function(b){return b.classList.contains('on');}).length,
+        guardar:g?g.textContent:'', dis:!!(g&&g.disabled), falta:!!document.querySelector('#stCarne .stcar-dep.falta .stcar-pvs')}; })()`);
+    chk('ofrece los proveedores conocidos y "Otro"', pv0.botones.length === 3 && pv0.botones[1] === 'Proveedor Uno' && /Otro/.test(pv0.botones[2]), pv0.botones);
+    chk('ninguno viene preseleccionado', pv0.on === 0, pv0);
+    chk('con piezas pesadas y sin proveedor, el boton lo pide y esta apagado', /proveedor/.test(pv0.guardar) && pv0.dis === true && pv0.falta === true, pv0);
+    await evaluar(cli, `window.__posts=[]; stCarneDep('ustariz'); stCarneGuardar(); 1`);
+    await pausa(300);
+    const pv1 = await evaluar(cli, `({posts:window.__posts.filter(function(p){return p.action==='piezasRecibir';}).length, t:${TOAST}, cola:CARNE_COLA.length})`);
+    chk('sin proveedor NO sale ningun POST y lo dice', pv1.posts === 0 && /proveedor/.test(pv1.t) && pv1.cola >= 2, pv1);
+    await evaluar(cli, `stCarneDep(''); stCarneProvOtro(); 1`);
+    const pv2 = await evaluar(cli, `({inp:!!document.getElementById('stcarProv'), prov:CARNE_PROV})`);
+    chk('"Otro" abre un campo para escribirlo y sigue sin proveedor hasta que se escribe', pv2.inp === true && pv2.prov === '', pv2);
+    await evaluar(cli, `stCarneProvTxt('Proveedor Nuevo'); 1`);
+    chk('lo escrito queda como proveedor', (await evaluar(cli, `CARNE_PROV`)) === 'Proveedor Nuevo');
+    await evaluar(cli, `CARNE_PROV=''; CARNE_PROV_OTRO=false; renderStCarne(); 1`);
+
+    // ══ cada pieza muestra de quien es, y la vista de costos ══
+    const tags = await evaluar(cli, `(function(){ var ts=[].slice.call(document.querySelectorAll('#stCarne .stcar-row .stcar-pv'));
+      var cx=[].slice.call(document.querySelectorAll('#stCarne .stcar-cx'));
+      var W=document.documentElement.clientWidth;
+      var sale=[].slice.call(document.querySelectorAll('#stCarne .stcar-cx, #stCarne .stcar-cx *, #stCarne .stcar-pv, #stCarne .stcar-pvb')).filter(function(e){var r=e.getBoundingClientRect();return r.width>0&&(r.right>W+1||r.left<-1);}).length;
+      return {tags:ts.map(function(t){return t.textContent.trim();}), sin:document.querySelectorAll('#stCarne .stcar-row .stcar-pv.sin').length,
+        color:ts.map(function(t){return getComputedStyle(t).backgroundColor;}),
+        cx:cx.map(function(c){return c.textContent;}), sale:sale, W:W, medidos:cx.length+ts.length}; })()`);
+    chk('cada grupo de piezas dice el proveedor con su NOMBRE y su costo por kilo', tags.tags.some(t => /Proveedor Uno/.test(t) && /19\.900/.test(t)) && tags.tags.some(t => /Proveedor Dos/.test(t) && /16\.600/.test(t)), tags.tags);
+    chk('"Frigorífico" no se repite en la etiqueta (queda el nombre)', !tags.tags.some(t => /Frigor/.test(t)), tags.tags);
+    chk('una pieza sin proveedor se ve como tal, en rojo', tags.sin === 1 && tags.tags.some(t => /Sin proveedor/.test(t)), tags);
+    chk('dos proveedores, dos colores distintos', new Set(tags.color).size === 3, tags.color);
+    chk('la vista de costos: una tarjeta por corte con datos (2), no la del corte sin nada', tags.cx.length === 2, tags.cx.length);
+    chk('dice el precio de venta, la ultima compra de cada proveedor con su fecha y el margen', /20\.750/.test(tags.cx[0]) && /02\/10\/2026/.test(tags.cx[0]) && /08\/10\/2026/.test(tags.cx[0]) && /4\.150/.test(tags.cx[0]) && /20%/.test(tags.cx[0]) && /850/.test(tags.cx[0]), (tags.cx[0] || '').slice(0, 400));
+    chk('y el promedio de lo disponible', /17\.771/.test(tags.cx[0]), (tags.cx[0] || '').slice(0, 400));
+    chk('nada de lo nuevo se sale de la pantalla (' + tags.medidos + ' medidos, ' + tags.W + 'px)', tags.sale === 0 && tags.medidos >= 5, tags);
 
     const podar = await evaluar(cli, `(function(){ try{ _swrPodar(); }catch(e){} return {cola:localStorage.getItem('maleu_carneCola')}; })()`);
     chk('el podador de copias NO borra la carne pesada', !!podar.cola && JSON.parse(podar.cola).length === 2, podar);
@@ -169,7 +214,7 @@ const TOAST = `(document.getElementById('toast')||{}).textContent||''`;
     chk('y el cursor sigue en el campo', tip.foco === 'stcarPeso', tip);
 
     // agregar y guardar con el POST lento, pesando mientras viaja
-    await evaluar(cli, `window.__demoraGet.carnePiezas=4000; document.getElementById('stcarPeso').value=''; stCarneElegir('CEn'); document.getElementById('stcarPeso').value='0,842'; stCarneAgregar(); stCarneDep('ustariz'); window.__posts=[]; window.__demoraPost=2500; stCarneGuardar(); 1`);
+    await evaluar(cli, `window.__demoraGet.carnePiezas=4000; document.getElementById('stcarPeso').value=''; stCarneElegir('CEn'); document.getElementById('stcarPeso').value='0,842'; stCarneAgregar(); stCarneProv('Proveedor Uno'); stCarneDep('ustariz'); window.__posts=[]; window.__demoraPost=2500; stCarneGuardar(); 1`);
     await pausa(400);
     const viaje = await evaluar(cli, `(function(){ var b=document.getElementById('stcarGuardar');
       document.getElementById('stcarPeso').value='3,5'; stCarneAgregar();
@@ -188,9 +233,10 @@ const TOAST = `(document.getElementById('toast')||{}).textContent||''`;
     chk('lo que se peso MIENTRAS guardaba sigue en la cola', tras.cola.length === 1 && Math.abs(tras.cola[0] - 3.5) < 1e-9, tras.cola);
     chk('lo guardado aparece YA en lo que hay en el freezer', /0,842/.test(tras.freezer) && /1,234/.test(tras.freezer), tras.freezer.slice(-400));
     chk('el aviso cuenta las 3 guardadas', /3 piezas/.test(tras.t), tras.t);
+    chk('el POST lleva el proveedor elegido', viaje.post.proveedor === 'Proveedor Uno', viaje.post.proveedor);
 
     // rechazo del backend: la pieza se queda con su motivo
-    await evaluar(cli, `window.__demoraGet.carnePiezas=120; window.__demoraPost=60; window.__malaAbbr='CLo'; stCarneElegir('CLo'); document.getElementById('stcarPeso').value='1'; stCarneAgregar(); stCarneDep('ustariz'); stCarneGuardar(); 1`);
+    await evaluar(cli, `window.__demoraGet.carnePiezas=120; window.__demoraPost=60; window.__malaAbbr='CLo'; stCarneElegir('CLo'); document.getElementById('stcarPeso').value='1'; stCarneAgregar(); stCarneProv('Proveedor Uno'); stCarneDep('ustariz'); stCarneGuardar(); 1`);
     await esperar(cli, `!CARNE_GUARDANDO`, 5000); await pausa(200);
     const malas = await evaluar(cli, `({cola:CARNE_COLA.map(function(p){return {a:p.abbr,err:p.err};}), txt:document.getElementById('stCarne').textContent})`);
     chk('lo que el backend rechaza se queda en la cola con su motivo', malas.cola.some(p => p.a === 'CLo' && /por kilo/.test(p.err)), malas.cola);
@@ -198,7 +244,7 @@ const TOAST = `(document.getElementById('toast')||{}).textContent||''`;
     chk('lo que si entro salio de la cola (el 3,5 de antes)', !malas.cola.some(p => p.a === 'CEn'), malas.cola);
 
     // corte de red: la cola se queda y el reintento manda los MISMOS uid
-    await evaluar(cli, `window.__malaAbbr=''; window.__modoPost='red'; window.__posts=[]; stCarneDep('ustariz'); stCarneGuardar(); 1`);
+    await evaluar(cli, `window.__malaAbbr=''; window.__modoPost='red'; window.__posts=[]; stCarneProv('Proveedor Uno'); stCarneDep('ustariz'); stCarneGuardar(); 1`);
     await esperar(cli, `!CARNE_GUARDANDO`, 5000); await pausa(200);
     const red1 = await evaluar(cli, `({cola:CARNE_COLA.length, uids:(window.__posts[0]&&window.__posts[0].piezas||[]).map(function(p){return p.uid;}), t:${TOAST}})`);
     chk('con un corte de red lo pesado sigue en la cola', red1.cola === 1, red1);
