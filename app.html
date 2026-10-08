@@ -9066,6 +9066,9 @@ function _ajSello(info){
   s.textContent=info.viejo?('Datos de '+info.hace+' · actualizando…'):('Actualizado '+info.hace);
 }
 /* Despues de GUARDAR: la copia y AJ_DATA son de antes del cambio, se tiran. */
+/* Hasta el 8/10/2026 ajustesData traia el PIN de todos y quedaba guardado en
+   este celular. Si la copia guardada todavia tiene alguno, se tira. */
+(function(){ try{ var k='mc_ajustes', c=localStorage.getItem(k); if(c&&c.indexOf('"pin":')>=0) localStorage.removeItem(k); }catch(e){} })();
 function ajReload(){ AJ_DATA=null; return ajLoad({sinCache:true,forzar:true}); }
 /* El refresco automatico (entrar, volver a la app, el vigia): pide de nuevo
    pero deja lo que se esta viendo, con su sello. Hasta el 6/10/2026 usaba
@@ -9448,7 +9451,7 @@ function ajUserRow(u,isNew){
   var orig=isNew?'':ajEsc(u.usuario);
   return '<div class="aj-row u" data-orig="'+orig+'">'
     +'<div class="aj-f"><label>Usuario</label><input data-k="usuario" value="'+ajEsc(u.usuario)+'" placeholder="ej: santos"></div>'
-    +'<div class="aj-f"><label>PIN</label><input data-k="pin" value="'+ajEsc(u.pin)+'" placeholder="1234"></div>'
+    +'<div class="aj-f"><label>PIN</label><input data-k="pin" value="" inputmode="numeric" maxlength="6" autocomplete="off" placeholder="'+(isNew?'6 números':(u.tienePin?'•••••• · escribí para cambiarlo':'sin PIN · 6 números'))+'"></div>'
     +'<div class="aj-f"><label>Rol</label>'+ajRolSelect(u.rol||'empleado')+'</div>'
     +'<div class="aj-f"><label>Nombre</label><input data-k="nombre" value="'+ajEsc(u.nombre)+'" placeholder="Nombre completo"></div>'
     +'<div class="aj-f"><label>Activo</label><select data-k="activo"><option value="si"'+(u.activo!==false?' selected':'')+'>Sí</option><option value="no"'+(u.activo===false?' selected':'')+'>No</option></select></div>'
@@ -9472,7 +9475,7 @@ function ajUsuariosHTML(){
   h+=soloV.map(function(v){
     return '<div class="aj-row u aj-row-vend">'
       +'<div class="aj-f"><label>Usuario</label><b>'+ajEsc(v.usuario)+'</b></div>'
-      +'<div class="aj-f"><label>PIN</label><b>'+(v.pin?ajEsc(v.pin):'—')+'</b></div>'
+      +'<div class="aj-f"><label>PIN</label><b>'+(v.tienePin?'••••••':'—')+'</b></div>'
       +'<div class="aj-f"><label>Rol</label><b>vendedor</b></div>'
       +'<div class="aj-f"><label>Nombre</label><b>'+ajEsc(v.nombre)+'</b></div>'
       +'<div class="aj-f"><label>Activo</label><b>'+(v.estado==='Activo'?'Sí':'No')+'</b></div>'
@@ -9493,17 +9496,17 @@ var AJ_APP_URL='https://app.maleu.com.ar/app.html';
 function ajAccesoVendHTML(){
   var vs=(AJ_DATA.vendedores||[]).filter(function(v){ return v.usuario; });
   vs.sort(function(a,b){ return (a.estado==='Activo'?0:1)-(b.estado==='Activo'?0:1) || String(a.nombre).localeCompare(String(b.nombre)); });
-  var h='<div class="aj-card"><h3>Vendedores</h3><div class="desc">Con qué entra cada vendedor a su portal. «Copiar acceso» arma el mensaje para mandarle: link de la app, usuario, PIN y el link para recibir avisos por Telegram.</div>';
+  var h='<div class="aj-card"><h3>Vendedores</h3><div class="desc">Con qué entra cada vendedor a su portal. El PIN no se guarda en este celular ni se vuelve a mostrar: para mandarle el acceso tocá «Cambiar PIN» y después «Copiar acceso», que arma el mensaje con el link de la app, el usuario, el PIN nuevo y el link de Telegram.</div>';
   if(!vs.length) h+='<div class="aj-acc-vacio">No hay vendedores cargados.</div>';
   h+=vs.map(function(v,i){
     var activo=v.estado==='Activo';
     return '<div class="aj-acc'+(activo?'':' off')+'">'
       +'<div class="aj-acc-top"><b>'+ajEsc(v.nombre)+'</b>'+(activo?'':'<span class="aj-acc-chip off">Inactivo</span>')
       +(v.tg?'<span class="aj-acc-chip ok">✓ Telegram</span>':'<span class="aj-acc-chip no">Sin Telegram</span>')+'</div>'
-      +'<div class="aj-acc-datos"><span>Usuario <b>'+ajEsc(v.usuario)+'</b></span><span>PIN <b>'+(v.pin?ajEsc(v.pin):'—')+'</b></span></div>'
+      +'<div class="aj-acc-datos"><span>Usuario <b>'+ajEsc(v.usuario)+'</b></span><span>PIN <b>'+(ajPinVisto(v)?ajEsc(ajPinVisto(v)):(v.tienePin?'••••••':'—'))+'</b></span></div>'
       +'<div class="aj-acc-btns">'
       +'<button class="aj-btn ghost" onclick="ajPinNuevo('+i+')">Cambiar PIN</button>'
-      +'<button class="aj-btn" onclick="ajCopiarAcceso('+i+')"'+(v.pin?'':' disabled')+'>Copiar acceso</button>'
+      +'<button class="aj-btn" onclick="ajCopiarAcceso('+i+')"'+(ajPinVisto(v)?'':' disabled title="Tocá «Cambiar PIN» primero: el PIN se ve solo cuando se cambia"')+'>Copiar acceso</button>'
       +'</div></div>';
   }).join('');
   h+='</div>';
@@ -9511,12 +9514,17 @@ function ajAccesoVendHTML(){
   return h;
 }
 var AJ_ACC_LISTA=[];
+/* El PIN ya no viene en ajustesData (8/10/2026). Lo unico que lo trae es la
+   respuesta de «Cambiar PIN», y vive aca, en memoria, hasta que se cierra o
+   recarga la app: nunca en localStorage. */
+var AJ_PIN_VISTO={};
+function ajPinVisto(v){ return (v&&AJ_PIN_VISTO[String(v.usuario||'').trim().toLowerCase()])||''; }
 function ajAccesoTexto(v){
   var nom=String(v.nombre||'').split(' ')[0];
   var t='¡Hola '+nom+'! Este es tu acceso al portal de Maleu:\n\n'
     +'📲 App: '+AJ_APP_URL+'\n'
     +'👤 Usuario: '+v.usuario+'\n'
-    +'🔑 PIN: '+v.pin+'\n';
+    +'🔑 PIN: '+ajPinVisto(v)+'\n';
   if(v.tgLink && !v.tg) t+='\n🔔 Para recibir los avisos de tus pedidos por Telegram, tocá este link y dale «Iniciar»:\n'+v.tgLink+'\n';
   t+='\nTip: abrí el link en el celu y agregalo a la pantalla de inicio para tenerlo como app.';
   return t;
@@ -9532,7 +9540,16 @@ function ajCopiarAcceso(i){
 function ajPinNuevo(i){
   var v=AJ_ACC_LISTA[i]; if(!v) return;
   if(!confirm('¿Le ponemos un PIN nuevo a '+v.nombre+'?\n\nEl PIN de ahora deja de servir para entrar. Si ya está adentro del portal, sigue adentro.')) return;
-  ajPost('vendedorPinNuevo',{usuario:v.usuario},'PIN nuevo para '+String(v.nombre).split(' ')[0]+' — mandale el acceso');
+  var nom=String(v.nombre).split(' ')[0];
+  fetch(API,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({action:'vendedorPinNuevo',usuario:v.usuario})})
+    .then(function(r){return r.json();})
+    .then(function(d){
+      if(!(d&&d.ok&&d.pin)){ toast('Error: '+((d&&d.err)||'?')); return; }
+      AJ_PIN_VISTO[String(v.usuario||'').trim().toLowerCase()]=String(d.pin);
+      toast('PIN nuevo para '+nom+': '+d.pin+' — tocá «Copiar acceso»');
+      ajReload();
+    })
+    .catch(function(e){ toast('Error: '+e.message); });
 }
 function ajAddUser(){
   var w=document.getElementById('ajNewUserWrap');
@@ -9545,7 +9562,10 @@ function ajSaveUser(btn){
     nombre:ajVal(btn,'nombre'), activo:(ajVal(btn,'activo')==='si'), notas:ajVal(btn,'notas') };
   var orig=r.getAttribute('data-orig'); if(orig) body.origUsuario=orig;
   if(!body.usuario){ toast('Falta usuario'); return; }
-  ajPost('usuarioSet',body,'Usuario guardado');
+  body.pin=String(body.pin||'').trim();
+  if(!orig&&!body.pin){ toast('Falta el PIN (6 números)'); return; }
+  if(body.pin&&!/^[0-9]{6}$/.test(body.pin)){ toast('El PIN tiene que ser de 6 números'); return; }
+  ajPost('usuarioSet',body,body.pin?'Usuario guardado · PIN '+body.pin:'Usuario guardado');
 }
 function ajDelUser(btn){
   var u=ajVal(btn,'usuario');
@@ -9650,7 +9670,7 @@ function ajVendRow(v,isNew){
   return '<div class="aj-row v" data-orig="'+orig+'">'
     +'<div class="aj-f"><label>Nombre</label><input data-k="nombre" value="'+ajEsc(v.nombre)+'"></div>'
     +'<div class="aj-f"><label>Usuario</label><input data-k="usuario" value="'+ajEsc(v.usuario)+'"></div>'
-    +'<div class="aj-f"><label>PIN</label><input data-k="pin" value="'+ajEsc(v.pin)+'"></div>'
+    +'<div class="aj-f"><label>PIN</label><input data-k="pin" value="" inputmode="numeric" maxlength="6" autocomplete="off" placeholder="'+(v.tienePin?'•••••• · escribí para cambiarlo':'6 números')+'"></div>'
     +'<div class="aj-f"><label>Comisión %</label><input data-k="comision" value="'+ajEsc(v.comision)+'"></div>'
     +'<div class="aj-f"><label>Estado</label><select data-k="estado"><option'+(v.estado==='Activo'?' selected':'')+'>Activo</option><option'+(v.estado!=='Activo'&&v.estado?' selected':'')+'>Inactivo</option></select></div>'
     +'<div class="aj-actions"><button class="aj-btn sm" onclick="ajSaveVend(this)">Guardar</button></div>'
@@ -9688,6 +9708,9 @@ function ajSaveVend(btn){
     localidad:ajVal(btn,'localidad'), notas:ajVal(btn,'notas') };
   var orig=r.getAttribute('data-orig'); if(orig) body.origUsuario=orig;
   if(!body.usuario||!body.nombre){ toast('Falta nombre o usuario'); return; }
+  body.pin=String(body.pin||'').trim();
+  if(body.pin&&!/^[0-9]{6}$/.test(body.pin)){ toast('El PIN tiene que ser de 6 números'); return; }
+  if(body.pin) AJ_PIN_VISTO[String(body.usuario).trim().toLowerCase()]=body.pin;
   ajPost('vendedorSet',body,'Vendedor guardado');
 }
 
