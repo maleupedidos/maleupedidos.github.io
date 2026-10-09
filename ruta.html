@@ -5415,7 +5415,14 @@ function _cobroComboBanner(pc, combo){
 // Nombre + teléfono: separa a los de la misma familia (mismo tel, distinto
 // nombre) pero junta al mismo cliente aunque los pedidos sean de
 // días distintos. Fallback a lote/sub-barrio si no hay tel.
+/* UNA TARJETA POR CASA (9/10/2026). La clave la manda el backend en `ck`: la
+   casa (barrio + sub barrio + lote) y, sin lote, el telefono normalizado del
+   CRM. Hasta ese dia la clave era el NOMBRE tipeado mas el telefono, y la misma
+   clienta salia en dos tarjetas ("Vicky Fernández" y "Victoria Fernandez", lote
+   72). Lo de abajo queda para Clubes —sin lote ni telefono— y para una copia
+   guardada de antes, que no trae `ck`. */
 function _claveCliente(e){
+  if(e&&e.ck)return String(e.ck);
   var nombre=String(e.c||'').toLowerCase().trim();
   var tel=_telCanon(e.t);
   if(tel.length>=8)return 'n:'+nombre+'|t:'+tel;
@@ -5429,23 +5436,30 @@ function _cobroClienteGrupoHTML(grp){
   var items=grp.items.slice().sort(function(a,b){return (parseFecha(a.fe||a.fePed||'')||0)-(parseFecha(b.fe||b.fePed||'')||0);});
   var total=items.reduce(function(s,p){return s+(Number(p.$)||0);},0);
   var idxsCsv=items.map(function(p){return pendientesCobro.indexOf(p);}).join(',');
-  var c='<div class="cobro-card" style="border:2px solid #F9A825;background:linear-gradient(135deg,#FFFDF7,#FFF3D6)">';
-  c+='<div class="cobro-card-head"><span class="cobro-card-name">👤 '+_rtcEsc(items[0].c)+' <span style="font-size:11px;color:#B8860B;font-weight:800">· '+items.length+' cobros</span></span>';
+  /* El nombre de la tarjeta es el del CRM (`cn`); el que trae cada pedido, si es
+     otro, va chico en su renglon. Se compara sin mayusculas ni acentos. */
+  var titular='';
+  items.forEach(function(p){if(!titular&&p.cn)titular=String(p.cn);});
+  if(!titular)titular=String(items[0].c||'');
+  var _nn=function(x){return String(x||'').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/\s+/g,' ').trim();};
+  var c='<div class="cobro-card" data-casa="'+_rtcEsc(_claveCliente(items[0]))+'" style="border:2px solid #F9A825;background:linear-gradient(135deg,#FFFDF7,#FFF3D6)">';
+  c+='<div class="cobro-card-head"><span class="cobro-card-name">👤 '+_rtcEsc(titular)+' <span style="font-size:11px;color:#B8860B;font-weight:800">· '+items.length+' cobros</span></span>';
   c+='<span class="cobro-card-total">'+formatMoney(total)+'</span></div>';
   c+='<div style="margin:8px 0">';
   items.forEach(function(p){
     var gidx=pendientesCobro.indexOf(p);
     var fecha=(p.de?p.de.slice(0,3)+' ':'')+(p.fe||p.fePed||'');
     c+='<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:7px 2px;border-top:1px solid #F0DCA8">'
-      +'<span style="font-size:12px;color:#5D4037;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">📅 '+_rtcEsc(fecha)+' · '+_rtcEsc(p.h)+' #'+_rtcEsc(p.id)+'</span>'
-      +'<span style="display:flex;align-items:center;gap:8px;flex-shrink:0"><b style="font-size:13px;color:#5D4037">'+formatMoney(p.$)+'</b>'
-      +'<button type="button" class="cobro-btn-cobrado" style="padding:5px 12px;font-size:12px" onclick="abrirCobroPendiente('+gidx+')">Cobrar</button></span>'
+      +'<span style="font-size:12px;color:#5D4037;min-width:0;line-height:1.35"><b>'+_rtcEsc(p.h)+' #'+_rtcEsc(p.id)+'</b> · '+_rtcEsc(fecha)
+        +(_nn(p.c)!==_nn(titular)?'<span class="cobro-otro-nombre" style="display:block;font-size:10.5px;color:#8D6E63;overflow:hidden;text-overflow:ellipsis">a nombre de '+_rtcEsc(p.c)+'</span>':'')+'</span>'
+      +'<span style="display:flex;align-items:center;gap:6px;flex-shrink:0"><b style="font-size:13px;color:#5D4037">'+formatMoney(p.$)+'</b>'
+      +'<button type="button" class="cobro-btn-cobrado" style="padding:5px 12px;font-size:12px" onclick="abrirCobroPendiente('+gidx+')">Cobrar</button>'
+      +'<button type="button" class="cobro-btn-alias" style="padding:5px 8px;font-size:12px;flex:0 0 auto;width:auto" title="Pedir comprobante de este pedido" aria-label="Pedir comprobante del pedido '+_rtcEsc(p.id)+'" onclick="cobroPedirComprobante('+gidx+')">🧾</button></span>'
       +'</div>';
   });
   c+='</div>';
   c+='<div class="cobro-card-actions" style="margin-bottom:8px">'
     +'<button type="button" class="cobro-btn-copiar" onclick="cobroCopiarDetalle(\''+idxsCsv+'\',this)">📋 Copiar el detalle de los '+items.length+'</button>'
-    +'<button type="button" class="cobro-btn-alias" onclick="cobroPedirComprobante('+pendientesCobro.indexOf(items[0])+')">🧾 Pedir comprobante</button>'
     +'</div>';
   c+='<button type="button" class="cobro-btn-cobrado" style="width:100%;background:#F9A825;font-weight:800;letter-spacing:.02em" onclick="abrirCobroComboCobros(\''+idxsCsv+'\')">💰 Cobrar los '+items.length+' juntos · '+formatMoney(total)+'</button>';
   c+='</div>';
@@ -5558,7 +5572,7 @@ function renderCobrosFromServer(){
   var sig=JSON.stringify([cobrosFiltro,_rutVerPeds,
     _rutSinCerrar.map(function(v){return [v.vendedor,v.n,v.total];}),
     pendientesCobro.map(function(pc){
-    return [pc.h,pc.id,pc.r,pc.$,pc.fp,pc.es,pc.sub||0,pc.env||0,pc.desc||0,pc.isVendedor?1:0];
+    return [pc.h,pc.id,pc.r,pc.$,pc.fp,pc.es,pc.sub||0,pc.env||0,pc.desc||0,pc.isVendedor?1:0,pc.ck||'',pc.cn||''];
   })]);
   if(el.__sig===sig&&!el.__pending)return;
   el.__sig=sig;el.__pending=false;
@@ -5601,7 +5615,7 @@ function renderCobrosFromServer(){
     if(canal==='re'){
       lista.forEach(function(pc){h+=_cobroVendedorHTML(pc);});
     } else {
-      // Agrupar por cliente (nombre+tel), sin importar el día.
+      // Agrupar por CASA (`ck`, ver _claveCliente), sin importar el día.
       var porCli={},orden=[];
       lista.forEach(function(pc){
         var ck=_claveCliente(pc);
