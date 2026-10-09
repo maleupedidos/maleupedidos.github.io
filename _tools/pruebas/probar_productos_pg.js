@@ -91,6 +91,11 @@ const EXTRA = `
   }
   var latido=Date.now()-2*60e3;
   if(esc==='vieja')latido=Date.now()-40*60e3;
+  /* EL SELLO DE ESCRITURA (9/10/2026): la ultima vez que ALGUIEN escribio.
+     Por defecto, antes del latido: la copia sirve. */
+  var sello=latido-60e3;
+  if(esc==='escrito')sello=Date.now()-30e3;
+  try{ if(esc==='post')localStorage.setItem('maleu_ult_post',String(Date.now()-20e3)); else localStorage.removeItem('maleu_ult_post'); }catch(e){}
   function resp(txt,ms,st){ return new Promise(function(ok){ setTimeout(function(){
     ok(new Response(txt,{status:st||200,headers:{'Content-Type':'application/json'}})); },ms); }); }
   var o=window.fetch; window.fetch=function(u,x){
@@ -115,6 +120,7 @@ const EXTRA = `
       var c = a==='stockTab' ? {ok:true,ts:Date.now(),stock:STOCK,stockDeps:DEPS,stockCierre:CIERRE}
         : a==='pedidosLight' ? {ts:1,pedidos:[],canales:[],light:true}
         : a==='cajaLight' ? {ts:1,caja:{},saldoBase:{},gastos:[],ingresos:[],movimientos:[],efMano:[],cuentas:[]}
+        : a==='ver' ? (esc==='sinsello' ? {ok:false,error:'stub'} : {ok:true,ver:String(sello)+'-x',t:Date.now(),fotos:{}})
         : a==='ocLight' ? {ok:true,oc:{lista:[]}} : a==='cobrosPendientes' ? {ok:true,cobros:[]}
         : {ok:false,error:'stub'};
       return resp(JSON.stringify(c), a==='stockTab'?400:100);
@@ -186,6 +192,8 @@ const vista = r => ({ k: r.k, filas: r.filas, avisos: r.avisos, dep: r.dep, titu
       { planilla: vista(off), base: vista(on) });
     chk('dice de donde salio y de cuando es', on.sello.length === 1 && /Copia de Supabase/.test(on.sello[0]) && /hace 2 min/.test(on.sello[0]), on.sello);
     chk('el valor del stock dice de cuando es el costo', /costo de la planilla hace 1 hora/.test(on.valorKs), on.valorKs);
+    chk('y cuando termina de preguntar, deja de decir que esta mirando', !/mirando si hubo cambios/.test(on.sello[0] || ''), on.sello);
+    chk('pregunto por el sello de escritura', on.gets.indexOf('ver') >= 0, on.gets);
     chk('sin excepciones', on.errores.length === 0, on.errores);
   }
 
@@ -205,6 +213,10 @@ const vista = r => ({ k: r.k, filas: r.filas, avisos: r.avisos, dep: r.dep, titu
   await vuelve('colgada', /no contestó en 6 s/, 'la base no contesta');
   await vuelve('sincosto', /costo/, 'sin costo de hoy');
   await vuelve('on', /moviste stock/, 'moviste stock despues de la copia', { sucio: true });
+  /* 9/10/2026: lo que escribio OTRO aparato, y este mismo antes de recargar. */
+  await vuelve('escrito', /se escribió algo/, 'otro aparato escribio despues de la copia');
+  await vuelve('sinsello', /no se pudo saber si hubo cambios/, 'no se pudo preguntar si hubo cambios');
+  await vuelve('post', /guardaste algo después de la copia/, 'este aparato guardo algo y se recargo');
 
   /* LA REINYECCION. El bug del 30/9: el reservado de Moresco se le restaba a
      Ustariz. Si `_stDesdePg` armara `pdd` con el reservado TOTAL, la pantalla
