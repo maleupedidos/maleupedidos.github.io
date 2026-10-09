@@ -679,6 +679,10 @@ select.np-input{background:var(--white) url("data:image/svg+xml;utf8,<svg xmlns=
 .np-fecha-btn .fb-num{font-size:17px;font-weight:900;display:block;margin-top:2px}
 .np-fecha-btn.active{background:var(--orange);color:#fff;border-color:var(--orange)}
 .np-fecha-btn.active .fb-dia{color:#fff;opacity:.85}
+.np-fecha-btn.pasada{border-style:dashed}
+.np-fecha-btn.antes{min-width:64px;border-style:dashed;color:var(--muted)}
+.np-fecha-nota{font-size:12.5px;font-weight:700;color:var(--brown);margin:6px 0 2px;line-height:1.35}
+.np-fecha-nota:empty{display:none}
 .np-productos{display:flex;flex-direction:column;gap:6px}
 .np-cat{font-size:11px;font-weight:800;color:var(--orange);text-transform:uppercase;letter-spacing:.08em;margin:8px 2px 2px}
 .np-cat-row{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:8px 2px 2px}
@@ -986,6 +990,7 @@ select.np-input{background:var(--white) url("data:image/svg+xml;utf8,<svg xmlns=
     <!-- Fecha entrega -->
     <div class="np-label">Fecha de entrega</div>
     <div class="np-fechas" id="npFechas"></div>
+    <div class="np-fecha-nota" id="npFechaNota"></div>
 
     <!-- Catalogo -->
     <div class="np-label">Productos</div>
@@ -1462,6 +1467,16 @@ var _RUTA_USER_ID = (function(){
   return '';
 })();
 function _rutaUserId(){return _RUTA_USER_ID;}
+/* El ROL de quien carga (9/10/2026). Lo usa el AUTOPEDIDO para ofrecer un dia
+   de entrega ya pasado solo a un admin. Es comodidad de pantalla: el permiso
+   de verdad lo decide el backend (`_entregaPasada_`). */
+var _RUTA_ROL = (function(){
+  try{
+    var s = JSON.parse(localStorage.getItem('maleu_panel_session') || 'null');
+    if (s && s.rol) return String(s.rol).trim().toLowerCase();
+  }catch(e){}
+  return '';
+})();
 
 var PROD_NAMES = {
   PPM:'Pack Muzza x2', PPJyQ:'Pack J&Q x2', PPCyQ:'Pack C&Q x2',
@@ -1650,7 +1665,7 @@ var NP_PRECIOS={
   PCC:{p:11500,c:6500,pc:8000},PJyM:{p:12000,c:7000,pc:8000},
   TP:{p:12000,c:7000},TJyQ:{p:12000,c:7000},TCa:{p:12000,c:7000},TV:{p:12000,c:7000},
   RC:{p:13000,c:8000},RP:{p:13000,c:8000},
-  CCo:{p:20750,c:16600},CEn:{p:34000,c:30100},CLo:{p:33000,c:26400},CPi:{p:22875,c:18300},CVa:{p:26000,c:22600},CVE:{p:25200,c:20160},CBC:{p:29250,c:23400},COB:{p:30325,c:24260},CMa:{p:22825,c:18260},CAC:{p:27900,c:22320},CAB:{p:27900,c:22320},CPe:{p:25025,c:20020}
+  CCo:{p:20750,c:16600},CEn:{p:34000,c:27200},CLo:{p:33000,c:25900},CPi:{p:22875,c:17900},CVa:{p:26000,c:22600},CVE:{p:25200,c:20160},CBC:{p:29250,c:23400},COB:{p:30325,c:24260},CMa:{p:22825,c:18260},CAC:{p:27900,c:22320},CAB:{p:27900,c:22320},CPe:{p:25025,c:20020}
 };
 
 /* La unidad de arranque, aparte de los precios a proposito: `_tools/precios.js`
@@ -9232,10 +9247,51 @@ function _npCardProd(p,esEncargo){
     + ctrl + (_conPz?npPzHtml(p,_pzs,_sel):'') + '</div>';
 }
 
+/* ── UN DIA QUE YA PASO (9/10/2026) ───────────────────────────────────────
+   Tadeo saco un paquete del freezer el 8/10 a la noche y lo anoto el 9/10: el
+   selector solo ofrecia de hoy en adelante, asi que la venta quedo fechada un
+   dia despues de lo que paso. Un admin puede elegir hasta 7 dias atras, y solo
+   en Home y Pilar (son los que fechan la entrega al nacer el pedido).
+   Un dia pasado es algo que YA se entrego: el estado pasa a Entregado solo y
+   el guardado no deja otra cosa. */
+var NP_DIAS_ATRAS=7, npVerPasados=false;
+function npPuedePasado(){return _RUTA_ROL==='admin'&&(npZona==='Home'||npZona==='Pilar');}
+function npIsoDe(d){return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');}
+function npEsPasada(iso){return !!iso&&String(iso)<npIsoDe(new Date());}
+function npTogglePasados(){
+  npVerPasados=!npVerPasados;
+  if(!npVerPasados&&npEsPasada(npFechaSel))npFechaSel='';
+  npRenderFechas();
+  setTimeout(function(){ npFetchStock(); npRenderCatalogo(); },0);
+}
+function npFechaNota(){
+  var n=document.getElementById('npFechaNota');if(!n)return;
+  n.textContent=npEsPasada(npFechaSel)?('Es un d\u00eda que ya pas\u00f3: se guarda como entregado el '+npDiaTexto()+'.'):'';
+}
+
 function npRenderFechas(){
   var host=document.getElementById('npFechas');
   var validos=NP_DIAS_VALIDOS[npZona]||[0,1,2,3,4,5,6];
   var hoy=new Date(),buttons='',encontradas=0,seleccionado=false;
+  /* Los dias pasados van primero y en orden. No pasan por `validos`: lo que ya
+     se entrego se entrego el dia que fue, sea o no dia de reparto. */
+  var puede=npPuedePasado();
+  if(!puede){npVerPasados=false;}
+  var conserva=puede&&npVerPasados&&npEsPasada(npFechaSel);
+  if(!conserva&&npEsPasada(npFechaSel))npFechaSel='';
+  if(puede){
+    buttons+='<button type="button" class="np-fecha-btn antes'+(npVerPasados?' active':'')+'" id="npFechaAntes" onclick="npTogglePasados()">'
+      +'<span class="fb-dia">'+(npVerPasados?'OCULTAR':'D\u00cdA')+'</span><span class="fb-num">'+(npVerPasados?'\u2715':'antes')+'</span></button>';
+    if(npVerPasados){
+      for(var k=NP_DIAS_ATRAS;k>=1;k--){
+        var dp=new Date(hoy.getFullYear(),hoy.getMonth(),hoy.getDate()-k);
+        var isoP=npIsoDe(dp);
+        buttons+='<button type="button" class="np-fecha-btn pasada'+(npFechaSel===isoP?' active':'')+'" data-iso="'+isoP+'" onclick="npSetFecha(\''+isoP+'\')">'
+          +'<span class="fb-dia">'+NP_DIA_CORTO[dp.getDay()]+'</span><span class="fb-num">'+dp.getDate()+' '+NP_MES_CORTO[dp.getMonth()]+'</span></button>';
+      }
+    }
+  }
+  if(conserva)seleccionado=true;
   for(var i=0;i<14&&encontradas<5;i++){
     var d=new Date(hoy.getFullYear(),hoy.getMonth(),hoy.getDate()+i);
     if(validos.indexOf(d.getDay())<0)continue;
@@ -9249,10 +9305,23 @@ function npRenderFechas(){
     encontradas++;
   }
   host.innerHTML=buttons;
+  /* Con los pasados abiertos, lo que se viene a tocar es AYER (o el pasado ya
+     elegido), y queda a la derecha de siete botones: se trae a la vista. */
+  if(puede&&npVerPasados){
+    var _pas=host.querySelectorAll('.np-fecha-btn.pasada');
+    var _ver=host.querySelector('.np-fecha-btn.pasada.active')||_pas[_pas.length-1];
+    if(_ver)host.scrollLeft=Math.max(0,_ver.offsetLeft-host.offsetLeft-(host.clientWidth-_ver.offsetWidth)/2);
+  }
+  npFechaNota();
 }
 
 function npSetFecha(iso){
   npFechaSel=iso;
+  if(npEsPasada(iso)){
+    var _es=document.getElementById('npEstadoEntrega');
+    if(_es&&_es.value!=='Entregado'){_es.value='Entregado';npUpdateTotal();}
+  }
+  npFechaNota();
   // El tope depende de la fecha de entrega: cambiarla puede pasar de ilimitado a
   // proyectado y al reves, asi que hay que repintar el catalogo.
   setTimeout(function(){ npFetchStock(); npRenderCatalogo(); },0);
@@ -10452,6 +10521,12 @@ function npGuardar(){
   }
   if(Object.keys(npCart).length===0){showToast('Agrega al menos un producto');return}
   if(!npFechaSel){showToast('Elegi una fecha de entrega');return}
+  /* Un dia pasado solo vale para algo que ya se entrego (9/10/2026). */
+  if(npEsPasada(npFechaSel)){
+    if(!npPuedePasado()){showToast('Ese d\u00eda ya pas\u00f3: eleg\u00ed otro');return}
+    if(((document.getElementById('npEstadoEntrega')||{}).value)!=='Entregado'){
+      showToast('Un d\u00eda que ya pas\u00f3 va con Estado: Entregado');return}
+  }
 
   var tipo=npGetTipo();
   // Construir items (para Clubes mapear a ID string que espera Apps Script)
