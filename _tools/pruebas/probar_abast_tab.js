@@ -209,7 +209,8 @@ const VIS = sel => `(function(){var e=document.querySelector(${JSON.stringify(se
     await evaluar(cli, `abaSwitchTab('resumen'); 1`);
     await esperar(cli, `!!document.querySelector('#resumenList .res-prov-card')`, 10000);
     const res = await evaluar(cli, TXT('#resumenList'));
-    chk('la carne dice los kilos con coma y "kg" (3,89 kg)', /3,89 kg/.test(res) && !/3\.89/.test(res), res.slice(0, 500));
+    /* 9/10/2026: en un resumen los kilos van con UN decimal (3,89 -> 3,9). */
+    chk('la carne dice los kilos con coma y "kg", un decimal (3,9 kg)', /3,9 kg/.test(res) && !/3\.9/.test(res) && !/3,89/.test(res), res.slice(0, 500));
     chk('el renglon de arriba no suma kilos con unidades: "Stock hoy: 7 u."', /Stock hoy: 7 u\./.test(res), (res.match(/Stock hoy[^·]*·[^·]*/) || [''])[0]);
     chk('"Voy a tener" cuenta lo pedido para el depósito (13 u.)', /Voy a tener: 13 u\./.test(res), (res.match(/Voy a tener[^A-Z]*/) || [''])[0]);
 
@@ -249,7 +250,8 @@ const VIS = sel => `(function(){var e=document.querySelector(${JSON.stringify(se
     await evaluar(cli, `var s=document.getElementById('npProv'); s.value='Caco'; s.dispatchEvent(new Event('change')); 1`);
     await pausa(300);
     const carne = await evaluar(cli, `({nota:!!document.querySelector('#npProductsList .np-carne-nota'), input:!!document.getElementById('npq_CLo'), btnOculto:document.getElementById('npConfirm').classList.contains('hide'), txt:document.getElementById('npProductsList').textContent.replace(/\\s+/g,' ')})`);
-    chk('la carne no se compra por acá: sin cantidad y lo dice', carne.nota && !carne.input, carne);
+    /* 9/10/2026: lo dice UNA vez arriba (la barra del sugerido o el cartel), no en cada corte. */
+    chk('la carne no se compra por acá: sin cantidad y lo dice', (carne.nota || /RECIBIR CARNE/.test(carne.txt)) && !carne.input && (carne.txt.match(/RECIBIR CARNE/g) || []).length === 1, carne);
     chk('y no hay botón de confirmar para un proveedor de carne', carne.btnOculto, carne);
     chk('la carne dice sus kilos con coma', !/3\.89/.test(carne.txt) && /kg/.test(carne.txt), carne.txt.slice(0, 300));
     // compra que se corta: reintento con EL MISMO id
