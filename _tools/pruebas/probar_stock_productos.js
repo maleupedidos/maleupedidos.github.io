@@ -141,6 +141,11 @@ const LEER = `(function(){
       console.log('  la tabla no pinto (sin esto lo de abajo no mide nada)'); salir(1);
     }
     await pausa(600);
+    /* 9/10/2026: `go('stock')` se llama apenas existe `go`, y el arranque del
+       ERP puede terminar despues y volver a Inicio: la geometria media una
+       pagina escondida (0px) segun cuanto tardaran las librerias de afuera. */
+    await evaluar(cli, `if(!document.getElementById('p-stock').classList.contains('on'))go('stock'); 1`);
+    await pausa(300);
   };
   try {
     await cli.enviar('Page.enable'); await cli.enviar('Runtime.enable');
@@ -320,7 +325,33 @@ const LEER = `(function(){
         && L.cab.join('|').indexOf('Físico|Reservado') > -1, L.cab);
     chk('y el pie no habla de freezers', !/se abre por freezer/.test(L.pie), L.pie);
 
-    const propios = errores.filter(e => /rStock|rStockReparto|_stAjuste|_stTienePd|stSwitchTab/.test(e));
+    /* ── f: CONTAR con el tilde y la cola (9/10/2026) ── */
+    await ir('a');
+    await evaluar(cli, `stSwitchTab('contar'); 1`);
+    if (await esperar(cli, `typeof stContarOk==='function' && !!document.querySelector('#stcR_TV input.stc-in')`, 15000)) {
+      const tv0 = await evaluar(cli, `(function(){ var p=_stProd('TV'); return Number(p.porDep[DEP_SEL]); })()`);
+      await evaluar(cli, `window.__posts=[]; document.querySelector('#stcR_TV .stc-ok').click(); 1`);
+      await esperar(cli, `window.__posts.length===1 && !STC_VIAJA`, 8000);
+      const p1 = await evaluar(cli, `({ p:window.__posts[0], fila:document.getElementById('stcR_TV').className, bt:(document.querySelector('#stcR_TV .stc-ok')||{}).className||'', txt:(document.querySelector('#stcR_TV .stc-ok')||{}).textContent||'', prog:(document.querySelector('#stContar .stc-prog')||{}).textContent||'' })`);
+      chk('el tilde manda el conteo aunque el numero no cambie (antes no mandaba nada)',
+          p1.p && p1.p.action === 'stockContar' && p1.p.abbr === 'TV' && p1.p.cantidad === tv0, p1.p);
+      chk('y la fila queda marcada como contada', /\blisto\b/.test(p1.fila) && /\bok\b/.test(p1.bt) && /contado/.test(p1.txt), p1);
+      chk('el progreso lo cuenta', /^1 de \d+ contados/.test(p1.prog), p1.prog);
+      /* Tres tildes seguidos: viajan DE A UNO, y las tres filas dicen que estan guardando. */
+      const c3 = await evaluar(cli, `(function(){ window.__posts=[]; stContarOk('PPM'); stContarOk('PPJyQ'); stContarOk('SL');
+        return { cola:STC_COLA.length, viaja:STC_VIAJA, posts:window.__posts.length, guardando:document.querySelectorAll('#stContar .stc-ok.cola').length }; })()`);
+      chk('tres tildes seguidos: sale UNO y dos esperan en la cola', c3.cola === 2 && c3.viaja === true && c3.posts === 1, c3);
+      chk('y las tres filas dicen que se estan guardando', c3.guardando === 3, c3);
+      await esperar(cli, `window.__posts.length===3 && !STC_VIAJA && !STC_COLA.length`, 8000);
+      const f3 = await evaluar(cli, `({ posts:window.__posts.map(function(p){return p.abbr;}), ok:document.querySelectorAll('#stContar .stc-ok.ok').length, guardando:document.querySelectorAll('#stContar .stc-ok.cola').length })`);
+      chk('terminan los tres, en el orden en que se tocaron', f3.posts.join(',') === 'PPM,PPJyQ,SL', f3.posts);
+      chk('y quedan cuatro filas contadas, ninguna guardando', f3.ok === 4 && f3.guardando === 0, f3);
+      /* MOVER pinta con lo que ya hay en memoria, sin esperar al servidor. */
+      const mv = await evaluar(cli, `(function(){ stSwitchTab('mover'); return document.querySelectorAll('#stMover .stm-row').length; })()`);
+      chk('al pasar a MOVER la lista esta en el mismo instante (' + mv + ' filas), no en blanco', mv > 0, mv);
+    } else chk('fase f: CONTAR pinta con el tilde', false);
+
+    const propios = errores.filter(e => /rStock|rStockReparto|_stAjuste|_stTienePd|stSwitchTab|stContar|_stc/.test(e));
     chk('ni un error propio de Stock en la consola', propios.length === 0, propios);
   } catch (e) {
     console.log('  EXCEPCION ' + (e && e.stack || e)); mal++;
