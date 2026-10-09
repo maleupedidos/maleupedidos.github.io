@@ -78,7 +78,11 @@ const chipLiq = `[].some.call(document.querySelectorAll('#vRed .rsc-vista .rt-ch
     await cli.enviar('Page.addScriptToEvaluateOnNewDocument', { source: STUB });
     await cli.enviar('Page.navigate', { url: BASE + '/app.html?prueba=1' });
     if (!await esperar(cli, `typeof rRed==='function' && typeof go==='function'`, 40000)) throw new Error('el ERP no cargó');
-    await pausa(600);
+    /* Esperar a que el ERP termine de arrancar: su propio arranque navega a la
+       tab inicial, y si eso pasa DESPUES de ir a Ventas la pantalla se sigue
+       dibujando pero escondida (todo mide 0: 1 de cada 3 corridas a 390 px). */
+    await esperar(cli, `!document.getElementById('boot')`, 15000);
+    await pausa(900);
     await ev(cli, `window.D=window.D||{}; D.pedidos=D.pedidos||[]; D.stock=D.stock||[]; D.ventasExtra=D.ventasExtra||[]; go('ventas'); vSwitchTab('red'); 1`);
     console.log('\n== Ventas > RED > Liquidación · ' + ANCHO + 'px ==');
 
@@ -100,6 +104,8 @@ const chipLiq = `[].some.call(document.querySelectorAll('#vRed .rsc-vista .rt-ch
     chk('Cuatro: comisión y envío partidos, sin marcar aparte y el efectivo a entregar como otra cuenta', /comisión \$3\.700 \+ envío \$3\.000/.test(cards[1]) && /Sin marcar · \$16\.350/.test(cards[1]) && /entregarle a Maleu \$36\.600/.test(cards[1]) && /no se descuenta/.test(cards[1]), cards[1]);
 
     console.log('Pagué');
+    const VISIBLE = `(function(){ if(document.getElementById('vRed').getBoundingClientRect().height<50){ go('ventas'); vSwitchTab('red'); redVista('liq'); } return document.getElementById('vRed').getBoundingClientRect().height>50; })()`;
+    chk('la pantalla está a la vista (no se mide una tab escondida)', await ev(cli, VISIBLE) === true);
     await ev(cli, `document.querySelector('#vRed .rlq-v .rlq-btn.ok').click(); 1`);
     const f0 = await ev(cli, `({chips:document.querySelectorAll('#vRed .rlq-form .lug-chip').length,on:document.querySelectorAll('#vRed .rlq-form .lug-chip.on').length,dis:document.getElementById('rlqConfirmar').disabled})`);
     chk('pregunta la cuenta con las 3 opciones y NINGUNA elegida', f0.chips === 3 && f0.on === 0, f0);
@@ -137,6 +143,7 @@ const chipLiq = `[].some.call(document.querySelectorAll('#vRed .rsc-vista .rt-ch
     chk('y dice quién lo anuló y cuándo', /ANULADO el 16\/10\/2026 10:00 por Uno/.test(await ev(cli, T('#vRed .rlq-pago.an')) || ''));
 
     console.log('Pantalla');
+    chk('la pantalla sigue a la vista', await ev(cli, VISIBLE) === true);
     const d = await ev(cli, `(function(){var vw=document.documentElement.clientWidth,fu=[];[].forEach.call(document.querySelectorAll('#vRed *'),function(e){var r=e.getBoundingClientRect();if(r.width>0&&(r.right>vw+1||r.left<-1))fu.push(e.className||e.tagName);});return {n:document.querySelectorAll('#vRed *').length,fuera:fu.slice(0,5),sx:document.documentElement.scrollWidth-vw};})()`);
     chk('nada se sale de la pantalla (' + d.n + ' elementos mirados)', d.n > 30 && d.fuera.length === 0 && d.sx <= 1, d);
     const bt = await ev(cli, `[].map.call(document.querySelectorAll('#vRed .rlq-btn, #vRed .rsc-vista .rt-chip'),function(b){return Math.round(b.getBoundingClientRect().height);})`);
