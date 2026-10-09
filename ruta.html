@@ -136,11 +136,19 @@ body.embed .tabs{top:0}
    pidio Tadeo; en el celular cae abajo solo, porque 38px de sangria + dos
    columnas no entran en 390px. */
 @media (min-width:720px){
-  .armado-card{display:grid;grid-template-columns:1fr auto;grid-template-areas:"lote lote" "head head" "prods oc" "pie pie";column-gap:12px}
+  .armado-card{display:grid;grid-template-columns:1fr auto;grid-template-areas:"lote lote" "head head" "prods prods" "pie pie";column-gap:12px}
   .armado-card .armado-head{grid-area:head}
   .armado-card .armado-prods{grid-area:prods}
-  .armado-card .armado-oc-tag{grid-area:oc;margin:0;align-self:start;max-width:260px}
 }
+/* Lo que vino por orden de compra va EN LA MISMA LISTA que lo del freezer
+   (9/10/2026): el recuadro azul aparte decia "no sale del freezer" y lo hacia
+   parecer algo que no hay que agarrar, cuando Tadeo ya lo recibio, lo aparto y
+   lo saca junto con el resto. Solo cambia el renglon que dice en que estado esta. */
+.armado-prods .armado-ap-tit{display:block;margin-top:5px;font-size:12px;font-weight:800;color:#1B5E20}
+.armado-prods .armado-ap-tit.no{color:#B45309}
+.armado-prods .armado-ap-tit.nd{color:#0D47A1}
+.armado-prods .armado-ap{font-style:normal;display:inline-block;font-size:10.5px;font-weight:800;padding:1px 7px;border-radius:50px;margin-left:4px;background:#E8F5E9;color:#1B5E20;white-space:nowrap}
+.armado-prods .armado-ap.no{background:#FFF3E0;color:#B45309}
 .armado-retira-tag{display:inline-block;font-size:10px;font-weight:800;background:#7B1FA2;color:#fff;padding:2px 8px;border-radius:50px;margin-left:6px;letter-spacing:.04em;text-transform:uppercase}
 
 /* ── ARMADO VIEW ── */
@@ -2957,16 +2965,60 @@ function _armIr(tipo){
  * `onKeys` es lo que mira el onclick: una key para la card de un cliente, la
  * lista separada por comas para la card agregada de un vendedor de Red.
  */
-function _ocBloque(ocItems, total, onKeys, esMasivo){
-  var lista=_sortProds(ocItems).map(function(p){
-    return _cantTxt(p.q,p.a)+' '+(PROD_NAMES[p.a]||p.a);
-  }).join(' · ');
-  var fn=esMasivo?'toggleArmadoMasivo':'toggleArmado';
-  var esc=function(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');};
-  return '<div class="armado-oc-tag" onclick="'+fn+'(\''+onKeys+'\')">'
-    +'<div class="oc-tit">+ '+total+' del proveedor · no sale del freezer</div>'
-    +'<div class="oc-items">'+esc(lista)+'</div>'
-    +'</div>';
+/* ¿LLEGO lo que este pedido tiene por orden de compra? (9/10/2026)
+ * Son dos estados distintos y el que arma tiene que saber cual es: «apartado en
+ * el deposito» (la orden esta Recibida: ya lo tiene y lo saca con el resto) o
+ * «todavia no llego». Sale de las lineas de orden de compra que el panel ya
+ * tiene (`D.oc.lista`), las mismas con las que Productos > Stock arma «Apartado».
+ * Solo lectura.
+ *
+ * Devuelve {tot,rec} por producto, o NULL si no se sabe (Ruta abierta suelta,
+ * la lista no llego, o el pedido no tiene lineas): no saber no es «no llego». */
+function _rutOcEstado(pedidos){
+  var Dp=null; try{Dp=window.D;}catch(_e){}
+  if(!Dp||!Dp.oc||!Array.isArray(Dp.oc.lista))return null;
+  var k=function(h,n){var s=String(n==null?'':n).trim(),x=Number(s);return String(h||'').trim()+'|'+((s&&!isNaN(x))?String(x):s);};
+  var mios={};
+  (pedidos||[]).forEach(function(e){if(e&&e.id!=null&&String(e.id).trim()!=='-')mios[k(e.h,e.id)]=true;});
+  var out={},hay=false;
+  Dp.oc.lista.forEach(function(l){
+    if(!l||!l.abbr||!mios[k(l.canal,l.pedido)])return;
+    if(l.estado==='Cancelado'||l.estado==='Anulado')return;
+    var q=Number(l.q)||0; if(!(q>0))return;
+    var o=out[l.abbr]||(out[l.abbr]={tot:0,rec:0});
+    o.tot+=q; if(l.estado==='Recibido')o.rec+=q;
+    hay=true;
+  });
+  return hay?out:null;
+}
+/* 'ap' = todo recibido · 'no' = nada recibido · 'parte' · null = no se sabe */
+function _rutOcDe(est,a){
+  var o=est&&est[a];
+  if(!o||!(o.tot>0))return null;
+  if(o.rec>=o.tot)return 'ap';
+  return o.rec>0?'parte':'no';
+}
+/* Los renglones de lo que vino por orden de compra, para meter ADENTRO de la
+ * lista de la bolsa (`.armado-prods`), debajo de lo del freezer. Antes era un
+ * recuadro azul aparte que decia «del proveedor · no sale del freezer». */
+function _ocLineas(ocItems, pedidos){
+  var items=_sortProds(ocItems), est=_rutOcEstado(pedidos);
+  var nAp=0,nNo=0,nOtro=0,u=0,hayKg=false;
+  var lineas=items.map(function(p){
+    var s=_rutOcDe(est,p.a), chip='';
+    if(s==='ap'){nAp++;chip='<em class="armado-ap">apartado</em>';}
+    else if(s==='no'){nNo++;chip='<em class="armado-ap no">todavía no llegó</em>';}
+    else if(s==='parte'){nOtro++;chip='<em class="armado-ap no">llegó '+_cantTxt(est[p.a].rec,p.a)+' de '+_cantTxt(est[p.a].tot,p.a)+'</em>';}
+    else nOtro++;
+    if(_esKg(p.a))hayKg=true; else u+=Number(p.q)||0;
+    return '<span>'+_cantTxt(p.q,p.a)+'</span> '+(PROD_NAMES[p.a]||p.a)+chip;
+  });
+  var cuanto=hayKg?_rtcCuenta(items):String(u), uno=(!hayKg&&u===1);
+  var tit,cls='';
+  if(nAp&&!nNo&&!nOtro)tit='+ '+cuanto+(uno?' apartado':' apartados')+' en el depósito';
+  else if(nNo&&!nAp&&!nOtro){tit='+ '+cuanto+(uno?' que todavía no llegó':' que todavía no llegaron');cls=' no';}
+  else{tit='+ '+cuanto+' por orden de compra';cls=' nd';}
+  return '<b class="armado-ap-tit'+cls+'">'+tit+'</b>'+lineas.join('<br>');
 }
 
 function renderArmado(){
@@ -3138,7 +3190,7 @@ function _renderArmadoCardCombo(cli,pedidos){
   var isRed=pedidos[0].h==='Red';
   var keysList=allKeys.join(',');
   var subtitulo=pedidos.length+' pedidos';
-  var ocTag=(depItems.length>0 && ocTot>0)?_ocBloque(ocItems,ocTot,keysList,true):'';
+  var ocTag=(depItems.length>0 && ocTot>0)?_ocLineas(ocItems,pedidos):'';
   var prodsToShow=depItems.length>0?depItems:pedidos[0].p;
   var cliEsc=String(cli||'').replace(/"/g,'&quot;');
   return '<div class="armado-card'+(allDone?' done':'')+(isRed?' red':'')+'">'
@@ -3149,10 +3201,9 @@ function _renderArmadoCardCombo(cli,pedidos){
     +'<span class="armado-saldo" data-cliente="'+cliEsc+'" style="display:none"></span>'
     +'</span>'
     +'</div>'
-    +'<div class="armado-prods" onclick="toggleArmadoMasivo(\''+keysList+'\')">'+prodText(prodsToShow,true,pedidos.reduce(function(a,p){return a.concat(p.pz||[]);},[]))+'</div>'
+    +'<div class="armado-prods" onclick="toggleArmadoMasivo(\''+keysList+'\')">'+prodText(prodsToShow,true,pedidos.reduce(function(a,p){return a.concat(p.pz||[]);},[]))+ocTag+'</div>'
     +(allDone?_armQuien(armadoDone[allKeys[allKeys.length-1]]):'')
     +_repTagArmado(pedidos)
-    +ocTag
     +'</div>';
 }
 
@@ -3175,7 +3226,7 @@ function _renderArmadoCard(e){
   // Tag "+OC" solo si el pedido es Mixto (parte D + parte OC). Si es Mixto, sí
   // va al Armado: hay que sacar la parte D del freezer y aclarar que el resto
   // viene del proveedor.
-  var ocTag=(depItems.length>0 && ocSum>0)?_ocBloque(ocItems,ocSum,key):'';
+  var ocTag=(depItems.length>0 && ocSum>0)?_ocLineas(ocItems,[e]):'';
   return '<div class="armado-card'+(isDone?' done':'')+(isRed?' red':'')+'">'
     +(loteStr?'<div class="armado-lote">'+loteStr+'</div>':'')
     +cancelBtn
@@ -3185,10 +3236,9 @@ function _renderArmadoCard(e){
     +'<span class="armado-saldo" data-cliente="'+(e.c||'').replace(/"/g,'&quot;')+'" style="display:none"></span>'
     +retiraTag+'</span>'
     +'</div>'
-    +'<div class="armado-prods" onclick="toggleArmado(\''+key+'\')">'+prodText(prodsToShow,true,_pzDe(e))+'</div>'
+    +'<div class="armado-prods" onclick="toggleArmado(\''+key+'\')">'+prodText(prodsToShow,true,_pzDe(e))+ocTag+'</div>'
     +(isDone?_armQuien(isDone):'')
     +_repTagArmado([e])
-    +ocTag
     +'</div>';
 }
 
@@ -3260,6 +3310,24 @@ function _renderArmadoRedAggregate(lista,dayKey){
 /* Render del bloque de barrios+subbarrios+cards de una lista de pedidos.
    Filtra pedidos 100% OC (no van al Armado: no hay nada del freezer). Si toda
    la lista filtra a vacío, devuelve un mensaje claro en lugar de mostrar nada. */
+/* Los pedidos que vienen ENTEROS por orden de compra, uno por renglon, con su
+   estado y lo que llevan (9/10/2026). Antes decia «viene entero del proveedor:
+   no se arma aca», que es falso cuando la orden ya esta recibida: esa mercaderia
+   esta apartada en el deposito y hay que sacarla con el resto. Sigue sin ser una
+   bolsa que se tilda, para no cambiar ninguna cuenta. */
+function _ocEnterosTxt(soloOC){
+  return (soloOC||[]).map(function(e){
+    var n=(e.retira||e.c||'').toString().trim();
+    var items=_itemsOCDe(e); if(!items.length)items=(e.p||[]).slice();
+    var est=_rutOcEstado([e]), a=0, no=0;
+    items.forEach(function(p){var s=_rutOcDe(est,p.a); if(s==='ap')a++; else if(s==='no')no++;});
+    var st=(items.length&&a===items.length)?'ya está apartado en el depósito: sacalo con el resto.'
+          :(items.length&&no===items.length)?'todavía no llegó del proveedor.'
+          :'viene por orden de compra.';
+    var lst=_sortProds(items).map(function(p){return _cantTxt(p.q,p.a)+' '+(PROD_NAMES[p.a]||p.a);}).join(' · ');
+    return '<b>'+_rtcEsc(n)+(e.id?' (#'+_rtcEsc(e.id)+')':'')+'</b> '+st+(lst?'<br>'+_rtcEsc(lst):'');
+  }).join('<br>');
+}
 function _renderArmadoBarrios(lista){
   var totalIn=lista.length;
   /* Los que se van por ser 100% OC se guardan para poder NOMBRARLOS despues.
@@ -3277,8 +3345,7 @@ function _renderArmadoBarrios(lista){
   });
   if(lista.length===0 && totalIn>0){
     return '<div class="armado-oc-info"><span class="aoi-ico">\uD83D\uDCE6</span>'
-      +'<div class="aoi-txt"><b>Nada que armar ac\u00e1.</b> '
-      +(totalIn===1?'El pedido viene entero':'Los '+totalIn+' pedidos vienen enteros')+' del proveedor.</div>'
+      +'<div class="aoi-txt"><b>Nada que sacar del freezer.</b><br>'+_ocEnterosTxt(soloOC)+'</div>'
       +'<button type="button" class="aoi-btn" onclick="switchTab(\'ruta\')">Ver en RUTA</button></div>';
   }
   var html='';
@@ -3286,15 +3353,8 @@ function _renderArmadoBarrios(lista){
      proveedor: hay que decirlo, porque si no ese pedido no esta en ninguna
      parte de esta pantalla y parece que se perdio. */
   if(soloOC.length){
-    var quien=soloOC.map(function(e){
-      var n=(e.retira||e.c||'').toString().trim();
-      return n+(e.id?' (#'+e.id+')':'');
-    });
-    var prods=0;
-    soloOC.forEach(function(e){(e.p||[]).forEach(function(p){prods+=(p.q||0);});});
     html+='<div class="armado-oc-info"><span class="aoi-ico">\uD83D\uDCE6</span>'
-      +'<div class="aoi-txt"><b>'+quien.join(' \u00b7 ')+'</b> '
-      +(soloOC.length===1?'viene entero':'vienen enteros')+' del proveedor ('+prods+' producto'+(prods===1?'':'s')+'): no se arma'+(soloOC.length>1?'n':'')+' ac\u00e1.</div>'
+      +'<div class="aoi-txt">'+_ocEnterosTxt(soloOC)+'</div>'
       +'<button type="button" class="aoi-btn" onclick="switchTab(\'ruta\')">Ver en RUTA</button></div>';
   }
   var barrios={};
@@ -4958,13 +5018,20 @@ function rutRenderRuta(){
 
   // Lo que se lleva
   h+='<section class="rtc-sec"><div class="rtc-sec-h"><span class="rtc-sec-t">Llevás</span><span class="rtc-sec-n">'+_rtcCuenta(todos)+'</span></div>';
+  /* Lo comprado dice EN QUE ESTADO esta (9/10/2026): apartado en el deposito
+     (orden recibida) o todavia no llego. Si no se sabe, queda como estaba. */
+  var _ocE=its.oc.length?_rutOcEstado(e._combo?e._pedidos:[e]):null, _ocA=0, _ocN=0;
+  its.oc.forEach(function(it){var s=_rutOcDe(_ocE,it.a); if(s==='ap')_ocA++; else if(s==='no')_ocN++;});
+  var _ocT=(its.oc.length&&_ocA===its.oc.length)?'Comprado · apartado en el depósito'
+          :(its.oc.length&&_ocN===its.oc.length)?'Comprado · todavía no llegó'
+          :'Comprado al proveedor';
   if(its.dep.length&&its.oc.length){
     h+='<div class="rtc-grp dep">De tu freezer · bolsa armada</div>';
     its.dep.forEach(function(it){h+=_rtcProdFila(it,'',pzE);});
-    h+='<div class="rtc-grp oc">Comprado al proveedor</div>';
+    h+='<div class="rtc-grp oc">'+_ocT+'</div>';
     its.oc.forEach(function(it){h+=_rtcProdFila(it,'',pzE);});
   }else{
-    h+='<div class="rtc-grp '+(its.oc.length?'oc':'dep')+'">'+(its.oc.length?'Comprado al proveedor':'De tu freezer · bolsa armada')+'</div>';
+    h+='<div class="rtc-grp '+(its.oc.length?'oc':'dep')+'">'+(its.oc.length?_ocT:'De tu freezer · bolsa armada')+'</div>';
     _sortProds(todos).forEach(function(it){h+=_rtcProdFila(it,'',pzE);});
   }
   h+='</section>';
