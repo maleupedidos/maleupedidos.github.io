@@ -262,7 +262,9 @@ const LEER = `(function(){
       await evaluar(cli, `stSwitchTab('productos'); 1`);
       await pausa(600);
       L = await evaluar(cli, LEER);
-      chk('al volver, dice que esta trayendo el stock nuevo', L.avisos.some(a => /trayendo el stock nuevo/.test(a)), L.avisos);
+      chk('al volver, dice que lo contado ya esta y que confirma con la planilla', L.avisos.some(a => /ya está en la tabla/.test(a) && /Confirmando/.test(a)), L.avisos);
+      /* 9/10/2026: el numero se ve ANTES de que llegue la foto nueva. */
+      chk('y la tabla YA muestra lo contado (4) mientras la foto viaja', fila('Sorrentinos Langostinos').celdas[4] === '4', fila('Sorrentinos Langostinos').celdas);
       chk('y lo pide UNA vez', L.nAdmin === n0 + 1, { antes: n0, ahora: L.nAdmin });
       await esperar(cli, `window.__nAdmin===${n0 + 1} && !document.querySelector('#sKpi .st-aviso')`, 15000);
       await pausa(300);

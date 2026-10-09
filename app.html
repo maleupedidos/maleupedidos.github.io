@@ -13254,7 +13254,7 @@ function _leerVersion(app){
    "El HTML no sabe que version es" dejo de ser cierto: el build le escribe
    adentro el CACHE_NAME de sw-panel.js, el mismo que deploy.sh obliga a subir en
    cada cambio. Si lo publicado dice otra cosa, esta pagina es vieja. Punto. */
-var _APP_CN_PAGINA='maleu-panel-v563';
+var _APP_CN_PAGINA='maleu-panel-v564';
 
 /* Devuelve [{k,v}] si lo publicado no es lo que esta pagina corre. */
 function _chequearVersiones(){
@@ -24027,6 +24027,7 @@ function stContarBlur(abbr,inp){
         // Script viejo, o un stub de prueba— dejaria el stock en NaN.
         aplicar(function(x){ x.porDep[dep]=v; if(typeof d.total==='number'&&isFinite(d.total))x.f=d.total; });
         ST_SUCIO=Date.now();
+        _stAplicarLocal(abbr,{dep:dep,ahora:(typeof d.ahora==='number'&&isFinite(d.ahora))?d.ahora:v,total:d.total});
         toast(pr.n+': '+stFmt(v,pr.u)+' '+(pr.u==='kg'?'kg':'u')+' en '+stDepNombre(dep));
       } else {
         delete DEP_CONTADOS[abbr+'|'+dep];
@@ -24729,6 +24730,42 @@ var DEP_DESDE='', DEP_HACIA='';
 var STM_SEL={};     // abbr -> {idPieza:true}
 var STM_VIAJA={};   // abbr -> true mientras el POST esta en camino
 
+/* LO QUE SE ACABA DE GUARDAR SE VE YA EN LA TABLA. (9/10/2026)
+
+   CONTAR y MOVER actualizaban lo suyo (`DEP_DATA`), pero la tabla de PRODUCTOS
+   vive de `D.stock`: al volver mostraba el numero de antes, con un cartel de
+   "trayendo el stock nuevo", los 2-5 s que tarda `stockTab`. El backend ya
+   contesto cuanto quedo: se escribe aca y la foto que llega despues confirma.
+   `c` = {dep, ahora, total} para un conteo, o {desde, hacia, ahoraDesde,
+   ahoraHacia} para un traspaso. Lo reservado no cambia con ninguno de los dos,
+   asi que el disponible se mueve lo mismo que el fisico. */
+function _stAplicarLocal(abbr,c){
+  if(typeof D!=='object'||!D||!Array.isArray(D.stock)||!c)return false;
+  var s=null;
+  for(var i=0;i<D.stock.length;i++)if(D.stock[i]&&D.stock[i].a===abbr){ s=D.stock[i]; break; }
+  if(!s)return false;
+  var r3=function(x){ return Math.round(x*1000)/1000; };
+  var pone=function(dep,ahora){
+    if(!dep||typeof ahora!=='number'||!isFinite(ahora))return 0;
+    if(!s.pd)s.pd={};
+    var dl=r3(ahora-(Number(s.pd[dep])||0));
+    s.pd[dep]=ahora;
+    if(s.pdd&&typeof s.pdd==='object')s.pdd[dep]=r3((Number(s.pdd[dep])||0)+dl);
+    return dl;
+  };
+  var delta=0;
+  if(c.dep)delta=pone(c.dep,c.ahora);
+  else{ pone(c.desde,c.ahoraDesde); pone(c.hacia,c.ahoraHacia); }
+  if(c.dep){
+    var fAntes=Number(s.f)||0;
+    s.f=(typeof c.total==='number'&&isFinite(c.total))?c.total:r3(fAntes+delta);
+    s.d=r3((Number(s.d)||0)+(s.f-fAntes));
+    if(s.co!==undefined&&s.co!==null)s.iv=Math.max(0,s.f)*(Number(s.co)||0);
+  }
+  try{ delete _pintadas.stock; }catch(e){}
+  if(ST_TAB==='productos'&&typeof rStock==='function'){ try{ rStock(); }catch(e){ console.error('rStock',e); } }
+  return true;
+}
 function _stProd(abbr){
   var prods=(DEP_DATA&&DEP_DATA.productos)||[];
   for(var i=0;i<prods.length;i++)if(prods[i].a===abbr)return prods[i];
@@ -24951,6 +24988,8 @@ function stMoverEnviar(abbr){
         delete STM_SEL[abbr];
         var inp2=$('stmIn_'+abbr); if(inp2)inp2.value='';
         if(!d.ya)ST_SUCIO=Date.now();
+        if(!d.ya&&p2&&!(d.porPieza&&(typeof d.ahoraDesde!=='number'||typeof d.ahoraHacia!=='number')))_stAplicarLocal(abbr,{desde:desde,hacia:hacia,
+          ahoraDesde:Number(p2.porDep[desde])||0,ahoraHacia:Number(p2.porDep[hacia])||0});
         toast(d.ya?'Esas piezas ya estaban en '+stDepNombre(hacia):'✓ '+desc+' → '+stDepNombre(hacia));
         renderStMover();
         if(typeof rStockReparto==='function')rStockReparto();
@@ -25138,6 +25177,12 @@ function _stDeLaBase(){
       if(ST_SUCIO&&ST_SUCIO>o.alDia)return no('moviste stock despu\u00e9s de la copia de la base');
       var _ya=Math.max(Number(_stockPedidoEn)||0,Number(_volcadoPedidoEn)||0);
       if(ST_TENGO&&_ya>o.alDia)return no('lo que ya ten\u00e9s es m\u00e1s nuevo que la copia de la base');
+      /* GUARDASTE ALGO DESDE ESTE APARATO DESPUES DE LA COPIA (9/10/2026).
+         `ST_SUCIO` vive en memoria: el iPhone mata la app al cambiar de app, y
+         al reabrirla la tabla leia la copia de antes del conteo. La hora del
+         ultimo POST queda en el aparato (la misma que miran Pedidos y Caja). */
+      var _post=0; try{ _post=Number(localStorage.getItem('maleu_ult_post'))||0; }catch(e){}
+      if(_post>o.alDia)return no('guardaste algo despu\u00e9s de la copia de la base');
       var cos=_stCostos();
       if(!cos)return no('no hay un costo de la planilla de hoy para el valor del stock');
       for(var i=0;i<o.stock.length;i++){
@@ -25152,10 +25197,32 @@ function _stDeLaBase(){
       D.stockTs=o.alDia; D.stockSinReg=o.sinRegistro; D.stockFuente='pg';
       _stockPedidoEn=Math.max(Number(_stockPedidoEn)||0,o.alDia);
       ST_TENGO=true; ST_INFO={viejo:false,t:_pedidoEn};
-      ST_FUENTE={de:'pg',t:o.alDia,costoT:cos.t};
+      var _fu={de:'pg',t:o.alDia,costoT:cos.t,comprobando:(typeof _pedSelloEscritura==='function')};
+      ST_FUENTE=_fu;
       try{ delete _pintadas.stock; }catch(e){}
       if((typeof ST_TAB!=='string'||ST_TAB==='productos')&&typeof rStock==='function'){
         try{ rStock(); }catch(e){ console.error('rStock',e); }
+      }
+      /* ¿ALGUIEN ESCRIBIO DESPUES DE LA COPIA? (9/10/2026)
+         La replica da una vuelta cada 10 min: lo que conto o movio OTRO aparato
+         en ese hueco no esta en la copia, y la tabla lo mostraba como bueno
+         (medido: el latido tenia 11 min). Es la pregunta que ya hacen Pedidos,
+         Caja y el CRM. Se pinta primero y se pregunta despues —la copia tarda
+         0,3 s y la pregunta 2-4—, y mientras tanto el sello lo dice. Si hubo
+         una escritura, o no se pudo saber, se trae la planilla. */
+      if(_fu.comprobando){
+        _pedSelloEscritura().then(function(info){
+          if(ST_FUENTE!==_fu)return;
+          var sello=_selloDe(info,['stockTab']);
+          if(sello&&sello<=o.alDia){
+            _fu.comprobando=false;
+            if(ST_TAB==='productos'&&typeof rStock==='function'){ try{ delete _pintadas.stock; rStock(); }catch(e){} }
+            return;
+          }
+          ST_FUENTE={de:'planilla',porque:sello?('se escribió algo '+_hace(sello)+', después de la copia de la base')
+            :'no se pudo saber si hubo cambios después de la copia'};
+          _stDeLaPlanilla(true);
+        });
       }
       return {usado:true,palanca:true};
     }).catch(function(e){
@@ -25419,7 +25486,7 @@ function rStock(){
       Promise.resolve(loadStockTab(true)).then(_fin,_fin);
     }
     avisos.push(ST_RECARGANDO
-      ? 'Contaste o moviste mercader\u00eda hace un momento: trayendo el stock nuevo\u2026'
+      ? 'Lo que contaste o moviste ya est\u00e1 en la tabla. Confirmando el resto con la planilla\u2026'
       : 'Hubo cambios de stock despu\u00e9s de esta foto y no se pudieron traer. Toc\u00e1 \u21bb.');
   }
 
@@ -25525,7 +25592,8 @@ function rStock(){
      con la palanca en «no» no hay nada que contar. */
   var _fuente='';
   if(ST_FUENTE&&ST_FUENTE.de==='pg'){
-    _fuente='<div class="st-sello">Copia de Supabase · igual a la planilla '+_hace(ST_FUENTE.t)+'</div>';
+    _fuente='<div class="st-sello">Copia de Supabase · igual a la planilla '+_hace(ST_FUENTE.t)
+      +(ST_FUENTE.comprobando?' · mirando si hubo cambios después…':'')+'</div>';
   }else if(ST_FUENTE&&ST_FUENTE.de==='planilla'){
     _fuente='<div class="st-sello">De la planilla'+(_stTs?' · '+_hace(_stTs):'')
       +(ST_FUENTE.porque?' · no se usó Supabase: '+stEsc(ST_FUENTE.porque):'')+'</div>';
