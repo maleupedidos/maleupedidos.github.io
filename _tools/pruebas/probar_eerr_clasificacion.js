@@ -161,12 +161,13 @@ const CASOS = [
        Servicios y el resto a Software: los planes quedaban partidos en dos. */
     const fin = await evaluar(cli, `(function(){
       var div = document.createElement('div'); rEERR_financiero(div);
-      var t = div.textContent.split(String.fromCharCode(160)).join(' ');
+      /* Solo la tabla del mes: el puente de abajo tambien nombra los planes (8/10/2026). */
+      var t = div.querySelector('#eerrMesTbl').textContent.split(String.fromCharCode(160)).join(' ');
       function tras(lbl){ var i = t.indexOf(lbl); return i < 0 ? '' : t.slice(i + lbl.length, i + lbl.length + 30); }
       return { planes: tras('Planes mensuales'), otras: tras('Otras herramientas') };
     })()`);
-    chk('lo financiero junta los planes: $180k', fin && fin.planes.indexOf('$180k') >= 0, fin);
-    chk('y el pago anual aparte, ENTERO el dia que salio: $48k', fin && fin.otras.indexOf('$48k') >= 0, fin);
+    chk('lo financiero junta los planes: $180.000', fin && fin.planes.indexOf('-$180.000') >= 0, fin);
+    chk('y el pago anual aparte, ENTERO el dia que salio: $48.000', fin && fin.otras.indexOf('-$48.000') >= 0, fin);
 
     /* ── Pagos anuales (6/10/2026) ──
        "Microsoft · Anual" $49.040 pagado el 21/07/2026: el economico lo reparte
@@ -201,7 +202,7 @@ const CASOS = [
     chk('junio 2027: la ultima cuota; julio 2027: ninguna cuota', an && an.jun27 === 4086.67 && an.jul27 === 0, an);
     chk('las 12 cuotas suman lo pagado, ni un peso mas', an && an.cuotas === 49040, an);
     chk('el EERR economico de julio dibuja la cuota y dice que es la 1 de 12', an && an.dual.indexOf('-$5.087') >= 0 && an.cuotaTxt, an);
-    chk('el financiero de julio lo ve entero ($50k con el de $1.000)', an && an.finJul.indexOf('$50k') >= 0, an);
+    chk('el financiero de julio lo ve entero ($50.040 con el de $1.000)', an && an.finJul.indexOf('-$50.040') >= 0, an);
     chk('el puente de julio resta lo pagado por adelantado ($44.953)', an && an.puenteJul.indexOf('44.953') >= 0, an);
     chk('el puente de octubre suma la cuota de julio ($4.087)', an && an.puenteOct.indexOf('4.087') >= 0, an);
 
@@ -247,7 +248,7 @@ const CASOS = [
     })()`);
     chk('abril: Campañas sólo con los folletos ($10.000), sin los $90.000 de stickers', st && st.camp === 10000, st);
     chk('los stickers quedan como memo de compras de packaging ($90.000)', st && st.bolsas === 90000, st);
-    chk('lo financiero los ve en Packaging ($90k)', st && st.pack.indexOf('$90k') >= 0, st);
+    chk('lo financiero los ve en Packaging ($90.000)', st && st.pack.indexOf('-$90.000') >= 0, st);
 
     /* ── El respaldo de provisiones = la hoja, y avisa (8/10/2026) ── */
     const pv = await evaluar(cli, `(function(){

@@ -175,8 +175,8 @@ const FILA = `function(pref){var rs=[].slice.call(document.querySelectorAll('#ee
     chk('julio: sin adelanto (pago sueldo atrasado)', !!F1 && F1.adel === false, F1);
     await pint(9, 'financiero');   /* el Estado de Caja es del mes de hoy (reloj en octubre) */
     const F2 = await ev(cli, `(function(){var b=document.getElementById('eerrBody').textContent;var c=document.querySelector('.eerr-sueldo-cuenta');
-      return {fijo:/Sueldo fijo\\s*\\$1\\.200\\.000/.test(b),quinc:/\\$600\\.000 día 5/.test(b),cuenta:c?c.innerText:''};})()`);
-    chk('Estado de Caja del mes en curso: sueldo fijo 1.200.000 y quincenal 600.000', !!F2 && F2.fijo && F2.quinc, F2);
+      return {fijo:/Sueldo fijo\\s*\\$1\\.200\\.000/.test(b),quinc:/se paga del 1 al 5 del mes siguiente/.test(b)&&!/día 5|quincenal/.test(b),cuenta:c?c.innerText:''};})()`);
+    chk('Sueldos del mes en curso: fijo 1.200.000, se paga del 1 al 5 del mes siguiente, sin programa quincenal', !!F2 && F2.fijo && F2.quinc, F2);
     chk('y la cuenta: Maleu te debe 1.800.000', !!F2 && /Maleu te debe \$1\.800\.000/.test(F2.cuenta), F2 && F2.cuenta);
     await ev(cli, `D.gastos=D.gastos.concat([{f:'10/09/2026',fFull:'10/09/2026 10:00',ts:1,mes:'Septiembre',cat:'Sueldo',con:'Tadeo Ustariz',$:3000000,not:''}]);`);
     await pint(8, 'financiero');
@@ -204,8 +204,8 @@ const FILA = `function(pref){var rs=[].slice.call(document.querySelectorAll('#ee
       && /Tadeo — cuenta del sueldo desde marzo 2026.*Maleu le debe \$2\.100\.000/.test(E3.mes) && /Lucas — cuenta del sueldo desde septiembre 2026.*Maleu le debe \$1\.000\.000/.test(E3.mes)
       && /\$100\.000 girados como sueldo no dicen de quién son/.test(E3.mes), E3 && E3.mes);
     await pint(9, 'financiero');   /* el Estado de Caja es del mes de hoy (reloj en octubre) */
-    const F4 = await ev(cli, `(function(){var b=document.getElementById('eerrBody').textContent;return {girados:/Sueldos girados/.test(b),fijos:/Sueldos fijos\\s*\\$2\\.500\\.000/.test(b),quinc:/\\$1\\.250\\.000 día 5/.test(b)};})()`);
-    chk('financiero con dos: "Sueldos girados", Estado de Caja con 2.500.000 y quincenal 1.250.000', !!F4 && F4.girados && F4.fijos && F4.quinc, F4);
+    const F4 = await ev(cli, `(function(){var b=document.getElementById('eerrBody').textContent;return {girados:/Sueldos girados/.test(b),fijos:/Sueldos fijos\\s*\\$2\\.500\\.000/.test(b),quinc:/se paga del 1 al 5 del mes siguiente/.test(b)&&!/día 5|quincenal/.test(b)};})()`);
+    chk('financiero con dos: "Sueldos girados", sueldos fijos 2.500.000, sin programa quincenal', !!F4 && F4.girados && F4.fijos && F4.quinc, F4);
 
     console.log('\n-- el corte del 21/9/2026: hasta agosto quedo saldada --');
     await ev(cli, `SUELDO_CUENTA_DESDE=${JSON.stringify(CORTE)}`);

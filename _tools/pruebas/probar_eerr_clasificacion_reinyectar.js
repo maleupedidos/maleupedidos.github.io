@@ -19,7 +19,7 @@ const BUGS = [
   /* El EERR que ve Tadeo no conoce el renglon nuevo: los planes se caen del
      dibujo aunque los KPIs esten bien. */
   { n: 'el EERR no suma los planes en su renglon',
-    de: "case 'planes': f_planes+=m;", a: "case 'planes_': f_planes+=m;",
+    de: "R.fijos={planes:v('planes'),", a: "R.fijos={planes:v('planes_'),",
     espera: /Planes mensuales" con Claude/ },
 
   /* Los KPIs (Inicio, la copia de Lucas) dejan los planes afuera de los fijos. */
@@ -44,7 +44,7 @@ const BUGS = [
 
   /* Lo financiero vuelve a partir los planes. */
   { n: 'lo financiero no junta los planes',
-    de: "if(_gastoLinea(g).linea==='planes'){pagPlanes+=m;", a: "if(_gastoLinea(g).linea==='planes_'){pagPlanes+=m;",
+    de: "['planes','Planes mensuales',['planes']],", a: "['planes','Planes mensuales',['planes_']],",
     espera: /lo financiero junta los planes/ },
 
   /* Lo cargado en DolarApp (la pauta de Meta) vuelve a los fijos. */
@@ -68,10 +68,9 @@ const BUGS = [
     a: "  if(cat==='proveedor')return T('cmv','proveedor');\n  if(hay(['muestra']))return T('extra','extra');",
     espera: /muestra para probar/ },
 
-  /* Un renglon de Servicios en $0 vuelve a aparecer. */
-  { n: 'Servicios se dibuja aunque este en cero',
-    de: "if(f_servicios>0){html+=leaf(eL('Servicios (luz, agua, internet)'", a: "if(true){html+=leaf(eL('Servicios (luz, agua, internet)'",
-    espera: /Servicios en \$0/ },
+  /* "Servicios en $0" ya no se reinyecta (8/10/2026): en la tabla nueva ningun
+     renglon en cero se dibuja (un solo filtro al armar Gastos fijos), no hay
+     una linea propia de Servicios que romper. */
 ];
 
 const original = fs.readFileSync(FUENTE, 'utf8');
