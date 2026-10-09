@@ -475,6 +475,9 @@
     .va .va-btns button { flex: 1 1 auto; min-height: 44px; border-radius: 10px; border: 1.5px solid #d7ccc8; background: #faf7f3; font-family: inherit;
       font-weight: 800; font-size: .78rem; color: #3e2723; cursor: pointer; padding: 0 .7rem; }
     .va .va-btns button.prim { background: #2E7D32; border-color: #2E7D32; color: #fff; }
+    /* ¿A que cuenta de Maleu entro la transferencia? (9/10/2026) */
+    .va .va-cta { flex: 1 1 100%; display: flex; flex-wrap: wrap; gap: .4rem; }
+    .va .va-cta-t { flex: 1 1 100%; font-size: .82rem; font-weight: 700; color: #4e342e; }
     .va .va-btns button:disabled { opacity: .45; }
     .va .va-mp { font-size: .68rem; color: #999; margin-top: .3rem; }
     .eq-obj .eq-head { display: flex; justify-content: space-between; align-items: baseline; gap: .5rem; flex-wrap: wrap; }
@@ -5026,7 +5029,22 @@ function redAbiertoHTML(p, iv, ip) {
     + '<span class="va-chip ' + (ent ? 'ok' : 'no') + '">' + (ent ? '✓ Entregado' : 'Sin entregar') + '</span>'
     + '<span class="va-chip ' + (cob ? 'ok' : 'no') + '">' + (cob ? '✓ Cobrado' + (p.fp ? ' · ' + redEsc(p.fp) : '') : 'Sin cobrar · ' + ars(p.cobro)) + '</span>'
     + (debe > 0 ? '<span class="va-chip ' + (pag ? 'ok' : 'no') + '">' + (pag ? '✓ Pagado a Maleu' : 'Debe a Maleu ' + ars(debe) + (p.nueva ? ' (efectivo)' : ' (entero, sin comisión)')) + '</span>' : '')
+    + (p.sinCta ? '<span class="va-chip no">Transfirió ' + ars(p.trDir) + ' a Maleu · falta decir a qué cuenta</span>' : '')
     + '</div><div class="va-btns">';
+  /* ¿A que cuenta de Maleu entro? (9/10/2026, RED_COBRO_A_CAJA). Sin ninguna
+     elegida: tocar la cuenta ES la confirmacion. Hasta que alguien la diga, esa
+     plata no suma en la Caja. */
+  if (_vaCta && _vaCta.iv === iv && _vaCta.ip === ip) {
+    const monto = _vaCta.que === 'cuenta' ? p.trDir : p.cobro;
+    h += '<div class="va-cta"><div class="va-cta-t">¿A qué cuenta de Maleu entraron los ' + ars(monto) + '?</div>';
+    ((_vaData && _vaData.cuentas) || []).forEach(function (c) {
+      h += '<button type="button" class="prim va-cta-b" data-c="' + redEsc(c.id) + '" onclick="redAbiertoCuenta(' + iv + ',' + ip + ',this.dataset.c)">' + redEsc(c.nombre) + '</button>';
+    });
+    h += '<button type="button" onclick="redAbiertoCuentaCancelar()">Cancelar</button></div></div>';
+    if (p.marcadoPor) h += '<div class="va-mp">Marcado por ' + redEsc(p.marcadoPor) + '</div>';
+    return h + '</div>';
+  }
+  if (p.sinCta) h += '<button type="button" class="prim" onclick="redAbiertoPedirCuenta(' + iv + ',' + ip + ',\'cuenta\')">¿A qué cuenta entró?</button>';
   if (!ent) h += '<button type="button" class="prim" onclick="redAbiertoMarcar(' + iv + ',' + ip + ',\'entrega\')">Entregado</button>';
   if (!cob) {
     h += '<button type="button" onclick="redAbiertoMarcar(' + iv + ',' + ip + ',\'cobroTr\')">Cobrado · transf. a Maleu</button>'
@@ -5039,9 +5057,45 @@ function redAbiertoHTML(p, iv, ip) {
   if (p.marcadoPor) h += '<div class="va-mp">Marcado por ' + redEsc(p.marcadoPor) + '</div>';
   return h + '</div>';
 }
+var _vaCta = null;
+function redAbiertoPedirCuenta(iv, ip, que) { _vaCta = { iv: iv, ip: ip, que: que }; redAbiertosRepintar(); }
+function redAbiertoCuentaCancelar() { _vaCta = null; redAbiertosRepintar(); }
+function redAbiertosRepintar() {
+  const v = _vaData && _vaData.vendedores; if (!v) return;
+  v.forEach(function (x, iv) { x.pedidos.forEach(function (p, ip) {
+    const card = document.querySelector('#va-box [data-va="' + iv + '-' + ip + '"]');
+    if (card) card.outerHTML = redAbiertoHTML(p, iv, ip);
+  }); });
+}
+/* Tocar una cuenta manda todo junto. `que` = 'cobro': marca cobrado por
+   transferencia Y dice la cuenta; 'cuenta': el pedido ya estaba cobrado (lo marco
+   el vendedor) y solo falta decir donde entro. */
+function redAbiertoCuenta(iv, ip, cuenta) {
+  const v = _vaData && _vaData.vendedores[iv], p = v && v.pedidos[ip], st = _vaCta;
+  if (!p || !st || !cuenta) return;
+  const updates = st.que === 'cuenta' ? { cuentaCobro: cuenta }
+    : { formaPagoCliente: 'Transferencia', cobroCliente: true, montoVisto: p.cobro, cuentaCobro: cuenta };
+  const card = document.querySelector('#va-box [data-va="' + iv + '-' + ip + '"]');
+  if (card) card.querySelectorAll('button').forEach(function (b) { b.disabled = true; });
+  fetch(APPS_SCRIPT_URL, {
+    method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify({ action: 'updatePedidoRed', pedidoId: String(p.n), vendedor: v.nombre, updates: updates })
+  }).then(function (r) { return r.json(); }).then(function (d) {
+    if (d && d.ok) { _vaCta = null; redToast('✓ Entró a la caja'); redAbiertosCargar(); return; }
+    if (card) card.querySelectorAll('button').forEach(function (b) { b.disabled = false; });
+    if (d && d.montoDistinto) { _vaCta = null; redToast('No se marcó: la planilla dice ' + ars(d.montoPlanilla)); redAbiertosCargar(); return; }
+    redToast('No se guardó: ' + _redErrTxt(d));
+  }).catch(function () {
+    if (card) card.querySelectorAll('button').forEach(function (b) { b.disabled = false; });
+    redToast('Sin conexión: no sé si se guardó. Tocá ↻ antes de volver a marcar.');
+  });
+}
 function redAbiertoMarcar(iv, ip, que) {
   const v = _vaData && _vaData.vendedores[iv], p = v && v.pedidos[ip];
   if (!p) return;
+  /* Regla del 5/10 con la palanca prendida: la transferencia a Maleu pregunta a
+     que cuenta entro, en vez del «¿seguro?». */
+  if (que === 'cobroTr' && p.nueva && _vaData.cobroACaja && (_vaData.cuentas || []).length) { redAbiertoPedirCuenta(iv, ip, 'cobro'); return; }
   const quien = String(v.nombre).split(' ')[0];
   let updates, msg;
   if (que === 'entrega') { updates = { entrega: true }; msg = '¿' + quien + ' entregó el pedido #' + p.n + ' de ' + (p.c || '—') + '?'; }
