@@ -12281,25 +12281,38 @@ function _sbOCs(){
   return _sbPermiso(true).then(function(sb){
     if(!sb)return null;
     var cols='channel,source_order_number,customer_name,product_abbr,quantity,supplier,state';
-    return fetch(sb.url+'/rest/v1/purchase_order_line?select='+cols+'&limit=5000',
-      {headers:{apikey:sb.key,Authorization:'Bearer '+sb.token}})
-      .then(function(r){ if(!r.ok)throw new Error('sb '+r.status); return r.json(); })
-      .then(function(filas){
-        if(!Array.isArray(filas))return null;
-        var out=[];
-        for(var i=0;i<filas.length;i++){
-          var o=filas[i]||{};
-          var canal=String(o.channel||'').trim(), pedido=String(o.source_order_number||'').trim();
-          if(!canal||!pedido)continue;
-          out.push({ canal:canal, pedido:pedido,
-                     cliente:String(o.customer_name||'').trim(),
-                     abbr:String(o.product_abbr||'').trim(),
-                     q:Number(o.quantity)||0,
-                     proveedor:String(o.supplier||'').trim(),
-                     estado:String(o.state||'').trim() });
-        }
-        return out;
-      });
+    /* DE A 1000, COMO LAS VENTAS (9/10/2026). Esto pedia `limit=5000` en una sola
+       llamada, y PostgREST corta en 1000 SIN avisar. La tabla paso las 1000
+       lineas el 7/10: el 8/10 a las 19:10 llegaban 1000 de 1058, o sea 580 OCs
+       de 616, y las que faltaban eran las MAS NUEVAS (la mas alta era la
+       OC-1302). Parecia una replica atrasada una hora y la replica estaba al
+       dia: OC-1331 a 1333 habian llegado a la base a los 10 min. El orden por
+       `order_no` es para que dos paginas no repitan ni salteen una fila. */
+    var out=[],paso=1000;
+    var traer=function(off){
+      return fetch(sb.url+'/rest/v1/purchase_order_line?select='+cols
+          +'&order=order_no&limit='+paso+'&offset='+off,
+        {headers:{apikey:sb.key,Authorization:'Bearer '+sb.token}})
+        .then(function(r){ if(!r.ok)throw new Error('sb '+r.status); return r.json(); })
+        .then(function(filas){
+          if(!Array.isArray(filas))throw new Error('sb formato');
+          for(var i=0;i<filas.length;i++){
+            var o=filas[i]||{};
+            var canal=String(o.channel||'').trim(), pedido=String(o.source_order_number||'').trim();
+            if(!canal||!pedido)continue;
+            out.push({ canal:canal, pedido:pedido,
+                       cliente:String(o.customer_name||'').trim(),
+                       abbr:String(o.product_abbr||'').trim(),
+                       q:Number(o.quantity)||0,
+                       proveedor:String(o.supplier||'').trim(),
+                       estado:String(o.state||'').trim() });
+          }
+          /* Tope de 20 paginas, igual que en las ventas. */
+          if(filas.length<paso||off>20000)return out;
+          return traer(off+paso);
+        });
+    };
+    return traer(0);
   }).catch(function(){ return null; });
 }
 

@@ -85,11 +85,45 @@ if (pinta > 0) {
   chk('Google marca que llego (_ocDeGoogle)', /_ocDeGoogle=true/.test(b));
   chk('y el adelanto de Supabase NO repinta si Google ya llego',
     /!_ocDeGoogle/.test(b), {});
-  chk('_ocFrescas se enciende con Google SIEMPRE',
-    /deGoogle\|\|/.test(b.replace(/\s/g, '')), {});
+  /* Desde v558 (8/10/2026) solo la planilla enciende _ocFrescas: la asercion
+     vieja buscaba `deGoogle||` y quedo roja sin que nadie la mirara. */
+  chk('_ocFrescas se enciende SOLO con Google (v558)',
+    /if\(deGoogle\)_ocFrescas=true/.test(b.replace(/\s/g, '')), {});
   chk('   y con Supabase SOLO si la copia es confiable (_sbPuedePisar)',
     /_sbPuedePisar\(\)/.test(b), {});
 }
 
-console.log('\n' + ok + ' ok, ' + mal + ' mal');
-process.exit(mal ? 1 : 0);
+/* 9/10/2026 — LA BASE CORTA EN 1000 FILAS SIN AVISAR. Se CORRE la funcion (no se
+   lee su texto) contra una base simulada que hace lo mismo que PostgREST: como
+   mucho 1000 por llamada, pidas lo que pidas. Con 1058 lineas (las del 8/10) el
+   atajo de una sola llamada traia 1000 y dejaba afuera las mas nuevas. */
+async function correrAtajo() {
+  console.log('\n-- mas de 1000 lineas: se piden de a paginas --');
+  if (!sb) return;
+  const TOTAL = 1058, llamadas = [];
+  const tabla = [];
+  for (let i = 1; i <= TOTAL; i++) {
+    tabla.push({ channel: i % 5 === 0 ? '' : 'Home', source_order_number: i % 5 === 0 ? '' : String(i),
+                 customer_name: 'C' + i, product_abbr: 'PPM', quantity: 1, supplier: 'P', state: 'Pendiente', _n: i });
+  }
+  const esperadas = tabla.filter(f => f.channel && f.source_order_number).length;
+  const fetchSim = url => {
+    llamadas.push(url);
+    const lim = Math.min(1000, Number((/limit=(\d+)/.exec(url) || [])[1]) || 1000);
+    const off = Number((/offset=(\d+)/.exec(url) || [])[1]) || 0;
+    return Promise.resolve({ ok: true, json: () => Promise.resolve(tabla.slice(off, off + lim)) });
+  };
+  const fn = new Function('_sbPermiso', 'fetch', sb + '\nreturn _sbOCs();');
+  const out = await fn(() => Promise.resolve({ url: 'https://x', key: 'k', token: 't' }), fetchSim);
+  chk('trae TODAS las lineas con canal y pedido (' + esperadas + ' de ' + TOTAL + ' filas)',
+    Array.isArray(out) && out.length === esperadas, { llegaron: out && out.length, esperadas, llamadas: llamadas.length });
+  chk('   incluida la ultima, que es la mas nueva',
+    Array.isArray(out) && out.some(o => o.pedido === String(TOTAL - 1)), {});
+  chk('   en 2 llamadas, ordenadas (sin orden, dos paginas pueden repetir o saltear)',
+    llamadas.length === 2 && llamadas.every(u => /order=order_no/.test(u)), llamadas);
+}
+
+correrAtajo().catch(e => { mal++; console.log('  MAL  el atajo revento: ' + e.message); }).then(() => {
+  console.log('\n' + ok + ' ok, ' + mal + ' mal');
+  process.exit(mal ? 1 : 0);
+});
