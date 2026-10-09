@@ -13426,10 +13426,13 @@ function loadRapido(opts){
      O sea: la lista aparece rapido, pero el ERP no dice "le falta la OC"
      hasta estar seguro. Mostrar de menos se ve; avisar de mas se paga. */
   var _ocDeGoogle=false;
-  var _ocPinta=function(lista,deGoogle){
+  var _ocPinta=function(lista,deGoogle,alFreezer){
     if(!Array.isArray(lista))return;
     if(!D)D={};
     D.oc={lista:lista};
+    /* La palanca STOCK_OC_AL_FREEZER viaja con la lista de la planilla (9/10/2026).
+       El adelanto no la trae: ahi no se pone y `_ocAlFreezerModo` usa la ultima. */
+    if(alFreezer)D.oc.alFreezer=alFreezer;
     /* SOLO la planilla habilita afirmar que falta una OC (8/10/2026). El adelanto
        de Supabase lo habilitaba tambien si no habia un cambio local reciente, y
        medido ese dia traia 580 OCs contra 616 de la planilla: le faltaban las
@@ -13442,7 +13445,7 @@ function loadRapido(opts){
   };
   if(_L.ocLight&&_L.ocLight.then){
     _L.ocLight.then(function(d){
-      if(d&&d.oc&&Array.isArray(d.oc.lista)){ _ocDeGoogle=true; _ocPinta(d.oc.lista,true);
+      if(d&&d.oc&&Array.isArray(d.oc.lista)){ _ocDeGoogle=true; _ocPinta(d.oc.lista,true,d.oc.alFreezer);
         /* La tabla de stock muestra lo APARTADO, que sale de las OCs: si estaba
            abierta cuando llegaron, se repinta (9/10/2026). */
         try{ if(typeof rStock==='function'&&typeof ST_TAB!=='undefined'&&ST_TAB==='productos'
@@ -20682,8 +20685,67 @@ function _stCab(largo,corto){
    SIN DEPOSITO: la orden de compra no guarda en que freezer se recibio.
    Devuelve null si falta alguna de las dos listas: no saber no es cero. */
 var ST_AP_ABIERTO={};
+/* LA REGLA NUEVA (9/10/2026, palanca STOCK_OC_AL_FREEZER del backend): lo que
+   llega por orden de compra para un pedido ENTRA al Fisico del freezer donde se
+   guardo y queda Reservado hasta la entrega. Con eso la columna «Apartado» de
+   arriba deja de hacer falta: esas unidades se ven en Reservado, con de quien son.
+
+   `_ocAlFreezerModo()` = 'no' | 'si' | 'salir'. Lo dice el backend junto con las
+   ordenes de compra (`D.oc.alFreezer`); se recuerda la ultima respuesta porque
+   la lista tambien puede venir adelantada de otra fuente, que no lo trae.
+   En 'no' esta pantalla queda exactamente como el 9/10 a la tarde (v573). */
+function _ocAlFreezerModo(){
+  var m='';
+  try{
+    if(D&&D.oc&&D.oc.alFreezer){ m=String(D.oc.alFreezer); localStorage.setItem('maleu_oc_alfreezer',m); }
+    else m=localStorage.getItem('maleu_oc_alfreezer')||'';
+  }catch(e){}
+  return (m==='si'||m==='salir')?m:'no';
+}
+/* ¿La lista de OC dice de cada linea si entro al freezer? Solo la que viene del
+   backend trae la clave `dep` (aunque sea vacia). Sin ella no se puede concluir
+   nada sobre lo apartado: no saber no es cero. */
+function _stOcConDeposito(){
+  if(!D||!D.oc||!Array.isArray(D.oc.lista))return false;
+  for(var i=0;i<D.oc.lista.length;i++){ var l=D.oc.lista[i]; if(l&&!('dep' in l))return false; }
+  return true;
+}
+/* Lo que esta en el Fisico y en el Reservado porque llego por OC para un pedido:
+   { abbr: { q, peds:[{h,n,c,q,dep}] } }. null si no se sabe. */
+function _stReservadoOC(){
+  if(!D||!Array.isArray(D.pedidos)||!_stOcConDeposito())return null;
+  var _k=function(h,n){
+    var s=String(n==null?'':n).trim(), x=Number(s);
+    return String(h||'').trim()+'|'+((s&&!isNaN(x))?String(x):s);
+  };
+  var idx={};
+  D.pedidos.forEach(function(p){ if(p&&p.n&&String(p.n).trim()!=='-')idx[_k(p.h,p.n)]=p; });
+  var out={};
+  D.oc.lista.forEach(function(l){
+    var q=Number(l&&l.ap)||0;
+    if(!(q>0)||!l.abbr)return;
+    var p=idx[_k(l.canal,l.pedido)]||{h:l.canal,n:l.pedido,c:l.cliente||''};
+    var o=out[l.abbr]||(out[l.abbr]={q:0,peds:[]}), ya=null;
+    o.q+=q;
+    for(var i=0;i<o.peds.length;i++)if(o.peds[i].h===p.h&&String(o.peds[i].n)===String(p.n)&&o.peds[i].dep===l.dep)ya=o.peds[i];
+    if(ya)ya.q+=q; else o.peds.push({h:p.h,n:p.n,c:p.c,q:q,dep:l.dep});
+  });
+  return out;
+}
+/** «2 de Catu Goldaracena (Home #1118), en Ustariz · …». */
+function _stResOCTexto(o,u){
+  var varios=Array.isArray(D.stockDeps)&&D.stockDeps.length>1;
+  return o.peds.map(function(x){
+    return stFmt(x.q,u)+(u==='kg'?' kg':'')+' de '+stEsc(x.c)+' ('+stEsc(x.h)+' #'+stEsc(x.n)+')'
+      +(varios&&x.dep?', en '+stEsc(_pedDepNombre(x.dep)):'');
+  }).join(' · ');
+}
 function _stApartado(){
   if(!D||!D.oc||!Array.isArray(D.oc.lista)||!Array.isArray(D.pedidos))return null;
+  /* Con la regla nueva, una linea que entro al freezer ya NO es «apartado fuera
+     del stock». Y si la lista no dice cuales entraron, no se puede saber. */
+  var _nueva=_ocAlFreezerModo()!=='no';
+  if(_nueva&&!_stOcConDeposito())return null;
   var _k=function(h,n){
     var s=String(n==null?'':n).trim(), x=Number(s);
     return String(h||'').trim()+'|'+((s&&!isNaN(x))?String(x):s);
@@ -20694,6 +20756,7 @@ function _stApartado(){
   D.oc.lista.forEach(function(l){
     if(!l||l.estado!=='Recibido'||!l.abbr)return;
     if(String(l.canal||'').indexOf('Dep')===0)return;
+    if(_nueva&&l.dep)return;   // entro al Fisico: se ve en Reservado, no aca
     var p=idx[_k(l.canal,l.pedido)];
     if(!p)return;
     if(p.es==='Entregado'||p.es==='Cancelado')return;
@@ -21075,6 +21138,7 @@ function renderStContar(opts){
     +(enCola?' &middot; guardando '+enCola:'')
     +(porPieza?' &middot; '+porPieza+' se cuentan por pieza':'')+'</div>';
   /* El nombre del OTRO freezer: "6 en el otro" obligaba a acordarse de cual es. */
+  var _resOCCont=(_ocAlFreezerModo()!=='no')?_stReservadoOC():null;
   var _apCont=_stApartado(), _hayApC=false;
   if(_apCont)for(var _ka in _apCont){_hayApC=true;break;}
   if(_hayApC)h+='<div class="stc-ayuda">Hay mercader&iacute;a <b>apartada para pedidos</b> que ya lleg&oacute; y falta entregar: '
@@ -21091,6 +21155,14 @@ function renderStContar(opts){
     /* Lo apartado para pedidos esta en el freezer y el que cuenta lo va a ver:
        sin esto, contaba de mas y el conteo lo metia al Fisico (9/10/2026). No se
        sabe en que freezer esta, asi que se dice en los dos y se aclara. */
+    /* Con la regla nueva lo de los pedidos YA esta en el numero: se cuenta todo. */
+    var _roC=(_resOCCont&&_resOCCont[pr.a])||null;
+    if(_roC&&!(Number(pr.pz)>0)){
+      var _roAca=0;
+      _roC.peds.forEach(function(x){ if(x.dep===DEP_SEL)_roAca+=x.q; });
+      if(_roAca>0)sub+='<span class="stc-ap">Incluye <b>'+stFmt(_roAca,pr.u)+(pr.u==='kg'?' kg':'')+'</b> guardado para pedidos ('
+        +_stResOCTexto({peds:_roC.peds.filter(function(x){return x.dep===DEP_SEL;})},pr.u)+'). Contalo tambi&eacute;n.</span>';
+    }
     var _apC=(_apCont&&_apCont[pr.a])||null;
     if(_apC&&!(Number(pr.pz)>0)){
       var _kgC=(pr.u==='kg'?' kg':'');
@@ -22816,10 +22888,17 @@ function rStock(){
      escrita aca— asi que con un solo deposito la tabla queda como estaba y un
      tercero aparece sin tocar codigo. */
   var _depsCol=(_stTienePd()&&Array.isArray(D.stockDeps)&&D.stockDeps.length>1)?D.stockDeps:[];
-  var gridCols='display:grid;grid-template-columns:var(--st-c1,minmax(180px,1fr)) repeat('
-    +(8+_depsCol.length)+',var(--st-cn,72px));gap:8px;align-items:center';
   /* Lo apartado para pedidos: ver `_stApartado`. null = todavia no se sabe. */
   var _ap=_stApartado(), conAp=0;
+  /* Con la regla nueva la columna «Apartado» se va: lo recibido para un pedido
+     esta en el Fisico y en el Reservado, que se toca para ver de quien es. Solo
+     sigue si quedo algo recibido con la regla de antes y sin entregar. */
+  var _modoOC=_ocAlFreezerModo(), _resOC=(_modoOC!=='no')?_stReservadoOC():null, conResOC=0;
+  var _hayApViejo=false;
+  if(_ap)for(var _kAp in _ap){_hayApViejo=true;break;}
+  var _verAp=(_modoOC==='no')||_hayApViejo;
+  var gridCols='display:grid;grid-template-columns:var(--st-c1,minmax(180px,1fr)) repeat('
+    +((_verAp?8:7)+_depsCol.length)+',var(--st-cn,72px));gap:8px;align-items:center';
   var headRow=
     '<div class="st-cab" style="'+gridCols+';padding:8px 14px;font-size:10px;color:var(--ink3);text-transform:uppercase;letter-spacing:.06em;font-weight:600;border-bottom:1px solid var(--border);margin-bottom:4px">'+
       '<div class="st-fija">Producto</div>'+
@@ -22827,7 +22906,7 @@ function rStock(){
       _stCab('Ajuste','Aj')+_stCab('F\u00edsico','F\u00edsico')+
       _depsCol.map(function(dp){var n=_stDepNom(dp);return _stCab(n,n);}).join('')+
       _stCab('Reservado','Res')+
-      _stCab('Apartado','Apart')+
+      (_verAp?_stCab('Apartado','Apart'):'')+
       '<div class="st-fija-der" style="text-align:center"><span class="st-lg">Disponible</span><span class="st-sm">Disp</span></div>'+
     '</div>';
 
@@ -22858,6 +22937,8 @@ function rStock(){
       if(aj!==0)conAjuste++;
       var _apS=(_ap&&_ap[s.a])||null;
       if(_apS)conAp++;
+      var _roS=(_resOC&&_resOC[s.a])||null;
+      if(_roS)conResOC++;
       var ajTxt=aj===0?'\u00b7':(aj>0?'+':'\u2212')+stFmt(Math.abs(aj),s.u);
       html+='<div class="si" style="'+gridCols+';padding:10px 14px">'+
         '<div class="si-n st-fija" title="'+stEsc(s.n)+'">'+stEsc(s.n)+'</div>'+
@@ -22872,8 +22953,11 @@ function rStock(){
           var q=Number((s.pd||{})[dp.id])||0;
           return '<div class="si-v"'+(q?'':' style="color:var(--ink3)"')+'>'+stFmt(q,s.u)+'</div>';
         }).join('')+
-        '<div class="si-v">'+stFmt(s.r,s.u)+'</div>'+
-        (_apS
+        (_roS
+          ?'<div class="si-v"><button type="button" class="st-ap-btn" onclick="stApVer(\'r_'+_stJs(s.a)+'\')" '
+            +'aria-label="'+stEsc(s.n)+': '+stFmt(s.r,s.u)+' reservado. Ver de quién">'+stFmt(s.r,s.u)+'</button></div>'
+          :'<div class="si-v">'+stFmt(s.r,s.u)+'</div>')+
+        (!_verAp?'':_apS
           ?'<div class="si-v"><button type="button" class="st-ap-btn" onclick="stApVer(\''+_stJs(s.a)+'\')" '
             +'aria-label="'+stEsc(s.n)+': '+stFmt(_apS.q,s.u)+' apartado para pedidos. Ver de qui\u00e9n">'+stFmt(_apS.q,s.u)+'</button></div>'
           :'<div class="si-v" style="color:var(--ink3)"'+(_ap?'':' title="Todav\u00eda no llegaron los pedidos y las \u00f3rdenes de compra"')+'>'+(_ap?'\u00b7':'\u2026')+'</div>')+
@@ -22881,6 +22965,9 @@ function rStock(){
           +(_otro>0?'<span class="st-otro" title="'+stFmt(_otro,s.u)+' en '+stEsc(_stDepNom(_stOtrosDeps()[0]))
             +' \u00b7 total '+stFmt(s.d,s.u)+'">+'+stFmt(_otro,s.u)+'</span>':'')+'</div>'+
       '</div>'+
+      (_roS?'<div class="st-ap-det" id="stApD_r_'+stEsc(s.a)+'" style="display:'+(ST_AP_ABIERTO['r_'+s.a]?'block':'none')+'">'
+        +'<b>Reservado:</b> '+_stResOCTexto(_roS,s.u)+'. Llegó por orden de compra y está guardado hasta la entrega'
+        +((Number(s.r)||0)-_roS.q>0.0001?'; el resto ('+stFmt((Number(s.r)||0)-_roS.q,s.u)+') son pedidos que salen del stock':'')+'.</div>':'')+
       (_apS?'<div class="st-ap-det" id="stApD_'+stEsc(s.a)+'" style="display:'+(ST_AP_ABIERTO[s.a]?'block':'none')+'">'
         +'<b>Apartado:</b> '+_stApTexto(_apS,s.u)+'. Ya lleg\u00f3 y falta entregarlo.</div>':'');
     });
@@ -22905,10 +22992,12 @@ function rStock(){
     +(conAjuste?' ('+conAjuste+' producto'+(conAjuste===1?'':'s')+' esta semana)':'')
     +': el detalle de cada movimiento est\u00e1 en el Kardex.'
     +(hayPz?' En la carne, <b>comprado</b> son los kilos de las piezas recibidas en la semana.':'')
-    +' <b>Apartado</b> es lo que ya llegó por orden de compra para un pedido que todavía no se entregó'
-    +(conAp?' ('+conAp+' producto'+(conAp===1?'':'s')+' hoy)':'')
-    +': está en el freezer pero <b>no</b> cuenta en el Físico, el Reservado ni el Disponible. Tocá el número para ver de quién es. '
-    +'No dice en qué freezer está: la orden de compra no lo guarda.'
+    +(_modoOC!=='no'?' Lo que llega por orden de compra para un pedido <b>entra al Físico</b> del freezer donde se guardó y queda <b>Reservado</b> hasta la entrega'
+      +(conResOC?' ('+conResOC+' producto'+(conResOC===1?'':'s')+' hoy): tocá el Reservado para ver de quién es.':'.'):'')
+    +(_verAp?' <b>Apartado</b> es lo que ya llegó por orden de compra para un pedido que todavía no se entregó'
+      +(conAp?' ('+conAp+' producto'+(conAp===1?'':'s')+' hoy)':'')
+      +': está en el freezer pero <b>no</b> cuenta en el Físico, el Reservado ni el Disponible. Tocá el número para ver de quién es. '
+      +'No dice en qué freezer está: la orden de compra no lo guarda.':'')
     +'</div>';
   sc.innerHTML=html;
   _stCabSeguir(sc);
