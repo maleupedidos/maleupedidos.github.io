@@ -30,7 +30,6 @@ const CASOS = `(function(){
   r.llegoParte=ver(ped({ocF:{SCa:2}}));                      // llego un producto
   r.llegoMenos=ver(ped({ocF:{SCa:1}}));                      // llego 1 de 2
   r.mixto=ver(ped({o:'Mixto',oD:{SCa:{d:1,oc:1},PPM:'D'},ocF:{SCa:1}}));   // 1 del stock + 1 por OC que ya llego
-  r.titulo=(typeof _ocBloque==='function')?_ocBloque([{a:'PPM',q:2}],2,'k',false):'';
   return r;
 })()`;
 
@@ -54,10 +53,12 @@ const CASOS = `(function(){
     chk('llego un producto: ese se arma, el otro todavia no llego', R.llegoParte.dep === 'SCa:2' && R.llegoParte.oc === 'PPM:2' && R.llegoParte.tipo === 'mixto', R.llegoParte);
     chk('llego 1 de 2: 1 se arma y 1 falta', R.llegoMenos.dep === 'SCa:1' && R.llegoMenos.oc === 'PPM:2,SCa:1', R.llegoMenos);
     chk('un mixto (1 del stock + 1 por OC que ya llego): se arman los 2 y lo del stock', R.mixto.dep === 'PPM:2,SCa:2' && R.mixto.oc === '' && R.mixto.tipo === 'dep', R.mixto);
-    chk('sin entregas con `ocF` el cartel dice lo de siempre', /del proveedor · no sale del freezer/.test(R.titulo), R.titulo);
-    await evaluar(cli, `entregas.push({h:'Home',id:9001,o:'Orden de Compra',p:[{a:'PPM',q:1}],oD:{},ocF:{}}); 1`).catch(() => {});
-    const T = await evaluar(cli, `(typeof _rutOcAlFreezer==='function'&&_rutOcAlFreezer())?_ocBloque([{a:'PPM',q:2}],2,'k',false):'(la palanca no se ve)'`);
-    chk('con la palanca prendida el cartel dice «todavía no llegó» y ya no «no sale del freezer»', /todav.a no lleg/.test(T) && !/no sale del freezer/.test(T), T);
+    /* El texto de lo que falta llegar lo arma `_ocLineas` (v574) con el estado de
+       la orden de compra. Aca se comprueba que esa funcion recibe SOLO lo que
+       no llego, y que la pantalla se entera de la palanca por las entregas. */
+    chk('sin entregas con `ocF` la pantalla no da la palanca por prendida', (await evaluar(cli, `typeof _rutOcAlFreezer==='function'&&_rutOcAlFreezer()`)) === false);
+    await evaluar(cli, `entregas.push({h:'Home',id:9001,o:'Orden de Compra',p:[{a:'PPM',q:1}],oD:{},ocF:{}}); 1`);
+    chk('con una entrega que trae `ocF`, si', (await evaluar(cli, `_rutOcAlFreezer()`)) === true);
     console.log('\n' + ok + ' ok · ' + mal + ' mal');
     salir(mal ? 1 : 0);
   } catch (e) { console.log('  REVENTO: ' + (e && e.stack || e)); salir(1); }
