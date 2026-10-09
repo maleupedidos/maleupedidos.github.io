@@ -56,7 +56,9 @@ const GASTOS = [
   G('18/07/2026', 'Sueldo', 'Tadeo Ustariz', 500000),
   G('02/08/2026', 'Sueldo', 'Tadeo Ustariz', 1200000),
   G('01/09/2026', 'Sueldo', 'Tadeo Ustariz', 500000),
-  G('09/07/2026', 'Herramienta', 'Canva', 20000)
+  G('09/07/2026', 'Herramienta', 'Canva', 20000),
+  /* un gasto de octubre: el financiero de un mes sin movimientos no dibuja el Estado de Caja */
+  G('02/10/2026', 'Herramienta', 'Canva', 1000)
 ];
 const PROV = [
   { concepto: 'Sueldo dueño imputado', cat: 'sueldo', monto: 1200000, desde: '2026-01', hasta: null },
@@ -73,7 +75,9 @@ const VENTAS = { ok: true, v: [
   { mes: 'Julio', h: 'Home', $: 5000000, costo: 3000000 },
   { mes: 'Septiembre', h: 'Home', $: 2000000, costo: 1300000 }] };
 
-const RELOJ = `(function(){var AH=new Date(2026,8,15,15,0,0).getTime();var _D=Date;
+/* El reloj paso del 15/9 al 15/10/2026 (8/10/2026): desde que el mes en curso carga
+   los fijos por dias, septiembre tiene que estar CERRADO para medir el sueldo entero. */
+const RELOJ = `(function(){var AH=new Date(2026,9,15,15,0,0).getTime();var _D=Date;
   function FD(){var a=[].slice.call(arguments);if(!(this instanceof FD))return new _D(AH).toString();
     if(a.length===0)return new _D(AH);return new (Function.prototype.bind.apply(_D,[null].concat(a)))();}
   FD.prototype=_D.prototype;FD.now=function(){return AH;};FD.UTC=_D.UTC;FD.parse=_D.parse;window.Date=FD;})();`;
@@ -100,7 +104,7 @@ const STUB = `
 /* El numero de una fila de la tabla del EERR por el comienzo de su etiqueta. */
 const FILA = `function(pref){var rs=[].slice.call(document.querySelectorAll('#eerrBody tr'));
   for(var i=0;i<rs.length;i++){var td=rs[i].querySelectorAll('td');if(td.length<2)continue;
-    var t=td[0].textContent.replace(/\\s+/g,' ').trim();if(t.indexOf(pref)===0){var m=td[td.length-1].textContent.match(/([−-])?\\$\\s*([\\d.]+)/);return m?Number((m[1]?'-':'')+m[2].replace(/\\./g,'')):null;}}
+    var t=td[0].textContent.replace(/[▸▾]/g,'').replace(/\\s+/g,' ').trim();if(t.indexOf(pref)===0){var m=td[1].textContent.match(/([−-])?\\$\\s*([\\d.]+)/);return m?Number((m[1]?'-':'')+m[2].replace(/\\./g,'')):null;}}
   return null;}`;
 
 (async () => {
@@ -109,7 +113,7 @@ const FILA = `function(pref){var rs=[].slice.call(document.querySelectorAll('#ee
   try {
     await cli.enviar('Page.enable'); await cli.enviar('Runtime.enable');
     await cli.enviar('Emulation.setDeviceMetricsOverride', { width: ANCHO, height: 900, deviceScaleFactor: 1, mobile: ANCHO <= 560 });
-    await cli.enviar('Page.addScriptToEvaluateOnNewDocument', { source: RELOJ + prep('x') + STUB });
+    await cli.enviar('Page.addScriptToEvaluateOnNewDocument', { source: RELOJ + prep('x') + STUB + ';window.__eerrTodo=true;' });
     console.log('\n== Sueldo fijo · ' + ANCHO + 'px · ' + APP + ' ==');
     await cli.enviar('Page.navigate', { url: BASE + '/' + APP });
     if (!await esperar(cli, `typeof go==='function' && window.D && Array.isArray(D.gastos) && D.gastos.length===${GASTOS.length}`, 90000)) throw new Error('el ERP no cargo la caja stubbeada');
@@ -152,13 +156,13 @@ const FILA = `function(pref){var rs=[].slice.call(document.querySelectorAll('#ee
     };
     await pint(6, 'economico');
     const E1 = await ev(cli, `(function(){var f=${FILA};var b=document.getElementById('eerrBody').textContent;
-      return {sueldo:f('Tu sueldo fijo'),ebitda:f('= EBITDA'),mes:(document.querySelector('.eerr-sueldo-mes')||{}).innerText||'',mil:b.indexOf('1.000.000')>=0};})()`);
+      return {sueldo:f('Tu sueldo fijo'),ebitda:f('= Resultado del mes'),mes:(document.querySelector('.eerr-sueldo-mes')||{}).innerText||'',mil:b.indexOf('1.000.000')>=0};})()`);
     chk('la linea "Tu sueldo fijo" dice -1.200.000', !!E1 && Math.abs(E1.sueldo) === 1200000, E1);
     chk('dice que te giraste 1.400.000, 200.000 mas que el fijo, y que Maleu te debe 1.100.000', !!E1 && /Te giraste \$1\.400\.000 en julio: \$200\.000 más que el fijo/.test(E1.mes) && /Maleu te debe \$1\.100\.000/.test(E1.mes), E1 && E1.mes);
     chk('ya no aparece el piso de $1.000.000', !!E1 && E1.mil === false, E1);
     await ev(cli, `D.gastos=D.gastos.map(function(g){return (g.cat==='Sueldo'&&g.mes==='Julio')?Object.assign({},g,{$:g.$/2}):g;});`);
     await pint(6, 'economico');
-    const E2 = await ev(cli, `(function(){var f=${FILA};return {sueldo:f('Tu sueldo fijo'),ebitda:f('= EBITDA'),mes:(document.querySelector('.eerr-sueldo-mes')||{}).innerText||''};})()`);
+    const E2 = await ev(cli, `(function(){var f=${FILA};return {sueldo:f('Tu sueldo fijo'),ebitda:f('= Resultado del mes'),mes:(document.querySelector('.eerr-sueldo-mes')||{}).innerText||''};})()`);
     chk('LA PROPIEDAD: con la mitad de giros en julio el EBITDA es el mismo (' + (E1 && E1.ebitda) + ')', !!E1 && !!E2 && E1.ebitda !== null && E1.ebitda === E2.ebitda && Math.abs(E2.sueldo) === 1200000, [E1 && E1.ebitda, E2 && E2.ebitda]);
     chk('y ahora dice que Maleu te queda debiendo 500.000 del mes', !!E2 && /\$500\.000 menos, que Maleu te queda debiendo/.test(E2.mes), E2 && E2.mes);
     await ev(cli, `D.gastos=${JSON.stringify(GASTOS)};`);
@@ -169,10 +173,10 @@ const FILA = `function(pref){var rs=[].slice.call(document.querySelectorAll('#ee
       return {demas:/Te giraste más que el sueldo fijo/.test(b),girado:/Sueldo girado a Tadeo/.test(b),viejo:/Retiros del dueño/.test(b),adel:/adelanto: más de lo que te tocaba/.test(b)};})()`);
     chk('julio: el EOAF muestra "Te giraste más que el sueldo fijo" y el renglon se llama "Sueldo girado a Tadeo"', !!F1 && F1.demas && F1.girado && !F1.viejo, F1);
     chk('julio: sin adelanto (pago sueldo atrasado)', !!F1 && F1.adel === false, F1);
-    await pint(8, 'financiero');
+    await pint(9, 'financiero');   /* el Estado de Caja es del mes de hoy (reloj en octubre) */
     const F2 = await ev(cli, `(function(){var b=document.getElementById('eerrBody').textContent;var c=document.querySelector('.eerr-sueldo-cuenta');
       return {fijo:/Sueldo fijo\\s*\\$1\\.200\\.000/.test(b),quinc:/\\$600\\.000 día 5/.test(b),cuenta:c?c.innerText:''};})()`);
-    chk('Estado de Caja de septiembre: sueldo fijo 1.200.000 y quincenal 600.000', !!F2 && F2.fijo && F2.quinc, F2);
+    chk('Estado de Caja del mes en curso: sueldo fijo 1.200.000 y quincenal 600.000', !!F2 && F2.fijo && F2.quinc, F2);
     chk('y la cuenta: Maleu te debe 1.800.000', !!F2 && /Maleu te debe \$1\.800\.000/.test(F2.cuenta), F2 && F2.cuenta);
     await ev(cli, `D.gastos=D.gastos.concat([{f:'10/09/2026',fFull:'10/09/2026 10:00',ts:1,mes:'Septiembre',cat:'Sueldo',con:'Tadeo Ustariz',$:3000000,not:''}]);`);
     await pint(8, 'financiero');
@@ -199,7 +203,7 @@ const FILA = `function(pref){var rs=[].slice.call(document.querySelectorAll('#ee
       !!E3 && /Tadeo: fijo \$1\.500\.000 · se giró \$500\.000/.test(E3.mes) && /Lucas: fijo \$1\.000\.000 · se giró \$0/.test(E3.mes)
       && /Tadeo — cuenta del sueldo desde marzo 2026.*Maleu le debe \$2\.100\.000/.test(E3.mes) && /Lucas — cuenta del sueldo desde septiembre 2026.*Maleu le debe \$1\.000\.000/.test(E3.mes)
       && /\$100\.000 girados como sueldo no dicen de quién son/.test(E3.mes), E3 && E3.mes);
-    await pint(8, 'financiero');
+    await pint(9, 'financiero');   /* el Estado de Caja es del mes de hoy (reloj en octubre) */
     const F4 = await ev(cli, `(function(){var b=document.getElementById('eerrBody').textContent;return {girados:/Sueldos girados/.test(b),fijos:/Sueldos fijos\\s*\\$2\\.500\\.000/.test(b),quinc:/\\$1\\.250\\.000 día 5/.test(b)};})()`);
     chk('financiero con dos: "Sueldos girados", Estado de Caja con 2.500.000 y quincenal 1.250.000', !!F4 && F4.girados && F4.fijos && F4.quinc, F4);
 

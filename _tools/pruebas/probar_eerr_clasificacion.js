@@ -90,6 +90,8 @@ const CASOS = [
     await cli.enviar('Page.enable'); await cli.enviar('Runtime.enable');
     await cli.enviar('Page.navigate', { url: BASE + '/app.html?prueba=1' });
     if (!await esperar(cli, "typeof _gastoLinea==='function' && typeof _eerrMesGastos==='function'")) { console.log('  el ERP no arranco'); process.exit(1); }
+    /* Desde el 8/10/2026 la tabla arranca plegada: aca se lee el dibujo entero. */
+    await evaluar(cli, 'window.__eerrTodo=true');
     console.log('\n== EERR: en que renglon cae cada gasto ==\n');
 
     const res = await evaluar(cli, `(function(){
