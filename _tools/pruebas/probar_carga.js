@@ -17,7 +17,10 @@
  *   · llegó de más: la pregunta dice el producto, el proveedor y el costo, y la
  *     respuesta viaja en la fila;
  *   · con una hora pasada, «había» pasa a ser lo de esa hora;
- *   · los campos llegan al piso táctil y nada desborda a lo ancho.
+ *   · los campos llegan al piso táctil y nada desborda a lo ancho;
+ *   · si el backend publicado todavía no tiene `cargaGuardar` (la grilla no trae
+ *     `guardar: true`), la pantalla NO manda ningún POST: una acción desconocida
+ *     cae en el alta de pedidos y crea un pedido real.
  */
 const { abrir, evaluar } = require('./cdp.js');
 const PREP = require('./sesion_prep.js')('prueba-sin-backend');
@@ -30,7 +33,7 @@ const chk = (c, t, x) => { if (c) { ok++; console.log('  ok   ' + t); } else { m
 const espera = ms => new Promise(r => setTimeout(r, ms));
 
 const p = (a, n, u, us, mo, dep, cli) => ({ a, n, u, ini: { ustariz: us, moresco: mo }, ped: { dep: dep || 0, cli: cli || 0, de: [] }, ap: {}, apDe: [] });
-const GRILLA = { ok: true, ts: 1, apartado: 'si',
+const GRILLA = { ok: true, ts: 1, apartado: 'si', guardar: true,
   deps: [{ id: 'ustariz', nombre: 'Depósito Ustariz', user: 'tadeo' }, { id: 'moresco', nombre: 'Depósito Moresco', user: 'lucas' }],
   proveedores: [
     { nombre: 'Le Unike', productos: [p('SL', 'Sorrentinos Langostinos', 'u', 3, 0), p('SCo', 'Sorrentinos Cordero al Malbec', 'u', 5, 1)] },
@@ -57,6 +60,9 @@ const BACKEND = `
       recibir: sl ? [] : filas.map(function (f) { return { a: f.a, llego: f.recibido, pedido: 6, ocs: ['OC-1'] }; }),
       movimientos: sl ? [{ product_sku: 'SL', kind: 'recepcion', quantity: 1, to_warehouse: 'ustariz' }]
         : [{ product_sku: 'PPM', kind: 'recepcion', quantity: 3, to_warehouse: 'ustariz' }, { product_sku: 'PPM', kind: 'traspaso', quantity: 3, from_warehouse: 'ustariz', to_warehouse: 'moresco' }] };
+    if (window.__repetida) return { ok: false, repetida: true, carga: 'CM-20261016-103000-ab12', estado: 'a_medias',
+      errores: ['Pack Pizzas x2 Muzzarella: su orden de compra cambio mientras cargabas (OC-1).'],
+      falta: [{ a: 'PPM', n: 'Pack Pizzas x2 Muzzarella', u: 'u', llego: 6, contaste: { ustariz: 8, moresco: 6 }, hay: { ustariz: 5, moresco: 3 } }] };
     return { ok: true, carga: 'CM-20261016-103000-ab12', avisos: [], movimientos: [] };
   }
   (function () { var o = window.fetch; window.fetch = function (u, x) {
@@ -218,6 +224,31 @@ async function pagina(url) {
   chk(r.antes === '5' && r.despues === '7', 'con una hora pasada el número gris de Ustariz pasa de 5 a 7 (lo que había a esa hora)', r);
   chk(r.ultimo.previa === true && r.ultimo.filas.length === 0 && r.ultimo.ocurrio > 0 && r.ultimo.ocurrio < Date.now(), 'lo pide con una vista previa sin filas y la hora elegida', r.ultimo);
   chk(/después: −2 en Ustariz/.test(r.sub), 'y dice qué se movió después («−2 en Ustariz»)', r.sub);
+
+  /* 9b. Un reintento de una carga que quedó a medias: no dice «guardada», dice qué falta. */
+  await evaluar(cli, `(function(){ var h=document.querySelector('#stCarga .stg-hora'); h.value=''; h.dispatchEvent(new Event('change',{bubbles:true})); return 1; })()`);
+  await evaluar(cli, tipear(campo('PPM', 1), '6')); await evaluar(cli, tipear(campo('PPM', 2), '8')); await evaluar(cli, tipear(campo('PPM', 3), '6'));
+  r = JSON.parse(await evaluar(cli, `(async () => { stgRevisar(); var t0=Date.now();
+    while (Date.now()-t0<5000 && !document.querySelector('#stgRev .stg-btn')) await new Promise(r=>setTimeout(r,100));
+    window.__repetida = true; document.querySelector('#stgRev .stg-btn').click();
+    t0=Date.now(); while (Date.now()-t0<6000 && !/a medias/.test(document.getElementById('stCarga').textContent)) await new Promise(r=>setTimeout(r,100));
+    await new Promise(r=>setTimeout(r,400)); window.__repetida = false;
+    return JSON.stringify({ txt: document.getElementById('stgRev').textContent, ancho: document.documentElement.scrollWidth-window.innerWidth }); })()`));
+  chk(/ya estaba en el sistema y quedó a medias/.test(r.txt) && !/Carga guardada/.test(r.txt), 'un reintento de una carga a medias no dice «guardada»', r.txt);
+  chk(/No están como los contaste/.test(r.txt) && /contaste Ustariz 8 · Moresco 6 y ahora hay Ustariz 5 · Moresco 3/.test(r.txt) && /habían llegado 6/.test(r.txt) && /CONTAR/.test(r.txt),
+    'dice qué falta: lo contado contra lo que hay, y adónde ir a corregirlo', r.txt);
+  chk(r.ancho <= 1, 'y el detalle no desborda a lo ancho', r.ancho);
+
+  /* 9c. Backend viejo (sin `guardar`): ni Revisar ni la hora mandan un POST. */
+  r = JSON.parse(await evaluar(cli, `(async () => { var antes = window.__posts.length;
+    CG_DATA.guardar = undefined; stgProvElegir('Sevuchitas'); await new Promise(r=>setTimeout(r,200));
+    var e = document.querySelector('#stgR_EV label:nth-of-type(1) input'); e.value='1'; e.dispatchEvent(new Event('input',{bubbles:true}));
+    e = document.querySelector('#stgR_EV label:nth-of-type(2) input'); e.value='5'; e.dispatchEvent(new Event('input',{bubbles:true}));
+    stgRevisar(); await new Promise(r=>setTimeout(r,600));
+    var txt = document.getElementById('stgRev').textContent;
+    var h = document.querySelector('#stCarga .stg-hora'); h.value='00:01'; h.dispatchEvent(new Event('change',{bubbles:true})); await new Promise(r=>setTimeout(r,600));
+    return JSON.stringify({ nuevos: window.__posts.length - antes, txt: txt, guardar: !!document.querySelector('#stgRev .stg-btn') }); })()`));
+  chk(r.nuevos === 0 && /todavía no está lista/.test(r.txt) && r.guardar === false, 'con un backend que no tiene cargaGuardar no sale NINGÚN POST, y lo dice', r);
 
   /* 10. Nada salió a producción y no hubo errores propios. */
   r = JSON.parse(await evaluar(cli, `JSON.stringify({ err: (window.__err||[]).filter(function(e){ return /stg|carga|Carga/i.test(e); }), otros: window.__posts.filter(function(b){ return !b || b.action !== 'cargaGuardar'; }).length, afuera: window.__afuera.length })`));
