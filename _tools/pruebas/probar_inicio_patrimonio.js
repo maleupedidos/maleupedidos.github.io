@@ -56,7 +56,7 @@ const H = o => Object.assign({ n: String(n++), h: 'Home', es: 'Entregado', de: '
 const MALO = '<img src=x onerror="window.__xss=1">';
 const PEDIDOS = [
   H({ c: 'Ana Prueba', fex: '2026-10-01', $: 100000, co: 60000 }),
-  H({ c: MALO, fex: '2026-10-02', $: 50000, co: 30000, ep: 'Pendiente' }),           // entregado sin cobrar
+  H({ c: MALO, fex: '2026-10-02', $: 50000.4, co: 30000, ep: 'Pendiente' }),           // entregado sin cobrar
   H({ c: 'Caro Prueba', fex: '2026-10-03', $: 10000, co: 6000, es: 'Pendiente', ep: 'Pendiente' }),   // sabado de ESTA semana
   H({ c: 'Dani Prueba', fex: '2026-10-06', $: 99000, co: 50000, es: 'Pendiente', ep: 'Pendiente' }),  // martes de la QUE VIENE
   H({ c: 'Eli Prueba', fex: '2026-09-22', $: 40000, co: 20000 })                     // una semana anterior
@@ -93,7 +93,7 @@ const STUB = `
       else if(a==='ventas') cuerpo={v:${JSON.stringify(VENTAS)}};
       else if(a==='busqueda'){ demora=1200; cuerpo={ok:true,deudas:[{n:'Prov A',total:k===2?500:1500,semanas:[{sem:'40',pendiente:k===2?500:1500}]}]}; }
       else if(a==='stockTab'){ demora=900; cuerpo=(__fase==='stockmal')?{ok:false,error:'Exceeded maximum execution time'}
-        :{ok:true,ts:1,stockDeps:[],stock:[{a:'PPM',n:'Pack Muzzarella',u:'u',f:2*k,co:1000,iv:2000*k,pd:{}},{a:'SQB',n:'Sorrentinos',u:'u',f:0,co:500,iv:0,pd:{}},{a:'CLo',n:'Lomo',u:'kg',f:1.5*k,co:2000,iv:3000*k,pd:{}}]}; }
+        :{ok:true,ts:1,stockDeps:[],stock:[{a:'PPM',n:'Pack Muzzarella',u:'u',f:2*k,co:1000,iv:2000.1*k,pd:{}},{a:'SQB',n:'Sorrentinos',u:'u',f:0,co:500,iv:0,pd:{}},{a:'CLo',n:'Lomo',u:'kg',f:1.5*k,co:2000,iv:3000.1*k,pd:{}}]}; }
       var t=JSON.stringify(cuerpo);
       return new Promise(function(r){setTimeout(function(){r(new Response(t,{status:200,headers:{'Content-Type':'application/json'}}));},demora);});
     }
@@ -135,7 +135,7 @@ async function faseOk(cli) {
   chk('son 7 cuadritos', r.n === 7, Object.keys(r.cards || {}));
   chk('el stock al costo es $5.000 (2.000 + 3.000), no $0', st.v === '$5.000', st);
   chk('y el pie cuenta los 2 productos que tienen algo', st.s === '2 productos en freezer', st.s);
-  chk('la Posición Neta suma el stock: 0 + 50.000 + 5.000 − 1.500 = $53.500', r.neta === '$53.500', r.neta);
+  chk('la Posición Neta suma el stock y lo que MUESTRA (hay centavos adentro): 0 + 50.000 + 5.000 − 1.500 = $53.500', r.neta === '$53.500', r.neta);
   chk('el stock se pidió UNA sola vez', r.stockTab === 1, r.stockTab);
 
   /* ── la proyeccion de la semana corta ── */
