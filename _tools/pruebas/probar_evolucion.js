@@ -161,7 +161,7 @@ const TODOS = ['ventas', 'acum', 'entregas', 'ticket', 'canales', 'margen', 'res
       var P=_rtPeriodo('sem',hoy), gp=_rtSumar(P.d,P.h);
       var PM=_rtPeriodo('mes',hoy), gc=_rtSumar(PM.cd,PM.ch);
       var sc=0;Object.keys(u.can).forEach(function(k){sc+=u.can[k];});
-      return {gr:S.gr,n:S.b.length,uF:u.f,uEnt:u.ent,uTk:u.tk,uCurso:u.curso,uProy:u.proy?u.proy.f:null,
+      return {gr:S.gr,n:S.b.length,uF:u.f,uEnt:u.ent,uTk:u.tk,uCurso:u.curso,uProy:u.proy?u.proy.f:null,uVacio:!!u.vacio,uArranca:!!u.arranca,pF:S.b.length>1?S.b[S.b.length-2].f:null,
         semF:gs.tot.f+gs.cat.f,semEnt:gs.tot.ent,semFr:gs.tot.f,sumaCanales:sc,
         semPartida:(P.d!==_rtIso(lun)),resumenSemF:gp.tot.f+gp.cat.f,
         mesF:gm.tot.f+gm.cat.f,acumHoy:A.hoyF,acumAnt:A.antMismoDia,mesAntMismoDia:gc.tot.f+gc.cat.f,
@@ -193,7 +193,23 @@ const TODOS = ['ventas', 'acum', 'entregas', 'ticket', 'canales', 'margen', 'res
     chk('por semana: la línea llena llega hasta el último período cerrado', M.por.ventas.llena[0] === R.n - (R.uCurso ? 1 : 0), [M.por.ventas.llena, R.n]);
     const hS = P12.reduce((a, id) => a + M.por[id].huecos, 0), pS = P12.reduce((a, id) => a + M.por[id].proy, 0);
     chk('por semana: punto hueco solo si la semana no cerró; proyección donde hay ritmo',
-      hS === (R.uCurso ? 3 : 0) && pS === (R.proy ? 1 : 0) + (R.uCurso && R.uProy !== null ? 2 : 0), [hS, pS, R.uCurso]);
+      hS === ((R.uCurso && !R.uVacio) ? (R.uEnt > 0 ? 3 : 2) : 0) && pS === (R.proy ? 1 : 0) + (R.uCurso && R.uProy !== null ? 2 : 0), [hS, pS, R.uCurso]);
+    /* UN PERÍODO RECIÉN ARRANCADO NO ES UN CERO (lunes 12/10/2026 00:06: «Esta
+       semana va $0» y un punto hueco contra el piso). Con la semana vacía o
+       arrancando hoy, el titular habla de la semana CERRADA, la nueva va como
+       nota y no hay punto en cero. */
+    if (R.uVacio || R.uArranca) {
+      const N = await evaluar(cli, `(function(){var o={};['ventas','entregas','ticket','canales'].forEach(function(id){
+        var c=document.querySelector('#p-evolucion [data-card="'+id+'"]'),n=c.querySelector('.evu-nota');
+        o[id]={frase:c.querySelector('.evu-frase').textContent,nota:n?n.textContent:'',huecos:c.querySelectorAll('svg .evu-p.hueco').length,
+               ult:_evuCfg[id].series.filter(function(s){return s.tipo==='main';}).map(function(s){return s.v[s.v.length-1];})};});return o;})()`);
+      console.log('  · la semana ' + (R.uVacio ? 'está vacía' : 'arranca hoy') + ': se mira el titular');
+      chk('semana recién arrancada: los cuatro titulares hablan de la semana pasada, con su número',
+        ['ventas', 'entregas', 'ticket', 'canales'].every(id => /semana pasada/i.test(N[id].frase) && /\d/.test(N[id].frase) && !/\$0/.test(N[id].frase)), N);
+      chk('…y dice lo que cerró la semana pasada', N.ventas.frase.indexOf(await evaluar(cli, `_evuCorto(${R.pF})`)) >= 0, [N.ventas.frase, R.pF]);
+      chk('…la semana nueva va como nota chica', ['ventas', 'entregas', 'ticket', 'canales'].every(id => /Esta semana (arranca hoy|todavía no tiene entregas)/.test(N[id].nota)), N);
+      if (R.uVacio) chk('…y sin punto en cero: la semana vacía no se dibuja', ['ventas', 'entregas', 'ticket', 'canales'].every(id => N[id].huecos === 0 && N[id].ult.every(v => v === null)), N);
+    }
     chk('cada gráfico arranca con una frase con su número', Object.keys(M.frases).length === 12 && Object.keys(M.frases).every(k => /\d/.test(M.frases[k]) && M.frases[k].length > 12), M.frases);
     Object.keys(M.frases).forEach(k => console.log('       «' + M.frases[k] + '»'));
     await captura('evolucion-semana');
@@ -209,7 +225,7 @@ const TODOS = ['ventas', 'acum', 'entregas', 'ticket', 'canales', 'margen', 'res
       return {on:t.classList.contains('on'),txt:t.innerText,dentro:tr.left>=br.left-1&&tr.right<=br.right+1,cross:box.querySelector('.evu-cross').style.display!=='none'};
     })()`);
     chk('al pasar por el último punto aparece el detalle', tip.on && tip.cross, tip);
-    chk('el detalle dice «Semana del dd/mm al dd/mm» y el número entero', /Semana del \d\d\/\d\d al \d\d\/\d\d/.test(tip.txt) && tip.txt.indexOf('$' + Math.round(R.uF).toLocaleString('es-AR')) >= 0, tip.txt);
+    chk('el detalle dice «Semana del dd/mm al dd/mm» y el número entero', /Semana del \d\d\/\d\d al \d\d\/\d\d/.test(tip.txt) && (R.uVacio ? /sin entregas/i.test(tip.txt) && !/\$0/.test(tip.txt) : tip.txt.indexOf('$' + Math.round(R.uF).toLocaleString('es-AR')) >= 0), tip.txt);
     chk('el detalle no se sale del gráfico', tip.dentro, tip);
     await evaluar(cli, `document.body.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true}))`);
 

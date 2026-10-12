@@ -4005,6 +4005,7 @@ a.plan-btn-metas{display:inline-flex;align-items:center;text-decoration:none}
 .evu-card{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:14px 14px 8px;box-shadow:var(--shadow);min-width:0}
 .evu-frase{font-size:16px;line-height:1.3;font-weight:700;color:var(--ink)}
 .evu-sub{font-size:12px;line-height:1.45;color:var(--ink3);margin:4px 0 10px}
+.evu-nota{font-size:12.5px;line-height:1.4;font-weight:600;color:var(--ink2);margin-top:4px}
 .evu-graf{position:relative;touch-action:pan-y;-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent}
 .evu-svg{display:block;overflow:visible;font-family:inherit}
 .evu-grid{stroke:var(--cd);stroke-width:1;shape-rendering:crispEdges}
@@ -28158,8 +28159,20 @@ function _evuSerie(){
     var fr=tot>0?hechos/tot:0;
     if(!(fr>0))return;
     var sc=_evuSumar(_rtIso(b.d),_rtIso(ayer));
+    /* Sin nada entregado en los días cerrados no hay ritmo: proyectar daría un
+       cierre en $0, que es otra caída falsa. */
+    if(!(sc.f>0)&&!(sc.ent>0))return;
     b.proy={f:sc.f/fr,ent:Math.round(sc.ent/fr),fr:fr,cerrF:sc.f,cerrEnt:sc.ent,can:{}};
     Object.keys(sc.can).forEach(function(k){b.proy.can[k]=sc.can[k]/fr;});
+  });
+  /* UN PERÍODO RECIÉN ARRANCADO NO ES UN CERO (Tadeo, lunes 12/10/2026 00:06: «Esta
+     semana va $0» con un punto hueco contra el piso). `arranca`: empezó hoy, no
+     tiene ningún día cerrado. `vacio`: todavía no entregó nada. En los dos casos el
+     titular habla del último período CERRADO y este va como una nota; si está
+     vacío, además, no se dibuja su punto. */
+  todos.forEach(function(b){
+    b.arranca=!!(b.curso&&ayer<b.d);
+    b.vacio=!!(b.curso&&b.conDatos&&!(b.ent>0)&&!(b.f>0));
   });
   todos.forEach(function(b,i){
     var prev=todos.slice(Math.max(0,i-N_REF),i).filter(function(x){return x.conDatos&&!x.curso&&x.d>=_rtDia(dMin,-6);});
@@ -28461,10 +28474,11 @@ function _evuTabla(c){
   });
   return h+'</tbody></table></div></details>';
 }
-function _evuCard(id,frase,sub,c){
+function _evuCard(id,frase,sub,c,nota){
   _evuCfg[id]=c;
   return '<div class="evu-card" data-card="'+id+'">'
     +'<div class="evu-frase">'+_tendEsc(frase)+'</div>'
+    +(nota?'<div class="evu-nota">'+_tendEsc(nota)+'</div>':'')
     +'<div class="evu-sub">'+_tendEsc(sub)+'</div>'
     +'<div class="evu-graf" data-evu="'+id+'"></div>'
     +_evuTabla(c)+'</div>';
@@ -28481,11 +28495,25 @@ function _evuProyDe(S,campo){
   var n=S.b.length, u=S.b[n-1];
   return (u.curso&&u.proy&&n>1)?{desde:n-2,i:n-1,v:u.proy[campo]}:null;
 }
+/* El período en curso recién arrancó o está vacío, y hay uno cerrado antes del que
+   hablar: devuelve ese. Si no, null y el titular habla del período en curso. */
+function _evuFlojo(S){
+  var n=S.b.length, u=S.b[n-1], p=n>1?S.b[n-2]:null;
+  return ((u.arranca||u.vacio)&&p&&!p.curso)?p:null;
+}
+function _evuNotaNuevo(S,conPlata){
+  var u=S.b[S.b.length-1], quien=S.gr==='sem'?'Esta semana':_evuMay(u.nom||'Este mes');
+  if(u.arranca)return quien+' arranca hoy'+((!u.vacio&&conPlata&&u.f>0)?': van '+_evuCorto(u.f):'')+'.';
+  return quien+' todavía no tiene entregas.';
+}
 function _evuBloqueVentas(S,A){
   var b=S.b, u=b[b.length-1], sem=S.gr==='sem';
   var este=sem?'Esta semana':_evuMay(u.nom||'Este mes');
+  var pf=_evuFlojo(S), nota1=pf?_evuNotaNuevo(S,true):'';
   var frase;
-  if(!u.curso){
+  if(pf){
+    frase=(sem?'La semana pasada':_evuMay(pf.nom))+' cerró '+_evuCorto(pf.f)+(pf.ref.f!==null?', '+_evuVs(_evuPct(pf.f,pf.ref.f),S.refNom):'');
+  }else if(!u.curso){
     frase=este+' '+_evuCorto(u.f)+(u.ref.f!==null?', '+_evuVs(_evuPct(u.f,u.ref.f),S.refNom):'');
   }else if(u.proy){
     frase=este+' va '+_evuCorto(u.f)+' al '+_evuDM(S.hoy)+'; al ritmo de hoy cierra en '+_evuCorto(u.proy.f)
@@ -28497,19 +28525,20 @@ function _evuBloqueVentas(S,A){
     aria:'Facturado por '+(sem?'semana':'mes'), colX:sem?'Semana':'Mes', hoyLab:'al '+_evuDM(S.hoy),
     x:_evuX(S),
     series:[
-      {nom:'Facturado',tipo:'main',color:EVU_C.main,v:b.map(function(z){return z.f;}),proy:_evuProyDe(S,'f')},
+      {nom:'Facturado',tipo:'main',color:EVU_C.main,v:b.map(function(z){return z.vacio?null:z.f;}),proy:_evuProyDe(S,'f')},
       {nom:_evuMay(S.refCorto),tipo:'ref',color:EVU_C.ref,fin:S.refCorto,v:b.map(function(z){return z.ref.f;})}
     ],
     fmtEje:_evuEjePlata,fmtFin:_evuCorto,fmtVal:_evuPlata,
     nota:function(i){
       var z=b[i];
+      if(z.vacio)return z.arranca?'Arranca hoy: todavía sin entregas.':'Todavía sin entregas.';
       if(z.curso)return (z.proy?'Al ritmo de hoy cierra en '+_evuPlata(z.proy.f)+'. ':'')+'Todavía no cerró.';
       if(z.ref.f===null)return '';
       return _evuMay(_evuVs(_evuPct(z.f,z.ref.f),'su promedio'));
     }
   };
   var sub1='Lo entregado, por el día de entrega: todos los canales y catering. La línea gris es '+S.refNom+' a cada punto.'
-    +(u.curso?' El punto hueco es lo de hoy; la línea punteada llega al cierre proyectado con el peso de cada día, como en Objetivo.':'');
+    +((u.curso&&!u.vacio)?' El punto hueco es lo de hoy'+(u.proy?'; la línea punteada llega al cierre proyectado con el peso de cada día, como en Objetivo.':'.'):'');
 
   /* El acumulado del mes: lo que Tadeo quiere saber es si va arriba o abajo del
      ritmo que hace falta para llegar, no el porcentaje del total. */
@@ -28517,14 +28546,20 @@ function _evuBloqueVentas(S,A){
   var pAnt=_evuPct(A.hoyF,A.antMismoDia);
   var alDia=M?Math.round(M*A.fr):0, dif=A.realCerr-alDia;
   A.alDia=alDia; A.dif=dif; A.meta=M;
-  var frase2;
-  if(M&&A.cerr>0){
+  var frase2, nota2='';
+  /* El día 1 sin nada entregado: se habla del mes que cerró y no se dibuja un
+     punto en $0. */
+  var mesNuevo=(A.dia===1&&!(A.hoyF>0));
+  if(mesNuevo){
+    frase2=A.mesAnt+' cerró en '+_evuCorto(A.antCierre||0);
+    nota2=A.mes+' arranca hoy'+(M?': el objetivo es '+_evuCorto(M):'')+'.';
+  }else if(M&&A.cerr>0){
     frase2=A.mes+' va '+_evuCorto(Math.abs(dif))+(dif>=0?' adelante':' atrás')+' del ritmo para llegar a '+_evuCorto(M)+': lleva '+_evuCorto(A.hoyF||0)+' al '+A.dia;
   }else{
     frase2=A.mes+' lleva '+_evuCorto(A.hoyF||0)+' al '+A.dia+(pAnt!==null?', '+_evuVs(pAnt,A.mesAnt.toLowerCase()+' al mismo día'):'');
   }
   var ritmo=A.x.map(function(x,i){return (M&&i<A.dias)?Math.round(M*calFraccionMes(A.y,A.m0,i+1,A.pesos)):null;});
-  var series2=[{nom:A.mes,tipo:'main',color:EVU_C.main,area:true,v:A.act,
+  var series2=[{nom:A.mes,tipo:'main',color:EVU_C.main,area:true,v:mesNuevo?A.act.map(function(){return null;}):A.act,
                 proy:A.proy?{desde:A.dia-1,i:A.dias-1,v:A.proy}:null}];
   if(M)series2.push({nom:'Ritmo necesario',tipo:'ref',color:EVU_C.obj,fin:'ritmo necesario',v:ritmo});
   series2.push({nom:A.mesAnt,tipo:'ref',color:EVU_C.ref,fin:A.mesAnt.toLowerCase(),v:A.ant});
@@ -28549,35 +28584,41 @@ function _evuBloqueVentas(S,A){
     +((_evuMeta&&_evuMeta.hace)?' Objetivo leído '+_evuMeta.hace+'.':'')
     +(!_evuMeta?' Trayendo el objetivo…':(M?'':' Este mes no tiene objetivo cargado.'));
   return '<div class="evu-h">1 · Ventas</div><div class="evu-fila">'
-    +_evuCard('ventas',frase,sub1,c1)+_evuCard('acum',frase2,sub2,c2)+'</div>';
+    +_evuCard('ventas',frase,sub1,c1,nota1)+_evuCard('acum',frase2,sub2,c2,nota2)+'</div>';
 }
 function _evuBloqueMotor(S){
   var b=S.b, u=b[b.length-1], sem=S.gr==='sem';
   var esteMin=sem?'esta semana':'en '+String(u.nom||'el mes').toLowerCase();
   var contra=function(v,ref){
     if(ref===null)return '';
-    var dif=Math.round(v-ref);
+    /* Contra el promedio YA redondeado, que es el que se lee al lado: 44 contra
+       51,5 decia «7 menos que el promedio (52)». */
+    var dif=Math.round(v)-Math.round(ref);
     return dif===0?', igual que el promedio':', '+Math.abs(dif)+(dif>0?' más':' menos')+' que el promedio ('+Math.round(ref)+')';
   };
-  var f1,f2;
-  if(!u.curso)f1=u.ent+(u.ent===1?' entrega ':' entregas ')+esteMin+contra(u.ent,u.ref.ent);
+  var f1,f2, pf=_evuFlojo(S), notaM=pf?_evuNotaNuevo(S,false):'';
+  var antes=pf?(sem?'la semana pasada':'en '+String(pf.nom||'el mes pasado').toLowerCase()):'';
+  if(pf)f1=_evuMay(antes)+' hubo '+pf.ent+(pf.ent===1?' entrega':' entregas')+contra(pf.ent,pf.ref.ent);
+  else if(!u.curso)f1=u.ent+(u.ent===1?' entrega ':' entregas ')+esteMin+contra(u.ent,u.ref.ent);
   else if(u.proy)f1='Van '+u.ent+(u.ent===1?' entrega ':' entregas ')+esteMin+'; al ritmo de hoy cierra en '+u.proy.ent+contra(u.proy.ent,u.ref.ent);
   else f1='Van '+u.ent+(u.ent===1?' entrega ':' entregas ')+esteMin+': recién arranca';
-  if(u.tk===null)f2='Todavía sin entregas '+esteMin;
+  if(pf&&pf.tk!==null)f2='Ticket promedio '+(sem?'de la semana pasada':'de '+String(pf.nom).toLowerCase())+' '+_evuCorto(pf.tk)+(pf.ref.tk!==null?', '+_evuVs(_evuPct(pf.tk,pf.ref.tk),'el promedio'):'');
+  else if(u.tk===null)f2='Todavía sin entregas '+esteMin;
   else f2='Ticket promedio '+_evuCorto(u.tk)+(u.curso?', en curso':'')+(u.ref.tk!==null?(u.curso?': ':', ')+_evuVs(_evuPct(u.tk,u.ref.tk),'el promedio'):'');
   var alto=(window.innerWidth<520)?196:210;
   var c1={
     aria:'Entregas por '+(sem?'semana':'mes'), colX:sem?'Semana':'Mes', alto:alto, entero:true, x:_evuX(S), hoyLab:'al '+_evuDM(S.hoy),
     series:[
-      {nom:'Entregas',tipo:'main',color:EVU_C.main,v:b.map(function(z){return z.ent;}),proy:_evuProyDe(S,'ent')},
+      {nom:'Entregas',tipo:'main',color:EVU_C.main,v:b.map(function(z){return z.vacio?null:z.ent;}),proy:_evuProyDe(S,'ent')},
       {nom:_evuMay(S.refCorto),tipo:'ref',color:EVU_C.ref,fin:S.refCorto,v:b.map(function(z){return z.ref.ent===null?null:Math.round(z.ref.ent*10)/10;})}
     ],
     fmtEje:_evuNum,fmtFin:_evuNum,fmtVal:function(v){return (Math.round(v*10)/10).toString().replace('.',',');},
     nota:function(i){
       var z=b[i];
+      if(z.vacio)return z.arranca?'Arranca hoy: todavía sin entregas.':'Todavía sin entregas.';
       if(z.curso)return (z.proy?'Al ritmo de hoy cierra en '+z.proy.ent+'. ':'')+'Todavía no cerró.';
       if(z.ref.ent===null)return '';
-      var d=Math.round(z.ent-z.ref.ent);
+      var d=Math.round(z.ent)-Math.round(z.ref.ent);
       return d===0?'Igual que su promedio':Math.abs(d)+(d>0?' más':' menos')+' que su promedio';
     }
   };
@@ -28589,13 +28630,14 @@ function _evuBloqueMotor(S){
     ],
     fmtEje:_evuEjePlata,fmtFin:_evuCorto,fmtVal:_evuPlata,
     nota:function(i){
-      var z=b[i];if(z.tk===null||z.ref.tk===null)return z.curso?'Todavía no cerró.':'';
+      var z=b[i];if(z.vacio)return z.arranca?'Arranca hoy: todavía sin entregas.':'Todavía sin entregas.';
+      if(z.tk===null||z.ref.tk===null)return z.curso?'Todavía no cerró.':'';
       return _evuMay(_evuVs(_evuPct(z.tk,z.ref.tk),'su promedio'))+(z.curso?' · todavía no cerró':'');
     }
   };
   return '<div class="evu-h">2 · El motor: cuántas veces vendimos y cuánto se llevó cada uno</div><div class="evu-fila">'
-    +_evuCard('entregas',f1,'Una venta es una entrega: lo que salió en un mismo viaje cuenta una vez. Sin catering.',c1)
-    +_evuCard('ticket',f2,'Lo facturado dividido las entregas, sin catering. Es un cociente: no se proyecta.',c2)+'</div>';
+    +_evuCard('entregas',f1,'Una venta es una entrega: lo que salió en un mismo viaje cuenta una vez. Sin catering.',c1,notaM)
+    +_evuCard('ticket',f2,'Lo facturado dividido las entregas, sin catering. Es un cociente: no se proyecta.',c2,notaM)+'</div>';
 }
 
 /* ─── 3 · Canales ───────────────────────────────────────────────────────────── */
@@ -28605,17 +28647,19 @@ function _evuBloqueCanales(S){
   var vis=EVU_CAN.filter(function(c){return !EVU_OFF[c[0]];});
   var series=vis.map(function(c){
     var k=c[0];
-    return {nom:k,tipo:'main',multi:true,color:c[1],v:b.map(function(z){return z.can?z.can[k]:null;}),
+    return {nom:k,tipo:'main',multi:true,color:c[1],v:b.map(function(z){return (z.can&&!z.vacio)?z.can[k]:null;}),
             proy:(u.curso&&u.proy&&n>1)?{desde:n-2,i:n-1,v:u.proy.can[k]}:null};
   });
-  /* La frase: quién hizo la mayor parte del período, y quiénes le siguen. */
-  var orden=EVU_CAN.map(function(c){return {k:c[0],v:u.can?u.can[c[0]]:0};}).sort(function(a,z){return z.v-a.v;});
-  var este=sem?'esta semana':String(u.nom||'el mes').toLowerCase();
+  /* La frase: quién hizo la mayor parte del período, y quiénes le siguen. Con el
+     período recién arrancado, la del último cerrado. */
+  var pf=_evuFlojo(S), q=pf||u, notaC=pf?_evuNotaNuevo(S,false):'';
+  var orden=EVU_CAN.map(function(c){return {k:c[0],v:q.can?q.can[c[0]]:0};}).sort(function(a,z){return z.v-a.v;});
+  var este=pf?(sem?'la semana pasada':String(pf.nom||'el mes pasado').toLowerCase()):(sem?'esta semana':String(u.nom||'el mes').toLowerCase());
   var frase;
-  if(!(u.f>0))frase='Todavía sin ventas '+(sem?este:'en '+este);
+  if(!(q.f>0))frase='Todavía sin ventas '+(sem?este:'en '+este);
   else{
-    var p1=Math.round(orden[0].v/u.f*100);
-    frase=orden[0].k+(u.curso?' lleva':' hizo')+' el '+p1+'% de '+este+' ('+_evuCorto(orden[0].v)+')';
+    var p1=Math.round(orden[0].v/q.f*100);
+    frase=orden[0].k+((u.curso&&!pf)?' lleva':' hizo')+' el '+p1+'% de '+este+' ('+_evuCorto(orden[0].v)+')';
     var sig=orden.slice(1).filter(function(o){return o.v>0;}).slice(0,2).map(function(o){return o.k+' '+_evuCorto(o.v);});
     if(sig.length)frase+='; le siguen '+sig.join(' y ');
   }
@@ -28628,7 +28672,7 @@ function _evuBloqueCanales(S){
     aria:'Facturado por canal', colX:sem?'Semana':'Mes', hoyLab:'al '+_evuDM(S.hoy), alto:(window.innerWidth<520)?250:280,
     x:_evuX(S), series:series,
     fmtEje:_evuEjePlata,fmtFin:_evuCorto,fmtVal:_evuPlata,
-    nota:function(i){return b[i].curso?'Todavía no cerró'+(b[i].proy?': la punteada es el cierre al ritmo de hoy.':'.'):'';}
+    nota:function(i){return b[i].vacio?(b[i].arranca?'Arranca hoy: todavía sin entregas.':'Todavía sin entregas.'):(b[i].curso?'Todavía no cerró'+(b[i].proy?': la punteada es el cierre al ritmo de hoy.':'.'):'');}
   };
   /* Home tambien se apaga (Tadeo, 11/10/2026): con $13M aplastaba a los otros
      cuatro contra el eje. Apagado, la escala se ajusta sola a los canales chicos
@@ -28639,7 +28683,7 @@ function _evuBloqueCanales(S){
   }).join('')+'</div>';
   _evuCfg.canales=c;
   return '<div class="evu-h">3 · Canales</div><div class="evu-fila uno">'
-    +'<div class="evu-card" data-card="canales"><div class="evu-frase">'+_tendEsc(frase)+'</div><div class="evu-sub">'+_tendEsc(sub)+'</div>'
+    +'<div class="evu-card" data-card="canales"><div class="evu-frase">'+_tendEsc(frase)+'</div>'+(notaC?'<div class="evu-nota">'+_tendEsc(notaC)+'</div>':'')+'<div class="evu-sub">'+_tendEsc(sub)+'</div>'
     +chips+'<div class="evu-graf" data-evu="canales"></div>'+_evuTabla(c)+'</div></div>';
 }
 
@@ -28767,8 +28811,15 @@ function _evuBloqueClientes(Ms){
   var cerrIdx=[]; Ms.forEach(function(m,i){if(!m.curso)cerrIdx.push(i);});
   var uc=cerrIdx.length?cerrIdx[cerrIdx.length-1]:-1;
   var maxAct=Math.max.apply(null,cerrIdx.map(function(i){return act[i]||0;}).concat([0]));
-  var f1,f2;
-  if(mU.curso){
+  var f1,f2, notaK='', actD=act.slice(), nueD=nue.slice();
+  /* El mes en curso sin ninguna casa todavía (el día 1): se habla del que cerró
+     y no se dibuja un punto en 0. */
+  if(mU.curso&&!(act[u]>0)&&uc>=0){
+    f1=Ms[uc].nom+' cerró con '+(act[uc]||0)+' casas activas';
+    f2='En '+Ms[uc].nom.toLowerCase()+' hubo '+(nue[uc]||0)+' casas nuevas';
+    notaK=mU.nom+(hoy.getDate()===1?' arranca hoy.':' todavía no tiene entregas.');
+    actD[u]=null; nueD[u]=null;
+  }else if(mU.curso){
     f1='Van '+(act[u]||0)+' casas activas en '+mU.nom.toLowerCase()+', al '+_evuDM(hoy)+(uc>=0?'; '+Ms[uc].nom.toLowerCase()+' cerró con '+act[uc]:'');
     f2='Van '+(nue[u]||0)+' casas nuevas en '+mU.nom.toLowerCase()+(uc>=0?'; en '+Ms[uc].nom.toLowerCase()+' fueron '+nue[uc]:'');
   }else{
@@ -28783,8 +28834,8 @@ function _evuBloqueClientes(Ms){
   };};
   var co=_evuCohortes(), comp=co.filter(function(m){return m.completa;}), pend=co.filter(function(m){return !m.completa;});
   var h=cab
-    +_evuCard('casas',f1,'Casas distintas que recibieron al menos una entrega en el mes: la misma cuenta de Objetivo.'+(mU.curso?' El mes en curso es un punto suelto: las casas no se proyectan, no se suman parejo.':''),mk('Casas activas',act,'Casas activas por mes'))
-    +_evuCard('nuevas',f2,'Casas cuya primera compra cayó en ese mes.',mk('Casas nuevas',nue,'Casas nuevas por mes'));
+    +_evuCard('casas',f1,'Casas distintas que recibieron al menos una entrega en el mes: la misma cuenta de Objetivo.'+(mU.curso?' El mes en curso es un punto suelto: las casas no se proyectan, no se suman parejo.':''),mk('Casas activas',actD,'Casas activas por mes'),notaK)
+    +_evuCard('nuevas',f2,'Casas cuya primera compra cayó en ese mes.',mk('Casas nuevas',nueD,'Casas nuevas por mes'),notaK);
   if(comp.length){
     var uC=comp[comp.length-1];
     var f3='De las casas nuevas de '+uC.nom.toLowerCase()+', el '+Math.round(uC.pct)+'% volvió a comprar dentro de los '+EVU_VENTANA+' días ('+uC.volvieron+' de '+uC.nuevas+')';
