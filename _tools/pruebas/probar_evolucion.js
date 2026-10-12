@@ -269,7 +269,7 @@ const TODOS = ['ventas', 'acum', 'entregas', 'ticket', 'canales', 'margen', 'res
       var ch=[].slice.call(document.querySelectorAll('#p-evolucion [data-card="canales"] .evu-chip')).map(function(b){return b.textContent+'|'+b.getAttribute('aria-pressed');});
       return {top:g.top,maxChicos:mx,ocupa:mx/g.top,chips:ch,series:c.series.map(function(s){return s.nom;})};})()`;
     const e1 = await evaluar(cli, esc);
-    chk('Canales tiene el chip Home, y arranca prendido', e1.chips.length === 3 && e1.chips[0] === 'Home|true' && e1.series[0] === 'Home', e1.chips);
+    chk('Canales tiene el chip Home, y arranca prendido', e1.chips.length === 5 && e1.chips[0] === 'Home|true' && e1.series[0] === 'Home', e1.chips);
     await evaluar(cli, `evuCanal('Home')`); await pausa(400);
     const e2 = await evaluar(cli, esc);
     Mc = await evaluar(cli, medir);
@@ -452,6 +452,14 @@ const TODOS = ['ventas', 'acum', 'entregas', 'ticket', 'canales', 'margen', 'res
       if (cx.n !== 5 - ((m & 1) + ((m >> 1) & 1) + ((m >> 2) & 1)) || !cx.abierta || !(cx.top > 0) || Mx.fuera.length || Mx.pisadas.length || Mx.sinAncho.length || Mx.graf !== 11) combos.push({ m, cx, fuera: Mx.fuera, pisadas: Mx.pisadas });
     }
     chk('Home, Red y Catering en sus 8 combinaciones: nada se pisa ni se sale, y la tabla abierta sigue abierta', combos.length === 0, combos);
+    /* Los cinco apagados: se dice, y el resto de la tab sigue entera. */
+    await evaluar(cli, `EVU_OFF={Home:true,Pilar:true,Clubes:true,Red:true,Catering:true};rEvolucion()`); await pausa(300);
+    const nada = await evaluar(cli, `({msg:(document.getElementById('evuCanVacio')||{}).textContent||'',svgs:document.querySelectorAll('#p-evolucion .evu-graf svg').length,chips:document.querySelectorAll('#p-evolucion .evu-chip').length})`);
+    chk('los cinco canales apagados: lo dice, quedan los chips para volver y los otros 10 gráficos', /apagados/.test(nada.msg) && nada.svgs === 10 && nada.chips === 5, nada);
+    await evaluar(cli, `document.querySelector('#p-evolucion .evu-chip').click()`); await pausa(300);
+    chk('…y un toque en un chip lo vuelve a dibujar', await evaluar(cli, `document.querySelectorAll('#p-evolucion .evu-graf svg').length`) === 11);
+    const chico = await evaluar(cli, `[].slice.call(document.querySelectorAll('#p-evolucion button,#p-evolucion summary')).filter(function(b){var r=b.getBoundingClientRect();return r.width>0&&r.height<38;}).length+'/'+document.querySelectorAll('#p-evolucion button,#p-evolucion summary').length`);
+    chk('ningún control de la tab mide menos de 38 px de alto (' + chico + ')', /^0\//.test(chico), chico);
     await evaluar(cli, `EVU_OFF={};rEvolucion()`); await pausa(300);
 
     /* Girar el celular / cambiar el ancho con la tab abierta, con un cartel abierto. */
