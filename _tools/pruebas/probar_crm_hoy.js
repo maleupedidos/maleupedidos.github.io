@@ -110,8 +110,13 @@ const FIX = {
   base: { segunda: 0.16, volve: 0.18, ocasion: null, repo: 0.54, nuevo: 0.43 },
   resultados: {}, cupones: { Tartas: { cod: 'TARTA20', pct: 20 } }, nombres: {}
 };
-const RES = { repo: { env: 40, envCompro: 26, envPlata: 1560000, ctl: 5, ctlCompro: 2, ctlPlata: 90000, enCurso: 12, boton: 9, botonPlata: 400000,
-  a: { env: 21, compro: 15, plata: 900000, boton: 6, botonPlata: 300000 }, b: { env: 19, compro: 11, plata: 660000, boton: 3, botonPlata: 100000 } } };
+const RES = { repo: { env: 40, mirados: 30, resp: 12, envCompro: 26, envPlata: 1560000, ctl: 5, ctlCompro: 2, ctlPlata: 90000, enCurso: 12, boton: 9, botonPlata: 400000,
+  a: { env: 21, resp: 8, compro: 15, plata: 900000, boton: 6, botonPlata: 300000 }, b: { env: 19, resp: 4, compro: 11, plata: 660000, boton: 3, botonPlata: 100000 } } };
+/* Dos casas que contestaron: una hace 2 horas, otra ayer (y ya compró). */
+const RESPUESTAS = [
+  { id: 'E1-0', k: 'casa:la paz|10', key: '1150000010', nom: 'Martín Prueba', jugada: 'repo', jugadaNom: 'Reposición', ver: 'a', horas: 2, txt: 'Dale, mandame 2', compro: 0 },
+  { id: 'E1-1', k: 'casa:la paz|11', key: '1150000011', nom: 'Ana Prueba', jugada: 'repo', jugadaNom: 'Reposición', ver: 'b', horas: 26, txt: '(mandó un audio)', compro: 1 }
+];
 const DATOS = process.env.DATOS ? JSON.parse(fs.readFileSync(process.env.DATOS, 'utf8')) : FIX;
 if (process.env.DATOS && !DATOS.tpls) DATOS.tpls = tpls('PENDING');   // la planilla espía no llega a WATI: los textos son los de la bitácora
 
@@ -131,7 +136,8 @@ const STUB = (datos) => `
       if(x&&String(x.method||'').toUpperCase()==='POST'){
         var b={}; try{ b=JSON.parse(x.body); }catch(e){}
         window.__posts.push(b);
-        return Promise.resolve(new Response(JSON.stringify(b.action==='crmEnviarJugada'?{ok:true,enviados:(b.casas||[1]).length,control:1,caidas:0,porVersion:{a:1,b:0}}:{ok:true}),{status:200}));
+        return Promise.resolve(new Response(JSON.stringify(b.action==='crmEnviarJugada'?{ok:true,enviados:(b.casas||[1]).length,control:1,caidas:0,sacadas:(b.sacadas||[]).length,porVersion:{a:1,b:0}}
+          :(b.action==='crmJugadasRespuestas'?{ok:true,mirados:0,nuevas:0,faltan:0}:{ok:true})),{status:200}));
       }
       var m=url.match(/action=([a-zA-Z_]+)/), a=m?m[1]:'?'; window.__gets.push(a);
       var cuerpo={ok:false,error:'stub'}, demora=120;
@@ -141,7 +147,8 @@ const STUB = (datos) => `
           cuerpo.palanca=(__fase==='on'||__fase==='pend');
           cuerpo.tpls=(__fase==='sinwati')?null:(__fase==='on'||__fase==='lento'||__fase==='res'?${JSON.stringify(tpls('APPROVED'))}:${JSON.stringify(tpls('PENDING'))});
           if(__fase==='off'||__fase==='pend'||__fase==='sinwati'){ cuerpo.casas.forEach(function(c){ if(c.listo===2) c.listo=(__fase==='sinwati'?0:1); }); cuerpo.jugadas.forEach(function(j){ j.listas=0; }); }
-          if(__fase==='res') cuerpo.resultados=${JSON.stringify(RES)};
+          if(__fase==='res'){ cuerpo.resultados=${JSON.stringify(RES)}; cuerpo.respHoras=48;
+            cuerpo.respuestas=${JSON.stringify(RESPUESTAS)}.map(function(x){ x.cuando=Date.now()-x.horas*3600000; return x; }); }
         }
         if(__fase==='lento') demora=6000;
       }
@@ -221,11 +228,12 @@ async function apagado(cli) {
 
   await abrirLista(cli, 'repo');
   await pausa(500);
-  const filas = await ev(cli, `JSON.stringify([].map.call(document.querySelectorAll('#jugCuerpo .jg-card.abierta .jg-lista .jg-fila'),function(f){return (f.querySelector('input')?'[x] ':'')+f.textContent.replace(/\\s+/g,' ').trim().slice(0,400);}))`);
+  const filas = await ev(cli, `JSON.stringify([].map.call(document.querySelectorAll('#jugCuerpo .jg-card.abierta .jg-lista .jg-fila'),function(f){return (f.classList.contains('jg-fila-va')?'[x] ':'')+f.textContent.replace(/\\s+/g,' ').trim().slice(0,400);}))`);
   console.log('     lista: ' + String(filas).slice(0, 900));
   const fl = JSON.parse(typeof filas === 'string' ? filas : '[]');
-  chk('la lista: 2 con tilde, 1 de control, 3 frenadas', fl.length === 6 && fl.filter(x => /^\[x\]/.test(x)).length === 2 && fl.some(x => /^control ?Carla Prueba/.test(x)), fl.map(x => x.slice(0, 40)));
+  chk('la lista: 2 que reciben (cada una con su botón Sacar), 1 de control, 3 frenadas', fl.length === 6 && fl.filter(x => /^\[x\]/.test(x)).length === 2 && fl.some(x => /^control ?Carla Prueba/.test(x)) && fl.filter(x => /^\[x\].*Sacar$/.test(x)).length === 2, fl.map(x => x.slice(0, 40) + '…' + x.slice(-12)));
   chk('cada casa muestra SU mensaje con SU versión (Ana va con la B)', fl.some(x => /Ana Prueba.*Hola Ana! Repartimos este viernes de 19 a 21\. ¿Reponemos los sorrentinos de jamón y queso así tenés la semana resuelta\?Versión B jug_reposicion_b/.test(x)), fl[1]);
+  chk('abrir "Hoy" apagado y sin jugadas enviadas no le pide nada a WATI', (await ev(cli, `window.__posts.filter(function(p){return p.action==='crmJugadasRespuestas';}).length`)) === 0);
   chk('la frenada por el tope dice por qué campaña', fl.some(x => /Mario Prueba.*ya recibió «domingo_11_octubre \(11\/10\)» en los últimos 7 días/.test(x)), fl[3]);
   chk('la del pedido abierto y la del nombre dicen su motivo', fl.some(x => /Elena Prueba.*tiene un pedido abierto/.test(x)) && fl.some(x => /PMO.*hay que revisar el nombre \(«PMO»: parece una sigla\)/.test(x)), fl.slice(4));
   chk('APAGADO: no hay botón de mandar ni de prueba', (await ev(cli, `!document.getElementById('jugGo')&&!document.getElementById('jugTelPrueba')`)) === true);
@@ -234,13 +242,13 @@ async function apagado(cli) {
   await foto(cli, 'hoy-lista');
 
   const medidas = await ev(cli, `JSON.stringify({desborde:document.documentElement.scrollWidth-window.innerWidth,
-    chicos:[].filter.call(document.querySelectorAll('#jugCuerpo .jg-btn, #jugCuerpo .jg-fila-nm .crm-edit-btn'),function(b){return b.getBoundingClientRect().height<44;}).length,
-    botones:document.querySelectorAll('#jugCuerpo .jg-btn, #jugCuerpo .jg-fila-nm .crm-edit-btn').length,
+    chicos:[].filter.call(document.querySelectorAll('#jugCuerpo .jg-btn, #jugCuerpo .jg-fila-nm .crm-edit-btn, #jugCuerpo .jg-sacar'),function(b){return b.getBoundingClientRect().height<44;}).length,
+    botones:document.querySelectorAll('#jugCuerpo .jg-btn, #jugCuerpo .jg-fila-nm .crm-edit-btn, #jugCuerpo .jg-sacar').length,
     sale:[].filter.call(document.querySelectorAll('#jugCuerpo .jg-card, #jugCuerpo .jg-tope, #jugCuerpo .jg-fila-nm'),function(c){var r=c.getBoundingClientRect();return r.right>window.innerWidth+1||r.left<-1;}).length,
     cols:(function(){var t={};[].forEach.call(document.querySelectorAll('#jugCuerpo .jg-card:not(.abierta)'),function(c){t[Math.round(c.getBoundingClientRect().left)]=1;});return Object.keys(t).length;})()})`);
   console.log('     medidas: ' + medidas);
   const md = JSON.parse(typeof medidas === 'string' ? medidas : '{}');
-  chk('nada desborda a lo ancho (' + md.botones + ' botones medidos)', md.desborde <= 0 && md.sale === 0 && md.botones >= 5, md);
+  chk('nada desborda a lo ancho (' + md.botones + ' botones medidos)', md.desborde <= 0 && md.sale === 0 && md.botones >= 7, md);
   chk('todos los botones llegan a 44 px', md.chicos === 0, md);
   chk(ANCHO <= 560 ? 'en el celular va en una columna' : 'en escritorio las tarjetas van en más de una columna', ANCHO <= 560 ? md.cols === 1 : md.cols >= 2, md);
 
@@ -292,9 +300,16 @@ async function prendido(cli) {
   await abrirLista(cli, 'repo');
   chk('aparece el botón de mandar, con la cuenta', await esperar(cli, `!!document.getElementById('jugGo')&&/^Mandar a 2 casas$/.test(document.getElementById('jugGo').textContent.trim())`, 8000), await ev(cli, T('#jugCuerpo .jg-pie')));
   chk('se puede probar la A y la B por separado', (await ev(cli, T('#jugCuerpo .jg-prueba'))) === 'Probar la AProbar la B');
-  await ev(cli, `document.querySelectorAll('#jugCuerpo .jg-card.abierta .jg-fila input')[1].click();1`);
+  await ev(cli, `document.querySelectorAll('#jugCuerpo .jg-card.abierta .jg-fila-va .jg-sacar')[1].click();1`);
   await pausa(300);
-  chk('destildar una casa la saca de la cuenta', (await ev(cli, T('#jugGo'))) === 'Mandar a 1 casa', await ev(cli, T('#jugGo')));
+  chk('un toque en "Sacar" la deja abajo como sacada, con cómo volver a ponerla', (await ev(cli, T('#jugCuerpo .jg-card.abierta .jg-fila-sac'))) ===
+    'sacadaAna Prueba La Paz · Lote 11La sacaste vos: no recibe esta jugada. Queda anotado a tu nombre cuando mandes.Volver a poner', await ev(cli, T('#jugCuerpo .jg-card.abierta .jg-fila-sac')));
+  await ev(cli, `document.querySelector('#jugCuerpo .jg-card.abierta .jg-fila-sac .jg-sacar').click();1`);
+  await pausa(250);
+  chk('"Volver a poner" la devuelve a la lista', (await ev(cli, T('#jugGo'))) === 'Mandar a 2 casas' && (await ev(cli, `document.querySelectorAll('#jugCuerpo .jg-card.abierta .jg-fila-sac').length`)) === 0);
+  await ev(cli, `document.querySelectorAll('#jugCuerpo .jg-card.abierta .jg-fila-va .jg-sacar')[1].click();1`);
+  await pausa(250);
+  chk('sacar una casa la saca de la cuenta', (await ev(cli, T('#jugGo'))) === 'Mandar a 1 casa', await ev(cli, T('#jugGo')));
   await ev(cli, `document.getElementById('jugGo').click();1`);
   await pausa(300);
   chk('el primer toque NO manda: pide el segundo', (await ev(cli, 'window.__posts.length')) === 0 && /^Tocá de nuevo: sale 1 mensaje por WhatsApp$/.test(await ev(cli, T('#jugGo'))), await ev(cli, T('#jugGo')));
@@ -305,8 +320,9 @@ async function prendido(cli) {
   const ps = JSON.parse(typeof posts === 'string' ? posts : '[]');
   chk('el segundo manda UN POST, con la jugada y solo la casa que quedó tildada', ps.length === 1 && ps[0].action === 'crmEnviarJugada' && ps[0].jugada === 'repo' && JSON.stringify(ps[0].casas) === '["casa:la paz|10"]', ps);
   chk('…y la versión que se le mostró a esa casa (A)', JSON.stringify(ps[0].versiones) === '{"casa:la paz|10":"a"}', ps[0] && ps[0].versiones);
+  chk('…y la casa que sacó, para que quede anotado quién la sacó', JSON.stringify(ps[0].sacadas) === '["casa:la paz|11"]', ps[0] && ps[0].sacadas);
   chk('el POST no lleva teléfonos, texto ni nombre de template: eso lo arma el servidor', !/1150000|sorrentinos|jug_/i.test(posts), posts);
-  chk('y avisa lo que salió, por versión', /1 mensaje enviado \(A 1 · B 0\) · 1 de control/.test(await ev(cli, T('#toast'))), await ev(cli, T('#toast')));
+  chk('y avisa lo que salió, por versión', /1 mensaje enviado \(A 1 · B 0\) · 1 de control · 1 sacada por vos/.test(await ev(cli, T('#toast'))), await ev(cli, T('#toast')));
   chk('sin errores en consola', (await ev(cli, 'JSON.stringify(window.__err||[])')) === '[]', await ev(cli, 'JSON.stringify(window.__err||[])'));
 
   console.log('\n-- con jugadas ya enviadas --');
@@ -316,7 +332,17 @@ async function prendido(cli) {
   const res = await ev(cli, `JSON.stringify([].map.call(document.querySelectorAll('#jugCuerpo .jg-tabla tr[data-res="repo"] td'),function(t){return t.textContent.replace(/\\s+/g,' ').trim();}))`);
   console.log('     resultados: ' + res);
   chk('compara contra el control, A contra B y los pedidos por el botón', res ===
-    '["Reposición 12 todavía en los 14 días","40","26 65%","$1.560.000","2 de 5 40%","15 de 21 71%","11 de 19 58%","9 A 6 · B 3"]', res);
+    '["Reposición 12 todavía en los 14 días","40","12 40% de 30 mirados","26 65%","$1.560.000","2 de 5 40%","15 de 21 71% · 8 resp.","11 de 19 58% · 4 resp.","9 A 6 · B 3"]', res);
+  const ct = await ev(cli, T('#jugCuerpo .jg-contesta'));
+  console.log('     te contestaron: ' + JSON.stringify(ct).slice(0, 420));
+  chk('arriba dice "Te contestaron 2 casas", con quién, de qué jugada, cuándo y qué dijo', /^Te contestaron 2 casas/.test(ct) && /Martín Prueba Reposición · hace 2 horasDale, mandame 2/.test(ct) &&
+    /Ana Prueba Reposición · (de ayer|hace 26 horas) · ya compró\(mandó un audio\)/.test(ct), ct);
+  chk('es lo PRIMERO de la pantalla: arriba del aviso del tope y de las jugadas', (await ev(cli, `(function(){var a=document.querySelector('#jugCuerpo .jg-contesta').getBoundingClientRect().top,b=document.querySelector('#jugCuerpo .jg-tope').getBoundingClientRect().top,c=document.querySelector('#jugCuerpo .jg-grid').getBoundingClientRect().top;return a<b&&b<c;})()`)) === true);
+  chk('al abrir, le pidió una vez al servidor que mire las respuestas en WATI', (await ev(cli, `window.__posts.filter(function(p){return p.action==='crmJugadasRespuestas';}).length`)) === 1, await ev(cli, 'JSON.stringify(window.__posts)'));
+  await ev(cli, `document.querySelectorAll('#jugCuerpo .jg-contesta .jg-resp-b .crm-edit-btn')[1].click();1`);
+  await pausa(250);
+  chk('"Ya le contesté" la saca de la vista y baja la cuenta', /^Te contestó 1 casa/.test(await ev(cli, T('#jugCuerpo .jg-contesta'))) && !/Martín Prueba/.test(await ev(cli, T('#jugCuerpo .jg-contesta'))), await ev(cli, T('#jugCuerpo .jg-contesta')));
+  chk('los botones de ese bloque llegan a 44 px y no desborda', (await ev(cli, `[].filter.call(document.querySelectorAll('#jugCuerpo .jg-contesta .crm-edit-btn'),function(b){return b.getBoundingClientRect().height<44;}).length+Math.max(0,document.documentElement.scrollWidth-window.innerWidth)`)) === 0);
   chk('la tabla ancha no desborda la página', (await ev(cli, 'document.documentElement.scrollWidth-window.innerWidth')) <= 0);
   await foto(cli, 'hoy-resultados');
 

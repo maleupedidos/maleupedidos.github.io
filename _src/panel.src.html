@@ -2355,6 +2355,16 @@ button.ped-dep-x.va,button.ped-dep-x.va:disabled{opacity:1;background:#E3EFE3;bo
 .jg-tag.ok{background:#2E7D32}
 .jg-tope{font-size:13px;line-height:1.45;color:#8B3A0E;background:var(--ol);border:1px solid var(--o);border-radius:10px;padding:10px 12px;margin-bottom:14px}
 .jg-tope b{color:var(--b)}
+.jg-fila-va{cursor:default}
+.jg-fila-sac{align-items:center}
+#jugCuerpo .jg-sacar{min-height:44px;padding:8px 12px;flex:none}
+.jg-contesta{background:#E8F5E9;border:1px solid #2E7D32;border-radius:12px;padding:12px 14px 4px;margin-bottom:14px}
+.jg-contesta-h{font-size:18px;font-weight:800;color:#1B5E20}
+.jg-contesta-s{font-size:12.5px;color:#33501F;line-height:1.4;margin:2px 0 6px}
+.jg-contesta .jg-fila{border-top-color:#B7DDB9;opacity:1;flex-wrap:wrap}
+.jg-dijo{background:#fff;color:var(--ink)}
+.jg-resp-b{display:flex;gap:8px;flex:none}
+#jugCuerpo .jg-resp-b .crm-edit-btn{min-height:44px;padding:8px 12px}
 .jg-fila-nm{align-items:center;opacity:1}
 #jugCuerpo .jg-fila-nm .crm-edit-btn{min-height:44px;padding:8px 12px;flex:none}
 .jg-msg-de{font-size:12px;color:var(--ink3);line-height:1.4;margin-bottom:10px}
@@ -38470,6 +38480,7 @@ if('serviceWorker' in navigator){
       _jug = d; _jugInfo = info;
       try { localStorage.setItem('maleu_jug_on', d.palanca ? '1' : '0'); } catch(e){}
       window.jugTabs(); _jugPintar(); _jugFichaParche();
+      if (!info || !info.viejo) _jugRespRefrescar(!!fresco);
       try { if (typeof window.jugAlLlegar === 'function') window.jugAlLlegar(); } catch(e){}
     }, {valido: function(d){ return !!(d && d.ok === true && Array.isArray(d.casas) && Array.isArray(d.jugadas)); }})
       .then(function(d){ _jugVuelo = null; return d; },
@@ -38544,6 +38555,7 @@ if('serviceWorker' in navigator){
     if (_jugErr) h += '<div class="crm-warn">' + _escJ(_jugErr) + ' Estás viendo lo último que se guardó.</div>';
     h += '<div class="jg-resumen"><b>' + total + '</b> ' + (total === 1 ? 'casa para escribirle hoy' : 'casas para escribirles hoy') +
       (d.ocasion ? ' · <b>reparto especial</b>: ' + _escJ(d.ocasion.motivo) + ', ' + _escJ(d.ocasion.horario) : '') + '</div>';
+    h += _jugContestaron();
     /* Lo que cuesta una campaña general: las casas que hoy tenian su jugada y no
        la reciben porque les llego otra cosa en los ultimos 7 dias. */
     var nTope = 0; (d.tope || []).forEach(function(x){ nTope += x.n; });
@@ -38564,6 +38576,48 @@ if('serviceWorker' in navigator){
     c.innerHTML = h;
   }
 
+  /* TE CONTESTARON: lo primero que hay que ver. Quien respondio un mensaje de
+     jugada en los ultimos 3 dias (el servidor lo lee del chat de WATI). "Ya le
+     contesté" lo saca de la vista en ESTE dispositivo; la charla se sigue en WATI,
+     que es donde esta la ventana de 24 horas para escribirle libre. */
+  function _jugVistas(){ try { return JSON.parse(localStorage.getItem('maleu_jug_resp_vistas') || '{}') || {}; } catch(e){ return {}; } }
+  function _jugContestaron(){
+    var vistas = _jugVistas();
+    var L = (_jug.respuestas || []).filter(function(x){ return !vistas[x.id]; });
+    if (!L.length) return '';
+    var h = '<div class="jg-contesta"><div class="jg-contesta-h">Te ' + (L.length === 1 ? 'contestó 1 casa' : 'contestaron ' + L.length + ' casas') + '</div>' +
+      '<div class="jg-contesta-s">Respondieron a un mensaje tuyo. Seguí la charla en WATI: tenés 24 horas desde que escribieron para contestarles libre.</div>';
+    L.forEach(function(x){
+      h += '<div class="jg-fila no jg-fila-resp"><span class="jg-fila-t"><b>' + _escJ(x.nom) + '</b> <span class="jg-ubic">' + _escJ(x.jugadaNom) + ' · ' + _escJ(_hace(x.cuando)) +
+        (x.compro ? ' · <b>ya compró</b>' : '') + '</span><span class="jg-fila-msg jg-dijo">' + _escJ(x.txt) + '</span></span>' +
+        '<span class="jg-resp-b"><button class="crm-edit-btn" onclick="crmOpenCliente(\'' + encodeURIComponent(x.key || '') + '\')">Ficha</button>' +
+        '<button class="crm-edit-btn" onclick="jugRespVista(\'' + encodeURIComponent(x.id) + '\')">Ya le contesté</button></span></div>';
+    });
+    return h + '</div>';
+  }
+  window.jugRespVista = function(idEnc){
+    var v = _jugVistas(); v[decodeURIComponent(idEnc)] = Date.now();
+    /* Lo de hace mas de 10 dias ya no vuelve a aparecer: se limpia. */
+    Object.keys(v).forEach(function(k){ if (Date.now() - v[k] > 10 * 86400000) delete v[k]; });
+    try { localStorage.setItem('maleu_jug_resp_vistas', JSON.stringify(v)); } catch(e){}
+    _jugPintar();
+  };
+  /* Le pide al servidor que mire en WATI si contestaron los mensajes de jugada
+     que faltan. A lo sumo cada 10 minutos, y solo si hay algo enviado que mirar. */
+  var _jugRespVuelo = false;
+  function _jugRespRefrescar(forzar){
+    if (_jugRespVuelo || !_jug) return;
+    var hay = Object.keys(_jug.resultados || {}).some(function(k){ return (_jug.resultados[k].env || 0) > 0; });
+    if (!hay) return;
+    var ult = 0; try { ult = Number(localStorage.getItem('maleu_jug_resp_ts')) || 0; } catch(e){}
+    if (!forzar && Date.now() - ult < 10 * 60000) return;
+    _jugRespVuelo = true;
+    try { localStorage.setItem('maleu_jug_resp_ts', String(Date.now())); } catch(e){}
+    fetch(CRM_API, {method: 'POST', mode: 'cors', body: JSON.stringify({action: 'crmJugadasRespuestas'})})
+      .then(function(r){ return r.json(); })
+      .then(function(d){ _jugRespVuelo = false; if (d && d.ok && d.mirados > 0) _jugCargar(true); })
+      .catch(function(){ _jugRespVuelo = false; });
+  }
   function _jugCard(j){
     var g = _jugCasas(j.id), ab = _jugAbierta === j.id;
     var ej = null;
@@ -38598,10 +38652,19 @@ if('serviceWorker' in navigator){
     var listas = g.van.filter(function(c){ return c.listo === 2; });
     var quedan = listas.filter(function(c){ return !fuera[c.k]; });
     var h = '<div class="jg-lista">';
+    /* Sacar una casa puntual: un toque. No recibe esta jugada y, al mandar, queda
+       anotado en la bitacora que la saco quien mando (ver `sacadas` en jugMandar). */
     g.van.forEach(function(c){
-      h += '<label class="jg-fila"><input type="checkbox" ' + (fuera[c.k] ? '' : 'checked') + ' onchange="jugTildar(\'' + j.id + '\',\'' + encodeURIComponent(c.k) + '\',this.checked)">' +
-        '<span class="jg-fila-t"><b>' + _escJ(c.nom) + '</b> <span class="jg-ubic">' + _jugUbic(c) + '</span>' +
-        '<span class="jg-fr">' + _escJ(c.fr) + '</span>' + _jugMsgHtml(j, c, true) + '</span></label>';
+      if (fuera[c.k]) return;
+      h += '<div class="jg-fila jg-fila-va"><span class="jg-fila-t"><b>' + _escJ(c.nom) + '</b> <span class="jg-ubic">' + _jugUbic(c) + '</span>' +
+        '<span class="jg-fr">' + _escJ(c.fr) + '</span>' + _jugMsgHtml(j, c, true) + '</span>' +
+        '<button class="crm-edit-btn jg-sacar" onclick="jugTildar(\'' + j.id + '\',\'' + encodeURIComponent(c.k) + '\',false)">Sacar</button></div>';
+    });
+    g.van.forEach(function(c){
+      if (!fuera[c.k]) return;
+      h += '<div class="jg-fila no jg-fila-sac"><span class="jg-tag gris">sacada</span><span class="jg-fila-t"><b>' + _escJ(c.nom) + '</b> <span class="jg-ubic">' + _jugUbic(c) +
+        '</span><span class="jg-fr">La sacaste vos: no recibe esta jugada. Queda anotado a tu nombre cuando mandes.</span></span>' +
+        '<button class="crm-edit-btn jg-sacar" onclick="jugTildar(\'' + j.id + '\',\'' + encodeURIComponent(c.k) + '\',true)">Volver a poner</button></div>';
     });
     g.ctl.forEach(function(c){
       h += '<div class="jg-fila no"><span class="jg-tag">control</span><span class="jg-fila-t"><b>' + _escJ(c.nom) + '</b> <span class="jg-ubic">' + _jugUbic(c) +
@@ -38666,17 +38729,20 @@ if('serviceWorker' in navigator){
       }
       return h;
     }
-    var ab = function(x){ return x.env ? x.compro + ' de ' + x.env + ' <span class="jg-ubic">' + _jugPct(x.compro, x.env) + '</span>' : '-'; };
-    h += '<div class="jg-tabla-w"><table class="jg-tabla"><thead><tr><th>Jugada</th><th>Mensajes</th><th>Compraron</th><th>Plata</th><th>Control</th><th>Versión A</th><th>Versión B</th><th>Por el botón</th></tr></thead><tbody>';
+    var ab = function(x){ return x.env ? x.compro + ' de ' + x.env + ' <span class="jg-ubic">' + _jugPct(x.compro, x.env) + (x.resp ? ' · ' + x.resp + ' resp.' : '') + '</span>' : '-'; };
+    h += '<div class="jg-tabla-w"><table class="jg-tabla"><thead><tr><th>Jugada</th><th>Mensajes</th><th>Respondieron</th><th>Compraron</th><th>Plata</th><th>Control</th><th>Versión A</th><th>Versión B</th><th>Por el botón</th></tr></thead><tbody>';
+    /* Respondieron: sobre los chats que ya se miraron en WATI. Si todavia no se
+       miro ninguno va una raya: no saber no es que no hayan contestado. */
+    var rsp = function(x){ return x.mirados ? '<b>' + x.resp + '</b> <span class="jg-ubic">' + _jugPct(x.resp, x.mirados) + (x.mirados < x.env ? ' de ' + x.mirados + ' mirados' : '') + '</span>' : '-'; };
     d.jugadas.forEach(function(j){
       var x = res[j.id]; if (!x) return;
-      h += '<tr data-res="' + j.id + '"><td>' + _escJ(j.nombre) + (x.enCurso ? ' <span class="jg-ubic">' + x.enCurso + ' todavía en los ' + d.reglas.ventana + ' días</span>' : '') + '</td><td>' + x.env + '</td>' +
+      h += '<tr data-res="' + j.id + '"><td>' + _escJ(j.nombre) + (x.enCurso ? ' <span class="jg-ubic">' + x.enCurso + ' todavía en los ' + d.reglas.ventana + ' días</span>' : '') + '</td><td>' + x.env + '</td><td>' + rsp(x) + '</td>' +
         '<td><b>' + x.envCompro + '</b> <span class="jg-ubic">' + _jugPct(x.envCompro, x.env) + '</span></td><td>$' + fmt$(x.envPlata) + '</td>' +
         '<td>' + (x.ctl ? x.ctlCompro + ' de ' + x.ctl + ' <span class="jg-ubic">' + _jugPct(x.ctlCompro, x.ctl) + '</span>' : '-') + '</td>' +
         '<td>' + ab(x.a) + '</td><td>' + ab(x.b) + '</td>' +
         '<td>' + (x.boton ? x.boton + ' <span class="jg-ubic">A ' + x.a.boton + ' · B ' + x.b.boton + '</span>' : '-') + '</td></tr>';
     });
-    h += '</tbody></table></div><div class="jg-msg-de">Casas que compraron en los ' + d.reglas.ventana + ' días siguientes al mensaje, contra las que quedaron sin recibirlo. «Por el botón» son los pedidos que entraron tocando Pedir ahora en ese mensaje. Con pocas casas la diferencia es ruido: el número que vale es el acumulado.</div>';
+    h += '</tbody></table></div><div class="jg-msg-de">Casas que compraron en los ' + d.reglas.ventana + ' días siguientes al mensaje, contra las que quedaron sin recibirlo. «Respondieron» son las que contestaron por WhatsApp dentro de las ' + (d.respHoras || 48) + ' horas. «Por el botón» son los pedidos que entraron tocando Pedir ahora en ese mensaje. Con pocas casas la diferencia es ruido: el número que vale es el acumulado.</div>';
     return h;
   }
 
@@ -38702,16 +38768,18 @@ if('serviceWorker' in navigator){
        la lista para que salga el mensaje que se reviso. */
     var vers = {};
     var ks = _jugCasas(id).van.filter(function(c){ return c.listo === 2 && !fuera[c.k]; }).map(function(c){ vers[c.k] = c.ver; return c.k; });
+    var sac = _jugCasas(id).van.filter(function(c){ return fuera[c.k]; }).map(function(c){ return c.k; });
     if (!ks.length) return;
     if (_jugArmado !== id){ _jugArmado = id; _jugPintar(); return; }
     _jugMandando = true; _jugPintar();
-    fetch(CRM_API, {method: 'POST', mode: 'cors', body: JSON.stringify({action: 'crmEnviarJugada', jugada: id, casas: ks, versiones: vers, lote: String(Date.now())})})
+    fetch(CRM_API, {method: 'POST', mode: 'cors', body: JSON.stringify({action: 'crmEnviarJugada', jugada: id, casas: ks, versiones: vers, sacadas: sac, lote: String(Date.now())})})
       .then(function(r){ return r.json(); })
       .then(function(d){
         _jugMandando = false; _jugArmado = '';
         if (d && d.ok){
           var pv = d.porVersion || {};
           toast(d.enviados + (d.enviados === 1 ? ' mensaje enviado' : ' mensajes enviados') + ' (A ' + (pv.a || 0) + ' · B ' + (pv.b || 0) + ')' + (d.control ? ' · ' + d.control + ' de control' : '') +
+            (d.sacadas ? ' · ' + d.sacadas + (d.sacadas === 1 ? ' sacada por vos' : ' sacadas por vos') : '') +
             (d.caidas ? ' · ' + d.caidas + ' ya no correspondían' : '') + (d.parcial ? ' · OJO, salió a medias: ' + d.error : ''), 7000);
           _jugAbierta = ''; _jugFuera[id] = {};
           _jugCargar(true);
