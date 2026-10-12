@@ -130,6 +130,9 @@ const ultimoPost = (cli) => evaluar(cli, `JSON.stringify(window.__posts[window._
     chk('sin descuadre no hay aviso', !/no suman el total/.test(ef));
 
     /* ── Mover efectivo: abrir sin atajo ── */
+    /* Primero como alguien que NO es admin: lo del otro no se toca. */
+    const rolAntes = await evaluar(cli, `SESSION.rol||''`);
+    await evaluar(cli, `SESSION.rol='empleado'; 1`);
     await click(cli, `document.getElementById('cjBMover')`);
     await pausa(150);
     const m0 = await evaluar(cli, `(()=>({ abierto: !document.getElementById('lugMoverForm').classList.contains('hidden'),
@@ -141,7 +144,20 @@ const ultimoPost = (cli) => evaluar(cli, `JSON.stringify(window.__posts[window._
     chk('ningun lugar viene elegido', m0.elegidos === 0, m0);
     chk('el boton dice que falta el origen y esta trabado', m0.dis === true && /De dónde/.test(m0.btn), m0.btn);
     const ajenos = m0.desde.filter(d => /Lucas/.test(d.t));
-    chk('la plata de Lucas no se puede sacar (Tadeo esta logueado) y dice quien la mueve', ajenos.length === 2 && ajenos.every(d => d.dis && /lo mueve Lucas/.test(d.t)), ajenos);
+    chk('sin ser admin, la plata de Lucas no se puede sacar y dice quien la mueve', ajenos.length === 2 && ajenos.every(d => d.dis && /lo mueve Lucas/.test(d.t)), ajenos);
+    /* Un admin si (12/10/2026): Lucas cobro el sabado y le dejo la plata a Tadeo. */
+    await evaluar(cli, `SESSION.rol='admin'; _lugPintarMover(); 1`);
+    const adm = await evaluar(cli, `[].slice.call(document.querySelectorAll('#lugMvDesde .lug-chip')).filter(function(b){return /Lucas/.test(b.textContent);}).map(function(b){return {t:b.textContent,dis:b.disabled};})`);
+    chk('admin: lo de Lucas se puede elegir como origen y muestra cuanto hay', adm.length === 2 && adm.every(d => !d.dis && /\$/.test(d.t)) && adm.some(d => /Sin guardar Lucas\s*\$80\.000/.test(d.t)), adm);
+    await click(cli, `document.querySelector('#lugMvDesde .lug-chip[data-l="cob:${L}"]')`);
+    await click(cli, `document.querySelector('#lugMvHacia .lug-chip[data-l="cob:${T}"]')`);
+    await evaluar(cli, `document.getElementById('lugMvMonto').value='80000'; _lugChk(); 1`);
+    const admB = await evaluar(cli, `({ btn: document.getElementById('lugMvBtn').textContent, dis: document.getElementById('lugMvBtn').disabled, hint: document.getElementById('lugMvHint').textContent })`);
+    chk('admin: Sin guardar Lucas → Sin guardar Tadeo $80.000 queda listo para mover y avisa que queda firmado', admB.dis === false && /Mover \$80\.000/.test(admB.btn) && /anotado que lo moviste vos/.test(admB.hint), admB);
+    await click(cli, `document.querySelector('#lugMvHacia .lug-chip[data-l="cf"]')`);
+    const admC = await evaluar(cli, `({ btn: document.getElementById('lugMvBtn').textContent, dis: document.getElementById('lugMvBtn').disabled })`);
+    chk('admin: tambien a la caja fuerte', admC.dis === false && /Mover \$80\.000/.test(admC.btn), admC);
+    await evaluar(cli, `SESSION.rol=${JSON.stringify(rolAntes)}; _lugMv={desde:'',hacia:'',modo:'',quien:''}; document.getElementById('lugMvMonto').value=''; _lugPintarMover(); 1`);
     chk('desde la caja fuerte se ofrece lo LIBRE ($600.000)', m0.desde.some(d => /Caja fuerte\s*\$600\.000 libre/.test(d.t)), m0.desde);
     chk('hacia ofrece "Nueva reserva"', m0.hacia.some(h => /Nueva reserva/.test(h)), m0.hacia);
 
