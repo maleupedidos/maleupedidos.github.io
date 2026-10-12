@@ -117,13 +117,14 @@ async function fase(cli, nombre) {
   console.log('     ' + JSON.stringify({ deuda: d, pedidos_busqueda: r.busq, copia: r.copia ? r.copia.length + ' bytes' : null }));
   chk('la deuda se pide UNA sola vez mientras carga', r.busq === 1, r.busq);
   if (nombre === 'ok') {
-    chk('son 7 cuadritos', r.n === 7, Object.keys(r.cards));
+    /* 12/10/2026 (/mejora): "Facturado mes" y "Margen mes" salieron de los
+       cuadritos: eran los dos numeros de Total Maleu, dos tarjetas mas arriba.
+       Quedan cinco, y el facturado y el margen se sostienen donde viven. */
+    chk('son 5 cuadritos', r.n === 5, Object.keys(r.cards));
     chk('ya NO esta "Cobrado mes"', !r.cards['COBRADO MES']);
-    const m = r.cards['MARGEN MES'] || {};
-    chk('"Margen mes" = facturado − costo de los entregados del mes ($58.000)', m.v === '$58.000', m);
-    /* El pie cambio el 7/10/2026 ("32% · igual que Total Maleu"): se sostiene el %, no la frase. */
-    chk('y el pie dice 32%', /^32%/.test(m.s || ''), m.s);
-    chk('Facturado mes da $180.000 (sin agosto ni lo pendiente)', (r.cards['FACTURADO MES'] || {}).v === '$180.000', r.cards['FACTURADO MES']);
+    chk('ni "Facturado mes" ni "Margen mes" (estan en Total Maleu)', !r.cards['FACTURADO MES'] && !r.cards['MARGEN MES'], Object.keys(r.cards));
+    const tm = await ev(cli, `JSON.stringify([].map.call(document.querySelectorAll('#hRetail .mt-kv'),function(e){return e.textContent.trim();}))`);
+    chk('Total Maleu dice el facturado ($180.000, sin agosto ni lo pendiente) y el margen ($58.000 32%)', tm === '["$180.000","$122.000","$58.000 32%"]', tm);
     chk('la deuda suma $1.500', d.v === '$1.500', d.v);
     chk('el pie dice la semana MAS VIEJA con algo pendiente (la 35 ya pagada no cuenta)', d.s === 'la más vieja: semana del 7/9', d.s);
     chk('la respuesta buena queda guardada', !!r.copia);

@@ -132,7 +132,7 @@ async function faseOk(cli) {
   let r = await ev(cli, LEER);
   const st = r.cards['STOCK (AL COSTO)'] || {};
   console.log('     ' + JSON.stringify({ stock: st, neta: r.neta, stockTab: r.stockTab }));
-  chk('son 7 cuadritos', r.n === 7, Object.keys(r.cards || {}));
+  chk('son 5 cuadritos (sin Facturado mes ni Margen mes, que estan en Total Maleu)', r.n === 5 && !r.cards['FACTURADO MES'] && !r.cards['MARGEN MES'], Object.keys(r.cards || {}));
   chk('el stock al costo es $5.000 (2.000 + 3.000), no $0', st.v === '$5.000', st);
   chk('y el pie cuenta los 2 productos que tienen algo', st.s === '2 productos en freezer', st.s);
   chk('la Posición Neta suma el stock y lo que MUESTRA (hay centavos adentro): 0 + 50.000 + 5.000 − 1.500 = $53.500', r.neta === '$53.500', r.neta);
