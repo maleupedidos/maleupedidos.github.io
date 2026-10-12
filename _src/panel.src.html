@@ -2355,7 +2355,12 @@ button.ped-dep-x.va,button.ped-dep-x.va:disabled{opacity:1;background:#E3EFE3;bo
 .jg-tag.ok{background:#2E7D32}
 .jg-tope{font-size:13px;line-height:1.45;color:#8B3A0E;background:var(--ol);border:1px solid var(--o);border-radius:10px;padding:10px 12px;margin-bottom:14px}
 .jg-tope b{color:var(--b)}
-.jg-fila-va{cursor:default}
+.jg-fila-va{cursor:default;flex-wrap:wrap}
+.jg-sacar-op{display:flex;gap:8px;flex-wrap:wrap;align-items:center;flex-basis:100%}
+.jg-sacar-op input{flex:1;min-width:180px;min-height:44px;padding:6px 10px;border:1px solid var(--borderstrong);border-radius:8px;font-family:inherit;font-size:16px;background:#fff;color:var(--ink)}
+#jugCuerpo .jg-sacar-no{border-color:var(--r);color:var(--r)}
+.jg-ne{display:block;margin-top:6px;padding-top:6px;border-top:1px dashed var(--o);color:#8B3A0E}
+.jg-ne .crm-edit-btn{margin-left:4px}
 .jg-fila-sac{align-items:center}
 #jugCuerpo .jg-sacar{min-height:44px;padding:8px 12px;flex:none}
 .jg-contesta{background:#E8F5E9;border:1px solid #2E7D32;border-radius:12px;padding:12px 14px 4px;margin-bottom:14px}
@@ -38460,6 +38465,7 @@ if('serviceWorker' in navigator){
     return '';
   }
   function _jugFrenoTxt(c){
+    if (c.ex === 'no-escribir') return 'no hay que escribirle: «' + ((c.ne && c.ne.motivo) || '') + '»' + (c.ne && c.ne.por ? ' (lo marcó ' + c.ne.por + (c.ne.fecha ? ' el ' + String(c.ne.fecha).slice(0, 5) : '') + '). Se habilita desde su ficha' : '');
     if (c.ex === 'tope') return 'ya recibió «' + (c.exPor || 'otra campaña') + '» en los últimos ' + _jug.reglas.tope + ' días';
     if (c.ex === 'reciente') return 'compró hace menos de ' + _jug.reglas.sinCompra + ' días';
     if (c.ex === 'abierto') return 'tiene un pedido abierto';
@@ -38590,7 +38596,12 @@ if('serviceWorker' in navigator){
      jugada en los ultimos 3 dias (el servidor lo lee del chat de WATI). "Ya le
      contesté" lo saca de la vista en ESTE dispositivo; la charla se sigue en WATI,
      que es donde esta la ventana de 24 horas para escribirle libre. */
-  function _jugVistas(){ try { return JSON.parse(localStorage.getItem('maleu_jug_resp_vistas') || '{}') || {}; } catch(e){ return {}; } }
+  /* "Ya le contesté" es de TODOS (12/10/2026): lo anota el servidor con quien lo
+     marco, y desde ahi no le aparece a nadie. `_jugAtend` solo lo esconde al
+     toque mientras viaja; hasta ese dia se guardaba en el dispositivo y Tadeo
+     seguia viendo lo que Lucas ya habia contestado. */
+  var _jugAtend = {};
+  function _jugVistas(){ return _jugAtend; }
   function _jugContestaron(){
     var vistas = _jugVistas();
     var L = (_jug.respuestas || []).filter(function(x){ return !vistas[x.id]; });
@@ -38606,11 +38617,17 @@ if('serviceWorker' in navigator){
     return h + '</div>';
   }
   window.jugRespVista = function(idEnc){
-    var v = _jugVistas(); v[decodeURIComponent(idEnc)] = Date.now();
-    /* Lo de hace mas de 10 dias ya no vuelve a aparecer: se limpia. */
-    Object.keys(v).forEach(function(k){ if (Date.now() - v[k] > 10 * 86400000) delete v[k]; });
-    try { localStorage.setItem('maleu_jug_resp_vistas', JSON.stringify(v)); } catch(e){}
+    var id = decodeURIComponent(idEnc);
+    _jugAtend[id] = 1;
     _jugPintar();
+    fetch(CRM_API, {method: 'POST', mode: 'cors', body: JSON.stringify({action: 'crmJugadaRespAtendida', id: id})})
+      .then(function(r){ return r.json(); })
+      .then(function(d){
+        if (d && d.ok){ if (d.ya && d.por) toast('Ya lo había marcado ' + d.por); return; }
+        delete _jugAtend[id]; _jugPintar();
+        toast('No se pudo anotar: sigue en la lista. ' + ((d && d.error) || ''), 6000);
+      })
+      .catch(function(err){ delete _jugAtend[id]; _jugPintar(); toast('No se pudo anotar: sigue en la lista. ' + err.message, 6000); });
   };
   /* Le pide al servidor que mire en WATI si contestaron los mensajes de jugada
      que faltan. A lo sumo cada 10 minutos, y solo si hay algo enviado que mirar. */
@@ -38657,6 +38674,65 @@ if('serviceWorker' in navigator){
     return h + '</div>';
   }
 
+  /* SACAR UNA CASA: dos maneras, y hay que elegir cual (12/10/2026).
+       · Solo este envío: hoy no recibe esta jugada; mañana puede volver a salir.
+       · No escribirle más: Tadeo sabe que a esa casa no hay que escribirle. Pide
+         el motivo, queda frenada en TODAS las jugadas y en las campañas generales,
+         y se vuelve a habilitar desde su ficha. Lo anota el servidor con quien lo
+         marco (`crmNoEscribir`). */
+  var _jugSac = null;   // {id, k, paso: 'elige' | 'motivo'}
+  function _jugSacarHtml(j, c){
+    var kE = encodeURIComponent(c.k), a = _jugSac && _jugSac.id === j.id && _jugSac.k === c.k;
+    if (!a) return '<button class="crm-edit-btn jg-sacar" onclick="jugSacarAbrir(\'' + j.id + '\',\'' + kE + '\')">Sacar</button>';
+    if (_jugSac.paso === 'motivo'){
+      return '<span class="jg-sacar-op"><input id="jugMotivo" type="text" maxlength="200" autocomplete="off" placeholder="¿Por qué no hay que escribirle?">' +
+        '<button class="crm-edit-btn jg-sacar jg-sacar-no" onclick="jugNoEscribir(\'' + j.id + '\',\'' + kE + '\')">No escribirle más</button>' +
+        '<button class="crm-edit-btn jg-sacar" onclick="jugSacarAbrir()">Cancelar</button></span>';
+    }
+    return '<span class="jg-sacar-op"><button class="crm-edit-btn jg-sacar" onclick="jugTildar(\'' + j.id + '\',\'' + kE + '\',false)">Solo este envío</button>' +
+      '<button class="crm-edit-btn jg-sacar jg-sacar-no" onclick="jugSacarAbrir(\'' + j.id + '\',\'' + kE + '\',\'motivo\')">No escribirle más…</button>' +
+      '<button class="crm-edit-btn jg-sacar" onclick="jugSacarAbrir()">Cancelar</button></span>';
+  }
+  window.jugSacarAbrir = function(id, kEnc, paso){
+    _jugSac = id ? {id: id, k: decodeURIComponent(kEnc), paso: paso || 'elige'} : null;
+    _jugArmado = '';
+    _jugPintar();
+    if (_jugSac && _jugSac.paso === 'motivo'){ var i = el('jugMotivo'); if (i) try { i.focus(); } catch(e){} }
+  };
+  function _jugCasaK(k){ return (_jug.casas || []).filter(function(c){ return c.k === k; })[0] || null; }
+  window.jugNoEscribir = function(id, kEnc){
+    var k = decodeURIComponent(kEnc), c = _jugCasaK(k), inp = el('jugMotivo');
+    var motivo = String((inp && inp.value) || '').replace(/\s+/g, ' ').trim();
+    if (!c) return;
+    if (motivo.length < 3){ toast('Escribí el motivo: queda anotado para el que venga después'); if (inp) inp.focus(); return; }
+    fetch(CRM_API, {method: 'POST', mode: 'cors', body: JSON.stringify({action: 'crmNoEscribir', k: c.k, key: c.key, tel: c.tel, nombre: c.nom, motivo: motivo})})
+      .then(function(r){ return r.json(); })
+      .then(function(d){
+        if (!d || !d.ok){ toast('No se pudo anotar. ' + ((d && d.error) || ''), 6000); return; }
+        /* Se ve al toque: pasa a frenada. El servidor manda la cuenta buena despues. */
+        var jd = _jugDef(id);
+        if (jd && !c.ex && !c.ctl){ jd.n = Math.max(0, jd.n - 1); jd.frenadas++; if (c.ver && jd[c.ver] > 0) jd[c.ver]--; }
+        c.ex = 'no-escribir'; c.ne = {motivo: d.motivo || motivo, por: d.por || '', fecha: d.fecha || ''};
+        _jugSac = null;
+        toast('Listo: a ' + c.nom + ' no se le escribe más, hasta que alguien la habilite desde su ficha', 6000);
+        _jugPintar(); _jugFichaParche();
+        _jugCargar(true);
+      })
+      .catch(function(err){ toast('No se pudo anotar. ' + err.message, 6000); });
+  };
+  window.jugHabilitar = function(kEnc){
+    var c = _jug && _jugCasaK(decodeURIComponent(kEnc)); if (!c) return;
+    fetch(CRM_API, {method: 'POST', mode: 'cors', body: JSON.stringify({action: 'crmNoEscribir', k: c.k, key: c.key, tel: c.tel, habilitar: true})})
+      .then(function(r){ return r.json(); })
+      .then(function(d){
+        if (!d || !d.ok){ toast('No se pudo habilitar. ' + ((d && d.error) || ''), 6000); return; }
+        c.ne = null; if (c.ex === 'no-escribir') c.ex = '';
+        toast('Listo: ' + c.nom + ' vuelve a recibir mensajes');
+        _jugPintar(); _jugFichaParche();
+        _jugCargar(true);
+      })
+      .catch(function(err){ toast('No se pudo habilitar. ' + err.message, 6000); });
+  };
   function _jugLista(j, g){
     var fuera = _jugFuera[j.id] || {};
     var listas = g.van.filter(function(c){ return c.listo === 2; });
@@ -38668,7 +38744,7 @@ if('serviceWorker' in navigator){
       if (fuera[c.k]) return;
       h += '<div class="jg-fila jg-fila-va"><span class="jg-fila-t"><b>' + _escJ(c.nom) + '</b> <span class="jg-ubic">' + _jugUbic(c) + '</span>' +
         '<span class="jg-fr">' + _escJ(c.fr) + '</span>' + _jugMsgHtml(j, c, true) + '</span>' +
-        '<button class="crm-edit-btn jg-sacar" onclick="jugTildar(\'' + j.id + '\',\'' + encodeURIComponent(c.k) + '\',false)">Sacar</button></div>';
+        _jugSacarHtml(j, c) + '</div>';
     });
     g.van.forEach(function(c){
       if (!fuera[c.k]) return;
@@ -38833,7 +38909,11 @@ if('serviceWorker' in navigator){
     var c = _jugCasaDe(tipo, key);
     if (!c || !c.fr) return '';
     var j = (c.j && !c.ex && !c.ctl) ? _jugDef(c.j) : null;
-    return _escJ(c.fr) + (j ? ' <span class="jg-tag">Hoy: ' + _escJ(j.nombre) + '</span>' : '');
+    /* "No escribirle mas" se ve en la ficha y se levanta desde aca. */
+    var ne = c.ne ? '<span class="jg-ne"><b>No escribirle.</b> ' + _escJ(c.ne.motivo) + (c.ne.por ? ' <span class="jg-ubic">Lo marcó ' + _escJ(c.ne.por) +
+      (c.ne.fecha ? ' el ' + _escJ(String(c.ne.fecha).slice(0, 10)) : '') + '</span>' : '') +
+      ' <button class="crm-edit-btn" onclick="jugHabilitar(\'' + encodeURIComponent(c.k) + '\')">Volver a habilitar</button></span>' : '';
+    return _escJ(c.fr) + (j ? ' <span class="jg-tag">Hoy: ' + _escJ(j.nombre) + '</span>' : '') + ne;
   }
   window.crmPerfilHtml = function(tipo, key){
     if (!_jugVisible()) return '';
@@ -38845,7 +38925,7 @@ if('serviceWorker' in navigator){
     var ns = document.querySelectorAll('.crm-ficha-perfil[data-pk]');
     for (var i = 0; i < ns.length; i++){
       var t = _jugPerfilTxt(ns[i].getAttribute('data-pt'), decodeURIComponent(ns[i].getAttribute('data-pk') || ''));
-      if (t){ ns[i].innerHTML = t; ns[i].style.display = ''; }
+      if (t){ if (ns[i].innerHTML !== t) ns[i].innerHTML = t; ns[i].style.display = ''; }
     }
   }
 
