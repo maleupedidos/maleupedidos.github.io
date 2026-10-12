@@ -1,7 +1,7 @@
 /* CRM > Hoy: las jugadas del día (12/10/2026).
 
    node probar_crm_hoy.js [390|1440]
-   BASE=http://localhost:8095 node probar_crm_hoy.js 390        ← tu propio servidor
+   BASE=http://localhost:8141 node probar_crm_hoy.js 390        ← tu propio servidor
    DATOS=<crmJugadas.json> FOTOS=<carpeta> node probar_crm_hoy.js 390   ← solo capturas
 
    Backend STUBBEADO con datos inventados (repo público), sin token: no toca
@@ -10,14 +10,22 @@
    Sostiene:
    · apagado, un admin ve la sub-tab primera y el "Hoy" de siempre pasa a
      llamarse "Pendientes"; quien no es admin no la ve y no cambia nada;
-   · cada jugada dice cuántas casas, la plata en juego, el mensaje armado con un
-     cliente (sin un {{hueco}}) y contra qué se mide;
+   · EL MENSAJE QUE SE VE ES EL QUE SALE: el cuerpo del template de WATI de la
+     versión de esa casa (A o B), con sus variables, letra por letra; si WATI no
+     se pudo leer no se muestra ningún texto;
+   · cada jugada dice cuántas casas, cuántas con A y con B, la plata en juego y
+     contra qué se mide;
+   · arriba dice cuántas casas se pierden por el tope y por qué campaña;
    · la lista muestra a quién va, quién queda de control y por qué se frena cada
-     una de las otras;
+     una de las otras; los nombres que no sirven salen en su lista para corregir;
    · APAGADO no hay botón de mandar, y no sale ni un POST;
-   · prendido: sin template aprobado tampoco hay botón; con template hacen falta
-     DOS toques, sale UN POST con las casas elegidas (sin teléfonos ni texto: eso
-     lo arma el servidor) y destildar una casa la saca;
+   · prendido: con los templates en revisión de Meta tampoco; aprobados hacen
+     falta DOS toques y sale UN POST con las casas elegidas (sin teléfonos ni
+     texto: eso lo arma el servidor);
+   · "Qué trajo cada jugada" compara contra el control, A contra B y los pedidos
+     que entraron por el botón;
+   · la ventana de campaña general aparta el control de la semana y ya no deja
+     elegir "Sin control";
    · la línea de perfil de la ficha sale de los mismos datos;
    · la segunda vez abre de la copia guardada, sin esperar al servidor;
    · nada desborda a lo ancho y los botones llegan al piso táctil (44 px).
@@ -38,7 +46,7 @@ const FOTOS = process.env.FOTOS || '';
 let ok = 0, mal = 0;
 function chk(nom, cond, det) {
   if (cond === true) { ok++; console.log('  ok   ' + nom); }
-  else { mal++; console.log('  MAL  ' + nom + (det !== undefined ? '\n         ' + JSON.stringify(det).slice(0, 600) : '')); }
+  else { mal++; console.log('  MAL  ' + nom + (det !== undefined ? '\n         ' + JSON.stringify(det).slice(0, 700) : '')); }
 }
 const pausa = ms => new Promise(r => setTimeout(r, ms));
 const ev = async (cli, expr) => { try { return await evaluar(cli, expr); } catch (e) { return { __err: String(e.message || e) }; } };
@@ -48,52 +56,72 @@ const esperar = async (cli, expr, ms = 30000) => {
   return false;
 };
 
+/* Los diez textos, como los cargó la sesión Wati el 12/10/2026 (bitácora). Acá
+   hacen de WATI: lo que se prueba es que la pantalla muestre ESTOS, no otros. */
+const TEXTOS = {
+  jug_reposicion_a: ['name producto cuando', 'Hola {{name}}! ¿Te llevamos {{producto}} de siempre? Repartimos {{cuando}} y te dejamos el pedido en la puerta de tu casa.'],
+  jug_reposicion_b: ['name cuando producto', 'Hola {{name}}! Repartimos {{cuando}}. ¿Reponemos {{producto}} así tenés la semana resuelta?'],
+  jug_nuevo_a: ['name producto familia descuento', 'Hola {{name}}! ¿Te llevamos {{producto}} de siempre? Y de paso conocé {{familia}}: esta semana tenés {{descuento}} para probar algo nuevo.'],
+  jug_nuevo_b: ['name familia descuento producto', 'Hola {{name}}! Esta semana te proponemos algo distinto: sumá {{familia}} a tu pedido con {{descuento}}. Y si querés, te llevamos también {{producto}} de siempre.'],
+  jug_segunda_a: ['name producto', 'Hola {{name}}! ¿Qué tal estuvo tu primer pedido? Si te gustó, lo repetimos cuando quieras: te llevamos {{producto}} o lo que tengas ganas de probar esta vez.'],
+  jug_segunda_b: ['name producto', 'Hola {{name}}! La primera vez uno prueba; la segunda ya sabe lo que quiere. ¿Armamos tu segundo pedido? Podés repetir {{producto}} o elegir algo nuevo de la tienda.'],
+  jug_ocasion_a: ['producto ocasion name cuando', '¿Qué mejor que {{producto}} para {{ocasion}}, {{name}}? Repartimos {{cuando}} y te dejamos el pedido en la puerta de tu casa.'],
+  jug_ocasion_b: ['name ocasion producto cuando', 'Hola {{name}}! Para {{ocasion}} ya sabemos qué no puede faltar en tu casa: {{producto}}. Repartimos {{cuando}}, ¿te anotamos?'],
+  jug_volve_a: ['name producto', 'Hola {{name}}! Hace un tiempo que no te llevamos nada y queríamos saludarte. Si tenés ganas, esta semana te acercamos {{producto}} de siempre o lo que quieras de la tienda.'],
+  jug_volve_b: ['name descuento producto', 'Hola {{name}}! Hace rato que no pasamos por tu casa. Para que vuelvas a tener la comida resuelta, tenés {{descuento}} en tu próximo pedido. ¿Te llevamos {{producto}} de siempre?']
+};
+const tpls = (estado) => { const o = {}; Object.keys(TEXTOS).forEach((n) => { o[n] = { estado: estado, cuerpo: TEXTOS[n][1], pie: 'Maleu · Pedí fácil, comé rico.', params: TEXTOS[n][0].split(' ') }; }); return o; };
+
 const P = (o) => Object.assign({ n: 5, fam: 'Sorrentinos', famPct: 80, g: 'SJyQ', gPct: 100, sp: 1, r: 21, rOk: 1, d: 24, toca: -3, dia: 5, diaOk: 1,
   fj: 'm', fjOk: 1, tk: 40000, nu: ['Tartas', 'Wraps'], prob: ['Sorrentinos'], cup: 0, cupBase: 0, est: 'Activo', can: 'Home', pideDia: 4, pideHora: 'noche', ab: 0 }, o || {});
-const casa = (lote, nom, j, extra) => Object.assign({ k: 'casa:la paz|' + lote, casa: 1, nom: nom, tel: '11500000' + lote, key: '11500000' + lote, keys: ['11500000' + lote],
-  bar: 'Estancias del Pilar', sub: 'La Paz', lote: String(lote), fr: 'Compra sorrentinos de jamón y queso cada 3 semanas, los viernes. Nunca probó tartas ni wraps. Le toca esta semana.',
-  j: j, js: j ? [j] : [], ex: '', ctl: 0, sale: new Date(2026, 9, 16).getTime(),
-  v: j ? { nombre: nom.split(' ')[0], producto_habitual: 'los sorrentinos de jamón y queso', dia_reparto: 'viernes' } : null, p: P() }, extra || {});
+const FRASE = 'Compra sorrentinos de jamón y queso cada 3 semanas, los viernes. Nunca probó tartas ni wraps. Le toca esta semana.';
+const casa = (lote, nom, j, ver, extra) => Object.assign({ k: 'casa:la paz|' + lote, casa: 1, nom: nom, tel: '11500000' + lote, key: '11500000' + lote, keys: ['11500000' + lote],
+  bar: 'Estancias del Pilar', sub: 'La Paz', lote: String(lote), fr: FRASE, j: j, js: j ? [j] : [], ex: '', exPor: '', ctl: 0, cs: 0, nm: 0, nmPor: '', crudo: nom,
+  sale: new Date(2026, 9, 16).getTime(), ver: ver || '', listo: j ? 2 : 0,
+  v: j ? { name: nom.split(' ')[0], producto: 'los sorrentinos de jamón y queso', cuando: 'este viernes de 19 a 21' } : null, p: P() }, extra || {});
+const J = (id, tag, nombre, o) => Object.assign({ id: id, tag: tag, nombre: nombre, tpl: { a: 'jug_' + tag + '_a', b: 'jug_' + tag + '_b' }, caen: 0, n: 0, listas: 0, a: 0, b: 0, control: 0, frenadas: 0, plata: 0, ej: null }, o);
 const FIX = {
-  ok: true, ts: 1, hoy: '12/10/2026', palanca: false, ocasion: null,
-  reglas: { tope: 7, sinCompra: 7, control: 10, ventana: 14 },
+  ok: true, ts: 1, hoy: '12/10/2026', palanca: false, ocasion: null, cuponVolve: null,
+  reglas: { tope: 7, sinCompra: 7, control: 10, ventana: 14, segundaDesde: 10, segundaHasta: 36, volveDesde: 45, repetir: 14 },
+  tpls: null,
   jugadas: [
-    { id: 'segunda', nombre: 'Segunda compra', template: 'jugada_segunda', vars: ['nombre', 'producto_habitual', 'dia_reparto'],
-      msg: 'Hola {{nombre}}! ¿Cómo te fue con {{producto_habitual}}? Este {{dia_reparto}} repartimos de nuevo: ¿te llevamos otra vez?', caen: 1, n: 1, control: 0, frenadas: 0, plata: 6400, ej: 'casa:la paz|20' },
-    { id: 'volve', nombre: 'Volvé', template: 'jugada_volve', vars: ['nombre', 'producto_habitual', 'dia_reparto'],
-      msg: '{{nombre}}, hace rato que no te llevamos {{producto_habitual}}. Este {{dia_reparto}} repartimos: ¿te guardamos?', caen: 0, n: 0, control: 0, frenadas: 0, plata: 0, ej: null },
-    { id: 'ocasion', nombre: 'Ocasión', template: 'jugada_ocasion', vars: ['nombre', 'producto_habitual', 'ocasion', 'horario_reparto'],
-      msg: '¿Qué mejor que {{producto_habitual}} para {{ocasion}}, {{nombre}}? Hoy repartimos {{horario_reparto}}.', caen: 0, n: 0, control: 0, frenadas: 0, plata: 0, ej: null },
-    { id: 'repo', nombre: 'Reposición', template: 'jugada_reposicion', vars: ['nombre', 'producto_habitual', 'dia_reparto'],
-      msg: '¿Te llevamos {{producto_habitual}} este {{dia_reparto}}, {{nombre}}?', caen: 5, n: 2, control: 1, frenadas: 2, plata: 43200, ej: 'casa:la paz|10' },
-    { id: 'nuevo', nombre: 'Probá algo nuevo', template: 'jugada_nuevo', vars: ['nombre', 'producto_habitual', 'familia_nueva', 'descuento', 'cupon'],
-      msg: '¿Te llevamos {{producto_habitual}}, {{nombre}}? Aprovechá a conocer {{familia_nueva}} con {{descuento}}% off: poné el cupón {{cupon}} en la tienda.', caen: 1, n: 1, control: 0, frenadas: 0, plata: 17200, ej: 'casa:la paz|30' }
+    J('segunda', 'segunda', 'Segunda compra', { caen: 2, n: 1, listas: 1, a: 0, b: 1, frenadas: 1, plata: 6400, ej: 'casa:la paz|20' }),
+    J('volve', 'volve', 'Volvé', {}),
+    J('ocasion', 'ocasion', 'Ocasión', {}),
+    J('repo', 'reposicion', 'Reposición', { caen: 6, n: 2, listas: 2, a: 1, b: 1, control: 1, frenadas: 3, plata: 43200, ej: 'casa:la paz|10' }),
+    J('nuevo', 'nuevo', 'Probá algo nuevo', { caen: 1, n: 1, listas: 1, a: 1, b: 0, plata: 17200, ej: 'casa:la paz|30' })
   ],
   casas: [
-    casa(10, 'Pepito Prueba', 'repo'),
-    casa(11, 'Ana Prueba', 'repo'),
-    casa(12, 'Control Prueba', 'repo', { ctl: 1 }),
-    casa(13, 'Tope Prueba', 'repo', { ex: 'tope' }),
-    casa(14, 'Abierta Prueba', 'repo', { ex: 'abierto' }),
-    casa(20, 'Segunda Prueba', 'segunda', { fr: 'Compró una sola vez, hace 12 días: lomo.', v: { nombre: 'Segunda', producto_habitual: 'el lomo', dia_reparto: 'viernes' }, p: P({ n: 1 }) }),
-    casa(30, 'Nueva Prueba', 'nuevo', { v: { nombre: 'Nueva', producto_habitual: 'las pizzas de muzzarella', dia_reparto: 'viernes', familia_nueva: 'las tartas', descuento: '20', cupon: 'TARTA20' } }),
-    casa(40, 'Quieta Prueba', '', {})
+    casa(10, 'Martín Prueba', 'repo', 'a'),
+    casa(11, 'Ana Prueba', 'repo', 'b'),
+    casa(12, 'Carla Prueba', 'repo', 'a', { ctl: 1, cs: 1 }),
+    casa(13, 'Mario Prueba', 'repo', 'a', { ex: 'tope', exPor: 'domingo_11_octubre (11/10)' }),
+    casa(14, 'Elena Prueba', 'repo', 'b', { ex: 'abierto' }),
+    casa(15, 'PMO', 'repo', 'a', { ex: 'nombre', nm: 1, nmPor: 'parece una sigla', crudo: 'PMO', listo: 0, v: { name: '', producto: 'los sorrentinos de jamón y queso', cuando: 'este viernes de 19 a 21' } }),
+    casa(20, 'Sofía Prueba', 'segunda', 'b', { fr: 'Compró una sola vez, hace 12 días: lomo.', v: { name: 'Sofía', producto: 'el lomo', cuando: 'este viernes de 19 a 21' }, p: P({ n: 1 }) }),
+    casa(21, 'Zorro Prueba', 'segunda', 'a', { ex: 'tope', exPor: 'viernes 9 del 10 (09/10)', nm: 1, nmPor: 'no lo reconozco como nombre', crudo: 'Zorro Prueba', listo: 0, p: P({ n: 1 }) }),
+    casa(30, 'Diego Prueba', 'nuevo', 'a', { v: { name: 'Diego', producto: 'las pizzas de muzzarella', cuando: 'este viernes de 19 a 21', familia: 'las tartas', descuento: '20% off con el cupón TARTA20' } }),
+    casa(40, 'Quieta Prueba', '', '', {})
   ],
-  frenos: { tope: 1, abierto: 1 },
-  historia: { segunda: { n: 160, compraron: 25, plata: 1, casas: 160 }, volve: { n: 100, compraron: 32, plata: 1, casas: 85 },
+  frenos: { tope: 2, abierto: 1, nombre: 1 },
+  tope: [{ camp: 'domingo_11_octubre (11/10)', n: 1 }, { camp: 'viernes 9 del 10 (09/10)', n: 1 }],
+  historia: { segunda: { n: 231, compraron: 38, plata: 1, casas: 231 }, volve: { n: 232, compraron: 41, plata: 1, casas: 193 },
               repo: { n: 255, compraron: 137, plata: 1, casas: 94 }, nuevo: { n: 253, compraron: 109, plata: 1, casas: 109 } },
-  base: { segunda: 0.16, volve: 0.32, ocasion: null, repo: 0.54, nuevo: 0.43 },
+  base: { segunda: 0.16, volve: 0.18, ocasion: null, repo: 0.54, nuevo: 0.43 },
   resultados: {}, cupones: { Tartas: { cod: 'TARTA20', pct: 20 } }, nombres: {}
 };
+const RES = { repo: { env: 40, envCompro: 26, envPlata: 1560000, ctl: 5, ctlCompro: 2, ctlPlata: 90000, enCurso: 12, boton: 9, botonPlata: 400000,
+  a: { env: 21, compro: 15, plata: 900000, boton: 6, botonPlata: 300000 }, b: { env: 19, compro: 11, plata: 660000, boton: 3, botonPlata: 100000 } } };
 const DATOS = process.env.DATOS ? JSON.parse(fs.readFileSync(process.env.DATOS, 'utf8')) : FIX;
-const TPLS = (cuales) => { const o = {}; cuales.forEach((n) => { o[n] = { estado: 'APPROVED', cuerpo: 'TEMPLATE ¿Te llevamos {{producto_habitual}} este {{dia_reparto}}, {{nombre}}?', param: 'nombre', params: ['nombre', 'producto_habitual', 'dia_reparto'] }; }); return o; };
+if (process.env.DATOS && !DATOS.tpls) DATOS.tpls = tpls('PENDING');   // la planilla espía no llega a WATI: los textos son los de la bitácora
 
-/* fase: off (palanca apagada) · on (prendida, con templates) · sintpl (prendida, sin el template) · lento (crmJugadas tarda 6 s) */
+/* fase: off (apagado; templates en revisión) · sinwati (apagado; WATI no se pudo leer) · on (prendido, aprobados)
+         · pend (prendido, en revisión) · res (con resultados) · lento (crmJugadas tarda 6 s) */
 const STUB = (datos) => `
   window.__gets=[]; window.__posts=[];
   var __fase=(location.search.match(/fase=(\\w+)/)||[])[1]||'off';
   if(window.top===window){ try{
-    localStorage.setItem('maleu_tab','estancias'); localStorage.setItem('maleu_est_sub','jugadas');
+    localStorage.setItem('maleu_est_sub','jugadas');
     if(__fase!=='lento'){ Object.keys(localStorage).forEach(function(k){ if(k.indexOf('mc_')===0) localStorage.removeItem(k); }); localStorage.removeItem('maleu_jug_on'); }
   }catch(e){} }
   (function(){ var o=window.fetch; window.fetch=function(u,x){
@@ -103,15 +131,24 @@ const STUB = (datos) => `
       if(x&&String(x.method||'').toUpperCase()==='POST'){
         var b={}; try{ b=JSON.parse(x.body); }catch(e){}
         window.__posts.push(b);
-        return Promise.resolve(new Response(JSON.stringify(b.action==='crmEnviarJugada'?{ok:true,enviados:(b.casas||[1]).length,control:1,caidas:0}:{ok:true}),{status:200}));
+        return Promise.resolve(new Response(JSON.stringify(b.action==='crmEnviarJugada'?{ok:true,enviados:(b.casas||[1]).length,control:1,caidas:0,porVersion:{a:1,b:0}}:{ok:true}),{status:200}));
       }
       var m=url.match(/action=([a-zA-Z_]+)/), a=m?m[1]:'?'; window.__gets.push(a);
       var cuerpo={ok:false,error:'stub'}, demora=120;
-      if(a==='crmJugadas'){ cuerpo=${JSON.stringify(datos)}; cuerpo.palanca=(__fase==='on'||__fase==='sintpl'); if(__fase==='lento') demora=6000; }
-      else if(a==='watiTemplates') cuerpo={ok:true,templates:(__fase==='sintpl'?${JSON.stringify(TPLS(['jugada_segunda']))}:${JSON.stringify(TPLS(['jugada_reposicion', 'jugada_segunda', 'jugada_nuevo']))})};
+      if(a==='crmJugadas'){
+        cuerpo=${JSON.stringify(datos)};
+        if(${process.env.DATOS ? 'false' : 'true'}){
+          cuerpo.palanca=(__fase==='on'||__fase==='pend');
+          cuerpo.tpls=(__fase==='sinwati')?null:(__fase==='on'||__fase==='lento'||__fase==='res'?${JSON.stringify(tpls('APPROVED'))}:${JSON.stringify(tpls('PENDING'))});
+          if(__fase==='off'||__fase==='pend'||__fase==='sinwati'){ cuerpo.casas.forEach(function(c){ if(c.listo===2) c.listo=(__fase==='sinwati'?0:1); }); cuerpo.jugadas.forEach(function(j){ j.listas=0; }); }
+          if(__fase==='res') cuerpo.resultados=${JSON.stringify(RES)};
+        }
+        if(__fase==='lento') demora=6000;
+      }
       else if(a==='pedidosLight') cuerpo={ts:1,pedidos:[],canales:[],light:true,saludSem:{},saludMes:{}};
       else if(a==='crmClientes') cuerpo={ts:1,clientes:[],lite:false,kg:[],nombres:{}};
       else if(a==='crmInteracciones') cuerpo={ts:1,interacciones:[]};
+      else if(a==='watiTemplates') cuerpo={ok:true,templates:{general_lunes:{estado:'APPROVED',cuerpo:'Hola {{name}}!',param:'name',params:['name']}}};
       else if(a==='admin') cuerpo={ok:false,forbidden:true};
       var t=JSON.stringify(cuerpo);
       return new Promise(function(r){setTimeout(function(){r(new Response(t,{status:200,headers:{'Content-Type':'application/json'}}));},demora);});
@@ -123,7 +160,7 @@ const pintado = `document.querySelectorAll('#jugCuerpo .jg-card').length===5`;
 const foto = async (cli, nombre) => {
   if (!FOTOS) return;
   const alto = await ev(cli, 'Math.max(document.documentElement.scrollHeight, document.body.scrollHeight)');
-  await cli.enviar('Emulation.setDeviceMetricsOverride', { width: ANCHO, height: Math.min(Number(alto) || 900, 6000), deviceScaleFactor: ANCHO <= 560 ? 2 : 1, mobile: ANCHO <= 560 });
+  await cli.enviar('Emulation.setDeviceMetricsOverride', { width: ANCHO, height: Math.min(Number(alto) || 900, 7000), deviceScaleFactor: ANCHO <= 560 ? 2 : 1, mobile: ANCHO <= 560 });
   await pausa(400);
   const r = await cli.enviar('Page.captureScreenshot', { format: 'png' });
   fs.mkdirSync(FOTOS, { recursive: true });
@@ -137,9 +174,10 @@ const ir = async (cli, fase) => {
   await esperar(cli, `typeof go==='function'&&typeof jugRender==='function'&&document.readyState==='complete'&&location.search.indexOf('fase=${fase}')>=0`, 30000);
   await ev(cli, `go('estancias');1`);
 };
+const abrirLista = (cli, id) => ev(cli, `document.querySelector('#jugCuerpo .jg-card[data-jug="${id}"] .jg-btn').click();1`);
 
 async function apagado(cli) {
-  console.log('\n-- apagado, entra un admin --');
+  console.log('\n-- apagado, entra un admin (los templates están en revisión de Meta) --');
   await ir(cli, 'off');
   chk('la sub-tab pinta sus 5 jugadas', await esperar(cli, pintado), await ev(cli, T('#jugCuerpo')));
   await pausa(600);
@@ -150,49 +188,75 @@ async function apagado(cli) {
   chk('el "Hoy" de siempre pasa a llamarse Pendientes, y no se perdió ninguna sub-tab', tb.indexOf('Pendientes') === 2 && tb.length === 11 && tb.filter(x => /oculta/.test(x)).length === 0, tb);
   chk('dice que está apagado', /Apagado: se ve, no manda/.test(await ev(cli, T('#jugCuerpo .jg-chip'))));
   chk('el resumen suma las que quedan para mandar (1 + 2 + 1 = 4)', /^4 casas para escribirles hoy/.test(await ev(cli, T('#jugCuerpo .jg-resumen'))), await ev(cli, T('#jugCuerpo .jg-resumen')));
+  const tope = await ev(cli, T('#jugCuerpo .jg-tope'));
+  console.log('     tope: ' + JSON.stringify(tope));
+  chk('dice cuántas casas se pierden por el tope y por qué campaña', /^2 casas tenían una jugada hoy y no la reciben/.test(tope) && /1 por «domingo_11_octubre \(11\/10\)» · 1 por «viernes 9 del 10 \(09\/10\)»/.test(tope), tope);
   const ordenCards = await ev(cli, `JSON.stringify([].map.call(document.querySelectorAll('#jugCuerpo .jg-card'),function(c){return c.getAttribute('data-jug')+(c.classList.contains('vacia')?'-':'');}))`);
   chk('las jugadas con casas van primero, las vacías al final', ordenCards === '["segunda","repo","nuevo","volve-","ocasion-"]', ordenCards);
   const repo = await ev(cli, T('#jugCuerpo .jg-card[data-jug="repo"]'));
-  console.log('     Reposición: ' + JSON.stringify(repo).slice(0, 420));
-  chk('Reposición: 2 casas, plata en juego, control y frenadas', /Reposición\s*2\s*casas/.test(repo) && /\$43\.200 en juego/.test(repo) && /1 de control/.test(repo) && /2 frenadas/.test(repo), repo);
+  console.log('     Reposición: ' + JSON.stringify(repo).slice(0, 520));
+  chk('Reposición: 2 casas, plata en juego, A y B, control y frenadas', /Reposición\s*2\s*casas/.test(repo) && /\$43\.200 en juego · 1 con la versión A · 1 con la B · 1 de control · 3 frenadas/.test(repo), repo);
   chk('dice contra qué se mide: 54 de cada 100 compran igual', /Sin mensaje, 54 de cada 100 compran igual en 14 días/.test(repo), repo);
-  const msg = await ev(cli, T('#jugCuerpo .jg-card[data-jug="repo"] .jg-msg'));
-  chk('el mensaje sale armado con un cliente real de la lista, sin huecos', msg === '¿Te llevamos los sorrentinos de jamón y queso este viernes, Pepito?', msg);
-  chk('y abajo dice a quién y su perfil', /Así le llegaría a Pepito Prueba\. Compra sorrentinos de jamón y queso cada 3 semanas/.test(await ev(cli, T('#jugCuerpo .jg-card[data-jug="repo"] .jg-msg-de'))));
+  const msg = await ev(cli, `(document.querySelector('#jugCuerpo .jg-card[data-jug="repo"] .jg-msg').firstChild||{}).textContent`);
+  chk('EL MENSAJE ES EL DEL TEMPLATE DE WATI, letra por letra, con los datos del cliente (versión A)',
+    msg === 'Hola Martín! ¿Te llevamos los sorrentinos de jamón y queso de siempre? Repartimos este viernes de 19 a 21 y te dejamos el pedido en la puerta de tu casa.', msg);
+  chk('con el pie del template', (await ev(cli, T('#jugCuerpo .jg-card[data-jug="repo"] .jg-msg-pie'))) === 'Maleu · Pedí fácil, comé rico.');
+  chk('y dice qué versión es, qué template y que está en revisión', (await ev(cli, T('#jugCuerpo .jg-card[data-jug="repo"] .jg-ver'))) === 'Versión A jug_reposicion_a · en revisión de Meta', await ev(cli, T('#jugCuerpo .jg-card[data-jug="repo"] .jg-ver')));
+  chk('abajo dice a quién y su perfil', /Así le llega a Martín Prueba\. Compra sorrentinos de jamón y queso cada 3 semanas/.test(await ev(cli, T('#jugCuerpo .jg-card[data-jug="repo"] .jg-msg-de'))));
+  chk('Segunda compra muestra la versión B, la de esa casa', (await ev(cli, `(document.querySelector('#jugCuerpo .jg-card[data-jug="segunda"] .jg-msg').firstChild||{}).textContent`)) ===
+    'Hola Sofía! La primera vez uno prueba; la segunda ya sabe lo que quiere. ¿Armamos tu segundo pedido? Podés repetir el lomo o elegir algo nuevo de la tienda.');
+  chk('Probá algo nuevo: la familia y el descuento con el cupón adentro', (await ev(cli, `(document.querySelector('#jugCuerpo .jg-card[data-jug="nuevo"] .jg-msg').firstChild||{}).textContent`)) ===
+    'Hola Diego! ¿Te llevamos las pizzas de muzzarella de siempre? Y de paso conocé las tartas: esta semana tenés 20% off con el cupón TARTA20 para probar algo nuevo.');
   chk('ningún mensaje de la pantalla tiene un {{hueco}}', (await ev(cli, `/\\{\\{/.test(document.getElementById('jugCuerpo').textContent)`)) === false);
-  chk('Probá algo nuevo nombra UNA familia, el descuento y el cupón', /conocer las tartas con 20% off: poné el cupón TARTA20/.test(await ev(cli, T('#jugCuerpo .jg-card[data-jug="nuevo"] .jg-msg'))));
+  chk('Segunda compra dice su ventana nueva (10 a 36 días)', /hace 10 a 36 días/.test(await ev(cli, T('#jugCuerpo .jg-card[data-jug="segunda"] .jg-por'))));
+  chk('Volvé avisa que la versión B no tiene cupón cargado', /versión B ofrece un descuento y no hay cupón cargado/.test(await ev(cli, T('#jugCuerpo .jg-card[data-jug="volve"]'))));
   chk('Ocasión sin día especial lo dice', /no hay ningún reparto especial cargado/.test(await ev(cli, T('#jugCuerpo .jg-card[data-jug="ocasion"]'))));
   chk('sin jugadas enviadas muestra la vara del historial', /Todavía no salió ninguna/.test(await ev(cli, T('#jugCuerpo'))) && /Reposición\s*255\s*137\s*54%/.test(await ev(cli, T('#jugCuerpo .jg-tabla'))), await ev(cli, T('#jugCuerpo .jg-tabla')));
+  const nm = await ev(cli, `JSON.stringify([].map.call(document.querySelectorAll('#jugCuerpo .jg-fila-nm'),function(f){return f.textContent.replace(/\\s+/g,' ').trim();}))`);
+  console.log('     nombres: ' + nm);
+  chk('los nombres que no sirven salen en su lista, con el motivo y la ficha a un toque (también la frenada por otra cosa)', nm ===
+    '["«PMO» La Paz · Lote 15Parece una sigla.Abrir la ficha","«Zorro Prueba» La Paz · Lote 21No lo reconozco como nombre.Abrir la ficha"]' &&
+    /^Revisar el nombre 2 casas/.test(await ev(cli, `[].filter.call(document.querySelectorAll('#jugCuerpo .jg-sec'),function(s){return /nombre/.test(s.textContent);})[0].textContent.replace(/\\s+/g,' ').trim()`)), nm);
   await foto(cli, 'hoy');
 
-  await ev(cli, `document.querySelector('#jugCuerpo .jg-card[data-jug="repo"] .jg-btn').click();1`);
+  await abrirLista(cli, 'repo');
   await pausa(500);
-  const filas = await ev(cli, `JSON.stringify([].map.call(document.querySelectorAll('#jugCuerpo .jg-card.abierta .jg-fila'),function(f){return (f.querySelector('input')?'[x] ':'')+f.textContent.replace(/\\s+/g,' ').trim().slice(0,170);}))`);
-  console.log('     lista: ' + filas);
+  const filas = await ev(cli, `JSON.stringify([].map.call(document.querySelectorAll('#jugCuerpo .jg-card.abierta .jg-lista .jg-fila'),function(f){return (f.querySelector('input')?'[x] ':'')+f.textContent.replace(/\\s+/g,' ').trim().slice(0,400);}))`);
+  console.log('     lista: ' + String(filas).slice(0, 900));
   const fl = JSON.parse(typeof filas === 'string' ? filas : '[]');
-  chk('la lista: 2 con tilde, 1 de control, 2 frenadas con su motivo', fl.length === 5 && fl.filter(x => /^\[x\]/.test(x)).length === 2 &&
-    fl.some(x => /^control ?Control Prueba/.test(x)) && fl.some(x => /Tope Prueba.*ya recibió un mensaje en los últimos 7 días/.test(x)) && fl.some(x => /Abierta Prueba.*tiene un pedido abierto/.test(x)), fl);
-  chk('cada casa de la lista muestra SU mensaje', (await ev(cli, T('#jugCuerpo .jg-card.abierta .jg-fila:nth-child(2) .jg-fila-msg'))) === '¿Te llevamos los sorrentinos de jamón y queso este viernes, Ana?', await ev(cli, T('#jugCuerpo .jg-card.abierta .jg-fila:nth-child(2) .jg-fila-msg')));
+  chk('la lista: 2 con tilde, 1 de control, 3 frenadas', fl.length === 6 && fl.filter(x => /^\[x\]/.test(x)).length === 2 && fl.some(x => /^control ?Carla Prueba/.test(x)), fl.map(x => x.slice(0, 40)));
+  chk('cada casa muestra SU mensaje con SU versión (Ana va con la B)', fl.some(x => /Ana Prueba.*Hola Ana! Repartimos este viernes de 19 a 21\. ¿Reponemos los sorrentinos de jamón y queso así tenés la semana resuelta\?Versión B jug_reposicion_b/.test(x)), fl[1]);
+  chk('la frenada por el tope dice por qué campaña', fl.some(x => /Mario Prueba.*ya recibió «domingo_11_octubre \(11\/10\)» en los últimos 7 días/.test(x)), fl[3]);
+  chk('la del pedido abierto y la del nombre dicen su motivo', fl.some(x => /Elena Prueba.*tiene un pedido abierto/.test(x)) && fl.some(x => /PMO.*hay que revisar el nombre \(«PMO»: parece una sigla\)/.test(x)), fl.slice(4));
   chk('APAGADO: no hay botón de mandar ni de prueba', (await ev(cli, `!document.getElementById('jugGo')&&!document.getElementById('jugTelPrueba')`)) === true);
   chk('y explica por qué', /Apagado\. Todavía no se manda nada desde acá/.test(await ev(cli, T('#jugCuerpo .jg-pie'))));
-  chk('llamar a mandar a mano tampoco hace nada', (await ev(cli, `jugMandar('repo');jugMandar('repo');jugPrueba('repo');window.__posts.length`)) === 0);
+  chk('llamar a mandar a mano tampoco hace nada', (await ev(cli, `jugMandar('repo');jugMandar('repo');jugPrueba('repo','a');window.__posts.length`)) === 0);
   await foto(cli, 'hoy-lista');
 
   const medidas = await ev(cli, `JSON.stringify({desborde:document.documentElement.scrollWidth-window.innerWidth,
-    chicos:[].filter.call(document.querySelectorAll('#jugCuerpo .jg-btn'),function(b){return b.getBoundingClientRect().height<44;}).length,
-    botones:document.querySelectorAll('#jugCuerpo .jg-btn').length,
-    sale:[].filter.call(document.querySelectorAll('#jugCuerpo .jg-card'),function(c){var r=c.getBoundingClientRect();return r.right>window.innerWidth+1||r.left<-1;}).length,
+    chicos:[].filter.call(document.querySelectorAll('#jugCuerpo .jg-btn, #jugCuerpo .jg-fila-nm .crm-edit-btn'),function(b){return b.getBoundingClientRect().height<44;}).length,
+    botones:document.querySelectorAll('#jugCuerpo .jg-btn, #jugCuerpo .jg-fila-nm .crm-edit-btn').length,
+    sale:[].filter.call(document.querySelectorAll('#jugCuerpo .jg-card, #jugCuerpo .jg-tope, #jugCuerpo .jg-fila-nm'),function(c){var r=c.getBoundingClientRect();return r.right>window.innerWidth+1||r.left<-1;}).length,
     cols:(function(){var t={};[].forEach.call(document.querySelectorAll('#jugCuerpo .jg-card:not(.abierta)'),function(c){t[Math.round(c.getBoundingClientRect().left)]=1;});return Object.keys(t).length;})()})`);
   console.log('     medidas: ' + medidas);
   const md = JSON.parse(typeof medidas === 'string' ? medidas : '{}');
-  chk('nada desborda a lo ancho (' + md.botones + ' botones medidos)', md.desborde <= 0 && md.sale === 0 && md.botones >= 3, md);
+  chk('nada desborda a lo ancho (' + md.botones + ' botones medidos)', md.desborde <= 0 && md.sale === 0 && md.botones >= 5, md);
   chk('todos los botones llegan a 44 px', md.chicos === 0, md);
   chk(ANCHO <= 560 ? 'en el celular va en una columna' : 'en escritorio las tarjetas van en más de una columna', ANCHO <= 560 ? md.cols === 1 : md.cols >= 2, md);
 
-  chk('la ficha dice el perfil arriba, con la jugada de hoy', (await ev(cli, `(function(){var d=document.createElement('div');d.innerHTML=crmPerfilHtml('cliente','1150000010');return d.textContent;})()`)) ===
-    'Compra sorrentinos de jamón y queso cada 3 semanas, los viernes. Nunca probó tartas ni wraps. Le toca esta semana. Hoy: Reposición');
+  chk('la ficha dice el perfil arriba, con la jugada de hoy', (await ev(cli, `(function(){var d=document.createElement('div');d.innerHTML=crmPerfilHtml('cliente','1150000010');return d.textContent;})()`)) === FRASE + ' Hoy: Reposición');
   chk('la ficha de la CASA también (por sub-barrio y lote)', /^Compra sorrentinos/.test(await ev(cli, `(function(){var d=document.createElement('div');d.innerHTML=crmPerfilHtml('casa','La Paz|010');return d.textContent;})()`)));
   chk('a la frenada no le dice "Hoy:"', !/Hoy:/.test(await ev(cli, `(function(){var d=document.createElement('div');d.innerHTML=crmPerfilHtml('cliente','1150000013');return d.textContent;})()`)));
+
+  console.log('\n-- la ventana de campaña general --');
+  const per = (lote, nom) => `{key:'11500000${lote}',tel:'11500000${lote}',telDisplay:'11500000${lote}',nombre:'${nom}',barrio:'Estancias del Pilar',subBarrio:'La Paz',lote:'${lote}',diasUltima:20,entregados:3,pendientes:0}`;
+  await ev(cli, `crmCampaniaAbrir({titulo:'General de prueba',personas:[${per(10, 'Martín Prueba')},${per(11, 'Ana Prueba')},${per(12, 'Carla Prueba')}]});1`);
+  await pausa(700);
+  const modal = await ev(cli, T('#cmpModal'));
+  console.log('     ventana: ' + JSON.stringify(modal).slice(0, 330));
+  chk('aparta sola la casa que esta semana es de control (2 reciben, 1 de control)', /^.*2 reciben · 3 casas · 1 casas de control \(1 personas\)/.test(modal), modal.slice(0, 200));
+  chk('ya no deja elegir "Sin control": dice que lo aparta el sistema', !/Sin control/.test(modal) && /1 de cada 10, las mismas que en las jugadas de Hoy/.test(await ev(cli, T('#cmpCtlTxt'))), await ev(cli, T('#cmpCtlTxt')));
+  await ev(cli, `cmpCerrar();1`);
   chk('en toda la fase no salió ni un POST', (await ev(cli, 'window.__posts.length')) === 0, await ev(cli, 'JSON.stringify(window.__posts)'));
 
   console.log('\n-- apagado, entra alguien que no es admin --');
@@ -201,17 +265,33 @@ async function apagado(cli) {
   console.log('     ' + noAdmin);
   chk('no ve la sub-tab, el "Hoy" de siempre se llama Hoy, y la ficha no cambia', noAdmin === '{"ve":false,"boton":"none","viejo":"Hoy","perfil":"","sub":"est-pulso"}', noAdmin);
   chk('sin errores en consola', (await ev(cli, 'JSON.stringify(window.__err||[])')) === '[]', await ev(cli, 'JSON.stringify(window.__err||[])'));
+
+  console.log('\n-- WATI no se pudo leer --');
+  await ir(cli, 'sinwati');
+  chk('pinta', await esperar(cli, pintado));
+  await pausa(400);
+  chk('NO muestra ningún texto de mensaje: avisa que no pudo leer los templates', (await ev(cli, `document.querySelectorAll('#jugCuerpo .jg-msg').length`)) === 0 &&
+    /No pude leer los templates de WATI, así que no muestro el mensaje/.test(await ev(cli, T('#jugCuerpo .jg-card[data-jug="repo"] .jg-nota'))), await ev(cli, T('#jugCuerpo .jg-card[data-jug="repo"]')));
 }
 
 async function prendido(cli) {
+  console.log('\n-- prendido, pero Meta todavía no aprobó los templates --');
+  await ir(cli, 'pend');
+  chk('pinta', await esperar(cli, pintado));
+  await pausa(400);
+  await abrirLista(cli, 'repo');
+  chk('dice que todavía no se puede mandar y no ofrece el botón', await esperar(cli, `/Todavía no se puede mandar\\./.test((document.querySelector('#jugCuerpo .jg-pie')||{}).textContent||'')&&!document.getElementById('jugGo')`, 8000), await ev(cli, T('#jugCuerpo .jg-pie')));
+  chk('y forzarlo a mano no manda', (await ev(cli, `jugMandar('repo');jugMandar('repo');window.__posts.length`)) === 0);
+
   console.log('\n-- prendido, con los templates aprobados --');
   await ir(cli, 'on');
   chk('pinta', await esperar(cli, pintado));
   await pausa(500);
   chk('ya no dice apagado', (await ev(cli, `!document.querySelector('#jugCuerpo .jg-chip')`)) === true);
-  await ev(cli, `document.querySelector('#jugCuerpo .jg-card[data-jug="repo"] .jg-btn').click();1`);
+  chk('el template figura aprobado', /aprobado por Meta/.test(await ev(cli, T('#jugCuerpo .jg-card[data-jug="repo"] .jg-ver'))));
+  await abrirLista(cli, 'repo');
   chk('aparece el botón de mandar, con la cuenta', await esperar(cli, `!!document.getElementById('jugGo')&&/^Mandar a 2 casas$/.test(document.getElementById('jugGo').textContent.trim())`, 8000), await ev(cli, T('#jugCuerpo .jg-pie')));
-  chk('el mensaje pasa a ser el del template aprobado', /^TEMPLATE ¿Te llevamos los sorrentinos de jamón y queso este viernes, Pepito\?$/.test(await ev(cli, T('#jugCuerpo .jg-card.abierta .jg-msg'))), await ev(cli, T('#jugCuerpo .jg-card.abierta .jg-msg')));
+  chk('se puede probar la A y la B por separado', (await ev(cli, T('#jugCuerpo .jg-prueba'))) === 'Probar la AProbar la B');
   await ev(cli, `document.querySelectorAll('#jugCuerpo .jg-card.abierta .jg-fila input')[1].click();1`);
   await pausa(300);
   chk('destildar una casa la saca de la cuenta', (await ev(cli, T('#jugGo'))) === 'Mandar a 1 casa', await ev(cli, T('#jugGo')));
@@ -224,17 +304,21 @@ async function prendido(cli) {
   console.log('     POST: ' + posts);
   const ps = JSON.parse(typeof posts === 'string' ? posts : '[]');
   chk('el segundo manda UN POST, con la jugada y solo la casa que quedó tildada', ps.length === 1 && ps[0].action === 'crmEnviarJugada' && ps[0].jugada === 'repo' && JSON.stringify(ps[0].casas) === '["casa:la paz|10"]', ps);
-  chk('el POST no lleva teléfonos ni texto: eso lo arma el servidor', !/1150000|sorrentinos|template/i.test(posts), posts);
-  chk('y avisa lo que salió', /1 mensaje enviado · 1 de control/.test(await ev(cli, T('#toast'))), await ev(cli, T('#toast')));
+  chk('…y la versión que se le mostró a esa casa (A)', JSON.stringify(ps[0].versiones) === '{"casa:la paz|10":"a"}', ps[0] && ps[0].versiones);
+  chk('el POST no lleva teléfonos, texto ni nombre de template: eso lo arma el servidor', !/1150000|sorrentinos|jug_/i.test(posts), posts);
+  chk('y avisa lo que salió, por versión', /1 mensaje enviado \(A 1 · B 0\) · 1 de control/.test(await ev(cli, T('#toast'))), await ev(cli, T('#toast')));
+  chk('sin errores en consola', (await ev(cli, 'JSON.stringify(window.__err||[])')) === '[]', await ev(cli, 'JSON.stringify(window.__err||[])'));
 
-  console.log('\n-- prendido, pero falta el template de esa jugada --');
-  await ir(cli, 'sintpl');
+  console.log('\n-- con jugadas ya enviadas --');
+  await ir(cli, 'res');
   chk('pinta', await esperar(cli, pintado));
   await pausa(400);
-  await ev(cli, `document.querySelector('#jugCuerpo .jg-card[data-jug="repo"] .jg-btn').click();1`);
-  chk('dice que falta el template y no ofrece mandar', await esperar(cli, `/Falta el template\\. «jugada_reposicion»/.test(document.querySelector('#jugCuerpo .jg-pie').textContent)&&!document.getElementById('jugGo')`, 8000), await ev(cli, T('#jugCuerpo .jg-pie')));
-  chk('y forzarlo a mano no manda', (await ev(cli, `jugMandar('repo');jugMandar('repo');window.__posts.length`)) === 0);
-  chk('sin errores en consola', (await ev(cli, 'JSON.stringify(window.__err||[])')) === '[]', await ev(cli, 'JSON.stringify(window.__err||[])'));
+  const res = await ev(cli, `JSON.stringify([].map.call(document.querySelectorAll('#jugCuerpo .jg-tabla tr[data-res="repo"] td'),function(t){return t.textContent.replace(/\\s+/g,' ').trim();}))`);
+  console.log('     resultados: ' + res);
+  chk('compara contra el control, A contra B y los pedidos por el botón', res ===
+    '["Reposición 12 todavía en los 14 días","40","26 65%","$1.560.000","2 de 5 40%","15 de 21 71%","11 de 19 58%","9 A 6 · B 3"]', res);
+  chk('la tabla ancha no desborda la página', (await ev(cli, 'document.documentElement.scrollWidth-window.innerWidth')) <= 0);
+  await foto(cli, 'hoy-resultados');
 
   console.log('\n-- la segunda vez: el servidor tarda 6 s --');
   await ir(cli, 'lento');
