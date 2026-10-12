@@ -322,7 +322,7 @@ const TODOS = ['ventas', 'acum', 'entregas', 'ticket', 'canales', 'margen', 'res
        uno: el cartel aparece, no se sale de su caja ni de la pantalla, no tapa
        los puntos de esa fecha, dice el período, y trae una fila por serie. */
     const recorrer = `(function(){
-      var out={puntos:0,graf:0,sinCartel:[],fuera:[],tapa:[],sinTitulo:[],filasMal:[],desorden:[],sinProy:[],sinCurso:[]};
+      var out={puntos:0,graf:0,sinCartel:[],fuera:[],tapa:[],sinTitulo:[],filasMal:[],desorden:[],sinProy:[],sinCurso:[],sinMarca:[],quedan:0,arriba:0};
       document.querySelectorAll('#p-evolucion .evu-graf').forEach(function(box){
         var id=box.getAttribute('data-evu'),c=_evuCfg[id],svg=box.querySelector('svg'); if(!c||!svg||!c._g)return;
         out.graf++;
@@ -336,7 +336,8 @@ const TODOS = ['ventas', 'acum', 'entregas', 'ticket', 'canales', 'margen', 'res
           var t=box.querySelector('.evu-tip');
           if(!t||!t.classList.contains('on')||box._evuI!==i){out.sinCartel.push(id+'#'+i);continue;}
           var tr=t.getBoundingClientRect();
-          if(tr.left<br.left-1||tr.right>br.right+1||tr.left<0||tr.right>window.innerWidth+0.5||tr.top<br.top-1)out.fuera.push(id+'#'+i);
+          var cdr=box.closest('.evu-card').getBoundingClientRect();
+          if(tr.left<br.left-1||tr.right>br.right+1||tr.left<0||tr.right>window.innerWidth+0.5||tr.top<cdr.top-1||tr.bottom>cdr.bottom+1)out.fuera.push(id+'#'+i);
           c.series.forEach(function(se){
             var v=(se.v[i]!==null&&se.v[i]!==undefined)?se.v[i]:((se.proy&&se.proy.i===i)?se.proy.v:null); if(v===null)return;
             var px=r.left+x,py=r.top+g.Y(v);
@@ -345,6 +346,10 @@ const TODOS = ['ventas', 'acum', 'entregas', 'ticket', 'canales', 'margen', 'res
           var tit=t.querySelector('.evu-tip-t').textContent;
           if(!/\\d/.test(tit)||tit.length<8)out.sinTitulo.push(id+'#'+i+': '+tit);
           var filas=[].slice.call(t.querySelectorAll('.evu-tip-f'));
+          /* el punto que se mira queda marcado en cada serie, en su lugar */
+          var mk=[].slice.call(svg.querySelectorAll('.evu-hov .evu-hov-p'));
+          if(mk.length!==con.length||mk.some(function(m){return Math.abs(Number(m.getAttribute('cx'))-x)>0.6;}))out.sinMarca.push(id+'#'+i+': '+mk.length+' de '+con.length);
+          if(tr.bottom<=r.top+Math.min.apply(null,mk.map(function(m){return Number(m.getAttribute('cy'));}))-8)out.arriba++;
           if(filas.length!==con.length)out.filasMal.push(id+'#'+i+': '+filas.length+' de '+con.length);
           if(c.series.length>1&&c.series.every(function(se){return se.multi;})){
             var vs=con.map(function(se){return (se.v[i]!==null&&se.v[i]!==undefined)?se.v[i]:se.proy.v;}).sort(function(a,b){return b-a;});
@@ -358,6 +363,7 @@ const TODOS = ['ventas', 'acum', 'entregas', 'ticket', 'canales', 'margen', 'res
           if((c.x[i].curso||c.x[i].hoy)&&!/en curso|no cerró|sin entregas|proyectado/.test(t.textContent))out.sinCurso.push(id+'#'+i);
         }
         box.dispatchEvent(new PointerEvent('pointerleave',{bubbles:false,pointerType:'mouse'}));
+        out.quedan+=svg.querySelectorAll('.evu-hov circle').length;
       });
       return out;})()`;
     const cartelesOk = (T, que) => {
@@ -370,6 +376,8 @@ const TODOS = ['ventas', 'acum', 'entregas', 'ticket', 'canales', 'margen', 'res
       chk(que + ': con varias líneas, van de mayor a menor', T.desorden.length === 0, T.desorden);
       chk(que + ': lo proyectado se nombra como tal', T.sinProy.length === 0, T.sinProy);
       chk(que + ': lo que no cerró lo dice', T.sinCurso.length === 0, T.sinCurso);
+      chk(que + ': cada serie marca el punto que se está mirando, y al salir no queda ninguna marca', T.sinMarca.length === 0 && T.quedan === 0, [T.sinMarca, T.quedan]);
+      console.log('  · ' + que + ': ' + T.arriba + ' de ' + T.puntos + ' carteles van arriba de su punto');
     };
     /* La tabla de «Ver los números» = el gráfico, celda por celda. */
     const tablas = `(function(){var mal=[],celdas=0;
