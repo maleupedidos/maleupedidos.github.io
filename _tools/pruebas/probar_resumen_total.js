@@ -125,7 +125,7 @@ const LEER = `(function(){
     chk('y esta ARRIBA de Ventas retail', v.arriba === true, { arriba: v.arriba });
     chk('son tres cards', v.cards === 3, { cards: v.cards });
     chk('arranca en el MES en curso (' + MES(0) + ')', (v.sub || '').indexOf(MES(0)) === 0, v.sub);
-    chk('   aunque abajo el selector esté en una semana', /Semana \d/.test(v.subRt || ''), v.subRt);
+    chk('   aunque abajo el selector esté en una semana', /Sem(ana)? \d/.test(v.subRt || ''), v.subRt);
 
     /* ── 2. Los numeros del mes: retail 100.000 + catering 552.000 ── */
     const f = (v.fac || {}), c = (v.cos || {}), m = (v.mar || {});

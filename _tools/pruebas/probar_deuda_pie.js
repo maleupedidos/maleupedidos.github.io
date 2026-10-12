@@ -121,7 +121,8 @@ async function fase(cli, nombre) {
     chk('ya NO esta "Cobrado mes"', !r.cards['COBRADO MES']);
     const m = r.cards['MARGEN MES'] || {};
     chk('"Margen mes" = facturado − costo de los entregados del mes ($58.000)', m.v === '$58.000', m);
-    chk('y el pie dice 32% de lo facturado', m.s === '32% de lo facturado', m.s);
+    /* El pie cambio el 7/10/2026 ("32% · igual que Total Maleu"): se sostiene el %, no la frase. */
+    chk('y el pie dice 32%', /^32%/.test(m.s || ''), m.s);
     chk('Facturado mes da $180.000 (sin agosto ni lo pendiente)', (r.cards['FACTURADO MES'] || {}).v === '$180.000', r.cards['FACTURADO MES']);
     chk('la deuda suma $1.500', d.v === '$1.500', d.v);
     chk('el pie dice la semana MAS VIEJA con algo pendiente (la 35 ya pagada no cuenta)', d.s === 'la más vieja: semana del 7/9', d.s);
