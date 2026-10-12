@@ -246,6 +246,23 @@ const TODOS = ['ventas', 'acum', 'entregas', 'ticket', 'canales', 'margen', 'res
     let Mc = await evaluar(cli, medir);
     chk('apagar Red saca una línea y los otros canales conservan su color', Mc.por.canales.colores.length === R2.vis - 1 && antes.replace(',#7B5EA7', '') === Mc.por.canales.colores.join(), [antes, Mc.por.canales.colores]);
     await evaluar(cli, `evuCanal('Red')`); await pausa(300);
+    /* Home aplasta a los otros cuatro contra el eje: apagado, la escala baja a la de
+       los canales chicos, que pasan a ocupar el alto del gráfico. */
+    const esc = `(function(){var c=_evuCfg.canales,g=c._g,mx=0;
+      c.series.forEach(function(s){if(s.nom==='Home')return;s.v.forEach(function(v){if(v>mx)mx=v;});if(s.proy&&s.proy.v>mx)mx=s.proy.v;});
+      var ch=[].slice.call(document.querySelectorAll('#p-evolucion [data-card="canales"] .evu-chip')).map(function(b){return b.textContent+'|'+b.getAttribute('aria-pressed');});
+      return {top:g.top,maxChicos:mx,ocupa:mx/g.top,chips:ch,series:c.series.map(function(s){return s.nom;})};})()`;
+    const e1 = await evaluar(cli, esc);
+    chk('Canales tiene el chip Home, y arranca prendido', e1.chips.length === 3 && e1.chips[0] === 'Home|true' && e1.series[0] === 'Home', e1.chips);
+    await evaluar(cli, `evuCanal('Home')`); await pausa(400);
+    const e2 = await evaluar(cli, esc);
+    Mc = await evaluar(cli, medir);
+    console.log('       eje con Home $' + Math.round(e1.top) + ' (los chicos ocupan el ' + Math.round(e1.ocupa * 100) + '% del alto) · sin Home $' + Math.round(e2.top) + ' (' + Math.round(e2.ocupa * 100) + '%)');
+    chk('apagar Home baja la escala a la de los canales chicos', e2.series.indexOf('Home') < 0 && e2.top < e1.top && e2.ocupa > 0.6 && e2.ocupa > e1.ocupa, [e1, e2]);
+    chk('sin Home: los otros conservan su color, y nada se pisa ni se sale', antes.replace('#E5662F,', '') === Mc.por.canales.colores.join() && Mc.pisadas.length === 0 && Mc.fuera.length === 0 && Mc.sinAncho.length === 0, [Mc.por.canales.colores, Mc.pisadas, Mc.fuera]);
+    await captura('evolucion-sin-home');
+    await enLaTab();
+    await evaluar(cli, `evuCanal('Home')`); await pausa(300);
 
     /* ── 4, 5 y 6. Rentabilidad, clientes y plata, contra su fuente ── */
     const R3 = await evaluar(cli, `(function(){
