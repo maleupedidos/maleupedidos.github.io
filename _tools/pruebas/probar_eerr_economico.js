@@ -44,10 +44,12 @@ const esperar = async (cli, expr, ms = 60000) => {
 const cerca = (a, b) => typeof a === 'number' && Math.abs(a - b) < 1;
 
 /* ── Datos inventados ─────────────────────────────────────────────────────── */
-const V = (mes, canal, zona, $, costo) => ({ mes: mes, anio: 2026, mc: '2026-' + (mes === 'Octubre' ? '10' : (mes === 'Septiembre' ? '09' : '08')), canal: canal, zona: zona, $: $, costo: costo, fecha: '05/' + (mes === 'Octubre' ? '10' : (mes === 'Septiembre' ? '09' : '08')) + '/2026' });
+const V = (mes, canal, zona, $, costo, pEf) => ({ pEf: pEf || 0, mes: mes, anio: 2026, mc: '2026-' + (mes === 'Octubre' ? '10' : (mes === 'Septiembre' ? '09' : '08')), canal: canal, zona: zona, $: $, costo: costo, fecha: '05/' + (mes === 'Octubre' ? '10' : (mes === 'Septiembre' ? '09' : '08')) + '/2026' });
 const VENTAS = [
   V('Agosto', 'Venta Directa', 'Estancias del Pilar', 8000000, 6000000),
-  V('Septiembre', 'Venta Directa', 'Estancias del Pilar', 6000000, 4200000),
+  /* $60.000 de esos $6.000.000 son propina (11/10/2026): el total de Ventas no cambia,
+     Home muestra $5.940.000 y la propina va en su renglon. */
+  V('Septiembre', 'Venta Directa', 'Estancias del Pilar', 6000000, 4200000, 60000),
   V('Septiembre', 'Venta Directa', 'Pilar', 2000000, 1500000),
   V('Septiembre', 'Red', '', 1000000, 800000),
   V('Septiembre', 'Clubes', '', 1000000, 700000),
@@ -203,8 +205,12 @@ const LEER = `(function(){
     await ev(cli, `document.querySelector('#eerrBody tr[data-eg="ven"]').click()`); await pausa(200);
     T = await ev(cli, LEER);
     const can = (T.filas || []).filter(f => /^h\b/.test(f.cls));
-    chk('ventas abre por canal y suma el total', can.length === 4 && can.reduce((s, f) => s + f.monto, 0) === 10000000, can.map(f => [f.txt, f.monto]));
-    chk('cada canal dice su margen', /margen 30,0%/.test(await ev(cli, `document.querySelector('#eerrBody tr.h').innerText`)), can[0]);
+    chk('ventas abre por canal + propinas y suma el total', can.length === 5 && can.reduce((s, f) => s + f.monto, 0) === 10000000, can.map(f => [f.txt, f.monto]));
+    chk('Home va sin su propina ($5.940.000)', can[0] && /^Home/.test(can[0].txt) && can[0].monto === 5940000, can[0]);
+    const prop = can.filter(f => /^Propinas y redondeos/.test(f.txt))[0];
+    chk('las propinas tienen renglon propio ($60.000)', !!prop && prop.monto === 60000, prop);
+    chk('el margen bruto dice cuanto es sin las propinas (27,6%)', /sin las propinas: 27,6%/.test(fila(/^= Margen bruto/).txt), fila(/^= Margen bruto/));
+    chk('cada canal dice su margen, sin la propina', /margen 29,3%/.test(await ev(cli, `document.querySelector('#eerrBody tr.h').innerText`)), can[0]);
     await ev(cli, `document.querySelector('#eerrBody tr[data-eg="fij"]').click()`); await pausa(200);
     const st9 = await ev(cli, `(document.getElementById('eerrSueldoTxt')||{}).innerText||''`);
     chk('septiembre cerrado: Maleu le debe $200.000 a Uno', /Uno — cuenta del sueldo[^\n]*Maleu le debe \$200\.000/.test(st9), st9);

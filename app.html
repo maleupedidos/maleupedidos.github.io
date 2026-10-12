@@ -13582,7 +13582,7 @@ function _leerVersion(app){
    "El HTML no sabe que version es" dejo de ser cierto: el build le escribe
    adentro el CACHE_NAME de sw-panel.js, el mismo que deploy.sh obliga a subir en
    cada cambio. Si lo publicado dice otra cosa, esta pagina es vieja. Punto. */
-var _APP_CN_PAGINA='maleu-panel-v576';
+var _APP_CN_PAGINA='maleu-panel-v577';
 
 /* Devuelve [{k,v}] si lo publicado no es lo que esta pagina corre. */
 function _chequearVersiones(){
@@ -29725,7 +29725,8 @@ function eerrKpisMes(mn,anio){
     if(p.es!=='Entregado')return false;
     if(p.h!=='Home'&&p.h!=='Pilar')return false;
     var dee=String(p.dee||'').split('-');
-    return dee.length>=2&&Number(dee[1])===mn;
+    /* Con el AÑO (11/10/2026): sin el, enero de 2027 sumaba tambien las bolsas de enero de 2026. */
+    return dee.length>=2&&Number(dee[0])===Number(anio)&&Number(dee[1])===mn;
   }).length;
   v_pk=Math.round(pedPk*(eerrConfig('COSTO_PACKAGING_PEDIDO',ymPk)||0));
   var totVar=v_fl+v_pk+v_camp;
@@ -30281,14 +30282,22 @@ function _eerrCalc(mn,anio){
   var R={mn:mn,anio:anio,mesNom:mesNom};
   var CAN=['Home','Pilar','Clubes','Red','B2B','Catering'];
   var cf={},cc={};CAN.forEach(function(k){cf[k]=0;cc[k]=0;});
-  var totFact=0,totCMV=0;
+  /* PROPINAS Y REDONDEOS APARTE (11/10/2026). El Facturado de Home, Pilar y Clubes
+     trae adentro la propina (el cliente que paga $12.000 por $11.900): es plata que
+     entra sin costo y le subia el margen a cada canal. El TOTAL de Ventas no cambia
+     —es el mismo numero de Inicio, Objetivo y Maleu - Lectura—: cada canal va sin
+     su propina y la propina va en un renglon propio. Red no tiene: es del vendedor. */
+  var totFact=0,totCMV=0,totProp=0;
   VD.filter(function(v){return _esDelMes(v,mesNom,anio);}).forEach(function(v){
     var f=Number(v.$)||0,c=Number(v.costo)||0,k=null;
     totFact+=f;totCMV+=c;
     if(v.canal==='Venta Directa')k=(v.zona==='Pilar'?'Pilar':'Home');
     else if(cf.hasOwnProperty(v.canal))k=v.canal;
-    if(k){cf[k]+=f;cc[k]+=c;}
+    var pr=(k==='Home'||k==='Pilar'||k==='Clubes')?Math.max(0,Math.min(f,(Number(v.pEf)||0)+(Number(v.pTr)||0))):0;
+    totProp+=pr;
+    if(k){cf[k]+=f-pr;cc[k]+=c;}
   });
+  R.propinas=totProp;
   /* Los gastos de categoria Catering son el costo del evento: van al costo. */
   var cmvCat=0,cmvCatD=[];
   ((D&&D.gastos)||[]).filter(function(g){return _esDelMes(g,mesNom,anio);}).forEach(function(g){
@@ -30321,7 +30330,7 @@ function _eerrCalc(mn,anio){
     if(p.es!=='Entregado')return false;
     if(p.h!=='Home'&&p.h!=='Pilar')return false;
     var dee=String(p.dee||'').split('-');
-    return dee.length>=2&&Number(dee[1])===mn;
+    return dee.length>=2&&Number(dee[0])===Number(anio)&&Number(dee[1])===mn;
   }).length;
   R.bolsas=Math.round(R.pedPack*R.costoPack);
   R.bolsasCompras=real.bolsas||0;
@@ -30551,17 +30560,17 @@ function rEERR_dual(body){
 
   /* 1 · Ventas, con lo que dejo cada canal */
   fila({id:'ven',lbl:'Ventas',sub:'lo entregado en el mes, esté cobrado o no',val:R.totFact,cls:'pos',pv:hayP?P.totFact:undefined,
-    nota:'Cada canal con lo que vendió y, al lado, cuánto le quedó después de pagar la mercadería.',
+    nota:'Cada canal con lo que vendió, sin las propinas, y al lado cuánto le quedó después de pagar la mercadería.',
     hijos:R.canales.map(function(c){
       var pc=null;if(hayP)P.canales.forEach(function(x){if(x.k===c.k)pc=x;});
       return {lbl:c.k,val:c.f,pc:c.f>0?'margen '+pct(c.f-c.c,c.f):'',pv:hayP?(pc?pc.f:0):undefined,ppc:pc&&pc.f>0?'margen '+pct(pc.f-pc.c,pc.f):''};
-    })});
+    }).concat((R.propinas>0||(hayP&&P.propinas>0))?[{lbl:'Propinas y redondeos',sub:'lo que el cliente dejó de más; no es venta de productos',val:R.propinas,pv:hayP?(P.propinas||0):undefined}]:[])});
   /* 2 · Costo */
   fila({id:'cmv',lbl:'− Costo de la mercadería',sub:'lo que costó lo que se entregó',val:-R.totCMV,pv:hayP?-P.totCMV:undefined,
     nota:'Es el costo de los productos entregados, pedido por pedido. No es lo que se les pagó a los proveedores este mes.',
     hijos:[{lbl:'Productos',val:-(R.totCMV-R.cmvCat),pv:hayP?-(P.totCMV-P.cmvCat):undefined}]
       .concat(R.cmvCat>0?[{lbl:'Gastos de los eventos de catering',val:-R.cmvCat,pv:hayP?-P.cmvCat:undefined,det:dets(R.cmvCatD)}]:[])});
-  fila({id:'mb',lbl:'= Margen bruto',val:R.totMB,cls:'tot',pv:hayP?P.totMB:undefined});
+  fila({id:'mb',lbl:'= Margen bruto',sub:R.propinas>0?('sin las propinas: '+pct(R.totMB-R.propinas,R.totFact-R.propinas)+' de lo vendido'):'',val:R.totMB,cls:'tot',pv:hayP?P.totMB:undefined});
   /* 3 · Gastos de cada venta */
   fila({id:'var',lbl:'− Gastos de cada venta',sub:'crecen cuando vendés más',val:-R.totVar,pv:hayP?-P.totVar:undefined,
     nota:'Si un mes no vendés nada, estos no existen.',
