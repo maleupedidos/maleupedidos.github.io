@@ -316,6 +316,173 @@ const TODOS = ['ventas', 'acum', 'entregas', 'ticket', 'canales', 'margen', 'res
     dibujoOk(M, 'este año por semana (' + n3 + ' puntos)');
     await captura('evolucion-anio');
 
+
+    /* ── LOS CARTELES, PUNTO POR PUNTO (12/10/2026) ──────────────────────────
+       Se pasa el puntero por CADA punto de CADA gráfico, en tres vistas. En cada
+       uno: el cartel aparece, no se sale de su caja ni de la pantalla, no tapa
+       los puntos de esa fecha, dice el período, y trae una fila por serie. */
+    const recorrer = `(function(){
+      var out={puntos:0,graf:0,sinCartel:[],fuera:[],tapa:[],sinTitulo:[],filasMal:[],desorden:[],sinProy:[],sinCurso:[]};
+      document.querySelectorAll('#p-evolucion .evu-graf').forEach(function(box){
+        var id=box.getAttribute('data-evu'),c=_evuCfg[id],svg=box.querySelector('svg'); if(!c||!svg||!c._g)return;
+        out.graf++;
+        var g=c._g,r=svg.getBoundingClientRect(),br=box.getBoundingClientRect();
+        for(var i=0;i<g.n;i++){
+          var con=c.series.filter(function(se){return (se.v[i]!==null&&se.v[i]!==undefined)||(se.proy&&se.proy.i===i);});
+          if(!con.length)continue;
+          out.puntos++;
+          var x=g.n===1?g.padL+g.pw/2:g.padL+i*g.pw/(g.n-1);
+          box.dispatchEvent(new PointerEvent('pointermove',{clientX:r.left+x,clientY:r.top+40,bubbles:true,pointerType:'mouse'}));
+          var t=box.querySelector('.evu-tip');
+          if(!t||!t.classList.contains('on')||box._evuI!==i){out.sinCartel.push(id+'#'+i);continue;}
+          var tr=t.getBoundingClientRect();
+          if(tr.left<br.left-1||tr.right>br.right+1||tr.left<0||tr.right>window.innerWidth+0.5||tr.top<br.top-1)out.fuera.push(id+'#'+i);
+          c.series.forEach(function(se){
+            var v=(se.v[i]!==null&&se.v[i]!==undefined)?se.v[i]:((se.proy&&se.proy.i===i)?se.proy.v:null); if(v===null)return;
+            var px=r.left+x,py=r.top+g.Y(v);
+            if(px>tr.left+1&&px<tr.right-1&&py>tr.top+1&&py<tr.bottom-1)out.tapa.push(id+'#'+i+' '+se.nom);
+          });
+          var tit=t.querySelector('.evu-tip-t').textContent;
+          if(!/\\d/.test(tit)||tit.length<8)out.sinTitulo.push(id+'#'+i+': '+tit);
+          var filas=[].slice.call(t.querySelectorAll('.evu-tip-f'));
+          if(filas.length!==con.length)out.filasMal.push(id+'#'+i+': '+filas.length+' de '+con.length);
+          if(c.series.length>1&&c.series.every(function(se){return se.multi;})){
+            var vs=con.map(function(se){return (se.v[i]!==null&&se.v[i]!==undefined)?se.v[i]:se.proy.v;}).sort(function(a,b){return b-a;});
+            var txt=filas.map(function(f){return f.querySelector('b').textContent;});
+            var esp=vs.map(function(v){return c.fmtVal(v);});
+            if(txt.map(function(s){return s.replace('≈ ','');}).join('|')!==esp.join('|'))out.desorden.push(id+'#'+i+': '+txt.join(' '));
+          }
+          c.series.forEach(function(se){
+            if(se.proy&&se.proy.i===i&&!/≈/.test(t.textContent)&&!/cierra en/.test(t.textContent))out.sinProy.push(id+'#'+i+' '+se.nom);
+          });
+          if((c.x[i].curso||c.x[i].hoy)&&!/en curso|no cerró|sin entregas|proyectado/.test(t.textContent))out.sinCurso.push(id+'#'+i);
+        }
+        box.dispatchEvent(new PointerEvent('pointerleave',{bubbles:false,pointerType:'mouse'}));
+      });
+      return out;})()`;
+    const cartelesOk = (T, que) => {
+      console.log('  · ' + que + ': ' + T.puntos + ' puntos en ' + T.graf + ' gráficos');
+      chk(que + ': el cartel aparece en todos los puntos (' + T.puntos + ')', T.puntos > 40 && T.graf === 11 && T.sinCartel.length === 0, T.sinCartel);
+      chk(que + ': ningún cartel se sale de su caja ni de la pantalla', T.fuera.length === 0, T.fuera);
+      chk(que + ': ningún cartel tapa los puntos que explica', T.tapa.length === 0, T.tapa);
+      chk(que + ': el cartel dice el período', T.sinTitulo.length === 0, T.sinTitulo);
+      chk(que + ': una fila por serie con dato en esa fecha', T.filasMal.length === 0, T.filasMal);
+      chk(que + ': con varias líneas, van de mayor a menor', T.desorden.length === 0, T.desorden);
+      chk(que + ': lo proyectado se nombra como tal', T.sinProy.length === 0, T.sinProy);
+      chk(que + ': lo que no cerró lo dice', T.sinCurso.length === 0, T.sinCurso);
+    };
+    /* La tabla de «Ver los números» = el gráfico, celda por celda. */
+    const tablas = `(function(){var mal=[],celdas=0;
+      document.querySelectorAll('#p-evolucion .evu-card[data-card]').forEach(function(cd){
+        var id=cd.getAttribute('data-card'),c=_evuCfg[id],tb=cd.querySelector('.evu-tb tbody'); if(!c||!tb)return;
+        var filas=[].slice.call(tb.querySelectorAll('tr')),k=0;
+        c.x.forEach(function(x,i){
+          if(!c.series.some(function(se){return se.v[i]!==null&&se.v[i]!==undefined;}))return;
+          var tr=filas[k++]; if(!tr){mal.push(id+': falta la fila '+i);return;}
+          var tds=tr.querySelectorAll('td');
+          c.series.forEach(function(se,j){celdas++;var v=se.v[i],esp=(v===null||v===undefined)?'—':c.fmtVal(v);
+            if(!tds[j]||tds[j].textContent!==esp)mal.push(id+'#'+i+' '+se.nom+': '+(tds[j]?tds[j].textContent:'?')+' ≠ '+esp);});
+        });
+        if(k!==filas.length)mal.push(id+': sobran filas');
+      });
+      return {mal:mal.slice(0,8),n:mal.length,celdas:celdas};})()`;
+
+    await enLaTab();
+    for (const [per, gr, que] of [['8s', 'sem', '8 semanas'], ['6m', 'mes', '6 meses por mes'], ['anio', 'sem', 'este año por semana'], ['12m', 'mes', '12 meses por mes']]) {
+      await evaluar(cli, `evuPer('${per}');evuGrupo('${gr}')`); await pausa(500);
+      cartelesOk(await evaluar(cli, recorrer), 'carteles, ' + que);
+      const Tb = await evaluar(cli, tablas);
+      chk('«Ver los números», ' + que + ': la tabla = el gráfico (' + Tb.celdas + ' celdas)', Tb.celdas > 80 && Tb.n === 0, Tb.mal);
+    }
+    /* El acumulado: el último día del mes trae la proyección, nombrada. */
+    await evaluar(cli, `evuPer('8s')`); await pausa(400);
+    const pA = await evaluar(cli, `(function(){var box=document.querySelector('#p-evolucion .evu-graf[data-evu="acum"]'),c=_evuCfg.acum,g=c._g,r=box.querySelector('svg').getBoundingClientRect();
+      var pr=c.series[0].proy; if(!pr)return {sin:true};
+      box.dispatchEvent(new PointerEvent('pointermove',{clientX:r.left+g.padL+pr.i*g.pw/(g.n-1),clientY:r.top+40,bubbles:true,pointerType:'mouse'}));
+      var t=box.querySelector('.evu-tip').textContent; box.dispatchEvent(new PointerEvent('pointerleave',{pointerType:'mouse'}));
+      return {txt:t,esp:'≈ '+c.fmtVal(pr.v)};})()`);
+    /* …también SIN objetivo cargado, cuando ese día no tiene ninguna otra serie. */
+    const pB = await evaluar(cli, `(function(){var m=_evuMeta;_evuMeta={label:m?m.label:'',v:0,hace:''};rEvolucion();
+      var box=document.querySelector('#p-evolucion .evu-graf[data-evu="acum"]'),c=_evuCfg.acum,g=c._g,r=box.querySelector('svg').getBoundingClientRect(),pr=c.series[0].proy,o={sin:!pr};
+      if(pr){box.dispatchEvent(new PointerEvent('pointermove',{clientX:r.left+g.padL+pr.i*g.pw/(g.n-1),clientY:r.top+40,bubbles:true,pointerType:'mouse'}));o.i=box._evuI;o.esp=pr.i;o.txt=box.querySelector('.evu-tip').textContent;}
+      _evuMeta=m;rEvolucion();return o;})()`);
+    if (!pB.sin) chk('acumulado sin objetivo: el cartel del cierre proyectado cae en su día, no en el de al lado', pB.i === pB.esp && /proyectado al cierre/.test(pB.txt), pB);
+    if (!pA.sin) chk('acumulado: el último día del mes muestra el cierre proyectado, con ≈ y «proyectado»', pA.txt.indexOf(pA.esp) >= 0 && /proyectado al cierre/.test(pA.txt), pA);
+
+    /* En el celular: se abre al tocar, se cierra al tocar afuera, al hacer scroll
+       y al cambiar de período. */
+    const toque = `(function(){var box=document.querySelector('#p-evolucion .evu-graf[data-evu="ventas"]'),r=box.querySelector('svg').getBoundingClientRect(),g=_evuCfg.ventas._g;
+      box.dispatchEvent(new PointerEvent('pointerdown',{clientX:r.left+g.padL+g.pw/2,clientY:r.top+50,bubbles:true,pointerType:'touch'}));
+      return document.querySelectorAll('#p-evolucion .evu-tip.on').length;})()`;
+    const abiertos = `document.querySelectorAll('#p-evolucion .evu-tip.on').length`;
+    chk('tocar un gráfico abre su cartel', await evaluar(cli, toque) === 1);
+    await evaluar(cli, `document.querySelector('#p-evolucion .evu-h').dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,pointerType:'touch'}))`);
+    chk('…tocar afuera lo cierra', await evaluar(cli, abiertos) === 0);
+    await evaluar(cli, toque);
+    await evaluar(cli, `window.scrollBy(0,120)`); await pausa(300);
+    chk('…al hacer scroll no queda colgado', await evaluar(cli, abiertos) === 0);
+    await evaluar(cli, `window.scrollTo(0,0)`); await pausa(200);
+    await evaluar(cli, toque);
+    await evaluar(cli, `evuPer('6m')`); await pausa(300);
+    chk('…ni al cambiar de período', await evaluar(cli, abiertos) === 0);
+
+    /* Con teclado. */
+    const tecla = k => `(function(){var box=document.querySelector('#p-evolucion .evu-graf[data-evu="ventas"]');box.focus();
+      box.dispatchEvent(new KeyboardEvent('keydown',{key:'${k}',bubbles:true}));
+      var t=box.querySelector('.evu-tip');return {i:box._evuI,on:!!t&&t.classList.contains('on'),tab:box.tabIndex,n:_evuCfg.ventas._g.n};})()`;
+    const k1 = await evaluar(cli, tecla('End')), k2 = await evaluar(cli, tecla('ArrowLeft')), k3 = await evaluar(cli, tecla('Home')), k4 = await evaluar(cli, tecla('Escape'));
+    chk('teclado: el gráfico recibe el foco y las flechas recorren los puntos', k1.tab === 0 && k1.on && k1.i === k1.n - 1 && k2.i === k1.n - 2 && k3.i === 0 && k4.on === false, [k1, k2, k3, k4]);
+    await evaluar(cli, `document.activeElement&&document.activeElement.blur()`);
+
+    /* Cambiar rápido: no queda un gráfico del período anterior. */
+    await evaluar(cli, `['8s','6m','12m','anio','8s','12m'].forEach(function(p){evuPer(p);});['sem','mes','sem','mes'].forEach(function(g){evuGrupo(g);});`);
+    await pausa(500);
+    const rap = await evaluar(cli, `(function(){var S=window._evuUltimo.S;return {per:S.per,gr:S.gr,n:S.b.length,svgs:document.querySelectorAll('#p-evolucion .evu-graf svg').length,
+      pts:_evuCfg.ventas.x.length,on:document.querySelector('#p-evolucion .evu-seg button.on').textContent};})()`);
+    chk('cambiar rápido de período y agrupación: queda el último, entero', rap.per === '12m' && rap.gr === 'mes' && rap.svgs === 11 && rap.pts === rap.n && rap.on === '12 meses', rap);
+    M = await evaluar(cli, medir); dibujoOk(M, '12 meses por mes');
+
+    /* Los tres chips, en las 8 combinaciones. «Ver los números» abierto no se cierra. */
+    await evaluar(cli, `evuPer('8s');document.querySelector('#p-evolucion [data-card="canales"] details').open=true;`); await pausa(300);
+    const combos = [];
+    for (let m = 0; m < 8; m++) {
+      await evaluar(cli, `EVU_OFF={Home:${!!(m & 1)},Red:${!!(m & 2)},Catering:${!!(m & 4)}};rEvolucion()`); await pausa(250);
+      const Mx = await evaluar(cli, medir);
+      const cx = await evaluar(cli, `({n:_evuCfg.canales.series.length,abierta:document.querySelector('#p-evolucion [data-card="canales"] details').open,top:_evuCfg.canales._g.top})`);
+      if (cx.n !== 5 - ((m & 1) + ((m >> 1) & 1) + ((m >> 2) & 1)) || !cx.abierta || !(cx.top > 0) || Mx.fuera.length || Mx.pisadas.length || Mx.sinAncho.length || Mx.graf !== 11) combos.push({ m, cx, fuera: Mx.fuera, pisadas: Mx.pisadas });
+    }
+    chk('Home, Red y Catering en sus 8 combinaciones: nada se pisa ni se sale, y la tabla abierta sigue abierta', combos.length === 0, combos);
+    await evaluar(cli, `EVU_OFF={};rEvolucion()`); await pausa(300);
+
+    /* Girar el celular / cambiar el ancho con la tab abierta, con un cartel abierto. */
+    await evaluar(cli, toque);
+    const ancho2 = ANCHO < 700 ? 844 : 1100;
+    await cli.enviar('Emulation.setDeviceMetricsOverride', { width: ancho2, height: ANCHO < 700 ? 390 : 800, deviceScaleFactor: 1, mobile: ANCHO < 700 });
+    await pausa(900);
+    M = await evaluar(cli, medir);
+    chk('al girar o cambiar el ancho (' + ancho2 + ' px) los gráficos se rehacen a su caja, sin cartel colgado', M.graf === 11 && M.sinAncho.length === 0 && M.fuera.length === 0 && await evaluar(cli, `(function(){var p=document.getElementById('p-evolucion');return p.scrollWidth-p.clientWidth;})()`) <= 0 && await evaluar(cli, abiertos) === 0, [M.sinAncho, M.fuera]);
+    await cli.enviar('Emulation.setDeviceMetricsOverride', { width: ANCHO, height: ANCHO < 700 ? 844 : 900, deviceScaleFactor: 1, mobile: ANCHO < 700 });
+    await pausa(900);
+    M = await evaluar(cli, medir);
+    chk('…y al volver, también', M.graf === 11 && M.sinAncho.length === 0 && M.fuera.length === 0, [M.sinAncho, M.fuera]);
+
+    /* Si el backend no contesta, se dice (no queda «Trayendo…» para siempre). */
+    const falla = await evaluar(cli, `(function(){var g=window.VD;window.VD=null;_evuEerrPedido=true;_evuEerrFallo='las ventas';rEvolucion();
+      var t=document.getElementById('evuBody').innerText,n=document.querySelectorAll('#p-evolucion .evu-graf svg').length;
+      window.VD=g;_evuEerrFallo='';rEvolucion();
+      return {dice:/No se pudieron traer las ventas/.test(t),trayendo:/Trayendo el EERR/.test(t),svgs:n,vuelve:document.querySelectorAll('#p-evolucion .evu-graf svg').length};})()`);
+    chk('sin las ventas: lo dice, los otros bloques se dibujan igual, y vuelve cuando llegan', falla.dice && !falla.trayendo && falla.svgs >= 8 && falla.vuelve === 11, falla);
+
+    /* El ↻ trae TODO lo que la tab dibuja: pedidos, ventas y caja. */
+    const fu = await evaluar(cli, `JSON.stringify(_fuentesDeTab('evolucion'))`);
+    chk('las fuentes de la tab son los pedidos, las ventas y la caja', /pedidos/.test(fu) && /ventas/.test(fu) && /caja/.test(fu), fu);
+    await evaluar(cli, `(function(){window.__evuPed=[];var f=window.fetch;window.__evuF=f;window.fetch=function(u){try{var m=/action=([A-Za-z]+)/.exec(String(u&&u.url||u));if(m)window.__evuPed.push(m[1]);}catch(e){}return f.apply(this,arguments);};refreshContextual();})()`);
+    await esperar(cli, `!document.getElementById('hdrRefresh').classList.contains('spinning')`, 120000);
+    const ped = await evaluar(cli, `(function(){window.fetch=window.__evuF;return JSON.stringify(window.__evuPed);})()`);
+    chk('el ↻ pide las ventas y la caja además de los pedidos', /"ventas"/.test(ped) && /"cajaLight"/.test(ped) && /pedidosLight|"lote"/.test(ped), ped);
+    chk('…y la tab queda entera después', await evaluar(cli, `document.querySelectorAll('#p-evolucion .evu-graf svg').length`) === 11);
+    chk('el sello dice de cuándo son los datos', /Ventas de /.test(await evaluar(cli, `document.getElementById('evuSello').textContent`)));
+
     const errs = await evaluar(cli, `JSON.stringify((window.__err||[]).filter(function(e){return /evolu|evu|rEvol|eerr|flujo/i.test(e);}))`);
     chk('sin errores de la tab en consola', errs === '[]', errs);
     console.log('\n  ' + ok + ' ok · ' + mal + ' mal\n');

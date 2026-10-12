@@ -4047,6 +4047,13 @@ a.plan-btn-metas{display:inline-flex;align-items:center;text-decoration:none}
 .evu-tip-f{display:flex;align-items:center;gap:6px}
 .evu-tip-f b{font-variant-numeric:tabular-nums}
 .evu-tip-k{display:inline-block;width:12px;height:3px;border-radius:2px;flex:none}
+.evu-tip-k.pr{height:0;border-top:2px dashed;border-radius:0}
+.evu-tip-f{white-space:normal}
+.evu-tip-f b{white-space:nowrap}
+.evu-graf:focus{outline:none}
+.evu-graf:focus-visible{outline:2px solid var(--b);outline-offset:3px;border-radius:4px}
+.evu-card.espera{min-height:300px}
+.evu-card.falla .evu-sub{color:var(--r)}
 .evu-tip-n{opacity:.8}
 .evu-tip-c{margin-top:2px;padding-top:3px;border-top:1px solid rgba(255,255,255,.22);white-space:normal}
 .evu-det{margin-top:4px;border-top:1px solid var(--border)}
@@ -11213,7 +11220,7 @@ var API='https://script.google.com/macros/s/AKfycbxmrG5YVSshcYezk8lXFx_uxb7NFGcb
        `crmClientes` y `crmLotes` aca, dos lecturas que nadie miraba competian con
        las dos que si. */
     planificacion: { pedidosLight: 1 },
-    evolucion: { pedidosLight: 1 },
+    evolucion: { pedidosLight: 1, ventas: 1, cajaLight: 1 },
     /* INICIO MIRA TRES, Y LA COLA CONOCIA UNA (25/9/2026).
 
        `_fuentesDeTab('inicio')` devolvia `['pedidos','caja','ventas']`: el
@@ -13459,7 +13466,9 @@ function _fuentesDeTab(tab){
      volcado entero y paso a ser `pedidos` — ver la rama de esta tab en
      refreshContextual.) */
   /* Evolucion (11/10/2026) dibuja todo desde los pedidos, con el motor del Resumen. */
-  if(tab==='evolucion')return ['pedidos'];
+  /* 12/10/2026: no era cierto. Rentabilidad y Plata salen de las ventas y de la
+     caja; con solo `pedidos` el ↻ decía «recién» y esos dos bloques seguían viejos. */
+  if(tab==='evolucion'){ var _fe=['pedidos','ventas']; if(_tengoTab('caja'))_fe.push('caja'); return _fe; }
   if(tab==='planificacion')return ['pedidos','planMes'];
   /* Proveedores (27/9/2026). Su analisis lo pide ella misma
      (`action=analisisProveedor`); del volcado solo usaba la LISTA de nombres,
@@ -13669,7 +13678,7 @@ function _leerVersion(app){
    "El HTML no sabe que version es" dejo de ser cierto: el build le escribe
    adentro el CACHE_NAME de sw-panel.js, el mismo que deploy.sh obliga a subir en
    cada cambio. Si lo publicado dice otra cosa, esta pagina es vieja. Punto. */
-var _APP_CN_PAGINA='maleu-panel-v580';
+var _APP_CN_PAGINA='maleu-panel-v581';
 
 /* Devuelve [{k,v}] si lo publicado no es lo que esta pagina corre. */
 function _chequearVersiones(){
@@ -14111,6 +14120,20 @@ function refreshContextual(){
          vuelve a sellar aca: el boton sigue en rojo —algo falta— pero el detalle
          deja de acusar a la que anduvo bien. */
       if(_bien.length){ try{ _marcarFresco(_bien); }catch(e){} }
+    },function(){ done(false); });
+    return;
+  }
+  /* EVOLUCION (12/10/2026): los pedidos, las ventas y la caja, en paralelo. Caia
+     en el default, que no pide las ventas: Rentabilidad no se actualizaba nunca. */
+  if(active==='evolucion'){
+    var _ev=[];
+    if(typeof loadRapido==='function')_ev.push(loadRapido({soloPedidos:true,dePlanilla:true}));
+    if(typeof loadVentas==='function')_ev.push(loadVentas());
+    if(_tengoTab('caja'))_ev.push(_recargarCaja());
+    Promise.all(_ev).then(function(res){
+      _evuEerrFallo='';
+      try{ rEvolucion(); }catch(e){ console.error('rEvolucion()',e); }
+      done(!(res||[]).some(function(r){ return r&&r.ok===false; }));
     },function(){ done(false); });
     return;
   }
@@ -31495,8 +31518,8 @@ var _tendRO=null, _tendUltimoAncho=0, _tendResizeT=null;
 var EVU={per:'8s',gr:'sem'};
 var EVU_C={main:'#E5662F',ref:'#A89880',ant:'#8A6F5A',obj:'#331C1C'};
 var EVU_DIA=['domingo','lunes','martes','miércoles','jueves','viernes','sábado'];
-var _evuMemo={}, _evuCfg={}, _evuRO=null, _evuAncho=0, _evuT=null;
-var _evuMeta=null, _evuMetaPedida='', _evuGlobal=false, _evuPrefLeida=false, _evuEerrPedido=false;
+var _evuMemo={}, _evuCfg={}, _evuRO=null, _evuAncho=0, _evuT=null, _evuPend=false;
+var _evuMeta=null, _evuMetaPedida='', _evuGlobal=false, _evuPrefLeida=false, _evuEerrPedido=false, _evuMetaFallo=false, _evuEerrFallo='';
 /* Los canales, cada uno con SU color: el color sigue al canal, no al orden. Si se
    apaga uno, los otros no cambian. Paleta validada con el script de dataviz
    (separación para daltonismo y contraste contra el blanco). */
@@ -31511,7 +31534,8 @@ function _evuDM(d){return _evu2(d.getDate())+'/'+_evu2(d.getMonth()+1);}
    va en el detalle al tocar y en la tabla. */
 function _evuCorto(v){
   var a=Math.abs(v),s=v<0?'-':'';
-  if(a>=1000000)return s+'$'+(a/1000000).toFixed(1).replace('.',',').replace(',0','')+'M';
+  /* 999.500 redondeaba a «$1000k». */
+  if(a>=999500)return s+'$'+(a/1000000).toFixed(1).replace('.',',').replace(',0','')+'M';
   if(a>=1000)return s+'$'+Math.round(a/1000)+'k';
   return s+'$'+Math.round(a);
 }
@@ -31653,7 +31677,7 @@ function _evuAcum(){
   for(var dd=1;dd<=N;dd++){
     act.push(dd<=hoy.getDate()?_evuSumar(iso(y,m,1),iso(y,m,dd)).f:null);
     ant.push(dd<=pDias?_evuSumar(iso(pY,pM,1),iso(pY,pM,dd)).f:null);
-    x.push({lab:String(dd),tit:'Día '+dd+' del mes'});
+    x.push({lab:String(dd),tit:'Día '+dd+' de '+RT_MESES[m].toLowerCase()+(dd===hoy.getDate()?' · hoy, todavía no cerró':''),hoy:dd===hoy.getDate()});
   }
   var dAnt=Math.min(hoy.getDate(),pDias);
   /* El ritmo se mide con los días CERRADOS, igual que Objetivo: hoy todavía no
@@ -31679,7 +31703,10 @@ function _evuPedirMeta(){
       _evuMeta={label:label,v:mt?(Number(mt.metaFact)||0):0,hace:(info&&info.viejo)?info.hace:''};
       if(cur==='evolucion'){try{rEvolucion();}catch(e){console.error('rEvolucion()',e);}}
     },{valido:function(d){return !!(d&&d.ok&&d.metas);}});
-    if(pr&&pr.catch)pr.catch(function(){});
+    if(pr&&pr.then)pr.then(function(){_evuMetaFallo=false;},function(){
+      _evuMetaFallo=true;
+      if(cur==='evolucion'){try{rEvolucion();}catch(e){console.error('rEvolucion()',e);}}
+    });
   }catch(e){console.error('evolucion/meta',e);}
 }
 
@@ -31741,7 +31768,7 @@ function _evuSvg(c,W){
   var pw=Math.max(40,W-padL-padR), ph=H-padT-padB;
   var X=function(i){return n===1?padL+pw/2:padL+i*pw/(n-1);};
   var Y=function(v){return padT+ph-((v-bot)/(top-bot))*ph;};
-  c._g={padL:padL,pw:pw,n:n,padT:padT,ph:ph,W:W,top:top};
+  c._g={padL:padL,pw:pw,n:n,padT:padT,ph:ph,W:W,top:top,Y:Y};
 
   var s='<svg class="evu-svg" viewBox="0 0 '+W+' '+H+'" width="'+W+'" height="'+H+'" role="img" aria-label="'+_tendEsc(c.aria||'')+'">';
   ticks.forEach(function(t){
@@ -31824,19 +31851,51 @@ function _evuSvg(c,W){
 function _evuTipFuera(box){
   var t=box.querySelector('.evu-tip'); if(t)t.classList.remove('on');
   var l=box.querySelector('.evu-cross'); if(l)l.style.display='none';
+  box._evuI=null;
+  /* Un cambio de ancho que llegó con un cartel abierto quedó esperando: ahora. */
+  if(_evuPend){
+    _evuPend=false;
+    clearTimeout(_evuT);
+    _evuT=setTimeout(function(){try{if(cur==='evolucion')_evuPintarGraficos();}catch(e){console.error('evolucion/resize',e);}},140);
+  }
+}
+function _evuTipsFuera(){
+  document.querySelectorAll('#p-evolucion .evu-graf').forEach(function(b){if(b.querySelector('.evu-tip.on'))_evuTipFuera(b);});
 }
 function _evuTip(box,c,i){
   var g=c._g, tip=box.querySelector('.evu-tip');
-  if(!tip){tip=document.createElement('div');tip.className='evu-tip';box.appendChild(tip);}
+  if(!tip){tip=document.createElement('div');tip.className='evu-tip';tip.setAttribute('role','status');tip.setAttribute('aria-live','polite');box.appendChild(tip);}
   while(tip.firstChild)tip.removeChild(tip.firstChild);
+  box._evuI=i;
   var el=function(tag,cls,txt){var e=document.createElement(tag);if(cls)e.className=cls;if(txt!==undefined)e.textContent=txt;return e;};
+  var enCurso=!!(c.x[i].curso||c.x[i].hoy);
   tip.appendChild(el('div','evu-tip-t',c.x[i].tit));
-  c.series.slice().sort(function(a,b){return (a.tipo==='main'?0:1)-(b.tipo==='main'?0:1);}).forEach(function(se){
-    var v=se.v[i]; if(v===null||v===undefined)return;
+  /* Una fila por serie que tenga algo en esa fecha. Varias líneas del mismo peso
+     (Canales, Plata) van de mayor a menor; si no, la principal primero. Lo que
+     todavía no cerró lo dice («en curso»), y lo proyectado lleva ≈ y su nombre:
+     nunca se lee como un número cerrado. */
+  var filas=[], ys=[];
+  c.series.forEach(function(se,k){
+    var v=se.v[i], hay=(v!==null&&v!==undefined), pr=(se.proy&&se.proy.i===i)?se.proy.v:null;
+    if(!hay&&pr===null)return;
+    var f={k:k,se:se,orden:hay?v:pr,main:se.tipo==='main'};
+    if(hay){
+      f.val=c.fmtVal(v); ys.push(g.Y(v));
+      /* Con varias lineas el titulo ya dice «en curso»: repetirlo en cada fila
+         es ruido. Ahi va solo el cierre proyectado de cada una. */
+      f.nom=se.nom+((enCurso&&se.tipo==='main'&&!se.multi)?' · en curso':'')+((pr!==null&&se.multi)?' · ≈ '+c.fmtFin(pr)+' al cierre':'');
+    }else{
+      f.val='≈ '+c.fmtVal(pr); f.nom=se.nom+' · proyectado al cierre'; f.proy=true; ys.push(g.Y(pr));
+    }
+    filas.push(f);
+  });
+  var multi=c.series.length>1&&c.series.every(function(se){return se.multi;});
+  filas.sort(multi?function(a,b){return b.orden-a.orden||a.k-b.k;}:function(a,b){return (a.main?0:1)-(b.main?0:1)||a.k-b.k;});
+  filas.forEach(function(f){
     var fila=el('div','evu-tip-f');
-    var key=el('span','evu-tip-k'); key.style.background=se.color; fila.appendChild(key);
-    fila.appendChild(el('b','',c.fmtVal(v)));
-    fila.appendChild(el('span','evu-tip-n',se.nom));
+    var key=el('span','evu-tip-k'+(f.proy?' pr':'')); key.style.background=f.proy?'none':f.se.color; key.style.borderColor=f.se.color; fila.appendChild(key);
+    fila.appendChild(el('b','',f.val));
+    fila.appendChild(el('span','evu-tip-n',f.nom));
     tip.appendChild(fila);
   });
   var nota=c.nota?c.nota(i):'';
@@ -31845,10 +31904,23 @@ function _evuTip(box,c,i){
   var l=box.querySelector('.evu-cross');
   if(l){l.setAttribute('x1',x.toFixed(1));l.setAttribute('x2',x.toFixed(1));l.style.display='';}
   tip.classList.add('on');
-  var tw=tip.offsetWidth, izq=x+12;
-  if(izq+tw>g.W)izq=x-12-tw;
-  if(izq<0)izq=Math.max(0,Math.min(g.W-tw,x-tw/2));
+  /* Al costado de la fecha, nunca encima del punto que explica. Si no entra a
+     ningun costado (un cartel ancho en el celular) se angosta al costado mas
+     ancho y sus renglones bajan de linea: centrarlo tapaba los puntos. */
+  /* Se mide desde la izquierda: un cartel absoluto se angosta segun donde
+     quedo la vez anterior, y la medida salia mentirosa. */
+  tip.style.maxWidth=''; tip.style.left='0px';
+  var tw=tip.offsetWidth, der=g.W-(x+12), izqEsp=x-12, izq, arriba=0;
+  if(tw<=der)izq=x+12;
+  else if(tw<=izqEsp)izq=x-12-tw;
+  else{
+    var lado=Math.max(der,izqEsp);
+    tip.style.maxWidth=Math.max(96,Math.floor(lado))+'px';
+    tw=tip.offsetWidth;
+    izq=(der>=izqEsp)?x+12:Math.max(0,x-12-tw);
+  }
   tip.style.left=izq+'px';
+  tip.style.top=arriba+'px';
 }
 function _evuEnganchar(box,id){
   if(box._evuOn)return; box._evuOn=true;
@@ -31858,7 +31930,9 @@ function _evuEnganchar(box,id){
     var g=c._g, x=ev.clientX-svg.getBoundingClientRect().left;
     var i=g.n<=1?0:Math.round((x-g.padL)/g.pw*(g.n-1));
     i=Math.max(0,Math.min(g.n-1,i));
-    var hay=function(j){return c.series.some(function(se){return se.v[j]!==null&&se.v[j]!==undefined;});};
+    /* La proyeccion tambien es un punto: el ultimo dia del mes, sin objetivo
+       cargado, solo tiene eso, y el cartel saltaba al dia de al lado. */
+    var hay=function(j){return c.series.some(function(se){return (se.v[j]!==null&&se.v[j]!==undefined)||(se.proy&&se.proy.i===j);});};
     if(!hay(i)){
       var ok=-1;
       for(var k=1;k<g.n&&ok<0;k++){if(i-k>=0&&hay(i-k))ok=i-k;else if(i+k<g.n&&hay(i+k))ok=i+k;}
@@ -31869,11 +31943,37 @@ function _evuEnganchar(box,id){
   box.addEventListener('pointermove',mover);
   box.addEventListener('pointerdown',mover);
   box.addEventListener('pointerleave',function(ev){if(ev.pointerType==='mouse')_evuTipFuera(box);});
+  /* Con teclado: Tab llega al gráfico y abre el último punto; las flechas
+     recorren, Inicio y Fin van a las puntas, Escape cierra. */
+  var conDato=function(c,j){return c.series.some(function(se){return (se.v[j]!==null&&se.v[j]!==undefined)||(se.proy&&se.proy.i===j);});};
+  var irA=function(desde,paso){
+    var c=_evuCfg[id]; if(!c||!c._g)return;
+    for(var j=desde;j>=0&&j<c._g.n;j+=paso){if(conDato(c,j)){_evuTip(box,c,j);return;}}
+  };
+  box.addEventListener('focus',function(){
+    var ok=false; try{ok=box.matches(':focus-visible');}catch(e){ok=true;}
+    if(!ok)return;
+    var c=_evuCfg[id]; if(c&&c._g)irA(c._g.n-1,-1);
+  });
+  box.addEventListener('blur',function(){_evuTipFuera(box);});
+  box.addEventListener('keydown',function(ev){
+    var c=_evuCfg[id]; if(!c||!c._g)return;
+    var n=c._g.n, i=(box._evuI===null||box._evuI===undefined)?n:box._evuI;
+    if(ev.key==='ArrowLeft'){irA(Math.min(n-1,i-1),-1);}
+    else if(ev.key==='ArrowRight'){irA(Math.max(0,i>=n?n-1:i+1),1);}
+    else if(ev.key==='Home'){irA(0,1);}
+    else if(ev.key==='End'){irA(n-1,-1);}
+    else if(ev.key==='Escape'){_evuTipFuera(box);return;}
+    else return;
+    ev.preventDefault();
+  });
   if(!_evuGlobal){
     _evuGlobal=true;
     document.addEventListener('pointerdown',function(ev){
       document.querySelectorAll('#p-evolucion .evu-graf').forEach(function(b){if(!b.contains(ev.target))_evuTipFuera(b);});
     },{passive:true});
+    /* En el celular un cartel abierto no se queda colgado al hacer scroll. */
+    window.addEventListener('scroll',function(){if(cur==='evolucion')_evuTipsFuera();},{passive:true,capture:true});
   }
 }
 function _evuPintarGraficos(){
@@ -31904,9 +32004,14 @@ function _evuObservar(){
     if(cur!=='evolucion')return;
     /* Con un detalle abierto no se rehace: rehacer el SVG bajo el dedo dispara
        otro evento y titila (pasó en Ventas › Tendencia). */
-    if(root.querySelector('.evu-tip.on'))return;
     var w=_tendAnchoUtil(root);
     if(!w||Math.abs(w-_evuAncho)<=2)return;
+    if(root.querySelector('.evu-tip.on')){
+      /* Girar el celular o cambiar la ventana es un cambio grande: el cartel se
+         cierra y se redibuja. Uno chico (la barra de scroll) espera a que cierre. */
+      if(Math.abs(w-_evuAncho)>40)_evuTipsFuera();
+      else{_evuPend=true;return;}
+    }
     clearTimeout(_evuT);
     _evuT=setTimeout(function(){try{_evuPintarGraficos();}catch(e){console.error('evolucion/resize',e);}},140);
   });
@@ -31932,7 +32037,7 @@ function _evuCard(id,frase,sub,c,nota){
     +'<div class="evu-frase">'+_tendEsc(frase)+'</div>'
     +(nota?'<div class="evu-nota">'+_tendEsc(nota)+'</div>':'')
     +'<div class="evu-sub">'+_tendEsc(sub)+'</div>'
-    +'<div class="evu-graf" data-evu="'+id+'"></div>'
+    +'<div class="evu-graf" data-evu="'+id+'" tabindex="0" role="group" aria-label="'+_tendEsc((c.aria||'Gráfico')+'. Con las flechas se recorre punto por punto.')+'"></div>'
     +_evuTabla(c)+'</div>';
 }
 
@@ -31994,7 +32099,10 @@ function _evuBloqueVentas(S,A){
 
   /* El acumulado del mes: lo que Tadeo quiere saber es si va arriba o abajo del
      ritmo que hace falta para llegar, no el porcentaje del total. */
-  var M=(_evuMeta&&_evuMeta.v>0)?_evuMeta.v:0;
+  /* El objetivo es el de ESTE mes: con la app abierta en el cambio de mes, el
+     del anterior no sirve. */
+  var metaOk=!!(_evuMeta&&_evuMeta.label===(A.mes+' '+A.y));
+  var M=(metaOk&&_evuMeta.v>0)?_evuMeta.v:0;
   var pAnt=_evuPct(A.hoyF,A.antMismoDia);
   var alDia=M?Math.round(M*A.fr):0, dif=A.realCerr-alDia;
   A.alDia=alDia; A.dif=dif; A.meta=M;
@@ -32033,8 +32141,8 @@ function _evuBloqueVentas(S,A){
   if(A.proy)sub2+='Al ritmo de hoy cierra en '+_evuPlata(A.proy)+'. ';
   if(pAnt!==null)sub2+=_evuMay(_evuVs(pAnt,A.mesAnt.toLowerCase()+' al mismo día'))+'. ';
   sub2+='Siempre el mes en curso: no cambia con el período de arriba.'
-    +((_evuMeta&&_evuMeta.hace)?' Objetivo leído '+_evuMeta.hace+'.':'')
-    +(!_evuMeta?' Trayendo el objetivo…':(M?'':' Este mes no tiene objetivo cargado.'));
+    +((metaOk&&_evuMeta.hace)?' Objetivo leído '+_evuMeta.hace+'.':'')
+    +(!metaOk?(_evuMetaFallo?' No se pudo traer el objetivo: tocá ↻.':' Trayendo el objetivo…'):(M?'':' Este mes no tiene objetivo cargado.'));
   return '<div class="evu-h">1 · Ventas</div><div class="evu-fila">'
     +_evuCard('ventas',frase,sub1,c1,nota1)+_evuCard('acum',frase2,sub2,c2,nota2)+'</div>';
 }
@@ -32136,7 +32244,7 @@ function _evuBloqueCanales(S){
   _evuCfg.canales=c;
   return '<div class="evu-h">3 · Canales</div><div class="evu-fila uno">'
     +'<div class="evu-card" data-card="canales"><div class="evu-frase">'+_tendEsc(frase)+'</div>'+(notaC?'<div class="evu-nota">'+_tendEsc(notaC)+'</div>':'')+'<div class="evu-sub">'+_tendEsc(sub)+'</div>'
-    +chips+'<div class="evu-graf" data-evu="canales"></div>'+_evuTabla(c)+'</div></div>';
+    +chips+'<div class="evu-graf" data-evu="canales" tabindex="0" role="group" aria-label="Facturado por canal. Con las flechas se recorre punto por punto."></div>'+_evuTabla(c)+'</div></div>';
 }
 
 /* ─── los meses de los bloques que solo existen por mes ─────────────────────── */
@@ -32167,14 +32275,20 @@ function _evuPedirEerr(){
   if(hayV&&hayG)return true;
   if(!_evuEerrPedido){
     _evuEerrPedido=true;
-    var rep=function(){if(cur==='evolucion'){try{rEvolucion();}catch(e){console.error('rEvolucion()',e);}}};
-    try{if(!hayV&&typeof loadVentas==='function'){var pv=loadVentas();if(pv&&pv.then)pv.then(rep,rep);}}catch(e){console.error('evolucion/ventas',e);}
-    try{if(!hayG&&typeof _recargarCaja==='function')_recargarCaja().then(rep,rep);}catch(e){console.error('evolucion/caja',e);}
+    _evuEerrFallo='';
+    /* Si el backend no contesta, se dice: «Trayendo…» para siempre es mentir. */
+    var rep=function(que){return function(r){
+      if(!r||r.ok===false)_evuEerrFallo=que;
+      if(cur==='evolucion'){try{rEvolucion();}catch(e){console.error('rEvolucion()',e);}}
+    };};
+    try{if(!hayV&&typeof loadVentas==='function'){var pv=loadVentas();if(pv&&pv.then)pv.then(rep('las ventas'),rep('las ventas'));}}catch(e){console.error('evolucion/ventas',e);}
+    try{if(!hayG&&typeof _recargarCaja==='function')_recargarCaja().then(rep('la caja'),rep('la caja'));}catch(e){console.error('evolucion/caja',e);}
   }
   return false;
 }
 function _evuEsperando(n,que){
-  return '<div class="evu-card"><div class="evu-frase">'+n+'</div><div class="evu-sub">Trayendo '+que+' del ERP…</div></div>';
+  if(_evuEerrFallo)return '<div class="evu-card espera falla"><div class="evu-frase">'+n+'</div><div class="evu-sub">No se pudieron traer '+_evuEerrFallo+' del ERP. Tocá ↻ arriba para probar de nuevo.</div></div>';
+  return '<div class="evu-card espera"><div class="evu-frase">'+n+'</div><div class="evu-sub">Trayendo '+que+' del ERP…</div></div>';
 }
 function _evuProm(vs){vs=vs.filter(function(v){return v!==null&&v!==undefined;});return vs.length?vs.reduce(function(a,v){return a+v;},0)/vs.length:null;}
 function _evuPctTxt(v){return (Math.round(v*10)/10).toString().replace('.',',')+'%';}
@@ -32248,7 +32362,9 @@ function _evuCohortes(){
   });
   return Object.keys(meses).sort().map(function(ym){
     var m=meses[ym], p=ym.split('-'), fin=new Date(+p[0],+p[1],0);
-    m.cumple=_rtDia(fin,EVU_VENTANA); m.completa=m.cumple<=hoy;
+    /* El día en que se cumplen todavía puede entrar una segunda compra: el mes
+       entra recién al día siguiente. */
+    m.cumple=_rtDia(fin,EVU_VENTANA); m.completa=m.cumple<hoy;
     m.y=+p[0]; m.m0=+p[1]-1; m.nom=RT_MESES[m.m0]; m.pct=m.nuevas?m.volvieron/m.nuevas*100:null;
     return m;
   });
@@ -32352,11 +32468,17 @@ function _evuControles(){
       return '<button type="button" class="'+(o[0]===act?'on':'')+'"'+((dis&&dis[o[0]])?' disabled':'')+' aria-pressed="'+(o[0]===act)+'" onclick="'+fn+'(\''+o[0]+'\')">'+o[1]+'</button>';
     }).join('')+'</div>';
   };
-  var ts=0; try{ts=_frescoTs('pedidos')||0;}catch(e){}
+  /* De cuándo es cada cosa. Los bloques 4 y 6 salen de las ventas y la caja, que
+     llegan aparte: si son de otro momento que los pedidos, se dice. */
+  var ts=0,tv=0,tc=0; try{ts=_frescoTs('pedidos')||0;tc=_frescoTs('caja')||0;}catch(e){}
+  try{tv=window.VD?(_vCopiaTs||0):0;}catch(e){}
+  var otros=[tv,tc].filter(function(t){return t>0;}), viejo=otros.length?Math.min.apply(null,otros):0;
+  var sello=ts?'Ventas de '+_hace(ts):'';
+  if(ts&&viejo&&(ts-viejo)>180000)sello+=' · rentabilidad y caja de '+_hace(viejo);
   return '<div class="evu-ctl">'
     +seg(EVU.per,[['8s','8 semanas'],['6m','6 meses'],['12m','12 meses'],['anio','Este año']],'evuPer')
     +seg(_evuGr(),[['sem','Por semana'],['mes','Por mes']],'evuGrupo',EVU.per==='8s'?{mes:1}:null)
-    +'<span class="evu-sello" id="evuSello">'+(ts?'Ventas de '+_hace(ts):'')+'</span></div>';
+    +'<span class="evu-sello" id="evuSello">'+sello+'</span></div>';
 }
 
 function rEvolucion(){
@@ -32375,8 +32497,13 @@ function rEvolucion(){
   if(!S.b.length){root.innerHTML=_evuControles()+'<div class="evu-vacio">Todavía no hay ventas entregadas para dibujar.</div>';return;}
   window._evuUltimo={S:S,A:A,meta:_evuMeta};   /* lo lee la prueba permanente */
   var hay=_evuPedirEerr(), Ms=_evuMeses();
+  /* Un repintado (llegó el objetivo, se apagó un canal) no cierra la tabla que
+     estaba abierta. */
+  var abiertos={};
+  root.querySelectorAll('.evu-card[data-card]').forEach(function(cd){var d=cd.querySelector('details');if(d&&d.open)abiertos[cd.getAttribute('data-card')]=1;});
   root.innerHTML=_evuControles()+_evuBloqueVentas(S,A)+_evuBloqueMotor(S)+_evuBloqueCanales(S)
     +_evuBloqueRentab(Ms,hay)+_evuBloqueClientes(Ms)+_evuBloquePlata(Ms,hay);
+  Object.keys(abiertos).forEach(function(id){var d=root.querySelector('.evu-card[data-card="'+id+'"] details');if(d)d.open=true;});
   _evuPintarGraficos();
   _evuObservar();
 }
