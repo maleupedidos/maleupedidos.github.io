@@ -272,6 +272,16 @@ async function apagado(cli) {
     perfil:crmPerfilHtml('cliente','1150000010')};estSwitch('jugadas');r.sub=(document.querySelector('#p-estancias .est-sub.on')||{}).id;SESSION.rol='admin';jugTabs();return JSON.stringify(r);})()`);
   console.log('     ' + noAdmin);
   chk('no ve la sub-tab, el "Hoy" de siempre se llama Hoy, y la ficha no cambia', noAdmin === '{"ve":false,"boton":"none","viejo":"Hoy","perfil":"","sub":"est-pulso"}', noAdmin);
+  console.log('\n-- al ENTRAR a CRM, un admin cae en Hoy y no en la última sub-tab --');
+  const entra = await ev(cli, `(function(){var sub=function(){return (document.querySelector('#p-estancias .est-sub.on')||{}).id;};var r={};
+    estSwitch('segmentos');go('inicio');go('estancias');r.admin=sub();
+    estSwitch('segmentos');rEstancias();r.repinta=sub();
+    SESSION.rol='ventas';go('inicio');go('estancias');r.otro=sub();
+    SESSION.rol='admin';jugTabs();return JSON.stringify(r);})()`);
+  console.log('     ' + entra);
+  chk('admin: venía de Segmentos, sale y vuelve a entrar: cae en Hoy', /"admin":"est-jugadas"/.test(entra), entra);
+  chk('un repintado NO lo saca de la sub-tab donde está trabajando', /"repinta":"est-segmentos"/.test(entra), entra);
+  chk('quien no es admin vuelve a su última sub-tab, como siempre', /"otro":"est-segmentos"/.test(entra), entra);
   chk('sin errores en consola', (await ev(cli, 'JSON.stringify(window.__err||[])')) === '[]', await ev(cli, 'JSON.stringify(window.__err||[])'));
 
   console.log('\n-- WATI no se pudo leer --');
