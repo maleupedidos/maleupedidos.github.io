@@ -138,7 +138,7 @@ const visible = (cli, id) => evaluar(cli, `(function(){var f=document.getElement
     /* ── Saldos ── */
     const mio = await txt(cli, '#cBal .cj-mio'), otro = await txt(cli, '#cBal .cj-otro');
     chk('lo mio: "Lo mío · Tadeo" con billetera $20.000 y sin guardar $120.000', /Lo mío · Tadeo/.test(mio) && /20\.000/.test(mio) && /120\.000/.test(mio), mio);
-    chk('lo mio trae "Guardé lo cobrado"', /Guardé lo cobrado/.test(mio), mio);
+    chk('lo mio trae "Guardé en la caja fuerte"', /Guardé en la caja fuerte/.test(mio), mio);
     chk('lo de Lucas en chico: 👛 $15.000 · 💰 $80.000', /Lucas/.test(otro) && /15\.000/.test(otro) && /80\.000/.test(otro), otro);
     const tam = await evaluar(cli, `({mio:parseFloat(getComputedStyle(document.querySelector('#cBal .cj-mio-g b')).fontSize), otro:parseFloat(getComputedStyle(document.querySelector('#cBal .cj-otro span:last-child')).fontSize)})`);
     chk('lo mio es grande y lo del otro chico (letra al menos el doble)', tam.mio >= 2 * tam.otro, tam);

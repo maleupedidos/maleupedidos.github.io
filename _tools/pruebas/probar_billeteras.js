@@ -53,6 +53,23 @@ const LUG = { activo: true, personas: [T, L],
   cf: 900000, reservas: [{ id: 'R-abc12345', prov: 'Proveedor <b>A</b>', monto: 300000 }],
   reservado: 300000, cfLibre: 600000, total: 1135000, efVivo: 1135000, descuadre: 0,
   movsUlt: [{ f: '08/10 21:00', desde: 'cob:' + T, hacia: 'cf', $: 50000, q: T, nota: '' }] };
+/* De que sale lo sin guardar (12/10/2026): lo que manda `_lugaresDetalle_`.
+   Tadeo: dos cobros de hoy, uno con el pago partido. Lucas: uno de hace 5 dias
+   (dispara el recordatorio), del que ya le paso $20.000 a Tadeo, y uno de hoy. */
+const HOY = Date.now(), DIA = 86400000;
+const DET = {
+  [T]: { suma: 120000, desde: HOY - 3600000, filas: [
+    { t: 'cobro', ts: HOY - 7200000, m: 70000, queda: 50000, h: 'Home', id: '501', c: 'Casa <i>Uno</i>', k: 'Home|501|1', mp: 12000, cta: 'brubank' },
+    { t: 'cobro', ts: HOY - 3600000, m: 50000, queda: 50000, h: 'Home', id: '502', c: 'Casa Dos', k: 'Home|502|2', vu: 5000 },
+    { t: 'entra', ts: HOY - 1800000, m: 20000, queda: 20000, de: 'cob:' + L, q: T, nota: 'me lo dejó en casa' },
+    { t: 'sale', ts: HOY - 900000, m: -20000, a: 'cf', q: T }
+  ] },
+  [L]: { suma: 80000, desde: HOY - 5 * DIA, filas: [
+    { t: 'cobro', ts: HOY - 5 * DIA, m: 60000, queda: 40000, h: 'Pilar', id: '77', c: 'Casa Tres', k: 'Pilar|77|3' },
+    { t: 'sale', ts: HOY - 1800000, m: -20000, a: 'cob:' + T, q: T, nota: 'me lo dejó en casa' },
+    { t: 'cobro', ts: HOY - 600000, m: 40000, queda: 40000, h: 'Home', id: '503', c: 'Casa Cuatro', k: 'Home|503|4' }
+  ] }
+};
 const caja = (lug) => ({
   ts: 1,
   caja: { cobradoEf: 135000, cobradoMP: 0, gastosEf: 0, gastosMP: 0, ingresosEf: 0, ingresosMP: 0,
@@ -126,7 +143,7 @@ const ultimoPost = (cli) => evaluar(cli, `JSON.stringify(window.__posts[window._
     }
     chk('el nombre del proveedor va escapado (no hay <b> adentro de la tarjeta)', await evaluar(cli, `!document.querySelector('#cBal .cj-ef b b')`) === true);
     chk('no estan los botones viejos (Di cambio, Mover, Sobres)', !/Di cambio|Sobres|↔ Mover/.test(ef), ef);
-    chk('Tadeo tiene cobrado sin guardar: aparece "Guardé lo cobrado"', /Guardé lo cobrado/.test(ef), ef);
+    chk('Tadeo tiene cobrado sin guardar: aparece "Guardé en la caja fuerte"', /Guardé en la caja fuerte/.test(ef), ef);
     chk('sin descuadre no hay aviso', !/no suman el total/.test(ef));
 
     /* ── Mover efectivo: abrir sin atajo ── */
@@ -156,7 +173,7 @@ const ultimoPost = (cli) => evaluar(cli, `JSON.stringify(window.__posts[window._
     chk('admin: Sin guardar Lucas → Sin guardar Tadeo $80.000 queda listo para mover y avisa que queda firmado', admB.dis === false && /Mover \$80\.000/.test(admB.btn) && /anotado que lo moviste vos/.test(admB.hint), admB);
     await click(cli, `document.querySelector('#lugMvHacia .lug-chip[data-l="cf"]')`);
     const admC = await evaluar(cli, `({ btn: document.getElementById('lugMvBtn').textContent, dis: document.getElementById('lugMvBtn').disabled })`);
-    chk('admin: tambien a la caja fuerte', admC.dis === false && /Mover \$80\.000/.test(admC.btn), admC);
+    chk('admin: tambien a la caja fuerte (el boton dice Guardé)', admC.dis === false && /Guardé \$80\.000/.test(admC.btn), admC);
     await evaluar(cli, `SESSION.rol=${JSON.stringify(rolAntes)}; _lugMv={desde:'',hacia:'',modo:'',quien:''}; document.getElementById('lugMvMonto').value=''; _lugPintarMover(); 1`);
     chk('desde la caja fuerte se ofrece lo LIBRE ($600.000)', m0.desde.some(d => /Caja fuerte\s*\$600\.000 libre/.test(d.t)), m0.desde);
     chk('hacia ofrece "Nueva reserva"', m0.hacia.some(h => /Nueva reserva/.test(h)), m0.hacia);
@@ -177,7 +194,7 @@ const ultimoPost = (cli) => evaluar(cli, `JSON.stringify(window.__posts[window._
     chk('al mover, la pantalla se cierra', await evaluar(cli, `document.getElementById('lugMoverForm').classList.contains('hidden')`) === true);
 
     /* ── Atajo: Guardé lo cobrado ── */
-    await click(cli, `[].slice.call(document.querySelectorAll('#cBal button')).filter(function(b){return /Guardé lo cobrado/.test(b.textContent);})[0]`);
+    await click(cli, `[].slice.call(document.querySelectorAll('#cBal button')).filter(function(b){return /Guardé en la caja fuerte/.test(b.textContent);})[0]`);
     await pausa(150);
     const g = await evaluar(cli, `({ monto: document.getElementById('lugMvMonto').value,
       d: (document.querySelector('#lugMvDesde .lug-chip.on')||{}).getAttribute ? document.querySelector('#lugMvDesde .lug-chip.on').getAttribute('data-l') : '',
@@ -188,6 +205,66 @@ const ultimoPost = (cli) => evaluar(cli, `JSON.stringify(window.__posts[window._
     await click(cli, `document.getElementById('lugMvBtn')`); await pausa(300);
     p = await ultimoPost(cli);
     chk('el monto se puede cambiar: guarda $100.000', p && p.action === 'moverPlata' && p.desde === 'cob:' + T && p.hacia === 'cf' && p.monto === 100000, p);
+
+    /* ── De que sale lo sin guardar, y «Recibí el efectivo de…» (12/10/2026) ── */
+    chk('sin el detalle del backend (app nueva, backend viejo) no se ofrece "¿De qué cobros sale?"',
+      await evaluar(cli, `document.querySelectorAll('#cBal .cj-ver').length`) === 0);
+    await evaluar(cli, `D.lugares.det=${JSON.stringify(DET)}; _lugDetAb={}; rCaja(); 1`);
+    let dv = await evaluar(cli, `({ ver: [].map.call(document.querySelectorAll('#cBal .cj-ver'),function(b){return b.dataset.p+'='+b.textContent;}),
+      rec: [].map.call(document.querySelectorAll('#cBal .cj-recor'),function(e){return e.textContent;}),
+      abierto: document.querySelectorAll('#cBal .cj-det').length })`);
+    chk('con el detalle, cada uno tiene su "¿De qué cobros sale?" y arranca cerrado', dv.ver.length === 2 && dv.ver.every(v => /De qué cobros sale/.test(v)) && dv.abierto === 0, dv);
+    chk('recordatorio SOLO para quien tiene efectivo de mas de 2 dias (Lucas, hace 5)', dv.rec.length === 1 && /sin guardar desde el .*hace 5 días/.test(dv.rec[0]), dv.rec);
+    await click(cli, `document.querySelector('#cBal .cj-ver[data-p="${L}"]')`); await pausa(120);
+    await click(cli, `document.querySelector('#cBal .cj-ver[data-p="${T}"]')`); await pausa(120);
+    const dt = (await texto(cli, '#cBal .cj-mio .cj-det')).replace(/\s+/g, ' ');
+    const dl = (await texto(cli, '#cBal .cj-otro-c .cj-det')).replace(/\s+/g, ' ');
+    chk('lo mío abierto: pedido, cliente y monto de cada cobro', /Home #501 · Casa iUno\/i\s*\$70\.000/.test(dt) && /Home #502 · Casa Dos\s*\$50\.000/.test(dt), dt);
+    chk('el nombre del cliente va sin etiquetas (no hay <i> escrito por un cliente)', await evaluar(cli, `!document.querySelector('#cBal .cj-det-l span i i')`) === true);
+    chk('el pago partido dice a dónde fue cada parte', /Pago partido: \$70\.000 en efectivo acá · \$12\.000 por transferencia a Brubank Prueba/.test(dt), dt);
+    chk('el vuelto de la billetera se explica (billete de $50.000, vuelto $5.000)', /Billete de \$50\.000: el vuelto \(\$5\.000\) salió de la billetera/.test(dt), dt);
+    chk('dice cuánto queda de un cobro guardado a medias y cuál sigue entero', /quedan \$50\.000/.test(dt) && /sin guardar/.test(dt), dt);
+    chk('lo que recibió de Lucas y lo que guardó quedan a la vista', /Recibió el efectivo de Lucas\s*\$20\.000/.test(dt) && /me lo dejó en casa/.test(dt) && /Guardado en la 🔒 caja fuerte\s*−\$20\.000/.test(dt), dt);
+    chk('lo de Lucas: "Se lo dio a Tadeo", y quién lo anotó', /Se lo dio a Tadeo\s*−\$20\.000/.test(dl) && /Lo anotó Tadeo/.test(dl), dl);
+    chk('agrupa por día y dice cuánto entró y cuánto sigue sin guardar', (dl.match(/entró \$/g) || []).length === 2 && /sin guardar \$40\.000/.test(dl), dl);
+    chk('el detalle suma el saldo: no hay aviso de diferencia', !/no suma el saldo/.test(dt + dl));
+    await evaluar(cli, `D.lugares.det[${JSON.stringify(L)}].suma=79000; rCaja(); 1`);
+    chk('si el detalle NO suma el saldo, lo dice', /no suma el saldo \(diferencia \$1\.000\)/.test((await texto(cli, '#cBal .cj-otro-c .cj-det')).replace(/\s+/g, ' ')));
+    await evaluar(cli, `D.lugares.det[${JSON.stringify(L)}].suma=80000; rCaja(); 1`);
+
+    const hayRec = await click(cli, `document.querySelector('#cBal .cj-recibi')`); await pausa(200);
+    let rc = await evaluar(cli, `({ tit: document.getElementById('lugMvTitulo').textContent, lbl: document.getElementById('lugMvHaciaLbl').textContent,
+      desde: [].map.call(document.querySelectorAll('#lugMvDesde .lug-chip'),function(b){return b.dataset.l+(b.classList.contains('on')?'*':'');}),
+      hacia: [].map.call(document.querySelectorAll('#lugMvHacia .lug-chip'),function(b){return b.dataset.l+(b.classList.contains('on')?'*':'');}),
+      monto: document.getElementById('lugMvMonto').value, btn: document.getElementById('lugMvBtn').textContent, dis: document.getElementById('lugMvBtn').disabled,
+      cobros: document.querySelectorAll('#lugMvCobros .lug-cobro').length })`);
+    chk('un admin tiene "Recibí el efectivo de Lucas" y abre con ese título', hayRec === true && /Recibí el efectivo de Lucas/.test(rc.tit), rc);
+    chk('el origen ya viene (lo sin guardar de Lucas) con todo el monto: $80.000', rc.desde.join() === 'cob:' + L + '*' && rc.monto === '80000', rc);
+    chk('el destino NO viene elegido: solo "lo tengo yo" o "caja fuerte", y el botón lo pide', rc.hacia.join() === 'cob:' + T + ',cf' && rc.dis === true && /Dónde está ahora/.test(rc.btn) && /Dónde está ahora/.test(rc.lbl), rc);
+    chk('ofrece marcar los cobros que siguen sin guardar (2)', rc.cobros === 2, rc.cobros);
+    await click(cli, `document.querySelectorAll('#lugMvCobros .lug-cobro')[0]`); await pausa(80);
+    await click(cli, `document.querySelector('#lugMvHacia .lug-chip[data-l="cob:${T}"]')`); await pausa(80);
+    rc = await evaluar(cli, `({ monto: document.getElementById('lugMvMonto').value, btn: document.getElementById('lugMvBtn').textContent, hint: document.getElementById('lugMvHint').textContent })`);
+    chk('marcar un cobro pone su monto ($40.000) y avisa cuánto le queda a Lucas', rc.monto === '40000' && /Recibí \$40\.000/.test(rc.btn) && /Quedan \$40\.000 en Sin guardar Lucas/.test(rc.hint) && /anotado que lo moviste vos/.test(rc.hint), rc);
+    await click(cli, `document.getElementById('lugMvBtn')`); await pausa(300);
+    p = await ultimoPost(cli);
+    chk('manda moverPlata de lo de Lucas a lo de Tadeo con el cobro marcado', p && p.action === 'moverPlata' && p.desde === 'cob:' + L && p.hacia === 'cob:' + T && p.monto === 40000 && p.cobros === 'Home|503|4' && !!p.clientOpId, p);
+    /* Tipear el monto a mano desmarca: el POST va sin cobros. (Mover recarga la
+       caja y el doble de backend no manda el detalle: se vuelve a poner.) */
+    await pausa(400);
+    await evaluar(cli, `D.lugares.det=${JSON.stringify(DET)}; rCaja(); 1`);
+    await click(cli, `document.querySelector('#cBal .cj-recibi')`); await pausa(150);
+    await click(cli, `document.querySelectorAll('#lugMvCobros .lug-cobro')[1]`); await pausa(80);
+    chk('(el cobro quedó marcado antes de tipear)', await evaluar(cli, `document.querySelectorAll('#lugMvCobros .lug-cobro.on').length`) === 1);
+    await evaluar(cli, `(()=>{ var i=document.getElementById('lugMvMonto'); i.value='15000'; i.dispatchEvent(new Event('input')); return 1; })()`);
+    await click(cli, `document.querySelector('#lugMvHacia .lug-chip[data-l="cf"]')`); await pausa(80);
+    chk('tipear el monto desmarca los cobros', await evaluar(cli, `document.querySelectorAll('#lugMvCobros .lug-cobro.on').length`) === 0);
+    await click(cli, `document.getElementById('lugMvBtn')`); await pausa(300);
+    p = await ultimoPost(cli);
+    chk('y una parte a mano va sin marcas: $15.000 a la caja fuerte', p && p.desde === 'cob:' + L && p.hacia === 'cf' && p.monto === 15000 && !('cobros' in p), p);
+    await evaluar(cli, `SESSION.rol='empleado'; rCaja(); 1`);
+    chk('quien no es admin no tiene "Recibí el efectivo de…"', await evaluar(cli, `document.querySelectorAll('#cBal .cj-recibi').length`) === 0);
+    await evaluar(cli, `SESSION.rol=${JSON.stringify(rolAntes)}; rCaja(); 1`);
 
     /* ── Atajo: Reservar para un proveedor ── */
     await evaluar(cli, `abrirMoverLug('reservar'); 1`); await pausa(150);
