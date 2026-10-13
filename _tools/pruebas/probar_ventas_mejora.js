@@ -141,6 +141,22 @@ const EXTRA = `
       rk.length === 2 && rk[0][0] === 'Combo Mundialista' && rk[0][1] === '3' && rk[0][3] === plata(194700), rk);
     chk('   el nombre viejo de la sub-tab sigue entrando (cae en POR PRODUCTO)', await evaluar(cli, `(function(){vSwitchTab('ventas');vSwitchTab('combos');return vTab==='productos' && document.getElementById('vProductos').style.display!=='none';})()`));
 
+    // ════ POR PRODUCTO: el canal y los filtros ════
+    await evaluar(cli, `vSwitchTab('productos');1`);
+    chk('Por Producto · el canal se llama "Otras zonas", no "Pilar"', await evaluar(cli, `!!document.querySelector('.prod-canal-chip[data-c="Otras zonas"]') && !document.querySelector('.prod-canal-chip[data-c="Pilar"]')`));
+    const tb = () => evaluar(cli, `(function(){var t=document.getElementById('prodToolbar'),b=document.getElementById('prodTbBtn');if(!t||!b)return null;
+      var g=t.querySelector('.prod-tb-group');return {btn:b.getBoundingClientRect().height>0, grupos:g.getBoundingClientRect().height>0};})()`);
+    let f = await tb();
+    if (ANCHO <= 700) {
+      chk('Por Producto · en el celular los filtros arrancan plegados detras de un boton', !!f && f.btn === true && f.grupos === false, f);
+      await evaluar(cli, `prodFiltrosToggle();1`); f = await tb();
+      chk('   y el boton los abre', !!f && f.grupos === true, f);
+      await evaluar(cli, `prodFiltrosToggle();1`);
+    } else {
+      chk('Por Producto · en la compu los filtros estan a la vista y no hay boton', !!f && f.btn === false && f.grupos === true, f);
+    }
+    chk('Por Producto · el ranking tiene "Copiar para Excel"', await evaluar(cli, `!!document.getElementById('prodCopiarBtn') && typeof prodCopiarExcel==='function'`));
+
     // ════ LA FICHA DEL PRODUCTO ════
     chk('Ficha · sin "Sell-through" (comparaba lo vendido contra lo comprado en el periodo)', await evaluar(cli, `document.documentElement.innerHTML.indexOf("st('Sell-through'")<0`));
 
