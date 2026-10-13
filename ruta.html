@@ -1238,6 +1238,19 @@ select.np-input{background:var(--white) url("data:image/svg+xml;utf8,<svg xmlns=
       <div class="cobro-ruta-pills" id="cobroQuien"></div>
     </div>
 
+    <!-- CUANDO SE COBRO (13/10/2026). Arranca en hoy; sin tocarlo, el cobro se
+         fecha ahora como siempre. Sirve para el cobro que entro otro dia y se
+         anota tarde: el dia elegido viaja en `fechaCobro` y el backend lo pone
+         en todo lo que escribe ese cobro. El backend valida (ni futuro ni antes
+         de la carga del pedido); aca solo se acompana. -->
+    <div class="cobro-ruta-section" id="cobroFechaSection">
+      <label class="cobro-ruta-lbl" for="cobroFecha">¿Cuándo cobraste?</label>
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <input type="date" id="cobroFecha" onchange="_cobroFechaCambio()" style="font-family:inherit;font-size:16px;font-weight:700;color:var(--brown);background:#fff;border:1.5px solid var(--border,#E0D6CC);border-radius:10px;padding:9px 10px;min-height:44px">
+        <span id="cobroFechaTxt" style="font-size:13px;font-weight:700;color:var(--muted)"></span>
+      </div>
+    </div>
+
     <div class="cobro-ruta-section" id="cobroCambioSection" style="display:none">
       <label class="cobro-ruta-lbl">Cambio que le devolviste</label>
       <div class="cobro-ruta-grid">
@@ -6047,6 +6060,42 @@ var _bilVivasRuta=null;   // {activo, personas:[...], bil:{<nombre>:$}}
 function _personasCaja(){return (_bilVivasRuta&&_bilVivasRuta.personas)||[];}
 function _nombreCorto(n){return String(n||'').split(' ')[0].replace(/[<>&"]/g,'');}
 function _quienCobro(st){return (st&&st.quien)||'';}
+/* ── CUANDO SE COBRO (13/10/2026) ──
+   El campo arranca en hoy cada vez que se abre el cuadro. `_fechaCobroPay()` da
+   'dd/mm/aaaa' SOLO si se eligio un dia distinto de hoy: sin tocarlo no viaja
+   nada y el backend fecha ahora, igual que antes. Lo que viaja queda en el
+   payload, o sea en la cola: al sincronizar no se recalcula. */
+function _hoyISORuta(){var d=new Date();return d.getFullYear()+'-'+('0'+(d.getMonth()+1)).slice(-2)+'-'+('0'+d.getDate()).slice(-2);}
+function _isoADmy(iso){var m=/^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso||''));return m?(m[3]+'/'+m[2]+'/'+m[1]):'';}
+function _pintarCobroFecha(){
+  var el=document.getElementById('cobroFecha'),tx=document.getElementById('cobroFechaTxt');
+  if(!el||!tx)return;
+  var hoy=_hoyISORuta(),v=el.value||hoy;
+  if(v===hoy){tx.textContent='Hoy · '+_isoADmy(hoy);tx.style.color='var(--muted)';return;}
+  var dias=Math.round((new Date(hoy+'T12:00:00')-new Date(v+'T12:00:00'))/86400000);
+  tx.textContent=_isoADmy(v)+' · '+(dias===1?'ayer':'hace '+dias+' días');
+  tx.style.color='#B45309';
+}
+function _resetCobroFecha(){
+  var el=document.getElementById('cobroFecha');
+  if(!el)return;
+  var hoy=_hoyISORuta();
+  el.max=hoy;el.value=hoy;
+  _pintarCobroFecha();
+}
+function _cobroFechaCambio(){
+  var el=document.getElementById('cobroFecha');
+  if(!el)return;
+  var hoy=_hoyISORuta();
+  if(!el.value){el.value=hoy;}
+  else if(el.value>hoy){el.value=hoy;showToast('No se puede cobrar con una fecha futura');}
+  _pintarCobroFecha();
+}
+function _fechaCobroPay(){
+  var el=document.getElementById('cobroFecha');
+  if(!el||!el.value||el.value>=_hoyISORuta())return '';
+  return _isoADmy(el.value);
+}
 function _setCobroQuien(n){if(!_cobroRutaState)return;_cobroRutaState.quien=n;_recalcCobroRuta();}
 /** Pinta las pastillas y devuelve true si FALTA elegir. */
 function _pintarCobroQuien(hayEf){
@@ -6994,6 +7043,7 @@ function _setBtnCobro(btn,txt){
 function _mostrarCuadroCobro(){
   var ov=document.getElementById('cobroRutaOverlay');
   if(ov)ov.classList.remove('hidden');
+  _resetCobroFecha();
   _pintarCobroCtas();
   _pintarCobroEnt();
 }
@@ -7708,7 +7758,7 @@ function confirmarCobroRuta(){
     // Faltaba, y el efecto era silencioso: el cuadro te preguntaba a qué cuenta
     // entró, vos elegías, y este payload la tiraba → el parcial se imputaba a la
     // default. Es la misma línea escrita dos veces, con una sola arreglada.
-    var payloadPar={action:'cobrarParcial',quien:_quienCobro(st),hoja:ent.h,id:String(ent.id),row:ent.r||0,
+    var payloadPar={action:'cobrarParcial',quien:_quienCobro(st),fechaCobro:_fechaCobroPay(),hoja:ent.h,id:String(ent.id),row:ent.r||0,
       formaPago:fpPar,cuenta:_ctaDeCobro(st,fpPar),
       monto:montoPar,notas:'Parcial desde Ruta/ENTREGA',ts:Date.now()};
     payloadPar.clientOpId=_opIdParcial(payloadPar);
@@ -7774,7 +7824,7 @@ function confirmarCobroRuta(){
   // Payload backend
   var payload={
     action:'marcarCobrado',
-    quien:_quienCobro(st),   // de quien es el efectivo (5/10/2026)
+    quien:_quienCobro(st),fechaCobro:_fechaCobroPay(),   // de quien es el efectivo (5/10/2026)
     hoja:ent.h,id:String(ent.id),row:ent.r,
     formaPago:fpFinal,
     cuenta:_ctaDeCobro(st,fpFinal),
@@ -7880,7 +7930,7 @@ function _confirmarCobroComboRuta(st,r){
       /* La cuenta faltaba aca (11/9/2026): era la cuarta copia de este payload
          y la unica sin ella. El parcial de un combo pagado al Brubank se
          imputaba a la cuenta por defecto. */
-      var _payParC={action:'cobrarParcial',quien:_quienCobro(st),hoja:pPar.h,id:String(pPar.id),row:pPar.r||0,
+      var _payParC={action:'cobrarParcial',quien:_quienCobro(st),fechaCobro:_fechaCobroPay(),hoja:pPar.h,id:String(pPar.id),row:pPar.r||0,
         formaPago:fpParC,cuenta:_ctaDeCobro(st,fpParC),monto:asigPar,notas:'Parcial desde Ruta/COMBO',ts:Date.now()};
       _payParC.clientOpId=_opIdParcial(_payParC);
       parPayloads.push(_payParC);
@@ -7933,7 +7983,7 @@ function _confirmarCobroComboRuta(st,r){
     var aplicP=(idx===0)?aplicacion:0;
     var payload={
       action:'marcarCobrado',
-      quien:_quienCobro(st),   // de quien es el efectivo (5/10/2026)
+      quien:_quienCobro(st),fechaCobro:_fechaCobroPay(),   // de quien es el efectivo (5/10/2026)
       hoja:p.h,id:String(p.id),row:p.r,
       formaPago:fpComboFinal,
       cuenta:_ctaDeCobro(st,fpComboFinal),
@@ -8068,7 +8118,7 @@ function _confirmarCobroPendiente(st,r){
     var monto=Math.round(r.neto);
     if(monto<=0)return;
     var fpPar=(fp==='Mixto')?(r.recMP>=r.recEf?'Transferencia':'Efectivo'):fp;
-    var payloadPar={action:'cobrarParcial',quien:_quienCobro(st),hoja:pc.h,id:String(pc.id),row:pc.r||0,formaPago:fpPar,cuenta:_ctaDeCobro(st,fpPar),monto:monto,notas:'Parcial desde Ruta/COBROS',ts:Date.now()};
+    var payloadPar={action:'cobrarParcial',quien:_quienCobro(st),fechaCobro:_fechaCobroPay(),hoja:pc.h,id:String(pc.id),row:pc.r||0,formaPago:fpPar,cuenta:_ctaDeCobro(st,fpPar),monto:monto,notas:'Parcial desde Ruta/COBROS',ts:Date.now()};
     payloadPar.clientOpId=_opIdParcial(payloadPar);
     cerrarCobroRuta();
     _commitCobroParcialModal(payloadPar,pc);
@@ -8100,7 +8150,7 @@ function _confirmarCobroPendiente(st,r){
   var propMet=(fpFinal==='Transferencia')?'Transferencia':'Efectivo';
   if(fpFinal==='Mixto')propMet=(tr>ef)?'Transferencia':'Efectivo';
 
-  var payload={action:'marcarCobrado',quien:_quienCobro(st),hoja:pc.h,id:String(pc.id),row:pc.r||0,
+  var payload={action:'marcarCobrado',quien:_quienCobro(st),fechaCobro:_fechaCobroPay(),hoja:pc.h,id:String(pc.id),row:pc.r||0,
     formaPago:fpFinal,cuenta:_ctaDeCobro(st,fpFinal),ef:ef,tr:tr,propina:propina,propMet:propMet,
     aFavor:aFavorPos,aplicacion:aplicacionPos,cliente:pc.c||'',
     recibidoEf:Math.max(0,r.recEf),   // el billete, igual que en ENTREGA
@@ -8818,6 +8868,15 @@ function processSyncQueue(){
            avisa a donde ir. Cinco reintentos solo demoraban el mismo error. */
         if(res&&res.sinReintento){
           syncQueue.shift();
+          /* Una fecha de cobro que el backend no acepto (13/10/2026): el pedido
+             NO quedo cobrado. Se saca la marca local y se vuelve a pedir Cobros. */
+          if(res.fechaInvalida&&item){
+            delete cobrados[(item.hoja||'')+'|'+(item.id||'')];
+            delete cobrados[(item.hoja||'')+'|R'+(item.row||'')];
+            _rutFirma='';_cobFirma='';
+            try{fetchCobrosPendientes(true);}catch(_ef){}
+            try{rutRenderRuta();}catch(_er){}
+          }
           if(typeof showToast==='function')showToast((res.err||'No se pudo')+(item&&item.action==='cancelarPedido'?' — cancelalo desde el panel, en Pedidos':''),7000);
           saveLocal();
           if(syncQueue.length===0){_limpiarGuardLoaderSync();rutHideLoader(true);}
