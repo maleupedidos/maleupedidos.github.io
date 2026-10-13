@@ -13946,7 +13946,7 @@ function _leerVersion(app){
    "El HTML no sabe que version es" dejo de ser cierto: el build le escribe
    adentro el CACHE_NAME de sw-panel.js, el mismo que deploy.sh obliga a subir en
    cada cambio. Si lo publicado dice otra cosa, esta pagina es vieja. Punto. */
-var _APP_CN_PAGINA='maleu-panel-v599';
+var _APP_CN_PAGINA='maleu-panel-v600';
 
 /* Devuelve [{k,v}] si lo publicado no es lo que esta pagina corre. */
 function _chequearVersiones(){
@@ -30040,6 +30040,20 @@ function _ckParseDMY(s){
    recompras llega antes, y de los que pasan los 60 dias sin comprar vuelve uno de
    cada tres. El backend tiene la misma escala (`_cliEstadoDias_`): van las dos juntas. */
 var CLI_ACTIVO_DIAS=30, CLI_DORMIDO_DIAS=60, CLI_INACTIVO_DIAS=120;
+/* «NUEVO», LA REGLA UNICA (Tadeo, 13/10/2026): UNA sola entrega, y esa primera
+   entrega fue hace CLI_NUEVO_DIAS dias o menos. Deja de serlo con la segunda
+   entrega o el dia 31, lo que pase antes; el dia 31 con una sola compra cae en la
+   escala normal (Enfriándose). Se cuentan ENTREGAS, no pedidos cargados.
+   Hasta ese dia Clientes pedia 35 dias y 1 entrega, Casas 35 dias con cualquier
+   cantidad, CRM > Hoy hasta 2 entregas y el backend 30 dias y hasta 2 pedidos.
+   La llaman `_cliVals`, `_hogEsNuevo` y `_hoyBandaUnit`. El backend tiene la misma
+   (`CLI_NUEVO_DIAS` / `_cliEsNuevo_`): van las dos juntas.
+   OJO: los «Nuevos» de Resumen, Ventas y Cierre cuentan «primera compra dentro
+   del periodo». Es otra metrica y no pasa por aca. */
+var CLI_NUEVO_DIAS=30;
+function cliEsNuevo(entregas,diasPrimeraEntrega){
+  return Number(entregas)===1 && diasPrimeraEntrega>=0 && diasPrimeraEntrega<=CLI_NUEVO_DIAS;
+}
 function cliEstadoDias(d){
   if(!(d>=0))return 'sin';
   if(d<=CLI_ACTIVO_DIAS)return 'activo';
@@ -40444,7 +40458,9 @@ if('serviceWorker' in navigator){
       }
       if (u.entregados === 1) return 'reactivable';
     }
-    if (u.diasUltima >= 0 && u.diasUltima <= lim && u.entregados <= 2) return 'nuevo';
+    // "Nuevo": la regla unica (`cliEsNuevo`, 13/10/2026). Con una sola entrega la
+    // primera es la ultima. Antes entraba tambien el que ya tenia dos.
+    if (u.diasUltima >= 0 && u.diasUltima <= lim && cliEsNuevo(u.entregados, u.diasUltima)) return 'nuevo';
     return null;
   }
 
@@ -48724,7 +48740,20 @@ function _objRango(periodo, mesLabel){
   // VISTAS (jugadas): cada una define un filtro + un orden + una explicación de la jugada.
   // Reemplazan la vieja sub-tab "Quién compra" — mismo directorio, un solo camino de datos.
   // ── Focos estratégicos que no se arman con un estado simple (se conservan de las Vistas viejas) ──
-  function _hogEsNuevo(h){ if(h._primera===undefined)h._primera=_minPrimera(h); return !!(h._primera && ((Date.now()-h._primera)/86400000)<=35); }
+  // La casa es Nueva con la regla unica (`cliEsNuevo`, 13/10/2026): UNA entrega Home
+  // entre todos sus integrantes, hace CLI_NUEVO_DIAS dias o menos.
+  function _hogDiasPrimera(h){
+    if(h._dPrim!==undefined) return h._dPrim;
+    var mx=-1, hay=false;
+    (h.members||[]).forEach(function(m){ var d=m.diasPrimeraEntHome; if(typeof d==='number'){ hay=true; if(d>mx)mx=d; } });
+    if(!hay){
+      // copia vieja, sin el dato del backend: la primera compra Home de la casa
+      var pf=_minPrimera(h);
+      if(pf){ var h0=new Date(); h0.setHours(0,0,0,0); var f0=new Date(pf.getTime()); f0.setHours(0,0,0,0); mx=Math.round((h0-f0)/86400000); }
+    }
+    return (h._dPrim=mx);
+  }
+  function _hogEsNuevo(h){ return cliEsNuevo(h.entregados||0, _hogDiasPrimera(h)); }
   function _hogEnRiesgo(h){ return h.estado==='activo' && h.freq && (h.entregados||0)>=2 && h.diasUltima>=Math.round(h.freq*0.9); }
   function _hogUnSolo(h){ return (h.entregados||0)===1 && h.diasUltima>=0; }
   // Residencia de la CASA: dato del lote (Permanente/Finde); si falta, se deduce de sus integrantes.
@@ -48742,7 +48771,7 @@ function _objRango(periodo, mesLabel){
     unsolo:'🌱 Probaron una vez y no volvieron. La segunda compra es la que fideliza — el mejor lugar para invertir.',
     enfriandose:'🟡 Compraban y hace '+(CLI_ACTIVO_DIAS+1)+' a '+CLI_DORMIDO_DIAS+' días que no piden. Son las más fáciles de recuperar: escribiles esta semana.',
     dormido:'🟠 Compraban y frenaron ('+(CLI_DORMIDO_DIAS+1)+'–'+CLI_INACTIVO_DIAS+' días). Reconectar cuesta menos que conseguir una nueva.',
-    nuevo:'🆕 Entraron en los últimos 35 días. Asegurá la segunda compra para que no se enfríen.'
+    nuevo:'🆕 Una sola compra, entregada hace '+CLI_NUEVO_DIAS+' días o menos. Asegurá la segunda para que no se enfríen.'
   };
   window.estHogBusq=function(v){ _hogFiltro.busq=(v||'').toLowerCase().trim(); _hogRenderList(); };
   window.estHogOrden=function(o){ _hogFiltro.orden=o; document.querySelectorAll('#estHogares .est-chip[data-o]').forEach(function(b){b.classList.toggle('on',b.dataset.o===o);}); _hogRenderList(); };
@@ -49057,10 +49086,13 @@ function _objRango(periodo, mesLabel){
     var dias=_H ? ((typeof c.diasUltimaHome==='number')?c.diasUltimaHome:-1)
                 : ((typeof c.diasUltima==='number')?c.diasUltima:-1);
     var est=_estEstado(dias);
-    // "Nuevo" = recién estrenado: 1 SOLA compra Home y reciente (≤35d). Si ya recompró
-    // (2+ entregas) deja de ser nuevo aunque su 1ª compra sea reciente → es un Activo/recompra.
+    // "Nuevo": la regla unica, `cliEsNuevo` (13/10/2026), en el alcance elegido.
+    // Los dias desde la primera ENTREGA los manda el backend; una copia vieja no
+    // los trae, y con una sola entrega la primera es la ultima.
     var _ent1=_H?(c.entregadosHome||0):(c.entregados||0);
-    if(est==='activo' && _ent1<=1){ var pf=_parseFecha(_H?c.primeraFechaHome:c.primeraFecha); if(pf && ((new Date()-pf)/86400000)<=35) est='nuevo'; }
+    var _dPrim=_H?c.diasPrimeraEntHome:c.diasPrimeraEnt;
+    if(typeof _dPrim!=='number') _dPrim=dias;
+    if(cliEsNuevo(_ent1,_dPrim)) est='nuevo';
     /* Pedidos en curso del ALCANCE (4/10/2026): con todo Maleu contaba solo Home,
        y alguien con un pedido de Red o de Clubes para mañana salia "sin pedido".
        `pendientes` lo manda el backend desde la v de ese dia; una copia vieja no
