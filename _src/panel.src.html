@@ -15952,6 +15952,49 @@ function aplicarMovLocal(tipo,fecha,cat,con,met,monto,notas,cuentaId){
    de ~5 s — mandar un POST por cuenta serian 15, y Apps Script los atiende de a
    uno. Si el backend no lo entiende, contesta `monto vacio` y NO escribe nada:
    entonces lo unico honesto es decir que no se guardo. */
+/* ── UNA FECHA ANTERIOR AL ULTIMO AJUSTE DE CAJA (13/10/2026) ──
+   La caja cuenta solo lo posterior al ultimo ajuste (Saldo Base). Un movimiento
+   fechado antes entra al EERR y NO mueve el saldo. El backend no lo escribe sin
+   una decision: contesta `pideAjuste` y aca se pregunta. Dos salidas, ninguna
+   marcada: 'tenia' (se guarda como esta) · 'notenia' (se guarda y el backend deja
+   ademas un movimiento «Ajuste de caja» de hoy, que es el que corrige el saldo). */
+var _ajDecMov='';
+function _ajTomar(){var d=_ajDecMov;_ajDecMov='';return d;}
+function _ajusteCartel(info,cb){
+  var v=document.getElementById('ajOv');if(v)v.remove();
+  var e=function(t){return String(t||'').replace(/[<>&"]/g,'');};
+  var cta=e(info&&info.cuenta)||'la caja';
+  var txt=(info&&info.texto)?e(info.texto):('Esta fecha es anterior al último ajuste de '+cta+' ('+e(info&&info.ajuste)+'): no va a mover el saldo.');
+  var bt='display:block;width:100%;text-align:left;font-family:inherit;background:#fff;color:#3B2314;border:1.5px solid #C9B8A8;border-radius:12px;padding:12px 14px;margin-top:10px;cursor:pointer;min-height:56px';
+  var ov=document.createElement('div');
+  ov.id='ajOv';
+  ov.setAttribute('style','position:fixed;inset:0;z-index:2147483000;background:rgba(59,35,20,.55);display:flex;align-items:center;justify-content:center;padding:16px');
+  ov.innerHTML='<div role="dialog" aria-modal="true" style="background:#FBF6EF;border-radius:16px;max-width:440px;width:100%;padding:20px;box-shadow:0 12px 40px rgba(0,0,0,.3);max-height:92vh;overflow:auto">'
+    +'<div style="font-size:17px;font-weight:800;color:#3B2314">Fecha anterior al último ajuste</div>'
+    +'<div id="ajOvTxt" style="font-size:14px;line-height:1.45;color:#3B2314;margin-top:8px">'+txt+'</div>'
+    +'<button type="button" id="ajOvTenia" style="'+bt+'"><b style="font-size:15px">El ajuste ya lo tenía en cuenta</b><br><span style="font-size:13px;color:#6B5A4C">Se guarda como está. El saldo no cambia.</span></button>'
+    +'<button type="button" id="ajOvNoTenia" style="'+bt+'"><b style="font-size:15px">El ajuste no lo tenía</b><br><span style="font-size:13px;color:#6B5A4C">Se guarda y el saldo de '+cta+' se corrige por ese monto, con un movimiento «Ajuste de caja» de hoy.</span></button>'
+    +'<button type="button" id="ajOvNo" style="display:block;width:100%;font-family:inherit;background:none;border:0;color:#6B5A4C;font-size:14px;font-weight:700;padding:14px 0 2px;cursor:pointer;min-height:44px">Cancelar, no guardar</button>'
+    +'</div>';
+  document.body.appendChild(ov);
+  var fin=function(dec){ov.remove();if(dec)cb(dec);};
+  document.getElementById('ajOvTenia').onclick=function(){fin('tenia');};
+  document.getElementById('ajOvNoTenia').onclick=function(){fin('notenia');};
+  document.getElementById('ajOvNo').onclick=function(){fin('');};
+}
+/* La respuesta de un gasto o un ingreso: ¿pide el cartel? Si se elige, se
+   guarda de nuevo con la decision puesta. */
+function _ajPide(r,tipo,btn,btnTxt){
+  if(!(r&&r.pideAjuste))return false;
+  hideLoader(true);
+  if(btn){btn.disabled=false;btn.textContent=btnTxt;}
+  _ajusteCartel({ajuste:r.ajuste,cuenta:r.cuentas},function(dec){
+    _ajDecMov=dec;
+    var ev={preventDefault:function(){}};
+    if(tipo==='gasto')guardarGasto(ev);else guardarIngreso(ev);
+  });
+  return true;
+}
 function _movClientOp(btn, payload){
   var firma=JSON.stringify(payload);
   if(btn&&btn.dataset&&btn.dataset.maleuMovFirma===firma&&btn.dataset.maleuMovOp)return btn.dataset.maleuMovOp;
@@ -15964,11 +16007,12 @@ function _movClientOpLimpiar(btn){
 }
 function _guardarMovPorCuenta(tipo,mv,fecha,cat,con,notas,btn,btnTxt){
   var pref=(tipo==='gasto')?'g':'i';
-  var payload={action:tipo,fecha:fecha,categoria:cat,concepto:con,notas:notas,montos:mv.porCta,lugar:_lugMovDe(pref,mv.ef)};
+  var payload={action:tipo,fecha:fecha,categoria:cat,concepto:con,notas:notas,montos:mv.porCta,lugar:_lugMovDe(pref,mv.ef),ajusteDec:_ajTomar()};
   payload.clientOpId=_movClientOp(btn,payload);
   fetch(API,{method:'POST',body:JSON.stringify(payload)})
     .then(function(r){return r.json();})
     .then(function(r){
+      if(_ajPide(r,tipo,btn,btnTxt))return;
       var esperadas=Object.keys(mv.porCta).length;
       if(r.ok&&r.rows===esperadas){
         var partes=[];
@@ -16026,7 +16070,7 @@ function guardarGasto(e){
   if(_mv.extra)return _guardarMovPorCuenta('gasto',_mv,fecha,cat,con,notas,btn,'Guardar gasto');
   // Single POST batch + fallback legacy si el backend no lo soporta (rows undefined o rows=0)
   var payload={
-    action:'gasto',fecha:fecha,categoria:cat,concepto:con,notas:notas,
+    action:'gasto',fecha:fecha,categoria:cat,concepto:con,notas:notas,ajusteDec:_ajTomar(),
     montoEf:ef, montoMp:mp, lugar:_lugMovDe('g',ef),
     // Compatibilidad con backend v200: si solo hay un método, también va por formato viejo
     metodo:(ef>0&&mp===0)?'Efectivo':((mp>0&&ef===0)?'Mercado Pago':''),
@@ -16036,6 +16080,7 @@ function guardarGasto(e){
   fetch(API,{method:'POST',body:JSON.stringify(payload)})
     .then(function(r){return r.json();})
     .then(function(r){
+      if(_ajPide(r,'gasto',btn,'Guardar gasto'))return;
       if(r.ok){
         if(ef>0)aplicarMovLocal('gasto',fecha,cat,con,'Efectivo',ef,notas);
         if(mp>0)aplicarMovLocal('gasto',fecha,cat,con,'Mercado Pago',mp,notas);
@@ -16071,7 +16116,7 @@ function guardarIngreso(e){
   /* Mismo criterio que el gasto: con una cuenta extra va SOLO `montos`. */
   if(_mv.extra)return _guardarMovPorCuenta('ingreso',_mv,fecha,cat,con,notas,btn,'Guardar ingreso');
   var payload={
-    action:'ingreso',fecha:fecha,categoria:cat,concepto:con,notas:notas,
+    action:'ingreso',fecha:fecha,categoria:cat,concepto:con,notas:notas,ajusteDec:_ajTomar(),
     montoEf:ef, montoMp:mp, lugar:_lugMovDe('i',ef),
     metodo:(ef>0&&mp===0)?'Efectivo':((mp>0&&ef===0)?'Mercado Pago':''),
     monto:(ef>0&&mp===0)?ef:((mp>0&&ef===0)?mp:0)
@@ -16080,6 +16125,7 @@ function guardarIngreso(e){
   fetch(API,{method:'POST',body:JSON.stringify(payload)})
     .then(function(r){return r.json();})
     .then(function(r){
+      if(_ajPide(r,'ingreso',btn,'Guardar ingreso'))return;
       if(r.ok){
         if(ef>0)aplicarMovLocal('ingreso',fecha,cat,con,'Efectivo',ef,notas);
         if(mp>0)aplicarMovLocal('ingreso',fecha,cat,con,'Mercado Pago',mp,notas);
@@ -20839,20 +20885,24 @@ function _cjMarcarAcc(){
  * un día, y el confirm lo dice con todas las letras.
  */
 function cobroCambiarFecha(hoja,pedido,fActual){
+  return _cobroCambiarFecha(hoja,pedido,fActual,'','');
+}
+/* `txtDado` + `dec`: la segunda vuelta, despues del cartel del ajuste (13/10/2026). */
+function _cobroCambiarFecha(hoja,pedido,fActual,txtDado,dec){
   var d=new Date(), ay=new Date(Date.now()-86400000);
   var dm=function(x){return String(x.getDate()).padStart(2,'0')+'/'+String(x.getMonth()+1).padStart(2,'0')+'/'+x.getFullYear();};
   var sug=dm(ay);
-  var txt=prompt('¿Qué día entró esta plata?\n\n'+(pedido?('Pedido #'+pedido+' · '):'')+hoja
+  var txt=txtDado||prompt('¿Qué día entró esta plata?\n\n'+(pedido?('Pedido #'+pedido+' · '):'')+hoja
     +'\nHoy figura: '+(fActual||'(sin fecha)')
     +'\n\nEscribilo dd/mm/aaaa.\nAyer fue '+sug+' · hoy es '+dm(d),sug);
   if(txt===null)return;
   txt=String(txt).trim();
   if(!/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(txt)){toast('La fecha va dd/mm/aaaa');return;}
-  if(!confirm('Mover este cobro al '+txt+'?\n\nSale de la caja del día que figura ahora y entra en la del '+txt
+  if(!txtDado&&!confirm('Mover este cobro al '+txt+'?\n\nSale de la caja del día que figura ahora y entra en la del '+txt
     +'.\nEl monto y el método NO cambian.'))return;
   showLoader('Corrigiendo la fecha...');
   fetch(API,{method:'POST',body:JSON.stringify({action:'cobroFecha',hoja:hoja,id:pedido,fecha:txt,
-    clientOpId:'cf-'+hoja+'-'+pedido+'-'+txt})})
+    ajusteDec:dec||'',clientOpId:'cf-'+hoja+'-'+pedido+'-'+txt+(dec?'-'+dec:'')})})
     .then(function(r){return r.json();})
     .then(function(r){
       hideLoader(true);
@@ -20862,6 +20912,9 @@ function cobroCambiarFecha(hoja,pedido,fActual){
            mueve el cobro de una sección del libro a otra y recalcula los totales
            de los dos días. Pintarlo a ojo sería dibujar algo que no es. */
         _recargarCaja();
+      }else if(r&&r.pideAjuste){
+        _ajusteCartel({ajuste:r.ajuste,cuenta:'la caja',texto:'El '+txt+' es anterior al último ajuste de caja ('+r.ajuste+'): con esa fecha el cobro deja de mover el saldo.'},
+          function(d){_cobroCambiarFecha(hoja,pedido,fActual,txt,d);});
       }else{
         alert((r&&(r.error||r.err))||'No se pudo cambiar la fecha.');
       }
@@ -27264,7 +27317,10 @@ function _catMov(c){
   if(s.length>3&&s.charAt(s.length-1)==='s')s=s.substring(0,s.length-1);
   return s;
 }
-function _esVuelto(m){ return _catMov(m&&m.cat)==='cambio cruzado'; }
+/* 'Ajuste de caja' (13/10/2026): la fila que compensa un movimiento fechado antes
+   del ultimo ajuste. Mueve el saldo y no es un gasto ni un ingreso: el movimiento
+   de verdad ya esta en su fecha. Queda afuera igual que un vuelto. */
+function _esVuelto(m){ var c=_catMov(m&&m.cat); return c==='cambio cruzado'||c==='ajuste de caja'; }
 function _esLiqRed(m){ return _catMov(m&&m.cat)==='liquidacion red'; }
 
 /* DONDE VA CADA GASTO DE EGRESOS en lo ECONOMICO (14/9/2026). Una sola regla para

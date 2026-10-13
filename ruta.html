@@ -6073,7 +6073,8 @@ function _pintarCobroFecha(){
   var hoy=_hoyISORuta(),v=el.value||hoy;
   if(v===hoy){tx.textContent='Hoy · '+_isoADmy(hoy);tx.style.color='var(--muted)';return;}
   var dias=Math.round((new Date(hoy+'T12:00:00')-new Date(v+'T12:00:00'))/86400000);
-  tx.textContent=_isoADmy(v)+' · '+(dias===1?'ayer':'hace '+dias+' días');
+  var ca=_cobroCorteAjuste();
+  tx.textContent=_isoADmy(v)+' · '+(dias===1?'ayer':'hace '+dias+' días')+(ca?' · anterior al último ajuste de caja ('+ca+'): no va a mover el saldo':'');
   tx.style.color='#B45309';
 }
 function _resetCobroFecha(){
@@ -6081,7 +6082,62 @@ function _resetCobroFecha(){
   if(!el)return;
   var hoy=_hoyISORuta();
   el.max=hoy;el.value=hoy;
+  /* Tope hacia atras (13/10/2026): el dia en que se cargo el pedido. Hasta hoy
+     solo lo frenaba el backend, al sincronizar. */
+  var mn=_cobroFechaMinISO();
+  if(mn&&mn<=hoy)el.min=mn;else el.removeAttribute('min');
+  if(_cobroRutaState)_cobroRutaState.ajDec='';
   _pintarCobroFecha();
+}
+function _dmyAISO(t){var m=/^(\d{1,2})\/(\d{1,2})\/(\d{4})/.exec(String(t||'').trim());return m?(m[3]+'-'+('0'+m[2]).slice(-2)+'-'+('0'+m[1]).slice(-2)):'';}
+/* El dia de carga mas nuevo de los pedidos del cuadro (`fc`, dd/mm/aaaa). */
+function _cobroFechaMinISO(){
+  var st=_cobroRutaState;if(!st)return '';
+  var ps=st.pedidos||(st.ent?[st.ent]:[]),mx='';
+  ps.forEach(function(x){var i=_dmyAISO(x&&x.fc);if(i&&i>mx)mx=i;});
+  return mx;
+}
+/* ── FECHA ANTERIOR AL ULTIMO AJUSTE DE CAJA (13/10/2026) ──
+   La caja cuenta solo lo posterior al ultimo ajuste (`corte`, que viaja con las
+   billeteras). Un cobro fechado antes NO mueve el saldo: se avisa en el renglon
+   de la fecha y, al confirmar, un cartel pide elegir. La decision viaja en
+   `ajusteDec`; con 'notenia' el backend deja un ingreso «Ajuste de caja» de hoy.
+   Compara como el backend: el dia elegido con la hora de ahora. */
+function _cobroCorteAjuste(){
+  var iso=(document.getElementById('cobroFecha')||{}).value||'';
+  if(!_fechaCobroPay())return '';
+  var c=String((_bilVivasRuta&&_bilVivasRuta.corte)||'');
+  var m=/^(\d{2})\/(\d{2})\/(\d{4}) (\d{2}):(\d{2})$/.exec(c);
+  if(!m)return '';
+  var corte=new Date(Number(m[3]),Number(m[2])-1,Number(m[1]),Number(m[4]),Number(m[5]),59);
+  var n=new Date(),d=/^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
+  if(!d)return '';
+  var f=new Date(Number(d[1]),Number(d[2])-1,Number(d[3]),n.getHours(),n.getMinutes(),0);
+  return f.getTime()<=corte.getTime()?c:'';
+}
+function _ajDecPay(){
+  var st=_cobroRutaState;
+  return (st&&st.ajDec&&_cobroCorteAjuste())?st.ajDec:'';
+}
+function rutAjusteCartel(corte,cb){
+  var v=document.getElementById('rutAjOv');if(v)v.remove();
+  var c=String(corte||'').replace(/[<>&"]/g,'');
+  var bt='display:block;width:100%;text-align:left;font-family:inherit;background:#fff;color:#3B2314;border:1.5px solid #C9B8A8;border-radius:12px;padding:12px 14px;margin-top:10px;cursor:pointer;min-height:56px';
+  var ov=document.createElement('div');
+  ov.id='rutAjOv';
+  ov.setAttribute('style','position:fixed;inset:0;z-index:2147483000;background:rgba(59,35,20,.55);display:flex;align-items:center;justify-content:center;padding:16px');
+  ov.innerHTML='<div role="dialog" aria-modal="true" style="background:#FBF6EF;border-radius:16px;max-width:440px;width:100%;padding:20px;box-shadow:0 12px 40px rgba(0,0,0,.3);max-height:92vh;overflow:auto">'
+    +'<div style="font-size:17px;font-weight:800;color:#3B2314">Fecha anterior al último ajuste</div>'
+    +'<div id="rutAjOvTxt" style="font-size:14px;line-height:1.45;color:#3B2314;margin-top:8px">Esta fecha es anterior al último ajuste de caja ('+c+'): no va a mover el saldo.</div>'
+    +'<button type="button" id="rutAjOvTenia" style="'+bt+'"><b style="font-size:15px">El ajuste ya lo tenía en cuenta</b><br><span style="font-size:13px;color:#6B5A4C">Se cobra con esa fecha. El saldo no cambia.</span></button>'
+    +'<button type="button" id="rutAjOvNoTenia" style="'+bt+'"><b style="font-size:15px">El ajuste no lo tenía</b><br><span style="font-size:13px;color:#6B5A4C">Se cobra con esa fecha y el saldo se corrige por ese monto, con un movimiento «Ajuste de caja» de hoy.</span></button>'
+    +'<button type="button" id="rutAjOvNo" style="display:block;width:100%;font-family:inherit;background:none;border:0;color:#6B5A4C;font-size:14px;font-weight:700;padding:14px 0 2px;cursor:pointer;min-height:44px">Volver, no cobrar todavía</button>'
+    +'</div>';
+  document.body.appendChild(ov);
+  var fin=function(dec){ov.remove();if(dec)cb(dec);};
+  document.getElementById('rutAjOvTenia').onclick=function(){fin('tenia');};
+  document.getElementById('rutAjOvNoTenia').onclick=function(){fin('notenia');};
+  document.getElementById('rutAjOvNo').onclick=function(){fin('');};
 }
 function _cobroFechaCambio(){
   var el=document.getElementById('cobroFecha');
@@ -6089,6 +6145,8 @@ function _cobroFechaCambio(){
   var hoy=_hoyISORuta();
   if(!el.value){el.value=hoy;}
   else if(el.value>hoy){el.value=hoy;showToast('No se puede cobrar con una fecha futura');}
+  else if(el.min&&el.value<el.min){el.value=el.min;showToast('El pedido se cargó el '+_isoADmy(el.min)+': no se puede cobrar antes de ese día');}
+  if(_cobroRutaState)_cobroRutaState.ajDec='';   // otra fecha, otra decision
   _pintarCobroFecha();
 }
 function _fechaCobroPay(){
@@ -7730,6 +7788,9 @@ function confirmarCobroRuta(){
   var r=_recalcCobroRuta();
   if(!r||r.errors.length>0)return;
   var st=_cobroRutaState;
+  /* Fecha anterior al ultimo ajuste de caja (13/10/2026): primero se elige. */
+  var _ca=_cobroCorteAjuste();
+  if(_ca&&!st.ajDec){rutAjusteCartel(_ca,function(dec){st.ajDec=dec;confirmarCobroRuta();});return;}
   // Combo: distribuir el cobro entre los pedidos individuales.
   if(st.combo){
     return _confirmarCobroComboRuta(st,r);
@@ -7758,7 +7819,7 @@ function confirmarCobroRuta(){
     // Faltaba, y el efecto era silencioso: el cuadro te preguntaba a qué cuenta
     // entró, vos elegías, y este payload la tiraba → el parcial se imputaba a la
     // default. Es la misma línea escrita dos veces, con una sola arreglada.
-    var payloadPar={action:'cobrarParcial',quien:_quienCobro(st),fechaCobro:_fechaCobroPay(),hoja:ent.h,id:String(ent.id),row:ent.r||0,
+    var payloadPar={action:'cobrarParcial',quien:_quienCobro(st),fechaCobro:_fechaCobroPay(),ajusteDec:_ajDecPay(),hoja:ent.h,id:String(ent.id),row:ent.r||0,
       formaPago:fpPar,cuenta:_ctaDeCobro(st,fpPar),
       monto:montoPar,notas:'Parcial desde Ruta/ENTREGA',ts:Date.now()};
     payloadPar.clientOpId=_opIdParcial(payloadPar);
@@ -7824,7 +7885,7 @@ function confirmarCobroRuta(){
   // Payload backend
   var payload={
     action:'marcarCobrado',
-    quien:_quienCobro(st),fechaCobro:_fechaCobroPay(),   // de quien es el efectivo (5/10/2026)
+    quien:_quienCobro(st),fechaCobro:_fechaCobroPay(),ajusteDec:_ajDecPay(),   // de quien es el efectivo (5/10/2026)
     hoja:ent.h,id:String(ent.id),row:ent.r,
     formaPago:fpFinal,
     cuenta:_ctaDeCobro(st,fpFinal),
@@ -7930,7 +7991,7 @@ function _confirmarCobroComboRuta(st,r){
       /* La cuenta faltaba aca (11/9/2026): era la cuarta copia de este payload
          y la unica sin ella. El parcial de un combo pagado al Brubank se
          imputaba a la cuenta por defecto. */
-      var _payParC={action:'cobrarParcial',quien:_quienCobro(st),fechaCobro:_fechaCobroPay(),hoja:pPar.h,id:String(pPar.id),row:pPar.r||0,
+      var _payParC={action:'cobrarParcial',quien:_quienCobro(st),fechaCobro:_fechaCobroPay(),ajusteDec:_ajDecPay(),hoja:pPar.h,id:String(pPar.id),row:pPar.r||0,
         formaPago:fpParC,cuenta:_ctaDeCobro(st,fpParC),monto:asigPar,notas:'Parcial desde Ruta/COMBO',ts:Date.now()};
       _payParC.clientOpId=_opIdParcial(_payParC);
       parPayloads.push(_payParC);
@@ -7983,7 +8044,7 @@ function _confirmarCobroComboRuta(st,r){
     var aplicP=(idx===0)?aplicacion:0;
     var payload={
       action:'marcarCobrado',
-      quien:_quienCobro(st),fechaCobro:_fechaCobroPay(),   // de quien es el efectivo (5/10/2026)
+      quien:_quienCobro(st),fechaCobro:_fechaCobroPay(),ajusteDec:_ajDecPay(),   // de quien es el efectivo (5/10/2026)
       hoja:p.h,id:String(p.id),row:p.r,
       formaPago:fpComboFinal,
       cuenta:_ctaDeCobro(st,fpComboFinal),
@@ -8118,7 +8179,7 @@ function _confirmarCobroPendiente(st,r){
     var monto=Math.round(r.neto);
     if(monto<=0)return;
     var fpPar=(fp==='Mixto')?(r.recMP>=r.recEf?'Transferencia':'Efectivo'):fp;
-    var payloadPar={action:'cobrarParcial',quien:_quienCobro(st),fechaCobro:_fechaCobroPay(),hoja:pc.h,id:String(pc.id),row:pc.r||0,formaPago:fpPar,cuenta:_ctaDeCobro(st,fpPar),monto:monto,notas:'Parcial desde Ruta/COBROS',ts:Date.now()};
+    var payloadPar={action:'cobrarParcial',quien:_quienCobro(st),fechaCobro:_fechaCobroPay(),ajusteDec:_ajDecPay(),hoja:pc.h,id:String(pc.id),row:pc.r||0,formaPago:fpPar,cuenta:_ctaDeCobro(st,fpPar),monto:monto,notas:'Parcial desde Ruta/COBROS',ts:Date.now()};
     payloadPar.clientOpId=_opIdParcial(payloadPar);
     cerrarCobroRuta();
     _commitCobroParcialModal(payloadPar,pc);
@@ -8150,7 +8211,7 @@ function _confirmarCobroPendiente(st,r){
   var propMet=(fpFinal==='Transferencia')?'Transferencia':'Efectivo';
   if(fpFinal==='Mixto')propMet=(tr>ef)?'Transferencia':'Efectivo';
 
-  var payload={action:'marcarCobrado',quien:_quienCobro(st),fechaCobro:_fechaCobroPay(),hoja:pc.h,id:String(pc.id),row:pc.r||0,
+  var payload={action:'marcarCobrado',quien:_quienCobro(st),fechaCobro:_fechaCobroPay(),ajusteDec:_ajDecPay(),hoja:pc.h,id:String(pc.id),row:pc.r||0,
     formaPago:fpFinal,cuenta:_ctaDeCobro(st,fpFinal),ef:ef,tr:tr,propina:propina,propMet:propMet,
     aFavor:aFavorPos,aplicacion:aplicacionPos,cliente:pc.c||'',
     recibidoEf:Math.max(0,r.recEf),   // el billete, igual que en ENTREGA
@@ -8848,6 +8909,9 @@ function processSyncQueue(){
         _rutFirma='';_cobFirma='';
         if(item&&item.action==='deshacerEntrega')_desRecientes.push({key:item.hoja+'|R'+item.row,t:Date.now()});
         _cobConfirmado(item);_estConfirmado(item);
+        if(res&&res.antesDelConteo&&item&&!item.ajusteDec&&typeof showToast==='function'){
+          showToast('Ese cobro quedó con fecha anterior al último ajuste de caja'+(res.ajusteDe?' ('+res.ajusteDe+')':'')+': no movió el saldo. Si el ajuste no lo tenía, corregilo desde Caja.',9000);
+        }
         /* Una descarga que entró por la cola también dice lo que salió mal. */
         if(item&&item.action==='marcarGuardadoEnStock'){ try{ _rdepAvisosDescarga(res); }catch(eAv){} }
         if(item&&item.action==='marcarEntregado'){
