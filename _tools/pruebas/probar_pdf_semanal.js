@@ -263,7 +263,7 @@ async function abrirFase(cli, fase) {
     chk('sin undefined, NaN ni centavos', T.length > 500 && !/undefined|NaN|\[object/.test(T) && !/\$\s?\d{1,3}(\.\d{3})*,\d/.test(T));
     chk('el documento: "Al cierre de la semana quedó por cobrar" $91.500, "cobrado Lun 14/9" y cuanto falta', /Al cierre de la semana quedó por cobrar de lo entregado: \$91\.500/.test(T) && /cobrado Lun 14\/9/.test(T) && /De eso ya entró \$10\.000 después del domingo 13\/9; falta \$81\.500/.test(T), (T.match(/Al cierre.{0,300}/) || [])[0]);
     chk('el documento: Red en poder del vendedor, "Vendedor Dos 1 pedido $30.000"', /Red en poder del vendedor.{0,80}Vendedor Dos 1 pedido \$30\.000/.test(T) && !/Final Tres/.test(T), (T.match(/Aparte, Red.{0,160}/) || [])[0]);
-    chk('el documento: quienes son los nuevos, donde viven, que llevaron y si volvieron', /Quiénes son los nuevos/.test(T) && /Fede PruebaPilaraCarnes 0,75 kg\$40\.000todavía no/.test(T), (T.match(/Quiénes son los nuevos.{0,160}/) || [])[0]);
+    chk('el documento: quienes son los nuevos, donde viven, que llevaron y si volvieron', /Quiénes son los nuevos/.test(T) && /Fede PruebaPilaraCarnes 0,75 kg\$40\.000/.test(T) && !/¿Volvió\?/.test(T) && !/todavía no/.test(T), (T.match(/Quiénes son los nuevos.{0,160}/) || [])[0]);
     chk('el documento: quienes volvieron y hace cuanto', /Quiénes volvieron/.test(T) && /Beto PruebaEstancias del PilarCarnes 1,5 kg · Pack Pizzas x2 1\$50\.00063 días/.test(T) && /un dormido que se despertó/.test(T), (T.match(/Quiénes volvieron.{0,160}/) || [])[0]);
     chk('el documento: "Carne y algo más" con el estado de cada cliente', /Carne y algo más/.test(T) && /Beto PruebaHome⏰ volvió tras 63 días1,5 kgPack Pizzas x2 1/.test(T) && /Fede PruebaOtras zonas🆕 nuevo0,75 kg—/.test(T) && !/Lo de siempre/.test(T), (T.match(/Los que llevaron carne.{0,200}/) || [])[0]);
     chk('el documento: el plan que falta se dice', /No llegó el plan de Septiembre 2026/.test(T), (T.match(/Contra el plan.{0,120}/) || [])[0]);
@@ -294,14 +294,14 @@ async function abrirFase(cli, fase) {
       var chips=[].map.call(document.querySelectorAll('#rsOpBody .rsop-chip'),function(b){return b.textContent.trim()+(b.classList.contains('on')?' [on]':'');});
       var r=dr.getBoundingClientRect();
       return {on:dr.classList.contains('on'),pdf:!!window.__pdf,chips:chips,d:q('#rsOpDesde').value,h:q('#rsOpHasta').value,res:q('#rsOpRes').textContent,
-        secs:document.querySelectorAll('#rsOpBody input[data-sec]').length,tild:document.querySelectorAll('#rsOpBody input[data-sec]:checked').length,
+        secs:document.querySelectorAll('#rsOpBody input[data-sec]').length,pagos:q('#rsOpBody input[data-sec="pagos"]').checked,tild:document.querySelectorAll('#rsOpBody input[data-sec]:checked').length,
         chicos:[].filter.call(document.querySelectorAll('#rsOpBody .rsop-chip,#rsOpBody .rsop-sec,#rsOpBody .btn-submit,#rsOpBody input[type=text],#rsOpDrawer .bbdd-drawer-back'),function(e){return e.getBoundingClientRect().height<40;}).length,
         desb:document.documentElement.scrollWidth>innerWidth+1,ancho:[document.documentElement.scrollWidth,innerWidth],
         fuera:[].filter.call(document.querySelectorAll('#rsOpBody *'),function(e){var b=e.getBoundingClientRect();return b.width>0&&(b.right>r.right+1||b.left<r.left-1);}).map(function(e){return e.tagName+'.'+e.className;}).slice(0,6)};})()`);
     chk('el boton PDF abre el panel y todavia no descarga nada', !!pan && pan.on === true && pan.pdf === false, pan);
     chk('el panel arranca en la semana (07/09 a 13/09, 7 dias) y ofrece estirarla hasta hoy lunes 14/9', !!pan && pan.d === '07/09/2026' && pan.h === '13/09/2026' && /7 días/.test(pan.res) && /la semana 2 de septiembre/.test(pan.res)
       && JSON.stringify(pan.chips) === JSON.stringify(['Sem 2 · 7–13 sep [on]', 'Hasta hoy · lun 14/9']), pan);
-    chk('las 11 secciones, todas tildadas; nada chico para el dedo y nada se sale del panel', !!pan && pan.secs === 11 && pan.tild === 11 && pan.chicos === 0 && pan.desb === false && pan.fuera.length === 0, pan);
+    chk('las 12 secciones, tildadas todas menos «Los pagos, uno por uno»; nada chico para el dedo y nada se sale del panel', !!pan && pan.secs === 12 && pan.tild === 11 && pan.pagos === false && pan.chicos === 0 && pan.desb === false && pan.fuera.length === 0, pan);
     /* Una fecha que no existe no descarga; el periodo, el titulo y las notas se guardan en el dispositivo. */
     const pan2 = await ev(cli, `(function(){var q=function(s){return document.querySelector(s);},ev=function(e){e.dispatchEvent(new Event('input',{bubbles:true}));};
       q('#rsOpHasta').value='31/02/2026';ev(q('#rsOpHasta'));var malo={res:q('#rsOpRes').textContent,cls:q('#rsOpRes').className};
@@ -404,6 +404,50 @@ async function abrirFase(cli, fase) {
     chk('un plan sin objetivo de Home ni de Otras zonas lo dice, y no dice que «no llegó»', !!PC && PC.sin === true, PC);
     chk('«tendría que ir en» y «cierra en» van por el PESO de los dias, como Planificacion, no parejo por dia', !!PC && num(PC.tAlD) === PC.alD && PC.alD !== PC.parejo && num(PC.tProy) === PC.proy, PC);
 
+    /* ── LOS AJUSTES DE LA LECTURA EN EL IPHONE (12/10/2026) ──
+       · los objetivos con indicador los cuenta el ERP (decia «60 casas nuevas: 0»
+         tres hojas antes de listar a los nuevos). Las casas nuevas se cuentan aca
+         con una cuenta propia: telefonos con entrega de retail del 1 al 13/9 cuya
+         primera compra de toda la historia es de septiembre;
+       · que explica la diferencia contra los dias de comparacion, por rama;
+       · «Los pagos, uno por uno» se puede sacar; la columna «¿Volvió?» no va si
+         todos dicen «todavía no» (y si alguno volvio, si);
+       · el total de un cuadro no queda solo en la hoja siguiente. */
+    const AJ = await ev(cli, `(function(){var K='maleu_plan_cache_Septiembre 2026',bk=localStorage.getItem(K),w=document.getElementById('rsHiddenWrap');
+      var pl=JSON.parse(bk);pl.objetivos=[
+        {id:'O-1',periodo:'Mes',objetivo:'Casas nuevas',indicador:'casas_nuevas',meta:10,unidad:'casas',avance:0,estado:'En curso'},
+        {id:'O-2',periodo:'Mes',objetivo:'Margen',indicador:'margen_bruto',meta:30,unidad:'%',avance:0,estado:'En curso'},
+        {id:'O-3',periodo:'Mes',objetivo:'Resultado',indicador:'resultado_neto',meta:2000000,unidad:'$',avance:0,estado:'En curso'},
+        {id:'O-4',periodo:'Mes',objetivo:'A mano',indicador:'manual',meta:100,unidad:'%',avance:40,estado:'En curso'}];
+      localStorage.setItem(K,JSON.stringify(pl));
+      var R=_rsArmar('2026-09-07');w.innerHTML=_rsRender(R);var t=w.textContent.replace(/\\s+/g,' ');
+      var eco=[].filter.call(w.querySelectorAll('.rs-section'),function(s){return !!s.querySelector('.rs-pl-row.total');})[0];
+      var cortes=_rsPdfCortes(eco),top=eco.getBoundingClientRect().top,tot=eco.querySelector('.rs-pl-row.total'),ant=tot.previousElementSibling;
+      var yT=tot.getBoundingClientRect().top-top,yA=ant.getBoundingClientRect().top-top,cerca=function(y){return cortes.some(function(c){return Math.abs(c-y)<1;});};
+      w.innerHTML=_rsRender(_rsArmar('2026-09-07',{off:{pagos:true}}));var tp=w.textContent;
+      var s=D.saludSemM['2026-09-2'],bkL=s.nuevosL[0].luego;s.nuevosL[0].luego=2;w.innerHTML=_rsRender(_rsArmar('2026-09-07'));var tv=w.textContent;s.nuevosL[0].luego=bkL;
+      w.innerHTML='';localStorage.setItem(K,bk);
+      var tel=function(p){var x=String(p.tel||'').replace(/\\D/g,'');return x.length>=8?x.slice(-10):'';},pri={},enMes={};
+      D.pedidos.forEach(function(p){if(p.hist||p.es!=='Entregado'||(p.h!=='Home'&&p.h!=='Pilar')||!(Number(p.$)>0)||!String(p.c||'').trim())return;
+        var x=tel(p),dia=_tendFechaVentaISO(p);if(!x||!dia)return;if(!pri[x]||dia<pri[x])pri[x]=dia;if(dia>='2026-09-01'&&dia<='2026-09-13')enMes[x]=1;});
+      var casasN=Object.keys(enMes).filter(function(x){return pri[x].slice(0,7)==='2026-09';}).length;
+      var g=_rtSumar('2026-09-01','2026-09-13'),f=g.tot.f+g.cat.f,mb=(f-g.tot.c-g.cat.c)/f*100;
+      var o=function(id){return R.objMes.lista.filter(function(x){return x.id===id;})[0]||{};},X=R.explica;
+      return {casas:o('O-1').avance,casasEsp:casasN,auto:o('O-1')._auto,mb:o('O-2').avance,mbEsp:mb,res:o('O-3')._alCierre,man:o('O-4').avance,manAuto:o('O-4')._auto,
+        t:{casas:t.indexOf('O-1Casas nuevasContado por el ERP al 13/9, como en Planificación—Mes'+casasN+' / 10 casas')>=0,cierre:/O-3Resultado—Messe mide al cierre · meta \\$2\\.000\\.000—/.test(t),mano:/O-4A mano—Mes40 \\/ 100%40%/.test(t)},
+        tObj:(t.match(/Objetivos del equipo.{0,420}/)||[])[0],
+        dif:X&&X.dif,sumR:X&&X.ramas.reduce(function(a,x){return a+x.d;},0),tot:R.g.tot.f-R.gc.tot.f,nR:X&&X.ramas.length,expl:/Qué explica la diferencia/.test(t)&&/El pedido más grande: antes/.test(t),
+        pagosOff:!/Los pagos, uno por uno/.test(tp)&&/Flujo de caja de la semana/.test(tp),pagosOn:/Los pagos, uno por uno/.test(t),
+        volvio:/¿Volvió\\?/.test(tv)&&/sí, 2 semanas/.test(tv),
+        nCortes:cortes.length,enTotal:cerca(yT),enAnterior:cerca(yA)};})()`);
+    chk('casas nuevas del mes: las cuenta el ERP (no el 0 de la hoja), igual a una cuenta propia por telefono', !!AJ && AJ.auto === 'erp' && AJ.casas === AJ.casasEsp && AJ.casasEsp > 0 && AJ.t.casas === true, AJ && [AJ.casas, AJ.casasEsp, AJ.tObj]);
+    chk('margen bruto del 1 al 13/9: (facturado − costo) / facturado, con catering', !!AJ && Math.abs(AJ.mb - AJ.mbEsp) < 1e-9 && AJ.mb > 0, AJ && [AJ.mb, AJ.mbEsp]);
+    chk('el resultado neto de un mes cortado no se inventa: «se mide al cierre»; el que se carga a mano queda como esta', !!AJ && AJ.res === true && AJ.t.cierre === true && AJ.man === 40 && AJ.manAuto === undefined && AJ.t.mano === true, AJ && [AJ.res, AJ.man, AJ.tObj]);
+    chk('que explica la diferencia: las ramas suman la diferencia del total, y el documento lo dice', !!AJ && AJ.nR >= 1 && Math.abs(AJ.sumR - AJ.dif) < 1 && AJ.dif === AJ.tot && AJ.expl === true, AJ && [AJ.dif, AJ.sumR, AJ.tot, AJ.nR]);
+    chk('«Los pagos, uno por uno» se puede sacar sin sacar el Financiero', !!AJ && AJ.pagosOff === true && AJ.pagosOn === true, AJ);
+    chk('«¿Volvió?» vuelve a salir si alguno de los nuevos volvio', !!AJ && AJ.volvio === true, AJ);
+    chk('el total del cuadro no queda solo: no hay corte antes del total ni antes del renglon anterior (' + (AJ && AJ.nCortes) + ' cortes)', !!AJ && AJ.nCortes > 3 && AJ.enTotal === false && AJ.enAnterior === false, AJ);
+
     /* (21/9/2026) Los objetivos en LEADS los cuenta CRM › Leads: del mes hasta el
        domingo de la semana del PDF (no hasta hoy), los de la semana dentro de la
        semana, sin los que ya eran clientes; los demas quedan con su avance. */
@@ -434,7 +478,8 @@ async function abrirFase(cli, fase) {
 
     /* Los cortes: bloque por bloque, el PDF mide cada captura. Se rearma el documento y se comprueba que todo lo
        pegado suma el alto de cada bloque y que cada corte interno cae en un renglon. */
-    const cortes = await ev(cli, `(function(){var w=document.getElementById('rsHiddenWrap');w.innerHTML=_rsRender(_rsArmar('2026-09-07'));var doc=w.querySelector('#rsDoc');
+    /* El PDF salio del panel, que arranca sin «Los pagos, uno por uno»: se compara contra ese documento. */
+    const cortes = await ev(cli, `(function(){var w=document.getElementById('rsHiddenWrap');w.innerHTML=_rsRender(_rsArmar('2026-09-07',{off:{pagos:true}}));var doc=w.querySelector('#rsDoc');
       var out=[].map.call(doc.children,function(b){return {alto:b.getBoundingClientRect().height,c:_rsPdfCortes(b),filas:[].map.call(b.querySelectorAll('tbody tr'),function(tr){var r=tr.getBoundingClientRect(),t=b.getBoundingClientRect().top;return [r.top-t,r.bottom-t];})};});
       w.innerHTML='';return out;})()`);
     const cortesOk = Array.isArray(cortes) && cortes.length >= 8 && cortes.every(b => b.c.every(y => !b.filas.some(f => y > f[0] + 1 && y < f[1] - 1)));

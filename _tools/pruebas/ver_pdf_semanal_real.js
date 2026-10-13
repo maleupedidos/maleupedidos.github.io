@@ -47,7 +47,9 @@ const $ = n => '$' + Math.round(n || 0).toLocaleString('es-AR');
       const X = await ev(cli, `(function(){var W=_rsArmar(${JSON.stringify(lun)}),R=_rsArmar(${JSON.stringify(lun)},${OPT}),s=_rtSumar(R.d,R.h).tot,ex=_rtSumar(_rtIso(_rtDia(W.dom,1)),R.h).tot;
         return {sem:[W.d,W.h,W.g.tot.f,W.g.tot.ent],per:[R.d,R.h,R.g.tot.f,R.g.tot.ent,R.nDias,R.libre],rt:[s.f,s.ent],extra:[ex.f,ex.ent],dias:R.dias.map(function(x){return x.d.getDate()+':'+x.ent+':'+x.f;}),
           vs:[_rtIso(R.vsD),_rtIso(R.vsH),R.gc.tot.f],cls:R.cls.map(function(x){return x.S.k+(x.exacta?' exacta':' cortada')+(x.cl?' '+x.cl.total+'/'+x.cl.nuevos+'/'+x.cl.recompra+'/'+x.cl.react:' sin dato');}),
-          mes:R.mesR&&{fr:R.mesR.fr,dia:R.mesR.dia,f:R.mesR.act.f,cat:R.mesR.act.cat},mt:R.objMes&&R.objMes.metaTotal}; })()`);
+          mes:R.mesR&&{fr:R.mesR.fr,dia:R.mesR.dia,f:R.mesR.act.f,cat:R.mesR.act.cat},mt:R.objMes&&R.objMes.metaTotal,
+          obj:R.objMes&&R.objMes.lista.map(function(o){return o.id+' '+o.indicador+' = '+(o._alCierre?'al cierre':o.avance)+' / '+o.meta+(o._auto?' ['+o._auto+']':'');}),
+          explica:R.explica&&{dif:R.explica.dif,ramas:R.explica.ramas.map(function(x){return x.n+' '+Math.round(x.d);}),antes:R.explica.maxAnt&&[R.explica.maxAnt.h,R.explica.maxAnt.f],ahora:R.explica.maxAct&&[R.explica.maxAct.h,R.explica.maxAct.f]}}; })()`);
       console.log('\nA MEDIDA:', JSON.stringify(X, null, 1));
       if (X && X.sem) console.log('semana + extra = periodo:', X.sem[2] + X.extra[0] === X.per[2], '· entregas', X.sem[3] + X.extra[1], 'vs', X.per[3], '· = Ventas retail:', X.rt[0] === X.per[2]);
     }
