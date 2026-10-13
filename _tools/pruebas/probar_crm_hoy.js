@@ -77,7 +77,9 @@ const TEXTOS = {
 const tpls = (estado) => { const o = {}; Object.keys(TEXTOS).forEach((n) => { o[n] = { estado: estado, cuerpo: TEXTOS[n][1], pie: 'Maleu · Pedí fácil, comé rico.', params: TEXTOS[n][0].split(' ') }; }); return o; };
 
 const P = (o) => Object.assign({ n: 5, fam: 'Sorrentinos', famPct: 80, g: 'SJyQ', gPct: 100, sp: 1, r: 21, rOk: 1, d: 24, toca: -3, dia: 5, diaOk: 1,
-  fj: 'm', fjOk: 1, tk: 40000, nu: ['Tartas', 'Wraps'], prob: ['Sorrentinos'], cup: 0, cupBase: 0, est: 'Activo', can: 'Home', pideDia: 4, pideHora: 'noche', ab: 0 }, o || {});
+  fj: 'm', fjOk: 1, tk: 40000, nu: ['Tartas', 'Wraps'], prob: ['Sorrentinos'], cup: 0, cupBase: 0, est: 'Activo', can: 'Home', pideDia: 4, pideHora: 'noche', ab: 0,
+  /* la escalera (13/10/2026): probó 3 de 41 y el próximo es la tarta de verdura */
+  diaCl: 0, pn: 3, pm: 41, sig: 'TV' }, o || {});
 const FRASE = 'Compra sorrentinos de jamón y queso cada 3 semanas, los viernes. Nunca probó tartas ni wraps. Le toca esta semana.';
 const casa = (lote, nom, j, ver, extra) => Object.assign({ k: 'casa:la paz|' + lote, casa: 1, nom: nom, tel: '11500000' + lote, key: '11500000' + lote, keys: ['11500000' + lote],
   bar: 'Estancias del Pilar', sub: 'La Paz', lote: String(lote), fr: FRASE, j: j, js: j ? [j] : [], ex: '', exPor: '', ctl: 0, cs: 0, nm: 0, nmPor: '', crudo: nom,
@@ -106,14 +108,14 @@ const FIX = {
     casa(20, 'Sofía Prueba', 'segunda', 'b', { fr: 'Compró una sola vez, hace 12 días: lomo.', v: { name: 'Sofía', producto: 'el lomo', cuando: 'este viernes de 19 a 21' }, p: P({ n: 1 }) }),
     casa(21, 'Zorro Prueba', 'segunda', 'a', { ex: 'tope', exPor: 'viernes 9 del 10 (09/10)', nm: 1, nmPor: 'no lo reconozco como nombre', crudo: 'Zorro Prueba', listo: 0, p: P({ n: 1 }) }),
     casa(30, 'Diego Prueba', 'nuevo', 'a', { v: { name: 'Diego', producto: 'las pizzas de muzzarella', cuando: 'este viernes de 19 a 21', familia: 'las tartas', descuento: '20% off con el cupón TARTA20' } }),
-    casa(40, 'Quieta Prueba', '', '', {})
+    casa(40, 'Quieta Prueba', '', '', { p: P({ pn: 41, pm: 41, sig: '' }) })
   ],
   frenos: { tope: 2, abierto: 1, nombre: 1 },
   tope: [{ camp: 'domingo_11_octubre (11/10)', n: 1 }, { camp: 'viernes 9 del 10 (09/10)', n: 1 }],
   historia: { segunda: { n: 231, compraron: 38, plata: 1, casas: 231 }, volve: { n: 232, compraron: 41, plata: 1, casas: 193 },
               repo: { n: 255, compraron: 137, plata: 1, casas: 94 }, nuevo: { n: 253, compraron: 109, plata: 1, casas: 109 } },
   base: { segunda: 0.16, volve: 0.18, ocasion: null, repo: 0.54, nuevo: 0.43 },
-  resultados: {}, cupones: { Tartas: { cod: 'TARTA20', pct: 20 } }, nombres: {}
+  resultados: {}, cupones: { Tartas: { cod: 'TARTA20', pct: 20 } }, nombres: { TV: 'Tarta Verdura' }
 };
 const RES = { repo: { env: 40, mirados: 30, resp: 12, envCompro: 26, envPlata: 1560000, ctl: 5, ctlCompro: 2, ctlPlata: 90000, enCurso: 12, boton: 9, botonPlata: 400000,
   a: { env: 21, resp: 8, compro: 15, plata: 900000, boton: 6, botonPlata: 300000 }, b: { env: 19, resp: 4, compro: 11, plata: 660000, boton: 3, botonPlata: 100000 } } };
@@ -241,18 +243,22 @@ async function apagado(cli) {
 
   await abrirLista(cli, 'repo');
   await pausa(500);
-  const filas = await ev(cli, `JSON.stringify([].map.call(document.querySelectorAll('#jugCuerpo .jg-card.abierta .jg-lista .jg-fila'),function(f){return (f.classList.contains('jg-fila-va')?'[x] ':'')+f.textContent.replace(/\\s+/g,' ').trim().slice(0,400);}))`);
+  const filas = await ev(cli, `JSON.stringify([].map.call(document.querySelectorAll('#jugCuerpo .jg-card.abierta .jg-lista .jg-fila'),function(f){return (f.classList.contains('jg-fila-va')?'[x] ':'')+f.textContent.replace(/\\s+/g,' ').trim().slice(0,600);}))`);
   console.log('     lista: ' + String(filas).slice(0, 900));
   const fl = JSON.parse(typeof filas === 'string' ? filas : '[]');
   chk('la lista: 2 que reciben (cada una con su botón Sacar), 1 de control, 4 frenadas', fl.length === 7 && fl.filter(x => /^\[x\]/.test(x)).length === 2 && fl.some(x => /^control ?Carla Prueba/.test(x)) && fl.filter(x => /^\[x\].*Sacar$/.test(x)).length === 2, fl.map(x => x.slice(0, 40) + '…' + x.slice(-12)));
   chk('cada casa muestra SU mensaje con SU versión (Ana va con la B)', fl.some(x => /Ana Prueba.*Hola Ana! Repartimos este viernes de 19 a 21\. ¿Reponemos los sorrentinos de jamón y queso así tenés la semana resuelta\?Versión B jug_reposicion_b/.test(x)), fl[1]);
   chk('abrir "Hoy" apagado y sin jugadas enviadas no le pide nada a WATI', (await ev(cli, `window.__posts.filter(function(p){return p.action==='crmJugadasRespuestas';}).length`)) === 0);
+  chk('cada casa dice cuántos productos probó y cuál es el próximo (la escalera)', fl.some(x => /Martín Prueba.*Probó 3 de 41 productos · el próximo: Tarta Verdura/.test(x)), fl[0]);
+  const fichaDe = (tel) => ev(cli, `(function(){var d=document.createElement('div');d.innerHTML=crmPerfilHtml('cliente','${tel}');return d.textContent;})()`);
+  chk('…y la ficha también', /Probó 3 de 41 productos · el próximo: Tarta Verdura/.test(await fichaDe('1150000010')), await fichaDe('1150000010'));
+  chk('la que los probó todos lo dice, sin próximo', /Probó 41 de 41 productos: los probó todos/.test(await fichaDe('1150000040')) && !/el próximo/.test(await fichaDe('1150000040')), await fichaDe('1150000040'));
   chk('la frenada por el tope dice por qué campaña', fl.some(x => /Mario Prueba.*ya recibió «domingo_11_octubre \(11\/10\)» en los últimos 7 días/.test(x)), fl[3]);
   chk('la del pedido abierto y la del nombre dicen su motivo', fl.some(x => /Elena Prueba.*tiene un pedido abierto/.test(x)) && fl.some(x => /PMO.*hay que revisar el nombre \(«PMO»: parece una sigla\)/.test(x)), fl.slice(4));
   chk('la que alguien marcó "no escribirle más" dice el motivo, quién y que se habilita desde la ficha',
     fl.some(x => /Hugo Prueba.*No se le manda: no hay que escribirle: «Pidió que no le escribamos» \(lo marcó Tadeo Ustariz el 10\/10\)\. Se habilita desde su ficha\./.test(x)), fl[6]);
   chk('y en su ficha se ve, con el botón para volver a habilitarla', (await ev(cli, `(function(){var d=document.createElement('div');d.innerHTML=crmPerfilHtml('cliente','1150000016');return d.textContent.replace(/\\s+/g,' ').trim();})()`)) ===
-    FRASE + 'No escribirle. Pidió que no le escribamos Lo marcó Tadeo Ustariz el 10/10/2026 Volver a habilitar');
+    FRASE + 'Probó 3 de 41 productos · el próximo: Tarta Verdura' + 'No escribirle. Pidió que no le escribamos Lo marcó Tadeo Ustariz el 10/10/2026 Volver a habilitar');
   chk('APAGADO: no hay botón de mandar ni de prueba', (await ev(cli, `!document.getElementById('jugGo')&&!document.getElementById('jugTelPrueba')`)) === true);
   chk('y explica por qué', /Apagado\. Todavía no se manda nada desde acá/.test(await ev(cli, T('#jugCuerpo .jg-pie'))));
   chk('llamar a mandar a mano tampoco hace nada', (await ev(cli, `jugMandar('repo');jugMandar('repo');jugPrueba('repo','a');window.__posts.length`)) === 0);
@@ -269,7 +275,7 @@ async function apagado(cli) {
   chk('todos los botones llegan a 44 px', md.chicos === 0, md);
   chk(ANCHO <= 560 ? 'en el celular va en una columna' : 'en escritorio las tarjetas van en más de una columna', ANCHO <= 560 ? md.cols === 1 : md.cols >= 2, md);
 
-  chk('la ficha dice el perfil arriba, con la jugada de hoy', (await ev(cli, `(function(){var d=document.createElement('div');d.innerHTML=crmPerfilHtml('cliente','1150000010');return d.textContent;})()`)) === FRASE + ' Hoy: Reposición');
+  chk('la ficha dice el perfil arriba, con la jugada de hoy', (await ev(cli, `(function(){var d=document.createElement('div');d.innerHTML=crmPerfilHtml('cliente','1150000010');return d.textContent;})()`)) === FRASE + ' Hoy: Reposición' + 'Probó 3 de 41 productos · el próximo: Tarta Verdura');
   chk('la ficha de la CASA también (por sub-barrio y lote)', /^Compra sorrentinos/.test(await ev(cli, `(function(){var d=document.createElement('div');d.innerHTML=crmPerfilHtml('casa','La Paz|010');return d.textContent;})()`)));
   chk('a la frenada no le dice "Hoy:"', !/Hoy:/.test(await ev(cli, `(function(){var d=document.createElement('div');d.innerHTML=crmPerfilHtml('cliente','1150000013');return d.textContent;})()`)));
 
