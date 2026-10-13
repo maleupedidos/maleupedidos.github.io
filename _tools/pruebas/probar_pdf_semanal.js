@@ -205,7 +205,7 @@ async function abrirFase(cli, fase) {
     const card = await ev(cli, `(function(){try{go('inicio');}catch(e){}var c=[].slice.call(document.querySelectorAll('#sem-body-prev .card')).filter(function(x){return /Sem 2 · 7–13 sep/.test(x.textContent);})[0];if(!c)return null;
       var m=c.textContent.match(/Cobrado en la semana\\s*\\$([\\d.]+)/),e=c.textContent.match(/EF \\$([\\d.]+) · TR \\$([\\d.]+)/);
       return {t:m?Number(m[1].replace(/\\./g,'')):null,ef:e?Number(e[1].replace(/\\./g,'')):null,tr:e?Number(e[2].replace(/\\./g,'')):null,
-        pdf:(c.innerHTML.match(/descargarPDFSemana\\(([^)]*)\\)/)||[])[1]};})()`);
+        pdf:(c.innerHTML.match(/pdfSemanaAbrir\\(([^)]*)\\)/)||[])[1]};})()`);
     chk('lo cobrado = la tarjeta "Cobrado en la semana" (total, EF y TR)', !!RR && !!card && card.t === RR.cob[0] && card.ef === RR.cob[1] && card.tr === RR.cob[2] && RR.cob[0] === 126000, [RR && RR.cob, card]);
     chk('el boton de la semana manda el lunes con su año', !!card && /2026-09-07/.test(card.pdf || ''), card && card.pdf);
     /* El borde de año (6/10/2026): la que era la semana 53 (28/12 a 3/1) son DOS
@@ -261,7 +261,7 @@ async function abrirFase(cli, fase) {
     chk('el documento: los créditos de WATI están en Campañas y mensajería, no en un gasto de la semana', /Campañas y mensajeríaWATI · Créditos−\$10\.000/.test(T) && !/Gastos de la semana/.test(T), (T.match(/Campañas y mensajería.{0,60}/) || [])[0]);
     chk('el documento: el financiero con el flujo de caja y los vueltos aparte', /Flujo de caja de la semana\$60\.200/.test(T) && /Los vueltos \(\$3\.000\) no cuentan/.test(T) && /Los pagos, uno por uno/.test(T), (T.match(/Financiero.{0,400}/) || [])[0]);
     chk('sin undefined, NaN ni centavos', T.length > 500 && !/undefined|NaN|\[object/.test(T) && !/\$\s?\d{1,3}(\.\d{3})*,\d/.test(T));
-    chk('el documento: "Al cierre de la semana quedó por cobrar" $91.500, "cobrado Lun 14/9" y cuanto falta', /Al cierre de la semana quedó por cobrar de lo entregado: \$91\.500/.test(T) && /cobrado Lun 14\/9/.test(T) && /De eso ya entró \$10\.000 después del domingo; falta \$81\.500/.test(T), (T.match(/Al cierre.{0,300}/) || [])[0]);
+    chk('el documento: "Al cierre de la semana quedó por cobrar" $91.500, "cobrado Lun 14/9" y cuanto falta', /Al cierre de la semana quedó por cobrar de lo entregado: \$91\.500/.test(T) && /cobrado Lun 14\/9/.test(T) && /De eso ya entró \$10\.000 después del domingo 13\/9; falta \$81\.500/.test(T), (T.match(/Al cierre.{0,300}/) || [])[0]);
     chk('el documento: Red en poder del vendedor, "Vendedor Dos 1 pedido $30.000"', /Red en poder del vendedor.{0,80}Vendedor Dos 1 pedido \$30\.000/.test(T) && !/Final Tres/.test(T), (T.match(/Aparte, Red.{0,160}/) || [])[0]);
     chk('el documento: quienes son los nuevos, donde viven, que llevaron y si volvieron', /Quiénes son los nuevos/.test(T) && /Fede PruebaPilaraCarnes 0,75 kg\$40\.000todavía no/.test(T), (T.match(/Quiénes son los nuevos.{0,160}/) || [])[0]);
     chk('el documento: quienes volvieron y hace cuanto', /Quiénes volvieron/.test(T) && /Beto PruebaEstancias del PilarCarnes 1,5 kg · Pack Pizzas x2 1\$50\.00063 días/.test(T) && /un dormido que se despertó/.test(T), (T.match(/Quiénes volvieron.{0,160}/) || [])[0]);
@@ -286,7 +286,44 @@ async function abrirFase(cli, fase) {
 
     /* El PDF de verdad: sin los nombres en la copia (los pide a saludClientes) y sin el plan guardado (lo pide). */
     await ev(cli, `delete D.saludSemM['2026-09-2'].nuevosL;delete D.saludSemM['2026-09-2'].reactL;window.__gets=[];window.__img=[];window.__escalas=[];
+      try{localStorage.removeItem('maleu_pdf_notas_2026-09-2');localStorage.removeItem('maleu_pdf_secciones');}catch(e){}
       var _b=document.querySelector('#hRetail .rt-pdf');if(_b)_b.click();`);
+    await pausa(500);
+    /* ── ARMAR EL PDF (12/10/2026): el boton abre el panel, no descarga derecho ── */
+    const pan = await ev(cli, `(function(){var dr=document.getElementById('rsOpDrawer'),q=function(s){return document.querySelector(s);};
+      var chips=[].map.call(document.querySelectorAll('#rsOpBody .rsop-chip'),function(b){return b.textContent.trim()+(b.classList.contains('on')?' [on]':'');});
+      var r=dr.getBoundingClientRect();
+      return {on:dr.classList.contains('on'),pdf:!!window.__pdf,chips:chips,d:q('#rsOpDesde').value,h:q('#rsOpHasta').value,res:q('#rsOpRes').textContent,
+        secs:document.querySelectorAll('#rsOpBody input[data-sec]').length,tild:document.querySelectorAll('#rsOpBody input[data-sec]:checked').length,
+        chicos:[].filter.call(document.querySelectorAll('#rsOpBody .rsop-chip,#rsOpBody .rsop-sec,#rsOpBody .btn-submit,#rsOpBody input[type=text],#rsOpDrawer .bbdd-drawer-back'),function(e){return e.getBoundingClientRect().height<40;}).length,
+        desb:document.documentElement.scrollWidth>innerWidth+1,ancho:[document.documentElement.scrollWidth,innerWidth],
+        fuera:[].filter.call(document.querySelectorAll('#rsOpBody *'),function(e){var b=e.getBoundingClientRect();return b.width>0&&(b.right>r.right+1||b.left<r.left-1);}).map(function(e){return e.tagName+'.'+e.className;}).slice(0,6)};})()`);
+    chk('el boton PDF abre el panel y todavia no descarga nada', !!pan && pan.on === true && pan.pdf === false, pan);
+    chk('el panel arranca en la semana (07/09 a 13/09, 7 dias) y ofrece estirarla hasta hoy lunes 14/9', !!pan && pan.d === '07/09/2026' && pan.h === '13/09/2026' && /7 días/.test(pan.res) && /la semana 2 de septiembre/.test(pan.res)
+      && JSON.stringify(pan.chips) === JSON.stringify(['Sem 2 · 7–13 sep [on]', 'Hasta hoy · lun 14/9']), pan);
+    chk('las 11 secciones, todas tildadas; nada chico para el dedo y nada se sale del panel', !!pan && pan.secs === 11 && pan.tild === 11 && pan.chicos === 0 && pan.desb === false && pan.fuera.length === 0, pan);
+    /* Una fecha que no existe no descarga; el periodo, el titulo y las notas se guardan en el dispositivo. */
+    const pan2 = await ev(cli, `(function(){var q=function(s){return document.querySelector(s);},ev=function(e){e.dispatchEvent(new Event('input',{bubbles:true}));};
+      q('#rsOpHasta').value='31/02/2026';ev(q('#rsOpHasta'));var malo={res:q('#rsOpRes').textContent,cls:q('#rsOpRes').className};
+      pdfSemanaDescargar();var bajo=!!window.__pdf,sigue=document.getElementById('rsOpDrawer').classList.contains('on');
+      q('#rsOpHasta').value='20/11/2026';ev(q('#rsOpHasta'));var largo=q('#rsOpRes').textContent;
+      document.querySelectorAll('#rsOpBody .rsop-chip')[1].click();
+      q('#rsOpTit').value='Finde largo';ev(q('#rsOpTit'));q('#rsOpNotas').value='Entregamos el lunes feriado';ev(q('#rsOpNotas'));
+      q('#rsOpBody input[data-sec="carne"]').click();
+      return {malo:malo,bajo:bajo,sigue:sigue,largo:largo,d:q('#rsOpDesde').value,h:q('#rsOpHasta').value,res:q('#rsOpRes').textContent,
+        on:[].map.call(document.querySelectorAll('#rsOpBody .rsop-chip.on'),function(b){return b.textContent.trim();}),
+        ls:JSON.parse(localStorage.getItem('maleu_pdf_notas_2026-09-2')||'null'),secs:JSON.parse(localStorage.getItem('maleu_pdf_secciones')||'null')};})()`);
+    chk('el 31/02 no es una fecha y un periodo de mas de 45 dias tampoco: lo dice en rojo y no descarga', !!pan2 && /dd\/mm\/aaaa/.test(pan2.malo.res) && /mal/.test(pan2.malo.cls) && pan2.bajo === false && pan2.sigue === true && /45 días/.test(pan2.largo), pan2);
+    chk('«Hasta hoy» estira el periodo al lunes 14/9: 8 dias, a medida y en curso', !!pan2 && pan2.d === '07/09/2026' && pan2.h === '14/09/2026' && /8 días/.test(pan2.res) && /período a medida/.test(pan2.res) && JSON.stringify(pan2.on) === '["Hasta hoy · lun 14/9"]', pan2);
+    chk('el periodo, el titulo y las notas quedan guardados por semana, y la seccion destildada tambien', !!pan2 && !!pan2.ls && pan2.ls.d === '2026-09-07' && pan2.ls.h === '2026-09-14' && pan2.ls.titulo === 'Finde largo' && pan2.ls.notas === 'Entregamos el lunes feriado' && !!pan2.secs && pan2.secs.carne === true, pan2);
+    /* Se cierra y se vuelve a abrir: esta todo como se dejo. Y se vuelve a la semana para el PDF de siempre. */
+    const pan3 = await ev(cli, `(function(){var q=function(s){return document.querySelector(s);};pdfSemanaCerrar();pdfSemanaAbrir('2026-09-10');
+      var o={h:q('#rsOpHasta').value,tit:q('#rsOpTit').value,notas:q('#rsOpNotas').value,carne:q('#rsOpBody input[data-sec="carne"]').checked};
+      document.querySelectorAll('#rsOpBody .rsop-chip')[0].click();q('#rsOpTit').value='';q('#rsOpTit').dispatchEvent(new Event('input',{bubbles:true}));
+      q('#rsOpNotas').value='';q('#rsOpNotas').dispatchEvent(new Event('input',{bubbles:true}));q('#rsOpBody input[data-sec="carne"]').click();
+      o.limpio=localStorage.getItem('maleu_pdf_notas_2026-09-2');
+      q('#rsOpBtn').click();o.cerro=!document.getElementById('rsOpDrawer').classList.contains('on');return o;})()`);
+    chk('al reabrir el panel (con cualquier dia de la semana) esta como se dejo; vaciado, no queda nada guardado; Descargar lo cierra', !!pan3 && pan3.h === '14/09/2026' && pan3.tit === 'Finde largo' && pan3.notas === 'Entregamos el lunes feriado' && pan3.carne === false && pan3.limpio === null && pan3.cerro === true, pan3);
     const salio = await esperar(cli, `!!window.__pdf`, 90000);
     const pdf = await ev(cli, `({pdf:window.__pdf,gets:window.__gets,toasts:window.__toasts,img:window.__img,esc:window.__escalas,
       nuevos:Array.isArray((D.saludSemM['2026-09-2']||{}).nuevosL),plan:!!localStorage.getItem('maleu_plan_cache_Septiembre 2026')})`);
@@ -301,6 +338,71 @@ async function abrirFase(cli, fase) {
     const docPlan = await ev(cli, `(function(){var R=_rsArmar('2026-09-07');var w=document.getElementById('rsHiddenWrap');w.innerHTML=_rsRender(R);var t=w.textContent;w.innerHTML='';
       return {m:R.plan.m,p:R.plan.p,realM:R.plan.realM,realP:R.plan.realP,mes:R.plan.mes,t:(t.match(/Contra el plan.{0,420}/)||[])[0]};})()`);
     chk('con el plan: objetivo retail del 7 al 13 $400.000 y 10 pedidos; entregado $130.000 (33%) y 4 pedidos; el mes $250.000 de $2.000.000', !!docPlan && docPlan.m === 400000 && docPlan.p === 10 && docPlan.realM === 130000 && docPlan.realP === 4 && docPlan.mes && docPlan.mes.real === 250000 && /del 7 al 13 de septiembre/.test(docPlan.t) && /33% del objetivo/.test(docPlan.t) && /\$250\.000 de \$2\.000\.000 \(13%\)/.test(docPlan.t), docPlan);
+
+    /* ── EL PERIODO A MEDIDA (12/10/2026) ── «fue finde largo y el lunes feriado
+       tambien entregamos»: la semana 7–13/9 estirada hasta hoy lunes 14/9. Se mete
+       una entrega el 14/9 para que el lunes pese. Sin opciones, o con las fechas de
+       la semana, el PDF es el de siempre. */
+    const LB = await ev(cli, `(function(){
+      var lunes={n:'2001',h:'Home',es:'Entregado',$:25000,co:15000,fex:'2026-09-14',dee:'2026-09-14',fe:'14/09',f:'14/09',mc:'2026-09',c:'Lunes Feriado',tel:'1100000999',bar:'Estancias del Pilar',ep:'No Cobrado',p:[{a:'PPM',q:1}],r:2001};
+      D.pedidos.push(lunes);
+      var W=_rsArmar('2026-09-07'), W2=_rsArmar('2026-09-07',{d:'2026-09-07',h:'2026-09-13'}), R=_rsArmar('2026-09-07',{d:'2026-09-07',h:'2026-09-14'});
+      var s=_rtSumar('2026-09-07','2026-09-14').tot, l=_rtSumar('2026-09-14','2026-09-14').tot, a=_rtSumar('2026-08-31','2026-09-07').tot;
+      var w=document.getElementById('rsHiddenWrap');
+      w.innerHTML=_rsRender(R);var t=w.textContent;
+      var C=_rsArmar('2026-09-07',{d:'2026-09-09',h:'2026-09-14'});w.innerHTML=_rsRender(C);var tc=w.textContent;
+      w.innerHTML=_rsRender(_rsArmar('2026-09-07',{d:'2026-09-07',h:'2026-09-14',titulo:'Finde <i>largo</i>',notas:'Entregamos el lunes\\n\\n- punto <b>uno</b>\\n- punto dos',off:{carne:true,dias:true}}));
+      var tn=w.textContent, nt={p:w.querySelectorAll('.rs-nt-p').length,li:w.querySelectorAll('.rs-nt-p.li').length,html:!!w.querySelector('.rs-nt b, .rs-cover-title i'),
+        primera:(w.querySelector('.rs-section .rs-h')||{}).textContent,tit:w.querySelector('.rs-cover-title').textContent,per:w.querySelector('.rs-cover-period').textContent};
+      w.innerHTML=_rsRender(_rsArmar('2026-09-07',{off:{numeros:1,plan:1,mes:1,objetivos:1,eco:1,fin:1,mercado:1,dias:1,clientes:1,carne:1,productos:1}}));
+      var nada=w.querySelectorAll('.rs-section').length;w.innerHTML='';
+      D.pedidos.splice(D.pedidos.indexOf(lunes),1);
+      return {igual:JSON.stringify([W.libre,W.d,W.h,W.g.tot,W.gc.tot,W.eco,W.nombre])===JSON.stringify([W2.libre,W2.d,W2.h,W2.g.tot,W2.gc.tot,W2.eco,W2.nombre]),wLibre:W.libre,wNom:W.nombre,
+        libre:R.libre,n:R.nDias,d:R.d,h:R.h,curso:R.enCurso,nom:R.nombre,f:R.g.tot.f,ent:R.g.tot.ent,sf:s.f,sent:s.ent,sem:W.g.tot.f,lun:l.f,
+        dias:R.dias.length,sumD:R.dias.reduce(function(x,y){return x+y.f;},0),ant:R.gc.tot.f,sant:a.f,fij:R.eco.fijosMes.map(function(x){return x.dias+'/'+x.diasMes;}),
+        fijos:R.eco.fijos,fijosW:W.eco.fijos,cl:R.cl,clOk:R.clOk.map(function(x){return x.S.k;}),cort:R.clCortadas.length,nuevos:R.nuevos&&R.nuevos.length,
+        t:{tit:/Del 7\\/9 al 14\\/9/.test(t),ey:/Resumen del período/.test(t),ocho:/8 días/.test(t),vs:/vs lun 31\\/8 → lun 7\\/9, los mismos días una semana antes/.test(t),
+           lunes:/Lun 14\\/91 entrega · \\$25\\.000/.test(t),per:/El período en números/.test(t)&&/Resultado económico del período/.test(t)&&!/de la semana−|de la semana\\$/.test(t),
+           cli:/Sem 2 · 7–13 sep · 4 clientes/.test(t)&&/no se suman/.test(t)},
+        cCl:C.clOk.length,cCort:C.clCortadas.map(function(x){return x.S.k;}),cTxt:/el período corta la sem 2 \\(7–13 sep\\)/.test(tc)&&!/Quiénes son los nuevos/.test(tc),
+        cEst:C.carne.lista.map(function(o){return o.est.t;}),
+        nt:nt,tnCarne:/Carne y algo más/.test(tn),tnDias:/Día por día/.test(tn),tnPara:/Para contar/.test(tn),nada:nada};})()`);
+    chk('sin opciones, o con las fechas de la semana, es el PDF de siempre («Sem 2 de septiembre»)', !!LB && LB.igual === true && LB.wLibre === false && LB.wNom === 'Sem 2 de septiembre', LB);
+    chk('a medida 7→14/9: 8 dias, en curso, y suma lo mismo que Ventas retail en ese rango', !!LB && LB.libre === true && LB.n === 8 && LB.d === '2026-09-07' && LB.h === '2026-09-14' && LB.curso === true && LB.nom === 'del 7/9 al 14/9' && LB.f === LB.sf && LB.ent === LB.sent, LB);
+    chk('es la semana MAS el lunes ($25.000): ni un peso de mas ni de menos, y los 8 dias suman el total', !!LB && LB.lun === 25000 && LB.f === LB.sem + 25000 && LB.dias === 8 && LB.sumD === LB.f, LB);
+    chk('se compara contra los mismos 8 dias una semana antes (31/8 a 7/9)', !!LB && LB.ant === LB.sant && LB.ant > 0, LB);
+    chk('los fijos son 8 de 30 dias de septiembre (mas que los 7 de la semana)', !!LB && JSON.stringify(LB.fij) === '["8/30"]' && LB.fijos > LB.fijosW, LB);
+    chk('los clientes NO se suman: va la sem 2 entera con sus nombres, y no se inventa un total', !!LB && LB.cl === null && JSON.stringify(LB.clOk) === '["2026-09-2"]' && LB.cort === 0 && LB.nuevos === 1, LB);
+    chk('el documento a medida: titulo, 8 dias, contra que se compara, el lunes en el dia por dia y «el período»', !!LB && Object.keys(LB.t).every(k => LB.t[k] === true), LB && LB.t);
+    chk('un periodo que corta la semana (9→14/9) no dice cuantos nuevos hubo ni «ya compraba»: dice que la corta', !!LB && LB.cCl === 0 && JSON.stringify(LB.cCort) === '["2026-09-2"]' && LB.cTxt === true && LB.cEst.indexOf('ya') < 0, LB);
+    chk('las notas van primero («Para contar»), con sus dos puntos de lista, y lo escrito NO se interpreta como HTML', !!LB && LB.tnPara === true && LB.nt.primera === 'Para contar' && LB.nt.p === 3 && LB.nt.li === 2 && LB.nt.html === false, LB && LB.nt);
+    chk('el titulo propio va en la portada y el periodo queda abajo', !!LB && LB.nt.tit === 'Finde <i>largo</i>' && /Del 7\/9 al 14\/9 · lun 7\/9 → lun 14\/9\/2026/.test(LB.nt.per), LB && LB.nt);
+    chk('las secciones destildadas no salen (carne y dia por dia), y sin ninguna queda solo la portada y el pie', !!LB && LB.tnCarne === false && LB.tnDias === false && LB.nada === 0, LB);
+
+    /* ── EL PLAN POR CANAL (12/10/2026) ── desde octubre el plan trae «Home|» y
+       «Pilar|» y no los tramos: el PDF decia «No llegó el plan» y habia llegado.
+       El objetivo del periodo es la parte del mes que les toca a sus dias por el
+       peso de cada dia; aca se calcula con una cuenta propia, dia por dia. */
+    const PC = await ev(cli, `(function(){var K='maleu_plan_cache_Septiembre 2026',bk=localStorage.getItem(K),w=document.getElementById('rsHiddenWrap');
+      var pesos=calPesosMaleu(), peso=function(a,b){var t=0;for(var i=a;i<=b;i++)t+=pesos[new Date(2026,8,i).getDay()];return t;}, mes=peso(1,30);
+      localStorage.setItem(K,JSON.stringify({ok:true,mes:'Septiembre 2026',metas:{'Home|':{metaFact:1500000,metaPedidos:30},'Pilar|':{metaFact:500000,metaPedidos:10},'Total|':{metaFact:3000000}}}));
+      var R=_rsArmar('2026-09-07');w.innerHTML=_rsRender(R);var t=w.textContent;
+      var L=_rsArmar('2026-09-07',{d:'2026-09-07',h:'2026-09-14'});
+      localStorage.setItem(K,JSON.stringify({ok:true,mes:'Septiembre 2026',metas:{'Total|':{metaFact:3000000}}}));
+      w.innerHTML=_rsRender(_rsArmar('2026-09-07'));var t2=w.textContent;w.innerHTML='';
+      if(bk===null)localStorage.removeItem(K);else localStorage.setItem(K,bk);
+      var fO=R.mesR.act.f+(R.mesR.act.cat||0), fr13=peso(1,13)/mes;
+      return {m:R.plan.m,esp:Math.round(2000000*peso(7,13)/mes),p:R.plan.p,espP:Math.round(40*peso(7,13)/mes),porPeso:R.plan.porPeso,falta:R.plan.falta.length,
+        mL:L.plan.m,espL:Math.round(2000000*peso(7,14)/mes),mesMeta:R.plan.mes&&R.plan.mes.meta,
+        txt:!/No llegó el plan/.test(t)&&/Objetivo retail/.test(t)&&/por lo que pesa cada día de la semana en la venta/.test(t),
+        sin:/no tiene cargado un objetivo de Home ni de Otras zonas/.test(t2)&&!/No llegó el plan/.test(t2),
+        alD:Math.round(3000000*fr13),parejo:Math.round(3000000*13/30),proy:Math.round(fO/fr13),
+        tAlD:(t.match(/tendría que ir en\\$(\\d{1,3}(?:\\.\\d{3})*)/)||[])[1],tProy:(t.match(/días cierra en\\$(\\d{1,3}(?:\\.\\d{3})*)/)||[])[1]};})()`);
+    const num = s => Number(String(s || '').replace(/\./g, ''));
+    chk('el plan por canal LLEGA: objetivo retail de la semana = la parte de Home + Otras zonas ($2.000.000) que les toca a esos dias por su peso', !!PC && PC.porPeso === true && PC.falta === 0 && PC.m === PC.esp && PC.m > 0 && PC.p === PC.espP && PC.mesMeta === 2000000 && PC.txt === true, PC);
+    chk('a medida, el objetivo es el de los 8 dias (mas que el de la semana)', !!PC && PC.mL === PC.espL && PC.mL >= PC.m, PC);
+    chk('un plan sin objetivo de Home ni de Otras zonas lo dice, y no dice que «no llegó»', !!PC && PC.sin === true, PC);
+    chk('«tendría que ir en» y «cierra en» van por el PESO de los dias, como Planificacion, no parejo por dia', !!PC && num(PC.tAlD) === PC.alD && PC.alD !== PC.parejo && num(PC.tProy) === PC.proy, PC);
 
     /* (21/9/2026) Los objetivos en LEADS los cuenta CRM › Leads: del mes hasta el
        domingo de la semana del PDF (no hasta hoy), los de la semana dentro de la

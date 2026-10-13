@@ -155,7 +155,7 @@ async function faseOk(cli) {
   chk('un nombre con HTML se ve como texto y no se ejecuta', x === '{"xss":0,"img":0,"txt":true}', x);
 
   /* ── el boton del PDF de una semana anterior ── */
-  const pdf = await ev(cli, `JSON.stringify([].map.call(document.querySelectorAll('#hCaja button[onclick*="descargarPDFSemana"]'),function(b){return b.textContent.trim();}))`);
+  const pdf = await ev(cli, `JSON.stringify([].map.call(document.querySelectorAll('#hCaja button[onclick*="pdfSemanaAbrir"]'),function(b){return b.textContent.trim();}))`);
   const pdfs = JSON.parse(typeof pdf === 'string' ? pdf : '[]');
   chk('hay un botón de PDF por semana anterior', pdfs.length >= 1, pdf);
   chk('y ninguno muestra la clave interna ("2026-9-4")', pdfs.length >= 1 && pdfs.every(t => !/\d{4}-\d{1,2}-\d/.test(t)), pdfs);

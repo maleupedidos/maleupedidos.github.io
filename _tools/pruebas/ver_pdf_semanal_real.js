@@ -20,6 +20,8 @@ const prep = require('./sesion_prep.js');
 const TOKEN = process.argv[2];
 const LUNES = process.argv[3] || '';
 const CAPTURAS = process.argv[4] || '';
+/* HASTA=aaaa-mm-dd (12/10/2026): el periodo a medida, del lunes a ese dia. NOTAS y TITULO, lo que se escribe en el panel. */
+const HASTA = process.env.HASTA || '';
 const BASE = process.env.BASE || 'http://localhost:8080';
 if (!TOKEN) { console.log('uso: node ver_pdf_semanal_real.js <token> [aaaa-mm-dd] [carpeta]'); process.exit(1); }
 const pausa = ms => new Promise(r => setTimeout(r, ms));
@@ -38,8 +40,18 @@ const $ = n => '$' + Math.round(n || 0).toLocaleString('es-AR');
     await ev(cli, `_tendCargarCatalogo()`);
     await esperar(cli, `!!_tendCat`, 60000);
     const lun = LUNES || await ev(cli, `(function(){var d=new Date();d.setDate(d.getDate()-((d.getDay()+6)%7)-7);return _rtIso(d);})()`);
-    await ev(cli, `new Promise(function(r){window._rsPreparar(${JSON.stringify(lun)},r);})`);
-    const R = await ev(cli, `(function(){var R=_rsArmar(${JSON.stringify(lun)});return {semN:R.semN,d:R.d,h:R.h,f:R.g.tot.f,ent:R.g.tot.ent,
+    const OPT = JSON.stringify(HASTA ? { d: lun, h: HASTA, titulo: process.env.TITULO || '', notas: (process.env.NOTAS || '').replace(/\|/g, '\n') } : {});
+    await ev(cli, `new Promise(function(r){window._rsPreparar(${JSON.stringify(lun)},r,${OPT});})`);
+    if (HASTA) {
+      /* El cruce del periodo a medida: es la semana mas los dias que se le sumaron, y dice lo que dice Ventas retail. */
+      const X = await ev(cli, `(function(){var W=_rsArmar(${JSON.stringify(lun)}),R=_rsArmar(${JSON.stringify(lun)},${OPT}),s=_rtSumar(R.d,R.h).tot,ex=_rtSumar(_rtIso(_rtDia(W.dom,1)),R.h).tot;
+        return {sem:[W.d,W.h,W.g.tot.f,W.g.tot.ent],per:[R.d,R.h,R.g.tot.f,R.g.tot.ent,R.nDias,R.libre],rt:[s.f,s.ent],extra:[ex.f,ex.ent],dias:R.dias.map(function(x){return x.d.getDate()+':'+x.ent+':'+x.f;}),
+          vs:[_rtIso(R.vsD),_rtIso(R.vsH),R.gc.tot.f],cls:R.cls.map(function(x){return x.S.k+(x.exacta?' exacta':' cortada')+(x.cl?' '+x.cl.total+'/'+x.cl.nuevos+'/'+x.cl.recompra+'/'+x.cl.react:' sin dato');}),
+          mes:R.mesR&&{fr:R.mesR.fr,dia:R.mesR.dia,f:R.mesR.act.f,cat:R.mesR.act.cat},mt:R.objMes&&R.objMes.metaTotal}; })()`);
+      console.log('\nA MEDIDA:', JSON.stringify(X, null, 1));
+      if (X && X.sem) console.log('semana + extra = periodo:', X.sem[2] + X.extra[0] === X.per[2], '· entregas', X.sem[3] + X.extra[1], 'vs', X.per[3], '· = Ventas retail:', X.rt[0] === X.per[2]);
+    }
+    const R = await ev(cli, `(function(){var R=_rsArmar(${JSON.stringify(lun)},${OPT});return {semN:R.semN,d:R.d,h:R.h,f:R.g.tot.f,ent:R.g.tot.ent,
       eco:R.eco,fin:R.fin,ing:R.ing.tot,cob:R.cob,plan:R.plan,pendTot:R.pendTot,pendYa:R.pendYa,pend:R.pend,redSin:R.redSin,
       carne:{cli:R.carne.cli,solo:R.carne.solo,ambos:R.carne.ambos,siempre:R.carne.siempre,sinDato:R.carne.sinDato,lista:R.carne.lista.map(function(o){return {c:o.c,h:o.h,kg:o.kg,est:o.est,ademas:o.ademas};})},
       nuevos:R.nuevos,volvieron:R.volvieron,cl:R.cl&&{total:R.cl.total,nuevos:R.cl.nuevos,recompra:R.cl.recompra,react:R.cl.react}};})()`);
@@ -61,13 +73,13 @@ const $ = n => '$' + Math.round(n || 0).toLocaleString('es-AR');
     console.log(`\nCarne: ${c.cli} clientes · solo carne ${c.solo} · carne y algo mas ${c.ambos} · sin carne ${c.siempre} · sin dato ${c.sinDato}`);
     c.lista.forEach(o => console.log(`  ${o.c} · ${o.h} · ${o.est && o.est.t}${o.est && o.est.sem ? ' ' + o.est.sem : ''} · ${Math.round(o.kg * 1000) / 1000} kg · ${o.ademas || '—'}`));
 
-    const txt = await ev(cli, `(function(){var w=document.getElementById('rsHiddenWrap');w.innerHTML=_rsRender(_rsArmar(${JSON.stringify(lun)}));var t=w.textContent;w.innerHTML='';return t;})()`);
+    const txt = await ev(cli, `(function(){var w=document.getElementById('rsHiddenWrap');w.innerHTML=_rsRender(_rsArmar(${JSON.stringify(lun)},${OPT}));var t=w.textContent;w.innerHTML='';return t;})()`);
     console.log('\nsin undefined/NaN:', typeof txt === 'string' && !/undefined|NaN|\[object/.test(txt));
 
     if (CAPTURAS) {
       fs.mkdirSync(CAPTURAS, { recursive: true });
       const alto = await ev(cli, `(function(){var w=document.getElementById('rsHiddenWrap');w.style.left='0px';w.style.zIndex='99999';w.style.background='#fff';
-        w.innerHTML=_rsRender(_rsArmar(${JSON.stringify(lun)}));window.scrollTo(0,0);return Math.ceil(w.getBoundingClientRect().height);})()`);
+        w.innerHTML=_rsRender(_rsArmar(${JSON.stringify(lun)},${OPT}));window.scrollTo(0,0);return Math.ceil(w.getBoundingClientRect().height);})()`);
       await pausa(800);
       const pag = 1100;
       for (let y = 0, i = 1; y < alto; y += pag, i++) {
