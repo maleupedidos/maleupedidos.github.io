@@ -124,6 +124,8 @@ const PREPARAR = `
             'bbdd','ventas','ajustes','estancias','proveedores','clientes','planificacion']
     }));
     localStorage.setItem('maleu_token','escritorio-token-de-prueba');
+    // Ventas abre en "Este mes" desde el 12/10/2026: las ventas sinteticas tienen fecha fija, se piden todas.
+    localStorage.setItem('maleu_v_per','todo');
     // La cache del SWR de Ventas: asi VD se llena sin backend y por el mismo
     // camino que usa el ERP de verdad cuando abre de la copia guardada.
     localStorage.setItem('ma3v2', ${JSON.stringify(JSON.stringify(VENTAS))});

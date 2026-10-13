@@ -125,6 +125,7 @@ const EXTRA = `
     try{
       localStorage.setItem('maleu_tab','ventas');
       localStorage.removeItem('ma3'); localStorage.removeItem('maleu_v_filtros'); localStorage.removeItem('maleu_v_vista');
+      localStorage.removeItem('maleu_v_per'); localStorage.removeItem('maleu_v_can');
       if(fase!=='d'){ localStorage.removeItem('ma3v3'); localStorage.removeItem('ma3v2'); }
     }catch(e){}
     if(fase==='b'){
@@ -181,11 +182,26 @@ const num = t => Number(String(t || '').replace(/[^\d]/g, '')) || 0;
     chk('la lista se dibuja', pinto);
     if (pinto) {
     await pausa(300);
+    /* 12/10/2026: abre en "Este mes" (abria en "Todo": los $102 M de toda la
+       historia) y recuerda el ultimo periodo. */
+    const delMes = V.filter(v => { const p = partes(v.fecha); return p.y === H.getFullYear() && p.m === H.getMonth() + 1; });
+    chk('abre en "Este mes", no en toda la historia', await evaluar(cli, `document.querySelector('#vfPer .vf-pc.on').getAttribute('data-v')==='mes'`));
+    let k0 = await kpis();
+    chk('   y el Facturado de entrada es el del mes', num(k0['Facturado']) === suma(delMes, v => v.$), [k0['Facturado'], suma(delMes, v => v.$)]);
+    /* buscar a alguien con ventas fuera del mes avisa que hay mas, y no se guarda como preferencia */
+    await evaluar(cli, `vBuscar('Cliente 12');1`); await pausa(400);
+    chk('la busqueda avisa si hay mas fuera del periodo', await evaluar(cli, `!!document.getElementById('vlFuera')`));
+    await toca('#vlFuera [data-acc="perbusq"]'); await pausa(200);
+    chk('   "buscar en todo" abre toda la historia sin recordarlo', await evaluar(cli, `document.querySelector('#vfPer .vf-pc.on').getAttribute('data-v')==='todo' && localStorage.getItem('maleu_v_per')===null`));
+    await evaluar(cli, `vBuscar('',1);1`); await pausa(200);
+    await toca('#vfPer [data-v="mesPasado"]'); await pausa(150);
+    chk('el periodo elegido se recuerda', await evaluar(cli, `localStorage.getItem('maleu_v_per')==='mesPasado'`));
+    await toca('#vfPer [data-v="todo"]'); await pausa(200);
     chk('dibuja 80 filas y no las ' + V.length + ' de un saque', await evaluar(cli, `document.querySelectorAll('#vList .vt').length`) === 80);
     chk('ofrece ver mas', await evaluar(cli, `!!document.querySelector('#vList [data-acc="mas"]')`));
     await toca('#vList [data-acc="mas"]'); await pausa(200);
     chk('"Ver mas" suma 100', await evaluar(cli, `document.querySelectorAll('#vList .vt').length`) === 180);
-    chk('8 periodos, y "Todo" prendido al entrar', await evaluar(cli, `document.querySelectorAll('#vfPer .vf-pc').length===8 && document.querySelector('#vfPer .vf-pc.on').getAttribute('data-v')==='todo'`));
+    chk('8 periodos, y "Todo" prendido al elegirlo', await evaluar(cli, `document.querySelectorAll('#vfPer .vf-pc').length===8 && document.querySelector('#vfPer .vf-pc.on').getAttribute('data-v')==='todo'`));
     chk('el estado de carga no queda a la vista', await evaluar(cli, `(function(e){return !!e&&e.hidden===true;})(document.getElementById('vEstado'))`));
 
     let k = await kpis();
@@ -195,6 +211,15 @@ const num = t => Number(String(t || '').replace(/[^\d]/g, '')) || 0;
     chk('Cobrado incluye lo de Red rendido mixto (en mx) sin inventar reparto', num(k['Cobrado']) === suma(V, cobradoDe), [k['Cobrado'], suma(V, cobradoDe)]);
     chk('Sin cobrar = el facturado de lo no cobrado', num(k['Sin cobrar']) === suma(V.filter(v => v.ep !== 'Cobrado'), v => v.$), [k['Sin cobrar']]);
     chk('el nombre de un cliente no se ejecuta como HTML', await evaluar(cli, `window.__xss===undefined`));
+    /* 12/10/2026: el margen arriba, el resumen por canal y copiar para Excel */
+    chk('Margen bruto = facturado − costo', num(k['Margen bruto']) === suma(V, v => v.$ - (v.costo || 0)), [k['Margen bruto'], suma(V, v => v.$ - (v.costo || 0))]);
+    const can = await evaluar(cli, `[].map.call(document.querySelectorAll('#vsCan .vs-can-r:not(.h)'),function(r){return r.children[0].textContent.trim()+'='+r.children[1].firstChild.textContent.replace(/[^0-9]/g,'');})`);
+    const otras = suma(V.filter(v => v.canal === 'Venta Directa' && v.barrio === 'Pilara'), v => v.$);
+    chk('el resumen por canal dice "Otras zonas" (no "Pilar") y su facturado cierra', can.indexOf('Otras zonas=' + otras) >= 0 && !can.some(x => /^Pilar=/.test(x)), can);
+    chk('   los canales suman el Facturado', can.reduce((a, x) => a + Number(x.split('=')[1]), 0) === suma(V, v => v.$), can);
+    const tsv = await evaluar(cli, `_vTsv(_vUlt.lista)`);
+    chk('"Copiar para Excel" existe y arma una fila por pedido', await evaluar(cli, `!!document.querySelector('#vlHead [data-acc="copiar"]')`) && tsv.split('\n').length === V.length + 1 && /^Fecha\tDía\tCanal/.test(tsv), tsv.slice(0, 120));
+    chk('   la plata va como número y el HTML del nombre no rompe columnas', tsv.split('\n').every(l => l.split('\t').length === 13) && /\t\d+\t\d+\t\d+\t(Cobrado|Sin cobrar)\t/.test(tsv.split('\n')[1]), tsv.split('\n')[1]);
 
     // El panel de filtros: cerrado en el celular, abierto en la compu
     const abierto = await evaluar(cli, `(function(e){return !!e&&!e.hidden;})(document.getElementById('vfPanel'))`);
