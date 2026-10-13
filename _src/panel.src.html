@@ -14471,7 +14471,7 @@ function pdHtml(d){
   var _kp='pd'+(L.length?1:0);
   var h='<details class="rb-card pd-card rb-plg'+(L.length?' rb-hay':'')+'"'+(_rbAb(_kp,L.length>0)?' open':'')+' ontoggle="_rbTog('+_RBQ+_kp+_RBQ+',this)">';
   h+='<summary class="rb-h"><span>🧾 Por decidir</span><span class="rb-n">'+(L.length?L.length+' esperando':'nada esperando')+(T.length?' · '+T.length+' recién decidido'+(T.length===1?'':'s'):'')+'</span></summary>';
-  h+='<div class="rb-sub">Todos los pedidos de la tienda pasan por acá. Sugerido: el vendedor del cupón, si no el de la zona, y en Estancias nosotros. Se puede elegir a cualquiera. Si nadie decide en '+(d.horas||2)+' h (el reloj corre de 8 a 22: lo que entra de noche espera a la mañana): en un barrio de vendedor sale al sugerido; si no, queda nuestro.</div>';
+  h+='<div class="rb-sub">Todos los pedidos de la tienda pasan por acá. Sugerido: el vendedor del cupón; si no, el que ya le vendió por Red; si no, el de la zona; y en Estancias nosotros. Se puede elegir a cualquiera. Si nadie decide en '+(d.horas||2)+' h (el reloj corre de 8 a 22: lo que entra de noche espera a la mañana): en un barrio de vendedor sale al sugerido; si no, queda nuestro.</div>';
   if(d.decidirErr)h+='<div class="rb-err">No pude leer los pedidos por decidir: '+rbEsc(d.decidirErr)+'</div>';
   L.forEach(function(p){
     var k=_pdKey(p),espera=p.desde?_hace(p.desde):'';
@@ -14523,7 +14523,7 @@ function pdVendedores(p,k){
   var h='<div class="pd-vt">'+(V[0].ok?'Reparten '+rbEsc(p.b||'ahí')+' el '+rbEsc((p.dia||'').toLowerCase())+'. Podés elegir a cualquiera: te aviso si no es su zona o su día.':'Nadie reparte '+rbEsc(p.b||'ese barrio')+(p.dia?' el '+rbEsc(p.dia.toLowerCase()):'')+'. Podés elegir a cualquiera: te aviso si no es su zona o su día.')+'</div>';
   V.forEach(function(v,i){
     h+='<button type="button" class="pd-v'+(v.ok?' ok':'')+(v.bloq?' bloq':'')+'"'
-      +' onclick="pdPasar(\''+k+'\','+i+')"><b>'+rbEsc(v.v)+(p.cup===v.v?' · su cupón':'')+'</b>'
+      +' onclick="pdPasar(\''+k+'\','+i+')"><b>'+rbEsc(v.v)+(p.cup===v.v?' · su cupón':((!p.cup&&p.hv===v.v)?' · ya le compró':''))+'</b>'
       +(v.ok?'<small>reparte acá ese día'+(v.tg?'':' · sin Telegram: va al grupo')+'</small>':'<small>'+rbEsc(v.mot)+'</small>')+'</button>';
   });
   return h;
@@ -14547,7 +14547,9 @@ function _pdPost(body){
 }
 /* La sugerencia y lo que pasa si nadie decide (5/10/2026, a la noche). */
 function pdSugHtml(p){
-  var porque=p.sug?(p.cup&&p.cup===p.sug?'vino con su cupón':'es su zona'):(p.h==='Home'?'es Estancias':'nadie reparte ese barrio');
+  /* La historia (13/10/2026): sin cupon, el cliente que ya le compro a un
+     vendedor por Red es de ese vendedor. `hv` y `hpq` los manda el backend. */
+  var porque=p.sug?(p.cup&&p.cup===p.sug?'vino con su cupón':(p.hv&&p.hv===p.sug&&p.hpq?p.hpq:'es su zona')):(p.h==='Home'?'es Estancias':'nadie reparte ese barrio');
   var h='<div class="pd-sug">Sugerido: <b>'+(p.sug?rbEsc(p.sug):'nosotros')+'</b> <small>('+rbEsc(porque)+')</small></div>';
   if(p.sale){
     var a=p.zona?('a '+rbEsc((p.sug||p.zona).split(' ')[0])):'nuestro';
@@ -14597,11 +14599,14 @@ function pdPasar(k,i){
   var nom=v.v.split(' ')[0];
   /* Avisa, pero deja (5/10/2026, a la noche): el motivo va en la pregunta y,
      si se confirma, el backend no lo vuelve a frenar (`igual`). */
-  var suyo=(p.cup&&p.cup===v.v);
+  /* Misma regla que el backend (que es el que decide): su cupon, o sin cupon
+     y ya le compro (13/10/2026). */
+  var porHist=(!p.cup&&p.hv&&p.hv===v.v);
+  var suyo=(p.cup&&p.cup===v.v)||porHist;
   var msg='¿Pasarle el pedido de '+p.c+' a '+v.v+'?\n\n'
     +(v.ok?'':'Ojo: '+v.mot+'.\n\n')
     +'• Le llega por Telegram y queda en su portal.\n'
-    +(suyo?'• Vino con su cupón: lo trajo '+nom+', cobra su comisión.\n'
+    +(suyo?(porHist?'• Ya '+(p.hpq||'le compró')+': es cliente de '+nom+', cobra su comisión.\n':'• Vino con su cupón: lo trajo '+nom+', cobra su comisión.\n')
           :'• Lo trajo Maleu: '+nom+' cobra solo el envío, no comisión.\n')
     +'• Este pedido de '+p.h+' se cancela y pasa a Red con las mismas OC y piezas.';
   if(!confirm(msg))return;
@@ -16644,6 +16649,16 @@ function guardarInvertir(){
 }
 
 // ── RENDER ──
+/* «Pasado a Red #113 (Fini)» (13/10/2026). Un pedido de la tienda que se le pasa
+   a un vendedor queda Cancelado en Home o Pilar y vive en Red: mostrarlo como
+   «Cancelado» a secas se leia como una venta perdida. `pas` es la marca que deja
+   el pase. */
+function _pedPasado(p){
+  if(!p||p.es!=='Cancelado'||!p.pas)return '';
+  var m=/^Pasado a Red #(\S+) \((.*)\)$/.exec(String(p.pas));
+  return (m?('Pasado a Red #'+m[1]+' ('+m[2].split(' ')[0]+')'):String(p.pas)).replace(/[<>&"]/g,'');
+}
+var _PED_PAS_ST='background:#F3E5F5;color:#6A1B9A';
 function rPedidosHome(){ rPedidos({homeOnly:true,listId:'pListHome',frId:'fRowHome'}); }
 
 /* -- PINTAR SOLO LO QUE SE ESTA MIRANDO -----------------------------------
@@ -19714,7 +19729,10 @@ function rPedidos(opts){
       : '<span class="pc-fe-static">'+(entregaISO?(function(iso){var pp=iso.split('-');return DNA[new Date(+pp[0],+pp[1]-1,+pp[2]).getDay()]+' '+Number(pp[2])+' '+MSA[+pp[1]-1];})(entregaISO):'-')+'</span>';
 
     // ─── SUMMARY (siempre visible) ───
-    var sumStateBadge='<span class="tg" style="'+(ecStyle[p.es]||'')+'">'+p.es+'</span>';
+    var _pas=_pedPasado(p);
+    var sumStateBadge=_pas?'<span class="tg" style="'+_PED_PAS_ST+'">'+_pas+'</span>':'<span class="tg" style="'+(ecStyle[p.es]||'')+'">'+p.es+'</span>';
+    /* El numero con que se le confirmo al cliente en la tienda (13/10/2026). */
+    if(p.h==='Red'&&p.era)sumStateBadge+='<span class="tg" style="background:var(--cd);color:var(--bl)">Tienda: '+String(p.era).replace(/[<>&"]/g,'')+'</span>';
     var sumPayBadge=(p.ep==='Cobrado')?'<span class="tg" style="background:var(--gb);color:var(--gd)">Cobrado</span>':'';
     var sumCanal='<span class="tg" style="background:var(--cd);color:var(--bl)">'+p.h+'</span>';
     // Badge "Listo p/entregar" si: el pedido tiene OCs vinculadas y todas
@@ -32411,7 +32429,9 @@ if('serviceWorker' in navigator){
     html+='<div class="ord-tags">';
     html+=  '<span class="ord-tag" style="background:var(--cd);color:var(--bl)">'+p.h+'</span>';
     html+=  '<span class="ord-tag" style="'+(oStyle[p.o]||'background:var(--cd);color:var(--bl)')+'">'+(p.o||'—')+'</span>';
-    html+=  '<span class="ord-tag" style="'+(ecStyle[p.es]||'background:var(--cd);color:var(--bl)')+'">'+(p.es||'—')+'</span>';
+    var _pasF=_pedPasado(p);
+    html+=  _pasF?'<span class="ord-tag" style="'+_PED_PAS_ST+'">'+_pasF+'</span>':'<span class="ord-tag" style="'+(ecStyle[p.es]||'background:var(--cd);color:var(--bl)')+'">'+(p.es||'—')+'</span>';
+    if(p.h==='Red'&&p.era)html+='<span class="ord-tag" style="background:var(--cd);color:var(--bl)" title="El número con que se le confirmó al cliente">Tienda: '+String(p.era).replace(/[<>&"]/g,'')+'</span>';
     if(p.ep==='Cobrado')html+='<span class="ord-tag" style="background:var(--gb);color:var(--gd)">Cobrado</span>';
     else html+='<span class="ord-tag" style="background:var(--ol);color:#E65100">No cobrado</span>';
     if(p.fp)html+='<span class="ord-tag" style="background:var(--cd);color:var(--bl)">'+p.fp+'</span>';
