@@ -157,6 +157,8 @@ const TABLA = (id) => `(function(){var num=${NUM};var t=document.getElementById(
     let L = await ev(cli, TABLA('eerrLibre'));
     chk('renglon Proveedores: lo que se debe ($400.000)', cerca(fila(L, /^− Proveedores/).monto, -ESP.deuda), fila(L, /^− Proveedores/));
     chk('renglon Sueldos: 2.400.000 × 8/31, y dice cuando se pagan', cerca(fila(L, /^− Sueldos/).monto, -Math.round(ESP.sueldos)) && /se pagan del 1 al 5 de noviembre/.test(fila(L, /^− Sueldos/).txt), fila(L, /^− Sueldos/));
+    /* 13/10/2026: el subtitulo dice que son dias trabajados y cuanto es el mes entero. */
+    chk('renglon Sueldos: el subtitulo dice los dias y el mes entero', /8 de 31 días de octubre · el mes entero son \$2\.400\.000, se pagan del 1 al 5 de noviembre/.test(fila(L, /^− Sueldos/).txt.replace(/\s+/g, ' ')), fila(L, /^− Sueldos/));
     chk('renglon Planes sin pagar: lo de septiembre', cerca(fila(L, /^− Planes del mes/).monto, -ESP.planes), fila(L, /^− Planes del mes/));
     chk('= Libre hoy', cerca(fila(L, /^= Libre hoy/).monto, Math.round(ESP.libre)), fila(L, /^= Libre hoy/));
     const pc = await ev(cli, `Math.round(_porCobrar().total)`);
