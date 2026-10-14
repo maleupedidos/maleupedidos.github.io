@@ -38374,14 +38374,15 @@ if('serviceWorker' in navigator){
      `erp_screen_snapshot` y la funcion que dice si el payload sirve. Las mismas
      reglas para todas —palanca, latido, dia, edicion local—, asi una pantalla no
      puede quedar mas laxa que otra. Devuelve {usado, palanca, porque, d, t}. */
-  function _crmFotoBase(screen, valida){
+  /* `palanca`: que llave de `sb.pal` la habilita (por defecto crmPg, la tab CRM; la ficha usa fichaPg). */
+  function _crmFotoBase(screen, valida, palanca){
     var no = function(porque){ return {usado: false, palanca: true, porque: porque}; };
     if (typeof _sbPermiso !== 'function' || typeof _fotoFechaUtc !== 'function') return Promise.resolve(null);
     /* Si el permiso se esta pidiendo recien (3,5 s), no se lo espera: la tab
        va por la planilla, como siempre. */
     if (typeof _sbPidiendo !== 'undefined' && _sbPidiendo) return Promise.resolve(null);
     return _sbPermiso(true).then(function(sb){
-      if (!sb || !sb.pal || !sb.pal.crmPg) return {usado: false, palanca: false};
+      if (!sb || !sb.pal || !sb.pal[palanca || 'crmPg']) return {usado: false, palanca: false};
       var H = {apikey: sb.key, Authorization: 'Bearer ' + sb.token};
       var ctl = (typeof AbortController === 'function') ? new AbortController() : null;
       var reloj = setTimeout(function(){ try { if (ctl) ctl.abort(); } catch(e){} }, CRM_PG_ESPERA_MS);
@@ -43474,6 +43475,16 @@ if('serviceWorker' in navigator){
       // lista: NO pedimos el detalle pesado al server (evita 7-10s + flicker + carga).
       // Solo se busca en el server si no hay pedidos en memoria (fallback).
       if (_crmHistLocalHtml(li) != null) return;
+      /* Sin pedidos en memoria: de la foto de la base (ver `_fichaPedidosBase`).
+         Si no sirve, o no alcanza para este cliente, Apps Script como siempre. */
+      _fichaPedidosBase().then(function(ok){
+        if (_fichaPidiendo !== key) return;
+        if (!ok || _crmHistLocalHtml(li) == null) return _fichaPedirServidor(key, li);
+        if (!_crmDrawerOpen() || !el('crmDrawerBody').querySelector('.crm-ficha-name')) return;
+        renderFichaSkeleton(li);
+        try { window.__fichaDe = 'base'; } catch(e){}
+      });
+      return;
     } else {
       /* Sin `li` estamos en el camino lento (17-30 s). Antes eso era una
          pantalla en blanco con "Cargando ficha...". Si ya abrimos esta ficha
@@ -43489,6 +43500,12 @@ if('serviceWorker' in navigator){
         el('crmDrawerBody').innerHTML = '<div class="loading crm-ficha-cargando">Cargando ficha…<br><span style="font-size:12px;font-weight:600;opacity:.7">la primera vez tarda unos segundos</span></div>';
       }
     }
+    _fichaPedirServidor(key, li);
+  };
+  /* La ficha entera de Apps Script (`crmCliente`): el camino de siempre cuando
+     no hay `li` o cuando la base no alcanzo. */
+  function _fichaPedirServidor(key, li){
+    try { window.__fichaDe = 'servidor'; } catch(e){}
     fetch(CRM_API + '?action=crmCliente&key=' + encodeURIComponent(key))
       .then(function(r){ return r.json(); })
       .then(function(d){
@@ -43532,7 +43549,7 @@ if('serviceWorker' in navigator){
         if (!li && !_fichaLeer(key)) el('crmDrawerBody').innerHTML = '<div class="empty"><p>Error: '+escHtml(err.message)+'</p></div>';
         else _fichaSello(null);
       });
-  };
+  }
 
   /* Los pedidos de UN cliente, sacados del volcado por su referencia exacta
      (14/9/2026). Se buscaban por NOMBRE: en Red y Clubes el volcado trae
@@ -43545,10 +43562,32 @@ if('serviceWorker' in navigator){
      cuenta. Si el volcado no tiene todos esos pedidos (es de otro momento que la
      lista), devuelve null y la ficha le pide el historial al servidor: nunca se
      muestra un historial que no cierre con el numero de arriba. */
+  /* LA FICHA DESDE LA BASE (14/10/2026, palanca FICHA_DESDE_PG -> `sb.pal.fichaPg`).
+     La ficha se arma aca con la lista (`li`) y los pedidos en memoria. Cuando
+     los pedidos NO estan (se abrio CRM sin haber cargado Pedidos), antes se le
+     pedia la ficha entera a Apps Script (`crmCliente`, 17-30 s). Ahora se traen
+     de la foto `pedidos` de la base, con las mismas reglas que la tab CRM
+     (`_crmFotoBase`: latido, sello de escritura, cambio local), y se arma igual.
+     Se guardan APARTE de `D`: la ficha no le cambia nada a la tab Pedidos.
+     Apps Script queda de respaldo si la base no sirve. */
+  var _fichaPedBase = null;
+  function _fichaPedidosBase(){
+    return _crmFotoBase('pedidos', function(d){ return !!(d && Array.isArray(d.pedidos) && d.pedidos.length && !d.tail); }, 'fichaPg')
+      .then(function(r){
+        _crmFotoNotaPantalla('ficha', r);
+        if (r && r.usado){ _fichaPedBase = {lista: r.d.pedidos, t: r.t}; return true; }
+        return false;
+      }).catch(function(){ return false; });
+  }
   function _crmPedidosDe(li){
-    if (typeof D === 'undefined' || !D || !Array.isArray(D.pedidos) || !li || !Array.isArray(li.refs)) return null;
+    var mine = _crmPedidosDeLista(li, (typeof D !== 'undefined' && D && Array.isArray(D.pedidos)) ? D.pedidos : null);
+    if (!mine && _fichaPedBase) mine = _crmPedidosDeLista(li, _fichaPedBase.lista);
+    return mine;
+  }
+  function _crmPedidosDeLista(li, lista){
+    if (!Array.isArray(lista) || !li || !Array.isArray(li.refs)) return null;
     var porFila = {}, porN = {};
-    D.pedidos.forEach(function(p){
+    lista.forEach(function(p){
       if (!p || p.hist) return;
       var k = p.h + '|' + p.n;
       porFila[k + '|' + p.r] = p;
