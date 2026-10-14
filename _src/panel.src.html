@@ -4604,6 +4604,7 @@ details.rb-plg[open]{padding-bottom:10px}
   <!-- Los filtros y los pedidos arriba (8/10/2026). Las cajas ocupan una linea
        cada una cuando no hay nada esperando: las pinta rbPintar / fpPintar. -->
   <div class="fr" id="fRow"></div>
+  <div id="apBox"></div>
   <div id="rbBox"></div>
   <div id="fpBox"></div>
   <div id="pList"></div>
@@ -19615,6 +19616,7 @@ function rPedidos(opts){
      la pinta `fpPintar` en #fpBox, agrupada por proveedor. */
   var _orphanBanner='';
   if(!homeOnly){ window._fpLista=(_dentroGraciaOC?[]:_orphans); try{fpPintar();}catch(_eFp){} }
+  if(!homeOnly){ try{apPedir();}catch(_eAp){} }
   // Filter out empty rows (no client or $0)
   var fl=D.pedidos.filter(function(p){
     if(p.hist)return false;
@@ -19968,6 +19970,81 @@ function _pcCuerpo(card){
    que falta pedirle a cada proveedor. Una linea, que se despliega por proveedor
    (el mapa producto -> proveedor viene en `redBandeja.provs`; sin el, lista
    los pedidos sin agrupar y no inventa una cuenta de proveedores). */
+/* ═══ LOS PEDIDOS QUE ESTAN ENTRANDO (13/10/2026) — ALTA_PG ═══
+   Con `ALTA_PG = rapido` el pedido de la tienda se guarda en la base, se le
+   contesta al cliente con su numero, y la fila de la planilla se escribe unos
+   segundos despues (un minuto si nadie tiene el ERP abierto). En ese rato el
+   pedido EXISTE y todavia no esta en la lista de abajo: se muestra aca.
+     · Sale de `fast_order` (migracion 046), leida directo de la base: no gasta
+       un cupo de Apps Script. Solo el resumen (numero, nombre, total, que lleva).
+     · NO TIENE BOTONES, a proposito: sin fila no hay nada que armar, cobrar ni
+       entregar. Cuando la fila aparece, el pedido pasa a la lista con todo.
+     · Esta pantalla empuja al aplicador por atras (`altaPgAplicar`, uno a la
+       vez), igual que el diferido de stock.
+     · «apartado» = fallo cinco veces: hay que cargarlo a mano (el detalle
+       entero esta en Alertas Tecnicas). Se muestra en rojo y no se va solo.
+   Nada de esto corre si el backend no dice `altaPg` en las palancas. */
+var AP={items:[],reloj:null,pidiendo:false,drenando:false,ult:0,ultDren:0};
+function apSabe(){ try{ return _palancaYa('altaPg'); }catch(e){ return false; } }
+function apPedir(forzar){
+  if(!apSabe()||AP.pidiendo)return;
+  if(!forzar&&Date.now()-AP.ult<8000)return;
+  AP.pidiendo=true; AP.ult=Date.now();
+  _sbPermiso(true).then(function(sb){
+    if(!sb||!sb.url||!sb.key||!sb.token)return null;
+    return fetch(sb.url+'/rest/v1/fast_order?select=seq,channel,order_number,customer_name,total_amount,items_summary,pieces_taken,status,received_at&status=neq.aplicado&order=seq.asc',
+      {headers:{apikey:sb.key,Authorization:'Bearer '+sb.token}}).then(function(r){ return r.ok?r.json():null; });
+  }).catch(function(){ return null; }).then(function(filas){
+    AP.pidiendo=false;
+    if(!filas){ apReloj(); return; }
+    var antes=AP.items.length;
+    AP.items=filas;
+    apPintar();
+    /* Uno que estaba entrando ya no esta: su fila aparecio. Se buscan los pedidos. */
+    if(antes>filas.length){ try{ if(cur==='pedidos'&&typeof actualizarPedidos==='function')actualizarPedidos(); }catch(e){} }
+    if(apHayEntrando()&&!AP.drenando&&Date.now()-AP.ultDren>20000)apDrenar();
+    apReloj();
+  });
+}
+function apHayEntrando(){ return AP.items.some(function(x){ return x.status==='pendiente'; }); }
+function apReloj(){
+  clearTimeout(AP.reloj);
+  if(apHayEntrando())AP.reloj=setTimeout(function(){ apPedir(true); },6000);
+}
+function apDrenar(){
+  if(AP.drenando||!apSabe())return;
+  AP.drenando=true; AP.ultDren=Date.now();
+  fetch(API,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({action:'altaPgAplicar'})})
+    .then(function(r){return r.json();}).catch(function(){return null;})
+    .then(function(){ AP.drenando=false; apPedir(true); });
+}
+function apPintar(){
+  var b=$('apBox'); if(!b)return;
+  if(!AP.items.length){ b.innerHTML=''; return; }
+  var esc=function(x){return String(x==null?'':x).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');};
+  var plata=function(n){ return '$'+Math.round(Number(n)||0).toLocaleString('es-AR'); };
+  var hace=function(t){ var m=Math.max(0,Math.round((Date.now()-Date.parse(t))/60000)); return m<1?'recién':('hace '+m+' min'); };
+  var h='<div style="border:1.5px solid var(--bd);border-radius:10px;background:#FFF8F0;padding:10px 12px;margin:0 0 10px">'
+    +'<div style="font-size:12px;font-weight:700;color:var(--b);letter-spacing:.04em;text-transform:uppercase;margin-bottom:6px">Entrando · '+AP.items.length+'</div>';
+  AP.items.forEach(function(x){
+    var ap=x.status==='apartado';
+    var tarde=!ap&&(Date.now()-Date.parse(x.received_at)>5*60000);
+    var falt=(x.pieces_taken||[]).length;
+    h+='<div style="display:flex;gap:10px;align-items:flex-start;padding:7px 0;border-top:1px solid var(--bd)">'
+      +'<div style="flex:1;min-width:0">'
+      +'<div style="font-weight:700;font-size:14px;color:var(--b)">'+esc(x.channel)+' #'+esc(x.order_number)+' · '+esc(x.customer_name)+'</div>'
+      +'<div style="font-size:12.5px;color:#5b4a3f;overflow-wrap:anywhere">'+esc(x.items_summary)+'</div>'
+      +(falt?'<div style="font-size:12px;color:#B3261E;font-weight:600">'+falt+(falt===1?' pieza de carne ya era':' piezas de carne ya eran')+' de otro pedido</div>':'')
+      +'<div style="font-size:12px;font-weight:600;color:'+(ap||tarde?'#B3261E':'#8a6d3b')+'">'
+      +(ap?'NO entró a la planilla: hay que cargarlo a mano (el detalle está en Alertas Técnicas)'
+          :(tarde?'Guardado '+hace(x.received_at)+' y todavía sin entrar a la lista. Se sigue intentando solo.'
+                 :'Guardado '+hace(x.received_at)+'. Entra a la lista en un momento: todavía no se puede armar ni cobrar.'))
+      +'</div></div>'
+      +'<div style="font-weight:700;font-size:14px;color:var(--b);white-space:nowrap">'+plata(x.total_amount)+'</div>'
+      +'</div>';
+  });
+  b.innerHTML=h+'</div>';
+}
 function fpPintar(){
   var b=$('fpBox'); if(!b)return;
   var L=window._fpLista||[];
