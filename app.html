@@ -13966,7 +13966,7 @@ function _leerVersion(app){
    "El HTML no sabe que version es" dejo de ser cierto: el build le escribe
    adentro el CACHE_NAME de sw-panel.js, el mismo que deploy.sh obliga a subir en
    cada cambio. Si lo publicado dice otra cosa, esta pagina es vieja. Punto. */
-var _APP_CN_PAGINA='maleu-panel-v608';
+var _APP_CN_PAGINA='maleu-panel-v609';
 
 /* Devuelve [{k,v}] si lo publicado no es lo que esta pagina corre. */
 function _chequearVersiones(){
@@ -20144,6 +20144,19 @@ function _pedPasado(p){
   return (m?('Pasado a Red #'+m[1]+' ('+m[2].split(' ')[0]+')'):String(p.pas)).replace(/[<>&"]/g,'');
 }
 var _PED_PAS_ST='background:#F3E5F5;color:#6A1B9A';
+/* LO QUE PAGA EL CLIENTE (14/10/2026). En Home, Pilar y Clubes es `$`. En Red
+   `$` es el A Pagar: lo que le queda a Maleu (subtotal - comision, sin envio), y
+   asi tiene que seguir porque con eso entra la venta de Red al economico. Pero
+   desde el 5/10 el cliente de Red le paga TODO a Maleu: subtotal + envio. La
+   tarjeta mostraba `$` y daba $18.900 en un pedido de $26.300 (Red #115), y
+   $126.000 en otro de $129.000 (#114, sin comision cargada). */
+function _pedTotalCliente(p){
+  if(!p)return 0;
+  if(p.h!=='Red')return Number(p.$)||0;
+  var sub=Number(p.subt);
+  if(!(sub>0))sub=(Number(p.$)||0)+(Number(p.com)||0);
+  return Math.max(0,sub-(Number(p.desc)||0))+(Number(p.env)||0);
+}
 function rPedidosHome(){ rPedidos({homeOnly:true,listId:'pListHome',frId:'fRowHome'}); }
 
 /* -- PINTAR SOLO LO QUE SE ESTA MIRANDO -----------------------------------
@@ -23046,7 +23059,7 @@ function rPedidos(opts){
   function _ocOrphanBannerHtml(list){
     var items=list.map(function(p){
       var lbl=_escH(p.h+' N'+p.n+' · '+(p.c||'—'));
-      return '<button type="button" onclick="openOrdDetail(\''+p.h+'\',\''+String(p.n).replace(/\\/g,"\\\\").replace(/'/g,"\\'")+'\')" style="display:block;width:100%;text-align:left;margin:5px 0 0;padding:8px 10px;background:#fff;border:1px solid var(--r);border-radius:8px;font-family:inherit;font-size:12.5px;font-weight:700;color:var(--r);cursor:pointer">'+lbl+' →</button>';
+      return '<button type="button" onclick="openOrdDetail(\''+p.h+'\',\''+String(p.n).replace(/\\/g,"\\\\").replace(/'/g,"\\'")+'\','+(p.r||0)+')" style="display:block;width:100%;text-align:left;margin:5px 0 0;padding:8px 10px;background:#fff;border:1px solid var(--r);border-radius:8px;font-family:inherit;font-size:12.5px;font-weight:700;color:var(--r);cursor:pointer">'+lbl+' →</button>';
     }).join('');
     return '<div style="margin:0 0 12px;padding:12px 14px;background:var(--rb);border:1.5px solid var(--r);border-radius:12px">'+
       '<div style="font-size:13.5px;font-weight:800;color:var(--r)">&#9888;&#65039; '+list.length+' pedido'+(list.length===1?'':'s')+' marcado'+(list.length===1?'':'s')+' &ldquo;Orden de Compra&rdquo; sin OC generada</div>'+
@@ -23253,11 +23266,11 @@ function rPedidos(opts){
     }
     html+='<div class="pc-summary" onclick="togglePc(event,this)">';
     html+=  '<div class="pc-summary-l">';
-    html+=    '<div class="pc-c"><span class="ord-link" onclick="event.stopPropagation();openOrdDetail(\''+p.h+'\',\''+p.n+'\')" title="Ver detalle del pedido">'+_rtEsc(p.c)+'</span></div>';
+    html+=    '<div class="pc-c"><span class="ord-link" onclick="event.stopPropagation();openOrdDetail(\''+p.h+'\',\''+p.n+'\','+(p.r||0)+')" title="Ver detalle del pedido">'+_rtEsc(p.c)+'</span></div>';
     html+=    '<div class="pc-summary-meta">'+sumCanal+sumStateBadge+sumOrigenPendBadge+sumPayBadge+sumReadyBadge+'<span>Entrega '+feShort+'</span></div>';
     html+=  '</div>';
     html+=  '<div class="pc-summary-r">';
-    html+=    '<span class="pc-$">$'+f$(p.$)+'</span>';
+    html+=    '<span class="pc-$">$'+f$(_pedTotalCliente(p))+'</span>';
     html+=    '<span class="pc-toggle">&#9660;</span>';
     html+=  '</div>';
     html+='</div>';
@@ -23560,7 +23573,7 @@ function fpPintar(){
     if(pv)h+='<div class="fp-prov">'+esc(pv)+' <small>'+grupos[pv].length+' pedido'+(grupos[pv].length===1?'':'s')+'</small></div>';
     grupos[pv].forEach(function(g){
       var p=g.p;
-      h+='<button type="button" class="fp-ped" onclick="openOrdDetail('+"'"+esc(p.h)+"','"+esc(String(p.n).replace(/[^A-Za-z0-9_-]/g,''))+"'"+')">'
+      h+='<button type="button" class="fp-ped" onclick="openOrdDetail('+"'"+esc(p.h)+"','"+esc(String(p.n).replace(/[^A-Za-z0-9_-]/g,''))+"',"+(Number(p.r)||0)+')">'
         +'<b>'+esc(p.h+' #'+p.n+' · '+(p.c||'—'))+'</b><small>'+esc(g.items.map(function(r){return cant(r)+' '+nomP(r.a);}).join(' · '))+'</small></button>';
     });
   });
@@ -35808,12 +35821,33 @@ if('serviceWorker' in navigator){
     return (DEFAULT_PROV_BY_ABBR&&DEFAULT_PROV_BY_ABBR[abbr])||'';
   }
 
-  function _findPed(hoja,n){
+  /* EL N° NO ES LA CLAVE (14/10/2026). Un cancelado lleva «-» en la columna N° y
+     en Pilar hay varios: buscar por (hoja, N°) devolvia el PRIMERO, y la tarjeta
+     «Pasado a Red #115» abria la ficha de un cancelado de junio. Dentro de una
+     misma copia de los pedidos (D), hoja + fila es unica: se busca por ahi.
+     Sin fila, solo si el N° es de UN pedido; si hay varios, no se adivina.
+     Lo que se toca desde la ficha abierta resuelve contra ESA (_ordAbierto). */
+  var _ordAbierto=null;
+  function _findPed(hoja,n,r){
     if(typeof D==='undefined'||!D||!D.pedidos)return null;
-    for(var i=0;i<D.pedidos.length;i++){
-      var p=D.pedidos[i];
-      if(p&&p.h===hoja&&String(p.n)===String(n))return p;
+    r=Number(r)||0;
+    var i,p;
+    if(r>0){
+      for(i=0;i<D.pedidos.length;i++){
+        p=D.pedidos[i];
+        if(p&&p.h===hoja&&Number(p.r)===r&&(n==null||n===''||String(p.n)===String(n)||String(n)==='-'))return p;
+      }
     }
+    if(_ordAbierto&&_ordAbierto.h===hoja&&String(_ordAbierto.n)===String(n)&&(!r||Number(_ordAbierto.r)===r)){
+      for(i=0;i<D.pedidos.length;i++)if(D.pedidos[i]===_ordAbierto)return _ordAbierto;
+    }
+    var hay=[];
+    for(i=0;i<D.pedidos.length;i++){
+      p=D.pedidos[i];
+      if(p&&p.h===hoja&&String(p.n)===String(n))hay.push(p);
+    }
+    if(hay.length===1)return hay[0];
+    if(hay.length>1)_findPed.ambiguo=hay.length;
     return null;
   }
 
@@ -36144,7 +36178,15 @@ if('serviceWorker' in navigator){
     else       html+='<div class="ord-money-row" style="color:var(--bl);opacity:.65"><span>Descuento</span><b>Sin descuento</b></div>';
     if(env>0)  html+='<div class="ord-money-row"><span>Envío</span><b>'+_ars(env)+'</b></div>';
     else if(p.h==='Pilar') html+='<div class="ord-money-row" style="color:var(--bl);opacity:.65"><span>Envío</span><b>Sin envío</b></div>';
-    html+='<div class="ord-money-row total"><span>Total a cobrar</span><b>'+_ars(sub)+'</b></div>';
+    html+='<div class="ord-money-row total"><span>Total a cobrar</span><b>'+_ars(_pedTotalCliente(p))+'</b></div>';
+    /* Red: el cliente paga todo a Maleu, y de eso una parte es del vendedor
+       (comision + envio, se le paga por quincena) y el resto de Maleu (`$`). */
+    if(p.h==='Red'){
+      var _comR=Number(p.com)||0, _vendR=String(p.br||p.retira||'el vendedor').split(' ')[0];
+      html+='<div class="ord-money-row" style="color:var(--bl)"><span>Para '+_vendR.replace(/[<>&"]/g,'')+' (comisión'+(env>0?' + envío':'')+')</span><b>'+_ars(_comR+env)+'</b></div>';
+      if(_comR>0&&env>0) html+='<div class="ord-money-row" style="color:var(--bl);opacity:.75;font-size:12px"><span>&nbsp;&nbsp;comisión '+_ars(_comR)+' · envío '+_ars(env)+'</span><b></b></div>';
+      html+='<div class="ord-money-row" style="color:var(--bl)"><span>Para Maleu</span><b>'+_ars(sub)+'</b></div>';
+    }
     html+='<div class="ord-money-row" style="margin-top:6px;padding-top:6px;border-top:1px dashed var(--cd);color:var(--bl)"><span>Forma de pago</span><b style="color:var(--ink)">'+fpLabel+(p.ep==='Cobrado'?' · Cobrado':'')+'</b></div>';
     if(costo>0){
       html+='<div class="ord-money-row" style="color:#8B3A0E"><span>Costo (CMV)</span><b>'+_ars(costo)+'</b></div>';
@@ -36212,8 +36254,13 @@ if('serviceWorker' in navigator){
     return html;
   }
 
-  window.openOrdDetail=function(hoja,n){
-    var p=_findPed(hoja,n);
+  window.openOrdDetail=function(hoja,n,r){
+    _findPed.ambiguo=0;
+    var p=_findPed(hoja,n,r);
+    if(!p&&_findPed.ambiguo){
+      if(typeof toast==='function')toast('Hay '+_findPed.ambiguo+' pedidos #'+n+' en '+hoja+': abrilo desde su tarjeta en Pedidos');
+      return;
+    }
     if(!p){
       /* No saber no es lo mismo que no existe: la ficha sale del volcado, y
          desde Ruta o Abastecimiento puede no haber llegado todavia. */
@@ -36230,7 +36277,7 @@ if('serviceWorker' in navigator){
         var tabAl=cur, t0=Date.now();
         (function _esperarD(){
           if(cur!==tabAl)return;
-          if(typeof D!=='undefined'&&D&&D.pedidos){window.openOrdDetail(hoja,n);return;}
+          if(typeof D!=='undefined'&&D&&D.pedidos){window.openOrdDetail(hoja,n,r);return;}
           if(Date.now()-t0<60000)setTimeout(_esperarD,800);
           else if(typeof toast==='function')toast('No pude traer los pedidos — probá de nuevo con ↻');
         })();
@@ -36239,6 +36286,7 @@ if('serviceWorker' in navigator){
       if(typeof toast==='function')toast('No tengo el pedido #'+n+' en la copia de pedidos — actualizá con ↻');
       return;
     }
+    _ordAbierto=p;
     var head=document.getElementById('ordHeadId');
     if(head)head.textContent=p.n+'  ·  '+p.h;
     var body=document.getElementById('ordBody');
@@ -36274,7 +36322,8 @@ if('serviceWorker' in navigator){
                 (telActual?telActual+'  \u2192  '+limpio:limpio)+
                 '\n\nSe escribe en todos sus pedidos y se le engancha el historial del CRM.'))return;
     showLoader('Guardando el tel\u00e9fono...');
-    fetch(API,{method:'POST',body:JSON.stringify({action:'crmTelDesdePedido',hoja:hoja,n:String(n),telNuevo:limpio,ts:Date.now()})})
+    var _rowTel=(_ordAbierto&&_ordAbierto.h===hoja&&String(_ordAbierto.n)===String(n))?(Number(_ordAbierto.r)||0):0;
+    fetch(API,{method:'POST',body:JSON.stringify({action:'crmTelDesdePedido',hoja:hoja,n:String(n),row:_rowTel,telNuevo:limpio,ts:Date.now()})})
       .then(function(r){return r.json();})
       .then(function(d){
         hideLoader(true);
@@ -36287,7 +36336,7 @@ if('serviceWorker' in navigator){
           });
         }
         try{CRM_DATA=null;}catch(e){}
-        openOrdDetail(hoja,String(n));
+        openOrdDetail(hoja,String(n),_rowTel);
         _recargarPedidos();
       })
       .catch(function(){hideLoader(true);toast('Sin conexi\u00f3n \u2014 no se guard\u00f3');});
@@ -36520,7 +36569,7 @@ if('serviceWorker' in navigator){
     if(faltan) h+='<div class="pes-dif">Falta pesar '+faltan+' '+(faltan===1?'corte':'cortes')+'.</div>';
     h+='<div class="pes-msg" id="pesMsg"></div>';
     h+='<div class="pes-acc"><button class="pes-btn" onclick="openOrdDetail(\''
-      +_pesEsc(ed.hoja)+'\',\''+_pesEsc(ed.n)+'\')">← Volver al pedido</button></div>';
+      +_pesEsc(ed.hoja)+'\',\''+_pesEsc(ed.n)+'\','+(Number(ed.row)||0)+')">← Volver al pedido</button></div>';
     h+='</div>';
     body.innerHTML=h;
   }
@@ -36758,7 +36807,7 @@ if('serviceWorker' in navigator){
           patch.pes=JSON.stringify(det);
           if(typeof _patchPedidoLocal==='function') _patchPedidoLocal(ed.hoja,ed.n,patch);
           toast('Pesaje guardado — el pedido cobra lo que dio la balanza');
-          if(typeof openOrdDetail==='function') openOrdDetail(ed.hoja,ed.n);
+          if(typeof openOrdDetail==='function') openOrdDetail(ed.hoja,ed.n,ed.row);
           _recargarPedidos();
         }else{
           toast('No se guardó: '+((d&&d.err)||'?'));
