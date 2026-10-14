@@ -167,6 +167,9 @@ const STUB = (datos) => `
           cuerpo.tpls=(__fase==='sinwati')?null:(__fase==='on'||__fase==='lento'||__fase==='res'||__fase==='prog'?${JSON.stringify(tpls('APPROVED'))}:${JSON.stringify(tpls('PENDING'))});
           if(__fase==='off'||__fase==='pend'||__fase==='sinwati'){ cuerpo.casas.forEach(function(c){ if(c.listo===2) c.listo=(__fase==='sinwati'?0:1); }); cuerpo.jugadas.forEach(function(j){ j.listas=0; }); }
           if(__fase==='res'){ cuerpo.resultados=${JSON.stringify(RES)}; cuerpo.respHoras=48;
+            /* Envios de hoy (14/10/2026): uno que llego entero y uno con 3 que fallaron. */
+            cuerpo.envios=[{lote:'1',camp:'jug_segunda_a',hora:'11:58',n:7,llegaron:7,leidos:2,fallaron:0,sinDato:0,sinMirar:0},
+                           {lote:'2',camp:'jug_volve_a',hora:'12:44',n:5,llegaron:2,leidos:0,fallaron:3,sinDato:0,sinMirar:0}];
             cuerpo.respuestas=${JSON.stringify(RESPUESTAS)}.map(function(x){ x.cuando=Date.now()-x.horas*3600000; return x; }); }
         }
         if(__fase==='lento') demora=6000;
@@ -395,6 +398,11 @@ async function prendido(cli) {
   await pausa(400);
   const res = await ev(cli, `JSON.stringify([].map.call(document.querySelectorAll('#jugCuerpo .jg-tabla tr[data-res="repo"] td'),function(t){return t.textContent.replace(/\\s+/g,' ').trim();}))`);
   console.log('     resultados: ' + res);
+  const envs = await ev(cli, `JSON.stringify([].map.call(document.querySelectorAll('#jugCuerpo .jg-env-f'),function(f){return {t:f.textContent.replace(/\\s+/g,' ').trim(), rojo:[].map.call(f.querySelectorAll('.jg-env-mal'),function(x){return x.textContent+'|'+getComputedStyle(x).color;})};}))`);
+  console.log('     envíos de hoy: ' + envs);
+  const E = JSON.parse(envs);
+  chk('«Envíos de hoy»: 7 enviados · 7 llegaron · 2 leídos', E.length === 2 && E[0].t === '11:58 · jug_segunda_a7 enviados · 7 llegaron · 2 leídos' && !E[0].rojo.length, E[0]);
+  chk('…y en rojo los que no llegaron', /5 enviados · 2 llegaron · 3 no llegaron$/.test(E[1].t) && E[1].rojo.length === 1 && /^3 no llegaron\|rgb\(179, 38, 30\)$/.test(E[1].rojo[0]), E[1]);
   chk('compara contra el control, A contra B y los pedidos por el botón', res ===
     '["Reposición 12 todavía en los 14 días","40","12 40% de 30 mirados","26 65%","$1.560.000","2 de 5 40%","15 de 21 71% · 8 resp.","11 de 19 58% · 4 resp.","9 A 6 · B 3"]', res);
   const ct = await ev(cli, T('#jugCuerpo .jg-contesta'));
