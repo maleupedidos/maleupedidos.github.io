@@ -13999,7 +13999,7 @@ function _leerVersion(app){
    "El HTML no sabe que version es" dejo de ser cierto: el build le escribe
    adentro el CACHE_NAME de sw-panel.js, el mismo que deploy.sh obliga a subir en
    cada cambio. Si lo publicado dice otra cosa, esta pagina es vieja. Punto. */
-var _APP_CN_PAGINA='maleu-panel-v629';
+var _APP_CN_PAGINA='maleu-panel-v630';
 
 /* Devuelve [{k,v}] si lo publicado no es lo que esta pagina corre. */
 function _chequearVersiones(){
@@ -18118,8 +18118,9 @@ function pdNosotros(k,ri){
     c.decididos=[{h:p.h,n:p.n,row:p.row,c:p.c,de:p.de,por:'vos',el:o.ok?'recién':'guardando…',t:Date.now(),puede:!!o.ok}].concat(c.decididos||[]);
   });
   toast('✓ '+p.c+': nuestro'+(lleva?', lo lleva '+lleva.split(' ')[0]:''));
-  _pdPost({action:'pedidoDecidir',hoja:p.h,id:p.n,row:p.row,decision:'nosotros',lleva:lleva||''}).then(function(d){
-    if(d&&d.ok){_rbOpFin(op);setTimeout(rbPedir,1500);return;}
+  _pdPost({action:'pedidoDecidir',hoja:p.h,id:p.n,row:p.row,decision:'nosotros',lleva:lleva||'',clientOpId:_pfId()}).then(function(d){
+    /* Con `diferida` (4d-2) la capa optimista se suelta cuando el aplicador ya escribio. */
+    if(d&&d.ok){_pfAplicar(d).then(function(){_rbOpFin(op);setTimeout(rbPedir,1500);});return;}
     _rbOpFallo(op,'No se guardó lo de '+p.c+': '+((d&&d.err)||'no se pudo'),'pde-'+k);
     if(d&&d.yaEstaba)setTimeout(rbPedir,500);
   }).catch(function(){
@@ -18170,8 +18171,8 @@ function pdVolver(h,n,row,btn){
       c.decidir=(c.decidir||[]).concat([{h:h,n:n,row:row,c:cli,_vuelve:true}]);
   });
   toast('Vuelve a Por decidir');
-  _pdPost({action:'pedidoDecidir',hoja:h,id:n,row:row,decision:'volver'}).then(function(d){
-    if(d&&d.ok){_rbOpFin(op);rbPedir();return;}
+  _pdPost({action:'pedidoDecidir',hoja:h,id:n,row:row,decision:'volver',clientOpId:_pfId()}).then(function(d){
+    if(d&&d.ok){_pfAplicar(d).then(function(){_rbOpFin(op);rbPedir();});return;}
     _rbOpFallo(op,'No se pudo deshacer '+h+' #'+n+': '+((d&&d.err)||'no se pudo'));
   }).catch(function(){_rbOpFallo(op,'Sin respuesta: no sé si '+h+' #'+n+' volvió. Lo vuelvo a mirar…');rbPedir();});
 }
@@ -18423,13 +18424,15 @@ function redComExcGuardar(uid,quitar){
   if(!quitar&&!m){toast('Poné el monto');return;}
   if(!quitar&&!mot){toast('Poné el motivo: sin motivo parece un error');return;}
   box._enviando=true;showLoader(quitar?'Volviendo a la escala...':'Guardando la excepción...');
-  fetch(API,{method:'POST',body:JSON.stringify({action:'redComisionExcepcion',n:n,row:row,monto:quitar?'':Number(m),motivo:mot})})
+  fetch(API,{method:'POST',body:JSON.stringify({action:'redComisionExcepcion',n:n,row:row,monto:quitar?'':Number(m),motivo:mot,clientOpId:_pfId()})})
     .then(function(r){return r.json();})
     .then(function(r){
       box._enviando=false;hideLoader(true);
       if(!r.ok){toast('Error: '+(r.err||'?'));return;}
-      toast(quitar?'Volvió a la escala: $'+f$(Math.round(Number(r.ahora)||0)):'Comisión fuera de escala: $'+f$(Math.round(Number(r.ahora)||0)));
-      _recargarPedidos();
+      /* Con `diferida` (4d-2) el monto de la escala lo calcula el aplicador: sin el
+         numero todavia, el aviso no inventa uno (se ve al recargar). */
+      toast(quitar?(r.ahora==null?'Volvió a la escala':'Volvió a la escala: $'+f$(Math.round(Number(r.ahora)||0))):'Comisión fuera de escala: $'+f$(Math.round(Number(r.ahora)||0)));
+      _pfAplicar(r).then(function(){_recargarPedidos();});
     })
     .catch(function(){box._enviando=false;hideLoader(true);toast('No se pudo guardar. Reintentá.');});
 }
@@ -24571,7 +24574,11 @@ function _cobroCambiarFecha(hoja,pedido,fActual,txtDado,dec,fila){
     +'.\nEl monto y el método NO cambian.'))return;
   showLoader('Corrigiendo la fecha...');
   fetch(API,{method:'POST',body:JSON.stringify({action:'cobroFecha',hoja:hoja,id:pedido,row:Number(fila)||0,fecha:txt,
-    ajusteDec:dec||'',clientOpId:'cf-'+hoja+'-'+pedido+'-'+(Number(fila)||0)+'-'+txt+(dec?'-'+dec:'')})})
+    /* La parte del final hace el id UNICO por toque (4d-2, 14/10/2026): la base
+       guarda los ids de las ordenes para siempre, y con uno fijo por pedido y fecha
+       mover el cobro al 11, volverlo y moverlo al 11 otra vez daba «ya aplicada»
+       y no hacia nada. */
+    ajusteDec:dec||'',clientOpId:'cf-'+hoja+'-'+pedido+'-'+(Number(fila)||0)+'-'+txt+(dec?'-'+dec:'')+'-'+Date.now().toString(36)})})
     .then(function(r){return r.json();})
     .then(function(r){
       hideLoader(true);
@@ -24579,8 +24586,9 @@ function _cobroCambiarFecha(hoja,pedido,fActual,txtDado,dec,fila){
         toast('Cobro movido al '+txt);
         /* Se recarga en vez de parchear el movimiento a mano: cambiar el día
            mueve el cobro de una sección del libro a otra y recalcula los totales
-           de los dos días. Pintarlo a ojo sería dibujar algo que no es. */
-        _recargarCaja();
+           de los dos días. Pintarlo a ojo sería dibujar algo que no es.
+           Con `diferida` (4d-2), despues de que el aplicador lo escribio. */
+        _pfAplicar(r).then(function(){_recargarCaja();});
       }else if(r&&r.pideAjuste){
         _ajusteCartel({ajuste:r.ajuste,cuenta:'la caja',texto:'El '+txt+' es anterior al último ajuste de caja ('+r.ajuste+'): con esa fecha el cobro deja de mover el saldo.'},
           function(d){_cobroCambiarFecha(hoja,pedido,fActual,txt,d,fila);});
@@ -59580,14 +59588,20 @@ window.rutCerrarRendidos=function(vend){
       showToast('Tardo demasiado. Toca ↻ para ver si entro — no lo cierres de nuevo.');}
   },45000);
   fetch(RUT_APPS_SCRIPT_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},
-    body:JSON.stringify({action:'cerrarRendidosRed',vendedor:vend})})
+    body:JSON.stringify({action:'cerrarRendidosRed',vendedor:vend,
+      clientOpId:'crr_'+Date.now().toString(36)+'_'+Math.random().toString(36).slice(2,10)})})
     .then(function(r){return r.json()})
     .then(function(d){
       clearTimeout(_safety);
       if(!d||d.ok===false)throw new Error((d&&(d.err||d.error))||'no se pudo');
+      /* Con `diferida` (4d-2, 14/10/2026) los pedidos se cierran despues: el
+         aplicador va antes del refresh, con el loader todavia tapando. */
+      var _ap=d.diferida
+        ?fetch(RUT_APPS_SCRIPT_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({action:'pedidosFuenteAplicar'}),redirect:'follow'}).catch(function(){})
+        :Promise.resolve();
       /* El refresh va ANTES de soltar el loader: la lista de abajo tiene los
          pedidos viejos hasta que vuelve. */
-      return fetchCobrosPendientes(true).then(function(){
+      return _ap.then(function(){return fetchCobrosPendientes(true);}).then(function(){
         _rutCerrando='';_rutVerPeds='';rutHideLoader(true);
         renderCobrosFromServer();
         var extra=d.stockMovido?(' · se descontaron '+d.stockMovido+' del freezer'):'';
@@ -68978,7 +68992,12 @@ function confirmarCompra() {
       abaHideLoader(true);
       abaShowToast('Compra registrada. La lista tarda en actualizarse: tocá ↻');
     }, 12000);
-    fetch(ABA_APPS_SCRIPT_URL + '?action=busqueda&t=' + Date.now())
+    /* Con `diferida` (4d-2, 14/10/2026) la compra se escribe despues: el aplicador
+       va antes de pedir la lista, si no la traeria sin la compra. */
+    (resp.diferida
+      ? fetch(ABA_APPS_SCRIPT_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ action: 'pedidosFuenteAplicar' }) }).catch(function () {})
+      : Promise.resolve())
+      .then(function () { return fetch(ABA_APPS_SCRIPT_URL + '?action=busqueda&t=' + Date.now()); })
       .then(function(r) { return r.json(); })
       .then(function(data) {
         /* Igual que el pago (15/9/2026): la lista que llega tarde tambien se usa. */
@@ -68993,8 +69012,10 @@ function confirmarCompra() {
         if (tarde) return;
         abaHideLoader(true);
         // Si se creó el pedido Red, decir cuál y por cuánto: es una venta.
-        if (resp.pedidoRed) {
-          abaShowToast('Pedido Red #' + resp.pedidoRed + ' creado — ' +
+        if (resp.pedidoRed || resp.pedidoRedPendiente) {
+          /* Con la orden diferida el numero del pedido existe recien cuando el
+             aplicador lo crea: el aviso dice la venta igual, sin inventar el N°. */
+          abaShowToast('Pedido Red ' + (resp.pedidoRed ? '#' + resp.pedidoRed + ' ' : '') + 'creado — ' +
                        abaFormatMoney(resp.facturadoVendedor || 0) + ' para cobrarle a ' + vendedor);
         } else {
           abaShowToast(items.length + (items.length === 1 ? ' producto agregado' : ' productos agregados') + ' a la compra');

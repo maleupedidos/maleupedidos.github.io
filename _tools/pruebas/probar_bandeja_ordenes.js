@@ -9,7 +9,8 @@
    · prendida (`diferida`): Confirmar y Pasar a otro vendedor mandan `clientOpId`,
      empujan al aplicador, y la fila confirmada NO vuelve a aparecer en ningún
      momento (la capa optimista se suelta recién cuando el aplicador terminó);
-   · apagada (sin `diferida`): ningún `pedidosFuenteAplicar`, y la fila tampoco vuelve. */
+   · apagada (sin `diferida`): ningún `pedidosFuenteAplicar`, y la fila tampoco vuelve.
+   Desde la segunda tanda de 4d-2, también Por decidir (`pdNosotros` → pedidoDecidir). */
 'use strict';
 const { abrir, evaluar } = require('./cdp.js');
 const BASE = process.env.BASE || 'http://localhost:8157';
@@ -23,6 +24,8 @@ const STUB = modo => `(function(){
   window.__log=[]; var modo=${JSON.stringify(modo)}; var escrito=false;
   var P={row:${ROW},n:'120',c:'Cliente de prueba',tot:50000,pago:'Transferencia',b:'Barrio',l:'1',de:'Viernes 16/10',v:'Rufino Ardanaz',desde:Date.now()-60000};
   var V=[{nombre:'Rufino Ardanaz',dias:['Viernes'],tg:true},{nombre:'Fini Mihailovitch',dias:['Viernes'],tg:true}];
+  /* Por decidir (Home): el mismo juego, con «lo entregamos nosotros». */
+  var D={h:'Home',n:'9001',row:5,c:'Cliente por decidir',de:'Viernes 16/10',sug:'',vs:[],el:new Date(Date.now()-60000).toISOString()};
   function resp(o){ return Promise.resolve(new Response(JSON.stringify(o),{status:200,headers:{'Content-Type':'application/json'}})); }
   var o=window.fetch; window.fetch=function(u,x){
     var url=String((u&&u.url)||u||'');
@@ -31,13 +34,18 @@ const STUB = modo => `(function(){
     if(metodo!=='POST'){
       var m=url.match(/action=([A-Za-z]+)/), ac=m?m[1]:'?';
       if(window.__mirar) window.__log.push('GET '+ac);
-      if(ac==='redBandeja') return resp({ok:true,horas:2,pendientes:escrito?[]:[P],vendedores:V,recientes:[]});
+      if(ac==='redBandeja') return resp({ok:true,horas:2,pendientes:escrito?[]:[P],vendedores:V,recientes:[],decidir:escrito?[]:[D],decididos:[],reps:[]});
       return resp({ok:true,pedidos:[],canales:{}});
     }
     var cuerpo=(x&&typeof x.body==='string')?Promise.resolve(x.body):((u&&u.clone)?u.clone().text():Promise.resolve(''));
     return cuerpo.then(function(t){
       var b={}; try{ b=JSON.parse(t); }catch(e){}
       if(window.__mirar) window.__log.push('POST '+b.action+(b.clientOpId?' (id)':''));
+      if(b.action==='pedidoDecidir'){
+        var rd={ok:true,hoja:'Home',id:'9001',decision:b.decision};
+        if(modo==='si'){ rd.aceptada=true; rd.diferida=true; rd.orden=9; } else escrito=true;
+        return resp(rd);
+      }
       if(b.action==='redConfirmar'||b.action==='redCambiarVendedor'){
         var r={ok:true,vendedor:b.vendedor||P.v,antes:P.v,aviso:'avisado',avisoOk:true,avisoAntes:'avisado'};
         if(modo==='si'){ r.aceptada=true; r.diferida=true; r.orden=9; } else escrito=true;
@@ -59,17 +67,18 @@ async function correr(modo, accion) {
   await pausa(2500);
   await evaluar(cli, 'try{localStorage.clear();}catch(e){} rbPedir(); 1');
   let antes = false;
-  for (let i = 0; i < 40; i++) { if ((antes = await evaluar(cli, "!!document.getElementById('rbp-" + ROW + "')"))) break; await pausa(250); }
+  const sel = accion === 'nosotros' ? 'pd-Home-9001' : 'rbp-' + ROW;
+  for (let i = 0; i < 40; i++) { if ((antes = await evaluar(cli, "!!document.getElementById('" + sel + "')"))) break; await pausa(250); }
   /* Pasar a otro vendedor: pdCambiar lee el select `pdc-<rk>` y pregunta con confirm. */
-  const disparo = accion === 'confirmar'
-    ? 'rbConfirmar(' + ROW + ')'
+  const disparo = accion === 'confirmar' ? 'rbConfirmar(' + ROW + ')'
+    : accion === 'nosotros' ? "pdNosotros('Home-9001',-1)"
     : "(function(){var s=document.createElement('select');s.id='pdc-x';s.innerHTML='<option value=\"Fini Mihailovitch\" selected>F</option>';document.body.appendChild(s);window.confirm=function(){return true;};pdCambiar('120'," + ROW + ",'x');})()";
   await evaluar(cli, 'window.__mirar=1; window.__log=[]; ' + disparo + '; 1');
   /* Cada 150 ms durante 7 s: ¿la fila volvió a aparecer? */
   let volvio = 0;
   const t0 = Date.now();
   while (Date.now() - t0 < 7000) {
-    if (await evaluar(cli, "!!document.getElementById('rbp-" + ROW + "')")) volvio++;
+    if (await evaluar(cli, "!!document.getElementById('" + sel + "')")) volvio++;
     await pausa(150);
   }
   const r = await evaluar(cli, '({ log: window.__log.slice(), err: (window.__err||[]).slice(0,5) })');
@@ -79,8 +88,8 @@ async function correr(modo, accion) {
 
 (async () => {
   console.log('\n== La bandeja de Red con las órdenes de pedido (' + ANCHO + ' px) ==\n');
-  for (const accion of ['confirmar', 'cambiar']) {
-    const ac = accion === 'confirmar' ? 'redConfirmar' : 'redCambiarVendedor';
+  for (const accion of ['confirmar', 'cambiar', 'nosotros']) {
+    const ac = accion === 'confirmar' ? 'redConfirmar' : accion === 'nosotros' ? 'pedidoDecidir' : 'redCambiarVendedor';
     console.log(' · ' + ac);
     let r = await correr('si', accion);
     chk('el pedido estaba en la bandeja antes de tocar', r.antes === true);
@@ -88,11 +97,11 @@ async function correr(modo, accion) {
     const iG = r.log.indexOf('GET redBandeja', iA);
     chk('prendida: manda su id', iP >= 0, r.log);
     chk('prendida: empuja al aplicador y recién después pide la bandeja', iA > iP && iG > iA, r.log);
-    if (accion === 'confirmar') chk('prendida: la fila confirmada no vuelve a aparecer nunca', r.volvio === 0, r.volvio + ' muestras con la fila');
+    if (accion !== 'cambiar') chk('prendida: la fila no vuelve a aparecer nunca', r.volvio === 0, r.volvio + ' muestras con la fila');
     chk('sin errores de consola', JSON.stringify(r.err) === '[]', r.err);
     r = await correr('no', accion);
     chk('apagada: ningún pedidosFuenteAplicar', r.log.indexOf('POST pedidosFuenteAplicar') < 0 && r.log.indexOf('GET redBandeja') > -1, r.log);
-    if (accion === 'confirmar') chk('apagada: la fila tampoco vuelve', r.volvio === 0, r.volvio);
+    if (accion !== 'cambiar') chk('apagada: la fila tampoco vuelve', r.volvio === 0, r.volvio);
   }
   console.log('\n  ' + ok + ' ok · ' + mal + ' mal\n');
   process.exit(mal ? 1 : 0);
