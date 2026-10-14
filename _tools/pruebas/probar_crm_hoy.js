@@ -147,6 +147,8 @@ const STUB = (datos) => `
            recarga de después devuelve a la casa a la lista y la prueba mide otra cosa. */
         window.__ne=window.__ne||{};
         if(b.action==='crmNoEscribir'){ if(b.habilitar) window.__ne[b.k]=null; else window.__ne[b.k]={motivo:b.motivo,por:'Tadeo Ustariz',fecha:'12/10/2026 18:40'}; }
+        if(b.action==='crmProgramarJugada') return Promise.resolve(new Response(JSON.stringify({ok:true,id:'JP-2',sale:b.sale,n:(b.casas||[]).length,por:'Tadeo Ustariz'}),{status:200}));
+        if(b.action==='crmCancelarJugadaProg') return Promise.resolve(new Response(JSON.stringify({ok:true,id:b.id,por:'Tadeo Ustariz'}),{status:200}));
         return Promise.resolve(new Response(JSON.stringify(b.action==='crmEnviarJugada'?{ok:true,enviados:(b.casas||[1]).length,control:1,caidas:0,sacadas:(b.sacadas||[]).length,porVersion:{a:1,b:0}}
           :(b.action==='crmJugadasRespuestas'?{ok:true,mirados:0,nuevas:0,faltan:0}
           :(b.action==='crmJugadaRespAtendida'?{ok:true,por:'Tadeo Ustariz',el:'12/10/2026 18:40'}
@@ -157,8 +159,12 @@ const STUB = (datos) => `
       if(a==='crmJugadas'){
         cuerpo=${JSON.stringify(datos)};
         if(${process.env.DATOS ? 'false' : 'true'}){
-          cuerpo.palanca=(__fase==='on'||__fase==='pend');
-          cuerpo.tpls=(__fase==='sinwati')?null:(__fase==='on'||__fase==='lento'||__fase==='res'?${JSON.stringify(tpls('APPROVED'))}:${JSON.stringify(tpls('PENDING'))});
+          cuerpo.palanca=(__fase==='on'||__fase==='pend'||__fase==='prog');
+          /* Programadas (14/10/2026): una esperando su hora (Reposición) y una que ya salió (Segunda). */
+          if(__fase==='prog') cuerpo.programadas=[
+            {id:'JP-1',jugada:'repo',sale:Date.now()+90*60000,saleTxt:'',n:2,prueba:false,por:'Lucas Moresco',el:'',estado:'programada',res:'',salio:'',cancelo:''},
+            {id:'JP-0',jugada:'segunda',sale:Date.now()-3600000,saleTxt:'',n:4,prueba:false,por:'Tadeo Ustariz',el:'',estado:'enviada',res:'salieron 3 (A 2 · B 1) · salteadas 1 (1 compró en el medio)',salio:'14/10/2026 09:03',cancelo:''}];
+          cuerpo.tpls=(__fase==='sinwati')?null:(__fase==='on'||__fase==='lento'||__fase==='res'||__fase==='prog'?${JSON.stringify(tpls('APPROVED'))}:${JSON.stringify(tpls('PENDING'))});
           if(__fase==='off'||__fase==='pend'||__fase==='sinwati'){ cuerpo.casas.forEach(function(c){ if(c.listo===2) c.listo=(__fase==='sinwati'?0:1); }); cuerpo.jugadas.forEach(function(j){ j.listas=0; }); }
           if(__fase==='res'){ cuerpo.resultados=${JSON.stringify(RES)}; cuerpo.respHoras=48;
             cuerpo.respuestas=${JSON.stringify(RESPUESTAS)}.map(function(x){ x.cuando=Date.now()-x.horas*3600000; return x; }); }
@@ -412,6 +418,46 @@ async function prendido(cli) {
   console.log('     pintó en ' + (Date.now() - t0) + ' ms');
   chk('abre de la copia guardada, sin esperar al servidor', rapido === true);
   chk('y dice de cuándo es', /datos de (recién|hace)/.test(await ev(cli, T('#jugCuerpo .jg-top'))), await ev(cli, T('#jugCuerpo .jg-top')));
+
+  console.log('\n-- programar (14/10/2026) --');
+  await ir(cli, 'prog');
+  chk('pinta', await esperar(cli, pintado));
+  await esperar(cli, `!!document.querySelector('#jugCuerpo .jg-prog')`, 8000);
+  const progR = await ev(cli, T('#jugCuerpo .jg-card[data-jug="repo"] .jg-prog'));
+  chk('la programada dice su hora, cuántas casas y quién la programó, con Cancelar', /^🕒 Programada para (hoy|\S+ \d+\/\d+) a las \d\d:\d\d · 2 casas · la programó Lucas Moresco\..*Cancelar$/.test(progR), progR);
+  const progS = await ev(cli, T('#jugCuerpo .jg-card[data-jug="segunda"] .jg-prog'));
+  chk('la que ya salió dice qué pasó (lo que escribió el trigger)', /^✅ La de .* \(corrió 09:03\): salieron 3 \(A 2 · B 1\) · salteadas 1 \(1 compró en el medio\)$/.test(progS), progS);
+  const btns = await ev(cli, `JSON.stringify([].map.call(document.querySelectorAll('#jugCuerpo .jg-card[data-jug="nuevo"] .jg-btns .jg-btn'),function(b){return b.textContent.trim();}))`);
+  chk('al lado de "Revisar la lista y mandar" está "Programar"', btns === '["Revisar la lista y mandar","Programar"]', btns);
+  await ev(cli, `document.querySelector('#jugCuerpo .jg-card[data-jug="repo"] .jg-prog .crm-edit-btn').click();1`);
+  await pausa(300);
+  chk('Cancelar le avisa al servidor cuál', (await ev(cli, `JSON.stringify(window.__posts.filter(function(p){return p.action==='crmCancelarJugadaProg';}).map(function(p){return p.id;}))`)) === '["JP-1"]');
+  await ev(cli, `document.querySelector('#jugCuerpo .jg-card[data-jug="nuevo"] .jg-prog-btn').click();1`);
+  await pausa(300);
+  const hora0 = await ev(cli, `(document.getElementById('jugHora')||{}).value||''`);
+  const antesDeMedioDia = await ev(cli, `(function(){var d=new Date();d.setHours(12,0,0,0);return d.getTime()-Date.now()>=5*60000;})()`);
+  chk('"Programar" abre la lista de esa jugada con la hora: por defecto las 12:00 de hoy', (await ev(cli, `!!document.querySelector('#jugCuerpo .jg-card.abierta[data-jug="nuevo"]')`)) === true &&
+    (antesDeMedioDia ? hora0 === '12:00' : /^\d\d:\d\d$/.test(hora0)), hora0);
+  chk('debajo de la hora aclara que sale hasta 15 min después', /^Sale hasta 15 min después de esa hora/.test(await ev(cli, T('#jugCuerpo .jg-hora-nota'))), await ev(cli, T('#jugCuerpo .jg-hora-nota')));
+  await ev(cli, `document.getElementById('jugHora').value='00:05';jugProgramar('nuevo');1`);
+  chk('una hora que ya pasó no se programa, y lo dice', (await ev(cli, `window.__posts.filter(function(p){return p.action==='crmProgramarJugada';}).length`)) === 0 && /Esa hora ya pasó/.test(await ev(cli, T('#toast'))), await ev(cli, T('#toast')));
+  const hFut = await ev(cli, `(function(){var t=new Date(Date.now()+2*3600000),a=new Date();if(t.toDateString()!==a.toDateString())t=new Date(a.getFullYear(),a.getMonth(),a.getDate(),23,59);var p=function(n){return (n<10?'0':'')+n;};return p(t.getHours())+':'+p(t.getMinutes());})()`);
+  await ev(cli, `document.getElementById('jugHora').value=${JSON.stringify(hFut)};document.getElementById('jugProgGo').click();1`);
+  await pausa(400);
+  const pp = JSON.parse(await ev(cli, `JSON.stringify(window.__posts.filter(function(p){return p.action==='crmProgramarJugada';}))`));
+  const hm = hFut.split(':').map(Number);
+  const saleEsp = await ev(cli, `(function(){var d=new Date();d.setHours(${hm[0]},${hm[1]},0,0);return d.getTime();})()`);
+  chk('programa UN POST: la jugada, las casas, la versión de cada una, las sacadas y la hora elegida', pp.length === 1 && pp[0].jugada === 'nuevo' && JSON.stringify(pp[0].casas) === '["casa:la paz|30"]' &&
+    JSON.stringify(pp[0].versiones) === '{"casa:la paz|30":"a"}' && JSON.stringify(pp[0].sacadas) === '[]' && pp[0].sale === saleEsp, pp);
+  chk('…sin teléfonos ni texto', !/1150000|sorrentinos|jug_/i.test(JSON.stringify(pp)));
+  chk('…y avisa para cuándo quedó, que sale hasta 15 min después y que se puede cancelar', new RegExp('Programada para las ' + hFut + ': 1 casa \\(sale hasta 15 min después\\)\\. Se puede cancelar').test(await ev(cli, T('#toast'))), await ev(cli, T('#toast')));
+  chk('no mandó nada por WhatsApp', (await ev(cli, `window.__posts.filter(function(p){return p.action==='crmEnviarJugada';}).length`)) === 0);
+  await ev(cli, `jugProgAbrir('repo');1`); await pausa(300);
+  const mdP = JSON.parse(await ev(cli, `JSON.stringify({chicos:[].filter.call(document.querySelectorAll('#jugCuerpo .jg-prog .crm-edit-btn, #jugCuerpo .jg-prog-btn, #jugProgGo'),function(b){return b.offsetParent&&b.getBoundingClientRect().height<44;}).length,
+    n:document.querySelectorAll('#jugCuerpo .jg-prog .crm-edit-btn, #jugCuerpo .jg-prog-btn, #jugProgGo').length, desborde:document.documentElement.scrollWidth-window.innerWidth})`));
+  chk('los botones nuevos llegan a 44 px y nada desborda (' + mdP.n + ' botones)', mdP.chicos === 0 && mdP.desborde <= 0 && mdP.n >= 3, mdP);
+  await foto(cli, 'hoy-programar');
+  chk('sin errores en consola', (await ev(cli, 'JSON.stringify(window.__err||[])')) === '[]', await ev(cli, 'JSON.stringify(window.__err||[])'));
 }
 
 (async () => {
