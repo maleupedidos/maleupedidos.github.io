@@ -438,6 +438,7 @@ async function prendido(cli) {
   const antesDeMedioDia = await ev(cli, `(function(){var d=new Date();d.setHours(12,0,0,0);return d.getTime()-Date.now()>=5*60000;})()`);
   chk('"Programar" abre la lista de esa jugada con la hora: por defecto las 12:00 de hoy', (await ev(cli, `!!document.querySelector('#jugCuerpo .jg-card.abierta[data-jug="nuevo"]')`)) === true &&
     (antesDeMedioDia ? hora0 === '12:00' : /^\d\d:\d\d$/.test(hora0)), hora0);
+  chk('debajo de la hora aclara que sale hasta 15 min después', /^Sale hasta 15 min después de esa hora/.test(await ev(cli, T('#jugCuerpo .jg-hora-nota'))), await ev(cli, T('#jugCuerpo .jg-hora-nota')));
   await ev(cli, `document.getElementById('jugHora').value='00:05';jugProgramar('nuevo');1`);
   chk('una hora que ya pasó no se programa, y lo dice', (await ev(cli, `window.__posts.filter(function(p){return p.action==='crmProgramarJugada';}).length`)) === 0 && /Esa hora ya pasó/.test(await ev(cli, T('#toast'))), await ev(cli, T('#toast')));
   const hFut = await ev(cli, `(function(){var t=new Date(Date.now()+2*3600000),a=new Date();if(t.toDateString()!==a.toDateString())t=new Date(a.getFullYear(),a.getMonth(),a.getDate(),23,59);var p=function(n){return (n<10?'0':'')+n;};return p(t.getHours())+':'+p(t.getMinutes());})()`);
@@ -449,7 +450,7 @@ async function prendido(cli) {
   chk('programa UN POST: la jugada, las casas, la versión de cada una, las sacadas y la hora elegida', pp.length === 1 && pp[0].jugada === 'nuevo' && JSON.stringify(pp[0].casas) === '["casa:la paz|30"]' &&
     JSON.stringify(pp[0].versiones) === '{"casa:la paz|30":"a"}' && JSON.stringify(pp[0].sacadas) === '[]' && pp[0].sale === saleEsp, pp);
   chk('…sin teléfonos ni texto', !/1150000|sorrentinos|jug_/i.test(JSON.stringify(pp)));
-  chk('…y avisa para cuándo quedó y que se puede cancelar', new RegExp('Programada para las ' + hFut + ': 1 casa\\. Se puede cancelar').test(await ev(cli, T('#toast'))), await ev(cli, T('#toast')));
+  chk('…y avisa para cuándo quedó, que sale hasta 15 min después y que se puede cancelar', new RegExp('Programada para las ' + hFut + ': 1 casa \\(sale hasta 15 min después\\)\\. Se puede cancelar').test(await ev(cli, T('#toast'))), await ev(cli, T('#toast')));
   chk('no mandó nada por WhatsApp', (await ev(cli, `window.__posts.filter(function(p){return p.action==='crmEnviarJugada';}).length`)) === 0);
   await ev(cli, `jugProgAbrir('repo');1`); await pausa(300);
   const mdP = JSON.parse(await ev(cli, `JSON.stringify({chicos:[].filter.call(document.querySelectorAll('#jugCuerpo .jg-prog .crm-edit-btn, #jugCuerpo .jg-prog-btn, #jugProgGo'),function(b){return b.offsetParent&&b.getBoundingClientRect().height<44;}).length,
