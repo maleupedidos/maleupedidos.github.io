@@ -30,7 +30,10 @@ const CASOS = [
   { id: 'excq', nom: 'comisión fuera de escala: quitar (el monto de la escala llega después)', accion: 'redComisionExcepcion',
     resp: { ok: true, row: 121, n: '120', vendedor: 'Rufino Ardanaz', antes: 15000, ahora: null, ahoraPendiente: true, quitada: true },
     disparo: "redComExcGuardar((function(){var b=document.createElement('div');b.id='excPrueba';b.dataset.n='120';b.dataset.r='121';document.body.appendChild(b);return 'excPrueba';})(),true)",
-    sigue: 'pedidosLight' }
+    sigue: 'pedidosLight' },
+  { id: 'cf', nom: 'mover el día de un cobro (el 📅 del libro de Caja)', accion: 'cobroFecha',
+    resp: { ok: true, antes: '14/10/2026 13:16', ahora: '11/10/2026 13:16', row: 1149, ajuste: 0 },
+    disparo: "_cobroCambiarFecha('Home','1167','14/10/2026','11/10/2026','',1149)", sigue: 'cajaLight' }
 ];
 
 const STUB = (modo, caso) => `(function(){
@@ -45,6 +48,7 @@ const STUB = (modo, caso) => `(function(){
     return cuerpo.then(function(t){
       var b={}; try{ b=JSON.parse(t); }catch(e){}
       if(window.__mirar) window.__log.push('POST '+b.action+(b.clientOpId?' (id)':''));
+      if(b.clientOpId) (window.__ids=window.__ids||[]).push(b.clientOpId);
       if(b.action===ACC){ var r=JSON.parse(JSON.stringify(RESP)); if(modo==='si'){r.aceptada=true;r.diferida=true;r.orden=9;} return resp(r); }
       if(b.action==='pedidosFuenteAplicar') return new Promise(function(ok){ setTimeout(ok,800); }).then(function(){ return resp({ok:true,hechas:1,quedan:0}); });
       return resp({ok:true});
@@ -64,7 +68,9 @@ async function correr(modo, caso) {
   await pausa(3000);
   await evaluar(cli, "window.__mirar=1; window.__log=[]; window.__confirmDevuelve=true; window.confirm=function(){return true;}; try{" + caso.disparo + ";}catch(e){window.__log.push('EXPLOTO '+e.message);} 1");
   await pausa(4500);
-  const r = await evaluar(cli, '({ log: window.__log.slice(), err: (window.__err||[]).slice(0,5) })');
+  /* Un segundo toque igual: el id tiene que ser otro (la base recuerda los ids para siempre). */
+  if (caso.id === 'cf') { await evaluar(cli, 'try{' + caso.disparo + ';}catch(e){} 1'); await pausa(2500); }
+  const r = await evaluar(cli, '({ log: window.__log.slice(), err: (window.__err||[]).slice(0,5), ids: (window.__ids||[]).filter(function(x){return /^cf-/.test(x);}) })');
   cli.matar();
   return Object.assign(r, { listo });
 }
@@ -80,6 +86,7 @@ async function correr(modo, caso) {
     chk('prendida: manda su id', iP >= 0, r.log);
     chk('prendida: empuja al aplicador y recién después pide ' + caso.sigue, iA > iP && iG > iA, r.log);
     chk('sin errores', JSON.stringify(r.err) === '[]' && !r.log.some((x) => /EXPLOTO/.test(x)), [r.err, r.log]);
+    if (caso.id === 'cf') chk('dos toques iguales mandan dos ids distintos', r.ids.length === 2 && r.ids[0] !== r.ids[1], r.ids);
     r = await correr('no', caso);
     const iP2 = r.log.indexOf('POST ' + caso.accion + ' (id)');
     chk('apagada: ningún pedidosFuenteAplicar, y pide ' + caso.sigue + ' igual', r.log.indexOf('POST pedidosFuenteAplicar') < 0 && r.log.indexOf('GET ' + caso.sigue, iP2) > iP2, r.log);
