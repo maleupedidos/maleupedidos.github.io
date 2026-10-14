@@ -22,7 +22,15 @@ const pausa = ms => new Promise(r => setTimeout(r, ms));
 const CASOS = [
   { id: 'trajo', nom: 'quién trajo al cliente (ficha del pedido de Red)', accion: 'redTrajoCliente',
     resp: { ok: true, valor: 'Maleu', row: 121, comision: { pendiente: true } },
-    disparo: "_ordTrajoCliente(121,'Maleu')", sigue: 'pedidosLight' }
+    disparo: "_ordTrajoCliente(121,'Maleu')", sigue: 'pedidosLight' },
+  { id: 'exc', nom: 'comisión fuera de escala: poner', accion: 'redComisionExcepcion',
+    resp: { ok: true, row: 121, n: '120', vendedor: 'Rufino Ardanaz', antes: 9000, ahora: 15000, ahoraPendiente: false, quitada: false },
+    disparo: "redComExcGuardar((function(){var b=document.createElement('div');b.id='excPrueba';b.dataset.n='120';b.dataset.r='121';b.innerHTML='<input data-role=m value=15000><input data-role=mot value=prueba>';document.body.appendChild(b);return 'excPrueba';})(),false)",
+    sigue: 'pedidosLight' },
+  { id: 'excq', nom: 'comisión fuera de escala: quitar (el monto de la escala llega después)', accion: 'redComisionExcepcion',
+    resp: { ok: true, row: 121, n: '120', vendedor: 'Rufino Ardanaz', antes: 15000, ahora: null, ahoraPendiente: true, quitada: true },
+    disparo: "redComExcGuardar((function(){var b=document.createElement('div');b.id='excPrueba';b.dataset.n='120';b.dataset.r='121';document.body.appendChild(b);return 'excPrueba';})(),true)",
+    sigue: 'pedidosLight' }
 ];
 
 const STUB = (modo, caso) => `(function(){
