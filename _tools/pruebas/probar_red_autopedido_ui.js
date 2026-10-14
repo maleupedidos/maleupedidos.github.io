@@ -48,6 +48,7 @@ function prep(ses, sesRed) {
       if(x&&String(x.method||'').toUpperCase()==='POST'){ var b={}; try{b=JSON.parse(x.body)}catch(e){} window.__posts.push(b);
         if(b.action==='redAutopedido') return resp(window.__resp.length?window.__resp.shift():{ok:true,n:115}); return resp({ok:true}); }
       var a=(url.match(/action=([A-Za-z]+)/)||[])[1]||'';
+      if(url.indexOf('action=piezas_full')>-1) return resp({CCo:[{id:'P-9002',kg:1.163},{id:'P-9001',kg:0.842}],CEn:[]});
       if(a==='vendedores') return resp({vendedores:[{nombre:'Marcos Bottcher',partido:'Pilar'}]});
       if(a==='dashboardVendedor') return resp(DASH, 200);
       if(a==='resolverVendedor') return resp({ok:true,nombre:'Marcos Bottcher',usuario:'marcos'}, 200);
@@ -96,6 +97,12 @@ async function ronda(cli, ancho) {
   chk('el día arranca en el próximo viernes y es un calendario', np.tipo === 'date' && np.dia === proxViernes(), np);
 
   await tocar(cli, '#prod-grid .prod-row:nth-of-type(2) .qty-btn:last-child'); await T(150);
+  await T(400);
+  const cz = await evaluar(cli, `(function(){var c=[].slice.call(document.querySelectorAll('#redCarneGrid .pz-corte'));var cco=c[0], cen=c[1];
+    return {n:c.length, cco:cco?[].map.call(cco.querySelectorAll('.pz-chip'),function(b){return b.innerText.replace(/\\s+/g,' ');}):[], cen:cen?cen.innerText.replace(/\\s+/g,' '):'', html:cco?cco.innerHTML.slice(0,300):''};})()`);
+  chk('la carne aparece: 12 cortes, las piezas del freezer con peso y precio, y «Sin stock» donde no hay', cz.n === 12 && cz.cco.length === 2 && /^0,842 kg \$\s?17\.472$/.test(cz.cco[0]) && /Sin stock/.test(cz.cen), cz);
+  r = await tocar(cli, '#redCarneGrid .pz-corte:nth-of-type(1) .pz-chip'); await T(200);
+  chk('tocar una pieza la elige', r === true && (await evaluar(cli, `document.querySelector('#redCarneGrid .pz-chip.sel')?1:0`)) === 1, r);
   await evaluar(cli, `(function(){var s=function(id,v){var e=document.getElementById(id); e.value=v; e.dispatchEvent(new Event('input',{bubbles:true}));};
     s('f-cliente','Clienta de Prueba'); s('f-telefono','11 4000 1234'); s('f-lote','45'); s('f-barrio','El Lucero'); s('f-dia','2026-10-17'); return true;})()`);
   r = await tocar(cli, '.pago-opt[data-val="Efectivo"]');
@@ -106,7 +113,9 @@ async function ronda(cli, ancho) {
   const b = p1.posts[0] || {};
   chk('sale con action=redAutopedido y un id np-red-', r === true && b.action === 'redAutopedido' && /^np-red-/.test(b.clientOrderId || ''), b);
   chk('  ...con la fecha y el día elegidos (sábado 17/10)', b.fechaEntrega === '2026-10-17' && b.dia === 'Sábado', [b.fechaEntrega, b.dia]);
-  chk('  ...con un producto y el teléfono del cliente', (b.items || []).length === 1 && b.telefono === '11 4000 1234', [b.items, b.telefono]);
+  const carne = (b.items || []).filter((x) => x.unidad === 'kg');
+  chk('  ...con un producto, la carne (kilos, importe e id de la pieza) y el teléfono del cliente', (b.items || []).length === 2 && carne.length === 1 && carne[0].id === 30 && carne[0].qty === 0.842 && carne[0].importe === 17472 && JSON.stringify(carne[0].piezas) === '["P-9001"]' && b.telefono === '11 4000 1234', [b.items, b.telefono]);
+  chk('  ...y el total suma la carne', b.total === (b.items || []).reduce((t, x) => t + (x.unidad === 'kg' ? x.importe : x.precio * x.qty), 0) + (b.envio || 0), [b.total, b.items]);
   chk('el rechazo del servidor se ve y NO se reintenta', p1.posts.length === 1 && /Fini/.test(p1.toast) && /Reintentar/.test(p1.btn), p1);
 
   r = await tocar(cli, '#btn-enviar'); await T(1800);
@@ -115,6 +124,8 @@ async function ronda(cli, ancho) {
   await T(1200);
   chk('guardado, vuelve al portal', (await evaluar(cli, VISIBLE('#dash-content'))) === true);
   await tocar(cli, '.mtab-mas'); await T(200); await tocar(cli, '#redMasSheet button:nth-of-type(1)'); await T(300);
+  /* Se mide en la pantalla (al reabrir): fusionado, `window.redPzCart` es la referencia vieja. */
+  chk('guardado, la carne elegida se vacía', (await evaluar(cli, `document.querySelectorAll('#redCarneGrid .pz-chip.sel').length`)) === 0);
   chk('un pedido nuevo arranca con otro id y el día en el viernes', (await evaluar(cli, `redApCoid`)) === '' && (await evaluar(cli, `document.getElementById('f-dia').value`)) === proxViernes());
   const sw = await evaluar(cli, 'document.documentElement.scrollWidth');
   chk('sin scroll horizontal', sw <= ancho, sw);
