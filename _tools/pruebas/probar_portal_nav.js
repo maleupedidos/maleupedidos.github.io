@@ -12,7 +12,7 @@
    · cada pantalla muestra lo suyo: Hoy el resumen, Pedidos la ruta, Clientes la
      lista (que salio de Inicio), Plata la Caja y los Pagos sin cambios;
    · una tab vieja guardada en el celular ('caja') abre Plata en Caja, sin romper;
-   · el «+» abre la tienda en otra ventana y el vendedor sigue en el ERP;
+   · el «+» › «Abrir la tienda» abre la tienda en otra ventana y el vendedor sigue en el ERP;
    · sin scroll horizontal a 390, y a 1440 con el cajon abierto la barra no
      queda tapada por el cajon.
 
@@ -121,6 +121,8 @@ const tocar = (cli, sel) => evaluar(cli, `(function(){var e=document.querySelect
     chk('el selector mide 44 px', pl.h >= 44, pl.h);
 
     r = await tocar(cli, '.mtab-mas'); await T(300);
+    /* 14/10/2026: el «+» ofrece «Lo cargo yo» o «Abrir la tienda» (probar_red_autopedido_ui.js). */
+    if (r === true) r = await tocar(cli, '#redMasSheet button:nth-of-type(2)'); await T(200);
     const mas = await evaluar(cli, `({abrio:window.__abrio, aca:location.href})`);
     chk('el «+» abre la tienda en otra ventana', r === true && mas.abrio.length === 1 && /^https:\/\/maleu\.com\.ar\/?$/.test(mas.abrio[0]), { r, mas });
     chk('  ...y el vendedor sigue en el ERP', /^http:\/\/localhost/.test(mas.aca), mas.aca);
