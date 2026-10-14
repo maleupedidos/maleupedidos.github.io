@@ -367,6 +367,9 @@ select,input[type="number"]{font-size:16px}
 .pago-libre-acc summary::before{content:'▸ ';font-size:10px}
 .pago-libre-acc[open] summary::before{content:'▾ '}
 .pago-libre-acc.alerta summary{color:#8E0000}
+.btn-redondeo{display:block;width:100%;min-height:44px;margin:4px 0 6px;border:1.5px solid #E65100;background:#fff;color:#E65100;border-radius:10px;font:inherit;font-weight:700;cursor:pointer}
+.btn-redondeo:disabled{opacity:.6}
+.deuda-historia .btn-link{border:0;background:none;color:#E65100;font:inherit;font-weight:700;text-decoration:underline;cursor:pointer;padding:0 4px;min-height:32px}
 .pago-libre-al{background:#FFF3E0;border-left:3px solid #E65100;border-radius:6px;padding:8px 10px;margin-bottom:6px;line-height:1.45;color:#5D2A00}
 .pago-libre-p{margin-top:6px;font-size:11px;line-height:1.45;color:#8A6A6A}
 .sem-card{background:#FAF7EE;border-radius:10px;padding:10px 12px;margin-top:8px;border:1px solid #E8DFC4}
@@ -1201,6 +1204,30 @@ function abaArranque(silent) {
   });
 }
 
+/* «Es redondeo, no lo cuentes» y su deshacer (14/10/2026). Escriben una fila en
+   «Redondeos Proveedores»; la deuda y el EERR la leen de ahi. */
+function abaRedondeo(btn) {
+  if (!btn || btn.disabled) return;
+  var prov = btn.getAttribute('data-prov'), sem = btn.getAttribute('data-sem'), monto = Number(btn.getAttribute('data-monto')) || 0;
+  if (!confirm('¿Los ' + abaFormatMoney(monto) + ' que le pagaste de más a ' + prov + ' son redondeo?\n\nSe suman a la compra de la semana ' + sem +
+               ' (van a Mercadería) y dejan de quedar a cuenta. Se puede deshacer.')) return;
+  btn.disabled = true; btn.textContent = 'Guardando…';
+  fetch(ABA_APPS_SCRIPT_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify({ action: 'provRedondeo', prov: prov, sem: sem, monto: monto }) })
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      if (d && d.ok) { abaShowToast('Listo: ' + abaFormatMoney(monto) + ' sumados a la semana ' + sem); abaRefresh(true); }
+      else { btn.disabled = false; btn.textContent = 'Es redondeo, no lo cuentes'; abaShowToast((d && d.err) || 'No se pudo', 6000); }
+    }).catch(function () { btn.disabled = false; btn.textContent = 'Es redondeo, no lo cuentes'; abaShowToast('Sin conexión: probá de nuevo', 6000); });
+}
+function abaRedondeoDeshacer(id) {
+  if (!confirm('¿Deshacer el redondeo ' + id + '? La diferencia vuelve a quedar a cuenta del proveedor.')) return;
+  fetch(ABA_APPS_SCRIPT_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify({ action: 'provRedondeoAnular', id: id }) })
+    .then(function (r) { return r.json(); })
+    .then(function (d) { if (d && d.ok) { abaShowToast('Redondeo deshecho'); abaRefresh(true); } else abaShowToast((d && d.err) || 'No se pudo', 6000); })
+    .catch(function () { abaShowToast('Sin conexión: probá de nuevo', 6000); });
+}
 function abaRefresh(silent) {
   try { abaFaltCargar(!silent); } catch (e) {}
   var habia = _abaHayDatos();
@@ -2321,6 +2348,16 @@ function _renderPagosInner() {
       if (_sobra > 0.01) {
         html += '<div class="pago-libre-al"><b>' + abaFormatMoney(_sobra) + '</b> no tienen deuda contra la cual aplicarse. ' +
                 'Revisá que no sea plata de una semana que el ERP no está contando: si no, se va a descontar de lo que compres ahora.</div>';
+        /* «Es redondeo, no lo cuentes» (14/10/2026): hasta REDONDEO_PROV_MAX. Lo
+           pagado de mas se suma a la compra de la ultima semana que se le compro. */
+        var _rMax = Number(busqueda.redondeoMax) || 0;
+        var _semR = '';
+        (d.semanas || []).forEach(function (x) { if ((Number(x.original) || 0) > 0) _semR = String(x.sem); });
+        if (_rMax > 0 && _sobra <= _rMax + 0.001 && _semR) {
+          html += '<button type="button" class="btn-redondeo" id="btnRedondeo_' + idx + '" data-prov="' + _abaH(d.n) + '" data-sem="' + _abaH(_semR) + '" data-monto="' + _sobra + '" ' +
+                  'onclick="abaRedondeo(this)">Es redondeo, no lo cuentes</button>' +
+                  '<div class="pago-libre-p">Suma ' + abaFormatMoney(_sobra) + ' a la compra de la semana ' + _abaH(_semR) + ' (va a Mercadería) en vez de quedar a cuenta. Se puede deshacer.</div>';
+        }
       }
       _libres.forEach(function(p) {
         html += '<div class="sem-pago-item"><span class="izq">' + _abaH(p.fecha || 'sin fecha') +
@@ -2414,7 +2451,14 @@ function _renderPagosInner() {
       html += '</details>';
     }
     html += _libresHtml;
-    html += '<div class="deuda-historia">En total le compraste ' + abaFormatMoney(orig) + ' y le pagaste ' + abaFormatMoney(pag) + '</div>';
+    /* Lo que de verdad se le pago (14/10/2026): lo aplicado a compras MAS lo que
+       sobra a cuenta y lo que quedo a favor. Antes decia solo lo aplicado y la
+       pantalla mostraba «pagaste lo mismo que compraste» junto a «sobran $9». */
+    html += '<div class="deuda-historia">En total le compraste ' + abaFormatMoney(orig) + ' y le pagaste ' + abaFormatMoney(pag + _sobra + favor) + '</div>';
+    (d.redondeos || []).forEach(function (x) {
+      html += '<div class="deuda-historia">Redondeo ' + _abaH(x.id) + ' del ' + _abaH(x.fecha) + ': ' + abaFormatMoney(x.monto) +
+              ' sumados a la semana ' + _abaH(x.sem) + ' <button type="button" class="btn-link" onclick="abaRedondeoDeshacer(\'' + _abaH(x.id) + '\')">Deshacer</button></div>';
+    });
 
     // Pago a cuenta — se descuenta de la deuda más vieja primero
     html += '<button class="btn-pago-libre" onclick="togglePagoForm(\'libre_' + idx + '\')">+ Pago a cuenta</button>';
