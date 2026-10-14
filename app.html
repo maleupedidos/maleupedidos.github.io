@@ -16319,10 +16319,11 @@ window.pedDep=function(hoja,row,dep,btn){
     if(btn.getAttribute('data-txt'))btn.textContent=btn.getAttribute('data-txt');
   };
   fetch(API,{method:'POST',headers:{'Content-Type':'text/plain'},
-    body:JSON.stringify({action:'pedidoDeposito',hoja:hoja,row:row,deposito:dep})})
+    body:JSON.stringify({action:'pedidoDeposito',hoja:hoja,row:row,deposito:dep,clientOpId:_pfId()})})
     .then(function(r){return r.json();})
     .then(function(d){
       if(!d||!d.ok)throw new Error((d&&d.err)||'no se pudo');
+      _pfAplicar(d);
       window._pedDepUltMs=Date.now()-t0;
       var ps=_pedDepEnMemoria(hoja,row), pint=0;
       for(var i=0;i<ps.length;i++){ ps[i].dep=String(dep||'').toLowerCase(); pint+=_pedDepRepintar(ps[i]); }
@@ -17428,6 +17429,18 @@ function _recargarSinVolcado(){
     return mal.length?mal[0]:(rs[0]||{ok:true});
   });
 }
+/* PEDIDOS 4d (14/10/2026): las ordenes de pedido. Con PEDIDOS_FUENTE_PG = si la base
+   acepta la orden y la planilla se escribe despues (`diferida`). `_pfId` le da a cada
+   una un id que no se repite (un reintento no la duplica) y `_pfAplicar` empuja al
+   aplicador ANTES de recargar: sin eso, la recarga leeria la planilla vieja y el
+   cambio pareceria volver atras hasta un minuto. Con la palanca apagada no hay
+   `diferida` y `_pfAplicar` no hace nada. */
+function _pfId(){ return 'pf_'+Date.now().toString(36)+'_'+Math.random().toString(36).slice(2,10); }
+function _pfAplicar(r){
+  if(!r||!r.diferida)return Promise.resolve(null);
+  return fetch(API,{method:'POST',body:JSON.stringify({action:'pedidosFuenteAplicar'})})
+    .then(function(x){return x.json();}).catch(function(){return null;});
+}
 function _recargarPedidos(){
   if(typeof loadRapido==='function')return loadRapido();
   return (typeof load==='function')?load():Promise.resolve();
@@ -18404,10 +18417,11 @@ function confirmarDeshacerOrigen(btn){
   window._forceTopOnRender=true;
   _marcarCambioOrigen();
   showLoader('Deshaciendo origen...');
-  fetch(API,{method:'POST',body:JSON.stringify({action:'deshacerOrigen',hoja:hoja,id:id,row:row})})
+  fetch(API,{method:'POST',body:JSON.stringify({action:'deshacerOrigen',hoja:hoja,id:id,row:row,clientOpId:_pfId()})})
     .then(function(r){return r.json();})
     .then(function(r){
       if(r.ok){
+        _pfAplicar(r);
         // UI optimista: marcar el pedido como Pendiente en D.pedidos
         if(D&&D.pedidos){
           for(var i=0;i<D.pedidos.length;i++){
@@ -19276,11 +19290,11 @@ function cambiarFechaEntrega(inp){
   // Tras la acción, scroll al top para que Tadeo no tenga que volver arriba a mano.
   window._forceTopOnRender=true;
   showLoader('Actualizando fecha de entrega...');
-  fetch(API,{method:'POST',body:JSON.stringify({action:'updateDiaEntrega',hoja:hoja,id:id,row:row,fecha:fecha})})
+  fetch(API,{method:'POST',body:JSON.stringify({action:'updateDiaEntrega',hoja:hoja,id:id,row:row,fecha:fecha,clientOpId:_pfId()})})
     .then(function(r){return r.json();})
     .then(function(r){
       hideLoader(true);
-      if(r.ok){_recargarPedidos().then(function(){window._forceTopOnRender=false;});}
+      if(r.ok){_pfAplicar(r).then(function(){return _recargarPedidos();}).then(function(){window._forceTopOnRender=false;});}
       else{inp.value=orig;_patchPedidoLocal(hoja,id,{dee:orig});toast('Error: '+(r.err||r.error||'?'));render();window._forceTopOnRender=false;}
     })
     .catch(function(){hideLoader(true);window._forceTopOnRender=false;inp.value=orig;toast('Sin conexion');})
@@ -19296,7 +19310,7 @@ function cambiarEstado(btn){
   _patchPedidoLocal(hoja,id,{es:nuevoEstado});
   render();
   showLoader(nuevoEstado==='Reservado'?'Reservando...':'Quitando reserva...');
-  fetch(API,{method:'POST',body:JSON.stringify({action:'cambiarEstadoEntrega',hoja:hoja,id:id,row:row,estado:nuevoEstado})})
+  fetch(API,{method:'POST',body:JSON.stringify({action:'cambiarEstadoEntrega',hoja:hoja,id:id,row:row,estado:nuevoEstado,clientOpId:_pfId()})})
     .then(function(r){return r.json();})
     .then(function(r){
       // Cerrar loader apenas responde el POST — no esperamos load() completo (~15s).
@@ -19308,7 +19322,7 @@ function cambiarEstado(btn){
       } else {
         toast('Error: '+(r.error||r.err));
       }
-      _recargarPedidos().then(function(){window._forceTopOnRender=false;});
+      _pfAplicar(r).then(function(){return _recargarPedidos();}).then(function(){window._forceTopOnRender=false;});
     })
     .catch(function(){hideLoader(true);window._forceTopOnRender=false;toast('Sin conexion');});
 }
@@ -62639,6 +62653,19 @@ function processSyncQueue(){
     .then(function(res){
       syncBusy=false;
       if(res&&res.ok){
+        /* PEDIDOS 4d (14/10/2026): la base acepto la orden y la planilla se escribe
+           despues (`diferida`). Antes de darla por hecha: se empuja al aplicador y se
+           vuelve a mandar la MISMA orden (mismo ts = mismo id). Si ya se aplico, la base
+           lo dice sin `diferida` y sigue como siempre. Sin esto, la sincronizacion de
+           los 15 s leeria la planilla vieja y el cobro o la entrega parecerian volver
+           atras. Tres vueltas como mucho: despues se da por hecha (la orden ya esta en
+           la base y el aplicador del minuto la escribe). */
+        if(res.diferida&&(item.__pf||0)<3){
+          item.__pf=(item.__pf||0)+1;
+          fetch(RUT_APPS_SCRIPT_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({action:'pedidosFuenteAplicar'}),redirect:'follow'})
+            .catch(function(){}).then(function(){setTimeout(processSyncQueue,300);});
+          return;
+        }
         // Éxito: remover de la cola, resetear backoff
         syncQueue.shift();if(item&&item.action==='marcarArmado')_armConfirmado(item);_repConfirmado(item);
         /* Cualquier escritura propia invalida la firma: si el otro celular la
