@@ -1092,7 +1092,6 @@ select.np-input{background:var(--white) url("data:image/svg+xml;utf8,<svg xmlns=
       </select>
       <select id="npEstadoEntrega" class="np-input" onchange="npUpdateTotal()">
         <option value="Pendiente">Estado: Pendiente</option>
-        <option value="Reservado">Estado: Reservado</option>
         <option value="Entregado">Estado: Entregado</option>
       </select>
     </div>
@@ -1686,7 +1685,7 @@ var NP_PRECIOS={
   PCC:{p:11500,c:6500,pc:8000},PJyM:{p:12000,c:7000,pc:8000},
   TP:{p:12000,c:7000},TJyQ:{p:12000,c:7000},TCa:{p:12000,c:7000},TV:{p:12000,c:7000},
   RC:{p:13000,c:8000},RP:{p:13000,c:8000},
-  CCo:{p:20750,c:16600},CEn:{p:34000,c:27200},CLo:{p:33000,c:25900},CPi:{p:22875,c:17900},CVa:{p:26000,c:22600},CVE:{p:25200,c:20160},CBC:{p:29250,c:23400},COB:{p:30325,c:24260},CMa:{p:22825,c:18260},CAC:{p:27900,c:22320},CAB:{p:27900,c:22320},CPe:{p:25025,c:20020}
+  CCo:{p:20750,c:16600},CEn:{p:34000,c:27200},CLo:{p:33000,c:26400},CPi:{p:22875,c:17900},CVa:{p:26000,c:22600},CVE:{p:25200,c:20160},CBC:{p:29250,c:23400},COB:{p:30325,c:24260},CMa:{p:22825,c:18260},CAC:{p:27900,c:22320},CAB:{p:27900,c:22320},CPe:{p:25025,c:20020}
 };
 
 /* La unidad de arranque, aparte de los precios a proposito: `_tools/precios.js`
@@ -5120,8 +5119,8 @@ function rutRenderRuta(){
   // Lo que se toca poco: queda al final, chico y sin competir con Entregado
   var estAct=e.es||'Pendiente';
   h+='<div class="rtc-mas">';
-  if(estAct==='Pendiente')h+='<button type="button" onclick="cambiarEstadoRuta(\''+kArg+'\',\'Reservado\')">Reservar</button>';
-  else if(estAct==='Reservado')h+='<button type="button" onclick="cambiarEstadoRuta(\''+kArg+'\',\'Pendiente\')">Quitar la reserva</button>';
+  /* «Reservar» se sacó el 14/10/2026: el pedido ya aparta su stock con el origen. Queda la salida para uno viejo. */
+  if(estAct==='Reservado')h+='<button type="button" onclick="cambiarEstadoRuta(\''+kArg+'\',\'Pendiente\')">Pasar a Pendiente</button>';
   h+='<button type="button" class="rtc-cancel" onclick="confirmarCancelarRuta(\''+kArg+'\')">Cancelar pedido</button>';
   h+='</div></article>';
   body.innerHTML=h;
@@ -5144,6 +5143,7 @@ function renderCobros(){
   // si llegan novedades, re-renderiza. Si querés data fresca a propósito, ↻.
   renderCobrosFromServer();
   fetchCobrosPendientes();
+  rutCliVendCargar();
 }
 
 /* ¿Entro el cobro? Le pregunta al server y lo DICE (4/9/2026).
@@ -5159,6 +5159,7 @@ function _cobConfirmado(p){if(p&&p.action==='marcarCobrado')_cobRecientes.push({
 function fetchCobrosPendientes(fresh,auto){
   // fresh=true saltea el cache de 20s del backend (igual que refresh() para entregas).
   // Importante cuando se cobró algo desde Panel u otro dispositivo y queremos verlo ya.
+  if(fresh&&!auto&&rutCurrentTab==='cobros')rutCliVendCargar();
   return fetch(RUT_APPS_SCRIPT_URL+'?action=cobrosPendientes&t='+Date.now()+(fresh?'&fresh=1':''))
     .then(function(r){return r.json()})
     .then(function(data){
@@ -5676,6 +5677,143 @@ window.rutCerrarRendidos=function(vend){
     });
 };
 
+/* CLIENTES DE VENDEDORES (14/10/2026). Desde el 5/10 el cliente de Red le paga
+   a MALEU, pero sus pedidos no estaban en Cobros: la tarjeta del vendedor solo
+   dice lo que EL debe entregar. Tadeo: «una sección abajo de todo con los pedidos
+   de Red que cobra Maleu, con el mismo botón de cobrar».
+   Los datos son los de Ventas › RED (`redPedidosAbiertos`, solo admin) y el cobro
+   va por el MISMO `updatePedidoRed`: es el que sella la Fecha de Cobro y la
+   cuenta, que es lo que mete la plata en la Caja. `marcarCobrado` (el cuadro de
+   los demás pedidos) no lo hace para Red. Se pide al entrar a Cobros y con ↻, no
+   en la sincronización de cada 15 s: el servidor es uno solo. */
+var _rutCV=null,_rutCVts=0,_rutCVabierto='',_rutCVcargando=false;
+try{var _cvC=JSON.parse(localStorage.getItem('maleu_ruta_clivend')||'null');if(_cvC&&_cvC.d){_rutCV=_cvC.d;_rutCVts=_cvC.ts||0;}}catch(e){}
+function rutCliVendCargar(){
+  if(_rutCVcargando)return;
+  _rutCVcargando=true;
+  fetch(RUT_APPS_SCRIPT_URL+'?action=redPedidosAbiertos&t='+Date.now())
+    .then(function(r){return r.json();})
+    .then(function(d){
+      _rutCVcargando=false;
+      /* Sin permiso (un repartidor) o error: la sección no sale. No es «nadie
+         debe nada», es «no lo puedo leer». */
+      if(!d||d.ok===false||!Array.isArray(d.vendedores)){_rutCV=null;}
+      else{_rutCV=d;_rutCVts=Date.now();try{localStorage.setItem('maleu_ruta_clivend',JSON.stringify({ts:_rutCVts,d:d}));}catch(e){}}
+      var el=document.getElementById('cobrosContent');if(el)el.__sig=null;
+      if(rutCurrentTab==='cobros')renderCobrosFromServer();
+    })
+    .catch(function(){_rutCVcargando=false;});
+}
+/* Los que cobra Maleu: regla del 5/10 (`nueva`), sin cobrar, o cobrados por
+   transferencia sin decir a qué cuenta entró (esa plata todavía no suma en Caja). */
+function _rutCVLista(){
+  var out=[];
+  if(!_rutCV||!Array.isArray(_rutCV.vendedores))return out;
+  _rutCV.vendedores.forEach(function(v,iv){
+    (v.pedidos||[]).forEach(function(p,ip){
+      if(!p||!p.nueva)return;
+      if(p.ep==='Cobrado'&&!p.sinCta)return;
+      out.push({v:v,p:p,k:iv+'-'+ip});
+    });
+  });
+  return out;
+}
+function _rutCVMonto(x){return x.p.ep==='Cobrado'?(Number(x.p.trDir)||0):(Number(x.p.cobro)||0);}
+function _rutCVHTML(){
+  var lista=_rutCVLista();
+  if(!lista.length)return '';
+  var tot=lista.reduce(function(s,x){return s+_rutCVMonto(x);},0);
+  var h='<div id="rutCliVend" class="cobro-canal-header re" style="margin-top:18px"><span>👥 Clientes de vendedores</span><span>'+formatMoney(tot)+'</span></div>';
+  h+='<div style="font-size:11px;color:var(--muted);margin:-2px 0 6px">Pedidos de Red que nos pagan a nosotros (desde el 5/10)'
+    +(_rutCVts?' · '+(Date.now()-_rutCVts<90000?'recién':'de las '+new Date(_rutCVts).toLocaleTimeString('es-AR',{hour:'2-digit',minute:'2-digit'})):'')+'</div>';
+  lista.forEach(function(x){
+    var p=x.p,cob=p.ep==='Cobrado',monto=_rutCVMonto(x);
+    var vN=String(x.v.nombre||'');
+    var est=p.es==='Entregado'?'<span style="font-size:9px;background:#3d8b3d;color:#fff;padding:2px 6px;border-radius:50px;font-weight:700;margin-left:4px">Entregado</span>':'';
+    var c='<div class="cobro-card" data-cv="'+x.k+'">';
+    c+='<div class="cobro-card-head"><span class="cobro-card-name">'+_rutEsc(p.c||'(sin nombre)')+' <span style="font-size:11px;color:var(--muted);font-weight:600">(Red #'+_rutEsc(p.n)+')</span>'+est+'</span>';
+    c+='<span class="cobro-card-total">'+formatMoney(monto)+'</span></div>';
+    c+='<div style="font-size:11px;color:var(--muted);margin:-2px 0 4px 0">de '+_rutEsc(vN)+(p.dia?' · 📅 '+_rutEsc(p.dia):'')+'</div>';
+    if(cob)c+='<div style="font-size:11px;color:#E65100;font-weight:700;margin:0 0 4px">Ya transfirió: falta decir a qué cuenta entró (todavía no suma en Caja)</div>';
+    if(_rutCVabierto===x.k){
+      var ctas=(_rutCV&&_rutCV.cuentas)||[];
+      c+='<div style="font-size:12px;font-weight:700;color:#5D4037;margin:6px 0 4px">¿A qué cuenta de Maleu entraron los '+formatMoney(monto)+'?</div><div class="cobro-card-actions" style="flex-wrap:wrap">';
+      ctas.forEach(function(ct){
+        c+='<button type="button" class="cobro-btn-cobrado" data-c="'+_rutEsc(ct.id)+'" onclick="rutCliVendGuardar(\''+x.k+'\',\''+(cob?'cuenta':'tr')+'\',this.dataset.c)">'+_rutEsc(ct.nombre)+'</button>';
+      });
+      if(!cob)c+='<button type="button" class="cobro-btn-alias" onclick="rutCliVendGuardar(\''+x.k+'\',\'ef\',\'\')">💵 Efectivo a '+_rutEsc(vN.split(' ')[0])+'</button>';
+      c+='<button type="button" class="cobro-btn-copiar" onclick="rutCliVendAbrir(\'\')">Cancelar</button></div>';
+    }else{
+      c+='<div class="cobro-card-actions">'
+        +'<button type="button" class="cobro-btn-alias" onclick="cobroPedirComprobanteCV(\''+_rutEsc(p.c||'')+'\')">🧾 Pedir comprobante</button>'
+        +'<button type="button" class="cobro-btn-cobrado" onclick="rutCliVendAbrir(\''+x.k+'\')">'+(cob?'¿A qué cuenta?':'Cobrar')+'</button></div>';
+    }
+    h+=c+'</div>';
+  });
+  return h;
+}
+/* El aviso de arriba: en el celular la sección queda abajo de todo, y abajo de
+   13 cobros no la ve nadie (misma regla que la banda de «ya te rindieron»). */
+function _rutCVAvisoHTML(){
+  var lista=_rutCVLista();
+  if(!lista.length)return '';
+  var tot=lista.reduce(function(s,x){return s+_rutCVMonto(x);},0);
+  return '<button type="button" onclick="rutCliVendIr()" style="display:flex;justify-content:space-between;align-items:center;gap:8px;width:100%;margin:0 0 10px;padding:9px 12px;background:#FFEBEE;border:1px solid #EF9A9A;border-radius:10px;font-family:inherit;font-size:12px;font-weight:800;color:#C62828;cursor:pointer;text-align:left">'
+    +'<span>👥 '+lista.length+(lista.length===1?' cliente de vendedor':' clientes de vendedores')+' para cobrar</span><span>'+formatMoney(tot)+' ↓</span></button>';
+}
+window.rutCliVendIr=function(){var s=document.getElementById('rutCliVend');if(s)s.scrollIntoView({behavior:'smooth',block:'start'});};
+window.cobroPedirComprobanteCV=function(nom){
+  var quien=String(nom||'').split(' ')[0];
+  rutCopiarTexto(_msgComprobante(),'✓ Mensaje copiado'+(quien?' — pegalo en el chat de '+quien:''));
+};
+window.rutCliVendAbrir=function(k){
+  /* Sin la palanca o sin cuentas: el cobro igual se marca, como en Ventas › RED,
+     pero con el «¿seguro?» de siempre. */
+  if(k){
+    var x=_rutCVLista().filter(function(y){return y.k===k;})[0];
+    if(x&&!(_rutCV&&_rutCV.cobroACaja&&(_rutCV.cuentas||[]).length)&&x.p.ep!=='Cobrado'){
+      if(!confirm('¿'+(x.p.c||'El cliente')+' le transfirió '+formatMoney(_rutCVMonto(x))+' a Maleu (Red #'+x.p.n+')?'))return;
+      rutCliVendGuardar(k,'tr','');return;
+    }
+  }
+  _rutCVabierto=k||'';
+  var el=document.getElementById('cobrosContent');if(el)el.__sig=null;
+  renderCobrosFromServer();
+};
+window.rutCliVendGuardar=function(k,que,cuenta){
+  var x=_rutCVLista().filter(function(y){return y.k===k;})[0];
+  if(!x)return;
+  var p=x.p,vN=String(x.v.nombre||'');
+  var updates;
+  if(que==='cuenta')updates={cuentaCobro:cuenta};
+  else if(que==='ef'){
+    if(!confirm('¿'+(p.c||'El cliente')+' le pagó '+formatMoney(p.cobro)+' en efectivo a '+vN.split(' ')[0]+' (Red #'+p.n+')?\n\nQueda como plata que '+vN.split(' ')[0]+' le tiene que entregar a Maleu.'))return;
+    updates={formaPagoCliente:'Efectivo',cobroCliente:true,montoVisto:p.cobro};
+  }else{
+    updates={formaPagoCliente:'Transferencia',cobroCliente:true,montoVisto:p.cobro};
+    if(cuenta)updates.cuentaCobro=cuenta;
+  }
+  var card=document.querySelector('#cobrosContent [data-cv="'+k+'"]');
+  if(card)card.querySelectorAll('button').forEach(function(b){b.disabled=true;});
+  fetch(RUT_APPS_SCRIPT_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},
+    body:JSON.stringify({action:'updatePedidoRed',pedidoId:String(p.n),row:Number(p.row)||0,vendedor:vN,updates:updates})})
+    .then(function(r){return r.json();})
+    .then(function(d){
+      if(d&&d.ok){
+        _rutCVabierto='';
+        showToast(que==='ef'?'✓ Marcado: lo tiene '+vN.split(' ')[0]:'✓ Cobrado — entró a la caja');
+        rutCliVendCargar();fetchCobrosPendientes(true);return;
+      }
+      if(card)card.querySelectorAll('button').forEach(function(b){b.disabled=false;});
+      if(d&&d.montoDistinto){_rutCVabierto='';showToast('No se marcó: la planilla dice '+formatMoney(d.montoPlanilla));rutCliVendCargar();return;}
+      showToast('No se guardó: '+((d&&(d.err||d.error))||'error'));
+    })
+    .catch(function(){
+      if(card)card.querySelectorAll('button').forEach(function(b){b.disabled=false;});
+      showToast('Sin conexión: no sé si se guardó. Tocá ↻ antes de volver a cobrar.');
+    });
+};
+
 function renderCobrosFromServer(){
   var el=document.getElementById('cobrosContent');
   // Guard 1: si hay un input/select de cobros con foco, NO re-renderizar (cierra el picker iOS).
@@ -5684,7 +5822,7 @@ function renderCobrosFromServer(){
     el.__pending=true;return;
   }
   // Guard 2: dedupe — incluye el filtro activo para re-renderizar al cambiar chip.
-  var sig=JSON.stringify([cobrosFiltro,_rutVerPeds,
+  var sig=JSON.stringify([cobrosFiltro,_rutVerPeds,_rutCVabierto,_rutCVts,_rutCVLista().map(function(x){return [x.k,x.p.n,x.p.ep,x.p.cobro];}),
     _rutSinCerrar.map(function(v){return [v.vendedor,v.n,v.total];}),
     pendientesCobro.map(function(pc){
     return [pc.h,pc.id,pc.r,pc.$,pc.fp,pc.es,pc.sub||0,pc.env||0,pc.desc||0,pc.isVendedor?1:0,pc.ck||'',pc.cn||''];
@@ -5696,8 +5834,13 @@ function renderCobrosFromServer(){
   function _chip(f,txt){return '<button type="button" class="cobros-chip'+(cobrosFiltro===f?' on':'')+'" data-cf="'+f+'" onclick="setCobrosFiltro(\''+f+'\')">'+txt+'</button>';}
   var chips=_rutSinCerrarHTML()
     +'<div class="cobros-chips">'+_chip('todos','Todos')+_chip('hoy','Hoy')+_chip('vd','🏠 Directa')+_chip('re','🔴 Red')+_chip('cl','⚽ Clubes')+'</div>';
+  /* Clientes de vendedores: con Todos y con Red (son pedidos de Red). */
+  var _cvVer=(cobrosFiltro==='todos'||cobrosFiltro==='re');
+  var cvAbajo=_cvVer?_rutCVHTML():'';
+  if(cvAbajo)chips+=_rutCVAvisoHTML();
 
   if(pendientesCobro.length===0){
+    if(cvAbajo){el.innerHTML=chips+cvAbajo;return;}
     /* La banda ya esta en `chips`, asi que sale igual sin cobros pendientes: ese
        es justo el caso peligroso — "Sin pendientes de cobro" con 13 pedidos sin
        marcar es una pantalla que miente. Misma regla que la banda de ARMADO. */
@@ -5711,7 +5854,7 @@ function renderCobrosFromServer(){
   h+='<div style="font-size:13px;font-weight:800;margin-bottom:10px">'+visibles.length+' pendiente(s) — Total: '+formatMoney(total)+'</div>';
 
   if(visibles.length===0){
-    el.innerHTML=h+'<div class="empty" style="padding:30px">Nada en este filtro</div>';return;
+    el.innerHTML=h+(cvAbajo||'<div class="empty" style="padding:30px">Nada en este filtro</div>');return;
   }
 
   // Agrupar por CANAL, y dentro de Venta Directa / Clubes por CLIENTE (across días).
@@ -5751,7 +5894,7 @@ function renderCobrosFromServer(){
     }
     h+='</div>';
   });
-  el.innerHTML=h;
+  el.innerHTML=h+cvAbajo;
 }
 
 // Cache de saldos a favor por teléfono (para no spamear el backend al renderear cobros)
