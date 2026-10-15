@@ -3122,6 +3122,25 @@ body.sb-open .sb-toggle .sb-toggle-lbl{display:inline}
 .cmd-empty{padding:40px 20px;text-align:center;color:var(--ink4);font-size:12px}
 .cmd-foot{padding:8px 12px;border-top:1px solid var(--border);display:flex;align-items:center;gap:14px;font-size:10px;color:var(--ink4);font-weight:500;background:var(--cr)}
 .cmd-foot span{display:flex;align-items:center;gap:4px}
+/* Buscador de pedidos y OC (15/10/2026) */
+.cmd-ped{border-bottom:1px solid var(--border);padding:2px 0 6px;margin-bottom:4px}
+.cmd-ped-h{align-items:flex-start}
+.cmd-chips{display:flex;flex-wrap:wrap;gap:4px;margin-top:4px}
+.cmd-chip{font-size:10px;font-weight:700;border:1px solid var(--border);color:var(--ink3);border-radius:50px;padding:1px 7px;white-space:nowrap}
+.cmd-ocs{margin:0 0 0 36px}
+.cmd-oc{padding:6px 10px;gap:8px;font-size:12px;align-items:center}
+.cmd-oc-n{font-family:'SF Mono',ui-monospace,monospace;font-size:11px;font-weight:700;color:var(--ink2);flex-shrink:0;min-width:62px}
+.cmd-oc-l{flex:1;min-width:0;line-height:1.25}
+.cmd-oc-l small{display:block;font-size:11px;color:var(--ink3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cmd-oc-vacio{font-size:11px;color:var(--ink4);padding:6px 12px}
+.cmd-oc-ficha{padding:10px 12px 14px}
+.cmd-oc-volver{background:none;border:none;color:var(--ink3);font:inherit;font-size:12px;font-weight:600;cursor:pointer;padding:6px 0;min-height:36px}
+.cmd-oc-tit{font-size:16px;font-weight:800;color:var(--ink);margin:4px 0 10px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.cmd-oc-fila{display:flex;justify-content:space-between;gap:12px;padding:7px 0;border-bottom:1px solid var(--border);font-size:13px}
+.cmd-oc-fila span{color:var(--ink3);flex-shrink:0}
+.cmd-oc-fila b{text-align:right;font-weight:600;min-width:0;overflow-wrap:anywhere}
+.cmd-oc-ir{margin-top:14px;width:100%;min-height:44px;border:none;border-radius:8px;background:var(--o);color:#fff;font:inherit;font-size:13px;font-weight:700;cursor:pointer}
+@media(max-width:600px){.cmd-bg{padding-top:12px}.cmd{max-width:calc(100vw - 16px)}.cmd-list{max-height:calc(100vh - 150px);max-height:calc(100dvh - 150px)}.cmd-ocs{margin-left:12px}.cmd-oc{min-height:44px}}
 
 /* ── KBD HELP modal ── */
 .kbd-help{display:flex;flex-direction:column;padding:14px 16px;gap:0}
@@ -11202,34 +11221,202 @@ function cmdNav(){
     return {k:x.k,t:d.t||x.t,s:d.bc||x.s,al:x.al,kbd:x.kbd,ic:x.ic};
   });
 }
+function _cmdEsc(t){return String(t==null?'':t).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
+/* ══ EL BUSCADOR DE PEDIDOS Y SUS OC (15/10/2026) ══════════════════════
+
+   Tadeo: «tipeo un cliente y me aparecen sus pedidos de todas las semanas, el
+   más reciente arriba, y debajo de cada uno sus líneas de OC». Antes buscaba
+   solo nombre y número, mostraba 10 y tocarlo llevaba a la tab Pedidos.
+
+   Usa lo que el ERP YA tiene: `D.pedidos` (pedidosLight, todas las semanas) y
+   `D.oc` (ocLight, que desde hoy trae N° de OC, fechas, nota y aparte `stock`:
+   las líneas que pasaron a «Tadeo — Stock», con el pedido del que venían).
+
+   Cada palabra tiene que aparecer en algún lado del pedido —cliente, canal,
+   vendedor, proveedor, producto, estado— sin acentos ni mayúsculas (dicta por
+   voz). Los números son estrictos: un N° de pedido o de OC tiene que ser ESE
+   número, y un teléfono va por los dígitos (4 o más), si no «116» traía
+   cientos de pedidos con un 116 en el celular.
+
+   Un pedido cancelado pierde su número (queda «-»): sus OC se le enganchan por
+   canal + cliente, entre las que no tienen un pedido vivo con ese número. */
+var _cmdIdx=null;
+function _cmdDig(s){return String(s==null?'':s).replace(/\D/g,'');}
+function _cmdOcDig(oc){var m=String(oc||'').match(/(\d+)\s*$/);return m?String(Number(m[1])):'';}
+function _cmdCliPlano(c){return _cmdPlano(String(c||'').replace(/\s*\(Red:[^)]*\)\s*$/,''));}
+function _cmdIndice(){
+  var peds=(typeof D!=='undefined'&&D&&Array.isArray(D.pedidos))?D.pedidos:null;
+  if(!peds)return null;
+  var lista=(D.oc&&Array.isArray(D.oc.lista))?D.oc.lista:[], stock=(D.oc&&Array.isArray(D.oc.stock))?D.oc.stock:[];
+  if(_cmdIdx&&_cmdIdx.peds===peds&&_cmdIdx.lista===lista&&_cmdIdx.stock===stock)return _cmdIdx;
+  var porPed={},vivos={},sueltas={};
+  peds.forEach(function(p){ if(p&&p.n&&p.n!=='-')vivos[p.h+'|'+p.n]=1; });
+  function add(k,l){(porPed[k]=porPed[k]||[]).push(l);}
+  lista.forEach(function(l){
+    var k=l.canal+'|'+l.pedido;
+    if(vivos[k])add(k,l);
+    else add('cli|'+l.canal+'|'+_cmdCliPlano(l.cliente),l);
+  });
+  stock.forEach(function(l){
+    var s={oc:l.oc,f:l.f,canal:'Depósito',pedido:'',cliente:'Tadeo — Stock',abbr:l.abbr,prod:l.prod,q:l.q,proveedor:l.proveedor,
+           estado:l.estado,fpp:l.fpp,fr:l.fr,nota:l.nota,aStock:true};
+    var k=l.eraCanal+'|'+l.eraPedido;
+    if(vivos[k])add(k,s); else add('cli|'+l.eraCanal+'|'+_cmdCliPlano(l.cliente||(String(l.nota||'').match(/\(([^)]+)\)/)||['',''])[1]),s);
+  });
+  var items=peds.map(function(p,i){
+    var vivo=p.n&&p.n!=='-';
+    var ls=(vivo?porPed[p.h+'|'+p.n]:porPed['cli|'+p.h+'|'+_cmdCliPlano(p.c)])||[];
+    var m=String(p.f||'').match(/(\d{1,2})\/(\d{1,2})/), y=String(p.mc||'').slice(0,4)||'2026';
+    var fk=m?(y+'-'+('0'+m[2]).slice(-2)+'-'+('0'+m[1]).slice(-2)):'0000';
+    var txt=_cmdPlano([p.c,p.h,p.br,p.bar,p.es,p.ep,p.fp,p.pas,p.era,p.retira].join(' ')+' '
+      +ls.map(function(l){return [l.proveedor,l.prod,l.abbr,l.estado,l.aStock?'tadeo stock':''].join(' ');}).join(' '));
+    var nums={};
+    if(vivo)nums[String(p.n).replace(/^0+/,'')]=1;
+    ls.forEach(function(l){var d=_cmdOcDig(l.oc);if(d)nums[d]=1;});
+    return {p:p,i:i,ls:ls,txt:txt,nums:nums,tel:_cmdDig(p.tel)+' '+_cmdDig(p.tcl),k:fk+' '+(p.hr||'')};
+  });
+  items.sort(function(a,b){return a.k<b.k?1:a.k>b.k?-1:b.i-a.i;});
+  _cmdIdx={peds:peds,lista:lista,stock:stock,items:items};
+  return _cmdIdx;
+}
+/* Una palabra suelta de la consulta: «pedido», «oc», «numero» no filtran nada. */
+var CMD_RUIDO={pedido:1,pedidos:1,oc:1,orden:1,ordenes:1,numero:1,nro:1,n:1,de:1,del:1,la:1,el:1,telefono:1,cel:1};
+function _cmdBuscarPedidos(qRaw){
+  var idx=_cmdIndice();
+  if(!idx)return null;
+  var q=_cmdPlano(qRaw).replace(/#/g,' ');
+  /* Un teléfono dictado o pegado: «11 3924-5151», «+54 9 11…». */
+  var soloTel=q.replace(/[\s\-+().]/g,'');
+  var telQ=/^\d{6,}$/.test(soloTel)?soloTel.replace(/^549?/,''):'';
+  var toks=q.replace(/\boc-(\d)/g,'oc $1').split(/[\s,;]+/).filter(function(t){return t&&!CMD_RUIDO[t];});
+  if(!toks.length&&!telQ)return {lista:[],total:0};
+  /* Un número que ES el N° de algún pedido u OC se busca solo como número: los
+     pedidos de Home ya van por el 1200 y cualquier celular tiene un «1201». Como
+     pedazo de teléfono cuenta si no es número de nada, o desde 6 dígitos. */
+  var esNum={};
+  toks.forEach(function(t){ if(/^\d+$/.test(t)&&t.length<6){var k=String(Number(t));esNum[t]=idx.items.some(function(it){return !!it.nums[k];});} });
+  var out=[];
+  idx.items.forEach(function(it){
+    var ok;
+    if(telQ)ok=it.tel.indexOf(telQ)>=0||(telQ.length<=6&&!!it.nums[String(Number(telQ))]);
+    else ok=toks.every(function(t){
+      if(/^\d+$/.test(t))return !!it.nums[String(Number(t))]||(!esNum[t]&&t.length>=4&&it.tel.indexOf(t)>=0);
+      if(t.length<2)return true;
+      return it.txt.indexOf(t)>=0;
+    });
+    if(ok)out.push(it);
+  });
+  return {lista:out,total:out.length};
+}
+var CMD_PED_MAX=25;
+function _cmdEstChip(e,aStock){
+  var t=aStock?'Pasada a Tadeo — Stock':(e||'Pendiente');
+  var c=aStock?'#6A1B9A':e==='Recibido'?'#2E7D32':e==='Pedido'?'#1565C0':e==='Cancelado'||e==='Cancelada'?'#9E9E9E':'#E65100';
+  return '<span class="cmd-chip" style="color:'+c+';border-color:'+c+'">'+_cmdEsc(t)+'</span>';
+}
+function _cmdPedHTML(it,items){
+  var p=it.p,vivo=p.n&&p.n!=='-';
+  var cli=String(p.c||'(sin nombre)').replace(/\s*\(Red:[^)]*\)\s*$/,'');
+  var chips='';
+  if(p.pas)chips+='<span class="cmd-chip" style="color:#C62828;border-color:#C62828">'+_cmdEsc(p.pas)+'</span>';
+  else if(p.es==='Cancelado')chips+='<span class="cmd-chip" style="color:#9E9E9E;border-color:#9E9E9E">Cancelado</span>';
+  if(p.era)chips+='<span class="cmd-chip" style="color:#5D4037;border-color:#A1887F">Era '+_cmdEsc(p.era)+'</span>';
+  if(p.es&&p.es!=='Cancelado')chips+='<span class="cmd-chip">'+_cmdEsc(p.es)+'</span>';
+  if(p.es!=='Cancelado')chips+='<span class="cmd-chip">'+_cmdEsc(p.ep||'')+'</span>';
+  var vend=(String(p.c||'').match(/\(Red:\s*([^)]*)\)/)||['',''])[1];
+  var sub=_cmdEsc(p.h)+(vivo?' #'+_cmdEsc(p.n):'')+(vend?' · '+_cmdEsc(vend):'')+' · '+_cmdEsc(p.dia?String(p.dia).slice(0,3)+' ':'')+_cmdEsc(p.f||'')
+    +(p.fed||p.dee?' · entrega '+_cmdEsc(p.fed||String(p.dee).split('-').reverse().slice(0,2).join('/')):'')+' · $'+Math.round(Number(p.$)||0).toLocaleString('es-AR');
+  items.push({type:'ped',h:p.h,n:p.n,r:p.r});
+  var h='<div class="cmd-ped"><div class="cmd-item cmd-ped-h" data-i="'+(items.length-1)+'" onclick="cmdPedAbrir('+(items.length-1)+')">'
+    +'<span class="cmd-item-ico"><svg viewBox="0 0 24 24" stroke="currentColor" fill="none" stroke-width="1.8"><rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 9h6M9 13h6"/></svg></span>'
+    +'<span class="cmd-item-l"><b>'+_cmdEsc(cli)+'</b><small>'+sub+'</small><span class="cmd-chips">'+chips+'</span></span></div>';
+  if(it.ls.length){
+    h+='<div class="cmd-ocs">';
+    it.ls.forEach(function(l){
+      items.push({type:'oc',l:l});
+      h+='<div class="cmd-item cmd-oc" data-i="'+(items.length-1)+'" onclick="cmdOcAbrir('+(items.length-1)+')">'
+        +'<span class="cmd-oc-n">'+_cmdEsc(l.oc||'OC s/n')+'</span>'
+        +'<span class="cmd-oc-l">'+_cmdEsc(l.prod||l.abbr)+' × '+_cmdEsc(String(l.q))+'<small>'+_cmdEsc(l.proveedor||'—')+(l.aStock&&l.nota?' · '+_cmdEsc(l.nota):'')+'</small></span>'
+        +_cmdEstChip(l.estado,l.aStock)+'</div>';
+    });
+    h+='</div>';
+  }else if(D&&D.oc&&Array.isArray(D.oc.lista)){
+    h+='<div class="cmd-ocs cmd-oc-vacio">Sin líneas de OC (sale del freezer o no se pidió)</div>';
+  }
+  return h+'</div>';
+}
+window.cmdPedAbrir=function(i){
+  var it=(($('cmdList')||{})._items||[])[i];if(!it)return;
+  cmdClose();
+  if(typeof window.openOrdDetail==='function')window.openOrdDetail(it.h,it.n,it.r);
+  else go('pedidos');
+};
+/* La ficha de una OC, adentro del mismo buscador: no hay una pantalla por OC
+   (Abastecimiento las agrupa por proveedor y semana) y una línea vieja,
+   Recibida, no aparece en ninguna. ← vuelve a los resultados. */
+var _cmdOcVista=null;
+window.cmdOcAbrir=function(i){
+  var it=(($('cmdList')||{})._items||[])[i];if(!it||!it.l)return;
+  _cmdOcVista=it.l;cmdRender();
+};
+window.cmdOcVolver=function(){_cmdOcVista=null;cmdRender();var i=$('cmdInput');if(i)i.focus();};
+window.cmdOcAbast=function(){
+  var l=_cmdOcVista;cmdClose();_cmdOcVista=null;
+  go('busqueda');
+  var t0=Date.now();
+  (function intentar(){
+    try{
+      if(typeof window.abaSwitchTab==='function'){
+        window.abaSwitchTab('proveedores');
+        var cards=[].slice.call(document.querySelectorAll('#p-busqueda .prov-card'));
+        var c=cards.filter(function(x){return l&&l.proveedor&&_cmdPlano(x.textContent).indexOf(_cmdPlano(l.proveedor))>=0;})[0];
+        if(c){c.scrollIntoView({behavior:'smooth',block:'start'});c.style.boxShadow='0 0 0 3px var(--o)';setTimeout(function(){c.style.boxShadow='';},2500);}
+        else if(l&&typeof toast==='function')toast(l.oc+' no está en la semana que muestra BUSQUEDA ('+(l.estado||'')+')');
+        return;
+      }
+    }catch(e){}
+    if(Date.now()-t0<6000)setTimeout(intentar,300);
+  })();
+};
+function _cmdOcFichaHTML(l){
+  function fila(k,v){return v?'<div class="cmd-oc-fila"><span>'+k+'</span><b>'+_cmdEsc(String(v))+'</b></div>':'';}
+  return '<div class="cmd-oc-ficha"><button type="button" class="cmd-oc-volver" onclick="cmdOcVolver()">← Volver a los resultados</button>'
+    +'<div class="cmd-oc-tit">'+_cmdEsc(l.oc||'OC sin número')+' '+_cmdEstChip(l.estado,l.aStock)+'</div>'
+    +fila('Producto',(l.prod||l.abbr)+' × '+l.q)+fila('Proveedor',l.proveedor)
+    +fila('Para',l.aStock?'Tadeo — Stock (Depósito)':(l.canal+(l.pedido?' #'+l.pedido:'')+(l.cliente?' · '+l.cliente:'')))
+    +fila('Creada',l.f)+fila('Pedida al proveedor',l.fpp)+fila('Recibida',l.fr)
+    +fila('Depósito',l.dep)+fila('Apartado',l.ap?String(l.ap):'')+fila('Nota',l.nota)
+    +(l.oc?'':'<div class="cmd-oc-vacio">Esta lista vino de la copia rápida, sin el N° de OC: tocá ↻ para traerla de la planilla.</div>')
+    +'<button type="button" class="cmd-oc-ir" onclick="cmdOcAbast()">Ver a '+_cmdEsc(l.proveedor||'el proveedor')+' en Abastecimiento</button></div>';
+}
+
 var cmdSel=0;
-function cmdOpen(){var b=$('cmdBg'),i=$('cmdInput');if(!b||!i)return;b.classList.add('on');i.value='';cmdSel=0;cmdRender();setTimeout(function(){i.focus();},30);}
+function cmdOpen(){var b=$('cmdBg'),i=$('cmdInput');if(!b||!i)return;b.classList.add('on');i.value='';cmdSel=0;_cmdOcVista=null;cmdRender();setTimeout(function(){i.focus();},30);
+  /* Sin pedidos cargados (se abrió desde una tab que no los usa): se traen
+     pedidos + OC livianos, no el volcado. */
+  try{ if((typeof D==='undefined'||!D||!D.pedidos)&&typeof loadRapido==='function'&&!cmdOpen._pidio){cmdOpen._pidio=1;loadRapido({soloPedidos:true});} }catch(e){}
+}
 function cmdClose(){var b=$('cmdBg');if(b)b.classList.remove('on');}
 function cmdRender(){
   var i=$('cmdInput'),l=$('cmdList');if(!i||!l)return;
-  var q=_cmdPlano(i.value);
   var items=[];
+  if(_cmdOcVista){ l.innerHTML=_cmdOcFichaHTML(_cmdOcVista); l._items=items; return; }
+  var q=_cmdPlano(i.value);
   function match(x){return !q||_cmdPlano(x.t).indexOf(q)>=0||_cmdPlano(x.s).indexOf(q)>=0||_cmdPlano(x.al).indexOf(q)>=0;}
   var nav=cmdNav().filter(match);
   var act=CMD_ACT.filter(match);
-  var pedidos=[];
-  if(q.length>=2&&D&&D.pedidos&&D.pedidos.length){
-    for(var pi=0;pi<D.pedidos.length&&pedidos.length<10;pi++){
-      var p=D.pedidos[pi];
-      /* Sin acentos tambien aca. `q` ya viene plano: si el nombre del cliente
-         quedara crudo, uno con tilde o enie dejaria de aparecer DEL TODO —
-         normalizar un solo lado es peor que no normalizar ninguno. */
-      var c=_cmdPlano(p.cliente||p.c||p.Cliente);
-      var n=_cmdPlano(p.n||p.nro||p.N);
-      if(c.indexOf(q)>=0||n.indexOf(q)>=0){
-        var hoja=p.h||p.hoja||'',nro=p.n||p.nro||'',tot=Number(p.total||p.t||p.Total||0);
-        pedidos.push({a:'ped',k:hoja,t:(p.cliente||p.c||p.Cliente||'(sin nombre)')+' · '+nro,s:hoja+' · $'+tot.toLocaleString('es-AR')});
-      }
-    }
-  }
   var html='';
   if(nav.length){html+='<div class="cmd-section">Ir a</div>';nav.forEach(function(x,i){items.push({type:'nav',k:x.k});html+='<div class="cmd-item" data-i="'+(items.length-1)+'" onclick="cmdGo(\''+x.k+'\')"><span class="cmd-item-ico">'+x.ic+'</span><span class="cmd-item-l"><b>'+x.t+'</b><small>'+x.s+'</small></span><span class="cmd-item-kbd">'+x.kbd+'</span></div>';});}
-  if(pedidos.length){html+='<div class="cmd-section">Pedidos</div>';pedidos.forEach(function(x){items.push({type:'ped',d:x});html+='<div class="cmd-item" data-i="'+(items.length-1)+'" onclick="cmdGo(\'pedidos\')"><span class="cmd-item-ico"><svg viewBox="0 0 24 24" stroke="currentColor" fill="none" stroke-width="1.8"><rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 9h6M9 13h6"/></svg></span><span class="cmd-item-l"><b>'+x.t+'</b><small>'+x.s+'</small></span></div>';});}
+  if(q.length>=2){
+    var r=_cmdBuscarPedidos(i.value);
+    if(!r)html+='<div class="cmd-section">Pedidos</div><div class="cmd-oc-vacio">Trayendo los pedidos… en unos segundos vuelven a aparecer acá.</div>';
+    else if(r.total){
+      var sello=(D&&D._lightTs&&typeof _hace==='function')?' · datos '+_hace(D._lightTs):'';
+      html+='<div class="cmd-section">Pedidos · '+r.total+(r.total>CMD_PED_MAX?' (los '+CMD_PED_MAX+' más recientes)':'')+_cmdEsc(sello)+'</div>';
+      r.lista.slice(0,CMD_PED_MAX).forEach(function(it){html+=_cmdPedHTML(it,items);});
+      if(r.total>CMD_PED_MAX)html+='<div class="cmd-oc-vacio">Hay '+(r.total-CMD_PED_MAX)+' más: sumá una palabra (el producto, el proveedor, el canal) para achicar.</div>';
+    }
+  }
   if(act.length){html+='<div class="cmd-section">Acciones</div>';act.forEach(function(x){items.push({type:'act',a:x.a});html+='<div class="cmd-item" data-i="'+(items.length-1)+'" onclick="cmdAct(\''+x.a+'\')"><span class="cmd-item-ico">'+x.ic+'</span><span class="cmd-item-l"><b>'+x.t+'</b><small>'+x.s+'</small></span><span class="cmd-item-kbd">'+x.kbd+'</span></div>';});}
   if(!html)html='<div class="cmd-empty">Sin resultados para "'+q+'"</div>';
   l.innerHTML=html;
@@ -11239,13 +11426,14 @@ function cmdRender(){
 }
 function cmdKey(e){
   var l=$('cmdList'),items=(l&&l._items)||[];
-  if(e.key==='Escape'){e.preventDefault();cmdClose();return;}
+  if(e.key==='Escape'){e.preventDefault();if(_cmdOcVista){cmdOcVolver();return;}cmdClose();return;}
   if(e.key==='ArrowDown'){e.preventDefault();cmdSel=Math.min(cmdSel+1,items.length-1);refreshSel();}
   else if(e.key==='ArrowUp'){e.preventDefault();cmdSel=Math.max(cmdSel-1,0);refreshSel();}
   else if(e.key==='Enter'){e.preventDefault();var it=items[cmdSel];if(!it)return;
     if(it.type==='nav')cmdGo(it.k);
     else if(it.type==='act')cmdAct(it.a);
-    else if(it.type==='ped')cmdGo('pedidos');
+    else if(it.type==='ped')cmdPedAbrir(cmdSel);
+    else if(it.type==='oc')cmdOcAbrir(cmdSel);
   }
   function refreshSel(){var els=l.querySelectorAll('.cmd-item');els.forEach(function(e,i){e.classList.toggle('sel',i===cmdSel);});var sel=els[cmdSel];if(sel&&sel.scrollIntoView)sel.scrollIntoView({block:'nearest'});}
 }
@@ -14100,10 +14288,14 @@ function loadRapido(opts){
      O sea: la lista aparece rapido, pero el ERP no dice "le falta la OC"
      hasta estar seguro. Mostrar de menos se ve; avisar de mas se paga. */
   var _ocDeGoogle=false;
-  var _ocPinta=function(lista,deGoogle,alFreezer){
+  var _ocPinta=function(lista,deGoogle,alFreezer,stock){
     if(!Array.isArray(lista))return;
     if(!D)D={};
+    /* Las lineas pasadas a «Tadeo — Stock» (15/10/2026, el buscador). Solo las
+       trae la planilla: el adelanto de Supabase deja las que habia. */
+    var _stPrev=(D.oc&&Array.isArray(D.oc.stock))?D.oc.stock:undefined;
     D.oc={lista:lista};
+    if(Array.isArray(stock))D.oc.stock=stock; else if(_stPrev)D.oc.stock=_stPrev;
     /* La palanca STOCK_OC_AL_FREEZER viaja con la lista de la planilla (9/10/2026).
        El adelanto no la trae: ahi no se pone y `_ocAlFreezerModo` usa la ultima. */
     if(alFreezer)D.oc.alFreezer=alFreezer;
@@ -14119,7 +14311,7 @@ function loadRapido(opts){
   };
   if(_L.ocLight&&_L.ocLight.then){
     _L.ocLight.then(function(d){
-      if(d&&d.oc&&Array.isArray(d.oc.lista)){ _ocDeGoogle=true; _ocPinta(d.oc.lista,true,d.oc.alFreezer);
+      if(d&&d.oc&&Array.isArray(d.oc.lista)){ _ocDeGoogle=true; _ocPinta(d.oc.lista,true,d.oc.alFreezer,d.oc.stock);
         /* La tabla de stock muestra lo APARTADO, que sale de las OCs: si estaba
            abierta cuando llegaron, se repinta (9/10/2026). */
         try{ if(typeof rStock==='function'&&typeof ST_TAB!=='undefined'&&ST_TAB==='productos'
