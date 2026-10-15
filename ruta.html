@@ -380,6 +380,10 @@ button.rtc-stop:active{background:var(--beige)}
 .rtc-lote b{font-size:46px;font-weight:900;color:var(--orange);letter-spacing:-.01em}
 .rtc-titulo{font-size:24px;font-weight:900;color:var(--brown);line-height:1.15;margin:4px 0 2px;overflow-wrap:anywhere}
 .rtc-nota{font-size:13px;font-weight:600;color:var(--muted);line-height:1.45;margin:6px 0 0}
+.rtc-nota.rtc-rojo,.rdep-rojo{color:#c62828;background:rgba(198,40,40,.08);border:1px solid rgba(198,40,40,.35);border-radius:8px;padding:8px 10px}
+.rdep-confirm-txt{white-space:pre-line;text-align:left;max-height:45vh;overflow:auto;font-size:13px}
+.confirm-box p.rdep-rojo{color:#c62828;margin-bottom:12px}
+.confirm-box p.rdep-confirm-txt{margin-bottom:16px}
 .rtc-reserva{display:inline-block;margin-top:6px;font-size:12px;font-weight:800;padding:3px 10px;border-radius:50px;background:#E3F2FD;color:#0D47A1}
 .rtc-cli{display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%;min-height:48px;padding:8px 0;margin:8px 0 10px;background:none;border:none;border-top:1px solid #F0EAE0;border-bottom:1px solid #F0EAE0;border-radius:0;font-family:inherit;text-align:left;cursor:pointer;color:var(--brown);-webkit-tap-highlight-color:transparent}
 .rtc-cli:active{background:#FFFCF5}
@@ -1839,6 +1843,10 @@ var _pgsAtrasado = null;
    auto y el backend ya no lo lista, pero la card lo nombra para que no parezca
    que se perdio. [{proveedor, fecha:'aaaa-mm-dd', unidades}] */
 var _pgsMasTarde = [];
+/* 15/10/2026: lo que tampoco esta en el auto (Pedido sin dia de busqueda,
+   Pendiente sin pedir) y lo que SI esta en la card pero el proveedor todavia no
+   figura entregado. [{proveedor, unidades, fecha?}] */
+var _pgsSinDia = [], _pgsSinPedir = [], _pgsSinEntregar = [];
 var pendientesPedidosOC=[];    // [{cliente,canal,nPedido,qty,items:[...]}]      ← a separar
 // Filtro de zona en RUTA. null = todos. String = subbarrio/barrio. Las pills arriba
 // permiten elegir destino y la lista de Ruta se filtra a solo ese subbarrio.
@@ -2174,18 +2182,45 @@ function _pgsLeerCache(){
   pendientesPedidosOC=c.pedidos||[];
   _pgsAtrasado=c.atrasado||null;
   _pgsMasTarde=c.masTarde||[];
+  _pgsSinDia=c.sinDia||[]; _pgsSinPedir=c.sinPedir||[]; _pgsSinEntregar=c.sinEntregar||[];
 })();
 
 var _pgsPidiendo=false, _pgsUltimo=0;
+var _RTC_DIAS=['dom','lun','mar','mié','jue','vie','sáb'];
+function _rtcDiaIso(iso){
+  var f=String(iso||'').split('-'), d=f.length===3?new Date(+f[0],+f[1]-1,+f[2]):null;
+  return d?_RTC_DIAS[d.getDay()]+' '+f[2]+'/'+f[1]:String(iso||'');
+}
+/* Lo que NO está en el auto, dicho para que no parezca perdido (2/10 y 15/10/2026):
+   lo que se busca otro día, lo pedido sin día de búsqueda y lo que todavía no se
+   le pidió al proveedor. */
 function _rtcMasTarde(){
+  var prov=function(x){return '<b>'+String(x.proveedor||'').replace(/[<>&]/g,'')+'</b>';};
+  var h='';
   var l=_pgsMasTarde||[];
-  if(!l.length)return '';
-  var DIAS=['dom','lun','mar','mié','jue','vie','sáb'];
-  return '<p class="rtc-nota">No está acá porque se busca otro día: '+l.map(function(x){
-    var f=String(x.fecha||'').split('-'), d=f.length===3?new Date(+f[0],+f[1]-1,+f[2]):null;
-    return '<b>'+String(x.proveedor||'').replace(/[<>&]/g,'')+'</b> ('+(x.unidades||0)+' u, '
-      +(d?DIAS[d.getDay()]+' '+f[2]+'/'+f[1]:x.fecha)+')';
+  if(l.length)h+='<p class="rtc-nota">Se busca otro día: '+l.map(function(x){
+    return prov(x)+' ('+(x.unidades||0)+' u, '+_rtcDiaIso(x.fecha)+')';
   }).join(' · ')+'.</p>';
+  var sd=_pgsSinDia||[];
+  if(sd.length)h+='<p class="rtc-nota">Pedido sin día de búsqueda cargado: '+sd.map(function(x){
+    return prov(x)+' ('+(x.unidades||0)+' u)';
+  }).join(' · ')+'. Agendalo en Abastecimiento › 📅 Búsqueda.</p>';
+  var sp=_pgsSinPedir||[];
+  if(sp.length)h+='<p class="rtc-nota">Todavía sin pedir al proveedor: '+sp.map(function(x){
+    return prov(x)+' ('+(x.unidades||0)+' u)';
+  }).join(' · ')+'.</p>';
+  return h;
+}
+/* Lo que está en la card y el proveedor todavía no figura entregado: en rojo,
+   porque confirmarlo de distraído lo da por recibido, suma el stock y habilita
+   el pago (15/10/2026). */
+function _rtcSinEntregarTxt(){
+  var l=_pgsSinEntregar||[], n=0;
+  l.forEach(function(x){n+=Number(x.unidades)||0;});
+  if(!n)return null;
+  return {n:n, det:l.map(function(x){
+    return '<b>'+String(x.proveedor||'').replace(/[<>&]/g,'')+'</b>: '+(x.unidades||0)+' u (se buscaba '+_rtcDiaIso(x.fecha)+')';
+  }).join('<br>')};
 }
 function fetchPendientesGuardarStock(forzar){
   if(_pgsPidiendo)return;
@@ -2204,6 +2239,7 @@ function fetchPendientesGuardarStock(forzar){
       /* `||null` y no `||{}`: si el backend todavia no lo manda, no hay aviso. */
       _pgsAtrasado=data.atrasado||null;
       _pgsMasTarde=data.masTarde||[];
+      _pgsSinDia=data.sinDia||[]; _pgsSinPedir=data.sinPedir||[]; _pgsSinEntregar=data.sinEntregar||[];
       // Re-render solo si estamos viendo la tab Ruta (la única donde aparece la card)
       if(rutCurrentTab==='ruta')rutRender();
     })
@@ -4323,7 +4359,29 @@ function confirmarGuardadoStock(rowsCsv,nProds,totalUnid,unidPedidos){
      o sube el costo de la OC, y con él lo que se le debe al proveedor. */
   else if(ef.hayAjuste) msg+='\n\nYa estaba todo recibido: no cambia la fecha de recibido. Lo contado distinto SÍ cambia el costo de la orden de compra y lo que le debés al proveedor.';
   else msg+='\n\nYa estaba todo recibido: no cambia la fecha de recibido ni el pago, solo queda guardado.';
+  var enviar=function(){ _rdepEnviarDescarga(rows,ajustes,aLucas,nLucas); };
+  /* Con unidades de un proveedor que todavía no entregó, el aviso va en un
+     cuadro propio: un confirm del navegador no tiene rojo (15/10/2026). */
+  var se=_rtcSinEntregarTxt();
+  if(se){
+    _rdepEnviarPend=enviar;
+    var o=document.getElementById('confirmOverlay');o.className='confirm-overlay';
+    o.innerHTML='<div class="confirm-box"><h3>¿Descargaste todo?</h3>'
+      +'<p class="rdep-rojo"><b>'+se.n+' unidades son de un proveedor que todavía no te entregó.</b><br>'+se.det+'<br>Confirmá solo si ya las tenés en la mano.</p>'
+      +'<p class="rdep-confirm-txt">'+_rtcEsc(msg.replace(/^¿Descargaste todo\?\n\n/,''))+'</p>'
+      +'<div class="confirm-btns"><button type="button" class="btn-no" onclick="cerrarConfirm()">No</button><button type="button" class="btn-si" onclick="_rdepConfirmarSi()">Sí, las tengo</button></div></div>';
+    return;
+  }
   if(!confirm(msg))return;
+  enviar();
+}
+var _rdepEnviarPend=null;
+function _rdepConfirmarSi(){
+  cerrarConfirm();
+  var f=_rdepEnviarPend; _rdepEnviarPend=null;
+  if(f)f();
+}
+function _rdepEnviarDescarga(rows,ajustes,aLucas,nLucas){
   rutShowLoader('Descargando el auto...');
   var payload={action:'marcarGuardadoEnStock',rows:rows,ajustes:ajustes,aLucas:aLucas,repartidor:_rutaUser(),ts:Date.now()};
   fetch(RUT_APPS_SCRIPT_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(payload),redirect:'follow'})
@@ -4976,7 +5034,8 @@ function rutRenderRuta(){
     h+='<article class="rtc-card">'
       +'<section class="rtc-dest dep"><div class="rtc-dest-top"><span class="rtc-zona">Depósito · la última parada</span><span class="rtc-canal">'+(totalUnidades+uPed)+' unidades</span></div>'
       +'<div class="rtc-titulo">Descargar el auto</div>'
-      +'<p class="rtc-nota">Todo lo que compraste y todavía no descargaste. Confirmá abajo cuando esté guardado: eso lo marca recibido y recién ahí podés pagarle al proveedor.</p>'
+      +'<p class="rtc-nota">Lo que ya recibiste o se busca hoy, y todavía no descargaste. Confirmá abajo cuando esté guardado: eso lo marca recibido y recién ahí podés pagarle al proveedor.</p>'
+      +(function(){var se=_rtcSinEntregarTxt();return se?'<p class="rtc-nota rtc-rojo">'+se.n+' u todavía no figuran entregadas por el proveedor:<br>'+se.det+'</p>':'';})()
       +_rtcMasTarde()+'</section>';
     if(nProds>0){
       h+='<section class="rtc-sec"><div class="rtc-sec-h"><span class="rtc-sec-t">Al freezer</span><span class="rtc-sec-n">'+_rtcCuenta(e.p)+'</span></div></section>'
