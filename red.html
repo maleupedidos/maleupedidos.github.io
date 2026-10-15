@@ -690,6 +690,15 @@
        plata, y suelto se parece a "cobrar" o "entregar", que son otra cosa. */
     .ruta-envio { font-size: .72rem; color: #777; margin-top: -.2rem; margin-bottom: .4rem; line-height: 1.8; }
     .ruta-envio.off { color: #8d6e63; }
+    /* «Este cliente es mío» (15/10/2026): quien trajo al cliente y el reclamo. */
+    .ruta-trajo { font-size: .74rem; color: #5d4037; background: #fbf7f2; border: 1px solid #efe3d3;
+                  border-radius: 10px; padding: .45rem .6rem; margin: .1rem 0 .5rem; line-height: 1.5; }
+    .ruta-trajo.pend { background: #fff8e1; border-color: #ffe082; }
+    .ruta-trajo.ok { background: #e8f5e9; border-color: #a5d6a7; color: #1b5e20; }
+    .ruta-trajo.no { background: #fbe9e7; border-color: #ffab91; color: #8d3a1e; }
+    .rec-btn { display: block; width: 100%; margin-top: .4rem; min-height: 40px; font-size: .82rem; font-weight: 700;
+               color: #fff; background: #6d4c41; border: 0; border-radius: 10px; cursor: pointer; }
+    .rec-btn:disabled { opacity: .5; cursor: default; }
     .env-btn { font-size: .68rem; font-weight: 700; color: #6d4c41; background: #fff3e0;
                border: 1px solid #ffcc80; border-radius: 999px; padding: .2rem .55rem;
                margin-left: .25rem; cursor: pointer; white-space: nowrap; }
@@ -2850,6 +2859,7 @@ function renderRuta() {
     html += '<div class="ruta-envio off">Envío sin cobrar · ' + _envioSelloTxt(p.envAnu) +
             _envBtn('false', 'Volver a cobrarlo') + '</div>';
   }
+  html += _trajoHtml(p);
   if (prodsHtml) html += '<div class="ruta-prods">' + prodsHtml + '</div>';
   html += '<div class="ruta-contact">';
   if (redTelOk(tel)) {
@@ -3260,6 +3270,59 @@ function _envioTrabadoMsg(p) {
     : 'Esperá: estoy guardando el envío';
 }
 
+/* ── «ESTE CLIENTE ES MÍO» (15/10/2026) ──
+   Un pedido que entró por la tienda y te lo pasamos dice «lo trajo Maleu»: cobrás
+   solo el envío. Si el cliente en realidad es tuyo, lo reclamás acá. Reclamar no
+   cambia nada todavía: lo decide Tadeo o Lucas, y acá ves en qué quedó. */
+const redReclamoEnVuelo = new Set();
+function _trajoHtml(p) {
+  const rc = p.rc || {};
+  const quien = s => s ? ' por ' + String(s).split(' ')[0] : '';
+  if (rc.estado === 'Pendiente')
+    return '<div class="ruta-trajo pend">🙋 Reclamaste este cliente' + (rc.el ? ' el ' + rc.el.slice(0, 5) : '') +
+           '. Esperando que Maleu lo apruebe: mientras tanto cobrás solo el envío.</div>';
+  if (rc.estado === 'Aprobado')
+    return '<div class="ruta-trajo ok">✓ Cliente tuyo: el reclamo se aprobó' + quien(rc.quien) + '. Cobrás tu comisión.</div>';
+  if (rc.estado === 'Rechazado')
+    return '<div class="ruta-trajo no">✗ El reclamo se rechazó' + quien(rc.quien) + ': lo trajo Maleu, cobrás solo el envío.</div>';
+  if (p.tc !== 'Maleu') return '';
+  const vuelo = redReclamoEnVuelo.has(_normN(p.n));
+  return '<div class="ruta-trajo">Este cliente lo trajo Maleu: cobrás solo el envío, no comisión.' +
+         '<button class="rec-btn" onclick="rutaReclamar()"' + (vuelo ? ' disabled' : '') + '>' +
+         (vuelo ? 'Guardando…' : '🙋 Este cliente es mío') + '</button></div>';
+}
+
+function rutaReclamar() {
+  const p = _rutaCurrent(); if (!p || !session) return;
+  const nN = _normN(p.n);
+  if (redReclamoEnVuelo.has(nN)) return;
+  if (!confirm('¿' + (p.c || 'Este cliente') + ' es cliente tuyo?\n\n' +
+               'Le avisamos a Maleu. Si lo aprueban, cobrás tu comisión por este pedido; ' +
+               'si no, queda como está (solo el envío).')) return;
+  const copia = lastDashboardData ? lastDashboardData.pedidos.find(x => _normN(x.n) === nN) : null;
+  const antes = p.rc || null;
+  const poner = rc => { p.rc = rc; if (copia) copia.rc = rc; renderRuta(); };
+  redReclamoEnVuelo.add(nN);
+  poner({ estado: 'Pendiente', quien: session.nombre, el: '' });
+  const post = body => fetch(APPS_SCRIPT_URL, { method: 'POST',
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(body) }).then(r => r.json());
+  post({ action: 'redReclamar', n: String(p.n), row: p.row,
+         clientOpId: 'rec_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 10) })
+    /* Con `diferida` (4d-2) lo escribe el aplicador: se lo empuja antes de seguir. */
+    .then(d => (d && d.ok && d.diferida) ? post({ action: 'pedidosFuenteAplicar' }).catch(() => null).then(() => d) : d)
+    .then(d => {
+      redReclamoEnVuelo.delete(nN);
+      if (d && d.ok) { poner(d.rc || { estado: 'Pendiente', quien: session.nombre, el: '' }); redToast('✓ Le avisamos a Maleu'); }
+      else { poner(antes); redToast('No se pudo: ' + ((d && d.err) || 'error')); }
+    })
+    .catch(() => {
+      /* No sabemos si llegó: se deja lo optimista y se le pregunta al servidor. */
+      redReclamoEnVuelo.delete(nN);
+      redToast('No sé si se guardó — lo estoy verificando');
+      try { loadDashboard(); } catch (e) {}
+    });
+}
+
 function rutaEnvioAnular(anular) {
   const p = _rutaCurrent(); if (!p || !session) return;
   if (_envioTrabado(p)) { redToast(_envioTrabadoMsg(p)); return; }
@@ -3540,7 +3603,7 @@ function rutaEditarCerrar() {
   editCart = {}; editPedidoRef = null;
 }
 
-function rutaEditarGuardar() {
+function rutaEditarGuardar(_revisado) {
   if (!editPedidoRef || !session) return;
   const p = editPedidoRef;
   const total = rutaEditarTotal();
@@ -3550,6 +3613,26 @@ function rutaEditarGuardar() {
     if (q > 0) items.push({ id: pr.id, qty: q });
   });
   if (!items.length) { redToast('El pedido no puede quedar vacío'); return; }
+
+  /* EL CORTE DEL JUEVES (15/10/2026). Antes de guardar, el backend corre la misma
+     edicion en seco: si ya paso el jueves 12 h y lo que agregás no esta libre en el
+     freezer, te lo dice antes de aceptarlo. Si no contesta, se guarda igual. */
+  if (!_revisado) {
+    const btnG = $id('em-save'); if (btnG) btnG.disabled = true;
+    showMaleuLoader('Revisando el pedido…', 'Mirando si llega para esta entrega');
+    fetch(APPS_SCRIPT_URL, {
+      method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({ action: 'editarPedidoRed', previa: true, pedidoId: String(p.n), row: Number(p.row) || 0,
+                             vendedor: session.nombre, items: items, total: total })
+    }).then(r => r.json()).catch(() => null).then(d => {
+      hideMaleuLoader();
+      if (btnG) btnG.disabled = false;
+      if (d && d.ok === false && d.err) { alert('No se puede guardar: ' + d.err); return; }
+      if (d && d.corte && !confirm('⚠️ ' + d.corte + '\n\n¿Lo guardo igual? A Maleu le llega el aviso.')) return;
+      rutaEditarGuardar(true);
+    });
+    return;
+  }
 
   // Cerrar modal de edición y mostrar loader
   $id('edit-modal-bg').classList.add('hidden');
