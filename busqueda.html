@@ -1485,7 +1485,60 @@ function populateProvSelect() {
     opt.value = p; opt.textContent = p;   // textContent: no hace falta escapar
     sel.appendChild(opt);
   });
-  if (current) sel.value = current;
+  /* Los proveedores de carne que no son dueños de ningun corte en la hoja
+     Proveedores (15/10/2026): hasta hoy solo aparecia LM Carnes, y la caja de
+     Carmín y Fuegos no tenia donde cargarse. La lista la arma el backend. */
+  var ya = {};
+  catalogo.proveedores.forEach(function (p) { ya[String(p).trim().toLowerCase()] = 1; });
+  (catalogo.carneProvs || []).forEach(function (p) {
+    if (ya[String(p).trim().toLowerCase()]) return;
+    var opt = document.createElement('option');
+    opt.value = p; opt.textContent = p + ' (carne)';
+    sel.appendChild(opt);
+  });
+  var nuevo = document.createElement('option');
+  nuevo.value = '__nuevoCarne'; nuevo.textContent = '+ Nuevo proveedor de carne…';
+  sel.appendChild(nuevo);
+  if (current && current !== '__nuevoCarne') sel.value = current;
+}
+
+/* Alta de un proveedor de carne desde el ERP (15/10/2026). Queda en la hoja
+   «Proveedores Carne»; desde ahi lo ofrecen + NUEVO, la factura y RECIBIR CARNE. */
+function _npAltaProvCarne(sel) {
+  var nombre = (prompt('Nombre del proveedor de carne nuevo:') || '').trim().replace(/\s+/g, ' ');
+  if (!nombre) { sel.value = _npProvPrevio || ''; return; }
+  var existe = (catalogo.carneProvs || []).concat(catalogo.proveedores || []).filter(function (p) {
+    return String(p).trim().toLowerCase() === nombre.toLowerCase();
+  })[0];
+  if (existe) { sel.value = existe; onNpProvChange(); return; }
+  abaShowLoader('Dando de alta a ' + nombre + '…');
+  fetch(ABA_APPS_SCRIPT_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify({ action: 'provCarneAlta', nombre: nombre }) })
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      abaHideLoader(true);
+      if (!d || !d.ok) { sel.value = _npProvPrevio || ''; abaShowToast('No se dio de alta: ' + ((d && (d.error || d.err)) || 'error del servidor'), 6000); return; }
+      catalogo.carneProvs = d.provs || (catalogo.carneProvs || []).concat([d.nombre]);
+      abaSaveLocal();
+      populateProvSelect();
+      sel.value = d.nombre;
+      abaShowToast(d.nombre + ' quedó como proveedor de carne');
+      onNpProvChange();
+      if (typeof abaCcCargar === 'function') abaCcCargar(true);
+    })
+    .catch(function () { abaHideLoader(true); sel.value = _npProvPrevio || ''; abaShowToast('Sin conexión: no se dio de alta', 5000); });
+}
+
+/* Los cortes de carne del catalogo, una vez cada uno: lo que se muestra para un
+   proveedor de carne que no tiene cortes propios en la hoja Proveedores. */
+function _npCortesCarne() {
+  var out = [], visto = {};
+  (catalogo.proveedores || []).forEach(function (p) {
+    ((catalogo.productos || {})[p] || []).forEach(function (it) {
+      if (it.u === 'kg' && !visto[it.a]) { visto[it.a] = 1; out.push(it); }
+    });
+  });
+  return out;
 }
 
 /* ── HELPERS ───────────────────────────────────────────── */
@@ -3959,6 +4012,7 @@ function renderStockOverview() {
 
 function onNpProvChange() {
   var sel = document.getElementById('npProv'), prov = sel.value;
+  if (prov === '__nuevoCarne') { _npAltaProvCarne(sel); return; }
   /* Una factura de carne a medio cargar no se esconde callada: seguiria contando como
      "editando" y trabaria el repintado del ERP entero. */
   if (_abaCcFormSucio() && !_abaCcEsCarne(prov)) {
@@ -3973,7 +4027,8 @@ function onNpProvChange() {
 
 function _npPintarProductos(prov) {
   var container = document.getElementById('npProductsList');
-  if (!prov || !catalogo.productos[prov]) {
+  var _esCarneSolo = prov && !catalogo.productos[prov] && _abaCcEsCarne(prov);
+  if (!prov || (!catalogo.productos[prov] && !_esCarneSolo)) {
     _abaCcMostrar(false);
     container.innerHTML = '';
     document.getElementById('npConfirm').classList.add('hide');
@@ -3984,7 +4039,7 @@ function _npPintarProductos(prov) {
 
   // Hide stock overview, show products
   document.getElementById('npStockOverview').innerHTML = '';
-  var items = catalogo.productos[prov];
+  var items = catalogo.productos[prov] || _npCortesCarne();
   /* La carne no se compra por aca (13/9/2026): entra por RECIBIR CARNE, pieza por
      pieza, y el stock de su deposito ES la suma de sus piezas — una OC recibida
      por aca sumaba kilos que la proxima tanda borraba sola. Ademas solo dejaba
@@ -4724,6 +4779,9 @@ function _abaCcFormSucio() { return !!(abaCcForm && abaCcForm.sucio); }
 /* Un proveedor de carne es uno cuyos productos son todos por kilo: el mismo criterio con
    el que + NUEVO le esconde el "Confirmar compra". */
 function _abaCcEsCarne(prov) {
+  /* O uno de la lista de proveedores de carne del backend (15/10/2026). */
+  var pn = String(prov || '').trim().toLowerCase();
+  if (pn && catalogo && (catalogo.carneProvs || []).some(function (p) { return String(p).trim().toLowerCase() === pn; })) return true;
   var items = (prov && catalogo && catalogo.productos && catalogo.productos[prov]) || [];
   return items.length > 0 && items.every(function (it) { return it.u === 'kg'; });
 }
