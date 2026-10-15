@@ -5502,6 +5502,11 @@ function redAbiertoHTML(p, iv, ip) {
     + (debe > 0 ? '<span class="va-chip ' + (pag ? 'ok' : 'no') + '">' + (pag ? '✓ Pagado a Maleu' : 'Debe a Maleu ' + ars(debe) + (p.nueva ? ' (efectivo)' : ' (entero, sin comisión)')) + '</span>' : '')
     + (p.sinCta ? '<span class="va-chip no">Transfirió ' + ars(p.trDir) + ' a Maleu · falta decir a qué cuenta</span>' : '')
     + '</div><div class="va-btns">';
+  /* Guardando (15/10/2026): el POST tarda 6-20 s y la tarjeta quedaba muda con
+     los botones grises. Mismo arreglo que Ruta › Cobros › Clientes de vendedores. */
+  if (_vaGuardando[iv + '-' + ip]) {
+    return h + '<div class="va-cta-t" style="background:#FFF3E0;border-radius:8px;padding:10px">⏳ Guardando' + redEsc(_vaGuardando[iv + '-' + ip]) + '… puede tardar unos segundos, no hace falta volver a tocar</div></div></div>';
+  }
   /* ¿A que cuenta de Maleu entro? (9/10/2026, RED_COBRO_A_CAJA). Sin ninguna
      elegida: tocar la cuenta ES la confirmacion. Hasta que alguien la diga, esa
      plata no suma en la Caja. */
@@ -5528,7 +5533,7 @@ function redAbiertoHTML(p, iv, ip) {
   if (p.marcadoPor) h += '<div class="va-mp">Marcado por ' + redEsc(p.marcadoPor) + '</div>';
   return h + '</div>';
 }
-var _vaCta = null;
+var _vaCta = null, _vaGuardando = {};
 function redAbiertoPedirCuenta(iv, ip, que) { _vaCta = { iv: iv, ip: ip, que: que }; redAbiertosRepintar(); }
 function redAbiertoCuentaCancelar() { _vaCta = null; redAbiertosRepintar(); }
 function redAbiertosRepintar() {
@@ -5546,18 +5551,21 @@ function redAbiertoCuenta(iv, ip, cuenta) {
   if (!p || !st || !cuenta) return;
   const updates = st.que === 'cuenta' ? { cuentaCobro: cuenta }
     : { formaPagoCliente: 'Transferencia', cobroCliente: true, montoVisto: p.cobro, cuentaCobro: cuenta };
-  const card = document.querySelector('#va-box [data-va="' + iv + '-' + ip + '"]');
-  if (card) card.querySelectorAll('button').forEach(function (b) { b.disabled = true; });
+  const kG = iv + '-' + ip;
+  if (_vaGuardando[kG]) return;
+  const ctaN = (((_vaData && _vaData.cuentas) || []).filter(function (c) { return c.id === cuenta; })[0] || {}).nombre || cuenta;
+  _vaGuardando[kG] = ' en ' + ctaN; redAbiertosRepintar();
+  const fin = function () { delete _vaGuardando[kG]; redAbiertosRepintar(); };
   fetch(APPS_SCRIPT_URL, {
     method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
     body: JSON.stringify({ action: 'updatePedidoRed', pedidoId: String(p.n), row: Number(p.row) || 0, vendedor: v.nombre, updates: updates })
   }).then(function (r) { return r.json(); }).then(function (d) {
-    if (d && d.ok) { _vaCta = null; redToast('✓ Entró a la caja'); redAbiertosCargar(); return; }
-    if (card) card.querySelectorAll('button').forEach(function (b) { b.disabled = false; });
+    if (d && d.ok) { _vaCta = null; delete _vaGuardando[kG]; redToast('✓ Entró a la caja'); redAbiertosCargar(); return; }
+    fin();
     if (d && d.montoDistinto) { _vaCta = null; redToast('No se marcó: la planilla dice ' + ars(d.montoPlanilla)); redAbiertosCargar(); return; }
     redToast('No se guardó: ' + _redErrTxt(d));
   }).catch(function () {
-    if (card) card.querySelectorAll('button').forEach(function (b) { b.disabled = false; });
+    fin();
     redToast('Sin conexión: no sé si se guardó. Tocá ↻ antes de volver a marcar.');
   });
 }
@@ -5573,18 +5581,20 @@ function redAbiertoMarcar(iv, ip, que) {
   else if (que === 'cobroTr') { updates = { formaPagoCliente: 'Transferencia', cobroCliente: true, montoVisto: p.cobro }; msg = '¿' + (p.c || 'El cliente') + ' le transfirió ' + ars(p.cobro) + ' a Maleu (pedido #' + p.n + ')?'; }
   else if (que === 'cobroEf') { updates = { formaPagoCliente: 'Efectivo', cobroCliente: true, montoVisto: p.cobro }; msg = '¿' + (p.c || 'El cliente') + ' le pagó ' + ars(p.cobro) + ' en efectivo a ' + quien + ' (pedido #' + p.n + ')?\n\nQueda como plata que ' + quien + ' le tiene que entregar a Maleu.'; }
   if (!updates || !confirm(msg)) return;
-  const card = document.querySelector('#va-box [data-va="' + iv + '-' + ip + '"]');
-  if (card) card.querySelectorAll('button').forEach(function (b) { b.disabled = true; });
+  const kG = iv + '-' + ip;
+  if (_vaGuardando[kG]) return;
+  _vaGuardando[kG] = ''; redAbiertosRepintar();
+  const fin = function () { delete _vaGuardando[kG]; redAbiertosRepintar(); };
   fetch(APPS_SCRIPT_URL, {
     method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
     body: JSON.stringify({ action: 'updatePedidoRed', pedidoId: String(p.n), row: Number(p.row) || 0, vendedor: v.nombre, updates: updates })
   }).then(function (r) { return r.json(); }).then(function (d) {
-    if (d && d.ok) { redToast('✓ Marcado'); redAbiertosCargar(); return; }
-    if (card) card.querySelectorAll('button').forEach(function (b) { b.disabled = false; });
+    if (d && d.ok) { delete _vaGuardando[kG]; redToast('✓ Marcado'); redAbiertosCargar(); return; }
+    fin();
     if (d && d.montoDistinto) { redToast('No se marcó: la planilla dice ' + ars(d.montoPlanilla)); redAbiertosCargar(); return; }
     redToast('No se guardó: ' + _redErrTxt(d));
   }).catch(function () {
-    if (card) card.querySelectorAll('button').forEach(function (b) { b.disabled = false; });
+    fin();
     redToast('Sin conexión: no sé si se guardó. Tocá ↻ antes de volver a marcar.');
   });
 }

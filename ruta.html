@@ -624,6 +624,9 @@ button.cobro-prods-copy{flex-shrink:0;border:1px solid #E8DFC4;background:#fff;c
 .cobro-card-actions button,.cobro-card-actions a{flex:1;padding:14px 8px;border:none;border-radius:10px;font-family:inherit;font-size:13px;font-weight:700;cursor:pointer;text-align:center;text-decoration:none;min-height:48px;display:flex;align-items:center;justify-content:center}
 .cobro-btn-alias{background:#25D366;color:#fff}
 .cobro-btn-cobrado{background:var(--orange);color:#fff}
+/* Cancelar NO es la acción: texto chico, sin fondo, en su renglón (15/10/2026). */
+.cobro-card-actions .cobro-btn-volver{flex:1 1 100%;background:transparent;color:var(--muted);font-weight:600;font-size:12px;min-height:34px;padding:6px 8px;text-decoration:underline}
+.cobro-cv-guardando{font-size:12px;font-weight:700;color:#5D4037;background:#FFF3E0;border-radius:10px;padding:12px;margin-top:6px}
 .cobro-fp-row{display:flex;align-items:center;gap:8px}
 .cobro-fp-row label{font-size:12px;font-weight:700;color:var(--muted);flex-shrink:0}
 .cobro-fp-row select{flex:1;border:1.5px solid var(--border);border-radius:10px;padding:10px 10px;font-size:15px;font-weight:700;font-family:inherit;background:var(--white);color:var(--brown);min-height:44px;-webkit-appearance:none;appearance:none;background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6' fill='%23331C1C'><path d='M0 0l5 6 5-6z'/></svg>");background-repeat:no-repeat;background-position:right 12px center;background-size:10px 6px;padding-right:32px}
@@ -5687,6 +5690,12 @@ window.rutCerrarRendidos=function(vend){
    los demás pedidos) no lo hace para Red. Se pide al entrar a Cobros y con ↻, no
    en la sincronización de cada 15 s: el servidor es uno solo. */
 var _rutCV=null,_rutCVts=0,_rutCVabierto='',_rutCVcargando=false;
+/* Lo que se está guardando, por tarjeta (15/10/2026). El POST tarda 6-20 s y la
+   tarjeta quedaba muda con los botones grises; la sincronización de cada 15 s la
+   repintaba con los botones VIVOS otra vez y se tocaba de nuevo: «no responden»
+   (Red #116: dos guardados a las 15:42:16 y 15:42:32). Ahora la tarjeta dice
+   «Guardando…» y ningún repintado le devuelve los botones. */
+var _rutCVguardando={};
 try{var _cvC=JSON.parse(localStorage.getItem('maleu_ruta_clivend')||'null');if(_cvC&&_cvC.d){_rutCV=_cvC.d;_rutCVts=_cvC.ts||0;}}catch(e){}
 function rutCliVendCargar(){
   if(_rutCVcargando)return;
@@ -5713,7 +5722,10 @@ function _rutCVLista(){
     (v.pedidos||[]).forEach(function(p,ip){
       if(!p||!p.nueva)return;
       if(p.ep==='Cobrado'&&!p.sinCta)return;
-      out.push({v:v,p:p,k:iv+'-'+ip});
+      /* Clave estable (15/10/2026): era la POSICIÓN en la lista (iv-ip). Si la
+         lista se recargaba entre pintar y tocar, la misma clave apuntaba a OTRO
+         pedido: abría o cobraba el de al lado. La fila y el número no se corren. */
+      out.push({v:v,p:p,k:'r'+(Number(p.row)||0)+'n'+String(p.n).replace(/[^0-9A-Za-z]/g,'')});
     });
   });
   return out;
@@ -5737,14 +5749,16 @@ function _rutCVHTML(){
     c+='<span class="cobro-card-total">'+formatMoney(monto)+'</span></div>';
     c+='<div style="font-size:11px;color:var(--muted);margin:-2px 0 4px 0">de '+_rutEsc(vN)+(p.dia?' · 📅 '+_rutEsc(p.dia):'')+'</div>';
     if(cob)c+='<div style="font-size:11px;color:#E65100;font-weight:700;margin:0 0 4px">Ya transfirió: falta decir a qué cuenta entró (todavía no suma en Caja)</div>';
-    if(_rutCVabierto===x.k){
+    if(_rutCVguardando[x.k]){
+      c+='<div class="cobro-cv-guardando">⏳ Guardando'+_rutEsc(_rutCVguardando[x.k])+'… puede tardar unos segundos, no hace falta volver a tocar</div>';
+    }else if(_rutCVabierto===x.k){
       var ctas=(_rutCV&&_rutCV.cuentas)||[];
       c+='<div style="font-size:12px;font-weight:700;color:#5D4037;margin:6px 0 4px">¿A qué cuenta de Maleu entraron los '+formatMoney(monto)+'?</div><div class="cobro-card-actions" style="flex-wrap:wrap">';
       ctas.forEach(function(ct){
         c+='<button type="button" class="cobro-btn-cobrado" data-c="'+_rutEsc(ct.id)+'" onclick="rutCliVendGuardar(\''+x.k+'\',\''+(cob?'cuenta':'tr')+'\',this.dataset.c)">'+_rutEsc(ct.nombre)+'</button>';
       });
       if(!cob)c+='<button type="button" class="cobro-btn-alias" onclick="rutCliVendGuardar(\''+x.k+'\',\'ef\',\'\')">💵 Efectivo a '+_rutEsc(vN.split(' ')[0])+'</button>';
-      c+='<button type="button" class="cobro-btn-copiar" onclick="rutCliVendAbrir(\'\')">Cancelar</button></div>';
+      c+='<button type="button" class="cobro-btn-volver" onclick="rutCliVendAbrir(\'\')">Cancelar</button></div>';
     }else{
       c+='<div class="cobro-card-actions">'
         +'<button type="button" class="cobro-btn-alias" onclick="cobroPedirComprobanteCV(\''+_rutEsc(p.c||'')+'\')">🧾 Pedir comprobante</button>'
@@ -5795,23 +5809,32 @@ window.rutCliVendGuardar=function(k,que,cuenta){
     updates={formaPagoCliente:'Transferencia',cobroCliente:true,montoVisto:p.cobro};
     if(cuenta)updates.cuentaCobro=cuenta;
   }
-  var card=document.querySelector('#cobrosContent [data-cv="'+k+'"]');
-  if(card)card.querySelectorAll('button').forEach(function(b){b.disabled=true;});
+  if(_rutCVguardando[k])return;
+  var ctaN=cuenta?((((_rutCV&&_rutCV.cuentas)||[]).filter(function(c){return c.id===cuenta;})[0]||{}).nombre||cuenta):'';
+  _rutCVguardando[k]=que==='ef'?' (efectivo a '+vN.split(' ')[0]+')':(ctaN?' en '+ctaN:'');
+  var _repintar=function(){var el=document.getElementById('cobrosContent');if(el)el.__sig=null;if(rutCurrentTab==='cobros')renderCobrosFromServer();};
+  _repintar();
   fetch(RUT_APPS_SCRIPT_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},
     body:JSON.stringify({action:'updatePedidoRed',pedidoId:String(p.n),row:Number(p.row)||0,vendedor:vN,updates:updates})})
     .then(function(r){return r.json();})
     .then(function(d){
+      delete _rutCVguardando[k];
       if(d&&d.ok){
         _rutCVabierto='';
+        /* Sale de la lista YA, sin esperar la recarga: la respuesta de
+           redPedidosAbiertos puede venir de antes del guardado. */
+        if(que==='cuenta'){p.sinCta=undefined;p.cta=cuenta;}
+        else{p.ep='Cobrado';if(que==='tr'&&!cuenta){p.sinCta=true;p.trDir=p.cobro;}else{p.sinCta=undefined;if(cuenta)p.cta=cuenta;}}
+        _repintar();
         showToast(que==='ef'?'✓ Marcado: lo tiene '+vN.split(' ')[0]:'✓ Cobrado — entró a la caja');
         rutCliVendCargar();fetchCobrosPendientes(true);return;
       }
-      if(card)card.querySelectorAll('button').forEach(function(b){b.disabled=false;});
+      _repintar();
       if(d&&d.montoDistinto){_rutCVabierto='';showToast('No se marcó: la planilla dice '+formatMoney(d.montoPlanilla));rutCliVendCargar();return;}
       showToast('No se guardó: '+((d&&(d.err||d.error))||'error'));
     })
     .catch(function(){
-      if(card)card.querySelectorAll('button').forEach(function(b){b.disabled=false;});
+      delete _rutCVguardando[k];_repintar();
       showToast('Sin conexión: no sé si se guardó. Tocá ↻ antes de volver a cobrar.');
     });
 };
@@ -5824,7 +5847,7 @@ function renderCobrosFromServer(){
     el.__pending=true;return;
   }
   // Guard 2: dedupe — incluye el filtro activo para re-renderizar al cambiar chip.
-  var sig=JSON.stringify([cobrosFiltro,_rutVerPeds,_rutCVabierto,_rutCVts,_rutCVLista().map(function(x){return [x.k,x.p.n,x.p.ep,x.p.cobro];}),
+  var sig=JSON.stringify([cobrosFiltro,_rutVerPeds,_rutCVabierto,_rutCVts,_rutCVguardando,_rutCVLista().map(function(x){return [x.k,x.p.n,x.p.ep,x.p.cobro];}),
     _rutSinCerrar.map(function(v){return [v.vendedor,v.n,v.total];}),
     pendientesCobro.map(function(pc){
     return [pc.h,pc.id,pc.r,pc.$,pc.fp,pc.es,pc.sub||0,pc.env||0,pc.desc||0,pc.isVendedor?1:0,pc.ck||'',pc.cn||''];
