@@ -14535,9 +14535,12 @@ function pdHtml(d){
   var N=(d.decididos||[]).filter(function(x){var n=String(x.n==null?'':x.n).trim();return n&&n!=='-';}).map(function(x){return {t:x.t||0,nos:x};});
   var R=(d.recientes||[]).filter(function(r){return r.puede;}).map(function(r){return {t:r.tEl||0,red:r};});
   var T=N.concat(R).sort(function(a,b){return b.t-a.t;}).slice(0,15);
-  var _kp='pd'+(L.length?1:0);
-  var h='<details class="rb-card pd-card rb-plg'+(L.length?' rb-hay':'')+'"'+(_rbAb(_kp,L.length>0)?' open':'')+' ontoggle="_rbTog('+_RBQ+_kp+_RBQ+',this)">';
-  h+='<summary class="rb-h"><span>🧾 Por decidir</span><span class="rb-n">'+(L.length?L.length+' esperando':'nada esperando')+(T.length?' · '+T.length+' recién decidido'+(T.length===1?'':'s'):'')+'</span></summary>';
+  /* Los reclamos «este cliente es mío» (15/10/2026) esperan en la misma tarjeta. */
+  var RP=((d.reclamos&&d.reclamos.pendientes)||[]),nEsp=L.length+RP.length;
+  var _kp='pd'+(nEsp?1:0);
+  var h='<details class="rb-card pd-card rb-plg'+(nEsp?' rb-hay':'')+'"'+(_rbAb(_kp,nEsp>0)?' open':'')+' ontoggle="_rbTog('+_RBQ+_kp+_RBQ+',this)">';
+  h+='<summary class="rb-h"><span>🧾 Por decidir</span><span class="rb-n">'+(nEsp?nEsp+' esperando':'nada esperando')+(T.length?' · '+T.length+' recién decidido'+(T.length===1?'':'s'):'')+'</span></summary>';
+  h+=rcHtml(d);
   h+='<div class="rb-sub">Todos los pedidos de la tienda pasan por acá. Sugerido: el vendedor del cupón; si no, el que ya le vendió por Red; si no, el de la zona; y en Estancias nosotros. Se puede elegir a cualquiera. Si nadie decide en '+(d.horas||2)+' h (el reloj corre de 8 a 22: lo que entra de noche espera a la mañana): en un barrio de vendedor sale al sugerido; si no, queda nuestro.</div>';
   if(d.decidirErr)h+='<div class="rb-err">No pude leer los pedidos por decidir: '+rbEsc(d.decidirErr)+'</div>';
   L.forEach(function(p){
@@ -14583,6 +14586,77 @@ function pdHtml(d){
     h+='</details>';
   }
   return h+'</details>';
+}
+/* ═══ «ESTE CLIENTE ES MÍO» (15/10/2026) ═══
+   El vendedor reclama desde su portal un pedido que dice «lo trajo Maleu».
+   Reclamar no cambia nada: aca un admin lo aprueba (Trajo el Cliente = Vendedor
+   y se recalcula la comision; si ya se pago, no se toca) o lo rechaza (queda
+   como esta y el vendedor lo ve). Backend: `reclamos` de ?action=redBandeja,
+   que solo viene para un admin, y {action:'redReclamoDecidir'}. */
+function _rc$(n){return '$'+Math.round(Number(n)||0).toLocaleString('es-AR');}
+function rcHtml(d){
+  var R=d&&d.reclamos;if(!R&&!(d&&d.reclamosErr))return '';
+  var h='';
+  if(d.reclamosErr)h+='<div class="rb-err">No pude leer los reclamos de los vendedores: '+rbEsc(d.reclamosErr)+'</div>';
+  ((R&&R.pendientes)||[]).forEach(function(p){
+    var k='rc'+p.row,nom=String(p.v||'').split(' ')[0];
+    var com;
+    if(p.liq)com='Su comisión de este pedido ya se pagó ('+rbEsc(p.liq)+'): aprobar no la cambia.';
+    else if(p.comNueva==null)com='Hoy cobra '+_rc$(p.com)+' de comisión'+(p.env?' + '+_rc$(p.env)+' de envío':'')+'. No pude calcular la nueva'+(p.comNuevaNota?': '+rbEsc(p.comNuevaNota):'')+'.';
+    else com='Comisión: hoy <b>'+_rc$(p.com)+'</b> → si aprobás <b>'+_rc$(p.comNueva)+'</b>'+(p.env?' (+ '+_rc$(p.env)+' de envío en los dos casos)':'')+'.';
+    h+='<div class="rb-p pd-p" id="'+k+'">'
+      +'<div class="rb-l1"><b>🙋 '+rbEsc(nom)+' dice que '+rbEsc(p.c||'este cliente')+' es suyo</b><span>'+_rc$(p.tot)+'</span></div>'
+      +'<div class="rb-l2">Red #'+rbEsc(p.n)+' · '+rbEsc(p.de||'sin día')+' · '+rbEsc(p.es||'Pendiente')+(p.ep?' · '+rbEsc(p.ep):'')+'</div>'
+      +'<div class="pd-sug">'+com+'</div>'
+      +'<div class="rb-l3">Reclamado'+(p.rc&&p.rc.el?' el '+rbEsc(p.rc.el):'')+(p.rc&&p.rc.quien?' · '+rbEsc(p.rc.quien):'')+'</div>'
+      +'<div class="pd-acc"><button type="button" class="pd-sug-btn" onclick="rcDecidir('+p.row+',true)">✓ Es suyo</button>'
+      +'<button type="button" class="pd-otro" onclick="rcDecidir('+p.row+',false)">✗ Lo trajimos nosotros</button></div>'
+      +'<div class="rb-err" id="rce-'+p.row+'"></div></div>';
+  });
+  var D=(R&&R.decididos)||[];
+  if(D.length){
+    h+='<details class="rb-det"'+(_rbAb('rcd',false)?' open':'')+' ontoggle="_rbTog('+_RBQ+'rcd'+_RBQ+',this)"><summary>Reclamos decididos ('+D.length+')</summary>';
+    D.forEach(function(p){
+      var ok=p.rc&&p.rc.estado==='Aprobado';
+      h+='<div class="rb-r"><b>Red #'+rbEsc(p.n)+'</b> '+rbEsc(p.c)+' → '+rbEsc(String(p.v||'').split(' ')[0])+': <b>'+(ok?'aprobado':'rechazado')+'</b>'
+        +(ok?' · comisión '+_rc$(p.com):'')+' <small>· '+rbEsc((p.rc&&p.rc.quien)||'')+' · '+rbEsc((p.rc&&p.rc.el)||'')+'</small></div>';
+    });
+    h+='</details>';
+  }
+  return h;
+}
+function rcDecidir(row,aprobar){
+  var R=(_rbDatos&&_rbDatos.reclamos&&_rbDatos.reclamos.pendientes)||[];
+  var p=R.filter(function(x){return x.row===row;})[0];if(!p)return;
+  var nom=String(p.v||'').split(' ')[0];
+  var msg=aprobar
+    ?'¿'+(p.c||'Este cliente')+' es de '+nom+'?\n\n• «Trajo el Cliente» pasa a Vendedor.\n• '
+      +(p.liq?'Su comisión ya se pagó: no se toca.':'La comisión de Red #'+p.n+' se recalcula'+(p.comNueva!=null?': '+_rc$(p.com)+' → '+_rc$(p.comNueva):'')+'.')
+    :'¿Rechazar el reclamo de '+nom+' por '+(p.c||'este cliente')+'?\n\nQueda como está (lo trajo Maleu, cobra solo el envío) y '+nom+' ve en su portal que se rechazó.';
+  if(!confirm(msg))return;
+  var op=_rbOp(function(c,o){
+    var r=c.reclamos;if(!r)return;
+    r.pendientes=(r.pendientes||[]).filter(function(x){return x.row!==row;});
+    var q=JSON.parse(JSON.stringify(p));
+    q.rc={estado:aprobar?'Aprobado':'Rechazado',quien:'vos',el:o.ok?'recién':'guardando…'};
+    if(aprobar&&q.comNueva!=null&&!q.liq)q.com=q.comNueva;
+    r.decididos=[q].concat((r.decididos||[]).filter(function(x){return x.row!==row;}));
+  });
+  _pdPost({action:'redReclamoDecidir',n:p.n,row:row,aprobar:!!aprobar,clientOpId:_pfId()}).then(function(d){
+    if(d&&d.ok){
+      _pfAplicar(d).then(function(){
+        _rbOpFin(op);
+        var cm=d.comision;
+        toast(aprobar?('✓ '+(p.c||'')+' es de '+nom+(cm&&!cm.pendiente&&cm.comision!=null?': comisión '+_rc$(cm.comision):'')):'Reclamo rechazado',5000);
+        setTimeout(rbPedir,1500);
+      });
+      return;
+    }
+    _rbOpFallo(op,'No se guardó lo de '+(p.c||'')+': '+((d&&d.err)||'no se pudo'),'rce-'+row);
+  }).catch(function(){
+    _rbOpFallo(op,'Sin respuesta: no sé si se guardó lo de '+(p.c||'')+'. Lo vuelvo a mirar…','rce-'+row);
+    setTimeout(rbPedir,1500);
+  });
 }
 function pdVendedores(p,k){
   var V=p.vs||[];
