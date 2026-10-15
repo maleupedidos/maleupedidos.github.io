@@ -10761,9 +10761,9 @@ function ajSaldoAjustar(i,tipo){
   if(monto<=0){ toast('Poné un monto'); return; }
   if(tipo==='Aplicación' && monto>c.saldo){ if(!confirm('Vas a quitar $'+ajMoney(monto)+' pero el cliente tiene $'+ajMoney(c.saldo)+'. ¿Seguir? (quedará en 0 o negativo)')) return; }
   var body={ cliente:c.cliente, telefono:c.telefono, tipo:tipo, monto:monto, notas:'Ajuste manual (Panel)'+(motivo?(': '+motivo):'') };
-  fetch(API,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(Object.assign({action:'crearSaldoCliente'},body))})
+  fetch(API,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(Object.assign({action:'crearSaldoCliente',clientOpId:_pfId()},body))})
     .then(function(r){return r.json();})
-    .then(function(d){ if(d&&d.ok){ toast((tipo==='Crédito'?'Crédito agregado':'Saldo descontado')+' · nuevo saldo $'+ajMoney(d.saldo)); ajLoadSaldos(); } else toast('Error: '+((d&&d.err)||'?')); })
+    .then(function(d){ if(d&&d.ok){ toast((tipo==='Crédito'?'Crédito agregado':'Saldo descontado')+' · nuevo saldo $'+ajMoney(d.saldo)); _pfAplicar(d).then(function(){ ajLoadSaldos(); }); } else toast('Error: '+((d&&d.err)||'?')); })
     .catch(function(e){ toast('Error: '+e.message); });
 }
 function ajDarCredito(btn){
@@ -10774,12 +10774,12 @@ function ajDarCredito(btn){
   var motivo=(r.querySelector('[data-k="motivo"]').value||'').trim();
   if(!cliente){ toast('Falta el nombre del cliente'); return; }
   if(monto<=0){ toast('Poné un monto'); return; }
-  var body={ action:'crearSaldoCliente', cliente:cliente, telefono:telefono, tipo:'Crédito', monto:monto, notas:'Ajuste manual (Panel)'+(motivo?(': '+motivo):'') };
+  var body={ action:'crearSaldoCliente', cliente:cliente, telefono:telefono, tipo:'Crédito', monto:monto, notas:'Ajuste manual (Panel)'+(motivo?(': '+motivo):''), clientOpId:_pfId() };
   btn.disabled=true; btn.textContent='...';
   fetch(API,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(body)})
     .then(function(r2){return r2.json();})
     .then(function(d){ btn.disabled=false; btn.textContent='+ Dar crédito';
-      if(d&&d.ok){ toast('Crédito dado a '+cliente+' · saldo $'+ajMoney(d.saldo)); r.querySelector('[data-k="cliente"]').value=''; r.querySelector('[data-k="telefono"]').value=''; r.querySelector('[data-k="monto"]').value=''; r.querySelector('[data-k="motivo"]').value=''; ajLoadSaldos(); }
+      if(d&&d.ok){ toast('Crédito dado a '+cliente+' · saldo $'+ajMoney(d.saldo)); r.querySelector('[data-k="cliente"]').value=''; r.querySelector('[data-k="telefono"]').value=''; r.querySelector('[data-k="monto"]').value=''; r.querySelector('[data-k="motivo"]').value=''; _pfAplicar(d).then(function(){ ajLoadSaldos(); }); }
       else toast('Error: '+((d&&d.err)||'?')); })
     .catch(function(e){ btn.disabled=false; btn.textContent='+ Dar crédito'; toast('Error: '+e.message); });
 }
@@ -13292,8 +13292,8 @@ function mrConfirmCierre(){
     usuario:c.usuario, fecha:c.fechaISO,
     billeteraIni:c.bil, cobradoEf:c.cobEf,
     esperado:c.pem, real:real,
-    notas:notasIn?notasIn.value:''
-  })}).then(function(r){return r.json();}).then(function(d){
+    notas:notasIn?notasIn.value:'', clientOpId:_pfId()
+  })}).then(function(r){return r.json();}).then(function(d){ return _pfAplicar(d).then(function(){ return d; }); }).then(function(d){
     if(btn){btn.disabled=false;btn.textContent='Confirmar cierre';}
     if(!d||!d.ok){alert('Error al cerrar: '+((d&&d.err)||'desconocido'));return;}
     mrCloseCierre();
@@ -14019,7 +14019,7 @@ function _leerVersion(app){
    "El HTML no sabe que version es" dejo de ser cierto: el build le escribe
    adentro el CACHE_NAME de sw-panel.js, el mismo que deploy.sh obliga a subir en
    cada cambio. Si lo publicado dice otra cosa, esta pagina es vieja. Punto. */
-var _APP_CN_PAGINA='maleu-panel-v636';
+var _APP_CN_PAGINA='maleu-panel-v637';
 
 /* Devuelve [{k,v}] si lo publicado no es lo que esta pagina corre. */
 function _chequearVersiones(){
@@ -19190,7 +19190,8 @@ function guardarEditor(uid,_ocTx){
   var _edLineas=lineas.map(function(l){return {a:l.a,q:l.q};});
   var _edFP=ed.fp||'';
   var _edRefPz=_edRef(ed);
-  var _cuerpo={action:'editarPedido',hoja:ed.hoja,id:ed.id,row:ed.row,lineas:_lineasEnvio,descuentoReceta:ed.receta||null,descuentoRecetaEditor:true,formaPago:_edFP};
+  /* clientOpId (15/10/2026): con la palanca prendida la edicion es una orden. */
+  var _cuerpo={action:'editarPedido',hoja:ed.hoja,id:ed.id,row:ed.row,lineas:_lineasEnvio,descuentoReceta:ed.receta||null,descuentoRecetaEditor:true,formaPago:_edFP,clientOpId:_pfId()};
   if(_pzA.length||_pzS.length)_cuerpo.piezas={agregar:_pzA,soltar:_pzS};
   fetch(API,{method:'POST',body:JSON.stringify(_cuerpo)})
     .then(function(r){return r.json();})
@@ -19227,13 +19228,16 @@ function guardarEditor(uid,_ocTx){
         var msg='Pedido actualizado';
         if(r.autoReReservado) msg+=' · sale del freezer ✓';
         else if(r.origenReseteado) msg+=' (origen reseteado)';
-        if(r.aviso) msg+=' · OC: '+r.aviso;
+        /* Como orden (`diferida`) el plan viene en `ocTexto`; por el camino de siempre, en `aviso`. */
+        var _ocMsg=r.aviso||r.ocTexto||'';
+        if(_ocMsg) msg+=' · OC: '+_ocMsg;
         /* El cliente pidio el cambio y espera que le cuenten como quedo: sin
            esto, el detalle actualizado esta a un toque y nadie se enteraria. */
         msg+=' — abr\u00ed la ficha y copi\u00e1 el detalle para el cliente';
-        toast(msg,r.aviso?9000:undefined);
-        // Reconciliar en background — sin loader visible
-        _recargarPedidos().then(function(){window._forceTopOnRender=false;});
+        toast(msg,_ocMsg?9000:undefined);
+        // Reconciliar en background — sin loader visible. Con `diferida` (orden) se
+        // empuja al aplicador antes: si no, la recarga traeria el pedido sin el cambio.
+        _pfAplicar(r).then(function(){return _recargarPedidos();}).then(function(){window._forceTopOnRender=false;});
       }else{
         toast('Error: '+(r.err||r.error||'?'));
         _recargarPedidos().then(function(){window._forceTopOnRender=false;});
@@ -20105,7 +20109,7 @@ function guardarAjuste(){
   }
   var btn=$('ajBtn');btn.disabled=true;btn.textContent='Guardando...';
   showLoader('Ajustando saldo...');
-  var payload={action:'ajusteSaldo',efectivo:ef,mp:mp,billetera:bil,sobres:sob,inversiones:inv};
+  var payload={action:'ajusteSaldo',efectivo:ef,mp:mp,billetera:bil,sobres:sob,inversiones:inv,clientOpId:_pfId()};
   if(LV)payload.lugares=LV.lug;
   /* Cada cuenta extra va como `cta_<id>`, con el MISMO criterio que los otros
      campos: lo que se deja vacio se manda con el valor calculado, no ausente.
@@ -20164,7 +20168,7 @@ function guardarAjuste(){
         toast('✓ Ajustado '+toco.join(' · ')+(toco.length<_campos?' — el resto quedó como estaba':''));
         $('ajusteForm').classList.add('hidden');$('ajCF').value='';$('ajBil').value='';$('ajMP').value='';$('ajInv').value='';$('ajWarn').classList.add('hidden');
         for(var _y=0;_y<_ex.length;_y++){var _e2=$('ajCta_'+_ex[_y].id);if(_e2)_e2.value='';}
-        _recargarCaja();
+        _pfAplicar(r).then(function(){_recargarCaja();});   // Caja C2: el conteo se escribe despues
       }else{hideLoader(true);toast('Error al ajustar');}
     })
     .catch(function(){hideLoader(true);toast('Sin conexion');})
@@ -20321,7 +20325,7 @@ function guardarInvertir(){
   var c=_calcSaldo();var disp=_invDir==='invertir'?c.mp:(c.inv||0);
   if(monto>disp){toast('No alcanza ('+(_invDir==='invertir'?'MP líquido':'Inversiones')+' $'+f$(Math.round(disp))+')');return;}
   var btn=$('invBtn');btn.disabled=true;btn.textContent='Guardando...';showLoader('Registrando...');
-  fetch(API,{method:'POST',body:JSON.stringify({action:'invertir',monto:monto,dir:_invDir})})
+  fetch(API,{method:'POST',body:JSON.stringify({action:'invertir',monto:monto,dir:_invDir,clientOpId:_pfId()})})
     .then(function(r){return r.json();})
     .then(function(r){
       if(r.ok){
@@ -20336,7 +20340,7 @@ function guardarInvertir(){
         render();hideLoader(true);
         toast(_invDir==='invertir'?'Invertido $'+f$(monto)+' (MP → Inversiones)':'Rescatado $'+f$(monto)+' (Inversiones → MP)');
         $('invertirForm').classList.add('hidden');$('invMonto').value='';
-        _recargarCaja();
+        _pfAplicar(r).then(function(){_recargarCaja();});
       }else{hideLoader(true);toast(r.err||'Error');}
     })
     .catch(function(){hideLoader(true);toast('Sin conexión');})
@@ -24120,13 +24124,13 @@ window.efBorrarHuerfano=function(btn){
   showLoader('Sacando el vuelto...');
   fetch(API,{method:'POST',body:JSON.stringify({action:'borrarVueltoHuerfano',
     row:row, h:hj, id:id, monto:monto,
-    clientOpId:'bvh-'+hj+'-'+id+'-'+monto+'-'+row})})
+    clientOpId:'bvh-'+hj+'-'+id+'-'+monto+'-'+row+'-'+Date.now().toString(36)})})
     .then(function(r){return r.json();})
     .then(function(r){
       hideLoader(true);
       if(r&&r.ok){ toast('Listo · el efectivo en mano baja $'+f$(monto)); }
       else{ alert((r&&r.error)||'No se pudo sacar. Probá de nuevo.'); }
-      _recargarCaja();
+      _pfAplicar(r).then(function(){_recargarCaja();});
     })
     .catch(function(){
       hideLoader(true);
@@ -24778,7 +24782,7 @@ function borrarMovCaja(tipo,row){
         if(tipo==='gasto')D.gastos=_fuera(D.gastos); else D.ingresos=_fuera(D.ingresos);
         render();
         toast('Borrado · $'+f$(m.$)+' vuelve a la caja');
-        _recargarCaja();
+        _pfAplicar(r).then(function(){_recargarCaja();});
       }else{
         alert((r&&r.error)||'No se pudo borrar. Probá de nuevo.');
         if(r&&(r.cambio||r.yaNoEsta))_recargarCaja();
@@ -28872,8 +28876,11 @@ window.rlqConfirmar=function(){
       if(r&&r.ok){
         RLQ_SEL=null;
         toast('Pago registrado · $'+f$(r.total)+' a '+s.v.split(' ')[0],4000);
-        _rlqPedir(true);
-        try{ if(typeof _recargarCaja==='function')_recargarCaja(); }catch(e){}
+        /* Con `diferida` (Caja C2) se escribe despues: el aplicador antes de releer. */
+        _pfAplicar(r).then(function(){
+          _rlqPedir(true);
+          try{ if(typeof _recargarCaja==='function')_recargarCaja(); }catch(e){}
+        });
       }else{
         alert((r&&(r.err||r.error))||'No se pudo registrar. Probá de nuevo.');
         if(r&&r.cambio){ RLQ_SEL=null; _rlqPedir(true); }
@@ -28894,8 +28901,12 @@ window.rlqDeshacer=function(id){
   if(!P){toast('No encuentro ese pago. Actualizo.');_rlqPedir(true);return;}
   if(!confirm('¿Deshacer este pago?\n\n'+P.vendedor+' · $'+f$(P.total)+' · '+P.fecha+'\n\nLos pedidos vuelven a quedar sin liquidar y el egreso sale de la Caja. El registro queda como anulado.'))return;
   showLoader('Deshaciendo el pago...');
-  fetch(API,{method:'POST',body:JSON.stringify({action:'redLiquidacionAnular',id:id,clientOpId:'lqa-'+id})})
+  /* El id lleva la hora (Caja C2, 14/10/2026): la base recuerda los ids de las
+     ordenes para siempre, y con uno fijo por liquidacion anularla, volver a
+     pagar y anularla otra vez daria «ya aplicada» sin hacer nada. */
+  fetch(API,{method:'POST',body:JSON.stringify({action:'redLiquidacionAnular',id:id,clientOpId:'lqa-'+id+'-'+Date.now().toString(36)})})
     .then(function(r){return r.json();})
+    .then(function(r){ return _pfAplicar(r).then(function(){ return r; }); })
     .then(function(r){
       hideLoader(true);
       if(r&&r.ok){ toast('Pago deshecho · $'+f$(r.total)+' vuelve a la caja',4000); try{ if(typeof _recargarCaja==='function')_recargarCaja(); }catch(e){} }
@@ -53529,10 +53540,19 @@ function rutaEditarGuardar(_revisado) {
       row: Number(p.row) || 0,   // la fila: el N° se repite (14/10/2026)
       vendedor: session.nombre,
       items: items,
-      total: total
+      total: total,
+      /* Con la palanca prendida la edición es una orden (15/10/2026): la base la
+         acepta y la escribe el aplicador. Sin el id iría por el camino de siempre. */
+      clientOpId: 'edr_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 10)
     })
   })
   .then(r => r.json())
+  /* Con `diferida` se empuja al aplicador antes de refrescar: si no, el pedido
+     aparecería sin el cambio hasta un minuto. `total` y `desfasaje` vienen igual. */
+  .then(d => (d && d.ok && d.diferida)
+    ? fetch(APPS_SCRIPT_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify({ action: 'pedidosFuenteAplicar' }) }).catch(() => null).then(() => d)
+    : d)
   .then(d => {
     if (!d.ok) {
       hideMaleuLoader();
@@ -67571,7 +67591,12 @@ function confirmarPago(key, idx, semana) {
       abaShowToast('Pago registrado. La lista tarda en actualizarse: tocá ↻');
     }, 12000);
     setTimeout(function() {
-      fetch(ABA_APPS_SCRIPT_URL + '?action=busqueda&t=' + Date.now())
+      /* Con `diferida` (Caja C2, 14/10/2026) el pago se escribe despues: el
+         aplicador va antes de pedir la deuda, si no la traeria sin el pago. */
+      (resp.diferida
+        ? fetch(ABA_APPS_SCRIPT_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ action: 'pedidosFuenteAplicar' }) }).catch(function () {})
+        : Promise.resolve())
+        .then(function () { return fetch(ABA_APPS_SCRIPT_URL + '?action=busqueda&t=' + Date.now()); })
         .then(function(r) { return r.json(); })
         .then(function(data) {
           /* La lista que llega DESPUES del tope de 12 s tambien se usa: tirarla

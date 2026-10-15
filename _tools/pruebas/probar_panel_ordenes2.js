@@ -39,7 +39,15 @@ const CASOS = [
   { id: 'gasto', nom: 'un gasto de Caja', accion: 'gasto', resp: { ok: true, rows: 1, ajuste: 0 },
     fn: 'guardarGasto', disparo: "_cajaPrep('g') || guardarGasto({preventDefault:function(){}})", sigue: 'cajaLight' },
   { id: 'ingreso', nom: 'un ingreso de Caja', accion: 'ingreso', resp: { ok: true, rows: 1, ajuste: 0 },
-    fn: 'guardarIngreso', disparo: "_cajaPrep('i') || guardarIngreso({preventDefault:function(){}})", sigue: 'cajaLight' }
+    fn: 'guardarIngreso', disparo: "_cajaPrep('i') || guardarIngreso({preventDefault:function(){}})", sigue: 'cajaLight' },
+  /* El resto de Caja C2 que se dispara sin armar medio formulario. */
+  { id: 'credito', nom: 'dar crédito a un cliente (Ajustes › Saldos)', accion: 'crearSaldoCliente', resp: { ok: true, saldo: 5000 }, fn: 'ajDarCredito',
+    disparo: "(function(){if(!document.getElementById('ajSaldosList')){var l=document.createElement('div');l.id='ajSaldosList';document.body.appendChild(l);} var r=document.getElementById('ajCredRow'); if(!r){r=document.createElement('div');r.id='ajCredRow';document.body.appendChild(r);} r.innerHTML='<input data-k=\"cliente\" value=\"Cliente Prueba\"><input data-k=\"telefono\" value=\"1199990009\"><input data-k=\"monto\" value=\"5000\"><input data-k=\"motivo\" value=\"prueba\">'; ajDarCredito(document.createElement('button'));})()",
+    sigue: 'saldosClientes' },
+  { id: 'liqanular', nom: 'deshacer el pago de una liquidación de Red', accion: 'redLiquidacionAnular', resp: { ok: true, id: 'LQ-0009', vendedor: 'Rufino Ardanaz', total: 3700, desmarcados: 1, egresos: 1 },
+    fn: 'rlqDeshacer', disparo: "(function(){window.RLQ_D={vendedores:[{pagos:[{id:'LQ-0009',vendedor:'Rufino Ardanaz',total:3700,fecha:'14/10/2026'}]}]}; rlqDeshacer('LQ-0009');})()", sigue: 'cajaLight' },
+  { id: 'invertir', nom: 'invertir plata digital', accion: 'invertir', resp: { ok: true, mp: 100000, inv: 50000 }, fn: 'guardarInvertir',
+    disparo: "(function(){window._calcSaldo=function(){return {mp:1e9,inv:1e9};}; var i=document.getElementById('invMonto'); if(i) i.value='1000'; var b=document.getElementById('invBtn'); if(b) b.disabled=false; guardarInvertir();})()", sigue: 'cajaLight' }
 ];
 /* Prepara el formulario de Caja: montos simulados, fecha de hoy, sin lugar que elegir. */
 const CAJA_PREP = "window._cajaPrep=function(p){ window._movMontos=function(){return {ef:1000,mp:0,total:1000,porCta:{efectivo:1000},extra:false};}; window._lugMovFalta=function(){return false;};"
