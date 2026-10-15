@@ -14019,7 +14019,7 @@ function _leerVersion(app){
    "El HTML no sabe que version es" dejo de ser cierto: el build le escribe
    adentro el CACHE_NAME de sw-panel.js, el mismo que deploy.sh obliga a subir en
    cada cambio. Si lo publicado dice otra cosa, esta pagina es vieja. Punto. */
-var _APP_CN_PAGINA='maleu-panel-v636';
+var _APP_CN_PAGINA='maleu-panel-v637';
 
 /* Devuelve [{k,v}] si lo publicado no es lo que esta pagina corre. */
 function _chequearVersiones(){
@@ -19190,7 +19190,8 @@ function guardarEditor(uid,_ocTx){
   var _edLineas=lineas.map(function(l){return {a:l.a,q:l.q};});
   var _edFP=ed.fp||'';
   var _edRefPz=_edRef(ed);
-  var _cuerpo={action:'editarPedido',hoja:ed.hoja,id:ed.id,row:ed.row,lineas:_lineasEnvio,descuentoReceta:ed.receta||null,descuentoRecetaEditor:true,formaPago:_edFP};
+  /* clientOpId (15/10/2026): con la palanca prendida la edicion es una orden. */
+  var _cuerpo={action:'editarPedido',hoja:ed.hoja,id:ed.id,row:ed.row,lineas:_lineasEnvio,descuentoReceta:ed.receta||null,descuentoRecetaEditor:true,formaPago:_edFP,clientOpId:_pfId()};
   if(_pzA.length||_pzS.length)_cuerpo.piezas={agregar:_pzA,soltar:_pzS};
   fetch(API,{method:'POST',body:JSON.stringify(_cuerpo)})
     .then(function(r){return r.json();})
@@ -19227,13 +19228,16 @@ function guardarEditor(uid,_ocTx){
         var msg='Pedido actualizado';
         if(r.autoReReservado) msg+=' · sale del freezer ✓';
         else if(r.origenReseteado) msg+=' (origen reseteado)';
-        if(r.aviso) msg+=' · OC: '+r.aviso;
+        /* Como orden (`diferida`) el plan viene en `ocTexto`; por el camino de siempre, en `aviso`. */
+        var _ocMsg=r.aviso||r.ocTexto||'';
+        if(_ocMsg) msg+=' · OC: '+_ocMsg;
         /* El cliente pidio el cambio y espera que le cuenten como quedo: sin
            esto, el detalle actualizado esta a un toque y nadie se enteraria. */
         msg+=' — abr\u00ed la ficha y copi\u00e1 el detalle para el cliente';
-        toast(msg,r.aviso?9000:undefined);
-        // Reconciliar en background — sin loader visible
-        _recargarPedidos().then(function(){window._forceTopOnRender=false;});
+        toast(msg,_ocMsg?9000:undefined);
+        // Reconciliar en background — sin loader visible. Con `diferida` (orden) se
+        // empuja al aplicador antes: si no, la recarga traeria el pedido sin el cambio.
+        _pfAplicar(r).then(function(){return _recargarPedidos();}).then(function(){window._forceTopOnRender=false;});
       }else{
         toast('Error: '+(r.err||r.error||'?'));
         _recargarPedidos().then(function(){window._forceTopOnRender=false;});
@@ -53536,10 +53540,19 @@ function rutaEditarGuardar(_revisado) {
       row: Number(p.row) || 0,   // la fila: el N° se repite (14/10/2026)
       vendedor: session.nombre,
       items: items,
-      total: total
+      total: total,
+      /* Con la palanca prendida la edición es una orden (15/10/2026): la base la
+         acepta y la escribe el aplicador. Sin el id iría por el camino de siempre. */
+      clientOpId: 'edr_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 10)
     })
   })
   .then(r => r.json())
+  /* Con `diferida` se empuja al aplicador antes de refrescar: si no, el pedido
+     aparecería sin el cambio hasta un minuto. `total` y `desfasaje` vienen igual. */
+  .then(d => (d && d.ok && d.diferida)
+    ? fetch(APPS_SCRIPT_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify({ action: 'pedidosFuenteAplicar' }) }).catch(() => null).then(() => d)
+    : d)
   .then(d => {
     if (!d.ok) {
       hideMaleuLoader();
