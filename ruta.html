@@ -380,6 +380,10 @@ button.rtc-stop:active{background:var(--beige)}
 .rtc-lote b{font-size:46px;font-weight:900;color:var(--orange);letter-spacing:-.01em}
 .rtc-titulo{font-size:24px;font-weight:900;color:var(--brown);line-height:1.15;margin:4px 0 2px;overflow-wrap:anywhere}
 .rtc-nota{font-size:13px;font-weight:600;color:var(--muted);line-height:1.45;margin:6px 0 0}
+.rtc-nota.rtc-rojo,.rdep-rojo{color:#c62828;background:rgba(198,40,40,.08);border:1px solid rgba(198,40,40,.35);border-radius:8px;padding:8px 10px}
+.rdep-confirm-txt{white-space:pre-line;text-align:left;max-height:45vh;overflow:auto;font-size:13px}
+.confirm-box p.rdep-rojo{color:#c62828;margin-bottom:12px}
+.confirm-box p.rdep-confirm-txt{margin-bottom:16px}
 .rtc-reserva{display:inline-block;margin-top:6px;font-size:12px;font-weight:800;padding:3px 10px;border-radius:50px;background:#E3F2FD;color:#0D47A1}
 .rtc-cli{display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%;min-height:48px;padding:8px 0;margin:8px 0 10px;background:none;border:none;border-top:1px solid #F0EAE0;border-bottom:1px solid #F0EAE0;border-radius:0;font-family:inherit;text-align:left;cursor:pointer;color:var(--brown);-webkit-tap-highlight-color:transparent}
 .rtc-cli:active{background:#FFFCF5}
@@ -662,7 +666,6 @@ button.cobro-prods-copy{flex-shrink:0;border:1px solid #E8DFC4;background:#fff;c
 /* Los tres modos de pago, solos en su fila: antes compartian fila con
    "Sin 10% OFF" y a 390px "Mixto" quedaba tapado. */
 .np-pago .np-chip{padding:13px 4px;font-size:13.5px;min-height:48px}
-.np-nodisc{width:100%;margin-top:8px;min-height:44px}
 /* El detalle de lo cargado, arriba del total. */
 .np-detalle{max-height:38vh;overflow-y:auto;-webkit-overflow-scrolling:touch;border:1.5px solid var(--border);border-radius:10px;background:var(--bg);padding:8px 10px;margin-bottom:8px}
 .np-det-cat{font-size:10.5px;font-weight:900;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);margin:6px 0 2px}
@@ -1038,7 +1041,6 @@ select.np-input{background:var(--white) url("data:image/svg+xml;utf8,<svg xmlns=
       <button type="button" class="np-chip" data-pago="Transferencia" onclick="npSetPago('Transferencia')">Transferencia</button>
       <button type="button" class="np-chip" data-pago="Mixto" onclick="npSetPago('Mixto')">Mixto</button>
     </div>
-    <button type="button" class="np-chip np-nodisc" id="npChipNoDisc" onclick="npToggleNoDisc()" title="Cobrar precio normal sin el 10% OFF del Efectivo">Sin 10% OFF</button>
 
     <!-- Ya me pagó: si el cliente paga al momento (caso clásico: vienen al
          depósito, pagan y se llevan). Setea estadoPago='Cobrado', llena
@@ -1734,7 +1736,7 @@ var NP_PIEZAS=null, NP_PIEZAS_TS=0;
 var npPzSel={};   // { id de producto: [{id:'P-0007', kg:1.286}] }
 var npGlobalPct=0;   // % de descuento sobre todo el pedido (tab "+")
 var npCatDisc={};    // { 'Tartas': 20, ... } % de descuento por categoría
-var npNoDisc=false;  // toggle "Sin 10% OFF": desactiva el 10% automático del Efectivo (el de +$100K se sacó el 11/9/2026)
+var npNoDisc=false;  // ya no hay toggle "Sin 10% OFF": el 10% del efectivo se sacó el 15/10/2026 (el de +$100K, el 11/9). Queda siempre en false.
 var _npClientesCache=null, _npClientesCacheTs=0, _npClickHandlerInstalled=false, _npFetchingClientes=false;
 
 /* ── LOADING OVERLAYS (dos distintos: GUARDAR y CARGAR) ── */
@@ -1841,6 +1843,10 @@ var _pgsAtrasado = null;
    auto y el backend ya no lo lista, pero la card lo nombra para que no parezca
    que se perdio. [{proveedor, fecha:'aaaa-mm-dd', unidades}] */
 var _pgsMasTarde = [];
+/* 15/10/2026: lo que tampoco esta en el auto (Pedido sin dia de busqueda,
+   Pendiente sin pedir) y lo que SI esta en la card pero el proveedor todavia no
+   figura entregado. [{proveedor, unidades, fecha?}] */
+var _pgsSinDia = [], _pgsSinPedir = [], _pgsSinEntregar = [];
 var pendientesPedidosOC=[];    // [{cliente,canal,nPedido,qty,items:[...]}]      ← a separar
 // Filtro de zona en RUTA. null = todos. String = subbarrio/barrio. Las pills arriba
 // permiten elegir destino y la lista de Ruta se filtra a solo ese subbarrio.
@@ -2176,18 +2182,45 @@ function _pgsLeerCache(){
   pendientesPedidosOC=c.pedidos||[];
   _pgsAtrasado=c.atrasado||null;
   _pgsMasTarde=c.masTarde||[];
+  _pgsSinDia=c.sinDia||[]; _pgsSinPedir=c.sinPedir||[]; _pgsSinEntregar=c.sinEntregar||[];
 })();
 
 var _pgsPidiendo=false, _pgsUltimo=0;
+var _RTC_DIAS=['dom','lun','mar','mié','jue','vie','sáb'];
+function _rtcDiaIso(iso){
+  var f=String(iso||'').split('-'), d=f.length===3?new Date(+f[0],+f[1]-1,+f[2]):null;
+  return d?_RTC_DIAS[d.getDay()]+' '+f[2]+'/'+f[1]:String(iso||'');
+}
+/* Lo que NO está en el auto, dicho para que no parezca perdido (2/10 y 15/10/2026):
+   lo que se busca otro día, lo pedido sin día de búsqueda y lo que todavía no se
+   le pidió al proveedor. */
 function _rtcMasTarde(){
+  var prov=function(x){return '<b>'+String(x.proveedor||'').replace(/[<>&]/g,'')+'</b>';};
+  var h='';
   var l=_pgsMasTarde||[];
-  if(!l.length)return '';
-  var DIAS=['dom','lun','mar','mié','jue','vie','sáb'];
-  return '<p class="rtc-nota">No está acá porque se busca otro día: '+l.map(function(x){
-    var f=String(x.fecha||'').split('-'), d=f.length===3?new Date(+f[0],+f[1]-1,+f[2]):null;
-    return '<b>'+String(x.proveedor||'').replace(/[<>&]/g,'')+'</b> ('+(x.unidades||0)+' u, '
-      +(d?DIAS[d.getDay()]+' '+f[2]+'/'+f[1]:x.fecha)+')';
+  if(l.length)h+='<p class="rtc-nota">Se busca otro día: '+l.map(function(x){
+    return prov(x)+' ('+(x.unidades||0)+' u, '+_rtcDiaIso(x.fecha)+')';
   }).join(' · ')+'.</p>';
+  var sd=_pgsSinDia||[];
+  if(sd.length)h+='<p class="rtc-nota">Pedido sin día de búsqueda cargado: '+sd.map(function(x){
+    return prov(x)+' ('+(x.unidades||0)+' u)';
+  }).join(' · ')+'. Agendalo en Abastecimiento › 📅 Búsqueda.</p>';
+  var sp=_pgsSinPedir||[];
+  if(sp.length)h+='<p class="rtc-nota">Todavía sin pedir al proveedor: '+sp.map(function(x){
+    return prov(x)+' ('+(x.unidades||0)+' u)';
+  }).join(' · ')+'.</p>';
+  return h;
+}
+/* Lo que está en la card y el proveedor todavía no figura entregado: en rojo,
+   porque confirmarlo de distraído lo da por recibido, suma el stock y habilita
+   el pago (15/10/2026). */
+function _rtcSinEntregarTxt(){
+  var l=_pgsSinEntregar||[], n=0;
+  l.forEach(function(x){n+=Number(x.unidades)||0;});
+  if(!n)return null;
+  return {n:n, det:l.map(function(x){
+    return '<b>'+String(x.proveedor||'').replace(/[<>&]/g,'')+'</b>: '+(x.unidades||0)+' u (se buscaba '+_rtcDiaIso(x.fecha)+')';
+  }).join('<br>')};
 }
 function fetchPendientesGuardarStock(forzar){
   if(_pgsPidiendo)return;
@@ -2206,6 +2239,7 @@ function fetchPendientesGuardarStock(forzar){
       /* `||null` y no `||{}`: si el backend todavia no lo manda, no hay aviso. */
       _pgsAtrasado=data.atrasado||null;
       _pgsMasTarde=data.masTarde||[];
+      _pgsSinDia=data.sinDia||[]; _pgsSinPedir=data.sinPedir||[]; _pgsSinEntregar=data.sinEntregar||[];
       // Re-render solo si estamos viendo la tab Ruta (la única donde aparece la card)
       if(rutCurrentTab==='ruta')rutRender();
     })
@@ -4325,7 +4359,29 @@ function confirmarGuardadoStock(rowsCsv,nProds,totalUnid,unidPedidos){
      o sube el costo de la OC, y con él lo que se le debe al proveedor. */
   else if(ef.hayAjuste) msg+='\n\nYa estaba todo recibido: no cambia la fecha de recibido. Lo contado distinto SÍ cambia el costo de la orden de compra y lo que le debés al proveedor.';
   else msg+='\n\nYa estaba todo recibido: no cambia la fecha de recibido ni el pago, solo queda guardado.';
+  var enviar=function(){ _rdepEnviarDescarga(rows,ajustes,aLucas,nLucas); };
+  /* Con unidades de un proveedor que todavía no entregó, el aviso va en un
+     cuadro propio: un confirm del navegador no tiene rojo (15/10/2026). */
+  var se=_rtcSinEntregarTxt();
+  if(se){
+    _rdepEnviarPend=enviar;
+    var o=document.getElementById('confirmOverlay');o.className='confirm-overlay';
+    o.innerHTML='<div class="confirm-box"><h3>¿Descargaste todo?</h3>'
+      +'<p class="rdep-rojo"><b>'+se.n+' unidades son de un proveedor que todavía no te entregó.</b><br>'+se.det+'<br>Confirmá solo si ya las tenés en la mano.</p>'
+      +'<p class="rdep-confirm-txt">'+_rtcEsc(msg.replace(/^¿Descargaste todo\?\n\n/,''))+'</p>'
+      +'<div class="confirm-btns"><button type="button" class="btn-no" onclick="cerrarConfirm()">No</button><button type="button" class="btn-si" onclick="_rdepConfirmarSi()">Sí, las tengo</button></div></div>';
+    return;
+  }
   if(!confirm(msg))return;
+  enviar();
+}
+var _rdepEnviarPend=null;
+function _rdepConfirmarSi(){
+  cerrarConfirm();
+  var f=_rdepEnviarPend; _rdepEnviarPend=null;
+  if(f)f();
+}
+function _rdepEnviarDescarga(rows,ajustes,aLucas,nLucas){
   rutShowLoader('Descargando el auto...');
   var payload={action:'marcarGuardadoEnStock',rows:rows,ajustes:ajustes,aLucas:aLucas,repartidor:_rutaUser(),ts:Date.now()};
   fetch(RUT_APPS_SCRIPT_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(payload),redirect:'follow'})
@@ -4978,7 +5034,8 @@ function rutRenderRuta(){
     h+='<article class="rtc-card">'
       +'<section class="rtc-dest dep"><div class="rtc-dest-top"><span class="rtc-zona">Depósito · la última parada</span><span class="rtc-canal">'+(totalUnidades+uPed)+' unidades</span></div>'
       +'<div class="rtc-titulo">Descargar el auto</div>'
-      +'<p class="rtc-nota">Todo lo que compraste y todavía no descargaste. Confirmá abajo cuando esté guardado: eso lo marca recibido y recién ahí podés pagarle al proveedor.</p>'
+      +'<p class="rtc-nota">Lo que ya recibiste o se busca hoy, y todavía no descargaste. Confirmá abajo cuando esté guardado: eso lo marca recibido y recién ahí podés pagarle al proveedor.</p>'
+      +(function(){var se=_rtcSinEntregarTxt();return se?'<p class="rtc-nota rtc-rojo">'+se.n+' u todavía no figuran entregadas por el proveedor:<br>'+se.det+'</p>':'';})()
       +_rtcMasTarde()+'</section>';
     if(nProds>0){
       h+='<section class="rtc-sec"><div class="rtc-sec-h"><span class="rtc-sec-t">Al freezer</span><span class="rtc-sec-n">'+_rtcCuenta(e.p)+'</span></div></section>'
@@ -6578,13 +6635,17 @@ function _renderCobroPedidos(peds){
    y uno que se cargo en efectivo con "Sin 10% OFF" no
    lo recupera en el cobro. Si cambia la forma de pago, manda la regla.
    `previo` = es el 10% que el pedido ya traia sin pagar en efectivo, para decirlo. */
+/* Y DESDE EL 15/10/2026 NO HAY 10% DEL EFECTIVO. Cobrar en efectivo ya no lo
+   aplica; solo lo conserva el pedido que se CARGO con el 10% (lo guardado es el
+   10% exacto del subtotal): cobrado en efectivo o con la forma de pago con la
+   que se cargo. Si se cobra de otra forma, lo pierde, como antes. */
 function _descAutoCobro(ent,fp){
   var sub=Number(ent&&ent.sub)||0, diez=Math.round(sub*0.10);
   var guardado=Number(ent&&ent.desc)||0;
-  if(ent&&fp===ent.fp&&(guardado===0||guardado===diez)){
-    return {d:guardado, previo:(guardado>0&&fp!=='Efectivo')};
+  if(ent&&guardado>0&&guardado===diez&&(fp==='Efectivo'||fp===ent.fp)){
+    return {d:guardado, previo:true};
   }
-  return {d:(fp==='Efectivo')?diez:0, previo:false};
+  return {d:0, previo:false};
 }
 /* ══ EL DESCUENTO DE UN COBRO (12/9/2026) ═══════════════════════════════════
    Tadeo, con el pedido #955: cargado en efectivo con el 10% ($112.500),
@@ -6630,8 +6691,8 @@ function _descDelCobro(st){
     else if(fp==='Mixto'){ monto=guardado; mot=guardado>0?'Pago mixto: queda el 10% con el que se cargó':'Pago mixto: sin descuento'; }
     else {
       var da=_descAutoCobro(ent,fp); monto=da.d;
-      if(monto>0)mot=da.previo?'El 10% con el que se cargó el pedido':'10% por pagar en efectivo';
-      else mot=(fp==='Efectivo')?'Se cargó sin descuento':'Sin descuento: el 10% es solo pagando en efectivo';
+      if(monto>0)mot='El 10% con el que se cargó el pedido';
+      else mot='Sin descuento';
     }
   } else if(d.modo==='sin'){ monto=0; mot='Sin descuento: lo elegiste vos'; }
   else if(d.modo==='diez'){ monto=diez; mot='10%: lo elegiste vos'; }
@@ -6764,8 +6825,8 @@ function _descDelCombo(st){
       });
       var m0=filas.reduce(function(a,f){return a+f.desc;},0);
       if(fp==='Mixto')mot=m0>0?'Pago mixto: cada pedido queda con el descuento con el que se cargó':'Pago mixto: sin descuento';
-      else if(m0>0)mot=hayPrevio?'El descuento con el que se cargó cada pedido':'10% por pagar en efectivo';
-      else mot=(fp==='Efectivo')?'Se cargaron sin descuento':'Sin descuento: el 10% es solo pagando en efectivo';
+      else if(m0>0)mot='El descuento con el que se cargó cada pedido';
+      else mot='Sin descuento';
     }
   } else if(d.modo==='sin'){
     filas.forEach(function(f){f.desc=0;});mot='Sin descuento: lo elegiste vos';
@@ -7903,7 +7964,7 @@ function _afterAlCostoChange(st){
 function _quitarAlCosto(st,btn){
   st.alCosto=false; delete st.comboAlCosto;
   if(btn)btn.classList.remove('on');
-  st.desc=null;   // vuelve a la regla (incluye el 10% si paga en efectivo)
+  st.desc=null;   // vuelve a la regla (el descuento con el que se cargó)
   _afterAlCostoChange(st);
 }
 
@@ -9539,15 +9600,6 @@ function npPintarCta(){
 }
 function npSetCta(id){npCta=id;npPintarCta();}
 
-// Toggle "Sin 10% OFF" — al activarlo, anula el 10% automatico del Efectivo.
-// Util para clientes a los que se les cobra precio normal aunque paguen en efectivo.
-// Los descuentos manuales (% al pedido / % por categoria / regalo) se mantienen siempre.
-function npToggleNoDisc(){
-  npNoDisc=!npNoDisc;
-  var b=document.getElementById('npChipNoDisc');
-  if(b)b.classList.toggle('active',npNoDisc);
-  npUpdateTotal();
-}
 
 function npRenderCatalogo(){
   var host=document.getElementById('npProductos');
@@ -9976,7 +10028,8 @@ function npDescuento(subtotal,tipo){
      ahora es muy facil... tengamos la libertad en AUTOPEDIDO para armar el
      descuento que querramos". Para eso estan el % al pedido, el % por categoria
      y el Regalo $. */
-  if(npPago==='Efectivo')return Math.round(subtotal*0.10);
+  /* Y desde el 15/10/2026 tampoco el del efectivo: Tadeo paso a un monotributo
+     mas grande y fideliza con templates y regalos, no con un descuento fijo. */
   return 0;
 }
 
@@ -10063,8 +10116,7 @@ function npDiscountInfo(){
   var globalDiscP=Math.round(base*gp/100);
   var pctDisc=catDiscP+globalDiscP;
   if(pctDisc>sub)pctDisc=sub;
-  var auto=0;
-  if(pctDisc===0&&tipo==='normal'&&!npNoDisc&&npPago==='Efectivo')auto=Math.round(sub*0.10);
+  var auto=0;   // sin descuento automatico desde el 15/10/2026 (era el 10% del efectivo)
   var effDisc=pctDisc>0?pctDisc:auto;
   var regalo=npDescuentoManualValor();
   var total=Math.max(0,sub-effDisc-regalo);
@@ -10099,11 +10151,9 @@ function npUpdateTotal(){
   else if(tipo==='club')parts.push('precio Club');
   if(info.globalDiscP>0)parts.push(info.globalPct+'% pedido');
   if(info.catDiscP>0)parts.push('% categoría');
-  if(info.auto>0)parts.push('10% OFF');
   if(info.regalo>0)parts.push('regalo');
   if(envio>0)parts.push('envío '+npMoney(envio));
   else if(npEnvioRegalado())parts.push('envío de regalo');
-  if(npNoDisc&&info.pctDisc===0)parts.push('sin 10% OFF');
   var label=parts.length?('Total ('+parts.join(' + ')+')'):'Total';
   try{npAvisoEncargoRender();}catch(_e2){}
   document.getElementById('npTotalLabel').textContent=label;
@@ -11005,11 +11055,8 @@ function npGuardar(){
       // auto10 solo queda true si NO hay % manual Y NO esta el "Sin 10% OFF".
       var recC={};
       Object.keys(npCatDisc).forEach(function(k){var v=Number(npCatDisc[k])||0;if(v>0)recC[k]=v;});
-      receta={g:Number(npGlobalPct)||0, c:recC, r:info.regalo||0, auto10:(!info.authoritative && !npNoDisc)};
-    } else if(npNoDisc){
-      // Solo "Sin 10% OFF", sin descuento manual: receta vacia con auto10=false
-      // para que el backend no reaplique el 10% al editar productos.
-      receta={g:0,c:{},r:0,auto10:false};
+      // auto10 siempre false desde el 15/10/2026: ya no hay 10% automatico.
+      receta={g:Number(npGlobalPct)||0, c:recC, r:info.regalo||0, auto10:false};
     }
   }
   // Nombre del dia derivado de la fecha seleccionada
