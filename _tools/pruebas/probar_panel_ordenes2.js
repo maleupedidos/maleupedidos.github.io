@@ -33,8 +33,19 @@ const CASOS = [
     sigue: 'pedidosLight' },
   { id: 'cf', nom: 'mover el día de un cobro (el 📅 del libro de Caja)', accion: 'cobroFecha',
     resp: { ok: true, antes: '14/10/2026 13:16', ahora: '11/10/2026 13:16', row: 1149, ajuste: 0 },
-    disparo: "_cobroCambiarFecha('Home','1167','14/10/2026','11/10/2026','',1149)", sigue: 'cajaLight' }
+    disparo: "_cobroCambiarFecha('Home','1167','14/10/2026','11/10/2026','',1149)", sigue: 'cajaLight' },
+  /* Caja C2 (CAJA_FUENTE_PG): el gasto y el ingreso de Caja. Los montos se simulan
+     (_movMontos lee varios campos) y la fecha es la de hoy. */
+  { id: 'gasto', nom: 'un gasto de Caja', accion: 'gasto', resp: { ok: true, rows: 1, ajuste: 0 },
+    fn: 'guardarGasto', disparo: "_cajaPrep('g') || guardarGasto({preventDefault:function(){}})", sigue: 'cajaLight' },
+  { id: 'ingreso', nom: 'un ingreso de Caja', accion: 'ingreso', resp: { ok: true, rows: 1, ajuste: 0 },
+    fn: 'guardarIngreso', disparo: "_cajaPrep('i') || guardarIngreso({preventDefault:function(){}})", sigue: 'cajaLight' }
 ];
+/* Prepara el formulario de Caja: montos simulados, fecha de hoy, sin lugar que elegir. */
+const CAJA_PREP = "window._cajaPrep=function(p){ window._movMontos=function(){return {ef:1000,mp:0,total:1000,porCta:{efectivo:1000},extra:false};}; window._lugMovFalta=function(){return false;};"
+  + " var d=new Date(), dd=('0'+d.getDate()).slice(-2)+'/'+('0'+(d.getMonth()+1)).slice(-2)+'/'+d.getFullYear();"
+  + " var f=document.getElementById(p+'Fecha'); if(f) f.value=dd; ['Cat','Con','Notas'].forEach(function(x){var e=document.getElementById(p+x); if(e) e.value=(x==='Cat'?'Varios':'prueba');});"
+  + " var b=document.getElementById(p+'Btn'); if(b) b.disabled=false; return false; };";
 
 const STUB = (modo, caso) => `(function(){
   window.__log=[]; var modo=${JSON.stringify(modo)}, RESP=${JSON.stringify(caso.resp)}, ACC=${JSON.stringify(caso.accion)};
@@ -62,10 +73,11 @@ async function correr(modo, caso) {
   await cli.enviar('Emulation.setDeviceMetricsOverride', { width: ANCHO, height: 844, deviceScaleFactor: 1, mobile: ANCHO < 600 });
   await cli.enviar('Page.addScriptToEvaluateOnNewDocument', { source: STUB(modo, caso) });
   await cli.enviar('Page.navigate', { url: BASE + '/app.html?prueba=1' });
-  const fn = caso.disparo.match(/^([A-Za-z_$]+)\(/)[1];
+  const fn = caso.fn || caso.disparo.match(/^([A-Za-z_$]+)\(/)[1];
   let listo = false;
   for (let i = 0; i < 120; i++) { if ((listo = await evaluar(cli, "typeof " + fn + "==='function' && typeof _pfAplicar==='function'"))) break; await pausa(250); }
   await pausa(3000);
+  await evaluar(cli, CAJA_PREP + " 1");
   await evaluar(cli, "window.__mirar=1; window.__log=[]; window.__confirmDevuelve=true; window.confirm=function(){return true;}; try{" + caso.disparo + ";}catch(e){window.__log.push('EXPLOTO '+e.message);} 1");
   await pausa(4500);
   /* Un segundo toque igual: el id tiene que ser otro (la base recuerda los ids para siempre). */
