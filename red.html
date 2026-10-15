@@ -3488,6 +3488,22 @@ const ABBR_TO_ID = {
   'TP':24, 'TJyQ':25, 'TCa':26, 'TV':27, 'RC':28, 'RP':29
 };
 
+/* Los 12 cortes (los usa «Lo cargo yo» y, desde el 15/10/2026, el editor). */
+var RED_CARNES = [
+  { id:30, abbr:'CCo', nombre:'Colita de Cuadril',      precio:20750 },
+  { id:31, abbr:'CEn', nombre:'Entraña',                precio:34000 },
+  { id:32, abbr:'CLo', nombre:'Lomo sin cordón',        precio:33000 },
+  { id:33, abbr:'CPi', nombre:'Picaña',                 precio:22875 },
+  { id:34, abbr:'CVa', nombre:'Vacío porcionado',       precio:26000 },
+  { id:35, abbr:'CVE', nombre:'Vacío entero',           precio:25200 },
+  { id:36, abbr:'CBC', nombre:'Bife de Chorizo',        precio:29250 },
+  { id:37, abbr:'COB', nombre:'Ojo de Bife',            precio:30325 },
+  { id:38, abbr:'CMa', nombre:'Matambre entero',        precio:22825 },
+  { id:39, abbr:'CAC', nombre:'Asado Cotilla Especial', precio:27900 },
+  { id:40, abbr:'CAB', nombre:'Asado Banderita',        precio:27900 },
+  { id:41, abbr:'CPe', nombre:'Peceto feteado',         precio:25025 }
+];
+
 let editCart = {};        // { [productId]: qty }
 let editOriginalTotal = 0;
 let editPedidoRef = null; // referencia al pedido en edición
@@ -3498,13 +3514,6 @@ function rutaEditar() {
     redToast('No se puede editar este pedido');
     return;
   }
-  /* Un pedido con carne no se edita desde el portal (4/10/2026): el editor no
-     tiene la carne en su catalogo, y guardar la sacaria del pedido y del total
-     sin avisar. Lo corrige Maleu desde el ERP. */
-  if ((p.prods || []).some(pr => RED_CARNE_KG[pr.a])) {
-    redToast('Este pedido tiene carne: para cambiarlo, escribile a Maleu');
-    return;
-  }
   editPedidoRef = p;
   // Precargar carrito con cantidades actuales
   editCart = {};
@@ -3512,6 +3521,14 @@ function rutaEditar() {
     const id = ABBR_TO_ID[pr.a];
     if (id != null) editCart[id] = Number(pr.q) || 0;
   });
+  /* LA CARNE EN EL EDITOR (15/10/2026). Hasta hoy un pedido con carne no se
+     editaba. Ahora la carne no se tipea: se tocan las PIEZAS, igual que en «Lo
+     cargo yo». Las del pedido vienen marcadas (tocarlas las suelta) y las libres
+     del freezer se pueden sumar. Los kilos los calcula el backend con las piezas;
+     lo de aca es para mostrar el total. */
+  edCarne = { viejo: {}, mias: null, libres: null, add: {}, sol: {}, salio: false, err: '' };
+  (p.prods || []).forEach(pr => { if (RED_CARNE_KG[pr.a]) edCarne.viejo[pr.a] = Number(pr.q) || 0; });
+  edCarneCargar(p);
   // Original = SOLO productos (sin envío), para comparar productos vs productos.
   // El envío no se edita acá: lo preserva el backend desde la col P (es del vendedor).
   editOriginalTotal = rutaEditarTotal();
@@ -3544,8 +3561,91 @@ function rutaEditarRender() {
       '</div>' +
     '</div>';
   });
-  body.innerHTML = html;
+  body.innerHTML = html + edCarneHtml();
   rutaEditarUpdateTotals();
+}
+
+let edCarne = null;       // la carne del pedido en edicion: piezas suyas, libres, y que se toca
+function edCarneCargar(p) {
+  const qs = '&n=' + encodeURIComponent(String(p.n)) + '&row=' + (Number(p.row) || 0) +
+             '&vendedor=' + encodeURIComponent(session.nombre) + '&t=' + Date.now();
+  const yo = edCarne;
+  Promise.all([
+    fetch(APPS_SCRIPT_URL + '?action=redPiezasPedido' + qs, { cache: 'no-store' }).then(r => r.json()),
+    fetch(APPS_SCRIPT_URL + '?action=piezas_full&t=' + Date.now(), { cache: 'no-store' }).then(r => r.json()).catch(() => ({}))
+  ]).then(([a, b]) => {
+    if (edCarne !== yo) return;
+    if (!a || a.ok === false) throw new Error((a && a.err) || 'no llegaron');
+    yo.mias = a.piezas || []; yo.salio = !!a.salio;
+    yo.libres = (b && b.ok !== false && typeof b === 'object') ? b : {};
+    rutaEditarRender();
+  }).catch(e => { if (edCarne !== yo) return; yo.err = String(e && e.message || e); rutaEditarRender(); });
+}
+/* Los kilos con los que queda un corte. Mirror de `_carneKgTrasPiezas_`. */
+function edCarneKg(a) {
+  const c = edCarne; if (!c) return 0;
+  let delta = 0, quedan = 0, tocado = false;
+  (c.mias || []).forEach(z => { if (z.abbr !== a) return; if (c.sol[z.id]) { delta -= z.kg; tocado = true; } else quedan += z.kg; });
+  Object.keys(c.add).forEach(id => { const z = c.add[id]; if (z.abbr !== a) return; delta += z.kg; quedan += z.kg; tocado = true; });
+  if (!tocado) return c.viejo[a] || 0;
+  let q = Math.round(((c.viejo[a] || 0) + delta) * 1000) / 1000;
+  if (!(quedan > 0) && q < 0.1) q = 0;
+  return q > 0 ? q : 0;
+}
+function edCarneCambio() { return !!edCarne && (Object.keys(edCarne.add).length > 0 || Object.keys(edCarne.sol).length > 0); }
+function edCarneHtml() {
+  const c = edCarne; if (!c) return '';
+  const pid = s => String(s).replace(/[^A-Za-z0-9_-]/g, '');
+  let h = '<div class="em-cat">Carne</div>';
+  if (c.err) return h + '<div class="pz-nota">No pude traer las piezas (' + String(c.err).replace(/[<>&"']/g, '').slice(0, 80) + '). La carne queda como está.</div>';
+  if (!c.mias) return h + '<div class="pz-nota">Buscando las piezas del freezer…</div>';
+  let algo = false;
+  RED_CARNES.forEach(k => {
+    const mias = c.mias.filter(z => z.abbr === k.abbr);
+    const libres = c.salio ? [] : ((c.libres || {})[k.abbr] || []).filter(z => !mias.some(m => m.id === z.id)).slice().sort((x, y) => x.kg - y.kg);
+    if (!mias.length && !libres.length && !c.viejo[k.abbr]) return;
+    algo = true;
+    const kg = edCarneKg(k.abbr);
+    h += '<div class="pz-corte"><div class="prod-info"><div class="prod-name">' + k.nombre + '</div><div class="prod-price">' + ars(k.precio) + ' el kg' +
+         (kg > 0 ? ' · lleva ' + redKg(kg) : '') + '</div></div><div class="pz-chips">';
+    const ka = pid(k.abbr);
+    mias.forEach(z => {
+      const sel = !c.sol[z.id], zid = pid(z.id);
+      h += c.salio
+        ? '<span class="pz-chip sel">✓ ' + redKg(Number(z.kg) || 0) + '</span>'
+        : '<button type="button" class="pz-chip' + (sel ? ' sel' : '') + '" onclick="edPzToggle(\'' + zid + '\',\'' + ka + '\',1)">' +
+          (sel ? '✓ ' : '') + redKg(Number(z.kg) || 0) + '<br>' + ars(Math.round(k.precio * (Number(z.kg) || 0))) + '</button>';
+    });
+    libres.forEach(z => {
+      const sel = !!c.add[z.id], zid = pid(z.id);
+      h += '<button type="button" class="pz-chip' + (sel ? ' sel' : '') + '" onclick="edPzToggle(\'' + zid + '\',\'' + ka + '\',0)">' +
+           (sel ? '✓ ' : '') + redKg(Number(z.kg) || 0) + '<br>' + ars(Math.round(k.precio * (Number(z.kg) || 0))) + '</button>';
+    });
+    if (c.viejo[k.abbr] && !mias.length) h += '<div class="pz-nota">' + redKg(c.viejo[k.abbr]) + ' sin pieza asignada: queda como está</div>';
+    h += '</div></div>';
+  });
+  if (c.salio) h += '<div class="pz-nota">La carne ya salió del freezer con este pedido: las piezas no se cambian.</div>';
+  else if (!algo) h += '<div class="pz-nota">Sin carne en el freezer</div>';
+  return h;
+}
+function edPzToggle(id, abbr, mia) {
+  const c = edCarne; if (!c || c.salio) return;
+  if (mia) { if (c.sol[id]) delete c.sol[id]; else c.sol[id] = 1; }
+  else if (c.add[id]) delete c.add[id];
+  else {
+    const z = ((c.libres || {})[abbr] || []).find(x => x.id === id); if (!z) return;
+    c.add[id] = { abbr: abbr, kg: Number(z.kg) || 0 };
+  }
+  rutaEditarRender();
+}
+/* Los items de carne (uno por corte, en kg) y las piezas que se mueven. */
+function edCarneItems() {
+  const out = [];
+  RED_CARNES.forEach(k => { const kg = edCarneKg(k.abbr); if (kg > 0) out.push({ id: k.id, qty: kg }); });
+  return out;
+}
+function edCarnePiezas() {
+  return edCarne ? { agregar: Object.keys(edCarne.add), soltar: Object.keys(edCarne.sol) } : { agregar: [], soltar: [] };
 }
 
 function rutaEditarChangeQty(id, delta) {
@@ -3570,6 +3670,7 @@ function rutaEditarChangeQty(id, delta) {
 function rutaEditarTotal() {
   let total = 0;
   PRODUCTOS.forEach(p => { total += (editCart[p.id] || 0) * p.precio; });
+  RED_CARNES.forEach(k => { total += Math.round(edCarneKg(k.abbr) * k.precio); });
   return total;
 }
 
@@ -3579,14 +3680,14 @@ function rutaEditarUpdateTotals() {
   const diffEl = $id('em-diff');
   const dif = total - editOriginalTotal;
   diffEl.classList.remove('up','down','same');
-  const count = Object.values(editCart).reduce((a,b) => a + b, 0);
+  const count = Object.values(editCart).reduce((a,b) => a + b, 0) + edCarneItems().length;
   if (count === 0) {
     diffEl.classList.add('up');
     diffEl.textContent = '⚠ El pedido no puede quedar vacío';
-  } else if (dif === 0) {
+  } else if (dif === 0 && !edCarneCambio()) {
     diffEl.classList.add('same');
     diffEl.textContent = 'Sin cambios respecto del original';
-  } else if (dif > 0) {
+  } else if (dif >= 0) {
     diffEl.classList.add('up');
     diffEl.textContent = '↑ Sube ' + ars(dif) + ' (antes ' + ars(editOriginalTotal) + ')';
   } else {
@@ -3595,12 +3696,12 @@ function rutaEditarUpdateTotals() {
   }
   // Botón guardar: habilitado solo si hay items y hay cambios
   const btn = $id('em-save');
-  btn.disabled = (count === 0) || (dif === 0);
+  btn.disabled = (count === 0) || (dif === 0 && !edCarneCambio());
 }
 
 function rutaEditarCerrar() {
   $id('edit-modal-bg').classList.add('hidden');
-  editCart = {}; editPedidoRef = null;
+  editCart = {}; editPedidoRef = null; edCarne = null;
 }
 
 function rutaEditarGuardar(_revisado) {
@@ -3612,6 +3713,8 @@ function rutaEditarGuardar(_revisado) {
     const q = editCart[pr.id] || 0;
     if (q > 0) items.push({ id: pr.id, qty: q });
   });
+  edCarneItems().forEach(it => items.push(it));
+  const piezas = edCarnePiezas();
   if (!items.length) { redToast('El pedido no puede quedar vacío'); return; }
 
   /* EL CORTE DEL JUEVES (15/10/2026). Antes de guardar, el backend corre la misma
@@ -3623,7 +3726,7 @@ function rutaEditarGuardar(_revisado) {
     fetch(APPS_SCRIPT_URL, {
       method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
       body: JSON.stringify({ action: 'editarPedidoRed', previa: true, pedidoId: String(p.n), row: Number(p.row) || 0,
-                             vendedor: session.nombre, items: items, total: total })
+                             vendedor: session.nombre, items: items, total: total, piezas: piezas })
     }).then(r => r.json()).catch(() => null).then(d => {
       hideMaleuLoader();
       if (btnG) btnG.disabled = false;
@@ -3647,6 +3750,7 @@ function rutaEditarGuardar(_revisado) {
       vendedor: session.nombre,
       items: items,
       total: total,
+      piezas: piezas,   // la carne: piezas que entran y salen (15/10/2026)
       /* Con la palanca prendida la edición es una orden (15/10/2026): la base la
          acepta y la escribe el aplicador. Sin el id iría por el camino de siempre. */
       clientOpId: 'edr_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 10)
@@ -3675,10 +3779,10 @@ function rutaEditarGuardar(_revisado) {
     }
     // Optimistic update local: pisar productos y total
     const nuevosProds = items.map(it => {
-      const pr = PRODUCTOS.find(x => x.id === it.id);
       // Buscar abbr correspondiente
       let abbr = '';
       Object.keys(ABBR_TO_ID).forEach(a => { if (ABBR_TO_ID[a] === it.id) abbr = a; });
+      RED_CARNES.forEach(k => { if (k.id === it.id) abbr = k.abbr; });
       return { a: abbr, q: it.qty };
     });
     p.prods = nuevosProds;
@@ -3700,7 +3804,7 @@ function rutaEditarGuardar(_revisado) {
     }
     setTimeout(() => {
       hideMaleuLoader();
-      editCart = {}; editPedidoRef = null;
+      editCart = {}; editPedidoRef = null; edCarne = null;
       renderRuta();
       redToast('✓ Pedido editado · ' + ars(totalReal));
     }, 900);
@@ -4937,20 +5041,7 @@ function showDashboard() {
    y kg, nada mas), y el item viaja con los kilos y los ids de las piezas para
    que el backend las marque Asignadas y nadie se lleve la misma. El precio por
    kg sale de precios.json, como el resto. */
-var RED_CARNES = [
-  { id:30, abbr:'CCo', nombre:'Colita de Cuadril',      precio:20750 },
-  { id:31, abbr:'CEn', nombre:'Entraña',                precio:34000 },
-  { id:32, abbr:'CLo', nombre:'Lomo sin cordón',        precio:33000 },
-  { id:33, abbr:'CPi', nombre:'Picaña',                 precio:22875 },
-  { id:34, abbr:'CVa', nombre:'Vacío porcionado',       precio:26000 },
-  { id:35, abbr:'CVE', nombre:'Vacío entero',           precio:25200 },
-  { id:36, abbr:'CBC', nombre:'Bife de Chorizo',        precio:29250 },
-  { id:37, abbr:'COB', nombre:'Ojo de Bife',            precio:30325 },
-  { id:38, abbr:'CMa', nombre:'Matambre entero',        precio:22825 },
-  { id:39, abbr:'CAC', nombre:'Asado Cotilla Especial', precio:27900 },
-  { id:40, abbr:'CAB', nombre:'Asado Banderita',        precio:27900 },
-  { id:41, abbr:'CPe', nombre:'Peceto feteado',         precio:25025 }
-];
+/* RED_CARNES se declara arriba, antes del editor (15/10/2026). */
 var redPiezas = null;      // {abbr: [{id, kg}]} · null = buscando · {__error} = no llego
 var redPzCart = {};        // pid -> {id, abbr, nombre, kg, importe}
 function redKg(kg) { return (Math.round(kg * 1000) / 1000).toLocaleString('es-AR', { minimumFractionDigits: 3, maximumFractionDigits: 3 }) + ' kg'; }

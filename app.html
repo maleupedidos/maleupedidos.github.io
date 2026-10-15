@@ -14019,7 +14019,7 @@ function _leerVersion(app){
    "El HTML no sabe que version es" dejo de ser cierto: el build le escribe
    adentro el CACHE_NAME de sw-panel.js, el mismo que deploy.sh obliga a subir en
    cada cambio. Si lo publicado dice otra cosa, esta pagina es vieja. Punto. */
-var _APP_CN_PAGINA='maleu-panel-v637';
+var _APP_CN_PAGINA='maleu-panel-v638';
 
 /* Devuelve [{k,v}] si lo publicado no es lo que esta pagina corre. */
 function _chequearVersiones(){
@@ -53382,6 +53382,22 @@ const ABBR_TO_ID = {
   'TP':24, 'TJyQ':25, 'TCa':26, 'TV':27, 'RC':28, 'RP':29
 };
 
+/* Los 12 cortes (los usa «Lo cargo yo» y, desde el 15/10/2026, el editor). */
+var RED_CARNES = [
+  { id:30, abbr:'CCo', nombre:'Colita de Cuadril',      precio:20750 },
+  { id:31, abbr:'CEn', nombre:'Entraña',                precio:34000 },
+  { id:32, abbr:'CLo', nombre:'Lomo sin cordón',        precio:33000 },
+  { id:33, abbr:'CPi', nombre:'Picaña',                 precio:22875 },
+  { id:34, abbr:'CVa', nombre:'Vacío porcionado',       precio:26000 },
+  { id:35, abbr:'CVE', nombre:'Vacío entero',           precio:25200 },
+  { id:36, abbr:'CBC', nombre:'Bife de Chorizo',        precio:29250 },
+  { id:37, abbr:'COB', nombre:'Ojo de Bife',            precio:30325 },
+  { id:38, abbr:'CMa', nombre:'Matambre entero',        precio:22825 },
+  { id:39, abbr:'CAC', nombre:'Asado Cotilla Especial', precio:27900 },
+  { id:40, abbr:'CAB', nombre:'Asado Banderita',        precio:27900 },
+  { id:41, abbr:'CPe', nombre:'Peceto feteado',         precio:25025 }
+];
+
 let editCart = {};        // { [productId]: qty }
 let editOriginalTotal = 0;
 let editPedidoRef = null; // referencia al pedido en edición
@@ -53392,13 +53408,6 @@ function rutaEditar() {
     redToast('No se puede editar este pedido');
     return;
   }
-  /* Un pedido con carne no se edita desde el portal (4/10/2026): el editor no
-     tiene la carne en su catalogo, y guardar la sacaria del pedido y del total
-     sin avisar. Lo corrige Maleu desde el ERP. */
-  if ((p.prods || []).some(pr => RED_CARNE_KG[pr.a])) {
-    redToast('Este pedido tiene carne: para cambiarlo, escribile a Maleu');
-    return;
-  }
   editPedidoRef = p;
   // Precargar carrito con cantidades actuales
   editCart = {};
@@ -53406,6 +53415,14 @@ function rutaEditar() {
     const id = ABBR_TO_ID[pr.a];
     if (id != null) editCart[id] = Number(pr.q) || 0;
   });
+  /* LA CARNE EN EL EDITOR (15/10/2026). Hasta hoy un pedido con carne no se
+     editaba. Ahora la carne no se tipea: se tocan las PIEZAS, igual que en «Lo
+     cargo yo». Las del pedido vienen marcadas (tocarlas las suelta) y las libres
+     del freezer se pueden sumar. Los kilos los calcula el backend con las piezas;
+     lo de aca es para mostrar el total. */
+  edCarne = { viejo: {}, mias: null, libres: null, add: {}, sol: {}, salio: false, err: '' };
+  (p.prods || []).forEach(pr => { if (RED_CARNE_KG[pr.a]) edCarne.viejo[pr.a] = Number(pr.q) || 0; });
+  edCarneCargar(p);
   // Original = SOLO productos (sin envío), para comparar productos vs productos.
   // El envío no se edita acá: lo preserva el backend desde la col P (es del vendedor).
   editOriginalTotal = rutaEditarTotal();
@@ -53438,8 +53455,91 @@ function rutaEditarRender() {
       '</div>' +
     '</div>';
   });
-  body.innerHTML = html;
+  body.innerHTML = html + edCarneHtml();
   rutaEditarUpdateTotals();
+}
+
+let edCarne = null;       // la carne del pedido en edicion: piezas suyas, libres, y que se toca
+function edCarneCargar(p) {
+  const qs = '&n=' + encodeURIComponent(String(p.n)) + '&row=' + (Number(p.row) || 0) +
+             '&vendedor=' + encodeURIComponent(session.nombre) + '&t=' + Date.now();
+  const yo = edCarne;
+  Promise.all([
+    fetch(APPS_SCRIPT_URL + '?action=redPiezasPedido' + qs, { cache: 'no-store' }).then(r => r.json()),
+    fetch(APPS_SCRIPT_URL + '?action=piezas_full&t=' + Date.now(), { cache: 'no-store' }).then(r => r.json()).catch(() => ({}))
+  ]).then(([a, b]) => {
+    if (edCarne !== yo) return;
+    if (!a || a.ok === false) throw new Error((a && a.err) || 'no llegaron');
+    yo.mias = a.piezas || []; yo.salio = !!a.salio;
+    yo.libres = (b && b.ok !== false && typeof b === 'object') ? b : {};
+    rutaEditarRender();
+  }).catch(e => { if (edCarne !== yo) return; yo.err = String(e && e.message || e); rutaEditarRender(); });
+}
+/* Los kilos con los que queda un corte. Mirror de `_carneKgTrasPiezas_`. */
+function edCarneKg(a) {
+  const c = edCarne; if (!c) return 0;
+  let delta = 0, quedan = 0, tocado = false;
+  (c.mias || []).forEach(z => { if (z.abbr !== a) return; if (c.sol[z.id]) { delta -= z.kg; tocado = true; } else quedan += z.kg; });
+  Object.keys(c.add).forEach(id => { const z = c.add[id]; if (z.abbr !== a) return; delta += z.kg; quedan += z.kg; tocado = true; });
+  if (!tocado) return c.viejo[a] || 0;
+  let q = Math.round(((c.viejo[a] || 0) + delta) * 1000) / 1000;
+  if (!(quedan > 0) && q < 0.1) q = 0;
+  return q > 0 ? q : 0;
+}
+function edCarneCambio() { return !!edCarne && (Object.keys(edCarne.add).length > 0 || Object.keys(edCarne.sol).length > 0); }
+function edCarneHtml() {
+  const c = edCarne; if (!c) return '';
+  const pid = s => String(s).replace(/[^A-Za-z0-9_-]/g, '');
+  let h = '<div class="em-cat">Carne</div>';
+  if (c.err) return h + '<div class="pz-nota">No pude traer las piezas (' + String(c.err).replace(/[<>&"']/g, '').slice(0, 80) + '). La carne queda como está.</div>';
+  if (!c.mias) return h + '<div class="pz-nota">Buscando las piezas del freezer…</div>';
+  let algo = false;
+  RED_CARNES.forEach(k => {
+    const mias = c.mias.filter(z => z.abbr === k.abbr);
+    const libres = c.salio ? [] : ((c.libres || {})[k.abbr] || []).filter(z => !mias.some(m => m.id === z.id)).slice().sort((x, y) => x.kg - y.kg);
+    if (!mias.length && !libres.length && !c.viejo[k.abbr]) return;
+    algo = true;
+    const kg = edCarneKg(k.abbr);
+    h += '<div class="pz-corte"><div class="prod-info"><div class="prod-name">' + k.nombre + '</div><div class="prod-price">' + ars(k.precio) + ' el kg' +
+         (kg > 0 ? ' · lleva ' + redKg(kg) : '') + '</div></div><div class="pz-chips">';
+    const ka = pid(k.abbr);
+    mias.forEach(z => {
+      const sel = !c.sol[z.id], zid = pid(z.id);
+      h += c.salio
+        ? '<span class="pz-chip sel">✓ ' + redKg(Number(z.kg) || 0) + '</span>'
+        : '<button type="button" class="pz-chip' + (sel ? ' sel' : '') + '" onclick="edPzToggle(\'' + zid + '\',\'' + ka + '\',1)">' +
+          (sel ? '✓ ' : '') + redKg(Number(z.kg) || 0) + '<br>' + ars(Math.round(k.precio * (Number(z.kg) || 0))) + '</button>';
+    });
+    libres.forEach(z => {
+      const sel = !!c.add[z.id], zid = pid(z.id);
+      h += '<button type="button" class="pz-chip' + (sel ? ' sel' : '') + '" onclick="edPzToggle(\'' + zid + '\',\'' + ka + '\',0)">' +
+           (sel ? '✓ ' : '') + redKg(Number(z.kg) || 0) + '<br>' + ars(Math.round(k.precio * (Number(z.kg) || 0))) + '</button>';
+    });
+    if (c.viejo[k.abbr] && !mias.length) h += '<div class="pz-nota">' + redKg(c.viejo[k.abbr]) + ' sin pieza asignada: queda como está</div>';
+    h += '</div></div>';
+  });
+  if (c.salio) h += '<div class="pz-nota">La carne ya salió del freezer con este pedido: las piezas no se cambian.</div>';
+  else if (!algo) h += '<div class="pz-nota">Sin carne en el freezer</div>';
+  return h;
+}
+function edPzToggle(id, abbr, mia) {
+  const c = edCarne; if (!c || c.salio) return;
+  if (mia) { if (c.sol[id]) delete c.sol[id]; else c.sol[id] = 1; }
+  else if (c.add[id]) delete c.add[id];
+  else {
+    const z = ((c.libres || {})[abbr] || []).find(x => x.id === id); if (!z) return;
+    c.add[id] = { abbr: abbr, kg: Number(z.kg) || 0 };
+  }
+  rutaEditarRender();
+}
+/* Los items de carne (uno por corte, en kg) y las piezas que se mueven. */
+function edCarneItems() {
+  const out = [];
+  RED_CARNES.forEach(k => { const kg = edCarneKg(k.abbr); if (kg > 0) out.push({ id: k.id, qty: kg }); });
+  return out;
+}
+function edCarnePiezas() {
+  return edCarne ? { agregar: Object.keys(edCarne.add), soltar: Object.keys(edCarne.sol) } : { agregar: [], soltar: [] };
 }
 
 function rutaEditarChangeQty(id, delta) {
@@ -53464,6 +53564,7 @@ function rutaEditarChangeQty(id, delta) {
 function rutaEditarTotal() {
   let total = 0;
   PRODUCTOS.forEach(p => { total += (editCart[p.id] || 0) * p.precio; });
+  RED_CARNES.forEach(k => { total += Math.round(edCarneKg(k.abbr) * k.precio); });
   return total;
 }
 
@@ -53473,14 +53574,14 @@ function rutaEditarUpdateTotals() {
   const diffEl = $id('em-diff');
   const dif = total - editOriginalTotal;
   diffEl.classList.remove('up','down','same');
-  const count = Object.values(editCart).reduce((a,b) => a + b, 0);
+  const count = Object.values(editCart).reduce((a,b) => a + b, 0) + edCarneItems().length;
   if (count === 0) {
     diffEl.classList.add('up');
     diffEl.textContent = '⚠ El pedido no puede quedar vacío';
-  } else if (dif === 0) {
+  } else if (dif === 0 && !edCarneCambio()) {
     diffEl.classList.add('same');
     diffEl.textContent = 'Sin cambios respecto del original';
-  } else if (dif > 0) {
+  } else if (dif >= 0) {
     diffEl.classList.add('up');
     diffEl.textContent = '↑ Sube ' + ars(dif) + ' (antes ' + ars(editOriginalTotal) + ')';
   } else {
@@ -53489,12 +53590,12 @@ function rutaEditarUpdateTotals() {
   }
   // Botón guardar: habilitado solo si hay items y hay cambios
   const btn = $id('em-save');
-  btn.disabled = (count === 0) || (dif === 0);
+  btn.disabled = (count === 0) || (dif === 0 && !edCarneCambio());
 }
 
 function rutaEditarCerrar() {
   $id('edit-modal-bg').classList.add('hidden');
-  editCart = {}; editPedidoRef = null;
+  editCart = {}; editPedidoRef = null; edCarne = null;
 }
 
 function rutaEditarGuardar(_revisado) {
@@ -53506,6 +53607,8 @@ function rutaEditarGuardar(_revisado) {
     const q = editCart[pr.id] || 0;
     if (q > 0) items.push({ id: pr.id, qty: q });
   });
+  edCarneItems().forEach(it => items.push(it));
+  const piezas = edCarnePiezas();
   if (!items.length) { redToast('El pedido no puede quedar vacío'); return; }
 
   /* EL CORTE DEL JUEVES (15/10/2026). Antes de guardar, el backend corre la misma
@@ -53517,7 +53620,7 @@ function rutaEditarGuardar(_revisado) {
     fetch(APPS_SCRIPT_URL, {
       method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
       body: JSON.stringify({ action: 'editarPedidoRed', previa: true, pedidoId: String(p.n), row: Number(p.row) || 0,
-                             vendedor: session.nombre, items: items, total: total })
+                             vendedor: session.nombre, items: items, total: total, piezas: piezas })
     }).then(r => r.json()).catch(() => null).then(d => {
       hideMaleuLoader();
       if (btnG) btnG.disabled = false;
@@ -53541,6 +53644,7 @@ function rutaEditarGuardar(_revisado) {
       vendedor: session.nombre,
       items: items,
       total: total,
+      piezas: piezas,   // la carne: piezas que entran y salen (15/10/2026)
       /* Con la palanca prendida la edición es una orden (15/10/2026): la base la
          acepta y la escribe el aplicador. Sin el id iría por el camino de siempre. */
       clientOpId: 'edr_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 10)
@@ -53569,10 +53673,10 @@ function rutaEditarGuardar(_revisado) {
     }
     // Optimistic update local: pisar productos y total
     const nuevosProds = items.map(it => {
-      const pr = PRODUCTOS.find(x => x.id === it.id);
       // Buscar abbr correspondiente
       let abbr = '';
       Object.keys(ABBR_TO_ID).forEach(a => { if (ABBR_TO_ID[a] === it.id) abbr = a; });
+      RED_CARNES.forEach(k => { if (k.id === it.id) abbr = k.abbr; });
       return { a: abbr, q: it.qty };
     });
     p.prods = nuevosProds;
@@ -53594,7 +53698,7 @@ function rutaEditarGuardar(_revisado) {
     }
     setTimeout(() => {
       hideMaleuLoader();
-      editCart = {}; editPedidoRef = null;
+      editCart = {}; editPedidoRef = null; edCarne = null;
       renderRuta();
       redToast('✓ Pedido editado · ' + ars(totalReal));
     }, 900);
@@ -54831,20 +54935,7 @@ function showDashboard() {
    y kg, nada mas), y el item viaja con los kilos y los ids de las piezas para
    que el backend las marque Asignadas y nadie se lleve la misma. El precio por
    kg sale de precios.json, como el resto. */
-var RED_CARNES = [
-  { id:30, abbr:'CCo', nombre:'Colita de Cuadril',      precio:20750 },
-  { id:31, abbr:'CEn', nombre:'Entraña',                precio:34000 },
-  { id:32, abbr:'CLo', nombre:'Lomo sin cordón',        precio:33000 },
-  { id:33, abbr:'CPi', nombre:'Picaña',                 precio:22875 },
-  { id:34, abbr:'CVa', nombre:'Vacío porcionado',       precio:26000 },
-  { id:35, abbr:'CVE', nombre:'Vacío entero',           precio:25200 },
-  { id:36, abbr:'CBC', nombre:'Bife de Chorizo',        precio:29250 },
-  { id:37, abbr:'COB', nombre:'Ojo de Bife',            precio:30325 },
-  { id:38, abbr:'CMa', nombre:'Matambre entero',        precio:22825 },
-  { id:39, abbr:'CAC', nombre:'Asado Cotilla Especial', precio:27900 },
-  { id:40, abbr:'CAB', nombre:'Asado Banderita',        precio:27900 },
-  { id:41, abbr:'CPe', nombre:'Peceto feteado',         precio:25025 }
-];
+/* RED_CARNES se declara arriba, antes del editor (15/10/2026). */
 var redPiezas = null;      // {abbr: [{id, kg}]} · null = buscando · {__error} = no llego
 var redPzCart = {};        // pid -> {id, abbr, nombre, kg, importe}
 function redKg(kg) { return (Math.round(kg * 1000) / 1000).toLocaleString('es-AR', { minimumFractionDigits: 3, maximumFractionDigits: 3 }) + ' kg'; }
@@ -55557,7 +55648,7 @@ try {
   showScreen('login');
 }
 
-try{window["APPS_SCRIPT_URL"]=APPS_SCRIPT_URL;}catch(e){}try{window["PRODUCTOS"]=PRODUCTOS;}catch(e){}try{window["session"]=session;}catch(e){}try{window["comPct"]=comPct;}catch(e){}try{window["comLbl"]=comLbl;}catch(e){}try{window["cart"]=cart;}catch(e){}try{window["pago"]=pago;}catch(e){}try{window["ENVIO_RED"]=ENVIO_RED;}catch(e){}try{window["cobrarEnvio"]=cobrarEnvio;}catch(e){}try{window["$id"]=$id;}catch(e){}try{window["onEnvioToggle"]=onEnvioToggle;}catch(e){}try{window["ars"]=ars;}catch(e){}try{window["showScreen"]=showScreen;}catch(e){}try{window["redToast"]=redToast;}catch(e){}try{window["doLogin"]=doLogin;}catch(e){}try{window["doLogout"]=doLogout;}catch(e){}try{window["enterDashboard"]=enterDashboard;}catch(e){}try{window["_resolverNombreCanonico"]=_resolverNombreCanonico;}catch(e){}try{window["_fetchDashboardRetry"]=_fetchDashboardRetry;}catch(e){}try{window["_redAviso"]=_redAviso;}catch(e){}try{window["loadDashboard"]=loadDashboard;}catch(e){}try{window["_refreshingPortal"]=_refreshingPortal;}catch(e){}try{window["refreshPortal"]=refreshPortal;}catch(e){}try{window["_renderLastSync"]=_renderLastSync;}catch(e){}try{window["lastDashboardData"]=lastDashboardData;}catch(e){}try{window["currentTab"]=currentTab;}catch(e){}try{window["currentMainTab"]=currentMainTab;}catch(e){}try{window["rutaIdx"]=rutaIdx;}catch(e){}try{window["_esPagado"]=_esPagado;}catch(e){}try{window["parseMonto"]=parseMonto;}catch(e){}try{window["rutaMixtoOpen"]=rutaMixtoOpen;}catch(e){}try{window["_avisarAlPanel"]=_avisarAlPanel;}catch(e){}try{window["MAIN_TABS"]=MAIN_TABS;}catch(e){}try{window["MAIN_TAB_VIEJA"]=MAIN_TAB_VIEJA;}catch(e){}try{window["MAIN_TAB_VISTA"]=MAIN_TAB_VISTA;}catch(e){}try{window["plataSub"]=plataSub;}catch(e){}try{window["_tabNueva"]=_tabNueva;}catch(e){}try{window["setMainTab"]=setMainTab;}catch(e){}try{window["setPlataSub"]=setPlataSub;}catch(e){}try{window["TIENDA_URL"]=TIENDA_URL;}catch(e){}try{window["redCargarPedido"]=redCargarPedido;}catch(e){}try{window["redMasCerrar"]=redMasCerrar;}catch(e){}try{window["redAbrirTienda"]=redAbrirTienda;}catch(e){}try{window["_bloqueMontos"]=_bloqueMontos;}catch(e){}try{window["redTareasHechas"]=redTareasHechas;}catch(e){}try{window["redTareasUlt"]=redTareasUlt;}catch(e){}try{window["redTelOk"]=redTelOk;}catch(e){}try{window["redEsc"]=redEsc;}catch(e){}try{window["renderTg"]=renderTg;}catch(e){}try{window["redTgYaEsta"]=redTgYaEsta;}catch(e){}try{window["renderTareas"]=renderTareas;}catch(e){}try{window["redTareaDeclarar"]=redTareaDeclarar;}catch(e){}try{window["redObjForm"]=redObjForm;}catch(e){}try{window["_objUlt"]=_objUlt;}catch(e){}try{window["_objPlural"]=_objPlural;}catch(e){}try{window["_objFechaCorta"]=_objFechaCorta;}catch(e){}try{window["_redDM"]=_redDM;}catch(e){}try{window["redSemanaDel"]=redSemanaDel;}catch(e){}try{window["_objKey"]=_objKey;}catch(e){}try{window["_objGuardarCopia"]=_objGuardarCopia;}catch(e){}try{window["renderObjetivo"]=renderObjetivo;}catch(e){}try{window["_objFocoHTML"]=_objFocoHTML;}catch(e){}try{window["MK_DIAS"]=MK_DIAS;}catch(e){}try{window["_mkIsoHoy"]=_mkIsoHoy;}catch(e){}try{window["_mkDiasEntre"]=_mkDiasEntre;}catch(e){}try{window["_mkCobro"]=_mkCobro;}catch(e){}try{window["_mkAplausoHTML"]=_mkAplausoHTML;}catch(e){}try{window["_mkBoardHTML"]=_mkBoardHTML;}catch(e){}try{window["_mkLogrosHTML"]=_mkLogrosHTML;}catch(e){}try{window["_mkFestejar"]=_mkFestejar;}catch(e){}try{window["OBJ_SUG_VISIBLES"]=OBJ_SUG_VISIBLES;}catch(e){}try{window["_objFormHTML"]=_objFormHTML;}catch(e){}try{window["redObjMas"]=redObjMas;}catch(e){}try{window["redObjEscribir"]=redObjEscribir;}catch(e){}try{window["redObjAbrir"]=redObjAbrir;}catch(e){}try{window["redObjCerrar"]=redObjCerrar;}catch(e){}try{window["redObjPaso"]=redObjPaso;}catch(e){}try{window["redObjToggle"]=redObjToggle;}catch(e){}try{window["redObjAgregarLibre"]=redObjAgregarLibre;}catch(e){}try{window["redObjQuitarLibre"]=redObjQuitarLibre;}catch(e){}try{window["redObjGuardar"]=redObjGuardar;}catch(e){}try{window["redObjMarcar"]=redObjMarcar;}catch(e){}try{window["renderDashboard"]=renderDashboard;}catch(e){}try{window["renderClientes"]=renderClientes;}catch(e){}try{window["_weekRowHTML"]=_weekRowHTML;}catch(e){}try{window["_semConPedidos"]=_semConPedidos;}catch(e){}try{window["renderWeeksList"]=renderWeeksList;}catch(e){}try{window["toggleWeeks"]=toggleWeeks;}catch(e){}try{window["renderMesesAnteriores"]=renderMesesAnteriores;}catch(e){}try{window["togglePrevMonths"]=togglePrevMonths;}catch(e){}try{window["filtrarClientes"]=filtrarClientes;}catch(e){}try{window["updateMainBadges"]=updateMainBadges;}catch(e){}try{window["_rutaAbierto"]=_rutaAbierto;}catch(e){}try{window["_rutaList"]=_rutaList;}catch(e){}try{window["_rutaTotalViernes"]=_rutaTotalViernes;}catch(e){}try{window["renderRuta"]=renderRuta;}catch(e){}try{window["rutaGo"]=rutaGo;}catch(e){}try{window["rutaJumpNext"]=rutaJumpNext;}catch(e){}try{window["_rutaCurrent"]=_rutaCurrent;}catch(e){}try{window["_rutaUpdate"]=_rutaUpdate;}catch(e){}try{window["redTituloReparto"]=redTituloReparto;}catch(e){}try{window["redHoyIso"]=redHoyIso;}catch(e){}try{window["redVencidos"]=redVencidos;}catch(e){}try{window["renderVencidos"]=renderVencidos;}catch(e){}try{window["redIrAPedido"]=redIrAPedido;}catch(e){}try{window["renderEscala"]=renderEscala;}catch(e){}try{window["_redCgAbierta"]=_redCgAbierta;}catch(e){}try{window["_redCgBusca"]=_redCgBusca;}catch(e){}try{window["_redCgEsc"]=_redCgEsc;}catch(e){}try{window["RED_CG_NIVELES"]=RED_CG_NIVELES;}catch(e){}try{window["_redCgNorm"]=_redCgNorm;}catch(e){}try{window["_redCgLista"]=_redCgLista;}catch(e){}try{window["renderComisionProd"]=renderComisionProd;}catch(e){}try{window["redCgToggle"]=redCgToggle;}catch(e){}try{window["redCgBuscar"]=redCgBuscar;}catch(e){}try{window["redCgAbrir"]=redCgAbrir;}catch(e){}try{window["_envioMontoSello"]=_envioMontoSello;}catch(e){}try{window["_envioSelloTxt"]=_envioSelloTxt;}catch(e){}try{window["redEnvioEnVuelo"]=redEnvioEnVuelo;}catch(e){}try{window["redEnvioSinVerificar"]=redEnvioSinVerificar;}catch(e){}try{window["_envioTrabado"]=_envioTrabado;}catch(e){}try{window["_envioTrabadoMsg"]=_envioTrabadoMsg;}catch(e){}try{window["redReclamoEnVuelo"]=redReclamoEnVuelo;}catch(e){}try{window["_trajoHtml"]=_trajoHtml;}catch(e){}try{window["rutaReclamar"]=rutaReclamar;}catch(e){}try{window["rutaEnvioAnular"]=rutaEnvioAnular;}catch(e){}try{window["rutaSetFP"]=rutaSetFP;}catch(e){}try{window["rutaToggleCobrado"]=rutaToggleCobrado;}catch(e){}try{window["rutaToggleEntrega"]=rutaToggleEntrega;}catch(e){}try{window["rutaCancelar"]=rutaCancelar;}catch(e){}try{window["rutaCancelarCerrar"]=rutaCancelarCerrar;}catch(e){}try{window["rutaCancelarConfirmar"]=rutaCancelarConfirmar;}catch(e){}try{window["ABBR_TO_ID"]=ABBR_TO_ID;}catch(e){}try{window["editCart"]=editCart;}catch(e){}try{window["editOriginalTotal"]=editOriginalTotal;}catch(e){}try{window["editPedidoRef"]=editPedidoRef;}catch(e){}try{window["rutaEditar"]=rutaEditar;}catch(e){}try{window["rutaEditarRender"]=rutaEditarRender;}catch(e){}try{window["rutaEditarChangeQty"]=rutaEditarChangeQty;}catch(e){}try{window["rutaEditarTotal"]=rutaEditarTotal;}catch(e){}try{window["rutaEditarUpdateTotals"]=rutaEditarUpdateTotals;}catch(e){}try{window["rutaEditarCerrar"]=rutaEditarCerrar;}catch(e){}try{window["rutaEditarGuardar"]=rutaEditarGuardar;}catch(e){}try{window["showMaleuLoader"]=showMaleuLoader;}catch(e){}try{window["setLoaderText"]=setLoaderText;}catch(e){}try{window["hideMaleuLoader"]=hideMaleuLoader;}catch(e){}try{window["rutaAbrirCobroMixto"]=rutaAbrirCobroMixto;}catch(e){}try{window["rutaCerrarMixto"]=rutaCerrarMixto;}catch(e){}try{window["rutaMixtoActualizarSuma"]=rutaMixtoActualizarSuma;}catch(e){}try{window["rutaMixtoPendiente"]=rutaMixtoPendiente;}catch(e){}try{window["rutaConfirmarMixto"]=rutaConfirmarMixto;}catch(e){}try{window["rutaMixtoVolverAEditar"]=rutaMixtoVolverAEditar;}catch(e){}try{window["rutaMixtoElegirPropina"]=rutaMixtoElegirPropina;}catch(e){}try{window["_rutaCommitMixto"]=_rutaCommitMixto;}catch(e){}try{window["_isoWeekDates"]=_isoWeekDates;}catch(e){}try{window["_isoWeekNow"]=_isoWeekNow;}catch(e){}try{window["_pagosSemanas"]=_pagosSemanas;}catch(e){}try{window["_cobroCliente"]=_cobroCliente;}catch(e){}try{window["_splitPago"]=_splitPago;}catch(e){}try{window["renderCaja"]=renderCaja;}catch(e){}try{window["_liqCtx"]=_liqCtx;}catch(e){}try{window["_redCtaPint"]=_redCtaPint;}catch(e){}try{window["_parseMonto"]=_parseMonto;}catch(e){}try{window["_yaPagado"]=_yaPagado;}catch(e){}try{window["_redComDe"]=_redComDe;}catch(e){}try{window["_redComMaleu"]=_redComMaleu;}catch(e){}try{window["liqOpen"]=liqOpen;}catch(e){}try{window["_redCtasDigitales"]=_redCtasDigitales;}catch(e){}try{window["_redCtaDefault"]=_redCtaDefault;}catch(e){}try{window["_redCtaNombre"]=_redCtaNombre;}catch(e){}try{window["_redCtaDePago"]=_redCtaDePago;}catch(e){}try{window["_redPintarCtas"]=_redPintarCtas;}catch(e){}try{window["_redSetCta"]=_redSetCta;}catch(e){}try{window["_redFaltaCta"]=_redFaltaCta;}catch(e){}try{window["liqClose"]=liqClose;}catch(e){}try{window["liqUpdateSum"]=liqUpdateSum;}catch(e){}try{window["liqConfirm"]=liqConfirm;}catch(e){}try{window["_sinMarcarCobrado"]=_sinMarcarCobrado;}catch(e){}try{window["_sinMarcarTxt"]=_sinMarcarTxt;}catch(e){}try{window["renderPagos"]=renderPagos;}catch(e){}try{window["registrarPagoParcial"]=registrarPagoParcial;}catch(e){}try{window["showViernesTab"]=showViernesTab;}catch(e){}try{window["renderPedidosTab"]=renderPedidosTab;}catch(e){}try{window["currentPedido"]=currentPedido;}catch(e){}try{window["PROD_NAME_BY_ABBR"]=PROD_NAME_BY_ABBR;}catch(e){}try{window["RED_CARNE_KG"]=RED_CARNE_KG;}catch(e){}try{window["redCantProd"]=redCantProd;}catch(e){}try{window["_normN"]=_normN;}catch(e){}try{window["showDetalle"]=showDetalle;}catch(e){}try{window["callCliente"]=callCliente;}catch(e){}try{window["waCliente"]=waCliente;}catch(e){}try{window["savedInd"]=savedInd;}catch(e){}try{window["_redOptimista"]=_redOptimista;}catch(e){}try{window["_redMontoDistinto"]=_redMontoDistinto;}catch(e){}try{window["_redErrTxt"]=_redErrTxt;}catch(e){}try{window["updatePedido"]=updatePedido;}catch(e){}try{window["_mapUpdatesToPedido"]=_mapUpdatesToPedido;}catch(e){}try{window["toggleEntrega"]=toggleEntrega;}catch(e){}try{window["toggleCobrado"]=toggleCobrado;}catch(e){}try{window["setFormaPago"]=setFormaPago;}catch(e){}try{window["savePropina"]=savePropina;}catch(e){}try{window["savePropinaMixto"]=savePropinaMixto;}catch(e){}try{window["ctrlMixtoActualizar"]=ctrlMixtoActualizar;}catch(e){}try{window["ctrlMixtoGuardar"]=ctrlMixtoGuardar;}catch(e){}try{window["redProxViernesISO"]=redProxViernesISO;}catch(e){}try{window["redISO"]=redISO;}catch(e){}try{window["redApCoid"]=redApCoid;}catch(e){}try{window["showNuevoPedido"]=showNuevoPedido;}catch(e){}try{window["showDashboard"]=showDashboard;}catch(e){}try{window["RED_CARNES"]=RED_CARNES;}catch(e){}try{window["redPiezas"]=redPiezas;}catch(e){}try{window["redPzCart"]=redPzCart;}catch(e){}try{window["redKg"]=redKg;}catch(e){}try{window["redCarneCargar"]=redCarneCargar;}catch(e){}try{window["redCarneRender"]=redCarneRender;}catch(e){}try{window["redPzToggle"]=redPzToggle;}catch(e){}try{window["redCarneItems"]=redCarneItems;}catch(e){}try{window["redCarneTotal"]=redCarneTotal;}catch(e){}try{window["renderProducts"]=renderProducts;}catch(e){}try{window["changeQty"]=changeQty;}catch(e){}try{window["updateCart"]=updateCart;}catch(e){}try{window["renderSummary"]=renderSummary;}catch(e){}try{window["setPago"]=setPago;}catch(e){}try{window["validateNuevo"]=validateNuevo;}catch(e){}try{window["enviar"]=enviar;}catch(e){}try{window["sendOrderWithRetry"]=sendOrderWithRetry;}catch(e){}try{window["_syncPreciosPortal"]=_syncPreciosPortal;}catch(e){}try{window["redVerComo"]=redVerComo;}catch(e){}try{window["redRolPanel"]=redRolPanel;}catch(e){}try{window["redRaizVerComo"]=redRaizVerComo;}catch(e){}try{window["redVerComoLista"]=redVerComoLista;}catch(e){}try{window["VA_COPIA"]=VA_COPIA;}catch(e){}try{window["_vaData"]=_vaData;}catch(e){}try{window["redAbiertosCargar"]=redAbiertosCargar;}catch(e){}try{window["redAbiertosPintar"]=redAbiertosPintar;}catch(e){}try{window["redAbiertoHTML"]=redAbiertoHTML;}catch(e){}try{window["_vaCta"]=_vaCta;}catch(e){}try{window["redAbiertoPedirCuenta"]=redAbiertoPedirCuenta;}catch(e){}try{window["redAbiertoCuentaCancelar"]=redAbiertoCuentaCancelar;}catch(e){}try{window["redAbiertosRepintar"]=redAbiertosRepintar;}catch(e){}try{window["redAbiertoCuenta"]=redAbiertoCuenta;}catch(e){}try{window["redAbiertoMarcar"]=redAbiertoMarcar;}catch(e){}try{window["redIrARecibir"]=redIrARecibir;}catch(e){}try{window["EQ_COPIA"]=EQ_COPIA;}catch(e){}try{window["redEquipoCargar"]=redEquipoCargar;}catch(e){}try{window["redEquipoPintar"]=redEquipoPintar;}catch(e){}try{window["redAplausoEnviar"]=redAplausoEnviar;}catch(e){}try{window["redFocoAdminHTML"]=redFocoAdminHTML;}catch(e){}try{window["redFocoGuardar"]=redFocoGuardar;}catch(e){}try{window["redVerComoEntrar"]=redVerComoEntrar;}catch(e){}try{window["redVerComoSalir"]=redVerComoSalir;}catch(e){}
+try{window["APPS_SCRIPT_URL"]=APPS_SCRIPT_URL;}catch(e){}try{window["PRODUCTOS"]=PRODUCTOS;}catch(e){}try{window["session"]=session;}catch(e){}try{window["comPct"]=comPct;}catch(e){}try{window["comLbl"]=comLbl;}catch(e){}try{window["cart"]=cart;}catch(e){}try{window["pago"]=pago;}catch(e){}try{window["ENVIO_RED"]=ENVIO_RED;}catch(e){}try{window["cobrarEnvio"]=cobrarEnvio;}catch(e){}try{window["$id"]=$id;}catch(e){}try{window["onEnvioToggle"]=onEnvioToggle;}catch(e){}try{window["ars"]=ars;}catch(e){}try{window["showScreen"]=showScreen;}catch(e){}try{window["redToast"]=redToast;}catch(e){}try{window["doLogin"]=doLogin;}catch(e){}try{window["doLogout"]=doLogout;}catch(e){}try{window["enterDashboard"]=enterDashboard;}catch(e){}try{window["_resolverNombreCanonico"]=_resolverNombreCanonico;}catch(e){}try{window["_fetchDashboardRetry"]=_fetchDashboardRetry;}catch(e){}try{window["_redAviso"]=_redAviso;}catch(e){}try{window["loadDashboard"]=loadDashboard;}catch(e){}try{window["_refreshingPortal"]=_refreshingPortal;}catch(e){}try{window["refreshPortal"]=refreshPortal;}catch(e){}try{window["_renderLastSync"]=_renderLastSync;}catch(e){}try{window["lastDashboardData"]=lastDashboardData;}catch(e){}try{window["currentTab"]=currentTab;}catch(e){}try{window["currentMainTab"]=currentMainTab;}catch(e){}try{window["rutaIdx"]=rutaIdx;}catch(e){}try{window["_esPagado"]=_esPagado;}catch(e){}try{window["parseMonto"]=parseMonto;}catch(e){}try{window["rutaMixtoOpen"]=rutaMixtoOpen;}catch(e){}try{window["_avisarAlPanel"]=_avisarAlPanel;}catch(e){}try{window["MAIN_TABS"]=MAIN_TABS;}catch(e){}try{window["MAIN_TAB_VIEJA"]=MAIN_TAB_VIEJA;}catch(e){}try{window["MAIN_TAB_VISTA"]=MAIN_TAB_VISTA;}catch(e){}try{window["plataSub"]=plataSub;}catch(e){}try{window["_tabNueva"]=_tabNueva;}catch(e){}try{window["setMainTab"]=setMainTab;}catch(e){}try{window["setPlataSub"]=setPlataSub;}catch(e){}try{window["TIENDA_URL"]=TIENDA_URL;}catch(e){}try{window["redCargarPedido"]=redCargarPedido;}catch(e){}try{window["redMasCerrar"]=redMasCerrar;}catch(e){}try{window["redAbrirTienda"]=redAbrirTienda;}catch(e){}try{window["_bloqueMontos"]=_bloqueMontos;}catch(e){}try{window["redTareasHechas"]=redTareasHechas;}catch(e){}try{window["redTareasUlt"]=redTareasUlt;}catch(e){}try{window["redTelOk"]=redTelOk;}catch(e){}try{window["redEsc"]=redEsc;}catch(e){}try{window["renderTg"]=renderTg;}catch(e){}try{window["redTgYaEsta"]=redTgYaEsta;}catch(e){}try{window["renderTareas"]=renderTareas;}catch(e){}try{window["redTareaDeclarar"]=redTareaDeclarar;}catch(e){}try{window["redObjForm"]=redObjForm;}catch(e){}try{window["_objUlt"]=_objUlt;}catch(e){}try{window["_objPlural"]=_objPlural;}catch(e){}try{window["_objFechaCorta"]=_objFechaCorta;}catch(e){}try{window["_redDM"]=_redDM;}catch(e){}try{window["redSemanaDel"]=redSemanaDel;}catch(e){}try{window["_objKey"]=_objKey;}catch(e){}try{window["_objGuardarCopia"]=_objGuardarCopia;}catch(e){}try{window["renderObjetivo"]=renderObjetivo;}catch(e){}try{window["_objFocoHTML"]=_objFocoHTML;}catch(e){}try{window["MK_DIAS"]=MK_DIAS;}catch(e){}try{window["_mkIsoHoy"]=_mkIsoHoy;}catch(e){}try{window["_mkDiasEntre"]=_mkDiasEntre;}catch(e){}try{window["_mkCobro"]=_mkCobro;}catch(e){}try{window["_mkAplausoHTML"]=_mkAplausoHTML;}catch(e){}try{window["_mkBoardHTML"]=_mkBoardHTML;}catch(e){}try{window["_mkLogrosHTML"]=_mkLogrosHTML;}catch(e){}try{window["_mkFestejar"]=_mkFestejar;}catch(e){}try{window["OBJ_SUG_VISIBLES"]=OBJ_SUG_VISIBLES;}catch(e){}try{window["_objFormHTML"]=_objFormHTML;}catch(e){}try{window["redObjMas"]=redObjMas;}catch(e){}try{window["redObjEscribir"]=redObjEscribir;}catch(e){}try{window["redObjAbrir"]=redObjAbrir;}catch(e){}try{window["redObjCerrar"]=redObjCerrar;}catch(e){}try{window["redObjPaso"]=redObjPaso;}catch(e){}try{window["redObjToggle"]=redObjToggle;}catch(e){}try{window["redObjAgregarLibre"]=redObjAgregarLibre;}catch(e){}try{window["redObjQuitarLibre"]=redObjQuitarLibre;}catch(e){}try{window["redObjGuardar"]=redObjGuardar;}catch(e){}try{window["redObjMarcar"]=redObjMarcar;}catch(e){}try{window["renderDashboard"]=renderDashboard;}catch(e){}try{window["renderClientes"]=renderClientes;}catch(e){}try{window["_weekRowHTML"]=_weekRowHTML;}catch(e){}try{window["_semConPedidos"]=_semConPedidos;}catch(e){}try{window["renderWeeksList"]=renderWeeksList;}catch(e){}try{window["toggleWeeks"]=toggleWeeks;}catch(e){}try{window["renderMesesAnteriores"]=renderMesesAnteriores;}catch(e){}try{window["togglePrevMonths"]=togglePrevMonths;}catch(e){}try{window["filtrarClientes"]=filtrarClientes;}catch(e){}try{window["updateMainBadges"]=updateMainBadges;}catch(e){}try{window["_rutaAbierto"]=_rutaAbierto;}catch(e){}try{window["_rutaList"]=_rutaList;}catch(e){}try{window["_rutaTotalViernes"]=_rutaTotalViernes;}catch(e){}try{window["renderRuta"]=renderRuta;}catch(e){}try{window["rutaGo"]=rutaGo;}catch(e){}try{window["rutaJumpNext"]=rutaJumpNext;}catch(e){}try{window["_rutaCurrent"]=_rutaCurrent;}catch(e){}try{window["_rutaUpdate"]=_rutaUpdate;}catch(e){}try{window["redTituloReparto"]=redTituloReparto;}catch(e){}try{window["redHoyIso"]=redHoyIso;}catch(e){}try{window["redVencidos"]=redVencidos;}catch(e){}try{window["renderVencidos"]=renderVencidos;}catch(e){}try{window["redIrAPedido"]=redIrAPedido;}catch(e){}try{window["renderEscala"]=renderEscala;}catch(e){}try{window["_redCgAbierta"]=_redCgAbierta;}catch(e){}try{window["_redCgBusca"]=_redCgBusca;}catch(e){}try{window["_redCgEsc"]=_redCgEsc;}catch(e){}try{window["RED_CG_NIVELES"]=RED_CG_NIVELES;}catch(e){}try{window["_redCgNorm"]=_redCgNorm;}catch(e){}try{window["_redCgLista"]=_redCgLista;}catch(e){}try{window["renderComisionProd"]=renderComisionProd;}catch(e){}try{window["redCgToggle"]=redCgToggle;}catch(e){}try{window["redCgBuscar"]=redCgBuscar;}catch(e){}try{window["redCgAbrir"]=redCgAbrir;}catch(e){}try{window["_envioMontoSello"]=_envioMontoSello;}catch(e){}try{window["_envioSelloTxt"]=_envioSelloTxt;}catch(e){}try{window["redEnvioEnVuelo"]=redEnvioEnVuelo;}catch(e){}try{window["redEnvioSinVerificar"]=redEnvioSinVerificar;}catch(e){}try{window["_envioTrabado"]=_envioTrabado;}catch(e){}try{window["_envioTrabadoMsg"]=_envioTrabadoMsg;}catch(e){}try{window["redReclamoEnVuelo"]=redReclamoEnVuelo;}catch(e){}try{window["_trajoHtml"]=_trajoHtml;}catch(e){}try{window["rutaReclamar"]=rutaReclamar;}catch(e){}try{window["rutaEnvioAnular"]=rutaEnvioAnular;}catch(e){}try{window["rutaSetFP"]=rutaSetFP;}catch(e){}try{window["rutaToggleCobrado"]=rutaToggleCobrado;}catch(e){}try{window["rutaToggleEntrega"]=rutaToggleEntrega;}catch(e){}try{window["rutaCancelar"]=rutaCancelar;}catch(e){}try{window["rutaCancelarCerrar"]=rutaCancelarCerrar;}catch(e){}try{window["rutaCancelarConfirmar"]=rutaCancelarConfirmar;}catch(e){}try{window["ABBR_TO_ID"]=ABBR_TO_ID;}catch(e){}try{window["RED_CARNES"]=RED_CARNES;}catch(e){}try{window["editCart"]=editCart;}catch(e){}try{window["editOriginalTotal"]=editOriginalTotal;}catch(e){}try{window["editPedidoRef"]=editPedidoRef;}catch(e){}try{window["rutaEditar"]=rutaEditar;}catch(e){}try{window["rutaEditarRender"]=rutaEditarRender;}catch(e){}try{window["edCarne"]=edCarne;}catch(e){}try{window["edCarneCargar"]=edCarneCargar;}catch(e){}try{window["edCarneKg"]=edCarneKg;}catch(e){}try{window["edCarneCambio"]=edCarneCambio;}catch(e){}try{window["edCarneHtml"]=edCarneHtml;}catch(e){}try{window["edPzToggle"]=edPzToggle;}catch(e){}try{window["edCarneItems"]=edCarneItems;}catch(e){}try{window["edCarnePiezas"]=edCarnePiezas;}catch(e){}try{window["rutaEditarChangeQty"]=rutaEditarChangeQty;}catch(e){}try{window["rutaEditarTotal"]=rutaEditarTotal;}catch(e){}try{window["rutaEditarUpdateTotals"]=rutaEditarUpdateTotals;}catch(e){}try{window["rutaEditarCerrar"]=rutaEditarCerrar;}catch(e){}try{window["rutaEditarGuardar"]=rutaEditarGuardar;}catch(e){}try{window["showMaleuLoader"]=showMaleuLoader;}catch(e){}try{window["setLoaderText"]=setLoaderText;}catch(e){}try{window["hideMaleuLoader"]=hideMaleuLoader;}catch(e){}try{window["rutaAbrirCobroMixto"]=rutaAbrirCobroMixto;}catch(e){}try{window["rutaCerrarMixto"]=rutaCerrarMixto;}catch(e){}try{window["rutaMixtoActualizarSuma"]=rutaMixtoActualizarSuma;}catch(e){}try{window["rutaMixtoPendiente"]=rutaMixtoPendiente;}catch(e){}try{window["rutaConfirmarMixto"]=rutaConfirmarMixto;}catch(e){}try{window["rutaMixtoVolverAEditar"]=rutaMixtoVolverAEditar;}catch(e){}try{window["rutaMixtoElegirPropina"]=rutaMixtoElegirPropina;}catch(e){}try{window["_rutaCommitMixto"]=_rutaCommitMixto;}catch(e){}try{window["_isoWeekDates"]=_isoWeekDates;}catch(e){}try{window["_isoWeekNow"]=_isoWeekNow;}catch(e){}try{window["_pagosSemanas"]=_pagosSemanas;}catch(e){}try{window["_cobroCliente"]=_cobroCliente;}catch(e){}try{window["_splitPago"]=_splitPago;}catch(e){}try{window["renderCaja"]=renderCaja;}catch(e){}try{window["_liqCtx"]=_liqCtx;}catch(e){}try{window["_redCtaPint"]=_redCtaPint;}catch(e){}try{window["_parseMonto"]=_parseMonto;}catch(e){}try{window["_yaPagado"]=_yaPagado;}catch(e){}try{window["_redComDe"]=_redComDe;}catch(e){}try{window["_redComMaleu"]=_redComMaleu;}catch(e){}try{window["liqOpen"]=liqOpen;}catch(e){}try{window["_redCtasDigitales"]=_redCtasDigitales;}catch(e){}try{window["_redCtaDefault"]=_redCtaDefault;}catch(e){}try{window["_redCtaNombre"]=_redCtaNombre;}catch(e){}try{window["_redCtaDePago"]=_redCtaDePago;}catch(e){}try{window["_redPintarCtas"]=_redPintarCtas;}catch(e){}try{window["_redSetCta"]=_redSetCta;}catch(e){}try{window["_redFaltaCta"]=_redFaltaCta;}catch(e){}try{window["liqClose"]=liqClose;}catch(e){}try{window["liqUpdateSum"]=liqUpdateSum;}catch(e){}try{window["liqConfirm"]=liqConfirm;}catch(e){}try{window["_sinMarcarCobrado"]=_sinMarcarCobrado;}catch(e){}try{window["_sinMarcarTxt"]=_sinMarcarTxt;}catch(e){}try{window["renderPagos"]=renderPagos;}catch(e){}try{window["registrarPagoParcial"]=registrarPagoParcial;}catch(e){}try{window["showViernesTab"]=showViernesTab;}catch(e){}try{window["renderPedidosTab"]=renderPedidosTab;}catch(e){}try{window["currentPedido"]=currentPedido;}catch(e){}try{window["PROD_NAME_BY_ABBR"]=PROD_NAME_BY_ABBR;}catch(e){}try{window["RED_CARNE_KG"]=RED_CARNE_KG;}catch(e){}try{window["redCantProd"]=redCantProd;}catch(e){}try{window["_normN"]=_normN;}catch(e){}try{window["showDetalle"]=showDetalle;}catch(e){}try{window["callCliente"]=callCliente;}catch(e){}try{window["waCliente"]=waCliente;}catch(e){}try{window["savedInd"]=savedInd;}catch(e){}try{window["_redOptimista"]=_redOptimista;}catch(e){}try{window["_redMontoDistinto"]=_redMontoDistinto;}catch(e){}try{window["_redErrTxt"]=_redErrTxt;}catch(e){}try{window["updatePedido"]=updatePedido;}catch(e){}try{window["_mapUpdatesToPedido"]=_mapUpdatesToPedido;}catch(e){}try{window["toggleEntrega"]=toggleEntrega;}catch(e){}try{window["toggleCobrado"]=toggleCobrado;}catch(e){}try{window["setFormaPago"]=setFormaPago;}catch(e){}try{window["savePropina"]=savePropina;}catch(e){}try{window["savePropinaMixto"]=savePropinaMixto;}catch(e){}try{window["ctrlMixtoActualizar"]=ctrlMixtoActualizar;}catch(e){}try{window["ctrlMixtoGuardar"]=ctrlMixtoGuardar;}catch(e){}try{window["redProxViernesISO"]=redProxViernesISO;}catch(e){}try{window["redISO"]=redISO;}catch(e){}try{window["redApCoid"]=redApCoid;}catch(e){}try{window["showNuevoPedido"]=showNuevoPedido;}catch(e){}try{window["showDashboard"]=showDashboard;}catch(e){}try{window["redPiezas"]=redPiezas;}catch(e){}try{window["redPzCart"]=redPzCart;}catch(e){}try{window["redKg"]=redKg;}catch(e){}try{window["redCarneCargar"]=redCarneCargar;}catch(e){}try{window["redCarneRender"]=redCarneRender;}catch(e){}try{window["redPzToggle"]=redPzToggle;}catch(e){}try{window["redCarneItems"]=redCarneItems;}catch(e){}try{window["redCarneTotal"]=redCarneTotal;}catch(e){}try{window["renderProducts"]=renderProducts;}catch(e){}try{window["changeQty"]=changeQty;}catch(e){}try{window["updateCart"]=updateCart;}catch(e){}try{window["renderSummary"]=renderSummary;}catch(e){}try{window["setPago"]=setPago;}catch(e){}try{window["validateNuevo"]=validateNuevo;}catch(e){}try{window["enviar"]=enviar;}catch(e){}try{window["sendOrderWithRetry"]=sendOrderWithRetry;}catch(e){}try{window["_syncPreciosPortal"]=_syncPreciosPortal;}catch(e){}try{window["redVerComo"]=redVerComo;}catch(e){}try{window["redRolPanel"]=redRolPanel;}catch(e){}try{window["redRaizVerComo"]=redRaizVerComo;}catch(e){}try{window["redVerComoLista"]=redVerComoLista;}catch(e){}try{window["VA_COPIA"]=VA_COPIA;}catch(e){}try{window["_vaData"]=_vaData;}catch(e){}try{window["redAbiertosCargar"]=redAbiertosCargar;}catch(e){}try{window["redAbiertosPintar"]=redAbiertosPintar;}catch(e){}try{window["redAbiertoHTML"]=redAbiertoHTML;}catch(e){}try{window["_vaCta"]=_vaCta;}catch(e){}try{window["redAbiertoPedirCuenta"]=redAbiertoPedirCuenta;}catch(e){}try{window["redAbiertoCuentaCancelar"]=redAbiertoCuentaCancelar;}catch(e){}try{window["redAbiertosRepintar"]=redAbiertosRepintar;}catch(e){}try{window["redAbiertoCuenta"]=redAbiertoCuenta;}catch(e){}try{window["redAbiertoMarcar"]=redAbiertoMarcar;}catch(e){}try{window["redIrARecibir"]=redIrARecibir;}catch(e){}try{window["EQ_COPIA"]=EQ_COPIA;}catch(e){}try{window["redEquipoCargar"]=redEquipoCargar;}catch(e){}try{window["redEquipoPintar"]=redEquipoPintar;}catch(e){}try{window["redAplausoEnviar"]=redAplausoEnviar;}catch(e){}try{window["redFocoAdminHTML"]=redFocoAdminHTML;}catch(e){}try{window["redFocoGuardar"]=redFocoGuardar;}catch(e){}try{window["redVerComoEntrar"]=redVerComoEntrar;}catch(e){}try{window["redVerComoSalir"]=redVerComoSalir;}catch(e){}
 };
 
 /* ═══════════ ruta ═══════════ */
