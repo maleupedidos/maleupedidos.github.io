@@ -1500,6 +1500,9 @@ button.ped-dep-x.va,button.ped-dep-x.va:disabled{opacity:1;background:#E3EFE3;bo
 #stCarga .stg-hora,#stCarga .stg-sel{min-height:44px;height:44px;padding:0 10px;border-radius:10px;border:1px solid var(--borderstrong);background:var(--surface);color:var(--ink);font-size:16px;font-family:inherit}
 .stg-sub{font-size:11.5px;color:var(--ink3);font-weight:400}
 .stg-row{display:grid;grid-template-columns:minmax(0,1fr) repeat(3,76px);gap:8px;align-items:end;padding:10px 14px;border-bottom:1px solid var(--border)}
+/* Con el precio de la factura (CARGA_PRECIO_FACTURA, 15/10/2026) va un campo mas. */
+.stg-row.stg-pre{grid-template-columns:minmax(0,1fr) repeat(3,76px) 92px}
+.stg-c.stg-c-pre .stg-in.stg-cambio{border-color:var(--amber,#b7791f);font-weight:700}
 .stg-n{font-size:13.5px;font-weight:700;color:var(--ink);line-height:1.25;min-width:0;align-self:center}
 .stg-n .stc-sub{display:block;font-weight:400}
 .stg-e{display:block;font-size:11.5px;font-weight:700;margin-top:2px;min-height:14px}
@@ -1545,6 +1548,7 @@ button.ped-dep-x.va,button.ped-dep-x.va:disabled{opacity:1;background:#E3EFE3;bo
   /* El nombre arriba, a todo el ancho, y los tres campos abajo: en 390 px el
      nombre al lado de tres campos quedaba en 90 px. */
   .stg-row{grid-template-columns:repeat(3,minmax(0,1fr));padding:10px 4px}
+  .stg-row.stg-pre{grid-template-columns:repeat(4,minmax(0,1fr))}
   .stg-n{grid-column:1/-1}
   /* La barra de abajo del celular tapaba el Guardar. */
   .stg-pie{padding-bottom:110px}
@@ -25861,6 +25865,27 @@ function _stgDepNom(id){
   return id;
 }
 function _stgIni(p){ return (CG_ENHORA&&CG_ENHORA[p.a])||p.ini||{}; }
+/* EL PRECIO DE LA FACTURA (15/10/2026). Arranca en el costo de Productos (el
+   numero gris); si la factura dice otro, se tipea y al guardar la carga pasa a la
+   col J de Productos y a la lista de ese proveedor. Solo con la palanca
+   CARGA_PRECIO_FACTURA (la grilla lo dice en `precioFactura`). Un precio se lee
+   como lo tipea una persona: «12.345» son doce mil, no doce (stNum lo leia asi). */
+function _stgConPrecio(){ return !!(CG_DATA&&CG_DATA.precioFactura); }
+function _stgPlata(t){
+  if(typeof t==='number')return t;
+  var x=String(t==null?'':t).replace(/[$\s]/g,'');
+  if(!x)return null;
+  if(x.indexOf(',')>=0)x=x.replace(/\./g,'').replace(',','.');
+  else if(/^\d{1,3}(\.\d{3})+$/.test(x))x=x.replace(/\./g,'');
+  return /^\d+(\.\d+)?$/.test(x)?Number(x):null;
+}
+/* El precio tipeado, si es distinto del costo: el numero, NaN si no se entiende, o null. */
+function _stgPrecio(p,v){
+  if(!_stgConPrecio()||!v||v.pre===undefined||String(v.pre).trim()==='')return null;
+  var n=_stgPlata(v.pre);
+  if(n==null||!(n>0))return NaN;
+  return Math.round(n)===Math.round(Number(p.c)||0)?null:Math.round(n);
+}
 function _stgOcurrio(){
   if(!CG_HORA)return 0;
   var m=String(CG_HORA).match(/^(\d{1,2}):(\d{2})$/); if(!m)return 0;
@@ -25878,9 +25903,13 @@ function _stgFila(p){
     var n=stNum(t); if(n==null){ mal=true; return; }
     fin[d.id]=n; if(Math.abs(n-(Number(ini[d.id])||0))>0.0005)toco=true;
   });
+  var pre=_stgPrecio(p,v);
+  if(pre!==null&&isNaN(pre))mal=true;
   if(mal)return {mal:true};
-  if(!toco)return null;
+  /* Un precio cambiado sin nada mas tambien viaja: el backend dice que va con lo que llego. */
+  if(!toco&&pre===null)return null;
   var f={a:p.a,recibido:rec||0,final:fin};
+  if(pre!==null)f.precio=pre;
   /* El «habia» que se mostro viaja para que el backend frene si cambio. Con
      una hora pasada solo se manda cuando ya se trajo el de esa hora. */
   if(!CG_HORA||CG_ENHORA)f.inicialVisto=ini;
@@ -25924,6 +25953,7 @@ function stgIn(a,campo,el){
   var v=CG_VAL[a]||(CG_VAL[a]={});
   CG_ACEPTA=false;
   if(campo==='rec'){ v.rec=el.value; delete v.deMas; }
+  else if(campo==='pre'){ v.pre=el.value; var _pp=_stgNom(a); el.classList.toggle('stg-cambio',_stgPrecio(_pp,v)!==null); }
   else { (v.fin||(v.fin={}))[campo]=el.value; }
   var b=_stgProv(), e=$('stgE_'+a);
   if(b&&e)for(var i=0;i<b.productos.length;i++)if(b.productos[i].a===a)e.innerHTML=_stgEstado(b.productos[i]);
@@ -26041,6 +26071,7 @@ function _stgPintarRev(){
       ?'El stock ya qued&oacute; acomodado.'
       :'El stock se est&aacute; acomodando: en unos segundos vas a ver los n&uacute;meros nuevos. Pod&eacute;s seguir con otro proveedor.')+'</div>';
     (r.errores||[]).forEach(function(e){ h+='<div class="stg-li stg-mal">'+stEsc(e)+'</div>'; });
+    (r.costos||[]).forEach(function(x){ h+='<div class="stg-li">'+stEsc(_stgNom(x.a).n)+': costo actualizado de $'+f$(x.antes)+' a $'+f$(x.ahora)+'</div>'; });
     /* Lo que no esta como se conto. Es contra el stock de AHORA: si despues hubo
        una venta tambien aparece, y por eso van los dos numeros. */
     if(r.falta&&r.falta.length){
@@ -26086,6 +26117,10 @@ function _stgPintarRev(){
     if(m.kind==='traspaso')h+='<div class="stg-li">'+stEsc(p.n)+': pasan '+stFmt(m.quantity,p.u)+' de '+stEsc(_stgDepNom(m.from_warehouse))+' a '+stEsc(_stgDepNom(m.to_warehouse))+'</div>';
     else if(m.kind==='ajuste')h+='<div class="stg-li stg-mal">'+stEsc(p.n)+': ajuste de '+_stgSigno(m.quantity,p.u)+' en '+stEsc(_stgDepNom(m.to_warehouse))+' (no lo explica lo que lleg&oacute;)</div>';
   });
+  (d.precios||[]).forEach(function(x){
+    h+='<div class="stg-li">'+stEsc(_stgNom(x.a).n)+': el costo pasa de $'+f$(x.antes)+' a <b>$'+f$(x.ahora)+'</b> (en Productos y en la lista de '+stEsc(CG_PROV)+')</div>';
+  });
+  (d.escala||[]).forEach(function(e){ h+='<div class="stg-li stg-mal">'+stEsc(e)+'</div>'; });
   (d.avisos||[]).forEach(function(a){ h+='<div class="stg-li stg-mal">'+stEsc(a)+'</div>'; });
   var hay=(d.lineas||[]).length>0;
   if(d.ok&&hay){
@@ -26133,7 +26168,8 @@ function renderStCarga(){
     h+='</select></label></div>';
   }
   h+='<div class="stc-ayuda">Anot&aacute; cu&aacute;nto <b>lleg&oacute;</b> y c&oacute;mo <b>qued&oacute;</b> cada freezer. '
-    +'Un freezer que dej&aacute;s vac&iacute;o queda como estaba (el n&uacute;mero gris). Lo que no toc&aacute;s no se guarda.</div>';
+    +'Un freezer que dej&aacute;s vac&iacute;o queda como estaba (el n&uacute;mero gris). Lo que no toc&aacute;s no se guarda.'
+    +(_stgConPrecio()?' El <b>precio de la factura</b> arranca en el costo de hoy: cambialo solo si la factura dice otro.':'')+'</div>';
   b.productos.forEach(function(p){
     if(p.u==='kg')return;
     var v=CG_VAL[p.a]||{}, ini=_stgIni(p), sub='';
@@ -26144,7 +26180,7 @@ function renderStCarga(){
       var partes=[]; deps.forEach(function(d){ var q=Number((sm.post||{})[d.id])||0; if(q)partes.push(_stgSigno(q,p.u)+' en '+stEsc(_stgDepNom(d.id))); });
       sub+=(sub?' &middot; ':'')+'despu&eacute;s: '+(sm.dudoso?'<span class="stg-mal">se movi&oacute; y no se sabe de qu&eacute; freezer</span>':partes.join(', '));
     }
-    h+='<div class="stg-row" id="stgR_'+stEsc(p.a)+'">'
+    h+='<div class="stg-row'+(_stgConPrecio()?' stg-pre':'')+'" id="stgR_'+stEsc(p.a)+'">'
       +'<div class="stg-n">'+stEsc(p.n)+(sub?'<span class="stc-sub">'+sub+'</span>':'')+'<span class="stg-e" id="stgE_'+stEsc(p.a)+'">'+_stgEstado(p)+'</span></div>'
       +'<label class="stg-c"><span>Lleg&oacute;</span><input class="stc-in stg-in" type="text" inputmode="numeric" value="'+stEsc(v.rec||'')+'" placeholder="0" '
       +'aria-label="Cuánto llegó de '+stEsc(p.n)+'" oninput="stgIn(\''+_stJs(p.a)+'\',\'rec\',this)"></label>';
@@ -26153,6 +26189,12 @@ function renderStCarga(){
         +'placeholder="'+stFmt(Number(ini[d.id])||0,p.u)+'" aria-label="Cómo quedó '+stEsc(_stgDepNom(d.id))+' de '+stEsc(p.n)+'" '
         +'oninput="stgIn(\''+_stJs(p.a)+'\',\''+_stJs(d.id)+'\',this)"></label>';
     });
+    if(_stgConPrecio()){
+      var _cam=_stgPrecio(p,v)!==null;
+      h+='<label class="stg-c stg-c-pre"><span>Factura $</span><input class="stc-in stg-in'+(_cam?' stg-cambio':'')+'" type="text" inputmode="numeric" value="'+stEsc(v.pre||'')+'" '
+        +'placeholder="$'+f$(Number(p.c)||0)+'" aria-label="Precio de la factura de '+stEsc(p.n)+' (hoy $'+f$(Number(p.c)||0)+')" '
+        +'oninput="stgIn(\''+_stJs(p.a)+'\',\'pre\',this)"></label>';
+    }
     h+='</div>';
   });
   h+='<div class="stg-pie"><button class="stg-btn" id="stgBtnRev" onclick="stgRevisar()">Revisar</button><div id="stgRev"></div></div>';
