@@ -11768,6 +11768,18 @@ var API='https://script.google.com/macros/s/AKfycbxmrG5YVSshcYezk8lXFx_uxb7NFGcb
   /* `cobrarParcial` entró el 22/9/2026, cuando dejó de poder cobrar dos veces:
      ahora el payload lleva `clientOpId` y el backend recuerda la respuesta. */
   var _POST_IDEMPOTENTE = { gasto: 1, ingreso: 1, borrarMovimientoCaja: 1, borrarVueltoHuerfano: 1, piezasRecibir: 1, cobrarParcial: 1 };
+  /* CRM: LA BASE ES LA FUENTE (15/10/2026). Las escrituras del CRM que con
+     CRM_FUENTE_PG = si van como orden (CRMFUENTE_SECO_ en Code.js). Se resuelven
+     ACA y no pantalla por pantalla: son diez acciones en seis pantallas (ficha,
+     notas, visitante, residencia, rol, interacciones y leads). Se les pone un
+     `clientOpId` (un reintento no duplica) y, si la orden vuelve `diferida`, se
+     empuja al aplicador ANTES de devolverle la respuesta a la pantalla: la
+     pantalla recarga despues de guardar, y sin esto leeria la planilla vieja
+     hasta un minuto. Con la palanca en no o medir no hay `diferida` y no cambia
+     nada. */
+  var _CRM_ORDEN = { crmUpdateClienteMeta: 1, crmSetNotasTags: 1, crmSetVisitante: 1, crmSetResidencia: 1, crmSetRolHogar: 1,
+    crmLogInteraccion: 1, crmDeleteInteraccion: 1, crmLeadSet: 1, crmLeadsBulk: 1, crmLeadDelete: 1 };
+  var CRM_APLICAR_MS = 25000;
   var _corte = window.__corteGet = { cortes: 0, salvados: 0 };
   var _CORTABLE = { admin:1, pedidosLight:1, cajaLight:1, ocLight:1, ventas:1, tendencia:1,
     stock_full:1, piezas_full:1, precios:1, catalogo:1, cobrosPendientes:1, entregas:1,
@@ -11948,7 +11960,7 @@ var API='https://script.google.com/macros/s/AKfycbxmrG5YVSshcYezk8lXFx_uxb7NFGcb
     }catch(e){ return false; }
   }
   window.fetch = function(input, init){
-    var esBackend = false, esPost = false, postIdempotente = false;
+    var esBackend = false, esPost = false, postIdempotente = false, ordenCrm = false;
     try{
       var t = ''; try { t = localStorage.getItem('maleu_token') || ''; } catch(e){}
       var url = (typeof input === 'string') ? input : ((input && input.url) || '');
@@ -11958,6 +11970,10 @@ var API='https://script.google.com/macros/s/AKfycbxmrG5YVSshcYezk8lXFx_uxb7NFGcb
         var cv = _cvCliente();
         if (esPost && init && typeof init.body === 'string'){
           var b = JSON.parse(init.body);
+          if (b && typeof b === 'object' && _CRM_ORDEN[b.action]){
+            ordenCrm = true;
+            if (!b.clientOpId){ b.clientOpId = 'crm_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 10); init.body = JSON.stringify(b); }
+          }
           if (b && typeof b === 'object' && !b.token){ b.token = t; if (cv && !b.cv) b.cv = cv; init.body = JSON.stringify(b); }
           postIdempotente = !!(b && b.clientOpId && _POST_IDEMPOTENTE[b.action]);
         } else if (!esPost && typeof input === 'string' && input.indexOf('token=') < 0){
@@ -12018,6 +12034,19 @@ var API='https://script.google.com/macros/s/AKfycbxmrG5YVSshcYezk8lXFx_uxb7NFGcb
             }, function(){});
           }
         }catch(e){}
+        /* Una orden del CRM aceptada y diferida: el aplicador primero (con reloj),
+           la respuesta despues. Si el aplicador no contesta, la respuesta sale
+           igual: la orden ya esta en la base y el disparador del minuto la escribe. */
+        if (ordenCrm && r && r.ok && typeof r.clone === 'function'){
+          return r.clone().json().then(function(j){
+            if (!(j && j.diferida)) return r;
+            try{ window.__crmOrdenes = (window.__crmOrdenes || 0) + 1; }catch(e){}
+            var aplicar = window.fetch(url, { method: 'POST', body: JSON.stringify({ action: 'pedidosFuenteAplicar' }) })
+              .then(function(x){ return x.json(); }).catch(function(){ return null; });
+            var reloj = new Promise(function(res){ setTimeout(res, CRM_APLICAR_MS); });
+            return Promise.race([aplicar, reloj]).then(function(){ return r; });
+          }, function(){ return r; });
+        }
         return r;
       }, function(e){ _marcar(); throw e; });
     }
