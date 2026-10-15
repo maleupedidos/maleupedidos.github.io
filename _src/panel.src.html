@@ -1212,6 +1212,10 @@ button.ped-dep-x.va,button.ped-dep-x.va:disabled{opacity:1;background:#E3EFE3;bo
 .btn-origen:active{opacity:.9}
 .btn-origen.saving{background:var(--bl)}
 .btn-origen.done{background:var(--g)}
+.pcb-det{margin-top:8px;border:1px solid var(--bd,#e5ddd3);border-radius:10px;padding:8px 10px;font-size:12px;background:var(--cr)}
+.pcb-det summary{cursor:pointer;font-weight:700;min-height:28px;display:flex;align-items:center}
+.pcb-it{padding:6px 0;border-top:1px dashed var(--bd,#e5ddd3);line-height:1.4;overflow-wrap:anywhere}
+.pcb-it:first-child{border-top:0}
 .btn-cancel-ped{display:block;width:100%;margin-top:8px;padding:11px;background:transparent;color:var(--r);border:1.5px solid var(--r);border-radius:10px;font-size:12px;font-weight:800;cursor:pointer;min-height:42px}
 
 /* ── FORM ── */
@@ -15653,10 +15657,26 @@ function cancelarEditor(uid){
    al cliente diga "te actualizo el pedido" solo cuando de verdad cambio algo.
    En memoria y sin persistir: al recargar cae al texto neutro, que nunca miente. */
 window._ordEditados={};
-function guardarEditor(uid){
+/* LA PREVIA DE LAS OC (15/10/2026). Antes de confirmar, el backend corre la misma
+   accion en seco y dice en una linea que pasa con las OC («2× Pack Muzza ya
+   pedidos a Bernardo Pisano pasan a tu stock ($13.600) · 1 línea sin pedir se
+   cancela»). Si no contesta, se sigue sin la linea: no frena la edicion. */
+function _ocPrevia(body){
+  var b={};Object.keys(body).forEach(function(k){if(k!=='clientOpId'&&k!=='piezas')b[k]=body[k];});
+  b.previa=true;
+  return fetch(API,{method:'POST',body:JSON.stringify(b)}).then(function(r){return r.json();})
+    .then(function(d){return (d&&d.ok&&d.ocTexto)||'';}).catch(function(){return '';});
+}
+function guardarEditor(uid,_ocTx){
   var ed=window['_ed_'+uid]; if(!ed) return;
   var lineas=ed.lineas.filter(function(l){return l.q>0;});
   if(lineas.length===0){toast('Agregá al menos un producto');return;}
+  if(_ocTx===undefined&&ed.es!=='Entregado'){
+    showLoader('Mirando qué pasa con las OC…');
+    _ocPrevia({action:'editarPedido',hoja:ed.hoja,id:ed.id,row:ed.row,
+      lineas:lineas.map(function(l){return {a:l.a,q:l.q};})}).then(function(tx){hideLoader(true);guardarEditor(uid,tx||'');});
+    return;
+  }
   var _pzA=Object.keys(ed.pzAdd||{}), _pzS=Object.keys(ed.pzSol||{});
   var resumen=lineas.map(function(l){
     return l.kg?(_edKgTxt(l.q)+' kg '+_edNom(l.a)+' @ $'+f$(l.precio)+'/kg'):(l.q+'x '+(PN[l.a]||l.a)+' @ $'+f$(l.precio));
@@ -15665,10 +15685,11 @@ function guardarEditor(uid){
     +(_pzA.length&&_pzS.length?' · ':'')+(_pzS.length?'−'+_pzS.length+(_pzS.length===1?' pieza que vuelve':' piezas que vuelven')+' al freezer':'');
   /* La carne viaja SIN costo: lo pone el backend con el de sus piezas. */
   var _lineasEnvio=lineas.map(function(l){return l.kg?{a:l.a,q:l.q,precio:l.precio}:l;});
+  /* Desde el 15/10/2026 editar ya no resetea el origen: las OC siguen la edicion. */
   var _aviso=(ed.es==='Entregado')
     ? '⚠️ Estás editando un pedido YA ENTREGADO.\nEl stock se reajusta solo por la diferencia.\n\n'
-    : 'Si solo bajaste cantidades, el origen se mantiene.\nSi agregaste productos o aumentaste, el origen se resetea a Pendiente.';
-  if(!confirm('Guardar cambios al pedido?\n\n'+resumen+'\n\n'+_aviso))return;
+    : (_ocTx?'OC: '+_ocTx:'');
+  if(!confirm('Guardar cambios al pedido?\n\n'+resumen+(_aviso?'\n\n'+_aviso:'')))return;
   // Tras la acción, scroll al top.
   window._forceTopOnRender=true;
   // Editar productos puede resetear origen a Pendiente o auto-reservar → tratarlo como
@@ -15707,6 +15728,7 @@ function guardarEditor(uid){
         if(typeof r.margen==='number') _patch.mg=r.margen;
         if(r.autoReReservado){_patch.o='Deposito';}   /* sin estado «Reservado» desde el 14/10/2026 */
         else if(r.origenReseteado){_patch.o='Pendiente';_patch.oDet='';}
+        else if(r.origen){_patch.o=r.origen;_patch.oDet=r.oDet||'';}   /* las OC siguen la edicion (15/10/2026) */
         _patchPedidoLocal(_edHoja,_edId,_patch);
         try{ window._ordEditados[_edHoja+'|'+_edId]=Date.now(); }catch(_e){}
         // Limpiar state residual + render forzado (mismo motivo que antes)
@@ -15716,7 +15738,7 @@ function guardarEditor(uid){
         var msg='Pedido actualizado';
         if(r.autoReReservado) msg+=' · sale del freezer ✓';
         else if(r.origenReseteado) msg+=' (origen reseteado)';
-        if(r.aviso) msg+=' · ⚠️ '+r.aviso;
+        if(r.aviso) msg+=' · OC: '+r.aviso;
         /* El cliente pidio el cambio y espera que le cuenten como quedo: sin
            esto, el detalle actualizado esta a un toque y nadie se enteraria. */
         msg+=' — abr\u00ed la ficha y copi\u00e1 el detalle para el cliente';
@@ -15977,12 +15999,13 @@ function _cplPedido(hoja,id){
   return null;
 }
 function _cplEsc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
-function _cplElegir(cli,id,monto,cb){
+function _cplElegir(cli,id,monto,cb,ocTx){
   var bg=document.createElement('div');
   bg.className='cpl-bg';
   bg.innerHTML='<div class="cpl-box" role="dialog" aria-modal="true">'
     +'<div class="cpl-tit">El pedido de '+_cplEsc(cli)+' (N° '+_cplEsc(id)+') está cobrado</div>'
     +'<div class="cpl-txt">'+(monto>0?'Entraron $'+Math.round(monto).toLocaleString('es-AR')+'. ':'')+'¿Qué pasó con la plata?</div>'
+    +(ocTx?'<div class="cpl-txt" style="font-size:12px;opacity:.85">OC: '+_cplEsc(ocTx)+'</div>':'')
     +'<button type="button" class="cpl-btn" data-v="devolvi">La devolví</button>'
     +'<button type="button" class="cpl-btn" data-v="a_favor">Queda a favor del cliente</button>'
     +'<button type="button" class="cpl-no" data-v="">No cancelar</button></div>';
@@ -15994,14 +16017,40 @@ function _cplElegir(cli,id,monto,cb){
   });
   document.body.appendChild(bg);
 }
-function confirmarCancelarPed(btn){
+function pcbCambios(el,h,n){
+  if(!el.open||el.dataset.ok)return;
+  var box=el.querySelector('.pcb-l');
+  var esc=function(t){return String(t==null?'':t).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});};
+  var m$=function(v){return '$'+Math.round(Number(v)||0).toLocaleString('es-AR');};
+  fetch(API+'?action=pedidoCambios&hoja='+encodeURIComponent(h)+'&n='+encodeURIComponent(n)+'&t='+Date.now())
+    .then(function(r){return r.json();}).then(function(d){
+      if(!d||!d.ok){box.textContent='No pude traer los cambios.';return;}
+      el.dataset.ok='1';
+      var C=d.cambios||[];
+      box.innerHTML=C.length?C.map(function(c){
+        return '<div class="pcb-it"><b>'+esc(c.el)+' · '+esc(String(c.quien).split(' (')[0])+'</b> <small>('+(c.desde==='portal'?'su portal':'ERP')+')</small><br>'
+          +[c.ag?'agregó '+esc(c.ag):'',c.sa?'sacó '+esc(c.sa):''].filter(Boolean).join(' · ')
+          +' · '+m$(c.antes)+' → '+m$(c.despues)
+          +(c.oc?'<br><small>OC: '+esc(c.oc)+'</small>':'')+(c.corte?'<br><small>⚠️ pasado el corte del jueves</small>':'')+'</div>';
+      }).join(''):'Sin cambios registrados (se anotan desde el 15/10/2026).';
+    }).catch(function(){box.textContent='Sin conexión.';});
+}
+function confirmarCancelarPed(btn,_ocTx){
   var hoja=btn.dataset.h, id=btn.dataset.n, row=Number(btn.dataset.r)||0, cli=btn.dataset.c||'';
   var p=_cplPedido(hoja,id);
-  if(p&&p.ep==='Cobrado'&&_CPL_HOJAS[hoja]){
-    _cplElegir(cli,id,Number(p.$)||0,function(v){btn.disabled=true;_cancelarPedEnviar(btn,hoja,id,row,cli,v);});
+  var _cob=!!(p&&p.ep==='Cobrado'&&_CPL_HOJAS[hoja]);
+  /* La linea de las OC antes de confirmar (15/10/2026): lo ya pedido pasa a stock. */
+  if(_ocTx===undefined){
+    btn.disabled=true;showLoader('Mirando qué pasa con las OC…');
+    _ocPrevia({action:'cancelarPedido',hoja:hoja,id:id,row:row,plata:_cob?'a_favor':''})
+      .then(function(tx){hideLoader(true);btn.disabled=false;confirmarCancelarPed(btn,tx||'');});
     return;
   }
-  if(!confirm('¿Cancelar el pedido de '+cli+' (N° '+id+')?\n\nEsta acción no se puede deshacer.'))return;
+  if(_cob){
+    _cplElegir(cli,id,Number(p.$)||0,function(v){btn.disabled=true;_cancelarPedEnviar(btn,hoja,id,row,cli,v);},_ocTx);
+    return;
+  }
+  if(!confirm('¿Cancelar el pedido de '+cli+' (N° '+id+')?\n\n'+(_ocTx?'OC: '+_ocTx+'\n\n':'')+'Esta acción no se puede deshacer.'))return;
   btn.disabled=true;
   _cancelarPedEnviar(btn,hoja,id,row,cli,'');
 }
@@ -16034,7 +16083,8 @@ function _cancelarPedEnviar(btn,hoja,id,row,cli,plata){
         // Antes esto no se decía y las líneas quedaban vivas: se le compraba al
         // proveedor para un pedido que ya no existía (caso Latugaye, $59.700).
         var _c=Number(r.ocCanceladas)||0, _rc=Number(r.ocYaRecibidas)||0;
-        if(_c>0){
+        if(r.ocTexto)toast('Pedido cancelado · OC: '+r.ocTexto,8000);
+        else if(_c>0){
           // Formateo inline a propósito: hay 4 fmt$() distintos en este archivo,
           // en scopes distintos, y uno de ellos ni siquiera pone el signo $.
           var _ah=Math.round(Number(r.ocAhorro)||0);
@@ -20080,6 +20130,10 @@ function rPedidos(opts){
     }
 
     if(isRed)html+=_redComHtml(p,'pc');
+
+    /* Los cambios del pedido (15/10/2026): quien lo edito, cuando, que agrego y
+       saco, el total antes y despues y que paso con las OC. Se traen al abrir. */
+    if(p.n&&p.n!=='-')html+='<details class="pcb-det" ontoggle="pcbCambios(this,\''+p.h+'\',\''+String(p.n).replace(/'/g,'')+'\')"><summary>🕓 Cambios del pedido</summary><div class="pcb-l">…</div></details>';
 
     // Nota para Red: el vendedor maneja Estado de Entrega y Pago desde red.html
     if(isRed&&p.es!=='Entregado'&&p.es!=='Cancelado'){
@@ -25117,8 +25171,12 @@ function avzPedir(){
     AVZ_LISTA=Array.isArray(d.avisos)?d.avisos:[]; AVZ_TS=Date.now(); avzPintar();
   }).catch(function(){AVZ_PIDIENDO=false;});
 }
+/* Las ediciones de los vendedores (15/10/2026) viven 48 h en la lista: prenden el
+   punto solo mientras no las viste en este navegador. */
+function _avzVistos(){try{return JSON.parse(localStorage.getItem('avz_vistos')||'{}')||{};}catch(e){return {};}}
 function avzPintar(){
-  var b=$('hdrBell'), dot=$('hdrNotifDot'), n=AVZ_LISTA.length;
+  var _v=_avzVistos();
+  var b=$('hdrBell'), dot=$('hdrNotifDot'), n=AVZ_LISTA.filter(function(a){return a.tipo!=='edicion'||!_v[a.id];}).length;
   if(b){ b.classList.toggle('hay',n>0); b.title=n?(n+(n===1?' aviso':' avisos')):'Sin avisos'; }
   if(dot)dot.style.display=n?'block':'none';
   var box=$('avzBox'); if(box&&!box.hidden)avzLista();
@@ -25126,7 +25184,8 @@ function avzPintar(){
 function avzLista(){
   var box=$('avzBox'); if(!box)return;
   var esc=function(t){return String(t==null?'':t).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});};
-  var ico={hoy:'💸',vispera:'⏰',vencida:'⚠️'};
+  var ico={hoy:'💸',vispera:'⏰',vencida:'⚠️',edicion:'✏️'};
+  try{var _v=_avzVistos();AVZ_LISTA.forEach(function(a){if(a.tipo==='edicion')_v[a.id]=Date.now();});localStorage.setItem('avz_vistos',JSON.stringify(_v));}catch(e){}
   box.innerHTML='<div class="avz-cab">Avisos</div>'+(AVZ_LISTA.length?AVZ_LISTA.map(function(a,i){
     return '<button type="button" class="avz-it avz-'+esc(a.tipo)+'" onclick="avzIr('+i+')"><span class="avz-ico">'+(ico[a.tipo]||'🔔')+'</span><span class="avz-tx"><b>'+esc(a.titulo)+'</b>'
       +(a.lineas||[]).filter(function(l){return String(l).trim();}).map(function(l){return '<small>'+esc(l)+'</small>';}).join('')+'</span></button>';
@@ -25139,11 +25198,12 @@ window.avzToggle=function(ev){
     document.addEventListener('click',function(){var bx=$('avzBox');if(bx&&!bx.hidden){bx.hidden=true;var bb=$('hdrBell');if(bb)bb.setAttribute('aria-expanded','false');}}); }
   box.hidden=!box.hidden;
   var b=$('hdrBell'); if(b)b.setAttribute('aria-expanded',box.hidden?'false':'true');
-  if(!box.hidden){ avzLista(); if(Date.now()-AVZ_TS>60000)avzPedir(); }
+  if(!box.hidden){ avzLista(); avzPintar(); if(Date.now()-AVZ_TS>60000)avzPedir(); }
 };
 window.avzIr=function(i){
   var a=AVZ_LISTA[i]; var box=$('avzBox'); if(box)box.hidden=true;
   if(a&&a.ir==='liquidacion')irLiquidacion();
+  else if(a&&a.ir==='pedidos')go('pedidos');
 };
 /* Ventas › RED › Liquidación. El chip existe solo si el backend dice que la
    liquidacion esta prendida, y eso se sabe recien al abrir RED: se espera. */
