@@ -26629,9 +26629,11 @@ function _stcSeguir(){
     _stcSeguir();
   };
   fetch(API,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},
-    body:JSON.stringify({action:'stockContar',abbr:abbr,deposito:dep,cantidad:v})})
+    body:JSON.stringify({action:'stockContar',abbr:abbr,deposito:dep,cantidad:v,clientOpId:_pfId()})})
     .then(function(r){return r.json();})
-    .then(function(d){ if(d&&d.ok)fin(true,d); else fin(false,d,(d&&d.error)||'?'); })
+    /* Stock I4 (15/10/2026): aceptado como orden, se empuja al aplicador; la
+       pantalla ya pinto el numero (`_stAplicarLocal`), no hace falta esperarlo. */
+    .then(function(d){ if(d&&d.ok){ _pfAplicar(d); fin(true,d); } else fin(false,d,(d&&d.error)||'?'); })
     .catch(function(e){ fin(false,null,(e&&e.message)||'sin conexi\u00f3n'); });
 }
 
@@ -27215,6 +27217,8 @@ function stCarneGuardar(){
       clientOpId:_opTanda,
       piezas:envio.map(function(p){return {abbr:p.abbr,peso:p.peso,uid:p.uid};})})})
     .then(function(r){return r.json();})
+    /* Stock I4: aceptada como orden, se aplica ANTES de recargar las piezas. */
+    .then(function(d){ return _pfAplicar(d).then(function(){ return d; }); })
     .then(function(d){
       terminar();
       if(d&&d.ok){
@@ -27288,8 +27292,10 @@ function stCarneBaja(id){
   CARNE_BAJANDO[id]=true;
   renderStCarne();
   fetch(API,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},
-    body:JSON.stringify({action:'piezasBaja',id:id,motivo:'Baja desde el ERP'})})
+    body:JSON.stringify({action:'piezasBaja',id:id,motivo:'Baja desde el ERP',clientOpId:_pfId()})})
     .then(function(r){return r.json();})
+    /* Stock I4: aceptada como orden, se aplica ANTES de recargar las piezas. */
+    .then(function(d){ return _pfAplicar(d).then(function(){ return d; }); })
     .then(function(d){
       delete CARNE_BAJANDO[id];
       if(d&&d.ok){
@@ -27522,7 +27528,7 @@ function stMoverEnviar(abbr){
   if(!DEP_DATA||STM_VIAJA[abbr])return;
   var pr=_stProd(abbr); if(!pr)return;
   var desde=DEP_DESDE, hacia=DEP_HACIA;   // se congelan: se pueden dar vuelta mientras viaja
-  var body={action:'stockTraspaso',abbr:abbr,desde:desde,hacia:hacia};
+  var body={action:'stockTraspaso',abbr:abbr,desde:desde,hacia:hacia,clientOpId:_pfId()};
   var uni=(pr.u==='kg'?'kg':'u'), desc='', v=0;
   var aca=Number((pr.porDep||{})[desde])||0;
 
@@ -27556,6 +27562,8 @@ function stMoverEnviar(abbr){
   renderStMover();
   fetch(API,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(body)})
     .then(function(r){return r.json();})
+    /* Stock I4: aceptado como orden, se aplica ANTES de que la pantalla recargue. */
+    .then(function(d){ return _pfAplicar(d).then(function(){ return d; }); })
     .then(function(d){
       delete STM_VIAJA[abbr];
       /* DEP_DATA pudo cambiar mientras viajaba (llegaron los datos de ahora): se
@@ -32820,8 +32828,10 @@ function _catFreezerPost(items,modo){
   var e=_catDetalle&&_catDetalle.event; if(!e)return;
   showLoader(modo==='sacar'?'Sacando del freezer\u2026':'Devolviendo al freezer\u2026');
   return fetch(API,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},
-    body:JSON.stringify({action:'cateringStock',eventId:e.id,ref:e.event_code||e.id,items:items,modo:modo})})
+    body:JSON.stringify({action:'cateringStock',eventId:e.id,ref:e.event_code||e.id,items:items,modo:modo,clientOpId:_pfId()})})
     .then(function(r){return r.json();})
+    /* Stock I4: aceptado como orden, se aplica ANTES de recargar el evento. */
+    .then(function(r){ return _pfAplicar(r).then(function(){ return r; }); })
     .then(function(r){
       hideLoader(true);
       if(r&&r.ok){
@@ -63590,6 +63600,9 @@ function processSyncQueue(){
            la base y el aplicador del minuto la escribe). */
         if(res.diferida&&(item.__pf||0)<3){
           item.__pf=(item.__pf||0)+1;
+          /* Stock I4 (15/10/2026): la PRIMERA respuesta de la descarga dice lo que
+             entra; el reenvio, con la orden ya aplicada, ve las filas selladas. */
+          if(!item.__res)item.__res=res;
           fetch(RUT_APPS_SCRIPT_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({action:'pedidosFuenteAplicar'}),redirect:'follow'})
             .catch(function(){}).then(function(){setTimeout(processSyncQueue,300);});
           return;
@@ -63607,7 +63620,7 @@ function processSyncQueue(){
           showToast('Ese cobro quedó con fecha anterior al último ajuste de caja'+(res.ajusteDe?' ('+res.ajusteDe+')':'')+': no movió el saldo. Si el ajuste no lo tenía, corregilo desde Caja.',9000);
         }
         /* Una descarga que entró por la cola también dice lo que salió mal. */
-        if(item&&item.action==='marcarGuardadoEnStock'){ try{ _rdepAvisosDescarga(res); }catch(eAv){} }
+        if(item&&item.action==='marcarGuardadoEnStock'){ try{ _rdepAvisosDescarga(item.__res||res); }catch(eAv){} }
         if(item&&item.action==='marcarEntregado'){
           var _kc=item.hoja+'|R'+item.row;
           (rutHechas||[]).forEach(function(x){if(x&&x.key===_kc)x.conf=Date.now();});
@@ -69738,7 +69751,13 @@ function abaProcessSyncQueue() {
            de marcar "seguia apareciendo ahi". El loader se cierra cuando la
            pantalla esta lista, no cuando contesta el server. */
         _abaLoaderMsg('Actualizando la lista…');
-        _abaEsperarRefresh(abaRefresh(true));
+        /* Stock I4 (15/10/2026): con la recepcion aceptada como orden la planilla se
+           escribe despues: se empuja al aplicador ANTES de recargar, o la lista
+           volveria a mostrar lo recibido como pendiente hasta un minuto. */
+        if (resp && resp.diferida) {
+          fetch(ABA_APPS_SCRIPT_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ action: 'pedidosFuenteAplicar' }) })
+            .catch(function () {}).then(function () { _abaEsperarRefresh(abaRefresh(true)); });
+        } else _abaEsperarRefresh(abaRefresh(true));
       } else {
         /* Sin conexion no hay nada que esperar: la accion ya quedo en la cola y
            se sincroniza sola cuando vuelva internet. Dejar el loader seria
