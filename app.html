@@ -943,6 +943,10 @@ button.sem-mas{display:block;width:100%;min-height:44px;margin:4px 0 8px;backgro
 .pc-tags{display:flex;gap:5px;flex-wrap:wrap;margin-top:8px}
 .pc-p{font-size:12px;color:var(--ink3);margin-top:6px;line-height:1.4}
 .pc-combo{display:inline-block;font-size:11px;font-weight:800;color:#E65100;background:#FFF3E0;border:1px solid #FFD8A8;border-radius:20px;padding:3px 9px;margin-top:6px}
+/* La misma casa, el mismo dia (16/10/2026): ver `_pedCasaHTML`. */
+.pc-casa{font-size:12px;line-height:1.4;color:var(--blu);background:var(--blub);border-radius:10px;padding:8px 10px;margin-top:8px}
+.pc-casa-rep{color:#8B3A0E;background:var(--ol)}
+.pc-casa .btn-cancel-ped{margin-top:8px}
 .pc-head{display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:11px;color:var(--ink3);margin-bottom:8px;flex-wrap:wrap}
 .pc-head .pc-fe{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
 .pc-head .pc-fe input[type=date]{font-size:13px;padding:5px 8px;border:1px solid var(--border);border-radius:4px;font-family:inherit;color:var(--ink);background:#fff;min-height:32px}
@@ -14043,7 +14047,7 @@ function _leerVersion(app){
    "El HTML no sabe que version es" dejo de ser cierto: el build le escribe
    adentro el CACHE_NAME de sw-panel.js, el mismo que deploy.sh obliga a subir en
    cada cambio. Si lo publicado dice otra cosa, esta pagina es vieja. Punto. */
-var _APP_CN_PAGINA='maleu-panel-v644';
+var _APP_CN_PAGINA='maleu-panel-v645';
 
 /* Devuelve [{k,v}] si lo publicado no es lo que esta pagina corre. */
 function _chequearVersiones(){
@@ -19605,6 +19609,106 @@ function _pcMarcarVisto(key){
   try{var s=_pcVistos();if(s.has(key))return;s.add(key);localStorage.setItem('maleu_pc_vistos_v2',JSON.stringify(Array.from(s)));}catch(e){}
 }
 function _pcKey(p){return p && p.h && p.n ? (p.h+'|'+p.n) : '';}
+/* ═══ LA MISMA CASA, EL MISMO DIA (16/10/2026) ════════════════════════════════
+   Tadeo: «Iñaki hizo el #1172 y a los 9 minutos el #1173: misma persona, mismo
+   lote, mismo dia de entrega. Es obvio que queria sumar algo».
+   Ruta, el armado y el cobro ya los juntan en una parada (`_agruparPedidos` de
+   ruta.html) y Resumen los cuenta como una venta (`_ocasiones`). Faltaba esta
+   tab: los pedidos vivos de Home y Pilar de la misma casa (mismo telefono, o
+   mismo lote) para el mismo dia de entrega van pegados, con el total de los
+   dos. Las filas NO se fusionan.
+   Si uno repite casi los mismos productos que otro (60% o mas, por producto),
+   es un «me equivoque, te lo hago de nuevo»: la tarjeta lo dice y ofrece
+   cancelar el viejo de un toque. No se cancela nada solo. La misma regla avisa
+   por Telegram al entrar (`_mismaCasaAlEntrar_` en Code.js). */
+function _pedTel10(t){
+  var d=String(t==null?'':t).replace(/\D/g,'');
+  if(d.length>=12&&d.slice(0,2)==='54')d=d.slice(2);
+  if(d.length===11&&d.charAt(0)==='9')d=d.slice(1);
+  return d.length>10?d.slice(-10):d;
+}
+function _pedCasaVivo(p){
+  return !!(p&&!p.hist&&(p.h==='Home'||p.h==='Pilar')&&p.es!=='Entregado'&&p.es!=='Cancelado'
+    &&p.n&&String(p.n)!=='-'&&/^\d{4}-\d{1,2}-\d{1,2}/.test(String(p.dee||'')));
+}
+/** pcKey -> [pedidos de la misma casa y el mismo dia] (solo grupos de 2 o mas). */
+function _pedCasaIdx(lista){
+  var gDeClave={},miembros={},n=0;
+  (lista||[]).forEach(function(p){
+    if(!_pedCasaVivo(p))return;
+    var m=String(p.dee).match(/^(\d{4})-(\d{1,2})-(\d{1,2})/), dia=m[1]+'-'+(+m[2])+'-'+(+m[3]), ks=[];
+    var t=_pedTel10(p.tel); if(t.length>=8)ks.push('t|'+t+'|'+dia);
+    var br=String(p.br||'').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/\s+/g,' ').trim();
+    if(/lote/.test(br))ks.push('b|'+br+'|'+dia);
+    if(!ks.length)return;
+    var g=null;
+    ks.forEach(function(k){
+      var x=gDeClave[k]; if(x==null||x===g)return;
+      if(g==null){g=x;return;}
+      /* Las dos claves apuntaban a grupos distintos: se juntan. */
+      miembros[x].forEach(function(q){miembros[g].push(q);});
+      delete miembros[x];
+      Object.keys(gDeClave).forEach(function(kk){if(gDeClave[kk]===x)gDeClave[kk]=g;});
+    });
+    if(g==null){g=++n;miembros[g]=[];}
+    ks.forEach(function(k){gDeClave[k]=g;});
+    miembros[g].push(p);
+  });
+  var out={};
+  Object.keys(miembros).forEach(function(g){
+    var mm=miembros[g]; if(mm.length<2)return;
+    mm.sort(function(a,b){return (Number(a.r)||0)-(Number(b.r)||0);});   /* el primero que entro, primero */
+    mm.forEach(function(p){out[_pcKey(p)]=mm;});
+  });
+  return out;
+}
+/** Que parte de los productos de los dos esta en los dos (0 a 1), por producto. */
+function _pedParecido(a,b){
+  var ka={},u={},comun=0;
+  (a&&a.p||[]).forEach(function(x){if(Number(x.q)>0){ka[x.a]=1;u[x.a]=1;}});
+  (b&&b.p||[]).forEach(function(x){if(Number(x.q)>0){if(ka[x.a]&&u[x.a]!==2){comun++;u[x.a]=2;}else if(!u[x.a])u[x.a]=1;}});
+  var tot=Object.keys(u).length;
+  return tot?comun/tot:0;
+}
+/** Reordena la lista para que los de la misma casa queden pegados, en el lugar
+ *  del primero que aparece. */
+function _pedCasaJuntar(fl,idx){
+  var ya={},out=[];
+  fl.forEach(function(p){
+    var k=_pcKey(p); if(ya[k])return;
+    var g=idx[k];
+    if(!g){ya[k]=1;out.push(p);return;}
+    var enLista={};fl.forEach(function(q){enLista[_pcKey(q)]=1;});
+    g.forEach(function(q){var kq=_pcKey(q);if(enLista[kq]&&!ya[kq]){ya[kq]=1;out.push(q);}});
+  });
+  return out;
+}
+/** Etiqueta y aviso de la tarjeta: {tag, cuerpo} ('' si no es de un grupo). */
+function _pedCasaHTML(p,idx){
+  var g=idx&&idx[_pcKey(p)]; if(!g)return {tag:'',cuerpo:''};
+  var otros=g.filter(function(q){return q!==p;});
+  var tot=g.reduce(function(s,q){return s+_pedTotalCliente(q);},0);
+  var esc=function(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});};
+  var nums=otros.map(function(q){return (q.h!==p.h?q.h+' ':'')+'#'+q.n;}).join(', ');
+  var tag='<span class="tg" style="background:var(--blub);color:var(--blu)" title="Mismo cliente y mismo día de entrega: va en una sola parada y se cobra junto">&#128279; Una entrega con '+esc(nums)+' · $'+f$(tot)+'</span>';
+  var cuerpo='<div class="pc-casa"><b>&#128279; Va junto con '+esc(nums)+'</b>: misma casa y mismo día de entrega. En Ruta es una sola parada y un solo cobro de <b>$'+f$(tot)+'</b>; cuenta como una venta.</div>';
+  /* ¿Parece repetido? Solo se ofrece cancelar el que entro ANTES. */
+  var viejos=otros.filter(function(q){return (Number(q.r)||0)<(Number(p.r)||0)&&_pedParecido(p,q)>=0.6;});
+  var nuevos=otros.filter(function(q){return (Number(q.r)||0)>(Number(p.r)||0)&&_pedParecido(p,q)>=0.6;});
+  if(viejos.length){
+    tag+='<span class="tg" style="background:var(--ol);color:#8B3A0E">&#9888;&#65039; Parece repetido</span>';
+    cuerpo+='<div class="pc-casa pc-casa-rep">&#9888;&#65039; <b>Parece repetido</b>: trae casi los mismos productos que '+viejos.map(function(q){return '#'+esc(q.n);}).join(', ')+'. Si fue un «me equivoqué, te lo hago de nuevo», cancelá el viejo:';
+    viejos.forEach(function(q){
+      if(q.ep==='Cobrado'&&!_CPL_HOJAS[q.h])return;
+      cuerpo+='<button class="btn-cancel-ped" data-h="'+esc(q.h)+'" data-n="'+esc(q.n)+'" data-r="'+(q.r||'')+'" data-c="'+esc(q.c||'')+'" onclick="event.stopPropagation();confirmarCancelarPed(this)">&#x1F5D1; Cancelar el #'+esc(q.n)+' (el anterior, $'+f$(_pedTotalCliente(q))+')</button>';
+    });
+    cuerpo+='</div>';
+  } else if(nuevos.length){
+    tag+='<span class="tg" style="background:var(--ol);color:#8B3A0E">&#9888;&#65039; Parece repetido</span>';
+    cuerpo+='<div class="pc-casa pc-casa-rep">&#9888;&#65039; <b>Parece repetido</b> en '+nuevos.map(function(q){return '#'+esc(q.n);}).join(', ')+' (entró después con casi los mismos productos). El botón para cancelar este está en la tarjeta del nuevo.</div>';
+  }
+  return {tag:tag,cuerpo:cuerpo};
+}
 
 // Toggle expandir/colapsar card de pedido. Si el click vino de un control interactivo, no togglea.
 function togglePc(ev, elt){
@@ -23593,6 +23697,11 @@ function rPedidos(opts){
     return b.n-a.n;
   });
   fl=_dec.map(function(x){return x.p;});
+  /* Los de la misma casa para el mismo dia, pegados (16/10/2026). El indice se
+     arma con TODOS los pedidos y no con los filtrados: un filtro no puede
+     esconder que hay otro pedido de la misma casa. */
+  var _casaIdx={};
+  try{ _casaIdx=_pedCasaIdx(D.pedidos||[]); fl=_pedCasaJuntar(fl,_casaIdx); }catch(_eCasa){ _casaIdx={}; }
 
   // "Unseen" (naranja) = pedido cuyo Origen sigue en Pendiente (no se decidió
   // Depósito/OC todavía) Y no fue abierto manualmente. En cuanto se confirma
@@ -23695,10 +23804,11 @@ function rPedidos(opts){
     if(p.o==='Pendiente' && p.es!=='Cancelado' && p.es!=='Entregado'){
       sumOrigenPendBadge='<span class="tg pc-pend-origen" title="Este pedido necesita que decidas el origen (Depósito u OC)">&#9888;&#65039; Decidir Origen</span>';
     }
+    var _casa=_pedCasaHTML(p,_casaIdx);
     html+='<div class="pc-summary" onclick="togglePc(event,this)">';
     html+=  '<div class="pc-summary-l">';
     html+=    '<div class="pc-c"><span class="ord-link" onclick="event.stopPropagation();openOrdDetail(\''+p.h+'\',\''+p.n+'\','+(p.r||0)+')" title="Ver detalle del pedido">'+_rtEsc(p.c)+'</span></div>';
-    html+=    '<div class="pc-summary-meta">'+sumCanal+sumStateBadge+sumOrigenPendBadge+sumPayBadge+sumReadyBadge+'<span>Entrega '+feShort+'</span></div>';
+    html+=    '<div class="pc-summary-meta">'+sumCanal+sumStateBadge+sumOrigenPendBadge+sumPayBadge+sumReadyBadge+_casa.tag+'<span>Entrega '+feShort+'</span></div>';
     html+=  '</div>';
     html+=  '<div class="pc-summary-r">';
     html+=    '<span class="pc-$">$'+f$(_pedTotalCliente(p))+'</span>';
@@ -23728,6 +23838,7 @@ function rPedidos(opts){
     html+='</div>';
     if(comboLbl)html+='<div class="pc-combo">🎁 '+comboLbl.replace(/[<>&]/g,' ')+'</div>';
     if(prods)html+='<div class="pc-p">'+prods+'</div>';
+    if(_casa.cuerpo)html+=_casa.cuerpo;
 
     // ORIGEN por producto (split DEP/OC por cantidad) si es Pendiente y el pedido no está cancelado ni entregado.
     // homeOnly (rol Repartidor): se oculta — los Home vie/sáb entran auto-reservados, decisión de origen
