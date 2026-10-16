@@ -1519,6 +1519,9 @@ button.ped-dep-x.va,button.ped-dep-x.va:disabled{opacity:1;background:#E3EFE3;bo
 .stg-in{width:100%;box-sizing:border-box}
 .stg-in::placeholder{color:var(--ink3);font-weight:400;opacity:.75}
 .stg-pie{padding:14px 0 24px}
+.stg-rep{color:var(--ink2)}
+.stg-rep b{color:#1565C0}
+.stg-rep-tot{margin:0 0 10px;padding:10px 12px;border:1px solid #90CAF9;border-radius:10px;background:#E3F2FD;color:#0D47A1;font-size:13px;line-height:1.45}
 #stCarga .stg-btn{display:block;width:100%;min-height:50px;height:auto;padding:14px 12px;margin-top:10px;border:none;border-radius:12px;background:var(--o);color:#fff;font-size:15px;font-weight:800;font-family:inherit;cursor:pointer}
 #stCarga .stg-btn2{min-height:44px;height:auto;padding:12px 14px;margin-top:8px;border-radius:10px;border:1px solid var(--o);background:var(--surface);color:var(--o);font-size:13px;font-weight:700;font-family:inherit;cursor:pointer}
 .stg-box{margin-top:10px;padding:12px 14px;border:1px solid var(--border);border-radius:12px;background:var(--surface);font-size:13px;color:var(--ink);line-height:1.4}
@@ -22529,6 +22532,90 @@ function _stgEstado(p){
   if(Math.abs(dif)<0.0005)return '<span class="stg-ok">&#10003; cuadra</span>';
   return '<span class="stg-mal">'+(dif>0?'sobran ':'faltan ')+stFmt(Math.abs(dif),p.u)+'</span>';
 }
+/* EL REPARTO ENTRE FREEZERS AL RECIBIR (16/10/2026, «Recepción sin quilombo»).
+   UNA regla, la usan la grilla y Abastecimiento › Recibir: de lo que llega para
+   REPONER (lo de pedidos de clientes va siempre al freezer que entrega), en el
+   freezer de casa queda lo que falta para llegar a su «Ideal» libre, y el resto
+   va al otro. Sin ideal (columna vacía en Productos) todo queda en casa, como
+   hasta hoy. `libre` = físico − reservado de ese freezer, ahora. */
+function _repartoIdeal(rep,ideal,libre){
+  rep=Math.max(0,Number(rep)||0);
+  if(ideal===null||ideal===undefined||ideal===''||!isFinite(Number(ideal)))return {aca:rep,otro:0,ideal:null,libre:Number(libre)||0};
+  var falta=Math.max(0,Number(ideal)-(Number(libre)||0));
+  var aca=Math.min(rep,falta);
+  return {aca:aca,otro:Math.round((rep-aca)*1000)/1000,ideal:Number(ideal),libre:Number(libre)||0};
+}
+/* El freezer de casa de un producto (su depósito por defecto) y el otro. Solo con
+   dos freezers: con uno no hay nada que repartir, con tres la regla no alcanza. */
+function _stgDepsDe(p){
+  var ds=_stgDeps(); if(ds.length!==2)return null;
+  var aca=(p&&p.dep&&(ds[0].id===p.dep||ds[1].id===p.dep))?p.dep:ds[0].id;
+  return {aca:aca,otro:ds[0].id===aca?ds[1].id:ds[0].id};
+}
+/* Con `rec` llegado: cómo queda cada freezer según la regla. */
+function _stgReparto(p,rec){
+  var dd=_stgDepsDe(p); if(!dd||!(rec>0))return null;
+  var ini=_stgIni(p), cli=Math.min(rec,Number(p.ped&&p.ped.cli)||0);
+  var libre=(Number(ini[dd.aca])||0)-(Number((p.res||{})[dd.aca])||0);
+  var x=_repartoIdeal(rec-cli,(p.ideal||{})[dd.aca],libre), dped=CG_DEPPED||dd.aca, fin={};
+  fin[dd.aca]=Math.round(((Number(ini[dd.aca])||0)+x.aca+(dped===dd.aca?cli:0))*1000)/1000;
+  fin[dd.otro]=Math.round(((Number(ini[dd.otro])||0)+x.otro+(dped===dd.otro?cli:0))*1000)/1000;
+  return {dd:dd,x:x,fin:fin,cli:cli};
+}
+/* Lo que cada producto manda al otro freezer: con lo tipeado si hay, o con lo
+   pedido si todavía no se tipeó nada («si llega lo pedido»). */
+function _stgRepartoLinea(p){
+  if(p.u==='kg')return null;
+  var v=CG_VAL[p.a]||{}, rec=stNum(v.rec), pedido=!(rec>0);
+  if(pedido)rec=(Number(p.ped&&p.ped.dep)||0)+(Number(p.ped&&p.ped.cli)||0);
+  var r=_stgReparto(p,rec); if(!r)return null;
+  var ini=_stgIni(p), otro=r.x.otro;
+  /* Si la persona ya tocó los freezers, manda lo que tipeó. */
+  if(!pedido&&v.auto===false&&v.fin&&v.fin[r.dd.otro]!==undefined&&String(v.fin[r.dd.otro]).trim()!==''){
+    var t=stNum(v.fin[r.dd.otro]); if(t!=null)otro=Math.max(0,Math.round((t-(Number(ini[r.dd.otro])||0)-((CG_DEPPED||r.dd.aca)===r.dd.otro?r.cli:0))*1000)/1000);
+  }
+  return {r:r,otro:otro,pedido:pedido};
+}
+function _stgRepartoTxt(p){
+  var l=_stgRepartoLinea(p); if(!l||l.r.x.ideal===null)return '';
+  return 'ideal '+stEsc(_stgDepNom(l.r.dd.aca))+' '+stFmt(l.r.x.ideal,p.u)+' (libre '+stFmt(l.r.x.libre,p.u)+')'
+    +(l.otro>0?' &rarr; <b>'+stFmt(l.otro,p.u)+' a '+stEsc(_stgDepNom(l.r.dd.otro))+'</b>':'');
+}
+function _stgRepartoTotHtml(){
+  var b=_stgProv(); if(!b)return '';
+  var partes=[], dest='', pedido=true;
+  b.productos.forEach(function(p){
+    var l=_stgRepartoLinea(p); if(!l||!(l.otro>0))return;
+    dest=l.r.dd.otro; if(!l.pedido)pedido=false;
+    partes.push('<b>'+stFmt(l.otro,p.u)+'</b> '+stEsc(p.n));
+  });
+  if(!partes.length)return '';
+  return '<div class="stg-rep-tot">&#128230; '+(pedido?'Si llega lo pedido, a ':'A ')+stEsc(_stgDepNom(dest))+': '+partes.join(' &middot; ')+'</div>';
+}
+function _stgRepartoPintar(p){
+  var e=$('stgRep_'+p.a); if(e)e.innerHTML=_stgRepartoTxt(p);
+  var t=$('stgRepTot'); if(t)t.innerHTML=_stgRepartoTotHtml();
+}
+/* Llegó cambió: si la persona no tocó los freezers, se llenan con la regla. */
+function _stgAutoFin(p){
+  var v=CG_VAL[p.a]; if(!v||v.auto===false)return;
+  var rec=stNum(v.rec), r=_stgReparto(p,rec);
+  if(!r){ if(v.auto){ delete v.fin; delete v.auto; delete v.autoDep; } }
+  else { v.fin={}; v.fin[r.dd.aca]=stFmt(r.fin[r.dd.aca],p.u); v.fin[r.dd.otro]=stFmt(r.fin[r.dd.otro],p.u); v.auto=true; v.autoDep={}; v.autoDep[r.dd.aca]=1; v.autoDep[r.dd.otro]=1; }
+  _stgDeps().forEach(function(d){ var i=$('stgF_'+p.a+'_'+d.id); if(i)i.value=(v.fin||{})[d.id]||''; });
+}
+/* Corregiste un freezer que el sistema habia llenado: el otro, si sigue siendo
+   del sistema, se recalcula para que siga cuadrando (lo que hay + lo que llego). */
+function _stgAutoResto(p,campo){
+  var v=CG_VAL[p.a]; if(!v||!v.autoDep)return;
+  delete v.autoDep[campo];
+  var quedan=Object.keys(v.autoDep);
+  if(quedan.length!==1){ v.autoDep=null; return; }
+  var otro=quedan[0], ini=_stgIni(p), tot=stNum(v.rec)||0, puesto=0;
+  _stgDeps().forEach(function(d){ tot+=Number(ini[d.id])||0; if(d.id!==otro){ var n=stNum((v.fin||{})[d.id]); puesto+=(n==null?(Number(ini[d.id])||0):n); } });
+  v.fin[otro]=stFmt(Math.max(0,tot-puesto),p.u);
+  var i=$('stgF_'+p.a+'_'+otro); if(i)i.value=v.fin[otro];
+}
 function _stgCuerpo(previa){
   var x=_stgFilas();
   var c={proveedor:CG_PROV,filas:x.filas,previa:!!previa};
@@ -22546,10 +22633,13 @@ function _stgSoltarRevision(){
 function stgIn(a,campo,el){
   var v=CG_VAL[a]||(CG_VAL[a]={});
   CG_ACEPTA=false;
-  if(campo==='rec'){ v.rec=el.value; delete v.deMas; }
-  else { (v.fin||(v.fin={}))[campo]=el.value; }
-  var b=_stgProv(), e=$('stgE_'+a);
-  if(b&&e)for(var i=0;i<b.productos.length;i++)if(b.productos[i].a===a)e.innerHTML=_stgEstado(b.productos[i]);
+  var b=_stgProv(), p=null;
+  if(b)for(var k=0;k<b.productos.length;k++)if(b.productos[k].a===a)p=b.productos[k];
+  if(campo==='rec'){ v.rec=el.value; delete v.deMas; if(p)_stgAutoFin(p); }
+  else { (v.fin||(v.fin={}))[campo]=el.value; v.auto=false; if(p)_stgAutoResto(p,campo); }
+  var e=$('stgE_'+a);
+  if(p&&e)e.innerHTML=_stgEstado(p);
+  if(p)_stgRepartoPintar(p);
   _stgSoltarRevision();
 }
 function stgProvElegir(n){
@@ -22557,7 +22647,16 @@ function stgProvElegir(n){
   CG_PROV=n; CG_REV=null; CG_RES=null; CG_COID=''; CG_ACEPTA=false;
   renderStCarga();
 }
-function stgDepPed(el){ CG_DEPPED=el.value; _stgSoltarRevision(); }
+function stgDepPed(el){
+  CG_DEPPED=el.value;
+  var b=_stgProv();
+  if(b)b.productos.forEach(function(p){
+    var v=CG_VAL[p.a];
+    if(v&&v.auto){ _stgAutoFin(p); var e=$('stgE_'+p.a); if(e)e.innerHTML=_stgEstado(p); }
+    _stgRepartoPintar(p);
+  });
+  _stgSoltarRevision();
+}
 /* Cambio la hora en que llego: se le pide al backend el «habia» de esa hora y
    lo que se movio despues (una vista previa sin filas no escribe ni valida). */
 function stgHora(el){
@@ -22755,8 +22854,8 @@ function renderStCarga(){
     deps.forEach(function(d){ h+='<option value="'+stEsc(d.id)+'"'+(d.id===CG_DEPPED?' selected':'')+'>'+stEsc(_stgDepNom(d.id))+'</option>'; });
     h+='</select></label></div>';
   }
-  h+='<div class="stc-ayuda">Anot&aacute; cu&aacute;nto <b>lleg&oacute;</b> y c&oacute;mo <b>qued&oacute;</b> cada freezer. '
-    +'Un freezer que dej&aacute;s vac&iacute;o queda como estaba (el n&uacute;mero gris). Lo que no toc&aacute;s no se guarda.</div>';
+  h+='<div class="stc-ayuda">Anot&aacute; cu&aacute;nto <b>lleg&oacute;</b>: los freezers se llenan solos con el reparto (en casa queda lo que falta para el ideal, el resto va al otro). '
+    +'Si qued&oacute; distinto, corregilo. Un freezer que dej&aacute;s vac&iacute;o queda como estaba (el n&uacute;mero gris). Lo que no toc&aacute;s no se guarda.</div>';
   b.productos.forEach(function(p){
     if(p.u==='kg')return;
     var v=CG_VAL[p.a]||{}, ini=_stgIni(p), sub='';
@@ -22768,17 +22867,17 @@ function renderStCarga(){
       sub+=(sub?' &middot; ':'')+'despu&eacute;s: '+(sm.dudoso?'<span class="stg-mal">se movi&oacute; y no se sabe de qu&eacute; freezer</span>':partes.join(', '));
     }
     h+='<div class="stg-row" id="stgR_'+stEsc(p.a)+'">'
-      +'<div class="stg-n">'+stEsc(p.n)+(sub?'<span class="stc-sub">'+sub+'</span>':'')+'<span class="stg-e" id="stgE_'+stEsc(p.a)+'">'+_stgEstado(p)+'</span></div>'
+      +'<div class="stg-n">'+stEsc(p.n)+(sub?'<span class="stc-sub">'+sub+'</span>':'')+'<span class="stc-sub stg-rep" id="stgRep_'+stEsc(p.a)+'">'+_stgRepartoTxt(p)+'</span><span class="stg-e" id="stgE_'+stEsc(p.a)+'">'+_stgEstado(p)+'</span></div>'
       +'<label class="stg-c"><span>Lleg&oacute;</span><input class="stc-in stg-in" type="text" inputmode="numeric" value="'+stEsc(v.rec||'')+'" placeholder="0" '
       +'aria-label="Cuánto llegó de '+stEsc(p.n)+'" oninput="stgIn(\''+_stJs(p.a)+'\',\'rec\',this)"></label>';
     deps.forEach(function(d){
-      h+='<label class="stg-c"><span>'+stEsc(_stgDepNom(d.id))+'</span><input class="stc-in stg-in" type="text" inputmode="numeric" value="'+stEsc((v.fin||{})[d.id]||'')+'" '
+      h+='<label class="stg-c"><span>'+stEsc(_stgDepNom(d.id))+'</span><input class="stc-in stg-in" id="stgF_'+stEsc(p.a)+'_'+stEsc(d.id)+'" type="text" inputmode="numeric" value="'+stEsc((v.fin||{})[d.id]||'')+'" '
         +'placeholder="'+stFmt(Number(ini[d.id])||0,p.u)+'" aria-label="Cómo quedó '+stEsc(_stgDepNom(d.id))+' de '+stEsc(p.n)+'" '
         +'oninput="stgIn(\''+_stJs(p.a)+'\',\''+_stJs(d.id)+'\',this)"></label>';
     });
     h+='</div>';
   });
-  h+='<div class="stg-pie"><button class="stg-btn" id="stgBtnRev" onclick="stgRevisar()">Revisar</button><div id="stgRev"></div></div>';
+  h+='<div class="stg-pie"><div id="stgRepTot">'+_stgRepartoTotHtml()+'</div><button class="stg-btn" id="stgBtnRev" onclick="stgRevisar()">Revisar</button><div id="stgRev"></div></div>';
   c.innerHTML=h;
   _stgPintarRev();
 }

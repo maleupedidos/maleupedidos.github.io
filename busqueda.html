@@ -120,6 +120,13 @@ body.embed .sem-tabs{top:48px}
 .recibir-panel.open{display:block}
 /* El comprobante del proveedor (7/10/2026): solo con RECEPCION_PG prendida. */
 .recibir-comp{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0 4px}
+.recibir-rep{margin:12px 0 4px;padding:10px 12px;background:#E3F2FD;border:1px solid #90CAF9;border-radius:10px}
+.recibir-rep-row{display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px dashed #BBDEFB}
+.recibir-rep-row:last-of-type{border-bottom:none}
+.recibir-rep-n{flex:1;min-width:0;font-size:13px;font-weight:700;color:#0D47A1}
+.recibir-rep-n small{display:block;font-weight:400;color:#5472A0;font-size:11px}
+.recibir-rep-in{width:64px;flex:0 0 64px}
+.recibir-rep-pie{font-size:12px;color:#0D47A1;margin-top:6px;line-height:1.4}
 .recibir-comp-tit{width:100%;font-size:13px;font-weight:700;color:#5b5137}
 .recibir-comp-in{flex:1 1 90px;min-width:0;font-size:15px;padding:9px 10px;border:1px solid #d8cba3;border-radius:8px;background:#fff}
 .recibir-row{display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid #E8DFC4}
@@ -856,6 +863,8 @@ function _abaOpenOrdInPanel(hoja, n){
 
 /* ── STATE ─────────────────────────────────────────────── */
 var busqueda = { provs: [], clientes: [], total: 0, ocs: [] };
+/* El reparto al recibir y la puerta desde Ruta (16/10/2026): arriba, antes de cualquier uso. */
+var _abaRecRep = {}, _abaRecRepTocado = {}, _abaRecAbrirPend = null;
 var catalogo = { proveedores: [], productos: {} };
 var abaSyncQueue = [];
 var _abaSyncEnVuelo = false;   // un POST de la cola por vez (ver abaProcessSyncQueue)
@@ -1460,7 +1469,11 @@ function loadCatalogo(forzar) {
       } else if (abaCurrentTab === 'resumen') {
         try { renderResumen(); } catch(e) { console.warn('[busqueda] renderResumen post-catalogo:', e); }
       } else if (abaCurrentTab === 'proveedores') {
-        try { renderProveedores(); } catch (e) {}   // las cantidades de kilos necesitan la unidad
+        /* Con un Recibir abierto no se repinta la lista entera (se perderia lo
+           tipeado): solo el reparto, que es lo que cambia con el stock nuevo. */
+        var _abiertos = document.querySelectorAll('.recibir-panel.open');
+        if (_abiertos.length) { for (var _ia = 0; _ia < _abiertos.length; _ia++) { try { abaRecRepPintar(Number(String(_abiertos[_ia].id).replace('recPanel_', ''))); } catch (e) {} } }
+        else { try { renderProveedores(); } catch (e) {} }   // las cantidades de kilos necesitan la unidad
       }
       return true;
     })
@@ -1965,6 +1978,7 @@ function renderProveedores() {
           '<div class="recibir-qty-wrap" id="' + wrapId + '">' + controles + '</div>' +
           '</div>';
       });
+      html += '<div id="recRep_' + idx + '">' + abaRecRepHtml(idx, grouped) + '</div>';
       html += abaRecDepHtml(idx, provOcs);
       if (abaRecComp()) {
         html += '<div class="recibir-comp">' +
@@ -1992,6 +2006,7 @@ function renderProveedores() {
     html = '<div class="al-dia" style="color:#7A4A4A">No queda nada para buscar ' + (semSel === 'prox' ? 'la próxima semana' : 'esta semana') + '.</div>';
   }
   document.getElementById('provList').innerHTML = html;
+  _abaRecAbrirAplicar();
 }
 
 /* ── PROGRAMAR BÚSQUEDA ────────────────────────────── */
@@ -2878,12 +2893,147 @@ function toggleRecibir(idx) {
   var panel = document.getElementById('recPanel_' + idx);
   if (!panel) return;
   panel.classList.toggle('open');
+  _abaRecAbrirPend = null;
+  /* El reparto usa lo libre de cada freezer: se pide el de ahora (16/10/2026). */
+  if (panel.classList.contains('open') && (_abaRecRep[idx] || []).length) { try { loadCatalogo(true); } catch (e) {} }
 }
 
 function onRecQtyChange(input, wrapId, origQty, u) {
   var val = _abaCantIn(input.value, u === 'kg' ? 'kg' : 'u');
   var wrap = document.getElementById(wrapId);
   if (wrap) wrap.className = 'recibir-qty-wrap' + (val === 0 ? ' zero' : val !== origQty ? ' changed' : '');
+  var m = String(wrapId || '').match(/^recWrap_(\d+)_/);
+  if (m) abaRecRepPintar(Number(m[1]));
+}
+
+/* ── EL REPARTO AL RECIBIR (16/10/2026, «Recepción sin quilombo») ──────────
+   Antes de bajar las bolsas, la pantalla dice cuánto va al otro freezer: en el
+   de casa queda lo que falta para su «Ideal» libre (columna de Productos) y el
+   resto va al otro. La regla es UNA y vive en el panel (`_repartoIdeal`); lo de
+   pedidos de clientes no se reparte (va al freezer que elegís abajo). Cada
+   número se puede corregir y viaja como `pases` en la misma recepción.
+   Sin ideal, o sin el catálogo cargado, no se muestra nada: queda como hoy. */
+function abaCatItem(abbr) {
+  var pv = (catalogo && catalogo.productos) || {};
+  for (var k in pv) {
+    if (!Object.prototype.hasOwnProperty.call(pv, k)) continue;
+    var l = pv[k] || [];
+    for (var i = 0; i < l.length; i++) if (l[i] && l[i].a === abbr) return l[i];
+  }
+  return null;
+}
+function _abaRecDepsDe(it) {
+  var ds = (catalogo && catalogo.deps) || [];
+  if (ds.length !== 2 || !it) return null;
+  var aca = (it.dep && (ds[0].id === it.dep || ds[1].id === it.dep)) ? it.dep : ds[0].id;
+  var otro = ds[0].id === aca ? ds[1] : ds[0];
+  return { aca: aca, otro: otro.id, otroNom: npDepCorto(otro.id), acaNom: npDepCorto(aca) };
+}
+function _abaRecRepCalc(idx, grouped) {
+  var out = [];
+  if (typeof _repartoIdeal !== 'function') return out;
+  (grouped || []).forEach(function (g, gi) {
+    if (_abaUni(g.abbr) === 'kg') return;
+    var it = abaCatItem(g.abbr), dd = _abaRecDepsDe(it);
+    if (!dd) return;
+    var ideal = (it.idl || {})[dd.aca];
+    if (ideal === undefined || ideal === null) return;
+    var input = document.getElementById('recQty_' + idx + '_' + gi);
+    var llega = input ? _abaCantIn(input.value, 'u') : g.totalQty;
+    var cli = 0;
+    getOcRowDetails(g.rows).forEach(function (d) { if (!d.isStock) cli += d.q; });
+    cli = Math.min(llega, cli);
+    var libre = (Number((it.pd || {})[dd.aca]) || 0) - (Number((it.pr || {})[dd.aca]) || 0);
+    var x = _repartoIdeal(llega - cli, ideal, libre);
+    out.push({ gi: gi, abbr: g.abbr, prod: g.prod, hacia: dd.otro, nom: dd.otroNom, acaNom: dd.acaNom,
+               cant: x.otro, aca: x.aca, ideal: x.ideal, libre: x.libre, cli: cli });
+  });
+  return out;
+}
+function abaRecRepHtml(idx, grouped) {
+  var l = _abaRecRepCalc(idx, grouped);
+  _abaRecRep[idx] = l;
+  if (!l.length) return '';
+  var dest = l[0].nom, h = '<div class="recibir-rep"><div class="recibir-comp-tit">&#128230; Qué va a ' + _abaH(dest) + '</div>';
+  l.forEach(function (r) {
+    var id = 'recMor_' + idx + '_' + r.gi;
+    var v = r.cant;
+    var prev = document.getElementById(id);
+    if (_abaRecRepTocado[idx + '_' + r.gi] && prev) v = _abaCantIn(prev.value, 'u');
+    r.cant = v;
+    h += '<div class="recibir-rep-row"><div class="recibir-rep-n">' + _abaH(r.prod) +
+      '<small>ideal ' + _abaH(r.acaNom) + ' ' + r.ideal + ' · libre ' + r.libre + (r.cli ? ' · ' + r.cli + ' de clientes' : '') + '</small></div>' +
+      '<input class="recibir-qty recibir-rep-in" id="' + id + '" type="number" inputmode="numeric" min="0" value="' + v + '"' +
+      ' aria-label="Cuántos ' + _abaH(r.prod) + ' van a ' + _abaH(r.nom) + '" oninput="abaRecRepTocar(' + idx + ',' + r.gi + ')"></div>';
+  });
+  return h + '<div class="recibir-rep-pie" id="recRepPie_' + idx + '">' + _abaRecRepPie(idx) + '</div></div>';
+}
+function _abaRecRepPie(idx) {
+  var l = (_abaRecRep[idx] || []).filter(function (r) { return r.cant > 0; });
+  if (!l.length) return 'Todo queda en ' + _abaH(((_abaRecRep[idx] || [])[0] || {}).acaNom || 'casa') + '.';
+  return 'Separá: ' + l.map(function (r) { return '<b>' + r.cant + '</b> ' + _abaH(r.abbr); }).join(' · ') +
+    ' — sale en el mismo toque de Confirmar.';
+}
+function abaRecRepTocar(idx, gi) {
+  _abaRecRepTocado[idx + '_' + gi] = true;
+  (_abaRecRep[idx] || []).forEach(function (r) {
+    if (r.gi !== gi) return;
+    var e = document.getElementById('recMor_' + idx + '_' + gi);
+    r.cant = e ? _abaCantIn(e.value, 'u') : r.cant;
+  });
+  var pie = document.getElementById('recRepPie_' + idx);
+  if (pie) pie.innerHTML = _abaRecRepPie(idx);
+}
+function abaRecRepPintar(idx) {
+  var box = document.getElementById('recRep_' + idx), prov = busqueda.provs[idx];
+  if (!box || !prov) return;
+  box.innerHTML = abaRecRepHtml(idx, agruparOcsPorProducto(_ocsRecibibles(prov.n)));
+}
+/* Los pases que viajan con la recepcion: lo que dice cada campo, enteros. */
+function abaLeerPases(idx) {
+  var out = [];
+  (_abaRecRep[idx] || []).forEach(function (r) {
+    var e = document.getElementById('recMor_' + idx + '_' + r.gi);
+    var n = e ? _abaCantIn(e.value, 'u') : r.cant;
+    n = Math.floor(Number(n) || 0);
+    if (n > 0) out.push({ abbr: r.abbr, cant: n, hacia: r.hacia });
+  });
+  return out;
+}
+
+/* LA PUERTA DESDE RUTA (16/10/2026): «📥 Llegó Sevuchitas» abre ESTE panel,
+   con todo lo pedido cargado y el reparto a la vista. Tadeo no encontraba
+   Recibir: el problema era la puerta, no la función. */
+/* Abastecimiento recien abierto se repinta solo cuando llega la lista fresca:
+   el panel abierto desde Ruta se volveria a cerrar. Por 30 s se reabre. */
+function _abaRecAbrirAplicar() {
+  var pe = _abaRecAbrirPend;
+  if (!pe || Date.now() > pe.hasta) { _abaRecAbrirPend = null; return; }
+  (busqueda.provs || []).forEach(function (p, i) {
+    if (p.n !== pe.prov) return;
+    var panel = document.getElementById('recPanel_' + i);
+    if (panel && !panel.classList.contains('open')) panel.classList.add('open');
+  });
+}
+function abaAbrirRecibir(provName) {
+  _abaRecAbrirPend = { prov: provName, hasta: Date.now() + 30000 };
+  try { if (abaCurrentTab !== 'proveedores') abaSwitchTab('proveedores'); } catch (e) {}
+  if (semSel !== 'actual') switchSemSel('actual');
+  if (!(catalogo && catalogo.proveedores && catalogo.proveedores.length)) { try { loadCatalogo(); } catch (e) {} }
+  renderProveedores();
+  var idx = -1;
+  (busqueda.provs || []).forEach(function (p, i) { if (p.n === provName) idx = i; });
+  var panel = idx >= 0 ? document.getElementById('recPanel_' + idx) : null;
+  var card = panel ? panel.closest('.prov-card') : null;
+  if (panel) panel.classList.add('open');
+  if (card) {
+    card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    card.style.boxShadow = '0 0 0 3px #F07D47';
+    setTimeout(function () { card.style.boxShadow = ''; }, 2500);
+  } else {
+    abaShowToast('No encuentro lo pedido a ' + provName + ' esta semana. Tocá ↻.', 5000);
+  }
+  return !!panel;
 }
 
 function recQtyStep(inputId, wrapId, origQty, delta) {
@@ -3068,8 +3218,10 @@ function enviarGroups(provName, idx, groups) {
   // dedupa con CacheService 6h y devuelve la misma respuesta sin re-ejecutar.
   var coid = 'rm_' + provName.replace(/\W/g,'_') + '_' + Date.now() + '_' + Math.random().toString(36).slice(2,8);
   var _comp = abaLeerComp(idx);
+  var _pases = abaLeerPases(idx);
   abaSyncQueue.push({ action: 'recibirMercaderia', groups: groups, clientOpId: coid, ts: Date.now(), comprobante: _comp || undefined,
-                      deposito: abaLeerDep(idx) || undefined });
+                      deposito: abaLeerDep(idx) || undefined, pases: _pases.length ? _pases : undefined });
+  _abaRecRepTocado = {};
   marcadosRecibido[_abaMarcaKey(provName)] = true;
   abaSaveLocal();
   abaShowLoader('Recibiendo mercadería…');
@@ -4604,8 +4756,13 @@ function abaProcessSyncQueue() {
     } else {
       // OK → sacar de la cola
       // Si vino con avisos (recibirMercaderia con diff absorbido), mostrar resumen
-      if (item.action === 'recibirMercaderia' && resp && resp.avisos && resp.avisos.length > 0) {
-        var msgs = resp.avisos.map(function(a) {
+      var _pasesMal = (item.action === 'recibirMercaderia' && resp && Array.isArray(resp.pases)) ? resp.pases.filter(function (x) { return !x.ok; }) : [];
+      var _pasesOk = (item.action === 'recibirMercaderia' && resp && Array.isArray(resp.pases)) ? resp.pases.filter(function (x) { return x.ok && x.cant > 0; }) : [];
+      if (_pasesOk.length && !_pasesMal.length && !(resp.avisos && resp.avisos.length)) {
+        abaShowToast('Recibido · a ' + npDepCorto(_pasesOk[0].hacia) + ': ' + _pasesOk.map(function (x) { return x.cant + ' ' + x.abbr; }).join(' · '), 6000);
+      }
+      if (item.action === 'recibirMercaderia' && resp && ((resp.avisos && resp.avisos.length > 0) || _pasesMal.length)) {
+        var msgs = (resp.avisos || []).map(function(a) {
           if (a.tipo === 'faltante_absorbido_stock') return a.prod + ': faltaron ' + (-a.diff) + ', descontados de la reposición del depósito (' + a.stockAntes + ' → ' + a.stockDespues + ')';
           if (a.tipo === 'sobrante_absorbido_stock') return a.prod + ': sobraron ' + a.diff + ', sumados a la reposición del depósito (' + a.stockAntes + ' → ' + a.stockDespues + ')';
           if (a.tipo === 'faltante_stock_insuficiente_clientes_afectados') return '⚠️ ' + a.prod + ': faltaron ' + (-a.diff) + ' y no alcanzó con la reposición del depósito. Hay clientes con menos de lo que pidieron.';
@@ -4616,6 +4773,8 @@ function abaProcessSyncQueue() {
           if (a.tipo === 'fila_movida') return '⚠️ ' + a.prod + ': la lista estaba vieja (la OC ' + a.oc + ' ya no está en esa fila). No se recibió: actualizá y volvé a recibir.';
           return a.prod + ': ajuste ' + (a.diff > 0 ? '+' : '') + a.diff;
         });
+        _pasesOk.forEach(function (x) { msgs.push(x.abbr + ': ' + x.cant + ' a ' + npDepCorto(x.hacia)); });
+        _pasesMal.forEach(function (x) { msgs.push('⚠️ ' + x.abbr + ': no pasó a ' + npDepCorto(x.hacia) + ' (' + (x.error || 'error') + '). Quedó en casa: movelo desde MOVER.'); });
         alert('Recepción procesada:\n\n' + msgs.join('\n'));
       }
       _abaSacarDeCola(item);
