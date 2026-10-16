@@ -140,8 +140,11 @@ async function pagina(url) {
 
   /* 4. Tipear: cuadra / faltan. PPM habia 5 y 3; llegaron 6. */
   await evaluar(cli, tipear(campo('PPM', 1), '6'));
-  r = await evaluar(cli, `document.getElementById('stgE_PPM').textContent`);
-  chk(/faltan 6/.test(r), 'llegaron 6 y todavía no dijo dónde quedaron: «faltan 6»', r);
+  /* Desde el 16/10/2026 los freezers se llenan solos con el reparto: sin ideal,
+     todo queda en casa (5 + 4 de reponer + 2 de clientes = 11; Moresco 3). */
+  r = JSON.parse(await evaluar(cli, `JSON.stringify({ e: document.getElementById('stgE_PPM').textContent,
+    us: document.getElementById('stgF_PPM_ustariz').value, mo: document.getElementById('stgF_PPM_moresco').value })`));
+  chk(/cuadra/.test(r.e) && r.us === '11' && r.mo === '3', 'llegaron 6: sin ideal los freezers se llenan solos, todo en Ustariz (11 y 3), y cuadra', r);
   await evaluar(cli, tipear(campo('PPM', 2), '8'));
   await evaluar(cli, tipear(campo('PPM', 3), '6'));
   r = await evaluar(cli, `document.getElementById('stgE_PPM').textContent`);
@@ -149,7 +152,7 @@ async function pagina(url) {
   await evaluar(cli, tipear(campo('PPJyQ', 1), '4'));
   await evaluar(cli, tipear(campo('PPJyQ', 3), '4'));
   r = await evaluar(cli, `document.getElementById('stgE_PPJyQ').textContent`);
-  chk(/cuadra/.test(r), 'PPJyQ: Ustariz vacío queda como estaba (2) y Moresco 4: «cuadra»', r);
+  chk(/cuadra/.test(r), 'PPJyQ: llegaron 4 y puse Moresco 4: Ustariz se recalcula a 2 y «cuadra»', r);
 
   /* 5. Revisar no escribe. */
   r = JSON.parse(await evaluar(cli, `(async () => { stgRevisar(); var t0=Date.now();
@@ -160,7 +163,7 @@ async function pagina(url) {
   chk(r.posts.length === 1 && b1.previa === true && b1.proveedor === 'Sevuchitas', 'Revisar manda UNA vista previa (previa:true)', r.posts);
   chk((b1.filas || []).length === 2 && !b1.filas.some(f => f.a === 'EV'), 'viajan las dos filas tocadas; la que no se tocó no', b1.filas);
   const fP = (b1.filas || []).filter(f => f.a === 'PPJyQ')[0] || {};
-  chk(fP.recibido === 4 && fP.final && fP.final.ustariz === 2 && fP.final.moresco === 4 && fP.inicialVisto && fP.inicialVisto.ustariz === 2, 'PPJyQ viaja con Ustariz = 2 (como estaba) y el «había» que se mostró', fP);
+  chk(fP.recibido === 4 && fP.final && fP.final.ustariz === 2 && fP.final.moresco === 4 && fP.inicialVisto && fP.inicialVisto.ustariz === 2, 'PPJyQ viaja con Ustariz = 2 (recalculado) y el «había» que se mostró', fP);
   chk(b1.depositoPedidos === 'ustariz' && b1.ocurrio === undefined, 'viaja el freezer de los pedidos (el del usuario) y sin hora (recién)', b1);
   chk(r.guardar && !r.revisarVisible && /pasan 3 de Ustariz a Moresco/.test(r.rev) && /llegaron 6 de 6 pedidos/.test(r.rev), 'muestra qué va a hacer y recién ahí ofrece Guardar', r.rev);
 
