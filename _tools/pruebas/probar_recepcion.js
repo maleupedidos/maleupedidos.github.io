@@ -34,9 +34,12 @@ const GRILLA = { ok: true, ts: 1, apartado: 'si', guardar: true, deps: DEPS,
     { a: 'EV', n: 'Empanadas Verdura x8', u: 'u', ini: { ustariz: 4, moresco: 0 }, ped: { dep: 6, cli: 0, de: [] }, ap: {}, apDe: [], res: { ustariz: 0, moresco: 0 }, ideal: {}, dep: 'ustariz' }] }] };
 const BUSQ = { semActual: 42, clientes: [], total: 0,
   provs: [{ n: 'Sevuchitas', cats: [{ cat: 'Pack Pizzas x2', items: [{ a: 'PPM', v: 'Muzzarella', q: 35, ct: 315000, sem: 42, qDep: 35 }] },
-                                    { cat: 'Empanadas', items: [{ a: 'EV', v: 'Verdura', q: 6, ct: 60000, sem: 42, qDep: 6 }] }] }],
+                                    { cat: 'Empanadas', items: [{ a: 'EV', v: 'Verdura', q: 6, ct: 60000, sem: 42, qDep: 6 }] }] },
+         { n: 'Le Unike', cats: [{ cat: 'Sorrentinos', items: [{ a: 'SCa', v: 'Calabaza', q: 13, ct: 149500, sem: 42, qDep: 13 }] }] }],
   ocs: [{ r: 10, oc: 'OC-1', prov: 'Sevuchitas', prod: 'Pack Pizzas x2 — Muzzarella', abbr: 'PPM', q: 35, est: 'Pedido', sem: 42, cliente: 'Tadeo — Stock', canal: 'Deposito', nped: '' },
-        { r: 11, oc: 'OC-2', prov: 'Sevuchitas', prod: 'Empanadas — Verdura', abbr: 'EV', q: 6, est: 'Pedido', sem: 42, cliente: 'Tadeo — Stock', canal: 'Deposito', nped: '' }] };
+        { r: 11, oc: 'OC-2', prov: 'Sevuchitas', prod: 'Empanadas — Verdura', abbr: 'EV', q: 6, est: 'Pedido', sem: 42, cliente: 'Tadeo — Stock', canal: 'Deposito', nped: '' },
+        /* La copia vieja del celular (16/10): Le Unike sigue «Pedido» aunque ya se recibió. */
+        { r: 12, oc: 'OC-3', prov: 'Le Unike', prod: 'Sorrentinos — Calabaza', abbr: 'SCa', q: 13, est: 'Pedido', sem: 42, cliente: 'Tadeo — Stock', canal: 'Deposito', nped: '' }] };
 const CATALOGO = { ts: 1, deps: DEPS, proveedores: ['Sevuchitas'], productos: { Sevuchitas: [
   { a: 'PPM', n: 'Pack Pizzas x2 — Muzzarella', cat: 'Pack Pizzas x2', c: 9000, s: 7, u: 'u', dem: 10, wk: [10, 10, 10], dep: 'ustariz', pd: { ustariz: 9, moresco: 0 }, pr: { ustariz: 2, moresco: 0 }, idl: { ustariz: 22 } },
   { a: 'EV', n: 'Empanadas — Verdura', cat: 'Empanadas', c: 10000, s: 4, u: 'u', dem: 2, wk: [2, 2, 2], dep: 'ustariz', pd: { ustariz: 4, moresco: 0 }, pr: {}, idl: {} }] } };
@@ -74,6 +77,12 @@ const PREP = `
     if (act === 'entregas') { var en = ${JSON.stringify(ENTREGAS)};
       if (window.__posts.some(function (b) { return b && b.action === 'entregarCarnePendiente'; })) en.carnePend = [];
       return __resp(en); }
+    /* «Llegó» sale de la descarga (16/10/2026): Sevuchitas falta recibir; Le Unike ya
+       se recibió aunque la copia de Abastecimiento del celular lo tenga «Pedido». */
+    if (act === 'pendientesGuardarStock') return __resp({ ok: true, dia: '', deposito: [
+      { abbr: 'PPM', prod: 'Pack Muzzarella x2', qty: 35, rows: [2], qtys: [35], recs: [0], proveedor: 'Sevuchitas', sinRecibir: 35 },
+      { abbr: 'SCa', prod: 'Sorrentinos Calabaza', qty: 13, rows: [9], qtys: [13], recs: [1], proveedor: 'Le Unike', sinRecibir: 0 }],
+      pedidos: [], sinEntregar: [], masTarde: [], sinDia: [], sinPedir: [] });
     if (act === 'busqueda') return __resp(${JSON.stringify(BUSQ)});
     if (act === 'catalogo') return __resp(${JSON.stringify(CATALOGO)});
     return __resp({ ok: false, error: 'prueba' });
@@ -157,8 +166,9 @@ const hasta = (cli, expr, ms) => evaluar(cli, `(async () => { const t0 = Date.no
   await evaluar(cli, `go('ruta')`);
   await hasta(cli, `typeof window.entregarAVendedor==='function' && document.getElementById('rutLlegan')`, 20000);
   await espera(2500);
-  r = JSON.parse(await evaluar(cli, `JSON.stringify({ ll: (document.getElementById('rutLlegan')||{}).textContent||'', vis: getComputedStyle(document.getElementById('rutLlegan')).display })`));
+  r = JSON.parse(await evaluar(cli, `JSON.stringify({ ll: (document.getElementById('rutLlegan')||{}).textContent||'', vis: getComputedStyle(document.getElementById('rutLlegan')).display, dbg: { pgs: (typeof pendientesGuardarStock!=='undefined'?pendientesGuardarStock:'nd'), prov: (typeof _rutLleganProvs==='function'?_rutLleganProvs():'nf'), tab: (typeof rutCurrentTab!=='undefined'?rutCurrentTab:'nd'), mr: (JSON.parse(localStorage.getItem('maleu_busqueda')||'{}').marcadosRecibido) } })`));
   chk(/Llegó/.test(r.ll) && /Sevuchitas/.test(r.ll) && r.vis !== 'none', 'arriba de Ruta: «📥 Llegó Sevuchitas»', r);
+  chk(!/Le Unike/.test(r.ll), 'un proveedor ya recibido no aparece en «Llegó» (caso del 16/10)', r);
   await evaluar(cli, `(function(){ if(typeof switchTab==='function')switchTab('armado'); })()`);
   await hasta(cli, `document.querySelector('.rcp-box')`, 8000);
   r = await evaluar(cli, `(document.querySelector('.rcp-box')||{}).textContent||''`);
