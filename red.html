@@ -3025,10 +3025,11 @@ function _rutaUpdate(updates) {
       pedidoId: String(p.n),
       row: Number(p.row) || 0,   // la fila: el N° se repite (14/10/2026)
       vendedor: session.nombre,
-      updates: updates
+      updates: updates,
+      clientOpId: 'pr_'+Date.now().toString(36)+'_'+Math.random().toString(36).slice(2,8)   // 4d (18/10/2026): con id es una orden de la base
     })
   }).then(r => r.json()).then(d => {
-    if (d.ok) return;
+    if (d.ok) { if (d.diferida) fetch(APPS_SCRIPT_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ action: 'pedidosFuenteAplicar' }) }).catch(function () { return null; }); return; }   /* 4d: que la escriba ya */
     if (d.montoDistinto) { _redMontoDistinto(d, deshacer, () => { updateMainBadges(); renderRuta(); }); return; }
     /* Un rechazo CONFIRMADO (ok:false: LockTimeout, sin permiso, pedido no
        encontrado...) quiere decir que no se escribio nada: la pantalla vuelve
@@ -4981,12 +4982,13 @@ function updatePedido(updates) {
       pedidoId: String(p.n),
       row: Number(p.row) || 0,   // la fila: el N° se repite (14/10/2026)
       vendedor: session.nombre,
-      updates: updates
+      updates: updates,
+      clientOpId: 'pr_'+Date.now().toString(36)+'_'+Math.random().toString(36).slice(2,8)   // 4d (18/10/2026): con id es una orden de la base
     })
   })
     .then(r => r.json())
     .then(d => {
-      if (d.ok) return;
+      if (d.ok) { if (d.diferida) fetch(APPS_SCRIPT_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ action: 'pedidosFuenteAplicar' }) }).catch(function () { return null; }); return; }   /* 4d: que la escriba ya */
       if (d.montoDistinto) {
         _redMontoDistinto(d, deshacer, () => { if (currentPedido === p) showDetalle(p.n); });
         return;
@@ -5415,7 +5417,12 @@ function enviar() {
      al ERP y el aviso sale por Telegram. Si el guardado falla tras 5 reintentos
      se le muestra el error para que reintente (antes iba con no-cors y se
      podia perder en silencio). */
-  sendOrderWithRetry(postData, 5).then(function() {
+  sendOrderWithRetry(postData, 5).then(function(res) {
+    /* 4e (17/10/2026): la base acepto el alta y la fila la escribe el aplicador.
+       Se lo empuja ya; la lista se recarga cuando termino, para que aparezca. */
+    var aplicado = (res && res.diferida)
+      ? fetch(APPS_SCRIPT_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ action: 'pedidosFuenteAplicar' }) }).catch(function () { return null; })
+      : Promise.resolve(null);
     btn.textContent = '✓ Pedido guardado';
     btn.style.background = '#2e7d32';
     setTimeout(function() {
@@ -5437,7 +5444,7 @@ function enviar() {
       btn.style.background = '';
       updateCart();
       showDashboard();
-      loadDashboard();   /* que el pedido nuevo aparezca sin tocar ↻ */
+      aplicado.then(function () { loadDashboard(); });   /* que el pedido nuevo aparezca sin tocar ↻ */
     }, 1200);
   }).catch(function(err) {
     btn.disabled = false;
@@ -5683,9 +5690,11 @@ function redAbiertoCuenta(iv, ip, cuenta) {
   const fin = function () { delete _vaGuardando[kG]; redAbiertosRepintar(); };
   fetch(APPS_SCRIPT_URL, {
     method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-    body: JSON.stringify({ action: 'updatePedidoRed', pedidoId: String(p.n), row: Number(p.row) || 0, vendedor: v.nombre, updates: updates })
+    body: JSON.stringify({ action: 'updatePedidoRed', pedidoId: String(p.n), row: Number(p.row) || 0, vendedor: v.nombre, updates: updates, clientOpId: 'pr_'+Date.now().toString(36)+'_'+Math.random().toString(36).slice(2,8) })
   }).then(function (r) { return r.json(); }).then(function (d) {
-    if (d && d.ok) { _vaCta = null; delete _vaGuardando[kG]; redToast('✓ Entró a la caja'); redAbiertosCargar(); return; }
+    if (d && d.ok) { _vaCta = null; delete _vaGuardando[kG]; redToast('✓ Entró a la caja');
+      (d.diferida ? fetch(APPS_SCRIPT_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ action: 'pedidosFuenteAplicar' }) }).catch(function () { return null; }) : Promise.resolve()).then(function () { redAbiertosCargar(); });   /* 4d (18/10/2026) */
+      return; }
     fin();
     if (d && d.montoDistinto) { _vaCta = null; redToast('No se marcó: la planilla dice ' + ars(d.montoPlanilla)); redAbiertosCargar(); return; }
     redToast('No se guardó: ' + _redErrTxt(d));
