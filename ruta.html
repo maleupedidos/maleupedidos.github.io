@@ -2038,7 +2038,7 @@ if('serviceWorker' in navigator && !_IS_EMBED){navigator.serviceWorker.register(
 function updateOnlineStatus(){document.getElementById('statusDot').className='status-dot '+(isOnline?'online':'offline')}
 function updateLastSync(){var n=new Date();document.getElementById('lastSync').textContent=n.getHours()+':'+String(n.getMinutes()).padStart(2,'0');localStorage.setItem('maleu_ruta_sync',n.getTime())}
 function saveLocal(){try{localStorage.setItem('maleu_ruta',JSON.stringify({_v:STORAGE_VERSION,entregas:entregas,entregados:entregados,cobrados:cobrados,propinas:propinas,syncQueue:syncQueue,rutSyncRechazados:rutSyncRechazados,armadoDone:armadoDone,pendientesCobro:pendientesCobro,rutHechas:rutHechas,currentTab:rutCurrentTab,rutaIndex:rutaIndex,rutaOrden:rutaOrden,ts:Date.now()}))}catch(e){}}
-function loadLocal(){try{var d=JSON.parse(localStorage.getItem('maleu_ruta')||'{}');if(d._v!==STORAGE_VERSION){d.entregados={};d.cobrados={};d.propinas={};d.armadoDone={};d.syncQueue=[]}if(d.entregas)entregas=_sanearEntregas(d.entregas);if(d.entregados)entregados=d.entregados;if(d.cobrados)cobrados=d.cobrados;if(d.propinas)propinas=d.propinas;if(d.syncQueue)syncQueue=d.syncQueue;if(Array.isArray(d.rutSyncRechazados)){rutSyncRechazados=d.rutSyncRechazados;if(rutSyncRechazados.length)setTimeout(function(){try{_rutPintarBanner();}catch(_){}},1500);}if(d.armadoDone)armadoDone=d.armadoDone;if(d.pendientesCobro)pendientesCobro=d.pendientesCobro;
+function loadLocal(){try{var d=JSON.parse(localStorage.getItem('maleu_ruta')||'{}');if(d._v!==STORAGE_VERSION){d.entregados={};d.cobrados={};d.propinas={};d.armadoDone={};d.syncQueue=[]}if(d.entregas)entregas=_sanearEntregas(d.entregas);if(d.entregados)entregados=d.entregados;if(d.cobrados)cobrados=d.cobrados;if(d.propinas)propinas=d.propinas;if(d.syncQueue)syncQueue=d.syncQueue;if(Array.isArray(d.rutSyncRechazados)){rutSyncRechazados=d.rutSyncRechazados;if(rutSyncRechazados.length){var _rPre=rutSyncRechazados.slice();setTimeout(function(){try{_rutPintarBanner();_rutSacarCobrados(_rPre,null);}catch(_){}},1500);}}if(d.armadoDone)armadoDone=d.armadoDone;if(d.pendientesCobro)pendientesCobro=d.pendientesCobro;
     /* Solo las de HOY: el recorrido de ayer ya no se puede deshacer desde aca
        (el backend frena el stock de otra semana) y acumularlas seria una lista
        que crece sola. */
@@ -2064,7 +2064,9 @@ function loadLocal(){try{var d=JSON.parse(localStorage.getItem('maleu_ruta')||'{
         try{localStorage.setItem('maleu_ruta',JSON.stringify(Object.assign({},d,{syncQueue:syncQueue,rutSyncRechazados:rutSyncRechazados})));}catch(_){}
         /* El banner se pinta aca y no solo en el render: con el dia vacio el
            render sale antes y el aviso no aparecia (lo agarro probar_cola_no_tira). */
-        setTimeout(function(){_rutPintarBanner();_viejas.forEach(function(it){_rutLogRechazo(it,_motV,'vieja');});},1500);}
+        /* Antes de avisar y de dejar constancia: lo que ya esta cobrado sale solo (18/10/2026). */
+        var _regsV=rutSyncRechazados.filter(function(r){return r.por==='vieja'&&r.t===_now;});
+        setTimeout(function(){_rutSacarCobrados(_regsV,function(quedan){quedan.forEach(function(r){_rutLogRechazo(r.item,_motV,'vieja');});});},1500);}
       _desc=0;
     }
     if(_desc>0){try{localStorage.setItem('maleu_ruta',JSON.stringify(Object.assign({},d,{syncQueue:syncQueue})));}catch(_){}
@@ -9228,9 +9230,51 @@ function _rutRechazoTxt(it){
 }
 function _rutRechazar(item,motivo,por){
   var it=Object.assign({},item);delete it.__attempts;
-  rutSyncRechazados.push({item:it,motivo:String(motivo||'sin motivo'),por:por||'rechazo',t:Date.now()});
-  saveLocal();_rutPintarBanner();
-  _rutLogRechazo(it,motivo,por);
+  var r={item:it,motivo:String(motivo||'sin motivo'),por:por||'rechazo',t:Date.now()};
+  /* Se guarda YA (si la app se cierra no se pierde); el aviso y la constancia
+     salen despues de preguntar si el cobro ya estaba hecho (18/10/2026). */
+  rutSyncRechazados.push(r);saveLocal();
+  _rutSacarCobrados([r],function(quedan){quedan.forEach(function(x){_rutLogRechazo(x.item,x.motivo,x.por);});});
+}
+/* ¿YA ESTA COBRADO? (18/10/2026) El viernes 16/10 tres cobros de Vicky
+   (#1120, #1123, #1170) quedaron en «No se pudo guardar» estando ya Cobrado en
+   la planilla, y Tadeo los tuvo que descartar a mano. Antes de avisar, al abrir
+   la app y antes de Reintentar, se le pregunta al servidor (`cobroYa`, solo
+   lee): lo que ya esta cobrado sale solo, sin preguntar. Si no contesta (sin
+   señal), queda todo como estaba: no saber no es saber que esta cobrado. */
+var _RUT_COBRO_ACC={marcarCobrado:1,cobrarParcial:1};
+function _rutCobroClave(it){return String(it&&it.hoja||'')+'|'+String(it&&it.id||'');}
+function _rutSacarCobrados(regs,cb){
+  var hecho=false;
+  var fin=function(s){
+    if(hecho)return;hecho=true;
+    var sacados=0;
+    if(s){
+      /* En el lugar (splice), nunca reasignando: el ERP fusionado publica el
+         arreglo en window y una copia nueva lo dejaria mirando el viejo. */
+      for(var k=rutSyncRechazados.length-1;k>=0;k--){
+        var r=rutSyncRechazados[k];
+        if(regs.indexOf(r)>=0&&r.item&&_RUT_COBRO_ACC[r.item.action]&&s[_rutCobroClave(r.item)]){rutSyncRechazados.splice(k,1);sacados++;}
+      }
+      if(sacados)saveLocal();
+    }
+    _rutPintarBanner();
+    var o=document.getElementById('confirmOverlay');
+    if(sacados&&o&&!o.classList.contains('hidden')&&o.querySelector('.rut-rech-box'))rutVerRechazados();
+    if(sacados&&typeof showToast==='function')showToast(sacados===1?'✓ Un cobro trabado ya estaba cobrado en la planilla: lo saqué de la lista':'✓ '+sacados+' cobros trabados ya estaban cobrados en la planilla: los saqué de la lista');
+    if(cb)cb(regs.filter(function(r){return rutSyncRechazados.indexOf(r)>=0;}));
+  };
+  var ps=regs.filter(function(r){return r&&r.item&&_RUT_COBRO_ACC[r.item.action]&&r.item.hoja&&r.item.id;})
+    .map(function(r){return {hoja:r.item.hoja,id:String(r.item.id),row:Number(r.item.row)||0};});
+  if(!ps.length||!isOnline){fin(null);return;}
+  setTimeout(function(){fin(null);},20000);
+  try{fetch(RUT_APPS_SCRIPT_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},
+    body:JSON.stringify({action:'cobroYa',pedidos:ps}),redirect:'follow'})
+    .then(function(x){return x.json();})
+    .then(function(d){
+      if(!d||!d.ok||!Array.isArray(d.cobrados)){fin(null);return;}
+      var s={};d.cobrados.forEach(function(k){s[k]=1;});fin(s);})
+    .catch(function(){fin(null);});}catch(_){fin(null);}
 }
 /* La constancia en Log Errores: si el celular se pierde o se borra, queda. */
 function _rutLogRechazo(it,motivo,por){
@@ -9265,8 +9309,14 @@ function rutVerRechazados(){
   o.innerHTML='<div class="confirm-box rut-rech-box"><h3>No se pudo guardar</h3><p>Esto quedó hecho en el celular pero <b>no en la planilla</b>.</p>'+filas+
     '<div class="confirm-btns"><button class="btn-no" onclick="cerrarConfirm()">Cerrar</button></div></div>';
 }
-function rutReintentarRechazado(i){
+function rutReintentarRechazado(i,yaMirado){
   var r=rutSyncRechazados[i];if(!r)return;
+  /* Un cobro: antes de reenviarlo, ¿ya esta cobrado? (18/10/2026) */
+  if(!yaMirado&&r.item&&_RUT_COBRO_ACC[r.item.action]){
+    if(typeof showToast==='function')showToast('Revisando si ya estaba cobrado…');
+    _rutSacarCobrados([r],function(quedan){if(quedan.length){var j=rutSyncRechazados.indexOf(r);if(j>=0)rutReintentarRechazado(j,1);}});
+    return;
+  }
   rutSyncRechazados.splice(i,1);
   var it=Object.assign({},r.item,{ts:Date.now()});delete it.__attempts;
   syncQueue.push(it);saveLocal();_rutPintarBanner();
