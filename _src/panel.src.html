@@ -15744,6 +15744,103 @@ function _edCarneTraer(uid){
   _edCarnePintar(uid);
 }
 
+/* ── «DEVOLVIÓ UN PRODUCTO» (19/10/2026) ─────────────────────────────────────
+   Un pedido Entregado de Home o Pilar: el cliente devolvio algo. Se elige que y
+   cuantos, y si vuelve al freezer o se tira. Es una `editarPedido` con
+   `devolucion` (viaja como orden y la base escribe los renglones, igual que
+   editar): el pedido baja, el stock sube SOLO si vuelve al freezer (un renglon
+   +DEV en el Kardex) y, si estaba cobrado, la diferencia queda a favor de la casa.
+   La carne (kilos) no: se devuelve desde «Editar productos». */
+function _dvEsc(t){return String(t==null?'':t).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
+function _dvPesos(n){return '$'+(Math.round(Number(n)||0)).toLocaleString('es-AR');}
+function _dvPed(hoja,id){
+  if(!(D&&D.pedidos))return null;
+  for(var i=0;i<D.pedidos.length;i++){if(D.pedidos[i].h===hoja&&String(D.pedidos[i].n)===String(id))return D.pedidos[i];}
+  return null;
+}
+function abrirDevolucion(hoja,id,row,uid){
+  var box=$(uid); if(!box)return;
+  if(!box.classList.contains('hidden')){box.classList.add('hidden');box.innerHTML='';delete window['_dv_'+uid];return;}
+  var ped=_dvPed(hoja,id); if(!ped){toast('Pedido no encontrado');return;}
+  if(!(D&&Array.isArray(D.stock)&&D.stock.length)){
+    box.classList.remove('hidden');
+    box.innerHTML='<div style="font-size:12px;color:var(--bl);padding:6px">Trayendo precios y stock&hellip;</div>';
+    var _fin=function(){box.classList.add('hidden');box.innerHTML='';
+      if(D&&Array.isArray(D.stock)&&D.stock.length)abrirDevolucion(hoja,id,row,uid);
+      else toast('No pude traer los precios. Tocá ↻ y probá de nuevo.',5000);};
+    Promise.resolve(typeof loadStockTab==='function'?loadStockTab():false).then(_fin,_fin);
+    return;
+  }
+  var lineas=(ped.p||[]).filter(function(l){return Number(l.q)>0;}).map(function(l){return {a:l.a,q:Number(l.q)};});
+  var elegibles=lineas.filter(function(l){return !_edEsKg(l.a);});
+  window['_dv_'+uid]={hoja:hoja,id:id,row:row,lineas:lineas,a:elegibles.length===1?elegibles[0].a:'',q:1,destino:'',
+    cobrado:ped.ep==='Cobrado',total:Number(ped.$)||0};
+  box.classList.remove('hidden');
+  renderDevolucion(uid);
+}
+function renderDevolucion(uid){
+  var dv=window['_dv_'+uid], box=$(uid); if(!dv||!box)return;
+  var chip=function(on,txt,js){return '<button type="button" onclick="'+js+'" style="padding:9px 12px;min-height:40px;border-radius:999px;font-size:13px;font-weight:'+(on?'800':'600')+';border:1.5px solid '+(on?'#6D4C41':'var(--ln,#ddd)')+';background:'+(on?'#6D4C41':'#fff')+';color:'+(on?'#fff':'var(--tx,#333)')+';margin:0 6px 6px 0">'+txt+'</button>';};
+  var h='<div style="font-size:14px;font-weight:800;color:#6D4C41;margin-bottom:8px">&#x21A9;&#xFE0F; Devolvió un producto</div>';
+  h+='<div style="font-size:12px;font-weight:700;margin-bottom:6px">¿Qué devolvió?</div><div>';
+  dv.lineas.forEach(function(l){
+    var st=_stockLinea(l.a), nom=(st&&st.n)||l.a, kg=_edEsKg(l.a);
+    if(kg){h+='<div style="font-size:12px;color:var(--bl);margin:0 0 6px">'+_dvEsc(nom)+' — la carne se devuelve desde «Editar productos»</div>';return;}
+    h+=chip(dv.a===l.a,_dvEsc(nom)+' · '+l.q,"dvElegir('"+uid+"','"+l.a+"')");
+  });
+  h+='</div>';
+  var lin=dv.lineas.filter(function(l){return l.a===dv.a;})[0];
+  if(lin){
+    if(dv.q>lin.q)dv.q=lin.q;
+    h+='<div style="font-size:12px;font-weight:700;margin:8px 0 6px">¿Cuántos?</div><div style="display:flex;align-items:center;gap:10px">'
+      +'<button type="button" onclick="dvCant(\''+uid+'\',-1)" style="width:40px;height:40px;border-radius:10px;border:1.5px solid #6D4C41;background:#fff;font-size:18px;font-weight:800">&minus;</button>'
+      +'<span style="font-size:18px;font-weight:800;min-width:24px;text-align:center">'+dv.q+'</span>'
+      +'<button type="button" onclick="dvCant(\''+uid+'\',1)" style="width:40px;height:40px;border-radius:10px;border:1.5px solid #6D4C41;background:#fff;font-size:18px;font-weight:800">+</button>'
+      +'<span style="font-size:12px;color:var(--bl)">de '+lin.q+'</span></div>';
+    h+='<div style="font-size:12px;font-weight:700;margin:10px 0 6px">¿Qué pasa con lo devuelto?</div><div>'
+      +chip(dv.destino==='freezer','&#x2744;&#xFE0F; Vuelve al freezer',"dvDestino('"+uid+"','freezer')")
+      +chip(dv.destino==='tirar','&#x1F5D1; Se tira',"dvDestino('"+uid+"','tirar')")+'</div>';
+    var baja=_precioCatalogo(dv.hoja,dv.a)*dv.q, nuevo=Math.max(0,dv.total-baja);
+    h+='<div style="font-size:13px;line-height:1.5;margin:10px 0;padding:10px;background:#fff;border-radius:8px">'
+      +'El pedido pasa de <b>'+_dvPesos(dv.total)+'</b> a <b>'+_dvPesos(nuevo)+'</b> (aprox.: lo calcula el servidor).'
+      +(dv.destino==='freezer'?'<br>El stock de '+_dvEsc(dv.a)+' sube '+dv.q+'.':dv.destino==='tirar'?'<br>El stock no se toca.':'')
+      +(dv.cobrado?'<br><b>Estaba cobrado:</b> la diferencia queda <b>a favor</b> de la casa.':'')+'</div>';
+  }
+  var listo=!!(lin&&dv.destino&&dv.q>0);
+  h+='<div style="display:flex;gap:8px"><button type="button" onclick="abrirDevolucion(\''+dv.hoja+'\',\''+dv.id+'\','+dv.row+',\''+uid+'\')" style="flex:1;min-height:44px;border-radius:10px;border:1.5px solid var(--ln,#ddd);background:#fff;font-weight:700">Cancelar</button>'
+    +'<button type="button" '+(listo?'':'disabled ')+'onclick="guardarDevolucion(\''+uid+'\')" style="flex:2;min-height:44px;border-radius:10px;border:0;background:'+(listo?'#6D4C41':'#BCAAA4')+';color:#fff;font-weight:800">Guardar devolución</button></div>';
+  box.innerHTML=h;
+}
+function dvElegir(uid,a){var dv=window['_dv_'+uid];if(!dv)return;dv.a=a;dv.q=1;renderDevolucion(uid);}
+function dvCant(uid,d){var dv=window['_dv_'+uid];if(!dv)return;var l=dv.lineas.filter(function(x){return x.a===dv.a;})[0];if(!l)return;dv.q=Math.max(1,Math.min(l.q,dv.q+d));renderDevolucion(uid);}
+function dvDestino(uid,v){var dv=window['_dv_'+uid];if(!dv)return;dv.destino=v;renderDevolucion(uid);}
+function guardarDevolucion(uid){
+  var dv=window['_dv_'+uid]; if(!dv||!dv.a||!dv.destino)return;
+  var lineas=dv.lineas.map(function(l){return {a:l.a,q:l.a===dv.a?l.q-dv.q:l.q};});
+  showLoader('Guardando la devolución…');
+  fetch(API,{method:'POST',body:JSON.stringify({action:'editarPedido',hoja:dv.hoja,id:dv.id,row:dv.row,lineas:lineas,
+      devolucion:{a:dv.a,q:dv.q,destino:dv.destino},clientOpId:_pfId()})})
+    .then(function(r){return r.json();})
+    .then(function(r){
+      hideLoader(true);
+      if(!r.ok){toast('No se guardó: '+(r.err||r.error||'?'),6000);return;}
+      var box=$(uid); if(box){box.classList.add('hidden');box.innerHTML='';}
+      delete window['_dv_'+uid];
+      var _patch={p:lineas.filter(function(l){return l.q>0;})};
+      if(typeof r.total==='number')_patch.$=r.total;
+      if(typeof r.costo==='number')_patch.co=r.costo;
+      if(typeof r.margen==='number')_patch.mg=r.margen;
+      _patchPedidoLocal(dv.hoja,dv.id,_patch);
+      try{window._ordEditados[dv.hoja+'|'+dv.id]=Date.now();}catch(_e){}
+      render();
+      var d=r.devolucion||{};
+      toast('Devolución guardada'+(dv.destino==='freezer'?' · '+dv.a+' vuelve al freezer':' · se tira')
+        +(d.aFavor?' · '+_dvPesos(d.aFavor)+' a favor':(dv.cobrado?' · la diferencia queda a favor':'')),7000);
+      _pfAplicar(r).then(function(){return _recargarPedidos();});
+    })
+    .catch(function(){hideLoader(true);toast('Sin conexión: no se guardó');});
+}
+
 function abrirEditorPedido(hoja, id, row, uidEd){
   var box=$(uidEd); if(!box) return;
   if(!box.classList.contains('hidden')){box.classList.add('hidden');box.innerHTML='';return;}
@@ -20565,6 +20662,13 @@ function rPedidos(opts){
       var _eLbl=_editEntregado?'&#x270F;&#xFE0F; Editar productos (entregado)':'&#x270F;&#xFE0F; Editar productos';
       html+='<button class="btn-origen" style="background:transparent;color:'+_eCol+';border:1.5px dashed '+_eCol+';margin-top:8px;font-size:12px;padding:11px;min-height:42px" onclick="abrirEditorPedido(\''+p.h+'\',\''+p.n+'\','+(p.r||0)+',\''+uidEd+'\')">'+_eLbl+'</button>';
       html+='<div id="'+uidEd+'" class="hidden" style="margin-top:10px;padding:10px;background:var(--cr);border-radius:10px;border:2px solid '+_eCol+'"></div>';
+    }
+
+    // DEVOLVIÓ UN PRODUCTO (19/10/2026) — un entregado de Home o Pilar, cobrado o no.
+    if(p.es==='Entregado'&&(p.h==='Home'||p.h==='Pilar')){
+      var uidDv='dv-'+p.h.replace(/ /g,'')+p.n;
+      html+='<button class="btn-origen" style="background:transparent;color:#6D4C41;border:1.5px dashed #6D4C41;margin-top:8px;font-size:12px;padding:11px;min-height:42px" onclick="abrirDevolucion(\''+p.h+'\',\''+p.n+'\','+(p.r||0)+',\''+uidDv+'\')">&#x21A9;&#xFE0F; Devolvió un producto</button>';
+      html+='<div id="'+uidDv+'" class="hidden" style="margin-top:10px;padding:10px;background:var(--cr);border-radius:10px;border:2px solid #6D4C41"></div>';
     }
 
     /* RESERVAR / QUITAR RESERVA SE SACARON (14/10/2026). Desde el 7/10 (@829)
