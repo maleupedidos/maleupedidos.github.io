@@ -1341,6 +1341,8 @@ select.np-input{background:var(--white) url("data:image/svg+xml;utf8,<svg xmlns=
     <div class="cobro-ruta-summary" id="cobroRutaSummary">
       <div class="cobro-ruta-sum-row"><span>Cliente pagó</span><b id="cobroSumPag">$0</b></div>
       <div class="cobro-ruta-sum-row"><span>Pedido</span><b id="cobroSumPed">$0</b></div>
+      <div class="cobro-ruta-sum-row" id="cobroSumRdRow" style="display:none"><span>Redondeo</span><b id="cobroSumRd">$0</b></div>
+      <div class="cobro-ruta-sum-row" id="cobroSumACobRow" style="display:none"><span>A cobrar en efectivo</span><b id="cobroSumACob">$0</b></div>
       <div class="cobro-ruta-sum-row" id="cobroSumCamRow" style="display:none"><span>Cambio devuelto</span><b id="cobroSumCam">$0</b></div>
       <div class="cobro-ruta-sum-row" id="cobroSumFavRow" style="display:none"><span>A favor</span><b id="cobroSumFav">$0</b></div>
       <div class="cobro-ruta-sum-row" id="cobroSumAplicRow" style="display:none"><span>Saldo aplicado</span><b id="cobroSumAplic">$0</b></div>
@@ -2143,6 +2145,7 @@ function refresh(silent,fresh,auto){
        {ok:false} vaciaba ARMADO y RUTA — y la sincronizacion lo pediria cada
        15 s. Mismo criterio que fetchCobrosPendientes. */
     if(!data||!Array.isArray(data.e))throw new Error('respuesta sin entregas');
+    if(typeof data.redEf==='boolean')RUT_RED_EF=data.redEf;   /* redondeo del efectivo (19/10/2026) */
     if(!auto)btn.classList.remove('spinning');
     var firma=_rutFirmaDe(data);
     if(auto&&firma===_rutFirma){updateLastSync();_rutFresco();processSyncQueue();return true;}
@@ -5388,6 +5391,7 @@ function fetchCobrosPendientes(fresh,auto){
       if(!data||data.ok===false||!Array.isArray(data.cobros)){
         throw new Error((data&&(data.err||data.error))||'respuesta sin cobros');
       }
+      if(typeof data.redEf==='boolean')RUT_RED_EF=data.redEf;   /* redondeo del efectivo (19/10/2026) */
       /* La sincronizacion (auto) no repinta si nada cambio. */
       var _fc='';try{_fc=JSON.stringify([data.cobros,data.sinCerrar||null,data.billetera]);}catch(x){}
       if(auto&&_fc&&_fc===_cobFirma)return true;
@@ -7134,7 +7138,7 @@ function _marcarSobranteAFavor(){
   var camMP=_parseMoneyInput(document.getElementById('cobroCamMP'));
   var neto=(recEf+recMP)-(camEf+camMP);
   var aplic=Math.max(0,Math.min(Number(st.aplicarSaldo)||0,st.total));
-  var requerido=Math.max(0,st.total-aplic);
+  var requerido=Math.max(0,st.total-aplic-_rdCobro(st));
   var sobr=Math.max(0,neto-requerido);
   if(sobr<=0){_recalcCobroRuta();return;}
   // Abrir sección "A favor" (idéntico al toggle manual) y cargar el sobrante
@@ -7154,7 +7158,7 @@ function _marcarSobranteComoPropina(){
   var camMP=_parseMoneyInput(document.getElementById('cobroCamMP'));
   var neto=(recEf+recMP)-(camEf+camMP);
   var aplic=Math.max(0,Math.min(Number(st.aplicarSaldo)||0,st.total));
-  var requerido=Math.max(0,st.total-aplic);
+  var requerido=Math.max(0,st.total-aplic-_rdCobro(st));
   var sobr=Math.max(0,neto-requerido);
   if(sobr<=0){_recalcCobroRuta();return;}
   // Abrir sección "Propina" y cargar el sobrante manualmente
@@ -7787,6 +7791,28 @@ function _toggleCobroSec(secId,btn){
 // Recalcula en vivo y valida. Retorna objeto con todos los montos calculados.
 // Soporta: saldo a favor previo aplicado (st.aplicarSaldo) y pago parcial (st.partial).
 // Para RUTA (sin esos flags) se comporta igual que antes: aplicar=0, partial=false.
+/* REDONDEO DEL EFECTIVO (19/10/2026, Tadeo). La carne va por kilo y el total
+   sale con pesos sueltos (#1197 $60.824,25): un cobro TODO en efectivo de Home o
+   Pilar se redondea a los $100 hacia abajo, a favor del cliente, y la diferencia
+   queda en el pedido como «Redondeo» (el backend la anota en la receta del
+   descuento, como «no se cobró un producto»). Transferencia y Mixto no. El combo
+   redondea el TOTAL del billete, no pedido por pedido: lo de los dos pedidos de
+   chester ($156.208 + $68.792 = $225.000) no tiene nada que redondear.
+   La palanca es COBRO_REDONDEO; el backend la manda como `redEf`. */
+var RUT_RED_EF=false;
+function _rdHojaOk(h){return h==='Home'||h==='Pilar';}
+/* Que pedido del combo lleva el redondeo: el ultimo de Home o Pilar. */
+function _rdComboIdx(st){
+  var ps=(st&&st.pedidos)||[];for(var i=ps.length-1;i>=0;i--){if(_rdHojaOk((ps[i]||{}).h))return i;}return -1;
+}
+function _rdCobro(st){
+  if(!RUT_RED_EF||!st||st.partial||st.fp!=='Efectivo')return 0;
+  if(st.combo?_rdComboIdx(st)<0:!_rdHojaOk((st.ent||{}).h))return 0;
+  if(_parseMoneyInput(document.getElementById('cobroRecMP'))>0)return 0;
+  var req=Math.max(0,(Number(st.total)||0)-Math.max(0,Math.min(Number(st.aplicarSaldo)||0,Number(st.total)||0)));
+  var rd=Math.round((req-Math.floor(req/100+1e-9)*100)*100)/100;
+  return rd<0.005?0:rd;
+}
 function _recalcCobroRuta(){
   if(!_cobroRutaState)return null;
   var st=_cobroRutaState;
@@ -7794,7 +7820,8 @@ function _recalcCobroRuta(){
   var partial=!!st.partial;
   // Saldo previo aplicado: no más que el total. En modo parcial no se aplica saldo.
   var aplicar=partial?0:Math.max(0,Math.min(Number(st.aplicarSaldo)||0,total));
-  var requerido=Math.max(0,total-aplicar); // lo que el cliente debe pagar este cobro
+  var rd=_rdCobro(st);
+  var requerido=Math.max(0,total-aplicar-rd); // lo que el cliente debe pagar este cobro
   // Lectura con formato AR: "35.500,50" → 35500.50
   _sugerirVuelto();
   var recEf=Math.max(0,_parseMoneyInput(document.getElementById('cobroRecEf')));
@@ -7811,6 +7838,9 @@ function _recalcCobroRuta(){
   // UI summary
   document.getElementById('cobroSumPag').textContent=formatMoney(pagado);
   document.getElementById('cobroSumPed').textContent=formatMoney(total);
+  var _rdEl=document.getElementById('cobroSumRd');
+  if(_rdEl){_rdEl.textContent='−'+formatMoney(rd);document.getElementById('cobroSumACob').textContent=formatMoney(total-rd);}
+  _mostrarFila('cobroSumRdRow',rd>0);_mostrarFila('cobroSumACobRow',rd>0);
   document.getElementById('cobroSumCam').textContent=camTot>0?formatMoney(camTot):'$0';
   _mostrarFila('cobroSumCamRow',camTot>0);
   // Indicador de billetera (fondo de cambio): el vuelto en efectivo cubierto por el efectivo
@@ -7949,7 +7979,7 @@ function _recalcCobroRuta(){
     }
   }
   _renderAFavCalc(); // mantener vivo el desglose del sobrante (a-favor + propina)
-  return {recEf:recEf,recMP:recMP,camEf:camEf,camMP:camMP,aFav:aFav,aplicar:aplicar,requerido:requerido,partial:partial,quedaSaldo:quedaSaldo,pagado:pagado,neto:neto,propina:propina,errors:errors};
+  return {recEf:recEf,recMP:recMP,camEf:camEf,camMP:camMP,aFav:aFav,aplicar:aplicar,requerido:requerido,partial:partial,quedaSaldo:quedaSaldo,pagado:pagado,neto:neto,propina:propina,rd:rd,errors:errors};
 }
 
 // ── Saldo a favor previo: banner + aplicar/quitar dentro del modal ──
@@ -8261,7 +8291,7 @@ function confirmarCobroRuta(){
   // Lo que REALMENTE entró por este pedido. Espeja la fórmula del backend
   // (Code.js:4706 — Facturado V = Total + Propina Ef + Propina Tr + A Favor),
   // así el número local y el que baja después del refetch son el mismo.
-  var facturadoTotal=total+prop+aFav;
+  var facturadoTotal=total+prop+aFav-((fpFinal==='Efectivo')?(r.rd||0):0);
   // Propina va al método dominante
   var propMet=(ef>=tr)?'Efectivo':'Transferencia';
 
@@ -8304,6 +8334,8 @@ function confirmarCobroRuta(){
   };
   // El descuento, explicito (_descAlPayload): lo que dice la pantalla es lo que queda.
   _descAlPayload(st,payload,fpFinal);
+  /* Redondeo del efectivo (19/10/2026): explicito, tambien en 0, para que el backend no lo calcule por su cuenta. */
+  if(RUT_RED_EF&&_rdHojaOk(payload.hoja))payload.redondeo=(fpFinal==='Efectivo')?(r.rd||0):0;
   // Vuelto en efectivo: lo cubre el efectivo recibido → sale de la billetera (mismo método);
   // si no, y lo cubre MP → cambio cruzado (Egreso Ef / Ingreso MP).
   if(r.camEf>0){
@@ -8437,7 +8469,9 @@ function _confirmarCobroComboRuta(st,r){
     // Mismo criterio que el cobro suelto: la card muestra lo realmente cobrado,
     // no el facturado previo. propina y a-favor van enteros al primer pedido del
     // combo, así que sólo ése cambia de monto.
-    p['$']=totalP+propP+aFavP;
+    /* El redondeo del billete va entero en UN pedido del combo (19/10/2026). */
+    var rdP=(fpComboFinal==='Efectivo'&&idx===_rdComboIdx(st))?(r.rd||0):0;
+    p['$']=totalP+propP+aFavP-rdP;
     if(propP>0)propinas[k]=propP;else delete propinas[k];
     pendientesCobro=pendientesCobro.filter(function(pc){
       return !(((pc.h||'')===p.h) && (String(pc.id||'')===String(p.id)));
@@ -8460,6 +8494,7 @@ function _confirmarCobroComboRuta(st,r){
       recibidoEf:(idx===0)?Math.max(0,r.recEf):0,
       repartidor:_rutaUser(),ts:Date.now()
     };
+    if(RUT_RED_EF&&_rdHojaOk(p.h))payload.redondeo=rdP;
     // Descuento del combo: forzar recalculo del total/facturado en el backend por pedido.
     if(_adj.extra){
       if(_adj.extra.recalcular)payload.recalcular=true;
@@ -8619,6 +8654,8 @@ function _confirmarCobroPendiente(st,r){
     repartidor:_rutaUser(),ts:Date.now()};
   // El descuento, explicito (_descAlPayload): lo que dice la pantalla es lo que queda.
   _descAlPayload(st,payload,fpFinal);
+  /* Redondeo del efectivo (19/10/2026): explicito, tambien en 0, para que el backend no lo calcule por su cuenta. */
+  if(RUT_RED_EF&&_rdHojaOk(payload.hoja))payload.redondeo=(fpFinal==='Efectivo')?(r.rd||0):0;
   // Vuelto en efectivo: si lo cubre el efectivo recibido → sale de la billetera (mismo método).
   //                     si no, y lo cubre MP → cambio cruzado (Egreso Ef / Ingreso MP).
   if(r.camEf>0){
@@ -11326,6 +11363,14 @@ function npGuardar(){
     } else if(npPago==='Efectivo'){
       data.efectivo=total;
       data.transferencia=0;
+      /* Redondeo del efectivo a los $100 (19/10/2026): lo escribe el backend,
+         aca se manda explicito y se avisa. */
+      if(RUT_RED_EF&&_rdHojaOk(npZona)){
+        var _efYa=Math.max(0,total-(Number(data.saldoAplicado)||0));
+        var _rdYa=Math.round((_efYa-Math.floor(_efYa/100+1e-9)*100)*100)/100;
+        data.redondeo=_rdYa<0.005?0:_rdYa;
+        if(data.redondeo>0)setTimeout(function(){showToast('Cobrado '+formatMoney(_efYa-data.redondeo)+' en efectivo · Redondeo −'+formatMoney(data.redondeo));},1200);
+      }
     } else if(npPago==='Transferencia'){
       data.efectivo=0;
       data.transferencia=total;
