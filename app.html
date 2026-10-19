@@ -3361,6 +3361,11 @@ body.sb-open .sb-toggle .sb-toggle-lbl{display:inline}
 .eerr-t2 tr.nt td{background:#fcfaf4;padding:8px 14px 8px 30px;font-size:12px;color:var(--ink3);line-height:1.5;white-space:normal;font-weight:400}
 .eerr-t2 tr.nt.d td{padding-left:56px;background:#faf6ea}
 .eerr-t2 tr.sel td{font-weight:800}
+.proy-t td.pos{color:var(--gd)}
+.proy-t tr.g.neg td:last-child b{color:var(--r)}
+.proy-t tr.h td .sb{margin-left:0;white-space:normal;line-height:1.4}
+.proy-t .mv{display:none}
+@media(max-width:560px){.proy-t .es{display:none}.proy-t .mv{display:table-cell}.proy-t td,.proy-t th{padding-left:6px;padding-right:6px;font-size:12.5px}.proy-t tr.h td{padding-left:12px}}
 .eerr-pie{font-size:11px;color:var(--ink3);padding:8px 14px 10px}
 .eerr-be-t{font-size:14px;color:var(--ink);line-height:1.5}
 .eerr-be-b{height:10px;background:var(--cd);border-radius:5px;margin:10px 0 8px;overflow:hidden}
@@ -14256,7 +14261,7 @@ function _leerVersion(app){
    "El HTML no sabe que version es" dejo de ser cierto: el build le escribe
    adentro el CACHE_NAME de sw-panel.js, el mismo que deploy.sh obliga a subir en
    cada cambio. Si lo publicado dice otra cosa, esta pagina es vieja. Punto. */
-var _APP_CN_PAGINA='maleu-panel-v656';
+var _APP_CN_PAGINA='maleu-panel-v657';
 
 /* Devuelve [{k,v}] si lo publicado no es lo que esta pagina corre. */
 function _chequearVersiones(){
@@ -30780,9 +30785,13 @@ function rEERR(){
       '<div class="eerr-toggle">'+
         '<button class="'+(eerrModo==='economico'?'on':'')+'" onclick="eerrSetModo(\'economico\')">Económico</button>'+
         '<button class="'+(eerrModo==='financiero'?'on':'')+'" onclick="eerrSetModo(\'financiero\')">Financiero</button>'+
+        '<button class="'+(eerrModo==='proyectado'?'on':'')+'" onclick="eerrSetModo(\'proyectado\')">Proyectado</button>'+
       '</div>'+
     '</div>';
   var body=$('eerrBody');
+  /* El proyectado no es de un mes: va de hoy a fin del mes que viene. */
+  var nav=document.querySelector('#eerrTool .eerr-mes-nav');if(nav)nav.style.visibility=eerrModo==='proyectado'?'hidden':'';
+  if(eerrModo==='proyectado'){rEERR_proyectado(body);return;}
   if(!VD){body.innerHTML='<div class="eerr-empty">Cargando ventas…</div>';loadVentas();return;}
   if(eerrModo==='financiero')rEERR_financiero(body);
   else rEERR_dual(body);
@@ -32804,6 +32813,238 @@ function _eerrCalc(mn,anio){
   R.estrMesEntero=GF.estr+GF.amort+falta;
   R.vacio=(totFact===0&&R.totVar===0&&R.totEstr===0&&R.totImp===0);
   return R;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   FLUJO DE FONDOS PROYECTADO (19/10/2026). Tadeo: "para cada dia que viene, que
+   plata entra y que plata sale, y con que saldo queda la caja. Que salga de lo
+   que el ERP ya sabe."
+
+   Arranca del saldo real de hoy (el mismo "Hay $X en caja" del financiero) y va
+   hasta fin del mes que viene. Cada renglon dice de donde sale. Lo que no tiene
+   fecha cargada NO se inventa: va al bloque "sin fecha" y no mueve el saldo del
+   dia a dia (abajo se dice cuanto quedaria si se paga y cobra todo eso hoy).
+
+   · Sueldos: la cuenta de cada uno (Provisiones_Fijas menos lo girado, la misma
+     de `_sueldoCuenta`). La mitad del mes en DIA_GIRO_2 y el resto en DIA_GIRO_1
+     del mes siguiente (Config_Maleu).
+   · Red: cada quincena de `action=redLiquidacion` en su `pagaEl`.
+   · Monotributo: el monto de Provisiones_Fijas, el dia del ultimo pago en Egresos.
+   · Fijos que se repiten: un concepto de planes / herramientas / servicios /
+     honorarios pagado en 2 o mas de los ultimos 3 meses, el mismo dia del mes,
+     con el ultimo monto. La nafta y los creditos son variables: no entran.
+   · Entra: los pedidos sin cobrar, en su dia de entrega. Los que ya se
+     entregaron y no se cobraron no tienen fecha de cobro: van a "sin fecha".
+   · Proveedores: el ERP no guarda vencimiento. Van a "sin fecha".
+   ═══════════════════════════════════════════════════════════════ */
+var _proyRed=null,_proyRedErr=false,_proyRedPedido=0;
+function _proyFetchRed(cb){
+  if(typeof _rlqEsAdmin==='function'&&!_rlqEsAdmin()){_proyRedErr='sin acceso';return;}
+  if(_proyRed||Date.now()-_proyRedPedido<60000)return;
+  _proyRedPedido=Date.now();
+  traer('proyRedLiq',API+'?action=redLiquidacion&t='+Date.now(),function(d){
+    if(!d||!d.ok)return;
+    _proyRed=d;_proyRedErr=false;cb();
+  },{valido:function(d){return !!d&&d.ok===true;}}).catch(function(){_proyRedErr='no se pudo leer';cb();});
+}
+function _proyDmy(s){
+  var m=String(s||'').match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  return m?new Date(Number(m[3]),Number(m[2])-1,Number(m[1])):null;
+}
+function _proyIso(iso){
+  var m=String(iso||'').match(/^(\d{4})-(\d{2})-(\d{2})/);
+  return m?new Date(Number(m[1]),Number(m[2])-1,Number(m[3])):null;
+}
+function _proyDm(d){return ('0'+d.getDate()).slice(-2)+'/'+('0'+(d.getMonth()+1)).slice(-2);}
+function _proyKey(d){return d.getFullYear()*10000+(d.getMonth()+1)*100+d.getDate();}
+/* El dia `dia` del mes (m0: 0-11) de `y`, sin pasarse del ultimo del mes. */
+function _proyDiaMes(y,m0,dia){
+  var ult=new Date(y,m0+1,0).getDate();
+  return new Date(y,m0,Math.min(Math.max(1,dia),ult));
+}
+/* Arma los renglones. Devuelve {hoy,hasta,caja,cuentas,con:[...],sin:[...]}.
+   Cada renglon: {f:Date|null,tipo:'in'|'out',lbl,$,org,atr} — `org` es de donde
+   sale; `atr` el dia en que tocaba si ya paso. */
+function _proyArmar(){
+  var hoy=new Date();hoy=new Date(hoy.getFullYear(),hoy.getMonth(),hoy.getDate());
+  var hasta=new Date(hoy.getFullYear(),hoy.getMonth()+2,0);
+  var con=[],sin=[];
+  function pon(r){
+    if(!(Math.abs(r.$)>0.5))return;
+    if(!r.f){sin.push(r);return;}
+    if(r.f<hoy){r.atr=r.f;r.f=hoy;}
+    if(r.f>hasta)return;
+    con.push(r);
+  }
+  var sl=_saldoLiquido(),inv=Number((D&&D.saldoBase&&D.saldoBase.inv)||0);
+  var caja=sl.total+inv;
+
+  /* ── Sueldos ── */
+  var ymHoy=hoy.getFullYear()+'-'+('0'+(hoy.getMonth()+1)).slice(-2);
+  var d1=eerrConfig('DIA_GIRO_1',ymHoy),d2=eerrConfig('DIA_GIRO_2',ymHoy);
+  var giros=_sueldoGirosPorMes();
+  _sueldoPersonas().forEach(function(p){
+    var mn=hoy.getMonth()+1,an=hoy.getFullYear();
+    var c=_sueldoCuenta(mn,an,p.k);if(!c)return;
+    var fijo=_sueldoFijoMes(mn,an,p.k),pm=mn===1?12:mn-1,pa=mn===1?an-1:an;
+    var cp=_sueldoCuenta(pm,pa,p.k),debiaAntes=cp?Math.max(0,cp.saldo):0;
+    var gMes=(giros[ymHoy]||{})[p.k]||0,cubreMes=Math.max(0,gMes-debiaAntes);
+    var org='Provisiones_Fijas: '+p.nombre+' '+_eerrPlata(fijo)+'/mes · girado en '+MES_ORD[mn-1].toLowerCase()+' '+_eerrPlata(gMes)
+      +(debiaAntes>0.5?' (' +_eerrPlata(Math.min(gMes,debiaAntes))+' pagó lo atrasado)':'');
+    var resto=c.saldo,mitad=0;
+    if(d2&&hoy.getDate()<d2){mitad=Math.max(0,Math.min(resto,fijo/2-cubreMes));}
+    if(mitad>0.5)pon({f:d2?_proyDiaMes(an,mn-1,d2):null,tipo:'out',lbl:'Sueldo '+p.nombre+' · mitad de '+MES_ORD[mn-1].toLowerCase(),$:mitad,org:org+' · día de pago DIA_GIRO_2 = '+d2+' (Config_Maleu)'});
+    resto-=mitad;
+    if(resto>0.5)pon({f:d1?_proyDiaMes(an,mn,d1):null,tipo:'out',lbl:'Sueldo '+p.nombre+' · lo que falta de '+MES_ORD[mn-1].toLowerCase(),$:resto,
+      org:org+' · le falta girar '+_eerrPlata(resto)+' · día de pago DIA_GIRO_1 = '+(d1||'sin cargar')+' del mes siguiente (Config_Maleu)'});
+    /* El mes que viene: si se adelanto, el adelanto se descuenta primero. */
+    var adel=resto<0?-resto:0,nm=mn===12?1:mn+1,na=mn===12?an+1:an,fn=_sueldoFijoMes(nm,na,p.k);
+    var m2=Math.max(0,fn/2-adel);
+    if(m2>0.5)pon({f:d2?_proyDiaMes(na,nm-1,d2):null,tipo:'out',lbl:'Sueldo '+p.nombre+' · mitad de '+MES_ORD[nm-1].toLowerCase(),$:m2,
+      org:'Provisiones_Fijas: '+p.nombre+' '+_eerrPlata(fn)+'/mes'+(adel>0.5?' · menos '+_eerrPlata(adel)+' que se adelantó':'')+' · día de pago DIA_GIRO_2 = '+d2+' (Config_Maleu)'});
+  });
+
+  /* ── Liquidacion quincenal de la Red ── */
+  if(_proyRed){
+    (_proyRed.vendedores||[]).forEach(function(v){
+      (v.quincenas||[]).forEach(function(q){
+        pon({f:_proyDmy(q.pagaEl),tipo:'out',lbl:'Red · '+v.nombre+' · '+q.lbl,$:Number(q.total)||0,
+          org:'Ventas › RED › Liquidación: comisión '+_eerrPlata(q.com||0)+' + envíos '+_eerrPlata(q.env||0)+' de '+(q.pedidos||[]).length+' pedido'+((q.pedidos||[]).length===1?'':'s')+' · se paga el '+q.pagaEl});
+      });
+      /* `debeEntregar` NO va: es la misma plata que los pedidos de la Red sin
+         cobrar, que ya entran abajo (la definicion de `_porCobrar`). */
+      if(Number(v.sinMarcarTotal)>0.5){
+        var sm=(v.sinMarcar||[])[0]||{};
+        sin.push({f:null,tipo:'out',lbl:'Red · '+v.nombre+' · comisión de pedidos sin marcar',$:Number(v.sinMarcarTotal),
+          org:'Ventas › RED › Liquidación: '+(v.sinMarcar||[]).length+' pedido'+((v.sinMarcar||[]).length===1?'':'s')+' que falta marcar entregado o cobrado'+(sm.pagaEl?' · si se marcan, se pagan el '+sm.pagaEl:'')});
+      }
+    });
+  }
+
+  /* ── Egresos que se repiten: monotributo y fijos ── */
+  var ini3=new Date(hoy.getFullYear(),hoy.getMonth()-2,1),grupos={};
+  function norm(s){return _sueldoNorm(s).replace(/·?\s*mensual\b/g,'').replace(/[^a-z0-9]+/g,' ').trim();}
+  ((D&&D.gastos)||[]).forEach(function(g){
+    var f=_proyDmy(g.f);if(!f||f<ini3||f>hoy)return;
+    var l=_gastoLinea(g).linea;
+    if(['planes','software','servicios','honorarios','mono'].indexOf(l)<0)return;
+    var k=l==='mono'?'__mono':norm(g.con);if(!k)return;
+    var G=grupos[k]||(grupos[k]={con:String(g.con||'').replace(/\s*·\s*Mensual\s*$/i,''),meses:{},ult:null});
+    G.meses[f.getFullYear()*12+f.getMonth()]=1;
+    if(!G.ult||f>=G.ult.f)G.ult={f:f,$:Number(g.$)||0};
+  });
+  var mesHoy=hoy.getFullYear()*12+hoy.getMonth();
+  Object.keys(grupos).forEach(function(k){
+    var G=grupos[k],mono=k==='__mono';
+    if(!mono&&Object.keys(G.meses).length<2)return;
+    for(var mm=mesHoy;mm<=mesHoy+1;mm++){
+      if(G.meses[mm])continue;   // ese mes ya se pago
+      var y=Math.floor(mm/12),m0=mm%12,f=_proyDiaMes(y,m0,G.ult.f.getDate());
+      var monto=G.ult.$,org='Egresos: el último fue el '+_proyDm(G.ult.f)+' por '+_eerrPlata(G.ult.$)+' · se repite el mismo día del mes';
+      if(mono){
+        var pv=eerrProvisiones(m0+1,y).filter(function(p){return p.cat==='impuesto_monotributo';})[0];
+        if(pv){monto=Number(pv.monto)||monto;org='Provisiones_Fijas: monotributo '+_eerrPlata(monto)+' · día: el último pago en Egresos fue el '+_proyDm(G.ult.f);}
+      }
+      pon({f:f,tipo:'out',lbl:mono?'Monotributo':G.con,$:monto,org:org});
+    }
+  });
+  if(!grupos.__mono){
+    var pv0=eerrProvisiones(hoy.getMonth()+1,hoy.getFullYear()).filter(function(p){return p.cat==='impuesto_monotributo';})[0];
+    if(pv0)sin.push({f:null,tipo:'out',lbl:'Monotributo',$:Number(pv0.monto)||0,org:'Provisiones_Fijas · no hay un pago en Egresos de los últimos 3 meses para saber el día'});
+  }
+
+  /* ── Proveedores: sin vencimiento en el ERP ── */
+  (_eerrDeudaProvDet||[]).forEach(function(d){
+    sin.push({f:null,tipo:'out',lbl:'Proveedor · '+d.n,$:d.m,org:'Abastecimiento: deuda viva'+(d.sem?' desde la semana '+d.sem:'')+' · el ERP no guarda cuándo vence'});
+  });
+
+  /* ── Entra: pedidos sin cobrar ── */
+  ((D&&D.pedidos)||[]).forEach(function(p){
+    if(p.ep==='Cobrado'||p.es==='Cancelado')return;
+    var m=Number(p.$)||0;if(!(m>0))return;
+    var f=_proyIso(p.dee),lbl=(p.h||'')+' #'+(p.n||'?')+' · '+String(p.c||'?').replace(/\s*\(Red:[^)]*\)\s*$/,'');
+    var red=p.h==='Red'?' · neto de la comisión del vendedor':'';
+    if(p.es==='Entregado'||(f&&f<hoy)){
+      sin.push({f:null,tipo:'in',lbl:lbl,$:m,org:'Pedidos: '+(p.es==='Entregado'?'entregado':'era para')+' el '+(f?_proyDm(f):'?')+' y figura '+(p.ep||'No Cobrado')+red});
+      return;
+    }
+    pon({f:f,tipo:'in',lbl:lbl,$:m,org:'Pedidos: entrega del '+(f?_proyDm(f):'?')+' · '+(p.es||'')+' · '+(p.ep||'No Cobrado')+red});
+  });
+
+  con.sort(function(a,b){return a.f-b.f||(a.tipo==='in'?-1:1);});
+  sin.sort(function(a,b){return b.$-a.$;});
+  return {hoy:hoy,hasta:hasta,caja:caja,cuentas:sl.cuentas||[],inv:inv,con:con,sin:sin};
+}
+function rEERR_proyectado(body){
+  var plata=_eerrPlata,esc=_egrEsc;
+  function repintar(){if(cur==='inicio'&&curSI==='eerr'&&eerrModo==='proyectado')rEERR();}
+  if(!D||!D.gastos||!D.pedidos){body.innerHTML='<div class="eerr-empty">Cargando…</div>';return;}
+  if(_eerrDeudaProv===null)eerrFetchDeudaProv(repintar);
+  _proyFetchRed(repintar);
+  var P=_proyArmar(),DIAS=['Dom','Lun','Mar','Mié','Jue','Vie','Sáb'];
+  /* Por dia, con el saldo corrido */
+  var dias=[],ix={},saldo=P.caja,min={v:P.caja,f:P.hoy};
+  P.con.forEach(function(r){
+    var k=_proyKey(r.f);
+    if(!ix[k]){ix[k]={f:r.f,ent:0,sal:0,rs:[]};dias.push(ix[k]);}
+    if(r.tipo==='in')ix[k].ent+=r.$;else ix[k].sal+=r.$;
+    ix[k].rs.push(r);
+  });
+  dias.forEach(function(d){saldo+=d.ent-d.sal;d.saldo=saldo;if(saldo<min.v)min={v:saldo,f:d.f};});
+  var sinE=0,sinS=0;P.sin.forEach(function(r){if(r.tipo==='in')sinE+=r.$;else sinS+=r.$;});
+  var piso=Number(eerrConfig('CAJA_MINIMA',P.hoy.getFullYear()+'-'+('0'+(P.hoy.getMonth()+1)).slice(-2)))||0;
+  var fin=saldo,bien=min.v>=piso;
+
+  var h='<div class="eerr-hero '+(bien?'pos':'neg')+'" id="proyHero">';
+  h+='<div class="eerr-hero-l">Flujo de fondos · de hoy '+_proyDm(P.hoy)+' al '+_proyDm(P.hasta)+'</div>';
+  h+='<div class="eerr-hero-v">Hoy hay <b style="color:var(--ink)">'+plata(P.caja)+'</b> · el '+_proyDm(P.hasta)+' quedarían <b id="proyFin">'+plata(fin)+'</b></div>';
+  h+='<div class="eerr-hero-s">Con lo que tiene fecha. El punto más bajo es <b>'+plata(min.v)+'</b> el '+DIAS[min.f.getDay()].toLowerCase()+' '+_proyDm(min.f)
+    +(piso>0?(min.v>=piso?', arriba del piso de '+plata(piso)+'.':', <b style="color:var(--r)">'+plata(piso-min.v)+' abajo del piso</b> de '+plata(piso)+'.'):'.')+'</div>';
+  if(P.sin.length)h+='<div class="eerr-hero-n">Sin fecha hay '+plata(sinS)+' para pagar y '+plata(sinE)+' para cobrar (abajo). Si se pagara y cobrara todo hoy, el '+_proyDm(P.hasta)+' quedarían <b>'+plata(fin+sinE-sinS)+'</b>.</div>';
+  h+='</div>';
+
+  /* La linea del saldo */
+  if(dias.length>=1&&typeof _eerrLinea==='function'){
+    var pts=[{l:'hoy',v:P.caja}].concat(dias.map(function(d){return {l:_proyDm(d.f),v:d.saldo};}));
+    var cw=(body&&body.clientWidth>200)?Math.min(body.clientWidth,860):720;
+    h+='<div class="eerr-card" id="proyGraf"><div class="eerr-card-h">Con cuánto queda la caja cada día que se mueve</div>'+_eerrLinea(pts,Math.max(300,cw-30),'#2E7D4F')+'</div>';
+  }
+
+  /* Entra y Sale en dos columnas; en el celular, una sola (Mov.) para que entre Queda. */
+  function cel(e,sa){var net=(e||0)-(sa||0);return '<td class="num pos es">'+(e?plata(e):'')+'</td><td class="num es">'+(sa?plata(-sa):'')+'</td><td class="num mv'+(net>0?' pos':'')+'">'+(e||sa?(net>0?'+':'')+plata(net):'')+'</td>';}
+  var cab='<th></th><th class="num es">Entra</th><th class="num es">Sale</th><th class="num mv">Mov.</th>';
+  /* La tabla, dia por dia */
+  var t='<tr class="h">'+cab+'<th class="num">Queda</th></tr>';
+  t+='<tr class="g"><td><span class="fl"></span>En caja ahora<span class="sb">'+P.cuentas.map(function(c){return esc(c.nombre)+' '+plata(c.saldo);}).join(' · ')+(P.inv>0?' · Inversiones '+plata(P.inv):'')+'</span></td>'+cel(0,0)+'<td class="num">'+plata(P.caja)+'</td></tr>';
+  dias.forEach(function(d){
+    var id='p:'+_proyKey(d.f),ab=!!window.__eerrTodo||!!_eerrAbiertos[id];
+    t+='<tr class="g abre'+(ab?' ab':'')+(d.saldo<piso?' neg':'')+'" data-eg="'+id+'" onclick="eerrTog(\''+id+'\')"><td><span class="fl">'+(ab?'▾':'▸')+'</span>'+DIAS[d.f.getDay()]+' '+_proyDm(d.f)
+      +'<span class="sb">'+d.rs.length+' movimiento'+(d.rs.length===1?'':'s')+'</span></td>'
+      +cel(d.ent,d.sal)+'<td class="num"><b>'+plata(d.saldo)+'</b></td></tr>';
+    if(ab)d.rs.forEach(function(r){
+      t+='<tr class="h"><td>'+esc(r.lbl)+'<span class="sb">'+(r.atr?'<b style="color:var(--r)">tocaba el '+_proyDm(r.atr)+' y no figura</b> · ':'')+esc(r.org)+'</span></td>'
+        +cel(r.tipo==='in'?r.$:0,r.tipo==='out'?r.$:0)+'<td class="num"></td></tr>';
+    });
+  });
+  if(!dias.length)t+='<tr class="h"><td colspan="5">No hay nada con fecha de acá al '+_proyDm(P.hasta)+'.</td></tr>';
+  h+='<div class="eerr-card eerr-tblw" id="proyTbl"><div class="eerr-card-h">Día por día · tocá un día para ver de dónde sale cada renglón</div>';
+  h+='<table class="eerr-t2 proy-t"><tbody>'+t+'</tbody></table>';
+  h+='<div class="eerr-pie">Solo aparecen los días en que algo entra o sale. Lo que ya tendría que haber pasado y no figura en Egresos va hoy, marcado en rojo.</div></div>';
+
+  /* Sin fecha */
+  var s='';
+  P.sin.forEach(function(r){
+    s+='<tr class="h"><td>'+esc(r.lbl)+'<span class="sb">'+esc(r.org)+'</span></td>'+cel(r.tipo==='in'?r.$:0,r.tipo==='out'?r.$:0)+'</tr>';
+  });
+  var avisos=[];
+  if(_eerrDeudaProv===null)avisos.push(_eerrDeudaProvFallo?'No se pudo leer la deuda con proveedores.':'Leyendo la deuda con proveedores…');
+  if(!_proyRed)avisos.push(_proyRedErr?'La liquidación de la Red: '+_proyRedErr+'.':'Leyendo la liquidación de la Red…');
+  h+='<div class="eerr-card eerr-tblw" id="proySin"><div class="eerr-card-h">Sin fecha · '+P.sin.length+' renglón'+(P.sin.length===1?'':'es')+'</div>';
+  if(avisos.length)h+='<div class="eerr-aviso" style="margin-bottom:8px">'+avisos.join(' ')+'</div>';
+  h+='<table class="eerr-t2 proy-t"><tbody><tr class="h">'+cab+'</tr>'+(s||'<tr class="h"><td colspan="4">Nada.</td></tr>')
+    +'<tr class="g"><td><span class="fl"></span>Total sin fecha</td>'+cel(sinE,sinS)+'</tr></tbody></table>';
+  h+='<div class="eerr-pie">No se ponen en un día porque el ERP no sabe cuándo: los proveedores no tienen vencimiento cargado, y un pedido entregado sin cobrar no tiene fecha de cobro.</div></div>';
+  body.innerHTML=h;
 }
 
 /* Un renglon de las tablas del EERR (economico y financiero), con sus hijos y el
