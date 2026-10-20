@@ -247,17 +247,16 @@ const EXTRA = `
 
     /* ── Formularios de a uno ── */
     const forms = await evaluar(cli, `(()=>{ var h=function(id){return document.getElementById(id).classList.contains('hidden');};
-      if(h('invertirForm')) toggleInvertir(); toggleMover(); var r={inv:h('invertirForm'), mov:h('moverForm')}; toggleMover(); return r; })()`);
-    chk('abrir Mover cierra Invertir', forms.inv === true && forms.mov === false, forms);
+      if(h('invertirForm')) toggleInvertir(); toggleAjuste(); var r={inv:h('invertirForm'), aj:h('ajusteForm')}; toggleAjuste(); return r; })()`);
+    /* El Mover viejo (caja fuerte / billetera / sobres) se borro el 20/10/2026. */
+    chk('abrir Contar cierra Invertir', forms.inv === true && forms.aj === false, forms);
 
     /* ── El aviso del ajuste ── */
     const aj = await evaluar(cli, `(()=>{ toggleAjuste(); var c=_calcSaldo(); document.getElementById('ajCF').value=''; document.getElementById('ajBil').value=String(Math.round(c.bil)); chkAjuste();
       var w=document.getElementById('ajWarn').classList.contains('hidden'); document.getElementById('ajBil').value=''; toggleAjuste(); return w; })()`);
     chk('contar solo la billetera (igual a lo calculado) no avisa una diferencia falsa', aj === true, aj);
 
-    /* ── Sobres ── */
-    const sob = await evaluar(cli, `(()=>{ toggleSobres(); var t=document.getElementById('sobresList').textContent; var x=window.__xss; toggleSobres(); return {t:t, xss:x===1, img:!!document.querySelector('#sobresList img')}; })()`);
-    chk('el nombre del sobre va escapado (no se ejecuta ni dibuja un <img>)', sob.xss === false && sob.img === false && /<img/.test(sob.t), sob);
+    /* Sobres: se borraron el 20/10/2026 (murieron con las billeteras el 5/10). */
 
     /* ── La clase del monto ── */
     const gm = await evaluar(cli, `(()=>{ var e=document.querySelector('#gList .gl-m'); if(!e) return null; var cs=getComputedStyle(e); return {ws:cs.whiteSpace, fw:cs.fontWeight}; })()`);
