@@ -37708,47 +37708,55 @@ if('serviceWorker' in navigator){
       cb(_ordFcDatos);
     }).catch(function(){cb(_ordFcDatos);});
   }
-  /* La de ese pedido en el entorno vigente; si no hay, la ultima de cualquiera. */
+  /* Los comprobantes de ese pedido (factura y notas de credito, 21/10/2026), del
+     entorno vigente; si no hay ninguno de ese entorno, los de cualquiera. */
   function _ordFcBuscar(d,hoja,n){
-    var fs=(d&&d.facturas)||[],mejor=null;
+    var fs=(d&&d.facturas)||[],todas=[],vig=[];
     for(var i=0;i<fs.length;i++){
       var f=fs[i];
       if(f['Canal']!==hoja||String(f['N° Pedido'])!==String(n))continue;
-      if(!mejor||f['Entorno']===d.entorno)mejor=f;
+      todas.push(f);if(f['Entorno']===d.entorno)vig.push(f);
     }
-    return mejor;
+    return vig.length?vig:todas;
   }
+  function _ordFcEsNc(f){return /cr[eé]dito/i.test(String(f&&f['Tipo']||''));}
   function _ordFcPintar(p){
     var el=document.getElementById('ordFactura');
     if(!el)return;
-    if(!(p.ep==='Cobrado'&&Number(p.tr)>0)){el.innerHTML='';return;}
+    var fsYa=_ordFcDatos?_ordFcBuscar(_ordFcDatos,p.h,p.n):[];
+    /* Un pedido que dejo de estar cobrado igual muestra sus comprobantes: ahi
+       vive la nota de credito que lo anulo. */
+    if(!(p.ep==='Cobrado'&&Number(p.tr)>0)&&!fsYa.length&&_ordFcDatos){el.innerHTML='';return;}
     _ordFcTraer(false,function(d){
       var el2=document.getElementById('ordFactura');
       if(!el2||!d)return;
-      var f=_ordFcBuscar(d,p.h,p.n);
-      if(!f&&!d.prendido){el2.innerHTML='';return;}
-      var prueba=(f?f['Entorno']:d.entorno)!=='prod'?' <span style="font-size:10px;font-weight:700;color:#E65100">PRUEBA ARCA</span>':'';
-      var h='<div class="ord-money" style="margin-top:10px"><div class="ord-money-row"><span>🧾 Factura C'+prueba+'</span>';
-      if(!f){
-        h+='<b style="color:var(--bl)">en camino</b></div><div style="font-size:12px;color:var(--bl)">El cobro por transferencia se anota en la cola en menos de 5 minutos.</div>';
-      }else{
-        var est=f['Estado'],err=_ordFcEsc(f['Último Error']||'');
+      var fs=_ordFcBuscar(d,p.h,p.n);
+      if(!fs.length&&(!d.prendido||!(p.ep==='Cobrado'&&Number(p.tr)>0))){el2.innerHTML='';return;}
+      var prueba=(fs.length?fs[0]['Entorno']:d.entorno)!=='prod'?' <span style="font-size:10px;font-weight:700;color:#E65100">PRUEBA ARCA</span>':'';
+      if(!fs.length){
+        el2.innerHTML='<div class="ord-money" style="margin-top:10px"><div class="ord-money-row"><span>🧾 Factura C'+prueba+'</span><b style="color:var(--bl)">en camino</b></div><div style="font-size:12px;color:var(--bl)">El cobro por transferencia se anota en la cola en menos de 10 minutos.</div></div>';
+        return;
+      }
+      var h='<div class="ord-money" style="margin-top:10px">',neto=0;
+      fs.forEach(function(f,k){
+        var nc=_ordFcEsNc(f),est=f['Estado'],err=_ordFcEsc(f['Último Error']||''),imp=_ordFcNum(f['Importe']);
+        if(est==='Emitida')neto+=(nc?-1:1)*imp;
+        h+='<div class="ord-money-row"'+(k?' style="margin-top:8px;border-top:1px dashed var(--bd,#ddd);padding-top:6px"':'')+'><span>'+(nc?'↩️ Nota de crédito C':'🧾 Factura C')+(k?'':prueba)+'</span>';
         if(est==='Emitida'){
           var nro=('0000'+f['Pto Vta']).slice(-5)+'-'+('0000000'+f['N° Comprobante']).slice(-8);
-          h+='<b style="color:var(--gd)">'+nro+'</b></div>';
-          h+='<div class="ord-money-row" style="font-size:12px;color:var(--bl)"><span>CAE '+_ordFcEsc(f['CAE'])+' · vence '+_ordFcEsc(f['Vto CAE'])+'</span><b>$'+f$(_ordFcNum(f['Importe']))+'</b></div>';
+          h+='<b style="color:'+(nc?'var(--r)':'var(--gd)')+'">'+nro+'</b></div>';
+          h+='<div class="ord-money-row" style="font-size:12px;color:var(--bl)"><span>CAE '+_ordFcEsc(f['CAE'])+' · vence '+_ordFcEsc(f['Vto CAE'])+'</span><b>'+(nc?'−':'')+'$'+f$(imp)+'</b></div>';
           h+='<button class="ord-btn" style="margin-top:6px;width:100%" onclick="ordFcPdf(\''+_ordFcEsc(f['Clave'])+'\')">⬇️ Descargar PDF</button>';
-        }else if(est==='Revisar'){
-          h+='<b style="color:var(--r)">revisar</b></div><div style="font-size:12px;color:var(--r)">'+err+'</div>';
         }else if(est==='Error'||est==='Sin CUIT'){
-          h+='<b style="color:#E65100">'+(est==='Error'?'no salió':'sin CUIT')+'</b></div><div style="font-size:12px;color:#8B3A0E">'+err+(est==='Error'?' · intento '+_ordFcEsc(f['Intentos'])+' (se reintenta solo cada 5 min)':'')+'</div>';
+          h+='<b style="color:#E65100">'+(est==='Error'?'no salió':'sin CUIT')+'</b></div><div style="font-size:12px;color:#8B3A0E">$'+f$(imp)+' · '+err+(est==='Error'?' · intento '+_ordFcEsc(f['Intentos'])+' (se reintenta solo cada 10 min)':'')+'</div>';
           if(est==='Error')h+='<button class="ord-btn" style="margin-top:6px;width:100%" onclick="ordFcReintentar(\''+_ordFcEsc(f['Clave'])+'\')">↻ Reintentar ahora</button>';
         }else if(est==='Anulada'){
           h+='<b style="color:var(--bl)">no se emitió</b></div><div style="font-size:12px;color:var(--bl)">'+err+'</div>';
         }else{
-          h+='<b style="color:var(--bl)">'+(est==='Enviando'?'pidiendo el CAE…':'en cola')+'</b></div><div style="font-size:12px;color:var(--bl)">Sale sola en la próxima vuelta (cada 5 min).</div>';
+          h+='<b style="color:var(--bl)">'+(est==='Enviando'?'pidiendo el CAE…':'en cola')+'</b></div><div style="font-size:12px;color:var(--bl)">$'+f$(imp)+(err?' · '+err:'')+' · sale sola en la próxima vuelta (cada 10 min).</div>';
         }
-      }
+      });
+      if(fs.length>1)h+='<div class="ord-money-row" style="margin-top:8px;font-size:12px"><span>Facturado neto</span><b>$'+f$(neto)+'</b></div>';
       el2.innerHTML=h+'</div>';
     });
   }
@@ -37769,7 +37777,7 @@ if('serviceWorker' in navigator){
   /* El QR que pide ARCA (RG 4892): una URL con el comprobante en base64. */
   function _ordFcQrUrl(f){
     var fe=String(f['Fecha Emisión']||'').split('/');
-    var j={ver:1,fecha:fe[2]+'-'+fe[1]+'-'+fe[0],cuit:Number(f['CUIT']),ptoVta:Number(f['Pto Vta']),tipoCmp:11,
+    var j={ver:1,fecha:fe[2]+'-'+fe[1]+'-'+fe[0],cuit:Number(f['CUIT']),ptoVta:Number(f['Pto Vta']),tipoCmp:_ordFcEsNc(f)?13:11,
       nroCmp:Number(f['N° Comprobante']),importe:_ordFcNum(f['Importe']),moneda:'PES',ctz:1,tipoDocRec:99,nroDocRec:0,
       tipoCodAut:'E',codAut:Number(f['CAE'])};
     return 'https://www.afip.gob.ar/fe/qr/?p='+btoa(JSON.stringify(j));
@@ -37782,17 +37790,18 @@ if('serviceWorker' in navigator){
       var em=(d.emisores&&d.emisores[f['CUIT']])||{};
       var doc=new window.jspdf.jsPDF('p','mm','a4'),W=210,M=12;
       var pv=('0000'+f['Pto Vta']).slice(-5),nro=('0000000'+f['N° Comprobante']).slice(-8);
-      var prueba=f['Entorno']!=='prod';
+      var prueba=f['Entorno']!=='prod',nc=_ordFcEsNc(f),fa=null;
+      if(nc)((d&&d.facturas)||[]).forEach(function(x){if(x['Clave']===f['Asociada'])fa=x;});
       doc.setLineWidth(0.3);
       doc.setFontSize(9);doc.text('ORIGINAL',W/2,M+4,{align:'center'});
       doc.rect(M,M+6,W-2*M,40);doc.line(W/2,M+20,W/2,M+46);
       doc.rect(W/2-8,M+6,16,14);doc.setFontSize(22);doc.setFont(undefined,'bold');doc.text('C',W/2,M+16,{align:'center'});
-      doc.setFontSize(7);doc.setFont(undefined,'normal');doc.text('COD. 011',W/2,M+19,{align:'center'});
+      doc.setFontSize(7);doc.setFont(undefined,'normal');doc.text(nc?'COD. 013':'COD. 011',W/2,M+19,{align:'center'});
       doc.setFontSize(13);doc.setFont(undefined,'bold');doc.text(String(em.titular||''),M+3,M+14);
       doc.setFontSize(8.5);doc.setFont(undefined,'normal');
       doc.text('Domicilio comercial: '+(em.domicilio||'—'),M+3,M+30);
       doc.text('Condición frente al IVA: Responsable Monotributo',M+3,M+35);
-      doc.setFontSize(15);doc.setFont(undefined,'bold');doc.text('FACTURA',W/2+12,M+14);
+      doc.setFontSize(15);doc.setFont(undefined,'bold');doc.text(nc?'NOTA DE CRÉDITO':'FACTURA',W/2+12,M+14);
       doc.setFontSize(9);doc.setFont(undefined,'normal');
       doc.text('Punto de venta: '+pv+'    Comp. N°: '+nro,W/2+4,M+26);
       doc.text('Fecha de emisión: '+f['Fecha Emisión'],W/2+4,M+31);
@@ -37807,8 +37816,12 @@ if('serviceWorker' in navigator){
       doc.text('Descripción',M+3,y+5);doc.text('Cant.',130,y+5);doc.text('Precio unit.',150,y+5);doc.text('Subtotal',W-M-3,y+5,{align:'right'});
       doc.setFont(undefined,'normal');
       var imp=_ordFcNum(f['Importe']),$s='$ '+imp.toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2});
-      doc.text('Productos alimenticios — pedido '+f['Canal']+' #'+f['N° Pedido'],M+3,y+13);
+      doc.text((nc?'Devolución / ajuste — pedido ':'Productos alimenticios — pedido ')+f['Canal']+' #'+f['N° Pedido'],M+3,y+13);
       doc.text('1',132,y+13);doc.text($s,150,y+13);doc.text($s,W-M-3,y+13,{align:'right'});
+      if(nc&&fa){
+        doc.setFontSize(9);
+        doc.text('Comprobante asociado: Factura C '+('0000'+fa['Pto Vta']).slice(-5)+'-'+('0000000'+fa['N° Comprobante']).slice(-8)+' del '+fa['Fecha Emisión'],M+3,y+21);
+      }
       doc.rect(M,215,W-2*M,14);doc.setFontSize(12);doc.setFont(undefined,'bold');
       doc.text('Importe total: '+$s,W-M-3,224,{align:'right'});
       var qr=window.qrcode(0,'M');qr.addData(_ordFcQrUrl(f));qr.make();
@@ -37821,7 +37834,7 @@ if('serviceWorker' in navigator){
         doc.setTextColor(200,60,0);doc.setFontSize(16);doc.setFont(undefined,'bold');
         doc.text('PRUEBA (HOMOLOGACIÓN ARCA) — SIN VALIDEZ FISCAL',W/2,M+190,{align:'center'});doc.setTextColor(0,0,0);
       }
-      doc.save('Factura-C-'+pv+'-'+nro+(prueba?'-PRUEBA':'')+'.pdf');
+      doc.save((nc?'Nota-de-credito-C-':'Factura-C-')+pv+'-'+nro+(prueba?'-PRUEBA':'')+'.pdf');
     });
   };
   /* Cargar / corregir el telefono de un cliente desde la ficha del pedido.
