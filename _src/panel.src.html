@@ -3320,6 +3320,9 @@ body.sb-open .sb-toggle .sb-toggle-lbl{display:inline}
 /* EERR economico rehecho (8/10/2026): resumen arriba, grafico, tabla agrupada. */
 .eerr-eco{max-width:860px;margin:0 auto;display:flex;flex-direction:column;gap:12px}
 .eerr-aviso{background:var(--wrnb);border:1px solid var(--wrn);border-left:3px solid var(--wrn);border-radius:8px;padding:10px 14px;font-size:12px;line-height:1.5;color:#8B6A00}
+/* El flujo proyectado adentro del financiero (21/10/2026). */
+.eerr-sec-t{margin:22px 0 8px;font-size:15px;font-weight:800;color:var(--ink)}
+.eerr-aviso.proy-bajo{margin-bottom:10px;background:#FDECEA;border-color:#E57373;border-left-color:var(--r);color:#8E1B1B}
 .eerr-hero{background:#fff;border:1px solid var(--cd);border-left:5px solid var(--gd);border-radius:12px;padding:16px 18px}
 .eerr-hero.neg{border-left-color:var(--r)}
 .eerr-hero-l{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--bl)}
@@ -27029,6 +27032,11 @@ function eerrEsServicio(txt){
 // Deuda viva con proveedores (FIFO por semana, igual que Abastecimiento).
 // Fetch al mismo endpoint que la tab Abastecimiento. Cache en memoria.
 var _eerrDeudaProv=null,_eerrDeudaProvDet=[];
+/* Para el flujo proyectado (21/10/2026): la deuda POR SEMANA de cada proveedor, ya
+   neta de lo que nos debe (a favor y notas de credito, FIFO: primero a lo mas
+   viejo), las OC todavia sin recibir por semana, y la semana de hoy segun el
+   backend. Salen del mismo `busqueda` que la deuda. */
+var _eerrDeudaProvSem=[],_eerrOcsPend=[],_eerrBusqHoy=null;
 /* Cuando fallo el ultimo pedido (ms), o 0. Hasta el 15/9/2026 un error dejaba la
    deuda en 0: Inicio y Cierre decian "$0 · al día" en verde, y como la respuesta
    {ok:false} tambien se guardaba como copia, lo seguian diciendo al reabrir la app.
@@ -27069,6 +27077,26 @@ function eerrFetchDeudaProv(cb,forzar){
       }
     });
     det.sort(function(a,b){return b.m-a.m;});
+    var porSem=[];
+    (d.deudas||[]).forEach(function(p){
+      var cred=Math.max(0,Number(p.aFavor)||0)+Math.max(0,Number(p.ncSaldo)||0);
+      (p.semanas||[]).map(function(s){return {sem:Number(s.sem)||0,m:Number(s.pendiente)||0};})
+        .filter(function(s){return s.sem>0&&s.m>0.01;}).sort(function(a,b){return a.sem-b.sem;})
+        .forEach(function(s){
+          var usa=Math.min(cred,s.m);cred-=usa;
+          if(s.m-usa>0.5)porSem.push({n:p.n||'?',sem:s.sem,m:s.m-usa,cred:usa});
+        });
+    });
+    var ocs={};
+    (d.ocs||[]).forEach(function(o){
+      if(o.est!=='Pendiente'&&o.est!=='Pedido')return;
+      var sem=Number(o.semEnt)||0,ct=Number(o.ct)||0;if(!sem||!(ct>0))return;
+      var k=(o.prov||'?')+'|'+sem;
+      (ocs[k]=ocs[k]||{n:o.prov||'?',sem:sem,m:0,n_oc:0,pend:0});
+      ocs[k].m+=ct;ocs[k].n_oc++;if(o.est==='Pendiente')ocs[k].pend++;
+    });
+    _eerrDeudaProvSem=porSem;_eerrOcsPend=Object.keys(ocs).map(function(k){return ocs[k];});
+    _eerrBusqHoy=(Number(d.semActual)&&Number(d.anioActual))?{sem:Number(d.semActual),anio:Number(d.anioActual)}:null;
     _eerrDeudaProv=total;_eerrDeudaProvDet=det;_eerrDeudaProvFallo=0;
     cb(total,det);
   },{valido:function(d){return !!d&&Array.isArray(d.deudas);}}).then(function(){
@@ -27128,8 +27156,10 @@ function eerrConfig(param,ym){
   return Number(matches[0].valor);
 }
 
-var eerrModo=(function(){try{return localStorage.getItem('maleu_eerr_modo')||'economico';}catch(e){return'economico';}})();
-function eerrSetModo(m){eerrModo=m;try{localStorage.setItem('maleu_eerr_modo',m);}catch(e){}rEERR();}
+/* «Proyectado» dejo de ser un modo el 21/10/2026: vive adentro del Financiero. Quien
+   lo tenia guardado entra al Financiero. */
+var eerrModo=(function(){try{var m=localStorage.getItem('maleu_eerr_modo')||'economico';return m==='proyectado'?'financiero':m;}catch(e){return'economico';}})();
+function eerrSetModo(m){if(m==='proyectado')m='financiero';eerrModo=m;try{localStorage.setItem('maleu_eerr_modo',m);}catch(e){}rEERR();}
 
 // Tooltip global posicionado por JS — respeta viewport, no se sale por los bordes
 if(!window._eerrTipInit){
@@ -27210,13 +27240,9 @@ function rEERR(){
       '<div class="eerr-toggle">'+
         '<button class="'+(eerrModo==='economico'?'on':'')+'" onclick="eerrSetModo(\'economico\')">Económico</button>'+
         '<button class="'+(eerrModo==='financiero'?'on':'')+'" onclick="eerrSetModo(\'financiero\')">Financiero</button>'+
-        '<button class="'+(eerrModo==='proyectado'?'on':'')+'" onclick="eerrSetModo(\'proyectado\')">Proyectado</button>'+
       '</div>'+
     '</div>';
   var body=$('eerrBody');
-  /* El proyectado no es de un mes: va de hoy a fin del mes que viene. */
-  var nav=document.querySelector('#eerrTool .eerr-mes-nav');if(nav)nav.style.visibility=eerrModo==='proyectado'?'hidden':'';
-  if(eerrModo==='proyectado'){rEERR_proyectado(body);return;}
   if(!VD){body.innerHTML='<div class="eerr-empty">Cargando ventas…</div>';loadVentas();return;}
   if(eerrModo==='financiero')rEERR_financiero(body);
   else rEERR_dual(body);
@@ -28986,6 +29012,8 @@ function rEERR_financiero(body){
     html+='<div class="eerr-pie" id="eerrStockPie">'+(_eerrStockVal===null?'Mercadería en el freezer: calculando…'
       :'Mercadería en el freezer, al costo: <b>'+plata(_eerrStockVal)+'</b>. No entra en la cuenta: no se puede gastar hasta que se venda.')+'</div>';
     html+='</div>';
+    /* El flujo de fondos proyectado, aca adentro (21/10/2026). */
+    html+='<div id="eerrProy">'+_proyHtml(repintar)+'</div>';
   } else {
     var sube=F.flujo>=0;
     html+='<div class="eerr-hero '+(sube?'pos':'neg')+'">';
@@ -29402,9 +29430,48 @@ function _proyArmar(){
     if(pv0)sin.push({f:null,tipo:'out',lbl:'Monotributo',$:Number(pv0.monto)||0,org:'Provisiones_Fijas · no hay un pago en Egresos de los últimos 3 meses para saber el día'});
   }
 
-  /* ── Proveedores: sin vencimiento en el ERP ── */
-  (_eerrDeudaProvDet||[]).forEach(function(d){
-    sin.push({f:null,tipo:'out',lbl:'Proveedor · '+d.n,$:d.m,org:'Abastecimiento: deuda viva'+(d.sem?' desde la semana '+d.sem:'')+' · el ERP no guarda cuándo vence'});
+  /* ── Proveedores (21/10/2026): FIFO por semana y el pedido de los jueves ──
+     La semana de la deuda es la de la mercaderia y se paga la semana siguiente
+     (memoria de la deuda FIFO): la de la semana S, el JUEVES de la S+1, que es el
+     dia en que se consolida y se le pasa el pedido. Lo que nos deben (a favor, notas
+     de credito) ya viene descontado de lo mas viejo. Las OC todavia sin recibir son
+     la compra de esa semana: misma regla. Si ese jueves ya paso, va hoy en rojo. */
+  var semHoy=(_eerrBusqHoy&&_eerrBusqHoy.sem)||_tendISOWeek(hoy),anioHoy=(_eerrBusqHoy&&_eerrBusqHoy.anio)||_isoWeek(hoy)[0];
+  function juevesSig(sem){
+    var an=sem>semHoy+5?anioHoy-1:anioHoy,j4=new Date(an,0,4),lun1=new Date(an,0,4-((j4.getDay()+6)%7));
+    return new Date(lun1.getFullYear(),lun1.getMonth(),lun1.getDate()+sem*7+3);
+  }
+  if(_eerrDeudaProvSem.length||_eerrOcsPend.length){
+    _eerrDeudaProvSem.forEach(function(d){
+      pon({f:juevesSig(d.sem),tipo:'out',lbl:'Proveedor · '+d.n+' · semana '+d.sem,$:d.m,
+        org:'Abastecimiento: deuda de la semana '+d.sem+' (FIFO)'+(d.cred>0.5?', ya descontados '+_eerrPlata(d.cred)+' a favor':'')+' · se paga con el pedido del jueves de la semana siguiente'});
+    });
+    _eerrOcsPend.forEach(function(o){
+      pon({f:juevesSig(o.sem),tipo:'out',lbl:'Proveedor · '+o.n+' · compra de la semana '+o.sem,$:o.m,
+        org:'Abastecimiento: '+o.n_oc+' OC sin recibir'+(o.pend?' ('+o.pend+' todavía sin pasar al proveedor)':'')+' · al costo de la OC · se paga el jueves de la semana siguiente'});
+    });
+  } else {
+    (_eerrDeudaProvDet||[]).forEach(function(d){
+      sin.push({f:null,tipo:'out',lbl:'Proveedor · '+d.n,$:d.m,org:'Abastecimiento: deuda viva'+(d.sem?' desde la semana '+d.sem:'')+' · falta el detalle por semana (actualizá)'});
+    });
+  }
+
+  /* ── Provisiones_Fijas que son plata (21/10/2026) ──
+     El sueldo y el monotributo ya van arriba. La ocupacion imputada y la
+     amortizacion NO salen de la caja: no entran. Lo demas (servicios, honorarios…),
+     si ese mes todavia no figura un pago del mismo concepto en Egresos: el dia del
+     ultimo pago si lo hay, si no el 10, y lo dice. */
+  [0,1].forEach(function(dm){
+    var y=hoy.getFullYear(),m0=hoy.getMonth()+dm;if(m0>11){m0-=12;y++;}
+    eerrProvisiones(m0+1,y).forEach(function(pv){
+      if(['sueldo','impuesto_monotributo','ocupacion','amortizacion'].indexOf(pv.cat)>=0)return;
+      var k=norm(pv.concepto),G=grupos[k];
+      if(G&&G.meses[y*12+m0])return;   // ese mes ya se pago
+      if(G&&Object.keys(G.meses).length>=2)return;   // ya lo proyecta "los que se repiten"
+      var dia=G?G.ult.f.getDate():10;
+      pon({f:_proyDiaMes(y,m0,dia),tipo:'out',lbl:pv.concepto,$:Number(pv.monto)||0,
+        org:'Provisiones_Fijas: '+_eerrPlata(Number(pv.monto)||0)+'/mes · '+(G?'el día del último pago':'día supuesto: el 10, no hay un pago anterior')});
+    });
   });
 
   /* ── Entra: pedidos sin cobrar ── */
@@ -29424,10 +29491,13 @@ function _proyArmar(){
   sin.sort(function(a,b){return b.$-a.$;});
   return {hoy:hoy,hasta:hasta,caja:caja,cuentas:sl.cuentas||[],inv:inv,con:con,sin:sin};
 }
-function rEERR_proyectado(body){
+/* El flujo proyectado va ADENTRO del financiero (Tadeo, 21/10/2026: «no en una
+   pantalla aparte»): `_proyHtml` devuelve la seccion y rEERR_financiero la pone
+   debajo de «Cuánto está libre», solo en el mes de hoy. */
+function rEERR_proyectado(body){body.innerHTML=_proyHtml(function(){if(cur==='inicio'&&curSI==='eerr')rEERR();});}
+function _proyHtml(repintar){
   var plata=_eerrPlata,esc=_egrEsc;
-  function repintar(){if(cur==='inicio'&&curSI==='eerr'&&eerrModo==='proyectado')rEERR();}
-  if(!D||!D.gastos||!D.pedidos){body.innerHTML='<div class="eerr-empty">Cargando…</div>';return;}
+  if(!D||!D.gastos||!D.pedidos)return '<div class="eerr-empty">Cargando el flujo de fondos…</div>';
   if(_eerrDeudaProv===null)eerrFetchDeudaProv(repintar);
   _proyFetchRed(repintar);
   var P=_proyArmar(),DIAS=['Dom','Lun','Mar','Mié','Jue','Vie','Sáb'];
@@ -29443,8 +29513,17 @@ function rEERR_proyectado(body){
   var sinE=0,sinS=0;P.sin.forEach(function(r){if(r.tipo==='in')sinE+=r.$;else sinS+=r.$;});
   var piso=Number(eerrConfig('CAJA_MINIMA',P.hoy.getFullYear()+'-'+('0'+(P.hoy.getMonth()+1)).slice(-2)))||0;
   var fin=saldo,bien=min.v>=piso;
+  /* EL PRIMER DIA ABAJO DEL PISO (21/10/2026): es el que hay que mirar, no el mas bajo. */
+  var bajo=null;
+  if(piso>0){
+    if(P.caja<piso)bajo={f:P.hoy,v:P.caja,hoy:true};
+    else dias.some(function(d){if(d.saldo<piso){bajo={f:d.f,v:d.saldo};return true;}return false;});
+  }
 
-  var h='<div class="eerr-hero '+(bien?'pos':'neg')+'" id="proyHero">';
+  var h='<div class="eerr-sec-t" id="proySec">Lo que viene · día por día</div>';
+  if(bajo)h+='<div class="eerr-aviso proy-bajo" id="proyBajo">⚠️ <b>'+(bajo.hoy?'Hoy':'El '+DIAS[bajo.f.getDay()].toLowerCase()+' '+_proyDm(bajo.f))+' la caja queda abajo del piso</b>: '+plata(bajo.v)
+    +' contra '+plata(piso)+' de CAJA_MINIMA (faltan '+plata(piso-bajo.v)+'). Es el primer día; tocalo abajo para ver qué sale ese día.</div>';
+  h+='<div class="eerr-hero '+(bien?'pos':'neg')+'" id="proyHero">';
   h+='<div class="eerr-hero-l">Flujo de fondos · de hoy '+_proyDm(P.hoy)+' al '+_proyDm(P.hasta)+'</div>';
   h+='<div class="eerr-hero-v">Hoy hay <b style="color:var(--ink)">'+plata(P.caja)+'</b> · el '+_proyDm(P.hasta)+' quedarían <b id="proyFin">'+plata(fin)+'</b></div>';
   h+='<div class="eerr-hero-s">Con lo que tiene fecha. El punto más bajo es <b>'+plata(min.v)+'</b> el '+DIAS[min.f.getDay()].toLowerCase()+' '+_proyDm(min.f)
@@ -29455,6 +29534,7 @@ function rEERR_proyectado(body){
   /* La linea del saldo */
   if(dias.length>=1&&typeof _eerrLinea==='function'){
     var pts=[{l:'hoy',v:P.caja}].concat(dias.map(function(d){return {l:_proyDm(d.f),v:d.saldo};}));
+    var body=document.getElementById('eerrBody');
     var cw=(body&&body.clientWidth>200)?Math.min(body.clientWidth,860):720;
     h+='<div class="eerr-card" id="proyGraf"><div class="eerr-card-h">Con cuánto queda la caja cada día que se mueve</div>'+_eerrLinea(pts,Math.max(300,cw-30),'#2E7D4F')+'</div>';
   }
@@ -29492,8 +29572,8 @@ function rEERR_proyectado(body){
   if(avisos.length)h+='<div class="eerr-aviso" style="margin-bottom:8px">'+avisos.join(' ')+'</div>';
   h+='<table class="eerr-t2 proy-t"><tbody><tr class="h">'+cab+'</tr>'+(s||'<tr class="h"><td colspan="4">Nada.</td></tr>')
     +'<tr class="g"><td><span class="fl"></span>Total sin fecha</td>'+cel(sinE,sinS)+'</tr></tbody></table>';
-  h+='<div class="eerr-pie">No se ponen en un día porque el ERP no sabe cuándo: los proveedores no tienen vencimiento cargado, y un pedido entregado sin cobrar no tiene fecha de cobro.</div></div>';
-  body.innerHTML=h;
+  h+='<div class="eerr-pie">No se ponen en un día porque el ERP no sabe cuándo: un pedido entregado sin cobrar no tiene fecha de cobro.</div></div>';
+  return h;
 }
 
 /* Un renglon de las tablas del EERR (economico y financiero), con sus hijos y el
