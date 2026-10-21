@@ -80,6 +80,8 @@ const CASOS = [
   /* 21/10/2026: lo que Tadeo se pasa de los rendimientos no es sueldo ni gasto. */
   ['retiro de rendimientos: fuera, ni sueldo ni gasto', 'Retiro de rendimientos', 'Tadeo Ustariz', 'rendimientos MP octubre', 'fuera', 'retiro'],
   ['aunque el concepto diga sueldo, manda la categoría', 'Retiro de rendimientos', 'Sueldo Tadeo', '', 'fuera', 'retiro'],
+  ['retiro del dueño: fuera, ni sueldo ni gasto', 'Retiro del dueño', 'Tadeo Ustariz', 'Rendimientos MP que me pasé a mi Brubank personal', 'fuera', 'retiro'],
+  ['retiro del dueño sin tilde, con el concepto Sueldo: manda la categoría', 'Retiro del dueno', 'Sueldo', '', 'fuera', 'retiro'],
   /* El débito de la tarjeta se clasifica por lo que pagó. */
   ['débito de tarjeta de un plan: va a planes',         'Tarjeta de crédito', 'Débito tarjeta · Supabase', '', 'estructura', 'planes'],
   ['débito de tarjeta sin detalle: otros gastos',        'Tarjeta de crédito', 'Débito automático', '', 'estructura', 'otros'],
