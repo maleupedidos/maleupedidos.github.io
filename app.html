@@ -7697,6 +7697,7 @@ details.rb-plg[open]{padding-bottom:10px}
           <option value="ped">Cantidad de pedidos</option>
           <option value="ticket">Ticket promedio</option>
           <option value="prod">Unidades vendidas</option>
+          <option value="casas">Casas nuevas</option>
         </select>
       </div>
       <!-- Categoria y Producto: solo con la metrica "Unidades vendidas". Se
@@ -14252,7 +14253,7 @@ function _leerVersion(app){
    "El HTML no sabe que version es" dejo de ser cierto: el build le escribe
    adentro el CACHE_NAME de sw-panel.js, el mismo que deploy.sh obliga a subir en
    cada cambio. Si lo publicado dice otra cosa, esta pagina es vieja. Punto. */
-var _APP_CN_PAGINA='maleu-panel-v669';
+var _APP_CN_PAGINA='maleu-panel-v670';
 
 /* Devuelve [{k,v}] si lo publicado no es lo que esta pagina corre. */
 function _chequearVersiones(){
@@ -35165,7 +35166,7 @@ function _tendObservar(box){
    canaleta no entra y ademas obliga a leer siete cifras para captar una escala. */
 function _tendEjeY(v,metric){
   if(metric==='kg')return (v&&Math.abs(v)<10)?_dec(v,1):String(Math.round(v));
-  if(metric==='ped'||metric==='prod')return String(Math.round(v));
+  if(metric==='ped'||metric==='prod'||metric==='casas')return String(Math.round(v));
   var a=Math.abs(v);
   if(a>=1000000)return '$'+(v/1000000).toFixed(a>=10000000?0:1).replace('.',',')+'M';
   if(a>=1000)return '$'+Math.round(v/1000)+'k';
@@ -35275,6 +35276,36 @@ function _tendBuildBarrioOptions(){
   var prev=sel.value;
   sel.innerHTML='<option value="__all">Todos</option>'+arr.map(function(b){return '<option value="'+b+'">'+b+'</option>';}).join('');
   if(prev && (prev==='__all' || arr.indexOf(prev)>=0))sel.value=prev;
+}
+/* ── CASAS NUEVAS (21/10/2026, semanal de GM) ─────────────────────────────
+   La gente nueva de cada periodo, contada por CASA y no por persona: el telefono
+   identifica la casa (adentro de una casa cambia quien pide). La excepcion es Red:
+   cuando el vendedor no carga el telefono del cliente queda el suyo (36% de los
+   pedidos de Red, medido el 29/9), asi que un numero de Red que aparece con DOS o
+   mas nombres es del vendedor y esa casa sale por el nombre. Sin telefono, el nombre.
+   Una casa es nueva en el periodo de su PRIMERA compra, mirando toda la historia
+   y todos los canales: los filtros eligen que casas nuevas se cuentan, no corren
+   la primera compra. */
+function _tendTel(t){var d=String(t||'').replace(/\D/g,'');return d.length>=8?d.slice(-10):'';}
+function _tendNom(c){return String(c||'').toLowerCase().replace(/\s*\(.*$/,'').normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[^a-z0-9]+/g,' ').trim();}
+var _tendPrimCache=null;
+function _tendPrimeras(){
+  if(_tendPrimCache&&_tendPrimCache.vd===VD)return _tendPrimCache.set;
+  var vivos=(VD||[]).filter(function(v){return v&&v.ep!=='Cancelado'&&v.fecha&&_tendParseDMY(v.fecha);});
+  /* Los telefonos de Red con mas de un nombre son del vendedor. */
+  var nomsRed={};
+  vivos.forEach(function(v){var t=_tendTel(v.tel);if(!t||_tendSubcanal(v)!=='Red')return;(nomsRed[t]=nomsRed[t]||{})[_tendNom(v.cliente)]=1;});
+  var clave=function(v){
+    var t=_tendTel(v.tel),n=_tendNom(v.cliente);
+    if(t&&!(_tendSubcanal(v)==='Red'&&Object.keys(nomsRed[t]||{}).length>1))return 't:'+t;
+    return n?'n:'+n:'';
+  };
+  var orden=vivos.map(function(v,i){return {v:v,i:i,t:_tendParseDMY(v.fecha).getTime()};})
+    .sort(function(a,b){return a.t-b.t||a.i-b.i;});
+  var vista={},set=new Set();
+  orden.forEach(function(x){var k=clave(x.v);if(!k||vista[k])return;vista[k]=1;set.add(x.v);});
+  _tendPrimCache={vd:VD,set:set};
+  return set;
 }
 function rTendencia(){
   /* Sin ventas no quedaba en blanco y mudo (13/9/2026): dice que esta trayendo
@@ -35464,6 +35495,7 @@ function rTendencia(){
     });
   }
 
+  var _prim=(metric==='casas')?_tendPrimeras():null;
   rows.forEach(function(v){
     var d=_tendParseDMY(v.fecha);
     var k, item;
@@ -35488,10 +35520,12 @@ function rTendencia(){
     item.fact+=Number(v.$)||0;
     item.mb+=(Number(v.$)||0)-(Number(v.costo)||0); // margen bruto = facturado − costo (canónico, igual que EERR)
     _acP(item,d,1,Number(v.$)||0,(Number(v.$)||0)-(Number(v.costo)||0),0);
+    if(_prim&&_prim.has(v)){item.nue=(item.nue||0)+1;if(_offP(d)<=_offHoy)item.pnue=(item.pnue||0)+1;}
   });
   var serie=Object.keys(grp).map(function(k){return grp[k];}).sort(function(a,b){return a.sortKey-b.sortKey;});
   if(win>0 && serie.length>win)serie=serie.slice(-win);
   function val(p){
+    if(metric==='casas')return p.nue||0;
     if(metric==='prod')return p.u||0;
     if(metric==='ped')return p.n;
     if(metric==='ticket')return p.n>0?p.fact/p.n:0;
@@ -35501,6 +35535,7 @@ function rTendencia(){
   /* Lo mismo, pero con lo que el periodo llevaba al dia de hoy. */
   function valP(p){
     var pn=p.pn||0, pf=p.pfact||0;
+    if(metric==='casas')return p.pnue||0;
     if(metric==='prod')return p.pu||0;
     if(metric==='ped')return pn;
     if(metric==='ticket')return pn>0?pf/pn:0;
@@ -35517,6 +35552,7 @@ function rTendencia(){
   function valFmt(x){
     if(metric==='prod')return uniProd==='kg'?(_dec(x,1)+' kg'):(Math.round(x)+' u.');
     if(metric==='ped')return String(Math.round(x));
+    if(metric==='casas'){var _r=Math.round(x);return _r+(_r===1?' casa':' casas');}
     return '$'+f$(Math.round(x));
   }
   function _fmtDM(d){return String(d.getDate()).padStart(2,'0')+'/'+String(d.getMonth()+1).padStart(2,'0');}
@@ -35832,6 +35868,9 @@ function rTendencia(){
   if(metric==='ped')pie+=' Cuenta <b>pedidos</b>, uno por uno. En Inicio &rsaquo; Resumen'
     +' el número es de <b>entregas</b>: dos pedidos de la misma casa en el mismo viaje van como uno,'
     +' y en Red cuenta la bolsa que le diste al vendedor. Por eso los dos números no tienen que coincidir.';
+  if(metric==='casas')pie+=' Cuenta <b>casas</b> en la semana o el mes de su <b>primera compra</b>, mirando toda la historia y todos los canales:'
+    +' el teléfono identifica la casa (en Red, si el número aparece con más de un cliente es del representante, y ahí va por el nombre).'
+    +' Los filtros de canal y barrio eligen qué casas nuevas se cuentan.';
   /* De dónde salen las unidades. Es otra fuente y otra fecha que el resto de las
      métricas, y callarlo sería mentir por omisión. */
   if(esProd)pie+=' Cuenta sólo lo <b>entregado</b>, por el <b>día que se entregó</b>:'
@@ -35943,10 +35982,11 @@ function rTendencia(){
   var col1Lbl=isWeek?'Semana':(isMonth?'Mes':'Fecha');
   /* Con la metrica en unidades, la 2da columna son UNIDADES y no pedidos: dejar
      el rotulo "Pedidos" al lado de un numero de unidades se lee como un bug. */
+  var esCasas=(metric==='casas');
   var thead='<div class="row h"><div>'+col1Lbl+'</div><div class="num">'
-    +(metric==='prod'?(uniProd==='kg'?'Kilos':'Unidades'):'Pedidos')+'</div><div class="num">'
-    +(metric==='prod'?'Pedidos':(metric==='mb'?'Margen':(metric==='ticket'?'Ticket':'Facturado')))+'</div><div class="num">'
-    +(metric==='ped'?'Δ pedidos':(metric==='prod'?'Δ '+(uniProd==='kg'?'kilos':'unidades'):'Δ vs anterior'))+'</div></div>';
+    +(esCasas?'Casas nuevas':(metric==='prod'?(uniProd==='kg'?'Kilos':'Unidades'):'Pedidos'))+'</div><div class="num">'
+    +(esCasas?'Pedidos':(metric==='prod'?'Pedidos':(metric==='mb'?'Margen':(metric==='ticket'?'Ticket':'Facturado'))))+'</div><div class="num">'
+    +(esCasas?'Δ casas':(metric==='ped'?'Δ pedidos':(metric==='prod'?'Δ '+(uniProd==='kg'?'kilos':'unidades'):'Δ vs anterior')))+'</div></div>';
   var rows2=serie.slice().reverse().map(function(p,i){
     var realIdx=serie.length-1-i;
     var vv=values[realIdx];
@@ -35965,8 +36005,8 @@ function rTendencia(){
       delta='▲ nuevo'; dCls='delta-up';
     }
     return '<div class="row"><div>'+tabLbl(p)+'</div><div class="num">'
-      +(metric==='prod'?(uniProd==='kg'?_dec(p.u||0,3):(p.u||0)):p.n)+'</div><div class="num">'
-      +(metric==='prod'?p.n:((metric==='mb'||metric==='ticket')?valFmt(vv):('$'+f$(Math.round(p.fact)))))
+      +(esCasas?(p.nue||0):(metric==='prod'?(uniProd==='kg'?_dec(p.u||0,3):(p.u||0)):p.n))+'</div><div class="num">'
+      +(esCasas?p.n:(metric==='prod'?p.n:((metric==='mb'||metric==='ticket')?valFmt(vv):('$'+f$(Math.round(p.fact))))))
       +'</div><div class="num '+dCls+'">'+delta+'</div></div>';
   }).join('');
   tableBox.innerHTML=thead+rows2;
