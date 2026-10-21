@@ -77,6 +77,12 @@ const CASOS = [
   ['la pauta sigue en campañas',                        'Marketing', 'Pauta Publicitaria', '', 'variable', 'campanas'],
   ['un proveedor sigue en el costo',                    'Proveedor', 'Carne', '',             'cmv', 'proveedor'],
   ['un vuelto sigue fuera',                             'Cambio cruzado', 'Cambio cruzado', '(Home #901)', 'fuera', 'vuelto'],
+  /* 21/10/2026: lo que Tadeo se pasa de los rendimientos no es sueldo ni gasto. */
+  ['retiro de rendimientos: fuera, ni sueldo ni gasto', 'Retiro de rendimientos', 'Tadeo Ustariz', 'rendimientos MP octubre', 'fuera', 'retiro'],
+  ['aunque el concepto diga sueldo, manda la categoría', 'Retiro de rendimientos', 'Sueldo Tadeo', '', 'fuera', 'retiro'],
+  /* El débito de la tarjeta se clasifica por lo que pagó. */
+  ['débito de tarjeta de un plan: va a planes',         'Tarjeta de crédito', 'Débito tarjeta · Supabase', '', 'estructura', 'planes'],
+  ['débito de tarjeta sin detalle: otros gastos',        'Tarjeta de crédito', 'Débito automático', '', 'estructura', 'otros'],
   ['un giro de sueldo sigue en sueldo',                 'Sueldo', 'Titular', '',              'estructura', 'sueldo'],
   ['la nafta sigue en vehiculo',                        'Nafta', 'Shell', '',                 'estructura', 'vehiculo'],
   ['una perdida sigue siendo extraordinaria',           'Otro', 'Mercadería perdida', '',     'extra', 'perdida'],
