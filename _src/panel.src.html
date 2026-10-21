@@ -29080,8 +29080,20 @@ function rEERR_financiero(body){
     html+='<div class="eerr-card" id="eerrPuente"><div class="eerr-card-h abre" data-eg="f:puente" onclick="eerrTog(\'f:puente\')" style="cursor:pointer"><span class="fl">'+(abP?'▾':'▸')+'</span> Por qué el resultado y la caja no dan lo mismo</div>';
     if(abP){
       var b=function(k){return (F.rub[k]||{m:0}).m;};
-      var gS=b('sueldo'),cS=null;try{cS=_sueldoCuenta(mn,anio);}catch(e){}
-      var adel=(cS&&cS.mes&&cS.mes.adelanto>0&&!A.enCurso)?cS.mes.adelanto:0;
+      /* El adelanto y lo que pago el mes anterior, PERSONA POR PERSONA (21/10/2026).
+         Con la cuenta de los dos juntos, lo que uno se adelanto se tapaba con lo que
+         se le debia al otro. Y lo girado en un mes que pago el sueldo del anterior
+         (del 1 al 5) se dice: no es de este mes. */
+      var gS=b('sueldo'),adel=0,pagoAnt=0,_pmS=mn===1?12:mn-1,_paS=mn===1?anio-1:anio;
+      try{
+        var _gmS=_sueldoGirosPorMes()[anio+'-'+('0'+mn).slice(-2)]||{};
+        _sueldoPersonas().forEach(function(p){
+          var c=_sueldoCuenta(mn,anio,p.k);
+          if(c&&c.mes&&c.mes.adelanto>0&&!A.enCurso)adel+=c.mes.adelanto;
+          var cp=_sueldoCuenta(_pmS,_paS,p.k),sp=cp?Math.max(0,cp.saldo):0;
+          pagoAnt+=Math.min(_gmS[p.k]||0,sp);
+        });
+      }catch(e){}
       var anualPag=0,anualCuo=0;
       ((D&&D.gastos)||[]).forEach(function(g){if(_esDelMes(g,mesNom,anio)&&_esAnual(g))anualPag+=Number(g.$)||0;});
       _eerrGastosEcon(mn,anio).forEach(function(g){if(g.anual!==undefined)anualCuo+=Number(g.$)||0;});
@@ -29094,6 +29106,7 @@ function rEERR_financiero(body){
         ['Vendedores de la Red',0,-b('liqred'),'La comisión y los envíos que se les pagaron en la quincena. No es un gasto del resultado: la venta de la Red ya entra neta de comisión. En la caja, lo cobrado de esos pedidos va entero (arriba, en cobranzas).'],
         ['Retiros de rendimientos',0,-b('retiro'),'Lo que te pasaste de los rendimientos de Mercado Pago. No es sueldo ni gasto: los rendimientos ya están en el resultado como ganancia financiera; esto es la plata que sacaste.'],
         ['Sueldos',-R.fijos.sueldo,-gS,(gS>R.fijos.sueldo+0.5?'Te giraste más que el sueldo fijo'+(A.enCurso?' de los días que van':'')+': la diferencia salió de la caja y no es costo.':'El resultado carga el sueldo fijo'+(A.enCurso?' por los días que van':'')+'; la caja, lo girado. Lo que falta girar se paga del 1 al 5 del mes siguiente.')
+          +(pagoAnt>0.5?' De lo girado, '+plata(pagoAnt)+' pagó lo que faltaba de '+MES_ORD[_pmS-1].toLowerCase()+' (se paga del 1 al 5).':'')
           +(adel>0?' De lo girado, '+plata(adel)+' es adelanto: más de lo que te tocaba.':'')],
         ['Planes mensuales',-R.fijos.planes,-b('planes'),A.enCurso?'El resultado estima los planes por los días que van; la caja ve lo que ya se pagó.':''],
         ['Auto y nafta',-R.fijos.vehiculo,-b('vehiculo'),A.enCurso?'El resultado estima la nafta por los días que van; la caja ve lo que ya se pagó.':''],
@@ -29260,8 +29273,8 @@ function _eerrCalc(mn,anio){
    dia a dia (abajo se dice cuanto quedaria si se paga y cobra todo eso hoy).
 
    · Sueldos: la cuenta de cada uno (Provisiones_Fijas menos lo girado, la misma
-     de `_sueldoCuenta`). La mitad del mes en DIA_GIRO_2 y el resto en DIA_GIRO_1
-     del mes siguiente (Config_Maleu).
+     de `_sueldoCuenta`). El sueldo de un mes, el DIA_GIRO_1 (del 1 al 5) del
+     mes siguiente (Config_Maleu). Hasta el 21/10/2026 la mitad iba el DIA_GIRO_2.
    · Red: cada quincena de `action=redLiquidacion` en su `pagaEl`.
    · Monotributo: el monto de Provisiones_Fijas, el dia del ultimo pago en Egresos.
    · Fijos que se repiten: un concepto de planes / herramientas / servicios /
@@ -29315,27 +29328,29 @@ function _proyArmar(){
 
   /* ── Sueldos ── */
   var ymHoy=hoy.getFullYear()+'-'+('0'+(hoy.getMonth()+1)).slice(-2);
-  var d1=eerrConfig('DIA_GIRO_1',ymHoy),d2=eerrConfig('DIA_GIRO_2',ymHoy);
+  /* EL SUELDO DE UN MES SE PAGA DEL 1 AL 5 DEL SIGUIENTE (Tadeo, 8/10 y 21/10/2026).
+     Hasta el 21/10 esto programaba media sueldo el dia 20 (DIA_GIRO_2) y el resto
+     el 5: en noviembre restaba la mitad de noviembre el 20/11 ademas de octubre el
+     5/11 — $1.200.000 de mas, porque el sueldo de noviembre se paga en diciembre.
+     Ahora: lo que falta del mes pasado, el DIA_GIRO_1 de este mes (si ya paso,
+     va hoy marcado en rojo); lo que falta de este mes, el DIA_GIRO_1 del que viene.
+     Lo girado a mitad de mes es adelanto y ya bajo lo que falta. */
+  var d1=Number(eerrConfig('DIA_GIRO_1',ymHoy))||5;
   var giros=_sueldoGirosPorMes();
   _sueldoPersonas().forEach(function(p){
     var mn=hoy.getMonth()+1,an=hoy.getFullYear();
     var c=_sueldoCuenta(mn,an,p.k);if(!c)return;
     var fijo=_sueldoFijoMes(mn,an,p.k),pm=mn===1?12:mn-1,pa=mn===1?an-1:an;
     var cp=_sueldoCuenta(pm,pa,p.k),debiaAntes=cp?Math.max(0,cp.saldo):0;
-    var gMes=(giros[ymHoy]||{})[p.k]||0,cubreMes=Math.max(0,gMes-debiaAntes);
+    var gMes=(giros[ymHoy]||{})[p.k]||0,pagoAtras=Math.min(gMes,debiaAntes),faltaAtras=debiaAntes-pagoAtras;
     var org='Provisiones_Fijas: '+p.nombre+' '+_eerrPlata(fijo)+'/mes · girado en '+MES_ORD[mn-1].toLowerCase()+' '+_eerrPlata(gMes)
-      +(debiaAntes>0.5?' (' +_eerrPlata(Math.min(gMes,debiaAntes))+' pagó lo atrasado)':'');
-    var resto=c.saldo,mitad=0;
-    if(d2&&hoy.getDate()<d2){mitad=Math.max(0,Math.min(resto,fijo/2-cubreMes));}
-    if(mitad>0.5)pon({f:d2?_proyDiaMes(an,mn-1,d2):null,tipo:'out',lbl:'Sueldo '+p.nombre+' · mitad de '+MES_ORD[mn-1].toLowerCase(),$:mitad,org:org+' · día de pago DIA_GIRO_2 = '+d2+' (Config_Maleu)'});
-    resto-=mitad;
-    if(resto>0.5)pon({f:d1?_proyDiaMes(an,mn,d1):null,tipo:'out',lbl:'Sueldo '+p.nombre+' · lo que falta de '+MES_ORD[mn-1].toLowerCase(),$:resto,
-      org:org+' · le falta girar '+_eerrPlata(resto)+' · día de pago DIA_GIRO_1 = '+(d1||'sin cargar')+' del mes siguiente (Config_Maleu)'});
-    /* El mes que viene: si se adelanto, el adelanto se descuenta primero. */
-    var adel=resto<0?-resto:0,nm=mn===12?1:mn+1,na=mn===12?an+1:an,fn=_sueldoFijoMes(nm,na,p.k);
-    var m2=Math.max(0,fn/2-adel);
-    if(m2>0.5)pon({f:d2?_proyDiaMes(na,nm-1,d2):null,tipo:'out',lbl:'Sueldo '+p.nombre+' · mitad de '+MES_ORD[nm-1].toLowerCase(),$:m2,
-      org:'Provisiones_Fijas: '+p.nombre+' '+_eerrPlata(fn)+'/mes'+(adel>0.5?' · menos '+_eerrPlata(adel)+' que se adelantó':'')+' · día de pago DIA_GIRO_2 = '+d2+' (Config_Maleu)'});
+      +(pagoAtras>0.5?' ('+_eerrPlata(pagoAtras)+' pagó lo de '+MES_ORD[pm-1].toLowerCase()+')':'');
+    if(faltaAtras>0.5)pon({f:_proyDiaMes(an,mn-1,d1),tipo:'out',lbl:'Sueldo '+p.nombre+' · lo que falta de '+MES_ORD[pm-1].toLowerCase(),$:faltaAtras,
+      org:'Provisiones_Fijas: '+p.nombre+' · le falta girar '+_eerrPlata(faltaAtras)+' de '+MES_ORD[pm-1].toLowerCase()+' · se paga del 1 al '+d1+' (DIA_GIRO_1, Config_Maleu)'});
+    var delMes=c.saldo-faltaAtras;   // el fijo de este mes menos lo que ya se giro a cuenta
+    if(delMes>0.5)pon({f:_proyDiaMes(mn===12?an+1:an,mn%12,d1),tipo:'out',lbl:'Sueldo '+p.nombre+' · '+MES_ORD[mn-1].toLowerCase(),$:delMes,
+      org:org+' · le falta girar '+_eerrPlata(delMes)+' · se paga del 1 al '+d1+' de '+MES_ORD[mn%12].toLowerCase()+' (DIA_GIRO_1, Config_Maleu)'});
+    /* El de el mes que viene se paga en el siguiente: queda fuera de este horizonte. */
   });
 
   /* ── Liquidacion quincenal de la Red ── */
