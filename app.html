@@ -6918,6 +6918,10 @@ details.rb-plg[open]{padding-bottom:10px}
 #pg-abast .aba-falt-det{font-size:12px;line-height:1.45;margin-top:3px;color:#5D2A2A}
 #pg-abast .aba-falt-btn{margin-top:7px;min-height:40px;padding:0 14px;border:0;border-radius:10px;background:#331C1C;color:#fff;font-family:inherit;font-size:13px;font-weight:800;cursor:pointer;max-width:100%}
 #pg-abast .aba-falt-nota{margin-top:6px;font-size:11.5px;color:#7A4A4A}
+#pg-abast .aba-guardando{margin:10px 0 4px;padding:8px 11px;border-radius:10px;border:1.5px dashed #90A4AE;background:#F4F7F9;opacity:.85}
+#pg-abast .aba-guardando-tit{display:flex;align-items:center;gap:7px;font-size:12px;font-weight:700;color:#546E7A;margin-bottom:4px}
+#pg-abast .aba-guardando-pt{width:8px;height:8px;border-radius:50%;background:#78909C;animation:ABA-abaGuardPulso 1.2s ease-in-out infinite}
+@keyframes ABA-abaGuardPulso{0%,100%{opacity:.3}50%{opacity:1}}
 #pg-abast .aba-ent-aviso{margin:10px 0 4px;padding:9px 11px;border-radius:10px;background:#FFF8E1;border:1.5px solid #F9A825;color:#5D4037;font-size:13px;line-height:1.45}
 #pg-abast .aba-ent-pagos{margin:8px}
 #pg-abast .aba-contacto{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:10px}
@@ -14236,7 +14240,7 @@ function _leerVersion(app){
    "El HTML no sabe que version es" dejo de ser cierto: el build le escribe
    adentro el CACHE_NAME de sw-panel.js, el mismo que deploy.sh obliga a subir en
    cada cambio. Si lo publicado dice otra cosa, esta pagina es vieja. Punto. */
-var _APP_CN_PAGINA='maleu-panel-v666';
+var _APP_CN_PAGINA='maleu-panel-v667';
 
 /* Devuelve [{k,v}] si lo publicado no es lo que esta pagina corre. */
 function _chequearVersiones(){
@@ -67263,6 +67267,77 @@ var _abaRecRep = {}, _abaRecRepTocado = {}, _abaRecAbrirPend = null;
 var catalogo = { proveedores: [], productos: {} };
 var abaSyncQueue = [];
 var _abaSyncEnVuelo = false;   // un POST de la cola por vez (ver abaProcessSyncQueue)
+
+/* LA COMPRA CONFIRMADA SE VE AL INSTANTE (21/10/2026). Lucas cargo dos veces la
+   compra de tartas de Claudia Polito (9:56 y 10:03) porque la lista no le mostraba
+   la primera: la tarjeta del proveedor sale de `busqueda`, que llega despues de que
+   la planilla la escribio (y con la orden diferida, mas tarde todavia). Desde el
+   toque, la compra va aca y se pinta en la tarjeta como «Guardando…». Sale sola
+   cuando `busqueda` trae sus OC (N° mas alto que el que habia al tocar, mismo
+   producto y cantidad), si el servidor la rechaza, o a las 3 h.
+   NO se mezcla con `busqueda.ocs`: de ahi sale la recepcion, y una OC que todavia
+   no tiene fila no se puede recibir. */
+var ABA_GUARDANDO_KEY = 'maleu_aba_guardando', ABA_GUARDANDO_MS = 3 * 3600 * 1000;
+var abaComprasGuardando = (function () {
+  try { var v = JSON.parse(localStorage.getItem(ABA_GUARDANDO_KEY) || '[]'); return Array.isArray(v) ? v : []; }
+  catch (e) { return []; }
+})();
+function _abaGuardandoGuardar() {
+  try { localStorage.setItem(ABA_GUARDANDO_KEY, JSON.stringify(abaComprasGuardando)); } catch (e) {}
+}
+function _abaOcNum(oc) { var m = /^OC-(\d+)$/.exec(String(oc || '')); return m ? Number(m[1]) : 0; }
+function _abaGuardandoAgregar(payload) {
+  // Lo que sale del deposito nace Recibido: no va a la lista de lo que hay que buscar.
+  var items = (payload.items || []).filter(function (it) { return String(it.origen || '').indexOf('Dep') !== 0 && Number(it.qty) > 0; });
+  if (!items.length) return;
+  var maxOc = 0;
+  ((busqueda && busqueda.ocs) || []).forEach(function (o) { var n = _abaOcNum(o.oc); if (n > maxOc) maxOc = n; });
+  abaComprasGuardando.push({ id: payload.clientOpId, prov: payload.proveedor, ts: Date.now(), maxOc: maxOc,
+    items: items.map(function (it) { return { a: it.abbr, n: it.nombre, q: Number(it.qty), ct: (Number(it.costo) || 0) * Number(it.qty) }; }) });
+  _abaGuardandoGuardar();
+}
+function _abaGuardandoSacar(id) {
+  var antes = abaComprasGuardando.length;
+  abaComprasGuardando = abaComprasGuardando.filter(function (g) { return g.id !== id; });
+  if (abaComprasGuardando.length !== antes) _abaGuardandoGuardar();
+}
+/* Con cada `busqueda` que llega: la que ya tiene sus OC en la lista, sale. Cada OC
+   cuenta para una sola linea, y solo las de N° mayor al que habia al tocar: las de
+   9:56 no "confirman" una compra igual de las 10:03. */
+function _abaGuardandoPodar() {
+  var ocs = (busqueda && busqueda.ocs) || [], ahora = Date.now(), usadas = {};
+  var antes = abaComprasGuardando.length;
+  abaComprasGuardando = abaComprasGuardando.filter(function (g) {
+    if (!(ahora - g.ts < ABA_GUARDANDO_MS)) return false;
+    var tomadas = [];
+    var todas = g.items.every(function (it) {
+      for (var i = 0; i < ocs.length; i++) {
+        var o = ocs[i];
+        if (usadas[o.oc] || tomadas.indexOf(o.oc) >= 0) continue;
+        if (o.prov === g.prov && o.abbr === it.a && Number(o.q) === it.q && _abaOcNum(o.oc) > g.maxOc) { tomadas.push(o.oc); return true; }
+      }
+      return false;
+    });
+    if (todas) { tomadas.forEach(function (oc) { usadas[oc] = 1; }); return false; }
+    return true;
+  });
+  if (abaComprasGuardando.length !== antes) _abaGuardandoGuardar();
+}
+function _abaGuardandoHtml(provName) {
+  if (semSel === 'prox') return '';   // una compra de hoy es de esta semana
+  var h = '';
+  abaComprasGuardando.forEach(function (g) {
+    if (g.prov !== provName) return;
+    var d = new Date(g.ts), hora = d.getHours() + ':' + ('0' + d.getMinutes()).slice(-2);
+    h += '<div class="aba-guardando"><div class="aba-guardando-tit"><span class="aba-guardando-pt"></span>Guardando… la compra de las ' + hora + '</div>';
+    g.items.forEach(function (it) {
+      h += '<div class="prov-item"><span class="prov-qty">' + _abaCant(it.q, _abaUni(it.a)) + ' &times;</span><span class="prov-var">' +
+           _abaH(it.n || it.a) + '</span><span class="prov-item-cost">' + abaFormatMoney(it.ct) + '</span></div>';
+    });
+    h += '</div>';
+  });
+  return h;
+}
 var marcadosPedido = {};
 var marcadosRecibido = {};
 var waCopied = {};
@@ -67451,6 +67526,7 @@ function _abaAviso(estado) {
    despues de comprar): antes cada una lo copiaba a mano. */
 function _abaAplicarBusqueda(data) {
   busqueda = data;
+  _abaGuardandoPodar();
   marcadosPedido = {};
   marcadosRecibido = {};
   var provNames = {};
@@ -68293,12 +68369,14 @@ function renderProveedores() {
 
   var html = '';
   var provsVisibles = 0;
+  var provsPintados = {};
   busqueda.provs.forEach(function(prov, idx) {
     // Filtrar items por semana seleccionada (cada item trae sem/anio).
     var catsFiltradas = (prov.cats || []).map(function(c){
       return { cat: c.cat, items: (c.items || []).filter(function(it){ return _matchSem(it); }) };
     }).filter(function(c){ return c.items.length > 0; });
     if (catsFiltradas.length === 0) return; // este proveedor no tiene OCs en la semana visible
+    provsPintados[prov.n] = 1;
     var costoFiltrado = 0;
     catsFiltradas.forEach(function(c){ c.items.forEach(function(it){ costoFiltrado += (it.ct || 0); }); });
     provsVisibles++;
@@ -68346,6 +68424,7 @@ function renderProveedores() {
         html += '<div class="prov-item"><span class="prov-qty">' + _abaCant(it.q, _abaUni(it.a)) + ' &times;</span><span class="prov-var">' + _abaH(it.v || c.cat) + '</span><span class="prov-item-cost">' + abaFormatMoney(it.ct) + '</span></div>';
       });
     });
+    html += _abaGuardandoHtml(prov.n);
 
     // Botón WhatsApp: copia el texto para mandarle al proveedor.
     var waState = waCopied[_abaWaKey(prov.n)];
@@ -68402,6 +68481,17 @@ function renderProveedores() {
     }
 
     html += '</div>';
+  });
+
+  /* El proveedor que todavia no tenia nada en la semana no tiene tarjeta: la compra
+     que se esta guardando se la arma, sin botones (no hay OC que marcar ni recibir). */
+  var provsGuardando = [];
+  abaComprasGuardando.forEach(function (g) { if (!provsPintados[g.prov] && provsGuardando.indexOf(g.prov) < 0) provsGuardando.push(g.prov); });
+  provsGuardando.forEach(function (pv) {
+    var hG = _abaGuardandoHtml(pv);
+    if (!hG) return;
+    provsVisibles++;
+    html += '<div class="prov-card"><div class="prov-head"><span class="prov-name">' + _abaH(_abaMarca(pv)) + '</span></div>' + hG + '</div>';
   });
 
   if (provsVisibles > 0) {
@@ -70986,7 +71076,14 @@ function updateNpSummary() {
   btn.classList.remove('success');
 }
 
-function confirmarCompra() {
+/* El servidor frena la MISMA compra cargada dos veces en el dia (21/10/2026: Lucas
+   repitio a las 10:03 la de las 9:56). Se pregunta; si es otra, se manda con
+   `confirmarDuplicada`. Devuelve true si hay que reenviar. */
+function abaCompraDuplicadaSigue(resp) {
+  return confirm(resp.error || ('Ya cargaste esta compra hoy a las ' + resp.hora + '. ¿Es otra?'));
+}
+
+function confirmarCompra(confirmarDuplicada) {
   var items = getNpItems();
   if (items.length === 0) return;
 
@@ -71007,6 +71104,8 @@ function confirmarCompra() {
        creaba OTRO pedido Red. */
     clientOpId: 'cm_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8)
   };
+  if (confirmarDuplicada === true) payload.confirmarDuplicada = true;
+  _abaGuardandoAgregar(payload);   // a la lista ya, como «Guardando…»
   /* Lo cargado se borra apenas sale: si quedara, un segundo "Confirmar" armaria
      otra compra con otro id — y esa si se cargaria dos veces. */
   var limpiar = function () { npQtys = {}; _npPintarProductos(prov); };
@@ -71030,10 +71129,16 @@ function confirmarCompra() {
     if (!resp) { aLaCola('El servidor no contestó bien: la compra queda guardada y se reintenta (no se carga dos veces)'); return; }
     if (resp.retry) { aLaCola('La planilla está ocupada: la compra queda guardada y se reintenta sola'); return; }
     if (!resp.ok) {
+      _abaGuardandoSacar(payload.clientOpId);
       abaHideLoader(true);
       btn.disabled = false;
       btn.textContent = 'Confirmar compra';
       updateNpSummary();
+      if (resp.duplicada) {
+        if (abaCompraDuplicadaSigue(resp)) confirmarCompra(true);
+        else abaShowToast('No se cargó: era la misma compra de las ' + (resp.hora || 'de hoy'));
+        return;
+      }
       abaShowToast('No se registró la compra: ' + (resp.error || resp.err || 'error del servidor'));
       return;
     }
@@ -71172,9 +71277,17 @@ function abaProcessSyncQueue() {
     } else if (resp && resp.ok === false && resp.retry) {
       // Backend pide retry (ej. lock timeout) → reintentar con backoff
       scheduleRetry(item, attempt);
+    } else if (resp && resp.ok === false && resp.duplicada && item.action === 'compraManual' && !item.confirmarDuplicada &&
+               abaCompraDuplicadaSigue(resp)) {
+      // La compra que salio por la cola parecia repetida y Tadeo dijo que es otra: va de nuevo
+      item.confirmarDuplicada = true;
+      abaSaveLocal();
+      setTimeout(abaProcessSyncQueue, 0);
     } else if (resp && resp.ok === false) {
       // Error definitivo del backend → avisar y descartar para no bloquear la cola
-      abaShowToast('No se pudo guardar: ' + (resp.error || resp.err || 'error del servidor'));
+      if (item.action === 'compraManual') { _abaGuardandoSacar(item.clientOpId); if (typeof abaRender === 'function') abaRender(); }
+      abaShowToast(resp.duplicada ? 'No se cargó: era la misma compra de las ' + (resp.hora || 'de hoy')
+                                  : 'No se pudo guardar: ' + (resp.error || resp.err || 'error del servidor'));
       _abaSacarDeCola(item);
       abaSaveLocal();
       document.getElementById('abaSyncBanner').className = 'sync-banner' + (abaSyncQueue.length > 0 ? ' visible' : '');
@@ -72167,7 +72280,7 @@ function abaShowToast(msg, ms) {
   abaShowToast._t = setTimeout(function() { t.classList.remove('show'); }, ms || 3000);
 }
 
-try{window["pedLevel"]=pedLevel;}catch(e){}try{window["ABA_APPS_SCRIPT_URL"]=ABA_APPS_SCRIPT_URL;}catch(e){}try{window["_abaOpenOrdInPanel"]=_abaOpenOrdInPanel;}catch(e){}try{window["busqueda"]=busqueda;}catch(e){}try{window["_abaRecRep"]=_abaRecRep;}catch(e){}try{window["_abaRecRepTocado"]=_abaRecRepTocado;}catch(e){}try{window["_abaRecAbrirPend"]=_abaRecAbrirPend;}catch(e){}try{window["catalogo"]=catalogo;}catch(e){}try{window["abaSyncQueue"]=abaSyncQueue;}catch(e){}try{window["_abaSyncEnVuelo"]=_abaSyncEnVuelo;}catch(e){}try{window["marcadosPedido"]=marcadosPedido;}catch(e){}try{window["marcadosRecibido"]=marcadosRecibido;}catch(e){}try{window["waCopied"]=waCopied;}catch(e){}try{window["armadoChecked"]=armadoChecked;}catch(e){}try{window["vendedoresMap"]=vendedoresMap;}catch(e){}try{window["VEND_RED_SIN_ID"]=VEND_RED_SIN_ID;}catch(e){}try{window["_vendRed"]=_vendRed;}catch(e){}try{window["semSel"]=semSel;}catch(e){}try{window["_semOf"]=_semOf;}catch(e){}try{window["_semActual"]=_semActual;}catch(e){}try{window["_matchSem"]=_matchSem;}catch(e){}try{window["switchSemSel"]=switchSemSel;}catch(e){}try{window["abaCurrentTab"]=abaCurrentTab;}catch(e){}try{window["abaIsOnline"]=abaIsOnline;}catch(e){}try{window["npQtys"]=npQtys;}catch(e){}try{window["npOrigins"]=npOrigins;}catch(e){}try{window["abaCargaEstado"]=abaCargaEstado;}catch(e){}try{window["abaCargaError"]=abaCargaError;}catch(e){}try{window["abaCatEstado"]=abaCatEstado;}catch(e){}try{window["abaCatError"]=abaCatError;}catch(e){}try{window["_abaCatVuelo"]=_abaCatVuelo;}catch(e){}try{window["_abaCatCuando"]=_abaCatCuando;}catch(e){}try{window["abaCc"]=abaCc;}catch(e){}try{window["_abaCcVuelo"]=_abaCcVuelo;}catch(e){}try{window["abaCcForm"]=abaCcForm;}catch(e){}try{window["abaCcCostoForm"]=abaCcCostoForm;}catch(e){}try{window["_npProvPrevio"]=_npProvPrevio;}catch(e){}try{window["_ABA_FUSIONADO"]=_ABA_FUSIONADO;}catch(e){}try{window["_abaUniCache"]=_abaUniCache;}catch(e){}try{window["_abaUniDe"]=_abaUniDe;}catch(e){}try{window["_abaLazy"]=_abaLazy;}catch(e){}try{window["_abaLazyN"]=_abaLazyN;}catch(e){}try{window["ABA_FOTO_VIEJA_MS"]=ABA_FOTO_VIEJA_MS;}catch(e){}try{window["_cacheValid"]=_cacheValid;}catch(e){}try{window["_IS_EMBED_INIT"]=_IS_EMBED_INIT;}catch(e){}try{window["_ABA_IS_EMBED"]=_ABA_IS_EMBED;}catch(e){}try{window["abaLoaderCount"]=abaLoaderCount;}catch(e){}try{window["abaShowLoader"]=abaShowLoader;}catch(e){}try{window["abaHideLoader"]=abaHideLoader;}catch(e){}try{window["abaUpdateOnlineStatus"]=abaUpdateOnlineStatus;}catch(e){}try{window["abaUpdateLastSync"]=abaUpdateLastSync;}catch(e){}try{window["abaSaveLocal"]=abaSaveLocal;}catch(e){}try{window["abaLoadLocal"]=abaLoadLocal;}catch(e){}try{window["_abaAviso"]=_abaAviso;}catch(e){}try{window["_abaAplicarBusqueda"]=_abaAplicarBusqueda;}catch(e){}try{window["abaReintentar"]=abaReintentar;}catch(e){}try{window["_abaFechaUtc"]=_abaFechaUtc;}catch(e){}try{window["_abaSello"]=_abaSello;}catch(e){}try{window["__abaFoto"]=__abaFoto;}catch(e){}try{window["_abaFotoNota"]=_abaFotoNota;}catch(e){}try{window["_abaFotoLeer"]=_abaFotoLeer;}catch(e){}try{window["abaArranque"]=abaArranque;}catch(e){}try{window["abaRedondeo"]=abaRedondeo;}catch(e){}try{window["abaRedondeoDeshacer"]=abaRedondeoDeshacer;}catch(e){}try{window["abaNotaCreditoAnular"]=abaNotaCreditoAnular;}catch(e){}try{window["abaRefresh"]=abaRefresh;}catch(e){}try{window["abaFalt"]=abaFalt;}catch(e){}try{window["abaFaltEstado"]=abaFaltEstado;}catch(e){}try{window["abaFaltErr"]=abaFaltErr;}catch(e){}try{window["_abaFaltVuelo"]=_abaFaltVuelo;}catch(e){}try{window["_abaFaltG"]=_abaFaltG;}catch(e){}try{window["ABA_COPIA_VALE_MS"]=ABA_COPIA_VALE_MS;}catch(e){}try{window["_abaUltEnvio"]=_abaUltEnvio;}catch(e){}try{window["_abaCopiaVale"]=_abaCopiaVale;}catch(e){}try{window["abaFaltCargar"]=abaFaltCargar;}catch(e){}try{window["_abaFaltProv"]=_abaFaltProv;}catch(e){}try{window["abaRenderFalt"]=abaRenderFalt;}catch(e){}try{window["abaFaltAgregar"]=abaFaltAgregar;}catch(e){}try{window["populateNpVendedor"]=populateNpVendedor;}catch(e){}try{window["loadVendedores"]=loadVendedores;}catch(e){}try{window["loadCatalogo"]=loadCatalogo;}catch(e){}try{window["populateProvSelect"]=populateProvSelect;}catch(e){}try{window["_npAltaProvCarne"]=_npAltaProvCarne;}catch(e){}try{window["_npCortesCarne"]=_npCortesCarne;}catch(e){}try{window["abaFormatMoney"]=abaFormatMoney;}catch(e){}try{window["_rotArmar"]=_rotArmar;}catch(e){}try{window["esc"]=esc;}catch(e){}try{window["_abaMarca"]=_abaMarca;}catch(e){}try{window["_abaH"]=_abaH;}catch(e){}try{window["_abaUni"]=_abaUni;}catch(e){}try{window["_abaCant"]=_abaCant;}catch(e){}try{window["_abaVer"]=_abaVer;}catch(e){}try{window["_abaTot"]=_abaTot;}catch(e){}try{window["_abaMonto"]=_abaMonto;}catch(e){}try{window["_abaCantIn"]=_abaCantIn;}catch(e){}try{window["_esOcDep"]=_esOcDep;}catch(e){}try{window["_abaNomCuenta"]=_abaNomCuenta;}catch(e){}try{window["_abaCopiar"]=_abaCopiar;}catch(e){}try{window["_abaHayDatos"]=_abaHayDatos;}catch(e){}try{window["_abaEsBusqueda"]=_abaEsBusqueda;}catch(e){}try{window["getSemanaISO"]=getSemanaISO;}catch(e){}try{window["abaRender"]=abaRender;}catch(e){}try{window["renderResumen"]=renderResumen;}catch(e){}try{window["_ocsRecibibles"]=_ocsRecibibles;}catch(e){}try{window["_abaMarcaKey"]=_abaMarcaKey;}catch(e){}try{window["_abaWaKey"]=_abaWaKey;}catch(e){}try{window["renderProveedores"]=renderProveedores;}catch(e){}try{window["_hoyISO"]=_hoyISO;}catch(e){}try{window["_addDias"]=_addDias;}catch(e){}try{window["_labelDia"]=_labelDia;}catch(e){}try{window["_diasHasta"]=_diasHasta;}catch(e){}try{window["_primerDiaSemSelISO"]=_primerDiaSemSelISO;}catch(e){}try{window["renderProgChip"]=renderProgChip;}catch(e){}try{window["openProgModal"]=openProgModal;}catch(e){}try{window["cerrarProgModal"]=cerrarProgModal;}catch(e){}try{window["programarBusqueda"]=programarBusqueda;}catch(e){}try{window["buildWaText"]=buildWaText;}catch(e){}try{window["copyWA"]=copyWA;}catch(e){}try{window["dismissWA"]=dismissWA;}catch(e){}try{window["marcarPedido"]=marcarPedido;}catch(e){}try{window["_abaLazyHtml"]=_abaLazyHtml;}catch(e){}try{window["_abaLazyAbrir"]=_abaLazyAbrir;}catch(e){}try{window["abaRenderPagos"]=abaRenderPagos;}catch(e){}try{window["_abaDetalleSemana"]=_abaDetalleSemana;}catch(e){}try{window["_renderPagosInner"]=_renderPagosInner;}catch(e){}try{window["abaPagoCta"]=abaPagoCta;}catch(e){}try{window["abaCuentasDigitales"]=abaCuentasDigitales;}catch(e){}try{window["abaPagoCuenta"]=abaPagoCuenta;}catch(e){}try{window["abaPagoLug"]=abaPagoLug;}catch(e){}try{window["abaPersonasCaja"]=abaPersonasCaja;}catch(e){}try{window["abaLugaresPago"]=abaLugaresPago;}catch(e){}try{window["abaPagoLugar"]=abaPagoLugar;}catch(e){}try{window["renderPagoForm"]=renderPagoForm;}catch(e){}try{window["setPagoFp"]=setPagoFp;}catch(e){}try{window["togglePagoForm"]=togglePagoForm;}catch(e){}try{window["updatePagoTotal"]=updatePagoTotal;}catch(e){}try{window["confirmarPago"]=confirmarPago;}catch(e){}try{window["getOcsByProv"]=getOcsByProv;}catch(e){}try{window["agruparOcsPorProducto"]=agruparOcsPorProducto;}catch(e){}try{window["toggleRecibir"]=toggleRecibir;}catch(e){}try{window["onRecQtyChange"]=onRecQtyChange;}catch(e){}try{window["abaCatItem"]=abaCatItem;}catch(e){}try{window["_abaRecDepsDe"]=_abaRecDepsDe;}catch(e){}try{window["_abaRecRepCalc"]=_abaRecRepCalc;}catch(e){}try{window["abaRecRepHtml"]=abaRecRepHtml;}catch(e){}try{window["_abaRecRepPie"]=_abaRecRepPie;}catch(e){}try{window["abaRecRepTocar"]=abaRecRepTocar;}catch(e){}try{window["abaRecRepPintar"]=abaRecRepPintar;}catch(e){}try{window["abaLeerPases"]=abaLeerPases;}catch(e){}try{window["_abaRecAbrirAplicar"]=_abaRecAbrirAplicar;}catch(e){}try{window["abaAbrirRecibir"]=abaAbrirRecibir;}catch(e){}try{window["recQtyStep"]=recQtyStep;}catch(e){}try{window["isTadeoStockCli"]=isTadeoStockCli;}catch(e){}try{window["getOcRowDetails"]=getOcRowDetails;}catch(e){}try{window["distribState"]=distribState;}catch(e){}try{window["_abaFirmaRec"]=_abaFirmaRec;}catch(e){}try{window["confirmarRecibir"]=confirmarRecibir;}catch(e){}try{window["abaRecComp"]=abaRecComp;}catch(e){}try{window["abaMontoIn"]=abaMontoIn;}catch(e){}try{window["abaLeerComp"]=abaLeerComp;}catch(e){}try{window["abaRecDeps"]=abaRecDeps;}catch(e){}try{window["abaRecDepMio"]=abaRecDepMio;}catch(e){}try{window["abaRecDepHtml"]=abaRecDepHtml;}catch(e){}try{window["abaLeerDep"]=abaLeerDep;}catch(e){}try{window["enviarGroups"]=enviarGroups;}catch(e){}try{window["openDistribModal"]=openDistribModal;}catch(e){}try{window["renderDistribList"]=renderDistribList;}catch(e){}try{window["distribStep"]=distribStep;}catch(e){}try{window["updateDistribRemaining"]=updateDistribRemaining;}catch(e){}try{window["cancelDistrib"]=cancelDistrib;}catch(e){}try{window["confirmDistrib"]=confirmDistrib;}catch(e){}try{window["classifyClientes"]=classifyClientes;}catch(e){}try{window["CAT_ORDEN"]=CAT_ORDEN;}catch(e){}try{window["CAT_REMAP"]=CAT_REMAP;}catch(e){}try{window["splitProducto"]=splitProducto;}catch(e){}try{window["agruparItems"]=agruparItems;}catch(e){}try{window["cardKeyFor"]=cardKeyFor;}catch(e){}try{window["getZone"]=getZone;}catch(e){}try{window["_bandaEnPoderVend"]=_bandaEnPoderVend;}catch(e){}try{window["renderPedidos"]=renderPedidos;}catch(e){}try{window["_renderPedidosInner"]=_renderPedidosInner;}catch(e){}try{window["_ckRedVend"]=_ckRedVend;}catch(e){}try{window["_abaPodarArmado"]=_abaPodarArmado;}catch(e){}try{window["_abaContacto"]=_abaContacto;}catch(e){}try{window["renderRedConsolidadoCard"]=renderRedConsolidadoCard;}catch(e){}try{window["askArmadoRedConsolidado"]=askArmadoRedConsolidado;}catch(e){}try{window["toggleArmadoRedConsolidado"]=toggleArmadoRedConsolidado;}catch(e){}try{window["pedidoGrupoReg"]=pedidoGrupoReg;}catch(e){}try{window["mergeClientesMismoPedido"]=mergeClientesMismoPedido;}catch(e){}try{window["countGruposArmados"]=countGruposArmados;}catch(e){}try{window["renderClienteCardMerged"]=renderClienteCardMerged;}catch(e){}try{window["askArmadoGrupo"]=askArmadoGrupo;}catch(e){}try{window["toggleArmadoGrupo"]=toggleArmadoGrupo;}catch(e){}try{window["askConfirm"]=askConfirm;}catch(e){}try{window["pedNav"]=pedNav;}catch(e){}try{window["_porProveedorAgregado"]=_porProveedorAgregado;}catch(e){}try{window["marcarArmadoProveedor"]=marcarArmadoProveedor;}catch(e){}try{window["abaRenderNuevo"]=abaRenderNuevo;}catch(e){}try{window["onNpVendedorChange"]=onNpVendedorChange;}catch(e){}try{window["renderStockOverview"]=renderStockOverview;}catch(e){}try{window["onNpProvChange"]=onNpProvChange;}catch(e){}try{window["_npPintarProductos"]=_npPintarProductos;}catch(e){}try{window["npUpdateFuturo"]=npUpdateFuturo;}catch(e){}try{window["npSetOrigen"]=npSetOrigen;}catch(e){}try{window["npChangeQty"]=npChangeQty;}catch(e){}try{window["npSetQty"]=npSetQty;}catch(e){}try{window["NP_COBERTURA"]=NP_COBERTURA;}catch(e){}try{window["npDepCorto"]=npDepCorto;}catch(e){}try{window["npDispDep"]=npDispDep;}catch(e){}try{window["npEnCamino"]=npEnCamino;}catch(e){}try{window["npYaPedido"]=npYaPedido;}catch(e){}try{window["npSugerido"]=npSugerido;}catch(e){}try{window["npSugeridoConTodo"]=npSugeridoConTodo;}catch(e){}try{window["npEsStock"]=npEsStock;}catch(e){}try{window["npAplicarSugerido"]=npAplicarSugerido;}catch(e){}try{window["npCargarSugeridos"]=npCargarSugeridos;}catch(e){}try{window["getNpItems"]=getNpItems;}catch(e){}try{window["updateNpSummary"]=updateNpSummary;}catch(e){}try{window["confirmarCompra"]=confirmarCompra;}catch(e){}try{window["_abaLoaderMsg"]=_abaLoaderMsg;}catch(e){}try{window["_abaEsperarRefresh"]=_abaEsperarRefresh;}catch(e){}try{window["abaProcessSyncQueue"]=abaProcessSyncQueue;}catch(e){}try{window["_abaSacarDeCola"]=_abaSacarDeCola;}catch(e){}try{window["scheduleRetry"]=scheduleRetry;}catch(e){}try{window["ABA_CC_LS"]=ABA_CC_LS;}catch(e){}try{window["_abaCcLeerLocal"]=_abaCcLeerLocal;}catch(e){}try{window["abaCcCargar"]=abaCcCargar;}catch(e){}try{window["_abaCcP2"]=_abaCcP2;}catch(e){}try{window["_abaCcHoy"]=_abaCcHoy;}catch(e){}try{window["_abaCcFechaNorm"]=_abaCcFechaNorm;}catch(e){}try{window["_abaCcFechaNum"]=_abaCcFechaNum;}catch(e){}try{window["_abaCcDia"]=_abaCcDia;}catch(e){}try{window["_abaCcHace"]=_abaCcHace;}catch(e){}try{window["_abaCcCorte"]=_abaCcCorte;}catch(e){}try{window["_abaCcNombre"]=_abaCcNombre;}catch(e){}try{window["_abaCcFormSucio"]=_abaCcFormSucio;}catch(e){}try{window["_abaCcEsCarne"]=_abaCcEsCarne;}catch(e){}try{window["_abaCcVisible"]=_abaCcVisible;}catch(e){}try{window["_abaCcMostrar"]=_abaCcMostrar;}catch(e){}try{window["_abaCcProvActual"]=_abaCcProvActual;}catch(e){}try{window["_abaCcEstado"]=_abaCcEstado;}catch(e){}try{window["abaRenderCarne"]=abaRenderCarne;}catch(e){}try{window["_abaCcPintarTop"]=_abaCcPintarTop;}catch(e){}try{window["_abaCcPintarLista"]=_abaCcPintarLista;}catch(e){}try{window["_abaCcCard"]=_abaCcCard;}catch(e){}try{window["_abaCcListaPrecios"]=_abaCcListaPrecios;}catch(e){}try{window["abaCcPreciosToggle"]=abaCcPreciosToggle;}catch(e){}try{window["abaCcCostoAbrir"]=abaCcCostoAbrir;}catch(e){}try{window["abaCcCostoCampo"]=abaCcCostoCampo;}catch(e){}try{window["abaCcCostoCancelar"]=abaCcCostoCancelar;}catch(e){}try{window["abaCcCostoGuardar"]=abaCcCostoGuardar;}catch(e){}try{window["abaCcAbrir"]=abaCcAbrir;}catch(e){}try{window["_abaCcArmarLineas"]=_abaCcArmarLineas;}catch(e){}try{window["_abaCcPrecioSugerido"]=_abaCcPrecioSugerido;}catch(e){}try{window["_abaCcPintarForm"]=_abaCcPintarForm;}catch(e){}try{window["_abaCcCambiosCosto"]=_abaCcCambiosCosto;}catch(e){}try{window["_abaCcEsLaMasNueva"]=_abaCcEsLaMasNueva;}catch(e){}try{window["_abaCcTotales"]=_abaCcTotales;}catch(e){}try{window["abaCcCampo"]=abaCcCampo;}catch(e){}try{window["abaCcProv"]=abaCcProv;}catch(e){}try{window["abaCcLinea"]=abaCcLinea;}catch(e){}try{window["abaCcAgregar"]=abaCcAgregar;}catch(e){}try{window["abaCcCosto"]=abaCcCosto;}catch(e){}try{window["_abaCcCerrarForm"]=_abaCcCerrarForm;}catch(e){}try{window["abaCcCerrar"]=abaCcCerrar;}catch(e){}try{window["_abaCcError"]=_abaCcError;}catch(e){}try{window["abaCcGuardar"]=abaCcGuardar;}catch(e){}try{window["abaCcRecibir"]=abaCcRecibir;}catch(e){}try{window["_abaCcRecKg"]=_abaCcRecKg;}catch(e){}try{window["_abaCcPintarRecibir"]=_abaCcPintarRecibir;}catch(e){}try{window["abaCcCaja"]=abaCcCaja;}catch(e){}try{window["abaCcCajaMas"]=abaCcCajaMas;}catch(e){}try{window["abaCcRecOtro"]=abaCcRecOtro;}catch(e){}try{window["abaCcAnular"]=abaCcAnular;}catch(e){}try{window["abaSwitchTab"]=abaSwitchTab;}catch(e){}try{window["abaHayEditor"]=abaHayEditor;}catch(e){}try{window["abaShowToast"]=abaShowToast;}catch(e){}
+try{window["pedLevel"]=pedLevel;}catch(e){}try{window["ABA_APPS_SCRIPT_URL"]=ABA_APPS_SCRIPT_URL;}catch(e){}try{window["_abaOpenOrdInPanel"]=_abaOpenOrdInPanel;}catch(e){}try{window["busqueda"]=busqueda;}catch(e){}try{window["_abaRecRep"]=_abaRecRep;}catch(e){}try{window["_abaRecRepTocado"]=_abaRecRepTocado;}catch(e){}try{window["_abaRecAbrirPend"]=_abaRecAbrirPend;}catch(e){}try{window["catalogo"]=catalogo;}catch(e){}try{window["abaSyncQueue"]=abaSyncQueue;}catch(e){}try{window["_abaSyncEnVuelo"]=_abaSyncEnVuelo;}catch(e){}try{window["ABA_GUARDANDO_KEY"]=ABA_GUARDANDO_KEY;}catch(e){}try{window["ABA_GUARDANDO_MS"]=ABA_GUARDANDO_MS;}catch(e){}try{window["abaComprasGuardando"]=abaComprasGuardando;}catch(e){}try{window["_abaGuardandoGuardar"]=_abaGuardandoGuardar;}catch(e){}try{window["_abaOcNum"]=_abaOcNum;}catch(e){}try{window["_abaGuardandoAgregar"]=_abaGuardandoAgregar;}catch(e){}try{window["_abaGuardandoSacar"]=_abaGuardandoSacar;}catch(e){}try{window["_abaGuardandoPodar"]=_abaGuardandoPodar;}catch(e){}try{window["_abaGuardandoHtml"]=_abaGuardandoHtml;}catch(e){}try{window["marcadosPedido"]=marcadosPedido;}catch(e){}try{window["marcadosRecibido"]=marcadosRecibido;}catch(e){}try{window["waCopied"]=waCopied;}catch(e){}try{window["armadoChecked"]=armadoChecked;}catch(e){}try{window["vendedoresMap"]=vendedoresMap;}catch(e){}try{window["VEND_RED_SIN_ID"]=VEND_RED_SIN_ID;}catch(e){}try{window["_vendRed"]=_vendRed;}catch(e){}try{window["semSel"]=semSel;}catch(e){}try{window["_semOf"]=_semOf;}catch(e){}try{window["_semActual"]=_semActual;}catch(e){}try{window["_matchSem"]=_matchSem;}catch(e){}try{window["switchSemSel"]=switchSemSel;}catch(e){}try{window["abaCurrentTab"]=abaCurrentTab;}catch(e){}try{window["abaIsOnline"]=abaIsOnline;}catch(e){}try{window["npQtys"]=npQtys;}catch(e){}try{window["npOrigins"]=npOrigins;}catch(e){}try{window["abaCargaEstado"]=abaCargaEstado;}catch(e){}try{window["abaCargaError"]=abaCargaError;}catch(e){}try{window["abaCatEstado"]=abaCatEstado;}catch(e){}try{window["abaCatError"]=abaCatError;}catch(e){}try{window["_abaCatVuelo"]=_abaCatVuelo;}catch(e){}try{window["_abaCatCuando"]=_abaCatCuando;}catch(e){}try{window["abaCc"]=abaCc;}catch(e){}try{window["_abaCcVuelo"]=_abaCcVuelo;}catch(e){}try{window["abaCcForm"]=abaCcForm;}catch(e){}try{window["abaCcCostoForm"]=abaCcCostoForm;}catch(e){}try{window["_npProvPrevio"]=_npProvPrevio;}catch(e){}try{window["_ABA_FUSIONADO"]=_ABA_FUSIONADO;}catch(e){}try{window["_abaUniCache"]=_abaUniCache;}catch(e){}try{window["_abaUniDe"]=_abaUniDe;}catch(e){}try{window["_abaLazy"]=_abaLazy;}catch(e){}try{window["_abaLazyN"]=_abaLazyN;}catch(e){}try{window["ABA_FOTO_VIEJA_MS"]=ABA_FOTO_VIEJA_MS;}catch(e){}try{window["_cacheValid"]=_cacheValid;}catch(e){}try{window["_IS_EMBED_INIT"]=_IS_EMBED_INIT;}catch(e){}try{window["_ABA_IS_EMBED"]=_ABA_IS_EMBED;}catch(e){}try{window["abaLoaderCount"]=abaLoaderCount;}catch(e){}try{window["abaShowLoader"]=abaShowLoader;}catch(e){}try{window["abaHideLoader"]=abaHideLoader;}catch(e){}try{window["abaUpdateOnlineStatus"]=abaUpdateOnlineStatus;}catch(e){}try{window["abaUpdateLastSync"]=abaUpdateLastSync;}catch(e){}try{window["abaSaveLocal"]=abaSaveLocal;}catch(e){}try{window["abaLoadLocal"]=abaLoadLocal;}catch(e){}try{window["_abaAviso"]=_abaAviso;}catch(e){}try{window["_abaAplicarBusqueda"]=_abaAplicarBusqueda;}catch(e){}try{window["abaReintentar"]=abaReintentar;}catch(e){}try{window["_abaFechaUtc"]=_abaFechaUtc;}catch(e){}try{window["_abaSello"]=_abaSello;}catch(e){}try{window["__abaFoto"]=__abaFoto;}catch(e){}try{window["_abaFotoNota"]=_abaFotoNota;}catch(e){}try{window["_abaFotoLeer"]=_abaFotoLeer;}catch(e){}try{window["abaArranque"]=abaArranque;}catch(e){}try{window["abaRedondeo"]=abaRedondeo;}catch(e){}try{window["abaRedondeoDeshacer"]=abaRedondeoDeshacer;}catch(e){}try{window["abaNotaCreditoAnular"]=abaNotaCreditoAnular;}catch(e){}try{window["abaRefresh"]=abaRefresh;}catch(e){}try{window["abaFalt"]=abaFalt;}catch(e){}try{window["abaFaltEstado"]=abaFaltEstado;}catch(e){}try{window["abaFaltErr"]=abaFaltErr;}catch(e){}try{window["_abaFaltVuelo"]=_abaFaltVuelo;}catch(e){}try{window["_abaFaltG"]=_abaFaltG;}catch(e){}try{window["ABA_COPIA_VALE_MS"]=ABA_COPIA_VALE_MS;}catch(e){}try{window["_abaUltEnvio"]=_abaUltEnvio;}catch(e){}try{window["_abaCopiaVale"]=_abaCopiaVale;}catch(e){}try{window["abaFaltCargar"]=abaFaltCargar;}catch(e){}try{window["_abaFaltProv"]=_abaFaltProv;}catch(e){}try{window["abaRenderFalt"]=abaRenderFalt;}catch(e){}try{window["abaFaltAgregar"]=abaFaltAgregar;}catch(e){}try{window["populateNpVendedor"]=populateNpVendedor;}catch(e){}try{window["loadVendedores"]=loadVendedores;}catch(e){}try{window["loadCatalogo"]=loadCatalogo;}catch(e){}try{window["populateProvSelect"]=populateProvSelect;}catch(e){}try{window["_npAltaProvCarne"]=_npAltaProvCarne;}catch(e){}try{window["_npCortesCarne"]=_npCortesCarne;}catch(e){}try{window["abaFormatMoney"]=abaFormatMoney;}catch(e){}try{window["_rotArmar"]=_rotArmar;}catch(e){}try{window["esc"]=esc;}catch(e){}try{window["_abaMarca"]=_abaMarca;}catch(e){}try{window["_abaH"]=_abaH;}catch(e){}try{window["_abaUni"]=_abaUni;}catch(e){}try{window["_abaCant"]=_abaCant;}catch(e){}try{window["_abaVer"]=_abaVer;}catch(e){}try{window["_abaTot"]=_abaTot;}catch(e){}try{window["_abaMonto"]=_abaMonto;}catch(e){}try{window["_abaCantIn"]=_abaCantIn;}catch(e){}try{window["_esOcDep"]=_esOcDep;}catch(e){}try{window["_abaNomCuenta"]=_abaNomCuenta;}catch(e){}try{window["_abaCopiar"]=_abaCopiar;}catch(e){}try{window["_abaHayDatos"]=_abaHayDatos;}catch(e){}try{window["_abaEsBusqueda"]=_abaEsBusqueda;}catch(e){}try{window["getSemanaISO"]=getSemanaISO;}catch(e){}try{window["abaRender"]=abaRender;}catch(e){}try{window["renderResumen"]=renderResumen;}catch(e){}try{window["_ocsRecibibles"]=_ocsRecibibles;}catch(e){}try{window["_abaMarcaKey"]=_abaMarcaKey;}catch(e){}try{window["_abaWaKey"]=_abaWaKey;}catch(e){}try{window["renderProveedores"]=renderProveedores;}catch(e){}try{window["_hoyISO"]=_hoyISO;}catch(e){}try{window["_addDias"]=_addDias;}catch(e){}try{window["_labelDia"]=_labelDia;}catch(e){}try{window["_diasHasta"]=_diasHasta;}catch(e){}try{window["_primerDiaSemSelISO"]=_primerDiaSemSelISO;}catch(e){}try{window["renderProgChip"]=renderProgChip;}catch(e){}try{window["openProgModal"]=openProgModal;}catch(e){}try{window["cerrarProgModal"]=cerrarProgModal;}catch(e){}try{window["programarBusqueda"]=programarBusqueda;}catch(e){}try{window["buildWaText"]=buildWaText;}catch(e){}try{window["copyWA"]=copyWA;}catch(e){}try{window["dismissWA"]=dismissWA;}catch(e){}try{window["marcarPedido"]=marcarPedido;}catch(e){}try{window["_abaLazyHtml"]=_abaLazyHtml;}catch(e){}try{window["_abaLazyAbrir"]=_abaLazyAbrir;}catch(e){}try{window["abaRenderPagos"]=abaRenderPagos;}catch(e){}try{window["_abaDetalleSemana"]=_abaDetalleSemana;}catch(e){}try{window["_renderPagosInner"]=_renderPagosInner;}catch(e){}try{window["abaPagoCta"]=abaPagoCta;}catch(e){}try{window["abaCuentasDigitales"]=abaCuentasDigitales;}catch(e){}try{window["abaPagoCuenta"]=abaPagoCuenta;}catch(e){}try{window["abaPagoLug"]=abaPagoLug;}catch(e){}try{window["abaPersonasCaja"]=abaPersonasCaja;}catch(e){}try{window["abaLugaresPago"]=abaLugaresPago;}catch(e){}try{window["abaPagoLugar"]=abaPagoLugar;}catch(e){}try{window["renderPagoForm"]=renderPagoForm;}catch(e){}try{window["setPagoFp"]=setPagoFp;}catch(e){}try{window["togglePagoForm"]=togglePagoForm;}catch(e){}try{window["updatePagoTotal"]=updatePagoTotal;}catch(e){}try{window["confirmarPago"]=confirmarPago;}catch(e){}try{window["getOcsByProv"]=getOcsByProv;}catch(e){}try{window["agruparOcsPorProducto"]=agruparOcsPorProducto;}catch(e){}try{window["toggleRecibir"]=toggleRecibir;}catch(e){}try{window["onRecQtyChange"]=onRecQtyChange;}catch(e){}try{window["abaCatItem"]=abaCatItem;}catch(e){}try{window["_abaRecDepsDe"]=_abaRecDepsDe;}catch(e){}try{window["_abaRecRepCalc"]=_abaRecRepCalc;}catch(e){}try{window["abaRecRepHtml"]=abaRecRepHtml;}catch(e){}try{window["_abaRecRepPie"]=_abaRecRepPie;}catch(e){}try{window["abaRecRepTocar"]=abaRecRepTocar;}catch(e){}try{window["abaRecRepPintar"]=abaRecRepPintar;}catch(e){}try{window["abaLeerPases"]=abaLeerPases;}catch(e){}try{window["_abaRecAbrirAplicar"]=_abaRecAbrirAplicar;}catch(e){}try{window["abaAbrirRecibir"]=abaAbrirRecibir;}catch(e){}try{window["recQtyStep"]=recQtyStep;}catch(e){}try{window["isTadeoStockCli"]=isTadeoStockCli;}catch(e){}try{window["getOcRowDetails"]=getOcRowDetails;}catch(e){}try{window["distribState"]=distribState;}catch(e){}try{window["_abaFirmaRec"]=_abaFirmaRec;}catch(e){}try{window["confirmarRecibir"]=confirmarRecibir;}catch(e){}try{window["abaRecComp"]=abaRecComp;}catch(e){}try{window["abaMontoIn"]=abaMontoIn;}catch(e){}try{window["abaLeerComp"]=abaLeerComp;}catch(e){}try{window["abaRecDeps"]=abaRecDeps;}catch(e){}try{window["abaRecDepMio"]=abaRecDepMio;}catch(e){}try{window["abaRecDepHtml"]=abaRecDepHtml;}catch(e){}try{window["abaLeerDep"]=abaLeerDep;}catch(e){}try{window["enviarGroups"]=enviarGroups;}catch(e){}try{window["openDistribModal"]=openDistribModal;}catch(e){}try{window["renderDistribList"]=renderDistribList;}catch(e){}try{window["distribStep"]=distribStep;}catch(e){}try{window["updateDistribRemaining"]=updateDistribRemaining;}catch(e){}try{window["cancelDistrib"]=cancelDistrib;}catch(e){}try{window["confirmDistrib"]=confirmDistrib;}catch(e){}try{window["classifyClientes"]=classifyClientes;}catch(e){}try{window["CAT_ORDEN"]=CAT_ORDEN;}catch(e){}try{window["CAT_REMAP"]=CAT_REMAP;}catch(e){}try{window["splitProducto"]=splitProducto;}catch(e){}try{window["agruparItems"]=agruparItems;}catch(e){}try{window["cardKeyFor"]=cardKeyFor;}catch(e){}try{window["getZone"]=getZone;}catch(e){}try{window["_bandaEnPoderVend"]=_bandaEnPoderVend;}catch(e){}try{window["renderPedidos"]=renderPedidos;}catch(e){}try{window["_renderPedidosInner"]=_renderPedidosInner;}catch(e){}try{window["_ckRedVend"]=_ckRedVend;}catch(e){}try{window["_abaPodarArmado"]=_abaPodarArmado;}catch(e){}try{window["_abaContacto"]=_abaContacto;}catch(e){}try{window["renderRedConsolidadoCard"]=renderRedConsolidadoCard;}catch(e){}try{window["askArmadoRedConsolidado"]=askArmadoRedConsolidado;}catch(e){}try{window["toggleArmadoRedConsolidado"]=toggleArmadoRedConsolidado;}catch(e){}try{window["pedidoGrupoReg"]=pedidoGrupoReg;}catch(e){}try{window["mergeClientesMismoPedido"]=mergeClientesMismoPedido;}catch(e){}try{window["countGruposArmados"]=countGruposArmados;}catch(e){}try{window["renderClienteCardMerged"]=renderClienteCardMerged;}catch(e){}try{window["askArmadoGrupo"]=askArmadoGrupo;}catch(e){}try{window["toggleArmadoGrupo"]=toggleArmadoGrupo;}catch(e){}try{window["askConfirm"]=askConfirm;}catch(e){}try{window["pedNav"]=pedNav;}catch(e){}try{window["_porProveedorAgregado"]=_porProveedorAgregado;}catch(e){}try{window["marcarArmadoProveedor"]=marcarArmadoProveedor;}catch(e){}try{window["abaRenderNuevo"]=abaRenderNuevo;}catch(e){}try{window["onNpVendedorChange"]=onNpVendedorChange;}catch(e){}try{window["renderStockOverview"]=renderStockOverview;}catch(e){}try{window["onNpProvChange"]=onNpProvChange;}catch(e){}try{window["_npPintarProductos"]=_npPintarProductos;}catch(e){}try{window["npUpdateFuturo"]=npUpdateFuturo;}catch(e){}try{window["npSetOrigen"]=npSetOrigen;}catch(e){}try{window["npChangeQty"]=npChangeQty;}catch(e){}try{window["npSetQty"]=npSetQty;}catch(e){}try{window["NP_COBERTURA"]=NP_COBERTURA;}catch(e){}try{window["npDepCorto"]=npDepCorto;}catch(e){}try{window["npDispDep"]=npDispDep;}catch(e){}try{window["npEnCamino"]=npEnCamino;}catch(e){}try{window["npYaPedido"]=npYaPedido;}catch(e){}try{window["npSugerido"]=npSugerido;}catch(e){}try{window["npSugeridoConTodo"]=npSugeridoConTodo;}catch(e){}try{window["npEsStock"]=npEsStock;}catch(e){}try{window["npAplicarSugerido"]=npAplicarSugerido;}catch(e){}try{window["npCargarSugeridos"]=npCargarSugeridos;}catch(e){}try{window["getNpItems"]=getNpItems;}catch(e){}try{window["updateNpSummary"]=updateNpSummary;}catch(e){}try{window["abaCompraDuplicadaSigue"]=abaCompraDuplicadaSigue;}catch(e){}try{window["confirmarCompra"]=confirmarCompra;}catch(e){}try{window["_abaLoaderMsg"]=_abaLoaderMsg;}catch(e){}try{window["_abaEsperarRefresh"]=_abaEsperarRefresh;}catch(e){}try{window["abaProcessSyncQueue"]=abaProcessSyncQueue;}catch(e){}try{window["_abaSacarDeCola"]=_abaSacarDeCola;}catch(e){}try{window["scheduleRetry"]=scheduleRetry;}catch(e){}try{window["ABA_CC_LS"]=ABA_CC_LS;}catch(e){}try{window["_abaCcLeerLocal"]=_abaCcLeerLocal;}catch(e){}try{window["abaCcCargar"]=abaCcCargar;}catch(e){}try{window["_abaCcP2"]=_abaCcP2;}catch(e){}try{window["_abaCcHoy"]=_abaCcHoy;}catch(e){}try{window["_abaCcFechaNorm"]=_abaCcFechaNorm;}catch(e){}try{window["_abaCcFechaNum"]=_abaCcFechaNum;}catch(e){}try{window["_abaCcDia"]=_abaCcDia;}catch(e){}try{window["_abaCcHace"]=_abaCcHace;}catch(e){}try{window["_abaCcCorte"]=_abaCcCorte;}catch(e){}try{window["_abaCcNombre"]=_abaCcNombre;}catch(e){}try{window["_abaCcFormSucio"]=_abaCcFormSucio;}catch(e){}try{window["_abaCcEsCarne"]=_abaCcEsCarne;}catch(e){}try{window["_abaCcVisible"]=_abaCcVisible;}catch(e){}try{window["_abaCcMostrar"]=_abaCcMostrar;}catch(e){}try{window["_abaCcProvActual"]=_abaCcProvActual;}catch(e){}try{window["_abaCcEstado"]=_abaCcEstado;}catch(e){}try{window["abaRenderCarne"]=abaRenderCarne;}catch(e){}try{window["_abaCcPintarTop"]=_abaCcPintarTop;}catch(e){}try{window["_abaCcPintarLista"]=_abaCcPintarLista;}catch(e){}try{window["_abaCcCard"]=_abaCcCard;}catch(e){}try{window["_abaCcListaPrecios"]=_abaCcListaPrecios;}catch(e){}try{window["abaCcPreciosToggle"]=abaCcPreciosToggle;}catch(e){}try{window["abaCcCostoAbrir"]=abaCcCostoAbrir;}catch(e){}try{window["abaCcCostoCampo"]=abaCcCostoCampo;}catch(e){}try{window["abaCcCostoCancelar"]=abaCcCostoCancelar;}catch(e){}try{window["abaCcCostoGuardar"]=abaCcCostoGuardar;}catch(e){}try{window["abaCcAbrir"]=abaCcAbrir;}catch(e){}try{window["_abaCcArmarLineas"]=_abaCcArmarLineas;}catch(e){}try{window["_abaCcPrecioSugerido"]=_abaCcPrecioSugerido;}catch(e){}try{window["_abaCcPintarForm"]=_abaCcPintarForm;}catch(e){}try{window["_abaCcCambiosCosto"]=_abaCcCambiosCosto;}catch(e){}try{window["_abaCcEsLaMasNueva"]=_abaCcEsLaMasNueva;}catch(e){}try{window["_abaCcTotales"]=_abaCcTotales;}catch(e){}try{window["abaCcCampo"]=abaCcCampo;}catch(e){}try{window["abaCcProv"]=abaCcProv;}catch(e){}try{window["abaCcLinea"]=abaCcLinea;}catch(e){}try{window["abaCcAgregar"]=abaCcAgregar;}catch(e){}try{window["abaCcCosto"]=abaCcCosto;}catch(e){}try{window["_abaCcCerrarForm"]=_abaCcCerrarForm;}catch(e){}try{window["abaCcCerrar"]=abaCcCerrar;}catch(e){}try{window["_abaCcError"]=_abaCcError;}catch(e){}try{window["abaCcGuardar"]=abaCcGuardar;}catch(e){}try{window["abaCcRecibir"]=abaCcRecibir;}catch(e){}try{window["_abaCcRecKg"]=_abaCcRecKg;}catch(e){}try{window["_abaCcPintarRecibir"]=_abaCcPintarRecibir;}catch(e){}try{window["abaCcCaja"]=abaCcCaja;}catch(e){}try{window["abaCcCajaMas"]=abaCcCajaMas;}catch(e){}try{window["abaCcRecOtro"]=abaCcRecOtro;}catch(e){}try{window["abaCcAnular"]=abaCcAnular;}catch(e){}try{window["abaSwitchTab"]=abaSwitchTab;}catch(e){}try{window["abaHayEditor"]=abaHayEditor;}catch(e){}try{window["abaShowToast"]=abaShowToast;}catch(e){}
 };
 
 /* -- Si tocaste una tab antes de que llegara este script -----------------

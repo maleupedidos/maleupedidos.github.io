@@ -574,6 +574,10 @@ html,body{overscroll-behavior:none;-webkit-overflow-scrolling:touch}
 .aba-falt-det{font-size:12px;line-height:1.45;margin-top:3px;color:#5D2A2A}
 .aba-falt-btn{margin-top:7px;min-height:40px;padding:0 14px;border:0;border-radius:10px;background:#331C1C;color:#fff;font-family:inherit;font-size:13px;font-weight:800;cursor:pointer;max-width:100%}
 .aba-falt-nota{margin-top:6px;font-size:11.5px;color:#7A4A4A}
+.aba-guardando{margin:10px 0 4px;padding:8px 11px;border-radius:10px;border:1.5px dashed #90A4AE;background:#F4F7F9;opacity:.85}
+.aba-guardando-tit{display:flex;align-items:center;gap:7px;font-size:12px;font-weight:700;color:#546E7A;margin-bottom:4px}
+.aba-guardando-pt{width:8px;height:8px;border-radius:50%;background:#78909C;animation:abaGuardPulso 1.2s ease-in-out infinite}
+@keyframes abaGuardPulso{0%,100%{opacity:.3}50%{opacity:1}}
 .aba-ent-aviso{margin:10px 0 4px;padding:9px 11px;border-radius:10px;background:#FFF8E1;border:1.5px solid #F9A825;color:#5D4037;font-size:13px;line-height:1.45}
 .aba-ent-pagos{margin:8px}
 .aba-contacto{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:10px}
@@ -868,6 +872,77 @@ var _abaRecRep = {}, _abaRecRepTocado = {}, _abaRecAbrirPend = null;
 var catalogo = { proveedores: [], productos: {} };
 var abaSyncQueue = [];
 var _abaSyncEnVuelo = false;   // un POST de la cola por vez (ver abaProcessSyncQueue)
+
+/* LA COMPRA CONFIRMADA SE VE AL INSTANTE (21/10/2026). Lucas cargo dos veces la
+   compra de tartas de Claudia Polito (9:56 y 10:03) porque la lista no le mostraba
+   la primera: la tarjeta del proveedor sale de `busqueda`, que llega despues de que
+   la planilla la escribio (y con la orden diferida, mas tarde todavia). Desde el
+   toque, la compra va aca y se pinta en la tarjeta como «Guardando…». Sale sola
+   cuando `busqueda` trae sus OC (N° mas alto que el que habia al tocar, mismo
+   producto y cantidad), si el servidor la rechaza, o a las 3 h.
+   NO se mezcla con `busqueda.ocs`: de ahi sale la recepcion, y una OC que todavia
+   no tiene fila no se puede recibir. */
+var ABA_GUARDANDO_KEY = 'maleu_aba_guardando', ABA_GUARDANDO_MS = 3 * 3600 * 1000;
+var abaComprasGuardando = (function () {
+  try { var v = JSON.parse(localStorage.getItem(ABA_GUARDANDO_KEY) || '[]'); return Array.isArray(v) ? v : []; }
+  catch (e) { return []; }
+})();
+function _abaGuardandoGuardar() {
+  try { localStorage.setItem(ABA_GUARDANDO_KEY, JSON.stringify(abaComprasGuardando)); } catch (e) {}
+}
+function _abaOcNum(oc) { var m = /^OC-(\d+)$/.exec(String(oc || '')); return m ? Number(m[1]) : 0; }
+function _abaGuardandoAgregar(payload) {
+  // Lo que sale del deposito nace Recibido: no va a la lista de lo que hay que buscar.
+  var items = (payload.items || []).filter(function (it) { return String(it.origen || '').indexOf('Dep') !== 0 && Number(it.qty) > 0; });
+  if (!items.length) return;
+  var maxOc = 0;
+  ((busqueda && busqueda.ocs) || []).forEach(function (o) { var n = _abaOcNum(o.oc); if (n > maxOc) maxOc = n; });
+  abaComprasGuardando.push({ id: payload.clientOpId, prov: payload.proveedor, ts: Date.now(), maxOc: maxOc,
+    items: items.map(function (it) { return { a: it.abbr, n: it.nombre, q: Number(it.qty), ct: (Number(it.costo) || 0) * Number(it.qty) }; }) });
+  _abaGuardandoGuardar();
+}
+function _abaGuardandoSacar(id) {
+  var antes = abaComprasGuardando.length;
+  abaComprasGuardando = abaComprasGuardando.filter(function (g) { return g.id !== id; });
+  if (abaComprasGuardando.length !== antes) _abaGuardandoGuardar();
+}
+/* Con cada `busqueda` que llega: la que ya tiene sus OC en la lista, sale. Cada OC
+   cuenta para una sola linea, y solo las de N° mayor al que habia al tocar: las de
+   9:56 no "confirman" una compra igual de las 10:03. */
+function _abaGuardandoPodar() {
+  var ocs = (busqueda && busqueda.ocs) || [], ahora = Date.now(), usadas = {};
+  var antes = abaComprasGuardando.length;
+  abaComprasGuardando = abaComprasGuardando.filter(function (g) {
+    if (!(ahora - g.ts < ABA_GUARDANDO_MS)) return false;
+    var tomadas = [];
+    var todas = g.items.every(function (it) {
+      for (var i = 0; i < ocs.length; i++) {
+        var o = ocs[i];
+        if (usadas[o.oc] || tomadas.indexOf(o.oc) >= 0) continue;
+        if (o.prov === g.prov && o.abbr === it.a && Number(o.q) === it.q && _abaOcNum(o.oc) > g.maxOc) { tomadas.push(o.oc); return true; }
+      }
+      return false;
+    });
+    if (todas) { tomadas.forEach(function (oc) { usadas[oc] = 1; }); return false; }
+    return true;
+  });
+  if (abaComprasGuardando.length !== antes) _abaGuardandoGuardar();
+}
+function _abaGuardandoHtml(provName) {
+  if (semSel === 'prox') return '';   // una compra de hoy es de esta semana
+  var h = '';
+  abaComprasGuardando.forEach(function (g) {
+    if (g.prov !== provName) return;
+    var d = new Date(g.ts), hora = d.getHours() + ':' + ('0' + d.getMinutes()).slice(-2);
+    h += '<div class="aba-guardando"><div class="aba-guardando-tit"><span class="aba-guardando-pt"></span>Guardando… la compra de las ' + hora + '</div>';
+    g.items.forEach(function (it) {
+      h += '<div class="prov-item"><span class="prov-qty">' + _abaCant(it.q, _abaUni(it.a)) + ' &times;</span><span class="prov-var">' +
+           _abaH(it.n || it.a) + '</span><span class="prov-item-cost">' + abaFormatMoney(it.ct) + '</span></div>';
+    });
+    h += '</div>';
+  });
+  return h;
+}
 var marcadosPedido = {};
 var marcadosRecibido = {};
 var waCopied = {};
@@ -1056,6 +1131,7 @@ function _abaAviso(estado) {
    despues de comprar): antes cada una lo copiaba a mano. */
 function _abaAplicarBusqueda(data) {
   busqueda = data;
+  _abaGuardandoPodar();
   marcadosPedido = {};
   marcadosRecibido = {};
   var provNames = {};
@@ -1898,12 +1974,14 @@ function renderProveedores() {
 
   var html = '';
   var provsVisibles = 0;
+  var provsPintados = {};
   busqueda.provs.forEach(function(prov, idx) {
     // Filtrar items por semana seleccionada (cada item trae sem/anio).
     var catsFiltradas = (prov.cats || []).map(function(c){
       return { cat: c.cat, items: (c.items || []).filter(function(it){ return _matchSem(it); }) };
     }).filter(function(c){ return c.items.length > 0; });
     if (catsFiltradas.length === 0) return; // este proveedor no tiene OCs en la semana visible
+    provsPintados[prov.n] = 1;
     var costoFiltrado = 0;
     catsFiltradas.forEach(function(c){ c.items.forEach(function(it){ costoFiltrado += (it.ct || 0); }); });
     provsVisibles++;
@@ -1951,6 +2029,7 @@ function renderProveedores() {
         html += '<div class="prov-item"><span class="prov-qty">' + _abaCant(it.q, _abaUni(it.a)) + ' &times;</span><span class="prov-var">' + _abaH(it.v || c.cat) + '</span><span class="prov-item-cost">' + abaFormatMoney(it.ct) + '</span></div>';
       });
     });
+    html += _abaGuardandoHtml(prov.n);
 
     // Botón WhatsApp: copia el texto para mandarle al proveedor.
     var waState = waCopied[_abaWaKey(prov.n)];
@@ -2007,6 +2086,17 @@ function renderProveedores() {
     }
 
     html += '</div>';
+  });
+
+  /* El proveedor que todavia no tenia nada en la semana no tiene tarjeta: la compra
+     que se esta guardando se la arma, sin botones (no hay OC que marcar ni recibir). */
+  var provsGuardando = [];
+  abaComprasGuardando.forEach(function (g) { if (!provsPintados[g.prov] && provsGuardando.indexOf(g.prov) < 0) provsGuardando.push(g.prov); });
+  provsGuardando.forEach(function (pv) {
+    var hG = _abaGuardandoHtml(pv);
+    if (!hG) return;
+    provsVisibles++;
+    html += '<div class="prov-card"><div class="prov-head"><span class="prov-name">' + _abaH(_abaMarca(pv)) + '</span></div>' + hG + '</div>';
   });
 
   if (provsVisibles > 0) {
@@ -4591,7 +4681,14 @@ function updateNpSummary() {
   btn.classList.remove('success');
 }
 
-function confirmarCompra() {
+/* El servidor frena la MISMA compra cargada dos veces en el dia (21/10/2026: Lucas
+   repitio a las 10:03 la de las 9:56). Se pregunta; si es otra, se manda con
+   `confirmarDuplicada`. Devuelve true si hay que reenviar. */
+function abaCompraDuplicadaSigue(resp) {
+  return confirm(resp.error || ('Ya cargaste esta compra hoy a las ' + resp.hora + '. ¿Es otra?'));
+}
+
+function confirmarCompra(confirmarDuplicada) {
   var items = getNpItems();
   if (items.length === 0) return;
 
@@ -4612,6 +4709,8 @@ function confirmarCompra() {
        creaba OTRO pedido Red. */
     clientOpId: 'cm_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8)
   };
+  if (confirmarDuplicada === true) payload.confirmarDuplicada = true;
+  _abaGuardandoAgregar(payload);   // a la lista ya, como «Guardando…»
   /* Lo cargado se borra apenas sale: si quedara, un segundo "Confirmar" armaria
      otra compra con otro id — y esa si se cargaria dos veces. */
   var limpiar = function () { npQtys = {}; _npPintarProductos(prov); };
@@ -4635,10 +4734,16 @@ function confirmarCompra() {
     if (!resp) { aLaCola('El servidor no contestó bien: la compra queda guardada y se reintenta (no se carga dos veces)'); return; }
     if (resp.retry) { aLaCola('La planilla está ocupada: la compra queda guardada y se reintenta sola'); return; }
     if (!resp.ok) {
+      _abaGuardandoSacar(payload.clientOpId);
       abaHideLoader(true);
       btn.disabled = false;
       btn.textContent = 'Confirmar compra';
       updateNpSummary();
+      if (resp.duplicada) {
+        if (abaCompraDuplicadaSigue(resp)) confirmarCompra(true);
+        else abaShowToast('No se cargó: era la misma compra de las ' + (resp.hora || 'de hoy'));
+        return;
+      }
       abaShowToast('No se registró la compra: ' + (resp.error || resp.err || 'error del servidor'));
       return;
     }
@@ -4777,9 +4882,17 @@ function abaProcessSyncQueue() {
     } else if (resp && resp.ok === false && resp.retry) {
       // Backend pide retry (ej. lock timeout) → reintentar con backoff
       scheduleRetry(item, attempt);
+    } else if (resp && resp.ok === false && resp.duplicada && item.action === 'compraManual' && !item.confirmarDuplicada &&
+               abaCompraDuplicadaSigue(resp)) {
+      // La compra que salio por la cola parecia repetida y Tadeo dijo que es otra: va de nuevo
+      item.confirmarDuplicada = true;
+      abaSaveLocal();
+      setTimeout(abaProcessSyncQueue, 0);
     } else if (resp && resp.ok === false) {
       // Error definitivo del backend → avisar y descartar para no bloquear la cola
-      abaShowToast('No se pudo guardar: ' + (resp.error || resp.err || 'error del servidor'));
+      if (item.action === 'compraManual') { _abaGuardandoSacar(item.clientOpId); if (typeof abaRender === 'function') abaRender(); }
+      abaShowToast(resp.duplicada ? 'No se cargó: era la misma compra de las ' + (resp.hora || 'de hoy')
+                                  : 'No se pudo guardar: ' + (resp.error || resp.err || 'error del servidor'));
       _abaSacarDeCola(item);
       abaSaveLocal();
       document.getElementById('abaSyncBanner').className = 'sync-banner' + (abaSyncQueue.length > 0 ? ' visible' : '');
