@@ -6676,7 +6676,36 @@ function _cobroCuando(p){
   if(dif===1)return 'mañana, '+txt;
   return 'el '+txt;
 }
-function _cobroMsgCliente(peds){
+/* LO QUE ESTA ELEGIDO EN EL CUADRO, para el mensaje (21/10/2026). Tadeo copiaba
+   el detalle, cambiaba el descuento (sin descuento · 10% · x%) y el texto seguia
+   diciendo el `p.desc` guardado: lo terminaba editando a mano. Esto lee el mismo
+   calculo que muestra el cuadro (_descDelCobro / _descDelCombo, _rdCobro) y lo
+   devuelve por pedido. null = no hay cuadro abierto con esos pedidos, o no se
+   puede recalcular (parcial, sin subtotal): el mensaje usa lo guardado. */
+function _cobroVivo(peds){
+  var st=_cobroRutaState;
+  if(!st||!peds||!peds.length)return null;
+  var clave=function(p){return (p&&p.h||'')+'|'+(p&&p.id||'');};
+  var d=st.combo?_descDelCombo(st):_descDelCobro(st);
+  if(!d||!d.calc)return null;
+  var por={};
+  if(st.combo){
+    (d.filas||[]).forEach(function(f){por[clave(f.p)]={sub:f.sub,desc:f.desc,env:f.env,sAp:f.sAp||0,total:f.total};});
+  } else {
+    por[clave(st.ent)]={sub:d.sub,desc:d.monto,env:d.env,sAp:d.sAp||0,total:d.total};
+  }
+  if(!peds.every(function(p){return !!por[clave(p)];}))return null;
+  var total=peds.reduce(function(a,p){return a+por[clave(p)].total;},0);
+  var aplic=st.partial?0:Math.max(0,Math.min(Number(st.aplicarSaldo)||0,total));
+  return {por:por,clave:clave,aplic:aplic,rd:_rdCobro(st)||0};
+}
+/* "10%" o "12,5%" del subtotal: el porcentaje que es ese descuento. */
+function _cobroPct(desc,sub){
+  if(!(desc>0)||!(sub>0))return '';
+  var p=desc/sub*100, r=Math.round(p);
+  return (Math.abs(p-r)<0.05?String(r):String(Math.round(p*10)/10).replace('.',','))+'%';
+}
+function _cobroMsgCliente(peds,vivo){
   peds=(peds||[]).filter(function(p){return !!p;});
   if(!peds.length)return '';
   var nom=String(peds[0].c||'').replace(/\s*\(.*$/,'').trim().split(/\s+/)[0]||'';
@@ -6690,7 +6719,8 @@ function _cobroMsgCliente(peds){
   l.push('');
   var total=0;
   peds.forEach(function(p){
-    var tot=Number(p['$'])||0;
+    var v=vivo?vivo.por[vivo.clave(p)]:null;
+    var tot=v?v.total:(Number(p['$'])||0);
     total+=tot;
     if(multi){
       var dl=_cobroDiaLargo(p);
@@ -6708,12 +6738,14 @@ function _cobroMsgCliente(peds){
       }
     });
     if(!lp.items.length)l.push('(sin el detalle de productos)');
-    var sub=Number(p.sub)||0, desc=Number(p.desc)||0, env=Number(p.env)||0, d=[];
+    var sub=v?v.sub:(Number(p.sub)||0), desc=v?v.desc:(Number(p.desc)||0), env=v?v.env:(Number(p.env)||0),
+        sAp=v?v.sAp:0, d=[];
     /* El desglose solo cuando hay algo que explicar: "Subtotal = Total" no dice nada. */
-    if(desc>0||env>0){
+    if(desc>0||env>0||sAp>0){
       if(sub)d.push('Subtotal '+_cobroPesos(sub));
-      if(desc>0)d.push('descuento −'+_cobroPesos(desc));
+      if(desc>0){var pc=_cobroPct(desc,sub);d.push('descuento'+(pc?' '+pc:'')+' −'+_cobroPesos(desc));}
       if(env>0)d.push('envío '+_cobroPesos(env));
+      if(sAp>0)d.push('saldo a favor −'+_cobroPesos(sAp));
       l.push('   '+d.join(' · '));
     }
     var yaPag=Number(p.cobradoParcial)||0;
@@ -6726,6 +6758,15 @@ function _cobroMsgCliente(peds){
       var cu=_cobroCuando(peds[0]);
       if(cu)l.push('\ud83d\ude9a Te lo llevo '+cu);
     }
+  }
+  /* Lo que se descuenta del TOTAL (no de un pedido): el saldo a favor que se le
+     aplica en este cobro y el redondeo del efectivo a los $100 (COBRO_REDONDEO). */
+  if(vivo&&(vivo.aplic>0||vivo.rd>0)){
+    var x=[_cobroPesos(total)];
+    if(vivo.aplic>0)x.push('saldo a favor \u2212'+_cobroPesos(vivo.aplic));
+    if(vivo.rd>0)x.push('redondeo \u2212'+_cobroPesos(vivo.rd));
+    l.push(x.join(' \u00b7 '));
+    total=Math.max(0,total-vivo.aplic-vivo.rd);
   }
   l.push('\ud83d\udcb3 '+(multi?'Total de los '+peds.length+': ':(Number(peds[0].cobradoParcial)>0?'Falta: ':'Total: '))+_cobroPesos(total));
   l.push('');
@@ -6758,9 +6799,22 @@ function cobroCopiarDetalle(idxsCsv,btn){
 }
 function cobroCopiarDetalleCuadro(btn){
   if(!_cobroPedsCuadro||!_cobroPedsCuadro.length){showToast('No hay detalle para copiar');return;}
-  var txt=_cobroMsgCliente(_cobroPedsCuadro);
+  var txt=_cobroMsgCliente(_cobroPedsCuadro,_cobroVivo(_cobroPedsCuadro));
   rutCopiarTexto(txt,'✓ Detalle copiado');
   _cobroMostrarMsg(btn,txt);
+}
+/* Si el texto copiado esta a la vista en el cuadro, sigue lo que se elige: cambiar
+   el descuento, la forma de pago o lo recibido lo reescribe (21/10/2026). Copiar de
+   nuevo copia esto mismo. */
+function _cobroMsgRefrescar(){
+  var box=document.querySelector('#cobroRutaProds .cobro-msg pre');
+  if(!box||!_cobroPedsCuadro||!_cobroPedsCuadro.length)return;
+  var txt=_cobroMsgCliente(_cobroPedsCuadro,_cobroVivo(_cobroPedsCuadro));
+  if(box.textContent===txt)return;
+  box.textContent=txt;
+  /* Lo que esta en el portapapeles es lo de ANTES: que no se pegue eso. */
+  var h=box.parentNode&&box.parentNode.querySelector('.cobro-msg-h span');
+  if(h)h.textContent='Cambió: tocá Copiar de nuevo';
 }
 
 function _renderCobroPedidos(peds){
@@ -7819,6 +7873,7 @@ function _rdCobro(st){
 function _recalcCobroRuta(){
   if(!_cobroRutaState)return null;
   var st=_cobroRutaState;
+  setTimeout(_cobroMsgRefrescar,0);   // el mensaje a la vista sigue al cuadro (21/10/2026)
   var total=st.total;
   var partial=!!st.partial;
   // Saldo previo aplicado: no más que el total. En modo parcial no se aplica saldo.
