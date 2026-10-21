@@ -46,7 +46,8 @@ function sacar(src, nombre) {
 }
 
 function montar(src) {
-  const nombres = ['_rdepAjustes', '_rdepFechaCorta', '_rdepEfecto', 'confirmarGuardadoStock'];
+  const nombres = ['_rdepAjustes', '_rdepFechaCorta', '_rdepEfecto', 'confirmarGuardadoStock',
+    '_rtcDiaIso', '_rtcSinEntregarTxt', '_rdepConfirmarSi', '_rdepEnviarDescarga'];   // 15/10/2026
   const partes = nombres.map((n) => sacar(src, n));
   const falta = nombres.filter((n, i) => !partes[i]);
   if (falta.length) return { error: 'no encontre ' + falta.join(', ') };
@@ -55,6 +56,7 @@ function montar(src) {
   const caja = {
     pendientesGuardarStock: [], pendientesPedidosOC: [], _rdepConteo: {}, _rdepLucas: {},
     PROD_NAMES: {}, _ultimoConfirm: null, _posts: 0,
+    _pgsSinEntregar: [], _RTC_DIAS: ['dom', 'lun', 'mar', 'mié', 'jue', 'vie', 'sáb'], _rdepEnviarPend: null,
     confirm: function (t) { caja._ultimoConfirm = t; return false; },   // NO manda nada
     fetch: function () { caja._posts++; return new Promise(() => {}); },
     rutShowLoader: () => {}, rutHideLoader: () => {}, _rutaUser: () => 'test', RUT_APPS_SCRIPT_URL: 'x',
