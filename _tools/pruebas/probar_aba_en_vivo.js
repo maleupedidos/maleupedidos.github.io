@@ -65,7 +65,9 @@ const FILAS = {
 };
 
 /* ── El Supabase falso ── */
-const S = { foto: { payload: BUSQ1, computed_at: '2026-10-22T12:00:00+00:00' }, rest: [], joins: [], tokens: [], socks: new Set(), rechazar: false };
+/* Las horas, relativas a cuando corre la prueba: una fija se vuelve «vieja» a la tarde (22/10). */
+const haceMin = (m) => new Date(Date.now() - m * 60000).toISOString();
+const S = { foto: { payload: BUSQ1, computed_at: haceMin(10) }, rest: [], joins: [], tokens: [], socks: new Set(), rechazar: false };
 const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'apikey, authorization, content-type, prefer', 'Access-Control-Allow-Methods': 'GET, OPTIONS' };
 const srv = http.createServer((req, res) => {
   if (req.method === 'OPTIONS') { res.writeHead(204, CORS); return res.end(); }
@@ -221,13 +223,13 @@ const cortar = () => S.socks.forEach(s => { try { s.destroy(); } catch (e) {} })
     chk('al cerrarlo se pinta solo', await esperar(cli, `_abaVivo.pintarPend===false && String((${card('Prov Dos')}||{}).textContent||'').indexOf('OC-907')>=0`, 8000));
 
     console.log('\n-- la foto nueva reemplaza la lista --');
-    S.foto = { payload: BUSQ2, computed_at: '2026-10-22T13:05:00+00:00' };
+    S.foto = { payload: BUSQ2, computed_at: haceMin(-1) };
     senal('erp:fotos', { screen: 'busqueda', computed_at: S.foto.computed_at });
     const rem = await esperar(cli, `!document.querySelector('#provList .aba-recien') && String((${card('Prov Uno')}||{}).textContent||'').indexOf('5')>=0`, 5000);
-    chk('con la foto, lo «recién cargado» sale y queda la lista de verdad', rem, await evaluar(cli, `abaRecienCargadas.map(function(r){return r.oc})`));
+    chk('con la foto, lo «recién cargado» sale y queda la lista de verdad', rem, await evaluar(cli, `String((${card('Prov Uno')}||{}).textContent||'').slice(0,300)+' || recien: '+document.querySelectorAll('#provList .aba-recien').length`));
     const viejo = S.rest.length;
-    senal('erp:fotos', { screen: 'busqueda', computed_at: '2026-10-22T13:00:00+00:00' });
-    senal('erp:fotos', { screen: 'pedidos', computed_at: '2026-10-22T14:00:00+00:00' });
+    senal('erp:fotos', { screen: 'busqueda', computed_at: haceMin(30) });
+    senal('erp:fotos', { screen: 'pedidos', computed_at: haceMin(-5) });
     await pausa(800);
     chk('una foto más vieja, o de otra pantalla, no se lee', S.rest.length === viejo, S.rest.slice(viejo));
 
