@@ -574,6 +574,13 @@ html,body{overscroll-behavior:none;-webkit-overflow-scrolling:touch}
 .aba-falt-det{font-size:12px;line-height:1.45;margin-top:3px;color:#5D2A2A}
 .aba-falt-btn{margin-top:7px;min-height:40px;padding:0 14px;border:0;border-radius:10px;background:#331C1C;color:#fff;font-family:inherit;font-size:13px;font-weight:800;cursor:pointer;max-width:100%}
 .aba-falt-nota{margin-top:6px;font-size:11.5px;color:#7A4A4A}
+.aba-recien{margin:10px 0 4px;padding:8px 11px;border-radius:10px;border:1.5px solid #81C784;background:#F1F8F2}
+.aba-recien-tit{display:flex;align-items:center;flex-wrap:wrap;gap:7px;font-size:12px;font-weight:700;color:#2E7D32;margin-bottom:4px}
+.aba-recien-pt{width:8px;height:8px;border-radius:50%;background:#43A047}
+.aba-recien-sub{font-weight:500;color:#558B5A}
+#abaEnVivo{font-size:10px;white-space:nowrap}
+#abaEnVivo.aba-vivo-si{color:#2E7D32}
+#abaEnVivo.aba-vivo-no{color:#B26A00}
 .aba-guardando{margin:10px 0 4px;padding:8px 11px;border-radius:10px;border:1.5px dashed #90A4AE;background:#F4F7F9;opacity:.85}
 .aba-guardando-tit{display:flex;align-items:center;gap:7px;font-size:12px;font-weight:700;color:#546E7A;margin-bottom:4px}
 .aba-guardando-pt{width:8px;height:8px;border-radius:50%;background:#78909C;animation:abaGuardPulso 1.2s ease-in-out infinite}
@@ -621,6 +628,7 @@ body *{touch-action:manipulation}
     <span id="semanaLabel" style="font-size:12px;opacity:.75;font-weight:600;margin-top:2px"></span>
   </div>
   <span id="abaLastSync" style="font-size:10px;opacity:.6"></span>
+  <span id="abaEnVivo"></span>
   <div class="status-dot" id="abaStatusDot"></div>
   <span class="badge" id="abaCounterBadge">--</span>
   <button class="btn-refresh" id="abaBtnRefresh" onclick="abaRefresh()">&#x21bb;</button>
@@ -910,7 +918,9 @@ function _abaGuardandoSacar(id) {
    cuenta para una sola linea, y solo las de N° mayor al que habia al tocar: las de
    9:56 no "confirman" una compra igual de las 10:03. */
 function _abaGuardandoPodar() {
-  var ocs = (busqueda && busqueda.ocs) || [], ahora = Date.now(), usadas = {};
+  /* Con la tab en vivo, lo «recién cargado» tambien confirma (22/10/2026): la OC
+     ya existe en la base aunque la lista todavia no la traiga. */
+  var ocs = _abaOcsConRecien(), ahora = Date.now(), usadas = {};
   var antes = abaComprasGuardando.length;
   abaComprasGuardando = abaComprasGuardando.filter(function (g) {
     if (!(ahora - g.ts < ABA_GUARDANDO_MS)) return false;
@@ -942,6 +952,189 @@ function _abaGuardandoHtml(provName) {
     h += '</div>';
   });
   return h;
+}
+
+/* ── EN VIVO: LA COMPRA QUE CARGO OTRO APARECE AL TOQUE (22/10/2026, rama supabase) ──
+   Paso 2 del plan de pantallas en tiempo real. Con la palanca `ABA_EN_VIVO` en
+   «si» (viaja con el permiso como `sb.pal.abaEnVivo`) esta tab escucha dos
+   canales de la base (migracion 100), con la pieza `_enVivoEscuchar` del panel:
+   · `erp:compras`: cambiaron estas OC. Se releen de `purchase_order_line` (solo
+     las columnas que la pantalla tiene permitidas: el costo no) y las que la
+     lista todavia no trae se pintan en su tarjeta como «Cargada recién».
+   · `erp:fotos`: se rehizo la foto `busqueda`. Se relee (≈0,6 s) y reemplaza
+     la lista entera, con lo que la base no calcula (deudas, costos, semanas).
+   Si la foto no llega en 60 s despues de una señal de compras, se pide la lista
+   a Apps Script, como el ↻.
+
+   Lo «recién cargado» va APARTE de `busqueda.ocs`, por la misma razon que lo
+   que se esta guardando: de `busqueda.ocs` salen la recepcion y la deuda, y una
+   OC sin su fila calculada no se puede recibir. Sale sola cuando la lista la
+   trae, si la cancelan, o a las 3 h.
+
+   Nunca se repinta encima de un panel de «Recibir mercaderia» abierto ni de un
+   campo que alguien esta escribiendo: queda pendiente y se pinta cuando lo
+   cierran. Con la palanca apagada no se ejecuta nada de esto. */
+var ABA_RECIEN_KEY = 'maleu_aba_recien';
+var abaRecienCargadas = (function () {
+  try { var v = JSON.parse(localStorage.getItem(ABA_RECIEN_KEY) || '[]'); return Array.isArray(v) ? v : []; }
+  catch (e) { return []; }
+})();
+var _abaVivo = { prendido: false, cuando: 0, esperaFoto: null, pintarPend: false, tPintar: null, ultAS: 0 };
+var ABA_VIVO_COLS = 'order_no,supplier,product_name,product_abbr,quantity,state,source_type,channel,customer_name,created_at_source';
+
+function _abaRecienGuardar() {
+  try { localStorage.setItem(ABA_RECIEN_KEY, JSON.stringify(abaRecienCargadas)); } catch (e) {}
+}
+/* Sale la que la lista ya trae, y la de hace mas de 3 h. */
+function _abaRecienPodar() {
+  var enLista = {}, ahora = Date.now(), antes = abaRecienCargadas.length;
+  ((busqueda && busqueda.ocs) || []).forEach(function (o) { enLista[o.oc] = 1; });
+  abaRecienCargadas = abaRecienCargadas.filter(function (r) { return !enLista[r.oc] && ahora - r.ts < ABA_GUARDANDO_MS; });
+  if (abaRecienCargadas.length !== antes) _abaRecienGuardar();
+}
+/* Lo que confirma un «Guardando…»: la lista y, ademas, lo recien cargado. */
+function _abaOcsConRecien() {
+  var ocs = ((busqueda && busqueda.ocs) || []).slice();
+  abaRecienCargadas.forEach(function (r) { ocs.push({ oc: r.oc, prov: r.prov, abbr: r.abbr, q: r.q }); });
+  return ocs;
+}
+function _abaRecienHtml(provName) {
+  if (semSel === 'prox') return '';
+  var mias = abaRecienCargadas.filter(function (r) { return r.prov === provName; });
+  if (!mias.length) return '';
+  var nums = mias.map(function (r) { return r.oc; }).sort(function (a, b) { return _abaOcNum(a) - _abaOcNum(b); });
+  var rango = nums.length > 1 ? nums[0] + ' a ' + nums[nums.length - 1] : nums[0];
+  var h = '<div class="aba-recien"><div class="aba-recien-tit"><span class="aba-recien-pt"></span>Cargada recién · ' + _abaH(rango) +
+          '<span class="aba-recien-sub">actualizando la lista…</span></div>';
+  mias.forEach(function (r) {
+    h += '<div class="prov-item"><span class="prov-qty">' + _abaCant(r.q, _abaUni(r.abbr)) + ' &times;</span><span class="prov-var">' +
+         _abaH(r.prod || r.abbr) + '</span><span class="prov-item-cost">—</span></div>';
+  });
+  return h + '</div>';
+}
+
+/* ¿Hay alguien escribiendo en la lista? Repintar ahora le borraria lo que tipeo. */
+function _abaVivoOcupado() {
+  try {
+    if (document.querySelector('#provView .recibir-panel.open')) return true;
+    var a = document.activeElement;
+    var pv = document.getElementById('provView');
+    return !!(a && pv && pv.contains(a) && /^(INPUT|SELECT|TEXTAREA)$/.test(a.tagName));
+  } catch (e) { return false; }
+}
+function _abaVivoPintar() {
+  if (_abaVivoOcupado()) {
+    _abaVivo.pintarPend = true;
+    if (!_abaVivo.tPintar) _abaVivo.tPintar = setTimeout(function () { _abaVivo.tPintar = null; if (_abaVivo.pintarPend) _abaVivoPintar(); }, 5000);
+    return;
+  }
+  _abaVivo.pintarPend = false;
+  try { abaRender(); } catch (e) {}
+}
+
+/* La foto, si es mas nueva que lo que hay en pantalla. Devuelve si la uso. */
+function _abaVivoFotoNueva() {
+  return _abaFotoLeer().then(function (foto) {
+    if (!foto || foto.cuando <= _abaVivo.cuando) return false;
+    _abaAplicarBusqueda(foto.data);
+    _abaVivo.cuando = foto.cuando;
+    abaCargaEstado = 'ok'; abaCargaError = '';
+    _abaSello(foto.cuando);
+    _abaVivoPintar();
+    return true;
+  }, function () { return false; });
+}
+
+/* Si la foto no se rehizo a tiempo: la lista de Apps Script, como el ↻. Una vez
+   por minuto como mucho: el servidor es uno solo para todo el ERP. */
+function _abaVivoEsperarFoto() {
+  if (_abaVivo.esperaFoto) return;
+  var desde = _abaVivo.cuando;
+  _abaVivo.esperaFoto = setTimeout(function () {
+    _abaVivo.esperaFoto = null;
+    if (_abaVivo.cuando > desde || Date.now() - _abaVivo.ultAS < 60000) return;
+    _abaVivo.ultAS = Date.now();
+    try { abaRefresh(true); } catch (e) {}
+  }, 60000);
+}
+
+function _abaVivoLeerOcs(ids) {
+  return _sbPermiso(true).then(function (sb) {
+    if (!sb || !sb.token) return null;
+    var lista = ids.map(function (x) { return '"' + String(x).replace(/["\\]/g, '') + '"'; }).join(',');
+    return fetch(sb.url + '/rest/v1/purchase_order_line?select=' + ABA_VIVO_COLS + '&order_no=in.(' + encodeURIComponent(lista) + ')',
+      { headers: { apikey: sb.key, Authorization: 'Bearer ' + sb.token } })
+      .then(function (r) { return r.ok ? r.json() : null; });
+  }).then(function (filas) {
+    if (!Array.isArray(filas)) return;
+    var enLista = {}, cambio = false;
+    ((busqueda && busqueda.ocs) || []).forEach(function (o) { enLista[o.oc] = o; });
+    filas.forEach(function (f) {
+      var oc = String(f.order_no || '');
+      var i = -1;
+      for (var k = 0; k < abaRecienCargadas.length; k++) if (abaRecienCargadas[k].oc === oc) { i = k; break; }
+      /* Solo lo que hay que ir a buscar: lo del deposito nace recibido, y lo
+         cancelado o ya recibido no se busca. */
+      var buscar = (f.state === 'Pendiente' || f.state === 'Pedido') && String(f.source_type || '').indexOf('Dep') !== 0;
+      if (!buscar || enLista[oc]) { if (i >= 0) { abaRecienCargadas.splice(i, 1); cambio = true; } return; }
+      var r = { oc: oc, prov: String(f.supplier || ''), abbr: String(f.product_abbr || ''), prod: String(f.product_name || ''),
+                q: Number(f.quantity) || 0, est: String(f.state || ''), ts: i >= 0 ? abaRecienCargadas[i].ts : Date.now() };
+      if (i >= 0) abaRecienCargadas[i] = r; else abaRecienCargadas.push(r);
+      cambio = true;
+    });
+    if (!cambio) return;
+    _abaRecienGuardar();
+    _abaGuardandoPodar();
+    _abaVivoPintar();
+  }).catch(function () {});
+}
+
+function _abaVivoCompras(p) {
+  if (!p) return;
+  if (p.tabla === 'oc' && Array.isArray(p.ids) && p.ids.length) _abaVivoLeerOcs(p.ids);
+  _abaVivoEsperarFoto();
+}
+function _abaVivoFoto(p) {
+  if (!p || p.screen !== 'busqueda') return;
+  if (_abaFechaUtc(p.computed_at) <= _abaVivo.cuando) return;
+  _abaVivoFotoNueva();
+}
+/* Al volver de un corte, lo que paso mientras no se escuchaba no llega por
+   señal: se relee la foto, y si no hay una mas nueva, la lista de Apps Script. */
+function _abaVivoVolver() {
+  _abaVivoFotoNueva().then(function (uso) {
+    if (uso || Date.now() - _abaVivo.ultAS < 60000) return;
+    _abaVivo.ultAS = Date.now();
+    try { abaRefresh(true); } catch (e) {}
+  });
+}
+
+/* El cartelito del encabezado: vivo, o desde cuando no. Cortado no es callado. */
+function _abaVivoSello(st) {
+  var el = document.getElementById('abaEnVivo');
+  if (!el) return;
+  if (!_abaVivo.prendido || !st || st.estado === 'apagado') { el.textContent = ''; el.className = ''; return; }
+  if (st.estado === 'vivo') { el.textContent = '● en vivo'; el.className = 'aba-vivo-si'; el.title = 'La lista se actualiza sola cuando alguien carga o cambia una compra'; return; }
+  if (st.estado === 'conectando') { el.textContent = '○ conectando…'; el.className = 'aba-vivo-no'; el.title = ''; return; }
+  var txt = 'sin conexión en vivo';
+  try { if (typeof _hace === 'function' && st.desde) txt += ' · ' + _hace(st.desde); } catch (e) {}
+  el.textContent = txt; el.className = 'aba-vivo-no'; el.title = st.motivo || '';
+}
+
+/* Se prende si la palanca dice «si». Idempotente: se llama al arrancar y cada
+   vez que llega la lista, porque el permiso puede llegar despues del arranque. */
+function _abaVivoPrender() {
+  try {
+    if (_abaVivo.prendido || typeof _enVivoEscuchar !== 'function' || typeof _sbPermiso !== 'function') return;
+    _sbPermiso(true).then(function (sb) {
+      if (_abaVivo.prendido || !sb || !sb.pal || !sb.pal.abaEnVivo) return;
+      _abaVivo.prendido = true;
+      if (typeof _enVivoAlEstado === 'function') _enVivoAlEstado(_abaVivoSello);
+      _enVivoEscuchar('erp:compras', _abaVivoCompras, _abaVivoVolver);
+      _enVivoEscuchar('erp:fotos', _abaVivoFoto, null);
+      try { _abaVivoSello(_enVivoEstado()); } catch (e) {}
+    }, function () {});
+  } catch (e) {}
 }
 var marcadosPedido = {};
 var marcadosRecibido = {};
@@ -1042,6 +1235,8 @@ if (_cacheValid || _IS_EMBED_INIT) {
 } else {
   abaArranque(false);
 }
+/* En vivo (22/10/2026): no hace nada con la palanca apagada. */
+_abaVivoPrender();
 
 // Cargar catalogo para tab Nuevo
 loadCatalogo();
@@ -1131,6 +1326,7 @@ function _abaAviso(estado) {
    despues de comprar): antes cada una lo copiaba a mano. */
 function _abaAplicarBusqueda(data) {
   busqueda = data;
+  _abaRecienPodar();
   _abaGuardandoPodar();
   marcadosPedido = {};
   marcadosRecibido = {};
@@ -1269,6 +1465,8 @@ function abaArranque(silent) {
     abaCargaEstado = 'ok'; abaCargaError = '';
     abaRender();
     _abaSello(foto.cuando);
+    _abaVivo.cuando = foto.cuando;
+    _abaVivoPrender();
     var lv = document.getElementById('abaLoadingView');
     if (lv) lv.classList.add('hidden');
     _abaAviso(null);
@@ -1348,6 +1546,8 @@ function abaRefresh(silent) {
       abaCargaEstado = 'ok'; abaCargaError = '';
       abaRender();
       abaUpdateLastSync();
+      _abaVivo.cuando = Date.now();
+      _abaVivoPrender();
       document.getElementById('abaLoadingView').classList.add('hidden');
       _abaAviso(null);
       abaProcessSyncQueue();
@@ -2030,6 +2230,7 @@ function renderProveedores() {
       });
     });
     html += _abaGuardandoHtml(prov.n);
+    html += _abaRecienHtml(prov.n);
 
     // Botón WhatsApp: copia el texto para mandarle al proveedor.
     var waState = waCopied[_abaWaKey(prov.n)];
@@ -2092,8 +2293,9 @@ function renderProveedores() {
      que se esta guardando se la arma, sin botones (no hay OC que marcar ni recibir). */
   var provsGuardando = [];
   abaComprasGuardando.forEach(function (g) { if (!provsPintados[g.prov] && provsGuardando.indexOf(g.prov) < 0) provsGuardando.push(g.prov); });
+  abaRecienCargadas.forEach(function (r) { if (!provsPintados[r.prov] && provsGuardando.indexOf(r.prov) < 0) provsGuardando.push(r.prov); });
   provsGuardando.forEach(function (pv) {
-    var hG = _abaGuardandoHtml(pv);
+    var hG = _abaGuardandoHtml(pv) + _abaRecienHtml(pv);
     if (!hG) return;
     provsVisibles++;
     html += '<div class="prov-card"><div class="prov-head"><span class="prov-name">' + _abaH(_abaMarca(pv)) + '</span></div>' + hG + '</div>';

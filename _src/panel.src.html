@@ -14067,6 +14067,173 @@ function _fotoPedidos(gen){
    datos— y quedo sin que nadie la llamara. Se fue con sus 15 chequeos, que
    pasaron a medir el camino vivo. */
 
+/* ══ EN VIVO: LA BASE AVISA CUANDO OTRO CAMBIA ALGO (22/10/2026, rama supabase) ══
+
+   Plan aprobado por Tadeo el 21/10/2026 (bitacora: «PLAN APROBADO: pantallas en
+   tiempo real»). Hasta aca cada pantalla se enteraba de los cambios cuando la
+   planilla terminaba de escribir o cuando se rehacia una foto: el 21/10 Lucas
+   cargo dos veces la misma compra porque la lista no le mostraba la primera.
+
+   Esto es UNA conexion a Realtime de Supabase, compartida por todas las
+   pantallas, y cada una escucha su canal: `_enVivoEscuchar('erp:compras', alCambio,
+   alVolver)`. Lo que llega es una SEÑAL («cambiaron estas OC»), nunca la fila: la
+   pantalla relee por REST con su token, que respeta los permisos por columna
+   (ver la migracion 100). Los canales son privados: solo entra un admin.
+
+   Sin libreria: el protocolo es el de Phoenix (lo que usa supabase-js por
+   adentro) y son cuatro mensajes. Probado contra el proyecto real el 22/10:
+   join, broadcast (90 ms de una conexion a otra), latido, y el canal privado
+   rechazado antes de la 100.
+
+   Las reglas que lo hacen seguro:
+   · Una pantalla NUNCA depende de esto. Si no hay permiso, si la palanca de la
+     pantalla esta apagada o si la conexion se corta, todo sigue como antes.
+   · Cortado no es callado: `_enVivoEstado()` dice si esta vivo y desde cuando,
+     y la pantalla lo muestra.
+   · Al volver de un corte (o del segundo plano: iOS mata la conexion) se llama
+     a `alVolver`, para que la pantalla relea todo: lo que paso mientras no
+     escuchaba no llega por señal.
+   · Con la pantalla oculta no se reconecta (bateria): se reconecta al volver. */
+var _ENV = { ws: null, estado: 'apagado', desde: 0, motivo: '', canales: {}, ref: 0,
+             esperas: {}, latido: null, intento: 0, tReconectar: null, token: '', oyentes: [] };
+var _ENV_ESPERAS_MS = [1000, 2000, 5000, 10000, 30000];
+var _ENV_LATIDO_MS = 25000;
+
+function _enVivoEstado() { return { estado: _ENV.estado, desde: _ENV.desde, motivo: _ENV.motivo }; }
+function _enVivoAlEstado(fn) { if (typeof fn === 'function' && _ENV.oyentes.indexOf(fn) < 0) _ENV.oyentes.push(fn); }
+function _enVivoPoner(estado, motivo) {
+  if (_ENV.estado === estado && _ENV.motivo === (motivo || '')) return;
+  _ENV.estado = estado; _ENV.motivo = motivo || ''; _ENV.desde = Date.now();
+  try { window.__enVivo = { estado: estado, desde: _ENV.desde, motivo: _ENV.motivo, canales: Object.keys(_ENV.canales) }; } catch (e) {}
+  _ENV.oyentes.forEach(function (fn) { try { fn(_enVivoEstado()); } catch (e) {} });
+}
+
+/* `alCambio(payload)` con cada señal del canal; `alVolver()` cada vez que el canal
+   vuelve a quedar escuchando despues de haberlo estado (no la primera). Llamarla
+   dos veces con el mismo canal reemplaza las funciones: es idempotente. */
+function _enVivoEscuchar(canal, alCambio, alVolver) {
+  try {
+    var c = _ENV.canales[canal];
+    if (c) { c.alCambio = alCambio; c.alVolver = alVolver; return; }
+    _ENV.canales[canal] = { alCambio: alCambio, alVolver: alVolver, unido: false, alguna: false };
+    if (_ENV.ws && _ENV.ws.readyState === 1) _enVivoUnir(canal);
+    else _enVivoConectar();
+  } catch (e) { _enVivoPoner('cortado', 'error: ' + ((e && e.message) || e)); }
+}
+
+function _enVivoMandar(topic, event, payload, alResponder) {
+  var ws = _ENV.ws;
+  if (!ws || ws.readyState !== 1) return false;
+  var r = String(++_ENV.ref);
+  if (alResponder) _ENV.esperas[r] = alResponder;
+  try { ws.send(JSON.stringify({ topic: topic, event: event, payload: payload, ref: r, join_ref: r })); return true; }
+  catch (e) { delete _ENV.esperas[r]; return false; }
+}
+
+function _enVivoUnir(canal) {
+  var c = _ENV.canales[canal];
+  if (!c || !_ENV.token) return;
+  _enVivoMandar('realtime:' + canal, 'phx_join', {
+    config: { broadcast: { ack: false, self: false }, presence: { key: '' }, postgres_changes: [], private: true },
+    access_token: _ENV.token
+  }, function (m) {
+    var p = m && m.payload;
+    if (p && p.status === 'ok') {
+      var volvio = c.alguna;
+      c.unido = true; c.alguna = true; _ENV.intento = 0;
+      _enVivoPoner('vivo', '');
+      if (volvio && typeof c.alVolver === 'function') { try { c.alVolver(); } catch (e) {} }
+    } else {
+      /* Rechazado: sin la 100 aplicada, o un token que ya no es admin. No se
+         reintenta en loop: un rechazo no se arregla insistiendo. */
+      c.unido = false;
+      _enVivoPoner('rechazado', String((p && p.response && p.response.reason) || 'el servidor no dejo escuchar ' + canal));
+    }
+  });
+}
+
+function _enVivoConectar() {
+  if (_ENV.ws && (_ENV.ws.readyState === 0 || _ENV.ws.readyState === 1)) return;
+  if (_ENV.tReconectar) { clearTimeout(_ENV.tReconectar); _ENV.tReconectar = null; }
+  if (!Object.keys(_ENV.canales).length) return;
+  if (typeof WebSocket === 'undefined' || typeof _sbPermiso !== 'function') { _enVivoPoner('apagado', 'este navegador no puede'); return; }
+  if (document.visibilityState === 'hidden') { _enVivoPoner('cortado', 'en segundo plano'); return; }
+  _enVivoPoner('conectando', '');
+  _sbPermiso(true).then(function (sb) {
+    if (!sb || !sb.url || !sb.key || !sb.token) { _enVivoPoner('apagado', 'sin permiso de la base'); _enVivoReconectar(); return; }
+    _ENV.token = sb.token;
+    var url = String(sb.url).replace(/^http/, 'ws') + '/realtime/v1/websocket?apikey=' + encodeURIComponent(sb.key) + '&vsn=1.0.0';
+    var ws;
+    try { ws = new WebSocket(url); } catch (e) { _enVivoPoner('cortado', 'no se pudo abrir'); _enVivoReconectar(); return; }
+    _ENV.ws = ws;
+    ws.onopen = function () {
+      Object.keys(_ENV.canales).forEach(function (k) { _ENV.canales[k].unido = false; _enVivoUnir(k); });
+      _enVivoLatir();
+    };
+    ws.onmessage = function (ev) {
+      var m; try { m = JSON.parse(ev.data); } catch (e) { return; }
+      if (m.event === 'phx_reply' && _ENV.esperas[m.ref]) { var f = _ENV.esperas[m.ref]; delete _ENV.esperas[m.ref]; try { f(m); } catch (e) {} return; }
+      var canal = String(m.topic || '').replace(/^realtime:/, '');
+      var c = _ENV.canales[canal];
+      if (!c) return;
+      if (m.event === 'broadcast') {
+        var dato = m.payload && m.payload.payload;
+        if (dato && typeof c.alCambio === 'function') { try { c.alCambio(dato); } catch (e) {} }
+      } else if (m.event === 'phx_error' || m.event === 'phx_close') {
+        /* El servidor solto el canal (p. ej. vencio el token): se vuelve a unir. */
+        c.unido = false;
+        setTimeout(function () { if (_ENV.canales[canal] && !_ENV.canales[canal].unido) _enVivoUnir(canal); }, 2000);
+      }
+    };
+    ws.onclose = function () {
+      if (_ENV.ws !== ws) return;
+      _ENV.ws = null; _ENV.esperas = {};
+      if (_ENV.latido) { clearInterval(_ENV.latido); _ENV.latido = null; }
+      Object.keys(_ENV.canales).forEach(function (k) { _ENV.canales[k].unido = false; });
+      if (_ENV.estado !== 'rechazado') _enVivoPoner('cortado', 'se corto la conexion');
+      _enVivoReconectar();
+    };
+    ws.onerror = function () { try { ws.close(); } catch (e) {} };
+  }, function () { _enVivoPoner('apagado', 'sin permiso de la base'); _enVivoReconectar(); });
+}
+
+function _enVivoReconectar() {
+  if (_ENV.tReconectar || _ENV.estado === 'rechazado') return;
+  if (document.visibilityState === 'hidden') return;   // se reconecta al volver (abajo)
+  var ms = _ENV_ESPERAS_MS[Math.min(_ENV.intento, _ENV_ESPERAS_MS.length - 1)];
+  _ENV.intento++;
+  _ENV.tReconectar = setTimeout(function () { _ENV.tReconectar = null; _enVivoConectar(); }, ms);
+}
+
+/* El latido mantiene viva la conexion y, de paso, pasa el token nuevo cuando el
+   panel lo renovo: sin eso el canal se cae al vencer el viejo. Un latido que no
+   vuelve en 10 s es una conexion muerta aunque el navegador no lo sepa. */
+function _enVivoLatir() {
+  if (_ENV.latido) clearInterval(_ENV.latido);
+  _ENV.latido = setInterval(function () {
+    var ws = _ENV.ws;
+    if (!ws || ws.readyState !== 1) return;
+    var volvio = false;
+    _enVivoMandar('phoenix', 'heartbeat', {}, function () { volvio = true; });
+    setTimeout(function () { if (!volvio && _ENV.ws === ws) { try { ws.close(); } catch (e) {} } }, 10000);
+    _sbPermiso(true).then(function (sb) {
+      if (!sb || !sb.token || sb.token === _ENV.token) return;
+      _ENV.token = sb.token;
+      Object.keys(_ENV.canales).forEach(function (k) {
+        if (_ENV.canales[k].unido) _enVivoMandar('realtime:' + k, 'access_token', { access_token: sb.token });
+      });
+    }, function () {});
+  }, _ENV_LATIDO_MS);
+}
+
+/* iOS corta la conexion con la app en segundo plano y no siempre avisa. Al
+   volver: si no esta abierta, se abre ya (sin esperar el turno de reintento). */
+document.addEventListener('visibilitychange', function () {
+  if (document.visibilityState !== 'visible' || !Object.keys(_ENV.canales).length) return;
+  if (_ENV.estado === 'rechazado') return;
+  if (!_ENV.ws || _ENV.ws.readyState > 1) { _ENV.intento = 0; _enVivoConectar(); }
+});
+
 /* ══ LA TAB PEDIDOS DESDE SUPABASE, CON PALANCA (6/10/2026, rama supabase) ══
 
    Con `Config_Maleu > PEDIDOS_DESDE_PG = si` (viaja con el permiso de
