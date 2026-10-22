@@ -139,6 +139,7 @@ const cortar = () => S.socks.forEach(s => { try { s.destroy(); } catch (e) {} })
       var cuerpo = a==='sbToken' ? {sb:{token:'tok-1',url:${JSON.stringify(SB)},key:'pub-prueba',seg:43200}, palancas:{abaEnVivo:${APAGADA ? 'false' : 'true'}}}
         : a==='busqueda' ? window.__busq || ${JSON.stringify(BUSQ1)}
         : a==='catalogo' ? {ts:1,proveedores:['Prov Uno'],deps:[],productos:{'Prov Uno':[]}} : a==='vendedores' ? {ts:1,vendedores:[]}
+        : a==='miSesion' ? {ok:true,usuario:'tadeo',rol:'admin',nombre:'Tadeo Ustariz',activo:true,tabs:null,authModo:'estricto',rolesModo:'estricto',palancas:window.__palMiSesion||{abaEnVivo:${APAGADA ? 'false' : 'true'}}}
         : a==='faltantes' ? {ok:true,faltan:[]} : a==='pedidosLight' ? {ts:1,pedidos:[],canales:[],light:true} : {ok:false,error:'stub'};
       var t=JSON.stringify(cuerpo);
       return new Promise(function(res){ setTimeout(function(){ res(new Response(t,{status:200,headers:{'Content-Type':'application/json'}})); }, 60); });
@@ -168,6 +169,16 @@ const cortar = () => S.socks.forEach(s => { try { s.destroy(); } catch (e) {} })
       senal('erp:compras', { tabla: 'oc', op: 'insert', n: 1, ids: ['OC-902'] });
       await pausa(1500);
       chk('una señal (si llegara) no cambia nada', (await recienDe('Prov Uno')) === null);
+      /* 22/10/2026: la palanca se prende DESPUÉS de que el permiso quedó guardado.
+         miSesion la trae y la pantalla se conecta sola, sin pedir permiso nuevo. */
+      const gTok = (await evaluar(cli, `window.__gets.slice()`)).filter(x => x === 'sbToken').length;
+      await evaluar(cli, `window.__palMiSesion = { abaEnVivo: true }; _refrescarMiSesion(true); 1`);
+      chk('una palanca prendida después llega por miSesion y la tab se conecta sola',
+        await esperar(cli, `window.__enVivo && window.__enVivo.estado==='vivo'`, 10000) && S.joins.length === 2,
+        { joins: S.joins.length, st: await evaluar(cli, `window.__enVivo||null`),
+          pagina: await evaluar(cli, `JSON.stringify({ f: typeof _palancasFrescas, r: typeof _refrescarMiSesion, perm: typeof _sbPerm !== 'undefined' && !!(_sbPerm && _sbPerm.token), pal: typeof _sbPerm !== 'undefined' && _sbPerm && _sbPerm.pal, gets: window.__gets.slice(-6), ses: typeof SESSION !== 'undefined' && !!SESSION })`) });
+      chk('   sin pedir un permiso nuevo', (await evaluar(cli, `window.__gets.slice()`)).filter(x => x === 'sbToken').length === gTok);
+      chk('   y queda guardada en la copia del permiso', await evaluar(cli, `(function(){ try { return JSON.parse(localStorage.getItem('mc_sbtok')).sb.pal.abaEnVivo === true; } catch (e) { return false; } })()`));
       const errs = await evaluar(cli, `window.__err.slice()`);
       chk('sin errores en la consola', errs.length === 0, errs);
       console.log('\n' + ok + ' ok · ' + mal + ' MAL'); salir(mal ? 1 : 0); return;
@@ -191,7 +202,7 @@ const cortar = () => S.socks.forEach(s => { try { s.destroy(); } catch (e) {} })
     chk('dice el N° de OC', String(await recienDe('Prov Uno')).indexOf('OC-902') >= 0, await recienDe('Prov Uno'));
     chk('el proveedor sin tarjeta tiene la suya', String(await recienDe('Prov Dos')).indexOf('OC-903') >= 0, await recienDe('Prov Dos'));
     const gets = await evaluar(cli, `window.__gets.filter(function(a){return a==='busqueda'})`);
-    chk('sin pedirle la lista a Apps Script', gets.length === 0, gets);
+    chk('sin pedirle la lista a Apps Script', gets.length === 0, await evaluar(cli, 'window.__gets.slice()'));
     const lect = S.rest.filter(r => r.path === '/rest/v1/purchase_order_line');
     chk('la lectura va con el token de la pantalla', lect.length >= 1 && lect.every(r => r.auth === 'Bearer tok-1'), lect);
     chk('y no pide el costo', lect.length >= 1 && lect.every(r => !/cost|revenue|margin|customer_key/.test(r.q)), lect.map(r => r.q));
