@@ -33,6 +33,7 @@ const prep = require('./sesion_prep.js');
 const ANCHO = parseInt(process.argv[2], 10) || 390;
 const BASE = process.env.BASE || 'http://localhost:8080';
 const APAGADA = process.env.APAGADA === '1';
+const PERMISO_TARDE = process.env.PERMISO_TARDE === '1';
 const CEL = ANCHO <= 560;
 let ok = 0, mal = 0;
 function chk(nom, cond, det) {
@@ -165,11 +166,31 @@ const cortar = () => S.socks.forEach(s => { try { s.destroy(); } catch (e) {} })
   try {
     await cli.enviar('Page.enable'); await cli.enviar('Runtime.enable');
     await cli.enviar('Emulation.setDeviceMetricsOverride', { width: ANCHO, height: CEL ? 844 : 900, deviceScaleFactor: 1, mobile: CEL });
-    await cli.enviar('Page.addScriptToEvaluateOnNewDocument', { source: prep('x') + EXTRA });
+    /* Con PERMISO_TARDE, «la copia de pedidos está fresca» (como en la compu de
+       Tadeo, que la usa todo el día): el panel no pide el permiso YA, espera 12 s. */
+    const FRESCA = PERMISO_TARDE ? `Object.defineProperty(window,'_SB_COPIA_VIEJA_MS',{get:function(){return 1e15},set:function(){},configurable:false});` : '';
+    await cli.enviar('Page.addScriptToEvaluateOnNewDocument', { source: prep('x') + EXTRA + FRESCA });
     console.log('\n== Abastecimiento en vivo · ' + ANCHO + 'px' + (APAGADA ? ' · PALANCA APAGADA' : '') + ' ==');
     await cli.enviar('Page.navigate', { url: BASE + '/' + (process.env.APP || 'app.html') + '?prueba=1' });
     if (!await esperar(cli, `typeof go==='function' && window.__fase==='a'`, 60000)) { console.log('  el ERP no arranco'); salir(1); }
     /* El permiso: el panel lo pide por atrás a los segundos; acá se pide ya. */
+    /* PERMISO_TARDE=1 (23/10/2026): el caso de Tadeo a las 10:40, con mc_sbtok
+       borrado. Sin pedir el permiso acá, lo pide el panel por atrás a los 12 s
+       (`_sbPermisoTibio`), DESPUÉS de que Abastecimiento ya preguntó «¿lo tengo?»
+       y le dijeron que no. Pedirlo acá era lo que escondía el bug. */
+    if (PERMISO_TARDE) {
+      await evaluar(cli, `go('busqueda'); 1`);
+      const enA = `getComputedStyle(document.getElementById('p-busqueda')).display!=='none'`;
+      await pausa(2500);
+      if (!await evaluar(cli, enA)) { await evaluar(cli, `go('busqueda'); 1`); await esperar(cli, enA, 10000); }
+      chk('permiso tarde: Abastecimiento arranca sin permiso', await esperar(cli, `!!window.__abaFoto && window.__abaFoto.estado==='sin permiso'`, 20000), await evaluar(cli, `window.__abaFoto||null`));
+      chk('   y cuando el panel lo trae (12 s), se prende el «en vivo» SOLO (≤ 45 s), sin tocar ↻',
+        await esperar(cli, `window.__enVivo && window.__enVivo.estado==='vivo'`, 45000), { st: await evaluar(cli, `window.__enVivo||null`), gets: await evaluar(cli, `window.__gets.slice(-8)`) });
+      { const v = await evaluar(cli, `(window.scrollTo(0,0), ${VISTO})`); chk('   y se VE', v.visto === true, v); }
+      const errs = await evaluar(cli, `window.__err.slice()`);
+      chk('sin errores en la consola', errs.length === 0, errs);
+      console.log('\n' + ok + ' ok · ' + mal + ' MAL'); salir(mal ? 1 : 0); return;
+    }
     await evaluar(cli, `_sbPermiso().then(function(){return 1})`);
     await evaluar(cli, `go('busqueda'); 1`);
     if (!await esperar(cli, `!!document.querySelector('#provList .prov-card')`, 25000)) { console.log('  BUSQUEDA no pinto'); salir(1); }
