@@ -40,6 +40,21 @@ function chk(nom, cond, det) {
   else { mal++; console.log('  MAL  ' + nom + (det !== undefined ? '\n         ' + JSON.stringify(det).slice(0, 500) : '')); }
 }
 const pausa = ms => new Promise(r => setTimeout(r, ms));
+/* ¿Se VE el cartel? (23/10/2026) Mirar el texto no alcanza: hasta ese día el
+   cartel decía «● en vivo» adentro de la .topbar, que el ERP fusionado esconde
+   (body.embed .topbar), y la prueba daba verde con nadie viéndolo. Esto mide
+   caja, ancestros visibles, que entre en la pantalla y que nada lo tape. */
+const VISTO = `(function(){
+  var el=document.getElementById('abaEnVivo'); if(!el) return {visto:false,por:'no existe'};
+  var r=el.getBoundingClientRect();
+  var vis=el.checkVisibility ? el.checkVisibility({checkOpacity:true,checkVisibilityCSS:true}) : !!el.offsetParent;
+  var cx=r.left+r.width/2, cy=r.top+r.height/2, tope=document.elementFromPoint(cx,cy);
+  var arriba=!!tope && (tope===el || el.contains(tope));
+  var dentro=r.width>0 && r.height>0 && r.left>=0 && r.right<=innerWidth && r.top>=0 && r.bottom<=innerHeight;
+  var oculto=null; for(var p=el;p&&p.nodeType===1;p=p.parentElement){ if(getComputedStyle(p).display==='none'){ oculto=(p.id||p.tagName)+(p.className?'.'+String(p.className).replace(/ +/g,'.'):''); break; } }
+  var pag=[].filter.call(document.querySelectorAll('[id^="p-"]'),function(x){return getComputedStyle(x).display!=='none'}).map(function(x){return x.id});
+  return {visto: vis && dentro && arriba, oculto:oculto, paginas:pag, fila:(document.getElementById('abaVivoFila')||{}).hidden, vis:vis, dentro:dentro, arriba:arriba, rect:[Math.round(r.left),Math.round(r.top),Math.round(r.width),Math.round(r.height)], tapa: tope && (tope.id||tope.className), ancho:innerWidth, scrollX:document.documentElement.scrollWidth>innerWidth};
+})()`;
 const esperar = async (cli, expr, ms = 30000) => {
   const t0 = Date.now();
   while (Date.now() - t0 < ms) { try { if (await evaluar(cli, expr)) return true; } catch (e) {} await pausa(150); }
@@ -158,6 +173,13 @@ const cortar = () => S.socks.forEach(s => { try { s.destroy(); } catch (e) {} })
     await evaluar(cli, `_sbPermiso().then(function(){return 1})`);
     await evaluar(cli, `go('busqueda'); 1`);
     if (!await esperar(cli, `!!document.querySelector('#provList .prov-card')`, 25000)) { console.log('  BUSQUEDA no pinto'); salir(1); }
+    /* 23/10/2026: 1 de cada ~5 corridas el arranque del panel terminaba DESPUÉS
+       del go('busqueda') y volvía a Inicio solo: el cartel daba 0×0 por estar en
+       una página escondida, no por estar mal puesto. Se espera a que el arranque
+       se quede quieto y, si se fue, se reentra. */
+    const enAbast = `getComputedStyle(document.getElementById('p-busqueda')).display!=='none'`;
+    await pausa(2500);
+    if (!await evaluar(cli, enAbast)) { console.log('  (el arranque volvió a Inicio solo: se reentra a Abastecimiento)'); await evaluar(cli, `go('busqueda'); 1`); await esperar(cli, enAbast, 10000); await evaluar(cli, `window.__gets=[]; 1`); }
     const card = (n) => `[].filter.call(document.querySelectorAll('#provList .prov-card'),function(x){var e=x.querySelector('.prov-name');return e&&e.textContent.indexOf(${JSON.stringify(n)})>=0})[0]`;
     const recienDe = (n) => evaluar(cli, `(function(){var c=${card(n)}; var r=c&&c.querySelector('.aba-recien'); return r?r.textContent:null})()`);
 
@@ -165,6 +187,7 @@ const cortar = () => S.socks.forEach(s => { try { s.destroy(); } catch (e) {} })
       await pausa(3000);
       chk('con la palanca apagada no abre ninguna conexión', S.joins.length === 0 && S.socks.size === 0, { joins: S.joins.length, socks: S.socks.size });
       chk('y el encabezado no dice nada de «en vivo»', (await evaluar(cli, `(document.getElementById('abaEnVivo')||{}).textContent||''`)) === '');
+      chk('   y su fila no ocupa lugar', await evaluar(cli, `(function(){var f=document.getElementById('abaVivoFila'); return !!f && f.hidden && f.getBoundingClientRect().height===0})()`));
       const g0 = (await evaluar(cli, `window.__gets.slice()`)).length;
       senal('erp:compras', { tabla: 'oc', op: 'insert', n: 1, ids: ['OC-902'] });
       await pausa(1500);
@@ -178,6 +201,7 @@ const cortar = () => S.socks.forEach(s => { try { s.destroy(); } catch (e) {} })
         { joins: S.joins.length, st: await evaluar(cli, `window.__enVivo||null`),
           pagina: await evaluar(cli, `JSON.stringify({ f: typeof _palancasFrescas, r: typeof _refrescarMiSesion, perm: typeof _sbPerm !== 'undefined' && !!(_sbPerm && _sbPerm.token), pal: typeof _sbPerm !== 'undefined' && _sbPerm && _sbPerm.pal, gets: window.__gets.slice(-6), ses: typeof SESSION !== 'undefined' && !!SESSION })`) });
       chk('   sin pedir un permiso nuevo', (await evaluar(cli, `window.__gets.slice()`)).filter(x => x === 'sbToken').length === gTok);
+      { const v = await evaluar(cli, VISTO); chk('   y el «● en vivo» se VE (caja, sin tapar, en pantalla)', v.visto === true && !v.scrollX, v); }
       chk('   y queda guardada en la copia del permiso', await evaluar(cli, `(function(){ try { return JSON.parse(localStorage.getItem('mc_sbtok')).sb.pal.abaEnVivo === true; } catch (e) { return false; } })()`));
       const errs = await evaluar(cli, `window.__err.slice()`);
       chk('sin errores en la consola', errs.length === 0, errs);
@@ -190,6 +214,7 @@ const cortar = () => S.socks.forEach(s => { try { s.destroy(); } catch (e) {} })
     chk('entra a erp:compras y erp:fotos', JSON.stringify(topics) === '["realtime:erp:compras","realtime:erp:fotos"]', topics);
     chk('los dos canales son privados y con el token', S.joins.every(j => j.privado && j.token === 'tok-1'), S.joins);
     chk('el encabezado dice «en vivo»', (await evaluar(cli, `(document.getElementById('abaEnVivo')||{}).textContent||''`)).indexOf('en vivo') >= 0);
+    { const v = await evaluar(cli, VISTO); chk('   y se VE (caja, sin tapar, en pantalla, sin scroll lateral)', v.visto === true && !v.scrollX, v); }
 
     console.log('\n-- una compra que cargó otro --');
     await evaluar(cli, `window.__gets=[]; 1`);
@@ -249,6 +274,7 @@ const cortar = () => S.socks.forEach(s => { try { s.destroy(); } catch (e) {} })
     cortar();
     chk('cortado dice «sin conexión en vivo»', await esperar(cli, `String((document.getElementById('abaEnVivo')||{}).textContent||'').indexOf('sin conexión en vivo')>=0`, 3000),
       await evaluar(cli, `(document.getElementById('abaEnVivo')||{}).textContent`));
+    { const v = await evaluar(cli, `(window.scrollTo(0,0), ${VISTO})`); chk('   y el cortado también se VE', v.visto === true, v); }
     chk('se reconecta solo', await esperar(cli, `window.__enVivo && window.__enVivo.estado==='vivo'`, 8000) && S.joins.length === 2, S.joins);
     chk('y al volver relee la foto', await (async () => { const t = Date.now(); while (Date.now() - t < 4000) { if (S.rest.some(r => r.path === '/rest/v1/erp_screen_snapshot')) return true; await pausa(150); } return false; })(), S.rest);
 
