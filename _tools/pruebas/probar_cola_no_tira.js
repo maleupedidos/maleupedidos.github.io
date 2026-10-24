@@ -10,8 +10,10 @@
  *     syncRechazado, y el banner se pone rojo;
  *   · tocar el banner muestra qué fue, de quién y por qué, con Reintentar y
  *     Descartar; Reintentar la vuelve a mandar; Descartar pide confirmación;
- *   · al abrir la app, lo que quedó en la cola más de 30 min no se reenvía solo
- *     (la purga de la v58) pero tampoco se tira: va a la misma lista.
+ *   · al abrir la app, un COBRO que quedó en la cola más de 30 min no se reenvía
+ *     solo (la purga de la v58) pero tampoco se tira: va a la misma lista;
+ *   · entregar (sin cobro) y armar SÍ salen, hasta 7 días, y lo que ya había
+ *     caído a la lista por viejo vuelve a la cola (24/10/2026, Santos #2047).
  * Todo el backend va stubbeado. No toca produccion ni necesita token.
  */
 'use strict';
@@ -134,22 +136,33 @@ const EXTRA = `
     await evaluar(cli, `cerrarConfirm(); 1`);
 
     console.log('\n-- al abrir la app, lo viejo de la cola --');
-    await evaluar(cli, `sessionStorage.setItem('noLimpiar','1');
+    await evaluar(cli, `sessionStorage.setItem('noLimpiar','1'); window.__resp.marcarEntregado={ok:true};
       var d=JSON.parse(localStorage.getItem('maleu_ruta')||'{}');
-      d.syncQueue=[{action:'marcarArmado',pedidos:[{h:'Home',id:'903',r:7,c:'Cliente 903'}],armado:true,usuario:'Tadeo',ts:${VIEJA}}];
-      d.rutSyncRechazados=[]; localStorage.setItem('maleu_ruta',JSON.stringify(d)); 1`);
+      d.syncQueue=[
+        {action:'marcarArmado',pedidos:[{h:'Home',id:'903',r:7,c:'Cliente 903'}],armado:true,usuario:'Tadeo',ts:${VIEJA}},
+        {action:'marcarEntregado',hoja:'Home',id:'903',row:7,cobrado:false,repartidor:'Tadeo',ts:${VIEJA}+1},
+        {action:'marcarCobrado',hoja:'Home',id:'904',row:8,formaPago:'Efectivo',ef:1000,ts:${VIEJA}+2}];
+      /* El caso de Santos (24/10/2026): ya habia caido a la lista por viejo. */
+      d.rutSyncRechazados=[{item:{action:'marcarEntregado',hoja:'Home',id:'905',row:9,cobrado:false,repartidor:'Santos',ts:${VIEJA}-3},motivo:'Quedó más de 30 min',por:'vieja',t:${VIEJA}}];
+      localStorage.setItem('maleu_ruta',JSON.stringify(d)); 1`);
     await cli.enviar('Page.navigate', { url: BASE + '/' + APP + '?prueba=1' });
     await pausa(1500);
     if (!await esperar(cli, `typeof go==='function'`, 60000)) { chk('el ERP rearranco', false); salir(1); }
     if (!await entrarRuta()) { chk('Ruta rearranco', false); salir(1); }
-    await pausa(3500);
+    await esperar(cli, `window.__posts.filter(function(p){return p.action==='marcarEntregado'}).length>=2`, 15000);
+    await pausa(2500);
     l = await lista();
-    chk('no se tira: va a «No se pudo guardar» como vieja', l.length === 1 && l[0].a === 'marcarArmado' && l[0].por === 'vieja', l);
-    chk('no se reenvía sola', (await posts('marcarArmado')).length === 0 && (await cola()) === 0);
+    chk('el COBRO viejo no se reenvía: va a «No se pudo guardar»', l.length === 1 && l[0].a === 'marcarCobrado' && l[0].por === 'vieja', l);
+    chk('el cobro no salió', (await posts('marcarCobrado')).length === 0);
+    chk('el ARMADO viejo sí sale (es idempotente)', (await posts('marcarArmado')).length === 1);
+    const ents = (await posts('marcarEntregado')).map(p => p.id).sort();
+    chk('la ENTREGA vieja sale, y la que ya había caído a la lista también vuelve', JSON.stringify(ents) === '["903","905"]', ents);
+    await esperar(cli, `(window.syncQueue||[]).length===0`, 8000);
+    chk('la cola queda vacía', (await cola()) === 0);
     const sr2 = await posts('syncRechazado');
-    chk('y queda en Log Errores', sr2.length === 1 && sr2[0].por === 'vieja', sr2);
+    chk('a Log Errores va solo el cobro', sr2.length === 1 && sr2[0].por === 'vieja' && sr2[0].item.action === 'marcarCobrado', sr2);
     b = await banner();
-    chk('con el banner rojo', /sync-rechazo/.test(b.cls), b);
+    chk('con el banner rojo por el cobro', /sync-rechazo/.test(b.cls), b);
     await evaluar(cli, `sessionStorage.removeItem('noLimpiar'); 1`);
 
     chk('sin errores de JS', !errores.length, errores.slice(0, 3));
