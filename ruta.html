@@ -442,6 +442,11 @@ button.rtc-stop:active{background:var(--beige)}
 .rtc-bar{display:flex;gap:8px}
 .rtc-cta{flex:1;min-width:0;min-height:60px;border:none;border-radius:14px;font-family:inherit;color:#fff;cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;padding:6px 10px;-webkit-tap-highlight-color:transparent;transition:transform .1s}
 .rtc-cta:active{transform:scale(.97)}
+.rtc-lleg-btn{width:100%;min-height:46px;margin:2px 0 10px;border:1.5px solid var(--orange);background:#fff;color:var(--orange);border-radius:12px;font-family:inherit;font-size:15px;font-weight:800;cursor:pointer}
+.rtc-lleg{margin:2px 0 10px;padding:9px 11px;border-radius:10px;font-size:13px;font-weight:700;line-height:1.35}
+.rtc-lleg.ok{background:#E8F5E9;color:#1B5E20}
+.rtc-lleg.nada{background:#FFF3E0;color:#E65100}
+.rtc-lleg.enviando{background:#F5F0E1;color:#5D4037}
 .rtc-cta small{font-size:11.5px;font-weight:800;opacity:.92;text-transform:uppercase;letter-spacing:.06em;line-height:1.2}
 .rtc-cta b{font-size:20px;font-weight:900;line-height:1.15;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
 .rtc-cta.entregar,.rtc-cta.red,.rtc-cta.dep{flex-direction:row;gap:8px}
@@ -5447,6 +5452,7 @@ function rutRenderRuta(){
   var _hr=e._combo?(e._pedidos[0].hr||''):(e.hr||'');
   var _f=e._combo?(e._pedidos[0].f||''):(e.f||'');
   h+='<section class="rtc-sec rtc-contacto"><div class="rtc-sec-h"><span class="rtc-sec-t">Contacto</span></div>';
+  if(e.h==='Home'||e.h==='Pilar')h+=_rutLlegHTML(key,kArg);
   if(tel){
     var th=_rtcTelHref(tel);
     h+='<div class="rtc-tel"><span class="rtc-tel-n">'+_rtcEsc(tel)+'</span>'
@@ -5478,6 +5484,52 @@ function rutRenderRuta(){
   // (lazy con cache 5min, comparte cache con ARMADO y con el modal de cobro).
   _populateRutaSaldoPrevio();
 }
+
+/* 🛵 LLEGANDO (24/10/2026). Tadeo: «la opción de "llegando" para mandarle al
+   cliente cuando esté llegando con el pedido a su casa». NO abre WhatsApp (un
+   link wa.me 1-a-1 puede congelar la cuenta) ni usa WATI: el backend
+   (`segLlegando`) pone «Está llegando» en la página de seguimiento del cliente
+   y, si dejó mail, le manda uno. Si el pedido no tiene seguimiento (cargado a
+   mano) no le llega nada, y el botón lo dice en vez de hacer como que avisó.
+   Lo avisado se recuerda en este celular por el día. */
+var _rutLleg={};
+try{_rutLleg=JSON.parse(localStorage.getItem('maleu_ruta_lleg')||'{}')||{};}catch(e){_rutLleg={};}
+function _rutLlegHoy(){return new Date().toLocaleDateString('sv-SE',{timeZone:'America/Argentina/Buenos_Aires'});}
+function _rutLlegDe(k){var x=_rutLleg[k];return x&&x.d===_rutLlegHoy()?x:null;}
+function _rutLlegHTML(key,kArg){
+  var x=_rutLlegDe(key);
+  if(x&&x.enviando)return '<div class="rtc-lleg enviando">⏳ Avisando que estás llegando…</div>';
+  if(x&&x.res){
+    var t=x.res==='mail'?'✓ Avisado a las '+x.hora+': lo ve en su seguimiento y le llegó un mail'
+         :x.res==='pagina'?'✓ Avisado a las '+x.hora+' en su página de seguimiento (no dejó mail)'
+         :'Este pedido no tiene seguimiento: no le llega ningún aviso. Si hace falta, llamalo.';
+    return '<div class="rtc-lleg '+(x.res==='nada'?'nada':'ok')+'">'+t+'</div>';
+  }
+  return '<button type="button" class="rtc-lleg-btn" onclick="rutLlegando(\''+kArg+'\')">🛵 Estoy llegando · avisarle</button>';
+}
+function _rutLlegGuardar(){try{localStorage.setItem('maleu_ruta_lleg',JSON.stringify(_rutLleg));}catch(e){}}
+window.rutLlegando=function(key){
+  /* Un combo (dos pedidos del mismo cliente) es UNA casa: se avisa por el primero. */
+  var ped=_esCombo(key)?(_pedidosDelCombo(key)[0]||null):findByKey(key);
+  if(!ped)return;
+  var k=key;
+  if(_rutLlegDe(k))return;
+  _rutLleg[k]={d:_rutLlegHoy(),enviando:true};rutRenderRuta();
+  fetch(RUT_APPS_SCRIPT_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},
+    body:JSON.stringify({action:'segLlegando',hoja:ped.h,id:String(ped.id),row:ped.r})})
+    .then(function(r){return r.json();})
+    .then(function(d){
+      if(!d||d.ok===false)throw new Error((d&&(d.err||d.error))||'no se pudo');
+      var hora=d.hora||new Date().toLocaleTimeString('es-AR',{hour:'2-digit',minute:'2-digit',timeZone:'America/Argentina/Buenos_Aires'});
+      var res=!d.pagina?'nada':(d.mail?'mail':'pagina');
+      _rutLleg[k]={d:_rutLlegHoy(),res:res,hora:hora};_rutLlegGuardar();rutRenderRuta();
+      showToast(res==='nada'?'No tiene seguimiento: no le llegó ningún aviso':(res==='mail'?'✓ Le avisamos: página y mail':'✓ Le avisamos en su página de seguimiento'));
+    })
+    .catch(function(err){
+      delete _rutLleg[k];_rutLlegGuardar();rutRenderRuta();
+      showToast('No se avisó ('+(err&&err.message||'sin señal')+'). Probá de nuevo.');
+    });
+};
 
 function renderCobros(){
   document.getElementById('armadoView').classList.add('hidden');document.getElementById('rutaView').classList.add('hidden');
