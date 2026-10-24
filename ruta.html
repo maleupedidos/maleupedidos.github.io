@@ -704,6 +704,19 @@ button.cobro-prods-copy{flex-shrink:0;border:1px solid #E8DFC4;background:#fff;c
 .np-det-row{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid rgba(0,0,0,.05);font-size:13.5px;color:var(--brown)}
 .np-det-row:last-child{border-bottom:none}
 .np-det-q{font-weight:900;color:var(--orange,#E65100);flex:0 0 auto}
+.np-reg{border:1.5px solid var(--border);border-radius:10px;background:var(--white);padding:0 12px}
+.np-reg[open]{padding-bottom:6px}
+.np-reg summary{cursor:pointer;padding:11px 0;font-weight:700;color:var(--brown);font-size:14px;list-style:none}
+.np-reg summary::-webkit-details-marker{display:none}
+.np-reg summary span{font-weight:600;color:var(--muted)}
+.np-reg summary b{color:var(--green)}
+.np-reg-ayuda{font-size:12px;color:var(--muted);margin:-4px 0 6px}
+.np-reg-row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:7px 0;border-top:1px solid rgba(0,0,0,.06)}
+.np-reg-info{min-width:0;flex:1}
+.np-reg-n{font-size:13.5px;font-weight:700;color:var(--brown);overflow-wrap:anywhere}
+.np-reg-sub{font-size:12px;color:var(--muted)}
+.np-reg-row.on .np-reg-sub{color:var(--green);font-weight:700}
+.np-reg-row .np-qty-btn:disabled{opacity:.35}
 .np-det-vacio{font-size:12.5px;color:var(--muted);font-style:italic;text-align:center;padding:8px}
 .np-detalle-btn{width:100%;min-height:40px;margin-bottom:8px;border:1.5px dashed var(--border);background:var(--white);border-radius:10px;font-family:inherit;font-size:13px;font-weight:800;color:var(--brown);cursor:pointer}
 .np-detalle-btn:hover{background:var(--bg)}
@@ -1053,6 +1066,9 @@ select.np-input{background:var(--white) url("data:image/svg+xml;utf8,<svg xmlns=
       </div>
       <input type="number" id="npDescuentoManual" inputmode="numeric" placeholder="🎁 Regalo $ (opc.)" class="np-input" oninput="npUpdateTotal()" min="0">
     </div>
+    <!-- Productos de regalo (24/10/2026): en vez de un %, regalar unidades del
+         carrito. Lo pinta npRegaloRender() con lo que haya cargado. -->
+    <div id="npRegaloProd" style="display:none;margin-top:8px"></div>
     <!-- El envio de Pilar se puede regalar (11/9/2026). Tadeo: "hay veces que no
          cobramos el envio y tocamos 'de regalo $5.000'". Ese regalo se descontaba
          de los PRODUCTOS: el facturado del pedido bajaba $5.000 y el envio quedaba
@@ -1776,6 +1792,7 @@ var NP_PIEZAS=null, NP_PIEZAS_TS=0;
 var npPzSel={};   // { id de producto: [{id:'P-0007', kg:1.286}] }
 var npGlobalPct=0;   // % de descuento sobre todo el pedido (tab "+")
 var npCatDisc={};    // { 'Tartas': 20, ... } % de descuento por categoría
+var npRegalo={};     // { id: 2, ... } unidades de REGALO de cada producto del carrito (24/10/2026)
 var npNoDisc=false;  // ya no hay toggle "Sin 10% OFF": el 10% del efectivo se sacó el 15/10/2026 (el de +$100K, el 11/9). Queda siempre en false.
 var _npClientesCache=null, _npClientesCacheTs=0, _npClickHandlerInstalled=false, _npFetchingClientes=false;
 
@@ -10438,28 +10455,79 @@ function npLineUnit(abbr,tipo){
 //  · regalo     = bonificación puntual en pesos (🎁), se suma aparte
 //  · authoritative = true si Tadeo puso algún %, el backend confía el número
 function npDiscountInfo(){
-  var tipo=npGetTipo(),sub=0,catDiscP=0;
+  var tipo=npGetTipo(),sub=0,catDiscP=0,regProd=0,rg={},regDet=[];
   var esClub=(npZona==='Clubes');   // Clubes: precio institucional, sin descuentos %
+  var conRegalo=npRegaloVa();
   Object.keys(npCart).forEach(function(id){
     var qty=npCart[id];if(!qty)return;
     var p=NP_CAT_FLAT.find(function(x){return x.id==id});if(!p)return;
     var unit=npLineUnit(p.abbr,tipo);if(!unit)return;
     var line=unit*qty;sub+=line;
     if(esClub)return;
+    /* Lo regalado va en el pedido pero no se cobra ni lleva el % (24/10/2026). */
+    var gq=conRegalo?Math.min(Number(npRegalo[id])||0,qty):0;
+    if(gq>0){regProd+=gq*unit;rg[p.abbr]=gq;regDet.push({abbr:p.abbr,n:p.n,q:gq,monto:gq*unit});}
     var cp=Number(npCatDisc[npCatForId(id)])||0;
-    if(cp>0)catDiscP+=line*cp/100;
+    if(cp>0)catDiscP+=(qty-gq)*unit*cp/100;
   });
+  regProd=Math.round(regProd);
   catDiscP=Math.round(catDiscP);
   var gp=esClub?0:(Number(npGlobalPct)||0);
-  var base=Math.max(0,sub-catDiscP);
+  var base=Math.max(0,sub-regProd-catDiscP);
   var globalDiscP=Math.round(base*gp/100);
   var pctDisc=catDiscP+globalDiscP;
-  if(pctDisc>sub)pctDisc=sub;
+  if(pctDisc>sub-regProd)pctDisc=Math.max(0,sub-regProd);
   var auto=0;   // sin descuento automatico desde el 15/10/2026 (era el 10% del efectivo)
   var effDisc=pctDisc>0?pctDisc:auto;
   var regalo=npDescuentoManualValor();
-  var total=Math.max(0,sub-effDisc-regalo);
-  return {sub:sub,catDiscP:catDiscP,globalDiscP:globalDiscP,pctDisc:pctDisc,auto:auto,effDisc:effDisc,regalo:regalo,total:total,authoritative:pctDisc>0,globalPct:gp};
+  var total=Math.max(0,sub-regProd-effDisc-regalo);
+  return {sub:sub,catDiscP:catDiscP,globalDiscP:globalDiscP,pctDisc:pctDisc,auto:auto,effDisc:effDisc,regalo:regalo,
+    regProd:regProd,rg:rg,regDet:regDet,total:total,authoritative:pctDisc>0||regProd>0,globalPct:gp};
+}
+
+/* ══ PRODUCTOS DE REGALO (24/10/2026) ══════════════════════════════════════
+   Tadeo: «me hacen un pedidazo y en vez de darle un 10% le regalo 2 potes de
+   Franui». El producto va en el pedido como cualquier otro (sale del freezer,
+   el armador lo pone en la bolsa, su costo baja el margen) y su precio de lista
+   se descuenta. Viaja en la receta del descuento (`rg`, por abreviatura), asi
+   que sobrevive a editar el pedido desde el panel. Solo Home y Pilar, precio
+   normal, y por unidad (la carne por kilo no). */
+function npRegaloVa(){ return (npZona==='Home'||npZona==='Pilar')&&npGetTipo()==='normal'; }
+function npRegaloQty(id,delta){
+  var max=Number(npCart[id])||0;
+  var v=Math.max(0,Math.min(max,(Number(npRegalo[id])||0)+delta));
+  if(v>0)npRegalo[id]=v;else delete npRegalo[id];
+  npUpdateTotal();
+}
+function npRegaloToggle(el){ _npRegaloAbierto=!!(el&&el.open); }
+var _npRegaloAbierto=false;
+function npRegaloRender(){
+  var box=document.getElementById('npRegaloProd'); if(!box)return;
+  /* Lo que ya no esta en el carrito (o tiene menos) no puede seguir de regalo. */
+  Object.keys(npRegalo).forEach(function(id){
+    var q=Number(npCart[id])||0;
+    if(!q)delete npRegalo[id]; else if(npRegalo[id]>q)npRegalo[id]=q;
+  });
+  var filas=[], nReg=0, montoReg=0, tipo=npGetTipo();
+  if(npRegaloVa()){
+    NP_CAT.forEach(function(cat){ cat.items.forEach(function(it){
+      var q=Number(npCart[it.id])||0; if(!q||npUni(it.abbr)==='kg')return;
+      var g=Number(npRegalo[it.id])||0, unit=npLineUnit(it.abbr,tipo);
+      if(!unit)return;
+      nReg+=g; montoReg+=g*unit;
+      filas.push('<div class="np-reg-row'+(g>0?' on':'')+'"><div class="np-reg-info"><div class="np-reg-n">'+(PROD_NAMES[it.abbr]||it.n||it.abbr)+'</div>'
+        +'<div class="np-reg-sub">'+(g>0?g+' de '+q+' de regalo · −'+npMoney(g*unit):'lleva '+q+' · '+npMoney(unit)+' c/u')+'</div></div>'
+        +'<div class="np-qty"><button type="button" class="np-qty-btn" onclick="npRegaloQty('+it.id+',-1)"'+(g>0?'':' disabled')+'>&minus;</button>'
+        +'<span class="np-qty-num">'+g+'</span>'
+        +'<button type="button" class="np-qty-btn" onclick="npRegaloQty('+it.id+',1)"'+(g<q?'':' disabled')+'>+</button></div></div>');
+    }); });
+  }
+  if(!filas.length){ box.style.display='none'; box.innerHTML=''; return; }
+  box.style.display='';
+  box.innerHTML='<details class="np-reg"'+(_npRegaloAbierto||nReg>0?' open':'')+' ontoggle="npRegaloToggle(this)">'
+    +'<summary>🎁 Regalar productos'+(nReg>0?' <b>· '+nReg+(nReg===1?' unidad':' unidades')+' · −'+npMoney(montoReg)+'</b>':' <span>(en vez de un descuento)</span>')+'</summary>'
+    +'<div class="np-reg-ayuda">Van en la bolsa y salen del freezer, pero no se cobran. Primero cargalos arriba.</div>'
+    +filas.join('')+'</details>';
 }
 
 function npSetGlobalPct(){
@@ -10481,6 +10549,7 @@ function npSetCatDisc(el){
 
 function npUpdateTotal(){
   try{npDetalleRender();}catch(_e){}
+  try{npRegaloRender();}catch(_eR){}
   var info=npDiscountInfo(),tipo=npGetTipo();
   var prop=parseInt((document.getElementById('npPropina')||{}).value)||0;
   var envio=npEnvioPara(npZona,info.sub);
@@ -10490,6 +10559,7 @@ function npUpdateTotal(){
   else if(tipo==='club')parts.push('precio Club');
   if(info.globalDiscP>0)parts.push(info.globalPct+'% pedido');
   if(info.catDiscP>0)parts.push('% categoría');
+  if(info.regProd>0)parts.push('productos de regalo');
   if(info.regalo>0)parts.push('regalo');
   if(envio>0)parts.push('envío '+npMoney(envio));
   else if(npEnvioRegalado())parts.push('envío de regalo');
@@ -10646,7 +10716,9 @@ function npResumenTextoWA(){
       var precio=tipo==='club'?(pr.pc||pr.p):(tipo==='costo'?pr.c:pr.p);
       var lineaTotal=precio*q;
       sub+=lineaTotal;
-      subCat+=lineaTotal;
+      /* El % de la categoria va solo sobre lo que se paga, no sobre lo regalado. */
+      var _gq=npRegaloVa()?Math.min(Number(npRegalo[item.id])||0,q):0;
+      subCat+=lineaTotal-_gq*precio;
       var nombreLargo=PROD_NAMES[item.abbr]||item.n||item.abbr;
       if(npUni(item.abbr)==='kg'){
         /* La carne va con el peso de cada pieza: es lo que el cliente paga. */
@@ -10656,7 +10728,7 @@ function npResumenTextoWA(){
         catLineas.push('• '+nombreLargo+' — '+_dw+' · '+npMoney(lineaTotal));
       } else {
         catQty+=q;
-        catLineas.push('• '+q+'× '+nombreLargo+' — '+npMoney(lineaTotal));
+        catLineas.push('• '+q+'× '+nombreLargo+' — '+npMoney(lineaTotal)+(_gq>0?' ('+(_gq===q?'de regalo 🎁':_gq+' de regalo 🎁')+')':''));
       }
     });
     if(catLineas.length===0)return;
@@ -10686,13 +10758,14 @@ function npResumenTextoWA(){
   // Mostrar la línea "Subtotal" solo si hay algún ajuste entre subtotal y total
   // (descuento o envío). Si no hay nada, mostrar directo el total — evita la
   // redundancia "Subtotal $X / Total $X" cuando son iguales.
-  var hayAjustes=(catDescDetalle.length>0)||info.globalDiscP>0||info.auto>0||info.regalo>0||npZona==='Pilar';
+  var hayAjustes=(catDescDetalle.length>0)||info.globalDiscP>0||info.auto>0||info.regalo>0||info.regProd>0||npZona==='Pilar';
   if(hayAjustes)lines.push('Subtotal: '+npMoney(sub));
   catDescDetalle.forEach(function(d){
     lines.push('Descuento '+d.name+' (-'+d.pct+'%): -'+npMoney(d.monto));
   });
   if(info.globalDiscP>0)lines.push('Descuento general (-'+info.globalPct+'%): -'+npMoney(info.globalDiscP));
   if(info.auto>0)lines.push('Descuento 10% OFF: -'+npMoney(info.auto));
+  info.regDet.forEach(function(d){lines.push('Regalo 🎁 '+d.q+'× '+(PROD_NAMES[d.abbr]||d.n||d.abbr)+': -'+npMoney(d.monto));});
   if(info.regalo>0)lines.push('Descuento / Regalo: -'+npMoney(info.regalo));
   if(envio>0)lines.push('Envío: '+npMoney(envio));
   else if(npEnvioRegalado())lines.push('Envío: de regalo 🎁');
@@ -11227,9 +11300,21 @@ function npAfueraTxt(afuera,ids){
 function npCap(abbr){
   var m=npStockMode();
   if(m==='ilimitado')return null;
-  if(!NP_STOCK||!NP_STOCK[abbr])return null;   // sin dato no se inventa un tope
+  /* LA CARNE POR PIEZAS: EL TOPE SON LAS PIEZAS (24/10/2026). Tadeo cargo las 2
+     entrañas que quedaban (0,325 + 0,593 = 0,918 kg) y el aviso dijo «hay
+     0.23999999999999977»: el stock en kilos de Productos estaba 0,678 kg abajo
+     de las piezas. Las piezas son lo que hay en el freezer, una por una, y es lo
+     que se elige: con la lista cargada, el tope es su suma (en «proyectado», la
+     mayor de las dos, por lo que viene del proveedor). Redondeado a gramos. */
+  var pz=(NP_PIEZAS&&Array.isArray(NP_PIEZAS[abbr]))?NP_PIEZAS[abbr]:null;
+  var kgPz=null;
+  if(pz){kgPz=0;pz.forEach(function(x){kgPz+=Number(x&&x.kg)||0;});kgPz=Math.round(kgPz*1000)/1000;}
+  if(!NP_STOCK||!NP_STOCK[abbr])return kgPz;   // sin dato no se inventa un tope
   var v=(m==='real')?NP_STOCK[abbr].f:NP_STOCK[abbr].p;
-  return (typeof v==='number')?v:null;
+  if(typeof v!=='number')return kgPz;
+  v=Math.round(v*1000)/1000;
+  if(kgPz!==null)return (m==='real')?kgPz:Math.max(v,kgPz);
+  return v;
 }
 /* Los productos del carrito que se pasan del tope. [] si no hay ninguno. */
 function npExcedidos(){
@@ -11313,7 +11398,7 @@ function npGuardar(){
   if(_exc.length){
     var _m=npStockMode();
     var _msg='\u26a0\ufe0f '+_exc.length+(_exc.length===1?' producto se pasa del stock':' productos se pasan del stock')+'\n\n';
-    _exc.forEach(function(e){ _msg+='\u2022 '+e.n+': ped\u00eds '+e.pide+', hay '+e.hay+'\n'; });
+    _exc.forEach(function(e){ var _u=npUni(e.abbr); _msg+='\u2022 '+e.n+': ped\u00eds '+npFmtCant(e.pide,_u)+', hay '+npFmtCant(e.hay,_u)+'\n'; });
     _msg+='\n'+(_m==='real'
       ? 'Es el stock del freezer y la entrega es antes del pr\u00f3ximo viernes: no hay reposici\u00f3n en el medio.'
       : 'Ya cont\u00e1ndole lo que viene del proveedor. El cutoff de compra fue el jueves 12:00, as\u00ed que esta entrega se sirve con lo que ya est\u00e1 comprado.');
@@ -11378,7 +11463,8 @@ function npGuardar(){
   // npNoDisc: cobrar precio normal sin el 10% auto del Efectivo. SOLO anula el 10%
   // automatico — si ademas hay un % manual (global/categoria) o regalo, ESE manda.
   // Por eso el override a desc=0 aplica unicamente cuando NO hay descuento manual.
-  var desc=info.authoritative?info.pctDisc:info.auto;
+  /* Los productos de regalo son parte del descuento autoritativo (24/10/2026). */
+  var desc=info.authoritative?(info.pctDisc+info.regProd):info.auto;
   var authoritative=info.authoritative;
   if(npNoDisc && !info.authoritative){ desc=0; authoritative=true; }
   var descMan=info.regalo;        // 🎁 regalo $: se suma aparte en el backend
@@ -11389,13 +11475,14 @@ function npGuardar(){
   // auto10=false cuando hay % manual o "Sin 10%" (el backend no debe reaplicar el 10%).
   var receta=null;
   if(npZona!=='Clubes'){
-    if(info.authoritative || info.regalo>0){
+    if(info.authoritative || info.regalo>0){   // authoritative incluye los productos de regalo
       // Hay % manual (global/categoria) o regalo: se guarda la receta completa.
       // auto10 solo queda true si NO hay % manual Y NO esta el "Sin 10% OFF".
       var recC={};
       Object.keys(npCatDisc).forEach(function(k){var v=Number(npCatDisc[k])||0;if(v>0)recC[k]=v;});
       // auto10 siempre false desde el 15/10/2026: ya no hay 10% automatico.
       receta={g:Number(npGlobalPct)||0, c:recC, r:info.regalo||0, auto10:false};
+      if(info.regProd>0)receta.rg=info.rg;
     }
   }
   // Nombre del dia derivado de la fecha seleccionada
@@ -11699,7 +11786,7 @@ function npListo(automatico){
 function npReset(){
   npCart={};
   npPzSel={};
-  npGlobalPct=0;npCatDisc={};
+  npGlobalPct=0;npCatDisc={};npRegalo={};
   npNoDisc=false;
   var nd=document.getElementById('npChipNoDisc');if(nd)nd.classList.remove('active');
   ['npNombre','npLote','npPilarBarrio','npPilarLote','npTel','npPropina','npDescuentoManual','npGlobalPct','npEfMixto','npTrMixto'].forEach(function(id){var el=document.getElementById(id);if(el)el.value=''});
