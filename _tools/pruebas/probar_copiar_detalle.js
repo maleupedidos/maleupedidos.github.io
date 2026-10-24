@@ -139,7 +139,7 @@ const copiar = async (cli, n, hoja) => {
   await cli.enviar('Emulation.setDeviceMetricsOverride', { width: ANCHO, height: ANCHO < 500 ? 844 : 900, deviceScaleFactor: 1, mobile: ANCHO < 500 });
   await cli.enviar('Page.addScriptToEvaluateOnNewDocument', { source: prep(TOKEN, EXTRA) });
   console.log('\n=== El detalle del pedido para el cliente · ' + ANCHO + 'px ===');
-  await cli.enviar('Page.navigate', { url: BASE + '/app.html' });
+  await cli.enviar('Page.navigate', { url: BASE + '/' + (process.env.APP || 'app.html') });
   if (!await esperar(cli, 'typeof window.openOrdDetail==="function"')) { console.log('el ERP no arranco'); process.exit(1); }
   const sem = await evaluar(cli, SEMBRAR);
   if (!sem || sem.peds !== PEDIDOS.length) { console.log('no pude sembrar los pedidos: ' + JSON.stringify(sem)); process.exit(1); }
@@ -160,8 +160,9 @@ const copiar = async (cli, n, hoja) => {
   chk('  y la direccion', /📍 La Pionera · Lote 72/.test(r.txt), r.txt);
   chk('  el total es el del pedido, con la forma de pago', /💳 Total: \$58\.073 \(Transferencia\)/.test(r.txt), r.txt);
   chk('  y el desglose explica el descuento', /Subtotal \$64\.525/.test(r.txt) && /descuento −\$6\.452/.test(r.txt), r.txt);
-  chk('  manda los DOS alias (falta cobrar y es transferencia)',
-    /Para abonar: maleump \(Mercado Pago\) o maleubru \(Brubank\)/.test(r.txt), r.txt);
+  /* Desde el 24/10/2026 al cliente solo la cuenta principal (`def`): «Dejemos solo maleump». */
+  chk('  manda SOLO el alias de la cuenta principal (falta cobrar y es transferencia)',
+    /Para abonar: maleump \(Mercado Pago\)\n/.test(r.txt) && !/maleubru/.test(r.txt), r.txt);
   chk('  cierra ofreciendo corregir', /Si algo no coincide, decime y lo corrijo\./.test(r.txt), r.txt);
   chk('lo copiado queda TAMBIEN a la vista (si el navegador no deja copiar)',
     r.on && r.vista === r.txt && r.txt.length > 50, { on: r.on, largo: r.vista.length });

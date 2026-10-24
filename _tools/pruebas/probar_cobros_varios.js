@@ -49,7 +49,9 @@ const COBROS = [
 const TOTAL = 18000 + 56943.9 + 56304 + 36000 + 18000 + 86013;   // 271.260,9 -> $271.261
 const CUENTAS = [
   { id: 'efectivo', nombre: 'Efectivo', tipo: 'efectivo', col: 2, alias: '', banco: '', def: false, inv: false },
-  { id: 'mp', nombre: 'Cuenta Prueba', tipo: 'digital', col: 3, alias: 'aliasprueba', banco: 'Banco', def: true, inv: true }
+  { id: 'mp', nombre: 'Cuenta Prueba', tipo: 'digital', col: 3, alias: 'aliasprueba', banco: 'Banco', def: true, inv: true },
+  /* Una segunda cuenta digital que NO es la principal: al cliente no se le nombra. */
+  { id: 'otra', nombre: 'Otra Prueba', tipo: 'digital', col: 7, alias: 'aliasotra', banco: 'Otro Banco', def: false, inv: false }
 ];
 const PREP = `
   window.__posts=[]; window.__errores=[]; window.__copiado='';
@@ -194,6 +196,12 @@ const pesos = n => '$' + Math.round(n).toLocaleString('es-AR');
     await pausa(500);
     const cp = await ev(cli, `window.__copiado`);
     chk('«Copiar detalle» copia solo lo tildado', /7002/.test(cp) && /7006/.test(cp) && !/7001|7003|7004|7005/.test(cp), String(cp).slice(0, 300));
+    chk('el detalle da solo el alias de la cuenta principal', /Para abonar: aliasprueba \(Banco\)\n/.test(cp) && !/aliasotra/.test(cp), String(cp).slice(String(cp).indexOf('Para abonar'), String(cp).indexOf('Para abonar') + 80));
+    await ev(cli, `window.__copiado=''; 1`);
+    await ev(cli, BOTON('/cobGrpComprobante/'));
+    await pausa(500);
+    const cc = await ev(cli, `window.__copiado`);
+    chk('el pedido de comprobante también', /aliasprueba/.test(cc) && !/aliasotra/.test(cc), cc);
 
     const errs = await ev(cli, 'window.__errores');
     chk('sin errores de JS', Array.isArray(errs) && errs.length === 0, errs);
