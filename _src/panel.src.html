@@ -11889,6 +11889,11 @@ function _ocasiones(peds){
   return Object.keys(claves);
 }
 function _contarVentas(peds){ return _ocasiones(peds||[]).length; }
+/* La clave de una venta de RED (25/10/2026): representante + cliente + día. Una
+   venta por CLIENTE del representante, no por bolsa. Ver `_rtSumar`. */
+function _redVentaKey(p,dia){
+  return (String(p.br||'').trim()||'sin representante')+'|'+String(p.c||'').toLowerCase().trim().replace(/\s+/g,' ')+'|'+dia;
+}
 /* Un cobro repartido entre efectivo y transferencia, y la fecha con la que se
    agrupa (14/9/2026). Los usan la tarjeta "Cobrado en la semana" de Inicio y el
    PDF semanal: si cada uno hiciera su cuenta, dirian cosas distintas.
@@ -18951,7 +18956,8 @@ function _m6Corto(n){
      `D.ventasExtra`: el volcado no los trae como pedidos. Catering no es retail y
      se dice aparte.
    · Entregas: `_contarVentas` (dos pedidos del mismo viaje son una); en Red, una
-     por vendedor por dia (la bolsa al vendedor); B2B y Catering, una por fila. */
+     por CLIENTE del representante y por dia (`_redVentaKey`, desde el 25/10/2026;
+     antes era la bolsa al vendedor); B2B y Catering, una por fila. */
 /* ══ EL TOTAL DE MALEU VA POR MES (28/9/2026) ═══════════════════════════════
    Tadeo: *"prefiero que aparezca el mensual total. No la semanal. Y un botón al
    costado de flechita izq y derecha para cambiar de mes"*.
@@ -19365,7 +19371,12 @@ function _rtSumar(desde,hasta){
          los PEDIDOS que cargó cada vendedor — cuántos clientes suyos atendió.
          Hasta el 20/9/2026 `det` contaba bolsas y decía siempre "Marcos 1". */
       g.red.det[v]=(g.red.det[v]||0)+1;
-      if(!g.bolsas[v+'|'+dia])g.bolsas[v+'|'+dia]=1;
+      /* UNA VENTA POR CLIENTE (25/10/2026). Tadeo: «como ahora Maleu es uno solo,
+         tienda unificada, ahora SÍ nos importa». Hasta ese día una venta de Red era
+         la bolsa (representante + día). El mismo cliente con dos pedidos del mismo
+         representante el mismo día sigue siendo una. Por nombre y no por teléfono:
+         en los pedidos viejos de Red el teléfono es el del representante. */
+      g.bolsas[_redVentaKey(p,dia)]=1;
     }else return;
     mete('tot',f,c);
   });
@@ -20207,7 +20218,8 @@ function rInicio(){
        antes de salir de casa. Lo que no se entrego va aparte, en `_faltaDia`, por
        su dia elegido.
        · N entregas: `_contarVentas` (dos pedidos del mismo viaje son una); en Red,
-         una bolsa por vendedor por dia, igual que Ventas retail.
+         una por cliente del representante y por dia (`_redVentaKey`, desde el
+         25/10/2026; antes era la bolsa al vendedor), igual que Ventas retail.
        · El Cobrado de mas abajo es OTRA cosa (la plata que entro ese dia) y no se toca. */
     var _semDesde=_rtIso(lun), _semHasta=_rtIso(new Date(lun.getFullYear(),lun.getMonth(),lun.getDate()+6)), _hoyIso=_rtIso(now);
     var ventasPorDia={}, facturadoPorDia={}, sinCobrarPorDia={}, ventasPorDiaCanal={};
@@ -20223,7 +20235,7 @@ function rInicio(){
         facturadoPorDia[k]=(facturadoPorDia[k]||0)+f;
         if(p.ep!=='Cobrado')sinCobrarPorDia[k]=(sinCobrarPorDia[k]||0)+f;
         if(p.h==='Red'){
-          (_bolsasDia[k]||(_bolsasDia[k]={}))[String(p.br||'').trim()||'sin representante']=1;
+          (_bolsasDia[k]||(_bolsasDia[k]={}))[_redVentaKey(p,k)]=1;   // una por cliente (25/10/2026)
         }else{
           (_pedsDia[k]||(_pedsDia[k]=[])).push(p);
           var cn=p.h||'Otro';
@@ -20237,7 +20249,7 @@ function rInicio(){
       var kf=_isoAKey(de);if(!kf)return;
       var x=_faltaDia[kf]||(_faltaDia[kf]={f:0,cob:0,peds:{},bolsas:{}});
       x.f+=f;if(p.ep==='Cobrado')x.cob+=f;
-      if(p.h==='Red')x.bolsas[String(p.br||'').trim()||'sin representante']=1;
+      if(p.h==='Red')x.bolsas[_redVentaKey(p,kf)]=1;
       else{var cf=p.h||'Otro';(x.peds[cf]||(x.peds[cf]=[])).push(p);}
     });
     Object.keys(_pedsDia).forEach(function(k){
@@ -26120,10 +26132,11 @@ function _cmpGrafico(){
    solo, con la misma cuenta.
 
    Los dos números de Red, que no son lo mismo y los dos importan:
-     · para MALEU una venta es LA BOLSA (vendedor + día): lo que sale del
-       freezer de una vez. Eso son las "entregas";
-     · el vendedor, con esa bolsa, atendió a 1, 5 o 15 clientes suyos. Eso son
-       los "pedidos", y son las ventas finales.
+     · desde el 25/10/2026 una VENTA es cada cliente del representante
+       (`_redVentaKey`: representante + cliente + día). Tadeo: «como ahora
+       Maleu es uno solo, tienda unificada, ahora SÍ nos importa»;
+     · la BOLSA (vendedor + día) es lo que sale del freezer de una vez: queda
+       como dato de logística. Hasta ese día la venta era la bolsa.
 
    De dónde sale cada peso, verificado contra la planilla pedido por pedido:
      subt  = lo que pagó el cliente por los productos (sin envío)
@@ -26211,7 +26224,7 @@ function _redSinRendirDeCobros(porV,total){
 }
 /* Junta los pedidos de Red del período y arma todo de una pasada. */
 function _redDatos(){
-  var R=_redRangos(), porV={}, bolsas={}, total={sub:0,env:0,mal:0,co:0,ped:0,pend:0,nPend:0,ori:_redOriCero()};
+  var R=_redRangos(), porV={}, bolsas={}, ventas={}, total={sub:0,env:0,mal:0,co:0,ped:0,pend:0,nPend:0,ori:_redOriCero()};
   ((typeof D!=='undefined'&&D&&D.pedidos)||[]).forEach(function(p){
     if(p.h!=='Red'||p.hist||p.es==='Cancelado')return;
     if(!_rtEsVenta(p))return;
@@ -26222,7 +26235,7 @@ function _redDatos(){
        Maleu, así que el bruto es eso dividido 0,83. Es la única forma de no
        perder el pedido entero por un campo vacío. */
     if(!sub&&mal)sub=Math.round(mal/0.83);
-    var e=porV[v]||(porV[v]={v:v,sub:0,env:0,mal:0,co:0,ped:0,pend:0,nPend:0,cli:{},prod:{},bolsas:{},mes:{},ult:'',pri:'',ori:_redOriCero()});
+    var e=porV[v]||(porV[v]={v:v,sub:0,env:0,mal:0,co:0,ped:0,pend:0,nPend:0,cli:{},prod:{},bolsas:{},ventas:{},mes:{},ult:'',pri:'',ori:_redOriCero()});
     e.sub+=sub; e.env+=env; e.mal+=mal; e.co+=co; e.ped++;
     total.sub+=sub; total.env+=env; total.mal+=mal; total.co+=co; total.ped++;
     /* La comision de ESTE pedido, con la formula que ya se paga: lo que pago el
@@ -26235,6 +26248,7 @@ function _redDatos(){
     total.ori[_ko].ped++; total.ori[_ko].sub+=sub; total.ori[_ko].com+=_com; total.ori[_ko].env+=env;
     if(String(p.ep||'').trim()!=='Cobrado'){ e.pend+=sub; e.nPend++; total.pend+=sub; total.nPend++; }
     e.bolsas[dia]=1; bolsas[v+'|'+dia]=1;
+    e.ventas[_redVentaKey(p,dia)]=1; ventas[_redVentaKey(p,dia)]=1;
     if(!e.pri||dia<e.pri)e.pri=dia;
     if(!e.ult||dia>e.ult)e.ult=dia;
     var mm=dia.slice(0,7); e.mes[mm]=(e.mes[mm]||0)+sub;
@@ -26257,7 +26271,7 @@ function _redDatos(){
     });
   });
   _redSinRendirDeCobros(porV,total);
-  return {R:R, porV:porV, total:total, entregas:Object.keys(bolsas).length};
+  return {R:R, porV:porV, total:total, entregas:Object.keys(bolsas).length, ventas:Object.keys(ventas).length};
 }
 
 /* Una línea por vendedor, mes a mes. Líneas y no barras: es una serie de
@@ -26837,7 +26851,7 @@ function _rRedVend(){
   var h='<div class="card rt">';
   h+='<div class="rt-h"><div class="rt-hl"><div class="rt-t">Red de representantes</div>'
     +'<div class="rt-sub">'+_rtEsc(d.R.t)+'</div>'
-    +'<div class="rt-sub2">una entrega es la bolsa que le damos al representante; los pedidos son las ventas que hizo él</div></div></div>';
+    +'<div class="rt-sub2">una venta es cada cliente del representante; la bolsa es lo que le damos para repartir</div></div></div>';
   h+='<div class="rt-per">'+chips+'</div>';
 
   var vend=Object.keys(porV).sort(function(a,b){return porV[b].sub-porV[a].sub;});
@@ -26851,8 +26865,8 @@ function _rRedVend(){
     +_redK4('Vendió la red',f(T.sub),'lo que pagaron los clientes')
     +_redK4('Le quedó a Maleu',f(T.mal),'el 83%')
     +_redK4('Margen de Maleu',f(mg),pct(mg,T.mal)+' de lo que le quedó')
-    +_redK4('Entregas',String(d.entregas),d.entregas===1?'bolsa que salió':'bolsas que salieron')
-    +_redK4('Pedidos',String(T.ped),'ventas de los representantes')
+    +_redK4('Ventas',String(d.ventas),'a clientes de los representantes')
+    +_redK4('Bolsas',String(d.entregas),d.entregas===1?'bolsa que salió':'bolsas que salieron')
     +_redK4('Sin rendir',f(T.pend),T.nPend?(T.nPend+(T.nPend===1?' pedido':' pedidos')):'todo rendido')
     +'</div>';
 
@@ -26862,14 +26876,14 @@ function _rRedVend(){
   h+=_redGrafico(porV,meses);
 
   h+='<div class="red-tabla-wrap"><table class="red-tabla"><thead><tr>'
-    +'<th>Representante</th><th class="num">Entregas</th><th class="num">Pedidos</th><th class="num">Clientes</th>'
+    +'<th>Representante</th><th class="num">Ventas</th><th class="num">Bolsas</th><th class="num">Clientes</th>'
     +'<th class="num">Vendió</th><th class="num">Ticket</th><th class="num">Se lleva</th>'
     +'<th class="num">Le quedó a Maleu</th><th class="num">Margen</th><th class="num">Sin rendir</th></tr></thead><tbody>';
   vend.forEach(function(v){
-    var e=porV[v], nB=Object.keys(e.bolsas).length, nC=Object.keys(e.cli).length;
+    var e=porV[v], nB=Object.keys(e.bolsas).length, nV=Object.keys(e.ventas).length, nC=Object.keys(e.cli).length;
     var gano=(e.sub-e.mal)+e.env, marg=e.mal-e.co;
     h+='<tr><td><b>'+_rtEsc(v)+'</b><div class="red-sub">'+_redDMY(e.pri)+' → '+_redDMY(e.ult)+'</div></td>'
-      +'<td class="num"><b>'+nB+'</b></td><td class="num">'+e.ped+'</td><td class="num">'+nC+'</td>'
+      +'<td class="num"><b>'+nV+'</b></td><td class="num">'+nB+'</td><td class="num">'+nC+'</td>'
       +'<td class="num">'+f(e.sub)+'</td><td class="num">'+f(e.ped?e.sub/e.ped:0)+'</td>'
       /* «Se lleva» es el mismo numero que antes decia «Comisión», pero eso
          juntaba dos cosas que se van a pagar distinto: el % sobre lo vendido y
@@ -33017,7 +33031,7 @@ function _vEntregas(lista){
   var otros=[],red={};
   for(var i=0;i<lista.length;i++){
     var v=lista[i],o=_vDer(v);
-    if(v.canal==='Red'){red[String(v.zona||v.cliente||'')+'|'+o.iso]=1;continue;}
+    if(v.canal==='Red'){red[String(v.zona||'')+'|'+String(v.cliente||'').toLowerCase().trim().replace(/\s+/g,' ')+'|'+o.iso]=1;continue;}
     otros.push({tel:v.tel,c:v.cliente,fe:o.f,he:v.he});
   }
   return _contarVentas(otros)+Object.keys(red).length;
