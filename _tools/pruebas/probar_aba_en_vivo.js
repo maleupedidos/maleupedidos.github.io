@@ -290,6 +290,15 @@ const cortar = () => S.socks.forEach(s => { try { s.destroy(); } catch (e) {} })
     await pausa(800);
     chk('una foto más vieja, o de otra pantalla, no se lee', S.rest.length === viejo, S.rest.slice(viejo));
 
+    console.log('\n-- 12 señales en el mismo segundo: UNA lectura (25/10/2026) --');
+    S.rest = [];
+    for (let i = 0; i < 12; i++) senal('erp:compras', { tabla: 'oc', op: 'update', n: 1, ids: ['OC-9' + String(10 + i)] });
+    for (let i = 0; i < 4; i++) senal('erp:fotos', { screen: 'busqueda', computed_at: haceMin(-2 - i) });
+    await pausa(2500);
+    { const l = S.rest.filter(r => r.path === '/rest/v1/purchase_order_line'), f = S.rest.filter(r => r.path === '/rest/v1/erp_screen_snapshot');
+      chk('una sola lectura de las OC, con los 12 N°', l.length === 1 && (decodeURIComponent(l[0].q).match(/OC-9\d\d/g) || []).length === 12, l.map(r => decodeURIComponent(r.q).slice(-120)));
+      chk('y una sola de la foto', f.length === 1, f.length); }
+
     console.log('\n-- se corta y vuelve --');
     S.joins = []; S.rest = [];
     cortar();
