@@ -1095,15 +1095,35 @@ function _abaVivoLeerOcs(ids) {
   }).catch(function () {});
 }
 
+/* UNA LECTURA POR TANDA (25/10/2026). Una recepcion o una compra escribe cada
+   renglon por separado, y la base manda una señal por escritura: 12 en el mismo
+   segundo, y la pantalla releia la base 12 veces. Los N° se juntan y se leen
+   juntos ABA_VIVO_JUNTAR_MS despues de la primera señal de la tanda. */
+var ABA_VIVO_JUNTAR_MS = 700;
+var _abaVivoTanda = { ids: {}, t: null, fotoT: null, fotoEnCurso: null };
 function _abaVivoCompras(p) {
   if (!p) return;
-  if (p.tabla === 'oc' && Array.isArray(p.ids) && p.ids.length) _abaVivoLeerOcs(p.ids);
+  if (p.tabla === 'oc' && Array.isArray(p.ids)) p.ids.forEach(function (x) { if (x) _abaVivoTanda.ids[String(x)] = 1; });
+  if (!_abaVivoTanda.t) _abaVivoTanda.t = setTimeout(function () {
+    _abaVivoTanda.t = null;
+    var ids = Object.keys(_abaVivoTanda.ids);
+    _abaVivoTanda.ids = {};
+    if (ids.length) _abaVivoLeerOcs(ids);
+  }, ABA_VIVO_JUNTAR_MS);
   _abaVivoEsperarFoto();
 }
 function _abaVivoFoto(p) {
   if (!p || p.screen !== 'busqueda') return;
   if (_abaFechaUtc(p.computed_at) <= _abaVivo.cuando) return;
-  _abaVivoFotoNueva();
+  /* Lo mismo con la foto: varias señales seguidas, una sola lectura; y si ya hay
+     una en camino, la que sigue sale cuando esa termina. */
+  if (_abaVivoTanda.fotoT) return;
+  _abaVivoTanda.fotoT = setTimeout(function () {
+    _abaVivoTanda.fotoT = null;
+    if (_abaVivoTanda.fotoEnCurso) { _abaVivoTanda.fotoEnCurso.then(function () { _abaVivoFoto(p); }); return; }
+    _abaVivoTanda.fotoEnCurso = _abaVivoFotoNueva().then(function (u) { _abaVivoTanda.fotoEnCurso = null; return u; },
+                                                        function () { _abaVivoTanda.fotoEnCurso = null; });
+  }, ABA_VIVO_JUNTAR_MS);
 }
 /* Al volver de un corte, lo que paso mientras no se escuchaba no llega por
    señal: se relee la foto, y si no hay una mas nueva, la lista de Apps Script. */
@@ -3475,6 +3495,7 @@ function confirmarRecibir(idx, btn) {
       prov: prov.n,
       prod: g.prod,
       qtyRecibida: qtyRecibida,
+      pedido: totalPedido,   // solo para el aviso de «falta la mitad» (abaRecFaltaMitad)
       rows: g.rows.map(function(r) { return r.r; }),
       // El N° de cada OC: si la fila ya es otra (lista vieja), el servidor no la toca.
       ocs: g.rows.map(function(r) { return r.oc || ''; })
@@ -3554,14 +3575,60 @@ function abaLeerDep(idx) {
   return e ? String(e.value || '').trim() : '';
 }
 
-function enviarGroups(provName, idx, groups) {
+/* LA RECEPCION CIERRA CON LO RECIBIDO (Tadeo, 23/10/2026; palanca RECEPCION_CIERRA).
+   Lo que no llego no abre OC: se cierra y listo. Solo si falta la mitad o mas de
+   lo que se le pidio a este proveedor se pregunta, por si conviene volver a pedirlo.
+   Devuelve { falta, pedido } si hay que preguntar, o null. Lo que sobra de un
+   producto no tapa lo que falta de otro. */
+function abaRecFaltaMitad(groups) {
+  try { if (typeof _palancaYa !== 'function' || !_palancaYa('recepcionCierra')) return null; } catch (e) { return null; }
+  var falta = 0, pedido = 0;
+  (groups || []).forEach(function (g) {
+    var p = Number(g.pedido) || 0, q = Number(g.qtyRecibida) || 0;
+    pedido += p;
+    if (q < p) falta += p - q;
+  });
+  return (pedido > 0 && falta / pedido >= 0.5) ? { falta: falta, pedido: pedido } : null;
+}
+function abaElegir(msg, siTxt, noTxt, onSi, onNo) {
+  var overlay = document.getElementById('abaConfirmOverlay');
+  var btnYes = document.getElementById('confirmYes'), btnNo = document.getElementById('confirmNo');
+  var ySi = btnYes.textContent, yNo = btnNo.textContent;
+  document.getElementById('confirmMsg').textContent = msg;
+  btnYes.textContent = siTxt; btnNo.textContent = noTxt;
+  overlay.classList.add('show');
+  function cleanup() {
+    overlay.classList.remove('show');
+    btnYes.textContent = ySi; btnNo.textContent = yNo;
+    btnYes.onclick = null; btnNo.onclick = null; overlay.onclick = null;
+  }
+  btnYes.onclick = function () { cleanup(); onSi(); };
+  btnNo.onclick = function () { cleanup(); onNo(); };
+  // Tocar afuera no elige: no se recibe nada y el panel queda como estaba.
+  overlay.onclick = function (e) { if (e.target === overlay) cleanup(); };
+}
+
+function enviarGroups(provName, idx, groups, faltanteOC) {
+  if (faltanteOC === undefined) {
+    var fm = abaRecFaltaMitad(groups);
+    if (fm) {
+      var fmt = function (n) { return String(Math.round(n * 1000) / 1000).replace('.', ','); };
+      abaElegir('A ' + provName + ' le pediste ' + fmt(fm.pedido) + ' y faltan ' + fmt(fm.falta) +
+                ' (la mitad o más). ¿Cerrás con lo que llegó o abrís una OC por lo que falta?',
+                'Abrir OC por lo que falta', 'Cerrar con lo que llegó',
+                function () { enviarGroups(provName, idx, groups, true); },
+                function () { enviarGroups(provName, idx, groups, false); });
+      return;
+    }
+  }
   // clientOpId: ID único de esta confirmación. Si hay timeout y reintenta, el server
   // dedupa con CacheService 6h y devuelve la misma respuesta sin re-ejecutar.
   var coid = 'rm_' + provName.replace(/\W/g,'_') + '_' + Date.now() + '_' + Math.random().toString(36).slice(2,8);
   var _comp = abaLeerComp(idx);
   var _pases = abaLeerPases(idx);
   abaSyncQueue.push({ action: 'recibirMercaderia', groups: groups, clientOpId: coid, ts: Date.now(), comprobante: _comp || undefined,
-                      deposito: abaLeerDep(idx) || undefined, pases: _pases.length ? _pases : undefined });
+                      deposito: abaLeerDep(idx) || undefined, pases: _pases.length ? _pases : undefined,
+                      faltanteOC: faltanteOC === true ? true : undefined });
   _abaRecRepTocado = {};
   marcadosRecibido[_abaMarcaKey(provName)] = true;
   abaSaveLocal();
