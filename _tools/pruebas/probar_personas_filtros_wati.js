@@ -37,7 +37,6 @@ const ANOTADOR = `
   HTMLAnchorElement.prototype.click = function(){};   // no baja nada a disco
 })();`;
 /* Lo que la pantalla tiene que mostrar, calculado aparte con la regla escrita. */
-const PIDE = `function(c, dow){ var n=0,e=0; (c.fp||[]).forEach(function(f){ var m=String(f).match(/^(\\d{4})(\\d{2})(\\d{2})$/); if(!m) return; n++; if(new Date(+m[1],+m[2]-1,+m[3]).getDay()===dow) e++; }); return n>=3 && e/n>=0.5; }`;
 
 (async () => {
   const cli = await abrir();
@@ -75,11 +74,24 @@ const PIDE = `function(c, dow){ var n=0,e=0; (c.fp||[]).forEach(function(f){ var
     chk('la tabla muestra la última campaña de la casa', /Última campaña/.test(col), col);
     await evaluar(cli, 'estCliFiltro("campNom",""); estCliFiltro("campModo","si")'); await pausa(500);
 
-    // 2) Día de la semana: domingo.
+    // 2) Día de la semana: el de la ENTREGA (`fe`, Tadeo 25/10/2026), no el del pedido.
+    /* Producción todavía no manda `fe`: se arman cuatro casos EN MEMORIA. A: 3 entregas
+       en domingo (entra). B: 2 domingos y 2 viernes (la mitad: entra). C: 2 domingos
+       (menos de 3: no). D: pidió 3 domingos pero se le entregó los viernes (no: es la
+       entrega la que manda). */
+    const casosDia = await evaluar(cli, `(function(){
+      var L=(window.estClientesSync()||[]).filter(function(c){ return !c.visitante; });
+      L.forEach(function(c){ c.fe=[]; });
+      var dom=['20261004','20261011','20261018'], vie=['20261002','20261009','20261016'];
+      L[0].fe=dom.slice(); L[1].fe=['20261004','20261011','20261002','20261009']; L[2].fe=['20261004','20261011'];
+      L[3].fe=vie.slice(); L[3].fp=dom.slice();
+      return [L[0].nombre, L[1].nombre, L[2].nombre, L[3].nombre]; })()`);
     await evaluar(cli, 'estCliFiltro("diaSem","0")'); await pausa(600);
     const nDom = await cuenta();
-    const espDom = await evaluar(cli, `(function(){ var f=${PIDE}; return (window.estClientesSync()||[]).filter(function(c){ return !c.visitante && f(c,0); }).length; })()`);
-    chk('«pide los domingos»: ' + nDom + ' personas (3 pedidos o más, la mitad o más en domingo)', nDom === espDom, { nDom, espDom });
+    const domNom = await evaluar(cli, "[].slice.call(document.querySelectorAll('#estCliList tbody tr .cli-nm')).map(function(x){return x.textContent.toLowerCase();})");
+    const esta = n => domNom.some(t => t.indexOf(String(n || '').toLowerCase().split(/ +/)[0]) === 0);
+    chk('«le entregamos los domingos»: entran los dos que cumplen y nadie más', nDom === 2 && esta(casosDia[0]) && esta(casosDia[1]), { nDom, domNom, casosDia });
+    chk('   el de 2 entregas no entra, y el que PIDIÓ en domingo pero recibe los viernes tampoco', !esta(casosDia[2]) && !esta(casosDia[3]), { domNom, casosDia });
     await evaluar(cli, 'estCliFiltro("diaSem","")'); await pausa(400);
 
     // 3) Pedido en curso, aparte.
