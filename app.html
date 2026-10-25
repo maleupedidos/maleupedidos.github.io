@@ -14531,7 +14531,7 @@ function _leerVersion(app){
    "El HTML no sabe que version es" dejo de ser cierto: el build le escribe
    adentro el CACHE_NAME de sw-panel.js, el mismo que deploy.sh obliga a subir en
    cada cambio. Si lo publicado dice otra cosa, esta pagina es vieja. Punto. */
-var _APP_CN_PAGINA='maleu-panel-v700';
+var _APP_CN_PAGINA='maleu-panel-v701';
 
 /* Devuelve [{k,v}] si lo publicado no es lo que esta pagina corre. */
 function _chequearVersiones(){
@@ -43048,6 +43048,42 @@ if('serviceWorker' in navigator){
     return ((String((it && it.nota) || '').match(/Campa[nñ]a:\s*(.+)$/) || [])[1] || '(sin nombre)').trim();
   }
   window.crmCampNombre = _campNombre;
+  /* LAS CAMPAÑAS DE CADA CASA (25/10/2026), para que CRM › Personas filtre por la
+     campaña que recibio (o no) la casa. Por casa, que es como se mide: si la mamá la
+     recibio, la casa la recibio. Solo lo que LLEGO (`_esCampania`: control, sacados y
+     listas sin confirmar no cuentan). Devuelve {casas: {casa: {nombre: ts}},
+     lista: [{nombre, ts, n}]} con la mas nueva primero, o null si la bitacora
+     todavia no cargo — no saber no es «no la recibio». */
+  var _campCasaMemo = null, _campCasaDe = null;
+  window.crmCampaniasPorCasa = function(){
+    if (!crmInteracciones){ try{ if(!_bitPidiendo){ _bitPidiendo = true; loadCrmInteracciones(); } }catch(e){} return null; }
+    var firma = crmInteracciones.length + '|' + ((crmClientes || []).length);
+    if (_campCasaMemo && _campCasaDe === firma) return _campCasaMemo;
+    var porKey = {}, porTel = {};
+    (crmClientes || []).forEach(function(c){
+      porKey[c.key] = c;
+      var t = String(c.tel || '').replace(/\D/g, '').slice(-10); if (t) porTel[t] = c;
+    });
+    var casas = {}, lista = {};
+    crmInteracciones.forEach(function(it){
+      if (!_esCampania(it)) return;
+      var t10 = String(it.tel || '').replace(/\D/g, '').slice(-10);
+      var c = porKey[it.key] || porTel[t10];
+      var ck = c ? window.crmCasaDe(c) : (t10 ? 'tel|' + t10 : '');
+      if (!ck) return;
+      var nom = _campNombre(it), ts = _crmFechaSort(String(it.fecha || '').split(' ')[0]) || 0;
+      var m = casas[ck] || (casas[ck] = {});
+      if (!(m[nom] >= ts)) m[nom] = ts;
+      var l = lista[nom] || (lista[nom] = {nombre: nom, ts: 0, casas: {}});
+      if (ts > l.ts) l.ts = ts;
+      l.casas[ck] = 1;
+    });
+    _campCasaMemo = {casas: casas, lista: Object.keys(lista).map(function(k){
+      var l = lista[k]; return {nombre: l.nombre, ts: l.ts, n: Object.keys(l.casas).length};
+    }).sort(function(a, b){ return b.ts - a.ts; })};
+    _campCasaDe = firma;
+    return _campCasaMemo;
+  };
   /* Las listas BAJADAS que nadie confirmo si salieron (origen 'lista').
      null = la bitacora todavia no cargo. */
   window.crmListasAbiertas = function(){
@@ -44275,9 +44311,16 @@ if('serviceWorker' in navigator){
     });
     return min;
   }
+  /* «Compraron en los ultimos N dias» es eso: una compra ENTREGADA. El pedido en
+     curso va en su propio atajo (25/10/2026): mezclados, sacar a los que compraron
+     en 7 dias se llevaba tambien al que pidio ayer para el domingo. */
   function _cmpCompraCasa(c, n){
     var mem = (_cmp && _cmp.casas[window.crmCasaDe(c)]) || [c];
-    return mem.some(function(m){ var d = _cmpDias(m); return (d >= 0 && d <= n) || (m.pendientes || 0) > 0; });
+    return mem.some(function(m){ var d = _cmpDias(m); return d >= 0 && d <= n; });
+  }
+  function _cmpEnCursoCasa(c){
+    var mem = (_cmp && _cmp.casas[window.crmCasaDe(c)]) || [c];
+    return mem.some(function(m){ return (m.pendientes || 0) > 0; });
   }
 
   function _cmpTplsAprobados(){
@@ -44350,6 +44393,7 @@ if('serviceWorker' in navigator){
       + (s.paso === 'enviar' ? '' :
           '<div class="cli-dl-atajos">'
           + '<div>Sacar las casas que compraron en los últimos <input id="cmpN1" class="cli-in" style="width:44px" inputmode="numeric" value="'+s.n1+'"> días <button class="est-chip" onclick="cmpSacar(\'compra\')">Sacar</button></div>'
+          + '<div>Sacar las casas con un pedido en curso <button class="est-chip" onclick="cmpSacar(\'curso\')">Sacar</button></div>'
           + '<div>Sacar las casas que recibieron una campaña en los últimos <input id="cmpN2" class="cli-in" style="width:44px" inputmode="numeric" value="'+s.n2+'"> días <button class="est-chip" onclick="cmpSacar(\'campania\')">Sacar</button></div>'
           + '<div><label><input type="checkbox"'+(s.uno ? ' checked' : '')+' onchange="cmpSet(\'uno\',this.checked)"> Una persona por casa (la que más compra)</label></div>'
           + '<div id="cmpCtlTxt">Casas de control: <b>1 de cada 10</b>, las mismas que en las jugadas de Hoy durante toda la semana. No reciben nada y son contra quien se mide. No se elige: lo aparta el sistema.</div>'
@@ -44396,18 +44440,22 @@ if('serviceWorker' in navigator){
   }
   window.cmpSacar = function(tipo){
     var s = _cmp; if (!s) return;
-    var inp = el(tipo === 'compra' ? 'cmpN1' : 'cmpN2');
-    var n = parseInt(String((inp || {}).value || '').replace(/\D/g, ''), 10);
-    if (!(n >= 0)){ toast('Poné cuántos días'); return; }
-    if (tipo === 'compra') s.n1 = n; else s.n2 = n;
+    var n = 0;
+    if (tipo !== 'curso'){
+      var inp = el(tipo === 'compra' ? 'cmpN1' : 'cmpN2');
+      n = parseInt(String((inp || {}).value || '').replace(/\D/g, ''), 10);
+      if (!(n >= 0)){ toast('Poné cuántos días'); return; }
+      if (tipo === 'compra') s.n1 = n; else s.n2 = n;
+    }
     if (tipo === 'campania' && !crmInteracciones){ toast('Estoy trayendo las campañas anteriores, probá de nuevo en unos segundos'); return; }
     var antes = Object.keys(s.fuera).length;
     s.arr.forEach(function(c){
       if (tipo === 'compra'){ if (_cmpCompraCasa(c, n)) s.fuera[c.key] = 1; }
+      else if (tipo === 'curso'){ if (_cmpEnCursoCasa(c)) s.fuera[c.key] = 1; }
       else { var d = _cmpUltCampCasa(c); if (d !== null && d >= 0 && d <= n) s.fuera[c.key] = 1; }
     });
     _cmpRepartir(); _cmpPintar();
-    toast('Saqué '+(Object.keys(s.fuera).length - antes)+' personas (por casa'+(tipo === 'compra' ? ', incluye pedidos en curso' : '')+')');
+    toast('Saqué '+(Object.keys(s.fuera).length - antes)+' personas (por casa)');
   };
   window.cmpPaso = function(p){ if (!_cmp) return; _cmp.paso = p; _cmpPintar(); };
   window.cmpChk = function(){
@@ -44469,8 +44517,13 @@ if('serviceWorker' in navigator){
     var nombre = String(s.nombre || s.tpl || '').trim();
     if (!nombre){ toast('Ponele nombre a la campaña: es lo que después se mide'); var i = el('cmpNombre'); if (i) i.focus(); return; }
     if (!s.manda.length){ toast('No quedó nadie tildado'); return; }
-    var rows = [['Name','CountryCode','Phone','AllowCampaign','AllowSMS','Apodo']];
-    s.manda.forEach(function(c){ rows.push([_cmpTitulo(c.nombre || ''), '54', _cmpTelWati(c.telDisplay || c.tel), 'True', 'True', (c.apodo || '')]); });
+    /* Sin el control de la semana la lista saldria con las casas de control
+       adentro, y la campaña ya no se podria medir (25/10/2026). */
+    if (!s.ctlListo){ toast('Todavía estoy buscando el grupo de control de la semana: probá de nuevo en unos segundos'); if (typeof window.jugCtlSemana === 'function') window.jugCtlSemana(); return; }
+    /* EL FORMATO DE LA IMPORTACION DE WATI (Tadeo, 25/10/2026): las cuatro columnas
+       que pide el panel, sin nada que acomodar a mano antes de subirla. */
+    var rows = [['Name','CountryCode','Phone','AllowCampaign']];
+    s.manda.forEach(function(c){ rows.push([_cmpTitulo(c.nombre || ''), '54', _cmpTelWati(c.telDisplay || c.tel), 'True']); });
     var csv = rows.map(function(r){ return r.map(_cmpCsvCell).join(','); }).join('\r\n');
     var blob = new Blob([String.fromCharCode(0xFEFF) + csv], {type:'text/csv;charset=utf-8;'});   // BOM: Excel con acentos
     var f = new Date(), z = function(n){ return (n < 10 ? '0' : '') + n; };
@@ -51968,7 +52021,52 @@ function _objRango(periodo, mesLabel){
        el barrio cuando hay UNO solo elegido, '' si no — lo usan la tarjeta y
        `_cliSoloHome`. `dir` invierte el orden (1 = el natural de cada columna). */
     barrios:[], estados:[], diasMin:'', diasMax:'', comprasMin:'', comprasMax:'', ticketMin:'',
-    canal:'', conCat:'', sinCat:'', vista:'tabla', dir:1};
+    canal:'', conCat:'', sinCat:'', vista:'tabla', dir:1,
+    /* 25/10/2026, para armar la campaña sin hacerla a mano: la campaña que recibio
+       (o no) la casa, el dia de la semana en que pide, y el pedido en curso aparte
+       de «compro en los ultimos N dias». */
+    campNom:'', campModo:'si', diaSem:'', enCurso:''};
+  /* «Pide los domingos» (25/10/2026): 3 dias con pedido o mas en los ultimos 200
+     (lo que trae `fp`), y la mitad o mas ese dia de la semana. Es el dia en que
+     HACE el pedido, no el de la entrega. */
+  var CLI_DIA_MIN_PED=3, CLI_DIA_PROP=0.5;
+  var _CLI_DIAS=['Domingo','Lunes','Martes','Miércoles','Jueves','Viernes','Sábado'];
+  function _cliPideEl(c, dow){
+    var fp=Array.isArray(c.fp)?c.fp:[], n=0, enDia=0;
+    fp.forEach(function(f){
+      var m=String(f).match(/^(\d{4})(\d{2})(\d{2})$/); if(!m) return;
+      n++; if(new Date(+m[1], +m[2]-1, +m[3]).getDay()===dow) enDia++;
+    });
+    return n>=CLI_DIA_MIN_PED && enDia/n>=CLI_DIA_PROP;
+  }
+  // Las campañas por casa, del CRM. null = la bitacora todavia no cargo.
+  function _cliCampCasa(){ try{ return (typeof window.crmCampaniasPorCasa==='function') ? window.crmCampaniasPorCasa() : null; }catch(e){ return null; } }
+  // La ultima campaña que le llego a la casa: {nombre, dias} o null.
+  function _cliUltCamp(c, cc){
+    var m=cc && cc.casas[window.crmCasaDe(c)]; if(!m) return null;
+    var best=null; Object.keys(m).forEach(function(k){ if(!best || m[k]>best.ts) best={nombre:k, ts:m[k]}; });
+    if(!best) return null;
+    var hoy=new Date(); hoy.setHours(0,0,0,0);
+    best.dias=best.ts ? Math.max(0, Math.round((hoy-new Date(best.ts).setHours(0,0,0,0))/86400000)) : -1;
+    return best;
+  }
+  /* Si la bitacora no habia llegado al pintar, se vuelve a mirar hasta que llegue
+     y se completan el desplegable de campañas y la lista. */
+  var _cliCampEsperaN=0;
+  function _cliCampEsperar(){
+    if(_cliCampCasa()){ _cliCampEsperaN=0; _cliCampOpts(); _cliRenderList(); return; }
+    if(++_cliCampEsperaN>20) return;
+    setTimeout(_cliCampEsperar, 1500);
+  }
+  function _cliCampOpts(){
+    var s=E$('cliCampSel'); if(!s) return;
+    var cc=_cliCampCasa();
+    if(!cc){ s.innerHTML='<option value="">Trayendo las campañas…</option>'; return; }
+    s.innerHTML='<option value="">Cualquiera</option>'+cc.lista.map(function(l){
+      var d=l.ts?new Date(l.ts):null, f=d?(('0'+d.getDate()).slice(-2)+'/'+('0'+(d.getMonth()+1)).slice(-2)):'';
+      return '<option value="'+esc(l.nombre)+'"'+(_cliFiltro.campNom===l.nombre?' selected':'')+'>'+esc(l.nombre)+(f?' · '+f:'')+' ('+l.n+' casas)</option>';
+    }).join('');
+  }
   function _cliBarrioDe(c){
     var _bc=String(c.barrio||'').trim();
     if(/^[-–—.]*$/.test(_bc)) _bc='';
@@ -52174,6 +52272,17 @@ function _objRango(periodo, mesLabel){
       if(_cliFiltro.canal && c.canalDom!==_cliFiltro.canal && (c.canales||[]).indexOf(_cliFiltro.canal)<0) return false;
       if(_cliFiltro.conCat && (c.cats||[]).indexOf(_cliFiltro.conCat)<0) return false;
       if(_cliFiltro.sinCat && (c.cats||[]).indexOf(_cliFiltro.sinCat)>=0) return false;
+      /* La campaña que recibio la CASA (25/10/2026). Sin la bitacora no se sabe
+         quien la recibio: no entra nadie, y la lista dice que esta esperando. */
+      if(_cliFiltro.campNom){
+        var _cc=_cliCampCasa(); if(!_cc) return false;
+        var _rec=!!((_cc.casas[window.crmCasaDe(c)]||{})[_cliFiltro.campNom]);
+        if(_cliFiltro.campModo==='no' ? _rec : !_rec) return false;
+      }
+      if(_cliFiltro.diaSem!=='' && !_cliPideEl(c, Number(_cliFiltro.diaSem))) return false;
+      // El pedido en curso va aparte de «ultima compra»: es otra cosa (25/10/2026).
+      if(_cliFiltro.enCurso==='sin' && _v.pend>0) return false;
+      if(_cliFiltro.enCurso==='con' && !(_v.pend>0)) return false;
       /* MARCA: las tres que solo estaban en la tab Clientes y se trajeron acá
          el 21/9/2026 al unificar las dos pantallas. */
       if(_cliFiltro.marca==='vip'   && !c.vip) return false;
@@ -52199,6 +52308,7 @@ function _objRango(periodo, mesLabel){
       else if(o==='estado') r=(_CLI_EST_ORD[va.estado]||9)-(_CLI_EST_ORD[vb.estado]||9) || (_cliRec(va)-_cliRec(vb));
       else if(o==='canal') r=String(a.canalDom||'~').localeCompare(String(b.canalDom||'~'));
       else if(o==='barrio') r=String(_cliBarrioDe(a)||'~').localeCompare(String(_cliBarrioDe(b)||'~')) || String(a.subBarrio||'').localeCompare(String(b.subBarrio||''));
+      else if(o==='camp'){ var _cs=_cliCampCasa(), ua=_cliUltCamp(a,_cs), ub=_cliUltCamp(b,_cs); r=(ua?ua.dias:1e9)-(ub?ub.dias:1e9); }
       else r=_cliRec(va)-_cliRec(vb);
       return r*dir;
     });
@@ -52217,9 +52327,9 @@ function _objRango(periodo, mesLabel){
   var _CLI_COLS=[
     {k:'nombre',t:'Persona'},{k:'estado',t:'Estado'},{k:'ultima',t:'Última compra',n:1},
     {k:'pedidos',t:'Compras',n:1},{k:'ticket',t:'Ticket prom.',n:1},{k:'facturado',t:'Facturado',n:1},
-    {k:'canal',t:'Canal'},{k:'barrio',t:'Barrio'}];
+    {k:'canal',t:'Canal'},{k:'barrio',t:'Barrio'},{k:'camp',t:'Última campaña (casa)'}];
   function _cliRenderTabla(arr){
-    var o=_cliFiltro.orden, dir=_cliFiltro.dir||1;
+    var o=_cliFiltro.orden, dir=_cliFiltro.dir||1, cc=_cliCampCasa();
     var h='<div class="cli-tw"><table class="cli-t"><thead><tr>'
       +_CLI_COLS.map(function(col){
         var on=(o===col.k);
@@ -52241,6 +52351,12 @@ function _objRango(periodo, mesLabel){
         +'<td class="n">'+(v.facturado?money(v.facturado):'—')+'</td>'
         +'<td>'+esc(c.canalDom||'—')+'</td>'
         +'<td><div>'+esc(bar||'—')+'</div>'+(loc?'<div class="cli-sub">'+esc(loc)+'</div>':'')+'</td>'
+        +(function(){
+          if(!cc) return '<td class="cli-sub">…</td>';
+          var uc=_cliUltCamp(c, cc);
+          return uc ? '<td><div>'+esc(uc.nombre)+'</div><div class="cli-sub">'+(uc.dias===0?'hoy':uc.dias===1?'ayer':uc.dias>0?'hace '+uc.dias+' d':'')+'</div></td>'
+                    : '<td class="cli-sub">ninguna</td>';
+        })()
         +'</tr>';
     });
     return h+'</tbody></table></div>';
@@ -52262,7 +52378,8 @@ function _objRango(periodo, mesLabel){
     clearTimeout(_cliFiltT); _cliFiltT=setTimeout(_cliRenderList,180);
   };
   window.estCliLimpiar=function(){
-    ['diasMin','diasMax','comprasMin','comprasMax','ticketMin','canal','conCat','sinCat','marca','integrante','busq'].forEach(function(k){_cliFiltro[k]='';});
+    ['diasMin','diasMax','comprasMin','comprasMax','ticketMin','canal','conCat','sinCat','marca','integrante','busq','campNom','diaSem','enCurso'].forEach(function(k){_cliFiltro[k]='';});
+    _cliFiltro.campModo='si';
     _cliFiltro.estados=[]; _cliFiltro.estado='';
     rClientes();
   };
@@ -52310,6 +52427,7 @@ function _objRango(periodo, mesLabel){
     var arr=_cliFilteredSorted();
     var c=E$('estCliCount'); if(c)c.innerHTML='<b>'+arr.length+'</b> '+(arr.length===1?'persona queda':'personas quedan');
     var cb=E$('estCliDlN'); if(cb)cb.textContent=arr.length;
+    if(!arr.length && _cliFiltro.campNom && !_cliCampCasa()){ box.innerHTML='<div class="est-soon"><div class="est-soon-i">⏳</div><div>Trayendo las campañas anteriores para saber qué casa recibió cuál…</div></div>'; if(!_cliCampEsperaN) _cliCampEsperar(); return; }
     if(!arr.length){ box.innerHTML='<div class="est-soon"><div class="est-soon-i">🔍</div><div>Ninguna persona con esos filtros.</div></div>'; return; }
     var top=arr.slice(0,400);
     var mas=(arr.length>400)?'<div class="cli-sub" style="padding:8px 4px">Se muestran 400 de '+arr.length+'. La descarga lleva los '+arr.length+'.</div>':'';
@@ -52543,6 +52661,13 @@ function _objRango(periodo, mesLabel){
             +'<label class="cli-f"><span>Canal</span><select class="cli-in" onchange="estCliFiltro(\'canal\',this.value)"><option value="">Todos</option>'+opt(_canSet,f.canal)+'</select></label>'
             +'<label class="cli-f"><span>Compró</span><select class="cli-in" onchange="estCliFiltro(\'conCat\',this.value)"><option value="">Cualquier cosa</option>'+opt(_catSet,f.conCat)+'</select></label>'
             +'<label class="cli-f"><span>Nunca compró</span><select class="cli-in" onchange="estCliFiltro(\'sinCat\',this.value)" title="Para cross-sell: quien nunca probó esa categoría"><option value="">—</option>'+opt(_catSet,f.sinCat)+'</select></label>'
+            +'<label class="cli-f"><span>Pedido en curso</span><select class="cli-in" onchange="estCliFiltro(\'enCurso\',this.value)" title="Aparte de «Última compra»: un pedido que todavía no se entregó"><option value="">Da igual</option>'
+              +'<option value="sin"'+(f.enCurso==='sin'?' selected':'')+'>Sin pedido en curso</option><option value="con"'+(f.enCurso==='con'?' selected':'')+'>Con pedido en curso</option></select></label>'
+            +'<label class="cli-f"><span>Pide los</span><select class="cli-in" onchange="estCliFiltro(\'diaSem\',this.value)" title="'+CLI_DIA_MIN_PED+' pedidos o más en los últimos 200 días, y la mitad o más ese día de la semana (el día en que hace el pedido)"><option value="">Cualquier día</option>'
+              +_CLI_DIAS.map(function(d,i){ return '<option value="'+i+'"'+(String(f.diaSem)===String(i)?' selected':'')+'>'+d+'</option>'; }).join('')+'</select></label>'
+            +'<label class="cli-f"><span>Campaña</span><select class="cli-in" onchange="estCliFiltro(\'campModo\',this.value)" title="Por casa: si alguien de la casa la recibió, la casa la recibió">'
+              +'<option value="si"'+(f.campModo!=='no'?' selected':'')+'>la casa recibió</option><option value="no"'+(f.campModo==='no'?' selected':'')+'>la casa NO recibió</option></select>'
+              +' <select class="cli-in" id="cliCampSel" style="max-width:220px" onchange="estCliFiltro(\'campNom\',this.value)"><option value="">…</option></select></label>'
             +'<button class="est-chip" onclick="estCliLimpiar()" title="Saca todos los filtros menos el barrio">✕ Limpiar filtros</button>'
             +'</div>';
         })()
@@ -52567,6 +52692,8 @@ function _objRango(periodo, mesLabel){
       _cliPintarEstados();
       document.querySelectorAll('#estClientes .est-chip[data-i]').forEach(function(b){b.classList.toggle('on',b.dataset.i===(_cliFiltro.integrante||''));});
       document.querySelectorAll('#estClientes .est-chip[data-m]').forEach(function(b){b.classList.toggle('on',b.dataset.m===(_cliFiltro.marca||''));});
+      _cliCampOpts();
+      if(!_cliCampCasa() && !_cliCampEsperaN) _cliCampEsperar();
       _cliRenderList();
       _cliPintarListas();
     });
