@@ -99,6 +99,8 @@ body{font-family:'Inter',-apple-system,'Segoe UI',system-ui,sans-serif;backgroun
 .pg{display:none;padding:18px 22px}
 .pg.on{display:block}
 /* Botón "Actualizar pedidos" — fuerza load() salteándose el throttle de 60s. */
+.ped-vivo-fila{display:flex;justify-content:flex-end;margin:-4px 2px 6px}.ped-vivo-fila:has(.ped-vivo[hidden]){display:none}
+.ped-vivo{font-size:11px;font-weight:700;white-space:nowrap}.ped-vivo[hidden]{display:none}.ped-vivo-si{color:#2E7D32}.ped-vivo-no{color:#B26A00}
 .btn-reload-ped{display:flex;align-items:center;justify-content:center;gap:6px;width:100%;padding:10px 14px;margin-bottom:10px;border:1.5px solid var(--o);background:#fff;color:var(--o);border-radius:10px;font-size:13px;font-weight:800;font-family:inherit;cursor:pointer;transition:.15s;-webkit-tap-highlight-color:transparent}
 .btn-reload-ped:hover{background:var(--ol)}
 .btn-reload-ped:active{transform:scale(.98)}
@@ -7305,6 +7307,7 @@ details.rb-plg[open]{padding-bottom:10px}
     <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2.2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 4v6h-6"/></svg>
     <span>Actualizar pedidos</span>
   </button>
+  <div class="ped-vivo-fila"><span id="pedEnVivo" class="ped-vivo" hidden></span></div>
   <!-- Los filtros y los pedidos arriba (8/10/2026). Las cajas ocupan una linea
        cada una cuando no hay nada esperando: las pinta rbPintar / fpPintar. -->
   <div class="fr" id="fRow"></div>
@@ -17258,22 +17261,29 @@ var _sbSinWarehouse=false;
    lados a proposito: el front no tiene de donde leerla, y dejarla implicita
    —"todo lo que haya en la tabla"— es justo lo que se rompio hoy. */
 var _SB_CANALES_PEDIDO='Home,Pilar,Clubes,Red';
+/* Las columnas del adelanto. Las usa tambien Pedidos en vivo (`_sbPedidosClaves`):
+   una sola lista, para que la relectura de un pedido traiga lo mismo que la lista. */
+function _sbPedCols(){
+  return 'channel,order_number,customer_name,customer_key,order_state,payment_state,'
+    +'payment_method,source_type,ordered_at,planned_delivery_at,delivered_at,'
+    +'billed_amount,cash_amount,transfer_amount,source_row,updated_at'
+    +(_sbSinWarehouse?'':',warehouse')
+    /* LOS PRODUCTOS NO SON OPCIONALES: ver el comentario de `_sbPedidosAhora`. */
+    +',sales_order_item(product_sku,quantity)';
+}
 function _sbPedidosAhora(limite){
   /* `true` = usá el permiso si lo tenés, pero no salgas a pedirlo. Ver
      `_sbPermiso`: pedirlo acá atrasa el arranque entero 3,5 s. */
   return _sbPermiso(true).then(function(sb){
     if(!sb)return null;
-    var cols='channel,order_number,customer_name,customer_key,order_state,payment_state,'
-      +'payment_method,source_type,ordered_at,planned_delivery_at,delivered_at,'
-      +'billed_amount,cash_amount,transfer_amount,source_row,updated_at'
-      +(_sbSinWarehouse?'':',warehouse')
+    var cols=_sbPedCols()
       /* LOS PRODUCTOS NO SON OPCIONALES. `rPedidos` hace `p.p.map`, `p.p.length`
          y `p.p.forEach`: sin ellos el dibujo revienta con un TypeError y la
          pantalla se queda como estaba — que es exactamente lo que pasaba la
          primera noche, y no se veia ningun error. Medido en Chrome real.
          `product_sku` ES la abreviatura (ECaC, PPM...), o sea lo que el ERP
          llama `a`. Va anidado: un solo viaje, 533 ms con los items adentro. */
-      +',sales_order_item(product_sku,quantity)';
+      ;
     var _pedir=function(cs){
       return fetch(sb.url+'/rest/v1/sales_order?select='+cs+'&channel=in.('+_SB_CANALES_PEDIDO+')'
           +'&order=ordered_at.desc&limit='+(limite||400),
@@ -18089,6 +18099,102 @@ document.addEventListener('visibilitychange', function () {
   if (!_ENV.ws || _ENV.ws.readyState > 1) { _ENV.intento = 0; _enVivoConectar(); }
 });
 
+/* ══ PEDIDOS EN VIVO (25/10/2026, tiempo real paso 3, rama supabase) ══
+   Con la palanca `PED_EN_VIVO` en «si» (viaja con el permiso como `sb.pal.pedEnVivo`)
+   el panel escucha `erp:pedidos` (migracion 121): «cambiaron estos pedidos». Con el
+   escritor unico la base escribe `sales_order` al ACEPTAR la orden, asi que la señal
+   llega en el mismo segundo y no un minuto despues, cuando el aplicador pasa la planilla.
+   · Se juntan las señales de PED_VIVO_JUNTAR_MS y se releen SOLO esos pedidos de
+     `sales_order`, con las columnas del adelanto (`_sbPedCols`).
+   · Se fusionan con `_sbFusionar`, que ya cuida pedido por pedido no volver atras
+     (`_sbFilaPisa`). Ademas, un pedido tocado ACA en los ultimos 6 min no se pisa con
+     la base: es la carrera de la replica que cuida `_sbPuedePisar`, ahora por pedido.
+   · Mas de 50 en una señal, o al volver de un corte: la lista entera, como el adelanto.
+   · Con un editor abierto no se repinta: queda pendiente (`_pendingLoadRender`).
+   · No sella «recien»: el ↻ y su sello siguen siendo de Google.
+   Con la palanca apagada no se ejecuta nada de esto. OJO: prenderla SOLO con la 121
+   pegada. Un canal rechazado deja «rechazado» toda la conexion, y apagaria tambien
+   el en vivo de Abastecimiento. */
+var PED_VIVO_JUNTAR_MS = 700;
+var _pedVivo = { prendido: false, ids: {}, todo: false, t: null };
+function _sbPedidosClaves(claves) {
+  return _sbPermiso(true).then(function (sb) {
+    if (!sb || !sb.token || !claves || !claves.length) return null;
+    var lista = claves.map(function (k) { return '"' + String(k).replace(/["\\]/g, '') + '"'; }).join(',');
+    return fetch(sb.url + '/rest/v1/sales_order?select=' + _sbPedCols() + '&order_key=in.(' + encodeURIComponent(lista) + ')'
+        + '&channel=in.(' + _SB_CANALES_PEDIDO + ')',
+      { headers: { apikey: sb.key, Authorization: 'Bearer ' + sb.token } })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (filas) { return Array.isArray(filas) ? filas.map(_sbAPedido) : null; });
+  }).catch(function () { return null; });
+}
+function _pedVivoAplicar(lista) {
+  if (!lista || !lista.length || typeof D === 'undefined' || !D || !Array.isArray(D.pedidos) || !D.pedidos.length) return false;
+  var ahora = Date.now();
+  var sirven = lista.filter(function (q) {
+    var k = _sbClavePedido(q), L = k ? _sbCambiosPed[k] : 0;
+    return !(L && ahora - L < _SB_ESPERA_TRAS_CAMBIO);
+  });
+  if (!sirven.length) return false;
+  var antes = JSON.stringify(D.pedidos);
+  D.pedidos = _sbFusionar(D.pedidos, sirven); D._pedidosDeSupabase = 1;
+  if (JSON.stringify(D.pedidos) === antes) return false;
+  try { _sbCompletar(); } catch (e) {}
+  try { if (_hayEditorAbierto()) _pendingLoadRender = true; else render(); } catch (e) {}
+  /* La copia del celular con lo nuevo; el sello no cambia (queda mas viejo que la copia, que es el lado seguro). */
+  try { _sbGuardarCopia(); } catch (e) {}
+  try { window.__pedVivo = { ult: ahora, n: sirven.length }; } catch (e) {}
+  return true;
+}
+/* La lista entera (las 400 mas nuevas, la consulta del adelanto) y la misma regla pedido
+   por pedido. No va por `_sbRefrescoPedidos`: ese no relee NADA durante 6 min despues de
+   cualquier cambio local, y una tanda grande se perderia hasta el proximo ↻. */
+function _pedVivoTodo() { try { _sbPedidos(400).then(_pedVivoAplicar); } catch (e) {} }
+function _pedVivoSenal(p) {
+  if (!p) return;
+  if (!Array.isArray(p.ids) || (Number(p.n) || 0) > p.ids.length) _pedVivo.todo = true;
+  else p.ids.forEach(function (k) { if (k) _pedVivo.ids[String(k)] = 1; });
+  if (_pedVivo.t) return;
+  _pedVivo.t = setTimeout(function () {
+    _pedVivo.t = null;
+    var todo = _pedVivo.todo, ids = Object.keys(_pedVivo.ids);
+    _pedVivo.todo = false; _pedVivo.ids = {};
+    if (todo || ids.length > 50) { _pedVivoTodo(); return; }
+    if (ids.length) _sbPedidosClaves(ids).then(_pedVivoAplicar);
+  }, PED_VIVO_JUNTAR_MS);
+}
+/* El cartelito arriba de la lista: vivo, o desde cuando no. Cortado no es callado. */
+function _pedVivoSello(st) {
+  ['pedEnVivo'].forEach(function (id) {
+    var el = document.getElementById(id);
+    if (!el) return;
+    var apagado = !_pedVivo.prendido || !st || st.estado === 'apagado';
+    el.hidden = apagado;
+    if (apagado) { el.textContent = ''; el.className = 'ped-vivo'; return; }
+    if (st.estado === 'vivo') { el.textContent = '● en vivo'; el.className = 'ped-vivo ped-vivo-si'; el.title = 'La lista se actualiza sola cuando alguien carga o cambia un pedido'; return; }
+    if (st.estado === 'conectando') { el.textContent = '○ conectando…'; el.className = 'ped-vivo ped-vivo-no'; el.title = ''; return; }
+    var txt = 'sin conexión en vivo';
+    try { if (typeof _hace === 'function' && st.desde) txt += ' · ' + _hace(st.desde); } catch (e) {}
+    el.textContent = txt; el.className = 'ped-vivo ped-vivo-no'; el.title = st.motivo || '';
+  });
+}
+/* Se prende si la palanca dice «si». Idempotente: se llama al arrancar, cuando llega
+   el permiso o cambian las palancas (`maleu:palancas`) y cuando llega la lista. */
+function _pedVivoPrender() {
+  try {
+    if (_pedVivo.prendido || typeof _enVivoEscuchar !== 'function' || typeof _sbPermiso !== 'function') return;
+    _sbPermiso(true).then(function (sb) {
+      if (_pedVivo.prendido || !sb || !sb.pal || !sb.pal.pedEnVivo) return;
+      _pedVivo.prendido = true;
+      _enVivoAlEstado(_pedVivoSello);
+      _enVivoEscuchar('erp:pedidos', _pedVivoSenal, _pedVivoTodo);
+      try { _pedVivoSello(_enVivoEstado()); } catch (e) {}
+    }, function () {});
+  } catch (e) {}
+}
+try { window.addEventListener('maleu:palancas', function () { _pedVivoPrender(); }); } catch (e) {}
+setTimeout(_pedVivoPrender, 0);
+
 /* ══ LA TAB PEDIDOS DESDE SUPABASE, CON PALANCA (6/10/2026, rama supabase) ══
 
    Con `Config_Maleu > PEDIDOS_DESDE_PG = si` (viaja con el permiso de
@@ -18448,6 +18554,7 @@ function loadRapido(opts){
   var _sbGen={llego:false};
   _sbGenUlt=_sbGen;   /* lo usa el permiso de la mañana: ver `_sbPermisoTibio` */
   try{ _sbRefrescoPedidos(_sbGen); }catch(e){}
+  try{ _pedVivoPrender(); }catch(e){}
   /* La foto de `pedidosLight` sale por el mismo carril y con el mismo testigo:
      adelanta, no reemplaza. Ver `_fotoPedidos`. */
   /* Con `PEDIDOS_DESDE_PG` la foto ya es la fuente (ver `_lotePedidosPg`):
