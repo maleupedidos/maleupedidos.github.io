@@ -98,7 +98,7 @@ function entregas(lista, cara) {
   const red = new Set(), grupos = {};
   lista.forEach(v => {
     const p = partes(fechaDe(v, cara));
-    if (v.canal === 'Red') { red.add(v.zona + '|' + p.iso); return; }
+    if (v.canal === 'Red') { red.add(v.zona + '|' + String(v.cliente || '').toLowerCase().trim().replace(/\s+/g, ' ') + '|' + p.iso); return; }   // por cliente desde el 25/10/2026
     let t = String(v.tel || '').replace(/\D/g, ''); if (t.length > 10) t = t.slice(-10);
     const k = (t || String(v.cliente).toLowerCase().trim().replace(/\s+/g, ' ')) + '|' + fechaDe(v, cara);
     (grupos[k] = grupos[k] || []).push(v);
@@ -206,7 +206,7 @@ const num = t => Number(String(t || '').replace(/[^\d]/g, '')) || 0;
 
     let k = await kpis();
     chk('Facturado de todo = la cuenta de aca', num(k['Facturado']) === suma(V, v => v.$), [k['Facturado'], suma(V, v => v.$)]);
-    chk('Ventas cuenta ENTREGAS (el mismo viaje es una, Red por vendedor y dia)', num(k['Ventas']) === entregas(V, 'ventas'), [k['Ventas'], entregas(V, 'ventas'), V.length]);
+    chk('Ventas cuenta ENTREGAS (el mismo viaje es una, Red por cliente del vendedor y dia)', num(k['Ventas']) === entregas(V, 'ventas'), [k['Ventas'], entregas(V, 'ventas'), V.length]);
     chk('Clientes = personas distintas por telefono', num(k['Clientes']) === new Set(V.map(cliKey)).size, [k['Clientes'], new Set(V.map(cliKey)).size]);
     chk('Cobrado incluye lo de Red rendido mixto (en mx) sin inventar reparto', num(k['Cobrado']) === suma(V, cobradoDe), [k['Cobrado'], suma(V, cobradoDe)]);
     chk('Sin cobrar = el facturado de lo no cobrado', num(k['Sin cobrar']) === suma(V.filter(v => v.ep !== 'Cobrado'), v => v.$), [k['Sin cobrar']]);
