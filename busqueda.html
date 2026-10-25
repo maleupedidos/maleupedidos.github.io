@@ -3475,6 +3475,7 @@ function confirmarRecibir(idx, btn) {
       prov: prov.n,
       prod: g.prod,
       qtyRecibida: qtyRecibida,
+      pedido: totalPedido,   // solo para el aviso de «falta la mitad» (abaRecFaltaMitad)
       rows: g.rows.map(function(r) { return r.r; }),
       // El N° de cada OC: si la fila ya es otra (lista vieja), el servidor no la toca.
       ocs: g.rows.map(function(r) { return r.oc || ''; })
@@ -3554,14 +3555,60 @@ function abaLeerDep(idx) {
   return e ? String(e.value || '').trim() : '';
 }
 
-function enviarGroups(provName, idx, groups) {
+/* LA RECEPCION CIERRA CON LO RECIBIDO (Tadeo, 23/10/2026; palanca RECEPCION_CIERRA).
+   Lo que no llego no abre OC: se cierra y listo. Solo si falta la mitad o mas de
+   lo que se le pidio a este proveedor se pregunta, por si conviene volver a pedirlo.
+   Devuelve { falta, pedido } si hay que preguntar, o null. Lo que sobra de un
+   producto no tapa lo que falta de otro. */
+function abaRecFaltaMitad(groups) {
+  try { if (typeof _palancaYa !== 'function' || !_palancaYa('recepcionCierra')) return null; } catch (e) { return null; }
+  var falta = 0, pedido = 0;
+  (groups || []).forEach(function (g) {
+    var p = Number(g.pedido) || 0, q = Number(g.qtyRecibida) || 0;
+    pedido += p;
+    if (q < p) falta += p - q;
+  });
+  return (pedido > 0 && falta / pedido >= 0.5) ? { falta: falta, pedido: pedido } : null;
+}
+function abaElegir(msg, siTxt, noTxt, onSi, onNo) {
+  var overlay = document.getElementById('abaConfirmOverlay');
+  var btnYes = document.getElementById('confirmYes'), btnNo = document.getElementById('confirmNo');
+  var ySi = btnYes.textContent, yNo = btnNo.textContent;
+  document.getElementById('confirmMsg').textContent = msg;
+  btnYes.textContent = siTxt; btnNo.textContent = noTxt;
+  overlay.classList.add('show');
+  function cleanup() {
+    overlay.classList.remove('show');
+    btnYes.textContent = ySi; btnNo.textContent = yNo;
+    btnYes.onclick = null; btnNo.onclick = null; overlay.onclick = null;
+  }
+  btnYes.onclick = function () { cleanup(); onSi(); };
+  btnNo.onclick = function () { cleanup(); onNo(); };
+  // Tocar afuera no elige: no se recibe nada y el panel queda como estaba.
+  overlay.onclick = function (e) { if (e.target === overlay) cleanup(); };
+}
+
+function enviarGroups(provName, idx, groups, faltanteOC) {
+  if (faltanteOC === undefined) {
+    var fm = abaRecFaltaMitad(groups);
+    if (fm) {
+      var fmt = function (n) { return String(Math.round(n * 1000) / 1000).replace('.', ','); };
+      abaElegir('A ' + provName + ' le pediste ' + fmt(fm.pedido) + ' y faltan ' + fmt(fm.falta) +
+                ' (la mitad o más). ¿Cerrás con lo que llegó o abrís una OC por lo que falta?',
+                'Abrir OC por lo que falta', 'Cerrar con lo que llegó',
+                function () { enviarGroups(provName, idx, groups, true); },
+                function () { enviarGroups(provName, idx, groups, false); });
+      return;
+    }
+  }
   // clientOpId: ID único de esta confirmación. Si hay timeout y reintenta, el server
   // dedupa con CacheService 6h y devuelve la misma respuesta sin re-ejecutar.
   var coid = 'rm_' + provName.replace(/\W/g,'_') + '_' + Date.now() + '_' + Math.random().toString(36).slice(2,8);
   var _comp = abaLeerComp(idx);
   var _pases = abaLeerPases(idx);
   abaSyncQueue.push({ action: 'recibirMercaderia', groups: groups, clientOpId: coid, ts: Date.now(), comprobante: _comp || undefined,
-                      deposito: abaLeerDep(idx) || undefined, pases: _pases.length ? _pases : undefined });
+                      deposito: abaLeerDep(idx) || undefined, pases: _pases.length ? _pases : undefined,
+                      faltanteOC: faltanteOC === true ? true : undefined });
   _abaRecRepTocado = {};
   marcadosRecibido[_abaMarcaKey(provName)] = true;
   abaSaveLocal();
