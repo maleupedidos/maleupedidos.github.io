@@ -8346,6 +8346,17 @@ function _rdCobro(st){
   var rd=Math.round((req-Math.floor(req/100+1e-9)*100)*100)/100;
   return rd<0.005?0:rd;
 }
+/* EL DESCUENTO ACEPTADO VIAJA EXPLICITO (25/10/2026). Home #2048: $103.819,50 en
+   efectivo, el cliente dio $100.000 y se acepto el descuento. Ese faltante era una
+   propina NEGATIVA que el cobro desde la tarjeta y el combo recortaban a cero
+   (`Math.max(0,r.propina)`): el pedido quedaba cobrado por $103.800 y «Sin guardar»
+   con $3.800 que no estaban en la mano. Ahora va como `descuentoAceptado` y el
+   backend lo SUMA al Descuento, encima del redondeo. */
+function _descAceptadoMonto(st,r){
+  if(!st||!st.aceptaDescuento||!r||r.partial)return 0;
+  var f=Math.round(-(Number(r.propina)||0)*100)/100;
+  return f>0?f:0;
+}
 function _recalcCobroRuta(){
   if(!_cobroRutaState)return null;
   var st=_cobroRutaState;
@@ -8825,7 +8836,7 @@ function confirmarCobroRuta(){
   // Lo que REALMENTE entró por este pedido. Espeja la fórmula del backend
   // (Code.js:4706 — Facturado V = Total + Propina Ef + Propina Tr + A Favor),
   // así el número local y el que baja después del refetch son el mismo.
-  var facturadoTotal=total+prop+aFav-((fpFinal==='Efectivo')?(r.rd||0):0);
+  var facturadoTotal=total+prop+aFav-((fpFinal==='Efectivo')?(r.rd||0):0)-_descAceptadoMonto(st,r);
   // Propina va al método dominante
   var propMet=(ef>=tr)?'Efectivo':'Transferencia';
 
@@ -8870,6 +8881,7 @@ function confirmarCobroRuta(){
   _descAlPayload(st,payload,fpFinal);
   /* Redondeo del efectivo (19/10/2026): explicito, tambien en 0, para que el backend no lo calcule por su cuenta. */
   if(RUT_RED_EF&&_rdHojaOk(payload.hoja))payload.redondeo=(fpFinal==='Efectivo')?(r.rd||0):0;
+  if(_descAceptadoMonto(st,r)>0)payload.descuentoAceptado=_descAceptadoMonto(st,r);
   // Vuelto en efectivo: lo cubre el efectivo recibido → sale de la billetera (mismo método);
   // si no, y lo cubre MP → cambio cruzado (Egreso Ef / Ingreso MP).
   if(r.camEf>0){
@@ -9005,7 +9017,10 @@ function _confirmarCobroComboRuta(st,r){
     // combo, así que sólo ése cambia de monto.
     /* El redondeo del billete va entero en UN pedido del combo (19/10/2026). */
     var rdP=(fpComboFinal==='Efectivo'&&idx===_rdComboIdx(st))?(r.rd||0):0;
-    p['$']=totalP+propP+aFavP-rdP;
+    /* El descuento aceptado va entero en el mismo pedido que el redondeo (o en el
+       primero si ninguno es de Home/Pilar): 25/10/2026, ver _descAceptadoMonto. */
+    var dAcP=(idx===Math.max(0,_rdComboIdx(st)))?_descAceptadoMonto(st,r):0;
+    p['$']=totalP+propP+aFavP-rdP-dAcP;
     if(propP>0)propinas[k]=propP;else delete propinas[k];
     pendientesCobro=pendientesCobro.filter(function(pc){
       return !(((pc.h||'')===p.h) && (String(pc.id||'')===String(p.id)));
@@ -9029,6 +9044,7 @@ function _confirmarCobroComboRuta(st,r){
       repartidor:_rutaUser(),ts:Date.now()
     };
     if(RUT_RED_EF&&_rdHojaOk(p.h))payload.redondeo=rdP;
+    if(dAcP>0)payload.descuentoAceptado=dAcP;
     // Descuento del combo: forzar recalculo del total/facturado en el backend por pedido.
     if(_adj.extra){
       if(_adj.extra.recalcular)payload.recalcular=true;
@@ -9157,7 +9173,9 @@ function _confirmarCobroPendiente(st,r){
   }
 
   // ── COBRO COMPLETO → action=marcarCobrado ──
-  var propina=r.propina;                    // puede ser negativa (ajuste de redondeo)
+  /* Negativa solo con «Aceptar descuento»: desde el 25/10/2026 eso viaja como
+     `descuentoAceptado` (ver _descAceptadoMonto) y no como propina negativa. */
+  var propina=_descAceptadoMonto(st,r)>0?0:r.propina;
   var aFavorPos=Math.max(0,r.aFav);         // crédito nuevo (cliente paga de más)
   var aplicacionPos=Math.max(0,r.aplicar);  // saldo previo aplicado
   // ── Detección AUTOMÁTICA de Mixto ──
@@ -9190,6 +9208,7 @@ function _confirmarCobroPendiente(st,r){
   _descAlPayload(st,payload,fpFinal);
   /* Redondeo del efectivo (19/10/2026): explicito, tambien en 0, para que el backend no lo calcule por su cuenta. */
   if(RUT_RED_EF&&_rdHojaOk(payload.hoja))payload.redondeo=(fpFinal==='Efectivo')?(r.rd||0):0;
+  if(_descAceptadoMonto(st,r)>0)payload.descuentoAceptado=_descAceptadoMonto(st,r);
   // Vuelto en efectivo: si lo cubre el efectivo recibido → sale de la billetera (mismo método).
   //                     si no, y lo cubre MP → cambio cruzado (Egreso Ef / Ingreso MP).
   if(r.camEf>0){
