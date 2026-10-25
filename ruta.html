@@ -7108,15 +7108,82 @@ function _cobroVivo(peds){
   var aplic=st.partial?0:Math.max(0,Math.min(Number(st.aplicarSaldo)||0,total));
   return {por:por,clave:clave,aplic:aplic,rd:_rdCobro(st)||0};
 }
-/* "10%" o "12,5%" del subtotal: el porcentaje que es ese descuento. */
+/* "10%" del subtotal: el porcentaje que es ese descuento, SOLO si es redondo.
+   Un descuento por un producto que no se cobró (la entraña en mal estado del
+   asado de Iñaki, 25/10/2026) salía «8,5%»: un número que no dice nada y que el
+   cliente lee como un descuento raro. Sin porcentaje redondo, va solo el monto. */
 function _cobroPct(desc,sub){
   if(!(desc>0)||!(sub>0))return '';
   var p=desc/sub*100, r=Math.round(p);
-  return (Math.abs(p-r)<0.05?String(r):String(Math.round(p*10)/10).replace('.',','))+'%';
+  return Math.abs(p-r)<0.05?String(r)+'%':'';
+}
+/* VARIOS PEDIDOS, UN SOLO MENSAJE QUE ARRANCA POR EL TOTAL (25/10/2026). Tadeo,
+   con el asado de Iñaki (3 pedidos): «quiero pasar cuánto es el total del asado
+   y esto es un quilombo». El de antes iba pedido por pedido, cada uno con su
+   desglose, y el total quedaba al final. Ahora: el total arriba, lo que se llevó
+   JUNTO por producto (las 2 picañas en un renglón), el descuento y el envío en
+   una línea cada uno, y los N° de pedido en una sola línea para buscarlos. Con
+   un pago parcial en alguno vuelve al formato de antes, que dice cuánto falta
+   de cada uno. */
+function _cobroMsgJunto(peds,vivo,hola,todosEnt){
+  var kf=function(k){return k.toLocaleString('es-AR',{minimumFractionDigits:3,maximumFractionDigits:3});};
+  var total=0, desc=0, env=0, sAp=0, conPrecio=true, orden=[], prod={}, dias={};
+  peds.forEach(function(p){
+    var v=vivo?vivo.por[vivo.clave(p)]:null;
+    total+=v?v.total:(Number(p['$'])||0);
+    desc+=v?v.desc:(Number(p.desc)||0); env+=v?v.env:(Number(p.env)||0); sAp+=v?(v.sAp||0):0;
+    dias[_cobroDiaLargo(p)||'']=1;
+    var lp=_cobroPreciosLinea(p);
+    if(!lp.conPrecio)conPrecio=false;
+    lp.items.forEach(function(x,i){
+      var e=prod[x.a]||(prod[x.a]={q:0,pr:0,kgs:[]});
+      if(!prod[x.a].visto){prod[x.a].visto=1;orden.push(x.a);}
+      e.q+=Number(x.q)||0; e.pr+=Number(lp.precios[i])||0;
+      if(_esKg(x.a))(p.pz||[]).forEach(function(z){if(z&&z.a===x.a&&Number(z.kg)>0)e.kgs.push(Number(z.kg));});
+    });
+  });
+  var dl=Object.keys(dias), dia=(dl.length===1&&dl[0])?dl[0]:'';
+  var l=[];
+  l.push(hola+(todosEnt?'Te paso el total de lo que te llevaste':'Te paso el total de tus pedidos')+(dia?' el '+dia:'')+' 🧡');
+  l.push('');
+  if(vivo&&(vivo.aplic>0||vivo.rd>0)){
+    var x=[_cobroPesos(total)];
+    if(vivo.aplic>0)x.push('saldo a favor −'+_cobroPesos(vivo.aplic));
+    if(vivo.rd>0)x.push('redondeo −'+_cobroPesos(vivo.rd));
+    l.push(x.join(' · '));
+    total=Math.max(0,total-vivo.aplic-vivo.rd);
+  }
+  l.push('💳 Total: '+_cobroPesos(total));
+  l.push('');
+  orden.forEach(function(a){
+    var e=prod[a], nombre=PROD_LARGOS[a]||PROD_NAMES[a]||a, pr=conPrecio?' · '+_cobroPesos(e.pr):'';
+    if(_esKg(a)){
+      var n=e.kgs.length, kg=n?e.kgs.reduce(function(s,k){return s+k;},0):e.q;
+      l.push('• '+nombre+' — '+(n>1?n+' piezas, ':(n===1?'1 pieza, ':''))+kf(kg)+' kg'+pr);
+    }else{
+      l.push('• '+e.q+'× '+nombre+(conPrecio?' — '+_cobroPesos(e.pr):''));
+    }
+  });
+  if(desc>0)l.push('• Descuento −'+_cobroPesos(desc));
+  if(env>0)l.push('• Envío '+_cobroPesos(env));
+  if(sAp>0)l.push('• Saldo a favor −'+_cobroPesos(sAp));
+  var ns=peds.map(function(p){return '#'+p.id;});
+  l.push('('+(ns.length>1?'pedidos '+ns.slice(0,-1).join(', ')+' y '+ns[ns.length-1]:'pedido '+ns[0])+')');
+  l.push('');
+  var al=_aliasCliente();
+  l.push('Para abonar: '+al.map(function(a){return a.alias+(a.banco?' ('+a.banco+')':'');}).join(' o '));
+  if(todosEnt)l.push('Cuando puedas me transferís. ¡Gracias!');
+  l.push('Si algo no coincide, decime y lo corrijo.');
+  return l.join('\n');
 }
 function _cobroMsgCliente(peds,vivo){
   peds=(peds||[]).filter(function(p){return !!p;});
   if(!peds.length)return '';
+  if(peds.length>1&&!peds.some(function(p){return Number(p.cobradoParcial)>0;})){
+    var _n=String(peds[0].c||'').replace(/\s*\(.*$/,'').trim().split(/\s+/)[0]||'';
+    if(_n)_n=_n.charAt(0).toUpperCase()+_n.slice(1);
+    return _cobroMsgJunto(peds,vivo,'¡Hola'+(_n?' '+_n:'')+'! ',peds.every(function(p){return p.es==='Entregado';}));
+  }
   var nom=String(peds[0].c||'').replace(/\s*\(.*$/,'').trim().split(/\s+/)[0]||'';
   if(nom)nom=nom.charAt(0).toUpperCase()+nom.slice(1);
   var hola='¡Hola'+(nom?' '+nom:'')+'! ';
