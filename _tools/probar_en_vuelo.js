@@ -9,7 +9,7 @@ const PANEL = fs.readFileSync(process.argv[3] || '_src/panel.src.html', 'utf8');
 const fn = (src, n) => { const i = src.indexOf('function ' + n + '('); if (i < 0) return ''; let d = 0, j = src.indexOf('{', i); for (; j < src.length; j++) { if (src[j] === '{') d++; else if (src[j] === '}') { d--; if (!d) break; } } return src.slice(i, j + 1); };
 const c = { RUT_MEDIR_CANALES: ['Home', 'Pilar'] }; vm.createContext(c);
 vm.runInContext(['_rutBaseNorm', '_rutVueloSet', '_rutMedirComparar', '_rutCobrosComparar'].map(n => fn(RUTA, n)).join('\n'), c);
-vm.runInContext(fn(PANEL, '_pedArmaComparar'), c);
+vm.runInContext(fn(PANEL, '_pedArmaComparar') + ';' + fn(PANEL, '_ventasArmaComparar'), c);
 let ok = 0, mal = 0; const chk = (t, x, d) => { x ? ok++ : mal++; console.log((x ? '  ok  ' : '  MAL ') + t + (x ? '' : '  -> ' + JSON.stringify(d))); };
 const vu = { claves: ['Home|2101', 'Red|2102'], total: 3 };
 // Ruta: el alta nueva esta en Apps Script y todavia no en la base
@@ -31,5 +31,11 @@ const pb = { pedidos: [{ h: 'Red', r: 140, n: '2102', es: 'Cancelado', $: 11500,
 r = c._pedArmaComparar(pa, pb, vu);
 chk('Pedidos: el cancelado en vuelo no es diferencia', r.diferencias === 0 && r.detalle._en_vuelo.n === 1 && r.pedidos === 1, r);
 chk('Pedidos: sin la 133 se ve (es)', c._pedArmaComparar(pa, pb, null).diferencias === 1);
+// Ventas: la base ya tiene el cobro del alta nueva
+const va = { v: [{ canal: 'Home', h: 'Home', n: '2101', cliente: 'X', fecha: '26/10', $: 11500 }, { canal: 'Home', h: 'Home', n: '2001', cliente: 'Y', fecha: '20/10', $: 1 }] };
+const vb = { v: [{ canal: 'Home', h: 'Home', n: '2101', cliente: 'X', fecha: '26/10', $: 0 }, { canal: 'Home', h: 'Home', n: '2001', cliente: 'Y', fecha: '20/10', $: 1 }] };
+r = c._ventasArmaComparar(va, vb, vu);
+chk('Ventas: el pedido en vuelo no es diferencia', r.diferencias === 0 && r.detalle._en_vuelo.n === 1, r);
+chk('Ventas: sin la 133 se ve', c._ventasArmaComparar(va, vb, null).diferencias === 1);
 console.log(ok + ' ok, ' + mal + ' mal');
 process.exit(mal ? 1 : 0);
