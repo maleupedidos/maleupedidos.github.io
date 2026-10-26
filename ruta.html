@@ -2250,12 +2250,71 @@ function _rutAviso(estado){
    Y si ya hay uno en vuelo (la sincronizacion arranco hace 3 s), el ↻ lo reusa
    en vez de sumar otro calculo de 9 s en paralelo. Se comparte el TEXTO y cada
    uno lo parsea: asi nadie procesa un objeto que otro ya modifico. */
+/* RUTA DESDE LA BASE, MODO MEDIR (26/10/2026, bloque 6; migraciones 129, 140 y 141).
+   Ruta le pide `entregas` a Apps Script cada 15 s por celular: es la lectura que mas
+   lo carga. Con `RUTA_DESDE_PG` en «medir» (viaja con el permiso: `sb.pal.rutaPg`),
+   cada 2 min como mucho le pide lo mismo a la base (`ruta_entregas_pantalla`, que
+   chequea el permiso de la tab), compara Home y Pilar campo por campo con la MISMA
+   regla que `_tools/cruce_ruta.py` y lo anota (`ruta_cruce_anotar`): cada 10 min, o
+   enseguida si cambia la cantidad de diferencias. Lo que se ve NO cambia: sigue siendo
+   lo de Apps Script. En el detalle va el campo y la clave del pedido, nunca el valor
+   (son datos de clientes). Sin la palanca, o suelta (?standalone=1), no hace nada. */
+var _rutMsApps=0, _rutMedir={ult:0,anot:0,dif:-1,vuelo:false};
+var RUT_MEDIR_CANALES=['Home','Pilar'], RUT_MEDIR_MS=120000, RUT_ANOTAR_MS=600000;
+function _rutBaseNorm(v){
+  if(v===null||v===undefined||v===''||(typeof v==='object'&&!Array.isArray(v)&&!Object.keys(v).length)||(Array.isArray(v)&&!v.length))return null;
+  if(typeof v==='number')return Math.round(v*1000)/1000;
+  if(typeof v==='string'){var s=v.trim();return /^-?\d+(\.\d+)?$/.test(s)?Number(s):(s||null);}
+  if(Array.isArray(v))return v.map(function(x){return JSON.stringify(_rutBaseNorm(x));}).sort();
+  if(typeof v==='object'){var o={};Object.keys(v).sort().forEach(function(k){var n=_rutBaseNorm(v[k]);if(n!==null)o[k]=n;});return Object.keys(o).length?o:null;}
+  return v;
+}
+/* Los canales que compara son los que la base dice que arma (`canales`, desde la 142);
+   una base de antes no lo dice y se comparan Home y Pilar. Con los cuatro, tambien la
+   carne pendiente de Red (`carnePend`), con el prefijo «carnePend.» en el detalle. */
+function _rutMedirComparar(a,b){
+  var can=(b&&Array.isArray(b.canales))?b.canales:RUT_MEDIR_CANALES;
+  var lista=function(d,grupos){var m={};grupos.forEach(function(g){(d&&d[g]||[]).forEach(function(x){if(x&&can.indexOf(x.h)>=0)m[x.h+'#'+Number(x.id)]=x;});});return m;};
+  var det={},n=0,total=0;
+  var anotar=function(campo,k){n++;if(!det[campo])det[campo]={n:0,ej:k};det[campo].n++;};
+  var cruzar=function(A,B,pre){
+    Object.keys(A).forEach(function(k){
+      var x=A[k],y=B[k];if(!y){anotar(pre+'_solo_apps_script',k);return;}
+      var cs={};Object.keys(x).concat(Object.keys(y)).forEach(function(c){cs[c]=1;});
+      Object.keys(cs).forEach(function(c){if(JSON.stringify(_rutBaseNorm(x[c]))!==JSON.stringify(_rutBaseNorm(y[c])))anotar(pre+c,k);});
+    });
+    Object.keys(B).forEach(function(k){if(!A[k])anotar(pre+'_solo_base',k);});
+    total+=Object.keys(A).length;
+  };
+  cruzar(lista(a,['e','hechas']),lista(b,['e','hechas']),'');
+  if(b&&Array.isArray(b.carnePend))cruzar(lista(a,['carnePend']),lista(b,['carnePend']),'carnePend.');
+  return {entregas:total,diferencias:n,detalle:det};
+}
+function _rutMedirBase(datos){
+  if(_rutMedir.vuelo||Date.now()-_rutMedir.ult<RUT_MEDIR_MS||typeof _sbPermiso!=='function')return;
+  _rutMedir.vuelo=true;_rutMedir.ult=Date.now();
+  var msA=_rutMsApps;
+  Promise.resolve(_sbPermiso()).then(function(sb){
+    if(!sb||!sb.pal||(sb.pal.rutaPg!=='medir'&&sb.pal.rutaPg!=='si'))return;
+    var h={apikey:sb.key,Authorization:'Bearer '+sb.token,'Content-Type':'application/json'},t0=Date.now();
+    return fetch(sb.url+'/rest/v1/rpc/ruta_entregas_pantalla',{method:'POST',headers:h,body:'{}'})
+      .then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.json();})
+      .then(function(b){
+        var msB=Date.now()-t0,c=_rutMedirComparar(datos,b);
+        if(c.diferencias===_rutMedir.dif&&Date.now()-_rutMedir.anot<RUT_ANOTAR_MS)return;
+        _rutMedir.dif=c.diferencias;_rutMedir.anot=Date.now();
+        return fetch(sb.url+'/rest/v1/rpc/ruta_cruce_anotar',{method:'POST',headers:h,
+          body:JSON.stringify({p:{ms_apps:msA,ms_base:msB,entregas:c.entregas,diferencias:c.diferencias,detalle:c.detalle}})});
+      });
+  }).catch(function(){}).then(function(){_rutMedir.vuelo=false;});
+}
 var _rutEntVuelo=null;
 function _pedirEntregasTxt(fresh){
   if(_rutEntVuelo&&Date.now()-_rutEntVuelo.t<45000&&(!fresh||_rutEntVuelo.fresh))return _rutEntVuelo.p;
   var reg={t:Date.now(),fresh:!!fresh,p:null};
   reg.p=fetch(RUT_APPS_SCRIPT_URL+'?action=entregas&t='+Date.now()+(fresh?'&fresh=1':''))
-    .then(function(r){return r.text()});
+    .then(function(r){return r.text()})
+    .then(function(t){_rutMsApps=Date.now()-reg.t;return t;});
   var fin=function(){if(_rutEntVuelo===reg)_rutEntVuelo=null;};
   reg.p.then(fin,fin);
   _rutEntVuelo=reg;
@@ -2275,6 +2334,8 @@ function refresh(silent,fresh,auto){
        {ok:false} vaciaba ARMADO y RUTA — y la sincronizacion lo pediria cada
        15 s. Mismo criterio que fetchCobrosPendientes. */
     if(!data||!Array.isArray(data.e))throw new Error('respuesta sin entregas');
+    /* Ruta desde la base, modo medir (26/10/2026): compara en paralelo, no toca lo que se ve. */
+    try{_rutMedirBase({e:JSON.parse(JSON.stringify(data.e)),hechas:JSON.parse(JSON.stringify(data.hechas||[]))});}catch(eMd){}
     if(typeof data.redEf==='boolean')RUT_RED_EF=data.redEf;   /* redondeo del efectivo (19/10/2026) */
     if(!auto)btn.classList.remove('spinning');
     var firma=_rutFirmaDe(data);
@@ -5572,12 +5633,70 @@ function _cobConfirmado(p){if(p&&p.action==='marcarCobrado')_cobRecientes.push({
 /* _verificarCobroEntro se borro el 12/9/2026: la usaba solo el fetch directo del
    cobro de COBROS, que paso a la cola. */
 
+/* COBROS DESDE LA BASE (26/10/2026, bloque 6). Con la sub-tab abierta, COBROS le pedia
+   `cobrosPendientes` a Apps Script cada 15 s. Esa pantalla ya tiene su foto en la base
+   (la usa el panel con CAJA_DESDE_PG). Palanca propia, `RUTA_COBROS_PG` (viaja con el
+   permiso: `sb.pal.rutaCobrosPg`; sin fila = no):
+     medir  como siempre a Apps Script y, cada 2 min, la foto al lado: se comparan los
+            cobros y se anota en `ruta_cruce` (detalle `_pantalla: cobros`);
+     si     la foto, con la MISMA regla del panel (`_cajaDesdePg` + `_pgNoUsar`):
+            confirmada, del dia y sin escrituras despues. Si no sirve, Apps Script.
+   El ↻ (fresh y no auto) va siempre a Apps Script, como en el panel. */
+var _rutCobMedir={ult:0,anot:0,dif:-1};
+function _rutCobrosApps(fresh){
+  return fetch(RUT_APPS_SCRIPT_URL+'?action=cobrosPendientes&t='+Date.now()+(fresh?'&fresh=1':'')).then(function(r){return r.json()});
+}
+function _rutCobrosFoto(){
+  if(typeof _fotosDeLaBase!=='function'||typeof _cajaDesdePg!=='function'||typeof _pgNoUsar!=='function')return Promise.resolve(null);
+  return _fotosDeLaBase(['cobrosPendientes']).then(function(f){
+    if(!f||!f.ok)return null;
+    var c=_cajaDesdePg(f.filas,f.estado,Date.now(),{cobrosPendientes:1});
+    if(!c.ok)return null;
+    if(_pgNoUsar(c.alDia,(typeof _selloDe==='function')?_selloDe(f.sello,['cobrosPendientes']):0))return null;
+    return c.d.cobrosPendientes;
+  }).catch(function(){return null;});
+}
+function _rutCobrosComparar(a,b){
+  var m=function(d){var o={};(d&&d.cobros||[]).forEach(function(x){if(x)o[(x.h||'')+'#'+Number(x.id)]=x;});return o;};
+  var A=m(a),B=m(b),det={},n=0;
+  var anotar=function(c,k){n++;if(!det[c])det[c]={n:0,ej:k};det[c].n++;};
+  Object.keys(A).forEach(function(k){
+    var x=A[k],y=B[k];if(!y){anotar('_solo_apps_script',k);return;}
+    var cs={};Object.keys(x).concat(Object.keys(y)).forEach(function(c){cs[c]=1;});
+    Object.keys(cs).forEach(function(c){if(JSON.stringify(_rutBaseNorm(x[c]))!==JSON.stringify(_rutBaseNorm(y[c])))anotar(c,k);});
+  });
+  Object.keys(B).forEach(function(k){if(!A[k])anotar('_solo_base',k);});
+  det._pantalla={n:0,ej:'cobros'};
+  return {entregas:Object.keys(A).length,diferencias:n,detalle:det};
+}
+function _rutCobrosTraer(fresh,auto){
+  if(typeof _sbPermiso!=='function')return _rutCobrosApps(fresh);
+  return Promise.resolve(_sbPermiso()).catch(function(){return null;}).then(function(sb){
+    var modo=sb&&sb.pal&&sb.pal.rutaCobrosPg;
+    if(modo==='si'&&!(fresh&&!auto)){
+      return _rutCobrosFoto().then(function(d){return d||_rutCobrosApps(fresh);});
+    }
+    var p=_rutCobrosApps(fresh);
+    if(modo==='medir'&&Date.now()-_rutCobMedir.ult>=RUT_MEDIR_MS){
+      _rutCobMedir.ult=Date.now();
+      var t0=Date.now();
+      Promise.all([p,_rutCobrosFoto().then(function(d){return {d:d,ms:Date.now()-t0};})]).then(function(rs){
+        var a=rs[0],b=rs[1].d;if(!b||!a||!Array.isArray(a.cobros))return;
+        var c=_rutCobrosComparar(a,b);
+        if(c.diferencias===_rutCobMedir.dif&&Date.now()-_rutCobMedir.anot<RUT_ANOTAR_MS)return;
+        _rutCobMedir.dif=c.diferencias;_rutCobMedir.anot=Date.now();
+        return fetch(sb.url+'/rest/v1/rpc/ruta_cruce_anotar',{method:'POST',headers:{apikey:sb.key,Authorization:'Bearer '+sb.token,'Content-Type':'application/json'},
+          body:JSON.stringify({p:{ms_base:rs[1].ms,entregas:c.entregas,diferencias:c.diferencias,detalle:c.detalle}})});
+      }).catch(function(){});
+    }
+    return p;
+  });
+}
 function fetchCobrosPendientes(fresh,auto){
   // fresh=true saltea el cache de 20s del backend (igual que refresh() para entregas).
   // Importante cuando se cobró algo desde Panel u otro dispositivo y queremos verlo ya.
   if(fresh&&!auto&&rutCurrentTab==='cobros')rutCliVendCargar();
-  return fetch(RUT_APPS_SCRIPT_URL+'?action=cobrosPendientes&t='+Date.now()+(fresh?'&fresh=1':''))
-    .then(function(r){return r.json()})
+  return _rutCobrosTraer(fresh,auto)
     .then(function(data){
       /* Una respuesta de error NO es una lista vacia. Sin esto, un
          {ok:false,authRequired:true} caia en `data.cobros||[]` y la pantalla
