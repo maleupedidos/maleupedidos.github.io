@@ -2936,10 +2936,65 @@ function _ctaNombre(id){
 
 var RUT_DEP = null, RUT_DEP_TS = 0;
 
+/* DEPOSITOS DESDE LA BASE (26/10/2026, 143). Cada 5 min por celular, Ruta le pedia
+   `depositos` a Apps Script, que lee Productos, Depositos y Piezas Carne enteras. La base
+   arma lo mismo (`depositos_pantalla`). Palanca `RUTA_DEP_PG` (`sb.pal.rutaDepPg`; sin
+   fila = no):
+     medir  como siempre a Apps Script y, al lado, la base: se comparan producto por
+            producto y se anota en `ruta_cruce` (detalle `_pantalla: depositos`);
+     si     la base; si no contesta, Apps Script.
+   `col` (la columna de la planilla) no se compara: la base no la tiene y nadie la usa. */
+var _rutDepMedir={anot:0,dif:-1};
+function _rutDepApps(){
+  return fetch(RUT_APPS_SCRIPT_URL+'?action=depositos&t='+Date.now()).then(function(r){return r.json();});
+}
+function _rutDepBase(sb){
+  return fetch(sb.url+'/rest/v1/rpc/depositos_pantalla',{method:'POST',
+    headers:{apikey:sb.key,Authorization:'Bearer '+sb.token,'Content-Type':'application/json'},body:'{}'})
+    .then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.json();});
+}
+function _rutDepComparar(a,b){
+  var det={},n=0;
+  var anotar=function(c,k){n++;if(!det[c])det[c]={n:0,ej:k};det[c].n++;};
+  var can=function(v){return JSON.stringify(v,function(k,x){if(x&&typeof x==='object'&&!Array.isArray(x)){var o={};Object.keys(x).sort().forEach(function(j){o[j]=x[j];});return o;}return x;});};
+  var m=function(l){var o={};(l||[]).forEach(function(x){if(x)o[x.a||x.id]=x;});return o;};
+  var cruzar=function(A,B,pre){
+    Object.keys(A).forEach(function(k){
+      var x=A[k],y=B[k];if(!y){anotar(pre+'_solo_apps_script',k);return;}
+      var cs={};Object.keys(x).concat(Object.keys(y)).forEach(function(c){if(c!=='col')cs[c]=1;});
+      Object.keys(cs).forEach(function(c){if(can(_rutBaseNorm(x[c]))!==can(_rutBaseNorm(y[c])))anotar(pre+c,k);});
+    });
+    Object.keys(B).forEach(function(k){if(!A[k])anotar(pre+'_solo_base',k);});
+  };
+  cruzar(m(a&&a.deps),m(b&&b.deps),'deps.');
+  cruzar(m(a&&a.productos),m(b&&b.productos),'');
+  det._pantalla={n:0,ej:'depositos'};
+  return {entregas:((a&&a.productos)||[]).length,diferencias:n,detalle:det};
+}
+function _rutDepTraer(){
+  if(typeof _sbPermiso!=='function')return _rutDepApps();
+  return Promise.resolve(_sbPermiso()).catch(function(){return null;}).then(function(sb){
+    var modo=sb&&sb.pal&&sb.pal.rutaDepPg;
+    if(modo==='si')return _rutDepBase(sb).catch(function(){return _rutDepApps();});
+    var t0=Date.now(),p=_rutDepApps().then(function(d){msA=Date.now()-t0;return d;}),msA=0;
+    if(modo==='medir'){
+      var t1=Date.now();
+      Promise.all([p,_rutDepBase(sb).then(function(d){return {d:d,ms:Date.now()-t1};})]).then(function(rs){
+        var a=rs[0],b=rs[1].d;if(!a||!a.productos||!b)return;
+        var c=_rutDepComparar(a,b);
+        if(c.diferencias===_rutDepMedir.dif&&Date.now()-_rutDepMedir.anot<RUT_ANOTAR_MS)return;
+        _rutDepMedir.dif=c.diferencias;_rutDepMedir.anot=Date.now();
+        return fetch(sb.url+'/rest/v1/rpc/ruta_cruce_anotar',{method:'POST',headers:{apikey:sb.key,Authorization:'Bearer '+sb.token,'Content-Type':'application/json'},
+          body:JSON.stringify({p:{ms_apps:msA,ms_base:rs[1].ms,entregas:c.entregas,diferencias:c.diferencias,detalle:c.detalle}})});
+      }).catch(function(){});
+    }
+    return p;
+  });
+}
+
 function rutDepPedir(force){
   if(!force && RUT_DEP && (Date.now()-RUT_DEP_TS)<300000) return;
-  fetch(RUT_APPS_SCRIPT_URL+'?action=depositos&t='+Date.now())
-    .then(function(r){return r.json();})
+  _rutDepTraer()
     .then(function(d){
       if(d&&d.deps&&d.productos){
         RUT_DEP=d; RUT_DEP_TS=Date.now();
