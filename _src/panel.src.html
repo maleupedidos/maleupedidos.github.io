@@ -14788,11 +14788,101 @@ function _pedArmaMedir(d){
       body:JSON.stringify({p:{ms_base:r.ms,pedidos:c.pedidos,diferencias:c.diferencias,detalle:c.detalle}})});
   }).catch(function(){}).then(function(){ _pedArmaM.vuelo=false; });
 }
+/* LA FOTO DE CAJA ARMADA EN LA BASE (26/10/2026, 147). Igual que la de pedidos, palanca
+   `CAJA_BASE_ARMA` (`sb.pal.cajaArma`). La base arma lo que se mueve con cada cobro y cada
+   gasto: el libro diario (`movimientos`), gastos, ingresos, gastosHist y los totales de
+   `caja`, contando desde el Saldo Base de la foto (`saldoBase.fechaDate`). Lo demas
+   (saldoBase, cuentas, lugares, efMano, vueltos, traspasos...) sale de la foto: solo esas
+   claves, no el libro entero. */
+var CAJA_ARMA_FOTO=['saldoBase','lugares','efMano','vueltos','traspasos','sobres','config','provisiones','redondeosProv','proveedores','efHuerfanos','cajaMode'];
+var _cajaArmaM={ult:0,vuelo:false};
+function _cajaArmaBase(sb,desde){
+  var t0=Date.now();
+  return fetch(sb.url+'/rest/v1/rpc/caja_light_pantalla',{method:'POST',
+    headers:{apikey:sb.key,Authorization:'Bearer '+sb.token,'Content-Type':'application/json'},body:JSON.stringify({p_desde:desde||null})})
+    .then(function(r){ if(!r.ok)throw new Error('la base contest\u00f3 '+r.status); return r.json(); })
+    .then(function(d){ if(!d||!Array.isArray(d.movimientos))throw new Error('la base no arm\u00f3 la caja'); return {d:d,ms:Date.now()-t0}; });
+}
+function _cajaArmaTraer(ts){
+  var nota=function(f){ try{ window.__cajaFuente=f; }catch(e){} return f; };
+  return _sbPermiso(true).then(function(sb){
+    if(!sb)throw new Error('sin permiso de la base');
+    var sel='screen,'+CAJA_ARMA_FOTO.map(function(k){ return k+':payload->'+k; }).join(',')+',cuentas:payload->caja->cuentas';
+    return fetch(sb.url+'/rest/v1/erp_screen_snapshot?select='+sel+'&screen=eq.cajaLight',{headers:{apikey:sb.key,Authorization:'Bearer '+sb.token}})
+      .then(function(r){ if(!r.ok)throw new Error('la foto contest\u00f3 '+r.status); return r.json(); })
+      .then(function(l){
+        var f=(l&&l[0])||null;
+        if(!f||!f.saldoBase||!Array.isArray(f.cuentas))throw new Error('la foto de caja no trae el saldo base');
+        return _cajaArmaBase(sb,f.saldoBase.fechaDate).then(function(r){
+          var d=r.d; CAJA_ARMA_FOTO.forEach(function(k){ if(f[k]!=null)d[k]=f[k]; });
+          d.caja=Object.assign({cuentas:f.cuentas},d.caja||{});
+          nota({de:'base',t:Date.now(),ms:r.ms});
+          return d;
+        });
+      });
+  }).catch(function(e){
+    nota({de:'planilla',porque:'la base no arm\u00f3 la caja: '+String((e&&e.message)||e)});
+    return _loteGets(['cajaLight'],ts).cajaLight;
+  });
+}
+/* Movimiento por movimiento: los cobros por hoja + pedido + efectivo/digital + fecha; los
+   gastos e ingresos por fila. La hora con tolerancia de 1 s (la base no guarda las milesimas
+   de una rendicion de Red), la plata al centavo. */
+function _cajaArmaComparar(a,b){
+  var det={}, n=0;
+  var anotar=function(c,k){ n++; if(!det[c])det[c]={n:0,ej:k}; det[c].n++; };
+  var v=function(x){ return (x===undefined||x===null||x==='')?null:x; };
+  var igual=function(c,x,y){
+    x=v(x); y=v(y);
+    if(typeof x==='number'&&typeof y==='number')return Math.abs(x-y)<(c==='ts'?1000:0.011);
+    return JSON.stringify(x)===JSON.stringify(y);
+  };
+  var cruzar=function(pre,A,B,clave){
+    var ma={}, mb={};
+    (A||[]).forEach(function(x){ ma[clave(x)]=x; }); (B||[]).forEach(function(x){ mb[clave(x)]=x; });
+    Object.keys(ma).forEach(function(k){
+      var x=ma[k], y=mb[k]; if(!y){ anotar(pre+'_solo_apps_script',k); return; }
+      var cs={}; Object.keys(x).concat(Object.keys(y)).forEach(function(c){ cs[c]=1; });
+      Object.keys(cs).forEach(function(c){ if(!igual(c,x[c],y[c]))anotar(pre+c,k); });
+    });
+    Object.keys(mb).forEach(function(k){ if(!ma[k])anotar(pre+'_solo_base',k); });
+  };
+  var kMov=function(m){ return m.tipo==='cobro'?(m.hoja+'|'+m.pedido+'|'+(m.cta==='efectivo'?'ef':'dig')+'|'+m.f):(m.tipo+'|'+m.r); };
+  cruzar('',a&&a.movimientos,b&&b.movimientos,kMov);
+  cruzar('gastos.',a&&a.gastos,b&&b.gastos,function(g){ return g.r; });
+  cruzar('ingresos.',a&&a.ingresos,b&&b.ingresos,function(g){ return g.r; });
+  var ca=(a&&a.caja)||{}, cb=(b&&b.caja)||{};
+  ['cobradoEf','cobradoMP','totalGastos','gastosEf','gastosMP','ingresosEf','ingresosMP'].forEach(function(k){ if(!igual(k,ca[k],cb[k]))anotar('caja.'+k,''); });
+  ['cobradoPorCuenta','gastosPorCuenta','ingresosPorCuenta'].forEach(function(k){
+    var x=ca[k]||{}, y=cb[k]||{}, cs={}; Object.keys(x).concat(Object.keys(y)).forEach(function(c){ cs[c]=1; });
+    Object.keys(cs).forEach(function(c){ if(!igual(k,x[c],y[c]))anotar('caja.'+k+'.'+c,''); });
+  });
+  det._pantalla={n:0,ej:'caja'};
+  return {pedidos:((a&&a.movimientos)||[]).length,diferencias:n,detalle:det};
+}
+function _cajaArmaMedir(d){
+  if(!d||!Array.isArray(d.movimientos)||d.base||!d.saldoBase)return;
+  if(_cajaArmaM.vuelo||Date.now()-_cajaArmaM.ult<PED_ARMA_MEDIR_MS)return;
+  _cajaArmaM.vuelo=true; _cajaArmaM.ult=Date.now();
+  _sbPermiso(true).then(function(sb){
+    if(!sb)return;
+    return _cajaArmaBase(sb,d.saldoBase.fechaDate).then(function(r){
+      var c=_cajaArmaComparar(d,r.d);
+      try{ window.__cajaArmaCruce=c; }catch(e){}
+      return fetch(sb.url+'/rest/v1/rpc/pedidos_cruce_anotar',{method:'POST',
+        headers:{apikey:sb.key,Authorization:'Bearer '+sb.token,'Content-Type':'application/json'},
+        body:JSON.stringify({p:{ms_base:r.ms,pedidos:c.pedidos,diferencias:c.diferencias,detalle:c.detalle}})});
+    });
+  }).catch(function(){}).then(function(){ _cajaArmaM.vuelo=false; });
+}
 function _lotePedidosPg(accs,ts,dePlanilla){
-  var arma=_palancaVal('pedidosArma');
-  if(arma==='si'&&!dePlanilla&&accs.indexOf('pedidosLight')>-1)return _lotePedidosArma(accs,ts);
-  var res=_lotePedidosPg0(accs,ts,dePlanilla);
+  var arma=_palancaVal('pedidosArma'), armaC=_palancaVal('cajaArma');
+  var conCaja=armaC==='si'&&!dePlanilla&&accs.indexOf('cajaLight')>-1;
+  var accs2=conCaja?accs.filter(function(a){ return a!=='cajaLight'; }):accs;
+  var res=!accs2.length?{}:((arma==='si'&&!dePlanilla&&accs2.indexOf('pedidosLight')>-1)?_lotePedidosArma(accs2,ts):_lotePedidosPg0(accs2,ts,dePlanilla));
   if(arma==='medir'&&res.pedidosLight)res.pedidosLight.then(_pedArmaMedir,function(){});
+  if(conCaja)res.cajaLight=_cajaArmaTraer(ts);
+  if(armaC==='medir'&&res.cajaLight)res.cajaLight.then(_cajaArmaMedir,function(){});
   return res;
 }
 /* «si»: pedidosLight de la base; el resto del lote por el camino de siempre (sin
