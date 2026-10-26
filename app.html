@@ -18416,7 +18416,112 @@ function _fotosDeLaBase(screens){
    `ocLight` se resuelven con las fotos y a Apps Script va solo el resto.
    `res._fuente` dice de donde salieron los pedidos (lo lee `loadRapido` para
    sellar con la hora del latido, no con la de ahora). */
+/* LA FOTO DE PEDIDOS ARMADA EN LA BASE (26/10/2026, 145). La foto `pedidos` la calcula
+   Apps Script leyendo la planilla (10 a 15 s) y se descarta si alguien escribe en el medio:
+   la base la arma sola (`pedidos_light_pantalla`). Palanca `PEDIDOS_BASE_ARMA`
+   (`sb.pal.pedidosArma`; sin fila = no):
+     medir  todo como siempre; cada PED_ARMA_MEDIR_MS, el pedidosLight que llego (de la foto
+            o de Apps Script) se compara contra el de la base y se anota en `pedidos_cruce`;
+     si     pedidos, canales y totales salen de la base en el momento. Lo que la base todavia
+            no arma (salud, ventasExtra, vendedores) sale de la foto: solo esas claves. Las
+            OCs van a Apps Script: no se cruzan con pedidos de otro momento.
+   El ↻ y «Actualizar pedidos» (`dePlanilla`) siguen yendo a Apps Script. */
+var PED_ARMA_MEDIR_MS=10*60e3, PED_ARMA_RESTO=['saludSem','saludSemM','saludMes','ventasExtra','vendedores'];
+var _pedArmaM={ult:0,vuelo:false};
+function _palancaVal(nombre){
+  try{
+    var sb=(_sbPerm&&Date.now()<_sbPermHasta)?_sbPerm:null;
+    if(!sb&&_sbPerm===null){ var g=_sbTokLeer(); if(g&&Number(g.hasta)>Date.now())sb=g.sb; }
+    return (sb&&sb.pal)?sb.pal[nombre]:null;
+  }catch(e){ return null; }
+}
+function _pedArmaBase(){
+  return _sbPermiso(true).then(function(sb){
+    if(!sb)throw new Error('sin permiso de la base');
+    var t0=Date.now();
+    return fetch(sb.url+'/rest/v1/rpc/pedidos_light_pantalla',{method:'POST',
+      headers:{apikey:sb.key,Authorization:'Bearer '+sb.token,'Content-Type':'application/json'},body:'{}'})
+      .then(function(r){ if(!r.ok)throw new Error('la base contest\u00f3 '+r.status); return r.json(); })
+      .then(function(d){ if(!d||!Array.isArray(d.pedidos))throw new Error('la base no arm\u00f3 los pedidos'); return {d:d,ms:Date.now()-t0,sb:sb}; });
+  });
+}
+/* Lo que la base no arma, de la foto: solo esas claves (no el MB de pedidos). */
+function _pedArmaResto(sb){
+  var sel='screen,'+PED_ARMA_RESTO.map(function(k){ return k+':payload->'+k; }).join(',');
+  return fetch(sb.url+'/rest/v1/erp_screen_snapshot?select='+sel+'&screen=eq.pedidos',{headers:{apikey:sb.key,Authorization:'Bearer '+sb.token}})
+    .then(function(r){ return r.ok?r.json():[]; }).then(function(l){ return (l&&l[0])||{}; }).catch(function(){ return {}; });
+}
+/* Pedido por pedido (clave hoja + fila). Iguales: los productos como conjunto (la base los
+   ordena por Productos, la hoja por columna), la plata al centavo, vacio = falta. Las filas
+   «Pasado a Red #…» que dejo un pase no estan en la base (el pedido sigue en Red): se
+   cuentan aparte (`_pasados_a_red`) y no suman diferencias. */
+function _pedArmaComparar(a,b){
+  var m=function(d){ var o={}; (d&&d.pedidos||[]).forEach(function(x){ if(x)o[x.h+'|'+x.r]=x; }); return o; };
+  var A=m(a), B=m(b), det={}, n=0, pas=0;
+  var anotar=function(c,k){ n++; if(!det[c])det[c]={n:0,ej:k}; det[c].n++; };
+  var v=function(x){ return (x===undefined||x===null||x==='')?null:x; };
+  var igual=function(x,y){
+    x=v(x); y=v(y);
+    if(typeof x==='number'&&typeof y==='number')return Math.abs(x-y)<0.011;
+    return JSON.stringify(x)===JSON.stringify(y);
+  };
+  var prods=function(l){ return JSON.stringify((l||[]).map(function(p){ return p.a+':'+Math.round(Number(p.q)*1000); }).sort()); };
+  Object.keys(A).forEach(function(k){
+    var x=A[k], y=B[k];
+    if(!y){ if(x.pas&&x.es==='Cancelado'){ pas++; return; } anotar('_solo_apps_script',k); return; }
+    var cs={}; Object.keys(x).concat(Object.keys(y)).forEach(function(c){ cs[c]=1; });
+    Object.keys(cs).forEach(function(c){
+      if(c==='p'){ if(prods(x.p)!==prods(y.p))anotar('p',k); return; }
+      if(c==='pz'){ if(prods((x.pz||[]).map(function(z){ return {a:z.a,q:z.kg}; }))!==prods((y.pz||[]).map(function(z){ return {a:z.a,q:z.kg}; })))anotar('pz',k); return; }
+      if(!igual(x[c],y[c]))anotar(c,k);
+    });
+  });
+  Object.keys(B).forEach(function(k){ if(!A[k])anotar('_solo_base',k); });
+  if(pas)det._pasados_a_red={n:pas,ej:''};
+  return {pedidos:Object.keys(A).length,diferencias:n,detalle:det};
+}
+function _pedArmaMedir(d){
+  if(!d||!Array.isArray(d.pedidos)||!d.pedidos.length||d.tail||!d.canales||d.base)return;
+  if(_pedArmaM.vuelo||Date.now()-_pedArmaM.ult<PED_ARMA_MEDIR_MS)return;
+  _pedArmaM.vuelo=true; _pedArmaM.ult=Date.now();
+  _pedArmaBase().then(function(r){
+    var c=_pedArmaComparar(d,r.d);
+    try{ window.__pedArmaCruce=c; }catch(e){}
+    return fetch(r.sb.url+'/rest/v1/rpc/pedidos_cruce_anotar',{method:'POST',
+      headers:{apikey:r.sb.key,Authorization:'Bearer '+r.sb.token,'Content-Type':'application/json'},
+      body:JSON.stringify({p:{ms_base:r.ms,pedidos:c.pedidos,diferencias:c.diferencias,detalle:c.detalle}})});
+  }).catch(function(){}).then(function(){ _pedArmaM.vuelo=false; });
+}
 function _lotePedidosPg(accs,ts,dePlanilla){
+  var arma=_palancaVal('pedidosArma');
+  if(arma==='si'&&!dePlanilla&&accs.indexOf('pedidosLight')>-1)return _lotePedidosArma(accs,ts);
+  var res=_lotePedidosPg0(accs,ts,dePlanilla);
+  if(arma==='medir'&&res.pedidosLight)res.pedidosLight.then(_pedArmaMedir,function(){});
+  return res;
+}
+/* «si»: pedidosLight de la base; el resto del lote por el camino de siempre (sin
+   pedidosLight). Si la base no contesta, pedidosLight tambien va por el camino de siempre. */
+function _lotePedidosArma(accs,ts){
+  var nota=function(f){ try{ window.__pedFuente=f; }catch(e){} return f; };
+  var resto=accs.filter(function(a){ return a!=='pedidosLight'&&a!=='ocLight'; });
+  var R=resto.length?_lotePedidosPg0(resto,ts,false):{};
+  var oc=accs.indexOf('ocLight')>-1?_loteGets(['ocLight'],ts).ocLight:null;
+  var res={_fuente:null,_fuenteCaja:R._fuenteCaja||null};
+  resto.forEach(function(a){ res[a]=R[a]; });
+  if(oc)res.ocLight=oc;
+  res.pedidosLight=_pedArmaBase().then(function(r){
+    return _pedArmaResto(r.sb).then(function(extra){
+      var d=r.d; PED_ARMA_RESTO.forEach(function(k){ if(extra[k]!=null)d[k]=extra[k]; });
+      res._fuente=nota({de:'base',t:Date.now(),ms:r.ms});
+      return d;
+    });
+  }).catch(function(e){
+    nota({de:'planilla',porque:'la base no arm\u00f3 los pedidos: '+String((e&&e.message)||e)});
+    return _lotePedidosPg0(['pedidosLight'],ts,false).pedidosLight;
+  });
+  return res;
+}
+function _lotePedidosPg0(accs,ts,dePlanilla){
   var nota=function(f){ try{ window.__pedFuente=f; }catch(e){} return f; };
   var notaC=function(f){ try{ window.__cajaFuente=f; }catch(e){} return f; };
   var quierePed=accs.indexOf('pedidosLight')>-1&&_palancaYa('pedidosPg');
