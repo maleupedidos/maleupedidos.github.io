@@ -35049,6 +35049,65 @@ window.catFreezerDevolver=function(a,max){
 function catGuardarEvento(ev){ev.preventDefault();var f=new FormData(ev.target),e=_catDetalle.event,o={id:e.id,event_code:e.event_code,status:f.get('status'),client_name:f.get('client_name'),event_name:f.get('event_name'),event_type:e.event_type||'',venue_name:e.venue_name||'',venue_address:e.venue_address||'',event_date:f.get('event_date'),guests_expected:f.get('guests_expected'),food_ready_at:f.get('food_ready_at')||null,notes:f.get('notes')||''};_catPost('event',o).then(function(){return catAbrir(e.id);}).catch(function(){toast('No pude guardar la ficha');});return false;}
 function catGuardarFila(ev,entity){ev.preventDefault();var f=new FormData(ev.target),o={id:_catId(),event_id:_catDetalle.event.id};f.forEach(function(v,k){o[k]=v;});if(entity==='menu'){o.item_category='menu';o.unit_sale_price=0;}if(entity==='line'){o.category='menu';o.quantity=1;o.unit='u';o.unit_amount=o.total_amount;}if(entity==='payment'){o.due_on=null;}if(entity==='task'){o.sort_order=0;}_catPost(entity,o).then(function(){return catAbrir(_catDetalle.event.id);}).catch(function(){toast('No pude guardar este dato');});return false;}
 
+/* LA FOTO DE VENTAS ARMADA EN LA BASE (26/10/2026, 148). Palanca `VENTAS_BASE_ARMA`
+   (`sb.pal.ventasArma`; sin fila = no):
+     medir  como siempre a Apps Script; cada PED_ARMA_MEDIR_MS se compara venta por venta
+            contra `ventas_pantalla` y se anota en `pedidos_cruce` (`_pantalla: ventas`);
+     si     las ventas salen de la base; las cuentas, de la foto (o las ya guardadas). Si la
+            base no contesta, Apps Script. */
+var _ventasArmaM={ult:0,vuelo:false};
+function _ventasApps(){ return fetch(API+'?action=ventas&t='+Date.now()).then(function(r){return r.json();}); }
+function _ventasBase(sb){
+  var t0=Date.now();
+  return fetch(sb.url+'/rest/v1/rpc/ventas_pantalla',{method:'POST',
+    headers:{apikey:sb.key,Authorization:'Bearer '+sb.token,'Content-Type':'application/json'},body:'{}'})
+    .then(function(r){ if(!r.ok)throw new Error('la base contest\u00f3 '+r.status); return r.json(); })
+    .then(function(d){ if(!d||!Array.isArray(d.v))throw new Error('la base no arm\u00f3 las ventas'); return {d:d,ms:Date.now()-t0}; });
+}
+function _ventasArmaComparar(a,b){
+  var det={}, n=0;
+  var anotar=function(c,k){ n++; if(!det[c])det[c]={n:0,ej:k}; det[c].n++; };
+  var can=function(x){ return JSON.stringify(x,function(k,y){ if(y&&typeof y==='object'&&!Array.isArray(y)){ var o={}; Object.keys(y).sort().forEach(function(j){ o[j]=y[j]; }); return o; } return y; }); };
+  var v=function(x){ return (x===undefined||x===null||x==='')?null:x; };
+  var igual=function(x,y){ x=v(x); y=v(y); if(typeof x==='number'&&typeof y==='number')return Math.abs(x-y)<0.011; return can(x)===can(y); };
+  var k=function(x){ return [x.canal,x.h||'',x.n||'',x.cliente,x.fecha].join('|'); };
+  var A={}, B={}; (a&&a.v||[]).forEach(function(x){ A[k(x)]=x; }); (b&&b.v||[]).forEach(function(x){ B[k(x)]=x; });
+  Object.keys(A).forEach(function(kk){
+    var x=A[kk], y=B[kk]; if(!y){ anotar('_solo_apps_script',x.canal+'|'+(x.h||'')+'|'+(x.n||'')); return; }
+    var cs={}; Object.keys(x).concat(Object.keys(y)).forEach(function(c){ cs[c]=1; });
+    Object.keys(cs).forEach(function(c){ if(!igual(x[c],y[c]))anotar(c,x.canal+'|'+(x.h||'')+'|'+(x.n||'')); });
+  });
+  Object.keys(B).forEach(function(kk){ if(!A[kk])anotar('_solo_base',B[kk].canal+'|'+(B[kk].h||'')+'|'+(B[kk].n||'')); });
+  det._pantalla={n:0,ej:'ventas'};
+  return {pedidos:Object.keys(A).length,diferencias:n,detalle:det};
+}
+function _ventasArmaMedir(d,sb){
+  if(!d||!Array.isArray(d.v)||d.base||_ventasArmaM.vuelo||Date.now()-_ventasArmaM.ult<PED_ARMA_MEDIR_MS)return;
+  _ventasArmaM.vuelo=true; _ventasArmaM.ult=Date.now();
+  _ventasBase(sb).then(function(r){
+    var c=_ventasArmaComparar(d,r.d);
+    try{ window.__ventasArmaCruce=c; }catch(e){}
+    return fetch(sb.url+'/rest/v1/rpc/pedidos_cruce_anotar',{method:'POST',
+      headers:{apikey:sb.key,Authorization:'Bearer '+sb.token,'Content-Type':'application/json'},
+      body:JSON.stringify({p:{ms_base:r.ms,pedidos:c.pedidos,diferencias:c.diferencias,detalle:c.detalle}})});
+  }).catch(function(){}).then(function(){ _ventasArmaM.vuelo=false; });
+}
+function _ventasTraer(){
+  var modo=(typeof _palancaVal==='function')?_palancaVal('ventasArma'):null;
+  if(!modo||typeof _sbPermiso!=='function')return _ventasApps();
+  return Promise.resolve(_sbPermiso(true)).catch(function(){return null;}).then(function(sb){
+    if(!sb)return _ventasApps();
+    if(modo==='si'){
+      return _ventasBase(sb).then(function(r){
+        var d=r.d;
+        return fetch(sb.url+'/rest/v1/erp_screen_snapshot?select=cuentas:payload->cuentas&screen=eq.ventas',{headers:{apikey:sb.key,Authorization:'Bearer '+sb.token}})
+          .then(function(x){ return x.ok?x.json():[]; }).then(function(l){ if(l&&l[0]&&Array.isArray(l[0].cuentas))d.cuentas=l[0].cuentas; return d; })
+          .catch(function(){ return d; });
+      }).catch(function(){ return _ventasApps(); });
+    }
+    return _ventasApps().then(function(d){ if(modo==='medir')_ventasArmaMedir(d,sb); return d; });
+  });
+}
 function loadVentas(){
   if(_vPidiendo)return _vPidiendo;                  // uno en vuelo alcanza
   if(!VD){
@@ -35061,7 +35120,7 @@ function loadVentas(){
      "no anda" y se toca de nuevo, que es otra consulta encolada. */
   setTimeout(function(){if(_vCargando)try{_vPintarEstado();}catch(e){}},20500);
   _frescoEnVuelo(['ventas'],1);
-  _vPidiendo=fetch(API+'?action=ventas&t='+Date.now()).then(function(r){return r.json();}).then(function(d){
+  _vPidiendo=_ventasTraer().then(function(d){
     if(!d||!Array.isArray(d.v)){var er=new Error('respuesta');er.resp=d;throw er;}
     VD=d.v;_vDeCopia=false;_vCopiaTs=Date.now();_vCargando=false;
     if(Array.isArray(d.cuentas)&&d.cuentas.length){VCTAS=d.cuentas;try{localStorage.setItem('ma3vctas',JSON.stringify(VCTAS));}catch(e){}}
