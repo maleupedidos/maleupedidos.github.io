@@ -5622,12 +5622,70 @@ function _cobConfirmado(p){if(p&&p.action==='marcarCobrado')_cobRecientes.push({
 /* _verificarCobroEntro se borro el 12/9/2026: la usaba solo el fetch directo del
    cobro de COBROS, que paso a la cola. */
 
+/* COBROS DESDE LA BASE (26/10/2026, bloque 6). Con la sub-tab abierta, COBROS le pedia
+   `cobrosPendientes` a Apps Script cada 15 s. Esa pantalla ya tiene su foto en la base
+   (la usa el panel con CAJA_DESDE_PG). Palanca propia, `RUTA_COBROS_PG` (viaja con el
+   permiso: `sb.pal.rutaCobrosPg`; sin fila = no):
+     medir  como siempre a Apps Script y, cada 2 min, la foto al lado: se comparan los
+            cobros y se anota en `ruta_cruce` (detalle `_pantalla: cobros`);
+     si     la foto, con la MISMA regla del panel (`_cajaDesdePg` + `_pgNoUsar`):
+            confirmada, del dia y sin escrituras despues. Si no sirve, Apps Script.
+   El ↻ (fresh y no auto) va siempre a Apps Script, como en el panel. */
+var _rutCobMedir={ult:0,anot:0,dif:-1};
+function _rutCobrosApps(fresh){
+  return fetch(RUT_APPS_SCRIPT_URL+'?action=cobrosPendientes&t='+Date.now()+(fresh?'&fresh=1':'')).then(function(r){return r.json()});
+}
+function _rutCobrosFoto(){
+  if(typeof _fotosDeLaBase!=='function'||typeof _cajaDesdePg!=='function'||typeof _pgNoUsar!=='function')return Promise.resolve(null);
+  return _fotosDeLaBase(['cobrosPendientes']).then(function(f){
+    if(!f||!f.ok)return null;
+    var c=_cajaDesdePg(f.filas,f.estado,Date.now(),{cobrosPendientes:1});
+    if(!c.ok)return null;
+    if(_pgNoUsar(c.alDia,(typeof _selloDe==='function')?_selloDe(f.sello,['cobrosPendientes']):0))return null;
+    return c.d.cobrosPendientes;
+  }).catch(function(){return null;});
+}
+function _rutCobrosComparar(a,b){
+  var m=function(d){var o={};(d&&d.cobros||[]).forEach(function(x){if(x)o[(x.h||'')+'#'+Number(x.id)]=x;});return o;};
+  var A=m(a),B=m(b),det={},n=0;
+  var anotar=function(c,k){n++;if(!det[c])det[c]={n:0,ej:k};det[c].n++;};
+  Object.keys(A).forEach(function(k){
+    var x=A[k],y=B[k];if(!y){anotar('_solo_apps_script',k);return;}
+    var cs={};Object.keys(x).concat(Object.keys(y)).forEach(function(c){cs[c]=1;});
+    Object.keys(cs).forEach(function(c){if(JSON.stringify(_rutBaseNorm(x[c]))!==JSON.stringify(_rutBaseNorm(y[c])))anotar(c,k);});
+  });
+  Object.keys(B).forEach(function(k){if(!A[k])anotar('_solo_base',k);});
+  det._pantalla={n:0,ej:'cobros'};
+  return {entregas:Object.keys(A).length,diferencias:n,detalle:det};
+}
+function _rutCobrosTraer(fresh,auto){
+  if(typeof _sbPermiso!=='function')return _rutCobrosApps(fresh);
+  return Promise.resolve(_sbPermiso()).catch(function(){return null;}).then(function(sb){
+    var modo=sb&&sb.pal&&sb.pal.rutaCobrosPg;
+    if(modo==='si'&&!(fresh&&!auto)){
+      return _rutCobrosFoto().then(function(d){return d||_rutCobrosApps(fresh);});
+    }
+    var p=_rutCobrosApps(fresh);
+    if(modo==='medir'&&Date.now()-_rutCobMedir.ult>=RUT_MEDIR_MS){
+      _rutCobMedir.ult=Date.now();
+      var t0=Date.now();
+      Promise.all([p,_rutCobrosFoto().then(function(d){return {d:d,ms:Date.now()-t0};})]).then(function(rs){
+        var a=rs[0],b=rs[1].d;if(!b||!a||!Array.isArray(a.cobros))return;
+        var c=_rutCobrosComparar(a,b);
+        if(c.diferencias===_rutCobMedir.dif&&Date.now()-_rutCobMedir.anot<RUT_ANOTAR_MS)return;
+        _rutCobMedir.dif=c.diferencias;_rutCobMedir.anot=Date.now();
+        return fetch(sb.url+'/rest/v1/rpc/ruta_cruce_anotar',{method:'POST',headers:{apikey:sb.key,Authorization:'Bearer '+sb.token,'Content-Type':'application/json'},
+          body:JSON.stringify({p:{ms_base:rs[1].ms,entregas:c.entregas,diferencias:c.diferencias,detalle:c.detalle}})});
+      }).catch(function(){});
+    }
+    return p;
+  });
+}
 function fetchCobrosPendientes(fresh,auto){
   // fresh=true saltea el cache de 20s del backend (igual que refresh() para entregas).
   // Importante cuando se cobró algo desde Panel u otro dispositivo y queremos verlo ya.
   if(fresh&&!auto&&rutCurrentTab==='cobros')rutCliVendCargar();
-  return fetch(RUT_APPS_SCRIPT_URL+'?action=cobrosPendientes&t='+Date.now()+(fresh?'&fresh=1':''))
-    .then(function(r){return r.json()})
+  return _rutCobrosTraer(fresh,auto)
     .then(function(data){
       /* Una respuesta de error NO es una lista vacia. Sin esto, un
          {ok:false,authRequired:true} caia en `data.cobros||[]` y la pantalla
