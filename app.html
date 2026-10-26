@@ -41434,7 +41434,77 @@ if('serviceWorker' in navigator){
      reglas para todas —palanca, latido, dia, edicion local—, asi una pantalla no
      puede quedar mas laxa que otra. Devuelve {usado, palanca, porque, d, t}. */
   /* `palanca`: que llave de `sb.pal` la habilita (por defecto crmPg, la tab CRM; la ficha usa fichaPg). */
+  /* LAS CUATRO FOTOS SIMPLES DEL CRM ARMADAS EN LA BASE (26/10/2026, 149): interacciones,
+     lotes, puntos y zonas son una hoja leida fila por fila, y la base ya las tiene. Palanca
+     `CRM_BASE_ARMA` (`sb.pal.crmArma`):
+       medir  todo como siempre; cada 10 min por pantalla, la foto de Apps Script se compara
+              contra `crm_foto_pantalla` y se anota en `pedidos_cruce` (`_pantalla`: la pantalla);
+       si     la pantalla sale de la base en el momento (sin latido ni sello: la base es la
+              fuente). Si la base no contesta, el camino de siempre. */
+  var CRM_ARMA_PANT = {crmInteracciones: ['interacciones', function(x){ return x.id; }], crmLotes: ['lotes', function(x){ return x.sub + '|' + x.lote; }],
+                       crmPuntos: ['puntos', function(x){ return x.id; }], crmZonas: ['zonas', function(x){ return x.nombre; }]};
+  var _crmArmaM = {};
+  function _crmArmaBase(sb, screen){
+    var t0 = Date.now();
+    return fetch(sb.url + '/rest/v1/rpc/crm_foto_pantalla', {method: 'POST',
+      headers: {apikey: sb.key, Authorization: 'Bearer ' + sb.token, 'Content-Type': 'application/json'}, body: JSON.stringify({p_screen: screen})})
+      .then(function(r){ if (!r.ok) throw new Error('la base contest\u00f3 ' + r.status); return r.json(); })
+      .then(function(d){ return {d: d, ms: Date.now() - t0}; });
+  }
+  function _crmArmaComparar(screen, a, b){
+    var cfg = CRM_ARMA_PANT[screen], det = {}, n = 0;
+    var anotar = function(c, k){ n++; if (!det[c]) det[c] = {n: 0, ej: k}; det[c].n++; };
+    var can = function(x){ return JSON.stringify(x, function(k, y){ if (y && typeof y === 'object' && !Array.isArray(y)){ var o = {}; Object.keys(y).sort().forEach(function(j){ o[j] = y[j]; }); return o; } return y; }); };
+    var v = function(x){ return (x === undefined || x === null || x === '') ? null : x; };
+    var igual = function(x, y){ x = v(x); y = v(y); if (typeof x === 'number' && typeof y === 'number') return Math.abs(x - y) < 1e-6; return can(x) === can(y); };
+    var A = {}, B = {}, i = 0;
+    ((a && a[cfg[0]]) || []).forEach(function(x){ A[cfg[1](x)] = x; });
+    ((b && b[cfg[0]]) || []).forEach(function(x){ B[cfg[1](x)] = x; });
+    Object.keys(A).forEach(function(k){
+      var x = A[k], y = B[k]; i++; if (!y){ anotar('_solo_apps_script', 'fila ' + i); return; }
+      var cs = {}; Object.keys(x).concat(Object.keys(y)).forEach(function(c){ cs[c] = 1; });
+      Object.keys(cs).forEach(function(c){ if (!igual(x[c], y[c])) anotar(c, 'fila ' + i); });
+    });
+    Object.keys(B).forEach(function(k){ if (!A[k]) anotar('_solo_base', ''); });
+    det._pantalla = {n: 0, ej: screen};
+    return {pedidos: Object.keys(A).length, diferencias: n, detalle: det};
+  }
+  function _crmArmaMedir(sb, screen, foto){
+    var m = _crmArmaM[screen] || (_crmArmaM[screen] = {ult: 0, vuelo: false});
+    if (!foto || m.vuelo || Date.now() - m.ult < 10 * 60e3) return;
+    m.vuelo = true; m.ult = Date.now();
+    _crmArmaBase(sb, screen).then(function(r){
+      var c = _crmArmaComparar(screen, foto, r.d);
+      try { (window.__crmArmaCruce = window.__crmArmaCruce || {})[screen] = c; } catch(e){}
+      return fetch(sb.url + '/rest/v1/rpc/pedidos_cruce_anotar', {method: 'POST',
+        headers: {apikey: sb.key, Authorization: 'Bearer ' + sb.token, 'Content-Type': 'application/json'},
+        body: JSON.stringify({p: {ms_base: r.ms, pedidos: c.pedidos, diferencias: c.diferencias, detalle: c.detalle}})});
+    }).catch(function(){}).then(function(){ m.vuelo = false; });
+  }
   function _crmFotoBase(screen, valida, palanca){
+    if (CRM_ARMA_PANT[screen] && typeof _palancaVal === 'function' && typeof _sbPermiso === 'function'){
+      var _arma = _palancaVal('crmArma');
+      if (_arma === 'si'){
+        return _sbPermiso(true).then(function(sb){
+          if (!sb) throw new Error('sin permiso');
+          return _crmArmaBase(sb, screen).then(function(r){
+            if (!valida(r.d)) throw new Error('la base vino vac\u00eda');
+            return {usado: true, palanca: true, d: r.d, t: Date.now(), base: true};
+          });
+        }).catch(function(){ return _crmFotoBase0(screen, valida, palanca); });
+      }
+      if (_arma === 'medir'){
+        _sbPermiso(true).then(function(sb){
+          if (!sb) return;
+          return fetch(sb.url + '/rest/v1/erp_screen_snapshot?select=payload&screen=eq.' + encodeURIComponent(screen), {headers: {apikey: sb.key, Authorization: 'Bearer ' + sb.token}})
+            .then(function(x){ return x.ok ? x.json() : []; })
+            .then(function(l){ if (l && l[0] && l[0].payload) _crmArmaMedir(sb, screen, l[0].payload); });
+        }).catch(function(){});
+      }
+    }
+    return _crmFotoBase0(screen, valida, palanca);
+  }
+  function _crmFotoBase0(screen, valida, palanca){
     var no = function(porque){ return {usado: false, palanca: true, porque: porque}; };
     if (typeof _sbPermiso !== 'function' || typeof _fotoFechaUtc !== 'function') return Promise.resolve(null);
     /* Si el permiso se esta pidiendo recien (3,5 s), no se lo espera: la tab
