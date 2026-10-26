@@ -2272,9 +2272,19 @@ function _rutBaseNorm(v){
 /* Los canales que compara son los que la base dice que arma (`canales`, desde la 142);
    una base de antes no lo dice y se comparan Home y Pilar. Con los cuatro, tambien la
    carne pendiente de Red (`carnePend`), con el prefijo «carnePend.» en el detalle. */
-function _rutMedirComparar(a,b){
-  var can=(b&&Array.isArray(b.canales))?b.canales:RUT_MEDIR_CANALES;
-  var lista=function(d,grupos){var m={};grupos.forEach(function(g){(d&&d[g]||[]).forEach(function(x){if(x&&can.indexOf(x.h)>=0)m[x.h+'#'+Number(x.id)]=x;});});return m;};
+/* LOS PEDIDOS EN VUELO (26/10/2026, 133). Con una orden todavia sin aplicar, o con una de
+   los ultimos 3 min, la base va ADELANTE de la planilla (escribe primero) y tiene razon:
+   compararlos cortaba la racha de 10 ceros con cada alta o cobro. Se piden DESPUES de las
+   dos respuestas (asi cubren lo que entro mientras viajaban) y se dejan afuera, contados
+   aparte en `_en_vuelo`. Si la base no tiene la 133, null: se compara todo, como antes. */
+function _rutEnVuelo(sb){
+  return fetch(sb.url+'/rest/v1/rpc/pedidos_en_vuelo',{method:'POST',headers:{apikey:sb.key,Authorization:'Bearer '+sb.token,'Content-Type':'application/json'},body:'{}'})
+    .then(function(r){return r.ok?r.json():null;}).catch(function(){return null;});
+}
+function _rutVueloSet(v){var o={};((v&&v.claves)||[]).forEach(function(k){var m=/^([^|]+)\|(\d+)$/.exec(String(k));if(m)o[m[1]+'#'+Number(m[2])]=1;});return o;}
+function _rutMedirComparar(a,b,vuelo){
+  var can=(b&&Array.isArray(b.canales))?b.canales:RUT_MEDIR_CANALES,fuera=_rutVueloSet(vuelo),ev={};
+  var lista=function(d,grupos){var m={};grupos.forEach(function(g){(d&&d[g]||[]).forEach(function(x){if(!x||can.indexOf(x.h)<0)return;var k=x.h+'#'+Number(x.id);if(fuera[k]){ev[k]=1;return;}m[k]=x;});});return m;};
   var det={},n=0,total=0;
   var anotar=function(campo,k){n++;if(!det[campo])det[campo]={n:0,ej:k};det[campo].n++;};
   var cruzar=function(A,B,pre){
@@ -2288,6 +2298,7 @@ function _rutMedirComparar(a,b){
   };
   cruzar(lista(a,['e','hechas']),lista(b,['e','hechas']),'');
   if(b&&Array.isArray(b.carnePend))cruzar(lista(a,['carnePend']),lista(b,['carnePend']),'carnePend.');
+  var nev=Object.keys(ev).length;if(nev)det._en_vuelo={n:nev,ej:Object.keys(ev)[0]};
   return {entregas:total,diferencias:n,detalle:det};
 }
 function _rutMedirBase(datos){
@@ -2300,11 +2311,13 @@ function _rutMedirBase(datos){
     return fetch(sb.url+'/rest/v1/rpc/ruta_entregas_pantalla',{method:'POST',headers:h,body:'{}'})
       .then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.json();})
       .then(function(b){
-        var msB=Date.now()-t0,c=_rutMedirComparar(datos,b);
+        var msB=Date.now()-t0;
+        return _rutEnVuelo(sb).then(function(vu){var c=_rutMedirComparar(datos,b,vu);
         if(c.diferencias===_rutMedir.dif&&Date.now()-_rutMedir.anot<RUT_ANOTAR_MS)return;
         _rutMedir.dif=c.diferencias;_rutMedir.anot=Date.now();
         return fetch(sb.url+'/rest/v1/rpc/ruta_cruce_anotar',{method:'POST',headers:h,
           body:JSON.stringify({p:{ms_apps:msA,ms_base:msB,entregas:c.entregas,diferencias:c.diferencias,detalle:c.detalle}})});
+        });
       });
   }).catch(function(){}).then(function(){_rutMedir.vuelo=false;});
 }
@@ -2981,11 +2994,15 @@ function _rutDepTraer(){
       var t1=Date.now();
       Promise.all([p,_rutDepBase(sb).then(function(d){return {d:d,ms:Date.now()-t1};})]).then(function(rs){
         var a=rs[0],b=rs[1].d;if(!a||!a.productos||!b)return;
+        /* El stock no tiene pedido: con cualquier orden en vuelo (133) esta vuelta no se compara. */
+        return _rutEnVuelo(sb).then(function(vu){
+        if(vu&&vu.total>0)return;
         var c=_rutDepComparar(a,b);
         if(c.diferencias===_rutDepMedir.dif&&Date.now()-_rutDepMedir.anot<RUT_ANOTAR_MS)return;
         _rutDepMedir.dif=c.diferencias;_rutDepMedir.anot=Date.now();
         return fetch(sb.url+'/rest/v1/rpc/ruta_cruce_anotar',{method:'POST',headers:{apikey:sb.key,Authorization:'Bearer '+sb.token,'Content-Type':'application/json'},
           body:JSON.stringify({p:{ms_apps:msA,ms_base:rs[1].ms,entregas:c.entregas,diferencias:c.diferencias,detalle:c.detalle}})});
+        });
       }).catch(function(){});
     }
     return p;
@@ -5711,8 +5728,9 @@ function _rutCobrosFoto(){
     return c.d.cobrosPendientes;
   }).catch(function(){return null;});
 }
-function _rutCobrosComparar(a,b){
-  var m=function(d){var o={};(d&&d.cobros||[]).forEach(function(x){if(x)o[(x.h||'')+'#'+Number(x.id)]=x;});return o;};
+function _rutCobrosComparar(a,b,vuelo){
+  var fuera=_rutVueloSet(vuelo),ev={};
+  var m=function(d){var o={};(d&&d.cobros||[]).forEach(function(x){if(!x)return;var k=(x.h||'')+'#'+Number(x.id);if(fuera[k]){ev[k]=1;return;}o[k]=x;});return o;};
   var A=m(a),B=m(b),det={},n=0;
   var anotar=function(c,k){n++;if(!det[c])det[c]={n:0,ej:k};det[c].n++;};
   Object.keys(A).forEach(function(k){
@@ -5722,6 +5740,7 @@ function _rutCobrosComparar(a,b){
   });
   Object.keys(B).forEach(function(k){if(!A[k])anotar('_solo_base',k);});
   det._pantalla={n:0,ej:'cobros'};
+  var nev=Object.keys(ev).length;if(nev)det._en_vuelo={n:nev,ej:Object.keys(ev)[0]};
   return {entregas:Object.keys(A).length,diferencias:n,detalle:det};
 }
 function _rutCobrosTraer(fresh,auto){
@@ -5737,11 +5756,13 @@ function _rutCobrosTraer(fresh,auto){
       var t0=Date.now();
       Promise.all([p,_rutCobrosFoto().then(function(d){return {d:d,ms:Date.now()-t0};})]).then(function(rs){
         var a=rs[0],b=rs[1].d;if(!b||!a||!Array.isArray(a.cobros))return;
-        var c=_rutCobrosComparar(a,b);
+        return _rutEnVuelo(sb).then(function(vu){
+        var c=_rutCobrosComparar(a,b,vu);
         if(c.diferencias===_rutCobMedir.dif&&Date.now()-_rutCobMedir.anot<RUT_ANOTAR_MS)return;
         _rutCobMedir.dif=c.diferencias;_rutCobMedir.anot=Date.now();
         return fetch(sb.url+'/rest/v1/rpc/ruta_cruce_anotar',{method:'POST',headers:{apikey:sb.key,Authorization:'Bearer '+sb.token,'Content-Type':'application/json'},
           body:JSON.stringify({p:{ms_base:rs[1].ms,entregas:c.entregas,diferencias:c.diferencias,detalle:c.detalle}})});
+        });
       }).catch(function(){});
     }
     return p;
