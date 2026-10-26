@@ -676,6 +676,17 @@ button.cobro-prods-copy{flex-shrink:0;border:1px solid #E8DFC4;background:#fff;c
 .cg-es.ent{background:#3d8b3d}.cg-es.pen{background:#E65100}
 .cg-monto{flex-shrink:0;font-weight:900;font-size:14px;color:#5D4037}
 .cg-row:not(.on) .cg-monto{color:#A1887F}
+/* Item por item en un evento (26/10/2026) */
+.cg-itm-abrir{display:flex;justify-content:flex-end;margin:-2px 0 2px}
+.cg-itm{margin:-2px 0 4px 14px;padding:6px 8px;border-left:3px solid #3d8b3d;background:#FAFDF6;border-radius:0 8px 8px 0;display:flex;flex-direction:column;gap:5px}
+.cg-itm-r{display:flex;align-items:center;gap:8px;width:100%;text-align:left;padding:7px 8px;border-radius:8px;border:1.5px solid #EADBB8;background:#fff;font-family:inherit;color:#5D4037;cursor:pointer;min-height:44px}
+.cg-itm-r.on{border-color:#3d8b3d;background:#F1F8E9}
+.cg-itm-r .cg-box{flex-basis:22px;height:22px}
+.cg-itm-r.on .cg-box{background:#3d8b3d;border-color:#3d8b3d}
+.cg-itm-n{flex:1;font-size:13px;font-weight:600}
+.cg-itm-m{font-weight:800;font-size:13px;white-space:nowrap}
+.cg-itm-r:not(.on) .cg-itm-m{color:#A1887F;text-decoration:line-through}
+.cg-itm-pie{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;font-size:11.5px;color:#5D4037;font-weight:700}
 .cg-pago{border-top:1px dashed #E0C48A;padding-top:8px}
 .cg-pago-l{display:block;font-size:12px;font-weight:700;color:#5D4037;margin-bottom:6px}
 .cg-pago-r{display:flex;gap:8px}
@@ -5645,25 +5656,32 @@ function parseFecha(s){
 
 // Abre el modal de cobro (mismo que en subtab RUTA) para un combo de pendientesCobro.
 // Recibe los índices del array pendientesCobro como CSV.
-function abrirCobroComboCobros(idxsCsv){
-  var idxs=String(idxsCsv||'').split(',').map(Number).filter(function(x){return!isNaN(x)});
+function abrirCobroComboCobros(idxsCsv,extra){
+  /* Sin el filtro de vacios, '' daba [0]: el primer pendiente de la lista se colaba
+     en un cobro de solo items (lo agarro probar_cobros_evento, 26/10/2026). */
+  var idxs=String(idxsCsv||'').split(',').filter(function(x){return String(x).trim()!=='';}).map(Number).filter(function(x){return!isNaN(x)});
   var peds=[];
   idxs.forEach(function(i){if(i>=0&&i<pendientesCobro.length)peds.push(pendientesCobro[i])});
-  if(peds.length===0)return;
+  /* Las partes de un pedido y quien paga (26/10/2026, ver _cobItm): van aparte de
+     `pedidos`, que son los que se cobran ENTEROS. */
+  var parc=(extra&&extra.parc)||[];
+  if(peds.length===0&&!parc.length)return;
   var totalC=peds.reduce(function(s,p){return s+(Number(p.$)||0);},0);
   // fp por defecto = el del primer pedido, normalizado a los 3 pills (Efectivo/Transferencia/Mixto).
   // Los pedidos pueden tener métodos distintos (ej: #653 Ef, #659 Tr, #670 Ef); Tadeo cobra
   // el total en UN método y puede cambiarlo con los pills.
   /* La de TODOS, o ninguna (12/9/2026): con formas distintas el cuadro pregunta. */
-  var fp=_fpComun(peds);
+  var fp=_fpComun(peds.concat(parc.map(function(x){return x.p;})));
+  var _p0=peds[0]||parc[0].p, _pagador=String((extra&&extra.pagador)||'').trim();
   _cobroRutaState={
-    key:'cobros-combo|'+peds[0].h+'|'+peds[0].id,
+    key:'cobros-combo|'+_p0.h+'|'+_p0.id,
     combo:true,fromCobros:true,
     pedidos:peds,total:totalC,totalOriginal:totalC,fp:fp, // totalOriginal: _setCobroFp lo usa al cambiar método
+    parcItems:parc,pagador:_pagador,ck:(extra&&extra.ck)||'',
     cambioOpen:false,aFavOpen:false
   };
   totalC=_comboRecalcTotal(_cobroRutaState);
-  document.getElementById('cobroRutaTitle').textContent='Cobrar a '+peds[0].c;
+  document.getElementById('cobroRutaTitle').textContent='Cobrar a '+(_pagador||_p0.c)+(_pagador?' (paga)':'');
   document.getElementById('cobroRutaSub').textContent=_cobroSubTxt(_cobroRutaState);
   document.querySelectorAll('#cobroRutaFp .cobro-pill').forEach(function(p){p.classList.toggle('on',p.getAttribute('data-fp')===fp)});
   /* La misma precarga que el resto (12/9/2026). Esta abria SIEMPRE con el total
@@ -5673,7 +5691,7 @@ function abrirCobroComboCobros(idxsCsv){
   _setMoneyInput('cobroRecMP',_autoCargaMP(fp,totalC));
   _resetCobroSeccionesColapsables();
   _refrescarPreciosSilencioso();
-  _renderCobroPedidos(peds);
+  _renderCobroPedidos(peds.concat(parc.map(_cobParteComoPedido)));
   _renderCobroDescInfo();
   _mostrarCuadroCobro();
   _recalcCobroRuta();
@@ -5996,7 +6014,14 @@ function _cobroComboBanner(pc, combo){
    clienta salia en dos tarjetas ("Vicky Fernández" y "Victoria Fernandez", lote
    72). Lo de abajo queda para Clubes —sin lote ni telefono— y para una copia
    guardada de antes, que no trae `ck`. */
+/* UN EVENTO, UNA TARJETA (26/10/2026). En un asado uno invita y paga pedidos de
+   otros, cargados a horas distintas y desde casas distintas. Un pedido marcado
+   «Grupal» con el nombre del evento se agrupa por ESE nombre, no por la casa ni
+   el telefono: la tarjeta del evento ofrece todos sus pedidos sin cobrar. */
+function _cobEventoNorm(s){return String(s||'').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[^a-z0-9]+/g,' ').trim();}
+function _cobEsEvento(ck){return String(ck||'').indexOf('g:')===0;}
 function _claveCliente(e){
+  if(e&&e.grp&&_cobEventoNorm(e.grp)&&!/^s[ií]$/i.test(String(e.grp).trim()))return 'g:'+_cobEventoNorm(e.grp);
   if(e&&e.ck)return String(e.ck);
   var nombre=String(e.c||'').toLowerCase().trim();
   var tel=_telCanon(e.t);
@@ -6018,9 +6043,95 @@ function _claveCliente(e){
    Lo tildado vive en `_cobSel` por casa y por pedido (Hoja|N°), no por indice:
    la lista se repinta sola cada 15 s y los indices cambian. Sin marca = tildado,
    asi que la tarjeta arranca como antes: «Cobrar los 7». */
-var _cobSel={}, _cobPago={}, _cobPagoMsg={};
+var _cobSel={}, _cobPago={}, _cobPagoMsg={}, _cobItm={}, _cobPagador={};   /* _cobItm y _cobPagador: ítem por ítem, ver abajo */
 function _cobGrpK(p){return String(p.h||'')+'|'+String(p.id||'');}
 function _cobGrpOn(ck,p){var s=_cobSel[ck];return !(s&&s[_cobGrpK(p)]===false);}
+
+/* ══ ÍTEM POR ÍTEM, Y QUIÉN PAGA (26/10/2026) ═══════════════════════════════
+   El #2056 de Jimena (lote 290) tiene una Torta Lemon y 2 Franui: la torta la paga
+   Rodrigo, que invito al asado, y los Franui los paga Jimena. En la tarjeta de un
+   EVENTO cada pedido se puede abrir y tildar renglon por renglon: lo tildado se
+   cobra como un pago a cuenta del pedido (`cobrarParcial`, con los items
+   escritos), y lo que no se tilda sigue pendiente a nombre de quien lo pidio.
+   «¿Quién paga?» queda escrito en cada cobro de la operacion («Pagó»): la deuda
+   y el CRM siguen siendo del pedido, no de quien puso la plata.
+   `_cobItm[ck][Hoja|N°]` = null (el pedido entero) o {abbr:true/false}. El monto
+   de un renglon es el precio de lista (`_cobroPreciosLinea`), y solo se ofrece si
+   los renglones suman el subtotal guardado: si la lista cambio, no se adivina. */
+function _cobItmDe(ck,p){var m=_cobItm[ck];return (m&&m[_cobGrpK(p)])||null;}
+/* Lo que se cobra de un pedido de la tarjeta: entero, una parte o nada. */
+function _cobGrpParte(ck,p){
+  if(!_cobGrpOn(ck,p))return {n:0,monto:0};
+  var sel=_cobItmDe(ck,p);
+  if(!sel)return {n:1,monto:Math.round(Number(p.$)||0),entero:true};
+  var lp=_cobroPreciosLinea(p), monto=0, nom=[], todos=true;
+  lp.items.forEach(function(x,i){
+    if(sel[x.a]){monto+=Number(lp.precios[i])||0;nom.push(_cantTxt(x.q,x.a)+' '+(PROD_NAMES[x.a]||x.a));}
+    else todos=false;
+  });
+  if(!nom.length)return {n:0,monto:0};
+  if(todos)return {n:1,monto:Math.round(Number(p.$)||0),entero:true};
+  return {n:1,monto:Math.round(monto),entero:false,txt:nom.join(' · ')};
+}
+function _cobItmPuede(p){
+  return !(Number(p.cobradoParcial)>0)&&_cobroPreciosLinea(p).conPrecio&&(p.h==='Home'||p.h==='Pilar');
+}
+function cobItmAbrir(btn){
+  var ck=btn.getAttribute('data-ck'), k=btn.getAttribute('data-k');
+  var p=_cobGrpItems(ck).filter(function(x){return _cobGrpK(x)===k;})[0];
+  if(!p)return;
+  if(!_cobItm[ck])_cobItm[ck]={};
+  if(_cobItm[ck][k]){delete _cobItm[ck][k];}
+  else{
+    if(!_cobItmPuede(p)){showToast(Number(p.cobradoParcial)>0?'Este pedido ya tiene un pago a cuenta: cobralo entero o desde su tarjeta':'No tengo el precio de cada renglón de este pedido');return;}
+    var m={};_cobroPreciosLinea(p).items.forEach(function(x){m[x.a]=true;});
+    _cobItm[ck][k]=m;
+    if(!_cobSel[ck])_cobSel[ck]={};
+    _cobSel[ck][k]=true;
+  }
+  _cobGrpRepintar();
+}
+function cobItmToggle(btn){
+  var ck=btn.getAttribute('data-ck'), k=btn.getAttribute('data-k'), a=btn.getAttribute('data-a');
+  var m=_cobItm[ck]&&_cobItm[ck][k];if(!m)return;
+  m[a]=!m[a];
+  _cobGrpRepintar();
+}
+/* Debajo de cada pedido del evento: «Pagar solo algunos ítems» y, abierto, sus
+   renglones tildables con el precio de cada uno. */
+function _cobItmHTML(ck,p,a){
+  var k=_cobGrpK(p), sel=_cobItmDe(ck,p), ak=a+' data-k="'+_rtcEsc(k)+'"';
+  if(!sel){
+    if(!_cobItmPuede(p)||!(p.p&&p.p.length>1&&_cobGrpOn(ck,p)))return '';
+    return '<div class="cg-itm-abrir"><button type="button" class="cg-mini"'+ak+' onclick="cobItmAbrir(this)">Pagar solo algunos ítems</button></div>';
+  }
+  var lp=_cobroPreciosLinea(p), h='<div class="cg-itm">';
+  lp.items.forEach(function(x,i){
+    var on=!!sel[x.a];
+    h+='<button type="button" class="cg-itm-r'+(on?' on':'')+'" role="checkbox" aria-checked="'+(on?'true':'false')+'"'+ak+' data-a="'+_rtcEsc(x.a)+'" onclick="cobItmToggle(this)">'
+      +'<span class="cg-box" aria-hidden="true">'+(on?'✓':'')+'</span><span class="cg-itm-n">'+_rtcEsc(_cantTxt(x.q,x.a)+' '+(PROD_NAMES[x.a]||x.a))+'</span>'
+      +'<span class="cg-itm-m">'+_cobroPesos(lp.precios[i])+'</span></button>';
+  });
+  var pt=_cobGrpParte(ck,p);
+  h+='<div class="cg-itm-pie"><span>'+(pt.n?(pt.entero?'Todo el pedido':'Se cobra '+_cobroPesos(pt.monto)+' · el resto queda a nombre de '+_rtcEsc(p.c||'quien lo pidió')):'Nada tildado de este pedido')+'</span>'
+    +'<button type="button" class="cg-mini"'+ak+' onclick="cobItmAbrir(this)">Todo el pedido</button></div></div>';
+  return h;
+}
+/* Cobrar lo tildado de un evento: los pedidos enteros y las partes, en UN cuadro
+   (el combinado de siempre), con quien paga. Aunque sea uno solo: el cuadro
+   suelto no sabe de partes ni de pagador. */
+function _cobEventoCobrar(ck){
+  var idx=[], parc=[];
+  _cobGrpItems(ck).forEach(function(p){
+    var pt=_cobGrpParte(ck,p);
+    if(!pt.n)return;
+    if(pt.entero){var i=pendientesCobro.indexOf(p);if(i>=0)idx.push(i);}
+    else parc.push({p:p,monto:pt.monto,txt:pt.txt,sel:Object.assign({},_cobItmDe(ck,p))});
+  });
+  if(!idx.length&&!parc.length){showToast('Tildá qué te pagó');return;}
+  abrirCobroComboCobros(idx.join(','),{parc:parc,pagador:_cobPagador[ck]||'',ck:ck});
+}
+function cobPagadorInput(inp){_cobPagador[inp.getAttribute('data-ck')]=String(inp.value||'').replace(/\s+/g,' ').trim().slice(0,80);}
 function _cobGrpOrden(items){
   return items.slice().sort(function(a,b){
     var d=(parseFecha(a.fe||a.fePed||'')||0)-(parseFecha(b.fe||b.fePed||'')||0);
@@ -6043,7 +6154,7 @@ function cobGrpToggle(btn){
 }
 function cobGrpTodos(btn,on){
   var ck=btn.getAttribute('data-ck');
-  _cobSel[ck]={};
+  _cobSel[ck]={};delete _cobItm[ck];
   if(!on)_cobGrpItems(ck).forEach(function(p){_cobSel[ck][_cobGrpK(p)]=false;});
   delete _cobPagoMsg[ck];
   _cobGrpRepintar();
@@ -6083,7 +6194,9 @@ function _cobGrpIdxs(ck){
   return _cobGrpItems(ck).filter(function(p){return _cobGrpOn(ck,p);}).map(function(p){return pendientesCobro.indexOf(p);}).filter(function(i){return i>=0;});
 }
 function cobGrpCobrar(btn){
-  var ck=btn.getAttribute('data-ck'), idxs=_cobGrpIdxs(ck);
+  var ck=btn.getAttribute('data-ck');
+  if(_cobEsEvento(ck))return _cobEventoCobrar(ck);
+  var idxs=_cobGrpIdxs(ck);
   if(!idxs.length){showToast('Tildá qué pedidos te pagó');return;}
   if(idxs.length===1)abrirCobroPendiente(idxs[0]);
   else abrirCobroComboCobros(idxs.join(','));
@@ -6125,18 +6238,20 @@ function _cobroClienteGrupoHTML(grp){
   var total=0;items.forEach(function(p){total+=Number(p.$)||0;});
   /* El nombre de la tarjeta es el del CRM (`cn`); el que trae cada pedido, si es
      otro, va chico en su renglon. Se compara sin mayusculas ni acentos. */
-  var titular='';
+  var titular='', esEv=_cobEsEvento(ck);
+  if(esEv)titular=String(items[0].grp||'');
   items.forEach(function(p){if(!titular&&p.cn)titular=String(p.cn);});
   if(!titular)titular=String(items[0].c||'');
   var _nn=function(x){return String(x||'').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/\s+/g,' ').trim();};
   var a=' data-ck="'+_rtcEsc(ck)+'"';
   var dias=_cobGrpDias(items[0]), desde=(items[0].de?items[0].de.slice(0,3).toLowerCase()+' ':'')+String(items[0].fe||items[0].fePed||'').replace(/\/\d{4}$/,'');
   var selN=0, selT=0;
-  items.forEach(function(p){if(_cobGrpOn(ck,p)){selN++;selT+=Number(p.$)||0;}});
+  var selParte=0;
+  items.forEach(function(p){var pt=_cobGrpParte(ck,p);selN+=pt.n;selT+=pt.monto;if(pt.n&&!pt.entero)selParte++;});
 
   var c='<div class="cobro-card cg-card" data-casa="'+_rtcEsc(ck)+'">';
-  c+='<div class="cg-head"><div class="cg-quien"><div class="cg-nom">👤 '+_rtcEsc(titular)+'</div>'
-    +'<div class="cg-sub">'+items.length+' pedidos sin cobrar'+(desde?' · debe desde '+_rtcEsc(desde)+(dias>0?' ('+(dias===1?'ayer':'hace '+dias+' días')+')':''):'')+'</div></div>'
+  c+='<div class="cg-head"><div class="cg-quien"><div class="cg-nom">'+(esEv?'🎉 ':'👤 ')+_rtcEsc(titular)+'</div>'
+    +'<div class="cg-sub">'+(esEv?'Evento · ':'')+items.length+' pedido'+(items.length===1?'':'s')+' sin cobrar'+(desde?' · debe desde '+_rtcEsc(desde)+(dias>0?' ('+(dias===1?'ayer':'hace '+dias+' días')+')':''):'')+'</div></div>'
     +'<div class="cg-tot"><span>Debe</span><b>'+_cobroPesos(total)+'</b></div></div>';
 
   c+='<div class="cg-todos"><span>Tildá lo que te pagó</span><span>'
@@ -6157,8 +6272,16 @@ function _cobroClienteGrupoHTML(grp){
         +'<span class="cg-l3">'+(fpIco?'Cargado en '+fpIco:'')+(p.cobradoParcial>0?' · ya pagó '+_cobroPesos(p.cobradoParcial)+' a cuenta':'')
         +(_nn(p.c)!==_nn(titular)?' · <span class="cobro-otro-nombre">a nombre de '+_rtcEsc(p.c)+'</span>':'')+'</span></span>'
       +'<span class="cg-monto">'+_cobroPesos(p.$)+'</span></button>';
+    if(esEv)c+=_cobItmHTML(ck,p,a);
   });
   c+='</div>';
+  if(esEv){
+    var nomsEv={};items.forEach(function(p){if(p.c)nomsEv[p.c]=1;});
+    c+='<div class="cg-pago"><label class="cg-pago-l">¿Quién paga? <span style="font-weight:400">(si no es quien lo pidió)</span></label>'
+      +'<div class="cg-pago-r"><span class="cg-pago-in" style="flex:1"><input type="text" list="cgPag_'+_rtcEsc(ck.replace(/[^a-z0-9]/g,''))+'" placeholder="Ej: Rodrigo Ustariz" maxlength="80"'+a
+      +' value="'+_rtcEsc(_cobPagador[ck]||'')+'" oninput="cobPagadorInput(this)"></span></div>'
+      +'<datalist id="cgPag_'+_rtcEsc(ck.replace(/[^a-z0-9]/g,''))+'">'+Object.keys(nomsEv).map(function(n){return '<option value="'+_rtcEsc(n)+'">';}).join('')+'</datalist></div>';
+  }
 
   var pm=_cobPagoMsg[ck];
   c+='<div class="cg-pago"><label class="cg-pago-l">¿Te pagó un monto? Tildo los más viejos que entran</label>'
@@ -6169,15 +6292,17 @@ function _cobroClienteGrupoHTML(grp){
 
   /* Los mismos botones que la tarjeta de un pedido suelto (`cobro-card-actions`). */
   var txt=!selN?'Tildá qué pedidos te pagó'
+    :selParte?'💰 Cobrar lo tildado · '+_cobroPesos(selT)
     :(selN===1?'💰 Cobrar 1 pedido · '+_cobroPesos(selT)
     :(selN===items.length?'💰 Cobrar los '+selN+' juntos · '+_cobroPesos(selT):'💰 Cobrar '+selN+' de '+items.length+' · '+_cobroPesos(selT)));
   c+='<div class="cobro-card-actions">'
     +'<button type="button" class="cobro-btn-copiar"'+a+' onclick="cobGrpCopiar(this)">📋 Copiar el detalle'+(selN>1?' de los '+selN:'')+'</button>'
     +'<button type="button" class="cobro-btn-alias"'+a+' onclick="cobGrpComprobante(this)">🧾 Pedir comprobante</button>'
     +'<button type="button" class="cobro-btn-cobrado cg-cobrar"'+a+(selN?'':' disabled')+' onclick="cobGrpCobrar(this)">'+txt+'</button></div>';
-  if(selN&&selN<items.length){
-    var resto=0;items.forEach(function(p){if(!_cobGrpOn(ck,p))resto+=Number(p.$)||0;});
-    c+='<div class="cg-resto">Quedan '+(items.length-selN)+' sin cobrar · '+_cobroPesos(resto)+'</div>';
+  if(selN&&(selN<items.length||selParte)){
+    var resto=0;items.forEach(function(p){resto+=Math.max(0,Math.round(Number(p.$)||0)-_cobGrpParte(ck,p).monto);});
+    c+='<div class="cg-resto">'+(selParte?'Queda sin cobrar '+_cobroPesos(resto)+' · lo no tildado sigue a nombre de quien lo pidió'
+      :'Quedan '+(items.length-selN)+' sin cobrar · '+_cobroPesos(resto))+'</div>';
   }
   c+='</div>';
   return c;
@@ -6545,7 +6670,7 @@ function renderCobrosFromServer(){
       });
       orden.forEach(function(ck){
         var grp=porCli[ck];
-        if(grp.items.length>=2)h+=_cobroClienteGrupoHTML(grp);
+        if(grp.items.length>=2||_cobEsEvento(ck))h+=_cobroClienteGrupoHTML(grp);
         else h+=_cobroCardHTML(grp.items[0], pendientesCobro.indexOf(grp.items[0]));
       });
     }
@@ -7411,7 +7536,16 @@ function _descDelCobro(st){
 function _cobroTotal(st){
   if(!st)return 0;
   /* Suelto o combo: sin poder recalcular, `total` es lo guardado. */
-  return Number(_descDelCobro(st).total)||0;
+  return (Number(_descDelCobro(st).total)||0)+_cobParcSuma(st);
+}
+/* Lo que suman las partes de pedidos de un cobro (items pagados por otro). */
+function _cobParcSuma(st){return ((st&&st.parcItems)||[]).reduce(function(a,x){return a+(Math.round(Number(x.monto))||0);},0);}
+/* Una parte, como un pedido para el detalle del cuadro: solo sus renglones. */
+function _cobParteComoPedido(x){
+  var sel=x.sel||{}, q=Object.assign({},x.p);
+  q.p=((x.p&&x.p.p)||[]).filter(function(it){return sel[it.a];});
+  q.sub=x.monto;q.totalOriginal=x.monto;q['$']=x.monto;q.id=String(x.p.id)+' (parte)';
+  return q;
 }
 /* Lo que el POST le dice al backend. Siempre EXPLICITO: con `recalcular` solo,
    el backend aplica su propia regla, y el total de la pantalla y el de la
@@ -7456,7 +7590,9 @@ function _comboIds(st){
   var ps=(st&&st.pedidos)||[], hs={};
   ps.forEach(function(p){hs[p.h]=1;});
   var una=Object.keys(hs).length===1;
-  return ps.map(function(p,i){return ((una&&i>0)?'':(p.h+' '))+'#'+p.id;}).join(' + ');
+  var t=ps.map(function(p,i){return ((una&&i>0)?'':(p.h+' '))+'#'+p.id;}).join(' + ');
+  ((st&&st.parcItems)||[]).forEach(function(x){t+=(t?' + ':'')+'parte de #'+x.p.id;});
+  return t;
 }
 /* La forma de pago de un pedido llevada a los pills: 'MP' o 'Mercado Pago' es
    una transferencia. */
@@ -8058,7 +8194,7 @@ function _setCobroFp(fp){
   st.total=nuevoTotal;
   // Actualizar header sub
   if(st.combo){
-    document.getElementById('cobroRutaSub').textContent=st.pedidos.length+' pedidos juntos · Total '+formatMoney(nuevoTotal);
+    document.getElementById('cobroRutaSub').textContent=(st.parcItems&&st.parcItems.length)?_cobroSubTxt(st):st.pedidos.length+' pedidos juntos · Total '+formatMoney(nuevoTotal);
   } else {
     var subTxt=st.esParcialPrev
       ? 'Saldo '+formatMoney(nuevoTotal)+' · '+st.ent.h+' #'+st.ent.id+' (ya cobraste '+formatMoney(st.yaCobrado||0)+' de '+formatMoney(st.totalOriginal||0)+')'
@@ -8947,6 +9083,15 @@ function confirmarCobroRuta(){
 function _confirmarCobroComboRuta(st,r){
   var peds=st.pedidos,fp=st.fp;
   var _comboPayloads=[]; // van a la COLA (12/9/2026); los parciales siguen por fetch directo
+  /* LAS PARTES Y QUIEN PAGA (26/10/2026). Las partes de un pedido (items que paga
+     otro) van como `cobrarParcial` con sus items escritos. Todo lo de este cuadro
+     lleva el mismo `opCobro`: Caja compara el billete contra la operacion entera. */
+  var parcI=st.parcItems||[], pagador=String(st.pagador||'').trim();
+  if(parcI.length&&r.partial){showToast('Con ítems tildados no hay pago parcial: tildá solo lo que te pagó');return;}
+  if(parcI.length&&!peds.length&&(r.camEf>0||r.camMP>0||Math.max(0,r.propina)>0||r.aFav>0||(r.aplicar||0)>0||_descAceptadoMonto(st,r)>0)){
+    showToast('Vuelto, propina, saldo o descuento van en un pedido entero: tildá también uno, o cobrá los ítems justos');return;
+  }
+  var opCobro=(peds.length+parcI.length>1||pagador||parcI.length)?_opCobroNuevo():'';
 
   // ── PAGO PARCIAL de un combo → N × action=cobrarParcial, repartido FIFO ──
   // El monto recibido se asigna del primer pedido al último: los que quedan
@@ -8984,7 +9129,7 @@ function _confirmarCobroComboRuta(st,r){
   }
   var prop=Math.max(0,r.propina),aFav=r.aFav;
   var aplicacion=Math.max(0,r.aplicar||0); // saldo previo aplicado, va al primer pedido
-  var nombre=(peds[0].c||'').split(' ')[0];
+  var nombre=(pagador||((peds[0]||(parcI[0]&&parcI[0].p)||{}).c)||'').split(' ')[0];
   // Auto-detección de Mixto a nivel combo (mismo criterio que cobros sueltos).
   var netoEfC=Math.max(0,r.recEf-r.camEf);
   var netoMPC=Math.max(0,r.recMP-r.camMP);
@@ -9043,6 +9188,8 @@ function _confirmarCobroComboRuta(st,r){
       recibidoEf:(idx===0)?Math.max(0,r.recEf):0,
       repartidor:_rutaUser(),ts:Date.now()
     };
+    if(opCobro)payload.opCobro=opCobro;
+    if(pagador)payload.pagador=pagador;
     if(RUT_RED_EF&&_rdHojaOk(p.h))payload.redondeo=rdP;
     if(dAcP>0)payload.descuentoAceptado=dAcP;
     // Descuento del combo: forzar recalculo del total/facturado en el backend por pedido.
@@ -9081,6 +9228,23 @@ function _confirmarCobroComboRuta(st,r){
       });
     }
   });
+  /* Las partes: un pago a cuenta de cada pedido, por lo tildado. Si no hay
+     ningun pedido entero, el billete va en la primera parte. El backend es
+     idempotente por `clientOpId` (`_idemPrevia_`), asi que van a la cola. */
+  parcI.forEach(function(x,j){
+    var fpX=(fpComboFinal==='Mixto')?(r.recMP>=r.recEf?'Transferencia':'Efectivo'):fpComboFinal;
+    var pay={action:'cobrarParcial',quien:_quienCobro(st),fechaCobro:_fechaCobroPay(),ajusteDec:_ajDecPay(),
+      hoja:x.p.h,id:String(x.p.id),row:x.p.r||0,formaPago:fpX,cuenta:_ctaDeCobro(st,fpX),monto:Math.round(x.monto),
+      notas:'Ítems'+(pagador?' que pagó '+pagador:'')+': '+x.txt,itemsTxt:x.txt,opCobro:opCobro,
+      recibidoEf:(!peds.length&&j===0)?Math.max(0,r.recEf):0,ts:Date.now()};
+    if(pagador)pay.pagador=pagador;
+    pay.clientOpId=_opIdParcial(pay);
+    _comboPayloads.push(pay);
+    /* Lo que queda del pedido, a nombre de quien lo pidio, hasta que vuelva el servidor. */
+    x.p['$']=Math.max(0,Math.round((Number(x.p['$'])||0)-x.monto));
+    x.p.cobradoParcial=(Number(x.p.cobradoParcial)||0)+Math.round(x.monto);
+  });
+  if(st.ck){delete _cobItm[st.ck];delete _cobSel[st.ck];}
   /* A la COLA (12/9/2026), igual que el cobro suelto: el combo tapaba la
      pantalla hasta 45 s con un fetch directo cuyo motivo —"la cola se traba en
      el iframe"— dejo de existir el 21/8/2026. Los cobros van PRIMERO y la
@@ -9101,7 +9265,7 @@ function _confirmarCobroComboRuta(st,r){
   else rutRenderRuta();
   processSyncQueue();
   if(navigator.vibrate)navigator.vibrate(30);
-  showToast('✓ Cobrados'+(_nEnt?' y entregados':'')+' '+peds.length+' pedidos de '+nombre+_rutSufCta(_comboPayloads[0]&&_comboPayloads[0].cuenta)+(isOnline?'':' — se sincroniza al volver la señal'));
+  showToast('✓ Cobrado'+(_nEnt?' y entregado':'')+(peds.length?' '+peds.length+' pedido'+(peds.length===1?'':'s'):'')+(parcI.length?(peds.length?' y ':' ')+parcI.length+' parte'+(parcI.length===1?'':'s'):'')+(pagador?' · pagó '+nombre:' de '+nombre)+_rutSufCta(_comboPayloads[0]&&_comboPayloads[0].cuenta)+(isOnline?'':' — se sincroniza al volver la señal'));
 }
 
 // Desde el 12/9/2026 lo usan SOLO los PARCIALES de un combo: `cobrarParcial` no es
@@ -9285,6 +9449,9 @@ function _commitCobroPendiente(payload,saldoPayload,pc){
    Dos parciales iguales hechos a propósito en momentos distintos tienen `ts`
    distinto, así que no se pisan entre ellos.
    Del otro lado lo atiende `_idemPrevia_('cp_', …)` en Code.js. */
+/* El id de UNA operacion del cuadro de cobro (26/10/2026): todos sus cobros lo
+   llevan en «Operación Cobro» y Caja compara el billete contra todos juntos. */
+function _opCobroNuevo(){return 'op'+Date.now().toString(36)+Math.random().toString(36).slice(2,7);}
 function _opIdParcial(p){
   return 'cp-'+(p.hoja||'')+'-'+(p.id||'')+'-'+(Number(p.monto)||0)+'-'+(p.ts||0);
 }
