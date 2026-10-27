@@ -59,7 +59,8 @@ function generar() {
 const nuevo = generar();
 if (chequear) {
   const viejo = fs.existsSync(SALIDA) ? fs.readFileSync(SALIDA, 'utf8') : '';
-  if (viejo !== nuevo) { console.error('✗ pj_motor.js quedó viejo contra Code.js: corré node _tools/copiar_motor.js'); process.exit(1); }
+  /* git puede dejarlo con CRLF al hacer checkout: eso no es «viejo». */
+  if (viejo.replace(/\r\n/g, '\n') !== nuevo) { console.error('✗ pj_motor.js quedó viejo contra Code.js: corré node _tools/copiar_motor.js'); process.exit(1); }
   console.log('✓ pj_motor.js al día con Code.js');
 } else {
   fs.writeFileSync(SALIDA, nuevo);
