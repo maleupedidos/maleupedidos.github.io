@@ -110,7 +110,13 @@ const MOTORES = [
   { salida: 'bq_motor.js', armar: () => envolver(
       cierre(fs.readFileSync(CODE, 'utf8'), '_doGetBusqueda', new Set(['_logError_', '_crmPgConfig_', '_uf_', '_alertaTecnica_',
         '_avisar_', '_avisarPedido_', '_avisarNegocio_', '_avisarCanal_', '_avisarFallo_', '_mlAvisar_', '_medRed_', '_wati429_'])),
-      fs.readFileSync(path.join(RAIZ, '_src', 'bq_motor_shim.js'), 'utf8'), 'El motor de Abastecimiento (200)') }
+      fs.readFileSync(path.join(RAIZ, '_src', 'bq_motor_shim.js'), 'utf8'), 'El motor de Abastecimiento (200)') },
+  /* (201) La escala de Red (`redEscala`). Las consultas a la base las contesta el shim con lo que
+     trajo `red_escala_pantalla`; el mapa de columnas de Red, tambien. No escribe ni avisa. */
+  { salida: 're_motor.js', armar: () => envolver(
+      cierre(fs.readFileSync(CODE, 'utf8'), '_doGetRedEscala', new Set(['_logError_', '_crmPgConfig_', '_crmPgFetch_', '_colsAbbr_',
+        '_alertaTecnica_', '_avisar_', '_avisarCanal_', '_avisarFallo_', '_mlAvisar_', '_uf_'])),
+      fs.readFileSync(path.join(RAIZ, '_src', 're_motor_shim.js'), 'utf8'), 'El motor de la escala de Red (201)') }
 ];
 
 /* git puede dejarlo con CRLF al hacer checkout: eso no es «viejo». Se normalizan LOS DOS lados:
