@@ -42,7 +42,9 @@ const RPA = {
   ok: true, cobroACaja: true, cuentas: CUENTAS,
   vendedores: [
     { nombre: 'Ana Rep', maleuLeDebe: 31958, pedidos: [
-      { n: '901', row: 101, c: 'Cliente Efectivo', dia: '23/10/2026', es: 'Pendiente', ep: 'No Cobrado', fp: 'Efectivo', cobro: 160000, nueva: true, debe: 160000, leDebe: 24400 } ] },
+      { n: '901', row: 101, c: 'Cliente Efectivo', dia: '23/10/2026', es: 'Pendiente', ep: 'No Cobrado', fp: 'Efectivo', cobro: 160000, nueva: true, debe: 160000, leDebe: 24400 },
+      /* 27/10/2026: efectivo, entregado y sin cobrar: lo cobra Maleu, no el representante. */
+      { n: '905', row: 105, c: 'Clienta Efectivo Debe', dia: '20/10/2026', es: 'Entregado', ep: 'No Cobrado', fp: 'Efectivo', cobro: 50000, nueva: true, debe: 50000, leDebe: 7000 } ] },
     { nombre: 'Beto Rep', maleuLeDebe: 0, pedidos: [
       { n: '902', row: 102, c: 'Cliente Transfiere', dia: '01/10/2026', es: 'Entregado', ep: 'No Cobrado', fp: 'Transferencia', cobro: 65500, nueva: true, debe: 0, leDebe: 15400 },
       { n: '903', row: 103, c: 'Cliente Ya Pago', dia: '23/10/2026', es: 'Pendiente', ep: 'Cobrado', fp: 'Transferencia', cobro: 27000, nueva: true, debe: 0, leDebe: 7400, sinCta: true, trDir: 27000 },
@@ -97,6 +99,8 @@ async function esperar(cli, expr, ms) { const t0 = Date.now(); while (Date.now()
     chk(/Hace \d+ días y no pagó: escribile a Cliente/.test(T) && !/avisale a Beto/.test(T), 'la deuda vieja dice que le escribamos al CLIENTE, no al representante');
     chk(!/#904/.test(T) && !/253\.200/.test(T), 'lo que no se entregó (el viernes) no aparece ni suma', (T.match(/#904[^#]*/) || [''])[0]);
     chk(/El cobro es de Maleu/.test(T), 'la regla: el cobro es de Maleu');
+    chk(/#905/.test(T) && /Mensaje para Clienta/.test(await evaluar(cli, 'document.getElementById("rutCliVend").parentNode.textContent')), 'el efectivo entregado y sin cobrar lo cobra Maleu (lista de clientes, con su mensaje)');
+    chk(!/Efectivo a Ana|Efectivo a Beto/.test(await evaluar(cli, 'document.getElementById("cobrosContent").innerHTML')), 'no ofrece «Efectivo a {representante}»');
     chk(/Ya transfirió: falta decir a qué cuenta/.test(T), 'la que ya transfirió pide la cuenta');
     chk(/Maleu le paga \$\s?31\.958 en la quincena/.test(T), 'dice lo que Maleu le paga en la quincena', (T.match(/Maleu le paga[^)]*/) || [''])[0]);
     chk(/clientes? de Red tienen? que transferirte/.test(T), 'el aviso de arriba nombra lo que falta transferir');
