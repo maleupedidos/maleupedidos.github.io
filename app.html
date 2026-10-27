@@ -29772,6 +29772,77 @@ function _stockArmaComparar(a,b){
   det._pantalla={n:0,ej:'stock'};
   return {pedidos:prods,diferencias:n,detalle:det};
 }
+/* (156) PROVEEDORES ARMADA EN LA BASE: `analisisProveedor` (a) contra
+   `proveedores_pantalla` (b). Cada lista por su clave, con el numero de aparicion
+   para las que repiten (una OC-REC abierta en varios productos, dos pagos iguales
+   el mismo dia); el resumen por proveedor y lo vendido por producto, por su
+   nombre. `meta.ts` y `base` no son de la pantalla. 5 por millon en los numeros. */
+function _provArmaComparar(a,b){
+  var det={}, n=0;
+  var anotar=function(c,k){ n++; if(!det[c])det[c]={n:0,ej:k}; det[c].n++; };
+  var cerca=function(x,y){ return Math.abs(x-y)<Math.max(1e-6,5e-6*Math.max(Math.abs(x),Math.abs(y))); };
+  var v=function(x){ return (x===undefined||x===null||x==='')?null:x; };
+  var igual=function(x,y){ x=v(x); y=v(y); if(typeof x==='number'&&typeof y==='number')return cerca(x,y); return JSON.stringify(x)===JSON.stringify(y); };
+  var fila=function(nom,k,x,y){
+    if(!y){ anotar(nom+'._solo_apps_script',k); return; }
+    var cs={}; Object.keys(x).concat(Object.keys(y)).forEach(function(c){ cs[c]=1; });
+    Object.keys(cs).forEach(function(c){ if(!igual(x[c],y[c]))anotar(nom+'.'+c,k); });
+  };
+  var porClave=function(l,clave){ var o={}, vez={}; (l||[]).forEach(function(x){ var k=clave(x); vez[k]=(vez[k]||0)+1; o[k+'#'+vez[k]]=x; }); return o; };
+  var lista=function(nom,la,lb,clave){
+    var A=porClave(la,clave), B=porClave(lb,clave);
+    Object.keys(A).forEach(function(k){ fila(nom,k,A[k],B[k]); });
+    Object.keys(B).forEach(function(k){ if(!A[k])anotar(nom+'._solo_base',k); });
+    return Object.keys(A).length;
+  };
+  var mapa=function(nom,ma,mb){
+    ma=ma||{}; mb=mb||{};
+    Object.keys(ma).forEach(function(k){ fila(nom,k,ma[k],mb[k]); });
+    Object.keys(mb).forEach(function(k){ if(!(k in ma))anotar(nom+'._solo_base',k); });
+  };
+  a=a||{}; b=b||{};
+  var ocs=lista('ocs',a.ocs,b.ocs,function(x){ return x.nOrden+'|'+x.abr; });
+  lista('catalogo',a.catalogo,b.catalogo,function(x){ return x.abr; });
+  lista('pagos',a.pagos,b.pagos,function(x){ return x.fecha+'|'+x.proveedor+'|'+x.total; });
+  lista('costoEvolucion',a.costoEvolucion,b.costoEvolucion,function(x){ return x.proveedor+'|'+x.abr; });
+  mapa('resumen',a.resumen,b.resumen);
+  mapa('ventasProd',(a.ventasProd||{}).prods,(b.ventasProd||{}).prods);
+  var ma=a.meta||{}, mb=b.meta||{};
+  if(ma.anio!==mb.anio||ma.mes!==mb.mes)anotar('meta',String(ma.anio)+'-'+String(ma.mes));
+  det._pantalla={n:0,ej:'proveedores'};
+  return {pedidos:ocs,diferencias:n,detalle:det};
+}
+/* `PROV_BASE_ARMA` (`sb.pal.provArma`; sin fila = no): medir compara cada
+   `analisisProveedor` recien llegado (cada PED_ARMA_MEDIR_MS como mucho) contra
+   `proveedores_pantalla`, solo si nadie escribio desde que se pidio; si la pinta
+   la base y, si la base no contesta, Apps Script. */
+var _provArmaM={ult:0,vuelo:false};
+function _provArmaBase(sb){
+  var t0=Date.now();
+  return fetch(sb.url+'/rest/v1/rpc/proveedores_pantalla',{method:'POST',
+    headers:{apikey:sb.key,Authorization:'Bearer '+sb.token,'Content-Type':'application/json'},body:'{}'})
+    .then(function(r){ if(!r.ok)throw new Error('la base contestó '+r.status); return r.json(); })
+    .then(function(d){ if(!d||!d.resumen||!Array.isArray(d.ocs))throw new Error('la base no armó proveedores'); return {d:d,ms:Date.now()-t0}; });
+}
+function _provArmaMedir(d,desde){
+  if(!d||!d.resumen||d.base||_provArmaM.vuelo||Date.now()-_provArmaM.ult<PED_ARMA_MEDIR_MS)return;
+  if(typeof _palancaVal!=='function'||_palancaVal('provArma')!=='medir'||typeof _sbPermiso!=='function')return;
+  _provArmaM.vuelo=true; _provArmaM.ult=Date.now();
+  Promise.resolve(_sbPermiso(true)).then(function(sb){
+    if(!sb)return null;
+    return _provArmaBase(sb).then(function(r){
+      return _pedSelloEscritura().then(function(info){
+        var sello=_selloDe(info,['analisisProveedor']);
+        if(!sello||sello>desde)return null;
+        var c=_provArmaComparar(d,r.d);
+        try{ window.__provArmaCruce=c; }catch(e){}
+        return fetch(sb.url+'/rest/v1/rpc/pedidos_cruce_anotar',{method:'POST',
+          headers:{apikey:sb.key,Authorization:'Bearer '+sb.token,'Content-Type':'application/json'},
+          body:JSON.stringify({p:{ms_base:r.ms,pedidos:c.pedidos,diferencias:c.diferencias,detalle:c.detalle}})});
+      });
+    });
+  }).catch(function(){}).then(function(){ _provArmaM.vuelo=false; });
+}
 /* `STOCK_BASE_ARMA` (`sb.pal.stockArma`; sin fila = no):
      medir  la tab sigue como hoy; cada PED_ARMA_MEDIR_MS, con un `stockTab` recien llegado,
             se compara contra `stock_tab_pantalla` y se anota en `pedidos_cruce`
@@ -47724,9 +47795,25 @@ if('serviceWorker' in navigator){
        resto del ERP. Y dice de cuando es lo que estas viendo — mostrar una copia
        sin decirlo seria mentir por omision. */
     if (!DATA || !DATA.resumen) $('pvProv').innerHTML = '<option>Cargando…</option>';
-    var primera = true;
+    var primera = true, _pvPedido = Date.now();
+    /* (156) Con `PROV_BASE_ARMA = si` la arma la base en el momento; si no contesta, lo de siempre. */
+    if (typeof _palancaVal === 'function' && _palancaVal('provArma') === 'si' && typeof _sbPermiso === 'function') {
+      return Promise.resolve(_sbPermiso(true)).then(function(sb){
+        if (!sb) throw new Error('sin permiso');
+        return _provArmaBase(sb).then(function(r){
+          DATA = r.d; _pvGusto = null; initFilters(); render();
+          var sello = $('pvFresco'); if (sello) sello.textContent = 'datos recién';
+          _pvFrescoEn = Date.now();
+          if (typeof _marcarFresco === 'function') _marcarFresco(['proveedores']);
+        });
+      }).catch(function(){ return _pvDeAppsScript(primera, _pvPedido); });
+    }
+    return _pvDeAppsScript(primera, _pvPedido);
+  }
+  function _pvDeAppsScript(primera, _pvPedido){
     return traer('prov_analisis', PROV_API + '?action=analisisProveedor',
       function(j, meta){
+        if (meta && !meta.viejo && typeof _provArmaMedir === 'function') _provArmaMedir(j, _pvPedido);
         DATA = j;
         _pvGusto = null;                 // el catalogo puede haber cambiado
         if (primera){ initFilters(); primera = false; }
