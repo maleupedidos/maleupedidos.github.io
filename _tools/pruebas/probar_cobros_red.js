@@ -45,7 +45,9 @@ const RPA = {
       { n: '901', row: 101, c: 'Cliente Efectivo', dia: '23/10/2026', es: 'Pendiente', ep: 'No Cobrado', fp: 'Efectivo', cobro: 160000, nueva: true, debe: 160000, leDebe: 24400 } ] },
     { nombre: 'Beto Rep', maleuLeDebe: 0, pedidos: [
       { n: '902', row: 102, c: 'Cliente Transfiere', dia: '01/10/2026', es: 'Entregado', ep: 'No Cobrado', fp: 'Transferencia', cobro: 65500, nueva: true, debe: 0, leDebe: 15400 },
-      { n: '903', row: 103, c: 'Cliente Ya Pago', dia: '23/10/2026', es: 'Pendiente', ep: 'Cobrado', fp: 'Transferencia', cobro: 27000, nueva: true, debe: 0, leDebe: 7400, sinCta: true, trDir: 27000 } ] }
+      { n: '903', row: 103, c: 'Cliente Ya Pago', dia: '23/10/2026', es: 'Pendiente', ep: 'Cobrado', fp: 'Transferencia', cobro: 27000, nueva: true, debe: 0, leDebe: 7400, sinCta: true, trDir: 27000 },
+      /* 27/10/2026: el pedido para el viernes que todavia no salio (Milagros #2100) NO es deuda. */
+      { n: '904', row: 104, c: 'Cliente Del Viernes', dia: '30/10/2026', es: 'Pendiente', ep: 'No Cobrado', fp: 'Transferencia', cobro: 253200, nueva: true, debe: 0, leDebe: 0, tel: '1154649466' } ] }
   ]
 };
 
@@ -91,17 +93,20 @@ async function esperar(cli, expr, ms) { const t0 = Date.now(); while (Date.now()
     chk(cuenta(/#901/g) === 1, 'el pedido en efectivo aparece UNA vez', cuenta(/#901/g));
     chk(!/le dieron/.test(T), 'no dice «le dieron» de un pedido que el cliente no pagó');
     chk(/Lo cobra Ana cuando lo entregue/.test(T), 'dice que Ana lo cobra cuando lo entregue');
-    chk(/Le tienen que transferir a Maleu/.test(T), 'las transferencias tienen su apartado');
-    chk(/Hace \d+ días y no transfirió: avisale a Beto/.test(T), 'la transferencia vieja avisa que hay que reclamarla');
+    chk(/Sus clientes nos deben/.test(T), 'lo que deben los clientes tiene su apartado');
+    chk(/Hace \d+ días y no pagó: escribile a Cliente/.test(T) && !/avisale a Beto/.test(T), 'la deuda vieja dice que le escribamos al CLIENTE, no al representante');
+    chk(!/#904/.test(T) && !/253\.200/.test(T), 'lo que no se entregó (el viernes) no aparece ni suma', (T.match(/#904[^#]*/) || [''])[0]);
+    chk(/El cobro es de Maleu/.test(T), 'la regla: el cobro es de Maleu');
     chk(/Ya transfirió: falta decir a qué cuenta/.test(T), 'la que ya transfirió pide la cuenta');
     chk(/Maleu le paga \$\s?31\.958 en la quincena/.test(T), 'dice lo que Maleu le paga en la quincena', (T.match(/Maleu le paga[^)]*/) || [''])[0]);
     chk(/clientes? de Red tienen? que transferirte/.test(T), 'el aviso de arriba nombra lo que falta transferir');
 
-    /* El botón del aviso copia el texto para el representante, con el alias. */
-    await evaluar(cli, '(function(){var b=[].filter.call(document.querySelectorAll("#cobrosContent button"),function(x){return /Mensaje para Beto/.test(x.textContent)})[0];if(b)b.click()})()');
+    /* El botón copia el mensaje PARA EL CLIENTE, de Maleu, con el alias (27/10/2026). */
+    chk(!/Mensaje para Beto/.test(T) && !/Un mensaje para Beto/.test(T), 'ningún mensaje para el representante');
+    await evaluar(cli, '(function(){var b=[].filter.call(document.querySelectorAll("#cobrosContent button"),function(x){return /Mensaje para Cliente/.test(x.textContent)})[0];if(b)b.click()})()');
     await dormir(400);
     const cop = await evaluar(cli, 'window.__copiado');
-    chk(!!cop && /Hola Beto/.test(cop) && /alias\.prueba/.test(cop) && /#902/.test(cop), 'copia el aviso para Beto con el alias', cop);
+    chk(!!cop && /Hola Cliente/.test(cop) && /de Maleu/.test(cop) && /alias\.prueba/.test(cop) && /#902/.test(cop) && !/Beto/.test(cop), 'copia el mensaje para el cliente, de Maleu, con el alias', cop);
     chk(!/wa\.me/.test(await evaluar(cli, 'document.getElementById("cobrosContent").innerHTML')), 'ningún link wa.me');
 
     if (process.env.FOTO) {
