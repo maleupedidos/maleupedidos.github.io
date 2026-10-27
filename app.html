@@ -11121,11 +11121,66 @@ function ajSaldosHTML(){
     +'<div id="ajSaldosList"><div class="aj-loading">Cargando saldos…</div></div>'
     +'</div>';
 }
+/* LOS SALDOS A FAVOR DESDE LA BASE (27/10/2026, 135). Palanca `SALDOS_BASE_ARMA` (`sb.pal.saldosArma`):
+     medir  se muestra lo de Apps Script y se compara contra `saldos_clientes_pantalla`
+            (`pedidos_cruce`, `_pantalla: saldos`); con una orden en vuelo (133) no compara;
+     si     la lista sale de la base; si la base no contesta, de Apps Script como siempre.
+   El medidor automatico (Code.js) compara con este mismo `_saldosArmaComparar`. */
+function _saldosArmaComparar(a,b){
+  var det={}, n=0;
+  var anotar=function(c,k){ n++; if(!det[c])det[c]={n:0,ej:k}; det[c].n++; };
+  var can=function(x){ return JSON.stringify(x,function(k,y){ if(typeof y==='number')return Math.round(y*100)/100; if(y&&typeof y==='object'&&!Array.isArray(y)){ var o={}; Object.keys(y).sort().forEach(function(j){ o[j]=y[j]; }); return o; } return y; }); };
+  var k=function(c){ return c.telefono||('n:'+String(c.cliente||'').toLowerCase()); };
+  var A=(a&&a.clientes)||[], B=(b&&b.clientes)||[], ma={}, mb={};
+  A.forEach(function(c){ ma[k(c)]=c; }); B.forEach(function(c){ mb[k(c)]=c; });
+  Object.keys(ma).forEach(function(kk,i){
+    var x=ma[kk], y=mb[kk]; if(!y){ anotar('_solo_apps_script','cliente '+(i+1)); return; }
+    ['cliente','telefono','saldo','movimientos'].forEach(function(c){ if(can(x[c])!==can(y[c]))anotar(c,'cliente '+(i+1)); });
+  });
+  Object.keys(mb).forEach(function(kk){ if(!ma[kk])anotar('_solo_base',''); });
+  if(!n && A.map(k).join('|')!==B.map(k).join('|'))anotar('_orden','');
+  det._pantalla={n:0,ej:'saldos'};
+  return {pedidos:A.length,diferencias:n,detalle:det};
+}
+function _saldosArmaMedir(d){
+  if(!d||!Array.isArray(d.clientes)||typeof _sbPermiso!=='function')return;
+  _sbPermiso(true).then(function(sb){
+    if(!sb)return;
+    var h={apikey:sb.key,Authorization:'Bearer '+sb.token,'Content-Type':'application/json'}, t0=Date.now();
+    return fetch(sb.url+'/rest/v1/rpc/saldos_clientes_pantalla',{method:'POST',headers:h,body:'{}'})
+      .then(function(r){ if(!r.ok)throw new Error('HTTP '+r.status); return r.json(); })
+      .then(function(b){
+        var ms=Date.now()-t0;
+        return fetch(sb.url+'/rest/v1/rpc/pedidos_en_vuelo',{method:'POST',headers:h,body:'{}'})
+          .then(function(x){ return x.ok?x.json():null; }).catch(function(){ return null; })
+          .then(function(vu){
+            if(vu&&vu.total>0)return;
+            var c=_saldosArmaComparar(d,b);
+            try{ window.__saldosArmaCruce=c; }catch(e){}
+            return fetch(sb.url+'/rest/v1/rpc/pedidos_cruce_anotar',{method:'POST',headers:h,
+              body:JSON.stringify({p:{ms_base:ms,pedidos:c.pedidos,diferencias:c.diferencias,detalle:c.detalle}})});
+          });
+      });
+  }).catch(function(){});
+}
+function _ajSaldosApps(medir){
+  var l=document.getElementById('ajSaldosList');
+  return traer('saldos', API+'?action=saldosClientes&_t='+Date.now(),
+    function(d,info){ AJ_SALDOS=(d&&d.clientes)||[]; ajRenderSaldosList(); if(medir&&!(info&&info.viejo))_saldosArmaMedir(d); })
+    .catch(function(){ if(l&&!(AJ_SALDOS||[]).length)l.innerHTML='<div class="aj-loading">Error de conexión.</div>'; });
+}
 function ajLoadSaldos(){
   var l=document.getElementById('ajSaldosList'); if(!l) return;
-  traer('saldos', API+'?action=saldosClientes&_t='+Date.now(),
-    function(d){ AJ_SALDOS=(d&&d.clientes)||[]; ajRenderSaldosList(); })
-    .catch(function(){ if(l&&!(AJ_SALDOS||[]).length)l.innerHTML='<div class="aj-loading">Error de conexión.</div>'; });
+  var modo=(typeof _palancaVal==='function')?_palancaVal('saldosArma'):null;
+  if(modo!=='si'||typeof _sbPermiso!=='function')return _ajSaldosApps(modo==='medir');
+  _sbPermiso(true).then(function(sb){
+    if(!sb)throw new Error('sin permiso');
+    return fetch(sb.url+'/rest/v1/rpc/saldos_clientes_pantalla',{method:'POST',headers:{apikey:sb.key,Authorization:'Bearer '+sb.token,'Content-Type':'application/json'},body:'{}'})
+      .then(function(r){ if(!r.ok)throw new Error('HTTP '+r.status); return r.json(); });
+  }).then(function(d){
+    if(!d||!Array.isArray(d.clientes))throw new Error('la base no armo los saldos');
+    AJ_SALDOS=d.clientes; ajRenderSaldosList();
+  }).catch(function(){ _ajSaldosApps(false); });
 }
 function ajSaldoBuscar(v){ AJ_SALDO_FILTRO=(v||'').toLowerCase().trim(); ajRenderSaldosList(); }
 function ajRenderSaldosList(){
@@ -14554,7 +14609,7 @@ function _leerVersion(app){
    "El HTML no sabe que version es" dejo de ser cierto: el build le escribe
    adentro el CACHE_NAME de sw-panel.js, el mismo que deploy.sh obliga a subir en
    cada cambio. Si lo publicado dice otra cosa, esta pagina es vieja. Punto. */
-var _APP_CN_PAGINA='maleu-panel-v718';
+var _APP_CN_PAGINA='maleu-panel-v719';
 
 /* Devuelve [{k,v}] si lo publicado no es lo que esta pagina corre. */
 function _chequearVersiones(){
