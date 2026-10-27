@@ -75,7 +75,8 @@ function _motPoner_(filas, row, fila) { while (filas.length < row - 1) filas.pus
    el panel toma del motor solo los datos de las tandas probadas (CAJA_RESTO_BASE). Lo que todavia no
    tiene sus hojas sale vacio o mal, y por eso no se usa.
    Tanda 1 (208): Saldo Base, Cuentas, Config_Maleu, Redondeos Proveedores, Proveedores, Movimientos
-   Plata y Provisiones_Fijas. */
+   Plata y Provisiones_Fijas.
+   Tanda 2 (209): Cambios Billetera, Sobres y el N° de cada pedido de Home, Pilar y Clubes (col B). */
 function _alertaTecnica_() { return ''; }
 function _avisar_() { return ''; }
 function _avisarCanal_() { return ''; }
@@ -3961,7 +3962,8 @@ var _CAM_CAB_ = {
   'Config_Maleu': ['Parámetro', 'Valor', 'Activo desde', 'Notas'],
   'Redondeos Proveedores': ['ID', 'Registrado', 'Proveedor', 'Semana', 'Monto', 'Quién', 'Estado', 'Anulado el', 'Anulado por'],
   'Proveedores': ['N° de Productos', 'Producto', 'Proveedor', 'Gustos', 'Abreviatura', 'Info Relevante', 'Canal de Venta', 'Costo', 'Venta Directa', 'Clubes'],
-  'Movimientos Plata': ['Fecha', 'Desde', 'Hacia', 'Monto', 'Quién', 'Nota', 'Op']
+  'Movimientos Plata': ['Fecha', 'Desde', 'Hacia', 'Monto', 'Quién', 'Nota', 'Op'],
+  'Sobres': ['Fecha', 'Proveedor', 'Monto', 'Estado', 'Fecha Pago', 'Notas']
 };
 function _camCargar_(d) {
   var H = {}, hj = d.hojas || {};
@@ -3973,6 +3975,12 @@ function _camCargar_(d) {
   var pv = [['Concepto', 'Categoría EERR', 'Monto Mensual', 'Activa desde', 'Activa hasta', 'Notas']];
   (d.prov || []).forEach(function (x) { _motPoner_(pv, x[0], [x[1], x[2], x[3] == null ? '' : Number(x[3]), x[4] || '', x[5] || '', x[6] || '']); });
   H.Provisiones_Fijas = new _Hoja('Provisiones_Fijas', pv);
+  /* Tanda 2 (209). */
+  var cb = [['Fecha', 'Hoja', 'Pedido', 'Cliente', 'Monto', 'Repartidor', 'Tipo']];
+  (d.cambios || []).forEach(function (x) { _motPoner_(cb, x[0], [_motFecha_(x[1]) || '', x[2], x[3], x[4], Number(x[5]) || 0, x[6], x[7]]); });
+  H['Cambios Billetera'] = new _Hoja('Cambios Billetera', cb);
+  ['Home', 'Pilar', 'Clubes'].forEach(function (h) { H[h] = new _Hoja(h, [['', 'N° Pedido']]); });
+  (d.ids || []).forEach(function (x) { if (H[x[0]]) _motPoner_(H[x[0]].f, x[1], ['', x[2]]); });
   _HOJAS = H;
 }
 

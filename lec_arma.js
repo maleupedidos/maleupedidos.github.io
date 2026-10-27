@@ -132,7 +132,8 @@ var LEC_ARMA = {
      base da los datos y la respuesta la arma ca_motor.js (`_doGetAdmin` con mode caja); se compara y se
      usa SOLO lo de las tandas probadas (`solo`, que es CAJA_RESTO_BASE). */
   cajaResto: { rpc: 'caja_resto_pantalla', listas: {}, orden: true, motor: 'ca',
-    solo: ['saldoBase', 'config', 'provisiones', 'redondeosProv', 'proveedores', 'traspasos', 'cajaMode', 'caja.cuentas'] },
+    solo: ['saldoBase', 'config', 'provisiones', 'redondeosProv', 'proveedores', 'traspasos', 'cajaMode', 'caja.cuentas',   /* tanda 1 (208) */
+      'vueltos', 'efHuerfanos', 'sobres'] },   /* tanda 2 (209) */
   dashboardVendedor: { rpc: 'dashboard_vendedor_pantalla', listas: { pedidos: ['n'], clientes: ['n'] }, orden: true, motor: 'dv',
     ignorar: ['tareas', 'objetivo', 'tg', 'liqs', 'liqProx', 'stats.escala'] }
 };
