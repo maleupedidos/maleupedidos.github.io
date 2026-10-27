@@ -115,6 +115,8 @@ var LEC_ARMA = {
   /* (205) Descargar el auto: la reposicion por abreviatura y los pedidos por cliente y numero, en orden;
      las notas de cada proveedor por posicion. `dia` es el de la respuesta. */
   pendientesGuardarStock: { rpc: 'pendientes_guardar_pantalla', listas: { deposito: ['abbr'] }, orden: true, motor: 'pg' },
+  /* (206) Catering › Cumpleaños: los clientes por telefono y en orden (los dias que faltan, el nombre). */
+  cumplesCatering: { rpc: 'cumples_catering_pantalla', listas: { lista: ['tel'] }, orden: true },
   /* (139) Mi Portal › Vendedores (solo admin): los vendedores por nombre y en orden; sus pedidos
      por numero y en el orden de la hoja; las cuentas por id. */
   redPedidosAbiertos: { rpc: 'red_pedidos_abiertos_pantalla', listas: { vendedores: ['nombre'], pedidos: ['n'], cuentas: ['id'] }, orden: true },
