@@ -135,6 +135,11 @@ const MOTORES = [
   { salida: 'pg_motor.js', armar: () => envolver(
       cierre(fs.readFileSync(CODE, 'utf8'), '_doGetPendientesGuardarStock', new Set(['_logError_'])),
       comun('pg_motor_shim.js'), 'El motor de Descargar el auto (205)') },
+  /* (208) El resto de la Caja: `_doGetAdmin` con `{mode: 'caja'}`, por tandas (ver ca_motor_shim.js). */
+  { salida: 'ca_motor.js', armar: () => envolver(
+      cierre(fs.readFileSync(CODE, 'utf8'), '_doGetAdmin', new Set(['_logError_', '_alertaTecnica_', '_avisar_', '_avisarCanal_',
+        '_avisarFallo_', '_mlAvisar_', '_crmPgConfig_', '_uf_', '_medRed_', '_wati429_'])),
+      comun('ca_motor_shim.js'), 'El motor del resto de la Caja (208)') },
   /* (27/10) El bloque LEC-ARMA de la pantalla (la config de cada lectura, `_lecArmaComparar` y
      `_motorCtx`), publicado aparte para el medidor de Apps Script: compara con el MISMO codigo que
      la pantalla. La pantalla no lo carga (lo tiene adentro). */

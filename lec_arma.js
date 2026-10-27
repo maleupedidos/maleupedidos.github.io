@@ -128,11 +128,22 @@ var LEC_ARMA = {
      dv_motor.js. Tareas, objetivo, Telegram, escala y liquidaciones salen de
      `dashboardVendedorEfectos` (Apps Script, que ademas hace los efectos): no se comparan. Los
      pedidos por numero y en orden; los clientes por nombre; los meses y las semanas por posicion. */
+  /* (208) El resto de la Caja (los datos que la foto de Apps Script todavia da al panel), POR TANDAS: la
+     base da los datos y la respuesta la arma ca_motor.js (`_doGetAdmin` con mode caja); se compara y se
+     usa SOLO lo de las tandas probadas (`solo`, que es CAJA_RESTO_BASE). */
+  cajaResto: { rpc: 'caja_resto_pantalla', listas: {}, orden: true, motor: 'ca',
+    solo: ['saldoBase', 'config', 'provisiones', 'redondeosProv', 'proveedores', 'traspasos', 'cajaMode', 'caja.cuentas'] },
   dashboardVendedor: { rpc: 'dashboard_vendedor_pantalla', listas: { pedidos: ['n'], clientes: ['n'] }, orden: true, motor: 'dv',
     ignorar: ['tareas', 'objetivo', 'tg', 'liqs', 'liqProx', 'stats.escala'] }
 };
 function _lecArmaComparar(accion,a,b){
   var cfg=LEC_ARMA[accion]||{}, listas=cfg.listas||{}, fuera={ts:1,base:1}, det={}, n=0;
+  /* (208) `solo`: se comparan SOLO esas rutas (el resto de la Caja va por tandas: la respuesta del motor
+     trae todo, pero solo lo de las tandas probadas vale). */
+  if(cfg.solo){ var _solo=function(x){ var o={}; cfg.solo.forEach(function(r){ var p=r.split('.'), v=x, d=o;
+      for(var i=0;i<p.length;i++){ v=v==null?undefined:v[p[i]]; }
+      if(v===undefined)return; for(var j=0;j<p.length-1;j++){ d=d[p[j]]=d[p[j]]||{}; } d[p[p.length-1]]=v; }); return o; };
+    a=_solo(a||{}); b=_solo(b||{}); }
   (cfg.ignorar||[]).forEach(function(k){ fuera[k]=1; });
   var anotar=function(c,k){ n++; if(!det[c])det[c]={n:0,ej:k}; det[c].n++; };
   var vacio=function(x){ return x===undefined||x===null||x===''; };

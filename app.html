@@ -18580,6 +18580,21 @@ function _cajaArmaBase(sb,desde){
     .then(function(r){ if(!r.ok)throw new Error('la base contest\u00f3 '+r.status); return r.json(); })
     .then(function(d){ if(!d||!Array.isArray(d.movimientos))throw new Error('la base no arm\u00f3 la caja'); return {d:d,ms:Date.now()-t0}; });
 }
+/* (208) EL RESTO DE LA CAJA DESDE LA BASE, por tandas. Con `LECTURAS_BASE_ARMA` cajaResto=si, los datos
+   de las tandas probadas (`LEC_ARMA.cajaResto.solo`) salen del motor y no de la foto de Apps Script; si
+   la base no contesta, quedan los de la foto. Con medir, se comparan contra la foto (solo esos). */
+function _cajaResto(d){
+  var modo=(typeof _lecModo==='function')?_lecModo('cajaResto'):null;
+  /* Una copia sin `base`: el libro ya lo arma la base (147) y el medidor saltea lo que viene de la base. */
+  if(modo==='medir'){ var _c=Object.assign({},d); delete _c.base; _lecArmaMedir('cajaResto',{},_c,Date.now()); return Promise.resolve(d); }
+  if(modo!=='si')return Promise.resolve(d);
+  return _lecArmaBase('cajaResto',{}).then(function(r){
+    LEC_ARMA.cajaResto.solo.forEach(function(ruta){ var p=ruta.split('.'), v=r.d, o=d;
+      for(var i=0;i<p.length;i++){ v=v==null?undefined:v[p[i]]; }
+      if(v===undefined)return; for(var j=0;j<p.length-1;j++){ o=o[p[j]]=o[p[j]]||{}; } o[p[p.length-1]]=v; });
+    return d;
+  },function(){ return d; });
+}
 function _cajaArmaTraer(ts){
   var nota=function(f){ try{ window.__cajaFuente=f; }catch(e){} return f; };
   return _sbPermiso(true).then(function(sb){
@@ -18594,7 +18609,7 @@ function _cajaArmaTraer(ts){
           var d=r.d; CAJA_ARMA_FOTO.forEach(function(k){ if(f[k]!=null)d[k]=f[k]; });
           d.caja=Object.assign({cuentas:f.cuentas},d.caja||{});
           nota({de:'base',t:Date.now(),ms:r.ms});
-          return d;
+          return _cajaResto(d);
         });
       });
   }).catch(function(e){
@@ -30147,11 +30162,22 @@ var LEC_ARMA = {
      dv_motor.js. Tareas, objetivo, Telegram, escala y liquidaciones salen de
      `dashboardVendedorEfectos` (Apps Script, que ademas hace los efectos): no se comparan. Los
      pedidos por numero y en orden; los clientes por nombre; los meses y las semanas por posicion. */
+  /* (208) El resto de la Caja (los datos que la foto de Apps Script todavia da al panel), POR TANDAS: la
+     base da los datos y la respuesta la arma ca_motor.js (`_doGetAdmin` con mode caja); se compara y se
+     usa SOLO lo de las tandas probadas (`solo`, que es CAJA_RESTO_BASE). */
+  cajaResto: { rpc: 'caja_resto_pantalla', listas: {}, orden: true, motor: 'ca',
+    solo: ['saldoBase', 'config', 'provisiones', 'redondeosProv', 'proveedores', 'traspasos', 'cajaMode', 'caja.cuentas'] },
   dashboardVendedor: { rpc: 'dashboard_vendedor_pantalla', listas: { pedidos: ['n'], clientes: ['n'] }, orden: true, motor: 'dv',
     ignorar: ['tareas', 'objetivo', 'tg', 'liqs', 'liqProx', 'stats.escala'] }
 };
 function _lecArmaComparar(accion,a,b){
   var cfg=LEC_ARMA[accion]||{}, listas=cfg.listas||{}, fuera={ts:1,base:1}, det={}, n=0;
+  /* (208) `solo`: se comparan SOLO esas rutas (el resto de la Caja va por tandas: la respuesta del motor
+     trae todo, pero solo lo de las tandas probadas vale). */
+  if(cfg.solo){ var _solo=function(x){ var o={}; cfg.solo.forEach(function(r){ var p=r.split('.'), v=x, d=o;
+      for(var i=0;i<p.length;i++){ v=v==null?undefined:v[p[i]]; }
+      if(v===undefined)return; for(var j=0;j<p.length-1;j++){ d=d[p[j]]=d[p[j]]||{}; } d[p[p.length-1]]=v; }); return o; };
+    a=_solo(a||{}); b=_solo(b||{}); }
   (cfg.ignorar||[]).forEach(function(k){ fuera[k]=1; });
   var anotar=function(c,k){ n++; if(!det[c])det[c]={n:0,ej:k}; det[c].n++; };
   var vacio=function(x){ return x===undefined||x===null||x===''; };
@@ -30210,7 +30236,7 @@ function _lecArmaBase(accion,args,ctx){
       .then(function(r){ if(!r.ok)throw new Error('la base contestó '+r.status); return r.json(); })
       .then(function(d){ if(!d||d.ok===false)throw new Error('la base no armó '+accion);
         /* (164) `motor`: la base dio los datos y la respuesta la arma el motor de las jugadas. */
-        return (cfg.motor==='dv'?_dvMotorArmar(d):cfg.motor==='bq'?_bqMotorArmar(d):cfg.motor==='re'?_reMotorArmar(d):cfg.motor==='cp'?_cpMotorArmar(d):cfg.motor==='mr'?_motorArmar('MR_MOTOR','mr_motor.js',d,{p:(args||{}).p}):cfg.motor==='pg'?_motorArmar('PG_MOTOR','pg_motor.js',d,{}):cfg.motor==='ro'?_roMotorArmar(d,ctx||{}):cfg.motor?_pjMotorArmar(d,ctx||{}):Promise.resolve(d)).then(function(x){ return {d:x,ms:Date.now()-t0,sb:sb}; }); });
+        return (cfg.motor==='dv'?_dvMotorArmar(d):cfg.motor==='bq'?_bqMotorArmar(d):cfg.motor==='re'?_reMotorArmar(d):cfg.motor==='cp'?_cpMotorArmar(d):cfg.motor==='mr'?_motorArmar('MR_MOTOR','mr_motor.js',d,{p:(args||{}).p}):cfg.motor==='pg'?_motorArmar('PG_MOTOR','pg_motor.js',d,{}):cfg.motor==='ca'?_motorArmar('CA_MOTOR','ca_motor.js',d,{}):cfg.motor==='ro'?_roMotorArmar(d,ctx||{}):cfg.motor?_pjMotorArmar(d,ctx||{}):Promise.resolve(d)).then(function(x){ return {d:x,ms:Date.now()-t0,sb:sb}; }); });
   });
 }
 /* EL MOTOR DE LAS JUGADAS (164). pj_motor.js lo genera _tools/copiar_motor.js desde Code.js: son
