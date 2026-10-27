@@ -104,7 +104,13 @@ const MOTORES = [
         '_escalaPortal_', '_escalaProductosVendedor_', '_escalaRedLeer_', '_rbTgLink_', '_liqRedDeVendedor_', '_liqRedProxDeVendedor_',
         '_roVendedorDeSesion_', '_rbVendedores_', '_rbVendedorPorNombre_', '_colsAbbr_', '_piezasLeer_', '_comisionPct', '_cuentas_',
         '_liqRedActiva_'])),
-      fs.readFileSync(path.join(RAIZ, '_src', 'dv_motor_shim.js'), 'utf8'), 'El motor del portal del vendedor (191)') }
+      fs.readFileSync(path.join(RAIZ, '_src', 'dv_motor_shim.js'), 'utf8'), 'El motor del portal del vendedor (191)') },
+  /* (200) Abastecimiento (`busqueda`). Lo que sale afuera (avisos, el contador de urlfetch, la
+     config de la base) lo reemplaza el shim; los pagos los contesta `datos.pagos`. */
+  { salida: 'bq_motor.js', armar: () => envolver(
+      cierre(fs.readFileSync(CODE, 'utf8'), '_doGetBusqueda', new Set(['_logError_', '_crmPgConfig_', '_uf_', '_alertaTecnica_',
+        '_avisar_', '_avisarPedido_', '_avisarNegocio_', '_avisarCanal_', '_avisarFallo_', '_mlAvisar_', '_medRed_', '_wati429_'])),
+      fs.readFileSync(path.join(RAIZ, '_src', 'bq_motor_shim.js'), 'utf8'), 'El motor de Abastecimiento (200)') }
 ];
 
 /* git puede dejarlo con CRLF al hacer checkout: eso no es «viejo». Se normalizan LOS DOS lados:
