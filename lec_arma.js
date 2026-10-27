@@ -109,6 +109,9 @@ var LEC_ARMA = {
      Los cobros por clave y en orden (Home, Pilar, Clubes y los vendedores); lo sin cerrar de Red por
      vendedor; lo de adentro por posicion. */
   cobrosPendientes: { rpc: 'cobros_pendientes_pantalla', listas: { cobros: ['key'], sinCerrar: ['vendedor'] }, orden: true, motor: 'cp' },
+  /* (204) Mi reparto: las entregas de ese dia en el orden de la hoja (por posicion). La base recibe
+     {usuario, fecha} en `p` y el motor tambien. */
+  miReparto: { rpc: 'mi_reparto_pantalla', listas: {}, orden: true, motor: 'mr' },
   /* (139) Mi Portal › Vendedores (solo admin): los vendedores por nombre y en orden; sus pedidos
      por numero y en el orden de la hoja; las cuentas por id. */
   redPedidosAbiertos: { rpc: 'red_pedidos_abiertos_pantalla', listas: { vendedores: ['nombre'], pedidos: ['n'], cuentas: ['id'] }, orden: true },

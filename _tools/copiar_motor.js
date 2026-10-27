@@ -89,6 +89,8 @@ function cierre(code, raiz, fuera) {
   }
   return [...vistos].map(n => defs[n]).sort((x, y) => x[0] - y[0]).map(([a, b]) => L.slice(a, b + 1).join('\n')).join('\n\n');
 }
+/* (204) Lo comun de los motores nuevos va adelante de su shim. */
+const comun = n => fs.readFileSync(path.join(RAIZ, '_src', 'motor_comun_shim.js'), 'utf8') + '\n' + fs.readFileSync(path.join(RAIZ, '_src', n), 'utf8');
 const MOTORES = [
   { salida: 'pj_motor.js', armar: generar },
   /* (190) Mi Portal › Objetivos del equipo (`redObjetivosEquipo`). */
@@ -124,6 +126,11 @@ const MOTORES = [
         '_colsAbbr_', '_piezasLeer_', '_billeterasVivas_', '_crmGetMergeMap', '_alertaTecnica_', '_avisar_', '_avisarPedido_',
         '_avisarNegocio_', '_avisarCanal_', '_avisarFallo_', '_mlAvisar_', '_medRed_', '_wati429_'])),
       fs.readFileSync(path.join(RAIZ, '_src', 'cp_motor_shim.js'), 'utf8'), 'El motor de Ruta › Cobros (203)') },
+  /* (204) «Mi reparto» (`miReparto`). Desde aca los motores nuevos llevan adelante lo comun
+     (_src/motor_comun_shim.js). Las billeteras las da la base (174). */
+  { salida: 'mr_motor.js', armar: () => envolver(
+      cierre(fs.readFileSync(CODE, 'utf8'), '_doGetMiReparto', new Set(['_logError_', '_billeterasVivas_'])),
+      comun('mr_motor_shim.js'), 'El motor de Mi reparto (204)') },
   /* (27/10) El bloque LEC-ARMA de la pantalla (la config de cada lectura, `_lecArmaComparar` y
      `_motorCtx`), publicado aparte para el medidor de Apps Script: compara con el MISMO codigo que
      la pantalla. La pantalla no lo carga (lo tiene adentro). */
