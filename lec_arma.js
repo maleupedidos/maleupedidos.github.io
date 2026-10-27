@@ -112,6 +112,9 @@ var LEC_ARMA = {
   /* (204) Mi reparto: las entregas de ese dia en el orden de la hoja (por posicion). La base recibe
      {usuario, fecha} en `p` y el motor tambien. */
   miReparto: { rpc: 'mi_reparto_pantalla', listas: {}, orden: true, motor: 'mr' },
+  /* (205) Descargar el auto: la reposicion por abreviatura y los pedidos por cliente y numero, en orden;
+     las notas de cada proveedor por posicion. `dia` es el de la respuesta. */
+  pendientesGuardarStock: { rpc: 'pendientes_guardar_pantalla', listas: { deposito: ['abbr'] }, orden: true, motor: 'pg' },
   /* (139) Mi Portal › Vendedores (solo admin): los vendedores por nombre y en orden; sus pedidos
      por numero y en el orden de la hoja; las cuentas por id. */
   redPedidosAbiertos: { rpc: 'red_pedidos_abiertos_pantalla', listas: { vendedores: ['nombre'], pedidos: ['n'], cuentas: ['id'] }, orden: true },
