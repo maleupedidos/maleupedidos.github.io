@@ -15525,12 +15525,93 @@ function _rbTog(k,el){_rbPlg[k]=!!el.open;}
 function _rbAb(k,def){return (k in _rbPlg)?_rbPlg[k]:def;}
 function rbEsc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
 function rbHora(t){if(!t)return '';var d=new Date(t);return ('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2);}
+/* (157) LA BANDEJA ARMADA EN LA BASE: `redBandeja` (a) contra `red_bandeja_pantalla` (b).
+   Cada lista por su clave (el pedido por hoja y numero, el vendedor por nombre); lo que la
+   base no arma —el `link` de Telegram y los reclamos— no se compara: lo sigue dando Apps
+   Script (`redBandejaExtra`). Los numeros con 0,011 (son pesos y horas en milisegundos). */
+function _rbArmaComparar(a,b){
+  var det={}, n=0;
+  var anotar=function(c,k){ n++; if(!det[c])det[c]={n:0,ej:k}; det[c].n++; };
+  var v=function(x){ return (x===undefined||x===null||x==='')?null:x; };
+  /* Las claves ordenadas: la base devuelve los objetos con otro orden que Apps Script. */
+  var can=function(x){ return JSON.stringify(x,function(k,y){ if(y&&typeof y==='object'&&!Array.isArray(y)){ var o={}; Object.keys(y).sort().forEach(function(j){ o[j]=y[j]; }); return o; } return y; }); };
+  var igual=function(x,y){ x=v(x); y=v(y); if(typeof x==='number'&&typeof y==='number')return Math.abs(x-y)<0.011; return can(x)===can(y); };
+  var lista=function(nom,la,lb,clave,fuera){
+    var A={}, B={}; (la||[]).forEach(function(x){ A[clave(x)]=x; }); (lb||[]).forEach(function(x){ B[clave(x)]=x; });
+    Object.keys(A).forEach(function(k){
+      var x=A[k], y=B[k]; if(!y){ anotar(nom+'._solo_apps_script',k); return; }
+      var cs={}; Object.keys(x).concat(Object.keys(y)).forEach(function(c){ if(!fuera||fuera.indexOf(c)<0)cs[c]=1; });
+      Object.keys(cs).forEach(function(c){ if(!igual(x[c],y[c]))anotar(nom+'.'+c,k); });
+    });
+    Object.keys(B).forEach(function(k){ if(!A[k])anotar(nom+'._solo_base',k); });
+    return Object.keys(A).length;
+  };
+  a=a||{}; b=b||{};
+  var ped=function(x){ return (x.h||'Red')+'|'+x.n; };
+  var c=lista('pendientes',a.pendientes,b.pendientes,ped)+lista('recientes',a.recientes,b.recientes,ped)
+       +lista('decidir',a.decidir,b.decidir,ped)+lista('decididos',a.decididos,b.decididos,ped);
+  lista('vendedores',a.vendedores,b.vendedores,function(x){ return x.nombre; },['link']);
+  ['horas','reps','provs','tareas'].forEach(function(k){ if(!igual(a[k],b[k]))anotar(k,''); });
+  det._pantalla={n:0,ej:'bandeja'};
+  return {pedidos:c,diferencias:n,detalle:det};
+}
+var _rbArmaM={ult:0,vuelo:false};
+function _rbArmaBase(sb){
+  var t0=Date.now();
+  return fetch(sb.url+'/rest/v1/rpc/red_bandeja_pantalla',{method:'POST',
+    headers:{apikey:sb.key,Authorization:'Bearer '+sb.token,'Content-Type':'application/json'},body:'{}'})
+    .then(function(r){ if(!r.ok)throw new Error('la base contestó '+r.status); return r.json(); })
+    .then(function(d){ if(!d||!d.ok||!Array.isArray(d.pendientes))throw new Error('la base no armó la bandeja'); return {d:d,ms:Date.now()-t0}; });
+}
+/* `RED_BANDEJA_ARMA` (`sb.pal.redArma`; sin fila = no). medir: cada `redBandeja` recien llegado
+   (cada PED_ARMA_MEDIR_MS como mucho) se compara contra la base, solo si nadie escribio desde
+   que se pidio. si: la arma la base y Apps Script pone solo el link y los reclamos; si la base
+   no contesta, todo Apps Script. */
+function _rbArmaMedir(d,desde){
+  if(!d||!d.ok||d.base||_rbArmaM.vuelo||Date.now()-_rbArmaM.ult<PED_ARMA_MEDIR_MS)return;
+  if(typeof _palancaVal!=='function'||_palancaVal('redArma')!=='medir'||typeof _sbPermiso!=='function')return;
+  _rbArmaM.vuelo=true; _rbArmaM.ult=Date.now();
+  Promise.resolve(_sbPermiso(true)).then(function(sb){
+    if(!sb)return null;
+    return _rbArmaBase(sb).then(function(r){
+      return _pedSelloEscritura().then(function(info){
+        var sello=_selloDe(info,['redBandeja']);
+        if(!sello||sello>desde)return null;
+        var c=_rbArmaComparar(d,r.d);
+        try{ window.__rbArmaCruce=c; }catch(e){}
+        return fetch(sb.url+'/rest/v1/rpc/pedidos_cruce_anotar',{method:'POST',
+          headers:{apikey:sb.key,Authorization:'Bearer '+sb.token,'Content-Type':'application/json'},
+          body:JSON.stringify({p:{ms_base:r.ms,pedidos:c.pedidos,diferencias:c.diferencias,detalle:c.detalle}})});
+      });
+    });
+  }).catch(function(){}).then(function(){ _rbArmaM.vuelo=false; });
+}
+function _rbDeLaBase(){
+  return Promise.resolve(_sbPermiso(true)).then(function(sb){
+    if(!sb)throw new Error('sin permiso');
+    var ex=fetch(API+'?action=redBandejaExtra&t='+Date.now()).then(function(r){ return r.json(); }).catch(function(){ return null; });
+    return Promise.all([_rbArmaBase(sb),ex]).then(function(rs){
+      var d=rs[0].d, x=rs[1]||{};
+      (d.vendedores||[]).forEach(function(vd){ vd.link=(x.links&&x.links[vd.nombre])||''; });
+      if(x.reclamos)d.reclamos=x.reclamos;
+      if(x.reclamosErr)d.reclamosErr=x.reclamosErr;
+      return d;
+    });
+  });
+}
 function rbPedir(){
   if(_rbVuelo){_rbOtra=true;return;}
   _rbVuelo=true;_rbPidioEn=Date.now();
   var fin=function(){_rbVuelo=false;if(_rbOtra){_rbOtra=false;setTimeout(rbPedir,300);}};
   try{
-    traer('redBandeja',API+'?action=redBandeja&t='+Date.now(),rbPintar,{valido:function(d){return d&&d.ok&&Array.isArray(d.pendientes);}})
+    var _rbModo=(typeof _palancaVal==='function'&&typeof _sbPermiso==='function')?_palancaVal('redArma'):null, _rbDesde=_rbPidioEn;
+    var _rbApps=function(){
+      return traer('redBandeja',API+'?action=redBandeja&t='+Date.now(),function(d,info){
+        rbPintar(d,info);
+        if(_rbModo==='medir'&&!(info&&info.viejo))_rbArmaMedir(d,_rbDesde);
+      },{valido:function(d){return d&&d.ok&&Array.isArray(d.pendientes);}});
+    };
+    (_rbModo==='si'?_rbDeLaBase().then(function(d){ rbPintar(d,{}); },function(){ return _rbApps(); }):_rbApps())
       .then(fin,function(e){fin();var b=$('rbBox');if(b&&!_rbDatos)b.innerHTML='<div class="rb-card"><div class="rb-h">📥 Bandeja de Red</div><div class="rb-vacio">No pude traer la bandeja. Tocá Actualizar pedidos.</div></div>';});
   }catch(e){fin();console.error('rbPedir',e);}
 }
