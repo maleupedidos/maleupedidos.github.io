@@ -6162,7 +6162,10 @@ function _rutRedBloqueHTML(pcsRed){
   var tot=0;
   orden.forEach(function(n){var r=porRep[n];tot+=(r.pc?(Number(r.pc.$)||0):0);r.cv.forEach(function(x){tot+=_rutCVMonto(x);});});
   var h='<div id="rutCliVend" class="cobro-canal-header re"><span>🔴 Red · Representantes</span><span>'+formatMoney(tot)+'</span></div>';
-  h+='<div class="cobro-red-regla">El cliente le paga a <b>Maleu</b>: transfiere a nuestra cuenta, o le da efectivo al representante y él te lo entrega entero. La comisión y el envío se los pagamos por quincena.</div>';
+  /* LA REGLA (Tadeo, 27/10/2026): «los representantes no cobran. El cobro es siempre de Maleu:
+     le escribimos nosotros al cliente y el cliente nos paga a nosotros». Hasta hoy esto decia
+     «avisale a Rufino» y armaba un «Mensaje para Rufino»: los dos iban al reves. */
+  h+='<div class="cobro-red-regla">El cobro es de <b>Maleu</b>: le escribimos nosotros al cliente y nos paga a nosotros. El representante solo coordina la entrega. Acá van los pedidos <b>ya entregados</b> y sin cobrar. La comisión y el envío se los pagamos por quincena.</div>';
   orden.forEach(function(n){
     var r=porRep[n];
     var sub=(r.pc?(Number(r.pc.$)||0):0)+r.cv.reduce(function(s,x){return s+_rutCVMonto(x);},0);
@@ -6172,14 +6175,15 @@ function _rutRedBloqueHTML(pcsRed){
     if(r.pc)c+=_cobroVendedorHTML(r.pc);
     if(r.cv.length){
       var stv=r.cv.reduce(function(s,x){return s+_rutCVMonto(x);},0);
-      c+='<div class="cobro-red-sub">🏦 Le tienen que transferir a Maleu <b>'+formatMoney(stv)+'</b></div>';
+      c+='<div class="cobro-red-sub">🏦 Sus clientes nos deben <b>'+formatMoney(stv)+'</b> <span style="font-weight:400">(entregado y sin cobrar)</span></div>';
       /* UN MENSAJE CON TODOS (25/10/2026). Tadeo: «podríamos mandar un solo
          mensaje a Rufino con toda la gente que tiene que pagarle a Maleu». Con
          uno solo alcanza el botón de su renglón. El nombre va por data-: hay
          representantes con apóstrofe (D'Andrea). */
-      var pend=r.cv.filter(function(x){return x.p.ep!=='Cobrado';});
-      if(pend.length>=2)c+='<div class="cobro-card-actions"><button type="button" class="cobro-btn-alias" style="flex:1" data-rep="'+_rutEsc(n)+'" onclick="cobroAvisarRepTodos(this.dataset.rep)">📋 Un mensaje para '+_rutEsc(n.split(' ')[0])+' con los '+pend.length+'</button></div>';
-      r.cv.forEach(function(x){c+=_rutCVItemHTML(x);});
+      /* Un mensaje por CLIENTE, no por representante (27/10/2026): si un cliente debe dos
+         pedidos, van juntos y el boton sale en el primero. */
+      var _vistoCli={};
+      r.cv.forEach(function(x){var kc=_rutCVCliK(x);c+=_rutCVItemHTML(x,!_vistoCli[kc]);_vistoCli[kc]=1;});
     }
     if(r.le>0)c+='<div class="cobro-red-le">💚 Maleu le paga '+formatMoney(r.le)+' en la quincena (comisión y envíos de lo ya entregado y cobrado)</div>';
     h+=c+'</div>';
@@ -6645,6 +6649,11 @@ function _rutCVLista(){
   _rutCV.vendedores.forEach(function(v,iv){
     (v.pedidos||[]).forEach(function(p,ip){
       if(!p||!p.nueva)return;
+      /* LO QUE NO SALIO NO ES DEUDA (27/10/2026). Tadeo: «la deuda suma solo lo que ya se le
+         entrego al cliente y no se cobro». La tarjeta de Rufino decia $517.700 y eran $247.500:
+         #2098 y #2100 de Milagros son para el viernes 30/10 y todavia no se entregaron. */
+      /* Salvo la que YA transfirio y falta decir a que cuenta: esa plata entro, no es deuda. */
+      if(p.es!=='Entregado'&&!(p.ep==='Cobrado'&&p.sinCta))return;
       if(p.ep==='Cobrado'&&!p.sinCta)return;
       /* Lo que paga en efectivo NO va acá (24/10/2026): esa plata la cobra el
          representante y entra por su «Recibí». Estaba en las dos listas a la vez. */
@@ -6662,8 +6671,11 @@ function _rutCVLista(){
 function _rutCVMonto(x){return Math.round(x.p.ep==='Cobrado'?(Number(x.p.trDir)||0):(Number(x.p.cobro)||0));}
 /* Un cliente que le transfiere a Maleu, adentro de la tarjeta de su
    representante (24/10/2026; antes era una tarjeta suelta abajo de todo). */
-function _rutCVItemHTML(x){
+/* El cliente de un pedido de Red: su telefono o, sin telefono, su nombre (27/10/2026). */
+function _rutCVCliK(x){var t=String(x.p.tel||'').replace(/\D/g,'').slice(-10);return t.length>=8?'t:'+t:'n:'+String(x.p.c||'').toLowerCase().trim();}
+function _rutCVItemHTML(x,conMsg){
     var p=x.p,cob=p.ep==='Cobrado',monto=_rutCVMonto(x);
+    var cliN=String(p.c||'el cliente').split(' ')[0];
     var vN=String(x.v.nombre||'');
     var dias=0;
     var mD=String(p.dia||'').match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
@@ -6671,7 +6683,8 @@ function _rutCVItemHTML(x){
     var est=p.es==='Entregado'?'<span class="cobro-red-chip ok">Entregado</span>':'';
     var c='<div class="cobro-red-cli" data-cv="'+x.k+'">';
     c+='<div class="cobro-red-fila"><span>'+_rutEsc(p.c||'(sin nombre)')+' <span class="cobro-red-n">#'+_rutEsc(p.n)+(p.dia?' · '+_rutEsc(p.dia):'')+'</span>'+est
-      +(!cob&&dias>=3?'<br><span class="cobro-red-pend">Hace '+dias+' días y no transfirió: avisale a '+_rutEsc(vN.split(' ')[0])+'</span>':'')
+      +(p.tel?'<br><span class="cobro-red-n">📞 '+_rutEsc(p.tel)+'</span>':'')
+      +(!cob&&dias>=3?'<br><span class="cobro-red-pend">Hace '+dias+' días y no pagó: escribile a '+_rutEsc(cliN)+'</span>':'')
       +'</span><b>'+formatMoney(monto)+'</b></div>';
     if(cob)c+='<div style="font-size:11px;color:#E65100;font-weight:700;margin:0 0 4px">Ya transfirió: falta decir a qué cuenta entró (todavía no suma en Caja)</div>';
     if(_rutCVguardando[x.k]){
@@ -6686,7 +6699,7 @@ function _rutCVItemHTML(x){
       c+='<button type="button" class="cobro-btn-volver" onclick="rutCliVendAbrir(\'\')">Cancelar</button></div>';
     }else{
       c+='<div class="cobro-card-actions">'
-        +(cob?'':'<button type="button" class="cobro-btn-alias" onclick="cobroAvisarRepCV(\''+x.k+'\')">📋 Mensaje para '+_rutEsc(vN.split(' ')[0])+'</button>')
+        +(cob||conMsg===false?'':'<button type="button" class="cobro-btn-alias" onclick="cobroAvisarCliCV(\''+x.k+'\')">📋 Mensaje para '+_rutEsc(cliN)+'</button>')
         +'<button type="button" class="cobro-btn-cobrado" onclick="rutCliVendAbrir(\''+x.k+'\')">'+(cob?'¿A qué cuenta?':'Ya transfirió')+'</button></div>';
     }
     return c+'</div>';
@@ -6701,9 +6714,31 @@ function _rutCVAvisoHTML(){
     +'<span>🔴 '+lista.length+(lista.length===1?' cliente de Red tiene':' clientes de Red tienen')+' que transferirte</span><span>'+formatMoney(tot)+' ↓</span></button>';
 }
 window.rutCliVendIr=function(){var s=document.getElementById('rutCliVend');if(s)s.scrollIntoView({behavior:'smooth',block:'start'});};
-/* Al cliente de Red le escribe su representante, no Maleu (24/10/2026): el
-   botón ya no copia «mandame el comprobante» para el cliente, copia el aviso
-   para el REPRESENTANTE, con el alias para que se lo pase. */
+/* EL MENSAJE ES PARA EL CLIENTE Y SALE DE MALEU (27/10/2026). Del 24/10 al 27/10 copiaba un
+   aviso para el representante («¿le pasás el alias?»): Tadeo lo dio vuelta, el representante
+   no cobra. Junta todo lo que ese cliente debe con ese representante (entregado y sin cobrar). */
+window.cobroAvisarCliCV=function(k){
+  var x=_rutCVLista().filter(function(y){return y.k===k;})[0];
+  if(!x)return;
+  var kc=_rutCVCliK(x),nomV=_vendNombreLimpio(x.v.nombre);
+  var xs=_rutCVLista().filter(function(y){return y.p.ep!=='Cobrado'&&_vendNombreLimpio(y.v.nombre)===nomV&&_rutCVCliK(y)===kc;});
+  if(!xs.length)return;
+  var cli=String(x.p.c||'').split(' ')[0];
+  var ctas=(_rutCV&&_rutCV.cuentas)||[];
+  var cd=ctas.filter(function(c){return c.def;})[0]||ctas[0];
+  var tot=0;
+  var lin=xs.map(function(y){
+    var m=_rutCVMonto(y);tot+=m;
+    var dia=String(y.p.dia||'').replace(/\/\d{4}$/,'');
+    return '• Pedido #'+y.p.n+(dia?' del '+dia:'')+': '+formatMoney(m);
+  });
+  var txt='Hola'+(cli?' '+cli:'')+'! Te escribimos de Maleu 😊 '
+    +(xs.length===1?'Te quedó pendiente el pago de tu pedido:\n':'Te quedaron pendientes los pagos de estos pedidos:\n')
+    +lin.join('\n')+(xs.length>1?'\nTotal: '+formatMoney(tot):'')+'\n'
+    +(cd&&cd.alias?'Podés transferir al alias '+cd.alias+'. ':'')+'Cuando lo hagas, mandanos el comprobante por acá. ¡Gracias!';
+  rutCopiarTexto(txt,'✓ Mensaje copiado — pegalo en el chat de '+(x.p.c||'el cliente')+(x.p.tel?' ('+x.p.tel+')':''));
+};
+/* El de antes (24/10/2026): el aviso para el representante. Quedo sin boton el 27/10. */
 window.cobroAvisarRepCV=function(k){
   var x=_rutCVLista().filter(function(y){return y.k===k;})[0];
   if(!x)return;

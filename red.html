@@ -2766,9 +2766,13 @@ window.addEventListener('message', function (e) {
 // Incluye los del viernes actual + cualquier entregado-sin-cobrar de semanas
 // anteriores, para que al cambiar de semana NO desaparezcan los deudores.
 // Un pedido recién desaparece cuando está Entregado Y Cobrado (o Cancelado).
+/* PEDIDOS ES LO QUE FALTA ENTREGAR (27/10/2026). Tadeo: «tiene que funcionar como nuestra
+   Ruta: solo lo que falta entregar. Lo entregado y sin cobrar es un tema nuestro y va a
+   Cobros». Hasta hoy tambien entraba lo entregado sin cobrar: Rufino veia #114, #118 y #122
+   (bolsa del 19/10) mezclados con la entrega del 30/10. El cobro es de Maleu. */
 function _rutaAbierto(p) {
   if (!p || p.es === 'Cancelado') return false;
-  return p.es !== 'Entregado' || p.ep !== 'Cobrado';
+  return p.es !== 'Entregado';
 }
 function _rutaList() {
   if (!lastDashboardData) return [];
@@ -2810,7 +2814,7 @@ function _rutaTotalViernes() {
       cobrados:   viActuales.filter(p => p.es === 'Entregado' && p.ep === 'Cobrado').length
     };
   }
-  // Sin viernes actual: contabilizar abiertos (falta entregar o cobrar) de semanas pasadas.
+  // Sin viernes actual: contabilizar lo que falta entregar de semanas pasadas.
   const abiertos = peds.filter(_rutaAbierto);
   return {
     total: abiertos.length,
@@ -2825,7 +2829,8 @@ function renderRuta() {
   const tot = _rutaTotalViernes();
   // Progress: avance combina entrega + cobro (cada paso vale medio)
   if (tot.total > 0) {
-    const avance = (tot.entregados + tot.cobrados) / (tot.total * 2);
+    /* Solo la entrega (27/10/2026): el cobro es de Maleu, no del representante. */
+    const avance = tot.entregados / tot.total;
     /* Si no hay reparto esta semana, lo que se mide son pendientes de antes
        (7/10/2026: Marcos veia «Tu ruta de esta semana 0/4» con los del 2/10). */
     const peds = (lastDashboardData && lastDashboardData.pedidos) || [];
@@ -2836,9 +2841,7 @@ function renderRuta() {
       tit = fes.length === 1 ? '🚚 Pendientes del ' + _objFechaCorta(fes[0]) : '🚚 Pendientes de semanas pasadas';
     }
     $id('ruta-title').textContent = tit;
-    $id('ruta-progress').textContent =
-      tot.entregados + '/' + tot.total + ' entregados · ' +
-      tot.cobrados   + '/' + tot.total + ' cobrados';
+    $id('ruta-progress').textContent = tot.entregados + '/' + tot.total + ' entregados';
     $id('ruta-bar-fill').style.width = Math.round(avance * 100) + '%';
   } else {
     $id('ruta-title').textContent = '🚚 Sin pedidos esta semana';
@@ -2847,10 +2850,10 @@ function renderRuta() {
   }
   // Pantalla de éxito SOLO si todos entregados Y todos cobrados
   if (list.length === 0) {
-    if (tot.total > 0 && tot.entregados === tot.total && tot.cobrados === tot.total) {
+    if (tot.total > 0 && tot.entregados === tot.total) {
       cont.innerHTML = '<div class="ruta-empty"><span class="emoji">✅</span>' +
         '<div class="title">¡Ruta completa!</div>' +
-        '<div class="sub">Entregaste y cobraste los ' + tot.total + ' pedidos del viernes.</div></div>';
+        '<div class="sub">Entregaste los ' + tot.total + ' pedidos. El cobro lo hacemos nosotros.</div></div>';
     } else {
       cont.innerHTML = '<div class="ruta-empty"><span class="emoji">📭</span>' +
         '<div class="title">Sin pedidos para entregar</div>' +
@@ -2895,7 +2898,7 @@ function renderRuta() {
   const cerrado = entregado && cobrado;
   html += '<div class="ruta-card' + (cerrado ? ' done' : '') + '">';
   if (entregado && !cobrado) {
-    html += '<div class="ruta-flag-pend">⚠️ Entregado · falta cobrar</div>';
+    html += '<div class="ruta-flag-pend">Entregado · el cobro lo hace Maleu</div>';
   }
   html += '<div class="ruta-who">' + (p.c || '—') + '</div>';
   html += '<div class="ruta-dir">' + (p.b || 'Sin barrio') + '</div>';
@@ -2936,78 +2939,13 @@ function renderRuta() {
 
   // Acciones
   html += '<div class="ruta-actions">';
-  html += '<h4>💵 Cobro al cliente</h4>';
-  html += '<div class="pm-switch">';
-  // Selección exclusiva: solo UNO puede estar marcado.
-  // Si el panel mixto está abierto manda él; si no, manda el método del pedido (lo que eligió el cliente).
-  var metodoSel = rutaMixtoOpen ? 'Mixto' : (p.fp || '');
-  html += '<div class="opt ' + (metodoSel === 'Efectivo' ? 'sel' : '') + '" onclick="rutaSetFP(\'Efectivo\')">💵 Efectivo</div>';
-  html += '<div class="opt ' + (metodoSel === 'Transferencia' ? 'sel' : '') + '" onclick="rutaSetFP(\'Transferencia\')">🏦 Transferencia</div>';
-  html += '<div class="opt ' + (metodoSel === 'Mixto' ? 'sel' : '') + '" onclick="rutaAbrirCobroMixto()">💸 Mixto</div>';
-  html += '</div>';
-  /* QUIEN COBRA, DICHO EN EL PEDIDO (24/10/2026). Los representantes le
-     preguntaban a Tadeo «¿a los clientes les cobro yo o vos?»: la pantalla
-     seguía diciendo «Por cobrar» y «Marcar Cobrado» como antes del 5/10, sin
-     el alias de Maleu. Ahora cada forma de pago dice quién cobra y qué hacer. */
-  if (!rutaMixtoOpen) html += _redQuienCobraHTML(p, metodoSel, cobrado);
-
-  if (rutaMixtoOpen) {
-    var totalP = _cobroCliente(p);
-    html += '<div class="mix-panel">';
-
-    if (rutaMixtoPendiente) {
-      // Pantalla de elección: la diferencia es propina, ¿en qué método?
-      var pe = rutaMixtoPendiente;
-      html += '<div class="mix-title">🎁 Hay una diferencia a favor</div>';
-      html += '<div style="font-size:.88rem;color:#444;line-height:1.4;margin-bottom:.7rem">' +
-              'Total del pedido: <b>' + ars(pe.total) + '</b><br>' +
-              'Cobraste: <b>' + ars(pe.ef + pe.tr) + '</b> (EF ' + ars(pe.ef) + ' + TR ' + ars(pe.tr) + ')<br>' +
-              '<span style="color:#e65100;font-weight:700">Sobran ' + ars(pe.dif) + ' → propina</span></div>';
-      html += '<div style="font-size:.85rem;font-weight:700;margin-bottom:.5rem">¿En qué método entró la propina?</div>';
-      html += '<div class="mix-actions" style="flex-direction:column;gap:.4rem">';
-      html += '<button class="mix-btn confirm" onclick="rutaMixtoElegirPropina(\'EF\')" style="background:linear-gradient(135deg,#1b5e20 0%,#2e7d32 100%)">🎁 Propina en Efectivo (' + ars(pe.dif) + ')</button>';
-      html += '<button class="mix-btn confirm" onclick="rutaMixtoElegirPropina(\'TR\')" style="background:linear-gradient(135deg,#0d47a1 0%,#1976d2 100%)">🎁 Propina en Transferencia (' + ars(pe.dif) + ')</button>';
-      html += '<button class="mix-btn cancel" onclick="rutaMixtoVolverAEditar()">✏️ No, editar montos</button>';
-      html += '</div>';
-    } else {
-      html += '<div class="mix-title">💸 Cobro mixto · Total pedido ' + ars(totalP) + '</div>';
-      html += '<div class="mix-row">';
-      html += '<div class="mix-field"><label>Efectivo ($)</label><div class="mix-input-wrap">' +
-              '<input id="mix-ef" class="mix-input" type="text" inputmode="decimal" lang="es-AR" placeholder="0,00" oninput="rutaMixtoActualizarSuma()" /></div></div>';
-      html += '<div class="mix-field"><label>Transferencia ($)</label><div class="mix-input-wrap">' +
-              '<input id="mix-tr" class="mix-input" type="text" inputmode="decimal" lang="es-AR" placeholder="0,00" oninput="rutaMixtoActualizarSuma()" /></div></div>';
-      html += '</div>';
-      html += '<div id="mix-sum-wrap" class="mix-summary"><span class="lbl">Total cobrado</span><span id="mix-sum" class="val">$0</span></div>';
-      html += '<div class="mix-actions">';
-      html += '<button class="mix-btn cancel" onclick="rutaCerrarMixto()">Cancelar</button>';
-      html += '<button class="mix-btn confirm" onclick="rutaConfirmarMixto()">✓ Guardar cobro</button>';
-      html += '</div>';
-    }
-
-    html += '</div>';
-  } else {
-    // Propina (solo Efectivo o Transferencia, no Mixto). Va a col S si Ef, T si Tr.
-    if (!cobrado && (metodoSel === 'Efectivo' || metodoSel === 'Transferencia')) {
-      var propActual = metodoSel === 'Efectivo' ? (Number(p.pEf) || 0) : (Number(p.pTr) || 0);
-      var propPlaceholder = propActual > 0 ? propActual.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '0,00';
-      html += '<div class="tip-row">';
-      html += '<label>🎁 Propina</label>';
-      html += '<div class="tip-input-wrap">' +
-              '<input id="ruta-tip" class="tip-input" type="text" inputmode="decimal" lang="es-AR" placeholder="' + propPlaceholder + '" value="' + (propActual > 0 ? propPlaceholder : '') + '" /></div>';
-      html += '</div>';
-      html += '<div class="tip-hint">Si hay propina, se suma al cobro. Va a col ' + (metodoSel === 'Efectivo' ? 'S (Efectivo)' : 'T (Transferencia)') + '.</div>';
-    }
-    /* Mientras se está guardando el envío de ESTE pedido el botón queda a la
-       vista pero quieto, y lo dice. Lo que se cobra depende del envío, así que
-       dejarlo tocable es por donde se pierde plata — ver rutaEnvioAnular. */
-    var _envBloq = _envioTrabado(p);
-    var _esTr = metodoSel === 'Transferencia';
-    html += '<button class="big-btn cobr' + (cobrado ? ' on' : '') + '" onclick="rutaToggleCobrado()"' +
-      (_envBloq ? ' style="opacity:.55"' : '') + '>' +
-      (_envBloq ? '⏳ Guardando el envío…'
-                : (cobrado ? (_esTr ? '✓ Transfirió a Maleu · tocar para deshacer' : '✓ Te pagó · tocar para deshacer')
-                           : (_esTr ? '🏦 Ya le transfirió a Maleu' : '💵 Me pagó en efectivo'))) + '</button>';
-  }
+  /* EL REPRESENTANTE NO COBRA (27/10/2026). Tadeo: «el cliente le pide a la tienda de Maleu,
+     nosotros le avisamos que representante le lleva el pedido y que dia, y el representante
+     solo coordina la entrega. El cobro es siempre de Maleu: le escribimos nosotros al cliente
+     y nos paga a nosotros». Hasta hoy aca se elegia la forma de pago, se marcaba «Me pago en
+     efectivo» y se copiaba un mensaje de cobro para el cliente. */
+  html += '<div class="qc-box"><div class="qc-t">💵 El cobro lo hace Maleu</div>'
+    + '<div class="qc-s">Nosotros le escribimos a ' + redEsc(String(p.c || 'el cliente').split(' ')[0]) + ' y nos paga a nosotros' + (cobrado ? ' (ya está cobrado ✓)' : '') + '. Vos coordinás la entrega con el cliente: no le cobrás ni le pasás cómo pagar.</div></div>';
   html += '<h4 style="margin-top:.8rem">🚚 Entrega</h4>';
   html += '<button class="big-btn entr' + (entregado ? ' on' : '') + '" onclick="rutaToggleEntrega()">' +
     (entregado ? '✓ Entregado · tocar para deshacer' : '🚚 Marcar Entregado') + '</button>';
@@ -5466,7 +5404,51 @@ function validateNuevo() {
   return ok;
 }
 
-function enviar() {
+/* UNA ENTREGA POR CLIENTE Y POR DIA (27/10/2026). Tadeo: «si un cliente ya tiene un pedido vivo
+   para ese mismo dia, el pedido nuevo tiene que sumarse a ese, no crear otro». Milagros Salazar
+   (lote 35) quedo con #2098 y #2100 para el 30/10. El mismo cliente = el mismo telefono o la
+   misma casa (barrio + lote). Vivo = ni entregado, ni cancelado, ni cobrado. */
+function _redTel10(t) { return String(t || '').replace(/\D/g, '').slice(-10); }
+function _redNormB(x) { return String(x || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ').trim(); }
+function _redPedidoVivoDelDia(tel, barrio, lote, iso) {
+  const peds = (lastDashboardData && lastDashboardData.pedidos) || [];
+  const t = _redTel10(tel), lo = String(lote || '').trim(), ba = _redNormB(barrio);
+  return peds.filter(p => p && p.es !== 'Entregado' && p.es !== 'Cancelado' && p.ep !== 'Cobrado' && p.fe === iso
+    && String(p.n || '').trim() && String(p.n).trim() !== '-'
+    && ((t.length >= 8 && _redTel10(p.t) === t) || (lo && String(p.l || '').trim() === lo && _redNormB(p.b) === ba)))[0] || null;
+}
+/* Lo del carrito, sumado a lo que ya tiene el pedido. La carne va por PIEZAS (las nuevas se
+   agregan; la del pedido la conserva el backend desde la fila). Es `editarPedidoRed`, el mismo
+   camino que «Editar pedido»: OC, corte del jueves y la base, igual. */
+function _redSumarAlPedido(ex, btn) {
+  const q = {};
+  (ex.prods || []).forEach(pr => { const id = ABBR_TO_ID[pr.a]; if (id != null && !RED_CARNE_KG[pr.a]) q[id] = (q[id] || 0) + (Number(pr.q) || 0); });
+  PRODUCTOS.forEach(p => { const k = cart[p.id] || 0; if (k > 0) q[p.id] = (q[p.id] || 0) + k; });
+  const items = Object.keys(q).filter(id => q[id] > 0).map(id => ({ id: Number(id), qty: q[id] }));
+  const carne = redCarneItems();
+  carne.forEach(it => items.push({ id: it.id, qty: it.qty }));
+  const piezas = { agregar: [].concat.apply([], carne.map(it => it.piezas || [])), soltar: [] };
+  let total = 0;
+  items.forEach(it => { const pr = PRODUCTOS.filter(x => x.id === it.id)[0]; if (pr) total += pr.precio * it.qty; });
+  carne.forEach(it => { total += it.importe; });
+  btn.disabled = true; btn.textContent = 'Sumando al #' + ex.n + '…'; btn.style.background = '#888';
+  return fetch(APPS_SCRIPT_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify({ action: 'editarPedidoRed', pedidoId: String(ex.n), row: Number(ex.row) || 0, vendedor: session.nombre,
+      items: items, total: total, piezas: piezas, sumado: true,
+      clientOpId: 'edr_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 10) }) })
+  .then(r => r.json())
+  .then(d => (d && d.ok && d.diferida)
+    ? fetch(APPS_SCRIPT_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ action: 'pedidosFuenteAplicar' }) }).catch(() => null).then(() => d)
+    : d)
+  .then(d => {
+    if (!d || !d.ok) throw new Error((d && d.err) || 'no se pudo sumar');
+    btn.textContent = '✓ Sumado al pedido #' + ex.n; btn.style.background = '#2e7d32';
+    redToast('✓ ' + (ex.c || 'El cliente') + ' ya tenía el #' + ex.n + ' para ese día: se sumó ahí (una entrega por cliente)');
+    return true;
+  });
+}
+
+function enviar(_reintento) {
   if (!validateNuevo()) return;
 
   const nombre    = $id('f-cliente').value.trim();
@@ -5496,6 +5478,16 @@ function enviar() {
      guarde como Date en col K. */
   if (!redApCoid) redApCoid = 'np-red-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7);
 
+  const btn = $id('btn-enviar');
+  const _ex = _redPedidoVivoDelDia(telefono, barrio, lote, fechaEntregaISO);
+  if (_ex) {
+    _redSumarAlPedido(_ex, btn).then(function () { setTimeout(_redApLimpiar, 1200); loadDashboard(); }).catch(function (err) {
+      btn.disabled = false; btn.textContent = 'Reintentar'; btn.style.background = '#c62828';
+      redToast('No pude sumarlo al #' + _ex.n + ': ' + (err && err.message || 'error') + '. Tocá Reintentar.');
+    });
+    return;
+  }
+
   /* action=redAutopedido (14/10/2026): el backend toma el vendedor de la
      sesion, rechaza el WhatsApp de un vendedor y usa el id para no duplicar. */
   const postData = {
@@ -5519,7 +5511,6 @@ function enviar() {
     telCliente: telefono
   };
 
-  const btn = $id('btn-enviar');
   btn.disabled = true;
   btn.textContent = 'Guardando…';
   btn.style.background = '#888';
@@ -5539,6 +5530,27 @@ function enviar() {
     btn.textContent = '✓ Pedido guardado';
     btn.style.background = '#2e7d32';
     setTimeout(function() {
+      _redApLimpiar();
+      aplicado.then(function () { loadDashboard(); });   /* que el pedido nuevo aparezca sin tocar ↻ */
+    }, 1200);
+  }).catch(function(err) {
+    /* El backend dice que ese cliente ya tiene un pedido ese dia (la lista de aca estaba
+       vieja): se recarga y se vuelve a guardar, que ahora suma. Una sola vez. */
+    if (err && err.sumarA && !_reintento) {
+      btn.textContent = 'Sumando al #' + err.sumarA.n + '…';
+      loadDashboard().then(function () { btn.disabled = false; enviar(true); });
+      return;
+    }
+    btn.disabled = false;
+    btn.textContent = 'Reintentar';
+    btn.style.background = '#c62828';
+    redToast('No pudimos guardar el pedido: ' + (err && err.message || 'error') + '. Tocá Reintentar.');
+  });
+}
+
+/* El formulario en blanco y de vuelta al inicio (antes adentro de enviar). */
+function _redApLimpiar() {
+      const btn = $id('btn-enviar');
       // Reset y volver al dashboard
       Object.keys(cart).forEach(k => delete cart[k]);
       PRODUCTOS.forEach(p => { const el = $id('qty-' + p.id); if (el) el.textContent = '0'; });
@@ -5557,14 +5569,6 @@ function enviar() {
       btn.style.background = '';
       updateCart();
       showDashboard();
-      aplicado.then(function () { loadDashboard(); });   /* que el pedido nuevo aparezca sin tocar ↻ */
-    }, 1200);
-  }).catch(function(err) {
-    btn.disabled = false;
-    btn.textContent = 'Reintentar';
-    btn.style.background = '#c62828';
-    redToast('No pudimos guardar el pedido: ' + (err && err.message || 'error') + '. Tocá Reintentar.');
-  });
 }
 
 // Envía un pedido al backend con retries y backoff exponencial.
@@ -5592,6 +5596,7 @@ function sendOrderWithRetry(data, maxAttempts) {
          vendedor): reintentar no lo arregla. Solo se reintenta lo que no
          llego o el candado ocupado (retry:true). */
       if (res && res.err && !res.retry) e.final = true;
+      if (res && res.sumarA) e.sumarA = res.sumarA;   /* una entrega por cliente y por día (27/10/2026) */
       throw e;
     })
     .catch(function(err) {
