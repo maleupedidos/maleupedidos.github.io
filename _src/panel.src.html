@@ -26319,7 +26319,11 @@ var LEC_ARMA = {
   productosAnalytics: { rpc: 'productos_analytics_pantalla', listas: { productos: ['abrev'] }, orden: true },
   /* (136, Backend ERP) Ajustes. Las listas por su clave y en el orden de la hoja; los permisos, por posicion. */
   ajustesData: { rpc: 'ajustes_data_pantalla', listas: { usuarios: ['usuario'], configMaleu: ['param', 'desde'], provisiones: ['concepto'],
-    configNegocio: ['param'], contadores: ['param'], vendedores: ['nombre'] }, orden: true }
+    configNegocio: ['param'], contadores: ['param'], vendedores: ['nombre'] }, orden: true },
+  /* (164) CRM > Hoy. La base da los DATOS y `motor` dice que la respuesta la arma el motor de
+     las jugadas (pj_motor.js, copiado de Code.js) en el navegador. Las casas y las jugadas por
+     su clave y en orden; lo demas por posicion. */
+  crmJugadas: { rpc: 'crm_jugadas_pantalla', listas: { casas: ['k'], jugadas: ['id'] }, orden: true, motor: true }
 };
 function _lecArmaComparar(accion,a,b){
   var cfg=LEC_ARMA[accion]||{}, listas=cfg.listas||{}, fuera={ts:1,base:1}, det={}, n=0;
@@ -26359,21 +26363,50 @@ function _lecArmaComparar(accion,a,b){
 /*LEC-ARMA-FIN*/
 var _lecArmaM={};
 function _lecModo(accion){ var m=(typeof _palancaVal==='function')?_palancaVal('lecArma'):null; return (m&&typeof m==='object'&&typeof _sbPermiso==='function')?(m[accion]||null):null; }
-function _lecArmaBase(accion,args){
+function _lecArmaBase(accion,args,ctx){
   var cfg=LEC_ARMA[accion], t0=Date.now();
   return Promise.resolve(_sbPermiso(true)).then(function(sb){
     if(!sb||!cfg)throw new Error('sin permiso');
     return fetch(sb.url+'/rest/v1/rpc/'+cfg.rpc,{method:'POST',
       headers:{apikey:sb.key,Authorization:'Bearer '+sb.token,'Content-Type':'application/json'},body:JSON.stringify(args||{})})
       .then(function(r){ if(!r.ok)throw new Error('la base contestó '+r.status); return r.json(); })
-      .then(function(d){ if(!d||d.ok===false)throw new Error('la base no armó '+accion); return {d:d,ms:Date.now()-t0,sb:sb}; });
+      .then(function(d){ if(!d||d.ok===false)throw new Error('la base no armó '+accion);
+        /* (164) `motor`: la base dio los datos y la respuesta la arma el motor de las jugadas. */
+        return (cfg.motor?_pjMotorArmar(d,ctx||{}):Promise.resolve(d)).then(function(x){ return {d:x,ms:Date.now()-t0,sb:sb}; }); });
+  });
+}
+/* EL MOTOR DE LAS JUGADAS (164). pj_motor.js lo genera _tools/copiar_motor.js desde Code.js: son
+   las mismas reglas que Apps Script. Se baja una vez por sesion y solo si hace falta. Los
+   templates de WATI no estan en la base: al medir van los de la respuesta de Apps Script; si no,
+   la copia guardada (la deja cada respuesta de Apps Script) o `crmJugadasTpls`. */
+var _pjMotorP=null;
+function _pjMotorCargar(){
+  if(window.PJ_MOTOR)return Promise.resolve(window.PJ_MOTOR);
+  return _pjMotorP||(_pjMotorP=new Promise(function(ok,mal){
+    var s=document.createElement('script'); s.src='pj_motor.js?t='+Date.now();   // siempre el publicado: se baja una vez por sesion
+    s.onload=function(){ window.PJ_MOTOR?ok(window.PJ_MOTOR):mal(new Error('el motor no cargó')); };
+    s.onerror=function(){ _pjMotorP=null; mal(new Error('no pude bajar el motor')); };
+    document.head.appendChild(s);
+  }));
+}
+function _pjTplsGuardar(tpls){ if(!tpls)return; try{ localStorage.setItem('mc_pjTpls',JSON.stringify({t:Date.now(),tpls:tpls})); }catch(e){} }
+function _pjTplsTraer(){
+  var g=null; try{ g=JSON.parse(localStorage.getItem('mc_pjTpls')||'null'); }catch(e){ g=null; }
+  var red=function(){ return fetch(API+'?action=crmJugadasTpls&t='+Date.now()).then(function(r){ return r.json(); })
+    .then(function(x){ if(x&&x.ok&&x.tpls){ _pjTplsGuardar(x.tpls); return x.tpls; } return g?g.tpls:null; }); };
+  if(g&&g.tpls){ if(Date.now()-(g.t||0)>3600000)red().catch(function(){}); return Promise.resolve(g.tpls); }
+  return red().catch(function(){ return null; });
+}
+function _pjMotorArmar(datos,ctx){
+  return Promise.all([_pjMotorCargar(),('tpls' in ctx)?Promise.resolve(ctx.tpls):_pjTplsTraer()]).then(function(z){
+    return z[0].armar(datos,{tpls:z[1]});
   });
 }
 function _lecArmaMedir(accion,args,d,desde){
   var m=_lecArmaM[accion]||(_lecArmaM[accion]={ult:0,vuelo:false});
   if(!d||d.base||m.vuelo||Date.now()-m.ult<PED_ARMA_MEDIR_MS)return;
   m.vuelo=true; m.ult=Date.now();
-  _lecArmaBase(accion,args).then(function(r){
+  _lecArmaBase(accion,args,{tpls:d.tpls}).then(function(r){
     return _pedSelloEscritura().then(function(info){
       var sello=_selloDe(info,[accion]);
       if(!sello||sello>desde)return null;
@@ -42906,7 +42939,10 @@ if('serviceWorker' in navigator){
   function _jugCargar(fresco){
     if (_jugVuelo) return _jugVuelo;
     _jugErr = '';
-    _jugVuelo = traer('crmJugadas', CRM_API + '?action=crmJugadas' + (fresco ? '&fresh=1' : '') + '&t=' + Date.now(), function(d, info){
+    /* (164) Con LECTURAS_BASE_ARMA la arma la base + el motor (pj_motor.js). La respuesta de Apps
+       Script deja la copia de los templates de WATI, que la base no tiene. */
+    _jugVuelo = _lecTraer('crmJugadas', {}, 'crmJugadas', CRM_API + '?action=crmJugadas' + (fresco ? '&fresh=1' : '') + '&t=' + Date.now(), function(d, info){
+      if (d && !d.base && !(info && info.viejo)) _pjTplsGuardar(d.tpls);
       _jug = d; _jugInfo = info;
       try { localStorage.setItem('maleu_jug_on', d.palanca ? '1' : '0'); } catch(e){}
       window.jugTabs(); _jugPintar(); _jugFichaParche();
