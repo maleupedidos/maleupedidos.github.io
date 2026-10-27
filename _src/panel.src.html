@@ -26257,6 +26257,101 @@ function _planTraer(mes,url){
   return Promise.resolve(_sbPermiso(true)).then(function(sb){ if(!sb)throw new Error('sin permiso'); return _planArmaBase(sb,mes); })
     .then(function(r){ return r.d; },function(){ return apps(); });
 }
+/*LEC-ARMA-INI*/
+/* LAS LECTURAS SUELTAS ARMADAS EN LA BASE (27/10/2026, 159 en adelante). Una sola pieza
+   para todas: cada accion de Apps Script que ya arma la base tiene su fila en LEC_ARMA
+   (la funcion de la base y, para cada lista de la respuesta, por que campo se identifica
+   una fila). La palanca es UNA fila de Config_Maleu, `LECTURAS_BASE_ARMA`, con la lista
+   «accion=modo» («crmLeads=medir; saludClientes=si»), que viaja en el permiso como
+   `sb.pal.lecArma` = {accion: 'medir'|'si'}. Sin la accion en la lista = como siempre.
+     medir  la pantalla sigue con Apps Script; cada PED_ARMA_MEDIR_MS, con una respuesta
+            recien llegada, la compara contra la base y la anota en `pedidos_cruce`
+            (`_pantalla: <accion>`), solo si nadie escribio desde que se pidio.
+     si     la arma la base; si no contesta, Apps Script. */
+var LEC_ARMA = {
+  crmLeads: { rpc: 'crm_leads_pantalla', listas: { leads: ['id'] } }
+};
+function _lecArmaComparar(accion,a,b){
+  var cfg=LEC_ARMA[accion]||{}, listas=cfg.listas||{}, fuera={ts:1,base:1}, det={}, n=0;
+  (cfg.ignorar||[]).forEach(function(k){ fuera[k]=1; });
+  var anotar=function(c,k){ n++; if(!det[c])det[c]={n:0,ej:k}; det[c].n++; };
+  var vacio=function(x){ return x===undefined||x===null||x===''; };
+  var cerca=function(x,y){ return Math.abs(x-y)<Math.max(1e-6,5e-6*Math.max(Math.abs(x),Math.abs(y))); };
+  var comp=function(x,y,ruta,ej){
+    if(vacio(x)&&vacio(y))return;
+    if(typeof x==='number'&&typeof y==='number'){ if(!cerca(x,y))anotar(ruta,ej); return; }
+    if(Array.isArray(x)&&Array.isArray(y)){
+      var cl=listas[ruta];
+      if(cl){
+        var A={}, B={}, vez={}, clave=function(z){ var k=cl.map(function(c){ return String(z&&z[c]); }).join('|'); vez[k]=(vez[k]||0)+1; return k+'#'+vez[k]; };
+        x.forEach(function(z){ A[clave(z)]=z; }); vez={}; y.forEach(function(z){ B[clave(z)]=z; });
+        Object.keys(A).forEach(function(k){ if(!(k in B))anotar(ruta+'._solo_apps_script',k); else comp(A[k],B[k],ruta,k); });
+        Object.keys(B).forEach(function(k){ if(!(k in A))anotar(ruta+'._solo_base',k); });
+        if(cfg.orden&&x.map(function(z){ return cl.map(function(c){ return z[c]; }).join('|'); }).join(',')!==y.map(function(z){ return cl.map(function(c){ return z[c]; }).join('|'); }).join(','))anotar(ruta+'._orden','');
+        return;
+      }
+      if(x.length!==y.length){ anotar(ruta+'._largo',ej); return; }
+      x.forEach(function(z,i){ comp(z,y[i],ruta,ej); });
+      return;
+    }
+    if(x&&y&&typeof x==='object'&&typeof y==='object'){
+      var ks={}; Object.keys(x).concat(Object.keys(y)).forEach(function(k){ ks[k]=1; });
+      Object.keys(ks).forEach(function(k){ if(ruta===''&&fuera[k])return; comp(x[k],y[k],ruta?ruta+'.'+k:k,ej); });
+      return;
+    }
+    if(String(x)!==String(y)||typeof x!==typeof y)anotar(ruta||'(raiz)',ej);
+  };
+  comp(a||{},b||{},'','');
+  var filas=0; Object.keys(listas).forEach(function(k){ filas+=((a&&a[k])||[]).length; });
+  det._pantalla={n:0,ej:accion};
+  return {pedidos:filas,diferencias:n,detalle:det};
+}
+/*LEC-ARMA-FIN*/
+var _lecArmaM={};
+function _lecModo(accion){ var m=(typeof _palancaVal==='function')?_palancaVal('lecArma'):null; return (m&&typeof m==='object'&&typeof _sbPermiso==='function')?(m[accion]||null):null; }
+function _lecArmaBase(accion,args){
+  var cfg=LEC_ARMA[accion], t0=Date.now();
+  return Promise.resolve(_sbPermiso(true)).then(function(sb){
+    if(!sb||!cfg)throw new Error('sin permiso');
+    return fetch(sb.url+'/rest/v1/rpc/'+cfg.rpc,{method:'POST',
+      headers:{apikey:sb.key,Authorization:'Bearer '+sb.token,'Content-Type':'application/json'},body:JSON.stringify(args||{})})
+      .then(function(r){ if(!r.ok)throw new Error('la base contestó '+r.status); return r.json(); })
+      .then(function(d){ if(!d||d.ok===false)throw new Error('la base no armó '+accion); return {d:d,ms:Date.now()-t0,sb:sb}; });
+  });
+}
+function _lecArmaMedir(accion,args,d,desde){
+  var m=_lecArmaM[accion]||(_lecArmaM[accion]={ult:0,vuelo:false});
+  if(!d||d.base||m.vuelo||Date.now()-m.ult<PED_ARMA_MEDIR_MS)return;
+  m.vuelo=true; m.ult=Date.now();
+  _lecArmaBase(accion,args).then(function(r){
+    return _pedSelloEscritura().then(function(info){
+      var sello=_selloDe(info,[accion]);
+      if(!sello||sello>desde)return null;
+      var c=_lecArmaComparar(accion,d,r.d);
+      try{ (window.__lecArmaCruce=window.__lecArmaCruce||{})[accion]=c; }catch(e){}
+      return fetch(r.sb.url+'/rest/v1/rpc/pedidos_cruce_anotar',{method:'POST',
+        headers:{apikey:r.sb.key,Authorization:'Bearer '+r.sb.token,'Content-Type':'application/json'},
+        body:JSON.stringify({p:{ms_base:r.ms,pedidos:c.pedidos,diferencias:c.diferencias,detalle:c.detalle}})});
+    });
+  }).catch(function(){}).then(function(){ m.vuelo=false; });
+}
+/* `traer` con la base adelante: mismos argumentos que traer, mas la accion y lo que se le
+   pasa a la funcion de la base. */
+function _lecTraer(accion,args,clave,url,pintar,opts){
+  var modo=_lecModo(accion), desde=Date.now();
+  if(modo!=='si')return traer(clave,url,function(d,info){
+    pintar(d,info);
+    if(modo==='medir'&&info&&!info.viejo)_lecArmaMedir(accion,args,d,desde);
+  },opts);
+  var g=(opts&&opts.sinCache)?null:_swrLeer(clave);
+  if(g){ try{ pintar(g.d,{viejo:true,cuando:g.t,hace:_hace(g.t)}); }catch(e){ console.error('lec/'+clave,e); } }
+  return _lecArmaBase(accion,args).then(function(r){
+    if(opts&&opts.valido&&!opts.valido(r.d))throw new Error('respuesta invalida');
+    _swrGuardar(clave,r.d);
+    var t=Date.now(); pintar(r.d,{viejo:false,cuando:t,hace:_hace(t)});
+    return r.d;
+  }).catch(function(){ return traer(clave,url,pintar,opts); });
+}
 /* `PROV_BASE_ARMA` (`sb.pal.provArma`; sin fila = no): medir compara cada
    `analisisProveedor` recien llegado (cada PED_ARMA_MEDIR_MS como mucho) contra
    `proveedores_pantalla`, solo si nadie escribio desde que se pidio; si la pinta
@@ -46620,7 +46715,7 @@ if('serviceWorker' in navigator){
     var hace = (planData.objetivos||[]).some(function(o){ return o.indicador==='leads' || /^leads?$/i.test(String(o.unidad||'').trim()); });
     if(!hace) return;
     _planLeadsPedidos = true;
-    traer('crmLeads', PLAN_API + '?action=crmLeads&t=' + Date.now(), function(){ if(planData && planData.ok){ renderAreas(); renderCierre(); } },
+    _lecTraer('crmLeads', {}, 'crmLeads', PLAN_API + '?action=crmLeads&t=' + Date.now(), function(){ if(planData && planData.ok){ renderAreas(); renderCierre(); } },
       { valido: function(d){ return !!d && d.ok===true && Array.isArray(d.leads); } }).catch(function(){ _planLeadsPedidos = false; });
   }
 
@@ -47988,7 +48083,7 @@ function _objRango(periodo, mesLabel){
 
   window.rLeads=function(){
     if(!_datos){ var g=_swrLeer('crmLeads'); if(g&&valido(g.d)){ _datos=g.d.leads; _sello={viejo:true,hace:_hace(g.t)}; pintar(); } }
-    traer('crmLeads', API+'?action=crmLeads&t='+Date.now(), function(d,info){
+    _lecTraer('crmLeads', {}, 'crmLeads', API+'?action=crmLeads&t='+Date.now(), function(d,info){
       if(!valido(d)) return;
       _datos=d.leads; _sello=info; pintar();
     }, { valido:valido }).catch(function(){
