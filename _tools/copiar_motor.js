@@ -117,6 +117,13 @@ const MOTORES = [
       cierre(fs.readFileSync(CODE, 'utf8'), '_doGetRedEscala', new Set(['_logError_', '_crmPgConfig_', '_crmPgFetch_', '_colsAbbr_',
         '_alertaTecnica_', '_avisar_', '_avisarCanal_', '_avisarFallo_', '_mlAvisar_', '_uf_'])),
       fs.readFileSync(path.join(RAIZ, '_src', 're_motor_shim.js'), 'utf8'), 'El motor de la escala de Red (201)') },
+  /* (203) Ruta › Cobros (`cobrosPendientes`). Las billeteras (174), las fusiones, las piezas y el mapa
+     de columnas los da la base resueltos; no sale a la red, no escribe ni avisa. */
+  { salida: 'cp_motor.js', armar: () => envolver(
+      cierre(fs.readFileSync(CODE, 'utf8'), '_doGetCobrosPendientes', new Set(['_logError_', '_crmPgConfig_', '_uf_', '_entregasVer_',
+        '_colsAbbr_', '_piezasLeer_', '_billeterasVivas_', '_crmGetMergeMap', '_alertaTecnica_', '_avisar_', '_avisarPedido_',
+        '_avisarNegocio_', '_avisarCanal_', '_avisarFallo_', '_mlAvisar_', '_medRed_', '_wati429_'])),
+      fs.readFileSync(path.join(RAIZ, '_src', 'cp_motor_shim.js'), 'utf8'), 'El motor de Ruta › Cobros (203)') },
   /* (27/10) El bloque LEC-ARMA de la pantalla (la config de cada lectura, `_lecArmaComparar` y
      `_motorCtx`), publicado aparte para el medidor de Apps Script: compara con el MISMO codigo que
      la pantalla. La pantalla no lo carga (lo tiene adentro). */

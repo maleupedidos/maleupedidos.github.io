@@ -105,6 +105,10 @@ var LEC_ARMA = {
   /* (202) Lo que se esta acomodando (las cargas diferidas, con DIF_BASE en la base): por id y en
      orden. `ahora` es la hora de cada respuesta; `tarde` depende de ella. */
   diferidos: { rpc: 'diferidos_pantalla', listas: { items: ['id'] }, orden: true, ignorar: ['ahora', 'items.tarde'] },
+  /* (203) Ruta › Cobros. La base da los DATOS y la respuesta la arma cp_motor.js (copiado de Code.js).
+     Los cobros por clave y en orden (Home, Pilar, Clubes y los vendedores); lo sin cerrar de Red por
+     vendedor; lo de adentro por posicion. */
+  cobrosPendientes: { rpc: 'cobros_pendientes_pantalla', listas: { cobros: ['key'], sinCerrar: ['vendedor'] }, orden: true, motor: 'cp' },
   /* (139) Mi Portal › Vendedores (solo admin): los vendedores por nombre y en orden; sus pedidos
      por numero y en el orden de la hoja; las cuentas por id. */
   redPedidosAbiertos: { rpc: 'red_pedidos_abiertos_pantalla', listas: { vendedores: ['nombre'], pedidos: ['n'], cuentas: ['id'] }, orden: true },
