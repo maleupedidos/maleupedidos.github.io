@@ -46,25 +46,70 @@ function extraer(code) {
   return partes.join('\n\n');
 }
 
-function generar() {
-  const code = fs.readFileSync(CODE, 'utf8'), shim = fs.readFileSync(SHIM, 'utf8');
-  const cuerpo = extraer(code);
+function envolver(cuerpo, shim, que) {
   const out = '/* GENERADO por _tools/copiar_motor.js desde estancias/.clasp-src/Code.js: NO SE EDITA.\n' +
-    '   El motor de CRM › Hoy (164). Ver el encabezado de _tools/copiar_motor.js. */\n' +
+    '   ' + que + '. Ver el encabezado de _tools/copiar_motor.js. */\n' +
     '(function (G) {\n' + shim.split('/*MOTOR*/').join('\n' + cuerpo + '\n') + '\n})(typeof window !== "undefined" ? window : globalThis);\n';
   new Function(out);                                          // que parsee, o no se escribe
   return out;
 }
-
-const nuevo = generar();
-if (chequear) {
-  const viejo = fs.existsSync(SALIDA) ? fs.readFileSync(SALIDA, 'utf8') : '';
-  /* git puede dejarlo con CRLF al hacer checkout: eso no es «viejo». Se normalizan LOS DOS lados:
-     Code.js trae algún CRLF propio, y normalizar solo el archivo lo daba por viejo siempre (27/10). */
-  const lf = t => t.replace(/\r\n/g, '\n');
-  if (lf(viejo) !== lf(nuevo)) { console.error('✗ pj_motor.js quedó viejo contra Code.js: corré node _tools/copiar_motor.js'); process.exit(1); }
-  console.log('✓ pj_motor.js al día con Code.js');
-} else {
-  fs.writeFileSync(SALIDA, nuevo);
-  console.log('pj_motor.js: ' + (nuevo.length / 1024).toFixed(0) + ' KB');
+function generar() {
+  const code = fs.readFileSync(CODE, 'utf8'), shim = fs.readFileSync(SHIM, 'utf8');
+  return envolver(extraer(code), shim, 'El motor de CRM › Hoy (164)');
 }
+
+/* EL CIERRE DE LLAMADAS (190, 27/10/2026). Para los motores nuevos no hay lista a mano: se copia
+   la funcion raiz y TODO lo que llama, recursivo (funciones y `var` de primer nivel de Code.js), en
+   el orden en que estan en Code.js. Si una regla suma una funcion, entra sola en el proximo build.
+   `fuera`: lo que el shim reemplaza y no hace falta copiar. */
+function cierre(code, raiz, fuera) {
+  const L = code.split(/\r?\n/), defs = Object.create(null);
+  for (let i = 0; i < L.length; i++) {
+    let m = /^function ([\w$]+)\(/.exec(L[i]);
+    if (m) { let j = i; while (L[j] !== '}') j++; if (!defs[m[1]]) defs[m[1]] = [i, j]; continue; }
+    m = /^var ([\w$]+)\s*=/.exec(L[i]);
+    if (m && !defs[m[1]]) {
+      let j = i, prof = 0;
+      for (;; j++) {
+        for (const ch of L[j].replace(/\/\/.*$/, '').replace(/'(?:[^'\\]|\\.)*'/g, '')) { if ('{[('.includes(ch)) prof++; if ('}])'.includes(ch)) prof--; }
+        if (prof <= 0 && /;\s*(\/\/.*)?$/.test(L[j])) break;
+      }
+      defs[m[1]] = [i, j];
+    }
+  }
+  if (!defs[raiz]) throw new Error('no encontré ' + raiz + ' en Code.js');
+  const vistos = new Set(), cola = [raiz];
+  while (cola.length) {
+    const n = cola.pop();
+    if (vistos.has(n) || fuera.has(n) || !defs[n]) continue;
+    vistos.add(n);
+    const [a, b] = defs[n];
+    const txt = L.slice(a, b + 1).join('\n').replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '').replace(/'(?:[^'\\\n]|\\.)*'/g, "''");
+    for (const t of new Set(txt.match(/[A-Za-z_$][\w$]*/g))) if (defs[t] && t !== n) cola.push(t);
+  }
+  return [...vistos].map(n => defs[n]).sort((x, y) => x[0] - y[0]).map(([a, b]) => L.slice(a, b + 1).join('\n')).join('\n\n');
+}
+const MOTORES = [
+  { salida: 'pj_motor.js', armar: generar },
+  /* (190) Mi Portal › Objetivos del equipo (`redObjetivosEquipo`). */
+  { salida: 'ro_motor.js', armar: () => envolver(
+      cierre(fs.readFileSync(CODE, 'utf8'), '_doGetRedObjetivosEquipo', new Set(['_logError_'])),
+      fs.readFileSync(path.join(RAIZ, '_src', 'ro_motor_shim.js'), 'utf8'), 'El motor de Mi Portal › Objetivos del equipo (190)') }
+];
+
+/* git puede dejarlo con CRLF al hacer checkout: eso no es «viejo». Se normalizan LOS DOS lados:
+   Code.js trae algún CRLF propio, y normalizar solo el archivo lo daba por viejo siempre (27/10). */
+const lf = t => t.replace(/\r\n/g, '\n');
+let viejos = 0;
+for (const M of MOTORES) {
+  const nuevo = M.armar(), arch = path.join(RAIZ, M.salida);
+  if (chequear) {
+    const viejo = fs.existsSync(arch) ? fs.readFileSync(arch, 'utf8') : '';
+    if (lf(viejo) !== lf(nuevo)) { console.error('✗ ' + M.salida + ' quedó viejo contra Code.js: corré node _tools/copiar_motor.js'); viejos++; }
+    else console.log('✓ ' + M.salida + ' al día con Code.js');
+  } else {
+    fs.writeFileSync(arch, nuevo);
+    console.log(M.salida + ': ' + (nuevo.length / 1024).toFixed(0) + ' KB');
+  }
+}
+if (viejos) process.exit(1);
