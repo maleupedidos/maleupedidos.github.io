@@ -30,6 +30,10 @@ fallar(){ echo "${RED}✖ $1${RST}" >&2; exit 1; }
 echo "→ [0/8] Armando app.html…"
 [ -d node_modules ] || { echo "    faltan dependencias, instalando…"; npm install --no-audit --no-fund >/dev/null; }
 node _tools/build.js | sed 's/^/    /' || fallar "El build no compilo — no se publica nada."
+# El motor de las jugadas (164): las reglas de Code.js, copiadas. Se regenera SIEMPRE, igual que
+# app.html: si Code.js cambio una regla, CRM > Hoy desde la base la tiene que tener.
+node _tools/copiar_motor.js ../estancias | sed 's/^/    /'
+node _tools/copiar_motor.js --chequear ../estancias >/dev/null 2>&1 || fallar "No pude copiar el motor de las jugadas de ../estancias — no se publica nada."
 
 # ── 1. Rama y sincronia con origin ───────────────────────────────────────────
 echo "→ [1/8] Sincronia con origin…"
