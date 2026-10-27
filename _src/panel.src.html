@@ -25872,7 +25872,9 @@ function _stDeLaBase(){
   var no=function(porque){ return {usado:false,palanca:true,porque:porque}; };
   if(typeof _sbPermiso!=='function')return Promise.resolve(null);
   return _sbPermiso(true).then(function(sb){
-    if(!sb||!sb.pal||!sb.pal.productosPg)return {usado:false,palanca:false};
+    /* (153) Con `STOCK_BASE_ARMA = si` la arma la base entera, con el costo adentro. */
+    var arma=!!(sb&&sb.pal&&sb.pal.stockArma==='si');
+    if(!sb||!sb.pal||(!sb.pal.productosPg&&!arma))return {usado:false,palanca:false};
     var H={apikey:sb.key,Authorization:'Bearer '+sb.token};
     var ctl=(typeof AbortController==='function')?new AbortController():null;
     var reloj=setTimeout(function(){ try{ if(ctl)ctl.abort(); }catch(e){} },ST_PG_ESPERA_MS);
@@ -25887,14 +25889,17 @@ function _stDeLaBase(){
        leer esa columna, y filtrar por una columna que no se puede leer da 403
        (medido el 5/10/2026 con el token de la pantalla). No hace falta: la
        policy de la 028 ya esconde las bajas para este rol. */
-    return Promise.all([
+    return (arma?_stockArmaBase(sb,ctl?ctl.signal:undefined).then(function(r){
+      var x=r.d, al=Number(x.alDia)||0;
+      return {completo:al>0, faltan:al>0?[]:['latido'], stock:x.stock, stockDeps:x.stockDeps,
+        alDia:al, stockCierre:x.stockCierre||'', sinRegistro:x.sinRegistro, conCosto:true};
+    }):Promise.all([
       g('inventory_product?select='+ST_PG_PROD+'&limit=1000'),
       g('inventory_stock_snapshot?select='+ST_PG_SNAP+'&limit=5000'),
       g('inventory_warehouse?select='+ST_PG_DEP+'&active=is.true'),
       g('replica_status?select='+ST_PG_EST+'&domain=eq.inventario')
-    ]).then(function(rs){
+    ]).then(function(rs){ return _stDesdePg({prods:rs[0],snaps:rs[1],deps:rs[2],estado:rs[3]}); })).then(function(o){
       clearTimeout(reloj);
-      var o=_stDesdePg({prods:rs[0],snaps:rs[1],deps:rs[2],estado:rs[3]});
       if(!o.completo)return no('a la base le falta '+o.faltan.join(', '));
       if(Date.now()-o.alDia>ST_PG_VIEJA_MS)return no('la copia de la base es de '+_hace(o.alDia));
       if(ST_SUCIO&&ST_SUCIO>o.alDia)return no('moviste stock despu\u00e9s de la copia de la base');
@@ -25906,9 +25911,9 @@ function _stDeLaBase(){
          ultimo POST queda en el aparato (la misma que miran Pedidos y Caja). */
       var _post=0; try{ _post=Number(localStorage.getItem('maleu_ult_post'))||0; }catch(e){}
       if(_post>o.alDia)return no('guardaste algo despu\u00e9s de la copia de la base');
-      var cos=_stCostos();
+      var cos=o.conCosto?{t:o.alDia}:_stCostos();
       if(!cos)return no('no hay un costo de la planilla de hoy para el valor del stock');
-      for(var i=0;i<o.stock.length;i++){
+      for(var i=0;!o.conCosto&&i<o.stock.length;i++){
         var s=o.stock[i], co=cos.map[s.a];
         if(co===undefined)return no('falta el costo de '+s.a);
         s.co=co; s.iv=Math.max(0,s.f)*co;   /* igual que `_armarStock_` */
@@ -26007,6 +26012,7 @@ function _stDeLaPlanilla(forzar){
            stock. Solo una foto de AHORA, no la copia guardada que se pinta
            mientras tanto: esa ya quedo anotada el dia que llego. */
         if(!info.viejo)_stCostosAnotar(d.stock,_pedidoEn);
+        if(!info.viejo)_stockArmaMedir(d,_pedidoEn);
         ST_TENGO=true;
         /* La tabla se redibuja con la foto nueva. `_pintadas` es la marca de
            "esta seccion ya esta al dia con el D de ahora": si no se borra, el
@@ -26019,6 +26025,83 @@ function _stDeLaPlanilla(forzar){
       }
     },forzar);
   return p;
+}
+/* (153) LA TAB STOCK ARMADA EN LA BASE: `stockTab` de Apps Script (a) contra
+   `stock_tab_pantalla` (b). Los productos por abreviatura y cada freezer adentro;
+   los depositos por id; los saltos del Kardex por producto, hora y referencia, la
+   cola por producto. `ts`, `ok`, `base` y `alDia` no son de la pantalla. Los
+   numeros con 5 por millon: el valor es fisico x costo en JS contra numeric. */
+function _stockArmaComparar(a,b){
+  var det={}, n=0;
+  var anotar=function(c,k){ n++; if(!det[c])det[c]={n:0,ej:k}; det[c].n++; };
+  var cerca=function(x,y){ return Math.abs(x-y)<Math.max(1e-6,5e-6*Math.max(Math.abs(x),Math.abs(y))); };
+  var v=function(x){ return (x===undefined||x===null||x==='')?null:x; };
+  var igual=function(x,y){
+    x=v(x); y=v(y);
+    if(typeof x==='number'&&typeof y==='number')return cerca(x,y);
+    if(x&&y&&typeof x==='object'&&typeof y==='object'&&!Array.isArray(x)&&!Array.isArray(y)){
+      var ks={}; Object.keys(x).concat(Object.keys(y)).forEach(function(k){ ks[k]=1; });
+      return Object.keys(ks).every(function(k){ return igual(x[k],y[k]); });
+    }
+    return JSON.stringify(x)===JSON.stringify(y);
+  };
+  var lista=function(nom,la,lb,clave){
+    var A={}, B={}, i=0;
+    (la||[]).forEach(function(x){ A[clave(x)]=x; }); (lb||[]).forEach(function(x){ B[clave(x)]=x; });
+    Object.keys(A).forEach(function(k){
+      var x=A[k], y=B[k]; i++;
+      if(!y){ anotar(nom+'._solo_apps_script',k); return; }
+      var cs={}; Object.keys(x).concat(Object.keys(y)).forEach(function(c){ cs[c]=1; });
+      Object.keys(cs).forEach(function(c){ if(!igual(x[c],y[c]))anotar(nom+'.'+c,k); });
+    });
+    Object.keys(B).forEach(function(k){ if(!A[k])anotar(nom+'._solo_base',k); });
+    return Object.keys(A).length;
+  };
+  a=a||{}; b=b||{};
+  var sa=a.sinRegistro||{}, sb=b.sinRegistro||{};
+  var prods=lista('stock',a.stock,b.stock,function(x){ return x.a; });
+  lista('stockDeps',a.stockDeps,b.stockDeps,function(x){ return x.id; });
+  lista('saltos',sa.saltos,sb.saltos,function(x){ return x.a+'|'+x.f+'|'+x.antesDe; });
+  lista('cola',sa.cola,sb.cola,function(x){ return x.a; });
+  if(!igual(a.stockCierre,b.stockCierre))anotar('stockCierre',String(a.stockCierre||''));
+  if(!igual(sa.total,sb.total))anotar('sinRegistro.total',String(sa.total));
+  det._pantalla={n:0,ej:'stock'};
+  return {pedidos:prods,diferencias:n,detalle:det};
+}
+/* `STOCK_BASE_ARMA` (`sb.pal.stockArma`; sin fila = no):
+     medir  la tab sigue como hoy; cada PED_ARMA_MEDIR_MS, con un `stockTab` recien llegado,
+            se compara contra `stock_tab_pantalla` y se anota en `pedidos_cruce`
+            (`_pantalla: stock`). SOLO si nadie escribio entre las dos lecturas: la de Apps
+            Script (`desde`) y la de la base (su latido). Si hubo una escritura en el medio no
+            es una diferencia, es otra hora: no se anota nada.
+     si     `_stDeLaBase` arma la tabla con `stock_tab_pantalla` (una llamada, con el costo),
+            con las mismas reglas de frescura de siempre. */
+var _stockArmaM={ult:0,vuelo:false};
+function _stockArmaBase(sb,senal){
+  var t0=Date.now();
+  return fetch(sb.url+'/rest/v1/rpc/stock_tab_pantalla',{method:'POST',signal:senal,
+    headers:{apikey:sb.key,Authorization:'Bearer '+sb.token,'Content-Type':'application/json'},body:'{}'})
+    .then(function(r){ if(!r.ok)throw new Error('la base contestó '+r.status); return r.json(); })
+    .then(function(d){ if(!d||!Array.isArray(d.stock))throw new Error('la base no armó el stock'); return {d:d,ms:Date.now()-t0}; });
+}
+function _stockArmaMedir(d,desde){
+  if(!d||!Array.isArray(d.stock)||d.base||_stockArmaM.vuelo||Date.now()-_stockArmaM.ult<PED_ARMA_MEDIR_MS)return;
+  if(typeof _palancaVal!=='function'||_palancaVal('stockArma')!=='medir'||typeof _sbPermiso!=='function')return;
+  _stockArmaM.vuelo=true; _stockArmaM.ult=Date.now();
+  Promise.resolve(_sbPermiso(true)).then(function(sb){
+    if(!sb)return null;
+    return _stockArmaBase(sb).then(function(r){
+      return _pedSelloEscritura().then(function(info){
+        var sello=_selloDe(info,['stockTab']), al=Number(r.d.alDia)||0;
+        if(!sello||!al||sello>Math.min(desde,al))return null;
+        var c=_stockArmaComparar(d,r.d);
+        try{ window.__stockArmaCruce=c; }catch(e){}
+        return fetch(sb.url+'/rest/v1/rpc/pedidos_cruce_anotar',{method:'POST',
+          headers:{apikey:sb.key,Authorization:'Bearer '+sb.token,'Content-Type':'application/json'},
+          body:JSON.stringify({p:{ms_base:r.ms,pedidos:c.pedidos,diferencias:c.diferencias,detalle:c.detalle}})});
+      });
+    });
+  }).catch(function(){}).then(function(){ _stockArmaM.vuelo=false; });
 }
 /*PG-STOCK-INI*/
 /* LA TAB PRODUCTOS DESDE SUPABASE. (5/10/2026, rama supabase)
