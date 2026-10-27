@@ -2915,8 +2915,7 @@ function _saldoPara(cliente, cb){
      dos veces, porque el cache se escribe recien al volver la respuesta. */
   if(_saldosPidiendo[ck]){ _saldosPidiendo[ck].push(cb); return; }
   _saldosPidiendo[ck] = [cb];
-  fetch(RUT_APPS_SCRIPT_URL+'?action=saldoCliente&cliente='+encodeURIComponent(cliente)+'&t='+Date.now())
-    .then(function(r){return r.json()})
+  /* (180) */ _rutLec('saldoCliente',{p:{cliente:cliente}},RUT_APPS_SCRIPT_URL+'?action=saldoCliente&cliente='+encodeURIComponent(cliente)+'&t='+Date.now())
     .then(function(data){
       var sv=(data&&data.ok)?(Number(data.saldo)||0):0;
       _saldosClienteCache[ck]={saldo:sv,ts:Date.now()};
@@ -7352,9 +7351,19 @@ function _bilDeQuienRuta(){
   return _billeteraRuta;
 }
 
+/* Una lectura que la base puede armar (LEC_ARMA): adentro del ERP, `_lecJson` decide de donde
+   sale; suelta (?standalone=1) o sin la fila, Apps Script como siempre. Devuelve el JSON. */
+function _rutLec(accion,args,url){
+  return (typeof _lecJson==='function'&&typeof LEC_ARMA==='object'&&LEC_ARMA[accion])
+    ?_lecJson(accion,args,url,function(){})
+    :fetch(url).then(function(r){return r.json()});
+}
 function _refrescarBilleteraRuta(){
-  return fetch(RUT_APPS_SCRIPT_URL+'?action=billetera&t='+Date.now())
-    .then(function(r){return r.json()})
+  /* (174) Si la base ya arma las billeteras (LEC_ARMA), `_lecJson` decide de donde salen. */
+  var _bilUrl=RUT_APPS_SCRIPT_URL+'?action=billetera&t='+Date.now();
+  return ((typeof _lecJson==='function'&&typeof LEC_ARMA==='object'&&LEC_ARMA.billetera)
+    ?_lecJson('billetera',{},_bilUrl,function(){})
+    :fetch(_bilUrl).then(function(r){return r.json()}))
     .then(function(data){
       if(data && data.billeteras)_bilVivasRuta=data.billeteras;
       if(data && typeof data.billetera==='number'){
@@ -8956,8 +8965,7 @@ function _fetchSaldoPrevioModal(tel,cliente){
   if(name){ _saldoPara(name, function(s){ _renderCobroSaldoPrevio(s); }); return; }
   var cached=_saldosClienteCache[key];
   if(cached&&(Date.now()-cached.ts)<60000){_renderCobroSaldoPrevio(cached.saldo);return;}
-  fetch(RUT_APPS_SCRIPT_URL+'?action=saldoCliente&tel='+encodeURIComponent(rawTel)+'&t='+Date.now())
-    .then(function(r){return r.json()})
+  /* (180) */ _rutLec('saldoCliente',{p:{tel:rawTel}},RUT_APPS_SCRIPT_URL+'?action=saldoCliente&tel='+encodeURIComponent(rawTel)+'&t='+Date.now())
     .then(function(data){var s=(data&&data.ok)?(Number(data.saldo)||0):0;_saldosClienteCache[key]={saldo:s,ts:Date.now()};_renderCobroSaldoPrevio(s);})
     .catch(function(){});
 }
@@ -9037,8 +9045,7 @@ function _renderRutaSaldoBanner(elements, saldo){
 var _preciosFresh=false;
 function _refrescarPreciosSilencioso(){
   if(_preciosFresh)return;
-  fetch(RUT_APPS_SCRIPT_URL+'?action=precios&t='+Date.now())
-    .then(function(r){return r.json()})
+  /* (183) */ _rutLec('precios',{},RUT_APPS_SCRIPT_URL+'?action=precios&t='+Date.now())
     .then(function(d){if(_npEsTablaPrecios(d)){NP_PRECIOS=d;_preciosFresh=true;npPreciosConfirmados=true;}})
     .catch(function(){});
 }
@@ -12193,8 +12200,7 @@ function _npEsTablaPrecios(d){
    los de arranque — que pueden estar viejos — y por eso npPintarAvisoPrecios()
    lo dice en pantalla en vez de callarlo. */
 function npFetchPrecios(){
-  fetch(RUT_APPS_SCRIPT_URL+'?action=precios&t='+Date.now())
-    .then(function(r){return r.json()})
+  /* (183) */ _rutLec('precios',{},RUT_APPS_SCRIPT_URL+'?action=precios&t='+Date.now())
     .then(function(data){
       if(_npEsTablaPrecios(data)){
         NP_PRECIOS=data;npPreciosConfirmados=true;
@@ -12607,8 +12613,12 @@ function npPreguntarSiEntro(coid,plazoMs,cb){
     var c=(typeof AbortController!=='undefined')?new AbortController():null;
     var t=setTimeout(function(){if(c)c.abort()},15000);
     var o={method:'GET'}; if(c)o.signal=c.signal;
-    fetch(RUT_APPS_SCRIPT_URL+'?action=pedidoEntro&coid='+encodeURIComponent(coid),o)
-      .then(function(r){return r.json()})
+    /* (184) Con `pedidoEntro=si`, primero la base: su SI es firme (el candidato se registra con la
+       fila ya escrita); su NO puede estar atrasado, asi que con un no se pregunta a Apps Script. */
+    var _apps=function(){ return fetch(RUT_APPS_SCRIPT_URL+'?action=pedidoEntro&coid='+encodeURIComponent(coid),o).then(function(r){return r.json()}); };
+    ((typeof _lecModo==='function'&&_lecModo('pedidoEntro')==='si')
+      ?_lecArmaBase('pedidoEntro',{p:{coid:coid}}).then(function(b){ return (b.d&&b.d.ok&&b.d.entro)?b.d:_apps(); },_apps)
+      :_apps())
       .then(function(r){ clearTimeout(t); if(r&&r.ok&&r.entro)return fin(r); otra(); })
       .catch(function(){ clearTimeout(t); otra(); });
   }
