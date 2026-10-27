@@ -1768,7 +1768,44 @@ function _resolverNombreCanonico() {
 // no puede depender de una sola llamada: Apps Script a veces tarda/falla y en
 // el celular con señal floja pasa seguido. Sin esto, un fallo transitorio hacía
 // que el vendedor viera "no tenés pedidos" (bug Fini 16/07/2026).
+/* (191) EL PORTAL DESDE LA BASE. Con LECTURAS_BASE_ARMA dashboardVendedor=si, los numeros los arma
+   la base + dv_motor.js (las reglas de Code.js) y aparecen al instante. Lo que abrir el portal HACE
+   (anotar las tareas de la semana, el Telegram de objetivo cumplido, guardar cuando lo abrio) y lo
+   que sale de eso (tareas, objetivo, Telegram, escala, liquidaciones) lo trae
+   `dashboardVendedorEfectos` de Apps Script, que se larga sin esperarlo: mientras llega, esas
+   partes son las de la copia guardada. En «medir», todo sigue saliendo de Apps Script. */
+var DV_EFECTOS = ['tareas', 'objetivo', 'tg', 'liqs', 'liqProx'];
+function _dvPegarEfectos(d, e) {
+  DV_EFECTOS.forEach(function (k) { if (k in e) d[k] = e[k]; });
+  if ('escala' in e && d.stats) d.stats.escala = e.escala;
+}
+function _dvEfectos(d, nom) {
+  try {
+    var c = JSON.parse(localStorage.getItem('maleu_red_dash_' + nom) || 'null');
+    if (c && c.data) _dvPegarEfectos(d, { tareas: c.data.tareas, objetivo: c.data.objetivo, tg: c.data.tg, liqs: c.data.liqs,
+      liqProx: c.data.liqProx, escala: c.data.stats ? c.data.stats.escala : null });
+  } catch (e) {}
+  fetch(APPS_SCRIPT_URL + '?action=dashboardVendedorEfectos&nombre=' + encodeURIComponent(nom), { cache: 'no-store' })
+    .then(function (r) { return r.json(); })
+    .then(function (e) {
+      if (!e || !e.ok) return;
+      _dvPegarEfectos(d, e);
+      if (!session || session.nombre !== nom) return;
+      try { localStorage.setItem('maleu_red_dash_' + nom, JSON.stringify({ ts: Date.now(), data: d })); } catch (eS) {}
+      renderDashboard(d);
+    })
+    .catch(function () {});
+}
 function _fetchDashboardRetry(maxAttempts) {
+  if (typeof _lecJson === 'function' && typeof LEC_ARMA === 'object' && LEC_ARMA.dashboardVendedor) {
+    var nom = session.nombre, url = APPS_SCRIPT_URL + '?action=dashboardVendedor&nombre=' + encodeURIComponent(nom);
+    return _lecJson('dashboardVendedor', { p_nombre: nom }, url, function () {})
+      .then(function (d) { if (!d || !d.ok) throw new Error((d && d.err) || 'ok=false'); if (d.base) _dvEfectos(d, nom); return d; })
+      .catch(function () { return _fetchDashboardApps(maxAttempts); });
+  }
+  return _fetchDashboardApps(maxAttempts);
+}
+function _fetchDashboardApps(maxAttempts) {
   maxAttempts = maxAttempts || 4;
   var attempt = 0;
   function _try() {
