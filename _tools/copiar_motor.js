@@ -104,7 +104,20 @@ const MOTORES = [
         '_escalaPortal_', '_escalaProductosVendedor_', '_escalaRedLeer_', '_rbTgLink_', '_liqRedDeVendedor_', '_liqRedProxDeVendedor_',
         '_roVendedorDeSesion_', '_rbVendedores_', '_rbVendedorPorNombre_', '_colsAbbr_', '_piezasLeer_', '_comisionPct', '_cuentas_',
         '_liqRedActiva_'])),
-      fs.readFileSync(path.join(RAIZ, '_src', 'dv_motor_shim.js'), 'utf8'), 'El motor del portal del vendedor (191)') }
+      fs.readFileSync(path.join(RAIZ, '_src', 'dv_motor_shim.js'), 'utf8'), 'El motor del portal del vendedor (191)') },
+  /* (27/10) El bloque LEC-ARMA de la pantalla (la config de cada lectura, `_lecArmaComparar` y
+     `_motorCtx`), publicado aparte para el medidor de Apps Script: compara con el MISMO codigo que
+     la pantalla. La pantalla no lo carga (lo tiene adentro). */
+  { salida: 'lec_arma.js', armar: () => {
+      const w = fs.readFileSync(path.join(RAIZ, '_src', 'panel.src.html'), 'utf8').replace(/\r\n/g, '\n');
+      const i = w.indexOf('/*LEC-ARMA-INI*/'), j = w.indexOf('/*LEC-ARMA-FIN*/');
+      if (i < 0 || j < i) throw new Error('no encontré el bloque LEC-ARMA en panel.src.html');
+      const out = '/* GENERADO por _tools/copiar_motor.js desde _src/panel.src.html (bloque LEC-ARMA): NO SE EDITA.\n' +
+        '   Lo baja el medidor de lecturas de Apps Script (medirLecturasBase). */\n(function (G) {\n' + w.slice(i, j) +
+        '\nG.LEC_ARMA = LEC_ARMA; G._lecArmaComparar = _lecArmaComparar; G._motorCtx = _motorCtx;\n})(typeof window !== "undefined" ? window : globalThis);\n';
+      new Function(out);
+      return out;
+    } }
 ];
 
 /* git puede dejarlo con CRLF al hacer checkout: eso no es «viejo». Se normalizan LOS DOS lados:
