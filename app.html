@@ -29893,6 +29893,74 @@ function _provArmaComparar(a,b){
   det._pantalla={n:0,ej:'proveedores'};
   return {pedidos:ocs,diferencias:n,detalle:det};
 }
+/* (158) PLANIFICACION ARMADA EN LA BASE: `planMes&lite=1` (a) contra `plan_mes_pantalla` (b).
+   Las metas por su clave (canal|barrio), las acciones por id Y en su orden (la pantalla las
+   lista asi), los objetivos por id, el cierre y lo demas tal cual. `conCatering` no se
+   compara: la base no lo sabe y la pantalla lo toma del permiso. Tampoco `real`, `origen`,
+   `base` ni `_guardado`. */
+function _planArmaComparar(a,b){
+  var det={}, n=0;
+  var anotar=function(c,k){ n++; if(!det[c])det[c]={n:0,ej:k}; det[c].n++; };
+  var v=function(x){ return (x===undefined||x===null||x==='')?null:x; };
+  var can=function(x){ return JSON.stringify(x,function(k,y){ if(y&&typeof y==='object'&&!Array.isArray(y)){ var o={}; Object.keys(y).sort().forEach(function(j){ o[j]=y[j]; }); return o; } return y; }); };
+  var igual=function(x,y){ x=v(x); y=v(y); if(typeof x==='number'&&typeof y==='number')return Math.abs(x-y)<1e-6; return can(x)===can(y); };
+  var fila=function(nom,k,x,y){
+    if(!y){ anotar(nom+'._solo_apps_script',k); return; }
+    var cs={}; Object.keys(x).concat(Object.keys(y)).forEach(function(c){ cs[c]=1; });
+    Object.keys(cs).forEach(function(c){ if(!igual(x[c],y[c]))anotar(nom+'.'+c,k); });
+  };
+  var porId=function(l){ var o={}; (l||[]).forEach(function(x){ o[x.id]=x; }); return o; };
+  a=a||{}; b=b||{};
+  var ma=a.metas||{}, mb=b.metas||{};
+  Object.keys(ma).forEach(function(k){ fila('metas',k,ma[k],mb[k]); });
+  Object.keys(mb).forEach(function(k){ if(!(k in ma))anotar('metas._solo_base',k); });
+  [['acciones',a.acciones,b.acciones],['objetivos',a.objetivos,b.objetivos]].forEach(function(z){
+    var A=porId(z[1]), B=porId(z[2]);
+    Object.keys(A).forEach(function(k){ fila(z[0],k,A[k],B[k]); });
+    Object.keys(B).forEach(function(k){ if(!A[k])anotar(z[0]+'._solo_base',k); });
+  });
+  if((a.acciones||[]).map(function(x){ return x.id; }).join(',')!==(b.acciones||[]).map(function(x){ return x.id; }).join(','))anotar('acciones._orden','');
+  ['mes','yyyy','mm','diasMes','diasTrans','cierre','arbol','barriosHome','canalesPrincipales'].forEach(function(k){ if(!igual(a[k],b[k]))anotar(k,''); });
+  det._pantalla={n:0,ej:'planificacion'};
+  return {pedidos:Object.keys(ma).length+(a.acciones||[]).length+(a.objetivos||[]).length,diferencias:n,detalle:det};
+}
+var _planArmaM={ult:0,vuelo:false};
+function _planArmaBase(sb,mes){
+  var t0=Date.now();
+  return fetch(sb.url+'/rest/v1/rpc/plan_mes_pantalla',{method:'POST',
+    headers:{apikey:sb.key,Authorization:'Bearer '+sb.token,'Content-Type':'application/json'},body:JSON.stringify({p_mes:mes})})
+    .then(function(r){ if(!r.ok)throw new Error('la base contestó '+r.status); return r.json(); })
+    .then(function(d){ if(!d||!d.ok||!d.metas)throw new Error('la base no armó el plan'); d.conCatering=!!(sb.pal&&sb.pal.conCatering); return {d:d,ms:Date.now()-t0}; });
+}
+function _planArmaMedir(d,mes,desde){
+  if(!d||!d.ok||d.base||_planArmaM.vuelo||Date.now()-_planArmaM.ult<PED_ARMA_MEDIR_MS)return;
+  if(typeof _palancaVal!=='function'||_palancaVal('planArma')!=='medir'||typeof _sbPermiso!=='function')return;
+  _planArmaM.vuelo=true; _planArmaM.ult=Date.now();
+  Promise.resolve(_sbPermiso(true)).then(function(sb){
+    if(!sb)return null;
+    return _planArmaBase(sb,mes).then(function(r){
+      return _pedSelloEscritura().then(function(info){
+        var sello=_selloDe(info,['planMes']);
+        if(!sello||sello>desde)return null;
+        var c=_planArmaComparar(d,r.d);
+        try{ window.__planArmaCruce=c; }catch(e){}
+        return fetch(sb.url+'/rest/v1/rpc/pedidos_cruce_anotar',{method:'POST',
+          headers:{apikey:sb.key,Authorization:'Bearer '+sb.token,'Content-Type':'application/json'},
+          body:JSON.stringify({p:{ms_base:r.ms,pedidos:c.pedidos,diferencias:c.diferencias,detalle:c.detalle}})});
+      });
+    });
+  }).catch(function(){}).then(function(){ _planArmaM.vuelo=false; });
+}
+/* `PLAN_BASE_ARMA` (`sb.pal.planArma`; sin fila = no): medir compara cada `planMes` lite
+   recien llegado contra la base (solo si nadie escribio desde que se pidio); si lo arma la
+   base y, si no contesta, Apps Script. Devuelve la respuesta como el fetch de antes. */
+function _planTraer(mes,url){
+  var desde=Date.now(), modo=(typeof _palancaVal==='function'&&typeof _sbPermiso==='function')?_palancaVal('planArma'):null;
+  var apps=function(){ return fetch(url).then(function(r){ return r.json(); }).then(function(d){ if(modo==='medir')_planArmaMedir(d,mes,desde); return d; }); };
+  if(modo!=='si')return apps();
+  return Promise.resolve(_sbPermiso(true)).then(function(sb){ if(!sb)throw new Error('sin permiso'); return _planArmaBase(sb,mes); })
+    .then(function(r){ return r.d; },function(){ return apps(); });
+}
 /* `PROV_BASE_ARMA` (`sb.pal.provArma`; sin fila = no): medir compara cada
    `analisisProveedor` recien llegado (cada PED_ARMA_MEDIR_MS como mucho) contra
    `proveedores_pantalla`, solo si nadie escribio desde que se pidio; si la pinta
@@ -50209,7 +50277,7 @@ if('serviceWorker' in navigator){
     /* 2) Las metas, las acciones y los objetivos. `lite=1`: sin `real` ni
        `origen`, que eran releer Home, Pilar, Clubes y Red enteras para nada. */
     return Promise.race([
-      fetch(PLAN_API + '?action=planMes&lite=1&mes=' + encodeURIComponent(label)).then(function(r){ return r.json(); }),
+      _planTraer(label, PLAN_API + '?action=planMes&lite=1&mes=' + encodeURIComponent(label)),
       new Promise(function(_, no){ setTimeout(function(){ no(new Error('el servidor no contestó en 45 s')); }, 45000); })
     ])
       .then(function(d){
