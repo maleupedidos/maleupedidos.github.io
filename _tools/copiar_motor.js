@@ -59,8 +59,10 @@ function generar() {
 const nuevo = generar();
 if (chequear) {
   const viejo = fs.existsSync(SALIDA) ? fs.readFileSync(SALIDA, 'utf8') : '';
-  /* git puede dejarlo con CRLF al hacer checkout: eso no es «viejo». */
-  if (viejo.replace(/\r\n/g, '\n') !== nuevo) { console.error('✗ pj_motor.js quedó viejo contra Code.js: corré node _tools/copiar_motor.js'); process.exit(1); }
+  /* git puede dejarlo con CRLF al hacer checkout: eso no es «viejo». Se normalizan LOS DOS lados:
+     Code.js trae algún CRLF propio, y normalizar solo el archivo lo daba por viejo siempre (27/10). */
+  const lf = t => t.replace(/\r\n/g, '\n');
+  if (lf(viejo) !== lf(nuevo)) { console.error('✗ pj_motor.js quedó viejo contra Code.js: corré node _tools/copiar_motor.js'); process.exit(1); }
   console.log('✓ pj_motor.js al día con Code.js');
 } else {
   fs.writeFileSync(SALIDA, nuevo);
