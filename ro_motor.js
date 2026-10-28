@@ -72,6 +72,9 @@ function _escalaRedCuentaNivel_(fila, cT) {
 function _colsRedOrigen_(sh, crear) {
   if (!sh) return { trajo: 0, tel: 0, cod: 0 };
   if (_COLSRED_) return _COLSRED_;
+  /* Entre ejecuciones tambien (28/10/2026), como `_rbCols_`: el alta de Red lo pedia justo despues del
+     appendRow, y leer el encabezado ahi hace recalcular la planilla. Solo con las tres: nada que crear. */
+  try { var _cr = CacheService.getScriptCache().get('red_cols_origen_v1'); if (_cr) { _COLSRED_ = JSON.parse(_cr); return _COLSRED_; } } catch (eCr) {}
   var lc = sh.getLastColumn();
   var hdr = sh.getRange(1, 1, 1, lc).getValues()[0];
   var out = { trajo: 0, tel: 0, cod: 0 };
@@ -91,7 +94,7 @@ function _colsRedOrigen_(sh, crear) {
       if (out[h[0]]) sh.getRange(1, out[h[0]], sh.getMaxRows(), 1).setNumberFormat('@');
     });
   }
-  if (out.trajo && out.tel && out.cod) _COLSRED_ = out;
+  if (out.trajo && out.tel && out.cod) { _COLSRED_ = out; try { CacheService.getScriptCache().put('red_cols_origen_v1', JSON.stringify(out), 600); } catch (ePr) {} }
   return out;
 }
 
@@ -112,13 +115,14 @@ function _rbCols_(sh, crear) {
   /* CACHEADO (1/10/2026, de noche): el portal y la bandeja lo piden en cada
      carga, y son dos llamadas a la hoja (ancho + encabezado) para un dato que
      cambia solo cuando ESTE codigo agrega las columnas. En Apps Script pesan
-     las llamadas, no las celdas. Solo se cachea si ya estan las seis. */
-  if (!crear) {
-    try {
-      var _c = CacheService.getScriptCache().get('rb_cols_v1');
-      if (_c) return JSON.parse(_c);
-    } catch (eC) {}
-  }
+     las llamadas, no las celdas. Solo se cachea si ya estan las seis.
+     CON `crear` TAMBIEN (28/10/2026): si el cache esta, estan las seis y no hay nada que crear. El pase a
+     un vendedor y `_rbAlEntrar_` lo pedian con `crear` justo despues de escribir Red, y esa lectura del
+     encabezado obligaba a la planilla a recalcular Productos (un par de segundos con el candado, cada una). */
+  try {
+    var _c = CacheService.getScriptCache().get('rb_cols_v1');
+    if (_c) return JSON.parse(_c);
+  } catch (eC) {}
   var ancho = sh.getLastColumn();
   var cab = sh.getRange(1, 1, 1, ancho).getValues()[0];
   var idx = {};
