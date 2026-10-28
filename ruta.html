@@ -10341,6 +10341,28 @@ function rutDescartarRechazado(i,ok){
   rutSyncRechazados.splice(i,1);saveLocal();_rutPintarBanner();rutVerRechazados();
 }
 
+/* (257, 28/10/2026) COBRAR_DIRECTO: con la palanca en «si» y permiso de la base, el cobro lo acepta la base
+   (`pedido_cobrar_directo`) en vez de Apps Script, con el MISMO id de orden (`marcarCobrado|hoja|N°|ts`): un
+   reintento por cualquiera de los dos caminos encuentra la orden y no duplica. El aplicador la pasa a la planilla.
+     · ok              aceptado (diferida mientras la planilla no lo tenga): sigue como una respuesta de Apps Script.
+     · null            sin palanca, sin permiso (401/403) o directo:false (fecha elegida, otra palanca): Apps Script.
+     · error de red o HTTP: tira, y la cola reintenta con backoff como siempre. */
+function _rutCobroDirecto(item,ctl){
+  if(!item||item.action!=='marcarCobrado'||typeof _palancaVal!=='function'||_palancaVal('cobrarDirecto')!==true||typeof _sbPermiso!=='function')return Promise.resolve(null);
+  return Promise.resolve(_sbPermiso(true)).then(function(sb){
+    if(!sb||!sb.token)return null;
+    var p={};Object.keys(item).forEach(function(k){if(k!=='token'&&k.indexOf('__')!==0)p[k]=item[k];});
+    return fetch(sb.url+'/rest/v1/rpc/pedido_cobrar_directo',{method:'POST',signal:ctl?ctl.signal:undefined,
+      headers:{apikey:sb.key,Authorization:'Bearer '+sb.token,'Content-Type':'application/json'},
+      body:JSON.stringify({p:p})})
+      .then(function(r){
+        if(r.status===401||r.status===403)return null;
+        if(!r.ok)throw new TypeError('la base contestó '+r.status);
+        return r.json();
+      })
+      .then(function(d){return(d&&d.ok)?d:null;});
+  },function(){return null;});
+}
 function processSyncQueue(){
   if(!isOnline||syncQueue.length===0||syncBusy)return;
   syncBusy=true;
@@ -10354,8 +10376,17 @@ function processSyncQueue(){
   var _abortTimer=setTimeout(function(){if(_aborter)_aborter.abort();},25000);
   var _fopts={method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(item),redirect:'follow'};
   if(_aborter)_fopts.signal=_aborter.signal;
-  fetch(RUT_APPS_SCRIPT_URL,_fopts)
-    .then(function(r){clearTimeout(_abortTimer);return r.json().catch(function(){return{ok:false,error:'InvalidJSON'}})})
+  var _porApps=function(){
+    return fetch(RUT_APPS_SCRIPT_URL,_fopts)
+      .then(function(r){return r.json().catch(function(){return{ok:false,error:'InvalidJSON'}})});
+  };
+  _rutCobroDirecto(item,_aborter)
+    .then(function(d){
+      if(d&&d.ok){try{window.__cobDe='base';}catch(e){}return d;}
+      try{window.__cobDe='apps';}catch(e){}
+      return _porApps();                                  /* directo:false, sin palanca o sin permiso */
+    })
+    .then(function(res){clearTimeout(_abortTimer);return res;})
     .then(function(res){
       syncBusy=false;
       if(res&&res.ok){
