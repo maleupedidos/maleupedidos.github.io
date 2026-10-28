@@ -26079,12 +26079,15 @@ function loadStockTab(forzar){
      · moviste stock en este aparato despues de la copia;
      · lo que ya se ve es MAS NUEVO que la copia;
      · no hay un costo de la planilla de menos de un dia (ver `_stCostos`).
-   Devuelve {usado, palanca, porque}. Nunca rechaza. */
+   Devuelve {usado, palanca, porque}. Nunca rechaza.
+   `opt.vivo` (28/10/2026, Stock en vivo): si la pregunta del sello dice que alguien escribio despues
+   de la copia, NO va a la planilla: esa escritura trae su propia señal cuando la replica la sube. */
 /* 30 min y no 20 (6/10/2026): la replica da una vuelta cada 10 y confirma en
    cada una; con 20, una sola vuelta que no pudo confirmar (un POST en el medio,
    el candado ocupado) ya mandaba la tab a la planilla. Igual que el CRM. */
 var ST_PG_VIEJA_MS=30*60e3, ST_PG_ESPERA_MS=6000;
-function _stDeLaBase(){
+function _stDeLaBase(opt){
+  opt=opt||{};
   var no=function(porque){ return {usado:false,palanca:true,porque:porque}; };
   if(typeof _sbPermiso!=='function')return Promise.resolve(null);
   return _sbPermiso(true).then(function(sb){
@@ -26163,6 +26166,7 @@ function _stDeLaBase(){
             if(ST_TAB==='productos'&&typeof rStock==='function'){ try{ delete _pintadas.stock; rStock(); }catch(e){} }
             return;
           }
+          if(opt.vivo){ _fu.comprobando=false; _stVivoNota({hizo:'stock de la base; hay una escritura posterior que llega con la proxima señal'}); return; }
           ST_FUENTE={de:'planilla',porque:sello?('se escribió algo '+_hace(sello)+', después de la copia de la base')
             :'no se pudo saber si hubo cambios después de la copia'};
           _stDeLaPlanilla(true);
@@ -26176,6 +26180,46 @@ function _stDeLaBase(){
     });
   }).catch(function(){ return {usado:false,palanca:false}; });
 }
+/* ══ STOCK EN VIVO (28/10/2026, «sacar el boton Actualizar»: Productos › Stock) ══
+   Con `STOCK_EN_VIVO` en «si» (`sb.pal.stockEnVivo`) y `STOCK_BASE_ARMA` en «si»: escucha `erp:stock`
+   (migracion 234: cambio alguna de las cinco tablas de inventario que lee `stock_tab_base`, venga de un
+   pedido, una recepcion, un conteo o un ajuste). Junta las señales (ST_VIVO_JUNTAR_MS), relee como mucho
+   cada ST_VIVO_MIN_MS y SOLO de la base (`_stDeLaBase({vivo:true})`, que llama a `stock_tab_pantalla`),
+   solo con Stock › PRODUCTOS a la vista. Si la base no sirve, queda como estaba: NO cae a Apps Script.
+   Con un editor abierto o escribiendo en la tab, queda pendiente. `window.__stockVivo` dice que hizo. */
+var ST_VIVO_JUNTAR_MS = 4000, ST_VIVO_MIN_MS = 20000;
+var _stVivo = { prendido: false, t: null, ult: 0, vuelo: false };
+function _stVivoNota(o){ try { window.__stockVivo = Object.assign({ t: Date.now() }, o); } catch(e){} }
+function _stVivoRecargar(){
+  _stVivo.t = null;
+  if (document.visibilityState === 'hidden' || cur !== 'stock' || (typeof ST_TAB === 'string' && ST_TAB !== 'productos')) { _stVivoNota({ hizo: 'nada: Stock › PRODUCTOS no esta a la vista' }); return; }
+  var ocupado = '';
+  try { if (typeof _hayEditorAbierto === 'function' && _hayEditorAbierto()) ocupado = 'editor abierto'; } catch(e){}
+  var a = document.activeElement;
+  if (!ocupado && a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName) && a.closest && a.closest('#p-stock')) ocupado = 'escribiendo';
+  if (ocupado || _stVivo.vuelo || _stockVuelo) { _stVivoNota({ hizo: 'pendiente: ' + (ocupado || 'ya hay una carga en vuelo') }); _stVivo.t = setTimeout(_stVivoRecargar, ST_VIVO_JUNTAR_MS * 2); return; }
+  var falta = ST_VIVO_MIN_MS - (Date.now() - _stVivo.ult);
+  if (falta > 0) { _stVivo.t = setTimeout(_stVivoRecargar, falta); return; }
+  _stVivo.ult = Date.now(); _stVivo.vuelo = true;
+  _stDeLaBase({ vivo: true }).then(function(r){
+    if (r && r.usado) { if (!window.__stockVivo || !/posterior/.test(window.__stockVivo.hizo || '') || Date.now() - window.__stockVivo.t > 1000) _stVivoNota({ hizo: 'stock de la base', fuente: ST_FUENTE && ST_FUENTE.de }); }
+    else _stVivoNota({ hizo: 'sin cambios: ' + ((r && r.porque) || 'la base no armo el stock') });
+  }, function(e){ _stVivoNota({ hizo: 'sin cambios: ' + ((e && e.message) || e) }); })
+    .then(function(){ _stVivo.vuelo = false; });
+}
+function _stVivoSenal(){ if (!_stVivo.t) _stVivo.t = setTimeout(_stVivoRecargar, ST_VIVO_JUNTAR_MS); }
+function _stVivoPrender(){
+  try {
+    if (_stVivo.prendido || typeof _enVivoEscuchar !== 'function' || typeof _sbPermiso !== 'function') return;
+    _sbPermiso(true).then(function(sb){
+      if (_stVivo.prendido || !sb || !sb.pal || !sb.pal.stockEnVivo || sb.pal.stockArma !== 'si') return;
+      _stVivo.prendido = true;
+      _enVivoEscuchar('erp:stock', _stVivoSenal, _stVivoSenal);
+    }, function(){});
+  } catch(e){}
+}
+try { window.addEventListener('maleu:palancas', function(){ _stVivoPrender(); }); } catch(e){}
+setTimeout(_stVivoPrender, 0);
 /* EL COSTO NO VIAJA POR LA BASE. (5/10/2026)
 
    `unit_cost` esta oculto para la pantalla por GRANT desde la 012, y sigue
@@ -31815,6 +31859,52 @@ function rCatering(){
   });
   return _catPidiendo;
 }
+/* ══ CATERING EN VIVO (28/10/2026) ══
+   Con `CATERING_EN_VIVO` en «si» (`sb.pal.cateringEnVivo`): escucha `erp:catering` (236: el evento y sus seis
+   hijas, tambien al borrar). Junta 4 s, relee como mucho cada 20 s y SOLO de la base (`catering_pantalla`,
+   138), solo con Catering a la vista. Con la FICHA de un evento abierta no la cierra: actualiza la lista por
+   atras y la ficha queda como esta (todavia es de Apps Script, `cateringDetail`). `window.__cateringVivo`. */
+var CAT_VIVO_JUNTAR_MS = 4000, CAT_VIVO_MIN_MS = 20000;
+var _catVivo = { prendido: false, t: null, ult: 0, vuelo: false };
+function _catVivoNota(o){ try { window.__cateringVivo = Object.assign({ t: Date.now() }, o); } catch(e){} }
+function _catVivoRecargar(){
+  _catVivo.t = null;
+  if (document.visibilityState === 'hidden' || cur !== 'catering') { _catVivoNota({ hizo: 'nada: Catering no esta a la vista' }); return; }
+  var ocupado = '';
+  try { if (typeof _hayEditorAbierto === 'function' && _hayEditorAbierto()) ocupado = 'editor abierto'; } catch(e){}
+  var a = document.activeElement;
+  if (!ocupado && a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName) && a.closest && a.closest('#catApp')) ocupado = 'escribiendo';
+  if (ocupado || _catVivo.vuelo || _catPidiendo) { _catVivoNota({ hizo: 'pendiente: ' + (ocupado || 'ya hay una carga en vuelo') }); _catVivo.t = setTimeout(_catVivoRecargar, CAT_VIVO_JUNTAR_MS * 2); return; }
+  var falta = CAT_VIVO_MIN_MS - (Date.now() - _catVivo.ult);
+  if (falta > 0) { _catVivo.t = setTimeout(_catVivoRecargar, falta); return; }
+  _catVivo.ult = Date.now(); _catVivo.vuelo = true;
+  Promise.resolve(_sbPermiso(true)).then(function(sb){
+    if (!sb) throw new Error('sin permiso de la base');
+    return fetch(sb.url + '/rest/v1/rpc/catering_pantalla', { method: 'POST',
+      headers: { apikey: sb.key, Authorization: 'Bearer ' + sb.token, 'Content-Type': 'application/json' }, body: '{}' })
+      .then(function(r){ if (!r.ok) throw new Error('la base contestó ' + r.status); return r.json(); });
+  }).then(function(d){
+    if (!d || !d.ok || !Array.isArray(d.events)) throw new Error('la base no armó catering');
+    _catEventos = d.events; if (d.cotiz) _catCotiz = d.cotiz;
+    if (_catDetalle) { _catVivoNota({ hizo: 'lista de la base; la ficha abierta no se toca', n: d.events.length }); return; }
+    _catPintar();
+    _catVivoNota({ hizo: 'catering de la base', n: d.events.length });
+  }).catch(function(e){ _catVivoNota({ hizo: 'la base no contesto, sin cambios: ' + ((e && e.message) || e) }); })
+    .then(function(){ _catVivo.vuelo = false; });
+}
+function _catVivoSenal(){ if (!_catVivo.t) _catVivo.t = setTimeout(_catVivoRecargar, CAT_VIVO_JUNTAR_MS); }
+function _catVivoPrender(){
+  try {
+    if (_catVivo.prendido || typeof _enVivoEscuchar !== 'function' || typeof _sbPermiso !== 'function') return;
+    _sbPermiso(true).then(function(sb){
+      if (_catVivo.prendido || !sb || !sb.pal || !sb.pal.cateringEnVivo) return;
+      _catVivo.prendido = true;
+      _enVivoEscuchar('erp:catering', _catVivoSenal, _catVivoSenal);
+    }, function(){});
+  } catch(e){}
+}
+try { window.addEventListener('maleu:palancas', function(){ _catVivoPrender(); }); } catch(e){}
+setTimeout(_catVivoPrender, 0);
 /* ════════════════ EL COTIZADOR DE CATERING (22/9/2026) ═══════════════════
    La cuenta vive ACA y en ningun otro lado: la pantalla y lo que se guarda en
    la base salen de la misma funcion (`_catCotizCalc`), asi que no pueden decir
@@ -44858,6 +44948,58 @@ if('serviceWorker' in navigator){
         return ok;
       });
   };
+
+  /* ══ PROVEEDORES EN VIVO (28/10/2026) ══
+     Con `PROV_EN_VIVO` en «si» (`sb.pal.provEnVivo`) y `PROV_BASE_ARMA` en «si»: escucha las tablas de las que
+     sale `proveedores_pantalla` (156): `erp:compras` (OC y compras de carne, 100/235), `erp:pedidos` (121),
+     `erp:stock` (234), `erp:pagos` (pagos a proveedores, 235) y `erp:fotos` con la foto `busqueda`. Junta 4 s,
+     relee como mucho cada 20 s y SOLO de la base (`_provArmaBase`), solo con la tab a la vista. Si la base no
+     contesta queda como estaba (no cae a Apps Script). No resetea el proveedor elegido: `initFilters` solo si
+     ese proveedor desaparecio. `window.__provVivo` dice que hizo. */
+  var PV_VIVO_JUNTAR_MS = 4000, PV_VIVO_MIN_MS = 20000;
+  var _pvVivo = { prendido: false, t: null, ult: 0, vuelo: false };
+  function _pvVivoNota(o){ try { window.__provVivo = Object.assign({ t: Date.now() }, o); } catch(e){} }
+  function _pvVivoRecargar(){
+    _pvVivo.t = null;
+    if (document.visibilityState === 'hidden' || cur !== 'proveedores') { _pvVivoNota({ hizo: 'nada: Proveedores no esta a la vista' }); return; }
+    var ocupado = '';
+    try { if (typeof _hayEditorAbierto === 'function' && _hayEditorAbierto()) ocupado = 'editor abierto'; } catch(e){}
+    var a = document.activeElement;
+    if (!ocupado && a && /^(INPUT|TEXTAREA)$/.test(a.tagName) && a.closest && a.closest('#p-proveedores')) ocupado = 'escribiendo';
+    if (ocupado || _pvVivo.vuelo) { _pvVivoNota({ hizo: 'pendiente: ' + (ocupado || 'ya hay una carga en vuelo') }); _pvVivo.t = setTimeout(_pvVivoRecargar, PV_VIVO_JUNTAR_MS * 2); return; }
+    var falta = PV_VIVO_MIN_MS - (Date.now() - _pvVivo.ult);
+    if (falta > 0) { _pvVivo.t = setTimeout(_pvVivoRecargar, falta); return; }
+    if (typeof _palancaVal !== 'function' || _palancaVal('provArma') !== 'si') { _pvVivoNota({ hizo: 'nada: PROV_BASE_ARMA no esta en si' }); return; }
+    _pvVivo.ult = Date.now(); _pvVivo.vuelo = true;
+    Promise.resolve(_sbPermiso(true)).then(function(sb){
+      if (!sb) throw new Error('sin permiso de la base');
+      return _provArmaBase(sb);
+    }).then(function(r){
+      DATA = r.d; _pvGusto = null;
+      if (!fProv || !(DATA.resumen || {})[fProv]) initFilters();
+      render();
+      var sello = $('pvFresco'); if (sello) sello.textContent = 'datos recién';
+      _pvFrescoEn = Date.now();
+      if (typeof _marcarFresco === 'function') _marcarFresco(['proveedores']);
+      _pvVivoNota({ hizo: 'proveedores de la base', ms: r.ms });
+    }).catch(function(e){ _pvVivoNota({ hizo: 'la base no contesto, sin cambios: ' + ((e && e.message) || e) }); })
+      .then(function(){ _pvVivo.vuelo = false; });
+  }
+  function _pvVivoSenal(){ if (!_pvVivo.t) _pvVivo.t = setTimeout(_pvVivoRecargar, PV_VIVO_JUNTAR_MS); }
+  function _pvVivoFoto(p){ if (p && p.screen === 'busqueda') _pvVivoSenal(); }
+  function _pvVivoPrender(){
+    try {
+      if (_pvVivo.prendido || typeof _enVivoEscuchar !== 'function' || typeof _sbPermiso !== 'function') return;
+      _sbPermiso(true).then(function(sb){
+        if (_pvVivo.prendido || !sb || !sb.pal || !sb.pal.provEnVivo) return;
+        _pvVivo.prendido = true;
+        ['erp:compras', 'erp:pedidos', 'erp:stock', 'erp:pagos'].forEach(function(c){ _enVivoEscuchar(c, _pvVivoSenal, _pvVivoSenal); });
+        _enVivoEscuchar('erp:fotos', _pvVivoFoto, _pvVivoSenal);
+      }, function(){});
+    } catch(e){}
+  }
+  try { window.addEventListener('maleu:palancas', function(){ _pvVivoPrender(); }); } catch(e){}
+  setTimeout(_pvVivoPrender, 0);
 
   function loadData(){
     /* Tardaba 10,8 s en pintar (medido el 21/9/2026 con el cronometro del
