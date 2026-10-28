@@ -22,23 +22,23 @@ const senal = `(function(){ var c=_ENV.canales['erp:pedidos']; c.oyentes.forEach
 const apps = (re) => `window.__aApps.filter(function(x){ return ${re}.test(x.u) && !x.cola; }).map(function(x){ return x.u.slice(0,120); })`;
 (async () => {
   const cli = await abrir();
-  await cli.enviar('Page.addScriptToEvaluateOnNewDocument', { source: prep(TOKEN) + `;(function(){var f=window.fetch;window.__aApps=[];window.fetch=function(u){try{var s=String(u&&u.url||u);if(/script\\.google(usercontent)?\\.com|\\/exec\\?/.test(s))window.__aApps.push({t:Date.now(),u:s.slice(0,200),cola:/_bombear/.test(String(new Error().stack))});}catch(e){}return f.apply(this,arguments);};})();` });
+  await cli.enviar('Page.addScriptToEvaluateOnNewDocument', { source: prep(TOKEN) + `;(function(){var f=window.fetch;window.__aApps=[];window.fetch=function(u){try{var s=String(u&&u.url||u);if(/script\\.google(usercontent)?\\.com|\\/exec\\?/.test(s))window.__aApps.push({t:Date.now(),u:s.slice(0,200),cola:/_bombear/.test(String(new Error().stack))});}catch(e){}return f.apply(this,arguments);};})();window.__palForzar={};setInterval(function(){try{var p=window._sbPerm&&window._sbPerm.pal;if(!p)return;Object.keys(window.__palForzar).forEach(function(k){var v=window.__palForzar[k];if(k==='lecArma'){p.lecArma=Object.assign({},p.lecArma||{},v);}else p[k]=v;});}catch(e){}},300);` });
   await cli.enviar('Page.enable', {});
   cli.escuchar((metodo, p) => { if (metodo === 'Page.javascriptDialogOpening') { console.log('  DIALOGO: ' + String(p && p.message).slice(0, 200)); cli.enviar('Page.handleJavaScriptDialog', { accept: true }).catch(() => {}); } });
   await cli.enviar('Page.navigate', { url: URL });
   chk('el ERP arranca', await esperar(cli, `typeof go==='function' && typeof _enVivoEscuchar==='function'`, 60000), '');
   chk('la conexion en vivo queda «vivo»', await esperar(cli, `window.__enVivo && window.__enVivo.estado==='vivo'`, 60000), await evaluar(cli, `window.__enVivo||null`));
   /* Las palancas nuevas, en la memoria de esta ventana (si el backend no las manda todavia). */
-  await evaluar(cli, `_sbPermiso(true).then(function(sb){ sb.pal.mirepartoEnVivo = true; sb.pal.rutaEnVivo = true; window.dispatchEvent(new Event('maleu:palancas')); }); 1`);
+  await evaluar(cli, `window.__palForzar.mirepartoEnVivo = true; window.__palForzar.rutaEnVivo = true; 1`); await pausa(800); await evaluar(cli, `window.dispatchEvent(new Event('maleu:palancas')); 1`);
 
   console.log('\n== Mi Reparto ==');
   await evaluar(cli, `go('mireparto'); try{ mrShowSub('dia'); }catch(e){} 1`);
   chk('la tab pinta el dia', await esperar(cli, `!!document.getElementById('mrList') && !/Cargando/.test(document.getElementById('p-mireparto').innerText)`, 60000), '');
   chk('se anota en erp:pedidos', await esperar(cli, `_ENV.canales['erp:pedidos'].oyentes.some(function(o){ return o.alCambio===_mrVivoSenal; })`, 15000), '');
-  await evaluar(cli, `_sbPermiso(true).then(function(sb){ sb.pal.lecArma = Object.assign({}, sb.pal.lecArma, { miReparto: 'medir' }); }); window.__mrVivo = null; 1`);
+  await evaluar(cli, `window.__palForzar.lecArma = { miReparto: 'medir' }; window.__mrVivo = null; 1`);
   await pausa(500); await evaluar(cli, senal);
   chk('con miReparto en «medir», la señal NO relee', await esperar(cli, `window.__mrVivo && /no esta en si/.test(window.__mrVivo.hizo)`, 40000), await evaluar(cli, `window.__mrVivo||null`));
-  await evaluar(cli, `_sbPermiso(true).then(function(sb){ sb.pal.lecArma = Object.assign({}, sb.pal.lecArma, { miReparto: 'si', miRepartoHistorial: 'si' }); }); window.__mrVivo = null; window.__aApps = []; window.__vioCargando = false;
+  await evaluar(cli, `window.__palForzar.lecArma = { miReparto: 'si', miRepartoHistorial: 'si' }; window.__mrVivo = null; window.__aApps = []; window.__vioCargando = false;
     (function(){ var l=document.getElementById('mrList'); if(l) new MutationObserver(function(){ if(/Cargando/.test(l.innerText)) window.__vioCargando = true; }).observe(l,{childList:true,subtree:true,characterData:true}); })(); 1`);
   await pausa(500); await evaluar(cli, senal);
   chk('con «si», una señal relee el dia DE LA BASE', await esperar(cli, `window.__mrVivo && window.__mrVivo.hizo==='reparto de la base'`, 45000), await evaluar(cli, `window.__mrVivo||null`));
@@ -58,7 +58,7 @@ const apps = (re) => `window.__aApps.filter(function(x){ return ${re}.test(x.u) 
   chk('con otra tab a la vista, nada', await esperar(cli, `window.__mrVivo && /^nada:/.test(window.__mrVivo.hizo)`, 45000), await evaluar(cli, `window.__mrVivo||null`));
 
   console.log('\n== Evolucion ==');
-  await evaluar(cli, `_sbPermiso(true).then(function(sb){ sb.pal.planArma = 'si'; }); go('evolucion'); 1`);
+  await evaluar(cli, `window.__palForzar.planArma = 'si'; 1`); await pausa(800); await evaluar(cli, `go('evolucion'); 1`);
   chk('la tab pinta', await esperar(cli, `!!document.getElementById('evuBody') && document.getElementById('evuBody').innerText.length > 100`, 60000), '');
   chk('la meta sale DE LA BASE (plan_mes_pantalla), no de planMes', await esperar(cli, `window._evuMeta && _evuMeta.de==='base'`, 30000), await evaluar(cli, `window._evuMeta||null`));
   await evaluar(cli, `window.__evuPintes = 0; var _r0 = rEvolucion; window.rEvolucion = function(){ window.__evuPintes++; return _r0.apply(this, arguments); }; window.__ventasVivo = null; window.__aApps = []; 1`);
