@@ -6013,6 +6013,7 @@ function redIrARecibir(iv) {
    hizo. Aca SI van los nombres: es el admin. Abre con la copia guardada. */
 const EQ_COPIA = 'maleu_red_equipo';
 function redEquipoCargar() {
+  eqVivoPrender();   /* idempotente */
   try { const c = JSON.parse(localStorage.getItem(EQ_COPIA) || 'null'); if (c && c.data) redEquipoPintar(c.data, c.ts); } catch (e) {}
   /* (190) Adentro del ERP, si la base ya arma los objetivos del equipo (LEC_ARMA), `_lecJson` decide de donde salen. */
   const eqUrl = APPS_SCRIPT_URL + '?action=redObjetivosEquipo';
@@ -6026,6 +6027,55 @@ function redEquipoCargar() {
     })
     .catch(function () {});
 }
+/* LA SEMANA DE CADA UNO, EN VIVO (28/10/2026), con el patron de Caja y del portal del vendedor (redVivo).
+   `red_objetivos_equipo_pantalla` (190) sale de los pedidos de Red, `Vendedores` y `Objetivos Red`: se escucha
+   `erp:pedidos` (solo si cambio un «Red|…»), `erp:hoja:vendedores` y `erp:hoja:objetivos_red` (237; el admin
+   escucha todo `erp:hoja:%`). Junta 4 s, relee como mucho cada 20 s, solo con la lista a la vista, y SOLO de la
+   base. Con `redObjetivosEquipo` en «si» y PORTAL_EN_VIVO. `window.__equipoVivo` dice que hizo. */
+var EQ_VIVO_JUNTAR_MS = 4000, EQ_VIVO_MIN_MS = 20000;
+var eqVivo = { prendido: false, t: null, ult: 0, vuelo: false };
+function eqVivoNota(o) { try { window.__equipoVivo = Object.assign({ t: Date.now() }, o); } catch (e) {} }
+function eqVivoAVista() {
+  var b = $id('eq-obj');
+  return document.visibilityState !== 'hidden' && (typeof cur === 'undefined' || cur === 'miportal') && !!b && b.offsetParent !== null;
+}
+function eqVivoRecargar() {
+  eqVivo.t = null;
+  if (!eqVivoAVista()) { eqVivoNota({ hizo: 'nada: la semana de cada uno no esta a la vista' }); return; }
+  if (eqVivo.vuelo) { eqVivo.t = setTimeout(eqVivoRecargar, EQ_VIVO_JUNTAR_MS); return; }
+  var falta = EQ_VIVO_MIN_MS - (Date.now() - eqVivo.ult);
+  if (falta > 0) { eqVivo.t = setTimeout(eqVivoRecargar, falta); return; }
+  if (typeof _lecArmaBase !== 'function') { eqVivoNota({ hizo: 'nada: fuera del ERP' }); return; }
+  eqVivo.ult = Date.now(); eqVivo.vuelo = true;
+  _lecArmaBase('redObjetivosEquipo', {}).then(function (r) {
+    var d = r && r.d;
+    if (!d || !d.ok) throw new Error('la base no armo la semana');
+    try { localStorage.setItem(EQ_COPIA, JSON.stringify({ ts: Date.now(), data: d })); } catch (e) {}
+    redEquipoPintar(d, Date.now());
+    eqVivoNota({ hizo: 'semana de la base', vendedores: (d.vendedores || []).length });
+  }).catch(function (e) { eqVivoNota({ hizo: 'la base no contesto, sin cambios: ' + ((e && e.message) || e) }); })
+    .then(function () { eqVivo.vuelo = false; });
+}
+function eqVivoSenal(p) {
+  if (p && Array.isArray(p.ids) && !(p.n > p.ids.length) && !p.ids.some(function (k) { return String(k).indexOf('Red|') === 0; })) return;
+  if (!eqVivo.t) eqVivo.t = setTimeout(eqVivoRecargar, EQ_VIVO_JUNTAR_MS);
+}
+function eqVivoHoja() { if (!eqVivo.t) eqVivo.t = setTimeout(eqVivoRecargar, EQ_VIVO_JUNTAR_MS); }
+function eqVivoPrender() {
+  try {
+    if (eqVivo.prendido || typeof _enVivoEscuchar !== 'function' || typeof _sbPermiso !== 'function' || typeof _lecModo !== 'function') return;
+    if (redRolPanel() !== 'admin' || _lecModo('redObjetivosEquipo') !== 'si') return;
+    _sbPermiso(true).then(function (sb) {
+      if (eqVivo.prendido || !sb || !sb.pal || !sb.pal.portalEnVivo || _lecModo('redObjetivosEquipo') !== 'si') return;
+      eqVivo.prendido = true;
+      try { (window.__vivoTabs = window.__vivoTabs || {}).miportal = function () { return true; }; } catch (e) {}
+      _enVivoEscuchar('erp:pedidos', eqVivoSenal, eqVivoHoja);
+      ['vendedores', 'objetivos_red'].forEach(function (h) { _enVivoEscuchar('erp:hoja:' + h, eqVivoHoja, eqVivoHoja); });
+      eqVivoNota({ hizo: 'escuchando' });
+    }, function () {});
+  } catch (e) {}
+}
+try { window.addEventListener('maleu:palancas', function () { if (typeof redRolPanel === 'function' && redRolPanel() === 'admin') eqVivoPrender(); }); } catch (e) {}
 function redEquipoPintar(d, ts) {
   const box = $id('eq-obj'); if (!box) return;
   const vs = d.vendedores || [];
