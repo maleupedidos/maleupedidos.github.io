@@ -23,7 +23,7 @@ const espia = `;window.__costos=[];(function(){var f=window.fetch;window.fetch=f
   window.__costos.push({a:a,n:n,ok:d&&d.ok!==false});}).catch(function(){});return p;};})();`;
 (async () => {
   const cli = await cdp.abrir();
-  await cli.enviar('Page.addScriptToEvaluateOnNewDocument', { source: prep(TOKEN) + `;localStorage.setItem("maleu_panel_session",JSON.stringify(Object.assign(JSON.parse(localStorage.getItem("maleu_panel_session")||"{}"),${sesion})));` + espia });
+  await cli.enviar('Page.addScriptToEvaluateOnNewDocument', { source: prep(TOKEN) + `;try{Object.keys(localStorage).forEach(function(k){if(/^(mc_|maleu_swr|swr_)/.test(k))localStorage.removeItem(k);});}catch(e){}` + `;localStorage.setItem("maleu_panel_session",JSON.stringify(Object.assign(JSON.parse(localStorage.getItem("maleu_panel_session")||"{}"),${sesion})));` + espia });
   await cli.enviar('Page.enable', {});
   cli.escuchar((m, p) => { if (m === 'Page.javascriptDialogOpening') { console.log('  DIALOGO: ' + String(p && p.message).slice(0, 200)); cli.enviar('Page.handleJavaScriptDialog', { accept: true }).catch(() => {}); } });
   await cli.enviar('Page.navigate', { url: URL });
