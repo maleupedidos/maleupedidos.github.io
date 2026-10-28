@@ -25,7 +25,9 @@ const capa = `;(function(){var o=window.fetch;window.__envios=[];window.__base=[
     var d=r==='nodirecto'?{ok:false,directo:false,motivo:'datos'}:r==='freno'?{ok:false,necesitaPlata:true,sinReintento:true,cobrado:1500,err:'El pedido está cobrado'}
       :{ok:true,aceptada:true,directo:true,orden:1,diferida:r==='ok',repetida:r==='aplicada'};
     return Promise.resolve(new Response(JSON.stringify(d),{status:200,headers:{'Content-Type':'application/json'}}));}
-  if(/"action":"(marcarCobrado|marcarEntregado|pedidoGrupal|descobrar|updateDiaEntrega|pedidoDeposito|deshacerOrigen|deshacerEntrega|cambiarEstadoEntrega|cancelarPedido|updatePedidoRed|pasarAVendedor|gasto|ingreso|marcarArmado)"/.test(b)){var q=JSON.parse(b);window.__envios.push({a:'apps',acc:q.action,id:q.clientOpId||'',ts:q.ts||0});}
+  if(/"action":"(marcarCobrado|marcarEntregado|pedidoGrupal|descobrar|updateDiaEntrega|pedidoDeposito|deshacerOrigen|deshacerEntrega|cambiarEstadoEntrega|cancelarPedido|updatePedidoRed|pasarAVendedor|gasto|ingreso|marcarArmado|pagarProveedor|borrarMovimientoCaja)"/.test(b)){var q=JSON.parse(b);window.__envios.push({a:'apps',acc:q.action,id:q.clientOpId||'',ts:q.ts||0});
+    /* Plata de prueba: nunca a Apps Script de verdad. */
+    if(q.action==='pagarProveedor'||q.action==='borrarMovimientoCaja')return Promise.resolve(new Response('{"ok":true,"prueba":true}',{status:200,headers:{'Content-Type':'application/json'}}));}
   if(b.indexOf('pedidosFuenteAplicar')>=0)window.__envios.push({a:'aplicar'});
   return o.apply(this,arguments);};})();
   window.__palForzar={};setInterval(function(){try{var p=window._sbPerm&&window._sbPerm.pal;if(!p)return;Object.keys(window.__palForzar).forEach(function(k){p[k]=window.__palForzar[k];});}catch(e){}},200);`;
@@ -45,7 +47,10 @@ const PANEL = {
   /* Tanda 4 (272, 273): la caja. */
   gasto: ['caja_gasto_directo', { fecha: '', hora: '', categoria: 'Prueba', concepto: 'Prueba', notas: '', montoEf: 1, montoMp: 0, metodo: 'Efectivo', monto: 1 }],
   ingreso: ['caja_ingreso_directo', { fecha: '', hora: '', categoria: 'Prueba', concepto: 'Prueba', notas: '', montoEf: 1, montoMp: 0, metodo: 'Efectivo', monto: 1 }],
-  marcarArmado: ['ruta_armado_directo', { armado: true, usuario: 'Prueba', pedidos: [{ h: 'Home', id: '999258', c: 'Prueba', r: 0 }] }] };
+  marcarArmado: ['ruta_armado_directo', { armado: true, usuario: 'Prueba', pedidos: [{ h: 'Home', id: '999258', c: 'Prueba', r: 0 }] }],
+  /* Tanda 5 (275, 276). */
+  pagarProveedor: ['caja_pago_directo', { proveedor: 'Prueba', efectivo: 0, mp: 1, bonif: 0, cuenta: '', lugar: '', semana: '', notas: '' }],
+  borrarMovimientoCaja: ['caja_borrar_directo', { tipo: 'gasto', row: 0, monto: 1, con: 'Prueba', f: '' }] };
 (async () => {
   const cli = await cdp.abrir();
   await cli.enviar('Page.addScriptToEvaluateOnNewDocument', { source: prep(TOKEN, capa) });
@@ -81,6 +86,23 @@ const PANEL = {
   const rf = await post('cancelarPedido'); e = await envs();
   chk('panel, cancelar un cobrado: la pantalla recibe el freno de la BASE (necesitaPlata, $1.500) y NO se pregunta a Apps Script',
     rf && rf.ok === false && rf.necesitaPlata === true && Number(rf.cobrado) === 1500 && e.length === 1 && e[0].a === 'base', { rf, e });
+  /* (275) Abastecimiento: el formulario de pago de verdad (`confirmarPago`) va primero a la base. */
+  await ev(cli, `go('busqueda'); 1`);
+  chk('Abastecimiento arranca', await esperar(cli, `typeof window.confirmarPago==='function' && typeof window._abaAplicarBusqueda==='function'`, 60000), '');
+  await pausa(4000);
+  const pagar = (r) => ev(cli, `window.__envios=[]; window.__base=['${r}']; try{_abaAplicarBusqueda({provs:[],clientes:[],total:0,ocs:[],deudas:[{n:'Prueba 275'}]});}catch(e){window.__err=(window.__err||[]).concat(['aplicar: '+e]);}
+    var k='pr275', box=document.createElement('div'); box.id='pr275box'; box.style.display='none';
+    box.innerHTML='<input id="pagoEf_'+k+'" value=""><input id="pagoMp_'+k+'" value="1"><input id="pagoNotas_'+k+'" value=""><button id="btnPagar_'+k+'" data-prov="Prueba 275">Confirmar pago</button><div id="pagoForm_'+k+'"></div>';
+    var v=document.getElementById('pr275box'); if(v)v.remove(); document.body.appendChild(box); confirmarPago(k,0,''); 1`).then(() => pausa(2500)).then(envs);
+  await pal({ pagarProveedor: true }); e = await pagar('ok');
+  chk('Abastecimiento, PAGO_DIRECTO prendida: el pago va a caja_pago_directo, NO a Apps Script, y después el aplicador',
+    e.filter((x) => x.a === 'base' && x.fn === 'caja_pago_directo' && x.acc === 'pagarProveedor' && !x.token).length === 1 && !e.some((x) => x.a === 'apps') && e.some((x) => x.a === 'aplicar'), e);
+  e = await pagar('nodirecto');
+  const bp = e.find((x) => x.a === 'base'), ap = e.find((x) => x.a === 'apps');
+  chk('   la base contesta directo:false (sobres): Apps Script con el MISMO id', bp && ap && ap.acc === 'pagarProveedor' && bp.id && bp.id === ap.id, e);
+  await pal({}); e = await pagar('ok');
+  chk('   apagada: Apps Script y NO la base', e.some((x) => x.a === 'apps' && x.acc === 'pagarProveedor') && !e.some((x) => x.a === 'base'), e);
+  await ev(cli, `var v=document.getElementById('pr275box'); if(v)v.remove(); 1`);
   /* ── RUTA ── */
   await ev(cli, `go('ruta'); 1`);
   chk('Ruta arranca', await esperar(cli, `typeof window.processSyncQueue==='function' && typeof window.loadLocal==='function'`, 60000), '');
