@@ -25,9 +25,9 @@ const capa = `;(function(){var o=window.fetch;window.__envios=[];window.__base=[
     var d=r==='nodirecto'?{ok:false,directo:false,motivo:'datos'}:r==='freno'?{ok:false,necesitaPlata:true,sinReintento:true,cobrado:1500,err:'El pedido está cobrado'}
       :{ok:true,aceptada:true,directo:true,orden:1,diferida:r==='ok',repetida:r==='aplicada'};
     return Promise.resolve(new Response(JSON.stringify(d),{status:200,headers:{'Content-Type':'application/json'}}));}
-  if(/"action":"(marcarCobrado|marcarEntregado|pedidoGrupal|descobrar|updateDiaEntrega|pedidoDeposito|deshacerOrigen|deshacerEntrega|cambiarEstadoEntrega|cancelarPedido|updatePedidoRed|pasarAVendedor|gasto|ingreso|marcarArmado|pagarProveedor|borrarMovimientoCaja|marcarOC)"/.test(b)){var q=JSON.parse(b);window.__envios.push({a:'apps',acc:q.action,id:q.clientOpId||'',ts:q.ts||0});
+  if(/"action":"(marcarCobrado|marcarEntregado|pedidoGrupal|descobrar|updateDiaEntrega|pedidoDeposito|deshacerOrigen|deshacerEntrega|cambiarEstadoEntrega|cancelarPedido|updatePedidoRed|pasarAVendedor|gasto|ingreso|marcarArmado|pagarProveedor|borrarMovimientoCaja|marcarOC|compraManual)"/.test(b)){var q=JSON.parse(b);window.__envios.push({a:'apps',acc:q.action,id:q.clientOpId||'',ts:q.ts||0});
     /* Plata de prueba: nunca a Apps Script de verdad. */
-    if(q.action==='pagarProveedor'||q.action==='borrarMovimientoCaja'||q.action==='marcarOC')return Promise.resolve(new Response('{"ok":true,"prueba":true}',{status:200,headers:{'Content-Type':'application/json'}}));}
+    if(q.action==='pagarProveedor'||q.action==='borrarMovimientoCaja'||q.action==='marcarOC'||q.action==='compraManual')return Promise.resolve(new Response('{"ok":true,"prueba":true}',{status:200,headers:{'Content-Type':'application/json'}}));}
   if(b.indexOf('pedidosFuenteAplicar')>=0)window.__envios.push({a:'aplicar'});
   return o.apply(this,arguments);};})();
   window.__palForzar={};setInterval(function(){try{var p=window._sbPerm&&window._sbPerm.pal;if(!p)return;Object.keys(window.__palForzar).forEach(function(k){p[k]=window.__palForzar[k];});}catch(e){}},200);`;
@@ -52,7 +52,9 @@ const PANEL = {
   pagarProveedor: ['caja_pago_directo', { proveedor: 'Prueba', efectivo: 0, mp: 1, bonif: 0, cuenta: '', lugar: '', semana: '', notas: '' }],
   borrarMovimientoCaja: ['caja_borrar_directo', { tipo: 'gasto', row: 0, monto: 1, con: 'Prueba', f: '' }],
   /* (277) */
-  marcarOC: ['compra_marcar_oc_directo', { rows: [{ r: 999999, oc: 'OC-PRUEBA', estado: 'Pedido' }] }] };
+  marcarOC: ['compra_marcar_oc_directo', { rows: [{ r: 999999, oc: 'OC-PRUEBA', estado: 'Pedido' }] }],
+  /* (278) */
+  compraManual: ['compra_manual_directo', { proveedor: 'Prueba', vendedor: 'Tadeo — Stock', items: [{ abbr: 'PRUEBA', qty: 1, costo: 1 }] }] };
 (async () => {
   const cli = await cdp.abrir();
   await cli.enviar('Page.addScriptToEvaluateOnNewDocument', { source: prep(TOKEN, capa) });
@@ -105,6 +107,19 @@ const PANEL = {
   await pal({}); e = await pagar('ok');
   chk('   apagada: Apps Script y NO la base', e.some((x) => x.a === 'apps' && x.acc === 'pagarProveedor') && !e.some((x) => x.a === 'base'), e);
   await ev(cli, `var v=document.getElementById('pr275box'); if(v)v.remove(); 1`);
+  /* (278) El formulario de compra de verdad: un proveedor real del selector, una cantidad, «Confirmar». */
+  const comprar = (r) => ev(cli, `window.__envios=[]; window.__base=['${r}']; go('busqueda');
+    var sel=document.getElementById('npProv'), op=[].slice.call(sel.options).filter(function(o){return o.value;})[0]; sel.value=op?op.value:''; onNpProvChange();
+    var inp=[].slice.call(document.querySelectorAll('#pg-abast input[id^="npq_"]'))[0]; if(inp) npSetQty(inp.id.slice(4),1);
+    var b=document.getElementById('npConfirm'); b.disabled=false; confirmarCompra(); 1`).then(() => pausa(3000)).then(envs);
+  await esperar(cli, `(document.getElementById('npProv')||{options:[]}).options.length>1`, 60000);
+  await pal({ compraManual: true }); e = await comprar('ok');
+  chk('Abastecimiento, COMPRA_DIRECTO prendida: la compra del formulario va a compra_manual_directo, NO a Apps Script, y después el aplicador',
+    e.filter((x) => x.a === 'base' && x.fn === 'compra_manual_directo' && x.acc === 'compraManual' && !x.token).length === 1 && !e.some((x) => x.a === 'apps') && e.some((x) => x.a === 'aplicar'), e);
+  e = await comprar('nodirecto'); const bm = e.find((x) => x.a === 'base'), am = e.find((x) => x.a === 'apps');
+  chk('   la base contesta directo:false: Apps Script con el MISMO id', bm && am && am.acc === 'compraManual' && bm.id === am.id, e);
+  await pal({}); e = await comprar('ok');
+  chk('   apagada: Apps Script y NO la base', e.some((x) => x.a === 'apps' && x.acc === 'compraManual') && !e.some((x) => x.a === 'base'), e);
   /* (277) La cola de Abastecimiento («Pedido enviado ✓» y lo demás que manda): la base primero. */
   const cola = (r) => ev(cli, `window.__envios=[]; window.__base=['${r}']; abaSyncQueue.push({action:'marcarOC',rows:[{r:999999,oc:'OC-PRUEBA',estado:'Pedido'}],ts:Date.now(),clientOpId:'mo_prueba_'+Date.now()});
     abaProcessSyncQueue(); 1`).then(() => esperar(cli, `abaSyncQueue.every(function(x){return x.clientOpId.indexOf('mo_prueba_')!==0;})`, 30000)).then(() => pausa(1500)).then(envs);
