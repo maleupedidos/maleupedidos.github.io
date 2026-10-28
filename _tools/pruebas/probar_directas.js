@@ -18,14 +18,14 @@ let ok = 0, mal = 0; const chk = (t, c, d) => { c ? ok++ : mal++; console.log((c
 async function esperar(cli, e, ms) { const t0 = Date.now(); while (Date.now() - t0 < ms) { try { if (await ev(cli, e)) return true; } catch (x) {} await pausa(200); } return false; }
 /* La base, simulada: `__base` es la secuencia de respuestas ('ok' = pendiente, 'aplicada', 'nodirecto', 'corte', '500', '404'). */
 const capa = `;(function(){var o=window.fetch;window.__envios=[];window.__base=[];window.fetch=function(u,x){var s=String((u&&u.url)||u||''),b=x&&x.body?String(x.body):'';
-  var m=/\\/rpc\\/(pedido_[a-z_]+_directo)/.exec(s);
+  var m=/\\/rpc\\/((?:pedido|caja)_[a-z_]+_directo)/.exec(s);
   if(m){var p=JSON.parse(b).p;window.__envios.push({a:'base',fn:m[1],acc:p.action,id:p.clientOpId||'',ts:p.ts||0,token:('token' in p)});var r=window.__base.shift()||'ok';
     if(r==='corte')return Promise.reject(new TypeError('Failed to fetch'));
     if(r==='500'||r==='404')return Promise.resolve(new Response('{}',{status:Number(r)}));
     var d=r==='nodirecto'?{ok:false,directo:false,motivo:'datos'}:r==='freno'?{ok:false,necesitaPlata:true,sinReintento:true,cobrado:1500,err:'El pedido está cobrado'}
       :{ok:true,aceptada:true,directo:true,orden:1,diferida:r==='ok',repetida:r==='aplicada'};
     return Promise.resolve(new Response(JSON.stringify(d),{status:200,headers:{'Content-Type':'application/json'}}));}
-  if(/"action":"(marcarCobrado|marcarEntregado|pedidoGrupal|descobrar|updateDiaEntrega|pedidoDeposito|deshacerOrigen|deshacerEntrega|cambiarEstadoEntrega|cancelarPedido|updatePedidoRed|pasarAVendedor)"/.test(b)){var q=JSON.parse(b);window.__envios.push({a:'apps',acc:q.action,id:q.clientOpId||'',ts:q.ts||0});}
+  if(/"action":"(marcarCobrado|marcarEntregado|pedidoGrupal|descobrar|updateDiaEntrega|pedidoDeposito|deshacerOrigen|deshacerEntrega|cambiarEstadoEntrega|cancelarPedido|updatePedidoRed|pasarAVendedor|gasto|ingreso)"/.test(b)){var q=JSON.parse(b);window.__envios.push({a:'apps',acc:q.action,id:q.clientOpId||'',ts:q.ts||0});}
   if(b.indexOf('pedidosFuenteAplicar')>=0)window.__envios.push({a:'aplicar'});
   return o.apply(this,arguments);};})();
   window.__palForzar={};setInterval(function(){try{var p=window._sbPerm&&window._sbPerm.pal;if(!p)return;Object.keys(window.__palForzar).forEach(function(k){p[k]=window.__palForzar[k];});}catch(e){}},200);`;
@@ -41,7 +41,10 @@ const PANEL = {
   cancelarPedido: ['pedido_cancelar_directo', { hoja: 'Home', id: '999258', row: 0 }],
   updatePedidoRed: ['pedido_portal_directo', { pedidoId: '999258', row: 0, vendedor: 'Prueba', updates: { entrega: true } }],
   /* Tanda 3 (269). */
-  pasarAVendedor: ['pedido_pase_directo', { hoja: 'Home', id: '999258', row: 0, al: '28/10 10:00', vendedor: 'Prueba', trajo: 'Maleu', igual: true }] };
+  pasarAVendedor: ['pedido_pase_directo', { hoja: 'Home', id: '999258', row: 0, al: '28/10 10:00', vendedor: 'Prueba', trajo: 'Maleu', igual: true }],
+  /* Tanda 4 (272, 273): la caja. */
+  gasto: ['caja_gasto_directo', { fecha: '', hora: '', categoria: 'Prueba', concepto: 'Prueba', notas: '', montoEf: 1, montoMp: 0, metodo: 'Efectivo', monto: 1 }],
+  ingreso: ['caja_ingreso_directo', { fecha: '', hora: '', categoria: 'Prueba', concepto: 'Prueba', notas: '', montoEf: 1, montoMp: 0, metodo: 'Efectivo', monto: 1 }] };
 (async () => {
   const cli = await cdp.abrir();
   await cli.enviar('Page.addScriptToEvaluateOnNewDocument', { source: prep(TOKEN, capa) });
