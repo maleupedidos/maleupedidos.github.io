@@ -28,6 +28,10 @@ async function esperar(cli, expr, ms) { const t0 = Date.now(); while (Date.now()
   await evaluar(cli, `_sbPermiso(true).then(function(sb){ if(sb&&sb.pal) sb.pal.portalEnVivo = true; }); 1`);
   for (const V of VENDEDORES) {
     console.log('\n== ' + V + ' ==');
+    /* El arranque del ERP puede volver a Inicio DESPUES de que la prueba abrio Mi Portal (pasó el 28/10: la señal
+       llegaba con la tab en «inicio» y no releia, que es lo correcto). Se vuelve a la tab y se la sostiene. */
+    await evaluar(cli, `if (cur !== 'miportal') go('miportal'); 1`);
+    chk('Mi Portal es la tab a la vista', await esperar(cli, `cur === 'miportal'`, 10000), await evaluar(cli, `cur`));
     await evaluar(cli, `redVerComoEntrar(${JSON.stringify(V)}); 1`);
     /* Adentro del ERP `session` y `renderDashboard` son de la sub-app: lo que se ve desde window es una copia.
        Por eso se mide el DOM: el cartel de «Ver como», el contenido visible y la ganancia de la semana. */
@@ -38,15 +42,16 @@ async function esperar(cli, expr, ms) { const t0 = Date.now(); while (Date.now()
     chk('anotado en erp:pedidos', await evaluar(cli, `redVivoCanal()==='erp:pedidos' && !!(_ENV.canales['erp:pedidos'] && _ENV.canales['erp:pedidos'].oyentes.some(function(o){ return String(o.alCambio).indexOf('redVivoCanal')>=0; }))`), await evaluar(cli, `Object.keys(_ENV.canales)`));
     await esperar(cli, `!redVivo.vuelo && !redVivo.t`, 30000);
     await evaluar(cli, `redVivo.ult = 0; window.__portalVivo = null; 1`);
-    await evaluar(cli, `_ENV.canales['erp:pedidos'].alCambio({tabla:'pedido', op:'update', n:1, ids:['Home|999']}); 1`);
-    await pausa(5000);
-    chk('una señal de Home no relee', await evaluar(cli, `!window.__portalVivo && !redVivo.t`), await evaluar(cli, `window.__portalVivo`));
+    /* En horario de trabajo llegan señales REALES de erp:pedidos (el admin en «Ver como» escucha ese canal): se mide
+       en el mismo instante que la señal de Home no deja programada una relectura. */
+    chk('una señal de Home no relee', await evaluar(cli, `(function(){ if (redVivo.t) { clearTimeout(redVivo.t); redVivo.t = null; } _ENV.canales['erp:pedidos'].alCambio({tabla:'pedido', op:'update', n:1, ids:['Home|999']}); return !redVivo.t; })()`), '');
     const antes = await evaluar(cli, `window.__aApps.length`);
-    await evaluar(cli, `document.querySelector('#gan-sem').textContent = 'CENTINELA'; 1`);
-    await evaluar(cli, `_ENV.canales['erp:pedidos'].alCambio({tabla:'pedido', op:'update', n:1, ids:['Red|5']}); 1`);
-    chk('una señal de Red relee de la base', await esperar(cli, `window.__portalVivo && window.__portalVivo.hizo==='portal de la base'`, 20000), await evaluar(cli, `window.__portalVivo`));
+    await esperar(cli, `!redVivo.vuelo`, 30000);
+    await evaluar(cli, `document.querySelector('#gan-sem').textContent = 'CENTINELA'; if (redVivo.t) { clearTimeout(redVivo.t); redVivo.t = null; } redVivo.ult = 0; window.__portalVivo = null; _ENV.canales['erp:pedidos'].alCambio({tabla:'pedido', op:'update', n:1, ids:['Red|5']}); 1`);
+    chk('una señal de Red relee de la base', await esperar(cli, `window.__portalVivo && window.__portalVivo.hizo==='portal de la base'`, 30000), await evaluar(cli, `window.__portalVivo`));
     chk('y repinta (el centinela se fue)', await esperar(cli, `document.querySelector('#gan-sem').textContent !== 'CENTINELA'`, 5000), await evaluar(cli, `document.querySelector('#gan-sem').textContent`));
-    const ap = await evaluar(cli, `window.__aApps.slice(${antes})`);
+    /* Solo las del portal: el refresco general del ERP (ventas, stockTab…) corre en segundo plano y no es de aca. */
+    const ap = (await evaluar(cli, `window.__aApps.slice(${antes})`)).filter((x) => /action=(dashboardVendedor|resolverVendedor|precios|redPiezasPedido)/.test(x.u));
     chk('sin pedidos a Apps Script en la relectura (ni efectos)', ap.length === 0, ap);
     await evaluar(cli, `redVerComoSalir(); 1`);
   }
