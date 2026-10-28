@@ -112,6 +112,10 @@ var LEC_ARMA = {
   /* (204) Mi reparto: las entregas de ese dia en el orden de la hoja (por posicion). La base recibe
      {usuario, fecha} en `p` y el motor tambien. */
   miReparto: { rpc: 'mi_reparto_pantalla', listas: {}, orden: true, motor: 'mr' },
+  /* (238) Mi reparto › Historial: SQL puro, los dias por fecha (del mas nuevo al mas viejo). */
+  miRepartoHistorial: { rpc: 'mi_reparto_historial_pantalla', listas: { dias: ['f'] }, orden: true },
+  /* (239) Mi Portal › Objetivos: las props de cada vendedor (ro_pv_, ro_abrio_), de seller_portal_state. */
+  redObjetivosProps: { rpc: 'red_objetivos_props_pantalla', listas: {}, orden: false },
   /* (205) Descargar el auto: la reposicion por abreviatura y los pedidos por cliente y numero, en orden;
      las notas de cada proveedor por posicion. `dia` es el de la respuesta. */
   pendientesGuardarStock: { rpc: 'pendientes_guardar_pantalla', listas: { deposito: ['abbr'] }, orden: true, motor: 'pg' },
