@@ -433,6 +433,9 @@ function _escalaRedNivel_(esc, facturado) {
 function _colsRedOrigen_(sh, crear) {
   if (!sh) return { trajo: 0, tel: 0, cod: 0 };
   if (_COLSRED_) return _COLSRED_;
+  /* Entre ejecuciones tambien (28/10/2026), como `_rbCols_`: el alta de Red lo pedia justo despues del
+     appendRow, y leer el encabezado ahi hace recalcular la planilla. Solo con las tres: nada que crear. */
+  try { var _cr = CacheService.getScriptCache().get('red_cols_origen_v1'); if (_cr) { _COLSRED_ = JSON.parse(_cr); return _COLSRED_; } } catch (eCr) {}
   var lc = sh.getLastColumn();
   var hdr = sh.getRange(1, 1, 1, lc).getValues()[0];
   var out = { trajo: 0, tel: 0, cod: 0 };
@@ -452,7 +455,7 @@ function _colsRedOrigen_(sh, crear) {
       if (out[h[0]]) sh.getRange(1, out[h[0]], sh.getMaxRows(), 1).setNumberFormat('@');
     });
   }
-  if (out.trajo && out.tel && out.cod) _COLSRED_ = out;
+  if (out.trajo && out.tel && out.cod) { _COLSRED_ = out; try { CacheService.getScriptCache().put('red_cols_origen_v1', JSON.stringify(out), 600); } catch (ePr) {} }
   return out;
 }
 

@@ -395,6 +395,9 @@ function _redExcCols_(sh, crear) {
   if (!crear && _REDEXC_COLS_) return _REDEXC_COLS_;
   var out = { monto: 0, motivo: 0 };
   if (!sh) return out;
+  /* Entre ejecuciones (28/10/2026), como `_rbCols_`: la escala lo pide despues de escribir Red. Solo con
+     las dos: nada que crear, tambien con `crear`. */
+  try { var _ce = CacheService.getScriptCache().get('red_exc_cols_v1'); if (_ce) { _REDEXC_COLS_ = JSON.parse(_ce); return _REDEXC_COLS_; } } catch (eCe) {}
   var lc = sh.getLastColumn();
   var hdr = sh.getRange(1, 1, 1, lc).getValues()[0];
   for (var i = 0; i < hdr.length; i++) {
@@ -410,6 +413,7 @@ function _redExcCols_(sh, crear) {
       sh.getRange(2, c, Math.max(1, sh.getMaxRows() - 1), 1).setNumberFormat('@'); }
   }
   _REDEXC_COLS_ = out;
+  if (out.monto && out.motivo) { try { CacheService.getScriptCache().put('red_exc_cols_v1', JSON.stringify(out), 600); } catch (ePe) {} }
   return out;
 }
 
@@ -431,6 +435,9 @@ function _redExcDeFila_(sh, row) {
 function _colsRedOrigen_(sh, crear) {
   if (!sh) return { trajo: 0, tel: 0, cod: 0 };
   if (_COLSRED_) return _COLSRED_;
+  /* Entre ejecuciones tambien (28/10/2026), como `_rbCols_`: el alta de Red lo pedia justo despues del
+     appendRow, y leer el encabezado ahi hace recalcular la planilla. Solo con las tres: nada que crear. */
+  try { var _cr = CacheService.getScriptCache().get('red_cols_origen_v1'); if (_cr) { _COLSRED_ = JSON.parse(_cr); return _COLSRED_; } } catch (eCr) {}
   var lc = sh.getLastColumn();
   var hdr = sh.getRange(1, 1, 1, lc).getValues()[0];
   var out = { trajo: 0, tel: 0, cod: 0 };
@@ -450,7 +457,7 @@ function _colsRedOrigen_(sh, crear) {
       if (out[h[0]]) sh.getRange(1, out[h[0]], sh.getMaxRows(), 1).setNumberFormat('@');
     });
   }
-  if (out.trajo && out.tel && out.cod) _COLSRED_ = out;
+  if (out.trajo && out.tel && out.cod) { _COLSRED_ = out; try { CacheService.getScriptCache().put('red_cols_origen_v1', JSON.stringify(out), 600); } catch (ePr) {} }
   return out;
 }
 
