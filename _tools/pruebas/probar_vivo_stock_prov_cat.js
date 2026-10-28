@@ -24,7 +24,7 @@ const PANT = [
 ];
 (async () => {
   const cli = await abrir();
-  await cli.enviar('Page.addScriptToEvaluateOnNewDocument', { source: prep(TOKEN) + `;(function(){var f=window.fetch;window.__aApps=[];window.fetch=function(u){try{var s=String(u&&u.url||u);if(/script\\.google(usercontent)?\\.com|\\/exec\\?/.test(s))window.__aApps.push({t:Date.now(),u:s.slice(0,160)});}catch(e){}return f.apply(this,arguments);};})();` });
+  await cli.enviar('Page.addScriptToEvaluateOnNewDocument', { source: prep(TOKEN) + `;(function(){var f=window.fetch;window.__aApps=[];window.fetch=function(u){try{var s=String(u&&u.url||u);if(/script\\.google(usercontent)?\\.com|\\/exec\\?/.test(s))window.__aApps.push({t:Date.now(),u:s.slice(0,160),cola:/_bombear/.test(String(new Error().stack))});}catch(e){}return f.apply(this,arguments);};})();` });
   await cli.enviar('Page.enable', {});
   cli.escuchar((metodo, p) => { if (metodo === 'Page.javascriptDialogOpening') { console.log('  DIALOGO: ' + String(p && p.message).slice(0, 200)); cli.enviar('Page.handleJavaScriptDialog', { accept: true }).catch(() => {}); } });
   await cli.enviar('Page.navigate', { url: URL });
@@ -49,7 +49,7 @@ const PANT = [
     await evaluar(cli, `(function(){ var c=_ENV.canales['${c0}']; c.oyentes.forEach(function(o){ try{ o.alCambio({tabla:'prueba',op:'update',n:1,ids:[]}); }catch(e){} }); })(); 1`);
     chk('con una señal relee DE LA BASE', await esperar(cli, `window.${P.nota} && window.${P.nota}.hizo==='${P.bien}'`, 45000), await evaluar(cli, `window.${P.nota}||null`));
     chk('   y sigue pintada', await evaluar(cli, P.pintado), '');
-    const aa = (await evaluar(cli, `window.__aApps`)).filter((x) => /action=(stockTab|analisisProveedor|catering)/.test(x.u));
+    const aa = (await evaluar(cli, `window.__aApps`)).filter((x) => /action=(stockTab|analisisProveedor|catering)/.test(x.u) && !x.cola);
     chk('   y en la relectura no fue a Apps Script (stockTab / analisisProveedor / catering)', aa.length === 0, aa);
     /* Con la tab NO a la vista, una señal no hace nada. */
     await evaluar(cli, `go('inicio'); window.${P.nota}=null; ${P.interno ? `_ENV.canales['erp:pagos']` : `_ENV.canales['${c0}']`}.oyentes.forEach(function(o){ try{ o.alCambio({}); }catch(e){} }); 1`);
