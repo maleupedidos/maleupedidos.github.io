@@ -10341,28 +10341,15 @@ function rutDescartarRechazado(i,ok){
   rutSyncRechazados.splice(i,1);saveLocal();_rutPintarBanner();rutVerRechazados();
 }
 
-/* (257, 28/10/2026) COBRAR_DIRECTO: con la palanca en «si» y permiso de la base, el cobro lo acepta la base
-   (`pedido_cobrar_directo`) en vez de Apps Script, con el MISMO id de orden (`marcarCobrado|hoja|N°|ts`): un
-   reintento por cualquiera de los dos caminos encuentra la orden y no duplica. El aplicador la pasa a la planilla.
+/* (257-265, 28/10/2026) LAS DIRECTAS: cobrar, entregar, deshacer la entrega y reservar las acepta la base
+   (`_ordenDirecta` del panel, una RPC por accion y una palanca por accion) en vez de Apps Script, con el MISMO id
+   de orden (`accion|hoja|N°|ts`): un reintento por cualquiera de los dos caminos encuentra la orden y no duplica.
      · ok              aceptado (diferida mientras la planilla no lo tenga): sigue como una respuesta de Apps Script.
-     · null            sin palanca, sin permiso (401/403) o directo:false (fecha elegida, otra palanca): Apps Script.
-     · error de red o HTTP: tira, y la cola reintenta con backoff como siempre. */
-function _rutCobroDirecto(item,ctl){
-  if(!item||item.action!=='marcarCobrado'||typeof _palancaVal!=='function'||_palancaVal('cobrarDirecto')!==true||typeof _sbPermiso!=='function')return Promise.resolve(null);
-  return Promise.resolve(_sbPermiso(true)).then(function(sb){
-    if(!sb||!sb.token)return null;
-    var p={};Object.keys(item).forEach(function(k){if(k!=='token'&&k.indexOf('__')!==0)p[k]=item[k];});
-    return fetch(sb.url+'/rest/v1/rpc/pedido_cobrar_directo',{method:'POST',signal:ctl?ctl.signal:undefined,
-      headers:{apikey:sb.key,Authorization:'Bearer '+sb.token,'Content-Type':'application/json'},
-      body:JSON.stringify({p:p})})
-      .then(function(r){
-        /* 404: la palanca prendida antes de aplicar la 257. Va por Apps Script en vez de reintentar para siempre. */
-        if(r.status===401||r.status===403||r.status===404)return null;
-        if(!r.ok)throw new TypeError('la base contestó '+r.status);
-        return r.json();
-      })
-      .then(function(d){return(d&&d.ok)?d:null;});
-  },function(){return null;});
+     · null            sin palanca, sin permiso, 404 o directo:false (ej. cobro con fecha elegida): Apps Script.
+     · error de red o HTTP: tira, y la cola reintenta con backoff como siempre.
+   Ruta suelta (`?standalone=1`) no tiene el panel: va todo por Apps Script. */
+function _rutDirecta(item,ctl){
+  return (typeof _ordenDirecta==='function')?_ordenDirecta(item,ctl):Promise.resolve(null);
 }
 function processSyncQueue(){
   if(!isOnline||syncQueue.length===0||syncBusy)return;
@@ -10381,7 +10368,7 @@ function processSyncQueue(){
     return fetch(RUT_APPS_SCRIPT_URL,_fopts)
       .then(function(r){return r.json().catch(function(){return{ok:false,error:'InvalidJSON'}})});
   };
-  _rutCobroDirecto(item,_aborter)
+  _rutDirecta(item,_aborter)
     .then(function(d){
       if(d&&d.ok){try{window.__cobDe='base';}catch(e){}return d;}
       try{window.__cobDe='apps';}catch(e){}
