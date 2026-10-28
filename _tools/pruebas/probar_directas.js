@@ -18,16 +18,16 @@ let ok = 0, mal = 0; const chk = (t, c, d) => { c ? ok++ : mal++; console.log((c
 async function esperar(cli, e, ms) { const t0 = Date.now(); while (Date.now() - t0 < ms) { try { if (await ev(cli, e)) return true; } catch (x) {} await pausa(200); } return false; }
 /* La base, simulada: `__base` es la secuencia de respuestas ('ok' = pendiente, 'aplicada', 'nodirecto', 'corte', '500', '404'). */
 const capa = `;(function(){var o=window.fetch;window.__envios=[];window.__base=[];window.fetch=function(u,x){var s=String((u&&u.url)||u||''),b=x&&x.body?String(x.body):'';
-  var m=/\\/rpc\\/((?:pedido|caja|ruta)_[a-z_]+_directo)/.exec(s);
+  var m=/\\/rpc\\/((?:pedido|caja|ruta|compra)_[a-z_]+_directo)/.exec(s);
   if(m){var p=JSON.parse(b).p;window.__envios.push({a:'base',fn:m[1],acc:p.action,id:p.clientOpId||'',ts:p.ts||0,token:('token' in p)});var r=window.__base.shift()||'ok';
     if(r==='corte')return Promise.reject(new TypeError('Failed to fetch'));
     if(r==='500'||r==='404')return Promise.resolve(new Response('{}',{status:Number(r)}));
     var d=r==='nodirecto'?{ok:false,directo:false,motivo:'datos'}:r==='freno'?{ok:false,necesitaPlata:true,sinReintento:true,cobrado:1500,err:'El pedido está cobrado'}
       :{ok:true,aceptada:true,directo:true,orden:1,diferida:r==='ok',repetida:r==='aplicada'};
     return Promise.resolve(new Response(JSON.stringify(d),{status:200,headers:{'Content-Type':'application/json'}}));}
-  if(/"action":"(marcarCobrado|marcarEntregado|pedidoGrupal|descobrar|updateDiaEntrega|pedidoDeposito|deshacerOrigen|deshacerEntrega|cambiarEstadoEntrega|cancelarPedido|updatePedidoRed|pasarAVendedor|gasto|ingreso|marcarArmado|pagarProveedor|borrarMovimientoCaja)"/.test(b)){var q=JSON.parse(b);window.__envios.push({a:'apps',acc:q.action,id:q.clientOpId||'',ts:q.ts||0});
+  if(/"action":"(marcarCobrado|marcarEntregado|pedidoGrupal|descobrar|updateDiaEntrega|pedidoDeposito|deshacerOrigen|deshacerEntrega|cambiarEstadoEntrega|cancelarPedido|updatePedidoRed|pasarAVendedor|gasto|ingreso|marcarArmado|pagarProveedor|borrarMovimientoCaja|marcarOC)"/.test(b)){var q=JSON.parse(b);window.__envios.push({a:'apps',acc:q.action,id:q.clientOpId||'',ts:q.ts||0});
     /* Plata de prueba: nunca a Apps Script de verdad. */
-    if(q.action==='pagarProveedor'||q.action==='borrarMovimientoCaja')return Promise.resolve(new Response('{"ok":true,"prueba":true}',{status:200,headers:{'Content-Type':'application/json'}}));}
+    if(q.action==='pagarProveedor'||q.action==='borrarMovimientoCaja'||q.action==='marcarOC')return Promise.resolve(new Response('{"ok":true,"prueba":true}',{status:200,headers:{'Content-Type':'application/json'}}));}
   if(b.indexOf('pedidosFuenteAplicar')>=0)window.__envios.push({a:'aplicar'});
   return o.apply(this,arguments);};})();
   window.__palForzar={};setInterval(function(){try{var p=window._sbPerm&&window._sbPerm.pal;if(!p)return;Object.keys(window.__palForzar).forEach(function(k){p[k]=window.__palForzar[k];});}catch(e){}},200);`;
@@ -50,7 +50,9 @@ const PANEL = {
   marcarArmado: ['ruta_armado_directo', { armado: true, usuario: 'Prueba', pedidos: [{ h: 'Home', id: '999258', c: 'Prueba', r: 0 }] }],
   /* Tanda 5 (275, 276). */
   pagarProveedor: ['caja_pago_directo', { proveedor: 'Prueba', efectivo: 0, mp: 1, bonif: 0, cuenta: '', lugar: '', semana: '', notas: '' }],
-  borrarMovimientoCaja: ['caja_borrar_directo', { tipo: 'gasto', row: 0, monto: 1, con: 'Prueba', f: '' }] };
+  borrarMovimientoCaja: ['caja_borrar_directo', { tipo: 'gasto', row: 0, monto: 1, con: 'Prueba', f: '' }],
+  /* (277) */
+  marcarOC: ['compra_marcar_oc_directo', { rows: [{ r: 999999, oc: 'OC-PRUEBA', estado: 'Pedido' }] }] };
 (async () => {
   const cli = await cdp.abrir();
   await cli.enviar('Page.addScriptToEvaluateOnNewDocument', { source: prep(TOKEN, capa) });
@@ -103,6 +105,16 @@ const PANEL = {
   await pal({}); e = await pagar('ok');
   chk('   apagada: Apps Script y NO la base', e.some((x) => x.a === 'apps' && x.acc === 'pagarProveedor') && !e.some((x) => x.a === 'base'), e);
   await ev(cli, `var v=document.getElementById('pr275box'); if(v)v.remove(); 1`);
+  /* (277) La cola de Abastecimiento («Pedido enviado ✓» y lo demás que manda): la base primero. */
+  const cola = (r) => ev(cli, `window.__envios=[]; window.__base=['${r}']; abaSyncQueue.push({action:'marcarOC',rows:[{r:999999,oc:'OC-PRUEBA',estado:'Pedido'}],ts:Date.now(),clientOpId:'mo_prueba_'+Date.now()});
+    abaProcessSyncQueue(); 1`).then(() => esperar(cli, `abaSyncQueue.every(function(x){return x.clientOpId.indexOf('mo_prueba_')!==0;})`, 30000)).then(() => pausa(1500)).then(envs);
+  await pal({ marcarOC: true }); e = await cola('ok');
+  chk('Abastecimiento, la cola con MARCAR_OC_DIRECTO: compra_marcar_oc_directo, NO Apps Script, sale de la cola y llama al aplicador',
+    e.filter((x) => x.a === 'base' && x.fn === 'compra_marcar_oc_directo').length === 1 && !e.some((x) => x.a === 'apps') && e.some((x) => x.a === 'aplicar'), e);
+  e = await cola('nodirecto'); const bc = e.find((x) => x.a === 'base'), ac = e.find((x) => x.a === 'apps');
+  chk('   la base contesta directo:false: Apps Script con el MISMO id', bc && ac && ac.acc === 'marcarOC' && bc.id === ac.id, e);
+  await pal({}); e = await cola('ok');
+  chk('   apagada: Apps Script y NO la base', e.some((x) => x.a === 'apps' && x.acc === 'marcarOC') && !e.some((x) => x.a === 'base'), e);
   /* ── RUTA ── */
   await ev(cli, `go('ruta'); 1`);
   chk('Ruta arranca', await esperar(cli, `typeof window.processSyncQueue==='function' && typeof window.loadLocal==='function'`, 60000), '');
