@@ -112,6 +112,9 @@ var LEC_ARMA = {
   /* (204) Mi reparto: las entregas de ese dia en el orden de la hoja (por posicion). La base recibe
      {usuario, fecha} en `p` y el motor tambien. */
   miReparto: { rpc: 'mi_reparto_pantalla', listas: {}, orden: true, motor: 'mr' },
+  /* (246) Los extras de la bandeja de Red: los links de Telegram (de la base) y, para el admin, los reclamos con la
+     comision recalculada por la escala (rx_motor.js, copiado de Code.js). Los reclamos por su fila de Red. */
+  redBandejaExtra: { rpc: 'red_bandeja_extra_pantalla', listas: { 'reclamos.pendientes': ['row'], 'reclamos.decididos': ['row'] }, orden: true, motor: 'rx' },
   /* (244) La ficha de un evento de catering: cada lista por su id; lo que salio del freezer por producto. */
   cateringDetail: { rpc: 'catering_detalle_pantalla', listas: { menu: ['id'], lines: ['id'], payments: ['id'], crew: ['id'], tasks: ['id'], freezer: ['a'] }, orden: true },
   /* (243) La marca y el contacto de cada proveedor, por alias (`en` es la hora de armado). */

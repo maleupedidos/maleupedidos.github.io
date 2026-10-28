@@ -123,6 +123,12 @@ const MOTORES = [
       cierre(fs.readFileSync(CODE, 'utf8'), '_doGetRedEscala', new Set(['_logError_', '_crmPgConfig_', '_crmPgFetch_', '_colsAbbr_',
         '_alertaTecnica_', '_avisar_', '_avisarCanal_', '_avisarFallo_', '_mlAvisar_', '_uf_'])),
       fs.readFileSync(path.join(RAIZ, '_src', 're_motor_shim.js'), 'utf8'), 'El motor de la escala de Red (201)') },
+  /* (246) Los reclamos de la bandeja de Red (`redBandejaExtra`): la comision recalculada con la escala, con el
+     mismo shim que la escala de Ventas (las filas crudas de Red, Productos, la escala y las hojas chicas). */
+  { salida: 'rx_motor.js', armar: () => envolver(
+      cierre(fs.readFileSync(CODE, 'utf8'), '_redReclamosListar_', new Set(['_logError_', '_crmPgConfig_', '_crmPgFetch_', '_colsAbbr_',
+        '_alertaTecnica_', '_avisar_', '_avisarCanal_', '_avisarFallo_', '_mlAvisar_', '_uf_', '_escalaRedVigilar_'])),
+      fs.readFileSync(path.join(RAIZ, '_src', 'rx_motor_shim.js'), 'utf8'), 'El motor de los reclamos de la bandeja de Red (246)') },
   /* (203) Ruta › Cobros (`cobrosPendientes`). Las billeteras (174), las fusiones, las piezas y el mapa
      de columnas los da la base resueltos; no sale a la red, no escribe ni avisa. */
   { salida: 'cp_motor.js', armar: () => envolver(
