@@ -129,8 +129,8 @@ var LEC_ARMA = {
      propiedades del script, que traen Apps Script (`_motorCtx`, `redObjetivosProps`). */
   redObjetivosEquipo: { rpc: 'red_objetivos_equipo_pantalla', listas: { vendedores: ['nombre'] }, orden: true, motor: 'ro' },
   /* (191) El portal del vendedor: la base da SUS filas de Red crudas y los numeros los arma
-     dv_motor.js. Tareas, objetivo, Telegram, escala y liquidaciones salen de
-     `dashboardVendedorEfectos` (Apps Script, que ademas hace los efectos): no se comparan. Los
+     dv_motor.js, y desde la 242 tambien tareas, objetivo, Telegram, escala y liquidaciones (los efectos
+     siguen en `dashboardVendedorEfectos`, que el portal larga sin esperar). Los
      pedidos por numero y en orden; los clientes por nombre; los meses y las semanas por posicion. */
   /* (208) El resto de la Caja (los datos que la foto de Apps Script todavia da al panel), POR TANDAS: la
      base da los datos y la respuesta la arma ca_motor.js (`_doGetAdmin` con mode caja); se compara y se
@@ -139,8 +139,8 @@ var LEC_ARMA = {
     solo: ['saldoBase', 'config', 'provisiones', 'redondeosProv', 'proveedores', 'traspasos', 'cajaMode', 'caja.cuentas',   /* tanda 1 (208) */
       'vueltos', 'efHuerfanos', 'sobres',   /* tanda 2 (209) */
       'lugares', 'efMano'] },   /* tanda 3 (211) */
-  dashboardVendedor: { rpc: 'dashboard_vendedor_pantalla', listas: { pedidos: ['n'], clientes: ['n'] }, orden: true, motor: 'dv',
-    ignorar: ['tareas', 'objetivo', 'tg', 'liqs', 'liqProx', 'stats.escala'] }
+  /* (242) tareas, objetivo, escala, liquidaciones y Telegram ya los arma el motor (`ef`): se comparan. */
+  dashboardVendedor: { rpc: 'dashboard_vendedor_pantalla', listas: { pedidos: ['n'], clientes: ['n'] }, orden: true, motor: 'dv' }
 };
 /* `num` (opcional, 27/10/2026): la regla para dos numeros, (x, y, ruta) -> iguales. La usa Maleu - Lectura para
    los motores (la plata al centavo, los kilos estrictos). Sin `num`, como siempre: 5 por millon. */

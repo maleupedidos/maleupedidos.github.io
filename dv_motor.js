@@ -5,9 +5,9 @@
    jugadas (164) y el de objetivos (190): _tools/copiar_motor.js pone donde dice MOTOR (entre
    barra-asterisco) `_doGetDashboardVendedor` y todo lo que llama, copiado de Code.js, MENOS lo que
    este shim reemplaza (abajo). Los datos son los de `dashboard_vendedor_pantalla` (191).
-   El motor arma los NUMEROS (stats, pedidos, clientes, lo rendido por semana, cuentas). Lo que
-   abrir el portal HACE y lo que sale de esos calculos (tareas, objetivo, Telegram, escala,
-   liquidaciones) lo trae `dashboardVendedorEfectos` de Apps Script: aca va vacio. */
+   El motor arma los NUMEROS (stats, pedidos, clientes, lo rendido por semana, cuentas) y, desde la 242,
+   tareas, objetivo, Telegram, escala y liquidaciones. Lo que abrir el portal HACE sigue en
+   `dashboardVendedorEfectos` de Apps Script, que el portal larga sin esperar. */
 
 /* `Date` con un reloj que se puede fijar (la prueba compara contra Apps Script parado en su hora). */
 var _D = G.Date, _ahora = null;
@@ -76,9 +76,170 @@ var _COLSRED_HDR_ = [
   ['cod',   'Vendedor que Trajo']
 ];
 
+var ESCALA_RED_CACHE_SEG = 6 * 3600;          // 6 h: la escala casi nunca cambia
+
+var ESCALA_RED_PROP = 'ESCALA_RED_COPIA';     // la ultima que se pudo leer
+
+var ESCALA_RED_VISTA_SEL = 'seller_commission_rate_calc?select=product_sku,product_name,level,amount,rule_amount,source,sale_price,unit_cost';
+
+function _escalaRedFuente_() {
+  var m = String(_cfgTexto_('ESCALA_RED_FUENTE', 'tabla') || '').trim().toLowerCase();
+  return (m === 'medir' || m === 'productos') ? m : 'tabla';
+}
+
+var CARNE_FIJA_DESDE = '2026-10-16';
+
+var CARNE_FIJA_COLS = ['Com Red Inicial', 'Com Red Intermedio', 'Com Red Top'];
+
+var CARNE_FIJA_NIVELES = ['inicial', 'intermedio', 'top'];
+
+var CARNE_FIJA_PCT = [5, 6, 7];
+
+function _carneFijaR50_(precio, pct) {
+  return Math.round((Number(precio) || 0) * pct / 5000) * 50;
+}
+
+function _carneFijaDeFilas_(vals) {
+  if (!vals || !vals.length) return null;
+  var h = vals[0].map(function (x) { return String(x || '').trim(); });
+  var cA = h.indexOf('Abreviatura'), cP = h.indexOf('Precio'), cU = h.indexOf('Unidad');
+  var cM = CARNE_FIJA_COLS.map(function (n) { return h.indexOf(n); });
+  if (cA < 0 || cP < 0 || cU < 0 || cM.some(function (c) { return c < 0; })) return null;
+  var montos = {}, escribir = [];
+  for (var i = 1; i < vals.length; i++) {
+    var f = vals[i], sku = String(f[cA] || '').trim();
+    if (!sku || String(f[cU] || '').trim().toLowerCase() !== 'kg') continue;
+    var m = {}, nuevos = null;
+    for (var k = 0; k < 3; k++) {
+      var v = f[cM[k]];
+      if (v === '' || v === null || v === undefined || isNaN(Number(v))) {
+        var precio = Number(f[cP]) || 0;
+        if (!(precio > 0)) { m = null; break; }   // sin precio no se inventa un monto
+        v = _carneFijaR50_(precio, CARNE_FIJA_PCT[k]);
+        nuevos = nuevos || {};
+        nuevos[k] = v;
+      }
+      m[CARNE_FIJA_NIVELES[k]] = Number(v);
+    }
+    if (!m) continue;
+    montos[sku] = m;
+    if (nuevos) escribir.push({ fila: i + 1, cols: cM.map(function (c) { return c + 1; }), valores: [m.inicial, m.intermedio, m.top] });
+  }
+  return { montos: montos, escribir: escribir };
+}
+
+var _PROD_VALORES_ = null;
+
+function _carneFijaLeer_() {
+  var sh = SS.getSheetByName('Productos');
+  if (!sh) throw new Error('no esta la hoja Productos');
+  var r = _carneFijaDeFilas_(_PROD_VALORES_ || sh.getDataRange().getValues());
+  if (!r) throw new Error('faltan en Productos las columnas ' + CARNE_FIJA_COLS.join(' / '));
+  if (r.escribir.length && !_SECO_) {
+    r.escribir.forEach(function (w) {
+      w.cols.forEach(function (c, k) { sh.getRange(w.fila, c).setValue(w.valores[k]); });
+    });
+  }
+  return r.montos;
+}
+
+function _escalaRedConCarne_(esc, carne) {
+  if (!esc || !carne) return esc;
+  esc.carneAntes = {};
+  Object.keys(carne).forEach(function (sku) {
+    esc.carneAntes[sku] = esc.montos[sku] || null;
+    esc.montos[sku] = carne[sku];
+  });
+  esc.carneDesde = CARNE_FIJA_DESDE;
+  return esc;
+}
+
+function _escalaRedMontos_(cfg, sinSkus) {
+  var fuente = _escalaRedFuente_();
+  var tabla = fuente === 'productos' ? null : _crmPgFetch_(cfg, 'get', 'seller_commission_rate?select=product_sku,level,amount');
+  if (fuente === 'tabla') return tabla;
+  var vista = null;
+  try { vista = _crmPgFetch_(cfg, 'get', ESCALA_RED_VISTA_SEL); } catch (eV) { vista = null; }
+  if (!vista || !vista.length) {
+    /* Una vez por lectura de la base (la copia dura 6 h): no es ruido. */
+    _alertaTecnica_('escala Red', 'La escala desde Productos no contestó: se paga con la tabla', [
+      'ESCALA_RED_FUENTE está en «' + fuente + '» pero la vista seller_commission_rate_calc no devolvió nada (¿falta pegar la 052?).',
+      'No se pierde nada: los montos salen de seller_commission_rate, como antes de la palanca.']);
+    return tabla || _crmPgFetch_(cfg, 'get', 'seller_commission_rate?select=product_sku,level,amount');
+  }
+  var _fuera = function (x) { return !(sinSkus && sinSkus[x.product_sku]); };
+  try { _escalaRedVigilar_(vista.filter(_fuera), fuente === 'medir' && tabla ? tabla.filter(_fuera) : null); } catch (eW) { try { _logError_('escala Red vigilar: ' + (eW && eW.message || eW)); } catch (e2) {} }
+  return fuente === 'productos' ? vista : tabla;
+}
+
+function _escalaRedLeer_() {
+  var cache = null;
+  try {
+    cache = CacheService.getScriptCache();
+    var crudo = cache.get('escala_red');
+    if (crudo) return JSON.parse(crudo);
+  } catch (eC) {}
+
+  var props = PropertiesService.getScriptProperties();
+  var esc = null;
+  try {
+    var cfg = _crmPgConfig_();
+    if (cfg.enabled) {
+      var bandas = _crmPgFetch_(cfg, 'get',
+        'seller_level_band?select=level,min_monthly_sales&order=min_monthly_sales.asc');
+      /* La carne primero: si Productos no se puede leer, tira y se usa la copia. */
+      var carne = _carneFijaLeer_();
+      var montos = _escalaRedMontos_(cfg, carne);
+      /* Las dos tienen que venir con filas. Una escala a medias liquidaria
+         algunos productos y otros no, que es peor que no liquidar ninguno. */
+      if (bandas && bandas.length && montos && montos.length) {
+        /* `leida`: cuando se leyo de la base. La pantalla de la escala lo
+           muestra para que se sepa de cuando son los montos (la copia dura 6 h). */
+        esc = { bandas: [], montos: {}, leida: Date.now() };
+        for (var i = 0; i < bandas.length; i++) {
+          esc.bandas.push({ nivel: String(bandas[i].level || ''),
+                            desde: Number(bandas[i].min_monthly_sales) || 0 });
+        }
+        for (var j = 0; j < montos.length; j++) {
+          var sku = String(montos[j].product_sku || '');
+          if (!sku) continue;
+          if (!esc.montos[sku]) esc.montos[sku] = {};
+          esc.montos[sku][String(montos[j].level || '')] = Number(montos[j].amount) || 0;
+        }
+        _escalaRedConCarne_(esc, carne);
+      }
+    }
+  } catch (eF) { esc = null; }
+
+  if (esc && esc.bandas.length) {
+    try { cache.put('escala_red', JSON.stringify(esc), ESCALA_RED_CACHE_SEG); } catch (e1) {}
+    try { props.setProperty(ESCALA_RED_PROP, JSON.stringify(esc)); } catch (e2) {}
+    return esc;
+  }
+  /* La base no contesto. La copia de la ultima vez es vieja pero es CIERTA:
+     estos numeros cambian cada varios meses, no cada dia. */
+  try {
+    var guardada = props.getProperty(ESCALA_RED_PROP);
+    if (guardada) return JSON.parse(guardada);
+  } catch (e3) {}
+  return null;
+}
+
 function _escalaRedCuentaNivel_(fila, cT) {
   return !(cT && String(fila[cT - 1] || '').trim() === 'Maleu');
 }
+
+function _escalaRedNivel_(esc, facturado) {
+  if (!esc || !esc.bandas || !esc.bandas.length) return '';
+  var f = Number(facturado) || 0, nivel = esc.bandas[0].nivel;
+  // Vienen ordenadas de menor a mayor: gana el ultimo corte que alcanza.
+  for (var i = 0; i < esc.bandas.length; i++) {
+    if (f >= esc.bandas[i].desde) nivel = esc.bandas[i].nivel;
+  }
+  return nivel;
+}
+
+var ESCALA_RED_DESDE_YM = 202610;   // octubre de 2026
 
 function _colsRedOrigen_(sh, crear) {
   if (!sh) return { trajo: 0, tel: 0, cod: 0 };
@@ -249,6 +410,8 @@ function _redDebeAMaleuBruto_(fila, iAPagar) {
            com: Math.round(com || 0), env: envN };
 }
 
+var LIQ_RED_HOJA = 'Liquidaciones Red';
+
 var LIQ_RED_COL = 'Comisión Liquidada';
 
 var _LIQ_RED_IDX_ = null;
@@ -281,6 +444,201 @@ function _liqRedCol_(sh, crear) {
   SpreadsheetApp.flush();
   _LIQ_RED_IDX_ = null;
   return c;
+}
+
+function _liqRed2_(n) { return (n < 10 ? '0' : '') + n; }
+function _liqRedHoyNum_() {
+  return Number(Utilities.formatDate(new Date(), 'America/Argentina/Buenos_Aires', 'yyyyMMdd'));
+}
+
+function _liqRedHoyNum_() {
+  return Number(Utilities.formatDate(new Date(), 'America/Argentina/Buenos_Aires', 'yyyyMMdd'));
+}
+
+function _liqRedQuincena_(num) {
+  var MES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
+  num = Number(num) || 0;
+  if (!num) return { key: 'sin-fecha', lbl: 'Sin día de entrega', desde: '', hasta: '', pagaEl: '', pagaNum: 0 };
+  var y = Math.floor(num / 10000), m = Math.floor(num / 100) % 100, d = num % 100;
+  var q = d <= 15 ? 1 : 2;
+  var ult = new Date(y, m, 0).getDate();
+  var pago = q === 1 ? new Date(y, m - 1, 16) : new Date(y, m, 1);
+  if (pago.getDay() === 6) pago.setDate(pago.getDate() + 2);
+  else if (pago.getDay() === 0) pago.setDate(pago.getDate() + 1);
+  var d1 = q === 1 ? 1 : 16, d2 = q === 1 ? 15 : ult;
+  return {
+    key: y + '-' + _liqRed2_(m) + '-Q' + q,
+    lbl: d1 + ' al ' + d2 + ' de ' + MES[m - 1],
+    desde: _liqRed2_(d1) + '/' + _liqRed2_(m) + '/' + y,
+    hasta: _liqRed2_(d2) + '/' + _liqRed2_(m) + '/' + y,
+    pagaEl: _liqRed2_(pago.getDate()) + '/' + _liqRed2_(pago.getMonth() + 1) + '/' + pago.getFullYear(),
+    pagaNum: pago.getFullYear() * 10000 + (pago.getMonth() + 1) * 100 + pago.getDate()
+  };
+}
+
+function _liqRedCalc_() {
+  var out = {};
+  var sh = SS.getSheetByName('Red');
+  if (!sh || sh.getLastRow() < 2) return out;
+  var d = sh.getDataRange().getValues(), h = d[0], ix = {};
+  for (var c = 0; c < h.length; c++) ix[String(h[c]).trim()] = c;
+  var iAP = ix['A Pagar'] != null ? ix['A Pagar'] : 48;
+  var iEPM = ix['Estado Pago a Maleu'] != null ? ix['Estado Pago a Maleu'] : 53;
+  var hoy = _liqRedHoyNum_();
+  var qs = {};
+  for (var r = 1; r < d.length; r++) {
+    var f = d[r], vend = String(f[7] || '').trim(), id = String(f[1] || '').trim();
+    if (!vend || !id) continue;
+    var es = String(f[11] || '').trim();
+    if (es === 'Cancelado') continue;
+    var deb = _redDebeAMaleu_(f, iAP);
+    if (deb.cerroViejo) continue;
+    var V = out[vend] || (out[vend] = { nombre: vend, quincenas: [], sinMarcar: [], sinMarcarTotal: 0, debeEntregar: 0 });
+    var epm = String(f[iEPM] || '').trim();
+    var pagado = epm === 'Pagado' || epm === 'Sí' || epm === 'Si';
+    if (es === 'Entregado' && !pagado && deb.debe > 0) V.debeEntregar += Math.round(deb.debe);
+    if (deb.liq) continue;
+    var tot = (deb.com || 0) + (deb.env || 0);
+    if (!(tot > 0)) continue;
+    var Q = _liqRedQuincena_(_redFechaNum_(f[10]));
+    var item = { n: id, row: r + 1, c: String(f[8] || '').trim(), dia: _fechaCorta_(f[10]),
+                 com: deb.com || 0, env: deb.env || 0, tot: tot };
+    if (es === 'Entregado' && String(f[13] || '').trim() === 'Cobrado') {
+      var k = vend + '|' + Q.key;
+      if (!qs[k]) {
+        qs[k] = { key: Q.key, lbl: Q.lbl, desde: Q.desde, hasta: Q.hasta, pagaEl: Q.pagaEl, pagaNum: Q.pagaNum,
+                  vencida: !Q.pagaNum || Q.pagaNum <= hoy, com: 0, env: 0, total: 0, pedidos: [] };
+        V.quincenas.push(qs[k]);
+      }
+      qs[k].pedidos.push(item); qs[k].com += item.com; qs[k].env += item.env; qs[k].total += tot;
+    } else {
+      item.falta = es !== 'Entregado' ? 'entregar' : 'cobrar';
+      item.q = Q.lbl; item.pagaEl = Q.pagaEl;
+      V.sinMarcar.push(item); V.sinMarcarTotal += tot;
+    }
+  }
+  Object.keys(out).forEach(function (k2) {
+    out[k2].quincenas.sort(function (a, b) { return a.key < b.key ? -1 : (a.key > b.key ? 1 : 0); });
+  });
+  return out;
+}
+
+function _liqRedFecha_(v, conHora) {
+  if (v instanceof Date) return Utilities.formatDate(v, 'America/Argentina/Buenos_Aires', conHora ? 'dd/MM/yyyy HH:mm' : 'dd/MM/yyyy');
+  return String(v == null ? '' : v).trim();
+}
+
+function _liqRedLeer_() {
+  var sh = SS.getSheetByName(LIQ_RED_HOJA), out = [];
+  if (!sh || sh.getLastRow() < 2) return out;
+  var d = sh.getDataRange().getValues(), h = d[0], ix = {};
+  for (var c = 0; c < h.length; c++) ix[String(h[c]).trim()] = c;
+  function _lqCelda(f, nombre) { return ix[nombre] != null ? f[ix[nombre]] : ''; }
+  for (var r = 1; r < d.length; r++) {
+    var id = String(_lqCelda(d[r], 'ID') || '').trim();
+    if (!id) continue;
+    out.push({
+      id: id, row: r + 1, registrado: _liqRedFecha_(_lqCelda(d[r], 'Registrado'), true),
+      fecha: _liqRedFecha_(_lqCelda(d[r], 'Fecha Pago')), vendedor: String(_lqCelda(d[r], 'Vendedor') || '').trim(),
+      quincena: String(_lqCelda(d[r], 'Quincena') || '').trim(),
+      desde: _liqRedFecha_(_lqCelda(d[r], 'Desde')), hasta: _liqRedFecha_(_lqCelda(d[r], 'Hasta')),
+      com: Number(_lqCelda(d[r], 'Comisión')) || 0, env: Number(_lqCelda(d[r], 'Envíos')) || 0, total: Number(_lqCelda(d[r], 'Total')) || 0,
+      cuenta: String(_lqCelda(d[r], 'Cuenta') || '').trim(), pago: String(_lqCelda(d[r], 'Pagó') || '').trim(),
+      pedidos: String(_lqCelda(d[r], 'Pedidos') || '').trim(), n: Number(_lqCelda(d[r], '# Pedidos')) || 0,
+      estado: String(_lqCelda(d[r], 'Estado') || '').trim() || 'Pagada',
+      anuladaEl: _liqRedFecha_(_lqCelda(d[r], 'Anulada el'), true), anuladaPor: String(_lqCelda(d[r], 'Anulada por') || '').trim()
+    });
+  }
+  return out;
+}
+
+function _liqRedDeVendedor_(nombre) {
+  if (!_liqRedActiva_()) return [];
+  var nm = String(nombre || '').trim();
+  return _liqRedLeer_().filter(function (l) { return l.vendedor === nm && l.estado !== 'Anulada'; })
+    .map(function (l) {
+      var Q = _liqRedQuincenaDeClave_(l.quincena);
+      return { id: l.id, f: l.fecha, total: l.total, com: l.com, env: l.env, n: l.n, q: Q || l.quincena };
+    }).reverse();
+}
+
+function _liqRedQuincenaDeClave_(key) {
+  var m = String(key || '').match(/^(\d{4})-(\d{2})-Q([12])$/);
+  if (!m) return '';
+  return _liqRedQuincena_(Number(m[1]) * 10000 + Number(m[2]) * 100 + (m[3] === '1' ? 1 : 16)).lbl;
+}
+
+function _liqRedProxDeVendedor_(nombre) {
+  if (!_liqRedActiva_()) return null;
+  var hoy = _liqRedHoyNum_();
+  var V = _liqRedCalc_()[String(nombre || '').trim()] || { quincenas: [], sinMarcar: [], sinMarcarTotal: 0 };
+  /* El pago de la quincena de hoy y el de la anterior: el menor que no paso.
+     Hoy 16/10 → el 16/10 (la del 1 al 15); el 17/10 → el 2/11. */
+  var a = _liqRedQuincena_(hoy), b = _liqRedQuincena_(_liqRedNumDia_(hoy, -15));
+  var prox = [a, b].filter(function (q) { return q.pagaNum >= hoy; })
+    .sort(function (x, y) { return x.pagaNum - y.pagaNum; })[0] || a;
+  return { hoy: hoy, proxPago: prox.pagaEl, proxPagoNum: prox.pagaNum,
+           quincenas: V.quincenas, sinMarcar: V.sinMarcar, sinMarcarTotal: V.sinMarcarTotal };
+}
+
+function _liqRedNumDia_(num, delta) {
+  var y = Math.floor(num / 10000), m = Math.floor(num / 100) % 100, d = num % 100;
+  var t = new Date(y, m - 1, d + delta);
+  return t.getFullYear() * 10000 + (t.getMonth() + 1) * 100 + t.getDate();
+}
+
+function _escalaPortal_(facturadoMes, pendiente, pendienteN) {
+  try {
+    var esc = _escalaRedLeer_();
+    if (!esc || !esc.bandas || !esc.bandas.length) return null;
+    var f = Math.round(Number(facturadoMes) || 0);
+    var pend = Math.round(Number(pendiente) || 0);
+    var sig = null;
+    for (var i = 0; i < esc.bandas.length; i++) {
+      var b = esc.bandas[i];
+      if (b.desde > f && (!sig || b.desde < sig.desde)) sig = b;
+    }
+    return {
+      nivel: _escalaRedNivel_(esc, f),
+      facturado: f,
+      /* El mes de ENTREGA, que es el que define el escalon. Se dice para que
+         el vendedor pueda cruzarlo con el otro numero del portal sin creer
+         que uno de los dos esta mal. */
+      desde: ESCALA_RED_DESDE_YM,
+      siguiente: sig ? { nivel: sig.nivel, desde: sig.desde, falta: Math.round(sig.desde - f) } : null,
+      /* Lo vencido sin marcar entregado (5/10/2026): NO entra en `facturado`
+         ni en `nivel`, que son lo que se liquida. Es lo que llevaria si lo
+         marca, y el nivel que eso le daria. */
+      pendiente: pend > 0 ? { monto: pend, n: Number(pendienteN) || 0, facturado: f + pend,
+                              nivel: _escalaRedNivel_(esc, f + pend) } : null,
+      bandas: esc.bandas
+    };
+  } catch (e) { return null; }
+}
+
+function _escalaProductosVendedor_(esc) {
+  if (!esc || !esc.montos) return [];
+  var prod = {};
+  var hProd = SS.getSheetByName('Productos');
+  if (hProd && hProd.getLastRow() > 1) {
+    var pd = hProd.getRange(1, 1, hProd.getLastRow(), 17).getValues();
+    for (var r = 1; r < pd.length; r++) {
+      var ab = String(pd[r][2] || '').trim();
+      if (!ab) continue;
+      prod[ab] = { n: String(pd[r][1] || '').trim(), precio: _numCelda_(pd[r][8]), u: _uniValida_(pd[r][16]) };
+    }
+  }
+  var cat = _catPorAbbr_(), mapa = _colsAbbr_('Red'), out = [], visto = {};
+  Object.keys(mapa).map(Number).sort(function (a, b) { return a - b; }).forEach(function (c) {
+    var s = mapa[c];
+    if (!s || visto[s]) return;
+    visto[s] = true;
+    var p = prod[s] || null, m = esc.montos[s] || null;
+    var num = function (x) { return (m && typeof m[x] === 'number') ? m[x] : null; };
+    out.push({ a: s, n: p ? p.n : s, cat: cat[s] || 'Otros', u: p ? p.u : 'u',
+               p: p ? p.precio : null, ini: num('inicial'), int: num('intermedio'), top: num('top') });
+  });
+  return out;
 }
 
 function _doGetDashboardVendedor(e) {
@@ -885,11 +1243,590 @@ function _rbCols_(sh, crear) {
   return out;
 }
 
+function _rbAhoraTxt_() {
+  return Utilities.formatDate(new Date(), RB_TZ_, 'dd/MM/yyyy HH:mm');
+}
+
+function _rbDiasParse_(s) {
+  var MAP = { lunes: 'Lunes', martes: 'Martes', miercoles: 'Miércoles', 'miércoles': 'Miércoles',
+              jueves: 'Jueves', viernes: 'Viernes', sabado: 'Sábado', 'sábado': 'Sábado',
+              domingo: 'Domingo' };
+  var out = [];
+  String(s == null ? '' : s).split(/[,;\/]|\sy\s/).forEach(function (p) {
+    var k = String(p).trim().toLowerCase();
+    if (MAP[k] && out.indexOf(MAP[k]) < 0) out.push(MAP[k]);
+  });
+  return out;
+}
+
+function _rbVendedores_(fresco) {
+  /* CACHEADO 5 min (1/10/2026, de noche): lo piden el portal de cada vendedor y
+     la bandeja en cada carga. `fresco` lo lee de la hoja: lo usa quien va a
+     ESCRIBIR (vincular un Telegram), que ademas borra esta copia. */
+  if (!fresco) {
+    try {
+      var _c = CacheService.getScriptCache().get('rb_vend_v2');
+      if (_c) { var _r = JSON.parse(_c); _r.sh = null; return _r; }
+    } catch (eC) {}
+  }
+  var res = { lista: [], sh: null, colDias: 0, colTg: 0 };
+  var sh = SS.getSheetByName('Vendedores');
+  res.sh = sh;
+  if (!sh || sh.getLastRow() <= 1) return res;
+  var d = sh.getDataRange().getValues();
+  var cab = d[0];
+  for (var c = 0; c < cab.length; c++) {
+    var h = String(cab[c] == null ? '' : cab[c]).trim().toLowerCase();
+    if (h === 'días' || h === 'dias') res.colDias = c + 1;
+    if (h === 'telegram') res.colTg = c + 1;
+  }
+  for (var r = 1; r < d.length; r++) {
+    var nombre = String(d[r][0] || '').trim();
+    if (!nombre) continue;
+    var dias = res.colDias ? _rbDiasParse_(d[r][res.colDias - 1]) : [];
+    res.lista.push({
+      nombre: nombre,
+      usuario: String(d[r][7] || '').trim().toLowerCase(),
+      pin: String(d[r][8] || '').trim(),
+      activo: String(d[r][6] || '').trim() === 'Activo',
+      dias: dias.length ? dias : ['Viernes'],
+      diasDefault: !dias.length,
+      chat: res.colTg ? String(d[r][res.colTg - 1] || '').trim() : '',
+      /* Los barrios que reparte (col D), para sugerirlo en Por decidir (5/10/2026). */
+      barrios: String(d[r][3] || '').trim(),
+      /* El alias para transferirle (col C), lo muestra la liquidacion (16/10/2026). */
+      alias: String(d[r][2] || '').trim(),
+      fila: r + 1
+    });
+  }
+  try {
+    CacheService.getScriptCache().put('rb_vend_v2', JSON.stringify(
+      { lista: res.lista, colDias: res.colDias, colTg: res.colTg }), 300);
+  } catch (eP) {}
+  return res;
+}
+
+function _rbVendedorPorNombre_(V, nombre) {
+  var n = String(nombre || '').trim();
+  for (var i = 0; i < V.lista.length; i++) if (V.lista[i].nombre === n) return V.lista[i];
+  return null;
+}
+
+var RT_HOJA_ = 'Tareas Red';
+
+var RT_CAB_ = ['Fecha', 'Semana', 'Vendedor', 'Tipo', 'Clave', 'Resultado', 'Nota'];
+
+var RT_RESULTADOS_ = ['Compró', 'No contesta', 'No quiere', 'Reprogramó'];
+
+var RT_MAX_TAREAS_ = 4;
+
+var RT_MAX_LLAMADOS_ = 4;
+
+function _rtHoja_(crear) {
+  var sh = SS.getSheetByName(RT_HOJA_);
+  if (sh || !crear) return sh;
+  sh = SS.insertSheet(RT_HOJA_);
+  if (!sh) return null;
+  sh.getRange(1, 1, 1, RT_CAB_.length).setValues([RT_CAB_]).setFontWeight('bold');
+  sh.getRange(2, 2, Math.max(1, sh.getMaxRows() - 1), 4).setNumberFormat('@');
+  return sh;
+}
+
+function _rtSemanaKey_(d) {
+  var w = _isoWeek(d);
+  /* El año ISO es el del jueves de esa semana. */
+  var j = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  j.setDate(j.getDate() + 4 - (j.getDay() || 7));
+  return j.getFullYear() + '-W' + (w < 10 ? '0' + w : w);
+}
+
 function _rtIso_(cel) {
   if (cel instanceof Date) return Utilities.formatDate(cel, RB_TZ_, 'yyyy-MM-dd');
   var m = String(cel == null ? '' : cel).trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
   return m ? m[3] + '-' + ('0' + m[2]).slice(-2) + '-' + ('0' + m[1]).slice(-2) : '';
 }
+
+function _rtDiasEntre_(isoA, hoy) {
+  var p = String(isoA).split('-');
+  if (p.length !== 3) return NaN;
+  var a = new Date(Number(p[0]), Number(p[1]) - 1, Number(p[2]));
+  var h = new Date(hoy.getFullYear(), hoy.getMonth(), hoy.getDate());
+  return Math.round((h - a) / 86400000);
+}
+
+function _rtDeclarado_(nombre, semKey, hoy) {
+  var out = { semana: {}, noQuiere: {}, mostradas: null };
+  /* "No quiere" tambien desde Objetivos Red (5/10/2026, hallazgo de Codex P2).
+     El portal nuevo guarda el resultado de cada accion ahi, y la exclusion de 90
+     dias solo miraba las tareas viejas: a la semana siguiente le volvia a sugerir
+     el mismo cliente que acababa de decir que no. */
+  try { out.noQuiere = _roNoQuiere_(nombre, hoy); } catch (eRo) {}
+  var sh = _rtHoja_(false);
+  if (!sh || sh.getLastRow() <= 1) return out;
+  var d = sh.getRange(2, 1, sh.getLastRow() - 1, RT_CAB_.length).getValues();
+  for (var i = 0; i < d.length; i++) {
+    if (String(d[i][2]).trim() !== nombre) continue;
+    var tipo = String(d[i][3]).trim(), clave = String(d[i][4]).trim(), res = String(d[i][5]).trim();
+    if (tipo === 'mostradas') {
+      if (clave === semKey) out.mostradas = { row: i + 2, val: res };
+      continue;
+    }
+    if (String(d[i][1]).trim() === semKey) out.semana[tipo + '|' + clave] = res;
+    if (res === 'No quiere') {
+      var dias = _rtDiasEntre_(_rtIso_(d[i][0]), hoy);
+      if (!(dias > 90)) out.noQuiere[clave] = 1;
+    }
+  }
+  return out;
+}
+
+function _rtTareas_(ctx) {
+  var hoy = ctx.hoy, dow = hoy.getDay();
+  var modo = (dow >= 1 && dow <= 4) ? 'vender' : 'cerrar';
+  var semKey = _rtSemanaKey_(hoy);
+  var decl = _rtDeclarado_(ctx.nombre, semKey, hoy);
+  var $ = function (n) { return '$' + Math.round(Number(n) || 0).toLocaleString('es-AR'); };
+  var T = [];
+
+  if (modo === 'cerrar') {
+    // 1. Entregar lo de la semana
+    var pendEnt = ctx.pedidos.filter(function (p) { return p.vi && p.es !== 'Entregado' && p.es !== 'Cancelado'; });
+    if (pendEnt.length) {
+      T.push({ id: 'entregar', clase: 'dato',
+        titulo: 'Entregá ' + pendEnt.length + (pendEnt.length === 1 ? ' pedido' : ' pedidos') + ' de tu reparto',
+        sub: 'Se tilda solo cuando lo marcás Entregado.',
+        items: pendEnt.slice(0, 12).map(function (p) { return { c: p.c, det: (p.b || '') + (p.de ? ' · ' + p.de : ''), n: p.n }; }) });
+    }
+    // 2. Cobrar lo entregado, cliente por cliente
+    var aCobrar = ctx.pedidos.filter(function (p) { return p.es === 'Entregado' && p.ep !== 'Cobrado'; });
+    if (aCobrar.length) {
+      var sumC = 0; aCobrar.forEach(function (p) { sumC += (p.$ || 0) + (p.env || 0); });
+      T.push({ id: 'cobrar', clase: 'dato',
+        titulo: 'Cobrá ' + $(sumC) + ' de ' + aCobrar.length + (aCobrar.length === 1 ? ' pedido entregado' : ' pedidos entregados'),
+        sub: 'Se tilda solo cuando lo marcás Cobrado.',
+        items: aCobrar.slice(0, 12).map(function (p) { return { c: p.c, det: $((p.$ || 0) + (p.env || 0)) + (p.fp ? ' · ' + p.fp : ''), n: p.n }; }) });
+    }
+    // 3. Rendir a Maleu SOLO lo cobrado en efectivo (desde el 30/9 la
+    //    transferencia va directo a Maleu: pedirle esa plata seria pedirle algo
+    //    que Maleu ya tiene).
+    var porSem = {};
+    ctx.pedidos.forEach(function (p) {
+      if (p.es === 'Cancelado' || p.ep !== 'Cobrado') return;
+      if (p.epm === 'Pagado' || p.epm === 'Sí' || p.epm === 'Si') return;
+      /* Mixto (2/10/2026, Codex): lo transferido YA entro a Maleu, asi que se
+         descuenta de lo que Maleu tiene que recibir. Caso: A Pagar $80.000,
+         $50.000 efectivo + $53.000 transferencia -> rinde $27.000 (antes
+         decia $50.000). Y nunca mas que el efectivo que tiene en la mano. */
+      /* 7/10/2026: `aPg` ya ES lo que debe, por la regla unica
+         (_redDebeAMaleu_): el efectivo desde el 5/10, el Facturado entero en lo
+         de antes que sigue abierto (aunque haya sido transferencia a SU cuenta,
+         como Fede #112). Recalcularlo aca por forma de pago lo dejaba en $0. */
+      var debe = p.aPg || 0;
+      if (debe <= 0) return;
+      var k = p._y + '-' + (p._sem < 10 ? '0' + p._sem : p._sem);
+      porSem[k] = (porSem[k] || 0) + debe;
+    });
+    var rendir = 0;
+    Object.keys(porSem).forEach(function (k) {
+      var rendido = (ctx.liqBySem[k] && ctx.liqBySem[k].total) || 0;
+      var libre = Math.max(0, rendido - (ctx.cerradoPorSem[k] || 0));
+      rendir += Math.max(0, porSem[k] - libre);
+    });
+    if (rendir > 0) {
+      T.push({ id: 'rendir', clase: 'dato', titulo: 'Rendí ' + $(rendir) + ' a Maleu',
+        sub: 'Es lo que te pagaron los clientes, entero: tu comisión te la paga Maleu en la quincena. Se tilda solo cuando se registra la rendición.', items: [] });
+    }
+    // 4. Envios en cero de las ultimas dos semanas: "deci que paso", no "cobralo"
+    var envCero = ctx.pedidos.filter(function (p) {
+      if (p.es !== 'Entregado' || (p.env || 0) > 0 || p.envAnu) return false;
+      var dw = (ctx.yearActual - p._y) * 53 + (ctx.semanaActual - p._sem);
+      return dw >= 0 && dw <= 1;
+    });
+    if (envCero.length) {
+      T.push({ id: 'envio', clase: 'dato',
+        titulo: 'Decí qué pasó con ' + envCero.length + (envCero.length === 1 ? ' envío' : ' envíos') + ' en $0',
+        sub: 'El envío es 100% tuyo. Si lo cobraste, cargalo; si lo regalaste, marcá "No le cobro el envío".',
+        items: envCero.slice(0, 8).map(function (p) { return { c: p.c, det: '#' + p.n, n: p.n }; }) });
+    }
+  } else {
+    // 6 y 7: los llamados. Juntos nunca pasan de RT_MAX_LLAMADOS_.
+    var hoyD = hoy;
+    var dorm = [], seg = [];
+    Object.keys(ctx.clientesMap).forEach(function (k) {
+      var c = ctx.clientesMap[k];
+      if (!c.ultIso || decl.noQuiere[c.n]) return;
+      var dUlt = _rtDiasEntre_(c.ultIso, hoyD);
+      if (!isFinite(dUlt)) return;
+      if (c.count >= 2 && c.primIso) {
+        if (decl.semana['recompra|' + c.n]) return;
+        var inter = _rtDiasEntre_(c.primIso, hoyD) - dUlt;
+        inter = inter / (c.count - 1);
+        if (!(inter >= 7)) inter = 7;
+        /* Dormido: paso una vez y media su ritmo. Y no perdido: mas de 6 meses
+           ya no es un llamado de esta semana. */
+        if (dUlt > inter * 1.5 && dUlt <= 180) dorm.push({ c: c, d: dUlt, inter: Math.round(inter) });
+      } else if (c.count === 1) {
+        if (decl.semana['segunda|' + c.n]) return;
+        if (dUlt >= 7 && dUlt < 60) seg.push({ c: c, d: dUlt });
+      }
+    });
+    dorm.sort(function (a, b) { return (b.c.total || 0) - (a.c.total || 0); });
+    seg.sort(function (a, b) { return b.d - a.d; });   // al que menos le queda, primero
+    var nSeg = Math.min(seg.length, dorm.length ? 1 : RT_MAX_LLAMADOS_);
+    var nDorm = Math.min(dorm.length, RT_MAX_LLAMADOS_ - nSeg);
+    nSeg = Math.min(seg.length, RT_MAX_LLAMADOS_ - nDorm);
+    if (nDorm) {
+      T.push({ id: 'recompra', clase: 'blanda',
+        titulo: 'Llamá a ' + nDorm + (nDorm === 1 ? ' cliente que no te compra' : ' clientes que no te compran') + ' hace rato',
+        sub: 'Ya te compraron más de una vez. Contanos cómo te fue (opcional).',
+        items: dorm.slice(0, nDorm).map(function (x) {
+          return { c: x.c.n, clave: x.c.n, t: x.c.t || '', det: (x.c.b ? x.c.b + ' · ' : '') + 'hace ' + x.d + ' días (te compraba cada ~' + x.inter + ')' };
+        }) });
+    }
+    if (nSeg) {
+      T.push({ id: 'segunda', clase: 'blanda',
+        titulo: 'Volvé a ' + nSeg + (nSeg === 1 ? ' cliente que te compró una sola vez' : ' clientes que te compraron una sola vez'),
+        sub: 'La segunda compra es la que lo hace cliente. Contanos cómo te fue (opcional).',
+        items: seg.slice(0, nSeg).map(function (x) {
+          return { c: x.c.n, clave: x.c.n, t: x.c.t || '', det: (x.c.b ? x.c.b + ' · ' : '') + 'compró hace ' + x.d + ' días · le quedan ' + (60 - x.d) };
+        }) });
+    }
+    // 5. El escalon, en PEDIDOS, y solo si el mes alcanza.
+    var esc = ctx.escala;
+    if (esc && esc.siguiente && esc.siguiente.falta > 0) {
+      var ticket = ctx.mes.pedidos ? ctx.mes.facturado / ctx.mes.pedidos : 0;
+      if (!(ticket > 0)) {
+        var tf = 0, tp = 0;
+        Object.keys(ctx.semanasMap).forEach(function (k) { tf += ctx.semanasMap[k].facturado || 0; tp += ctx.semanasMap[k].pedidos || 0; });
+        ticket = tp ? tf / tp : 0;
+      }
+      if (ticket > 0) {
+        var faltan = Math.ceil(esc.siguiente.falta / ticket);
+        // Ritmo: pedidos por semana de las ultimas 8 con movimiento.
+        var ks = Object.keys(ctx.semanasMap).sort().slice(-8), sp = 0;
+        ks.forEach(function (k) { sp += ctx.semanasMap[k].pedidos || 0; });
+        var ritmo = ks.length ? sp / ks.length : 0;
+        var finMes = new Date(hoy.getFullYear(), hoy.getMonth() + 1, 0);
+        var semRest = Math.max(1, Math.ceil((finMes - hoy) / (7 * 86400000)));
+        if (faltan <= Math.ceil(ritmo * semRest * 1.3)) {
+          T.push({ id: 'escalon', clase: 'dato',
+            titulo: 'Te faltan ' + faltan + (faltan === 1 ? ' pedido' : ' pedidos') + ' para el nivel ' + esc.siguiente.nivel,
+            sub: 'Al subir, se te recalcula TODO el mes con el valor nuevo.', items: [] });
+        }
+      }
+    }
+  }
+
+  T = T.slice(0, RT_MAX_TAREAS_);
+
+  /* El denominador del experimento: que se le mostro esta semana. Una fila por
+     semana y vendedor; se reescribe solo si aparecio algo nuevo. */
+  try {
+    var cuenta = {};
+    if (decl.mostradas && decl.mostradas.val) {
+      decl.mostradas.val.split(' · ').forEach(function (p) {
+        var kv = p.split(':'); if (kv.length === 2) cuenta[kv[0]] = Number(kv[1]) || 0;
+      });
+    }
+    var antes = JSON.stringify(cuenta);
+    T.forEach(function (t) { cuenta[t.id] = Math.max(cuenta[t.id] || 0, (t.items && t.items.length) || 1); });
+    /* `_SIN_EFECTOS_` (27/10/2026): el medidor de lecturas arma el portal para compararlo, y
+       ningun vendedor vio esas tareas: no se anotan como mostradas. */
+    if (!_SIN_EFECTOS_ && JSON.stringify(cuenta) !== antes && T.length) {
+      var val = Object.keys(cuenta).sort().map(function (k) { return k + ':' + cuenta[k]; }).join(' · ');
+      var shT = _rtHoja_(true);
+      if (shT) {
+        if (decl.mostradas) shT.getRange(decl.mostradas.row, 6).setValue(val);
+        else shT.appendRow([_rbAhoraTxt_(), semKey, ctx.nombre, 'mostradas', semKey, val, '']);
+        try { _hojaBaseMarcar_('Tareas Red', 'mostradas'); } catch (eHb) {}
+      }
+    }
+  } catch (eM) { try { _logError_('tareas red (mostradas): ' + eM); } catch (_e) {} }
+
+  return { modo: modo, semana: semKey, lista: T, resultados: RT_RESULTADOS_ };
+}
+
+var RO_HOJA_ = 'Objetivos Red';
+
+var RO_CAB_ = ['Semana', 'Vendedor', 'Objetivo', 'Acciones', 'Actualizado', 'Aplausos', 'Cumplió'];
+
+var RO_RESULTADOS_ = ['Compró', 'No contesta', 'No quiere', 'Reprogramó', 'Hecho'];
+
+var RO_MAX_SUGERIDAS_ = 4;   // por tipo
+
+function _roHoja_(crear) {
+  var sh = SS.getSheetByName(RO_HOJA_);
+  if (sh || !crear) return sh;
+  sh = SS.insertSheet(RO_HOJA_);
+  if (!sh) return null;
+  sh.getRange(1, 1, 1, RO_CAB_.length).setValues([RO_CAB_]).setFontWeight('bold');
+  /* Texto: la semana '2026-W41' y el JSON no se tienen que convertir en nada. */
+  sh.getRange(2, 1, Math.max(1, sh.getMaxRows() - 1), RO_CAB_.length).setNumberFormat('@');
+  return sh;
+}
+
+function _roNoQuiere_(nombre, hoy) {
+  var out = {};
+  var sh = _roHoja_(false);
+  if (!sh || sh.getLastRow() <= 1) return out;
+  var d = sh.getRange(2, 1, sh.getLastRow() - 1, 4).getValues();
+  for (var i = 0; i < d.length; i++) {
+    if (String(d[i][1]).trim() !== nombre) continue;
+    var acc = [];
+    try { acc = JSON.parse(String(d[i][3] || '[]')) || []; } catch (eJ) { acc = []; }
+    if (!Array.isArray(acc)) continue;
+    acc.forEach(function (a) {
+      if (!a || a.res !== 'No quiere' || !a.clave) return;
+      var iso = _rtIso_(a.fr) || _roLunesDeSemana_(String(d[i][0]).trim());
+      var dias = _rtDiasEntre_(iso, hoy);
+      if (!(dias > 90)) out[a.clave] = 1;
+    });
+  }
+  return out;
+}
+
+function _roLunesDeSemana_(semKey) {
+  var m = /^(\d{4})-W(\d{1,2})$/.exec(semKey);
+  if (!m) return '';
+  var y = Number(m[1]), w = Number(m[2]);
+  var e = new Date(y, 0, 4);                      // el 4 de enero siempre cae en la semana 1
+  var lun = new Date(e); lun.setDate(e.getDate() - ((e.getDay() + 6) % 7) + (w - 1) * 7);
+  return Utilities.formatDate(lun, RB_TZ_, 'yyyy-MM-dd');
+}
+
+function _roJson_(cel) {
+  try { var x = JSON.parse(String(cel || '[]')); return Array.isArray(x) ? x : []; } catch (e) { return []; }
+}
+
+function _roLeerTodo_() {
+  var out = {};
+  var sh = _roHoja_(false);
+  if (!sh || sh.getLastRow() <= 1) return out;
+  var d = sh.getRange(2, 1, sh.getLastRow() - 1, RO_CAB_.length).getValues();
+  for (var i = 0; i < d.length; i++) {
+    var k = String(d[i][0]).trim(), v = String(d[i][1]).trim();
+    if (!k || !v) continue;
+    var meta = Number(d[i][2]);
+    (out[k] = out[k] || {})[v] = { row: i + 2, meta: meta > 0 ? Math.round(meta) : null,
+      acciones: _roJson_(d[i][3]), aplausos: _roJson_(d[i][5]), cumplio: String(d[i][6] || '').trim() };
+  }
+  return out;
+}
+
+function _roIso_(cel) {
+  if (cel instanceof Date) return Utilities.formatDate(cel, RB_TZ_, 'yyyy-MM-dd');
+  var m = String(cel == null ? '' : cel).trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  return m ? m[3] + '-' + ('0' + m[2]).slice(-2) + '-' + ('0' + m[1]).slice(-2) : '';
+}
+
+function _roSemanaRango_(hoy) {
+  var l = new Date(hoy.getFullYear(), hoy.getMonth(), hoy.getDate());
+  l.setDate(l.getDate() - ((l.getDay() + 6) % 7));
+  var d = new Date(l); d.setDate(d.getDate() + 6);
+  var f = function (x) { return Utilities.formatDate(x, RB_TZ_, 'yyyy-MM-dd'); };
+  return { lun: f(l), dom: f(d) };
+}
+
+function _roVentasSemana_(data, cols, rango) {
+  return _roVentasEntre_(data, cols, rango.lun, rango.dom);
+}
+
+function _roVentasEntre_(data, cols, desde, hasta) {
+  var out = {}, vistos = {};
+  if (!data) return out;
+  for (var r = 0; r < data.length; r++) {
+    var v = String(data[r][7] || '').trim();
+    if (!v) continue;
+    if (cols.estRed) {
+      var er = String(data[r][cols.estRed - 1] || '').trim();
+      if (er === 'Por confirmar' || er === 'Anulado') continue;
+    }
+    var es = String(data[r][11] || '').trim();
+    if (es === 'Cancelado') continue;
+    var c = String(data[r][8] || '').trim();
+    if (!c || c.toLowerCase() === v.toLowerCase()) continue;   // su compra de mercaderia
+    var fe = _roIso_(data[r][10]);
+    if (!fe || fe < desde || fe > hasta) continue;
+    var deMaleu = !_escalaRedCuentaNivel_(data[r], cols.trajo);
+    var k = v + '|' + c.toLowerCase() + '|' + fe;               // mismo cliente, mismo dia = una venta
+    if (!out[v]) out[v] = { lleva: 0, pasadas: 0, ventas: [] };
+    if (vistos[k]) {
+      /* Si alguna de las partes es de Maleu, la venta entera es de Maleu. */
+      if (deMaleu && !vistos[k].m) { vistos[k].m = true; out[v].lleva--; out[v].pasadas++; }
+      continue;
+    }
+    vistos[k] = { c: c, fe: fe, es: es, m: deMaleu };
+    out[v].ventas.push(vistos[k]);
+    if (deMaleu) out[v].pasadas++; else out[v].lleva++;
+  }
+  return out;
+}
+
+function _roLunesDe_(iso) {
+  var p = String(iso).split('-');
+  var d = new Date(Number(p[0]), Number(p[1]) - 1, Number(p[2]));
+  d.setDate(d.getDate() - ((d.getDay() + 6) % 7));
+  return Utilities.formatDate(d, RB_TZ_, 'yyyy-MM-dd');
+}
+
+function _roVentasPorSemana_(data, cols) {
+  var todas = _roVentasEntre_(data, cols, '0000-00-00', '9999-99-99'), out = {};
+  Object.keys(todas).forEach(function (v) {
+    var m = out[v] = {};
+    todas[v].ventas.forEach(function (x) { if (!x.m) { var l = _roLunesDe_(x.fe); m[l] = (m[l] || 0) + 1; } });
+  });
+  return out;
+}
+
+function _roHistoria_(nombre, porSemana, todo, hoy, metaHoy, llevaHoy) {
+  var mias = porSemana[nombre] || {};
+  var l0 = new Date(hoy.getFullYear(), hoy.getMonth(), hoy.getDate());
+  l0.setDate(l0.getDate() - ((l0.getDay() + 6) % 7));
+  var semana = function (i) {
+    var d = new Date(l0); d.setDate(d.getDate() - 7 * i);
+    var f = (todo[_rtSemanaKey_(d)] || {})[nombre];
+    return { lun: Utilities.formatDate(d, RB_TZ_, 'yyyy-MM-dd'), meta: f ? f.meta : null, f: f };
+  };
+  var hist = [], cumplidas = 0, conMeta = 0;
+  for (var i = 8; i >= 1; i--) {
+    var s = semana(i);
+    var n = mias[s.lun] || 0;
+    hist.push({ lun: s.lun, meta: s.meta, lleva: n });
+    if (s.meta) { conMeta++; if (n >= s.meta) cumplidas++; }
+  }
+  var racha = 0;
+  for (var j = 1; j <= 52; j++) {
+    var w = semana(j);
+    if (!w.meta || (mias[w.lun] || 0) < w.meta) break;
+    racha++;
+  }
+  if (metaHoy && llevaHoy >= metaHoy) racha++;
+  var record = 0;
+  Object.keys(mias).forEach(function (k) { if (mias[k] > record) record = mias[k]; });
+  /* El último aplauso: el de esta semana, o el de la pasada si no hay. */
+  var ap = null;
+  for (var a = 0; a <= 1 && !ap; a++) {
+    var fa = a === 0 ? ((todo[_rtSemanaKey_(hoy)] || {})[nombre]) : semana(1).f;
+    var L = (fa && fa.aplausos) || [];
+    if (L.length) ap = { por: L[L.length - 1].por || '', txt: L[L.length - 1].txt || '', f: L[L.length - 1].f || '', pasada: a === 1 };
+  }
+  return { hist: hist, racha: racha, record: record, cumplidas: cumplidas, conMeta: conMeta, aplauso: ap };
+}
+
+function _roGananciaPorVenta_(pedidos) {
+  var porSem = {}, porVenta = {};
+  (pedidos || []).forEach(function (p) {
+    if (p.es === 'Cancelado' || p.cn === false || !p.fe) return;
+    var k = p.c.toLowerCase() + '|' + p.fe;
+    porVenta[k] = (porVenta[k] || 0) + (Number(p.com) || 0) + (Number(p.env) || 0);
+    var sk = p._y + '-' + ('0' + p._sem).slice(-2);
+    if (!porSem[sk]) porSem[sk] = {};
+    porSem[sk][k] = 1;
+  });
+  var sems = Object.keys(porSem).sort().slice(-8);
+  var n = 0, tot = 0;
+  sems.forEach(function (s) { Object.keys(porSem[s]).forEach(function (k) { n++; tot += porVenta[k] || 0; }); });
+  return n ? Math.round(tot / n) : null;
+}
+
+function _roSugeridas_(clientesMap, hoy, elegidas, noQuiere) {
+  var dorm = [], seg = [], rep = [];
+  Object.keys(clientesMap || {}).forEach(function (k) {
+    var c = clientesMap[k];
+    if (!c || !c.ultIso || noQuiere[c.n] || elegidas[c.n]) return;
+    var dUlt = _rtDiasEntre_(c.ultIso, hoy);
+    if (!isFinite(dUlt)) return;
+    var det = c.b ? c.b + ' · ' : '';
+    if (c.count >= 2 && c.primIso) {
+      var inter = (_rtDiasEntre_(c.primIso, hoy) - dUlt) / (c.count - 1);
+      if (!(inter >= 7)) inter = 7;
+      inter = Math.round(inter);
+      if (dUlt > inter * 1.5 && dUlt <= 180) dorm.push({ tipo: 'dormido', clave: c.n, t: c.t || '', txt: 'Llamar a ' + c.n, det: det + 'hace ' + dUlt + ' días (te compraba cada ~' + inter + ')', _o: -(c.total || 0) });
+      else if (dUlt >= inter && dUlt <= inter * 1.5) rep.push({ tipo: 'reponer', clave: c.n, t: c.t || '', txt: 'Ofrecerle reponer a ' + c.n, det: det + 'te compra cada ~' + inter + ' días, la última hace ' + dUlt, _o: -dUlt });
+    } else if (c.count === 1 && dUlt >= 7 && dUlt < 60) {
+      seg.push({ tipo: 'segunda', clave: c.n, t: c.t || '', txt: 'Volver a ' + c.n, det: det + 'compró una sola vez, hace ' + dUlt + ' días', _o: -dUlt });
+    }
+  });
+  var corta = function (L) {
+    L.sort(function (a, b) { return a._o - b._o; });
+    return L.slice(0, RO_MAX_SUGERIDAS_).map(function (x) { delete x._o; return x; });
+  };
+  return corta(rep).concat(corta(seg), corta(dorm));
+}
+
+function _roObjetivoPortal_(ctx) {
+  var hoy = ctx.hoy;
+  var semKey = _rtSemanaKey_(hoy);
+  var rango = _roSemanaRango_(hoy);
+  var todo = _roLeerTodo_();
+  var filas = todo[semKey] || {};
+  var ventas = _roVentasSemana_(ctx.data, ctx.cols, rango);
+  var mia = filas[ctx.nombre] || { meta: null, acciones: [] };
+  var yo = ventas[ctx.nombre] || { lleva: 0, pasadas: 0, ventas: [] };
+  var elegidas = {};
+  mia.acciones.forEach(function (a) { if (a && a.clave) elegidas[a.clave] = 1; });
+  var noQuiere = {};
+  try { noQuiere = _rtDeclarado_(ctx.nombre, semKey, hoy).noQuiere || {}; } catch (eD) { noQuiere = {}; }
+  /* El equipo: la suma de los que se pusieron objetivo, sin nombres. */
+  var eq = { meta: 0, lleva: 0, conMeta: 0 };
+  Object.keys(filas).forEach(function (v) {
+    if (!filas[v].meta) return;
+    eq.conMeta++; eq.meta += filas[v].meta; eq.lleva += (ventas[v] ? ventas[v].lleva : 0);
+  });
+  var porVenta = _roGananciaPorVenta_(ctx.pedidos);
+  var his = _roHistoria_(ctx.nombre, _roVentasPorSemana_(ctx.data, ctx.cols), todo, hoy, mia.meta, yo.lleva);
+  /* Efectos de abrir el portal (Marcador, 5/10/2026). Ninguno rompe el portal.
+     Con `_SIN_EFECTOS_` (el medidor de lecturas, 27/10/2026) no corre ninguno. */
+  if (!_SIN_EFECTOS_) try {
+    var props = PropertiesService.getScriptProperties();
+    /* Lo que gana por venta, para los Telegram del lunes y del viernes, que no
+       arman el portal entero. Se escribe solo si cambió. */
+    /* (239, 28/10/2026) Lo que cambia se escribe TAMBIEN en `seller_portal_state`, de donde lo lee
+       `red_objetivos_props_pantalla`. Solo las columnas que cambiaron (el upsert no pisa la otra). */
+    var _sps = {};
+    if (porVenta && props.getProperty('ro_pv_' + ctx.nombre) !== String(porVenta)) { props.setProperty('ro_pv_' + ctx.nombre, String(porVenta)); _sps.per_sale = String(porVenta); }
+    /* Cuándo lo abrió él (no el admin en «Ver como»): lo ven Tadeo y Lucas. */
+    if (ctx.esSuyo) {
+      var cc = CacheService.getScriptCache();
+      if (!cc.get('ro_abrio_' + ctx.nombre)) { var _abrio = _rbAhoraTxt_(); props.setProperty('ro_abrio_' + ctx.nombre, _abrio); cc.put('ro_abrio_' + ctx.nombre, '1', 1800); _sps.opened_at = _abrio; }
+    }
+    if (_sps.per_sale || _sps.opened_at) try {
+      var _cfgSps = _crmPgConfig_();
+      if (_cfgSps.enabled) { _sps.seller_name = ctx.nombre; _sps.updated_at = new Date().toISOString();
+        _crmPgFetch_(_cfgSps, 'post', 'seller_portal_state?on_conflict=seller_name', [_sps]); }
+    } catch (eSps) { try { _logError_('seller_portal_state: ' + eSps); } catch (_e) {} }
+  } catch (eP) {}
+  if (!_SIN_EFECTOS_) try { _roAvisarCumplio_(ctx.nombre, semKey, filas[ctx.nombre], yo.lleva); } catch (eC) {}
+  return {
+    sem: semKey, lun: rango.lun, dom: rango.dom,
+    meta: mia.meta, lleva: yo.lleva, pasadas: yo.pasadas,
+    ventas: yo.ventas.slice(0, 40),
+    acciones: mia.acciones,
+    sugeridas: _roSugeridas_(ctx.clientesMap, hoy, elegidas, noQuiere),
+    porVenta: porVenta,
+    siLlega: (mia.meta && porVenta) ? porVenta * mia.meta : null,
+    equipo: eq,
+    foco: _roFoco_(filas),
+    resultados: RO_RESULTADOS_,
+    hist: his.hist, racha: his.racha, record: his.record,
+    cumplidas: his.cumplidas, conMeta: his.conMeta, aplauso: his.aplauso
+  };
+}
+
+var RO_TODOS_ = '*';
+
+function _roFoco_(filas) {
+  var f = filas && filas[RO_TODOS_];
+  var a = f && f.acciones && f.acciones[0];
+  return (a && a.txt) ? { txt: String(a.txt), por: String(a.por || '') } : null;
+}
+
+function _uniValida_(v) {
+  var s = String(v || '').trim().toLowerCase();
+  return (s === 'kg' || s === 'u') ? s : 'u';
+}
+
+var _SECO_ = false;
 
 function _isoWeek(date) {
   const d      = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
@@ -903,6 +1840,16 @@ var manana = new Date();
 
 var mm = String(manana.getMonth()+1).padStart(2,'0');
 
+function _numCelda_(v) {
+  if (typeof v === 'number') return isFinite(v) ? v : 0;
+  var t = String(v == null ? '' : v).replace(/\$/g, '').replace(/\s/g, '');
+  if (!t) return 0;
+  if (t.indexOf(',') >= 0) t = t.replace(/\./g, '').replace(',', '.');
+  else if (/^-?\d{1,3}(\.\d{3})+$/.test(t)) t = t.replace(/\./g, '');
+  var n = parseFloat(t);
+  return isFinite(n) ? n : 0;
+}
+
 var _COLMAPS_ = {};
 
 function _prodsDeFila_(hoja, fila, redondear) {
@@ -915,6 +1862,68 @@ function _prodsDeFila_(hoja, fila, redondear) {
     q = q || 0;
     if (q > 0) out.push({ a: mapa[orden[i]], q: redondear ? Math.round(q * 1000) / 1000 : q });
   }
+  return out;
+}
+
+function _cfgFilasConfig_() {
+  var c = null, j = null;
+  try { c = CacheService.getScriptCache(); j = JSON.parse(c.get('cfg_filas') || 'null'); } catch (e) { j = null; }
+  if (!j || !j.f) {
+    var sh = SS.getSheetByName('Config_Maleu'), f = [];
+    if (sh && sh.getLastRow() > 1) f = sh.getRange(1, 1, sh.getLastRow(), 2).getValues();
+    j = { t: Date.now(), f: f };
+    try { if (c && f.length) c.put('cfg_filas', JSON.stringify(j), 300); } catch (e2) {}
+  }
+  return j.f;
+}
+
+var _CFG_MEMO_ = null;
+
+function _cfgTexto_(clave, porDefecto) {
+  try {
+    var ck = 'cfgtx_' + clave;
+    if (_CFG_MEMO_ && _CFG_MEMO_[ck] != null) return _CFG_MEMO_[ck];
+    var c = CacheService.getScriptCache(), v = c.get(ck);
+    if (v != null) { if (_CFG_MEMO_) _CFG_MEMO_[ck] = v; return v; }
+    v = porDefecto;
+    var cfgF = _cfgFilasConfig_();
+    if (cfgF.length > 1) {
+      var rows = cfgF;
+      for (var i = 0; i < rows.length; i++) {
+        if (String(rows[i][0]).trim().toUpperCase() === clave) { v = String(rows[i][1]).trim().toLowerCase() || porDefecto; break; }
+      }
+    }
+    c.put(ck, v, 300);
+    if (_CFG_MEMO_ && v != null) _CFG_MEMO_[ck] = v;
+    return v;
+  } catch (e) { return porDefecto; }
+}
+
+var _SIN_EFECTOS_ = false;
+
+function _fechaCorta_(v) {
+  if (v instanceof Date) return Utilities.formatDate(v, 'America/Argentina/Buenos_Aires', 'dd/MM/yyyy');
+  return String(v || '').trim().split(' ')[0];
+}
+
+function _catPorAbbr_() {
+  try {
+    var raw = CacheService.getScriptCache().get('prodcat_abbr_v1');
+    if (raw) return JSON.parse(raw);
+  } catch (e) {}
+  var out = {};
+  try {
+    var hp = SS.getSheetByName('Proveedores');
+    if (!hp || hp.getLastRow() < 2) return out;
+    var d = hp.getDataRange().getValues();
+    var lastProd = '';
+    for (var r = 1; r < d.length; r++) {
+      if (d[r][1] && String(d[r][1]).trim()) lastProd = String(d[r][1]).trim();
+      var ab = String(d[r][4] || '').trim();
+      if (ab && lastProd && !out[ab]) out[ab] = lastProd;
+    }
+    try { CacheService.getScriptCache().put('prodcat_abbr_v1', JSON.stringify(out), 300); } catch (e2) {}
+  } catch (e3) { return {}; }
   return out;
 }
 
@@ -943,8 +1952,43 @@ function _dvCargar_(d) {
   H.Red = new _Hoja('Red', filas);
   H['Pagos Red Liq'] = new _Hoja('Pagos Red Liq', [['Timestamp', 'Fecha', 'Vendedor', 'Año', 'Semana', 'Efectivo', 'Transferencia']].concat(
     (d.liqs || []).map(function (x) { return ['', x[0], d.nombre, x[1], x[2], x[3], x[4]]; })));
+  /* (242) Las hojas de `ef`, en el orden en que las leen las reglas (por posicion o por nombre). */
+  var ef = d.ef || {};
+  var conCab = function (cab, filas2) {
+    var out = [cab.slice()];
+    (filas2 || []).forEach(function (x) { var f = cab.map(function (k) { return _dvTexto_(x.d ? x.d[k] : ''); }); while (out.length < x.row - 1) out.push([]); out[x.row - 1] = f; });
+    for (var i = 0; i < out.length; i++) if (!out[i]) out[i] = [];
+    return out;
+  };
+  H['Tareas Red'] = new _Hoja('Tareas Red', conCab(RT_CAB_, ef.tareas));
+  H['Objetivos Red'] = new _Hoja('Objetivos Red', conCab(RO_CAB_, ef.obj));
+  H['Liquidaciones Red'] = new _Hoja('Liquidaciones Red', conCab(_DV_LIQ_CAB_, ef.liqr));
+  H.Vendedores = new _Hoja('Vendedores', conCab(_DV_VEND_CAB_, ef.vend ? [ef.vend] : []));
+  H.Proveedores = new _Hoja('Proveedores', conCab(['N° de Productos', 'Producto', 'Proveedor', 'Gustos', 'Abreviatura'], ef.prov));
+  H.Config_Maleu = new _Hoja('Config_Maleu', conCab(['Parámetro', 'Valor', 'Activo desde', 'Notas'], ef.cfg));
+  /* Productos: las columnas que se leen por posicion (B nombre, C abreviatura, I precio, Q unidad) y por nombre
+     (Abreviatura, Precio, Unidad y las tres «Com Red», Y:AA). La J (Costo) NO: no viaja al telefono. */
+  var cabP = []; for (var i = 0; i < 27; i++) cabP.push('');
+  cabP[0] = 'N°'; cabP[1] = 'Producto'; cabP[2] = 'Abreviatura'; cabP[8] = 'Precio'; cabP[16] = 'Unidad';
+  cabP[24] = 'Com Red Inicial'; cabP[25] = 'Com Red Intermedio'; cabP[26] = 'Com Red Top';
+  var vv = function (x) { return x == null ? '' : x; };
+  H.Productos = new _Hoja('Productos', [cabP].concat(((ef.esc || {}).prod || []).map(function (x, k) {
+    var f = []; for (var j = 0; j < 27; j++) f.push('');
+    f[0] = k + 1; f[1] = x.n; f[2] = x.a; f[8] = vv(x.precio); f[16] = x.u; f[24] = vv(x.ri); f[25] = vv(x.rm); f[26] = vv(x.rt);
+    return f;
+  })));
   _HOJAS = H;
   _COLMAPS_ = {}; _LIQ_RED_IDX_ = null; _COLSRED_ = null;
+}
+var _DV_LIQ_CAB_ = ['ID', 'Registrado', 'Fecha Pago', 'Vendedor', 'Quincena', 'Desde', 'Hasta', 'Comisión', 'Envíos', 'Total',
+  'Cuenta', 'Pagó', 'Pedidos', '# Pedidos', 'Estado', 'Anulada el', 'Anulada por', 'Detalle'];
+var _DV_VEND_CAB_ = ['Nombre', 'WhatsApp', 'Alias MP', 'Barrios (separados por coma)', 'Partido', 'Localidad', 'Estado',
+  'Usuario', 'PIN', 'Comisión %', 'Notas', 'Días', 'Telegram'];
+/* Una celda de una hoja chica como la da `getValues`: la copia guarda las fechas como «aaaa-mm-dd hh:mm:ss». */
+function _dvTexto_(v) {
+  var m = /^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2})(?::(\d{2}))?)?$/.exec(v == null ? '' : String(v));
+  if (m) { var d = new Date(+m[1], +m[2] - 1, +m[3], +(m[4] || 0), +(m[5] || 0), +(m[6] || 0)); d.toString = _dvFechaTxt_; return d; }
+  return v == null ? '' : v;
 }
 /* Lo que la base ya da resuelto: el mapa de columnas de productos, las piezas de SUS pedidos, su
    comision, las cuentas y la palanca de la liquidacion. */
@@ -953,15 +1997,30 @@ function _piezasLeer_() { return (_DV.piezas || []).map(function (x) { return { 
 function _comisionPct(nombre) { var pct = Number(_DV.comPct); return (pct > 0 && pct < 100) ? pct : 17; }
 function _cuentas_() { return (_DV.cuentas || []).map(function (c) { return { id: c.id, nombre: c.nombre, tipo: c.tipo, col: c.col, alias: c.alias || '', banco: c.banco || '' }; }); }
 function _liqRedActiva_() { return !!_DV.liq; }
-/* Lo que trae `dashboardVendedorEfectos` (Apps Script): aca, vacio. */
-function _rtTareas_() { return null; }
-function _roObjetivoPortal_() { return null; }
-function _escalaPortal_() { return null; }
-function _roVendedorDeSesion_() { return ''; }
-function _rbVendedores_() { return { lista: [], sh: null, colDias: 0, colTg: 0 }; }
-function _rbVendedorPorNombre_() { return null; }
-function _liqRedDeVendedor_() { return []; }
-function _liqRedProxDeVendedor_() { return null; }
+/* (242) Tareas, objetivo, escala, liquidaciones y Telegram los arma el motor con `ef` (242): solo lo del
+   vendedor, la escala sin costo y el equipo como total. Lo que HACE abrir el portal (anotar las tareas mostradas,
+   las props, el Telegram de «cumpliste», vigilar la escala) no corre aca: `_SIN_EFECTOS_` y estos vacios. */
+function _roVendedorDeSesion_() { return (_DV && _DV.ef && _DV.ef.esSuyo) ? String(_DV.nombre || '') : ''; }
+/* El link sale del PIN, que no viaja: es el `_tg_link` que la replica deriva con la MISMA `_rbTgLink_`. */
+function _rbTgLink_() { return String((_DV && _DV.ef && _DV.ef.vend && _DV.ef.vend.d && _DV.ef.vend.d._tg_link) || ''); }
+function _roAvisarCumplio_() {}
+function _escalaRedVigilar_() {}
+function _alertaTecnica_() { return ''; }
+function _avisar_() { return ''; }
+function _avisarCanal_() { return ''; }
+function _avisarFallo_() { return ''; }
+function _mlAvisar_() { return ''; }
+function _hojaBaseMarcar_() {}
+function _uf_() { throw new Error('el motor no sale a internet'); }
+/* Las consultas de la escala a la base: las contesta `ef.esc` (de la vista, solo sku, nivel y monto). */
+function _crmPgConfig_() { return { enabled: true, url: 'base', key: 'base' }; }
+function _crmPgFetch_(cfg, method, path) {
+  var t = String(path || '').split('?')[0], e = (_DV && _DV.ef && _DV.ef.esc) || {};
+  if (t === 'seller_level_band') return e.bandas || [];
+  if (t === 'seller_commission_rate') return e.tabla || [];
+  if (t === 'seller_commission_rate_calc') return e.vista || [];
+  return [];
+}
 function _logError_() {}
 
 /* datos: lo que devuelve dashboard_vendedor_pantalla. opts.ahora: fijar el reloj (la prueba).
@@ -972,9 +2031,13 @@ G.DV_MOTOR = {
     _ahora = opts.ahora != null ? Number(opts.ahora) : null;
     try {
       _dvCargar_(datos || {});
-      _authCtx = null;
+      _authCtx = null; _SIN_EFECTOS_ = true; _SECO_ = true; _CFG_MEMO_ = null; _PROD_VALORES_ = null;
       var o = JSON.parse(_doGetDashboardVendedor({ parameter: { nombre: datos.nombre } }).getContent());
-      o.base = true;
+      /* (242) El equipo es un TOTAL de la base: el motor solo tiene las filas de este vendedor. */
+      if (o.objetivo && datos.ef && datos.ef.eq) o.objetivo.equipo = datos.ef.eq;
+      /* `base: 'ef'` = tareas/objetivo/escala/liquidaciones/Telegram salieron del motor (con la 242): el portal
+         ya no los pide a Apps Script, solo larga los efectos. Sin `ef` (base sin la 242), como antes. */
+      o.base = (datos && datos.ef) ? 'ef' : true;
       return o;
     } finally { _ahora = null; _HOJAS = {}; _DV = null; }
   }

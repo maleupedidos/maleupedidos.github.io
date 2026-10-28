@@ -66,7 +66,10 @@ function cierre(code, raiz, fuera) {
   const L = code.split(/\r?\n/), defs = Object.create(null);
   for (let i = 0; i < L.length; i++) {
     let m = /^function ([\w$]+)\(/.exec(L[i]);
-    if (m) { let j = i; while (L[j] !== '}') j++; if (!defs[m[1]]) defs[m[1]] = [i, j]; continue; }
+    /* (242) Si una funcion esta definida dos veces, en Apps Script vale la ULTIMA (como en todo JS): se copia esa.
+       `_catPorAbbr_` esta dos veces y son distintas (la de la linea 60245 se queda con la PRIMERA categoria de
+       cada abreviatura; la de la 27427, con la ultima): hasta hoy el motor copiaba la que Apps Script no usa. */
+    if (m) { let j = i; while (L[j] !== '}') j++; defs[m[1]] = [i, j]; continue; }
     m = /^var ([\w$]+)\s*=/.exec(L[i]);
     if (m && !defs[m[1]]) {
       let j = i, prof = 0;
@@ -97,15 +100,16 @@ const MOTORES = [
   { salida: 'ro_motor.js', armar: () => envolver(
       cierre(fs.readFileSync(CODE, 'utf8'), '_doGetRedObjetivosEquipo', new Set(['_logError_'])),
       fs.readFileSync(path.join(RAIZ, '_src', 'ro_motor_shim.js'), 'utf8'), 'El motor de Mi Portal › Objetivos del equipo (190)') },
-  /* (191) El portal del vendedor (`dashboardVendedor`): los numeros. Lo que hace efectos o sale de
-     ellos (tareas, objetivo, Telegram, escala, liquidaciones) lo reemplaza el shim y lo trae
-     `dashboardVendedorEfectos`; lo que la base da resuelto (mapa de productos, piezas, comision,
-     cuentas, la palanca de la liquidacion), tambien. */
+  /* (191) El portal del vendedor (`dashboardVendedor`): los numeros y, desde la 242, tareas, objetivo,
+     escala y liquidaciones (con `ef`). Lo que hace efectos (Telegram, avisos, anotar en hojas) o necesita
+     el PIN (el link de Telegram) lo reemplaza el shim; lo que la base da resuelto (mapa de productos,
+     piezas, comision, cuentas, la palanca de la liquidacion), tambien. */
   { salida: 'dv_motor.js', armar: () => envolver(
-      cierre(fs.readFileSync(CODE, 'utf8'), '_doGetDashboardVendedor', new Set(['_logError_', '_rtTareas_', '_roObjetivoPortal_',
-        '_escalaPortal_', '_escalaProductosVendedor_', '_escalaRedLeer_', '_rbTgLink_', '_liqRedDeVendedor_', '_liqRedProxDeVendedor_',
-        '_roVendedorDeSesion_', '_rbVendedores_', '_rbVendedorPorNombre_', '_colsAbbr_', '_piezasLeer_', '_comisionPct', '_cuentas_',
-        '_liqRedActiva_'])),
+      cierre(fs.readFileSync(CODE, 'utf8'), '_doGetDashboardVendedor', new Set(['_logError_',
+        /* (242) tareas, objetivo, escala y liquidaciones se copian; lo que hace efectos o necesita el PIN, no */
+        '_rbTgLink_', '_roVendedorDeSesion_', '_roAvisarCumplio_', '_escalaRedVigilar_', '_alertaTecnica_', '_avisar_', '_avisarCanal_',
+        '_avisarFallo_', '_mlAvisar_', '_hojaBaseMarcar_', '_uf_', '_crmPgConfig_', '_crmPgFetch_',
+        '_colsAbbr_', '_piezasLeer_', '_comisionPct', '_cuentas_', '_liqRedActiva_'])),
       fs.readFileSync(path.join(RAIZ, '_src', 'dv_motor_shim.js'), 'utf8'), 'El motor del portal del vendedor (191)') },
   /* (200) Abastecimiento (`busqueda`). Lo que sale afuera (avisos, el contador de urlfetch, la
      config de la base) lo reemplaza el shim; los pagos los contesta `datos.pagos`. */
