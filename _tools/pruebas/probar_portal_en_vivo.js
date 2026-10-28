@@ -22,6 +22,9 @@ async function esperar(cli, expr, ms) { const t0 = Date.now(); while (Date.now()
   cli.escuchar((metodo, p) => { if (metodo === 'Page.javascriptDialogOpening') { console.log('  DIALOGO: ' + String(p && p.message).slice(0, 200)); cli.enviar('Page.handleJavaScriptDialog', { accept: true }).catch(() => {}); } });
   await cli.enviar('Page.navigate', { url: URL });
   chk('el ERP arranca', await esperar(cli, `typeof go==='function' && typeof _enVivoEscuchar==='function'`, 60000), '');
+  /* (28/10) sesion_prep no trae SESSION.tabs: cuando llega miSesion (~30 s) el ERP ve las tabs «cambiadas», vuelve a
+     aplicar los roles y salta a la primera tab. Con un login de verdad no pasa. Se espera a que llegue, ANTES de ir. */
+  await esperar(cli, `typeof SESSION!=='undefined' && SESSION && Array.isArray(SESSION.tabs) && SESSION.tabs.length>0`, 90000);
   await evaluar(cli, `go('miportal'); 1`);
   chk('Mi Portal arranca (Ver como disponible)', await esperar(cli, `typeof redVerComoEntrar==='function' && typeof redVivoPrender==='function'`, 60000), '');
   /* La palanca: con PORTAL_EN_VIVO en si se prende sola; si no (local, sin el backend nuevo), a mano. */
