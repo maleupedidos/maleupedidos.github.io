@@ -468,22 +468,6 @@ function _uniValida_(v) {
 
 var _SECO_ = false;
 
-function _catPorAbbr_() {
-  var ck = CacheService.getScriptCache(), k = 'cat_por_abbr_v1';
-  try { var g = ck.get(k); if (g) return JSON.parse(g); } catch (e0) {}
-  var out = {}, sh = SS.getSheetByName('Proveedores');
-  if (sh && sh.getLastRow() > 1) {
-    var d = sh.getRange(1, 1, sh.getLastRow(), 5).getValues(), ultimo = '';
-    for (var i = 1; i < d.length; i++) {
-      var pb = String(d[i][1] || '').trim(); if (pb) ultimo = pb;
-      var ab = String(d[i][4] || '').trim();
-      if (ab && ultimo) out[ab] = ultimo;
-    }
-  }
-  try { ck.put(k, JSON.stringify(out), 600); } catch (e1) {}
-  return out;
-}
-
 function _parteMoney_(n) {
   var x = Math.round(Number(n) || 0);
   return '$' + String(x).replace(/\B(?=(\d{3})+(?!\d))/g, '.');
@@ -531,6 +515,27 @@ function _cfgTexto_(clave, porDefecto) {
     if (_CFG_MEMO_ && v != null) _CFG_MEMO_[ck] = v;
     return v;
   } catch (e) { return porDefecto; }
+}
+
+function _catPorAbbr_() {
+  try {
+    var raw = CacheService.getScriptCache().get('prodcat_abbr_v1');
+    if (raw) return JSON.parse(raw);
+  } catch (e) {}
+  var out = {};
+  try {
+    var hp = SS.getSheetByName('Proveedores');
+    if (!hp || hp.getLastRow() < 2) return out;
+    var d = hp.getDataRange().getValues();
+    var lastProd = '';
+    for (var r = 1; r < d.length; r++) {
+      if (d[r][1] && String(d[r][1]).trim()) lastProd = String(d[r][1]).trim();
+      var ab = String(d[r][4] || '').trim();
+      if (ab && lastProd && !out[ab]) out[ab] = lastProd;
+    }
+    try { CacheService.getScriptCache().put('prodcat_abbr_v1', JSON.stringify(out), 300); } catch (e2) {}
+  } catch (e3) { return {}; }
+  return out;
 }
 
 
