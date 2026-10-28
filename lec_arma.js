@@ -138,7 +138,9 @@ var LEC_ARMA = {
   dashboardVendedor: { rpc: 'dashboard_vendedor_pantalla', listas: { pedidos: ['n'], clientes: ['n'] }, orden: true, motor: 'dv',
     ignorar: ['tareas', 'objetivo', 'tg', 'liqs', 'liqProx', 'stats.escala'] }
 };
-function _lecArmaComparar(accion,a,b){
+/* `num` (opcional, 27/10/2026): la regla para dos numeros, (x, y, ruta) -> iguales. La usa Maleu - Lectura para
+   los motores (la plata al centavo, los kilos estrictos). Sin `num`, como siempre: 5 por millon. */
+function _lecArmaComparar(accion,a,b,num){
   var cfg=LEC_ARMA[accion]||{}, listas=cfg.listas||{}, fuera={ts:1,base:1}, det={}, n=0;
   /* (208) `solo`: se comparan SOLO esas rutas (el resto de la Caja va por tandas: la respuesta del motor
      trae todo, pero solo lo de las tandas probadas vale). */
@@ -152,7 +154,7 @@ function _lecArmaComparar(accion,a,b){
   var cerca=function(x,y){ return Math.abs(x-y)<Math.max(1e-6,5e-6*Math.max(Math.abs(x),Math.abs(y))); };
   var comp=function(x,y,ruta,ej){
     if(vacio(x)&&vacio(y))return;
-    if(typeof x==='number'&&typeof y==='number'){ if(!cerca(x,y))anotar(ruta,ej); return; }
+    if(typeof x==='number'&&typeof y==='number'){ if(!(num?num(x,y,ruta):cerca(x,y)))anotar(ruta,ej); return; }
     if(Array.isArray(x)&&Array.isArray(y)){
       var cl=listas[ruta];
       if(cl){
