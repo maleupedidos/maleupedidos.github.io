@@ -25,7 +25,7 @@ const capa = `;(function(){var o=window.fetch;window.__envios=[];window.__base=[
     var d=r==='nodirecto'?{ok:false,directo:false,motivo:'datos'}:r==='freno'?{ok:false,necesitaPlata:true,sinReintento:true,cobrado:1500,err:'El pedido está cobrado'}
       :{ok:true,aceptada:true,directo:true,orden:1,diferida:r==='ok',repetida:r==='aplicada'};
     return Promise.resolve(new Response(JSON.stringify(d),{status:200,headers:{'Content-Type':'application/json'}}));}
-  if(/"action":"(marcarCobrado|marcarEntregado|pedidoGrupal|descobrar|updateDiaEntrega|pedidoDeposito|deshacerOrigen|deshacerEntrega|cambiarEstadoEntrega|cancelarPedido|updatePedidoRed)"/.test(b)){var q=JSON.parse(b);window.__envios.push({a:'apps',acc:q.action,id:q.clientOpId||'',ts:q.ts||0});}
+  if(/"action":"(marcarCobrado|marcarEntregado|pedidoGrupal|descobrar|updateDiaEntrega|pedidoDeposito|deshacerOrigen|deshacerEntrega|cambiarEstadoEntrega|cancelarPedido|updatePedidoRed|pasarAVendedor)"/.test(b)){var q=JSON.parse(b);window.__envios.push({a:'apps',acc:q.action,id:q.clientOpId||'',ts:q.ts||0});}
   if(b.indexOf('pedidosFuenteAplicar')>=0)window.__envios.push({a:'aplicar'});
   return o.apply(this,arguments);};})();
   window.__palForzar={};setInterval(function(){try{var p=window._sbPerm&&window._sbPerm.pal;if(!p)return;Object.keys(window.__palForzar).forEach(function(k){p[k]=window.__palForzar[k];});}catch(e){}},200);`;
@@ -39,7 +39,9 @@ const PANEL = {
   cambiarEstadoEntrega: ['pedido_estado_directo', { hoja: 'Home', id: '999258', row: 0, estado: 'Pendiente' }],
   /* Tanda 2 (266, 267). */
   cancelarPedido: ['pedido_cancelar_directo', { hoja: 'Home', id: '999258', row: 0 }],
-  updatePedidoRed: ['pedido_portal_directo', { pedidoId: '999258', row: 0, vendedor: 'Prueba', updates: { entrega: true } }] };
+  updatePedidoRed: ['pedido_portal_directo', { pedidoId: '999258', row: 0, vendedor: 'Prueba', updates: { entrega: true } }],
+  /* Tanda 3 (269). */
+  pasarAVendedor: ['pedido_pase_directo', { hoja: 'Home', id: '999258', row: 0, al: '28/10 10:00', vendedor: 'Prueba', trajo: 'Maleu', igual: true }] };
 (async () => {
   const cli = await cdp.abrir();
   await cli.enviar('Page.addScriptToEvaluateOnNewDocument', { source: prep(TOKEN, capa) });
