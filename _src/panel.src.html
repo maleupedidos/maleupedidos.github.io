@@ -10029,16 +10029,18 @@ function _mrhPopulateSelects(dias){
 }
 
 // ── Mi Reparto - Historial: carga el dataset completo. El filtrado es client-side.
-function loadMiRepartoHistorial(){
+function loadMiRepartoHistorial(opts){
+  opts=opts||{};
   var usuario=_mrGetUsuario();
   if(!usuario)return Promise.resolve(false);
   var listEl=document.getElementById('mrhList');
   var emEl=document.getElementById('mrhEmpty');
-  if(listEl)listEl.innerHTML='<div style="text-align:center;padding:20px;color:#888">Cargando...</div>';
-  if(emEl)emEl.style.display='none';
+  /* (28/10) `opts.d`: Mi Reparto en vivo ya trajo la respuesta de la base; se pinta sin el «Cargando...». */
+  if(!opts.d&&listEl)listEl.innerHTML='<div style="text-align:center;padding:20px;color:#888">Cargando...</div>';
+  if(!opts.d&&emEl)emEl.style.display='none';
   var url=API+'?action=miRepartoHistorial&usuario='+encodeURIComponent(usuario);
   /* (238) por LEC_ARMA: con `miRepartoHistorial=si` lo arma la base; con `medir`, Apps Script y se compara. */
-  return _lecJson('miRepartoHistorial',{p:{usuario:usuario}},url,function(){}).then(function(d){
+  return (opts.d?Promise.resolve(opts.d):_lecJson('miRepartoHistorial',{p:{usuario:usuario}},url,function(){})).then(function(d){
     if(!d||!d.ok){
       if(listEl)listEl.innerHTML='<div style="color:#d33;padding:14px">Error: '+((d&&d.err)||'desconocido')+'</div>';
       return false;
@@ -10398,9 +10400,58 @@ function _mrSetLoading(on){
   }
 }
 
+/* ══ MI REPARTO EN VIVO (28/10/2026) ══
+   Con `MIREPARTO_EN_VIVO` en «si» (`sb.pal.mirepartoEnVivo`): escucha `erp:pedidos` (121: una entrega, un
+   cobro o un vuelto cambian `sales_order`, de donde sale `mi_reparto_pantalla`, 204, y el historial, 238).
+   Junta 4 s, relee como mucho cada 20 s y SOLO de la base (`_lecArmaBase`), solo con Mi Reparto a la vista:
+   la sub-tab que esta abierta (Dia o Historial), con su lectura en «si». Escribiendo la fecha, queda
+   pendiente. Si la base no contesta, queda como estaba. `window.__mrVivo` dice que hizo. */
+var MR_VIVO_JUNTAR_MS = 4000, MR_VIVO_MIN_MS = 20000;
+var _mrVivo = { prendido: false, t: null, ult: 0, vuelo: false };
+function _mrVivoNota(o){ try { window.__mrVivo = Object.assign({ t: Date.now() }, o); } catch(e){} }
+function _mrVivoRecargar(){
+  _mrVivo.t = null;
+  if (document.visibilityState === 'hidden' || cur !== 'mireparto') { _mrVivoNota({ hizo: 'nada: Mi Reparto no esta a la vista' }); return; }
+  var ocupado = '';
+  try { if (typeof _hayEditorAbierto === 'function' && _hayEditorAbierto()) ocupado = 'editor abierto'; } catch(e){}
+  var a = document.activeElement;
+  if (!ocupado && a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName) && a.closest && a.closest('#p-mireparto')) ocupado = 'escribiendo';
+  if (ocupado || _mrVivo.vuelo) { _mrVivoNota({ hizo: 'pendiente: ' + (ocupado || 'ya hay una carga en vuelo') }); _mrVivo.t = setTimeout(_mrVivoRecargar, MR_VIVO_JUNTAR_MS * 2); return; }
+  var falta = MR_VIVO_MIN_MS - (Date.now() - _mrVivo.ult);
+  if (falta > 0) { _mrVivo.t = setTimeout(_mrVivoRecargar, falta); return; }
+  var ph = document.getElementById('mrPaneHist'), hist = !!(ph && ph.style.display === 'block');
+  var lec = hist ? 'miRepartoHistorial' : 'miReparto';
+  if (_lecModo(lec) !== 'si') { _mrVivoNota({ hizo: 'nada: ' + lec + ' no esta en si' }); return; }
+  var usuario = _mrGetUsuario(), fechaISO = hist ? null : dmyToIso((document.getElementById('mrFecha') || {}).value || '');
+  if (!usuario || (!hist && !fechaISO)) { _mrVivoNota({ hizo: 'nada: sin usuario o sin fecha' }); return; }
+  _mrVivo.ult = Date.now(); _mrVivo.vuelo = true;
+  _lecArmaBase(lec, { p: hist ? { usuario: usuario } : { usuario: usuario, fecha: fechaISO } }).then(function(r){
+    var d = r && r.d;
+    if (!d || !d.ok) throw new Error('la base no armo ' + lec);
+    return (hist ? loadMiRepartoHistorial({ d: d }) : loadMiReparto({ d: d, usuario: usuario, fecha: fechaISO })).then(function(ok){
+      _mrVivoNota({ hizo: ok ? (hist ? 'historial de la base' : 'reparto de la base') : 'nada: cambiaste de repartidor o de fecha', ms: r.ms });
+    });
+  }).catch(function(e){ _mrVivoNota({ hizo: 'la base no contesto, sin cambios: ' + ((e && e.message) || e) }); })
+    .then(function(){ _mrVivo.vuelo = false; });
+}
+function _mrVivoSenal(){ if (!_mrVivo.t) _mrVivo.t = setTimeout(_mrVivoRecargar, MR_VIVO_JUNTAR_MS); }
+function _mrVivoPrender(){
+  try {
+    if (_mrVivo.prendido || typeof _enVivoEscuchar !== 'function' || typeof _sbPermiso !== 'function') return;
+    _sbPermiso(true).then(function(sb){
+      if (_mrVivo.prendido || !sb || !sb.pal || !sb.pal.mirepartoEnVivo) return;
+      _mrVivo.prendido = true;
+      _enVivoEscuchar('erp:pedidos', _mrVivoSenal, _mrVivoSenal);
+    }, function(){});
+  } catch(e){}
+}
+try { window.addEventListener('maleu:palancas', function(){ _mrVivoPrender(); }); } catch(e){}
+setTimeout(_mrVivoPrender, 0);
+
 // ── Mi Reparto: trae entregas del día hechas por el usuario logueado.
 // Input fecha es dd/mm/aaaa (texto con máscara). Se convierte a ISO para el backend.
-function loadMiReparto(){
+function loadMiReparto(opts){
+  opts=opts||{};
   var raw=(document.getElementById('mrFecha')||{}).value||'';
   var fechaISO=dmyToIso(raw);
   if(!fechaISO){
@@ -10418,12 +10469,14 @@ function loadMiReparto(){
   }
   var listEl=document.getElementById('mrList');
   var emEl=document.getElementById('mrEmpty');
-  if(listEl)listEl.innerHTML='<div style="text-align:center;padding:20px;color:#888">Cargando...</div>';
-  if(emEl)emEl.style.display='none';
+  /* (28/10) `opts.d`: Mi Reparto en vivo ya trajo la respuesta de la base (del mismo usuario y fecha). */
+  if(opts.d&&(opts.usuario!==usuario||opts.fecha!==fechaISO))return Promise.resolve(false);
+  if(!opts.d&&listEl)listEl.innerHTML='<div style="text-align:center;padding:20px;color:#888">Cargando...</div>';
+  if(!opts.d&&emEl)emEl.style.display='none';
   _mrSetLoading(true);
   var url=API+'?action=miReparto&usuario='+encodeURIComponent(usuario)+'&fecha='+encodeURIComponent(fechaISO);
   /* (204) Con `LECTURAS_BASE_ARMA` miReparto=si, de la base + mr_motor.js. */
-  return _lecJson('miReparto',{p:{usuario:usuario,fecha:fechaISO}},url,function(){}).then(function(d){
+  return (opts.d?Promise.resolve(opts.d):_lecJson('miReparto',{p:{usuario:usuario,fecha:fechaISO}},url,function(){})).then(function(d){
     _mrSetLoading(false);
     if(!d||!d.ok){
       if(listEl)listEl.innerHTML='<div style="color:#d33;padding:14px">Error: '+((d&&d.err)||'desconocido')+'</div>';
@@ -11409,7 +11462,9 @@ function refreshContextual(){
      en el default, que no pide las ventas: Rentabilidad no se actualizaba nunca. */
   if(active==='evolucion'){
     var _ev=[];
-    if(typeof loadRapido==='function')_ev.push(loadRapido({soloPedidos:true,dePlanilla:true}));
+    /* (28/10/2026) Con PEDIDOS_BASE_ARMA = si los pedidos salen de la base; si no, de la planilla como antes. */
+    if(typeof loadRapido==='function')_ev.push(loadRapido({soloPedidos:true,dePlanilla:!(typeof _palancaVal==='function'&&_palancaVal('pedidosArma')==='si')}));
+    _evuMetaPedida='';   /* y la meta se vuelve a pedir */
     if(typeof loadVentas==='function')_ev.push(loadVentas());
     if(_tengoTab('caja'))_ev.push(_recargarCaja());
     Promise.all(_ev).then(function(res){
@@ -15598,13 +15653,14 @@ var _cjVivo = { prendido: false, t: null, ult: 0 };
 function _cjVivoNota(o){ try { window.__cajaVivo = Object.assign({ t: Date.now() }, o); } catch(e){} }
 function _cjVivoRecargar(){
   _cjVivo.t = null;
-  if (document.visibilityState === 'hidden' || (cur !== 'caja' && cur !== 'egresos' && cur !== 'inicio')) { _cjVivoNota({ hizo: 'nada: la caja no esta a la vista' }); return; }
+  if (document.visibilityState === 'hidden' || (cur !== 'caja' && cur !== 'egresos' && cur !== 'inicio' && cur !== 'evolucion')) { _cjVivoNota({ hizo: 'nada: la caja no esta a la vista' }); return; }
   try { if (typeof _hayEditorAbierto === 'function' && _hayEditorAbierto()) { _cjVivoNota({ hizo: 'pendiente: editor abierto' }); _cjVivo.t = setTimeout(_cjVivoRecargar, CJ_VIVO_JUNTAR_MS * 2); return; } } catch(e){}
   var falta = CJ_VIVO_MIN_MS - (Date.now() - _cjVivo.ult);
   if (falta > 0) { _cjVivo.t = setTimeout(_cjVivoRecargar, falta); return; }
   _cjVivo.ult = Date.now();
   _recargarCaja(true).then(function(r){
     if (r && r.ok && cur === 'inicio') { try { if (_hayEditorAbierto()) _pendingLoadRender = true; else render(); } catch(e){} }
+    if (r && r.ok && cur === 'evolucion') { try { rEvolucion(); } catch(e){ console.error('evolucion/vivo', e); } }
     _cjVivoNota({ hizo: r && r.ok ? 'caja de la base' : ('sin cambios: ' + ((r && r.motivo) || 'la base no armo la caja')), fuente: window.__cajaFuente || null });
   });
 }
@@ -32422,7 +32478,8 @@ var _vVivo = { prendido: false, t: null, ult: 0, pend: false };
 function _vVivoNota(o){ try { window.__ventasVivo = Object.assign({ t: Date.now() }, o); } catch(e){} }
 function _vVivoAVista(){
   if (document.visibilityState === 'hidden') return false;
-  return (cur === 'ventas' && (vTab === 'ventas' || vTab === 'cobros' || vTab === 'tendencia')) || (cur === 'inicio' && (curSI === 'eerr' || curSI === 'cierre'));
+  /* (28/10) Evolucion dibuja con las mismas ventas: escucha lo mismo y se repinta despues. */
+  return (cur === 'ventas' && (vTab === 'ventas' || vTab === 'cobros' || vTab === 'tendencia')) || (cur === 'inicio' && (curSI === 'eerr' || curSI === 'cierre')) || cur === 'evolucion';
 }
 function _vVivoRecargar(){
   _vVivo.t = null;
@@ -32445,6 +32502,7 @@ function _vVivoRecargar(){
     var antes = VD ? VD.length : 0;
     VD = d.v; _vDeCopia = false; _vCopiaTs = Date.now();
     try { _vPintarTodo(); } catch(e){ console.error('ventas/vivo', e); }
+    if (cur === 'evolucion') { try { rEvolucion(); } catch(e){ console.error('evolucion/vivo', e); } }
     _vGuardarCopia(VD); _marcarFresco(['ventas']);
     _vVivoNota({ hizo: 'ventas de la base', n: VD.length, antes: antes });
   }).catch(function(e){ _vVivoNota({ hizo: 'la base no contesto, sin cambios: ' + ((e && e.message) || e) }); })
@@ -32858,6 +32916,22 @@ function _evuAcum(){
 function _evuPedirMeta(){
   var h=_evuHoy(), label=RT_MESES[h.getMonth()]+' '+h.getFullYear();
   if(_evuMetaPedida===label)return;
+  _evuMetaPedida=label;
+  /* (28/10/2026) Con `PLAN_BASE_ARMA = si` la meta sale de la base (`plan_mes_pantalla`, la misma de
+     Objetivo), no de Apps Script. Si la base no contesta, lo de siempre. */
+  if(typeof _palancaVal==='function'&&_palancaVal('planArma')==='si'&&typeof _planArmaBase==='function'){
+    Promise.resolve(_sbPermiso(true)).then(function(sb){ if(!sb)throw new Error('sin permiso'); return _planArmaBase(sb,label); })
+      .then(function(r){
+        var d=r&&r.d, mt=d&&d.metas&&d.metas['Total|'];
+        if(!d||!d.ok||!d.metas)throw new Error('la base no armo el plan');
+        _evuMeta={label:label,v:mt?(Number(mt.metaFact)||0):0,hace:'',de:'base'}; _evuMetaFallo=false;
+        if(cur==='evolucion'){try{rEvolucion();}catch(e){console.error('rEvolucion()',e);}}
+      }).catch(function(){ _evuMetaPedida=''; _evuMetaDeApps(label); });
+    return;
+  }
+  _evuMetaDeApps(label);
+}
+function _evuMetaDeApps(label){
   _evuMetaPedida=label;
   try{
     var pr=traer('evu_plan_'+label,API+'?action=planMes&lite=1&mes='+encodeURIComponent(label),function(d,info){

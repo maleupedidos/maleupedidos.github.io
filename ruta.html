@@ -12772,20 +12772,56 @@ function rutSincronizar(motivo){
     if(!_rutSyncReintento)_rutSyncReintento=setTimeout(function(){_rutSyncReintento=null;rutSincronizar('reintento');},Math.max(falta,4000));
     return Promise.resolve(false);
   }
-  _rutSyncEnVuelo=true;
+  _rutSyncEnVuelo=true; _rutVivo.ultSync=Date.now();
   var ps=[refresh(true,false,true)];
   /* COBROS sale de otro endpoint: si esa es la sub-tab abierta, tambien. Sin
      `fresh`: desde el 12/9/2026 su cache se tira con cada escritura. */
   if(rutCurrentTab==='cobros')ps.push(fetchCobrosPendientes(false,true));
   return Promise.all(ps).then(function(r){_rutSyncEnVuelo=false;return r[0];},function(){_rutSyncEnVuelo=false;return false;});
 }
+/* ══ RUTA EN VIVO (28/10/2026) ══
+   Con `RUTA_EN_VIVO` en «si» (`sb.pal.rutaEnVivo`), adentro del ERP: escucha `erp:pedidos` (121: una entrega,
+   un cobro, un pedido nuevo o editado en otro celular) y sincroniza con la señal, por el MISMO camino que el
+   reloj (`rutSincronizar`: no repinta debajo del dedo, con un cuadro abierto ni si llego lo mismo). Junta
+   RUT_VIVO_JUNTAR_MS y sincroniza como mucho cada RUT_VIVO_MIN_MS. Con el en vivo conectado, el reloj de
+   15 s queda de red y sincroniza cada RUT_SYNC_VIVO_MS; cortado (o suelta, ?standalone=1), cada 15 s como
+   siempre. `window.__rutaVivo` dice que hizo. */
+var RUT_VIVO_JUNTAR_MS=4000, RUT_VIVO_MIN_MS=20000, RUT_SYNC_VIVO_MS=120000;
+var _rutVivo={prendido:false,t:null,ult:0,ultSync:0};
+function _rutVivoNota(o){try{window.__rutaVivo=Object.assign({t:Date.now()},o);}catch(x){}}
+function _rutVivoConectado(){return _rutVivo.prendido&&!!(window.__enVivo&&window.__enVivo.estado==='vivo');}
+function _rutVivoSincronizar(){
+  _rutVivo.t=null;
+  if(!_rutEstaMirando()){_rutVivoNota({hizo:'nada: Ruta no esta a la vista'});return;}
+  var falta=RUT_VIVO_MIN_MS-(Date.now()-_rutVivo.ult);
+  if(falta>0){_rutVivo.t=setTimeout(_rutVivoSincronizar,falta);return;}
+  _rutVivo.ult=Date.now();
+  rutSincronizar('vivo').then(function(r){_rutVivoNota({hizo:'sincronizo por una señal',r:r});},function(){_rutVivoNota({hizo:'la sincronizacion fallo'});});
+}
+function _rutVivoSenal(){if(!_rutVivo.t)_rutVivo.t=setTimeout(_rutVivoSincronizar,RUT_VIVO_JUNTAR_MS);}
+function _rutVivoPrender(){
+  try{
+    if(_rutVivo.prendido||typeof _enVivoEscuchar!=='function'||typeof _sbPermiso!=='function')return;
+    _sbPermiso(true).then(function(sb){
+      if(_rutVivo.prendido||!sb||!sb.pal||!sb.pal.rutaEnVivo)return;
+      _rutVivo.prendido=true;
+      _enVivoEscuchar('erp:pedidos',_rutVivoSenal,_rutVivoSenal);
+    },function(){});
+  }catch(x){}
+}
+try{window.addEventListener('maleu:palancas',function(){_rutVivoPrender();});}catch(x){}
+setTimeout(_rutVivoPrender,0);
 function _arrancarRuta(){
   if(entregas.length>0){rutRender();updateLastSync();refresh(true);}
   else{refresh(false);}
   ['pointerdown','touchstart','keydown','wheel'].forEach(function(ev){
     document.addEventListener(ev,function(){_rutUltimoToque=Date.now();},{passive:true,capture:true});
   });
-  setInterval(function(){rutSincronizar('reloj');},RUT_SYNC_MS);
+  setInterval(function(){
+    /* (28/10) Con el en vivo conectado el reloj es la red: cada RUT_SYNC_VIVO_MS, no cada 15 s. */
+    if(_rutVivoConectado()&&Date.now()-_rutVivo.ultSync<RUT_SYNC_VIVO_MS)return;
+    rutSincronizar('reloj');
+  },RUT_SYNC_MS);
   document.addEventListener('visibilitychange',function(){if(!document.hidden)rutSincronizar('vuelta');});
 }
 _arrancarRuta();
