@@ -1822,6 +1822,69 @@ function _fetchDashboardApps(maxAttempts) {
   return _try();
 }
 
+/* ══ MI PORTAL EN VIVO (240, 28/10/2026) ══
+   Con `PORTAL_EN_VIVO` en «si» (`sb.pal.portalEnVivo`) escucha `erp:red:<usuario>`: la base avisa cuando cambia
+   un pedido de Red de ESE vendedor o lo que rindio, sin datos de la fila (el vendedor solo puede escuchar el
+   suyo; el admin, en «Ver como», cualquiera). Junta 4 s, relee como mucho cada 20 s, solo con Mi Portal a la
+   vista, y SOLO de la base (`dashboard_vendedor_pantalla` + dv_motor.js): no vuelve a correr los efectos de
+   Apps Script (tareas mostradas, Telegram), asi que tareas/objetivo/escala/liquidaciones quedan los de la
+   ultima carga. Al vendedor le hace falta token: SB_TOKEN_VENDEDORES. `window.__portalVivo`. */
+var RED_VIVO_JUNTAR_MS = 4000, RED_VIVO_MIN_MS = 20000;
+var redVivo = { canales: {}, t: null, ult: 0, vuelo: false };
+function redVivoNota(o) { try { window.__portalVivo = Object.assign({ t: Date.now(), canal: redVivoCanal() }, o); } catch (e) {} }
+/* El vendedor, su canal. El admin en «Ver como» no tiene el usuario del vendedor (la lista no lo trae): escucha
+   `erp:pedidos` (121, que ya puede) y relee solo si cambio un pedido de Red (clave «Red|…»). */
+function redVivoCanal() {
+  if (session && session.verComo) return 'erp:pedidos';
+  var u = session && String(session.usuario || '').trim().toLowerCase(); return u ? 'erp:red:' + u : '';
+}
+function redVivoRecargar() {
+  redVivo.t = null;
+  var nom = session && session.nombre;
+  if (!nom || document.visibilityState === 'hidden' || (typeof cur !== 'undefined' && cur !== 'miportal')) { redVivoNota({ hizo: 'nada: Mi Portal no esta a la vista', vis: document.visibilityState, tab: (typeof cur !== 'undefined' ? cur : '') }); return; }
+  if (redVivo.vuelo || (typeof redEnvioEnVuelo !== 'undefined' && redEnvioEnVuelo && redEnvioEnVuelo.size)) { redVivoNota({ hizo: 'pendiente: hay algo en vuelo' }); redVivo.t = setTimeout(redVivoRecargar, RED_VIVO_JUNTAR_MS * 2); return; }
+  var falta = RED_VIVO_MIN_MS - (Date.now() - redVivo.ult);
+  if (falta > 0) { redVivo.t = setTimeout(redVivoRecargar, falta); return; }
+  if (typeof _lecArmaBase !== 'function') { redVivoNota({ hizo: 'nada: fuera del ERP' }); return; }
+  redVivo.ult = Date.now(); redVivo.vuelo = true;
+  _lecArmaBase('dashboardVendedor', { p_nombre: nom }).then(function (r) {
+    var d = r && r.d;
+    if (!d || !d.ok) throw new Error('la base no armo el portal');
+    if (!session || session.nombre !== nom) return;
+    try {   /* lo que traen los efectos, de la ultima carga (no se vuelven a pedir) */
+      var c = JSON.parse(localStorage.getItem('maleu_red_dash_' + nom) || 'null');
+      if (c && c.data) _dvPegarEfectos(d, { tareas: c.data.tareas, objetivo: c.data.objetivo, tg: c.data.tg, liqs: c.data.liqs,
+        liqProx: c.data.liqProx, escala: c.data.stats ? c.data.stats.escala : null });
+    } catch (e) {}
+    try { localStorage.setItem('maleu_red_dash_' + nom, JSON.stringify({ ts: Date.now(), data: d })); } catch (e) {}
+    renderDashboard(d); _renderLastSync(Date.now(), false);
+    redVivoNota({ hizo: 'portal de la base', pedidos: (d.pedidos || []).length });
+  }).catch(function (e) { redVivoNota({ hizo: 'la base no contesto, sin cambios: ' + ((e && e.message) || e) }); })
+    .then(function () { redVivo.vuelo = false; });
+}
+function redVivoSenal(canal) {
+  return function (p) {
+    if (canal !== redVivoCanal()) return;
+    if (canal === 'erp:pedidos' && p && Array.isArray(p.ids) && !(p.n > p.ids.length)
+        && !p.ids.some(function (k) { return String(k).indexOf('Red|') === 0; })) return;
+    if (!redVivo.t) redVivo.t = setTimeout(redVivoRecargar, RED_VIVO_JUNTAR_MS);
+  };
+}
+function redVivoPrender() {
+  try {
+    var canal = redVivoCanal();
+    if (!canal || redVivo.canales[canal] || typeof _enVivoEscuchar !== 'function' || typeof _sbPermiso !== 'function') return;
+    _sbPermiso(true).then(function (sb) {
+      if (redVivo.canales[canal] || !sb || !sb.pal || !sb.pal.portalEnVivo) return;
+      redVivo.canales[canal] = 1;
+      var f = redVivoSenal(canal);
+      _enVivoEscuchar(canal, f, f);
+      redVivoNota({ hizo: 'escuchando' });
+    }, function () {});
+  } catch (e) {}
+}
+try { window.addEventListener('maleu:palancas', function () { redVivoPrender(); }); } catch (e) {}
+
 // Devuelve una promesa que resuelve true (cargó fresco) o false (falló). NUNCA
 // rechaza, para no dejar rejections sin manejar en los callers fire-and-forget.
 /* Le avisa al ERP en que anda esta tab, igual que Ruta y Abastecimiento: un
@@ -1837,6 +1900,7 @@ function loadDashboard() {
      pinta antes de verificar el nombre, puede haber dos cargas en vuelo para
      dos nombres: la que llega tarde no pisa la pantalla del otro. */
   var _nomCarga = session && session.nombre;
+  redVivoPrender();   /* (240) el canal de este vendedor; idempotente */
   // 1) Mostrar cache inmediatamente si existe (instant feel)
   var hadCache = false;
   var cachedTs = 0;
