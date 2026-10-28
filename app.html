@@ -14616,7 +14616,7 @@ function _leerVersion(app){
    "El HTML no sabe que version es" dejo de ser cierto: el build le escribe
    adentro el CACHE_NAME de sw-panel.js, el mismo que deploy.sh obliga a subir en
    cada cambio. Si lo publicado dice otra cosa, esta pagina es vieja. Punto. */
-var _APP_CN_PAGINA='maleu-panel-v737';
+var _APP_CN_PAGINA='maleu-panel-v738';
 
 /* Devuelve [{k,v}] si lo publicado no es lo que esta pagina corre. */
 function _chequearVersiones(){
@@ -18610,7 +18610,9 @@ function _cajaResto(d){
     return d;
   },function(){ return d; });
 }
-function _cajaArmaTraer(ts){
+/* `sinPlanilla` (27/10/2026): el en vivo de Caja no puede caer a Apps Script (cada señal serian 7-12 s de
+   Google); con la bandera, si la base no arma, la promesa se rechaza y la pantalla queda como estaba. */
+function _cajaArmaTraer(ts,sinPlanilla){
   var nota=function(f){ try{ window.__cajaFuente=f; }catch(e){} return f; };
   return _sbPermiso(true).then(function(sb){
     if(!sb)throw new Error('sin permiso de la base');
@@ -18628,6 +18630,7 @@ function _cajaArmaTraer(ts){
         });
       });
   }).catch(function(e){
+    if(sinPlanilla)throw e;
     nota({de:'planilla',porque:'la base no arm\u00f3 la caja: '+String((e&&e.message)||e)});
     return _loteGets(['cajaLight'],ts).cajaLight;
   });
@@ -19217,11 +19220,18 @@ var _cajaVuelo=false;
    el cartel de Caja esperaba ese segundo viaje (~3,3 s de mas) y ocupaba un
    cupo de los dos. Aca queda la promesa del lote para que Caja la espere. */
 var _cajaLoteVuelo=null;
-function _recargarCaja(){
+/* (27/10/2026) Con `CAJA_BASE_ARMA` en «si», la tab Caja (y Pagos) se pide a la base como en el arranque
+   (`_cajaArmaTraer`: el libro de `caja_light_pantalla`, lo demas de la foto), no a Apps Script: ~1 s contra
+   7-12 s. Si la base no arma, `_cajaArmaTraer` cae solo a Apps Script, como siempre. Con `vivo`, sin esa
+   caida (la señal no puede convertirse en una llamada a Google). */
+function _recargarCaja(vivo){
   _frescoEnVuelo(['caja'],1);
   var _finC=function(){ _frescoEnVuelo(['caja'],-1); };
-  return fetch(API+'?action=cajaLight&t='+Date.now())
-    .then(function(r){return r.json();})
+  var _deBase=(typeof _palancaVal==='function'&&_palancaVal('cajaArma')==='si'&&typeof _sbPermiso==='function');
+  if(vivo&&!_deBase){ _finC(); return Promise.resolve({ok:false,red:false,motivo:'CAJA_BASE_ARMA no esta en si'}); }
+  var _pedido=_deBase?_cajaArmaTraer(Date.now(),!!vivo)
+    :fetch(API+'?action=cajaLight&t='+Date.now()).then(function(r){return r.json();});
+  return _pedido
     .then(function(d){
       if(!d||!Array.isArray(d.movimientos))return {ok:false,red:true};
       _cajaAplicar(d);
@@ -19235,6 +19245,42 @@ function _recargarCaja(){
     .catch(function(){return {ok:false,red:false};})
     .then(function(r){ _finC(); return r; });
 }
+/* ══ CAJA EN VIVO (27/10/2026, «sacar el boton Actualizar»: Caja/Pagos e Inicio) ══
+   Con `CAJA_EN_VIVO` en «si» (`sb.pal.cajaEnVivo`) y `CAJA_BASE_ARMA` en «si»: escucha `erp:pedidos` (un cobro,
+   una entrega) y `erp:fotos` con `cajaLight` (gastos, ingresos, saldo base: la foto se rehace cuando cambian).
+   Junta las señales (CJ_VIVO_JUNTAR_MS), relee como mucho cada CJ_VIVO_MIN_MS y SOLO de la base
+   (`_recargarCaja(true)`), solo con Caja, Pagos o Inicio a la vista. Con un campo de la caja en uso,
+   `_recargarCaja` ya deja el repintado pendiente. En Inicio repinta con `render()`. `window.__cajaVivo`. */
+var CJ_VIVO_JUNTAR_MS = 4000, CJ_VIVO_MIN_MS = 20000;
+var _cjVivo = { prendido: false, t: null, ult: 0 };
+function _cjVivoNota(o){ try { window.__cajaVivo = Object.assign({ t: Date.now() }, o); } catch(e){} }
+function _cjVivoRecargar(){
+  _cjVivo.t = null;
+  if (document.visibilityState === 'hidden' || (cur !== 'caja' && cur !== 'egresos' && cur !== 'inicio')) { _cjVivoNota({ hizo: 'nada: la caja no esta a la vista' }); return; }
+  try { if (typeof _hayEditorAbierto === 'function' && _hayEditorAbierto()) { _cjVivoNota({ hizo: 'pendiente: editor abierto' }); _cjVivo.t = setTimeout(_cjVivoRecargar, CJ_VIVO_JUNTAR_MS * 2); return; } } catch(e){}
+  var falta = CJ_VIVO_MIN_MS - (Date.now() - _cjVivo.ult);
+  if (falta > 0) { _cjVivo.t = setTimeout(_cjVivoRecargar, falta); return; }
+  _cjVivo.ult = Date.now();
+  _recargarCaja(true).then(function(r){
+    if (r && r.ok && cur === 'inicio') { try { if (_hayEditorAbierto()) _pendingLoadRender = true; else render(); } catch(e){} }
+    _cjVivoNota({ hizo: r && r.ok ? 'caja de la base' : ('sin cambios: ' + ((r && r.motivo) || 'la base no armo la caja')), fuente: window.__cajaFuente || null });
+  });
+}
+function _cjVivoSenal(){ if (!_cjVivo.t) _cjVivo.t = setTimeout(_cjVivoRecargar, CJ_VIVO_JUNTAR_MS); }
+function _cjVivoFoto(p){ if (p && p.screen === 'cajaLight') _cjVivoSenal(); }
+function _cjVivoPrender(){
+  try {
+    if (_cjVivo.prendido || typeof _enVivoEscuchar !== 'function' || typeof _sbPermiso !== 'function') return;
+    _sbPermiso(true).then(function(sb){
+      if (_cjVivo.prendido || !sb || !sb.pal || !sb.pal.cajaEnVivo) return;
+      _cjVivo.prendido = true;
+      _enVivoEscuchar('erp:pedidos', _cjVivoSenal, _cjVivoSenal);
+      _enVivoEscuchar('erp:fotos', _cjVivoFoto, _cjVivoSenal);
+    }, function(){});
+  } catch(e){}
+}
+try { window.addEventListener('maleu:palancas', function(){ _cjVivoPrender(); }); } catch(e){}
+setTimeout(_cjVivoPrender, 0);
 // Boton "Actualizar" de la tab Caja. No tapa la pantalla: la lista de abajo
 // sigue siendo valida (es la de recien) y se repinta sola cuando llega.
 function actualizarCaja(){
