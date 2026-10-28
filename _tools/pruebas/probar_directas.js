@@ -22,9 +22,10 @@ const capa = `;(function(){var o=window.fetch;window.__envios=[];window.__base=[
   if(m){var p=JSON.parse(b).p;window.__envios.push({a:'base',fn:m[1],acc:p.action,id:p.clientOpId||'',ts:p.ts||0,token:('token' in p)});var r=window.__base.shift()||'ok';
     if(r==='corte')return Promise.reject(new TypeError('Failed to fetch'));
     if(r==='500'||r==='404')return Promise.resolve(new Response('{}',{status:Number(r)}));
-    var d=r==='nodirecto'?{ok:false,directo:false,motivo:'datos'}:{ok:true,aceptada:true,directo:true,orden:1,diferida:r==='ok',repetida:r==='aplicada'};
+    var d=r==='nodirecto'?{ok:false,directo:false,motivo:'datos'}:r==='freno'?{ok:false,necesitaPlata:true,sinReintento:true,cobrado:1500,err:'El pedido está cobrado'}
+      :{ok:true,aceptada:true,directo:true,orden:1,diferida:r==='ok',repetida:r==='aplicada'};
     return Promise.resolve(new Response(JSON.stringify(d),{status:200,headers:{'Content-Type':'application/json'}}));}
-  if(/"action":"(marcarCobrado|marcarEntregado|pedidoGrupal|descobrar|updateDiaEntrega|pedidoDeposito|deshacerOrigen|deshacerEntrega|cambiarEstadoEntrega)"/.test(b)){var q=JSON.parse(b);window.__envios.push({a:'apps',acc:q.action,id:q.clientOpId||'',ts:q.ts||0});}
+  if(/"action":"(marcarCobrado|marcarEntregado|pedidoGrupal|descobrar|updateDiaEntrega|pedidoDeposito|deshacerOrigen|deshacerEntrega|cambiarEstadoEntrega|cancelarPedido|updatePedidoRed)"/.test(b)){var q=JSON.parse(b);window.__envios.push({a:'apps',acc:q.action,id:q.clientOpId||'',ts:q.ts||0});}
   if(b.indexOf('pedidosFuenteAplicar')>=0)window.__envios.push({a:'aplicar'});
   return o.apply(this,arguments);};})();
   window.__palForzar={};setInterval(function(){try{var p=window._sbPerm&&window._sbPerm.pal;if(!p)return;Object.keys(window.__palForzar).forEach(function(k){p[k]=window.__palForzar[k];});}catch(e){}},200);`;
@@ -35,7 +36,10 @@ const PANEL = {
   pedidoDeposito: ['pedido_deposito_directo', { hoja: 'Home', row: 0, deposito: 'ustariz' }],
   deshacerOrigen: ['pedido_deshacer_origen_directo', { hoja: 'Home', id: '999258', row: 0 }],
   deshacerEntrega: ['pedido_deshacer_entrega_directo', { hoja: 'Home', id: '999258', row: 0 }],
-  cambiarEstadoEntrega: ['pedido_estado_directo', { hoja: 'Home', id: '999258', row: 0, estado: 'Pendiente' }] };
+  cambiarEstadoEntrega: ['pedido_estado_directo', { hoja: 'Home', id: '999258', row: 0, estado: 'Pendiente' }],
+  /* Tanda 2 (266, 267). */
+  cancelarPedido: ['pedido_cancelar_directo', { hoja: 'Home', id: '999258', row: 0 }],
+  updatePedidoRed: ['pedido_portal_directo', { pedidoId: '999258', row: 0, vendedor: 'Prueba', updates: { entrega: true } }] };
 (async () => {
   const cli = await cdp.abrir();
   await cli.enviar('Page.addScriptToEvaluateOnNewDocument', { source: prep(TOKEN, capa) });
@@ -66,6 +70,11 @@ const PANEL = {
   }
   await ev(cli, `window.__base=['ok']; 1`); await post('pedidoGrupal'); e = await envs();
   chk('panel, prender el día NO prende el grupal', e.some((x) => x.a === 'apps') && !e.some((x) => x.a === 'base'), e);
+  /* (266) Cuando la base FRENA (cobrado sin decidir la plata), esa respuesta llega a la pantalla: no se pregunta a Apps Script. */
+  await pal({ cancelarPedido: true }); await ev(cli, `window.__base=['freno']; 1`);
+  const rf = await post('cancelarPedido'); e = await envs();
+  chk('panel, cancelar un cobrado: la pantalla recibe el freno de la BASE (necesitaPlata, $1.500) y NO se pregunta a Apps Script',
+    rf && rf.ok === false && rf.necesitaPlata === true && Number(rf.cobrado) === 1500 && e.length === 1 && e[0].a === 'base', { rf, e });
   /* ── RUTA ── */
   await ev(cli, `go('ruta'); 1`);
   chk('Ruta arranca', await esperar(cli, `typeof window.processSyncQueue==='function' && typeof window.loadLocal==='function'`, 60000), '');
