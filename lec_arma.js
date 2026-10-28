@@ -112,6 +112,10 @@ var LEC_ARMA = {
   /* (204) Mi reparto: las entregas de ese dia en el orden de la hoja (por posicion). La base recibe
      {usuario, fecha} en `p` y el motor tambien. */
   miReparto: { rpc: 'mi_reparto_pantalla', listas: {}, orden: true, motor: 'mr' },
+  /* (244) La ficha de un evento de catering: cada lista por su id; lo que salio del freezer por producto. */
+  cateringDetail: { rpc: 'catering_detalle_pantalla', listas: { menu: ['id'], lines: ['id'], payments: ['id'], crew: ['id'], tasks: ['id'], freezer: ['a'] }, orden: true },
+  /* (243) La marca y el contacto de cada proveedor, por alias (`en` es la hora de armado). */
+  proveedoresMarca: { rpc: 'proveedores_marca_pantalla', listas: {}, orden: false, ignorar: ['en'] },
   /* (238) Mi reparto › Historial: SQL puro, los dias por fecha (del mas nuevo al mas viejo). */
   miRepartoHistorial: { rpc: 'mi_reparto_historial_pantalla', listas: { dias: ['f'] }, orden: true },
   /* (239) Mi Portal › Objetivos: las props de cada vendedor (ro_pv_, ro_abrio_), de seller_portal_state. */
