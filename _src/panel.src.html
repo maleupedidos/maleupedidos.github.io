@@ -24969,11 +24969,11 @@ function renderStContar(opts){
   for(var m=0;m<prods.length;m++){
     if(Number(prods[m].pz)>0){porPieza++;continue;}
     contables++;
-    if(STC_EST[prods[m].a+'|'+DEP_SEL]==='cola')enCola++;
-    else if(DEP_CONTADOS[prods[m].a+'|'+DEP_SEL])listos++;
+    if(STC_EST[prods[m].a+'|'+DEP_SEL]==='envia')enCola++;
+    if(DEP_CONTADOS[prods[m].a+'|'+DEP_SEL])listos++;
   }
   h+='<div class="stc-prog">'+(listos?listos+' de '+contables+' contados':contables+' productos, ninguno contado todav&iacute;a')
-    +(enCola?' &middot; guardando '+enCola:'')
+    +(enCola?' &middot; mandando '+enCola+' atr&aacute;s':'')
     +(porPieza?' &middot; '+porPieza+' se cuentan por pieza':'')+'</div>';
   /* El nombre del OTRO freezer: "6 en el otro" obligaba a acordarse de cual es. */
   var _resOCCont=(_ocAlFreezerModo()!=='no')?_stReservadoOC():null;
@@ -25029,13 +25029,13 @@ function renderStContar(opts){
     }
 
     var _est=STC_EST[pr.a+'|'+DEP_SEL]||'', _hecho=!!DEP_CONTADOS[pr.a+'|'+DEP_SEL];
-    var _bt, _difR=(_est!=='cola')?difSku(pr.a):null;
+    var _bt, _difR=(_est!=='envia')?difSku(pr.a):null;
     if(_difR){ _bt='<button class="stc-ok cola" disabled aria-label="'+stEsc(pr.n)+': acomodando '+stEsc(_difR.titulo)+'">Acomo-<br>dando</button>'; sub='acomodando '+stEsc(_difR.titulo)+'&hellip;'; }
-    else if(_est==='cola')_bt='<button class="stc-ok cola" disabled>Guar-<br>dando</button>';
+    /* (28/10) «enviando» es CONTADO: el envio va atras y se reintenta solo si falla. */
     else if(_est==='err')_bt='<button class="stc-ok err" onclick="stContarOk(\''+_stJs(pr.a)+'\')" aria-label="No se guard&oacute; '+stEsc(pr.n)+': reintentar">No se<br>guard&oacute;</button>';
     else if(_hecho)_bt='<button class="stc-ok ok" disabled aria-label="'+stEsc(pr.n)+' contado">&#10003;<small>contado</small></button>';
     else _bt='<button class="stc-ok" onclick="stContarOk(\''+_stJs(pr.a)+'\')" aria-label="'+stEsc(pr.n)+': el n&uacute;mero est&aacute; bien">&#10003;</button>';
-    h+='<div class="stc-row'+(_hecho&&_est!=='cola'&&_est!=='err'?' listo':'')+'" id="stcR_'+stEsc(pr.a)+'">'
+    h+='<div class="stc-row'+(_hecho&&_est!=='err'?' listo':'')+'" id="stcR_'+stEsc(pr.a)+'">'
       +'<div class="stc-n">'+stEsc(pr.n)+'<span class="stc-sub">'+sub+'</span></div>'
       +'<input class="stc-in" id="stcIn_'+stEsc(pr.a)+'" type="text" inputmode="decimal" value="'+stFmt(hay,pr.u)+'" data-v0="'+stFmt(hay,pr.u)+'" '
       +'aria-label="Cu&aacute;nto hay de '+stEsc(pr.n)+'" onblur="stContarBlur(\''+_stJs(pr.a)+'\',this)"'+(_difR?' disabled':'')+'>'
@@ -25089,62 +25089,103 @@ function stContarOk(abbr){
    "ocupado". La cola manda uno, espera, y manda el siguiente; la fila dice
    "guardando" mientras tanto y la pantalla se puede seguir usando. */
 var STC_COLA=[], STC_VIAJA=false, STC_EST={};
+/* EL CONTEO SE SIENTE INSTANTANEO (28/10/2026). Tadeo contando sorrentinos con 3G: Langostinos quedo en «No se
+   guardo» (el POST se corto y la fila volvio atras: el conteo NO llego a la base), Cordero y Jamon y Queso un
+   rato en «Guardando», y cada ✓ tardaba (la fila esperaba al servidor, de a uno). Ahora:
+   · el ✓ marca CONTADO en el acto (el numero ya estaba puesto); el envio va atras, de a uno como antes (el
+     candado del backend);
+   · la cola vive en el aparato (STC_COLA_KEY): cerrar la app con algo sin mandar no lo pierde;
+   · si un envio falla por la red (corte, tiempo agotado, servidor ocupado) se REINTENTA solo, con espera que
+     crece, con el MISMO clientOpId y sin volver el numero atras. Contar pone una cantidad absoluta: mandarlo
+     dos veces deja lo mismo;
+   · solo despues de STC_INTENTOS fallas de red, o si el servidor lo RECHAZA, la fila dice «No se guardo»
+     (tocar el ✓ lo vuelve a mandar). Con la conexion de vuelta (`online`), la cola sigue sola. */
+var STC_COLA_KEY='maleu_stcCola', STC_INTENTOS=6, STC_ESPERA_MS=25000, _stcReloj=null;
+function _stcGuardarCola(){ try{ localStorage.setItem(STC_COLA_KEY,JSON.stringify(STC_COLA)); }catch(e){} }
 function _stcEncolar(abbr,dep,v){
   var pr=_stProd(abbr); if(!pr)return;
   var k=abbr+'|'+dep;
   var antes=Number((pr.porDep||{})[dep])||0;
-  /* Optimista: el numero queda puesto ya y vuelve solo si el backend dice que no. */
+  /* Optimista: el numero queda puesto ya y vuelve solo si el backend lo RECHAZA. */
   pr.porDep[dep]=v;
   pr.f=Number(pr.f)+(v-antes);
   var ya=null;
   for(var i=0;i<STC_COLA.length;i++)if(STC_COLA[i].k===k)ya=STC_COLA[i];
-  if(ya)ya.v=v;                                         // todavia no salio: vale el ultimo numero
-  else STC_COLA.push({k:k,abbr:abbr,dep:dep,v:v,antes:antes});
-  STC_EST[k]='cola';
+  if(ya){ ya.v=v; ya.intentos=0; }                       // todavia no salio: vale el ultimo numero
+  else STC_COLA.push({k:k,abbr:abbr,dep:dep,v:v,antes:antes,id:_pfId(),intentos:0});
+  DEP_CONTADOS[k]=true;                                  // contado YA: el ✓ no espera al servidor
+  STC_EST[k]='envia';
+  _stcGuardarCola();
   if(ST_TAB==='contar'&&DEP_SEL===dep)renderStContar();
   _stcSeguir();
 }
+/* ¿Una falla de la RED (se reintenta) o el servidor dijo que no (se avisa)? */
+function _stcEsDeRed(d,msj){
+  if(!d)return true;
+  return /ocupad|candado|timeout|tiempo|lock|intent|busy|Service|Exception/i.test(String((d&&(d.error||d.err))||msj||''));
+}
 function _stcSeguir(){
-  if(STC_VIAJA||!STC_COLA.length)return;
-  var it=STC_COLA.shift();
+  if(STC_VIAJA||!STC_COLA.length||_stcReloj)return;
+  var it=STC_COLA[0];
   STC_VIAJA=true;
   var abbr=it.abbr, dep=it.dep, v=it.v, antes=it.antes, k=it.k;
   /* Si llegaron los depositos de ahora mientras viajaba, la pantalla muestra OTRO
      objeto: lo que confirma o revierte la respuesta tiene que ir a ese. */
   var fin=function(ok,d,msj){
     STC_VIAJA=false;
-    var otroEnCola=false;
-    for(var i=0;i<STC_COLA.length;i++)if(STC_COLA[i].k===k)otroEnCola=true;
     var pr=_stProd(abbr);
+    /* Si mientras viajaba se volvio a contar el mismo producto, el item ya trae el numero nuevo: sigue en la cola. */
+    var cambio=(it.v!==v);
     if(ok){
+      if(!cambio){ STC_COLA.shift(); delete STC_EST[k]; if(pr){ pr.porDep[dep]=v; if(d&&typeof d.total==='number'&&isFinite(d.total))pr.f=d.total; } }
       DEP_CONTADOS[k]=true;
-      if(!otroEnCola){
-        delete STC_EST[k];
-        if(pr){ pr.porDep[dep]=v; if(d&&typeof d.total==='number'&&isFinite(d.total))pr.f=d.total; }
-      }
       ST_SUCIO=Date.now();
       if(d&&d.diferida)difAnotar(d,'el conteo de '+((pr&&pr.n)||abbr),[abbr]);
       _stAplicarLocal(abbr,{dep:dep,ahora:(d&&typeof d.ahora==='number'&&isFinite(d.ahora))?d.ahora:v,total:d&&d.total});
       /* Solo cuando CAMBIO: veinte tildes no son veinte carteles. */
       if(pr&&Math.abs(v-antes)>1e-9)toast(pr.n+': '+stFmt(v,pr.u)+' '+(pr.u==='kg'?'kg':'u')+' en '+stDepNombre(dep));
+      try{ window.__stcUlt={hizo:'guardado',abbr:abbr,intentos:it.intentos,t:Date.now()}; }catch(e){}
+    }else if(_stcEsDeRed(d,msj)&&it.intentos+1<STC_INTENTOS){
+      /* La red: se reintenta solo, sin volver el numero atras. La fila sigue «contado». */
+      it.intentos++;
+      var espera=Math.min(60000,3000*Math.pow(2,it.intentos-1));
+      try{ window.__stcUlt={hizo:'reintento',abbr:abbr,intentos:it.intentos,espera:espera,msj:msj||'',t:Date.now()}; }catch(e){}
+      _stcReloj=setTimeout(function(){ _stcReloj=null; _stcSeguir(); },espera);
     }else{
-      if(!otroEnCola){
-        STC_EST[k]='err';
-        if(pr){ var hoy=Number(pr.porDep[dep])||0; pr.porDep[dep]=antes; pr.f=Number(pr.f)-(hoy-antes); }
-      }
-      toast('No se pudo guardar '+((pr&&pr.n)||abbr)+': '+msj,4000);
+      /* El servidor lo rechazo, o la red fallo STC_INTENTOS veces: se dice, y el ✓ lo vuelve a mandar. */
+      STC_COLA.shift();
+      STC_EST[k]='err';
+      delete DEP_CONTADOS[k];
+      if(!_stcEsDeRed(d,msj)&&pr){ var hoy=Number(pr.porDep[dep])||0; pr.porDep[dep]=antes; pr.f=Number(pr.f)-(hoy-antes); }
+      toast('No se pudo guardar '+((pr&&pr.n)||abbr)+': '+(msj||'?')+' — tocá el ✓ para mandarlo de nuevo',6000);
+      try{ window.__stcUlt={hizo:'no se guardo',abbr:abbr,intentos:it.intentos+1,msj:msj||'',t:Date.now()}; }catch(e){}
     }
+    _stcGuardarCola();
     if(ST_TAB==='contar'&&DEP_SEL===dep)renderStContar();
-    _stcSeguir();
+    if(!_stcReloj)_stcSeguir();
   };
-  fetch(API,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},
-    body:JSON.stringify({action:'stockContar',abbr:abbr,deposito:dep,cantidad:v,clientOpId:_pfId()})})
+  /* Con 3G un POST puede quedar colgado sin error: a los STC_ESPERA_MS se corta y cuenta como falla de red. */
+  var ctl=(typeof AbortController==='function')?new AbortController():null;
+  var reloj=setTimeout(function(){ try{ if(ctl)ctl.abort(); }catch(e){} },STC_ESPERA_MS);
+  fetch(API,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},signal:ctl?ctl.signal:undefined,
+    body:JSON.stringify({action:'stockContar',abbr:abbr,deposito:dep,cantidad:v,clientOpId:it.id})})
     .then(function(r){return r.json();})
     /* Stock I4 (15/10/2026): aceptado como orden, se empuja al aplicador; la
        pantalla ya pinto el numero (`_stAplicarLocal`), no hace falta esperarlo. */
-    .then(function(d){ if(d&&d.ok){ _pfAplicar(d); fin(true,d); } else fin(false,d,(d&&d.error)||'?'); })
-    .catch(function(e){ fin(false,null,(e&&e.message)||'sin conexi\u00f3n'); });
+    .then(function(d){ clearTimeout(reloj); if(d&&d.ok){ _pfAplicar(d); fin(true,d); } else fin(false,d,(d&&(d.error||d.err))||'?'); })
+    .catch(function(e){ clearTimeout(reloj); fin(false,null,(e&&e.name==='AbortError')?'no contest\u00f3 en '+(STC_ESPERA_MS/1000)+' s':((e&&e.message)||'sin conexi\u00f3n')); });
 }
+/* Lo que quedo sin mandar al cerrar la app sigue al abrirla, y con la conexion de vuelta. */
+(function(){
+  try{
+    var c=JSON.parse(localStorage.getItem(STC_COLA_KEY)||'[]');
+    if(Array.isArray(c)&&c.length){
+      c.forEach(function(it){ if(it&&it.k&&it.abbr&&it.dep){ it.intentos=0; if(!it.id)it.id=_pfId(); STC_COLA.push(it); STC_EST[it.k]='envia'; DEP_CONTADOS[it.k]=true; } });
+      setTimeout(_stcSeguir,3000);
+    }
+  }catch(e){}
+  try{ window.addEventListener('online',function(){ if(_stcReloj){ clearTimeout(_stcReloj); _stcReloj=null; } _stcSeguir(); }); }catch(e){}
+})();
 
 
 /* ══ RECIBIR CARNE: pesar pieza por pieza (10/9/2026) ══
