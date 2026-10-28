@@ -32220,6 +32220,62 @@ function _vPintarTodo(){
 }
 window.vReintentar=function(){loadVentas();};
 
+/* ══ VENTAS EN VIVO (27/10/2026, segunda pantalla del «sacar el boton Actualizar») ══
+   Con `VENTAS_EN_VIVO` en «si» (`sb.pal.ventasEnVivo`) y `VENTAS_BASE_ARMA` en «si», Ventas escucha
+   `erp:pedidos` (migracion 121): un pedido que se entrega, se cobra o se edita cambia `sales_order`, que es de
+   donde arma la lista `ventas_pantalla`. La señal se junta (V_VIVO_JUNTAR_MS) y se relee como mucho cada
+   V_VIVO_MIN_MS, solo con Ventas (Ventas/Cobros/Tendencia) o Inicio › EERR/Cierre a la vista.
+   · Solo la base: si `ventas_pantalla` falla, NO cae a Apps Script (cada señal seria ~20 s de Google): queda
+     como estaba hasta la proxima señal o el ↻.
+   · Con un editor abierto, o escribiendo en un campo de Ventas, se deja pendiente y se reintenta.
+   · Al volver de un corte, la misma relectura. `window.__ventasVivo` dice que hizo la ultima vez. */
+var V_VIVO_JUNTAR_MS = 4000, V_VIVO_MIN_MS = 20000;
+var _vVivo = { prendido: false, t: null, ult: 0, pend: false };
+function _vVivoNota(o){ try { window.__ventasVivo = Object.assign({ t: Date.now() }, o); } catch(e){} }
+function _vVivoAVista(){
+  if (document.visibilityState === 'hidden') return false;
+  return (cur === 'ventas' && (vTab === 'ventas' || vTab === 'cobros' || vTab === 'tendencia')) || (cur === 'inicio' && (curSI === 'eerr' || curSI === 'cierre'));
+}
+function _vVivoRecargar(){
+  _vVivo.t = null;
+  if (!_vVivoAVista()) { _vVivo.pend = true; _vVivoNota({ hizo: 'nada: Ventas no esta a la vista (queda pendiente)' }); return; }
+  var ocupado = '';
+  try { if (typeof _hayEditorAbierto === 'function' && _hayEditorAbierto()) ocupado = 'editor abierto'; } catch(e){}
+  var a = document.activeElement;
+  if (!ocupado && a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName) && a.closest && a.closest('#p-ventas')) ocupado = 'escribiendo';
+  if (ocupado || _vPidiendo) { _vVivoNota({ hizo: 'pendiente: ' + (ocupado || 'ya hay una carga en vuelo') }); _vVivo.t = setTimeout(_vVivoRecargar, V_VIVO_JUNTAR_MS * 2); return; }
+  var falta = V_VIVO_MIN_MS - (Date.now() - _vVivo.ult);
+  if (falta > 0) { _vVivo.t = setTimeout(_vVivoRecargar, falta); return; }
+  if (typeof _palancaVal !== 'function' || _palancaVal('ventasArma') !== 'si') { _vVivoNota({ hizo: 'nada: VENTAS_BASE_ARMA no esta en si' }); return; }
+  _vVivo.ult = Date.now(); _vVivo.pend = false;
+  _vPidiendo = Promise.resolve(_sbPermiso(true)).then(function(sb){
+    if (!sb) throw new Error('sin permiso de la base');
+    return _ventasBase(sb);
+  }).then(function(r){
+    var d = r && r.d;
+    if (!d || !Array.isArray(d.v)) throw new Error('la base no armo las ventas');
+    var antes = VD ? VD.length : 0;
+    VD = d.v; _vDeCopia = false; _vCopiaTs = Date.now();
+    try { _vPintarTodo(); } catch(e){ console.error('ventas/vivo', e); }
+    _vGuardarCopia(VD); _marcarFresco(['ventas']);
+    _vVivoNota({ hizo: 'ventas de la base', n: VD.length, antes: antes });
+  }).catch(function(e){ _vVivoNota({ hizo: 'la base no contesto, sin cambios: ' + ((e && e.message) || e) }); })
+    .then(function(){ _vPidiendo = null; });
+}
+function _vVivoSenal(){ if (!_vVivo.t) _vVivo.t = setTimeout(_vVivoRecargar, V_VIVO_JUNTAR_MS); }
+function _vVivoPrender(){
+  try {
+    if (_vVivo.prendido || typeof _enVivoEscuchar !== 'function' || typeof _sbPermiso !== 'function') return;
+    _sbPermiso(true).then(function(sb){
+      if (_vVivo.prendido || !sb || !sb.pal || !sb.pal.ventasEnVivo) return;
+      _vVivo.prendido = true;
+      _enVivoEscuchar('erp:pedidos', _vVivoSenal, _vVivoSenal);
+    }, function(){});
+  } catch(e){}
+}
+try { window.addEventListener('maleu:palancas', function(){ _vVivoPrender(); }); } catch(e){}
+setTimeout(_vVivoPrender, 0);
+
 // ═══════════════════════════════════════
 //  TENDENCIA — subtab de Ventas
 //  Compara un canal a lo largo del tiempo, agregado por día puntual,
