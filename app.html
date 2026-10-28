@@ -10236,6 +10236,51 @@ function ajLoad(opts){
   }).then(function(d){ AJ_PEDIDO=null; return d; },function(e){ AJ_PEDIDO=null; throw e; });
   return AJ_PEDIDO;
 }
+/* ══ AJUSTES EN VIVO (28/10/2026) ══
+   Con `AJUSTES_EN_VIVO` en «si» (`sb.pal.ajustesEnVivo`) y «ajustesData=si» en LECTURAS_BASE_ARMA: escucha las
+   hojas de las que sale `ajustes_data_pantalla` (136), por la 237: `erp:hoja:usuarios`, `permisos`,
+   `config_maleu`, `config`, `vendedores` y `provisiones_fijas`. Junta 4 s, relee como mucho cada 20 s y SOLO
+   de la base (`_lecArmaBase('ajustesData')`), solo con Ajustes a la vista y en una seccion que usa esos datos
+   (no en Sesion, Avisos, Automatizaciones ni Producto nuevo). Con un editor abierto o escribiendo en la tab,
+   queda pendiente: nunca pisa un formulario a medio llenar. `window.__ajustesVivo` dice que hizo. */
+var AJ_VIVO_JUNTAR_MS = 4000, AJ_VIVO_MIN_MS = 20000;
+var _ajVivo = { prendido: false, t: null, ult: 0, vuelo: false };
+function _ajVivoNota(o){ try { window.__ajustesVivo = Object.assign({ t: Date.now() }, o); } catch(e){} }
+function _ajVivoRecargar(){
+  _ajVivo.t = null;
+  if (document.visibilityState === 'hidden' || cur !== 'ajustes' || AJ_SEC_SOLAS[AJ_SEC]) { _ajVivoNota({ hizo: 'nada: Ajustes no esta a la vista' }); return; }
+  var ocupado = '';
+  try { if (typeof _hayEditorAbierto === 'function' && _hayEditorAbierto()) ocupado = 'editor abierto'; } catch(e){}
+  var a = document.activeElement;
+  if (!ocupado && a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName) && a.closest && a.closest('#p-ajustes')) ocupado = 'escribiendo';
+  if (ocupado || _ajVivo.vuelo || AJ_PEDIDO) { _ajVivoNota({ hizo: 'pendiente: ' + (ocupado || 'ya hay una carga en vuelo') }); _ajVivo.t = setTimeout(_ajVivoRecargar, AJ_VIVO_JUNTAR_MS * 2); return; }
+  var falta = AJ_VIVO_MIN_MS - (Date.now() - _ajVivo.ult);
+  if (falta > 0) { _ajVivo.t = setTimeout(_ajVivoRecargar, falta); return; }
+  if (_lecModo('ajustesData') !== 'si') { _ajVivoNota({ hizo: 'nada: ajustesData no esta en si' }); return; }
+  _ajVivo.ult = Date.now(); _ajVivo.vuelo = true;
+  _lecArmaBase('ajustesData', {}).then(function(r){
+    var d = r && r.d;
+    if (!d || !d.ok) throw new Error('la base no armo ajustes');
+    AJ_DATA = d; ajRender();
+    _ajSello({ viejo: false, cuando: Date.now(), hace: 'recién' });
+    if (typeof _marcarFresco === 'function') _marcarFresco(['ajustes']);
+    _ajVivoNota({ hizo: 'ajustes de la base', ms: r.ms });
+  }).catch(function(e){ _ajVivoNota({ hizo: 'la base no contesto, sin cambios: ' + ((e && e.message) || e) }); })
+    .then(function(){ _ajVivo.vuelo = false; });
+}
+function _ajVivoSenal(){ if (!_ajVivo.t) _ajVivo.t = setTimeout(_ajVivoRecargar, AJ_VIVO_JUNTAR_MS); }
+function _ajVivoPrender(){
+  try {
+    if (_ajVivo.prendido || typeof _enVivoEscuchar !== 'function' || typeof _sbPermiso !== 'function') return;
+    _sbPermiso(true).then(function(sb){
+      if (_ajVivo.prendido || !sb || !sb.pal || !sb.pal.ajustesEnVivo) return;
+      _ajVivo.prendido = true;
+      ['usuarios', 'permisos', 'config_maleu', 'config', 'vendedores', 'provisiones_fijas'].forEach(function(h){ _enVivoEscuchar('erp:hoja:' + h, _ajVivoSenal, _ajVivoSenal); });
+    }, function(){});
+  } catch(e){}
+}
+try { window.addEventListener('maleu:palancas', function(){ _ajVivoPrender(); }); } catch(e){}
+setTimeout(_ajVivoPrender, 0);
 /* Deja dicho de cuando son los datos que se estan viendo. Sin esto, mostrar una
    copia guardada seria mentir por omision. */
 function _ajSello(info){
@@ -14617,7 +14662,7 @@ function _leerVersion(app){
    "El HTML no sabe que version es" dejo de ser cierto: el build le escribe
    adentro el CACHE_NAME de sw-panel.js, el mismo que deploy.sh obliga a subir en
    cada cambio. Si lo publicado dice otra cosa, esta pagina es vieja. Punto. */
-var _APP_CN_PAGINA='maleu-panel-v739';
+var _APP_CN_PAGINA='maleu-panel-v741';
 
 /* Devuelve [{k,v}] si lo publicado no es lo que esta pagina corre. */
 function _chequearVersiones(){
@@ -51024,6 +51069,58 @@ if('serviceWorker' in navigator){
   function _planClearCache(){
     try { if(planCurMes) localStorage.removeItem(PLAN_CACHE_PREFIX + planCurMes.label); } catch(e){}
   }
+
+  /* ══ OBJETIVO EN VIVO (28/10/2026) ══
+     Con `PLAN_EN_VIVO` en «si» (`sb.pal.planEnVivo`) y `PLAN_BASE_ARMA` en «si»: escucha las hojas de las que
+     sale `plan_mes_pantalla` (158), por la 237: `erp:hoja:plan_ventas`, `plan_acciones`, `objetivos` y
+     `cierres_de_mes`. Junta 4 s, relee como mucho cada 20 s y SOLO de la base (`_planArmaBase`, el mes que se
+     esta mirando), solo con Objetivo a la vista. Con un cajon abierto (meta, accion, objetivo) o escribiendo,
+     queda pendiente. La plata ya la repinta erp:pedidos. `window.__planVivo` dice que hizo. */
+  var PL_VIVO_JUNTAR_MS = 4000, PL_VIVO_MIN_MS = 20000;
+  var _plVivo = { prendido: false, t: null, ult: 0, vuelo: false };
+  function _plVivoNota(o){ try { window.__planVivo = Object.assign({ t: Date.now() }, o); } catch(e){} }
+  function _plVivoRecargar(){
+    _plVivo.t = null;
+    if (document.visibilityState === 'hidden' || cur !== 'planificacion') { _plVivoNota({ hizo: 'nada: Objetivo no esta a la vista' }); return; }
+    var ocupado = '';
+    ['planMetaDrawer', 'planAccDrawer', 'planObjDrawer'].forEach(function(id){ var d = el(id); if (!ocupado && d && d.classList.contains('on')) ocupado = 'cajon abierto'; });
+    try { if (!ocupado && typeof _hayEditorAbierto === 'function' && _hayEditorAbierto()) ocupado = 'editor abierto'; } catch(e){}
+    var a = document.activeElement;
+    if (!ocupado && a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName) && a.closest && a.closest('#p-planificacion')) ocupado = 'escribiendo';
+    if (ocupado || _plVivo.vuelo || _planVuelo > 0) { _plVivoNota({ hizo: 'pendiente: ' + (ocupado || 'ya hay una carga en vuelo') }); _plVivo.t = setTimeout(_plVivoRecargar, PL_VIVO_JUNTAR_MS * 2); return; }
+    var falta = PL_VIVO_MIN_MS - (Date.now() - _plVivo.ult);
+    if (falta > 0) { _plVivo.t = setTimeout(_plVivoRecargar, falta); return; }
+    if (typeof _palancaVal !== 'function' || _palancaVal('planArma') !== 'si') { _plVivoNota({ hizo: 'nada: PLAN_BASE_ARMA no esta en si' }); return; }
+    var label = (planCurMes && planCurMes.label) || _mesActualAR().label;
+    _plVivo.ult = Date.now(); _plVivo.vuelo = true;
+    Promise.resolve(_sbPermiso(true)).then(function(sb){
+      if (!sb) throw new Error('sin permiso de la base');
+      return _planArmaBase(sb, label);
+    }).then(function(r){
+      var d = r && r.d;
+      if (!d || !d.ok) throw new Error('la base no armo el plan');
+      if (planCurMes && planCurMes.label !== label) { _plVivoNota({ hizo: 'nada: cambiaste de mes mientras releia' }); return; }
+      d._guardado = Date.now(); planData = d;
+      try { localStorage.setItem(PLAN_CACHE_PREFIX + label, JSON.stringify(d)); } catch(e){}
+      _planEstado('', null); _planRenderAll();
+      try { if (typeof _marcarFresco === 'function') _marcarFresco(['planMes']); } catch(e){}
+      _plVivoNota({ hizo: 'objetivo de la base', mes: label, ms: r.ms });
+    }).catch(function(e){ _plVivoNota({ hizo: 'la base no contesto, sin cambios: ' + ((e && e.message) || e) }); })
+      .then(function(){ _plVivo.vuelo = false; });
+  }
+  function _plVivoSenal(){ if (!_plVivo.t) _plVivo.t = setTimeout(_plVivoRecargar, PL_VIVO_JUNTAR_MS); }
+  function _plVivoPrender(){
+    try {
+      if (_plVivo.prendido || typeof _enVivoEscuchar !== 'function' || typeof _sbPermiso !== 'function') return;
+      _sbPermiso(true).then(function(sb){
+        if (_plVivo.prendido || !sb || !sb.pal || !sb.pal.planEnVivo) return;
+        _plVivo.prendido = true;
+        ['plan_ventas', 'plan_acciones', 'objetivos', 'cierres_de_mes'].forEach(function(h){ _enVivoEscuchar('erp:hoja:' + h, _plVivoSenal, _plVivoSenal); });
+      }, function(){});
+    } catch(e){}
+  }
+  try { window.addEventListener('maleu:palancas', function(){ _plVivoPrender(); }); } catch(e){}
+  setTimeout(_plVivoPrender, 0);
 
   window.planLoad = function(){
     var label = (el('planMesSel') && el('planMesSel').value) || (planCurMes && planCurMes.label) || _mesActualAR().label;
