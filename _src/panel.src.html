@@ -13636,8 +13636,7 @@ window.pedDep=function(hoja,row,dep,btn){
     btn.classList.remove('va');
     if(btn.getAttribute('data-txt'))btn.textContent=btn.getAttribute('data-txt');
   };
-  fetch(API,{method:'POST',headers:{'Content-Type':'text/plain'},
-    body:JSON.stringify({action:'pedidoDeposito',hoja:hoja,row:row,deposito:dep,clientOpId:_pfId()})})
+  _ordenPost({action:'pedidoDeposito',hoja:hoja,row:row,deposito:dep,clientOpId:_pfId()})
     .then(function(r){return r.json();})
     .then(function(d){
       if(!d||!d.ok)throw new Error((d&&d.err)||'no se pudo');
@@ -15312,6 +15311,46 @@ function _pfAplicar(r){
   return fetch(API,{method:'POST',body:JSON.stringify({action:'pedidosFuenteAplicar'})})
     .then(function(x){return x.json();}).catch(function(){return null;});
 }
+/* LAS ESCRITURAS DIRECTO A LA BASE (257-265, 28/10/2026). Cada accion de esta lista la acepta la base con su RPC
+   en vez de Apps Script, con el MISMO id de orden (clientOpId, o accion|hoja|N°|ts): un reintento por cualquiera de
+   los dos caminos encuentra la orden y no duplica. Cada una con su palanca (`pal.directas[accion]`, y el cobro
+   ademas `pal.cobrarDirecto`): apagada, ni se llama a la base. El aplicador la pasa a la planilla.
+   `_ordenDirecta` contesta la respuesta de la base, o null = va por Apps Script (sin palanca, sin permiso, 404 = la
+   migracion sin aplicar, o `directo:false`: la base no la sabe validar). Un error de red o de la base TIRA: la cola
+   de Ruta reintenta; `_ordenPost` (el panel, sin cola) cae a Apps Script con el mismo id. */
+var ORD_DIRECTAS_RPC={marcarCobrado:'pedido_cobrar_directo',marcarEntregado:'pedido_entregar_directo',pedidoGrupal:'pedido_grupal_directo',
+  descobrar:'pedido_descobrar_directo',updateDiaEntrega:'pedido_dia_directo',pedidoDeposito:'pedido_deposito_directo',
+  deshacerOrigen:'pedido_deshacer_origen_directo',deshacerEntrega:'pedido_deshacer_entrega_directo',cambiarEstadoEntrega:'pedido_estado_directo'};
+function _ordenDirectaOn(a){
+  if(typeof _palancaVal!=='function')return false;
+  var m=_palancaVal('directas');
+  return !!(m&&m[a]===true)||(a==='marcarCobrado'&&_palancaVal('cobrarDirecto')===true);
+}
+function _ordenDirecta(body,ctl){
+  var a=body&&body.action, fn=ORD_DIRECTAS_RPC[a];
+  if(!fn||!_ordenDirectaOn(a)||typeof _sbPermiso!=='function')return Promise.resolve(null);
+  return Promise.resolve(_sbPermiso(true)).then(function(sb){
+    if(!sb||!sb.token)return null;
+    var p={};Object.keys(body).forEach(function(k){if(k!=='token'&&k.indexOf('__')!==0)p[k]=body[k];});
+    return fetch(sb.url+'/rest/v1/rpc/'+fn,{method:'POST',signal:ctl?ctl.signal:undefined,
+      headers:{apikey:sb.key,Authorization:'Bearer '+sb.token,'Content-Type':'application/json'},body:JSON.stringify({p:p})})
+      .then(function(r){
+        if(r.status===401||r.status===403||r.status===404)return null;
+        if(!r.ok)throw new TypeError('la base contestó '+r.status);
+        return r.json();
+      })
+      .then(function(d){return(d&&d.ok)?d:null;});
+  },function(){return null;});
+}
+/* El POST de una accion del panel: primero la base (si va directo), si no Apps Script. Devuelve un Response,
+   asi cada pantalla sigue con su `.then(r.json())` de siempre. */
+function _ordenPost(body){
+  var apps=function(){return fetch(API,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(body)});};
+  return _ordenDirecta(body).catch(function(){return null;}).then(function(d){
+    try{ window.__ordDe=d?'base':'apps'; }catch(e){}
+    return d?new Response(JSON.stringify(d),{status:200,headers:{'Content-Type':'application/json'}}):apps();
+  });
+}
 function _recargarPedidos(){
   if(typeof loadRapido==='function')return loadRapido();
   return (typeof load==='function')?load():Promise.resolve();
@@ -16525,7 +16564,7 @@ function confirmarDeshacerOrigen(btn){
   window._forceTopOnRender=true;
   _marcarCambioOrigen();
   showLoader('Deshaciendo origen...');
-  fetch(API,{method:'POST',body:JSON.stringify({action:'deshacerOrigen',hoja:hoja,id:id,row:row,clientOpId:_pfId()})})
+  _ordenPost({action:'deshacerOrigen',hoja:hoja,id:id,row:row,clientOpId:_pfId()})
     .then(function(r){return r.json();})
     .then(function(r){
       if(r.ok){
@@ -17623,7 +17662,7 @@ function cambiarFechaEntrega(inp){
   // Tras la acción, scroll al top para que Tadeo no tenga que volver arriba a mano.
   window._forceTopOnRender=true;
   showLoader('Actualizando fecha de entrega...');
-  fetch(API,{method:'POST',body:JSON.stringify({action:'updateDiaEntrega',hoja:hoja,id:id,row:row,fecha:fecha,clientOpId:_pfId()})})
+  _ordenPost({action:'updateDiaEntrega',hoja:hoja,id:id,row:row,fecha:fecha,clientOpId:_pfId()})
     .then(function(r){return r.json();})
     .then(function(r){
       hideLoader(true);
@@ -17643,7 +17682,7 @@ function cambiarEstado(btn){
   _patchPedidoLocal(hoja,id,{es:nuevoEstado});
   render();
   showLoader(nuevoEstado==='Reservado'?'Reservando...':'Quitando reserva...');
-  fetch(API,{method:'POST',body:JSON.stringify({action:'cambiarEstadoEntrega',hoja:hoja,id:id,row:row,estado:nuevoEstado,clientOpId:_pfId()})})
+  _ordenPost({action:'cambiarEstadoEntrega',hoja:hoja,id:id,row:row,estado:nuevoEstado,clientOpId:_pfId()})
     .then(function(r){return r.json();})
     .then(function(r){
       // Cerrar loader apenas responde el POST — no esperamos load() completo (~15s).
@@ -36860,7 +36899,7 @@ if('serviceWorker' in navigator){
   window.deshacerCobro=function(hoja,n,row){
     if(!confirm('¿Deshacer el cobro de este pedido?\n\nVuelve a "No cobrado" y reaparece en COBROS para cobrarlo de nuevo con la forma de pago / monto correctos. La caja se ajusta sola.'))return;
     showLoader('Deshaciendo cobro...');
-    fetch(API,{method:'POST',body:JSON.stringify({action:'descobrar',hoja:hoja,id:String(n),row:row,ts:Date.now()})})
+    _ordenPost({action:'descobrar',hoja:hoja,id:String(n),row:row,ts:Date.now()})
       .then(function(r){return r.json();})
       .then(function(r){
         hideLoader(true);
@@ -37377,8 +37416,7 @@ if('serviceWorker' in navigator){
     if(valor===null){ var q=document.getElementById('ordGrupalQue'); valor=((q&&q.value)||'').trim()||true; }
     var btns=document.querySelectorAll('.ord-trajo-op');
     for(var i=0;i<btns.length;i++) btns[i].disabled=true;
-    fetch(API,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},
-      body:JSON.stringify({action:'pedidoGrupal',hoja:hoja,row:row,id:n,valor:valor,clientOpId:_pfId()})})
+    _ordenPost({action:'pedidoGrupal',hoja:hoja,row:row,id:n,valor:valor,clientOpId:_pfId()})
       .then(function(r){return r.json();})
       .then(function(d){
         if(d&&d.ok){
@@ -37499,8 +37537,7 @@ if('serviceWorker' in navigator){
     if(!confirm(msg))return;
     var btns=document.querySelectorAll('.ord-actions .ord-btn');
     for(var i=0;i<btns.length;i++) btns[i].disabled=true;
-    fetch(API,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},
-      body:JSON.stringify({action:'deshacerEntrega',hoja:hoja,id:String(n),row:row})})
+    _ordenPost({action:'deshacerEntrega',hoja:hoja,id:String(n),row:row,clientOpId:_pfId()})
       .then(function(r){return r.json();})
       .then(function(d){
         if(d&&d.ok){
