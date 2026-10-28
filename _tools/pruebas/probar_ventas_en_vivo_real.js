@@ -34,7 +34,7 @@ async function esperar(cli, expr, ms) { const t0 = Date.now(); while (Date.now()
   while (Date.now() < fin) {
     await pausa(15000);
     let l = {}, v = null;
-    try { l = await evaluar(cli, `window.__llega`); v = await evaluar(cli, `window.__ventasVivo||null`); } catch (e) { console.log('  (la pagina no contesto: ' + e.message + ')'); continue; }
+    try { l = (await evaluar(cli, `window.__llega`)) || {}; v = await evaluar(cli, `window.__ventasVivo||null`); }   /* (28/10) si la app se actualizo sola y recargo, __llega no existe */ catch (e) { console.log('  (la pagina no contesto: ' + e.message + ')'); continue; }
     console.log('  ' + new Date().toTimeString().slice(0, 8) + ' llegaron: pedidos ' + ((l.ped || []).length) + ' · ventas ' + ((l.ventas || []).length) + ' · __ventasVivo ' + JSON.stringify(v));
     if (v && v.hizo === 'ventas de la base') { vio = true; break; }
   }
