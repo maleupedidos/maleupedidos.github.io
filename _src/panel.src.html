@@ -5864,6 +5864,8 @@ details.rb-plg[open]{padding-bottom:10px}
          pantalla mostraba Pulso. -->
     <button class="bbdd-tab bbdd-tab-sep on" data-esub="pulso" onclick="estSwitch('pulso')">Pulso</button>
   </div>
+  <!-- (27/10/2026) El CRM en vivo: «● en vivo» o desde cuando no. Escondido con la palanca CRM_EN_VIVO apagada. -->
+  <div class="ped-vivo-fila"><span id="crmEnVivo" class="ped-vivo" hidden></span></div>
 
   <!-- Sub: HOY nuevo (las jugadas del dia) -->
   <div class="est-sub" id="est-jugadas">
@@ -14352,11 +14354,24 @@ function _enVivoPoner(estado, motivo) {
 /* `alCambio(payload)` con cada señal del canal; `alVolver()` cada vez que el canal
    vuelve a quedar escuchando despues de haberlo estado (no la primera). Llamarla
    dos veces con el mismo canal reemplaza las funciones: es idempotente. */
+/* VARIOS OYENTES POR CANAL (27/10/2026). Hasta hoy un canal tenia UN manejador y el segundo que se anotaba
+   pisaba al primero: si el CRM escuchaba `erp:fotos`, Abastecimiento se quedaba sin en vivo. Ahora cada canal
+   guarda la lista (`oyentes`) y `alCambio`/`alVolver` reparten a todos; anotar dos veces la misma funcion no
+   la duplica. Un oyente que revienta no corta a los demas. */
+function _enVivoRepartir(c, campo, dato) {
+  (c.oyentes || []).forEach(function (o) { if (typeof o[campo] === 'function') { try { o[campo](dato); } catch (e) {} } });
+}
 function _enVivoEscuchar(canal, alCambio, alVolver) {
   try {
     var c = _ENV.canales[canal];
-    if (c) { c.alCambio = alCambio; c.alVolver = alVolver; return; }
-    _ENV.canales[canal] = { alCambio: alCambio, alVolver: alVolver, unido: false, alguna: false };
+    if (c) {
+      var ya = c.oyentes.filter(function (o) { return o.alCambio === alCambio; })[0];
+      if (ya) ya.alVolver = alVolver; else c.oyentes.push({ alCambio: alCambio, alVolver: alVolver });
+      return;
+    }
+    c = _ENV.canales[canal] = { oyentes: [{ alCambio: alCambio, alVolver: alVolver }], unido: false, alguna: false };
+    c.alCambio = function (d) { _enVivoRepartir(c, 'alCambio', d); };
+    c.alVolver = function () { _enVivoRepartir(c, 'alVolver'); };
     if (_ENV.ws && _ENV.ws.readyState === 1) _enVivoUnir(canal);
     else _enVivoConectar();
   } catch (e) { _enVivoPoner('cortado', 'error: ' + ((e && e.message) || e)); }
@@ -38803,6 +38818,85 @@ if('serviceWorker' in navigator){
       .then(function(r){ _crmInterPromesa = null; return r; });
     return _crmInterPromesa;
   }
+
+  /* ══ EL CRM EN VIVO (27/10/2026, primera pantalla del «sacar el boton Actualizar») ══
+     Con `CRM_EN_VIVO` en «si» (`sb.pal.crmEnVivo`) el CRM escucha `erp:fotos` (migracion 100): cada vez que
+     el ERP rehace la foto `crmClientes` o `crmInteracciones` (cada 5 min si hubo cambios, FOTO_CADA_5), relee
+     ESA foto de la base y repinta la sub-tab abierta (Segmentos, Hoy, Plan semana, y la bitacora de la ficha).
+     · Solo la base: si la foto no sirve (vieja, o se escribio algo despues de confirmarla), NO cae a Apps
+       Script: cada señal seria una llamada a Google. Queda como estaba hasta la proxima señal o el ↻.
+     · Solo con la tab CRM abierta y la app a la vista; con un editor abierto, o escribiendo en un campo del
+       CRM, se deja pendiente y se reintenta a los CRM_VIVO_REINTENTO_MS.
+     · Al volver de un corte, la misma relectura (lo que paso mientras no escuchaba no llega por señal).
+     `window.__crmVivo` dice cuando llego la ultima señal y que hizo. */
+  var CRM_VIVO_REINTENTO_MS = 8000;
+  var _crmVivo = { prendido: false, pend: {}, t: null };
+  function _crmVivoOcupado(){
+    try { if (typeof _hayEditorAbierto === 'function' && _hayEditorAbierto()) return 'editor abierto'; } catch(e){}
+    var a = document.activeElement;
+    if (a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName) && a.closest && a.closest('#p-estancias')) return 'escribiendo';
+    return '';
+  }
+  function _crmVivoNota(o){ try { window.__crmVivo = Object.assign({ t: Date.now() }, o); } catch(e){} }
+  function _crmVivoAplicar(){
+    _crmVivo.t = null;
+    if (typeof cur === 'undefined' || cur !== 'estancias' || document.visibilityState === 'hidden') { _crmVivoNota({ hizo: 'nada: el CRM no esta a la vista' }); _crmVivo.pend = {}; return; }
+    var oc = _crmVivoOcupado();
+    if (oc) { _crmVivoNota({ hizo: 'pendiente: ' + oc }); _crmVivo.t = setTimeout(_crmVivoAplicar, CRM_VIVO_REINTENTO_MS); return; }
+    var pend = _crmVivo.pend; _crmVivo.pend = {};
+    if (pend.crmClientes) {
+      _crmDeLaBase().then(function(r){
+        _crmVivoNota({ hizo: r && r.usado ? 'clientes de la base (' + r.de + ')' : 'clientes: la foto no sirvio, sin cambios', porque: r && r.porque });
+        if (r && r.usado) { CRM_FUENTE = { de: r.de, t: r.t }; _crmCliEstadoPintar(); _crmRenderActiveSub(); }
+      }).catch(function(e){ _crmVivoNota({ hizo: 'error clientes: ' + ((e && e.message) || e) }); });
+    }
+    if (pend.crmInteracciones) {
+      _crmFotoBase('crmInteracciones', function(d){ return !!(d && Array.isArray(d.interacciones) && d.interacciones.length); }).then(function(r){
+        if (!r || !r.usado) { _crmVivoNota({ hizo: 'bitacora: la foto no sirvio, sin cambios', porque: r && r.porque }); return; }
+        crmInteracciones = _crmInterFusion(r.d.interacciones);
+        try{ localStorage.setItem('maleu_crm_inter_v1', JSON.stringify(crmInteracciones)); }catch(e){}
+        _crmIndexInteracciones();
+        if (crmClientes) _crmRenderActiveSub();
+        if (crmFichaActual && crmFichaActual.tipo === 'cliente' && el('crmBitacora')) { try { _crmRenderBitacora(crmFichaActual.data); } catch(e){} }
+        _crmVivoNota({ hizo: 'bitacora de la base' });
+      }).catch(function(e){ _crmVivoNota({ hizo: 'error bitacora: ' + ((e && e.message) || e) }); });
+    }
+  }
+  function _crmVivoFoto(p){
+    var s = p && p.screen;
+    if (s !== 'crmClientes' && s !== 'crmInteracciones') return;
+    _crmVivo.pend[s] = 1;
+    _crmVivoNota({ senal: s, computed_at: p.computed_at });
+    if (!_crmVivo.t) _crmVivo.t = setTimeout(_crmVivoAplicar, 700);
+  }
+  function _crmVivoVolver(){ _crmVivo.pend = { crmClientes: 1, crmInteracciones: 1 }; if (!_crmVivo.t) _crmVivo.t = setTimeout(_crmVivoAplicar, 700); }
+  /* El cartelito arriba de la lista, como en Pedidos: vivo, o desde cuando no. */
+  function _crmVivoSello(st){
+    var e = el('crmEnVivo'); if (!e) return;
+    var apagado = !_crmVivo.prendido || !st || st.estado === 'apagado';
+    e.hidden = apagado;
+    if (apagado) { e.textContent = ''; return; }
+    if (st.estado === 'vivo') { e.textContent = '● en vivo'; e.className = 'ped-vivo ped-vivo-si'; e.title = 'Los clientes y la bitácora se actualizan solos cuando alguien cambia algo (en unos minutos)'; return; }
+    if (st.estado === 'conectando') { e.textContent = '○ conectando…'; e.className = 'ped-vivo ped-vivo-no'; e.title = ''; return; }
+    var txt = 'sin conexión en vivo';
+    try { if (typeof _hace === 'function' && st.desde) txt += ' · ' + _hace(st.desde); } catch(e2){}
+    e.textContent = txt; e.className = 'ped-vivo ped-vivo-no'; e.title = st.motivo || '';
+  }
+  function _crmVivoPrender(){
+    try {
+      if (_crmVivo.prendido || typeof _enVivoEscuchar !== 'function' || typeof _sbPermiso !== 'function') return;
+      _sbPermiso(true).then(function(sb){
+        if (_crmVivo.prendido || !sb || !sb.pal || !sb.pal.crmEnVivo) return;
+        _crmVivo.prendido = true;
+        _enVivoAlEstado(_crmVivoSello);
+        _enVivoEscuchar('erp:fotos', _crmVivoFoto, _crmVivoVolver);
+        try { _crmVivoSello(_enVivoEstado()); } catch(e){}
+      }, function(){});
+    } catch(e){}
+  }
+  window._crmVivoPrender = _crmVivoPrender;
+  try { window.addEventListener('maleu:palancas', function(){ _crmVivoPrender(); }); } catch(e){}
+  setTimeout(_crmVivoPrender, 0);
 
   // ── Índices de la bitácora: por key y por tel, ordenadas desc por fecha ──
   var _interByKey = {}, _interByTel = {};
