@@ -1432,6 +1432,19 @@ function _abaSello(ts) {
    la pantalla anda, va por Apps Script, y nadie se entera de que el atajo está
    roto. Esto se lee con `window.__abaFoto` en la consola. */
 var __abaFoto = { estado: 'sin intentar', motivo: '' };
+/* PURA. '' = la foto se puede usar; si no, por que no. `estado` = filas de
+   replica_status; `sello` = lo de `_pedSelloEscritura` ({g, f}). Es deuda con
+   proveedores: el mismo limite que Caja (15 min). */
+var ABA_FOTO_CONF_MS = 15 * 60 * 1000;
+function _abaFotoNoSirve(estado, sello, ahora) {
+  if (typeof _fotoConf !== 'function' || typeof _selloDe !== 'function' || typeof _pgNoUsar !== 'function')
+    return 'el panel no expone la confirmacion de las fotos';
+  if (!Array.isArray(estado)) return 'no se pudo leer la confirmacion de la base';
+  var conf = _fotoConf(estado, 'busqueda');
+  if (!conf) return 'la base todavia no confirma la foto';
+  if (ahora - conf > ABA_FOTO_CONF_MS) return 'la base confirmo la foto hace ' + Math.round((ahora - conf) / 60000) + ' min';
+  return _pgNoUsar(conf, _selloDe(sello, ['busqueda']));
+}
 function _abaFotoNota(estado, motivo) {
   __abaFoto = { estado: estado, motivo: String(motivo || '') };
   try { window.__abaFoto = __abaFoto; } catch (e) {}
@@ -1452,12 +1465,24 @@ function _abaFotoLeer() {
         _abaFotoNota('sin permiso', 'este usuario no tiene token de Supabase, o todavía no llegó');
         return null;
       }
-      return fetch(sb.url + '/rest/v1/erp_screen_snapshot'
-          + '?select=payload,computed_at,warning,source&screen=eq.busqueda',
-        { headers: { apikey: sb.key, Authorization: 'Bearer ' + sb.token } })
-        .then(function (r) {
-          if (!r.ok) { _abaFotoNota('HTTP ' + r.status, 'la 030 sin aplicar, o la policy no deja leer'); return null; }
-          return r.json();
+      /* LA FOTO SOLA NO ALCANZA (29/10/2026). Hasta hoy se usaba mirando solo
+         `computed_at` y se aceptaba hasta 25 min: los 4 pagos de 11:42-11:46 no
+         se vieron porque la foto era de las 11:33 y nadie la recalculaba. Ahora,
+         como Caja: la confirmacion de la base (`foto:busqueda`) de menos de
+         ABA_FOTO_CONF_MS y ninguna escritura de su tema despues (el sello de
+         `action=ver`). Si no, va por Apps Script. */
+      var H = { headers: { apikey: sb.key, Authorization: 'Bearer ' + sb.token } };
+      var pedir = function (q) { return fetch(sb.url + '/rest/v1/' + q, H).then(function (r) { return r.ok ? r.json() : { _http: r.status }; }); };
+      return Promise.all([
+        pedir('erp_screen_snapshot?select=payload,computed_at,warning,source&screen=eq.busqueda'),
+        typeof _fotoConfQuery === 'function' ? pedir(_fotoConfQuery(['busqueda'])).catch(function () { return null; }) : Promise.resolve(null),
+        typeof _pedSelloEscritura === 'function' ? _pedSelloEscritura() : Promise.resolve(null)
+      ]).then(function (rs) {
+          var filas = rs[0];
+          if (filas && filas._http) { _abaFotoNota('HTTP ' + filas._http, 'la 030 sin aplicar, o la policy no deja leer'); return null; }
+          var porQue = _abaFotoNoSirve(rs[1], rs[2], Date.now());
+          if (porQue) { _abaFotoNota('sin confirmar', porQue); return null; }
+          return filas;
         })
         .then(function (filas) {
           if (!filas) return null;
@@ -1527,8 +1552,9 @@ function abaRedondeo(btn) {
   if (!confirm('¿Los ' + abaFormatMoney(monto) + ' que le pagaste de más a ' + prov + ' son redondeo?\n\nSe suman a la compra de la semana ' + sem +
                ' (van a Mercadería) y dejan de quedar a cuenta. Se puede deshacer.')) return;
   btn.disabled = true; btn.textContent = 'Guardando…';
-  fetch(ABA_APPS_SCRIPT_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-    body: JSON.stringify({ action: 'provRedondeo', prov: prov, sem: sem, monto: monto }) })
+  var _rdBody = { action: 'provRedondeo', prov: prov, sem: sem, monto: monto };   /* (302) por la base si esta prendida */
+  (typeof _hojaPost === 'function' ? _hojaPost(_rdBody) : fetch(ABA_APPS_SCRIPT_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify(_rdBody) }))
     .then(function (r) { return r.json(); })
     .then(function (d) {
       if (d && d.ok) { abaShowToast('Listo: ' + abaFormatMoney(monto) + ' sumados a la semana ' + sem); abaRefresh(true); }
@@ -1537,8 +1563,9 @@ function abaRedondeo(btn) {
 }
 function abaRedondeoDeshacer(id) {
   if (!confirm('¿Deshacer el redondeo ' + id + '? La diferencia vuelve a quedar a cuenta del proveedor.')) return;
-  fetch(ABA_APPS_SCRIPT_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-    body: JSON.stringify({ action: 'provRedondeoAnular', id: id }) })
+  var _raBody = { action: 'provRedondeoAnular', id: id };   /* (302) por la base si esta prendida */
+  (typeof _hojaPost === 'function' ? _hojaPost(_raBody) : fetch(ABA_APPS_SCRIPT_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify(_raBody) }))
     .then(function (r) { return r.json(); })
     .then(function (d) { if (d && d.ok) { abaShowToast('Redondeo deshecho'); abaRefresh(true); } else abaShowToast((d && d.err) || 'No se pudo', 6000); })
     .catch(function () { abaShowToast('Sin conexión: probá de nuevo', 6000); });
@@ -2462,11 +2489,13 @@ function programarBusqueda(provName, isoFecha) {
   abaSaveLocal();
   abaRender();
   // POST al backend
-  fetch(ABA_APPS_SCRIPT_URL, {
+  /* (302) Por la base si su palanca esta prendida (`_hojaPost` del panel); si no, Apps Script. */
+  var _pbBody = { action: 'programarBusqueda', proveedor: provName, fecha: isoFecha || '' };
+  (typeof _hojaPost === 'function' ? _hojaPost(_pbBody) : fetch(ABA_APPS_SCRIPT_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-    body: JSON.stringify({ action: 'programarBusqueda', proveedor: provName, fecha: isoFecha || '' })
-  }).then(function(r) { return r.json().catch(function() { return {}; }); }).then(function(resp) {
+    body: JSON.stringify(_pbBody)
+  })).then(function(r) { return r.json().catch(function() { return {}; }); }).then(function(resp) {
     if (resp && resp.ok) {
       abaShowToast(isoFecha ? ('📅 ' + provName + ': ' + _labelDia(isoFecha)) : ('Quitada programación de ' + provName));
     } else {
