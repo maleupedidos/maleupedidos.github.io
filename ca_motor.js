@@ -2037,13 +2037,14 @@ function _doGetAdmin(opt) {
        y una sola vez, fuera del loop. Por numero fijo se romperian solas: son
        las ultimas de la hoja y cualquier columna nueva las corre. En una hoja
        que todavia no las tiene, el -1 deja el campo vacio y nada mas. */
-    var _iTrajoR = -1, _iTelCliR = -1, _iExcR = -1, _iExcMR = -1, _iPorR = -1;
+    var _iTrajoR = -1, _iTelCliR = -1, _iExcR = -1, _iExcMR = -1, _iPorR = -1, _iGrpR = -1;
     var _iDepR = _ixDepPedido_(dataRed[0]);
     (function () {
       var _h0 = dataRed[0] || [];
       for (var _q = 0; _q < _h0.length; _q++) {
         var _nq = String(_h0[_q]).trim();
         if (_nq === 'Confirmado por') { _iPorR = _q; continue; }
+        if (_nq === GRUPAL_COL_) { _iGrpR = _q; continue; }   // la juntada (28/10/2026)
         if (_nq === 'Trajo el Cliente') _iTrajoR = _q;
         else if (_nq === 'Teléfono Cliente') _iTelCliR = _q;
         else if (_nq === RED_EXC_HDR.monto) _iExcR = _q;
@@ -2177,6 +2178,8 @@ function _doGetAdmin(opt) {
         era: (function () { var x = _rbNumeroCliente_('', _iPorR >= 0 ? dataRed[rr][_iPorR] : ''); return x ? (x.hoja + ' #' + x.n) : undefined; })(),
         tc: _iTrajoR >= 0 ? String(dataRed[rr][_iTrajoR] || '').trim() : '',
         tcl: _iTelCliR >= 0 ? String(dataRed[rr][_iTelCliR] || '').trim() : '',
+        /* La JUNTADA (28/10/2026): un pedido de la tienda puede caer en un representante. */
+        grp: (_iGrpR >= 0 && String(dataRed[rr][_iGrpR] || '').trim()) ? String(dataRed[rr][_iGrpR]).trim() : undefined,   // solo con valor: la foto de la base (292) hace lo mismo
         /* La comision del vendedor, y si es fuera de escala (2/10/2026). `cexm`
            es el motivo: solo viaja cuando hay excepcion. */
         com: Number(dataRed[rr][46]) || 0,
@@ -2557,7 +2560,17 @@ function _doGetAdmin(opt) {
         else if (fpVal === 'Mixto') {
           // Bug Gonzalo 05/06: fp=Mixto mandaba TODO el facturado a MP en libro diario.
           // Usar la composición real de las cols Ef/Tr del pedido, escalando por si hubo parciales.
-          if (facturado > 0 && (ef + tr) > 0) {
+          /* MEDIO POR MEDIO (28/10/2026). Con parciales se restaba el total y lo que quedaba se
+             repartia con la proporcion del pedido ENTERO: el #2056 (Ef 26.000 + Tr 18.000, parcial
+             de 26.000 en efectivo) cerraba con $10.636 en efectivo que nadie cobro. Lo que falta de
+             cada medio es su columna menos los parciales de ese medio (nunca negativo), escalado al
+             neto por si hubo propina. Sin parciales da lo mismo que antes. */
+          var efResta = Math.max(0, ef - (parcAcum ? parcAcum.ef : 0));
+          var trResta = Math.max(0, tr - (parcAcum ? parcAcum.mp : 0));
+          if (facturado > 0 && (efResta + trResta) > 0) {
+            efTotal = Math.round(netoCierre * (efResta / (efResta + trResta)));
+            mpTotal = netoCierre - efTotal;
+          } else if (facturado > 0 && (ef + tr) > 0) {
             efTotal = Math.round(netoCierre * (ef / (ef + tr)));
             mpTotal = netoCierre - efTotal;
           } else {

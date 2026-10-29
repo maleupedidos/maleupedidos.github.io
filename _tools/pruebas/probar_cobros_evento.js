@@ -79,7 +79,8 @@ const LEER = `(function(){
     nom:(k.querySelector('.cg-nom')||{}).textContent||'',
     ids: rows.map(function(x){return (x.textContent.match(/#(\\d+)/)||[])[1];}),
     itms: itms.map(function(x){return {t:x.textContent.replace(/\\s+/g,' ').trim(),on:x.getAttribute('aria-checked')==='true',h:Math.round(x.getBoundingClientRect().height)};}),
-    pagador: !!k.querySelector('input[oninput*="cobPagadorInput"]'),
+    pagador: !!k.querySelector('.cg-chip[onclick*="cobPagadorChip"]'), chips: [].slice.call(k.querySelectorAll('.cg-chip[onclick*="cobPagadorChip"]')).map(function(x){return {n:x.getAttribute('data-n'),on:x.classList.contains('on')};}),
+    cada: [].slice.call(k.querySelectorAll('.cg-cobrar-de')).map(function(x){return x.textContent.trim();}),
     boton: cob?{txt:cob.textContent.trim(),dis:!!cob.disabled}:null,
     resto: (k.querySelector('.cg-resto')||{}).textContent||'',
     afuera: bs.filter(function(b){var q=b.getBoundingClientRect();return q.right>r.right+1||q.left<r.left-1;}).length,
@@ -87,7 +88,7 @@ const LEER = `(function(){
 })()`;
 const CLICK = sel => `(function(){var k=${CARD};var b=k&&k.querySelector(${JSON.stringify(sel)});if(b)b.click();return !!b;})()`;
 const ITEM = a => `(function(){var k=${CARD};var b=k&&k.querySelector('.cg-itm-r[data-a="${a}"]');if(b)b.click();return !!b;})()`;
-const PAGADOR = n => `(function(){var k=${CARD};var i=k&&k.querySelector('input[oninput*="cobPagadorInput"]');if(!i)return false;i.value=${JSON.stringify(n)};i.dispatchEvent(new Event('input',{bubbles:true}));return true;})()`;
+const PAGADOR = n => `(function(){var k=${CARD};var o=k&&k.querySelector('.cg-chip-otro');if(!o)return false;o.click();k=${CARD};var i=k&&k.querySelector('input[list^="cgPag_"]');if(!i)return false;i.value=${JSON.stringify(n)};i.dispatchEvent(new Event('input',{bubbles:true}));i.dispatchEvent(new Event('change',{bubbles:true}));return true;})()`;
 const ESTADO = `(function(){try{var s=_cobroRutaState;if(!s)return null;
   return {combo:!!s.combo,ids:(s.pedidos||[]).map(function(p){return String(p.id);}),parc:(s.parcItems||[]).map(function(x){return {id:String(x.p.id),m:x.monto,t:x.txt};}),
     pagador:s.pagador||'',total:s.total,fp:s.fp||'',titulo:(document.getElementById('cobroRutaTitle')||{}).textContent||'',
@@ -198,6 +199,51 @@ async function confirmar(cli) {
     await pausa(800);
     const P2 = await ev(cli, `window.__posts.filter(function(p){return /marcarCobrado|cobrarParcial/.test(p.action);})`);
     chk('un solo cobrarParcial, con el billete', (P2 || []).length === 1 && P2[0].action === 'cobrarParcial' && P2[0].recibidoEf === 26000 && P2[0].monto === 26000 && !!P2[0].opCobro, P2);
+
+    /* 28/10/2026: con el pedido destildado, tildar un ítem dejaba el botón gris. */
+    console.log('\n-- el ítem manda sobre su pedido --');
+    await abrirLista(cli);
+    const FILA = id => `(function(){var k=${CARD};var r=[].slice.call(k.querySelectorAll('.cg-row')).filter(function(x){return /#${id}/.test(x.textContent);})[0];if(r)r.click();return !!r;})()`;
+    const ON = id => `(function(){var k=${CARD};var r=[].slice.call(k.querySelectorAll('.cg-row')).filter(function(x){return /#${id}/.test(x.textContent);})[0];return r?r.getAttribute('aria-checked')==='true':null;})()`;
+    await ev(cli, FILA('7201')); await pausa(300);
+    await ev(cli, `(function(){var k=${CARD};var b=[].slice.call(k.querySelectorAll('.cg-itm-abrir button')).filter(function(x){return x.getAttribute('data-k')==='Home|7202';})[0];if(b)b.click();return !!b;})()`);
+    await pausa(300);
+    await ev(cli, FILA('7202')); await pausa(300);
+    L = await ev(cli, LEER);
+    chk('destildado el pedido, el botón queda gris', L.boton && L.boton.dis === true && (await ev(cli, ON('7202'))) === false, L.boton);
+    await ev(cli, ITEM('TLC')); await pausa(300);
+    L = await ev(cli, LEER);
+    chk('tildar/destildar un ítem tilda su pedido y el botón cobra lo tildado ($18.000)', (await ev(cli, ON('7202'))) === true && L.boton && !L.boton.dis && L.boton.txt.indexOf(pesos(18000)) >= 0, L.boton);
+    await ev(cli, ITEM('F')); await pausa(300);
+    L = await ev(cli, LEER);
+    chk('sin ningún ítem tildado, el pedido se destilda', (await ev(cli, ON('7202'))) === false && L.boton && L.boton.dis === true, { on: await ev(cli, ON('7202')), b: L.boton });
+    await ev(cli, FILA('7202')); await pausa(300);
+    L = await ev(cli, LEER);
+    chk('volver a tildar el pedido tilda todos sus ítems ($44.000)', (L.itms || []).length === 2 && L.itms.every(x => x.on) && L.boton && !L.boton.dis && L.boton.txt.indexOf(pesos(44000)) >= 0, { itms: L.itms, b: L.boton });
+
+    /* 28/10/2026: quién paga con chips, y los dos modos al cobrar. */
+    console.log('\n-- la juntada al cobrar: chips y modos --');
+    await abrirLista(cli);
+    L = await ev(cli, LEER);
+    chk('«¿Quién paga?» muestra a los integrantes como chips (los 2 que pidieron)', (L.chips || []).length === 2 && L.chips.some(x => x.n === 'Anfitrion Prueba') && L.chips.some(x => x.n === 'Invitada Prueba') && !L.chips.some(x => x.on), L.chips);
+    chk('la tarjeta dice «Juntada»', /Juntada ·/.test(L.txt || ''), (L.txt || '').slice(0, 120));
+    await ev(cli, `(function(){var k=${CARD};var b=[].slice.call(k.querySelectorAll('.cg-chip')).filter(function(x){return x.getAttribute('data-n')==='Invitada Prueba';})[0];b.click();return 1;})()`); await pausa(300);
+    L = await ev(cli, LEER);
+    chk('tocar un chip lo elige (y solo a ese)', L.chips.filter(x => x.on).length === 1 && L.chips.find(x => x.on).n === 'Invitada Prueba', L.chips);
+    await ev(cli, CLICK('.cg-cobrar')); await pausa(800);
+    S = await ev(cli, ESTADO);
+    chk('el cuadro cobra los 2 a nombre de quien paga, con el monto ya puesto', S && S.pagador === 'Invitada Prueba' && Math.round(S.total) === 84000 && /84\.000/.test(S.ef || ''), S);
+    await ev(cli, `(function(){try{cerrarCobroRuta&&cerrarCobroRuta();}catch(e){}return 1;})()`);
+    await abrirLista(cli);
+    await ev(cli, PAGADOR('Padrino Prueba')); await pausa(300);
+    L = await ev(cli, LEER);
+    chk('«Otro del CRM» suma a alguien sin pedido como integrante', (L.chips || []).some(x => x.n === 'Padrino Prueba' && x.on), L.chips);
+    await ev(cli, `(function(){var k=${CARD};var b=[].slice.call(k.querySelectorAll('.cg-chip')).filter(function(x){return x.getAttribute('data-m')==='cada';})[0];b.click();return 1;})()`); await pausa(300);
+    L = await ev(cli, LEER);
+    chk('«Cada uno lo suyo»: un botón por integrante con lo suyo', (L.cada || []).length === 2 && L.cada.some(t => /Anfitrion Prueba/.test(t) && t.indexOf(pesos(40000)) >= 0) && L.cada.some(t => /Invitada Prueba/.test(t) && t.indexOf(pesos(44000)) >= 0) && (!L.boton || /Cobrar a /.test(L.boton.txt)), L.cada);
+    await ev(cli, `(function(){var k=${CARD};var b=[].slice.call(k.querySelectorAll('.cg-cobrar-de')).filter(function(x){return x.getAttribute('data-n')==='Invitada Prueba';})[0];b.click();return 1;})()`); await pausa(800);
+    S = await ev(cli, ESTADO);
+    chk('cobrar a la invitada abre SOLO su pedido, a su nombre', S && JSON.stringify(S.ids) === '["7202"]' && S.parc.length === 0 && S.pagador === 'Invitada Prueba' && Math.round(S.total) === 44000, S);
 
     const errs = await ev(cli, `window.__errores`);
     chk('sin errores de JS', Array.isArray(errs) && errs.length === 0, errs);
