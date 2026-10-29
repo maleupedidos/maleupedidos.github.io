@@ -1708,6 +1708,9 @@ function _doGetAdmin(opt) {
        col Decisión. Sin esto el original se ve «Cancelado» a secas. */
     var _iDecH = -1;
     for (var _qd = 0; _qd < headersH.length; _qd++) if (String(headersH[_qd] || '').trim() === 'Decisión') { _iDecH = _qd; break; }
+    /* (305) El horario del cliente: «Takeaway · horario a coordinar» (29/10/2026). Solo si hay, como la base. */
+    var _iHcH = -1;
+    for (var _qh = 0; _qh < headersH.length; _qh++) if (String(headersH[_qh] || '').trim() === 'Horario Cliente') { _iHcH = _qh; break; }
 
     // Índices comunes Home/Pilar v2 (abr/2026). Difieren solo en nº de productos y cols post-productos.
     var isPilarAdm = (hoja === 'Pilar');
@@ -1905,6 +1908,7 @@ function _doGetAdmin(opt) {
         tel: String(data[r][IX.tel] || '').trim(),
         dep: (_iDepH >= 0 ? String(data[r][_iDepH] || '').trim().toLowerCase() : ''),
         pas: (_iDecH >= 0 && /^Pasado a Red #/.test(String(data[r][_iDecH] || '').trim())) ? String(data[r][_iDecH]).trim() : undefined,
+        hc: (_iHcH >= 0 && String(data[r][_iHcH] || '').trim()) ? String(data[r][_iHcH]).trim() : undefined,
         r: r + _rOffH
       });
     }
