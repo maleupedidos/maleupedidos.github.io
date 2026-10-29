@@ -18,16 +18,16 @@ let ok = 0, mal = 0; const chk = (t, c, d) => { c ? ok++ : mal++; console.log((c
 async function esperar(cli, e, ms) { const t0 = Date.now(); while (Date.now() - t0 < ms) { try { if (await ev(cli, e)) return true; } catch (x) {} await pausa(200); } return false; }
 /* La base, simulada: `__base` es la secuencia de respuestas ('ok' = pendiente, 'aplicada', 'nodirecto', 'corte', '500', '404'). */
 const capa = `;(function(){var o=window.fetch;window.__envios=[];window.__base=[];window.fetch=function(u,x){var s=String((u&&u.url)||u||''),b=x&&x.body?String(x.body):'';
-  var m=/\\/rpc\\/((?:pedido|caja|ruta|compra)_[a-z_]+_directo)/.exec(s);
+  var m=/\\/rpc\\/((?:pedido|caja|ruta|compra|red)_[a-z_]+_directo)/.exec(s);
   if(m){var p=JSON.parse(b).p;window.__envios.push({a:'base',fn:m[1],acc:p.action,id:p.clientOpId||'',ts:p.ts||0,token:('token' in p)});var r=window.__base.shift()||'ok';
     if(r==='corte')return Promise.reject(new TypeError('Failed to fetch'));
     if(r==='500'||r==='404')return Promise.resolve(new Response('{}',{status:Number(r)}));
     var d=r==='nodirecto'?{ok:false,directo:false,motivo:'datos'}:r==='freno'?{ok:false,necesitaPlata:true,sinReintento:true,cobrado:1500,err:'El pedido está cobrado'}
       :{ok:true,aceptada:true,directo:true,orden:1,diferida:r==='ok',repetida:r==='aplicada'};
     return Promise.resolve(new Response(JSON.stringify(d),{status:200,headers:{'Content-Type':'application/json'}}));}
-  if(/"action":"(marcarCobrado|marcarEntregado|pedidoGrupal|descobrar|updateDiaEntrega|pedidoDeposito|deshacerOrigen|deshacerEntrega|cambiarEstadoEntrega|cancelarPedido|updatePedidoRed|pasarAVendedor|gasto|ingreso|marcarArmado|pagarProveedor|borrarMovimientoCaja|marcarOC|compraManual|setOrigenProductos)"/.test(b)){var q=JSON.parse(b);window.__envios.push({a:'apps',acc:q.action,id:q.clientOpId||'',ts:q.ts||0});
+  if(/"action":"(marcarCobrado|marcarEntregado|pedidoGrupal|descobrar|updateDiaEntrega|pedidoDeposito|deshacerOrigen|deshacerEntrega|cambiarEstadoEntrega|cancelarPedido|updatePedidoRed|pasarAVendedor|gasto|ingreso|marcarArmado|pagarProveedor|borrarMovimientoCaja|marcarOC|compraManual|setOrigenProductos|redTrajoCliente|redReclamar|redReclamoDecidir)"/.test(b)){var q=JSON.parse(b);window.__envios.push({a:'apps',acc:q.action,id:q.clientOpId||'',ts:q.ts||0});
     /* Plata de prueba: nunca a Apps Script de verdad. */
-    if(q.action==='pagarProveedor'||q.action==='borrarMovimientoCaja'||q.action==='marcarOC'||q.action==='compraManual'||q.action==='setOrigenProductos')return Promise.resolve(new Response('{"ok":true,"prueba":true}',{status:200,headers:{'Content-Type':'application/json'}}));}
+    if(q.action==='pagarProveedor'||q.action==='borrarMovimientoCaja'||q.action==='marcarOC'||q.action==='compraManual'||q.action==='setOrigenProductos'||/^red(TrajoCliente|Reclamar|ReclamoDecidir)$/.test(q.action))return Promise.resolve(new Response('{"ok":true,"prueba":true}',{status:200,headers:{'Content-Type':'application/json'}}));}
   if(b.indexOf('pedidosFuenteAplicar')>=0)window.__envios.push({a:'aplicar'});
   return o.apply(this,arguments);};})();
   window.__palForzar={};setInterval(function(){try{var p=window._sbPerm&&window._sbPerm.pal;if(!p)return;Object.keys(window.__palForzar).forEach(function(k){p[k]=window.__palForzar[k];});}catch(e){}},200);`;
@@ -56,7 +56,11 @@ const PANEL = {
   /* (278) */
   compraManual: ['compra_manual_directo', { proveedor: 'Prueba', vendedor: 'Tadeo — Stock', items: [{ abbr: 'PRUEBA', qty: 1, costo: 1 }] }],
   /* (279) */
-  setOrigenProductos: ['pedido_origen_directo', { hoja: 'Home', id: '999258', row: 0, productos: [{ a: 'PRUEBA', d: 1, oc: 0 }] }] };
+  setOrigenProductos: ['pedido_origen_directo', { hoja: 'Home', id: '999258', row: 0, productos: [{ a: 'PRUEBA', d: 1, oc: 0 }] }],
+  /* (280) */
+  redTrajoCliente: ['red_trajo_directo', { row: 999258, valor: 'Maleu' }],
+  redReclamar: ['red_reclamar_directo', { n: '999258', row: 0 }],
+  redReclamoDecidir: ['red_reclamo_decidir_directo', { n: '999258', row: 0, aprobar: true }] };
 (async () => {
   const cli = await cdp.abrir();
   await cli.enviar('Page.addScriptToEvaluateOnNewDocument', { source: prep(TOKEN, capa) });
@@ -106,6 +110,20 @@ const PANEL = {
   await pal({}); e = await origen('ok');
   chk('   apagada: Apps Script y NO la base', e.some((x) => x.a === 'apps' && x.acc === 'setOrigenProductos') && !e.some((x) => x.a === 'base'), e);
   await ev(cli, `var v=document.getElementById('orig-pr279'); if(v)v.remove(); 1`);
+  /* (280) El «trajo» de la ficha del pedido de verdad (`_ordTrajoCliente`). */
+  const trajo = (r) => ev(cli, `window.__envios=[]; window.__base=['${r}']; window._ordTrajoCliente(999258,'Maleu'); 1`).then(() => pausa(2000)).then(envs);
+  await pal({ redTrajoCliente: true }); e = await trajo('ok');
+  chk('Pedidos, «Trajo el cliente» con TRAJO_DIRECTO: va a red_trajo_directo, NO a Apps Script', e.filter((x) => x.a === 'base' && x.fn === 'red_trajo_directo').length === 1 && !e.some((x) => x.a === 'apps'), e);
+  e = await trajo('nodirecto'); const bt = e.find((x) => x.a === 'base'), at = e.find((x) => x.a === 'apps');
+  chk('   la base contesta directo:false: Apps Script con el MISMO id', bt && at && at.acc === 'redTrajoCliente' && bt.id === at.id, e);
+  await pal({}); e = await trajo('ok');
+  chk('   apagada: Apps Script y NO la base', e.some((x) => x.a === 'apps' && x.acc === 'redTrajoCliente') && !e.some((x) => x.a === 'base'), e);
+  /* (280) El reclamo del portal sale por `redPost` (rutaReclamar): con RECLAMAR_DIRECTO va a la base. */
+  await ev(cli, `go('miportal'); 1`);
+  chk('Mi Portal arranca (redPost)', await esperar(cli, `typeof window.redPost==='function'`, 60000), '');
+  await pal({ redReclamar: true });
+  e = await ev(cli, `window.__envios=[]; window.__base=['ok']; redPost({action:'redReclamar',n:'999258',row:0,clientOpId:'rec_prueba_'+Date.now()}).then(function(r){return r.json();}).then(function(){return 1;})`).then(() => pausa(500)).then(envs);
+  chk('Portal, el reclamo por redPost con RECLAMAR_DIRECTO: va a red_reclamar_directo, NO a Apps Script', e.filter((x) => x.a === 'base' && x.fn === 'red_reclamar_directo').length === 1 && !e.some((x) => x.a === 'apps'), e);
   /* (275) Abastecimiento: el formulario de pago de verdad (`confirmarPago`) va primero a la base. */
   await ev(cli, `go('busqueda'); 1`);
   chk('Abastecimiento arranca', await esperar(cli, `typeof window.confirmarPago==='function' && typeof window._abaAplicarBusqueda==='function'`, 60000), '');
