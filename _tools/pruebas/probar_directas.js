@@ -25,9 +25,9 @@ const capa = `;(function(){var o=window.fetch;window.__envios=[];window.__base=[
     var d=r==='nodirecto'?{ok:false,directo:false,motivo:'datos'}:r==='freno'?{ok:false,necesitaPlata:true,sinReintento:true,cobrado:1500,err:'El pedido está cobrado'}
       :{ok:true,aceptada:true,directo:true,orden:1,diferida:r==='ok',repetida:r==='aplicada'};
     return Promise.resolve(new Response(JSON.stringify(d),{status:200,headers:{'Content-Type':'application/json'}}));}
-  if(/"action":"(marcarCobrado|marcarEntregado|pedidoGrupal|descobrar|updateDiaEntrega|pedidoDeposito|deshacerOrigen|deshacerEntrega|cambiarEstadoEntrega|cancelarPedido|updatePedidoRed|pasarAVendedor|gasto|ingreso|marcarArmado|pagarProveedor|borrarMovimientoCaja|marcarOC|compraManual|setOrigenProductos|redTrajoCliente|redReclamar|redReclamoDecidir|crmUpdateClienteMeta|crmDeleteInteraccion|crmLeadDelete)"/.test(b)){var q=JSON.parse(b);window.__envios.push({a:'apps',acc:q.action,id:q.clientOpId||'',ts:q.ts||0});
+  if(/"action":"(marcarCobrado|marcarEntregado|pedidoGrupal|descobrar|updateDiaEntrega|pedidoDeposito|deshacerOrigen|deshacerEntrega|cambiarEstadoEntrega|cancelarPedido|updatePedidoRed|pasarAVendedor|gasto|ingreso|marcarArmado|pagarProveedor|borrarMovimientoCaja|marcarOC|compraManual|setOrigenProductos|redTrajoCliente|redReclamar|redReclamoDecidir|crmUpdateClienteMeta|crmDeleteInteraccion|crmLeadDelete|pedidoDecidir|cobroFecha|marcarEntregadoAVendedor|noSeCobro)"/.test(b)){var q=JSON.parse(b);window.__envios.push({a:'apps',acc:q.action,id:q.clientOpId||'',ts:q.ts||0});
     /* Plata de prueba: nunca a Apps Script de verdad. */
-    if(q.action==='pagarProveedor'||q.action==='borrarMovimientoCaja'||q.action==='marcarOC'||q.action==='compraManual'||q.action==='setOrigenProductos'||/^red(TrajoCliente|Reclamar|ReclamoDecidir)$/.test(q.action)||/^crm(UpdateClienteMeta|DeleteInteraccion|LeadDelete)$/.test(q.action))return Promise.resolve(new Response('{"ok":true,"prueba":true}',{status:200,headers:{'Content-Type':'application/json'}}));}
+    if(q.action==='pagarProveedor'||q.action==='borrarMovimientoCaja'||q.action==='marcarOC'||q.action==='compraManual'||q.action==='setOrigenProductos'||/^red(TrajoCliente|Reclamar|ReclamoDecidir)$/.test(q.action)||/^crm(UpdateClienteMeta|DeleteInteraccion|LeadDelete)$/.test(q.action)||/^(pedidoDecidir|cobroFecha|marcarEntregadoAVendedor|noSeCobro)$/.test(q.action))return Promise.resolve(new Response('{"ok":true,"prueba":true}',{status:200,headers:{'Content-Type':'application/json'}}));}
   if(b.indexOf('pedidosFuenteAplicar')>=0)window.__envios.push({a:'aplicar'});
   return o.apply(this,arguments);};})();
   window.__palForzar={};setInterval(function(){try{var p=window._sbPerm&&window._sbPerm.pal;if(!p)return;Object.keys(window.__palForzar).forEach(function(k){p[k]=window.__palForzar[k];});}catch(e){}},200);`;
@@ -64,7 +64,12 @@ const PANEL = {
   /* (281) */
   crmUpdateClienteMeta: ['crm_ficha_directo', { tel: '5490000000000', notas: 'prueba' }],
   crmDeleteInteraccion: ['crm_interaccion_borrar_directo', { id: 'I-PRUEBA' }],
-  crmLeadDelete: ['crm_lead_borrar_directo', { id: 'L-PRUEBA' }] };
+  crmLeadDelete: ['crm_lead_borrar_directo', { id: 'L-PRUEBA' }],
+  /* (282-285) */
+  pedidoDecidir: ['pedido_decidir_directo', { hoja: 'Home', id: '999258', row: 0, decision: 'nosotros' }],
+  cobroFecha: ['pedido_cobro_fecha_directo', { hoja: 'Home', id: '999258', row: 0, fecha: '27/10/2026' }],
+  marcarEntregadoAVendedor: ['red_bolsa_directo', { rows: [999999], vendedor: 'Prueba' }],
+  noSeCobro: ['pedido_no_se_cobro_directo', { hoja: 'Home', id: '999258', row: 0, abbr: 'PRUEBA', motivo: 'prueba' }] };
 (async () => {
   const cli = await cdp.abrir();
   await cli.enviar('Page.addScriptToEvaluateOnNewDocument', { source: prep(TOKEN, capa) });
@@ -139,6 +144,11 @@ const PANEL = {
   chk('   la base contesta directo:false: Apps Script con el MISMO clientOpId', bc2 && ac2 && ac2.acc === 'crmDeleteInteraccion' && bc2.id === ac2.id, e);
   await pal({}); e = await crm('ok');
   chk('   apagada: Apps Script y NO la base', e.some((x) => x.a === 'apps' && x.acc === 'crmDeleteInteraccion') && !e.some((x) => x.a === 'base'), e);
+  /* (283) El 📅 del libro de Caja de verdad sale por _ordenPost; (284) la bolsa de Ruta, por _rutDirecta. */
+  await pal({ cobroFecha: true });
+  e = await ev(cli, `window.__envios=[]; window.__base=['nodirecto']; _ordenPost({action:'cobroFecha',hoja:'Home',id:'999258',row:0,fecha:'27/10/2026',clientOpId:'cf-prueba-'+Date.now()}).then(function(r){return r.json();}).then(function(){return 1;})`).then(() => pausa(800)).then(envs);
+  const bf = e.find((x) => x.a === 'base'), af = e.find((x) => x.a === 'apps');
+  chk('Caja, el día del cobro con COBRO_FECHA_DIRECTO y la base en directo:false (el ajuste de caja): Apps Script con el MISMO id', bf && af && bf.fn === 'pedido_cobro_fecha_directo' && af.acc === 'cobroFecha' && bf.id === af.id, e);
   /* (275) Abastecimiento: el formulario de pago de verdad (`confirmarPago`) va primero a la base. */
   await ev(cli, `go('busqueda'); 1`);
   chk('Abastecimiento arranca', await esperar(cli, `typeof window.confirmarPago==='function' && typeof window._abaAplicarBusqueda==='function'`, 60000), '');
