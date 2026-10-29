@@ -14688,7 +14688,7 @@ function _leerVersion(app){
    "El HTML no sabe que version es" dejo de ser cierto: el build le escribe
    adentro el CACHE_NAME de sw-panel.js, el mismo que deploy.sh obliga a subir en
    cada cambio. Si lo publicado dice otra cosa, esta pagina es vieja. Punto. */
-var _APP_CN_PAGINA='maleu-panel-v773';
+var _APP_CN_PAGINA='maleu-panel-v774';
 
 /* Devuelve [{k,v}] si lo publicado no es lo que esta pagina corre. */
 function _chequearVersiones(){
@@ -18987,7 +18987,9 @@ var ORD_DIRECTAS_RPC={marcarCobrado:'pedido_cobrar_directo',marcarEntregado:'ped
   /* (289) La orden de hoja: el objetivo de la semana del portal. */
   redObjetivoSet:'red_objetivo_directo',
   /* (301) La recepcion (la cola de Abastecimiento ya pasa por `_ordenDirecta`). */
-  recibirMercaderia:'compra_recibir_directo'};
+  recibirMercaderia:'compra_recibir_directo',
+  /* (302) La orden de hoja: la busqueda programada, el objetivo del plan y los redondeos del proveedor. */
+  programarBusqueda:'prov_programar_directo',planObjetivoSet:'plan_objetivo_directo',provRedondeo:'prov_redondeo_directo',provRedondeoAnular:'prov_redondeo_anular_directo'};
 function _ordenDirectaOn(a){
   if(typeof _palancaVal!=='function')return false;
   var m=_palancaVal('directas');
@@ -19017,6 +19019,12 @@ function _ordenPost(body){
     try{ window.__ordDe=d?'base':'apps'; }catch(e){}
     return d?new Response(JSON.stringify(d),{status:200,headers:{'Content-Type':'application/json'}}):apps();
   });
+}
+/* (302) Una escritura de hoja chica: con su id (el reintento no duplica) y por `_ordenPost` (la base si su palanca
+   esta en «si»; si no, Apps Script con el mismo cuerpo). Devuelve un Response, como un fetch. */
+function _hojaPost(body){
+  if(!body.clientOpId)body.clientOpId='ho_'+Date.now().toString(36)+'_'+Math.random().toString(36).slice(2,8);
+  return _ordenPost(body);
 }
 function _recargarPedidos(){
   if(typeof loadRapido==='function')return loadRapido();
@@ -52538,7 +52546,8 @@ if('serviceWorker' in navigator){
   };
 
   function _planPost(body){
-    return fetch(PLAN_API, { method:'POST', mode:'cors', body: JSON.stringify(body) })
+    /* (302) El objetivo del plan pasa por la base si OBJETIVO_PLAN_DIRECTO esta prendida (`_hojaPost`). */
+    return ((body && body.action==='planObjetivoSet' && typeof _hojaPost==='function') ? _hojaPost(body) : fetch(PLAN_API, { method:'POST', mode:'cors', body: JSON.stringify(body) }))
       .then(function(r){ return r.json(); })
       .then(function(d){ if(!d || !d.ok) throw new Error((d && (d.error||d.err)) || 'no se guardó'); return d; });
   }
@@ -72864,8 +72873,9 @@ function abaRedondeo(btn) {
   if (!confirm('¿Los ' + abaFormatMoney(monto) + ' que le pagaste de más a ' + prov + ' son redondeo?\n\nSe suman a la compra de la semana ' + sem +
                ' (van a Mercadería) y dejan de quedar a cuenta. Se puede deshacer.')) return;
   btn.disabled = true; btn.textContent = 'Guardando…';
-  fetch(ABA_APPS_SCRIPT_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-    body: JSON.stringify({ action: 'provRedondeo', prov: prov, sem: sem, monto: monto }) })
+  var _rdBody = { action: 'provRedondeo', prov: prov, sem: sem, monto: monto };   /* (302) por la base si esta prendida */
+  (typeof _hojaPost === 'function' ? _hojaPost(_rdBody) : fetch(ABA_APPS_SCRIPT_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify(_rdBody) }))
     .then(function (r) { return r.json(); })
     .then(function (d) {
       if (d && d.ok) { abaShowToast('Listo: ' + abaFormatMoney(monto) + ' sumados a la semana ' + sem); abaRefresh(true); }
@@ -72874,8 +72884,9 @@ function abaRedondeo(btn) {
 }
 function abaRedondeoDeshacer(id) {
   if (!confirm('¿Deshacer el redondeo ' + id + '? La diferencia vuelve a quedar a cuenta del proveedor.')) return;
-  fetch(ABA_APPS_SCRIPT_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-    body: JSON.stringify({ action: 'provRedondeoAnular', id: id }) })
+  var _raBody = { action: 'provRedondeoAnular', id: id };   /* (302) por la base si esta prendida */
+  (typeof _hojaPost === 'function' ? _hojaPost(_raBody) : fetch(ABA_APPS_SCRIPT_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify(_raBody) }))
     .then(function (r) { return r.json(); })
     .then(function (d) { if (d && d.ok) { abaShowToast('Redondeo deshecho'); abaRefresh(true); } else abaShowToast((d && d.err) || 'No se pudo', 6000); })
     .catch(function () { abaShowToast('Sin conexión: probá de nuevo', 6000); });
@@ -73799,11 +73810,13 @@ function programarBusqueda(provName, isoFecha) {
   abaSaveLocal();
   abaRender();
   // POST al backend
-  fetch(ABA_APPS_SCRIPT_URL, {
+  /* (302) Por la base si su palanca esta prendida (`_hojaPost` del panel); si no, Apps Script. */
+  var _pbBody = { action: 'programarBusqueda', proveedor: provName, fecha: isoFecha || '' };
+  (typeof _hojaPost === 'function' ? _hojaPost(_pbBody) : fetch(ABA_APPS_SCRIPT_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-    body: JSON.stringify({ action: 'programarBusqueda', proveedor: provName, fecha: isoFecha || '' })
-  }).then(function(r) { return r.json().catch(function() { return {}; }); }).then(function(resp) {
+    body: JSON.stringify(_pbBody)
+  })).then(function(r) { return r.json().catch(function() { return {}; }); }).then(function(resp) {
     if (resp && resp.ok) {
       abaShowToast(isoFecha ? ('📅 ' + provName + ': ' + _labelDia(isoFecha)) : ('Quitada programación de ' + provName));
     } else {
