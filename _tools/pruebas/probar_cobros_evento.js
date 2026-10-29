@@ -199,6 +199,27 @@ async function confirmar(cli) {
     const P2 = await ev(cli, `window.__posts.filter(function(p){return /marcarCobrado|cobrarParcial/.test(p.action);})`);
     chk('un solo cobrarParcial, con el billete', (P2 || []).length === 1 && P2[0].action === 'cobrarParcial' && P2[0].recibidoEf === 26000 && P2[0].monto === 26000 && !!P2[0].opCobro, P2);
 
+    /* 28/10/2026: con el pedido destildado, tildar un ítem dejaba el botón gris. */
+    console.log('\n-- el ítem manda sobre su pedido --');
+    await abrirLista(cli);
+    const FILA = id => `(function(){var k=${CARD};var r=[].slice.call(k.querySelectorAll('.cg-row')).filter(function(x){return /#${id}/.test(x.textContent);})[0];if(r)r.click();return !!r;})()`;
+    const ON = id => `(function(){var k=${CARD};var r=[].slice.call(k.querySelectorAll('.cg-row')).filter(function(x){return /#${id}/.test(x.textContent);})[0];return r?r.getAttribute('aria-checked')==='true':null;})()`;
+    await ev(cli, FILA('7201')); await pausa(300);
+    await ev(cli, `(function(){var k=${CARD};var b=[].slice.call(k.querySelectorAll('.cg-itm-abrir button')).filter(function(x){return x.getAttribute('data-k')==='Home|7202';})[0];if(b)b.click();return !!b;})()`);
+    await pausa(300);
+    await ev(cli, FILA('7202')); await pausa(300);
+    L = await ev(cli, LEER);
+    chk('destildado el pedido, el botón queda gris', L.boton && L.boton.dis === true && (await ev(cli, ON('7202'))) === false, L.boton);
+    await ev(cli, ITEM('TLC')); await pausa(300);
+    L = await ev(cli, LEER);
+    chk('tildar/destildar un ítem tilda su pedido y el botón cobra lo tildado ($18.000)', (await ev(cli, ON('7202'))) === true && L.boton && !L.boton.dis && L.boton.txt.indexOf(pesos(18000)) >= 0, L.boton);
+    await ev(cli, ITEM('F')); await pausa(300);
+    L = await ev(cli, LEER);
+    chk('sin ningún ítem tildado, el pedido se destilda', (await ev(cli, ON('7202'))) === false && L.boton && L.boton.dis === true, { on: await ev(cli, ON('7202')), b: L.boton });
+    await ev(cli, FILA('7202')); await pausa(300);
+    L = await ev(cli, LEER);
+    chk('volver a tildar el pedido tilda todos sus ítems ($44.000)', (L.itms || []).length === 2 && L.itms.every(x => x.on) && L.boton && !L.boton.dis && L.boton.txt.indexOf(pesos(44000)) >= 0, { itms: L.itms, b: L.boton });
+
     const errs = await ev(cli, `window.__errores`);
     chk('sin errores de JS', Array.isArray(errs) && errs.length === 0, errs);
   } catch (e) { mal++; console.log('  MAL  se cortó: ' + (e.stack || e)); }
