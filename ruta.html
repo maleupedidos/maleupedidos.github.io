@@ -6371,10 +6371,49 @@ function cobPagadorInput(inp){_cobPagador[inp.getAttribute('data-ck')]=String(in
    quien pago cada cobro («Pagó»). La deuda y el CRM no cambian: son del pedido. */
 var _cobModo={}, _cobOtroAbierto={}, _COB_EXTRA_LS='maleu_juntada_extra';
 function _cobNorm(x){return String(x||'').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/\s+/g,' ').trim();}
-function _cobExtras(ck){try{var m=JSON.parse(localStorage.getItem(_COB_EXTRA_LS)||'{}');return Array.isArray(m[ck])?m[ck]:[];}catch(e){return [];}}
+function _cobExtrasLocal(ck){try{var m=JSON.parse(localStorage.getItem(_COB_EXTRA_LS)||'{}');return Array.isArray(m[ck])?m[ck]:[];}catch(e){return [];}}
+/* (300, 29/10/2026) EN LA BASE: con la palanca JUNTADA_INTEGRANTES_BASE los integrantes que no pidieron nada se leen de
+   la base (`juntada_integrantes_pantalla`) y se guardan ahi (`juntada_integrante_directo`), asi los ve cualquier celular.
+   El celular sigue anotandolos (si la base no contesta, no se pierde nada) y lo que tenia de antes lo sube una vez. */
+var _cobExtraBase={}, _cobExtraBaseT=0, _cobExtraBaseVa=null;
+function _cobJuntadaBaseOn(){return !!(typeof _sbPerm!=='undefined'&&_sbPerm&&_sbPerm.pal&&_sbPerm.pal.juntadaBase)&&typeof _sbPermiso==='function';}
+function _cobJuntadaRpc(fn,p){
+  return Promise.resolve(_sbPermiso(true)).then(function(sb){
+    if(!sb||!sb.token)return null;
+    return fetch(sb.url+'/rest/v1/rpc/'+fn,{method:'POST',headers:{apikey:sb.key,Authorization:'Bearer '+sb.token,'Content-Type':'application/json'},body:JSON.stringify({p:p})})
+      .then(function(r){return r.ok?r.json():null;});
+  }).catch(function(){return null;});
+}
+function _cobExtrasTraer(){
+  if(!_cobJuntadaBaseOn()||_cobExtraBaseVa||Date.now()-_cobExtraBaseT<60000)return;
+  _cobExtraBaseVa=_cobJuntadaRpc('juntada_integrantes_pantalla',{}).then(function(d){
+    _cobExtraBaseVa=null;
+    if(!d||!d.ok||!d.juntadas)return;
+    _cobExtraBaseT=Date.now();
+    var antes=JSON.stringify(_cobExtraBase);_cobExtraBase=d.juntadas;
+    /* Lo que este celular tenia y la base no: se sube (una vez; sumar es idempotente). */
+    try{var m=JSON.parse(localStorage.getItem(_COB_EXTRA_LS)||'{}');Object.keys(m).forEach(function(ck){
+      if(!_cobEsEvento(ck)||!Array.isArray(m[ck]))return;
+      var ya=(_cobExtraBase[ck]||[]).map(_cobNorm);
+      m[ck].forEach(function(n){if(ya.indexOf(_cobNorm(n))<0)_cobJuntadaRpc('juntada_integrante_directo',{action:'juntadaIntegrante',grp:ck.slice(2),nombre:n});});
+    });}catch(e){}
+    if(JSON.stringify(_cobExtraBase)!==antes&&typeof _cobGrpRepintar==='function')_cobGrpRepintar();
+  });
+}
+function _cobExtras(ck){
+  _cobExtrasTraer();
+  var out=_cobExtrasLocal(ck).slice();
+  (_cobExtraBase[ck]||[]).forEach(function(n){if(!out.some(function(x){return _cobNorm(x)===_cobNorm(n);}))out.push(n);});
+  return out;
+}
 function _cobExtraSumar(ck,n){
   try{var m=JSON.parse(localStorage.getItem(_COB_EXTRA_LS)||'{}');var l=Array.isArray(m[ck])?m[ck]:[];
     if(!l.some(function(x){return _cobNorm(x)===_cobNorm(n);}))l.push(n);m[ck]=l.slice(-12);localStorage.setItem(_COB_EXTRA_LS,JSON.stringify(m));}catch(e){}
+  if(_cobJuntadaBaseOn()&&_cobEsEvento(ck)){
+    var c=(typeof _npClientesCache!=='undefined'&&_npClientesCache||[]).filter(function(x){return _cobNorm(x.nombre)===_cobNorm(n);})[0];
+    _cobJuntadaRpc('juntada_integrante_directo',{action:'juntadaIntegrante',grp:ck.slice(2),nombre:n,tel:c&&c.tel||''})
+      .then(function(d){if(d&&d.ok&&d.ck){_cobExtraBase[d.ck]=d.integrantes||[];}});
+  }
 }
 function _cobIntegrantes(ck,items){
   var out=[], vis={};
