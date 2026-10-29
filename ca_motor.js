@@ -2557,7 +2557,17 @@ function _doGetAdmin(opt) {
         else if (fpVal === 'Mixto') {
           // Bug Gonzalo 05/06: fp=Mixto mandaba TODO el facturado a MP en libro diario.
           // Usar la composición real de las cols Ef/Tr del pedido, escalando por si hubo parciales.
-          if (facturado > 0 && (ef + tr) > 0) {
+          /* MEDIO POR MEDIO (28/10/2026). Con parciales se restaba el total y lo que quedaba se
+             repartia con la proporcion del pedido ENTERO: el #2056 (Ef 26.000 + Tr 18.000, parcial
+             de 26.000 en efectivo) cerraba con $10.636 en efectivo que nadie cobro. Lo que falta de
+             cada medio es su columna menos los parciales de ese medio (nunca negativo), escalado al
+             neto por si hubo propina. Sin parciales da lo mismo que antes. */
+          var efResta = Math.max(0, ef - (parcAcum ? parcAcum.ef : 0));
+          var trResta = Math.max(0, tr - (parcAcum ? parcAcum.mp : 0));
+          if (facturado > 0 && (efResta + trResta) > 0) {
+            efTotal = Math.round(netoCierre * (efResta / (efResta + trResta)));
+            mpTotal = netoCierre - efTotal;
+          } else if (facturado > 0 && (ef + tr) > 0) {
             efTotal = Math.round(netoCierre * (ef / (ef + tr)));
             mpTotal = netoCierre - efTotal;
           } else {
