@@ -27038,9 +27038,36 @@ function _roMotorCargar(){
     document.head.appendChild(s);
   }));
 }
+/* LOS MOTORES EN UN HILO APARTE (29/10/2026). Tadeo: «que el ERP se SIENTA rápido». Medido en el celular
+   (CPU x4): el motor de la Caja tarda ~600 ms en `armar`, y hasta ahora corría en el hilo de la pantalla —
+   cada vez que llegaba el resto de la Caja, cualquier toque quedaba esperando ese tiempo, estuviera uno en la
+   tab que estuviera. Los motores son JavaScript puro (sin DOM ni localStorage: `(function(G){…})(globalThis)`),
+   así que corren igual en un Worker: la pantalla sigue respondiendo mientras se calcula, y lo que llega es el
+   mismo objeto. UN Worker para la sesión, que carga cada motor una vez (`importScripts`, el mismo archivo).
+   Si no hay Worker, el motor revienta adentro o pasan 25 s sin respuesta: `aca()`, el camino de siempre. */
+var _MH={w:null,n:0,pend:{},roto:false};
+function _motorHilo(glob,arch,datos,opts,aca){
+  if(_MH.roto||typeof Worker!=='function'||typeof Blob!=='function')return aca();
+  try{
+    if(!_MH.w){
+      var src='var M={};self.onmessage=function(e){var q=e.data;try{if(!self[q.glob])importScripts(q.url);'
+        +'var r=self[q.glob].armar(q.datos,q.opts||{});self.postMessage({id:q.id,ok:true,r:r});}'
+        +'catch(x){self.postMessage({id:q.id,ok:false,err:String((x&&x.message)||x)});}};';
+      _MH.w=new Worker(URL.createObjectURL(new Blob([src],{type:'text/javascript'})));
+      _MH.w.onmessage=function(e){var q=e.data,p=_MH.pend[q.id];if(!p)return;delete _MH.pend[q.id];clearTimeout(p.t);q.ok?p.ok(q.r):p.mal(new Error(q.err));};
+      _MH.w.onerror=function(){_MH.roto=true;Object.keys(_MH.pend).forEach(function(k){var p=_MH.pend[k];delete _MH.pend[k];clearTimeout(p.t);p.mal(new Error('el hilo de los motores se cayó'));});};
+    }
+    var id=++_MH.n, url=new URL(arch+'?t='+(window.__motorVer||(window.__motorVer=Date.now())),location.href).href;
+    return new Promise(function(ok,mal){
+      _MH.pend[id]={ok:ok,mal:mal,t:setTimeout(function(){delete _MH.pend[id];mal(new Error('el motor no contestó en 25 s'));},25000)};
+      _MH.w.postMessage({id:id,glob:glob,url:url,datos:datos,opts:opts||{}});
+    }).catch(function(){ return aca(); });
+  }catch(e){ _MH.roto=true; return aca(); }
+}
 /* EL MOTOR DEL PORTAL DEL VENDEDOR (191): no necesita nada de Apps Script para los numeros. */
 var _dvMotorP=null;
-function _dvMotorArmar(datos){
+function _dvMotorArmar(datos){ return _motorHilo('DV_MOTOR','dv_motor.js',datos,{},function(){ return _dvMotorArmarAca(datos); }); }
+function _dvMotorArmarAca(datos){
   var p=window.DV_MOTOR?Promise.resolve(window.DV_MOTOR):(_dvMotorP||(_dvMotorP=new Promise(function(ok,mal){
     var s=document.createElement('script'); s.src='dv_motor.js?t='+Date.now();
     s.onload=function(){ window.DV_MOTOR?ok(window.DV_MOTOR):mal(new Error('el motor no cargó')); };
@@ -27051,7 +27078,8 @@ function _dvMotorArmar(datos){
 }
 /* EL MOTOR DE ABASTECIMIENTO (200): igual que el del portal, no necesita nada de Apps Script. */
 var _bqMotorP=null;
-function _bqMotorArmar(datos){
+function _bqMotorArmar(datos){ return _motorHilo('BQ_MOTOR','bq_motor.js',datos,{},function(){ return _bqMotorArmarAca(datos); }); }
+function _bqMotorArmarAca(datos){
   var p=window.BQ_MOTOR?Promise.resolve(window.BQ_MOTOR):(_bqMotorP||(_bqMotorP=new Promise(function(ok,mal){
     var s=document.createElement('script'); s.src='bq_motor.js?t='+Date.now();
     s.onload=function(){ window.BQ_MOTOR?ok(window.BQ_MOTOR):mal(new Error('el motor no cargó')); };
@@ -27062,7 +27090,8 @@ function _bqMotorArmar(datos){
 }
 /* (204) Un motor cualquiera, por su nombre: se baja una vez por sesion. Los nuevos van por aca. */
 var _motoresP={};
-function _motorArmar(glob,arch,datos,opts){
+function _motorArmar(glob,arch,datos,opts){ return _motorHilo(glob,arch,datos,opts,function(){ return _motorArmarAca(glob,arch,datos,opts); }); }
+function _motorArmarAca(glob,arch,datos,opts){
   var p=window[glob]?Promise.resolve(window[glob]):(_motoresP[glob]||(_motoresP[glob]=new Promise(function(ok,mal){
     var s=document.createElement('script'); s.src=arch+'?t='+Date.now();
     s.onload=function(){ window[glob]?ok(window[glob]):mal(new Error('el motor no cargó')); };
@@ -27073,7 +27102,8 @@ function _motorArmar(glob,arch,datos,opts){
 }
 /* EL MOTOR DE RUTA › COBROS (203): igual que el de Abastecimiento. */
 var _cpMotorP=null;
-function _cpMotorArmar(datos){
+function _cpMotorArmar(datos){ return _motorHilo('CP_MOTOR','cp_motor.js',datos,{},function(){ return _cpMotorArmarAca(datos); }); }
+function _cpMotorArmarAca(datos){
   var p=window.CP_MOTOR?Promise.resolve(window.CP_MOTOR):(_cpMotorP||(_cpMotorP=new Promise(function(ok,mal){
     var s=document.createElement('script'); s.src='cp_motor.js?t='+Date.now();
     s.onload=function(){ window.CP_MOTOR?ok(window.CP_MOTOR):mal(new Error('el motor no cargó')); };
@@ -27084,7 +27114,8 @@ function _cpMotorArmar(datos){
 }
 /* EL MOTOR DE LA ESCALA DE RED (201): igual que el de Abastecimiento. */
 var _reMotorP=null;
-function _reMotorArmar(datos){
+function _reMotorArmar(datos){ return _motorHilo('RE_MOTOR','re_motor.js',datos,{},function(){ return _reMotorArmarAca(datos); }); }
+function _reMotorArmarAca(datos){
   var p=window.RE_MOTOR?Promise.resolve(window.RE_MOTOR):(_reMotorP||(_reMotorP=new Promise(function(ok,mal){
     var s=document.createElement('script'); s.src='re_motor.js?t='+Date.now();
     s.onload=function(){ window.RE_MOTOR?ok(window.RE_MOTOR):mal(new Error('el motor no cargó')); };

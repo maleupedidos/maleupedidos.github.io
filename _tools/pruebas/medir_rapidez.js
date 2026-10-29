@@ -17,6 +17,8 @@ const SIN_FRENO = args.includes('--sin-freno');
 const ANCHO = Number((args[args.indexOf('--ancho') + 1]) || 0) || 390;
 const SALIDA = args.includes('--json') ? args[args.indexOf('--json') + 1] : '';
 const URL = process.env.BASE_URL || 'https://app.maleu.com.ar/app.html';
+/* --css <archivo>: CSS que se inyecta al arrancar, para probar un cambio de estilos ANTES de publicarlo (A/B). */
+const CSS_EXTRA = args.includes('--css') ? fs.readFileSync(args[args.indexOf('--css') + 1], 'utf8') : '';
 const pausa = (ms) => new Promise((r) => setTimeout(r, ms));
 const OBS = `(function(){
   window.__lt=[]; window.__ev=[]; window.__tap=0;
@@ -63,7 +65,8 @@ async function medir(cli, listo, tope) {
   const out = { cuando: new Date().toISOString(), ancho: ANCHO, freno: !SIN_FRENO, pasos: [] };
   const anotar = (paso, r) => { out.pasos.push(Object.assign({ paso }, r)); console.log(paso.padEnd(44), JSON.stringify(r)); };
   try {
-    await cli.enviar('Page.addScriptToEvaluateOnNewDocument', { source: prep(TOKEN) + '\n' + OBS });
+    await cli.enviar('Page.addScriptToEvaluateOnNewDocument', { source: prep(TOKEN) + '\n' + OBS + (CSS_EXTRA
+      ? `\n(function(){var s=document.createElement('style');s.textContent=${JSON.stringify(CSS_EXTRA)};(document.head||document.documentElement).appendChild(s);})();` : '') });
     await cli.enviar('Page.enable', {}); await cli.enviar('Network.enable', {});
     cli.escuchar((m) => { if (m === 'Page.javascriptDialogOpening') cli.enviar('Page.handleJavaScriptDialog', { accept: true }).catch(() => {}); });
     await cli.enviar('Emulation.setDeviceMetricsOverride', { width: ANCHO, height: ANCHO < 800 ? 844 : 900, deviceScaleFactor: ANCHO < 800 ? 3 : 1, mobile: ANCHO < 800 });
@@ -83,9 +86,11 @@ async function medir(cli, listo, tope) {
       ['busqueda', `!!document.querySelector('#pg-abast') && (document.querySelector('#pg-abast')||{}).innerText.length>200`],
       ['caja', `!!document.querySelector('#p-caja') && (document.querySelector('#p-caja')||{}).innerText.length>200`]
     ];
-    for (const [tab, listo] of TABS) {
-      if (await irA(cli, tab)) anotar('abrir ' + tab, await medir(cli, listo));
-      else anotar('abrir ' + tab, { error: 'no encontré la tab' });
+    /* Dos vueltas: la 1ª arma cada tab (lo que siente quien recién abre la app); la 2ª es ir y volver, como se usa
+       todo el día. */
+    for (const vuelta of ['', ' (2ª vez)']) for (const [tab, listo] of TABS) {
+      if (await irA(cli, tab)) anotar('abrir ' + tab + vuelta, await medir(cli, listo));
+      else anotar('abrir ' + tab + vuelta, { error: 'no encontré la tab' });
       await pausa(1500);
       await irA(cli, 'inicio'); await medir(cli, 'true'); await pausa(800);
     }
