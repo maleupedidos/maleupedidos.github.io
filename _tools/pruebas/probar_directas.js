@@ -25,9 +25,9 @@ const capa = `;(function(){var o=window.fetch;window.__envios=[];window.__base=[
     var d=r==='nodirecto'?{ok:false,directo:false,motivo:'datos'}:r==='freno'?{ok:false,necesitaPlata:true,sinReintento:true,cobrado:1500,err:'El pedido está cobrado'}
       :{ok:true,aceptada:true,directo:true,orden:1,diferida:r==='ok',repetida:r==='aplicada'};
     return Promise.resolve(new Response(JSON.stringify(d),{status:200,headers:{'Content-Type':'application/json'}}));}
-  if(/"action":"(marcarCobrado|marcarEntregado|pedidoGrupal|descobrar|updateDiaEntrega|pedidoDeposito|deshacerOrigen|deshacerEntrega|cambiarEstadoEntrega|cancelarPedido|updatePedidoRed|pasarAVendedor|gasto|ingreso|marcarArmado|pagarProveedor|borrarMovimientoCaja|marcarOC|compraManual)"/.test(b)){var q=JSON.parse(b);window.__envios.push({a:'apps',acc:q.action,id:q.clientOpId||'',ts:q.ts||0});
+  if(/"action":"(marcarCobrado|marcarEntregado|pedidoGrupal|descobrar|updateDiaEntrega|pedidoDeposito|deshacerOrigen|deshacerEntrega|cambiarEstadoEntrega|cancelarPedido|updatePedidoRed|pasarAVendedor|gasto|ingreso|marcarArmado|pagarProveedor|borrarMovimientoCaja|marcarOC|compraManual|setOrigenProductos)"/.test(b)){var q=JSON.parse(b);window.__envios.push({a:'apps',acc:q.action,id:q.clientOpId||'',ts:q.ts||0});
     /* Plata de prueba: nunca a Apps Script de verdad. */
-    if(q.action==='pagarProveedor'||q.action==='borrarMovimientoCaja'||q.action==='marcarOC'||q.action==='compraManual')return Promise.resolve(new Response('{"ok":true,"prueba":true}',{status:200,headers:{'Content-Type':'application/json'}}));}
+    if(q.action==='pagarProveedor'||q.action==='borrarMovimientoCaja'||q.action==='marcarOC'||q.action==='compraManual'||q.action==='setOrigenProductos')return Promise.resolve(new Response('{"ok":true,"prueba":true}',{status:200,headers:{'Content-Type':'application/json'}}));}
   if(b.indexOf('pedidosFuenteAplicar')>=0)window.__envios.push({a:'aplicar'});
   return o.apply(this,arguments);};})();
   window.__palForzar={};setInterval(function(){try{var p=window._sbPerm&&window._sbPerm.pal;if(!p)return;Object.keys(window.__palForzar).forEach(function(k){p[k]=window.__palForzar[k];});}catch(e){}},200);`;
@@ -54,7 +54,9 @@ const PANEL = {
   /* (277) */
   marcarOC: ['compra_marcar_oc_directo', { rows: [{ r: 999999, oc: 'OC-PRUEBA', estado: 'Pedido' }] }],
   /* (278) */
-  compraManual: ['compra_manual_directo', { proveedor: 'Prueba', vendedor: 'Tadeo — Stock', items: [{ abbr: 'PRUEBA', qty: 1, costo: 1 }] }] };
+  compraManual: ['compra_manual_directo', { proveedor: 'Prueba', vendedor: 'Tadeo — Stock', items: [{ abbr: 'PRUEBA', qty: 1, costo: 1 }] }],
+  /* (279) */
+  setOrigenProductos: ['pedido_origen_directo', { hoja: 'Home', id: '999258', row: 0, productos: [{ a: 'PRUEBA', d: 1, oc: 0 }] }] };
 (async () => {
   const cli = await cdp.abrir();
   await cli.enviar('Page.addScriptToEvaluateOnNewDocument', { source: prep(TOKEN, capa) });
@@ -90,6 +92,20 @@ const PANEL = {
   const rf = await post('cancelarPedido'); e = await envs();
   chk('panel, cancelar un cobrado: la pantalla recibe el freno de la BASE (necesitaPlata, $1.500) y NO se pregunta a Apps Script',
     rf && rf.ok === false && rf.necesitaPlata === true && Number(rf.cobrado) === 1500 && e.length === 1 && e[0].a === 'base', { rf, e });
+  /* (279) El botón «Confirmar origen» de verdad (`confirmarOrigen`), con su recuadro como lo arma el panel. */
+  const origen = (r) => ev(cli, `window.__envios=[]; window.__base=['${r}'];
+    var v=document.getElementById('orig-pr279'); if(v)v.remove(); var box=document.createElement('div'); box.id='orig-pr279'; box.style.display='none';
+    box.innerHTML='<div class="origen-prod" data-a="PRUEBA" data-q="1"><input data-role="d" value="1"><input data-role="oc" value="0"></div>';
+    document.body.appendChild(box); var b=document.createElement('button'); b.dataset.h='Home'; b.dataset.n='999258'; b.dataset.r='0'; b.dataset.uid='pr279';
+    box.appendChild(b); confirmarOrigen(b); 1`).then(() => pausa(2500)).then(envs);
+  await pal({ setOrigenProductos: true }); e = await origen('ok');
+  chk('Pedidos, «Confirmar origen» con ORIGEN_DIRECTO: va a pedido_origen_directo, NO a Apps Script', e.filter((x) => x.a === 'base' && x.fn === 'pedido_origen_directo' && x.acc === 'setOrigenProductos').length === 1
+    && !e.some((x) => x.a === 'apps'), e);
+  e = await origen('nodirecto'); const bo = e.find((x) => x.a === 'base'), ao = e.find((x) => x.a === 'apps');
+  chk('   la base contesta directo:false: Apps Script con el MISMO id', bo && ao && ao.acc === 'setOrigenProductos' && bo.id === ao.id, e);
+  await pal({}); e = await origen('ok');
+  chk('   apagada: Apps Script y NO la base', e.some((x) => x.a === 'apps' && x.acc === 'setOrigenProductos') && !e.some((x) => x.a === 'base'), e);
+  await ev(cli, `var v=document.getElementById('orig-pr279'); if(v)v.remove(); 1`);
   /* (275) Abastecimiento: el formulario de pago de verdad (`confirmarPago`) va primero a la base. */
   await ev(cli, `go('busqueda'); 1`);
   chk('Abastecimiento arranca', await esperar(cli, `typeof window.confirmarPago==='function' && typeof window._abaAplicarBusqueda==='function'`, 60000), '');
