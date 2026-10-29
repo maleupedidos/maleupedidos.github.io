@@ -2037,13 +2037,14 @@ function _doGetAdmin(opt) {
        y una sola vez, fuera del loop. Por numero fijo se romperian solas: son
        las ultimas de la hoja y cualquier columna nueva las corre. En una hoja
        que todavia no las tiene, el -1 deja el campo vacio y nada mas. */
-    var _iTrajoR = -1, _iTelCliR = -1, _iExcR = -1, _iExcMR = -1, _iPorR = -1;
+    var _iTrajoR = -1, _iTelCliR = -1, _iExcR = -1, _iExcMR = -1, _iPorR = -1, _iGrpR = -1;
     var _iDepR = _ixDepPedido_(dataRed[0]);
     (function () {
       var _h0 = dataRed[0] || [];
       for (var _q = 0; _q < _h0.length; _q++) {
         var _nq = String(_h0[_q]).trim();
         if (_nq === 'Confirmado por') { _iPorR = _q; continue; }
+        if (_nq === GRUPAL_COL_) { _iGrpR = _q; continue; }   // la juntada (28/10/2026)
         if (_nq === 'Trajo el Cliente') _iTrajoR = _q;
         else if (_nq === 'Teléfono Cliente') _iTelCliR = _q;
         else if (_nq === RED_EXC_HDR.monto) _iExcR = _q;
@@ -2177,6 +2178,8 @@ function _doGetAdmin(opt) {
         era: (function () { var x = _rbNumeroCliente_('', _iPorR >= 0 ? dataRed[rr][_iPorR] : ''); return x ? (x.hoja + ' #' + x.n) : undefined; })(),
         tc: _iTrajoR >= 0 ? String(dataRed[rr][_iTrajoR] || '').trim() : '',
         tcl: _iTelCliR >= 0 ? String(dataRed[rr][_iTelCliR] || '').trim() : '',
+        /* La JUNTADA (28/10/2026): un pedido de la tienda puede caer en un representante. */
+        grp: (_iGrpR >= 0 && String(dataRed[rr][_iGrpR] || '').trim()) ? String(dataRed[rr][_iGrpR]).trim() : undefined,   // solo con valor: la foto de la base (292) hace lo mismo
         /* La comision del vendedor, y si es fuera de escala (2/10/2026). `cexm`
            es el motivo: solo viaja cuando hay excepcion. */
         com: Number(dataRed[rr][46]) || 0,
