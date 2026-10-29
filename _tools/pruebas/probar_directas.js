@@ -18,16 +18,16 @@ let ok = 0, mal = 0; const chk = (t, c, d) => { c ? ok++ : mal++; console.log((c
 async function esperar(cli, e, ms) { const t0 = Date.now(); while (Date.now() - t0 < ms) { try { if (await ev(cli, e)) return true; } catch (x) {} await pausa(200); } return false; }
 /* La base, simulada: `__base` es la secuencia de respuestas ('ok' = pendiente, 'aplicada', 'nodirecto', 'corte', '500', '404'). */
 const capa = `;(function(){var o=window.fetch;window.__envios=[];window.__base=[];window.fetch=function(u,x){var s=String((u&&u.url)||u||''),b=x&&x.body?String(x.body):'';
-  var m=/\\/rpc\\/((?:pedido|caja|ruta|compra|red)_[a-z_]+_directo)/.exec(s);
+  var m=/\\/rpc\\/((?:pedido|caja|ruta|compra|red|crm)_[a-z_]+_directo)/.exec(s);
   if(m){var p=JSON.parse(b).p;window.__envios.push({a:'base',fn:m[1],acc:p.action,id:p.clientOpId||'',ts:p.ts||0,token:('token' in p)});var r=window.__base.shift()||'ok';
     if(r==='corte')return Promise.reject(new TypeError('Failed to fetch'));
     if(r==='500'||r==='404')return Promise.resolve(new Response('{}',{status:Number(r)}));
     var d=r==='nodirecto'?{ok:false,directo:false,motivo:'datos'}:r==='freno'?{ok:false,necesitaPlata:true,sinReintento:true,cobrado:1500,err:'El pedido está cobrado'}
       :{ok:true,aceptada:true,directo:true,orden:1,diferida:r==='ok',repetida:r==='aplicada'};
     return Promise.resolve(new Response(JSON.stringify(d),{status:200,headers:{'Content-Type':'application/json'}}));}
-  if(/"action":"(marcarCobrado|marcarEntregado|pedidoGrupal|descobrar|updateDiaEntrega|pedidoDeposito|deshacerOrigen|deshacerEntrega|cambiarEstadoEntrega|cancelarPedido|updatePedidoRed|pasarAVendedor|gasto|ingreso|marcarArmado|pagarProveedor|borrarMovimientoCaja|marcarOC|compraManual|setOrigenProductos|redTrajoCliente|redReclamar|redReclamoDecidir)"/.test(b)){var q=JSON.parse(b);window.__envios.push({a:'apps',acc:q.action,id:q.clientOpId||'',ts:q.ts||0});
+  if(/"action":"(marcarCobrado|marcarEntregado|pedidoGrupal|descobrar|updateDiaEntrega|pedidoDeposito|deshacerOrigen|deshacerEntrega|cambiarEstadoEntrega|cancelarPedido|updatePedidoRed|pasarAVendedor|gasto|ingreso|marcarArmado|pagarProveedor|borrarMovimientoCaja|marcarOC|compraManual|setOrigenProductos|redTrajoCliente|redReclamar|redReclamoDecidir|crmUpdateClienteMeta|crmDeleteInteraccion|crmLeadDelete)"/.test(b)){var q=JSON.parse(b);window.__envios.push({a:'apps',acc:q.action,id:q.clientOpId||'',ts:q.ts||0});
     /* Plata de prueba: nunca a Apps Script de verdad. */
-    if(q.action==='pagarProveedor'||q.action==='borrarMovimientoCaja'||q.action==='marcarOC'||q.action==='compraManual'||q.action==='setOrigenProductos'||/^red(TrajoCliente|Reclamar|ReclamoDecidir)$/.test(q.action))return Promise.resolve(new Response('{"ok":true,"prueba":true}',{status:200,headers:{'Content-Type':'application/json'}}));}
+    if(q.action==='pagarProveedor'||q.action==='borrarMovimientoCaja'||q.action==='marcarOC'||q.action==='compraManual'||q.action==='setOrigenProductos'||/^red(TrajoCliente|Reclamar|ReclamoDecidir)$/.test(q.action)||/^crm(UpdateClienteMeta|DeleteInteraccion|LeadDelete)$/.test(q.action))return Promise.resolve(new Response('{"ok":true,"prueba":true}',{status:200,headers:{'Content-Type':'application/json'}}));}
   if(b.indexOf('pedidosFuenteAplicar')>=0)window.__envios.push({a:'aplicar'});
   return o.apply(this,arguments);};})();
   window.__palForzar={};setInterval(function(){try{var p=window._sbPerm&&window._sbPerm.pal;if(!p)return;Object.keys(window.__palForzar).forEach(function(k){p[k]=window.__palForzar[k];});}catch(e){}},200);`;
@@ -60,7 +60,11 @@ const PANEL = {
   /* (280) */
   redTrajoCliente: ['red_trajo_directo', { row: 999258, valor: 'Maleu' }],
   redReclamar: ['red_reclamar_directo', { n: '999258', row: 0 }],
-  redReclamoDecidir: ['red_reclamo_decidir_directo', { n: '999258', row: 0, aprobar: true }] };
+  redReclamoDecidir: ['red_reclamo_decidir_directo', { n: '999258', row: 0, aprobar: true }],
+  /* (281) */
+  crmUpdateClienteMeta: ['crm_ficha_directo', { tel: '5490000000000', notas: 'prueba' }],
+  crmDeleteInteraccion: ['crm_interaccion_borrar_directo', { id: 'I-PRUEBA' }],
+  crmLeadDelete: ['crm_lead_borrar_directo', { id: 'L-PRUEBA' }] };
 (async () => {
   const cli = await cdp.abrir();
   await cli.enviar('Page.addScriptToEvaluateOnNewDocument', { source: prep(TOKEN, capa) });
@@ -124,6 +128,17 @@ const PANEL = {
   await pal({ redReclamar: true });
   e = await ev(cli, `window.__envios=[]; window.__base=['ok']; redPost({action:'redReclamar',n:'999258',row:0,clientOpId:'rec_prueba_'+Date.now()}).then(function(r){return r.json();}).then(function(){return 1;})`).then(() => pausa(500)).then(envs);
   chk('Portal, el reclamo por redPost con RECLAMAR_DIRECTO: va a red_reclamar_directo, NO a Apps Script', e.filter((x) => x.a === 'base' && x.fn === 'red_reclamar_directo').length === 1 && !e.some((x) => x.a === 'apps'), e);
+  /* (281) Las órdenes del CRM salen por el interceptor de fetch (el del token): un fetch a Apps Script con la acción, como
+     lo hace la ficha. Con su directa, a la base; con directo:false, a Apps Script con el MISMO clientOpId que puso el interceptor. */
+  const crm = (r) => ev(cli, `window.__envios=[]; window.__base=['${r}']; fetch(API,{method:'POST',body:JSON.stringify({action:'crmDeleteInteraccion',id:'I-PRUEBA'})})
+    .then(function(x){return x.json();}).then(function(){return 1;},function(){return 1;})`).then(() => pausa(1500)).then(envs);
+  await pal({ crmDeleteInteraccion: true }); e = await crm('ok');
+  chk('CRM, un fetch de la pantalla con BORRAR_INTERACCION_DIRECTO: va a crm_interaccion_borrar_directo (con su clientOpId), NO a Apps Script, y después el aplicador',
+    e.filter((x) => x.a === 'base' && x.fn === 'crm_interaccion_borrar_directo' && /^crm_/.test(x.id) && !x.token).length === 1 && !e.some((x) => x.a === 'apps') && e.some((x) => x.a === 'aplicar'), e);
+  e = await crm('nodirecto'); const bc2 = e.find((x) => x.a === 'base'), ac2 = e.find((x) => x.a === 'apps');
+  chk('   la base contesta directo:false: Apps Script con el MISMO clientOpId', bc2 && ac2 && ac2.acc === 'crmDeleteInteraccion' && bc2.id === ac2.id, e);
+  await pal({}); e = await crm('ok');
+  chk('   apagada: Apps Script y NO la base', e.some((x) => x.a === 'apps' && x.acc === 'crmDeleteInteraccion') && !e.some((x) => x.a === 'base'), e);
   /* (275) Abastecimiento: el formulario de pago de verdad (`confirmarPago`) va primero a la base. */
   await ev(cli, `go('busqueda'); 1`);
   chk('Abastecimiento arranca', await esperar(cli, `typeof window.confirmarPago==='function' && typeof window._abaAplicarBusqueda==='function'`, 60000), '');
