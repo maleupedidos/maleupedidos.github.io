@@ -35,7 +35,7 @@ function prep(ses, sesRed) {
     ['maleu_red_dash_' + sesRed.nombre]: JSON.stringify({ ts: Date.now() - 600000, data: DASH }), maleu_red_main_tab: 'hoy' };
   return `(function(){
     try{ if(!sessionStorage.getItem('__prep')){ localStorage.clear(); var L=${JSON.stringify(ls)}; for(var k in L) localStorage.setItem(k,L[k]); sessionStorage.setItem('__prep','1'); } }catch(e){}
-    window.__err=[]; window.__abrio=[]; window.__posts=[]; window.__resp=[];
+    window.__err=[]; window.__abrio=[]; window.__posts=[]; window.__resp=[]; window.__gets=[]; window.__delay=0; window.__redApEntroMs=300;
     window.addEventListener('error',function(e){window.__err.push(String(e.message));});
     window.confirm=function(){return true;}; window.alert=function(){};
     window.open=function(u){ window.__abrio.push(String(u)); return {opener:1}; };
@@ -46,8 +46,12 @@ function prep(ses, sesRed) {
       var url=String(u&&u.url||u);
       if(url.indexOf('script.google.com/macros')<0) return orig(u,x);
       if(x&&String(x.method||'').toUpperCase()==='POST'){ var b={}; try{b=JSON.parse(x.body)}catch(e){} window.__posts.push(b);
-        if(b.action==='redAutopedido') return resp(window.__resp.length?window.__resp.shift():{ok:true,n:115}); return resp({ok:true}); }
+        if(b.action==='redAutopedido'){ var rr=window.__resp.length?window.__resp.shift():{ok:true,n:115};
+          if(rr==='red') return Promise.reject(new TypeError('Failed to fetch'));
+          return resp(rr, window.__delay||30); }
+        return resp({ok:true}); }
       var a=(url.match(/action=([A-Za-z]+)/)||[])[1]||'';
+      window.__gets.push(a);
       if(url.indexOf('action=piezas_full')>-1) return resp({CCo:[{id:'P-9002',kg:1.163},{id:'P-9001',kg:0.842}],CEn:[]});
       if(a==='vendedores') return resp({vendedores:[{nombre:'Marcos Bottcher',partido:'Pilar'}]});
       if(a==='dashboardVendedor') return resp(DASH, 200);
@@ -107,26 +111,62 @@ async function ronda(cli, ancho) {
     s('f-cliente','Clienta de Prueba'); s('f-telefono','11 4000 1234'); s('f-lote','45'); s('f-barrio','El Lucero'); s('f-dia','2026-10-17'); return true;})()`);
   r = await tocar(cli, '.pago-opt[data-val="Efectivo"]');
   await evaluar(cli, `window.__resp=[{ok:false,err:'Ese es el WhatsApp de Fini Mihailovitch. Cargá el del cliente.'}]`);
-  r = await tocar(cli, '#btn-enviar'); await T(3500);
   const inv = await evaluar(cli, `[].map.call(document.querySelectorAll('#screen-nuevo .field.invalid'),function(e){return e.id})`); if (inv.length) console.log('     inválidos: ' + inv.join(', '));
-  const p1 = await evaluar(cli, `({posts:window.__posts.filter(function(p){return p.action==='redAutopedido'}), btn:document.getElementById('btn-enviar').innerText, toast:(document.body.innerText.match(/Ese es el WhatsApp[^\\n]*/)||[''])[0]})`);
+  r = await tocar(cli, '#btn-enviar'); await T(1500);
+  const p1 = await evaluar(cli, `({posts:window.__posts.filter(function(p){return p.action==='redAutopedido'}), aviso:(document.getElementById('redApCola')||{}).innerText||'', dash:${VISIBLE('#dash-content')}})`);
   const b = p1.posts[0] || {};
   chk('sale con action=redAutopedido y un id np-red-', r === true && b.action === 'redAutopedido' && /^np-red-/.test(b.clientOrderId || ''), b);
   chk('  ...con la fecha y el día elegidos (sábado 17/10)', b.fechaEntrega === '2026-10-17' && b.dia === 'Sábado', [b.fechaEntrega, b.dia]);
   const carne = (b.items || []).filter((x) => x.unidad === 'kg');
   chk('  ...con un producto, la carne (kilos, importe e id de la pieza) y el teléfono del cliente', (b.items || []).length === 2 && carne.length === 1 && carne[0].id === 30 && carne[0].qty === 0.842 && carne[0].importe === 17472 && JSON.stringify(carne[0].piezas) === '["P-9001"]' && b.telefono === '11 4000 1234', [b.items, b.telefono]);
   chk('  ...y el total suma la carne', b.total === (b.items || []).reduce((t, x) => t + (x.unidad === 'kg' ? x.importe : x.precio * x.qty), 0) + (b.envio || 0), [b.total, b.items]);
-  chk('el rechazo del servidor se ve y NO se reintenta', p1.posts.length === 1 && /Fini/.test(p1.toast) && /Reintentar/.test(p1.btn), p1);
+  chk('el rechazo del servidor se ve en el inicio, con «Volver a cargarlo», y NO se reintenta', p1.posts.length === 1 && p1.dash === true && /Fini/.test(p1.aviso) && /Volver a cargarlo/.test(p1.aviso), p1);
 
-  r = await tocar(cli, '#btn-enviar'); await T(1800);
-  const p2 = await evaluar(cli, `window.__posts.filter(function(p){return p.action==='redAutopedido'})`);
-  chk('el segundo intento manda el MISMO id (no duplica)', r === true && p2.length === 2 && p2[1].clientOrderId === b.clientOrderId, p2.map(x => x.clientOrderId));
-  await T(1200);
+  /* «Volver a cargarlo»: el formulario como estaba. */
+  r = await tocar(cli, '#redApCola button'); await T(500);
+  const rc = await evaluar(cli, `({vis:${VISIBLE('#screen-nuevo')}, c:document.getElementById('f-cliente').value, l:document.getElementById('f-lote').value, dia:document.getElementById('f-dia').value,
+    pago:(document.querySelector('.pago-opt.sel')||{}).innerText, pz:document.querySelectorAll('#redCarneGrid .pz-chip.sel').length, cola:(document.getElementById('redApCola')||{}).hidden})`);
+  chk('«Volver a cargarlo» deja el formulario como estaba (cliente, lote, día, pago y la pieza)', r === true && rc.vis === true && rc.c === 'Clienta de Prueba' && rc.l === '45' && rc.dia === '2026-10-17' && /Efectivo/.test(rc.pago) && rc.pz === 1 && rc.cola === true, rc);
+
+  /* CARGADO AL INSTANTE: el servidor tarda 4 s (hoy tarda 9-19 s) y la pantalla no lo espera. */
+  await evaluar(cli, `window.__delay=4000;1`);
+  const t0 = Date.now();
+  r = await tocar(cli, '#btn-enviar');
+  let tCargado = null;
+  for (let i = 0; i < 40; i++) { if (await evaluar(cli, `/cargado/i.test(document.getElementById('btn-enviar').innerText)||${VISIBLE('#dash-content')}`)) { tCargado = Date.now() - t0; break; } await T(25); }
+  await T(600);
+  const p2 = await evaluar(cli, `({posts:window.__posts.filter(function(p){return p.action==='redAutopedido'}).map(function(p){return p.clientOrderId}), aviso:(document.getElementById('redApCola')||{}).innerText||'', dash:${VISIBLE('#dash-content')}})`);
+  console.log('     tocar → «cargado»: ' + tCargado + ' ms (servidor simulado: 4000 ms)');
+  chk('con el servidor tardando 4 s, marca «cargado» en menos de 400 ms y vuelve al inicio', tCargado !== null && tCargado < 400 && p2.dash === true, { tCargado, p2 });
+  chk('  ...el inicio dice «Registrando el pedido de…» mientras viaja', /Registrando el pedido de Clienta de Prueba/.test(p2.aviso), p2.aviso);
+  chk('  ...y el pedido vuelto a cargar va con id NUEVO (el anterior el servidor lo rechazó)', p2.posts.length === 2 && p2.posts[1] !== b.clientOrderId, p2.posts);
+  const nDash0 = await evaluar(cli, `window.__gets.filter(function(a){return a==='dashboardVendedor'}).length`);
+  await T(4200);
+  const p3 = await evaluar(cli, `({cola:localStorage.getItem('maleu_red_ap_cola'), oculto:document.getElementById('redApCola').hidden, dash:window.__gets.filter(function(a){return a==='dashboardVendedor'}).length})`);
+  chk('cuando el servidor confirma, sale de la cola, el aviso se va y la lista se recarga', p3.cola === null && p3.oculto === true && p3.dash > nDash0, p3);
+  await evaluar(cli, `window.__delay=0;1`);
   chk('guardado, vuelve al portal', (await evaluar(cli, VISIBLE('#dash-content'))) === true);
   await tocar(cli, '.mtab-mas'); await T(200); await tocar(cli, '#redMasSheet button:nth-of-type(1)'); await T(300);
   /* Se mide en la pantalla (al reabrir): fusionado, `window.redPzCart` es la referencia vieja. */
   chk('guardado, la carne elegida se vacía', (await evaluar(cli, `document.querySelectorAll('#redCarneGrid .pz-chip.sel').length`)) === 0);
   chk('un pedido nuevo arranca con otro id y el día en el viernes', (await evaluar(cli, `redApCoid`)) === '' && (await evaluar(cli, `document.getElementById('f-dia').value`)) === proxViernes());
+  /* Un corte de red: pregunta si entró y lo vuelve a mandar con el MISMO id. */
+  await evaluar(cli, `showDashboard();window.__posts=[];window.__resp=['red'];_redApEncolar({action:'redAutopedido',clientOrderId:'np-red-corte',nombre:'Otra Clienta',items:[]},{},1000);1`);
+  await T(3500);
+  const pc = await evaluar(cli, `({ids:window.__posts.filter(function(p){return p.action==='redAutopedido'}).map(function(p){return p.clientOrderId}), entro:window.__gets.filter(function(a){return a==='pedidoEntro'}).length, cola:localStorage.getItem('maleu_red_ap_cola')})`);
+  chk('un corte de red: pregunta si entró y lo vuelve a mandar con el MISMO id, hasta que entra', pc.ids.length === 2 && pc.ids.every(x => x === 'np-red-corte') && pc.entro >= 1 && pc.cola === null, pc);
+
+  /* Cerrar la app con un pedido viajando: no se pierde, y Salir no lo borra. */
+  await evaluar(cli, `window.__delay=600000;_redApEncolar({action:'redAutopedido',clientOrderId:'np-red-vivo',nombre:'Tercera Clienta',items:[]},{},1000);1`);
+  await T(300);
+  await evaluar(cli, `doLogout();1`); await T(300);
+  chk('Salir no borra un pedido que se está registrando', (await evaluar(cli, `!!localStorage.getItem('maleu_token')&&/np-red-vivo/.test(localStorage.getItem('maleu_red_ap_cola')||'')`)) === true);
+  await cli.enviar('Page.reload');
+  for (let i = 0; i < 80; i++) { await T(150); try { if (await evaluar(cli, VISIBLE('#dash-content'))) break; } catch (e) {} }
+  await T(2500);
+  const pv = await evaluar(cli, `({ids:window.__posts.filter(function(p){return p.action==='redAutopedido'}).map(function(p){return p.clientOrderId}), cola:localStorage.getItem('maleu_red_ap_cola')})`);
+  chk('al volver a abrir la app retoma el pedido pendiente (mismo id) y lo registra', pv.ids.length === 1 && pv.ids[0] === 'np-red-vivo' && pv.cola === null, pv);
+
   const sw = await evaluar(cli, 'document.documentElement.scrollWidth');
   chk('sin scroll horizontal', sw <= ancho, sw);
   const errs = await evaluar(cli, 'window.__err');
