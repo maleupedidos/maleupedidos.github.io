@@ -20,9 +20,10 @@ function ok(n,c){if(!c)throw Error(n);console.log('OK '+n);}
     const cob=await evaluar(c,`({n:_rutCVLista(true).length,deuda:_rutCVLista().length,html:document.getElementById('cobrosContent').textContent.includes('Por entregar y sin cobrar')})`);
     ok('Cobros incluye a los clientes por entregar, separados de la deuda',cob.n>cob.deuda&&cob.html);
     await evaluar(c,`switchTab('ruta');refresh(true,true)`);
-    await esperar(c,`!!document.getElementById('rutRedProximos')`);
-    ok('Ruta muestra wraps de los pedidos futuros',await evaluar(c,`/wrap/i.test(document.getElementById('rutRedProximos').textContent)`));
-    ok('Ruta muestra carne de los pedidos futuros',await evaluar(c,`/vacío|carne/i.test(document.getElementById('rutRedProximos').textContent)`));
+    await esperar(c,`getSorted().some(function(e){return e._redAgg&&e._vendedor===__repNombre;})`);
+    const bolsa=await evaluar(c,`(function(){var b=getSorted().find(function(e){return e._redAgg&&e._vendedor===__repNombre;});return {wrap:b.p.some(function(p){return p.a==='WPo'&&p.q>0;}),carne:b.p.some(function(p){return p.a==='CVa'&&p.q>0;}),n:b._keys.length};})()`);
+    ok('la bolsa del retiro incluye wraps del pedido futuro',bolsa.wrap);
+    ok('la bolsa del retiro incluye la carne y todos los pedidos pendientes',bolsa.carne&&bolsa.n>=2);
     await evaluar(c,`go('busqueda');1`);
     await esperar(c,`typeof abaSwitchTab==='function'&&typeof pedNav==='function'`);
     await evaluar(c,`window.__ordenVistas.busqueda()`);

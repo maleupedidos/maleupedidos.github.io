@@ -40,11 +40,21 @@ const sum=(xs,a)=>xs.filter(x=>x.abbr===a).reduce((s,x)=>s+x.q,0);
   cobrar._rutCV.vendedores[0].pedidos=[{...base,es:'Pendiente'}];
   ok('Red se dibuja aunque aun no haya deuda de entregados',cobrar._rutRedBloqueHTML([]).includes('1 Pendiente'));
 
-  const p=ctx(ruta,['_rutRedProximosHTML'],{getHoyISO:()=> '2026-10-30',_rtcEsc:s=>s,_sortProds:x=>x||[],_rtcProdFila:p=>'<p>'+p.a+' '+p.q+'</p>'});
-  const futuro=p._rutRedProximosHTML([{h:'Red',id:1,retira:'Representante Prueba',fe:'2026-10-31',p:[{a:'WPo',q:1},{a:'CVa',q:0.969}]},
-    {h:'Red',id:2,retira:'Otro',fe:'2026-10-30',p:[{a:'NUEVO',q:4}]}]);
-  ok('Ruta muestra carne y wraps de manana con su fecha',futuro.includes('31/10/2026')&&futuro.includes('WPo 1')&&futuro.includes('CVa 0.969'));
-  ok('mostrar proximos no los mete en el boton de entrega de hoy',!futuro.includes('<button')&&!futuro.includes('NUEVO'));
+  const lista=[{h:'Red',id:1,r:10,retira:'Representante Prueba',fe:'2026-10-31',p:[{a:'WPo',q:1},{a:'CVa',q:0.969}]},
+    {h:'Red',id:2,r:11,retira:'Representante Prueba',fe:'2026-10-29',p:[{a:'WPo',q:2}]},
+    {h:'Home',id:3,r:12,fe:'2026-10-31',p:[{a:'PMu',q:4}]}];
+  const anterior=JSON.stringify(lista);
+  const p=ctx(ruta,['_rutParaRetiroHoy','getHoyPendientes','getOtrosDias','getAtrasados','getSorted'],{
+    getHoyISO:()=> '2026-10-30',getPendientes:()=>lista,esHoy:e=>e.fe==='2026-10-30',sortByZona:x=>x,sortByHora:x=>x,
+    rutaOrdenModo:'zona',rutaOrden:{},armadoDone:{},eKey:e=>e.h+'|R'+e.r,_origenTipo:()=> 'dep',
+    _itemsDepDe:e=>e.p,_itemsOCDe:()=>[],_sortProds:x=>x,_agruparPedidos:x=>x,
+    pendientesGuardarStock:[],pendientesPedidosOC:[],_pgsAtrasado:null});
+  const bolsa=p.getSorted().find(x=>x._redAgg);
+  ok('la bolsa del viernes incluye el wrap del pedido de manana',bolsa&&bolsa.p.find(x=>x.a==='WPo').q===3);
+  ok('la bolsa completa incluye la carne sin filtrar por fecha del cliente',bolsa.p.find(x=>x.a==='CVa').q===0.969&&bolsa._keys.length===2);
+  ok('Red atrasada no se duplica en el agregado del retiro',p.getAtrasados().length===0&&p.getHoyPendientes().length===2);
+  ok('las entregas directas futuras conservan su dia',p.getOtrosDias().length===1&&p.getOtrosDias()[0].h==='Home');
+  ok('armar la bolsa no modifica fechas ni cantidades guardadas',JSON.stringify(lista)===anterior);
   const viejo={vendedores:[{nombre:'cache'}]};let resolver;
   const carga=ctx(ruta,['rutCliVendCargar'],{_rutCV:viejo,_rutCVts:0,_rutCVcargando:false,_rutCVvuelo:null,_rutCVerror:'',
     RUT_APPS_SCRIPT_URL:'apps',LEC_ARMA:{redPedidosAbiertos:{}},_lecJson:()=>new Promise(r=>resolver=r),
