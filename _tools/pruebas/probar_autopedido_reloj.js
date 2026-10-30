@@ -128,11 +128,11 @@ const esperar = async (cli, e, ms = 60000) => {
 
     /* ── A los 6 s el loader tiene que hablar ── */
     const msg0 = await evaluar(cli, `(document.getElementById('rutLoaderMsg')||{}).textContent||''`);
-    chk('al principio dice "Guardando pedido..."', /Guardando pedido/i.test(msg0), { msg0 });
+    chk('al principio confirma desde el boton sin tapar la pantalla', await evaluar(cli, `/Guardando/i.test(document.getElementById("npGuardar").textContent)&&!document.getElementById("rutLoaderOverlay").classList.contains("visible")`));
     await pausa(6200);
     const msg1 = await evaluar(cli, `(document.getElementById('rutLoaderMsg')||{}).textContent||''`);
     chk('a los 6 s deja de estar mudo y explica la demora',
-      msg1 !== msg0 && /tarda|despertar|Sigue/i.test(msg1), { msg0, msg1 });
+      msg1 !== msg0 && /esperando la confirmaci/i.test(msg1), { msg0, msg1 });
 
     /* ── EL REINTENTO, QUE ES EL PUNTO ──
        No se puede abortar la señal desde afuera (solo la tiene el
