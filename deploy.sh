@@ -85,6 +85,7 @@ fi
 
 # ── 3c. Que arranque de verdad ───────────────────────────────────────────────
 echo "→ Sincronizacion operativa (sin red ni escrituras reales)…"
+node _tools/probar-autopedido-vivo.js || fallar "Fallo la disponibilidad en autopedido."
 node _tools/probar-sync-operativo.js | sed 's/^/    /' || fallar "Fallo la sincronizacion operativa — no se publica."
 node _tools/probar-representantes-operativo.js | sed 's/^/    /' || fallar "Fallo el armado o los cobros de representantes — no se publica."
 

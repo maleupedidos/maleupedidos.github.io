@@ -11956,31 +11956,54 @@ function _npHaceTxt(ts){
    Sale de `action=piezas_full`, el endpoint PUBLICO de la tienda (id y kg), en el
    mismo orden: lo que ve el cliente y lo que ve Lucas es lo mismo. */
 /* NP_PIEZAS y npPzSel se declaran arriba, junto a npCart: la card los lee. */
+/* Las altas aceptadas se ocultan localmente hasta que la lectura confirma
+   su reserva. Una replica atrasada no puede volver a ofrecerlas. */
+var _npInvVersion=0, _npPzVuelo=null, _npStVuelo=null;
+var _npPzOcupadas={};
+try{_npPzOcupadas=JSON.parse(localStorage.getItem('mc_np_ocupadas')||'{}')||{};}catch(e){}
+function _npPzGuardarOcupadas(){try{localStorage.setItem('mc_np_ocupadas',JSON.stringify(_npPzOcupadas));}catch(e){}}
+function _npInvInvalidar(){_npInvVersion++;NP_PIEZAS_TS=0;NP_STOCK_TS=0;}
+function _npPzAceptadas(data){
+  (data.items||[]).forEach(function(it){(it.piezas||[]).forEach(function(id){_npPzOcupadas[String(id)]=true;});});
+  _npInvInvalidar();_npPzGuardarOcupadas();
+}
+function _npPzFiltrar(d,confirmar){
+  var vistos={},out={};
+  Object.keys(d).forEach(function(a){out[a]=d[a].filter(function(x){vistos[String(x.id)]=true;return !_npPzOcupadas[String(x.id)];});});
+  if(confirmar){Object.keys(_npPzOcupadas).forEach(function(id){if(!vistos[id])delete _npPzOcupadas[id];});_npPzGuardarOcupadas();}
+  return out;
+}
+function _npInvDatos(d){return !!d&&typeof d==='object'&&!Array.isArray(d)&&Object.keys(d).every(function(k){return Array.isArray(d[k]);});}
 function npFetchPiezas(force){
   /* La copia de las piezas se muestra igual que la del stock: al instante y
      reemplazada apenas llega lo de ahora. Una pieza de la copia que ya se vendio
      no es un riesgo de doble venta: la reserva la resuelve el backend al
      guardar, y si ya no esta el pedido entra igual y lo dice. */
-  if(!NP_PIEZAS){ var c=_npCopiaLeer('mc_np_piezas'); if(c){ NP_PIEZAS=c.d; NP_PIEZAS_COPIA=c.ts; } }
-  if(!force && NP_PIEZAS && !NP_PIEZAS_COPIA && (Date.now()-NP_PIEZAS_TS)<60000) return;
+  if(!NP_PIEZAS){ var c=_npCopiaLeer('mc_np_piezas'); if(c){ NP_PIEZAS=_npPzFiltrar(c.d,false); NP_PIEZAS_COPIA=c.ts; } }
+  if(!force && NP_PIEZAS && !NP_PIEZAS_COPIA && (Date.now()-NP_PIEZAS_TS)<60000) return Promise.resolve(true);
+  var version=_npInvVersion;
+  if(_npPzVuelo&&_npPzVuelo.v===version)return _npPzVuelo.p;
+  var vuelo={v:version};_npPzVuelo=vuelo;
   /* (167) Adentro del ERP, si la base ya arma las piezas (LEC_ARMA), `_lecJson` decide de donde salen. */
   var _npPfUrl=RUT_APPS_SCRIPT_URL+'?action=piezas_full&_='+Date.now();
-  ((typeof _lecJson==='function'&&typeof LEC_ARMA==='object'&&LEC_ARMA.piezas_full)
+  vuelo.p=((typeof _lecJson==='function'&&typeof LEC_ARMA==='object'&&LEC_ARMA.piezas_full)
     ?_lecJson('piezas_full',{},_npPfUrl,function(){})
     :fetch(_npPfUrl,{cache:'no-store'}).then(function(r){return r.json()}))
     .then(function(d){
       /* {ok:false} es un error: se deja lo que habia (o el campo de kilos si no
          habia nada). {} es "no hay piezas cargadas", que es un dato. */
-      if(d&&typeof d==='object'&&d.ok!==false){ NP_PIEZAS=d; NP_PIEZAS_TS=Date.now(); NP_PIEZAS_COPIA=0; _npCopiaGuardar('mc_np_piezas',d); npRenderCatalogo(); npUpdateTotal(); }
+      if(version!==_npInvVersion)return false;
+      if(_npInvDatos(d)){ NP_PIEZAS=_npPzFiltrar(d,true); NP_PIEZAS_TS=Date.now(); NP_PIEZAS_COPIA=0; _npCopiaGuardar('mc_np_piezas',d); npRenderCatalogo(); npUpdateTotal(); return true; }return false;
     })
-    .catch(function(){});
+    .catch(function(){return false;}).then(function(ok){if(_npPzVuelo===vuelo)_npPzVuelo=null;return ok;});
+  return vuelo.p;
 }
 /* Las piezas que se ofrecen de un corte, de la mas liviana a la mas pesada: el
    mismo orden que ve el cliente en la tienda. Hasta el 11/9/2026 a la noche
    iban primero las de la tanda anterior; Tadeo lo dio de baja junto con su
    oferta ("pone todo en orden, de menor a mayor"). */
 function npPzDisp(abbr){
-  var l=((NP_PIEZAS&&NP_PIEZAS[abbr])||[]).slice();
+  var l=((NP_PIEZAS&&NP_PIEZAS[abbr])||[]).filter(function(x){return !_npPzOcupadas[String(x.id)];});
   l.sort(function(a,b){ return Number(a.kg)-Number(b.kg); });
   return l;
 }
@@ -12017,31 +12040,39 @@ function npPzTap(el){
   if(!pid||!pz)return;
   var sel=(npPzSel[pid]||[]).slice(), i=-1;
   for(var k=0;k<sel.length;k++) if(sel[k].id===pz) i=k;
-  if(i>=0) sel.splice(i,1); else sel.push({id:pz,kg:kg});
+  if(i>=0) sel.splice(i,1); else {
+    var disponible=Object.keys(NP_PIEZAS||{}).some(function(a){return npPzDisp(a).some(function(x){return String(x.id)===pz;});});
+    if(!disponible){showToast('Esa pieza ya no está disponible');npRenderCatalogo();return;}
+    sel.push({id:pz,kg:kg});
+  }
   var tot=0; sel.forEach(function(x){tot+=x.kg;}); tot=Math.round(tot*1000)/1000;
   if(sel.length&&tot>0){ npPzSel[pid]=sel; npCart[pid]=tot; }
   else { delete npPzSel[pid]; delete npCart[pid]; }
   npRenderCatalogo(); npUpdateTotal();
 }
 function npFetchStock(force){
-  npFetchPiezas(force);
+  var piezas=npFetchPiezas(force);
   if(!NP_STOCK){
     var c=_npCopiaLeer('mc_np_stock');
     /* Se pinta YA: el catalogo se dibujo antes de llegar aca, sin nada. */
     if(c){ NP_STOCK=c.d; NP_STOCK_COPIA=c.ts; try{ npDepRender(); npRenderCatalogo(); npUpdateTotal(); }catch(e){} }
   }
-  if(!force && NP_STOCK && !NP_STOCK_COPIA && (Date.now()-NP_STOCK_TS)<60000) return;
+  if(!force && NP_STOCK && !NP_STOCK_COPIA && (Date.now()-NP_STOCK_TS)<60000) return piezas;
+  var version=_npInvVersion;
+  if(_npStVuelo&&_npStVuelo.v===version)return _npStVuelo.p;
+  var vuelo={v:version};_npStVuelo=vuelo;
   /* (166) Adentro del ERP, si la base ya arma el stock (LEC_ARMA), `_lecJson` decide de donde sale. */
   var _npSfUrl=RUT_APPS_SCRIPT_URL+'?action=stock_full&_='+Date.now();
-  ((typeof _lecJson==='function'&&typeof LEC_ARMA==='object'&&LEC_ARMA.stock_full)
+  vuelo.p=((typeof _lecJson==='function'&&typeof LEC_ARMA==='object'&&LEC_ARMA.stock_full)
     ?_lecJson('stock_full',{},_npSfUrl,function(){})
     :fetch(_npSfUrl,{cache:'no-store'}).then(function(r){return r.json()}))
     /* Al llegar el stock se vuelve a decidir el origen (npUpdateTotal ->
        npAvisoEncargoRender -> npOrigenAuto, que respeta si alguien lo eligio a
        mano). Sin esto, lo cargado antes de que llegara quedaba en Orden de
        Compra aunque estuviera en el freezer (11/9/2026). */
-    .then(function(d){ if(d&&typeof d==='object'&&d.ok!==false){ NP_STOCK=d; NP_STOCK_TS=Date.now(); NP_STOCK_COPIA=0; _npCopiaGuardar('mc_np_stock',d); npDepRender(); npRenderCatalogo(); npUpdateTotal(); } })
-    .catch(function(){});
+    .then(function(d){ if(version!==_npInvVersion)return false; if(d&&typeof d==='object'&&d.ok===undefined){ NP_STOCK=d; NP_STOCK_TS=Date.now(); NP_STOCK_COPIA=0; _npCopiaGuardar('mc_np_stock',d); npDepRender(); npRenderCatalogo(); npUpdateTotal(); return true; }return false; })
+    .catch(function(){return false;}).then(function(ok){if(_npStVuelo===vuelo)_npStVuelo=null;return ok;});
+  return Promise.all([piezas,vuelo.p]).then(function(r){return r.every(Boolean);});
 }
 function _npHoyAR(){
   var n=new Date(Date.now()-3*3600*1000);
@@ -12724,6 +12755,7 @@ function npGuardar(){
   var _npExito=function(res){
       _npFin();
       /* Entro: el proximo pedido es otro intento y lleva id nuevo. */
+      _npPzAceptadas(data);
       npCoid='';
       npPendienteBorrar();
       // Stash el resumen ANTES de npReset() (que limpia el cart). Permite que el
@@ -12759,12 +12791,12 @@ function npGuardar(){
       if(res&&(res.dedup||res.verificado))
         _yaMsg='<div class="np-ok-oc">✅ Este pedido ya había entrado'+(res.ref?' ('+res.ref+')':'')
               +': no se cargó dos veces. Si querías cambiarle algo, editalo desde Pedidos.</div>';
-      s.innerHTML='<div style="margin-bottom:8px">Pedido guardado en Sheets · '+nombre+' · '+npMoney(total)+'</div>'+_yaMsg+_pzMsg+_ocMsg+
+      s.innerHTML='<div style="margin-bottom:8px">Pedido guardado · '+nombre+' · '+npMoney(total)+'</div>'+_yaMsg+_pzMsg+_ocMsg+
         '<button type="button" class="np-btn-copy" style="margin:0" onclick="npCopiarResumen()">📋 Copiar resumen para WhatsApp</button>'+
         '<button type="button" class="np-btn-listo" onclick="npListo()">Listo →</button>';
       btn.textContent='GUARDAR PEDIDO';btn.disabled=false;npSaving=false;
       npReset();
-      npFetchPiezas(true); npFetchStock(true);   // las reservadas salen de la lista
+      npFetchStock(true);   // las reservadas salen de la lista
       // El salto a ARMADO se disparaba solo a los 6s (antes 2s, para dar tiempo a
       // copiar el resumen). Eso es tiempo muerto: si ya copiaste, esperás al pedo.
       // Ahora "Listo →" lo hace en el acto y los 6s quedan solo de red.
@@ -12784,7 +12816,7 @@ function npGuardar(){
          refresca el stock (el pedido nuevo ya reservo lo suyo). */
       if(res.diferida)
         fetch(RUT_APPS_SCRIPT_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({action:'pedidosFuenteAplicar'}),redirect:'follow'})
-          .catch(function(){}).then(function(){ npFetchPiezas(true); npFetchStock(true); });
+          .catch(function(){}).then(function(){ _npInvInvalidar();npFetchStock(true); });
     })
     .catch(function(err){
       console.error('npGuardar fail',err);
@@ -13001,7 +13033,9 @@ function _rutVolverAParada(p,avisar){
   }catch(x){}
 }
 function rutSincronizar(motivo){
-  if(!isOnline||_rutSyncEnVuelo||!_rutEstaMirando())return Promise.resolve(false);
+  if(!isOnline||document.hidden||(typeof _tabActual==='function'&&_tabActual()!=='ruta'))return Promise.resolve(false);
+  if(rutCurrentTab==='nuevo')return npFetchStock(true);
+  if(_rutSyncEnVuelo||!_rutEstaMirando())return Promise.resolve(false);
   var btn=document.getElementById('btnRefresh');if(btn&&btn.classList.contains('spinning'))return Promise.resolve(false);
   var falta=4000-(Date.now()-_rutUltimoToque);
   if(_rutOcupado()||falta>0){
@@ -13028,7 +13062,7 @@ function _rutVivoNota(o){try{window.__rutaVivo=Object.assign({t:Date.now()},o);}
 function _rutVivoConectado(){return _rutVivo.prendido&&!!(window.__enVivo&&window.__enVivo.estado==='vivo');}
 function _rutVivoSincronizar(){
   _rutVivo.t=null;
-  if(!_rutEstaMirando()){_rutVivoNota({hizo:'nada: Ruta no esta a la vista'});return;}
+  if(rutCurrentTab!=='nuevo'&&!_rutEstaMirando()){_rutVivoNota({hizo:'nada: Ruta no esta a la vista'});return;}
   var falta=RUT_VIVO_MIN_MS-(Date.now()-_rutVivo.ult);
   if(falta>0){_rutVivo.t=setTimeout(_rutVivoSincronizar,falta);return;}
   _rutVivo.ult=Date.now();
@@ -13037,15 +13071,14 @@ function _rutVivoSincronizar(){
     if(!r&&_rutSyncEnVuelo&&!_rutVivo.t)_rutVivo.t=setTimeout(_rutVivoSincronizar,RUT_VIVO_MIN_MS);
   },function(){_rutVivoNota({hizo:'la sincronizacion fallo'});});
 }
-function _rutVivoSenal(){if(!_rutVivo.t)_rutVivo.t=setTimeout(_rutVivoSincronizar,RUT_VIVO_JUNTAR_MS);}
+function _rutVivoSenal(){_npInvInvalidar();if(!_rutVivo.t)_rutVivo.t=setTimeout(_rutVivoSincronizar,RUT_VIVO_JUNTAR_MS);}
 function _rutVivoPrender(){
   try{
     if(_rutVivo.prendido||typeof _enVivoEscuchar!=='function'||typeof _sbPermiso!=='function')return;
     _sbPermiso(true).then(function(sb){
       if(_rutVivo.prendido||!sb||!sb.pal||!sb.pal.rutaEnVivo)return;
       _rutVivo.prendido=true;
-      /* + NUEVO tambien (28/10/2026): es el formulario del pedido nuevo; los precios se piden cada vez que se abre
-         y el resto lo tipea quien carga. No hay nada que refrescar a mano. */
+      /* NUEVO conserva el borrador y actualiza stock y piezas con cada señal. */
       try{(window.__vivoTabs=window.__vivoTabs||{}).ruta=function(){ return true; };}catch(x){}
       _enVivoEscuchar('erp:pedidos',_rutVivoSenal,_rutVivoSenal);
       _enVivoEscuchar('erp:compras',_rutVivoSenal,_rutVivoSenal);
@@ -13058,6 +13091,7 @@ setTimeout(_rutVivoPrender,0);
 window.__ordenVistas=window.__ordenVistas||{};
 window.__ordenVistas.ruta=function(){
   if(typeof _palancaVal!=='function'||_palancaVal('rutaPg')!=='si')return null;
+  if(rutCurrentTab==='nuevo'){_npInvInvalidar();return npFetchStock(true);}
   if(_rutOcupado())return false;
   return refresh(true,false,true).then(function(ok){
     if(rutCurrentTab==='cobros')return Promise.all([fetchCobrosPendientes(false,true),rutCliVendCargar()]).then(function(){return ok;});
