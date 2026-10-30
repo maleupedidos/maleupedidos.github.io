@@ -86,6 +86,7 @@ fi
 # ── 3c. Que arranque de verdad ───────────────────────────────────────────────
 echo "→ Sincronizacion operativa (sin red ni escrituras reales)…"
 node _tools/probar-sync-operativo.js | sed 's/^/    /' || fallar "Fallo la sincronizacion operativa — no se publica."
+node _tools/probar-representantes-operativo.js | sed 's/^/    /' || fallar "Fallo el armado o los cobros de representantes — no se publica."
 
 #  `node --check` dice que el JS parsea, no que la app arranca. Ya rompi Ruta y
 #  Abastecimiento pasando el chequeo de sintaxis. (19/08/2026)

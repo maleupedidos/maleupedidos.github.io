@@ -4011,7 +4011,7 @@ function _renderPedidosInner() {
   // busqueda.clientes para que classifyClientes y subrenders trabajen con la
   // lista filtrada sin tocar todos los call sites.
   var _origClientes = busqueda.clientes || [];
-  busqueda.clientes = _origClientes.filter(_matchSem);
+  busqueda.clientes = _abaRedCompletarClientes(_origClientes, typeof D!=='undefined'&&D&&D.pedidos||[]).filter(_matchSem);
   try {
   var cl = classifyClientes();
   var total = (busqueda.clientes || []).length;
@@ -4246,6 +4246,39 @@ function _abaContacto(tel, aviso) {
     '<button type="button" class="aba-copiar" data-txt="' + _abaH(aviso) + '" data-ok="Aviso copiado: pegalo en WhatsApp" onclick="_abaCopiar(this)">Copiar aviso</button>' +
     '</div>';
 }
+/* La bolsa de Red incluye lo del deposito, no solo las filas de OC de busqueda.
+   Se completa por pedido+SKU y sin mutar ni duplicar las compras originales. */
+function _abaRedCompletarClientes(clientes,pedidos){
+  var out=(clientes||[]).map(function(c){return c.canal==='Red'?Object.assign({},c,{items:(c.items||[]).map(function(i){return Object.assign({},i);})}):c;}), ix={};
+  out.forEach(function(c){if(c.canal==='Red')ix[String(c.ped)]=c;});
+  (pedidos||[]).forEach(function(p){
+    if(p.h!=='Red'||p.es==='Entregado'||p.es==='Cancelado'||p.ev==='Entregado'||!p.retira||!Array.isArray(p.p))return;
+    var c=ix[String(p.n)], iso=String(p.dee||'');
+    if(!c){
+      if(!/^\d{4}-\d{2}-\d{2}$/.test(iso))return;
+      var d=new Date(iso+'T12:00:00Z');d.setUTCDate(d.getUTCDate()+4-(d.getUTCDay()||7));
+      var sem=Math.ceil(((d-Date.UTC(d.getUTCFullYear(),0,1))/86400000+1)/7);
+      c={canal:'Red',ped:String(p.n),n:p.c||'',vendedor:p.retira,dir:p.br||'',items:[],semEnt:sem,anioEnt:d.getUTCFullYear(),ing:0};
+      out.push(c);ix[String(p.n)]=c;
+    }
+    var det=p.oDet||{};try{if(typeof det==='string')det=JSON.parse(det);}catch(e){det={};}
+    p.p.forEach(function(it){
+      var q=Number(it.q)||0, listado=0, listadoDep=0;
+      c.items.forEach(function(x){if(x.abbr===it.a){listado+=Number(x.q)||0;if(x.deDeposito)listadoDep+=Number(x.q)||0;}});
+      var falta=Math.round((q-listado)*1000)/1000;if(falta<=0)return;
+      var v=det[it.a], deDep=(p.o==='Deposito'||p.o==='Depósito'||v==='D')?q:(v&&typeof v==='object'?Number(v.d)||0:0);
+      var nom=(typeof PN!=='undefined'&&PN[it.a])||(typeof PROD_NAMES!=='undefined'&&PROD_NAMES[it.a])||it.a;
+      if(/^C/.test(it.a))nom='Carnes — '+nom.replace(/^Carne\s+/,'');
+      else if(/^W(Po|Bo|Ve)$/.test(it.a))nom='Wraps — '+nom.replace(/^Wrap\s+/,'');
+      var agregar=function(cant,deposito){if(cant>0)c.items.push({abbr:it.a,prod:nom,q:cant,est:deposito?'Deposito':'Revisar origen',deDeposito:deposito,revisarOrigen:!deposito});};
+      var fisico=Math.min(falta,Math.max(0,deDep-listadoDep));agregar(fisico,true);agregar(Math.round((falta-fisico)*1000)/1000,false);
+    });
+  });
+  return out;
+}
+try{window.addEventListener('maleu:pedidos-listos',function(){
+  if(typeof _tabActual==='function'&&_tabActual()==='busqueda')_abaVivoPintar();
+});}catch(e){}
 function renderRedConsolidadoCard(list) {
   // Agrupa todos los pedidos de Red por vendedor y muestra productos sumados.
   // Maleu arma UN solo consolidado; el vendedor subdivide después.
@@ -4254,14 +4287,16 @@ function renderRedConsolidadoCard(list) {
     var v = _vendRed(cli);
     if (!byVendedor[v]) byVendedor[v] = { peds: [], prods: {} };
     byVendedor[v].peds.push(cli);
-    cli.items.forEach(function(it) {
-      if (!byVendedor[v].prods[it.prod]) byVendedor[v].prods[it.prod] = { q: 0, abbr: it.abbr || '', pendiente: false };
-      byVendedor[v].prods[it.prod].q += it.q;
-      if (it.est === 'Pendiente' || it.est === 'Pedido') byVendedor[v].prods[it.prod].pendiente = true;
+    (cli.items||[]).forEach(function(it) {
+      var k=it.prod+'|'+(it.deDeposito?'D':it.revisarOrigen?'?':'OC');
+      if (!byVendedor[v].prods[k]) byVendedor[v].prods[k] = { prod:it.prod, q: 0, abbr: it.abbr || '', pendiente: false, deDeposito:!!it.deDeposito,revisarOrigen:!!it.revisarOrigen };
+      byVendedor[v].prods[k].q += Number(it.q)||0;
+      if (it.est === 'Pendiente' || it.est === 'Pedido') byVendedor[v].prods[k].pendiente = true;
     });
   });
 
   var html = '';
+  if(typeof D==='undefined'||!D||!Array.isArray(D.pedidos)||!D.pedidos.length)html+='<div class="cobro-red-regla">Falta actualizar Pedidos para completar lo que sale del depósito. Esta lista todavía muestra solo las compras.</div>';
   Object.keys(byVendedor).sort().forEach(function(vName) {
     var data = byVendedor[vName];
     var cardKey = _ckRedVend(vName);
@@ -4271,7 +4306,7 @@ function renderRedConsolidadoCard(list) {
     html += '<div class="cliente-ped">' + data.peds.length + (data.peds.length === 1 ? ' pedido en la bolsa' : ' pedidos en la bolsa') + '</div>';
 
     var flatItems = Object.keys(data.prods).map(function(prod) {
-      return { prod: prod, abbr: data.prods[prod].abbr, q: data.prods[prod].q, est: data.prods[prod].pendiente ? 'Pendiente' : '' };
+      return Object.assign({},data.prods[prod],{est:data.prods[prod].pendiente?'Pendiente':''});
     });
     agruparItems(flatItems).forEach(function(g) {
       html += '<div class="cat-header">' + _abaH(g[0]) + '</div>';
@@ -4282,6 +4317,7 @@ function renderRedConsolidadoCard(list) {
           '<span class="cliente-item-qty">' + _abaCantX(it.q, _abaUni(it.abbr)) + '</span>' +
           '<span class="cliente-item-name">' + _abaH(entry.sabor || it.prod) + '</span>' +
           (pendiente ? '<span class="aba-pend-chip">Sin recibir</span>' : '') +
+          (it.deDeposito ? '<span class="aba-pend-chip">Del depósito</span>' : it.revisarOrigen?'<span class="aba-pend-chip">Revisar origen / OC</span>':'') +
           '</div>';
       });
     });
