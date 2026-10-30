@@ -8900,7 +8900,7 @@ function panelDoLogin(){
 }
 function panelDoLogout(){
   /* (30/10/2026) Un autopedido de Mi Portal sin registrar vive solo en este celular: salir lo borraria. */
-  try{ if(JSON.parse(localStorage.getItem('maleu_red_ap_cola')||'[]').length){ if(typeof showToast==='function')showToast('Hay un pedido de Mi Portal registrándose. Salí cuando termine.',5000); return; } }catch(e){}
+  try{ if(JSON.parse(localStorage.getItem('maleu_red_ap_cola')||'[]').length||JSON.parse(localStorage.getItem('maleu_np_cola')||'[]').length){ if(typeof showToast==='function')showToast('Hay un pedido registrándose (autopedido). Salí cuando termine.',5000); return; } }catch(e){}
   /* Antes esto borraba 5 claves y escondia el login. Alcanzaba cuando cada app
      vivia en su propio iframe con su propia memoria. Ahora que el ERP es UNO
      SOLO, quedaba adentro la ruta del dia del usuario anterior, su busqueda,
@@ -14452,18 +14452,26 @@ function _enVivoMandar(topic, event, payload, alResponder) {
   if (!ws || ws.readyState !== 1) return false;
   var r = String(++_ENV.ref);
   if (alResponder) _ENV.esperas[r] = alResponder;
-  try { ws.send(JSON.stringify({ topic: topic, event: event, payload: payload, ref: r, join_ref: r })); return true; }
+  try { ws.send(JSON.stringify({ topic: topic, event: event, payload: payload, ref: r, join_ref: r })); return r; }
   catch (e) { delete _ENV.esperas[r]; return false; }
 }
 
+/* UNA UNION POR CANAL (30/10/2026). Phoenix cierra la union anterior cuando llega otra al mismo canal (`phx_close`
+   con el join_ref VIEJO), y aca cada `phx_close` volvia a unir a los 2 s: la union nueva cerraba la anterior, que
+   pedia otra, y asi para siempre. Medido en frio con la sesion real: los 25 canales cerrandose cada ~1 s y, como cada
+   vuelta contaba como «volvio de un corte», pedidos y caja releidos cada 1,5 s (63 lecturas en 25 s, sin parar).
+   Ahora el canal recuerda su `joinRef`, no manda otra union mientras una esta en vuelo, y un cierre de una union
+   que ya no es la vigente no se toca. */
 function _enVivoUnir(canal) {
   var c = _ENV.canales[canal];
-  if (!c || !_ENV.token) return;
-  _enVivoMandar('realtime:' + canal, 'phx_join', {
+  if (!c || !_ENV.token || c.uniendo) return;
+  c.uniendo = true;
+  var _ref = _enVivoMandar('realtime:' + canal, 'phx_join', {
     config: { broadcast: { ack: false, self: false }, presence: { key: '' }, postgres_changes: [], private: true },
     access_token: _ENV.token
   }, function (m) {
     var p = m && m.payload;
+    c.uniendo = false;
     if (p && p.status === 'ok') {
       var volvio = c.alguna;
       c.unido = true; c.alguna = true; _ENV.intento = 0;
@@ -14476,6 +14484,7 @@ function _enVivoUnir(canal) {
       _enVivoPoner('rechazado', String((p && p.response && p.response.reason) || 'el servidor no dejo escuchar ' + canal));
     }
   });
+  if (_ref) c.joinRef = _ref; else c.uniendo = false;
 }
 
 function _enVivoConectar() {
@@ -14484,8 +14493,13 @@ function _enVivoConectar() {
   if (!Object.keys(_ENV.canales).length) return;
   if (typeof WebSocket === 'undefined' || typeof _sbPermiso !== 'function') { _enVivoPoner('apagado', 'este navegador no puede'); return; }
   if (document.visibilityState === 'hidden') { _enVivoPoner('cortado', 'en segundo plano'); return; }
+  /* (30/10/2026) `_ENV.ws` se asigna recien cuando vuelve el permiso: sin esta marca, cada canal que se anotaba
+     mientras tanto abria OTRA conexion (medido: 4 tandas de uniones en 450 ms al arrancar). */
+  if (_ENV.conectando) return;
+  _ENV.conectando = true;
   _enVivoPoner('conectando', '');
   _sbPermiso(true).then(function (sb) {
+    _ENV.conectando = false;
     if (!sb || !sb.url || !sb.key || !sb.token) { _enVivoPoner('apagado', 'sin permiso de la base'); _enVivoReconectar(); return; }
     _ENV.token = sb.token;
     var url = String(sb.url).replace(/^http/, 'ws') + '/realtime/v1/websocket?apikey=' + encodeURIComponent(sb.key) + '&vsn=1.0.0';
@@ -14493,7 +14507,7 @@ function _enVivoConectar() {
     try { ws = new WebSocket(url); } catch (e) { _enVivoPoner('cortado', 'no se pudo abrir'); _enVivoReconectar(); return; }
     _ENV.ws = ws;
     ws.onopen = function () {
-      Object.keys(_ENV.canales).forEach(function (k) { _ENV.canales[k].unido = false; _enVivoUnir(k); });
+      Object.keys(_ENV.canales).forEach(function (k) { _ENV.canales[k].unido = false; _ENV.canales[k].uniendo = false; _enVivoUnir(k); });
       _enVivoLatir();
     };
     ws.onmessage = function (ev) {
@@ -14507,6 +14521,9 @@ function _enVivoConectar() {
         try{_ordenSenalPendiente(canal);}catch(e){}
         if (dato && typeof c.alCambio === 'function') { try { c.alCambio(dato); } catch (e) {} }
       } else if (m.event === 'phx_error' || m.event === 'phx_close') {
+        /* El cierre de una union vieja (la reemplazo la vigente) no es un corte: no se toca. */
+        var _jr = m.join_ref || m.ref;   /* con vsn 1.0.0 el cierre trae el ref de la union en `ref` */
+        if (_jr && c.joinRef && String(_jr) !== String(c.joinRef)) return;
         /* El servidor solto el canal (p. ej. vencio el token): se vuelve a unir. */
         c.unido = false;
         setTimeout(function () { if (_ENV.canales[canal] && !_ENV.canales[canal].unido) _enVivoUnir(canal); }, 2000);
@@ -14516,12 +14533,12 @@ function _enVivoConectar() {
       if (_ENV.ws !== ws) return;
       _ENV.ws = null; _ENV.esperas = {};
       if (_ENV.latido) { clearInterval(_ENV.latido); _ENV.latido = null; }
-      Object.keys(_ENV.canales).forEach(function (k) { _ENV.canales[k].unido = false; });
+      Object.keys(_ENV.canales).forEach(function (k) { _ENV.canales[k].unido = false; _ENV.canales[k].uniendo = false; _ENV.canales[k].joinRef = ''; });
       if (_ENV.estado !== 'rechazado') _enVivoPoner('cortado', 'se corto la conexion');
       _enVivoReconectar();
     };
     ws.onerror = function () { try { ws.close(); } catch (e) {} };
-  }, function () { _enVivoPoner('apagado', 'sin permiso de la base'); _enVivoReconectar(); });
+  }, function () { _ENV.conectando = false; _enVivoPoner('apagado', 'sin permiso de la base'); _enVivoReconectar(); });
 }
 
 function _enVivoReconectar() {

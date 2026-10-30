@@ -81,7 +81,7 @@ const chipLiq = `[].some.call(document.querySelectorAll('#vRed .rsc-vista .rt-ch
     /* Esperar a que el ERP termine de arrancar: su propio arranque navega a la
        tab inicial, y si eso pasa DESPUES de ir a Ventas la pantalla se sigue
        dibujando pero escondida (todo mide 0: 1 de cada 3 corridas a 390 px). */
-    await esperar(cli, `!document.getElementById('boot')`, 15000);
+    await esperar(cli, `document.documentElement.classList.contains('listo')`, 15000);
     await pausa(900);
     await ev(cli, `window.D=window.D||{}; D.pedidos=D.pedidos||[]; D.stock=D.stock||[]; D.ventasExtra=D.ventasExtra||[]; go('ventas'); vSwitchTab('red'); 1`);
     console.log('\n== Ventas > RED > Liquidación · ' + ANCHO + 'px ==');

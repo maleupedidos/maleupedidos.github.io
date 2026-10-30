@@ -15,7 +15,7 @@ const pausa = (ms) => new Promise((r) => setTimeout(r, ms));
     cli.escuchar((m) => { if (m === 'Page.javascriptDialogOpening') cli.enviar('Page.handleJavaScriptDialog', { accept: true }).catch(() => {}); });
     await cli.enviar('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 3, mobile: true });
     await cli.enviar('Page.navigate', { url: process.env.BASE_URL || 'https://app.maleu.com.ar/app.html' });
-    for (let i = 0; i < 160 && !(await cdp.evaluar(cli, `typeof go==='function'&&!!window._sbPerm&&window.D&&(D.pedidos||[]).length>0&&!document.getElementById('boot')`).catch(() => false)); i++) await pausa(500);
+    for (let i = 0; i < 160 && !(await cdp.evaluar(cli, `typeof go==='function'&&!!window._sbPerm&&window.D&&(D.pedidos||[]).length>0&&document.documentElement.classList.contains('listo')`).catch(() => false)); i++) await pausa(500);
     await pausa(4000);
     await cdp.evaluar(cli, `go(${JSON.stringify(PAG)});1`); await pausa(9000);
     await cli.enviar('Emulation.setCPUThrottlingRate', { rate: 4 });

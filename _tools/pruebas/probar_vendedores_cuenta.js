@@ -42,7 +42,7 @@ const CLICK = (n, txt) => `(function(){var c=[].filter.call(document.querySelect
 async function abrirTab(cli, activa, dialogos) {
   const id = (await cli.enviar('Page.addScriptToEvaluateOnNewDocument', { source: prep('token-de-prueba', stub(activa)) })).identifier;
   await cli.enviar('Page.navigate', { url: 'http://localhost:' + PUERTO + '/app.html' });
-  await esperar(cli, `typeof go==='function' && document.readyState==='complete' && !document.getElementById('boot')`);
+  await esperar(cli, `typeof go==='function' && document.readyState==='complete' && document.documentElement.classList.contains('listo')`);
   await T(1200);
   await evaluar(cli, 'setTimeout(function(){go("miportal")},0),1');
   const listo = await esperar(cli, `document.querySelectorAll('#va-box .va-p').length===3`, 60000);

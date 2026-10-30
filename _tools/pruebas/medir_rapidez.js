@@ -76,7 +76,7 @@ async function medir(cli, listo, tope) {
     }
     const t0 = Date.now();
     await cli.enviar('Page.navigate', { url: URL });
-    for (let i = 0; i < 120 && !(await cdp.evaluar(cli, `typeof go==='function'&&!!window._sbPerm&&window.D&&(D.pedidos||[]).length>0&&!document.getElementById('boot')`).catch(() => false)); i++) await pausa(500);
+    for (let i = 0; i < 120 && !(await cdp.evaluar(cli, `typeof go==='function'&&!!window._sbPerm&&window.D&&(D.pedidos||[]).length>0&&document.documentElement.classList.contains('listo')`).catch(() => false)); i++) await pausa(500);
     anotar('arranque (navegar → datos y sin splash)', { ms: Date.now() - t0 });
     await pausa(4000);
     /* LAS CUATRO TABS DE TODOS LOS DÍAS */
