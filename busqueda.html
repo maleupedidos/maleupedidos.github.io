@@ -1102,6 +1102,11 @@ function _abaVivoLeerOcs(ids) {
 var ABA_VIVO_JUNTAR_MS = 700;
 var _abaVivoTanda = { ids: {}, t: null, fotoT: null, fotoEnCurso: null };
 function _abaVivoCompras(p) {
+  /* Con el motor migrado, la señal relee la pantalla de la base. Esperar una foto
+     de Apps Script dejaba la OC o el pago anterior hasta un minuto. */
+  if(typeof _lecModo==='function'&&_lecModo('busqueda')==='si'){
+    _abaVivoBaseSenal();return;
+  }
   if (!p) return;
   if (p.tabla === 'oc' && Array.isArray(p.ids)) p.ids.forEach(function (x) { if (x) _abaVivoTanda.ids[String(x)] = 1; });
   if (!_abaVivoTanda.t) _abaVivoTanda.t = setTimeout(function () {
@@ -1128,12 +1133,31 @@ function _abaVivoFoto(p) {
 /* Al volver de un corte, lo que paso mientras no se escuchaba no llega por
    señal: se relee la foto, y si no hay una mas nueva, la lista de Apps Script. */
 function _abaVivoVolver() {
+  if(typeof _lecModo==='function'&&_lecModo('busqueda')==='si'){_abaVivoBaseSenal();return;}
   _abaVivoFotoNueva().then(function (uso) {
     if (uso || Date.now() - _abaVivo.ultAS < 60000) return;
     _abaVivo.ultAS = Date.now();
     try { abaRefresh(true); } catch (e) {}
   });
 }
+var _abaVivoBaseT=null, _abaVivoBaseVuelo=false, _abaVivoBasePend=false;
+function _abaVivoBaseSenal(){
+  _abaVivoBasePend=true;
+  if(_abaVivoBaseT||_abaVivoBaseVuelo)return;
+  _abaVivoBaseT=setTimeout(function(){
+    _abaVivoBaseT=null;
+    if(document.hidden||(typeof _tabActual==='function'&&_tabActual()!=='busqueda'))return;
+    if(abaHayEditor()){_abaVivoBaseSenal();return;}
+    _abaVivoBasePend=false;_abaVivoBaseVuelo=true;
+    abaRefresh(true).then(function(){_abaVivoBaseVuelo=false;if(_abaVivoBasePend)_abaVivoBaseSenal();},function(){_abaVivoBaseVuelo=false;});
+  },500);
+}
+window.__ordenVistas=window.__ordenVistas||{};
+window.__ordenVistas.busqueda=function(){
+  if(typeof _lecModo!=='function'||_lecModo('busqueda')!=='si')return null;
+  if(abaHayEditor())return false;
+  return abaRefresh(true).then(function(ok){return ok||null;});
+};
 
 /* El cartelito del encabezado: vivo, o desde cuando no. Cortado no es callado. */
 function _abaVivoSello(st) {
@@ -1161,6 +1185,9 @@ function _abaVivoPrender() {
       try{(window.__vivoTabs=window.__vivoTabs||{}).busqueda=function(){ return true; }; }catch(e){}
       if (typeof _enVivoAlEstado === 'function') _enVivoAlEstado(_abaVivoSello);
       _enVivoEscuchar('erp:compras', _abaVivoCompras, _abaVivoVolver);
+      _enVivoEscuchar('erp:pedidos', _abaVivoVolver, null);
+      _enVivoEscuchar('erp:stock', _abaVivoVolver, null);
+      _enVivoEscuchar('erp:pagos', _abaVivoVolver, null);
       _enVivoEscuchar('erp:fotos', _abaVivoFoto, null);
       try { _abaVivoSello(_enVivoEstado()); } catch (e) {}
     }, function () {});
@@ -1598,7 +1625,9 @@ function abaTraerBusqueda() {
   if (typeof _lecJson === 'function' && typeof LEC_ARMA === 'object' && LEC_ARMA.busqueda) return _lecJson('busqueda', {}, url, function () {});
   return fetch(url).then(function (r) { return r.json(); });
 }
+var _abaRefreshLectura=0;
 function abaRefresh(silent) {
+  var lectura=++_abaRefreshLectura;
   try { abaFaltCargar(!silent); } catch (e) {}
   var habia = _abaHayDatos();
   if (!silent && !_ABA_FUSIONADO) document.getElementById('abaLoadingView').classList.remove('hidden');
@@ -1613,6 +1642,7 @@ function abaRefresh(silent) {
   // no solo que se llamo. Sin esto estampaba hora nueva sobre datos viejos.
   var pBus = abaTraerBusqueda()
     .then(function(data) {
+      if(lectura!==_abaRefreshLectura)return false;
       /* Una respuesta de error ({ok:false}, sesion vencida) no reemplaza lo que
          habia: antes se guardaba en el celular y la proxima apertura arrancaba
          sin datos (13/9/2026). */
@@ -5317,10 +5347,13 @@ function abaProcessSyncQueue() {
         /* Stock I4 (15/10/2026): con la recepcion aceptada como orden la planilla se
            escribe despues: se empuja al aplicador ANTES de recargar, o la lista
            volveria a mostrar lo recibido como pendiente hasta un minuto. */
-        if (resp && resp.diferida) {
+        if (resp && resp.diferida && resp.baseEscribio !== true) {
           fetch(ABA_APPS_SCRIPT_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ action: 'pedidosFuenteAplicar' }) })
             .catch(function () {}).then(function () { _abaEsperarRefresh(abaRefresh(true)); });
-        } else _abaEsperarRefresh(abaRefresh(true));
+        } else {
+          if(resp&&resp.diferida&&typeof _pfAplicar==='function')_pfAplicar(resp);
+          _abaEsperarRefresh(abaRefresh(true));
+        }
       } else {
         /* Sin conexion no hay nada que esperar: la accion ya quedo en la cola y
            se sincroniza sola cuando vuelva internet. Dejar el loader seria

@@ -2333,11 +2333,20 @@ function _rutMedirBase(datos){
 }
 var _rutEntVuelo=null;
 function _pedirEntregasTxt(fresh){
-  if(_rutEntVuelo&&Date.now()-_rutEntVuelo.t<45000&&(!fresh||_rutEntVuelo.fresh))return _rutEntVuelo.p;
-  var reg={t:Date.now(),fresh:!!fresh,p:null};
-  reg.p=fetch(RUT_APPS_SCRIPT_URL+'?action=entregas&t='+Date.now()+(fresh?'&fresh=1':''))
-    .then(function(r){return r.text()})
-    .then(function(t){_rutMsApps=Date.now()-reg.t;return t;});
+  var version=typeof _ordenCambios!=='undefined'?(_ordenCambios.ruta||0):0;
+  if(_rutEntVuelo&&_rutEntVuelo.version===version&&Date.now()-_rutEntVuelo.t<45000&&(!fresh||_rutEntVuelo.fresh))return _rutEntVuelo.p;
+  var reg={t:Date.now(),fresh:!!fresh,version:version,p:null};
+  var apps=function(){return fetch(RUT_APPS_SCRIPT_URL+'?action=entregas&t='+Date.now()+(fresh?'&fresh=1':''))
+    .then(function(r){return r.text()}).then(function(t){_rutMsApps=Date.now()-reg.t;window.__rutaFuente={de:'apps',ms:_rutMsApps};return t;});};
+  /* RUTA_DESDE_PG=si antes solo comparaba: nunca alimentaba la pantalla. */
+  reg.p=(typeof _sbPermiso==='function'?Promise.resolve(_sbPermiso(true)):Promise.resolve(null)).then(function(sb){
+    if(!sb||!sb.pal||sb.pal.rutaPg!=='si')return apps();
+    return fetch(sb.url+'/rest/v1/rpc/ruta_entregas_pantalla',{method:'POST',
+      headers:{apikey:sb.key,Authorization:'Bearer '+sb.token,'Content-Type':'application/json'},body:'{}'})
+      .then(function(r){if(!r.ok)throw new Error('Ruta: HTTP '+r.status);return r.json();})
+      .then(function(d){if(!d||!Array.isArray(d.e))throw new Error('Ruta sin entregas');d._rutaBase=true;window.__rutaFuente={de:'base',ms:Date.now()-reg.t};return JSON.stringify(d);})
+      .catch(apps);
+  });
   var fin=function(){if(_rutEntVuelo===reg)_rutEntVuelo=null;};
   reg.p.then(fin,fin);
   _rutEntVuelo=reg;
@@ -2346,19 +2355,22 @@ function _pedirEntregasTxt(fresh){
 /* Le avisa al ↻ del panel que las entregas son de ahora (13/9/2026). Suelta
    (?standalone=1) no hay panel y no pasa nada. */
 function _rutFresco(){try{if(typeof window._marcarFresco==='function')window._marcarFresco(['ruta'])}catch(e){}}
+var _rutLectura=0;
 function refresh(silent,fresh,auto){
+  var lectura=++_rutLectura;
   if(!silent)document.getElementById('loadingView').classList.remove('hidden');
   // El cartel sale SOLO si no hay nada en pantalla. Con entregas del cache, lo
   // unico que se mueve es el ↻ girando arriba — la regla del 22/8/2026.
   if(!auto)_rutAviso(entregas.length>0 ? null : 'yendo');
   var btn=document.getElementById('btnRefresh');if(!auto)btn.classList.add('spinning');
   return _pedirEntregasTxt(fresh).then(function(t){return JSON.parse(t)}).then(function(data){
+    if(lectura!==_rutLectura)return false;
     /* Una respuesta sin la lista NO es "no hay entregas": sin esto un
        {ok:false} vaciaba ARMADO y RUTA — y la sincronizacion lo pediria cada
        15 s. Mismo criterio que fetchCobrosPendientes. */
     if(!data||!Array.isArray(data.e))throw new Error('respuesta sin entregas');
     /* Ruta desde la base, modo medir (26/10/2026): compara en paralelo, no toca lo que se ve. */
-    try{_rutMedirBase({e:JSON.parse(JSON.stringify(data.e)),hechas:JSON.parse(JSON.stringify(data.hechas||[]))});}catch(eMd){}
+    try{if(!data._rutaBase)_rutMedirBase({e:JSON.parse(JSON.stringify(data.e)),hechas:JSON.parse(JSON.stringify(data.hechas||[]))});}catch(eMd){}
     if(typeof data.redEf==='boolean')RUT_RED_EF=data.redEf;   /* redondeo del efectivo (19/10/2026) */
     if(!auto)btn.classList.remove('spinning');
     var firma=_rutFirmaDe(data);
@@ -10555,7 +10567,7 @@ function processSyncQueue(){
            los 15 s leeria la planilla vieja y el cobro o la entrega parecerian volver
            atras. Tres vueltas como mucho: despues se da por hecha (la orden ya esta en
            la base y el aplicador del minuto la escribe). */
-        if(res.diferida&&(item.__pf||0)<3){
+        if(res.diferida&&res.baseEscribio!==true&&(item.__pf||0)<3){
           item.__pf=(item.__pf||0)+1;
           /* Stock I4 (15/10/2026): la PRIMERA respuesta de la descarga dice lo que
              entra; el reenvio, con la orden ya aplicada, ve las filas selladas. */
@@ -10564,6 +10576,7 @@ function processSyncQueue(){
             .catch(function(){}).then(function(){setTimeout(processSyncQueue,300);});
           return;
         }
+        if(res.diferida&&res.baseEscribio===true&&typeof _pfAplicar==='function')_pfAplicar(res);
         // Éxito: remover de la cola, resetear backoff
         syncQueue.shift();if(item&&item.action==='marcarArmado')_armConfirmado(item);_repConfirmado(item);
         /* Cualquier escritura propia invalida la firma: si el otro celular la
@@ -12985,7 +12998,7 @@ function rutSincronizar(motivo){
    RUT_VIVO_JUNTAR_MS y sincroniza como mucho cada RUT_VIVO_MIN_MS. Con el en vivo conectado, el reloj de
    15 s queda de red y sincroniza cada RUT_SYNC_VIVO_MS; cortado (o suelta, ?standalone=1), cada 15 s como
    siempre. `window.__rutaVivo` dice que hizo. */
-var RUT_VIVO_JUNTAR_MS=4000, RUT_VIVO_MIN_MS=20000, RUT_SYNC_VIVO_MS=120000;
+var RUT_VIVO_JUNTAR_MS=500, RUT_VIVO_MIN_MS=1500, RUT_SYNC_VIVO_MS=120000;
 var _rutVivo={prendido:false,t:null,ult:0,ultSync:0};
 function _rutVivoNota(o){try{window.__rutaVivo=Object.assign({t:Date.now()},o);}catch(x){}}
 function _rutVivoConectado(){return _rutVivo.prendido&&!!(window.__enVivo&&window.__enVivo.estado==='vivo');}
@@ -12995,7 +13008,10 @@ function _rutVivoSincronizar(){
   var falta=RUT_VIVO_MIN_MS-(Date.now()-_rutVivo.ult);
   if(falta>0){_rutVivo.t=setTimeout(_rutVivoSincronizar,falta);return;}
   _rutVivo.ult=Date.now();
-  rutSincronizar('vivo').then(function(r){_rutVivoNota({hizo:'sincronizo por una señal',r:r});},function(){_rutVivoNota({hizo:'la sincronizacion fallo'});});
+  rutSincronizar('vivo').then(function(r){
+    _rutVivoNota({hizo:'sincronizo por una señal',r:r});
+    if(!r&&_rutSyncEnVuelo&&!_rutVivo.t)_rutVivo.t=setTimeout(_rutVivoSincronizar,RUT_VIVO_MIN_MS);
+  },function(){_rutVivoNota({hizo:'la sincronizacion fallo'});});
 }
 function _rutVivoSenal(){if(!_rutVivo.t)_rutVivo.t=setTimeout(_rutVivoSincronizar,RUT_VIVO_JUNTAR_MS);}
 function _rutVivoPrender(){
@@ -13008,11 +13024,22 @@ function _rutVivoPrender(){
          y el resto lo tipea quien carga. No hay nada que refrescar a mano. */
       try{(window.__vivoTabs=window.__vivoTabs||{}).ruta=function(){ return true; };}catch(x){}
       _enVivoEscuchar('erp:pedidos',_rutVivoSenal,_rutVivoSenal);
+      _enVivoEscuchar('erp:compras',_rutVivoSenal,_rutVivoSenal);
+      _enVivoEscuchar('erp:stock',_rutVivoSenal,_rutVivoSenal);
     },function(){});
   }catch(x){}
 }
 try{window.addEventListener('maleu:palancas',function(){_rutVivoPrender();});}catch(x){}
 setTimeout(_rutVivoPrender,0);
+window.__ordenVistas=window.__ordenVistas||{};
+window.__ordenVistas.ruta=function(){
+  if(typeof _palancaVal!=='function'||_palancaVal('rutaPg')!=='si')return null;
+  if(_rutOcupado())return false;
+  return refresh(true,false,true).then(function(ok){
+    if(rutCurrentTab==='cobros')return fetchCobrosPendientes(false,true).then(function(){return ok;});
+    return ok||null;
+  });
+};
 function _arrancarRuta(){
   if(entregas.length>0){rutRender();updateLastSync();refresh(true);}
   else{refresh(false);}

@@ -84,6 +84,9 @@ else
 fi
 
 # ── 3c. Que arranque de verdad ───────────────────────────────────────────────
+echo "→ Sincronizacion operativa (sin red ni escrituras reales)…"
+node _tools/probar-sync-operativo.js | sed 's/^/    /' || fallar "Fallo la sincronizacion operativa — no se publica."
+
 #  `node --check` dice que el JS parsea, no que la app arranca. Ya rompi Ruta y
 #  Abastecimiento pasando el chequeo de sintaxis. (19/08/2026)
 #  Abre el ERP en un Chrome headless y prueba las tres sub-apps. Tarda ~1 min.

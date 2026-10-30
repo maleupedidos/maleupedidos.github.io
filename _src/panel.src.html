@@ -9632,6 +9632,7 @@ function abrirTab(clave){
 function go(p){
   try{ if(typeof DIF!=='undefined'&&DIF.items.length)setTimeout(function(){ _difPintar(true); },0); }catch(_eDf0){}
   cur=p;try{localStorage.setItem('maleu_tab',p);}catch(e){}
+  setTimeout(function(){ if(typeof _ordenVistaPedir==='function')_ordenVistaPedir(); },0);
   try{ _pintarFresco(); }catch(e){}
   /* Entrar a una tab con datos viejos los renueva solo. Esto es lo que hace que
      no haya que "actualizar en cada tab": el refresco va en segundo plano, sin
@@ -14495,6 +14496,7 @@ function _enVivoConectar() {
       if (!c) return;
       if (m.event === 'broadcast') {
         var dato = m.payload && m.payload.payload;
+        try{_ordenSenalPendiente(canal);}catch(e){}
         if (dato && typeof c.alCambio === 'function') { try { c.alCambio(dato); } catch (e) {} }
       } else if (m.event === 'phx_error' || m.event === 'phx_close') {
         /* El servidor solto el canal (p. ej. vencio el token): se vuelve a unir. */
@@ -14580,16 +14582,24 @@ function _sbPedidosClaves(claves) {
       .then(function (filas) { return Array.isArray(filas) ? filas.map(_sbAPedido) : null; });
   }).catch(function () { return null; });
 }
-function _pedVivoAplicar(lista) {
-  if (!lista || !lista.length || typeof D === 'undefined' || !D || !Array.isArray(D.pedidos) || !D.pedidos.length) return false;
+function _pedVivoAplicar(lista, desdeBase) {
+  if (!Array.isArray(lista) || typeof D === 'undefined' || !D) return false;
+  if (!Array.isArray(D.pedidos)) D.pedidos = [];
   var ahora = Date.now();
   var sirven = lista.filter(function (q) {
     var k = _sbClavePedido(q), L = k ? _sbCambiosPed[k] : 0;
-    return !(L && ahora - L < _SB_ESPERA_TRAS_CAMBIO);
+    return desdeBase ? !(L && L >= desdeBase) : !(L && ahora - L < _SB_ESPERA_TRAS_CAMBIO);
   });
   if (!sirven.length) return false;
   var antes = JSON.stringify(D.pedidos);
-  D.pedidos = _sbFusionar(D.pedidos, sirven); D._pedidosDeSupabase = 1;
+  /* La pantalla armada por la base ya incluye las ordenes aceptadas. La replica cruda
+     sigue con sus defensas; una lectura anterior a otro toque tampoco puede pisarlo. */
+  if (desdeBase) {
+    var ix = {}; sirven.forEach(function(q){ ix[_sbClavePedido(q)] = q; });
+    D.pedidos = D.pedidos.map(function(q){ var k=_sbClavePedido(q), n=ix[k]; if(n){delete ix[k];return n;} return q; });
+    Object.keys(ix).forEach(function(k){ D.pedidos.push(ix[k]); });
+  } else D.pedidos = _sbFusionar(D.pedidos, sirven);
+  D._pedidosDeSupabase = 1;
   if (JSON.stringify(D.pedidos) === antes) return false;
   try { _sbCompletar(); } catch (e) {}
   try { if (_hayEditorAbierto()) _pendingLoadRender = true; else render(); } catch (e) {}
@@ -14629,7 +14639,11 @@ function _pedEntrandoHTML(p){
 /* La lista entera (las 400 mas nuevas, la consulta del adelanto) y la misma regla pedido
    por pedido. No va por `_sbRefrescoPedidos`: ese no relee NADA durante 6 min despues de
    cualquier cambio local, y una tanda grande se perderia hasta el proximo ↻. */
-function _pedVivoTodo() { try { _sbPedidos(400).then(_pedVivoAplicar); } catch (e) {} }
+function _pedVivoTodo() {
+  var desde = Date.now();
+  if (_palancaVal('pedidosArma') === 'si') return _pedArmaBase().then(function(r){ _pedVivoAplicar(r.d.pedidos, desde); return true; }).catch(function(){return null;});
+  return _sbPedidos(400).then(function(l){ return _pedVivoAplicar(l); });
+}
 function _pedVivoSenal(p) {
   if (!p) return;
   if (!Array.isArray(p.ids) || (Number(p.n) || 0) > p.ids.length) _pedVivo.todo = true;
@@ -14639,7 +14653,7 @@ function _pedVivoSenal(p) {
     _pedVivo.t = null;
     var todo = _pedVivo.todo, ids = Object.keys(_pedVivo.ids);
     _pedVivo.todo = false; _pedVivo.ids = {};
-    if (todo || ids.length > 50) { _pedVivoTodo(); return; }
+    if (_palancaVal('pedidosArma') === 'si' || todo || ids.length > 50) { _pedVivoTodo().catch(function(){}); return; }
     if (ids.length) _sbPedidosClaves(ids).then(_pedVivoAplicar);
   }, PED_VIVO_JUNTAR_MS);
 }
@@ -15249,11 +15263,56 @@ function _recargarSinVolcado(){
    cambio pareceria volver atras hasta un minuto. Con la palanca apagada no hay
    `diferida` y `_pfAplicar` no hace nada. */
 function _pfId(){ return 'pf_'+Date.now().toString(36)+'_'+Math.random().toString(36).slice(2,10); }
+var _pfVuelo=null;
 function _pfAplicar(r){
   if(!r||!r.diferida)return Promise.resolve(null);
-  return fetch(API,{method:'POST',body:JSON.stringify({action:'pedidosFuenteAplicar'})})
-    .then(function(x){return x.json();}).catch(function(){return null;});
+  var aplicar=function(){return fetch(API,{method:'POST',body:JSON.stringify({action:'pedidosFuenteAplicar'})})
+    .then(function(x){return x.json();}).catch(function(){return null;});};
+  if(r.baseEscribio!==true)return aplicar();
+  if(!_pfVuelo){
+    _pfVuelo=aplicar().then(function(d){_pfVuelo=null;return d;});
+  }
+  /* baseEscribio confirma el dato, no solo que se encolo la orden. La copia a Sheets
+     sigue por atras; una orden aceptada sin ese dato conserva la espera anterior. */
+  return Promise.resolve(null);
 }
+/* Una escritura confirmada invalida las cuatro vistas operativas, incluso si estan
+   cerradas. Solo se relee la visible; se conserva lo pendiente al cambiar de tab. */
+var _ordenCambios={}, _ordenVistaVuelo={}, _ordenVistaTimer=null;
+function _ordenSenalPendiente(canal){
+  var tabs={'erp:pedidos':['pedidos','caja','egresos','ruta','busqueda'],
+    'erp:stock':['ruta','busqueda'],'erp:compras':['ruta','busqueda'],'erp:pagos':['caja','egresos','busqueda']};
+  (tabs[canal]||[]).forEach(function(k){_ordenCambios[k]=(_ordenCambios[k]||0)+1;});
+}
+function _ordenConfirmada(body,r){
+  if(!r||!r.ok||r.baseEscribio!==true)return;
+  ['pedidos','caja','egresos','ruta','busqueda'].forEach(function(k){_ordenCambios[k]=(_ordenCambios[k]||0)+1;});
+  clearTimeout(_ordenVistaTimer);_ordenVistaTimer=setTimeout(_ordenVistaPedir,150);
+}
+function _ordenVistaPedir(){
+  if(document.hidden)return;
+  var tab=typeof _tabActual==='function'?_tabActual():cur, v=_ordenCambios[tab];
+  var fn=window.__ordenVistas&&window.__ordenVistas[tab];
+  if(!v||!fn||_ordenVistaVuelo[tab])return;
+  _ordenVistaVuelo[tab]=true;
+  Promise.resolve().then(fn).then(function(ok){
+    if(ok===true&&_ordenCambios[tab]===v)delete _ordenCambios[tab];
+    _ordenVistaVuelo[tab]=false;
+    if(ok!==null&&_ordenCambios[tab]){clearTimeout(_ordenVistaTimer);_ordenVistaTimer=setTimeout(_ordenVistaPedir,1500);}
+  },function(){_ordenVistaVuelo[tab]=false;});
+}
+window.__ordenVistas=window.__ordenVistas||{};
+window.__ordenVistas.pedidos=function(){
+  if(_palancaVal('pedidosArma')!=='si')return null;
+  if(_hayEditorAbierto())return false;
+  return _pedVivoTodo();
+};
+window.__ordenVistas.caja=window.__ordenVistas.egresos=function(){
+  if(_palancaVal('cajaArma')!=='si')return null;
+  if(_editandoEnCaja())return false;
+  return _recargarCaja(true).then(function(r){return r&&r.ok?true:null;});
+};
+document.addEventListener('visibilitychange',function(){if(!document.hidden)_ordenVistaPedir();});
 /* LAS ESCRITURAS DIRECTO A LA BASE (257-265, 28/10/2026). Cada accion de esta lista la acepta la base con su RPC
    en vez de Apps Script, con el MISMO id de orden (clientOpId, o accion|hoja|N°|ts): un reintento por cualquiera de
    los dos caminos encuentra la orden y no duplica. Cada una con su palanca (`pal.directas[accion]`, y el cobro
@@ -15299,7 +15358,11 @@ function _ordenDirecta(body,ctl,accion){
         if(!r.ok)throw new TypeError('la base contestó '+r.status);
         return r.json();
       })
-      .then(function(d){return(!d||typeof d!=='object'||d.directo===false)?null:d;});
+      .then(function(d){
+        if(!d||typeof d!=='object'||d.directo===false)return null;
+        _ordenConfirmada(body,d);
+        return d;
+      });
   },function(){return null;});
 }
 /* El POST de una accion del panel: primero la base (si va directo), si no Apps Script. Devuelve un Response,
@@ -15318,7 +15381,7 @@ function _hojaPost(body){
   return _ordenPost(body);
 }
 function _recargarPedidos(){
-  if(typeof loadRapido==='function')return loadRapido();
+  if(typeof loadRapido==='function')return loadRapido({soloPedidos:true});
   return (typeof load==='function')?load():Promise.resolve();
 }
 function loadRapido(opts){
@@ -15656,11 +15719,13 @@ var _cajaVuelo=false;
    el cartel de Caja esperaba ese segundo viaje (~3,3 s de mas) y ocupaba un
    cupo de los dos. Aca queda la promesa del lote para que Caja la espere. */
 var _cajaLoteVuelo=null;
+var _cajaLectura=0;
 /* (27/10/2026) Con `CAJA_BASE_ARMA` en «si», la tab Caja (y Pagos) se pide a la base como en el arranque
    (`_cajaArmaTraer`: el libro de `caja_light_pantalla`, lo demas de la foto), no a Apps Script: ~1 s contra
    7-12 s. Si la base no arma, `_cajaArmaTraer` cae solo a Apps Script, como siempre. Con `vivo`, sin esa
    caida (la señal no puede convertirse en una llamada a Google). */
 function _recargarCaja(vivo){
+  var lectura=++_cajaLectura;
   _frescoEnVuelo(['caja'],1);
   var _finC=function(){ _frescoEnVuelo(['caja'],-1); };
   var _deBase=(typeof _palancaVal==='function'&&_palancaVal('cajaArma')==='si'&&typeof _sbPermiso==='function');
@@ -15669,6 +15734,7 @@ function _recargarCaja(vivo){
     :fetch(API+'?action=cajaLight&t='+Date.now()).then(function(r){return r.json();});
   return _pedido
     .then(function(d){
+      if(lectura!==_cajaLectura)return {ok:false,motivo:'lectura reemplazada'};
       if(!d||!Array.isArray(d.movimientos))return {ok:false,red:true};
       _cajaAplicar(d);
       if(_editandoEnCaja()){_pendingLoadRender=true;return {ok:true};}
@@ -15687,17 +15753,21 @@ function _recargarCaja(vivo){
    Junta las señales (CJ_VIVO_JUNTAR_MS), relee como mucho cada CJ_VIVO_MIN_MS y SOLO de la base
    (`_recargarCaja(true)`), solo con Caja, Pagos o Inicio a la vista. Con un campo de la caja en uso,
    `_recargarCaja` ya deja el repintado pendiente. En Inicio repinta con `render()`. `window.__cajaVivo`. */
-var CJ_VIVO_JUNTAR_MS = 4000, CJ_VIVO_MIN_MS = 20000;
-var _cjVivo = { prendido: false, t: null, ult: 0 };
+var CJ_VIVO_JUNTAR_MS = 500, CJ_VIVO_MIN_MS = 1500;
+var _cjVivo = { prendido: false, t: null, ult: 0, vuelo: false, pendiente: false };
 function _cjVivoNota(o){ try { window.__cajaVivo = Object.assign({ t: Date.now() }, o); } catch(e){} }
 function _cjVivoRecargar(){
   _cjVivo.t = null;
+  if(_cjVivo.vuelo){_cjVivo.pendiente=true;return;}
   if (document.visibilityState === 'hidden' || (cur !== 'caja' && cur !== 'egresos' && cur !== 'inicio' && cur !== 'evolucion')) { _cjVivoNota({ hizo: 'nada: la caja no esta a la vista' }); return; }
   try { if (typeof _hayEditorAbierto === 'function' && _hayEditorAbierto()) { _cjVivoNota({ hizo: 'pendiente: editor abierto' }); _cjVivo.t = setTimeout(_cjVivoRecargar, CJ_VIVO_JUNTAR_MS * 2); return; } } catch(e){}
   var falta = CJ_VIVO_MIN_MS - (Date.now() - _cjVivo.ult);
   if (falta > 0) { _cjVivo.t = setTimeout(_cjVivoRecargar, falta); return; }
   _cjVivo.ult = Date.now();
+  _cjVivo.vuelo=true;_cjVivo.pendiente=false;
   _recargarCaja(true).then(function(r){
+    _cjVivo.vuelo=false;
+    if(_cjVivo.pendiente)_cjVivoSenal();
     if (r && r.ok && cur === 'inicio') { try { if (_hayEditorAbierto()) _pendingLoadRender = true; else render(); } catch(e){} }
     if (r && r.ok && cur === 'evolucion') { try { rEvolucion(); } catch(e){ console.error('evolucion/vivo', e); } }
     _cjVivoNota({ hizo: r && r.ok ? 'caja de la base' : ('sin cambios: ' + ((r && r.motivo) || 'la base no armo la caja')), fuente: window.__cajaFuente || null });
@@ -15713,6 +15783,8 @@ function _cjVivoPrender(){
       _cjVivo.prendido = true;
       try{(window.__vivoTabs=window.__vivoTabs||{}).caja=function(){ return true; }; window.__vivoTabs.egresos=function(){ return true; }; }catch(e){}
       _enVivoEscuchar('erp:pedidos', _cjVivoSenal, _cjVivoSenal);
+      _enVivoEscuchar('erp:pagos', _cjVivoSenal, _cjVivoSenal);
+      ['egresos','ingresos','saldo_base','cuentas'].forEach(function(h){_enVivoEscuchar('erp:hoja:'+h,_cjVivoSenal,_cjVivoSenal);});
       _enVivoEscuchar('erp:fotos', _cjVivoFoto, _cjVivoSenal);
     }, function(){});
   } catch(e){}
