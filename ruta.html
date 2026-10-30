@@ -11041,7 +11041,7 @@ function npSetCta(id){npCta=id;npPintarCta();}
 
 function npRenderCatalogo(){
   var host=document.getElementById('npProductos');
-  var html='';
+  var html='<button type="button" id="npInvEstado" onclick="npFetchStock(true)" style="display:block;border:0;background:none;padding:4px 0 8px;font-size:12px;text-align:left;color:#666" aria-live="polite">Consultando disponibilidad…</button>';
   // Un numero sin decir de que es, miente por omision: "quedan 5" no es lo mismo
   // antes del cutoff que despues.
   var _m=npStockMode();
@@ -11100,6 +11100,7 @@ function npRenderCatalogo(){
     html+='</details>';
   }
   host.innerHTML=html;
+  _npInvEstadoRender();
 }
 
 /* La card de un producto. Vive aparte porque la dibujan dos lugares (el catalogo
@@ -11132,13 +11133,16 @@ function _npCardProd(p,esEncargo){
       var cls=cap===0?'cero':(cap<=3?'poco':'');
       stkHtml='<div class="np-stk '+cls+'">'+(cap===0?'sin stock':('quedan '+cap))+'</div>';
     }
-  } else if(esEncargo){
+  } else {
     /* Con modo 'ilimitado' npCap() es null y la card quedaria muda justo donde
        mas hace falta saber si hay algo. El fisico se dice igual, aclarando que
        no es de Estancias \u2014 mostrar un numero sin decir de que es, miente. */
     var f=npFisico(p.abbr);
     if(f!==null)stkHtml='<div class="np-stk '+(f>0?'poco':'cero')+'">'
       +(f>0?('hay '+f+' en el freezer'):'no hay en el freezer')+'</div>';
+  }
+  if(_uni!=='kg'&&cap===null&&npFisico(p.abbr)===null){
+    stkHtml='<div class="np-stk">'+(_npStError?'Stock sin actualizar':'Consultando stock…')+'</div>';
   }
   /* Por peso no van los +/-: nadie compra "1 kilo redondo" de colita. Va un
      campo para tipear lo que marco la balanza. */
@@ -11958,9 +11962,15 @@ function _npHaceTxt(ts){
 /* NP_PIEZAS y npPzSel se declaran arriba, junto a npCart: la card los lee. */
 /* Las altas aceptadas se ocultan localmente hasta que la lectura confirma
    su reserva. Una replica atrasada no puede volver a ofrecerlas. */
-var _npInvVersion=0, _npPzVuelo=null, _npStVuelo=null;
+var _npInvVersion=0, _npPzVuelo=null, _npStVuelo=null, _npStError=false, _npPzError=false;
 var _npPzOcupadas={};
 try{_npPzOcupadas=JSON.parse(localStorage.getItem('mc_np_ocupadas')||'{}')||{};}catch(e){}
+function _npInvEstadoRender(){
+  var el=document.getElementById('npInvEstado');if(!el)return;
+  var cargando=!!(_npStVuelo||_npPzVuelo),error=_npStError||_npPzError;
+  el.textContent=cargando?'Actualizando disponibilidad…':error?'No se pudo actualizar toda la disponibilidad. Reintentar':(!NP_STOCK||!NP_PIEZAS)?'Consultando disponibilidad…':'Disponibilidad actualizada';
+  el.style.color=error?'#b42318':'#666';
+}
 function _npPzGuardarOcupadas(){try{localStorage.setItem('mc_np_ocupadas',JSON.stringify(_npPzOcupadas));}catch(e){}}
 function _npInvInvalidar(){_npInvVersion++;NP_PIEZAS_TS=0;NP_STOCK_TS=0;}
 function _npPzAceptadas(data){
@@ -11969,11 +11979,11 @@ function _npPzAceptadas(data){
 }
 function _npPzFiltrar(d,confirmar){
   var vistos={},out={};
-  Object.keys(d).forEach(function(a){out[a]=d[a].filter(function(x){vistos[String(x.id)]=true;return !_npPzOcupadas[String(x.id)];});});
+  Object.keys(d).filter(function(a){return Array.isArray(d[a]);}).forEach(function(a){out[a]=d[a].filter(function(x){vistos[String(x.id)]=true;return !_npPzOcupadas[String(x.id)];});});
   if(confirmar){Object.keys(_npPzOcupadas).forEach(function(id){if(!vistos[id])delete _npPzOcupadas[id];});_npPzGuardarOcupadas();}
   return out;
 }
-function _npInvDatos(d){return !!d&&typeof d==='object'&&!Array.isArray(d)&&Object.keys(d).every(function(k){return Array.isArray(d[k]);});}
+function _npInvDatos(d){return !!d&&typeof d==='object'&&!Array.isArray(d)&&d.ok!==false&&Object.keys(d).every(function(k){return k==='base'?typeof d[k]==='boolean':Array.isArray(d[k]);});}
 function npFetchPiezas(force){
   /* La copia de las piezas se muestra igual que la del stock: al instante y
      reemplazada apenas llega lo de ahora. Una pieza de la copia que ya se vendio
@@ -11983,7 +11993,7 @@ function npFetchPiezas(force){
   if(!force && NP_PIEZAS && !NP_PIEZAS_COPIA && (Date.now()-NP_PIEZAS_TS)<60000) return Promise.resolve(true);
   var version=_npInvVersion;
   if(_npPzVuelo&&_npPzVuelo.v===version)return _npPzVuelo.p;
-  var vuelo={v:version};_npPzVuelo=vuelo;
+  var vuelo={v:version};_npPzVuelo=vuelo;_npPzError=false;_npInvEstadoRender();
   /* (167) Adentro del ERP, si la base ya arma las piezas (LEC_ARMA), `_lecJson` decide de donde salen. */
   var _npPfUrl=RUT_APPS_SCRIPT_URL+'?action=piezas_full&_='+Date.now();
   vuelo.p=((typeof _lecJson==='function'&&typeof LEC_ARMA==='object'&&LEC_ARMA.piezas_full)
@@ -11995,7 +12005,7 @@ function npFetchPiezas(force){
       if(version!==_npInvVersion)return false;
       if(_npInvDatos(d)){ NP_PIEZAS=_npPzFiltrar(d,true); NP_PIEZAS_TS=Date.now(); NP_PIEZAS_COPIA=0; _npCopiaGuardar('mc_np_piezas',d); npRenderCatalogo(); npUpdateTotal(); return true; }return false;
     })
-    .catch(function(){return false;}).then(function(ok){if(_npPzVuelo===vuelo)_npPzVuelo=null;return ok;});
+    .catch(function(){return false;}).then(function(ok){if(_npPzVuelo===vuelo){_npPzVuelo=null;_npPzError=!ok&&version===_npInvVersion;}_npInvEstadoRender();return ok;});
   return vuelo.p;
 }
 /* Las piezas que se ofrecen de un corte, de la mas liviana a la mas pesada: el
@@ -12060,7 +12070,7 @@ function npFetchStock(force){
   if(!force && NP_STOCK && !NP_STOCK_COPIA && (Date.now()-NP_STOCK_TS)<60000) return piezas;
   var version=_npInvVersion;
   if(_npStVuelo&&_npStVuelo.v===version)return _npStVuelo.p;
-  var vuelo={v:version};_npStVuelo=vuelo;
+  var vuelo={v:version};_npStVuelo=vuelo;_npStError=false;_npInvEstadoRender();
   /* (166) Adentro del ERP, si la base ya arma el stock (LEC_ARMA), `_lecJson` decide de donde sale. */
   var _npSfUrl=RUT_APPS_SCRIPT_URL+'?action=stock_full&_='+Date.now();
   vuelo.p=((typeof _lecJson==='function'&&typeof LEC_ARMA==='object'&&LEC_ARMA.stock_full)
@@ -12071,7 +12081,7 @@ function npFetchStock(force){
        mano). Sin esto, lo cargado antes de que llegara quedaba en Orden de
        Compra aunque estuviera en el freezer (11/9/2026). */
     .then(function(d){ if(version!==_npInvVersion)return false; if(d&&typeof d==='object'&&d.ok===undefined){ NP_STOCK=d; NP_STOCK_TS=Date.now(); NP_STOCK_COPIA=0; _npCopiaGuardar('mc_np_stock',d); npDepRender(); npRenderCatalogo(); npUpdateTotal(); return true; }return false; })
-    .catch(function(){return false;}).then(function(ok){if(_npStVuelo===vuelo)_npStVuelo=null;return ok;});
+    .catch(function(){return false;}).then(function(ok){if(_npStVuelo===vuelo){_npStVuelo=null;_npStError=!ok&&version===_npInvVersion;}_npInvEstadoRender();return ok;});
   return Promise.all([piezas,vuelo.p]).then(function(r){return r.every(Boolean);});
 }
 function _npHoyAR(){
@@ -12425,7 +12435,7 @@ function npCap(abbr){
      de las piezas. Las piezas son lo que hay en el freezer, una por una, y es lo
      que se elige: con la lista cargada, el tope es su suma (en «proyectado», la
      mayor de las dos, por lo que viene del proveedor). Redondeado a gramos. */
-  var pz=(NP_PIEZAS&&Array.isArray(NP_PIEZAS[abbr]))?NP_PIEZAS[abbr]:null;
+  var pz=(NP_PIEZAS&&Array.isArray(NP_PIEZAS[abbr]))?npPzDisp(abbr):null;
   var kgPz=null;
   if(pz){kgPz=0;pz.forEach(function(x){kgPz+=Number(x&&x.kg)||0;});kgPz=Math.round(kgPz*1000)/1000;}
   if(!NP_STOCK||!NP_STOCK[abbr])return kgPz;   // sin dato no se inventa un tope
