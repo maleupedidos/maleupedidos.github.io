@@ -29,6 +29,10 @@ async function esperar(cli,expr,ms=45000){const t=Date.now();while(Date.now()-t<
       console.log(tab+': '+(ok?'actualizada':'NO actualizada')+'; RPC: '+JSON.stringify(await evaluar(cli,'window.__syncLecturas')));
       if(!ok)throw Error('La vista quedo pendiente: '+tab);
       if(tab==='ruta'){
+        /* Una lectura del arranque puede compartir la promesa; forzar una nueva lectura
+           prueba la fuente, en vez de atribuirle a esta medicion un GET anterior. */
+        await evaluar(cli,`window.__rutaFuente=null;_ordenCambios.ruta=(_ordenCambios.ruta||0)+1;_ordenVistaPedir();1`);
+        await esperar(cli,`!_ordenCambios.ruta`,60000);
         const fuente=await evaluar(cli,'window.__rutaFuente||null');
         console.log('Fuente de Ruta: '+JSON.stringify(fuente));
         if(!fuente||fuente.de!=='base')throw Error('Ruta no vino de Supabase');
