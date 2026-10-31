@@ -2434,6 +2434,28 @@ function refresh(silent,fresh,auto){
    que `traer()` en el panel. Guardar que no se pueda NO es un error: la pantalla
    funciona igual, sólo que esperando. */
 var _PGS_CACHE='maleu_pgs_v1';
+/* LA DESCARGA AL INSTANTE (31/10/2026). «Descargué todo» tardaba 25 s de mediana con la pantalla tapada (Apps Script,
+   medido con el Log Candado). Ahora el auto se vacía al toque y la descarga va por la cola (`syncQueue`: reintenta
+   sola y el aviso de arriba dice «Guardando…»). Mientras siga en la cola, o se haya confirmado hace menos de 3 min
+   (la respuesta puede haberse armado antes), esas filas no vuelven con un refresco. Si el servidor la rechaza sale
+   de la cola y el próximo refresco las trae de vuelta, con lo tildado y lo contado intactos (se borran al confirmar). */
+var _rdepBajando=[];
+function _rdepFilasBajando(){
+  var s={}, ahora=Date.now();
+  _rdepBajando=_rdepBajando.filter(function(x){return ahora-x.t<180000;});
+  _rdepBajando.forEach(function(x){(x.rows||[]).forEach(function(r){s[r]=1;});});
+  (typeof syncQueue!=='undefined'&&syncQueue||[]).forEach(function(it){if(it&&it.action==='marcarGuardadoEnStock')(it.rows||[]).forEach(function(r){s[r]=1;});});
+  return s;
+}
+/* Un item con alguna fila bajando sale entero: la descarga se llevó lo que había en pantalla al tocar. */
+function _pgsSinBajando(lista,anidado){
+  var s=_rdepFilasBajando();
+  if(!Object.keys(s).length)return lista||[];
+  var fuera=function(it){return (it.rows||[]).some(function(r){return s[r];});};
+  if(!anidado)return (lista||[]).filter(function(it){return !fuera(it);});
+  return (lista||[]).map(function(g){return Object.assign({},g,{items:(g.items||[]).filter(function(it){return !fuera(it);})});})
+    .filter(function(g){return g.items.length>0;});
+}
 function _pgsGuardarCache(d){
   try{ localStorage.setItem(_PGS_CACHE, JSON.stringify({ts:Date.now(),deposito:d.deposito||d.items||[],pedidos:d.pedidos||[]})); }catch(e){}
 }
@@ -2509,8 +2531,8 @@ function fetchPendientesGuardarStock(forzar){
       _pgsGuardarCache(data);
       /* `deposito` con fallback a `items`: son el mismo array y el backend manda
          los dos, para poder publicarse antes que este archivo sin dejar la card muda. */
-      pendientesGuardarStock=data.deposito||data.items||[];
-      pendientesPedidosOC=data.pedidos||[];
+      pendientesGuardarStock=_pgsSinBajando(data.deposito||data.items||[]);
+      pendientesPedidosOC=_pgsSinBajando(data.pedidos||[],true);
       /* `||null` y no `||{}`: si el backend todavia no lo manda, no hay aviso. */
       _pgsAtrasado=data.atrasado||null;
       _pgsMasTarde=data.masTarde||[];
@@ -4743,52 +4765,42 @@ function _rdepConfirmarSi(){
   if(f)f();
 }
 function _rdepEnviarDescarga(rows,ajustes,aLucas,nLucas){
-  rutShowLoader('Descargando el auto...');
   var payload={action:'marcarGuardadoEnStock',rows:rows,ajustes:ajustes,aLucas:aLucas,repartidor:_rutaUser(),ts:Date.now()};
-  fetch(RUT_APPS_SCRIPT_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(payload),redirect:'follow'})
-    .then(function(r){return r.json().catch(function(){return{ok:false}})})
-    .then(function(res){
-      rutHideLoader(true);
-      if(res&&res.ok){
-        // Actualización optimista: vacío la lista local. El próximo refresh confirma.
-        pendientesGuardarStock=[];
-        pendientesPedidosOC=[];
-        /* Y la copia guardada, o al reabrir la app volvería a pintar el auto
-           lleno: la pantalla diría que falta guardar lo que acaba de guardar. */
-        try{ localStorage.removeItem(_PGS_CACHE); }catch(e){}
-        rutRender();
-        /* Los tildes son de ESTA tanda: si quedaran, la proxima card
-           arrancaria toda en verde y el tildado dejaria de decir nada. Lo mismo
-           el conteo: un "conté 14" de hoy aplicado a la compra de la semana que
-           viene corregiria una OC que nadie conto. */
-        _rdepOk = {}; _rdepGuardar();
-        _rdepConteo = {}; _rdepConteoGuardar();
-        _rdepLucas = {}; _rdepLucasGuardar();
-        /* Un reparto que no se pudo hacer se DICE. La descarga fue bien igual
-           —la mercaderia entro—, pero esa mercaderia quedo en el freezer de
-           Tadeo, o sea disponible en la tienda, y eso hay que saberlo ahora y
-           no cuando alguien la pida. */
-        if(_rdepAvisosDescarga(res)){
-          /* ya avisó lo que salió mal */
-        } else if(nLucas>0){
-          showToast('Guardado ('+(res.n||rows.length)+' OCs) · '+nLucas+' al freezer de Lucas');
-        } else {
-          /* Lo que el backend dice que movió, no lo que la pantalla calculó. */
-          var nMov=res.stock?Object.keys(res.stock).filter(function(k){return res.stock[k];}).length:-1;
-          showToast('Guardado confirmado ('+(res.n||rows.length)+' OCs)'+
-            (nMov===0?' · el stock no cambió':nMov>0?' · stock movido en '+nMov+' producto'+(nMov>1?'s':''):''));
-        }
-        if(isOnline)fetchPendientesGuardarStock(true);
-      } else {
-        syncQueue.push(payload);saveLocal();processSyncQueue();
-        showToast('Sin conexion — se reintenta');
-      }
-    })
-    .catch(function(){
-      rutHideLoader(true);
-      syncQueue.push(payload);saveLocal();processSyncQueue();
-      showToast('Sin conexion — se reintenta');
-    });
+  syncQueue.push(payload);saveLocal();
+  // Al instante: el auto se vacía (el filtro `_pgsSinBajando` lo sostiene hasta que el servidor confirma).
+  pendientesGuardarStock=_pgsSinBajando(pendientesGuardarStock);
+  pendientesPedidosOC=_pgsSinBajando(pendientesPedidosOC,true);
+  /* Y la copia guardada, o al reabrir la app volvería a pintar el auto
+     lleno: la pantalla diría que falta guardar lo que acaba de guardar. */
+  try{ localStorage.removeItem(_PGS_CACHE); }catch(e){}
+  rutRender();_rutPintarBanner();
+  if(navigator.vibrate)navigator.vibrate(30);
+  showToast('Descargando'+(nLucas>0?' · '+nLucas+' al freezer de Lucas':'')+' — guardando…');
+  processSyncQueue();
+}
+/* El servidor confirmó la descarga (desde la cola). */
+function _rdepDescargaConfirmada(item,res){
+  _rdepBajando.push({rows:(item&&item.rows)||[],t:Date.now()});
+  /* Los tildes son de ESTA tanda: si quedaran, la proxima card
+     arrancaria toda en verde y el tildado dejaria de decir nada. Lo mismo
+     el conteo: un "conté 14" de hoy aplicado a la compra de la semana que
+     viene corregiria una OC que nadie conto. Se borran recien aca: si el
+     servidor la rechaza, la card vuelve como estaba. */
+  _rdepOk = {}; _rdepGuardar();
+  _rdepConteo = {}; _rdepConteoGuardar();
+  _rdepLucas = {}; _rdepLucasGuardar();
+  /* Un reparto que no se pudo hacer se DICE. La descarga fue bien igual
+     —la mercaderia entro—, pero esa mercaderia quedo en el freezer de
+     Tadeo, o sea disponible en la tienda, y eso hay que saberlo ahora y
+     no cuando alguien la pida. */
+  if(!_rdepAvisosDescarga(res)){
+    var nL=Object.keys((item&&item.aLucas)||{}).reduce(function(t,k){return t+(Number(item.aLucas[k])||0);},0);
+    /* Lo que el backend dice que movió, no lo que la pantalla calculó. */
+    var nMov=res&&res.stock?Object.keys(res.stock).filter(function(k){return res.stock[k];}).length:-1;
+    showToast('✓ Descarga guardada ('+((res&&res.n)||((item&&item.rows)||[]).length)+' OCs)'+(nL>0?' · '+nL+' al freezer de Lucas':'')+
+      (nMov===0?' · el stock no cambió':nMov>0?' · stock movido en '+nMov+' producto'+(nMov>1?'s':''):''));
+  }
+  if(isOnline)fetchPendientesGuardarStock(true);
 }
 
 // POST explícito: "ya le di la bolsa física al vendedor". Marca col BE
@@ -10441,6 +10453,8 @@ function _rutRechazoTxt(it){
 }
 function _rutRechazar(item,motivo,por){
   var it=Object.assign({},item);delete it.__attempts;
+  /* (31/10/2026) Una descarga rechazada: el auto vuelve a mostrar lo que tenía. */
+  if(item&&item.action==='marcarGuardadoEnStock'){ try{ fetchPendientesGuardarStock(true); }catch(eR){} }
   var r={item:it,motivo:String(motivo||'sin motivo'),por:por||'rechazo',t:Date.now()};
   /* Se guarda YA (si la app se cierra no se pierde); el aviso y la constancia
      salen despues de preguntar si el cobro ya estaba hecho (18/10/2026). */
@@ -10501,7 +10515,9 @@ function _rutPintarBanner(){
     b.onclick=rutVerRechazados;
   }else{
     b.className='sync-banner'+(syncQueue.length>0?' visible':'');
-    b.textContent='Entregas pendientes de sincronizar';
+    /* (31/10/2026) Lo que se pintó al toque y todavía no confirmó el servidor. */
+    var q0=syncQueue[0], qn=syncQueue.length;
+    b.textContent='Guardando… '+(q0?(_RUT_ACC_TXT[q0.action]||'un cambio'):'')+(qn>1?' y '+(qn-1)+' más':'');
     b.onclick=null;
   }
 }
@@ -10623,7 +10639,7 @@ function processSyncQueue(){
           showToast('Ese cobro quedó con fecha anterior al último ajuste de caja'+(res.ajusteDe?' ('+res.ajusteDe+')':'')+': no movió el saldo. Si el ajuste no lo tenía, corregilo desde Caja.',9000);
         }
         /* Una descarga que entró por la cola también dice lo que salió mal. */
-        if(item&&item.action==='marcarGuardadoEnStock'){ try{ _rdepAvisosDescarga(item.__res||res); }catch(eAv){} }
+        if(item&&item.action==='marcarGuardadoEnStock'){ try{ _rdepDescargaConfirmada(item,item.__res||res); }catch(eAv){} }
         if(item&&item.action==='marcarEntregado'){
           var _kc=item.hoja+'|R'+item.row;
           (rutHechas||[]).forEach(function(x){if(x&&x.key===_kc)x.conf=Date.now();});
@@ -10642,6 +10658,7 @@ function processSyncQueue(){
            avisa a donde ir. Cinco reintentos solo demoraban el mismo error. */
         if(res&&res.sinReintento){
           syncQueue.shift();
+          if(item&&item.action==='marcarGuardadoEnStock'){ try{ fetchPendientesGuardarStock(true); }catch(eR){} }
           /* Una fecha de cobro que el backend no acepto (13/10/2026): el pedido
              NO quedo cobrado. Se saca la marca local y se vuelve a pedir Cobros. */
           if(res.fechaInvalida&&item){
