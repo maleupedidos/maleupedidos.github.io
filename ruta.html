@@ -5782,7 +5782,10 @@ function _parcAnotar(pc,payload){
   var cp=(Number(pc.cobradoParcial)||0)+Number(payload.monto||0), saldo=(Number(pc.$)||0)-Number(payload.monto||0);
   _parcEsperado[(pc.h||'')+'|'+(pc.id||'')]={cp:cp,saldo:Math.max(0,saldo),cierra:saldo<=0,coid:payload.clientOpId,conf:0};
 }
-function _parcConfirmado(p){Object.keys(_parcEsperado).forEach(function(k){if(_parcEsperado[k].coid===p.clientOpId)_parcEsperado[k].conf=Date.now();});}
+function _parcConfirmado(p){Object.keys(_parcEsperado).forEach(function(k){if(_parcEsperado[k].coid===p.clientOpId)_parcEsperado[k].conf=Date.now();});
+  if(rutCurrentTab==='cobros')setTimeout(function(){try{renderCobrosFromServer();}catch(e){}},0);}
+/* «Guardando…» se decide al pintar, con la cola de AHORA: un pedido con un parcial suyo todavía sin confirmar. */
+function _parcEnCola(pc){return (syncQueue||[]).some(function(q){return q&&q.action==='cobrarParcial'&&q.hoja===pc.h&&String(q.id)===String(pc.id);});}
 function _parcRechazado(p){
   var hubo=false;
   Object.keys(_parcEsperado).forEach(function(k){if(_parcEsperado[k].coid===p.clientOpId){delete _parcEsperado[k];hubo=true;}});
@@ -5796,7 +5799,7 @@ function _parcSobre(cobros){
   return (cobros||[]).filter(function(c){
     var e=_parcEsperado[(c.h||'')+'|'+(c.id||'')]; if(!e)return true;
     if(e.cierra)return false;
-    if((Number(c.cobradoParcial)||0)<e.cp){c.cobradoParcial=e.cp;c.$=e.saldo;c._guardando=enCola[e.coid]?1:0;}   /* confirmado: el monto sí, el cartel no */
+    if((Number(c.cobradoParcial)||0)<e.cp){c.cobradoParcial=e.cp;c.$=e.saldo;}
     return true;
   });
 }
@@ -6083,7 +6086,7 @@ function _cobroCardHTML(pc, globalIdx){
   if(pc.cobradoParcial && pc.cobradoParcial>0){
     c+='<div style="background:#FFF8E1;border-left:3px solid #F9A825;padding:8px 10px;border-radius:6px;font-size:12px">';
     c+='<div style="font-weight:700;color:#5D4037">Total facturado: '+formatMoney(pc.totalOriginal||0)+'</div>';
-    c+='<div style="color:#33691E;font-weight:700;margin-top:2px">Ya cobrado: '+formatMoney(pc.cobradoParcial)+(pc._guardando?' <span class="rut-guardando">· Guardando…</span>':'')+'</div>';
+    c+='<div style="color:#33691E;font-weight:700;margin-top:2px">Ya cobrado: '+formatMoney(pc.cobradoParcial)+(_parcEnCola(pc)?' <span class="rut-guardando">· Guardando…</span>':'')+'</div>';
     if(pc.parciales && pc.parciales.length){
       var detP=pc.parciales.map(function(x){return x.fecha+' · '+x.fp+' '+formatMoney(x.monto)}).join('<br>');
       c+='<div style="font-size:11px;color:var(--muted);margin-top:4px;line-height:1.4">'+detP+'</div>';
@@ -6691,7 +6694,7 @@ function _cobroClienteGrupoHTML(grp){
       +'<span class="cg-info"><span class="cg-l1"><b>#'+_rtcEsc(p.id)+'</b> · '+_rtcEsc(fecha)
         +' <span class="cg-es '+(ent?'ent':'pen')+'">'+(ent?'Entregado':'Sin entregar')+'</span></span>'
         +(prods?'<span class="cg-l2">'+_rtcEsc(prods)+'</span>':'')
-        +'<span class="cg-l3">'+(fpIco?'Cargado en '+fpIco:'')+(p.cobradoParcial>0?' · ya pagó '+_cobroPesos(p.cobradoParcial)+' a cuenta':'')
+        +'<span class="cg-l3">'+(fpIco?'Cargado en '+fpIco:'')+(p.cobradoParcial>0?' · ya pagó '+_cobroPesos(p.cobradoParcial)+' a cuenta'+(_parcEnCola(p)?' <span class="rut-guardando">· Guardando…</span>':''):'')
         +(_nn(p.c)!==_nn(titular)?' · <span class="cobro-otro-nombre">a nombre de '+_rtcEsc(p.c)+'</span>':'')+'</span></span>'
       +'<span class="cg-monto">'+_cobroPesos(p.$)+'</span></button>';
     if(esEv)c+=_cobItmHTML(ck,p,a);
@@ -9618,11 +9621,19 @@ function _confirmarCobroComboRuta(st,r){
         formaPago:fpParC,cuenta:_ctaDeCobro(st,fpParC),monto:asigPar,notas:'Parcial desde Ruta/COMBO',ts:Date.now()};
       _payParC.clientOpId=_opIdParcial(_payParC);
       parPayloads.push(_payParC);
+      /* (31/10/2026) Al instante, como el parcial suelto: cuánto tiene que quedar cobrado y el saldo de ESTA fila. */
+      _parcAnotar({h:pPar.h,id:pPar.id,$:totPar,cobradoParcial:pPar.cobradoParcial},_payParC);
     }
     if(!parPayloads.length)return;
     cerrarCobroRuta();
-    _commitCobroComboDirecto(parPayloads,peds);
-    showToast('Parcial '+formatMoney(Math.round(r.neto))+' · '+nCierra+'/'+peds.length+' pedidos cerrados');
+    /* A la cola (31/10/2026): `cobrarParcial` es orden con `clientOpId`, el reintento no cobra dos veces. Antes tapaba
+       la pantalla hasta que contestaba Apps Script. */
+    parPayloads.forEach(function(x){syncQueue.push(x);});saveLocal();
+    pendientesCobro=_parcSobre(pendientesCobro);
+    var _elBCp=document.getElementById('tabCobrosCount');if(_elBCp)_elBCp.textContent=pendientesCobro.length||'';
+    if(rutCurrentTab==='cobros')renderCobrosFromServer();
+    _rutPintarBanner();processSyncQueue();
+    showToast('Parcial '+formatMoney(Math.round(r.neto))+' · '+nCierra+'/'+peds.length+' pedidos cerrados — guardando…');
     rutRenderRuta();
     return;
   }
@@ -9767,54 +9778,8 @@ function _confirmarCobroComboRuta(st,r){
   showToast('✓ Cobrado'+(_nEnt?' y entregado':'')+(peds.length?' '+peds.length+' pedido'+(peds.length===1?'':'s'):'')+(parcI.length?(peds.length?' y ':' ')+parcI.length+' parte'+(parcI.length===1?'':'s'):'')+(pagador?' · pagó '+nombre:' de '+nombre)+_rutSufCta(_comboPayloads[0]&&_comboPayloads[0].cuenta)+(isOnline?'':' — se sincroniza al volver la señal'));
 }
 
-// Desde el 12/9/2026 lo usan SOLO los PARCIALES de un combo: `cobrarParcial` no es
-// idempotente, asi que no puede ir a la cola, que reintenta. El cobro completo va a la cola.
-// Backend idempotente: reintentar un pedido ya cobrado no duplica. Ante falla transitoria,
-// reencola SOLO los fallidos y reconcilia con el server (la card vuelve solo si de verdad
-// no se cobró).
-function _commitCobroComboDirecto(payloads, peds, nEnt){
-  if(!payloads||!payloads.length)return;
-  var nombre=(peds&&peds[0]&&peds[0].c||'').split(' ')[0];
-  rutShowLoader('Cobrando '+peds.length+' pedidos de '+nombre+'...');
-  var _guard=setTimeout(function(){try{rutHideLoader(true);}catch(_){}},45000);
-  function _reconciliar(){setTimeout(function(){if(rutCurrentTab==='cobros')fetchCobrosPendientes(true);},4000);}
-  if(!isOnline){
-    payloads.forEach(function(p){syncQueue.push(p);});saveLocal();
-    clearTimeout(_guard);rutHideLoader(true);
-    showToast('Cobro combinado offline — se sincroniza al volver señal');
-    return;
-  }
-  var _settled=false;
-  var _timer=setTimeout(function(){
-    if(_settled)return;_settled=true;clearTimeout(_guard);rutHideLoader(true);
-    payloads.forEach(function(p){syncQueue.push(p);});saveLocal();setTimeout(processSyncQueue,1500);
-    showToast('⏳ El servidor tardó — reintentando en segundo plano…');_reconciliar();
-  },35000);
-  Promise.all(payloads.map(function(p){
-    return fetch(RUT_APPS_SCRIPT_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(p),redirect:'follow'})
-      .then(function(rs){return rs.json().catch(function(){return{ok:false,_transitorio:true};});})
-      .catch(function(){return{ok:false,_transitorio:true};});
-  })).then(function(results){
-    if(_settled)return;_settled=true;clearTimeout(_timer);clearTimeout(_guard);rutHideLoader(true);
-    var fallidos=[];
-    results.forEach(function(res,i){if(!(res&&res.ok))fallidos.push(payloads[i]);else _cobConfirmado(payloads[i]);});
-    _cobFirma='';
-    if(fallidos.length===0){
-      showToast('✓ Cobrados'+(nEnt?' y entregados':'')+' '+peds.length+' pedidos de '+nombre+_rutSufCta(payloads[0]&&payloads[0].cuenta));
-      if(navigator.vibrate)navigator.vibrate(30);
-      if(rutCurrentTab==='cobros')fetchCobrosPendientes(true);
-    } else {
-      // Reencolar SOLO los que no confirmaron (idempotente) + reconciliar.
-      fallidos.forEach(function(p){syncQueue.push(p);});saveLocal();setTimeout(processSyncQueue,1500);
-      showToast('⏳ '+fallidos.length+'/'+payloads.length+' sin confirmar — reintentando y verificando…');
-      _reconciliar();
-    }
-  }).catch(function(){
-    if(_settled)return;_settled=true;clearTimeout(_timer);clearTimeout(_guard);rutHideLoader(true);
-    payloads.forEach(function(p){syncQueue.push(p);});saveLocal();setTimeout(processSyncQueue,1500);
-    showToast('⏳ Sin respuesta — reintentando en segundo plano…');_reconciliar();
-  });
-}
+/* `_commitCobroComboDirecto` se borro el 31/10/2026: los parciales del combo van por la cola (`cobrarParcial` es orden
+   con `clientOpId`). */
 
 // ── COBRO de un pedido suelto desde COBROS (modal unificado) ──
 // Contrato backend (_doPostMarcarCobrado): ef/tr = total del pedido por método

@@ -14,7 +14,10 @@ let ok = 0, mal = 0; const chk = (n, c, d) => { c ? ok++ : mal++; console.log((c
 const pausa = ms => new Promise(r => setTimeout(r, ms));
 const esperar = async (cli, expr, ms = 60000) => { const t0 = Date.now(); while (Date.now() - t0 < ms) { try { if (await evaluar(cli, expr)) return true; } catch (e) {} await pausa(250); } return false; };
 const pc = (id, c, $) => ({ h: 'Home', id, r: id, c, $, totalOriginal: $, cobradoParcial: 0, fp: 'Efectivo', ep: 'No Cobrado', es: 'Entregado', t: '', p: [{ a: 'PMu', q: 1 }], fe: '', de: '' });
-const COBROS = [pc(9301, 'Parcial Uno', 20000), pc(9302, 'Parcial Rechazo', 15000)];
+const hoyAR = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Argentina/Buenos_Aires' }));
+const HOYd = String(hoyAR.getDate()).padStart(2, '0') + '/' + String(hoyAR.getMonth() + 1).padStart(2, '0') + '/' + hoyAR.getFullYear();
+const combo = (id, $) => Object.assign(pc(id, 'Combo Ana', $), { t: '1155550000', fe: HOYd, de: 'Hoy' });
+const COBROS = [pc(9301, 'Parcial Uno', 20000), pc(9302, 'Parcial Rechazo', 15000), combo(9311, 10000), combo(9312, 8000)];
 const EXTRA = `window.__posts=[]; window.__srv=${JSON.stringify(COBROS)};
   (function(){ var real; Object.defineProperty(window,'LEC_ARMA',{configurable:false,get:function(){ if(!real||typeof real!=='object')return real; var o=Object.assign({},real); delete o.cobrosPendientes; return o; },set:function(v){ real=v; }}); })();
   (function(){ var o=window.fetch; window.fetch=function(u,x){ var url=String((u&&u.url)||u||'');
@@ -83,6 +86,40 @@ const COLA = `JSON.stringify((JSON.parse(localStorage.getItem('maleu_ruta')||'{}
   r = await evaluar(cli, PARCIAL('Parcial Rechazo', 5000, `/Guardando/.test(${TXT('Parcial Rechazo')})`));
   chk('Parcial Rechazo: al toque dice «Guardando…»', r.ms >= 0 && r.ms <= 300, r);
   chk('  si el servidor lo rechaza, la card vuelve sin el parcial', await esperar(cli, `!/Ya cobrado/.test(${TXT('Parcial Rechazo')})&&/\\$\\s?15\\.000/.test(${TXT('Parcial Rechazo')})`, DEMORA * 4 + 6000), await evaluar(cli, TXT('Parcial Rechazo')));
+  // El combo: $12.000 sobre $10.000 + $8.000 → el primero se cierra (sale) y el segundo queda con $2.000 a cuenta.
+  const IDC = (id) => `(function(){var v=document.getElementById('cobrosView');return [].slice.call(v.querySelectorAll('.cobro-card')).filter(function(c){return c.textContent.indexOf('#${'${id}'}')>=0;})[0]||null;})()`;
+  /* Dos pedidos del mismo cliente se cobran desde el GRUPO (casillas + «Cobrar»). Lo que queda de #9312 puede pintarse
+     como fila del grupo («ya pagó … a cuenta») o, con #9311 ya afuera, como card suelta («Ya cobrado»). */
+  const V = `document.getElementById('cobrosView')`;
+  chk('Combo Ana: aparece el grupo con las dos filas', await esperar(cli, `[].slice.call(${V}.querySelectorAll('.cg-row')).filter(function(b){return /#931[12]/.test(b.textContent);}).length===2`, 10000));
+  r = await evaluar(cli, `new Promise(function(fin){
+    var filas=[].slice.call(${V}.querySelectorAll('.cg-row')).filter(function(b){return /#931[12]/.test(b.textContent);});
+    filas.forEach(function(b){ if(!b.classList.contains('on'))b.click(); });
+    setTimeout(function(){
+      var f=[].slice.call(${V}.querySelectorAll('.cg-row')).filter(function(b){return /#9311/.test(b.textContent);})[0];
+      var g=f; while(g&&!g.querySelector('.cg-cobrar'))g=g.parentElement;
+      var bt=g&&g.querySelector('.cg-cobrar'); if(!bt){fin({err:'sin botón Cobrar del grupo'});return;} bt.click();
+      setTimeout(function(){
+        var b=[].slice.call(document.querySelectorAll('#cobroRutaOverlay button')).filter(function(x){return /_toggleCobroParcial/.test(x.getAttribute('onclick')||'');})[0];
+        if(!b){fin({err:'sin botón Parcial'});return;} b.click();
+        var i=document.getElementById('cobroRecEf'); i.value='12000'; i.dispatchEvent(new Event('input',{bubbles:true}));
+        setTimeout(function(){
+          var tap=0,t0=performance.now(),el=document.getElementById('rutLoaderOverlay');
+          var iv=setInterval(function(){ if(el&&el.classList.contains('visible'))tap=performance.now()-t0; },16);
+          confirmarCobroRuta();
+          (function mira(){ var t=${V}.textContent, x=[].slice.call(${V}.querySelectorAll('.cg-row,.cobro-card')).filter(function(c){return /#9312/.test(c.textContent);})[0];
+            var ok=!/#9311\\b/.test(t)&&x&&/(Ya cobrado: |ya pagó )\\$\\s?2\\.000/.test(x.textContent)&&/Guardando/.test(x.textContent);
+            if(ok){ requestAnimationFrame(function(){ clearInterval(iv); fin({ms:Math.round(performance.now()-t0),tapa:Math.round(tap)}); }); return; }
+            if(performance.now()-t0>10000){ clearInterval(iv); fin({ms:-1,tapa:Math.round(tap),x:x&&x.textContent.slice(0,160),hay9311:/#9311\b/.test(t)}); return; }
+            requestAnimationFrame(mira); })();
+        },400);
+      },700);
+    },400);
+  })`);
+  chk('  parcial de $12.000: #9311 sale y #9312 queda con $2.000 a cuenta · Guardando… al toque (' + r.ms + ' ms)', r.ms >= 0 && r.ms <= 300 && !r.tapa, r);
+  await esperar(cli, `__posts.filter(function(x){return x.action==='cobrarParcial'&&/^931[12]$/.test(String(x.id));}).length>=2`, 20000);   // la cola manda de a una
+  const pc2 = await evaluar(cli, `JSON.stringify(__posts.filter(function(x){return x.action==='cobrarParcial'&&/^931[12]$/.test(String(x.id));}).map(function(x){return x.id+':'+x.monto+':'+(x.clientOpId?'id':'sin id');}))`);
+  chk('  y salen las dos partes por la cola, con su id (10.000 y 2.000)', /9311:10000:id/.test(pc2) && /9312:2000:id/.test(pc2), pc2);
   chk('sin errores de JS', (await evaluar(cli, `JSON.stringify(window.__errores||[])`)) === '[]', await evaluar(cli, `JSON.stringify(window.__errores||[])`));
   console.log('\n' + ok + ' ok · ' + mal + ' mal');
   process.exit(mal ? 1 : 0);
