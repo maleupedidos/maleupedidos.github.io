@@ -109,6 +109,8 @@ async function pagar(cli, url) {
   await ev(cli, `(function(){var i=document.querySelector('#pagosView .pago-form.open input[id^="pagoEf_"]');i.value='100000';i.dispatchEvent(new Event('input',{bubbles:true}));})()`);
   const listo = await ev(cli, `(function(){var b=document.querySelector('#pagosView .pago-form.open .btn-pagar');return !!b&&!b.disabled;})()`);
   chk('el formulario deja confirmar $100.000 en efectivo', listo === true, listo);
+  /* (31/10/2026) Que el loader no tape nada mientras guarda y trae la deuda: cuenta los cuadros en que se vio. */
+  await ev(cli, `(function(){window.__tapo=0;setInterval(function(){var e=document.getElementById('abaLoaderOverlay');if(e&&!e.classList.contains('hidden'))window.__tapo++;},16);return 1})()`);
   await ev(cli, `document.querySelector('#pagosView .pago-form.open .btn-pagar').click()`);
   return true;
 }
@@ -132,6 +134,7 @@ async function pagar(cli, url) {
       console.log('     a los 13,5 s: ' + JSON.stringify(t));
       chk('el formulario del pago ya no queda abierto', t.abiertos === 0, t);
       chk('el ERP no cree que hay algo a medio editar', t.editando === false, t);
+      chk('el pago no tapó la pantalla con el loader', (await ev(cli, 'window.__tapo')) === 0, await ev(cli, 'window.__tapo'));
       const llego = await esperar(cli, `!document.querySelector('#pagosView .btn-pago-sem')`, 10000);
       chk('la lista que llega TARDE igual se aplica (el pago ya no figura para pagar)', llego);
       await ev(cli, `go('caja')`);

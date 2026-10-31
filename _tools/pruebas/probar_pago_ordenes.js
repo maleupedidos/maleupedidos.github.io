@@ -70,7 +70,7 @@ async function correr(modo, pantalla) {
   await cli.enviar('Page.enable'); await cli.enviar('Runtime.enable');
   await cli.enviar('Emulation.setDeviceMetricsOverride', { width: ANCHO, height: 844, deviceScaleFactor: 1, mobile: ANCHO < 600 });
   await cli.enviar('Page.addScriptToEvaluateOnNewDocument', { source: STUB(modo, pantalla) });
-  await cli.enviar('Page.navigate', { url: BASE + '/app.html?prueba=1' });
+  await cli.enviar('Page.navigate', { url: BASE + '/' + (process.env.APP || 'app.html') + '?prueba=1' });
   for (let i = 0; i < 120; i++) { if (await evaluar(cli, "typeof go==='function'")) break; await pausa(250); }
   if (pantalla === 'ruta') await evaluar(cli, 'go("ruta"); 1');
   if (pantalla === 'portal') await evaluar(cli, 'go("miportal"); 1');

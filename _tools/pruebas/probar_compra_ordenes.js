@@ -40,7 +40,8 @@ const STUB = modo => `(function(){
       if(b.action==='compraManual'){
         var r={ok:true,filas:1,totalCosto:18000,primerOC:'OC-900',ultimoOC:'OC-900',pedidoRed:(modo==='si'?null:121),facturadoVendedor:23000};
         if(modo==='si'){ r.aceptada=true; r.diferida=true; r.orden=9; r.pedidoRedPendiente=true; }
-        return resp(r);
+        /* 1,5 s, como un servidor de verdad: con la respuesta al instante el loader no llegaba a verse (31/10/2026). */
+        return new Promise(function(ok){ setTimeout(ok,1500); }).then(function(){ return resp(r); });
       }
       if(b.action==='pedidosFuenteAplicar') return new Promise(function(ok){ setTimeout(ok,800); }).then(function(){ return resp({ok:true,hechas:1,quedan:0}); });
       return resp({ok:true});
@@ -53,7 +54,7 @@ async function correr(modo) {
   await cli.enviar('Page.enable'); await cli.enviar('Runtime.enable');
   await cli.enviar('Emulation.setDeviceMetricsOverride', { width: ANCHO, height: 844, deviceScaleFactor: 1, mobile: ANCHO < 600 });
   await cli.enviar('Page.addScriptToEvaluateOnNewDocument', { source: STUB(modo) });
-  await cli.enviar('Page.navigate', { url: BASE + '/app.html?prueba=1' });
+  await cli.enviar('Page.navigate', { url: BASE + '/' + (process.env.APP || 'app.html') + '?prueba=1' });
   for (let i = 0; i < 120; i++) { if (await evaluar(cli, "typeof go==='function'")) break; await pausa(250); }
   await evaluar(cli, "go('busqueda'); 1");
   for (let i = 0; i < 120; i++) { if (await evaluar(cli, "typeof abaSwitchTab==='function' && typeof confirmarCompra==='function'")) break; await pausa(250); }
@@ -64,13 +65,15 @@ async function correr(modo) {
   /* Para un vendedor: se agrega la opcion si la lista de vendedores no la trajo. */
   const vend = await evaluar(cli, "(function(){var s=document.getElementById('npVendedor'); if(!s) return 'sin select'; if(![].some.call(s.options,function(o){return o.value==='Rufino Ardanaz';})){var op=document.createElement('option');op.value='Rufino Ardanaz';op.textContent='Rufino';s.appendChild(op);} s.value='Rufino Ardanaz'; s.dispatchEvent(new Event('change',{bubbles:true})); return s.value;})()");
   await evaluar(cli, "npSetQty('PPM', 2); 1");
+  /* (31/10/2026) Que el loader no tape nada mientras guarda: cuenta los cuadros en que se vio. */
+  await evaluar(cli, "window.__tapo=0;setInterval(function(){var e=document.getElementById('abaLoaderOverlay');if(e&&!e.classList.contains('hidden'))window.__tapo++;},16);1");
   await pausa(400);
   /* Los avisos que da la pantalla, para mirar que dice del pedido de Red. */
   /* Los avisos se leen del DOM (#abaToast): la sub-app llama a su propio abaShowToast,
      asi que reemplazar el de window no los veria. */
   await evaluar(cli, "(function(){var t=document.getElementById('abaToast'); if(t) new MutationObserver(function(){ window.__toasts.push(t.textContent); }).observe(t,{childList:true,characterData:true,subtree:true});})(); window.__mirar=1; window.__log=[]; try{ confirmarCompra(); }catch(e){ window.__log.push('EXPLOTO '+e.message); } 1");
   await pausa(4500);
-  const r = await evaluar(cli, '({ log: window.__log.slice(), err: (window.__err||[]).slice(0,5), toasts: window.__toasts.slice() })');
+  const r = await evaluar(cli, '({ log: window.__log.slice(), err: (window.__err||[]).slice(0,5), toasts: window.__toasts.slice(), tapo: window.__tapo })');
   cli.matar();
   return Object.assign(r, { vend });
 }
@@ -85,6 +88,7 @@ async function correr(modo) {
   chk('prendida: empuja al aplicador y recién después pide la lista', iA > iP && iG > iA, r.log);
   chk('prendida: el aviso dice la venta sin inventar el N° del pedido', r.toasts.some((t) => /^Pedido Red creado — .*23\.000/.test(t)), r.toasts);
   chk('sin errores', JSON.stringify(r.err) === '[]' && !r.log.some((x) => /EXPLOTO/.test(x)), [r.err, r.log]);
+  chk('la compra no tapa la pantalla con el loader', r.tapo === 0, r.tapo);
   r = await correr('no');
   const iP2 = r.log.indexOf('POST compraManual (id)');
   chk('apagada: ningún pedidosFuenteAplicar, pide la lista, y el aviso trae el N°', iP2 >= 0 && r.log.indexOf('POST pedidosFuenteAplicar') < 0 && r.log.indexOf('GET busqueda', iP2) > iP2 && r.toasts.some((t) => /^Pedido Red #121 creado/.test(t)), [r.log, r.toasts]);
