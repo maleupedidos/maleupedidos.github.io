@@ -13,11 +13,11 @@ if (!TOKEN) { console.error('falta el token'); process.exit(2); }
 let ok = 0, mal = 0; const chk = (n, c, d) => { c ? ok++ : mal++; console.log((c ? '  ok   ' : '  MAL  ') + n + (c || d === undefined ? '' : '\n         ' + JSON.stringify(d))); };
 const pausa = ms => new Promise(r => setTimeout(r, ms));
 const esperar = async (cli, expr, ms = 60000) => { const t0 = Date.now(); while (Date.now() - t0 < ms) { try { if (await evaluar(cli, expr)) return true; } catch (e) {} await pausa(250); } return false; };
-const EXTRA = `window.__posts=[]; window.__rechazar=false;
+const EXTRA = `window.__posts=[]; window.__rechazar=false; window.__alertas=[]; window.confirm=function(){return true;}; window.alert=function(m){window.__alertas.push(String(m));};
   (function(){ var o=window.fetch; window.fetch=function(u,x){ var url=String((u&&u.url)||u||'');
     if(x&&String(x.method||'').toUpperCase()==='POST'&&!/\\/rest\\/v1\\/rpc\\/[a-z0-9_]+_(pantalla|datos|base)(\\?|$)/.test(url)){
       var b={}; try{b=JSON.parse(x.body);}catch(e){} var a=b.action||(b.p&&b.p.action)||'';
-      if(a==='gasto'||a==='ingreso'){ window.__posts.push({a:a,id:b.clientOpId||(b.p&&b.p.clientOpId)||''});
+      if(a==='gasto'||a==='ingreso'||a==='borrarMovimientoCaja'){ window.__posts.push({a:a,id:b.clientOpId||(b.p&&b.p.clientOpId)||''});
         var r=window.__rechazar?{ok:false,err:'rechazado a propósito'}:{ok:true};
         return new Promise(function(res){ setTimeout(function(){ res(new Response(JSON.stringify(r),{status:200,headers:{'Content-Type':'application/json'}})); }, ${DEMORA}); }); }
     }
@@ -72,6 +72,26 @@ const MOV = (pref, con, monto) => `new Promise(function(fin){
   const marca3 = 'Prueba ingreso ' + Date.now().toString(36);
   r = await evaluar(cli, MOV('i', marca3, 777));
   chk('INGRESO: aparece al toque con «Guardando…» (' + r.ms + ' ms)', r.ms >= 0 && r.ms <= 300 && !r.tapa, r);
+  // Borrar: un gasto REAL (el POST se corta: no se borra nada).
+  await esperar(cli, `!document.querySelector('.cj-guardando')`, 20000);
+  const fila = await evaluar(cli, `(function(){var m=(D.movimientos||[]).filter(function(x){return x.tipo==='gasto'&&Number(x.r)>1&&!x.noBorrar;})[0];return m?Number(m.r):0;})()`);
+  const BOTON = `([].slice.call(document.querySelectorAll('.gl-x')).filter(function(b){var o=b.getAttribute('onclick')||'';return o.indexOf('borrarMovCaja(')>=0&&o.indexOf('gasto')>=0&&o.indexOf(','+${fila}+')')>=0;})[0]||null)`;
+  if (!fila) chk('hay un gasto real para borrar', false);
+  else {
+    await evaluar(cli, `__rechazar=false`);
+    r = await evaluar(cli, `new Promise(function(fin){ var t0=performance.now(),tap=0,el=document.getElementById('loaderOverlay');
+      var iv=setInterval(function(){ if(el&&el.classList.contains('visible'))tap=performance.now()-t0; },16);
+      borrarMovCaja('gasto',${fila});
+      (function mira(){ if(!(${BOTON})){ requestAnimationFrame(function(){ var ms=performance.now()-t0; setTimeout(function(){clearInterval(iv);fin({ms:Math.round(ms),tapa:Math.round(tap)});},300); }); return; }
+        if(performance.now()-t0>${DEMORA + 3000}){ clearInterval(iv); fin({ms:-1,tapa:Math.round(tap)}); return; } requestAnimationFrame(mira); })(); })`);
+    chk('BORRAR: la fila se va al toque (' + r.ms + ' ms) y sin loader', r.ms >= 0 && r.ms <= 300 && !r.tapa, r);
+    await pausa(DEMORA + 3000);
+    await evaluar(cli, `__rechazar=true;__alertas=[]`);
+    await esperar(cli, `!!(${BOTON})`, 20000);
+    await evaluar(cli, `borrarMovCaja('gasto',${fila})`);
+    chk('  rechazado: se va al toque', !(await evaluar(cli, `!!(${BOTON})`)));
+    chk('  y cuando la base lo rechaza, vuelve y avisa', await esperar(cli, `!!(${BOTON})&&__alertas.length>0`, DEMORA + 15000), await evaluar(cli, `JSON.stringify(__alertas)`));
+  }
   chk('sin errores de JS', (await evaluar(cli, `JSON.stringify(window.__errores||[])`)) === '[]', await evaluar(cli, `JSON.stringify(window.__errores||[])`));
   console.log('\n' + ok + ' ok · ' + mal + ' mal');
   process.exit(mal ? 1 : 0);
