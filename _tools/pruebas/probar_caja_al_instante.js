@@ -17,7 +17,7 @@ const EXTRA = `window.__posts=[]; window.__rechazar=false; window.__alertas=[]; 
   (function(){ var o=window.fetch; window.fetch=function(u,x){ var url=String((u&&u.url)||u||'');
     if(x&&String(x.method||'').toUpperCase()==='POST'&&!/\\/rest\\/v1\\/rpc\\/[a-z0-9_]+_(pantalla|datos|base)(\\?|$)/.test(url)){
       var b={}; try{b=JSON.parse(x.body);}catch(e){} var a=b.action||(b.p&&b.p.action)||'';
-      if(a==='gasto'||a==='ingreso'||a==='borrarMovimientoCaja'){ window.__posts.push({a:a,id:b.clientOpId||(b.p&&b.p.clientOpId)||''});
+      if(a==='gasto'||a==='ingreso'||a==='borrarMovimientoCaja'||a==='descobrar'){ window.__posts.push({a:a,id:b.clientOpId||(b.p&&b.p.clientOpId)||''});
         var r=window.__rechazar?{ok:false,err:'rechazado a propósito'}:{ok:true};
         return new Promise(function(res){ setTimeout(function(){ res(new Response(JSON.stringify(r),{status:200,headers:{'Content-Type':'application/json'}})); }, ${DEMORA}); }); }
     }
@@ -91,6 +91,15 @@ const MOV = (pref, con, monto) => `new Promise(function(fin){
     await evaluar(cli, `borrarMovCaja('gasto',${fila})`);
     chk('  rechazado: se va al toque', !(await evaluar(cli, `!!(${BOTON})`)));
     chk('  y cuando la base lo rechaza, vuelve y avisa', await esperar(cli, `!!(${BOTON})&&__alertas.length>0`, DEMORA + 15000), await evaluar(cli, `JSON.stringify(__alertas)`));
+  }
+  // Deshacer un cobro: un pedido REAL cobrado (el POST se corta: no cambia nada).
+  const ped = await evaluar(cli, `(function(){var p=(D.pedidos||[]).filter(function(x){return x.ep==='Cobrado'&&x.h==='Home';})[0];return p?JSON.stringify({h:p.h,n:String(p.n),r:p.r||0}):'';})()`);
+  if (!ped) chk('hay un pedido cobrado para deshacer', false);
+  else {
+    const P = JSON.parse(ped), EP = `((D.pedidos||[]).filter(function(x){return x.h===${JSON.stringify(P.h)}&&String(x.n)===${JSON.stringify(P.n)};})[0]||{}).ep`;
+    await evaluar(cli, `__rechazar=true;deshacerCobro(${JSON.stringify(P.h)},${JSON.stringify(P.n)},${P.r})`);
+    chk('DESHACER COBRO: al toque queda «No Cobrado», sin loader', (await evaluar(cli, EP)) === 'No Cobrado' && !(await evaluar(cli, `document.getElementById('loaderOverlay').classList.contains('visible')`)), await evaluar(cli, EP));
+    chk('  y si la base lo rechaza vuelve a «Cobrado»', await esperar(cli, `${EP}==='Cobrado'`, DEMORA + 10000), await evaluar(cli, EP));
   }
   chk('sin errores de JS', (await evaluar(cli, `JSON.stringify(window.__errores||[])`)) === '[]', await evaluar(cli, `JSON.stringify(window.__errores||[])`));
   console.log('\n' + ok + ' ok · ' + mal + ' mal');
