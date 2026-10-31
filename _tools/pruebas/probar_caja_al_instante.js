@@ -66,7 +66,7 @@ const MOV = (pref, con, monto) => `new Promise(function(fin){
   r = await evaluar(cli, MOV('g', marca2, 4321));
   chk('GASTO rechazado: aparece al toque igual', r.ms >= 0 && r.ms <= 300, r);
   chk('  cuando la base lo rechaza, el movimiento se va', await esperar(cli, `!(${FILA(marca2)})`, DEMORA + 15000));
-  chk('  y el formulario vuelve con lo tipeado', (await evaluar(cli, `document.getElementById('gCon').value`)) === marca2, await evaluar(cli, `document.getElementById('gCon').value`));
+  chk('  y el formulario vuelve con lo tipeado', await esperar(cli, `document.getElementById('gCon').value===${JSON.stringify(marca2)}`, DEMORA + 8000), await evaluar(cli, `document.getElementById('gCon').value`));
   await evaluar(cli, `__rechazar=false;document.getElementById('gCon').value='';document.getElementById('gMP').value='';`);
   // Ingreso.
   const marca3 = 'Prueba ingreso ' + Date.now().toString(36);

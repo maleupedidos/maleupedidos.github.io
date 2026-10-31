@@ -21751,6 +21751,18 @@ function _guardarMovPorCuenta(tipo,mv,fecha,cat,con,notas,btn,btnTxt){
   var pref=(tipo==='gasto')?'g':'i';
   var payload={action:tipo,fecha:fecha,hora:_horaMov(pref),categoria:cat,concepto:con,notas:notas,montos:mv.porCta,lugar:_lugMovDe(pref,mv.ef),ajusteDec:_ajTomar()};
   payload.clientOpId=_movClientOp(btn,payload);
+  /* (31/10/2026) Hoy: al toque, como el de un solo metodo. */
+  if(_movEsHoy(fecha)){
+    hideLoader(true);
+    var _esp=Object.keys(mv.porCta).length;
+    return _movAlInstante(tipo,payload,Object.keys(mv.porCta).map(function(id){return {met:_movNombre(id),monto:mv.porCta[id],id:id,txt:_movNombre(id)+' $'+f$(mv.porCta[id])};}),
+      fecha,cat,con,notas,btn,btnTxt,function(){
+        $(pref+'Cat').value='';$(pref+'Con').value='';$(pref+'Notas').value='';
+        if(pref==='g'&&$('gProvAviso'))$('gProvAviso').hidden=true;
+        if(pref==='g')_gCatAviso('');
+        _movLimpiar(pref);
+      },function(r){return r.ok&&r.rows===_esp;});
+  }
   _ordenPost(payload)   /* (272/273) gasto e ingreso: primero la base con GASTO_DIRECTO / INGRESO_DIRECTO */
     .then(function(r){return r.json();})
     .then(function(r){
@@ -21807,15 +21819,18 @@ function _movFormFoto(pref){
   return o;
 }
 function _movFormVolver(pref,o){Object.keys(o.v).forEach(function(id){var x=$(id);if(x)x.value=o.v[id];});_lugMovSel[pref]=o.lug||'';_lugPintarMov(pref);}
+function _movPartes(ef,mp){var o=[];if(ef>0)o.push({met:'Efectivo',monto:ef,txt:'EF $'+f$(ef)});if(mp>0)o.push({met:'Mercado Pago',monto:mp,txt:'MP $'+f$(mp)});return o;}
 function _movEsHoy(fecha){var h=new Date();return fecha===h.getFullYear()+'-'+String(h.getMonth()+1).padStart(2,'0')+'-'+String(h.getDate()).padStart(2,'0');}
-function _movAlInstante(tipo,payload,ef,mp,fecha,cat,con,notas,btn,btnTxt,limpiar){
-  var pref=(tipo==='gasto')?'g':'i', foto=_movFormFoto(pref), toque=Date.now();
-  var marcar=function(){if(D&&D.movimientos&&D.movimientos[0])D.movimientos[0]._guardando=toque;};
-  if(ef>0){aplicarMovLocal(tipo,fecha,cat,con,'Efectivo',ef,notas);marcar();}
-  if(mp>0){aplicarMovLocal(tipo,fecha,cat,con,'Mercado Pago',mp,notas);marcar();}
+/* `partes`: [{met, monto, id (cuenta, opcional), txt}]. `esOk(r)`: si la respuesta es un guardado entero. */
+function _movAlInstante(tipo,payload,partes,fecha,cat,con,notas,btn,btnTxt,limpiar,esOk){
+  var pref=(tipo==='gasto')?'g':'i', foto=_movFormFoto(pref), toque=Date.now(), total=0;
+  partes.forEach(function(x){
+    aplicarMovLocal(tipo,fecha,cat,con,x.met,x.monto,notas,x.id);
+    if(D&&D.movimientos&&D.movimientos[0])D.movimientos[0]._guardando=toque;
+    total+=x.monto;
+  });
   render();
-  var parts=[];if(ef>0)parts.push('EF $'+f$(ef));if(mp>0)parts.push('MP $'+f$(mp));
-  toast((tipo==='gasto'?'Gasto':'Ingreso')+' $'+f$(ef+mp)+' ('+parts.join(' + ')+') — guardando…');
+  toast((tipo==='gasto'?'Gasto':'Ingreso')+' $'+f$(total)+' ('+partes.map(function(x){return x.txt;}).join(' + ')+') — guardando…');
   saveNota(notas);saveConcepto(cat,con);
   limpiar();
   btn.disabled=false;btn.textContent=btnTxt;
@@ -21824,8 +21839,10 @@ function _movAlInstante(tipo,payload,ef,mp,fecha,cat,con,notas,btn,btnTxt,limpia
     .then(function(r){return r.json();})
     .then(function(r){
       if(r&&r.pideAjuste){volver('');_ajPide(r,tipo,btn,btnTxt);return;}
-      if(r&&r.ok){_movClientOpLimpiar(btn);_pfAplicar(r).then(function(){_recargarCaja();});return;}
-      volver('No se guardó el '+tipo+': '+((r&&r.err)||'?')+'. Lo dejé de nuevo en el formulario.');
+      if(r&&(esOk?esOk(r):r.ok)){_movClientOpLimpiar(btn);_pfAplicar(r).then(function(){_recargarCaja();});return;}
+      /* Guardó algunas filas y no todas (cuenta extra): se dice cuántas y el formulario NO vuelve, para no cargarlo dos veces. */
+      if(r&&r.ok&&r.rows>0){_recargarCaja();toast('Guardó '+r.rows+' de '+partes.length+' — mirá la hoja antes de cargarlo de nuevo');return;}
+      volver('No se guardó el '+tipo+': '+((r&&(r.err||r.error))||'?')+'. Lo dejé de nuevo en el formulario.');
     })
     .catch(function(){volver('No pude confirmar el '+tipo+'. Lo dejé en el formulario: tocá Guardar otra vez, no se duplica.');});
   return false;
@@ -21856,7 +21873,7 @@ function guardarGasto(e){
     monto:(ef>0&&mp===0)?ef:((mp>0&&ef===0)?mp:0)
   };
   payload.clientOpId=_movClientOp(btn,payload);
-  if(_movEsHoy(fecha)){hideLoader(true);return _movAlInstante('gasto',payload,ef,mp,fecha,cat,con,notas,btn,'Guardar gasto',function(){
+  if(_movEsHoy(fecha)){hideLoader(true);return _movAlInstante('gasto',payload,_movPartes(ef,mp),fecha,cat,con,notas,btn,'Guardar gasto',function(){
     $('gCat').value='';if($('gProvAviso'))$('gProvAviso').hidden=true;_gCatAviso('');$('gCon').value='';$('gNotas').value='';_movLimpiar('g');});}
   _ordenPost(payload)   /* (272/273) gasto e ingreso: primero la base con GASTO_DIRECTO / INGRESO_DIRECTO */
     .then(function(r){return r.json();})
@@ -21904,7 +21921,7 @@ function guardarIngreso(e){
     monto:(ef>0&&mp===0)?ef:((mp>0&&ef===0)?mp:0)
   };
   payload.clientOpId=_movClientOp(btn,payload);
-  if(_movEsHoy(fecha)){hideLoader(true);return _movAlInstante('ingreso',payload,ef,mp,fecha,cat,con,notas,btn,'Guardar ingreso',function(){
+  if(_movEsHoy(fecha)){hideLoader(true);return _movAlInstante('ingreso',payload,_movPartes(ef,mp),fecha,cat,con,notas,btn,'Guardar ingreso',function(){
     $('iCat').value='';$('iCon').value='';$('iNotas').value='';_movLimpiar('i');});}
   _ordenPost(payload)   /* (272/273) gasto e ingreso: primero la base con GASTO_DIRECTO / INGRESO_DIRECTO */
     .then(function(r){return r.json();})
