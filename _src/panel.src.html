@@ -1271,6 +1271,7 @@ button.sem-mas{display:block;width:100%;min-height:44px;margin:4px 0 8px;backgro
 .cj-r.t-cobro .cj-m{color:#2d8a4f}.cj-r.t-ingreso .cj-m{color:#1976d2}.cj-r.t-gasto .cj-m{color:var(--r)}.cj-r.t-traspaso .cj-m{color:var(--bl)}
 .cj-r.t-traspaso{background:#FAF8F5;border-style:dashed}
 .cj-r2{font-size:11.5px;color:var(--bl);margin-top:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cj-guardando{color:#546E7A;font-style:italic;font-weight:600}
 .cj-acc-r{display:flex;flex:none}
 #movTitulo{display:flex;align-items:center;justify-content:space-between;margin:2px 0 8px}
 /* Compu: dos columnas, los saldos quietos mientras el libro se mueve. */
@@ -18063,6 +18064,41 @@ function _gProvIrAbast(){
   var intentos=0;
   (function ir(){ if(typeof abaSwitchTab==='function'){ try{abaSwitchTab('pagos');}catch(e){} return; } if(++intentos<40)setTimeout(ir,150); })();
 }
+/* GASTO E INGRESO AL INSTANTE (31/10/2026). Ya iban directo a la base (272/273), pero la pantalla esperaba la
+   respuesta con el loader puesto y recien ahi pintaba. Con fecha de HOY se pinta al toque en el libro diario y en los
+   saldos, marcado «Guardando…» (`m._guardando`), y el formulario queda limpio para el siguiente. La verdad la trae
+   `_recargarCaja` cuando la base contesta. Si la base lo rechaza (o no se sabe si llego), se recarga la caja (lo
+   pintado se va) y el formulario vuelve con lo que tenia: tocar Guardar otra vez manda el MISMO id, no duplica.
+   Otro dia va por el camino de siempre: una fecha anterior al ultimo ajuste de caja pide decidir antes (`_ajPide`). */
+function _movFormFoto(pref){
+  var f=$(pref==='g'?'formGasto':'formIngreso'),o={v:{},lug:_lugMovSel[pref]};
+  if(f)[].forEach.call(f.querySelectorAll('input,select,textarea'),function(x){if(x.id&&x.type!=='button'&&x.type!=='submit')o.v[x.id]=x.value;});
+  return o;
+}
+function _movFormVolver(pref,o){Object.keys(o.v).forEach(function(id){var x=$(id);if(x)x.value=o.v[id];});_lugMovSel[pref]=o.lug||'';_lugPintarMov(pref);}
+function _movEsHoy(fecha){var h=new Date();return fecha===h.getFullYear()+'-'+String(h.getMonth()+1).padStart(2,'0')+'-'+String(h.getDate()).padStart(2,'0');}
+function _movAlInstante(tipo,payload,ef,mp,fecha,cat,con,notas,btn,btnTxt,limpiar){
+  var pref=(tipo==='gasto')?'g':'i', foto=_movFormFoto(pref), toque=Date.now();
+  var marcar=function(){if(D&&D.movimientos&&D.movimientos[0])D.movimientos[0]._guardando=toque;};
+  if(ef>0){aplicarMovLocal(tipo,fecha,cat,con,'Efectivo',ef,notas);marcar();}
+  if(mp>0){aplicarMovLocal(tipo,fecha,cat,con,'Mercado Pago',mp,notas);marcar();}
+  render();
+  var parts=[];if(ef>0)parts.push('EF $'+f$(ef));if(mp>0)parts.push('MP $'+f$(mp));
+  toast((tipo==='gasto'?'Gasto':'Ingreso')+' $'+f$(ef+mp)+' ('+parts.join(' + ')+') — guardando…');
+  saveNota(notas);saveConcepto(cat,con);
+  limpiar();
+  btn.disabled=false;btn.textContent=btnTxt;
+  var volver=function(msg){_movFormVolver(pref,foto);_recargarCaja();if(msg)toast(msg);};
+  _ordenPost(payload)
+    .then(function(r){return r.json();})
+    .then(function(r){
+      if(r&&r.pideAjuste){volver('');_ajPide(r,tipo,btn,btnTxt);return;}
+      if(r&&r.ok){_movClientOpLimpiar(btn);_pfAplicar(r).then(function(){_recargarCaja();});return;}
+      volver('No se guardó el '+tipo+': '+((r&&r.err)||'?')+'. Lo dejé de nuevo en el formulario.');
+    })
+    .catch(function(){volver('No pude confirmar el '+tipo+'. Lo dejé en el formulario: tocá Guardar otra vez, no se duplica.');});
+  return false;
+}
 function guardarGasto(e){
   e.preventDefault();
   var _mv=_movMontos('g');
@@ -18089,6 +18125,8 @@ function guardarGasto(e){
     monto:(ef>0&&mp===0)?ef:((mp>0&&ef===0)?mp:0)
   };
   payload.clientOpId=_movClientOp(btn,payload);
+  if(_movEsHoy(fecha)){hideLoader(true);return _movAlInstante('gasto',payload,ef,mp,fecha,cat,con,notas,btn,'Guardar gasto',function(){
+    $('gCat').value='';if($('gProvAviso'))$('gProvAviso').hidden=true;_gCatAviso('');$('gCon').value='';$('gNotas').value='';_movLimpiar('g');});}
   _ordenPost(payload)   /* (272/273) gasto e ingreso: primero la base con GASTO_DIRECTO / INGRESO_DIRECTO */
     .then(function(r){return r.json();})
     .then(function(r){
@@ -18135,6 +18173,8 @@ function guardarIngreso(e){
     monto:(ef>0&&mp===0)?ef:((mp>0&&ef===0)?mp:0)
   };
   payload.clientOpId=_movClientOp(btn,payload);
+  if(_movEsHoy(fecha)){hideLoader(true);return _movAlInstante('ingreso',payload,ef,mp,fecha,cat,con,notas,btn,'Guardar ingreso',function(){
+    $('iCat').value='';$('iCon').value='';$('iNotas').value='';_movLimpiar('i');});}
   _ordenPost(payload)   /* (272/273) gasto e ingreso: primero la base con GASTO_DIRECTO / INGRESO_DIRECTO */
     .then(function(r){return r.json();})
     .then(function(r){
@@ -23166,6 +23206,7 @@ function rMovimientos(){
       }
     }
     if(m.not)l2.push(_egrEsc(m.not));
+    if(m._guardando)l2.unshift('<span class="cj-guardando">Guardando…</span>');   /* (31/10/2026) pintado al toque */
     /* La ✕ solo en lo que se carga a mano; un cobro se deshace desde el pedido
        y un pago a proveedor desde Abastecimiento. El 📅 corrige el día de un
        cobro de Home/Pilar/Clubes (25/9/2026). */
