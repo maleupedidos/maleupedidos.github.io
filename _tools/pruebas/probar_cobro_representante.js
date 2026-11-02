@@ -24,7 +24,7 @@ const EXTRA = `window.__envios=[]; window.__base=[]; window.__alerts=[]; window.
       var d=r==='nodirecto'?{ok:false,directo:false,motivo:'pendiente'}:r==='freno'?{ok:false,err:'El monto ($90000) supera el saldo pendiente ($80000)',saldoPendiente:80000}
         :{ok:true,aceptada:true,directo:true,orden:1,diferida:false,updated:1,pedidosPendientes:1,total:1000,saldoPendiente:0,parcial:false,semanas:1,detalle:[]};
       return Promise.resolve(new Response(JSON.stringify(d),{status:200,headers:{'Content-Type':'application/json'}})); }
-    if(x&&String(x.method||'').toUpperCase()==='POST'&&/cobrarVendedorRed|entregarCarnePendiente|cerrarRendidosRed/.test(b)){ var q=JSON.parse(b); window.__envios.push({a:'apps',acc:q.action,id:q.clientOpId||String(q.ts||'')});
+    if(x&&String(x.method||'').toUpperCase()==='POST'&&/cobrarVendedorRed|entregarCarnePendiente|cerrarRendidosRed/.test(b)){ var q=JSON.parse(b); window.__envios.push({a:'apps',acc:q.action,id:q.clientOpId||String(q.ts||''),nd:q._noDirecto||''});
       return new Promise(function(res){ setTimeout(function(){ res(new Response(JSON.stringify({ok:true,updated:1,total:1000,saldoPendiente:0}),{status:200,headers:{'Content-Type':'application/json'}})); },3000); }); }
     return o.apply(this,arguments); }; })();`;
 (async () => {
@@ -51,10 +51,12 @@ const EXTRA = `window.__envios=[]; window.__base=[]; window.__alerts=[]; window.
   x = await cobrar(['nodirecto'], 4500);
   const b1 = x.e.find((y) => y.a === 'base'), a1 = x.e.find((y) => y.a === 'apps');
   chk('directo:false (algo de Red pendiente): Apps Script con el MISMO clientOpId', b1 && a1 && b1.id === a1.id, x);
+  chk('  (parte 3) y la orden dice por qué: _noDirecto = base:pendiente', a1 && a1.nd === 'base:pendiente', a1);
   chk('  y ahí sí aparece el loader (Apps Script tarda)', x.tapa >= 380, x.tapa + ' ms');
   x = await cobrar(['corte'], 4500);
   const b2 = x.e.find((y) => y.a === 'base'), a2 = x.e.find((y) => y.a === 'apps');
   chk('un corte de la base: Apps Script con el MISMO clientOpId', b2 && a2 && b2.id === a2.id, x);
+  chk('  (parte 3) y la orden dice por qué: _noDirecto = red', a2 && a2.nd === 'red', a2);
   x = await cobrar(['freno'], 1500);
   chk('el freno de la base (supera el saldo) llega a la pantalla y NO se pregunta a Apps Script',
     x.e.length === 1 && x.e[0].a === 'base' && x.alerts.some((m) => /supera el saldo pendiente/.test(m)), x);
@@ -77,6 +79,7 @@ const EXTRA = `window.__envios=[]; window.__base=[]; window.__alerts=[]; window.
   chk('  apagada: Apps Script y ni se llama a la base', x.e.length === 1 && x.e[0].a === 'apps', x);
   x = await cobrar(['ok'], 4500);
   chk('apagada: Apps Script y ni se llama a la base', x.e.length === 1 && x.e[0].a === 'apps', x);
+  chk('  (parte 3) y la orden dice por qué: _noDirecto = palanca-front', x.e[0] && x.e[0].nd === 'palanca-front', x.e[0]);
   chk('sin errores de JS', (await evaluar(cli, `JSON.stringify(window.__errores||[])`)) === '[]', await evaluar(cli, `JSON.stringify(window.__errores||[])`));
   console.log('\n' + ok + ' ok · ' + mal + ' mal');
   process.exit(mal ? 1 : 0);

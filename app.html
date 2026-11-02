@@ -14732,7 +14732,7 @@ function _leerVersion(app){
    "El HTML no sabe que version es" dejo de ser cierto: el build le escribe
    adentro el CACHE_NAME de sw-panel.js, el mismo que deploy.sh obliga a subir en
    cada cambio. Si lo publicado dice otra cosa, esta pagina es vieja. Punto. */
-var _APP_CN_PAGINA='maleu-panel-v804';
+var _APP_CN_PAGINA='maleu-panel-v805';
 
 /* Devuelve [{k,v}] si lo publicado no es lo que esta pagina corre. */
 function _chequearVersiones(){
@@ -19148,25 +19148,35 @@ function _ordenDirectaOn(a){
   var m=_palancaVal('directas');
   return !!(m&&m[a]===true)||(a==='marcarCobrado'&&_palancaVal('cobrarDirecto')===true);
 }
+/* POR QUE NO FUE DIRECTO (corte, parte 3 — 2/11/2026). Del 26/10 al 2/11, 181 de 400 ordenes de pantalla fueron a
+   Apps Script teniendo directa con su palanca en «si», y el motivo se perdia aca. Ahora queda en la orden que va a
+   Apps Script como `_noDirecto` (llega a `order_command.payload`): palanca-front · sin-token · http-403 · red ·
+   base:<motivo que devolvio la RPC> (datos, no encontrado, pendiente, cuenta, palanca, usuario…). Se borra al empezar:
+   un reintento que si va directo no lo arrastra. */
+function _ordenNoDirecto(body,m){ try{ if(body&&typeof body==='object')body._noDirecto=String(m||'?').slice(0,80); }catch(e){} }
 function _ordenDirecta(body,ctl,accion){
   var a=accion||(body&&body.action), fn=ORD_DIRECTAS_RPC[a];
-  if(!fn||!_ordenDirectaOn(a)||typeof _sbPermiso!=='function')return Promise.resolve(null);
+  if(body&&typeof body==='object')delete body._noDirecto;
+  if(!fn)return Promise.resolve(null);
+  if(!_ordenDirectaOn(a)){ _ordenNoDirecto(body,'palanca-front'); return Promise.resolve(null); }
+  if(typeof _sbPermiso!=='function'){ _ordenNoDirecto(body,'sin-sbPermiso'); return Promise.resolve(null); }
   return Promise.resolve(_sbPermiso(true)).then(function(sb){
-    if(!sb||!sb.token)return null;
-    var p={};Object.keys(body).forEach(function(k){if(k!=='token'&&k.indexOf('__')!==0)p[k]=body[k];});
+    if(!sb||!sb.token){ _ordenNoDirecto(body,'sin-token'); return null; }
+    var p={};Object.keys(body).forEach(function(k){if(k!=='token'&&k!=='_noDirecto'&&k.indexOf('__')!==0)p[k]=body[k];});
     return fetch(sb.url+'/rest/v1/rpc/'+fn,{method:'POST',signal:ctl?ctl.signal:undefined,
       headers:{apikey:sb.key,Authorization:'Bearer '+sb.token,'Content-Type':'application/json'},body:JSON.stringify({p:p})})
       .then(function(r){
-        if(r.status===401||r.status===403||r.status===404)return null;
-        if(!r.ok)throw new TypeError('la base contestó '+r.status);
+        if(r.status===401||r.status===403||r.status===404){ _ordenNoDirecto(body,'http-'+r.status); return null; }
+        if(!r.ok){ _ordenNoDirecto(body,'http-'+r.status); throw new TypeError('la base contestó '+r.status); }
         return r.json();
-      })
+      },function(e){ _ordenNoDirecto(body,'red'); throw e; })
       .then(function(d){
-        if(!d||typeof d!=='object'||d.directo===false)return null;
+        if(!d||typeof d!=='object'){ _ordenNoDirecto(body,'base:vacia'); return null; }
+        if(d.directo===false){ _ordenNoDirecto(body,'base:'+(d.motivo||'?')); return null; }
         _ordenConfirmada(body,d);
         return d;
       });
-  },function(){return null;});
+  },function(){ _ordenNoDirecto(body,'sin-token-error'); return null; });
 }
 /* El POST de una accion del panel: primero la base (si va directo), si no Apps Script. Devuelve un Response,
    asi cada pantalla sigue con su `.then(r.json())` de siempre. */
@@ -69859,6 +69869,7 @@ function cobrarVendedorRed(vendedor,ef,tr,esTotal,cuenta,quien){
   _rutDirecta(payload,_ab).catch(function(){return null;})
     .then(function(d){
       if(d){clearTimeout(_t);return d;}
+      _fopts.body=JSON.stringify(payload);   /* (corte, parte 3) con el `_noDirecto` que dejó `_ordenDirecta` */
       return fetch(RUT_APPS_SCRIPT_URL,_fopts)
         .then(function(rs){clearTimeout(_t);return rs.json().catch(function(){return{ok:false,error:'InvalidJSON'};});});
     })
@@ -70103,6 +70114,7 @@ function processSyncQueue(){
   var _fopts={method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(item),redirect:'follow'};
   if(_aborter)_fopts.signal=_aborter.signal;
   var _porApps=function(){
+    _fopts.body=JSON.stringify(item);   /* (corte, parte 3) recién acá: lleva el `_noDirecto` que dejó `_ordenDirecta` */
     return fetch(RUT_APPS_SCRIPT_URL,_fopts)
       .then(function(r){return r.json().catch(function(){return{ok:false,error:'InvalidJSON'}})});
   };
