@@ -487,8 +487,19 @@ function _liqRedCalc_() {
   for (var c = 0; c < h.length; c++) ix[String(h[c]).trim()] = c;
   var iAP = ix['A Pagar'] != null ? ix['A Pagar'] : 48;
   var iEPM = ix['Estado Pago a Maleu'] != null ? ix['Estado Pago a Maleu'] : 53;
+  var iBE = ix['Entregado a Vendedor'] != null ? ix['Entregado a Vendedor'] : 56;
   var hoy = _liqRedHoyNum_();
   var qs = {};
+  var _q = function (V, vend, Q) {
+    var k = vend + '|' + Q.key;
+    if (!qs[k]) {
+      qs[k] = { key: Q.key, lbl: Q.lbl, desde: Q.desde, hasta: Q.hasta, pagaEl: Q.pagaEl, pagaNum: Q.pagaNum,
+                vencida: !Q.pagaNum || Q.pagaNum <= hoy, com: 0, env: 0, bono: 0, total: 0, pedidos: [], bonos: [] };
+      V.quincenas.push(qs[k]);
+    }
+    return qs[k];
+  };
+  var _V = function (vend) { return out[vend] || (out[vend] = { nombre: vend, quincenas: [], sinMarcar: [], sinMarcarTotal: 0, debeEntregar: 0, esperando: [], propios: 0 }); };
   for (var r = 1; r < d.length; r++) {
     var f = d[r], vend = String(f[7] || '').trim(), id = String(f[1] || '').trim();
     if (!vend || !id) continue;
@@ -496,33 +507,114 @@ function _liqRedCalc_() {
     if (es === 'Cancelado') continue;
     var deb = _redDebeAMaleu_(f, iAP);
     if (deb.cerroViejo) continue;
-    var V = out[vend] || (out[vend] = { nombre: vend, quincenas: [], sinMarcar: [], sinMarcarTotal: 0, debeEntregar: 0 });
+    var V = _V(vend);
     var epm = String(f[iEPM] || '').trim();
     var pagado = epm === 'Pagado' || epm === 'Sí' || epm === 'Si';
     if (es === 'Entregado' && !pagado && deb.debe > 0) V.debeEntregar += Math.round(deb.debe);
     if (deb.liq) continue;
     var tot = (deb.com || 0) + (deb.env || 0);
     if (!(tot > 0)) continue;
-    var Q = _liqRedQuincena_(_redFechaNum_(f[10]));
+    var kNum = _redFechaNum_(f[10]);
+    var Q = _liqRedQuincena_(kNum);
+    var bolsa = String(f[iBE] || '').trim() === 'Entregado';
     var item = { n: id, row: r + 1, c: String(f[8] || '').trim(), dia: _fechaCorta_(f[10]),
-                 com: deb.com || 0, env: deb.env || 0, tot: tot };
-    if (es === 'Entregado' && String(f[13] || '').trim() === 'Cobrado') {
-      var k = vend + '|' + Q.key;
-      if (!qs[k]) {
-        qs[k] = { key: Q.key, lbl: Q.lbl, desde: Q.desde, hasta: Q.hasta, pagaEl: Q.pagaEl, pagaNum: Q.pagaNum,
-                  vencida: !Q.pagaNum || Q.pagaNum <= hoy, com: 0, env: 0, total: 0, pedidos: [] };
-        V.quincenas.push(qs[k]);
-      }
-      qs[k].pedidos.push(item); qs[k].com += item.com; qs[k].env += item.env; qs[k].total += tot;
+                 com: deb.com || 0, env: deb.env || 0, tot: tot, sinBolsa: !bolsa };
+    /* POR DEVENGADO (2/11/2026, Tadeo; la 331 en la base): se paga por el dia en que el representante pidio y le
+       dimos la bolsa (col K), no por cuando le entrega al cliente ni por cuando se cobra. Va a su quincena si la
+       bolsa esta marcada o si ese dia ya paso (sin marcar, con `sinBolsa` para que la pantalla lo diga). */
+    if (bolsa || (kNum && kNum <= hoy)) {
+      var qq = _q(V, vend, Q);
+      qq.pedidos.push(item); qq.com += item.com; qq.env += item.env; qq.total += tot;
     } else {
-      item.falta = es !== 'Entregado' ? 'entregar' : 'cobrar';
+      item.falta = 'bolsa';
       item.q = Q.lbl; item.pagaEl = Q.pagaEl;
       V.sinMarcar.push(item); V.sinMarcarTotal += tot;
     }
   }
+  /* EL BONO DE $15.000 POR CLIENTE NUEVO (2/11/2026, ver `_liqRedBonos_`): va a la quincena de la 2ª compra. */
+  try {
+    var B = _liqRedBonos_(hoy);
+    Object.keys(B.bonos).forEach(function (vend) {
+      var V2 = _V(vend);
+      B.bonos[vend].forEach(function (b) {
+        var qb = _q(V2, vend, _liqRedQuincena_(b.qNum));
+        qb.bonos.push({ tel: b.tel, c: b.c, p1: b.p1, dia1: b.dia1, p2: b.p2, dia2: b.dia2, monto: LIQ_RED_BONO });
+        qb.bono += LIQ_RED_BONO; qb.total += LIQ_RED_BONO;
+      });
+    });
+    Object.keys(B.esperando).forEach(function (vend) { _V(vend).esperando = B.esperando[vend]; });
+    Object.keys(B.propios).forEach(function (vend) { _V(vend).propios = B.propios[vend]; });
+  } catch (eB) { _logError_('liquidacion red: el bono', eB); }
   Object.keys(out).forEach(function (k2) {
     out[k2].quincenas.sort(function (a, b) { return a.key < b.key ? -1 : (a.key > b.key ? 1 : 0); });
   });
+  return out;
+}
+
+var LIQ_RED_BONO = 15000;
+
+var LIQ_RED_BONO_DESDE = 20261001;
+
+function _liqRedBonos_(hoy) {
+  var out = { bonos: {}, esperando: {}, propios: {} };
+  var dig = function (v) { var s = String(v == null ? '' : v).replace(/\D/g, ''); return s.length >= 10 ? s.slice(-10) : ''; };
+  var aNum = function (num) { var y = Math.floor(num / 10000), m = Math.floor(num / 100) % 100, d = num % 100; return Date.UTC(y, m - 1, d) / 86400000; };
+  var fmt = function (num) { return num ? _liqRed2_(num % 100) + '/' + _liqRed2_(Math.floor(num / 100) % 100) + '/' + Math.floor(num / 10000) : ''; };
+  var peds = [];
+  ['Home', 'Pilar', 'Clubes', 'Red'].forEach(function (h) {
+    var sh = SS.getSheetByName(h);
+    if (!sh || sh.getLastRow() < 2) return;
+    var d = sh.getDataRange().getValues(), ix = {};
+    d[0].forEach(function (c, i) { ix[String(c).trim()] = i; });
+    var g = function (f, k) { return ix[k] != null ? f[ix[k]] : ''; };
+    var cN = ix['N° Pedido'] != null ? 'N° Pedido' : 'N°', cD = h === 'Red' ? 'Día de Entrega' : 'Día de Entrega Elegido';
+    for (var r = 1; r < d.length; r++) {
+      var f = d[r];
+      if (String(g(f, 'Estado de Entrega') || '').trim() === 'Cancelado') continue;
+      var n = String(g(f, cN) || '').trim();
+      if (!n || n === '-') continue;
+      var tel = (h === 'Red' ? dig(g(f, 'Teléfono Cliente')) : '') || dig(g(f, 'Teléfono'));
+      var dia = _redFechaNum_(g(f, cD)) || _redFechaNum_(g(f, 'Fecha'));
+      if (!tel || !dia) continue;
+      peds.push({ h: h, n: n, row: r + 1, tel: tel, dia: dia, c: String(g(f, 'Cliente') || '').trim(),
+                  vend: h === 'Red' ? String(g(f, 'Vendedor') || '').trim() : '',
+                  trajo: h === 'Red' ? String(g(f, 'Trajo el Cliente') || '').trim() : '' });
+    }
+  });
+  var porTel = {};
+  peds.forEach(function (p) { (porTel[p.tel] = porTel[p.tel] || []).push(p); });
+  /* El WhatsApp de cada representante y los bonos ya pagados (un «Pagué» no anulado anota el telefono). */
+  var telVend = {};
+  try {
+    var shV = SS.getSheetByName('Vendedores');
+    if (shV && shV.getLastRow() > 1) shV.getRange(2, 1, shV.getLastRow() - 1, 2).getValues().forEach(function (f) {
+      var nm = String(f[0] || '').trim(); if (nm) telVend[nm] = dig(f[1]);
+    });
+  } catch (eV) {}
+  var pagados = {};
+  _liqRedLeer_().forEach(function (l) {
+    if (l.estado === 'Anulada') return;
+    String(l.bonos || '').split(',').forEach(function (t) { t = t.trim(); if (t) pagados[t] = 1; });
+  });
+  var hoyD = aNum(hoy);
+  Object.keys(porTel).forEach(function (tel) {
+    var l = porTel[tel].sort(function (a, b) { return a.dia - b.dia || ((a.h !== 'Red') - (b.h !== 'Red')) || a.row - b.row; });
+    var p1 = l[0];
+    if (p1.h !== 'Red' || p1.trajo !== 'Vendedor' || p1.dia < LIQ_RED_BONO_DESDE || !p1.vend) return;
+    if (telVend[p1.vend] && telVend[p1.vend] === tel) { out.propios[p1.vend] = (out.propios[p1.vend] || 0) + 1; return; }
+    var d1 = aNum(p1.dia), p2 = null;
+    var resto = l.slice(1).filter(function (x) { var dx = aNum(x.dia); return dx >= d1 && dx <= d1 + 60; })
+      .sort(function (a, b) { return a.dia - b.dia || a.row - b.row; });
+    if (resto.length) p2 = resto[0];
+    if (p2) {
+      if (pagados[tel]) return;
+      (out.bonos[p1.vend] = out.bonos[p1.vend] || []).push({ tel: tel, c: p1.c, p1: p1.h + ' #' + p1.n, dia1: fmt(p1.dia),
+        p2: p2.h + ' #' + p2.n, dia2: fmt(p2.dia), qNum: p2.dia });
+    } else if (hoyD - d1 <= 60) {
+      (out.esperando[p1.vend] = out.esperando[p1.vend] || []).push({ c: p1.c, dia: fmt(p1.dia), quedan: 60 - (hoyD - d1) });
+    }
+  });
+  Object.keys(out.esperando).forEach(function (v) { out.esperando[v].sort(function (a, b) { return a.quedan - b.quedan; }); });
   return out;
 }
 
@@ -549,7 +641,8 @@ function _liqRedLeer_() {
       cuenta: String(_lqCelda(d[r], 'Cuenta') || '').trim(), pago: String(_lqCelda(d[r], 'Pagó') || '').trim(),
       pedidos: String(_lqCelda(d[r], 'Pedidos') || '').trim(), n: Number(_lqCelda(d[r], '# Pedidos')) || 0,
       estado: String(_lqCelda(d[r], 'Estado') || '').trim() || 'Pagada',
-      anuladaEl: _liqRedFecha_(_lqCelda(d[r], 'Anulada el'), true), anuladaPor: String(_lqCelda(d[r], 'Anulada por') || '').trim()
+      anuladaEl: _liqRedFecha_(_lqCelda(d[r], 'Anulada el'), true), anuladaPor: String(_lqCelda(d[r], 'Anulada por') || '').trim(),
+      bonos: String(_lqCelda(d[r], 'Bonos') || '').trim()
     });
   }
   return out;
