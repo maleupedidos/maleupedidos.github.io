@@ -10322,14 +10322,22 @@ function cobrarVendedorRed(vendedor,ef,tr,esTotal,cuenta,quien){
   // Offline real → encolar. Online → FETCH DIRECTO endurecido (NO syncQueue: en el
   // iframe del Panel la cola se trababa y el cobro nunca se mandaba, sin avisar).
   if(!isOnline){ syncQueue.push(payload);saveLocal();showToast('Cobrado offline — se sincroniza al volver señal');return; }
-  rutShowLoader('Cobrando a '+vendedorLimpio.split(' ')[0]+'...');
+  /* (322, 2/11/2026) Primero la base (RENDICION_DIRECTO): contesta en ~0,1-0,3 s, asi que el loader solo aparece si
+     tarda mas de 400 ms (Apps Script). Si no la acepta directo (palanca, algo de Red pendiente, sin permiso), Apps
+     Script con el MISMO clientOpId: si la base ya la habia aceptado, no se registra dos veces. */
+  var _ldT=setTimeout(function(){_ldT=null;rutShowLoader('Cobrando a '+vendedorLimpio.split(' ')[0]+'...');},400);
   var _ab=(typeof AbortController!=='undefined')?new AbortController():null;
   var _t=setTimeout(function(){if(_ab)_ab.abort();},15000);
   var _fopts={method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(payload),redirect:'follow'};
   if(_ab)_fopts.signal=_ab.signal;
-  fetch(RUT_APPS_SCRIPT_URL,_fopts)
-    .then(function(rs){clearTimeout(_t);return rs.json().catch(function(){return{ok:false,error:'InvalidJSON'};});})
+  _rutDirecta(payload,_ab).catch(function(){return null;})
+    .then(function(d){
+      if(d){clearTimeout(_t);return d;}
+      return fetch(RUT_APPS_SCRIPT_URL,_fopts)
+        .then(function(rs){clearTimeout(_t);return rs.json().catch(function(){return{ok:false,error:'InvalidJSON'};});});
+    })
     .then(function(res){
+      if(_ldT){clearTimeout(_ldT);_ldT=null;}
       rutHideLoader(true);
       var corto=vendedorLimpio.split(' ')[0];
       if(res&&res.ok){
@@ -10362,6 +10370,7 @@ function cobrarVendedorRed(vendedor,ef,tr,esTotal,cuenta,quien){
       } else { _revert(); alert('❌ Error al cobrar a '+vendedorLimpio+'\n\n'+((res&&(res.err||res.error))||'sin respuesta del servidor')+'\n\nNada se modificó. Probá de nuevo.'); }
     })
     .catch(function(err){
+      if(_ldT){clearTimeout(_ldT);_ldT=null;}
       clearTimeout(_t);rutHideLoader(true);_revert();
       var aborted=err&&err.name==='AbortError';
       showToast(aborted?'❌ Timeout (15s) — probá de nuevo':'❌ Sin respuesta — '+((err&&err.message)||'error'));
