@@ -19,12 +19,12 @@ const EXTRA = `window.__envios=[]; window.__base=[]; window.__alerts=[]; window.
   window.alert=function(m){window.__alerts.push(String(m));}; window.confirm=function(){return true;};
   window.__palForzar={};setInterval(function(){try{var p=window._sbPerm&&window._sbPerm.pal;if(!p)return;Object.keys(window.__palForzar).forEach(function(k){p[k]=window.__palForzar[k];});}catch(e){}},200);
   (function(){ var o=window.fetch; window.fetch=function(u,x){ var s=String((u&&u.url)||u||''), b=x&&x.body?String(x.body):'';
-    if(/\\/rpc\\/(red_cobro_directo|red_carne_pend_directo)/.test(s)){ var p=JSON.parse(b).p; window.__envios.push({a:'base',acc:p.action,id:p.clientOpId||String(p.ts||'')}); var r=window.__base.shift()||'ok';
+    if(/\\/rpc\\/(red_cobro_directo|red_carne_pend_directo|red_cerrar_rendidos_directo)/.test(s)){ var p=JSON.parse(b).p; window.__envios.push({a:'base',acc:p.action,id:p.clientOpId||String(p.ts||'')}); var r=window.__base.shift()||'ok';
       if(r==='corte')return Promise.reject(new TypeError('Failed to fetch'));
       var d=r==='nodirecto'?{ok:false,directo:false,motivo:'pendiente'}:r==='freno'?{ok:false,err:'El monto ($90000) supera el saldo pendiente ($80000)',saldoPendiente:80000}
         :{ok:true,aceptada:true,directo:true,orden:1,diferida:false,updated:1,pedidosPendientes:1,total:1000,saldoPendiente:0,parcial:false,semanas:1,detalle:[]};
       return Promise.resolve(new Response(JSON.stringify(d),{status:200,headers:{'Content-Type':'application/json'}})); }
-    if(x&&String(x.method||'').toUpperCase()==='POST'&&/cobrarVendedorRed|entregarCarnePendiente/.test(b)){ var q=JSON.parse(b); window.__envios.push({a:'apps',acc:q.action,id:q.clientOpId||String(q.ts||'')});
+    if(x&&String(x.method||'').toUpperCase()==='POST'&&/cobrarVendedorRed|entregarCarnePendiente|cerrarRendidosRed/.test(b)){ var q=JSON.parse(b); window.__envios.push({a:'apps',acc:q.action,id:q.clientOpId||String(q.ts||'')});
       return new Promise(function(res){ setTimeout(function(){ res(new Response(JSON.stringify({ok:true,updated:1,total:1000,saldoPendiente:0}),{status:200,headers:{'Content-Type':'application/json'}})); },3000); }); }
     return o.apply(this,arguments); }; })();`;
 (async () => {
@@ -70,6 +70,8 @@ const EXTRA = `window.__envios=[]; window.__base=[]; window.__alerts=[]; window.
   x = await carne(['nodirecto'], 4500);
   const b3 = x.e.find((y) => y.a === 'base'), a3 = x.e.find((y) => y.a === 'apps');
   chk('  directo:false: Apps Script con el MISMO ts (el mismo id de orden)', b3 && a3 && b3.id && b3.id === a3.id, x);
+  /* (324) Cerrar los rendidos NO se prueba acá: rutCerrarRendidos busca al representante en _rutSinCerrar, que vive en la
+     sub-app y se llena de tres fuentes (foto, lectura, Apps Script); la copia de window no sirve para sembrarlo. */
   await pal({});
   x = await carne(['ok'], 4500);
   chk('  apagada: Apps Script y ni se llama a la base', x.e.length === 1 && x.e[0].a === 'apps', x);
