@@ -14728,7 +14728,7 @@ function _leerVersion(app){
    "El HTML no sabe que version es" dejo de ser cierto: el build le escribe
    adentro el CACHE_NAME de sw-panel.js, el mismo que deploy.sh obliga a subir en
    cada cambio. Si lo publicado dice otra cosa, esta pagina es vieja. Punto. */
-var _APP_CN_PAGINA='maleu-panel-v797';
+var _APP_CN_PAGINA='maleu-panel-v798';
 
 /* Devuelve [{k,v}] si lo publicado no es lo que esta pagina corre. */
 function _chequearVersiones(){
@@ -19119,7 +19119,9 @@ var ORD_DIRECTAS_RPC={marcarCobrado:'pedido_cobrar_directo',marcarEntregado:'ped
   /* (315) Editar un pedido: la previa (sin orden) y el guardado. Piezas, pesaje y devolucion: directo:false → Apps Script. */
   editarPedido:'pedido_editar_directo',
   /* (318) Mover plata: la base calcula lo sin guardar de cada uno (`_lugares_saldos`) y frena igual que Apps Script. */
-  moverPlata:'caja_mover_directo'};
+  moverPlata:'caja_mover_directo',
+  /* (319) Recibir piezas de carne y darlas de baja: la base corre el seco sobre la replica y el seguro de stock. */
+  piezasRecibir:'piezas_recibir_directo',piezasBaja:'piezas_baja_directo'};
 function _ordenDirectaOn(a){
   if(typeof _palancaVal!=='function')return false;
   var m=_palancaVal('directas');
@@ -29758,13 +29760,15 @@ function stCarneGuardar(){
      backend los recuerda 6 h (vuelven como `repetidas`, no como piezas nuevas).
      Va derivado de la tanda, no al azar, para que el reintento traiga el mismo. */
   var _opTanda='pzr-'+(envio[0].uid||'')+'-'+envio.length+'-'+Math.round(totKg*1000);
-  fetch(API,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},
-    body:JSON.stringify({action:'piezasRecibir',proveedor:provEnvio,deposito:depEnvio||undefined,
+  /* (319) Por `_ordenPost`: con PIEZAS_DIRECTO la acepta la base (sin los 7-10 s del seco de Apps Script); si no,
+     Apps Script con el mismo cuerpo. */
+  _ordenPost({action:'piezasRecibir',proveedor:provEnvio,deposito:depEnvio||undefined,
       clientOpId:_opTanda,
-      piezas:envio.map(function(p){return {abbr:p.abbr,peso:p.peso,uid:p.uid};})})})
+      piezas:envio.map(function(p){return {abbr:p.abbr,peso:p.peso,uid:p.uid};})})
     .then(function(r){return r.json();})
-    /* Stock I4: aceptada como orden, se aplica ANTES de recargar las piezas. */
-    .then(function(d){ return _pfAplicar(d).then(function(){ return d; }); })
+    /* Stock I4: aceptada como orden, se aplica ANTES de recargar las piezas. Aceptada por la base, la pantalla
+       contesta YA y la recarga espera al aplicador por atras (`_pzTrasAplicar`). */
+    .then(_pzAplicarSegun)
     .then(function(d){
       terminar();
       if(d&&d.ok){
@@ -29802,8 +29806,7 @@ function stCarneGuardar(){
         toast('✓ '+cuantas+' pieza'+(cuantas===1?'':'s')+' · '
           +stFmt(sabeUid?kgOk:totKg,'kg')+' kg en '+(depNomEnvio||stCarneDepTxt())
           +(nMalas?' — '+nMalas+' no entr'+(nMalas===1?'ó':'aron')+' y siguen en la cola':''),nMalas?6000:3000);
-        stCarnePedir(true);
-        if(DEP_DATA&&typeof stDepPedir==='function')stDepPedir(true);
+        _pzTrasAplicar(d,function(){ stCarnePedir(true); if(DEP_DATA&&typeof stDepPedir==='function')stDepPedir(true); });
       } else {
         toast('No se pudo guardar: '+((d&&d.error)||'?')+' — lo pesado sigue acá',5000);
         renderStCarne();
@@ -29817,6 +29820,17 @@ function stCarneGuardar(){
         +'tocá Guardar de nuevo, no se carga dos veces.',6000);
       renderStCarne();
     });
+}
+
+/* (319) La orden que acepto la BASE (`directo:true`) no espera al aplicador: la pantalla contesta con lo que dijo la
+   base y la recarga de las piezas sale cuando el aplicador termino (antes traeria la lista sin lo nuevo y taparia lo
+   que se acaba de pintar). La que acepto Apps Script espera como siempre. */
+function _pzAplicarSegun(d){
+  if(d&&d.ok&&d.directo===true){ d.__ap=_pfAplicar(d); return d; }
+  return _pfAplicar(d).then(function(){ return d; });
+}
+function _pzTrasAplicar(d,fn){
+  if(d&&d.__ap)d.__ap.then(fn,fn); else fn();
 }
 
 /** Saca una pieza del freezer sin venderla: es la correccion de un peso mal
@@ -29856,11 +29870,11 @@ function _stCarneBajaMandar(id,motivo,tipo){
   var peso=pz?stFmt(pz.peso,'kg'):'';
   CARNE_BAJANDO[id]=true;
   renderStCarne();
-  fetch(API,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},
-    body:JSON.stringify({action:'piezasBaja',id:id,motivo:motivo,clientOpId:_pfId()})})
+  /* (319) Por `_ordenPost`: con PIEZAS_DIRECTO la acepta la base; si no, Apps Script. */
+  _ordenPost({action:'piezasBaja',id:id,motivo:motivo,clientOpId:_pfId()})
     .then(function(r){return r.json();})
-    /* Stock I4: aceptada como orden, se aplica ANTES de recargar las piezas. */
-    .then(function(d){ return _pfAplicar(d).then(function(){ return d; }); })
+    /* Stock I4: aceptada como orden, se aplica ANTES de recargar las piezas (o por atras, si la acepto la base). */
+    .then(_pzAplicarSegun)
     .then(function(d){
       delete CARNE_BAJANDO[id];
       if(d&&d.ok){
@@ -29871,8 +29885,7 @@ function _stCarneBajaMandar(id,motivo,tipo){
         renderStCarne();
         toast(d.yaEstaba?'Esa pieza ya no estaba en el freezer':(tipo==='merma'?'✓ Merma registrada: '+peso+' kg':'✓ Pieza de '+peso+' kg dada de baja'));
         if(tipo==='merma')_MERMAS_T=0;   /* el EERR la vuelve a pedir */
-        stCarnePedir(true);
-        if(DEP_DATA&&typeof stDepPedir==='function')stDepPedir(true);
+        _pzTrasAplicar(d,function(){ stCarnePedir(true); if(DEP_DATA&&typeof stDepPedir==='function')stDepPedir(true); });
       } else { renderStCarne(); toast('No se pudo: '+((d&&d.error)||'?'),4000); }
     })
     .catch(function(e){ delete CARNE_BAJANDO[id]; renderStCarne(); toast('No se pudo: '+e.message,4000); });
