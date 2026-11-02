@@ -131,6 +131,8 @@ var LEC_ARMA = {
   pendientesGuardarStock: { rpc: 'pendientes_guardar_pantalla', listas: { deposito: ['abbr'] }, orden: true, motor: 'pg' },
   /* (206) Catering › Cumpleaños: los clientes por telefono y en orden (los dias que faltan, el nombre). */
   cumplesCatering: { rpc: 'cumples_catering_pantalla', listas: { lista: ['tel'] }, orden: true },
+  /* (326) Las mermas del EERR (Piezas Carne en «Baja» con nota «Merma:…»): por su id. Corte, parte 1. */
+  mermas: { rpc: 'mermas_pantalla', listas: { mermas: ['id'] } },
   /* (139) Mi Portal › Vendedores (solo admin): los vendedores por nombre y en orden; sus pedidos
      por numero y en el orden de la hoja; las cuentas por id. */
   redPedidosAbiertos: { rpc: 'red_pedidos_abiertos_pantalla', listas: { vendedores: ['nombre'], pedidos: ['n'], cuentas: ['id'] }, orden: true },
