@@ -41,7 +41,7 @@ const COBROS = [
 const RPA = {
   ok: true, cobroACaja: true, cuentas: CUENTAS,
   vendedores: [
-    { nombre: 'Ana Rep', maleuLeDebe: 31958, pedidos: [
+    { nombre: 'Ana Rep', maleuLeDebe: 99999, pedidos: [
       { n: '901', row: 101, c: 'Cliente Efectivo', dia: '23/10/2026', es: 'Pendiente', ep: 'No Cobrado', fp: 'Efectivo', cobro: 160000, nueva: true, debe: 160000, leDebe: 24400 },
       /* 27/10/2026: efectivo, entregado y sin cobrar: lo cobra Maleu, no el representante. */
       { n: '905', row: 105, c: 'Clienta Efectivo Debe', dia: '20/10/2026', es: 'Entregado', ep: 'No Cobrado', fp: 'Efectivo', cobro: 50000, nueva: true, debe: 50000, leDebe: 7000 } ] },
@@ -65,7 +65,7 @@ function prep() {
       if(url.indexOf('action=redPedidosAbiertos')>-1)return R(${JSON.stringify(RPA)});
       if(url.indexOf('action=entregas')>-1)return R({ts:Date.now(),e:[],cuentas:${JSON.stringify(CUENTAS)}});
       return of.apply(this,arguments)};
-      window.confirm=function(){return true};window.alert=function(){};})();`;
+      window.RLQ_D={ok:true,activa:true,vendedores:[{nombre:'Ana Rep',aPagar:31958},{nombre:'Beto Rep',aPagar:0}]};window.confirm=function(){return true};window.alert=function(){};})();`;
 }
 const dormir = ms => new Promise(r => setTimeout(r, ms));
 async function esperar(cli, expr, ms) { const t0 = Date.now(); while (Date.now() - t0 < (ms || 15000)) { if (await evaluar(cli, expr)) return true; await dormir(200); } return false; }
@@ -102,7 +102,7 @@ async function esperar(cli, expr, ms) { const t0 = Date.now(); while (Date.now()
     chk(/#905/.test(T) && /Mensaje para Clienta/.test(await evaluar(cli, 'document.getElementById("rutCliVend").parentNode.textContent')), 'el efectivo entregado y sin cobrar lo cobra Maleu (lista de clientes, con su mensaje)');
     chk(!/Efectivo a Ana|Efectivo a Beto/.test(await evaluar(cli, 'document.getElementById("cobrosContent").innerHTML')), 'no ofrece «Efectivo a {representante}»');
     chk(/Ya transfirió: falta decir a qué cuenta/.test(T), 'la que ya transfirió pide la cuenta');
-    chk(/Maleu le paga \$\s?31\.958 en la quincena/.test(T), 'dice lo que Maleu le paga en la quincena', (T.match(/Maleu le paga[^)]*/) || [''])[0]);
+    chk(/Maleu le debe \$\s?31\.958 de su liquidación/.test(T) && !/99\.999/.test(T), 'lo que Maleu le debe sale de la liquidación, no de la regla vieja (2/11/2026)', (T.match(/Maleu le (paga|debe)[^)]*/) || [''])[0]);
     chk(/clientes? de Red tienen? que transferirte/.test(T), 'el aviso de arriba nombra lo que falta transferir');
 
     /* El botón copia el mensaje PARA EL CLIENTE, de Maleu, con el alias (27/10/2026). */
