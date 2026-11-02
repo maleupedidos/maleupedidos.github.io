@@ -10772,6 +10772,24 @@ function _npSaveCacheToLS(){
   try{localStorage.setItem(_NP_CLI_LS_KEY,JSON.stringify({ts:_npClientesCacheTs,list:_npClientesCache}));}catch(e){}
 }
 
+/* (corte, parte 1 — 2/11/2026) La lista de clientes sale de la BASE: la misma foto que usa la tab CRM
+   (`crm_foto_pantalla('crmClientes')`, la 151; admite la tab ruta), con la misma palanca CRM_BASE_ARMA (`crmArma`).
+   El «lite» de Apps Script era esa lista con menos campos: aca se usan los mismos. Sin palanca, sin sesion de la
+   base o si la base no contesta: Apps Script como siempre. */
+function _npClientesTraer(){
+  var apps=function(){return fetch(RUT_APPS_SCRIPT_URL+'?action=crmClientes&lite=1&t='+Date.now()).then(function(r){return r.json()});};
+  if(typeof _palancaVal!=='function'||typeof _sbPermiso!=='function'||_palancaVal('crmArma')!=='si')return apps();
+  return Promise.resolve(_sbPermiso(true)).then(function(sb){
+    if(!sb||!sb.token)throw new Error('sin sesion de la base');
+    return fetch(sb.url+'/rest/v1/rpc/crm_foto_pantalla',{method:'POST',
+      headers:{apikey:sb.key,Authorization:'Bearer '+sb.token,'Content-Type':'application/json'},body:JSON.stringify({p_screen:'crmClientes'})})
+      .then(function(r){if(!r.ok)throw new Error('la base contesto '+r.status);return r.json();});
+  }).then(function(d){
+    if(!d||!Array.isArray(d.clientes)||!d.clientes.length)throw new Error('la base vino vacia');
+    try{window.__npClientesDe='base';}catch(e){}
+    return d;
+  }).catch(function(){try{window.__npClientesDe='apps';}catch(e){}return apps();});
+}
 // Carga la lista de clientes desde el CRM. Estrategia:
 //  1) Hidrata de localStorage (instantáneo, sobrevive recargas).
 //  2) Si el cache en memoria es fresco (<30 min) y no se fuerza, no pega al backend.
@@ -10781,8 +10799,7 @@ function npFetchClientes(force){
   if(!force && _npClientesCache && (Date.now()-_npClientesCacheTs)<1800000)return;
   if(_npFetchingClientes)return; // ya hay un fetch en curso
   _npFetchingClientes=true;
-  fetch(RUT_APPS_SCRIPT_URL+'?action=crmClientes&lite=1&t='+Date.now())
-    .then(function(r){return r.json()})
+  _npClientesTraer()
     .then(function(data){
       var lista=(data&&data.clientes)||(Array.isArray(data)?data:[]);
       if(!lista.length)return; // respuesta vacía: conservo el cache viejo
