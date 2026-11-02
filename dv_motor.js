@@ -597,11 +597,17 @@ function _liqRedBonos_(hoy) {
     String(l.bonos || '').split(',').forEach(function (t) { t = t.trim(); if (t) pagados[t] = 1; });
   });
   var hoyD = aNum(hoy);
+  /* (334) Los PEDIDOS de Red desde el 1/10 que entraron con el telefono del propio representante: no cuentan para el
+     bono, y se dicen para que Tadeo le pida el del cliente. */
+  peds.forEach(function (p) {
+    if (p.h === 'Red' && p.vend && p.dia >= LIQ_RED_BONO_DESDE && telVend[p.vend] && telVend[p.vend] === p.tel)
+      out.propios[p.vend] = (out.propios[p.vend] || 0) + 1;
+  });
   Object.keys(porTel).forEach(function (tel) {
     var l = porTel[tel].sort(function (a, b) { return a.dia - b.dia || ((a.h !== 'Red') - (b.h !== 'Red')) || a.row - b.row; });
     var p1 = l[0];
     if (p1.h !== 'Red' || p1.trajo !== 'Vendedor' || p1.dia < LIQ_RED_BONO_DESDE || !p1.vend) return;
-    if (telVend[p1.vend] && telVend[p1.vend] === tel) { out.propios[p1.vend] = (out.propios[p1.vend] || 0) + 1; return; }
+    if (telVend[p1.vend] && telVend[p1.vend] === tel) return;
     var d1 = aNum(p1.dia), p2 = null;
     var resto = l.slice(1).filter(function (x) { var dx = aNum(x.dia); return dx >= d1 && dx <= d1 + 60; })
       .sort(function (a, b) { return a.dia - b.dia || a.row - b.row; });
