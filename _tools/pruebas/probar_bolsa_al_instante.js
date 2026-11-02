@@ -26,13 +26,17 @@ const EXTRA = `window.__posts=[]; window.__rechazar=false; window.__errores=[];
   window.addEventListener('error',function(e){window.__errores.push(String(e.message));});
   (function(){ var o=window.fetch; window.fetch=function(u,x){ var url=String((u&&u.url)||u||'');
     if(x&&String(x.method||'').toUpperCase()==='POST'){ var b={}; try{b=JSON.parse(x.body);}catch(e){} if(b&&b.p&&!b.action)b=Object.assign({__rpc:url.split('/rpc/')[1]},b.p); window.__posts.push(b);
-      var bolsa=b.action==='marcarEntregadoAVendedor';
+      var bolsa=b.action==='marcarEntregadoAVendedor', rep=b.action==='reprogramarEntrega';
       var r=(bolsa&&window.__rechazar)?{ok:false,sinReintento:true,err:'rechazada a propósito'}:{ok:true,n:(b.rows||[]).length};
-      return new Promise(function(res){ setTimeout(function(){ res(new Response(JSON.stringify(r),{status:200,headers:{'Content-Type':'application/json'}})); }, bolsa?${DEMORA}:0); }); }
+      /* (325) Reprogramar: la base contesta al toque; Apps Script, demorado (para ver si el loader aparece). */
+      if(rep)r={ok:true,directo:!!b.__rpc,movidos:(b.pedidos||[]).length,fecha:b.fecha,resultados:(b.pedidos||[]).map(function(p){return {ok:true,hoja:p.hoja,id:p.id};})};
+      if(rep&&b.__rpc&&window.__repNoDirecto)r={ok:false,directo:false,motivo:'pendiente'};
+      return new Promise(function(res){ setTimeout(function(){ res(new Response(JSON.stringify(r),{status:200,headers:{'Content-Type':'application/json'}})); }, (bolsa||(rep&&!b.__rpc))?${DEMORA}:0); }); }
     if(url.indexOf('action=entregas')>-1) return Promise.resolve(new Response(JSON.stringify({ts:Date.now(),e:${JSON.stringify(ENTREGAS)}}),{status:200,headers:{'Content-Type':'application/json'}}));
     if(url.indexOf('action=pendientesGuardarStock')>-1) return Promise.resolve(new Response('{"ok":true,"deposito":[],"pedidos":[]}',{status:200,headers:{'Content-Type':'application/json'}}));
     return o.apply(this,arguments); }; })();
   window.confirm=function(){return true;};
+  window.__palForzar={};setInterval(function(){try{var p=window._sbPerm&&window._sbPerm.pal;if(!p)return;Object.keys(window.__palForzar).forEach(function(k){p[k]=window.__palForzar[k];});}catch(e){}},200);
   try{ localStorage.removeItem('maleu_ruta'); }catch(e){}`;
 const HAY = `getSorted().some(function(x){return x&&x._redAgg&&/Vendedor Prueba/.test(x._vendedor||'');})`;
 const TOQUE = `new Promise(function(fin){
@@ -77,6 +81,19 @@ const BOLSAS = `JSON.stringify(__posts.filter(function(b){return b.action==='mar
   await evaluar(cli, TOQUE);
   chk('  se va al toque', !(await evaluar(cli, HAY)));
   chk('si el servidor la rechaza, la bolsa vuelve', await esperar(cli, HAY, DEMORA + 8000));
+  // (325) Reprogramar: los dos pedidos de hoy, a mañana. Con REPROG_DIRECTO va a la base y no tapa.
+  const man = new Date(hoyAR); man.setDate(man.getDate() + 1);
+  const REP = (noDir, espera) => evaluar(cli, `new Promise(function(fin){ __posts.length=0; window.__repNoDirecto=${noDir};
+    var el=document.getElementById('rutLoaderOverlay'), tapa=0, t0=performance.now();
+    var iv=setInterval(function(){ if(el&&el.classList.contains('visible')&&!tapa)tapa=Math.round(performance.now()-t0); },16);
+    _reprogAplicar('${iso(hoyAR)}','${iso(man)}');
+    setTimeout(function(){ clearInterval(iv); fin({p:__posts.filter(function(b){return b.action==='reprogramarEntrega';}).map(function(b){return (b.__rpc||'apps')+':'+b.clientOpId;}),tapa:tapa}); }, ${espera}); })`);
+  await evaluar(cli, `__rechazar=false; window.__palForzar.directas={marcarEntregadoAVendedor:true,reprogramarEntrega:true}; 1`); await pausa(500);
+  let rp = await REP(false, 1500);
+  chk('reprogramar con REPROG_DIRECTO: va a pedido_reprog_directo, NO a Apps Script, sin tapar', rp.p.length === 1 && /^pedido_reprog_directo:rep_/.test(rp.p[0]) && rp.tapa === 0, rp);
+  await evaluar(cli, `_rutFirma='';refresh(true,false); 1`); await pausa(1500);   // vuelven a estar hoy (la lista local los había movido)
+  rp = await REP(true, DEMORA + 1500);
+  chk('  directo:false: Apps Script con el MISMO clientOpId (y ahí sí el loader)', rp.p.length === 2 && rp.p[1] === 'apps:' + rp.p[0].split(':')[1] && rp.tapa >= 380, rp);
   chk('sin errores de JS', (await evaluar(cli, `JSON.stringify(window.__errores||[])`)) === '[]', await evaluar(cli, `JSON.stringify(window.__errores||[])`));
   console.log('\n' + ok + ' ok · ' + mal + ' mal');
   process.exit(mal ? 1 : 0);
