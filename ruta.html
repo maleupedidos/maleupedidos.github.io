@@ -4332,14 +4332,19 @@ function _reprogAplicar(dayKey,iso,ev){
   if(!confirm('Pasar al '+_isoLindo(iso)+':\n\n'+lista
     +'\n\nSi alguno YA se entrego, cancela y marca la entrega en vez de mover la fecha.'))return;
 
-  rutShowLoader('Cambiando la fecha de entrega\u2026');
+  /* (325, 2/11/2026) Primero la base (REPROG_DIRECTO); el loader reci\u00e9n si tarda m\u00e1s de 400 ms. Si no la acepta
+     directo, Apps Script con el MISMO clientOpId. */
+  var _ldT=setTimeout(function(){_ldT=null;rutShowLoader('Cambiando la fecha de entrega\u2026');},400);
   var payload={action:'reprogramarEntrega',fecha:iso,
     pedidos:ped.map(function(e){return {hoja:e.h,id:String(e.id),row:e.r};}),ts:Date.now()};
   payload.clientOpId='rep_'+Date.now().toString(36)+'_'+Math.random().toString(36).slice(2,10);
-  fetch(RUT_APPS_SCRIPT_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},
-    body:JSON.stringify(payload),redirect:'follow'})
-    .then(function(r){return r.json().catch(function(){return{ok:false}})})
+  _rutDirecta(payload).catch(function(){return null;})
+    .then(function(d){
+      return d?d:fetch(RUT_APPS_SCRIPT_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(payload),redirect:'follow'})
+        .then(function(r){return r.json().catch(function(){return{ok:false}})});
+    })
     .then(function(res){
+      if(_ldT){clearTimeout(_ldT);_ldT=null;}
       rutHideLoader(true);
       if(res&&res.ok){
         /* Optimista: se mueven en la lista local, asi el loader puede cerrarse
@@ -4366,6 +4371,7 @@ function _reprogAplicar(dayKey,iso,ev){
       }
     })
     .catch(function(){
+      if(_ldT){clearTimeout(_ldT);_ldT=null;}
       rutHideLoader(true);
       showToast('Sin conexion \u2014 la fecha no se cambio');
     });
@@ -4821,37 +4827,31 @@ function entregarAVendedor(keysCsv,dayKey,vendedorNombre,carneNoVa){
     if(!confirm(msg))return;
   }
   var rows=keys.map(function(k){var ent=findByKey(k);return ent?ent.r:0;}).filter(function(r){return r>=2});
-  rutShowLoader('Marcando entregado al representante...');
   // `dia` puede venir vacio, y desde RUTA viene vacio A PROPOSITO (11/9/2026):
   // con el dia el backend marca TODOS los pedidos Red de ese vendedor y ese dia,
   // tambien los que entraron despues de armar la bolsa, y los sacaria del freezer
   // sin que esten adentro. Se marcan las filas que se ven en la card.
   var payload={action:'marcarEntregadoAVendedor',rows:rows,dia:dayKey||'',vendedor:vendedorNombre||'',ts:Date.now()};
   if(carneNoVa&&carneNoVa.length)payload.carneNoVa=carneNoVa;
-  /* (284) Primero la base (BOLSA_DIRECTO); si no la acepta directo, Apps Script con el mismo `ts` (el mismo id). */
-  _rutDirecta(payload).catch(function(){return null;}).then(function(d){
-    return d?d:fetch(RUT_APPS_SCRIPT_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(payload),redirect:'follow'})
-      .then(function(r){return r.json().catch(function(){return{ok:false}})});
-  })
-    .then(function(res){
-      rutHideLoader(true);
-      if(res&&res.ok){
-        keys.forEach(function(k){var ent=findByKey(k);if(ent)entregados[k]=true});
-        saveLocal();rutRender();
-        showToast('Entregado a '+(vendedorNombre||'representante')+' ('+(res.n||rows.length)+' pedidos)'+(res.carnePendiente?' · '+res.carnePendiente+(res.carnePendiente===1?' pieza queda':' piezas quedan')+' en el freezer':''));
-        /* 4d (18/10/2026): la base acepto la bolsa y la planilla la escribe el
-           aplicador. Se lo empuja antes de refrescar, o la fila volveria atras. */
-        (res.diferida?fetch(RUT_APPS_SCRIPT_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({action:'pedidosFuenteAplicar'}),redirect:'follow'}).catch(function(){}):Promise.resolve()).then(function(){ if(isOnline)refresh(true,false); });
-      } else {
-        syncQueue.push(payload);saveLocal();processSyncQueue();
-        showToast('Sin conexion — se reintenta');
-      }
-    })
-    .catch(function(){
-      rutHideLoader(true);
-      syncQueue.push(payload);saveLocal();processSyncQueue();
-      showToast('Sin conexion — se reintenta');
-    });
+  /* AL INSTANTE (2/11/2026). Hasta hoy el loader tapaba la pantalla hasta que contestaba la base (o Apps Script).
+     Ahora la bolsa sale de Armado y Ruta al toque y la guarda la cola: primero la base (284, BOLSA_DIRECTO) y si
+     no la acepta directo, Apps Script, con el mismo `ts` (el mismo id: un reintento no marca dos veces). `__keys`
+     es para volverla atras si el servidor la rechaza (`_rutRechazar`); a la base no viaja (`_ordenDirecta` saca
+     lo que empieza con `__`). */
+  payload.__keys=keys.slice();
+  keys.forEach(function(k){var ent=findByKey(k);if(ent)entregados[k]=true});
+  syncQueue.push(payload);saveLocal();rutRender();_rutPintarBanner();
+  if(navigator.vibrate)navigator.vibrate(30);
+  var nCp=(carneNoVa&&carneNoVa.length)||0;
+  showToast('Entregado a '+(vendedorNombre||'representante')+' ('+rows.length+' pedido'+(rows.length===1?'':'s')+')'+(nCp?' · '+nCp+(nCp===1?' pieza queda':' piezas quedan')+' en el freezer':'')+' — guardando…');
+  processSyncQueue();
+}
+/* La bolsa que el servidor rechazo (5 intentos, o `sinReintento`): vuelve a Armado y Ruta. */
+function _bolsaRechazada(item){
+  if(!item||item.action!=='marcarEntregadoAVendedor')return;
+  (item.__keys||[]).forEach(function(k){delete entregados[k];});
+  saveLocal();
+  try{rutRender();}catch(e){}
 }
 
 /* ── LA CARNE QUE NO SALE CON LA BOLSA (16/10/2026) ──────────────────────
@@ -4904,11 +4904,17 @@ function _rutCarnePendHtml(){
 }
 function rutCarnePendDar(row,vend){
   if(!confirm('¿Ya le diste a '+(vend||'el representante')+' la carne que faltaba?'))return;
-  rutShowLoader('Marcando la carne…');
-  fetch(RUT_APPS_SCRIPT_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},
-    body:JSON.stringify({action:'entregarCarnePendiente',row:row,ts:Date.now()}),redirect:'follow'})
-    .then(function(r){return r.json().catch(function(){return{ok:false}})})
+  /* (323, 2/11/2026) Primero la base (CARNE_PEND_DIRECTO); el loader recién si tarda más de 400 ms. Si no la acepta
+     directo, Apps Script con el mismo `ts` (el mismo id de orden). */
+  var payload={action:'entregarCarnePendiente',row:row,ts:Date.now()};
+  var _ldT=setTimeout(function(){_ldT=null;rutShowLoader('Marcando la carne…');},400);
+  _rutDirecta(payload).catch(function(){return null;})
+    .then(function(d){
+      return d?d:fetch(RUT_APPS_SCRIPT_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(payload),redirect:'follow'})
+        .then(function(r){return r.json().catch(function(){return{ok:false}})});
+    })
     .then(function(res){
+      if(_ldT){clearTimeout(_ldT);_ldT=null;}
       rutHideLoader(true);
       if(res&&res.ok){
         rutCarnePend=(rutCarnePend||[]).filter(function(x){return Number(x.r)!==Number(row);});
@@ -4916,7 +4922,7 @@ function rutCarnePendDar(row,vend){
         (res.diferida?fetch(RUT_APPS_SCRIPT_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({action:'pedidosFuenteAplicar'}),redirect:'follow'}).catch(function(){}):Promise.resolve()).then(function(){ if(isOnline)refresh(true,false); });   /* 4d (18/10/2026) */
       } else showToast((res&&res.err)||'No se pudo. Probá de nuevo.');
     })
-    .catch(function(){ rutHideLoader(true); showToast('Sin conexión: probá de nuevo cuando vuelva'); });
+    .catch(function(){ if(_ldT){clearTimeout(_ldT);_ldT=null;} rutHideLoader(true); showToast('Sin conexión: probá de nuevo cuando vuelva'); });
 }
 
 /* ── «📥 LLEGÓ <proveedor>» (16/10/2026) ─────────────────────────────────
@@ -6843,10 +6849,15 @@ window.rutCerrarRendidos=function(vend){
     if(_rutCerrando){_rutCerrando='';rutHideLoader(true);
       showToast('Tardo demasiado. Toca ↻ para ver si entro — no lo cierres de nuevo.');}
   },45000);
-  fetch(RUT_APPS_SCRIPT_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},
-    body:JSON.stringify({action:'cerrarRendidosRed',vendedor:vend,
-      clientOpId:'crr_'+Date.now().toString(36)+'_'+Math.random().toString(36).slice(2,10)})})
-    .then(function(r){return r.json()})
+  /* (324, 2/11/2026) Primero la base (CERRAR_RENDIDOS_DIRECTO): sin los ~15 s de Apps Script recorriendo la hoja Red. El
+     loader sigue tapando hasta que vuelve el refresh, a proposito (ver arriba). Si no la acepta directo, Apps Script con
+     el MISMO clientOpId. */
+  var _crrBody={action:'cerrarRendidosRed',vendedor:vend,clientOpId:'crr_'+Date.now().toString(36)+'_'+Math.random().toString(36).slice(2,10)};
+  _rutDirecta(_crrBody).catch(function(){return null;})
+    .then(function(dd){
+      return dd?dd:fetch(RUT_APPS_SCRIPT_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(_crrBody)})
+        .then(function(r){return r.json()});
+    })
     .then(function(d){
       clearTimeout(_safety);
       if(!d||d.ok===false)throw new Error((d&&(d.err||d.error))||'no se pudo');
@@ -10343,14 +10354,22 @@ function cobrarVendedorRed(vendedor,ef,tr,esTotal,cuenta,quien){
   // Offline real → encolar. Online → FETCH DIRECTO endurecido (NO syncQueue: en el
   // iframe del Panel la cola se trababa y el cobro nunca se mandaba, sin avisar).
   if(!isOnline){ syncQueue.push(payload);saveLocal();showToast('Cobrado offline — se sincroniza al volver señal');return; }
-  rutShowLoader('Cobrando a '+vendedorLimpio.split(' ')[0]+'...');
+  /* (322, 2/11/2026) Primero la base (RENDICION_DIRECTO): contesta en ~0,1-0,3 s, asi que el loader solo aparece si
+     tarda mas de 400 ms (Apps Script). Si no la acepta directo (palanca, algo de Red pendiente, sin permiso), Apps
+     Script con el MISMO clientOpId: si la base ya la habia aceptado, no se registra dos veces. */
+  var _ldT=setTimeout(function(){_ldT=null;rutShowLoader('Cobrando a '+vendedorLimpio.split(' ')[0]+'...');},400);
   var _ab=(typeof AbortController!=='undefined')?new AbortController():null;
   var _t=setTimeout(function(){if(_ab)_ab.abort();},15000);
   var _fopts={method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(payload),redirect:'follow'};
   if(_ab)_fopts.signal=_ab.signal;
-  fetch(RUT_APPS_SCRIPT_URL,_fopts)
-    .then(function(rs){clearTimeout(_t);return rs.json().catch(function(){return{ok:false,error:'InvalidJSON'};});})
+  _rutDirecta(payload,_ab).catch(function(){return null;})
+    .then(function(d){
+      if(d){clearTimeout(_t);return d;}
+      return fetch(RUT_APPS_SCRIPT_URL,_fopts)
+        .then(function(rs){clearTimeout(_t);return rs.json().catch(function(){return{ok:false,error:'InvalidJSON'};});});
+    })
     .then(function(res){
+      if(_ldT){clearTimeout(_ldT);_ldT=null;}
       rutHideLoader(true);
       var corto=vendedorLimpio.split(' ')[0];
       if(res&&res.ok){
@@ -10383,6 +10402,7 @@ function cobrarVendedorRed(vendedor,ef,tr,esTotal,cuenta,quien){
       } else { _revert(); alert('❌ Error al cobrar a '+vendedorLimpio+'\n\n'+((res&&(res.err||res.error))||'sin respuesta del servidor')+'\n\nNada se modificó. Probá de nuevo.'); }
     })
     .catch(function(err){
+      if(_ldT){clearTimeout(_ldT);_ldT=null;}
       clearTimeout(_t);rutHideLoader(true);_revert();
       var aborted=err&&err.name==='AbortError';
       showToast(aborted?'❌ Timeout (15s) — probá de nuevo':'❌ Sin respuesta — '+((err&&err.message)||'error'));
@@ -10445,6 +10465,7 @@ function _rutRechazoTxt(it){
 function _rutRechazar(item,motivo,por){
   var it=Object.assign({},item);delete it.__attempts;
   if(item&&item.action==='cobrarParcial'){ try{ _parcRechazado(item); }catch(eP){} }
+  try{ _bolsaRechazada(item); }catch(eB){}
   /* (31/10/2026) Una descarga rechazada: el auto vuelve a mostrar lo que tenía. */
   if(item&&item.action==='marcarGuardadoEnStock'){ try{ fetchPendientesGuardarStock(true); }catch(eR){} }
   var r={item:it,motivo:String(motivo||'sin motivo'),por:por||'rechazo',t:Date.now()};
@@ -10652,6 +10673,7 @@ function processSyncQueue(){
           syncQueue.shift();
           if(item&&item.action==='marcarGuardadoEnStock'){ try{ fetchPendientesGuardarStock(true); }catch(eR){} }
           if(item&&item.action==='cobrarParcial'){ try{ _parcRechazado(item); }catch(eP){} }
+          try{ _bolsaRechazada(item); }catch(eB){}
           /* Una fecha de cobro que el backend no acepto (13/10/2026): el pedido
              NO quedo cobrado. Se saca la marca local y se vuelve a pedir Cobros. */
           if(res.fechaInvalida&&item){

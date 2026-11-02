@@ -69,7 +69,9 @@ const PANEL = {
   pedidoDecidir: ['pedido_decidir_directo', { hoja: 'Home', id: '999258', row: 0, decision: 'nosotros' }],
   cobroFecha: ['pedido_cobro_fecha_directo', { hoja: 'Home', id: '999258', row: 0, fecha: '27/10/2026' }],
   marcarEntregadoAVendedor: ['red_bolsa_directo', { rows: [999999], vendedor: 'Prueba' }],
-  noSeCobro: ['pedido_no_se_cobro_directo', { hoja: 'Home', id: '999258', row: 0, abbr: 'PRUEBA', motivo: 'prueba' }] };
+  noSeCobro: ['pedido_no_se_cobro_directo', { hoja: 'Home', id: '999258', row: 0, abbr: 'PRUEBA', motivo: 'prueba' }],
+  /* (322) Caja › «Recibí de un vendedor» */
+  cobrarVendedorRed: ['red_cobro_directo', { vendedor: 'Vendedor Prueba', ef: 1, tr: 0, cuenta: '', quien: '' }] };
 (async () => {
   const cli = await cdp.abrir();
   await cli.enviar('Page.addScriptToEvaluateOnNewDocument', { source: prep(TOKEN, capa) });
