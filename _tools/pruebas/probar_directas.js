@@ -25,7 +25,7 @@ const capa = `;(function(){var o=window.fetch;window.__envios=[];window.__base=[
     var d=r==='nodirecto'?{ok:false,directo:false,motivo:'datos'}:r==='freno'?{ok:false,necesitaPlata:true,sinReintento:true,cobrado:1500,err:'El pedido está cobrado'}
       :{ok:true,aceptada:true,directo:true,orden:1,diferida:r==='ok',repetida:r==='aplicada'};
     return Promise.resolve(new Response(JSON.stringify(d),{status:200,headers:{'Content-Type':'application/json'}}));}
-  if(/"action":"(marcarCobrado|marcarEntregado|pedidoGrupal|descobrar|updateDiaEntrega|pedidoDeposito|deshacerOrigen|deshacerEntrega|cambiarEstadoEntrega|cancelarPedido|updatePedidoRed|pasarAVendedor|gasto|ingreso|marcarArmado|pagarProveedor|borrarMovimientoCaja|marcarOC|compraManual|setOrigenProductos|redTrajoCliente|redReclamar|redReclamoDecidir|crmUpdateClienteMeta|crmDeleteInteraccion|crmLeadDelete|pedidoDecidir|cobroFecha|marcarEntregadoAVendedor|noSeCobro)"/.test(b)){var q=JSON.parse(b);window.__envios.push({a:'apps',acc:q.action,id:q.clientOpId||'',ts:q.ts||0});
+  if(/"action":"(marcarCobrado|marcarEntregado|pedidoGrupal|descobrar|updateDiaEntrega|pedidoDeposito|deshacerOrigen|deshacerEntrega|cambiarEstadoEntrega|cancelarPedido|updatePedidoRed|pasarAVendedor|gasto|ingreso|marcarArmado|pagarProveedor|borrarMovimientoCaja|marcarOC|compraManual|setOrigenProductos|redTrajoCliente|redReclamar|redReclamoDecidir|crmUpdateClienteMeta|crmDeleteInteraccion|crmLeadDelete|crmCampaniaConfirmar|pedidoDecidir|cobroFecha|marcarEntregadoAVendedor|noSeCobro)"/.test(b)){var q=JSON.parse(b);window.__envios.push({a:'apps',acc:q.action,id:q.clientOpId||'',ts:q.ts||0,nd:q._noDirecto||''});
     /* Plata de prueba: nunca a Apps Script de verdad. */
     if(q.action==='pagarProveedor'||q.action==='borrarMovimientoCaja'||q.action==='marcarOC'||q.action==='compraManual'||q.action==='setOrigenProductos'||/^red(TrajoCliente|Reclamar|ReclamoDecidir)$/.test(q.action)||/^crm(UpdateClienteMeta|DeleteInteraccion|LeadDelete)$/.test(q.action)||/^(pedidoDecidir|cobroFecha|marcarEntregadoAVendedor|noSeCobro)$/.test(q.action))return Promise.resolve(new Response('{"ok":true,"prueba":true}',{status:200,headers:{'Content-Type':'application/json'}}));}
   if(b.indexOf('pedidosFuenteAplicar')>=0)window.__envios.push({a:'aplicar'});
@@ -146,6 +146,16 @@ const PANEL = {
   chk('   la base contesta directo:false: Apps Script con el MISMO clientOpId', bc2 && ac2 && ac2.acc === 'crmDeleteInteraccion' && bc2.id === ac2.id, e);
   await pal({}); e = await crm('ok');
   chk('   apagada: Apps Script y NO la base', e.some((x) => x.a === 'apps' && x.acc === 'crmDeleteInteraccion') && !e.some((x) => x.a === 'base'), e);
+  /* (328) Confirmar una lista de campaña, por el mismo interceptor del CRM. */
+  const conf = (r) => ev(cli, `window.__envios=[]; window.__base=['${r}']; fetch(API,{method:'POST',body:JSON.stringify({action:'crmCampaniaConfirmar',lote:'1700000000000',mandada:true})})
+    .then(function(x){return x.json();}).then(function(){return 1;},function(){return 1;})`).then(() => pausa(1500)).then(envs);
+  await pal({ crmCampaniaConfirmar: true }); e = await conf('ok');
+  chk('CRM, confirmar una lista con CAMPANIA_CONF_DIRECTO: va a crm_campania_confirmar_directo (con su clientOpId), NO a Apps Script',
+    e.filter((x) => x.a === 'base' && x.fn === 'crm_campania_confirmar_directo' && /^crm_/.test(x.id) && !x.token).length === 1 && !e.some((x) => x.a === 'apps'), e);
+  e = await conf('nodirecto'); const bq = e.find((x) => x.a === 'base'), aq = e.find((x) => x.a === 'apps');
+  chk('   la base contesta directo:false: Apps Script con el MISMO clientOpId y el motivo (_noDirecto = base:datos)', bq && aq && aq.acc === 'crmCampaniaConfirmar' && bq.id === aq.id && aq.nd === 'base:datos', e);
+  await pal({}); e = await conf('ok');
+  chk('   apagada: Apps Script y NO la base', e.some((x) => x.a === 'apps' && x.acc === 'crmCampaniaConfirmar') && !e.some((x) => x.a === 'base'), e);
   /* (283) El 📅 del libro de Caja de verdad sale por _ordenPost; (284) la bolsa de Ruta, por _rutDirecta. */
   await pal({ cobroFecha: true });
   e = await ev(cli, `window.__envios=[]; window.__base=['nodirecto']; _ordenPost({action:'cobroFecha',hoja:'Home',id:'999258',row:0,fecha:'27/10/2026',clientOpId:'cf-prueba-'+Date.now()}).then(function(r){return r.json();}).then(function(){return 1;})`).then(() => pausa(800)).then(envs);
