@@ -22,6 +22,8 @@ const pausa = ms => new Promise(r => setTimeout(r, ms));
     for (let i = 0; i < 90; i++) { await pausa(1000); if (await cdp.evaluar(cli, 'typeof go==="function"&&!!(window.D&&D.movimientos&&D.movimientos.length)')) break; }
     await cdp.evaluar(cli, 'go("caja")');
     for (let i = 0; i < 60; i++) { await pausa(1000); if (await cdp.evaluar(cli, '!!document.querySelector("#gList")&&document.querySelector("#gList").innerText.length>20')) break; }
+    /* (2/11/2026) Ningun toque de Caja tapa la pantalla: se cuenta cada showLoader desde aca. */
+    await cdp.evaluar(cli, 'window.__loaders=[];(function(){var s=window.showLoader;window.showLoader=function(m){window.__loaders.push(String(m||""));return s.apply(this,arguments);};})();true');
     const CON = 'PRUEBA Backend no se guarda ' + Date.now();
     const antes = await cdp.evaluar(cli, 'D.caja.gastosMP||0');
     const t = await cdp.evaluar(cli, `(function(){
@@ -67,6 +69,25 @@ const pausa = ms => new Promise(r => setTimeout(r, ms));
     chk('Contar: el saldo nuevo de MP queda en pantalla ($' + aj.mpN + ')', Math.round(aj.sb) === aj.mpN, aj);
     const aj2 = await cdp.evaluar(cli, `actualizarCaja().then(function(){return {sb:D.saldoBase&&D.saldoBase.mp, calc:Math.round(_calcSaldo().mp)};})`);
     chk('   tocando Actualizar (la base trae el saldo viejo) no vuelve atras', Math.round(aj2.sb) === aj.mpN, aj2);
+    /* Un gasto con fecha de AYER tambien va al instante (antes esperaba con el loader). */
+    const CON2 = 'PRUEBA ayer ' + Date.now();
+    const ay = await cdp.evaluar(cli, `(function(){
+      var d=new Date(Date.now()-86400000), f=String(d.getDate()).padStart(2,'0')+'/'+String(d.getMonth()+1).padStart(2,'0')+'/'+d.getFullYear();
+      $('gFecha').value=f; $('gCat').value='Otro'; $('gCon').value=${JSON.stringify(CON2)}; $('gEf').value=''; $('gMP').value='777';
+      var t0=performance.now(), b=$('gBtn'); b.form.requestSubmit?b.form.requestSubmit(b):b.click();
+      return new Promise(function(r){ var i=setInterval(function(){ if((D.movimientos||[]).some(function(m){return m.con===${JSON.stringify(CON2)};})){clearInterval(i);r(Math.round(performance.now()-t0));} },20); setTimeout(function(){clearInterval(i);r(-1);},4000); });
+    })()`);
+    chk('un gasto con fecha de ayer tambien entra al instante (' + ay + ' ms)', ay >= 0 && ay < 1500, ay);
+    /* INVERTIR al instante: MP del conteo baja $1.000 e Inversiones sube $1.000 al toque. */
+    const iv = await cdp.evaluar(cli, `(function(){
+      var mp0=Number(D.saldoBase.mp)||0, inv0=Number(D.saldoBase.inv)||0;
+      toggleInvertir(); setInvDir('invertir'); $('invMonto').value='1000'; guardarInvertir();
+      return {d_mp:Math.round((Number(D.saldoBase.mp)||0)-mp0), d_inv:Math.round((Number(D.saldoBase.inv)||0)-inv0)};
+    })()`);
+    chk('Invertir: MP -$1.000 e Inversiones +$1.000 al toque', iv.d_mp === -1000 && iv.d_inv === 1000, iv);
+    await pausa(3000);
+    const lds = await cdp.evaluar(cli, 'window.__loaders');
+    chk('ningun toque de Caja mostro el loader de pantalla completa', !lds.length, lds);
     const err = await cdp.evaluar(cli, 'window.__err');
     chk('sin errores en la consola', !err.length, err.slice(0, 5));
   } finally { cli.matar(); }
