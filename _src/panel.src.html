@@ -16745,18 +16745,26 @@ function pasarVendGuardar(uid){
   var t=String((box.querySelector('[data-role=t]')||{}).value||'Maleu');
   if(!v){toast('Elegí el representante');return;}
   if(!confirm('¿Pasar el pedido de '+(box.dataset.c||'')+' a '+v+'?\n\nSe crea en Red, le avisamos y este pedido se cancela.'))return;
-  box._enviando=true;showLoader('Pasando el pedido a '+v.split(' ')[0]+'...');
+  box._enviando=true;
+  /* AL TOQUE (2/11/2026). El pedido queda Cancelado con «Pasado a Red (…)» en el mismo toque y se cierra el detalle; el
+     de Red aparece con la recarga. Si el backend no lo pasa, vuelve como estaba y avisa. */
+  var _h=box.dataset.h,_n=box.dataset.n,_pA=null;
+  (D&&D.pedidos||[]).some(function(x){ if(x&&x.h===_h&&String(x.n)===String(_n)){_pA={es:x.es,pas:x.pas||''};return true;} return false; });
+  _patchPedidoLocal(_h,_n,{es:'Cancelado',pas:'Pasado a Red (' + v + ')'});
+  render();
+  try{if(typeof closeOrdDetail==='function')closeOrdDetail();}catch(e){}
+  toast('Pasando el pedido a '+v.split(' ')[0]+'… — guardando',4000);
+  var _volverPase=function(msg){ box._enviando=false; if(_pA){_patchPedidoLocal(_h,_n,_pA);render();} toast(msg,6000); };
   _ordenPost({action:'pasarAVendedor',hoja:box.dataset.h,id:box.dataset.n,row:Number(box.dataset.r)||0,al:box.dataset.al||'',vendedor:v,trajo:t,
     clientOpId:'pav_'+Date.now()+'_'+Math.random().toString(36).slice(2,8)})
     .then(function(r){return r.json();})
     .then(function(r){
-      box._enviando=false;hideLoader(true);
-      if(!r.ok){toast('No se pasó: '+(r.err||'?'),5000);return;}
+      box._enviando=false;
+      if(!r.ok){_volverPase('No se pasó: '+(r.err||'?')+'. Quedó como estaba.');return;}
       toast('✓ Ahora es '+(r.red&&r.red.n?'Red #'+r.red.n:'de Red')+', de '+String(r.vendedor||'').split(' ')[0]+(r.ocMovidas?' · '+r.ocMovidas+' OC':'')+(r.piezasMovidas?' · '+r.piezasMovidas+' pieza'+(r.piezasMovidas===1?'':'s'):''),5000);
-      try{if(typeof closeOrdDetail==='function')closeOrdDetail();}catch(e){}
       _pfAplicar(r).then(function(){ _recargarPedidos(); });   /* 4d (18/10/2026) */
     })
-    .catch(function(){box._enviando=false;hideLoader(true);toast('No se pudo pasar. Reintentá: no se duplica.');});
+    .catch(function(){_volverPase('No pude confirmar el pase. Quedó como estaba: reintentá, no se duplica.');_recargarPedidos();});
 }
 /* La comision fuera de escala de un pedido de Red (2/10/2026). Solo admin: el
    backend lo vuelve a chequear. */
@@ -37633,16 +37641,20 @@ if('serviceWorker' in navigator){
     if(!confirm((telActual?'Cambiar el tel\u00e9fono de ':'Guardarle el tel\u00e9fono a ')+quien+':\n\n'+
                 (telActual?telActual+'  \u2192  '+limpio:limpio)+
                 '\n\nSe escribe en todos sus pedidos y se le engancha el historial del CRM.'))return;
-    showLoader('Guardando el tel\u00e9fono...');
     var _rowTel=(_ordAbierto&&_ordAbierto.h===hoja&&String(_ordAbierto.n)===String(n))?(Number(_ordAbierto.r)||0):0;
+    /* AL TOQUE (2/11/2026): el telefono se ve ya en la ficha; si el backend no lo guarda, vuelve el de antes. */
+    var _telAntes={};
+    if(D&&D.pedidos)D.pedidos.forEach(function(p){ if(p&&p.h===hoja&&String(p.n)===String(n)){ _telAntes[p.h+'|'+p.n]=p.tel; p.tel=limpio; _pedMarcar(p,'telefono'); } });
+    try{ openOrdDetail(hoja,String(n),_rowTel); }catch(eT){}
+    toast('Guardando el tel\u00e9fono\u2026');
+    var _telVolver=function(msg){ if(D&&D.pedidos)D.pedidos.forEach(function(p){ var k=p&&(p.h+'|'+p.n); if(k&&(k in _telAntes)){p.tel=_telAntes[k];_pedMarcar(p,'telefono');} }); try{ openOrdDetail(hoja,String(n),_rowTel); }catch(eT2){} toast(msg,6000); };
     fetch(API,{method:'POST',body:JSON.stringify({action:'crmTelDesdePedido',hoja:hoja,n:String(n),row:_rowTel,telNuevo:limpio,ts:Date.now(),clientOpId:_pfId()})})
       .then(function(r){return r.json();})
       /* Con `diferida` (4d-2) la planilla se escribe despues: se espera al
          aplicador antes de reabrir la ficha y recargar. */
       .then(function(d){return _pfAplicar(d).then(function(){return d;});})
       .then(function(d){
-        hideLoader(true);
-        if(!d||!d.ok){toast('\u274c '+((d&&d.error)||'no se pudo guardar'));return;}
+        if(!d||!d.ok){_telVolver('\u274c '+((d&&d.error)||'no se pudo guardar')+'. Qued\u00f3 el de antes.');return;}
         toast('Tel\u00e9fono guardado en '+(d.totalFilas||0)+' pedido'+((d.totalFilas===1)?'':'s'));
         /* Al toque en la copia local, para no esperar los 20s del volcado. */
         if(D&&D.pedidos){
@@ -37654,7 +37666,7 @@ if('serviceWorker' in navigator){
         openOrdDetail(hoja,String(n),_rowTel);
         _recargarPedidos();
       })
-      .catch(function(){hideLoader(true);toast('Sin conexi\u00f3n \u2014 no se guard\u00f3');});
+      .catch(function(){_telVolver('No pude confirmar el tel\u00e9fono. Qued\u00f3 el de antes: volv\u00e9 a intentar.');_recargarPedidos();});
   };
   window.closeOrdDetail=function(){
     document.getElementById('ordBg').classList.remove('open');
