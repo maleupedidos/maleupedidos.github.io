@@ -490,12 +490,113 @@ function _cfgFilasConfig_() {
   var c = null, j = null;
   try { c = CacheService.getScriptCache(); j = JSON.parse(c.get('cfg_filas') || 'null'); } catch (e) { j = null; }
   if (!j || !j.f) {
-    var sh = SS.getSheetByName('Config_Maleu'), f = [];
-    if (sh && sh.getLastRow() > 1) f = sh.getRange(1, 1, sh.getLastRow(), 2).getValues();
-    j = { t: Date.now(), f: f };
+    /* (350) DE DONDE SE LEEN LAS PALANCAS: CFG_FUENTE_PG. no = la hoja · medir = la hoja, comparada con la base · si = la
+       base (la hoja si la base no contesta). La decide la fuente de la vuelta anterior (`CFG_FUENTE_ULT`): si venia de la
+       hoja, la dice la hoja, y en «no» no se va a la base (ni una llamada de mas); si venia de la base, la dice la base, y
+       asi se apaga desde la base sin leer la hoja. Los secretos la base no los tiene: salen de las propiedades, que se
+       llenan cada vez que se lee la hoja. */
+    var props = null; try { props = PropertiesService.getScriptProperties(); } catch (eP) {}
+    var ult = props ? String(props.getProperty('CFG_FUENTE_ULT') || '') : '', base = null, modo = 'no', f = null, src = 'hoja';
+    if (ult === 'base') {
+      base = _cfgFilasBase_();
+      modo = base ? _cfgModoEn_(base, 'CFG_FUENTE_PG') : 'no';
+      if (modo === 'si') { f = _cfgConSecretos_(base); if (f) src = 'base'; }
+    }
+    if (!f) {
+      var sh = SS.getSheetByName('Config_Maleu');
+      f = [];
+      if (sh && sh.getLastRow() > 1) f = sh.getRange(1, 1, sh.getLastRow(), 2).getValues();
+      _cfgGuardarSecretos_(f);
+      if (ult !== 'base' || !base) {
+        modo = _cfgModoEn_(f, 'CFG_FUENTE_PG');
+        if (modo !== 'no') base = base || _cfgFilasBase_();
+        /* La hoja dice «si»: esta vuelta ya leyo la hoja y le sirve; la proxima va a la base. */
+        if (modo === 'si' && base) src = 'hoja→base';
+      }
+    }
+    /* Se escribe solo cuando cambia (de la hoja a la base o al reves): en «no» no se toca nada. */
+    try { if (props && (src === 'hoja' ? ult === 'base' : ult !== 'base')) props.setProperty('CFG_FUENTE_ULT', src === 'hoja' ? 'hoja' : 'base'); } catch (eU) {}
+    j = { t: Date.now(), f: f, src: src };
     try { if (c && f.length) c.put('cfg_filas', JSON.stringify(j), 300); } catch (e2) {}
+    /* Despues de guardar la cache: la alerta lee palancas, y sin la cache volveria a entrar aca. */
+    if (modo === 'medir' && src === 'hoja' && f.length && base) _cfgMedirBase_(f, base);
   }
   return j.f;
+}
+
+function _cfgFilasBase_() {
+  try {
+    var cfg = _crmPgConfig_();
+    if (!cfg.enabled) return null;
+    var rs = UrlFetchApp.fetch(cfg.url + '/rest/v1/rpc/config_filas', { method: 'post', contentType: 'application/json',
+      headers: { apikey: cfg.key, Authorization: 'Bearer ' + cfg.key }, payload: '{}', muteHttpExceptions: true });
+    if (rs.getResponseCode() >= 300) return null;
+    var f = JSON.parse(rs.getContentText() || 'null');
+    /* Solo la forma de `config_filas`: una lista de pares que arranca con el encabezado. Cualquier otra cosa (un error,
+       un objeto, una respuesta de otro lado) no son palancas: null, y se lee la hoja. */
+    if (!Array.isArray(f) || f.length < 2 || !Array.isArray(f[0]) || f[0][0] !== 'Parámetro' || f[0][1] !== 'Valor') return null;
+    for (var i = 1; i < f.length; i++) if (!Array.isArray(f[i]) || f[i].length !== 2 || typeof f[i][0] !== 'string') return null;
+    return f;
+  } catch (e) { return null; }
+}
+
+function _cfgModoEn_(filas, clave) {
+  for (var i = 0; i < filas.length; i++) {
+    if (String(filas[i][0] == null ? '' : filas[i][0]).trim().toUpperCase() !== clave) continue;
+    var v = String(filas[i][1] == null ? '' : filas[i][1]).trim().toLowerCase();
+    return (v === 'si' || v === 'sí') ? 'si' : (v === 'medir' ? 'medir' : 'no');
+  }
+  return 'no';
+}
+
+function _cfgGuardarSecretos_(filas) {
+  try {
+    var p = PropertiesService.getScriptProperties(), vistos = {};
+    for (var i = 0; i < filas.length; i++) {
+      var k = String(filas[i][0] == null ? '' : filas[i][0]).trim().toUpperCase();
+      if (!k || vistos[k] || !_ajSecreto_(k)) continue;
+      vistos[k] = 1;
+      var v = String(filas[i][1] == null ? '' : filas[i][1]);
+      if (p.getProperty('CFG_SECRETO_' + k) !== v) p.setProperty('CFG_SECRETO_' + k, v);
+    }
+  } catch (e) {}
+}
+
+function _cfgConSecretos_(filas) {
+  try {
+    var p = PropertiesService.getScriptProperties(), out = [];
+    for (var i = 0; i < filas.length; i++) {
+      var k = String(filas[i][0] == null ? '' : filas[i][0]).trim().toUpperCase(), v = filas[i][1];
+      if (i > 0 && _ajSecreto_(k)) { v = p.getProperty('CFG_SECRETO_' + k); if (v == null) return null; }
+      out.push([filas[i][0], v]);
+    }
+    return out;
+  } catch (e) { return null; }
+}
+
+function _cfgDiferencias_(hoja, base) {
+  var t = function (x) { return x instanceof Date ? String(x.getTime()) : String(x == null ? '' : x).trim(); }, dif = [];
+  var n = Math.max(hoja.length, base.length);
+  for (var i = 1; i < n && dif.length < 20; i++) {
+    var h = hoja[i] || ['', ''], b = base[i] || ['', ''], k = t(h[0]);
+    if (k.toUpperCase() !== t(b[0]).toUpperCase()) { dif.push('fila ' + (i + 1) + ' · hoja: ' + k + ' · base: ' + t(b[0])); continue; }
+    if (_ajSecreto_(k)) continue;
+    if (t(h[1]) !== t(b[1])) dif.push('fila ' + (i + 1) + ' ' + k + ' · hoja: ' + t(h[1]) + ' · base: ' + t(b[1]));
+  }
+  return dif;
+}
+
+function _cfgMedirBase_(hoja, base) {
+  try {
+    if (!base) return;
+    var dif = _cfgDiferencias_(hoja, base), p = PropertiesService.getScriptProperties();
+    var hoy = Utilities.formatDate(new Date(), 'America/Argentina/Buenos_Aires', 'yyyy-MM-dd'), k = dif.length ? 'CFG_MEDIR_DIST' : 'CFG_MEDIR_IGUAL';
+    var ult = p.getProperty(k) || '';
+    if (dif.length ? (Date.now() - (Number(ult) || 0) < 3600000) : ult === hoy) return;
+    p.setProperty(k, dif.length ? String(Date.now()) : hoy);
+    _alertaTecnica_('palancas de la base', dif.length ? 'Las palancas de la base dieron DISTINTO (' + dif.length + (dif.length === 20 ? ' o más' : '') + ')'
+      : 'Las palancas de la base dieron IGUAL (' + (hoja.length - 1) + ' filas)', dif, !dif.length);
+  } catch (e) {}
 }
 
 var _CFG_MEMO_ = null;
@@ -539,6 +640,10 @@ function _catPorAbbr_() {
     try { CacheService.getScriptCache().put('prodcat_abbr_v1', JSON.stringify(out), 300); } catch (e2) {}
   } catch (e3) { return {}; }
   return out;
+}
+
+function _ajSecreto_(param){
+  return ({ AVISOS_TG_TOKEN: 1, CRM_PG_SECRET_KEY: 1, GH_CRUCE_TOKEN: 1, GH_CRUCE_TOKEN_EL: 1, WATI_TOKEN: 1, WATI_API_KEY: 1, TELEGRAM_BOT_TOKEN: 1 })[String(param||'').trim().toUpperCase()] === 1;
 }
 
 

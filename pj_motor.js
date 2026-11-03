@@ -1164,10 +1164,36 @@ function _cfgFilasConfig_() {
   var c = null, j = null;
   try { c = CacheService.getScriptCache(); j = JSON.parse(c.get('cfg_filas') || 'null'); } catch (e) { j = null; }
   if (!j || !j.f) {
-    var sh = SS.getSheetByName('Config_Maleu'), f = [];
-    if (sh && sh.getLastRow() > 1) f = sh.getRange(1, 1, sh.getLastRow(), 2).getValues();
-    j = { t: Date.now(), f: f };
+    /* (350) DE DONDE SE LEEN LAS PALANCAS: CFG_FUENTE_PG. no = la hoja · medir = la hoja, comparada con la base · si = la
+       base (la hoja si la base no contesta). La decide la fuente de la vuelta anterior (`CFG_FUENTE_ULT`): si venia de la
+       hoja, la dice la hoja, y en «no» no se va a la base (ni una llamada de mas); si venia de la base, la dice la base, y
+       asi se apaga desde la base sin leer la hoja. Los secretos la base no los tiene: salen de las propiedades, que se
+       llenan cada vez que se lee la hoja. */
+    var props = null; try { props = PropertiesService.getScriptProperties(); } catch (eP) {}
+    var ult = props ? String(props.getProperty('CFG_FUENTE_ULT') || '') : '', base = null, modo = 'no', f = null, src = 'hoja';
+    if (ult === 'base') {
+      base = _cfgFilasBase_();
+      modo = base ? _cfgModoEn_(base, 'CFG_FUENTE_PG') : 'no';
+      if (modo === 'si') { f = _cfgConSecretos_(base); if (f) src = 'base'; }
+    }
+    if (!f) {
+      var sh = SS.getSheetByName('Config_Maleu');
+      f = [];
+      if (sh && sh.getLastRow() > 1) f = sh.getRange(1, 1, sh.getLastRow(), 2).getValues();
+      _cfgGuardarSecretos_(f);
+      if (ult !== 'base' || !base) {
+        modo = _cfgModoEn_(f, 'CFG_FUENTE_PG');
+        if (modo !== 'no') base = base || _cfgFilasBase_();
+        /* La hoja dice «si»: esta vuelta ya leyo la hoja y le sirve; la proxima va a la base. */
+        if (modo === 'si' && base) src = 'hoja→base';
+      }
+    }
+    /* Se escribe solo cuando cambia (de la hoja a la base o al reves): en «no» no se toca nada. */
+    try { if (props && (src === 'hoja' ? ult === 'base' : ult !== 'base')) props.setProperty('CFG_FUENTE_ULT', src === 'hoja' ? 'hoja' : 'base'); } catch (eU) {}
+    j = { t: Date.now(), f: f, src: src };
     try { if (c && f.length) c.put('cfg_filas', JSON.stringify(j), 300); } catch (e2) {}
+    /* Despues de guardar la cache: la alerta lee palancas, y sin la cache volveria a entrar aca. */
+    if (modo === 'medir' && src === 'hoja' && f.length && base) _cfgMedirBase_(f, base);
   }
   return j.f;
 }

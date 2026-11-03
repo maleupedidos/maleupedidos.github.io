@@ -14739,7 +14739,7 @@ function _leerVersion(app){
    "El HTML no sabe que version es" dejo de ser cierto: el build le escribe
    adentro el CACHE_NAME de sw-panel.js, el mismo que deploy.sh obliga a subir en
    cada cambio. Si lo publicado dice otra cosa, esta pagina es vieja. Punto. */
-var _APP_CN_PAGINA='maleu-panel-v815';
+var _APP_CN_PAGINA='maleu-panel-v816';
 
 /* Devuelve [{k,v}] si lo publicado no es lo que esta pagina corre. */
 function _chequearVersiones(){
@@ -16964,7 +16964,8 @@ function _loadUnaVez(){
       if(!Array.isArray(d.provisiones)&&Array.isArray(D.provisiones))d.provisiones=D.provisiones;
       if(!Array.isArray(d.config)&&Array.isArray(D.config))d.config=D.config;
     }
-    D=d;_volcadoPedidoEn=_pedidoEn;if(d&&d.oc&&d.oc.lista)_ocFrescas=true;try{localStorage.setItem('ma3',JSON.stringify(d));}catch(e){}try{sync();}catch(e){}_ldSync();$('dot').className='hdr-dot';try{sbUpdateMetrics();}catch(e){}
+    D=d;try{if(typeof _movLocalesReponer==='function')_movLocalesReponer();}catch(e){}   /* lo recien cargado en Caja (2/11/2026) */
+    _volcadoPedidoEn=_pedidoEn;if(d&&d.oc&&d.oc.lista)_ocFrescas=true;try{localStorage.setItem('ma3',JSON.stringify(d));}catch(e){}try{sync();}catch(e){}_ldSync();$('dot').className='hdr-dot';try{sbUpdateMetrics();}catch(e){}
     var _pinto=true;
     if(_hayEditorAbierto()){_pendingLoadRender=true;}
     else{ try{ render(); }catch(e){ _pinto=false; console.error('render()',e); } }
@@ -19534,6 +19535,8 @@ function _cajaCampos(d){
      en el volcado; lo usa la tab Proveedores. Igual que los otros tres de hoy:
      si no se lo nombra aca, el backend lo manda y no llega a D. */
   if(Array.isArray(d.proveedores))D.proveedores=d.proveedores;
+  /* Al final: lo recien cargado que esta lectura todavia no trae vuelve a la lista y a los totales (2/11/2026). */
+  if(Array.isArray(d.movimientos))_movLocalesReponer();
 }
 function _cajaAplicar(d){
   _cajaCampos(d);
@@ -21728,30 +21731,58 @@ function parseM(v){var s=String(v||'').trim();if(!s)return 0;s=s.replace(/[^\d,.
 // Aplica un movimiento al D local (saldo + libro diario) sin esperar al backend.
 // Permite cerrar el loader inmediatamente con los montos ya actualizados,
 // mientras _recargarCaja() trae lo de verdad por atras.
+/* LO RECIEN CARGADO NO SE BORRA AL RECARGAR (2/11/2026). Tadeo cargo un gasto a las 22:31, toco Actualizar y no
+   estaba: la caja viene de la base (`caja_light_pantalla` lee `cash_movement`), y el renglon llega ahi cuando pasa la
+   replica de Egresos/Ingresos (3 min ese dia). `_cajaCampos` reemplazaba `D.movimientos` y `D.caja` enteros y se
+   llevaba lo que `aplicarMovLocal` acababa de pintar. Ahora cada movimiento cargado aca queda anotado aparte y cada
+   lectura lo repone (renglon y totales) hasta que la lectura lo trae, o hasta MOV_LOC_MS. Si el guardado falla, se
+   descarta (`_movLocalDescartar`). Regla: lo que se crea se ve al instante. */
+var MOV_LOC_MS=15*60*1000, _movLocales=[];
+function _movCajaSumar(tipo,esEf,monto,cid){
+  D.caja=D.caja||{cobradoEf:0,cobradoMP:0,gastosEf:0,gastosMP:0,ingresosEf:0,ingresosMP:0};
+  if(tipo==='gasto'){if(esEf)D.caja.gastosEf=(D.caja.gastosEf||0)+monto;else D.caja.gastosMP=(D.caja.gastosMP||0)+monto;}
+  else{if(esEf)D.caja.ingresosEf=(D.caja.ingresosEf||0)+monto;else D.caja.ingresosMP=(D.caja.ingresosMP||0)+monto;}
+  if(cid){
+    var clave=(tipo==='gasto')?'gastosPorCuenta':'ingresosPorCuenta';
+    D.caja[clave]=D.caja[clave]||{};
+    D.caja[clave][cid]=(D.caja[clave][cid]||0)+monto;
+  }
+}
+function _movLocalDescartar(desde){ _movLocales=_movLocales.filter(function(x){ return x.t<desde; }); }
+/* Despues de que una lectura reemplazo la caja: lo cargado que la lectura todavia no trae, vuelve. Es el mismo
+   movimiento si coinciden tipo, monto, concepto y la hora con 10 min de margen. */
+function _movLocalesReponer(){
+  if(!D||!_movLocales.length)return;
+  var ahora=Date.now(), lista=Array.isArray(D.movimientos)?D.movimientos:(D.movimientos=[]);
+  _movLocales=_movLocales.filter(function(x){
+    if(ahora-x.t>MOV_LOC_MS)return false;
+    var ya=lista.some(function(m){ return m&&m!==x.mov&&m.tipo===x.mov.tipo&&Number(m.$)===Number(x.mov.$)&&
+      String(m.con||'')===String(x.mov.con||'')&&Math.abs((Number(m.ts)||0)-(Number(x.mov.ts)||0))<600000; });
+    if(ya)return false;
+    if(lista.indexOf(x.mov)<0){ lista.unshift(x.mov); _movCajaSumar(x.mov.tipo,x.esEf,x.mov.$,x.cid); }
+    return true;
+  });
+}
 function aplicarMovLocal(tipo,fecha,cat,con,met,monto,notas,cuentaId){
   if(!D)return;
   D.caja=D.caja||{cobradoEf:0,cobradoMP:0,gastosEf:0,gastosMP:0,ingresosEf:0,ingresosMP:0};
   var esEf=met==='Efectivo';
-  if(tipo==='gasto'){if(esEf)D.caja.gastosEf=(D.caja.gastosEf||0)+monto;else D.caja.gastosMP=(D.caja.gastosMP||0)+monto;}
-  else{if(esEf)D.caja.ingresosEf=(D.caja.ingresosEf||0)+monto;else D.caja.ingresosMP=(D.caja.ingresosMP||0)+monto;}
   /* Y el mapa por cuenta, que es de donde sale el saldo de cada tarjeta cuando
      el backend manda las cuentas. Sin esto, un gasto del Brubank se veria en el
      libro diario al instante pero la tarjeta no se moveria hasta el proximo
      volcado — y el saldo diria una cosa y los movimientos otra.
      Si no se sabe la cuenta, se resuelve por el metodo con el mismo criterio
      que el backend: lo que no es efectivo cae en la digital por defecto. */
-  var cts=_cajaCuentas();
+  var cts=_cajaCuentas(), cid='';
   if(cts){
     var idEf='efectivo',idDef='mp';
     for(var i=0;i<cts.length;i++){
       if(cts[i].tipo==='efectivo')idEf=cts[i].id;
       if(cts[i].def)idDef=cts[i].id;
     }
-    var cid=cuentaId||(esEf?idEf:idDef);
-    var clave=(tipo==='gasto')?'gastosPorCuenta':'ingresosPorCuenta';
-    D.caja[clave]=D.caja[clave]||{};
-    D.caja[clave][cid]=(D.caja[clave][cid]||0)+monto;
+    cid=cuentaId||(esEf?idEf:idDef);
   }
+  _movCajaSumar(tipo,esEf,monto,cid);
   // Insertar al inicio del libro diario (lo más nuevo arriba)
   var fStr=fecha?fecha.split('-').reverse().join('/'):'';
   /* Con su hora y su cuenta, como los arma el backend: sin `ts` se ordenaba al
@@ -21766,6 +21797,7 @@ function aplicarMovLocal(tipo,fecha,cat,con,met,monto,notas,cuentaId){
   if(!_ctaMov&&cts){for(var _k=0;_k<cts.length;_k++){if(esEf?cts[_k].tipo==='efectivo':cts[_k].def){_ctaMov=cts[_k].id;break;}}}
   var mov={tipo:tipo,f:fStr,ts:_ts,cat:cat,con:con,met:met,cta:_ctaMov||undefined,$:monto,not:notas,i:Date.now()};
   D.movimientos=D.movimientos||[];D.movimientos.unshift(mov);
+  _movLocales.push({mov:mov,esEf:esEf,cid:cid,t:Date.now()});
 }
 
 /* Guarda un gasto o un ingreso con plata en una cuenta que el formato viejo no
@@ -21913,14 +21945,14 @@ function _movAlInstante(tipo,payload,partes,fecha,cat,con,notas,btn,btnTxt,limpi
   saveNota(notas);saveConcepto(cat,con);
   limpiar();
   btn.disabled=false;btn.textContent=btnTxt;
-  var volver=function(msg){_movFormVolver(pref,foto);_recargarCaja();if(msg)toast(msg);};
+  var volver=function(msg){_movLocalDescartar(toque);_movFormVolver(pref,foto);_recargarCaja();if(msg)toast(msg);};
   _ordenPost(payload)
     .then(function(r){return r.json();})
     .then(function(r){
       if(r&&r.pideAjuste){volver('');_ajPide(r,tipo,btn,btnTxt);return;}
       if(r&&(esOk?esOk(r):r.ok)){_movClientOpLimpiar(btn);_pfAplicar(r).then(function(){_recargarCaja();});return;}
       /* Guardó algunas filas y no todas (cuenta extra): se dice cuántas y el formulario NO vuelve, para no cargarlo dos veces. */
-      if(r&&r.ok&&r.rows>0){_recargarCaja();toast('Guardó '+r.rows+' de '+partes.length+' — mirá la hoja antes de cargarlo de nuevo');return;}
+      if(r&&r.ok&&r.rows>0){_movLocalDescartar(toque);_recargarCaja();toast('Guardó '+r.rows+' de '+partes.length+' — mirá la hoja antes de cargarlo de nuevo');return;}
       volver('No se guardó el '+tipo+': '+((r&&(r.err||r.error))||'?')+'. Lo dejé de nuevo en el formulario.');
     })
     .catch(function(){volver('No pude confirmar el '+tipo+'. Lo dejé en el formulario: tocá Guardar otra vez, no se duplica.');});
