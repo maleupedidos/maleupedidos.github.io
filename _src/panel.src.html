@@ -8903,6 +8903,8 @@ function panelDoLogin(){
       // AUTH: el token habilita TODAS las llamadas al backend, asi que se guarda
       // siempre — no depende del tilde de 'recordarme'.
       try{ if(d.token) localStorage.setItem('maleu_token', d.token); }catch(e){}
+      /* (373) Con LOGIN_BASE en «medir» o «si»: la sesion propia de la base, por atras. No frena la entrada. */
+      try{ _sbLoginPropio((d.usuario||u), p, d); }catch(eLp){}
       SESSION={
         usuario:d.usuario||u,rol:d.rol||'empleado',nombre:d.nombre||u,ts:Date.now(),
         tabs:Array.isArray(d.tabs)?d.tabs:null
@@ -13366,6 +13368,79 @@ function _sbTokLeer(){
 }
 function _sbTokBorrar(){ try{ localStorage.removeItem(_SB_TOK_LS); }catch(e){} }
 
+/* EL LOGIN POR LA BASE (353/354/373, 3/11/2026). El token de `sbToken` lo emite Apps Script y queda en su cola: a la
+   mañana, con el permiso vencido, todo lo de la base esperaba 5-16 s. Con LOGIN_BASE la base verifica el PIN
+   (`login_pin`, anonima, con bloqueo a los 5 fallos) y da una sesion de Supabase PROPIA (con refresh_token): el
+   permiso se renueva sin Apps Script y las palancas salen de `permiso_base()`.
+     «medir»: se hacen las dos y se usa la de sbToken; el medidor anota si difieren (`login-base`).
+     «si»   : sesion propia primero; si algo falla, sbToken como siempre.
+   Dar de baja a alguien corta su acceso en la consulta siguiente aunque tenga token (354). Salir borra todo (mc_*). */
+var _SB_SES_LS='mc_sbses';
+function _sbSesLeer(){
+  try{
+    var g=JSON.parse(localStorage.getItem(_SB_SES_LS)||'null');
+    var yo=(typeof SESSION!=='undefined'&&SESSION&&SESSION.usuario)||'';
+    if(!g||!g.refresh||!g.url||!g.key||String(g.u||'').toLowerCase()!==String(yo).toLowerCase())return null;
+    return g;
+  }catch(e){ return null; }
+}
+function _sbSesGuardar(g){ try{ localStorage.setItem(_SB_SES_LS,JSON.stringify(g)); }catch(e){} }
+function _sbSesBorrar(){ try{ localStorage.removeItem(_SB_SES_LS); }catch(e){} }
+function _sbMedNota(ref,ok){ try{ if(typeof _medEmpezar==='function')_medCerrar(_medEmpezar('login-base',ref),ok?'base':'fallo'); }catch(e){} }
+function _sbAuth(url,key,grant,body){
+  return fetch(url+'/auth/v1/token?grant_type='+grant,{method:'POST',headers:{apikey:key,'Content-Type':'application/json'},body:JSON.stringify(body)})
+    .then(function(r){ return r.json().then(function(j){ if(!r.ok||!j||!j.access_token)throw new Error((j&&(j.error_description||j.msg||j.error))||('auth '+r.status)); return j; }); });
+}
+function _sbLoginPropio(u,pin,d){
+  if(!d||!/^(medir|si)$/.test(String(d.loginBase||''))||!d.sbUrl||!d.sbPub||!pin)return;
+  var url=String(d.sbUrl).replace(/\/+$/,''), key=d.sbPub;
+  fetch(url+'/rest/v1/rpc/login_pin',{method:'POST',headers:{apikey:key,Authorization:'Bearer '+key,'Content-Type':'application/json'},
+    body:JSON.stringify({p_usuario:u,p_pin:pin})})
+    .then(function(r){ return r.json(); })
+    .then(function(lp){
+      var ok=!!(lp&&lp.ok), igual=(ok===!!d.ok)&&(!ok||String(lp.rol||'')===String(d.rol||''));
+      _sbMedNota((igual?'igual ':'DISTINTO ')+u+': base '+(ok?lp.rol:('no · '+((lp&&lp.err)||'')))+' / apps '+(d.rol||''),igual);
+      if(!ok||!lp.clave||!lp.email)return;
+      return _sbAuth(url,key,'password',{email:lp.email,password:lp.clave}).then(function(t){
+        _sbSesGuardar({u:u,url:url,key:key,access:t.access_token,refresh:t.refresh_token,hasta:Date.now()+(Number(t.expires_in)||3600)*1000,modo:d.loginBase});
+      });
+    })
+    .catch(function(e){ _sbMedNota('fallo '+u+': '+((e&&e.message)||e),false); });
+}
+/* El permiso con la sesion propia: renueva el token si esta por vencer y trae las palancas de la base. Null si no hay
+   sesion propia; rechaza si algo falla (el que llama cae a sbToken). Un refresh rechazado borra la sesion: si lo dieron
+   de baja, no se reintenta en cada pantalla. */
+function _sbPermisoPropio(){
+  var g=_sbSesLeer(); if(!g)return Promise.resolve(null);
+  var pTok=(g.access&&Number(g.hasta)-120000>Date.now())?Promise.resolve(g)
+    :_sbAuth(g.url,g.key,'refresh_token',{refresh_token:g.refresh}).then(function(t){
+        g.access=t.access_token; g.refresh=t.refresh_token||g.refresh; g.hasta=Date.now()+(Number(t.expires_in)||3600)*1000; _sbSesGuardar(g); return g;
+      },function(e){ _sbSesBorrar(); throw e; });
+  return pTok.then(function(g2){
+    return fetch(g2.url+'/rest/v1/rpc/permiso_base',{method:'POST',headers:{apikey:g2.key,Authorization:'Bearer '+g2.access,'Content-Type':'application/json'},body:'{}'})
+      .then(function(r){ if(!r.ok)throw new Error('permiso_base '+r.status); return r.json(); })
+      .then(function(pb){ if(!pb||!pb.ok||!pb.pal)throw new Error('permiso_base sin palancas');
+        return {token:g2.access,url:g2.url,key:g2.key,seg:Math.max(60,Math.round((Number(g2.hasta)-Date.now())/1000)),pal:pb.pal,propio:true}; });
+  });
+}
+/* Las palancas comparadas por CONTENIDO: jsonb reordena las claves. */
+function _sbCanon(x){
+  if(Array.isArray(x))return '['+x.map(_sbCanon).join(',')+']';
+  if(x&&typeof x==='object')return '{'+Object.keys(x).sort().map(function(k){ return JSON.stringify(k)+':'+_sbCanon(x[k]); }).join(',')+'}';
+  return JSON.stringify(x===undefined?null:x);
+}
+var _sbMedirUlt=0;
+function _sbMedirPropio(sbApps){
+  if(Date.now()-_sbMedirUlt<30*60000)return; _sbMedirUlt=Date.now();
+  var yo=(typeof SESSION!=='undefined'&&SESSION&&SESSION.usuario)||'';
+  _sbPermisoPropio().then(function(sb){
+    if(!sb)return;
+    var a=(sbApps&&sbApps.pal)||{}, b=sb.pal||{}, dif=[];
+    Object.keys(a).concat(Object.keys(b)).forEach(function(k){ if(dif.indexOf(k)<0&&_sbCanon(a[k])!==_sbCanon(b[k]))dif.push(k); });
+    _sbMedNota((dif.length?'DISTINTO ':'igual ')+'pal '+yo+(dif.length?': '+dif.slice(0,6).join(','):''),!dif.length);
+  },function(e){ _sbMedNota('fallo pal '+yo+': '+((e&&e.message)||e),false); });
+}
+
 /* El permiso para hablarle a Supabase. Lo emite el ERP (`action=sbToken`) y
    dura una hora; se renueva dos minutos antes. Un "no" se recuerda 5 minutos
    para no preguntar en cada pantalla: hoy solo Tadeo recibe permiso, asi que
@@ -13396,6 +13471,20 @@ function _sbPermiso(soloSiLoTengo){
   /* No esta guardado y el que llama no puede pagar la espera. Null no es un
      error: significa "esta pantalla va por Apps Script, como siempre". */
   if(soloSiLoTengo)return Promise.resolve(null);
+  var _ses=_sbSesLeer();
+  if(_ses&&_ses.modo==='si'){
+    _sbPidiendo=_sbPermisoPropio().then(function(sb){
+      if(!sb)throw new Error('sin sesion propia');
+      _sbPidiendo=null;
+      _sbPerm=sb;_sbPermHasta=Date.now()+Math.max(60,(Number(sb.seg)||3600)-120)*1000;
+      _sbTokGuardar(sb,_sbPermHasta);
+      try{ localStorage.removeItem(_SB_NO_LS); }catch(e){}
+      try{ setTimeout(function(){ try{ window.dispatchEvent(new Event('maleu:palancas')); }catch(eE){} },0); }catch(eT){}
+      if(sb.pal&&sb.pal.loginBase&&sb.pal.loginBase!=='si'){ _ses.modo=sb.pal.loginBase; _sbSesGuardar(_ses); }
+      return sb;
+    }).catch(function(e){ _sbPidiendo=null; _sbMedNota('fallo propio, va sbToken: '+((e&&e.message)||e),false); _ses.modo='medir'; _sbSesGuardar(_ses); return _sbPermiso(); });
+    return _sbPidiendo;
+  }
   _sbPidiendo=fetch(API+'?action=sbToken&t='+Date.now())
     .then(function(r){return r.json();})
     .then(function(d){
@@ -13416,6 +13505,13 @@ function _sbPermiso(soloSiLoTengo){
       sb.pal=(d&&d.palancas)||{};
       _sbPerm=sb;_sbPermHasta=Date.now()+Math.max(60,(Number(sb.seg)||3600)-120)*1000;
       _sbTokGuardar(sb,_sbPermHasta);
+      /* (373) El modo del login por la base viaja con las palancas: «si» pasa a usar la sesion propia la proxima
+         vez; «medir» la compara contra esta; «no» la deja de lado. */
+      try{
+        var _sp=_sbSesLeer(), _lb=String((sb.pal&&sb.pal.loginBase)||'no');
+        if(_sp&&_sp.modo!==_lb){ _sp.modo=_lb; _sbSesGuardar(_sp); }
+        if(_sp&&_lb==='medir')setTimeout(function(){ _sbMedirPropio(sb); },2000);
+      }catch(eLb){}
       try{ localStorage.removeItem(_SB_NO_LS); }catch(e){}
       /* Avisar que llegó (23/10/2026). Las pantallas preguntan «¿lo tengo?» sin
          salir a pedirlo (`_sbPermiso(true)`); si preguntaron antes de que llegara,
