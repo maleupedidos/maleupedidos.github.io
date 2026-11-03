@@ -23,16 +23,49 @@ const TABS = process.env.SOLO_ARRANQUE ? [] : [
 ];
 /* COMO OTRO USUARIO: USUARIO=santos ROL=repartidor TABS=ruta,mireparto (el token tiene que ser el de ese usuario). */
 if (process.env.TABS) { TABS.length = 0; process.env.TABS.split(',').forEach((t) => TABS.push(t.split('>'))); }
-const COMO = process.env.USUARIO ? `;try{localStorage.setItem("maleu_panel_session",JSON.stringify({usuario:${JSON.stringify(process.env.USUARIO)},rol:${JSON.stringify(process.env.ROL || '')},nombre:${JSON.stringify(process.env.USUARIO)},ts:Date.now()}));}catch(e){}` : '';
+/* CON LA SESIÓN DE LA BASE: SBSES=<archivo .json> con {access_token|access, refresh_token|refresh} (un token temporal de Auth
+   que arma Supa, como en la 376). Se siembra como la sesión propia (`mc_sbses`, modo «si», todos) del USUARIO: el ERP pide
+   el permiso a la base y no a Apps Script. El archivo no se versiona ni se imprime. */
+let SBSES = '';
+if (process.env.SBSES) {
+  const j = JSON.parse(require('fs').readFileSync(process.env.SBSES, 'utf8'));
+  const g = { u: process.env.USUARIO || j.usuario || '', url: j.url || 'https://xhaxmyvhygxynwjqrarm.supabase.co',
+    key: j.key || j.pub || j.apikey || 'sb_publishable_IVIVgOV-t_ugcQz1zQNwsw_U-4yOMZG', access: j.access_token || j.access, refresh: j.refresh_token || j.refresh,
+    hasta: Date.now() + 50 * 60e3, modo: 'si', todos: true };
+  SBSES = `;try{localStorage.setItem('mc_sbses',${JSON.stringify(JSON.stringify(g))});}catch(e){}`
+    /* SOLO LECTURA, a prueba de todo (con estos tokens una directa escribe COMO esa persona): pasan las RPC *_pantalla y
+       *_datos (nunca una con «directo») y la renovación de la sesión; TODO otro POST/PATCH/PUT/DELETE se corta y se anota. */
+    + `;(function(){var f=window.fetch;window.__bloqueados=[];window.fetch=function(u,x){var s=String(u&&u.url||u),m=String((x&&x.method)||(u&&u.method)||'GET').toUpperCase();
+      if(m!=='GET'&&m!=='HEAD'){var r=/\\/rest\\/v1\\/rpc\\/([a-z0-9_]+)/.exec(s);
+        var lee=(r&&(/_(pantalla|datos)$/.test(r[1])||r[1]==="permiso_base")&&!/directo/.test(r[1]))||/\\/auth\\/v1\\/token\\?grant_type=refresh_token/.test(s);
+        if(!lee){window.__bloqueados.push(m+' '+(r?r[1]:s.slice(0,90)));return Promise.resolve(new Response(JSON.stringify({ok:false,err:'cortado por la prueba (solo lectura)'}),{status:200,headers:{'Content-Type':'application/json'}}));}}
+      return f.apply(this,arguments);};})();`;
+}
+/* EL PERMISO GUARDADO VENCIDO (lo que tiene un celular que abre la app después de una hora): VENCIDO=<archivo con las palancas
+   de palancas_front, {pal}>. Se siembra `mc_sbtok` con esas palancas y vencido hace 10 min. */
+if (process.env.VENCIDO && SBSES) {
+  const pal = JSON.parse(require('fs').readFileSync(process.env.VENCIDO, 'utf8')).pal;
+  const t = { u: process.env.USUARIO || '', sb: { token: 'vencido', url: 'https://xhaxmyvhygxynwjqrarm.supabase.co', key: 'sb_publishable_IVIVgOV-t_ugcQz1zQNwsw_U-4yOMZG', pal: pal }, hasta: Date.now() - 10 * 60e3 };
+  SBSES += `;try{localStorage.setItem('mc_sbtok',${JSON.stringify(JSON.stringify(t))});}catch(e){}`;
+}
+const COMO = process.env.USUARIO ? `;try{localStorage.setItem("maleu_panel_session",JSON.stringify({usuario:${JSON.stringify(process.env.USUARIO)},rol:${JSON.stringify(process.env.ROL || '')},nombre:${JSON.stringify(process.env.NOMBRE || process.env.USUARIO)},ts:Date.now()}));}catch(e){}` : '';
 (async () => {
   const cli = await cdp.abrir();
   /* SIN_APPS=1: el ensayo en este navegador (localStorage maleu_sin_apps = '1'). Por tab: qué se cortó, errores nuevos y
      cuánto texto tiene la pantalla (una tab que quedó vacía sin Apps Script se ve acá). */
   const SIN = !!process.env.SIN_APPS;
-  await cli.enviar('Page.addScriptToEvaluateOnNewDocument', { source: prep(TOKEN) + COMO + ESPIA + (SIN ? `;try{localStorage.setItem('maleu_sin_apps','1');}catch(e){}` : '') });
+  await cli.enviar('Page.addScriptToEvaluateOnNewDocument', { source: prep(TOKEN) + COMO + SBSES + ESPIA + (SIN ? `;try{localStorage.setItem('maleu_sin_apps','1');}catch(e){}` : '') });
   await cli.enviar('Page.enable', {});
   cli.escuchar((m, p) => { if (m === 'Page.javascriptDialogOpening') cli.enviar('Page.handleJavaScriptDialog', { accept: true }).catch(() => {}); });
   await cli.enviar('Page.navigate', { url: URL });
+  if (SBSES) {   /* la guarda tiene que cortar una directa y un POST a Apps Script ANTES de recorrer: si no, no se sigue */
+    let g = null; for (let i = 0; i < 30 && !g; i++) { await pausa(1000); try { g = await evaluar(cli, `(async function(){
+      var a=await (await fetch('https://xhaxmyvhygxynwjqrarm.supabase.co/rest/v1/rpc/pedido_alta_directo',{method:'POST',body:'{}'})).text();
+      var b=await (await fetch('https://xhaxmyvhygxynwjqrarm.supabase.co/rest/v1/rpc/ficha_base',{method:'POST',body:'{}'})).text();
+      return {directa:/cortado por la prueba/.test(a), base:/cortado por la prueba/.test(b), sesion:!!localStorage.getItem('mc_sbses')}; })()`); } catch (e) {} }
+    console.log('  guarda: ' + JSON.stringify(g));
+    if (!g || !g.directa || !g.base || !g.sesion) { console.log('LA GUARDA NO CORTA: no se recorre'); cli.matar(); process.exit(3); }
+  }
   await pausa(ESPERA + 10000);
   for (const [tab, sub] of TABS) {
     const nombre = tab + (sub ? '›' + sub : '');
@@ -60,6 +93,8 @@ const COMO = process.env.USUARIO ? `;try{localStorage.setItem("maleu_panel_sessi
   l.forEach((x) => { (por[x.a] = por[x.a] || {}); por[x.a][x.tab] = (por[x.a][x.tab] || 0) + 1; });
   console.log('\n\n' + Object.keys(por).length + ' acciones GET a Apps Script en el recorrido (' + l.length + ' pedidos):');
   Object.keys(por).sort().forEach((a) => console.log('  ' + a.padEnd(26) + Object.entries(por[a]).map(([t, n]) => t + (n > 1 ? '×' + n : '')).join(', ')));
+  if (process.env.EVAL) { try { console.log('\n  EVAL: ' + JSON.stringify(await cdp.evaluar(cli, process.env.EVAL)).slice(0, 1500)); } catch (e) { console.log('\n  EVAL revento: ' + e.message); } }
+  if (SBSES) { const bl = await evaluar(cli, `window.__bloqueados||[]`); const c = {}; bl.forEach((x) => { c[x] = (c[x] || 0) + 1; }); console.log('\n  escrituras cortadas por la guarda: ' + JSON.stringify(c)); }
   if (process.env.PILAS) l.filter((x) => x.tab === 'arranque' || x.a === process.env.PILAS).forEach((x) => console.log('\n  ' + x.a + ' @' + x.ms + 'ms palancas:' + x.pal + '\n     ' + x.pila));
   cli.matar(); process.exit(0);
 })().catch((e) => { console.error('REVENTO', e); process.exit(2); });
