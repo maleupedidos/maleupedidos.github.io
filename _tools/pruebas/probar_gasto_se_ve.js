@@ -23,22 +23,22 @@ function sacar(nombre) {
   for (; j < src.length; j++) { if (src[j] === '{') n++; else if (src[j] === '}' && --n === 0) break; }
   return src.slice(i, j + 1);
 }
-const piezas = ['_movCajaSumar', '_movLocalDescartar', '_movLocalesReponer', 'aplicarMovLocal', '_cajaCampos'].map(sacar);
+const piezas = ['_movCajaSumar', '_movLocalDescartar', '_movEsElBorrado', '_movBorradoAnotar', '_movBorradoOlvidar', '_movSacar', '_movLocalesReponer', 'aplicarMovLocal', '_cajaCampos'].map(sacar);
 let ok = 0, mal = 0;
 const chk = (t, c, d) => { c ? ok++ : mal++; console.log((c ? '  ok   ' : '  MAL  ') + t + (c ? '' : '  -> ' + JSON.stringify(d))); };
 if (piezas.some(p => !p)) { chk('el panel tiene _movLocalesReponer (lo cargado vuelve despues de una lectura)', false, piezas.map(p => !!p)); console.log('\n' + ok + ' ok · ' + mal + ' mal'); process.exit(1); }
 let reloj = Date.parse('2026-11-02T22:31:31-03:00');
 const mundo = new Function('reloj', 'Date_', `
-  var D = null; var MOV_LOC_MS = 15*60*1000, _movLocales = [];
+  var D = null; var MOV_LOC_MS = 15*60*1000, _movLocales = [], _movBorrados = [];
   var Date = function (x) { return x === undefined ? new Date_(reloj()) : new Date_(x); };
   Date.now = function () { return reloj(); }; Date.parse = Date_.parse;
   function _cajaCuentas() { return [{ id: 'efectivo', tipo: 'efectivo' }, { id: 'mp', def: true }, { id: 'brubank' }]; }
   function _horaMov() { return ''; }
   ${piezas.join('\n')}
-  return { set D(v) { D = v; }, get D() { return D; }, aplicarMovLocal, _cajaCampos, _movLocalDescartar, locales: function () { return _movLocales.length; } };
+  return { set D(v) { D = v; }, get D() { return D; }, aplicarMovLocal, _cajaCampos, _movLocalDescartar, _movSacar, _movBorradoAnotar, _movBorradoOlvidar, borrados: function () { return _movBorrados.length; }, locales: function () { return _movLocales.length; } };
 `)(() => reloj, Date);
 const leer = () => JSON.parse(JSON.stringify({ caja: { gastosEf: 0, gastosMP: 5000, ingresosEf: 0, ingresosMP: 0, gastosPorCuenta: { mp: 5000 } },
-  movimientos: [{ tipo: 'gasto', f: '02/11/2026', ts: Date.parse('2026-11-02T17:15:07-03:00'), cat: 'Proveedor', con: 'Pago a Le Unike', met: 'Mercado Pago', cta: 'mp', $: 5000 }] }));
+  movimientos: [{ tipo: 'gasto', r: 399, f: '02/11/2026', ts: Date.parse('2026-11-02T17:15:07-03:00'), cat: 'Proveedor', con: 'Pago a Le Unike', met: 'Mercado Pago', cta: 'mp', $: 5000 }] }));
 const cuantos = (con) => mundo.D.movimientos.filter(m => m.con === con).length;
 
 // 1. El caso de Tadeo
@@ -81,6 +81,25 @@ mundo.aplicarMovLocal('ingreso', '2026-11-02', 'Otros', 'Reintegro', 'Brubank', 
 reloj += 30000;
 mundo._cajaCampos(leer());
 chk('un ingreso a Brubank sigue en la lista y en su cuenta', cuantos('Reintegro') === 1 && mundo.D.caja.ingresosMP === 7000 && (mundo.D.caja.ingresosPorCuenta || {}).brubank === 7000, mundo.D.caja);
+
+// 5. BORRAR un movimiento: resta del saldo y la lectura atrasada no lo devuelve
+mundo.D = leer();
+let m5 = mundo.D.movimientos[0];
+mundo._movSacar(m5); mundo._movBorradoAnotar(m5);
+chk('al borrar sale de la lista y resta del total (gastos MP 5000 -> 0)', cuantos('Pago a Le Unike') === 0 && mundo.D.caja.gastosMP === 0 && mundo.D.caja.gastosPorCuenta.mp === 0, mundo.D.caja);
+reloj += 20000;
+mundo._cajaCampos(leer());   /* la base todavia lo trae */
+chk('una lectura que todavia lo trae NO lo devuelve, y el total sigue en 0', cuantos('Pago a Le Unike') === 0 && mundo.D.caja.gastosMP === 0, { lista: mundo.D.movimientos.map(m => m.con), caja: mundo.D.caja });
+reloj += 20000;
+const sinEl = leer(); sinEl.movimientos = []; sinEl.caja.gastosMP = 0; sinEl.caja.gastosPorCuenta.mp = 0;
+mundo._cajaCampos(sinEl);   /* paso la replica: ya no esta */
+chk('cuando la base ya no lo trae, no resta dos veces', mundo.D.caja.gastosMP === 0 && mundo.borrados() === 0, { caja: mundo.D.caja, borrados: mundo.borrados() });
+// 6. Un borrado que fallo se olvida: la lectura lo muestra de nuevo
+mundo.D = leer();
+m5 = mundo.D.movimientos[0];
+mundo._movSacar(m5); mundo._movBorradoAnotar(m5); mundo._movBorradoOlvidar('gasto', 399);
+mundo._cajaCampos(leer());
+chk('un borrado que fallo vuelve a mostrar el movimiento y su total', cuantos('Pago a Le Unike') === 1 && mundo.D.caja.gastosMP === 5000, mundo.D.caja);
 
 console.log('\n' + ok + ' ok · ' + mal + ' mal');
 process.exit(mal ? 1 : 0);

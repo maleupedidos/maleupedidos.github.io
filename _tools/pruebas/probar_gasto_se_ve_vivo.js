@@ -41,6 +41,21 @@ const pausa = ms => new Promise(r => setTimeout(r, ms));
     chk('   y en el total de gastos MP (+1234)', Math.round(tras.mp - antes) === 1234, { antes, despues: tras.mp });
     const r = await cdp.evaluar(cli, 'actualizarCaja().then(function(x){return {r:x, lista:document.getElementById("gList").innerText.indexOf(' + JSON.stringify(CON) + ')>=0};})');
     chk('tocando Actualizar tambien sigue', r.lista, r);
+    /* El ✕ de un movimiento real: el POST va cortado (no se borra nada), y la recarga de la base lo sigue trayendo. */
+    const b = await cdp.evaluar(cli, `(function(){
+      window.confirm=function(){return true;};
+      var m=(D.movimientos||[]).filter(function(x){return x&&x.tipo==='gasto'&&x.r&&x.met!=='Efectivo'&&x.con!==${JSON.stringify(CON)};})[0];
+      if(!m)return {sin:true};
+      var antesMp=D.caja.gastosMP||0, txt=m.con; borrarMovCaja('gasto',m.r);
+      return {r:m.r,$:m.$,con:txt,antesMp:antesMp,ya:(D.movimientos||[]).some(function(x){return x.tipo==='gasto'&&Number(x.r)===Number(m.r);}),mp:D.caja.gastosMP};
+    })()`);
+    if (b.sin) chk('hay un gasto digital para probar el borrado', false, b);
+    else {
+      chk('al borrar sale de la lista y resta ($' + b.$ + ')', !b.ya && Math.round(b.antesMp - b.mp) === Math.round(b.$), b);
+      await pausa(6000);
+      const b2 = await cdp.evaluar(cli, `({ya:(D.movimientos||[]).some(function(x){return x.tipo==='gasto'&&Number(x.r)===${Number(b.r)};}),mp:D.caja.gastosMP})`);
+      chk('   y la recarga de la base (que todavia lo trae) no lo devuelve', !b2.ya && Math.round(b.antesMp - b2.mp) === Math.round(b.$), Object.assign({ antesMp: b.antesMp }, b2));
+    }
     const err = await cdp.evaluar(cli, 'window.__err');
     chk('sin errores en la consola', !err.length, err.slice(0, 5));
   } finally { cli.matar(); }
