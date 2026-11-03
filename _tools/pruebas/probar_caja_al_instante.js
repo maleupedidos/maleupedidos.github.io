@@ -86,11 +86,18 @@ const MOV = (pref, con, monto) => `new Promise(function(fin){
         if(performance.now()-t0>${DEMORA + 3000}){ clearInterval(iv); fin({ms:-1,tapa:Math.round(tap)}); return; } requestAnimationFrame(mira); })(); })`);
     chk('BORRAR: la fila se va al toque (' + r.ms + ' ms) y sin loader', r.ms >= 0 && r.ms <= 300 && !r.tapa, r);
     await pausa(DEMORA + 3000);
-    await evaluar(cli, `__rechazar=true;__alertas=[]`);
-    await esperar(cli, `!!(${BOTON})`, 20000);
-    await evaluar(cli, `borrarMovCaja('gasto',${fila})`);
-    chk('  rechazado: se va al toque', !(await evaluar(cli, `!!(${BOTON})`)));
-    chk('  y cuando la base lo rechaza, vuelve y avisa', await esperar(cli, `!!(${BOTON})&&__alertas.length>0`, DEMORA + 15000), await evaluar(cli, `JSON.stringify(__alertas)`));
+    /* (3/11/2026) Otra fila para el rechazo: la primera, ya borrada con OK, queda tapada A PROPOSITO (`_movBorrados`,
+       «lo borrado no vuelve», 2/11) aunque la base la siga trayendo — esperar que reaparezca era esperar un bug. */
+    const fila2 = await evaluar(cli, `(function(){var m=(D.movimientos||[]).filter(function(x){return x.tipo==='gasto'&&Number(x.r)>1&&!x.noBorrar&&Number(x.r)!==${fila};})[0];return m?Number(m.r):0;})()`);
+    const B2 = `([].slice.call(document.querySelectorAll('.gl-x')).filter(function(b){var o=b.getAttribute('onclick')||'';return o.indexOf('borrarMovCaja(')>=0&&o.indexOf('gasto')>=0&&o.indexOf(','+${fila2}+')')>=0;})[0]||null)`;
+    if (!fila2) chk('hay un segundo gasto real para el rechazo', false);
+    else {
+      await evaluar(cli, `__rechazar=true;__alertas=[]`);
+      await esperar(cli, `!!(${B2})`, 20000);
+      await evaluar(cli, `borrarMovCaja('gasto',${fila2})`);
+      chk('  rechazado: se va al toque', !(await evaluar(cli, `!!(${B2})`)));
+      chk('  y cuando la base lo rechaza, vuelve y avisa', await esperar(cli, `!!(${B2})&&__alertas.length>0`, DEMORA + 15000), await evaluar(cli, `JSON.stringify(__alertas)`));
+    }
   }
   // Deshacer un cobro: un pedido REAL cobrado (el POST se corta: no cambia nada).
   const ped = await evaluar(cli, `(function(){var p=(D.pedidos||[]).filter(function(x){return x.ep==='Cobrado'&&x.h==='Home';})[0];return p?JSON.stringify({h:p.h,n:String(p.n),r:p.r||0}):'';})()`);

@@ -93,7 +93,8 @@ const BOLSAS = `JSON.stringify(__posts.filter(function(b){return b.action==='mar
   chk('reprogramar con REPROG_DIRECTO: va a pedido_reprog_directo, NO a Apps Script, sin tapar', rp.p.length === 1 && /^pedido_reprog_directo:rep_/.test(rp.p[0]) && rp.tapa === 0, rp);
   await evaluar(cli, `_rutFirma='';refresh(true,false); 1`); await pausa(1500);   // vuelven a estar hoy (la lista local los había movido)
   rp = await REP(true, DEMORA + 1500);
-  chk('  directo:false: Apps Script con el MISMO clientOpId (y ahí sí el loader)', rp.p.length === 2 && rp.p[1] === 'apps:' + rp.p[0].split(':')[1] && rp.tapa >= 380, rp);
+  /* (3/11/2026) Desde v828 ningún guardado tapa la pantalla: Apps Script lento muestra la píldora, no el overlay. */
+  chk('  directo:false: Apps Script con el MISMO clientOpId, y sin tapar (la píldora, v828)', rp.p.length === 2 && rp.p[1] === 'apps:' + rp.p[0].split(':')[1] && rp.tapa === 0, rp);
   chk('sin errores de JS', (await evaluar(cli, `JSON.stringify(window.__errores||[])`)) === '[]', await evaluar(cli, `JSON.stringify(window.__errores||[])`));
   console.log('\n' + ok + ' ok · ' + mal + ' mal');
   process.exit(mal ? 1 : 0);
