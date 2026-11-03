@@ -14848,7 +14848,7 @@ function _leerVersion(app){
    "El HTML no sabe que version es" dejo de ser cierto: el build le escribe
    adentro el CACHE_NAME de sw-panel.js, el mismo que deploy.sh obliga a subir en
    cada cambio. Si lo publicado dice otra cosa, esta pagina es vieja. Punto. */
-var _APP_CN_PAGINA='maleu-panel-v866';
+var _APP_CN_PAGINA='maleu-panel-v867';
 
 /* Devuelve [{k,v}] si lo publicado no es lo que esta pagina corre. */
 function _chequearVersiones(){
@@ -31214,6 +31214,22 @@ function loadStockTab(forzar){
   if(_stockVuelo&&!forzar)return _stockVuelo;
   var p=_stDeLaBase().then(function(r){
     if(r&&r.usado)return true;
+    /* (3/11/2026, corte: pieza 8) Con STOCK_BASE_ARMA = si la tab NUNCA va a Apps Script: si la base no sirvio,
+       queda lo ultimo que llego (o la copia guardada) y se dice por que. La señal en vivo (`erp:stock`) la repinta. */
+    if(r&&r.arma){
+      ST_FUENTE={de:'basefallo',porque:r.porque||''};
+      if(!ST_TENGO){
+        var g=(typeof _swrLeer==='function')?_swrLeer('stockTab1'):null;
+        if(g&&g.d&&Array.isArray(g.d.stock)){
+          if(typeof D!=='object'||!D)D={};
+          D.stock=g.d.stock; D.stockDeps=g.d.stockDeps; D.stockCierre=g.d.stockCierre; D.stockTs=Number(g.t)||0;
+          D.stockSinReg=g.d.sinRegistro; D.stockFuente='copia'; ST_TENGO=true; ST_FUENTE.copiaT=Number(g.t)||0;
+        }
+      }
+      try{ delete _pintadas.stock; }catch(e){}
+      if((typeof ST_TAB!=='string'||ST_TAB==='productos')&&typeof rStock==='function'){ try{ rStock(); }catch(e){ console.error('rStock',e); } }
+      return false;
+    }
     if(r&&r.palanca)ST_FUENTE={de:'planilla',porque:r.porque||''};
     else ST_FUENTE=null;
     return _stDeLaPlanilla(forzar);
@@ -31243,11 +31259,12 @@ function loadStockTab(forzar){
 var ST_PG_VIEJA_MS=30*60e3, ST_PG_ESPERA_MS=6000;
 function _stDeLaBase(opt){
   opt=opt||{};
-  var no=function(porque){ return {usado:false,palanca:true,porque:porque}; };
+  var arma=false;
+  var no=function(porque){ return {usado:false,palanca:true,porque:porque,arma:arma}; };
   if(typeof _sbPermiso!=='function')return Promise.resolve(null);
   return _sbPermiso(true).then(function(sb){
     /* (153) Con `STOCK_BASE_ARMA = si` la arma la base entera, con el costo adentro. */
-    var arma=!!(sb&&sb.pal&&sb.pal.stockArma==='si');
+    arma=!!(sb&&sb.pal&&sb.pal.stockArma==='si');
     if(!sb||!sb.pal||(!sb.pal.productosPg&&!arma))return {usado:false,palanca:false};
     var H={apikey:sb.key,Authorization:'Bearer '+sb.token};
     var ctl=(typeof AbortController==='function')?new AbortController():null;
@@ -31275,16 +31292,21 @@ function _stDeLaBase(opt){
     ]).then(function(rs){ return _stDesdePg({prods:rs[0],snaps:rs[1],deps:rs[2],estado:rs[3]}); })).then(function(o){
       clearTimeout(reloj);
       if(!o.completo)return no('a la base le falta '+o.faltan.join(', '));
-      if(Date.now()-o.alDia>ST_PG_VIEJA_MS)return no('la copia de la base es de '+_hace(o.alDia));
-      if(ST_SUCIO&&ST_SUCIO>o.alDia)return no('moviste stock despu\u00e9s de la copia de la base');
+      /* (3/11/2026, corte: pieza 8) Con `arma` la base es la fuente: una foto atrasada se MUESTRA con su aviso
+         (`atraso`) y la señal en vivo trae lo que falta; ya no se va a la planilla. */
+      var atraso='';
+      if(Date.now()-o.alDia>ST_PG_VIEJA_MS)atraso='la copia de la base es de '+_hace(o.alDia);
+      else if(ST_SUCIO&&ST_SUCIO>o.alDia)atraso='moviste stock despu\u00e9s de la copia de la base';
       var _ya=Math.max(Number(_stockPedidoEn)||0,Number(_volcadoPedidoEn)||0);
-      if(ST_TENGO&&_ya>o.alDia)return no('lo que ya ten\u00e9s es m\u00e1s nuevo que la copia de la base');
+      if(!atraso&&ST_TENGO&&_ya>o.alDia&&!arma)atraso='lo que ya ten\u00e9s es m\u00e1s nuevo que la copia de la base';
+      if(atraso&&!arma)return no(atraso);
       /* GUARDASTE ALGO DESDE ESTE APARATO DESPUES DE LA COPIA (9/10/2026).
          `ST_SUCIO` vive en memoria: el iPhone mata la app al cambiar de app, y
          al reabrirla la tabla leia la copia de antes del conteo. La hora del
          ultimo POST queda en el aparato (la misma que miran Pedidos y Caja). */
       var _post=0; try{ _post=Number(localStorage.getItem('maleu_ult_post'))||0; }catch(e){}
-      if(_post>o.alDia)return no('guardaste algo despu\u00e9s de la copia de la base');
+      if(!atraso&&_post>o.alDia)atraso='guardaste algo despu\u00e9s de la copia de la base';
+      if(atraso&&!arma)return no(atraso);
       var cos=o.conCosto?{t:o.alDia}:_stCostos();
       if(!cos)return no('no hay un costo de la planilla de hoy para el valor del stock');
       for(var i=0;!o.conCosto&&i<o.stock.length;i++){
@@ -31299,7 +31321,7 @@ function _stDeLaBase(opt){
       D.stockTs=o.alDia; D.stockSinReg=o.sinRegistro; D.stockFuente='pg';
       _stockPedidoEn=Math.max(Number(_stockPedidoEn)||0,o.alDia);
       ST_TENGO=true; ST_INFO={viejo:false,t:_pedidoEn};
-      var _fu={de:'pg',t:o.alDia,costoT:cos.t,comprobando:(typeof _pedSelloEscritura==='function')};
+      var _fu={de:'pg',t:o.alDia,costoT:cos.t,comprobando:(typeof _pedSelloEscritura==='function'),arma:arma,atraso:atraso};
       ST_FUENTE=_fu;
       try{ delete _pintadas.stock; }catch(e){}
       if((typeof ST_TAB!=='string'||ST_TAB==='productos')&&typeof rStock==='function'){
@@ -31321,7 +31343,13 @@ function _stDeLaBase(opt){
             if(ST_TAB==='productos'&&typeof rStock==='function'){ try{ delete _pintadas.stock; rStock(); }catch(e){} }
             return;
           }
-          if(opt.vivo){ _fu.comprobando=false; _stVivoNota({hizo:'stock de la base; hay una escritura posterior que llega con la proxima señal'}); return; }
+          if(opt.vivo||arma){
+            _fu.comprobando=false;
+            if(!_fu.atraso&&!opt.vivo)_fu.atraso=sello?('se escribi\u00f3 algo '+_hace(sello)+'; llega con la pr\u00f3xima se\u00f1al'):'no se pudo saber si hubo cambios despu\u00e9s';
+            if(opt.vivo)_stVivoNota({hizo:'stock de la base; hay una escritura posterior que llega con la proxima señal'});
+            if(ST_TAB==='productos'&&typeof rStock==='function'){ try{ delete _pintadas.stock; rStock(); }catch(e){} }
+            return;
+          }
           ST_FUENTE={de:'planilla',porque:sello?('se escribió algo '+_hace(sello)+', después de la copia de la base')
             :'no se pudo saber si hubo cambios después de la copia'};
           _stDeLaPlanilla(true);
@@ -32413,8 +32441,13 @@ function rStock(){
      con la palanca en «no» no hay nada que contar. */
   var _fuente='';
   if(ST_FUENTE&&ST_FUENTE.de==='pg'){
-    _fuente='<div class="st-sello">Copia de Supabase · igual a la planilla '+_hace(ST_FUENTE.t)
-      +(ST_FUENTE.comprobando?' · mirando si hubo cambios después…':'')+'</div>';
+    _fuente='<div class="st-sello">'+(ST_FUENTE.arma?'De la base · al d\u00eda ':'Copia de Supabase · igual a la planilla ')+_hace(ST_FUENTE.t)
+      +(ST_FUENTE.comprobando?' · mirando si hubo cambios después…':'')
+      +(ST_FUENTE.atraso?' · '+stEsc(ST_FUENTE.atraso):'')+'</div>';
+  }else if(ST_FUENTE&&ST_FUENTE.de==='basefallo'){
+    _fuente='<div class="st-sello">No se pudo leer la base'+(ST_FUENTE.porque?': '+stEsc(ST_FUENTE.porque):'')
+      +(ST_TENGO?' · se ve lo \u00faltimo que lleg\u00f3'+(ST_FUENTE.copiaT?' ('+_hace(ST_FUENTE.copiaT)+')':''):'')
+      +' · prob\u00e1 con \u21bb</div>';
   }else if(ST_FUENTE&&ST_FUENTE.de==='planilla'){
     _fuente='<div class="st-sello">De la planilla'+(_stTs?' · '+_hace(_stTs):'')
       +(ST_FUENTE.porque?' · no se usó Supabase: '+stEsc(ST_FUENTE.porque):'')+'</div>';
@@ -36150,7 +36183,8 @@ function eerrFetchStock(cb,forzar){
         _eerrStockVal=_eerrStockSuma(d.stock);_eerrStockN=_eerrStockCuenta(d.stock);
         _eerrStockT=Number(d.alDia)||Date.now(); window.__eerrStockDe='base';
         if(antes!==_eerrStockVal||antesT!==_eerrStockT)cb();
-      }).catch(function(){ _eerrStockDeApps(cb); });
+      /* (3/11/2026, corte: pieza 8) Ya no cae a Apps Script: si la base no contesta, se dice. */
+      }).catch(function(){ if(_eerrStockVal===null){_eerrStockMal=true;} cb(); });
       return;
     }
   }
