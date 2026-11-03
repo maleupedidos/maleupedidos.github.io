@@ -3813,7 +3813,7 @@ function _vendedoresRedArr_() {
       var nombreV = String(dV[rv][0] || '').trim();
       if (!nombreV) continue;
       var waV = String(dV[rv][1] || '').trim();
-      var comV = Number(dV[rv][9]) || 17;
+      var comV = Number(dV[rv][9]) || 0;   // (3/11) sin 17: desde el 7/10 el representante rinde el bruto entero
       var estadoV = String(dV[rv][6] || '').trim();
       comisionPorVendedor[nombreV] = comV;
       waPorVendedor[nombreV] = waV;
@@ -3855,7 +3855,7 @@ function _vendedoresRedArr_() {
       if (estPagoM === 'Sí' || estPagoM === 'Si' || estPagoM === 'Pagado') continue;
       var totP = Number(row[idxTotal]) || 0;
       if (totP <= 0) continue;
-      var comPct = comisionPorVendedor[vend] !== undefined ? comisionPorVendedor[vend] : 17;
+      var comPct = comisionPorVendedor[vend] !== undefined ? comisionPorVendedor[vend] : 0;
       // Preferir "A Pagar" real por pedido — respeta comisiones por fila (caso
       // R-45/R-46 con comisión 0 a familia del vendedor). Fallback al cálculo
       // plano si la columna no existe o está vacía.
@@ -3904,7 +3904,7 @@ function _vendedoresRedArr_() {
       var vendLA = String(dLA[rLA][2] || '').trim();
       if (!vendLA) continue;
       if (!vendedoresDeuda[vendLA]) {
-        var comLA = comisionPorVendedor[vendLA] !== undefined ? comisionPorVendedor[vendLA] : 17;
+        var comLA = comisionPorVendedor[vendLA] !== undefined ? comisionPorVendedor[vendLA] : 0;
         vendedoresDeuda[vendLA] = { nombre: vendLA, wa: waPorVendedor[vendLA] || '', com: comLA, estado: 'Inactivo', deuda: 0, pedidos: [], deudaPorSemana: {}, liquidaciones: [] };
       }
       if (!vendedoresDeuda[vendLA].liquidaciones) vendedoresDeuda[vendLA].liquidaciones = [];
