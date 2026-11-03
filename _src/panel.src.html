@@ -15487,10 +15487,28 @@ function _baseRpc(rpc,args){
       .then(function(d){ if(!d||d.ok===false)throw new Error((d&&d.err)||('la base no armó '+rpc)); return d; });
   });
 }
+/* (3/11/2026, a pedido del Organizador) POR APARATO: con `sinApps=si` corta solo donde ya hay SESION PROPIA de la base
+   (`_sbSesLeer`, se arma al entrar con el PIN despues de LOGIN_BASE_TODOS). El aparato que no la tiene sigue como siempre,
+   con su caida a Apps Script: cada uno pasa solo cuando vuelve a entrar. La marca local del ensayo corta igual. */
 function _sinApps(){
   try{ if(localStorage.getItem('maleu_sin_apps')==='1')return true; }catch(e){}
-  try{ return typeof _lecModo==='function'&&_lecModo('sinApps')==='si'; }catch(e){ return false; }
+  try{ return typeof _lecModo==='function'&&_lecModo('sinApps')==='si'&&typeof _sbSesLeer==='function'&&!!_sbSesLeer(); }catch(e){ return false; }
 }
+/* QUIEN YA TIENE SESION DE LA BASE (3/11/2026): una vez por dia y por aparato, al medidor (`ui_medicion`, boton
+   `sesion-base`, resultado base = la tiene / fallo = todavia no). El aparato es un id al azar que queda en el aparato. */
+function _sesionBaseAnotar(){
+  try{
+    if(typeof SESSION==='undefined'||!SESSION||!SESSION.usuario||typeof _medEmpezar!=='function')return;
+    var hoy=new Date().toISOString().slice(0,10), k='mc_sesbase_'+String(SESSION.usuario).toLowerCase();
+    if(localStorage.getItem(k)===hoy)return;
+    var ap=localStorage.getItem('maleu_aparato'); if(!ap){ ap=Math.random().toString(36).slice(2,8); localStorage.setItem('maleu_aparato',ap); }
+    var tiene=typeof _sbSesLeer==='function'&&!!_sbSesLeer();
+    var ua=String(navigator.userAgent||''), que=/iPhone|iPad/.test(ua)?'iOS':/Android/.test(ua)?'Android':/Windows/.test(ua)?'Windows':/Mac/.test(ua)?'Mac':'otro';
+    _medCerrar(_medEmpezar('sesion-base',(tiene?'con':'sin')+' · '+SESSION.usuario+' · '+(SESSION.rol||'')+' · aparato '+ap+' '+que),tiene?'base':'fallo');
+    localStorage.setItem(k,hoy);
+  }catch(e){}
+}
+setTimeout(_sesionBaseAnotar,15000);
 function _palancaVal(nombre){
   try{
     var sb=(_sbPerm&&Date.now()<_sbPermHasta)?_sbPerm:null;
@@ -28383,8 +28401,11 @@ function _lecJson(accion,args,url,alLlegar,_ya){
   /* (3/11/2026) Sin palancas todavia (el permiso de la base no llego) pero con el permiso EN CAMINO: se espera a ese
      permiso (~3 s) y se decide con el. Antes la lectura salia a Apps Script y quedaba en su cola detras del arranque:
      «Ver como un representante» tardo 17-28 s en mostrar la lista. Una sola vez (`_ya`). */
-  if(!_ya&&modo==null&&_sbPidiendo&&(typeof _palancaVal!=='function'||_palancaVal('lecArma')==null)){
-    return Promise.resolve(_sbPidiendo).then(function(){ return _lecJson(accion,args,url,alLlegar,true); },function(){ return _lecJson(accion,args,url,alLlegar,true); });
+  /* (3/11/2026) Tambien con SESION PROPIA de la base aunque el permiso todavia no este en vuelo: pedirlo cuesta ~0,3 s contra
+     Supabase y ningun cupo de Apps Script (la primera vuelta de Cobros en Ruta salia a Apps Script al arrancar). */
+  var _sesP=(!_ya&&modo==null&&!_sbPidiendo&&typeof _sbSesLeer==='function'&&_sbSesLeer())?_sbPermiso(true):null;
+  if(!_ya&&modo==null&&(_sbPidiendo||_sesP)&&(typeof _palancaVal!=='function'||_palancaVal('lecArma')==null)){
+    return Promise.resolve(_sbPidiendo||_sesP).then(function(){ return _lecJson(accion,args,url,alLlegar,true); },function(){ return _lecJson(accion,args,url,alLlegar,true); });
   }
   var apps=function(){ return fetch(url).then(function(r){ return r.json(); }).then(function(d){
     alLlegar(d); if(modo==='medir')_lecArmaMedir(accion,args,d,desde); return d; }); };
