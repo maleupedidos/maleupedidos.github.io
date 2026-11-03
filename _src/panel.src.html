@@ -1406,6 +1406,8 @@ button.ped-dep-x.va,button.ped-dep-x.va:disabled{opacity:1;background:#E3EFE3;bo
 .fg-row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
 .fg .auto{background:var(--bg);color:var(--ink3);font-weight:500}
 .btn-submit{width:100%;padding:11px;background:var(--o);color:#fff;border:1px solid #D9663A;border-radius:4px;font-size:14px;font-weight:600;cursor:pointer;transition:.12s;letter-spacing:.01em}
+/* (2/11/2026) El boton que esta guardando: sin overlay, se ve en el boton mismo. */
+.is-guardando{opacity:.55;cursor:progress}
 .btn-submit:hover{background:#D9663A}
 .btn-submit:disabled{opacity:.5;cursor:not-allowed}
 
@@ -12940,12 +12942,40 @@ function toggleCajaForm(t){
 var loaderCount=0;
 var loaderTimer=null;
 var LOADER_DELAY=400; // ms
+/* NINGUN TOQUE TAPA LA PANTALLA (2/11/2026, Tadeo: «lleno de botones con el loader de Maleu cargando, que ya no
+   deberia existir»). `showLoader` ya no prende el overlay de pantalla completa: muestra una pildora chica abajo
+   («Guardando…» con el mensaje de siempre) que no tapa ni frena nada. Lo que el overlay hacia de verdad —que un
+   segundo toque no mande otra vez— lo hace ahora `_guardandoMarcar`: el boton que se toco recien queda marcado
+   mientras dure, y un toque encima no pasa (un `_pfId()` nuevo por toque no lo frenaria el backend). El arranque en
+   frio tiene su propia pantalla (`#boot`), que no pasa por aca. */
+var _ultToque=null,_ultToqueT=0,_guardandoEls=[];
+try{document.addEventListener('click',function(e){
+  var b=e.target&&e.target.closest?e.target.closest('button,[onclick],.btn-submit'):null;
+  if(b&&b.dataset&&b.dataset.guardando==='1'){ e.stopPropagation(); e.preventDefault(); return; }
+  _ultToque=b; _ultToqueT=Date.now();
+},true);}catch(e){}
+function _guardandoMarcar(){
+  if(!_ultToque||Date.now()-_ultToqueT>2000||!document.contains(_ultToque))return;
+  if(_guardandoEls.indexOf(_ultToque)<0){ _ultToque.dataset.guardando='1'; _ultToque.classList.add('is-guardando'); _guardandoEls.push(_ultToque); }
+}
+function _guardandoSoltar(){ _guardandoEls.forEach(function(b){ try{ delete b.dataset.guardando; b.classList.remove('is-guardando'); }catch(e){} }); _guardandoEls=[]; }
+function _pildora(){
+  var el=document.getElementById('guardandoPill');
+  if(!el){
+    el=document.createElement('div'); el.id='guardandoPill'; el.setAttribute('role','status');
+    el.style.cssText='position:fixed;left:50%;bottom:calc(env(safe-area-inset-bottom, 0px) + 84px);transform:translateX(-50%);'
+      +'background:#331C1C;color:#fff;padding:8px 14px;border-radius:20px;font:600 13px/1.2 inherit;z-index:9998;'
+      +'pointer-events:none;box-shadow:0 4px 14px rgba(0,0,0,.18);display:none;max-width:86vw;white-space:nowrap;overflow:hidden;text-overflow:ellipsis';
+    document.body.appendChild(el);
+  }
+  return el;
+}
 function showLoader(msg, immediate){
   loaderCount++;
+  _guardandoMarcar();
   var doShow=function(){
-    var el=document.getElementById('loaderOverlay');
-    if(msg)document.getElementById('loaderMsg').textContent=msg;
-    if(el&&loaderCount>0)el.classList.add('visible');
+    if(loaderCount<=0)return;
+    var el=_pildora(); el.textContent='⏳ '+(msg||'Guardando…'); el.style.display='block';
   };
   if(immediate){
     if(loaderTimer){clearTimeout(loaderTimer);loaderTimer=null;}
@@ -12959,8 +12989,9 @@ function hideLoader(force){
   if(force)loaderCount=0;else loaderCount=Math.max(0,loaderCount-1);
   if(loaderCount===0){
     if(loaderTimer){clearTimeout(loaderTimer);loaderTimer=null;}
-    var el=document.getElementById('loaderOverlay');
-    if(el)el.classList.remove('visible');
+    var el=document.getElementById('guardandoPill');
+    if(el)el.style.display='none';
+    _guardandoSoltar();
     // Si estamos en Pedidos o Pedidos Home, scrollear arriba de todo para ver el primer pedido
     var pedTab=document.getElementById('p-pedidos');
     var pedHomeTab=document.getElementById('p-pedidoshome');
@@ -17470,14 +17501,22 @@ function _ocPrevia(body){
   return _ordenPost(b).then(function(r){return r.json();})
     .then(function(d){return (d&&d.ok&&d.ocTexto)||'';}).catch(function(){return '';});
 }
+/* NINGUN TOQUE TAPA LA PANTALLA (2/11/2026). El «Guardando…» va en el boton que se toco (deshabilitado), no en un
+   loader de pantalla completa: el resto del ERP sigue usable. Devuelve con que volverlo a como estaba. */
+function _btnGuardando(btn,txt){
+  if(!btn)return function(){};
+  var t=btn.textContent, d=btn.disabled; btn.disabled=true; btn.textContent=txt||'Guardando…';
+  return function(){ try{ btn.disabled=d; btn.textContent=t; }catch(e){} };
+}
+function _btnDe(sel){ try{ return document.querySelector(sel); }catch(e){ return null; } }
 function guardarEditor(uid,_ocTx){
   var ed=window['_ed_'+uid]; if(!ed) return;
   var lineas=ed.lineas.filter(function(l){return l.q>0;});
   if(lineas.length===0){toast('Agregá al menos un producto');return;}
   if(_ocTx===undefined&&ed.es!=='Entregado'){
-    showLoader('Mirando qué pasa con las OC…');
+    var _vbP=_btnGuardando(_btnDe('[onclick*="guardarEditor(\''+uid+'\'"]'),'Mirando las OC…');
     _ocPrevia({action:'editarPedido',hoja:ed.hoja,id:ed.id,row:ed.row,
-      lineas:lineas.map(function(l){return {a:l.a,q:l.q};})}).then(function(tx){hideLoader(true);guardarEditor(uid,tx||'');});
+      lineas:lineas.map(function(l){return {a:l.a,q:l.q};})}).then(function(tx){_vbP();guardarEditor(uid,tx||'');});
     return;
   }
   var _pzA=Object.keys(ed.pzAdd||{}), _pzS=Object.keys(ed.pzSol||{});
@@ -17498,7 +17537,7 @@ function guardarEditor(uid,_ocTx){
   // Editar productos puede resetear origen a Pendiente o auto-reservar → tratarlo como
   // cambio de origen para la ventana de gracia del aviso de OCs huérfanas.
   if(typeof _marcarCambioOrigen==='function') _marcarCambioOrigen();
-  showLoader('Guardando cambios...');
+  var _vbE=_btnGuardando(_btnDe('[onclick*="guardarEditor(\''+uid+'\'"]'),'Guardando…');
   // Snapshot del pedido para UI optimista antes de mandar
   var _edHoja=ed.hoja, _edId=ed.id;
   var _edLineas=lineas.map(function(l){return {a:l.a,q:l.q};});
@@ -17511,9 +17550,8 @@ function guardarEditor(uid,_ocTx){
   _ordenPost(_cuerpo)
     .then(function(r){return r.json();})
     .then(function(r){
-      // Cerrar loader apenas responde el POST — no esperamos load() completo (~15s).
       // UI optimista: pinto las líneas nuevas + FP + $ del pedido en D antes de load.
-      hideLoader(true);
+      _vbE();
       if(r.ok){
         cancelarEditor(uid);
         /* Los kilos de la carne son los que calculo el backend desde las piezas. */
@@ -17558,7 +17596,7 @@ function guardarEditor(uid,_ocTx){
         _recargarPedidos().then(function(){window._forceTopOnRender=false;});
       }
     })
-    .catch(function(){hideLoader(true);window._forceTopOnRender=false;toast('Sin conexion');});
+    .catch(function(){_vbE();window._forceTopOnRender=false;toast('No pude confirmar si se guardó. Mirá el pedido antes de volver a guardar.');_recargarPedidos();});
 }
 
 // Auto-balance: cuando cambiás un input (DEP u OC), el otro se ajusta para que sumen la cantidad pedida.
@@ -17964,9 +18002,9 @@ function confirmarCancelarPed(btn,_ocTx){
   var _cob=!!(p&&p.ep==='Cobrado'&&_CPL_HOJAS[hoja]);
   /* La linea de las OC antes de confirmar (15/10/2026): lo ya pedido pasa a stock. */
   if(_ocTx===undefined){
-    btn.disabled=true;showLoader('Mirando qué pasa con las OC…');
+    var _vbC=_btnGuardando(btn,'Mirando las OC…');
     _ocPrevia({action:'cancelarPedido',hoja:hoja,id:id,row:row,plata:_cob?'a_favor':''})
-      .then(function(tx){hideLoader(true);btn.disabled=false;confirmarCancelarPed(btn,tx||'');});
+      .then(function(tx){_vbC();confirmarCancelarPed(btn,tx||'');});
     return;
   }
   if(_cob){
@@ -17984,7 +18022,6 @@ function _cancelarPedEnviar(btn,hoja,id,row,cli,plata){
   _patchPedidoLocal(hoja,id,{es:'Cancelado'});
   render();
   toast('Pedido cancelado');
-  showLoader('Cancelando pedido...');
   var _body={action:'cancelarPedido',hoja:hoja,id:id,row:row,clientOpId:_pfId()};
   if(plata)_body.plata=plata;
   _ordenPost(_body)
