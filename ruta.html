@@ -10344,7 +10344,7 @@ function _cvSetQuien(n){if(!_cvCtx)return;_cvCtx.quien=n;_cvSync();}
    cuáles faltan (`recibidos[].cobroCerrado:false`, ultimas 24 h): no se rehace aca la regla de «del más viejo al más
    nuevo». Mandarlo dos veces no cobra dos veces (la segunda ya lo ve cerrado) y si Apps Script lo rechaza vuelve solo
    a false. Sin la 375 `recibidos` no viene: no hace nada. */
-var _cvCierreVuelo=false, _cvCierreHechos={}, _cvCierreUlt=0;
+var _cvCierreVuelo=false, _cvCierreHechos={}, _cvCierreUlt=0, _cvCierreAvisado=false;
 function _cvCerrarRecibidos(forzar){
   if(_cvCierreVuelo||typeof _sbPermiso!=='function')return;
   if(!forzar&&Date.now()-_cvCierreUlt<30000)return;
@@ -10355,10 +10355,21 @@ function _cvCerrarRecibidos(forzar){
       .then(function(r){ return r.ok?r.json():null; });
   }).then(function(d){
     _cvCierreVuelo=false;
-    var rs=((d&&d.ok&&Array.isArray(d.recibidos))?d.recibidos:[]).filter(function(x){ return x&&x.cobroCerrado===false&&x.n!=null&&!_cvCierreHechos[String(x.clave||x.n)]; });
+    /* Los intentos quedan en el celular: si a los 5 min el pedido sigue sin cerrar (Apps Script lo rechazo, p. ej. el
+       monto cambio con COBRO_RED_ESTRICTO), no se reintenta para siempre: se avisa una vez que hay que cerrarlo a mano. */
+    var ints={}; try{ ints=JSON.parse(localStorage.getItem('mc_refc')||'{}')||{}; }catch(e){} Object.keys(ints).forEach(function(k){ if(Date.now()-ints[k]>2*86400000)delete ints[k]; });
+    var aMano=[];
+    var rs=((d&&d.ok&&Array.isArray(d.recibidos))?d.recibidos:[]).filter(function(x){
+      if(!x||x.cobroCerrado!==false||x.n==null||!x.representante)return false;
+      var k=String(x.clave||x.n);
+      if(ints[k]&&Date.now()-ints[k]>5*60000){ aMano.push('#'+x.n+(x.cliente?' '+x.cliente:'')); return false; }
+      return !ints[k]&&!_cvCierreHechos[k];
+    });
+    if(aMano.length&&!_cvCierreAvisado){ _cvCierreAvisado=true; showToast('⚠️ No se pudo dejar Cobrado al cliente: '+aMano.join(', ')+'. Cerralo a mano en el pedido.'); }
     rs.forEach(function(x){
       var k=String(x.clave||x.n); _cvCierreHechos[k]=Date.now();
-      var body={action:'updatePedidoRed',pedidoId:String(x.n),row:Number(x.row)||0,vendedor:String(x.representante||x.vendedor||''),
+      ints[k]=Date.now(); try{ localStorage.setItem('mc_refc',JSON.stringify(ints)); }catch(e){}
+      var body={action:'updatePedidoRed',pedidoId:String(x.n),row:Number(x.row)||0,vendedor:String(x.representante),
         updates:{cobroCliente:true,montoVisto:Number(x.monto)||0},clientOpId:'refc_'+k.replace(/[^A-Za-z0-9_-]/g,'').slice(0,60)};
       (typeof _ordenPost==='function'?_ordenPost(body):fetch(RUT_APPS_SCRIPT_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(body)}))
         .then(function(r){ return r&&r.json?r.json():r; })
