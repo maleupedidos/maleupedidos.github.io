@@ -56,6 +56,17 @@ const pausa = ms => new Promise(r => setTimeout(r, ms));
       const b2 = await cdp.evaluar(cli, `({ya:(D.movimientos||[]).some(function(x){return x.tipo==='gasto'&&Number(x.r)===${Number(b.r)};}),mp:D.caja.gastosMP})`);
       chk('   y la recarga de la base (que todavia lo trae) no lo devuelve', !b2.ya && Math.round(b.antesMp - b2.mp) === Math.round(b.$), Object.assign({ antesMp: b.antesMp }, b2));
     }
+    /* CONTAR: «Confirmar saldo» con MP = lo calculado + $1 (el POST va cortado: no se escribe). La recarga de la base
+       trae el saldo de antes: el nuevo tiene que quedarse. */
+    const aj = await cdp.evaluar(cli, `(function(){
+      var c=_calcSaldo(); var mpN=Math.round(c.mp)+1;
+      $('ajMP').value=String(mpN); $('ajCF').value=''; $('ajBil').value=''; $('ajInv').value='';
+      guardarAjuste();
+      return new Promise(function(r){ setTimeout(function(){ r({mpN:mpN, sb:D.saldoBase&&D.saldoBase.mp}); }, 2500); });
+    })()`);
+    chk('Contar: el saldo nuevo de MP queda en pantalla ($' + aj.mpN + ')', Math.round(aj.sb) === aj.mpN, aj);
+    const aj2 = await cdp.evaluar(cli, `actualizarCaja().then(function(){return {sb:D.saldoBase&&D.saldoBase.mp, calc:Math.round(_calcSaldo().mp)};})`);
+    chk('   tocando Actualizar (la base trae el saldo viejo) no vuelve atras', Math.round(aj2.sb) === aj.mpN, aj2);
     const err = await cdp.evaluar(cli, 'window.__err');
     chk('sin errores en la consola', !err.length, err.slice(0, 5));
   } finally { cli.matar(); }

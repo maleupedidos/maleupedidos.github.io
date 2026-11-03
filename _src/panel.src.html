@@ -13231,7 +13231,7 @@ function _loadUnaVez(){
       if(!Array.isArray(d.provisiones)&&Array.isArray(D.provisiones))d.provisiones=D.provisiones;
       if(!Array.isArray(d.config)&&Array.isArray(D.config))d.config=D.config;
     }
-    D=d;try{if(typeof _movLocalesReponer==='function')_movLocalesReponer();}catch(e){}   /* lo recien cargado en Caja (2/11/2026) */
+    D=d;try{if(typeof _saldoLocalReponer==='function'&&d&&d.saldoBase)_saldoLocalReponer(d);if(typeof _movLocalesReponer==='function')_movLocalesReponer();}catch(e){}   /* lo recien cargado en Caja (2/11/2026) */
     _volcadoPedidoEn=_pedidoEn;if(d&&d.oc&&d.oc.lista)_ocFrescas=true;try{localStorage.setItem('ma3',JSON.stringify(d));}catch(e){}try{sync();}catch(e){}_ldSync();$('dot').className='hdr-dot';try{sbUpdateMetrics();}catch(e){}
     var _pinto=true;
     if(_hayEditorAbierto()){_pendingLoadRender=true;}
@@ -15803,6 +15803,7 @@ function _cajaCampos(d){
      si no se lo nombra aca, el backend lo manda y no llega a D. */
   if(Array.isArray(d.proveedores))D.proveedores=d.proveedores;
   /* Al final: lo recien cargado que esta lectura todavia no trae vuelve a la lista y a los totales (2/11/2026). */
+  if(d.saldoBase)_saldoLocalReponer(d);
   if(Array.isArray(d.movimientos))_movLocalesReponer();
 }
 function _cajaAplicar(d){
@@ -18020,6 +18021,35 @@ function _movLocalDescartar(desde){ _movLocales=_movLocales.filter(function(x){ 
    siguiente (cash_movement, por replica) la traia de vuelta. Se anota: cada lectura que todavia la trae la saca de la
    lista y la resta de los totales, hasta que la base deje de traerla o pasen MOV_LOC_MS. Si el borrado falla, se olvida. */
 var _movBorrados=[];
+/* EL SALDO CONTADO NO VUELVE ATRAS (2/11/2026). Contar e Invertir escriben Saldo Base por Apps Script; la Caja de la
+   base lo ve cuando la replica sube la fila. Mientras una lectura traiga el saldo de antes, se queda el nuevo, y despues
+   de un conteo los totales son «lo que trae la lectura menos lo que habia al contar» (la lectura sigue contando desde el
+   conteo viejo). `antes` = la caja al momento de contar (null en Invertir, que no corta). */
+var _saldoLocal=null;
+function _saldoLocalAnotar(sb,cajaAntes){ _saldoLocal={t:Date.now(),sb:JSON.parse(JSON.stringify(sb||{})),antes:cajaAntes?JSON.parse(JSON.stringify(cajaAntes)):null}; }
+function _saldoIgual(a,b){
+  if(!a||!b)return false;
+  var n=function(x){return Math.round(Number(x)||0);};
+  return n(a.ef)===n(b.ef)&&n(a.mp)===n(b.mp)&&n(a.inv)===n(b.inv)&&String(a.fecha||'').slice(0,10)===String(b.fecha||'').slice(0,10);
+}
+function _cajaRestar(c,a){
+  var o=JSON.parse(JSON.stringify(c||{}));
+  Object.keys(a||{}).forEach(function(k){
+    if(k==='cuentas')return;
+    if(typeof a[k]==='number'&&typeof o[k]==='number')o[k]-=a[k];
+    else if(a[k]&&typeof a[k]==='object'&&!Array.isArray(a[k])){
+      o[k]=o[k]&&typeof o[k]==='object'?o[k]:{};
+      Object.keys(a[k]).forEach(function(j){ if(typeof a[k][j]==='number')o[k][j]=(Number(o[k][j])||0)-a[k][j]; });
+    }
+  });
+  return o;
+}
+function _saldoLocalReponer(d){
+  if(!_saldoLocal||!D)return;
+  if(Date.now()-_saldoLocal.t>MOV_LOC_MS||!d||!d.saldoBase||_saldoIgual(d.saldoBase,_saldoLocal.sb)){ _saldoLocal=null; return; }
+  D.saldoBase=JSON.parse(JSON.stringify(_saldoLocal.sb));
+  if(_saldoLocal.antes&&d.caja)D.caja=_cajaRestar(d.caja,_saldoLocal.antes);
+}
 function _movEsElBorrado(m,b){ return m&&m.tipo===b.tipo&&(Number(m.r)===Number(b.r)||(Number(m.$)===Number(b.$)&&String(m.con||'')===String(b.con||'')&&Math.abs((Number(m.ts)||0)-(Number(b.ts)||0))<60000)); }
 function _movBorradoAnotar(m){ _movBorrados.push({tipo:m.tipo,r:m.r,$:Number(m.$)||0,con:m.con||'',ts:m.ts||0,t:Date.now()}); }
 function _movBorradoOlvidar(tipo,row){ _movBorrados=_movBorrados.filter(function(b){ return !(b.tipo===tipo&&Number(b.r)===Number(row)); }); }
@@ -18723,6 +18753,7 @@ function guardarAjuste(){
            que la pantalla se caiga al corte viejo y el Brubank desapareceria de
            la Caja hasta el proximo volcado, que son 10-14 segundos. */
         var _ctsPrev=(D.caja||{}).cuentas;
+        _saldoLocalAnotar(D.saldoBase,D.caja);   /* (2/11/2026) la lectura atrasada no lo vuelve atras */
         D.caja={cobradoEf:0,cobradoMP:0,gastosEf:0,gastosMP:0,ingresosEf:0,ingresosMP:0,
                 cobradoPorCuenta:{},gastosPorCuenta:{},ingresosPorCuenta:{},cuentas:_ctsPrev};
         render();hideLoader(true);
@@ -18773,6 +18804,7 @@ function guardarInvertir(){
         if(D.saldoBase){
           D.saldoBase.mp=r.mp;D.saldoBase.inv=r.inv;
           if(D.saldoBase.porCuenta){var _ci=_ctaInv(_cajaCuentas());if(_ci)D.saldoBase.porCuenta[_ci.id]=r.mp;}
+          _saldoLocalAnotar(D.saldoBase,null);   /* (2/11/2026) invertir no corta: solo el saldo */
         }
         render();hideLoader(true);
         toast(_invDir==='invertir'?'Invertido $'+f$(monto)+' (MP → Inversiones)':'Rescatado $'+f$(monto)+' (Inversiones → MP)');

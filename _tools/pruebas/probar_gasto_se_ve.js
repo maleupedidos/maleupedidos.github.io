@@ -23,19 +23,19 @@ function sacar(nombre) {
   for (; j < src.length; j++) { if (src[j] === '{') n++; else if (src[j] === '}' && --n === 0) break; }
   return src.slice(i, j + 1);
 }
-const piezas = ['_movCajaSumar', '_movLocalDescartar', '_movEsElBorrado', '_movBorradoAnotar', '_movBorradoOlvidar', '_movSacar', '_movLocalesReponer', 'aplicarMovLocal', '_cajaCampos'].map(sacar);
+const piezas = ['_movCajaSumar', '_movLocalDescartar', '_movEsElBorrado', '_movBorradoAnotar', '_movBorradoOlvidar', '_movSacar', '_saldoLocalAnotar', '_saldoIgual', '_cajaRestar', '_saldoLocalReponer', '_movLocalesReponer', 'aplicarMovLocal', '_cajaCampos'].map(sacar);
 let ok = 0, mal = 0;
 const chk = (t, c, d) => { c ? ok++ : mal++; console.log((c ? '  ok   ' : '  MAL  ') + t + (c ? '' : '  -> ' + JSON.stringify(d))); };
 if (piezas.some(p => !p)) { chk('el panel tiene _movLocalesReponer (lo cargado vuelve despues de una lectura)', false, piezas.map(p => !!p)); console.log('\n' + ok + ' ok · ' + mal + ' mal'); process.exit(1); }
 let reloj = Date.parse('2026-11-02T22:31:31-03:00');
 const mundo = new Function('reloj', 'Date_', `
-  var D = null; var MOV_LOC_MS = 15*60*1000, _movLocales = [], _movBorrados = [];
+  var D = null; var MOV_LOC_MS = 15*60*1000, _movLocales = [], _movBorrados = [], _saldoLocal = null;
   var Date = function (x) { return x === undefined ? new Date_(reloj()) : new Date_(x); };
   Date.now = function () { return reloj(); }; Date.parse = Date_.parse;
   function _cajaCuentas() { return [{ id: 'efectivo', tipo: 'efectivo' }, { id: 'mp', def: true }, { id: 'brubank' }]; }
   function _horaMov() { return ''; }
   ${piezas.join('\n')}
-  return { set D(v) { D = v; }, get D() { return D; }, aplicarMovLocal, _cajaCampos, _movLocalDescartar, _movSacar, _movBorradoAnotar, _movBorradoOlvidar, borrados: function () { return _movBorrados.length; }, locales: function () { return _movLocales.length; } };
+  return { set D(v) { D = v; }, get D() { return D; }, aplicarMovLocal, _cajaCampos, _movLocalDescartar, _movSacar, _movBorradoAnotar, _movBorradoOlvidar, borrados: function () { return _movBorrados.length; }, _saldoLocalAnotar, saldoLocal: function () { return _saldoLocal; }, locales: function () { return _movLocales.length; } };
 `)(() => reloj, Date);
 const leer = () => JSON.parse(JSON.stringify({ caja: { gastosEf: 0, gastosMP: 5000, ingresosEf: 0, ingresosMP: 0, gastosPorCuenta: { mp: 5000 } },
   movimientos: [{ tipo: 'gasto', r: 399, f: '02/11/2026', ts: Date.parse('2026-11-02T17:15:07-03:00'), cat: 'Proveedor', con: 'Pago a Le Unike', met: 'Mercado Pago', cta: 'mp', $: 5000 }] }));
@@ -100,6 +100,30 @@ m5 = mundo.D.movimientos[0];
 mundo._movSacar(m5); mundo._movBorradoAnotar(m5); mundo._movBorradoOlvidar('gasto', 399);
 mundo._cajaCampos(leer());
 chk('un borrado que fallo vuelve a mostrar el movimiento y su total', cuantos('Pago a Le Unike') === 1 && mundo.D.caja.gastosMP === 5000, mundo.D.caja);
+
+// 7. CONTAR: el saldo nuevo no vuelve atras y los totales cuentan desde el conteo
+const conSaldo = () => { const x = leer(); x.saldoBase = { ef: 100000, mp: 2000000, inv: 0, fecha: '21/10/2026', porCuenta: { efectivo: 100000, mp: 2000000 } }; return x; };
+mundo.D = conSaldo();
+mundo._saldoLocalAnotar({ ef: 150000, mp: 1900000, inv: 0, fecha: '02/11/2026', porCuenta: { efectivo: 150000, mp: 1900000 } }, mundo.D.caja);
+mundo.D.saldoBase = { ef: 150000, mp: 1900000, inv: 0, fecha: '02/11/2026', porCuenta: { efectivo: 150000, mp: 1900000 } };
+mundo.D.caja = { cobradoEf: 0, cobradoMP: 0, gastosEf: 0, gastosMP: 0, ingresosEf: 0, ingresosMP: 0, gastosPorCuenta: {}, ingresosPorCuenta: {} };
+reloj += 20000;
+const vieja = conSaldo(); vieja.caja.gastosMP = 5000 + 800; vieja.caja.gastosPorCuenta.mp = 5800;   /* despues del conteo hubo un gasto de $800 */
+mundo._cajaCampos(vieja);   /* la base todavia tiene el saldo del 21/10 */
+chk('Contar: una lectura con el saldo viejo no lo vuelve atras', mundo.D.saldoBase.ef === 150000 && mundo.D.saldoBase.mp === 1900000, mundo.D.saldoBase);
+chk('   y los totales cuentan desde el conteo (gastos MP $800, no $5.800)', mundo.D.caja.gastosMP === 800 && mundo.D.caja.gastosPorCuenta.mp === 800, mundo.D.caja);
+reloj += 20000;
+const nueva = conSaldo(); nueva.saldoBase = { ef: 150000, mp: 1900000, inv: 0, fecha: '02/11/2026 22:50', porCuenta: { efectivo: 150000, mp: 1900000 } };
+nueva.caja.gastosMP = 800; nueva.caja.gastosPorCuenta.mp = 800;
+mundo._cajaCampos(nueva);   /* la base ya tiene el conteo */
+chk('   cuando la base trae el conteo, manda la lectura y se suelta', mundo.D.caja.gastosMP === 800 && mundo.saldoLocal() === null, { caja: mundo.D.caja, local: mundo.saldoLocal() });
+
+// 8. INVERTIR: el saldo nuevo se queda, los totales no se tocan
+mundo.D = conSaldo();
+mundo._saldoLocalAnotar({ ef: 100000, mp: 1500000, inv: 500000, fecha: '21/10/2026', porCuenta: { efectivo: 100000, mp: 1500000 } }, null);
+reloj += 20000;
+mundo._cajaCampos(conSaldo());
+chk('Invertir: una lectura vieja no devuelve el MP de antes, y los totales quedan como los trae', mundo.D.saldoBase.mp === 1500000 && mundo.D.saldoBase.inv === 500000 && mundo.D.caja.gastosMP === 5000, { sb: mundo.D.saldoBase, caja: mundo.D.caja });
 
 console.log('\n' + ok + ' ok · ' + mal + ' mal');
 process.exit(mal ? 1 : 0);
