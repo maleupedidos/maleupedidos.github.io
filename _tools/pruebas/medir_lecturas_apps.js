@@ -21,12 +21,15 @@ const TABS = process.env.SOLO_ARRANQUE ? [] : [
   ['ventas', 'ventas'], ['ventas', 'cobros'], ['ventas', 'tendencia'], ['ventas', 'productos'], ['ventas', 'combos'],
   ['stock', 'productos'], ['stock', 'contar'], ['stock', 'mover'], ['stock', 'carne'], ['stock', 'carga'], ['stock', 'catalogo'],
 ];
+/* COMO OTRO USUARIO: USUARIO=santos ROL=repartidor TABS=ruta,mireparto (el token tiene que ser el de ese usuario). */
+if (process.env.TABS) { TABS.length = 0; process.env.TABS.split(',').forEach((t) => TABS.push(t.split('>'))); }
+const COMO = process.env.USUARIO ? `;try{localStorage.setItem("maleu_panel_session",JSON.stringify({usuario:${JSON.stringify(process.env.USUARIO)},rol:${JSON.stringify(process.env.ROL || '')},nombre:${JSON.stringify(process.env.USUARIO)},ts:Date.now()}));}catch(e){}` : '';
 (async () => {
   const cli = await cdp.abrir();
   /* SIN_APPS=1: el ensayo en este navegador (localStorage maleu_sin_apps = '1'). Por tab: qué se cortó, errores nuevos y
      cuánto texto tiene la pantalla (una tab que quedó vacía sin Apps Script se ve acá). */
   const SIN = !!process.env.SIN_APPS;
-  await cli.enviar('Page.addScriptToEvaluateOnNewDocument', { source: prep(TOKEN) + ESPIA + (SIN ? `;try{localStorage.setItem('maleu_sin_apps','1');}catch(e){}` : '') });
+  await cli.enviar('Page.addScriptToEvaluateOnNewDocument', { source: prep(TOKEN) + COMO + ESPIA + (SIN ? `;try{localStorage.setItem('maleu_sin_apps','1');}catch(e){}` : '') });
   await cli.enviar('Page.enable', {});
   cli.escuchar((m, p) => { if (m === 'Page.javascriptDialogOpening') cli.enviar('Page.handleJavaScriptDialog', { accept: true }).catch(() => {}); });
   await cli.enviar('Page.navigate', { url: URL });
