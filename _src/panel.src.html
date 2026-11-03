@@ -12802,7 +12802,12 @@ function guardarMoverLug(){
     .then(function(r){
       /* Recibí de un vendedor puede volver `diferida` (4d-2): la caja se recarga
          cuando el aplicador ya anoto la rendicion. */
-      if(r&&r.ok){toast(okTxt);_movClientOpLimpiar(btn);cerrarMoverLug();_pfAplicar(r).then(function(){_recargarCaja();});}
+      if(r&&r.ok){
+        /* (2/11/2026) Mover plata se ve al instante; la rendicion de un representante no (sin movimiento con que
+           emparejarla, reponerla la sumaria dos veces): esa espera la lectura. */
+        if(payload.action==='moverPlata'){ try{ _lugAnotar(payload.desde,payload.hacia,payload.monto,payload.nota); render(); }catch(eL){} }
+        toast(okTxt);_movClientOpLimpiar(btn);cerrarMoverLug();_pfAplicar(r).then(function(){_recargarCaja();});
+      }
       else{toast('No se movió: '+((r&&(r.err||r.error))||'error'));btn.disabled=false;btn.textContent=txt;}
     })
     .catch(function(){toast('No pude confirmar. Tocá el botón otra vez: no se va a duplicar.');btn.disabled=false;btn.textContent=txt;});
@@ -15821,6 +15826,7 @@ function _cajaCampos(d){
   if(Array.isArray(d.proveedores))D.proveedores=d.proveedores;
   /* Al final: lo recien cargado que esta lectura todavia no trae vuelve a la lista y a los totales (2/11/2026). */
   if(d.saldoBase)_saldoLocalReponer(d);
+  if(d.lugares!==undefined)_lugLocalesReponer();
   if(Array.isArray(d.movimientos))_movLocalesReponer();
 }
 function _cajaAplicar(d){
@@ -18052,6 +18058,42 @@ var _movBorrados=[];
    de un conteo los totales son «lo que trae la lectura menos lo que habia al contar» (la lectura sigue contando desde el
    conteo viejo). `antes` = la caja al momento de contar (null en Invertir, que no corta). */
 var _saldoLocal=null;
+/* MOVER PLATA SE VE AL INSTANTE (2/11/2026). Los lugares (caja fuerte `cf`, billeteras `bil:X`, lo cobrado sin guardar
+   `cob:X`) los arma la base con la replica de Movimientos Plata: al mover, no cambiaba nada en pantalla hasta minutos
+   despues. Al OK se pasa el monto de un lugar al otro y el movimiento entra primero en `movsUlt`; cada lectura lo repone
+   hasta que lo trae (mismo desde, hacia y monto, de hace menos de 10 min) o pasan MOV_LOC_MS. Los sobres (`res:`)
+   tienen reservas por proveedor: esos se ven con la lectura. */
+var _lugLocales=[];
+function _lugBalde(L,k,delta){
+  if(!L||!k)return false;
+  if(k==='cf'){ L.cf=(Number(L.cf)||0)+delta; L.cfLibre=(Number(L.cfLibre)||0)+delta; return true; }
+  var m=/^(bil|cob):(.*)$/.exec(k); if(!m)return false;
+  L[m[1]]=L[m[1]]||{}; L[m[1]][m[2]]=(Number(L[m[1]][m[2]])||0)+delta; return true;
+}
+function _lugMover(L,x){
+  if(!L||String(x.desde).indexOf('res:')===0||String(x.hacia).indexOf('res:')===0)return false;
+  if(!_lugBalde(L,x.desde,0)||!_lugBalde(L,x.hacia,0))return false;
+  _lugBalde(L,x.desde,-x.$); _lugBalde(L,x.hacia,x.$);
+  L.movsUlt=[{f:x.f,desde:x.desde,hacia:x.hacia,$:x.$,q:x.q||'',nota:x.nota||'',_local:1}].concat(L.movsUlt||[]);
+  return true;
+}
+function _lugAnotar(desde,hacia,monto,nota){
+  if(!D||!D.lugares)return;
+  var h=new Date(), f=String(h.getDate()).padStart(2,'0')+'/'+String(h.getMonth()+1).padStart(2,'0')+' '+String(h.getHours()).padStart(2,'0')+':'+String(h.getMinutes()).padStart(2,'0');
+  var x={desde:desde,hacia:hacia,$:Number(monto)||0,nota:nota||'',f:f,t:Date.now(),q:(window._authUser&&_authUser.nombre)||''};
+  if(_lugMover(D.lugares,x))_lugLocales.push(x);
+}
+function _lugLocalesReponer(){
+  if(!D||!D.lugares||!_lugLocales.length)return;
+  var ahora=Date.now(), L=D.lugares;
+  _lugLocales=_lugLocales.filter(function(x){
+    if(ahora-x.t>MOV_LOC_MS)return false;
+    var ya=(L.movsUlt||[]).some(function(m){ return m&&!m._local&&m.desde===x.desde&&m.hacia===x.hacia&&Number(m.$)===Number(x.$)&&String(m.f||'').slice(0,5)===x.f.slice(0,5); });
+    if(ya)return false;
+    _lugMover(L,x);
+    return true;
+  });
+}
 function _saldoLocalAnotar(sb,cajaAntes){ _saldoLocal={t:Date.now(),sb:JSON.parse(JSON.stringify(sb||{})),antes:cajaAntes?JSON.parse(JSON.stringify(cajaAntes)):null}; }
 function _saldoIgual(a,b){
   if(!a||!b)return false;
