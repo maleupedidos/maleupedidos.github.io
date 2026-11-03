@@ -14742,7 +14742,7 @@ function _leerVersion(app){
    "El HTML no sabe que version es" dejo de ser cierto: el build le escribe
    adentro el CACHE_NAME de sw-panel.js, el mismo que deploy.sh obliga a subir en
    cada cambio. Si lo publicado dice otra cosa, esta pagina es vieja. Punto. */
-var _APP_CN_PAGINA='maleu-panel-v833';
+var _APP_CN_PAGINA='maleu-panel-v834';
 
 /* Devuelve [{k,v}] si lo publicado no es lo que esta pagina corre. */
 function _chequearVersiones(){
@@ -20480,7 +20480,10 @@ function pasarVendAbrir(uid){
   if(box.classList.contains('hidden')||box.childElementCount)return;
   if(_rbDatos&&_rbDatos.vendedores){_pasarVendForm(box);return;}
   box.innerHTML='<div class="red-com-mot">Cargando los representantes…</div>';
-  fetch(API+'?action=redBandeja&t='+Date.now()).then(function(r){return r.json();}).then(function(d){
+  /* (3/11/2026) Con RED_BANDEJA_ARMA en «si», de la base (`_rbDeLaBase`, la misma de la bandeja); si no contesta, Apps Script. */
+  var _rbApps=function(){ return fetch(API+'?action=redBandeja&t='+Date.now()).then(function(r){return r.json();}); };
+  var _rbM=(typeof _palancaVal==='function'&&typeof _sbPermiso==='function')?_palancaVal('redArma'):null;
+  (_rbM==='si'?_rbDeLaBase().then(function(d){ return (d&&Array.isArray(d.vendedores))?d:_rbApps(); },_rbApps):_rbApps()).then(function(d){
     if(d&&d.ok&&Array.isArray(d.vendedores)){_rbDatos=d;_pasarVendForm(box);}
     else box.innerHTML='<div class="red-com-mot">No pude traer los representantes. Cerrá y abrí de nuevo.</div>';
   }).catch(function(){box.innerHTML='<div class="red-com-mot">No pude traer los representantes. Cerrá y abrí de nuevo.</div>';});
@@ -43139,9 +43142,15 @@ if('serviceWorker' in navigator){
     tareas.push(traerJson('vendedores',20000,function(j){
       if(j&&Array.isArray(j.vendedores))_rsVendActivos=j.vendedores.map(function(v){return String(v.nombre||'').trim();}).filter(Boolean);
     }));
+    /* (3/11/2026) Las metas del mes por `_planTraer`: la base (`plan_mes_pantalla`, PLAN_BASE_ARMA) y, si no, Apps
+       Script. Antes iba `traerJson('planMes&mes=…')`, que no esta en LEC_ARMA (la clave lleva el mes): caia siempre a
+       Apps Script, y con el planMes entero. El PDF solo usa `metas`, que vienen en el liviano. */
     mesesDe(lun,fin).forEach(function(x){
-      tareas.push(traerJson('planMes&mes='+encodeURIComponent(x.label),20000,function(j){
-        if(j&&j.ok&&j.metas){try{localStorage.setItem(PLAN_CACHE+x.label,JSON.stringify(j));}catch(e){}}
+      tareas.push(new Promise(function(res){
+        var hecho=false, fin2=function(){ if(!hecho){hecho=true;res();} }, t=setTimeout(fin2,20000);
+        Promise.resolve(_planTraer(x.label,API+'?action=planMes&lite=1&mes='+encodeURIComponent(x.label)+'&t='+Date.now()))
+          .then(function(j){ if(hecho)return; clearTimeout(t); if(j&&j.ok&&j.metas){try{localStorage.setItem(PLAN_CACHE+x.label,JSON.stringify(j));}catch(e){}} fin2(); })
+          .catch(function(){ clearTimeout(t); fin2(); });
       }));
     });
     Promise.all(tareas).then(function(){cb();},function(){cb();});
@@ -60937,8 +60946,12 @@ function _redApProcesar() {
 function _redApEntro(coid, plazo, cb) {
   var hasta = Date.now() + plazo;
   (function una() {
-    fetch(APPS_SCRIPT_URL + '?action=pedidoEntro&coid=' + encodeURIComponent(coid), { method: 'GET' })
-      .then(function (r) { return r.json(); })
+    /* (3/11/2026) Con `pedidoEntro=si`, primero la base (`tienda_pedido_entro`, como Ruta): su SI es firme; su NO
+       todavia no dice nada (el pedido puede estar entrando por Apps Script), asi que ahi se pregunta a Apps Script. */
+    var _apps = function () { return fetch(APPS_SCRIPT_URL + '?action=pedidoEntro&coid=' + encodeURIComponent(coid), { method: 'GET' }).then(function (r) { return r.json(); }); };
+    ((typeof _lecModo === 'function' && _lecModo('pedidoEntro') === 'si' && typeof _lecArmaBase === 'function')
+      ? _lecArmaBase('pedidoEntro', { p: { coid: coid } }).then(function (b) { return (b.d && b.d.ok && b.d.entro) ? b.d : _apps(); }, _apps)
+      : _apps())
       .then(function (r) { if (r && r.ok && r.entro) return cb(r); throw 0; })
       .catch(function () { if (Date.now() + 5000 > hasta) return cb(null); setTimeout(una, 5000); });
   })();
