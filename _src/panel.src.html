@@ -29450,8 +29450,37 @@ function _rlqForm(d,v,q){
     +(listo?'':'<div class="rlq-nota">Elegí '+(s.cuenta?'de dónde salió el efectivo':'la cuenta')+' para poder registrarlo.</div>')+'</div>';
   return h;
 }
+/* (3/11/2026) LO RECIEN PAGADO. Tadeo le pago a Fini (LQ-0005), salio «Pago registrado» y la tarjeta seguia con
+   «Pagué $47.850»: la pantalla lee la liquidacion de la BASE y el pago, por Apps Script, llega a su copia minutos
+   despues. Lo que el servidor acepto se recuerda en el aparato (`mc_rlq_recien`) y esa quincena se muestra pagada
+   —sin boton— hasta que la base lo ve (el id aparece en los pagos, o la quincena deja de ofrecerse) o pasan 3 h.
+   Pagar dos veces igual no se puede: el servidor recalcula y contesta «No hay nada para pagar». */
+var _RLQ_RECIEN_LS='mc_rlq_recien';
+function _rlqRecienLeer(){ try{ return JSON.parse(localStorage.getItem(_RLQ_RECIEN_LS)||'{}')||{}; }catch(e){ return {}; } }
+function _rlqRecienGuardar(m){ try{ if(Object.keys(m).length)localStorage.setItem(_RLQ_RECIEN_LS,JSON.stringify(m)); else localStorage.removeItem(_RLQ_RECIEN_LS); }catch(e){} }
+function _rlqRecienAnotar(v,q,r){
+  var m=_rlqRecienLeer(); m[v+'|'+q]={id:String((r&&r.id)||''),total:Number(r&&r.total)||0,ts:Date.now()}; _rlqRecienGuardar(m);
+}
+/* Saca de `d` las quincenas recien pagadas (y su monto de «le debe» y de los totales); devuelve {v: [recien]}. */
+function _rlqRecienAplicar(d){
+  var m=_rlqRecienLeer(), out={}, cambio=false, ahora=Date.now();
+  Object.keys(m).forEach(function(k){
+    var x=m[k], vn=k.split('|')[0], qk=k.slice(vn.length+1);
+    var V=((d&&d.vendedores)||[]).filter(function(v){ return v.nombre===vn; })[0];
+    var ve=V&&(V.pagos||[]).some(function(p){ return x.id&&p.id===x.id; });
+    var Q=V&&(V.quincenas||[]).filter(function(q){ return q.key===qk; })[0];
+    if(ahora-x.ts>3*3600000||ve||!Q){ delete m[k]; cambio=true; return; }
+    V.quincenas=V.quincenas.filter(function(q){ return q!==Q; });
+    V.aPagar=Math.max(0,(Number(V.aPagar)||0)-(Number(Q.total)||0));
+    (out[vn]=out[vn]||[]).push({lbl:Q.lbl,id:x.id,total:x.total||Q.total,ts:x.ts});
+  });
+  if(cambio)_rlqRecienGuardar(m);
+  return out;
+}
 function rlqPintar(){
   var box=$('vRed'), d=RLQ_D; if(!box||!d)return;
+  d=JSON.parse(JSON.stringify(d));
+  var _recien=_rlqRecienAplicar(d);
   var hoyPagar=0, despues=0, sinMarcar=0;
   (d.vendedores||[]).forEach(function(v){
     (v.quincenas||[]).forEach(function(q){ if(q.vencida)hoyPagar+=q.total; else despues+=q.total; });
@@ -29465,11 +29494,18 @@ function rlqPintar(){
     +'<div class="rlq-kpi"><span>Sin marcar</span><b>$'+f$(sinMarcar)+'</b></div></div></div>';
   var vacios=[];
   (d.vendedores||[]).forEach(function(v){
-    var tiene=(v.quincenas||[]).length||(v.sinMarcar||[]).length||(v.pagos||[]).length||v.debeEntregar>0||(v.esperando||[]).length||v.propios>0;
+    var _rc=_recien[v.nombre]||[];
+    var tiene=_rc.length||(v.quincenas||[]).length||(v.sinMarcar||[]).length||(v.pagos||[]).length||v.debeEntregar>0||(v.esperando||[]).length||v.propios>0;
     if(!tiene){ vacios.push(v.nombre); return; }
     h+='<div class="card rt rlq-v" data-v="'+_rlqH(v.nombre)+'"><div class="rlq-vh"><div class="rlq-vn">'+_rlqH(v.nombre)+'</div>'
       +'<div class="rlq-vt">'+(v.aPagar>0?'Maleu le debe <b>$'+f$(v.aPagar)+'</b>':'Al día')+'</div></div>';
     h+=_rlqAlias(v);
+    _rc.forEach(function(x){
+      var f=new Date(x.ts), hh=('0'+f.getHours()).slice(-2)+':'+('0'+f.getMinutes()).slice(-2);
+      h+='<div class="rlq-q"><div class="rlq-qh"><b>'+_rlqH(x.lbl)+'</b><span class="rlq-chip ya">✓ Pagado'+(x.id?' · '+_rlqH(x.id):'')+' · '
+        +('0'+f.getDate()).slice(-2)+'/'+('0'+(f.getMonth()+1)).slice(-2)+' '+hh+'</span></div>'
+        +'<div class="rlq-qt"><span>Registrado</span><b>$'+f$(x.total)+'</b></div></div>';
+    });
     (v.quincenas||[]).forEach(function(q){
       var sel=_rlqSelDe(v.nombre,q.key);
       h+='<div class="rlq-q"><div class="rlq-qh"><b>'+_rlqH(q.lbl)+'</b><span class="rlq-chip '+(q.vencida?'ya':'no')+'">'
@@ -29581,6 +29617,8 @@ window.rlqConfirmar=function(){
       hideLoader(true);
       if(r&&r.ok){
         RLQ_SEL=null;
+        _rlqRecienAnotar(s.v,s.q,r);
+        rlqPintar();
         toast('Pago registrado · $'+f$(r.total)+' a '+s.v.split(' ')[0],4000);
         /* Con `diferida` (Caja C2) se escribe despues: el aplicador antes de releer. */
         _pfAplicar(r).then(function(){
