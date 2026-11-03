@@ -47,7 +47,7 @@ async function esperar(expr, ms) { const t0 = Date.now(); while (Date.now() - t0
    {ok, detalle} o tira. `escribe`: necesita las entidades PRUEBA; sin ellas se anota «esperando» y no corre. */
 async function paso(nombre, fn, opt) {
   opt = opt || {};
-  if (opt.escribe && !ENTIDADES) { pasos.push({ paso: nombre, ok: true, ms: 0, detalle: 'esperando las entidades PRUEBA (no corrió)' }); console.log('  --   ' + nombre + '  (esperando entidades)'); return null; }
+  if (opt.escribe && !ENTIDADES) { pasos.push({ paso: nombre, ok: true, salteado: true, ms: 0, detalle: 'esperando las entidades PRUEBA (no corrió)' }); console.log('  --   ' + nombre + '  (esperando entidades)'); return null; }
   const antes = await ev(`(window.__ensayoApps||[]).length`).catch(() => 0), antesS = await ev(`JSON.stringify(window.__sinApps||{})`).catch(() => '{}'), t0 = Date.now();
   let r;
   try { r = await fn(); } catch (e) { r = { ok: false, detalle: 'reventó: ' + String((e && e.message) || e).slice(0, 200) }; }
@@ -111,7 +111,7 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
   await pantalla('stock', 'productos', `typeof D==='object'&&D&&Array.isArray(D.stock)&&D.stock.length>0&&ST_FUENTE&&ST_FUENTE.de==='pg'`);
 
   /* 3) LO QUE TOCA PLATA REAL, EN SECO: la directa acepta, valida y no cae a Apps Script; no queda nada. */
-  if (!cred) { pasos.push({ paso: 'mover plata (en seco)', ok: true, ms: 0, detalle: 'solo con el usuario robot (con ROBOT_TOKEN el PREP corta los POST)' }); console.log('  --   mover plata (en seco)  (solo con el usuario robot)'); }
+  if (!cred) { pasos.push({ paso: 'mover plata (en seco)', ok: true, salteado: true, ms: 0, detalle: 'solo con el usuario robot (con ROBOT_TOKEN el PREP corta los POST)' }); console.log('  --   mover plata (en seco)  (solo con el usuario robot)'); }
   else await paso('mover plata (en seco)', async () => {
     const r = await rpc('robot_en_seco', { p_rpc: 'caja_mover_directo', p: { action: 'moverPlata', desde: 'cf', hacia: 'cf', monto: 1, nota: 'robot', proveedor: '', clientOpId: PREFIJO + 'mover-mal' } });
     const bien = r && r.ok && r.respuesta && r.respuesta.ok === false && /mismo lugar/.test(String(r.respuesta.err || ''));
