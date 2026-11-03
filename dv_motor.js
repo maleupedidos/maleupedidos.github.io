@@ -1649,8 +1649,11 @@ function _rtTareas_(ctx) {
       var val = Object.keys(cuenta).sort().map(function (k) { return k + ':' + cuenta[k]; }).join(' · ');
       var shT = _rtHoja_(true);
       if (shT) {
+        /* (3/11/2026, corte) la base primero: sin esto Tareas Red no se puede dejar de replicar. */
+        var _filaM = [_rbAhoraTxt_(), semKey, ctx.nombre, 'mostradas', semKey, val, ''];
+        _hojaBaseAntes_('Tareas Red', shT, decl.mostradas ? [{ row: decl.mostradas.row, col: 6, vals: [val] }] : [{ row: shT.getLastRow() + 1, col: 1, vals: _filaM }]);
         if (decl.mostradas) shT.getRange(decl.mostradas.row, 6).setValue(val);
-        else shT.appendRow([_rbAhoraTxt_(), semKey, ctx.nombre, 'mostradas', semKey, val, '']);
+        else shT.appendRow(_filaM);
         try { _hojaBaseMarcar_('Tareas Red', 'mostradas'); } catch (eHb) {}
       }
     }
@@ -1934,6 +1937,159 @@ function _roFoco_(filas) {
   return (a && a.txt) ? { txt: String(a.txt), por: String(a.por || '') } : null;
 }
 
+var HOJASBASE_ = {
+  'Objetivos Red': { clave: ['Semana', 'Vendedor'] },
+  'Plan Acciones': { clave: ['ID'] },
+  'Objetivos':     { clave: ['ID'] },
+  /* El «Mes» puede ser texto («octubre 2026») o una fecha: los dos son el mismo mes. */
+  'Plan Ventas':   { clave: ['Mes', 'Canal', 'Barrio'], mes: 'Mes' },
+  'Permisos':      { clave: ['Rol', 'Tab'], min: true },
+  'Vendedores':    { clave: ['Nombre'], fuera: ['PIN'] },
+  'Usuarios':      { clave: ['Usuario'], fuera: ['PIN'], min: true },
+  /* 130 (26/10/2026, bloque 5): la fecha en que se busca a cada proveedor. */
+  'Programaciones Búsqueda': { clave: ['Proveedor'] },
+  /* 130: las jugadas del CRM programadas para salir mas tarde. */
+  'Jugadas Programadas': { clave: ['ID'] },
+  /* 131: «Es redondeo, no lo cuentes» de la deuda con un proveedor. */
+  'Redondeos Proveedores': { clave: ['ID'] },
+  /* 132: el registro de los proveedores de carne y el de los meses cerrados del plan. */
+  'Proveedores Carne': { clave: ['Proveedor'] },
+  'Cierres de Mes': { clave: ['Mes'], mes: 'Mes' },
+  /* 134 (26/10/2026): COPIAS, no «base primero» (no hay handler con `_hojaBaseAntes_`):
+     Apps Script las sigue escribiendo y marca la copia. Las leen combosEval (Ventas › combos),
+     avisosErp (Red) y pedidoCambios (historial del pedido). La fecha de Cambios Pedidos va al
+     minuto: «Total después» separa dos cambios del mismo pedido en el mismo minuto. */
+  'Combos': { clave: ['Canal', 'N° Pedido', 'Combo ID'] },
+  'Cambios Pedidos': { clave: ['Fecha', 'Hoja', 'N° Pedido', 'Total después'] },
+  /* 155: el catalogo (producto, proveedor, costo, precios) que leen Proveedores y la bandeja.
+     La escriben el costo de la carne, el precio de factura y el alta de un producto: las
+     tres ponen la marca despues de escribir (todavia ninguna escribe primero en la base). */
+  'Proveedores': { clave: ['Abreviatura'] },
+  /* 157: las tareas de los vendedores (la bandeja las resume por semana). La escriben el portal
+     (las mostradas de la semana) y declarar una tarea; las dos ponen la marca despues. Una
+     tarea declarada dos veces son dos filas: por eso la clave lleva la hora. */
+  'Tareas Red': { clave: ['Fecha', 'Vendedor', 'Tipo', 'Clave'] },
+  /* 136 (27/10/2026): las dos de configuracion, para que la base arme Ajustes. Config_Maleu
+     tiene una fila por parametro y vigencia (`configMaleuSet` hace upsert por las dos); el
+     token del bot va vacio (`_ajSecreto_`). Config son los parametros de negocio y los
+     contadores: `_nextId` y los dos que suben «Ultimo OC-» marcan la copia. */
+  'Config_Maleu': { clave: ['Parámetro', 'Activo desde'], secretos: 'Parámetro' },
+  'Config': { clave: ['Parámetro'] },
+  /* 166 (27/10/2026): los precios de los combos de la tienda, que `stock_full` manda en
+     `_combos`. Se editan a mano: la copia va por huella, una vez por hora. */
+  'Precios Combos': { clave: ['ID'] },
+  /* 139 (27/10/2026): las cuentas de cobro, en el orden de la hoja y con su columna de Saldo
+     Base, que `redPedidosAbiertos` manda en `cuentas`. Se editan a mano: por huella. */
+  'Cuentas': { clave: ['id'] },
+  /* 174 (27/10/2026): las billeteras por persona (`billetera` de Ruta y Caja). Las escribe la
+     caja (ajustes, mover plata, vueltos): marcan la copia por `_cajaPgMarcarPendiente_`.
+     `porFila`: la clave es el N° de fila (Saldo Base repite fechas: 58 filas, 51 fechas).
+     `_cab` lleva los encabezados en orden: el orden de las personas sale de ahi. */
+  'Saldo Base': { clave: ['Fecha'], porFila: true },
+  'Movimientos Plata': { clave: ['Op'], porFila: true },
+  /* 209: los sobres (plata separada para un proveedor), para el resto de la Caja desde la base. */
+  'Sobres': { clave: ['Fecha'], porFila: true },
+  /* 175: los pagos de la liquidacion quincenal de Red (`redLiquidacion`). Los escriben pagar y
+     anular, que son POST y mueven Egresos: los marca la caja. */
+  'Liquidaciones Red': { clave: ['ID'] },
+  /* 216 (27/10/2026): las dos que Maleu - Lectura copia y la base no tenia. COPIAS por fila (la clave
+     se repite y la fila recien existe al escribir): las escriben `origenCruce` y el registro del alta,
+     que marcan despues. Que escriban primero en la base queda en el mapa para apagar la planilla. */
+  'Origen y Cruce': { clave: ['Cliente'], porFila: true },
+  'Log Pedidos': { clave: ['Llegó al Sheets'], porFila: true }
+};
+
+function _hojasBaseLista_() {
+  var txt = ''; try { txt = String(_cfgTexto_('HOJAS_BASE', '') || ''); } catch (e) {}
+  var out = [];
+  txt.split(/[;,]/).forEach(function (x) {
+    var n = x.trim().toLowerCase(); if (!n) return;
+    Object.keys(HOJASBASE_).forEach(function (h) { if (h.toLowerCase() === n && out.indexOf(h) < 0) out.push(h); });
+  });
+  return out;
+}
+
+function _hojaBaseOn_(hoja) { return !!HOJASBASE_[hoja] && _hojasBaseLista_().indexOf(hoja) >= 0 && _crmPgConfig_().enabled; }
+/* PURA (salvo la zona). Un valor como lo guarda la base: una fecha (o un «dd/mm/aaaa hh:mm»
+   que la hoja va a convertir en fecha) en un solo formato; numeros y si/no como son; el
+   resto, texto sin espacios de mas. */
+function _hojaBaseValor_(v) {
+  if (v instanceof Date) return isNaN(v.getTime()) ? '' : Utilities.formatDate(v, 'America/Argentina/Buenos_Aires', 'yyyy-MM-dd HH:mm:ss');
+  if (typeof v === 'number' || typeof v === 'boolean') return v;
+  var s = String(v == null ? '' : v).trim();
+  var m = /^(\d{2})\/(\d{2})\/(\d{4})(?: (\d{2}):(\d{2})(?::(\d{2}))?)?$/.exec(s);
+  if (m) return m[3] + '-' + m[2] + '-' + m[1] + ' ' + (m[4] || '00') + ':' + (m[5] || '00') + ':' + (m[6] || '00');
+  return s;
+}
+
+function _hojaBaseValor_(v) {
+  if (v instanceof Date) return isNaN(v.getTime()) ? '' : Utilities.formatDate(v, 'America/Argentina/Buenos_Aires', 'yyyy-MM-dd HH:mm:ss');
+  if (typeof v === 'number' || typeof v === 'boolean') return v;
+  var s = String(v == null ? '' : v).trim();
+  var m = /^(\d{2})\/(\d{2})\/(\d{4})(?: (\d{2}):(\d{2})(?::(\d{2}))?)?$/.exec(s);
+  if (m) return m[3] + '-' + m[2] + '-' + m[1] + ' ' + (m[4] || '00') + ':' + (m[5] || '00') + ':' + (m[6] || '00');
+  return s;
+}
+
+function _hojaBaseClave_(C, cab, f) {
+  var partes = [];
+  for (var i = 0; i < C.clave.length; i++) {
+    var j = cab.indexOf(C.clave[i]);
+    var v = j >= 0 ? f[j] : '';
+    if (C.mes && C.clave[i] === C.mes) {
+      /* Fecha, número de serie de Sheets (una celda con fecha leída sin formato) o texto: el mismo mes. */
+      if (typeof v === 'number' && v > 20000 && v < 80000) v = new Date(Math.round((v - 25569) * 86400000) + 3 * 3600000);
+      var mm = v instanceof Date ? Utilities.formatDate(v, 'America/Argentina/Buenos_Aires', 'yyyy-MM') : _planPgMes_(v);
+      v = mm || String(v == null ? '' : v).trim();
+    } else v = String(_hojaBaseValor_(v));
+    if (C.min) v = v.toLowerCase();
+    partes.push(v);
+  }
+  return partes[0] ? partes.join('|') : '';
+}
+
+function _hojaBaseDato_(C, cab, f) {
+  var o = {};
+  cab.forEach(function (h, j) {
+    h = String(h == null ? '' : h).trim();
+    if (!h || (C.fuera || []).indexOf(h) >= 0 || h === 'PIN') return;
+    o[h] = _hojaBaseValor_(f[j] == null ? '' : f[j]);
+  });
+  if (C.secretos && _ajSecreto_(o[C.secretos]) && 'Valor' in o) o['Valor'] = '';
+  if (C.derivar) C.derivar(o, cab.map(function (h) { return String(h == null ? '' : h).trim(); }), f);
+  return o;
+}
+
+function _hojaBaseAntes_(hoja, sh, cambios) {
+  if (!sh || !_hojaBaseOn_(hoja)) return null;
+  try {
+    var C = HOJASBASE_[hoja], last = sh.getLastRow(), ancho = Math.max(sh.getLastColumn(), 1);
+    var cab = sh.getRange(1, 1, 1, ancho).getValues()[0].map(function (h) { return String(h == null ? '' : h).trim(); });
+    var filas = [], borrar = [];
+    (cambios || []).forEach(function (c) {
+      var hoy = (c.row >= 2 && c.row <= last) ? sh.getRange(c.row, 1, 1, ancho).getValues()[0] : [];
+      while (hoy.length < ancho) hoy.push('');
+      if (c.borrar) { var kb = _hojaBaseClave_(C, cab, hoy); if (kb) borrar.push(kb); return; }
+      var f = hoy.slice(), col = (Number(c.col) || 1) - 1;
+      (c.vals || []).forEach(function (v, i) { if (v !== undefined) f[col + i] = v; });
+      var k = _hojaBaseClave_(C, cab, f);
+      if (k) filas.push({ key: k, data: _hojaBaseDato_(C, cab, f), row: c.row });
+    });
+    if (!filas.length && !borrar.length) return null;
+    var r = _pgRpc_('escribir_filas_hoja', { sheet: hoja, filas: filas, borrar: borrar });
+    if (!r.ok) throw new Error(r.error || 'escribir_filas_hoja');
+    /* LA HUELLA YA NO DICE LO QUE TIENE LA BASE (26/10/2026). La replica sube la hoja solo si
+       su huella cambio desde la ultima subida; esto acaba de cambiar la base por otro lado.
+       Si la hoja no termina igual (un corte, una edicion a mano que la deshace), la huella
+       seguiria igual y la base se quedaria con una fila que la hoja no tiene: la proxima
+       vuelta reconcilia siempre. Lo encontro la prueba de «Proveedores Carne». */
+    try { PropertiesService.getScriptProperties().deleteProperty('HOJABASE_HUELLA_' + hoja); } catch (eHu) {}
+    return r;
+  } catch (e) { try { _pgAnotarError_('HOJASBASE', e); } catch (e2) {} return null; }
+  /* La marca de la replica la pone doPost DESPUES de escribir la hoja (`_hojaBaseDespues_`):
+     puesta antes, una replica que leyera en el medio cerraria la marca con la fila vieja. */
+}
+
 function _uniValida_(v) {
   var s = String(v || '').trim().toLowerCase();
   return (s === 'kg' || s === 'u') ? s : 'u';
@@ -1961,6 +2117,39 @@ function _numCelda_(v) {
   else if (/^-?\d{1,3}(\.\d{3})+$/.test(t)) t = t.replace(/\./g, '');
   var n = parseFloat(t);
   return isFinite(n) ? n : 0;
+}
+
+var PG_ERROR_MSG_TOPE = 400;
+
+function _pgAnotarError_(pre, e) {
+  var p = PropertiesService.getScriptProperties();
+  p.setProperty(pre + '_SYNC_LAST_ERROR_AT', String(Date.now()));
+  /* Se TRUNCA: una Script Property aguanta 9 KB, y un 400 de PostgREST puede
+     traer el registro entero adentro del mensaje. En los primeros 400
+     caracteres estan el codigo y el motivo, que es lo que se viene a leer. */
+  var msg = String((e && e.message) || e || 'sin detalle').slice(0, PG_ERROR_MSG_TOPE);
+  /* En su propio try: si guardar el mensaje fallara, el error DE VERDAD tiene
+     que seguir subiendo igual. Anotar el motivo no puede tapar el motivo. */
+  try { p.setProperty(pre + '_SYNC_LAST_ERROR_MSG', msg); } catch (eMsg) {}
+  try { _pgFallasContar_(p, pre, msg); } catch (eF) {}
+}
+
+var PG_FALLAS_DOMINIOS_ = ['ORD_PG', 'CAJA_PG', 'OC_PG', 'INV_PG', 'CRM_PG', 'PLAN_PG', 'FOTO'];
+
+var PG_FALLAS_NOMBRE_ = { ORD_PG: 'pedidos', CAJA_PG: 'caja', OC_PG: 'compras', INV_PG: 'inventario', CRM_PG: 'CRM', PLAN_PG: 'la meta del mes', FOTO: 'las fotos de pantalla' };
+
+function _pgFallasContar_(p, pre, msg) {
+  if (PG_FALLAS_DOMINIOS_.indexOf(pre) < 0) return;
+  var vuelta = String(_VUELTA_INICIO_ || Math.floor(Date.now() / 300000));
+  var st = {}; try { st = JSON.parse(p.getProperty('PG_FALLAS_' + pre) || '{}') || {}; } catch (e) { st = {}; }
+  if (st.v === vuelta) return;                       /* la misma vuelta ya conto */
+  st.n = (Number(st.n) || 0) + 1; st.v = vuelta; if (!st.desde) st.desde = Date.now();
+  p.setProperty('PG_FALLAS_' + pre, JSON.stringify(st));
+  if (st.n === 2) {
+    _alertaTecnica_('replica ' + pre, 'La réplica de ' + (PG_FALLAS_NOMBRE_[pre] || pre) + ' falló dos vueltas seguidas: la base no se está poniendo al día',
+      ['Desde: ' + Utilities.formatDate(new Date(st.desde), 'America/Argentina/Buenos_Aires', 'dd/MM HH:mm') + '.',
+       'Último error: ' + String(msg || '').slice(0, 300)]);
+  }
 }
 
 var _COLMAPS_ = {};
@@ -2113,7 +2302,34 @@ function _cfgTexto_(clave, porDefecto) {
   } catch (e) { return porDefecto; }
 }
 
+var _VUELTA_INICIO_ = 0;
+
 var _SIN_EFECTOS_ = false;
+
+var PLAN_PG_MESES_ = { enero: '01', febrero: '02', marzo: '03', abril: '04', mayo: '05', junio: '06', julio: '07',
+  agosto: '08', septiembre: '09', setiembre: '09', octubre: '10', noviembre: '11', diciembre: '12' };
+
+function _planPgMes_(txt) {
+  var s = String(txt == null ? '' : txt).trim().toLowerCase()
+    .replace(/[áà]/g, 'a').replace(/[éè]/g, 'e').replace(/[íì]/g, 'i').replace(/[óò]/g, 'o').replace(/[úù]/g, 'u');
+  var m = /^([a-z]+)\s+(\d{4})$/.exec(s);
+  return (m && PLAN_PG_MESES_[m[1]]) ? m[2] + '-' + PLAN_PG_MESES_[m[1]] : null;
+}
+
+function _pgRpc_(fn, p) {
+  var cfg = _crmPgConfig_();
+  if (!cfg.enabled) return { ok: false, error: 'sin config de la base' };
+  try {
+    var rs = _uf_('pg_' + fn, cfg.url + '/rest/v1/rpc/' + fn, {
+      method: 'post', contentType: 'application/json',
+      headers: { apikey: cfg.key, Authorization: 'Bearer ' + cfg.key },
+      payload: JSON.stringify({ p: p }), muteHttpExceptions: true });
+    var code = rs.getResponseCode(), txt = rs.getContentText() || '';
+    if (code >= 300) return { ok: false, error: 'HTTP ' + code + ' ' + txt.slice(0, 120) };
+    var d = JSON.parse(txt || '{}');
+    return { ok: !!(d && d.ok), r: d };
+  } catch (e) { return { ok: false, error: String((e && e.message) || e).slice(0, 120) }; }
+}
 
 function _fechaCorta_(v) {
   if (v instanceof Date) return Utilities.formatDate(v, 'America/Argentina/Buenos_Aires', 'dd/MM/yyyy');
