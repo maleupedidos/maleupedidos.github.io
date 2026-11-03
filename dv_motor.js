@@ -1382,6 +1382,7 @@ function _rbVendedores_(fresco) {
     var h = String(cab[c] == null ? '' : cab[c]).trim().toLowerCase();
     if (h === 'días' || h === 'dias') res.colDias = c + 1;
     if (h === 'telegram') res.colTg = c + 1;
+    if (h.indexOf('prioridad') === 0) res.colPrio = c + 1;
   }
   for (var r = 1; r < d.length; r++) {
     var nombre = String(d[r][0] || '').trim();
@@ -1399,12 +1400,14 @@ function _rbVendedores_(fresco) {
       barrios: String(d[r][3] || '').trim(),
       /* El alias para transferirle (col C), lo muestra la liquidacion (16/10/2026). */
       alias: String(d[r][2] || '').trim(),
+      /* (3/11/2026) «Prioridad cuando el cliente no es de nadie» (col por encabezado; vacia = ultima). */
+      prioridad: res.colPrio ? _vendPrio_(d[r][res.colPrio - 1]) : null,
       fila: r + 1
     });
   }
   try {
     CacheService.getScriptCache().put('rb_vend_v2', JSON.stringify(
-      { lista: res.lista, colDias: res.colDias, colTg: res.colTg }), 300);
+      { lista: res.lista, colDias: res.colDias, colTg: res.colTg, colPrio: res.colPrio || 0 }), 300);
   } catch (eP) {}
   return res;
 }
@@ -1413,6 +1416,13 @@ function _rbVendedorPorNombre_(V, nombre) {
   var n = String(nombre || '').trim();
   for (var i = 0; i < V.lista.length; i++) if (V.lista[i].nombre === n) return V.lista[i];
   return null;
+}
+
+function _vendPrio_(x) {
+  var s = String(x == null ? '' : x).trim();
+  if (!s) return null;
+  var n = Number(s.replace(',', '.'));
+  return isFinite(n) ? n : null;
 }
 
 var RT_HOJA_ = 'Tareas Red';
