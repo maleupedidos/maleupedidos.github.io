@@ -31,7 +31,7 @@ const SELLO = `(document.querySelector('#p-stock .st-sello')||{}).innerText||''`
   chk('el ERP arranca', await esperar(cli, `typeof go==='function' && typeof loadStockTab==='function'`, 60000), '');
   chk('la palanca STOCK_BASE_ARMA llega en «si»', await esperar(cli, `typeof _palancaVal==='function' && _palancaVal('stockArma')==='si'`, 30000),
     await evaluar(cli, `typeof _palancaVal==='function'?_palancaVal('stockArma'):'?'`));
-  await evaluar(cli, `go('stock'); try{ if(typeof stShowSub==='function')stShowSub('productos'); }catch(e){} 1`);
+  await evaluar(cli, `go('stock'); try{ if(typeof stSwitchTab==='function')stSwitchTab('productos'); }catch(e){} 1`);
   const pinto = `!!(D && Array.isArray(D.stock) && D.stock.length && document.querySelector('#p-stock').innerText.length > 200)`;
   chk('Productos pinta', await esperar(cli, pinto, 60000), '');
   const filas = await evaluar(cli, `D.stock.length`);

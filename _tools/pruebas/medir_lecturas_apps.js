@@ -23,7 +23,10 @@ const TABS = process.env.SOLO_ARRANQUE ? [] : [
 ];
 (async () => {
   const cli = await cdp.abrir();
-  await cli.enviar('Page.addScriptToEvaluateOnNewDocument', { source: prep(TOKEN) + ESPIA });
+  /* SIN_APPS=1: el ensayo en este navegador (localStorage maleu_sin_apps = '1'). Por tab: qué se cortó, errores nuevos y
+     cuánto texto tiene la pantalla (una tab que quedó vacía sin Apps Script se ve acá). */
+  const SIN = !!process.env.SIN_APPS;
+  await cli.enviar('Page.addScriptToEvaluateOnNewDocument', { source: prep(TOKEN) + ESPIA + (SIN ? `;try{localStorage.setItem('maleu_sin_apps','1');}catch(e){}` : '') });
   await cli.enviar('Page.enable', {});
   cli.escuchar((m, p) => { if (m === 'Page.javascriptDialogOpening') cli.enviar('Page.handleJavaScriptDialog', { accept: true }).catch(() => {}); });
   await cli.enviar('Page.navigate', { url: URL });
@@ -35,12 +38,19 @@ const TABS = process.env.SOLO_ARRANQUE ? [] : [
       if (sub) {
         await pausa(1500);
         await evaluar(cli, tab === 'stock'
-          ? `try{ stShowSub(${JSON.stringify(sub)}); }catch(e){} 1`
+          ? `try{ stSwitchTab(${JSON.stringify(sub)}); }catch(e){} 1`
           : `try{ var b=document.querySelector('[data-vt="${sub}"]'); if(b)b.click(); }catch(e){} 1`);
       }
     } catch (e) { console.log('  (' + nombre + ': ' + e.message + ')'); }
     await pausa(ESPERA);
-    process.stdout.write('.');
+    if (SIN) {
+      const r = await evaluar(cli, `(function(){ var c=window.__sinApps||{}, ant=window.__sinAnt||{}, nuevo={}; Object.keys(c).forEach(function(k){ if(c[k]>(ant[k]||0))nuevo[k]=c[k]-(ant[k]||0); });
+        window.__sinAnt=JSON.parse(JSON.stringify(c)); var e=(window.__err||[]).slice(window.__errAnt||0); window.__errAnt=(window.__err||[]).length;
+        var p=document.querySelector('#p-${tab}'), tx=p?p.innerText:''; var aviso=(tx.match(/(No se pudo[^\\n]{0,80}|no se pudo[^\\n]{0,80}|Sin conexi[^\\n]{0,60})/)||[])[0]||'';
+        return {cortadas:nuevo, err:e.filter(function(x){return !/SIN_APPS_LECTURAS/.test(x);}).slice(0,3), largo:tx.length, aviso:aviso}; })()`);
+      console.log('\n  ' + nombre.padEnd(22) + ' texto ' + String(r.largo).padStart(6) + ' · cortadas ' + JSON.stringify(r.cortadas)
+        + (r.aviso ? ' · «' + r.aviso + '»' : '') + (r.err.length ? '\n      ERR ' + r.err.join(' | ').slice(0, 300) : ''));
+    } else process.stdout.write('.');
   }
   const l = await evaluar(cli, `window.__aApps`);
   const por = {};
