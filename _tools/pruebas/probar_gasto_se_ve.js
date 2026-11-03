@@ -23,19 +23,22 @@ function sacar(nombre) {
   for (; j < src.length; j++) { if (src[j] === '{') n++; else if (src[j] === '}' && --n === 0) break; }
   return src.slice(i, j + 1);
 }
-const piezas = ['_movCajaSumar', '_movLocalDescartar', '_movEsElBorrado', '_movBorradoAnotar', '_movBorradoOlvidar', '_movSacar', '_saldoLocalAnotar', '_saldoIgual', '_cajaRestar', '_saldoLocalReponer', '_movLocalesReponer', 'aplicarMovLocal', '_cajaCampos'].map(sacar);
+const piezas = ['_medVersion', '_medEmpezar', '_medCerrar', '_movCajaSumar', '_movLocalDescartar', '_movEsElBorrado', '_movBorradoAnotar', '_movBorradoOlvidar', '_movSacar', '_saldoLocalAnotar', '_saldoIgual', '_cajaRestar', '_saldoLocalReponer', '_movLocalesReponer', 'aplicarMovLocal', '_cajaCampos'].map(sacar);
 let ok = 0, mal = 0;
 const chk = (t, c, d) => { c ? ok++ : mal++; console.log((c ? '  ok   ' : '  MAL  ') + t + (c ? '' : '  -> ' + JSON.stringify(d))); };
 if (piezas.some(p => !p)) { chk('el panel tiene _movLocalesReponer (lo cargado vuelve despues de una lectura)', false, piezas.map(p => !!p)); console.log('\n' + ok + ' ok · ' + mal + ' mal'); process.exit(1); }
 let reloj = Date.parse('2026-11-02T22:31:31-03:00');
 const mundo = new Function('reloj', 'Date_', `
   var D = null; var MOV_LOC_MS = 15*60*1000, _movLocales = [], _movBorrados = [], _saldoLocal = null;
+  var window = {}, document = { documentElement: { getAttribute: function () { return ''; } } }, cur = 'caja';
+  var MED_TOPE = 300, _medCola = [], _medTimer = 1; function _medMandar() {}
+  function requestAnimationFrame(f) { f(); }
   var Date = function (x) { return x === undefined ? new Date_(reloj()) : new Date_(x); };
   Date.now = function () { return reloj(); }; Date.parse = Date_.parse;
   function _cajaCuentas() { return [{ id: 'efectivo', tipo: 'efectivo' }, { id: 'mp', def: true }, { id: 'brubank' }]; }
   function _horaMov() { return ''; }
   ${piezas.join('\n')}
-  return { set D(v) { D = v; }, get D() { return D; }, aplicarMovLocal, _cajaCampos, _movLocalDescartar, _movSacar, _movBorradoAnotar, _movBorradoOlvidar, borrados: function () { return _movBorrados.length; }, _saldoLocalAnotar, saldoLocal: function () { return _saldoLocal; }, locales: function () { return _movLocales.length; } };
+  return { set D(v) { D = v; }, get D() { return D; }, aplicarMovLocal, _cajaCampos, _movLocalDescartar, _movSacar, _movBorradoAnotar, _movBorradoOlvidar, borrados: function () { return _movBorrados.length; }, _saldoLocalAnotar, saldoLocal: function () { return _saldoLocal; }, locales: function () { return _movLocales.length; }, med: function () { return _medCola; } };
 `)(() => reloj, Date);
 const leer = () => JSON.parse(JSON.stringify({ caja: { gastosEf: 0, gastosMP: 5000, ingresosEf: 0, ingresosMP: 0, gastosPorCuenta: { mp: 5000 } },
   movimientos: [{ tipo: 'gasto', r: 399, f: '02/11/2026', ts: Date.parse('2026-11-02T17:15:07-03:00'), cat: 'Proveedor', con: 'Pago a Le Unike', met: 'Mercado Pago', cta: 'mp', $: 5000 }] }));
@@ -124,6 +127,16 @@ mundo._saldoLocalAnotar({ ef: 100000, mp: 1500000, inv: 500000, fecha: '21/10/20
 reloj += 20000;
 mundo._cajaCampos(conSaldo());
 chk('Invertir: una lectura vieja no devuelve el MP de antes, y los totales quedan como los trae', mundo.D.saldoBase.mp === 1500000 && mundo.D.saldoBase.inv === 500000 && mundo.D.caja.gastosMP === 5000, { sb: mundo.D.saldoBase, caja: mundo.D.caja });
+
+// 9. EL MEDIDOR: cada caso cierra con su resultado, sin datos del cliente
+const M = mundo.med();
+const de = (b) => M.filter(r => r.boton === b);
+chk('medidor: el gasto de Tadeo cierra «base» con 2 lecturas que vinieron sin el', de('gasto').some(r => r.resultado === 'base' && r.relecturas_sin === 2 && r.ms_base > 0 && r.ms_visto != null), de('gasto'));
+chk('medidor: el gasto que fallo cierra «fallo»', de('gasto').some(r => r.resultado === 'fallo'), de('gasto'));
+chk('medidor: el ingreso que no llego en 15 min cierra «perdido»', de('ingreso').some(r => r.resultado === 'perdido'), de('ingreso'));
+chk('medidor: el borrado cierra «base» con 1 lectura atrasada, y el que fallo «fallo»', de('borrarMov').some(r => r.resultado === 'base' && r.relecturas_sin === 1) && de('borrarMov').some(r => r.resultado === 'fallo'), de('borrarMov'));
+chk('medidor: contar cierra «base» cuando la base trae el conteo', de('contar').some(r => r.resultado === 'base' && r.relecturas_sin === 1), de('contar'));
+chk('medidor: ninguna fila lleva el concepto, notas ni nombres', !JSON.stringify(M).match(/Tadeo|Le Unike|Sueldo|Bolsas|Reintegro/), M.map(r => r.ref));
 
 console.log('\n' + ok + ' ok · ' + mal + ' mal');
 process.exit(mal ? 1 : 0);

@@ -13076,6 +13076,7 @@ function _pintarVersion(){
     caches.keys().then(function(ks){
       var v=(ks||[]).map(function(k){ var m=String(k).match(/maleu-panel-v(\d+)/); return m?Number(m[1]):0; }).sort(function(a,b){return b-a;})[0];
       box.textContent = v ? 'Versión ' + v : '';
+      if(v)window.__swVersion='v'+v;   /* el medidor de botones la anota (2/11/2026) */
     }).catch(function(){});
   }catch(e){}
 }
@@ -14739,7 +14740,7 @@ function _leerVersion(app){
    "El HTML no sabe que version es" dejo de ser cierto: el build le escribe
    adentro el CACHE_NAME de sw-panel.js, el mismo que deploy.sh obliga a subir en
    cada cambio. Si lo publicado dice otra cosa, esta pagina es vieja. Punto. */
-var _APP_CN_PAGINA='maleu-panel-v823';
+var _APP_CN_PAGINA='maleu-panel-v824';
 
 /* Devuelve [{k,v}] si lo publicado no es lo que esta pagina corre. */
 function _chequearVersiones(){
@@ -21433,6 +21434,8 @@ var _sbCambiosPed={};
 /* (2/11/2026) Para lo que toca un pedido a mano (sin _patchPedidoLocal): queda anotado igual, asi la lista siguiente no lo pisa. */
 function _pedMarcar(p){ try{ var k=_sbClavePedido(p); if(k){ _sbCambioLocal=Date.now(); _sbCambiosPed[k]=_sbCambioLocal; } }catch(e){} }
 function _patchPedidoLocal(hoja,id,patch){
+  /* El medidor (2/11/2026): en Pedidos solo se mide hasta que se pinta (no hay con que comparar si la base ya lo trae). */
+  try{ var _mp=_medEmpezar('pedido:'+Object.keys(patch||{}).sort().join(','),hoja+'#'+id); setTimeout(function(){ _medCerrar(_mp,'pintado'); },800); }catch(eMd){}
   _sbCambioLocal=Date.now();
   var kc=_sbClavePedido({h:hoja,n:id});
   if(kc)_sbCambiosPed[kc]=_sbCambioLocal;
@@ -21771,6 +21774,43 @@ function parseM(v){var s=String(v||'').trim();if(!s)return 0;s=s.replace(/[^\d,.
    lectura lo repone (renglon y totales) hasta que la lectura lo trae, o hasta MOV_LOC_MS. Si el guardado falla, se
    descarta (`_movLocalDescartar`). Regla: lo que se crea se ve al instante. */
 var MOV_LOC_MS=15*60*1000, _movLocales=[];
+/* EL MEDIDOR DE BOTONES (2/11/2026, Organizador). Cada guardado anota: boton, tab, usuario, `ref` (solo ids: fila, N°,
+   nunca nombres ni telefonos), ms hasta que se pinta, ms hasta que una lectura de la base lo trae («terminado»), y
+   cuantas lecturas vinieron sin el (lo que antes «volvia atras»). Todo en memoria: no le suma nada al toque. Se manda
+   por tandas (cada MED_CADA_MS y al pasar a segundo plano) a `ui_medicion_anotar` con keepalive; si la base no lo
+   toma, queda en `med_cola` (tope MED_TOPE) y va con la proxima. `window.__med` para mirarlo. */
+var MED_CADA_MS=30000, MED_TOPE=300, _medCola=[], _medTimer=null;
+function _medVersion(){ try{ return (window.__swVersion||'')||document.documentElement.getAttribute('data-version')||''; }catch(e){ return ''; } }
+function _medEmpezar(boton,ref){
+  var x={b:String(boton||'?'),tab:String(typeof cur==='string'?cur:''),ref:String(ref==null?'':ref).slice(0,80),at:Date.now(),vis:null,base:null,rel:0,res:''};
+  try{ requestAnimationFrame(function(){ requestAnimationFrame(function(){ if(x.vis==null)x.vis=Date.now()-x.at; }); }); }catch(e){ x.vis=0; }
+  return x;
+}
+function _medCerrar(x,res){
+  if(!x||x.res)return;
+  x.res=res;
+  if(res==='base'&&x.base==null)x.base=Date.now()-x.at;
+  _medCola.push({at:new Date(x.at).toISOString(),tab:x.tab,boton:x.b,ref:x.ref,ms_visto:x.vis,ms_base:x.base,resultado:res,relecturas_sin:x.rel,version:_medVersion()});
+  if(_medCola.length>MED_TOPE)_medCola=_medCola.slice(-MED_TOPE);
+  try{ (window.__med=window.__med||[]).push(_medCola[_medCola.length-1]); if(window.__med.length>50)window.__med.shift(); }catch(e){}
+  if(!_medTimer)_medTimer=setTimeout(_medMandar,MED_CADA_MS);
+}
+function _medMandar(){
+  _medTimer=null;
+  if(!_medCola.length||typeof _sbPermiso!=='function')return;
+  var tanda=_medCola.slice(0,100);
+  Promise.resolve(_sbPermiso(true)).then(function(sb){
+    if(!sb||!sb.token)return;
+    return fetch(sb.url+'/rest/v1/rpc/ui_medicion_anotar',{method:'POST',keepalive:true,
+      headers:{apikey:sb.key,Authorization:'Bearer '+sb.token,'Content-Type':'application/json'},body:JSON.stringify({p:{filas:tanda}})})
+      .then(function(r){ if(r.ok){ _medCola=_medCola.slice(tanda.length); } });
+  }).catch(function(){}).then(function(){
+    try{ localStorage.setItem('med_cola',JSON.stringify(_medCola)); }catch(e){}
+    if(_medCola.length&&!_medTimer)_medTimer=setTimeout(_medMandar,MED_CADA_MS*4);
+  });
+}
+try{ var _mc0=JSON.parse(localStorage.getItem('med_cola')||'[]'); if(Array.isArray(_mc0))_medCola=_mc0.slice(-MED_TOPE); if(_medCola.length)_medTimer=setTimeout(_medMandar,MED_CADA_MS); }catch(e){}
+try{ document.addEventListener('visibilitychange',function(){ if(document.visibilityState==='hidden'&&_medCola.length){ clearTimeout(_medTimer); _medMandar(); } }); }catch(e){}
 function _movCajaSumar(tipo,esEf,monto,cid){
   D.caja=D.caja||{cobradoEf:0,cobradoMP:0,gastosEf:0,gastosMP:0,ingresosEf:0,ingresosMP:0};
   if(tipo==='gasto'){if(esEf)D.caja.gastosEf=(D.caja.gastosEf||0)+monto;else D.caja.gastosMP=(D.caja.gastosMP||0)+monto;}
@@ -21781,7 +21821,7 @@ function _movCajaSumar(tipo,esEf,monto,cid){
     D.caja[clave][cid]=(D.caja[clave][cid]||0)+monto;
   }
 }
-function _movLocalDescartar(desde){ _movLocales=_movLocales.filter(function(x){ return x.t<desde; }); }
+function _movLocalDescartar(desde){ _movLocales=_movLocales.filter(function(x){ if(x.t>=desde)_medCerrar(x.med,'fallo'); return x.t<desde; }); }
 /* LO BORRADO TAMPOCO VUELVE (2/11/2026). El ✕ de un renglon sacaba la fila pero no restaba del saldo, y la lectura
    siguiente (cash_movement, por replica) la traia de vuelta. Se anota: cada lectura que todavia la trae la saca de la
    lista y la resta de los totales, hasta que la base deje de traerla o pasen MOV_LOC_MS. Si el borrado falla, se olvida. */
@@ -21814,20 +21854,21 @@ function _lugAnotar(desde,hacia,monto,nota){
   if(!D||!D.lugares)return;
   var h=new Date(), f=String(h.getDate()).padStart(2,'0')+'/'+String(h.getMonth()+1).padStart(2,'0')+' '+String(h.getHours()).padStart(2,'0')+':'+String(h.getMinutes()).padStart(2,'0');
   var x={desde:desde,hacia:hacia,$:Number(monto)||0,nota:nota||'',f:f,t:Date.now(),q:(window._authUser&&_authUser.nombre)||''};
-  if(_lugMover(D.lugares,x))_lugLocales.push(x);
+  if(_lugMover(D.lugares,x)){ x.med=_medEmpezar('moverPlata',desde+'>'+hacia); _lugLocales.push(x); }
 }
 function _lugLocalesReponer(){
   if(!D||!D.lugares||!_lugLocales.length)return;
   var ahora=Date.now(), L=D.lugares;
   _lugLocales=_lugLocales.filter(function(x){
-    if(ahora-x.t>MOV_LOC_MS)return false;
+    if(ahora-x.t>MOV_LOC_MS){ _medCerrar(x.med,'perdido'); return false; }
     var ya=(L.movsUlt||[]).some(function(m){ return m&&!m._local&&m.desde===x.desde&&m.hacia===x.hacia&&Number(m.$)===Number(x.$)&&String(m.f||'').slice(0,5)===x.f.slice(0,5); });
-    if(ya)return false;
+    if(ya){ _medCerrar(x.med,'base'); return false; }
+    if(x.med)x.med.rel++;
     _lugMover(L,x);
     return true;
   });
 }
-function _saldoLocalAnotar(sb,cajaAntes){ _saldoLocal={t:Date.now(),sb:JSON.parse(JSON.stringify(sb||{})),antes:cajaAntes?JSON.parse(JSON.stringify(cajaAntes)):null}; }
+function _saldoLocalAnotar(sb,cajaAntes){ if(_saldoLocal)_medCerrar(_saldoLocal.med,'perdido'); _saldoLocal={t:Date.now(),sb:JSON.parse(JSON.stringify(sb||{})),antes:cajaAntes?JSON.parse(JSON.stringify(cajaAntes)):null,med:_medEmpezar(cajaAntes?'contar':'invertir','')}; }
 function _saldoIgual(a,b){
   if(!a||!b)return false;
   var n=function(x){return Math.round(Number(x)||0);};
@@ -21847,13 +21888,16 @@ function _cajaRestar(c,a){
 }
 function _saldoLocalReponer(d){
   if(!_saldoLocal||!D)return;
-  if(Date.now()-_saldoLocal.t>MOV_LOC_MS||!d||!d.saldoBase||_saldoIgual(d.saldoBase,_saldoLocal.sb)){ _saldoLocal=null; return; }
+  if(Date.now()-_saldoLocal.t>MOV_LOC_MS||!d||!d.saldoBase||_saldoIgual(d.saldoBase,_saldoLocal.sb)){
+    _medCerrar(_saldoLocal.med,(d&&d.saldoBase&&_saldoIgual(d.saldoBase,_saldoLocal.sb))?'base':'perdido'); _saldoLocal=null; return;
+  }
+  if(_saldoLocal.med)_saldoLocal.med.rel++;
   D.saldoBase=JSON.parse(JSON.stringify(_saldoLocal.sb));
   if(_saldoLocal.antes&&d.caja)D.caja=_cajaRestar(d.caja,_saldoLocal.antes);
 }
 function _movEsElBorrado(m,b){ return m&&m.tipo===b.tipo&&(Number(m.r)===Number(b.r)||(Number(m.$)===Number(b.$)&&String(m.con||'')===String(b.con||'')&&Math.abs((Number(m.ts)||0)-(Number(b.ts)||0))<60000)); }
-function _movBorradoAnotar(m){ _movBorrados.push({tipo:m.tipo,r:m.r,$:Number(m.$)||0,con:m.con||'',ts:m.ts||0,t:Date.now()}); }
-function _movBorradoOlvidar(tipo,row){ _movBorrados=_movBorrados.filter(function(b){ return !(b.tipo===tipo&&Number(b.r)===Number(row)); }); }
+function _movBorradoAnotar(m){ _movBorrados.push({tipo:m.tipo,r:m.r,$:Number(m.$)||0,con:m.con||'',ts:m.ts||0,t:Date.now(),med:_medEmpezar('borrarMov',m.tipo+'|'+(m.r||''))}); }
+function _movBorradoOlvidar(tipo,row){ _movBorrados=_movBorrados.filter(function(b){ var es=b.tipo===tipo&&Number(b.r)===Number(row); if(es)_medCerrar(b.med,'fallo'); return !es; }); }
 /* Saca un movimiento de las listas y lo resta de los totales: lo que hace el borrado, sin esperar a la base. */
 function _movSacar(m){
   var fuera=function(a){return (a||[]).filter(function(x){return !(x===m||(Number(x.r)===Number(m.r)&&(!x.tipo||x.tipo===m.tipo)));});};
@@ -21868,9 +21912,10 @@ function _movLocalesReponer(){
   if(_movBorrados.length){
     var ah=Date.now();
     _movBorrados=_movBorrados.filter(function(b){
-      if(ah-b.t>MOV_LOC_MS)return false;
+      if(ah-b.t>MOV_LOC_MS){ _medCerrar(b.med,'perdido'); return false; }
       var vuelto=(D.movimientos||[]).filter(function(m){ return _movEsElBorrado(m,b); })[0];
-      if(!vuelto)return false;   /* la base ya no lo trae: listo */
+      if(!vuelto){ _medCerrar(b.med,'base'); return false; }   /* la base ya no lo trae: listo */
+      if(b.med)b.med.rel++;
       _movSacar(vuelto);
       return true;
     });
@@ -21878,11 +21923,11 @@ function _movLocalesReponer(){
   if(!_movLocales.length)return;
   var ahora=Date.now(), lista=Array.isArray(D.movimientos)?D.movimientos:(D.movimientos=[]);
   _movLocales=_movLocales.filter(function(x){
-    if(ahora-x.t>MOV_LOC_MS)return false;
+    if(ahora-x.t>MOV_LOC_MS){ _medCerrar(x.med,'perdido'); return false; }
     var ya=lista.some(function(m){ return m&&m!==x.mov&&m.tipo===x.mov.tipo&&Number(m.$)===Number(x.mov.$)&&
       String(m.con||'')===String(x.mov.con||'')&&Math.abs((Number(m.ts)||0)-(Number(x.mov.ts)||0))<600000; });
-    if(ya)return false;
-    if(lista.indexOf(x.mov)<0){ lista.unshift(x.mov); _movCajaSumar(x.mov.tipo,x.esEf,x.mov.$,x.cid); }
+    if(ya){ _medCerrar(x.med,'base'); return false; }
+    if(lista.indexOf(x.mov)<0){ lista.unshift(x.mov); _movCajaSumar(x.mov.tipo,x.esEf,x.mov.$,x.cid); if(x.med)x.med.rel++; }
     return true;
   });
 }
@@ -21920,7 +21965,7 @@ function aplicarMovLocal(tipo,fecha,cat,con,met,monto,notas,cuentaId){
   if(!_ctaMov&&cts){for(var _k=0;_k<cts.length;_k++){if(esEf?cts[_k].tipo==='efectivo':cts[_k].def){_ctaMov=cts[_k].id;break;}}}
   var mov={tipo:tipo,f:fStr,ts:_ts,cat:cat,con:con,met:met,cta:_ctaMov||undefined,$:monto,not:notas,i:Date.now()};
   D.movimientos=D.movimientos||[];D.movimientos.unshift(mov);
-  _movLocales.push({mov:mov,esEf:esEf,cid:cid,t:Date.now()});
+  _movLocales.push({mov:mov,esEf:esEf,cid:cid,t:Date.now(),med:_medEmpezar(window._movMedBoton||tipo,'')});
 }
 
 /* Guarda un gasto o un ingreso con plata en una cuenta que el formato viejo no
@@ -75556,11 +75601,13 @@ function confirmarPago(key, idx, semana) {
       if (typeof aplicarMovLocal === 'function') {
         var _hp = new Date(), _hoyP = _hp.getFullYear() + '-' + String(_hp.getMonth() + 1).padStart(2, '0') + '-' + String(_hp.getDate()).padStart(2, '0');
         var _ctaP = mp > 0 ? (abaPagoCta[key] || '') : '';
+        window._movMedBoton = 'pagoProveedor';   /* el medidor de botones (2/11/2026) */
         if (ef > 0) aplicarMovLocal('gasto', _hoyP, 'Proveedor', 'Pago a ' + d.n, 'Efectivo', ef, notas, '');
         if (mp > 0) aplicarMovLocal('gasto', _hoyP, 'Proveedor', 'Pago a ' + d.n,
           (_ctaP && typeof _movNombre === 'function') ? _movNombre(_ctaP) : 'Mercado Pago', mp, notas, _ctaP);
       }
     } catch (eMovP) {}
+    window._movMedBoton = '';
     var _donePago = false;
     var _safetyPago = setTimeout(function() {
       if (_donePago) return;
