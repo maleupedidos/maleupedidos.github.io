@@ -25889,7 +25889,7 @@ function renderStContar(opts){
     if(_difR){ _bt='<button class="stc-ok cola" disabled aria-label="'+stEsc(pr.n)+': acomodando '+stEsc(_difR.titulo)+'">Acomo-<br>dando</button>'; sub='acomodando '+stEsc(_difR.titulo)+'&hellip;'; }
     /* (28/10) «enviando» es CONTADO: el envio va atras y se reintenta solo si falla. */
     else if(_est==='err')_bt='<button class="stc-ok err" onclick="stContarOk(\''+_stJs(pr.a)+'\')" aria-label="No se guard&oacute; '+stEsc(pr.n)+': reintentar">No se<br>guard&oacute;</button>';
-    else if(_hecho)_bt='<button class="stc-ok ok" disabled aria-label="'+stEsc(pr.n)+' contado">&#10003;<small>contado</small></button>';
+    else if(_hecho)_bt='<button class="stc-ok ok" onclick="stContarDeshacer(\''+_stJs(pr.a)+'\')" aria-label="'+stEsc(pr.n)+' contado: tocá para deshacer">&#10003;<small>contado</small></button>';
     else _bt='<button class="stc-ok" onclick="stContarOk(\''+_stJs(pr.a)+'\')" aria-label="'+stEsc(pr.n)+': el n&uacute;mero est&aacute; bien">&#10003;</button>';
     h+='<div class="stc-row'+(_hecho&&_est!=='err'?' listo':'')+'" id="stcR_'+stEsc(pr.a)+'">'
       +'<div class="stc-n">'+stEsc(pr.n)+'<span class="stc-sub">'+sub+'</span></div>'
@@ -25924,6 +25924,51 @@ function stContarBlur(abbr,inp){
   _stcEncolar(abbr,dep,v);
 }
 
+var STC_DESHACER_MS=5000, _stcDesT=null;
+/* Deshacer un conteo (el verde tocado otra vez, o «Deshacer» de la barra). Si todavia no salio, se saca de la cola y
+   el numero vuelve: no queda nada. Si ya salio, se manda el numero de antes (un ajuste que lo vuelve atras) y la fila
+   queda SIN marcar. Si se edita el numero, eso es contar de nuevo (stContarBlur). */
+function stContarDeshacer(abbr,dep){
+  dep=dep||DEP_SEL;
+  var pr=_stProd(abbr); if(!pr)return;
+  var k=abbr+'|'+dep, it=null, idx=-1;
+  for(var i=0;i<STC_COLA.length;i++)if(STC_COLA[i].k===k){ it=STC_COLA[i]; idx=i; }
+  var hoy=Number((pr.porDep||{})[dep])||0;
+  if(it&&!(STC_VIAJA&&idx===0)){
+    /* No salio: afuera de la cola, el numero de antes, sin marcar. */
+    STC_COLA.splice(idx,1);
+    pr.porDep[dep]=it.antes; pr.f=Number(pr.f)-(hoy-it.antes);
+    delete DEP_CONTADOS[k]; delete STC_EST[k];
+    _stcGuardarCola();
+    toast(pr.n+': conteo deshecho, no se guardó nada');
+  }else{
+    /* Ya salio (o esta saliendo): se vuelve al numero de antes con otro conteo, y la fila queda sin marcar. */
+    var ult=(_stcUltimo[k]!=null)?_stcUltimo[k]:null;
+    if(ult==null){ delete DEP_CONTADOS[k]; if(ST_TAB==='contar'&&DEP_SEL===dep)renderStContar(); return; }
+    _stcEncolar(abbr,dep,ult);
+    for(var j=0;j<STC_COLA.length;j++)if(STC_COLA[j].k===k){ STC_COLA[j].desmarcar=true; STC_COLA[j].desde=0; }
+    delete DEP_CONTADOS[k];
+    _stcGuardarCola();
+    toast(pr.n+': vuelve a '+stFmt(ult,pr.u)+' '+(pr.u==='kg'?'kg':'u'));
+  }
+  _stcDeshacerOcultar();
+  if(ST_TAB==='contar'&&DEP_SEL===dep)renderStContar();
+  _stcSeguir();
+}
+/* El numero que habia ANTES del ultimo conteo guardado de cada producto, para poder volver. */
+var _stcUltimo={};
+function _stcDeshacerMostrar(abbr,dep){
+  var pr=_stProd(abbr); if(!pr)return;
+  var k=abbr+'|'+dep;
+  var b=document.getElementById('stcDeshacer');
+  if(!b){ b=document.createElement('div'); b.id='stcDeshacer';
+    b.style.cssText='position:fixed;left:50%;transform:translateX(-50%);bottom:calc(76px + env(safe-area-inset-bottom));z-index:900;background:#3E2723;color:#fff;border-radius:12px;padding:10px 12px 10px 16px;display:flex;align-items:center;gap:12px;font-size:13px;box-shadow:0 6px 20px rgba(0,0,0,.25);max-width:92vw';
+    document.body.appendChild(b); }
+  b.innerHTML='<span>'+stEsc(pr.n)+': contado</span><button type="button" style="background:none;border:0;color:#FFCC80;font-weight:800;font-size:13px;min-height:40px;padding:0 6px;cursor:pointer" onclick="stContarDeshacer(\''+_stJs(abbr)+'\',\''+_stJs(dep)+'\')">Deshacer</button>';
+  b.style.display='flex';
+  clearTimeout(_stcDesT); _stcDesT=setTimeout(_stcDeshacerOcultar,STC_DESHACER_MS);
+}
+function _stcDeshacerOcultar(){ clearTimeout(_stcDesT); var b=document.getElementById('stcDeshacer'); if(b)b.style.display='none'; }
 /** "Conte y esta bien" (9/10/2026). Hasta hoy, si el numero coincidia la
     pantalla no mandaba nada: la fila no quedaba marcada, y el cartel de "stock
     sin registro" no se podia cerrar contando (el backend pone el libro al dia
@@ -25976,9 +26021,14 @@ function _stcEncolar(abbr,dep,v){
   pr.f=Number(pr.f)+(v-antes);
   var ya=null;
   for(var i=0;i<STC_COLA.length;i++)if(STC_COLA[i].k===k)ya=STC_COLA[i];
-  if(ya){ ya.v=v; ya.intentos=0; }                       // todavia no salio: vale el ultimo numero
-  else STC_COLA.push({k:k,abbr:abbr,dep:dep,v:v,antes:antes,id:_pfId(),intentos:0});
+  /* (3/11/2026) DESHACER COMO GMAIL. Tadeo: «si toco el ✓ por error queda fijo en contado y no puedo volver
+     atrás». El conteo sale recien a los STC_DESHACER_MS: en esa ventana «Deshacer» lo saca de la cola y no queda
+     NINGUN ajuste (ni en el Kardex ni en la base). Contar de nuevo el mismo producto antes de que salga solo cambia
+     el numero (un solo envio). */
+  if(ya){ ya.v=v; ya.intentos=0; ya.desde=Date.now()+STC_DESHACER_MS; delete ya.desmarcar; }   // todavia no salio: vale el ultimo numero
+  else { STC_COLA.push({k:k,abbr:abbr,dep:dep,v:v,antes:antes,id:_pfId(),intentos:0,desde:Date.now()+STC_DESHACER_MS}); _stcUltimo[k]=antes; }
   DEP_CONTADOS[k]=true;                                  // contado YA: el ✓ no espera al servidor
+  _stcDeshacerMostrar(abbr,dep);
   STC_EST[k]='envia';
   _stcGuardarCola();
   if(ST_TAB==='contar'&&DEP_SEL===dep)renderStContar();
@@ -25993,6 +26043,7 @@ function _stcEsDeRed(d,msj){
 function _stcSeguir(){
   if(STC_VIAJA||!STC_COLA.length||_stcReloj)return;
   var it=STC_COLA[0];
+  if(it.desde&&it.desde>Date.now()){ _stcReloj=setTimeout(function(){ _stcReloj=null; _stcSeguir(); },it.desde-Date.now()+50); return; }
   STC_VIAJA=true;
   var abbr=it.abbr, dep=it.dep, v=it.v, antes=it.antes, k=it.k;
   /* Si llegaron los depositos de ahora mientras viajaba, la pantalla muestra OTRO
@@ -26004,7 +26055,7 @@ function _stcSeguir(){
     var cambio=(it.v!==v);
     if(ok){
       if(!cambio){ STC_COLA.shift(); delete STC_EST[k]; if(pr){ pr.porDep[dep]=v; if(d&&typeof d.total==='number'&&isFinite(d.total))pr.f=d.total; } }
-      DEP_CONTADOS[k]=true;
+      if(it.desmarcar&&!cambio)delete DEP_CONTADOS[k]; else DEP_CONTADOS[k]=true;
       ST_SUCIO=Date.now();
       if(d&&d.diferida)difAnotar(d,'el conteo de '+((pr&&pr.n)||abbr),[abbr]);
       _stAplicarLocal(abbr,{dep:dep,ahora:(d&&typeof d.ahora==='number'&&isFinite(d.ahora))?d.ahora:v,total:d&&d.total});

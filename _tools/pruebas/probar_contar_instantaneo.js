@@ -37,6 +37,9 @@ const red = `;(function(){var o=window.fetch;window.__envios=[];window.fetch=fun
   chk('el ERP arranca', await esperar(cli, `typeof go==='function' && typeof _stcEncolar==='function'`, 60000), '');
   await ev(cli, `localStorage.removeItem('maleu_stcCola'); localStorage.setItem('__red3g', JSON.stringify({lento:6000, cortes:2})); go('stock'); try{ stSwitchTab('contar'); }catch(e){} 1`);
   chk('Contar pinta los productos', await esperar(cli, `ST_TAB==='contar' && !!document.querySelector('#stContar .stc-row .stc-ok:not(.ok)')`, 60000), await ev(cli, `ST_TAB`).catch(() => null));
+  /* (3/11/2026) Desde v854 el conteo sale a los 5 s (ventana de «Deshacer»): esta prueba mide la COLA y los reintentos, no esa
+     ventana (la mide probar_contar_deshacer.js). Se apaga la espera para que los cortes caigan donde la prueba los espera. */
+  await ev(cli, 'STC_DESHACER_MS=0;1');
   const abbr = await ev(cli, `(function(){ var b=document.querySelector('#stContar .stc-row .stc-ok:not(.ok)'); return b.closest('.stc-row').id.replace('stcR_',''); })()`);
   const v0 = await ev(cli, `document.getElementById('stcIn_${abbr}').value`);
   console.log('  producto:', abbr, '· numero en pantalla:', v0);
@@ -64,6 +67,7 @@ const red = `;(function(){var o=window.fetch;window.__envios=[];window.fetch=fun
   chk('recargado con uno sin mandar: al abrir lo manda solo', await esperar(cli, `typeof _stcEncolar==='function' && window.__envios && window.__envios.some(function(e){ return e.abbr==='${abbr2}'; })`, 60000), await ev(cli, `[localStorage.getItem('maleu_stcCola'), window.__envios]`).catch(() => null));
   chk('   y la cola queda vacia', await esperar(cli, `JSON.parse(localStorage.getItem('maleu_stcCola')||'[]').length===0`, 30000), '');
   /* 4. Un rechazo del servidor si se avisa. */
+  await ev(cli, 'STC_DESHACER_MS=0;1');   /* la recarga la volvio a 5 s */
   await ev(cli, `localStorage.setItem('__red3g', JSON.stringify({rechazo:1})); go('stock'); try{ stSwitchTab('contar'); }catch(e){} 1`);
   await esperar(cli, `ST_TAB==='contar' && !!document.querySelector('#stContar .stc-row .stc-ok:not(.ok)')`, 60000);
   const abbr3 = await ev(cli, `(function(){ var b=document.querySelector('#stContar .stc-row .stc-ok:not(.ok)'); return b.closest('.stc-row').id.replace('stcR_',''); })()`);
