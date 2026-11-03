@@ -58,7 +58,7 @@ const BOLSAS = `JSON.stringify(__posts.filter(function(b){return b.action==='mar
   console.log('\n=== RUTA · la bolsa al representante al instante · ' + ANCHO + ' px · ' + APP + ' ===');
   await cli.enviar('Page.navigate', { url: BASE + '/' + APP });
   if (!await esperar(cli, 'typeof window.go==="function"')) { console.log('el ERP no arrancó'); process.exit(1); }
-  await evaluar(cli, 'go("ruta")'); await pausa(1500);
+  await evaluar(cli, 'go("ruta")'); await esperar(cli, 'typeof window.switchTab==="function"', 60000); await pausa(500);
   await evaluar(cli, 'switchTab("ruta");refresh(true,false)');
   chk('aparece la bolsa del representante', await esperar(cli, HAY, 30000));
   const r = await evaluar(cli, TOQUE);

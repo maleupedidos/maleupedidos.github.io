@@ -46,7 +46,7 @@ const TOQUE = (filas) => `new Promise(function(fin){
   console.log('\n=== RUTA · Descargué todo al instante · ' + ANCHO + ' px · ' + APP + ' ===');
   await cli.enviar('Page.navigate', { url: BASE + '/' + APP });
   if (!await esperar(cli, 'typeof window.go==="function"')) { console.log('el ERP no arrancó'); process.exit(1); }
-  await evaluar(cli, 'go("ruta")'); await pausa(1500);
+  await evaluar(cli, 'go("ruta")'); await esperar(cli, 'typeof window.switchTab==="function"', 60000); await pausa(500);
   await evaluar(cli, 'switchTab("ruta");fetchPendientesGuardarStock(true)');
   chk('aparece la card del depósito', await esperar(cli, HAY_DEP, 30000));
   const r = await evaluar(cli, TOQUE('90501,90502'));

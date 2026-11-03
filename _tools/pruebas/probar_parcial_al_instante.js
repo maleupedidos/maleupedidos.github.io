@@ -66,7 +66,7 @@ const COLA = `JSON.stringify((JSON.parse(localStorage.getItem('maleu_ruta')||'{}
   console.log('\n=== RUTA › COBROS · el parcial al instante · ' + ANCHO + ' px · ' + APP + ' ===');
   await cli.enviar('Page.navigate', { url: BASE + '/' + APP });
   if (!await esperar(cli, 'typeof window.go==="function"', 120000)) { console.log('el ERP no arrancó'); process.exit(1); }
-  await evaluar(cli, 'go("ruta")'); await pausa(1500); await evaluar(cli, 'switchTab("cobros")');
+  await evaluar(cli, 'go("ruta")'); await esperar(cli, 'typeof window.switchTab==="function"', 60000); await pausa(500); await evaluar(cli, 'switchTab("cobros")');
   chk('aparecen las dos cards', await esperar(cli, `!!(${CARD('Parcial Uno')})&&!!(${CARD('Parcial Rechazo')})`, 30000));
   let r = await evaluar(cli, PARCIAL('Parcial Uno', 8000, `/Ya cobrado: \\$\\s?8\\.000/.test(${TXT('Parcial Uno')})&&/Guardando/.test(${TXT('Parcial Uno')})`));
   chk('Parcial Uno: al toque dice «Ya cobrado $8.000 · Guardando…» (' + r.ms + ' ms, tope 300)', r.ms >= 0 && r.ms <= 300, r);
