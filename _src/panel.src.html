@@ -9007,15 +9007,35 @@ function panelDoLogin(){
   er.classList.remove('show');
   if(!u||!p){er.textContent='Ingresá usuario y PIN';er.classList.add('show');return;}
   var btn=document.getElementById('loginBtn');btn.disabled=true;btn.textContent='Entrando...';
-  fetch(API,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({action:'loginUsuario',usuario:u,pin:p})})
-    .then(function(r){return r.json();})
+  /* (3/11/2026, corte) EL LOGIN YA NO DEPENDE DE APPS SCRIPT. Se piden los dos a la vez: Apps Script (`loginUsuario`,
+     el de siempre, que trae el token que todavia usan las escrituras sin directa) y la base (`_loginBase`: login_pin +
+     la sesion propia + mi_sesion_pantalla). Si Apps Script contesta, se entra como siempre y la sesion de la base ya
+     quedo guardada (sin el viaje extra de `_sbLoginPropio`). Si NO contesta, esta apagado (WEBAPP_APAGADO) o es el
+     ensayo, se entra con la base sola. El representante sigue por Apps Script: su portal necesita datos que el login de
+     la base todavia no trae. Un «incorrecto» de los dos es incorrecto; uno solo no: el PIN de la base puede ir 1 min atras. */
+  var _ens=false; try{ _ens=localStorage.getItem('maleu_ensayo')==='1'; }catch(eE){}
+  var _pApps=_ens?Promise.resolve(null):fetch(API,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({action:'loginUsuario',usuario:u,pin:p})})
+    .then(function(r){return r.json();}).catch(function(){ return null; });
+  var _pBase=(typeof _loginBase==='function')?_loginBase(u,p).catch(function(e){ return {ok:false,red:true,err:String((e&&e.message)||e)}; }):Promise.resolve(null);
+  Promise.all([_pApps,_pBase]).then(function(z){
+    var d=z[0], b=z[1];
+    try{ window.__loginDe={apps:d?(d.ok?'ok':(d.apagado?'apagado':'no')):'sin respuesta',base:b?(b.ok?'ok':'no'):'sin respuesta'}; }catch(eW){}
+    if(d&&d.ok){ if(b&&b.ok)d._baseYa=true; return d; }
+    if(b&&b.ok&&String(b.rol||'').toLowerCase()!=='vendedor')return b;
+    if(d||(b&&!b.red))return {ok:false,err:(d&&!d.apagado&&d.err)||(b&&b.err)||'Usuario o PIN incorrectos'};
+    throw new Error('sin conexion');
+  })
     .then(function(d){
       if(!d||!d.ok){er.textContent=(d&&d.err)||'Usuario o PIN incorrectos';er.classList.add('show');btn.disabled=false;btn.textContent='Entrar';return;}
       // AUTH: el token habilita TODAS las llamadas al backend, asi que se guarda
       // siempre — no depende del tilde de 'recordarme'.
       try{ if(d.token) localStorage.setItem('maleu_token', d.token); }catch(e){}
+      /* Donde esta la base, para el proximo login aunque Apps Script no conteste (3/11/2026). */
+      try{ if(d.sbUrl&&d.sbPub) localStorage.setItem('mc_sbcfg', JSON.stringify({url:String(d.sbUrl).replace(/\/+$/,''),key:d.sbPub})); }catch(eCf){}
       /* (373) Con LOGIN_BASE en «medir» o «si»: la sesion propia de la base, por atras. No frena la entrada. */
-      try{ _sbLoginPropio((d.usuario||u), p, d); }catch(eLp){}
+      if(!d._baseYa&&!d.viaBase){ try{ _sbLoginPropio((d.usuario||u), p, d); }catch(eLp){} }
+      /* La vuelta atras de LOGIN_BASE: si Apps Script dice «no» (o no manda el modo), la sesion de la base no se usa. */
+      if(d._baseYa&&!/^(medir|si)$/.test(String(d.loginBase||''))){ try{ _sbSesBorrar(); }catch(eSb){} }
       SESSION={
         usuario:d.usuario||u,rol:d.rol||'empleado',nombre:d.nombre||u,ts:Date.now(),
         tabs:Array.isArray(d.tabs)?_tabsExpandir(d.tabs):null
@@ -13680,6 +13700,32 @@ function _sbMedNota(ref,ok){ try{ if(typeof _medEmpezar==='function')_medCerrar(
 function _sbAuth(url,key,grant,body){
   return fetch(url+'/auth/v1/token?grant_type='+grant,{method:'POST',headers:{apikey:key,'Content-Type':'application/json'},body:JSON.stringify(body)})
     .then(function(r){ return r.json().then(function(j){ if(!r.ok||!j||!j.access_token)throw new Error((j&&(j.error_description||j.msg||j.error))||('auth '+r.status)); return j; }); });
+}
+/* (3/11/2026, corte) EL LOGIN POR LA BASE, SIN APPS SCRIPT. Hace falta saber donde esta la base ANTES de entrar: la URL y
+   la clave publica (publishable: es publica por diseño, la usa la tienda igual) que mando el backend en el ultimo login,
+   o las de produccion. Devuelve {ok, viaBase, usuario, rol, nombre, tabs} o {ok:false, err}; rechaza si no hay red. */
+var SB_PROD_URL='https://xhaxmyvhygxynwjqrarm.supabase.co', SB_PROD_PUB='sb_publishable_IVIVgOV-t_ugcQz1zQNwsw_U-4yOMZG';
+function _sbCfgLogin(){
+  try{ var g=JSON.parse(localStorage.getItem('mc_sbcfg')||'null'); if(g&&g.url&&g.key)return g; }catch(e){}
+  return {url:SB_PROD_URL,key:SB_PROD_PUB};
+}
+function _loginBase(u,pin){
+  var c=_sbCfgLogin(), H=function(tok){ return {apikey:c.key,Authorization:'Bearer '+(tok||c.key),'Content-Type':'application/json'}; };
+  return fetch(c.url+'/rest/v1/rpc/login_pin',{method:'POST',headers:H(),body:JSON.stringify({p_usuario:u,p_pin:pin})})
+    .then(function(r){ return r.json(); })
+    .then(function(lp){
+      if(!lp||!lp.ok||!lp.email||!lp.clave)return {ok:false,err:(lp&&lp.err)||'Usuario o PIN incorrectos'};
+      return _sbAuth(c.url,c.key,'password',{email:lp.email,password:lp.clave}).then(function(t){
+        var g={u:lp.usuario||u,url:c.url,key:c.key,access:t.access_token,refresh:t.refresh_token,hasta:Date.now()+(Number(t.expires_in)||3600)*1000,modo:'si',todos:true};
+        _sbSesGuardar(g);
+        return fetch(c.url+'/rest/v1/rpc/mi_sesion_pantalla',{method:'POST',headers:H(t.access_token),body:'{}'})
+          .then(function(r){ return r.json(); })
+          .then(function(s){
+            if(!s||!s.ok||s.activo===false){ _sbSesBorrar(); return {ok:false,err:(s&&s.activo===false)?'Tu usuario quedó desactivado':'No se pudo abrir la sesión'}; }
+            return {ok:true,viaBase:true,usuario:g.u,rol:s.rol||lp.rol||'empleado',nombre:s.nombre||g.u,tabs:s.tabs,loginBase:'si'};
+          });
+      });
+    });
 }
 function _sbLoginPropio(u,pin,d){
   if(!d||!/^(medir|si)$/.test(String(d.loginBase||''))||!d.sbUrl||!d.sbPub||!pin)return;
