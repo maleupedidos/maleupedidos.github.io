@@ -12728,11 +12728,16 @@ var API='https://script.google.com/macros/s/AKfycbxmrG5YVSshcYezk8lXFx_uxb7NFGcb
  *   vendedor   → solo Mi Portal (Fase 3)
  * Backend valida contra hoja Usuarios (auto-creada en primer login). */
 var SESSION=null;
+/* ¿Hay sesion propia de la base para este usuario? Lee lo guardado sin depender de SESSION (lo usa _loadSession antes). */
+function _sesBaseDe(u){
+  try{ var g=JSON.parse(localStorage.getItem('mc_sbses')||'null'); return !!(g&&g.refresh&&g.url&&g.key&&String(g.u||'').toLowerCase()===String(u||'').toLowerCase()); }catch(e){ return false; }
+}
 function _loadSession(){
   try{var s=localStorage.getItem('maleu_panel_session');if(s){SESSION=JSON.parse(s);if(SESSION&&SESSION.tabs)SESSION.tabs=_tabsExpandir(SESSION.tabs);}}catch(e){SESSION=null;}
   // AUTH (19/08/2026): las sesiones guardadas antes del token no sirven para hablar
   // con el backend. Se descartan una unica vez para que vuelva a pedir usuario+PIN.
-  try{ if(SESSION && !localStorage.getItem('maleu_token')){ SESSION=null; localStorage.removeItem('maleu_panel_session'); } }catch(e){}
+  /* (3/11/2026) Con la sesion propia de la base (login sin Apps Script, v874) tampoco hace falta el token de Apps Script. */
+  try{ if(SESSION && !localStorage.getItem('maleu_token') && !_sesBaseDe(SESSION.usuario)){ SESSION=null; localStorage.removeItem('maleu_panel_session'); } }catch(e){}
 }
 _loadSession();
 function panelDoLogin(){
@@ -12785,7 +12790,12 @@ function panelDoLogin(){
       if(document.getElementById('loginRemember').checked){
         try{localStorage.setItem('maleu_panel_session',JSON.stringify(SESSION));}catch(e){}
       }
-      _enterApp();
+      /* (3/11/2026) Con la sesion de la base, el permiso (y con el, las PALANCAS) se pide ANTES de abrir la app: si no,
+         nadie lo pedia y las primeras pantallas decidian «sin palancas» y salian a Apps Script (medido con el robot:
+         avisosErp y ventas). Contra Supabase son ~0,3 s; tope 3 s, y si no llega se entra igual. */
+      if((d.viaBase||d._baseYa)&&typeof _sbPermiso==='function'){
+        Promise.race([Promise.resolve(_sbPermiso()).catch(function(){ return null; }),new Promise(function(r){ setTimeout(r,3000); })]).then(function(){ _enterApp(); });
+      } else _enterApp();
     })
     .catch(function(){er.textContent='Error de conexión. Intentá de nuevo.';er.classList.add('show');btn.disabled=false;btn.textContent='Entrar';});
 }
@@ -12980,7 +12990,10 @@ function _pedirLivianas(){
      esa corrida: medido, giraba 3,1 s esperando la caja y los cobros que esa
      tab no dibuja, y de paso repintaba Pedidos Home estando en Pedidos. */
   if(_dPidiendo||_livianasPedidas||D)return;
-  if(!_necesitaDatosPanel())return;
+  /* (3/11/2026) Con `SESSION.tabs` cargadas `_necesitaDatosPanel()` daba SIEMPRE false (`_TABS_CON_DATOS` esta vacia
+     desde el 27/9) y esto se cortaba: entrar con usuario y PIN dejaba Inicio vacio hasta tocar ↻ (lo encontro el robot).
+     La tab abierta, si es de las que arrancan livianas y la sesion la tiene, pide lo suyo. */
+  if(!_necesitaDatosPanel()&&!(typeof cur==='string'&&_ARRANCAN_LIVIANO[cur]&&_tengoTab(cur)))return;
   _livianasPedidas=true;
   _dPidiendo=true;_dEstado='yendo';_ldSync();
   var _fin=function(ok){ _dPidiendo=false;_dEstado=ok?'ok':'error';_ldSync(); };
@@ -13305,7 +13318,7 @@ function _palancasFrescas(pal){
 }
 function _refrescarMiSesion(forzar){
   if(!SESSION||!SESSION.usuario) return;
-  try{ if(!localStorage.getItem('maleu_token')) return; }catch(e){ return; }
+  try{ if(!localStorage.getItem('maleu_token') && !_sesBaseDe(SESSION.usuario)) return; }catch(e){ return; }
   if(!forzar && Date.now()-_miSesionT<300000) return;
   _miSesionT=Date.now();
   /* (3/11/2026, corte) La contesta la base (`mi_sesion_pantalla`, 391); si no, Apps Script. `window.__miSesionDe` dice de donde. */
@@ -14889,7 +14902,7 @@ function _leerVersion(app){
    "El HTML no sabe que version es" dejo de ser cierto: el build le escribe
    adentro el CACHE_NAME de sw-panel.js, el mismo que deploy.sh obliga a subir en
    cada cambio. Si lo publicado dice otra cosa, esta pagina es vieja. Punto. */
-var _APP_CN_PAGINA='maleu-panel-v874';
+var _APP_CN_PAGINA='maleu-panel-v875';
 
 /* Devuelve [{k,v}] si lo publicado no es lo que esta pagina corre. */
 function _chequearVersiones(){
@@ -41448,7 +41461,7 @@ function _vListaClick(e){
        lo despierta. Sin esto, un celular en el bolsillo seguiria preguntando. */
     if(document.visibilityState !== 'visible') return;
     if(navigator.onLine === false){ _vigiaProgramar(); return; }
-    try{ if(!localStorage.getItem('maleu_token')) return; }catch(e){}
+    try{ if(!localStorage.getItem('maleu_token') && !(typeof SESSION!=='undefined'&&SESSION&&_sesBaseDe(SESSION.usuario))) return; }catch(e){}
     if(!_vigiaForzar && _vigiaUltVer && Date.now() - _vigiaUltVer < VIGIA_RESPALDO_MS && _vigiaCubierto()){
       _vigia.salteadas = (_vigia.salteadas || 0) + 1; _vigiaProgramar(VIGIA_MS); return;
     }

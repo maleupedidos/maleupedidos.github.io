@@ -96,7 +96,7 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
 
   /* ¿Están las entidades PRUEBA? Sin ellas, los pasos que escriben no corren. */
   const ent = await rpc('robot_entidades_pantalla', {}).catch(() => null);
-  ENTIDADES = !!(ent && ent.ok && ent.cliente && ent.producto && ent.cuenta);
+  ENTIDADES = !!(ent && ent.ok && Array.isArray(ent.faltan) && ent.faltan.length === 0);
   console.log('  entidades PRUEBA: ' + (ENTIDADES ? 'sí' : 'todavía no (' + JSON.stringify(ent).slice(0, 120) + ')'));
 
   /* 2) LAS PANTALLAS QUE LEEN, sin Apps Script: cada una tiene que pintar de la base. */
