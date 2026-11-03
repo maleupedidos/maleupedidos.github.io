@@ -14742,7 +14742,7 @@ function _leerVersion(app){
    "El HTML no sabe que version es" dejo de ser cierto: el build le escribe
    adentro el CACHE_NAME de sw-panel.js, el mismo que deploy.sh obliga a subir en
    cada cambio. Si lo publicado dice otra cosa, esta pagina es vieja. Punto. */
-var _APP_CN_PAGINA='maleu-panel-v838';
+var _APP_CN_PAGINA='maleu-panel-v839';
 
 /* Devuelve [{k,v}] si lo publicado no es lo que esta pagina corre. */
 function _chequearVersiones(){
@@ -31520,8 +31520,14 @@ function _lecTraer(accion,args,clave,url,pintar,opts){
   }).catch(function(){ return traer(clave,url,pintar,opts); });
 }
 /* Lo mismo para un fetch sin copia guardada (`traerJson` del PDF): `alLlegar(d)` una vez. */
-function _lecJson(accion,args,url,alLlegar){
+function _lecJson(accion,args,url,alLlegar,_ya){
   var modo=_lecModo(accion), desde=Date.now();
+  /* (3/11/2026) Sin palancas todavia (el permiso de la base no llego) pero con el permiso EN CAMINO: se espera a ese
+     permiso (~3 s) y se decide con el. Antes la lectura salia a Apps Script y quedaba en su cola detras del arranque:
+     «Ver como un representante» tardo 17-28 s en mostrar la lista. Una sola vez (`_ya`). */
+  if(!_ya&&modo==null&&_sbPidiendo&&(typeof _palancaVal!=='function'||_palancaVal('lecArma')==null)){
+    return Promise.resolve(_sbPidiendo).then(function(){ return _lecJson(accion,args,url,alLlegar,true); },function(){ return _lecJson(accion,args,url,alLlegar,true); });
+  }
   var apps=function(){ return fetch(url).then(function(r){ return r.json(); }).then(function(d){
     alLlegar(d); if(modo==='medir')_lecArmaMedir(accion,args,d,desde); return d; }); };
   if(modo!=='si')return apps();
@@ -61150,6 +61156,17 @@ function redVerComoLista() {
     + 'Lo que marques queda registrado a tu nombre.</p><div class="vc-lista"><div class="spinner"></div></div>';
   redEquipoCargar();
   redAbiertosCargar();
+  /* (3/11/2026) La lista se pinta YA de la copia de la vez anterior y se reemplaza cuando llega la de ahora. */
+  const _vcPintar = function (lista) {
+    const cont = box.querySelector('.vc-lista'); if (!cont) return;
+    cont.innerHTML = lista.map(function (v) {
+      return '<button type="button" data-nombre="' + redEsc(v.nombre) + '" onclick="redVerComoEntrar(this.dataset.nombre)">'
+        + redEsc(v.nombre) + (v.partido ? ' <span style="color:#999;font-weight:600">· ' + redEsc(v.partido) + '</span>' : '') + '</button>';
+    }).join('');
+  };
+  let _vcCopia = null;
+  try { _vcCopia = JSON.parse(localStorage.getItem('mc_red_vercomo') || 'null'); } catch (e) {}
+  if (_vcCopia && Array.isArray(_vcCopia.l) && _vcCopia.l.length) _vcPintar(_vcCopia.l);
   /* (182) Si la base ya arma los vendedores (LEC_ARMA), `_lecJson` decide de donde salen. */
   ((typeof _lecJson === 'function' && typeof LEC_ARMA === 'object' && LEC_ARMA.vendedores)
     ? _lecJson('vendedores', {}, APPS_SCRIPT_URL + '?action=vendedores', function () {})
@@ -61157,15 +61174,13 @@ function redVerComoLista() {
     .then(function (d) {
       const lista = (d && d.vendedores) || [];
       const cont = box.querySelector('.vc-lista');
-      if (!lista.length) { cont.innerHTML = '<p>No pude traer la lista de representantes. Probá de nuevo.</p>'; return; }
-      cont.innerHTML = lista.map(function (v) {
-        return '<button type="button" data-nombre="' + redEsc(v.nombre) + '" onclick="redVerComoEntrar(this.dataset.nombre)">'
-          + redEsc(v.nombre) + (v.partido ? ' <span style="color:#999;font-weight:600">· ' + redEsc(v.partido) + '</span>' : '') + '</button>';
-      }).join('');
+      if (!lista.length) { if (!(_vcCopia && _vcCopia.l && _vcCopia.l.length)) cont.innerHTML = '<p>No pude traer la lista de representantes. Probá de nuevo.</p>'; return; }
+      _vcPintar(lista);
+      try { localStorage.setItem('mc_red_vercomo', JSON.stringify({ t: Date.now(), l: lista.map(function (v) { return { nombre: v.nombre, partido: v.partido || '' }; }) })); } catch (e) {}
     })
     .catch(function () {
       const cont = box.querySelector('.vc-lista');
-      if (cont) cont.innerHTML = '<p>Sin conexión. <button type="button" onclick="redVerComoLista()">Reintentar</button></p>';
+      if (cont && !(_vcCopia && _vcCopia.l && _vcCopia.l.length)) cont.innerHTML = '<p>Sin conexión. <button type="button" onclick="redVerComoLista()">Reintentar</button></p>';
     });
 }
 /* PEDIDOS ABIERTOS DE TODOS LOS VENDEDORES (6/10/2026). Tadeo: «tienen que ver

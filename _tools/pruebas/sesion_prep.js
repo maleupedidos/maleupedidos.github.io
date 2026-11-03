@@ -14,10 +14,12 @@ module.exports = function prep(token, extra) {
     + 'document.addEventListener("click",function(e){window.__clicks.push((e.target.id?"#"+e.target.id:"")+"."+String(e.target.className||"").split(" ")[0]);},true);'
     /* (27/10/2026) Las LECTURAS de la base tambien son POST (`/rest/v1/rpc/<algo>_pantalla|_datos|_base`):
        interceptadas, la prueba recibia {ok:true} en vez de la caja o las ventas y concluia «la base no
-       armo». Esas pasan; todo otro POST (Apps Script, rpc que escriben) sigue interceptado. */
+       armo». Esas pasan; todo otro POST (Apps Script, rpc que escriben) sigue interceptado.
+       (3/11/2026) Tambien las tienda_* de solo lectura (STABLE; tienda_cumple escribe y NO pasa) y la previa de
+       noSeCobro: cortadas, «Ver como» decia «No pude traer la lista» sobre una base que contestaba bien. */
     + '(function(){var o=window.fetch;window.fetch=function(u,x){'
     + 'var _u=String((u&&u.url)||u||"");'
-    + 'if(x&&String(x.method||"").toUpperCase()==="POST"&&!/\\/rest\\/v1\\/rpc\\/[a-z0-9_]+_(pantalla|datos|base)(\\?|$)/.test(_u))return Promise.resolve(new Response(JSON.stringify({ok:true}),{status:200,headers:{"Content-Type":"application/json"}}));'
+    + 'if(x&&String(x.method||"").toUpperCase()==="POST"&&!/\\/rest\\/v1\\/rpc\\/([a-z0-9_]+_(pantalla|datos|base)|tienda_(vendedores|pedido_entro|ruleta|saldo_cliente|seguimiento|stock|piezas|validar_cupon)|pedido_no_se_cobro_previa)(\\?|$)/.test(_u))return Promise.resolve(new Response(JSON.stringify({ok:true}),{status:200,headers:{"Content-Type":"application/json"}}));'
     + 'return o.apply(this,arguments);};})();'
     + (extra || '');
 };
