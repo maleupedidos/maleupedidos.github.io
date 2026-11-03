@@ -5781,6 +5781,7 @@ window.rutLlegando=function(key){
 };
 
 function renderCobros(){
+  try{ _cvCerrarRecibidos(); }catch(eCr){}
   document.getElementById('armadoView').classList.add('hidden');document.getElementById('rutaView').classList.add('hidden');
   document.getElementById('cobrosView').classList.remove('hidden');document.getElementById('nuevoView').classList.add('hidden');
   // Render optimista: cache local INSTANTÁNEO. Fetch en background silencioso —
@@ -10211,6 +10212,7 @@ function confirmarCobroVendedor(vendedor){
      el comprobante. Con el Mercado Pago de entrada, una rendicion al Brubank
      que nadie corregia quedaba imputada a la otra cuenta. */
   _cvCtx={vendedor:nombre,saldo:saldo,sems:(pc.sems||[]),cta:'',quien:''};
+  setTimeout(function(){ _cvEnManoPintar(nombre); },0);
   // El overlay se rehace entero abajo (`o.innerHTML=html`), así que el box de
   // cuentas nace vacío: sin resetear la firma, `_cvPintarCtas` creería que ya
   // está pintado y el selector no aparecería en la segunda apertura.
@@ -10241,6 +10243,7 @@ function confirmarCobroVendedor(vendedor){
     +    '<div style="font-size:11px;color:#999;margin-top:5px">'+nPedidos+' pedido'+(nPedidos!==1?'s':'')+' pendiente'+(nPedidos!==1?'s':'')+'</div>'
     +    ((Number(pc.efNuevo)||0)>0?'<div style="display:flex;justify-content:space-between;padding:2px 0;color:#1B5E20"><span>💵 Efectivo de sus clientes (desde el 5/10)</span><b>'+formatMoney(pc.efNuevo)+'</b></div>':'')
     +  '</div>'
+    +  '<div id="cvEnMano" style="padding:0 18px"></div>'
     +  '<div style="padding:0 18px 12px"><div id="cvSemanas" style="font-size:11px"></div></div>'
     +  '<div style="padding:13px 18px 16px;background:#fafafa;border-top:1px solid #eee">'
     +    '<div style="font-size:11px;font-weight:800;color:#5D4037;margin-bottom:8px">¿Cómo te pagó?</div>'
@@ -10336,6 +10339,53 @@ function _cvPintarQuien(){
   if(box.innerHTML!==h)box.innerHTML=h;
 }
 function _cvSetQuien(n){if(!_cvCtx)return;_cvCtx.quien=n;_cvSync();}
+/* (375, 3/11/2026) EL CIERRE DE LO «EN MANO». Al recibir el efectivo de un representante, la base da por recibidos sus
+   pedidos marcados; queda dejarlos Cobrado al cliente con el `updatePedidoRed` de siempre (cobroCliente). La base dice
+   cuáles faltan (`recibidos[].cobroCerrado:false`, ultimas 24 h): no se rehace aca la regla de «del más viejo al más
+   nuevo». Mandarlo dos veces no cobra dos veces (la segunda ya lo ve cerrado) y si Apps Script lo rechaza vuelve solo
+   a false. Sin la 375 `recibidos` no viene: no hace nada. */
+var _cvCierreVuelo=false, _cvCierreHechos={}, _cvCierreUlt=0;
+function _cvCerrarRecibidos(forzar){
+  if(_cvCierreVuelo||typeof _sbPermiso!=='function')return;
+  if(!forzar&&Date.now()-_cvCierreUlt<30000)return;
+  _cvCierreVuelo=true; _cvCierreUlt=Date.now();
+  Promise.resolve(_sbPermiso(true)).then(function(sb){
+    if(!sb)return null;
+    return fetch(sb.url+'/rest/v1/rpc/red_efectivo_pantalla',{method:'POST',headers:{apikey:sb.key,Authorization:'Bearer '+sb.token,'Content-Type':'application/json'},body:'{}'})
+      .then(function(r){ return r.ok?r.json():null; });
+  }).then(function(d){
+    _cvCierreVuelo=false;
+    var rs=((d&&d.ok&&Array.isArray(d.recibidos))?d.recibidos:[]).filter(function(x){ return x&&x.cobroCerrado===false&&x.n!=null&&!_cvCierreHechos[String(x.clave||x.n)]; });
+    rs.forEach(function(x){
+      var k=String(x.clave||x.n); _cvCierreHechos[k]=Date.now();
+      var body={action:'updatePedidoRed',pedidoId:String(x.n),row:Number(x.row)||0,vendedor:String(x.representante||x.vendedor||''),
+        updates:{cobroCliente:true,montoVisto:Number(x.monto)||0},clientOpId:'refc_'+k.replace(/[^A-Za-z0-9_-]/g,'').slice(0,60)};
+      (typeof _ordenPost==='function'?_ordenPost(body):fetch(RUT_APPS_SCRIPT_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(body)}))
+        .then(function(r){ return r&&r.json?r.json():r; })
+        .then(function(j){ if(!j||j.ok===false)delete _cvCierreHechos[k]; })
+        .catch(function(){ delete _cvCierreHechos[k]; });
+    });
+  },function(){ _cvCierreVuelo=false; });
+}
+/* (372, 3/11/2026) Lo que el representante marcó «Me pagó en efectivo» en su portal: la plata que tiene de Maleu, por
+   pedido. Al registrar el efectivo, la base da por recibidos esos pedidos (del más viejo al más nuevo, enteros). */
+function _cvEnManoPintar(nombre){
+  var box=_cvEl('cvEnMano'); if(!box||typeof _sbPermiso!=='function')return;
+  Promise.resolve(_sbPermiso(true)).then(function(sb){
+    if(!sb)return null;
+    return fetch(sb.url+'/rest/v1/rpc/red_efectivo_pantalla',{method:'POST',headers:{apikey:sb.key,Authorization:'Bearer '+sb.token,'Content-Type':'application/json'},body:'{}'})
+      .then(function(r){ return r.ok?r.json():null; });
+  }).then(function(d){
+    var b=_cvEl('cvEnMano'); if(!b||!d||!d.ok||!d.palanca)return;
+    var en=d.enMano||{}, k=Object.keys(en).filter(function(r){ return String(r).trim().toLowerCase()===String(nombre||'').trim().toLowerCase(); })[0];
+    var x=k&&en[k]; if(!x||!(Number(x.total)>0))return;
+    var e=function(t){ return String(t==null?'':t).replace(/[<>&"]/g,''); };
+    b.innerHTML='<div style="margin:0 0 10px;padding:8px 10px;border:1px dashed #D7B98A;border-radius:10px;background:#FFF8EE;font-size:12px;color:#5D4037">'
+      +'<div style="display:flex;justify-content:space-between;font-weight:800"><span>🤝 Tiene en mano (le pagaron en efectivo)</span><span>'+formatMoney(Number(x.total)||0)+'</span></div>'
+      +(x.pedidos||[]).map(function(pp){ return '<div style="display:flex;justify-content:space-between;color:#777;font-size:11px"><span>#'+e(pp.n)+' '+e(pp.cliente)+'</span><span>'+formatMoney(Number(pp.monto)||0)+'</span></div>'; }).join('')
+      +'</div>';
+  }).catch(function(){});
+}
 
 function _cvQuick(modo){
   if(!_cvCtx)return;
@@ -10421,6 +10471,7 @@ function cobrarVendedorRed(vendedor,ef,tr,esTotal,cuenta,quien){
       rutHideLoader(true);
       var corto=vendedorLimpio.split(' ')[0];
       if(res&&res.ok){
+        if(ef>0)setTimeout(function(){ _cvCerrarRecibidos(true); },1500);   /* (375) los «en mano» que esta rendición recibió: Cobrado al cliente */
         if(res.total>0||res.updated>0){
           // Un parcial NO marca pedidos como Pagado (updated=0) pero SÍ registró
           // plata; y el cierre de una semana ya rendida marca pedidos sin cobrar

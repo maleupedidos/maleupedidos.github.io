@@ -12569,6 +12569,42 @@ function _lugDetHtml(p){
   return h;
 }
 
+/* ── LO QUE TIENE CADA REPRESENTANTE DE MALEU (372, 3/11/2026) ──
+   El cliente le pagó en efectivo al representante y él lo marcó en su portal («Me pagó en efectivo»). Esa plata
+   todavía NO es de la caja: no suma a ningún lugar, billetera ni total. Se muestra aparte para saber qué recibir.
+   Se lee de `red_efectivo_pantalla()` (el admin ve todo), cada 30 s como mucho, y repinta la Caja si cambió. */
+var _cjEnMano={d:null,t:0,vuelo:false,firma:''};
+function _cjEnManoLeer(){
+  if(_cjEnMano.vuelo||Date.now()-_cjEnMano.t<30000||typeof _sbPermiso!=='function')return;
+  _cjEnMano.vuelo=true;
+  Promise.resolve(_sbPermiso(true)).then(function(sb){
+    if(!sb)throw new Error('sin permiso');
+    return fetch(sb.url+'/rest/v1/rpc/red_efectivo_pantalla',{method:'POST',headers:{apikey:sb.key,Authorization:'Bearer '+sb.token,'Content-Type':'application/json'},body:'{}'})
+      .then(function(r){ if(!r.ok)throw new Error('la base contestó '+r.status); return r.json(); });
+  }).then(function(d){
+    _cjEnMano.vuelo=false;_cjEnMano.t=Date.now();
+    _cjEnMano.d=(d&&d.ok&&d.palanca)?(d.enMano||{}):null;
+    var f=JSON.stringify(_cjEnMano.d);
+    if(f!==_cjEnMano.firma){ _cjEnMano.firma=f; try{ if(cur==='caja'&&typeof rCaja==='function')rCaja(); }catch(e){} }
+  },function(){ _cjEnMano.vuelo=false;_cjEnMano.t=Date.now(); });
+}
+/* Los representantes con plata de Maleu en la mano, en el formato de `red_efectivo_pantalla` / `caja_resto.enMano`. */
+function _cjEnManoHtml(){
+  _cjEnManoLeer();
+  var en=_cjEnMano.d; if(!en)return '';
+  var reps=Object.keys(en).filter(function(r){ return en[r]&&Number(en[r].total)>0; });
+  if(!reps.length)return '';
+  var h='<div style="margin-top:8px;padding:8px 10px;border:1px dashed #D7B98A;border-radius:10px;background:#FFF8EE">'
+    +'<div style="font-weight:800;color:var(--ink);margin-bottom:2px">🤝 En mano de representantes</div>';
+  reps.sort(function(a,b){ return Number(en[b].total)-Number(en[a].total); }).forEach(function(r){
+    var ps=(en[r].pedidos||[]);
+    h+='<div class="lug-fila"><span>'+_lugH(r)+' tiene de Maleu'
+      +'<br><small style="color:var(--bl)">'+ps.map(function(x){ return '#'+_lugH(x.n)+(x.cliente?' '+_lugH(x.cliente):''); }).join(' · ')+'</small></span>'
+      +'<b>$'+f$(Math.round(Number(en[r].total)||0))+'</b></div>';
+  });
+  h+='<div style="font-size:10.5px;color:var(--bl);margin-top:2px">No suma a la caja: es plata que el cliente le dio al representante. Entra al recibirla en Ruta › Cobros › «Recibir de un representante».</div></div>';
+  return h;
+}
 /* ── La tarjeta de Efectivo con lugares ── */
 function _subEfLug(L){
   var P=L.personas||[],yo=_lugYo();
@@ -12585,6 +12621,7 @@ function _subEfLug(L){
   /* El control de siempre, a la vista: si los lugares no suman el efectivo
      total, algo se cargo sin lugar o hay un bug. No se esconde. */
   if(Number(L.descuadre))h+='<div style="color:var(--r);font-weight:700;margin-top:4px">⚠️ Los lugares no suman el total (diferencia $'+f$(L.descuadre)+'). Avisale a Backend.</div>';
+  try{ h+=_cjEnManoHtml(); }catch(eEm){}
   var miCob=yo?(Number((L.cob||{})[yo])||0):0;
   h+='<div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap">';
   if(miCob>0)h+='<button data-a="guardar" onclick="abrirMoverLug(this.dataset.a)" class="lug-boton lleno">💰→🔒 Guardé lo cobrado</button>';
