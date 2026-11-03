@@ -76,6 +76,8 @@ var LEC_ARMA = {
   precios: { rpc: 'precios_pantalla', listas: {} },
   /* (184) Si un pedido entro (publica). Ruta la usa solo para el SI: ver npPreguntarSiEntro. */
   pedidoEntro: { rpc: 'tienda_pedido_entro', listas: {} },
+  /* (363) La vista previa de «¿Por qué falta?» (Caja): solo lee, no registra orden. Ver _nscPost. */
+  noSeCobroPrevia: { rpc: 'pedido_no_se_cobro_previa', listas: {} },
   /* (185) Validar un cupon (publica, la usa solo la tienda): por codigo, con los items del carrito. */
   validarCupon: { rpc: 'tienda_validar_cupon', listas: {} },
   /* (186) El seguimiento de un pedido (publica, la usa solo la tienda): por codigo co_...; las
