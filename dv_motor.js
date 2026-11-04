@@ -50,6 +50,8 @@ var Utilities = { formatDate: function (d, tz, fmt) {
 } };
 
 
+var SS        = SpreadsheetApp.getActiveSpreadsheet() || SpreadsheetApp.openById('1ILXCc9ddbC_gJPNoUADBiSMXAWLM9v73ov2_xXb8YsY');
+
 var _authCtx = null;    // { usuario, rol } de la request en curso
 
 function _cuentaDigitalDefault_() {

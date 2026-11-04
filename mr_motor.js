@@ -77,6 +77,8 @@ var _MR = {};
 function _billeterasVivas_() { var b = (_MR.bil || {}).billeteras || {}; return { activo: !!b.activo, personas: b.personas || [], bil: b.bil || {}, corte: b.corte || '' }; }
 
 
+var SS        = SpreadsheetApp.getActiveSpreadsheet() || SpreadsheetApp.openById('1ILXCc9ddbC_gJPNoUADBiSMXAWLM9v73ov2_xXb8YsY');
+
 function _doGetMiReparto(e) {
   var usuario = String((e && e.parameter && e.parameter.usuario) || '').trim();
   var fechaISO = String((e && e.parameter && e.parameter.fecha) || '').trim();

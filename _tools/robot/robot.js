@@ -78,6 +78,14 @@ let ENTIDADES = false;
 /* Números que se siguen corrida a corrida (van en robot_resultado.metricas): la espera de «se está acomodando» entre dos
    movimientos de stock del mismo producto (4/11/2026: 30-90 s por el aplicador; tiene que bajar con el Kardex paso c). */
 const METRICAS = {};
+/* EL PROGRAMADO DE GITHUB LLEGA CUANDO QUIERE (4/11/2026): el de las 3:30 arrancó a las 11:46, en plena operación, y su
+   limpieza (que barre lo PRUEBA por cliente y teléfono) se llevó las 24 altas que Supa estaba midiendo. Un disparo
+   `schedule` fuera de la madrugada (1 a 8 h de Argentina) no corre: sale en 0 diciendo por qué. A mano (workflow_dispatch)
+   y desde los deploy corre siempre. */
+if (process.env.GITHUB_EVENT_NAME === 'schedule') {
+  const _h = Number(new Date().toLocaleString('en-US', { timeZone: 'America/Argentina/Buenos_Aires', hour: 'numeric', hour12: false }));
+  if (!(_h >= 1 && _h < 8)) { console.log('programado fuera de la madrugada (' + _h + ' h de Argentina): no corre. GitHub lo largó tarde.'); process.exit(0); }
+}
 const CRED = credenciales();
 
 /* Una RPC de la base con la sesión de la página (la del robot). */

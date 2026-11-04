@@ -71,6 +71,8 @@ function _mlAvisar_() { return ''; }
 function _logError_() {}
 
 
+var SS        = SpreadsheetApp.getActiveSpreadsheet() || SpreadsheetApp.openById('1ILXCc9ddbC_gJPNoUADBiSMXAWLM9v73ov2_xXb8YsY');
+
 var _COLSRED_ = null;
 
 var _COLSRED_HDR_ = [
