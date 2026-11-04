@@ -250,9 +250,8 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
     const r2 = await directa('pasarAVendedor', { action: 'pasarAVendedor', hoja: p.h, id: String(p.n), row: p.r, al: p.al || AL, vendedor: REP, trajo: 'Vendedor', clientOpId: PREFIJO + 'pase' });
     /* El pase es de admin: hasta que la base deje al robot pasar lo PRUEBA (pedido a Supa), sale salteado y no frena el deploy. */
     if (r2 && r2.d && r2.d.forbidden) return { ok: true, salteado: true, detalle: 'el alta cayó en ' + p.h + ' #' + p.n + '; el pase es solo de admin (pedido a Supa: que el robot pase lo PRUEBA)' };
-    /* Hueco del corte (4/11/2026): el pase busca el pedido por la fila de la hoja y uno nacido en la base no tiene (fila
-       negativa) → «no encontrado». Pedido a Supa; mientras, salteado nombrando el hueco para no frenar los deploys. */
-    if (Number(p.r) < 0 && r2 && /no encontrado/.test(String(r2.fueApps || ''))) return { ok: true, salteado: true, detalle: 'HUECO DEL CORTE: el pase no encuentra un pedido nacido en la base (' + p.h + ' #' + p.n + ', fila ' + p.r + ')' };
+    /* El hueco del corte (un pedido nacido en la base, fila negativa, daba «no encontrado») lo cerró Supa con la 427: el
+       pase lo busca por hoja + N° + hora del alta. Desde el 4/11/2026 ya no se saltea: si vuelve, sale en rojo. */
     if (!bien(r2)) return mal(r2, 'pasar a ' + REP + ' (estaba en ' + p.h + ' #' + p.n + ' fila ' + p.r + ' al ' + (p.al || AL) + ' · ' + (p.es || '?') + ')');
     const nRed = r2.d.red && r2.d.red.n;
     await ev(`_recargarPedidos(); 1`).catch(() => 0);
