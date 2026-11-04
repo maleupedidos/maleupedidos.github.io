@@ -5,9 +5,11 @@ const CHROMES = [
   'C:/Program Files/Google/Chrome/Application/chrome.exe',
   'C:/Program Files (x86)/Google/Chrome/Application/chrome.exe',
   'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',
-  'C:/Program Files/Microsoft/Edge/Application/msedge.exe'
+  'C:/Program Files/Microsoft/Edge/Application/msedge.exe',
+  /* Linux (GitHub Actions, el robot nocturno — 4/11/2026) */
+  '/usr/bin/google-chrome','/usr/bin/google-chrome-stable','/usr/bin/chromium','/usr/bin/chromium-browser'
 ];
-function buscarChrome(){ for(const c of CHROMES) if(fs.existsSync(c)) return c; throw new Error('no hay Chrome'); }
+function buscarChrome(){ if(process.env.CHROME_BIN&&fs.existsSync(process.env.CHROME_BIN)) return process.env.CHROME_BIN; for(const c of CHROMES) if(fs.existsSync(c)) return c; throw new Error('no hay Chrome'); }
 async function esperarPagina(puerto, intentos=60){
   for(let i=0;i<intentos;i++){
     try{ const r=await fetch('http://127.0.0.1:'+puerto+'/json/list'); const l=await r.json();
@@ -32,6 +34,7 @@ async function abrir(opts){
   const puerto=9222+Math.floor(Math.random()*500);
   const args=['--headless=new','--disable-gpu','--no-first-run','--no-default-browser-check',
     '--remote-debugging-port='+puerto,'--user-data-dir='+perfil,'about:blank'];
+  if(process.platform==='linux') args.unshift('--no-sandbox','--disable-dev-shm-usage');
   const proc=spawn(chrome,args,{stdio:'ignore'});
   const wsUrl=await esperarPagina(puerto);
   const cli=conectar(wsUrl); await cli.listo;

@@ -102,6 +102,26 @@ else
   echo "    (ningun .html modificado)"
 fi
 
+# ── 3c2. El robot de pruebas, sobre lo que se va a publicar (4/11/2026) ─────
+#  Entra con el usuario robot por la base, recorre las pantallas en modo ensayo
+#  (nada sale a Apps Script) y, con las entidades PRUEBA, escribe y deshace.
+#  Prueba el app.html local (ROBOT_LOCAL) contra el backend y la base de verdad.
+#  El resultado del deploy no se guarda (el aviso de las 8 es el de la noche).
+#  Urgencia: SIN_ROBOT=1 ./deploy.sh "…"
+echo "→ [3c2/8] El robot de pruebas…"
+if [ -n "${SIN_ROBOT:-}" ] || [ -n "${SIN_HUMO:-}" ]; then
+  echo "${YEL}    SALTEADO a mano (SIN_ROBOT/SIN_HUMO). Corré: node _tools/robot/robot.js${RST}"
+elif [ -n "$HTMLS" ]; then
+  set +e
+  ROBOT_LOCAL=1 ROBOT_SIN_REPORTE=1 node _tools/robot/robot.js 2>&1 | sed 's/^/    /'
+  RC=${PIPESTATUS[0]}
+  set -e
+  if [ "$RC" = "2" ]; then echo "${YEL}    sin credenciales del robot en esta compu: no corrió${RST}"
+  elif [ "$RC" != "0" ]; then fallar "El robot encontró algo roto — no se publica."; fi
+else
+  echo "    (ningun .html modificado)"
+fi
+
 # ── 3d. Que se pueda LEER en la computadora ──────────────────────────────────
 #  El 3/9/2026 se publico el desglose de una venta probado solo a 390px: en el
 #  celular se veia bien y en la computadora era ilegible (el label a 1189px de

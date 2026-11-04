@@ -25,7 +25,16 @@
 'use strict';
 const fs = require('fs'), path = require('path'), os = require('os');
 const cdp = require('../pruebas/cdp.js');
-const URL_APP = process.env.BASE_URL || 'https://app.maleu.com.ar/app.html';
+/* ROBOT_LOCAL=1 (deploy.sh, 4/11/2026): levanta su propio servidor con el app.html recién armado y prueba ESO, lo que se
+   va a publicar. El backend y la base siguen siendo los de producción. */
+let URL_APP = process.env.BASE_URL || 'https://app.maleu.com.ar/app.html', SERVIDOR = null;
+async function servirLocal() {
+  const puerto = 8300 + Math.floor(Math.random() * 600);
+  SERVIDOR = require('child_process').spawn(process.execPath, [path.join(__dirname, '..', 'servir.js'), String(puerto)], { stdio: 'ignore' });
+  URL_APP = 'http://localhost:' + puerto + '/app.html';
+  for (let i = 0; i < 80; i++) { try { const r = await fetch(URL_APP); if (r.ok) return; } catch (e) {} await pausa(250); }
+  throw new Error('el servidor local no arrancó');
+}
 const ahora = new Date(), dos = (n) => String(n).padStart(2, '0');
 const CORRIDA = process.env.ROBOT_CORRIDA || (ahora.getUTCFullYear() + dos(ahora.getUTCMonth() + 1) + dos(ahora.getUTCDate()) + '-' + dos(ahora.getUTCHours()) + dos(ahora.getUTCMinutes()));
 const PREFIJO = 'robot-' + CORRIDA + '-';
@@ -71,6 +80,7 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
 (async () => {
   const cred = credenciales(), TOKEN = process.env.ROBOT_TOKEN || '';
   if (!cred && !TOKEN) { console.log('Sin credenciales del robot (ROBOT_USUARIO/ROBOT_PIN o ~/.maleu/robot.json) ni ROBOT_TOKEN: no corre.'); process.exit(2); }
+  if (process.env.ROBOT_LOCAL) await servirLocal();
   console.log('Robot · corrida ' + CORRIDA + ' · ' + URL_APP + (cred ? ' · usuario ' + cred.usuario : ' · con una sesión de admin (solo lecturas y en seco)'));
   cli = await cdp.abrir();
   /* Con el usuario robot: modo ENSAYO (nada a Apps Script). Con ROBOT_TOKEN (una sesion de Apps Script, sin sesion de la
@@ -118,15 +128,128 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
     return { ok: !!bien, detalle: bien ? 'valida (mismo lugar → no)' : JSON.stringify(r).slice(0, 200) };
   }, { topeMs: 5000 });
 
-  /* 4) LOS PASOS QUE ESCRIBEN (con entidades PRUEBA). Se suman acá a medida que la base los tenga. */
-  await paso('alta en la tienda', async () => ({ ok: false, detalle: 'por escribir' }), { escribe: true });
-  await paso('editar, armar, entregar, cobrar, deshacer cobro', async () => ({ ok: false, detalle: 'por escribir' }), { escribe: true });
-  await paso('contar stock y deshacer', async () => ({ ok: false, detalle: 'por escribir' }), { escribe: true });
-  await paso('OC de prueba: pedir y recibir', async () => ({ ok: false, detalle: 'por escribir' }), { escribe: true });
-  await paso('cargar una compra', async () => ({ ok: false, detalle: 'por escribir' }), { escribe: true });
-  await paso('pagar al proveedor PRUEBA', async () => ({ ok: false, detalle: 'por escribir' }), { escribe: true });
-  await paso('portal del representante PRUEBA', async () => ({ ok: false, detalle: 'por escribir' }), { escribe: true });
-  await paso('liquidación de PRUEBA', async () => ({ ok: false, detalle: 'por escribir' }), { escribe: true });
+  /* 4) LOS PASOS QUE ESCRIBEN (4/11/2026). Escritos contra los NOMBRES que da robot_entidades_pantalla (cliente y
+     representante «PRUEBA Robot», su teléfono, proveedor «PRUEBA», sku «PRUEBA», depósito y cuenta «prueba») y se
+     prenden solos cuando `faltan` queda vacío. Cada uno va por `_ordenDirecta`, el mismo camino que el botón: si
+     devuelve null, la orden habría caído a Apps Script (y el motivo queda en `_noDirecto`). Todo lleva `robot-<corrida>-`
+     en su id: la base lo saca de los totales y robot_limpiar lo borra. */
+  const E = ent || {}, TEL = String(E.telefono || '5490000000001'), CLI = E.cliente || 'PRUEBA Robot', REP = E.representante || 'PRUEBA Robot';
+  const PROV = E.proveedor || 'PRUEBA', SKU = E.producto || 'PRUEBA', DEP = E.deposito || 'prueba', CTA = E.cuenta || 'prueba';
+  /* La directa desde la página. Devuelve {d} o {fueApps:motivo}. */
+  const directa = (accion, body) => ev(`(async function(){ var b=${JSON.stringify(body)}; if(!b.ts)b.ts=Date.now();
+    try{ var d=await _ordenDirecta(b,null,${JSON.stringify(accion)}); return d?{d:d}:{fueApps:b._noDirecto||'?'}; }catch(e){ return {error:String(e&&e.message||e)}; } })()`, 30000);
+  const mal = (r, que) => ({ ok: false, detalle: que + ': ' + (r.fueApps ? 'habría ido a Apps Script (' + r.fueApps + ')' : JSON.stringify(r.error || r.d || r).slice(0, 200)) });
+  const bien = (r) => !!(r && r.d && r.d.ok);
+  /* El pedido del robot en D.pedidos (h = hoja, n = número). Espera hasta `ms` a que la pantalla lo tenga. */
+  const buscarPedido = (n, ms) => esperar(`(function(){ if(typeof D!=='object'||!D||!Array.isArray(D.pedidos))return null;
+    var p=D.pedidos.find(function(x){ return String(x.n)===${JSON.stringify(String(n))}&&String(x.c||'').indexOf('PRUEBA Robot')>=0; });
+    return p?{h:p.h,n:p.n,r:(p.r||p.row||p.fila||0),$:p.$,ep:p.ep,es:p.es}:null; })()`, ms);
+  let PED = null;
+
+  await paso('alta en la tienda', async () => {
+    const prod = await ev(`(function(){ var l=(typeof D==='object'&&D&&Array.isArray(D.stock))?D.stock:[];
+      var p=l.find(function(x){ return String(x.abbr||x.sku||'').trim()===${JSON.stringify(SKU)}; }); return p?{id:p.id,precio:p.precio||p.p||0}:null; })()`);
+    if (!prod || prod.id == null) return { ok: false, detalle: 'el producto ' + SKU + ' no está en D.stock' };
+    const hoy = new Date(), ent2 = new Date(hoy.getTime() + 2 * 86400000).toISOString().slice(0, 10);
+    const body = { canal: 'Pilar', fecha: hoy.toLocaleString('es-AR'), fechaEntrega: ent2, dia: '', horario: '', nombre: CLI, telefono: TEL,
+      pago: 'Transferencia', envio: 0, items: [{ id: prod.id, qty: 1 }], repartidor: '', total: Number(prod.precio) || 1, subtotalSinDescuento: Number(prod.precio) || 1,
+      descuento: 0, descuentoManual: 0, descuentoGlobalPct: 0, descuentoReceta: null, propina: 0, tipoPedido: '', deposito: DEP,
+      barrio: 'PRUEBA', direccion: 'PRUEBA', lote: '', origen: 'Pendiente', estadoEntrega: 'Pendiente', estadoPago: 'No Cobrado', clientOrderId: PREFIJO + 'alta' };
+    const r = await directa('altaPedido', body);
+    if (!bien(r)) return mal(r, 'alta');
+    const n = r.d.n || r.d.ref;
+    const t0 = Date.now(); await ev(`_recargarPedidos(); 1`).catch(() => 0);
+    PED = await buscarPedido(n, 10000); const ver = Date.now() - t0;
+    if (!PED) return { ok: false, detalle: 'la base dio el ' + n + ' pero no apareció en Pedidos en 10 s' };
+    const otra = await directa('altaPedido', Object.assign({}, body));   // el mismo id: no tiene que duplicar
+    const dup = bien(otra) && String(otra.d.n || otra.d.ref) !== String(n) && !otra.d.dedup;
+    return { ok: !dup && ver < 1500, detalle: 'pedido ' + n + ' · se vio en ' + ver + ' ms' + (dup ? ' · DUPLICÓ con el mismo id' : ' · sin duplicar') };
+  }, { escribe: true, topeMs: 15000 });
+
+  await paso('armar, entregar, cobrar, deshacer cobro', async () => {
+    if (!PED) return { ok: false, detalle: 'sin el pedido del alta' };
+    const base = { hoja: PED.h, id: String(PED.n), row: PED.r }, hechos = [];
+    let r = await directa('marcarArmado', { action: 'marcarArmado', pedidos: [{ h: PED.h, id: String(PED.n), r: PED.r, c: CLI }], armado: true, usuario: 'robot', clientOpId: PREFIJO + 'armar' });
+    if (!bien(r)) return mal(r, 'armar'); hechos.push('armado');
+    r = await directa('marcarEntregado', Object.assign({ action: 'marcarEntregado', cobrado: false, propina: 0, repartidor: '' }, base));
+    if (!bien(r)) return mal(r, 'entregar'); hechos.push('entregado');
+    r = await directa('marcarCobrado', Object.assign({ action: 'marcarCobrado', quien: 'robot', fechaCobro: '', formaPago: 'Transferencia', cuenta: CTA, ef: 0, tr: Number(PED.$) || 1, propina: 0, cliente: CLI, repartidor: '' }, base));
+    if (!bien(r)) return mal(r, 'cobrar'); hechos.push('cobrado');
+    await ev(`_recargarPedidos(); 1`).catch(() => 0);
+    const cob = await esperar(`(function(){ var p=(D.pedidos||[]).find(function(x){ return String(x.n)===${JSON.stringify(String(PED.n))}; }); return p&&p.ep==='Cobrado'; })()`, 8000);
+    r = await directa('descobrar', Object.assign({ action: 'descobrar' }, base));
+    if (!bien(r)) return mal(r, 'deshacer cobro'); hechos.push('descobrado');
+    return { ok: !!cob, detalle: hechos.join(' → ') + (cob ? '' : ' · después de cobrar la pantalla no lo mostró Cobrado en 8 s') };
+  }, { escribe: true, topeMs: 30000 });
+
+  await paso('contar stock y deshacer', async () => {
+    const antes = await ev(`(function(){ var p=(D.stock||[]).find(function(x){ return String(x.abbr||x.sku||'').trim()===${JSON.stringify(SKU)}; }); return p?Number(p.stock!=null?p.stock:(p.s||0)):null; })()`);
+    if (antes == null) return { ok: false, detalle: 'el producto ' + SKU + ' no está en D.stock' };
+    const contar = (cant, id, extra) => rpc('stock_contar_directo', { p: Object.assign({ abbr: SKU, deposito: DEP, cantidad: cant, clientOpId: PREFIJO + id, cv: 'robot' }, extra || {}) });
+    const r1 = await contar(antes + 1, 'contar');
+    if (!r1 || !r1.ok) return { ok: false, detalle: 'contar: ' + JSON.stringify(r1).slice(0, 200) };
+    const r2 = await contar(antes, 'descontar', { desmarcar: true });
+    if (!r2 || !r2.ok) return { ok: false, detalle: 'deshacer: ' + JSON.stringify(r2).slice(0, 200) };
+    return { ok: true, detalle: antes + ' → ' + (antes + 1) + ' → ' + antes };
+  }, { escribe: true, topeMs: 10000 });
+
+  let COMPRA = null;
+  await paso('cargar una compra', async () => {
+    const r = await directa('compraManual', { action: 'compraManual', proveedor: PROV, vendedor: 'robot', items: [{ abbr: SKU, nombre: SKU, costo: 1, qty: 1, origen: 'Orden de Compra' }], clientOpId: PREFIJO + 'compra' });
+    if (!bien(r)) return mal(r, 'compra');
+    COMPRA = r.d;
+    return { ok: true, detalle: 'cargada' + (r.d.hora ? ' (' + r.d.hora + ')' : '') };
+  }, { escribe: true, topeMs: 10000 });
+
+  await paso('OC de prueba: pedir y recibir', async () => {
+    if (!COMPRA) return { ok: false, detalle: 'sin la compra del paso anterior' };
+    /* La línea de la compra en la lectura de Abastecimiento: un objeto con el proveedor PRUEBA y su fila. */
+    const bq = await rpc('busqueda_pantalla', {});
+    const filas = []; (function mirar(o) { if (!o || typeof o !== 'object') return; if (Array.isArray(o)) return o.forEach(mirar);
+      const prov = String(o.prov || o.proveedor || o.Proveedor || '').trim(), fila = o.r || o.row || o.fila;
+      if (prov === PROV && fila) filas.push({ r: fila, oc: o.oc || o.OC || '', abbr: o.abbr || o.prod || SKU, pedido: o.qty || o.cant || o.pedido || 1 });
+      Object.keys(o).forEach((k) => mirar(o[k])); })(bq);
+    if (!filas.length) return { ok: false, detalle: 'la compra no aparece en busqueda_pantalla' };
+    const f = filas[filas.length - 1], oc = f.oc || ('OC-' + PREFIJO + 'oc');
+    let r = await directa('marcarOC', { action: 'marcarOC', rows: [{ r: f.r, oc: oc, estado: 'Pedido' }], clientOpId: PREFIJO + 'pedir' });
+    if (!bien(r)) return mal(r, 'pedir');
+    r = await directa('recibirMercaderia', { action: 'recibirMercaderia', deposito: DEP, groups: [{ prov: PROV, prod: SKU, abbr: f.abbr, qtyRecibida: Number(f.pedido) || 1, pedido: Number(f.pedido) || 1, rows: [f.r], ocs: [oc] }], clientOpId: PREFIJO + 'recibir' });
+    if (!bien(r)) return mal(r, 'recibir');
+    return { ok: true, detalle: 'fila ' + f.r + ' · ' + oc + ' pedida y recibida' };
+  }, { escribe: true, topeMs: 15000 });
+
+  await paso('pagar al proveedor PRUEBA', async () => {
+    const r = await directa('pagarProveedor', { action: 'pagarProveedor', proveedor: PROV, efectivo: 0, mp: 1, bonif: 0, semana: '', notas: 'robot', cuenta: CTA, clientOpId: PREFIJO + 'pago' });
+    return bien(r) ? { ok: true, detalle: '$1 desde la cuenta ' + CTA } : mal(r, 'pago');
+  }, { escribe: true, topeMs: 5000 });
+
+  await paso('portal del representante PRUEBA', async () => {
+    const prod = await ev(`(function(){ var p=(D.stock||[]).find(function(x){ return String(x.abbr||x.sku||'').trim()===${JSON.stringify(SKU)}; }); return p?{id:p.id,nombre:p.nombre||p.n||${JSON.stringify(SKU)},precio:Number(p.precio||p.p||1)}:null; })()`);
+    if (!prod) return { ok: false, detalle: 'el producto ' + SKU + ' no está en D.stock' };
+    const r = await directa('redAutopedido', { action: 'redAutopedido', clientOrderId: PREFIJO + 'red', canal: 'Red', vendedor: REP, nombre: CLI, telefono: TEL,
+      barrioPrivado: 'PRUEBA', lote: '', dia: '', fechaEntrega: new Date(Date.now() + 2 * 86400000).toISOString(), horario: 'A coordinar', pago: 'Transferencia', envio: 0,
+      items: [{ id: prod.id, nombre: prod.nombre, qty: 1, precio: prod.precio }], total: prod.precio, trajo: 'Vendedor', telCliente: TEL });
+    return bien(r) ? { ok: true, detalle: 'autopedido ' + (r.d.ref || (r.d.sumarA && r.d.sumarA.n) || '') } : mal(r, 'autopedido');
+  }, { escribe: true, topeMs: 10000 });
+
+  await paso('liquidación de PRUEBA', async () => {
+    const liq = await rpc('red_liquidacion_pantalla', {});
+    let fila = null; (function mirar(o) { if (fila || !o || typeof o !== 'object') return; if (Array.isArray(o)) return o.forEach(mirar);
+      if (String(o.vendedor || o.Vendedor || o.nombre || '').trim() === REP && (o.quincena || o.q)) { fila = o; return; } Object.keys(o).forEach((k) => mirar(o[k])); })(liq);
+    if (!fila) return { ok: true, detalle: REP + ' no tiene nada a liquidar en la quincena (no se pagó nada)' };
+    const total = Number(fila.total || fila.aPagar || 0);
+    if (!(total > 0)) return { ok: true, detalle: 'quincena ' + (fila.quincena || fila.q) + ' en $0: nada que pagar' };
+    const r = await directa('redLiquidacionPagar', { action: 'redLiquidacionPagar', vendedor: REP, quincena: fila.quincena || fila.q, cuenta: CTA, lugar: '', totalVisto: total, clientOpId: PREFIJO + 'liq' });
+    return bien(r) ? { ok: true, detalle: '$' + total + ' desde la cuenta ' + CTA } : mal(r, 'liquidación');
+  }, { escribe: true, topeMs: 10000 });
+
+  /* Lo que se frenó (WhatsApp, Telegram, mails) y la limpieza de todo lo de esta corrida. */
+  if (ENTIDADES) {
+    const fr = await rpc('robot_avisos_frenados', { p_corrida: CORRIDA }).catch(() => null);
+    if (fr) console.log('  avisos frenados: ' + JSON.stringify(fr).slice(0, 160));
+    const li = await rpc('robot_limpiar', { p_corrida: CORRIDA }).catch(() => null);
+    console.log('  limpieza: ' + (li && li.http === 404 ? 'robot_limpiar todavía no existe (la corre el cron de la base)' : JSON.stringify(li).slice(0, 160)));
+  }
 
   return terminar();
 })().catch((e) => { hallazgos.push('el robot reventó: ' + String((e && e.message) || e).slice(0, 200)); return terminar(); });
@@ -139,5 +262,6 @@ async function terminar() {
     console.log('resultado en la base: ' + JSON.stringify(r).slice(0, 160));
   }
   try { cli && cli.matar(); } catch (e) {}
+  try { SERVIDOR && SERVIDOR.kill(); } catch (e) {}
   process.exit(mal ? 1 : 0);
 }
