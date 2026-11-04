@@ -56,6 +56,9 @@ async function esperar(expr, ms) { const t0 = Date.now(); while (Date.now() - t0
    {ok, detalle} o tira. `escribe`: necesita las entidades PRUEBA; sin ellas se anota «esperando» y no corre. */
 async function paso(nombre, fn, opt) {
   opt = opt || {};
+  /* ROBOT_SOLO_LECTURA=1 (los deploy.sh, 4/11/2026): los pasos que escriben quedan para el nocturno hasta que den verde
+     completo; si no, una falla del robot recién estrenado frenaría cualquier arreglo urgente. */
+  if (opt.escribe && process.env.ROBOT_SOLO_LECTURA) { pasos.push({ paso: nombre, ok: true, salteado: true, ms: 0, detalle: 'en el deploy solo lecturas (corre de noche)' }); console.log('  --   ' + nombre + '  (solo lecturas en el deploy)'); return null; }
   if (opt.escribe && !ENTIDADES) { pasos.push({ paso: nombre, ok: true, salteado: true, ms: 0, detalle: 'esperando las entidades PRUEBA (no corrió)' }); console.log('  --   ' + nombre + '  (esperando entidades)'); return null; }
   const antes = await ev(`(window.__ensayoApps||[]).length`).catch(() => 0), antesS = await ev(`JSON.stringify(window.__sinApps||{})`).catch(() => '{}'), t0 = Date.now();
   let r;
