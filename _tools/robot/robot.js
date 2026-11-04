@@ -403,7 +403,8 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
     if (!a || !a.ok || !d || !d.ok) return { ok: false, detalle: 'robot_saldo_efectivo no contestó: ' + JSON.stringify(d || a).slice(0, 120) };
     const fmt = (x) => '$' + Math.round(Number(x) || 0).toLocaleString('es-AR');
     if (Number(a.efectivo) === Number(d.efectivo)) return { ok: true, detalle: fmt(a.efectivo) + ' antes y después' };
-    if (d.ult_real && String(d.ult_real) > T_EFECTIVO) return { ok: true, salteado: true, detalle: 'hubo un movimiento real de efectivo durante la corrida (' + d.ult_real + '): ' + fmt(a.efectivo) + ' → ' + fmt(d.efectivo) };
+    /* `ult_real` llega en milisegundos (442); `ult_real_txt`, en hora argentina para leer. */
+    if (Number(d.ult_real) > Date.parse(T_EFECTIVO)) return { ok: true, salteado: true, detalle: 'hubo un movimiento real de efectivo durante la corrida (' + (d.ult_real_txt || d.ult_real) + '): ' + fmt(a.efectivo) + ' → ' + fmt(d.efectivo) };
     return { ok: false, detalle: 'cambió: ' + fmt(a.efectivo) + ' → ' + fmt(d.efectivo) + ' (cf ' + fmt(a.cf) + ' → ' + fmt(d.cf) + ')' };
   });
 
