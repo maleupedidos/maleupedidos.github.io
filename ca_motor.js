@@ -3812,6 +3812,9 @@ function _vendedoresRedArr_() {
     for (var rv = 1; rv < dV.length; rv++) {
       var nombreV = String(dV[rv][0] || '').trim();
       if (!nombreV) continue;
+      /* (4/11/2026) El representante del robot de pruebas no va a la foto «pedidos» (la base lo saca con la 400; esta
+         foto la arma Apps Script con la planilla y se le colaba, con su WhatsApp de prueba). */
+      if (nombreV === 'PRUEBA Robot') continue;
       var waV = String(dV[rv][1] || '').trim();
       var comV = Number(dV[rv][9]) || 0;   // (3/11) sin 17: desde el 7/10 el representante rinde el bruto entero
       var estadoV = String(dV[rv][6] || '').trim();

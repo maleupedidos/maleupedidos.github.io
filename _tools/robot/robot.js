@@ -148,11 +148,16 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
     var p=D.pedidos.find(function(x){ return String(x.n)===${JSON.stringify(String(n))}&&String(x.c||'').indexOf('PRUEBA Robot')>=0; });
     return p?{h:p.h,n:p.n,r:(p.r||p.row||p.fila||0),$:p.$,ep:p.ep,es:p.es}:null; })()`, ms);
   let PED = null;
+  /* El producto PRUEBA como lo ve Stock › Productos (D.stock, claves cortas: a = sigla, n = nombre, p = precio, pd = físico
+     por depósito). El id de tienda no viaja en la foto de stock: lo da robot_entidades_pantalla (producto_id). */
+  const prodPrueba = () => ev(`(function(){ var l=(typeof D==='object'&&D&&Array.isArray(D.stock))?D.stock:[];
+    var p=l.find(function(x){ return String(x.a||'').trim()===${JSON.stringify(SKU)}; }); if(!p)return null;
+    return {id:${JSON.stringify(E.producto_id == null ? null : E.producto_id)}, nombre:p.n||${JSON.stringify(SKU)}, precio:Number(p.p)||1, stock:Number((p.pd||{})[${JSON.stringify(DEP)}])||0}; })()`);
 
   await paso('alta en la tienda', async () => {
-    const prod = await ev(`(function(){ var l=(typeof D==='object'&&D&&Array.isArray(D.stock))?D.stock:[];
-      var p=l.find(function(x){ return String(x.abbr||x.sku||'').trim()===${JSON.stringify(SKU)}; }); return p?{id:p.id,precio:p.precio||p.p||0}:null; })()`);
-    if (!prod || prod.id == null) return { ok: false, detalle: 'el producto ' + SKU + ' no está en D.stock' };
+    const prod = await prodPrueba();
+    if (!prod) return { ok: false, detalle: 'el producto ' + SKU + ' no está en D.stock (Stock › Productos)' };
+    if (prod.id == null) return { ok: false, detalle: 'falta el id de tienda del producto ' + SKU + ' (robot_entidades_pantalla.producto_id)' };
     const hoy = new Date(), ent2 = new Date(hoy.getTime() + 2 * 86400000).toISOString().slice(0, 10);
     const body = { canal: 'Pilar', fecha: hoy.toLocaleString('es-AR'), fechaEntrega: ent2, dia: '', horario: '', nombre: CLI, telefono: TEL,
       pago: 'Transferencia', envio: 0, items: [{ id: prod.id, qty: 1 }], repartidor: '', total: Number(prod.precio) || 1, subtotalSinDescuento: Number(prod.precio) || 1,
@@ -186,15 +191,16 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
   }, { escribe: true, topeMs: 30000 });
 
   await paso('contar stock y deshacer', async () => {
-    const antes = await ev(`(function(){ var p=(D.stock||[]).find(function(x){ return String(x.abbr||x.sku||'').trim()===${JSON.stringify(SKU)}; }); return p?Number(p.stock!=null?p.stock:(p.s||0)):null; })()`);
+    const pp = await prodPrueba(), antes = pp ? pp.stock : null;
     if (antes == null) return { ok: false, detalle: 'el producto ' + SKU + ' no está en D.stock' };
     const contar = (cant, id, extra) => rpc('stock_contar_directo', { p: Object.assign({ abbr: SKU, deposito: DEP, cantidad: cant, clientOpId: PREFIJO + id, cv: 'robot' }, extra || {}) });
     const r1 = await contar(antes + 1, 'contar');
     if (!r1 || !r1.ok) return { ok: false, detalle: 'contar: ' + JSON.stringify(r1).slice(0, 200) };
-    const r2 = await contar(antes, 'descontar', { desmarcar: true });
+    /* «Se está acomodando»: el movimiento anterior todavía no terminó de entrar. Se reintenta hasta 2 min. */
+    let r2 = null; for (let k = 0; k < 12; k++) { r2 = await contar(antes, 'descontar', { desmarcar: true }); if (!(r2 && r2.acomodando)) break; await pausa(10000); }
     if (!r2 || !r2.ok) return { ok: false, detalle: 'deshacer: ' + JSON.stringify(r2).slice(0, 200) };
     return { ok: true, detalle: antes + ' → ' + (antes + 1) + ' → ' + antes };
-  }, { escribe: true, topeMs: 10000 });
+  }, { escribe: true, topeMs: 130000 });
 
   let COMPRA = null;
   await paso('cargar una compra', async () => {
@@ -208,18 +214,24 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
     if (!COMPRA) return { ok: false, detalle: 'sin la compra del paso anterior' };
     /* La línea de la compra en la lectura de Abastecimiento: un objeto con el proveedor PRUEBA y su fila. */
     const bq = await rpc('busqueda_pantalla', {});
-    const filas = []; (function mirar(o) { if (!o || typeof o !== 'object') return; if (Array.isArray(o)) return o.forEach(mirar);
-      const prov = String(o.prov || o.proveedor || o.Proveedor || '').trim(), fila = o.r || o.row || o.fila;
-      if (prov === PROV && fila) filas.push({ r: fila, oc: o.oc || o.OC || '', abbr: o.abbr || o.prod || SKU, pedido: o.qty || o.cant || o.pedido || 1 });
-      Object.keys(o).forEach((k) => mirar(o[k])); })(bq);
-    if (!filas.length) return { ok: false, detalle: 'la compra no aparece en busqueda_pantalla' };
-    const f = filas[filas.length - 1], oc = f.oc || ('OC-' + PREFIJO + 'oc');
-    let r = await directa('marcarOC', { action: 'marcarOC', rows: [{ r: f.r, oc: oc, estado: 'Pedido' }], clientOpId: PREFIJO + 'pedir' });
-    if (!bien(r)) return mal(r, 'pedir');
-    r = await directa('recibirMercaderia', { action: 'recibirMercaderia', deposito: DEP, groups: [{ prov: PROV, prod: SKU, abbr: f.abbr, qtyRecibida: Number(f.pedido) || 1, pedido: Number(f.pedido) || 1, rows: [f.r], ocs: [oc] }], clientOpId: PREFIJO + 'recibir' });
-    if (!bien(r)) return mal(r, 'recibir');
-    return { ok: true, detalle: 'fila ' + f.r + ' · ' + oc + ' pedida y recibida' };
-  }, { escribe: true, topeMs: 15000 });
+    /* La línea de la compra en bq.oc: {n: número de OC, q, abbr, prov, est, row, fc}. Lo del robot nunca llega a la planilla,
+       así que row viene en 0: se identifica por el número de OC. La más nueva de PRUEBA que no esté recibida. */
+    const lin = (bq && Array.isArray(bq.oc) ? bq.oc : []).filter((x) => String(x.prov || '').trim() === PROV && String(x.abbr || '').trim() === SKU && x.est !== 'Recibida')
+      .sort((a, b) => String(b.fc || '').localeCompare(String(a.fc || '')))[0];
+    if (!lin) { const ej = (bq && Array.isArray(bq.oc) ? bq.oc.filter((x) => JSON.stringify(x).indexOf(SKU) >= 0).slice(0, 2) : []);
+      return { ok: false, detalle: 'la compra no aparece en busqueda_pantalla' + (ej.length ? ' · oc con PRUEBA: ' + JSON.stringify(ej).slice(0, 250) : ' · ninguna línea de oc con PRUEBA') }; }
+    const oc = lin.n, q = Number(lin.q) || 1, hechos = [];
+    let r;
+    if (lin.est !== 'Pedido') {
+      r = await directa('marcarOC', { action: 'marcarOC', rows: [{ r: lin.row || 0, oc: oc, estado: 'Pedido' }], clientOpId: PREFIJO + 'pedir' });
+      if (!bien(r)) return mal(r, 'pedir'); hechos.push('pedida');
+    } else hechos.push('ya en Pedido');
+    /* Mismo «se está acomodando» que el conteo (el movimiento de stock anterior espera al aplicador): hasta 2 min. */
+    for (let k = 0; k < 12; k++) { r = await directa('recibirMercaderia', { action: 'recibirMercaderia', deposito: DEP, groups: [{ prov: PROV, prod: SKU, abbr: SKU, qtyRecibida: q, pedido: q, rows: [lin.row || 0], ocs: [oc] }], clientOpId: PREFIJO + 'recibir' });
+      if (!(r && r.d && r.d.ok === false && /acomodando/.test(String(r.d.err || r.d.error || '')))) break; await pausa(10000); }
+    if (!bien(r)) return mal(r, 'recibir'); hechos.push('recibida');
+    return { ok: true, detalle: oc + ': ' + hechos.join(' → ') };
+  }, { escribe: true, topeMs: 130000 });
 
   await paso('pagar al proveedor PRUEBA', async () => {
     const r = await directa('pagarProveedor', { action: 'pagarProveedor', proveedor: PROV, efectivo: 0, mp: 1, bonif: 0, semana: '', notas: 'robot', cuenta: CTA, clientOpId: PREFIJO + 'pago' });
@@ -227,8 +239,9 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
   }, { escribe: true, topeMs: 5000 });
 
   await paso('portal del representante PRUEBA', async () => {
-    const prod = await ev(`(function(){ var p=(D.stock||[]).find(function(x){ return String(x.abbr||x.sku||'').trim()===${JSON.stringify(SKU)}; }); return p?{id:p.id,nombre:p.nombre||p.n||${JSON.stringify(SKU)},precio:Number(p.precio||p.p||1)}:null; })()`);
-    if (!prod) return { ok: false, detalle: 'el producto ' + SKU + ' no está en D.stock' };
+    const prod = await prodPrueba();
+    if (!prod) return { ok: false, detalle: 'el producto ' + SKU + ' no está en D.stock (Stock › Productos)' };
+    if (prod.id == null) return { ok: false, detalle: 'falta el id de tienda del producto ' + SKU + ' (robot_entidades_pantalla.producto_id)' };
     const r = await directa('redAutopedido', { action: 'redAutopedido', clientOrderId: PREFIJO + 'red', canal: 'Red', vendedor: REP, nombre: CLI, telefono: TEL,
       barrioPrivado: 'PRUEBA', lote: '', dia: '', fechaEntrega: new Date(Date.now() + 2 * 86400000).toISOString(), horario: 'A coordinar', pago: 'Transferencia', envio: 0,
       items: [{ id: prod.id, nombre: prod.nombre, qty: 1, precio: prod.precio }], total: prod.precio, trajo: 'Vendedor', telCliente: TEL });
@@ -258,6 +271,8 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
       detalle: li && li.ok ? 'borrado ' + JSON.stringify(li.borrado || {}).slice(0, 200) + (conRes.length ? ' · residuos en ' + conRes.join(', ') : '') : JSON.stringify(li).slice(0, 200) });
     if (!(li && li.ok)) hallazgos.push('limpieza: robot_limpiar no borró (' + JSON.stringify(li).slice(0, 120) + ')');
     if (conRes.length) hallazgos.push('limpieza: quedaron residuos en ' + conRes.join(', ') + ' (pasarle a Supa)');
+    /* (402) Las fotos de pantalla que arma Apps Script con la planilla y traen algo del robot: una fuga de ese lado. */
+    const fotos = (li && li.fotos) || {}; if (Object.keys(fotos).length) hallazgos.push('fotos de Apps Script con lo del robot: ' + JSON.stringify(fotos).slice(0, 200));
     console.log('  limpieza: ' + JSON.stringify(li).slice(0, 200));
   }
 
