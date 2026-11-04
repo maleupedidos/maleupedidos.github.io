@@ -14919,7 +14919,7 @@ function _leerVersion(app){
    "El HTML no sabe que version es" dejo de ser cierto: el build le escribe
    adentro el CACHE_NAME de sw-panel.js, el mismo que deploy.sh obliga a subir en
    cada cambio. Si lo publicado dice otra cosa, esta pagina es vieja. Punto. */
-var _APP_CN_PAGINA='maleu-panel-v878';
+var _APP_CN_PAGINA='maleu-panel-v879';
 
 /* Devuelve [{k,v}] si lo publicado no es lo que esta pagina corre. */
 function _chequearVersiones(){
@@ -17464,7 +17464,7 @@ function _sbSesBorrar(){ try{ localStorage.removeItem(_SB_SES_LS); }catch(e){} }
 function _sbMedNota(ref,ok){ try{ if(typeof _medEmpezar==='function')_medCerrar(_medEmpezar('login-base',ref),ok?'base':'fallo'); }catch(e){} }
 function _sbAuth(url,key,grant,body){
   return fetch(url+'/auth/v1/token?grant_type='+grant,{method:'POST',headers:{apikey:key,'Content-Type':'application/json'},body:JSON.stringify(body)})
-    .then(function(r){ return r.json().then(function(j){ if(!r.ok||!j||!j.access_token)throw new Error((j&&(j.error_description||j.msg||j.error))||('auth '+r.status)); return j; }); });
+    .then(function(r){ return r.json().then(function(j){ if(!r.ok||!j||!j.access_token){ var e=new Error((j&&(j.error_description||j.msg||j.error))||('auth '+r.status)); e.http=r.status; throw e; } return j; }); });
 }
 /* (3/11/2026, corte) EL LOGIN POR LA BASE, SIN APPS SCRIPT. Hace falta saber donde esta la base ANTES de entrar: la URL y
    la clave publica (publishable: es publica por diseño, la usa la tienda igual) que mando el backend en el ultimo login,
@@ -17516,7 +17516,11 @@ function _sbPermisoPropio(){
   var pTok=(g.access&&Number(g.hasta)-120000>Date.now())?Promise.resolve(g)
     :_sbAuth(g.url,g.key,'refresh_token',{refresh_token:g.refresh}).then(function(t){
         g.access=t.access_token; g.refresh=t.refresh_token||g.refresh; g.hasta=Date.now()+(Number(t.expires_in)||3600)*1000; _sbSesGuardar(g); return g;
-      },function(e){ _sbSesBorrar(); throw e; });
+      },function(e){
+        /* (4/11/2026) Se borra solo si la BASE dijo que no (el refresh ya no vale: 400/401/403). Un corte de red o un 5xx
+           la borraba igual, y ese usuario quedaba pidiendo el permiso a Apps Script para siempre: el 4/11, con Apps Script
+           sin cuota, Ruta no cargo. */
+        if(e&&(e.http===400||e.http===401||e.http===403))_sbSesBorrar(); throw e; });
   return pTok.then(function(g2){
     return fetch(g2.url+'/rest/v1/rpc/permiso_base',{method:'POST',headers:{apikey:g2.key,Authorization:'Bearer '+g2.access,'Content-Type':'application/json'},body:'{}'})
       .then(function(r){ if(!r.ok)throw new Error('permiso_base '+r.status); return r.json(); })
@@ -17576,6 +17580,7 @@ function _sbMedirPropio(sbApps){
    O sea que pedirlo ahi hace que la lista llegue MAS TARDE que sin atajo, y de
    paso atrasa 3,5 s a `cobrosPendientes`, `cajaLight` y `ocLight`. El permiso
    se pide igual, pero por atras y con la cola vacia: ver `_sbPermisoTibio`. */
+var _sbPropioFalloHasta=0;
 function _sbPermiso(soloSiLoTengo){
   if(_sbPerm&&Date.now()<_sbPermHasta)return Promise.resolve(_sbPerm);
   if(_sbPerm===false&&Date.now()<_sbPermHasta)return Promise.resolve(null);
@@ -17592,7 +17597,7 @@ function _sbPermiso(soloSiLoTengo){
      gastar un cupo de Apps Script: «solo si lo tengo» la renueva igual. Antes devolvia null cuando el permiso guardado
      (1 h) habia vencido, y TODO el arranque —ventas, pedidos, caja, stock, abastecimiento— caia a Apps Script. */
   if(soloSiLoTengo&&!(_ses&&_ses.modo==='si'))return Promise.resolve(null);
-  if(_ses&&_ses.modo==='si'){
+  if(_ses&&_ses.modo==='si'&&!(Date.now()<_sbPropioFalloHasta)){
     _sbPidiendo=_sbPermisoPropio().then(function(sb){
       if(!sb)throw new Error('sin sesion propia');
       _sbPidiendo=null;
@@ -17603,7 +17608,10 @@ function _sbPermiso(soloSiLoTengo){
       if(sb.pal&&sb.pal.loginBase&&sb.pal.loginBase!=='si'){ _ses.modo=sb.pal.loginBase; _sbSesGuardar(_ses); }
       setTimeout(function(){ _sbCompararConApps(sb); },3000);
       return sb;
-    }).catch(function(e){ _sbPidiendo=null; _sbMedNota('fallo propio, va sbToken: '+((e&&e.message)||e),false); _ses.modo='medir'; _sbSesGuardar(_ses); return _sbPermiso(); });
+    }).catch(function(e){ _sbPidiendo=null; _sbMedNota('fallo propio, va sbToken: '+((e&&e.message)||e),false);
+      /* (4/11/2026) Antes pasaba el modo a «medir» y lo GUARDABA: una sola falla dejaba a ese telefono pidiendo el
+         permiso a Apps Script para siempre. Ahora es por un minuto: esta vez va por sbToken y la proxima vuelve a la base. */
+      _sbPropioFalloHasta=Date.now()+60000; return _sbPermiso(); });
     return _sbPidiendo;
   }
   _sbPidiendo=fetch(API+'?action=sbToken&t='+Date.now())

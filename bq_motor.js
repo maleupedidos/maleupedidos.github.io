@@ -73,8 +73,6 @@ function _mlAvisar_() { return ''; }
 function _logError_() {}
 
 
-var SS        = SpreadsheetApp.getActiveSpreadsheet() || SpreadsheetApp.openById('1ILXCc9ddbC_gJPNoUADBiSMXAWLM9v73ov2_xXb8YsY');
-
 function _colNumero_(letras) {
   var s = String(letras || '').trim().toUpperCase();
   if (!s || s.length > 3) return 0;

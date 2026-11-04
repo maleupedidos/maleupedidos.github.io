@@ -74,8 +74,6 @@ function _motPoner_(filas, row, fila) { while (filas.length < row - 1) filas.pus
    (205) como «Orden de Compra» (en su fila y sus columnas) y «Programaciones Búsqueda». */
 
 
-var SS        = SpreadsheetApp.getActiveSpreadsheet() || SpreadsheetApp.openById('1ILXCc9ddbC_gJPNoUADBiSMXAWLM9v73ov2_xXb8YsY');
-
 function _esCanalDeposito_(canal) {
   var c = String(canal || '').trim().toLowerCase();
   return c === 'deposito' || c === 'depósito';

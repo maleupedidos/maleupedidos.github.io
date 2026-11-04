@@ -84,7 +84,11 @@ function cierre(code, raiz, fuera) {
   const vistos = new Set(), cola = [raiz];
   while (cola.length) {
     const n = cola.pop();
-    if (vistos.has(n) || fuera.has(n) || !defs[n]) continue;
+    /* `SS` es la planilla y la pone SIEMPRE el shim (motor_comun_shim.js). El 4/11/2026 Code.js paso de `const SS` a
+       `var SS` (el alta en seco del robot la envuelve), el cierre la empezo a copiar, y la copia
+       (`SpreadsheetApp.getActiveSpreadsheet()`) reventaba al cargar: todos los motores «no cargaron» y cada lectura
+       armada en la base cayo a Apps Script, sin un error a la vista. */
+    if (vistos.has(n) || fuera.has(n) || n === 'SS' || !defs[n]) continue;
     vistos.add(n);
     const [a, b] = defs[n];
     const txt = L.slice(a, b + 1).join('\n').replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '').replace(/'(?:[^'\\\n]|\\.)*'/g, "''");
@@ -171,6 +175,16 @@ const lf = t => t.replace(/\r\n/g, '\n');
 let viejos = 0;
 for (const M of MOTORES) {
   const nuevo = M.armar(), arch = path.join(RAIZ, M.salida);
+  /* (4/11/2026) QUE CARGUE. Un motor que revienta al cargar (el 4/11: `SpreadsheetApp is not defined`) no da error en
+     ningún lado: el front dice «el motor no cargó» por lo bajo y la lectura cae a Apps Script. Se carga como en el
+     navegador (un contexto sin Apps Script) y tiene que dejar su global `XX_MOTOR` con `armar`. */
+  if (/_motor\.js$/.test(M.salida)) {
+    const vm = require('vm'), cx = {}; cx.globalThis = cx; cx.self = cx; cx.window = cx; vm.createContext(cx);
+    let err = '';
+    try { vm.runInContext(nuevo, cx, { filename: M.salida }); } catch (e) { err = e.message; }
+    const glob = Object.keys(cx).find((k) => /_MOTOR$/.test(k) && cx[k] && typeof cx[k].armar === 'function');
+    if (err || !glob) { console.error('✗ ' + M.salida + ' NO CARGA fuera de Apps Script: ' + (err || 'no deja su XX_MOTOR.armar')); viejos++; continue; }
+  }
   if (chequear) {
     const viejo = fs.existsSync(arch) ? fs.readFileSync(arch, 'utf8') : '';
     if (lf(viejo) !== lf(nuevo)) { console.error('✗ ' + M.salida + ' quedó viejo contra Code.js: corré node _tools/copiar_motor.js'); viejos++; }

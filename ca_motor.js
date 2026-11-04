@@ -88,8 +88,6 @@ function _crmPgConfig_() { return { enabled: false, url: '', key: '' }; }
 function _uf_() { throw new Error('el motor no sale a la red'); }
 
 
-var SS        = SpreadsheetApp.getActiveSpreadsheet() || SpreadsheetApp.openById('1ILXCc9ddbC_gJPNoUADBiSMXAWLM9v73ov2_xXb8YsY');
-
 function _parseDiaEntregaDate(v) {
   if (v instanceof Date) return v;
   var s = String(v == null ? '' : v).trim();
