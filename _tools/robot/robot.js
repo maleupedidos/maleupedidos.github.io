@@ -36,7 +36,7 @@ async function servirLocal() {
   throw new Error('el servidor local no arrancó');
 }
 const ahora = new Date(), dos = (n) => String(n).padStart(2, '0');
-const CORRIDA = process.env.ROBOT_CORRIDA || (ahora.getUTCFullYear() + dos(ahora.getUTCMonth() + 1) + dos(ahora.getUTCDate()) + '-' + dos(ahora.getUTCHours()) + dos(ahora.getUTCMinutes()));
+const CORRIDA = process.env.ROBOT_CORRIDA || (ahora.getUTCFullYear() + dos(ahora.getUTCMonth() + 1) + dos(ahora.getUTCDate()) + '-' + dos(ahora.getUTCHours()) + dos(ahora.getUTCMinutes()) + dos(ahora.getUTCSeconds()));   /* (4/11) con segundos: dos corridas en el mismo minuto compartian id y la segunda recibia los pedidos ya borrados de la primera */
 const PREFIJO = 'robot-' + CORRIDA + '-';
 const pausa = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -101,7 +101,10 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
      en 0 diciendo por qué. Preguntarlo no gasta UrlFetch. Si no contesta, corre igual. */
   try {
     const cp = await (await fetch('https://script.google.com/macros/s/AKfycbxmrG5YVSshcYezk8lXFx_uxb7NFGcb9EfTXc7dsIN4rZyj73CET4mk_aKPFPDY2wNi/exec?action=cupoPruebas', { signal: AbortSignal.timeout(20000) })).json();
-    if (cp && cp.frenado) { console.log('Cupo de UrlFetch del día: ' + cp.total + ' de un tope de ' + cp.tope + ' para las pruebas. El robot no corre hoy.'); process.exit(0); }
+    /* (4/11/2026, 17:45, Organizador) El robot va en MODO ENSAYO: no llama a Apps Script. Lo único que le cuesta a la cuota
+       es que el aplicador marque sus órdenes (una llamada cada una, desde @1210 también las borradas). El freno queda
+       del lado del servidor para lo que sí gasta (el alta en seco); acá se avisa y se corre. */
+    if (cp && cp.frenado) console.log('Cupo de UrlFetch del día: ' + cp.total + ' de un tope de ' + cp.tope + '. El robot corre igual (ensayo, sin Apps Script); el seco sigue frenado.');
   } catch (eCp) {}
   if (process.env.ROBOT_LOCAL) await servirLocal();
   console.log('Robot · corrida ' + CORRIDA + ' · ' + URL_APP + (cred ? ' · usuario ' + cred.usuario : ' · con una sesión de admin (solo lecturas y en seco)'));
@@ -246,7 +249,11 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
   await paso('tienda → Por decidir → pasar al representante', async () => {
     const prod = await prodPrueba();
     if (!prod || prod.id == null) return { ok: false, detalle: 'sin el producto PRUEBA o su id' };
-    const F3 = new Date(Date.now() + 3 * 86400000), _d3 = F3.toLocaleDateString('es-AR', { weekday: 'long', timeZone: 'America/Argentina/Buenos_Aires' });
+    /* (4/11/2026) El representante PRUEBA reparte los VIERNES y el pase lo valida («PRUEBA reparte viernes, y este pedido es
+       para el Sábado»): «hoy + 3» andaba solo cuando el robot corría un martes. Va el viernes de la semana que viene: el de
+       esta semana puede chocar con el autopedido del portal (a 2 días), y la base deja una entrega por cliente y por día. */
+    const _hoyAR = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Argentina/Buenos_Aires' }));
+    const F3 = new Date(Date.now() + (((5 - _hoyAR.getDay() + 7) % 7) + 7) * 86400000), _d3 = F3.toLocaleDateString('es-AR', { weekday: 'long', timeZone: 'America/Argentina/Buenos_Aires' });
     /* «al» (dd/MM HH:mm del alta, hora de Argentina): el pase lo pide (_pase_seco: «falta la fecha y hora del pedido»). */
     const _ah = new Intl.DateTimeFormat('es-AR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'America/Argentina/Buenos_Aires' }).formatToParts(new Date()).reduce((o, x) => (o[x.type] = x.value, o), {});
     const AL = _ah.day + '/' + _ah.month + ' ' + _ah.hour + ':' + _ah.minute;
@@ -389,7 +396,14 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
        borró nada (falla); residuos = una tabla con algo del robot que la limpieza no conoce (hallazgo para Supa). */
     /* ROBOT_SIN_LIMPIEZA=1: deja lo de la corrida para mirarlo (una orden trabada, por ejemplo); el reloj de las 05:00 limpia. */
     const li = process.env.ROBOT_SIN_LIMPIEZA ? { ok: true, borrado: {}, residuos: {}, salteada: true } : await rpc('robot_limpiar', { p_corrida: CORRIDA }).catch((e) => ({ ok: false, error: e.message }));
-    const res = (li && li.residuos) || {}, conRes = Object.keys(res).filter((k) => Number(res[k]) > 0);
+    /* (4/11/2026) `order_command` pendiente de menos de 30 min lo PROTEGE robot_limpiar a propósito (423): son órdenes de
+       esta corrida que el aplicador todavía tiene que marcar, y las barre el reloj de la noche. Hasta que la base las
+       separe de los residuos de verdad (pedido a Supa), van como aviso y no como rojo: si no, el robot sale rojo SIEMPRE
+       y frena todo deploy. Igual `delivery_day_close` (el cierre del día del robot, que la limpieza todavía no conoce). */
+    const AVISO_SOLO = { order_command: 1, delivery_day_close: 1 };
+    const res0 = (li && li.residuos) || {}, res = {};
+    Object.keys(res0).forEach((k) => { if (AVISO_SOLO[k]) { if (Number(res0[k]) > 0) console.log('  aviso: ' + res0[k] + ' en ' + k + ' (protegido o sin limpiar todavía; no frena)'); } else res[k] = res0[k]; });
+    const conRes = Object.keys(res).filter((k) => Number(res[k]) > 0);
     pasos.push({ paso: 'limpieza', ok: !!(li && li.ok) && !conRes.length, ms: 0,
       detalle: li && li.ok ? 'borrado ' + JSON.stringify(li.borrado || {}).slice(0, 200) + (conRes.length ? ' · residuos en ' + conRes.join(', ') : '') : JSON.stringify(li).slice(0, 200) });
     if (!(li && li.ok)) hallazgos.push('limpieza: robot_limpiar no borró (' + JSON.stringify(li).slice(0, 120) + ')');
