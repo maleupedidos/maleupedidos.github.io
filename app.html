@@ -12758,6 +12758,67 @@ var SESSION=null;
 function _sesBaseDe(u){
   try{ var g=JSON.parse(localStorage.getItem('mc_sbses')||'null'); return !!(g&&g.refresh&&g.url&&g.key&&String(g.u||'').toLowerCase()===String(u||'').toLowerCase()); }catch(e){ return false; }
 }
+/* LA SESION VIEJA SE CIERRA (4/11/2026, Organizador; Tadeo: «el ERP no puede leer ni escribir nada por Apps Script»).
+   Un aparato con la sesion de antes del login por la base (sin `mc_sbses`) pide el permiso a Apps Script y por ahi cae
+   todo lo demas: es una puerta trasera. Ese aparato ve UNA vez «Entrá de nuevo con tu PIN», con su usuario fijo, y no
+   puede seguir hasta entrar: `_loginBase` le arma la sesion propia y la app sigue donde estaba.
+   NO es un cerrar sesion: no se borra nada. La cola de Ruta sin subir (y la carne pesada, y los autopedidos) se queda en
+   el telefono y sube por la base apenas entra — subirla ANTES no se puede: sin sesion de la base, la base no la acepta.
+   Funciona con Apps Script caido (el 4/11 sin cuota): `_loginBase` habla solo con la base. */
+function _reentradaHaceFalta(){
+  try{
+    if(typeof SESSION==='undefined'||!SESSION||!SESSION.usuario)return false;
+    if(localStorage.getItem('maleu_ensayo')==='1'&&!window.__reentradaProbar)return false;
+    return !_sesBaseDe(SESSION.usuario);
+  }catch(e){ return false; }
+}
+function _reentradaChequear(){
+  if(!_reentradaHaceFalta()){ var v=document.getElementById('reentrada'); if(v)v.remove(); return false; }
+  if(document.getElementById('reentrada'))return true;
+  var cola=0; try{ cola=(typeof _ajColaPendiente==='function')?_ajColaPendiente():0; }catch(e){}
+  var nombre=String(SESSION.nombre||SESSION.usuario||'').split(' ')[0];
+  var d=document.createElement('div'); d.id='reentrada';
+  d.setAttribute('style','position:fixed;inset:0;z-index:2147483000;background:rgba(43,26,14,.92);display:flex;align-items:center;justify-content:center;padding:20px');
+  d.innerHTML='<form id="reentradaForm" style="background:#fff;border-radius:14px;max-width:360px;width:100%;padding:22px 20px;box-shadow:0 10px 40px rgba(0,0,0,.35);font-family:inherit">'
+    +'<div style="font-size:18px;font-weight:700;margin-bottom:6px">Entrá de nuevo con tu PIN</div>'
+    +'<div style="font-size:13px;color:#555;margin-bottom:14px;line-height:1.4">Hola <b></b>. Cambiamos cómo entra la app: hace falta tu PIN una sola vez. No se pierde nada de lo que tenés cargado.</div>'
+    +(cola>0?'<div style="font-size:13px;background:#FFF3E0;color:#8a4b00;border-radius:8px;padding:8px 10px;margin-bottom:12px">Tenés <b>'+cola+'</b> movimiento'+(cola>1?'s':'')+' de Ruta sin subir: se suben solos apenas entres.</div>':'')
+    +'<label style="font-size:12px;color:#777">Usuario</label><input id="reentradaUser" type="text" readonly style="width:100%;padding:10px;margin:4px 0 10px;border:1px solid #ddd;border-radius:8px;background:#f6f6f6;font-size:16px">'
+    +'<label style="font-size:12px;color:#777">PIN</label><input id="reentradaPin" type="password" inputmode="numeric" autocomplete="current-password" style="width:100%;padding:10px;margin:4px 0 6px;border:1px solid #ccc;border-radius:8px;font-size:16px">'
+    +'<div id="reentradaErr" style="color:#c62828;font-size:13px;min-height:18px;margin-bottom:6px"></div>'
+    +'<button id="reentradaBtn" type="submit" style="width:100%;padding:12px;border:0;border-radius:10px;background:#F07D47;color:#fff;font-size:16px;font-weight:700;min-height:44px">Entrar</button>'
+    +'<button type="button" id="reentradaOtro" style="width:100%;margin-top:10px;padding:10px;border:0;background:none;color:#777;font-size:13px;min-height:44px">No soy yo: cerrar sesión</button>'
+    +'</form>';
+  document.body.appendChild(d);
+  d.querySelector('b').textContent=nombre;   /* textContent: el nombre viene de la planilla */
+  document.getElementById('reentradaUser').value=SESSION.usuario;
+  document.getElementById('reentradaForm').onsubmit=function(ev){ ev.preventDefault(); _reentradaEntrar(); };
+  document.getElementById('reentradaOtro').onclick=function(){ if(typeof ajCerrarSesion==='function')ajCerrarSesion(); };
+  try{ if(typeof _medEmpezar==='function')_medCerrar(_medEmpezar('reentrada','pedida · '+SESSION.usuario+(cola?' · cola '+cola:'')),'fallo'); }catch(e){}
+  setTimeout(function(){ try{ document.getElementById('reentradaPin').focus(); }catch(e){} },50);
+  return true;
+}
+function _reentradaEntrar(){
+  var pin=String(document.getElementById('reentradaPin').value||'').trim(), er=document.getElementById('reentradaErr'), btn=document.getElementById('reentradaBtn');
+  if(!pin){ er.textContent='Ingresá tu PIN'; return; }
+  if(typeof _loginBase!=='function'){ er.textContent='No se pudo: recargá la app'; return; }
+  btn.disabled=true; btn.textContent='Entrando…'; er.textContent='';
+  _loginBase(SESSION.usuario,pin).then(function(r){
+    if(!r||!r.ok){ er.textContent=(r&&r.err)||'PIN incorrecto'; btn.disabled=false; btn.textContent='Entrar'; return; }
+    if(String(r.usuario||'').toLowerCase()!==String(SESSION.usuario).toLowerCase()){ try{ _sbSesBorrar(); }catch(e){} er.textContent='Ese PIN es de otro usuario'; btn.disabled=false; btn.textContent='Entrar'; return; }
+    /* El permiso (y con el las palancas) por la sesion nueva, y que las pantallas se enteren. */
+    try{ _sbPerm=null; _sbPermHasta=0; _sbTokBorrar(); }catch(e){}
+    Promise.race([Promise.resolve(_sbPermiso()).catch(function(){ return null; }),new Promise(function(ok){ setTimeout(ok,3000); })]).then(function(){
+      var v=document.getElementById('reentrada'); if(v)v.remove();
+      try{ if(typeof _medEmpezar==='function')_medCerrar(_medEmpezar('reentrada','hecha · '+SESSION.usuario),'base'); }catch(e){}
+      try{ window.dispatchEvent(new Event('maleu:palancas')); }catch(e){}
+      /* La cola de Ruta, ya con la sesion de la base: sube por las directas. */
+      try{ if(typeof processSyncQueue==='function')setTimeout(processSyncQueue,500); }catch(e){}
+      if(typeof toast==='function')toast('Listo, '+String(SESSION.nombre||SESSION.usuario).split(' ')[0]+'. Ya está.',3000);
+    });
+  },function(){ er.textContent='Sin conexión con la base. Probá de nuevo en un momento.'; btn.disabled=false; btn.textContent='Entrar'; });
+}
+document.addEventListener('DOMContentLoaded',function(){ setTimeout(_reentradaChequear,1500); setInterval(_reentradaChequear,60000); });
 function _loadSession(){
   try{var s=localStorage.getItem('maleu_panel_session');if(s){SESSION=JSON.parse(s);if(SESSION&&SESSION.tabs)SESSION.tabs=_tabsExpandir(SESSION.tabs);}}catch(e){SESSION=null;}
   // AUTH (19/08/2026): las sesiones guardadas antes del token no sirven para hablar
@@ -14930,7 +14991,7 @@ function _leerVersion(app){
    "El HTML no sabe que version es" dejo de ser cierto: el build le escribe
    adentro el CACHE_NAME de sw-panel.js, el mismo que deploy.sh obliga a subir en
    cada cambio. Si lo publicado dice otra cosa, esta pagina es vieja. Punto. */
-var _APP_CN_PAGINA='maleu-panel-v882';
+var _APP_CN_PAGINA='maleu-panel-v883';
 
 /* Devuelve [{k,v}] si lo publicado no es lo que esta pagina corre. */
 function _chequearVersiones(){
@@ -19877,7 +19938,21 @@ function _ordenDirectaOn(a){
    Apps Script como `_noDirecto` (llega a `order_command.payload`): palanca-front · sin-token · http-403 · red ·
    base:<motivo que devolvio la RPC> (datos, no encontrado, pendiente, cuenta, palanca, usuario…). Se borra al empezar:
    un reintento que si va directo no lo arrastra. */
-function _ordenNoDirecto(body,m){ try{ if(body&&typeof body==='object')body._noDirecto=String(m||'?').slice(0,80); }catch(e){} }
+function _ordenNoDirecto(body,m){
+  try{ if(body&&typeof body==='object')body._noDirecto=String(m||'?').slice(0,80); }catch(e){}
+  /* (4/11/2026, Supa 444) Y a la base: el motivo quedaba solo en el navegador y no se podia saber por que una accion con
+     directa seguia llegando a Apps Script. `directa_no_anotar` acepta anon, tiene tope y nunca falla. */
+  try{ _directaNoAnotar(body&&body.action, m, ''); }catch(e){}
+}
+function _directaNoAnotar(accion,motivo,detalle){
+  try{
+    var c=(typeof _sbCfgLogin==='function')?_sbCfgLogin():null; if(!c||!c.url||!c.key)return;
+    var sb=(typeof _sbPerm==='object'&&_sbPerm&&_sbPerm.token)?_sbPerm:null;
+    fetch(c.url+'/rest/v1/rpc/directa_no_anotar',{method:'POST',keepalive:true,
+      headers:{apikey:c.key,Authorization:'Bearer '+(sb?sb.token:c.key),'Content-Type':'application/json'},
+      body:JSON.stringify({p:{accion:String(accion||'?').slice(0,60),motivo:String(motivo||'?').slice(0,80),detalle:String(detalle||'').slice(0,200),fuente:'erp',usuario:(typeof SESSION!=='undefined'&&SESSION&&SESSION.usuario)||''}})}).catch(function(){});
+  }catch(e){}
+}
 function _ordenDirecta(body,ctl,accion){
   var a=accion||(body&&body.action), fn=ORD_DIRECTAS_RPC[a];
   if(body&&typeof body==='object')delete body._noDirecto;
