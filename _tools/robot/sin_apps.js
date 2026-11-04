@@ -46,7 +46,7 @@ const PANTALLAS = [
   ['miportal', 'setMainTab', ['hoy', 'pedidos', 'clientes', 'plata']],
   ['busqueda', 'abaSwitchTab', ['resumen', 'pedidos', 'proveedores', 'costos', 'pagos', 'nuevo']],
   ['proveedores', null, []],
-  ['ajustes', null, []],
+  /* Ajustes no: el robot no la ve a propósito (usuarios y PIN). La cubre el paso «ajustes en la base» del robot (437). */
 ];
 const ERROR_RE = /No se pudo|Sin conexi[oó]n|fijate la conexi[oó]n|Error al cargar|no responde/i;
 
