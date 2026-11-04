@@ -193,7 +193,10 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
     if (!PED) return { ok: false, detalle: 'la base dio el ' + n + ' pero no apareció en Pedidos en 10 s' };
     const otra = await directa('altaPedido', Object.assign({}, body));   // el mismo id: no tiene que duplicar
     const dup = bien(otra) && String(otra.d.n || otra.d.ref) !== String(n) && !otra.d.dedup;
-    return { ok: !dup && ver < 1500, detalle: 'pedido ' + n + ' · se vio en ' + ver + ' ms' + (dup ? ' · DUPLICÓ con el mismo id' : ' · sin duplicar') };
+    /* El tope de «se ve»: 1,5 s desde acá. En GitHub Actions (CI) el runner está lejos de la base y suma ~1 s de red que
+       Tadeo no tiene: 3 s. El número medido va igual en el detalle y en métricas. */
+    const TOPE_VER = process.env.CI ? 3000 : 1500; METRICAS.alta_se_ve_ms = ver;
+    return { ok: !dup && ver < TOPE_VER, detalle: 'pedido ' + n + ' · se vio en ' + ver + ' ms (tope ' + TOPE_VER + ')' + (dup ? ' · DUPLICÓ con el mismo id' : ' · sin duplicar') };
   }, { escribe: true, topeMs: 15000 });
 
   await paso('armar, entregar, cobrar, deshacer cobro', async () => {
