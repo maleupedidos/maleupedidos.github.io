@@ -421,6 +421,16 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
     METRICAS.posts_apps_hoy = pf.totalHoy;
     return { ok: true, salteado: pf.totalHoy > 0, detalle: 'hoy ' + pf.totalHoy + (pf.totalHoy ? ' (' + top(pf.hoy) + ')' : '') + (ayer ? ' · ayer ' + tot(ayer) + ' (' + top(ayer) + ')' : '') };
   });
+  /* POR QUÉ NO FUE DIRECTA (Supa 444): cada caída a Apps Script anota su motivo en la base; acá se leen los de 7 días. */
+  await paso('por qué no fueron directas (7 días)', async () => {
+    const r = await rpc('directa_no_motivos', { p_dias: 7 }).catch(() => null);
+    if (!r || r.http >= 300 || !r.ok) return { ok: true, salteado: true, detalle: 'directa_no_motivos no contestó: ' + JSON.stringify(r).slice(0, 120) };
+    const l = [];
+    (r.acciones || []).forEach((a) => (a.motivos || []).forEach((m) => l.push({ a: a.accion, m: m.motivo, n: m.n, u: m.usuarios })));
+    l.sort((x, y) => y.n - x.n);
+    const txt = l.slice(0, 8).map((x) => x.a + ' · ' + x.m + ' ×' + x.n + (x.u ? ' (' + x.u + ')' : '')).join(' | ');
+    return { ok: true, salteado: l.length > 0, detalle: l.length ? txt : 'ninguna' };
+  });
   await paso('el efectivo real no se movió', async () => {
     const a = EFECTIVO_ANTES, d = await rpc('robot_saldo_efectivo', {}).catch(() => null);
     if (!a || !a.ok || !d || !d.ok) return { ok: false, detalle: 'robot_saldo_efectivo no contestó: ' + JSON.stringify(d || a).slice(0, 120) };
