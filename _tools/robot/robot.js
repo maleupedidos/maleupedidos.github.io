@@ -41,9 +41,10 @@ const PREFIJO = 'robot-' + CORRIDA + '-';
 const pausa = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function credenciales() {
-  if (process.env.ROBOT_USUARIO && process.env.ROBOT_PIN) return { usuario: process.env.ROBOT_USUARIO, pin: process.env.ROBOT_PIN };
+  /* repUsuario/repPin: el representante «PRUEBA Robot» (ROBOT_REP_USUARIO y ROBOT_PIN_REP en Actions; pinRep en el archivo). */
+  if (process.env.ROBOT_USUARIO && process.env.ROBOT_PIN) return { usuario: process.env.ROBOT_USUARIO, pin: process.env.ROBOT_PIN, repUsuario: process.env.ROBOT_REP_USUARIO || 'pruebarobot', repPin: process.env.ROBOT_PIN_REP || '' };
   const f = path.join(os.homedir(), '.maleu', 'robot.json');
-  if (fs.existsSync(f)) { const j = JSON.parse(fs.readFileSync(f, 'utf8')); if (j.usuario && j.pin) return { usuario: j.usuario, pin: String(j.pin) }; }
+  if (fs.existsSync(f)) { const j = JSON.parse(fs.readFileSync(f, 'utf8')); if (j.usuario && j.pin) return { usuario: j.usuario, pin: String(j.pin), repUsuario: j.repUsuario || 'pruebarobot', repPin: j.pinRep ? String(j.pinRep) : '' }; }
   return null;
 }
 
@@ -74,6 +75,7 @@ async function paso(nombre, fn, opt) {
   return r;
 }
 let ENTIDADES = false;
+const CRED = credenciales();
 
 /* Una RPC de la base con la sesión de la página (la del robot). */
 const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(!sb)return {ok:false,error:'sin permiso de la base'};
@@ -81,7 +83,7 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
   var t=await r.text(); try{ return Object.assign({http:r.status},JSON.parse(t)); }catch(e){ return {http:r.status,texto:t.slice(0,200)}; } })()`, 30000);
 
 (async () => {
-  const cred = credenciales(), TOKEN = process.env.ROBOT_TOKEN || '';
+  const cred = CRED, TOKEN = process.env.ROBOT_TOKEN || '';
   if (!cred && !TOKEN) { console.log('Sin credenciales del robot (ROBOT_USUARIO/ROBOT_PIN o ~/.maleu/robot.json) ni ROBOT_TOKEN: no corre.'); process.exit(2); }
   if (process.env.ROBOT_LOCAL) await servirLocal();
   console.log('Robot · corrida ' + CORRIDA + ' · ' + URL_APP + (cred ? ' · usuario ' + cred.usuario : ' · con una sesión de admin (solo lecturas y en seco)'));
@@ -242,10 +244,23 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
     const prod = await prodPrueba();
     if (!prod) return { ok: false, detalle: 'el producto ' + SKU + ' no está en D.stock (Stock › Productos)' };
     if (prod.id == null) return { ok: false, detalle: 'falta el id de tienda del producto ' + SKU + ' (robot_entidades_pantalla.producto_id)' };
-    const r = await directa('redAutopedido', { action: 'redAutopedido', clientOrderId: PREFIJO + 'red', canal: 'Red', vendedor: REP, nombre: CLI, telefono: TEL,
+    /* Como en la vida real: el representante entra con SU usuario y PIN (por la base: login_pin + auth) y carga el
+       autopedido con SU token. La base toma el vendedor de la sesión, no del cuerpo. No se guarda: la sesión de la página
+       sigue siendo la del robot. */
+    if (!CRED.repPin) return { ok: false, detalle: 'falta el PIN del representante PRUEBA Robot (ROBOT_PIN_REP / pinRep)' };
+    const body = { action: 'redAutopedido', clientOrderId: PREFIJO + 'red', canal: 'Red', vendedor: REP, nombre: CLI, telefono: TEL,
       barrioPrivado: 'PRUEBA', lote: '', dia: '', fechaEntrega: new Date(Date.now() + 2 * 86400000).toISOString(), horario: 'A coordinar', pago: 'Transferencia', envio: 0,
-      items: [{ id: prod.id, nombre: prod.nombre, qty: 1, precio: prod.precio }], total: prod.precio, trajo: 'Vendedor', telCliente: TEL });
-    return bien(r) ? { ok: true, detalle: 'autopedido ' + (r.d.ref || (r.d.sumarA && r.d.sumarA.n) || '') } : mal(r, 'autopedido');
+      items: [{ id: prod.id, nombre: prod.nombre, qty: 1, precio: prod.precio }], total: prod.precio, trajo: 'Vendedor', telCliente: TEL };
+    const r = await ev(`(async function(){ var c=_sbCfgLogin(), H=function(t){ return {apikey:c.key,Authorization:'Bearer '+(t||c.key),'Content-Type':'application/json'}; };
+      var lp=await (await fetch(c.url+'/rest/v1/rpc/login_pin',{method:'POST',headers:H(),body:JSON.stringify({p_usuario:${JSON.stringify(CRED.repUsuario)},p_pin:${JSON.stringify(CRED.repPin)}})})).json();
+      if(!lp||!lp.ok||!lp.email)return {paso:'login',r:lp?{ok:lp.ok,err:lp.err}:null};
+      var t=await _sbAuth(c.url,c.key,'password',{email:lp.email,password:lp.clave});
+      var x=await fetch(c.url+'/rest/v1/rpc/red_autopedido_directo',{method:'POST',headers:H(t.access_token),body:JSON.stringify({p:${JSON.stringify(body)}})});
+      var j=null; try{ j=await x.json(); }catch(e){} return {paso:'autopedido',http:x.status,r:j,rol:lp.rol}; })()`, 30000);
+    if (r.paso === 'login') return { ok: false, detalle: 'el representante no pudo entrar por la base: ' + JSON.stringify(r.r).slice(0, 150) };
+    const d = r.r || {};
+    return d.ok ? { ok: true, detalle: 'entró como ' + CRED.repUsuario + ' (rol ' + r.rol + ') · autopedido ' + (d.ref || (d.sumarA && d.sumarA.n) || '') }
+      : { ok: false, detalle: 'autopedido: http ' + r.http + ' ' + JSON.stringify(d).slice(0, 180) };
   }, { escribe: true, topeMs: 10000 });
 
   await paso('liquidación de PRUEBA', async () => {
