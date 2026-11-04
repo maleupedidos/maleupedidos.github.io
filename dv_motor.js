@@ -1961,7 +1961,9 @@ var HOJASBASE_ = {
      Apps Script las sigue escribiendo y marca la copia. Las leen combosEval (Ventas › combos),
      avisosErp (Red) y pedidoCambios (historial del pedido). La fecha de Cambios Pedidos va al
      minuto: «Total después» separa dos cambios del mismo pedido en el mismo minuto. */
-  'Combos': { clave: ['Canal', 'N° Pedido', 'Combo ID'] },
+  /* POR FILA (4/11/2026, paridad del corte): un pedido puede llevar el MISMO combo en dos filas (Red #2120, dos
+     «Descubrí Maleu · Fin de Semana» de $34.900) y con la clave Canal|N°|Combo ID la copia se quedaba con una sola. */
+  'Combos': { clave: ['Canal', 'N° Pedido', 'Combo ID'], porFila: true },
   'Cambios Pedidos': { clave: ['Fecha', 'Hoja', 'N° Pedido', 'Total después'] },
   /* 155: el catalogo (producto, proveedor, costo, precios) que leen Proveedores y la bandeja.
      La escriben el costo de la carne, el precio de factura y el alta de un producto: las

@@ -96,6 +96,13 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
 (async () => {
   const cred = CRED, TOKEN = process.env.ROBOT_TOKEN || '';
   if (!cred && !TOKEN) { console.log('Sin credenciales del robot (ROBOT_USUARIO/ROBOT_PIN o ~/.maleu/robot.json) ni ROBOT_TOKEN: no corre.'); process.exit(2); }
+  /* EL CUPO DE URLFETCH (4/11/2026): el robot no va a Apps Script, pero sus órdenes las procesa el aplicador, y el 4/11 la
+     cuota del día se agotó con un pedido real esperando. Pasado el tope de las pruebas (UF_TOPE_PRUEBAS) no corre: sale
+     en 0 diciendo por qué. Preguntarlo no gasta UrlFetch. Si no contesta, corre igual. */
+  try {
+    const cp = await (await fetch('https://script.google.com/macros/s/AKfycbxmrG5YVSshcYezk8lXFx_uxb7NFGcb9EfTXc7dsIN4rZyj73CET4mk_aKPFPDY2wNi/exec?action=cupoPruebas', { signal: AbortSignal.timeout(20000) })).json();
+    if (cp && cp.frenado) { console.log('Cupo de UrlFetch del día: ' + cp.total + ' de un tope de ' + cp.tope + ' para las pruebas. El robot no corre hoy.'); process.exit(0); }
+  } catch (eCp) {}
   if (process.env.ROBOT_LOCAL) await servirLocal();
   console.log('Robot · corrida ' + CORRIDA + ' · ' + URL_APP + (cred ? ' · usuario ' + cred.usuario : ' · con una sesión de admin (solo lecturas y en seco)'));
   cli = await cdp.abrir();
