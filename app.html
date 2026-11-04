@@ -12663,6 +12663,24 @@ var API='https://script.google.com/macros/s/AKfycbxmrG5YVSshcYezk8lXFx_uxb7NFGcb
         try{ window.__despertadorNoViajo = (window.__despertadorNoViajo || 0) + 1; }catch(e){}
         return Promise.resolve(new Response('{"ok":true,"despertador":"no viaja"}', { status: 200, headers: { 'Content-Type': 'application/json' } }));
       }
+      /* (4/11/2026, Organizador) SIN RESPALDO EN LAS ESCRITURAS CON DIRECTA. Si la accion tiene su RPC en la base y su
+         palanca esta prendida, el POST a Apps Script NO sale, venga de donde venga (panel, Ruta, Red, Abastecimiento, el
+         CRM): cada uno caia a Apps Script por su cuenta cuando la directa devolvia null. Con la palanca apagada, Apps
+         Script como siempre (eso es una decision, no una caida). El motivo de la caida ya se anoto (`_ordenNoDirecto`).
+           · la base la RECHAZO por una regla (`base:…`): se contesta {ok:false} con el motivo, y la pantalla lo muestra;
+           · red, 5xx, sin sesion: error de red, y la cola (Ruta, Abastecimiento, Red) reintenta contra la base. */
+      /* Si quien llamo NO probo la directa (un camino viejo que postea derecho a Apps Script: el cuerpo no trae
+         `_noDirecto`), la prueba esta puerta. Las ordenes del CRM tienen su propio desvio mas abajo. */
+      if (!ordenCrm && _accD && typeof ORD_DIRECTAS_RPC === 'object' && ORD_DIRECTAS_RPC[_accD] && typeof _ordenDirectaOn === 'function' && _ordenDirectaOn(_accD)){
+        var _bD = null; try { _bD = JSON.parse((init && init.body) || '{}'); } catch(e){}
+        if (_bD && !('_noDirecto' in _bD) && typeof _ordenDirecta === 'function'){
+          return _ordenDirecta(_bD).then(function(d){
+            if (d) return new Response(JSON.stringify(d), { status: 200, headers: { 'Content-Type': 'application/json' } });
+            return _sinRespaldo(_accD, _bD._noDirecto);
+          }, function(){ return _sinRespaldo(_accD, 'red'); });
+        }
+        return _sinRespaldo(_accD, _bD && _bD._noDirecto);
+      }
     }
     var _ensayo = false; try { _ensayo = localStorage.getItem('maleu_ensayo') === '1'; } catch(e){}
     /* (4/11/2026) Una orden del CRM prueba primero su directa: el corte del ensayo va en su respaldo a Apps Script (abajo). */
@@ -12698,6 +12716,8 @@ var API='https://script.google.com/macros/s/AKfycbxmrG5YVSshcYezk8lXFx_uxb7NFGcb
       var pedirPost = (_bCrm && typeof _ordenDirecta === 'function')
         ? _ordenDirecta(_bCrm).catch(function(){ return null; }).then(function(d){
             if (d) return new Response(JSON.stringify(d), { status: 200, headers: { 'Content-Type': 'application/json' } });
+            /* (4/11/2026) Con su directa prendida, sin respaldo: no se manda a Apps Script. */
+            if (typeof _ordenDirectaOn === 'function' && _ordenDirectaOn(_bCrm.action)) return _sinRespaldo(_bCrm.action, _bCrm._noDirecto);
             /* (corte, parte 3) Con el `_noDirecto` que dejó `_ordenDirecta` en el cuerpo. */
             try { init.body = JSON.stringify(_bCrm); } catch(e){}
             return _porApps(); })
@@ -14991,7 +15011,7 @@ function _leerVersion(app){
    "El HTML no sabe que version es" dejo de ser cierto: el build le escribe
    adentro el CACHE_NAME de sw-panel.js, el mismo que deploy.sh obliga a subir en
    cada cambio. Si lo publicado dice otra cosa, esta pagina es vieja. Punto. */
-var _APP_CN_PAGINA='maleu-panel-v883';
+var _APP_CN_PAGINA='maleu-panel-v884';
 
 /* Devuelve [{k,v}] si lo publicado no es lo que esta pagina corre. */
 function _chequearVersiones(){
@@ -19943,6 +19963,19 @@ function _ordenNoDirecto(body,m){
   /* (4/11/2026, Supa 444) Y a la base: el motivo quedaba solo en el navegador y no se podia saber por que una accion con
      directa seguia llegando a Apps Script. `directa_no_anotar` acepta anon, tiene tope y nunca falla. */
   try{ _directaNoAnotar(body&&body.action, m, ''); }catch(e){}
+}
+/* (4/11/2026) La respuesta de una escritura con directa que la base no tomo, en vez de mandarla a Apps Script.
+   `base:…` = la base la rechazo por una regla: {ok:false} con el motivo (la pantalla lo muestra; reintentar no cambia nada).
+   Lo demas (red, 5xx, sin sesion): error de red, y las colas reintentan contra la base. */
+function _sinRespaldo(accion,nd){
+  nd=String(nd||'');
+  try{ (window.__sinRespaldo=window.__sinRespaldo||[]).push({a:accion,m:nd,t:Date.now()}); }catch(e){}
+  try{ _directaNoAnotar(accion,'sin respaldo: '+(nd||'?'),'no se mando a Apps Script'); }catch(e){}
+  if(/^base:/.test(nd)){
+    var mot=nd.replace(/^base:/,''), txt='No se guardó: la base no lo aceptó ('+mot+').';
+    return Promise.resolve(new Response(JSON.stringify({ok:false,sinRespaldo:true,motivo:mot,err:txt,error:txt}),{status:200,headers:{'Content-Type':'application/json'}}));
+  }
+  return Promise.reject(new TypeError('No se pudo guardar en la base ('+(nd||'sin respuesta')+'): se reintenta.'));
 }
 function _directaNoAnotar(accion,motivo,detalle){
   try{
