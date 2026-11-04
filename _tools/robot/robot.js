@@ -247,8 +247,15 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
   if (ENTIDADES) {
     const fr = await rpc('robot_avisos_frenados', { p_corrida: CORRIDA }).catch(() => null);
     if (fr) console.log('  avisos frenados: ' + JSON.stringify(fr).slice(0, 160));
-    const li = await rpc('robot_limpiar', { p_corrida: CORRIDA }).catch(() => null);
-    console.log('  limpieza: ' + (li && li.http === 404 ? 'robot_limpiar todavía no existe (la corre el cron de la base)' : JSON.stringify(li).slice(0, 160)));
+    /* robot_limpiar (401): {ok, borrado:{tabla:n}, residuos:{tabla:n}}. ok:false = un paso pasaba las 300 filas y no
+       borró nada (falla); residuos = una tabla con algo del robot que la limpieza no conoce (hallazgo para Supa). */
+    const li = await rpc('robot_limpiar', { p_corrida: CORRIDA }).catch((e) => ({ ok: false, error: e.message }));
+    const res = (li && li.residuos) || {}, conRes = Object.keys(res).filter((k) => Number(res[k]) > 0);
+    pasos.push({ paso: 'limpieza', ok: !!(li && li.ok) && !conRes.length, ms: 0,
+      detalle: li && li.ok ? 'borrado ' + JSON.stringify(li.borrado || {}).slice(0, 200) + (conRes.length ? ' · residuos en ' + conRes.join(', ') : '') : JSON.stringify(li).slice(0, 200) });
+    if (!(li && li.ok)) hallazgos.push('limpieza: robot_limpiar no borró (' + JSON.stringify(li).slice(0, 120) + ')');
+    if (conRes.length) hallazgos.push('limpieza: quedaron residuos en ' + conRes.join(', ') + ' (pasarle a Supa)');
+    console.log('  limpieza: ' + JSON.stringify(li).slice(0, 200));
   }
 
   return terminar();
