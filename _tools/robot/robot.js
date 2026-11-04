@@ -70,7 +70,7 @@ async function paso(nombre, fn, opt) {
   if (apps.length) { r.ok = false; hallazgos.push(nombre + ': intentó ir a Apps Script (' + [...new Set(apps)].join(', ') + ')'); }
   if (r.ok && opt.topeMs && ms > opt.topeMs) { r.ok = false; r.detalle = (r.detalle ? r.detalle + ' · ' : '') + 'tardó ' + ms + ' ms (tope ' + opt.topeMs + ')'; }
   if (!r.ok && !apps.length) hallazgos.push(nombre + ': ' + (r.detalle || 'falló'));
-  pasos.push({ paso: nombre, ok: !!r.ok, ms: ms, detalle: String(r.detalle || '').slice(0, 300) + (apps.length ? ' · Apps Script: ' + [...new Set(apps)].join(', ') : '') });
+  pasos.push({ paso: nombre, ok: !!r.ok, ms: ms, salteado: r.salteado || undefined, detalle: String(r.detalle || '').slice(0, 300) + (apps.length ? ' · Apps Script: ' + [...new Set(apps)].join(', ') : '') });
   console.log((r.ok ? '  ok   ' : '  MAL  ') + nombre + '  (' + ms + ' ms)' + (r.detalle ? '  ' + r.detalle : '') + (apps.length ? '  · Apps Script: ' + apps.join(', ') : ''));
   return r;
 }
@@ -134,6 +134,23 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
     const r = await rpc('robot_en_seco', { p_rpc: 'caja_mover_directo', p: { action: 'moverPlata', desde: 'cf', hacia: 'cf', monto: 1, nota: 'robot', proveedor: '', clientOpId: PREFIJO + 'mover-mal' } });
     const bien = r && r.ok && r.respuesta && r.respuesta.ok === false && /mismo lugar/.test(String(r.respuesta.err || ''));
     return { ok: !!bien, detalle: bien ? 'valida (mismo lugar → no)' : JSON.stringify(r).slice(0, 200) };
+  }, { topeMs: 5000 });
+
+  /* 3b) CONTAR UN PRODUCTO REAL, EN SECO (4/11/2026, con Supa): la directa corre y se deshace. Mide si la base frena
+     («se está acomodando») y cuánto tarda con los productos de verdad: es el antes/después del Kardex paso c. Cuenta lo
+     mismo que hay (delta 0) en el depósito donde más tiene. */
+  if (cred) await paso('contar en seco (producto real)', async () => {
+    const pr = await ev(`(function(){ var l=(typeof D==='object'&&D&&Array.isArray(D.stock))?D.stock:[], m=null;
+      l.forEach(function(x){ if(String(x.a||'')==='PRUEBA'||x.u==='kg')return; Object.keys(x.pd||{}).forEach(function(d){ var q=Number(x.pd[d])||0; if(d!=='prueba'&&q>0&&(!m||q>m.q))m={a:x.a,d:d,q:q}; }); });
+      return m; })()`);
+    if (!pr) return { ok: false, detalle: 'no hay un producto real con stock en D.stock' };
+    const t0 = Date.now();
+    const r = await rpc('robot_en_seco', { p_rpc: 'stock_contar_directo', p: { abbr: pr.a, deposito: pr.d, cantidad: pr.q, clientOpId: PREFIJO + 'seco-contar', cv: 'robot' } });
+    METRICAS.contar_real_seco_ms = Date.now() - t0;
+    if (r && r.ok === false && /no se prueba en seco/.test(String(r.error || ''))) { delete METRICAS.contar_real_seco_ms; return { ok: true, salteado: true, detalle: 'robot_en_seco todavía no acepta stock_contar_directo (pedido a Supa)' }; }
+    const resp = (r && r.respuesta) || {};
+    METRICAS.contar_real_frenado = !!resp.acomodando;
+    return { ok: !!(r && r.ok) && !resp.acomodando, detalle: pr.a + ' en ' + pr.d + ' (' + pr.q + ') · ' + (resp.acomodando ? 'FRENADO: se está acomodando' : (resp.ok ? 'aceptado' : JSON.stringify(resp).slice(0, 150))) + ' · ' + METRICAS.contar_real_seco_ms + ' ms' };
   }, { topeMs: 5000 });
 
   /* 4) LOS PASOS QUE ESCRIBEN (4/11/2026). Escritos contra los NOMBRES que da robot_entidades_pantalla (cliente y
