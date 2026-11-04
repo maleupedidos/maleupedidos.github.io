@@ -12596,6 +12596,15 @@ var API='https://script.google.com/macros/s/AKfycbxmrG5YVSshcYezk8lXFx_uxb7NFGcb
       var url = (typeof input === 'string') ? input : ((input && input.url) || '');
       esBackend = url.indexOf('script.google.com/macros') > -1;
       esPost = !!(init && init.method && String(init.method).toUpperCase() === 'POST');
+      /* (4/11/2026) La orden del CRM se marca AUNQUE no haya token de Apps Script: con la sesión de la base sola (login
+         sin Apps Script, v874) quedaba sin marcar y nunca probaba la directa. */
+      if (!t && esBackend && esPost && init && typeof init.body === 'string'){
+        try { var _b0 = JSON.parse(init.body);
+          if (_b0 && typeof _b0 === 'object' && _CRM_ORDEN[_b0.action]){
+            ordenCrm = true;
+            if (!_b0.clientOpId){ _b0.clientOpId = 'crm_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 10); init.body = JSON.stringify(_b0); }
+          } } catch(e){}
+      }
       if (t && esBackend){
         var cv = _cvCliente();
         if (esPost && init && typeof init.body === 'string'){
@@ -12641,12 +12650,14 @@ var API='https://script.google.com/macros/s/AKfycbxmrG5YVSshcYezk8lXFx_uxb7NFGcb
        navegador de prueba apuntado a la COPIA de la base) no sale NADA a Apps Script: ni lecturas, ni escrituras, ni
        sbToken. Cada intento queda en `window.__ensayoApps` ({m, a, t}): es la lista de lo que le falta a la base. */
     var _ensayo = false; try { _ensayo = localStorage.getItem('maleu_ensayo') === '1'; } catch(e){}
-    if (esBackend && _ensayo){
+    /* (4/11/2026) Una orden del CRM prueba primero su directa: el corte del ensayo va en su respaldo a Apps Script (abajo). */
+    var _ensayoCorte = function(){
       var _accE = '';
       try { _accE = esPost ? (JSON.parse((init && init.body) || '{}').action || '?') : ((String(input).match(/[?&]action=([A-Za-z]+)/) || [])[1] || '?'); } catch(e){ _accE = '?'; }
       try { (window.__ensayoApps = window.__ensayoApps || []).push({ m: esPost ? 'POST' : 'GET', a: _accE, t: Date.now(), tab: typeof cur === 'string' ? cur : '' }); } catch(e){}
       return Promise.reject(new TypeError('ENSAYO: Apps Script apagado (' + (esPost ? 'POST ' : 'GET ') + _accE + ')'));
-    }
+    };
+    if (esBackend && _ensayo && !ordenCrm) return _ensayoCorte();
     /* (3/11/2026) SIN_APPS_LECTURAS: ver `_sinApps`. Se contesta como un Apps Script que no esta: un error de red. */
     if (esBackend && !esPost && typeof input === 'string' && typeof _sinApps === 'function' && _sinApps()){
       var _accS = (input.match(/[?&]action=([A-Za-z]+)/) || [])[1] || '';
@@ -12665,7 +12676,7 @@ var API='https://script.google.com/macros/s/AKfycbxmrG5YVSshcYezk8lXFx_uxb7NFGcb
     if (esBackend && esPost){
       var _marcar = function(){ try{ window.__ultimoPostBackend = Date.now(); }catch(e){} };
       _marcar();
-      var _porApps = function(){ return postIdempotente ? _pedirPostCajaConCorte(input, init, 0) : _pedir(input, init, 0); };
+      var _porApps = function(){ if (_ensayo) return _ensayoCorte(); return postIdempotente ? _pedirPostCajaConCorte(input, init, 0) : _pedir(input, init, 0); };
       /* (281) Una orden del CRM con su directa prendida (FICHA_DIRECTO, BORRAR_INTERACCION_DIRECTO, ...): primero la
          base; si no la acepta directo, Apps Script con el mismo cuerpo (el mismo clientOpId: no duplica). */
       var _bCrm = null; try { _bCrm = ordenCrm ? JSON.parse(init.body) : null; } catch(e){}
@@ -14149,13 +14160,15 @@ function mrConfirmCierre(){
   if(!realIn || !realIn.value.trim()){alert('Ingresá el monto contado físicamente.');return;}
   var real=Number(String(realIn.value).replace(/[^\d-]/g,''))||0;
   if(btn){btn.disabled=true;btn.textContent='Guardando...';}
-  fetch(API,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({
+  /* (4/11/2026) Por `_ordenPost`: con CIERRE_REPARTO_DIRECTO en «si» la acepta la base (reparto_cierre_directo); si no,
+     Apps Script. Es plata: la palanca pasa por «medir» con el OK del Organizador. */
+  _ordenPost(({
     action:'cerrarDiaReparto',
     usuario:c.usuario, fecha:c.fechaISO,
     billeteraIni:c.bil, cobradoEf:c.cobEf,
     esperado:c.pem, real:real,
     notas:notasIn?notasIn.value:'', clientOpId:_pfId()
-  })}).then(function(r){return r.json();}).then(function(d){ return _pfAplicar(d).then(function(){ return d; }); }).then(function(d){
+  })).then(function(r){return r.json();}).then(function(d){ return _pfAplicar(d).then(function(){ return d; }); }).then(function(d){
     if(btn){btn.disabled=false;btn.textContent='Confirmar cierre';}
     if(!d||!d.ok){alert('Error al cerrar: '+((d&&d.err)||'desconocido'));return;}
     mrCloseCierre();
@@ -14902,7 +14915,7 @@ function _leerVersion(app){
    "El HTML no sabe que version es" dejo de ser cierto: el build le escribe
    adentro el CACHE_NAME de sw-panel.js, el mismo que deploy.sh obliga a subir en
    cada cambio. Si lo publicado dice otra cosa, esta pagina es vieja. Punto. */
-var _APP_CN_PAGINA='maleu-panel-v876';
+var _APP_CN_PAGINA='maleu-panel-v877';
 
 /* Devuelve [{k,v}] si lo publicado no es lo que esta pagina corre. */
 function _chequearVersiones(){
@@ -19812,7 +19825,16 @@ var ORD_DIRECTAS_RPC={marcarCobrado:'pedido_cobrar_directo',marcarEntregado:'ped
   /* (362) Sacar un vuelto huerfano. Palanca VUELTO_DIRECTO (sin fila = no: Apps Script). */
   borrarVueltoHuerfano:'caja_vuelto_borrar_directo',
   /* (364) Anular o aplicar una nota de credito (Abastecimiento). Palanca NC_DIRECTO (sin fila = no: Apps Script). */
-  provNotaCreditoAnular:'prov_nc_cerrar_directo',provNotaCreditoAplicar:'prov_nc_cerrar_directo'};
+  provNotaCreditoAnular:'prov_nc_cerrar_directo',provNotaCreditoAplicar:'prov_nc_cerrar_directo',
+  /* (4/11/2026, corte) LISTAS DEL LADO FRONT, la RPC la escribe Supa. Mientras su palanca no esté en «si» (o la RPC no
+     exista: 404) van a Apps Script con el mismo cuerpo de siempre. La bandeja de Red y el cierre del día (Mi Reparto)
+     salen por `_ordenPost`; las del CRM ya pasaban por `_ordenDirecta` (el interceptor, `_CRM_ORDEN`) y caían a Apps
+     Script solo por no estar en este mapa. Palancas: RED_CONFIRMAR, CIERRE_REPARTO, CRM_NOTAS, CRM_VISITANTE,
+     CRM_RESIDENCIA, CRM_ROL_HOGAR, CRM_INTERACCION, CRM_LEAD, CRM_LOTE y CRM_MERGE (todas con _DIRECTO). */
+  redConfirmar:'red_confirmar_directo',cerrarDiaReparto:'reparto_cierre_directo',
+  crmSetNotasTags:'crm_notas_tags_directo',crmSetVisitante:'crm_visitante_directo',crmSetResidencia:'crm_residencia_directo',
+  crmSetRolHogar:'crm_rol_hogar_directo',crmLogInteraccion:'crm_interaccion_directo',crmLeadSet:'crm_lead_directo',
+  crmLeadsBulk:'crm_lead_directo',crmLoteSave:'crm_lote_directo',crmMergeClientes:'crm_merge_directo'};
 function _ordenDirectaOn(a){
   if(typeof _palancaVal!=='function')return false;
   var m=_palancaVal('directas');
@@ -20874,8 +20896,8 @@ function rbConfirmar(row){
   var op=_rbOp(function(c){c.pendientes=(c.pendientes||[]).filter(function(x){return x.row!==row;});});
   op.porApps=true;   /* redConfirmar va por Apps Script (2/11/2026) */
   toast('Confirmando #'+p.n+' → '+String(vend||p.v).split(' ')[0]+'…',4000);
-  fetch(API,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},
-    body:JSON.stringify({action:'redConfirmar',n:p.n,row:p.row,vendedor:vend!==p.v?vend:'',clientOpId:_pfId()})})
+  /* (4/11/2026) Por `_ordenPost`: con RED_CONFIRMAR_DIRECTO en «si» la acepta la base (red_confirmar_directo); si no, Apps Script. */
+  _ordenPost({action:'redConfirmar',n:p.n,row:p.row,vendedor:vend!==p.v?vend:'',clientOpId:_pfId()})
   .then(function(r){return r.json();}).then(function(d){
     if(d&&d.ok){
       toast('✓ #'+p.n+' → '+d.vendedor.split(' ')[0]+(d.avisoOk?' · avisado':' · OJO: '+d.aviso),4000);
