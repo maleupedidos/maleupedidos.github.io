@@ -214,6 +214,18 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
     return { ok: !dup && ver < TOPE_VER, detalle: 'pedido ' + n + ' · se vio en ' + ver + ' ms (tope ' + TOPE_VER + ')' + (dup ? ' · DUPLICÓ con el mismo id' : ' · sin duplicar') };
   }, { escribe: true, topeMs: 15000 });
 
+  /* EL ALTA COMPLETA (4/11/2026, Supa, 418/419). La base hace 3 altas del robot como la tienda (Home, Pilar y Red → Pilar
+     Por decidir), controla cada pedido campo por campo y deshace todo antes de volver. Con ok=false ella misma pasa
+     ALTA_COMPLETA a «medir» y anota la alerta: acá sale en rojo. Con la palanca apagada, gris. */
+  await paso('alta completa en la base (3 canales)', async () => {
+    const r = await rpc('robot_alta_completa_probar', {});
+    if (!r || r.http >= 300) return { ok: false, detalle: 'la base contestó ' + (r && r.http) + ' ' + String((r && (r.message || r.texto)) || '').slice(0, 150) };
+    if (r.palanca === false) return { ok: true, salteado: true, detalle: 'ALTA_COMPLETA apagada: no hay nada que probar' };
+    const al = Array.isArray(r.altas) ? r.altas : [];
+    const txt = al.map((a) => a.canal + ' #' + a.pedido + (a.completo ? ' completo (' + a.campos + ' campos)' : ' INCOMPLETO: ' + JSON.stringify(a.diffs).slice(0, 120))).join(' · ');
+    return { ok: !!r.ok && al.length === 3 && al.every((a) => a.completo), detalle: (txt || 'sin altas') + (r.volvio_a_medir ? ' · la base volvió ALTA_COMPLETA a «medir»' : '') };
+  }, { escribe: true, topeMs: 20000 });
+
   /* La tienda en el barrio de un representante (4/11/2026, con Supa). Hoy (PEDIDOS_POR_DECIDIR sin fila = sí) cae en
      Pilar «Por decidir» y se pasa a un representante con «Pasar a un vendedor» (pedido_pase_directo): ese es el camino vivo,
      no la bandeja «Por confirmar». El cuerpo es el de la tienda (tienda/app.js ~7590). Entrega a 3 días: la del portal va a
