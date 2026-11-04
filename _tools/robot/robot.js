@@ -226,6 +226,15 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
     return { ok: !!r.ok && al.length === 3 && al.every((a) => a.completo), detalle: (txt || 'sin altas') + (r.volvio_a_medir ? ' · la base volvió ALTA_COMPLETA a «medir»' : '') };
   }, { escribe: true, topeMs: 20000 });
 
+  /* AJUSTES SIN APPS SCRIPT (4/11/2026, Supa 437). El robot no ve Ajustes (están los usuarios y los PIN): la base corre
+     ajustesData como admin, devuelve solo conteos y comprueba que al robot le da 403. */
+  await paso('ajustes en la base (como admin, solo conteos)', async () => {
+    const r = await rpc('robot_ajustes_probar', {});
+    if (!r || r.http >= 300) return { ok: false, detalle: 'la base contestó ' + (r && r.http) + ' ' + String((r && (r.message || r.texto)) || '').slice(0, 150) };
+    const f = r.filas || {};
+    return { ok: !!r.ok && !!r.admin_ok && !!r.robot_403, detalle: 'admin ' + (r.admin_ok ? 'ok' : 'MAL') + ' · robot 403 ' + (r.robot_403 ? 'sí' : 'NO') + ' · ' + (f.usuarios || 0) + ' usuarios, ' + (f.configMaleu || 0) + ' de Config' };
+  }, { topeMs: 15000 });
+
   /* La tienda en el barrio de un representante (4/11/2026, con Supa). Hoy (PEDIDOS_POR_DECIDIR sin fila = sí) cae en
      Pilar «Por decidir» y se pasa a un representante con «Pasar a un vendedor» (pedido_pase_directo): ese es el camino vivo,
      no la bandeja «Por confirmar». El cuerpo es el de la tienda (tienda/app.js ~7590). Entrega a 3 días: la del portal va a

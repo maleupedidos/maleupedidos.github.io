@@ -59,7 +59,9 @@ let n=0;function ok(name,cond){assert(cond,name);n++;console.log('OK '+name);}
     fetch:async url=>{if(url.includes('base.invalid')){base++;if(fail)return new Response('{}',{status:503});return new Response('{"e":[],"hechas":[]}');}apps++;return new Response('{"e":[]}');}},ruta);
   ok('Ruta en modo si se pinta desde Supabase',JSON.parse(await r._pedirEntregasTxt())._rutaBase===true&&base===1&&apps===0);
   mode='medir';await r._pedirEntregasTxt();ok('modo medir sigue mostrando Apps Script',apps===1&&base===1);
-  mode='si';fail=true;await r._pedirEntregasTxt();ok('si Supabase falla se conserva la alternativa de Apps Script',apps===2);
+  /* (4/11/2026) Sin respaldo a Apps Script: si la base falla, reintenta la base y el error sube a la pantalla. */
+  mode='si';fail=true;let subio=false;await r._pedirEntregasTxt().catch(()=>{subio=true;});
+  ok('si Supabase falla reintenta la base, no va a Apps Script y el error sube',subio&&apps===1&&base===3);
   let applied=0,resolveCaja=[];
   const caja=ctx(['_recargarCaja'],{_cajaLectura:0,_frescoEnVuelo:()=>{},_palancaVal:()=> 'si',_sbPermiso:()=>{},
     _cajaArmaTraer:()=>new Promise(res=>resolveCaja.push(res)),_cajaAplicar:d=>applied=d.id,

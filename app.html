@@ -9057,8 +9057,8 @@ details.rb-plg[open]{padding-bottom:10px}
 </div>
 <div id="errorView" class="empty hidden" style="color:#E65100">
   <div style="font-size:32px;margin-bottom:10px">&#x26A0;</div>
-  <div style="font-size:15px;font-weight:700;margin-bottom:4px">No se pudo conectar</div>
-  <div style="font-size:12px">Toca refresh</div>
+  <div style="font-size:15px;font-weight:700;margin-bottom:4px" id="rutErrTitulo">No se pudo conectar</div>
+  <div style="font-size:12px" id="rutErrDetalle">Toca refresh</div>
 </div>
 
 <!-- ARMADO -->
@@ -14919,7 +14919,7 @@ function _leerVersion(app){
    "El HTML no sabe que version es" dejo de ser cierto: el build le escribe
    adentro el CACHE_NAME de sw-panel.js, el mismo que deploy.sh obliga a subir en
    cada cambio. Si lo publicado dice otra cosa, esta pagina es vieja. Punto. */
-var _APP_CN_PAGINA='maleu-panel-v879';
+var _APP_CN_PAGINA='maleu-panel-v880';
 
 /* Devuelve [{k,v}] si lo publicado no es lo que esta pagina corre. */
 function _chequearVersiones(){
@@ -32230,12 +32230,24 @@ function _lecTraer(accion,args,clave,url,pintar,opts){
   },opts);
   var g=(opts&&opts.sinCache)?null:_swrLeer(clave);
   if(g){ try{ pintar(g.d,{viejo:true,cuando:g.t,hace:_hace(g.t)}); }catch(e){ console.error('lec/'+clave,e); } }
-  return _lecArmaBase(accion,args).then(function(r){
+  return _lecBaseReintento(accion,args).then(function(r){
     if(opts&&opts.valido&&!opts.valido(r.d))throw new Error('respuesta invalida');
     _swrGuardar(clave,r.d);
     var t=Date.now(); pintar(r.d,{viejo:false,cuando:t,hace:_hace(t)});
     return r.d;
-  }).catch(function(){ return traer(clave,url,pintar,opts); });
+  });
+}
+/* SIN RESPALDO A APPS SCRIPT (4/11/2026, Tadeo vía el Organizador: «el ERP no puede leer ni escribir nada por Apps
+   Script»). Con la lectura en «si», si la base falla se REINTENTA contra la base una vez y, si sigue, el error sube a la
+   pantalla. Antes caia a Apps Script en silencio: el 4/11 los motores no cargaban desde la mañana y nadie se entero
+   hasta que Apps Script se quedo sin cuota y Ruta no abrio. Un 403 es «a este rol no le corresponde» (el repartidor no
+   ve las OC): no se reintenta, y sube con `forbidden`. */
+function _lecBaseReintento(accion,args){
+  return _lecArmaBase(accion,args).catch(function(e){
+    if(/\b403\b/.test(String(e&&e.message))){ var f=new Error('No te corresponde ver esto ('+accion+')'); f.forbidden=true; throw f; }
+    return new Promise(function(ok){ setTimeout(ok,1500); }).then(function(){ return _lecArmaBase(accion,args); })
+      .catch(function(e2){ var x=new Error('No pude leer '+accion+' de la base: '+String((e2&&e2.message)||e2)); x.base=true; throw x; });
+  });
 }
 /* Lo mismo para un fetch sin copia guardada (`traerJson` del PDF): `alLlegar(d)` una vez. */
 function _lecJson(accion,args,url,alLlegar,_ya){
@@ -32252,7 +32264,7 @@ function _lecJson(accion,args,url,alLlegar,_ya){
   var apps=function(){ return fetch(url).then(function(r){ return r.json(); }).then(function(d){
     alLlegar(d); if(modo==='medir')_lecArmaMedir(accion,args,d,desde); return d; }); };
   if(modo!=='si')return apps();
-  return _lecArmaBase(accion,args).then(function(r){ alLlegar(r.d); return r.d; },function(){ return apps(); });
+  return _lecBaseReintento(accion,args).then(function(r){ alLlegar(r.d); return r.d; });   /* sin respaldo a Apps Script (4/11/2026) */
 }
 /* `PROV_BASE_ARMA` (`sb.pal.provArma`; sin fila = no): medir compara cada
    `analisisProveedor` recien llegado (cada PED_ARMA_MEDIR_MS como mucho) contra
@@ -63243,11 +63255,12 @@ function _pedirEntregasTxt(fresh){
   /* RUTA_DESDE_PG=si antes solo comparaba: nunca alimentaba la pantalla. */
   reg.p=(typeof _sbPermiso==='function'?Promise.resolve(_sbPermiso(true)):Promise.resolve(null)).then(function(sb){
     if(!sb||!sb.pal||sb.pal.rutaPg!=='si')return apps();
-    return fetch(sb.url+'/rest/v1/rpc/ruta_entregas_pantalla',{method:'POST',
+    var base=function(){return fetch(sb.url+'/rest/v1/rpc/ruta_entregas_pantalla',{method:'POST',
       headers:{apikey:sb.key,Authorization:'Bearer '+sb.token,'Content-Type':'application/json'},body:'{}'})
       .then(function(r){if(!r.ok)throw new Error('Ruta: HTTP '+r.status);return r.json();})
-      .then(function(d){if(!d||!Array.isArray(d.e))throw new Error('Ruta sin entregas');d._rutaBase=true;window.__rutaFuente={de:'base',ms:Date.now()-reg.t};return JSON.stringify(d);})
-      .catch(apps);
+      .then(function(d){if(!d||!Array.isArray(d.e))throw new Error('Ruta sin entregas');d._rutaBase=true;window.__rutaFuente={de:'base',ms:Date.now()-reg.t};return JSON.stringify(d);});};
+    /* (4/11/2026) Sin respaldo a Apps Script: si la base falla, otra vez la base; si sigue, el error a la pantalla. */
+    return base().catch(function(){return new Promise(function(ok){setTimeout(ok,1500);}).then(base);});
   });
   var fin=function(){if(_rutEntVuelo===reg)_rutEntVuelo=null;};
   reg.p.then(fin,fin);
@@ -63301,6 +63314,15 @@ function refresh(silent,fresh,auto){
     return true;
   }).catch(function(){
     if(auto)return false;
+    /* EL CARTEL DICE LA VERDAD (4/11/2026). Sin sesion propia de la base, Ruta depende de Apps Script para el permiso:
+       el 4/11, sin cuota, decia «No se pudo conectar» con internet andando. Ahi lo que sirve es volver a entrar. */
+    try{
+      var _sinSes=!(typeof _sbSesLeer==='function'&&_sbSesLeer()), _t=document.getElementById('rutErrTitulo'), _dd=document.getElementById('rutErrDetalle');
+      if(_t&&_dd){
+        if(_sinSes){ _t.textContent='Tu sesión es de la versión vieja'; _dd.innerHTML='Cerrá sesión y entrá de nuevo con tu PIN: así Ruta lee directo de la base.<br><button class="btn" style="margin-top:10px" onclick="if(typeof ajCerrarSesion===\'function\')ajCerrarSesion()">Cerrar sesión</button>'; }
+        else { _t.textContent='No pude leer las entregas de la base'; _dd.textContent='Probé dos veces. Tocá ↻ en un rato; si sigue, avisale a Tadeo.'; }
+      }
+    }catch(eMsg){}
     btn.classList.remove('spinning');document.getElementById('loadingView').classList.add('hidden');
     if(entregas.length>0){rutRender();showToast('Sin conexion — cache');_rutAviso(null)}else{document.getElementById('errorView').classList.remove('hidden');_rutAviso('error')}
     /* false = no se pudo. Sin esto el ↻ del panel lo contaba como exito. */
