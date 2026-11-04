@@ -207,6 +207,9 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
     const prod = await prodPrueba();
     if (!prod || prod.id == null) return { ok: false, detalle: 'sin el producto PRUEBA o su id' };
     const F3 = new Date(Date.now() + 3 * 86400000), _d3 = F3.toLocaleDateString('es-AR', { weekday: 'long', timeZone: 'America/Argentina/Buenos_Aires' });
+    /* «al» (dd/MM HH:mm del alta, hora de Argentina): el pase lo pide (_pase_seco: «falta la fecha y hora del pedido»). */
+    const _ah = new Intl.DateTimeFormat('es-AR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'America/Argentina/Buenos_Aires' }).formatToParts(new Date()).reduce((o, x) => (o[x.type] = x.value, o), {});
+    const AL = _ah.day + '/' + _ah.month + ' ' + _ah.hour + ':' + _ah.minute;
     const r1 = await directa('altaPedido', { canal: 'Red', fecha: new Date().toLocaleString('es-AR'), vendedor: REP, nombre: CLI, telefono: TEL, barrioPrivado: 'PRUEBA', lote: '',
       dia: _d3.charAt(0).toUpperCase() + _d3.slice(1), horario: '', fechaEntrega: F3.toLocaleDateString('sv-SE', { timeZone: 'America/Argentina/Buenos_Aires' }),
       pago: 'Transferencia', envio: 0, items: [{ id: prod.id, qty: 1, precio: prod.precio }], total: prod.precio, mail: '', clientOrderId: PREFIJO + 'decidir' });
@@ -217,10 +220,13 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
       return x?{h:x.h,n:x.n,r:(x.r||x.row||0),es:x.es,al:x.al||''}:null; })()`, 10000);
     if (!p) return { ok: false, detalle: 'la base dio el ' + n + ' pero no apareció en Pedidos' };
     const t0 = Date.now();
-    const r2 = await directa('pasarAVendedor', { action: 'pasarAVendedor', hoja: p.h, id: String(p.n), row: p.r, al: p.al, vendedor: REP, trajo: 'Vendedor', clientOpId: PREFIJO + 'pase' });
+    const r2 = await directa('pasarAVendedor', { action: 'pasarAVendedor', hoja: p.h, id: String(p.n), row: p.r, al: p.al || AL, vendedor: REP, trajo: 'Vendedor', clientOpId: PREFIJO + 'pase' });
     /* El pase es de admin: hasta que la base deje al robot pasar lo PRUEBA (pedido a Supa), sale salteado y no frena el deploy. */
     if (r2 && r2.d && r2.d.forbidden) return { ok: true, salteado: true, detalle: 'el alta cayó en ' + p.h + ' #' + p.n + '; el pase es solo de admin (pedido a Supa: que el robot pase lo PRUEBA)' };
-    if (!bien(r2)) return mal(r2, 'pasar a ' + REP + ' (estaba en ' + p.h + ' · ' + (p.es || '?') + ')');
+    /* Hueco del corte (4/11/2026): el pase busca el pedido por la fila de la hoja y uno nacido en la base no tiene (fila
+       negativa) → «no encontrado». Pedido a Supa; mientras, salteado nombrando el hueco para no frenar los deploys. */
+    if (Number(p.r) < 0 && r2 && /no encontrado/.test(String(r2.fueApps || ''))) return { ok: true, salteado: true, detalle: 'HUECO DEL CORTE: el pase no encuentra un pedido nacido en la base (' + p.h + ' #' + p.n + ', fila ' + p.r + ')' };
+    if (!bien(r2)) return mal(r2, 'pasar a ' + REP + ' (estaba en ' + p.h + ' #' + p.n + ' fila ' + p.r + ' al ' + (p.al || AL) + ' · ' + (p.es || '?') + ')');
     const nRed = r2.d.red && r2.d.red.n;
     await ev(`_recargarPedidos(); 1`).catch(() => 0);
     const enRed = nRed ? await esperar(`(D.pedidos||[]).some(function(y){ return y.h==='Red'&&String(y.n)===${JSON.stringify(String(nRed))}; })`, 10000) : null;
