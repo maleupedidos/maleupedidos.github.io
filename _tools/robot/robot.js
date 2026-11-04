@@ -308,17 +308,23 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
        autopedido con SU token. La base toma el vendedor de la sesión, no del cuerpo. No se guarda: la sesión de la página
        sigue siendo la del robot. */
     /* El día de entrega es el de la semana de la fecha (en Argentina), con mayúscula: «Viernes». */
-    const FECHA_ENT = new Date(Date.now() + 2 * 86400000), _d = FECHA_ENT.toLocaleDateString('es-AR', { weekday: 'long', timeZone: 'America/Argentina/Buenos_Aires' }), DIA_ENT = _d.charAt(0).toUpperCase() + _d.slice(1);
     if (!CRED.repPin) return { ok: false, detalle: 'falta el PIN del representante PRUEBA Robot (ROBOT_PIN_REP / pinRep)' };
-    const body = { action: 'redAutopedido', clientOrderId: PREFIJO + 'red', canal: 'Red', vendedor: REP, nombre: CLI, telefono: TEL,
-      barrioPrivado: 'PRUEBA', lote: '', dia: DIA_ENT, fechaEntrega: FECHA_ENT.toLocaleDateString('sv-SE', { timeZone: 'America/Argentina/Buenos_Aires' }), horario: 'A coordinar', pago: 'Transferencia', envio: 0,
-      items: [{ id: prod.id, nombre: prod.nombre, qty: 1, precio: prod.precio }], total: prod.precio, trajo: 'Vendedor', telCliente: TEL };
-    const r = await ev(`(async function(){ var c=_sbCfgLogin(), H=function(t){ return {apikey:c.key,Authorization:'Bearer '+(t||c.key),'Content-Type':'application/json'}; };
+    /* Una entrega por cliente y por día: si una corrida anterior dejó un pedido del cliente PRUEBA ese día (sin limpieza),
+       se prueba con 4, 6 y 8 días en vez de fallar y frenar un deploy. */
+    const cargar = (dias) => {
+      const FECHA_ENT = new Date(Date.now() + dias * 86400000), _d = FECHA_ENT.toLocaleDateString('es-AR', { weekday: 'long', timeZone: 'America/Argentina/Buenos_Aires' }), DIA_ENT = _d.charAt(0).toUpperCase() + _d.slice(1);
+      const body = { action: 'redAutopedido', clientOrderId: PREFIJO + 'red-' + dias, canal: 'Red', vendedor: REP, nombre: CLI, telefono: TEL,
+        barrioPrivado: 'PRUEBA', lote: '', dia: DIA_ENT, fechaEntrega: FECHA_ENT.toLocaleDateString('sv-SE', { timeZone: 'America/Argentina/Buenos_Aires' }), horario: 'A coordinar', pago: 'Transferencia', envio: 0,
+        items: [{ id: prod.id, nombre: prod.nombre, qty: 1, precio: prod.precio }], total: prod.precio, trajo: 'Vendedor', telCliente: TEL };
+      return ev(`(async function(){ var c=_sbCfgLogin(), H=function(t){ return {apikey:c.key,Authorization:'Bearer '+(t||c.key),'Content-Type':'application/json'}; };
       var lp=await (await fetch(c.url+'/rest/v1/rpc/login_pin',{method:'POST',headers:H(),body:JSON.stringify({p_usuario:${JSON.stringify(CRED.repUsuario)},p_pin:${JSON.stringify(CRED.repPin)}})})).json();
       if(!lp||!lp.ok||!lp.email)return {paso:'login',r:lp?{ok:lp.ok,err:lp.err}:null};
       var t=await _sbAuth(c.url,c.key,'password',{email:lp.email,password:lp.clave});
       var x=await fetch(c.url+'/rest/v1/rpc/red_autopedido_directo',{method:'POST',headers:H(t.access_token),body:JSON.stringify({p:${JSON.stringify(body)}})});
       var j=null; try{ j=await x.json(); }catch(e){} return {paso:'autopedido',http:x.status,r:j,rol:lp.rol}; })()`, 30000);
+    };
+    let r = null;
+    for (const dias of [2, 4, 6, 8]) { r = await cargar(dias); if (!(r && r.r && r.r.ok === false && /ya tiene el pedido/.test(String(r.r.err || '')))) break; }
     if (r.paso === 'login') return { ok: false, detalle: 'el representante no pudo entrar por la base: ' + JSON.stringify(r.r).slice(0, 150) };
     const d = r.r || {};
     return d.ok ? { ok: true, detalle: 'entró como ' + CRED.repUsuario + ' (rol ' + r.rol + ') · autopedido ' + (d.ref || (d.sumarA && d.sumarA.n) || '') }
