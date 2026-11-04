@@ -396,14 +396,10 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
        borró nada (falla); residuos = una tabla con algo del robot que la limpieza no conoce (hallazgo para Supa). */
     /* ROBOT_SIN_LIMPIEZA=1: deja lo de la corrida para mirarlo (una orden trabada, por ejemplo); el reloj de las 05:00 limpia. */
     const li = process.env.ROBOT_SIN_LIMPIEZA ? { ok: true, borrado: {}, residuos: {}, salteada: true } : await rpc('robot_limpiar', { p_corrida: CORRIDA }).catch((e) => ({ ok: false, error: e.message }));
-    /* (4/11/2026) `order_command` pendiente de menos de 30 min lo PROTEGE robot_limpiar a propósito (423): son órdenes de
-       esta corrida que el aplicador todavía tiene que marcar, y las barre el reloj de la noche. Hasta que la base las
-       separe de los residuos de verdad (pedido a Supa), van como aviso y no como rojo: si no, el robot sale rojo SIEMPRE
-       y frena todo deploy. Igual `delivery_day_close` (el cierre del día del robot, que la limpieza todavía no conoce). */
-    const AVISO_SOLO = { order_command: 1, delivery_day_close: 1 };
-    const res0 = (li && li.residuos) || {}, res = {};
-    Object.keys(res0).forEach((k) => { if (AVISO_SOLO[k]) { if (Number(res0[k]) > 0) console.log('  aviso: ' + res0[k] + ' en ' + k + ' (protegido o sin limpiar todavía; no frena)'); } else res[k] = res0[k]; });
-    const conRes = Object.keys(res).filter((k) => Number(res[k]) > 0);
+    /* (4/11/2026, Supa 443) Lo que la limpieza deja A PROPÓSITO (órdenes pendientes de esta corrida, < 30 min) viene
+       aparte en `pendientes` y no cuenta: `residuos` es solo lo que no conoce, y eso sale rojo. */
+    if (li && li.pendientes) console.log('  pendientes (protegidas a propósito, las barre la noche): ' + JSON.stringify(li.pendientes).slice(0, 120));
+    const res = (li && li.residuos) || {}, conRes = Object.keys(res).filter((k) => Number(res[k]) > 0);
     pasos.push({ paso: 'limpieza', ok: !!(li && li.ok) && !conRes.length, ms: 0,
       detalle: li && li.ok ? 'borrado ' + JSON.stringify(li.borrado || {}).slice(0, 200) + (conRes.length ? ' · residuos en ' + conRes.join(', ') : '') : JSON.stringify(li).slice(0, 200) });
     if (!(li && li.ok)) hallazgos.push('limpieza: robot_limpiar no borró (' + JSON.stringify(li).slice(0, 120) + ')');
@@ -412,6 +408,19 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
     const fotos = (li && li.fotos) || {}; if (Object.keys(fotos).length) hallazgos.push('fotos de Apps Script con lo del robot: ' + JSON.stringify(fotos).slice(0, 200));
     console.log('  limpieza: ' + JSON.stringify(li).slice(0, 200));
   }
+  /* LAS ESCRITURAS QUE TODAVÍA LLEGAN A APPS SCRIPT (4/11/2026, Organizador; meta 0). Los pasos del robot ya van con 0
+     (cada uno sale rojo si intenta ir a Apps Script). Esto es lo de la GENTE: Apps Script cuenta por día y por acción lo
+     que le entra por el web app (`postsFront`, sin el aplicador). Hoy es informativo: sale gris con el número y las
+     acciones, y se pone rojo cuando llegue a 0 y alguien vuelva a escribir por ahí. */
+  await paso('escrituras que todavía llegan a Apps Script', async () => {
+    const pf = await (await fetch('https://script.google.com/macros/s/AKfycbxmrG5YVSshcYezk8lXFx_uxb7NFGcb9EfTXc7dsIN4rZyj73CET4mk_aKPFPDY2wNi/exec?action=postsFront', { signal: AbortSignal.timeout(20000) })).json().catch(() => null);
+    if (!pf || !pf.ok) return { ok: true, salteado: true, detalle: 'postsFront no contestó' };
+    const dias = pf.dias || {}, ks = Object.keys(dias).sort(), ayer = ks.length > 1 ? dias[ks[ks.length - 2]] : null;
+    const top = (o) => Object.entries(o || {}).sort((a, b) => b[1] - a[1]).slice(0, 8).map((e) => e[0] + ' ' + e[1]).join(', ');
+    const tot = (o) => Object.values(o || {}).reduce((s, n) => s + (Number(n) || 0), 0);
+    METRICAS.posts_apps_hoy = pf.totalHoy;
+    return { ok: true, salteado: pf.totalHoy > 0, detalle: 'hoy ' + pf.totalHoy + (pf.totalHoy ? ' (' + top(pf.hoy) + ')' : '') + (ayer ? ' · ayer ' + tot(ayer) + ' (' + top(ayer) + ')' : '') };
+  });
   await paso('el efectivo real no se movió', async () => {
     const a = EFECTIVO_ANTES, d = await rpc('robot_saldo_efectivo', {}).catch(() => null);
     if (!a || !a.ok || !d || !d.ok) return { ok: false, detalle: 'robot_saldo_efectivo no contestó: ' + JSON.stringify(d || a).slice(0, 120) };
