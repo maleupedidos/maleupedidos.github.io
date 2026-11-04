@@ -4378,7 +4378,7 @@ function _reprogAplicar(dayKey,iso,ev){
         /* Con `diferida` (4d-2, 14/10/2026) la fecha se escribe despues: se empuja
            al aplicador antes del refresh, si no traeria la fecha vieja. */
         if(isOnline){
-          if(res.diferida)fetch(RUT_APPS_SCRIPT_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({action:'pedidosFuenteAplicar'}),redirect:'follow'})
+          if(res.diferida)_rutDespertarAplicador()
             .catch(function(){}).then(function(){refresh(true,false);});
           else refresh(true,false);
         }
@@ -4952,7 +4952,7 @@ function rutCarnePendDar(row,vend){
       if(res&&res.ok){
         rutCarnePend=(rutCarnePend||[]).filter(function(x){return Number(x.r)!==Number(row);});
         rutRender(); showToast(res.ya?'Esa carne ya figuraba entregada':'Listo: la carne salió del freezer');
-        (res.diferida?fetch(RUT_APPS_SCRIPT_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({action:'pedidosFuenteAplicar'}),redirect:'follow'}).catch(function(){}):Promise.resolve()).then(function(){ if(isOnline)refresh(true,false); });   /* 4d (18/10/2026) */
+        (res.diferida?_rutDespertarAplicador().catch(function(){}):Promise.resolve()).then(function(){ if(isOnline)refresh(true,false); });   /* 4d (18/10/2026) */
       } else showToast((res&&res.err)||'No se pudo. Probá de nuevo.');
     })
     .catch(function(){ if(_ldT){clearTimeout(_ldT);_ldT=null;} rutHideLoader(true); showToast('Sin conexión: probá de nuevo cuando vuelva'); });
@@ -5779,9 +5779,7 @@ window.rutLlegando=function(key){
   var k=key;
   if(_rutLlegDe(k))return;
   _rutLleg[k]={d:_rutLlegHoy(),enviando:true};rutRenderRuta();
-  fetch(RUT_APPS_SCRIPT_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},
-    body:JSON.stringify({action:'segLlegando',hoja:ped.h,id:String(ped.id),row:ped.r})})
-    .then(function(r){return r.json();})
+  _rutPostBase({action:'segLlegando',hoja:ped.h,id:String(ped.id),row:ped.r})
     .then(function(d){
       if(!d||d.ok===false)throw new Error((d&&(d.err||d.error))||'no se pudo');
       var hora=d.hora||new Date().toLocaleTimeString('es-AR',{hour:'2-digit',minute:'2-digit',timeZone:'America/Argentina/Buenos_Aires'});
@@ -6927,7 +6925,7 @@ window.rutCerrarRendidos=function(vend){
       /* Con `diferida` (4d-2, 14/10/2026) los pedidos se cierran despues: el
          aplicador va antes del refresh, con el loader todavia tapando. */
       var _ap=d.diferida
-        ?fetch(RUT_APPS_SCRIPT_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({action:'pedidosFuenteAplicar'}),redirect:'follow'}).catch(function(){})
+        ?_rutDespertarAplicador().catch(function(){})
         :Promise.resolve();
       /* El refresh va ANTES de soltar el loader: la lista de abajo tiene los
          pedidos viejos hasta que vuelve. */
@@ -7163,7 +7161,7 @@ window.rutCliVendGuardar=function(k,que,cuenta){
         _repintar();
         showToast(que==='ef'?'✓ Marcado: lo tiene '+vN.split(' ')[0]:'✓ Cobrado — entró a la caja');
         /* 4d (18/10/2026): si la base la acepto, que el aplicador la escriba antes de recargar. */
-        (d.diferida?fetch(RUT_APPS_SCRIPT_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({action:'pedidosFuenteAplicar'}),redirect:'follow'}).catch(function(){}):Promise.resolve())
+        (d.diferida?_rutDespertarAplicador().catch(function(){}):Promise.resolve())
           .then(function(){ rutCliVendCargar();fetchCobrosPendientes(true); });
         return;
       }
@@ -10524,7 +10522,7 @@ function cobrarVendedorRed(vendedor,ef,tr,esTotal,cuenta,quien){
            empuja al aplicador y RECIEN ahi se vuelve a pedir Cobros, si no la card
            del vendedor volveria con la deuda de antes. */
         var _trasCobro=function(){if(rutCurrentTab==='cobros')fetchCobrosPendientes(true);};
-        if(res.diferida)fetch(RUT_APPS_SCRIPT_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({action:'pedidosFuenteAplicar'}),redirect:'follow'}).catch(function(){}).then(_trasCobro);
+        if(res.diferida)_rutDespertarAplicador().catch(function(){}).then(_trasCobro);
         else _trasCobro();
       } else { _revert(); alert('❌ Error al cobrar a '+vendedorLimpio+'\n\n'+((res&&(res.err||res.error))||'sin respuesta del servidor')+'\n\nNada se modificó. Probá de nuevo.'); }
     })
@@ -10633,9 +10631,7 @@ function _rutSacarCobrados(regs,cb){
     .map(function(r){return {hoja:r.item.hoja,id:String(r.item.id),row:Number(r.item.row)||0};});
   if(!ps.length||!isOnline){fin(null);return;}
   setTimeout(function(){fin(null);},20000);
-  try{fetch(RUT_APPS_SCRIPT_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},
-    body:JSON.stringify({action:'cobroYa',pedidos:ps}),redirect:'follow'})
-    .then(function(x){return x.json();})
+  try{_rutPostBase({action:'cobroYa',pedidos:ps})
     .then(function(d){
       if(!d||!d.ok||!Array.isArray(d.cobrados)){fin(null);return;}
       var s={};d.cobrados.forEach(function(k){s[k]=1;});fin(s);})
@@ -10643,8 +10639,23 @@ function _rutSacarCobrados(regs,cb){
 }
 /* La constancia en Log Errores: si el celular se pierde o se borra, queda. */
 function _rutLogRechazo(it,motivo,por){
-  try{fetch(RUT_APPS_SCRIPT_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},
-    body:JSON.stringify({action:'syncRechazado',motivo:String(motivo||''),por:por||'rechazo',item:it,usuario:_rutaUser()}),redirect:'follow'}).catch(function(){});}catch(_){}
+  try{_rutPostBase({action:'syncRechazado',motivo:String(motivo||''),por:por||'rechazo',item:it,usuario:_rutaUser()}).catch(function(){});}catch(_){}
+}
+/* UNA ACCION SUELTA DE RUTA, POR LA BASE (4/11/2026, Supa 431/432). Con su palanca prendida (`pal.directas`) va a la base
+   por `_ordenDirecta` y, si la base falla, el error sube: NO cae a Apps Script (Tadeo: «el ERP no puede leer ni escribir
+   nada por Apps Script»). Con la palanca apagada, Apps Script como siempre. Devuelve el JSON de la respuesta. */
+/* (4/11/2026, Supa) Despertar al aplicador despues de una directa ya no hace falta: su reloj la toma en ~1 min y
+   ningun dato depende de eso. Era una llamada a Apps Script por cada cobro y entrega. */
+function _rutDespertarAplicador(){return Promise.resolve();}
+function _rutPostBase(body){
+  var apps=function(){return fetch(RUT_APPS_SCRIPT_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(body),redirect:'follow'}).then(function(r){return r.json();});};
+  if(typeof _ordenDirecta!=='function')return apps();
+  var on=(typeof _ordenDirectaOn==='function')&&_ordenDirectaOn(body.action);
+  return _ordenDirecta(body).then(function(d){
+    if(d)return d;
+    if(on&&body._noDirecto&&!/^palanca/.test(body._noDirecto))throw new Error('la base no la tomó ('+body._noDirecto+')');
+    return apps();
+  });
 }
 function _rutPintarBanner(){
   var b=document.getElementById('syncBanner');if(!b)return;
@@ -10762,7 +10773,7 @@ function processSyncQueue(){
           /* Stock I4 (15/10/2026): la PRIMERA respuesta de la descarga dice lo que
              entra; el reenvio, con la orden ya aplicada, ve las filas selladas. */
           if(!item.__res)item.__res=res;
-          fetch(RUT_APPS_SCRIPT_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({action:'pedidosFuenteAplicar'}),redirect:'follow'})
+          _rutDespertarAplicador()
             .catch(function(){}).then(function(){setTimeout(processSyncQueue,300);});
           return;
         }
@@ -13032,7 +13043,7 @@ function _npColaListo(it,res,t0){
   showToast('✓ Pedido de '+it.nom+' registrado'+(ref?' ('+ref+')':'')+((_pzR&&_pzR.faltan)?' — ⚠️ '+_pzR.faltan+' pieza(s) ya no estaban':''),(_pzR&&_pzR.faltan)?9000:3500);
   _npColaPintar();
   if(res.diferida)
-    fetch(RUT_APPS_SCRIPT_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({action:'pedidosFuenteAplicar'}),redirect:'follow'})
+    _rutDespertarAplicador()
       .catch(function(){}).then(function(){ _npInvInvalidar(); npFetchStock(true); });
   else npFetchStock(true);
   setTimeout(_npColaProcesar,300);
