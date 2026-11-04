@@ -199,6 +199,35 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
     return { ok: !dup && ver < TOPE_VER, detalle: 'pedido ' + n + ' · se vio en ' + ver + ' ms (tope ' + TOPE_VER + ')' + (dup ? ' · DUPLICÓ con el mismo id' : ' · sin duplicar') };
   }, { escribe: true, topeMs: 15000 });
 
+  /* La tienda en el barrio de un representante (4/11/2026, con Supa). Hoy (PEDIDOS_POR_DECIDIR sin fila = sí) cae en
+     Pilar «Por decidir» y se pasa a un representante con «Pasar a un vendedor» (pedido_pase_directo): ese es el camino vivo,
+     no la bandeja «Por confirmar». El cuerpo es el de la tienda (tienda/app.js ~7590). Entrega a 3 días: la del portal va a
+     2 y la base deja una entrega por cliente y por día. */
+  await paso('tienda → Por decidir → pasar al representante', async () => {
+    const prod = await prodPrueba();
+    if (!prod || prod.id == null) return { ok: false, detalle: 'sin el producto PRUEBA o su id' };
+    const F3 = new Date(Date.now() + 3 * 86400000), _d3 = F3.toLocaleDateString('es-AR', { weekday: 'long', timeZone: 'America/Argentina/Buenos_Aires' });
+    const r1 = await directa('altaPedido', { canal: 'Red', fecha: new Date().toLocaleString('es-AR'), vendedor: REP, nombre: CLI, telefono: TEL, barrioPrivado: 'PRUEBA', lote: '',
+      dia: _d3.charAt(0).toUpperCase() + _d3.slice(1), horario: '', fechaEntrega: F3.toLocaleDateString('sv-SE', { timeZone: 'America/Argentina/Buenos_Aires' }),
+      pago: 'Transferencia', envio: 0, items: [{ id: prod.id, qty: 1, precio: prod.precio }], total: prod.precio, mail: '', clientOrderId: PREFIJO + 'decidir' });
+    if (!bien(r1)) return mal(r1, 'alta de la tienda');
+    const n = r1.d.n || r1.d.ref;
+    await ev(`_recargarPedidos(); 1`).catch(() => 0);
+    const p = await esperar(`(function(){ var x=(D.pedidos||[]).find(function(y){ return String(y.n)===${JSON.stringify(String(n))}&&String(y.c||'').indexOf('PRUEBA Robot')>=0; });
+      return x?{h:x.h,n:x.n,r:(x.r||x.row||0),es:x.es,al:x.al||''}:null; })()`, 10000);
+    if (!p) return { ok: false, detalle: 'la base dio el ' + n + ' pero no apareció en Pedidos' };
+    const t0 = Date.now();
+    const r2 = await directa('pasarAVendedor', { action: 'pasarAVendedor', hoja: p.h, id: String(p.n), row: p.r, al: p.al, vendedor: REP, trajo: 'Vendedor', clientOpId: PREFIJO + 'pase' });
+    /* El pase es de admin: hasta que la base deje al robot pasar lo PRUEBA (pedido a Supa), sale salteado y no frena el deploy. */
+    if (r2 && r2.d && r2.d.forbidden) return { ok: true, salteado: true, detalle: 'el alta cayó en ' + p.h + ' #' + p.n + '; el pase es solo de admin (pedido a Supa: que el robot pase lo PRUEBA)' };
+    if (!bien(r2)) return mal(r2, 'pasar a ' + REP + ' (estaba en ' + p.h + ' · ' + (p.es || '?') + ')');
+    const nRed = r2.d.red && r2.d.red.n;
+    await ev(`_recargarPedidos(); 1`).catch(() => 0);
+    const enRed = nRed ? await esperar(`(D.pedidos||[]).some(function(y){ return y.h==='Red'&&String(y.n)===${JSON.stringify(String(nRed))}; })`, 10000) : null;
+    METRICAS.pase_se_ve_ms = Date.now() - t0;
+    return { ok: !!enRed, detalle: p.h + ' #' + p.n + ' (' + (p.es || '?') + ') → Red #' + (nRed || '?') + (enRed ? ' · se vio en ' + METRICAS.pase_se_ve_ms + ' ms' : ' · no apareció en Red') };
+  }, { escribe: true, topeMs: 25000 });
+
   await paso('armar, entregar, cobrar, deshacer cobro', async () => {
     if (!PED) return { ok: false, detalle: 'sin el pedido del alta' };
     const base = { hoja: PED.h, id: String(PED.n), row: PED.r }, hechos = [];

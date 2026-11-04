@@ -113,7 +113,7 @@ if [ -n "${SIN_ROBOT:-}" ] || [ -n "${SIN_HUMO:-}" ]; then
   echo "${YEL}    SALTEADO a mano (SIN_ROBOT/SIN_HUMO). Corré: node _tools/robot/robot.js${RST}"
 elif [ -n "$HTMLS" ]; then
   set +e
-  ROBOT_LOCAL=1 ROBOT_SIN_REPORTE=1 ROBOT_SOLO_LECTURA=1 node _tools/robot/robot.js 2>&1 | sed 's/^/    /'
+  ROBOT_LOCAL=1 ROBOT_SIN_REPORTE=1 node _tools/robot/robot.js 2>&1 | sed 's/^/    /'
   RC=${PIPESTATUS[0]}
   set -e
   if [ "$RC" = "2" ]; then echo "${YEL}    sin credenciales del robot en esta compu: no corrió${RST}"
