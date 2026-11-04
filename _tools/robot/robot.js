@@ -252,9 +252,11 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
     /* Como en la vida real: el representante entra con SU usuario y PIN (por la base: login_pin + auth) y carga el
        autopedido con SU token. La base toma el vendedor de la sesión, no del cuerpo. No se guarda: la sesión de la página
        sigue siendo la del robot. */
+    /* El día de entrega es el de la semana de la fecha (en Argentina), con mayúscula: «Viernes». */
+    const FECHA_ENT = new Date(Date.now() + 2 * 86400000), _d = FECHA_ENT.toLocaleDateString('es-AR', { weekday: 'long', timeZone: 'America/Argentina/Buenos_Aires' }), DIA_ENT = _d.charAt(0).toUpperCase() + _d.slice(1);
     if (!CRED.repPin) return { ok: false, detalle: 'falta el PIN del representante PRUEBA Robot (ROBOT_PIN_REP / pinRep)' };
     const body = { action: 'redAutopedido', clientOrderId: PREFIJO + 'red', canal: 'Red', vendedor: REP, nombre: CLI, telefono: TEL,
-      barrioPrivado: 'PRUEBA', lote: '', dia: '', fechaEntrega: new Date(Date.now() + 2 * 86400000).toISOString(), horario: 'A coordinar', pago: 'Transferencia', envio: 0,
+      barrioPrivado: 'PRUEBA', lote: '', dia: DIA_ENT, fechaEntrega: FECHA_ENT.toLocaleDateString('sv-SE', { timeZone: 'America/Argentina/Buenos_Aires' }), horario: 'A coordinar', pago: 'Transferencia', envio: 0,
       items: [{ id: prod.id, nombre: prod.nombre, qty: 1, precio: prod.precio }], total: prod.precio, trajo: 'Vendedor', telCliente: TEL };
     const r = await ev(`(async function(){ var c=_sbCfgLogin(), H=function(t){ return {apikey:c.key,Authorization:'Bearer '+(t||c.key),'Content-Type':'application/json'}; };
       var lp=await (await fetch(c.url+'/rest/v1/rpc/login_pin',{method:'POST',headers:H(),body:JSON.stringify({p_usuario:${JSON.stringify(CRED.repUsuario)},p_pin:${JSON.stringify(CRED.repPin)}})})).json();
@@ -285,7 +287,8 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
     if (fr) console.log('  avisos frenados: ' + JSON.stringify(fr).slice(0, 160));
     /* robot_limpiar (401): {ok, borrado:{tabla:n}, residuos:{tabla:n}}. ok:false = un paso pasaba las 300 filas y no
        borró nada (falla); residuos = una tabla con algo del robot que la limpieza no conoce (hallazgo para Supa). */
-    const li = await rpc('robot_limpiar', { p_corrida: CORRIDA }).catch((e) => ({ ok: false, error: e.message }));
+    /* ROBOT_SIN_LIMPIEZA=1: deja lo de la corrida para mirarlo (una orden trabada, por ejemplo); el reloj de las 05:00 limpia. */
+    const li = process.env.ROBOT_SIN_LIMPIEZA ? { ok: true, borrado: {}, residuos: {}, salteada: true } : await rpc('robot_limpiar', { p_corrida: CORRIDA }).catch((e) => ({ ok: false, error: e.message }));
     const res = (li && li.residuos) || {}, conRes = Object.keys(res).filter((k) => Number(res[k]) > 0);
     pasos.push({ paso: 'limpieza', ok: !!(li && li.ok) && !conRes.length, ms: 0,
       detalle: li && li.ok ? 'borrado ' + JSON.stringify(li.borrado || {}).slice(0, 200) + (conRes.length ? ' · residuos en ' + conRes.join(', ') : '') : JSON.stringify(li).slice(0, 200) });
