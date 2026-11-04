@@ -75,6 +75,9 @@ async function paso(nombre, fn, opt) {
   return r;
 }
 let ENTIDADES = false;
+/* Números que se siguen corrida a corrida (van en robot_resultado.metricas): la espera de «se está acomodando» entre dos
+   movimientos de stock del mismo producto (4/11/2026: 30-90 s por el aplicador; tiene que bajar con el Kardex paso c). */
+const METRICAS = {};
 const CRED = credenciales();
 
 /* Una RPC de la base con la sesión de la página (la del robot). */
@@ -199,9 +202,10 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
     const r1 = await contar(antes + 1, 'contar');
     if (!r1 || !r1.ok) return { ok: false, detalle: 'contar: ' + JSON.stringify(r1).slice(0, 200) };
     /* «Se está acomodando»: el movimiento anterior todavía no terminó de entrar. Se reintenta hasta 2 min. */
-    let r2 = null; for (let k = 0; k < 12; k++) { r2 = await contar(antes, 'descontar', { desmarcar: true }); if (!(r2 && r2.acomodando)) break; await pausa(10000); }
+    let r2 = null; const tE = Date.now(); for (let k = 0; k < 12; k++) { r2 = await contar(antes, 'descontar', { desmarcar: true }); if (!(r2 && r2.acomodando)) break; await pausa(10000); }
+    METRICAS.espera_contar_ms = Date.now() - tE;
     if (!r2 || !r2.ok) return { ok: false, detalle: 'deshacer: ' + JSON.stringify(r2).slice(0, 200) };
-    return { ok: true, detalle: antes + ' → ' + (antes + 1) + ' → ' + antes };
+    return { ok: true, detalle: antes + ' → ' + (antes + 1) + ' → ' + antes + ' · el deshacer esperó ' + Math.round(METRICAS.espera_contar_ms / 1000) + ' s («se está acomodando»)' };
   }, { escribe: true, topeMs: 130000 });
 
   let COMPRA = null;
@@ -229,9 +233,10 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
       if (!bien(r)) return mal(r, 'pedir'); hechos.push('pedida');
     } else hechos.push('ya en Pedido');
     /* Mismo «se está acomodando» que el conteo (el movimiento de stock anterior espera al aplicador): hasta 2 min. */
-    for (let k = 0; k < 12; k++) { r = await directa('recibirMercaderia', { action: 'recibirMercaderia', deposito: DEP, groups: [{ prov: PROV, prod: SKU, abbr: SKU, qtyRecibida: q, pedido: q, rows: [lin.row || 0], ocs: [oc] }], clientOpId: PREFIJO + 'recibir' });
+    const tR = Date.now(); for (let k = 0; k < 12; k++) { r = await directa('recibirMercaderia', { action: 'recibirMercaderia', deposito: DEP, groups: [{ prov: PROV, prod: SKU, abbr: SKU, qtyRecibida: q, pedido: q, rows: [lin.row || 0], ocs: [oc] }], clientOpId: PREFIJO + 'recibir' });
       if (!(r && r.d && r.d.ok === false && /acomodando/.test(String(r.d.err || r.d.error || '')))) break; await pausa(10000); }
-    if (!bien(r)) return mal(r, 'recibir'); hechos.push('recibida');
+    METRICAS.espera_recibir_ms = Date.now() - tR;
+    if (!bien(r)) return mal(r, 'recibir'); hechos.push('recibida (esperó ' + Math.round(METRICAS.espera_recibir_ms / 1000) + ' s)');
     return { ok: true, detalle: oc + ': ' + hechos.join(' → ') };
   }, { escribe: true, topeMs: 130000 });
 
@@ -296,9 +301,10 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
 
 async function terminar() {
   const mal = pasos.filter((p) => !p.ok).length;
+  if (Object.keys(METRICAS).length) console.log('métricas: ' + JSON.stringify(METRICAS));
   console.log('\n' + (pasos.length - mal) + ' de ' + pasos.length + ' pasos bien' + (hallazgos.length ? ' · hallazgos:\n  - ' + hallazgos.join('\n  - ') : ''));
   if (!process.env.ROBOT_SIN_REPORTE && cli) {
-    const r = await rpc('robot_resultado', { p: { corrida: CORRIDA, inicio: ahora.toISOString(), fin: new Date().toISOString(), pasos: pasos, hallazgos: hallazgos } }).catch((e) => ({ error: e.message }));
+    const r = await rpc('robot_resultado', { p: { corrida: CORRIDA, inicio: ahora.toISOString(), fin: new Date().toISOString(), pasos: pasos, hallazgos: hallazgos, metricas: METRICAS } }).catch((e) => ({ error: e.message }));
     console.log('resultado en la base: ' + JSON.stringify(r).slice(0, 160));
   }
   try { cli && cli.matar(); } catch (e) {}
