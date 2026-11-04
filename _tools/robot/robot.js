@@ -128,6 +128,10 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
   if (!pasos[0].ok) return terminar();
 
   /* ¿Están las entidades PRUEBA? Sin ellas, los pasos que escriben no corren. */
+  /* EL EFECTIVO REAL NO SE MUEVE (4/11/2026, Organizador; Supa 441). Se mide la caja como la ve Tadeo (sin lo PRUEBA) al
+     entrar y al terminar: tiene que dar igual. Si cambió por un movimiento real en el medio (`ult_real`, cuando la base
+     lo mande, posterior al arranque), no se puede comparar y se dice. */
+  const EFECTIVO_ANTES = await rpc('robot_saldo_efectivo', {}).catch(() => null), T_EFECTIVO = new Date().toISOString();
   const ent = await rpc('robot_entidades_pantalla', {}).catch(() => null);
   ENTIDADES = !!(ent && ent.ok && Array.isArray(ent.faltan) && ent.faltan.length === 0);
   console.log('  entidades PRUEBA: ' + (ENTIDADES ? 'sí' : 'todavía no (' + JSON.stringify(ent).slice(0, 120) + ')'));
@@ -394,6 +398,14 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
     const fotos = (li && li.fotos) || {}; if (Object.keys(fotos).length) hallazgos.push('fotos de Apps Script con lo del robot: ' + JSON.stringify(fotos).slice(0, 200));
     console.log('  limpieza: ' + JSON.stringify(li).slice(0, 200));
   }
+  await paso('el efectivo real no se movió', async () => {
+    const a = EFECTIVO_ANTES, d = await rpc('robot_saldo_efectivo', {}).catch(() => null);
+    if (!a || !a.ok || !d || !d.ok) return { ok: false, detalle: 'robot_saldo_efectivo no contestó: ' + JSON.stringify(d || a).slice(0, 120) };
+    const fmt = (x) => '$' + Math.round(Number(x) || 0).toLocaleString('es-AR');
+    if (Number(a.efectivo) === Number(d.efectivo)) return { ok: true, detalle: fmt(a.efectivo) + ' antes y después' };
+    if (d.ult_real && String(d.ult_real) > T_EFECTIVO) return { ok: true, salteado: true, detalle: 'hubo un movimiento real de efectivo durante la corrida (' + d.ult_real + '): ' + fmt(a.efectivo) + ' → ' + fmt(d.efectivo) };
+    return { ok: false, detalle: 'cambió: ' + fmt(a.efectivo) + ' → ' + fmt(d.efectivo) + ' (cf ' + fmt(a.cf) + ' → ' + fmt(d.cf) + ')' };
+  });
 
   return terminar();
 })().catch((e) => { hallazgos.push('el robot reventó: ' + String((e && e.message) || e).slice(0, 200)); return terminar(); });
