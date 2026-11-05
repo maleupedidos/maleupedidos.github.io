@@ -588,7 +588,7 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
     if (L0 != null && L1 != null && L1 < L0 && !(L2 > L1)) falta.push('B: la devolución (el libro ' + L0 + ' → ' + L1 + ' → ' + L2 + ')');
     det.push('B Home #' + b.n + ' ' + qty + '→1 · OC ' + qOC(pb0) + '→' + qOC(pb) + ' · cambios ' + (pb && pb.cambios) + ' · libro ' + L0 + '→' + L1 + '→' + L2);
     return { ok: !falta.length, detalle: det.join(' · ') + (falta.length ? ' · FALTA: ' + falta.join(' · ') : '') + ' · pesaje de carne: después del corte' };
-  }, { escribe: true, topeMs: 90000, esperado: '517 (raw_cells de los pedidos nacidos en la base)' });
+  }, { escribe: true, topeMs: 90000 });
 
   /* Lo que se frenó (WhatsApp, Telegram, mails) y la limpieza de todo lo de esta corrida. */
   if (ENTIDADES) {
