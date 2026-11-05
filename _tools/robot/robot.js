@@ -551,27 +551,44 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
     return { ok: !falta.length, detalle: 'Home #' + a.n + ' (' + qty + ' ' + SKU + ') → Red #' + nRed + (falta.length ? ' · FALTA: ' + falta.join(' · ') : ' · OC ' + p.ocs.map((o) => o.n).join(',') + ' en Red · el aviso al representante quedó descartado, no salió') };
   }, { escribe: true, topeMs: 40000 });
 
-  /* (5/11, Organizador; Supa 512) EDITAR PEDIDO: cambiar la cantidad recalcula total e importes en sales_order, ajusta las OC
-     y deja la fila de Cambios Pedidos en la base. El pesaje de carne no se puede: no hay carne PRUEBA esta noche (Supa la
-     deja para después del corte). Pide a robot_verificar: pedido.total, pedido.items [{a, q, importe}], pedido.cambios. */
-  await paso('editar pedido (cantidad)', async () => {
+  /* (5/11, Organizador; Supa 512/517) ALTA NUEVA → EDITAR → OC, CAMBIOS Y DEVOLUCIÓN. Dos pedidos, porque la base frena la
+     segunda edición del mismo pedido antes de los 10 min (choque):
+     A) alta con más que el stock (nace su OC) → subir 2 → 1 fila en Cambios, total recalculado, la OC con más (u otra OC);
+     B) alta con más que el stock → bajar a 1 (menos que el stock) → la OC Pendiente baja o se borra, 1 fila en Cambios, y
+        si el alta había descontado del libro, el libro vuelve a subir (la devolución).
+     El pesaje de carne queda para después del corte (sin carne PRUEBA). */
+  await paso('alta nueva → editar → OC, Cambios y devolución', async () => {
     if (E.producto_id == null) return { ok: false, detalle: 'falta el id de tienda del producto ' + SKU };
-    const a = await altaHome('edita', 1);
-    if (!a.ok || !a.n) return { ok: false, detalle: 'alta Home: ' + JSON.stringify(a).slice(0, 200) };
-    const pp = await prodPrueba(), precio = (pp && pp.precio) || 1000;
-    const r = await directa('editarPedido', { action: 'editarPedido', hoja: 'Home', id: String(a.n), row: -Number(a.n), lineas: [{ a: SKU, q: 2, precio: precio }], descuentoReceta: null, descuentoRecetaEditor: true, formaPago: 'Transferencia', clientOpId: PREFIJO + 'edita-editar' });
-    if (!bien(r)) return mal(r, 'editar Home #' + a.n);
-    let p = null; for (let k = 0; k < 5; k++) { p = await verPedido('Home|' + a.n); if (p && Number(p.total) === 2 * precio) break; await pausa(2000); }
-    const falta = [];
-    if (!p || !p.existe) falta.push('el pedido en la base');
-    else {
-      if (Number(p.total) !== 2 * precio) falta.push('total ' + p.total + ' (tenía que dar ' + 2 * precio + ')');
-      if (!Array.isArray(p.items)) falta.push('robot_verificar no trae pedido.items');
-      else { const it = p.items.find((x) => String(x.a || x.sku) === SKU); if (!it || Number(it.q) !== 2 || Number(it.importe) !== 2 * precio) falta.push('la línea de ' + SKU + ' (' + JSON.stringify(it || null).slice(0, 80) + ')'); }
-      if (p.cambios == null) falta.push('robot_verificar no trae pedido.cambios'); else if (!(Number(p.cambios) > 0)) falta.push('la fila de Cambios Pedidos');
-    }
-    return { ok: !falta.length, detalle: 'Home #' + a.n + ': 1 → 2 ' + SKU + ' a $' + precio + (falta.length ? ' · FALTA: ' + falta.join(' · ') : ' · total, importe y Cambios Pedidos en la base') + ' · pesaje de carne: sin carne PRUEBA (después del corte)' };
-  }, { escribe: true, topeMs: 40000, esperado: '517 (el pedido nacido en la base no tiene raw_cells: editar no escribe Cambios, OC ni devolución)' });
+    const pp = await prodPrueba(), precio = (pp && pp.precio) || 1000, falta = [], det = [];
+    const libro = async () => { const v = await rpc('robot_verificar', { p: {} }).catch(() => null); return v && v.libro && v.libro[DEP] ? Number(v.libro[DEP].q) : null; };
+    const qOC = (p) => ((p && p.ocs) || []).filter((o) => o.est !== 'Cancelado').reduce((t, o) => t + (Number(o.q) || 0), 0);
+    const nOC = (p) => ((p && p.ocs) || []).filter((o) => o.est !== 'Cancelado').length;
+    const editar = (n, q, suf) => directa('editarPedido', { action: 'editarPedido', hoja: 'Home', id: String(n), row: -Number(n), lineas: [{ a: SKU, q: q, precio: precio }], descuentoReceta: null, descuentoRecetaEditor: true, formaPago: 'Transferencia', clientOpId: PREFIJO + suf });
+    const esperarPed = async (clave, cond) => { let p = null; for (let k = 0; k < 10; k++) { p = await verPedido(clave); if (p && cond(p)) break; await pausa(2000); } return p; };
+    const L0 = await libro(), qty = Math.ceil(L0 || 0) + 5;
+    // A) subir
+    const a = await altaHome('ed517a', qty); if (!a.ok || !a.n) return { ok: false, detalle: 'alta A: ' + JSON.stringify(a).slice(0, 160) };
+    const pa0 = await esperarPed('Home|' + a.n, (p) => nOC(p) > 0);
+    if (!nOC(pa0)) falta.push('A: el alta de ' + qty + ' (hay ' + L0 + ') no tiene OC');
+    const ea = await editar(a.n, qty + 2, 'ed517a-subir'); if (!bien(ea)) return mal(ea, 'editar A (subir)');
+    const pa = await esperarPed('Home|' + a.n, (p) => Number(p.cambios) >= 1);
+    if (!(pa && Number(pa.cambios) >= 1)) falta.push('A: la fila de Cambios (' + (pa && pa.cambios) + ')');
+    if (!(pa && Number(pa.total) === (qty + 2) * precio)) falta.push('A: total ' + (pa && pa.total) + ' (tenía que dar ' + (qty + 2) * precio + ')');
+    if (pa0 && pa && !(qOC(pa) > qOC(pa0) || nOC(pa) > nOC(pa0))) falta.push('A: la OC no creció (' + qOC(pa0) + ' → ' + qOC(pa) + ')');
+    det.push('A Home #' + a.n + ' ' + qty + '→' + (qty + 2) + ' · OC ' + qOC(pa0) + '→' + qOC(pa) + ' · cambios ' + (pa && pa.cambios));
+    // B) bajar
+    const b = await altaHome('ed517b', qty); if (!b.ok || !b.n) return { ok: false, detalle: 'alta B: ' + JSON.stringify(b).slice(0, 160) };
+    const pb0 = await esperarPed('Home|' + b.n, (p) => nOC(p) > 0), L1 = await libro();
+    const eb = await editar(b.n, 1, 'ed517b-bajar'); if (!bien(eb)) return mal(eb, 'editar B (bajar)');
+    const pb = await esperarPed('Home|' + b.n, (p) => Number(p.cambios) >= 1);
+    const L2 = await libro();
+    if (!(pb && Number(pb.cambios) >= 1)) falta.push('B: la fila de Cambios (' + (pb && pb.cambios) + ')');
+    if (!(pb && Number(pb.total) === precio)) falta.push('B: total ' + (pb && pb.total) + ' (tenía que dar ' + precio + ')');
+    if (pb0 && pb && !(qOC(pb) < qOC(pb0))) falta.push('B: la OC Pendiente no bajó (' + qOC(pb0) + ' → ' + qOC(pb) + ')');
+    if (L0 != null && L1 != null && L1 < L0 && !(L2 > L1)) falta.push('B: la devolución (el libro ' + L0 + ' → ' + L1 + ' → ' + L2 + ')');
+    det.push('B Home #' + b.n + ' ' + qty + '→1 · OC ' + qOC(pb0) + '→' + qOC(pb) + ' · cambios ' + (pb && pb.cambios) + ' · libro ' + L0 + '→' + L1 + '→' + L2);
+    return { ok: !falta.length, detalle: det.join(' · ') + (falta.length ? ' · FALTA: ' + falta.join(' · ') : '') + ' · pesaje de carne: después del corte' };
+  }, { escribe: true, topeMs: 90000, esperado: '517 (raw_cells de los pedidos nacidos en la base)' });
 
   /* Lo que se frenó (WhatsApp, Telegram, mails) y la limpieza de todo lo de esta corrida. */
   if (ENTIDADES) {
