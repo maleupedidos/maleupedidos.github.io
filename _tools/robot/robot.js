@@ -366,7 +366,8 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
     const bq = await rpc('busqueda_pantalla', {});
     /* La línea de la compra en bq.oc: {n: número de OC, q, abbr, prov, est, row, fc}. Lo del robot nunca llega a la planilla,
        así que row viene en 0: se identifica por el número de OC. La más nueva de PRUEBA que no esté recibida. */
-    const lin = (bq && Array.isArray(bq.oc) ? bq.oc : []).filter((x) => String(x.prov || '').trim() === PROV && String(x.abbr || '').trim() === SKU && x.est !== 'Recibida')
+    const ocCompra = String((COMPRA && (COMPRA.ocs || COMPRA.oc)) || '').split(/[ ,]+/).filter(Boolean);   /* (5/11) la OC de ESTA compra, no una vieja */
+    const lin = (bq && Array.isArray(bq.oc) ? bq.oc : []).filter((x) => String(x.prov || '').trim() === PROV && String(x.abbr || '').trim() === SKU && x.est !== 'Recibida' && (!ocCompra.length || ocCompra.indexOf(String(x.n)) >= 0))
       .sort((a, b) => String(b.fc || '').localeCompare(String(a.fc || '')))[0];
     if (!lin) { const ej = (bq && Array.isArray(bq.oc) ? bq.oc.filter((x) => JSON.stringify(x).indexOf(SKU) >= 0).slice(0, 2) : []);
       return { ok: false, detalle: 'la compra no aparece en busqueda_pantalla' + (ej.length ? ' · oc con PRUEBA: ' + JSON.stringify(ej).slice(0, 250) : ' · ninguna línea de oc con PRUEBA') }; }
@@ -491,16 +492,16 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
     const antes = new Set((await ocsPrueba()).map(clave));
     const lv = await rpc('robot_verificar', { p: {} }).catch(() => null), tot = lv && lv.total ? Number(lv.total.q) || 0 : 0, qty = Math.ceil(tot) + 5;
     const ent2 = new Date(Date.now() + 2 * 86400000).toISOString().slice(0, 10);
-    const alta = await rpc('pedido_alta_directo', { p: { canal: 'Pilar', fecha: new Date().toLocaleString('es-AR'), fechaEntrega: ent2, dia: '', horario: '', nombre: CLI, telefono: TEL, pago: 'Transferencia', envio: 0,
+    const alta = await rpc('pedido_alta_directo', { p: { canal: 'Home', fecha: new Date().toLocaleString('es-AR'), fechaEntrega: ent2, dia: '', horario: '', nombre: CLI, telefono: TEL, pago: 'Transferencia', envio: 0,
       items: [{ id: E.producto_id, qty: qty }], total: 1000, subtotalSinDescuento: 1000, descuento: 0, descuentoManual: 0, descuentoGlobalPct: 0, descuentoReceta: null, propina: 0, tipoPedido: '', deposito: DEP,
-      barrio: 'PRUEBA', direccion: 'PRUEBA', lote: '', origen: 'Pendiente', estadoEntrega: 'Pendiente', estadoPago: 'No Cobrado', clientOrderId: PREFIJO + 'altaoc' } });
+      barrio: 'PRUEBA', direccion: 'PRUEBA', lote: 'PRUEBA', estadoEntrega: 'Pendiente', estadoPago: 'No Cobrado', clientOrderId: PREFIJO + 'altaoc' } });   /* Home y SIN origen: _alta_origen manda a OC lo que falta */
     if (!alta || !alta.ok || !alta.n) return { ok: false, detalle: 'alta de ' + qty + ' ' + SKU + ': ' + JSON.stringify(alta).slice(0, 200) };
     let nuevas = []; for (let k = 0; k < 8; k++) { nuevas = (await ocsPrueba()).filter((x) => !antes.has(clave(x))); if (nuevas.length) break; await pausa(2000); }
-    if (!nuevas.length) return { ok: false, detalle: 'pedido Pilar #' + alta.n + ' de ' + qty + ' ' + SKU + ' (hay ' + tot + '): no apareció ninguna OC nueva' };
-    const c = await directa('cancelarPedido', { action: 'cancelarPedido', hoja: 'Pilar', id: String(alta.n), row: -Number(alta.n), clientOpId: PREFIJO + 'cancelaroc' });
+    if (!nuevas.length) return { ok: false, detalle: 'pedido Home #' + alta.n + ' de ' + qty + ' ' + SKU + ' (hay ' + tot + '): no apareció ninguna OC nueva' };
+    const c = await directa('cancelarPedido', { action: 'cancelarPedido', hoja: 'Home', id: String(alta.n), row: -Number(alta.n), clientOpId: PREFIJO + 'cancelaroc' });
     if (!bien(c)) return mal(c, 'cancelar #' + alta.n);
     let quedan = []; for (let k = 0; k < 8; k++) { const ahora = await ocsPrueba(); quedan = nuevas.map((o) => ahora.find((x) => clave(x) === clave(o))).filter((x) => x && x.est !== 'Cancelado'); if (!quedan.length) break; await pausa(2000); }
-    const det = 'Pilar #' + alta.n + ' (' + qty + ' ' + SKU + ', había ' + tot + ') → ' + nuevas.map((x) => x.n + ' ' + x.est).join(', ') + ' → cancelado';
+    const det = 'Home #' + alta.n + ' (' + qty + ' ' + SKU + ', había ' + tot + ') → ' + nuevas.map((x) => x.n + ' ' + x.est).join(', ') + ' → cancelado';
     return { ok: !quedan.length, detalle: det + (quedan.length ? ' · la OC sigue viva: ' + quedan.map((x) => x.n + ' ' + x.est).join(', ') : ' · OC cancelada') };
   }, { escribe: true, topeMs: 60000 });
 
