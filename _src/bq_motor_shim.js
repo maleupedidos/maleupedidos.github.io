@@ -81,7 +81,9 @@ function _bqmCelda_(v) {
   if (typeof v === 'string') { var f = _bqmFecha_(v); if (f) return f; }
   return v == null ? '' : v;
 }
-function _bqmPoner_(filas, row, fila) { while (filas.length < row - 1) filas.push([]); filas[row - 1] = fila; }
+/* (5/11/2026) Un pedido nacido en Supabase tiene fila NEGATIVA: va al final de la hoja (el motor lo busca por N°, no por fila).
+   Antes `filas[-2367]` lo dejaba afuera y la OC de ese pedido salía sin representante en Búsqueda. */
+function _bqmPoner_(filas, row, fila) { if (!(row >= 2)) { (filas._neg || (filas._neg = [])).push(fila); return; } while (filas.length < row - 1) filas.push([]); filas[row - 1] = fila; }
 var _BQM_OC_CAB_ = ['N° Orden', 'Fecha Creación', 'Semana', 'Mes', 'Canal', 'N° Pedido Origen', 'Cliente', 'Teléfono', 'Dirección',
   'Proveedor', 'Producto', 'Abreviatura', 'Cantidad', 'Costo Unitario', 'Costo Total', 'Precio Venta Unit.', 'Ingreso Total',
   'Margen Bruto ($)', 'Margen (%)', 'Origen', 'Estado OC', 'Fecha Pedido Prov', 'Fecha Recibido'];
@@ -124,6 +126,8 @@ function _bqmCargar_(d) {
     }
     _bqmPoner_(H[x.h].f, x.row, f);
   });
+  /* Las de fila negativa, recién al final: si no, una fila de planilla baja (2, 3…) las pisaría. */
+  ['Home', 'Pilar', 'Clubes', 'Red'].forEach(function (h) { var fs = H[h].f; (fs._neg || []).forEach(function (x) { fs.push(x); }); delete fs._neg; });
   var hj = d.hojas || {};
   Object.keys(hj).forEach(function (n) {
     var filas = hj[n] || [], cab = _BQM_CAB_[n] || ((filas[0] && filas[0].d && filas[0].d._cab) || []), out = [cab.slice()];
