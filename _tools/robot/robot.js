@@ -577,12 +577,14 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
     const a = await altaHome('ed517a', qty); if (!a.ok || !a.n) return { ok: false, detalle: 'alta A: ' + JSON.stringify(a).slice(0, 160) };
     const pa0 = await esperarPed('Home|' + a.n, (p) => nOC(p) > 0);
     if (!nOC(pa0)) falta.push('A: el alta de ' + qty + ' (hay ' + L0 + ') no tiene OC');
-    const ea = await editar(a.n, qty + 2, 'ed517a-subir'); if (!bien(ea)) return mal(ea, 'editar A (subir)');
+    /* (Supa) Lo que sube sale primero del freezer si hay libre: se sube MÁS que todo el stock, así la OC tiene que crecer. */
+    const qA = qty + Math.ceil(L0 || 0) + 5;
+    const ea = await editar(a.n, qA, 'ed517a-subir'); if (!bien(ea)) return mal(ea, 'editar A (subir)');
     const pa = await esperarPed('Home|' + a.n, (p) => Number(p.cambios) >= 1);
     if (!(pa && Number(pa.cambios) >= 1)) falta.push('A: la fila de Cambios (' + (pa && pa.cambios) + ')');
-    if (!(pa && Number(pa.total) === (qty + 2) * precio)) falta.push('A: total ' + (pa && pa.total) + ' (tenía que dar ' + (qty + 2) * precio + ')');
+    if (!(pa && Number(pa.total) === qA * precio)) falta.push('A: total ' + (pa && pa.total) + ' (tenía que dar ' + qA * precio + ')');
     if (pa0 && pa && !(qOC(pa) > qOC(pa0) || nOC(pa) > nOC(pa0))) falta.push('A: la OC no creció (' + qOC(pa0) + ' → ' + qOC(pa) + ')');
-    det.push('A Home #' + a.n + ' ' + qty + '→' + (qty + 2) + ' · OC ' + qOC(pa0) + '→' + qOC(pa) + ' · cambios ' + (pa && pa.cambios));
+    det.push('A Home #' + a.n + ' ' + qty + '→' + qA + ' · OC ' + qOC(pa0) + '→' + qOC(pa) + ' · cambios ' + (pa && pa.cambios));
     // B) bajar
     const b = await altaHome('ed517b', qty); if (!b.ok || !b.n) return { ok: false, detalle: 'alta B: ' + JSON.stringify(b).slice(0, 160) };
     const pb0 = await esperarPed('Home|' + b.n, (p) => nOC(p) > 0), L1 = await libro();
