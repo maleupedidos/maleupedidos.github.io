@@ -14555,6 +14555,19 @@ var _sbSinWarehouse=false;
 var _SB_CANALES_PEDIDO='Home,Pilar,Clubes,Red';
 /* Las columnas del adelanto. Las usa tambien Pedidos en vivo (`_sbPedidosClaves`):
    una sola lista, para que la relectura de un pedido traiga lo mismo que la lista. */
+/* (5/11/2026) Los pedidos del robot de pruebas NO son de nadie. La regla de admin de la base deja leer todas las
+   filas (tambien las de prueba y las borradas) y la lista en vivo las traia: Tadeo veia «PRUEBA Robot · entrando…» despues
+   de cada publicacion, colgado aunque el robot ya lo hubiera borrado. Misma regla que `_es_prueba_pedido`. El robot si
+   las ve (mide con ellas). */
+var _SB_TEL_PRUEBA={'5490000000001':1,'90000000001':1,'0000000001':1,'5490000000002':1,'90000000002':1,'0000000002':1};
+function _sbSoyRobot(){ var u=(typeof SESSION!=='undefined'&&SESSION&&SESSION.usuario)||''; u=String(u).toLowerCase(); return u==='robot'||u==='pruebarobot'; }
+function _sbEsPrueba(nombre,tel,dep){
+  if(String(nombre||'').trim().toLowerCase()==='prueba robot')return true;
+  if(String(dep||'').trim().toLowerCase()==='prueba')return true;
+  return !!_SB_TEL_PRUEBA[String(tel||'').replace(/\D/g,'')];
+}
+function _sbFilaSirve(o){ return !!o&&!o.deleted_at&&(_sbSoyRobot()||!_sbEsPrueba(o.customer_name,o.customer_key,o.warehouse)); }
+function _sbPedidoSirve(q){ return !!q&&(_sbSoyRobot()||!_sbEsPrueba(q.c,q.tel,q.dep||q.deposito)); }
 function _sbPedCols(){
   return 'channel,order_number,customer_name,customer_key,order_state,payment_state,'
     +'payment_method,source_type,ordered_at,planned_delivery_at,delivered_at,'
@@ -14578,7 +14591,7 @@ function _sbPedidosAhora(limite){
       ;
     var _pedir=function(cs){
       return fetch(sb.url+'/rest/v1/sales_order?select='+cs+'&channel=in.('+_SB_CANALES_PEDIDO+')'
-          +'&order=ordered_at.desc&limit='+(limite||400),
+          +'&deleted_at=is.null&order=ordered_at.desc&limit='+(limite||400),
         {headers:{apikey:sb.key,Authorization:'Bearer '+sb.token}})
         .then(function(r){ if(!r.ok)throw new Error('sb '+r.status); return r.json(); });
     };
@@ -14590,7 +14603,7 @@ function _sbPedidosAhora(limite){
       _sbSinWarehouse=true;
       return _pedir(cols.replace(',warehouse',''));
     })
-      .then(function(filas){ return Array.isArray(filas)?filas.map(_sbAPedido):null; });
+      .then(function(filas){ return Array.isArray(filas)?filas.filter(_sbFilaSirve).map(_sbAPedido):null; });
   }).catch(function(){ return null; });
 }
 
@@ -15461,10 +15474,10 @@ function _sbPedidosClaves(claves) {
     if (!sb || !sb.token || !claves || !claves.length) return null;
     var lista = claves.map(function (k) { return '"' + String(k).replace(/["\\]/g, '') + '"'; }).join(',');
     return fetch(sb.url + '/rest/v1/sales_order?select=' + _sbPedCols() + '&order_key=in.(' + encodeURIComponent(lista) + ')'
-        + '&channel=in.(' + _SB_CANALES_PEDIDO + ')',
+        + '&channel=in.(' + _SB_CANALES_PEDIDO + ')&deleted_at=is.null',
       { headers: { apikey: sb.key, Authorization: 'Bearer ' + sb.token } })
       .then(function (r) { return r.ok ? r.json() : null; })
-      .then(function (filas) { return Array.isArray(filas) ? filas.map(_sbAPedido) : null; });
+      .then(function (filas) { return Array.isArray(filas) ? filas.filter(_sbFilaSirve).map(_sbAPedido) : null; });
   }).catch(function () { return null; });
 }
 /* EL REPINTADO DE LA SEÑAL EN VIVO NO VA ENCIMA DEL DEDO (2/11/2026). Medido con CPU x4: estando en Inicio, cada
@@ -15489,12 +15502,15 @@ function _pedVivoRepintar() {
 function _pedVivoAplicar(lista, desdeBase) {
   if (!Array.isArray(lista) || typeof D === 'undefined' || !D) return false;
   if (!Array.isArray(D.pedidos)) D.pedidos = [];
+  var _nAntes = D.pedidos.length;
+  D.pedidos = D.pedidos.filter(_sbPedidoSirve);
+  lista = lista.filter(_sbPedidoSirve);
   var ahora = Date.now();
   var sirven = lista.filter(function (q) {
     var k = _sbClavePedido(q), L = k ? _sbCambiosPed[k] : 0;
     return desdeBase ? !(L && L >= desdeBase) : !(L && ahora - L < _SB_ESPERA_TRAS_CAMBIO);
   });
-  if (!sirven.length) return false;
+  if (!sirven.length) { if (D.pedidos.length !== _nAntes) { try { render(); } catch (e) {} } return false; }
   var antes = JSON.stringify(D.pedidos);
   /* La pantalla armada por la base ya incluye las ordenes aceptadas. La replica cruda
      sigue con sus defensas; una lectura anterior a otro toque tampoco puede pisarlo. */
@@ -23373,6 +23389,7 @@ function rPedidos(opts){
   var __vistos=_pcVistos();
   function _pintarUna(p, _dest){
     var card=document.createElement('div');
+    if(!_sbPedidoSirve(p))return;   /* (5/11/2026) un pedido del robot de pruebas no se dibuja */
     if(_pedEntrando(p)){ card.className='pc pc-entrando'; card.innerHTML=_pedEntrandoHTML(p); _dest.appendChild(card); return; }
     var pcKey=_pcKey(p);
     var origenPendiente=(_pedOrigenPendiente(p));
