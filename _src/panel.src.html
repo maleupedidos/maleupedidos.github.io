@@ -7292,7 +7292,17 @@ window.ajAutomBorrarTrigger = function(id, fn){
 
 /* (5/11/2026, Supa 496) Usuarios y roles se escriben por la base, con fetch directo a su RPC (puerta admin+ajustes).
    El PIN viaja solo a la RPC, que lo cifra a privado.login_pin: no pasa por Apps Script ni queda en la planilla. */
-var AJ_BASE_RPC={usuarioSet:'usuario_set_directo',usuarioDelete:'usuario_delete_directo',rolCrear:'rol_crear_directo',rolBorrar:'rol_borrar_directo'};
+/* (5/11, Supa 502) Config operativa, Provisiones fijas, el alias y el PIN nuevo del representante, igual. */
+var AJ_BASE_RPC={usuarioSet:'usuario_set_directo',usuarioDelete:'usuario_delete_directo',rolCrear:'rol_crear_directo',rolBorrar:'rol_borrar_directo',
+  configOpSet:'config_op_set_directo',provisionSet:'provision_set_directo',provisionDelete:'provision_delete_directo',
+  vendedorAlias:'vendedor_alias_directo',vendedorPinNuevo:'vendedor_pin_nuevo_directo'};
+/* Una acción de AJ_BASE_RPC por su RPC: devuelve la respuesta de la base, o {ok:false,err} si la base dijo que no o no hay
+   sesión. Solo un corte de red rechaza. */
+function _ajBase(action,body){
+  body=body||{}; body.action=action; body.clientOpId=body.clientOpId||('aj_'+action+'_'+Date.now().toString(36));
+  return _prRpc(AJ_BASE_RPC[action],{p:body}).then(function(d){ return d||{ok:false,err:'La base no contestó.'}; },
+    function(e){ var t=String(e&&e.message||e); if(/permiso|sesión|La base contestó/.test(t))return {ok:false,err:t}; throw e; });
+}
 function ajPost(action,body,okMsg){
   body.action=action;
   try{ showLoader('Guardando…'); }catch(e){}
@@ -7437,8 +7447,8 @@ function ajPinNuevo(i){
   var v=AJ_ACC_LISTA[i]; if(!v) return;
   if(!confirm('¿Le ponemos un PIN nuevo a '+v.nombre+'?\n\nEl PIN de ahora deja de servir para entrar. Si ya está adentro del portal, sigue adentro.')) return;
   var nom=String(v.nombre).split(' ')[0];
-  fetch(API,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({action:'vendedorPinNuevo',usuario:v.usuario})})
-    .then(function(r){return r.json();})
+  /* El PIN nuevo se ve UNA vez: la base lo guarda cifrado y un reintento devuelve pin null (hay que pedir otro). */
+  _ajBase('vendedorPinNuevo',{usuario:v.usuario})
     .then(function(d){
       if(!(d&&d.ok&&d.pin)){ toast('Error: '+((d&&d.err)||'?')); return; }
       AJ_PIN_VISTO[String(v.usuario||'').trim().toLowerCase()]=String(d.pin);
@@ -16425,7 +16435,7 @@ function _ordenNoDirecto(body,m){
 var ACCIONES_CORTADAS={crmCambiarTelefono:1,crmCancelarJugadaProg:1,crmEnviarCampania:1,crmEnviarJugada:1,crmJugadaRespAtendida:1,
   crmLeadSet:1,crmLeadsBulk:1,crmLogInteraccion:1,crmLoteSave:1,crmLotesSaveBatch:1,crmMergeClientes:1,crmNoEscribir:1,
   crmProgramarJugada:1,crmPuntoSave:1,crmSetRolHogar:1,crmSetVisitante:1,crmZonaDelete:1,crmZonaSave:1,hogaresMergeSave:1,
-  ruletaCuponUsar:1,redConfirmar:1,avisosSetup:1,configMaleuSet:1,ghCruceToken:1,pinVer:1,triggerBorrar:1,vendedorAlias:1,
+  ruletaCuponUsar:1,redConfirmar:1,avisosSetup:1,configMaleuSet:1,cargaGuardar:1,ghCruceToken:1,pinVer:1,triggerBorrar:1,vendedorAlias:1,
   vendedorPinNuevo:1,cateringStock:1,difCerrar:1,fechaEntregaReal:1,redTgVincular:1,
   /* (22:30, Supa + criterio del Organizador) De la plata de Red se cortan las 6 del flujo viejo o del cobro (0 usos); las 4
      de la liquidacion (anular el pago, comision, cambiar vendedor, envio) se portan antes del 15/11. */
@@ -25646,12 +25656,24 @@ function _stgPost(cuerpo){
      backend publicado todavia no conoce cae en el alta de pedidos y crea un
      pedido real. Pasa si el front se publica antes que el backend. */
   if(!(CG_DATA&&CG_DATA.guardar===true))return Promise.resolve({ok:false,error:'Esta pantalla todav\u00eda no est\u00e1 lista del lado del sistema. Avisale a Tadeo.'});
-  var ctl=(typeof AbortController==='function')?new AbortController():null;
-  var reloj=ctl?setTimeout(function(){ try{ctl.abort();}catch(e){} },120000):null;
+  /* (5/11/2026, Supa 492) La carga se escribe en la base: carga_guardar_directo, con el mismo cuerpo de antes. NUNCA cae a
+     Apps Script: con directo:false (palanca, aplicador, id, usuario) se muestra el motivo y no se guarda nada. Un 42501 o
+     un error de la base vuelven como respuesta con error; solo un corte de red rechaza (y el reintento lleva el mismo
+     clientOpId, que la base reconoce como repetida). */
   cuerpo.action='cargaGuardar';
-  return fetch(API,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(cuerpo),signal:ctl?ctl.signal:undefined})
-    .then(function(r){return r.json();})
-    .then(function(d){ if(reloj)clearTimeout(reloj); return d; },function(e){ if(reloj)clearTimeout(reloj); throw e; });
+  return _prRpc('carga_guardar_directo',{p:cuerpo}).then(function(d){
+    if(!d)return {ok:false,error:'La base no contestó: no se guardó nada.'};
+    if(d.directo===false){
+      var m={palanca:'la carga por la base está apagada',aplicador:'la carga todavía pasa por la planilla',id:'faltó el número de operación',usuario:'no se reconoce tu usuario',fecha:'la hora no es válida'}[d.motivo];
+      return {ok:false,error:'No se guardó: '+(m||d.err||d.error||d.motivo||'la base no la tomó')+'. Avisale a Tadeo.'};
+    }
+    if(d.ok===false&&!d.error&&d.err)d.error=d.err;
+    return d;
+  },function(e){
+    var t=String(e&&e.message||e);
+    if(/permiso|sesión|La base contestó/.test(t))return {ok:false,error:t};
+    throw e;
+  });
 }
 function stCargaPedir(forzar){
   if(CG_PIDIENDO)return Promise.resolve(false);
@@ -30222,8 +30244,7 @@ window.rlqAliasGuardar=function(){
   var v=RLQ_ALIAS, i=$('rlqAliasIn'); if(!v||!i)return;
   var a=String(i.value||'').replace(/\s+/g,'');
   showLoader('Guardando el alias…');
-  fetch(API,{method:'POST',body:JSON.stringify({action:'vendedorAlias',nombre:v,alias:a})})
-    .then(function(r){return r.json();})
+  _ajBase('vendedorAlias',{nombre:v,alias:a})
     .then(function(r){
       hideLoader(true);
       if(r&&r.ok){

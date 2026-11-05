@@ -312,9 +312,14 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
   /* (5/11/2026, Supa) TRASPASO de ida y vuelta, sin entidades nuevas: PRUEBA de 'prueba' a 'ustariz' y de vuelta. El libro
      tiene que mostrar prueba −1 / ustariz +1 en la ida y el neto en 0 a la vuelta. Solo toca el SKU PRUEBA, nunca stock
      real. Si en 'prueba' no hay ni 1, se cuenta 1 antes y se deshace al final (como el paso de contar). */
+  /* (5/11/2026, Organizador) «Se guardó» no alcanza: el stock que muestra el ERP tiene que quedar movido y SEGUIR igual a los
+     2 minutos (la foto se recalcula del libro y antes de la 497 lo pisaba). STOCK_ESPERADO guarda lo último que tiene que
+     verse; el paso «stock a los 2 min» lo vuelve a leer antes de la limpieza. */
+  const stockPd = async () => { const d = await rpc('stock_tab_pantalla', {}); const p = ((d && d.stock) || []).find((x) => String(x.a || x.abbr || '').trim() === SKU);
+    const pd = (p && (p.pd || p.porDep)) || {}; return { prueba: Number(pd[DEP]) || 0, ustariz: Number(pd.ustariz) || 0 }; };
+  let STOCK_ESPERADO = null, T_ULTIMO_MOV = 0;
   await paso('traspaso PRUEBA ida y vuelta', async () => {
-    const libro = async () => { const d = await rpc('stock_tab_pantalla', {}); const p = ((d && d.stock) || []).find((x) => String(x.a || x.abbr || '').trim() === SKU);
-      const pd = (p && (p.pd || p.porDep)) || {}; return { prueba: Number(pd[DEP]) || 0, ustariz: Number(pd.ustariz) || 0 }; };
+    const libro = stockPd;
     const reintentar = async (fn) => { let r = null; for (let k = 0; k < 12; k++) { r = await fn(); if (!(r && r.acomodando)) break; await pausa(10000); } return r; };
     const tras = (desde, hacia, id) => reintentar(() => rpc('stock_traspaso_directo', { p: { action: 'stockTraspaso', abbr: SKU, desde: desde, hacia: hacia, cantidad: 1, clientOpId: PREFIJO + id } }));
     const a0 = await libro(); let contado = false;
@@ -337,6 +342,7 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
     const det = DEP + '/ustariz ' + a.prueba + '/' + a.ustariz + ' → ' + b.prueba + '/' + b.ustariz + ' → ' + c2.prueba + '/' + c2.ustariz + (contado ? ' (se contó 1 antes' + (des && des.ok ? ' y se deshizo)' : ', NO se deshizo: ' + JSON.stringify(des).slice(0, 80) + ')') : '');
     if (!idaBien) return { ok: false, detalle: 'la ida no movió el libro como debía: ' + det };
     if (!netoBien) return { ok: false, detalle: 'el neto no quedó en 0: ' + det };
+    STOCK_ESPERADO = { prueba: contado ? a0.prueba : c2.prueba, ustariz: c2.ustariz, de: 'traspaso' }; T_ULTIMO_MOV = Date.now();
     if (c2.ustariz !== 0) hallazgos.push('traspaso: PRUEBA tiene ' + c2.ustariz + ' en ustariz (tiene que ser 0)');
     return { ok: !contado || !!(des && des.ok), detalle: det };
   }, { escribe: true, topeMs: 280000 });
@@ -360,6 +366,7 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
     if (!lin) { const ej = (bq && Array.isArray(bq.oc) ? bq.oc.filter((x) => JSON.stringify(x).indexOf(SKU) >= 0).slice(0, 2) : []);
       return { ok: false, detalle: 'la compra no aparece en busqueda_pantalla' + (ej.length ? ' · oc con PRUEBA: ' + JSON.stringify(ej).slice(0, 250) : ' · ninguna línea de oc con PRUEBA') }; }
     const oc = lin.n, q = Number(lin.q) || 1, hechos = [];
+    const sa = await stockPd();
     let r;
     if (lin.est !== 'Pedido') {
       r = await directa('marcarOC', { action: 'marcarOC', rows: [{ r: lin.row || 0, oc: oc, estado: 'Pedido' }], clientOpId: PREFIJO + 'pedir' });
@@ -370,8 +377,37 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
       if (!(r && r.d && r.d.ok === false && /acomodando/.test(String(r.d.err || r.d.error || '')))) break; await pausa(10000); }
     METRICAS.espera_recibir_ms = Date.now() - tR;
     if (!bien(r)) return mal(r, 'recibir'); hechos.push('recibida (esperó ' + Math.round(METRICAS.espera_recibir_ms / 1000) + ' s)');
-    return { ok: true, detalle: oc + ': ' + hechos.join(' → ') };
+    /* (5/11, Supa 497) Recibir mueve el libro: el stock de PRUEBA en el depósito prueba sube lo recibido. */
+    let sb = null; for (let k = 0; k < 6; k++) { sb = await stockPd(); if (sb.prueba === sa.prueba + q) break; await pausa(2000); }
+    const lv = await rpc('robot_verificar', { p: {} }).catch(() => null), lq = lv && lv.libro && lv.libro[DEP] ? Number(lv.libro[DEP].q) : null;
+    STOCK_ESPERADO = { prueba: sa.prueba + q, ustariz: sa.ustariz, de: 'recepción' }; T_ULTIMO_MOV = Date.now();
+    const subio = sb.prueba === sa.prueba + q;
+    return { ok: subio, detalle: oc + ': ' + hechos.join(' → ') + ' · stock ' + DEP + ' ' + sa.prueba + ' → ' + sb.prueba + (subio ? ' (+' + q + ')' : ' · tenía que dar ' + (sa.prueba + q)) + ' · libro ' + lq + ' · op ' + PREFIJO + 'recibir' };
   }, { escribe: true, topeMs: 130000 });
+
+  /* (5/11/2026, Supa 492) CARGA de mercadería por la base: previa → guardar 1 PRUEBA → el libro total sube 1 → el reintento
+     con el mismo clientOpId contesta repetida y no suma otra vez. El libro se lee con robot_verificar (501). */
+  await paso('carga de mercadería PRUEBA', async () => {
+    const libroTotal = async () => { const v = await rpc('robot_verificar', { p: {} }); return v && v.total ? Number(v.total.q) || 0 : null; };
+    const ahora = Date.now();
+    const pv = await rpc('carga_guardar_directo', { p: { action: 'cargaGuardar', proveedor: PROV, filas: [], previa: true, ocurrio: ahora } });
+    /* La previa sin filas contesta ok:false («no cambiaste nada») pero trae el inicial por depósito: es lo que usa el ERP. */
+    const ini = pv && pv.inicial && pv.inicial[SKU];
+    if (!ini || typeof ini !== 'object') return { ok: false, detalle: 'la previa no trajo el inicial de ' + SKU + ': ' + JSON.stringify(pv).slice(0, 200) };
+    const fin = Object.assign({}, ini); fin[DEP] = (Number(ini[DEP]) || 0) + 1;
+    const t0 = await libroTotal();
+    const cuerpo = { action: 'cargaGuardar', proveedor: PROV, ocurrio: ahora, filas: [{ a: SKU, recibido: 1, final: fin, inicialVisto: ini, deMas: { que: 'compra', costo: 1 } }]   /* la OC ya se recibió: llega «de más» y se contesta como en el ERP, «Compra nueva» a $1 */, clientOpId: PREFIJO + 'carga' };
+    const rv = await rpc('carga_guardar_directo', { p: Object.assign({}, cuerpo, { previa: true }) });
+    if (!rv || rv.ok === false) return { ok: false, detalle: 'revisar: ' + JSON.stringify(rv).slice(0, 220) };
+    const g = await rpc('carga_guardar_directo', { p: cuerpo });
+    if (!g || !g.carga) return { ok: false, detalle: 'guardar: ' + JSON.stringify(g).slice(0, 220) };
+    const g2 = await rpc('carga_guardar_directo', { p: cuerpo });
+    const t1 = await libroTotal();
+    const rep = !!(g2 && g2.repetida), subio = t0 != null && t1 === t0 + 1;
+    if (g.ok) { const lv = await rpc('robot_verificar', { p: {} }).catch(() => null); if (lv && lv.libro) { STOCK_ESPERADO = { prueba: Number((lv.libro[DEP] || {}).q) || 0, ustariz: Number((lv.libro.ustariz || {}).q) || 0, de: 'carga (el libro al guardar)' }; T_ULTIMO_MOV = Date.now(); } }
+    const det = 'carga ' + g.carga + (g.ok ? '' : ' (a medias: ' + JSON.stringify(g.errores || g.sinGuardar || '').slice(0, 80) + ')') + ' · libro total ' + t0 + ' → ' + t1 + ' · reintento ' + (rep ? 'repetida' : 'NO repetida: ' + JSON.stringify(g2).slice(0, 80));
+    return { ok: !!g.ok && rep && subio, detalle: det + (subio ? '' : ' · ¡el libro no subió 1!') };
+  }, { escribe: true, topeMs: 30000 });
 
   await paso('pagar al proveedor PRUEBA', async () => {
     const r = await directa('pagarProveedor', { action: 'pagarProveedor', proveedor: PROV, efectivo: 0, mp: 1, bonif: 0, semana: '', notas: 'robot', cuenta: CTA, clientOpId: PREFIJO + 'pago' });
@@ -419,6 +455,17 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
     const r = await directa('redLiquidacionPagar', { action: 'redLiquidacionPagar', vendedor: REP, quincena: fila.quincena || fila.q, cuenta: CTA, lugar: '', totalVisto: total, clientOpId: PREFIJO + 'liq' });
     return bien(r) ? { ok: true, detalle: '$' + total + ' desde la cuenta ' + CTA } : mal(r, 'liquidación');
   }, { escribe: true, topeMs: 10000 });
+
+  await paso('stock a los 2 min (recepción y traspaso)', async () => {
+    if (!STOCK_ESPERADO) return { ok: false, detalle: 'no hubo movimiento de stock que mirar (falló un paso anterior)' };
+    const falta = 120000 - (Date.now() - T_ULTIMO_MOV); if (falta > 0) await pausa(falta);
+    /* Dos cosas a los 2 min: el LIBRO sigue en lo esperado (nadie lo devolvió) y la PANTALLA muestra lo mismo que el libro. */
+    const v = await stockPd(), e = STOCK_ESPERADO, lv = await rpc('robot_verificar', { p: {} }).catch(() => null);
+    const lb = lv && lv.libro ? { prueba: Number((lv.libro[DEP] || {}).q) || 0, ustariz: Number((lv.libro.ustariz || {}).q) || 0 } : null;
+    const libroOk = !!lb && lb.prueba === e.prueba && lb.ustariz === e.ustariz, pantallaOk = !!lb && v.prueba === lb.prueba && v.ustariz === lb.ustariz;
+    return { ok: libroOk && pantallaOk, detalle: 'después de ' + e.de + ': ' + DEP + '/ustariz esperado ' + e.prueba + '/' + e.ustariz + ' · libro a los 2 min ' + (lb ? lb.prueba + '/' + lb.ustariz : '?') + ' · el ERP muestra ' + v.prueba + '/' + v.ustariz
+      + (libroOk ? '' : ' · ¡EL LIBRO VOLVIÓ PARA ATRÁS!') + (pantallaOk ? '' : ' · ¡EL ERP NO MUESTRA EL LIBRO!') };
+  }, { escribe: true, topeMs: 150000 });
 
   /* Lo que se frenó (WhatsApp, Telegram, mails) y la limpieza de todo lo de esta corrida. */
   if (ENTIDADES) {
@@ -472,7 +519,7 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
       var fuera={pedidosFuenteAplicar:1,altaPgAplicar:1,difAplicar:1,loginUsuario:1,logout:1,loginVendedor:1}, on=_palancaVal('directas')||{};
       var todas=Object.keys(s).filter(function(a){ return !fuera[a]; });
       /* juntadaIntegrante va por su propia RPC desde Ruta (juntada_integrante_directo), no por el mapa ni por Apps Script. */
-      var base=function(a){ if(a==='stockContar')return _palancaVal('contarDirecto')===true; if(a==='juntadaIntegrante')return true; /* (5/11) Ajustes › Precios: fetch directo a su RPC (Supa 490). */ if(a==='precioProducto'||a==='precioCombo'||a==='cuentaSet'||a==='configMaleuSet')return true; if(typeof AJ_BASE_RPC==='object'&&AJ_BASE_RPC[a])return true; return !!(ORD_DIRECTAS_RPC[a]&&on[a]===true); };
+      var base=function(a){ if(a==='stockContar')return _palancaVal('contarDirecto')===true; if(a==='juntadaIntegrante')return true; /* (5/11) Ajustes › Precios: fetch directo a su RPC (Supa 490). */ if(a==='precioProducto'||a==='precioCombo'||a==='cuentaSet'||a==='configMaleuSet'||a==='cargaGuardar')return true; if(typeof AJ_BASE_RPC==='object'&&AJ_BASE_RPC[a])return true; return !!(ORD_DIRECTAS_RPC[a]&&on[a]===true); };
       var cortadas=todas.filter(function(a){ return !base(a)&&typeof ACCIONES_CORTADAS==='object'&&ACCIONES_CORTADAS[a]; });
       var apps=todas.filter(function(a){ return !base(a)&&!(typeof ACCIONES_CORTADAS==='object'&&ACCIONES_CORTADAS[a]); });
       return JSON.stringify({n:todas.length,apps:apps.sort(),cortadas:cortadas.length}); })()`, 30000));
