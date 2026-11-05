@@ -2378,12 +2378,29 @@ function _dvCelda_(v) {
   if (v && typeof v === 'object' && v.$d) { var d = new Date(v.$d); d.toString = _dvFechaTxt_; return d; }
   return v == null ? '' : v;
 }
+var _DV_FALSAS_ = {};
+/* Cambia cada `row` prestado por la fila negativa del pedido (538). */
+function _dvFilasReales_(o) {
+  if (Array.isArray(o)) { o.forEach(_dvFilasReales_); return o; }
+  if (o && typeof o === 'object') Object.keys(o).forEach(function (k) {
+    if (k === 'row' && typeof o[k] === 'number' && _DV_FALSAS_[o[k]] != null) o[k] = _DV_FALSAS_[o[k]];
+    else _dvFilasReales_(o[k]);
+  });
+  return o;
+}
 function _dvCargar_(d) {
   _DV = d;
   var H = {}, cab = d.cab || [], filas = [cab];
   /* Las filas de ESTE vendedor en su numero de fila de la hoja (el portal lo usa como pista para
      anular un envio); las de los demas no viajan y quedan vacias. */
-  (d.filas || []).forEach(function (x) { filas[x[0] - 1] = (x[1] || []).map(_dvCelda_); });
+  (d.filas || []).forEach(function (x) { if (x[0] >= 2) filas[x[0] - 1] = (x[1] || []).map(_dvCelda_); });
+  /* (538, 5/11/2026) Los pedidos nacidos en Supabase tienen fila NEGATIVA: van al final de la hoja en una fila
+     prestada y `_DV_FALSAS_` la devuelve a su numero de verdad en lo que arma el motor. */
+  _DV_FALSAS_ = {};
+  (d.filas || []).forEach(function (x) {
+    if (!(x[0] < 0)) return;
+    filas.push((x[1] || []).map(_dvCelda_)); _DV_FALSAS_[filas.length] = x[0];
+  });
   for (var i = 0; i < filas.length; i++) if (!filas[i]) filas[i] = [];
   H.Red = new _Hoja('Red', filas);
   H['Pagos Red Liq'] = new _Hoja('Pagos Red Liq', [['Timestamp', 'Fecha', 'Vendedor', 'Año', 'Semana', 'Efectivo', 'Transferencia']].concat(
@@ -2474,7 +2491,7 @@ G.DV_MOTOR = {
       /* `base: 'ef'` = tareas/objetivo/escala/liquidaciones/Telegram salieron del motor (con la 242): el portal
          ya no los pide a Apps Script, solo larga los efectos. Sin `ef` (base sin la 242), como antes. */
       o.base = (datos && datos.ef) ? 'ef' : true;
-      return o;
+      return _dvFilasReales_(o);
     } finally { _ahora = null; _HOJAS = {}; _DV = null; }
   }
 };
