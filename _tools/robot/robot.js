@@ -371,7 +371,8 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
     const bq = await rpc('busqueda_pantalla', {});
     /* La línea de la compra en bq.oc: {n: número de OC, q, abbr, prov, est, row, fc}. Lo del robot nunca llega a la planilla,
        así que row viene en 0: se identifica por el número de OC. La más nueva de PRUEBA que no esté recibida. */
-    const ocCompra = String((COMPRA && (COMPRA.ocs || COMPRA.oc)) || '').split(/[ ,]+/).filter(Boolean);   /* (5/11) la OC de ESTA compra, no una vieja */
+    const ocCompra = String((COMPRA && (COMPRA.ocs || COMPRA.oc || [COMPRA.primerOC, COMPRA.ultimoOC].filter(Boolean).join(','))) || '').split(/[ ,]+/).filter(Boolean);   /* (5/11) la OC de ESTA compra, no una vieja */
+    if (!ocCompra.length) return { ok: false, detalle: 'la compra no devolvió su número de OC: no sé cuál recibir · respuesta ' + JSON.stringify(COMPRA).slice(0, 220) };
     const lin = (bq && Array.isArray(bq.oc) ? bq.oc : []).filter((x) => String(x.prov || '').trim() === PROV && String(x.abbr || '').trim() === SKU && x.est !== 'Recibida' && (!ocCompra.length || ocCompra.indexOf(String(x.n)) >= 0))
       .sort((a, b) => String(b.fc || '').localeCompare(String(a.fc || '')))[0];
     if (!lin) { const ej = (bq && Array.isArray(bq.oc) ? bq.oc.filter((x) => JSON.stringify(x).indexOf(SKU) >= 0).slice(0, 2) : []);
@@ -511,9 +512,9 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
   }, { escribe: true, topeMs: 60000 });
 
   /* Un alta Home de PRUEBA (por la base), para los pasos de abajo. qty > stock → nace su OC (504). */
-  const altaHome = async (sufijo, qty, fecha) => {
+  const altaHome = async (sufijo, qty, fecha, nombre) => {
     const ent2 = fecha || new Date(Date.now() + 2 * 86400000).toISOString().slice(0, 10);
-    const r = await rpc('pedido_alta_directo', { p: { canal: 'Home', fecha: new Date().toLocaleString('es-AR'), fechaEntrega: ent2, dia: '', horario: '', nombre: CLI, telefono: TEL, pago: 'Transferencia', envio: 0,
+    const r = await rpc('pedido_alta_directo', { p: { canal: 'Home', fecha: new Date().toLocaleString('es-AR'), fechaEntrega: ent2, dia: '', horario: '', nombre: nombre || CLI, telefono: TEL, pago: 'Transferencia', envio: 0,
       items: [{ id: E.producto_id, qty: qty }], total: 1000 * qty, subtotalSinDescuento: 1000 * qty, descuento: 0, descuentoManual: 0, descuentoGlobalPct: 0, descuentoReceta: null, propina: 0, tipoPedido: '', deposito: DEP,
       barrio: 'PRUEBA', direccion: 'PRUEBA', lote: 'PRUEBA', estadoEntrega: 'Pendiente', estadoPago: 'No Cobrado', clientOrderId: PREFIJO + sufijo } });
     const _ah = new Intl.DateTimeFormat('es-AR', { timeZone: 'America/Argentina/Buenos_Aires', day: 'numeric', month: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false }).formatToParts(new Date()).reduce((o, x) => (o[x.type] = x.value, o), {});
@@ -529,9 +530,10 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
     const lv = await rpc('robot_verificar', { p: {} }).catch(() => null), qty = Math.ceil(lv && lv.total ? Number(lv.total.q) || 0 : 0) + 5;
     /* El representante PRUEBA reparte los viernes, y el otro pase usa el de la semana que viene (una entrega por cliente y día): acá, el de dentro de dos semanas. */
     const _h = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Argentina/Buenos_Aires' })), vie = new Date(Date.now() + (((5 - _h.getDay() + 7) % 7) + 14) * 86400000).toLocaleDateString('sv-SE', { timeZone: 'America/Argentina/Buenos_Aires' });
-    const a = await altaHome('pasaoc', qty, vie);
+    /* (Supa) Si el cliente es el mismo vendedor no se avisa (regla de Apps Script que la 513 copia): otro nombre, trajo Maleu. */
+    const a = await altaHome('pasaoc', qty, vie, 'PRUEBA Cliente Robot');
     if (!a.ok || !a.n) return { ok: false, detalle: 'alta Home: ' + JSON.stringify(a).slice(0, 200) };
-    const r = await directa('pasarAVendedor', { action: 'pasarAVendedor', hoja: 'Home', id: String(a.n), row: -Number(a.n), al: a.al, vendedor: REP, trajo: 'Vendedor', clientOpId: PREFIJO + 'pasaoc-pase' });
+    const r = await directa('pasarAVendedor', { action: 'pasarAVendedor', hoja: 'Home', id: String(a.n), row: -Number(a.n), al: a.al, vendedor: REP, trajo: 'Maleu', clientOpId: PREFIJO + 'pasaoc-pase' });
     if (!bien(r)) return mal(r, 'pasar Home #' + a.n + ' a ' + REP);
     const nRed = r.d.red && r.d.red.n; if (!nRed) return { ok: false, detalle: 'el pase no devolvió el Red|N nuevo: ' + JSON.stringify(r.d).slice(0, 160) };
     let p = null; for (let k = 0; k < 5; k++) { p = await verPedido('Red|' + nRed); if (p && Array.isArray(p.ocs) && p.ocs.length) break; await pausa(2000); }
