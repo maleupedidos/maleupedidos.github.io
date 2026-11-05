@@ -219,6 +219,16 @@ const RESP = {
      touch de por medio— y el test quedaba en "0 posts" sobre un boton que
      funciona. Ejecutar su atributo prueba lo mismo que importa: que el boton
      este cableado a la funcion correcta y con los argumentos correctos. */
+  /* (4/11/2026, 22:55) «Descargué todo» se CORTO (uso 0: dos usos, los dos de scripts). Con el corte prendido la card
+     se dibuja igual, sin el boton y con el aviso; el resto (el confirm, el POST, la copia) no corre. */
+  const cortada = await evaluar(cli, `typeof ACCIONES_CORTADAS==='object'&&!!ACCIONES_CORTADAS.marcarGuardadoEnStock&&!(typeof _ordenDirectaOn==='function'&&_ordenDirectaOn('marcarGuardadoEnStock'))`);
+  if (cortada) {
+    const vista = await evaluar(cli, `(function(){ var hay=Array.prototype.slice.call(document.querySelectorAll('button')).some(function(x){ return /Descargu/i.test(x.textContent||''); });
+      return JSON.stringify({boton:hay, aviso:/se est. pasando a la base/.test(document.body.innerText||'')}); })()`);
+    const v = JSON.parse(vista);
+    chk('cortada: no hay boton «Descargué todo»', v.boton === false, v);
+    chk('cortada: y la card dice que se esta pasando a la base', v.aviso === true, v);
+  } else {
   const apretado = await evaluar(cli, `(function(){
     /* El confirm se vuelve a poner JUSTO ACA: \`servir.js\` instala el suyo para
        que el ERP no se trabe en desarrollo, y pisa al que se inyecto antes de
@@ -267,6 +277,7 @@ const RESP = {
   chk('y el conteo tambien, o corregiria la compra de la semana que viene',
     P.conteoDespues === 0, P.conteoDespues);
 
+  }
   chk('no hubo un solo error de JS en toda la corrida', errores.length === 0, errores.slice(0, 2));
 
   // La captura, para poder MIRAR la pantalla y no solo afirmar que anda.
