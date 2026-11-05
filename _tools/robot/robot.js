@@ -468,11 +468,11 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
      la base al robot). Sin los despertadores (no viajan) ni el login (el respaldo sigue a propósito). Informativo. */
   await paso('escrituras del ERP por Apps Script', async () => {
     const r = JSON.parse(await ev(`(async function(){ await _sbPermiso(true); var t=await (await fetch('app.html',{cache:'no-store'})).text(), s={};
-      t.replace(/action\\s*:\\s*['"]([A-Za-z]+)['"]/g,function(m,a){ s[a]=1; return m; });
+      t.replace(/action\\s*:\\s*['"]([A-Za-z]+)['"]/g,function(m,a){ s[a]=1; return m; }); /* (5/11) también las que arma un helper: ajPost('usuarioSet',…) y cuerpo.action='X' (se escapaban del contador). */ t.replace(/\\bajPost\\(\\s*'([A-Za-z]+)'/g,function(m,a){ s[a]=1; return m; }); t.replace(/\\.action\\s*=\\s*'([A-Za-z]+)'/g,function(m,a){ s[a]=1; return m; });
       var fuera={pedidosFuenteAplicar:1,altaPgAplicar:1,difAplicar:1,loginUsuario:1,logout:1,loginVendedor:1}, on=_palancaVal('directas')||{};
       var todas=Object.keys(s).filter(function(a){ return !fuera[a]; });
       /* juntadaIntegrante va por su propia RPC desde Ruta (juntada_integrante_directo), no por el mapa ni por Apps Script. */
-      var base=function(a){ if(a==='stockContar')return _palancaVal('contarDirecto')===true; if(a==='juntadaIntegrante')return true; /* (5/11) Ajustes › Precios: fetch directo a su RPC (Supa 490). */ if(a==='precioProducto'||a==='precioCombo'||a==='cuentaSet'||a==='configMaleuSet')return true; return !!(ORD_DIRECTAS_RPC[a]&&on[a]===true); };
+      var base=function(a){ if(a==='stockContar')return _palancaVal('contarDirecto')===true; if(a==='juntadaIntegrante')return true; /* (5/11) Ajustes › Precios: fetch directo a su RPC (Supa 490). */ if(a==='precioProducto'||a==='precioCombo'||a==='cuentaSet'||a==='configMaleuSet')return true; if(typeof AJ_BASE_RPC==='object'&&AJ_BASE_RPC[a])return true; return !!(ORD_DIRECTAS_RPC[a]&&on[a]===true); };
       var cortadas=todas.filter(function(a){ return !base(a)&&typeof ACCIONES_CORTADAS==='object'&&ACCIONES_CORTADAS[a]; });
       var apps=todas.filter(function(a){ return !base(a)&&!(typeof ACCIONES_CORTADAS==='object'&&ACCIONES_CORTADAS[a]); });
       return JSON.stringify({n:todas.length,apps:apps.sort(),cortadas:cortadas.length}); })()`, 30000));
