@@ -1334,7 +1334,11 @@ button.ped-dep-x.va,button.ped-dep-x.va:disabled{opacity:1;background:#E3EFE3;bo
 .origen-help{font-size:11px;color:var(--bl);margin-bottom:8px;line-height:1.35}
 .origen-prod{background:#fff;border:1px solid var(--cd);border-radius:10px;padding:10px;margin-bottom:8px}
 .origen-prod-title{font-size:13px;font-weight:800;color:var(--b);margin-bottom:8px;line-height:1.25}
-.origen-split{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.origen-split{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px}
+.origen-cell.rep{border-color:#E65100;background:#FFF6EE}
+.origen-cell.rep .origen-cell-lbl{color:#E65100}
+.origen-cell.rep input{border-color:#E65100;color:#E65100}
+.origen-rep{font-size:11px;color:#E65100;margin:-4px 0 6px}
 .origen-cell{display:flex;flex-direction:column;align-items:center;border-radius:10px;padding:8px 6px;border:1.5px solid}
 .origen-cell.dep{border-color:var(--blu);background:#F4F9FE}
 .origen-cell.oc{border-color:#6A1B9A;background:#FAF4FB}
@@ -15186,7 +15190,7 @@ function _leerVersion(app){
    "El HTML no sabe que version es" dejo de ser cierto: el build le escribe
    adentro el CACHE_NAME de sw-panel.js, el mismo que deploy.sh obliga a subir en
    cada cambio. Si lo publicado dice otra cosa, esta pagina es vieja. Punto. */
-var _APP_CN_PAGINA='maleu-panel-v928';
+var _APP_CN_PAGINA='maleu-panel-v929';
 
 /* Devuelve [{k,v}] si lo publicado no es lo que esta pagina corre. */
 function _chequearVersiones(){
@@ -22378,11 +22382,21 @@ function _pedOrigenPendiente(p){
   return o===''||o==='Pendiente';
 }
 function adjustOrigenSplit(inp){
+  /* (545) Tres celdas: Depósito · Reposición en camino · Orden de compra, que suman la cantidad pedida.
+     La que tocás manda; el resto se acomoda primero en Depósito y, si no alcanza, en la tercera. */
   var rowUid=inp.dataset.row, q=Number(inp.dataset.q)||0, role=inp.dataset.role;
-  var v=Math.max(0, Math.min(q, Number(inp.value)||0));
-  v=Math.round(v*1000)/1000;inp.value=v;
-  var pair=document.querySelector('input[data-row="'+rowUid+'"][data-role="'+(role==='d'?'oc':'d')+'"]');
-  if(pair) pair.value = Math.round((q-v)*1000)/1000;
+  var r3=function(x){return Math.round(x*1000)/1000;};
+  var v=r3(Math.max(0, Math.min(q, Number(inp.value)||0)));inp.value=v;
+  var get=function(k){return document.querySelector('input[data-row="'+rowUid+'"][data-role="'+k+'"]');};
+  var otros=role==='d'?['oc','rep']:role==='rep'?['d','oc']:['d','rep'];
+  var a=get(otros[0]), b=get(otros[1]);
+  var vb=b?Math.max(0,Number(b.value)||0):0;
+  if(role==='d'){ /* Depósito manda: lo que sobra va primero a OC y la reposición se recorta si no entra */
+    vb=Math.min(vb, r3(q-v)); if(b)b.value=r3(vb); if(a)a.value=r3(q-v-vb); return;
+  }
+  var va=r3(q-v-vb);
+  if(va<0){ vb=r3(Math.max(0,vb+va)); va=0; if(b)b.value=vb; }
+  if(a)a.value=va;
 }
 
 // Atajo: aplicar el mismo origen (D u OC) a todos los productos del pedido en un toque.
@@ -22393,6 +22407,7 @@ function origenQuick(modo, uid){
     var qTot=Number(prodRow.dataset.q)||0;
     var dInp=prodRow.querySelector('input[data-role="d"]');
     var ocInp=prodRow.querySelector('input[data-role="oc"]');
+    var repInp=prodRow.querySelector('input[data-role="rep"]'); if(repInp)repInp.value=0;
     if(modo==='D'){
       if(dInp)dInp.value=qTot;
       if(ocInp)ocInp.value=0;
@@ -22424,6 +22439,23 @@ function _origenDispHTML(a){
   });
   return t.length?'<div class="origen-disp">Libre en freezer: '+t.join(' \u00b7 ')+'</div>':'';
 }
+/* (545) La reposición en camino: compras de canal Depósito ya pedidas al proveedor, menos lo apartado para otros pedidos. */
+var _repoEC={t:0,d:null,cargando:false};
+function _repoLibre(a){ var x=_repoEC.d&&_repoEC.d[a]; return x?Number(x.libre)||0:0; }
+function _repoTxt(a){
+  if(!_repoEC.d)return 'En camino libre: …';
+  var x=_repoEC.d[a]; if(!x||!(Number(x.camino)>0))return 'En camino libre: 0 (no hay compra en camino)';
+  return 'En camino libre: <b>'+(Math.round(Number(x.libre)*1000)/1000)+'</b>'+(Number(x.apartado)>0?' (de '+(Math.round(Number(x.camino)*1000)/1000)+', '+(Math.round(Number(x.apartado)*1000)/1000)+' ya apartados)':'');
+}
+function _repoPintar(){ document.querySelectorAll('.origen-rep[data-a]').forEach(function(el){ el.innerHTML=_repoTxt(el.dataset.a); }); }
+function _repoCargar(forzar){
+  if(_repoEC.cargando)return;
+  if(!forzar&&_repoEC.d&&Date.now()-_repoEC.t<60000){ setTimeout(_repoPintar,0); return; }
+  _repoEC.cargando=true;
+  _baseRpc('repo_en_camino_base',{}).then(function(r){ _repoEC.d=(r&&r.rep)||{}; _repoEC.t=Date.now(); })
+    .catch(function(){ if(!_repoEC.d)_repoEC.d={}; })
+    .then(function(){ _repoEC.cargando=false; _repoPintar(); });
+}
 function _origenFaltan(productos){
   var out=[];
   (productos||[]).forEach(function(x){
@@ -22454,28 +22486,31 @@ function confirmarOrigen(btn){
   var box=$('orig-'+uid);
   var productos=[];
   var resumen=[];
-  var error=null;
+  var error=null, repError=null;
   box.querySelectorAll('.origen-prod').forEach(function(prodRow){
     var abbr=prodRow.dataset.a;
     var qTot=Number(prodRow.dataset.q)||0;
     var dInp=prodRow.querySelector('input[data-role="d"]');
     var ocInp=prodRow.querySelector('input[data-role="oc"]');
+    var repInp=prodRow.querySelector('input[data-role="rep"]');
     var provSel=prodRow.querySelector('select[data-role="prov"]');
     var d=Math.max(0, Number(dInp&&dInp.value)||0);
     var oc=Math.max(0, Number(ocInp&&ocInp.value)||0);
+    var rp=Math.max(0, Number(repInp&&repInp.value)||0);
     var prov=provSel?provSel.value.trim():'';
-    d=Math.round(d*1000)/1000;oc=Math.round(oc*1000)/1000;
-    if(Math.round((d+oc)*1000)!==Math.round(qTot*1000)){error=(PN[abbr]||abbr)+': '+d+'+'+oc+'≠'+qTot; return;}
-    productos.push({a:abbr,d:d,oc:oc,prov:prov});
-    var lbl;
-    if(d>0&&oc>0) lbl=d+' Depósito + '+oc+' OC';
-    else if(d>0) lbl=d+' Depósito';
-    else if(oc>0) lbl=oc+' OC'+(prov?' → '+prov:'');
-    else lbl='(0)';
-    if(oc>0&&prov&&!(d>0)) {} else if(oc>0&&prov) lbl+=' → '+prov;
-    resumen.push((PN[abbr]||abbr)+': '+lbl);
+    d=Math.round(d*1000)/1000;oc=Math.round(oc*1000)/1000;rp=Math.round(rp*1000)/1000;
+    if(Math.round((d+oc+rp)*1000)!==Math.round(qTot*1000)){error=(PN[abbr]||abbr)+': '+d+'+'+rp+'+'+oc+'≠'+qTot; return;}
+    /* (545) Lo que se pide de la reposición no puede pasar lo libre (la base lo vuelve a validar). */
+    if(rp>0&&_repoEC.d&&rp>_repoLibre(abbr)+0.0005){repError=(PN[abbr]||abbr)+': pediste '+rp+' de la reposición en camino y quedan '+_repoLibre(abbr)+' libres';return;}
+    productos.push(rp>0?{a:abbr,d:d,rep:rp,oc:oc,prov:prov}:{a:abbr,d:d,oc:oc,prov:prov});
+    var partes=[];
+    if(d>0)partes.push(d+' Depósito');
+    if(rp>0)partes.push(rp+' de la reposición en camino');
+    if(oc>0)partes.push(oc+' OC'+(prov?' → '+prov:''));
+    resumen.push((PN[abbr]||abbr)+': '+(partes.length?partes.join(' + '):'(0)'));
   });
   if(error){toast('Cantidad no coincide en '+error);return;}
+  if(repError){toast(repError,6000);return;}
   var _faltan=_origenFaltan(productos);
   if(!confirm('¿Confirmar origen de este pedido?\n\n'+resumen.join('\n')+(_faltan.length?'\n\n\u26a0\ufe0f No alcanza lo libre en los freezers:\n'+_faltan.join('\n')+'\nLo que falta queda a la vista en Abastecimiento (Faltan para entregar).':'')))return;
   btn.disabled=true;btn.textContent='Guardando...';btn.classList.add('saving');
@@ -22485,9 +22520,10 @@ function confirmarOrigen(btn){
   showLoader('Guardando origen...');
   // Calcular el origen resultante (Deposito / Orden de Compra / Mixto) para UI optimista
   var anyD=false,anyOC=false;
-  productos.forEach(function(p){if(p.d>0)anyD=true;if(p.oc>0)anyOC=true;});
-  var nuevoOrigen=(anyD&&!anyOC)?'Deposito':(anyOC&&!anyD)?'Orden de Compra':(anyD&&anyOC)?'Mixto':'Pendiente';
-  var detalleObj={};productos.forEach(function(p){detalleObj[p.a]={d:p.d,oc:p.oc};});
+  var anyRep=false;
+  productos.forEach(function(p){if(p.d>0)anyD=true;if(p.oc>0)anyOC=true;if(p.rep>0)anyRep=true;});
+  var nuevoOrigen=anyRep?'Mixto':(anyD&&!anyOC)?'Deposito':(anyOC&&!anyD)?'Orden de Compra':(anyD&&anyOC)?'Mixto':'Pendiente';
+  var detalleObj={};productos.forEach(function(p){detalleObj[p.a]=p.rep>0?{d:p.d,oc:p.oc,rep:p.rep}:{d:p.d,oc:p.oc};});
   /* AL TOQUE (2/11/2026). El origen nuevo se pinta YA (la base lo acepta en ~1 s, Apps Script tardaba 4 s de mediana y
      hasta 30): se guarda el de antes y vuelve si el backend lo rechaza o si se dice que no al aviso de OC comprometida. */
   var _pO=null,_antes=null;
@@ -22524,6 +22560,7 @@ function confirmarOrigen(btn){
             }
           }
         }
+        if(anyRep)_repoEC.t=0;
         render();hideLoader(true);
         var _m='Origen guardado';
         if(r.ocBorradas>0) _m+=' · '+r.ocBorradas+' OC quitada'+(r.ocBorradas>1?'s':'');
@@ -27248,10 +27285,16 @@ function rPedidos(opts){
         html+='<div class="origen-prod" data-uid="'+uid+'" data-a="'+pr.a+'" data-q="'+pr.q+'">';
         html+='<div class="origen-prod-title">'+(_esCarne(pr.a)?_lineaProd(pr.a,pr.q,p.pz):'<b>'+pr.q+'x</b> '+(PN[pr.a]||pr.a))+'</div>';
         html+=_origenDispHTML(pr.a);   /* (544) cuanto hay libre en cada freezer */
+        if(!_esCarne(pr.a))html+='<div class="origen-rep" data-a="'+pr.a+'">'+_repoTxt(pr.a)+'</div>';   /* (545) */
         html+='<div class="origen-split">';
         html+='<div class="origen-cell dep"><div class="origen-cell-lbl">Depósito</div>';
         html+='<input type="number" inputmode="decimal" step="'+(_esCarne(pr.a)?'0.001':'1')+'" min="0" max="'+pr.q+'" value="'+pr.q+'" data-role="d" data-row="'+rowUid+'" data-q="'+pr.q+'" onchange="adjustOrigenSplit(this)" oninput="adjustOrigenSplit(this)">';
         html+='</div>';
+        if(!_esCarne(pr.a)){   /* (545) la carne va por piezas: no se aparta de una reposición */
+          html+='<div class="origen-cell rep"><div class="origen-cell-lbl">Reposición en camino</div>';
+          html+='<input type="number" inputmode="decimal" step="1" min="0" max="'+pr.q+'" value="0" data-role="rep" data-row="'+rowUid+'" data-q="'+pr.q+'" onchange="adjustOrigenSplit(this)" oninput="adjustOrigenSplit(this)">';
+          html+='</div>';
+        }
         html+='<div class="origen-cell oc"><div class="origen-cell-lbl">Orden Compra</div>';
         html+='<input type="number" inputmode="decimal" step="'+(_esCarne(pr.a)?'0.001':'1')+'" min="0" max="'+pr.q+'" value="0" data-role="oc" data-row="'+rowUid+'" data-q="'+pr.q+'" onchange="adjustOrigenSplit(this)" oninput="adjustOrigenSplit(this)">';
         html+='</div>';
@@ -27267,6 +27310,7 @@ function rPedidos(opts){
       });
       html+='<button class="btn-origen" data-h="'+p.h+'" data-n="'+p.n+'" data-r="'+(p.r||'')+'" data-uid="'+uid+'" onclick="confirmarOrigen(this)">CONFIRMAR ORIGEN</button>';
       html+='</div>';
+      _repoCargar();   /* (545) lo libre en camino, para el texto de cada producto */
     }
 
     // DESHACER ORIGEN — disponible si ya hay origen confirmado (no Pendiente)
@@ -42154,7 +42198,7 @@ if('serviceWorker' in navigator){
     Object.keys(raw).forEach(function(abbr){
       var v=raw[abbr];
       if(v&&typeof v==='object'){
-        det[abbr]={d:Number(v.d)||0,oc:Number(v.oc)||0};
+        det[abbr]={d:Number(v.d)||0,oc:Number(v.oc)||0,rep:Number(v.rep)||0};   /* (545) rep: de la reposición en camino */
       }else if(v==='OC'){
         det[abbr]={d:0,oc:qByAbbr[abbr]||0};
       }else{ // 'D' o cualquier otra cosa → todo Depósito
@@ -42179,10 +42223,11 @@ if('serviceWorker' in navigator){
 
   // Estado consolidado del pedido — qué falta hacer
   function _estadoConsolidado(p,det,ocs){
-    var hasD=false,hasOC=false;
+    var hasD=false,hasOC=false,hasRep=false;
     Object.keys(det).forEach(function(a){
       if(det[a].d>0)hasD=true;
       if(det[a].oc>0)hasOC=true;
+      if(det[a].rep>0)hasRep=true;
     });
     var ocsRecibidas=ocs.filter(function(o){return String(o.estado||'').toLowerCase()==='recibido';}).length;
     var ocsTotal=ocs.length;
@@ -42196,6 +42241,7 @@ if('serviceWorker' in navigator){
     if(entregado)return {cls:'ok',ic:'✓',msg:'Entregado · falta cobrar'};
     // No entregado todavía — chequear listo o esperando
     if(_pedOrigenPendiente(p))return {cls:'wait',ic:'⏳',msg:'Falta decidir origen de los productos'};
+    if(hasRep)return {cls:'wait',ic:'🚚',msg:'Esperando la reposición en camino'};
     if(hasOC&&!todasRecibidas){
       var falta=ocsTotal-ocsRecibidas;
       return {cls:'wait',ic:'📦',msg:'Esperando '+falta+' OC'+(falta===1?'':'s')+' del proveedor'};
@@ -42221,7 +42267,7 @@ if('serviceWorker' in navigator){
     var pn=(typeof PN!=='undefined'&&PN)||{};
 
     // Productos D y OC
-    var prodsD=[]; var prodsOC=[];
+    var prodsD=[]; var prodsOC=[]; var prodsRep=[];
     (p.p||[]).forEach(function(r){
       var d=det[r.a]?det[r.a].d:0;
       var oc=det[r.a]?det[r.a].oc:0;
@@ -42237,6 +42283,7 @@ if('serviceWorker' in navigator){
         else d=r.q;
       }
       if(d>0)prodsD.push({a:r.a,q:d});
+      if(det[r.a]&&det[r.a].rep>0)prodsRep.push({a:r.a,q:det[r.a].rep});
       if(oc>0){
         // buscar la OC correspondiente para mostrar proveedor + estado
         var ocRow=ocs.find(function(o){return String(o.abbr||'').trim()===r.a;});
@@ -42433,6 +42480,19 @@ if('serviceWorker' in navigator){
       html+='</div>';
     }
 
+    // (545) Sección REPOSICIÓN EN CAMINO: no está en el freezer; entra apartada para este pedido cuando se recibe la compra.
+    if(prodsRep.length){
+      html+='<div class="ord-section">';
+      html+=  '<div class="ord-section-h">🚚 De la reposición en camino <span class="count">'+prodsRep.length+'</span></div>';
+      prodsRep.forEach(function(pr){
+        html+='<div class="ord-prod"><div class="ord-prod-ico wait">🚚</div><div class="ord-prod-l">';
+        html+=  '<div><span class="ord-prod-q">'+pr.q+'×</span><span class="ord-prod-name">'+(pn[pr.a]||pr.a)+'</span></div>';
+        html+=  '<div class="ord-prod-sub">Viene en la compra del depósito · se aparta al recibirla</div>';
+        html+='</div></div>';
+      });
+      html+='</div>';
+    }
+
     // Sección ORDEN DE COMPRA
     if(prodsOC.length){
       html+='<div class="ord-section">';
@@ -42468,7 +42528,7 @@ if('serviceWorker' in navigator){
     }
 
     // Si no hay detalle (origen Pendiente) y solo cargué prodsD con pendingDecision, ya está cubierto.
-    if(!prodsD.length&&!prodsOC.length){
+    if(!prodsD.length&&!prodsOC.length&&!prodsRep.length){
       html+='<div class="ord-section"><div class="ord-empty">Sin productos cargados</div></div>';
     }
 
