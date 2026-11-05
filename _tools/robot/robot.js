@@ -226,7 +226,7 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
     const vio = a1.bil === a0.bil - 100 && a1.cob === (a0.cob || 0) + 100, volvio = a2.bil === a0.bil && a2.cob === (a0.cob || 0);
     return { ok: vio && volvio && bien(m2) && a1.de === 'base' && a1.sinFoto, detalle: 'bil/cob de PRUEBA Robot ' + a0.bil + '/' + a0.cob + ' → ' + a1.bil + '/' + a1.cob + ' → ' + a2.bil + '/' + a2.cob
       + (vio ? ' · se vio al instante' : ' · ¡CAJA NO LO MOSTRÓ!') + (volvio ? '' : ' · no volvió') + (bien(m2) ? '' : ' · deshacer: ' + JSON.stringify(m2).slice(0, 120)) + ' · de ' + a1.de + (a1.sinFoto ? ', sin foto' : ', CON FOTO') };
-  }, { escribe: true, topeMs: 60000, esperado: 'Supa: «Billetera/Cobrado PRUEBA Robot» en la Saldo Base que lee el motor ca' });
+  }, { escribe: true, topeMs: 60000 });
   await paso('alta en la tienda', async () => {
     const prod = await prodPrueba();
     if (!prod) return { ok: false, detalle: 'el producto ' + SKU + ' no está en D.stock (Stock › Productos)' };
