@@ -440,7 +440,7 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
       var fuera={pedidosFuenteAplicar:1,altaPgAplicar:1,difAplicar:1,loginUsuario:1,logout:1,loginVendedor:1}, on=_palancaVal('directas')||{};
       var todas=Object.keys(s).filter(function(a){ return !fuera[a]; });
       /* juntadaIntegrante va por su propia RPC desde Ruta (juntada_integrante_directo), no por el mapa ni por Apps Script. */
-      var base=function(a){ if(a==='stockContar')return _palancaVal('contarDirecto')===true; if(a==='juntadaIntegrante')return true; return !!(ORD_DIRECTAS_RPC[a]&&on[a]===true); };
+      var base=function(a){ if(a==='stockContar')return _palancaVal('contarDirecto')===true; if(a==='juntadaIntegrante')return true; /* (5/11) Ajustes › Precios: fetch directo a su RPC (Supa 490). */ if(a==='precioProducto'||a==='precioCombo'||a==='cuentaSet')return true; return !!(ORD_DIRECTAS_RPC[a]&&on[a]===true); };
       var cortadas=todas.filter(function(a){ return !base(a)&&typeof ACCIONES_CORTADAS==='object'&&ACCIONES_CORTADAS[a]; });
       var apps=todas.filter(function(a){ return !base(a)&&!(typeof ACCIONES_CORTADAS==='object'&&ACCIONES_CORTADAS[a]); });
       return JSON.stringify({n:todas.length,apps:apps.sort(),cortadas:cortadas.length}); })()`, 30000));

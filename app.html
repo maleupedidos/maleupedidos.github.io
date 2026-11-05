@@ -43,6 +43,7 @@ html.listo #boot{opacity:0;pointer-events:none;transition:opacity .25s}
 .cpl-btn,.cpl-no{display:block;width:100%;padding:12px;border-radius:10px;font-size:15px;margin-top:8px;cursor:pointer}
 .cpl-btn{border:1px solid var(--ink3,#bbb);background:var(--bg,#fff);color:var(--ink,#222);font-weight:600}
 .cpl-no{border:none;background:transparent;color:var(--ink2,#555)}
+.pr-fila{border-top:1px solid rgba(128,128,128,.2);padding:10px 0}.pr-nom{font-weight:600;margin-bottom:6px}.pr-sku{font-weight:400;opacity:.6;font-size:12px}.pr-ins{display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end}.pr-ins label{display:flex;flex-direction:column;font-size:12px;opacity:.9;gap:2px}.pr-ins input:not([type=checkbox]){width:110px;padding:8px;border-radius:8px;border:1px solid rgba(128,128,128,.35);font-size:15px;background:transparent;color:inherit}.pr-cta input:not([type=checkbox]){width:150px}.pr-ins label.pr-chk{flex-direction:row;align-items:center;gap:6px;padding-bottom:8px}.pr-res{margin-top:6px;font-size:13px}.pr-ok{color:#1a7f37}.pr-mal{color:#c62828}.pr-res s{opacity:.6}.pr-buscar{width:100%;box-sizing:border-box;padding:9px;border-radius:8px;border:1px solid rgba(128,128,128,.35);margin:8px 0;font-size:15px;background:transparent;color:inherit}.pr-nota{font-size:12px;opacity:.75;margin:6px 0}
 </style>
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
@@ -9874,6 +9875,7 @@ details.rb-plg[open]{padding-bottom:10px}
     <button class="aj-pill" data-sec="permisos" onclick="ajGo('permisos')">🔐 Permisos</button>
     <button class="aj-pill" data-sec="avisos" onclick="ajGo('avisos')">🔔 Avisos</button>
     <button class="aj-pill" data-sec="alta" onclick="ajGo('alta')">➕ Producto nuevo</button>
+    <button class="aj-pill" data-sec="precios" onclick="ajGo('precios')">💲 Precios</button>
     <button class="aj-pill" data-sec="autom" onclick="ajGo('autom')">⚙️ Automatizaciones</button>
     <button class="aj-pill" data-sec="sesion" onclick="ajGo('sesion')">🔑 Sesión</button>
   </div>
@@ -9886,7 +9888,7 @@ details.rb-plg[open]{padding-bottom:10px}
  * Provisiones_Fijas, Config (negocio), Vendedores, Permisos. */
 var AJ_DATA=null, AJ_SEC='usuarios', AJ_PEDIDO=null;
 /* Las secciones que se dibujan sin ajustesData. */
-var AJ_SEC_SOLAS={sesion:1,avisos:1,autom:1,alta:1};
+var AJ_SEC_SOLAS={sesion:1,avisos:1,autom:1,alta:1,precios:1};
 function ajEsc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 /* ── Sesión: salir para entrar con otra cuenta ────────────────────────────
    Pedido de Tadeo (21/8/2026): poder cambiarse a la cuenta de un repartidor o
@@ -10290,7 +10292,7 @@ function _ajVivoPrender(){
          `ajustesData` (el canal sale de Config_Maleu): va con las demas. AUTOMATIZACIONES sale de su lectura y de la
          foto `erp_automation_snapshot`, que no avisa: sigue con el boton hasta que la base mande esa señal. */
       try{(window.__vivoTabs=window.__vivoTabs||{}).ajustes=function(){
-        if (AJ_SEC==='sesion' || AJ_SEC==='alta') return true;
+        if (AJ_SEC==='sesion' || AJ_SEC==='alta' || AJ_SEC==='precios') return true;
         if (AJ_SEC==='autom') return !!_auVivo.prendido;   /* (270) erp:hoja:automatizaciones */
         return _lecModo('ajustesData')==='si'; }; }catch(e){}
       ['usuarios', 'permisos', 'config_maleu', 'config', 'vendedores', 'provisiones_fijas'].forEach(function(h){ _enVivoEscuchar('erp:hoja:' + h, _ajVivoSenal, _ajVivoSenal); });
@@ -10343,6 +10345,8 @@ function ajRender(){
   /* Si ajustesData llega mientras se esta tipeando, esto se vuelve a dibujar:
      primero se guarda lo tipeado, o se perderia. */
   if(AJ_SEC==='alta'){ if(document.getElementById('ap_nombre'))apLeer(); b.innerHTML=ajAltaHTML(); return; }
+  /* Precios (5/11/2026): lee y escribe por la base, sin ajustesData. */
+  if(AJ_SEC==='precios'){ b.innerHTML=ajPreciosHTML(); prFiltrar(); return; }
   // ajustesData lee media planilla: tarda 15-25s. Antes, tocar una pastilla
   // durante esa espera no hacia NADA (ajRender se iba de largo) y parecia que
   // el boton estaba muerto. Ahora al menos avisa que esta en camino.
@@ -10429,6 +10433,126 @@ function apZonaHTML(){
   return h;
 }
 var AP_AVISOS=[];
+/* ── Precios (5/11/2026, Supa 490): precio de cada producto (y Clubes), los 5 combos y las 3 cuentas ──────────────
+   Lee y escribe SOLO por la base: producto_precio_directo / combo_precio_directo / cuenta_set_directo. Estas acciones
+   no existen en Code.js: mandarlas a Apps Script caerían en _doPostPedido y crearían un pedido. Por eso no pasan por
+   el interceptor ni por _ordenDirecta: van con fetch directo a la RPC, y si la base no contesta, no se guardó nada.
+   Después de guardar, la fila muestra el antes y el después que devuelve la base (no lo que se tipeó). */
+var PR={estado:'nada',err:'',productos:[],combos:[],cuentas:[],filtro:'',ed:{},res:{},busy:{},op:{},lectura:''};
+/* Lo de hoy, por si la lectura propia (precios_ajustes_pantalla) todavía no está en la base: el antes REAL lo devuelve
+   la escritura igual. */
+var PR_COMBOS_HOY=[{id:'cmb_descubri_semana',nombre:'Descubrí Maleu · Semana',precio:33900},{id:'cmb_descubri_finde',nombre:'Descubrí Maleu · Fin de Semana',precio:34900},
+  {id:'cmb_noche_casa',nombre:'Noche en Casa',precio:23900},{id:'cmb_mesa_familiar',nombre:'Mesa Familiar',precio:45900},{id:'cmb_freezer_lleno',nombre:'Freezer Lleno',precio:84900}];
+var PR_CUENTAS_HOY=[{id:'efectivo',nombre:'Efectivo',alias:'',banco:'',activo:true},{id:'mp',nombre:'Mercado Pago Tadeo',alias:'maleump',banco:'Mercado Pago',activo:true},
+  {id:'brubank',nombre:'Brubank Lucas',alias:'maleubru',banco:'Brubank',activo:true}];
+function pr$(n){ if(n===null||n===undefined||n==='')return '—'; var x=Number(n); return isNaN(x)?String(n):'$'+Math.round(x).toLocaleString('es-AR'); }
+function prNum(v){ var s=String(v==null?'':v).trim().replace(/\$/g,'').replace(/\s/g,''); if(s==='')return null; if(/,/.test(s))s=s.replace(/\./g,'').replace(',','.'); else if(/^\d{1,3}(\.\d{3})+$/.test(s))s=s.replace(/\./g,''); var n=Number(s); return isNaN(n)?NaN:n; }
+function _prRpc(rpc,body){
+  return Promise.resolve(typeof _sbPermiso==='function'?_sbPermiso(true):null).catch(function(){return null;}).then(function(sb){
+    if(!sb||!sb.token||!sb.url)throw new Error('Sin sesión de la base: salí y volvé a entrar con tu PIN.');
+    return fetch(sb.url+'/rest/v1/rpc/'+rpc,{method:'POST',headers:{apikey:sb.key,Authorization:'Bearer '+sb.token,'Content-Type':'application/json'},body:JSON.stringify(body||{})})
+      .then(function(r){ return r.text().then(function(t){ var d=null; try{d=JSON.parse(t);}catch(e){}
+        if(r.status===403||(d&&(d.code==='42501'||d.forbidden)))throw new Error('No tenés permiso para cambiar precios (hace falta admin con la tab Ajustes).');
+        if(!r.ok)throw new Error((d&&d.message)||('La base contestó '+r.status+'.'));
+        return d; }); });
+  });
+}
+function prCargar(forzar){
+  /* Sola, solo la primera vez: si cargara también desde 'error', cada dibujo del error volvería a pedir (bucle). */
+  if(PR.estado==='cargando'||(PR.estado!=='nada'&&!forzar))return;
+  PR.estado='cargando'; PR.err='';
+  _prRpc('precios_ajustes_pantalla',{}).then(function(d){
+    if(!d||!Array.isArray(d.productos))throw new Error('sin lectura propia');
+    PR.productos=d.productos; PR.combos=d.combos||[]; PR.cuentas=d.cuentas||[]; PR.lectura='base';
+  }).catch(function(e){
+    if(/permiso/.test(String(e&&e.message)))throw e;
+    /* Respaldo: precios de precios_pantalla y nombres del stock. Combos y cuentas, los de hoy. */
+    return Promise.all([_prRpc('precios_pantalla',{}),_prRpc('stock_tab_pantalla',{}).catch(function(){return null;})]).then(function(r){
+      var pr=r[0]||{}, nom={}; ((r[1]&&r[1].stock)||[]).forEach(function(x){ var a=String(x.a||x.abbr||'').trim(); if(a)nom[a]=x.n||x.nombre||''; });
+      PR.productos=Object.keys(pr).map(function(k){ return {sku:k,nombre:nom[k]||'',precio:pr[k]&&pr[k].p,precioClubes:null,unidad:pr[k]&&pr[k].u}; })
+        .sort(function(a,b){ return String(a.nombre||a.sku).localeCompare(String(b.nombre||b.sku),'es'); });
+      PR.combos=PR_COMBOS_HOY.slice(); PR.cuentas=PR_CUENTAS_HOY.slice(); PR.lectura='respaldo';
+    });
+  }).then(function(){ PR.estado='listo'; },function(e){ PR.estado='error'; PR.err=String(e&&e.message||e); })
+    .then(function(){ if(AJ_SEC==='precios')ajRender(); });
+}
+function prEd(k,campo,el){ (PR.ed[k]=PR.ed[k]||{})[campo]=(el.type==='checkbox')?el.checked:el.value; }
+function prVal(k,campo,def){ var e=PR.ed[k]; return (e&&campo in e)?e[campo]:def; }
+function prResHTML(k,fmt){
+  var r=PR.res[k]; if(!r)return '';
+  if(!r.ok)return '<div class="pr-res pr-mal">✗ '+ajEsc(r.err)+'</div>';
+  return '<div class="pr-res pr-ok">✓ Guardado · '+fmt(r.antes||{},r.despues||{})+'</div>';
+}
+function prCambio(a,b,campo,fmt){ var x=a[campo],y=b[campo]; if(String(x==null?'':x)===String(y==null?'':y))return ''; return ajEsc(campo)+': <s>'+ajEsc(fmt?fmt(x):x)+'</s> → <b>'+ajEsc(fmt?fmt(y):y)+'</b>'; }
+function prFmtProd(a,b){ return 'Precio '+pr$(a.precio)+' → <b>'+pr$(b.precio)+'</b> · Clubes '+pr$(a.precioClubes)+' → <b>'+pr$(b.precioClubes)+'</b>'; }
+function prFmtCombo(a,b){ return 'Precio '+pr$(a.precio)+' → <b>'+pr$(b.precio)+'</b>'; }
+function prFmtCuenta(a,b){ var l=['nombre','alias','banco','activo'].map(function(c){ return prCambio(a,b,c); }).filter(Boolean); return l.length?l.join(' · '):'sin cambios'; }
+function ajPreciosHTML(){
+  prCargar(false);
+  var h='<div class="aj-card"><h3>Precios</h3><div class="desc">Cambiá el precio y tocá «Guardar». Se escribe directo en la base (la tienda lo toma de ahí) y la fila te muestra el antes y el después.</div>';
+  if(PR.estado==='cargando'||PR.estado==='nada')return h+'<div class="aj-loading">Cargando precios…</div></div>';
+  if(PR.estado==='error')return h+'<div class="ap-caja ap-mal">'+ajEsc(PR.err)+'</div><button class="aj-btn ghost aj-btn-full" onclick="prCargar(true)">Reintentar</button></div>';
+  if(PR.lectura==='respaldo')h+='<div class="pr-nota">Combos y cuentas muestran los valores del 5/11. El antes real te lo da la base al guardar.</div>';
+  h+='<input class="pr-buscar" id="prBuscar" placeholder="Buscar producto…" value="'+ajEsc(PR.filtro)+'" oninput="PR.filtro=this.value;prFiltrar()">';
+  h+='<div id="prProds">'+PR.productos.map(function(p){
+    var k='p:'+p.sku, b=PR.busy[k];
+    return '<div class="pr-fila" data-q="'+ajEsc((String(p.nombre||'')+' '+p.sku).toLowerCase())+'"><div class="pr-nom">'+ajEsc(p.nombre||p.sku)+' <span class="pr-sku">'+ajEsc(p.sku)+(p.unidad==='kg'?' · por kg':'')+'</span></div>'
+      +'<div class="pr-ins"><label>Precio<input inputmode="decimal" value="'+ajEsc(prVal(k,'precio',p.precio==null?'':Math.round(p.precio)))+'" oninput="prEd(\''+k+'\',\'precio\',this)"></label>'
+      +'<label>Clubes<input inputmode="decimal" placeholder="no" value="'+ajEsc(prVal(k,'precioClubes',p.precioClubes==null||p.precioClubes===''?'':Math.round(p.precioClubes)))+'" oninput="prEd(\''+k+'\',\'precioClubes\',this)"></label>'
+      +'<button class="aj-btn" onclick="prGuardarProd(\''+ajEsc(p.sku)+'\')"'+(b?' disabled':'')+'>'+(b?'…':'Guardar')+'</button></div>'+prResHTML(k,prFmtProd)+'</div>';
+  }).join('')+'</div></div>';
+  h+='<div class="aj-card"><h3>Combos</h3>'+PR.combos.map(function(c){
+    var k='c:'+c.id, b=PR.busy[k];
+    return '<div class="pr-fila"><div class="pr-nom">'+ajEsc(c.nombre)+(c.nota?' <span class="pr-sku">'+ajEsc(c.nota)+'</span>':'')+'</div>'
+      +'<div class="pr-ins"><label>Precio<input inputmode="decimal" value="'+ajEsc(prVal(k,'precio',c.precio==null?'':Math.round(c.precio)))+'" oninput="prEd(\''+k+'\',\'precio\',this)"></label>'
+      +'<button class="aj-btn" onclick="prGuardarCombo(\''+ajEsc(c.id)+'\')"'+(b?' disabled':'')+'>'+(b?'…':'Guardar')+'</button></div>'+prResHTML(k,prFmtCombo)+'</div>';
+  }).join('')+'</div>';
+  h+='<div class="aj-card"><h3>Cuentas</h3><div class="desc">El saldo no se toca acá.</div>'+PR.cuentas.map(function(c){
+    var k='q:'+c.id, b=PR.busy[k], act=prVal(k,'activo',c.activo!==false&&String(c.activo).toLowerCase()!=='no');
+    return '<div class="pr-fila"><div class="pr-ins pr-cta">'
+      +'<label>Nombre<input value="'+ajEsc(prVal(k,'nombre',c.nombre||''))+'" oninput="prEd(\''+k+'\',\'nombre\',this)"></label>'
+      +'<label>Alias<input autocapitalize="off" value="'+ajEsc(prVal(k,'alias',c.alias||''))+'" oninput="prEd(\''+k+'\',\'alias\',this)"></label>'
+      +'<label>Banco<input value="'+ajEsc(prVal(k,'banco',c.banco||''))+'" oninput="prEd(\''+k+'\',\'banco\',this)"></label>'
+      +'<label class="pr-chk"><input type="checkbox"'+(act?' checked':'')+(c.id==='efectivo'?' disabled title="El efectivo no se desactiva"':'')+' onchange="prEd(\''+k+'\',\'activo\',this)"> Activa</label>'
+      +'<button class="aj-btn" onclick="prGuardarCuenta(\''+ajEsc(c.id)+'\')"'+(b?' disabled':'')+'>'+(b?'…':'Guardar')+'</button></div>'+prResHTML(k,prFmtCuenta)+'</div>';
+  }).join('')+'</div>';
+  return h;
+}
+function prFiltrar(){ var q=String(PR.filtro||'').toLowerCase().trim(); document.querySelectorAll('#prProds .pr-fila').forEach(function(f){ f.style.display=(!q||f.dataset.q.indexOf(q)>=0)?'':'none'; }); }
+/* Un clientOpId por intento de guardar ESA fila: si la red se corta y se reintenta, la base lo reconoce y no lo hace dos
+   veces. Se renueva recién cuando la base contestó. */
+function _prOp(k){ if(!PR.op[k])PR.op[k]='pr_'+k.replace(/[^\w]/g,'_')+'_'+Date.now().toString(36); return PR.op[k]; }
+function _prGuardar(k,rpc,p,aplicar){
+  if(PR.busy[k])return;
+  PR.busy[k]=1; delete PR.res[k]; p.clientOpId=_prOp(k); ajRender();
+  _prRpc(rpc,{p:p}).then(function(d){
+    delete PR.op[k];
+    if(!d||d.ok===false){ PR.res[k]={ok:false,err:(d&&d.err)||'La base no lo guardó.'}; return; }
+    PR.res[k]={ok:true,antes:d.antes,despues:d.despues}; delete PR.ed[k]; aplicar(d.despues||{});
+  },function(e){
+    /* Sin respuesta no se sabe si llegó: se deja el mismo clientOpId para el reintento. */
+    PR.res[k]={ok:false,err:String(e&&e.message||e)+(/permiso|sesión/i.test(String(e&&e.message))?'':' Probá de nuevo: si ya había llegado, no se repite.')};
+  }).then(function(){ delete PR.busy[k]; if(AJ_SEC==='precios'){ ajRender(); prFiltrar(); } });
+}
+function prGuardarProd(sku){
+  var k='p:'+sku, e=PR.ed[k]||{}, p={action:'precioProducto',sku:sku};
+  if('precio' in e){ var n=prNum(e.precio); if(n===null||isNaN(n)||n<=0){ PR.res[k]={ok:false,err:'El precio tiene que ser un número mayor que 0.'}; ajRender(); prFiltrar(); return; } p.precio=n; }
+  if('precioClubes' in e){ var c=prNum(e.precioClubes); if(c!==null&&(isNaN(c)||c<0)){ PR.res[k]={ok:false,err:'El precio de Clubes no es un número (dejalo vacío para sacarlo).'}; ajRender(); prFiltrar(); return; } p.precioClubes=c===null?'':c; }
+  if(!('precio' in p)&&!('precioClubes' in p)){ PR.res[k]={ok:false,err:'No cambiaste nada.'}; ajRender(); prFiltrar(); return; }
+  _prGuardar(k,'producto_precio_directo',p,function(d){ PR.productos.forEach(function(x){ if(x.sku===sku){ if('precio' in d)x.precio=d.precio; if('precioClubes' in d)x.precioClubes=d.precioClubes; } }); });
+}
+function prGuardarCombo(id){
+  var k='c:'+id, e=PR.ed[k]||{}, n=prNum(e.precio);
+  if(!('precio' in e)){ PR.res[k]={ok:false,err:'No cambiaste nada.'}; ajRender(); prFiltrar(); return; }
+  if(n===null||isNaN(n)||n<=0){ PR.res[k]={ok:false,err:'El precio tiene que ser un número mayor que 0.'}; ajRender(); prFiltrar(); return; }
+  _prGuardar(k,'combo_precio_directo',{action:'precioCombo',id:id,precio:n},function(d){ PR.combos.forEach(function(x){ if(x.id===id&&'precio' in d)x.precio=d.precio; }); });
+}
+function prGuardarCuenta(id){
+  var k='q:'+id, e=PR.ed[k]||{}, p={action:'cuentaSet',id:id};
+  ['nombre','alias','banco','activo'].forEach(function(c){ if(c in e)p[c]=(c==='activo')?!!e[c]:String(e[c]).trim(); });
+  if(Object.keys(p).length<=2){ PR.res[k]={ok:false,err:'No cambiaste nada.'}; ajRender(); prFiltrar(); return; }
+  _prGuardar(k,'cuenta_set_directo',p,function(d){ PR.cuentas.forEach(function(x){ if(x.id===id)['nombre','alias','banco','activo'].forEach(function(c){ if(c in d)x[c]=d[c]; }); }); });
+}
 function ajAltaHTML(){
   apCargarCatalogo();
   if(AP_RES) return apResultadoHTML();
@@ -15034,7 +15158,7 @@ function _leerVersion(app){
    "El HTML no sabe que version es" dejo de ser cierto: el build le escribe
    adentro el CACHE_NAME de sw-panel.js, el mismo que deploy.sh obliga a subir en
    cada cambio. Si lo publicado dice otra cosa, esta pagina es vieja. Punto. */
-var _APP_CN_PAGINA='maleu-panel-v910';
+var _APP_CN_PAGINA='maleu-panel-v911';
 
 /* Devuelve [{k,v}] si lo publicado no es lo que esta pagina corre. */
 function _chequearVersiones(){
