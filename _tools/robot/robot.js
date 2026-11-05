@@ -421,6 +421,16 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
     METRICAS.posts_apps_hoy = pf.totalHoy;
     return { ok: true, salteado: pf.totalHoy > 0, detalle: 'hoy ' + pf.totalHoy + (pf.totalHoy ? ' (' + top(pf.hoy) + ')' : '') + (ayer ? ' · ayer ' + tot(ayer) + ' (' + top(ayer) + ')' : '') };
   });
+  /* LA PLATA DE RED EN LA BASE (4/11/2026, Supa 483). Corre como admin, en un bloque que se deshace, sobre sus propios
+     datos PRUEBA: cambiar vendedor, anular y devolver el envío, comisión fuera de escala y sacarla, anular la liquidación
+     LQ-9991, y la comisión como robot (403). La liquidación tiene que dar igual al peso. Rojo si algo no da. */
+  await paso('plata de Red en la base (como admin, se deshace)', async () => {
+    const r = await rpc('robot_red_plata_probar', {});
+    if (!r || r.http >= 300) return { ok: false, detalle: 'la base contestó ' + (r && r.http) + ' ' + String((r && (r.message || r.texto)) || '').slice(0, 150) };
+    const casos = Array.isArray(r.casos) ? r.casos : [], malos = casos.filter((c) => !c.ok), L = r.liquidacion || {};
+    return { ok: !!r.ok && !malos.length && casos.length >= 7 && L.igual === true,
+      detalle: (casos.length - malos.length) + ' de ' + casos.length + ' casos · liquidación ' + (L.igual ? 'igual al peso' : 'DISTINTA') + ' ($' + (L.total || 0) + ')' + (malos.length ? ' · mal: ' + malos.map((c) => c.accion + (c.err ? ' (' + String(c.err).slice(0, 60) + ')' : '')).join(', ') : '') };
+  }, { topeMs: 20000 });
   /* CUÁNTAS ESCRITURAS DEL ERP TODAVÍA SALEN POR APPS SCRIPT (4/11/2026, Organizador: «de 50 a menos de 10»). Sin tocar
      botones: toda `action:'X'` del app.html publicado contra el mapa de directas y la palanca REAL de cada una (la que le da
      la base al robot). Sin los despertadores (no viajan) ni el login (el respaldo sigue a propósito). Informativo. */
