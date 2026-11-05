@@ -210,6 +210,23 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
     var p=l.find(function(x){ return String(x.a||'').trim()===${JSON.stringify(SKU)}; }); if(!p)return null;
     return {id:${JSON.stringify(E.producto_id == null ? null : E.producto_id)}, nombre:p.n||${JSON.stringify(SKU)}, precio:Number(p.p)||1, stock:Number((p.pd||{})[${JSON.stringify(DEP)}])||0}; })()`);
 
+  /* (5/11/2026, Organizador; Supa 524) MOVIMIENTO DE PLATA → SE VE EN CAJA AL INSTANTE. Solo en la sesión del robot existe la
+     persona «PRUEBA Robot» (bil 1000 de fantasía): se mueven $100 de su billetera a su cobrado, Caja tiene que mostrarlo en el
+     acto (de la base, sin foto), y se deshace moviendo al revés. Para admin no existe. */
+  if (cred) await paso('plata PRUEBA → se ve en Caja al instante', async () => {
+    const lug = async () => JSON.parse(await ev(`(async function(){ var d=await _cajaArmaTraer(Date.now(),true); var L=d.lugares||{}, n='PRUEBA Robot';
+      return JSON.stringify({bil:Number((L.bil||{})[n]), cob:Number((L.cob||{})[n]), de:(window.__cajaFuente||{}).de, sinFoto:!!(window.__cajaFuente||{}).sinFoto}); })()`, 30000));
+    const mover = (desde, hacia, id) => directa('moverPlata', { action: 'moverPlata', desde: desde, hacia: hacia, monto: 100, nota: 'robot', proveedor: '', clientOpId: PREFIJO + id });
+    const a0 = await lug();
+    if (!isFinite(a0.bil)) return { ok: false, detalle: 'en Caja no está la persona PRUEBA Robot (524): ' + JSON.stringify(a0) };
+    const m1 = await mover('bil:PRUEBA Robot', 'cob:PRUEBA Robot', 'plata-ida'); if (!bien(m1)) return mal(m1, 'mover');
+    const a1 = await lug();
+    let m2 = null; for (let k = 0; k < 12; k++) { m2 = await mover('cob:PRUEBA Robot', 'bil:PRUEBA Robot', 'plata-vuelta'); if (!(m2 && m2.d && m2.d.acomodando)) break; await pausa(5000); }
+    const a2 = await lug();
+    const vio = a1.bil === a0.bil - 100 && a1.cob === (a0.cob || 0) + 100, volvio = a2.bil === a0.bil && a2.cob === (a0.cob || 0);
+    return { ok: vio && volvio && bien(m2) && a1.de === 'base' && a1.sinFoto, detalle: 'bil/cob de PRUEBA Robot ' + a0.bil + '/' + a0.cob + ' → ' + a1.bil + '/' + a1.cob + ' → ' + a2.bil + '/' + a2.cob
+      + (vio ? ' · se vio al instante' : ' · ¡CAJA NO LO MOSTRÓ!') + (volvio ? '' : ' · no volvió') + (bien(m2) ? '' : ' · deshacer: ' + JSON.stringify(m2).slice(0, 120)) + ' · de ' + a1.de + (a1.sinFoto ? ', sin foto' : ', CON FOTO') };
+  }, { escribe: true, topeMs: 60000, esperado: 'Supa: «Billetera/Cobrado PRUEBA Robot» en la Saldo Base que lee el motor ca' });
   await paso('alta en la tienda', async () => {
     const prod = await prodPrueba();
     if (!prod) return { ok: false, detalle: 'el producto ' + SKU + ' no está en D.stock (Stock › Productos)' };
