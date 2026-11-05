@@ -418,12 +418,14 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
     METRICAS.espera_recibir_ms = Date.now() - tR;
     if (!bien(r)) return mal(r, 'recibir'); hechos.push('recibida (esperó ' + Math.round(METRICAS.espera_recibir_ms / 1000) + ' s)');
     /* (5/11, Supa 497) Recibir mueve el libro: el stock de PRUEBA en el depósito prueba sube lo recibido. */
-    /* (5/11, Supa) La recepción vuelve diferida: el LIBRO se mueve en el acto y la pantalla se pone al día cuando el aplicador
-       de la base cierra la orden (< 1 min). Se juzga por el libro; que la pantalla lo muestre lo mira el paso de los 2 min. */
+    /* (529) El libro y las lecturas de Stock/autopedido deben coincidir inmediatamente, sin esperar al cron. */
     const lq = await libroDep(), sb = await stockPd();
     STOCK_ESPERADO = { prueba: la + q, ustariz: sa.ustariz, de: 'recepción' }; T_ULTIMO_MOV = Date.now();
     const subio = la != null && lq === la + q;
-    return { ok: subio, detalle: oc + ': ' + hechos.join(' → ') + ' · libro ' + DEP + ' ' + la + ' → ' + lq + (subio ? ' (+' + q + ')' : ' · tenía que dar ' + (la + q)) + ' · el ERP mostraba ' + sa.prueba + ' → ' + sb.prueba + ' · op ' + PREFIJO + 'recibir' + ' · fila ' + lin.row + (subio ? '' : ' · respuesta ' + JSON.stringify(r && r.d ? r.d : r).slice(0, 400)) };
+    const full = await rpc('stock_full_pantalla', {});
+    const enAutopedido = Number(full && full[SKU] && full[SKU].pd && full[SKU].pd[DEP]);
+    const inmediato = sb.prueba === lq && enAutopedido === lq;
+    return { ok: subio && inmediato, detalle: oc + ': ' + hechos.join(' → ') + ' · libro ' + DEP + ' ' + la + ' → ' + lq + (subio ? ' (+' + q + ')' : ' · tenía que dar ' + (la + q)) + ' · Stock inmediato ' + sb.prueba + ' · autopedido inmediato ' + enAutopedido + ' · op ' + PREFIJO + 'recibir' + ' · fila ' + lin.row + (subio ? '' : ' · respuesta ' + JSON.stringify(r && r.d ? r.d : r).slice(0, 400)) };
   }, { escribe: true, topeMs: 130000 });
 
   /* (5/11/2026, Supa 492) CARGA de mercadería por la base: previa → guardar 1 PRUEBA → el libro total sube 1 → el reintento
