@@ -616,6 +616,12 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
     return { ok: !falta.length, detalle: det.join(' · ') + (falta.length ? ' · FALTA: ' + falta.join(' · ') : '') + ' · pesaje de carne: después del corte' };
   }, { escribe: true, topeMs: 90000 });
 
+  await paso('nadie lee la foto de Apps Script', async () => {
+    const f = JSON.parse(await ev(`JSON.stringify(window.__fotoApps||null)`).catch(() => 'null'));
+    if (f === null) return { ok: false, detalle: 'el ERP no tiene el corte de la foto (window.__fotoApps no existe)' };
+    return { ok: !f.length, detalle: f.length ? 'intentaron leer erp_screen_snapshot: ' + [...new Set(f)].join(', ') : 'ninguna lectura de erp_screen_snapshot' };
+  });
+
   /* Lo que se frenó (WhatsApp, Telegram, mails) y la limpieza de todo lo de esta corrida. */
   if (ENTIDADES) {
     const fr = await rpc('robot_avisos_frenados', { p_corrida: CORRIDA }).catch(() => null);

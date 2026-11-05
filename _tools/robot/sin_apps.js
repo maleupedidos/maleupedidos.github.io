@@ -100,6 +100,11 @@ const ERROR_RE = /No se pudo|Sin conexi[oó]n|fijate la conexi[oó]n|Error al ca
   filas.forEach((f) => f.apps.forEach((a) => { (acc[a] = acc[a] || []).push(f.pantalla); }));
   console.log('Acciones que todavía van a Apps Script:');
   Object.keys(acc).sort().forEach((a) => console.log('  ' + a + '  ←  ' + [...new Set(acc[a])].join(', ')));
+  /* (5/11/2026, Organizador) erp_screen_snapshot (las fotos de Apps Script) no lo lee NINGUNA pantalla: el ERP corta esa
+     lectura en su fetch y anota en window.__fotoApps quién lo intentó. */
+  const fotos = JSON.parse(await ev(`JSON.stringify(window.__fotoApps||[])`).catch(() => '[]'));
+  console.log(fotos.length ? 'Pantallas que intentaron leer la foto de Apps Script: ' + [...new Set(fotos)].join(', ') : 'Ninguna pantalla intentó leer la foto de Apps Script');
+  if (fotos.length) malas.push({ pantalla: 'fotos de Apps Script', apps: [], error: [...new Set(fotos)].join(', ') });
   if (process.env.SIN_APPS_JSON) fs.writeFileSync(process.env.SIN_APPS_JSON, JSON.stringify({ rol, filas, acciones: acc }, null, 1));
   try { cli.matar(); } catch (e) {}
   process.exit(malas.length ? 1 : 0);
