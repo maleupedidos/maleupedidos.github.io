@@ -1325,6 +1325,11 @@ button.ped-dep-x.on{background:var(--gd);border-color:var(--gd);color:#fff}
 button.ped-dep-x:disabled{opacity:.45;cursor:default}
 button.ped-dep-x.va,button.ped-dep-x.va:disabled{opacity:1;background:#E3EFE3;border-color:var(--gd);color:var(--gd)}
 .ped-dep-n{font-size:10.5px;color:var(--ink4);margin-top:6px;line-height:1.35}
+.abas-pend{margin:8px 0;padding:10px 12px;border-radius:10px;background:#fff4e5;border:1px solid #f0b46a}
+.abas-pend .abas-t{font-weight:700;font-size:13px;color:#8a4b00}
+.abas-pend .abas-s{font-size:12px;color:#6b4a1f;margin:4px 0 8px}
+.abas-pend button{border:0;border-radius:8px;padding:8px 12px;background:#2e7d32;color:#fff;font-weight:700;font-size:13px}
+.origen-disp{font-size:11px;color:var(--mt,#666);margin:2px 0 6px}
 .origen-box{margin-top:10px;background:var(--cr);border-radius:10px;padding:10px}
 .origen-help{font-size:11px;color:var(--bl);margin-bottom:8px;line-height:1.35}
 .origen-prod{background:#fff;border:1px solid var(--cd);border-radius:10px;padding:10px;margin-bottom:8px}
@@ -18669,6 +18674,44 @@ function setProvAll(uid, value){
   box.querySelectorAll('select[data-role="prov"]').forEach(function(s){s.value=value||'';});
 }
 
+/* (544) Lo libre (fisico menos reservado) de un producto en cada freezer, de la tabla Productos (`pdd`). */
+function _origenDisp(a){
+  var l=(D&&Array.isArray(D.stock))?D.stock:[], x=null;
+  for(var i=0;i<l.length;i++){ if(l[i]&&l[i].a===a){ x=l[i]; break; } }
+  return x&&x.pdd&&typeof x.pdd==='object'?x.pdd:null;
+}
+function _origenDispHTML(a){
+  var d=_origenDisp(a); if(!d)return '';
+  var deps=(typeof _pedDeps==='function'?_pedDeps():[]), t=[];
+  (deps.length?deps:Object.keys(d).map(function(k){return {id:k,nombre:k};})).forEach(function(dp){
+    var v=Number(d[dp.id])||0; t.push(_pedDepEsc(_pedDepCorto(dp.nombre||dp.id))+' <b'+(v<=0?' style="color:#c62828"':'')+'>'+(Math.round(v*1000)/1000)+'</b>');
+  });
+  return t.length?'<div class="origen-disp">Libre en freezer: '+t.join(' \u00b7 ')+'</div>':'';
+}
+function _origenFaltan(productos){
+  var out=[];
+  (productos||[]).forEach(function(x){
+    if(!(x.d>0))return; var d=_origenDisp(x.a); if(!d)return;
+    var libre=0; Object.keys(d).forEach(function(k){ libre+=Math.max(0,Number(d[k])||0); });
+    var f=Math.round((x.d-libre)*1000)/1000;
+    if(f>0)out.push('\u2022 '+(PN[x.a]||x.a)+': faltan '+f+' (hay '+(Math.round(libre*1000)/1000)+' libres)');
+  });
+  return out;
+}
+/* (544) El proveedor confirmo el agregado de un pedido tardio: el pasamanos sigue y deja de estar pendiente. */
+function abasConfirmar(clave,btn){
+  if(!confirm('¿El proveedor confirmó lo de la OC de este pedido?'))return;
+  if(btn){btn.disabled=true;btn.textContent='Guardando…';}
+  _baseRpc('pedido_abastecimiento_directo',{p:{clave:clave,accion:'confirmado'}}).then(function(){
+    var k=String(clave).split('|');
+    (D&&D.pedidos||[]).forEach(function(x){ if(x&&x.h===k[0]&&String(x.n)===k[1])delete x.abas; });
+    toast('Listo: el proveedor confirmó');
+    try{render();}catch(e){}
+  }).catch(function(e){
+    if(btn){btn.disabled=false;btn.textContent='El proveedor confirmó';}
+    toast('No se guardó: '+((e&&e.message)||'error'),6000);
+  });
+}
 function confirmarOrigen(btn){
   if(btn.disabled)return;
   var hoja=btn.dataset.h, id=btn.dataset.n, row=Number(btn.dataset.r)||0, uid=btn.dataset.uid;
@@ -18697,7 +18740,8 @@ function confirmarOrigen(btn){
     resumen.push((PN[abbr]||abbr)+': '+lbl);
   });
   if(error){toast('Cantidad no coincide en '+error);return;}
-  if(!confirm('¿Confirmar origen de este pedido?\n\n'+resumen.join('\n')))return;
+  var _faltan=_origenFaltan(productos);
+  if(!confirm('¿Confirmar origen de este pedido?\n\n'+resumen.join('\n')+(_faltan.length?'\n\n\u26a0\ufe0f No alcanza lo libre en los freezers:\n'+_faltan.join('\n')+'\nLo que falta queda a la vista en Abastecimiento (Faltan para entregar).':'')))return;
   btn.disabled=true;btn.textContent='Guardando...';btn.classList.add('saving');
   // Tras la acción, scroll al top para que Tadeo no tenga que volver arriba a mano.
   window._forceTopOnRender=true;
@@ -23439,6 +23483,13 @@ function rPedidos(opts){
        corregir hasta que se entrega. Meterlo adentro lo habria escondido en
        los pedidos ya confirmados, que son justo los que hay que poder
        corregir. */
+    /* (544, 5/11/2026) PEDIDO TARDIO: un autopedido del jueves entre las 12 y las 21 para ese viernes. Su OC se agrego,
+       pero el proveedor todavia no dijo que si: aceptar el pedido no es que el proveedor lo acepte. */
+    if(!homeOnly&&p.abas==='pendiente'&&p.es!=='Cancelado'&&p.es!=='Entregado'){
+      html+='<div class="abas-pend"><div class="abas-t">\u23f3 Pedido tard\u00edo: falta que el proveedor confirme lo de la OC</div>'
+        +'<div class="abas-s">Si el proveedor dice que s\u00ed, toc\u00e1 el bot\u00f3n. Si dice que no, «Deshacer origen» y cubrilo desde el dep\u00f3sito (todo o una parte).</div>'
+        +'<button type="button" onclick="abasConfirmar(\''+_rtEsc(p.h+'|'+p.n)+'\',this)">El proveedor confirm\u00f3</button></div>';
+    }
     html+=_pedDepHTML(p,homeOnly);
     if(!homeOnly && _pedOrigenPendiente(p)&&p.p&&p.p.length>0&&p.es!=='Cancelado'&&p.es!=='Entregado'){
       var uid=p.h.replace(/ /g,'')+p.n;
@@ -23460,6 +23511,7 @@ function rPedidos(opts){
         var rowUid=uid+'-'+idx;
         html+='<div class="origen-prod" data-uid="'+uid+'" data-a="'+pr.a+'" data-q="'+pr.q+'">';
         html+='<div class="origen-prod-title">'+(_esCarne(pr.a)?_lineaProd(pr.a,pr.q,p.pz):'<b>'+pr.q+'x</b> '+(PN[pr.a]||pr.a))+'</div>';
+        html+=_origenDispHTML(pr.a);   /* (544) cuanto hay libre en cada freezer */
         html+='<div class="origen-split">';
         html+='<div class="origen-cell dep"><div class="origen-cell-lbl">Depósito</div>';
         html+='<input type="number" inputmode="decimal" step="'+(_esCarne(pr.a)?'0.001':'1')+'" min="0" max="'+pr.q+'" value="'+pr.q+'" data-role="d" data-row="'+rowUid+'" data-q="'+pr.q+'" onchange="adjustOrigenSplit(this)" oninput="adjustOrigenSplit(this)">';
