@@ -153,6 +153,13 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
   await pantalla('inicio', null, `document.querySelector('#p-inicio')&&document.querySelector('#p-inicio').innerText.length>300`);
   await pantalla('pedidos', null, `typeof D==='object'&&D&&Array.isArray(D.pedidos)&&D.pedidos.length>0`);
   await pantalla('caja', null, `typeof D==='object'&&D&&D.caja&&document.querySelector('#p-caja')&&document.querySelector('#p-caja').innerText.length>300`);
+  /* (5/11/2026, Organizador: «Caja no puede mostrar plata congelada») Caja tiene que salir de la base, SIN la foto cajaLight que
+     arma Apps Script desde la planilla congelada: el Saldo Base, el efectivo por lugar y las cuentas, de caja_resto_pantalla. */
+  await paso('caja sale de la base, sin la foto', async () => {
+    const r = JSON.parse(await ev(`(async function(){ try{ var d=await _cajaArmaTraer(Date.now(),true); var f=window.__cajaFuente||{}; return JSON.stringify({de:f.de, sinFoto:!!f.sinFoto, porque:f.porque||'', sb:!!(d.saldoBase&&d.saldoBase.fechaDate), lug:!!(d.lugares&&d.lugares.cf!=null), cuentas:((d.caja&&d.caja.cuentas)||[]).length, mov:(d.movimientos||[]).length}); }catch(e){ return JSON.stringify({err:String(e&&e.message||e)}); } })()`, 30000));
+    const ok = r.de === 'base' && r.sinFoto && r.sb && r.lug && r.cuentas > 0;
+    return { ok: ok, detalle: r.err ? 'reventó: ' + r.err : 'de ' + r.de + (r.sinFoto ? ', sin la foto' : ', CON LA FOTO DE APPS SCRIPT' + (r.porque ? ' (' + r.porque + ')' : '')) + ' · saldo base ' + (r.sb ? 'sí' : 'NO') + ' · efectivo por lugar ' + (r.lug ? 'sí' : 'NO') + ' · ' + r.cuentas + ' cuentas · ' + r.mov + ' movimientos' };
+  }, { topeMs: 15000 });
   await pantalla('stock', 'productos', `typeof D==='object'&&D&&Array.isArray(D.stock)&&D.stock.length>0&&ST_FUENTE&&ST_FUENTE.de==='pg'`);
 
   /* 3) LO QUE TOCA PLATA REAL, EN SECO: la directa acepta, valida y no cae a Apps Script; no queda nada. */
