@@ -289,11 +289,16 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
     if (!bien(r)) return mal(r, 'entregar'); hechos.push('entregado');
     r = await directa('marcarCobrado', Object.assign({ action: 'marcarCobrado', quien: 'robot', fechaCobro: '', formaPago: 'Transferencia', cuenta: CTA, ef: 0, tr: Number(PED.$) || 1, propina: 0, cliente: CLI, repartidor: '' }, base));
     if (!bien(r)) return mal(r, 'cobrar'); hechos.push('cobrado');
+    /* (5/11, Organizador + Supa 501) «Se guardó» no alcanza: la cuenta y quién cobró tienen que quedar en el pedido. */
+    let vp = null; for (let k = 0; k < 5; k++) { const v = await rpc('robot_verificar', { p: { pedido: PED.h + '|' + PED.n } }).catch(() => null); vp = v && v.pedido; if (vp && vp.cuenta && vp.cobrador) break; await pausa(1500); }
+    const faltan = !vp ? ['el pedido'] : ['cuenta', 'cobrador', 'forma'].filter((c) => !vp[c]);
+    if (vp && !(Number(vp.transferencia) > 0)) faltan.push('transferencia');
+    hechos.push(faltan.length ? 'en la base FALTA ' + faltan.join(', ') : 'en la base: ' + vp.forma + ' · ' + vp.cuenta + ' · ' + vp.cobrador);
     await ev(`_recargarPedidos(); 1`).catch(() => 0);
     const cob = await esperar(`(function(){ var p=(D.pedidos||[]).find(function(x){ return String(x.n)===${JSON.stringify(String(PED.n))}; }); return p&&p.ep==='Cobrado'; })()`, 8000);
     r = await directa('descobrar', Object.assign({ action: 'descobrar' }, base));
     if (!bien(r)) return mal(r, 'deshacer cobro'); hechos.push('descobrado');
-    return { ok: !!cob, detalle: hechos.join(' → ') + (cob ? '' : ' · después de cobrar la pantalla no lo mostró Cobrado en 8 s') };
+    return { ok: !!cob && !faltan.length, detalle: hechos.join(' → ') + (cob ? '' : ' · después de cobrar la pantalla no lo mostró Cobrado en 8 s') };
   }, { escribe: true, topeMs: 30000 });
 
   await paso('contar stock y deshacer', async () => {
@@ -349,7 +354,7 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
 
   let COMPRA = null;
   await paso('cargar una compra', async () => {
-    const r = await directa('compraManual', { action: 'compraManual', proveedor: PROV, vendedor: 'robot', items: [{ abbr: SKU, nombre: SKU, costo: 1, qty: 1, origen: 'Orden de Compra' }], clientOpId: PREFIJO + 'compra' });
+    const r = await directa('compraManual', { action: 'compraManual', proveedor: PROV, vendedor: 'robot', items: [{ abbr: SKU, nombre: SKU, costo: 1, qty: 1, origen: 'Orden de Compra' }], confirmarDuplicada: true, clientOpId: PREFIJO + 'compra' });   /* (5/11) cada corrida es una compra nueva: como tocar «es otra» */
     if (!bien(r)) return mal(r, 'compra');
     COMPRA = r.d;
     return { ok: true, detalle: 'cargada' + (r.d.hora ? ' (' + r.d.hora + ')' : '') };
@@ -366,6 +371,8 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
     if (!lin) { const ej = (bq && Array.isArray(bq.oc) ? bq.oc.filter((x) => JSON.stringify(x).indexOf(SKU) >= 0).slice(0, 2) : []);
       return { ok: false, detalle: 'la compra no aparece en busqueda_pantalla' + (ej.length ? ' · oc con PRUEBA: ' + JSON.stringify(ej).slice(0, 250) : ' · ninguna línea de oc con PRUEBA') }; }
     const oc = lin.n, q = Number(lin.q) || 1, hechos = [];
+    /* (5/11, Supa) Una línea de OC sin fila no se recibe: rows:[0] contesta ok sin recibir nada. Rojo antes de mandar. */
+    if (!(Number(lin.row) > 0)) return { ok: false, detalle: oc + ': la línea vino con fila ' + JSON.stringify(lin.row) + ' en busqueda_pantalla · no se recibe una OC sin fila · línea ' + JSON.stringify(lin).slice(0, 200) };
     const sa = await stockPd();
     let r;
     if (lin.est !== 'Pedido') {
@@ -382,7 +389,7 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
     const lv = await rpc('robot_verificar', { p: {} }).catch(() => null), lq = lv && lv.libro && lv.libro[DEP] ? Number(lv.libro[DEP].q) : null;
     STOCK_ESPERADO = { prueba: sa.prueba + q, ustariz: sa.ustariz, de: 'recepción' }; T_ULTIMO_MOV = Date.now();
     const subio = sb.prueba === sa.prueba + q;
-    return { ok: subio, detalle: oc + ': ' + hechos.join(' → ') + ' · stock ' + DEP + ' ' + sa.prueba + ' → ' + sb.prueba + (subio ? ' (+' + q + ')' : ' · tenía que dar ' + (sa.prueba + q)) + ' · libro ' + lq + ' · op ' + PREFIJO + 'recibir' };
+    return { ok: subio, detalle: oc + ': ' + hechos.join(' → ') + ' · stock ' + DEP + ' ' + sa.prueba + ' → ' + sb.prueba + (subio ? ' (+' + q + ')' : ' · tenía que dar ' + (sa.prueba + q)) + ' · libro ' + lq + ' · op ' + PREFIJO + 'recibir' + ' · fila ' + lin.row + (subio ? '' : ' · respuesta ' + JSON.stringify(r && r.d ? r.d : r).slice(0, 400)) };
   }, { escribe: true, topeMs: 130000 });
 
   /* (5/11/2026, Supa 492) CARGA de mercadería por la base: previa → guardar 1 PRUEBA → el libro total sube 1 → el reintento
@@ -411,7 +418,11 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
 
   await paso('pagar al proveedor PRUEBA', async () => {
     const r = await directa('pagarProveedor', { action: 'pagarProveedor', proveedor: PROV, efectivo: 0, mp: 1, bonif: 0, semana: '', notas: 'robot', cuenta: CTA, clientOpId: PREFIJO + 'pago' });
-    return bien(r) ? { ok: true, detalle: '$1 desde la cuenta ' + CTA } : mal(r, 'pago');
+    if (!bien(r)) return mal(r, 'pago');
+    /* (5/11, Supa 501/499) El pago tiene que aparecer en Caja y en el EERR del mes. */
+    let g = null; for (let k = 0; k < 5; k++) { const v = await rpc('robot_verificar', { p: { gasto_op: PREFIJO + 'pago' } }).catch(() => null); g = v && v.gasto; if (g && g.en_caja && g.en_eerr) break; await pausa(1500); }
+    const okG = !!(g && g.en_caja && g.en_eerr);
+    return { ok: okG, detalle: '$1 desde la cuenta ' + CTA + ' · ' + (g ? 'en Caja ' + (g.en_caja ? 'sí' : 'NO') + ' · en el EERR ' + (g.mes || '') + ' ' + (g.en_eerr ? 'sí' : 'NO') : 'robot_verificar no encontró el pago') };
   }, { escribe: true, topeMs: 5000 });
 
   await paso('portal del representante PRUEBA', async () => {
