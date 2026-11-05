@@ -571,7 +571,7 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
       if (p.cambios == null) falta.push('robot_verificar no trae pedido.cambios'); else if (!(Number(p.cambios) > 0)) falta.push('la fila de Cambios Pedidos');
     }
     return { ok: !falta.length, detalle: 'Home #' + a.n + ': 1 → 2 ' + SKU + ' a $' + precio + (falta.length ? ' · FALTA: ' + falta.join(' · ') : ' · total, importe y Cambios Pedidos en la base') + ' · pesaje de carne: sin carne PRUEBA (después del corte)' };
-  }, { escribe: true, topeMs: 40000, esperado: '512' });
+  }, { escribe: true, topeMs: 40000, esperado: '517 (el pedido nacido en la base no tiene raw_cells: editar no escribe Cambios, OC ni devolución)' });
 
   /* Lo que se frenó (WhatsApp, Telegram, mails) y la limpieza de todo lo de esta corrida. */
   if (ENTIDADES) {
