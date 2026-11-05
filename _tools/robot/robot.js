@@ -481,6 +481,29 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
       + (libroOk ? '' : ' · ¡EL LIBRO VOLVIÓ PARA ATRÁS!') + (pantallaOk ? '' : ' · ¡EL ERP NO MUESTRA EL LIBRO!') };
   }, { escribe: true, topeMs: 150000 });
 
+  /* (5/11/2026, Supa 504/507/510) Un pedido de algo SIN stock crea su OC en la base; al cancelarlo, la OC queda Cancelado (o
+     sale de la lista de Abastecimiento). Va después del control de los 2 min: la reserva no toca ese chequeo. La 510 prende
+     maleu.oc_prueba solo en la transacción de una orden robot-. */
+  await paso('pedido sin stock → OC → cancelar', async () => {
+    if (E.producto_id == null) return { ok: false, detalle: 'falta el id de tienda del producto ' + SKU };
+    const ocsPrueba = async () => { const bq = await rpc('busqueda_pantalla', {}); return (bq && Array.isArray(bq.oc) ? bq.oc : []).filter((x) => String(x.abbr || '').trim() === SKU && String(x.prov || '').trim() === PROV); };
+    const clave = (x) => x.n + '|' + x.row;
+    const antes = new Set((await ocsPrueba()).map(clave));
+    const lv = await rpc('robot_verificar', { p: {} }).catch(() => null), tot = lv && lv.total ? Number(lv.total.q) || 0 : 0, qty = Math.ceil(tot) + 5;
+    const ent2 = new Date(Date.now() + 2 * 86400000).toISOString().slice(0, 10);
+    const alta = await rpc('pedido_alta_directo', { p: { canal: 'Pilar', fecha: new Date().toLocaleString('es-AR'), fechaEntrega: ent2, dia: '', horario: '', nombre: CLI, telefono: TEL, pago: 'Transferencia', envio: 0,
+      items: [{ id: E.producto_id, qty: qty }], total: 1000, subtotalSinDescuento: 1000, descuento: 0, descuentoManual: 0, descuentoGlobalPct: 0, descuentoReceta: null, propina: 0, tipoPedido: '', deposito: DEP,
+      barrio: 'PRUEBA', direccion: 'PRUEBA', lote: '', origen: 'Pendiente', estadoEntrega: 'Pendiente', estadoPago: 'No Cobrado', clientOrderId: PREFIJO + 'altaoc' } });
+    if (!alta || !alta.ok || !alta.n) return { ok: false, detalle: 'alta de ' + qty + ' ' + SKU + ': ' + JSON.stringify(alta).slice(0, 200) };
+    let nuevas = []; for (let k = 0; k < 8; k++) { nuevas = (await ocsPrueba()).filter((x) => !antes.has(clave(x))); if (nuevas.length) break; await pausa(2000); }
+    if (!nuevas.length) return { ok: false, detalle: 'pedido Pilar #' + alta.n + ' de ' + qty + ' ' + SKU + ' (hay ' + tot + '): no apareció ninguna OC nueva' };
+    const c = await directa('cancelarPedido', { action: 'cancelarPedido', hoja: 'Pilar', id: String(alta.n), row: -Number(alta.n), clientOpId: PREFIJO + 'cancelaroc' });
+    if (!bien(c)) return mal(c, 'cancelar #' + alta.n);
+    let quedan = []; for (let k = 0; k < 8; k++) { const ahora = await ocsPrueba(); quedan = nuevas.map((o) => ahora.find((x) => clave(x) === clave(o))).filter((x) => x && x.est !== 'Cancelado'); if (!quedan.length) break; await pausa(2000); }
+    const det = 'Pilar #' + alta.n + ' (' + qty + ' ' + SKU + ', había ' + tot + ') → ' + nuevas.map((x) => x.n + ' ' + x.est).join(', ') + ' → cancelado';
+    return { ok: !quedan.length, detalle: det + (quedan.length ? ' · la OC sigue viva: ' + quedan.map((x) => x.n + ' ' + x.est).join(', ') : ' · OC cancelada') };
+  }, { escribe: true, topeMs: 60000 });
+
   /* Lo que se frenó (WhatsApp, Telegram, mails) y la limpieza de todo lo de esta corrida. */
   if (ENTIDADES) {
     const fr = await rpc('robot_avisos_frenados', { p_corrida: CORRIDA }).catch(() => null);
