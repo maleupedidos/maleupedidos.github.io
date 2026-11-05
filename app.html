@@ -13031,31 +13031,16 @@ function panelDoLogin(){
   er.classList.remove('show');
   if(!u||!p){er.textContent='Ingresá usuario y PIN';er.classList.add('show');return;}
   var btn=document.getElementById('loginBtn');btn.disabled=true;btn.textContent='Entrando...';
-  /* (3/11/2026, corte) EL LOGIN YA NO DEPENDE DE APPS SCRIPT. Se piden los dos a la vez: Apps Script (`loginUsuario`,
-     el de siempre, que trae el token que todavia usan las escrituras sin directa) y la base (`_loginBase`: login_pin +
-     la sesion propia + mi_sesion_pantalla). Si Apps Script contesta, se entra como siempre y la sesion de la base ya
-     quedo guardada (sin el viaje extra de `_sbLoginPropio`). Si NO contesta, esta apagado (WEBAPP_APAGADO) o es el
-     ensayo, se entra con la base sola. El representante sigue por Apps Script: su portal necesita datos que el login de
-     la base todavia no trae. Un «incorrecto» de los dos es incorrecto; uno solo no: el PIN de la base puede ir 1 min atras. */
-  var _ens=false; try{ _ens=localStorage.getItem('maleu_ensayo')==='1'; }catch(eE){}
-  var _pApps=_ens?Promise.resolve(null):fetch(API,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({action:'loginUsuario',usuario:u,pin:p})})
-    .then(function(r){return r.json();}).catch(function(){ return null; });
-  var _pBase=(typeof _loginBase==='function')?_loginBase(u,p).catch(function(e){ return {ok:false,red:true,err:String((e&&e.message)||e)}; }):Promise.resolve(null);
-  /* (4/11/2026, 23:45) EL LOGIN NO DEPENDE DE APPS SCRIPT. Decide la BASE; de Apps Script solo se toma su token (lo
-     usan las pocas escrituras que todavia van ahi a proposito: la excepcion) si llego, y se lo espera 4 s como mucho:
-     con Promise.all un Apps Script colgado colgaba el login. Si la base no contesta, como antes. */
-  var _pApps4=Promise.race([_pApps,new Promise(function(ok){ setTimeout(function(){ ok(null); },4000); })]);
-  Promise.all([_pApps4,_pBase]).then(function(z){
-    var d=z[0], b=z[1];
-    try{ window.__loginDe={apps:d?(d.ok?'ok':(d.apagado?'apagado':'no')):'sin respuesta',base:b?(b.ok?'ok':'no'):'sin respuesta'}; }catch(eW){}
-    /* El representante entra por la base cuando la base trae lo de su portal (`barrios` y compania, Supa 487). */
-    if(b&&b.ok&&(String(b.rol||'').toLowerCase()!=='vendedor'||Array.isArray(b.barrios))){
-      if(d&&d.ok&&d.token){ b.token=d.token; if(d.sbUrl&&d.sbPub){ b.sbUrl=d.sbUrl; b.sbPub=d.sbPub; } }
-      return b;
+  /* Corte definitivo: el login normal usa la misma base que el modo ensayo.
+     No pide el token viejo ni acepta un usuario por un respaldo de Apps Script. */
+  var _pBase=(typeof _loginBase==='function')?_loginBase(u,p):Promise.reject(new Error('login no disponible'));
+  _pBase.then(function(b){
+    try{ window.__loginDe={apps:'desconectado',base:b?(b.ok?'ok':'no'):'sin respuesta'}; }catch(eW){}
+    if(!b)throw new Error('sin conexion');
+    if(b.ok&&String(b.rol||'').toLowerCase()==='vendedor'&&!Array.isArray(b.barrios)){
+      return {ok:false,err:'No se pudo cargar tu acceso de vendedor. Intentá de nuevo.'};
     }
-    if(d&&d.ok){ if(b&&b.ok)d._baseYa=true; return d; }
-    if(d||(b&&!b.red))return {ok:false,err:(d&&!d.apagado&&d.err)||(b&&b.err)||'Usuario o PIN incorrectos'};
-    throw new Error('sin conexion');
+    return b;
   })
     .then(function(d){
       if(!d||!d.ok){er.textContent=(d&&d.err)||'Usuario o PIN incorrectos';er.classList.add('show');btn.disabled=false;btn.textContent='Entrar';return;}
@@ -15196,7 +15181,7 @@ function _leerVersion(app){
    "El HTML no sabe que version es" dejo de ser cierto: el build le escribe
    adentro el CACHE_NAME de sw-panel.js, el mismo que deploy.sh obliga a subir en
    cada cambio. Si lo publicado dice otra cosa, esta pagina es vieja. Punto. */
-var _APP_CN_PAGINA='maleu-panel-v918';
+var _APP_CN_PAGINA='maleu-panel-v919';
 
 /* Devuelve [{k,v}] si lo publicado no es lo que esta pagina corre. */
 function _chequearVersiones(){
@@ -33729,9 +33714,11 @@ var RLQ_D=null, RLQ_SEL=null, RLQ_PEDIDO=0, RLQ_ERR=false;
    Nada se guarda aca: si ya se pago, el proximo pedido ya no lo trae. */
 var AVZ_LISTA=[], AVZ_TS=0, AVZ_PIDIENDO=false;
 function avzPedir(){
+  if(typeof SESSION==='undefined'||!SESSION||!SESSION.usuario)return;
   if(AVZ_PIDIENDO)return; AVZ_PIDIENDO=true;
-  /* (178) Si la base ya arma la campanita (LEC_ARMA), `_lecJson` decide de donde sale. */
-  _lecJson('avisosErp',{},API+'?action=avisosErp&t='+Date.now(),function(){}).then(function(d){
+  /* La campanita se lee de la base, también mientras llegan las palancas. */
+  _lecBaseReintento('avisosErp',{}).then(function(r){
+    var d=r.d;
     AVZ_PIDIENDO=false;
     if(!d||!d.ok)return;
     AVZ_LISTA=Array.isArray(d.avisos)?d.avisos:[]; AVZ_TS=Date.now(); avzPintar();
@@ -33792,7 +33779,7 @@ window.irLiquidacion=function(){
   var quiere=false; try{ quiere=location.hash==='#liquidacion'; }catch(e){}
   var n=0, t=setInterval(function(){
     n++;
-    var listo=typeof go==='function'&&typeof _tengoTab==='function'&&_tengoTab('ventas');
+    var listo=typeof SESSION!=='undefined'&&SESSION&&SESSION.usuario&&typeof go==='function'&&typeof _tengoTab==='function'&&_tengoTab('ventas');
     if(listo){
       clearInterval(t);
       avzPedir(); setInterval(avzPedir,10*60*1000);

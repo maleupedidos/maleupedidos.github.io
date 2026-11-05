@@ -84,6 +84,9 @@ else
 fi
 
 # ── 3c. Que arranque de verdad ───────────────────────────────────────────────
+echo "→ Login exclusivamente en Supabase…"
+node _tools/pruebas/probar_login_solo_base.js || fallar "El login volvió a depender de Apps Script."
+
 echo "→ Sincronizacion operativa (sin red ni escrituras reales)…"
 node _tools/probar-autopedido-vivo.js || fallar "Fallo la disponibilidad en autopedido."
 node _tools/probar-sync-operativo.js | sed 's/^/    /' || fallar "Fallo la sincronizacion operativa — no se publica."

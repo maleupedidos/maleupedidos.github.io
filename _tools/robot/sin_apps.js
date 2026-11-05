@@ -63,7 +63,7 @@ const ERROR_RE = /No se pudo|Sin conexi[oó]n|fijate la conexi[oó]n|Error al ca
     if (m === 'Fetch.requestPaused') { cortadas.push(String(p.request.url).replace(/token=[^&]*/, 'token=…').slice(0, 160)); cli.enviar('Fetch.failRequest', { requestId: p.requestId, errorReason: 'BlockedByClient' }).catch(() => {}); }
     if (m === 'Page.javascriptDialogOpening') cli.enviar('Page.handleJavaScriptDialog', { accept: true }).catch(() => {});
   });
-  await cli.enviar('Page.addScriptToEvaluateOnNewDocument', { source: `try{localStorage.setItem('maleu_ensayo','1');}catch(e){}` });
+  await cli.enviar('Page.addScriptToEvaluateOnNewDocument', { source: `try{localStorage.removeItem('maleu_ensayo');}catch(e){}` });
   await cli.enviar('Page.enable', {});
   await cli.enviar('Page.navigate', { url: URL_APP });
   const hay = await esperar(`typeof panelDoLogin==='function'&&!!document.getElementById('loginUser')`, 60000);
@@ -71,6 +71,8 @@ const ERROR_RE = /No se pudo|Sin conexi[oó]n|fijate la conexi[oó]n|Error al ca
   await ev(`document.getElementById('loginUser').value=${JSON.stringify(cred.usuario)}; document.getElementById('loginPin').value=${JSON.stringify(cred.pin)}; document.getElementById('loginRemember').checked=true; panelDoLogin(); 1`);
   const ok = await esperar(`typeof SESSION!=='undefined'&&SESSION&&SESSION.usuario`, 30000);
   if (!ok) { console.log('no entró'); process.exit(1); }
+  if (cortadas.length) { console.log('MAL: el login normal intentó llamar a Apps Script'); cli.matar(); process.exit(1); }
+  await ev(`localStorage.setItem('maleu_ensayo','1'); 1`);
   const rol = await ev(`SESSION.rol||''`);
   console.log('Sin Apps Script · ' + URL_APP + ' · rol ' + rol);
   await pausa(8000);
