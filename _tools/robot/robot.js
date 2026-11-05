@@ -285,9 +285,9 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
     const base = { hoja: PED.h, id: String(PED.n), row: PED.r }, hechos = [];
     let r = await directa('marcarArmado', { action: 'marcarArmado', pedidos: [{ h: PED.h, id: String(PED.n), r: PED.r, c: CLI }], armado: true, usuario: 'robot', clientOpId: PREFIJO + 'armar' });
     if (!bien(r)) return mal(r, 'armar'); hechos.push('armado');
-    r = await directa('marcarEntregado', Object.assign({ action: 'marcarEntregado', cobrado: false, propina: 0, repartidor: '' }, base));
+    r = await directa('marcarEntregado', Object.assign({ action: 'marcarEntregado', cobrado: false, propina: 0, repartidor: '', clientOpId: PREFIJO + 'entregar' }, base));
     if (!bien(r)) return mal(r, 'entregar'); hechos.push('entregado');
-    r = await directa('marcarCobrado', Object.assign({ action: 'marcarCobrado', quien: 'robot', fechaCobro: '', formaPago: 'Transferencia', cuenta: CTA, ef: 0, tr: Number(PED.$) || 1, propina: 0, cliente: CLI, repartidor: '' }, base));
+    r = await directa('marcarCobrado', Object.assign({ action: 'marcarCobrado', quien: 'robot', fechaCobro: '', formaPago: 'Transferencia', cuenta: CTA, ef: 0, tr: Number(PED.$) || 1, propina: 0, cliente: CLI, repartidor: '', clientOpId: PREFIJO + 'cobrar' }, base));
     if (!bien(r)) return mal(r, 'cobrar'); hechos.push('cobrado');
     /* (5/11, Organizador + Supa 501) «Se guardó» no alcanza: la cuenta y quién cobró tienen que quedar en el pedido. */
     let vp = null; for (let k = 0; k < 5; k++) { const v = await rpc('robot_verificar', { p: { pedido: PED.h + '|' + PED.n } }).catch(() => null); vp = v && v.pedido; if (vp && vp.cuenta && vp.cobrador) break; await pausa(1500); }
@@ -296,7 +296,7 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
     hechos.push(faltan.length ? 'en la base FALTA ' + faltan.join(', ') : 'en la base: ' + vp.forma + ' · ' + vp.cuenta + ' · ' + vp.cobrador);
     await ev(`_recargarPedidos(); 1`).catch(() => 0);
     const cob = await esperar(`(function(){ var p=(D.pedidos||[]).find(function(x){ return String(x.n)===${JSON.stringify(String(PED.n))}; }); return p&&p.ep==='Cobrado'; })()`, 8000);
-    r = await directa('descobrar', Object.assign({ action: 'descobrar' }, base));
+    r = await directa('descobrar', Object.assign({ action: 'descobrar', clientOpId: PREFIJO + 'descobrar' }, base));
     if (!bien(r)) return mal(r, 'deshacer cobro'); hechos.push('descobrado');
     return { ok: !!cob && !faltan.length, detalle: hechos.join(' → ') + (cob ? '' : ' · después de cobrar la pantalla no lo mostró Cobrado en 8 s') };
   }, { escribe: true, topeMs: 30000 });
@@ -354,7 +354,7 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
 
   let COMPRA = null;
   await paso('cargar una compra', async () => {
-    const r = await directa('compraManual', { action: 'compraManual', proveedor: PROV, vendedor: 'robot', items: [{ abbr: SKU, nombre: SKU, costo: 1, qty: 1, origen: 'Orden de Compra' }], confirmarDuplicada: true, clientOpId: PREFIJO + 'compra' });   /* (5/11) cada corrida es una compra nueva: como tocar «es otra» */
+    const r = await directa('compraManual', { action: 'compraManual', proveedor: PROV, vendedor: 'Tadeo — Stock', items: [{ abbr: SKU, nombre: SKU, costo: 1, qty: 1, origen: 'Orden de Compra' }], confirmarDuplicada: true, clientOpId: PREFIJO + 'compra' });   /* (5/11) cada corrida es una compra nueva: como tocar «es otra». Vendedor «Tadeo — Stock»: OC de STOCK (con otro vendedor es OC de cliente y al recibirla no entra al freezer; Supa) */
     if (!bien(r)) return mal(r, 'compra');
     COMPRA = r.d;
     return { ok: true, detalle: 'cargada' + (r.d.hora ? ' (' + r.d.hora + ')' : '') };
@@ -374,6 +374,8 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
     /* (5/11, Supa) Una línea de OC sin fila no se recibe: rows:[0] contesta ok sin recibir nada. Rojo antes de mandar. */
     if (!(Number(lin.row) > 0)) return { ok: false, detalle: oc + ': la línea vino con fila ' + JSON.stringify(lin.row) + ' en busqueda_pantalla · no se recibe una OC sin fila · línea ' + JSON.stringify(lin).slice(0, 200) };
     const sa = await stockPd();
+    const libroDep = async () => { const v = await rpc('robot_verificar', { p: {} }).catch(() => null); return v && v.libro && v.libro[DEP] ? Number(v.libro[DEP].q) : null; };
+    const la = await libroDep();
     let r;
     if (lin.est !== 'Pedido') {
       r = await directa('marcarOC', { action: 'marcarOC', rows: [{ r: lin.row || 0, oc: oc, estado: 'Pedido' }], clientOpId: PREFIJO + 'pedir' });
@@ -385,11 +387,12 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
     METRICAS.espera_recibir_ms = Date.now() - tR;
     if (!bien(r)) return mal(r, 'recibir'); hechos.push('recibida (esperó ' + Math.round(METRICAS.espera_recibir_ms / 1000) + ' s)');
     /* (5/11, Supa 497) Recibir mueve el libro: el stock de PRUEBA en el depósito prueba sube lo recibido. */
-    let sb = null; for (let k = 0; k < 6; k++) { sb = await stockPd(); if (sb.prueba === sa.prueba + q) break; await pausa(2000); }
-    const lv = await rpc('robot_verificar', { p: {} }).catch(() => null), lq = lv && lv.libro && lv.libro[DEP] ? Number(lv.libro[DEP].q) : null;
-    STOCK_ESPERADO = { prueba: sa.prueba + q, ustariz: sa.ustariz, de: 'recepción' }; T_ULTIMO_MOV = Date.now();
-    const subio = sb.prueba === sa.prueba + q;
-    return { ok: subio, detalle: oc + ': ' + hechos.join(' → ') + ' · stock ' + DEP + ' ' + sa.prueba + ' → ' + sb.prueba + (subio ? ' (+' + q + ')' : ' · tenía que dar ' + (sa.prueba + q)) + ' · libro ' + lq + ' · op ' + PREFIJO + 'recibir' + ' · fila ' + lin.row + (subio ? '' : ' · respuesta ' + JSON.stringify(r && r.d ? r.d : r).slice(0, 400)) };
+    /* (5/11, Supa) La recepción vuelve diferida: el LIBRO se mueve en el acto y la pantalla se pone al día cuando el aplicador
+       de la base cierra la orden (< 1 min). Se juzga por el libro; que la pantalla lo muestre lo mira el paso de los 2 min. */
+    const lq = await libroDep(), sb = await stockPd();
+    STOCK_ESPERADO = { prueba: la + q, ustariz: sa.ustariz, de: 'recepción' }; T_ULTIMO_MOV = Date.now();
+    const subio = la != null && lq === la + q;
+    return { ok: subio, detalle: oc + ': ' + hechos.join(' → ') + ' · libro ' + DEP + ' ' + la + ' → ' + lq + (subio ? ' (+' + q + ')' : ' · tenía que dar ' + (la + q)) + ' · el ERP mostraba ' + sa.prueba + ' → ' + sb.prueba + ' · op ' + PREFIJO + 'recibir' + ' · fila ' + lin.row + (subio ? '' : ' · respuesta ' + JSON.stringify(r && r.d ? r.d : r).slice(0, 400)) };
   }, { escribe: true, topeMs: 130000 });
 
   /* (5/11/2026, Supa 492) CARGA de mercadería por la base: previa → guardar 1 PRUEBA → el libro total sube 1 → el reintento
