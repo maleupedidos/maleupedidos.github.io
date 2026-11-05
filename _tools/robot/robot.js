@@ -540,11 +540,14 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
     if (!(p && Array.isArray(p.ocs))) falta.push('robot_verificar no trae pedido.ocs');
     else if (!p.ocs.length || p.ocs.some((o) => String(o.pedido || '') !== 'Red|' + nRed)) falta.push('las OC en Red|' + nRed + ' (' + JSON.stringify(p.ocs).slice(0, 120) + ')');
     if (!(p && Array.isArray(p.avisos))) falta.push('robot_verificar no trae pedido.avisos');
-    else if (!p.avisos.some((x) => /telegram/i.test(String(x.canal || '')) && !x.enviado)) falta.push('el Telegram al representante en notice_outbox sin mandar (' + JSON.stringify(p.avisos).slice(0, 120) + ')');
+    /* (Supa 515) El aviso de un pedido robot- NUNCA entra a la cola: el guardia lo descarta antes (prueba_aviso_descartado).
+       Se espera UNO descartado y NINGUNO enviado. */
+    else { if (p.avisos.some((x) => x.enviado)) falta.push('¡un aviso del robot SALIÓ! (' + JSON.stringify(p.avisos).slice(0, 160) + ')');
+      if (!p.avisos.some((x) => x.descartado)) falta.push('el aviso al representante, descartado por el guardia (' + JSON.stringify(p.avisos).slice(0, 120) + ')'); }
     /* Las piezas: PRUEBA es por unidad (sin carne PRUEBA esta noche, Supa): se mira solo que no se pierdan si las hay. */
     if (p && Array.isArray(p.piezas) && p.piezas.some((x) => String(x.pedido || '') !== 'Red|' + nRed)) falta.push('las piezas reservadas en Red|' + nRed);
-    return { ok: !falta.length, detalle: 'Home #' + a.n + ' (' + qty + ' ' + SKU + ') → Red #' + nRed + (falta.length ? ' · FALTA: ' + falta.join(' · ') : ' · OC ' + p.ocs.map((o) => o.n).join(',') + ' en Red, Telegram en cola sin mandar') };
-  }, { escribe: true, topeMs: 40000, esperado: '513' });
+    return { ok: !falta.length, detalle: 'Home #' + a.n + ' (' + qty + ' ' + SKU + ') → Red #' + nRed + (falta.length ? ' · FALTA: ' + falta.join(' · ') : ' · OC ' + p.ocs.map((o) => o.n).join(',') + ' en Red · el aviso al representante quedó descartado, no salió') };
+  }, { escribe: true, topeMs: 40000 });
 
   /* (5/11, Organizador; Supa 512) EDITAR PEDIDO: cambiar la cantidad recalcula total e importes en sales_order, ajusta las OC
      y deja la fila de Cambios Pedidos en la base. El pesaje de carne no se puede: no hay carne PRUEBA esta noche (Supa la
