@@ -309,6 +309,38 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
     return { ok: true, detalle: antes + ' → ' + (antes + 1) + ' → ' + antes + ' · el deshacer esperó ' + Math.round(METRICAS.espera_contar_ms / 1000) + ' s («se está acomodando»)' };
   }, { escribe: true, topeMs: 130000 });
 
+  /* (5/11/2026, Supa) TRASPASO de ida y vuelta, sin entidades nuevas: PRUEBA de 'prueba' a 'ustariz' y de vuelta. El libro
+     tiene que mostrar prueba −1 / ustariz +1 en la ida y el neto en 0 a la vuelta. Solo toca el SKU PRUEBA, nunca stock
+     real. Si en 'prueba' no hay ni 1, se cuenta 1 antes y se deshace al final (como el paso de contar). */
+  await paso('traspaso PRUEBA ida y vuelta', async () => {
+    const libro = async () => { const d = await rpc('stock_tab_pantalla', {}); const p = ((d && d.stock) || []).find((x) => String(x.a || x.abbr || '').trim() === SKU);
+      const pd = (p && (p.pd || p.porDep)) || {}; return { prueba: Number(pd[DEP]) || 0, ustariz: Number(pd.ustariz) || 0 }; };
+    const reintentar = async (fn) => { let r = null; for (let k = 0; k < 12; k++) { r = await fn(); if (!(r && r.acomodando)) break; await pausa(10000); } return r; };
+    const tras = (desde, hacia, id) => reintentar(() => rpc('stock_traspaso_directo', { p: { action: 'stockTraspaso', abbr: SKU, desde: desde, hacia: hacia, cantidad: 1, clientOpId: PREFIJO + id } }));
+    const a0 = await libro(); let contado = false;
+    if (a0.prueba < 1) {
+      const c = await rpc('stock_contar_directo', { p: { abbr: SKU, deposito: DEP, cantidad: 1, clientOpId: PREFIJO + 'tr-contar', cv: 'robot' } });
+      if (!c || !c.ok) return { ok: false, detalle: 'no pude poner 1 en ' + DEP + ': ' + JSON.stringify(c).slice(0, 160) };
+      contado = true;
+    }
+    const a = await libro();
+    const r1 = await tras(DEP, 'ustariz', 'tr-ida');
+    if (!r1 || !r1.ok) return { ok: false, detalle: 'ida: ' + JSON.stringify(r1).slice(0, 200) };
+    const b = await libro();
+    const idaBien = b.prueba === a.prueba - 1 && b.ustariz === a.ustariz + 1;
+    const r2 = await tras('ustariz', DEP, 'tr-vuelta');
+    if (!r2 || !r2.ok) return { ok: false, detalle: 'vuelta (¡PRUEBA quedó 1 en ustariz!): ' + JSON.stringify(r2).slice(0, 200) };
+    const c2 = await libro();
+    let des = null;
+    if (contado) des = await reintentar(() => rpc('stock_contar_directo', { p: { abbr: SKU, deposito: DEP, cantidad: a0.prueba, clientOpId: PREFIJO + 'tr-descontar', cv: 'robot', desmarcar: true } }));
+    const netoBien = c2.prueba === a.prueba && c2.ustariz === a.ustariz;
+    const det = DEP + '/ustariz ' + a.prueba + '/' + a.ustariz + ' → ' + b.prueba + '/' + b.ustariz + ' → ' + c2.prueba + '/' + c2.ustariz + (contado ? ' (se contó 1 antes' + (des && des.ok ? ' y se deshizo)' : ', NO se deshizo: ' + JSON.stringify(des).slice(0, 80) + ')') : '');
+    if (!idaBien) return { ok: false, detalle: 'la ida no movió el libro como debía: ' + det };
+    if (!netoBien) return { ok: false, detalle: 'el neto no quedó en 0: ' + det };
+    if (c2.ustariz !== 0) hallazgos.push('traspaso: PRUEBA tiene ' + c2.ustariz + ' en ustariz (tiene que ser 0)');
+    return { ok: !contado || !!(des && des.ok), detalle: det };
+  }, { escribe: true, topeMs: 280000 });
+
   let COMPRA = null;
   await paso('cargar una compra', async () => {
     const r = await directa('compraManual', { action: 'compraManual', proveedor: PROV, vendedor: 'robot', items: [{ abbr: SKU, nombre: SKU, costo: 1, qty: 1, origen: 'Orden de Compra' }], clientOpId: PREFIJO + 'compra' });
