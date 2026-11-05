@@ -1334,6 +1334,9 @@ button.ped-dep-x.va,button.ped-dep-x.va:disabled{opacity:1;background:#E3EFE3;bo
 .origen-help{font-size:11px;color:var(--bl);margin-bottom:8px;line-height:1.35}
 .origen-prod{background:#fff;border:1px solid var(--cd);border-radius:10px;padding:10px;margin-bottom:8px}
 .origen-prod-title{font-size:13px;font-weight:800;color:var(--b);margin-bottom:8px;line-height:1.25}
+.stcar-rem{margin:8px 0;padding:8px 10px;border-radius:10px;background:#F7F4EF;font-size:12px;line-height:1.5}
+.stcar-rem b{font-weight:800}.stcar-rem .ok{color:#2E7D32}.stcar-rem .falta{color:#B26A00}.stcar-rem .mas{color:#C62828}
+.stcar-corte small.ok{color:#2E7D32}.stcar-corte small.falta{color:#B26A00}.stcar-corte small.mas{color:#C62828;font-weight:800}
 .origen-split{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px}
 .origen-cell.rep{border-color:#E65100;background:#FFF6EE}
 .origen-cell.rep .origen-cell-lbl{color:#E65100}
@@ -27060,6 +27063,25 @@ function _stcSeguir(){
    serian minuto y medio de espera repartidos en medio del trabajo. Y si se cierra
    la app a mitad de pesar, lo pesado sigue ahi. */
 var CARNE_DATA=null, CARNE_COLA=[], CARNE_CORTE='', CARNE_PROV='', CARNE_GUARDANDO=false;
+/* (547) Contra el remito: la ultima compra de carne del proveedor elegido y, por corte, lo cargado en piezas desde su fecha. */
+var CARNE_REM={prov:'',d:null,t:0,cargando:false};
+function _carneRemCargar(forzar){
+  var pv=CARNE_PROV; if(!pv||CARNE_REM.cargando)return;
+  if(!forzar&&CARNE_REM.prov===pv&&Date.now()-CARNE_REM.t<60000)return;
+  CARNE_REM.cargando=true;
+  _baseRpc('carne_remito_avance',{p:{proveedor:pv}}).then(function(r){
+    CARNE_REM={prov:pv,d:(r&&r.compra)||null,t:Date.now(),cargando:false};
+  }).catch(function(){ CARNE_REM.cargando=false; CARNE_REM.t=Date.now(); CARNE_REM.prov=pv; })
+    .then(function(){ if(CARNE_PROV===pv)renderStCarne(); });
+}
+/* Lo cargado (guardado + en la cola) contra el remito: ok entre 90% y 110%; menos = falta; mas = de mas. */
+function _carneRemCorte(a){
+  var d=(CARNE_REM.prov===CARNE_PROV)?CARNE_REM.d:null, c=d&&d.cortes&&d.cortes[a]; if(!c)return null;
+  var cola=0; for(var i=0;i<CARNE_COLA.length;i++)if(CARNE_COLA[i].abbr===a)cola+=CARNE_COLA[i].peso;
+  var rem=Number(c.remito)||0, tot=Math.round(((Number(c.cargado)||0)+cola)*1000)/1000;
+  var cls=rem>0&&tot>rem*1.1?'mas':(rem>0&&tot<rem*0.9?'falta':'ok');
+  return {rem:rem,tot:tot,cola:cola,cargado:Number(c.cargado)||0,cls:cls,dif:Math.round((tot-rem)*1000)/1000};
+}
 /* El deposito al que entra la tanda. Se elige EN CADA TANDA y no se guarda:
    cualquier producto puede estar en cualquiera de los dos freezers (Tadeo,
    11/9/2026), y un deposito que se hereda de la tanda anterior —o de otra
@@ -27286,6 +27308,19 @@ function _stCarneHtml(){
   }
   h+='</div>';
 
+  /* (547) El remito de ese proveedor: lo que dice contra lo que ya se cargo. */
+  if(CARNE_PROV)_carneRemCargar(false);
+  var remD=(CARNE_PROV&&CARNE_REM.prov===CARNE_PROV)?CARNE_REM.d:null;
+  if(remD&&remD.cortes){
+    var rl=[];
+    cortes.forEach(function(x){ var r=_carneRemCorte(x.a); if(!r)return;
+      rl.push('<span class="'+r.cls+'">'+stEsc(_carneCorto(x.n))+' <b>'+stFmt(r.tot,'kg')+'</b> de '+stFmt(r.rem,'kg')+' kg'
+        +(r.cls==='falta'?' (faltan '+stFmt(-r.dif,'kg')+')':r.cls==='mas'?' ('+stFmt(r.dif,'kg')+' de m&aacute;s)':' &#10003;')+'</span>'); });
+    h+='<div class="stcar-rem">Contra el remito <b>'+stEsc(remD.id)+'</b> del '+stEsc(remD.fecha||'')+':<br>'+rl.join(' &middot; ')+'</div>';
+  }else if(CARNE_PROV&&CARNE_REM.prov===CARNE_PROV&&!CARNE_REM.cargando){
+    h+='<div class="stcar-rem">No hay una compra cargada de '+stEsc(CARNE_PROV)+' para comparar. Cargala en Abastecimiento &rsaquo; Carne.</div>';
+  }
+
   /* ¿A que deposito entra? Con un solo deposito no hay nada que preguntar. */
   var dps=stCarneDepsTodos();
   if(dps.length===1)CARNE_DEP=dps[0].id;
@@ -27309,7 +27344,10 @@ function _stCarneHtml(){
     for(var q=0;q<CARNE_COLA.length;q++)if(CARNE_COLA[q].abbr===pr.a){enCola++;kgCola+=CARNE_COLA[q].peso;}
     h+='<button class="stcar-corte'+(pr.a===CARNE_CORTE?' on':'')+'" '
       +'onclick="stCarneElegir(\''+_stJs(pr.a)+'\')">'+stEsc(_carneCorto(pr.n))
-      +'<small>'+(enCola?enCola+' pz &middot; '+stFmt(kgCola,'kg')+' kg':'sin pesar')+'</small></button>';
+      +(function(){ var r=_carneRemCorte(pr.a);   /* (547) contra el remito */
+          if(r)return '<small class="'+r.cls+'">'+stFmt(r.tot,'kg')+' / '+stFmt(r.rem,'kg')+' kg</small>';
+          return '<small>'+(enCola?enCola+' pz &middot; '+stFmt(kgCola,'kg')+' kg':'sin pesar')+'</small>'; })()
+      +'</button>';
   }
   h+='</div>';
 
@@ -27648,6 +27686,7 @@ function stCarneGuardar(){
           return false;
         });
         _carneColaGuardar();
+        setTimeout(function(){ _carneRemCargar(true); },300);   /* (547) */
         /* Lo guardado aparece YA en "lo que hay en el freezer"; el refresco de
            carnePiezas (2-8 s) lo confirma. */
         (d.piezas||[]).forEach(function(pz){
