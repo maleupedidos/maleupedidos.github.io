@@ -68,10 +68,15 @@ async function paso(nombre, fn, opt) {
   const apps = await ev(`(function(){ var l=(window.__ensayoApps||[]).slice(${antes}).map(function(x){ return x.m+' '+x.a; }), a=${'${antesS}'}, c=window.__sinApps||{};
     Object.keys(c).forEach(function(k){ if(c[k]>(a[k]||0))l.push('GET '+k); }); return l; })()`).catch(() => []);
   if (apps.length) { r.ok = false; hallazgos.push(nombre + ': intentó ir a Apps Script (' + [...new Set(apps)].join(', ') + ')'); }
+  /* (5/11/2026, Organizador) ROJO ESPERADO: un paso armado antes de que la base tenga lo suyo (opt.esperado = la migración).
+     Si falla, sale como «ESP» con el motivo y no frena el deploy ni cuenta como hallazgo; cuando pase, dice que ya se puede
+     sacar la marca. */
+  if (opt.esperado && !r.ok && !apps.length) { r = { ok: true, salteado: true, detalle: 'ROJO ESPERADO (hasta la ' + opt.esperado + '): ' + (r.detalle || 'falló') }; }
+  else if (opt.esperado && r.ok && !r.salteado) { r.detalle = (r.detalle || '') + ' · ya pasa: sacarle la marca «esperado ' + opt.esperado + '»'; }
   if (r.ok && opt.topeMs && ms > opt.topeMs) { r.ok = false; r.detalle = (r.detalle ? r.detalle + ' · ' : '') + 'tardó ' + ms + ' ms (tope ' + opt.topeMs + ')'; }
   if (!r.ok && !apps.length) hallazgos.push(nombre + ': ' + (r.detalle || 'falló'));
   pasos.push({ paso: nombre, ok: !!r.ok, ms: ms, salteado: r.salteado || undefined, detalle: String(r.detalle || '').slice(0, 300) + (apps.length ? ' · Apps Script: ' + [...new Set(apps)].join(', ') : '') });
-  console.log((r.ok ? '  ok   ' : '  MAL  ') + nombre + '  (' + ms + ' ms)' + (r.detalle ? '  ' + r.detalle : '') + (apps.length ? '  · Apps Script: ' + apps.join(', ') : ''));
+  console.log((r.ok ? (r.salteado && opt.esperado ? '  ESP  ' : '  ok   ') : '  MAL  ') + nombre + '  (' + ms + ' ms)' + (r.detalle ? '  ' + r.detalle : '') + (apps.length ? '  · Apps Script: ' + apps.join(', ') : ''));
   return r;
 }
 let ENTIDADES = false;
@@ -504,6 +509,64 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
     const det = 'Home #' + alta.n + ' (' + qty + ' ' + SKU + ', había ' + tot + ') → ' + nuevas.map((x) => x.n + ' ' + x.est).join(', ') + ' → cancelado';
     return { ok: !quedan.length, detalle: det + (quedan.length ? ' · la OC sigue viva: ' + quedan.map((x) => x.n + ' ' + x.est).join(', ') : ' · OC cancelada') };
   }, { escribe: true, topeMs: 60000 });
+
+  /* Un alta Home de PRUEBA (por la base), para los pasos de abajo. qty > stock → nace su OC (504). */
+  const altaHome = async (sufijo, qty, fecha) => {
+    const ent2 = fecha || new Date(Date.now() + 2 * 86400000).toISOString().slice(0, 10);
+    const r = await rpc('pedido_alta_directo', { p: { canal: 'Home', fecha: new Date().toLocaleString('es-AR'), fechaEntrega: ent2, dia: '', horario: '', nombre: CLI, telefono: TEL, pago: 'Transferencia', envio: 0,
+      items: [{ id: E.producto_id, qty: qty }], total: 1000 * qty, subtotalSinDescuento: 1000 * qty, descuento: 0, descuentoManual: 0, descuentoGlobalPct: 0, descuentoReceta: null, propina: 0, tipoPedido: '', deposito: DEP,
+      barrio: 'PRUEBA', direccion: 'PRUEBA', lote: 'PRUEBA', estadoEntrega: 'Pendiente', estadoPago: 'No Cobrado', clientOrderId: PREFIJO + sufijo } });
+    const _ah = new Intl.DateTimeFormat('es-AR', { timeZone: 'America/Argentina/Buenos_Aires', day: 'numeric', month: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false }).formatToParts(new Date()).reduce((o, x) => (o[x.type] = x.value, o), {});
+    return Object.assign({ al: _ah.day + '/' + _ah.month + ' ' + _ah.hour + ':' + _ah.minute }, r || {});
+  };
+  const verPedido = async (clave) => { const v = await rpc('robot_verificar', { p: { pedido: clave } }).catch(() => null); return (v && v.pedido) || null; };
+
+  /* (5/11, Organizador; Supa 513) PASAR A VENDEDOR con OC: las OC del pedido (y sus piezas) se van con él al Red|N nuevo, y el
+     Telegram al representante queda en notice_outbox sin mandarse (es PRUEBA). Pide a robot_verificar: pedido.ocs [{n, est,
+     pedido}], pedido.piezas, pedido.avisos [{canal, enviado}]. */
+  await paso('pasar a vendedor con OC', async () => {
+    if (E.producto_id == null) return { ok: false, detalle: 'falta el id de tienda del producto ' + SKU };
+    const lv = await rpc('robot_verificar', { p: {} }).catch(() => null), qty = Math.ceil(lv && lv.total ? Number(lv.total.q) || 0 : 0) + 5;
+    /* El representante PRUEBA reparte los viernes, y el otro pase usa el de la semana que viene (una entrega por cliente y día): acá, el de dentro de dos semanas. */
+    const _h = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Argentina/Buenos_Aires' })), vie = new Date(Date.now() + (((5 - _h.getDay() + 7) % 7) + 14) * 86400000).toLocaleDateString('sv-SE', { timeZone: 'America/Argentina/Buenos_Aires' });
+    const a = await altaHome('pasaoc', qty, vie);
+    if (!a.ok || !a.n) return { ok: false, detalle: 'alta Home: ' + JSON.stringify(a).slice(0, 200) };
+    const r = await directa('pasarAVendedor', { action: 'pasarAVendedor', hoja: 'Home', id: String(a.n), row: -Number(a.n), al: a.al, vendedor: REP, trajo: 'Vendedor', clientOpId: PREFIJO + 'pasaoc-pase' });
+    if (!bien(r)) return mal(r, 'pasar Home #' + a.n + ' a ' + REP);
+    const nRed = r.d.red && r.d.red.n; if (!nRed) return { ok: false, detalle: 'el pase no devolvió el Red|N nuevo: ' + JSON.stringify(r.d).slice(0, 160) };
+    let p = null; for (let k = 0; k < 5; k++) { p = await verPedido('Red|' + nRed); if (p && Array.isArray(p.ocs) && p.ocs.length) break; await pausa(2000); }
+    const falta = [];
+    if (!p || !p.existe) falta.push('el pedido Red|' + nRed + ' en la base');
+    if (!(p && Array.isArray(p.ocs))) falta.push('robot_verificar no trae pedido.ocs');
+    else if (!p.ocs.length || p.ocs.some((o) => String(o.pedido || '') !== 'Red|' + nRed)) falta.push('las OC en Red|' + nRed + ' (' + JSON.stringify(p.ocs).slice(0, 120) + ')');
+    if (!(p && Array.isArray(p.avisos))) falta.push('robot_verificar no trae pedido.avisos');
+    else if (!p.avisos.some((x) => /telegram/i.test(String(x.canal || '')) && !x.enviado)) falta.push('el Telegram al representante en notice_outbox sin mandar (' + JSON.stringify(p.avisos).slice(0, 120) + ')');
+    /* Las piezas: PRUEBA es por unidad (sin carne PRUEBA esta noche, Supa): se mira solo que no se pierdan si las hay. */
+    if (p && Array.isArray(p.piezas) && p.piezas.some((x) => String(x.pedido || '') !== 'Red|' + nRed)) falta.push('las piezas reservadas en Red|' + nRed);
+    return { ok: !falta.length, detalle: 'Home #' + a.n + ' (' + qty + ' ' + SKU + ') → Red #' + nRed + (falta.length ? ' · FALTA: ' + falta.join(' · ') : ' · OC ' + p.ocs.map((o) => o.n).join(',') + ' en Red, Telegram en cola sin mandar') };
+  }, { escribe: true, topeMs: 40000, esperado: '513' });
+
+  /* (5/11, Organizador; Supa 512) EDITAR PEDIDO: cambiar la cantidad recalcula total e importes en sales_order, ajusta las OC
+     y deja la fila de Cambios Pedidos en la base. El pesaje de carne no se puede: no hay carne PRUEBA esta noche (Supa la
+     deja para después del corte). Pide a robot_verificar: pedido.total, pedido.items [{a, q, importe}], pedido.cambios. */
+  await paso('editar pedido (cantidad)', async () => {
+    if (E.producto_id == null) return { ok: false, detalle: 'falta el id de tienda del producto ' + SKU };
+    const a = await altaHome('edita', 1);
+    if (!a.ok || !a.n) return { ok: false, detalle: 'alta Home: ' + JSON.stringify(a).slice(0, 200) };
+    const pp = await prodPrueba(), precio = (pp && pp.precio) || 1000;
+    const r = await directa('editarPedido', { action: 'editarPedido', hoja: 'Home', id: String(a.n), row: -Number(a.n), lineas: [{ a: SKU, q: 2, precio: precio }], descuentoReceta: null, descuentoRecetaEditor: true, formaPago: 'Transferencia', clientOpId: PREFIJO + 'edita-editar' });
+    if (!bien(r)) return mal(r, 'editar Home #' + a.n);
+    let p = null; for (let k = 0; k < 5; k++) { p = await verPedido('Home|' + a.n); if (p && Number(p.total) === 2 * precio) break; await pausa(2000); }
+    const falta = [];
+    if (!p || !p.existe) falta.push('el pedido en la base');
+    else {
+      if (Number(p.total) !== 2 * precio) falta.push('total ' + p.total + ' (tenía que dar ' + 2 * precio + ')');
+      if (!Array.isArray(p.items)) falta.push('robot_verificar no trae pedido.items');
+      else { const it = p.items.find((x) => String(x.a || x.sku) === SKU); if (!it || Number(it.q) !== 2 || Number(it.importe) !== 2 * precio) falta.push('la línea de ' + SKU + ' (' + JSON.stringify(it || null).slice(0, 80) + ')'); }
+      if (p.cambios == null) falta.push('robot_verificar no trae pedido.cambios'); else if (!(Number(p.cambios) > 0)) falta.push('la fila de Cambios Pedidos');
+    }
+    return { ok: !falta.length, detalle: 'Home #' + a.n + ': 1 → 2 ' + SKU + ' a $' + precio + (falta.length ? ' · FALTA: ' + falta.join(' · ') : ' · total, importe y Cambios Pedidos en la base') + ' · pesaje de carne: sin carne PRUEBA (después del corte)' };
+  }, { escribe: true, topeMs: 40000, esperado: '512' });
 
   /* Lo que se frenó (WhatsApp, Telegram, mails) y la limpieza de todo lo de esta corrida. */
   if (ENTIDADES) {
