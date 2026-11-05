@@ -44,16 +44,21 @@ const sum=(xs,a)=>xs.filter(x=>x.abbr===a).reduce((s,x)=>s+x.q,0);
     {h:'Red',id:2,r:11,retira:'Representante Prueba',fe:'2026-10-29',p:[{a:'WPo',q:2}]},
     {h:'Home',id:3,r:12,fe:'2026-10-31',p:[{a:'PMu',q:4}]}];
   const anterior=JSON.stringify(lista);
-  const p=ctx(ruta,['_rutParaRetiroHoy','getHoyPendientes','getOtrosDias','getAtrasados','getSorted'],{
-    getHoyISO:()=> '2026-10-30',getPendientes:()=>lista,esHoy:e=>e.fe==='2026-10-30',sortByZona:x=>x,sortByHora:x=>x,
+  /* (5/11/2026) En Red `fe` es el viernes de la bolsa (534/539): el jueves la bolsa va al viernes, no a hoy. */
+  const ctxDia=hoy=>ctx(ruta,['_rutParaRetiroHoy','getHoyPendientes','getOtrosDias','getAtrasados','getSorted'],{
+    getHoyISO:()=> hoy,getPendientes:()=>lista,esHoy:e=>e.fe===hoy,sortByZona:x=>x,sortByHora:x=>x,
     rutaOrdenModo:'zona',rutaOrden:{},armadoDone:{},eKey:e=>e.h+'|R'+e.r,_origenTipo:()=> 'dep',
     _itemsDepDe:e=>e.p,_itemsOCDe:()=>[],_sortProds:x=>x,_agruparPedidos:x=>x,
     pendientesGuardarStock:[],pendientesPedidosOC:[],_pgsAtrasado:null});
+  const jue=ctxDia('2026-10-30');
+  ok('el jueves la bolsa del viernes va al viernes, no a hoy',jue.getOtrosDias().some(x=>x.h==='Red'&&x.fe==='2026-10-31')&&!jue.getHoyPendientes().some(x=>x.fe==='2026-10-31'));
+  ok('una bolsa que quedo sin dar (fecha pasada) sigue en hoy',jue.getHoyPendientes().length===1&&jue.getHoyPendientes()[0].id===2&&jue.getAtrasados().length===0);
+  const p=ctxDia('2026-10-31');
   const bolsa=p.getSorted().find(x=>x._redAgg);
-  ok('la bolsa del viernes incluye el wrap del pedido de manana',bolsa&&bolsa.p.find(x=>x.a==='WPo').q===3);
+  ok('el viernes la bolsa incluye el wrap de los dos pedidos',bolsa&&bolsa.p.find(x=>x.a==='WPo').q===3);
   ok('la bolsa completa incluye la carne sin filtrar por fecha del cliente',bolsa.p.find(x=>x.a==='CVa').q===0.969&&bolsa._keys.length===2);
-  ok('Red atrasada no se duplica en el agregado del retiro',p.getAtrasados().length===0&&p.getHoyPendientes().length===2);
-  ok('las entregas directas futuras conservan su dia',p.getOtrosDias().length===1&&p.getOtrosDias()[0].h==='Home');
+  ok('Red atrasada no se duplica en el agregado del retiro',p.getAtrasados().length===0&&p.getHoyPendientes().filter(x=>x.h==='Red').length===2);
+  ok('las entregas directas conservan su dia',p.getOtrosDias().length===0&&jue.getOtrosDias().some(x=>x.h==='Home'));
   ok('armar la bolsa no modifica fechas ni cantidades guardadas',JSON.stringify(lista)===anterior);
   const viejo={vendedores:[{nombre:'cache'}]};let resolver;
   const carga=ctx(ruta,['rutCliVendCargar'],{_rutCV:viejo,_rutCVts:0,_rutCVcargando:false,_rutCVvuelo:null,_rutCVerror:'',
