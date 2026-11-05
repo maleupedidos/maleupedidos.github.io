@@ -429,10 +429,12 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
       t.replace(/action\\s*:\\s*['"]([A-Za-z]+)['"]/g,function(m,a){ s[a]=1; return m; });
       var fuera={pedidosFuenteAplicar:1,altaPgAplicar:1,difAplicar:1,loginUsuario:1,logout:1,loginVendedor:1}, on=_palancaVal('directas')||{};
       var todas=Object.keys(s).filter(function(a){ return !fuera[a]; });
-      var apps=todas.filter(function(a){ if(a==='stockContar')return _palancaVal('contarDirecto')!==true; return !(ORD_DIRECTAS_RPC[a]&&on[a]===true); });
-      return JSON.stringify({n:todas.length,apps:apps.sort()}); })()`, 30000));
+      var base=function(a){ if(a==='stockContar')return _palancaVal('contarDirecto')===true; return !!(ORD_DIRECTAS_RPC[a]&&on[a]===true); };
+      var cortadas=todas.filter(function(a){ return !base(a)&&typeof ACCIONES_CORTADAS==='object'&&ACCIONES_CORTADAS[a]; });
+      var apps=todas.filter(function(a){ return !base(a)&&!(typeof ACCIONES_CORTADAS==='object'&&ACCIONES_CORTADAS[a]); });
+      return JSON.stringify({n:todas.length,apps:apps.sort(),cortadas:cortadas.length}); })()`, 30000));
     METRICAS.escrituras_apps = r.apps.length;
-    return { ok: true, salteado: r.apps.length > 0, detalle: r.apps.length + ' de ' + r.n + (r.apps.length ? ': ' + r.apps.join(', ') : '') };
+    return { ok: true, salteado: r.apps.length > 0, detalle: r.apps.length + ' de ' + r.n + ' (cortadas por uso 0: ' + r.cortadas + ')' + (r.apps.length ? ': ' + r.apps.join(', ') : '') };
   });
   /* POR QUÉ NO FUE DIRECTA (Supa 444): cada caída a Apps Script anota su motivo en la base; acá se leen los de 7 días. */
   await paso('por qué no fueron directas (7 días)', async () => {
