@@ -421,6 +421,19 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
     METRICAS.posts_apps_hoy = pf.totalHoy;
     return { ok: true, salteado: pf.totalHoy > 0, detalle: 'hoy ' + pf.totalHoy + (pf.totalHoy ? ' (' + top(pf.hoy) + ')' : '') + (ayer ? ' · ayer ' + tot(ayer) + ' (' + top(ayer) + ')' : '') };
   });
+  /* CUÁNTAS ESCRITURAS DEL ERP TODAVÍA SALEN POR APPS SCRIPT (4/11/2026, Organizador: «de 50 a menos de 10»). Sin tocar
+     botones: toda `action:'X'` del app.html publicado contra el mapa de directas y la palanca REAL de cada una (la que le da
+     la base al robot). Sin los despertadores (no viajan) ni el login (el respaldo sigue a propósito). Informativo. */
+  await paso('escrituras del ERP por Apps Script', async () => {
+    const r = JSON.parse(await ev(`(async function(){ await _sbPermiso(true); var t=await (await fetch('app.html',{cache:'no-store'})).text(), s={};
+      t.replace(/action\\s*:\\s*['"]([A-Za-z]+)['"]/g,function(m,a){ s[a]=1; return m; });
+      var fuera={pedidosFuenteAplicar:1,altaPgAplicar:1,difAplicar:1,loginUsuario:1,logout:1,loginVendedor:1}, on=_palancaVal('directas')||{};
+      var todas=Object.keys(s).filter(function(a){ return !fuera[a]; });
+      var apps=todas.filter(function(a){ if(a==='stockContar')return _palancaVal('contarDirecto')!==true; return !(ORD_DIRECTAS_RPC[a]&&on[a]===true); });
+      return JSON.stringify({n:todas.length,apps:apps.sort()}); })()`, 30000));
+    METRICAS.escrituras_apps = r.apps.length;
+    return { ok: true, salteado: r.apps.length > 0, detalle: r.apps.length + ' de ' + r.n + (r.apps.length ? ': ' + r.apps.join(', ') : '') };
+  });
   /* POR QUÉ NO FUE DIRECTA (Supa 444): cada caída a Apps Script anota su motivo en la base; acá se leen los de 7 días. */
   await paso('por qué no fueron directas (7 días)', async () => {
     const r = await rpc('directa_no_motivos', { p_dias: 7 }).catch(() => null);
