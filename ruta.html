@@ -1037,6 +1037,7 @@ select.np-input{background:var(--white) url("data:image/svg+xml;utf8,<svg xmlns=
     <div class="ruta-body" id="rutaBody"></div>
     <div class="ruta-actions" id="rutaActions"></div>
   </div>
+  <div id="rutaRendidos" style="padding:12px 14px 90px"></div>
 </div>
 
 <!-- COBROS -->
@@ -5519,6 +5520,7 @@ function _rtcVacio(titulo,texto,boton){
 
 function rutRenderRuta(){
   rutUbicCargar();
+  try{ _rutPintarRendidos(); }catch(eRd){}
   document.getElementById('armadoView').classList.add('hidden');document.getElementById('rutaView').classList.remove('hidden');document.getElementById('cobrosView').classList.add('hidden');document.getElementById('nuevoView').classList.add('hidden');
   var resumen=document.getElementById('rutaResumen'),header=document.getElementById('rutaHeader'),body=document.getElementById('rutaBody'),actions=document.getElementById('rutaActions');
   if(rutaModoRepartir){ _rtcRepartir(resumen,header,body,actions); return; }
@@ -5988,7 +5990,7 @@ function fetchCobrosPendientes(fresh,auto){
       if(data.billeteras)_bilVivasRuta=data.billeteras;
       /* Solo si vino el campo: un backend viejo no lo manda, y en ese caso hay
          que dejar lo que ya estaba en vez de vaciar la banda. */
-      if(Array.isArray(data.sinCerrar))_rutSinCerrar=data.sinCerrar;
+      if(Array.isArray(data.sinCerrar)){_rutSinCerrar=data.sinCerrar; try{ _rutPintarRendidos(); }catch(eR){} }
       var cobros=data.cobros||[];
       /* Lo que se esta cobrando desde ESTE celular no vuelve a aparecer
          (12/9/2026). Con la sincronizacion cada 15 s, una respuesta armada
@@ -6869,15 +6871,42 @@ function _cobroClienteGrupoHTML(grp){
 /* La banda de "ya te rindieron pero falta marcarlo".
    Va ARRIBA de los chips y de la lista: es lo unico de esta pantalla que
    requiere una decision, y abajo de 13 cobros no la ve nadie. */
+/* (6/11/2026, Tadeo) LOS DOMINGOS. «Ya te rindieron» se mostraba apenas la bolsa estaba en el representante y la plata en
+   Maleu: el mismo viernes, con el pedido todavía sin llevar al cliente (#2365 Gaston Schisano, de Fede). Ahora un pedido
+   aparece recién desde el domingo siguiente a su día de entrega (el viernes 6/11 → el domingo 8/11) y sigue apareciendo
+   hasta que se cierra. Y va AL FINAL de la sub-tab RUTA, no arriba de Cobros. */
+function _rutDomingoTras(dia){
+  var m=String(dia||'').match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/); if(!m)return null;
+  var d=new Date(Number(m[3]),Number(m[2])-1,Number(m[1]));
+  d.setDate(d.getDate()+(7-d.getDay()));   /* el domingo siguiente (si fue domingo, el de la otra semana) */
+  return d;
+}
+function _rutSinCerrarVisibles(){
+  var hoy=new Date(); hoy.setHours(0,0,0,0);
+  return (_rutSinCerrar||[]).map(function(v){
+    var peds=(v.peds||[]).filter(function(p){ var dom=_rutDomingoTras(p.dia); return !dom||dom<=hoy; });
+    var tot=0; peds.forEach(function(p){tot+=(Number(p.total)||0);});
+    return {vendedor:v.vendedor,peds:peds,n:peds.length,total:tot};
+  }).filter(function(v){return v.n>0;});
+}
+var _rutRendT=0;
+function _rutPintarRendidos(){
+  var el=document.getElementById('rutaRendidos'); if(!el)return;
+  if(typeof _rutEsRepartidor==='function'&&_rutEsRepartidor()){el.innerHTML='';return;}
+  el.innerHTML=_rutSinCerrarHTML();
+  /* Los datos vienen con los cobros: si hace rato que no se piden (estás en RUTA, no en COBROS), se piden por atrás. */
+  if(Date.now()-_rutRendT>300000){ _rutRendT=Date.now(); try{ fetchCobrosPendientes(false,true); }catch(e){} }
+}
 function _rutSinCerrarHTML(){
-  if(!_rutSinCerrar||!_rutSinCerrar.length)return '';
+  var _vis=_rutSinCerrarVisibles();
+  if(!_vis.length)return '';
   var tot=0,nped=0;
-  _rutSinCerrar.forEach(function(v){tot+=(Number(v.total)||0);nped+=(Number(v.n)||0);});
+  _vis.forEach(function(v){tot+=(Number(v.total)||0);nped+=(Number(v.n)||0);});
   var h='<div class="sc-box">'
     + '<div class="sc-h">\u2705 Ya te rindieron \u2014 falta marcarlo</div>'
     + '<div class="sc-sub">'+nped+(nped===1?' pedido':' pedidos')+' por '+formatMoney(tot)
     + '. Te pagaron, asi que ya los entregaron: siguen figurando abiertos solo porque el representante no usa el ERP.</div>';
-  _rutSinCerrar.forEach(function(v){
+  _vis.forEach(function(v){
     var abierto=(_rutVerPeds===v.vendedor);
     h+='<div class="sc-v">'
       + '<div class="sc-vr">'
@@ -6908,6 +6937,7 @@ window.rutVerRendidos=function(v){
   var el=document.getElementById('cobrosContent');
   if(el)el.__sig=null;   // forzar el repintado: el dedupe no mira esta variable
   renderCobrosFromServer();
+  try{ _rutPintarRendidos(); }catch(e){}
 };
 
 /* Cierra de una todos los pedidos rendidos de un vendedor.
@@ -6918,7 +6948,8 @@ window.rutVerRendidos=function(v){
 window.rutCerrarRendidos=function(vend){
   if(_rutCerrando)return;
   var v=null;
-  for(var i=0;i<_rutSinCerrar.length;i++){if(_rutSinCerrar[i].vendedor===vend){v=_rutSinCerrar[i];break;}}
+  var _vsc=_rutSinCerrarVisibles();
+  for(var i=0;i<_vsc.length;i++){if(_vsc[i].vendedor===vend){v=_vsc[i];break;}}
   if(!v){showToast('No encuentro los pedidos de '+vend);return;}
   var meses={};
   (v.peds||[]).forEach(function(p){
@@ -7230,7 +7261,7 @@ function renderCobrosFromServer(){
 
   // ── Chips de filtro (siempre visibles arriba) ──
   function _chip(f,txt){return '<button type="button" class="cobros-chip'+(cobrosFiltro===f?' on':'')+'" data-cf="'+f+'" onclick="setCobrosFiltro(\''+f+'\')">'+txt+'</button>';}
-  var chips=_rutSinCerrarHTML()
+  var chips=''   /* (6/11/2026) «Ya te rindieron» se mudó al final de la sub-tab RUTA (Tadeo) */
     +'<div class="cobros-chips">'+_chip('todos','Todos')+_chip('hoy','Hoy')+_chip('vd','🏠 Directa')+_chip('re','🔴 Red')+_chip('cl','⚽ Clubes')+'</div>';
   if(_rutCVerror)chips+='<div class="cobro-red-regla">'+_rutEsc(_rutCVerror)+'. <button type="button" class="rtc-mini" onclick="rutCliVendCargar()">Reintentar</button></div>';
   else if(_rutCVcargando&&!_rutCV)chips+='<div class="cobro-red-regla">Cargando clientes de representantes…</div>';
