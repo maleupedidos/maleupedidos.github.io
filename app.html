@@ -15199,7 +15199,7 @@ function _leerVersion(app){
    "El HTML no sabe que version es" dejo de ser cierto: el build le escribe
    adentro el CACHE_NAME de sw-panel.js, el mismo que deploy.sh obliga a subir en
    cada cambio. Si lo publicado dice otra cosa, esta pagina es vieja. Punto. */
-var _APP_CN_PAGINA='maleu-panel-v944';
+var _APP_CN_PAGINA='maleu-panel-v945';
 
 /* Devuelve [{k,v}] si lo publicado no es lo que esta pagina corre. */
 function _chequearVersiones(){
@@ -29424,7 +29424,13 @@ var ST_TAB = 'productos', DEP_DATA = null, DEP_SEL = '', DEP_PEDIDO = false;
 /* Cuando algo cambio el stock desde CONTAR / MOVER / RECIBIR CARNE (ms), cuando se
    intento traer el volcado por ese cambio, y si esta viajando. Ver rStock. */
 var ST_SUCIO = 0, ST_INTENTO = 0, ST_RECARGANDO = false;
-var DEP_CONTADOS = {};   // abbr|dep de lo contado en esta sesion, para marcar la fila
+var DEP_CONTADOS = {};   // abbr|dep -> cuándo se contó (ms), para marcar la fila
+/* (6/11/2026, Tadeo) EL VERDE «CONTADO» NO SE QUEDA PARA SIEMPRE. Vivía en la memoria mientras la app estaba abierta
+   (casi nunca se cierra): el próximo conteo arrancaba con todo en verde. Ahora dura lo que dura un conteo (2 h) y dice
+   a qué hora se contó; después vuelve solo al ✓ de siempre. */
+var DEP_CONTADO_MS = 2 * 3600000;
+function _stcContado(k){ var t = DEP_CONTADOS[k]; if (!t) return 0; if (t === true) return Date.now(); return (Date.now() - t < DEP_CONTADO_MS) ? t : 0; }
+function _stcHora(t){ var d = new Date(t); return d.getHours() + ':' + String(d.getMinutes()).padStart(2, '0'); }
 
 function stSwitchTab(t){
   if(ST_TAB===t)return;
@@ -30556,7 +30562,7 @@ function renderStContar(opts){
     if(Number(prods[m].pz)>0){porPieza++;continue;}
     contables++;
     if(STC_EST[prods[m].a+'|'+DEP_SEL]==='envia')enCola++;
-    if(DEP_CONTADOS[prods[m].a+'|'+DEP_SEL])listos++;
+    if(_stcContado(prods[m].a+'|'+DEP_SEL))listos++;
   }
   h+='<div class="stc-prog">'+(listos?listos+' de '+contables+' contados':contables+' productos, ninguno contado todav&iacute;a')
     +(enCola?' &middot; mandando '+enCola+' atr&aacute;s':'')
@@ -30623,12 +30629,12 @@ function renderStContar(opts){
       continue;
     }
 
-    var _est=STC_EST[pr.a+'|'+DEP_SEL]||'', _hecho=!!DEP_CONTADOS[pr.a+'|'+DEP_SEL];
+    var _est=STC_EST[pr.a+'|'+DEP_SEL]||'', _hechoT=_stcContado(pr.a+'|'+DEP_SEL), _hecho=!!_hechoT;
     var _bt, _difR=(_est!=='envia')?difSku(pr.a):null;
     if(_difR){ _bt='<button class="stc-ok cola" disabled aria-label="'+stEsc(pr.n)+': acomodando '+stEsc(_difR.titulo)+'">Acomo-<br>dando</button>'; sub='acomodando '+stEsc(_difR.titulo)+'&hellip;'; }
     /* (28/10) «enviando» es CONTADO: el envio va atras y se reintenta solo si falla. */
     else if(_est==='err')_bt='<button class="stc-ok err" onclick="stContarOk(\''+_stJs(pr.a)+'\')" aria-label="No se guard&oacute; '+stEsc(pr.n)+': reintentar">No se<br>guard&oacute;</button>';
-    else if(_hecho)_bt='<button class="stc-ok ok" onclick="stContarDeshacer(\''+_stJs(pr.a)+'\')" aria-label="'+stEsc(pr.n)+' contado: tocá para deshacer">&#10003;<small>contado</small></button>';
+    else if(_hecho)_bt='<button class="stc-ok ok" onclick="stContarDeshacer(\''+_stJs(pr.a)+'\')" aria-label="'+stEsc(pr.n)+' contado: tocá para deshacer">&#10003;<small>contado '+_stcHora(_hechoT)+'</small></button>';
     else _bt='<button class="stc-ok" onclick="stContarOk(\''+_stJs(pr.a)+'\')" aria-label="'+stEsc(pr.n)+': el n&uacute;mero est&aacute; bien">&#10003;</button>';
     h+='<div class="stc-row'+(_hecho&&_est!=='err'?' listo':'')+'" id="stcR_'+stEsc(pr.a)+'">'
       +'<div class="stc-n">'+stEsc(pr.n)+'<span class="stc-sub">'+sub+'</span></div>'
@@ -30766,7 +30772,7 @@ function _stcEncolar(abbr,dep,v){
      el numero (un solo envio). */
   if(ya){ ya.v=v; ya.intentos=0; ya.desde=Date.now()+STC_DESHACER_MS; delete ya.desmarcar; }   // todavia no salio: vale el ultimo numero
   else { STC_COLA.push({k:k,abbr:abbr,dep:dep,v:v,antes:antes,id:_pfId(),intentos:0,desde:Date.now()+STC_DESHACER_MS}); _stcUltimo[k]=antes; }
-  DEP_CONTADOS[k]=true;                                  // contado YA: el ✓ no espera al servidor
+  DEP_CONTADOS[k]=Date.now();                            // contado YA: el ✓ no espera al servidor
   _stcDeshacerMostrar(abbr,dep);
   STC_EST[k]='envia';
   _stcGuardarCola();
@@ -30794,7 +30800,7 @@ function _stcSeguir(){
     var cambio=(it.v!==v);
     if(ok){
       if(!cambio){ STC_COLA.shift(); delete STC_EST[k]; if(pr){ pr.porDep[dep]=v; if(d&&typeof d.total==='number'&&isFinite(d.total))pr.f=d.total; } }
-      if(it.desmarcar&&!cambio)delete DEP_CONTADOS[k]; else DEP_CONTADOS[k]=true;
+      if(it.desmarcar&&!cambio)delete DEP_CONTADOS[k]; else if(!DEP_CONTADOS[k]||DEP_CONTADOS[k]===true)DEP_CONTADOS[k]=Date.now();
       ST_SUCIO=Date.now();
       if(d&&d.diferida)difAnotar(d,'el conteo de '+((pr&&pr.n)||abbr),[abbr]);
       _stAplicarLocal(abbr,{dep:dep,ahora:(d&&typeof d.ahora==='number'&&isFinite(d.ahora))?d.ahora:v,total:d&&d.total});
@@ -30876,7 +30882,7 @@ function _stcSeguir(){
   try{
     var c=JSON.parse(localStorage.getItem(STC_COLA_KEY)||'[]');
     if(Array.isArray(c)&&c.length){
-      c.forEach(function(it){ if(it&&it.k&&it.abbr&&it.dep){ it.intentos=0; if(!it.id)it.id=_pfId(); STC_COLA.push(it); STC_EST[it.k]='envia'; DEP_CONTADOS[it.k]=true; } });
+      c.forEach(function(it){ if(it&&it.k&&it.abbr&&it.dep){ it.intentos=0; if(!it.id)it.id=_pfId(); STC_COLA.push(it); STC_EST[it.k]='envia'; DEP_CONTADOS[it.k]=Date.now(); } });
       setTimeout(_stcSeguir,3000);
     }
   }catch(e){}
