@@ -4356,6 +4356,9 @@ function _renderPedidosInner() {
           var dot = pendiente ? '<span style="color:#E65100" title="OC pendiente de recibir">&#x26A0;&#xFE0F;</span>' : '<span style="color:#2E7D32">&#x2713;</span>';
           html += '<div style="display:flex;justify-content:space-between;padding:3px 0;font-size:12px;color:#5D4037">' +
             '<span>' + dot + ' ' + _abaCant(s.qty, _abaUni(abbr)) + ' &rarr; ' + _abaH(s.cliente) + ' <span style="opacity:.7">(' + _abaH(s.canal) + (s.nped ? ' #' + _abaH(s.nped) : '') + ')</span></span>' +
+            ((!pendiente && s.oc && _abaUni(abbr) !== 'kg')
+              ? '<button type="button" onclick="abaCorregirRecibido(\'' + esc(s.oc) + '\',' + Number(s.qty) + ',\'' + esc(nombre) + '\')" style="background:none;border:1px solid #D7C9A8;border-radius:8px;padding:2px 8px;font:inherit;font-size:12px;font-weight:700;color:#6D4C41;cursor:pointer;min-height:30px" title="Corregir lo recibido">&#x270F;&#xFE0F; Corregir</button>'
+              : '') +
             '</div>';
         });
         html += '</div>';
@@ -4767,6 +4770,35 @@ function pedNav(level) {
 // UN vendedor hardcodeado — los pedidos de los otros aparecían a nombre de él
 // y no había forma de saber qué le tocaba a cada uno. (Tadeo 07/08/2026)
 // Devuelve: {totalProvs, porProv:{<prov>:{pedido,recibido,porProd:{<abbr>:{prod,pedido,recibido,splits:[{qty,cliente,canal,nped,est}]}}}}}
+/* ✏️ CORREGIR LO RECIBIDO (6/11/2026, Tadeo). Recibió por apuro 6 wraps y llegaron 5: no había cómo corregirlo.
+   Pide la cantidad que de verdad llegó y llama a `compra_corregir_directo` (573): corrige la orden, la deuda con el
+   proveedor y, si entró al freezer, el stock — todo junto. Solo admin (la base lo controla). La carne no: va por pieza. */
+function abaCorregirRecibido(oc, antes, nombre) {
+  var t = window.prompt('¿Cuántos ' + nombre + ' llegaron de verdad en ' + oc + '?\n(figura que se recibieron ' + antes + ')', String(antes));
+  if (t === null) return;
+  t = String(t).trim().replace(',', '.');
+  if (!/^\d+(\.\d+)?$/.test(t)) { abaShowToast('Escribí un número'); return; }
+  if (Number(t) === Number(antes)) { abaShowToast('Es lo mismo que figura: no cambié nada'); return; }
+  var mot = window.prompt('¿Por qué? (opcional, queda anotado en la orden)', '') || '';
+  if (typeof _sbPermiso !== 'function') { abaShowToast('No pude conectar con la base'); return; }
+  abaShowToast('Corrigiendo ' + oc + '…');
+  Promise.resolve(_sbPermiso(true)).then(function (sb) {
+    if (!sb || !sb.token) throw new Error('sin sesión de la base');
+    return fetch(sb.url + '/rest/v1/rpc/compra_corregir_directo', { method: 'POST',
+      headers: { apikey: sb.key, Authorization: 'Bearer ' + sb.token, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ p: { action: 'corregirRecepcion', oc: oc, cantidad: t, motivo: mot,
+        clientOpId: 'cr_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8) } }) })
+      .then(function (r) { return r.json().then(function (d) { if (!r.ok) throw new Error((d && d.message) || ('la base contestó ' + r.status)); return d; }); });
+  }).then(function (d) {
+    if (!d || !d.ok) { abaShowToast('No se pudo: ' + ((d && d.error) || '?'), 5000); return; }
+    if (d.sinCambio) { abaShowToast('No había nada que cambiar'); return; }
+    var plata = Math.abs(Number(d.deuda) || 0).toLocaleString('es-AR');
+    abaShowToast('✓ ' + oc + ': ' + d.antes + ' → ' + d.ahora + ' · le debés $' + plata + (d.delta < 0 ? ' menos' : ' más')
+      + (d.freezer ? ' · stock ' + (d.delta > 0 ? '+' : '') + d.delta : ' · no toca el stock (era de un cliente)'), 6000);
+    try { abaRefresh(true); } catch (e) {}
+  }).catch(function (e) { abaShowToast('No se pudo: ' + ((e && e.message) || e), 5000); });
+}
+
 function _porProveedorAgregado() {
   var porProv = {};
   var totalProvs = 0;
@@ -4807,7 +4839,7 @@ function _porProveedorAgregado() {
         p.splits.push({qty:qty, cliente:etiquetaRed, canal:'Red', nped:'', est:recibido?'Recibido':'Pendiente'});
       }
     } else {
-      p.splits.push({qty:qty, cliente:oc.cliente||'?', canal:oc.canal||'', nped:oc.nped||'', est:est});
+      p.splits.push({qty:qty, cliente:oc.cliente||'?', canal:oc.canal||'', nped:oc.nped||'', est:est, oc:oc.oc||'', abbr:abbr, prod:oc.prod||abbr});
     }
   });
   return {totalProvs:totalProvs, porProv:porProv};
