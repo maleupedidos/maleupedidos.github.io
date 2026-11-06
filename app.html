@@ -11808,6 +11808,12 @@ function ajPermisoSet(rol,tab,acceso){
         <div id="pvRecoList"></div>
       </div>
 
+      <!-- (6/11/2026) Mermas para reclamar: la carne de este proveedor que salió en mal estado -->
+      <div class="pv-reco-box" id="pvMermaBox" style="display:none">
+        <h4 class="pv-reco-h">🗑 Mermas para reclamar</h4>
+        <div id="pvMermaList"></div>
+      </div>
+
       <!-- Gráfico evolución -->
       <div class="pv-chart-card">
         <div class="pv-chart-head">
@@ -15193,7 +15199,7 @@ function _leerVersion(app){
    "El HTML no sabe que version es" dejo de ser cierto: el build le escribe
    adentro el CACHE_NAME de sw-panel.js, el mismo que deploy.sh obliga a subir en
    cada cambio. Si lo publicado dice otra cosa, esta pagina es vieja. Punto. */
-var _APP_CN_PAGINA='maleu-panel-v942';
+var _APP_CN_PAGINA='maleu-panel-v943';
 
 /* Devuelve [{k,v}] si lo publicado no es lo que esta pagina corre. */
 function _chequearVersiones(){
@@ -51924,6 +51930,59 @@ if('serviceWorker' in navigator){
     }).join('');
   }
 
+  /* MERMAS PARA RECLAMAR (6/11/2026, Tadeo). Las piezas de carne de ESTE proveedor dadas de baja como «Merma» en
+     Productos › Carne (mermas_base, 562: trae el proveedor y la fecha en que llegó). Cada una con su casilla: no toda
+     merma es culpa del proveedor (una pieza perdida en el freezer no se reclama). «Copiar para WhatsApp» arma el
+     mensaje con las tildadas, para mandárselo o descontárselo del próximo pago. */
+  var _pvMermaFuera = {};   /* las destildadas, por id de pieza (se recuerdan mientras la pantalla está abierta) */
+  var _pvMermaTry = 0;
+  function _pvNorm(x){ return String(x||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9]/g,''); }
+  function _pvMermasDe(prov){
+    var k = _pvNorm(prov);
+    return ((typeof _MERMAS!=='undefined' && Array.isArray(_MERMAS)) ? _MERMAS : []).filter(function(m){ return k && _pvNorm(m.prov)===k; })
+      .sort(function(a,b){ return String(b.iso||'').localeCompare(String(a.iso||'')); });
+  }
+  function _pvDM(iso){ var m = String(iso||'').match(/^(\d{4})-(\d{2})-(\d{2})/); return m ? (Number(m[3])+'/'+Number(m[2])) : '—'; }
+  function _pvKg(n){ return (Number(n)||0).toLocaleString('es-AR',{minimumFractionDigits:3,maximumFractionDigits:3}); }
+  function _pvMotivo(n){ return String(n||'').replace(/^merma:\s*/i,'').trim(); }
+  function renderMermas(){
+    var box = $('pvMermaBox'), list = $('pvMermaList');
+    if (!box || !list) return;
+    if (typeof _MERMAS === 'undefined' || !Array.isArray(_MERMAS)) {
+      try { _MERMAS_T = 0; _mermasCargar(); } catch(e) {}
+      if (_pvMermaTry++ < 10) setTimeout(renderMermas, 1500);
+      return;
+    }
+    var l = _pvMermasDe(fProv);
+    if (!l.length) { box.style.display = 'none'; list.innerHTML = ''; return; }
+    var kgT = 0, plT = 0, n = 0;
+    var filas = l.map(function(m){
+      var pl = Math.round((Number(m.kg)||0)*(Number(m.ckg)||0)), on = !_pvMermaFuera[m.id];
+      if (on) { kgT += Number(m.kg)||0; plT += pl; n++; }
+      return '<label class="pv-reco-item '+(on?'warn':'ok')+'" style="display:flex;gap:10px;align-items:flex-start;cursor:pointer">'
+        + '<input type="checkbox" '+(on?'checked':'')+' onchange="_pvMermaTocar(\''+esc(m.id)+'\',this.checked)" style="margin-top:3px;width:18px;height:18px;flex:none">'
+        + '<span><b>'+esc(m.corte||m.abbr)+'</b> · '+esc(m.id)+' · '+_pvKg(m.kg)+' kg · $'+fmtU(pl)
+        + '<br><small style="color:#6b7280">Llegó el '+_pvDM(m.rec)+' · baja el '+_pvDM(m.iso)+(_pvMotivo(m.nota)?' · '+esc(_pvMotivo(m.nota)):'')+'</small></span></label>';
+    }).join('');
+    box.style.display = 'block';
+    list.innerHTML = filas
+      + '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-top:8px">'
+      + '<b>A reclamar: '+n+' pieza'+(n===1?'':'s')+' · '+_pvKg(kgT)+' kg · $'+fmtU(plT)+'</b>'
+      + '<button type="button" class="btn-pdf" onclick="_pvMermaCopiar()" '+(n?'':'disabled')+'>📋 Copiar para WhatsApp</button></div>';
+  }
+  window._pvMermaTocar = function(id, on){ if (on) delete _pvMermaFuera[id]; else _pvMermaFuera[id] = true; renderMermas(); };
+  window._pvMermaCopiar = function(){
+    var l = _pvMermasDe(fProv).filter(function(m){ return !_pvMermaFuera[m.id]; });
+    if (!l.length) return;
+    var kgT = 0, plT = 0;
+    var t = 'Hola! Te paso las piezas que nos llegaron y no estaban en condiciones para vender:\n'
+      + l.map(function(m){ kgT += Number(m.kg)||0; plT += Math.round((Number(m.kg)||0)*(Number(m.ckg)||0));
+          return '• '+(m.corte||m.abbr)+' · '+_pvKg(m.kg)+' kg (llegó el '+_pvDM(m.rec)+')'; }).join('\n')
+      + '\nTotal: '+_pvKg(kgT)+' kg · $'+fmtU(plT)+'. ¿Cómo lo resolvemos? Gracias!';
+    var ok = function(){ try{ toast('📋 Copiado: pegalo en el chat de '+provMarca(fProv)); }catch(e){} };
+    try { navigator.clipboard.writeText(t).then(ok, function(){ prompt('Copiá el mensaje:', t); }); } catch(e) { prompt('Copiá el mensaje:', t); }
+  };
+
   function renderComparativa(){
     var resumen = DATA.resumen || {};
     var totYtd = 0;
@@ -51973,6 +52032,7 @@ if('serviceWorker' in navigator){
     renderEvolucionCostos();
     renderRentabilidad();
     renderRecomendaciones();
+    try { _pvMermaTry = 0; renderMermas(); } catch(e) {}
     var ocs = filterOcs();
 
     // Aggregate por granularidad
