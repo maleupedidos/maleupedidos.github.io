@@ -18,7 +18,7 @@ const sql = async (q) => (await import('file:///C:/Tadeo Ustariz/Trabajo/Grupo M
     await ev(`document.getElementById('loginUser').value=${JSON.stringify(cred.usuario)}; document.getElementById('loginPin').value=${JSON.stringify(String(cred.pin))}; panelDoLogin(); 1`);
     await esperar(`typeof SESSION!=='undefined'&&SESSION&&!!SESSION.usuario`, 60000);
     await ev(`go('pedidos'); 1`);
-    await esperar(`(document.getElementById('pedEnVivo')||{}).textContent&&/●\s*en vivo/.test(document.getElementById('pedEnVivo').textContent)`, 45000);
+    await esperar(`(document.getElementById('pedEnVivo')||{}).textContent&&/●\\s*en vivo/.test(document.getElementById('pedEnVivo').textContent)`, 45000);
     console.log('sesion', await ev(`JSON.stringify({u:SESSION.usuario,rol:SESSION.rol,arma:_palancaVal('pedidosArma'),sello:(document.getElementById('pedEnVivo')||{}).textContent,canales:Object.keys((_ENV&&_ENV.canales)||{})})`));
     await ev(`(function(){window.__s=[];var f=_pedVivoSenal;window._pedVivoSenal=function(p){window.__s.push({t:Date.now(),p:p});return f.apply(this,arguments);};
       var g=_pedVivoAplicar;window._pedVivoAplicar=function(l,d){window.__s.push({t:Date.now(),aplicar:(l||[]).map(function(q){return q&&(q.h+'|'+q.n+'|'+q.c);})});return g.apply(this,arguments);};

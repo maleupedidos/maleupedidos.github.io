@@ -34,7 +34,7 @@ async function aparato(nombre) {
   const [A, B] = await Promise.all([aparato('A'), aparato('B')]);
   try {
     for (const x of [A, B]) {
-      const v = await x.esperar(`(function(){var e=document.getElementById('pedEnVivo');return e&&/●\s*en vivo/.test(e.textContent)?e.textContent:'';})()`, 45000);
+      const v = await x.esperar(`(function(){var e=document.getElementById('pedEnVivo');return e&&/●\\s*en vivo/.test(e.textContent)?e.textContent:'';})()`, 45000);
       chk(x.nombre + ': Pedidos dice «en vivo»', !!v, await x.ev(`(document.getElementById('pedEnVivo')||{}).textContent||'sin sello'`));
     }
     // 1) Entra un pedido desde «otro aparato» (la tienda).
