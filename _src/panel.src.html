@@ -15726,7 +15726,21 @@ function _pedVivoSenal(p) {
     _pedVivo.t = null;
     var todo = _pedVivo.todo, ids = Object.keys(_pedVivo.ids);
     _pedVivo.todo = false; _pedVivo.ids = {};
-    if (_palancaVal('pedidosArma') === 'si' || todo || ids.length > 50) { _pedVivoTodo().catch(function(){}); return; }
+    if (todo || ids.length > 50) { _pedVivoTodo().catch(function(){}); return; }
+    /* (6/11/2026, 579) SOLO LOS QUE CAMBIARON. Con PEDIDOS_BASE_ARMA cada señal traia la lista entera (~2.400 pedidos,
+       0,4 s en la base + todo el JSON por la red) aunque cambiara uno. Ahora pide esos pedidos ya armados, con los
+       mismos permisos (215 ms → 5 ms en la base). Si falta alguno (borrado, o la base no contesto) va la lista entera. */
+    if (_palancaVal('pedidosArma') === 'si') {
+      var desde = Date.now();
+      _pedArmaClaves(ids).then(function (l) {
+        var vino = {}; (l || []).forEach(function (q) { vino[String(q.h) + '|' + String(q.n)] = 1; });
+        var falta = ids.some(function (k) { return !vino[k]; });
+        var esRep = false; try { esRep = String((SESSION && SESSION.rol) || '').toLowerCase() === 'repartidor'; } catch (e) {}
+        if (!l || (falta && !esRep)) return _pedVivoTodo();
+        if (l.length) _pedVivoAplicar(l, desde);
+      }).catch(function () { _pedVivoTodo().catch(function(){}); });
+      return;
+    }
     if (ids.length) _sbPedidosClaves(ids).then(_pedVivoAplicar);
   }, PED_VIVO_JUNTAR_MS);
 }
@@ -16076,6 +16090,16 @@ function _pedArmaBase(){
       .then(function(r){ if(!r.ok)throw new Error('la base contest\u00f3 '+r.status); return r.json(); })
       .then(function(d){ if(!d||!Array.isArray(d.pedidos))throw new Error('la base no arm\u00f3 los pedidos'); return {d:d,ms:Date.now()-t0,sb:sb}; });
   });
+}
+/* Unos pedidos ya armados por la base, con el formato de la lista (579). null si la base no contesto bien. */
+function _pedArmaClaves(claves){
+  return _sbPermiso(true).then(function(sb){
+    if(!sb||!claves||!claves.length)return null;
+    return fetch(sb.url+'/rest/v1/rpc/pedidos_light_claves_pantalla',{method:'POST',
+      headers:{apikey:sb.key,Authorization:'Bearer '+sb.token,'Content-Type':'application/json'},body:JSON.stringify({p_claves:claves})})
+      .then(function(r){ return r.ok?r.json():null; })
+      .then(function(d){ return (d&&Array.isArray(d.pedidos))?d.pedidos:null; });
+  }).catch(function(){ return null; });
 }
 /* Lo que la base no arma, de la foto: solo esas claves (no el MB de pedidos). */
 /* (5/11/2026, Supa 522) Salud, ventas extra y vendedores salen de la BASE (pedidos_resto_pantalla), no de la foto de pedidos
