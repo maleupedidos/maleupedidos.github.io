@@ -52,7 +52,9 @@ echo "  OK: al dia con origin/main."
 
 # ── 2. Que haya algo que publicar ────────────────────────────────────────────
 echo "→ [2/8] Cambios a publicar…"
-CAMBIOS="$(git status --porcelain -- '*.html' '*.js' '*.json' '*.css' | awk '{print $NF}' | sort -u)"
+# (6/11/2026) Tambien lo commiteado y todavia no pusheado: un arreglo commiteado antes del deploy salia sin subir el
+# CACHE_NAME (y sin chequear su sintaxis), y los celulares no se enteraban de la version nueva. Paso con la v955.
+CAMBIOS="$( { git status --porcelain -- '*.html' '*.js' '*.json' '*.css' | awk '{print $NF}'; git diff --name-only origin/main..HEAD -- '*.html' '*.js' '*.json' '*.css'; } | sort -u)"
 if [ -z "$CAMBIOS" ] && [ "$(git rev-list --count origin/main..HEAD)" -eq 0 ]; then
   fallar "No hay nada modificado ni ningun commit pendiente de push."
 fi
