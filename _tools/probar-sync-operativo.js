@@ -21,7 +21,7 @@ let n=0;function ok(name,cond){assert(cond,name);n++;console.log('OK '+name);}
   finish();await tick();ok('la compatibilidad con Sheets termina al volver el aplicador',done);
 
   let render=0;
-  const p=ctx(['_pedVivoAplicar','_sbPedidoSirve','_sbSoyRobot','_sbEsPrueba'],{D:{pedidos:[{h:'Home',n:'1',ep:'Cobrado'},{h:'Pilar',n:'2',ep:'No Cobrado'}]},
+  const p=ctx(['_pedVivoAplicar','_sbPedidoSirve','_sbSoyRobot','_sbEsPrueba','_copiaFresca'],{D:{pedidos:[{h:'Home',n:'1',ep:'Cobrado'},{h:'Pilar',n:'2',ep:'No Cobrado'}]},
     _sbCambiosPed:{'Home|1':100},_SB_ESPERA_TRAS_CAMBIO:360000,_SB_TEL_PRUEBA:{},_sbClavePedido:q=>q.h+'|'+q.n,
     _sbFusionar:()=>{throw Error('la lectura armada no debe pasar por la replica');},
     _sbCompletar:()=>{},_hayEditorAbierto:()=>false,render:()=>render++,_sbGuardarCopia:()=>{},cur:'pedidos'});
