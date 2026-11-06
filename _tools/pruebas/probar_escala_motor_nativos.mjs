@@ -1,0 +1,15 @@
+import fs from 'fs'; import vm from 'vm';
+const { sql } = await import('file:///C:/Tadeo Ustariz/Trabajo/Grupo Matriz/Maleu/copia-supabase/estancias/_tools/sql_base.mjs');
+const MIG = process.env.SIN ? '' : fs.readFileSync('C:/Tadeo Ustariz/Trabajo/Grupo Matriz/Maleu/copia-supabase/estancias/database/migrations/557_cobros_escala_red_nativos.sql', 'utf8').replace(/^BEGIN;$/m, '').replace(/^COMMIT;$/m, '');
+const r = await sql(`BEGIN;\n${MIG}\nSELECT set_config('request.jwt.claims','{"role":"authenticated","app_metadata":{"usuario":"tadeo","rol":"admin"}}',true);\nCREATE TEMP TABLE b ON COMMIT DROP AS SELECT red_bolsa_directo('{"action":"marcarEntregadoAVendedor","rows":[-2366,-2367],"vendedor":"Lourdes Thomas","ts":1,"clientOpId":"escala-bolsa"}'::jsonb) r;
+CREATE TEMP TABLE c ON COMMIT DROP AS SELECT red_cobro_directo('{"action":"cobrarVendedorRed","vendedor":"Lourdes Thomas","ef":249563,"tr":0,"cuenta":"","quien":"Tadeo Ustariz","ts":1,"clientOpId":"escala-cvr"}'::jsonb) r;
+CREATE TEMP TABLE d ON COMMIT DROP AS SELECT red_cerrar_rendidos_directo('{"action":"cerrarRendidosRed","vendedor":"Lourdes Thomas","clientOpId":"escala-crr"}'::jsonb) r;
+SELECT red_escala_pantalla() x; ROLLBACK;`);
+const datos = r[r.length - 1].x;
+const ctx = { console, JSON, Math, Number, String, Object, Array, Date, RegExp, Error, isNaN, isFinite, parseInt, parseFloat, encodeURIComponent, decodeURIComponent, Intl, Symbol, Map, Set };
+ctx.G = ctx; ctx.window = ctx; vm.createContext(ctx);
+vm.runInContext(fs.readFileSync('re_motor.js', 'utf8'), ctx);
+const o = ctx.RE_MOTOR.armar(datos, {});
+const lou = JSON.stringify(o).match(/\{[^{}]*Lourdes Thomas[^{}]*\}/g) || [];
+console.log('Federico:', (JSON.stringify(o).match(/{[^{}]*Federico D'Andrea[^{}]*}/) || [''])[0].slice(0, 200));
+console.log('filas Red en datos:', (datos.red || []).length, '· menciones de Lou en la escala:', lou.length, (lou[0] || '').slice(0, 300));

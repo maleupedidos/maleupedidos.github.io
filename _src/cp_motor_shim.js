@@ -88,10 +88,27 @@ var _CPM_CAB_ = {
     'Usuario', 'PIN', 'Comisión %', 'Notas', 'Días', 'Telegram'],
   Config_Maleu: ['Parámetro', 'Valor', 'Activo desde', 'Notas']
 };
+/* (557, 5/11/2026) Los pedidos NACIDOS EN LA BASE tienen fila NEGATIVA: `_cpmPoner_` los perdía en silencio (un índice
+   negativo no es una fila). Van al final de su hoja en una fila prestada y `_cpmFilasReales_` les devuelve su número en lo
+   que arma el motor (mismo arreglo que la 538 en el portal). Sin esto, un pedido de la tienda entregado y sin cobrar no
+   aparecía en Ruta › Cobros. */
+var _cpmFALSAS_ = {};
+function _cpmFilasReales_(o, h) {
+  if (Array.isArray(o)) { o.forEach(function (x) { _cpmFilasReales_(x, h); }); return o; }
+  if (o && typeof o === 'object') {
+    var hh = typeof o.h === 'string' ? o.h : h;
+    Object.keys(o).forEach(function (k) {
+      if ((k === 'r' || k === 'row') && typeof o[k] === 'number' && _cpmFALSAS_[(hh || 'Red') + '|' + o[k]] != null) o[k] = _cpmFALSAS_[(hh || 'Red') + '|' + o[k]];
+      else _cpmFilasReales_(o[k], hh);
+    });
+  }
+  return o;
+}
 function _cpmCargar_(d) {
   var H = {}, cab = d.cab || {};
+  _cpmFALSAS_ = {};
   Object.keys(_CPM_PED_).forEach(function (h) {
-    var c = (cab[h] || []).slice(), cc = _CPM_PED_[h], filas = [c];
+    var c = (cab[h] || []).slice(), cc = _CPM_PED_[h], filas = [c], negs = [];
     var ix = function (n) { return c.indexOf(n); };
     (d.ped || []).forEach(function (x) {
       if (x.h !== h) return;
@@ -105,12 +122,14 @@ function _cpmCargar_(d) {
         if (ix('Sub Barrio') >= 0) f[ix('Sub Barrio')] = x.sb;
         if (ix('Domicilio - Lote') >= 0) f[ix('Domicilio - Lote')] = x.l;
       }
-      _cpmPoner_(filas, x.row, f);
+      if (Number(x.row) < 0) negs.push([Number(x.row), f]); else _cpmPoner_(filas, x.row, f);
     });
+    negs.forEach(function (z) { filas.push(z[1]); _cpmFALSAS_[h + '|' + filas.length] = z[0]; });
     H[h] = new _Hoja(h, filas);
   });
   var red = [(cab.Red || []).slice()];
-  (d.red || []).forEach(function (x) { _cpmPoner_(red, x[0], (x[1] || []).map(_cpmCelda_)); });
+  (d.red || []).forEach(function (x) { if (!(Number(x[0]) < 0)) _cpmPoner_(red, x[0], (x[1] || []).map(_cpmCelda_)); });
+  (d.red || []).forEach(function (x) { if (Number(x[0]) < 0) { red.push((x[1] || []).map(_cpmCelda_)); _cpmFALSAS_['Red|' + red.length] = Number(x[0]); } });
   H.Red = new _Hoja('Red', red);
   H['Cobros Parciales'] = new _Hoja('Cobros Parciales', [['Fecha/Hora', 'Hoja', 'N° Pedido', 'Cliente', 'Forma Pago', 'Monto']].concat(
     (d.parciales || []).map(function (x) { var k = String(x.k || ''), i = k.indexOf('|');
@@ -143,7 +162,7 @@ G.CP_MOTOR = {
       _CFG_MEMO_ = null; _CUENTAS_MEMO_ = null; _SALDOS_MEMO_ = null; _comPctCache = null;
       var o = JSON.parse(_doGetCobrosPendientes({ parameter: { fresh: '1' } }).getContent());
       o.base = true;
-      return o;
+      return _cpmFilasReales_(o);
     } finally { _ahora = null; _HOJAS = {}; _CP = {}; }
   }
 };

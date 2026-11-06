@@ -667,8 +667,25 @@ var _REM_CAB_ = {
 };
 /* Productos: las columnas que se leen por posicion (B nombre, C abreviatura, I precio, J costo,
    Q unidad) y por nombre (Abreviatura, Precio, Unidad y las tres «Com Red», Y:AA). */
+/* (557, 5/11/2026) Los pedidos NACIDOS EN LA BASE tienen fila NEGATIVA: `_remPoner_` los perdía en silencio (un índice
+   negativo no es una fila). Van al final de su hoja en una fila prestada y `_remFilasReales_` les devuelve su número en lo
+   que arma el motor (mismo arreglo que la 538 en el portal). Sin esto, un pedido de la tienda entregado y sin cobrar no
+   aparecía en Ruta › Cobros. */
+var _remFALSAS_ = {};
+function _remFilasReales_(o, h) {
+  if (Array.isArray(o)) { o.forEach(function (x) { _remFilasReales_(x, h); }); return o; }
+  if (o && typeof o === 'object') {
+    var hh = typeof o.h === 'string' ? o.h : h;
+    Object.keys(o).forEach(function (k) {
+      if ((k === 'r' || k === 'row') && typeof o[k] === 'number' && _remFALSAS_[(hh || 'Red') + '|' + o[k]] != null) o[k] = _remFALSAS_[(hh || 'Red') + '|' + o[k]];
+      else _remFilasReales_(o[k], hh);
+    });
+  }
+  return o;
+}
 function _remCargar_(d) {
   var H = {}, cabP = [];
+  _remFALSAS_ = {};
   for (var i = 0; i < 27; i++) cabP.push('');
   cabP[0] = 'N°'; cabP[1] = 'Producto'; cabP[2] = 'Abreviatura'; cabP[8] = 'Precio'; cabP[9] = 'Costo'; cabP[16] = 'Unidad';
   cabP[24] = 'Com Red Inicial'; cabP[25] = 'Com Red Intermedio'; cabP[26] = 'Com Red Top';
@@ -679,7 +696,8 @@ function _remCargar_(d) {
     return f;
   })));
   var red = [(d.cab || []).slice()];
-  (d.red || []).forEach(function (x) { _remPoner_(red, x[0], (x[1] || []).map(_remCelda_)); });
+  (d.red || []).forEach(function (x) { if (!(Number(x[0]) < 0)) _remPoner_(red, x[0], (x[1] || []).map(_remCelda_)); });
+  (d.red || []).forEach(function (x) { if (Number(x[0]) < 0) { red.push((x[1] || []).map(_remCelda_)); _remFALSAS_['Red|' + red.length] = Number(x[0]); } });
   H.Red = new _Hoja('Red', red);
   var hj = d.hojas || {};
   Object.keys(_REM_CAB_).forEach(function (n) {
@@ -701,7 +719,7 @@ G.RE_MOTOR = {
       _CFG_MEMO_ = null; _COLSRED_ = null; _PROD_VALORES_ = null; _SECO_ = true;
       var o = JSON.parse(_doGetRedEscala({ parameter: {} }).getContent());
       o.base = true;
-      return o;
+      return _remFilasReales_(o, 'Red');
     } finally { _ahora = null; _HOJAS = {}; _RE = {}; }
   }
 };
