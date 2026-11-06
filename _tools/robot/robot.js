@@ -485,7 +485,8 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
       var j=null; try{ j=await x.json(); }catch(e){} return {paso:'autopedido',http:x.status,r:j,rol:lp.rol}; })()`, 30000);
     };
     let r = null;
-    for (const dias of [2, 4, 6, 8]) { r = await cargar(dias); if (!(r && r.r && r.r.ok === false && /ya tiene el pedido/.test(String(r.r.err || '')))) break; }
+    /* (5/11/2026) También si el día cae antes del corte del autopedido (jueves 21:00, regla 544): «van desde el viernes …». */
+    for (const dias of [2, 4, 6, 8, 10]) { r = await cargar(dias); if (!(r && r.r && r.r.ok === false && /ya tiene el pedido|van desde el/.test(String(r.r.err || '')))) break; }
     if (r.paso === 'login') return { ok: false, detalle: 'el representante no pudo entrar por la base: ' + JSON.stringify(r.r).slice(0, 150) };
     const d = r.r || {};
     return d.ok ? { ok: true, detalle: 'entró como ' + CRED.repUsuario + ' (rol ' + r.rol + ') · autopedido ' + (d.ref || (d.sumarA && d.sumarA.n) || '') }
