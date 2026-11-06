@@ -20,7 +20,46 @@ var Date = (function (D) {
   return F;
 })(_D);
 
-function _Hoja(nombre, filas) { this.n = nombre; this.f = filas; }
+/* (5/11/2026, noche) FILAS NEGATIVAS: lo nacido en la base (pedidos de la tienda y el portal, parciales y rendiciones que
+   escribe la base) no tiene fila de planilla y lleva una NEGATIVA. `_motPoner_` la perdía en silencio (un índice negativo no
+   es una fila): Caja no veía esos cobros. Ahora se separan al poner, van al final de su hoja en una fila prestada, y
+   `_motFilasReales_` les devuelve su número en lo que arma el motor (mismo arreglo que la 538 en el portal). */
+var _MOT_FALSAS_ = {};
+function _motFalsasReset_() { _MOT_FALSAS_ = {}; }
+function _Hoja(nombre, filas) {
+  if (filas && filas.__neg) {
+    filas.__neg.forEach(function (z) { filas.push(z[1]); (_MOT_FALSAS_[nombre] = _MOT_FALSAS_[nombre] || {})[filas.length] = z[0]; });
+    delete filas.__neg;
+  }
+  this.n = nombre; this.f = filas;
+}
+/* Las filas negativas que se pusieron DESPUÉS de crear la hoja (Caja crea la hoja y después la llena): al terminar de
+   cargar, se agregan al final de su hoja. */
+function _motNegCerrar_(H) {
+  Object.keys(H || {}).forEach(function (n) {
+    var f = H[n] && H[n].f;
+    if (f && f.__neg) {
+      f.__neg.forEach(function (z) { f.push(z[1]); (_MOT_FALSAS_[n] = _MOT_FALSAS_[n] || {})[f.length] = z[0]; });
+      delete f.__neg;
+    }
+  });
+}
+function _motFilasReales_(o, hoja) {
+  if (Array.isArray(o)) { o.forEach(function (x) { _motFilasReales_(x, hoja); }); return o; }
+  if (o && typeof o === 'object') {
+    var h = typeof o.h === 'string' ? o.h : (typeof o.hoja === 'string' ? o.hoja : hoja);
+    Object.keys(o).forEach(function (k) {
+      var v = o[k];
+      if ((k === 'r' || k === 'row' || k === 'fila') && typeof v === 'number' && v > 1) {
+        var real = null;
+        if (h && _MOT_FALSAS_[h] && _MOT_FALSAS_[h][v] != null) real = _MOT_FALSAS_[h][v];
+        /* sin hoja a la vista no se toca: una fila 5 de Gastos no es la fila prestada 5 de otra hoja */
+        if (real != null) o[k] = real;
+      } else _motFilasReales_(v, h);
+    });
+  }
+  return o;
+}
 _Hoja.prototype.getName = function () { return this.n; };
 _Hoja.prototype.getLastRow = function () { return this.f.length; };
 _Hoja.prototype.getLastColumn = function () { var m = 0; this.f.forEach(function (x) { if (x.length > m) m = x.length; }); return m; };
@@ -66,7 +105,10 @@ function _motCelda_(v) {
   if (typeof v === 'string') { var f = _motFecha_(v); if (f) return f; }
   return v == null ? '' : v;
 }
-function _motPoner_(filas, row, fila) { while (filas.length < row - 1) filas.push([]); filas[row - 1] = fila; }
+function _motPoner_(filas, row, fila) {
+  if (Number(row) < 0) { (filas.__neg = filas.__neg || []).push([Number(row), fila]); return; }   /* (noche) ver _Hoja */
+  while (filas.length < row - 1) filas.push([]); filas[row - 1] = fila;
+}
 
 /* EL MOTOR DE «MI REPARTO» (204, 27/10/2026). Va despues de motor_comun_shim.js; _tools/copiar_motor.js
    pone donde dice MOTOR (entre barra-asterisco) `_doGetMiReparto` y lo que llama, copiado de Code.js. Lo
@@ -342,13 +384,15 @@ function _mrmCargar_(d) {
    (los mismos parametros de `?action=miReparto`). */
 G.MR_MOTOR = {
   armar: function (datos, opts) {
+    _motFalsasReset_();
     opts = opts || {};
     _ahora = opts.ahora != null ? Number(opts.ahora) : null;
     try {
       _mrmCargar_(datos || {});
+      _motNegCerrar_(_HOJAS);   /* (noche) filas negativas al final de su hoja */
       var o = JSON.parse(_doGetMiReparto({ parameter: opts.p || {} }).getContent());
       o.base = true;
-      return o;
+      return _motFilasReales_(o);   /* (noche) filas negativas → su número real */
     } finally { _ahora = null; _HOJAS = {}; _MR = {}; }
   }
 };

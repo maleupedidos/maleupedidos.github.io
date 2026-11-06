@@ -93,14 +93,16 @@ function _camCabPed_(h) {
    que `?action=cajaLight` en lo que la tanda ya tiene. */
 G.CA_MOTOR = {
   armar: function (datos, opts) {
+    _motFalsasReset_();
     opts = opts || {};
     _ahora = opts.ahora != null ? Number(opts.ahora) : null;
     try {
       _camCargar_(datos || {});
+      _motNegCerrar_(_HOJAS);   /* (noche) filas negativas al final de su hoja */
       _CFG_MEMO_ = null; _CUENTAS_MEMO_ = null; _LUG_CFG_ = null;
       var o = JSON.parse(_doGetAdmin({ mode: 'caja', fresh: true }).getContent());
       o.base = true;
-      return o;
+      return _motFilasReales_(o);   /* (noche) filas negativas → su número real */
     } finally { _ahora = null; _HOJAS = {}; }
   }
 };

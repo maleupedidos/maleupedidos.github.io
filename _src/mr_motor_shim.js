@@ -36,13 +36,15 @@ function _mrmCargar_(d) {
    (los mismos parametros de `?action=miReparto`). */
 G.MR_MOTOR = {
   armar: function (datos, opts) {
+    _motFalsasReset_();
     opts = opts || {};
     _ahora = opts.ahora != null ? Number(opts.ahora) : null;
     try {
       _mrmCargar_(datos || {});
+      _motNegCerrar_(_HOJAS);   /* (noche) filas negativas al final de su hoja */
       var o = JSON.parse(_doGetMiReparto({ parameter: opts.p || {} }).getContent());
       o.base = true;
-      return o;
+      return _motFilasReales_(o);   /* (noche) filas negativas → su número real */
     } finally { _ahora = null; _HOJAS = {}; _MR = {}; }
   }
 };

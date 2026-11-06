@@ -27,13 +27,15 @@ function _pgmCargar_(d) {
 /* datos: lo que devuelve pendientes_guardar_pantalla. opts.ahora: fijar el reloj (la prueba). */
 G.PG_MOTOR = {
   armar: function (datos, opts) {
+    _motFalsasReset_();
     opts = opts || {};
     _ahora = opts.ahora != null ? Number(opts.ahora) : null;
     try {
       _pgmCargar_(datos || {});
+      _motNegCerrar_(_HOJAS);   /* (noche) filas negativas al final de su hoja */
       var o = JSON.parse(_doGetPendientesGuardarStock().getContent());
       o.base = true;
-      return o;
+      return _motFilasReales_(o);   /* (noche) filas negativas → su número real */
     } finally { _ahora = null; _HOJAS = {}; }
   }
 };
