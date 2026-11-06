@@ -28505,9 +28505,14 @@ function _stDeLaBase(opt){
        (medido el 5/10/2026 con el token de la pantalla). No hace falta: la
        policy de la 028 ya esconde las bajas para este rol. */
     return (arma?_stockArmaBase(sb,ctl?ctl.signal:undefined).then(function(r){
-      var x=r.d, al=Number(x.alDia)||0;
+      /* (6/11/2026) Fisico y reservado salen del LIBRO (`stock_base()`, en vivo): son de `ts`, la hora en que la base
+         contesto. `alDia` es el latido de la replica del inventario de la planilla, apagada a proposito desde el
+         5/11 01:23 (`inv` en REPLICA_PG_NO): con el, Stock decia «la copia de la base es de hace 2 días» sobre un
+         stock al minuto. `alDia` sigue diciendo de cuando son las columnas que todavia vienen de la planilla
+         (inicial, vendido y comprado de la semana): va aparte, en `semT`. */
+      var al=Number(x.ts)||Number(x.alDia)||0;
       return {completo:al>0, faltan:al>0?[]:['latido'], stock:x.stock, stockDeps:x.stockDeps,
-        alDia:al, stockCierre:x.stockCierre||'', sinRegistro:x.sinRegistro, conCosto:true};
+        alDia:al, semT:Number(x.alDia)||0, stockCierre:x.stockCierre||'', sinRegistro:x.sinRegistro, conCosto:true};
     }):Promise.all([
       g('inventory_product?select='+ST_PG_PROD+'&limit=1000'),
       g('inventory_stock_snapshot?select='+ST_PG_SNAP+'&limit=5000'),
@@ -28545,7 +28550,7 @@ function _stDeLaBase(opt){
       D.stockTs=o.alDia; D.stockSinReg=o.sinRegistro; D.stockFuente='pg';
       _stockPedidoEn=Math.max(Number(_stockPedidoEn)||0,o.alDia);
       ST_TENGO=true; ST_INFO={viejo:false,t:_pedidoEn};
-      var _fu={de:'pg',t:o.alDia,costoT:cos.t,comprobando:(typeof _pedSelloEscritura==='function'),arma:arma,atraso:atraso};
+      var _fu={de:'pg',t:o.alDia,semT:o.semT||0,costoT:cos.t,comprobando:(typeof _pedSelloEscritura==='function'),arma:arma,atraso:atraso};
       ST_FUENTE=_fu;
       try{ delete _pintadas.stock; }catch(e){}
       if((typeof ST_TAB!=='string'||ST_TAB==='productos')&&typeof rStock==='function'){
@@ -29694,12 +29699,16 @@ function rStock(){
   }
   var _ksValor='al costo · '+conStock+' producto'+(conStock===1?'':'s')+' con stock';
   if(ST_FUENTE&&ST_FUENTE.de==='pg'&&ST_FUENTE.costoT)_ksValor+=' · costo de la planilla '+_hace(ST_FUENTE.costoT);
+  /* (6/11/2026) Inicial, vendido y comprado de la semana todavia son columnas de la planilla, cuya replica esta
+     apagada desde el 5/11: si tienen mas de un dia, se dice de cuando son (el stock de arriba si esta al minuto). */
+  var _ksSem='entró '+_stUK(comp)+' · arrancó con '+_stUK(ini);
+  if(ST_FUENTE&&ST_FUENTE.de==='pg'&&ST_FUENTE.semT&&Date.now()-ST_FUENTE.semT>86400000)_ksSem+=' · de la planilla, '+_hace(ST_FUENTE.semT);
   $('sKpi').innerHTML=
     _fuente+
     _sinReg+
     avisos.map(function(a){return '<div class="st-aviso">\u26a0\ufe0f '+a+'</div>';}).join('')+
     '<div class="card"><div class="kl">Valor del stock</div><div class="kv">$'+f$(Math.round(sumInv))+'</div><div class="ks">'+_ksValor+'</div></div>'+
-    '<div class="card"><div class="kl">Vendido esta semana</div><div class="kv">'+_stUK(ven)+'</div><div class="ks">entr\u00f3 '+_stUK(comp)+' \u00b7 arranc\u00f3 con '+_stUK(ini)+'</div></div>'+
+    '<div class="card"><div class="kl">Vendido esta semana</div><div class="kv">'+_stUK(ven)+'</div><div class="ks">'+_ksSem+'</div></div>'+
     '<div class="card'+(sinDisp>0?' wrn':'')+'"><div class="kl">Sin disponible</div><div class="kv">'+sinDisp+'</div><div class="ks">'+(ksDisp.length?ksDisp.join(' \u00b7 '):'todos tienen algo para vender')+'</div></div>';
 
   /* Donde esta cada cosa. Desde el 13/9/2026 el reparto viaja en el MISMO volcado
@@ -38375,6 +38384,15 @@ function _vListaClick(e){
     /* Stock en CONTAR, MOVER o RECIBIR CARNE: lo mismo que su ↻ (13/9/2026).
        `loadRapido` traia pedidos, caja y OCs y dejaba los depositos y las piezas
        como estaban. */
+    /* (6/11/2026) PRODUCTOS caia al `loadRapido()` de abajo: cada vuelta a Stock pasados 90 s bajaba pedidos (1,3 MB),
+       caja, cobros y OC —medido con la base simulada: 9 lecturas— y NO renovaba el stock, que es lo unico que dibuja
+       (`stockTab`, su fuente en `_fuentesDeTab`). `loadStockTab` no pide dos veces si ya hay una en vuelo. */
+    if(_tab === 'stock' && (typeof ST_TAB !== 'string' || ST_TAB === 'productos') && typeof loadStockTab === 'function'){
+      _refrescandoAuto = true;
+      _anotarInicioRefresco(_tab);
+      Promise.resolve(loadStockTab()).then(function(){}, function(){}).then(function(){ _refrescandoAuto = false; });
+      return;
+    }
     if(_tab === 'stock' && typeof ST_TAB === 'string' && ST_TAB !== 'productos'){
       _refrescandoAuto = true;
       _anotarInicioRefresco(_tab);
