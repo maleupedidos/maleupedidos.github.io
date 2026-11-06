@@ -15368,9 +15368,25 @@ function _enVivoMandar(topic, event, payload, alResponder) {
    vuelta contaba como «volvio de un corte», pedidos y caja releidos cada 1,5 s (63 lecturas en 25 s, sin parar).
    Ahora el canal recuerda su `joinRef`, no manda otra union mientras una esta en vuelo, y un cierre de una union
    que ya no es la vigente no se toca. */
+/* (5/11/2026) SOLO LOS CANALES QUE EL ROL PUEDE LEER. Las mismas reglas que las policies de realtime.messages
+   (erp_en_vivo_escuchar*). El panel anotaba ~25 canales para cualquier rol: un representante pedía erp:pedidos,
+   erp:stock, Usuarios, Egresos…, Supabase rechazaba ~18 de a uno (≈4 s cada rechazo), mientras tanto NO entregaba los
+   avisos de su propio canal y a los ~76 s cerraba la conexión. Medido con un socket aislado: su canal solo → el aviso
+   llega en 1,4 s; con los 25 → nunca. El admin puede leerlos todos y no cambia nada. */
+var _ENV_HOJAS_REP = { 'erp:hoja:vendedores': 1, 'erp:hoja:objetivos_red': 1, 'erp:hoja:tareas_red': 1, 'erp:hoja:liquidaciones_red': 1,
+                       'erp:hoja:cuentas': 1, 'erp:hoja:escala_red': 1 };
+function _enVivoPuede(canal) {
+  var rol = '', u = '';
+  try { rol = String((SESSION && SESSION.rol) || '').trim().toLowerCase(); u = String((SESSION && SESSION.usuario) || '').trim().toLowerCase(); } catch (e) {}
+  if (rol === 'admin') return true;
+  if (rol === 'vendedor') return !!u && (canal === 'erp:red:' + u || !!_ENV_HOJAS_REP[canal]);
+  if (rol === 'repartidor') return !!u && canal === 'erp:reparto:' + u;
+  return false;
+}
 function _enVivoUnir(canal) {
   var c = _ENV.canales[canal];
   if (!c || !_ENV.token || c.uniendo) return;
+  if (!_enVivoPuede(canal)) { c.noPuede = true; return; }   /* (5/11) ni se pide: un rechazo traba los avisos de los demás */
   c.uniendo = true;
   var _ref = _enVivoMandar('realtime:' + canal, 'phx_join', {
     config: { broadcast: { ack: false, self: false }, presence: { key: '' }, postgres_changes: [], private: true },
@@ -15397,6 +15413,8 @@ function _enVivoConectar() {
   if (_ENV.ws && (_ENV.ws.readyState === 0 || _ENV.ws.readyState === 1)) return;
   if (_ENV.tReconectar) { clearTimeout(_ENV.tReconectar); _ENV.tReconectar = null; }
   if (!Object.keys(_ENV.canales).length) return;
+  /* (5/11) Sin ningún canal que este rol pueda leer, no se abre la conexión (no hay nada que escuchar). */
+  if (!Object.keys(_ENV.canales).some(function (k) { return _enVivoPuede(k); })) { _enVivoPoner('apagado', 'tu usuario no tiene avisos en vivo'); return; }
   if (typeof WebSocket === 'undefined' || typeof _sbPermiso !== 'function') { _enVivoPoner('apagado', 'este navegador no puede'); return; }
   if (document.visibilityState === 'hidden') { _enVivoPoner('cortado', 'en segundo plano'); return; }
   /* (30/10/2026) `_ENV.ws` se asigna recien cuando vuelve el permiso: sin esta marca, cada canal que se anotaba
