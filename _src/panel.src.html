@@ -15428,7 +15428,14 @@ function _enVivoConectar() {
   if (_ENV.conectando) return;
   _ENV.conectando = true;
   _enVivoPoner('conectando', '');
+  /* (6/11/2026) TOPE DE 8 s AL PERMISO. En el iPhone recién abierto (o con la red cambiando) el permiso de la base podía
+     no volver nunca, y el en vivo quedaba «conectando…» para siempre: Tadeo y Lucas lo vieron en Pedidos, y Ruta se
+     enteraba del armado del otro recién con el reloj de 15 s. Sin respuesta en 8 s se suelta y reintenta. */
+  var _envTope = false, _envT = setTimeout(function () {
+    _envTope = true; _ENV.conectando = false; _enVivoPoner('cortado', 'el permiso de la base no contestó'); _enVivoReconectar();
+  }, 8000);
   _sbPermiso(true).then(function (sb) {
+    clearTimeout(_envT); if (_envTope) return;
     _ENV.conectando = false;
     if (!sb || !sb.url || !sb.key || !sb.token) { _enVivoPoner('apagado', 'sin permiso de la base'); _enVivoReconectar(); return; }
     _ENV.token = sb.token;
@@ -15468,7 +15475,7 @@ function _enVivoConectar() {
       _enVivoReconectar();
     };
     ws.onerror = function () { try { ws.close(); } catch (e) {} };
-  }, function () { _ENV.conectando = false; _enVivoPoner('apagado', 'sin permiso de la base'); _enVivoReconectar(); });
+  }, function () { clearTimeout(_envT); if (_envTope) return; _ENV.conectando = false; _enVivoPoner('apagado', 'sin permiso de la base'); _enVivoReconectar(); });
 }
 
 function _enVivoReconectar() {
@@ -15502,11 +15509,20 @@ function _enVivoLatir() {
 
 /* iOS corta la conexion con la app en segundo plano y no siempre avisa. Al
    volver: si no esta abierta, se abre ya (sin esperar el turno de reintento). */
-document.addEventListener('visibilitychange', function () {
+function _enVivoRevivir() {
   if (document.visibilityState !== 'visible' || !Object.keys(_ENV.canales).length) return;
   if (_ENV.estado === 'rechazado') return;
-  if (!_ENV.ws || _ENV.ws.readyState > 1) { _ENV.intento = 0; _enVivoConectar(); }
-});
+  if (!_ENV.ws || _ENV.ws.readyState > 1) { _ENV.intento = 0; _enVivoConectar(); return; }
+  /* (6/11/2026) La conexión «abierta» puede estar muerta (el iPhone la congela en segundo plano y no avisa): se la
+     prueba YA con un latido; si no contesta en 3 s se cierra y se reabre (antes esperaba el latido de 25 + 10 s). */
+  var ws = _ENV.ws; if (ws.readyState !== 1) return;
+  var volvio = false;
+  _enVivoMandar('phoenix', 'heartbeat', {}, function () { volvio = true; });
+  setTimeout(function () { if (!volvio && _ENV.ws === ws) { _ENV.intento = 0; try { ws.close(); } catch (e) {} } }, 3000);
+}
+document.addEventListener('visibilitychange', _enVivoRevivir);
+try { window.addEventListener('online', function () { if (_ENV.tReconectar) { clearTimeout(_ENV.tReconectar); _ENV.tReconectar = null; } _ENV.intento = 0; _enVivoRevivir(); }); } catch (e) {}
+try { window.addEventListener('pageshow', _enVivoRevivir); } catch (e) {}
 
 /* ══ PEDIDOS EN VIVO (25/10/2026, tiempo real paso 3, rama supabase) ══
    Con la palanca `PED_EN_VIVO` en «si» (viaja con el permiso como `sb.pal.pedEnVivo`)
@@ -27833,15 +27849,56 @@ function stCarneBaja(id){
   var ov=document.getElementById('stMermaOv');
   if(!ov){ ov=document.createElement('div'); ov.id='stMermaOv'; ov.className='stmerma-ov'; document.body.appendChild(ov); }
   ov.onclick=function(e){ if(e.target===ov)ov.hidden=true; };
-  ov.innerHTML='<div class="stmerma-box"><div class="stmerma-t">Sacar la pieza de '+stEsc(peso)+' kg</div>'
+  ov.innerHTML='<div class="stmerma-box"><div class="stmerma-t">La pieza de '+stEsc(peso)+' kg'+(pz&&pz.dep?' · en '+stEsc(stCarneDepNom(String(pz.dep).toLowerCase())):'')+'</div>'
     +(pz&&pz.estado==='Asignada'?'<div class="stmerma-av">⚠️ Es del pedido '+stEsc(pz.pedido||'de un cliente')+': se queda sin ella y hay que elegirle otra o editarlo.</div>':'')
     +'<label class="stmerma-l">¿Por qué sale?</label>'
     +'<textarea id="stMermaMot" rows="2" placeholder="Ej.: olor raro al abrir el envase · se cortó la cadena de frío"></textarea>'
     +'<button type="button" class="stmerma-b merma" onclick="stCarneBajaHacer(\''+_stJs(id)+'\',\'merma\')">🗑 Merma — no se puede vender'
     +(costo?'<small>'+stEsc(_carnePlata(costo))+' de costo van a pérdida</small>':'')+'</button>'
+    +_stCarneMoverBtns(id,pz)
     +'<button type="button" class="stmerma-b" onclick="stCarneBajaHacer(\''+_stJs(id)+'\',\'correccion\')">✏️ Corrección — peso mal cargado o la repone el proveedor<small>no es pérdida</small></button>'
     +'<button type="button" class="stmerma-x" onclick="document.getElementById(\'stMermaOv\').hidden=true">No sacar nada</button></div>';
   ov.hidden=false;
+}
+/* MOVER UNA PIEZA DE FREEZER (6/11/2026, Tadeo). Lucas, contando la carne, tocó sin querer «Depósito Moresco» y
+   cargó cortes que estaban en Ustariz; para corregirlo tuvo que darlos de baja como «Corrección» y volver a cargarlos.
+   Ahora la ✕ ofrece «⇄ Está en Ustariz: pasarla ahí»: un traspaso de ESA pieza (stock_traspaso_directo con ids), sin
+   baja ni alta. La pieza conserva su código, su peso, su costo y, si está pedida, el pedido. */
+function _stCarneMoverBtns(id,pz){
+  if(!pz)return '';
+  var aca=String(pz.dep||'').toLowerCase();
+  var ds=(typeof stCarneDepsTodos==='function'?stCarneDepsTodos():((CARNE_DATA&&CARNE_DATA.deps)||[])).filter(function(d){ return d&&d.id&&String(d.id).toLowerCase()!==aca&&String(d.id).toLowerCase()!=='prueba'; });
+  return ds.map(function(d){
+    var nom=String(d.nombre||d.id).replace(/^Dep(o|ó)sito /,'');
+    return '<button type="button" class="stmerma-b" onclick="stCarneMover(\''+_stJs(id)+'\',\''+_stJs(d.id)+'\')">⇄ Está en '+stEsc(nom)+': pasarla ahí'
+      +'<small>no sale del stock: cambia de freezer'+(aca?' ('+stEsc(stCarneDepNom(aca))+' → '+stEsc(nom)+')':'')+'</small></button>';
+  }).join('');
+}
+function _stCarneAbbrDe(id){
+  var pc=(CARNE_DATA&&CARNE_DATA.porCorte)||{};
+  for(var a in pc){ var ps=(pc[a]&&pc[a].piezas)||[]; for(var i=0;i<ps.length;i++)if(ps[i].id===id)return a; }
+  return '';
+}
+function stCarneMover(id,hacia){
+  var ov=document.getElementById('stMermaOv'); if(ov)ov.hidden=true;
+  var pz=_carnePieza(id), abbr=_stCarneAbbrDe(id);
+  if(!pz||!abbr){ toast('No encontré esa pieza: actualizá y probá de nuevo',4000); return; }
+  if(CARNE_BAJANDO[id])return;
+  var desde=String(pz.dep||'').toLowerCase(), peso=stFmt(pz.peso,'kg');
+  CARNE_BAJANDO[id]=true;
+  renderStCarne();
+  _ordenPost({action:'stockTraspaso',abbr:abbr,desde:desde,hacia:hacia,ids:[id],cantidad:String(pz.peso),clientOpId:_pfId()})
+    .then(function(r){return r.json();})
+    .then(function(d){
+      delete CARNE_BAJANDO[id];
+      if(d&&d.ok){
+        pz.dep=hacia; ST_SUCIO=Date.now();
+        renderStCarne();
+        toast(d.ya?'Esa pieza ya estaba en '+stCarneDepNom(hacia):'✓ Pieza de '+peso+' kg pasada a '+stCarneDepNom(hacia));
+        stCarnePedir(true); if(DEP_DATA&&typeof stDepPedir==='function')stDepPedir(true);
+      } else { renderStCarne(); toast('No se pudo: '+((d&&d.error)||'?'),4500); }
+    })
+    .catch(function(e){ delete CARNE_BAJANDO[id]; renderStCarne(); toast('No se pudo: '+e.message,4000); });
 }
 function stCarneBajaHacer(id,tipo){
   var t=String(((document.getElementById('stMermaMot')||{}).value)||'').trim();
