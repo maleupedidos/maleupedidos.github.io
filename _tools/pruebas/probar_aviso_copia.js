@@ -32,9 +32,10 @@ const cred = JSON.parse(fs.readFileSync(path.join(os.homedir(), '.maleu', 'robot
       const hay = await ev(`(document.getElementById('hAlerts')||{}).textContent.indexOf('Mostrando lo guardado')>-1`).catch(() => null);
       if (hay && visto === null) visto = Date.now() - t0;
       if (!hay && visto !== null) { seFue = Date.now() - t0; break; }
-      await pausa(500);
+      await pausa(100);
     }
     const txt = await ev(`((document.getElementById('hAlerts')||{}).textContent||'').slice(0,120)`).catch(() => '');
+    console.log('v935 cargada:', await ev(`typeof _copiaFresca==='function'`).catch(() => '?'));
     console.log('aviso visto a los', visto === null ? '—' : visto + ' ms', '· se fue a los', seFue === null ? 'NUNCA (30 s)' : seFue + ' ms');
     if (visto !== null && seFue === null) { mal++; console.log('MAL: el aviso quedó pegado →', txt); }
     else console.log('OK');
