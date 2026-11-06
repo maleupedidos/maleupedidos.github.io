@@ -44872,11 +44872,52 @@ if('serviceWorker' in navigator){
     var d = String(tel||'').replace(/\D/g,'');
     if (!d) return '';
     if (d.indexOf('54') === 0 && d.length > 10) d = d.slice(2);
+    d = d.replace(/^0+/, '');   // «011 4567-8901» salia 901145678901 (6/11/2026)
     if (d.length === 11 && d.charAt(0) === '9') return d;
     if (d.length === 10) return '9' + d;
     return d.length >= 8 ? '9' + d : '';
   }
   function _cmpCsvCell(v){ v = (v == null ? '' : String(v)); return /[",\n;]/.test(v) ? '"' + v.replace(/"/g,'""') + '"' : v; }
+  /* Un .xlsx minimo sin librerias (6/11/2026): una hoja, todas las celdas como texto
+     (inlineStr), zip sin comprimir. Asi el Phone nunca pasa a numero ni a notacion cientifica. */
+  function _cmpXlsx(rows){
+    var xe = function(v){ return String(v == null ? '' : v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); };
+    var col = function(i){ return String.fromCharCode(65 + i); };
+    var sd = rows.map(function(r, ri){
+      return '<row r="'+(ri+1)+'">' + r.map(function(v, ci){
+        return '<c r="'+col(ci)+(ri+1)+'" t="inlineStr"><is><t xml:space="preserve">'+xe(v)+'</t></is></c>';
+      }).join('') + '</row>';
+    }).join('');
+    var hd = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n';
+    var files = [
+      ['[Content_Types].xml', hd+'<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>'],
+      ['_rels/.rels', hd+'<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>'],
+      ['xl/workbook.xml', hd+'<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Contactos" sheetId="1" r:id="rId1"/></sheets></workbook>'],
+      ['xl/_rels/workbook.xml.rels', hd+'<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>'],
+      ['xl/worksheets/sheet1.xml', hd+'<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><cols><col min="1" max="1" width="22" customWidth="1"/><col min="2" max="2" width="13" customWidth="1"/><col min="3" max="3" width="16" customWidth="1"/><col min="4" max="4" width="15" customWidth="1"/></cols><sheetData>'+sd+'</sheetData></worksheet>']
+    ];
+    var crcT = _cmpXlsx._t || (_cmpXlsx._t = (function(){ var t = [], c, n, k; for (n = 0; n < 256; n++){ c = n; for (k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1); t[n] = c >>> 0; } return t; })());
+    var crc = function(b){ var c = 0xFFFFFFFF; for (var i = 0; i < b.length; i++) c = crcT[(c ^ b[i]) & 0xFF] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; };
+    var enc = new TextEncoder(), parts = [], central = [], off = 0;
+    var u16 = function(a, v){ a.push(v & 0xFF, (v >>> 8) & 0xFF); };
+    var u32 = function(a, v){ a.push(v & 0xFF, (v >>> 8) & 0xFF, (v >>> 16) & 0xFF, (v >>> 24) & 0xFF); };
+    files.forEach(function(fl){
+      var nm = enc.encode(fl[0]), data = enc.encode(fl[1]), cr = crc(data), h = [];
+      u32(h, 0x04034b50); u16(h, 20); u16(h, 0x0800); u16(h, 0); u16(h, 0); u16(h, 0x21);
+      u32(h, cr); u32(h, data.length); u32(h, data.length); u16(h, nm.length); u16(h, 0);
+      parts.push(new Uint8Array(h), nm, data);
+      var c = [];
+      u32(c, 0x02014b50); u16(c, 20); u16(c, 20); u16(c, 0x0800); u16(c, 0); u16(c, 0); u16(c, 0x21);
+      u32(c, cr); u32(c, data.length); u32(c, data.length); u16(c, nm.length); u16(c, 0); u16(c, 0);
+      u16(c, 0); u16(c, 0); u32(c, 0); u32(c, off);
+      central.push(new Uint8Array(c), nm);
+      off += h.length + nm.length + data.length;
+    });
+    var cdLen = central.reduce(function(s, p){ return s + p.length; }, 0), e = [];
+    u32(e, 0x06054b50); u16(e, 0); u16(e, 0); u16(e, files.length); u16(e, files.length);
+    u32(e, cdLen); u32(e, off); u16(e, 0);
+    return new Blob(parts.concat(central, [new Uint8Array(e)]), {type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+  }
   function _cmpTitulo(n){
     var low = {de:1,del:1,la:1,las:1,los:1,y:1,van:1,von:1,el:1};
     return String(n||'').trim().split(/\s+/).map(function(w, i){
@@ -45186,12 +45227,15 @@ if('serviceWorker' in navigator){
     /* EL FORMATO DE LA IMPORTACION DE WATI (Tadeo, 25/10/2026): las cuatro columnas
        que pide el panel, sin nada que acomodar a mano antes de subirla. */
     var rows = [['Name','CountryCode','Phone','AllowCampaign']];
-    s.manda.forEach(function(c){ rows.push([_cmpTitulo(c.nombre || ''), '54', _cmpTelWati(c.telDisplay || c.tel), 'True']); });
-    var csv = rows.map(function(r){ return r.map(_cmpCsvCell).join(','); }).join('\r\n');
-    var blob = new Blob([String.fromCharCode(0xFEFF) + csv], {type:'text/csv;charset=utf-8;'});   // BOM: Excel con acentos
+    /* Name = el MISMO saludo que usa el envio desde el ERP (6/11/2026): el template de WATI
+       saluda con el Name del contacto. Antes iba el nombre completo («Hola Juan Manuel Perez»). */
+    s.manda.forEach(function(c){ rows.push([_cmpNombreMsg(c), '54', _cmpTelWati(c.telDisplay || c.tel), 'True']); });
+    /* .xlsx de verdad y no .csv (6/11/2026): Excel abria el CSV y el Phone (11 digitos) quedaba
+       NUMERO, mostrado 9,11E+10 con el ancho por defecto. Aca TODAS las celdas son texto. */
+    var blob = _cmpXlsx(rows);
     var f = new Date(), z = function(n){ return (n < 10 ? '0' : '') + n; };
     var slug = nombre.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'').slice(0, 50);
-    var fname = 'maleu-'+(slug || 'campania')+'-'+f.getFullYear()+z(f.getMonth()+1)+z(f.getDate())+'.csv';
+    var fname = 'maleu-'+(slug || 'campania')+'-'+f.getFullYear()+z(f.getMonth()+1)+z(f.getDate())+'.xlsx';
     var url = URL.createObjectURL(blob), a = document.createElement('a');
     a.href = url; a.download = fname; document.body.appendChild(a); a.click();
     setTimeout(function(){ document.body.removeChild(a); URL.revokeObjectURL(url); }, 400);
