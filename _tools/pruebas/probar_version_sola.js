@@ -56,6 +56,8 @@ const PREP = `
     chk('   sin el campo, ya no hay nada sin guardar', await evaluar(cli, `!_hayCambiosSinGuardar()`));
     await caso('4. vuelve tras 11 min y llega la version: se aplica sola', `window.__ponerVis('hidden'); window.__recargas=[]; _verOcultaDesde=Date.now()-11*60000; window.__ponerVis('visible'); ${nueva}`, true);
     await caso('5. vuelve tras 11 min pero toca antes: NO', `window.__ponerVis('hidden'); _verOcultaDesde=Date.now()-11*60000; window.__ponerVis('visible'); document.dispatchEvent(new Event('pointerdown')); ${nueva}`, false);
+    await caso('7. en Ruta, oculta: NO (en reparto decide el cartel)', `var __c=cur; cur='ruta'; window.__ponerVis('hidden'); ${nueva}; cur=__c`, false);
+    await caso('8. repartidor, vuelve tras 11 min: NO', `var __s=SESSION; SESSION={usuario:'x',rol:'repartidor'}; window.__ponerVis('hidden'); _verOcultaDesde=Date.now()-11*60000; window.__ponerVis('visible'); ${nueva}; SESSION=__s`, false);
     await caso('6. vuelve tras 2 min: NO', `window.__ponerVis('hidden'); _verOcultaDesde=Date.now()-2*60000; window.__ponerVis('visible'); window.__recargas=[]; ${nueva}`, false);
   } finally { cli.matar(); }
   console.log('\n' + ok + ' ok · ' + mal + ' mal');
