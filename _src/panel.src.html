@@ -9401,6 +9401,7 @@ function panelDoLogout(){
     }
     borrar.forEach(function(k){ localStorage.removeItem(k); });
   }catch(e){}
+  try{ _ma3Borrar(); }catch(e){}   /* y la de IndexedDB: si el reload la corta, _ma3Leer la descarta por usuario */
   SESSION=null;
   location.reload();
 }
@@ -13997,7 +13998,7 @@ function _loadUnaVez(){
     return {ok:_pinto, red:true, pinto:_pinto};
   }).catch(function(){
     $('dot').className='hdr-dot off';
-    var c=localStorage.getItem('ma3');if(c&&!D){try{D=_dDeCopia(c);if(!_hayEditorAbierto())render();}catch(e){}}
+    _ma3Leer(function(c,tc){ if(c&&!D){try{D=_dDeCopia(c,tc);if(!_hayEditorAbierto())render();}catch(e){}} });
     _ldSync();
     // Devolvemos ok:false en vez de tragarnos el error: quien nos llamo tiene
     // que poder distinguir "datos frescos" de "segui viendo los de antes".
@@ -14677,9 +14678,59 @@ function _sbPedidoSirve(q){ return !!q&&(_sbSoyRobot()||!_sbEsPrueba(q.c,q.tel,q
    nuevo de la base: pantalla al toque en vez de blanco. Pero Tadeo veía 3 s datos de hace horas como si fueran de ahora (y un
    pedido del robot de antes del filtro de la v932). Ahora la copia sale sin pedidos de prueba y marcada con su hora (`ma3t`);
    Inicio avisa «Mostrando lo guardado de hace X · actualizando…» mientras se vea, y el aviso se va solo con lo fresco. */
-function _ma3Guardar(o){
-  localStorage.setItem('ma3',JSON.stringify(o));
+/* (7/11/2026) LA COPIA VIVE EN INDEXEDDB, NO EN localStorage. El iPhone de Tadeo se lleno y anoto que ocupaba cada cosa:
+   `ma3` 1,8 millones de caracteres (≈3,7 MB en Safari, que cuenta 2 bytes por caracter) de un tope de 5 MB por sitio.
+   Crece con cada pedido, asi que se iba a volver a llenar sola. IndexedDB tiene cientos de MB.
+   Se guarda el mismo JSON (texto: nada de clonar `D`, que puede tener cosas que no se clonan) junto con SU hora y SU
+   usuario: el cierre de sesion recarga al toque y el borrado de IndexedDB es asincronico, asi que una copia de otro
+   usuario se descarta al leerla, no se confia en que se haya borrado. Sin IndexedDB (o si falla), localStorage como antes. */
+var _MA3_DB=null;
+function _ma3Usuario(){ try{ return String((SESSION&&SESSION.usuario)||'').toLowerCase(); }catch(e){ return ''; } }
+function _ma3Db(){
+  if(_MA3_DB)return _MA3_DB;
+  _MA3_DB=new Promise(function(ok,mal){
+    try{
+      if(typeof indexedDB==='undefined'||!indexedDB){ mal(new Error('sin indexedDB')); return; }
+      var r=indexedDB.open('maleu',1);
+      r.onupgradeneeded=function(){ try{ r.result.createObjectStore('kv'); }catch(e){} };
+      r.onsuccess=function(){ ok(r.result); };
+      r.onerror=function(){ mal(r.error||new Error('indexedDB')); };
+      r.onblocked=function(){ mal(new Error('indexedDB bloqueada')); };
+    }catch(e){ mal(e); }
+  });
+  _MA3_DB.catch(function(){});
+  return _MA3_DB;
+}
+function _ma3LsViejo(s,o){
+  localStorage.setItem('ma3',s);
   try{ if(o&&!o.__copia)localStorage.setItem('ma3t',String(Date.now())); }catch(e){}
+}
+function _ma3Guardar(o){
+  var s=JSON.stringify(o);
+  if(typeof indexedDB==='undefined'||!indexedDB){ _ma3LsViejo(s,o); return; }
+  var t=(o&&o.__copia)?(Number(o.__copia)||1):Date.now();
+  var rec={s:s,t:t,u:_ma3Usuario()};
+  _ma3Db().then(function(db){
+    var tx=db.transaction('kv','readwrite'); tx.objectStore('kv').put(rec,'ma3');
+    tx.oncomplete=function(){ try{ localStorage.removeItem('ma3'); }catch(e){} };
+    tx.onerror=function(){ try{ _ma3LsViejo(s,o); }catch(e){} };
+  }).catch(function(){ try{ _ma3LsViejo(s,o); }catch(e){} });
+}
+/* cb(texto, hora) — primero la copia vieja de localStorage (si quedo de antes de la v967), si no la de IndexedDB. */
+function _ma3Leer(cb){
+  var c=null; try{ c=localStorage.getItem('ma3'); }catch(e){}
+  if(c){ var t0=0; try{ t0=Number(localStorage.getItem('ma3t'))||0; }catch(e){} cb(c,t0); return; }
+  if(typeof indexedDB==='undefined'||!indexedDB){ cb(null,0); return; }
+  var listo=false; function fin(a,b){ if(listo)return; listo=true; cb(a,b); }
+  setTimeout(function(){ fin(null,0); },3000);   /* una base que no contesta no deja la app esperando */
+  _ma3Db().then(function(db){
+    var rq=db.transaction('kv','readonly').objectStore('kv').get('ma3');
+    rq.onsuccess=function(){ var r=rq.result; if(r&&r.s&&r.u===_ma3Usuario())fin(r.s,Number(r.t)||0); else fin(null,0); };
+    rq.onerror=function(){ fin(null,0); };
+  }).catch(function(){ fin(null,0); });
+}
+function _ma3Borrar(){
+  try{ _ma3Db().then(function(db){ db.transaction('kv','readwrite').objectStore('kv').delete('ma3'); }).catch(function(){}); }catch(e){}
 }
 var _COPIA_ARRANQUE=Date.now();
 function _copiaFresca(){
@@ -14687,10 +14738,10 @@ function _copiaFresca(){
   /* (6/11/2026) Llegó lo de ahora: recién acá se saca el loader del arranque (ver el <script> del #boot). */
   try{ if(window.__bootEsperaNuevo){ window.__bootEsperaNuevo=false; if(typeof render==='function'&&!(typeof _hayEditorAbierto==='function'&&_hayEditorAbierto()))render(); window.__bootListo&&window.__bootListo(); } }catch(e){}
 }
-function _dDeCopia(c){
+function _dDeCopia(c,tCopia){
   var d=JSON.parse(c); if(!d||typeof d!=='object')return d;
   try{ if(Array.isArray(d.pedidos)&&typeof _sbPedidoSirve==='function')d.pedidos=d.pedidos.filter(_sbPedidoSirve); }catch(e){}
-  var t=0; try{ t=Number(localStorage.getItem('ma3t'))||0; }catch(e){}
+  var t=Number(tCopia)||0; if(!t){ try{ t=Number(localStorage.getItem('ma3t'))||0; }catch(e){} }
   try{ Object.defineProperty(d,'__copia',{value:t||1,enumerable:false,writable:true,configurable:true}); }catch(e){}
   return d;
 }
@@ -38370,8 +38421,8 @@ function _vListaClick(e){
 (function(){
   // Bloquear toda carga de datos si no hay sesión activa.
   if(!SESSION||!SESSION.rol){return;}
-  var c=null;try{c=localStorage.getItem('ma3');}catch(e){}
-  if(c){try{D=_dDeCopia(c);render();}catch(e){D=null;}}
+  /* (7/11/2026) La copia ahora viene de IndexedDB (asincronico, unos ms): si lo fresco llego antes, la copia ya no hace falta. */
+  _ma3Leer(function(c,tc){ if(c&&!D){try{D=_dDeCopia(c,tc);if(!(typeof _hayEditorAbierto==='function'&&_hayEditorAbierto()))render();}catch(e){D=null;}} });
   try{_ldSync();}catch(e){}
   // Mismo criterio que _enterApp: un vendedor solo ve Mi Portal, no tiene
   // sentido traerle pedidos/caja/ventas — y el backend ya se lo niega.
