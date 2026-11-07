@@ -541,6 +541,9 @@ function _abrirSubapp(clave){
     _subappsVivas[clave] = false;
     _subappsRotas[clave] = e;
     console.error('La tab ' + clave + ' no arranco:', e);
+    /* (7/11/2026) Atrapado aca, el error no llegaba al listener de window: Ruta se cayo en el iPhone de Tadeo y
+       ui_medicion decia «0 errores». Ahora se anota como cualquier otro js-error. */
+    try{ if(typeof _jsErrAnotar === 'function') _jsErrAnotar('seccion ' + clave + ' no arranco: ' + ((e && e.message) || e), ''); }catch(_e){}
     try{ _carteSubappRota(clave, e); }catch(_e){ console.error('y tampoco pude avisarlo:', _e); }
   }
 }
