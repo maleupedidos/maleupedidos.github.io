@@ -16318,10 +16318,19 @@ function _cajaArmaTraer(ts,sinPlanilla){
        de la base (caja_resto_pantalla + el motor): la foto no se lee. Si la base no contesta, recién ahí la foto, y la
        pantalla lo dice (__cajaFuente.de='foto'). */
     if(typeof _lecModo==='function'&&_lecModo('cajaResto')==='si'){
+      /* (7/11/2026) LAS DOS LECTURAS A LA VEZ. Iban en fila: el saldo base (~0,4 s) para saber su fecha y recien despues
+         los movimientos desde esa fecha (~0,3 s). La fecha cambia solo con un arqueo nuevo, asi que se piden juntas con la
+         ultima fecha conocida; si al llegar el saldo base la fecha es otra, se vuelve a pedir con la nueva (nunca se
+         muestra una caja armada desde una fecha vieja). */
+      var fEsp=null; try{ fEsp=localStorage.getItem('maleu_caja_fsb')||null; }catch(e){}
+      var pAdel=fEsp?_cajaArmaBase(sb,fEsp).catch(function(){ return null; }):null;
       return _lecArmaBase('cajaResto',{}).then(function(rr){
         var f=rr&&rr.d;
         if(!f||!f.saldoBase||!f.saldoBase.fechaDate||!f.caja||!Array.isArray(f.caja.cuentas))throw new Error('la base no trajo el saldo base');
-        return _cajaArmaBase(sb,f.saldoBase.fechaDate).then(function(r){
+        var fecha=f.saldoBase.fechaDate;
+        if(fecha!==fEsp){ try{ localStorage.setItem('maleu_caja_fsb',fecha); }catch(e){} }
+        var pMov=(pAdel&&fecha===fEsp)?pAdel.then(function(r){ return r||_cajaArmaBase(sb,fecha); }):_cajaArmaBase(sb,fecha);
+        return pMov.then(function(r){
           var d=r.d; CAJA_ARMA_FOTO.forEach(function(k){ if(f[k]!=null)d[k]=f[k]; });
           d.caja=Object.assign({},d.caja||{},{cuentas:f.caja.cuentas});
           nota({de:'base',t:Date.now(),ms:r.ms,sinFoto:true});
@@ -29255,13 +29264,28 @@ var _lecArmaM={};
    «miReparto=si» viaja como «mireparto». Buscando por el nombre tal cual, toda lectura con una
    mayuscula daba null desde la 159: seguia en Apps Script aunque estuviera en «si». */
 function _lecModo(accion){ var m=(typeof _palancaVal==='function')?_palancaVal('lecArma'):null; return (m&&typeof m==='object'&&typeof _sbPermiso==='function')?(m[accion]||m[String(accion).toLowerCase()]||null):null; }
+/* (7/11/2026) DOS PEDIDOS IGUALES A LA VEZ VIAJAN UNA SOLA VEZ. Al abrir Ruta › Cobros salian dos
+   `cobros_pendientes_pantalla` con 11 ms de diferencia (~0,6 s cada uno, en la red del celular). Se comparte solo el
+   TEXTO de la respuesta y solo si el segundo sale dentro de los 150 ms del primero: cada uno arma su propio objeto
+   (los motores y las pantallas los modifican) y una lectura pedida despues de una escritura nunca recibe una vieja. */
+var _lecVuelo={};
+function _lecFetchTexto(sb,rpc,body){
+  var k=rpc+'|'+body, v=_lecVuelo[k];
+  if(v&&Date.now()-v.t<150){ v.n++; return v.p; }
+  var p=fetch(sb.url+'/rest/v1/rpc/'+rpc,{method:'POST',
+    headers:{apikey:sb.key,Authorization:'Bearer '+sb.token,'Content-Type':'application/json'},body:body})
+    .then(function(r){ if(!r.ok)throw new Error('la base contestó '+r.status); return r.text(); });
+  var reg={t:Date.now(),p:p,n:1}; _lecVuelo[k]=reg;
+  var fin=function(){ if(_lecVuelo[k]===reg)delete _lecVuelo[k]; if(reg.n>1){ try{ (window.__lecJuntados=window.__lecJuntados||[]).push(rpc+' ×'+reg.n); }catch(e){} } };
+  p.then(fin,fin);
+  return p;
+}
 function _lecArmaBase(accion,args,ctx){
   var cfg=LEC_ARMA[accion], t0=Date.now();
   return Promise.resolve(_sbPermiso(true)).then(function(sb){
     if(!sb||!cfg)throw new Error('sin permiso');
-    return fetch(sb.url+'/rest/v1/rpc/'+cfg.rpc,{method:'POST',
-      headers:{apikey:sb.key,Authorization:'Bearer '+sb.token,'Content-Type':'application/json'},body:JSON.stringify(args||{})})
-      .then(function(r){ if(!r.ok)throw new Error('la base contestó '+r.status); return r.json(); })
+    return _lecFetchTexto(sb,cfg.rpc,JSON.stringify(args||{}))
+      .then(function(t){ return JSON.parse(t); })
       .then(function(d){ if(!d||d.ok===false)throw new Error('la base no armó '+accion);
         /* (164) `motor`: la base dio los datos y la respuesta la arma el motor de las jugadas. */
         return (cfg.motor==='dv'?_dvMotorArmar(d):cfg.motor==='bq'?_bqMotorArmar(d):cfg.motor==='re'?_reMotorArmar(d):cfg.motor==='cp'?_cpMotorArmar(d):cfg.motor==='mr'?_motorArmar('MR_MOTOR','mr_motor.js',d,{p:(args||{}).p}):cfg.motor==='pg'?_motorArmar('PG_MOTOR','pg_motor.js',d,{}):cfg.motor==='ca'?_motorArmar('CA_MOTOR','ca_motor.js',d,{}):cfg.motor==='rx'?_motorArmar('RX_MOTOR','rx_motor.js',d,{}):cfg.motor==='ro'?_roMotorArmar(d,ctx||{}):cfg.motor?_pjMotorArmar(d,ctx||{}):Promise.resolve(d)).then(function(x){ return {d:x,ms:Date.now()-t0,sb:sb}; }); });
