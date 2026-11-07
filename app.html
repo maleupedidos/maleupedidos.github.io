@@ -15246,7 +15246,7 @@ function _leerVersion(app){
    "El HTML no sabe que version es" dejo de ser cierto: el build le escribe
    adentro el CACHE_NAME de sw-panel.js, el mismo que deploy.sh obliga a subir en
    cada cambio. Si lo publicado dice otra cosa, esta pagina es vieja. Punto. */
-var _APP_CN_PAGINA='maleu-panel-v970';
+var _APP_CN_PAGINA='maleu-panel-v971';
 
 /* Devuelve [{k,v}] si lo publicado no es lo que esta pagina corre. */
 function _chequearVersiones(){
@@ -17597,7 +17597,9 @@ function _lsAnotarPesadas(){
     var l=[];
     for(var i=0;i<localStorage.length;i++){ var k=localStorage.key(i); l.push([k,(localStorage.getItem(k)||'').length]); }
     l.sort(function(a,b){return b[1]-a[1];});
-    _jsErrAnotar('cuota llena: '+l.slice(0,3).map(function(x){return x[0]+' '+Math.round(x[1]/1024)+'K';}).join(','),'');
+    var tot=0; l.forEach(function(x){ tot+=x[0].length+x[1]; });
+    /* (7/11/2026) + el total y cuantas claves: con solo las 3 mas pesadas no se sabia si el resto sumaba. */
+    _jsErrAnotar('cuota llena '+Math.round(tot/1024)+'K/'+l.length+': '+l.slice(0,3).map(function(x){return x[0].slice(0,16)+' '+Math.round(x[1]/1024)+'K';}).join(','),'');
   }catch(e){}
 }
 (function(){
@@ -18468,7 +18470,46 @@ function _ma3Db(){
   _MA3_DB.catch(function(){});
   return _MA3_DB;
 }
+/* (7/11/2026) LAS OTRAS COPIAS GRANDES TAMBIEN, con una copia en memoria. A las 13:04 el iPhone de Tadeo se volvio a
+   llenar: `maleu_crm_clientes_v1` 545 K, `ma3v3` (Ventas) 422 K. Se leen al abrir CRM/Estancias/Ventas, nunca en el
+   arranque, asi que alcanza con cargarlas de IndexedDB a memoria apenas abre la app (unos ms): cuando alguien toca esas
+   tabs ya estan. Si alguien lee antes de que termine, cae a localStorage como antes (la copia vieja; la proxima
+   guardada la muda). Cada una con su usuario, igual que `ma3`. */
+var _GR_MEM={};
+function _grLeer(k){
+  var m=_GR_MEM[k]; if(m&&m.u===_ma3Usuario())return m.s;
+  try{ return localStorage.getItem(k); }catch(e){ return null; }
+}
+function _grGuardar(k,s){
+  s=String(s); var u=_ma3Usuario(); _GR_MEM[k]={s:s,u:u};
+  if(typeof indexedDB==='undefined'||!indexedDB){ try{ localStorage.setItem(k,s); }catch(e){} return true; }
+  _ma3Db().then(function(db){
+    var tx=db.transaction('kv','readwrite'); tx.objectStore('kv').put({s:s,u:u,t:Date.now()},'gr:'+k);
+    tx.oncomplete=function(){ try{ localStorage.removeItem(k); }catch(e){} };
+    tx.onerror=function(){ _lsFallbackNota(k,'tx'); try{ localStorage.setItem(k,s); }catch(e){} };
+  }).catch(function(e){ _lsFallbackNota(k,(e&&e.message)||'open'); try{ localStorage.setItem(k,s); }catch(e2){} });
+  return true;
+}
+var _lsFallbackVisto={};
+function _lsFallbackNota(k,porque){
+  if(_lsFallbackVisto[k])return; _lsFallbackVisto[k]=1;
+  try{ if(typeof _jsErrAnotar==='function')_jsErrAnotar('copia a localStorage (sin IndexedDB): '+k+' · '+String(porque).slice(0,30),''); }catch(e){}
+}
+(function _grCargar(){
+  try{
+    if(typeof indexedDB==='undefined'||!indexedDB)return;
+    _ma3Db().then(function(db){
+      var rq=db.transaction('kv','readonly').objectStore('kv').openCursor(IDBKeyRange.bound('gr:','gr:￿'));
+      rq.onsuccess=function(){ var c=rq.result; if(!c)return; var k=String(c.key).slice(3), v=c.value;
+        if(v&&v.s!=null&&!_GR_MEM[k])_GR_MEM[k]={s:v.s,u:v.u};
+        /* Ya esta en IndexedDB y es de este usuario: la de localStorage sobra y ocupa lugar (se libera al abrir). */
+        if(v&&v.u&&v.u===_ma3Usuario()){ try{ localStorage.removeItem(k); }catch(e){} }
+        c.continue(); };
+    }).catch(function(){});
+  }catch(e){}
+})();
 function _ma3LsViejo(s,o){
+  _lsFallbackNota('ma3','');
   localStorage.setItem('ma3',s);
   try{ if(o&&!o.__copia)localStorage.setItem('ma3t',String(Date.now())); }catch(e){}
 }
@@ -19448,7 +19489,23 @@ function _enVivoLatir() {
 
 /* iOS corta la conexion con la app en segundo plano y no siempre avisa. Al
    volver: si no esta abierta, se abre ya (sin esperar el turno de reintento). */
+/* (7/11/2026) AL VOLVER, PONERSE AL DIA. Si el iPhone congelo la app un rato y la conexion sobrevivio (el latido
+   contesta), los avisos que pasaron mientras tanto se perdieron y nadie releia: Tadeo volvia a Pedidos y veia lo de
+   antes hasta tocar «Actualizar». Si estuvo oculta mas de 20 s y la conexion sigue viva, se corre el `alVolver` de
+   cada canal unido: lo mismo que pasa al reconectar (cada pantalla relee lo suyo y respeta si estas editando). Si la
+   conexion murio, ya lo hace la reconexion. */
+var _ENV_OCULTA_DESDE = 0, ENV_PONERSE_AL_DIA_MS = 20000;
+function _enVivoPonerseAlDia() {
+  try { window.__alDia = { t: Date.now(), canales: 0 }; } catch (e) {}
+  Object.keys(_ENV.canales).forEach(function (k) {
+    var c = _ENV.canales[k];
+    if (c && c.unido && typeof c.alVolver === 'function') { try { c.alVolver(); window.__alDia.canales++; } catch (e) {} }
+  });
+}
 function _enVivoRevivir() {
+  if (document.visibilityState === 'hidden') { _ENV_OCULTA_DESDE = Date.now(); return; }
+  var estuvoOculta = _ENV_OCULTA_DESDE && (Date.now() - _ENV_OCULTA_DESDE > ENV_PONERSE_AL_DIA_MS);
+  _ENV_OCULTA_DESDE = 0;
   if (document.visibilityState !== 'visible' || !Object.keys(_ENV.canales).length) return;
   if (_ENV.estado === 'rechazado') return;
   if (!_ENV.ws || _ENV.ws.readyState > 1) { _ENV.intento = 0; _enVivoConectar(); return; }
@@ -19456,7 +19513,7 @@ function _enVivoRevivir() {
      prueba YA con un latido; si no contesta en 3 s se cierra y se reabre (antes esperaba el latido de 25 + 10 s). */
   var ws = _ENV.ws; if (ws.readyState !== 1) return;
   var volvio = false;
-  _enVivoMandar('phoenix', 'heartbeat', {}, function () { volvio = true; });
+  _enVivoMandar('phoenix', 'heartbeat', {}, function () { volvio = true; if (estuvoOculta) _enVivoPonerseAlDia(); });
   setTimeout(function () { if (!volvio && _ENV.ws === ws) { _ENV.intento = 0; try { ws.close(); } catch (e) {} } }, 3000);
 }
 document.addEventListener('visibilitychange', _enVivoRevivir);
@@ -19558,8 +19615,11 @@ function _pedVivoAplicar(lista, desdeBase) {
    con la fila real). Se pinta como tarjeta de SOLO LECTURA: sin botones ni nada que
    mande su fila, que no existe todavia. Cuando llega la planilla se fusiona por clave
    y queda la tarjeta normal. */
+/* (7/11/2026) Y SOLO SI TODAVIA NO TIENE IMPORTE. Desde el corte (5/11) la planilla no escribe mas: todo pedido nuevo
+   vive solo en la base con `source_row` negativo PARA SIEMPRE, ya con sus importes. Sin esta condicion los 26 pedidos
+   del corte para aca salian «⏳ entrando…» sin botones cada vez que la lista venia por el atajo crudo (Tadeo, 13:04). */
 function _pedEntrando(p){
-  return !!(p && p._deSupabase && Number(p.r) < 0 && Array.isArray(p.p) && p.p.length && p.c && String(p.c).trim());
+  return !!(p && p._deSupabase && Number(p.r) < 0 && !(Number(p.$) > 0) && Array.isArray(p.p) && p.p.length && p.c && String(p.c).trim());
 }
 function _pedEntrandoHTML(p){
   var prods = p.p.map(function (r) { return _lineaProd(r.a, r.q, p.pz); }).join(' · ');
@@ -38436,7 +38496,7 @@ function _vGuardarCopia(lista){
     txt=JSON.stringify({t:Date.now(),k:ks,f:lista.map(function(v){return ks.map(function(k){return v[k]===undefined?null:v[k];});})});
   }catch(e){return false;}
   try{localStorage.removeItem('ma3v2');}catch(e){}          // la copia vieja, sin compactar
-  try{localStorage.setItem(_V_COPIA,txt);return true;}
+  try{return _grGuardar(_V_COPIA,txt);}   /* (7/11/2026) a IndexedDB, ver _grGuardar */
   catch(e){
     if(typeof _swrPodar==='function')_swrPodar();
     try{localStorage.setItem(_V_COPIA,txt);return true;}
@@ -38445,7 +38505,7 @@ function _vGuardarCopia(lista){
 }
 function _vLeerCopia(){
   try{
-    var raw=localStorage.getItem(_V_COPIA);
+    var raw=_grLeer(_V_COPIA);
     if(raw){
       var o=JSON.parse(raw);
       if(o&&Array.isArray(o.k)&&Array.isArray(o.f)){
@@ -45397,7 +45457,7 @@ if('serviceWorker' in navigator){
           if (Array.isArray(d.kg)){ var o = {}; d.kg.forEach(function(a){ o[a] = 1; }); _crmKg = o; }
           if (d.nombres && typeof d.nombres === 'object') _crmNombres = d.nombres;
           /* La copia del celular queda con la fecha de la FOTO, no la de ahora. */
-          try { window._lsSetSafe(CRM_CLI_LS, JSON.stringify(crmClientes)); localStorage.setItem(CRM_CLI_TS, String(cuando)); } catch(e){}
+          try { _grGuardar(CRM_CLI_LS, JSON.stringify(crmClientes)); localStorage.setItem(CRM_CLI_TS, String(cuando)); } catch(e){}
           try { _crmRenderActiveSub(); } catch(e){ _crmFotoNota('render', (e && e.message) || e); }
           _crmCliEstadoPintar();
           _crmFotoNota('ok', 'de ' + new Date(cuando).toLocaleTimeString());
@@ -45616,7 +45676,7 @@ if('serviceWorker' in navigator){
       if (Array.isArray(o.d.kg)){ var k = {}; o.d.kg.forEach(function(a){ k[a] = 1; }); _crmKg = k; try { localStorage.setItem('maleu_crm_kg', JSON.stringify(k)); } catch(e){} }
       if (o.d.nombres && typeof o.d.nombres === 'object'){ _crmNombres = o.d.nombres; try { localStorage.setItem('maleu_crm_nombres', JSON.stringify(o.d.nombres)); } catch(e){} }
       /* La copia del celular queda con la fecha del LATIDO, no la de ahora. */
-      try { window._lsSetSafe(CRM_CLI_LS, JSON.stringify(crmClientes)); localStorage.setItem(CRM_CLI_TS, String(o.alDia)); } catch(e){}
+      try { _grGuardar(CRM_CLI_LS, JSON.stringify(crmClientes)); localStorage.setItem(CRM_CLI_TS, String(o.alDia)); } catch(e){}
       try { if (typeof window._marcarFresco === 'function') window._marcarFresco(['crmClientes'], o.alDia); } catch(e){}
       return {usado: true, palanca: true, de: 'pg', t: o.alDia};
     });
@@ -45661,7 +45721,7 @@ if('serviceWorker' in navigator){
         _crmDupMemo = null;
         if (Array.isArray(d.kg)){ var o = {}; d.kg.forEach(function(a){ o[a] = 1; }); _crmKg = o; try { localStorage.setItem('maleu_crm_kg', JSON.stringify(o)); } catch(e){} }
         if (d.nombres && typeof d.nombres === 'object'){ _crmNombres = d.nombres; try { localStorage.setItem('maleu_crm_nombres', JSON.stringify(d.nombres)); } catch(e){} }
-        try { window._lsSetSafe(CRM_CLI_LS, JSON.stringify(crmClientes)); localStorage.setItem(CRM_CLI_TS, String(Date.now())); } catch(e){}
+        try { _grGuardar(CRM_CLI_LS, JSON.stringify(crmClientes)); localStorage.setItem(CRM_CLI_TS, String(Date.now())); } catch(e){}
         _crmCanalBarrioFilled = false;
         try { if (typeof window._marcarFresco === 'function') window._marcarFresco(['crmClientes']); } catch(e){}
         return true;
@@ -45715,7 +45775,7 @@ if('serviceWorker' in navigator){
   function loadCrmClientes(){
     // Pintado instantáneo desde la copia local + refresco en 2do plano.
     if (!(crmClientes && crmClientes.length)){
-      try { var _cc = JSON.parse(localStorage.getItem(CRM_CLI_LS) || 'null'); if (_cc && _cc.length) { crmClientes = _cc; _crmCanalBarrioFilled = false; _crmDupMemo = null; } } catch(e){}
+      try { var _cc = JSON.parse(_grLeer(CRM_CLI_LS) || 'null'); if (_cc && _cc.length) { crmClientes = _cc; _crmCanalBarrioFilled = false; _crmDupMemo = null; } } catch(e){}
     }
     var _hadCache = !!(crmClientes && crmClientes.length);
     if (_hadCache) { _crmRenderActiveSub(); }
@@ -46040,7 +46100,7 @@ if('serviceWorker' in navigator){
     if (crmClientes && crmClientes.length){ cb(); return; }
     // NUNCA pisar con []: un fetch vacío/fallido envenena _hogBuild (todo en 0). Si no vino
     // nada, caemos a la cache local y dejamos crmClientes como estaba (null → reintenta luego).
-    function fallback(){ if(!(crmClientes&&crmClientes.length)){ try{ var cc=JSON.parse(localStorage.getItem('maleu_crm_clientes_v1')||'null'); if(cc&&cc.length)crmClientes=cc; }catch(e){} } cb(); }
+    function fallback(){ if(!(crmClientes&&crmClientes.length)){ try{ var cc=JSON.parse(_grLeer('maleu_crm_clientes_v1')||'null'); if(cc&&cc.length)crmClientes=cc; }catch(e){} } cb(); }
     /* Por la misma puerta que el resto del CRM (6/10/2026): con `CRM_DESDE_PG`
        tambien sale de la base, y la pedida en vuelo se comparte. */
     _crmPedirClientes().then(function(){ fallback(); }, function(){ fallback(); });
@@ -46229,7 +46289,7 @@ if('serviceWorker' in navigator){
     }
   };
   function _estCacheLotes(){
-    try{ window._lsSetSafe('maleu_crm_lotes_v1', JSON.stringify(Object.keys(_mapaLotesData||{}).map(function(k){return _mapaLotesData[k];}))); }catch(e){}
+    try{ _grGuardar('maleu_crm_lotes_v1', JSON.stringify(Object.keys(_mapaLotesData||{}).map(function(k){return _mapaLotesData[k];}))); }catch(e){}
   }
   // SNAPSHOT ESTÁTICO same-origin (GitHub Pages / CDN): rápido y CONFIABLE. El endpoint
   // live de Apps Script es lento (8-18s) y en algunos navegadores falla siempre; el
@@ -46247,7 +46307,7 @@ if('serviceWorker' in navigator){
         var l=(d&&d.clientes)||null; _snapTried=true;
         if(l && l.length){
           if(!(crmClientes && crmClientes.length)) crmClientes=l;   // sembramos global solo si estaba vacío
-          try{ window._lsSetSafe('maleu_crm_clientes_v1', JSON.stringify(l)); }catch(e){}
+          try{ _grGuardar('maleu_crm_clientes_v1', JSON.stringify(l)); }catch(e){}
           anyC=true;
         }
         done();
@@ -46267,7 +46327,7 @@ if('serviceWorker' in navigator){
           _prunePendingLotes(base);                    // saca del pendiente lo que el snapshot ya trae
           window._applyPendingLotes(base);             // overlay: ediciones locales recientes ganan
           _mapaLotesData=base;                         // el snapshot es la verdad de la hoja → autoridad del roster
-          try{ window._lsSetSafe('maleu_crm_lotes_v1', JSON.stringify(Object.keys(base).map(function(k){return base[k];}))); }catch(e){}
+          try{ _grGuardar('maleu_crm_lotes_v1', JSON.stringify(Object.keys(base).map(function(k){return base[k];}))); }catch(e){}
         }
         done();
       })
@@ -46275,8 +46335,8 @@ if('serviceWorker' in navigator){
   };
   // SÍNCRONO: devuelve {hogares,prospectos} desde cache, o null si no hay nada cacheado.
   window.estHogaresSync = function(){
-    if (!(crmClientes && crmClientes.length)){ try{ var cc=JSON.parse(localStorage.getItem('maleu_crm_clientes_v1')||'null'); if(cc&&cc.length)crmClientes=cc; }catch(e){} }
-    if (!_mapaLotesData){ try{ var lc=JSON.parse(localStorage.getItem('maleu_crm_lotes_v1')||'null'); if(lc&&lc.length){ _mapaLotesData={}; lc.forEach(function(r){ _mapaLotesData[_crmNormName(r.sub)+'|'+_loteNorm(r.lote)]=r; }); } }catch(e){} }
+    if (!(crmClientes && crmClientes.length)){ try{ var cc=JSON.parse(_grLeer('maleu_crm_clientes_v1')||'null'); if(cc&&cc.length)crmClientes=cc; }catch(e){} }
+    if (!_mapaLotesData){ try{ var lc=JSON.parse(_grLeer('maleu_crm_lotes_v1')||'null'); if(lc&&lc.length){ _mapaLotesData={}; lc.forEach(function(r){ _mapaLotesData[_crmNormName(r.sub)+'|'+_loteNorm(r.lote)]=r; }); } }catch(e){} }
     if (!(crmClientes && crmClientes.length)) return null;
     try{ return _hogBuild(); }catch(e){ return null; }
   };
@@ -46389,7 +46449,7 @@ if('serviceWorker' in navigator){
 
   // SÍNCRONO: clientes INDIVIDUALES de Estancias del Pilar (desde cache). null si no hay.
   window.estClientesSync = function(){
-    if (!(crmClientes && crmClientes.length)){ try{ var cc=JSON.parse(localStorage.getItem('maleu_crm_clientes_v1')||'null'); if(cc&&cc.length)crmClientes=cc; }catch(e){} }
+    if (!(crmClientes && crmClientes.length)){ try{ var cc=JSON.parse(_grLeer('maleu_crm_clientes_v1')||'null'); if(cc&&cc.length)crmClientes=cc; }catch(e){} }
     if (!(crmClientes && crmClientes.length)) return null;
     /* Devuelve TODOS los clientes (21/9/2026). Hasta hoy recortaba a
        'estancias del pilar' y la pantalla veia 261 de 384, o sea el 63% del
@@ -46424,12 +46484,12 @@ if('serviceWorker' in navigator){
     var pend=2;
     function done(){ if(--pend>0) return;
       // Si el fetch no trajo clientes, caemos a la cache local antes de construir.
-      if(!(crmClientes && crmClientes.length)){ try{ var cc=JSON.parse(localStorage.getItem('maleu_crm_clientes_v1')||'null'); if(cc&&cc.length)crmClientes=cc; }catch(e){} }
+      if(!(crmClientes && crmClientes.length)){ try{ var cc=JSON.parse(_grLeer('maleu_crm_clientes_v1')||'null'); if(cc&&cc.length)crmClientes=cc; }catch(e){} }
       var ok=!!(crmClientes && crmClientes.length);
       try{ cb(_hogBuild(), ok); }catch(e){ cb({hogares:[],prospectos:[]}, ok); }
     }
     _fetchClientesRetry(4, function(list){
-      if(list && list.length){ crmClientes=list; try{ window._lsSetSafe('maleu_crm_clientes_v1', JSON.stringify(crmClientes)); }catch(e){} }
+      if(list && list.length){ crmClientes=list; try{ _grGuardar('maleu_crm_clientes_v1', JSON.stringify(crmClientes)); }catch(e){} }
       // si vino null (falló/vacío): NO tocamos crmClientes ni la cache.
       done();
     });
@@ -46467,7 +46527,7 @@ if('serviceWorker' in navigator){
     }catch(e){}
   }
   window.crmLoteGetLocal = function(sub, lote){
-    if (!_mapaLotesData){ try{ var lc=JSON.parse(localStorage.getItem('maleu_crm_lotes_v1')||'null'); if(lc&&lc.length){ _mapaLotesData={}; lc.forEach(function(r){ _mapaLotesData[_crmNormName(r.sub)+'|'+_loteNorm(r.lote)]=r; }); } }catch(e){} }
+    if (!_mapaLotesData){ try{ var lc=JSON.parse(_grLeer('maleu_crm_lotes_v1')||'null'); if(lc&&lc.length){ _mapaLotesData={}; lc.forEach(function(r){ _mapaLotesData[_crmNormName(r.sub)+'|'+_loteNorm(r.lote)]=r; }); } }catch(e){} }
     return (_mapaLotesData||{})[_crmNormName(sub)+'|'+_loteNorm(lote)] || null;
   };
 
@@ -49613,7 +49673,7 @@ if('serviceWorker' in navigator){
     // tiene su endpoint); acá va lo que falta.
     try {
       (crmClientes||[]).forEach(function(x){ if (x.tel===st.tel){ x.notas=notas; x.tags=tags; } });
-      if (window._lsSetSafe) _lsSetSafe('maleu_crm_clientes_v1', JSON.stringify(crmClientes));
+      _grGuardar('maleu_crm_clientes_v1', JSON.stringify(crmClientes));
     } catch(e){}
     // Endpoint acotado: crmUpdateClienteMeta reescribe 14 columnas de un saque y
     // desde acá se borrarían nombre canónico, cumple, alias y ubicación.
@@ -50170,7 +50230,7 @@ if('serviceWorker' in navigator){
      se reflejaba en la lista ni en la copia, y al reabrir la ficha se veia la de antes. */
   window.crmClientesPorTel = function(tel){ return (crmClientes || []).filter(function(c){ return c.tel === tel; }); };
   window.crmClientesGuardarCopia = function(){
-    try { window._lsSetSafe(CRM_CLI_LS, JSON.stringify(crmClientes)); } catch(e){}
+    try { _grGuardar(CRM_CLI_LS, JSON.stringify(crmClientes)); } catch(e){}
     // Una edicion hecha aca: ninguna foto anterior a esto puede pisarla.
     try { localStorage.setItem(CRM_CAMBIO_TS, String(Date.now())); } catch(e){}
   };
@@ -50185,7 +50245,7 @@ if('serviceWorker' in navigator){
     _crmDupMemo = null;
     if (typeof alias.diasUltima==='number' && alias.diasUltima>=0 && (canon.diasUltima<0 || alias.diasUltima<canon.diasUltima)){ canon.diasUltima=alias.diasUltima; canon.ultimaFecha=alias.ultimaFecha; canon.estado=alias.estado; }
     crmClientes.splice(ai,1);
-    try { window._lsSetSafe('maleu_crm_clientes_v1', JSON.stringify(crmClientes)); } catch(e){}
+    try { _grGuardar('maleu_crm_clientes_v1', JSON.stringify(crmClientes)); } catch(e){}
   }
 
   window.crmFusionConfirm = function(otherKeyEnc){
@@ -50227,7 +50287,7 @@ if('serviceWorker' in navigator){
       break;
     }
     if (movido){
-      try { window._lsSetSafe('maleu_crm_clientes_v1', JSON.stringify(crmClientes)); } catch(e){}
+      try { _grGuardar('maleu_crm_clientes_v1', JSON.stringify(crmClientes)); } catch(e){}
     }
     return movido;
   }
@@ -51536,7 +51596,7 @@ if('serviceWorker' in navigator){
               if (body.barrioMapa) it.barrio = body.barrioMapa;
               if (body.sinUbicacion){ it.subBarrio=''; it.lote=''; }
               else { if (body.subBarrioMapa) it.subBarrio = body.subBarrioMapa; if (body.loteMapa) it.lote = body.loteMapa; }
-              try { window._lsSetSafe('maleu_crm_clientes_v1', JSON.stringify(crmClientes)); } catch(e){}
+              try { _grGuardar('maleu_crm_clientes_v1', JSON.stringify(crmClientes)); } catch(e){}
             }
           } catch(e){}
           // Si el mapa está iniciado, reflejar la nueva ubicación al instante
@@ -57804,7 +57864,7 @@ function _objRango(periodo, mesLabel){
   }
   // Marca/desmarca el flag visitante del cliente (drives sub-tab Clientes + exclusión de la casa).
   function _setVisitanteFlag(tel, on){
-    try{ if(crmClientes){ crmClientes.forEach(function(c){ if(c.tel===tel) c.visitante=on; }); if(window._lsSetSafe)_lsSetSafe('maleu_crm_clientes_v1', JSON.stringify(crmClientes)); } }catch(e){}
+    try{ if(crmClientes){ crmClientes.forEach(function(c){ if(c.tel===tel) c.visitante=on; }); _grGuardar('maleu_crm_clientes_v1', JSON.stringify(crmClientes)); } }catch(e){}
     if(tel) fetch(EST_API,{method:'POST',mode:'cors',body:JSON.stringify({action:'crmSetVisitante',tel:tel,visitante:on?1:0})}).catch(function(){});
   }
   // Reconstruye la casa desde cache (roster + clientes ya parcheados) y re-pinta ficha + lista.
