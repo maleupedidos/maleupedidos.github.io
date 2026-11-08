@@ -651,6 +651,13 @@ button.cobro-prods-copy{flex-shrink:0;border:1px solid #E8DFC4;background:#fff;c
 .cobro-canal-header.vd{background:#FFF3E0;color:#5D4037;border-left:3px solid var(--orange)}
 .cobro-canal-header.cl{background:#E8F5E9;color:#2E7D32;border-left:3px solid #2E7D32}
 .cobro-canal-header.re{background:#FFEBEE;color:#C62828;border-left:3px solid #C62828}
+.cob-desp{margin:8px 0 6px}
+.cob-desp>summary{list-style:none;cursor:pointer;min-height:44px;align-items:center;margin:0 0 6px;user-select:none}
+.cob-desp>summary::-webkit-details-marker{display:none}
+.cob-desp-t::before{content:"▸";display:inline-block;margin-right:6px;transition:transform .15s}
+.cob-desp[open]>summary .cob-desp-t::before{transform:rotate(90deg)}
+.cob-desp-t{font-size:13px}
+.cob-desp-r{font-size:12.5px;font-weight:800;white-space:nowrap}
 .cobro-title{font-size:14px;font-weight:800;color:var(--orange);margin-bottom:10px}
 /* Un cliente con varios cobros: renglones tildables (24/10/2026) */
 .cg-card{border:2px solid #F9A825;background:linear-gradient(135deg,#FFFDF7,#FFF3D6);gap:10px}
@@ -6489,7 +6496,11 @@ function _cobEventoNorm(s){return String(s||'').toLowerCase().normalize('NFD').r
 function _cobEsEvento(ck){return String(ck||'').indexOf('g:')===0;}
 function _claveCliente(e){
   if(e&&e.grp&&_cobEventoNorm(e.grp)&&!/^s[ií]$/i.test(String(e.grp).trim()))return 'g:'+_cobEventoNorm(e.grp);
-  if(e&&e.ck)return String(e.ck);
+  /* UNA TARJETA POR CLIENTE, NO POR CASA (8/11/2026, Tadeo): «en el lote 289, mi casa, se juntan las cobranzas de
+     todos los de la casa; me costó encontrar mi pedido porque estaba a nombre de Alejandra, mi mamá». La casa (`ck`)
+     sigue siendo la base, pero adentro cada NOMBRE es su tarjeta: mismo nombre en la misma casa = mismo cliente (sus
+     varios pedidos se siguen cobrando juntos). El evento («Juntada», arriba) sigue siendo una tarjeta. */
+  if(e&&e.ck)return String(e.ck)+'|n:'+_cobEventoNorm(e.c);
   var nombre=String(e.c||'').toLowerCase().trim();
   var tel=_telCanon(e.t);
   if(tel.length>=8)return 'n:'+nombre+'|t:'+tel;
@@ -7359,7 +7370,7 @@ function renderCobrosFromServer(){
   if(cvAbajo)chips+=_rutCVAvisoHTML();
 
   if(pendientesCobro.length===0){
-    if(cvAbajo){el.innerHTML=chips+cvAbajo;return;}
+    if(cvAbajo){el.innerHTML=chips+_cobDespRed(cvAbajo);return;}
     if(_rutCVcargando||_rutCVerror){el.innerHTML=chips;return;}
     /* La banda ya esta en `chips`, asi que sale igual sin cobros pendientes: ese
        es justo el caso peligroso — "Sin pendientes de cobro" con 13 pedidos sin
@@ -7374,7 +7385,7 @@ function renderCobrosFromServer(){
   h+='<div style="font-size:13px;font-weight:800;margin-bottom:10px">'+visibles.length+' pendiente(s) — Total: '+_cobroPesos(total)+'</div>';
 
   if(visibles.length===0){
-    el.innerHTML=h+(cvAbajo||'<div class="empty" style="padding:30px">Nada en este filtro</div>');return;
+    el.innerHTML=h+(cvAbajo?_cobDespRed(cvAbajo):'<div class="empty" style="padding:30px">Nada en este filtro</div>');return;
   }
 
   // Agrupar por CANAL, y dentro de Venta Directa / Clubes por CLIENTE (across días).
@@ -7388,7 +7399,8 @@ function renderCobrosFromServer(){
     var lista=porCanal[canal];
     if(lista.length===0)return;
     var totCanal=lista.reduce(function(s,p){return s+(Number(p.$)||0);},0);
-    h+='<div class="cobro-canal-header '+canal+'"><span>'+_canalCobroLabel(canal)+'</span><span>'+_cobroPesos(totCanal)+'</span></div>';
+    /* (8/11/2026) Un desplegable por canal: se lee el resumen (cuántos y cuánto) y se abre el que se va a cobrar. */
+    h+=_cobDespAbre(canal,lista.length+(lista.length===1?' pedido':' pedidos')+' \u00b7 '+_cobroPesos(totCanal),_canalCobroLabel(canal));
     h+='<div class="cobro-section" style="border:none;padding:0">';
 
     {
@@ -7411,9 +7423,27 @@ function renderCobrosFromServer(){
         else h+=_cobroCardHTML(grp.items[0], pendientesCobro.indexOf(grp.items[0]));
       });
     }
-    h+='</div>';
+    h+='</div></details>';
   });
-  el.innerHTML=h+cvAbajo;
+  el.innerHTML=h+_cobDespRed(cvAbajo);
+}
+/* LOS DESPLEGABLES DE COBRANZA (8/11/2026, Tadeo: «un desplegable de Home y uno de Red, así se lee mejor en la compu y
+   el celular»). Cada canal es un <details> con su resumen en la cabecera. Lo abierto o cerrado se recuerda en el
+   celular (`maleu_cob_desp_<canal>`); la primera vez arranca abierto. La lista se repinta sola cada 15 s: el estado
+   sale de ahí, no del DOM. */
+function _cobDespAbierto(c){ try{ return localStorage.getItem('maleu_cob_desp_'+c)!=='0'; }catch(e){ return true; } }
+window._cobDespToggle=function(d){ try{ localStorage.setItem('maleu_cob_desp_'+d.dataset.c,d.open?'1':'0'); }catch(e){} };
+function _cobDespAbre(c,resumen,titulo){
+  return '<details class="cob-desp '+c+'" data-c="'+c+'"'+(_cobDespAbierto(c)?' open':'')+' ontoggle="_cobDespToggle(this)">'
+    +'<summary class="cobro-canal-header cob-desp-h '+c+'"><span class="cob-desp-t">'+titulo+'</span><span class="cob-desp-r">'+resumen+'</span></summary>';
+}
+function _cobDespRed(html){
+  if(!html)return '';
+  /* El bloque de Red trae su propia cabecera («🔴 Red · Representantes» y su total, que suma tambien los clientes de
+     los representantes): pasa a ser la del desplegable. Queda el ancla `rutCliVend`, a la que llevan otros botones. */
+  var m=/<div id="rutCliVend" class="cobro-canal-header re"><span>([^<]*)<\/span><span>([^<]*)<\/span><\/div>/.exec(html);
+  if(m)html=html.replace(m[0],'<div id="rutCliVend"></div>');
+  return _cobDespAbre('re',m?m[2]:'',m?m[1]:_canalCobroLabel('re'))+html+'</details>';
 }
 
 // Cache de saldos a favor por teléfono (para no spamear el backend al renderear cobros)
