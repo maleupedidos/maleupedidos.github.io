@@ -5,6 +5,8 @@
 module.exports = function prep(token, extra) {
   return 'try{'
     + 'localStorage.setItem("maleu_token","' + token + '");'
+    /* (8/11/2026) Las pruebas simulan datos imitando a Apps Script: sin esto el ERP corta esas llamadas (APPS_APAGADO). */
+    + 'localStorage.setItem("maleu_apps_prueba","1");'
     + 'localStorage.setItem("maleu_panel_session",JSON.stringify({usuario:"tadeo",rol:"admin",nombre:"Tadeo Ustariz",ts:Date.now()}));'
     + '}catch(e){}'
     + 'window.__err=[];window.__warn=[];window.__clicks=[];'

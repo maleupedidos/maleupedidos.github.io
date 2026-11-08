@@ -88,6 +88,8 @@ fi
 # ── 3c. Que arranque de verdad ───────────────────────────────────────────────
 echo "→ Login exclusivamente en Supabase…"
 node _tools/pruebas/probar_login_solo_base.js || fallar "El login volvió a depender de Apps Script."
+echo "→ Apps Script apagado: nada del ERP sale a script.google.com…"
+node _tools/pruebas/probar_apps_apagado.js >/dev/null 2>&1 || fallar "El ERP volvió a mandar algo a Apps Script — corré: node _tools/pruebas/probar_apps_apagado.js"
 
 echo "→ Sincronizacion operativa (sin red ni escrituras reales)…"
 node _tools/probar-autopedido-vivo.js || fallar "Fallo la disponibilidad en autopedido."

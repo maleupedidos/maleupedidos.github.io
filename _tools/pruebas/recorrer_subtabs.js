@@ -78,7 +78,7 @@ const NAV = 'estSwitch|ajGo|setCrmProdPeriodo|switchTab|stSwitchTab|vSwitchTab|a
        no ve Egresos, Catering, Evolución, Objetivo ni CRM. Con la sesión de la base + la guarda de solo lectura de
        sbses_guarda.js, encima de la de arriba. */
     const COMO_ADMIN = !!(process.env.SBSES && process.env.TOKEN);
-    if (COMO_ADMIN) await cli.enviar('Page.addScriptToEvaluateOnNewDocument', { source: require('./sesion_prep.js')(process.env.TOKEN) + require('./sbses_guarda.js')(process.env.SBSES, 'tadeo') });
+    if (COMO_ADMIN) await cli.enviar('Page.addScriptToEvaluateOnNewDocument', { source: require('./sesion_prep.js')(process.env.TOKEN) + require('./sbses_guarda.js')(process.env.SBSES, 'tadeo') + ';try{localStorage.removeItem("maleu_apps_prueba");}catch(e){}' });   /* el recorrido mide el corte de verdad */
     await cli.enviar('Page.navigate', { url: BASE + '/' + APP });
     if (!COMO_ADMIN) for (let i = 0; i < 100; i++) { try { if (await ev(`!!document.getElementById('loginUser')&&typeof panelDoLogin==='function'`)) break; } catch (e) {} await pausa(200); }
     if (!COMO_ADMIN) await ev(`document.getElementById('loginUser').value=${JSON.stringify(cred.usuario)}; document.getElementById('loginPin').value=${JSON.stringify(String(cred.pin))}; var r=document.getElementById('loginRemember'); if(r)r.checked=true; panelDoLogin(); 1`);
@@ -118,6 +118,9 @@ const NAV = 'estSwitch|ajGo|setCrmProdPeriodo|switchTab|stSwitchTab|vSwitchTab|a
     res.forEach(r => { const mal = r.carg || (r.n || 0) < 30 || (r.feo && r.feo.length) || r.desb; console.log((mal ? '  MAL ' : '  ok  ') + r.donde.padEnd(56) + String(r.n || 0).padStart(5) + ' elem' + String(r.ms == null ? '' : r.ms + ' ms').padStart(9) + (r.carg ? ' CARGANDO' : '') + (r.feo && r.feo.length ? ' FEO:' + r.feo.join(',') : '') + (r.desb ? ' DESBORDA ' + r.desb + 'px' : '')); });
     console.log('\n== Errores (' + errores.length + ')'); errores.forEach(e => console.log('  [' + e.donde + '] ' + e.tipo + ': ' + e.msg));
     console.log('\n== js-error del medidor (' + med.length + ')'); med.forEach(x => console.log('  ' + x));
+    /* (8/11/2026) Lo que el ERP intentó mandar a Apps Script y cortó en su propia puerta (`_appsApagadoResp`). */
+    const apag = await ev(`(window.__appsApagado||{})`);
+    console.log('\n== Cortados por Apps Script apagado (' + Object.keys(apag).length + ')'); Object.keys(apag).forEach(k => console.log('  ' + k + ' ×' + apag[k]));
     console.log('\n== POST bloqueados (' + bloq.length + ')'); Array.from(new Set(bloq)).slice(0, 15).forEach(b => console.log('  ' + b));
   } finally { cli.matar(); }
 })();

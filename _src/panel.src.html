@@ -9286,6 +9286,10 @@ var API='https://script.google.com/macros/s/AKfycbxmrG5YVSshcYezk8lXFx_uxb7NFGcb
         return Promise.reject(new TypeError('Apps Script no se usa para leer (SIN_APPS_LECTURAS): ' + _accS));
       }
     }
+    /* (8/11/2026) APPS SCRIPT APAGADO: ninguna lectura viaja (ver `_appsApagadoResp`). */
+    if (esBackend && !esPost && typeof APPS_APAGADO !== 'undefined' && APPS_APAGADO && typeof _appsApagadoResp === 'function'){
+      return _appsApagadoResp(false, (String(input).match(/[?&]action=([A-Za-z]+)/) || [])[1] || '?');
+    }
     /* _pedir se encarga de dos cosas: sesion vencida y reintento ante traba. */
     if (esBackend && !esPost && typeof input === 'string'){
       return _encolar(input, init);
@@ -9296,7 +9300,13 @@ var API='https://script.google.com/macros/s/AKfycbxmrG5YVSshcYezk8lXFx_uxb7NFGcb
     if (esBackend && esPost){
       var _marcar = function(){ try{ window.__ultimoPostBackend = Date.now(); }catch(e){} };
       _marcar();
-      var _porApps = function(){ if (_ensayo) return _ensayoCorte(); return postIdempotente ? _pedirPostCajaConCorte(input, init, 0) : _pedir(input, init, 0); };
+      var _porApps = function(){ if (_ensayo) return _ensayoCorte();
+        /* (8/11/2026) APPS SCRIPT APAGADO: la escritura que llega hasta acá (sin directa, o con la directa apagada) no viaja. */
+        if (typeof APPS_APAGADO !== 'undefined' && APPS_APAGADO && typeof _appsApagadoResp === 'function'){
+          var _accP = '?'; try { _accP = JSON.parse((init && init.body) || '{}').action || (_bCrm && _bCrm.action) || '?'; } catch(e){}
+          return _appsApagadoResp(true, _accP);
+        }
+        return postIdempotente ? _pedirPostCajaConCorte(input, init, 0) : _pedir(input, init, 0); };
       /* (281) Una orden del CRM con su directa prendida (FICHA_DIRECTO, BORRAR_INTERACCION_DIRECTO, ...): primero la
          base; si no la acepta directo, Apps Script con el mismo cuerpo (el mismo clientOpId: no duplica). */
       var _bCrm = null; try { _bCrm = ordenCrm ? JSON.parse(init.body) : null; } catch(e){}
@@ -9344,6 +9354,7 @@ var API='https://script.google.com/macros/s/AKfycbxmrG5YVSshcYezk8lXFx_uxb7NFGcb
         return r;
       }, function(e){ _marcar(); throw e; });
     }
+    if (esBackend && typeof APPS_APAGADO !== 'undefined' && APPS_APAGADO && typeof _appsApagadoResp === 'function') return _appsApagadoResp(esPost, '?');
     return _pedir(input, init, 0);
   };
 
@@ -16961,7 +16972,11 @@ var ORD_DIRECTAS_RPC={marcarCobrado:'pedido_cobrar_directo',marcarEntregado:'ped
 function _ordenDirectaOn(a){
   if(typeof _palancaVal!=='function')return false;
   var m=_palancaVal('directas');
-  return !!(m&&m[a]===true)||(a==='marcarCobrado'&&_palancaVal('cobrarDirecto')===true);
+  if(!!(m&&m[a]===true)||(a==='marcarCobrado'&&_palancaVal('cobrarDirecto')===true))return true;
+  /* (8/11/2026) Apps Script está apagado: una acción con RPC que la lista de palancas NO NOMBRA (permiso viejo, guardado
+     antes de que esa directa existiera) va a la base igual. Solo un «false» explícito la deja afuera. Antes caía a
+     Apps Script y se perdía: el «Estoy llegando» de Santos, 4 veces el 6-7/11 («palanca-front»). */
+  return !!(m&&typeof m==='object'&&!(a in m)&&typeof ORD_DIRECTAS_RPC==='object'&&ORD_DIRECTAS_RPC[a]);
 }
 /* POR QUE NO FUE DIRECTO (corte, parte 3 — 2/11/2026). Del 26/10 al 2/11, 181 de 400 ordenes de pantalla fueron a
    Apps Script teniendo directa con su palanca en «si», y el motivo se perdia aca. Ahora queda en la orden que va a
@@ -17049,6 +17064,25 @@ function _sinRespaldo(accion,nd){
     return Promise.resolve(new Response(JSON.stringify({ok:false,sinRespaldo:true,motivo:mot,err:txt,error:txt}),{status:200,headers:{'Content-Type':'application/json'}}));
   }
   return Promise.reject(new TypeError('No se pudo guardar en la base ('+(nd||'sin respuesta')+'): se reintenta.'));
+}
+/* APPS SCRIPT APAGADO (8/11/2026). Desde el 5/11 el web app contesta {ok:false, apagado:true} a todo (WEBAPP_APAGADO = si,
+   sin excepciones). Igual quedaban ~100 caminos de respaldo que salian a buscarlo: cada uno esperaba 1-4 s a un servidor
+   muerto para recibir un error que no decia nada util. Ahora se cortan en la unica puerta (el `window.fetch` de arriba):
+     · una ESCRITURA contesta lo mismo que contestaba Apps Script ({ok:false, apagado:true}) — mismas colas, mismos carteles,
+       mismo comportamiento — pero sin viajar, con un texto que se entiende, y queda anotada en la base (`directa_no_anotar`,
+       motivo «apps apagado»): esa lista es lo que todavia le falta a la base;
+     · una LECTURA falla como un corte de red (igual que SIN_APPS_LECTURAS): cada pantalla sigue con su copia y su sello.
+   Vuelta atras: `APPS_APAGADO=false` (y WEBAPP_APAGADO = no en la base).
+   Las PRUEBAS viejas simulan sus datos haciendose pasar por Apps Script (`action=entregas`...): `sesion_prep.js` pone
+   localStorage `maleu_apps_prueba` = '1' en el navegador de la prueba y ahi el corte no se aplica. Ningun telefono la tiene. */
+var APPS_APAGADO=(function(){ try{ return localStorage.getItem('maleu_apps_prueba')!=='1'; }catch(e){ return true; } })();
+function _appsApagadoResp(esPost,accion){
+  accion=String(accion||'?');
+  try{ var _aa=window.__appsApagado=window.__appsApagado||{}; _aa[(esPost?'POST ':'GET ')+accion]=(_aa[(esPost?'POST ':'GET ')+accion]||0)+1; }catch(e){}
+  if(!esPost)return Promise.reject(new TypeError('Apps Script está apagado: '+accion+' se lee de la base'));
+  try{ _directaNoAnotar(accion,'apps apagado','no viajo'); }catch(e){}
+  var txt='No se guardó: esto todavía no pasa por la base ('+accion+'). Avisale a Tadeo.';
+  return Promise.resolve(new Response(JSON.stringify({ok:false,apagado:true,accion:accion,err:txt,error:txt}),{status:200,headers:{'Content-Type':'application/json'}}));
 }
 function _directaNoAnotar(accion,motivo,detalle){
   try{

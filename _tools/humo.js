@@ -114,6 +114,9 @@ function huerfanosEn(raiz, excluirSel) {
 const RUIDO = [
   /Failed to fetch/i, /net::ERR_/i, /NetworkError/i, /Access to fetch/i, /CORS/i,
   /service ?worker/i, /Failed to load resource/i, /manifest/i, /favicon/i,
+  // (8/11/2026) Sin sesion de la base, una lectura que antes salia a Apps Script y fallaba por red ahora la corta el
+  // ERP en su puerta (APPS_APAGADO): es el mismo «no hay backend», con otro texto.
+  /Apps Script está apagado/,
   // El panel entra a pintar sus tabs con la sesion falsa pero sin datos (`D`
   // nunca llega, no hay backend) y revienta ahi. Es el precio de inyectar la
   // sesion, no un bug. Se filtra SOLO este prefijo: cualquier otro TypeError
