@@ -165,11 +165,11 @@ const estado = cli => evaluar(cli, `JSON.stringify({
     const hay = await evaluar(cli, 'typeof npGuardar==="function" && !!document.getElementById("npYaCobrado")');
     if (hay) {
       await evaluar(cli, 'try{npSetPago("Efectivo")}catch(e){}; var y=document.getElementById("npYaCobrado"); y.checked=true; npToggleYaCobrado();'); await dormir(300);
-      const np = await evaluar(cli, `JSON.stringify({ver:!document.getElementById('npQuienWrap').classList.contains('hidden'), n:document.querySelectorAll('#npQuienChips .np-chip').length, on:document.querySelectorAll('#npQuienChips .np-chip.active').length})`).then(JSON.parse);
-      chequear(np.ver && np.n === 2 && np.on === 0, '"Ya me pagó" en efectivo pregunta quien lo cobro, sin nadie elegido', JSON.stringify(np));
-      chequear(await evaluar(cli, 'npFaltaQuien()') === true, 'y sin elegir, falta (npGuardar frena antes de mandar)');
-      await evaluar(cli, `npSetQuien(${JSON.stringify(L)})`);
-      chequear(await evaluar(cli, 'npFaltaQuien()') === false, 'elegido Lucas, ya no falta');
+      /* (8/11/2026) «Ya me pagó» ya no pregunta quién adentro del autopedido: al guardar se abre el CUADRO DE COBRO (el
+         de COBRANZA), que lo pregunta con la billetera del día elegida. Lo prueba _tools/pruebas/probar_autopedido_cobro.js. */
+      const np = await evaluar(cli, `JSON.stringify({ver:!document.getElementById('npQuienWrap').classList.contains('hidden'), n:document.querySelectorAll('#npQuienChips .np-chip').length})`).then(JSON.parse);
+      chequear(!np.ver && np.n === 0, '"Ya me pagó" no pregunta quién en el formulario: lo pregunta el cuadro de cobro', JSON.stringify(np));
+      chequear(await evaluar(cli, 'npFaltaQuien()') === false, 'y no frena el guardado por eso');
     } else {
       chequear(false, 'el AUTOPEDIDO no esta en esta pantalla (no se pudo medir)');
     }
