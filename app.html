@@ -15388,7 +15388,7 @@ function _leerVersion(app){
    "El HTML no sabe que version es" dejo de ser cierto: el build le escribe
    adentro el CACHE_NAME de sw-panel.js, el mismo que deploy.sh obliga a subir en
    cada cambio. Si lo publicado dice otra cosa, esta pagina es vieja. Punto. */
-var _APP_CN_PAGINA='maleu-panel-v986';
+var _APP_CN_PAGINA='maleu-panel-v987';
 
 /* Devuelve [{k,v}] si lo publicado no es lo que esta pagina corre. */
 function _chequearVersiones(){
@@ -21276,6 +21276,39 @@ function _cjVivoPrender(){
 }
 try { window.addEventListener('maleu:palancas', function(){ _cjVivoPrender(); }); } catch(e){}
 setTimeout(_cjVivoPrender, 0);
+/* ══ INICIO EN VIVO: CUENTAS A PAGAR Y STOCK (8/11/2026) ══
+   El en vivo de la caja repinta Inicio, pero «Cuentas a pagar» (la deuda FIFO de `busqueda`) y «Stock (al costo)» se
+   piden UNA vez y quedan guardados: pagabas a un proveedor o recibías mercadería y la caja bajaba en vivo mientras la
+   deuda, el stock y el Capital de trabajo seguían con el número viejo hasta reabrir la app. Ahora `erp:compras` y
+   `erp:pagos` marcan la deuda para volver a pedir, y `erp:stock`/`erp:compras` el stock. Se junta medio segundo, y
+   solo se pide con Inicio a la vista; si no, queda marcado y se pide al volver (lo mira rHSnap). Misma palanca que la
+   caja (`cajaEnVivo`). `window.__iniVivo`. */
+var _iniVivo = { prendido: false, t: null, deuda: false, stock: false };
+function _iniVivoAplicar(){
+  _iniVivo.t = null;
+  if (document.visibilityState === 'hidden' || cur !== 'inicio') return;   /* queda marcado: rHSnap lo pide al volver */
+  var pintar = function(){ try { if (cur === 'inicio' && (typeof curSI === 'undefined' || curSI !== 'eerr')) { if (typeof _hayEditorAbierto === 'function' && _hayEditorAbierto()) _pendingLoadRender = true; else rHSnap(); } } catch(e){ console.error('inicio/vivo', e); } };
+  var hizo = [];
+  if (_iniVivo.deuda && typeof eerrFetchDeudaProv === 'function') { _iniVivo.deuda = false; hizo.push('deuda'); eerrFetchDeudaProv(pintar, true); }
+  if (_iniVivo.stock && typeof eerrFetchStock === 'function') { _iniVivo.stock = false; hizo.push('stock'); eerrFetchStock(pintar, true); }
+  try { window.__iniVivo = { t: Date.now(), hizo: hizo }; } catch(e){}
+}
+function _iniVivoMarcar(que){ return function(){ _iniVivo[que] = true; if (!_iniVivo.t) _iniVivo.t = setTimeout(_iniVivoAplicar, CJ_VIVO_JUNTAR_MS); }; }
+function _iniVivoPrender(){
+  try {
+    if (_iniVivo.prendido || typeof _enVivoEscuchar !== 'function' || typeof _sbPermiso !== 'function') return;
+    _sbPermiso(true).then(function(sb){
+      if (_iniVivo.prendido || !sb || !sb.pal || !sb.pal.cajaEnVivo) return;
+      _iniVivo.prendido = true;
+      var deuda = _iniVivoMarcar('deuda'), stock = _iniVivoMarcar('stock');
+      _enVivoEscuchar('erp:compras', function(){ deuda(); stock(); }, function(){ deuda(); stock(); });
+      _enVivoEscuchar('erp:pagos', deuda, deuda);
+      _enVivoEscuchar('erp:stock', stock, stock);
+    }, function(){});
+  } catch(e){}
+}
+try { window.addEventListener('maleu:palancas', function(){ _iniVivoPrender(); }); } catch(e){}
+setTimeout(_iniVivoPrender, 0);
 // Boton "Actualizar" de la tab Caja. No tapa la pantalla: la lista de abajo
 // sigue siendo valida (es la de recien) y se repinta sola cuando llega.
 function actualizarCaja(){
@@ -22110,7 +22143,7 @@ function confirmarDeshacerOrigen(btn){
   // Tras la acción, scroll al top para que Tadeo no tenga que volver arriba a mano.
   window._forceTopOnRender=true;
   _marcarCambioOrigen();
-  showLoader('Deshaciendo origen...');
+  showLoader('Deshaciendo la asignación...');
   _ordenPost({action:'deshacerOrigen',hoja:hoja,id:id,row:row,clientOpId:_pfId()})
     .then(function(r){return r.json();})
     .then(function(r){
@@ -23141,7 +23174,9 @@ function confirmarOrigen(btn){
   // Tras la acción, scroll al top para que Tadeo no tenga que volver arriba a mano.
   window._forceTopOnRender=true;
   _marcarCambioOrigen();
-  showLoader('Guardando la asignación...');
+  /* (8/11/2026) Sin cartel que tape: la asignación ya se pinta al toque (abajo, «AL TOQUE») y el cartel la tapaba
+     hasta que contestaba la base (~1 s). El botón queda en «Guardando...» y deshabilitado; si la base dice que no,
+     vuelve lo de antes (`_volver`) como siempre. El aviso de OC comprometida sigue preguntando. */
   // Calcular el origen resultante (Deposito / Orden de Compra / Mixto) para UI optimista
   var anyD=false,anyOC=false;
   var anyRep=false;
@@ -23163,7 +23198,6 @@ function confirmarOrigen(btn){
       if(r&&r.needsConfirm){
         hideLoader(true);
         if(confirm(_warnOCMsg(r.warn))){
-          showLoader('Guardando la asignación...');
           enviar(true);
         }else{
           _volver();
@@ -23186,7 +23220,7 @@ function confirmarOrigen(btn){
         }
         if(anyRep)_repoEC.t=0;
         render();hideLoader(true);
-        var _m='Origen guardado';
+        var _m='Asignación guardada';
         if(r.ocBorradas>0) _m+=' · '+r.ocBorradas+' OC quitada'+(r.ocBorradas>1?'s':'');
         if(r.aviso) _m+=' · ⚠️ '+r.aviso;   // OC pedida anulada / recibida intacta (6/10/2026)
         toast(_m,r.aviso?9000:undefined);
@@ -25363,6 +25397,8 @@ function rHSnap(){
   var aCobrar=_pc.total;
   // 7. Deuda Proveedores — fetch async, cache global. Si no llegó todavía, dispara fetch + re-render.
   var deudaProv=null;
+  /* (8/11/2026) Lo que el en vivo marco mientras Inicio no estaba a la vista se pide ahora (ver _iniVivo). */
+  if(typeof _iniVivo==='object'&&(_iniVivo.deuda||_iniVivo.stock)&&!_iniVivo.t)_iniVivo.t=setTimeout(_iniVivoAplicar,0);
   if(typeof window._eerrDeudaProv!=='undefined')deudaProv=window._eerrDeudaProv;
   if(deudaProv===null&&typeof eerrFetchDeudaProv==='function'){
     eerrFetchDeudaProv(function(){
@@ -78678,6 +78714,10 @@ function abaPagoLugar(key, id) {
   updatePagoTotal(key, Number((mont && mont.getAttribute('data-sug')) || 0));
 }
 function renderPagoForm(key, idx, semana, montoSugerido) {
+  /* (8/11/2026) ui_medicion «error-pagos» ×8 (5-6/11, Lucas y Tadeo): con la copia guardada, PAGOS se pinta durante el
+     arranque ANTES de llegar a `var abaPagoCta = {}` (más abajo): valía undefined y cada proveedor salía con error. */
+  if (!abaPagoCta || typeof abaPagoCta !== 'object') abaPagoCta = {};
+  if (!abaPagoLug || typeof abaPagoLug !== 'object') abaPagoLug = {};
   delete abaPagoCta[key];
   delete abaPagoLug[key];
   var titulo = semana ? 'Pago semana ' + semana : 'Pago a cuenta (se descuenta de la deuda más vieja)';

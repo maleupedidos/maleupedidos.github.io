@@ -72,16 +72,21 @@ const NAV = 'estSwitch|ajGo|setCrmProdPeriodo|switchTab|stSwitchTab|vSwitchTab|a
     await cli.enviar('Page.addScriptToEvaluateOnNewDocument', { source: `(function(){window.confirm=function(){return false;};window.alert=function(){};window.prompt=function(){return null;};
       var o=window.fetch;window.fetch=function(u,x){var url=String((u&&u.url)||u||''),m=String((x&&x.method)||(u&&u.method)||'GET').toUpperCase();
       var lectura=!/rest.v1.rpc|script\.google/.test(url)||/ui_medicion_anotar|login_pin|permiso_base|_pantalla$|_pantalla[?]|rest.v1.rpc.[a-z_]*_(base|light|leer|ver|lista|foto)$/.test(url)||(/rest.v1.rpc/.test(url)&&!/(directo|aplicar|crear|guardar|borrar|registrar|cobrar|marcar|editar|cancelar|alta|baja|mover|pasar|programar|vincular|enviar|confirmar|limpiar|resolver|poner|anotar|cargar|sumar|restar|cerrar|abrir_caja)/i.test(url));
-      if(m==='POST'&&(!lectura||/script\\.google/.test(url))){ (window.__bloqueados=window.__bloqueados||[]).push(url.slice(0,120)); return Promise.resolve(new Response('{"ok":false,"bloqueado":true}',{status:200,headers:{'Content-Type':'application/json'}})); }
+      if(m==='POST'&&(!lectura||/script\\.google/.test(url))){ (window.__bloqueados=window.__bloqueados||[]).push(url.slice(0,90)+' '+String((x&&x.body)||'').replace(/("token":")[^"]*/g,'$1***').slice(0,70)); return Promise.resolve(new Response('{"ok":false,"bloqueado":true}',{status:200,headers:{'Content-Type':'application/json'}})); }
       return o.apply(this,arguments);};})();` });
+    /* (8/11/2026) COMO ADMIN: SBSES=<archivo> TOKEN=<token> (estancias/scripts/migraciones/sesion_prueba.py). El robot
+       no ve Egresos, Catering, Evolución, Objetivo ni CRM. Con la sesión de la base + la guarda de solo lectura de
+       sbses_guarda.js, encima de la de arriba. */
+    const COMO_ADMIN = !!(process.env.SBSES && process.env.TOKEN);
+    if (COMO_ADMIN) await cli.enviar('Page.addScriptToEvaluateOnNewDocument', { source: require('./sesion_prep.js')(process.env.TOKEN) + require('./sbses_guarda.js')(process.env.SBSES, 'tadeo') });
     await cli.enviar('Page.navigate', { url: BASE + '/' + APP });
-    for (let i = 0; i < 100; i++) { try { if (await ev(`!!document.getElementById('loginUser')&&typeof panelDoLogin==='function'`)) break; } catch (e) {} await pausa(200); }
-    await ev(`document.getElementById('loginUser').value=${JSON.stringify(cred.usuario)}; document.getElementById('loginPin').value=${JSON.stringify(String(cred.pin))}; var r=document.getElementById('loginRemember'); if(r)r.checked=true; panelDoLogin(); 1`);
+    if (!COMO_ADMIN) for (let i = 0; i < 100; i++) { try { if (await ev(`!!document.getElementById('loginUser')&&typeof panelDoLogin==='function'`)) break; } catch (e) {} await pausa(200); }
+    if (!COMO_ADMIN) await ev(`document.getElementById('loginUser').value=${JSON.stringify(cred.usuario)}; document.getElementById('loginPin').value=${JSON.stringify(String(cred.pin))}; var r=document.getElementById('loginRemember'); if(r)r.checked=true; panelDoLogin(); 1`);
     let tabs = null;
     for (let i = 0; i < 150; i++) { try { tabs = await ev(`(typeof SESSION!=='undefined'&&SESSION&&SESSION.tabs)?SESSION.tabs:null`); if (tabs) break; } catch (e) {} await pausa(200); }
     if (!tabs) { console.log('no entró'); process.exit(1); }
     await pausa(4000);
-    const vistas = (await ev(`Array.from(document.querySelectorAll('.pg')).map(function(p){return p.id.replace(/^p-/,'');})`)).filter(t => tabs.indexOf(t) >= 0);
+    const vistas = (await ev(`Array.from(document.querySelectorAll('.pg')).map(function(p){return p.id.replace(/^p-/,'');})`)).filter(t => COMO_ADMIN ? t !== 'resumen' : tabs.indexOf(t) >= 0);
     res.length = 0;
     for (const t of vistas) {
       donde = t;
