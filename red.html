@@ -3181,6 +3181,10 @@ function renderRuta() {
   } else if (p.envAnu) {
     html += '<div class="ruta-envio off">Envío sin cobrar · ' + _envioSelloTxt(p.envAnu) +
             _envBtn('false', 'Volver a cobrarlo') + '</div>';
+  } else if (!cobrado && p.es !== 'Cancelado') {
+    /* (8/11/2026, 596) Un Red que nacio SIN envio: antes no habia como cargarlo (Gaston #2365 y Caro Rojo #2378 se
+       hicieron a mano en la base). Siempre son $3.000 (medido: 56 de 111 con envio, ninguno con otro monto). */
+    html += '<div class="ruta-envio off">Sin envío' + _envBtn('false, ' + ENVIO_RED_MONTO, '+ Cobrar envío ' + ars(ENVIO_RED_MONTO)) + '</div>';
   }
   html += _trajoHtml(p);
   if (prodsHtml) html += '<div class="ruta-prods">' + prodsHtml + '</div>';
@@ -3724,11 +3728,14 @@ function rutaReclamar() {
     });
 }
 
-function rutaEnvioAnular(anular) {
+var ENVIO_RED_MONTO = 3000;
+/* `nuevo` (8/11/2026, 596): cargar un envio que el pedido nunca tuvo, de ese monto. */
+function rutaEnvioAnular(anular, nuevo) {
   const p = _rutaCurrent(); if (!p || !session) return;
   if (_envioTrabado(p)) { redToast(_envioTrabadoMsg(p)); return; }
   if (p.ep === 'Cobrado') { redToast('Ya está cobrado: el envío se arregla a mano'); return; }
-  const monto = anular ? (Number(p.env) || 0) : _envioMontoSello(p.envAnu);
+  const cargar = !anular && Number(nuevo) > 0 && !p.envAnu && !(Number(p.env) > 0);
+  const monto = anular ? (Number(p.env) || 0) : (cargar ? Math.round(Number(nuevo)) : _envioMontoSello(p.envAnu));
   if (!monto) { redToast(anular ? 'Este pedido no tiene envío' : 'No sé de cuánto era el envío'); return; }
 
   const quien = p.c || 'este cliente';
@@ -3737,7 +3744,9 @@ function rutaEnvioAnular(anular) {
   const msg = anular
     ? 'Le regalás el envío de ' + ars(monto) + ' a ' + quien + '.\n\n' +
       'Esos ' + ars(monto) + ' salen de TU ganancia, no de Maleu.\n\n¿Lo hacés igual?'
-    : '¿Volver a cobrarle el envío de ' + ars(monto) + ' a ' + quien + '?';
+    : cargar
+      ? '¿Le cobrás el envío de ' + ars(monto) + ' a ' + quien + '?\n\nSe suma a lo que paga el cliente y es tuyo: te lo pagamos con la comisión.'
+      : '¿Volver a cobrarle el envío de ' + ars(monto) + ' a ' + quien + '?';
   if (!confirm(msg)) return;
 
   /* Optimista con vuelta atras: la pantalla responde ya, y si el backend dice
@@ -3769,7 +3778,7 @@ function rutaEnvioAnular(anular) {
 
   fetch(APPS_SCRIPT_URL, {
     method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-    body: JSON.stringify({ action: 'redEnvioAnular', n: String(p.n), row: p.row, anular: !!anular,
+    body: JSON.stringify({ action: 'redEnvioAnular', n: String(p.n), row: p.row, anular: !!anular, monto: cargar ? monto : undefined,
       clientOpId: 'env_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 10) })
   }).then(r => r.json())
     /* Con `diferida` (4d-2, 14/10/2026) el Total y el Envío se escriben despues. El
@@ -3783,7 +3792,7 @@ function rutaEnvioAnular(anular) {
     .then(d => {
     if (d && d.ok) {
       if (anular && d.sello) aplicar({ env: 0, envAnu: d.sello });
-      redToast(anular ? '✓ No le cobrás el envío' : '✓ El envío vuelve');
+      redToast(anular ? '✓ No le cobrás el envío' : (cargar ? '✓ Envío de ' + ars(monto) + ' cargado' : '✓ El envío vuelve'));
     } else {
       aplicar(antes);
       redToast('No se pudo: ' + ((d && d.err) || 'error'));
