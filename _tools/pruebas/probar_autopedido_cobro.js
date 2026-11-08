@@ -27,10 +27,11 @@ let ok = 0, mal = 0; const chk = (n, c, extra) => { c ? ok++ : mal++; console.lo
       return of.apply(this,arguments); }; })();` });
   await cli.enviar('Page.navigate', { url: 'http://localhost:8080/app.html' });
   for (let i = 0; i < 80; i++) { if (await ev(`typeof go==='function'`).catch(() => false)) break; await pausa(250); }
-  await pausa(3000); await ev(`go('ruta')`); await pausa(2500);
+  await pausa(3000); await ev(`go('ruta')`); await pausa(1500); await ev(`switchTab('ruta')`); await pausa(1500);
   const bd = await ev(`(function(){var b=document.getElementById('rutBilDia'); return {vis:!!b&&!b.hidden, txt:b?b.innerText.replace(/\\s+/g,' '):''};})()`);
-  chk('la billetera del día se ve en Ruta', bd.vis && /Tadeo/.test(bd.txt), bd.txt.slice(0, 90));
+  chk('la billetera se ve en la sub-tab RUTA y dice «salís a entregar»', bd.vis && /Tadeo/.test(bd.txt) && /a entregar/.test(bd.txt) && !/hoy/i.test(bd.txt), bd.txt.slice(0, 90));
   await ev(`switchTab('nuevo')`); await pausa(4500);
+  chk('el cartel de la billetera NO está en + PEDIDO (solo en la sub-tab RUTA)', await ev(`(function(){var b=document.getElementById('rutBilDia');return !b||!b.offsetParent;})()`));
   const r1 = await ev(`(function(){var o={};
     npSetZona('Home'); var n=document.getElementById('npNombre'); n.value='PRUEBA Cobro'; document.getElementById('npLote').value='9';
     var hoyIso=npIsoDe(new Date()); var fb=Array.from(document.querySelectorAll('#npFechas [onclick^="npSetFecha"]')).filter(function(b){var m=(b.getAttribute('onclick')||'').match(/'(\\d{4}-\\d{2}-\\d{2})'/);return m&&m[1]>=hoyIso;}); if(fb[0])fb[0].click();
