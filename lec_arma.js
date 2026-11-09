@@ -116,7 +116,7 @@ var LEC_ARMA = {
   miReparto: { rpc: 'mi_reparto_pantalla', listas: {}, orden: true, motor: 'mr' },
   /* (248) Ajustes › Automatizaciones. La agenda, los sellos y los triggers son una FOTO de Apps Script (de hasta 10
      min: `fotoDe`); los sellos y la hora del cruce de GitHub cambian solos y no se comparan. */
-  automatizaciones: { rpc: 'automatizaciones_pantalla', listas: { agenda: ['fn'], triggers: ['id'] }, orden: true, ignorar: ['ahora', 'fotoDe', 'sellos', 'ghCruce.ultimo'] },
+  automatizaciones: { rpc: 'automatizaciones_pantalla', listas: { agenda: ['fn'], triggers: ['id'] }, orden: true, ignorar: ['ahora', 'fotoDe', 'sellos', 'ghCruce.ultimo', 'cron'] },
   /* (246) Los extras de la bandeja de Red: los links de Telegram (de la base) y, para el admin, los reclamos con la
      comision recalculada por la escala (rx_motor.js, copiado de Code.js). Los reclamos por su fila de Red. */
   redBandejaExtra: { rpc: 'red_bandeja_extra_pantalla', listas: { 'reclamos.pendientes': ['row'], 'reclamos.decididos': ['row'] }, orden: true, motor: 'rx' },
