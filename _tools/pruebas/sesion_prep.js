@@ -21,7 +21,7 @@ module.exports = function prep(token, extra) {
        noSeCobro: cortadas, «Ver como» decia «No pude traer la lista» sobre una base que contestaba bien. */
     + '(function(){var o=window.fetch;window.fetch=function(u,x){'
     + 'var _u=String((u&&u.url)||u||"");'
-    + 'if(x&&String(x.method||"").toUpperCase()==="POST"&&!/\\/rest\\/v1\\/rpc\\/([a-z0-9_]+_(pantalla|datos|base)|tienda_(vendedores|pedido_entro|ruleta|saldo_cliente|seguimiento|stock|piezas|validar_cupon)|pedido_no_se_cobro_previa|prov_costos_previa|red_efectivo_pantalla)(\\?|$)/.test(_u))return Promise.resolve(new Response(JSON.stringify({ok:true}),{status:200,headers:{"Content-Type":"application/json"}}));'
+    + 'if(x&&String(x.method||"").toUpperCase()==="POST"&&!/\\/rest\\/v1\\/rpc\\/([a-z0-9_]+_(pantalla|datos|base)|tienda_(vendedores|pedido_entro|ruleta|saldo_cliente|seguimiento|stock|piezas|validar_cupon)|pedido_no_se_cobro_previa|carne_remito_avance|prov_costos_previa|red_efectivo_pantalla)(\\?|$)/.test(_u))return Promise.resolve(new Response(JSON.stringify({ok:true}),{status:200,headers:{"Content-Type":"application/json"}}));'
     + 'return o.apply(this,arguments);};})();'
     + (extra || '');
 };
