@@ -22,7 +22,7 @@ function sbses(archivo, usuario) {
   return `;try{localStorage.setItem('mc_sbses',${JSON.stringify(JSON.stringify(g))});}catch(e){}`
     + `;(function(){var f=window.fetch;window.__bloqueados=[];window.fetch=function(u,x){var s=String(u&&u.url||u),m=String((x&&x.method)||(u&&u.method)||'GET').toUpperCase();
       if(m!=='GET'&&m!=='HEAD'){var r=/\\/rest\\/v1\\/rpc\\/([a-z0-9_]+)/.exec(s);
-        var lee=(r&&(/_(pantalla|datos)$/.test(r[1])||r[1]==="permiso_base"||r[1]==="tienda_vendedores")&&!/directo/.test(r[1]))||/\\/auth\\/v1\\/token\\?grant_type=refresh_token/.test(s);
+        var lee=(r&&(/_(pantalla|datos)$/.test(r[1])||r[1]==="permiso_base"||r[1]==="tienda_vendedores"||r[1]==="conteo_ultimo_base")&&!/directo/.test(r[1]))||/\\/auth\\/v1\\/token\\?grant_type=refresh_token/.test(s);
         if(!lee){window.__bloqueados.push(m+' '+(r?r[1]:s.slice(0,60))+' '+String((x&&x.body)||'').replace(/("token":")[^"]*/g,'$1***').slice(0,90));return Promise.resolve(new Response(JSON.stringify({ok:false,err:'cortado por la prueba (solo lectura)'}),{status:200,headers:{'Content-Type':'application/json'}}));}}
       return f.apply(this,arguments);};})();`;
 }
