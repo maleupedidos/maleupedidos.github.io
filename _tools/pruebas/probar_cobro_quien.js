@@ -67,9 +67,9 @@ async function esperar(cli, expr, ms) {
   return false;
 }
 let _prepId = null;
-async function arrancar(cli, bil) {
+async function arrancar(cli, bil, extra) {
   if (_prepId) { try { await cli.enviar('Page.removeScriptToEvaluateOnNewDocument', { identifier: _prepId }); } catch (e) {} }
-  const r = await cli.enviar('Page.addScriptToEvaluateOnNewDocument', { source: 'try{localStorage.clear()}catch(e){}\n' + prep(bil) });
+  const r = await cli.enviar('Page.addScriptToEvaluateOnNewDocument', { source: 'try{localStorage.clear()}catch(e){}\n' + (extra || '') + '\n' + prep(bil) });
   _prepId = r && r.identifier;
   await cli.enviar('Page.navigate', { url: BASE });
   await dormir(3000);
@@ -173,6 +173,25 @@ const estado = cli => evaluar(cli, `JSON.stringify({
     } else {
       chequear(false, 'el AUTOPEDIDO no esta en esta pantalla (no se pudo medir)');
     }
+
+    /* 6. (10/11/2026) Cobra Tatu desde su celular: aparece él, viene elegido, y el vuelto sale de la billetera del día */
+    const S = 'Santos Bullrich';
+    const BIL3 = { activo: true, personas: [T, L, S], bil: { [T]: 20000, [L]: 15000, [S]: 0 } };
+    await arrancar(cli, BIL3, `try{localStorage.setItem('maleu_panel_session',JSON.stringify({nombre:${JSON.stringify(S)},usuario:'santos',rol:'repartidor'}));
+      var d=new Date(),f=d.getFullYear()+'-'+('0'+(d.getMonth()+1)).slice(-2)+'-'+('0'+d.getDate()).slice(-2);
+      localStorage.setItem('maleu_bil_dia',JSON.stringify({f:f,q:${JSON.stringify(T)},u:'santos'}));}catch(e){}`);
+    // ?prueba=1 pisa la sesión con «Modo Prueba»: el usuario de Ruta se pone a mano.
+    await evaluar(cli, `_RUTA_USER=${JSON.stringify(S)}`);
+    await abrirCuadro(cli, '9002');
+    await evaluar(cli, '_setMoneyInput("cobroRecEf", 30000); _recalcCobroRuta();'); await dormir(300);
+    e = await estado(cli);
+    chequear(e.pills.length === 3 && e.pills.indexOf('Santos*') >= 0, 'Tatu aparece en «quién cobró» y viene elegido él', JSON.stringify(e.pills));
+    await evaluar(cli, `_toggleCobroSec('cobroCambioSection', document.getElementById('cobroToggleCambio')); _setMoneyInput("cobroRecEf", 35000); _cobroRecTocado(); _recalcCobroRuta();`); await dormir(400);
+    e = await estado(cli);
+    chequear(/Billetera de Tadeo: \$20\.000/.test(e.bil), 'el vuelto sale de la billetera con la que salió (Tadeo)', e.bil);
+    await evaluar(cli, 'window.__posts=[]; confirmarCobroRuta()');
+    p = await posts(cli, 'marcarCobrado');
+    chequear(p.length === 1 && p[0].quien === S && p[0].billeteraVuelto === T, 'marcarCobrado: quien Santos, billeteraVuelto Tadeo', JSON.stringify(p[0] || {}).slice(0, 220));
 
     const errs = JSON.parse(await evaluar(cli, 'JSON.stringify(window.__errores||[])'));
     chequear(errs.length === 0, 'sin errores de JS', JSON.stringify(errs).slice(0, 200));
