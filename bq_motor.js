@@ -651,7 +651,9 @@ function _doGetBusqueda() {
 
     // Cliente agrupado (solo si NO entregado: no debe aparecer en ARMADO).
     // Para Depósito agregamos la semana al cKey: cada semana tiene su propia card.
-    if (!yaEntregado) {
+    /* (9/11/2026) Lo recibido del depósito ya está en el freezer: no es una bolsa por armar.
+       Pasaba con lo recibido EN la semana (la carne del domingo): solo se salteaban las de antes. */
+    if (!yaEntregado && !(esDepCanal && esRecibido)) {
       var cKey = cliente + '|' + nPedido + (esDepCanal ? ('|sem' + semEntPed + '-' + anioEntPed) : '');
       if (!porCliente[cKey]) porCliente[cKey] = { n: cliente, canal: canal, dir: dir, tel: tel, ped: nPedido, items: [], ing: 0, semEnt: semEntPed, anioEnt: anioEntPed, vendedor: (canal === 'Red' && entInfo ? (entInfo.vendedor || '') : '') };
       porCliente[cKey].items.push({ prod: _renameProd(producto), abbr: abbr, q: qty, pv: ingresoT, est: estado });
