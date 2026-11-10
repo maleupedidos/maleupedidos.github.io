@@ -192,7 +192,7 @@ const txt = (cli, sel) => ev(cli, `window.__tx(document.querySelector(${JSON.str
         await txt(cli, '#hRetail .rt-hl'));
     chk('B2B $192.000', tiene(/^B2B/, /\$192\.000/), fila(/^B2B/));
     const cat = await txt(cli, '#hRetail .rt-cat') || '';
-    chk('Catering se dice aparte y no suma', /Catering \$300\.000/.test(cat) && /no es retail/.test(cat), cat);
+    chk('Catering se dice aparte y no suma', /Catering \$300\.000/.test(cat) && /aparte del retail/.test(cat), cat);
     const copia = await ev(cli, `decodeURIComponent((document.querySelector('#hRetail .rt-copy')||{getAttribute:function(){return ''}}).getAttribute('data-copy')||'')`);
     chk('"Copiar" arma el resumen con los mismos numeros', /Facturado \$492\.400/.test(copia || '') && /Home \$115\.000/.test(copia || '') && /Otras zonas \$80\.000/.test(copia || ''), copia);
     /* El ticket también viaja en el texto que se copia: es el número por el que
