@@ -104,7 +104,7 @@ async function abrirLista(cli) {
     console.log('\n-- el cuadro del cliente, con sus dos pedidos --');
     let L = await ev(cli, LEER);
     chk('una tarjeta con #7301 y #7302 (y #7303, de otra casa, aparte)', !L.sin && L.ids.join() === '7301,7302' && !/#7303/.test(L.txt), L);
-    chk('ofrece «🎉 Juntar lo tildado en un evento», prendido', !!(L.abrir && !L.abrir.dis && /Juntar lo tildado en un evento/.test(L.abrir.txt)), L.abrir);
+    chk('ofrece «🎉 Juntar lo tildado en un evento», prendido', !!(L.abrir && !L.abrir.dis && /^Juntar lo tildado en un evento$/.test(L.abrir.txt)), L.abrir);
 
     await ev(cli, EN('.cg-junt-abrir button')); await pausa(300);
     L = await ev(cli, LEER);
@@ -135,8 +135,8 @@ async function abrirLista(cli) {
     await ev(cli, EN('.cg-junt-acc .cobro-btn-copiar')); await pausa(300);
     const cp = (await ev(cli, 'window.__copia')) || '';
     console.log('     ' + String(cp).replace(/\n/g, ' ⏎ ').slice(0, 400));
-    chk('el mensaje arranca con el título', /^🎉 Asado Prueba 7\/11/.test(cp), cp);
-    chk('lleva el total, cuánto pone cada uno y el alias', /💳 Total: \$168\.552/.test(cp) && /👥 Son 8: \$21\.100 cada uno/.test(cp) && /aliasprueba/.test(cp), cp);
+    chk('el mensaje arranca con el título', /^Asado Prueba 7\/11/.test(cp), cp);
+    chk('lleva el total, cuánto pone cada uno y el alias', /💳 Total: \$168\.552/.test(cp) && /(^|\n)Son 8: \$21\.100 cada uno/.test(cp) && /aliasprueba/.test(cp), cp);
     chk('y habla en plural («cada uno transfiere su parte»)', /cada uno transfiere su parte/.test(cp) && !/me transferís/.test(cp), cp);
     chk('la división sobrevive a que la pantalla se repinte', await (async () => { await ev(cli, `_cobGrpRepintar()`); await pausa(400); return /\$21\.100 cada uno/.test((await ev(cli, LEER)).txt); })());
 

@@ -57,7 +57,7 @@ const PEDS = [
     chk('«Crear» manda la juntada nueva', (ps || []).some((x) => x.action === 'pedidoGrupal' && x.valor === 'Cumple de Ana'), ps);
     await abrir('Home', '9002', 12);
     L = await cdp.evaluar(cli, LEER);
-    chk('marcado: dice «Es de la juntada …» y la chapita dice Juntada', /Es de la juntada Asado del Sábado/.test(L.txt) && /🎉 Juntada/.test(L.tag) && !/Grupal/.test(L.tag), { t: L.txt.slice(0, 160), tag: L.tag });
+    chk('marcado: dice «Es de la juntada …» y la chapita dice Juntada', /Es de la juntada Asado del Sábado/.test(L.txt) && /(^|\|)Juntada/.test(L.tag) && !/Grupal/.test(L.tag), { t: L.txt.slice(0, 160), tag: L.tag });
     await cdp.evaluar(cli, "window.__posts=[];[].slice.call(document.querySelectorAll('.ord-trajo-op')).filter(function(b){return /Sacar de la juntada/.test(b.textContent);})[0].click();1"); await pausa(500);
     ps = await cdp.evaluar(cli, 'window.__posts');
     chk('«Sacar de la juntada» manda vacío', (ps || []).some((x) => x.action === 'pedidoGrupal' && x.valor === '' && x.id === '9002'), ps);

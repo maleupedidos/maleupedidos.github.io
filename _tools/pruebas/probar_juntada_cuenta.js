@@ -94,7 +94,7 @@ const DATA = { ok: true, ck: 'g:asado prueba', titulo: 'Asado Prueba',
     console.log('\n-- los mensajes --');
     await ev(cli, `jntCopiarGrupo()`); await pausa(200);
     const mg = await ev(cli, `document.getElementById('jntMsg').textContent`);
-    chk('el del grupo: título, lo de Maleu, lo de afuera, total por persona y quién le pasa a quién', /^🎉 \*Asado Prueba\*/.test(mg) && /🥩 Maleu/.test(mg) && /🛒 Pan \(Juan\): \$8\.000/.test(mg) && /somos 5/.test(mg) && /Quién le pasa a quién:/.test(mg) && /alias \*maleump\*/.test(mg), mg);
+    chk('el del grupo: título, lo de Maleu, lo de afuera, total por persona y quién le pasa a quién', /^\*Asado Prueba\*/.test(mg) && /Maleu \(/.test(mg) && /Pan \(Juan\): \$8\.000/.test(mg) && !/[\u{1F300}-\u{1FAFF}]/u.test(mg) && /somos 5/.test(mg) && /Quién le pasa a quién:/.test(mg) && /alias \*maleump\*/.test(mg), mg);
     await ev(cli, `[].filter.call(document.querySelectorAll('#jntBody .jnt-copy'),function(b){return b.getAttribute('data-n')==='Pedro Prueba';})[0].click()`); await pausa(200);
     const mp = await ev(cli, `document.getElementById('jntMsg').textContent`);
     chk('el de Pedro: cuánto le toca, lo que puso y a quién le pasa', /^¡Hola Pedro!/.test(mp) && /te toca/.test(mp) && /Pusiste \$12\.000 \(Verduras\)/.test(mp) && /• A (Maleu|Anfitrion): \$/.test(mp), mp);
