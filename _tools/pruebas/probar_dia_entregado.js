@@ -120,28 +120,39 @@ const STUB = `
     const lun = await abrir('2026-09-14');
     chk('cada día es un botón y abre su detalle', /^Lunes 14\/9/.test(lun), lun);
     chk('dice que no hubo entregas', /No hubo entregas este día/.test(lun), lun);
-    chk('"Quedó sin marcar entregado · 1 pedido · $97.600" con Carolina y "ya cobrado"', /Quedó sin marcar entregado · 1 pedido · \$97\.600/.test(lun) && /Carolina Prueba Pilara \$97\.600 ya cobrado/.test(lun), lun);
+    chk('"Quedó sin marcar entregado · 1 pedido · $97.600" con Carolina y "ya cobrado"', /Quedó sin marcar entregado · 1 pedido · \$97\.600/.test(lun) && /· Carolina Prueba Pilara · #\d+ \$97\.600 ya cobrado/.test(lun), lun);
 
     console.log('\n-- martes 15: quiénes fueron --');
     const cMar = await cuadro('2026-09-15');
     const mar = await abrir('2026-09-15');
     const nMar = Number(((cMar || '').match(/mar 15 (\d+)/) || [])[1]);
-    chk('el cuadrado y el detalle dicen lo mismo (' + nMar + ' entregas)', nMar > 0 && new RegExp(nMar + ' entregas · \\$106\\.400').test(mar), { cMar, mar });
-    chk('Ana: dos pedidos del mismo viaje, un renglón de $40.000, sin cobrar', /Ana Prueba Home · 19:00 h · 2 pedidos en un viaje \$40\.000 sin cobrar/.test(mar), mar);
-    chk('Red: un renglón por cliente del representante, sin "(Red: …)"', /Final Uno Red · Vendedor Uno \$41\.500/.test(mar) && /Final Dos Red · Vendedor Uno \$24\.900/.test(mar) && !/\(Red:/.test(mar), mar);
+    chk('el cuadrado y el detalle dicen lo mismo (' + nMar + ' entregas)', nMar > 0 && new RegExp('Entregas ' + nMar + ' Vendido \\$106\\.400').test(mar), { cMar, mar });
+    chk('margen bruto del día con su %: $106.400 − $75.000 = $31.400 (30%)', /Margen bruto \$31\.400 30%/.test(mar), mar);
+    chk('ticket promedio: $106.400 / 3 = $35.467', /Ticket promedio \$35\.467/.test(mar), mar);
+    chk('cobrado: 0% · falta $40.000 (Red no cuenta: lo cobra Maleu al representante)', /Cobrado 0% falta \$40\.000/.test(mar), mar);
+    chk('Ana: dos pedidos del mismo viaje, un renglón de $40.000, sin cobrar', /1 Ana Prueba Home · 19:00 h · 2 pedidos en un viaje · #\d+ #\d+ \$40\.000 sin cobrar/.test(mar), mar);
+    chk('Red: un renglón por cliente del representante, sin "(Red: …)"', /Final Uno Red · Vendedor Uno · #\d+ \$41\.500/.test(mar) && /Final Dos Red · Vendedor Uno · #\d+ \$24\.900/.test(mar) && !/\(Red:/.test(mar), mar);
     chk('incluye el pedido elegido para el lunes y entregado el martes; nada que falte', !/entregar/.test(mar.replace('No suma a lo entregado', '')), mar);
     const nRen = await ev(cli, `document.querySelectorAll('#hRetail .rt-dd .rt-dd-f').length`);
     chk('3 renglones (Ana, Final Uno, Final Dos)', nRen === 3, nRen);
+    const orden = await ev(cli, `[].map.call(document.querySelectorAll('#hRetail .rt-dd .rt-dd-f'),function(f){return f.querySelector('.rt-dd-o').textContent+' '+f.querySelector('.rt-dd-i b').textContent;}).join(' | ')`);
+    chk('numeradas por hora: Ana (19:00) es la 1, las sin hora después por monto', orden === '1 Ana Prueba | 2 Final Uno | 3 Final Dos', orden);
+    /* Tocar el renglón abre el PEDIDO (no la ficha del cliente); cada número abre el suyo. */
+    const abreRen = await ev(cli, `(function(){var o=window.openOrdDetail,got=[];window.openOrdDetail=function(h,n,r){got.push(h+'#'+n);};
+      var f=document.querySelector('#hRetail .rt-dd .rt-dd-f');f.click();
+      [].forEach.call(f.querySelectorAll('.rt-dd-n'),function(b){b.click();});
+      window.openOrdDetail=o;return got.join(',');})()`);
+    chk('tocar el renglón abre el pedido, y cada número abre el suyo (sin abrir también el renglón)', /^Home#\d+,Home#\d+,Home#\d+$/.test(abreRen || '') && abreRen.split(',')[1] !== abreRen.split(',')[2], abreRen);
 
     console.log('\n-- hoy miércoles 16 --');
     const mie = await abrir('2026-09-16');
-    chk('Beto entregado y sin cobrar', /1 entrega · \$17\.000/.test(mie) && /Beto Prueba Home \$17\.000 sin cobrar/.test(mie), mie);
-    chk('"Falta entregar hoy" el club, sin decir cobrado', /Falta entregar hoy · 1 pedido · \$26\.000/.test(mie) && /Socio Club \(Champagnat\) Club Champagnat \$26\.000/.test(mie) && !/ya cobrado/.test(mie), mie);
+    chk('Beto entregado y sin cobrar', /Entregas 1 Vendido \$17\.000/.test(mie) && /1 Beto Prueba Home · #\d+ \$17\.000 sin cobrar/.test(mie), mie);
+    chk('"Falta entregar hoy" el club, sin decir cobrado', /Falta entregar hoy · 1 pedido · \$26\.000/.test(mie) && /Socio Club \(Champagnat\) Club Champagnat · #\d+ \$26\.000/.test(mie) && !/ya cobrado/.test(mie), mie);
 
     console.log('\n-- viernes 18: lo que viene --');
     const vie = await abrir('2026-09-18');
     chk('"Para entregar · 2 pedidos · $70.000" (el cancelado no aparece)', /Para entregar · 2 pedidos · \$70\.000/.test(vie) && !/Cancelado/.test(vie), vie);
-    chk('Eli "ya cobrado"', /Eli Prueba Home \$20\.000 ya cobrado/.test(vie), vie);
+    chk('Eli "ya cobrado"', /Eli Prueba Home · #\d+ \$20\.000 ya cobrado/.test(vie), vie);
     await ev(cli, `rtDiaVer('2026-09-18')`); await pausa(200);
     chk('tocar de nuevo el mismo día lo cierra', (await ev(cli, `document.querySelectorAll('#hRetail .rt-dd').length`)) === 0);
 
@@ -149,7 +160,7 @@ const STUB = `
     const k0 = await ev(cli, `window.__tx(document.querySelector('#hRetail .rt-k'))`);
     chk('"Esta semana" de Ventas retail = $123.400', /Facturado \$123\.400/.test(k0 || ''), k0);
     let suma = 0;
-    for (const iso of ['2026-09-14', '2026-09-15', '2026-09-16']) { const t = await abrir(iso); const m = t.match(/entregas? · \$([\d.]+)/); suma += m ? Number(m[1].replace(/\./g, '')) : 0; }
+    for (const iso of ['2026-09-14', '2026-09-15', '2026-09-16']) { const t = await abrir(iso); const m = t.match(/Vendido \$([\d.]+)/); suma += m ? Number(m[1].replace(/\./g, '')) : 0; }
     chk('la suma de los detalles de cada día da $123.400', suma === 123400, suma);
 
     console.log('\n-- pantalla (abierto el martes) --');

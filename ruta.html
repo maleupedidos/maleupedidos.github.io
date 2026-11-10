@@ -716,6 +716,11 @@ button.cobro-prods-copy{flex-shrink:0;border:1px solid #E8DFC4;background:#fff;c
 .cg-pago-in span{font-weight:800;color:#8D6E63}
 .cg-pago-in input{flex:1;min-width:0;border:none;outline:none;font-family:inherit;font-size:16px;font-weight:700;color:#5D4037;padding:8px 0;background:transparent}
 .cg-pago-msg{font-size:12px;margin-top:6px;line-height:1.35;font-weight:700}
+.cg-junt-abrir{margin-top:8px}.cg-junt-abrir .cg-mini{min-height:44px;width:100%}
+.cg-junt-acc{display:flex;gap:8px;margin-top:8px;flex-wrap:wrap}.cg-junt-acc>button{min-height:44px}
+.cg-junt-acc .cobro-btn-cobrado,.cg-junt-acc .cobro-btn-copiar{flex:1;min-width:0}
+.cg-div-in input{width:100%;min-width:0;min-height:42px}.cg-div-in span{color:#8A7A6E;font-size:12.5px;font-weight:700;white-space:nowrap}
+.cg-div-r{display:flex;align-items:center;font-size:13px;color:#5D4037;white-space:nowrap}.cg-div-r b{font-size:17px;margin-right:4px}
 .cg-pago-msg.ok{color:#2E7D32}.cg-pago-msg.err{color:#C62828}
 .cobro-card-actions .cg-cobrar{font-size:15px;font-weight:900;letter-spacing:.01em}
 .cg-cobrar:disabled{background:#D7CCC8;cursor:default}
@@ -6922,6 +6927,97 @@ function cobGrpComprobante(btn){
   var i=idxs.length?idxs[0]:pendientesCobro.indexOf(_cobGrpItems(btn.getAttribute('data-ck'))[0]);
   if(i>=0)cobroPedirComprobante(i);
 }
+/* ══ JUNTAR PEDIDOS EN UN EVENTO, DESDE COBROS (10/11/2026) ════════════════════════════════════════════════════════
+   Tadeo: «estos 2 pedidos (#2403 la carne, #2404 el Franui) son de un mismo asado: unir pedidos y ponerles un título,
+   y ver el total para pasarle la división a los comensales». La JUNTADA ya existía (26/10: la marca `grp` del pedido,
+   la tarjeta 🎉 de abajo), pero solo se ponía desde la ficha de cada pedido, de a uno. Esto la pone desde acá, a todo
+   lo tildado de una vez, con la MISMA acción (`pedidoGrupal` → `pedido_grupal_directo`): no hay una segunda forma de
+   juntar. Es una etiqueta: no toca la plata, ni el stock, ni la venta de cada pedido. */
+var _cobJuntAb={}, _cobDiv={};
+function cobJuntAbrir(btn){var ck=btn.getAttribute('data-ck');_cobJuntAb[ck]=!_cobJuntAb[ck];_cobGrpRepintar(ck);
+  if(_cobJuntAb[ck])setTimeout(function(){var el=document.getElementById('cobrosContent'),i=el&&el.querySelector('.cg-junt-in');if(i)i.focus();},50);}
+/* Las juntadas de los últimos 21 días (para sumar a una que ya existe con el MISMO texto). */
+function _cobJuntRecientes(){
+  var desde=Date.now()-21*86400000, vistos={}, out=[];
+  ((typeof D!=='undefined'&&D&&D.pedidos)||[]).forEach(function(x){
+    var g=String(x.grp||'').trim(); if(!g||/^s[ií]$/i.test(g))return;
+    var m=String(x.dee||'').match(/^(\d{4})-(\d{2})-(\d{2})/); if(m&&new Date(+m[1],+m[2]-1,+m[3]).getTime()<desde)return;
+    var k=_cobEventoNorm(g); if(vistos[k])return; vistos[k]=1; out.push(g);
+  });
+  return out.slice(0,5);
+}
+function cobJuntElegir(btn){var card=btn.closest('.cg-card'),i=card&&card.querySelector('.cg-junt-in');if(i){i.value=btn.getAttribute('data-n');i.focus();}}
+/* Marca (o desmarca, con '') los pedidos de a uno, en orden. Contesta cuántos salieron y cuáles no. */
+function _cobJuntMarcar(items,valor){
+  var ok=0, mal=[];
+  if(typeof _ordenPost!=='function')return Promise.resolve({ok:0,mal:items.map(function(p){return p.id;})});
+  return items.reduce(function(pr,p){return pr.then(function(){
+    return _ordenPost({action:'pedidoGrupal',hoja:p.h,row:Number(p.r)||0,id:String(p.id),valor:valor,clientOpId:_pfId()})
+      .then(function(r){return r.json();})
+      .then(function(d){
+        if(!(d&&d.ok)){mal.push(p.id);return;}
+        ok++; p.grp=valor;
+        ((typeof D!=='undefined'&&D&&D.pedidos)||[]).forEach(function(x){if(x.h===p.h&&String(x.n)===String(p.id))x.grp=valor;});
+      },function(){mal.push(p.id);});
+  });},Promise.resolve()).then(function(){return {ok:ok,mal:mal};});
+}
+function cobJuntar(btn){
+  var ck=btn.getAttribute('data-ck'), card=btn.closest('.cg-card'), inp=card&&card.querySelector('.cg-junt-in');
+  var tit=String((inp&&inp.value)||'').replace(/\s+/g,' ').trim().slice(0,80);
+  if(tit.length<3||/^s[ií]$/i.test(tit)){showToast('Ponele un nombre, ej: Asado sáb 7/11');if(inp)inp.focus();return;}
+  var items=_cobGrpItems(ck).filter(function(p){return _cobGrpOn(ck,p);});
+  if(!items.length){showToast('Tildá qué pedidos son del evento');return;}
+  var no=items.filter(function(p){return ['Home','Pilar','Red'].indexOf(p.h)<0;});
+  if(no.length){showToast('Los pedidos de '+no[0].h+' no se pueden juntar (#'+no[0].id+')');return;}
+  /* Sin foco: Cobros no se repinta con un campo enfocado (no cerrarle el teclado del iPhone) y quedaba en «Juntando…». */
+  try{if(document.activeElement&&document.activeElement.blur)document.activeElement.blur();}catch(e){}
+  btn.disabled=true; btn.textContent='Juntando…';
+  _cobJuntMarcar(items,tit).then(function(r){
+    delete _cobJuntAb[ck];
+    if(r.mal.length)showToast('No pude juntar '+r.mal.map(function(n){return '#'+n;}).join(', ')+(r.ok?' (los otros '+r.ok+' sí)':'')+'. Probá de nuevo');
+    else showToast('🎉 Listo: '+(r.ok===1?'el pedido quedó':'los '+r.ok+' pedidos quedaron')+' en «'+tit+'»');
+    _cobGrpRepintar();
+  });
+}
+/* Separar: les saca la marca a TODOS los pedidos del evento (vuelven a la tarjeta de su cliente). */
+function cobJuntSeparar(btn){
+  var ck=btn.getAttribute('data-ck'), items=_cobGrpItems(ck);
+  if(!items.length)return;
+  if(!confirm('¿Separar «'+String(items[0].grp||'')+'»? Los '+items.length+' pedidos vuelven a la tarjeta de cada cliente. No cambia ningún monto.'))return;
+  try{if(document.activeElement&&document.activeElement.blur)document.activeElement.blur();}catch(e){}
+  btn.disabled=true; btn.textContent='Separando…';
+  _cobJuntMarcar(items,'').then(function(r){
+    if(r.mal.length)showToast('No pude separar '+r.mal.map(function(n){return '#'+n;}).join(', ')+'. Probá de nuevo');
+    else showToast('Listo: separados');
+    _cobGrpRepintar();
+  });
+}
+/* La división entre los comensales: redondeada para arriba a los $100 (nadie transfiere $21.069). */
+function _cobDivCada(total,n){return n>1?Math.ceil(total/n/100)*100:0;}
+function cobDivInput(inp){
+  var ck=inp.getAttribute('data-ck'), n=Math.min(200,Math.round(Number(String(inp.value||'').replace(/[^0-9]/g,''))||0));
+  _cobDiv[ck]=n;
+  var tot=Number(inp.getAttribute('data-t'))||0, r=inp.closest('.cg-pago')&&inp.closest('.cg-pago').querySelector('.cg-div-r');
+  if(r)r.innerHTML=n>1?'<b>'+_cobroPesos(_cobDivCada(tot,n))+'</b> cada uno':'';
+}
+function cobJuntCopiar(btn){
+  var ck=btn.getAttribute('data-ck'), items=_cobGrpItems(ck);
+  var sel=items.filter(function(p){return _cobGrpOn(ck,p);}); if(!sel.length)sel=items;
+  if(!sel.length)return;
+  var tit=String(sel[0].grp||'').trim(), tot=0; sel.forEach(function(p){tot+=Number(p.$)||0;});
+  var todosEnt=sel.every(function(p){return p.es==='Entregado';});
+  var l=_cobroMsgJunto(sel,null,'',todosEnt).split('\n');
+  l[0]='🎉 '+tit+(todosEnt?' — el total de lo que llevamos 🧡':' — el total del pedido 🧡');
+  var n=_cobDiv[ck]||0;
+  if(n>1){
+    var i=l.findIndex(function(x){return /^💳 Total:/.test(x);});
+    if(i>=0)l.splice(i+1,0,'👥 Son '+n+': '+_cobroPesos(_cobDivCada(tot,n))+' cada uno');
+  }
+  l=l.map(function(x){return x==='Cuando puedas me transferís. ¡Gracias!'?(n>1?'Cuando puedan, cada uno transfiere su parte. ¡Gracias!':'Cuando puedan me transfieren. ¡Gracias!'):x;});
+  var txt=l.join('\n');
+  rutCopiarTexto(txt,'✓ Copiado — pegalo en el grupo del evento');
+  _cobroMostrarMsg(btn,txt);
+}
 /* Lo que lleva un pedido, corto: los dos primeros productos y cuantos mas. */
 function _cobGrpProds(p){
   var it=_sortProds((p&&p.p)||[]);
@@ -7024,6 +7120,27 @@ function _cobroClienteGrupoHTML(grp){
     c+='<div class="cg-cada">'+(porD.length?porD.map(function(g){
         return '<button type="button" class="cobro-btn-cobrado cg-cobrar cg-cobrar-de"'+a+' data-n="'+_rtcEsc(g.n)+'" onclick="cobGrpCobrarDe(this)">💰 Cobrar a '+_rtcEsc(g.n)+' · '+_cobroPesos(g.monto)+'</button>';
       }).join(''):'<button type="button" class="cobro-btn-cobrado cg-cobrar" disabled>Tildá qué te pagaron</button>')+'</div>';
+  }
+  /* (10/11/2026) Juntar en un evento / dividir entre los comensales / separar. */
+  if(esEv){
+    var tDiv=selN?selT:total, nDiv=_cobDiv[ck]||0;
+    c+='<div class="cg-pago cg-div"><label class="cg-pago-l">¿Entre cuántos lo dividen?</label>'
+      +'<div class="cg-pago-r"><span class="cg-pago-in cg-div-in"><input type="text" inputmode="numeric" placeholder="Ej: 8" maxlength="3"'+a+' data-t="'+Math.round(tDiv)+'"'
+      +' value="'+(nDiv||'')+'" oninput="cobDivInput(this)"><span>personas</span></span>'
+      +'<span class="cg-div-r">'+(nDiv>1?'<b>'+_cobroPesos(_cobDivCada(tDiv,nDiv))+'</b> cada uno':'')+'</span></div>'
+      +'<div class="cg-junt-acc"><button type="button" class="cobro-btn-copiar"'+a+' onclick="cobJuntCopiar(this)">📋 Copiar para el grupo</button>'
+      +'<button type="button" class="cg-mini cg-junt-sep"'+a+' onclick="cobJuntSeparar(this)">Separar</button></div>'
+      +'<div class="cg-pago-msg" style="color:var(--ink3,#7A6A5E);font-weight:600">Sobre '+_cobroPesos(tDiv)+', redondeado para arriba a los $100. El mensaje lleva el detalle, el total, cuánto pone cada uno y el alias.</div></div>';
+  }else if(_cobJuntAb[ck]){
+    var rec=_cobJuntRecientes();
+    c+='<div class="cg-pago cg-junt"><label class="cg-pago-l">🎉 Juntar '+(selN===1?'el pedido tildado':'los '+selN+' tildados')+' en un evento</label>'
+      +'<div class="cg-pago-r"><span class="cg-pago-in" style="flex:1"><input type="text" class="cg-junt-in" maxlength="80" placeholder="Ej: Asado sáb 7/11"'+a+' onkeydown="if(event.key===\'Enter\')this.closest(\'.cg-card\').querySelector(\'.cg-junt-ok\').click()"></span></div>'
+      +(rec.length?'<div class="cg-chips" style="margin-top:6px">'+rec.map(function(g){return '<button type="button" class="cg-chip" data-n="'+_rtcEsc(g)+'" onclick="cobJuntElegir(this)">'+_rtcEsc(g)+'</button>';}).join('')+'</div>':'')
+      +'<div class="cg-junt-acc"><button type="button" class="cobro-btn-cobrado cg-junt-ok"'+a+(selN?'':' disabled')+' onclick="cobJuntar(this)">Juntar'+(selN?' · '+_cobroPesos(selT):'')+'</button>'
+      +'<button type="button" class="cg-mini"'+a+' onclick="cobJuntAbrir(this)">Cancelar</button></div>'
+      +'<div class="cg-pago-msg" style="color:var(--ink3,#7A6A5E);font-weight:600">Es una etiqueta: cada pedido se cobra y se cuenta igual que ahora. En el CRM no se le suma al consumo de la casa.</div></div>';
+  }else{
+    c+='<div class="cg-junt-abrir"><button type="button" class="cg-mini"'+a+(selN?'':' disabled')+' onclick="cobJuntAbrir(this)">🎉 Juntar lo tildado en un evento</button></div>';
   }
   if(selN&&(selN<items.length||selParte)){
     var resto=0;items.forEach(function(p){resto+=Math.max(0,Math.round(Number(p.$)||0)-_cobGrpParte(ck,p).monto);});
