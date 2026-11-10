@@ -39,7 +39,8 @@ const PEDS = [
       var vw=document.documentElement.clientWidth;
       return {hay:!!bx,txt:bx?bx.textContent.replace(/\\s+/g,' '):'',ops:bx?[].slice.call(bx.querySelectorAll('.ord-junt-op')).map(function(b){return b.textContent.replace(/\\s+/g,' ').trim();}):[],
         afuera:bx?[].slice.call(bx.querySelectorAll('button,input')).filter(function(b){var q=b.getBoundingClientRect();return q.width>0&&q.right>vw+1;}).length:0,
-        tag:[].slice.call(document.querySelectorAll('.ord-tag')).map(function(t){return t.textContent;}).join('|')};})()`;
+        /* (10/11/2026) La juntada con nombre ya no es una chapita: es el botón «🎉 Juntada X · La cuenta ›» (638). */
+        tag:[].slice.call(document.querySelectorAll('.ord-tag,.ofx-jnt')).map(function(t){return t.textContent;}).join('|')};})()`;
     await abrir('Home', '9001', 11);
     let L = await cdp.evaluar(cli, LEER);
     chk('la ficha pregunta «¿Es de una juntada?»', L.hay && /¿Es de una juntada\?/.test(L.txt), L.txt.slice(0, 200));
