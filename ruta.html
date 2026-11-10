@@ -716,6 +716,7 @@ button.cobro-prods-copy{flex-shrink:0;border:1px solid #E8DFC4;background:#fff;c
 .cg-pago-in span{font-weight:800;color:#8D6E63}
 .cg-pago-in input{flex:1;min-width:0;border:none;outline:none;font-family:inherit;font-size:16px;font-weight:700;color:#5D4037;padding:8px 0;background:transparent}
 .cg-pago-msg{font-size:12px;margin-top:6px;line-height:1.35;font-weight:700}
+.rtc-parc{color:#2E7D32;font-weight:700}
 .cobro-red-mano{margin:8px 0;padding:9px 11px;border:1px solid #C8E6C9;border-radius:10px;background:#F1F8F1;font-size:12.5px;color:#2E5E32}
 .cobro-red-mano-h{display:flex;justify-content:space-between;gap:8px;font-weight:800;margin-bottom:4px}
 .cobro-red-mano-f{display:flex;justify-content:space-between;gap:8px;padding:2px 0}
@@ -5897,10 +5898,15 @@ function rutRenderRuta(){
   var cobrado=isCobrado(e);
   // Si YA esta cobrado, e.$ (Facturado del backend) ya incluye la propina: no
   // se vuelve a sumar (bug Sandra 28/05: $102.620 con la propina contada 2 veces).
-  var totalFact=cobrado?e.$:(e.$+prop);
+  /* (10/11/2026) LO PAGADO A CUENTA SE RESTA. `entregas` manda `$` = el total del pedido y `cobradoParcial` = lo ya pagado
+     (un pago a cuenta, o un pedido cobrado que se editó y subió: 637). La tarjeta mostraba el total entero: Eugenia #2412
+     decía «Falta cobrar $234.584,5» con $224.014,50 ya pagados (faltaban $10.570). */
+  var _parc=cobrado?0:_rtcParcial(e);
+  var totalFact=cobrado?e.$:Math.max(0,Math.round((Number(e.$)||0)-_parc+prop));
   h+='<section class="rtc-sec rtc-cobro'+(cobrado?' ok':'')+'">'
     +'<div class="rtc-sec-h"><span class="rtc-sec-t">Cobro</span><span class="rtc-est '+(cobrado?'ok':'falta')+'">'+(cobrado?_rtcIco('ok',13)+'Ya pagó':'Falta cobrar')+'</span></div>'
-    +'<div class="rtc-monto"><b>'+formatMoney(totalFact)+'</b><span>'+_rtcEsc(_rtcFpTxt(e.fp,cobrado))+'</span></div>';
+    +'<div class="rtc-monto"><b>'+formatMoney(Math.round(totalFact))+'</b><span>'+_rtcEsc(_rtcFpTxt(e.fp,cobrado))+'</span></div>'
+    +(_parc>0?'<div class="rtc-det rtc-parc">Ya pagó '+formatMoney(Math.round(_parc))+' a cuenta, de '+formatMoney(Math.round(Number(e.$)||0))+'.</div>':'');
   if(e._combo){
     h+='<div class="rtc-combo">'+e._pedidos.length+' pedidos del mismo cliente, van juntos:';
     e._pedidos.forEach(function(p,i){
@@ -8961,6 +8967,16 @@ function _resetCobroSeccionesColapsables(){
 }
 
 // Abre el modal con defaults inteligentes según fp del pedido.
+/* Lo que el cliente ya pagó a cuenta de un pedido de RUTA: `cobradoParcial` de `entregas`, o lo que COBROS sabe del mismo
+   pedido (una copia vieja de `entregas` puede no traerlo). */
+function _rtcParcial(e){
+  if(!e)return 0;
+  var v=Number(e.cobradoParcial)||0;
+  if(!(v>0)&&typeof pendientesCobro!=='undefined'&&Array.isArray(pendientesCobro)){
+    for(var i=0;i<pendientesCobro.length;i++){var pc=pendientesCobro[i];if(pc&&pc.h===e.h&&String(pc.id)===String(e.id)){v=Number(pc.cobradoParcial)||0;break;}}
+  }
+  return v>0?v:0;
+}
 function abrirCobroRuta(key){
   _cobroTocado=false;
   // Combo: abrir modal con total combinado. Estado guarda los pedidos para distribuir.
@@ -8997,13 +9013,20 @@ function abrirCobroRuta(key){
     showToast('Ya está cobrado');return;
   }
   var fp=ent.fp||'Efectivo';
+  /* (10/11/2026) Con algo pagado a cuenta, el cuadro cobra el SALDO (como `abrirCobroPendiente`): el `$` de `entregas` es
+     el total, y el cobro del resto descuenta lo pagado a cuenta en la base. Va una copia: la entrega de la lista no cambia. */
+  var _parcR=_rtcParcial(ent);
+  if(_parcR>0)ent=Object.assign({},ent,{'$':Math.max(0,Math.round(((Number(ent.$)||0)-_parcR)*100)/100),totalOriginal:Number(ent.$)||0});
   // Total según la FP actual (_descDelCobro). Si cambia la FP, _setCobroFp recalcula.
-  _cobroRutaState={key:key,combo:false,ent:ent,total:0,totalOriginal:Number(ent.$)||0,fp:fp,cambioOpen:false,aFavOpen:false,entregar:true};
+  _cobroRutaState={key:key,combo:false,ent:ent,total:0,totalOriginal:Number(ent.totalOriginal||ent.$)||0,fp:fp,cambioOpen:false,aFavOpen:false,entregar:true,
+    yaCobrado:_parcR,esParcialPrev:_parcR>0};
   var total=_cobroRutaState.total=_cobroTotal(_cobroRutaState);
 
   // Setear UI
   document.getElementById('cobroRutaTitle').textContent='Cobrar a '+ent.c;
-  document.getElementById('cobroRutaSub').textContent='Pedido '+formatMoney(total)+' · '+ent.h+' #'+ent.id;
+  document.getElementById('cobroRutaSub').textContent=_parcR>0
+    ? 'Saldo '+formatMoney(Math.round(total))+' · '+ent.h+' #'+ent.id+' (ya pagó '+formatMoney(Math.round(_parcR))+' a cuenta de '+formatMoney(Math.round(_cobroRutaState.totalOriginal))+')'
+    : 'Pedido '+formatMoney(total)+' · '+ent.h+' #'+ent.id;
   document.querySelectorAll('#cobroRutaFp .cobro-pill').forEach(function(p){p.classList.toggle('on',p.getAttribute('data-fp')===fp)});
   _setMoneyInput('cobroRecEf',_autoCargaEf(fp,total));
   _setMoneyInput('cobroRecMP',_autoCargaMP(fp,total));
