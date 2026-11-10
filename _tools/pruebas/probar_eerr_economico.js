@@ -141,6 +141,9 @@ const LEER = `(function(){
     console.log('\n== EERR economico · ' + ANCHO + 'px · ' + APP + ' ==');
     await cli.enviar('Page.navigate', { url: BASE + '/' + APP });
     if (!await esperar(cli, `typeof go==='function' && window.D && D.pedidos && D.pedidos.length===${PEDIDOS.length} && Array.isArray(D.gastos)`, 90000)) throw new Error('el ERP no cargo los datos stubbeados');
+    /* (10/11/2026) La sesion de la prueba es inventada y no tiene sesion de la base: a los 60 s el chequeo de reentrada
+       tapaba todo con «Entrá de nuevo con tu PIN» y la prueba fallaba por tiempo, no por el EERR. Se apaga aca adentro. */
+    await ev(cli, `window._reentradaHaceFalta=function(){return false}; var _re=document.getElementById('reentrada'); if(_re)_re.remove(); true`);
     await ev(cli, `document.querySelector('#p-inicio .ist[data-st="eerr"]').click()`);
     if (!await esperar(cli, `!!window.VD && document.getElementById('eerrBody').innerText.length>200`, 60000)) throw new Error('el EERR no pinto');
     await pausa(400);
@@ -191,6 +194,9 @@ const LEER = `(function(){
     /* (10/11/2026) Arriba: el resultado, «de cada $100» y los seis numeros de la distribuidora. */
     const tl = await ev(cli, `[].map.call(document.querySelectorAll('#eerrKpis .ek'),function(e){return e.innerText.replace(/\\s+/g,' ');})`);
     chk('seis numeros de la distribuidora, con septiembre al lado', tl.length === 6 && tl.filter(t => /septiembre/.test(t)).length >= 4, tl);
+    /* (634) Las familias reparten lo vendido sin propina y el costo de las ventas: sumadas, dan lo mismo que el EERR. */
+    const fz = await ev(cli, `(function(){var F=_eerrFamilias(10,2026),R=_eerrCalc(10,2026);if(!F)return {sinDatos:true};var f=0,c=0;F.fams.forEach(function(x){f+=x.f;c+=x.c;});return {f:f,esperoF:R.totFact-R.propinas,c:c,esperoC:R.totCMV-R.cmvCat-(R.cmvRed||0),n:F.fams.length};})()`);
+    chk('las familias suman lo vendido y el costo del EERR', fz && fz.n > 0 && cerca(fz.f, fz.esperoF) && cerca(fz.c, fz.esperoC), fz);
     chk('«de cada $100» suma 100', await ev(cli, `(function(){var t=0;document.querySelectorAll('#eerrCada100 .ec100-r').forEach(function(r){var v=Number(r.querySelector('b').textContent.replace('$','').replace(',','.'));t+=r.classList.contains('per')?-v:v;});return Math.abs(t-100)<0.6;})()`));   /* con perdida: lo gastado − la perdida = 100 */
     chk('punto de equilibrio en palabras', /Para no perder plata en octubre hay que vender/.test(await ev(cli, `(document.getElementById('eerrEquilibrio')||{}).innerText||''`)));
     chk('sin metas de EBITDA, glosario ni signos de pregunta', await ev(cli, `!/EBITDA|GLOSARIO|Aspiracional/i.test(document.getElementById('eerrBody').innerText) && document.querySelectorAll('#eerrBody .eerr-help-i').length===0`));

@@ -123,6 +123,10 @@ html.listo #boot{opacity:0;pointer-events:none;transition:opacity .25s}
   .ecn-t{grid-area:t;text-align:left!important;font-size:12.5px!important}.ecn-m{grid-area:m;align-self:end}
   .ec100-m{min-width:0}
 }
+
+/* (634) Cada familia de producto */
+.efa-esp{font-size:13px;color:var(--ink3);padding:6px 0 4px}
+.efa-re{min-height:36px;margin-left:6px;padding:0 12px;border:1px solid var(--cd);border-radius:8px;background:#fff;font:inherit;font-size:12.5px;font-weight:700;color:var(--b);cursor:pointer}
 </style>
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
@@ -35124,6 +35128,74 @@ function _eerrAlDia(mn,anio,dia){
   });
   return o;
 }
+/* (10/11/2026) UN PLAN MENSUAL QUE FALTA. Octubre no tenia cargado Claude (~$163.000, pagado el 19 de julio, agosto y
+   septiembre) ni Movistar (~$36.500): el EERR de un mes cerrado cuenta los planes por lo pagado, asi que el resultado salia
+   ~$200.000 mas alto y nada lo decia. Un plan que se pago los DOS meses anteriores y no aparece en este se avisa (no se
+   inventa el gasto: puede haberse dado de baja). En el mes en curso, solo pasado el dia en que se suele pagar (+3). */
+function _eerrPlanKey(con){ return String(con||'').toLowerCase().split(/\s[·\-|:]\s|\s+mensual/)[0].normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim(); }
+function _eerrPlanesFaltan(mn,anio,A){
+  var NOM=['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+  function delMes(m,a){
+    var o={};
+    ((D&&D.gastos)||[]).forEach(function(g){
+      if(!_esDelMes(g,NOM[m-1],a))return;
+      var l=_gastoLinea(g)||{}; if(l.linea!=='planes')return;
+      var k=_eerrPlanKey(g.con); if(!k)return;
+      var dia=Number(String(g.f||'').split('/')[0])||0;
+      if(!o[k])o[k]={n:String(g.con||'').split(/\s[·\-|:]\s/)[0].trim(),m:0,dia:dia};
+      o[k].m+=Number(g.$)||0;
+    });
+    return o;
+  }
+  var p1=new Date(anio,mn-2,1),p2=new Date(anio,mn-3,1);
+  var este=delMes(mn,anio),m1=delMes(p1.getMonth()+1,p1.getFullYear()),m2=delMes(p2.getMonth()+1,p2.getFullYear());
+  var out=[];
+  Object.keys(m1).forEach(function(k){
+    if(!m2[k]||este[k])return;
+    if(A&&A.enCurso&&A.dia<=Math.min(28,(m1[k].dia||28)+3))return;
+    out.push({n:m1[k].n,m:m1[k].m,dia:m1[k].dia,mes:NOM[p1.getMonth()].toLowerCase()});
+  });
+  return out.sort(function(a,b){return b.m-a.m;});
+}
+/* (634, 10/11/2026) EL MARGEN POR FAMILIA. La base dice, para cada pedido, qué parte de lo vendido y del costo es de
+   cada familia (`ventas_familias_pantalla`); aca se reparte lo vendido (sin propina) y el costo REAL de cada pedido con
+   esos pesos, asi el total por familia da lo mismo que el renglon Ventas y el Costo de la mercaderia. */
+var _eerrFamW={}, _eerrFamPed={}, _eerrFamErr={};
+function _eerrFamPedir(mn,anio){
+  var ym=anio+'-'+mn, mesNom=['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'][mn-1];
+  if(_eerrFamPed[ym]||_eerrFamErr[ym])return;   /* en vuelo, o fallo: no se reintenta solo (seria un bucle) */
+  var ks=(window.VD||[]).filter(function(v){return v.k&&_esDelMes(v,mesNom,anio)&&!_eerrFamW.hasOwnProperty(v.k);}).map(function(v){return v.k;});
+  if(!ks.length)return;
+  _eerrFamPed[ym]=true;   /* en vuelo: se libera al volver (si fallo, queda el error y el boton Reintentar) */
+  if(typeof _sbPermiso!=='function'){_eerrFamErr[ym]='sin base';return;}
+  _sbPermiso(true).then(function(sb){
+    if(!sb)throw new Error('sin permiso de la base');
+    return fetch(sb.url+'/rest/v1/rpc/ventas_familias_pantalla',{method:'POST',
+      headers:{apikey:sb.key,Authorization:'Bearer '+sb.token,'Content-Type':'application/json'},body:JSON.stringify({p_keys:ks})});
+  }).then(function(r){ if(!r.ok)throw new Error('la base contestó '+r.status); return r.json(); })
+  .then(function(m){ ks.forEach(function(k){ _eerrFamW[k]=(m&&m[k])||null; }); delete _eerrFamErr[ym]; },
+        function(e){ _eerrFamErr[ym]=String((e&&e.message)||e); _eerrFamPed[ym]=false; })
+  .then(function(){ if(!_eerrFamErr[ym])_eerrFamPed[ym]=false; if(cur==='inicio'&&curSI==='eerr'&&eerrModo==='economico')rEERR(); });
+}
+/* null = todavia no llego; {fams:[...], ...} = la cuenta. */
+function _eerrFamilias(mn,anio){
+  var mesNom=['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'][mn-1];
+  var vs=(window.VD||[]).filter(function(v){return _esDelMes(v,mesNom,anio);});
+  var falta=vs.some(function(v){return v.k&&!_eerrFamW.hasOwnProperty(v.k);});
+  if(falta){_eerrFamPedir(mn,anio);return null;}
+  var F={},orden=[];
+  function fam(n){if(!F[n]){F[n]={n:n,f:0,c:0,q:0,u:'',ped:0};orden.push(n);}return F[n];}
+  vs.forEach(function(v){
+    var f=Number(v.$)||0,c=Number(v.costo)||0;
+    var k=v.canal==='Venta Directa'?(v.zona==='Pilar'?'Pilar':'Home'):v.canal;
+    if(k==='Home'||k==='Pilar'||k==='Clubes')f-=Math.max(0,Math.min(f,(Number(v.pEf)||0)+(Number(v.pTr)||0)));
+    var w=v.k?_eerrFamW[v.k]:null;
+    if(v.canal==='Catering'){var x=fam('Catering (eventos)');x.f+=f;x.c+=c;x.ped++;return;}
+    if(!w||!w.length){var y=fam('Sin detalle');y.f+=f;y.c+=c;y.ped++;return;}
+    w.forEach(function(r){var z=fam(r[0]);z.f+=f*r[1];z.c+=c*r[2];z.q+=Number(r[3])||0;z.u=r[4]||z.u;z.ped++;});
+  });
+  return {fams:orden.map(function(n){return F[n];}).sort(function(a,b){return b.f-a.f;})};
+}
 function _eerrCalc(mn,anio){
   if(!window.VD)return null;
   var mesNom=['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'][mn-1];
@@ -35639,6 +35711,12 @@ function rEERR_dual(body){
   if(eerrProvRespaldo()){
     html+='<div id="eerrProvRespaldoAviso" class="eerr-aviso"><b>⚠️ Provisiones de respaldo.</b> No llegó la hoja Provisiones_Fijas: sueldos, monotributo, alquiler y desgaste salen de la copia guardada en el código (al 8/10/2026). Volvé a entrar a esta pantalla para volver a pedirla.</div>';
   }
+  var _pf=_eerrPlanesFaltan(mn,anio,A);
+  if(_pf.length){
+    html+='<div class="eerr-aviso" id="eerrPlanFalta"><b>⚠️ Falta cargar '+(_pf.length>1?'planes mensuales':'un plan mensual')+'.</b> '
+      +_pf.map(function(p){return '<b>'+esc(p.n)+'</b> (se pagó los dos meses anteriores; en '+p.mes+' '+plata(p.m)+(p.dia?', el '+p.dia:'')+')';}).join(' · ')
+      +'. Si '+(_pf.length>1?'se pagaron':'se pagó')+', cargalo en Egresos: hoy el resultado de '+mesMin+' no '+(_pf.length>1?'los':'lo')+' tiene. Si se dio de baja, ignorá este aviso.</div>';
+  }
   var sinCosto=R.canales.filter(function(c){return c.f>0&&(c.c<=0||c.c/c.f<0.05);});
   if(sinCosto.length){
     html+='<div class="eerr-aviso"><b>⚠️ Falta cargar costos.</b> '+sinCosto.map(function(c){return esc(c.k)+' vendió '+plata(c.f)+' y tiene '+(c.c>0?'solo '+plata(c.c):'$0')+' de costo';}).join(' · ')+'. El margen de abajo está inflado hasta que se cargue.</div>';
@@ -35727,12 +35805,38 @@ function rEERR_dual(body){
         +'<span class="ecn-v"><b>'+plata(c.f)+'</b></span>'
         +'<span class="ecn-e">'+(n?f$(n)+'<small> entregas</small>':'—')+'</span>'
         +'<span class="ecn-t">'+(n?plata(c.f/n):'—')+'<small> por entrega</small></span>'
-        +'<span class="ecn-m"><b class="'+(mp>=25?'ok':(mp>=18?'':'mal'))+'">'+_dec(mp,1)+'%</b><small>'+plata(mb)+(mpP!==null&&!A.enCurso?' · '+(mp>=mpP?'▲':'▼')+' '+_dec(Math.abs(mp-mpP),1)+' pts':'')+'</small></span>'
+        +'<span class="ecn-m"><b class="'+(mp>=25?'ok':(mp>=18?'':'mal'))+'">'+_dec(mp,1)+'%</b><small>'+plata(mb)+(mpP!==null&&!A.enCurso?' · '+(Math.abs(mp-mpP)<0.05?'igual':(mp>=mpP?'▲':'▼')+' '+_dec(Math.abs(mp-mpP),1)+' pts'):'')+'</small></span>'
         +'</div>';
     });
     html+='<div class="ecn-pie">El margen bruto es lo que deja cada canal después de pagar la mercadería. En Red, lo vendido ya es neto de la comisión del representante.</div>';
     html+='</div>';
   }
+
+  /* ── Cada familia de producto (634) ── */
+  var FA=_eerrFamilias(mn,anio),FP=hayP?_eerrFamilias(pd.getMonth()+1,pd.getFullYear()):null;
+  html+='<div class="eerr-card" id="eerrFamilias"><div class="eerr-card-h">Cada familia de producto: cuánto vende y cuánto deja</div>';
+  if(!FA){
+    var _fe=_eerrFamErr[anio+'-'+mn];
+    html+='<div class="efa-esp">'+(_fe?'No pude traer el detalle de productos ('+esc(_fe)+'). <button type="button" class="efa-re" onclick="_eerrFamPed={};_eerrFamErr={};rEERR()">Reintentar</button>':'Trayendo qué productos llevó cada venta…')+'</div>';
+  } else if(FA.fams.length){
+    var fTF=FA.fams.reduce(function(a,x){return a+x.f;},0);
+    var FPm={};if(FP)FP.fams.forEach(function(x){FPm[x.n]=x;});
+    html+='<div class="ecn-h efa-h"><span>Familia</span><span>Vendido</span><span>Cantidad</span><span>Precio promedio</span><span>Margen bruto</span></div>';
+    FA.fams.forEach(function(x){
+      var mb=x.f-x.c,mp=x.f>0?mb/x.f*100:0,sh=fTF>0?x.f/fTF*100:0,kg=x.u==='kg';
+      var px=FPm[x.n],mpP=px&&px.f>0?(px.f-px.c)/px.f*100:null;
+      var cant=x.q>0?(kg?_dec(x.q,1)+' kg':f$(Math.round(x.q))+' u'):'—';
+      html+='<div class="ecn-r efa-r">'
+        +'<span class="ecn-n">'+esc(x.n)+'<i class="ecn-sh"><b style="width:'+sh.toFixed(1)+'%"></b></i><small>'+_dec(sh,0)+'% de lo vendido</small></span>'
+        +'<span class="ecn-v"><b>'+plata(x.f)+'</b></span>'
+        +'<span class="ecn-e">'+cant+'</span>'
+        +'<span class="ecn-t">'+(x.q>0?plata(x.f/x.q)+'<small> por '+(kg?'kg':'unidad')+'</small>':'—')+'</span>'
+        +'<span class="ecn-m"><b class="'+(mp>=25?'ok':(mp>=18?'':'mal'))+'">'+_dec(mp,1)+'%</b><small>'+plata(mb)+(mpP!==null&&!A.enCurso?' · '+(Math.abs(mp-mpP)<0.05?'igual':(mp>=mpP?'▲':'▼')+' '+_dec(Math.abs(mp-mpP),1)+' pts'):'')+'</small></span>'
+        +'</div>';
+    });
+    html+='<div class="ecn-pie">Lo vendido es sin propinas. El costo de cada venta es el real y se reparte entre sus productos según el costo de lista de cada uno: sumadas, las familias dan lo mismo que el costo de la mercadería de abajo (sin los gastos de catering ni los redondeos a proveedores).</div>';
+  }
+  html+='</div>';
 
   /* ── Los ultimos 6 meses (se dibujan despues de la tabla) ── */
   var serie=[];
