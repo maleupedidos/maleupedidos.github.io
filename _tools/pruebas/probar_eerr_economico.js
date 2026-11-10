@@ -88,8 +88,10 @@ const CAJA = { ts: 1, caja: {}, saldoBase: {}, movimientos: [], efMano: [], gast
 /* Lo esperado, a mano. Octubre al dia 8 de 31. */
 const FR = 8 / 31;
 const ESP = {
-  sep: { ventas: 10000000, mb: 2800000, vars: 50000 + 10 * 1000 + 100000, estr: 310000 + 155000 + 62000 + 2400000, amort: 31000, imp: 46500 },
-  oct: { ventas: 3000000, mb: 800000, vars: 4 * 1000 + 62000,
+  /* (10/11/2026) Las bolsas se cuentan de las MISMAS ventas que el renglon Ventas (las de Venta Directa del mes), no de
+     D.pedidos: septiembre tiene 2 ventas de Venta Directa y octubre 1. Los PEDIDOS de arriba ya no cuentan para esto. */
+  sep: { ventas: 10000000, mb: 2800000, vars: 50000 + 2 * 1000 + 100000, estr: 310000 + 155000 + 62000 + 2400000, amort: 31000, imp: 46500 },
+  oct: { ventas: 3000000, mb: 800000, vars: 1 * 1000 + 62000,
     estr: 2400000 * FR + 62000 * FR + 310000 * FR + 155000 * FR + 10000, amort: 31000 * FR, imp: 46500 * FR }
 };
 ESP.sep.res = ESP.sep.mb - ESP.sep.vars - ESP.sep.estr - ESP.sep.amort - ESP.sep.imp;
@@ -186,8 +188,10 @@ const LEER = `(function(){
     chk('el mes en curso va punteado', g.punteado === 1, g);
     chk('cada punto tiene su valor escrito', g.txt.indexOf('$10,0M') >= 0 && g.txt.indexOf('$3,00M') >= 0 && g.txt.indexOf('Oct') >= 0, g.txt);
     chk('el grafico ocupa su caja (no queda chiquito)', g.w >= (ANCHO <= 560 ? 300 : 340) && g.h >= 110, g);
-    const tl = await ev(cli, `[].map.call(document.querySelectorAll('#eerrBody .eerr-t'),function(e){return e.innerText.replace(/\\s+/g,' ');})`);
-    chk('cuatro numeros arriba, con septiembre al lado', tl.length === 4 && tl.every(t => /septiembre/.test(t)), tl);
+    /* (10/11/2026) Arriba: el resultado, «de cada $100» y los seis numeros de la distribuidora. */
+    const tl = await ev(cli, `[].map.call(document.querySelectorAll('#eerrKpis .ek'),function(e){return e.innerText.replace(/\\s+/g,' ');})`);
+    chk('seis numeros de la distribuidora, con septiembre al lado', tl.length === 6 && tl.filter(t => /septiembre/.test(t)).length >= 4, tl);
+    chk('«de cada $100» suma 100', await ev(cli, `(function(){var t=0;document.querySelectorAll('#eerrCada100 .ec100-r').forEach(function(r){var v=Number(r.querySelector('b').textContent.replace('$','').replace(',','.'));t+=r.classList.contains('per')?-v:v;});return Math.abs(t-100)<0.6;})()`));   /* con perdida: lo gastado − la perdida = 100 */
     chk('punto de equilibrio en palabras', /Para no perder plata en octubre hay que vender/.test(await ev(cli, `(document.getElementById('eerrEquilibrio')||{}).innerText||''`)));
     chk('sin metas de EBITDA, glosario ni signos de pregunta', await ev(cli, `!/EBITDA|GLOSARIO|Aspiracional/i.test(document.getElementById('eerrBody').innerText) && document.querySelectorAll('#eerrBody .eerr-help-i').length===0`));
 
