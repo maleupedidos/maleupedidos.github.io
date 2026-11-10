@@ -44,6 +44,15 @@ html.listo #boot{opacity:0;pointer-events:none;transition:opacity .25s}
 .cpl-btn{border:1px solid var(--ink3,#bbb);background:var(--bg,#fff);color:var(--ink,#222);font-weight:600}
 .cpl-no{border:none;background:transparent;color:var(--ink2,#555)}
 .pr-fila{border-top:1px solid rgba(128,128,128,.2);padding:10px 0}.pr-nom{font-weight:600;margin-bottom:6px}.pr-sku{font-weight:400;opacity:.6;font-size:12px}.pr-ins{display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end}.pr-ins label{display:flex;flex-direction:column;font-size:12px;opacity:.9;gap:2px}.pr-ins input:not([type=checkbox]){width:110px;padding:8px;border-radius:8px;border:1px solid rgba(128,128,128,.35);font-size:15px;background:transparent;color:inherit}.pr-cta input:not([type=checkbox]){width:150px}.pr-ins label.pr-chk{flex-direction:row;align-items:center;gap:6px;padding-bottom:8px}.pr-res{margin-top:6px;font-size:13px}.pr-ok{color:#1a7f37}.pr-mal{color:#c62828}.pr-res s{opacity:.6}.pr-buscar{width:100%;box-sizing:border-box;padding:9px;border-radius:8px;border:1px solid rgba(128,128,128,.35);margin:8px 0;font-size:15px;background:transparent;color:inherit}.pr-nota{font-size:12px;opacity:.75;margin:6px 0}
+
+/* (10/11/2026) El EERR esperando sus fuentes */
+.eerr-espera{background:#fff;border:1px solid #E8DFC4;border-radius:14px;padding:22px 18px;margin:12px 0;text-align:center}
+.eerr-espera-t{font-size:16px;font-weight:800;color:#331C1C}
+.eerr-espera-s{font-size:13px;color:#8A7B70;margin:6px auto 14px;max-width:460px;line-height:1.45}
+.eerr-espera-b{min-height:44px;padding:0 20px;border:none;border-radius:10px;background:#331C1C;color:#fff;font:inherit;font-size:14px;font-weight:800;cursor:pointer}
+.eerr-espera-bar{height:4px;border-radius:4px;background:#F2E8C7;overflow:hidden;max-width:260px;margin:0 auto}
+.eerr-espera-bar i{display:block;height:100%;width:40%;background:#E65100;border-radius:4px;animation:eerrEsp 1.1s ease-in-out infinite}
+@keyframes eerrEsp{0%{transform:translateX(-100%)}100%{transform:translateX(250%)}}
 </style>
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
@@ -16660,6 +16669,9 @@ function _cajaArmaMedir(d){
 }
 function _lotePedidosPg(accs,ts,dePlanilla){
   var arma=_palancaVal('pedidosArma'), armaC=_palancaVal('cajaArma');
+  /* (10/11/2026) Con un perfil nuevo las palancas todavia no se leyeron (null) y la caja se iba a Apps Script, que esta
+     apagado desde el corte: los gastos no llegaban NUNCA y el EERR mostraba octubre con $1,1M de ganancia de mas. */
+  if(armaC==null&&typeof APPS_APAGADO!=='undefined'&&APPS_APAGADO)armaC='si';
   var conCaja=armaC==='si'&&!dePlanilla&&accs.indexOf('cajaLight')>-1;
   var accs2=conCaja?accs.filter(function(a){ return a!=='cajaLight'; }):accs;
   var res=!accs2.length?{}:((arma==='si'&&!dePlanilla&&accs2.indexOf('pedidosLight')>-1)?_lotePedidosArma(accs2,ts):_lotePedidosPg0(accs2,ts,dePlanilla));
@@ -17541,7 +17553,9 @@ function _recargarCaja(vivo){
   var lectura=++_cajaLectura;
   _frescoEnVuelo(['caja'],1);
   var _finC=function(){ _frescoEnVuelo(['caja'],-1); };
-  var _deBase=(typeof _palancaVal==='function'&&_palancaVal('cajaArma')==='si'&&typeof _sbPermiso==='function');
+  var _pvC=(typeof _palancaVal==='function')?_palancaVal('cajaArma'):null;
+  if(_pvC==null&&typeof APPS_APAGADO!=='undefined'&&APPS_APAGADO)_pvC='si';   /* (10/11/2026) ver _lotePedidosPg */
+  var _deBase=(_pvC==='si'&&typeof _sbPermiso==='function');
   if(vivo&&!_deBase){ _finC(); return Promise.resolve({ok:false,red:false,motivo:'CAJA_BASE_ARMA no esta en si'}); }
   var _pedido=_deBase?_cajaArmaTraer(Date.now(),!!vivo)
     :fetch(API+'?action=cajaLight&t='+Date.now()).then(function(r){return r.json();});
@@ -32980,6 +32994,30 @@ if(!window._eerrTipInit){
   window.addEventListener('resize',_eerrHideTip);
 }
 
+/* (10/11/2026) UN RESULTADO SIN SUS FUENTES ES UN NUMERO FALSO. Las ventas llegaban y los gastos de la caja no (ver
+   _lotePedidosPg): la pantalla decia «Maleu gano $3.992.159» en octubre, con $1,1M de gastos sin contar, y solo avisaba
+   de las provisiones. Ahora, si falta la caja, se pide, se dice que se esta esperando y no se muestra ningun numero. */
+var _eerrFuenteM={t:0,n:0,err:''};
+function _eerrFuentesListas(body){
+  var hayCaja=!!(D&&Array.isArray(D.movimientos)&&Array.isArray(D.gastos));
+  var hayProv=!!(D&&Array.isArray(D.provisiones)&&D.provisiones.length);
+  if(hayCaja&&hayProv){_eerrFuenteM.n=0;_eerrFuenteM.err='';return true;}
+  var falta=[]; if(!hayCaja)falta.push('los gastos y los ingresos de la caja'); if(!hayProv)falta.push('los gastos fijos (sueldos, alquiler, monotributo)');
+  var ahora=Date.now();
+  if(typeof _recargarCaja==='function'&&ahora-_eerrFuenteM.t>12000&&_eerrFuenteM.n<3){
+    _eerrFuenteM.t=ahora;_eerrFuenteM.n++;
+    _recargarCaja(false).then(function(r){ if(!r||!r.ok)_eerrFuenteM.err=(r&&r.motivo)||'la base no contestó'; },function(e){ _eerrFuenteM.err=String((e&&e.message)||e); })
+      .then(function(){ if(cur==='inicio'&&curSI==='eerr')rEERR(); });
+  }
+  var rendido=_eerrFuenteM.n>=3&&ahora-_eerrFuenteM.t>12000;
+  body.innerHTML='<div class="eerr-espera">'+
+    '<div class="eerr-espera-t">'+(rendido?'No pude traer todo lo que necesita el estado de resultados':'Trayendo los datos del mes…')+'</div>'+
+    '<div class="eerr-espera-s">Falta'+(falta.length>1?'n':'')+' '+falta.join(' y ')+'. Sin eso el resultado saldría mal, así que no muestro ninguno.'+
+      (rendido&&_eerrFuenteM.err?' ('+_egrEsc(_eerrFuenteM.err)+')':'')+'</div>'+
+    (rendido?'<button type="button" class="eerr-espera-b" onclick="_eerrFuenteM.n=0;_eerrFuenteM.t=0;rEERR()">Reintentar</button>':'<div class="eerr-espera-bar"><i></i></div>')+
+    '</div>';
+  return false;
+}
 function rEERR(){
   if(!eerrMes){var n=new Date();eerrMes=new Date(n.getFullYear(),n.getMonth(),1);}
   var mesNom=MES_ORD[eerrMes.getMonth()],anioN=eerrMes.getFullYear();
@@ -32997,6 +33035,7 @@ function rEERR(){
     '</div>';
   var body=$('eerrBody');
   if(!VD){body.innerHTML='<div class="eerr-empty">Cargando ventas…</div>';loadVentas();return;}
+  if(!_eerrFuentesListas(body))return;
   if(eerrModo==='financiero')rEERR_financiero(body);
   else rEERR_dual(body);
 }
