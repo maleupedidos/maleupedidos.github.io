@@ -109,7 +109,8 @@ async function abrirLista(cli) {
     await ev(cli, EN('.cg-junt-abrir button')); await pausa(300);
     L = await ev(cli, LEER);
     chk('abre el nombre del evento', L.panel === true, L);
-    chk('dice que es una etiqueta y que cada pedido se cobra igual', /Es una etiqueta: cada pedido se cobra y se cuenta igual que ahora/.test(L.txt), L.txt);
+    /* (10/11/2026) Sin la explicación de «etiqueta» (sobreinformación): «Otras opciones» queda abierto mientras se junta. */
+    chk('«Otras opciones» queda abierto mientras se junta', (await ev(cli, `(function(){var k=${CARD};var d=k&&k.querySelector('details.cg-mas');return !!(d&&d.open);})()`)) === true);
     chk('el botón dice cuánto suma lo tildado: Juntar · $168.552', /Juntar · \$168\.552/.test(L.txt), L.txt);
 
     console.log('\n-- sin nombre no junta --');
@@ -123,7 +124,7 @@ async function abrirLista(cli) {
     const ops = await ev(cli, 'window.__ops');
     chk('un `pedidoGrupal` por pedido, con el nombre limpio', Array.isArray(ops) && ops.length === 2 && ops.every(o => o.action === 'pedidoGrupal' && o.hoja === 'Home' && o.valor === 'Asado Prueba 7/11' && o.clientOpId) && ops.map(o => o.id).join() === '7301,7302', ops);
     L = await ev(cli, LEER);
-    chk('la tarjeta pasa a ser la del evento: 🎉 Asado Prueba 7/11', /🎉\s*Asado Prueba 7\/11/.test(L.nom || ''), L.nom);
+    chk('la tarjeta pasa a ser la del evento: Asado Prueba 7/11', /^\s*Asado Prueba 7\/11/.test(L.nom || ''), L.nom);
     chk('con los dos pedidos y el total $168.552', L.ids && L.ids.join() === '7301,7302' && /Debe\s*\$168\.552/.test(L.txt), L.txt);
     chk('el de la otra casa no se tocó', !/#7303/.test(L.txt));
 
@@ -152,7 +153,7 @@ async function abrirLista(cli) {
     const op2 = await ev(cli, 'window.__ops');
     chk('`pedidoGrupal` con \'\' a los dos', Array.isArray(op2) && op2.length === 2 && op2.every(o => o.valor === ''), op2);
     L = await ev(cli, LEER);
-    chk('vuelve la tarjeta del cliente', /Anfitrion Prueba/.test(L.nom || '') && !/🎉/.test(L.nom || ''), L.nom);
+    chk('vuelve la tarjeta del cliente', /Anfitrion Prueba/.test(L.nom || '') && !/Asado/.test(L.nom || ''), L.nom);
 
     console.log('\n-- si la base rechaza uno --');
     await ev(cli, `window.__ops=[];window.__toasts=[];window.__rechazar={'7302':1}`);
