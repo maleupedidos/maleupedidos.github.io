@@ -39,8 +39,11 @@ async function esperar(cli, expr, ms = 120000) {
   try {
     await cli.enviar('Emulation.setDeviceMetricsOverride', { width: ANCHO, height: 900, deviceScaleFactor: 1, mobile: ANCHO < 700 });
     await cli.enviar('Page.enable');
-    await cli.enviar('Page.addScriptToEvaluateOnNewDocument', { source: prep(TOKEN, '') });
+    /* SBSES=<archivo> (10/11/2026): desde el corte los datos vienen de la base; sin esto no carga nada. */
+    const SBSES = require(path.join(__dirname, 'sbses_guarda.js'))(process.env.SBSES, process.env.USUARIO || 'tadeo');
+    await cli.enviar('Page.addScriptToEvaluateOnNewDocument', { source: prep(TOKEN, '') + SBSES });
     await cli.enviar('Page.navigate', { url: URL_ERP });
+    if (SBSES && !(await require(path.join(__dirname, 'sbses_guarda.js')).verificarGuarda(cli, evaluar))) { console.error('  ABORTA: la guarda de solo lectura no corta'); process.exit(3); }
     console.log('\n== ' + ANCHO + 'px · ' + URL_ERP);
 
     const hay = await esperar(cli, 'typeof D!=="undefined"&&D&&D.pedidos&&D.pedidos.length>0&&document.querySelector("#hRetail .rt-per")');
@@ -50,38 +53,25 @@ async function esperar(cli, expr, ms = 120000) {
     const cent = await evaluar(cli, `(document.querySelector('#p-inicio-resumen').innerText.match(/\\$\\s?-?\\d{1,3}(\\.\\d{3})*,\\d+/g)||[]).slice(0,5)`);
     chk(cent.length === 0, 'ningun monto con centavos en el Resumen', cent);
 
-    /* ── Tarjetas del dia de la semana en curso ── */
+    /* ── Los dias de Ventas retail (10/11/2026: el desplegable «📅 Sem N» salio; cada dia se abre
+       tocando su cuadrado). Con datos reales: el numero del cuadrado = la suma del detalle. ── */
     const d = await evaluar(cli, `(function(){
-      try{toggleSem('actual')}catch(e){}
-      function lunes(d){var x=new Date(d.getFullYear(),d.getMonth(),d.getDate());x.setDate(x.getDate()-((x.getDay()+6)%7));return x;}
-      var now=new Date(), lun=lunes(now), dias=[], errores=[];
-      var body=document.getElementById('sem-body-actual'); if(!body)return {sinBody:true};
-      var cards=[].slice.call(body.querySelectorAll(':scope > .card'));
-      cards.forEach(function(c,i){
-        var f=new Date(lun.getFullYear(),lun.getMonth(),lun.getDate()+i);
-        var iso=f.getFullYear()+'-'+String(f.getMonth()+1).padStart(2,'0')+'-'+String(f.getDate()).padStart(2,'0');
-        /* 14/9/2026: cuenta lo ENTREGADO, por el dia de la venta. Hasta ese dia esta
-           prueba esperaba los pedidos con entrega ELEGIDA ese dia, entregados o no, que
-           era justo el bug (Carolina, Reservada, figuraba como "1 entrega"). */
-        var peds=D.pedidos.filter(function(p){return p.c&&p.c.trim()&&p.$>0&&p.h!=='Red'&&p.es==='Entregado'&&!p.hist&&_tendFechaVentaISO(p)===iso;});
-        /* el numero grande de la cabecera, no textContent entero: pega "07/09" con "0 entregas" y lee 90 */
-        var cab=c.querySelector(':scope > div > span:last-child');
-        var m=cab&&cab.textContent.match(/^\\s*(\\d+)\\s*entregas?/); var shown=m?Number(m[1]):null;
-        /* Red sale del renglon de canales, no del texto entero: "Falta entregar · Red 1" no son entregas */
-        var lin=[].filter.call(c.querySelectorAll(':scope > div'),function(x){return !x.className&&/^(Home|Pilar|Clubes|Red|Otro)\\b/.test(x.textContent.trim());})[0];
-        var noRed=shown===null?null:shown - (((lin&&lin.textContent.match(/Red\\s*(\\d+)/))||[0,0])[1]*1);
-        var expN=peds.length?_contarVentas(peds):0;
-        dias.push({iso:iso,shown:shown,noRed:noRed,expN:expN,filas:peds.length,estancias:/en Estancias/.test(c.textContent)});
+      try{rtPer('sem')}catch(e){}
+      var bs=[].slice.call(document.querySelectorAll('#hRetail .rt-dia')), dias=[];
+      bs.forEach(function(b){
+        var iso=((b.getAttribute('onclick')||'').match(/\\d{4}-\\d{2}-\\d{2}/)||[])[0]; if(!iso)return;
+        var n=Number((b.querySelector('b')||{}).textContent); if(!(n>0))return;
+        rtDiaVer(iso);
+        var dd=document.querySelector('#hRetail .rt-dd'), t=dd?dd.textContent:'';
+        var m=t.match(/(\\d+) entregas? · /);
+        dias.push({iso:iso,cuadro:n,detalle:m?Number(m[1]):null});
+        rtDiaVer(iso);
       });
-      return {dias:dias};
+      return {dias:dias,sem:!!document.getElementById('sem-body-actual')};
     })()`);
-    if (d.sinBody) chk(false, 'no encontre la semana en curso');
-    else {
-      const malN = d.dias.filter(x => x.noRed !== null && x.noRed !== x.expN);
-      const juntos = d.dias.filter(x => x.filas > x.expN).length;
-      chk(malN.length === 0, 'cada dia: "N entregas" (sin Red) = entregas de sus pedidos (' + d.dias.length + ' dias, ' + juntos + ' con pedidos del mismo viaje)', malN);
-      chk(d.dias.every(x => !x.estancias), 'las tarjetas del dia ya no hablan de Estancias (14/9/2026: el Resumen es global)', d.dias.filter(x => x.estancias));
-    }
+    chk(d.sem === false, 'ya no esta el desplegable de la semana');
+    const malD = d.dias.filter(x => x.cuadro !== x.detalle);
+    chk(d.dias.length > 0 && malD.length === 0, 'cada dia: el cuadrado dice lo mismo que su detalle (' + d.dias.length + ' dias con entregas)', malD.length ? malD : d.dias);
 
     /* ── Estancias > Pulso ── */
     await evaluar(cli, `try{go('estancias')}catch(e){}`);

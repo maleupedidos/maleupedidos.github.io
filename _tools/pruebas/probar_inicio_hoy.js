@@ -188,11 +188,7 @@ async function lunes(cli) {
   chk('y muestra lo cargado: 1 pedido · $99.000', /Cargado para entregar · 1 pedido · \$99\.000/.test(v.carg || ''), v.carg);
   chk('con su dia: mar 6/10', /mar 6\/10 · 1 pedido/.test(v.carg || ''), v.carg);
 
-  const sa = await ev(cli, `JSON.stringify({cards:document.querySelectorAll('#sem-body-actual > .card').length,txt:${T('#sem-body-actual')}})`);
-  console.log('     semana actual: ' + String(sa).slice(0, 330));
-  const s = JSON.parse(typeof sa === 'string' ? sa : '{}');
-  chk('la semana actual dibuja solo hoy y el martes (que tiene un pedido): 2 tarjetas, no 7', s.cards === 2 && /Lun 05\/10/.test(s.txt || '') && /Mar 06\/10/.test(s.txt || ''), s);
-  chk('y dice que los otros 5 dias no tienen nada', /Los otros 5 días de la semana no tienen/.test(s.txt || ''), s.txt);
+  chk('el desplegable «📅 Sem N» ya no está (10/11/2026: los días se abren en Ventas retail)', (await ev(cli, `!!document.getElementById('sem-body-actual')`)) === false);
 
   chk('sin meta cargada, Total Maleu no dibuja el objetivo', (await ev(cli, `document.querySelectorAll('#hRetail .mt-obj').length`)) === 0);
   chk('con toda la deuda de esta semana no hay aviso arriba (todavia no vencio)', (await ev(cli, T('#hDeudaAviso'))) === '' && /toda de esta semana/.test(await ev(cli, T('#hSnap'))), await ev(cli, T('#hDeudaAviso')));

@@ -1,4 +1,5 @@
-/* Inicio > Resumen: la tarjeta de cada dia de la semana en curso (14/9/2026).
+/* Inicio > Resumen: lo de cada dia de la semana (14/9/2026; desde el 10/11/2026, el detalle
+   que se abre tocando el cuadrado del dia en Ventas retail — el desplegable «📅 Sem N» se saco).
 
    node probar_dia_entregado.js [390|1440]
    APP=app_viejo_tmp.html node probar_dia_entregado.js 390    ← la direccion contraria
@@ -109,56 +110,62 @@ const STUB = `
     console.log('\n== Tarjeta del dia · ' + ANCHO + 'px · ' + APP + ' ==');
     if (!await esperar(cli, `typeof go==='function' && window.D && D.pedidos && D.pedidos.length===${PEDIDOS.length}`, 90000)) { console.log('  el ERP no cargo los pedidos stubbeados'); salir(1); }
     await ev(cli, `go('inicio')`);
-    if (!await esperar(cli, `!!document.getElementById('sem-body-actual')`, 20000)) { console.log('  no se dibujo la semana en curso'); salir(1); }
-    await ev(cli, `(function(){var b=document.getElementById('sem-body-actual');if(b&&b.classList.contains('hidden'))toggleSem('actual');})()`);
-    await pausa(500);
-    const dias = await ev(cli, `[].map.call(document.querySelectorAll('#sem-body-actual > .card'),function(c){return window.__tx(c);})`);
-    const D7 = Array.isArray(dias) ? dias : [];
-    chk('se examinan las 7 tarjetas de la semana', D7.length === 7, D7.length);
-    const dia = re => D7.find(x => re.test(x)) || '';
-    const lun = dia(/^Lun 14\/09/), mar = dia(/^Mar 15\/09/), mie = dia(/^Mi[eé] 16\/09/), vie = dia(/^Vie 18\/09/);
+    await ev(cli, `rtPer('sem')`);
+    if (!await esperar(cli, `document.querySelectorAll('#hRetail .rt-dia').length===7`, 20000)) { console.log('  no se dibujaron los 7 dias de Ventas retail', JSON.stringify(await ev(cli, `[document.querySelectorAll('#hRetail .rt-dia').length, (document.getElementById('hRetail')||{}).textContent.slice(0,300), window.__err]`))); salir(1); }
+    chk('ya no está el desplegable «📅 Sem N» de abajo', (await ev(cli, `!!document.getElementById('sem-body-actual')`)) === false);
+    const abrir = async iso => { await ev(cli, `rtDiaVer('${iso}')`); await pausa(250); return await ev(cli, `window.__tx(document.querySelector('#hRetail .rt-dd'))`) || ''; };
+    const cuadro = iso => ev(cli, `window.__tx([].filter.call(document.querySelectorAll('#hRetail .rt-dia'),function(b){return (b.getAttribute('onclick')||'').indexOf('${iso}')>-1;})[0])`);
 
     console.log('\n-- lunes 14: Carolina, reservada y pagada, sin entregar --');
-    chk('no dice "1 entrega": dice "1 por entregar"', /^Lun 14\/09 1 por entregar/.test(lun), lun);
-    chk('no dice "Entregado ese día"', !/Entregado ese d/.test(lun), lun);
-    chk('dice "Quedó sin marcar entregado · Pilar 1 $97.600" (ya pasó)', /Quedó sin marcar entregado · Pilar 1 \$97\.600/.test(lun), lun);
-    chk('dice que ya está cobrado y que no suma hasta que se marque', /No suma a lo entregado hasta que se marque · ya está cobrado/.test(lun), lun);
-    chk('el Cobrado del día no se toca: $97.600', /Cobrado ese d[ií]a \$97\.600/.test(lun), lun);
+    const lun = await abrir('2026-09-14');
+    chk('cada día es un botón y abre su detalle', /^Lunes 14\/9/.test(lun), lun);
+    chk('dice que no hubo entregas', /No hubo entregas este día/.test(lun), lun);
+    chk('"Quedó sin marcar entregado · 1 pedido · $97.600" con Carolina y "ya cobrado"', /Quedó sin marcar entregado · 1 pedido · \$97\.600/.test(lun) && /Carolina Prueba Pilara \$97\.600 ya cobrado/.test(lun), lun);
 
-    console.log('\n-- martes 15: lo que se entrego --');
-    chk('2 entregas (Ana en un viaje con dos pedidos, Red una bolsa)', /^Mar 15\/09 2 entregas/.test(mar), mar);
-    chk('por canal: Home 1 · Red 1', /Home 1 · Red 1/.test(mar), mar);
-    chk('Entregado ese día $106.400 (incluye el pedido elegido para el lunes)', /Entregado ese d[ií]a \$106\.400/.test(mar), mar);
-    chk('nada que falte el martes', !/entregar/.test(mar), mar);
+    console.log('\n-- martes 15: quiénes fueron --');
+    const cMar = await cuadro('2026-09-15');
+    const mar = await abrir('2026-09-15');
+    const nMar = Number(((cMar || '').match(/mar 15 (\d+)/) || [])[1]);
+    chk('el cuadrado y el detalle dicen lo mismo (' + nMar + ' entregas)', nMar > 0 && new RegExp(nMar + ' entregas · \\$106\\.400').test(mar), { cMar, mar });
+    chk('Ana: dos pedidos del mismo viaje, un renglón de $40.000, sin cobrar', /Ana Prueba Home · 19:00 h · 2 pedidos en un viaje \$40\.000 sin cobrar/.test(mar), mar);
+    chk('Red: un renglón por cliente del representante, sin "(Red: …)"', /Final Uno Red · Vendedor Uno \$41\.500/.test(mar) && /Final Dos Red · Vendedor Uno \$24\.900/.test(mar) && !/\(Red:/.test(mar), mar);
+    chk('incluye el pedido elegido para el lunes y entregado el martes; nada que falte', !/entregar/.test(mar.replace('No suma a lo entregado', '')), mar);
+    const nRen = await ev(cli, `document.querySelectorAll('#hRetail .rt-dd .rt-dd-f').length`);
+    chk('3 renglones (Ana, Final Uno, Final Dos)', nRen === 3, nRen);
 
-    console.log('\n-- hoy miercoles 16 --');
-    chk('1 entrega', /^Mi[eé] 16\/09 · HOY 1 entrega/.test(mie), mie);
-    chk('Entregado $17.000 y "de esas entregas, $17.000 todavía sin cobrar"', /Entregado ese d[ií]a \$17\.000/.test(mie) && /de esas entregas, \$17\.000 todav[ií]a sin cobrar/.test(mie), mie);
-    chk('"Falta entregar hoy · Clubes 1 $26.000", sin decir cobrado', /Falta entregar hoy · Clubes 1 \$26\.000/.test(mie) && /hasta que se marque$|hasta que se marque Cobrado/.test(mie) && !/ya est[aá] cobrado|ya cobrado/.test(mie), mie);
+    console.log('\n-- hoy miércoles 16 --');
+    const mie = await abrir('2026-09-16');
+    chk('Beto entregado y sin cobrar', /1 entrega · \$17\.000/.test(mie) && /Beto Prueba Home \$17\.000 sin cobrar/.test(mie), mie);
+    chk('"Falta entregar hoy" el club, sin decir cobrado', /Falta entregar hoy · 1 pedido · \$26\.000/.test(mie) && /Socio Club \(Champagnat\) Club Champagnat \$26\.000/.test(mie) && !/ya cobrado/.test(mie), mie);
 
     console.log('\n-- viernes 18: lo que viene --');
-    chk('"2 por entregar"', /^Vie 18\/09 2 por entregar/.test(vie), vie);
-    chk('"Para entregar · Home 2 $70.000" (el cancelado no aparece)', /Para entregar · Home 2 \$70\.000/.test(vie), vie);
-    chk('"$20.000 ya cobrado"', /\$20\.000 ya cobrado/.test(vie), vie);
+    const vie = await abrir('2026-09-18');
+    chk('"Para entregar · 2 pedidos · $70.000" (el cancelado no aparece)', /Para entregar · 2 pedidos · \$70\.000/.test(vie) && !/Cancelado/.test(vie), vie);
+    chk('Eli "ya cobrado"', /Eli Prueba Home \$20\.000 ya cobrado/.test(vie), vie);
+    await ev(cli, `rtDiaVer('2026-09-18')`); await pausa(200);
+    chk('tocar de nuevo el mismo día lo cierra', (await ev(cli, `document.querySelectorAll('#hRetail .rt-dd').length`)) === 0);
 
     console.log('\n-- cierra con Ventas retail --');
-    await ev(cli, `rtPer('sem')`); await pausa(300);
     const k0 = await ev(cli, `window.__tx(document.querySelector('#hRetail .rt-k'))`);
-    chk('"Esta semana" de Ventas retail = la suma de lo entregado de los días ($123.400)', /Facturado \$123\.400/.test(k0 || ''), k0);
-    const sumaDias = D7.reduce((s, x) => { const m = x.match(/Entregado ese d[ií]a \$([\d.]+)/); return s + (m ? Number(m[1].replace(/\./g, '')) : 0); }, 0);
-    chk('la suma de las tarjetas da $123.400', sumaDias === 123400, sumaDias);
+    chk('"Esta semana" de Ventas retail = $123.400', /Facturado \$123\.400/.test(k0 || ''), k0);
+    let suma = 0;
+    for (const iso of ['2026-09-14', '2026-09-15', '2026-09-16']) { const t = await abrir(iso); const m = t.match(/entregas? · \$([\d.]+)/); suma += m ? Number(m[1].replace(/\./g, '')) : 0; }
+    chk('la suma de los detalles de cada día da $123.400', suma === 123400, suma);
 
-    console.log('\n-- pantalla --');
+    console.log('\n-- pantalla (abierto el martes) --');
+    await abrir('2026-09-15');
     const geo = await ev(cli, `(function(){
-      var o={desborde:document.documentElement.scrollWidth>window.innerWidth+1,pisados:[],filas:0};
-      [].forEach.call(document.querySelectorAll('#sem-body-actual .dia-falta'),function(f){
+      var o={desborde:document.documentElement.scrollWidth>window.innerWidth+1,pisados:[],filas:0,chicos:[]};
+      [].forEach.call(document.querySelectorAll('#hRetail .rt-dd-f'),function(f){
         o.filas++;var a=f.children[0].getBoundingClientRect(),b=f.children[1].getBoundingClientRect();
         if(a.right>b.left+1&&a.bottom>b.top&&b.bottom>a.top)o.pisados.push(f.textContent.slice(0,40));
         if(f.scrollWidth>f.clientWidth+1)o.pisados.push('se sale: '+f.textContent.slice(0,40));
       });
+      [].forEach.call(document.querySelectorAll('#hRetail .rt-dia, #hRetail .rt-dd-x'),function(x){var r=x.getBoundingClientRect();if(r.height<44)o.chicos.push(x.className+' '+Math.round(r.height));});
       return o;})()`);
     chk('sin desborde a lo ancho', geo && geo.desborde === false, geo);
-    chk('el renglón de lo que falta no pisa su monto (' + (geo && geo.filas) + ' renglones)', !!(geo && geo.filas === 3 && geo.pisados.length === 0), geo);
+    chk('ningún nombre pisa su monto (' + (geo && geo.filas) + ' renglones)', !!(geo && geo.filas === 3 && geo.pisados.length === 0), geo);
+    chk('los días y la ✕ miden 44px o más', !!(geo && geo.chicos.length === 0), geo && geo.chicos);
     const err = await ev(cli, 'window.__err');
     chk('sin errores de JS', Array.isArray(err) && err.length === 0, err);
   } catch (e) {
