@@ -20,7 +20,14 @@
    · en Caja, elegir la categoria Proveedor avisa que la deuda no baja;
    · en Abastecimiento → Pagos, con dos cuentas digitales, una transferencia pide
      de cual salio, no deja confirmar sin elegir, y el POST lleva la cuenta;
-   · minimo tactil y nada desbordado. */
+   · minimo tactil y nada desbordado.
+   Y desde el 11/11/2026 (segunda /auditoria):
+   · un "Ajuste de caja" se aparta pero no se cuenta como vuelto: "ni 1 ajuste de caja";
+   · en Compras, el selector de Dia no ofrece dias que solo tienen gastos;
+   · un filtro elegido que ya no esta en la lista sigue a la vista para poder sacarlo;
+   · el Mes es el primer selector de periodo, y el orden vive en el titulo del Detalle;
+   · "efectivo" en minuscula es efectivo;
+   · el dia de HOY se compara contra ayer hasta esta misma hora. */
 'use strict';
 const { abrir, evaluar } = require('./cdp.js');
 const prep = require('./sesion_prep.js');
@@ -57,6 +64,11 @@ const ultAnt = new Date(hoy.getFullYear(), hoy.getMonth(), 0);
 const hayFueraDelCorte = diaHoy < ultAnt.getDate();
 const antFuera = new Date(hoy.getFullYear(), hoy.getMonth() - 1, Math.min(diaHoy + 1, ultAnt.getDate()));
 const mesKey = hoy.getFullYear() + '-' + p2(hoy.getMonth() + 1);
+const ayer = new Date(hoy.getFullYear(), hoy.getMonth(), hoy.getDate() - 1);
+const ayerEnMes = ayer.getMonth() === hoy.getMonth();
+const totG = 100000 + (ayerEnMes ? 6000 : 0);                    // Nafta + Sueldo (+ los dos de ayer)
+const pctG = Math.round((totG - 20000) / 20000 * 100);
+const diaKey = mesKey + '-' + p2(hoy.getDate());
 
 const MOVS = [
   // este mes: compras
@@ -70,6 +82,12 @@ const MOVS = [
   mk(hoy, '08:00', 'Sueldo', 'Lucas', 'Mercado Pago', 60000),
   mk(hoy, '08:30', 'Cambio cruzado', 'Vuelto por transferencia — Cliente Uno #901', 'Mercado Pago', 7000),
   mk(hoy, '08:31', 'Cambio cruzado', 'Vuelto por transferencia — Cliente Dos #902', 'Mercado Pago', 3000),
+  mk(hoy, '08:32', 'Ajuste de caja', 'Ajuste por movimiento anterior', 'Mercado Pago', 55000),
+  // ayer: uno temprano (entra en "ayer hasta esta hora") y uno a ultima hora (no entra)
+  mk(ayer, '00:01', 'Herramienta', 'Ayer temprano', 'Mercado Pago', 2000),
+  mk(ayer, '23:59', 'Herramienta', 'Ayer tarde', 'Mercado Pago', 4000),
+  // un dia de julio con SOLO un gasto (y en "efectivo" con minuscula)
+  mk(new Date(2026, 6, 3), '07:00', 'Nafta', 'Shell', 'efectivo', 1000),
   // mes anterior: el dia 1 (dentro del corte) y despues de hoy (fuera)
   mk(antDia1, '10:00', 'Proveedor', 'Pago a Le Unike', 'Mercado Pago', 80000),
   mk(antFuera, '10:00', 'Proveedor', 'Pago a Le Unike', 'Mercado Pago', hayFueraDelCorte ? 900000 : 0),
@@ -139,6 +157,11 @@ const num = t => Number(String(t || '').replace(/[^\d]/g, '')) || 0;
 
     await ir('a');
     await evaluar(cli, `go('egresos'); 1`);
+    /* Desde el corte (5/11/2026) la caja llega de la base (caja_light_pantalla), no del
+       stub de Apps Script: sin sesion de la base la tab quedaba vacia y la prueba no media
+       nada. Los movimientos inventados se cargan por la misma puerta que usa la recarga. */
+    await esperar(cli, `typeof _cajaCampos==='function'`, 20000);
+    await evaluar(cli, `_cajaCampos(${JSON.stringify(CAJA)}); rEgresos(); 1`);
     if (!await esperar(cli, `window.D && Array.isArray(D.movimientos) && D.movimientos.length>20 && document.querySelector('#egrKpi .card')`, 30000)) {
       console.log('  la tab no pinto (sin esto lo de abajo no mide nada)'); salir(1);
     }
@@ -146,14 +169,40 @@ const num = t => Number(String(t || '').replace(/[^\d]/g, '')) || 0;
     /* ── Gastos del mes ── */
     await evaluar(cli, `egrSwitch('gastos'); window._egrPeriodo='mes:${mesKey}'; rEgresos(); 1`);
     let k = await evaluar(cli, KPI);
-    chk('Gastos del mes = Nafta + Sueldo ($100.000), sin los vueltos', num(k['Total Gastos'] && k['Total Gastos'].v) === 100000, k['Total Gastos']);
-    chk('y lo dice: "No incluye 2 vueltos ($10.000)"', !!k['Total Gastos'] && k['Total Gastos'].s.some(x => /No incluye 2 vueltos \(\$10\.000\)/.test(x)), k['Total Gastos'] && k['Total Gastos'].s);
+    chk('Gastos del mes = Nafta + Sueldo, sin los vueltos ni el ajuste de caja', num(k['Total Gastos'] && k['Total Gastos'].v) === totG, k['Total Gastos']);
+    chk('y lo dice: "No incluye 2 vueltos ($10.000) ni 1 ajuste de caja ($55.000)"', !!k['Total Gastos'] && k['Total Gastos'].s.some(x => /No incluye 2 vueltos \(\$10\.000\) ni 1 ajuste de caja \(\$55\.000\)/.test(x)), k['Total Gastos'] && k['Total Gastos'].s);
     const cats = await evaluar(cli, `[].map.call(document.querySelectorAll('#egrBreakdown .card'),function(c){return c.textContent})`);
     chk('ningun grupo "Cambio cruzado" en el desglose', !cats.some(c => /Cambio cruzado/i.test(c)), cats);
-    chk('Gastos vs los mismos dias del mes anterior (Nafta del dia 1: $20.000, +400%)', !!k['Total Gastos'] && k['Total Gastos'].s.some(x => /\+400% vs el 1 al \d+ de/.test(x) && /20\.000/.test(x)), k['Total Gastos'] && k['Total Gastos'].s);
+    chk('Gastos vs los mismos dias del mes anterior (Nafta del dia 1: $20.000, +' + pctG + '%)', !!k['Total Gastos'] && k['Total Gastos'].s.some(x => new RegExp('\\+' + pctG + '% vs el 1 al \\d+ de').test(x) && /20\.000/.test(x)), k['Total Gastos'] && k['Total Gastos'].s);
+    const per = await evaluar(cli, `(function(){ var p=document.getElementById('egrPeriodo'); var s=p?p.querySelector('select'):null;
+      var t=document.getElementById('egrDetTitle'), b=document.getElementById('egrOrden');
+      return { primero: s?s.id:'', orden: !!(t&&b&&t.contains(b)), txt: b?b.textContent:'', circulo: !!document.querySelector('#egrFilterWrap #egrOrden') }; })()`);
+    chk('el Mes es el primer selector de periodo', per.primero === 'egrMesSel', per);
+    chk('el orden vive en el titulo del Detalle, con palabras', per.orden && /Más recientes primero/.test(per.txt) && !per.circulo, per);
+    await evaluar(cli, `document.getElementById('egrOrden').click(); 1`);
+    chk('y al tocarlo cambia', /Más antiguos primero/.test(await evaluar(cli, `document.getElementById('egrOrden').textContent`)));
+    await evaluar(cli, `window._egrOrden='desc'; rEgresos(); 1`);
+
+    /* ── El dia de hoy contra ayer hasta esta hora ── */
+    await evaluar(cli, `window._egrPeriodo='fecha:${diaKey}'; rEgresos(); 1`);
+    k = await evaluar(cli, KPI);
+    chk('hoy se compara contra ayer hasta esta hora: solo el de las 00:01 ($2.000)', !!k['Total Gastos'] && k['Total Gastos'].s.some(x => /vs ayer hasta las \d\d:\d\d \(\$2\.000\)/.test(x)), k['Total Gastos'] && k['Total Gastos'].s);
+
+    /* ── "efectivo" en minuscula ── */
+    await evaluar(cli, `window._egrPeriodo='mes:2026-07'; rEgresos(); 1`);
+    k = await evaluar(cli, KPI);
+    chk('"efectivo" en minuscula suma en Efectivo', num((k['Efectivo'] || {}).v) === 1000, k['Efectivo']);
+
+    /* ── Un filtro elegido que ya no esta en la lista ── */
+    await evaluar(cli, `window._egrPeriodo=''; window._egrCats=['Nafta','Categoria que ya no existe']; rEgresos(); 1`);
+    const chip = await evaluar(cli, `!!document.querySelector('#egrCatFilter button[data-c="Categoria que ya no existe"]')`);
+    chk('un filtro elegido que ya no esta en la lista sigue a la vista para sacarlo', chip);
+    await evaluar(cli, `window._egrCats=[]; rEgresos(); 1`);
 
     /* ── Compras del mes ── */
     await evaluar(cli, `egrSwitch('compras'); window._egrPeriodo='mes:${mesKey}'; rEgresos(); 1`);
+    const dias = await evaluar(cli, `[].map.call(document.querySelectorAll('#egrDiaSel option'),function(o){return o.value;})`);
+    chk('en Compras el Dia no ofrece un dia que solo tiene gastos (03/07)', dias.indexOf('2026-07-03') < 0 && dias.length > 1, dias.slice(0, 12));
     k = await evaluar(cli, KPI);
     const tc = k['Total Compras'] || { v: '', s: [] };
     chk('Compras del mes: $167.000 en 4 pagos (el partido cuenta uno)', num(tc.v) === 167000 && tc.s.some(x => /^4 pagos$/.test(x.trim())), tc);
@@ -177,10 +226,17 @@ const num = t => Number(String(t || '').replace(/[^\d]/g, '')) || 0;
     chk('la semana 1 de 2027 se compara contra la 53 de 2026 ($53.000)', !!k['Total Gastos'] && k['Total Gastos'].s.some(x => /53\.000/.test(x)), k['Total Gastos']);
 
     /* ── Buscador ── */
-    await evaluar(cli, `egrSwitch('compras'); window._egrPeriodo=''; rEgresos(); 1`);
+    /* El arranque en modo prueba termina despues y deja Inicio a la vista: con la tab
+       oculta el buscador mide 0 y no recibe teclas. Se vuelve a Egresos. */
+    await evaluar(cli, `go('egresos'); egrSwitch('compras'); window._egrPeriodo=''; rEgresos(); 1`);
+    await esperar(cli, `(document.querySelector('.pg.on')||{}).id==='p-egresos'`, 5000);
     const hayBusq = await evaluar(cli, `!!document.getElementById('egrSearchInp')`);
     chk('con mas de 8 proveedores aparece el buscador', hayBusq);
     if (hayBusq) {
+      /* A 1440 el arranque del modo prueba todavia repinta en el primer segundo y le saca el
+         foco (11/11/2026: con la sesion real y 2097 movimientos, "Sevu" a 80 ms por tecla
+         queda entero en las dos anchuras; rEgresos tarda 3-18 ms). Se espera a que asiente. */
+      await pausa(2000);
       await evaluar(cli, `document.getElementById('egrSearchInp').focus(); 1`);
       for (const ch of 'Prov T') { await cli.enviar('Input.insertText', { text: ch }); await pausa(60); }
       const b = await evaluar(cli, `(function(){ var i=document.getElementById('egrSearchInp'); return {v:i.value, foco:document.activeElement===i,
@@ -193,12 +249,13 @@ const num = t => Number(String(t || '').replace(/[^\d]/g, '')) || 0;
     }
 
     /* ── El ↻ ── */
-    await evaluar(cli, `window.__gets=[]; 1`);
+    await evaluar(cli, `window.__gets=[]; window.__recCaja=0; var __rc=window._recargarCaja; window._recargarCaja=function(){window.__recCaja++; return __rc.apply(this,arguments);}; 1`);
     await evaluar(cli, `refreshContextual(); 1`);
-    await esperar(cli, `window.__gets.length>0`, 8000);
+    await esperar(cli, `window.__recCaja>0`, 8000);
     await pausa(2500);
-    const gets = await evaluar(cli, `window.__gets.slice()`);
-    chk('el ↻ en Pagos pide la caja y no los pedidos, cobros ni OCs', gets.indexOf('cajaLight') >= 0 && !gets.some(a => ['pedidosLight', 'cobrosPendientes', 'ocLight', 'admin'].indexOf(a) >= 0), gets);
+    const gets = await evaluar(cli, `({rc:window.__recCaja, g:window.__gets.slice()})`);
+    chk('el ↻ en Egresos recarga la caja y no los pedidos, cobros ni OCs', gets.rc > 0 && !gets.g.some(a => ['pedidosLight', 'cobrosPendientes', 'ocLight', 'admin'].indexOf(a) >= 0), gets);
+    await evaluar(cli, `window._recargarCaja=__rc; _cajaCampos(${JSON.stringify(CAJA)}); 1`);
 
     /* ── Tamaños ── */
     const tam = await evaluar(cli, `(function(){ var desb=document.documentElement.scrollWidth>window.innerWidth+1; return {desb:desb}; })()`);
