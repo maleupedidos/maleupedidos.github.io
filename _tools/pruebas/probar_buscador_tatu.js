@@ -40,8 +40,10 @@ const leer = (cli) => evaluar(cli, `(function(){var b=document.getElementById('p
   let e = await leer(c1);
   chk(e.usu === 'santos' && e.rol === 'repartidor', 'la sesión de prueba es santos / repartidor', e);
   chk(e.ve === true, 'santos ve el buscador en Pedidos Home', e);
-  const ref = await evaluar(c1, "(function(){var p=(D&&D.pedidos||[]).filter(function(x){return x.h==='Home'&&x.c&&x.$>0&&!x.hist})[0];return p?{c:p.c,n:String(p.n)}:null})()");
-  chk(!!ref, 'hay pedidos de Home en su sesión', ref);
+  /* Si hoy no tiene pedidos de su día (pasa: depende del reparto), se busca un cliente conocido. El buscador tiene que
+     andar igual: busca en la base, no en lo que la sesión tiene. */
+  const ref = (await evaluar(c1, "(function(){var p=(typeof D!=='undefined'&&D&&D.pedidos||[]).filter(function(x){return x.h==='Home'&&x.c&&x.$>0&&!x.hist})[0];return p?{c:p.c,n:String(p.n)}:null})()"))
+    || { c: 'Jeronimo Susini', n: '2439' };
   if (ref) {
     const tipear = async (t) => { await evaluar(c1, "pedBuscarH('',true)"); await T(300); await evaluar(c1, "document.getElementById('pedBusqH').focus()"); await c1.enviar('Input.insertText', { text: t }); await T(2500); return leer(c1); };
     const nom = ref.c.split(' ')[0];
