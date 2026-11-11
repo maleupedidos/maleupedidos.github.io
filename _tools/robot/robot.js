@@ -628,7 +628,18 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
   /* Lo que se frenó (WhatsApp, Telegram, mails) y la limpieza de todo lo de esta corrida. */
   if (ENTIDADES) {
     const fr = await rpc('robot_avisos_frenados', { p_corrida: CORRIDA }).catch(() => null);
-    if (fr) console.log('  avisos frenados: ' + JSON.stringify(fr).slice(0, 160));
+    /* SOLO LOS DE ESTA CORRIDA (11/11/2026). La base busca el inicio en `robot_corrida`, pero esa fila se guarda
+       recién al FINAL de la corrida: al preguntar acá todavía no existe y la base cae a «las últimas 2 horas»,
+       que juntaba también las corridas automáticas de cada 11 minutos. El deploy decía «avisos frenados: 71…87…
+       101…105» y parecía una cola que crecía. No lo es: esos avisos nunca entran a wati_outbox (la trampa los
+       desvía a prueba_aviso_descartado, que es justo lo que prueba que no le llegó nada a nadie). Se cuentan acá
+       los de esta corrida por su hora, con el tope de 200 filas que trae la función. */
+    if (fr) {
+      const mios = (fr.filas || []).filter((x) => Date.parse(x.creado_at) >= ahora.getTime());
+      const porCola = {}; mios.forEach((x) => { porCola[x.cola] = (porCola[x.cola] || 0) + 1; });
+      console.log('  avisos frenados de esta corrida (no salieron, la trampa los desvió): ' + mios.length
+        + (mios.length ? ' · ' + Object.keys(porCola).map((k) => k + ' ' + porCola[k]).join(' · ') : ''));
+    }
     /* robot_limpiar (401): {ok, borrado:{tabla:n}, residuos:{tabla:n}}. ok:false = un paso pasaba las 300 filas y no
        borró nada (falla); residuos = una tabla con algo del robot que la limpieza no conoce (hallazgo para Supa). */
     /* ROBOT_SIN_LIMPIEZA=1: deja lo de la corrida para mirarlo (una orden trabada, por ejemplo); el reloj de las 05:00 limpia. */
