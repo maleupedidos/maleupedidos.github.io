@@ -15904,7 +15904,7 @@ function _leerVersion(app){
    "El HTML no sabe que version es" dejo de ser cierto: el build le escribe
    adentro el CACHE_NAME de sw-panel.js, el mismo que deploy.sh obliga a subir en
    cada cambio. Si lo publicado dice otra cosa, esta pagina es vieja. Punto. */
-var _APP_CN_PAGINA='maleu-panel-v1055';
+var _APP_CN_PAGINA='maleu-panel-v1056';
 
 /* Devuelve [{k,v}] si lo publicado no es lo que esta pagina corre. */
 function _chequearVersiones(){
@@ -19139,7 +19139,11 @@ function _sbAPedido(o){
     h:o.channel||'', n:num, c:o.customer_name||'', tel:o.customer_key||'',
     f:_sbDdMm(o.ordered_at), hr:'',
     de:_sbDia(o.planned_delivery_at), dee:String(o.planned_delivery_at||'').slice(0,10),
-    fe:_sbDdMm(o.delivered_at), fex:String(o.delivered_at||'').slice(0,10),
+    /* (11/11/2026) La fecha de entrega en HORA ARGENTINA, como `pedidos_light_pantalla` (x.fe).
+       Con el slice crudo del timestamp (UTC), lo entregado el 31/10 después de las 21 caía el 1/11:
+       Inicio sumaba en noviembre 4 pedidos de Home que Ventas, bien, ponía en octubre. */
+    fe:(function(){var q=_sbArgPartes(o.delivered_at);return q&&q.f?q.f.slice(0,5):'';})(),
+    fex:(function(){var q=_sbArgPartes(o.delivered_at);if(!q||!q.f)return '';var z=q.f.split('/');return z[2]+'-'+z[1]+'-'+z[0];})(),
     /* (10/11/2026) La hora en que se entrego, para numerar las entregas del dia en Ventas retail. Se llama `hx` y no
        `he` A PROPOSITO: `he` lo usa `_ocasiones` para partir las entregas por viaje, y cambiaria cuantas cuenta el ERP. */
     hx:(function(){var q=_sbArgPartes(String(o.delivered_at||''));return (q&&q.h&&q.h!=='00:00')?q.h:'';})(),
@@ -19151,7 +19155,16 @@ function _sbAPedido(o){
     dep:String(o.warehouse||'').trim().toLowerCase(),
     /* (10/11/2026) El barrio: Estancias › Pulso filtra por él, y con esta lista sola decía «no hay pedidos este año». */
     bar:String(o.neighborhood||'').trim(),
-    $:Number(o.billed_amount)||0,
+    /* (11/11/2026) Red va por el NETO (lo que le queda a Maleu), como `pedidos_light_pantalla` y como
+       Ventas (memoria project_red_facturacion_neta). Con el bruto, Inicio sumaba $30.231 de más en
+       tres pedidos de Red de noviembre. Sin el neto (fila vieja), queda el bruto como antes. */
+    $:(o.channel==='Red'&&o.net_amount!=null&&o.net_amount!=='')?(Number(o.net_amount)||0):(Number(o.billed_amount)||0),
+    /* La bolsa entregada al representante: `_rtEsVenta` cuenta una venta de Red por ESTO, no por el
+       estado del pedido (Caro Rojo, 7/11: «Pendiente» con la bolsa entregada). */
+    ev:o.handoff_state||'',
+    /* (11/11/2026) El costo y el margen, como los trae `pedidos_light_pantalla` (co / mg). Solo
+       vienen si la consulta los pidió (admin, ver `_sbPedCols`). */
+    co:Number(o.cost_amount)||0, mg:Number(o.margin_amount)||0,
     ef:Number(o.cash_amount)||0, tr:Number(o.transfer_amount)||0,
     r:Number(o.source_row)||0,
     /* De cuando es esta fila EN LA BASE. No lo dibuja nadie: lo usa `_sbEdad`
@@ -19381,10 +19394,17 @@ function _dCopiaAviso(){
   return '<div class="al" style="background:#FFF6E5;border-color:#F0C27B"><span class="al-i">⌛</span><div><h3>Mostrando lo guardado '
     +(t>1?'de '+cuando:'en el celular')+'</h3><p>Actualizando con los datos de ahora&hellip;</p></div></div>';
 }
+function _sbConCosto(){ try{ return typeof SESSION!=='undefined'&&SESSION&&SESSION.rol==='admin'; }catch(e){ return false; } }
 function _sbPedCols(){
   return 'channel,order_number,customer_name,customer_key,order_state,payment_state,'
     +'payment_method,source_type,ordered_at,planned_delivery_at,delivered_at,'
     +'billed_amount,cash_amount,transfer_amount,source_row,updated_at,neighborhood'
+    /* EL COSTO (11/11/2026). Sin él, Inicio decía Costo $0 y margen 100% en Total Maleu, Ventas
+       retail y Por mercado: `_rtSumar` lee `p.co` de estas filas y esta lista no lo traía (la base
+       tenía el costo de los 74 entregados de noviembre). Solo para admin: la regla de la base
+       (`_rol_sin_costo`) es que empleado y repartidor no ven costos, y acá se respeta igual. */
+    +',net_amount,handoff_state'
+    +(_sbConCosto()?',cost_amount,margin_amount':'')
     +(_sbSinWarehouse?'':',warehouse')
     /* LOS PRODUCTOS NO SON OPCIONALES: ver el comentario de `_sbPedidosAhora`. */
     +',sales_order_item(product_sku,quantity)';
@@ -26567,6 +26587,16 @@ function rHSnap(){
   // "Cobrado mes" tuvo cuadrito propio hasta el 14/9/2026: repetía el "% ya cobrado"
   // de Facturado ($10,95M contra $10,99M) y su pie era un control del dato
   // ("cobertura FC"). Lo cobrado sigue adentro del flujo neto.
+  /* SIN LA CAJA NO HAY NÚMERO (11/11/2026). Inicio arranca pidiendo solo los pedidos: los
+     movimientos y el saldo llegan cuando alguien abre Caja o Egresos. Hasta entonces «Egresos
+     del mes» y «Disponibilidades» decían $0 — no saber dibujado como cero, el mismo día que la
+     caja tenía plata. Ahora Inicio la pide él mismo, una vez, y mientras viaja dice que la trae. */
+  var cajaSabe=Array.isArray(D.movimientos);
+  if(!cajaSabe&&typeof _recargarCaja==='function'&&!_cajaVuelo&&!rHSnap._pidio){
+    rHSnap._pidio=1;_cajaVuelo=true;
+    _recargarCaja().then(function(r){_cajaVuelo=false;if(!(r&&r.ok))rHSnap._fallo=1;if(cur==='inicio'&&curSI!=='eerr')rHSnap();},
+      function(){_cajaVuelo=false;rHSnap._fallo=1;if(cur==='inicio'&&curSI!=='eerr')rHSnap();});
+  }
   var fm=(typeof eerrFlujoMes==='function')?eerrFlujoMes(mn,anioN):{cobranzas:0,salidas:0,flujo:0};
   var quemadoMes=fm.salidas||0;
   var flujoMes=fm.flujo||0;
@@ -26636,8 +26666,14 @@ function rHSnap(){
      mismos dos numeros de Total Maleu, dos tarjetas mas arriba —el pie lo decia:
      "igual que Total Maleu"—. Quedan los cinco que no estan en otro lado. El
      "% cobrado" se fue con ellos: lo que falta cobrar esta en A cobrar. */
-  html+=card(sFlujo,'Egresos del mes',fmoney(quemadoMes),(flujoMes>=0?'+':'')+fmoney(flujoMes)+' flujo neto');
-  html+=card(sSaldo,'Disponibilidades',fmoney(saldoTot),(saldoTot>=cajaMin?'sobre caja mín ':'bajo caja mín ')+fmoney(cajaMin));
+  if(cajaSabe){
+    html+=card(sFlujo,'Egresos del mes',fmoney(quemadoMes),(flujoMes>=0?'+':'')+fmoney(flujoMes)+' flujo neto');
+    html+=card(sSaldo,'Disponibilidades',fmoney(saldoTot),(saldoTot>=cajaMin?'sobre caja mín ':'bajo caja mín ')+fmoney(cajaMin));
+  }else{
+    var _cjNo=rHSnap._fallo?'no pude traer la caja: abrí Caja':'trayendo la caja…';
+    html+=card('','Egresos del mes','—',_cjNo,"go('egresos')");
+    html+=card('','Disponibilidades','—',_cjNo,"go('caja')");
+  }
   /* El pie dice de dónde sale cuando hay de los dos: "recibieron Maleu y no
      pagaron" es cierto de los dos, pero un vendedor y un cliente no se cobran
      en la misma pantalla ni con la misma llamada. */
