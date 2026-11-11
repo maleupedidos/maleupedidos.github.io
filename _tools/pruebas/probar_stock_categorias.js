@@ -55,6 +55,19 @@ const chk = (c, t, extra) => { if (c) { ok++; console.log('  ok   ' + t); } else
     t = await ev(leer);
     chk(/Ustariz/.test(txt) || txt === 'ok', 'se pudo abrir la vista de un solo depósito', txt);
     chk(/Chorizo/.test(t) && /Morcilla/.test(t), 'un solo depósito: el chorizo y la morcilla tienen fila');
+    /* (640) SECCION > FAMILIA desde la base: con fam/sec/so/fo, la tabla va por sección y familia, en su orden. */
+    await ev(`(function(){ try{ stDep(''); }catch(e){}
+      var fila=function(a,n,f,fam,sec,so,fo){return {a:a,n:n,f:f,r:0,d:f,p:0,co:1000,i:0,v:0,c:0,iv:f*1000,u:'u',pd:{ustariz:f,moresco:0},pdd:{ustariz:f,moresco:0},pr:{},pz:0,vd:0.5,fam:fam,sec:sec,so:so,fo:fo};};
+      D.stock=[fila('Cho','Chorizo',4,'Embutidos','Carnicería',3,2), fila('TG','Torta Golosa',2,'Tortas','Postres',2,1),
+               fila('F','Franui Leche',5,'Frutas bañadas','Postres',2,2), fila('PMu','Pizza Muzzarella',3,'Pizzas','Comidas',1,2),
+               fila('PPM','Pack Muzzarella x2',1,'Packs de pizzas','Comidas',1,1)];
+      rStock(); return 1;})()`);
+    await pausa(500);
+    const sec = await ev(`(function(){var t=(document.querySelector('#p-stock')||{}).textContent||'';
+      var o=['Comidas','Packs de pizzas','Pizzas','Postres','Tortas','Frutas bañadas','Carnicería','Embutidos'].map(function(x){ return t.indexOf(x); });
+      return {o:o, n:document.querySelectorAll('#p-stock .st-sec').length};})()`);
+    chk(sec.n === 3, 'la tabla tiene los 3 títulos de sección', JSON.stringify(sec));
+    chk(sec.o.every((x, i) => x >= 0 && (i === 0 || x > sec.o[i - 1])), 'secciones y familias en su orden (Comidas › Packs, Pizzas · Postres › Tortas, Frutas bañadas · Carnicería › Embutidos)', JSON.stringify(sec.o));
     /* Contado hoy / ayer: un momento que en Argentina es AYER a las 23:59. */
     const hace = await ev(`(function(){
       var ahora=new Date(Date.now()-3*3600e3);   /* hora argentina en campos UTC */
