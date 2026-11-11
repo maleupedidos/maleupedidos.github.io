@@ -193,6 +193,30 @@ const estado = cli => evaluar(cli, `JSON.stringify({
     p = await posts(cli, 'marcarCobrado');
     chequear(p.length === 1 && p[0].quien === S && p[0].billeteraVuelto === T, 'marcarCobrado: quien Santos, billeteraVuelto Tadeo', JSON.stringify(p[0] || {}).slice(0, 220));
 
+    /* 7. (11/11/2026, 648) Cobra Tatu SIN billetera del día: el cuadro pregunta en qué billetera entra la plata */
+    await arrancar(cli, BIL3, `try{localStorage.setItem('maleu_panel_session',JSON.stringify({nombre:${JSON.stringify(S)},usuario:'santos',rol:'repartidor'}));}catch(e){}`);
+    await evaluar(cli, `_RUTA_USER=${JSON.stringify(S)}`);
+    await abrirCuadro(cli, '9002');
+    await evaluar(cli, '_setMoneyInput("cobroRecEf", 30000); _recalcCobroRuta();'); await dormir(300);
+    const bil7 = () => evaluar(cli, `JSON.stringify({ver:document.getElementById('cobroBilSection').style.display!=='none',
+      pills:[].slice.call(document.querySelectorAll('#cobroBil .cobro-pill')).map(function(b){return b.textContent+(b.classList.contains('on')?'*':'');}),
+      err:(document.getElementById('cobroRutaErr')||{}).textContent||'', dis:document.getElementById('btnCobroRutaOk').disabled})`).then(JSON.parse);
+    let b7 = await bil7();
+    chequear(b7.ver && b7.pills.join() === 'Tadeo,Lucas', 'sin billetera del día: pregunta la billetera (Tadeo y Lucas, sin Tatu, ninguna elegida)', JSON.stringify(b7.pills));
+    chequear(/En qué billetera entra la plata/.test(b7.err) && b7.dis, 'y no deja confirmar hasta elegirla', b7.err.slice(0, 120));
+    await evaluar(cli, `_setCobroBil(${JSON.stringify(L)})`); await dormir(300);
+    b7 = await bil7();
+    chequear(b7.pills.indexOf('Lucas*') >= 0 && !/billetera entra/.test(b7.err), 'elegida Lucas, el error se va', JSON.stringify(b7));
+    await evaluar(cli, 'window.__posts=[]; confirmarCobroRuta()');
+    p = await posts(cli, 'marcarCobrado');
+    chequear(p.length === 1 && p[0].quien === S && p[0].billeteraVuelto === L, 'marcarCobrado: quien Santos, la plata a Lucas', JSON.stringify(p[0] || {}).slice(0, 220));
+    /* 8. Cobra Tadeo: la pregunta de la billetera no aparece */
+    await arrancar(cli, BIL);
+    await abrirCuadro(cli, '9002');
+    await evaluar(cli, `_setMoneyInput("cobroRecEf", 30000); _setCobroQuien(${JSON.stringify(T)}); _recalcCobroRuta();`); await dormir(300);
+    b7 = await bil7();
+    chequear(!b7.ver, 'si cobra alguien con billetera propia, no pregunta la billetera', JSON.stringify(b7));
+
     const errs = JSON.parse(await evaluar(cli, 'JSON.stringify(window.__errores||[])'));
     chequear(errs.length === 0, 'sin errores de JS', JSON.stringify(errs).slice(0, 200));
   } catch (e) {
