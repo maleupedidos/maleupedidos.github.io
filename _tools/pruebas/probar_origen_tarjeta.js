@@ -49,7 +49,14 @@ const chk = (c, m, extra) => { if (c === true) { ok++; console.log('  ok  ', m);
     }
     await evaluar(cli, `(function(){var c=${card};var s=c.querySelector('.pc-summary');s.click();})()`); await T(900);
     const ab = await evaluar(cli, `(function(){var c=${card};var rs=[].slice.call(c.querySelectorAll('.pc-orl-r')).map(function(r){return {p:r.querySelector('.pc-orl-p').textContent.trim(),o:[].slice.call(r.querySelectorAll('.pc-orl-x')).map(function(x){return x.textContent.trim()})}});
-      var dv=c.querySelector('.ped-dep-v');var on=[].slice.call(c.querySelectorAll('.ped-dep-x.on')).map(function(b){return b.textContent.trim()});return {rs:rs,dep:dv?dv.textContent.trim():null,on:on};})()`);
+      var dv=c.querySelector('.ped-dep-v');var on=[].slice.call(c.querySelectorAll('.ped-dep-x.on')).map(function(b){return b.textContent.trim()});
+      var bt=[].slice.call(c.querySelectorAll('.ped-dep-x')).map(function(b){return b.textContent.trim()});return {rs:rs,dep:dv?dv.textContent.trim():null,on:on,bt:bt,chip:(c.querySelector('.pc-or-chip')||{}).textContent||''};})()`);
+    /* (11/11/2026, segunda vuelta) El freezer SIEMPRE con nombre: ni «Depósito» a secas, ni «Por defecto», ni «Sin elegir». */
+    chk(!ab.rs.some((r) => r.o.some((x) => /^Dep[oó]sito( ·|$)/.test(x))) && !/^Dep[oó]sito$/.test(ab.chip), `${K}: ningún «Depósito» sin nombre (renglones y chip «${ab.chip}»)`, { rs: ab.rs, chip: ab.chip });
+    if (ab.dep !== null) {
+      chk(ab.bt.indexOf('Por defecto') < 0 && !/Sin elegir/.test(ab.dep), `${K}: sin «Por defecto» ni «Sin elegir»: ${ab.bt.join(' · ')} / ${ab.dep}`, ab);
+      chk(ab.on.length === 1 || /^Repartido/.test(ab.dep), `${K}: un freezer marcado (${ab.on.join(',')}), salvo repartido`, ab);
+    }
     chk(ab.rs.length === ors.length && ors.length > 0, `${K}: abierta, un renglón por producto (${ab.rs.length} de ${ors.length})`, ab);
     const malos = ab.rs.filter((r, i) => {
       const o = ors[i] && ors[i].or; if (!o) return false;

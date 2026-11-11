@@ -15919,7 +15919,7 @@ function _leerVersion(app){
    "El HTML no sabe que version es" dejo de ser cierto: el build le escribe
    adentro el CACHE_NAME de sw-panel.js, el mismo que deploy.sh obliga a subir en
    cada cambio. Si lo publicado dice otra cosa, esta pagina es vieja. Punto. */
-var _APP_CN_PAGINA='maleu-panel-v1065';
+var _APP_CN_PAGINA='maleu-panel-v1066';
 
 /* Devuelve [{k,v}] si lo publicado no es lo que esta pagina corre. */
 function _chequearVersiones(){
@@ -19097,6 +19097,26 @@ function _pedConOr(p){
   p.p.forEach(function(it){ if(it&&!it.or&&m[it.a])it.or=m[it.a]; });
   return p;
 }
+/* EL FREEZER POR DEFECTO, RESUELTO (11/11/2026). Tadeo: «Depósito» sin nombre y «Por defecto» confunden; la pantalla
+   tiene que decir el freezer en el que el producto VA A TERMINAR. Medido ese día en la base: los 47 productos tienen
+   inventory_product.default_warehouse = 'ustariz'. La lista de freezers que llega a la pantalla (D.stockDeps, ordenada
+   por sort_order) no trae el default por producto, así que se toma el primero, que es Ustariz. Si algún día un producto
+   tiene otro default, hay que mandarlo en la foto de stock y usarlo acá. */
+function _pedDepDef(){ var l=_pedDeps(); return (l[0]&&l[0].id)||'ustariz'; }
+/* Cuánto sale de cada freezer, con lo guardado: el reparto por producto (w); si no hay, el freezer del pedido; si
+   tampoco, el por defecto. {ustariz:3, moresco:1}. */
+function _pedDepReparto(p){
+  _pedConOr(p);
+  var out={}, base=String(p.dep||'').trim().toLowerCase()||_pedDepDef();
+  (Array.isArray(p.p)?p.p:[]).forEach(function(it){
+    var or=it&&it.or, d=or?Number(or.d)||0:(Number(it&&it.q)||0);
+    if(!(d>0))return;
+    var w=or&&or.w&&typeof or.w==='object'?or.w:null, ks=w?Object.keys(w).filter(function(k){return Number(w[k])>0;}):[];
+    if(ks.length)ks.forEach(function(k){ out[k]=(out[k]||0)+Number(w[k]); });
+    else out[base]=(out[base]||0)+d;
+  });
+  return out;
+}
 function _pedOcDe(p,a){
   var l=(D&&D.oc&&Array.isArray(D.oc.lista))?D.oc.lista:[];
   return l.filter(function(o){ return o&&String(o.canal||'').trim()===p.h&&String(o.pedido||'').trim()===String(p.n)
@@ -19106,7 +19126,7 @@ function _pedOrigenPartes(p,it){
   var or=it&&it.or, partes=[], q=Number(it&&it.q)||0, num=function(x){ return _dec(Number(x)||0,_esCarne(it.a)?3:0).replace(/,000$/,''); };
   if(!or){
     if(_pedOrigenPendiente(p))return [{t:'Sin decidir',c:'pend'}];
-    if(p.o==='Deposito')return [{t:'Depósito'+(p.dep?' '+_pedDepNombre(p.dep):''),c:'dep'}];
+    if(p.o==='Deposito')return [{t:'Depósito '+_pedDepNombre(p.dep||_pedDepDef()),c:'dep'}];
     if(p.o==='Orden de Compra'||p.o==='Mixto'){
       var ocs0=_pedOcDe(p,it.a); if(!ocs0.length)return [{t:p.o==='Mixto'?'Depósito y OC':'OC',c:'oc'}];
     }else return [];
@@ -19116,7 +19136,7 @@ function _pedOrigenPartes(p,it){
   if(d>0){
     var ks=w?Object.keys(w).filter(function(k){ return Number(w[k])>0; }):[];
     if(ks.length)ks.forEach(function(k){ partes.push({t:'Depósito '+_pedDepNombre(k)+((varias||ks.length>1)?' · '+num(w[k]):''),c:'dep'}); });
-    else partes.push({t:'Depósito'+(p.dep?' '+_pedDepNombre(p.dep):'')+(varias?' · '+num(d):''),c:'dep'});
+    else partes.push({t:'Depósito '+_pedDepNombre(p.dep||_pedDepDef())+(varias?' · '+num(d):''),c:'dep'});
   }
   if(rep>0)partes.push({t:'Reposición en camino'+(varias?' · '+num(rep):''),c:'rep'});
   if(oc>0||!or){
@@ -19148,15 +19168,15 @@ function _pedOrigenChip(p){
   p.p.forEach(function(it){
     var or=it.or; if(!or){sinOr++;return;}
     if(Number(or.d)>0){ var w=or.w&&typeof or.w==='object'?or.w:null, ks=w?Object.keys(w).filter(function(k){return Number(w[k])>0;}):[];
-      if(ks.length)ks.forEach(function(k){deps[k]=1;}); else deps[p.dep||'_']=1; }
+      if(ks.length)ks.forEach(function(k){deps[k]=1;}); else deps[p.dep||_pedDepDef()]=1; }
     if(Number(or.oc)>0)nOc++;
     if(Number(or.rep)>0)nRep++;
   });
   if(sinOr===p.p.length){
-    if(p.o==='Deposito')return 'Depósito'+(p.dep?' '+_pedDepNombre(p.dep):'');
+    if(p.o==='Deposito')return 'Depósito '+_pedDepNombre(p.dep||_pedDepDef());
     return '';
   }
-  var dk=Object.keys(deps), dTxt=dk.length?('Depósito'+(dk.length===1&&dk[0]!=='_'?' '+_pedDepNombre(dk[0]):'')):'';
+  var dk=Object.keys(deps), dTxt=dk.length?('Depósito'+(dk.length===1?' '+_pedDepNombre(dk[0]):' '+dk.map(_pedDepNombre).join(' y '))):'';
   var oTxt=nOc?(nOc+' OC'):'', rTxt=nRep?'reposición':'';
   return [dTxt,oTxt,rTxt].filter(Boolean).join(' + ');
 }
@@ -19179,22 +19199,25 @@ function _pedDepHTML(p,homeOnly){
   /* (11/11/2026) El botón marcado dice lo GUARDADO: el freezer del pedido; si no tiene, el de sus productos cuando es
      uno solo; ninguno si están repartidos; «Por defecto» solo si no hay nada guardado. Antes marcaba «Por defecto»
      al lado de «Ustariz — elegido producto por producto». */
-  var _marca=id||(_wK.length===1?_wK[0]:'');
+  /* (11/11/2026, segunda vuelta) Sin «Por defecto» ni «Sin elegir»: dos botones y SIEMPRE uno marcado, el freezer del
+     que va a salir (lo guardado, o el por defecto ya resuelto). Si sale de los dos, ninguno marcado y se dice cuánto
+     de cada uno. */
+  var _rep=_pedDepReparto(p), _rK=Object.keys(_rep);
+  var _marca=_rK.length===1?_rK[0]:(_rK.length?'':(id||_pedDepDef()));
+  var _num=function(x){ return _dec(Number(x)||0,3).replace(/,?0+$/,''); };
+  var _repTxt=_rK.length>1?'Repartido: '+_rK.map(function(k){ return _num(_rep[k])+' '+_pedDepNombre(k); }).join(' · '):'';
   var cerrado=_pedDepCerrado(p);
   /* Por FILA, no por numero (2/10/2026, Codex): dos pedidos Home sin numero
      ("-") daban el mismo id, y el repintado de uno caia en el bloque del otro. */
   var uid=_pedDepUid(p);
   var h='<div class="ped-dep" id="pdep-'+uid+'">'
     +'<div class="ped-dep-t">De qu\u00e9 freezer sale</div>'
-    +'<div class="ped-dep-v">'+(id?_pedDepEsc(_pedDepNombre(id))
-      :(_wK.length?_pedDepEsc(_wK.map(_pedDepNombre).join(' y '))+' <small>\u2014 elegido producto por producto (abajo)</small>'
-      :'Sin elegir <small>\u2014 sale del freezer por defecto de cada producto</small>'))+'</div>';
+    +'<div class="ped-dep-v">'+(_repTxt?_pedDepEsc(_repTxt):_pedDepEsc(_pedDepNombre(_marca)))+'</div>';
   if(!cerrado){
     h+='<div class="ped-dep-b">';
     deps.forEach(function(d){
       h+='<button type="button" class="ped-dep-x'+(_marca===d.id?' on':'')+'" onclick="pedDep(\''+_pedDepEsc(p.h)+'\','+(p.r||0)+',\''+_pedDepEsc(d.id)+'\',this)">'+_pedDepEsc(_pedDepCorto(d.nombre||d.id))+'</button>';
     });
-    h+='<button type="button" class="ped-dep-x'+(!id&&!_wK.length?' on':'')+'" onclick="pedDep(\''+_pedDepEsc(p.h)+'\','+(p.r||0)+',\'\',this)">Por defecto</button>';
     h+='</div>';
   }else{
     h+='<div class="ped-dep-n">Ya se entreg\u00f3: la mercader\u00eda sali\u00f3 de un freezer y cambiar esto no la mueve. Para pasarla de uno a otro, us\u00e1 un traspaso en Productos.</div>';
@@ -23116,7 +23139,7 @@ function _jntMsgGrupo(d,C){
   var l=['*'+(d.titulo||'La juntada')+'*',''];
   (d.pedidos||[]).forEach(function(p){
     var it=(p.p||[]).map(function(x){return (typeof _esCarne==='function'&&_esCarne(x.a))?(PN[x.a]||x.a).replace(/^Carne /,''):(Number(x.q)||0)+'× '+(PN[x.a]||x.a);}).join(', ');
-    l.push('Maleu'+(it?' ('+it+')':'')+': '+_jnt$(p.total)+(p.cob?' ✓':''));
+    l.push('Maleu'+(it?' ('+it+')':'')+': '+_jnt$(p.total)+(p.cob?'':''));
   });
   (d.gastos||[]).forEach(function(g){ l.push(''+g.que+' ('+String(g.quien).split(' ')[0]+'): '+_jnt$(g.monto)); });
   l.push('');
@@ -23196,7 +23219,7 @@ function _jntPintar(){
   if(e.head)e.head.textContent=d.titulo||_JNT.grp;
   /* 1. Arriba, de un vistazo */
   h+='<div class="jnt-top"><div><span>Total</span><b>'+_jnt$(C.total)+'</b></div><div><span>Son</span><b>'+C.n+'</b></div><div><span>Cada uno</span><b>'+_jnt$(Math.ceil(C.toca))+'</b></div>'
-    +(C.pendMaleu>0?'<div class="mal"><span>Falta a Maleu</span><b>'+_jnt$(C.pendMaleu)+'</b></div>':'<div class="ok"><span>Maleu</span><b>✓ cobrado</b></div>')+'</div>';
+    +(C.pendMaleu>0?'<div class="mal"><span>Falta a Maleu</span><b>'+_jnt$(C.pendMaleu)+'</b></div>':'<div class="ok"><span>Maleu</span><b>cobrado</b></div>')+'</div>';
   if(_JNT.enVuelo)h+='<div class="jnt-guardando">Guardando…</div>';
   /* 2. Quiénes estuvieron */
   h+='<div class="ord-section jnt-sec"><div class="ord-section-h">Quiénes estuvieron <span class="count">'+C.n+'</span></div><div class="jnt-gente">';
@@ -23249,7 +23272,7 @@ function _jntPintar(){
     if(C.trans.length){
       h+='<div class="jnt-tr-t">Quién le pasa a quién</div>';
       C.trans.forEach(function(t){ h+='<div class="jnt-tr"><span>'+_jntEsc(t.de)+' → <b>'+(t.maleu?'Maleu':_jntEsc(t.a))+'</b></span><b>'+_jnt$(t.monto)+'</b></div>'; });
-    }else h+='<div class="jnt-tr-t ok">✓ Todo saldado</div>';
+    }else h+='<div class="jnt-tr-t ok">Todo saldado</div>';
   }
   h+='</div>';
   h+='<div id="jntMsg" class="ord-msg"></div>';
@@ -23265,7 +23288,7 @@ function jntSumarPer(){
   var c=(_jntCli||[]).filter(function(x){return _jntNorm(x.nombre)===_jntNorm(t)||(dig.length>=8&&x.tel&&x.tel.slice(-10)===dig.slice(-10));})[0];
   if(c){
     if(inp)inp.value='';
-    _jntGuardar('juntada_integrante_directo',{action:'juntadaIntegrante',grp:_JNT.grp,nombre:c.nombre,tel:c.tel||''},'✓ '+c.nombre.split(' ')[0]+' sumado').then(function(ok){ if(ok)_jntRecargar(); });
+    _jntGuardar('juntada_integrante_directo',{action:'juntadaIntegrante',grp:_JNT.grp,nombre:c.nombre,tel:c.tel||''},''+c.nombre.split(' ')[0]+' sumado').then(function(ok){ if(ok)_jntRecargar(); });
     return;
   }
   if(dig.length>=8&&dig.length===t.replace(/[\s+()-]/g,'').length){toast('Ese teléfono no está en el CRM: escribí el nombre');return;}
@@ -23284,7 +23307,7 @@ function jntNuevoOk(){
   if(nv.tipo==='casa'&&(!barrio||!lote)&&tel){toast('Poné el barrio y el lote de su casa');return;}
   var nombre=nv.nombre, tipo=nv.tipo;
   _JNT.nuevo=null;
-  _jntGuardar('juntada_integrante_directo',{action:'juntadaIntegrante',grp:_JNT.grp,nombre:nombre,tel:tel},'✓ '+nombre.split(' ')[0]+' sumado').then(function(ok){
+  _jntGuardar('juntada_integrante_directo',{action:'juntadaIntegrante',grp:_JNT.grp,nombre:nombre,tel:tel},''+nombre.split(' ')[0]+' sumado').then(function(ok){
     if(!ok)return;
     _jntRecargar();
     if(!tel)return;   /* sin teléfono no hay ficha del CRM (la clave del CRM es el teléfono) */
@@ -23294,7 +23317,7 @@ function jntNuevoOk(){
       if(!r||r.ok===false){toast('Quedó en la juntada, pero no en el CRM: '+((r&&r.err)||'?'),6000);return;}
       return _ordenPost({action:'crmSetResidencia',tel:tel,residencia:tipo==='casa'?'vive':'visita',clientOpId:_pfId()}).then(function(r2){return r2.json();}).then(function(){
         _jntCli=null; try{localStorage.removeItem('maleu_np_clientes_v1');}catch(e){}
-        toast('✓ '+nombre.split(' ')[0]+' quedó en el CRM ('+(tipo==='casa'?'tiene casa':'visita')+')',3000);
+        toast(nombre.split(' ')[0]+' quedó en el CRM ('+(tipo==='casa'?'tiene casa':'visita')+')',3000);
         _jntClientes();
       });
     }).catch(function(e){toast('Quedó en la juntada, pero no en el CRM: '+String(e&&e.message||e),6000);});
@@ -23310,7 +23333,7 @@ function jntSumarGasto(){
   if(!que){toast('Poné qué fue (ej: Pan)');var a=document.getElementById('jntGQue');if(a)a.focus();return;}
   if(!(m>0)){toast('Poné el monto');var b=document.getElementById('jntGMonto');if(b)b.focus();return;}
   ['jntGQue','jntGMonto'].forEach(function(id){var x=document.getElementById(id);if(x)x.value='';});
-  _jntGuardar('juntada_gasto_directo',{grp:_JNT.grp,quien:q,que:que,monto:m},'✓ '+que+' de '+q.split(' ')[0]+': '+_jnt$(m));
+  _jntGuardar('juntada_gasto_directo',{grp:_JNT.grp,quien:q,que:que,monto:m},''+que+' de '+q.split(' ')[0]+': '+_jnt$(m));
 }
 function jntQuitarGasto(btn){
   var id=btn.getAttribute('data-id'); if(!id)return;
@@ -23319,13 +23342,13 @@ function jntQuitarGasto(btn){
 function _jntCopiar(txt,btn,msg){
   try{ if(navigator.clipboard&&navigator.clipboard.writeText)navigator.clipboard.writeText(txt); }catch(e){}
   var box=document.getElementById('jntMsg'); if(box){box.textContent=txt;box.classList.add('on');}
-  toast(msg||'✓ Copiado',2500);
+  toast(msg||'Copiado',2500);
 }
-function jntCopiarGrupo(btn){ var d=_JNT.d; if(!d)return; _jntCopiar(_jntMsgGrupo(d,_jntCuenta(d)),btn,'✓ Copiado: pegalo en el grupo de la juntada'); }
+function jntCopiarGrupo(btn){ var d=_JNT.d; if(!d)return; _jntCopiar(_jntMsgGrupo(d,_jntCuenta(d)),btn,'Copiado: pegalo en el grupo de la juntada'); }
 function jntCopiarPer(btn){
   var d=_JNT.d; if(!d)return; var C=_jntCuenta(d), n=btn.getAttribute('data-n');
   var x=C.personas.filter(function(y){return y.nombre===n;})[0]; if(!x)return;
-  _jntCopiar(_jntMsgPersona(d,C,x),btn,'✓ Copiado: pegalo en el chat de '+n.split(' ')[0]);
+  _jntCopiar(_jntMsgPersona(d,C,x),btn,'Copiado: pegalo en el chat de '+n.split(' ')[0]);
 }
 /* ══ DERIVAR A UN REPRESENTANTE (10/11/2026) ════════════════════════════════════════════════════════════════════════
    Tadeo: «tiene que volar, ser simple, los botones tienen que fluir». Antes: un formulario con dos listas desplegables y un
