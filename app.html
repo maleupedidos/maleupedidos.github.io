@@ -8280,7 +8280,15 @@ div.rb-esq .rb-n{color:#bbb}
     <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2.2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 4v6h-6"/></svg>
     <span>Actualizar pedidos</span>
   </button>
+  <!-- (11/11/2026) El buscador de clientes, para Tatu (usuario santos): ver _pedBuscaOk. -->
+  <div class="ped-top" id="pedTopHome" hidden>
+    <label class="ped-busq"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+      <input id="pedBusqH" type="search" autocomplete="off" placeholder="Buscar cliente, teléfono o N° de pedido" oninput="pedBuscarH(this.value)">
+      <button type="button" class="ped-busq-x" id="pedBusqHX" hidden onclick="pedBuscarH('',true)" aria-label="Borrar la búsqueda">×</button>
+    </label>
+  </div>
   <div class="fr" id="fRowHome"></div>
+  <div id="pedResH" class="ped-res" hidden></div>
   <div id="pListHome"></div>
 </div>
 
@@ -15911,7 +15919,7 @@ function _leerVersion(app){
    "El HTML no sabe que version es" dejo de ser cierto: el build le escribe
    adentro el CACHE_NAME de sw-panel.js, el mismo que deploy.sh obliga a subir en
    cada cambio. Si lo publicado dice otra cosa, esta pagina es vieja. Punto. */
-var _APP_CN_PAGINA='maleu-panel-v1059';
+var _APP_CN_PAGINA='maleu-panel-v1060';
 
 /* Devuelve [{k,v}] si lo publicado no es lo que esta pagina corre. */
 function _chequearVersiones(){
@@ -19048,6 +19056,72 @@ function _pedDepCerrado(p){
   if(p.h==='Red')return String(p.ev||'').trim()==='Entregado'||p.es==='Entregado';
   return p.es==='Entregado';
 }
+/* ══ DE DÓNDE SALE CADA PRODUCTO (11/11/2026) ══════════════════════════════
+   Tadeo (María Paz Martín, Pilar #2440): «no puedo saber si cada producto sale del depósito, y de cuál, o de una OC».
+   Lee el origen guardado por producto (`p.p[i].or` = {d, oc, rep, w:{freezer:cantidad}}) y las líneas de OC del
+   pedido (D.oc.lista). Devuelve, por producto, las partes: «Depósito Ustariz», «OC-1234 · Proveedor · pedida».
+   Sin origen guardado (pedido viejo, o todavía sin decidir) dice lo que se sabe, sin inventar un freezer. */
+function _pedOcDe(p,a){
+  var l=(D&&D.oc&&Array.isArray(D.oc.lista))?D.oc.lista:[];
+  return l.filter(function(o){ return o&&String(o.canal||'').trim()===p.h&&String(o.pedido||'').trim()===String(p.n)
+    &&(o.abbr===a||o.ap===a)&&String(o.estado||'').trim().toLowerCase()!=='cancelado'; });
+}
+function _pedOrigenPartes(p,it){
+  var or=it&&it.or, partes=[], q=Number(it&&it.q)||0, num=function(x){ return _dec(Number(x)||0,_esCarne(it.a)?3:0).replace(/,000$/,''); };
+  if(!or){
+    if(_pedOrigenPendiente(p))return [{t:'Sin decidir',c:'pend'}];
+    if(p.o==='Deposito')return [{t:'Depósito'+(p.dep?' '+_pedDepNombre(p.dep):''),c:'dep'}];
+    if(p.o==='Orden de Compra'||p.o==='Mixto'){
+      var ocs0=_pedOcDe(p,it.a); if(!ocs0.length)return [{t:p.o==='Mixto'?'Depósito y OC':'OC',c:'oc'}];
+    }else return [];
+  }
+  var d=Number(or&&or.d)||0, oc=Number(or&&or.oc)||0, rep=Number(or&&or.rep)||0, w=(or&&or.w&&typeof or.w==='object')?or.w:null;
+  var varias=(d>0?1:0)+(oc>0?1:0)+(rep>0?1:0)>1;
+  if(d>0){
+    var ks=w?Object.keys(w).filter(function(k){ return Number(w[k])>0; }):[];
+    if(ks.length)ks.forEach(function(k){ partes.push({t:'Depósito '+_pedDepNombre(k)+((varias||ks.length>1)?' · '+num(w[k]):''),c:'dep'}); });
+    else partes.push({t:'Depósito'+(p.dep?' '+_pedDepNombre(p.dep):'')+(varias?' · '+num(d):''),c:'dep'});
+  }
+  if(rep>0)partes.push({t:'Reposición en camino'+(varias?' · '+num(rep):''),c:'rep'});
+  if(oc>0||!or){
+    var ocs=_pedOcDe(p,it.a);
+    if(ocs.length)ocs.forEach(function(o){
+      var e=String(o.estado||'').trim().toLowerCase(), est=e==='recibido'?'recibida':(e==='pedido'?'pedida':'falta pedir');
+      partes.push({t:(o.oc?String(o.oc):'OC')+(o.proveedor?' · '+o.proveedor:'')+' · '+est+(varias||ocs.length>1?' · '+num(o.q):''),c:e==='recibido'?'ok':'oc'});
+    });
+    else partes.push({t:'OC'+(varias?' · '+num(oc):'')+((D&&D.oc&&D.oc.lista)?' · falta pedir':''),c:'oc'});
+  }
+  return partes;
+}
+/* Un renglón por producto, con su origen a la derecha. */
+function _pedOrigenLineas(p){
+  if(!p||!Array.isArray(p.p)||!p.p.length)return '';
+  var e=function(t){ return String(t==null?'':t).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];}); };
+  return '<div class="pc-orl">'+p.p.map(function(it){
+    var pt=_pedOrigenPartes(p,it);
+    return '<div class="pc-orl-r"><span class="pc-orl-p">'+(_esCarne(it.a)?_lineaProd(it.a,it.q,p.pz):'<b>'+e(it.q)+'×</b> '+e(PN[it.a]||it.a))+'</span>'
+      +'<span class="pc-orl-o">'+pt.map(function(x){ return '<span class="pc-orl-x '+x.c+'">'+e(x.t)+'</span>'; }).join('')+'</span></div>';
+  }).join('')+'</div>';
+}
+/* El chip de la tarjeta cerrada: «Depósito Ustariz», «4 OC», «Depósito + 2 OC». Vacío si no se sabe. */
+function _pedOrigenChip(p){
+  if(!p||!Array.isArray(p.p)||!p.p.length||p.es==='Cancelado')return '';
+  var deps={},nOc=0,nRep=0,sinOr=0;
+  p.p.forEach(function(it){
+    var or=it.or; if(!or){sinOr++;return;}
+    if(Number(or.d)>0){ var w=or.w&&typeof or.w==='object'?or.w:null, ks=w?Object.keys(w).filter(function(k){return Number(w[k])>0;}):[];
+      if(ks.length)ks.forEach(function(k){deps[k]=1;}); else deps[p.dep||'_']=1; }
+    if(Number(or.oc)>0)nOc++;
+    if(Number(or.rep)>0)nRep++;
+  });
+  if(sinOr===p.p.length){
+    if(p.o==='Deposito')return 'Depósito'+(p.dep?' '+_pedDepNombre(p.dep):'');
+    return '';
+  }
+  var dk=Object.keys(deps), dTxt=dk.length?('Depósito'+(dk.length===1&&dk[0]!=='_'?' '+_pedDepNombre(dk[0]):'')):'';
+  var oTxt=nOc?(nOc+' OC'):'', rTxt=nRep?'reposición':'';
+  return [dTxt,oTxt,rTxt].filter(Boolean).join(' + ');
+}
 function _pedDepHTML(p,homeOnly){
   var deps=_pedDeps();
   /* Con UN solo deposito no hay nada que preguntar ni nada que mostrar: la
@@ -19056,14 +19130,22 @@ function _pedDepHTML(p,homeOnly){
   /* Un pedido que no toca el freezer no tiene de donde salir. Con el origen
      todavia sin decidir SI se muestra: es el momento natural para elegirlo. */
   if(p.o==='Orden de Compra')return '';
+  /* (11/11/2026) Todo por OC según lo guardado por producto: no hay freezer que elegir. */
+  var _its=Array.isArray(p.p)?p.p:[], _conOr=_its.filter(function(it){return it&&it.or;});
+  if(_conOr.length&&_conOr.length===_its.length&&_conOr.every(function(it){return !(Number(it.or.d)>0);}))return '';
   var id=String(p.dep||'').trim().toLowerCase();
+  /* Sin freezer elegido para el pedido pero con el de cada producto guardado: se dice cuál, no «Sin elegir». */
+  var _wDe={}; _conOr.forEach(function(it){ var w=it.or.w; if(w&&typeof w==='object')Object.keys(w).forEach(function(k){ if(Number(w[k])>0)_wDe[k]=1; }); });
+  var _wK=Object.keys(_wDe);
   var cerrado=_pedDepCerrado(p);
   /* Por FILA, no por numero (2/10/2026, Codex): dos pedidos Home sin numero
      ("-") daban el mismo id, y el repintado de uno caia en el bloque del otro. */
   var uid=_pedDepUid(p);
   var h='<div class="ped-dep" id="pdep-'+uid+'">'
     +'<div class="ped-dep-t">De qu\u00e9 freezer sale</div>'
-    +'<div class="ped-dep-v">'+(id?_pedDepEsc(_pedDepNombre(id)):'Sin elegir <small>\u2014 sale del freezer por defecto de cada producto</small>')+'</div>';
+    +'<div class="ped-dep-v">'+(id?_pedDepEsc(_pedDepNombre(id))
+      :(_wK.length?_pedDepEsc(_wK.map(_pedDepNombre).join(' y '))+' <small>\u2014 elegido producto por producto (abajo)</small>'
+      :'Sin elegir <small>\u2014 sale del freezer por defecto de cada producto</small>'))+'</div>';
   if(!cerrado){
     h+='<div class="ped-dep-b">';
     deps.forEach(function(d){
@@ -19216,7 +19298,11 @@ function _sbAPedido(o){
        array: si la consulta no los trajo, va vacio y la lista dibuja el pedido
        sin el detalle — feo, pero vivo. Undefined la rompe entera. */
     p:(Array.isArray(o.sales_order_item)?o.sales_order_item:[]).map(function(it){
-      return { a:it.product_sku||'', q:Number(it.quantity)||0 };
+      /* (11/11/2026) El origen de CADA producto, para que la tarjeta diga de dónde sale (ver _pedOrigenLineas). */
+      var or=it.origin; if(typeof or==='string'){ try{ or=JSON.parse(or); }catch(e){ or=null; } }
+      var x={ a:it.product_sku||'', q:Number(it.quantity)||0 };
+      if(or&&typeof or==='object')x.or=or;
+      return x;
     }),
     /* Los 14 cancelados sin numero traen '-' en la planilla, y un guion solo
        bajo una columna que dice "N°" se lee como "se rompio". */
@@ -19433,7 +19519,7 @@ function _sbPedCols(){
     +(_sbConCosto()?',cost_amount,margin_amount':'')
     +(_sbSinWarehouse?'':',warehouse')
     /* LOS PRODUCTOS NO SON OPCIONALES: ver el comentario de `_sbPedidosAhora`. */
-    +',sales_order_item(product_sku,quantity)';
+    +',sales_order_item(product_sku,quantity,origin)';
 }
 function _sbPedidosAhora(limite){
   /* `true` = usá el permiso si lo tenés, pero no salgas a pedirlo. Ver
@@ -19691,7 +19777,8 @@ function _sbVentas(){
 function _sbOCs(){
   return _sbPermiso(true).then(function(sb){
     if(!sb)return null;
-    var cols='channel,source_order_number,customer_name,product_abbr,quantity,supplier,state';
+    /* (11/11/2026) + order_no: la tarjeta del pedido nombra la OC de cada producto (OC-1574). */
+    var cols='channel,source_order_number,customer_name,product_abbr,quantity,supplier,state,order_no';
     /* DE A 1000, COMO LAS VENTAS (9/10/2026). Esto pedia `limit=5000` en una sola
        llamada, y PostgREST corta en 1000 SIN avisar. La tabla paso las 1000
        lineas el 7/10: el 8/10 a las 19:10 llegaban 1000 de 1058, o sea 580 OCs
@@ -19716,7 +19803,8 @@ function _sbOCs(){
                        abbr:String(o.product_abbr||'').trim(),
                        q:Number(o.quantity)||0,
                        proveedor:String(o.supplier||'').trim(),
-                       estado:String(o.state||'').trim() });
+                       estado:String(o.state||'').trim(),
+                       oc:String(o.order_no||'').trim() });
           }
           /* Tope de 20 paginas, igual que en las ventas. */
           if(filas.length<paso||off>20000)return out;
@@ -28903,7 +28991,67 @@ var _rpGen={};
    tiene que aparecer: «santos 10/11» no, «santos bullrich» sí). Sin acentos ni mayúsculas, como el Ctrl K. Un número
    de 1 a 5 cifras es el N° de pedido exacto; desde 6 cifras se busca en el teléfono. Solo admin (pedido de Tadeo:
    lo usan él, Lucas y Tatu). */
-var _pedQ='',_pedQt=null;
+var _pedQ='',_pedQt=null,_pedQH='';
+/* QUIÉN TIENE EL BUSCADOR (11/11/2026). En Pedidos, admin. En Pedidos Home, admin y los USUARIOS de esta lista: Tadeo
+   pidió que lo use Tatu (Santos Bullrich, usuario «santos»), sin cambiarle el rol de repartidor. Va por usuario y no
+   por rol a propósito: Agustín (carpi) es repartidor también y no lo recibe de arrastre. Busca entre los pedidos que
+   esa sesión puede ver (para un repartidor, los de Home) y muestra la tarjeta de siempre: cliente, estado, fecha de
+   entrega y total, sin costos (la base no se los manda: _rol_sin_costo / _sbConCosto). */
+var PED_BUSCA_USUARIOS=['santos'];
+function _pedBuscaOk(homeOnly){
+  if(typeof SESSION==='undefined'||!SESSION)return false;
+  if(SESSION.rol==='admin')return true;
+  return !!homeOnly&&PED_BUSCA_USUARIOS.indexOf(String(SESSION.usuario||'').toLowerCase())>=0;
+}
+function pedBuscarH(v,limpiar){
+  _pedQH=String(v||'');
+  var i=$('pedBusqH'),x=$('pedBusqHX');
+  if(limpiar&&i){i.value='';i.focus();}
+  if(x)x.hidden=!_pedQH;
+  var adm=(typeof SESSION!=='undefined'&&SESSION&&SESSION.rol==='admin');
+  clearTimeout(_pedQt);_pedQt=setTimeout(function(){
+    try{ if(adm)rPedidosHome(); else _pedBuscarBaseH(_pedQH); }catch(e){ console.error('pedBuscarH',e); }
+  },limpiar?0:250);
+}
+/* EL REPARTIDOR BUSCA EN LA BASE, NO EN LO QUE TIENE (11/11/2026). Su sesión trae solo los pedidos de su día de
+   reparto (pedidos_light_pantalla los recorta: hoy eran 2), así que filtrar eso no es «buscar entre todos». Se le
+   pregunta a sales_order con SU permiso (la policy le deja leer los de Home, de cualquier fecha) y SIN pedir
+   columnas de costo. Lista corta: cliente, estado, entrega y total, lo más nuevo arriba. */
+var _pedBHn=0;
+function _pedBuscarBaseH(q){
+  var box=$('pedResH'), lst=$('pListHome'); q=String(q||'').trim();
+  if(!box)return;
+  if(!q){ box.hidden=true; box.innerHTML=''; if(lst)lst.hidden=false; return; }
+  if(lst)lst.hidden=true; box.hidden=false;
+  var yo=++_pedBHn;
+  box.innerHTML='<div class="ped-res-m">Buscando «'+_rtEsc(q)+'»…</div>';
+  /* Primero la función de la base `pedidos_buscar_pantalla(p_q)` (SECURITY DEFINER: el repartidor NO puede leer
+     sales_order directo —su policy le devuelve 0 filas—, y la función devuelve solo cliente, canal, N°, estado,
+     entrega y total, nunca costos). Si todavía no existe (404), se busca entre lo que la sesión ya tiene y se dice. */
+  var _local=false;
+  _sbPermiso(true).then(function(sb){
+    if(!sb)throw new Error('sin permiso de la base');
+    return fetch(sb.url+'/rest/v1/rpc/pedidos_buscar_pantalla',{method:'POST',headers:{apikey:sb.key,Authorization:'Bearer '+sb.token,'Content-Type':'application/json'},body:JSON.stringify({p_q:q})})
+      .then(function(r){
+        if(r.status===404){ _local=true; return (D&&D.pedidos||[]).map(function(p){ return {channel:p.h,order_number:p.n,customer_name:p.c,customer_key:p.tel,neighborhood:p.bar,order_state:p.es,planned_delivery_at:p.dee,billed_amount:p.$}; }); }
+        if(!r.ok)throw new Error('la base contestó '+r.status);
+        return r.json();
+      });
+  }).then(function(filas){
+    if(yo!==_pedBHn)return;
+    var L=(filas||[]).map(function(o){ return {h:o.channel||o.h||'',n:String(o.order_number||o.n||''),c:o.customer_name||o.c||'',tel:o.customer_key||o.tel||'',bar:o.neighborhood||o.bar||'',
+      es:o.order_state||o.es||'',dee:String(o.planned_delivery_at||o.dee||'').slice(0,10),$:Number(o.billed_amount!=null?o.billed_amount:o.tot)||0}; })
+      .filter(function(p){ return p.c&&_pedCoincide(p,q); });
+    var _nota=_local?'<div class="ped-res-m">Por ahora busca solo entre los pedidos de tu día de reparto.</div>':'';
+    if(!L.length){ box.innerHTML=_nota+'<div class="ped-res-m">Ningún pedido coincide con «'+_rtEsc(q)+'».</div>'; return; }
+    var DN=['Dom','Lun','Mar','Mié','Jue','Vie','Sáb'];
+    box.innerHTML=_nota+'<div class="ped-res-m">'+L.length+(L.length===1?' pedido':' pedidos')+(L.length>=60?' (los 60 más nuevos)':'')+'</div>'+L.map(function(p){
+      var ent=p.dee?(function(z){var d=new Date(+z[0],+z[1]-1,+z[2]);return DN[d.getDay()]+' '+z[2]+'/'+z[1]+'/'+z[0];})(p.dee.split('-')):'sin fecha';
+      return '<div class="ped-res-r"><div class="ped-res-l"><b>'+_rtEsc(p.c)+'</b><span>'+_rtEsc(p.h)+' #'+_rtEsc(p.n)+' · Entrega '+ent+'</span></div>'
+        +'<div class="ped-res-d"><span class="tg ped-res-e '+_rtEsc(String(p.es).toLowerCase())+'">'+_rtEsc(p.es||'—')+'</span><b>$'+f$(Math.round(p.$))+'</b></div></div>';
+    }).join('');
+  }).catch(function(e){ if(yo!==_pedBHn)return; box.innerHTML='<div class="ped-res-m">No pude buscar: '+_rtEsc(String(e&&e.message||e))+'</div>'; });
+}
 function _pedCoincide(p,q){
   var toks=_cmdPlano(q).split(/\s+/).filter(Boolean);if(!toks.length)return true;
   var txt=_cmdPlano([p.c,p.bar,p.br,p.h].join(' ')),tel=String(p.tel||'').replace(/\D/g,''),num=String(p.n||'');
@@ -29006,8 +29154,10 @@ function rPedidos(opts){
      canales salían de D.canales —que en la copia guardada no viene, y quedaba solo «Todos»—. */
   var fr=$(frId);if(!fr)return;fr.innerHTML='';fr.className='fr ped-fr';
   /* El buscador es de admin (Tadeo y Lucas). Un empleado ve la lista sin él. */
-  if(!homeOnly){ var _bb=$('pedBusqBox'); if(_bb)_bb.hidden=!(typeof SESSION!=='undefined'&&SESSION&&SESSION.rol==='admin'); if(_bb&&_bb.hidden)_pedQ=''; }
-  var _q=homeOnly?'':String(_pedQ||'').trim();
+  if(!homeOnly){ var _bb=$('pedBusqBox'); if(_bb)_bb.hidden=!_pedBuscaOk(false); if(_bb&&_bb.hidden)_pedQ=''; }
+  else{ var _bh=$('pedTopHome'); if(_bh)_bh.hidden=!_pedBuscaOk(true); if(_bh&&_bh.hidden)_pedQH=''; }
+  /* En Pedidos Home el admin filtra lo que tiene; el repartidor busca en la base (_pedBuscarBaseH), no acá. */
+  var _q=String((homeOnly?((typeof SESSION!=='undefined'&&SESSION&&SESSION.rol==='admin')?_pedQH:''):_pedQ)||'').trim();
   var _base=(D.pedidos||[]).filter(function(p){
     if(p.hist)return false;
     if(!p.c||!p.c.trim())return false;
@@ -29226,6 +29376,9 @@ function rPedidos(opts){
       sumOrigenPendBadge='<span class="tg pc-pend-origen" title="Este pedido necesita que le asignes stock o lo compres contra pedido (OC)"> Asignar stock</span>';
     }
     var _casa=_pedCasaHTML(p,_casaIdx);
+    /* (11/11/2026) De dónde sale, también con la tarjeta cerrada. Si ya está el chip de OC esperando, no se repite. */
+    var _orChip=sumOrigenPendBadge?'':_pedOrigenChip(p);
+    if(_orChip&&!(sumReadyBadge&&/OC/.test(_orChip)&&!/Dep/.test(_orChip)))sumReadyBadge='<span class="tg pc-or-chip" title="De dónde sale">'+_rtEsc(_orChip)+'</span>'+sumReadyBadge;
     html+='<div class="pc-summary" onclick="togglePc(event,this)">';
     html+=  '<div class="pc-summary-l">';
     /* El nombre abre el pedido (es la unica puerta a su ficha); el 👤, la del cliente en el CRM (28/10/2026). */
@@ -29264,7 +29417,10 @@ function rPedidos(opts){
     if(p.fp)html+='<span class="tg" style="background:var(--cd);color:var(--bl)">'+p.fp+'</span>';
     html+='</div>';
     if(comboLbl)html+='<div class="pc-combo">'+comboLbl.replace(/[<>&]/g,' ')+'</div>';
-    if(prods)html+='<div class="pc-p">'+prods+'</div>';
+    /* (11/11/2026) Un renglón por producto con su origen; si el pedido no tiene productos con origen, la línea de siempre. */
+    var _orl=_pedOrigenLineas(p);
+    if(_orl&&!_pedOrigenPendiente(p))html+=_orl;
+    else if(prods)html+='<div class="pc-p">'+prods+'</div>';
     if(_casa.cuerpo)html+=_casa.cuerpo;
 
     // ORIGEN por producto (split DEP/OC por cantidad) si es Pendiente y el pedido no está cancelado ni entregado.
@@ -61046,7 +61202,24 @@ html:not(#_e1):not(#_e2) #p-egresos #egrBreakdown .card{border-top:1px solid var
 html:not(#_e1):not(#_e2) :is(#p-pedidos,#p-pedidoshome,#p-caja,#p-ventas,#p-egresos) :is(.pc,.vt,.cj-r,.va-p){border-radius:var(--card-r);box-shadow:none}
 
 /* TAB PEDIDOS (11/11/2026): buscador arriba, filtros segmentados con cantidad, el orden en un selector */
-#p-pedidos .ped-top{display:flex;align-items:center;gap:10px;margin:0 0 10px}
+#p-pedidos .ped-top,#p-pedidoshome .ped-top{display:flex;align-items:center;gap:10px;margin:0 0 10px}
+#p-pedidoshome .ped-top[hidden],#p-pedidoshome .ped-busq-x[hidden],#p-pedidoshome .ped-res[hidden],#p-pedidoshome #pListHome[hidden]{display:none}
+.ped-res{border:1px solid var(--border);border-radius:9px;background:#fff;overflow:hidden;margin:0 0 12px}
+.ped-res-m{font-size:12px;color:var(--ink3);padding:9px 12px;border-bottom:1px solid var(--border)}
+.ped-res-r{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:10px 12px;border-bottom:1px solid var(--border)}
+.ped-res-r:last-child{border-bottom:none}
+.ped-res-l{min-width:0;display:flex;flex-direction:column;gap:2px}
+.ped-res-l b{font-size:14px;font-weight:600;color:var(--ink)}
+.ped-res-l span{font-size:12px;color:var(--ink3)}
+.ped-res-d{display:flex;flex-direction:column;align-items:flex-end;gap:4px;flex-shrink:0}
+.ped-res-d b{font-size:13px;font-weight:600;font-variant-numeric:tabular-nums}
+.ped-res-e.entregado{background:var(--gb);color:var(--gd)}
+.ped-res-e.pendiente{background:var(--ol);color:#8B3A0E}
+.ped-res-e.cancelado{background:var(--rb);color:var(--r)}
+#p-pedidoshome .ped-busq{flex:1;min-width:0;display:flex;align-items:center;gap:8px;height:38px;padding:0 10px 0 12px;border:1px solid var(--borderstrong);border-radius:9px;background:#fff}
+#p-pedidoshome .ped-busq svg{width:16px;height:16px;flex-shrink:0;stroke:var(--ink3);fill:none;stroke-width:2;stroke-linecap:round}
+#p-pedidoshome .ped-busq input{flex:1;min-width:0;border:none;outline:none;background:transparent;font:inherit;font-size:14px;color:var(--ink)}
+html:not(#_e1):not(#_e2) #p-pedidoshome .ped-busq-x{min-height:0;width:26px;height:26px;padding:0;border:none;border-radius:50%;background:var(--cr);color:var(--ink3);font-size:16px;line-height:1;cursor:pointer;flex-shrink:0}
 #p-pedidos .ped-busq{flex:1;min-width:0;display:flex;align-items:center;gap:8px;height:38px;padding:0 10px 0 12px;border:1px solid var(--borderstrong);border-radius:9px;background:#fff}
 #p-pedidos .ped-busq[hidden],#p-pedidos .ped-busq-x[hidden]{display:none}
 #p-pedidos .ped-busq:focus-within{border-color:var(--o);box-shadow:0 0 0 3px rgba(240,125,71,.15)}
@@ -61072,6 +61245,20 @@ html:not(#_e1):not(#_e2) .pg select.ped-orden{margin-left:auto;width:auto;font-s
   html:not(#_e1):not(#_e2) .pg .ped-seg + .ped-seg button{padding:0 2px;font-size:12px}
   html:not(#_e1):not(#_e2) .pg select.ped-orden{min-height:38px;height:38px;flex:0 0 auto;width:auto;min-width:96px;margin-left:0;padding:0 22px 0 8px;font-size:12px}
 }
+/* DE DÓNDE SALE CADA PRODUCTO (_pedOrigenLineas / _pedOrigenChip) */
+.pc-orl{margin:8px 0 4px;border:1px solid var(--border);border-radius:9px;overflow:hidden}
+.pc-orl-r{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:7px 10px;font-size:13px;border-top:1px solid var(--border)}
+.pc-orl-r:first-child{border-top:none}
+.pc-orl-p{min-width:0;color:var(--ink)}
+.pc-orl-o{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:4px;flex-shrink:0;max-width:60%}
+.pc-orl-x{font-size:11.5px;font-weight:600;padding:2px 7px;border-radius:6px;white-space:nowrap;background:var(--cd);color:var(--bl)}
+.pc-orl-x.dep{background:#EAF3EC;color:#2E6B3A}
+.pc-orl-x.oc{background:var(--ol);color:#8B3A0E}
+.pc-orl-x.ok{background:var(--gb);color:var(--gd)}
+.pc-orl-x.rep{background:#EEF2FB;color:#33507A}
+.pc-orl-x.pend{background:#FDE8E6;color:#B3261E}
+.tg.pc-or-chip{background:#EAF3EC;color:#2E6B3A}
+@media(max-width:560px){.pc-orl-r{flex-wrap:wrap}.pc-orl-o{max-width:100%;justify-content:flex-start}}
 /* FILTROS PLEGABLES (_filtrosPlegables) */
 .fp-cerrado{display:none !important}
 .fp-bar{display:flex;align-items:center;flex-wrap:wrap;gap:6px 10px;margin:0 0 8px}
