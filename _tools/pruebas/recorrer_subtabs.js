@@ -86,7 +86,8 @@ const NAV = 'estSwitch|ajGo|setCrmProdPeriodo|switchTab|stSwitchTab|vSwitchTab|a
     for (let i = 0; i < 150; i++) { try { tabs = await ev(`(typeof SESSION!=='undefined'&&SESSION&&SESSION.tabs)?SESSION.tabs:null`); if (tabs) break; } catch (e) {} await pausa(200); }
     if (!tabs) { console.log('no entró'); process.exit(1); }
     await pausa(4000);
-    const vistas = (await ev(`Array.from(document.querySelectorAll('.pg')).map(function(p){return p.id.replace(/^p-/,'');})`)).filter(t => COMO_ADMIN ? t !== 'resumen' : tabs.indexOf(t) >= 0);
+    const vistas = (await ev(`Array.from(document.querySelectorAll('.pg')).map(function(p){return p.id.replace(/^p-/,'');})`)).filter(t => COMO_ADMIN ? t !== 'resumen' : tabs.indexOf(t) >= 0)
+      .filter(t => !process.env.SOLO || process.env.SOLO.split(',').indexOf(t) >= 0);   /* (11/11/2026) SOLO=stock: una tab sola, para /auditoria */
     res.length = 0;
     for (const t of vistas) {
       donde = t;
