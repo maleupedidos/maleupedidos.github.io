@@ -49,7 +49,7 @@ const chk = (c, m, extra) => { if (c === true) { ok++; console.log('  ok  ', m);
     }
     await evaluar(cli, `(function(){var c=${card};var s=c.querySelector('.pc-summary');s.click();})()`); await T(900);
     const ab = await evaluar(cli, `(function(){var c=${card};var rs=[].slice.call(c.querySelectorAll('.pc-orl-r')).map(function(r){return {p:r.querySelector('.pc-orl-p').textContent.trim(),o:[].slice.call(r.querySelectorAll('.pc-orl-x')).map(function(x){return x.textContent.trim()})}});
-      var dv=c.querySelector('.ped-dep-v');return {rs:rs,dep:dv?dv.textContent.trim():null};})()`);
+      var dv=c.querySelector('.ped-dep-v');var on=[].slice.call(c.querySelectorAll('.ped-dep-x.on')).map(function(b){return b.textContent.trim()});return {rs:rs,dep:dv?dv.textContent.trim():null,on:on};})()`);
     chk(ab.rs.length === ors.length && ors.length > 0, `${K}: abierta, un renglón por producto (${ab.rs.length} de ${ors.length})`, ab);
     const malos = ab.rs.filter((r, i) => {
       const o = ors[i] && ors[i].or; if (!o) return false;
@@ -59,7 +59,11 @@ const chk = (c, m, extra) => { if (c === true) { ok++; console.log('  ok  ', m);
     });
     chk(malos.length === 0, `${K}: cada renglón coincide con el origen guardado en la base`, { malos, ors });
     if (todoOc) chk(ab.dep === null, `${K}: todo por OC, no aparece «De qué freezer sale»`, ab.dep);
-    else if (ws.length) chk(!!ab.dep && !/Sin elegir/.test(ab.dep), `${K}: «De qué freezer sale» no dice «Sin elegir»: ${ab.dep}`, ab.dep);
+    else if (ws.length) {
+      chk(!!ab.dep && !/Sin elegir/.test(ab.dep), `${K}: «De qué freezer sale» no dice «Sin elegir»: ${ab.dep}`, ab.dep);
+      if (ws.length === 1) chk(ab.on.length === 1 && ab.on[0].toLowerCase().indexOf(ws[0]) >= 0, `${K}: el botón marcado es el guardado (${ws[0]}), no «Por defecto»: ${ab.on.join(',')}`, ab.on);
+      else chk(ab.on.length === 0, `${K}: repartido entre freezers, ningún botón marcado`, ab.on);
+    }
     console.log('     ', JSON.stringify(ab.rs));
   }
   const err = (await evaluar(cli, 'window.__err||[]')).filter((x) => !/ResizeObserver loop/.test(x));
