@@ -26,6 +26,8 @@ const chk = (c, m, extra) => { if (c === true) { ok++; console.log('  ok  ', m);
   await cli.enviar('Page.navigate', { url: URL });
   await T(12000);
   await evaluar(cli, "fC='Todos';fE='Todos';go('pedidos')"); await T(9000);
+  /* SIN_OR=1: la lista llega SIN el origen de cada producto, como la arma pedidos_light_pantalla en producción. La tarjeta lo tiene que sacar igual (_ORI). */
+  if (process.env.SIN_OR) { await evaluar(cli, "(D.pedidos||[]).forEach(function(p){(p.p||[]).forEach(function(it){delete it.or;});});render()"); await T(1500); console.log('  (sin origen en la lista: lo tiene que traer aparte)'); }
   for (const K of PEDS) {
     const [H, N] = K.split('|');
     /* La verdad, de la base (con el permiso de la pantalla), sin pasar por el armado del ERP. */

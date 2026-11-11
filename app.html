@@ -15919,7 +15919,7 @@ function _leerVersion(app){
    "El HTML no sabe que version es" dejo de ser cierto: el build le escribe
    adentro el CACHE_NAME de sw-panel.js, el mismo que deploy.sh obliga a subir en
    cada cambio. Si lo publicado dice otra cosa, esta pagina es vieja. Punto. */
-var _APP_CN_PAGINA='maleu-panel-v1060';
+var _APP_CN_PAGINA='maleu-panel-v1061';
 
 /* Devuelve [{k,v}] si lo publicado no es lo que esta pagina corre. */
 function _chequearVersiones(){
@@ -19061,6 +19061,42 @@ function _pedDepCerrado(p){
    Lee el origen guardado por producto (`p.p[i].or` = {d, oc, rep, w:{freezer:cantidad}}) y las líneas de OC del
    pedido (D.oc.lista). Devuelve, por producto, las partes: «Depósito Ustariz», «OC-1234 · Proveedor · pedida».
    Sin origen guardado (pedido viejo, o todavía sin decidir) dice lo que se sabe, sin inventar un freezer. */
+/* EL ORIGEN POR PRODUCTO, APARTE DE LA LISTA (11/11/2026). La lista de pedidos la arman dos caminos y uno solo trae
+   el origen de cada producto: en producción gana `pedidos_light_pantalla`, que no lo trae, y la tarjeta volvía a decir
+   «Depósito» a secas (medido en vivo con María Paz, Pilar #2440). Se pide aparte a sales_order_item —los pedidos de
+   los últimos 60 días, de a 1000—, se guarda en _ORI y se completa al dibujar (`_pedConOr`). Cada 2 min como mucho. */
+var _ORI={},_ORI_T=0,_ORI_V=null;
+function _oriCargar(){
+  if(_ORI_V||Date.now()-_ORI_T<120000||typeof _sbPermiso!=='function')return;
+  _ORI_V=_sbPermiso(true).then(function(sb){
+    if(!sb)return;
+    var desde=new Date(Date.now()-60*864e5).toISOString().slice(0,10), out={};
+    var traer=function(off){
+      return fetch(sb.url+'/rest/v1/sales_order_item?select=order_key,product_sku,origin,sales_order!inner(ordered_at)&sales_order.ordered_at=gte.'+desde
+          +'&order=order_key&limit=1000&offset='+off,{headers:{apikey:sb.key,Authorization:'Bearer '+sb.token}})
+        .then(function(r){ if(!r.ok)throw new Error('sb '+r.status); return r.json(); })
+        .then(function(f){
+          (f||[]).forEach(function(x){ var o=x.origin; if(typeof o==='string'){ try{o=JSON.parse(o);}catch(e){o=null;} }
+            if(o&&typeof o==='object')(out[x.order_key]=out[x.order_key]||{})[x.product_sku]=o; });
+          return (f&&f.length===1000&&off<10000)?traer(off+1000):null;
+        });
+    };
+    return traer(0).then(function(){
+      _ORI=out;_ORI_T=Date.now();
+      if((cur==='pedidos'||cur==='pedidoshome')&&typeof render==='function'){
+        var ab=[].slice.call(document.querySelectorAll('.pc:not(.collapsed)')).map(function(c){return c.dataset.pcKey||'';}).filter(Boolean);
+        render();
+        ab.forEach(function(k){ var c=document.querySelector('.pc[data-pc-key="'+String(k).replace(/"/g,'\\"')+'"]'); if(c&&c.classList.contains('collapsed')){ _pcCuerpo(c); c.classList.remove('collapsed'); } });
+      }
+    });
+  }).catch(function(e){ console.warn('origen por producto',e); }).then(function(){ _ORI_V=null; });
+}
+function _pedConOr(p){
+  if(!p||!Array.isArray(p.p))return p;
+  var m=_ORI[p.h+'|'+p.n]; if(!m)return p;
+  p.p.forEach(function(it){ if(it&&!it.or&&m[it.a])it.or=m[it.a]; });
+  return p;
+}
 function _pedOcDe(p,a){
   var l=(D&&D.oc&&Array.isArray(D.oc.lista))?D.oc.lista:[];
   return l.filter(function(o){ return o&&String(o.canal||'').trim()===p.h&&String(o.pedido||'').trim()===String(p.n)
@@ -19095,6 +19131,7 @@ function _pedOrigenPartes(p,it){
 }
 /* Un renglón por producto, con su origen a la derecha. */
 function _pedOrigenLineas(p){
+  _pedConOr(p);
   if(!p||!Array.isArray(p.p)||!p.p.length)return '';
   var e=function(t){ return String(t==null?'':t).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];}); };
   return '<div class="pc-orl">'+p.p.map(function(it){
@@ -19105,6 +19142,7 @@ function _pedOrigenLineas(p){
 }
 /* El chip de la tarjeta cerrada: «Depósito Ustariz», «4 OC», «Depósito + 2 OC». Vacío si no se sabe. */
 function _pedOrigenChip(p){
+  _pedConOr(p);
   if(!p||!Array.isArray(p.p)||!p.p.length||p.es==='Cancelado')return '';
   var deps={},nOc=0,nRep=0,sinOr=0;
   p.p.forEach(function(it){
@@ -19123,6 +19161,7 @@ function _pedOrigenChip(p){
   return [dTxt,oTxt,rTxt].filter(Boolean).join(' + ');
 }
 function _pedDepHTML(p,homeOnly){
+  _pedConOr(p);
   var deps=_pedDeps();
   /* Con UN solo deposito no hay nada que preguntar ni nada que mostrar: la
      pantalla vuelve a ser exactamente la de antes del 25/9. */
@@ -29072,6 +29111,7 @@ function rPedidos(opts){
   var homeOnly = !!opts.homeOnly;
   /* Los depósitos se piden YA, al pintar la lista, y no recién al abrir una tarjeta (ver _pedDeps). */
   if(!homeOnly){ try{ _pedDeps(); }catch(_eDp){} }
+  try{ _oriCargar(); }catch(_eOr){}
   var listId = opts.listId || 'pList';
   var frId = opts.frId || 'fRow';
   function _rerender(){ rPedidos(opts); }
