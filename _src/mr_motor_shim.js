@@ -44,6 +44,15 @@ G.MR_MOTOR = {
       _motNegCerrar_(_HOJAS);   /* (noche) filas negativas al final de su hoja */
       var o = JSON.parse(_doGetMiReparto({ parameter: opts.p || {} }).getContent());
       o.base = true;
+      /* (650) Quién cobró en persona (`qp`) y en qué billetera quedó la plata (`bil`), por N° de pedido: la base los
+         manda en cada entrega (648); `_doGetMiReparto` no los conoce. */
+      var _qpN = {};
+      (datos && datos.home || []).forEach(function (x) { _qpN[String(x.n)] = x; });
+      (o.entregas || []).forEach(function (e) {
+        var x = _qpN[String(e.n)]; if (!x) return;
+        if (x.qp) e.qp = String(x.qp);
+        if (x.bil) e.bil = String(x.bil);
+      });
       return _motFilasReales_(o);   /* (noche) filas negativas → su número real */
     } finally { _ahora = null; _HOJAS = {}; _MR = {}; }
   }

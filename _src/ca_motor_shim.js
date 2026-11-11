@@ -58,14 +58,15 @@ function _camCargar_(d) {
     put('Teléfono', x[10]); put('Barrio', x[11]); put('Sub Barrio', x[12]); put('Domicilio - Lote', x[13]);
     put('Cuenta Cobro', x[14]); put('Cobró', x[15]); put('Repartidor', x[16]);
     put('Recibido Efectivo', Number(x[17]) || ''); put('Operación Cobro', x[18]); put('Pagó', x[19]);
+    put('Cobró en persona', x[20] || '');   /* (648) */
     _motPoner_(H[h].f, x[1], f);
   });
   H['Cobros Parciales'] = new _Hoja('Cobros Parciales', [['Fecha/Hora', 'Hoja', 'N° Pedido', 'Cliente', 'Forma Pago', 'Monto', 'Notas',
-    'Cuenta', 'Cobró', 'Op', 'Pagó', 'Operación Cobro', 'Ítems', 'Recibido Efectivo']]);
+    'Cuenta', 'Cobró', 'Op', 'Pagó', 'Operación Cobro', 'Ítems', 'Recibido Efectivo', 'Cobró en persona']]);
   (d.parc || []).forEach(function (x) {
     var k = String(x[2] || ''), i = k.indexOf('|');
     _motPoner_(H['Cobros Parciales'].f, x[0], [_motFecha_(x[1]) || '', k.slice(0, i), k.slice(i + 1), x[3], x[4], Number(x[5]) || 0, '',
-      x[6], x[7], '', x[8], x[9], '', Number(x[10]) || '']);
+      x[6], x[7], '', x[8], x[9], '', Number(x[10]) || '', x[11] || '']);
   });
   H['Pagos Red Liq'] = new _Hoja('Pagos Red Liq', [['Timestamp', 'Fecha', 'Vendedor', 'Año', 'Semana', 'Efectivo', 'Transferencia', 'Total',
     'A Pagar Esperado', 'Diferencia', 'Pedidos', '# Pedidos', 'Origen', 'Cuenta', 'Recibió']]);
@@ -86,7 +87,7 @@ function _camCabPed_(h) {
   var cab = []; for (var i = 0; i < 30; i++) cab.push('');
   cab[1] = 'N° Pedido';
   return cab.concat(['Fecha de Cobro', 'Fecha Entrega', 'Repartidor', 'Teléfono', 'Cuenta Cobro', 'Cobró', 'Recibido Efectivo',
-    'Operación Cobro', 'Pagó'], h === 'Clubes' ? [] : ['Barrio', 'Sub Barrio', 'Domicilio - Lote']);
+    'Operación Cobro', 'Pagó', 'Cobró en persona'], h === 'Clubes' ? [] : ['Barrio', 'Sub Barrio', 'Domicilio - Lote']);
 }
 
 /* datos: lo que devuelve caja_resto_pantalla. opts.ahora: fijar el reloj (la prueba). Devuelve lo mismo

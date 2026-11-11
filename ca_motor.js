@@ -2548,6 +2548,7 @@ function _doGetAdmin(opt) {
       var _ce = { q: q, m: ef };
       if (det) {
         _ce.ts = det.ts || 0; _ce.h = det.h || ''; _ce.id = det.id || ''; _ce.c = det.c || '';
+        if (det.qp) _ce.qp = det.qp;
         if (dig > 0) { _ce.mp = dig; _ce.cta = _cuentaDigitalValida_(cuentaId) || _cuentaDigitalDefault_(); }
       }
       _lugIn.cobEf.push(_ce);
@@ -2606,7 +2607,8 @@ function _doGetAdmin(opt) {
       // Sumar a caja viva sólo si es posterior al saldoBase
       if (saldoBase.fechaDate && !_afterSaldo(cpFecha)) continue;
       if (cpFp === 'Efectivo') _acumCobrado(cpMonto, 0, '', String(dCP_caja[rcp_caja][8] || '').trim(),
-        { ts: fDtCP ? fDtCP.getTime() : 0, h: cpHoja, id: cpId + ' (parcial)', c: cpCli });
+        { ts: fDtCP ? fDtCP.getTime() : 0, h: cpHoja, id: cpId + ' (parcial)', c: cpCli,
+          qp: String(dCP_caja[rcp_caja][14] || '').trim() });   // (648) quién cobró en persona
       else _acumCobrado(0, cpMonto, cpCta);
     }
   }
@@ -2673,9 +2675,10 @@ function _doGetAdmin(opt) {
     var _ixH = function (nom) { for (var i = 0; i < hdrs.length; i++) if (String(hdrs[i]).trim() === nom) return i; return -1; };
     var idxBar = _ixH('Barrio'), idxSub = _ixH('Sub Barrio'), idxLot = _ixH('Domicilio - Lote');
     var idxOp = _ixH(COBRO_OP_COL_), idxPg = _ixH(COBRO_PAGO_COL_);
+    var idxCobP = _ixH('Cobró en persona');   // (648) quién cobró ≠ dónde está la plata («Cobró»)
     var _c = _leerColsRalas_(shC, [1, 3, colsC.cli, colsC.fp, colsC.ep,
                                    colsC.ef, colsC.tr, colsC.fac, idxFc, idxFeEnt, idxRep, idxTel, idxBar, idxSub, idxLot], _lecModo);
-    var _fin = _leerColsRalas_(shC, [idxCta, idxCob, idxRec, idxOp, idxPg], _lecModo);
+    var _fin = _leerColsRalas_(shC, [idxCta, idxCob, idxRec, idxOp, idxPg, idxCobP], _lecModo);
     var _cta = function (r) { return idxCta >= 0 ? _fin.v(r, idxCta) : ''; };
     var _quien = function (r) {
       return String((idxCob >= 0 ? _fin.v(r, idxCob) : '') || (idxRep >= 0 ? _c.v(r, idxRep) : '') || '').trim();
@@ -2750,7 +2753,8 @@ function _doGetAdmin(opt) {
         if (!_afterSaldo(fcRaw)) continue;
       }
       _acumCobrado(efTotal, mpTotal, String(_cta(rc2) || '').trim(), _quien(rc2),
-        { ts: fDt ? fDt.getTime() : 0, h: hojaName, id: pedidoId, c: cliente });
+        { ts: fDt ? fDt.getTime() : 0, h: hojaName, id: pedidoId, c: cliente,
+          qp: idxCobP >= 0 ? String(_fin.v(rc2, idxCobP) || '').trim() : '' });
     }
   }
   // Home/Pilar v2: L=11=FP, M=12=EP, R=17=Efectivo, S=18=Transferencia, V=21=Facturado, H=7=Cliente
@@ -3413,6 +3417,7 @@ function _lugaresDetalle_(e) {
     if (!(num(c.m) > 0)) return;
     var k = persona(c.q);
     var f = { t: 'cobro', ts: num(c.ts), m: num(c.m), h: String(c.h || ''), id: String(c.id || ''), c: String(c.c || '') };
+    if (c.qp) f.qp = String(c.qp);   // (648) quién lo cobró en persona (Tatu), aunque la plata esté en otra billetera
     if (num(c.mp) > 0) { f.mp = num(c.mp); f.cta = String(c.cta || ''); }
     f.k = f.h + '|' + f.id + '|' + f.ts;
     de(k).filas.push(f);
@@ -4164,14 +4169,15 @@ function _camCargar_(d) {
     put('Teléfono', x[10]); put('Barrio', x[11]); put('Sub Barrio', x[12]); put('Domicilio - Lote', x[13]);
     put('Cuenta Cobro', x[14]); put('Cobró', x[15]); put('Repartidor', x[16]);
     put('Recibido Efectivo', Number(x[17]) || ''); put('Operación Cobro', x[18]); put('Pagó', x[19]);
+    put('Cobró en persona', x[20] || '');   /* (648) */
     _motPoner_(H[h].f, x[1], f);
   });
   H['Cobros Parciales'] = new _Hoja('Cobros Parciales', [['Fecha/Hora', 'Hoja', 'N° Pedido', 'Cliente', 'Forma Pago', 'Monto', 'Notas',
-    'Cuenta', 'Cobró', 'Op', 'Pagó', 'Operación Cobro', 'Ítems', 'Recibido Efectivo']]);
+    'Cuenta', 'Cobró', 'Op', 'Pagó', 'Operación Cobro', 'Ítems', 'Recibido Efectivo', 'Cobró en persona']]);
   (d.parc || []).forEach(function (x) {
     var k = String(x[2] || ''), i = k.indexOf('|');
     _motPoner_(H['Cobros Parciales'].f, x[0], [_motFecha_(x[1]) || '', k.slice(0, i), k.slice(i + 1), x[3], x[4], Number(x[5]) || 0, '',
-      x[6], x[7], '', x[8], x[9], '', Number(x[10]) || '']);
+      x[6], x[7], '', x[8], x[9], '', Number(x[10]) || '', x[11] || '']);
   });
   H['Pagos Red Liq'] = new _Hoja('Pagos Red Liq', [['Timestamp', 'Fecha', 'Vendedor', 'Año', 'Semana', 'Efectivo', 'Transferencia', 'Total',
     'A Pagar Esperado', 'Diferencia', 'Pedidos', '# Pedidos', 'Origen', 'Cuenta', 'Recibió']]);
@@ -4192,7 +4198,7 @@ function _camCabPed_(h) {
   var cab = []; for (var i = 0; i < 30; i++) cab.push('');
   cab[1] = 'N° Pedido';
   return cab.concat(['Fecha de Cobro', 'Fecha Entrega', 'Repartidor', 'Teléfono', 'Cuenta Cobro', 'Cobró', 'Recibido Efectivo',
-    'Operación Cobro', 'Pagó'], h === 'Clubes' ? [] : ['Barrio', 'Sub Barrio', 'Domicilio - Lote']);
+    'Operación Cobro', 'Pagó', 'Cobró en persona'], h === 'Clubes' ? [] : ['Barrio', 'Sub Barrio', 'Domicilio - Lote']);
 }
 
 /* datos: lo que devuelve caja_resto_pantalla. opts.ahora: fijar el reloj (la prueba). Devuelve lo mismo
