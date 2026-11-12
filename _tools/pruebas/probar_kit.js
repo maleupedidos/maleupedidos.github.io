@@ -99,6 +99,15 @@ const chk = (c, m, x) => { if (c === true) { ok++; console.log('  ok  ', m); } e
     await ev("estHogLimpiar()"); await T(500);
     const h2 = await ev("(document.getElementById('fp-hog')||{}).innerText||''");
     chk(/Sin filtros/.test(h0) && /Estado: Dormidas/.test(h1) && /Sin filtros/.test(h2), 'Casas: arranca sin filtros, dice el que se puso y Limpiar lo saca', { h0, h1, h2 });
+    // Pedidos «Tarjetas / Tabla»: en la compu, una fila por tarjeta y al tocarla se abre la tarjeta entera; en el
+    // celular el interruptor no se ve y siguen siendo tarjetas.
+    await ev("go('pedidos')"); await T(2500);
+    const pt = JSON.parse(await ev(`(function(){localStorage.setItem('panelPedVista','tabla');rPedidos();var l=document.getElementById('pList');var r=l.querySelectorAll('.pt-row'),c=l.querySelectorAll('.pc.pc-en-tabla');
+      var o={tabla:l.classList.contains('ped-tabla'),filas:r.length,tarj:c.length,vista:getComputedStyle(document.querySelector('.ped-vista')).display};
+      if(r[0]){r[0].click();o.abierta=!!l.querySelector('.pc.pt-abierta:not(.collapsed)');}
+      localStorage.setItem('panelPedVista','tarjetas');rPedidos();o.vuelve=!l.classList.contains('ped-tabla')&&l.querySelectorAll('.pt-row').length===0;return JSON.stringify(o);})()`));
+    if (CEL) chk(!pt.tabla && pt.filas === 0 && pt.vista === 'none', 'Pedidos en el celular: siempre tarjetas, sin interruptor', pt);
+    else chk(pt.tabla && pt.filas > 0 && pt.filas === pt.tarj && pt.abierta && pt.vuelve, 'Pedidos en la compu: una fila por pedido, la fila abre la tarjeta, y «Tarjetas» vuelve', pt);
     const dis = JSON.parse(await ev(`(function(){var b=document.createElement('button');b.className='btn-primary';b.disabled=true;b.textContent='x';document.querySelector('.pg.on').appendChild(b);var o=getComputedStyle(b).opacity;b.remove();return JSON.stringify({o:o});})()`));
     chk(Number(dis.o) < 0.6, 'un botón deshabilitado se ve deshabilitado', dis);
   } catch (e) { mal++; console.log('  REVENTO: ' + (e && e.stack || e)); }
