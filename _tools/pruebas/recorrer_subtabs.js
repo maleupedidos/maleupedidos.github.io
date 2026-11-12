@@ -42,6 +42,25 @@ const NAV = 'estSwitch|ajGo|setCrmProdPeriodo|switchTab|stSwitchTab|vSwitchTab|a
       if (m && !m.carg && m.n > 30) break;
       await pausa(250);
     }
+    /* (12/11/2026) TEXTO=1: lo compacto que quedó CORTADO (el texto no entra: scrollWidth > ancho, o «…») o en DOS
+       RENGLONES siendo de un renglón (botón, chip, tab, KPI, celda). Sirve para comparar antes y después de cambiar la
+       letra: TEXTO_OUT=<archivo.json> guarda la lista por pantalla. */
+    if (process.env.TEXTO && m) {
+      try {
+        m.txt = await ev(`(function(){var pg=document.querySelector('.pg.on'); if(!pg)return [];
+          var SEL='button,.tab,[class*="-tab"],[class*="chip"],[class*="pill"],.tg,[class*="kpi"] b,[class*="kpi"] strong,[class*="-seg"] > *,.aba-res-c b,th,td,.bn-lbl,[class*="badge"]';
+          var out=[], vis=function(e){return !!(e.offsetWidth||e.offsetHeight)&&getComputedStyle(e).visibility!=='hidden';};
+          [].slice.call(pg.querySelectorAll(SEL)).forEach(function(e){
+            if(!vis(e))return; var t=(e.innerText||'').replace(/\\s+/g,' ').trim(); if(!t||t.length>40)return;
+            var cs=getComputedStyle(e), lh=parseFloat(cs.lineHeight)||parseFloat(cs.fontSize)*1.25, h=e.getBoundingClientRect().height;
+            var pad=(parseFloat(cs.paddingTop)||0)+(parseFloat(cs.paddingBottom)||0)+(parseFloat(cs.borderTopWidth)||0)+(parseFloat(cs.borderBottomWidth)||0);
+            var corta=e.scrollWidth>e.clientWidth+1&&cs.overflow!=='visible'&&e.clientWidth>0;
+            var dos=t.indexOf(' ')>0&&e.children.length<=1&&(h-pad)>lh*1.6&&t.length<=24;
+            if(corta||dos)out.push(String(e.className||e.tagName).split(' ')[0].slice(0,24)+' «'+t.slice(0,28)+'» '+(corta?'corta':'dos'));
+          });
+          return out.slice(0,60);})()`);
+      } catch (e) { m.txt = ['(no se pudo medir)']; }
+    }
     return m || {};
   };
   /* ABRIR=1: en cada pantalla toca hasta 2 de cada «abrir un detalle» (la ficha del cliente, el pedido, la OC…), solo
@@ -120,6 +139,12 @@ const NAV = 'estSwitch|ajGo|setCrmProdPeriodo|switchTab|stSwitchTab|vSwitchTab|a
     const bloq = await ev(`(window.__bloqueados||[])`);
     console.log('\n== Sub-tabs ' + ANCHO + 'px · ' + res.length + ' pantallas');
     res.forEach(r => { const mal = r.carg || (r.n || 0) < 30 || (r.feo && r.feo.length) || r.desb; console.log((mal ? '  MAL ' : '  ok  ') + r.donde.padEnd(56) + String(r.n || 0).padStart(5) + ' elem' + String(r.ms == null ? '' : r.ms + ' ms').padStart(9) + (r.carg ? ' CARGANDO' : '') + (r.feo && r.feo.length ? ' FEO:' + r.feo.join(',') : '') + (r.desb ? ' DESBORDA ' + r.desb + 'px' : '')); });
+    if (process.env.TEXTO) {
+      const conTxt = res.filter(r => r.txt && r.txt.length);
+      console.log('\n== Textos cortados o en dos renglones (' + conTxt.reduce((a, r) => a + r.txt.length, 0) + ' en ' + conTxt.length + ' pantallas)');
+      conTxt.forEach(r => console.log('  ' + r.donde + ': ' + r.txt.slice(0, 8).join(' · ')));
+      if (process.env.TEXTO_OUT) fs.writeFileSync(process.env.TEXTO_OUT, JSON.stringify(res.map(r => ({ donde: r.donde, txt: r.txt || [], desb: r.desb || 0 }))));
+    }
     console.log('\n== Errores (' + errores.length + ')'); errores.forEach(e => console.log('  [' + e.donde + '] ' + e.tipo + ': ' + e.msg));
     console.log('\n== js-error del medidor (' + med.length + ')'); med.forEach(x => console.log('  ' + x));
     /* (8/11/2026) Lo que el ERP intentó mandar a Apps Script y cortó en su propia puerta (`_appsApagadoResp`). */
