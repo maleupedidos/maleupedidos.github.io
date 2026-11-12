@@ -87,6 +87,28 @@ const chk = (c, m, x) => { if (c === true) { ok++; console.log('  ok  ', m); } e
       const nav = JSON.parse(await ev("JSON.stringify([].map.call(document.querySelectorAll('#p-ajustes .aj-nav .aj-pill'),function(b){return b.textContent;}))"));
       chk(nav[0] === 'Precios' && nav.indexOf('Config operativa') < 0, 'el menú arranca por lo que se cambia seguido (Precios) y sin «Config operativa»', nav);
     }
+    /* ── Lo que decidió el Organizador el 11/11 noche ── */
+    if (process.env.DECIDIDOS) {
+      await ev("ajGo('usuarios')"); await T(500);
+      const us = JSON.parse(await ev(`JSON.stringify({link:!!document.querySelector('#ajBody .aj-link-rep button'),acc:document.querySelectorAll('#ajBody .aj-acc').length,
+        filasRep:document.querySelectorAll('#ajBody .aj-row-vend').length,nRep:(AJ_DATA.vendedores||[]).filter(function(v){return v.usuario;}).length})`));
+      chk(us.link && us.acc === 0 && us.filasRep === 0, `Usuarios: sin representantes, con link a Representantes (${us.nRep})`, us);
+      await ev("document.querySelector('#ajBody .aj-link-rep button').click()"); await T(500);
+      const rp = JSON.parse(await ev(`JSON.stringify({sec:AJ_SEC,acc:document.querySelectorAll('#ajBody .aj-acc').length,pin:[].filter.call(document.querySelectorAll('#ajBody .aj-acc button'),function(b){return /Cambiar PIN/.test(b.textContent);}).length,datos:document.querySelectorAll('#ajBody .aj-row.v').length})`));
+      chk(rp.sec === 'vendedores' && rp.acc === us.nRep && rp.pin === us.nRep && rp.datos >= 1, 'el link lleva a Representantes, con el acceso (Cambiar PIN) y los datos de cada uno', rp);
+      await ev("ajGo('provisiones')"); await T(500);
+      const pv = JSON.parse(await ev(`JSON.stringify((function(){var rs=[].slice.call(document.querySelectorAll('#ajBody .aj-row.pr[data-orig]'));
+        return {n:rs.length,cat:rs.map(function(r){var s=r.querySelector('select[data-k="categoria"]');return s?s.value:null;}),
+          desde:rs.map(function(r){var i=r.querySelector('input[data-k="desde"]');return i?i.type+':'+i.value:null;}),
+          hasta:rs.map(function(r){var i=r.querySelector('input[data-k="hasta"]');return i?i.type+':'+i.value:null;}),
+          base:(AJ_DATA.provisiones||[]).map(function(p){return [p.categoria,String(p.desde).slice(0,7),String(p.hasta||'').slice(0,7)];})};})())`));
+      chk(pv.n > 0 && pv.cat.every((c) => c !== null) && pv.desde.every((d) => /^month:/.test(d)) && pv.hasta.every((d) => /^month:/.test(d)),
+        `Provisiones: ${pv.n} con categoría en selector y meses en selector`, pv);
+      chk(pv.base.every((b, i) => pv.cat[i] === b[0] && pv.desde[i] === 'month:' + b[1] && pv.hasta[i] === 'month:' + b[2]), 'lo que muestran coincide con la base (categoría, desde, hasta)', { pv: [pv.cat, pv.desde, pv.hasta], base: pv.base });
+      await ev("ajGo('permisos')"); await T(500);
+      const pm = JSON.parse(await ev(`JSON.stringify([].map.call(document.querySelectorAll('#ajBody .aj-perm-c'),function(l){var r=l.getBoundingClientRect();return Math.min(r.width,r.height);}))`));
+      chk(pm.length > 20 && pm.every((x) => x >= 43.5), `Permisos: ${pm.length} casilleros con área de 44 px`, pm.slice(0, 6));
+    }
     /* ── Todas las sub-secciones: sin símbolos, sin códigos a la vista, nada que se salga ── */
     if (process.env.TODAS) {
       const secs = JSON.parse(await ev("JSON.stringify([].map.call(document.querySelectorAll('#p-ajustes .aj-nav .aj-pill'),function(b){return b.getAttribute('data-sec');}))"));

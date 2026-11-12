@@ -209,6 +209,14 @@
     .row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: .6rem; }
     .prod-grid { display: flex; flex-direction: column; gap: .3rem; }
     .prod-row { display: flex; align-items: center; justify-content: space-between; padding: .6rem 0; border-bottom: 1px solid #f0f0f0; }
+    /* (655) Los combos */
+    .red-cmb-armar { min-height: 40px; padding: 0 14px; border-radius: 20px; border: 2px solid #e65100; background: #fff; color: #e65100; font-weight: 700; font-family: inherit; cursor: pointer; }
+    .red-cmb-form { display: flex; flex-direction: column; gap: .5rem; padding: .6rem 0 .8rem; border-bottom: 1px solid #f0f0f0; }
+    .red-cmb-slot { display: flex; flex-direction: column; gap: .2rem; font-size: .8rem; color: #666; }
+    .red-cmb-slot select { min-height: 40px; font-size: .95rem; border: 1px solid #ddd; border-radius: 8px; padding: 0 .5rem; background: #fff; }
+    .red-cmb-add { min-height: 44px; border: 0; border-radius: 10px; background: #e65100; color: #fff; font-weight: 700; font-family: inherit; cursor: pointer; }
+    .red-cmb-det { display: block; color: #888; font-size: .75rem; }
+    .red-cmb-quitar { border: 0; background: none; color: #c62828; font: inherit; font-size: .75rem; text-decoration: underline; padding: 6px 2px; cursor: pointer; }
     .prod-row:last-child { border-bottom: none; }
     /* La carne por pieza (14/10/2026): una ficha por pieza del freezer, con su peso y su precio. */
     .pz-corte { padding: .6rem 0; border-bottom: 1px solid #f0f0f0; }
@@ -1249,6 +1257,7 @@
   <div class="container">
     <div class="section">
       <h3 style="margin-bottom:.8rem">Productos</h3>
+      <div id="red-combos"></div>
       <div class="prod-grid" id="prod-grid"></div>
     </div>
 
@@ -5626,7 +5635,92 @@ function redCarneItems() {
 }
 function redCarneTotal() { var t = 0; Object.keys(redPzCart).forEach(function (k) { t += redPzCart[k].importe; }); return t; }
 
+/* ── LOS COMBOS EN EL PORTAL (11/11/2026, 655) ──
+   Fede D'Andrea quiso cargar un «Noche en Casa» y no podía: el portal no tenía combos y el alta los descartaba. Ahora
+   son los MISMOS combos que la tienda (tienda/app.js › COMBOS, mismas ranuras) con el precio de «Precios Combos»
+   (`combos_precios_pantalla`, el mismo con el que el alta lo revalida). Al guardar viaja como la tienda: los productos
+   a precio de lista en `items` y `combos` con lo elegido; la base descuenta la rebaja. La comisión es por producto,
+   también en los combos (Tadeo, 11/11/2026): la rebaja la absorbe Maleu. */
+const RED_COMBOS = [
+  { id: 'cmb_descubri_semana', nombre: 'Descubrí Maleu · Semana', precio: 33900, slots: [
+    { label: 'Tarta', pick: 1, options: { cat: 'Tartas' } }, { label: 'Sorrentinos', pick: 1, options: { ids: [10, 9, 8] } }, { label: 'Postre', pick: 1, options: { ids: [13] } }] },
+  { id: 'cmb_descubri_finde', nombre: 'Descubrí Maleu · Fin de Semana', precio: 34900, slots: [
+    { label: 'Pizza premium', pick: 1, options: { cat: 'Pizzas Individuales' } }, { label: 'Empanadas', pick: 1, options: { cat: 'Empanadas' } }, { label: 'Postre', pick: 1, options: { ids: [13] } }] },
+  { id: 'cmb_noche_casa', nombre: 'Noche en Casa', precio: 23900, slots: [
+    { label: 'Pizza', pick: 1, options: { cat: 'Pack Pizzas x2' } }, { label: 'Postre', pick: 1, options: { ids: [13] } }] },
+  { id: 'cmb_mesa_familiar', nombre: 'Mesa Familiar', precio: 45900, slots: [
+    { label: 'Tarta', pick: 2, options: { cat: 'Tartas' } }, { label: 'Empanadas', pick: 1, options: { cat: 'Empanadas' } }, { label: 'Postre', pick: 1, options: { ids: [13] } }] },
+  { id: 'cmb_freezer_lleno', nombre: 'Freezer Lleno', precio: 84900, slots: [
+    { label: 'Pizza', pick: 2, options: { cat: 'Pack Pizzas x2' } }, { label: 'Sorrentinos', pick: 1, options: { ids: [10, 9, 8] } },
+    { label: 'Empanadas', pick: 1, options: { cat: 'Empanadas' } }, { label: 'Tarta', pick: 2, options: { cat: 'Tartas' } }] },
+];
+const redComboCart = [];   // [{ comboId, qty, picks:[{label,id,nombre}] }]
+let redComboArmando = null; // id del combo que se está armando
+function _redComboOpc(slot) {
+  const ps = PRODUCTOS.filter(p => !p.baja);
+  return slot.options.ids ? slot.options.ids.map(id => ps.filter(p => p.id === id)[0]).filter(Boolean) : ps.filter(p => p.cat === slot.options.cat);
+}
+function _redComboDisponible(c) { return c.slots.every(s => _redComboOpc(s).length > 0); }
+function _redComboItems(inst) {   // los productos del combo, agrupados: [{id, qty, precio}]
+  const q = {};
+  inst.picks.forEach(pk => { q[pk.id] = (q[pk.id] || 0) + 1; });
+  return Object.keys(q).map(id => { const p = PRODUCTOS.filter(x => x.id === Number(id))[0]; return { id: Number(id), qty: q[id], precio: p ? p.precio : 0 }; });
+}
+function _redComboDef(id) { return RED_COMBOS.filter(c => c.id === id)[0]; }
+function redComboTotal() { return redComboCart.reduce((s, inst) => { const c = _redComboDef(inst.comboId); return s + (c ? c.precio * inst.qty : 0); }, 0); }
+function redComboCount() { return redComboCart.reduce((s, inst) => s + inst.qty, 0); }
+function _redComboEsc(s) { return String(s == null ? '' : s).replace(/[<>&"]/g, ''); }
+function renderCombos() {
+  const box = $id('red-combos'); if (!box) return;
+  const cs = RED_COMBOS.filter(_redComboDisponible);
+  if (!cs.length) { box.innerHTML = ''; return; }
+  let h = '<div class="prod-cat">Combos</div>';
+  cs.forEach(c => {
+    const incl = c.slots.map(s => (s.pick > 1 ? s.pick + ' ' : '') + s.label.toLowerCase()).join(' + ');
+    h += '<div class="prod-row red-cmb"><div class="prod-info"><div class="prod-name">' + _redComboEsc(c.nombre) + '</div>'
+      + '<div class="prod-price">' + ars(c.precio) + ' · ' + _redComboEsc(incl) + '</div></div>'
+      + '<button type="button" class="red-cmb-armar" onclick="redComboArmar(\'' + c.id + '\')">' + (redComboArmando === c.id ? 'Cerrar' : 'Armar') + '</button></div>';
+    if (redComboArmando === c.id) {
+      h += '<div class="red-cmb-form" id="red-cmb-form">';
+      c.slots.forEach((s, si) => {
+        for (let k = 0; k < s.pick; k++) {
+          const ops = _redComboOpc(s);
+          h += '<label class="red-cmb-slot"><span>' + _redComboEsc(s.label) + (s.pick > 1 ? ' ' + (k + 1) : '') + '</span>'
+            + '<select data-slot="' + si + '">' + ops.map(p => '<option value="' + p.id + '">' + _redComboEsc(p.nombre) + '</option>').join('') + '</select></label>';
+        }
+      });
+      h += '<button type="button" class="red-cmb-add" onclick="redComboAgregar(\'' + c.id + '\')">Agregar el combo</button></div>';
+    }
+  });
+  box.innerHTML = h;
+}
+function redComboArmar(id) { redComboArmando = (redComboArmando === id) ? null : id; renderCombos(); }
+function redComboAgregar(id) {
+  const c = _redComboDef(id), f = $id('red-cmb-form'); if (!c || !f) return;
+  const picks = [];
+  f.querySelectorAll('select[data-slot]').forEach(sel => {
+    const s = c.slots[Number(sel.getAttribute('data-slot'))], p = PRODUCTOS.filter(x => x.id === Number(sel.value))[0];
+    if (s && p) picks.push({ label: s.label, id: p.id, nombre: p.nombre });
+  });
+  const firma = id + '|' + picks.map(p => p.id).join(',');
+  const ya = redComboCart.filter(x => x.comboId + '|' + x.picks.map(p => p.id).join(',') === firma)[0];
+  if (ya) ya.qty++; else redComboCart.push({ comboId: id, qty: 1, picks: picks });
+  redComboArmando = null; renderCombos(); updateCart();
+  redToast(c.nombre + ' agregado');
+}
+function redComboQuitar(i) { redComboCart.splice(i, 1); updateCart(); }
+/* Los precios de los combos, de la base (los mismos de la tienda). Sin conexión quedan los de arriba. */
+function _syncPreciosCombos() {
+  const pedir = (typeof window._baseRpc === 'function') ? window._baseRpc('combos_precios_pantalla', {}) : Promise.reject(new Error('sin base'));
+  return pedir.then(function (d) {
+    let cambio = false;
+    RED_COMBOS.forEach(c => { const v = Number(d && d[c.id]); if (v > 0 && v !== c.precio) { c.precio = v; cambio = true; } });
+    if (cambio) { renderCombos(); updateCart(); }
+  }).catch(function () {});
+}
+
 function renderProducts() {
+  renderCombos();
   const grid = $id('prod-grid');
   let lastCat = '';
   let html = '';
@@ -5657,7 +5751,7 @@ function changeQty(id, delta) {
 }
 
 function updateCart() {
-  const count = Object.values(cart).reduce((a, b) => a + b, 0) + Object.keys(redPzCart).length;
+  const count = Object.values(cart).reduce((a, b) => a + b, 0) + Object.keys(redPzCart).length + redComboCount();
   $id('sec-cliente').classList.toggle('hidden', count === 0);
   $id('sec-resumen').classList.toggle('hidden', count === 0);
   $id('btn-enviar').disabled = count === 0;
@@ -5668,7 +5762,7 @@ function updateCart() {
   if (count > 0) {
     let total = 0;
     PRODUCTOS.forEach(p => { total += (cart[p.id] || 0) * p.precio; });
-    total += redCarneTotal();
+    total += redCarneTotal() + redComboTotal();
     /* YA NO SE ESTIMA LA GANANCIA ACA. (30/9/2026)
 
        Hasta hoy esta barra decia "Tu ganancia: $X" calculado como total x 17%.
@@ -5701,6 +5795,12 @@ function renderSummary() {
     const sub = p.precio * qty;
     total += sub;
     lines += '<div class="sum-row"><span>' + p.nombre + (qty > 1 ? ' x' + qty : '') + '</span><span>' + ars(sub) + '</span></div>';
+  });
+  redComboCart.forEach(function (inst, i) {
+    const c = _redComboDef(inst.comboId); if (!c) return;
+    const sub = c.precio * inst.qty; total += sub;
+    lines += '<div class="sum-row"><span>' + _redComboEsc(c.nombre) + (inst.qty > 1 ? ' x' + inst.qty : '')
+      + '<small class="red-cmb-det">' + _redComboEsc(inst.picks.map(p => p.nombre).join(' + ')) + ' · <button type="button" class="red-cmb-quitar" onclick="redComboQuitar(' + i + ')">Quitar</button></small></span><span>' + ars(sub) + '</span></div>';
   });
   redCarneItems().forEach(function (it) {
     total += it.importe;
@@ -5812,6 +5912,19 @@ function enviar(_reintento) {
     }
   });
   redCarneItems().forEach(function (it) { items.push(it); total += it.importe; });
+  /* (655) Los combos: sus productos a precio de lista (sumados al renglón del mismo producto si ya estaba: el alta no acepta
+     un producto repetido) y el combo en `combos`, con lo elegido. El total lleva el precio cerrado del combo. */
+  const combos = redComboCart.map(function (inst) {
+    const c = _redComboDef(inst.comboId); if (!c) return null;
+    const its = _redComboItems(inst);
+    its.forEach(function (ci) {
+      const ya = items.filter(x => x.id === ci.id && !x.unidad)[0];
+      const p = PRODUCTOS.filter(x => x.id === ci.id)[0];
+      if (ya) ya.qty += ci.qty * inst.qty; else items.push({ id: ci.id, nombre: p ? p.nombre : '', qty: ci.qty * inst.qty, precio: ci.precio });
+    });
+    total += c.precio * inst.qty;
+    return { id: c.id, nombre: c.nombre, precio: c.precio, qty: inst.qty, picks: inst.picks, items: its };
+  }).filter(Boolean);
   // Envío: el vendedor decide por pedido si lo cobra (default sí). Va 100% a él.
   const envio = cobrarEnvio ? ENVIO_RED : 0;
   total += envio;
@@ -5823,6 +5936,11 @@ function enviar(_reintento) {
 
   const btn = $id('btn-enviar');
   const _ex = _redPedidoVivoDelDia(telefono, barrio, lote, fechaEntregaISO);
+  if (_ex && combos.length) {
+    /* Sumar un combo a un pedido que ya existe no está hecho: «editar pedido» no sabe de combos. Mejor decirlo que cobrarlo suelto. */
+    redToast((_ex.c || 'El cliente') + ' ya tiene el #' + _ex.n + ' para ese día. Un combo no se suma a un pedido hecho: avisale a Maleu.');
+    return;
+  }
   if (_ex) {
     _redSumarAlPedido(_ex, btn).then(function () { setTimeout(_redApLimpiar, 1200); loadDashboard(); }).catch(function (err) {
       btn.disabled = false; btn.textContent = 'Reintentar'; btn.style.background = '#c62828';
@@ -5843,6 +5961,7 @@ function enviar(_reintento) {
     dia, fechaEntrega: fechaEntregaISO,
     horario: 'A coordinar', pago,
     envio: envio, items, total,
+    combos: combos, comboDetalle: combos.length ? JSON.stringify(combos) : '',
     /* Quien trajo al cliente (28/9/2026). Un pedido cargado desde ESTE portal es
        un cliente del vendedor: lo consiguio el. El que nos entra a nosotros y le
        pasamos para que entregue nace 'Maleu' y se corrige desde el panel.
@@ -6025,6 +6144,7 @@ function _redApLimpiar() {
       $id('f-dia').value = redProxViernesISO();
       redApCoid = '';
       redPzCart = {}; redCarneRender();
+      redComboCart.length = 0; redComboArmando = null; renderCombos();   /* (655) */
       pago = '';
       document.querySelectorAll('.pago-opt').forEach(o => o.classList.remove('sel'));
       cobrarEnvio = true;
@@ -6089,6 +6209,7 @@ function _syncPreciosPortal() {
 /* ═══════ INIT ═══════ */
 renderProducts();
 _syncPreciosPortal();
+_syncPreciosCombos();   /* (655) los precios de los combos, los mismos de la tienda */
 
 // Modo embebido: detectar ?embed=1 → ocultar header, deshabilitar logout local
 (function(){

@@ -53,8 +53,14 @@ function cred() {
   console.log('A) sesión vieja, sin cola');
   await viejo(null);
   ver('A: aparece «Entrá de nuevo con tu PIN»', !!(await esperar(`!!document.getElementById('reentrada')`, 15000)));
-  ver('A: tapa toda la app (lo de atrás no se toca)', !!(await ev(`(function(){ var r=document.getElementById('reentrada'); if(!r)return false; var e=document.elementFromPoint(innerWidth/2,innerHeight-5); window.__tapaAbajo=e?(e.tagName+'#'+e.id+'.'+String(e.className).slice(0,60)+' z='+getComputedStyle(e).zIndex):null; return r.contains(e); })()`)));
-  console.log('   abajo de todo: ' + await ev('window.__tapaAbajo'));
+  /* (11/11/2026) Medía SOLO el punto de 5 px arriba del borde de abajo: en GitHub ese punto cae fuera de la ventana y
+     elementFromPoint devuelve null (medido: «abajo de todo: null»), un rojo de la prueba y no de la app (94 corridas).
+     Ahora: el cartel ocupa toda la ventana y es lo que está arriba en el centro y en cuatro puntos adentro de los bordes. */
+  ver('A: tapa toda la app (lo de atrás no se toca)', !!(await ev(`(function(){ var r=document.getElementById('reentrada'); if(!r)return false;
+    var b=r.getBoundingClientRect(), W=document.documentElement.clientWidth, H=document.documentElement.clientHeight;
+    if(b.left>0.5||b.top>0.5||b.right<W-0.5||b.bottom<H-0.5)return false;
+    var pts=[[W/2,H/2],[10,10],[W-10,10],[10,H-10],[W-10,H-10]];
+    return pts.every(function(p){ var e=document.elementFromPoint(p[0],p[1]); return !!e&&r.contains(e); }); })()`)));
   ver('A: el usuario va fijo', !!(await ev(`(function(){ var u=document.getElementById('reentradaUser'); return u&&u.readOnly&&u.value===${JSON.stringify(C.usuario)}; })()`)));
   await entrarConPin('000000');
   ver('A: con un PIN mal, no entra y lo dice', !!(await esperar(`(function(){ var e=document.getElementById('reentradaErr'); return !!(document.getElementById('reentrada')&&e&&e.textContent.length>3); })()`, 15000)));
