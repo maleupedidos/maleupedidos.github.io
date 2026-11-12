@@ -73,6 +73,15 @@ const chk = (c, m, x) => { if (c === true) { ok++; console.log('  ok  ', m); } e
       await ev(`(function(){var r=document.querySelector('#ajBody .aj-pr[data-k="TIENDA_CIERRE_HOY"]');r.querySelector('[data-k="valor"]').value='45';r.querySelector('button.aj-btn').click();})()`); await T(500);
       const c2 = JSON.parse(await ev('JSON.stringify(window.__cfg)'));
       chk(c2.length === 1 && c2[0].param === 'TIENDA_CIERRE_HOY' && c2[0].valor === '45', 'Guardar el cierre de la tienda manda TIENDA_CIERRE_HOY = 45', c2);
+      // Los valores, contra la base (lo que trae AJ_DATA es la base: ajustes_data_pantalla).
+      const vv = JSON.parse(await ev(`JSON.stringify((function(){var g=function(k){var r=document.querySelector('#ajBody .aj-pr[data-k="'+k+'"] [data-k="valor"]');return r?r.value:null;};
+        var b=function(k){var f=null;(AJ_DATA.configMaleu||[]).forEach(function(c){if(c.param===k)f=c.valor;});return f;};
+        return {mo:g('MARGEN_OBJETIVO'),moB:b('MARGEN_OBJETIVO'),cm:g('CAJA_MINIMA'),cmB:b('CAJA_MINIMA'),env:g('Envío fuera de Home ($)'),envB:((AJ_DATA.configNegocio||[]).filter(function(c){return /Env/.test(c.param);})[0]||{}).valor,canal:g('AVISOS_CANAL'),canalB:b('AVISOS_CANAL')};})())`));
+      chk(Number(vv.mo.replace(',', '.')) / 100 === Number(vv.moB) && vv.cm.split('.').join('') === String(vv.cmB) && vv.env.split('.').join('') === String(vv.envB) && vv.canal === vv.canalB,
+        `los valores coinciden con la base (margen ${vv.mo} % = ${vv.moB}, caja mínima ${vv.cm}, envío ${vv.env}, avisos ${vv.canal})`, vv);
+      await ev(`window.__cfg=[];(function(){var r=document.querySelector('#ajBody .aj-pr[data-k="MARGEN_OBJETIVO"]');r.querySelector('[data-k="valor"]').value='30';r.querySelector('button.aj-btn').click();})()`); await T(500);
+      const c3 = JSON.parse(await ev('JSON.stringify(window.__cfg)'));
+      chk(c3.length === 1 && c3[0].valor === '0.3', 'un % se guarda como fracción (30 % → 0.3, como siempre)', c3);
       const a2 = JSON.parse(await ev("JSON.stringify({sw:document.getElementById('ajBody').scrollWidth,cw:document.getElementById('ajBody').clientWidth})"));
       chk(a2.sw <= a2.cw + 1, `a ${ANCHO} px nada se sale de Parámetros`, a2);
       const nav = JSON.parse(await ev("JSON.stringify([].map.call(document.querySelectorAll('#p-ajustes .aj-nav .aj-pill'),function(b){return b.textContent;}))"));
