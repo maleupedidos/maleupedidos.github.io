@@ -49,6 +49,14 @@ const chk = (c, m, x) => { if (c === true) { ok++; console.log('  ok  ', m); } e
       b.innerHTML='<div class="cpl-box"><div class="cpl-tit">Prueba</div></div>';document.body.appendChild(b);
       document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));return JSON.stringify({sigue:!!document.getElementById('kitPrueba')});})()`));
     chk(!esc.sigue, 'Escape cierra el modal abierto', esc);
+    // Esqueleto: un «Cargando…» suelto se dibuja como barras; cuando llega el contenido, se ve el contenido.
+    await ev(`(function(){var d=document.createElement('div');d.className='empty';d.id='esqPrueba';d.textContent='Cargando pedidos…';document.querySelector('.pg.on').appendChild(d);})()`);
+    await T(300);
+    const e1 = JSON.parse(await ev(`(function(){var d=document.getElementById('esqPrueba');return JSON.stringify({esq:d.classList.contains('k-esq'),barras:d.querySelectorAll('.k-esq-fila').length,txt:d.innerText.trim()});})()`));
+    chk(e1.esq && e1.barras === 4 && /Cargando pedidos/.test(e1.txt), 'un «Cargando…» suelto se dibuja como esqueleto (y el texto sigue ahí)', e1);
+    await ev(`document.getElementById('esqPrueba').textContent='No hay pedidos con estos filtros.'`); await T(300);
+    const e2 = JSON.parse(await ev(`(function(){var d=document.getElementById('esqPrueba'),c=getComputedStyle(d).color;var r={esq:d.classList.contains('k-esq'),color:c};d.remove();return JSON.stringify(r);})()`));
+    chk(!e2.esq && e2.color !== 'rgba(0, 0, 0, 0)', 'cuando llega el contenido, el esqueleto se va y el texto se ve', e2);
     const dis = JSON.parse(await ev(`(function(){var b=document.createElement('button');b.className='btn-primary';b.disabled=true;b.textContent='x';document.querySelector('.pg.on').appendChild(b);var o=getComputedStyle(b).opacity;b.remove();return JSON.stringify({o:o});})()`));
     chk(Number(dis.o) < 0.6, 'un botón deshabilitado se ve deshabilitado', dis);
   } catch (e) { mal++; console.log('  REVENTO: ' + (e && e.stack || e)); }
