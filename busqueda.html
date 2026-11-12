@@ -232,6 +232,9 @@ body.embed .sem-tabs{top:48px}
 .stock-low{background:#fff3e0;color:#e67e22}
 .stock-out{background:#fce8e8;color:#c0392b}
 .np-prod-future{font-size:10px;font-weight:800;padding:2px 7px;border-radius:50px;display:inline-block;margin-left:5px;background:#FFE4D0;color:#E5662F;border:1px solid #F07D47}
+/* (671) La clase del producto por demanda semanal. */
+.np-cls{display:inline-flex;align-items:center;justify-content:center;min-width:20px;height:20px;border-radius:6px;font-size:11px;font-weight:800;margin-right:6px;vertical-align:1px}
+.np-cls-A{background:#E8F5E9;color:#1B5E20}.np-cls-B{background:#FFF8E1;color:#7A5200}.np-cls-C{background:#F3F1EE;color:#6D625B}
 .np-prod-otrodep{display:inline-block;font-size:10px;font-weight:700;color:#9A3412;
   background:#FFEDD5;border:1px solid #FDBA74;border-radius:6px;padding:1px 6px;
   margin-left:4px;white-space:nowrap}
@@ -5240,7 +5243,8 @@ function _npPintarProductos(prov) {
   }
   ordenGrupos.forEach(function(cat){
     if (mostrarTitulos) html += '<div class="np-cat-title">' + _abaH(cat) + '</div>';
-    grupos[cat].forEach(function(it){
+    /* (671) En el stock, los de más demanda (clase A) primero. */
+    (esStock ? grupos[cat].slice().sort(function (x, y) { return 'ABC'.indexOf(x.cls || 'C') - 'ABC'.indexOf(y.cls || 'C'); }) : grupos[cat]).forEach(function(it){
       var esKg = it.u === 'kg';
       var u = esKg ? 'kg' : 'u';
       var _dd = npDispDep(it);
@@ -5285,10 +5289,7 @@ function _npPintarProductos(prov) {
             sugHtml = '<span class="np-prod-sug info" title="' + _abaH(fteTxt + ' (' + wkTxt + ')') + '">Faltan ~' + _abaCant(sug, 'kg') + '</span>';
           } else {
             sugHtml = '<button type="button" class="np-prod-sug" onclick="npAplicarSugerido(\'' + esc(it.a) + '\')" title="' + _abaH(fteTxt + ' (' + wkTxt + ') · cobertura ' + NP_COBERTURA + ' sem — cuenta solo lo que tenés acá — tocá para cargar') + '">Pedir ' + _abaCant(sug, 'u') + '</button>';
-            var sugTodo = npSugeridoConTodo(it);
-            if (_dd.otros > 0 && sugTodo < sug) {
-              sugHtml += '<span class="np-prod-otrodep" title="Si traés lo del otro freezer, con esto alcanza">o traelo y pedí ' + _abaCant(sugTodo, 'u') + '</span>';
-            }
+            /* (671) Sin «o traelo y pedí X»: el sugerido ya cuenta los dos freezers. Lo del otro va arriba, como dato. */
           }
         } else {
           sugHtml = '<span class="np-prod-sug info ok" title="' + _abaH(fteTxt + ' (' + wkTxt + ') — stock + en camino ya cubre') + '">cubierto</span>';
@@ -5298,7 +5299,7 @@ function _npPintarProductos(prov) {
       var costoTxt = _cOC > 0 ? abaFormatMoney(_cOC) + (esKg ? '/kg' : ' c/u') : 'Sin costo';
       html += '<div class="np-prod-card" style="flex-wrap:wrap">' +
         '<div class="np-prod-info">' +
-          '<div class="np-prod-name">' + _abaH(String(it.n || '').split(' — ').slice(1).join(' — ') || it.n) + '</div>' +   /* (9/11/2026) sin la familia */
+          '<div class="np-prod-name">' + (esStock && it.cls ? '<span class="np-cls np-cls-' + _abaH(it.cls) + '" title="' + (it.cls === 'A' ? 'Vende 5 o más por semana' : it.cls === 'B' ? 'Vende entre 1,5 y 5 por semana' : 'Vende menos de 1,5 por semana: se tienen 2 en total') + '">' + _abaH(it.cls) + '</span>' : '') + _abaH(String(it.n || '').split(' — ').slice(1).join(' — ') || it.n) + '</div>' +   /* (9/11/2026) sin la familia */
           '<div class="np-prod-meta">' + costoTxt + ' ' + stockHtml + futuroHtml + sugHtml + '</div>' +
         '</div>';
       if (!esKg) {
@@ -5476,15 +5477,26 @@ function npSugerido(it) {
   if (!it) return 0;
   var caja = Number(it.caja) || 0;
   var s = 0;
-  if (it.dem !== undefined && it.dem !== null && it.dem > 0)
-    s = Math.round(it.dem * NP_COBERTURA - npDispDep(it).aca - npEnCamino(it.a));
+  /* (671, 12/11/2026) Cuenta el stock de LOS DOS freezers (Ustariz + Moresco) más lo que está en camino: lo del otro
+     freezer se trae, no se vuelve a comprar. Clase por demanda semanal (la da la base): A y B, demanda × 1,5 semanas;
+     C, sin sugerido por demanda: un piso de 2 en total entre los dos freezers (solo si se vendió o se pidió algo:
+     un producto que no se mueve no se stockea). Y nunca más que el TOPE (lo máximo pedido en una semana). */
+  var dem = Number(it.dem) || 0, stock = (it.s !== null && it.s !== undefined) ? Number(it.s) || 0 : 0;
+  var cls = it.cls || (dem >= 5 ? 'A' : dem >= 1.5 ? 'B' : 'C');
+  if (cls === 'C') { if (!it.baja && (dem > 0 || Number(it.tope) > 0)) s = Math.round(2 - stock - npEnCamino(it.a)); }
+  else if (dem > 0) s = Math.round(dem * NP_COBERTURA - stock - npEnCamino(it.a));
   /* Solo stock (22/10/2026): lo apartado para pedidos que el freezer no cubre
      tambien se pide, y todo va en cajas enteras («te faltan 2 → 1 caja de 24»). */
   if (caja > 0) {
     var n = Math.max(s, npFaltaSolo(it));
-    return n > 0 ? Math.ceil(n / caja) * caja : 0;
+    return _npTope(it, n > 0 ? Math.ceil(n / caja) * caja : 0, caja);
   }
-  return s > 0 ? s : 0;
+  return _npTope(it, s > 0 ? s : 0, 0);
+}
+function _npTope(it, n, caja) {
+  var t = Number(it && it.tope) || 0;
+  if (t > 0 && n > t) n = caja > 0 ? Math.floor(t / caja) * caja : t;
+  return n;
 }
 
 /* Lo apartado para pedidos que el freezer no cubre (Disponible negativo), menos
