@@ -665,6 +665,11 @@ button.cobro-prods-copy{flex-shrink:0;border:1px solid #E8DFC4;background:#fff;c
 .cob-desp[open]>summary .cob-desp-t::before{transform:rotate(45deg)}
 .cob-desp-t{font-size:13px}
 .cob-desp-r{font-size:12.5px;font-weight:800;white-space:nowrap}
+.cob-sec-h.deu{background:#FDECEA;color:#8E1B1B;border-left:3px solid #C62828;font-size:13px}
+.cob-sec-h.fut{background:#F3F1EE;color:#5B524C;border-left:3px solid #9E948C;font-size:13px}
+.cob-sub-h{display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin:12px 2px 6px;padding-bottom:4px;border-bottom:1px solid #E6E0DA;font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;color:#6D625B}
+.cob-sub-h b{font-variant-numeric:tabular-nums;color:#331C1C}
+.cob-sec-nota{font-size:12px;color:#6D625B;margin:2px 2px 8px}
 .cobro-title{font-size:14px;font-weight:800;color:var(--orange);margin-bottom:10px}
 /* Un cliente con varios cobros: renglones tildables (24/10/2026) */
 .cg-card{border:2px solid #F9A825;background:linear-gradient(135deg,#FFFDF7,#FFF3D6);gap:10px}
@@ -6538,14 +6543,17 @@ function _cobroVendedorHTML(pc){
    que Maleu le paga en la quincena. Los datos siguen viniendo de los mismos dos
    endpoints (`cobrosPendientes` y `redPedidosAbiertos`); acá solo se juntan. */
 var _rutLiqPidiendo=false;
-function _rutRedBloqueHTML(pcsRed){
+function _rutRedBloqueHTML(pcsRed,opt){
+  opt=opt||{};
   var porRep={},orden=[];
   function rep(n){n=_vendNombreLimpio(n);if(!porRep[n]){porRep[n]={pc:null,cv:[],pend:[],le:0};orden.push(n);}return porRep[n];}
   (pcsRed||[]).forEach(function(pc){if(pc&&pc.isVendedor)rep(pc.c).pc=pc;});
   _rutCVLista().forEach(function(x){rep(x.v.nombre).cv.push(x);});
   /* (10/11/2026) Lo que ya le pagaron al representante en efectivo: aparece en SU tarjeta, como plata a rendir. */
   if(typeof _rutEnMano!=='undefined'&&_rutEnMano)Object.keys(_rutEnMano.porRep||{}).forEach(function(n){rep(n).mano=_rutEnMano.porRep[n];});
-  _rutCVLista(true).filter(function(x){return x.p.es!=='Entregado'&&x.p.ep!=='Cobrado';}).forEach(function(x){rep(x.v.nombre).pend.push(x);});
+  /* (12/11/2026) Con `sinPend` lo no entregado va a la sección «A futuro», no adentro de la deuda. */
+  if(!opt.sinPend)_rutCVLista(true).filter(function(x){return x.p.es!=='Entregado'&&x.p.ep!=='Cobrado';}).forEach(function(x){rep(x.v.nombre).pend.push(x);});
+  orden.forEach(function(n){porRep[n].cv.sort(function(a,b){return _cobDiaTs(a.p.dia)-_cobDiaTs(b.p.dia);});});
   /* LO QUE MALEU LE PAGA SALE DE LA LIQUIDACION (2/11/2026). Hasta hoy era `maleuLeDebe` de
      `redPedidosAbiertos`: la regla vieja (entregado Y cobrado, acumulado desde el 7/10, sin
      restar lo ya pagado). La liquidacion de la quincena va por devengado y suma el bono: Rufino
@@ -6560,9 +6568,13 @@ function _rutRedBloqueHTML(pcsRed){
     _rutLiqPidiendo=true;
     _rlqPedir(false).then(function(d){_rutLiqPidiendo=false;if(d){var el=document.getElementById('cobrosContent');if(el)el.__sig=null;if(rutCurrentTab==='cobros')renderCobrosFromServer();}},function(){_rutLiqPidiendo=false;});
   }
+  window._rutRedBloqueTot=0;
   if(!orden.length)return '';
   var tot=0;
-  orden.forEach(function(n){var r=porRep[n];tot+=(r.pc?(Number(r.pc.$)||0):0);r.cv.forEach(function(x){tot+=_rutCVMonto(x);});});
+  /* (12/11/2026) Lo que el representante YA cobró en efectivo y falta que rinda también es deuda: entra al total. */
+  function _manoTot(r){return (r.mano||[]).reduce(function(s2,x){return s2+(Number(x.monto)||0);},0);}
+  orden.forEach(function(n){var r=porRep[n];tot+=(r.pc?(Number(r.pc.$)||0):0)+_manoTot(r);r.cv.forEach(function(x){tot+=_rutCVMonto(x);});});
+  window._rutRedBloqueTot=tot;
   var h='<div id="rutCliVend" class="cobro-canal-header re"><span>Red · Representantes</span><span>'+formatMoney(tot)+'</span></div>';
   /* LA REGLA (Tadeo, 27/10/2026): «los representantes no cobran. El cobro es siempre de Maleu:
      le escribimos nosotros al cliente y el cliente nos paga a nosotros». Hasta hoy esto decia
@@ -6574,7 +6586,7 @@ function _rutRedBloqueHTML(pcsRed){
     var c='<div class="cobro-card cobro-red-card">';
     c+='<div class="cobro-card-head"><span class="cobro-card-name">'+_rtcEsc(n)
       +' <span class="cobro-red-tag">REPRESENTANTE</span></span><span class="cobro-card-total">'
-      +(sub>0||!(r.mano&&r.mano.length)?formatMoney(sub):formatMoney(r.mano.reduce(function(s3,x){return s3+x.monto;},0))+'<small style="display:block;font-size:10.5px;font-weight:700;color:#2E7D32;text-align:right">a rendir</small>')+'</span></div>';
+      +formatMoney(sub+_manoTot(r))+(_manoTot(r)>0?'<small style="display:block;font-size:10.5px;font-weight:700;color:#2E7D32;text-align:right">'+(sub>0?formatMoney(_manoTot(r))+' ':'')+'a rendir</small>':'')+'</span></div>';
     if(r.pc)c+=_cobroVendedorHTML(r.pc);
     if(r.cv.length){
       var stv=r.cv.reduce(function(s,x){return s+_rutCVMonto(x);},0);
@@ -7653,68 +7665,91 @@ function renderCobrosFromServer(){
   else if(_rutCVcargando&&!_rutCV)chips+='<div class="cobro-red-regla">Cargando clientes de representantes…</div>';
   /* Red: una tarjeta por representante, con Todos y con Red (24/10/2026). */
   var _cvVer=(cobrosFiltro==='todos'||cobrosFiltro==='re');
-  var cvAbajo=_cvVer?_rutRedBloqueHTML(pendientesCobro.filter(function(pc){return _canalDeCobro(pc)==='re';})):'';
-  if(cvAbajo)chips+=_rutCVAvisoHTML();
+  /* (12/11/2026) COBROS POR SECCIONES (Tadeo: «ver de un vistazo quién debe de verdad»).
+     DEUDORES = ya entregado y sin cobrar: Equipo Maleu (Home, Pilar, Clubes) y Representantes (Red, por representante).
+     A FUTURO = todavía no entregado: NO es deuda (la misma regla que el portal desde el 27/10: lo que no salió no se
+     reclama), pero se puede cobrar por adelantado desde ahí mismo. Adentro, el que debe hace más tiempo primero. */
+  var cvAbajo=_cvVer?_rutRedBloqueHTML(pendientesCobro.filter(function(pc){return _canalDeCobro(pc)==='re';}),{sinPend:true}):'';
+  var totRedDeu=cvAbajo?(window._rutRedBloqueTot||0):0;
+  var redFut=_cvVer?_rutCVLista(true).filter(function(x){return x.p.es!=='Entregado'&&x.p.ep!=='Cobrado';}):[];
+  if(cvAbajo||redFut.length)chips+=_rutCVAvisoHTML();
 
-  if(pendientesCobro.length===0){
-    if(cvAbajo){el.innerHTML=chips+_cobDespRed(cvAbajo);return;}
+  var visibles=pendientesCobro.filter(function(pc){return _canalDeCobro(pc)!=='re'&&_cobroPasaFiltro(pc);});
+  if(!visibles.length&&!cvAbajo&&!redFut.length){
     if(_rutCVcargando||_rutCVerror){el.innerHTML=chips;return;}
     /* La banda ya esta en `chips`, asi que sale igual sin cobros pendientes: ese
        es justo el caso peligroso — "Sin pendientes de cobro" con 13 pedidos sin
        marcar es una pantalla que miente. Misma regla que la banda de ARMADO. */
-    el.innerHTML=chips+'<div class="empty" style="padding:40px">Sin pendientes de cobro</div>';return;
+    el.innerHTML=chips+'<div class="empty" style="padding:40px">'+(pendientesCobro.length?'Nada en este filtro':'Sin pendientes de cobro')+'</div>';return;
   }
+  var eqDeu=visibles.filter(_cobEsEntregado), eqFut=visibles.filter(function(pc){return !_cobEsEntregado(pc);});
+  var _suma=function(l){return l.reduce(function(s,p){return s+(Number(p.$)||0);},0);};
+  var totEqDeu=_suma(eqDeu), totEqFut=_suma(eqFut);
+  var totRedFut=redFut.reduce(function(s,x){return s+_rutCVMonto(x);},0);
 
-  // Aplicar filtro
-  var visibles=pendientesCobro.filter(_cobroPasaFiltro);
-  var total=0;visibles.forEach(function(pc){total+=pc.$});
   var h=chips;
-  var _canSet={};visibles.forEach(function(pc){_canSet[_canalDeCobro(pc)]=1;});
-  if(Object.keys(_canSet).length>1)h+='<div style="font-size:13px;font-weight:800;margin-bottom:10px">'+visibles.length+(visibles.length===1?' pendiente':' pendientes')+' · '+_cobroPesos(total)+'</div>';
-
-  if(visibles.length===0){
-    el.innerHTML=h+(cvAbajo?_cobDespRed(cvAbajo):'<div class="empty" style="padding:30px">Nada en este filtro</div>');return;
+  /* ── DEUDORES ── */
+  if(eqDeu.length||cvAbajo){
+    h+=_cobSecAbre('deu',true,'Deudores · ya entregado y sin cobrar',_cobroPesos(totEqDeu+totRedDeu));
+    if(eqDeu.length)h+=_cobSubH('Equipo Maleu',eqDeu.length+(eqDeu.length===1?' pedido':' pedidos')+' · '+_cobroPesos(totEqDeu))+_cobTarjetas(eqDeu);
+    if(cvAbajo){
+      var m=/<div id="rutCliVend" class="cobro-canal-header re"><span>([^<]*)<\/span><span>([^<]*)<\/span><\/div>/.exec(cvAbajo);
+      if(m)cvAbajo=cvAbajo.replace(m[0],'<div id="rutCliVend"></div>');
+      h+=_cobSubH('Representantes',_cobroPesos(totRedDeu))+cvAbajo;
+    }
+    h+='</details>';
   }
-
-  // Agrupar por CANAL, y dentro de Venta Directa / Clubes por CLIENTE (across días).
-  // Antes se agrupaba por día → el mismo cliente en días distintos quedaba suelto.
-  // Ahora: un cliente con 2+ cobros pendientes se muestra en UNA card con "cobrar juntos".
-  var porCanal={vd:[],cl:[],re:[]};
-  visibles.forEach(function(pc){porCanal[_canalDeCobro(pc)].push(pc);});
-
-  /* Red no se pinta en este recorrido: va entera en el bloque de representantes (cvAbajo). */
-  ['vd','cl'].forEach(function(canal){
-    var lista=porCanal[canal];
-    if(lista.length===0)return;
-    var totCanal=lista.reduce(function(s,p){return s+(Number(p.$)||0);},0);
-    /* (8/11/2026) Un desplegable por canal: se lee el resumen (cuántos y cuánto) y se abre el que se va a cobrar. */
-    h+=_cobDespAbre(canal,lista.length+(lista.length===1?' pedido':' pedidos')+' \u00b7 '+_cobroPesos(totCanal),_canalCobroLabel(canal));
-    h+='<div class="cobro-section" style="border:none;padding:0">';
-
-    {
-      // Agrupar por CASA (`ck`, ver _claveCliente), sin importar el día.
-      var porCli={},orden=[];
-      lista.forEach(function(pc){
-        var ck=_claveCliente(pc);
-        if(!porCli[ck]){porCli[ck]={items:[]};orden.push(ck);}
-        porCli[ck].items.push(pc);
-      });
-      // Ordenar por urgencia: la fecha pendiente más vieja del cliente, primero.
-      orden.sort(function(a,b){
-        var fa=Math.min.apply(null,porCli[a].items.map(function(p){return parseFecha(p.fe||p.fePed||'')||9e15;}));
-        var fb=Math.min.apply(null,porCli[b].items.map(function(p){return parseFecha(p.fe||p.fePed||'')||9e15;}));
-        return fa-fb;
-      });
-      orden.forEach(function(ck){
-        var grp=porCli[ck];
-        if(grp.items.length>=2||_cobEsEvento(ck))h+=_cobroClienteGrupoHTML(grp);
-        else h+=_cobroCardHTML(grp.items[0], pendientesCobro.indexOf(grp.items[0]));
+  /* ── A FUTURO ── (plegado de entrada) */
+  if(eqFut.length||redFut.length){
+    var nFut=eqFut.length+redFut.length;
+    h+=_cobSecAbre('fut',false,'A futuro · todavía no entregado',nFut+(nFut===1?' pedido':' pedidos')+' · '+_cobroPesos(totEqFut+totRedFut));
+    h+='<div class="cob-sec-nota">No son deudores: todavía no se entregó. Si alguien paga antes, se cobra desde acá.</div>';
+    if(eqFut.length)h+=_cobSubH('Equipo Maleu',_cobroPesos(totEqFut))+_cobTarjetas(eqFut);
+    if(redFut.length){
+      h+=_cobSubH('Representantes',_cobroPesos(totRedFut));
+      var porR={},ordR=[];
+      redFut.forEach(function(x){var n=_vendNombreLimpio(x.v.nombre);if(!porR[n]){porR[n]=[];ordR.push(n);}porR[n].push(x);});
+      ordR.forEach(function(n){
+        var xs=porR[n].sort(function(a,b){return _cobDiaTs(a.p.dia)-_cobDiaTs(b.p.dia);});
+        h+='<div class="cobro-card cobro-red-card"><div class="cobro-card-head"><span class="cobro-card-name">'+_rtcEsc(n)
+          +' <span class="cobro-red-tag">REPRESENTANTE</span></span><span class="cobro-card-total">'+formatMoney(xs.reduce(function(s,x){return s+_rutCVMonto(x);},0))+'</span></div>';
+        xs.forEach(function(x){h+=_rutCVItemHTML(x,false);});
+        h+='</div>';
       });
     }
-    h+='</div></details>';
-  });
-  el.innerHTML=h+_cobDespRed(cvAbajo);
+    h+='</details>';
+  }
+  el.innerHTML=h;
 }
+/* ¿Ya se entregó? Lo que no trae estado es un entregado de este celular que todavía no sincronizó (`_entregarCore`). */
+function _cobEsEntregado(pc){return !pc.es||pc.es==='Entregado'||!!(pc.key&&entregados[pc.key]);}
+function _cobDiaTs(s){var m=String(s||'').match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);return m?new Date(+m[3],+m[2]-1,+m[1]).getTime():9e15;}
+/* Las tarjetas de Home, Pilar y Clubes: una por CASA (`_claveCliente`, sin importar el día; los pedidos de una misma
+   entrega quedan en la misma tarjeta), la que debe hace más tiempo primero. */
+function _cobTarjetas(lista){
+  var porCli={},orden=[],h='';
+  lista.forEach(function(pc){
+    var ck=_claveCliente(pc);
+    if(!porCli[ck]){porCli[ck]={items:[]};orden.push(ck);}
+    porCli[ck].items.push(pc);
+  });
+  var _ts=function(ck){return Math.min.apply(null,porCli[ck].items.map(function(p){return parseFecha(p.fe||p.fePed||'')||9e15;}));};
+  orden.sort(function(a,b){return _ts(a)-_ts(b);});
+  orden.forEach(function(ck){
+    var grp=porCli[ck];
+    if(grp.items.length>=2||_cobEsEvento(ck))h+=_cobroClienteGrupoHTML(grp);
+    else h+=_cobroCardHTML(grp.items[0], pendientesCobro.indexOf(grp.items[0]));
+  });
+  return '<div class="cobro-section" style="border:none;padding:0">'+h+'</div>';
+}
+function _cobSubH(t,r){return '<div class="cob-sub-h"><span>'+t+'</span><b>'+r+'</b></div>';}
+/* Una sección: lo abierto o cerrado se recuerda en el celular; «Deudores» arranca abierta y «A futuro» cerrada. */
+function _cobSecAbre(c,porDefecto,titulo,resumen){
+  var ab=porDefecto;try{var v=localStorage.getItem('maleu_cob_sec_'+c);if(v!==null)ab=v==='1';}catch(e){}
+  return '<details class="cob-desp cob-sec '+c+'" data-c="'+c+'"'+(ab?' open':'')+' ontoggle="_cobSecToggle(this)">'
+    +'<summary class="cobro-canal-header cob-desp-h cob-sec-h '+c+'"><span class="cob-desp-t">'+titulo+'</span><span class="cob-desp-r">'+resumen+'</span></summary>';
+}
+window._cobSecToggle=function(d){ try{ localStorage.setItem('maleu_cob_sec_'+d.dataset.c,d.open?'1':'0'); }catch(e){} };
 /* LOS DESPLEGABLES DE COBRANZA (8/11/2026, Tadeo: «un desplegable de Home y uno de Red, así se lee mejor en la compu y
    el celular»). Cada canal es un <details> con su resumen en la cabecera. Lo abierto o cerrado se recuerda en el
    celular (`maleu_cob_desp_<canal>`); la primera vez arranca abierto. La lista se repinta sola cada 15 s: el estado
