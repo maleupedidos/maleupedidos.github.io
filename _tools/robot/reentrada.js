@@ -53,7 +53,8 @@ function cred() {
   console.log('A) sesión vieja, sin cola');
   await viejo(null);
   ver('A: aparece «Entrá de nuevo con tu PIN»', !!(await esperar(`!!document.getElementById('reentrada')`, 15000)));
-  ver('A: tapa toda la app (lo de atrás no se toca)', !!(await ev(`(function(){ var r=document.getElementById('reentrada'); if(!r)return false; var e=document.elementFromPoint(innerWidth/2,innerHeight-5); return r.contains(e); })()`)));
+  ver('A: tapa toda la app (lo de atrás no se toca)', !!(await ev(`(function(){ var r=document.getElementById('reentrada'); if(!r)return false; var e=document.elementFromPoint(innerWidth/2,innerHeight-5); window.__tapaAbajo=e?(e.tagName+'#'+e.id+'.'+String(e.className).slice(0,60)+' z='+getComputedStyle(e).zIndex):null; return r.contains(e); })()`)));
+  console.log('   abajo de todo: ' + await ev('window.__tapaAbajo'));
   ver('A: el usuario va fijo', !!(await ev(`(function(){ var u=document.getElementById('reentradaUser'); return u&&u.readOnly&&u.value===${JSON.stringify(C.usuario)}; })()`)));
   await entrarConPin('000000');
   ver('A: con un PIN mal, no entra y lo dice', !!(await esperar(`(function(){ var e=document.getElementById('reentradaErr'); return !!(document.getElementById('reentrada')&&e&&e.textContent.length>3); })()`, 15000)));

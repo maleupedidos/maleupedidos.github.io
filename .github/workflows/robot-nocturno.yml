@@ -1,16 +1,16 @@
-# EL ROBOT DE PRUEBAS, TODAS LAS NOCHES (4/11/2026) — Y EN CADA PUSH A MAIN (el CI, 4/11/2026, plan de Bauti Coll).
+# EL ROBOT DE PRUEBAS, TODAS LAS NOCHES (4/11/2026).
 # Recorre el ERP publicado con el usuario robot (entra por la base, modo ensayo: nada sale a Apps Script) y deja el
 # resultado en la base (`robot_resultado`). A las 8:00 el cartero de la base lo manda al grupo «Maleu - Resumenes».
 # Acá NO hay token de Telegram ni de la base: solo el usuario y PIN del robot (secrets ROBOT_USUARIO y ROBOT_PIN).
-# En un push, el push ES la publicación (GitHub Pages): el robot espera a que app.maleu.com.ar sirva la versión del
-# commit (el CN de sw-panel.js) y recién ahí prueba. Si un paso falla, el run sale en rojo. Uno a la vez: dos robots
-# juntos se pisan la limpieza.
+#
+# (11/11/2026, Organizador por Tadeo) YA NO CORRE EN CADA PUSH. Corría en cada publicación, estuvo en rojo en todas, y a
+# Tadeo le llegaba un mail de GitHub por cada una. El de antes de publicar ya existe: `deploy.sh` corre el robot sobre lo
+# que se va a publicar (paso 3c2) y no publica si falla. Acá queda el nocturno y el manual (workflow_dispatch).
+# Si algo falla, el último paso avisa con UNA línea al Telegram «Maleu · Resúmenes» (migración 654), no por mail.
 name: robot nocturno
 on:
   schedule:
     - cron: '30 6 * * *'   # 03:30 en Argentina (GitHub lo larga cuando quiere: el robot no corre fuera de 1–8 h)
-  push:
-    branches: [main]
   workflow_dispatch: {}
 permissions:
   contents: read
@@ -26,18 +26,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Esperar a que Pages sirva este commit
-        if: github.event_name == 'push'
-        run: |
-          quiero=$(grep -o "maleu-panel-v[0-9]*" sw-panel.js | head -1)
-          echo "versión del commit: $quiero"
-          for i in $(seq 1 40); do
-            hay=$(curl -s "https://app.maleu.com.ar/sw-panel.js?_=$(date +%s)" | grep -o "maleu-panel-v[0-9]*" | head -1 || true)
-            [ "$hay" = "$quiero" ] && { echo "publicada: $hay"; exit 0; }
-            sleep 15
-          done
-          echo "::error::a los 10 min app.maleu.com.ar sigue sirviendo $hay y no $quiero"; exit 1
       - name: Robot contra app.maleu.com.ar
+        id: robot
         env:
           ROBOT_USUARIO: ${{ secrets.ROBOT_USUARIO }}
           ROBOT_PIN: ${{ secrets.ROBOT_PIN }}
@@ -45,6 +35,7 @@ jobs:
           CHROME_BIN: /usr/bin/google-chrome
         run: node _tools/robot/robot.js
       - name: Sin Apps Script (todas las tabs con script.google.com cortado)
+        id: sinapps
         if: always()
         env:
           ROBOT_USUARIO: ${{ secrets.ROBOT_USUARIO }}
@@ -52,11 +43,13 @@ jobs:
           CHROME_BIN: /usr/bin/google-chrome
         run: node _tools/robot/sin_apps.js
       - name: Checkout PRUEBA en la tienda real (maleu.com.ar)
+        id: tienda
         if: always()
         env:
           CHROME_BIN: /usr/bin/google-chrome
         run: node _tools/robot/tienda_checkout.js
       - name: La sesión vieja se cierra (reentrada con PIN, con y sin cola de Ruta)
+        id: reentrada
         if: always()
         env:
           ROBOT_USUARIO: ${{ secrets.ROBOT_USUARIO }}
@@ -64,6 +57,7 @@ jobs:
           CHROME_BIN: /usr/bin/google-chrome
         run: node _tools/robot/reentrada.js
       - name: El representante entra por la pantalla de login sin Apps Script (y su portal no lo usa)
+        id: rep
         if: always()
         env:
           ROBOT_USUARIO: ${{ secrets.ROBOT_USUARIO }}
@@ -72,3 +66,15 @@ jobs:
           SIN_APPS_ROL: rep
           CHROME_BIN: /usr/bin/google-chrome
         run: node _tools/robot/sin_apps.js
+      - name: Si algo falló, una línea al Telegram de resúmenes
+        if: failure()
+        env:
+          ROBOT_USUARIO: ${{ secrets.ROBOT_USUARIO }}
+          ROBOT_PIN: ${{ secrets.ROBOT_PIN }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          FALLO: >-
+            Falló: ${{ steps.robot.outcome == 'failure' && 'el recorrido del ERP · ' || '' }}${{ steps.sinapps.outcome == 'failure' && 'pantallas sin Apps Script · ' || '' }}${{ steps.tienda.outcome == 'failure' && 'compra de prueba en la tienda · ' || '' }}${{ steps.reentrada.outcome == 'failure' && 'volver a entrar con PIN · ' || '' }}${{ steps.rep.outcome == 'failure' && 'el portal del representante · ' || '' }}el detalle está en GitHub.
+        run: |
+          export VERSION=$(grep -o "maleu-panel-v[0-9]*" sw-panel.js | head -1 | sed 's/maleu-panel-//')
+          node _tools/robot/avisar_falla.js
