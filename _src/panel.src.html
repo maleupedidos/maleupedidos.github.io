@@ -7983,6 +7983,7 @@ function ajParamRow(c){
    crítico, otra hoja) vive acá también. */
 var AJ_PARAMS=[
   {g:'Lo que se cambia seguido',l:[
+    {k:'PROV_DIAS_BUSQUEDA',n:'Días de búsqueda a proveedores',d:'Separados por coma (jue,vie). Si la próxima búsqueda llega el día de la entrega o antes, el pedido se arma como pasamanos (OC); si no, sale del freezer.',t:'texto'},
     {k:'TIENDA_CIERRE_HOY',n:'Cierre de la tienda para el mismo día',d:'Minutos después del fin de la franja de entrega en que la tienda deja de tomar pedidos para hoy. También acepta una hora fija (18:30).',t:'texto',u:'min'},
     {k:'PRODUCTOS_SOLO_STOCK',n:'Productos que se venden solo con stock',d:'Siglas separadas por coma. No se le piden al proveedor por cliente: se venden mientras haya en el freezer.',t:'texto'},
     {k:'PRODUCTOS_BAJA',n:'Productos que se dejan de comprar',d:'Siglas separadas por coma. Siguen en el catálogo, pero no se reponen.',t:'texto'},
@@ -18738,7 +18739,47 @@ function _rbDibujar(){
   var nEsp=((d.decidir||[]).length)+(((d.reclamos&&d.reclamos.pendientes)||[]).length);
   var _pd=nEsp?pdHtml(d):'';
   var _aviso=P.length?'<button type="button" class="rb-a-rep" onclick="go(\'miportal\')">'+P.length+(P.length===1?' pedido de Red espera':' pedidos de Red esperan')+' en Representantes ›</button>':'';
-  b.innerHTML=_pd+_aviso;
+  b.innerHTML=prepHtml()+_pd+_aviso;
+  prepPedir();
+}
+/* ═══ PEDIDO REPETIDO (11/11/2026, 658) ═══
+   Tadeo: Mercedes Girado hizo el #2446 a las 22:09 y el #2447 a las 22:14 con productos distintos: es una CORRECCIÓN,
+   no dos compras, y el ERP los sumaba. El mismo teléfono, para la misma entrega, con menos de 60 minutos entre los dos:
+   «¿Sumar o Quedarse con el último?» en un toque. Quedarse con el último cancela el anterior (con sus OC sin pedir); no
+   se borra. Mientras no se decida, no se arma (la base lo frena en ruta_armado_directo). */
+var _PREP=null, _prepVuelo=false, _prepT=0;
+function prepPedir(forzar){
+  if(_prepVuelo||(!forzar&&Date.now()-_prepT<20000)||typeof _baseRpc!=='function')return;
+  _prepVuelo=true;
+  _baseRpc('pedidos_repetidos_pantalla',{}).then(function(d){
+    var antes=JSON.stringify(_PREP||[]); _PREP=Array.isArray(d)?d:[]; _prepT=Date.now();
+    if(JSON.stringify(_PREP)!==antes){ var b=$('rbBox'); var t=document.getElementById('prepBox'); if(t)t.outerHTML=prepHtml(); else if(b)b.insertAdjacentHTML('afterbegin',prepHtml()); }
+  }).catch(function(){}).then(function(){ _prepVuelo=false; });
+}
+function prepHtml(){
+  var L=_PREP||[];
+  if(!L.length)return '<div id="prepBox"></div>';
+  var h='<div id="prepBox" class="rb-card pd-card rb-hay prep-card"><div class="rb-h"><span>Pedido repetido</span><span class="rb-n">'+L.length+' por decidir</span></div>';
+  L.forEach(function(x,i){
+    var nn=rbEsc(x.hn)+' #'+rbEsc(x.nn), nv=rbEsc(x.hv)+' #'+rbEsc(x.nv);
+    h+='<div class="rb-p prep-p" id="prep-'+i+'"><div class="rb-l1"><b>'+rbEsc(x.c||'')+'</b><span>hizo 2 pedidos en '+(x.min||0)+' min</span></div>'
+      +'<div class="rb-l2">Para el '+rbEsc(String(x.e).slice(8,10)+'/'+String(x.e).slice(5,7))+': '+nv+' ($'+Number(x.totV||0).toLocaleString('es-AR')+') y después '+nn+' ($'+Number(x.totN||0).toLocaleString('es-AR')+').</div>'
+      +'<div class="pd-acc"><button type="button" class="pd-nos" onclick="prepDecidir('+i+',\'sumar\')">Sumar</button>'
+      +'<button type="button" class="pd-pas" onclick="prepDecidir('+i+',\'ultimo\')">Quedarse con el último ('+nn+')</button></div>'
+      +'<div class="rb-l3">Hasta que se decida, no se arma.</div></div>';
+  });
+  return h+'</div>';
+}
+function prepDecidir(i,dec){
+  var x=(_PREP||[])[i]; if(!x)return;
+  if(dec==='ultimo'&&!confirm('Se cancela '+x.hv+' #'+x.nv+' ('+x.c+') y queda solo '+x.hn+' #'+x.nn+'.\nLas OC que todavía no se pidieron de ese pedido se cancelan también.\n\n¿Seguir?'))return;
+  var el=document.getElementById('prep-'+i); if(el)el.style.opacity='.5';
+  _baseRpc('pedido_repetido_decidir',{p:{vieja:x.vieja,nueva:x.nueva,decision:dec}}).then(function(r){
+    toast(dec==='sumar'?'Quedan los dos pedidos':'Se canceló '+x.hv+' #'+x.nv+': queda '+x.hn+' #'+x.nn,5000);
+    _PREP=(_PREP||[]).filter(function(y){return !(y.vieja===x.vieja&&y.nueva===x.nueva);});
+    var t=document.getElementById('prepBox'); if(t)t.outerHTML=prepHtml();
+    if(dec==='ultimo'){ try{ if(typeof _recargarPedidos==='function')_recargarPedidos(); }catch(e){} }
+  }).catch(function(e){ if(el)el.style.opacity=''; toast('No se pudo: '+String(e&&e.message||e),6000); });
 }
 /* ═══ POR DECIDIR (5/10/2026) ═══
    Tadeo: "la tab Pedidos como el lugar donde Lucas y yo recibimos los pedidos
