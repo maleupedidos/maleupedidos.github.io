@@ -5727,6 +5727,8 @@ div.rb-esq .rb-n{color:#bbb}
       </div>
 
       <!-- Card resumen: titulo y monto cambian segun el rol (admin vs repartidor) -->
+      <!-- (12/11/2026, 677) Los clientes nuevos que consiguió el empleado en la quincena: el premio va con el sueldo. -->
+      <div id="mrPremios" class="mr-premios" hidden></div>
       <div id="mrSummary" style="background:linear-gradient(135deg,#FF7A00,#FF5722);color:#fff;padding:20px;border-radius:14px;box-shadow:0 4px 14px rgba(255,87,34,0.25);margin-bottom:14px">
         <div id="mrSumLbl" style="font-size:13px;opacity:0.85;text-transform:uppercase;letter-spacing:0.5px">Te llevás por este día</div>
         <div id="mrTotal" style="font-size:42px;font-weight:800;line-height:1.1;margin:6px 0">$0</div>
@@ -5736,7 +5738,7 @@ div.rb-esq .rb-n{color:#bbb}
           <div><span style="opacity:0.8">Propinas:</span> <strong id="mrPropinas">$0</strong></div>
           <div><span style="opacity:0.8">Entregas:</span> <strong id="mrCount">0</strong></div>
           <div><span style="opacity:0.8">Con propina:</span> <strong id="mrPropN">0</strong></div>
-          <div style="flex-basis:100%;font-size:12.5px;opacity:0.85">El sueldo es mensual: acá van solo las propinas, que son 100% del repartidor.</div>
+          <div style="flex-basis:100%;font-size:12.5px;opacity:0.85">El sueldo es quincenal: acá van solo las propinas, que son 100% del repartidor.</div>
         </div>
         <!-- Volumen movido + pendientes de cobro. Visible solo si hubo entregas Y NO estás
              viendo a otro repartidor (esa info es contable, no va al WhatsApp del pago). -->
@@ -8197,6 +8199,8 @@ var AJ_PARAMS=[
   {g:'Finanzas y metas',l:[
     {k:'CAJA_MINIMA',n:'Caja mínima',d:'Lo mínimo que tiene que quedar en caja para no comprometer la operación.',t:'pesos'},
     {k:'SUELDO_MENSUAL',n:'Sueldo del dueño',d:'Sueldo imputado por mes. Entra al estado de resultados.',t:'pesos'},
+    {k:'SUELDO_EMPLEADO_QUINCENA',n:'Sueldo de un empleado por quincena',d:'Lo que se sugiere al cargar en Caja el gasto «Sueldo» de un empleado (Santos: $350.000 por mes). Se puede cambiar en cada pago.',t:'pesos'},
+    {k:'PREMIO_CLIENTE_NUEVO',n:'Premio por cliente nuevo (empleados)',d:'Lo que gana un empleado por cada cliente nuevo que consigue, cuando se entrega su primer pedido. Se suma al sueldo de la quincena.',t:'pesos'},
     {k:'GIRO_QUINCENAL',n:'Giro quincenal',d:'Lo que se retira en cada uno de los dos giros del mes.',t:'pesos'},
     {k:'DIA_GIRO_1',n:'Día del primer giro',d:'Día del mes en que se hace el primer giro.',t:'num'},
     {k:'DIA_GIRO_2',n:'Día del segundo giro',d:'Día del mes en que se hace el segundo giro.',t:'num'},
@@ -11095,6 +11099,8 @@ function go(p){
     // Adaptar UI a rol admin (oculta montos, mantiene actividad)
     mrApplyRoleMode();
     try{ mrRepsPintar(); mrDiaPintar(); }catch(eMr){}
+    /* (12/11/2026, 677) Los clientes nuevos de la quincena: al entrar, aunque el refresco automático se saltee loadMiReparto. */
+    try{ mrPremiosPintar(_mrGetUsuario(), dmyToIso((inF&&inF.value)||'')||''); }catch(ePr){}
     /* Si el refresco automático ya pidió esta vista, no duplicar la consulta
        apenas termina de entrar a la tab. */
     if(!(typeof window._refrescoAutoOcupado==='function'&&window._refrescoAutoOcupado()))loadMiReparto();
@@ -11835,6 +11841,31 @@ setTimeout(_mrVivoPrender, 0);
 
 // ── Mi Reparto: trae entregas del día hechas por el usuario logueado.
 // Input fecha es dd/mm/aaaa (texto con máscara). Se convierte a ISO para el backend.
+/* (12/11/2026, 677) «Clientes nuevos esta quincena: N · $X» con los nombres, y los que trajo y todavía no se entregaron.
+   Solo para los empleados (repartidor/empleado en Usuarios): la base lo dice con `esEmpleado`. */
+var _mrPremGen=0;
+function mrPremiosPintar(usuario,fechaISO,intento){
+  var box=document.getElementById('mrPremios'); if(!box||typeof _baseRpc!=='function')return;
+  var g=++_mrPremGen;
+  /* Al abrir, el permiso de la base puede no estar todavía: se lo espera (si no, `_baseRpc` falla callado). */
+  Promise.resolve(typeof _sbPermiso==='function'?_sbPermiso():null).catch(function(){}).then(function(){ return _baseRpc('premios_captacion_pantalla',{p:{persona:usuario,fecha:fechaISO}}); }).then(function(d){
+    if(g!==_mrPremGen)return;
+    if(!d||!d.esEmpleado){ box.hidden=true; box.innerHTML=''; return; }
+    var m=function(n){return '$'+Math.round(Number(n)||0).toLocaleString('es-AR');};
+    var cl=(d.clientes||[]).map(function(x){return _kEsc(x.c)+' <small>('+_kEsc(x.pedido)+', entregado el '+_kEsc(x.entregado)+')</small>';});
+    var ec=(d.enCamino||[]).map(function(x){return _kEsc(x.c)+' <small>('+_kEsc(x.pedido)+')</small>';});
+    box.innerHTML='<div class="mr-pr-h"><span>Clientes nuevos esta quincena</span><b>'+(d.n||0)+' \u00b7 '+m(d.monto)+'</b></div>'
+      +'<div class="mr-pr-sub">Quincena del '+_kEsc(d.quincena)+' \u00b7 '+m(d.unitario)+' por cada cliente nuevo, cuando se entrega su primer pedido. Se cobra con el sueldo.</div>'
+      +(cl.length?'<ul class="mr-pr-l">'+cl.map(function(x){return '<li>'+x+'</li>';}).join('')+'</ul>':'')
+      +(ec.length?'<div class="mr-pr-sub">Por entregar (cuentan cuando se entreguen): '+ec.join(', ')+'</div>':'');
+    box.hidden=false;
+  }).catch(function(eP){ try{window.__mrPremErr=(window.__mrPremErr||[]).concat([String(eP&&eP.message||eP)]);}catch(_){}
+    if(g!==_mrPremGen)return;
+    /* Al abrir la app la sesión de la base puede tardar: dos reintentos antes de rendirse. */
+    if((intento||0)<2)setTimeout(function(){ if(g===_mrPremGen)mrPremiosPintar(usuario,fechaISO,(intento||0)+1); },2500);
+    else box.hidden=true;
+  });
+}
 function loadMiReparto(opts){
   opts=opts||{};
   var raw=(document.getElementById('mrFecha')||{}).value||'';
@@ -11853,6 +11884,7 @@ function loadMiReparto(opts){
   }
   var listEl=document.getElementById('mrList');
   var emEl=document.getElementById('mrEmpty');
+  try{ mrPremiosPintar(usuario,fechaISO); }catch(ePr){}
   /* (28/10) `opts.d`: Mi Reparto en vivo ya trajo la respuesta de la base (del mismo usuario y fecha). */
   if(opts.d&&(opts.usuario!==usuario||opts.fecha!==fechaISO))return Promise.resolve(false);
   if(!opts.d&&listEl)listEl.innerHTML='<div style="text-align:center;padding:20px;color:#888">Cargando...</div>';
@@ -14095,13 +14127,48 @@ function swapIConInput(cat){
   }
   cur.parentNode.replaceChild(nuevo,cur);
 }
+try{ $('gCon').addEventListener('input',function(){ clearTimeout(window.__gSueT); window.__gSueT=setTimeout(_gSueldoPintar,350); });
+     $('gFecha').addEventListener('change',_gSueldoPintar); }catch(eSu){}
 $('gCat').addEventListener('change',function(){buildConceptoDL('dlConG',this.value);var av=$('gProvAviso');if(av)av.hidden=(_catMov(this.value)!=='proveedor');_gCatAviso(this.value);});
 /* Las dos categorias del 21/10/2026, explicadas al elegirlas: un debito automatico
    de la tarjeta se clasifica en el resultado por lo que pago (el concepto), y un
    retiro de rendimientos no es sueldo ni gasto. */
+/* (12/11/2026, 677) Gasto «Sueldo» a un empleado (Santos): se sugiere el sueldo de la quincena + los premios por clientes
+   nuevos de esa quincena (la de la fecha del gasto), con los nombres. Todo editable: el botón solo llena el monto. */
+var _gSueGen=0, _gSueCapt=null;
+function _gSueldoPintar(){
+  var av=$('gCatAviso'); if(!av||_catMov(($('gCat')||{}).value)!=='sueldo')return;
+  var con=(($('gCon')||{}).value||'').trim(), g=++_gSueGen;
+  var pedir=function(lista){
+    var per=(lista||[]).filter(function(n){ return con&&n.toLowerCase().indexOf(con.toLowerCase())===0||(con&&con.toLowerCase().indexOf(n.toLowerCase())===0); })[0];
+    if(!per){ av.innerHTML=(lista&&lista.length)?'Si es el sueldo de <b>'+lista.map(_kEsc).join('</b> o <b>')+'</b>, escribí su nombre en el concepto: te sugiero el monto de la quincena con sus premios.':''; av.hidden=!av.innerHTML; return; }
+    var f=dmyToIso((($('gFecha')||{}).value||'').trim())||'';
+    _baseRpc('premios_captacion_pantalla',{p:{persona:per,fecha:f}}).then(function(d){
+      if(g!==_gSueGen)return;
+      var m=function(n){return '$'+Math.round(Number(n)||0).toLocaleString('es-AR');}, tot=(Number(d.sueldoBase)||0)+(Number(d.monto)||0);
+      var nom=(d.clientes||[]).map(function(x){return _kEsc(x.c);}).join(', ');
+      av.innerHTML='<b>Sueldo de '+_kEsc(per)+', quincena del '+_kEsc(d.quincena)+'</b><br>Sueldo '+m(d.sueldoBase)
+        +' + premios '+m(d.monto)+' ('+(d.n||0)+(d.n===1?' cliente nuevo':' clientes nuevos')+(nom?': '+nom:'')+') = <b>'+m(tot)+'</b>'
+        +'<br><button type="button" class="g-prov-ir" onclick="_gSueldoUsar('+tot+',\'ef\')">Poner '+m(tot)+' en efectivo</button> '
+        +'<button type="button" class="g-prov-ir" onclick="_gSueldoUsar('+tot+',\'mp\')">en Mercado Pago</button>';
+      av.hidden=false;
+      av.dataset.premio=(d.n?('Incluye premio por '+d.n+(d.n===1?' cliente nuevo':' clientes nuevos')+' ('+m(d.monto)+'): '+(d.clientes||[]).map(function(x){return x.c;}).join(', ')):'');
+    }).catch(function(){});
+  };
+  if(_gSueCapt)pedir(_gSueCapt);
+  else _baseRpc('captadores_pantalla',{}).then(function(d){ _gSueCapt=(d&&d.captadores)||[]; if(g===_gSueGen)pedir(_gSueCapt); }).catch(function(){});
+}
+function _gSueldoUsar(monto,donde){
+  var ef=$('gEf'), mp=$('gMP'); if(!ef||!mp)return;
+  if(donde==='ef'){ ef.value=String(monto); mp.value=''; } else { mp.value=String(monto); ef.value=''; }
+  try{ _lugPintarMov('g'); }catch(e){}
+  var av=$('gCatAviso'), no=$('gNotas');
+  if(av&&no&&av.dataset.premio&&!no.value.trim())no.value=av.dataset.premio;
+}
 function _gCatAviso(cat){
   var av=$('gCatAviso');if(!av)return;
   var c=_catMov(cat),t='';
+  if(c==='sueldo'){ av.innerHTML=''; av.hidden=true; _gSueldoPintar(); return; }
   if(c==='tarjeta de credito')t='Escribí en el concepto <b>qué pagó la tarjeta</b> (ej. «Débito tarjeta · Supabase»): el resultado lo clasifica por ahí. Sin detalle va a <b>Otros gastos</b>.';
   else if(c==='retiro de rendimiento')t='<b>No es sueldo ni gasto.</b> Es plata de los rendimientos que te pasás: baja la caja, no toca el resultado ni la cuenta del sueldo.';
   else if(c==='retiro del dueno')t='<b>No es sueldo ni gasto.</b> Es plata que sacás vos: baja la caja, no toca el resultado ni la cuenta del sueldo.';
@@ -59218,6 +59285,14 @@ html:not(#_e1):not(#_e2):not(#_e3) :is(button,input,select,textarea){font-family
   html:not(#_e1):not(#_e2):not(#_e3) .snav .bn-popover-it.on:hover{background:var(--ol);text-decoration:none}
   html:not(#_e1):not(#_e2):not(#_e3) .snav .bn-popover-it.on{background:var(--ol);color:var(--o);font-weight:600;text-decoration:none}
 }
+
+/* (12/11/2026, 677) Mi Reparto: los clientes nuevos de la quincena. */
+.mr-premios{background:#fff;border:1px solid var(--border);border-radius:12px;padding:12px 14px;margin-bottom:12px}
+.mr-pr-h{display:flex;justify-content:space-between;align-items:baseline;gap:10px;font-size:14px;font-weight:700;color:var(--ink)}
+.mr-pr-h b{font-size:16px;font-variant-numeric:tabular-nums;color:#2E7D32;white-space:nowrap}
+.mr-pr-sub{font-size:12px;color:var(--ink3);margin-top:4px;line-height:1.4}
+.mr-pr-l{margin:8px 0 0;padding-left:18px;font-size:13px;color:var(--ink2)}
+.mr-pr-l small{color:var(--ink3)}
 </style>
 
 </body>

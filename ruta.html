@@ -1214,6 +1214,12 @@ select.np-input{background:var(--white) url("data:image/svg+xml;utf8,<svg xmlns=
     <!-- (12/11/2026, 676) La confirmación al cliente, como la de la tienda. Tildada sola con un teléfono válido. -->
     <label class="np-wa" id="npWaWrap"><input type="checkbox" id="npWaConf" onchange="npWaTocar()"><span>Mandarle la confirmación por WhatsApp</span></label>
     <div class="np-wa-nota" id="npWaNota"></div>
+    <!-- (12/11/2026, 677) Quién consiguió al cliente: el premio por cliente nuevo de los empleados. -->
+    <div id="npCaptWrap" hidden>
+      <div class="np-lbl-mini">Lo consiguió</div>
+      <select id="npCaptado" class="np-input" onchange="npCaptTocar()"><option value="">Nadie: llegó solo</option></select>
+      <div class="np-wa-nota" id="npCaptNota"></div>
+    </div>
 
     <!-- Home: barrio privado + sub barrio + lote -->
     <div id="npHomeFields">
@@ -11639,6 +11645,7 @@ function switchTab(tab){
   if(_v)['armadoView','rutaView','cobrosView','nuevoView'].forEach(function(id){var e=document.getElementById(id);if(e)e.classList.toggle('hidden',id!==_v);});
   /* (12/11/2026) + PEDIDO en la compu va a dos columnas: la pantalla deja de ser la columna de 480 px. */
   try{ (document.getElementById('pg-ruta')||document.body).classList.toggle('np-ancho',_v==='nuevoView'); }catch(_eA){}
+  if(_v==='nuevoView'){ try{ npCaptPintar(); npWaPintar(); }catch(_eC){} }
   var _gen=++_rutTabGen;
   _rutLuego(function(){if(_gen!==_rutTabGen||rutCurrentTab!==tab)return;rutRender();_switchTabDespues(tab);});
 }
@@ -11853,6 +11860,7 @@ function npSelectCliente(idx){
   // Tel (siempre, se guarda en el pedido)
   var elTel=document.getElementById('npTel');if(elTel&&c.tel)elTel.value=c.tel;
   try{npWaPintar();}catch(_eW){}
+  npCliElegido=true; try{npCaptPintar();}catch(_eC){}
   /* Un cliente de Los Alcanfores ya no va en Home: se pasa a Pilar con su barrio
      (21/9/2026). Sin esto, elegirlo desde Home lo dejaba en la hoja equivocada. */
   if(npZona==='Home'&&/alcanfor/i.test(String(c.barrio||'')))npSetZona('Pilar');
@@ -11931,6 +11939,7 @@ function npSetZona(z){
   // El envio se cobra solo en Pilar, y solo ahi se puede regalar. Al salir de
   // Pilar se destilda, para que no viaje regalado a otro pedido.
   npEnvioUI(z);
+  try{ npCaptPintar(); }catch(_eC){}
   if(z==='Clubes'){npGlobalPct=0;npCatDisc={};var gpi=document.getElementById('npGlobalPct');if(gpi)gpi.value='';}
   // Re-render catalogo (clubes filtra a 8 productos) y fechas
   /* (2/11/2026) Los chips y los campos cambian en el toque; el catalogo (Clubes filtra a 8) y las fechas, en el
@@ -13613,7 +13622,9 @@ function npPintarAvisoPrecios(){
 (function(){
   var raiz=document.getElementById('nuevoView'); if(!raiz)return;
   try{ npWaPintar(); }catch(_eW){}
-  raiz.addEventListener('input',function(e){ var t=e.target; if(t&&t.id)npCampoOk(t.id); });
+  try{ npCaptPintar(); }catch(_eC){}
+  raiz.addEventListener('input',function(e){ var t=e.target; if(t&&t.id)npCampoOk(t.id);
+    if(t&&t.id==='npNombre'){ npCliElegido=false; } if(t&&(t.id==='npNombre'||t.id==='npTel')){ try{npCaptPintar();}catch(_eC){} } });
   raiz.addEventListener('change',function(e){ var t=e.target; if(t&&t.id)npCampoOk(t.id); });
   raiz.addEventListener('keydown',function(e){
     if(e.key!=='Enter'||e.shiftKey||e.altKey||e.ctrlKey||e.metaKey)return;
@@ -13796,6 +13807,9 @@ function npGuardar(){
   };
   /* (12/11/2026, 676) La confirmación por WhatsApp: la base la manda si el alta trae esta marca. */
   if((document.getElementById('npWaConf')||{}).checked&&npWaValido())data.confirmarWA=true;
+  /* (12/11/2026, 677) Quién consiguió al cliente: la base lo anota (un empleado solo a sí mismo). */
+  var _cap=((document.getElementById('npCaptado')||{}).value||'').trim();
+  if(_cap&&(npZona==='Home'||npZona==='Pilar')&&!(document.getElementById('npCaptWrap')||{}).hidden)data.captadoPor=_cap;
   /* Pedido grupal (25/10/2026): viaja lo que se escribio, o true. */
   if((document.getElementById('npGrupal')||{}).checked){
     data.grupal=((document.getElementById('npGrupalQue')||{}).value||'').trim()||true;
@@ -14198,6 +14212,40 @@ function npWaPintar(){
   if(w)w.classList.toggle('off',!ok);
   if(nota)nota.textContent=!tel?'Sin teléfono no se le puede mandar la confirmación.':(!ok?'El teléfono no parece válido: tiene que tener el código de área (ej. 11 4479 3787).':(cb.checked?'Le llega el resumen del pedido a +'+npWaTel(tel)+'.':'No se le manda la confirmación (la destildaste: ya se lo confirmaste por chat).'));
 }
+/* (12/11/2026, 677) «Lo consiguió». Un empleado (repartidor) que carga un cliente NUEVO queda precargado como quien lo
+   consiguió (puede poner «Nadie»); un admin elige a cualquier empleado. La base decide si es nuevo de verdad (primera
+   compra de ese teléfono) y paga el premio recién cuando se entrega. Solo Home y Pilar. */
+var npCliElegido=false, npCaptManual=false, _npCapts=null;
+function npCaptEsNuevo(){
+  if(npCliElegido)return false;
+  var t=String((document.getElementById('npTel')||{}).value||'').replace(/\D/g,'').slice(-10);
+  if(t.length<10)return false;
+  return !(_npClientesCache||[]).some(function(c){ return c._st&&c._st.slice(-10)===t; });
+}
+function npCaptTocar(){ npCaptManual=true; npCaptPintar(); }
+function npCaptPintar(){
+  var w=document.getElementById('npCaptWrap'), sel=document.getElementById('npCaptado'), nota=document.getElementById('npCaptNota');
+  if(!w||!sel)return;
+  var rol=String((typeof SESSION!=='undefined'&&SESSION&&SESSION.rol)||'').toLowerCase(), yo=(typeof SESSION!=='undefined'&&SESSION&&(SESSION.nombre||''))||'';
+  var esRep=(rol==='repartidor'||rol==='empleado'), esAdm=(rol==='admin');
+  if(!(npZona==='Home'||npZona==='Pilar')||!(esRep||esAdm)){ w.hidden=true; sel.value=''; return; }
+  if(_npCapts===null){
+    _npCapts=[];
+    /* Espera el permiso de la base; si falla (la sesión todavía no estaba), se vuelve a pedir en el próximo repintado. */
+    if(typeof _baseRpc==='function')Promise.resolve(typeof _sbPermiso==='function'?_sbPermiso():null).catch(function(){})
+      .then(function(){ return _baseRpc('captadores_pantalla',{}); })
+      .then(function(d){ _npCapts=(d&&d.captadores)||[]; npCaptPintar(); })
+      .catch(function(eC){ try{window.__npCaptErr=String(eC&&eC.message||eC);}catch(_){} _npCapts=null; setTimeout(function(){ try{ if(_npCapts===null)npCaptPintar(); }catch(_e){} },3000); });
+  }
+  var opciones=esAdm?_npCapts:(_npCapts.indexOf(yo)>=0?[yo]:[]);
+  if(!opciones.length){ w.hidden=true; sel.value=''; return; }
+  var val=sel.value, html='<option value="">Nadie: llegó solo</option>'+opciones.map(function(n){ return '<option>'+String(n).replace(/[<>&"]/g,'')+'</option>'; }).join('');
+  if(sel.__h!==html){ sel.innerHTML=html; sel.__h=html; sel.value=val; }
+  var nuevo=npCaptEsNuevo();
+  if(!npCaptManual)sel.value=(esRep&&nuevo)?yo:'';
+  w.hidden=false;
+  if(nota)nota.textContent=sel.value?(nuevo?'Si es su primer pedido, '+sel.value+' gana el premio cuando se entregue.':'Este cliente ya compró antes: no cuenta como nuevo.'):(nuevo?'Cliente nuevo.':'');
+}
 function npReset(){
   _npBorradorBorrar();   /* (8/11/2026) el pedido se guardo o se empieza de cero */
   npCart={};
@@ -14208,6 +14256,7 @@ function npReset(){
   ['npNombre','npLote','npPilarBarrio','npPilarLote','npTel','npPropina','npDescuentoManual','npGlobalPct','npEfMixto','npTrMixto'].forEach(function(id){var el=document.getElementById(id);if(el)el.value=''});
   var yc=document.getElementById('npYaCobrado');if(yc)yc.checked=false;
   npWaManual=false; try{npWaPintar();}catch(_eW){}
+  npCliElegido=false; npCaptManual=false; try{var _cs=document.getElementById('npCaptado'); if(_cs)_cs.value=''; npCaptPintar();}catch(_eC){}
   var gr=document.getElementById('npGrupal');if(gr)gr.checked=false;
   var grq=document.getElementById('npGrupalQue');if(grq){grq.value='';grq.hidden=true;}
   npCta='';npQuien='';npPintarCta();
