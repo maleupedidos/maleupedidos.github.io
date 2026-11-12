@@ -35,7 +35,10 @@ const NAV = 'estSwitch|ajGo|setCrmProdPeriodo|switchTab|stSwitchTab|vSwitchTab|a
           for(var i=0;i<n.childNodes.length;i++)rec(n.childNodes[i]); })(pg);
         var txt=partes.join(' '); var carg=/Cargando|Buscando…|Trayendo/.test(txt.slice(0,400))&&txt.length<600;
         var feo=(txt.match(/undefined|NaN|\\[object Object\\]|null null|Invalid Date/g)||[]);
-        return {n:pg.querySelectorAll('*').length, carg:carg, feo:feo.slice(0,3), desb:Math.max(0,document.documentElement.scrollWidth-document.documentElement.clientWidth)};})()`);
+        /* (12/11/2026) Símbolos tipográficos a la vista (el ERP no los lleva: íconos de trazo). La «→» de «de A → B» se deja. */
+        var sim=(txt.match(/[\\u25BE\\u25B4\\u2190\\u25B8\\u25C2\\u21C4\\u2713\\u2715\\u2605\\u26A0\\u21BB\\u270E\\u25C0\\u25B6\\u25B2\\u25BC\\u2248\\u25A6\\u2716\\u2714]|[\\uD83C-\\uDBFF][\\uDC00-\\uDFFF]/g)||[]);
+        if(sim.length)feo=feo.concat(['símbolos: '+sim.slice(0,6).join(' ')]);
+        return {n:pg.querySelectorAll('*').length, carg:carg, feo:feo.slice(0,4), desb:Math.max(0,document.documentElement.scrollWidth-document.documentElement.clientWidth)};})()`);
       if (m && !m.carg && m.n > 30) break;
       await pausa(250);
     }
