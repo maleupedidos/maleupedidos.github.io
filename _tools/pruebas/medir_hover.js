@@ -31,8 +31,33 @@ const MARCAR = `(function(){
   });});
   return JSON.stringify(out);
 })()`.replace(/FONDO_RX/g, FONDO.toString());
-const ESTILO = (i) => `(function(){var e=document.querySelector('[data-mh="${i}"]');if(!e)return '';var s=getComputedStyle(e);
-  return [s.backgroundColor,s.color,s.borderTopColor,s.boxShadow,s.textDecorationLine,s.filter,s.backgroundImage].join('|');})()`;
+/* (12/11/2026) Medido por CONTRASTE, no por «cambió algo»: el color final del fondo (con el velo `inset` y el
+   `filter: brightness` aplicados, sobre el fondo del padre si es transparente), del borde y del texto. Visible =
+   contraste de luminancia >= MIN (1,10 por defecto) en alguno de los tres, o un subrayado nuevo, o una sombra externa
+   notoria. Las expresiones van sin barras invertidas a propósito: este texto viaja dentro de un template de JS. */
+const ESTILO = (i) => `(function(){var e=document.querySelector('[data-mh="${i}"]');if(!e)return '';
+  function rgba(c){var m=String(c||'').match(/rgba?[(]([^)]+)[)]/);if(!m)return null;var p=m[1].split(',').map(function(x){return parseFloat(x);});return {r:p[0],g:p[1],b:p[2],a:p.length>3?p[3]:1};}
+  function mezcla(top,bot){var a=top.a;return {r:top.r*a+bot.r*(1-a),g:top.g*a+bot.g*(1-a),b:top.b*a+bot.b*(1-a),a:1};}
+  var s=getComputedStyle(e), bg=rgba(s.backgroundColor), n=e.parentElement;
+  var base={r:255,g:255,b:255,a:1};
+  while(n){var c=rgba(getComputedStyle(n).backgroundColor);if(c&&c.a>0.5){base=c;break;}n=n.parentElement;}
+  var f=bg&&bg.a>0?mezcla(bg,base):base;
+  var sh=String(s.boxShadow||''), ext=0;
+  if(sh!=='none')sh.split(/,(?=[ ]*rgba?[(])/).forEach(function(part){var c=rgba(part);if(!c)return;if(part.indexOf('inset')>=0)f=mezcla(c,f);else{var nums=(part.replace(/rgba?[(][^)]*[)]/,'').match(/[0-9.]+px/g)||[]);if(nums.length>=3&&parseFloat(nums[2])>=4)ext=Math.max(ext,c.a);}});
+  var br=String(s.filter||'').match(/brightness[(]([0-9.]+)[)]/);var k=br?parseFloat(br[1]):1;
+  f={r:f.r*k,g:f.g*k,b:f.b*k};
+  var bd=rgba(s.borderTopColor)||{r:0,g:0,b:0,a:0}, tx=rgba(s.color)||{r:0,g:0,b:0,a:1};
+  return JSON.stringify({bg:[f.r,f.g,f.b],bd:[bd.r,bd.g,bd.b,bd.a],bw:parseFloat(s.borderTopWidth)||0,tx:[tx.r,tx.g,tx.b],u:/underline/.test(s.textDecorationLine),ext:ext});})()`;
+const MIN = Number(process.env.MIN || 1.10);
+function lum(c) { const f = (v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); }; return 0.2126 * f(c[0]) + 0.7152 * f(c[1]) + 0.0722 * f(c[2]); }
+function ratio(a, b) { const x = lum(a), y = lum(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); }
+function visible(A, H) {
+  if (!A || !H) return { ok: true, r: 0 };
+  const a = JSON.parse(A), h = JSON.parse(H);
+  const rb = ratio(a.bg, h.bg), rt = ratio(a.tx, h.tx), rd = (h.bw > 0 && h.bd[3] > 0) ? ratio(a.bd.slice(0, 3), h.bd.slice(0, 3)) : 1;
+  const r = Math.max(rb, rt, rd);
+  return { ok: r >= MIN || (h.u && !a.u) || (h.ext >= 0.12 && h.ext > a.ext + 0.05), r };
+}
 (async () => {
   const c = await abrir(); const ev = (e) => evaluar(c, e);
   await c.enviar('Runtime.enable'); await c.enviar('Page.enable'); await c.enviar('DOM.enable'); await c.enviar('CSS.enable');
@@ -53,6 +78,7 @@ const ESTILO = (i) => `(function(){var e=document.querySelector('[data-mh="${i}"
     const r = await c.enviar('DOM.querySelectorAll', { nodeId: doc.root.nodeId, selector: '[data-mh]' });
     const ids = {};
     for (const nid of r.nodeIds) { try { const a = await c.enviar('DOM.getAttributes', { nodeId: nid }); const k = a.attributes.indexOf('data-mh'); ids[a.attributes[k + 1]] = nid; } catch (x) {} }
+    if (process.env.DEBUG) console.log('DBG nodos', r.nodeIds.length, 'ids', Object.keys(ids).length, 'els', els.length);
     const sinPuntero = [], sinCambio = [];
     for (const e of els) {
       if (e.cur !== 'pointer') sinPuntero.push(e.c + ' «' + e.t + '»');
@@ -64,11 +90,12 @@ const ESTILO = (i) => `(function(){var e=document.querySelector('[data-mh="${i}"
         await c.enviar('CSS.forcePseudoState', { nodeId: nid, forcedPseudoClasses: ['hover'] });
         desp = await ev(ESTILO(e.i));
         await c.enviar('CSS.forcePseudoState', { nodeId: nid, forcedPseudoClasses: [] });
-      } catch (x) { continue; }
-      if (antes && antes === desp) sinCambio.push(e.c + ' «' + e.t + '»');
+      } catch (x) { if (process.env.DEBUG && (global.__dbe = (global.__dbe || 0) + 1) <= 2) console.log('DBG error', String(x && x.message).slice(0, 300)); continue; }
+      if (process.env.DEBUG && (!process.env.DEBUG_C || e.c === process.env.DEBUG_C)) console.log('DBG', e.c, e.t.replace(/\s+/g, ' '), antes, '||', desp);
+      const v = visible(antes, desp); if (!v.ok) sinCambio.push(e.c + ' «' + e.t + '» ' + v.r.toFixed(2));
     }
     vistos += els.length; malos += sinPuntero.length + sinCambio.length;
-    console.log(t.padEnd(13), String(els.length).padStart(3) + ' vistos', sinPuntero.length ? ' sin puntero ' + sinPuntero.length + ': ' + sinPuntero.slice(0, 6).join(', ') : '', sinCambio.length ? ' sin hover ' + sinCambio.length + ': ' + sinCambio.slice(0, 6).join(', ') : '');
+    console.log(t.padEnd(13), String(els.length).padStart(3) + ' vistos', sinPuntero.length ? ' sin puntero ' + sinPuntero.length + ': ' + sinPuntero.slice(0, 6).join(', ') : '', sinCambio.length ? ' hover flojo ' + sinCambio.length + ': ' + sinCambio.slice(0, 6).join(', ') : '');
   }
   console.log('\n  examinados: ' + vistos + ' · sin aviso: ' + malos);
   try { c.matar(); } catch (e) {}
