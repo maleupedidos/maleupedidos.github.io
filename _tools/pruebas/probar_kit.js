@@ -82,6 +82,15 @@ const chk = (c, m, x) => { if (c === true) { ok++; console.log('  ok  ', m); } e
     await ev("ajIrParam('PROV_DIAS_BUSQUEDA')");
     let marcado = false; for (let i = 0; i < 30 && !marcado; i++) { await T(300); marcado = await ev("!!document.querySelector('#p-ajustes .aj-pr.ajp-marca[data-k=\"PROV_DIAS_BUSQUEDA\"]')"); }
     chk(marcado, 'elegir el resultado abre Parámetros y marca ese parámetro');
+    // CRM › Personas: los filtros van plegados y «Filtros aplicados» dice lo que está puesto.
+    await ev("go('estancias')"); await T(2500); await ev("estSwitch('clientes')");
+    for (let i = 0; i < 40 && !(await ev("!!document.getElementById('fp-cli')")); i++) await T(500);
+    const fp0 = JSON.parse(await ev(`JSON.stringify({bar:!!document.getElementById('fp-cli'),cerrado:(document.getElementById('estCliFil')||{classList:{contains:function(){return false}}}).classList.contains('fp-cerrado'),txt:(document.getElementById('fp-cli')||{}).innerText||''})`));
+    await ev("estCliEstado('activo')"); await T(800);
+    const fp1 = await ev("(document.getElementById('fp-cli')||{}).innerText||''");
+    await ev("estCliEstado('')"); await T(400);
+    chk(fp0.bar && fp0.cerrado && /Sin filtros/.test(fp0.txt), 'Personas: los filtros arrancan plegados y dicen «Sin filtros»', fp0);
+    chk(/Filtros aplicados/.test(fp1) && /Estado: Activos/.test(fp1), 'con un filtro puesto, la barra lo dice («Estado: Activos»)', fp1);
     const dis = JSON.parse(await ev(`(function(){var b=document.createElement('button');b.className='btn-primary';b.disabled=true;b.textContent='x';document.querySelector('.pg.on').appendChild(b);var o=getComputedStyle(b).opacity;b.remove();return JSON.stringify({o:o});})()`));
     chk(Number(dis.o) < 0.6, 'un botón deshabilitado se ve deshabilitado', dis);
   } catch (e) { mal++; console.log('  REVENTO: ' + (e && e.stack || e)); }
