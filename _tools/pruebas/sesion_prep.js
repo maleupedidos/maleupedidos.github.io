@@ -7,7 +7,8 @@ module.exports = function prep(token, extra) {
     + 'localStorage.setItem("maleu_token","' + token + '");'
     /* (8/11/2026) Las pruebas simulan datos imitando a Apps Script: sin esto el ERP corta esas llamadas (APPS_APAGADO). */
     + 'localStorage.setItem("maleu_apps_prueba","1");'
-    + 'localStorage.setItem("maleu_panel_session",JSON.stringify({usuario:"tadeo",rol:"admin",nombre:"Tadeo Ustariz",ts:Date.now()}));'
+    /* (12/11/2026) PREP_SESION = JSON de la sesión del panel, para probar otro rol tal como entra (ej. el gerente con sus tabs). */
+    + 'localStorage.setItem("maleu_panel_session",JSON.stringify(' + (process.env.PREP_SESION || '{usuario:"tadeo",rol:"admin",nombre:"Tadeo Ustariz",ts:Date.now()}') + '));'
     + '}catch(e){}'
     + 'window.__err=[];window.__warn=[];window.__clicks=[];'
     + 'window.addEventListener("error",function(e){window.__err.push(String(e.message));});'
