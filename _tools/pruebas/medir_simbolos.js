@@ -13,7 +13,7 @@ const W = Number(process.argv[2] || 1440);
 const CORTE = "(function(){var of=window.fetch;window.fetch=function(u,o){var url=String((u&&u.url)||u||'');if(o&&String(o.method||'').toUpperCase()==='POST'&&!/rpc\\/(.*_pantalla|.*_base|mi_sesion|palancas.*|permiso.*|lectura.*|ventas.*|admin.*|eerr.*)/.test(url)&&!/auth\\/v1/.test(url))return Promise.reject(new TypeError('cortado'));return of.apply(this,arguments);};})()";
 const MIRAR = "(function(){var pg=document.querySelector('.pg.on');if(!pg)return '{}';var w=document.createTreeWalker(pg,NodeFilter.SHOW_TEXT),n,o={};" +
   "while(n=w.nextNode()){var p=n.parentElement;if(!p||!p.getClientRects().length)continue;var cs=getComputedStyle(p);if(cs.visibility==='hidden')continue;" +
-  "var m=n.nodeValue.match(/[\\u25BE\\u25B4\\u2190\\u25B8\\u25C2\\u21C4\\u2713\\u2715\\u2605\\u26A0\\u21BB\\u270E\\u25C0\\u25B6]|[\\uD83C-\\uDBFF][\\uDC00-\\uDFFF]/g);" +
+  "var m=n.nodeValue.match(/[\\u25BE\\u25B4\\u2190\\u25B8\\u25C2\\u21C4\\u2713\\u2715\\u2605\\u26A0\\u21BB\\u270E\\u25C0\\u25B6\\u25B2\\u25BC\\u2248]|[\\uD83C-\\uDBFF][\\uDC00-\\uDFFF]/g);" +
   "if(m)m.forEach(function(ch){var k=ch+' '+String(p.className||p.tagName).split(' ')[0];o[k]=(o[k]||0)+1;});}return JSON.stringify(o);})()";
 (async () => {
   const c = await abrir(); const ev = (e) => evaluar(c, e);
