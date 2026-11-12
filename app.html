@@ -11852,6 +11852,8 @@ var AJ_ROL_NOMBRE={admin:'Administrador',gerente:'Gerente',empleado:'Empleado',r
 /* ── EL GERENTE (665, 12/11/2026) ── Joaco mide y decide: ve casi todo, edita precios, productos nuevos y representantes,
    y Productos es SOLO LECTURA. Lo dice la hoja Permisos (filas `stock.lectura`, `ajustes.precios`, `ajustes.alta`,
    `ajustes.vendedores`), así que Tadeo lo puede cambiar desde Ajustes › Permisos. La base lo frena igual (665). */
+/* Escapar para HTML, global (`esc` vive en otro bloque y acá no existe: ReferenceError callado). */
+function _kEsc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];}); }
 function _rolVeTodo(){ return typeof SESSION!=='undefined'&&!!SESSION&&(SESSION.rol==='admin'||SESSION.rol==='gerente'); }
 function _tabLectura(t){ return typeof SESSION!=='undefined'&&!!SESSION&&SESSION.rol!=='admin'&&Array.isArray(SESSION.tabs)&&SESSION.tabs.indexOf(t+'.lectura')>=0; }
 /* Las secciones de Ajustes que tiene este rol, si están marcadas por sección; null = todas (admin). */
@@ -11871,7 +11873,7 @@ function _gerCambiosPintar(){
       +'<button type="button" class="hoy-av-q" onclick="gerCambio(0,\'vistoTodos\')">Visto todo</button></div>';
     l.forEach(function(c){
       var cuando=(typeof _hace==='function')?_hace(Date.parse(c.at)):'';
-      h+='<div class="ger-av-f"><span class="hoy-av-t">'+esc(c.texto)+'<small>'+esc(cuando)+'</small></span><span class="ger-av-acc">'
+      h+='<div class="ger-av-f"><span class="hoy-av-t">'+_kEsc(c.texto)+'<small>'+_kEsc(cuando)+'</small></span><span class="ger-av-acc">'
         +(c.puedeDeshacer?'<button type="button" class="hoy-av-q" onclick="gerCambio('+c.id+',\'deshacer\')">Deshacer</button>':'')
         +'<button type="button" class="hoy-av-q" onclick="gerCambio('+c.id+',\'visto\')">Visto</button></span></div>';
     });
@@ -16319,7 +16321,7 @@ function _leerVersion(app){
    "El HTML no sabe que version es" dejo de ser cierto: el build le escribe
    adentro el CACHE_NAME de sw-panel.js, el mismo que deploy.sh obliga a subir en
    cada cambio. Si lo publicado dice otra cosa, esta pagina es vieja. Punto. */
-var _APP_CN_PAGINA='maleu-panel-v1120';
+var _APP_CN_PAGINA='maleu-panel-v1121';
 
 /* Devuelve [{k,v}] si lo publicado no es lo que esta pagina corre. */
 function _chequearVersiones(){
@@ -25404,14 +25406,96 @@ function _pedCasaVivo(p){
     &&p.n&&String(p.n)!=='-'&&/^\d{4}-\d{1,2}-\d{1,2}/.test(String(p.dee||'')));
 }
 /** pcKey -> [pedidos de la misma casa y el mismo dia] (solo grupos de 2 o mas). */
+
+/* ── JUNTAR Y SEPARAR ENTREGAS A MANO (668, 12/11/2026) ──
+   La regla automática (mismo teléfono + mismo día) no ve todo: otro teléfono de la misma casa, el pedido de un familiar,
+   dos clientes que reciben juntos; y al revés, dos del mismo teléfono que van separados. El grupo manual vive en la base
+   (`entrega_grupo`) y le gana a la regla en Pedidos, Ruta, Armado, Cobros y el contador. Los pedidos siguen siendo dos. */
+var _ENT_GRP={}, _entGrpT=0;
+function _entGrpDe(h,n){ return _ENT_GRP[String(h||'')+'|'+String(n==null?'':n).trim()]||''; }
+function _entGrpPedir(forzar){
+  if(!forzar&&Date.now()-_entGrpT<20000)return Promise.resolve(false);
+  _entGrpT=Date.now();
+  if(typeof _baseRpc!=='function')return Promise.resolve(false);
+  return _baseRpc('entrega_grupos_pantalla').then(function(d){
+    var g=(d&&d.g)||{}, cambio=JSON.stringify(g)!==JSON.stringify(_ENT_GRP); _ENT_GRP=g;
+    if(cambio)_entRepintar();
+    return cambio;
+  },function(){ return false; });
+}
+function _entRepintar(){
+  try{ if((cur==='pedidos'||cur==='pedidoshome')&&typeof rPedidos==='function')rPedidos(); }catch(e){}
+  try{ if(typeof window.rutRender==='function')window.rutRender(); }catch(e){}
+}
+function _entIsoLindo(fecha){ var m=String(fecha||'').match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/); if(!m)return fecha;
+  var d=new Date(+m[3],+m[2]-1,+m[1]); return ['dom','lun','mar','mié','jue','vie','sáb'][d.getDay()]+' '+(+m[1])+'/'+(+m[2]); }
+function entSeparar(h,n){
+  if(!confirm('¿Separar el #'+n+' de su entrega? Va como una parada y un cobro aparte.'))return;
+  _baseRpc('entrega_grupo_directo',{p:{action:'entregaSeparar',key:h+'|'+n}}).then(function(){
+    toast('Listo: el #'+n+' va aparte'); _entGrpPedir(true);
+  },function(e){ toast('No se pudo: '+((e&&e.message)||'sin conexión')); });
+}
+/* El buscador de pedidos pendientes, para elegir con cuál va. */
+function entJuntarAbrir(h,n){
+  var yo=(D&&D.pedidos||[]).find(function(p){return p.h===h&&String(p.n)===String(n);});
+  var o=document.getElementById('entJuntarOv'); if(!o){o=document.createElement('div');o.id='entJuntarOv';document.body.appendChild(o);}
+  o.className='ent-ov'; o.onclick=function(ev){ if(ev.target===o)o.remove(); };
+  o.innerHTML='<div class="ent-box" role="dialog" aria-label="Juntar con otro pedido"><div class="ent-h"><b>Juntar el #'+_kEsc(n)+(yo?' de '+_kEsc(yo.c||''):'')+' con…</b>'
+    +'<button type="button" class="ent-x" aria-label="Cerrar" onclick="document.getElementById(\'entJuntarOv\').remove()">×</button></div>'
+    +'<input id="entJuntarQ" type="search" autocomplete="off" placeholder="Buscá por nombre, N° o teléfono" oninput="entJuntarFiltrar(\''+h+'\',\''+_kEsc(String(n))+'\')">'
+    +'<div id="entJuntarL" class="ent-l"></div><p class="ent-nota">Van en una sola parada y se cobran juntos. Los pedidos siguen siendo dos.</p></div>';
+  entJuntarFiltrar(h,n);
+  setTimeout(function(){ var i=document.getElementById('entJuntarQ'); if(i)i.focus(); },50);
+}
+function entJuntarFiltrar(h,n){
+  var el=document.getElementById('entJuntarL'); if(!el)return;
+  var q=String((document.getElementById('entJuntarQ')||{}).value||'').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').trim();
+  var l=(D&&D.pedidos||[]).filter(function(p){
+    if(p.h===h&&String(p.n)===String(n))return false;
+    var es=String(p.es||''); if(es==='Entregado'||es==='Cancelado'||p.h==='Red')return false;
+    if(!q)return true;
+    var t=(String(p.c||'')+' '+p.n+' '+String(p.tel||'')).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'');
+    return t.indexOf(q)>=0;
+  }).slice(0,30);
+  el.innerHTML=l.length?l.map(function(p){
+    return '<button type="button" class="ent-f" onclick="entJuntar(\''+h+'\',\''+_kEsc(String(n))+'\',\''+p.h+'\',\''+_kEsc(String(p.n))+'\')"><span><b>'+_kEsc(p.c||'')+'</b><small>'+_kEsc(p.h)+' #'+_kEsc(p.n)+(p.dee?' · '+_kEsc(_entIsoLindo(String(p.dee).replace(/^(\d{4})-(\d{1,2})-(\d{1,2}).*/,'$3/$2/$1'))):'')+'</small></span><b>$'+f$(_pedTotalCliente(p))+'</b></button>';
+  }).join(''):'<div class="ent-vacio">No hay pedidos pendientes con eso.</div>';
+}
+function entJuntar(ha,na,hb,nb,ya){
+  _baseRpc('entrega_grupo_directo',{p:{action:'entregaJuntar',a:ha+'|'+na,b:hb+'|'+nb}}).then(function(r){
+    var o=document.getElementById('entJuntarOv'); if(o)o.remove();
+    toast('Listo: #'+na+' y #'+nb+' van en una sola entrega'); _entGrpPedir(true);
+  },function(e){
+    var msg=(e&&e.message)||'';
+    /* Distinta fecha: se pregunta si se pasa, con la reprogramación de siempre, y se vuelve a juntar. */
+    if(/distinta fecha/i.test(msg)&&!ya){
+      var a=(D&&D.pedidos||[]).find(function(p){return p.h===ha&&String(p.n)===String(na);});
+      var b=(D&&D.pedidos||[]).find(function(p){return p.h===hb&&String(p.n)===String(nb);});
+      var fa=a&&String(a.dee||'').slice(0,10);
+      if(!a||!b||!fa){ toast('Tienen distinta fecha de entrega'); return; }
+      var lindo=_entIsoLindo(fa.replace(/^(\d{4})-(\d{1,2})-(\d{1,2})$/,'$3/$2/$1'));
+      if(!confirm('El #'+nb+' es para otro día. ¿Lo pasamos al '+lindo+', con el #'+na+'?'))return;
+      _baseRpc('pedido_reprog_directo',{p:{action:'reprogramarEntrega',fecha:fa,pedidos:[{hoja:b.h,id:String(b.n),row:Number(b.r)||0}],
+        clientOpId:'rep_ent_'+Date.now().toString(36)}}).then(function(){
+          b.dee=a.dee; entJuntar(ha,na,hb,nb,true);
+        },function(e2){ toast('No se pudo cambiar la fecha: '+((e2&&e2.message)||'sin conexión')); });
+      return;
+    }
+    toast('No se pudo: '+(msg||'sin conexión'));
+  });
+}
 function _pedCasaIdx(lista){
   var gDeClave={},miembros={},n=0;
   (lista||[]).forEach(function(p){
     if(!_pedCasaVivo(p))return;
     var m=String(p.dee).match(/^(\d{4})-(\d{1,2})-(\d{1,2})/), dia=m[1]+'-'+(+m[2])+'-'+(+m[3]), ks=[];
+    /* (668) El grupo manual le gana a la regla; «solo» no se agrupa. Con el día: si cambia de fecha, sale solo. */
+    var _mg=_entGrpDe(p.h,p.n); if(_mg==='solo')return;
+    if(_mg)ks.push('m|'+_mg+'|'+dia); else {
     var t=_pedTel10(p.tel); if(t.length>=8)ks.push('t|'+t+'|'+dia);
     var br=String(p.br||'').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/\s+/g,' ').trim();
     if(/lote/.test(br))ks.push('b|'+br+'|'+dia);
+    }
     if(!ks.length)return;
     var g=null;
     ks.forEach(function(k){
@@ -30105,6 +30189,7 @@ function rPedidos(opts){
      arma con TODOS los pedidos y no con los filtrados: un filtro no puede
      esconder que hay otro pedido de la misma casa. */
   var _casaIdx={};
+  try{ _entGrpPedir(false); }catch(_eEG){}
   try{ _casaIdx=_pedCasaIdx(D.pedidos||[]); fl=_pedCasaJuntar(fl,_casaIdx); }catch(_eCasa){ _casaIdx={}; }
 
   // "Unseen" (naranja) = pedido cuyo Origen sigue en Pendiente (no se decidió
@@ -46844,6 +46929,12 @@ if('serviceWorker' in navigator){
     /* Deshacer el cobro (no Red): vuelve a «No cobrado» para corregirlo en COBROS. */
     if(cob&&p.h!=='Red')masB+='<button class="ord-btn danger" onclick="deshacerCobro(\''+p.h+'\',\''+p.n+'\','+(p.r||0)+')">Deshacer el cobro</button>';
     var editable=(!ent&&!canc&&!cob&&p.h!=='Red');
+    /* (668) Juntar o separar la entrega a mano. */
+    if(!ent&&!canc&&p.h!=='Red'){
+      masB+='<button class="ord-btn" onclick="entJuntarAbrir(\''+p.h+'\',\''+p.n+'\')">Juntar con otro pedido…</button>';
+      var _enGr=false; try{ _enGr=!!_pedCasaIdx(D.pedidos||[])[_pcKey(p)]; }catch(eG){}
+      if(_enGr)masB+='<button class="ord-btn" onclick="entSeparar(\''+p.h+'\',\''+p.n+'\')">Separar este pedido</button>';
+    }
     if(editable)masB+='<button class="ord-btn danger" onclick="_ordCancelar(\''+p.h+'\',\''+p.n+'\','+(p.r||0)+',\''+(p.c||'').replace(/[\\\'"]/g,'')+'\')">Cancelar pedido</button>';
     if(masB){
       mas+='<div class="ofx-mas-b">'+masB+'</div>';
@@ -62804,6 +62895,20 @@ html:not(#_e1):not(#_e2):not(#_e3) #pList.ped-tabla .pt-mas:hover{border-color:v
 #pList.ped-tabla>.pc.pc-en-tabla.pt-abierta>.pc-summary{display:none}
 #pList.ped-tabla>.pc-mas{padding:10px}
 
+/* (668) Juntar con otro pedido. */
+.ent-ov{position:fixed;inset:0;z-index:9000;background:rgba(40,24,16,.45);display:flex;align-items:flex-end;justify-content:center}
+@media(min-width:700px){.ent-ov{align-items:center}}
+.ent-box{background:#fff;width:100%;max-width:460px;max-height:86vh;overflow:auto;border-radius:16px 16px 0 0;padding:14px 16px calc(16px + env(safe-area-inset-bottom))}
+@media(min-width:700px){.ent-box{border-radius:14px}}
+.ent-h{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px;font-size:15px}
+.ent-x{min-width:44px;min-height:44px;border:0;background:none;font-size:22px;color:var(--ink3);border-radius:999px}
+#entJuntarQ{width:100%;box-sizing:border-box;min-height:44px;border:1.5px solid var(--cd);border-radius:10px;padding:8px 12px;font:inherit;font-size:15px}
+.ent-l{margin-top:8px;display:flex;flex-direction:column;gap:4px}
+.ent-f{display:flex;justify-content:space-between;align-items:center;gap:10px;min-height:48px;text-align:left;border:1px solid var(--cd);border-radius:10px;background:#fff;padding:8px 12px;font:inherit;font-size:14px;color:var(--ink)}
+.ent-f small{display:block;font-size:12px;color:var(--ink3);font-weight:500}
+.ent-f>b{font-variant-numeric:tabular-nums;white-space:nowrap}
+.ent-vacio,.ent-nota{font-size:12.5px;color:var(--ink3);margin:8px 2px}
+
 /* (665) Los cambios del gerente en Inicio. */
 .ger-av-f{display:flex;justify-content:space-between;align-items:center;gap:10px;min-height:44px;border-top:1px solid var(--cd);font-size:13px;color:var(--ink2)}
 .ger-av-f small{display:block;font-size:11.5px;color:var(--ink3)}
@@ -69344,6 +69449,9 @@ function _lugarDe(e,lug){ return (lug&&e&&lug[eKey(e)])||e; }
 // clave es la misma de antes ("tel|dia"), y así no se pierde lo que ya estaba
 // guardado con ella (las propinas y los cobros locales del combo).
 function _claveCombo(e,lug){
+  /* (668) El grupo manual le gana a la regla automática (con el día: si cambia de fecha, sale solo). */
+  var _mg=(typeof _entGrpDe==='function')?_entGrpDe(e.h,e.id):'';
+  if(_mg)return (_mg==='solo'?'solo|'+e.h+'|'+e.id:'man|'+_mg)+'|'+(e.fe||e.de||'');
   var L=_lugarDe(e,lug);
   var tel=_telCanon(e.t);
   var nombre=String(e.c||'').toLowerCase().trim();
@@ -69920,6 +70028,7 @@ function getZonaSummary(list){
    (la regla de siempre de Ruta, `_claveCombo`: el caso de Mercedes Girado, #2446 + #2447). Los contadores cuentan eso. */
 function _rutNEntregas(lista){try{return _agruparPedidos((lista||[]).filter(function(e){return e&&!e._redAgg&&!e._depAgg;})).length;}catch(e){return (lista||[]).length;}}
 function rutRender(){
+  try{ if(typeof _entGrpPedir==='function')_entGrpPedir(false); }catch(eEG){}
   var all=getPendientes(),hoy=getHoyPendientes();
   var totalHoy=_rutNEntregas(entregas.filter(esHoy));
   var doneHoy=Math.max(0,totalHoy-_rutNEntregas(hoy));
@@ -72464,6 +72573,9 @@ function rutRenderRuta(){
   h+='<section class="rtc-dest '+canal+'">'
     +'<div class="rtc-dest-top"><span class="rtc-zona">'+_rtcEsc(_rtcZonaLbl(e))+'</span><span class="rtc-canal">'+_rtcEsc(e.h)+' '+ids+'</span></div>'
     +_rtcDestino(e);
+  /* (668) La entrega va a la dirección del primero; si las del grupo difieren, se dice. */
+  if(e._combo){ var _dirs={}; e._pedidos.forEach(function(p){ var d=String(p.dir||p.l||'').trim().toLowerCase(); if(d)_dirs[d]=1; });
+    if(Object.keys(_dirs).length>1)h+='<div class="rtc-atr"><b>Ojo:</b> los pedidos de esta entrega tienen direcciones distintas. Va a la del #'+_rtcEsc(e._pedidos[0].id)+'.</div>'; }
   if(e.es==='Reservado')h+='<div class="rtc-reserva">Reservado</div>';
   var _idLink=e._combo?String(e._pedidos[0].id):String(e.id);
   h+='<button type="button" class="rtc-cli" onclick="_openOrdInPanel(\''+_rtcArg(e.h)+'\',\''+_rtcArg(_idLink)+'\')">'
@@ -72543,6 +72655,12 @@ function rutRenderRuta(){
   h+='<div class="rtc-mas">';
   /* «Reservar» se sacó el 14/10/2026: el pedido ya aparta su stock con el origen. Queda la salida para uno viejo. */
   if(estAct==='Reservado')h+='<button type="button" onclick="cambiarEstadoRuta(\''+kArg+'\',\'Pendiente\')">Pasar a Pendiente</button>';
+  /* (668) Juntar con otro pedido o separar uno de la entrega. */
+  if(e.h!=='Red'&&typeof entJuntarAbrir==='function'){
+    var _p0=e._combo?e._pedidos[0]:e;
+    h+='<button type="button" onclick="entJuntarAbrir(\''+_rtcArg(_p0.h)+'\',\''+_rtcArg(String(_p0.id))+'\')">Juntar con otro</button>';
+    if(e._combo)e._pedidos.forEach(function(p){ h+='<button type="button" onclick="entSeparar(\''+_rtcArg(p.h)+'\',\''+_rtcArg(String(p.id))+'\')">Separar #'+_rtcEsc(p.id)+'</button>'; });
+  }
   h+='<button type="button" class="rtc-cancel" onclick="confirmarCancelarRuta(\''+kArg+'\')">Cancelar pedido</button>';
   h+='</div></article>';
   body.innerHTML=h;
@@ -73225,6 +73343,10 @@ function _cobroComboBanner(pc, combo){
 function _cobEventoNorm(s){return String(s||'').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[^a-z0-9]+/g,' ').trim();}
 function _cobEsEvento(ck){return String(ck||'').indexOf('g:')===0;}
 function _claveCliente(e){
+  /* (668) Lo juntado a mano se cobra junto; lo separado, aparte. */
+  var _mg=(e&&typeof _entGrpDe==='function')?_entGrpDe(e.h,e.id):'';
+  if(_mg&&_mg!=='solo')return 'man|'+_mg;
+  if(_mg==='solo')return 'solo|'+e.h+'|'+e.id;
   if(e&&e.grp&&_cobEventoNorm(e.grp)&&!/^s[ií]$/i.test(String(e.grp).trim()))return 'g:'+_cobEventoNorm(e.grp);
   /* UNA TARJETA POR CLIENTE, NO POR CASA (8/11/2026, Tadeo): «en el lote 289, mi casa, se juntan las cobranzas de
      todos los de la casa; me costó encontrar mi pedido porque estaba a nombre de Alejandra, mi mamá». La casa (`ck`)
