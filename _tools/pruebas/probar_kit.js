@@ -91,6 +91,14 @@ const chk = (c, m, x) => { if (c === true) { ok++; console.log('  ok  ', m); } e
     await ev("estCliEstado('')"); await T(400);
     chk(fp0.bar && fp0.cerrado && /Sin filtros/.test(fp0.txt), 'Personas: los filtros arrancan plegados y dicen «Sin filtros»', fp0);
     chk(/Filtros aplicados/.test(fp1) && /Estado: Activos/.test(fp1), 'con un filtro puesto, la barra lo dice («Estado: Activos»)', fp1);
+    // CRM › Casas: lo mismo; el orden de siempre (Más facturan) no cuenta como filtro, y Limpiar vuelve a él.
+    await ev("estSwitch('hogares')"); for (let i = 0; i < 40 && !(await ev("!!document.getElementById('fp-hog')")); i++) await T(500);
+    const h0 = await ev("(document.getElementById('fp-hog')||{}).innerText||''");
+    await ev("estHogEstado('dormido')"); await T(500);
+    const h1 = await ev("(document.getElementById('fp-hog')||{}).innerText||''");
+    await ev("estHogLimpiar()"); await T(500);
+    const h2 = await ev("(document.getElementById('fp-hog')||{}).innerText||''");
+    chk(/Sin filtros/.test(h0) && /Estado: Dormidas/.test(h1) && /Sin filtros/.test(h2), 'Casas: arranca sin filtros, dice el que se puso y Limpiar lo saca', { h0, h1, h2 });
     const dis = JSON.parse(await ev(`(function(){var b=document.createElement('button');b.className='btn-primary';b.disabled=true;b.textContent='x';document.querySelector('.pg.on').appendChild(b);var o=getComputedStyle(b).opacity;b.remove();return JSON.stringify({o:o});})()`));
     chk(Number(dis.o) < 0.6, 'un botón deshabilitado se ve deshabilitado', dis);
   } catch (e) { mal++; console.log('  REVENTO: ' + (e && e.stack || e)); }
