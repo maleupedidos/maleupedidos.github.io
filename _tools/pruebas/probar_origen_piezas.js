@@ -49,6 +49,15 @@ const card = `document.querySelector('.pc[data-pc-key="${K}"]')`;
     await T(9000);
     await evaluar(cli, "fC='Todos';fE='Todos';go('pedidos')"); await T(8000);
     await evaluar(cli, ATAJO);
+    /* SOLO_CARNE=Deposito|Pendiente: el pedido, EN MEMORIA, queda de solo carne con ese origen (no se escribe nada). Desde
+       el 11/11 noche el selector de piezas también está en esos pedidos. */
+    if (process.env.SOLO_CARNE) {
+      const n = await evaluar(cli, `(function(){var k=${JSON.stringify(K)};var p=(D.pedidos||[]).filter(function(x){return x.h+'|'+x.n===k;})[0];if(!p)return -1;
+        p.p=p.p.filter(function(r){return _esCarne(r.a);});p.o=${JSON.stringify(process.env.SOLO_CARNE)};render();return p.p.length;})()`);
+      chk(n > 0, `${K} en memoria: solo carne (${n} cortes), origen ${process.env.SOLO_CARNE}`, n);
+      chk(await evaluar(cli, `_origenEditable((D.pedidos||[]).filter(function(x){return x.h+'|'+x.n===${JSON.stringify(K)};})[0])`) === true, 'el editor de origen está (solo carne)');
+      chk(await evaluar(cli, `_pedOrigenPendiente((D.pedidos||[]).filter(function(x){return x.h+'|'+x.n===${JSON.stringify(K)};})[0])`) === false, 'y no cuenta como «sin origen»');
+    }
     await evaluar(cli, 'pedBuscar(' + JSON.stringify(K.split('|')[1]) + ',false)'); await T(900);
     await evaluar(cli, `(function(){var c=${card};if(c&&c.classList.contains('collapsed'))c.querySelector('.pc-summary').click();})()`); await T(1500);
     // Las piezas pueden tardar en llegar la primera vez (se piden al abrir).
