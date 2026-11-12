@@ -87,6 +87,19 @@ const chk = (c, m, x) => { if (c === true) { ok++; console.log('  ok  ', m); } e
       const nav = JSON.parse(await ev("JSON.stringify([].map.call(document.querySelectorAll('#p-ajustes .aj-nav .aj-pill'),function(b){return b.textContent;}))"));
       chk(nav[0] === 'Precios' && nav.indexOf('Config operativa') < 0, 'el menú arranca por lo que se cambia seguido (Precios) y sin «Config operativa»', nav);
     }
+    /* ── Todas las sub-secciones: sin símbolos, sin códigos a la vista, nada que se salga ── */
+    if (process.env.TODAS) {
+      const secs = JSON.parse(await ev("JSON.stringify([].map.call(document.querySelectorAll('#p-ajustes .aj-nav .aj-pill'),function(b){return b.getAttribute('data-sec');}))"));
+      for (const s of secs) {
+        await ev(`ajGo(${JSON.stringify(s)})`);
+        for (let i = 0; i < 16; i++) { await T(500); if (!(await ev("/Cargando|Leyendo/.test(document.getElementById('ajBody').innerText)"))) break; }
+        await T(400);
+        const r = JSON.parse(await ev(`JSON.stringify((function(){var b=document.getElementById('ajBody'),t=b.innerText;
+          return {n:t.length,sim:(t.match(/[\\u2715\\u2713\\u2717\\u2605\\u26a0\\u2197]|[\\uD83C-\\uDBFF][\\uDC00-\\uDFFF]/g)||[]),
+            cod:(t.match(/\\b[A-Z][A-Z0-9]{2,}_[A-Z0-9_]{3,}\\b/g)||[]),sw:b.scrollWidth,cw:b.clientWidth};})())`));
+        chk(r.n > 40 && !r.sim.length && !r.cod.length && r.sw <= r.cw + 1, `${s}: ${r.n} letras, sin símbolos ni códigos, nada se sale`, r);
+      }
+    }
     const errs = JSON.parse(await ev('JSON.stringify(window.__errores||[])') || '[]');
     chk(!errs.length, 'sin errores de JS', errs);
   } catch (e) { mal++; console.log('  REVENTO: ' + (e && e.stack || e)); }
