@@ -16136,7 +16136,7 @@ function _leerVersion(app){
    "El HTML no sabe que version es" dejo de ser cierto: el build le escribe
    adentro el CACHE_NAME de sw-panel.js, el mismo que deploy.sh obliga a subir en
    cada cambio. Si lo publicado dice otra cosa, esta pagina es vieja. Punto. */
-var _APP_CN_PAGINA='maleu-panel-v1078';
+var _APP_CN_PAGINA='maleu-panel-v1079';
 
 /* Devuelve [{k,v}] si lo publicado no es lo que esta pagina corre. */
 function _chequearVersiones(){
@@ -42519,7 +42519,7 @@ var EVU={per:'8s',gr:'sem'};
 var EVU_C={main:'#E5662F',ref:'#A89880',ant:'#8A6F5A',obj:'#331C1C'};
 var EVU_DIA=['domingo','lunes','martes','miércoles','jueves','viernes','sábado'];
 var _evuMemo={}, _evuCfg={}, _evuRO=null, _evuAncho=0, _evuT=null, _evuPend=false;
-var _evuMeta=null, _evuMetaPedida='', _evuGlobal=false, _evuPrefLeida=false, _evuEerrPedido=false, _evuMetaFallo=false, _evuEerrFallo='';
+var _evuMeta=null, _evuMetaPedida='', _evuGlobal=false, _evuPrefLeida=false, _evuEerrPedido=false, _evuMetaFallo=false, _evuEerrFallo='', _evuEerrIntentos=0;
 /* Los canales, cada uno con SU color: el color sigue al canal, no al orden. Si se
    apaga uno, los otros no cambian. Paleta validada con el script de dataviz
    (separación para daltonismo y contraste contra el blanco). */
@@ -42582,6 +42582,7 @@ function _evuGuardarPref(){try{localStorage.setItem('maleu_evu',JSON.stringify({
    ticket, y `ref`: el promedio de los períodos ANTERIORES a ese punto (8 semanas
    o 3 meses), que es la vara contra la que se lee. El período en curso se corta
    en hoy y se marca; nunca entra en un promedio. */
+var EVU_PROY_MIN=0.2;   /* (11/11/2026) lo cerrado tiene que pesar al menos esto del período para proyectar */
 function _evuSerie(){
   var hoy=_evuHoy(), gr=_evuGr();
   var lun=_rtDia(hoy,-((hoy.getDay()+6)%7));
@@ -42633,7 +42634,11 @@ function _evuSerie(){
     var hechos=0,tot=0;
     for(var x=b.d;x<=b.h;x=_rtDia(x,1)){var w=pesos[x.getDay()];tot+=w;if(x<=ayer)hechos+=w;}
     var fr=tot>0?hechos/tot:0;
-    if(!(fr>0))return;
+    /* (11/11/2026, auditoría) Con muy poco del período cerrado no se proyecta. Lunes y martes pesan el 3,5 % de la
+       semana (viernes 46 %, sábado 29 %): el martes 10/11 la semana «cerraba en $26,6M, 507 % arriba» con $1,5M
+       hechos. Dividir por 0,035 convierte cualquier venta suelta en un cierre absurdo. Desde que lo cerrado pesa el
+       20 % (la semana, desde el viernes; un mes, en su segunda semana) el ritmo ya dice algo. */
+    if(!(fr>=EVU_PROY_MIN))return;
     var sc=_evuSumar(_rtIso(b.d),_rtIso(ayer));
     /* Sin nada entregado en los días cerrados no hay ritmo: proyectar daría un
        cierre en $0, que es otra caída falsa. */
@@ -43352,8 +43357,15 @@ function _evuPedirEerr(){
     _evuEerrPedido=true;
     _evuEerrFallo='';
     /* Si el backend no contesta, se dice: «Trayendo…» para siempre es mentir. */
+    /* (11/11/2026, auditoría) Una falla al arrancar no es definitiva: entrando a Evolución apenas se abre la app,
+       `loadVentas` falla una vez (la sesión de la base todavía no está) y la tab quedaba en «No se pudieron traer
+       las ventas… volvé a entrar» para siempre (medido). Se reintenta sola hasta 3 veces, cada 4 s; recién ahí se dice. */
     var rep=function(que){return function(r){
-      if(!r||r.ok===false)_evuEerrFallo=que;
+      if(!r||r.ok===false){
+        _evuEerrIntentos++;
+        if(_evuEerrIntentos<=3){ setTimeout(function(){ _evuEerrPedido=false; if(cur==='evolucion'){try{rEvolucion();}catch(e){}} },4000); return; }
+        _evuEerrFallo=que;
+      }
       if(cur==='evolucion'){try{rEvolucion();}catch(e){console.error('rEvolucion()',e);}}
     };};
     try{if(!hayV&&typeof loadVentas==='function'){var pv=loadVentas();if(pv&&pv.then)pv.then(rep('las ventas'),rep('las ventas'));}}catch(e){console.error('evolucion/ventas',e);}
@@ -43450,6 +43462,13 @@ function _evuBloqueClientes(Ms){
   var hoy=_evuHoy();
   var act=Ms.map(function(m){return window._planIndicadorMes('casas',m.y,m.m0,m.hasta);});
   var nue=Ms.map(function(m){return window._planIndicadorMes('casas_nuevas',m.y,m.m0,m.hasta);});
+  /* (11/11/2026, auditoría) «Nueva» = su primera compra cae en ese mes: sin la historia de antes, toda casa parece
+     nueva. Al abrir la app hay ~400 pedidos (los recientes) y la tarjeta decía «octubre: 132 nuevas» (eran 37, medido
+     contra la base) hasta que llegaba el resto. Sin pedidos de 60 días antes del primer mes, no se cuenta: se espera. */
+  var _min=null; (((typeof D!=='undefined'&&D&&D.pedidos)||[])).forEach(function(p){ if(p&&!p.hist){ var d=_tendFechaVentaISO(p); if(d&&(!_min||d<_min))_min=d; } });
+  var _desde=Ms.length?_rtIso(_rtDia(new Date(Ms[0].y,Ms[0].m0,1),-60)):null;
+  var _sinHist=!_min||(_desde&&_min>_desde);
+  if(_sinHist)nue=Ms.map(function(){return null;});
   var u=Ms.length-1, x=_evuXm(Ms), mU=Ms[u];
   var cerrIdx=[]; Ms.forEach(function(m,i){if(!m.curso)cerrIdx.push(i);});
   var uc=cerrIdx.length?cerrIdx[cerrIdx.length-1]:-1;
@@ -43475,10 +43494,11 @@ function _evuBloqueClientes(Ms){
     fmtEje:_evuNum,fmtFin:_evuNum,fmtVal:_evuNum,
     nota:function(i){return Ms[i].curso?'Todavía no cerró: se suman casas hasta fin de mes.':'';}
   };};
-  var co=_evuCohortes(), comp=co.filter(function(m){return m.completa;}), pend=co.filter(function(m){return !m.completa;});
+  var co=_sinHist?[]:_evuCohortes(), comp=co.filter(function(m){return m.completa;}), pend=co.filter(function(m){return !m.completa;});   /* misma razón: sin historia, todos «nuevos» */
   var h=cab
     +_evuCard('casas',f1,'Casas distintas que recibieron al menos una entrega en el mes: la misma cuenta de Objetivo.'+(mU.curso?' El mes en curso es un punto suelto: las casas no se proyectan, no se suman parejo.':''),mk('Casas activas',actD,'Casas activas por mes'),notaK)
-    +_evuCard('nuevas',f2,'Casas cuya primera compra cayó en ese mes.',mk('Casas nuevas',nueD,'Casas nuevas por mes'),notaK);
+    +(_sinHist?'<div class="evu-card espera"><div class="evu-frase">Casas nuevas</div><div class="evu-sub">Contando con todo el historial de pedidos…</div></div>'
+      :_evuCard('nuevas',f2,'Casas cuya primera compra cayó en ese mes.',mk('Casas nuevas',nueD,'Casas nuevas por mes'),notaK));
   if(comp.length){
     var uC=comp[comp.length-1];
     var f3='De las casas nuevas de '+uC.nom.toLowerCase()+', el '+Math.round(uC.pct)+'% volvió a comprar dentro de los '+EVU_VENTANA+' días ('+uC.volvieron+' de '+uC.nuevas+')';
