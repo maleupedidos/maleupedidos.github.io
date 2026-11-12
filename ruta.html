@@ -2185,8 +2185,8 @@ if(_IS_EMBED){
     if(!e||!e.data)return;
     if(e.data.type==='maleu_ruta_get_counter'){
       try{
-        var totalHoy=entregas.filter(_rutParaRetiroHoy).length;
-        var doneHoy=totalHoy-getHoyPendientes().length;
+        var totalHoy=_rutNEntregas(entregas.filter(_rutParaRetiroHoy));
+        var doneHoy=Math.max(0,totalHoy-_rutNEntregas(getHoyPendientes()));
         parent.postMessage({type:'maleu_ruta_counter',entregadas:doneHoy,total:totalHoy},'*');
       }catch(_){}
     }
@@ -3333,10 +3333,13 @@ function getZonaSummary(list){
 }
 
 /* ── RENDER ── */
+/* (12/11/2026) UNA ENTREGA, NO UN PEDIDO: varios pedidos de la misma casa para el mismo día son una sola parada
+   (la regla de siempre de Ruta, `_claveCombo`: el caso de Mercedes Girado, #2446 + #2447). Los contadores cuentan eso. */
+function _rutNEntregas(lista){try{return _agruparPedidos((lista||[]).filter(function(e){return e&&!e._redAgg&&!e._depAgg;})).length;}catch(e){return (lista||[]).length;}}
 function rutRender(){
   var all=getPendientes(),hoy=getHoyPendientes();
-  var totalHoy=entregas.filter(esHoy).length;
-  var doneHoy=totalHoy-hoy.length;
+  var totalHoy=_rutNEntregas(entregas.filter(esHoy));
+  var doneHoy=Math.max(0,totalHoy-_rutNEntregas(hoy));
   document.getElementById('counterBadge').textContent=doneHoy+'/'+totalHoy;
   // Si estoy embebido, avisar counter al panel padre (statusbar item).
   if(_IS_EMBED){try{parent.postMessage({type:'maleu_ruta_counter',entregadas:doneHoy,total:totalHoy},'*');}catch(e){}}
@@ -3941,16 +3944,22 @@ function _renderArmadoRedAggregate(lista,dayKey){
    esta apartada en el deposito y hay que sacarla con el resto. Sigue sin ser una
    bolsa que se tilda, para no cambiar ninguna cuenta. */
 function _ocEnterosTxt(soloOC){
-  return (soloOC||[]).map(function(e){
-    var n=(e.retira||e.c||'').toString().trim();
-    var items=_itemsOCDe(e); if(!items.length)items=(e.p||[]).slice();
-    var est=_rutOcEstado([e]), a=0, no=0;
+  /* (12/11/2026) Un renglón por ENTREGA: los pedidos de la misma casa y el mismo día, juntos («Mercedes Girado (#2447 +
+     #2446)» con todo lo que llevan), con la misma regla que las paradas (`_claveCombo`). */
+  var _lugOC=_lugares(soloOC||[]), _gOC={}, _oOC=[];
+  (soloOC||[]).forEach(function(e){var k=_claveCombo(e,_lugOC);if(!_gOC[k]){_gOC[k]=[];_oOC.push(k);}_gOC[k].push(e);});
+  return _oOC.map(function(k){
+    var g=_gOC[k], e=g[0];
+    var items=[];g.forEach(function(x){var it=_itemsOCDe(x);if(!it.length)it=(x.p||[]).slice();items=items.concat(it);});
+    var est=_rutOcEstado(g), a=0, no=0;
     items.forEach(function(p){var s=_rutOcDe(est,p.a); if(s==='ap')a++; else if(s==='no')no++;});
     var st=(items.length&&a===items.length)?'ya está apartado en el depósito: sacalo con el resto.'
-          :(items.length&&no===items.length)?'todavía no llegó del proveedor.'
+          :(items.length&&no===items.length)?(g.length>1?'todavía no llegaron del proveedor.':'todavía no llegó del proveedor.')
           :'viene por orden de compra.';
+    var n=(e.retira||e.c||'').toString().trim();
+    var ids=g.map(function(x){return x.id?'#'+_rtcEsc(x.id):'';}).filter(Boolean).join(' + ');
     var lst=_sortProds(items).map(function(p){return _cantTxt(p.q,p.a)+' '+(PROD_NAMES[p.a]||p.a);}).join(' · ');
-    return '<b>'+_rtcEsc(n)+(e.id?' (#'+_rtcEsc(e.id)+')':'')+'</b> '+st+(lst?'<br>'+_rtcEsc(lst):'');
+    return '<b>'+_rtcEsc(n)+(ids?' ('+ids+')':'')+'</b> '+st+(lst?'<br>'+_rtcEsc(lst):'');
   }).join('<br>');
 }
 function _renderArmadoBarrios(lista){
@@ -5739,19 +5748,19 @@ function rutRenderRuta(){
     }else{
       h=_rtcVacio(_rtcIco('ok',22)+' Terminaste las entregas de hoy','','');
     }
-    var futuros=sortByZona(getOtrosDias().filter(function(e){return e.h!=='Red';}));
+    var futuros=_agruparPedidos(sortByZona(getOtrosDias().filter(function(e){return e.h!=='Red';})));
     if(futuros.length>0){
       var porDia={},dias=[];
       futuros.forEach(function(f){var d=f.fe||f.de||'';if(!porDia[d]){porDia[d]=[];dias.push(d);}porDia[d].push(f);});
       dias.sort();
-      h+='<div class="rtc-prox"><div class="rtc-sec-t">Próximos días · '+futuros.length+' pedido'+(futuros.length===1?'':'s')+'</div>';
+      h+='<div class="rtc-prox"><div class="rtc-sec-t">Próximos días · '+futuros.length+' entrega'+(futuros.length===1?'':'s')+'</div>';
       dias.forEach(function(d){
         var items=porDia[d];
         var lbl=/^\d{4}-\d{2}-\d{2}$/.test(d)?labelFecha(d):(d||'Sin día');
         h+='<div class="rtc-prox-d">'+_rtcEsc(lbl)+' <b>'+items.length+'</b></div>';
         items.forEach(function(f){
           var l=String(f.l||'').trim(); if(l==='-')l='';
-          h+='<div class="rtc-prox-f"><div><b>'+_rtcEsc(f.c)+'</b><span>'+_rtcEsc(_rtcZonaLbl(f)+(l?' · '+(/^\d/.test(l)?'Lote '+l:l):''))+'</span></div>'
+          h+='<div class="rtc-prox-f"><div><b>'+_rtcEsc(f.c)+(f._combo?' <i style="font-style:normal;font-weight:500;font-size:12px;opacity:.7">'+f._pedidos.map(function(p){return '#'+_rtcEsc(p.id);}).join(' + ')+'</i>':'')+'</b><span>'+_rtcEsc(_rtcZonaLbl(f)+(l?' · '+(/^\d/.test(l)?'Lote '+l:l):''))+'</span></div>'
             +'<small>'+_rtcEsc(prodText(f.p).replace(/<br>/g,' · ').replace(/<[^>]+>/g,''))+'</small></div>';
         });
       });
