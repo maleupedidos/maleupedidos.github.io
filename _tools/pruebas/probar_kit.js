@@ -71,6 +71,10 @@ const chk = (c, m, x) => { if (c === true) { ok++; console.log('  ok  ', m); } e
     chk(cj.top === 'cj-top' && cj.disp && cj.hoy, 'Caja: Disponibilidades y Hoy arriba de todo', cj);
     chk(cj.abierto && cj.items.join(',') === 'Gasto,Ingreso,Transferir,Arqueo', '«+ Nuevo» abre Gasto, Ingreso, Transferir y Arqueo', cj.items);
     chk(cj.gasto && cj.cerrado, 'elegir Gasto abre el formulario y cierra el menú', cj);
+    const ct = JSON.parse(await ev(`(function(){var b=document.querySelector('#cBal .cj-ct-ver[data-q]');if(!b)return JSON.stringify({n:-1});var q=b.dataset.q;b.click();
+      var t=(document.getElementById('cjSemBar')||{}).innerText||'';var m=t.replace(/\\./g,'').match(/(\\d+) movimiento/);var r={q:q,n:m?Number(m[1]):0,tarjetas:document.querySelectorAll('#cBal .cj-ct').length};
+      var i=document.getElementById('cjBusq');if(i)i.value='';window._cjBusq='';rMovimientos();return JSON.stringify(r);})()`));
+    chk(ct.tarjetas >= 2 && ct.n > 0, 'una tarjeta por cuenta, y «Ver movimientos» filtra el libro por esa cuenta', ct);
     // Portada de Ajustes: tarjetas por área y un buscador que lleva directo al parámetro.
     await ev("go('ajustes')"); for (let i = 0; i < 30 && !(await ev("!!document.querySelector('#ajBody .ajp-grid')")); i++) await T(500);
     const aj = JSON.parse(await ev(`(function(){var n=document.querySelectorAll('#ajBody .ajp-card').length;ajpBuscar('busqueda');var r=[].map.call(document.querySelectorAll('#ajpRes button b'),function(b){return b.textContent;});return JSON.stringify({n:n,res:r});})()`));
