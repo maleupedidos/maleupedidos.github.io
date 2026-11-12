@@ -5500,6 +5500,7 @@ div.rb-esq .rb-n{color:#bbb}
         <!-- La version que corre en ESTE celular (21/9/2026): para saber si a alguien le
              quedo una vieja. Sale de la copia que guardo el service worker. -->
         <div class="um-ver" id="umVer"></div>
+        <div class="um-row" id="umComo" hidden onclick="comoAbrir()">Entrar como…</div>
         <div class="um-row danger" onclick="ajCerrarSesion()">Cerrar sesión</div>
       </div>
     </div>
@@ -7850,6 +7851,86 @@ var AJ_ROL_NOMBRE={admin:'Administrador',gerente:'Gerente',empleado:'Empleado',r
    `ajustes.vendedores`), así que Tadeo lo puede cambiar desde Ajustes › Permisos. La base lo frena igual (665). */
 /* Escapar para HTML, global (`esc` vive en otro bloque y acá no existe: ReferenceError callado). */
 function _kEsc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];}); }
+
+/* ── EL DUEÑO (669, 12/11/2026) ── Tadeo tiene todo lo de admin y además: genera los PIN (el PIN no se puede «ver»: la
+   base lo guarda con bcrypt) y puede «Entrar como…» cualquier persona para ver el ERP exactamente como ella. Lo decide la
+   base (`_es_dueno()`); la sesión lo sabe por `mi_sesion_pantalla` (`dueno`). */
+function _esDueno(){ return typeof SESSION!=='undefined'&&!!SESSION&&!!SESSION.dueno&&!_comoActivo(); }
+var _COMO_LS='maleu_como', _COMO_VUELTA_LS='maleu_como_vuelta';
+var _COMO_KEYS=['maleu_panel_session','mc_sbses','mc_sbtok','maleu_red_session','maleu_token','maleu_tab'];
+function _comoActivo(){ try{ return !!localStorage.getItem(_COMO_LS); }catch(e){ return false; } }
+/* Lo que el ERP guardó de los datos de UNA persona no puede verlo otra: se tiran las copias al entrar y al volver. */
+function _comoLimpiarCopias(){
+  try{ Object.keys(localStorage).forEach(function(k){ if((/^mc_/.test(k)&&k!=='mc_sbcfg'&&k!=='mc_sbses'&&k!=='mc_sbtok')||k==='ma3')localStorage.removeItem(k); }); }catch(e){}
+}
+function comoAbrir(){
+  try{ var m=document.getElementById('hdrUserMenu'); if(m)m.classList.remove('open'); }catch(e){}
+  var o=document.getElementById('comoOv'); if(!o){o=document.createElement('div');o.id='comoOv';document.body.appendChild(o);}
+  o.className='ent-ov'; o.onclick=function(ev){ if(ev.target===o)o.remove(); };
+  o.innerHTML='<div class="ent-box" role="dialog" aria-label="Entrar como"><div class="ent-h"><b>Entrar como…</b><button type="button" class="ent-x" aria-label="Cerrar" onclick="document.getElementById(\'comoOv\').remove()">×</button></div>'
+    +'<p class="ent-nota" style="margin-top:0">Ves el ERP exactamente como esa persona, sin su PIN. Lo que hagas queda anotado como «tadeo como …». Volver es un toque.</p><div id="comoL" class="ent-l"><div class="ent-vacio">Trayendo la lista…</div></div></div>';
+  _baseRpc('entrar_como_lista').then(function(d){
+    var ROL={admin:'Administrador',gerente:'Gerente',empleado:'Empleado',repartidor:'Repartidor',vendedor:'Representante'};
+    var el=document.getElementById('comoL'); if(!el)return;
+    el.innerHTML=(d.gente||[]).map(function(g){
+      return '<button type="button" class="ent-f" onclick="entrarComo(\''+_kEsc(g.usuario)+'\',\''+_kEsc(String(g.nombre).replace(/'/g,''))+'\')"><span><b>'+_kEsc(g.nombre)+'</b><small>'+_kEsc(ROL[g.rol]||g.rol)+' · '+_kEsc(g.usuario)+'</small></span></button>';
+    }).join('')||'<div class="ent-vacio">No hay nadie con cuenta en la base todavía.</div>';
+  },function(e){ var el=document.getElementById('comoL'); if(el)el.innerHTML='<div class="ent-vacio">No pude traer la lista: '+_kEsc((e&&e.message)||'')+'</div>'; });
+}
+function entrarComo(u,nombre){
+  var c=_sbCfgLogin(), H=function(tok){ return {apikey:c.key,Authorization:'Bearer '+(tok||c.key),'Content-Type':'application/json'}; };
+  toast('Entrando como '+nombre+'…');
+  _baseRpc('entrar_como_directo',{p:{usuario:u}}).then(function(lp){
+    return _sbAuth(c.url,c.key,'password',{email:lp.email,password:lp.clave}).then(function(t){
+      /* Lo del dueño se guarda para volver; recién después se pisa con lo de la persona. */
+      var vuelta={}; _COMO_KEYS.forEach(function(k){ try{ vuelta[k]=localStorage.getItem(k); }catch(e){} });
+      return fetch(c.url+'/rest/v1/rpc/suplantacion_activar',{method:'POST',headers:H(t.access_token),body:JSON.stringify({p:{nonce:lp.nonce}})}).then(function(r){return r.json();}).then(function(a){
+        if(!a||!a.ok)throw new Error((a&&a.err)||'no se pudo activar');
+        return fetch(c.url+'/rest/v1/rpc/mi_sesion_pantalla',{method:'POST',headers:H(t.access_token),body:'{}'}).then(function(r){return r.json();}).then(function(s){
+          if(!s||!s.ok)throw new Error('no se pudo abrir su sesión');
+          localStorage.setItem(_COMO_VUELTA_LS,JSON.stringify(vuelta));
+          localStorage.setItem(_COMO_LS,JSON.stringify({dueno:(SESSION&&SESSION.usuario)||'tadeo',usuario:u,nombre:s.nombre||nombre}));
+          _comoLimpiarCopias(); _sbTokBorrar(); try{ localStorage.removeItem('maleu_token'); }catch(e){}
+          _sbSesGuardar({u:u,url:c.url,key:c.key,access:t.access_token,refresh:t.refresh_token,hasta:Date.now()+(Number(t.expires_in)||3600)*1000,modo:'si',todos:true});
+          var ses={usuario:u,rol:s.rol||'empleado',nombre:s.nombre||nombre,ts:Date.now(),tabs:Array.isArray(s.tabs)?s.tabs:null,dueno:false};
+          localStorage.setItem('maleu_panel_session',JSON.stringify(ses));
+          if(ses.rol==='vendedor')localStorage.setItem('maleu_red_session',JSON.stringify({ok:true,nombre:s.nombre||'',usuario:u,wa:s.wa||'',aliasMp:s.aliasMp||'',
+            comision:s.comision||17,barrios:s.barrios||[],partido:s.partido||'',localidad:s.localidad||''}));
+          else localStorage.removeItem('maleu_red_session');
+          location.reload();
+        });
+      });
+    });
+  }).catch(function(e){ toast('No pude entrar como '+nombre+': '+((e&&e.message)||'sin conexión')); });
+}
+function volverDeComo(){
+  var v=null; try{ v=JSON.parse(localStorage.getItem(_COMO_VUELTA_LS)||'null'); }catch(e){}
+  _comoLimpiarCopias();
+  _COMO_KEYS.forEach(function(k){ try{ if(v&&v[k]!=null)localStorage.setItem(k,v[k]); else localStorage.removeItem(k); }catch(e){} });
+  try{ localStorage.removeItem(_COMO_LS); localStorage.removeItem(_COMO_VUELTA_LS); }catch(e){}
+  location.reload();
+}
+/* La franja fija de arriba mientras el dueño está «como» otra persona. */
+function _comoFranja(){
+  var c=null; try{ c=JSON.parse(localStorage.getItem(_COMO_LS)||'null'); }catch(e){}
+  var f=document.getElementById('comoFranja');
+  if(!c){ if(f)f.remove(); document.body.classList.remove('k-como'); return; }
+  if(!f){ f=document.createElement('div'); f.id='comoFranja'; f.setAttribute('role','status'); document.body.appendChild(f); }
+  f.innerHTML='<span>Estás como <b>'+_kEsc(c.nombre||c.usuario)+'</b></span><button type="button" onclick="volverDeComo()">Volver a '+_kEsc(String(c.dueno||'Tadeo').replace(/^./,function(x){return x.toUpperCase();}))+'</button>';
+  document.body.classList.add('k-como');
+}
+/* «Generar PIN nuevo»: solo el dueño. Se muestra UNA vez, con Copiar; el de antes deja de servir y se cierran sus sesiones. */
+function ajPinGenerar(u,nombre){
+  if(!confirm('¿Generar un PIN nuevo para '+nombre+'?\n\nEl PIN de ahora deja de servir y se cierra la sesión que tenga abierta. El nuevo se ve una sola vez.'))return;
+  _baseRpc('usuario_pin_nuevo_directo',{p:{action:'usuarioPinNuevo',usuario:u,clientOpId:'pin_'+u+'_'+Date.now().toString(36)}}).then(function(d){
+    var o=document.getElementById('pinOv'); if(!o){o=document.createElement('div');o.id='pinOv';document.body.appendChild(o);}
+    o.className='ent-ov';
+    o.innerHTML='<div class="ent-box" role="dialog" aria-label="PIN nuevo"><div class="ent-h"><b>PIN nuevo de '+_kEsc(nombre)+'</b></div>'
+      +'<div class="pin-nuevo">'+_kEsc(d.pin)+'</div><p class="ent-nota">Se ve esta sola vez: copialo y mandáselo. '+(d.sesionesCerradas?'Se cerraron sus sesiones abiertas.':'')+'</p>'
+      +'<div style="display:flex;gap:8px"><button type="button" class="aj-btn" style="flex:1;min-height:44px" onclick="navigator.clipboard&&navigator.clipboard.writeText(\''+_kEsc(d.pin)+'\').then(function(){toast(\'PIN copiado\')});">Copiar</button>'
+      +'<button type="button" class="aj-btn ghost" style="flex:1;min-height:44px" onclick="document.getElementById(\'pinOv\').remove();ajReload();">Listo</button></div></div>';
+  },function(e){ toast('No se pudo: '+((e&&e.message)||'sin conexión')); });
+}
 function _rolVeTodo(){ return typeof SESSION!=='undefined'&&!!SESSION&&(SESSION.rol==='admin'||SESSION.rol==='gerente'); }
 function _tabLectura(t){ return typeof SESSION!=='undefined'&&!!SESSION&&SESSION.rol!=='admin'&&Array.isArray(SESSION.tabs)&&SESSION.tabs.indexOf(t+'.lectura')>=0; }
 /* Las secciones de Ajustes que tiene este rol, si están marcadas por sección; null = todas (admin). */
@@ -7924,7 +8005,10 @@ function ajUserRow(u,isNew){
   var orig=isNew?'':ajEsc(u.usuario);
   return '<div class="aj-row u" data-orig="'+orig+'" data-borrador="usr:'+(isNew?'nuevo':orig)+'">'
     +'<div class="aj-f"><label>Usuario</label><input data-k="usuario" value="'+ajEsc(u.usuario)+'" placeholder="ej: santos"></div>'
-    +'<div class="aj-f"><label>PIN'+(!isNew&&u.tienePin?_ajOjo('usuario'):'')+'</label><input data-k="pin" value="" inputmode="numeric" maxlength="6" autocomplete="off" placeholder="'+(isNew?'6 números':(u.tienePin?'•••••• · escribí para cambiarlo':'sin PIN · 6 números'))+'"></div>'
+    /* (669) El PIN no se «ve» ni se escribe acá: es de 6 números cifrado. Alta: el primero. Después: «Generar PIN nuevo», solo Tadeo. */
+    +'<div class="aj-f"><label>PIN</label>'+(isNew?'<input data-k="pin" value="" inputmode="numeric" maxlength="6" autocomplete="off" placeholder="6 números">'
+      :(_esDueno()?'<button type="button" class="aj-btn ghost" style="min-height:40px" onclick="ajPinGenerar(\''+ajEsc(u.usuario)+'\',\''+ajEsc(String(u.nombre||u.usuario).replace(/\'/g,''))+'\')">Generar PIN nuevo</button>'
+        :'<span class="aj-pin-txt">'+(u.tienePin?'Tiene PIN':'Sin PIN')+' · lo genera Tadeo</span>'))+'</div>'
     +'<div class="aj-f"><label>Rol</label>'+ajRolSelect(u.rol||'empleado')+'</div>'
     +'<div class="aj-f"><label>Nombre</label><input data-k="nombre" value="'+ajEsc(u.nombre)+'" placeholder="Nombre completo"></div>'
     +'<div class="aj-f"><label>Activo</label><select data-k="activo"><option value="si"'+(u.activo!==false?' selected':'')+'>Sí</option><option value="no"'+(u.activo===false?' selected':'')+'>No</option></select></div>'
@@ -7985,7 +8069,7 @@ function ajAccesoVendHTML(){
       +(v.tg?'<span class="aj-acc-chip ok">Telegram</span>':'<span class="aj-acc-chip no">Sin Telegram</span>')+'</div>'
       +'<div class="aj-acc-datos"><span>Usuario <b>'+ajEsc(v.usuario)+'</b></span><span>PIN <b>'+(ajPinVisto(v)?ajEsc(ajPinVisto(v)):(v.tienePin?'••••••':'—'))+'</b></span></div>'
       +'<div class="aj-acc-btns">'
-      +'<button class="aj-btn ghost" onclick="ajPinNuevo('+i+')">Cambiar PIN</button>'
+      +(_esDueno()?'<button class="aj-btn ghost" onclick="ajPinNuevo('+i+')">Cambiar PIN</button>':'')
       +'<button class="aj-btn" onclick="ajCopiarAcceso('+i+')"'+(ajPinVisto(v)?'':' disabled title="Tocá «Cambiar PIN» primero: el PIN se ve solo cuando se cambia"')+'>Copiar acceso</button>'
       +'</div></div>';
   }).join('');
@@ -8286,7 +8370,9 @@ function ajVendRow(v,isNew){
   return '<div class="aj-row v" data-orig="'+orig+'" data-borrador="vend:'+(isNew?'nuevo':orig)+'">'
     +'<div class="aj-f"><label>Nombre</label><input data-k="nombre" value="'+ajEsc(v.nombre)+'"></div>'
     +'<div class="aj-f"><label>Usuario</label><input data-k="usuario" value="'+ajEsc(v.usuario)+'"></div>'
-    +'<div class="aj-f"><label>PIN'+(!isNew&&v.tienePin?_ajOjo('vendedor'):'')+'</label><input data-k="pin" value="" inputmode="numeric" maxlength="6" autocomplete="off" placeholder="'+(v.tienePin?'•••••• · escribí para cambiarlo':'6 números')+'"></div>'
+    +'<div class="aj-f"><label>PIN</label>'+(isNew?'<input data-k="pin" value="" inputmode="numeric" maxlength="6" autocomplete="off" placeholder="6 números (o vacío: lo saca solo)">'
+      :(_esDueno()?'<button type="button" class="aj-btn ghost" style="min-height:40px" onclick="ajPinGenerar(\''+ajEsc(v.usuario)+'\',\''+ajEsc(String(v.nombre||v.usuario).replace(/\'/g,''))+'\')">Generar PIN nuevo</button>'
+        :'<span class="aj-pin-txt">'+(v.tienePin?'Tiene PIN':'Sin PIN')+' · lo genera Tadeo</span>'))+'</div>'
     +'<div class="aj-f"><label>Estado</label><select data-k="estado"><option'+(v.estado==='Activo'?' selected':'')+'>Activo</option><option'+(v.estado!=='Activo'&&v.estado?' selected':'')+'>Inactivo</option></select></div>'
     +'<div class="aj-actions"><button class="aj-btn sm" onclick="ajSaveVend(this)">Guardar</button></div>'
     +'<div class="aj-f aj-full"><label>Barrios (separados por coma)</label><input data-k="barrios" value="'+ajEsc(v.barrios)+'"></div>'
@@ -10036,7 +10122,7 @@ function panelDoLogin(){
       if(d._baseYa&&!/^(medir|si)$/.test(String(d.loginBase||''))){ try{ _sbSesBorrar(); }catch(eSb){} }
       SESSION={
         usuario:d.usuario||u,rol:d.rol||'empleado',nombre:d.nombre||u,ts:Date.now(),
-        tabs:Array.isArray(d.tabs)?_tabsExpandir(d.tabs):null
+        tabs:Array.isArray(d.tabs)?_tabsExpandir(d.tabs):null, dueno:!!d.dueno
       };
       // Si es vendedor, popular sesión de red.html para que el iframe entre directo al dashboard
       if(SESSION.rol==='vendedor'){
@@ -10421,6 +10507,7 @@ function _nombrarMiPortal(rol){
 }
 function applyRoles(){
   if(!SESSION)return;
+  try{ var _uc=document.getElementById('umComo'); if(_uc)_uc.hidden=!_esDueno(); _comoFranja(); }catch(eC){}
   var rol=SESSION.rol||'empleado';
   try{ document.body.classList.toggle('k-lectura-stock',_tabLectura('stock')); }catch(eL){}
   try{ var _sx=_ajSecciones(); document.querySelectorAll('#p-ajustes .aj-pill').forEach(function(b){ b.hidden=!!(_sx&&b.dataset.sec!=='inicio'&&_sx.indexOf(b.dataset.sec)<0); }); }catch(eA){}
@@ -10632,6 +10719,7 @@ function _refrescarMiSesion(forzar){
     _palancasFrescas(d.palancas);
     var tabs=Array.isArray(d.tabs)?_tabsExpandir(d.tabs):null;
     var orden=function(x){ return JSON.stringify((x||[]).slice().sort()); };
+    var _dn=!!d.dueno&&!_comoActivo(); if(SESSION.dueno!==_dn){ SESSION.dueno=_dn; try{ if(localStorage.getItem('maleu_panel_session'))localStorage.setItem('maleu_panel_session',JSON.stringify(SESSION)); }catch(eD){} try{ applyRoles(); }catch(eA){} }
     if(d.rol===SESSION.rol && orden(tabs)===orden(SESSION.tabs)) return;
     SESSION.rol=d.rol||SESSION.rol; SESSION.tabs=tabs; if(d.nombre) SESSION.nombre=d.nombre;
     try{ if(localStorage.getItem('maleu_panel_session')) localStorage.setItem('maleu_panel_session',JSON.stringify(SESSION)); }catch(e){}
@@ -15198,7 +15286,7 @@ function _loginBase(u,pin){
           .then(function(s){
             if(!s||!s.ok||s.activo===false){ _sbSesBorrar(); return {ok:false,err:(s&&s.activo===false)?'Tu usuario quedó desactivado':'No se pudo abrir la sesión'}; }
             /* (4/11/2026) Lo que necesita el portal del representante (maleu_red_session), si la base lo manda. */
-            return {ok:true,viaBase:true,usuario:g.u,rol:s.rol||lp.rol||'empleado',nombre:s.nombre||g.u,tabs:s.tabs,loginBase:'si',
+            return {ok:true,viaBase:true,usuario:g.u,rol:s.rol||lp.rol||'empleado',nombre:s.nombre||g.u,tabs:s.tabs,loginBase:'si',dueno:!!s.dueno,
               wa:s.wa,aliasMp:s.aliasMp,comision:s.comision,barrios:s.barrios,partido:s.partido,localidad:s.localidad};
           });
       });
@@ -58890,6 +58978,13 @@ html:not(#_e1):not(#_e2):not(#_e3) #pList.ped-tabla .pt-mas:hover{border-color:v
 #pList.ped-tabla>.pc.pc-en-tabla.pt-abierta{display:block;margin:0;border:none;border-bottom:1px solid var(--border);border-radius:0;background:#FBF8F4;padding:6px 14px 12px}
 #pList.ped-tabla>.pc.pc-en-tabla.pt-abierta>.pc-summary{display:none}
 #pList.ped-tabla>.pc-mas{padding:10px}
+
+/* (669) El dueño «como» otra persona: una franja fija arriba, que no se puede perder de vista. */
+#comoFranja{position:fixed;top:0;left:0;right:0;z-index:10040;display:flex;justify-content:center;align-items:center;gap:12px;flex-wrap:wrap;
+  background:#7A1A12;color:#fff;font-size:13.5px;padding:6px 12px calc(6px);min-height:44px;box-shadow:0 2px 6px rgba(0,0,0,.25)}
+#comoFranja button{min-height:36px;border:1.5px solid rgba(255,255,255,.7);background:transparent;color:#fff;border-radius:999px;padding:4px 14px;font:inherit;font-weight:700;cursor:pointer}
+body.k-como{padding-top:44px}
+.pin-nuevo{font-size:34px;font-weight:800;letter-spacing:.18em;text-align:center;font-variant-numeric:tabular-nums;padding:14px 0;color:var(--ink)}
 
 /* (668) Juntar con otro pedido. */
 .ent-ov{position:fixed;inset:0;z-index:9000;background:rgba(40,24,16,.45);display:flex;align-items:flex-end;justify-content:center}
