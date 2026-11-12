@@ -65,7 +65,7 @@ const chk = (c, m, x) => { if (c === true) { ok++; console.log('  ok  ', m); } e
       chk(p.filas.length >= 20, `Parámetros: ${p.filas.length} de negocio con nombre`, p.filas.length);
       chk(p.filas.every((f) => f.n && !/^[A-Z0-9_]+$/.test(f.n) && f.d.length > 10), 'cada uno con nombre en castellano y una línea de qué hace', p.filas.filter((f) => !f.n || /^[A-Z0-9_]+$/.test(f.n) || f.d.length <= 10));
       chk(/frecuente|seguido/i.test(p.grupos[0] || ''), 'el primer grupo es lo que se cambia seguido', p.grupos);
-      chk(p.filas[0] && p.filas[0].k === 'TIENDA_CIERRE_HOY', 'arriba de todo: el cierre de la tienda', p.filas[0]);
+      chk(p.filas[0] && p.filas[0].k === 'PROV_DIAS_BUSQUEDA', 'arriba de todo: los días de búsqueda (v1080)', p.filas[0]);
       chk(!/TIENDA_CIERRE_HOY|KARDEX_SI_|_DIRECTO\b/.test(p.visible), 'ningún código a la vista (las palancas técnicas, plegadas)', (p.visible.match(/[A-Z]{3,}_[A-Z_]+/g) || []).slice(0, 5));
       chk(/palancas/i.test(p.tec) && !p.tecAbierto, 'las palancas técnicas van aparte y plegadas', p.tec);
       chk(!/Contadores de numeraci/.test(p.visible), 'sin la tarjeta de contadores (códigos que no se entendían)');
@@ -85,7 +85,7 @@ const chk = (c, m, x) => { if (c === true) { ok++; console.log('  ok  ', m); } e
       const a2 = JSON.parse(await ev("JSON.stringify({sw:document.getElementById('ajBody').scrollWidth,cw:document.getElementById('ajBody').clientWidth})"));
       chk(a2.sw <= a2.cw + 1, `a ${ANCHO} px nada se sale de Parámetros`, a2);
       const nav = JSON.parse(await ev("JSON.stringify([].map.call(document.querySelectorAll('#p-ajustes .aj-nav .aj-pill'),function(b){return b.textContent;}))"));
-      chk(nav[0] === 'Precios' && nav.indexOf('Config operativa') < 0, 'el menú arranca por lo que se cambia seguido (Precios) y sin «Config operativa»', nav);
+      chk(nav[0] === 'Inicio' && nav[1] === 'Precios' && nav.indexOf('Config operativa') < 0, 'el menú arranca por la portada y después Precios, sin «Config operativa» (v1093)', nav);
     }
     /* ── Lo que decidió el Organizador el 11/11 noche ── */
     if (process.env.DECIDIDOS) {

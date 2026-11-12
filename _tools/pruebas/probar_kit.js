@@ -71,6 +71,13 @@ const chk = (c, m, x) => { if (c === true) { ok++; console.log('  ok  ', m); } e
     chk(cj.top === 'cj-top' && cj.disp && cj.hoy, 'Caja: Disponibilidades y Hoy arriba de todo', cj);
     chk(cj.abierto && cj.items.join(',') === 'Gasto,Ingreso,Transferir,Arqueo', '«+ Nuevo» abre Gasto, Ingreso, Transferir y Arqueo', cj.items);
     chk(cj.gasto && cj.cerrado, 'elegir Gasto abre el formulario y cierra el menú', cj);
+    // Portada de Ajustes: tarjetas por área y un buscador que lleva directo al parámetro.
+    await ev("go('ajustes')"); for (let i = 0; i < 30 && !(await ev("!!document.querySelector('#ajBody .ajp-grid')")); i++) await T(500);
+    const aj = JSON.parse(await ev(`(function(){var n=document.querySelectorAll('#ajBody .ajp-card').length;ajpBuscar('busqueda');var r=[].map.call(document.querySelectorAll('#ajpRes button b'),function(b){return b.textContent;});return JSON.stringify({n:n,res:r});})()`));
+    chk(aj.n === 6 && aj.res.indexOf('Días de búsqueda a proveedores') >= 0, 'Ajustes: 6 áreas y el buscador encuentra «Días de búsqueda a proveedores»', aj);
+    await ev("ajIrParam('PROV_DIAS_BUSQUEDA')");
+    let marcado = false; for (let i = 0; i < 30 && !marcado; i++) { await T(300); marcado = await ev("!!document.querySelector('#p-ajustes .aj-pr.ajp-marca[data-k=\"PROV_DIAS_BUSQUEDA\"]')"); }
+    chk(marcado, 'elegir el resultado abre Parámetros y marca ese parámetro');
     const dis = JSON.parse(await ev(`(function(){var b=document.createElement('button');b.className='btn-primary';b.disabled=true;b.textContent='x';document.querySelector('.pg.on').appendChild(b);var o=getComputedStyle(b).opacity;b.remove();return JSON.stringify({o:o});})()`));
     chk(Number(dis.o) < 0.6, 'un botón deshabilitado se ve deshabilitado', dis);
   } catch (e) { mal++; console.log('  REVENTO: ' + (e && e.stack || e)); }
