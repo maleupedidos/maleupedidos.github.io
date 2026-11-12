@@ -63,6 +63,14 @@ const chk = (c, m, x) => { if (c === true) { ok++; console.log('  ok  ', m); } e
     await ev('kbdClose()');
     chk(ay.on && ay.tit === 'Cómo funciona Caja' && ay.n >= 2, 'el «?» abre «Cómo funciona Caja»', ay);
     chk(/^[A-ZÁÉÍÓÚ][^·›]*\.$/.test(ay.bc || ''), 'la línea gris es una oración (sin «·» de lista)', ay.bc);
+    // Caja como Dux: Disponibilidades y HOY arriba de todo; «+ Nuevo» con las 4 acciones, y cada una abre lo suyo.
+    await ev("go('caja')"); for (let i = 0; i < 40 && !(await ev("!!document.querySelector('#cBal .cj-top')")); i++) await T(500);
+    const cj = JSON.parse(await ev(`(function(){var c=document.getElementById('cBal'),p=c&&c.firstElementChild;var b=document.querySelector('#cjAcc .k-nuevo-b');kitMenu(b);
+      var m=document.querySelector('#cjAcc .k-menu');var r={top:p&&p.className,disp:!!(p&&p.querySelector('.cj-total')),hoy:!!document.getElementById('cjHoy'),abierto:m&&!m.hidden,items:m?[].map.call(m.querySelectorAll('.k-menu-i'),function(x){return x.firstChild.textContent;}):[]};
+      document.getElementById('tGasto').click();r.gasto=!document.getElementById('formGasto').classList.contains('hidden');r.cerrado=m.hidden;cjAccion('gasto');return JSON.stringify(r);})()`));
+    chk(cj.top === 'cj-top' && cj.disp && cj.hoy, 'Caja: Disponibilidades y Hoy arriba de todo', cj);
+    chk(cj.abierto && cj.items.join(',') === 'Gasto,Ingreso,Transferir,Arqueo', '«+ Nuevo» abre Gasto, Ingreso, Transferir y Arqueo', cj.items);
+    chk(cj.gasto && cj.cerrado, 'elegir Gasto abre el formulario y cierra el menú', cj);
     const dis = JSON.parse(await ev(`(function(){var b=document.createElement('button');b.className='btn-primary';b.disabled=true;b.textContent='x';document.querySelector('.pg.on').appendChild(b);var o=getComputedStyle(b).opacity;b.remove();return JSON.stringify({o:o});})()`));
     chk(Number(dis.o) < 0.6, 'un botón deshabilitado se ve deshabilitado', dis);
   } catch (e) { mal++; console.log('  REVENTO: ' + (e && e.stack || e)); }
