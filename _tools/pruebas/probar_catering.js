@@ -3,8 +3,8 @@
    Sostiene, contra la base de verdad (solo lectura: toda escritura POST se corta en el navegador):
      · la lista tiene Próximos, Realizados y (si hay) Cancelados, en ese orden;
      · Realizados = los pedidos canal Catering de la base, y el total cruza con la base:
-         venta = Σ billed_amount; costo = Σ cost_amount + Σ egresos `out|catering` (como el EERR);
-       (al 12/11/2026: 5 eventos, $3.051.000 de venta, $1.593.363 + $581.869,67 de costo);
+         venta = Σ billed_amount; costo = Σ cost_amount (ya incluye las compras del evento; los egresos de Catering no se suman);
+       (al 12/11/2026: 5 eventos, $3.051.000 de venta, $1.593.363 de costo);
      · el bautismo de Belu Pascual (26/9, no se hizo) está en Cancelados y no en Próximos;
      · 4 KPIs, Cotizar primario y Cumpleaños secundario, sin ↻;
      · sin símbolos, sin códigos (ni en inglés), nada se sale; también en la ficha y en el cotizador. */
@@ -18,7 +18,7 @@ const PREP = require(path.join(__dirname, 'sesion_prep.js'))('x');
 const guarda = require(path.join(__dirname, 'sbses_guarda.js'));
 const SBSES = guarda(process.env.SBSES, process.env.USUARIO || 'tadeo');
 if (!SBSES) { console.error('falta SBSES'); process.exit(2); }
-const VENTA = Number(process.env.VENTA || 3051000), COSTO = Number(process.env.COSTO || 1593363 + 581869.67), N = Number(process.env.N || 5);
+const VENTA = Number(process.env.VENTA || 3051000), COSTO = Number(process.env.COSTO || 1593363), N = Number(process.env.N || 5);
 let ok = 0, mal = 0;
 const chk = (c, m, x) => { if (c === true) { ok++; console.log('  ok  ', m); } else { mal++; console.log('  MAL ', m, x !== undefined ? JSON.stringify(x).slice(0, 700) : ''); } };
 const LIMPIO = `function(t){return {sim:(t.match(/[\\u2190\\u2192\\u25C0\\u25B6\\u25BE\\u25B4\\u270E\\u21BB\\u2713\\u2715\\u2717\\u2605\\u26a0]|[\\uD83C-\\uDBFF][\\uDC00-\\uDFFF]/g)||[]),
@@ -52,7 +52,7 @@ const LIMPIO = `function(t){return {sim:(t.match(/[\\u2190\\u2192\\u25C0\\u25B6\
     chk(r.secs[0] === 'Próximos' && r.secs.indexOf('Realizados') > 0, 'Próximos arriba y Realizados abajo', r.secs);
     chk(r.nReal === N, `Realizados tiene los ${N} pedidos canal Catering de la base`, r.nReal);
     chk(Math.round(r.venta) === Math.round(VENTA), `venta de los realizados = base al peso ($${VENTA})`, r.venta);
-    chk(Math.abs(r.costo - COSTO) < 0.01, `costo = costo de los pedidos + egresos de Catering, al centavo (${COSTO})`, r.costo);
+    chk(Math.abs(r.costo - COSTO) < 0.01, `costo = costo de los pedidos, sin sumar otra vez los egresos de Catering (${COSTO})`, r.costo);
     chk(r.tot.indexOf('$' + Math.round(VENTA).toLocaleString('es-AR')) >= 0, 'el total impreso dice la venta de la base', r.tot);
     chk(!/Belu Pascual/.test(r.proxTxt) && /Belu Pascual/.test(r.cancTxt), 'el bautismo de Belu Pascual está en Cancelados, no en Próximos', { prox: r.proxTxt.slice(0, 200), canc: r.cancTxt.slice(0, 200) });
     chk(r.kpis === 4, '4 KPIs', r.kpis);
@@ -75,6 +75,11 @@ const LIMPIO = `function(t){return {sim:(t.match(/[\\u2190\\u2192\\u25C0\\u25B6\
     chk(/Margen de Maleu/.test(c.res), 'el cotizador calcula (35 personas por defecto)', c.res.slice(0, 120));
     chk(!c.sub && !c.sim.length && !c.cod.length, 'cotizador: sin subtítulo, sin símbolos, sin códigos', c);
     chk(c.sw <= c.cw + 1, 'cotizador: nada se sale', c);
+    // El EERR tampoco cuenta dos veces (12/11/2026): en marzo hay pedido de Catering, así que sus egresos no se suman.
+    await ev("go('ventas')");
+    for (let i = 0; i < 120 && !(await ev("!!(window.VD&&VD.length&&typeof D!=='undefined'&&D&&D.gastos&&D.gastos.length)")); i++) await T(500);
+    const e3 = JSON.parse(await ev(`JSON.stringify((function(){if(!(window.VD&&VD.length))return null;var R=_eerrCalc(3,2026),c=(R.canales||[]).filter(function(x){return x.k==='Catering';})[0]||{};return {cmvCat:R.cmvCat,catC:c.c};})())`));
+    chk(!!e3 && e3.cmvCat === 0 && Math.round(e3.catC) === 405369, 'EERR de marzo: el costo de Catering es el del pedido ($405.369), sin los $331.361 de egresos', e3);
   } catch (e) { mal++; console.log('  REVENTO: ' + (e && e.stack || e)); }
   console.log(`\n  ${ok} ok · ${mal} MAL\n`);
   try { cli.matar(); } catch (e) {}

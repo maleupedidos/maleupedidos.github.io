@@ -36100,6 +36100,18 @@ function _eerrMesGastosAlDia(mn,anio){
 }
 
 // Replica la clasificación de calcEcon() pero standalone (no depende de mesNom outer).
+/* EL COSTO DE CATERING NO SE CUENTA DOS VECES (12/11/2026, Tadeo vía Organizador).
+   El costo cargado en cada pedido de Catering YA incluye las compras del evento, que además están cargadas
+   como egresos de categoría Catering. Hasta la v1082 el EERR sumaba las dos cosas. Ahora un egreso de
+   Catering se suma al costo SOLO si no hay un pedido de Catering ese mes ni el anterior (el anterior cubre
+   un reintegro que se paga después del evento: Laura Aguirre 25/9, reintegro del 16/10). No se borra ni se
+   recategoriza nada: sigue fuera de los gastos generales, igual que antes. */
+function _catMesConPedido(mn,anio){
+  if(!window.VD)return false;
+  var N=['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+  var hay=function(m,a){return VD.some(function(v){return v.canal==='Catering'&&_esDelMes(v,N[m-1],a);});};
+  return hay(mn,anio)||(mn===1?hay(12,anio-1):hay(mn-1,anio));
+}
 function eerrKpisMes(mn,anio){
   var MES_NOMBRES=['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
   var mesNom=MES_NOMBRES[mn-1];
@@ -36110,7 +36122,7 @@ function eerrKpisMes(mn,anio){
   ventas.forEach(function(v){totFact+=Number(v.$)||0;totCMV+=Number(v.costo)||0;});
   // CMV catering directo
   ((D&&D.gastos)||[]).filter(function(g){return _esDelMes(g,mesNom,anio);}).forEach(function(g){
-    if(_norm(g.cat||'')==='catering')totCMV+=Number(g.$)||0;
+    if(_norm(g.cat||'')==='catering'&&!_catMesConPedido(mn,anio))totCMV+=Number(g.$)||0;
   });
   /* Lo pagado de mas a un proveedor por redondear (14/10/2026): es costo de la compra. */
   ((D&&D.redondeosProv)||[]).filter(function(g){return _esDelMes(g,mesNom,anio);}).forEach(function(g){totCMV+=Number(g.$)||0;});
@@ -36863,8 +36875,8 @@ function _eerrCalc(mn,anio){
   R.propinas=totProp;R.ent=cn;
   R.entTot=['Home','Pilar','Clubes','Red','B2B'].reduce(function(a,k){return a+(cn[k]||0);},0);   /* sin catering: un evento no es una entrega */
   /* Los gastos de categoria Catering son el costo del evento: van al costo. */
-  var cmvCat=0,cmvCatD=[];
-  ((D&&D.gastos)||[]).filter(function(g){return _esDelMes(g,mesNom,anio);}).forEach(function(g){
+  var cmvCat=0,cmvCatD=[],catCub=_catMesConPedido(mn,anio);
+  ((D&&D.gastos)||[]).filter(function(g){return !catCub&&_esDelMes(g,mesNom,anio);}).forEach(function(g){
     var c=String(g.cat||'').trim().toLowerCase();
     if(c.length>3&&c.charAt(c.length-1)==='s')c=c.substring(0,c.length-1);
     if(c==='catering'){var m=Number(g.$)||0;cmvCat+=m;cmvCatD.push({con:g.con||'',m:m});}
@@ -37764,20 +37776,16 @@ function _catEstado(v){var k=String(v||'').toLowerCase();return CAT_ESTADOS[k]||
    Muestra TODO el catering en un solo lugar:
    · Próximos: los eventos de `catering_event` con fecha de hoy en adelante (y los de fecha pasada que nadie
      cerró, marcados), sin los cancelados.
-   · Realizados: los pedidos canal Catering de `sales_order` (`realizados`, 660). El costo es el del pedido más
-     los egresos de categoría Catering (`gastos`), que es como lo cuenta el EERR: así el total del año cruza al
-     peso. Cada egreso se le asigna al evento de fecha más cercana.
+   · Realizados: los pedidos canal Catering de `sales_order` (`realizados`, 660). El costo es el del pedido, que
+     ya incluye las compras del evento (Tadeo, 12/11/2026): los egresos de categoría Catering no se suman.
    · Cancelados: plegados al final. */
 var _catRealizados=[], _catGastos=[];
 function _catHoyISO(){var d=new Date();return d.getFullYear()+'-'+('0'+(d.getMonth()+1)).slice(-2)+'-'+('0'+d.getDate()).slice(-2);}
 function _catDias(a,b){return Math.abs((Date.parse(a+'T12:00:00')-Date.parse(b+'T12:00:00'))/864e5);}
 function _catRealizadosArmar(){
   var rs=(_catRealizados||[]).map(function(r){return {k:r.k,f:String(r.f||''),c:r.c||'',b:r.b||'',v:Number(r.v)||0,co:Number(r.co)||0,g:0,ng:0,ent:!!r.ent,cob:!!r.cob};});
-  (_catGastos||[]).forEach(function(g){
-    var f=String(g.f||''),m=Number(g.m)||0,mej=null,dm=1e9;if(!f||!rs.length)return;
-    rs.forEach(function(r){var d=_catDias(f,r.f);if(d<dm){dm=d;mej=r;}});
-    if(mej){mej.g+=m;mej.ng++;}
-  });
+  /* (12/11/2026) Los egresos de Catering NO se suman: el costo del pedido ya los incluye (Tadeo). `_catGastos`
+     queda para mirar, no para sumar. Ver `_catMesConPedido` en el EERR. */
   return rs;
 }
 function _catPct(n){return (Math.round(n*10)/10).toLocaleString('es-AR')+'%';}
@@ -37802,7 +37810,7 @@ function _catTarjetaRealizado(r){
   return '<div class="pc cat-pc cat-pc-real">'
     +'<div class="pc-top"><div class="pc-c">'+_catEsc(r.c||'Cliente')+'</div><div class="pc-$">'+_catDinero(r.v)+'</div></div>'
     +'<div class="pc-p">'+_catFecha(r.f)+(r.b?' · '+_catEsc(r.b):'')+'</div>'
-    +'<div class="pc-p">Costo '+_catDinero(costo)+(r.g?' (incluye '+_catDinero(r.g)+' de egresos de Catering)':'')+' · margen '+_catDinero(mar)+(r.v?' ('+_catPct(mar/r.v*100)+')':'')+'</div>'
+    +'<div class="pc-p">Costo '+_catDinero(costo)+' · margen '+_catDinero(mar)+(r.v?' ('+_catPct(mar/r.v*100)+')':'')+'</div>'
     +'<div class="pc-tags">'+tags+'</div></div>';
 }
 function _catPintar(){
