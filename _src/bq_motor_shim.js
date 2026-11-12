@@ -111,6 +111,8 @@ function _bqmCargar_(d) {
     f[15] = x.pv == null ? '' : x.pv; f[19] = x.org; f[20] = x.est; f[22] = _bqmFecha_(x.fr) || '';
     _bqmPoner_(oc, x.row, f);
   });
+  /* (12/11/2026) Lo cargado directo en la base no tiene fila de la hoja (row null): va al final, como los pedidos. */
+  (oc._neg || []).forEach(function (x) { oc.push(x); }); delete oc._neg;
   H['Orden de Compra'] = new _Hoja('Orden de Compra', oc);
   ['Home', 'Pilar', 'Clubes', 'Red'].forEach(function (h) { H[h] = new _Hoja(h, [['N° Pedido']]); });
   (d.ped || []).forEach(function (x) {
@@ -143,6 +145,9 @@ function _bqmCargar_(d) {
       x.kg == null ? '' : x.kg, x.precio == null ? '' : x.precio, x.total == null ? '' : x.total, x.est, x.libro, x.nota, x.cargo,
       _bqmFecha_(x.cargado) || x.cargado || '', x.kgped == null ? '' : x.kgped, x.cajas, x.recibio, x.kgres == null ? '' : x.kgres]);
   });
+  /* (12/11/2026) CC-0016 (Carmín, 4/11, $2.405.153) se cargó en la base sin fila de la hoja y el motor la tiraba: la
+     deuda de Carmín decía $63.900 en vez de $2.469.053. Lo sin fila va al final, como los pedidos. */
+  (cc._neg || []).forEach(function (x) { cc.push(x); }); delete cc._neg;
   H[CCARNE_HOJA] = new _Hoja(CCARNE_HOJA, cc);
   H[NC_HOJA_] = new _Hoja(NC_HOJA_, [NC_CAB_.slice()].concat((d.nc || []).map(function (x) {
     return [x.id, _bqmFecha_(x.f) || '', x.prov, Number(x.monto) || 0, x.motivo, x.det, x.quien, x.est, '', ''];
