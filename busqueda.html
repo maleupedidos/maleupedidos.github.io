@@ -720,6 +720,17 @@ body *{touch-action:manipulation}
 .deuda-card.al-dia-card{background:#FBFAF6}
 /* (13/11/2026) El pago suelto, plegado. */
 .np-summary-dep{font-size:13px;font-weight:700;color:#331C1C;margin:2px 0 8px}
+.rec-cli{margin:0 0 10px;padding:8px 10px;border-radius:8px;background:rgba(255,255,255,.6)}
+.rec-cli-f{display:flex;justify-content:space-between;gap:10px;font-size:13px;color:#331C1C;padding:3px 0}
+.rec-cli-f b{font-variant-numeric:tabular-nums}
+.rec-rep-tit{margin-top:4px}
+.recibir-row.rec-cont{gap:10px}
+.rec-ok{display:flex;align-items:center;justify-content:center;min-width:44px;min-height:44px;cursor:pointer}
+.rec-ok input{width:24px;height:24px;accent-color:#2E7D32;cursor:pointer}
+.recibir-name small{display:block;font-size:11.5px;font-weight:600;color:#7A4A4A}
+.rec-falta{margin:-2px 0 8px 54px;font-size:12.5px;font-weight:700;color:#B26A00}
+.rec-pie{font-size:12.5px;color:#7A4A4A;margin:8px 0 4px;text-align:center}
+.btn-confirmar-recibir:disabled{opacity:.45;cursor:not-allowed}
 .pago-otro{margin-top:10px}.pago-otro>summary{cursor:pointer;font-size:12.5px;font-weight:700;color:#7A4A4A;padding:6px 2px;list-style:none}.pago-otro>summary::-webkit-details-marker{display:none}.pago-otro>summary::before{content:'';display:inline-block;width:6px;height:6px;border-right:1.6px solid currentColor;border-bottom:1.6px solid currentColor;transform:rotate(-45deg);margin:0 8px 1px 0}.pago-otro[open]>summary::before{transform:rotate(45deg)}
 /* (13/11/2026) «Por retirar» en la tarjeta de PAGOS. */
 .aba-ret{margin-top:10px;padding:10px 12px;border:1px dashed #E8DFC4;border-radius:10px;background:#FFFDF7}
@@ -1584,7 +1595,10 @@ function _abaDestPedir() {
     }).catch(function () { _abaDestT = 0; });
 }
 function _abaDepNom(id) {
-  return 'Depósito ' + (typeof npDepCorto === 'function' ? npDepCorto(id) : String(id || ''));
+  var d = (typeof _pedDeps === 'function' ? (_pedDeps() || []) : []).filter(function (x) { return x && x.id === id; })[0];
+  var n = String((d && d.nombre) || '').replace(/^dep[oó]sito\s+/i, '').trim();
+  if (!n) n = String(id || '').charAt(0).toUpperCase() + String(id || '').slice(1);
+  return 'Depósito ' + n;
 }
 function _abaAplicarBusqueda(data) {
   busqueda = data;
@@ -2793,10 +2807,28 @@ function renderProveedores() {
 
     if (allPedido && !allRecibido && provOcs.length > 0) {
       // Estado: Pedido → mostrar "Recibir mercadería" agrupado por producto
-      html += '<button class="btn-recibir" onclick="toggleRecibir(' + idx + ')">Recibir mercadería</button>';
+      html += '<button class="btn-recibir" onclick="toggleRecibir(' + idx + ')">Recibir todo de ' + _abaH(prov.n) + '</button>';
       html += '<div class="recibir-panel" id="recPanel_' + idx + '">';
       var grouped = agruparOcsPorProducto(provOcs);
+      /* (13/11/2026) RECIBIR CON UNA LISTA PARA CONTAR. Lo de pedidos de clientes ya se separó en el auto: va arriba, solo para
+         ver. Lo de reposición viaja en la caja cerrada y se cuenta en el depósito: va abajo, cada producto con su casilla de
+         «contado». El casillero de cada producto es SOLO lo de reposición; lo recibido que se manda es clientes + contado
+         (`_abaRecLlega`). La recepción y su cálculo no cambian: mismo grupo por producto, misma posición, mismo envío. */
+      var _cliLst = [], _hayRep = false;
+      grouped.forEach(function (g) {
+        var cliQ = 0; getOcRowDetails(g.rows).forEach(function (d) { if (!d.isStock) cliQ += Number(d.q) || 0; });
+        g._cli = Math.round(cliQ * 1000) / 1000; g._rep = Math.round((g.totalQty - g._cli) * 1000) / 1000;
+        if (g._cli > 0) _cliLst.push(g); if (g._rep > 0) _hayRep = true;
+      });
+      if (_cliLst.length) {
+        html += '<div class="rec-cli"><div class="recibir-comp-tit">De pedidos de clientes · ya separado en el auto</div>';
+        _cliLst.forEach(function (g) { html += '<div class="rec-cli-f"><span>' + _abaH(g.prod) + '</span><b>' + _abaCant(g._cli, _abaUni(g.abbr)) + '</b></div>'; });
+        html += '</div>';
+      }
+      if (_hayRep) html += '<div class="recibir-comp-tit rec-rep-tit">Reposición · contá y tildá cada producto</div>';
       grouped.forEach(function(g, gi) {
+        /* Sin reposición (todo es de clientes): no hay nada que contar; el casillero queda en 0 y escondido. */
+        if (!(g._rep > 0)) { html += '<input type="hidden" id="recQty_' + idx + '_' + gi + '" value="0" data-cli="' + g._cli + '">'; return; }
         var inputId = 'recQty_' + idx + '_' + gi;
         var wrapId  = 'recWrap_' + idx + '_' + gi;
         var u = _abaUni(g.abbr);
@@ -2804,15 +2836,16 @@ function renderProveedores() {
            sirve para 0,873 kg, y el input numerico truncaba a entero. */
         var controles = (u === 'kg')
           ? '<input class="recibir-qty recibir-qty-kg" id="' + inputId + '" type="text" inputmode="decimal" autocomplete="off" value="' + _abaCant(g.totalQty, '') + '" oninput="onRecQtyChange(this,\'' + wrapId + '\',' + g.totalQty + ',\'kg\')"><span class="recibir-uni">kg</span>'
-          : '<button class="recibir-qty-btn" type="button" aria-label="Uno menos" onclick="recQtyStep(\'' + inputId + '\',\'' + wrapId + '\',' + g.totalQty + ',-1)">&minus;</button>' +
-            '<input class="recibir-qty" id="' + inputId + '" type="number" inputmode="numeric" min="0" value="' + g.totalQty + '" oninput="onRecQtyChange(this,\'' + wrapId + '\',' + g.totalQty + ',\'u\')">' +
-            '<button class="recibir-qty-btn" type="button" aria-label="Uno más" onclick="recQtyStep(\'' + inputId + '\',\'' + wrapId + '\',' + g.totalQty + ',+1)">+</button>';
-        html += '<div class="recibir-row">' +
-          '<div class="recibir-name">' + _abaH(g.prod) + '</div>' +
-          '<div class="recibir-orig">' + _abaCant(g.totalQty, u) + '</div>' +
-          '<div class="recibir-arrow">&rarr;</div>' +
+          : '<button class="recibir-qty-btn" type="button" aria-label="Uno menos" onclick="recQtyStep(\'' + inputId + '\',\'' + wrapId + '\',' + g._rep + ',-1)">&minus;</button>' +
+            '<input class="recibir-qty" id="' + inputId + '" type="number" inputmode="numeric" min="0" value="' + g._rep + '" data-cli="' + g._cli + '" oninput="onRecQtyChange(this,\'' + wrapId + '\',' + g._rep + ',\'u\')">' +
+            '<button class="recibir-qty-btn" type="button" aria-label="Uno más" onclick="recQtyStep(\'' + inputId + '\',\'' + wrapId + '\',' + g._rep + ',+1)">+</button>';
+        if (u === 'kg') controles = controles.replace('value="' + _abaCant(g.totalQty, '') + '"', 'value="' + _abaCant(g._rep, '') + '" data-cli="' + g._cli + '"');
+        html += '<div class="recibir-row rec-cont">' +
+          '<label class="rec-ok" title="Contado"><input type="checkbox" id="recOk_' + idx + '_' + gi + '" onchange="abaRecRevisar(' + idx + ')" aria-label="Contado: ' + _abaH(g.prod) + '"></label>' +
+          '<div class="recibir-name">' + _abaH(g.prod) + '<small>pedido ' + _abaCant(g._rep, u) + '</small></div>' +
           '<div class="recibir-qty-wrap" id="' + wrapId + '">' + controles + '</div>' +
-          '</div>';
+          '</div>' +
+          '<div class="rec-falta" id="recFalta_' + idx + '_' + gi + '" hidden></div>';
       });
       html += '<div id="recRep_' + idx + '">' + abaRecRepHtml(idx, grouped) + '</div>';
       html += abaRecDepHtml(idx, provOcs);
@@ -2824,7 +2857,8 @@ function renderProveedores() {
           '<input class="recibir-comp-in" id="recCompMonto_' + idx + '" type="text" inputmode="decimal" autocomplete="off" placeholder="Monto $">' +
           '</div>';
       }
-      html += '<button class="btn-confirmar-recibir" data-firma="' + _abaH(_abaFirmaRec(prov.n, grouped)) + '" onclick="confirmarRecibir(' + idx + ',this)">Confirmar recepción</button>';
+      html += '<div class="rec-pie" id="recPie_' + idx + '">' + (_hayRep ? 'Tildá cada producto cuando lo contaste.' : 'Todo es de pedidos de clientes: ya está separado.') + '</div>';
+      html += '<button class="btn-confirmar-recibir" id="recConf_' + idx + '" data-firma="' + _abaH(_abaFirmaRec(prov.n, grouped)) + '" onclick="confirmarRecibir(' + idx + ',this)"' + (_hayRep ? ' disabled' : '') + '>Confirmar recepción</button>';
       html += '</div>';
     }
 
@@ -3965,6 +3999,33 @@ function agruparOcsPorProducto(ocs) {
   return keys.map(function(p) { return map[p]; });
 }
 
+/* (13/11/2026) Lo que llega de un producto: lo de clientes (ya separado) + lo contado de reposición. */
+function _abaRecLlega(idx, gi, g) {
+  var input = document.getElementById('recQty_' + idx + '_' + gi);
+  if (!input) return g ? g.totalQty : 0;
+  var u = g ? _abaUni(g.abbr) : 'u';
+  return Math.round(((Number(input.getAttribute('data-cli')) || 0) + _abaCantIn(input.value, u === 'kg' ? 'kg' : 'u')) * 1000) / 1000;
+}
+/* Cada vez que cambia un número o una casilla: el faltante (sale de la reposición, como lo hace la base: la última OC de
+   reposición del producto) y «Confirmar» habilitado recién cuando todo está tildado. */
+function abaRecRevisar(idx) {
+  var prov = (busqueda.provs || [])[idx]; if (!prov) return;
+  var grouped = agruparOcsPorProducto(_ocsRecibibles(prov.n)), faltan = 0, total = 0;
+  grouped.forEach(function (g, gi) {
+    var box = document.getElementById('recFalta_' + idx + '_' + gi), ok = document.getElementById('recOk_' + idx + '_' + gi);
+    if (ok) { total++; if (!ok.checked) faltan++; }
+    if (!box) return;
+    var det = getOcRowDetails(g.rows), llega = _abaRecLlega(idx, gi, g), dif = Math.round((llega - g.totalQty) * 1000) / 1000;
+    var st = det.filter(function (d) { return d.isStock; }), ult = st.length ? (g.rows[det.indexOf(st[st.length - 1])] || {}).oc : '';
+    if (!dif) { box.hidden = true; box.textContent = ''; return; }
+    var u = _abaUni(g.abbr), n = _abaCant(Math.abs(dif), u);
+    box.textContent = (dif < 0 ? 'Falta ' + n + ' ' + g.prod + ': sale de la reposición' : 'Sobra ' + n + ' ' + g.prod + ': va a la reposición') + (ult ? ' ' + ult : '') + '.';
+    box.hidden = false;
+  });
+  var btn = document.getElementById('recConf_' + idx), pie = document.getElementById('recPie_' + idx);
+  if (btn && total) btn.disabled = faltan > 0;
+  if (pie && total) pie.textContent = faltan ? 'Faltan tildar ' + faltan + ' de ' + total + '.' : 'Todo contado: confirmá.';
+}
 function toggleRecibir(idx) {
   var panel = document.getElementById('recPanel_' + idx);
   if (!panel) return;
@@ -3979,7 +4040,7 @@ function onRecQtyChange(input, wrapId, origQty, u) {
   var wrap = document.getElementById(wrapId);
   if (wrap) wrap.className = 'recibir-qty-wrap' + (val === 0 ? ' zero' : val !== origQty ? ' changed' : '');
   var m = String(wrapId || '').match(/^recWrap_(\d+)_/);
-  if (m) abaRecRepPintar(Number(m[1]));
+  if (m) { abaRecRepPintar(Number(m[1])); try { abaRecRevisar(Number(m[1])); } catch (eRv) {} }
 }
 
 /* ── EL REPARTO AL RECIBIR (16/10/2026, «Recepción sin quilombo») ──────────
@@ -4016,8 +4077,7 @@ function _abaRecRepCalc(idx, grouped) {
     var ideal = (it.idl || {})[dd.aca];
     /* (6/11/2026, Tadeo) Sin Ideal también se puede mandar al otro freezer: el recuadro sale igual, en 0. Lo que no
        entra en el freezer de casa se decide parado en el depósito (la búsqueda se cuenta ahí, no en el auto). */
-    var input = document.getElementById('recQty_' + idx + '_' + gi);
-    var llega = input ? _abaCantIn(input.value, 'u') : g.totalQty;
+    var llega = _abaRecLlega(idx, gi, g);
     var cli = 0;
     getOcRowDetails(g.rows).forEach(function (d) { if (!d.isStock) cli += d.q; });
     cli = Math.min(llega, cli);
@@ -4038,7 +4098,7 @@ function abaRecRepHtml(idx, grouped) {
   var l = _abaRecRepCalc(idx, grouped);
   _abaRecRep[idx] = l;
   if (!l.length) return '';
-  var dest = l[0].nom, h = '<div class="recibir-rep"><div class="recibir-comp-tit">Qué va a ' + _abaH(dest) + '</div>';
+  var dest = _abaDepNom(l[0].hacia), h = '<div class="recibir-rep"><div class="recibir-comp-tit">Qué va al ' + _abaH(dest.charAt(0).toLowerCase() + dest.slice(1)) + '</div>';
   l.forEach(function (r) {
     var id = 'recMor_' + idx + '_' + r.gi;
     var v = r.cant;
@@ -4187,8 +4247,7 @@ function confirmarRecibir(idx, btn) {
   var casoQueNecesitaDistrib = null; // primer producto que necesita distribución manual
 
   grouped.forEach(function(g, gi) {
-    var input = document.getElementById('recQty_' + idx + '_' + gi);
-    var qtyRecibida = input ? _abaCantIn(input.value, _abaUni(g.abbr)) : g.totalQty;
+    var qtyRecibida = _abaRecLlega(idx, gi, g);   /* (13/11/2026) clientes (ya separado) + lo contado */
     var detalles = getOcRowDetails(g.rows);
     var totalPedido = detalles.reduce(function(s, d){ return s + d.q; }, 0);
     var diff = qtyRecibida - totalPedido;
