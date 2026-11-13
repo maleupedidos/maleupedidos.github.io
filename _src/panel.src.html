@@ -35,6 +35,20 @@ html.listo #boot{opacity:0;pointer-events:none;transition:opacity .25s}
 .stmerma-b small{display:block;font-weight:600;color:#666;font-size:.78rem;margin-top:2px}
 .stmerma-b.merma{border-color:#c62828;background:#ffebee;color:#b71c1c}
 .stmerma-x{background:none;border:0;padding:10px;font:inherit;color:#666;cursor:pointer}
+/* (13/11/2026, 687) La ficha de la pieza: se abre tocando la pieza en «En el freezer». */
+.stcar-pz-tap{cursor:pointer}
+.stficha-h{display:flex;justify-content:space-between;align-items:flex-start;gap:8px}
+.stficha-h small{display:block;font-size:.8rem;color:#777;font-weight:700}
+.stficha-h b{display:block;font-size:1.45rem;font-weight:800;line-height:1.2}
+.stficha-x{border:0;background:none;font:inherit;font-size:1.6rem;line-height:1;min-width:44px;min-height:44px;cursor:pointer;color:#777}
+.stficha-f{display:flex;justify-content:space-between;gap:12px;padding:7px 0;border-bottom:1px solid #eee;font-size:.88rem}
+.stficha-f span{color:#777;flex:0 0 auto}
+.stficha-f b{text-align:right;font-weight:700}
+.stficha-log{font-size:.8rem;color:#5D4037;background:#FFF8E1;border-radius:8px;padding:7px 9px}
+.stficha-err{font-size:.8rem;color:#B45309}
+.stficha-in{width:100%;box-sizing:border-box;min-height:48px;font:inherit;font-size:1.25rem;font-weight:800;padding:8px 12px;border:1.5px solid #ccc;border-radius:10px}
+.stficha-bs{display:flex;gap:8px}
+.stficha-bs > *{flex:1}
 /* Cancelar un pedido cobrado: que paso con la plata (7/10/2026). */
 .cpl-bg{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px}
 .cpl-box{background:var(--bg,#fff);color:var(--ink,#222);border-radius:14px;padding:18px;width:100%;max-width:380px;box-shadow:0 10px 30px rgba(0,0,0,.25)}
@@ -31356,9 +31370,10 @@ function _stCarneHtml(){
         pvAnt=pvK;
         ch+='<span class="stcar-pvl">'+_carnePvTag(pzs[v].prov,pzs[v].costo)+'</span>';
       }
-      ch+='<span class="stcar-pz'+(pzs[v].estado==='Asignada'?' pedida':'')+(bj?' viaja':'')+'">'+stFmt(pzs[v].peso,'kg')
+      /* (13/11/2026, 687) Tocar la pieza abre su ficha; la × sigue abriendo la baja directo. */
+      ch+='<span class="stcar-pz stcar-pz-tap'+(pzs[v].estado==='Asignada'?' pedida':'')+(bj?' viaja':'')+'" role="button" tabindex="0" onclick="stCarneFicha(\''+_stJs(pzs[v].id)+'\')" aria-label="Ver la pieza de '+stFmt(pzs[v].peso,'kg')+' kg">'+stFmt(pzs[v].peso,'kg')
         +(pzs[v].estado==='Asignada'?' &middot; '+stEsc(pzs[v].pedido||'pedida'):'')
-        +(bj?' &hellip;':'<button onclick="stCarneBaja(\''+_stJs(pzs[v].id)+'\')" aria-label="Sacar del freezer la pieza de '+stFmt(pzs[v].peso,'kg')+' kg">&times;</button>')
+        +(bj?' &hellip;':'<button onclick="event.stopPropagation();stCarneBaja(\''+_stJs(pzs[v].id)+'\')" aria-label="Sacar del freezer la pieza de '+stFmt(pzs[v].peso,'kg')+' kg">&times;</button>')
         +'</span>';
     }
     h+='<div class="stcar-row"><div class="stcar-n">'+stEsc(_carneCorto(cr.n))
@@ -31672,6 +31687,78 @@ function stCarneBaja(id){
     +'<button type="button" class="stmerma-b" onclick="stCarneBajaHacer(\''+_stJs(id)+'\',\'correccion\')">Corrección — peso mal cargado o la repone el proveedor<small>no es pérdida</small></button>'
     +'<button type="button" class="stmerma-x" onclick="document.getElementById(\'stMermaOv\').hidden=true">No sacar nada</button></div>';
   ov.hidden=false;
+}
+/* LA FICHA DE LA PIEZA (13/11/2026, 687). Tadeo: «¿cómo veo las piezas que se cargaron recién?». «En el freezer» agrupa
+   por proveedor y costo, y las 89 de Carmín de hoy se mezclaban con las de antes al mismo precio. Tocar una pieza abre
+   esto: cuándo se cargó (día y hora), el proveedor y la compra con su remito, el costo por kilo, los días en el freezer,
+   el depósito, el estado y, si está pedida, de quién (`pieza_ficha_pantalla`). Acciones: «Merma» abre la baja de siempre
+   (`stCarneBaja`: merma, cambiar de freezer o corrección; una sola pieza de código para las dos pantallas). «Corregir
+   peso» (la misma pieza, sin darla de baja: `pieza_peso_directo`, 688) va después del reparto: PIEZA_PESO_LISTO. */
+var PIEZA_PESO_LISTO=false, _stFicha=null;
+function stCarneFicha(id){
+  var pz=_carnePieza(id); if(!pz){ toast('No encontré esa pieza: actualizá y probá de nuevo',4000); return; }
+  _stFicha={id:id,d:null,cargando:true,err:'',corrigiendo:false,guardando:false};
+  var ov=document.getElementById('stFichaOv');
+  if(!ov){ ov=document.createElement('div'); ov.id='stFichaOv'; ov.className='stmerma-ov'; document.body.appendChild(ov); }
+  ov.onclick=function(e){ if(e.target===ov)stCarneFichaCerrar(); };
+  ov.hidden=false; _stFichaPintar();
+  var f=_stFicha;
+  _baseRpc('pieza_ficha_pantalla',{p:{id:id}}).then(function(d){ if(_stFicha!==f)return; f.d=d; f.cargando=false; _stFichaPintar(); },
+    function(e){ if(_stFicha!==f)return; f.cargando=false; f.err=String((e&&e.message)||e); _stFichaPintar(); });
+}
+function stCarneFichaCerrar(){ var ov=document.getElementById('stFichaOv'); if(ov)ov.hidden=true; _stFicha=null; }
+function _stFichaPintar(){
+  var f=_stFicha, ov=document.getElementById('stFichaOv'); if(!f||!ov)return;
+  var pz=_carnePieza(f.id)||{}, d=f.d||{}, esp=f.cargando?'&hellip;':'';
+  var peso=Number(d.peso!=null?d.peso:pz.peso)||0;
+  var fila=function(k,v){ return v?'<div class="stficha-f"><span>'+k+'</span><b>'+v+'</b></div>':''; };
+  var estado=String(d.estado||pz.estado||''), enFreezer=/^(disponible|asignada)$/i.test(estado);
+  var dias=(d.dias==null||!enFreezer)?esp:(Number(d.dias)===0?'desde hoy':(Number(d.dias)===1?'1 día':d.dias+' días'));
+  var comp=d.compra?(stEsc(d.compra.id)+(d.compra.remito?' &middot; remito '+stEsc(d.compra.remito):'')+(d.compra.fecha?' <small style="font-weight:600;color:#777">('+stEsc(d.compra.fecha)+')</small>':'')):(f.cargando?esp:'no la encuentro');
+  var costo=Number(d.costo!=null?d.costo:pz.costo)||0;
+  var ped=d.pedido||pz.pedido||'';
+  var h='<div class="stmerma-box"><div class="stficha-h"><div><small>'+stEsc(_carneCorto(d.corte||pz.corte||''))+' &middot; '+stEsc(f.id)+'</small><b>'+stFmt(peso,'kg')+' kg</b></div>'
+    +'<button type="button" class="stficha-x" onclick="stCarneFichaCerrar()" aria-label="Cerrar">&times;</button></div>'
+    +'<div>'
+    +fila('Cargada el',stEsc(d.cargada||((pz.recibida||'')+(pz.recHora?' '+pz.recHora:''))))
+    +fila('Proveedor',stEsc(d.prov||pz.prov||''))
+    +fila('Compra',comp)
+    +(costo>0?fila('Costo por kg',stEsc(_carnePlata(costo))):'')
+    +(enFreezer?fila('En el freezer',dias):'')
+    +fila('Depósito',stEsc(_stDepNom({nombre:stCarneDepNom(String(d.dep||pz.dep||'').toLowerCase())})||''))
+    +fila('Estado',stEsc(estado))
+    +(ped?fila('Pedida por',stEsc(ped)+(d.cliente?' &middot; '+stEsc(d.cliente):'')):'')
+    +'</div>'
+    +((d.pesos&&d.pesos.length)?'<div class="stficha-log">'+d.pesos.map(function(x){ return 'Peso corregido el '+stEsc(x.cuando)+(x.quien?' por '+stEsc(x.quien):'')+': '+stFmt(Number(x.antes),'kg')+' &rarr; '+stFmt(Number(x.ahora),'kg')+' kg'; }).join('<br>')+'</div>':'')
+    +(d.nota&&!enFreezer?'<div class="stficha-log">'+stEsc(d.nota)+'</div>':'')
+    +(f.err?'<div class="stficha-err">No pude traer el resto de la ficha ('+stEsc(f.err)+').</div>':'');
+  if(f.corrigiendo){
+    h+='<label class="stmerma-l" for="stFichaPeso">Peso correcto (kg)</label>'
+      +'<input id="stFichaPeso" class="stficha-in" type="text" inputmode="decimal" autocomplete="off" value="'+String(peso).replace('.',',')+'">'
+      +'<div class="stficha-bs"><button type="button" class="stmerma-x" onclick="stCarneFichaCorregir(false)">Cancelar</button>'
+      +'<button type="button" class="stmerma-b"'+(f.guardando?' disabled':'')+' onclick="stCarneFichaGuardarPeso()">'+(f.guardando?'Guardando&hellip;':'Guardar el peso')+'</button></div>';
+  }else if(enFreezer){
+    if(PIEZA_PESO_LISTO&&d.puedeCorregir)h+='<button type="button" class="stmerma-b" onclick="stCarneFichaCorregir(true)">Corregir peso<small>la misma pieza, sin darla de baja</small></button>';
+    if(!CARNE_BAJANDO[f.id])h+='<button type="button" class="stmerma-b merma" onclick="stCarneFichaMerma()">Merma<small>vino mal, consumo propio: sale del freezer</small></button>';
+  }
+  ov.innerHTML=h+'</div>';
+  if(f.corrigiendo){ var i=document.getElementById('stFichaPeso'); if(i&&document.activeElement!==i){ try{ i.focus(); i.select(); }catch(e){} } }
+}
+function stCarneFichaCorregir(si){ if(!_stFicha)return; _stFicha.corrigiendo=!!si&&PIEZA_PESO_LISTO; _stFichaPintar(); }
+function stCarneFichaMerma(){ var id=_stFicha&&_stFicha.id; stCarneFichaCerrar(); if(id)stCarneBaja(id); }
+function stCarneFichaGuardarPeso(){
+  var f=_stFicha; if(!f||f.guardando||!PIEZA_PESO_LISTO)return;
+  var i=document.getElementById('stFichaPeso'), v=Number(String((i&&i.value)||'').replace(/\s/g,'').replace(',','.'));
+  if(!(v>0)||v>100){ toast('Escribí el peso en kilos (ej.: 0,735)',3500); return; }
+  v=Math.round(v*1000)/1000;
+  f.guardando=true; _stFichaPintar();
+  _baseRpc('pieza_peso_directo',{p:{action:'piezaPeso',id:f.id,peso:v,clientOpId:'pzp_'+f.id+'_'+Date.now().toString(36)}})
+    .then(function(r){
+      var pz=_carnePieza(f.id); if(pz&&r&&r.peso!=null)pz.peso=Number(r.peso);
+      ST_SUCIO=Date.now();
+      toast(r&&r.ya?'Esa pieza ya pesaba '+stFmt(v,'kg')+' kg':'Peso corregido: '+stFmt(Number(r.pesoAntes),'kg')+' → '+stFmt(Number(r.peso),'kg')+' kg',4500);
+      stCarneFichaCerrar(); renderStCarne(); stCarnePedir(true); if(DEP_DATA&&typeof stDepPedir==='function')stDepPedir(true);
+    },function(e){ if(_stFicha!==f)return; f.guardando=false; _stFichaPintar(); toast('No se corrigió: '+String((e&&e.message)||e),5000); });
 }
 /* MOVER UNA PIEZA DE FREEZER (6/11/2026, Tadeo). Lucas, contando la carne, tocó sin querer «Depósito Moresco» y
    cargó cortes que estaban en Ustariz; para corregirlo tuvo que darlos de baja como «Corrección» y volver a cargarlos.
