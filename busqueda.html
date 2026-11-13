@@ -719,6 +719,7 @@ body *{touch-action:manipulation}
 .deuda-aldia{font-size:13px;font-weight:800;color:#2E7D32;background:#E8F5E9;padding:4px 11px;border-radius:99px}
 .deuda-card.al-dia-card{background:#FBFAF6}
 /* (13/11/2026) El pago suelto, plegado. */
+.np-summary-dep{font-size:13px;font-weight:700;color:#331C1C;margin:2px 0 8px}
 .pago-otro{margin-top:10px}.pago-otro>summary{cursor:pointer;font-size:12.5px;font-weight:700;color:#7A4A4A;padding:6px 2px;list-style:none}.pago-otro>summary::-webkit-details-marker{display:none}.pago-otro>summary::before{content:'';display:inline-block;width:6px;height:6px;border-right:1.6px solid currentColor;border-bottom:1.6px solid currentColor;transform:rotate(-45deg);margin:0 8px 1px 0}.pago-otro[open]>summary::before{transform:rotate(45deg)}
 /* (13/11/2026) «Por retirar» en la tarjeta de PAGOS. */
 .aba-ret{margin-top:10px;padding:10px 12px;border:1px dashed #E8DFC4;border-radius:10px;background:#FFFDF7}
@@ -912,6 +913,11 @@ details.res-plegada[open]>summary .res-prov-head{margin-bottom:8px}
       <select class="np-select" id="npVendedor" onchange="onNpVendedorChange()">
         <option value="Tadeo — Stock">Reposición de stock (al depósito)</option>
       </select>
+    </div>
+    <!-- (13/11/2026, 680) A qué depósito va la reposición. Se ve siempre; la recepción lo trae elegido y se puede cambiar. -->
+    <div class="np-field" id="npDepField" hidden>
+      <div class="np-label">Depósito al que va</div>
+      <select class="np-select" id="npDepDest" onchange="updateNpSummary()"></select>
     </div>
     <div class="np-field">
       <div class="np-label">Proveedor</div>
@@ -1561,8 +1567,26 @@ function _abaAviso(estado) {
 
 /* Lo que hacen las tres puertas que traen `busqueda` (el ↻, despues de pagar y
    despues de comprar): antes cada una lo copiaba a mano. */
+/* (13/11/2026, 680) {OC: depósito} de las OC abiertas con destino. Se pide con cada lectura (cada 60 s como mucho). */
+var _abaDest = {}, _abaDestT = 0;
+function _abaDestPedir() {
+  if (typeof _baseRpc !== 'function' || Date.now() - _abaDestT < 60000) return;
+  _abaDestT = Date.now();
+  Promise.resolve(typeof _sbPermiso === 'function' ? _sbPermiso() : null).catch(function () {})
+    .then(function () { return _baseRpc('oc_destinos_pantalla', {}); })
+    .then(function (d) {
+      var n = (d && d.destinos) || {};
+      if (JSON.stringify(n) === JSON.stringify(_abaDest)) return;
+      _abaDest = n;
+      try { if (!(typeof abaHayEditor === 'function' && abaHayEditor())) abaRender(); } catch (e) {}
+    }).catch(function () { _abaDestT = 0; });
+}
+function _abaDepNom(id) {
+  return 'Depósito ' + (typeof npDepCorto === 'function' ? npDepCorto(id) : String(id || ''));
+}
 function _abaAplicarBusqueda(data) {
   busqueda = data;
+  try { _abaDestPedir(); } catch (eD) {}
   _abaRecienPodar();
   _abaGuardandoPodar();
   /* LAS MARCAS SOBREVIVEN A LA LECTURA (2/11/2026). Se vaciaban en cada lectura: si la lista todavia no traia el
@@ -1989,6 +2013,26 @@ function abaFaltAgregar(abbr) {
 /* ── LOAD VENDEDORES RED (para botón WA al vendedor) ────── */
 /* Rellena el dropdown "¿Para quién es la compra?" con Tadeo — Stock + todos
    los vendedores Red activos del Sheets (genérico: Marcos, Fini, …). */
+/* (13/11/2026, 680) Los depósitos para la reposición: Ustariz y Moresco (PRUEBA no, salvo que no haya otro). Elegido el
+   propio de quien carga, como en la recepción; se ve siempre y se puede cambiar. */
+function abaNpDepPintar() {
+  var w = document.getElementById('npDepField'), sel = document.getElementById('npDepDest');
+  if (!w || !sel) return;
+  var deps = (typeof _pedDeps === 'function' ? (_pedDeps() || []) : []).filter(function (d) { return d && d.id && d.id !== 'prueba'; });
+  if (!deps.length || (typeof npEsStock === 'function' && !npEsStock())) { w.hidden = true; return; }
+  var cur = sel.value, html = deps.map(function (d) {
+    var nom = String(d.nombre || d.id).replace(/^dep[oó]sito\s+/i, '');
+    return '<option value="' + _abaH(d.id) + '">Depósito ' + _abaH(nom) + '</option>';
+  }).join('');
+  if (sel.__h !== html) { sel.innerHTML = html; sel.__h = html; }
+  var ids = deps.map(function (d) { return d.id; });
+  sel.value = ids.indexOf(cur) >= 0 ? cur : (typeof abaRecDepMio === 'function' ? (abaRecDepMio(deps) || ids[0]) : ids[0]);
+  w.hidden = false;
+}
+function abaNpDepNombre() {
+  var sel = document.getElementById('npDepDest'); if (!sel || !sel.value || (document.getElementById('npDepField') || {}).hidden) return '';
+  var o = sel.options[sel.selectedIndex]; return o ? o.text : '';
+}
 function populateNpVendedor() {
   var sel = document.getElementById('npVendedor');
   if (!sel) return;
@@ -3532,7 +3576,7 @@ function _abaPorRetirarHtml(d, idx) {
   });
   h += '<details class="aba-ret-ocs"><summary>Ver ' + (c.pr.length === 1 ? 'la OC' : 'las ' + c.pr.length + ' OC') + '</summary>';
   c.pr.forEach(function (x) {
-    h += '<div class="aba-ret-f oc"><span class="n">' + _abaH(x.oc) + (x.fecha ? ' · ' + _abaH(x.fecha) : '') + ' · ' + _abaH(x.prod || '') + '</span><span class="q">' + _abaH(String(x.q || '')) + '</span><span class="m">' + abaFormatMoney(x.ct) + '</span></div>';
+    h += '<div class="aba-ret-f oc"><span class="n">' + _abaH(x.oc) + (x.fecha ? ' · ' + _abaH(x.fecha) : '') + ' · ' + _abaH(x.prod || '') + (_abaDest[x.oc] ? ' · <b>Reposición · ' + _abaH(_abaDepNom(_abaDest[x.oc])) + '</b>' : '') + '</span><span class="q">' + _abaH(String(x.q || '')) + '</span><span class="m">' + abaFormatMoney(x.ct) + '</span></div>';
   });
   h += '</details>';
   if (c.pagado > 0.01) h += '<div class="aba-ret-f ya"><span class="n">Ya pagado al retirar</span><span class="m">' + abaFormatMoney(c.pagado) + '</span></div>';
@@ -3952,7 +3996,8 @@ function abaCatItem(abbr) {
   return null;
 }
 function _abaRecDepsDe(it) {
-  var ds = (catalogo && catalogo.deps) || [];
+  /* (13/11/2026) El depósito PRUEBA no cuenta para el reparto: con la sesión de prueba son 3 y el bloque no salía. */
+  var ds = ((catalogo && catalogo.deps) || []).filter(function (d) { return d && d.id !== 'prueba'; });
   if (ds.length !== 2 || !it) return null;
   var aca = (it.dep && (ds[0].id === it.dep || ds[1].id === it.dep)) ? it.dep : ds[0].id;
   var otro = ds[0].id === aca ? ds[1] : ds[0];
@@ -3975,8 +4020,14 @@ function _abaRecRepCalc(idx, grouped) {
     cli = Math.min(llega, cli);
     var libre = (Number((it.pd || {})[dd.aca]) || 0) - (Number((it.pr || {})[dd.aca]) || 0);
     var x = _repartoIdeal(llega - cli, ideal, libre);
+    /* (13/11/2026, 680) Si las OC de reposición dicen a qué depósito van, eso manda sobre el ideal: lo de las OC «al otro»
+       va precargado; si todas dicen «este», 0. Las OC viejas sin destino siguen con el ideal. Siempre editable. */
+    var conDest = 0, alOtro = 0;
+    (g.rows || []).forEach(function (rr) { var dz = _abaDest[rr.oc]; if (!dz) return; conDest++; if (dz === dd.otro) alOtro += Number(rr.q) || 0; });
+    var porOc = conDest > 0;
+    if (porOc) x.otro = Math.max(0, Math.min(llega - cli, alOtro));
     out.push({ gi: gi, abbr: g.abbr, prod: g.prod, hacia: dd.otro, nom: dd.otroNom, acaNom: dd.acaNom,
-               cant: x.otro, aca: x.aca, ideal: x.ideal, libre: x.libre, cli: cli });
+               cant: x.otro, aca: x.aca, ideal: x.ideal, libre: x.libre, cli: cli, porOc: porOc });
   });
   return out;
 }
@@ -3992,7 +4043,7 @@ function abaRecRepHtml(idx, grouped) {
     if (_abaRecRepTocado[idx + '_' + r.gi] && prev) v = _abaCantIn(prev.value, 'u');
     r.cant = v;
     h += '<div class="recibir-rep-row"><div class="recibir-rep-n">' + _abaH(r.prod) +
-      '<small>' + (r.ideal === null || r.ideal === undefined ? 'sin ideal en ' + _abaH(r.acaNom) : 'ideal ' + _abaH(r.acaNom) + ' ' + r.ideal) + ' · libre ' + r.libre + (r.cli ? ' · ' + r.cli + ' de clientes' : '') + '</small></div>' +
+      '<small>' + (r.porOc ? 'según la OC' : '') + (r.porOc ? ' · ' : '') + (r.ideal === null || r.ideal === undefined ? 'sin ideal en ' + _abaH(r.acaNom) : 'ideal ' + _abaH(r.acaNom) + ' ' + r.ideal) + ' · libre ' + r.libre + (r.cli ? ' · ' + r.cli + ' de clientes' : '') + '</small></div>' +
       '<input class="recibir-qty recibir-rep-in" id="' + id + '" type="number" inputmode="numeric" min="0" value="' + v + '"' +
       ' aria-label="Cuántos ' + _abaH(r.prod) + ' van a ' + _abaH(r.nom) + '" oninput="abaRecRepTocar(' + idx + ',' + r.gi + ')"></div>';
   });
@@ -5760,7 +5811,9 @@ function updateNpSummary() {
   }
 
   var total = 0;
+  try { abaNpDepPintar(); } catch (eDp) {}
   var html = '<div class="np-summary"><div class="np-summary-title">Resumen del pedido</div>';
+  if (npEsStock() && abaNpDepNombre()) html += '<div class="np-summary-dep">Reposición · ' + _abaH(abaNpDepNombre()) + '</div>';
   items.forEach(function(it) {
     var sub = it.costo * it.qty;
     total += sub;
@@ -5806,6 +5859,8 @@ function confirmarCompra(confirmarDuplicada) {
     action: 'compraManual',
     proveedor: prov,
     vendedor: vendedor,
+    /* (13/11/2026, 680) El depósito de la reposición: la base lo anota en las OC (destino_deposito). */
+    deposito: (npEsStock() && (document.getElementById('npDepDest') || {}).value) || undefined,
     items: items,
     /* El mismo id en todos los reintentos: el servidor no carga dos veces una
        compra que ya escribio (13/9/2026). Si era para un vendedor, un reintento
