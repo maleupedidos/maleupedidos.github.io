@@ -7269,17 +7269,22 @@ function ajIrParam(k){
 /* (13/11/2026, depósitos fase 1) AJUSTES › DEPÓSITOS: los freezers de cada depósito (nombre y litros; alta, cambio y
    baja con `freezer_guardar_directo`, 618) y su ocupación. La capacidad del depósito es la suma de sus freezers. Los
    depósitos vienen con el stock (`D.stockDeps`); si todavía no llegaron, se piden y se repinta. PRUEBA no aparece. */
-var _ajDepPidiendo=false;
+var _ajDepPidiendo=false, _ajDepFallo=false;
+function ajDepReintentar(){ _ajDepFallo=false; ajRender(); }
 function ajDepositosHTML(){
   var deps=_depsReales();
   if(!deps.length){
+    /* (13/11/2026) Si la base no contestó (ni con el reintento), se dice y se ofrece de nuevo: antes quedaba «Trayendo…». */
+    if(_ajDepFallo&&!_ajDepPidiendo)return '<div class="aj-loading">No pude traer los depósitos: la base no contestó.<br>'
+      +'<button type="button" class="aj-btn sm" style="margin-top:10px" onclick="ajDepReintentar()">Reintentar</button></div>';
     if(!_ajDepPidiendo&&typeof loadStockTab==='function'){
       _ajDepPidiendo=true;
-      try{ loadStockTab(); }catch(e){}
-      var n=0, t=setInterval(function(){ n++; if(_depsReales().length||n>40){ clearInterval(t); _ajDepPidiendo=false; if(AJ_SEC==='depositos'&&cur==='ajustes')ajRender(); } },500);
+      var fin=function(){ _ajDepPidiendo=false; _ajDepFallo=!_depsReales().length; if(AJ_SEC==='depositos'&&cur==='ajustes')ajRender(); };
+      try{ Promise.resolve(loadStockTab(true)).then(fin,fin); }catch(e){ fin(); }
     }
     return '<div class="aj-loading">Trayendo los depósitos…</div>';
   }
+  _ajDepFallo=false;
   var h='<div class="aj-note">La capacidad de cada depósito es la suma de sus freezers. Los litros de cada producto se cargan en Productos › Litros por producto.</div>';
   deps.forEach(function(d){ h+=_stOcupCard(d.id,true); });
   return '<div class="aj-dep">'+h+'</div>';
@@ -17886,10 +17891,23 @@ var _pedArmaM={ult:0,vuelo:false};
 var _SIN_APPS_SIGUE={sbToken:1};   /* miSesion salio el 3/11/2026: la contesta la base (391) */
 /* Una RPC de la base con el permiso de siempre. Rechaza si no hay permiso, si no contesta o si contesta {ok:false}:
    el que llama decide si cae a Apps Script. (3/11/2026: miSesion y los templates de WATI, 391 y 392.) */
+/* (13/11/2026) UN CORTE DEL AUTH DE SUPABASE. A veces la base contesta 500 {"message":"Failed to check user auth status»}:
+   es el control del token, ANTES de correr nada. Ajustes › Depósitos se quedó en «Trayendo los depósitos…» por eso.
+   `ir()` hace el pedido; si vuelve con ese 500 se reintenta UNA vez a los 1,2 s. Con `todo5xx` (solo lecturas) se reintenta
+   cualquier 5xx; sin él, solo ese, que es seguro también para una escritura (no llegó a ejecutarse). */
+function _baseReintenta(ir,todo5xx){
+  return ir().then(function(r){
+    if(!r||r.status<500)return r;
+    return r.clone().text().then(function(t){
+      if(!todo5xx&&!/Failed to check user auth status/i.test(String(t||'')))return r;
+      return new Promise(function(ok){ setTimeout(ok,1200); }).then(ir);
+    },function(){ return r; });
+  });
+}
 function _baseRpc(rpc,args){
   return Promise.resolve(typeof _sbPermiso==='function'?_sbPermiso(true):null).then(function(sb){
     if(!sb||!sb.token||!sb.url)throw new Error('sin permiso de la base');
-    return fetch(sb.url+'/rest/v1/rpc/'+rpc,{method:'POST',headers:{apikey:sb.key,Authorization:'Bearer '+sb.token,'Content-Type':'application/json'},body:JSON.stringify(args||{})})
+    return _baseReintenta(function(){ return fetch(sb.url+'/rest/v1/rpc/'+rpc,{method:'POST',headers:{apikey:sb.key,Authorization:'Bearer '+sb.token,'Content-Type':'application/json'},body:JSON.stringify(args||{})}); })
       .then(function(r){ if(!r.ok)throw new Error('la base contestó '+r.status); return r.json(); })
       .then(function(d){ if(!d||d.ok===false)throw new Error((d&&d.err)||('la base no armó '+rpc)); return d; });
   });
@@ -33339,8 +33357,8 @@ function _provArmaMedir(d,desde){
 var _stockArmaM={ult:0,vuelo:false};
 function _stockArmaBase(sb,senal){
   var t0=Date.now();
-  return fetch(sb.url+'/rest/v1/rpc/stock_tab_pantalla',{method:'POST',signal:senal,
-    headers:{apikey:sb.key,Authorization:'Bearer '+sb.token,'Content-Type':'application/json'},body:'{}'})
+  return _baseReintenta(function(){ return fetch(sb.url+'/rest/v1/rpc/stock_tab_pantalla',{method:'POST',signal:senal,
+    headers:{apikey:sb.key,Authorization:'Bearer '+sb.token,'Content-Type':'application/json'},body:'{}'}); },true)   /* (13/11) un reintento */
     .then(function(r){ if(!r.ok)throw new Error('la base contestó '+r.status); return r.json(); })
     .then(function(d){ if(!d||!Array.isArray(d.stock))throw new Error('la base no armó el stock'); return {d:d,ms:Date.now()-t0}; });
 }
