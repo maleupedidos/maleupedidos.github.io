@@ -38,6 +38,13 @@ html.listo #boot{opacity:0;pointer-events:none;transition:opacity .25s}
 /* (13/11/2026, 687) La ficha de la pieza: se abre tocando la pieza en «En el freezer». */
 .stcar-pz-tap{cursor:pointer}
 .stficha-h{display:flex;justify-content:space-between;align-items:flex-start;gap:8px}
+/* (13/11/2026, 683) El reservado de un depósito, con de quién es */
+.st-res-b{background:none;border:0;font:inherit;color:inherit;cursor:pointer;padding:0;min-height:32px;text-decoration:underline dotted;text-underline-offset:3px}
+.st-res-b.on{font-weight:800;text-decoration:underline}
+.st-res-det{padding:4px 14px 12px 24px;font-size:12.5px;color:var(--ink2,#4a3b33);border-bottom:1px solid var(--border);background:var(--surface2,#faf7f3)}
+.st-res-f{display:flex;justify-content:space-between;gap:10px;padding:4px 0}
+.st-res-f small{color:var(--ink3)}
+.st-res-f > span:last-child{white-space:nowrap}
 .stficha-h small{display:block;font-size:.8rem;color:#777;font-weight:700}
 .stficha-h b{display:block;font-size:1.45rem;font-weight:800;line-height:1.2}
 .stficha-x{border:0;background:none;font:inherit;font-size:1.6rem;line-height:1;min-width:44px;min-height:44px;cursor:pointer;color:#777}
@@ -33630,7 +33637,35 @@ function _stDepBarra(){
   el.innerHTML='<span class="st-dep-l">Ver</span><button type="button" class="rt-chip'+(ST_DEP?'':' on')+'" onclick="stDep(\'\')">Todos</button>'
     +deps.map(function(d){return '<button type="button" class="rt-chip'+(ST_DEP===d.id?' on':'')+'" onclick="stDep(\''+_stJs(d.id)+'\')">'+stEsc(_stDepNom(d))+'</button>';}).join('');
 }
+/* (13/11/2026, 683) DE QUIÉN ES LO RESERVADO. Tadeo: «la vista del depósito muestra físico 11 · reservado 1 · libre 10, y el
+   reservado se despliega con el nombre del cliente y el día de entrega». `stock_reservado_detalle_pantalla` es la MISMA
+   regla que el Reservado, renglón por renglón (suma lo mismo, producto por producto y depósito por depósito: probado). Se
+   pide al abrir la vista de un depósito; tocar el número de Reservado despliega de quién es. */
+var _ST_RES={t:0,filas:null,vuelo:null,ab:{}};
+function _stResPedir(forzar){
+  if(_ST_RES.vuelo)return _ST_RES.vuelo;
+  if(!forzar&&_ST_RES.filas&&Date.now()-_ST_RES.t<60000&&!(ST_SUCIO&&ST_SUCIO>_ST_RES.t))return Promise.resolve(_ST_RES.filas);
+  if(typeof _baseRpc!=='function')return Promise.resolve(null);
+  _ST_RES.vuelo=_baseRpc('stock_reservado_detalle_pantalla',{}).then(function(d){
+    _ST_RES.filas=(d&&d.filas)||[]; _ST_RES.t=Date.now(); _ST_RES.vuelo=null;
+    if(ST_DEP&&Object.keys(_ST_RES.ab).some(function(k){ return _ST_RES.ab[k]; })&&typeof rStock==='function')rStock();
+    return _ST_RES.filas;
+  },function(){ _ST_RES.vuelo=null; _ST_RES.err=true; if(ST_DEP&&typeof rStock==='function')rStock(); return null; });
+  return _ST_RES.vuelo;
+}
+window.stResVer=function(sku){ _ST_RES.ab[sku]=!_ST_RES.ab[sku]; if(_ST_RES.ab[sku]){ _ST_RES.err=false; _stResPedir(false); } if(typeof rStock==='function')rStock(); };
+function _stResDia(d){ var m=/^(\d{2})\/(\d{2})\/(\d{4})$/.exec(String(d||'')); if(!m)return 'sin día'; return ['dom','lun','mar','mié','jue','vie','sáb'][new Date(+m[3],+m[2]-1,+m[1]).getDay()]+' '+m[1]+'/'+m[2]; }
+function _stResDetHTML(sku,dep,u){
+  if(!_ST_RES.filas)return '<div class="st-res-det">'+(_ST_RES.err?'No pude traer de quién es. Tocá el número de nuevo.':'Trayendo de quién es&hellip;')+'</div>';
+  var L=_ST_RES.filas.filter(function(x){ return x.sku===sku&&String(x.dep||'').toLowerCase()===String(dep||'').toLowerCase(); });
+  if(!L.length)return '<div class="st-res-det">No encuentro de quién es: tocá &#8635; para actualizar.</div>';
+  return '<div class="st-res-det">'+L.map(function(x){
+    return '<div class="st-res-f"><span>'+stEsc(x.cli||'(sin nombre)')+' <small>'+stEsc((x.canal||'')+(x.n?' #'+x.n:''))+(x.por==='oc'?' &middot; llegó por OC':'')+'</small></span>'
+      +'<span>'+stEsc(_stResDia(x.dia))+' &middot; <b>'+stFmt(Number(x.q)||0,u)+(u==='kg'?' kg':' u')+'</b></span></div>';
+  }).join('')+'</div>';
+}
 function _rStockDep(dep){
+  try{ _stResPedir(false); }catch(e){}   /* (683) de quién es lo reservado, para cuando se toque */
   var dn=_stDepNom((D.stockDeps||[]).filter(function(d){return d.id===dep;})[0]||{id:dep});
   var r3=function(x){return Math.round((Number(x)||0)*1000)/1000;};
   var filas=(D.stock||[]).filter(_stSeMuestra).map(function(s){
@@ -33664,8 +33699,10 @@ function _rStockDep(dep){
         +'<div class="si-n st-fija" title="'+stEsc(s.n)+'">'+stEsc(s.n)+_stEdadHTML(s.a)+'</div>'
         +_stAlcanzaHTML({vd:s.vd,d:x.d,u:s.u})
         +'<div class="si-v"'+(x.f?'':' style="color:var(--ink3)"')+'>'+stFmt(x.f,s.u)+_stPz(s,'pzn',dep)+'</div>'
-        +'<div class="si-v"'+(x.r?'':' style="color:var(--ink3)"')+'>'+stFmt(x.r,s.u)+'</div>'
-        +'<div class="si-v st-fija-der '+cls+'">'+stFmt(x.d,s.u)+_stPz(s,'pzl',dep)+'</div></div>';
+        +(x.r>0?'<button type="button" class="si-v st-res-b'+(_ST_RES.ab[s.a]?' on':'')+'" onclick="stResVer(\''+_stJs(s.a)+'\')" aria-expanded="'+(!!_ST_RES.ab[s.a])+'" aria-label="De quién es lo reservado de '+stEsc(s.n)+'">'+stFmt(x.r,s.u)+'</button>'
+               :'<div class="si-v" style="color:var(--ink3)">'+stFmt(x.r,s.u)+'</div>')
+        +'<div class="si-v st-fija-der '+cls+'">'+stFmt(x.d,s.u)+_stPz(s,'pzl',dep)+'</div></div>'
+        +(x.r>0&&_ST_RES.ab[s.a]?_stResDetHTML(s.a,dep,s.u):'');
     });
   });
   html+='</div></div><div class="st-pie" style="padding:12px 4px;font-size:12px;color:var(--ink3)"><b>Días</b>: para cuántos días alcanza lo disponible de <b>este</b> depósito al ritmo de venta de toda la empresa.</div>';
