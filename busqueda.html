@@ -140,6 +140,22 @@ body.embed .sem-tabs{top:48px}
 .hj-res ul{margin:0 0 10px;padding-left:18px;font-size:14px;line-height:1.45;color:#3E2723}
 .hj-res-b{display:grid;grid-template-columns:1fr 2fr;gap:8px}
 .hj-volver{min-height:52px;border:1px solid #E7DCC0;border-radius:14px;background:#fff;color:#3E2723;font:inherit;font-weight:700;cursor:pointer}
+/* (691) Recibir › «Recibido hoy» y Deshacer */
+.rhoy{margin:18px 0 0}
+.rhoy-t{font-weight:800;color:#3E2723;font-size:15px;margin:0 0 8px}
+.rhoy-c{background:#fff;border:1px solid #E7DCC0;border-radius:14px;padding:12px 14px;margin:0 0 10px}
+.rhoy-des{opacity:.7}
+.rhoy-cab{display:flex;justify-content:space-between;gap:8px;align-items:baseline;margin:0 0 4px}
+.rhoy-cab b{min-width:0;overflow-wrap:anywhere}
+.rhoy-cab span{font-size:12.5px;color:#8D6E63;white-space:nowrap}
+.rhoy-l{font-size:13.5px;color:#3E2723;line-height:1.45;overflow-wrap:anywhere}
+.rhoy-x{font-size:12.5px;color:#8D6E63;margin:6px 0 0}
+.rhoy-b{margin:10px 0 0;width:100%;min-height:44px;border:1px solid #E7DCC0;border-radius:12px;background:#fff;color:#C62828;font:inherit;font-weight:700;cursor:pointer}
+.rhoy-b:disabled{color:#A1887F;cursor:default}
+.rhoy-q{margin:10px 0 0;font-size:13px;color:#3E2723;line-height:1.4}
+.rhoy-qb{display:grid;grid-template-columns:1fr 2fr;gap:8px;margin:8px 0 0}
+.rhoy-si{min-height:52px;border:0;border-radius:14px;background:#C62828;color:#fff;font:inherit;font-weight:800;cursor:pointer}
+@media (min-width:900px){.rhoy{max-width:760px}}
 @media (min-width:900px){.hj{max-width:760px}.hj-f{display:grid;grid-template-columns:minmax(0,1fr) 420px;align-items:center}.hj-col{padding-left:calc(100% - 420px)}.hj-nums{padding-left:0}.hj-nota,.hj-cam{grid-column:1/-1}}
 .aba-ocup{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:0 0 12px}
 .aba-ocup-c{background:#fff;border:2px solid #E8DFC4;border-radius:16px;padding:12px 14px;font-size:13px;min-width:0}
@@ -7365,7 +7381,8 @@ function abaRenderRecibir(forzar) {
   var provs = _abaHjProvs();
   if (!provs.length) {
     _abaHj = null;
-    box.innerHTML = '<div class="al-dia">No hay nada para recibir.<br><small>Cuando le pidas a un proveedor, aparece acá para contarlo.</small></div>';
+    box.innerHTML = '<div class="al-dia">No hay nada para recibir.<br><small>Cuando le pidas a un proveedor, aparece acá para contarlo.</small></div>' + _abaRecHoyHtml();
+    _abaRecHoyPedir();
     return;
   }
   var prov = (_abaHjSel && provs.indexOf(_abaHjSel) >= 0) ? _abaHjSel : (_abaHj && provs.indexOf(_abaHj.prov) >= 0 ? _abaHj.prov : provs[0]);
@@ -7394,7 +7411,8 @@ function abaRenderRecibir(forzar) {
   if (S.resumen) h += _abaHjResumenHtml(P, S);
   else h += '<button type="button" class="hj-conf" id="hjConf" onclick="abaHjRevisar()"' + (_abaHjFaltan(P, S) ? ' disabled' : '') + '>Revisar y confirmar</button>';
   h += '</div>';
-  box.innerHTML = h;
+  box.innerHTML = h + _abaRecHoyHtml();
+  _abaRecHoyPedir();
 }
 function _abaHjDepNom(id) { return id ? String(_abaDepNom(id)).replace(/^Dep[oó]sito\s+/i, '') : ''; }
 function _abaHjSigla(id) { return id === 'ustariz' ? 'UST' : id === 'moresco' ? 'MO' : String(id || '').slice(0, 3).toUpperCase(); }
@@ -7520,9 +7538,74 @@ function abaHjConfirmar(btn) {
     try { if (typeof abaRefresh === 'function') abaRefresh(); } catch (e) {}
     try { if (typeof loadStockTab === 'function') loadStockTab(true); } catch (e) {}
     abaRenderRecibir(true);
+    _abaRecHoyPedir(true);
   }).catch(function (e) {
     S.yendo = false; S.err = (e && e.message) || 'No se guardó nada.';
     abaRenderRecibir(true);
+  });
+}
+
+/* (691, 13/11/2026) «Recibido hoy»: las recepciones de la hoja de hoy y, para el admin, «Deshacer» la que se recibió mal.
+   La base (`recepcion_deshacer_directo`) devuelve las OC a «Pedido», saca del freezer lo que entró y trae de vuelta lo que se
+   pasó a Moresco — todo o nada. Si algo cambió después (una entrega, un costo) o lo que entró ya está comprometido, no deshace
+   y dice por qué. Lo contado («Había») y los pagos no se tocan. Sin la 691 o sin red, la sección no aparece. */
+var _abaRecHoy = { filas: null, puede: false, ts: 0, yendo: false, err: {}, pregunta: '', haciendo: '' };
+function _abaRecHoyPedir(forzar) {
+  var R = _abaRecHoy;
+  if (R.yendo || !abaIsOnline || (!forzar && R.ts && Date.now() - R.ts < 30000)) return;
+  R.yendo = true;
+  _abaHjRpc('recepciones_hoy_pantalla', {}).then(function (d) {
+    R.filas = Array.isArray(d.hoy) ? d.hoy : []; R.puede = d.puede === true; R.ts = Date.now(); R.yendo = false;
+    _abaRecHoyPintar();
+  }).catch(function () { R.yendo = false; R.ts = Date.now(); });
+}
+function _abaRecHoyPintar() { var el = document.getElementById('abaRecHoy'); if (el) el.outerHTML = _abaRecHoyHtml(); }
+function _abaRecHoyNom(a) { var it = abaCatItem(a) || {}; return _abaHjCorto(it.n || a); }
+function _abaRecHoyHtml() {
+  var R = _abaRecHoy, F = R.filas;
+  if (!R.puede || !F || !F.length) return '<div id="abaRecHoy"></div>';
+  var h = '<div id="abaRecHoy" class="rhoy"><div class="rhoy-t">Recibido hoy</div>';
+  F.forEach(function (f) {
+    var hj = String(f.hoja || ''), por = {}, orden = [];
+    (f.lineas || []).forEach(function (l) {
+      var a = l.abbr || ''; if (!por[a]) { por[a] = { p: 0, l: 0 }; orden.push(a); }
+      por[a].p += Number(l.pedido) || 0; por[a].l += Number(l.llego) || 0;
+    });
+    var prods = orden.map(function (a) { var x = por[a];
+      return _abaH(_abaRecHoyNom(a)) + ' ' + _abaCant(x.l, '') + (Math.abs(x.l - x.p) > 1e-9 ? ' (de ' + _abaCant(x.p, '') + ')' : ''); });
+    var tr = f.tras || [], otro = tr.length ? (_abaHjDepNom(tr[0].hacia) || 'Moresco') : '';
+    var tras = tr.map(function (t) { return _abaH(_abaRecHoyNom(t.abbr)) + ' ' + _abaCant(Number(t.cant) || 0, ''); });
+    h += '<div class="rhoy-c' + (f.deshecha ? ' rhoy-des' : '') + '">'
+      + '<div class="rhoy-cab"><b>' + _abaH(f.prov || 'Proveedor') + '</b><span>' + _abaH(f.hora || '') + (f.por ? ' · ' + _abaH(f.por) : '') + '</span></div>'
+      + (prods.length ? '<div class="rhoy-l">' + prods.join(' · ') + '</div>' : '')
+      + (tras.length ? '<div class="rhoy-l">A ' + _abaH(otro) + ': ' + tras.join(' · ') + '</div>' : '');
+    if (f.deshecha) h += '<div class="rhoy-x">Deshecha a las ' + _abaH(f.deshecha.hora || '') + (f.deshecha.por ? ' · ' + _abaH(f.deshecha.por) : '') + '</div>';
+    else if (f.cambio) h += '<div class="rhoy-x">Ya no se puede deshacer: ' + _abaH(f.cambio) + '.</div>';
+    else if (f.lista) {
+      if (R.err[hj]) h += '<div class="hj-err" role="alert" style="margin:10px 0 0">' + _abaH(R.err[hj]) + '</div>';
+      if (R.haciendo === hj) h += '<button type="button" class="rhoy-b" disabled>Deshaciendo…</button>';
+      else if (R.pregunta === hj) h += '<div class="rhoy-q">Vuelve a «Pedido» y sale del freezer lo que entró' + (tras.length ? ', y vuelve lo que pasó a ' + _abaH(otro) : '')
+          + '. Lo contado y los pagos no se tocan.<div class="rhoy-qb"><button type="button" class="hj-volver" onclick="abaRecHoyNo()">No</button>'
+          + '<button type="button" class="rhoy-si" onclick="abaRecHoyDeshacer(\'' + esc(hj) + '\')">Sí, deshacer</button></div></div>';
+      else h += '<button type="button" class="rhoy-b" onclick="abaRecHoyPreguntar(\'' + esc(hj) + '\')">Deshacer esta recepción</button>';
+    }
+    h += '</div>';
+  });
+  return h + '</div>';
+}
+function abaRecHoyPreguntar(hj) { _abaRecHoy.pregunta = hj; _abaRecHoy.err[hj] = ''; _abaRecHoyPintar(); }
+function abaRecHoyNo() { _abaRecHoy.pregunta = ''; _abaRecHoyPintar(); }
+function abaRecHoyDeshacer(hj) {
+  var R = _abaRecHoy; if (R.haciendo) return;
+  R.haciendo = hj; R.pregunta = ''; R.err[hj] = ''; _abaRecHoyPintar();
+  _abaHjRpc('recepcion_deshacer_directo', { p: { hoja: hj } }).then(function (r) {
+    R.haciendo = '';
+    abaShowToast(r.ya ? 'Esa recepción ya estaba deshecha' : 'Deshecha la recepción de ' + (r.prov || 'el proveedor') + ': volvió a «Pedido»', 6000);
+    try { if (typeof abaRefresh === 'function') abaRefresh(); } catch (e) {}
+    try { if (typeof loadStockTab === 'function') loadStockTab(true); } catch (e) {}
+    _abaRecHoyPedir(true);
+  }).catch(function (e) {
+    R.haciendo = ''; R.err[hj] = (e && e.message) || 'No se deshizo nada.'; _abaRecHoyPintar();
   });
 }
 
