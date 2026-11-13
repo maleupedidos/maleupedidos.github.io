@@ -822,6 +822,12 @@ body{font-family:'Montserrat',-apple-system,'Segoe UI',system-ui,sans-serif;back
 /* (588) Ocupacion de los freezers */
 .aj-dep{display:grid;gap:12px}@media (min-width:900px){.aj-dep{grid-template-columns:1fr 1fr}.aj-dep .aj-note{grid-column:1/-1}}
 .aj-pin-acc{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.aj-f-pin{order:9}   /* (13/11) el PIN del dueño en su propia fila, abajo de los datos, con los botones uno al lado del otro */
+.aj-f-pin .aj-pin-acc .aj-btn{min-height:40px}
+.aj-grupo-t{margin:16px 0 4px;font-size:12px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--ink3)}
+.aj-grupo-t span{font-weight:600;margin-left:4px}
+.aj-nueva-b{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.aj-nueva-b .aj-btn{min-height:44px}
 .aj-pin-est{flex-basis:100%;font-size:12.5px;line-height:1.4}
 .aj-pin-bloq{color:#C62828;font-weight:700}.aj-pin-viejo{color:#8D6E63}
 .dep-oc{margin-top:6px}.dep-oc .st-frz-bar{margin:4px 0 3px}
@@ -12171,7 +12177,21 @@ function _ajPinAcc(usr,nom){
   return '<div class="aj-pin-acc" data-pinu="'+u+'">'
     +'<button type="button" class="aj-btn ghost aj-pin-ver" style="min-height:40px" onclick="ajPinVer(\''+u+'\',\''+n+'\')">Ver PIN</button>'
     +'<button type="button" class="aj-btn ghost" style="min-height:40px" onclick="ajPinGenerar(\''+u+'\',\''+n+'\')">Generar PIN nuevo</button>'
+    +(_ajEsRep(usr)?'<button type="button" class="aj-btn ghost aj-pin-ver" style="min-height:40px" onclick="ajAccesoCopiarU(\''+u+'\')">Copiar acceso</button>':'')
     +'<div class="aj-pin-est" hidden></div></div>';
+}
+function _ajEsRep(usr){ var k=String(usr||'').toLowerCase(); return ((AJ_DATA&&AJ_DATA.vendedores)||[]).some(function(v){ return String(v.usuario||'').toLowerCase()===k; }); }
+/* «Copiar acceso» desde la lista de Usuarios: lee el PIN en el momento (solo el dueño; queda anotado) y arma el mensaje de
+   siempre (app, usuario, PIN y, si no tiene Telegram, su link). Si el PIN es de antes de la 685, hay que generar uno. */
+function ajAccesoCopiarU(usr){
+  var v=((AJ_DATA&&AJ_DATA.vendedores)||[]).filter(function(x){ return String(x.usuario||'').toLowerCase()===String(usr).toLowerCase(); })[0]; if(!v)return;
+  _baseRpc('pin_ver_directo',{p:{usuario:usr}}).then(function(d){
+    AJ_PIN_VISTO[String(v.usuario).trim().toLowerCase()]=d.pin;
+    var t=ajAccesoTexto(v), nom=String(v.nombre||'').split(' ')[0];
+    var ok=function(){ toast('Acceso de '+nom+' copiado'); }, mal=function(){ prompt('Copialo:',t); };
+    try{ if(navigator.clipboard&&navigator.clipboard.writeText){ navigator.clipboard.writeText(t).then(ok,mal); return; } }catch(e){}
+    mal();
+  },function(e){ toast((e&&e.message)||'No se pudo',6000); });
 }
 function _ajPinEstadoPintar(forzar){
   if(typeof _esDueno!=='function'||!_esDueno())return;
@@ -12295,7 +12315,7 @@ function ajUserRow(u,isNew){
   return '<div class="aj-row u" data-orig="'+orig+'" data-borrador="usr:'+(isNew?'nuevo':orig)+'">'
     +'<div class="aj-f"><label>Usuario</label><input data-k="usuario" value="'+ajEsc(u.usuario)+'" placeholder="ej: santos"></div>'
     /* (669) El PIN no se «ve» ni se escribe acá: es de 6 números cifrado. Alta: el primero. Después: «Generar PIN nuevo», solo Tadeo. */
-    +'<div class="aj-f"><label>PIN</label>'+(isNew?'<input data-k="pin" value="" inputmode="numeric" maxlength="6" autocomplete="off" placeholder="6 números">'
+    +'<div class="aj-f'+(!isNew&&_esDueno()?' aj-full aj-f-pin':'')+'"><label>PIN</label>'+(isNew?'<input data-k="pin" value="" inputmode="numeric" maxlength="6" autocomplete="off" placeholder="6 números">'
       :(_esDueno()?_ajPinAcc(u.usuario,u.nombre)
         :'<span class="aj-pin-txt">'+(u.tienePin?'Tiene PIN':'Sin PIN')+' · lo genera Tadeo</span>'))+'</div>'
     +'<div class="aj-f"><label>Rol</label>'+ajRolSelect(u.rol||'empleado')+'</div>'
@@ -12308,36 +12328,53 @@ function ajUserRow(u,isNew){
     +'</div>';
 }
 function ajUsuariosHTML(){
-  /* Los de adentro primero (administradores, gerente, empleados, repartidores), después los vendedores y al final el robot. */
-  var _ordRol={admin:0,gerente:1,joaquin:1,empleado:2,repartidor:3,vendedor:4,robot:9};
-  var us=(AJ_DATA.usuarios||[]).slice().sort(function(a,b){ var x=(_ordRol[a.rol]==null?5:_ordRol[a.rol]), y=(_ordRol[b.rol]==null?5:_ordRol[b.rol]);
-    return x-y||String(a.nombre||a.usuario).localeCompare(String(b.nombre||b.usuario)); });
-  var h='<div class="aj-card"><h3>Usuarios</h3><div class="desc">Quién entra al ERP, con qué rol y qué ve. Qué ve cada rol se cambia en Permisos. Para que alguien deje de entrar, ponelo en Activo: No.</div>';
+  /* (13/11/2026) USUARIOS = TODOS LOS QUE ENTRAN AL ERP. Tadeo: «¿por qué hay 2 caminos y no uno? En Usuarios no aparece
+     Lourdes». Para él es gente que entra; que vivan en dos hojas (Usuarios y Vendedores) es un detalle nuestro. Por debajo
+     no cambia nada: dos hojas, dos fuentes de login_pin. Acá se leen las dos y se muestran en dos grupos, por nombre:
+     el Equipo y los Representantes (los de Vendedores, más los de Usuarios con rol vendedor, sin repetir a nadie).
+     El PIN de todos se maneja acá (Ver, Generar, Desbloquear: solo el dueño). Representantes queda para lo comercial. */
+  var porNom=function(a,b){ return String(a.nombre||a.usuario).localeCompare(String(b.nombre||b.usuario),'es'); };
+  var usu=(AJ_DATA.usuarios||[]), ven=(AJ_DATA.vendedores||[]).filter(function(v){ return v&&v.usuario; });
+  var esRep={}; ven.forEach(function(v){ esRep[String(v.usuario).toLowerCase()]=v; });
+  var equipo=usu.filter(function(u){ return u.rol!=='vendedor'&&!esRep[String(u.usuario).toLowerCase()]; }).sort(porNom);
+  var enUsu={}, reps=[];
+  usu.forEach(function(u){ var k=String(u.usuario).toLowerCase(); if(u.rol==='vendedor'||esRep[k]){ enUsu[k]=1; reps.push({u:u,v:esRep[k]||null}); } });
+  ven.forEach(function(v){ var k=String(v.usuario).toLowerCase(); if(!enUsu[k])reps.push({u:null,v:v}); });
+  reps.sort(function(a,b){ return porNom(a.u||a.v, b.u||b.v); });
+  var h='<div class="aj-card"><h3>Usuarios</h3><div class="desc">Todos los que entran al ERP: el equipo y los representantes. Qué ve cada rol se cambia en Permisos; para que alguien deje de entrar, Activo: No.</div>';
   h+='<div id="ajNewUserWrap"></div>';
-  setTimeout(function(){ var w=document.getElementById('ajNewUserWrap'); if(w&&!w.innerHTML&&_borradorHay('usr:nuevo'))ajAddUser(); },0);
-  h+='<div class="aj-add"><button class="aj-btn ghost sm" onclick="ajAddUser()">+ Nuevo usuario</button></div>';
-  h+=us.map(function(u){return ajUserRow(u,false);}).join('');
-  /* Los vendedores que entran SOLO por la hoja Vendedores (6/10/2026): el login
-     los busca ahí si no están en Usuarios, así que esta lista no los mostraba
-     (Federico D'Andrea). Van de solo lectura: su PIN se cambia en la tarjeta
-     de abajo, que escribe en Vendedores — no se duplica en Usuarios. */
-  /* (11/11/2026, Organizador) Los representantes viven en UN lugar: la sección Representantes (sus datos, su acceso y su
-     PIN). Acá solo el link. Antes estaban en tres: estas filas de solo lectura, la tarjeta de acceso y su sección. */
-  var _nRep=(AJ_DATA.vendedores||[]).filter(function(v){ return v.usuario; }).length;
-  h+='<div class="aj-link-rep">Los representantes ('+_nRep+') se manejan en <button type="button" class="aj-btn ghost sm" onclick="ajGo(\'vendedores\')">Representantes</button>: sus datos, su acceso y su PIN.</div>';
-  var soloV=[];
-  h+=soloV.map(function(v){
-    return '<div class="aj-row u aj-row-vend">'
-      +'<div class="aj-f"><label>Usuario</label><b>'+ajEsc(v.usuario)+'</b></div>'
-      +'<div class="aj-f"><label>PIN</label><b>'+(v.tienePin?'••••••':'—')+'</b></div>'
-      +'<div class="aj-f"><label>Rol</label><b>representante</b></div>'
-      +'<div class="aj-f"><label>Nombre</label><b>'+ajEsc(v.nombre)+'</b></div>'
-      +'<div class="aj-f"><label>Activo</label><b>'+(v.estado==='Activo'?'Sí':'No')+'</b></div>'
-      +'<div class="aj-f"><label>Notas</label><span class="aj-acc-chip">Entra por la hoja Vendedores · PIN abajo</span></div>'
-      +'<div class="aj-actions"></div></div>';
-  }).join('');
+  setTimeout(function(){ var w=document.getElementById('ajNewUserWrap'); if(w&&!w.innerHTML&&_borradorHay('usr:nuevo'))ajAddUser(true); },0);
+  h+='<div class="aj-add"><button class="aj-btn ghost sm" onclick="ajNuevaPersona()">+ Nuevo usuario</button></div>';
+  h+='<div class="aj-grupo-t">Equipo <span>'+equipo.length+'</span></div>';
+  h+=equipo.map(function(u){return ajUserRow(u,false);}).join('');
+  h+='<div class="aj-grupo-t">Representantes <span>'+reps.length+'</span></div>';
+  h+=reps.map(function(x){ return x.u?ajUserRow(x.u,false):ajRepUsuarioRow(x.v); }).join('');
   h+='</div>';
   return h;
+}
+/* Un representante que entra solo por la hoja Vendedores: sus datos de acceso (de solo lectura acá: se cambian en su
+   ficha, en Representantes) y su PIN, igual que todos. */
+function ajRepUsuarioRow(v){
+  return '<div class="aj-row u aj-row-vend">'
+    +'<div class="aj-f"><label>Usuario</label><b>'+ajEsc(v.usuario)+'</b></div>'
+    +'<div class="aj-f'+(_esDueno()?' aj-full aj-f-pin':'')+'"><label>PIN</label>'+(_esDueno()?_ajPinAcc(v.usuario,v.nombre):'<span class="aj-pin-txt">'+(v.tienePin?'Tiene PIN':'Sin PIN')+' · lo genera Tadeo</span>')+'</div>'
+    +'<div class="aj-f"><label>Rol</label><b>Representante</b></div>'
+    +'<div class="aj-f"><label>Nombre</label><b>'+ajEsc(v.nombre)+'</b></div>'
+    +'<div class="aj-f"><label>Activo</label><b>'+(v.estado==='Activo'?'Sí':'No')+'</b></div>'
+    +'<div class="aj-actions"><button type="button" class="aj-btn ghost sm" onclick="ajGo(\'vendedores\')">Ficha comercial &rarr;</button></div></div>';
+}
+/* «+ Nuevo usuario» pregunta primero quién es: del equipo (el alta de siempre) o representante (va a Representantes, donde
+   se crea con su ficha comercial). */
+function ajNuevaPersona(){
+  var w=document.getElementById('ajNewUserWrap'); if(!w)return;
+  if(w.innerHTML){ w.innerHTML=''; return; }
+  w.innerHTML='<div class="aj-row u aj-nueva"><div class="aj-f aj-full"><label>¿Quién es?</label>'
+    +'<div class="aj-nueva-b"><button type="button" class="aj-btn" onclick="ajAddUser(true)">Del equipo</button>'
+    +'<button type="button" class="aj-btn ghost" onclick="ajNuevoRep()">Representante</button></div></div></div>';
+}
+function ajNuevoRep(){
+  ajGo('vendedores');
+  setTimeout(function(){ try{ var w=document.getElementById('ajNewVendWrap'); if(w&&!w.innerHTML)ajAddVend(); var r=w&&w.querySelector('input'); if(r){ r.scrollIntoView({block:'center'}); r.focus(); } }catch(e){} toast('Completá su ficha comercial y guardá'); },60);
 }
 
 /* ── ACCESO DE LOS VENDEDORES (5/10/2026) ──
@@ -12349,18 +12386,15 @@ var AJ_APP_URL='https://app.maleu.com.ar/app.html';
 function ajAccesoVendHTML(){
   var vs=(AJ_DATA.vendedores||[]).filter(function(v){ return v.usuario; });
   vs.sort(function(a,b){ return (a.estado==='Activo'?0:1)-(b.estado==='Activo'?0:1) || String(a.nombre).localeCompare(String(b.nombre)); });
-  var h='<div class="aj-card"><h3>Representantes</h3><div class="desc">Con qué entra cada representante a Mi Portal. El PIN no se vuelve a mostrar: para mandarle el acceso, «Cambiar PIN» y después «Copiar acceso».</div>';
+  var h='<div class="aj-card"><h3>Representantes</h3><div class="desc">El usuario, el PIN y «Copiar acceso» de cada uno están en <button type="button" class="aj-btn ghost sm" onclick="ajGo(\'usuarios\')">Usuarios</button>. Acá, si tiene los avisos de Telegram.</div>';
   if(!vs.length) h+='<div class="aj-acc-vacio">No hay representantes cargados.</div>';
   h+=vs.map(function(v,i){
     var activo=v.estado==='Activo';
     return '<div class="aj-acc'+(activo?'':' off')+'">'
       +'<div class="aj-acc-top"><b>'+ajEsc(v.nombre)+'</b>'+(activo?'':'<span class="aj-acc-chip off">Inactivo</span>')
       +(v.tg?'<span class="aj-acc-chip ok">Telegram</span>':'<span class="aj-acc-chip no">Sin Telegram</span>')+'</div>'
-      +'<div class="aj-acc-datos"><span>Usuario <b>'+ajEsc(v.usuario)+'</b></span><span>PIN <b>'+(ajPinVisto(v)?ajEsc(ajPinVisto(v)):(v.tienePin?'••••••':'—'))+'</b></span></div>'
-      +'<div class="aj-acc-btns">'
-      +(_esDueno()?'<button class="aj-btn ghost" onclick="ajPinNuevo('+i+')">Cambiar PIN</button>':'')
-      +'<button class="aj-btn" onclick="ajCopiarAcceso('+i+')"'+(ajPinVisto(v)?'':' disabled title="Tocá «Cambiar PIN» primero: el PIN se ve solo cuando se cambia"')+'>Copiar acceso</button>'
-      +'</div></div>';
+      +'<div class="aj-acc-datos"><span>Usuario <b>'+ajEsc(v.usuario)+'</b></span></div>'
+      +'</div>';
   }).join('');
   h+='</div>';
   AJ_ACC_LISTA=vs;
@@ -12428,9 +12462,9 @@ function ajPinNuevo(i){
     })
     .catch(function(e){ toast('Error: '+e.message); });
 }
-function ajAddUser(){
+function ajAddUser(directo){
   var w=document.getElementById('ajNewUserWrap');
-  if(w.innerHTML){ w.innerHTML=''; return; }
+  if(w.innerHTML&&!directo){ w.innerHTML=''; return; }
   w.innerHTML=ajUserRow({usuario:'',pin:'',rol:'empleado',nombre:'',activo:true,notas:''},true);
 }
 function ajSaveUser(btn){
@@ -12662,8 +12696,7 @@ function ajVendRow(v,isNew){
     +'<div class="aj-f"><label>Nombre</label><input data-k="nombre" value="'+ajEsc(v.nombre)+'"></div>'
     +'<div class="aj-f"><label>Usuario</label><input data-k="usuario" value="'+ajEsc(v.usuario)+'"></div>'
     +'<div class="aj-f"><label>PIN</label>'+(isNew?'<input data-k="pin" value="" inputmode="numeric" maxlength="6" autocomplete="off" placeholder="6 números (o vacío: lo saca solo)">'
-      :(_esDueno()?_ajPinAcc(v.usuario,v.nombre)
-        :'<span class="aj-pin-txt">'+(v.tienePin?'Tiene PIN':'Sin PIN')+' · lo genera Tadeo</span>'))+'</div>'
+      :'<button type="button" class="aj-btn ghost sm" onclick="ajGo(\'usuarios\')">El PIN, en Usuarios &rarr;</button>')+'</div>'
     +'<div class="aj-f"><label>Estado</label><select data-k="estado"><option'+(v.estado==='Activo'?' selected':'')+'>Activo</option><option'+(v.estado!=='Activo'&&v.estado?' selected':'')+'>Inactivo</option></select></div>'
     +'<div class="aj-actions"><button class="aj-btn sm" onclick="ajSaveVend(this)">Guardar</button></div>'
     +'<div class="aj-f aj-full"><label>Barrios (separados por coma)</label><input data-k="barrios" value="'+ajEsc(v.barrios)+'"></div>'
