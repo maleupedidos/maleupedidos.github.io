@@ -7366,7 +7366,7 @@ function apCargarCatalogo(){
     if(dp)dp.innerHTML=AP_CAT.provs.map(function(c){return '<option value="'+ajEsc(c)+'">';}).join('');
   }).catch(function(){});
 }
-function apPlata(n){ return '$'+Math.round(Number(n)||0).toLocaleString('es-AR'); }
+function apPlata(n){ var v=Number(n)||0; return '$'+v.toLocaleString('es-AR',v%1?{minimumFractionDigits:2,maximumFractionDigits:2}:{}); }   /* (13/11) con centavos si los tiene: $10.309,50 */
 function apLeer(){
   ['nombre','sigla','precio','costo','categoria','gusto','proveedor','precioClubes'].forEach(function(k){
     var el=document.getElementById('ap_'+k); if(el)AP_F[k]=el.value;
@@ -7393,14 +7393,14 @@ function apZonaHTML(){
       +AP_ERR.map(function(e){return '<li>'+ajEsc(e)+'</li>';}).join('')+'</ul></div>';
   }
   if(AP_PLAN){
-    var p=AP_PLAN, cols=(p.columnas||[]).map(function(c){return c.hoja;}).join(', ');
+    var p=AP_PLAN, pr=p.productos||{}, pv=p.proveedores||{};
     var ids=(p.base||[]).map(function(b){return (b.channel==='tienda'?'tienda':b.channel==='red'?'Red':'Clubes')+' '+b.code;}).join(' · ');
     h+='<div class="ap-caja"><b>Esto es lo que se va a escribir</b><ul>'
       +'<li><b>'+ajEsc(p.nombre)+'</b> ('+ajEsc(p.sigla)+'), por '+(p.unidad==='kg'?'kilo':'unidad')+': se vende a '+apPlata(p.precio)+' y cuesta '+apPlata(p.costo)+'.</li>'
-      +'<li>Una fila nueva en <b>Productos</b> (la '+p.productos.fila+') con stock 0. Freezer: '+ajEsc(p.deposito)+'.</li>'
-      +'<li>Una fila nueva en <b>Proveedores</b>: '+ajEsc(p.categoria)+(p.gusto?' — '+ajEsc(p.gusto):'')+', de '+ajEsc(p.proveedor)+'.</li>'
-      +'<li>Una columna «'+ajEsc(p.sigla)+'» al final de las hojas <b>'+ajEsc(cols)+'</b>.</li>'
-      +'<li>Sus códigos: '+ajEsc(ids)+'.</li>'
+      /* (13/11/2026) Lo que hace la base hoy (producto_alta_directo), sin la época de la planilla: no hay filas ni columnas de hojas. */
+      +'<li>'+(pr.ya?'El producto ya estaba en la base: se completa lo que le falta.':'El producto nuevo en la base'+(pr.numero?', el n° '+pr.numero+' de la lista':'')+', con stock 0 en todos los freezers. Freezer de siempre: '+ajEsc(String(p.deposito||'').replace(/^./,function(x){return x.toUpperCase();}))+'.')+'</li>'
+      +'<li>'+(pv.ya?'Su ficha de proveedor ya estaba.':'Su ficha de proveedor: '+ajEsc(p.categoria)+(p.gusto?' — '+ajEsc(p.gusto):'')+', de '+ajEsc(p.proveedor)+'.')+'</li>'
+      +(ids?'<li>Sus códigos: '+ajEsc(ids)+'.</li>':'')
       +(p.clubes?'<li>En Clubes se vende a '+apPlata(p.precioClubes)+'.</li>':'')
       +'</ul>'
       +((AP_AVISOS||[]).length?'<div class="ap-aviso">'+AP_AVISOS.map(ajEsc).join('<br>')+'</div>':'')
@@ -7423,7 +7423,23 @@ var PR_COMBOS_HOY=[{id:'cmb_descubri_semana',nombre:'Descubrí Maleu · Semana',
 var PR_CUENTAS_HOY=[{id:'efectivo',nombre:'Efectivo',alias:'',banco:'',activo:true},{id:'mp',nombre:'Mercado Pago Tadeo',alias:'maleump',banco:'Mercado Pago',activo:true},
   {id:'brubank',nombre:'Brubank Lucas',alias:'maleubru',banco:'Brubank',activo:true}];
 function pr$(n){ if(n===null||n===undefined||n==='')return '—'; var x=Number(n); return isNaN(x)?String(n):'$'+Math.round(x).toLocaleString('es-AR'); }
-function prNum(v){ var s=String(v==null?'':v).trim().replace(/\$/g,'').replace(/\s/g,''); if(s==='')return null; if(/,/.test(s))s=s.replace(/\./g,'').replace(',','.'); else if(/^\d{1,3}(\.\d{3})+$/.test(s))s=s.replace(/\./g,''); var n=Number(s); return isNaN(n)?NaN:n; }
+/* (13/11/2026) EL lector de plata y cantidades del ERP, en formato argentino. «10309,50», «10.309,50», «10309.5» y
+   «$ 10.309,50» dan 10309,5; «10.310» da 10310 (miles). Con `dec` (kilos, litros, cantidades) un punto solo es decimal:
+   «2.345» kg = 2,345. Devuelve NaN si no hay número. Lo usan todos los lectores de montos de las cuatro fuentes
+   (parseM, prNum, stNum, _planNum, _cvMonto, _parseMoneyInput, _abaMonto, parseMonto…): Tadeo cargó un costo
+   «10309,50» en Producto nuevo y la base lo leyó como $0. */
+window.numAR=function(v,dec){
+  if(typeof v==='number')return v;
+  var s=String(v==null?'':v).replace(/[^\d,.\-]/g,'');
+  if(!/\d/.test(s))return NaN;
+  var neg=s.charAt(0)==='-'; s=s.replace(/-/g,'');
+  var c=s.lastIndexOf(','), p=s.lastIndexOf('.');
+  if(c>=0&&p>=0){ s=(c>p)?s.replace(/\./g,'').replace(',','.'):s.replace(/,/g,''); }
+  else if(c>=0){ s=(s.split(',').length>2)?s.replace(/,/g,''):s.replace(',','.'); }
+  else if(p>=0&&(s.split('.').length>2||(!dec&&/^\d{1,3}(\.\d{3})+$/.test(s)))){ s=s.replace(/\./g,''); }
+  var n=Number(s); return isFinite(n)?(neg?-n:n):NaN;
+};
+function prNum(v){ var s=String(v==null?'':v).replace(/[\s$]/g,''); if(s==='')return null; return numAR(s); }
 function _prRpc(rpc,body){
   return Promise.resolve(typeof _sbPermiso==='function'?_sbPermiso(true):null).catch(function(){return null;}).then(function(sb){
     if(!sb||!sb.token||!sb.url)throw new Error('Sin sesión de la base: salí y volvé a entrar con tu PIN.');
@@ -7574,8 +7590,11 @@ function apResultadoHTML(){
 }
 function apMandar(extra){
   apLeer();
-  var body={action:'altaProducto',nombre:AP_F.nombre,sigla:AP_F.sigla,unidad:AP_F.unidad,precio:AP_F.precio,costo:AP_F.costo,
-    categoria:AP_F.categoria,gusto:AP_F.gusto,proveedor:AP_F.proveedor,deposito:AP_F.deposito,clubes:!!AP_F.clubes,precioClubes:AP_F.precioClubes};
+  /* (13/11/2026) La plata va ya leída en formato argentino: la base leía «10309,50» como $0. Si no es un número va como
+     se escribió, para que la base conteste «Falta el precio». */
+  var _n=function(v){var n=numAR(v);return isFinite(n)?n:v;};
+  var body={action:'altaProducto',nombre:AP_F.nombre,sigla:AP_F.sigla,unidad:AP_F.unidad,precio:_n(AP_F.precio),costo:_n(AP_F.costo),
+    categoria:AP_F.categoria,gusto:AP_F.gusto,proveedor:AP_F.proveedor,deposito:AP_F.deposito,clubes:!!AP_F.clubes,precioClubes:_n(AP_F.precioClubes)};
   Object.keys(extra||{}).forEach(function(k){body[k]=extra[k];});
   /* (4/11/2026, Supa 482) La confirmacion (no la previa) lleva su id: la base lo pide, y es el mismo por sigla y dia, asi
      un reintento de la misma alta no crea otra. */
@@ -8764,7 +8783,7 @@ function ajSaldoToggle(i){
 function ajSaldoAjustar(i,tipo){
   var c=(AJ_SALDOS||[])[i]; if(!c) return;
   var ed=document.getElementById('ajSaldoEd'+i);
-  var monto=Number(String((ed.querySelector('[data-k="monto"]').value||'')).replace(/[^\d]/g,''))||0;
+  var monto=Math.round(numAR(ed.querySelector('[data-k="monto"]').value)||0);
   var motivo=(ed.querySelector('[data-k="motivo"]').value||'').trim();
   if(monto<=0){ toast('Poné un monto'); return; }
   if(tipo==='Aplicación' && monto>c.saldo){ if(!confirm('Vas a quitar $'+ajMoney(monto)+' pero el cliente tiene $'+ajMoney(c.saldo)+'. ¿Seguir? (quedará en 0 o negativo)')) return; }
@@ -8778,7 +8797,7 @@ function ajDarCredito(btn){
   var r=document.getElementById('ajCredRow');
   var cliente=(r.querySelector('[data-k="cliente"]').value||'').trim();
   var telefono=(r.querySelector('[data-k="telefono"]').value||'').trim();
-  var monto=Number(String(r.querySelector('[data-k="monto"]').value||'').replace(/[^\d]/g,''))||0;
+  var monto=Math.round(numAR(r.querySelector('[data-k="monto"]').value)||0);
   var motivo=(r.querySelector('[data-k="motivo"]').value||'').trim();
   if(!cliente){ toast('Falta el nombre del cliente'); return; }
   if(monto<=0){ toast('Poné un monto'); return; }
@@ -11699,7 +11718,7 @@ function mrOpenCierre(){
   if(realIn && !realIn.dataset.live){
     realIn.dataset.live='1';
     realIn.addEventListener('input',function(){
-      var v=Number(String(this.value||'').replace(/[^\d-]/g,''))||0;
+      var v=Math.round(numAR(this.value)||0);
       var dif=v-(_mrCajaCtx.pem||0);
       var de=document.getElementById('mrCierreDif');
       if(!de)return;
@@ -11729,7 +11748,7 @@ function mrConfirmCierre(){
   var notasIn=document.getElementById('mrCierreNotas');
   var btn=document.getElementById('mrBtnCierreConf');
   if(!realIn || !realIn.value.trim()){alert('Ingresá el monto contado físicamente.');return;}
-  var real=Number(String(realIn.value).replace(/[^\d-]/g,''))||0;
+  var real=Math.round(numAR(realIn.value)||0);
   if(btn){btn.disabled=true;btn.textContent='Guardando...';}
   /* (4/11/2026) Por `_ordenPost`: con CIERRE_REPARTO_DIRECTO en «si» la acepta la base (reparto_cierre_directo); si no,
      Apps Script. Es plata: la palanca pasa por «medir» con el OK del Organizador. */
@@ -15214,9 +15233,9 @@ function _hayEditorAbierto(){
     for(var j=0;j<prods.length;j++){
       var qTot=Number(prods[j].dataset.q)||0;
       var ocInp=prods[j].querySelector('input[data-role="oc"]');
-      if(ocInp&&Number(ocInp.value)>0)return true;
+      if(ocInp&&numAR(ocInp.value,true)>0)return true;
       var dInp=prods[j].querySelector('input[data-role="d"]');
-      if(dInp&&Number(dInp.value)!==qTot)return true;
+      if(dInp&&(numAR(dInp.value,true)||0)!==qTot)return true;
     }
     var provSel=boxes[i].querySelector('select[data-role="prov"]');
     if(provSel&&provSel.value)return true;
@@ -20313,7 +20332,7 @@ function jntQuitarPer(btn){
   _jntGuardar('juntada_integrante_directo',{action:'juntadaIntegrante',grp:_JNT.grp,nombre:n,quitar:true}).then(function(ok){ if(ok)_jntRecargar(); });
 }
 function jntSumarGasto(){
-  var q=_JNT.quien, que=String((document.getElementById('jntGQue')||{}).value||'').trim(), m=Math.round(Number(String((document.getElementById('jntGMonto')||{}).value||'').replace(/[^0-9]/g,''))||0);
+  var q=_JNT.quien, que=String((document.getElementById('jntGQue')||{}).value||'').trim(), m=Math.round(numAR((document.getElementById('jntGMonto')||{}).value)||0);
   if(!q){toast('Elegí quién lo puso');return;}
   if(!que){toast('Poné qué fue (ej: Pan)');var a=document.getElementById('jntGQue');if(a)a.focus();return;}
   if(!(m>0)){toast('Poné el monto');var b=document.getElementById('jntGMonto');if(b)b.focus();return;}
@@ -20622,10 +20641,10 @@ function cambiarFPEditor(uid, val){
 function actualizarDescuentoEditor(uid){
   var ed=window['_ed_'+uid]; if(!ed) return;
   var box=$(uid); if(!box) return;
-  var gEl=box.querySelector('[data-drole="g"]'); var g=gEl?Number(gEl.value)||0:0; if(g<0)g=0; if(g>100)g=100;
-  var rEl=box.querySelector('[data-drole="r"]'); var r=rEl?Number(rEl.value)||0:0; if(r<0)r=0;
+  var gEl=box.querySelector('[data-drole="g"]'); var g=gEl?numAR(gEl.value)||0:0; if(g<0)g=0; if(g>100)g=100;
+  var rEl=box.querySelector('[data-drole="r"]'); var r=rEl?numAR(rEl.value)||0:0; if(r<0)r=0;
   var c={};
-  box.querySelectorAll('[data-drole="cat"]').forEach(function(inp){var v=Number(inp.value)||0; if(v>100)v=100; if(v>0)c[inp.dataset.cat]=v;});
+  box.querySelectorAll('[data-drole="cat"]').forEach(function(inp){var v=numAR(inp.value)||0; if(v>100)v=100; if(v>0)c[inp.dataset.cat]=v;});
   var hasPct=(g>0)||Object.keys(c).length>0;
   /* Los productos de regalo del AUTOPEDIDO (rg) no tienen casilla aca: se conservan. */
   var rg=(ed.receta&&ed.receta.rg&&Object.keys(ed.receta.rg).length)?ed.receta.rg:null;
@@ -20985,8 +21004,8 @@ function renderEditor(uidEd){
         +'<b>'+q+'</b><button type="button" onclick="edPaso(\''+uidEd+'\','+idx+',1)"'+(q>=cap?' disabled':'')+' aria-label="Uno más">+</button></div>')
       +'<div class="ede-sub" id="'+uidEd+'-sub-'+idx+'">$'+f$(q*l.precio)+'</div>';
     if(l._verPc&&!saca){
-      h+='<div class="ede-pcb"><label>Precio al cliente $<input type="number" inputmode="numeric" min="0" value="'+l.precio+'" data-uid="'+uidEd+'" data-idx="'+idx+'" data-role="precio" oninput="actualizarLineaEditor(this)"></label>'
-        +'<label class="co">Costo al proveedor $<input type="number" inputmode="numeric" min="0" value="'+(l.costo||0)+'" data-uid="'+uidEd+'" data-idx="'+idx+'" data-role="costo" oninput="actualizarLineaEditor(this)"></label></div>';
+      h+='<div class="ede-pcb"><label>Precio al cliente $<input type="text" inputmode="decimal" value="'+l.precio+'" data-uid="'+uidEd+'" data-idx="'+idx+'" data-role="precio" oninput="actualizarLineaEditor(this)"></label>'
+        +'<label class="co">Costo al proveedor $<input type="text" inputmode="decimal" value="'+(l.costo||0)+'" data-uid="'+uidEd+'" data-idx="'+idx+'" data-role="costo" oninput="actualizarLineaEditor(this)"></label></div>';
     }
     h+='</div>';
   });
@@ -21096,7 +21115,7 @@ window.edPaso=function(uid,idx,d,fijo){
 window.edPrecioVer=function(uid,idx){ var ed=window['_ed_'+uid]; if(!ed||!ed.lineas[idx])return; ed.lineas[idx]._verPc=!ed.lineas[idx]._verPc; renderEditor(uid); };
 
 function actualizarLineaEditor(inp){
-  var uid=inp.dataset.uid, idx=Number(inp.dataset.idx), role=inp.dataset.role, val=Number(inp.value)||0;
+  var uid=inp.dataset.uid, idx=Number(inp.dataset.idx), role=inp.dataset.role, val=numAR(inp.value,role!=='precio'&&role!=='costo')||0;
   var ed=window['_ed_'+uid]; if(!ed||!ed.lineas[idx]) return;
   // Cap por stock disponible solo para cantidad
   if(role==='q'){
@@ -21518,11 +21537,11 @@ function adjustOrigenSplit(inp){
      La que tocás manda; el resto se acomoda primero en Depósito y, si no alcanza, en la tercera. */
   var rowUid=inp.dataset.row, q=Number(inp.dataset.q)||0, role=inp.dataset.role;
   var r3=function(x){return Math.round(x*1000)/1000;};
-  var v=r3(Math.max(0, Math.min(q, Number(inp.value)||0)));inp.value=v;
+  var v=r3(Math.max(0, Math.min(q, numAR(inp.value,true)||0)));inp.value=v;
   var get=function(k){return document.querySelector('input[data-row="'+rowUid+'"][data-role="'+k+'"]');};
   var otros=role==='d'?['oc','rep']:role==='rep'?['d','oc']:['d','rep'];
   var a=get(otros[0]), b=get(otros[1]);
-  var vb=b?Math.max(0,Number(b.value)||0):0;
+  var vb=b?Math.max(0,numAR(b.value,true)||0):0;
   if(role==='d'){ /* Depósito manda: lo que sobra va primero a OC y la reposición se recorta si no entra */
     vb=Math.min(vb, r3(q-v)); if(b)b.value=r3(vb); if(a)a.value=r3(q-v-vb); _origenWSync(rowUid); return;
   }
@@ -21561,35 +21580,35 @@ function _origenWHTML(pr,rowUid,p,wIni){
   return h+'</div>';
 }
 function _origenWInputs(rowUid){ return document.querySelectorAll('input[data-role="w"][data-row="'+rowUid+'"]'); }
-function _origenWD(rowUid){ var d=document.querySelector('input[data-row="'+rowUid+'"][data-role="d"]'); return d?Math.max(0,Number(d.value)||0):0; }
+function _origenWD(rowUid){ var d=document.querySelector('input[data-row="'+rowUid+'"][data-role="d"]'); return d?Math.max(0,numAR(d.value,true)||0):0; }
 /* Lo del Depósito cambió: lo que sobra o falta lo absorbe el freezer por defecto (y si no alcanza, los otros). */
 function _origenWSync(rowUid){
   var ins=_origenWInputs(rowUid); if(!ins.length)return;
   var r3=function(x){return Math.round(x*1000)/1000;};
   var box=ins[0].closest('.origen-w'), def=box?box.getAttribute('data-def'):'', d=_origenWD(rowUid), suma=0;
-  ins.forEach(function(i){suma+=Math.max(0,Number(i.value)||0);});
+  ins.forEach(function(i){suma+=Math.max(0,numAR(i.value,true)||0);});
   var dif=r3(d-suma), lista=Array.prototype.slice.call(ins).sort(function(x,y){return (y.dataset.dep===def)-(x.dataset.dep===def);});
   lista.forEach(function(i){
-    if(dif===0)return; var v=Math.max(0,Number(i.value)||0), nv=r3(Math.max(0,v+dif)); dif=r3(dif-(nv-v)); i.value=nv;
+    if(dif===0)return; var v=Math.max(0,numAR(i.value,true)||0), nv=r3(Math.max(0,v+dif)); dif=r3(dif-(nv-v)); i.value=nv;
   });
   if(box)box.classList.toggle('vacio',d<=0);
 }
 /* Tocaste un freezer: el resto se reparte en los otros para que siga sumando lo del Depósito. */
 function origenWCambio(inp){
   var rowUid=inp.dataset.row, d=_origenWD(rowUid), r3=function(x){return Math.round(x*1000)/1000;};
-  var v=r3(Math.max(0,Math.min(d,Number(inp.value)||0))); if(String(inp.value)!==''&&Number(inp.value)!==v)inp.value=v;
+  var v=r3(Math.max(0,Math.min(d,numAR(inp.value,true)||0))); if(String(inp.value)!==''&&numAR(inp.value,true)!==v)inp.value=v;
   var resto=r3(d-v);
   Array.prototype.forEach.call(_origenWInputs(rowUid),function(i){
-    if(i===inp)return; var nv=r3(Math.max(0,Math.min(resto,Number(i.value)||0))); i.value=nv; resto=r3(resto-nv);
+    if(i===inp)return; var nv=r3(Math.max(0,Math.min(resto,numAR(i.value,true)||0))); i.value=nv; resto=r3(resto-nv);
   });
-  if(resto>0){ var o=Array.prototype.filter.call(_origenWInputs(rowUid),function(i){return i!==inp;})[0]; if(o)o.value=r3((Number(o.value)||0)+resto); }
+  if(resto>0){ var o=Array.prototype.filter.call(_origenWInputs(rowUid),function(i){return i!==inp;})[0]; if(o)o.value=r3((numAR(o.value,true)||0)+resto); }
   var ob=inp.closest&&inp.closest('.origen-box'); if(ob)ob.dataset.touched='1';   /* no lo pisa un repintado */
 }
 /* Para mandar: {dep: cant} solo con lo > 0. null si no hay filas por freezer. */
 function _origenWLeer(rowUid){
   var ins=_origenWInputs(rowUid); if(!ins.length)return null;
   var w={}, r3=function(x){return Math.round(x*1000)/1000;};
-  ins.forEach(function(i){var v=r3(Math.max(0,Number(i.value)||0)); if(v>0)w[i.dataset.dep]=v;});
+  ins.forEach(function(i){var v=r3(Math.max(0,numAR(i.value,true)||0)); if(v>0)w[i.dataset.dep]=v;});
   return w;
 }
 
@@ -21694,9 +21713,9 @@ function confirmarOrigen(btn){
     var ocInp=prodRow.querySelector('input[data-role="oc"]');
     var repInp=prodRow.querySelector('input[data-role="rep"]');
     var provSel=prodRow.querySelector('select[data-role="prov"]');
-    var d=Math.max(0, Number(dInp&&dInp.value)||0);
-    var oc=Math.max(0, Number(ocInp&&ocInp.value)||0);
-    var rp=Math.max(0, Number(repInp&&repInp.value)||0);
+    var d=Math.max(0, numAR(dInp&&dInp.value,true)||0);
+    var oc=Math.max(0, numAR(ocInp&&ocInp.value,true)||0);
+    var rp=Math.max(0, numAR(repInp&&repInp.value,true)||0);
     var prov=provSel?provSel.value.trim():'';
     d=Math.round(d*1000)/1000;oc=Math.round(oc*1000)/1000;rp=Math.round(rp*1000)/1000;
     if(Math.round((d+oc+rp)*1000)!==Math.round(qTot*1000)){error=(PN[abbr]||abbr)+': '+d+'+'+rp+'+'+oc+'≠'+qTot; return;}
@@ -22242,7 +22261,7 @@ function _cancelarPedEnviar(btn,hoja,id,row,cli,plata){
    se leia como 150 y "1.250.000" como 0 — sin avisar nada: el gasto se guardaba
    por $150 y el ajuste dejaba la caja fuerte en cero. El punto es separador de
    MILES cuando agrupa de a tres digitos; con coma, la coma es el decimal. */
-function parseM(v){var s=String(v||'').trim();if(!s)return 0;s=s.replace(/[^\d,.\-]/g,'');if(s.indexOf(',')>=0){s=s.replace(/\./g,'').replace(',','.');}else if(/^-?\d{1,3}(\.\d{3})+$/.test(s)){s=s.replace(/\./g,'');}return Number(s)||0;}
+function parseM(v){var n=numAR(v);return isFinite(n)?n:0;}
 
 // Aplica un movimiento al D local (saldo + libro diario) sin esperar al backend.
 // Permite cerrar el loader inmediatamente con los montos ya actualizados,
@@ -27274,7 +27293,7 @@ window.nscElegir=function(a){
   if(l)_NSC.monto=Math.round(l.monto);
   _nscPintar();
 };
-function _nscLeer(){var s=_NSC;var mo=$('nscMot');if(mo)s.motivo=String(mo.value||'').trim();var m=Number(($('nscMonto')||{}).value);if(m>0)s.monto=Math.round(m);}
+function _nscLeer(){var s=_NSC;var mo=$('nscMot');if(mo)s.motivo=String(mo.value||'').trim();var m=numAR(($('nscMonto')||{}).value);if(m>0)s.monto=Math.round(m);}
 window.nscVer=function(){
   var s=_NSC;if(!s||!s.abbr)return;_nscLeer();
   if(s.motivo.length<3){s.err='Escribí por qué no se cobró.';_nscPintar(true);return;}
@@ -27314,7 +27333,7 @@ function _nscPintar(conservar){
         +' <small>× '+(Math.round(l.q*1000)/1000)+'</small></span><b>$'+f$(l.monto)+'</b></label>';}).join('')+'</div>';
     if(s.abbr){
       h+='<div class="nsc-lbl">¿Por qué?</div><input id="nscMot" class="nsc-in" maxlength="200" placeholder="Ej: vino en mal estado" value="'+e(s.motivo||'')+'">';
-      h+='<div class="nsc-lbl">Monto que no se cobró</div><input id="nscMonto" class="nsc-in" type="number" inputmode="numeric" min="1" value="'+e(s.monto||'')+'">';
+      h+='<div class="nsc-lbl">Monto que no se cobró</div><input id="nscMonto" class="nsc-in" type="text" inputmode="decimal" min="1" value="'+e(s.monto||'')+'">';
     }
   }
   if(s.previa){
@@ -29050,7 +29069,7 @@ function _stLitAplicar(r){
   rStock();
 }
 function stLitGuardar(inp){
-  var sku=inp.getAttribute('data-sku'), l=Number(String(inp.value||'').replace(',','.'));
+  var sku=inp.getAttribute('data-sku'), l=numAR(inp.value,true);
   if(!(l>0)||l>200){ toast('Litros entre 0,1 y 200'); return; }
   inp.disabled=true;
   _baseRpc('producto_litros_directo',{p:{sku:sku,litros:l}}).then(function(r){
@@ -29733,7 +29752,7 @@ function stgRta(a,que){
   var v=CG_VAL[a]||(CG_VAL[a]={}), dm={que:que};
   if(que==='compra'){
     var ci=$('stgCosto_'+a);
-    if(ci){ var c=stNum(ci.value); if(!(c>0)){ toast('Decime cuánto sale cada uno'); return; } dm.costo=c; }
+    if(ci){ var c=numAR(ci.value); if(!(c>0)){ toast('Decime cuánto sale cada uno'); return; } dm.costo=c; }
   }
   v.deMas=dm; CG_REV=null;
   stgRevisar();
@@ -30118,7 +30137,7 @@ window.stmgObjEditar=function(){
 };
 window.stmgObjGuardar=function(){
   var i=$('stmgObjIn'), m=$('stmgObjMsg'), ok=$('stmgObjOk'); if(!i)return;
-  var n=Number(String(i.value||'').replace('%','').replace(',','.').trim());
+  var n=numAR(i.value,true);
   if(!isFinite(n)||n<1||n>90){ if(m)m.textContent='Poné un número entre 1 y 90.'; return; }
   n=Math.round(n*10)/10;
   if(ok){ ok.disabled=true; ok.textContent='Guardando…'; }
@@ -30371,9 +30390,7 @@ function stDepPedir(forzar,soloBase){
 function stNum(txt){
   /* "-3" daba 3: el signo se borraba con el resto de lo que no es un digito. */
   if(/-/.test(String(txt==null?'':txt)))return null;
-  var s=String(txt==null?'':txt).trim().replace(',','.').replace(/[^\d.]/g,'');
-  if(!s)return null;
-  var v=parseFloat(s);
+  var v=numAR(txt,true);   /* (13/11) «1.234,5» daba 1,234 */
   if(!isFinite(v)||v<0)return null;
   return Math.round(v*1000)/1000;
 }
@@ -31811,7 +31828,7 @@ function stCarneFichaCorregir(si){ if(!_stFicha)return; _stFicha.corrigiendo=!!s
 function stCarneFichaMerma(){ var id=_stFicha&&_stFicha.id; stCarneFichaCerrar(); if(id)stCarneBaja(id); }
 function stCarneFichaGuardarPeso(){
   var f=_stFicha; if(!f||f.guardando||!PIEZA_PESO_LISTO)return;
-  var i=document.getElementById('stFichaPeso'), v=Number(String((i&&i.value)||'').replace(/\s/g,'').replace(',','.'));
+  var i=document.getElementById('stFichaPeso'), v=numAR(i&&i.value,true);
   if(!(v>0)||v>100){ toast('Escribí el peso en kilos (ej.: 0,735)',3500); return; }
   v=Math.round(v*1000)/1000;
   f.guardando=true; _stFichaPintar();
@@ -33613,7 +33630,7 @@ function stFrzGuardar(dep,id,borrar,btn){
   if(id)p.id=id;
   if(borrar){ if(!confirm('¿Sacar este freezer de la lista?'))return; p.borrar=true; }
   else{
-    p.nombre=String(($('stFrzN')||{}).value||'').trim(); p.litros=Number(($('stFrzL')||{}).value)||0;
+    p.nombre=String(($('stFrzN')||{}).value||'').trim(); p.litros=numAR(($('stFrzL')||{}).value,true)||0;
     if(!p.nombre){toast('Poné un nombre al freezer');return;}
     if(!(p.litros>0)||p.litros>100000){toast('Poné los litros del freezer');return;}
   }
@@ -39370,8 +39387,8 @@ function catPintarDetalle(){
   var h='<div class="cat-head"><div><div class="cat-title">'+(v('event_name')||'Evento')+'</div><div class="cat-sub">'+_catEsc(e.client_name||'')+' · '+_catFecha(e.event_date)+' · '+_catEsc(_catEstado(e.status))+'</div></div><button class="btn-reload-caja" type="button" onclick="_catDetalle=null;_catPintar()">Volver a Catering</button></div>';
   h+='<section class="card"><div class="st">Ficha del evento</div><form onsubmit="return catGuardarEvento(event)"><div class="fg-row"><div class="fg"><label>Cliente</label><input name="client_name" value="'+v('client_name')+'" required></div><div class="fg"><label>Estado</label><select name="status">'+['lead','quoted','confirmed','in_production','completed','cancelled'].map(function(x){return '<option value="'+x+'" '+(e.status===x?'selected':'')+'>'+_catEstado(x)+'</option>';}).join('')+'</select></div></div><div class="fg-row"><div class="fg"><label>Evento</label><input name="event_name" value="'+v('event_name')+'"></div><div class="fg"><label>Fecha</label><input name="event_date" type="date" value="'+v('event_date').slice(0,10)+'" required></div></div><div class="fg-row"><div class="fg"><label>Invitados estimados</label><input name="guests_expected" type="number" min="0" value="'+(e.guests_expected||0)+'"></div><div class="fg"><label>Listo para servir</label><input name="food_ready_at" type="time" value="'+v('food_ready_at').slice(0,5)+'"></div></div><div class="fg"><label>Notas operativas</label><input name="notes" value="'+v('notes')+'"></div><button class="btn-submit" type="submit">Guardar ficha</button></form></section>';
   h+='<section class="card"><div class="st">Menú</div><div class="cat-list">'+_catLista(d.menu,function(x){return '<div class="cat-event"><b>'+_catEsc(x.item_name)+'</b><div class="cat-sub">'+x.quantity_planned+' '+_catEsc(x.unit)+' · $'+f$(x.unit_sale_price||0)+' c/u</div></div>';},'Todavía no cargaste el menú.')+'</div><form class="fg-row" style="margin-top:10px" onsubmit="return catGuardarFila(event,\'menu\')"><input name="item_name" placeholder="Ej: Pizza muzzarella" required><input name="quantity_planned" type="number" min="0" step="0.5" placeholder="Cantidad" required><select name="unit"><option value="u">unidades</option><option value="porcion">porciones</option><option value="kg">kg</option></select><button class="btn-submit" type="submit">Agregar</button></form></section>';
-  h+='<section class="card"><div class="st">Presupuesto y compras</div><div class="cat-list">'+_catLista(d.lines,function(x){return '<div class="cat-event"><b>'+_catEsc(x.description)+'</b><div class="cat-sub">'+_catCod(x.stage)+' · '+_catCod(x.line_kind)+' · '+_catCod(x.category)+' · '+_catDinero(x.total_amount)+'</div></div>';},'Todavía no cargaste líneas de presupuesto.')+'</div><form class="fg-row" style="margin-top:10px" onsubmit="return catGuardarFila(event,\'line\')"><input name="description" placeholder="Ej: Servicio de pizzas" required><input name="total_amount" type="number" min="0" placeholder="$ total" required><select name="line_kind"><option value="revenue">Venta</option><option value="cost">Costo</option></select><select name="stage"><option value="budget">Presupuesto</option><option value="actual">Real</option></select><button class="btn-submit" type="submit">Agregar</button></form></section>';
-  h+='<section class="card"><div class="st">Cobros</div><div class="cat-list">'+_catLista(d.payments,function(x){return '<div class="cat-event"><b>'+_catCod(x.payment_kind)+'</b><div class="cat-sub">'+_catDinero(x.amount)+' · '+_catCod(x.status)+(x.due_on?' · '+_catFecha(x.due_on):'')+'</div></div>';},'Todavía no cargaste cobros.')+'</div><form class="fg-row" style="margin-top:10px" onsubmit="return catGuardarFila(event,\'payment\')"><input name="amount" type="number" min="0" placeholder="$ monto" required><select name="payment_kind"><option value="deposit">Seña</option><option value="balance">Saldo</option></select><select name="status"><option value="expected">Pendiente</option><option value="received">Recibido</option></select><button class="btn-submit" type="submit">Agregar</button></form></section>';
+  h+='<section class="card"><div class="st">Presupuesto y compras</div><div class="cat-list">'+_catLista(d.lines,function(x){return '<div class="cat-event"><b>'+_catEsc(x.description)+'</b><div class="cat-sub">'+_catCod(x.stage)+' · '+_catCod(x.line_kind)+' · '+_catCod(x.category)+' · '+_catDinero(x.total_amount)+'</div></div>';},'Todavía no cargaste líneas de presupuesto.')+'</div><form class="fg-row" style="margin-top:10px" onsubmit="return catGuardarFila(event,\'line\')"><input name="description" placeholder="Ej: Servicio de pizzas" required><input name="total_amount" type="text" inputmode="decimal" placeholder="$ total" required><select name="line_kind"><option value="revenue">Venta</option><option value="cost">Costo</option></select><select name="stage"><option value="budget">Presupuesto</option><option value="actual">Real</option></select><button class="btn-submit" type="submit">Agregar</button></form></section>';
+  h+='<section class="card"><div class="st">Cobros</div><div class="cat-list">'+_catLista(d.payments,function(x){return '<div class="cat-event"><b>'+_catCod(x.payment_kind)+'</b><div class="cat-sub">'+_catDinero(x.amount)+' · '+_catCod(x.status)+(x.due_on?' · '+_catFecha(x.due_on):'')+'</div></div>';},'Todavía no cargaste cobros.')+'</div><form class="fg-row" style="margin-top:10px" onsubmit="return catGuardarFila(event,\'payment\')"><input name="amount" type="text" inputmode="decimal" placeholder="$ monto" required><select name="payment_kind"><option value="deposit">Seña</option><option value="balance">Saldo</option></select><select name="status"><option value="expected">Pendiente</option><option value="received">Recibido</option></select><button class="btn-submit" type="submit">Agregar</button></form></section>';
   h+=_catFreezerHTML(d);
   h+='<section class="card"><div class="st">Tareas</div><div class="cat-list">'+_catLista(d.tasks,function(x){return '<div class="cat-event"><b>'+_catEsc(x.task_name)+'</b><div class="cat-sub">'+_catCod(x.task_group)+' · '+_catEsc(x.owner_name||'Sin responsable')+'</div></div>';},'Todavía no cargaste tareas.')+'</div><form class="fg-row" style="margin-top:10px" onsubmit="return catGuardarFila(event,\'task\')"><input name="task_name" placeholder="Ej: Confirmar asistentes" required><input name="owner_name" placeholder="Responsable"><select name="task_group"><option value="commercial">Comercial</option><option value="purchases">Compras</option><option value="production">Producción</option><option value="service">Servicio</option><option value="close">Cierre</option></select><button class="btn-submit" type="submit">Agregar</button></form></section>';
   el.innerHTML=h;
@@ -39469,7 +39486,7 @@ function _catFreezerPost(items,modo){
 window.catFreezerSacar=function(ev){
   ev.preventDefault();
   var f=new FormData(ev.target);
-  var a=String(f.get('a')||''), q=Number(f.get('q'))||0;
+  var a=String(f.get('a')||''), q=numAR(f.get('q'),true)||0;
   if(!a||!(q>0)){ toast('Eleg\u00ed el producto y la cantidad'); return false; }
   _catFreezerPost([{a:a,q:q}],'sacar');
   return false;
@@ -39487,7 +39504,7 @@ window.catFreezerDevolver=function(a,max){
 };
 
 function catGuardarEvento(ev){ev.preventDefault();var f=new FormData(ev.target),e=_catDetalle.event,o={id:e.id,event_code:e.event_code,status:f.get('status'),client_name:f.get('client_name'),event_name:f.get('event_name'),event_type:e.event_type||'',venue_name:e.venue_name||'',venue_address:e.venue_address||'',event_date:f.get('event_date'),guests_expected:f.get('guests_expected'),food_ready_at:f.get('food_ready_at')||null,notes:f.get('notes')||''};_catPost('event',o).then(function(){return catAbrir(e.id);}).catch(function(){toast('No pude guardar la ficha');});return false;}
-function catGuardarFila(ev,entity){ev.preventDefault();var f=new FormData(ev.target),o={id:_catId(),event_id:_catDetalle.event.id};f.forEach(function(v,k){o[k]=v;});if(entity==='menu'){o.item_category='menu';o.unit_sale_price=0;}if(entity==='line'){o.category='menu';o.quantity=1;o.unit='u';o.unit_amount=o.total_amount;}if(entity==='payment'){o.due_on=null;}if(entity==='task'){o.sort_order=0;}_catPost(entity,o).then(function(){return catAbrir(_catDetalle.event.id);}).catch(function(){toast('No pude guardar este dato');});return false;}
+function catGuardarFila(ev,entity){ev.preventDefault();var f=new FormData(ev.target),o={id:_catId(),event_id:_catDetalle.event.id};f.forEach(function(v,k){o[k]=(/^(total_amount|amount)$/.test(k)&&isFinite(numAR(v)))?numAR(v):v;});if(entity==='menu'){o.item_category='menu';o.unit_sale_price=0;}if(entity==='line'){o.category='menu';o.quantity=1;o.unit='u';o.unit_amount=o.total_amount;}if(entity==='payment'){o.due_on=null;}if(entity==='task'){o.sort_order=0;}_catPost(entity,o).then(function(){return catAbrir(_catDetalle.event.id);}).catch(function(){toast('No pude guardar este dato');});return false;}
 
 /* LA FOTO DE VENTAS ARMADA EN LA BASE (26/10/2026, 148). Palanca `VENTAS_BASE_ARMA`
    (`sb.pal.ventasArma`; sin fila = no):
@@ -55945,9 +55962,9 @@ if('serviceWorker' in navigator){
      Antes habia cinco (Metas del mes, + Objetivo, + Cargar objetivo, + Meta por
      canal y Cargar las metas). Este abre el plan entero: la facturacion y el
      objetivo de cada area, con el numero del mes anterior al lado. */
-  function _planPesosNum(v){ return Number(String(v||'').replace(/\D/g,'')) || 0; }
+  function _planPesosNum(v){ return Math.round(numAR(v)||0); }
   function _planPesosTxt(n){ n = Math.round(Number(n)||0); return n ? n.toLocaleString('es-AR') : ''; }
-  function _planNum(v){ var n = Number(String(v||'').replace(/\./g,'').replace(',','.')); return isFinite(n) ? n : 0; }
+  function _planNum(v){ var n = numAR(v); return isFinite(n) ? n : 0; }
   window.planPesosFmt = function(inp){ inp.value = _planPesosTxt(_planPesosNum(inp.value)); };
   function _planOpt(lista, actual){
     return lista.map(function(v){ var val = Array.isArray(v) ? v[0] : v, txt = Array.isArray(v) ? v[1] : v;
