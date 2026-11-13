@@ -488,6 +488,10 @@ function _doGetBusqueda() {
   var totalGeneral = 0;
   var ocRows = [];
   var deudas = {};
+  /* (13/11/2026) LO QUE SE RETIRA HOY: las OC en «Pedido» (todavía no recibidas), por proveedor, con la semana en la que
+     va a caer su deuda al recibirse (la misma regla de abajo: la de la OC si es del 7/9 en adelante; si no, la de hoy,
+     que es cuando se la recibe). Solo informa y sostiene los pagos «Al retirar»: no suma a ninguna deuda. */
+  var porRetirar = {};
   // Desde que fecha la semana de la deuda sale de la OC y no de "Fecha Recibido" (ver abajo).
   var DEUDA_SEM_OC_DESDE = new Date(2026, 8, 7);
 
@@ -561,6 +565,14 @@ function _doGetBusqueda() {
     // 7/9/2026; antes, la semana en que se marco recibida (col W "Fecha Recibido",
     // con fallback a la col C). NO usamos semEntPed porque el pedido cliente
     // puede tener Día de Entrega muy viejo (zombi) y arruinar la imputación.
+    if (estado === 'Pedido' && !esDeposito && costoT > 0) {
+      var fCrePR = _parseFechaCualquiera(row[1]), semPR;
+      if (fCrePR instanceof Date && fCrePR >= DEUDA_SEM_OC_DESDE && String(row[2] || '').trim()) semPR = String(row[2]).trim();
+      else semPR = String(_isoWeek(new Date()));
+      if (!porRetirar[prov]) porRetirar[prov] = [];
+      porRetirar[prov].push({ oc: ocNum, sem: semPR, ct: costoT, prod: _renameProd(producto), q: qty,
+        fecha: (fCrePR instanceof Date) ? (('0' + fCrePR.getDate()).slice(-2) + '/' + ('0' + (fCrePR.getMonth() + 1)).slice(-2)) : '' });
+    }
     if (esRecibido && !esDeposito) {
       // Solo se descuenta lo que se pago FUERA del ledger (ver la lista arriba).
       // Todo lo demas cuenta como deuda y se cancela con los pagos del ledger:
@@ -793,6 +805,7 @@ function _doGetBusqueda() {
   Object.keys(_ncPorProv).forEach(function(p) { allProvs[p] = true; });
   Object.keys(pagosImputados).forEach(function(p) { allProvs[p] = true; });
   Object.keys(pagosLibres).forEach(function(p) { allProvs[p] = true; });
+  Object.keys(porRetirar).forEach(function(p) { allProvs[p] = true; });
 
   Object.keys(allProvs).forEach(function(prov) {
     var d = deudas[prov] || { total: 0, semanas: {}, rows: [] };
@@ -831,7 +844,7 @@ function _doGetBusqueda() {
        Solo pagos desde SALDO_FAVOR_DESDE_TS: antes de esto el excedente se
        daba por saldado (Caco +$3.420 en la 37, Le Unike +$200 en la 39) y
        resucitarlo inventaria creditos que ya se arreglaron de palabra. */
-    var aFavor = 0, aFavorDe = [];
+    var aFavor = 0, aFavorDe = [], adelantos = [];
     var ncLista = _ncPorProv[prov] || [];
     var ncSaldo = ncLista.reduce(function (a, x) { return a + x.monto; }, 0), ncAplicadoTot = 0;
     for (var i = 0; i < semKeys.length; i++) {
@@ -849,12 +862,20 @@ function _doGetBusqueda() {
       var pagadoTotalSem = pagadoImp + aplicarLibre + aplicarFavor + aplicarNC;
       var pendiente = Math.max(0, bruto - pagadoTotalSem);
       var sobra = pagadoImp - bruto;
+      /* (13/11/2026) PAGADO AL RETIRAR. Un pago con nota «Al retirar…» que SOBRA en una semana que todavía tiene OC sin
+         recibir no es saldo a favor: es el adelanto de lo que se está retirando. Se sostiene hasta que se reciba todo;
+         recibido, lo que sobre pasa a «a favor» con la regla de siempre (recibieron menos: el proveedor nos debe). */
+      var _adelSem = pagosSem.filter(function (p) { return /^\s*al retirar/i.test(String(p.notas || '')); })
+                             .reduce(function (a, p) { return a + p.tot; }, 0);
+      var _porRetSem = (porRetirar[prov] || []).filter(function (x) { return x.sem === s; }).reduce(function (a, x) { return a + x.ct; }, 0);
+      var adelanto = (sobra > 0.01 && _adelSem > 0 && _porRetSem > 0) ? Math.min(sobra, _adelSem) : 0;
+      if (adelanto > 0) { sobra -= adelanto; adelantos.push({ sem: s, monto: adelanto }); }
       var sobraCuenta = sobra > 0.01 && pagosSem.some(function(p) { return (Number(p.ts) || 0) >= SALDO_FAVOR_DESDE_TS; });
       if (sobraCuenta) { aFavor += sobra; aFavorDe.push({ sem: s, monto: sobra }); }
       semsArr.push({
         sem: s, original: bruto, pagado: pagadoTotalSem, pendiente: pendiente,
         pagosImp: pagosSem, pagadoFifo: aplicarLibre,
-        aFavorAplicado: aplicarFavor, aFavorGenerado: sobraCuenta ? sobra : 0, ncAplicado: aplicarNC,
+        aFavorAplicado: aplicarFavor, aFavorGenerado: sobraCuenta ? sobra : 0, ncAplicado: aplicarNC, adelanto: adelanto,
         items: rowsBySem[s] || [] // detalle de OCs imputadas a esta semana
       });
       totalOriginal += bruto;
@@ -873,7 +894,7 @@ function _doGetBusqueda() {
     /* Con un redondeo marcado en los ultimos 30 dias sigue en la lista aunque
        quede saldado: es donde esta el «Deshacer» (14/10/2026). */
     var _redRec = _redVig.some(function (x) { return x.prov === prov && x.fDate && (Date.now() - x.fDate.getTime()) < 30 * 86400000; });
-    if (totalPendiente > 0.0001 || saldoLibre > 0.01 || aFavor > 0.01 || _redRec || ncLista.length) {
+    if (totalPendiente > 0.0001 || saldoLibre > 0.01 || aFavor > 0.01 || _redRec || ncLista.length || (porRetirar[prov] || []).length) {
       deudasArr.push({
         n: prov,
         total: totalPendiente,
@@ -889,6 +910,8 @@ function _doGetBusqueda() {
         ncAplicado: ncAplicadoTot,
         notasCredito: ncLista.map(function (x) { return { id: x.id, fecha: x.fecha, monto: x.monto, motivo: x.motivo, detalle: x.detalle }; }),
         neto: totalPendiente - aFavor - ncSaldo,
+        porRetirar: porRetirar[prov] || [],
+        adelantos: adelantos,
         redondeos: _redVig.filter(function (x) { return x.prov === prov; })
       });
     }

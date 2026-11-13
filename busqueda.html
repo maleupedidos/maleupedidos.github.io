@@ -718,6 +718,12 @@ body *{touch-action:manipulation}
 .btn-pago-libre{background:#fff !important;color:#331C1C !important;border:1.5px solid #E8DFC4 !important;min-height:44px}
 .deuda-aldia{font-size:13px;font-weight:800;color:#2E7D32;background:#E8F5E9;padding:4px 11px;border-radius:99px}
 .deuda-card.al-dia-card{background:#FBFAF6}
+/* (13/11/2026) «Por retirar» en la tarjeta de PAGOS. */
+.aba-ret{margin-top:10px;padding:10px 12px;border:1px dashed #E8DFC4;border-radius:10px;background:#FFFDF7}
+.aba-ret-h{display:flex;justify-content:space-between;align-items:baseline;font-size:14px;font-weight:800;color:#331C1C}
+.aba-ret-h b{font-variant-numeric:tabular-nums}
+.aba-ret-sub{font-size:11.5px;color:#7A4A4A;margin:3px 0 6px;line-height:1.35}
+.aba-ret .btn-pago-sem{margin-top:8px}
 /* (12/11/2026) «Al día (N)»: plegado al final de PAGOS; un renglón por proveedor que abre su tarjeta. */
 .pg-aldia{margin:14px 16px 8px;border-top:1px dashed #E8DFC4;padding-top:6px}
 .pg-aldia > summary{cursor:pointer;list-style:none;display:flex;align-items:center;gap:8px;padding:8px 4px;font-size:12px;font-weight:700;color:#7A4A4A;text-transform:uppercase;letter-spacing:.03em}
@@ -3331,10 +3337,14 @@ function _renderPagosInner() {
     var pendientesHtml = '';
     var saldadas = [];
     sems.forEach(function(s, si) {
+      /* (13/11/2026) Una semana que solo tiene lo pagado al retirar (nada recibido todavía) no es una semana saldada:
+         va en «Por retirar». */
+      if (!(Number(s.original) > 0) && Number(s.adelanto) > 0) return;
       if (s.pendiente <= 0.01) saldadas.push({ s: s, si: si });
       else { pendientesHtml += _renderSemCard(s, si); }
     });
     html += pendientesHtml;
+    html += _abaPorRetirarHtml(d, idx);
     if (saldadas.length > 0) {
       /* Las mas nuevas primero: es la que uno viene a chequear. */
       var _lzSal = _abaLazyHtml(function () {
@@ -3368,7 +3378,8 @@ function _renderPagosInner() {
   var _netoDe = function (d) { return (d && typeof d.neto === 'number') ? d.neto : (Number(d && d.total) || 0); };
   var _alDiaL = [];
   deudas.forEach(function(d, idx) {
-    if (d && Math.abs(_netoDe(d)) <= 0.01) { _alDiaL.push({ d: d, idx: idx }); return; }
+    /* (13/11/2026) Con mercadería por retirar no está «al día»: va arriba, con su botón de pagar al retirar. */
+    if (d && Math.abs(_netoDe(d)) <= 0.01 && !(d.porRetirar || []).length) { _alDiaL.push({ d: d, idx: idx }); return; }
     var _h0 = html, _t0 = totalDeuda;
     try { _pagoCard(d, idx); }
     catch (eCard) {
@@ -3456,6 +3467,86 @@ function abaPagoLugar(key, id) {
   var mont = document.getElementById('pagoRestante_' + key);
   updatePagoTotal(key, Number((mont && mont.getAttribute('data-sug')) || 0));
 }
+/* (13/11/2026) LO QUE SE RETIRA HOY. Las OC en «Pedido» del proveedor (número, fecha, monto según lo pedido) y lo ya
+   pagado al retirar. «Pagar al retirar» y «Pagar semana N + lo de hoy» arman un PLAN: un pago por semana (la deuda,
+   imputada a su semana; lo de hoy, a la semana de esas OC con la nota «Al retirar: OC-…»). La deuda sigue saliendo de
+   lo recibido: al recibir, si vino menos, la diferencia queda a favor y se descuenta sola de lo próximo. */
+var _abaPlanes = {};
+function _abaPorRetirarHtml(d, idx) {
+  var pr = d.porRetirar || [];
+  if (!pr.length) return '';
+  var adel = {}; (d.adelantos || []).forEach(function (a) { adel[a.sem] = (adel[a.sem] || 0) + (Number(a.monto) || 0); });
+  var porSem = {}, orden = [];
+  pr.forEach(function (x) { if (!porSem[x.sem]) { porSem[x.sem] = { ct: 0, ocs: [] }; orden.push(x.sem); } porSem[x.sem].ct += Number(x.ct) || 0; porSem[x.sem].ocs.push(x.oc); });
+  var tot = 0, pagado = 0, plan = [];
+  orden.forEach(function (sm) {
+    var ct = porSem[sm].ct, a = Math.min(ct, adel[sm] || 0), falta = Math.max(0, ct - a);
+    tot += ct; pagado += a;
+    if (falta > 0.01) plan.push({ sem: sm, monto: falta, notas: 'Al retirar: ' + porSem[sm].ocs.join(', ') });
+  });
+  /* Lo que el proveedor ya nos debe (recibimos menos de lo pagado) se descuenta solo de lo próximo: no se vuelve a pagar. */
+  var favor = Math.max(0, Number(d.aFavor) || 0), usarFavor = 0;
+  plan.forEach(function (x) { var u = Math.min(x.monto, favor - usarFavor); if (u > 0) { x.monto -= u; usarFavor += u; } });
+  plan = plan.filter(function (x) { return x.monto > 0.01; });
+  var falta = Math.max(0, tot - pagado - usarFavor);
+  var h = '<div class="aba-ret"><div class="aba-ret-h"><span>Por retirar</span><b>' + abaFormatMoney(tot) + '</b></div>';
+  h += '<div class="aba-ret-sub">Lo pedido que todavía no se recibió. El monto es el estimado de lo pedido: la deuda real sale de lo que se reciba.</div>';
+  pr.forEach(function (x) {
+    h += '<div class="sem-pago-item"><span class="izq">' + _abaH(x.oc) + (x.fecha ? ' · ' + _abaH(x.fecha) : '') + ' · ' + _abaH(String(x.q || '')) + ' ' + _abaH(x.prod || '') + '</span><span class="der">' + abaFormatMoney(x.ct) + '</span></div>';
+  });
+  if (pagado > 0.01) h += '<div class="sem-pago-item sem-favor"><span class="izq">Ya pagado al retirar</span><span class="der">' + abaFormatMoney(pagado) + '</span></div>';
+  if (usarFavor > 0.01) h += '<div class="sem-pago-item sem-favor"><span class="izq">Lo cubre el saldo a favor</span><span class="der">' + abaFormatMoney(usarFavor) + '</span></div>';
+  if (falta > 0.01) {
+    var kR = 'ret_' + idx;
+    _abaPlanes[kR] = plan;
+    h += '<button class="btn-pago-sem" onclick="togglePagoForm(\'' + kR + '\')">Pagar al retirar (' + abaFormatMoney(falta) + ')</button>';
+    h += renderPagoForm(kR, idx, 'PLAN', falta);
+    /* Con deuda: lo que se debe (cada semana, de la más vieja a la más nueva) + lo de hoy. */
+    var deb = (d.semanas || []).filter(function (s) { return Number(s.pendiente) > 0.01; });
+    if (deb.length) {
+      var kD = 'retd_' + idx, planD = deb.map(function (s) { return { sem: String(s.sem), monto: Number(s.pendiente) || 0, notas: '' }; }).concat(plan);
+      var totD = planD.reduce(function (a, x) { return a + x.monto; }, 0);
+      _abaPlanes[kD] = planD;
+      var lbl = deb.length === 1 ? 'Pagar semana ' + _abaH(String(deb[0].sem)) + ' + lo de hoy' : 'Pagar lo que se debe + lo de hoy';
+      h += '<button class="btn-pago-sem" onclick="togglePagoForm(\'' + kD + '\')">' + lbl + ' (' + abaFormatMoney(totD) + ')</button>';
+      h += renderPagoForm(kD, idx, 'PLAN', totD);
+    }
+  } else if (pagado > 0.01 || usarFavor > 0.01) {
+    h += '<div class="pago-libre-p">Lo que se retira ya está pagado' + (usarFavor > 0.01 ? ' (con el saldo a favor)' : '') + '. Si al recibir viene menos, la diferencia queda a favor.</div>';
+  }
+  return h + '</div>';
+}
+/* Un plan = varios pagos. El monto que se tipeó se reparte en el orden del plan (primero la deuda, después lo de hoy); lo
+   que sobre va al último. El efectivo se usa primero, después la transferencia y la bonificación. */
+function confirmarPagoPlan(key, idx) {
+  var plan = (_abaPlanes[key] || []).map(function (x) { return { sem: x.sem, monto: x.monto, notas: x.notas }; });
+  if (!plan.length) return;
+  var btn = document.getElementById('btnPagar_' + key); if (!btn || btn.disabled) return;
+  var ef = _abaMonto(document.getElementById('pagoEf_' + key).value), mp = _abaMonto(document.getElementById('pagoMp_' + key).value);
+  var bEl = document.getElementById('pagoBonif_' + key), bo = bEl ? _abaMonto(bEl.value) : 0;
+  var notasU = (document.getElementById('pagoNotas_' + key).value || '').trim();
+  var T = ef + mp + bo; if (T <= 0) return;
+  var ctaBox = document.getElementById('pagoCta_' + key); if (ctaBox && mp > 0 && !abaPagoCta[key]) { abaShowToast('Elegí de qué cuenta salió la transferencia'); return; }
+  var lugBox = document.getElementById('pagoLug_' + key); if (lugBox && ef > 0 && !abaPagoLug[key]) { abaShowToast('Elegí de dónde salió el efectivo'); return; }
+  var cta = mp > 0 ? (abaPagoCta[key] || '') : '', lug = ef > 0 ? (abaPagoLug[key] || '') : '';
+  var resto = T, piezas = [];
+  plan.forEach(function (x, i) {
+    var m = (i === plan.length - 1) ? resto : Math.min(resto, x.monto);
+    if (m > 0.004) { piezas.push({ sem: x.sem, monto: m, notas: [x.notas, notasU].filter(Boolean).join(' · ') }); resto -= m; }
+  });
+  var fondos = { ef: ef, mp: mp, bonif: bo };
+  piezas.forEach(function (pz) {
+    var falta = pz.monto;
+    ['ef', 'mp', 'bonif'].forEach(function (k) { var t = Math.min(fondos[k], falta); pz[k] = t; fondos[k] -= t; falta -= t; });
+  });
+  var base = 'pp_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6);
+  btn.disabled = true; btn.textContent = 'Enviando…';
+  piezas.forEach(function (pz, i) {
+    setTimeout(function () {
+      confirmarPago(key, idx, pz.sem, { ef: pz.ef, mp: pz.mp, bonif: pz.bonif, notas: pz.notas, cuenta: pz.mp > 0 ? cta : '', lugar: pz.ef > 0 ? lug : '', coid: base + '_' + i });
+    }, i * 700);
+  });
+}
 function renderPagoForm(key, idx, semana, montoSugerido) {
   /* (8/11/2026) ui_medicion «error-pagos» ×8 (5-6/11, Lucas y Tadeo): con la copia guardada, PAGOS se pinta durante el
      arranque ANTES de llegar a `var abaPagoCta = {}` (más abajo): valía undefined y cada proveedor salía con error. */
@@ -3463,7 +3554,7 @@ function renderPagoForm(key, idx, semana, montoSugerido) {
   if (!abaPagoLug || typeof abaPagoLug !== 'object') abaPagoLug = {};
   delete abaPagoCta[key];
   delete abaPagoLug[key];
-  var titulo = semana ? 'Pago semana ' + semana : 'Pago a cuenta (se descuenta de la deuda más vieja)';
+  var titulo = semana === 'PLAN' ? 'Pago de lo que se retira' : (semana ? 'Pago semana ' + semana : 'Pago a cuenta (se descuenta de la deuda más vieja)');
   var html = '<div class="pago-form" id="pagoForm_' + key + '">';
   html += '<div class="pago-form-title">' + titulo + '</div>';
   // Atajos: tocás "Efectivo" o "Transferencia" y el monto sugerido se autocompleta.
@@ -3501,13 +3592,13 @@ function renderPagoForm(key, idx, semana, montoSugerido) {
     '</div>';
   html += '<textarea class="pago-notas" id="pagoNotas_' + key + '" rows="2" placeholder="Notas (opcional · ej: 1 J&Morrón de regalo)"></textarea>';
   html += '<div class="pago-total-line"><span>Pagando</span><span class="amount" id="pagoTotalLabel_' + key + '">$0</span></div>';
-  html += '<div class="pago-total-line sub"><span>Queda pendiente ' + (semana ? 'sem ' + semana : '') + '</span><span id="pagoRestante_' + key + '" data-sug="' + montoSugerido + '">' + abaFormatMoney(montoSugerido) + '</span></div>';
+  html += '<div class="pago-total-line sub"><span>Queda pendiente ' + (semana && semana !== 'PLAN' ? 'sem ' + semana : '') + '</span><span id="pagoRestante_' + key + '" data-sug="' + montoSugerido + '">' + abaFormatMoney(montoSugerido) + '</span></div>';
   /* data-prov: el formulario sabe de QUIEN es (4/10/2026). `idx` es una posición
      en `busqueda.deudas`, y esa lista se reemplaza sin repintar si llega tarde
      mientras estás tipeando: un proveedor saldado sale de la lista y todos los
      de atrás se corren uno. */
   var provPago = ((busqueda.deudas || [])[idx] || {}).n || '';
-  html += '<button class="btn-pagar" id="btnPagar_' + key + '" data-prov="' + _abaH(provPago) + '" onclick="confirmarPago(\'' + key + '\',' + idx + ',\'' + semana + '\')" disabled>Confirmar pago</button>';
+  html += '<button class="btn-pagar" id="btnPagar_' + key + '" data-prov="' + _abaH(provPago) + '" onclick="' + (semana === 'PLAN' ? 'confirmarPagoPlan(\'' + key + '\',' + idx + ')' : 'confirmarPago(\'' + key + '\',' + idx + ',\'' + semana + '\')') + '" disabled>Confirmar pago</button>';
   html += '</div>';
   return html;
 }
@@ -3577,7 +3668,7 @@ function updatePagoTotal(key, montoSugerido) {
   btnP.textContent = faltaCta ? 'Elegí de qué cuenta salió' : (faltaLug ? 'Elegí de dónde salió el efectivo' : 'Confirmar pago');
 }
 
-function confirmarPago(key, idx, semana) {
+function confirmarPago(key, idx, semana, fz) {
   var deudas = busqueda.deudas || [];
   var d = deudas[idx];
   /* Se busca por el NOMBRE con el que se dibujó el formulario, no por la
@@ -3590,20 +3681,22 @@ function confirmarPago(key, idx, semana) {
   }
   if (!d) return;
 
-  var ef = _abaMonto(document.getElementById('pagoEf_' + key).value);
-  var mp = _abaMonto(document.getElementById('pagoMp_' + key).value);
+  var ef = fz ? fz.ef : _abaMonto(document.getElementById('pagoEf_' + key).value);
+  var mp = fz ? fz.mp : _abaMonto(document.getElementById('pagoMp_' + key).value);
   var bonifEl = document.getElementById('pagoBonif_' + key);
-  var bonif = bonifEl ? _abaMonto(bonifEl.value) : 0;
-  var notas = document.getElementById('pagoNotas_' + key).value || '';
+  var bonif = fz ? fz.bonif : (bonifEl ? _abaMonto(bonifEl.value) : 0);
+  var notas = fz ? (fz.notas || '') : (document.getElementById('pagoNotas_' + key).value || '');
   var total = ef + mp + bonif;
   if (total <= 0) return;
-  var ctaBoxC = document.getElementById('pagoCta_' + key);
-  if (ctaBoxC && mp > 0 && !abaPagoCta[key]) { abaShowToast('Elegí de qué cuenta salió la transferencia'); return; }
-  var lugBoxC = document.getElementById('pagoLug_' + key);
-  if (lugBoxC && ef > 0 && !abaPagoLug[key]) { abaShowToast('Elegí de dónde salió el efectivo'); return; }
+  if (!fz) {
+    var ctaBoxC = document.getElementById('pagoCta_' + key);
+    if (ctaBoxC && mp > 0 && !abaPagoCta[key]) { abaShowToast('Elegí de qué cuenta salió la transferencia'); return; }
+    var lugBoxC = document.getElementById('pagoLug_' + key);
+    if (lugBoxC && ef > 0 && !abaPagoLug[key]) { abaShowToast('Elegí de dónde salió el efectivo'); return; }
+  }
 
-  var btn = document.getElementById('btnPagar_' + key);
-  if (btn.disabled) return;   // un segundo toque no manda otro pago
+  var btn = document.getElementById('btnPagar_' + key) || { textContent: '', disabled: false };
+  if (!fz && btn.disabled) return;   // un segundo toque no manda otro pago (una pieza de un plan ya viene con el botón trabado)
   btn.disabled = true;
   btn.textContent = 'Enviando…';
 
@@ -3616,13 +3709,13 @@ function confirmarPago(key, idx, semana) {
     semana: semana || '',
     notas: notas,
     /* Vacia = la digital por defecto (lo de siempre). Solo viaja si hubo transferencia. */
-    cuenta: mp > 0 ? (abaPagoCta[key] || '') : '',
+    cuenta: fz ? (fz.cuenta || '') : (mp > 0 ? (abaPagoCta[key] || '') : ''),
     /* De que lugar salio el efectivo (5/10/2026). Vacio = caja fuerte. */
-    lugar: ef > 0 ? (abaPagoLug[key] || '') : '',
+    lugar: fz ? (fz.lugar || '') : (ef > 0 ? (abaPagoLug[key] || '') : ''),
     /* El mismo id en todos los reintentos: el servidor no carga dos veces un pago
        que ya escribio (13/9/2026). Antes, si se cortaba la red despues de que
        Apps Script escribiera, la cola lo volvia a mandar y el pago quedaba doble. */
-    clientOpId: 'pp_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8)
+    clientOpId: (fz && fz.coid) || ('pp_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8))
   };
 
   var label = semana ? 'sem ' + semana : 'a cuenta';
@@ -3687,7 +3780,7 @@ function confirmarPago(key, idx, semana) {
     try {
       if (typeof aplicarMovLocal === 'function') {
         var _hp = new Date(), _hoyP = _hp.getFullYear() + '-' + String(_hp.getMonth() + 1).padStart(2, '0') + '-' + String(_hp.getDate()).padStart(2, '0');
-        var _ctaP = mp > 0 ? (abaPagoCta[key] || '') : '';
+        var _ctaP = mp > 0 ? (payload.cuenta || '') : '';
         window._movMedBoton = 'pagoProveedor';   /* el medidor de botones (2/11/2026) */
         if (ef > 0) aplicarMovLocal('gasto', _hoyP, 'Proveedor', 'Pago a ' + d.n, 'Efectivo', ef, notas, '');
         if (mp > 0) aplicarMovLocal('gasto', _hoyP, 'Proveedor', 'Pago a ' + d.n,
