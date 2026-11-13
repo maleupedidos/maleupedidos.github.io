@@ -821,6 +821,9 @@ body{font-family:'Montserrat',-apple-system,'Segoe UI',system-ui,sans-serif;back
 }
 /* (588) Ocupacion de los freezers */
 .aj-dep{display:grid;gap:12px}@media (min-width:900px){.aj-dep{grid-template-columns:1fr 1fr}.aj-dep .aj-note{grid-column:1/-1}}
+.aj-pin-acc{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.aj-pin-est{flex-basis:100%;font-size:12.5px;line-height:1.4}
+.aj-pin-bloq{color:#C62828;font-weight:700}.aj-pin-viejo{color:#8D6E63}
 .dep-oc{margin-top:6px}.dep-oc .st-frz-bar{margin:4px 0 3px}
 .dep-oc-t{font-size:11.5px;color:var(--ink3);line-height:1.3}.dep-oc.aviso .dep-oc-t{color:#C62828}
 .dep-oc-t.vacio{color:#B45309;font-weight:600}
@@ -7263,6 +7266,7 @@ function ajGo(sec){
   ajRender();
 }
 function ajRender(){
+  if((AJ_SEC==='usuarios'||AJ_SEC==='vendedores')&&typeof _esDueno==='function'&&_esDueno())setTimeout(function(){ _ajPinEstadoPintar(false); },30);   /* (685) */
   var b=document.getElementById('ajBody'), h='';
   // Sesion es informacion de ESTE telefono: quien esta adentro y si quedo algo
   // sin sincronizar. No necesita el backend, asi que se dibuja aunque la
@@ -7958,6 +7962,53 @@ function _comoFranja(){
   f.innerHTML='<span>Estás como <b>'+_kEsc(c.nombre||c.usuario)+'</b></span><button type="button" onclick="volverDeComo()">Volver a '+_kEsc(String(c.dueno||'Tadeo').replace(/^./,function(x){return x.toUpperCase();}))+'</button>';
   document.body.classList.add('k-como');
 }
+/* (13/11/2026, 685) VER EL PIN, solo el dueño. Tadeo: «quiero ver los PIN de cada usuario, soy el creador del ERP» (3/11), y
+   hoy Lou no podía entrar y no había cómo saber su PIN. Desde la 685 cada PIN que se genera queda cifrado (clave del Vault)
+   y `pin_ver_directo` lo devuelve SOLO al dueño (y anota quién miró). Los de antes de la 685 no se pueden ver: solo hay hash.
+   `pin_estado_pantalla` dice, por usuario, si se puede ver y si está bloqueado por los 5 intentos. */
+var _AJ_PIN={t:0,d:null,vuelo:null};
+function _ajPinAcc(usr,nom){
+  var u=ajEsc(usr), n=ajEsc(String(nom||usr).replace(/'/g,''));
+  return '<div class="aj-pin-acc" data-pinu="'+u+'">'
+    +'<button type="button" class="aj-btn ghost aj-pin-ver" style="min-height:40px" onclick="ajPinVer(\''+u+'\',\''+n+'\')">Ver PIN</button>'
+    +'<button type="button" class="aj-btn ghost" style="min-height:40px" onclick="ajPinGenerar(\''+u+'\',\''+n+'\')">Generar PIN nuevo</button>'
+    +'<div class="aj-pin-est" hidden></div></div>';
+}
+function _ajPinEstadoPintar(forzar){
+  if(typeof _esDueno!=='function'||!_esDueno())return;
+  var pintar=function(){
+    var L=(_AJ_PIN.d&&_AJ_PIN.d.usuarios)||[], por={}; L.forEach(function(x){ por[String(x.usuario).toLowerCase()]=x; });
+    document.querySelectorAll('#ajBody .aj-pin-acc').forEach(function(el){
+      var x=por[String(el.getAttribute('data-pinu')||'').toLowerCase()], est=el.querySelector('.aj-pin-est'), ver=el.querySelector('.aj-pin-ver');
+      if(!est)return;
+      var h=[];
+      if(x&&x.bloqueadoHasta)h.push('<span class="aj-pin-bloq">Bloqueado hasta las '+ajEsc(x.bloqueadoHasta)+'</span> <button type="button" class="aj-btn sm" onclick="ajPinDesbloquear(\''+ajEsc(x.usuario)+'\')">Desbloquear</button>');
+      if(x&&!x.visible){ if(ver)ver.hidden=true; h.push('<span class="aj-pin-viejo">Se creó antes del 13/11: generá uno nuevo y vas a poder verlo.</span>'); }
+      else if(ver)ver.hidden=false;
+      est.innerHTML=h.join('<br>'); est.hidden=!h.length;
+    });
+  };
+  if(_AJ_PIN.d&&!forzar&&Date.now()-_AJ_PIN.t<60000){ pintar(); return; }
+  if(_AJ_PIN.vuelo)return;
+  _AJ_PIN.vuelo=_baseRpc('pin_estado_pantalla',{}).then(function(d){ _AJ_PIN.d=d; _AJ_PIN.t=Date.now(); _AJ_PIN.vuelo=null; pintar(); },function(){ _AJ_PIN.vuelo=null; });
+}
+function ajPinVer(u,nombre){
+  _baseRpc('pin_ver_directo',{p:{usuario:u}}).then(function(d){
+    var o=document.getElementById('pinOv'); if(!o){o=document.createElement('div');o.id='pinOv';document.body.appendChild(o);}
+    o.className='ent-ov';
+    o.innerHTML='<div class="ent-box" role="dialog" aria-label="PIN"><div class="ent-h"><b>PIN de '+_kEsc(nombre)+'</b></div>'
+      +'<div class="pin-nuevo">'+_kEsc(d.pin)+'</div><p class="ent-nota">Se cierra solo en <b id="pinSeg">10</b> s. Queda anotado que lo miraste.</p>'
+      +'<div style="display:flex;gap:8px"><button type="button" class="aj-btn" style="flex:1;min-height:44px" onclick="navigator.clipboard&&navigator.clipboard.writeText(\''+_kEsc(d.pin)+'\').then(function(){toast(\'PIN copiado\')})">Copiar</button>'
+      +'<button type="button" class="aj-btn ghost" style="flex:1;min-height:44px" onclick="ajPinCerrar()">Listo</button></div></div>';
+    var n=10; clearInterval(_AJ_PIN.reloj);
+    _AJ_PIN.reloj=setInterval(function(){ n--; var e=document.getElementById('pinSeg'); if(e)e.textContent=n; if(n<=0)ajPinCerrar(); },1000);
+  },function(e){ toast((e&&e.message)||'No se pudo', 6000); _ajPinEstadoPintar(true); });
+}
+function ajPinCerrar(){ clearInterval(_AJ_PIN.reloj); var o=document.getElementById('pinOv'); if(o)o.remove(); }
+function ajPinDesbloquear(u){
+  _baseRpc('login_desbloquear_directo',{p:{usuario:u}}).then(function(){ toast('Desbloqueado: ya puede volver a probar su PIN'); _ajPinEstadoPintar(true); },
+    function(e){ toast('No se pudo: '+((e&&e.message)||'sin conexión')); });
+}
 /* «Generar PIN nuevo»: solo el dueño. Se muestra UNA vez, con Copiar; el de antes deja de servir y se cierran sus sesiones. */
 function ajPinGenerar(u,nombre){
   if(!confirm('¿Generar un PIN nuevo para '+nombre+'?\n\nEl PIN de ahora deja de servir y se cierra la sesión que tenga abierta. El nuevo se ve una sola vez.'))return;
@@ -7967,7 +8018,7 @@ function ajPinGenerar(u,nombre){
     o.innerHTML='<div class="ent-box" role="dialog" aria-label="PIN nuevo"><div class="ent-h"><b>PIN nuevo de '+_kEsc(nombre)+'</b></div>'
       +'<div class="pin-nuevo">'+_kEsc(d.pin)+'</div><p class="ent-nota">Se ve esta sola vez: copialo y mandáselo. '+(d.sesionesCerradas?'Se cerraron sus sesiones abiertas.':'')+'</p>'
       +'<div style="display:flex;gap:8px"><button type="button" class="aj-btn" style="flex:1;min-height:44px" onclick="navigator.clipboard&&navigator.clipboard.writeText(\''+_kEsc(d.pin)+'\').then(function(){toast(\'PIN copiado\')});">Copiar</button>'
-      +'<button type="button" class="aj-btn ghost" style="flex:1;min-height:44px" onclick="document.getElementById(\'pinOv\').remove();ajReload();">Listo</button></div></div>';
+      +'<button type="button" class="aj-btn ghost" style="flex:1;min-height:44px" onclick="document.getElementById(\'pinOv\').remove();_AJ_PIN.d=null;ajReload();">Listo</button></div></div>';
   },function(e){ toast('No se pudo: '+((e&&e.message)||'sin conexión')); });
 }
 function _rolVeTodo(){ return typeof SESSION!=='undefined'&&!!SESSION&&(SESSION.rol==='admin'||SESSION.rol==='gerente'); }
@@ -8046,7 +8097,7 @@ function ajUserRow(u,isNew){
     +'<div class="aj-f"><label>Usuario</label><input data-k="usuario" value="'+ajEsc(u.usuario)+'" placeholder="ej: santos"></div>'
     /* (669) El PIN no se «ve» ni se escribe acá: es de 6 números cifrado. Alta: el primero. Después: «Generar PIN nuevo», solo Tadeo. */
     +'<div class="aj-f"><label>PIN</label>'+(isNew?'<input data-k="pin" value="" inputmode="numeric" maxlength="6" autocomplete="off" placeholder="6 números">'
-      :(_esDueno()?'<button type="button" class="aj-btn ghost" style="min-height:40px" onclick="ajPinGenerar(\''+ajEsc(u.usuario)+'\',\''+ajEsc(String(u.nombre||u.usuario).replace(/\'/g,''))+'\')">Generar PIN nuevo</button>'
+      :(_esDueno()?_ajPinAcc(u.usuario,u.nombre)
         :'<span class="aj-pin-txt">'+(u.tienePin?'Tiene PIN':'Sin PIN')+' · lo genera Tadeo</span>'))+'</div>'
     +'<div class="aj-f"><label>Rol</label>'+ajRolSelect(u.rol||'empleado')+'</div>'
     +'<div class="aj-f"><label>Nombre</label><input data-k="nombre" value="'+ajEsc(u.nombre)+'" placeholder="Nombre completo"></div>'
@@ -8412,7 +8463,7 @@ function ajVendRow(v,isNew){
     +'<div class="aj-f"><label>Nombre</label><input data-k="nombre" value="'+ajEsc(v.nombre)+'"></div>'
     +'<div class="aj-f"><label>Usuario</label><input data-k="usuario" value="'+ajEsc(v.usuario)+'"></div>'
     +'<div class="aj-f"><label>PIN</label>'+(isNew?'<input data-k="pin" value="" inputmode="numeric" maxlength="6" autocomplete="off" placeholder="6 números (o vacío: lo saca solo)">'
-      :(_esDueno()?'<button type="button" class="aj-btn ghost" style="min-height:40px" onclick="ajPinGenerar(\''+ajEsc(v.usuario)+'\',\''+ajEsc(String(v.nombre||v.usuario).replace(/\'/g,''))+'\')">Generar PIN nuevo</button>'
+      :(_esDueno()?_ajPinAcc(v.usuario,v.nombre)
         :'<span class="aj-pin-txt">'+(v.tienePin?'Tiene PIN':'Sin PIN')+' · lo genera Tadeo</span>'))+'</div>'
     +'<div class="aj-f"><label>Estado</label><select data-k="estado"><option'+(v.estado==='Activo'?' selected':'')+'>Activo</option><option'+(v.estado!=='Activo'&&v.estado?' selected':'')+'>Inactivo</option></select></div>'
     +'<div class="aj-actions"><button class="aj-btn sm" onclick="ajSaveVend(this)">Guardar</button></div>'
