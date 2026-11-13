@@ -67,6 +67,29 @@ const NAV = 'estSwitch|ajGo|setCrmProdPeriodo|switchTab|stSwitchTab|vSwitchTab|a
      lectura, y mira si lo que se abre dice undefined/NaN o tira error. Nunca toca los toggles que escriben
      (toggleEntrega, toggleCobrado, toggleArmado…): la lista es blanca. */
   const ABRE = 'togglePc|lugDetToggle|cjLibro|vfPanelToggle|hoyQuienes|mrCalOpen|rtPer|pvSetPer|switchSemSel|redCgAbrir|crmOpenCliente|verFichaDePedido|openOrdDetail|prodOpenDetalle|estHogFicha|abaCcAbrir|cobItmAbrir|rutCliVendAbrir|tendVerProducto|stpzAbrir|toggleSem|toggleWeeks|toggleDiaPeds|toggleCollapse|_toggleCobroSec|planSemToggle|semTogglePlegada|togglePrevMonths|rutVerRendidos|rutVerRechazados|rtClVer|showDashboard|stApVer|redObjAbrir|toggleArmadoMasivo';
+  /* (13/11/2026, poda) VOLCAR=<carpeta>: por pantalla guarda el texto visible, los botones (texto + función) y una
+     captura de lo que se ve arriba. Es el «antes» de la poda: qué hay, cuánto texto y cuántos botones. */
+  const volcados = [];
+  const volcar = async (donde0) => {
+    if (!process.env.VOLCAR) return;
+    try {
+      const v = await ev(`(function(){var pg=document.querySelector('.pg.on'); if(!pg)return null;
+        var partes=[]; (function rec(n){ if(n.nodeType===3){ var s=String(n.nodeValue||'').trim(); if(s)partes.push(s); return; }
+          if(n.nodeType!==1)return; var cs=getComputedStyle(n); if(cs.display==='none'||cs.visibility==='hidden'||Number(cs.opacity)<0.05)return;
+          for(var i=0;i<n.childNodes.length;i++)rec(n.childNodes[i]); })(pg);
+        var vis=function(e){return !!(e.offsetWidth||e.offsetHeight);};
+        var bots=[].slice.call(pg.querySelectorAll('button,[onclick]')).filter(vis).map(function(e){var oc=(e.getAttribute('onclick')||'').match(/^[\\s]*(?:event[^;]*;)?\\s*([A-Za-z_$][\\w$]*)/);return ((e.innerText||e.getAttribute('aria-label')||'').replace(/\\s+/g,' ').trim().slice(0,40))+' ['+(oc?oc[1]:'-')+']';});
+        return {txt:partes.join(' | ').slice(0,6000), chars:partes.join(' ').length, bots:bots.slice(0,120), nb:bots.length, alto:document.documentElement.scrollHeight};})()`);
+      if (!v) return;
+      const dir = process.env.VOLCAR; fs.mkdirSync(dir, { recursive: true });
+      const nom = String(volcados.length).padStart(3, '0') + '_' + donde0.replace(/[^A-Za-z0-9]+/g, '_').slice(0, 50);
+      await ev('window.scrollTo(0,0)'); await pausa(200);
+      const f = await cli.enviar('Page.captureScreenshot', { format: 'jpeg', quality: 60 });
+      fs.writeFileSync(path.join(dir, nom + '.jpg'), Buffer.from(f.data, 'base64'));
+      volcados.push({ donde: donde0, foto: nom + '.jpg', ...v });
+      fs.writeFileSync(path.join(dir, 'volcado.json'), JSON.stringify(volcados, null, 1));
+    } catch (e) {}
+  };
   const feosVistos = {}, res = [];
   const abrirDetalles = async (donde0) => {
     const lista = await ev(`(function(){var re=/^\\s*(${ABRE})\\(/; var vis=function(e){return !!(e.offsetWidth||e.offsetHeight||e.getClientRects().length);};
@@ -117,6 +140,7 @@ const NAV = 'estSwitch|ajGo|setCrmProdPeriodo|switchTab|stSwitchTab|vSwitchTab|a
       try { await ev(`go(${JSON.stringify(t)}); 1`); } catch (e) { errores.push({ donde: t, tipo: 'go', msg: String(e.message).slice(0, 200) }); continue; }
       const m0 = await medir();
       res.push({ donde: t, ms: Date.now() - tg, ...m0 });
+      await volcar(t);
       await pausa(800);
       const navs = await ev(`(function(){var re=/^\\s*(${NAV})\\(/; var vis=function(e){return !!(e.offsetWidth||e.offsetHeight||e.getClientRects().length);};
         var pg=document.querySelector('.pg.on'); var vistos={}, l=[];
@@ -130,6 +154,7 @@ const NAV = 'estSwitch|ajGo|setCrmProdPeriodo|switchTab|stSwitchTab|vSwitchTab|a
         await pausa(300);
         const m = await medir();
         res.push({ donde, ms: Date.now() - t0, ...m });
+        await volcar(donde);
         await pausa(700);
         if (process.env.ABRIR) await abrirDetalles(donde);
       }
