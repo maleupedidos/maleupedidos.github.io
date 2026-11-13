@@ -121,8 +121,27 @@ const RESP = {
     arrancado = await evaluar(cli, SENAL).catch(() => false);
   }
 
+  /* (13/11/2026) LA LECTURA VIENE DE LA BASE, NO DE LA URL. Desde el 4/11 `_lecJson` arma `pendientesGuardarStock` desde
+     la base y ya no cae a Apps Script: sin sesión (`?prueba=1`) la lectura fallaba, la card no recibía nada y la prueba
+     daba 9 MAL todo el tiempo —también contra la versión publicada—, que es como se aprende a ignorar un MAL. Se simula
+     donde hoy está la frontera: `_lecJson`, apenas el panel la define y ANTES de abrir RUTA (que pide la lista al
+     arrancar). Con la lectura por URL (sin LEC_ARMA) sigue valiendo el stub del fetch de arriba. */
+  const stubLec = await evaluar(cli, `(function(){
+    if (typeof window._lecJson !== 'function') return 'no hay _lecJson';
+    var real = window._lecJson;
+    window._lecJson = function(accion, args, url, alLlegar){
+      if (accion !== 'pendientesGuardarStock') return real.apply(this, arguments);
+      var cuerpo = window.__descargado ? {ok:true, deposito:[], items:[], pedidos:[], totalRows:0, sinRecibir:0} : window.__RESP;
+      var d = JSON.parse(JSON.stringify(cuerpo));
+      try { if (typeof alLlegar === 'function') alLlegar(d); } catch (e) {}
+      return Promise.resolve(d);
+    };
+    return 'ok';
+  })()`).catch((e) => 'reventó: ' + e.message);
+
   console.log('\n══ La card «Descargar el auto», dibujada ══\n');
   chk('el ERP termino de cargar y registro la sub-app RUTA', arrancado === true);
+  chk('la lectura de la base queda simulada (_lecJson)', stubLec === 'ok', stubLec);
 
   /* Se entra tocando la tab del PANEL, que es `go('ruta')`, como entra Tadeo.
      OJO con `switchTab('ruta')`: existe, pero es otra cosa — son las SUB-TABS de
@@ -165,8 +184,12 @@ const RESP = {
   await evaluar(cli, `switchTab('ruta')`).catch(() => {});
   await new Promise((r) => setTimeout(r, 500));
 
-  await evaluar(cli, `typeof fetchPendientesGuardarStock==='function' && fetchPendientesGuardarStock(true)`).catch(() => {});
-  await new Promise((r) => setTimeout(r, 2500));
+  for (let i = 0; i < 10; i++) {
+    await evaluar(cli, `typeof fetchPendientesGuardarStock==='function' && fetchPendientesGuardarStock(true)`).catch(() => {});
+    await new Promise((r) => setTimeout(r, 500));
+    if (await evaluar(cli, `!!localStorage.getItem('maleu_pgs_v1')`).catch(() => false)) break;
+  }
+  await new Promise((r) => setTimeout(r, 1000));
   await evaluar(cli, `typeof rutRender==='function' && rutRender()`).catch(() => {});
   await new Promise((r) => setTimeout(r, 800));
 
@@ -224,7 +247,7 @@ const RESP = {
   const cortada = await evaluar(cli, `typeof ACCIONES_CORTADAS==='object'&&!!ACCIONES_CORTADAS.marcarGuardadoEnStock&&!(typeof _ordenDirectaOn==='function'&&_ordenDirectaOn('marcarGuardadoEnStock'))`);
   if (cortada) {
     const vista = await evaluar(cli, `(function(){ var hay=Array.prototype.slice.call(document.querySelectorAll('button')).some(function(x){ return /Descargu/i.test(x.textContent||''); });
-      return JSON.stringify({boton:hay, aviso:/se marca desde Abastecimiento/.test(document.body.innerText||'')}); })()`);
+      return JSON.stringify({boton:hay, aviso:/se marca desde (Abastecimiento|Compras)/.test(document.body.innerText||'')}); })()`);
     const v = JSON.parse(vista);
     chk('cortada: no hay boton «Descargué todo»', v.boton === false, v);
     chk('cortada: y la card dice que se marca desde Abastecimiento › Recepción', v.aviso === true, v);
