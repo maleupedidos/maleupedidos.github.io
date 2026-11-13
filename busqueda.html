@@ -887,6 +887,16 @@ details.res-plegada[open]>summary .res-prov-head{margin-bottom:8px}
 .aba-recmodo-b{min-height:40px;border:0;border-radius:9px;background:transparent;font:inherit;font-weight:800;font-size:14px;color:#6d5c52;cursor:pointer;touch-action:manipulation}
 .aba-recmodo-b.on{background:#fff;color:#3b2314;box-shadow:0 1px 3px rgba(0,0,0,.12)}
 #abaCarneHost{padding:0 16px 16px}
+.cc-wa{display:block;width:100%;margin:10px 0 0}
+/* (13/11/2026) Lo pagado a proveedores, por mes (era Egresos › Compras) */
+.aba-pagmes{margin:16px 16px 24px;border:1.5px solid #E8DFC4;border-radius:12px;background:#fff}
+.aba-pagmes > summary{padding:13px 14px;font-weight:800;font-size:14px;color:#331C1C;cursor:pointer;list-style-position:inside}
+.aba-pagmes-b{padding:0 14px 12px}
+.aba-pagmes-m{border-top:1px solid #F1EBE4;padding:8px 0}
+.aba-pagmes-m > summary{display:flex;justify-content:space-between;gap:8px;font-weight:700;font-size:13.5px;cursor:pointer;color:#331C1C}
+.aba-pagmes-f{display:flex;justify-content:space-between;gap:8px;font-size:13px;padding:4px 0 4px 12px;color:#4a3b33}
+.aba-pagmes-f small{color:#8b7a70}
+.aba-pagmes-p{font-size:12px;color:#7A4A4A;margin-top:8px;line-height:1.4}
 </style>
 </head>
 <body>
@@ -3627,8 +3637,49 @@ function _renderPagosInner() {
     + _celP(_pgConDeuda, 'Proveedores con deuda', _pgConDeuda ? 'de ' + deudas.length : 'todos al día', '')
     + _celP(_pgVieja ? 'Semana ' + _pgVieja : '—', 'La más vieja sin pagar', _pgVieja ? (_pgViejaA >= 2 ? 'hace ' + _pgViejaA + ' semanas' : (_pgViejaA === 1 ? 'la semana pasada' : 'esta semana')) : 'nada pendiente', _pgViejaA >= 2 ? 'ojo' : '')
     + '</div>' + html;
+  html += _abaPagadoMesHtml();   /* (13/11) lo que daba Egresos › Compras */
 
   document.getElementById('pagosList').innerHTML = html;
+}
+/* (13/11/2026) LO PAGADO A PROVEEDORES, POR MES — lo único que daba Egresos › Compras y no estaba acá (Egresos pasó a ser
+   solo Gastos). Sale de lo mismo que salía allá: los movimientos de Caja con categoría «Proveedor», sin los vueltos, del
+   panel (`D.movimientos`, `_catMov`, `_esVuelto`, `_egrCleanProv`). Plegado, al pie: arriba está lo que se debe. */
+function _abaPagadoMesHtml() {
+  if (typeof D === 'undefined' || !D || !Array.isArray(D.movimientos) || typeof _catMov !== 'function' || typeof _egrCleanProv !== 'function') return '';
+  var meses = {}, orden = [];
+  D.movimientos.forEach(function (m) {
+    if (!m || m.tipo !== 'gasto' || _catMov(m.cat) !== 'proveedor') return;
+    if (typeof _esVuelto === 'function' && _esVuelto(m)) return;
+    var x = String(m.f || '').match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/); if (!x) return;
+    var k = x[3] + '-' + ('0' + x[2]).slice(-2);
+    if (!meses[k]) { meses[k] = { tot: 0, prov: {} }; orden.push(k); }
+    var pv = _egrCleanProv(m.con), pk = (typeof _egrNorm === 'function') ? _egrNorm(pv) : String(pv).toLowerCase();
+    var M = meses[k], v = Number(m.$) || 0;
+    M.tot += v;
+    if (!M.prov[pk]) M.prov[pk] = { n: pv, tot: 0, c: 0 };
+    M.prov[pk].tot += v; M.prov[pk].c++;
+  });
+  if (!orden.length) return '';
+  orden.sort(); orden.reverse();
+  var NOM = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
+  var h = '<details class="aba-pagmes" id="abaPagMes"' + (_abaPagMesAbierto ? ' open' : '') + ' ontoggle="abaPagMesToggle(this.open)"><summary>Lo pagado a proveedores, por mes</summary><div class="aba-pagmes-b">';
+  orden.slice(0, 4).forEach(function (k, i) {
+    var M = meses[k], provs = Object.keys(M.prov).map(function (q) { return M.prov[q]; }).sort(function (a, c) { return c.tot - a.tot; });
+    h += '<details class="aba-pagmes-m"' + (i === 0 ? ' open' : '') + '><summary><span>' + NOM[Number(k.slice(5)) - 1] + ' ' + k.slice(0, 4) + '</span><b>' + abaFormatMoney(Math.round(M.tot)) + '</b></summary>'
+      + provs.map(function (q) { return '<div class="aba-pagmes-f"><span>' + _abaH(q.n) + ' <small>· ' + q.c + ' pago' + (q.c === 1 ? '' : 's') + '</small></span><span>' + abaFormatMoney(Math.round(q.tot)) + '</span></div>'; }).join('')
+      + '</details>';
+  });
+  h += '<div class="aba-pagmes-p">Lo que se cargó en Caja como pago a un «Proveedor». Lo que se le debe a cada uno está arriba.</div></div></details>';
+  return h;
+}
+/* Abierto o cerrado sobrevive al repintado de Pagar (llegan datos y se rearma la lista). */
+var _abaPagMesAbierto = false;
+function abaPagMesToggle(v) { _abaPagMesAbierto = !!v; }
+function abaPagadoMesAbrir() {
+  _abaPagMesAbierto = true;
+  var d = document.getElementById('abaPagMes'); if (!d) return;
+  d.open = true;
+  try { d.scrollIntoView({ block: 'start', behavior: 'smooth' }); } catch (e) {}
 }
 
 /* Las cuentas digitales que manda `action=busqueda` (13/9/2026). Con una sola no
@@ -6391,6 +6442,29 @@ function _abaCcFechaNorm(s) {
   return _abaCcP2(d) + '/' + _abaCcP2(mo) + '/' + y;
 }
 function _abaCcFechaNum(f) { var m = String(f || '').match(/^(\d{2})\/(\d{2})\/(\d{4})$/); return m ? Number(m[3] + m[2] + m[1]) : 0; }
+/* (13/11/2026) «COPIAR PARA WHATSAPP» DEL PEDIDO DE CARNE (Organizador). Mismo estilo que el de las órdenes de compra
+   (`buildWaText`): el día, cada corte con sus kilos y su detalle («con cordón»), sin precios: los pone el proveedor. */
+function _abaCcWaTexto(c) {
+  var lines = ['Hola! Te paso el pedido de carne para el ' + _abaCcDia(c.fecha).toLowerCase() + ':', ''];
+  (c.lineas || []).forEach(function (l) {
+    /* Sin ceros de más: «22 kg», «18,5 kg» (en la pantalla van con tres decimales; en un mensaje, no). */
+    lines.push('  ' + (Number(l.kg) || 0).toLocaleString('es-AR', { maximumFractionDigits: 3 }) + ' kg × ' + _abaCcNombre(l.abbr, l.corte) + (l.det ? ' (' + l.det + ')' : ''));
+  });
+  lines.push('');
+  lines.push('Gracias!');
+  return lines.join('\n');
+}
+function abaCcCopiarWA(id, btn) {
+  var c = ((abaCc.data && abaCc.data.compras) || []).filter(function (x) { return String(x.id).replace(/[^\w\-]/g, '') === String(id); })[0];
+  if (!c) return;
+  var t = _abaCcWaTexto(c);
+  var listo = function () {
+    if (btn) { btn.textContent = '¡Copiado!'; setTimeout(function () { btn.textContent = 'Copiar para WhatsApp'; }, 1500); }
+    if (navigator.vibrate) navigator.vibrate(30);
+  };
+  var aMano = function () { window.prompt('Copiá el pedido:', t); };
+  if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(t).then(listo, aMano); else aMano();
+}
 function _abaCcDia(f) {
   var m = String(f || '').match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
   if (!m) return f || 'sin fecha';
@@ -6562,7 +6636,7 @@ function _abaCcCard(c) {
       (dif >= 0 ? '+' : '') + pct.toFixed(1).replace('.', ',') + '% contra la factura' +
       (lejos ? '. Es más que la diferencia de balanza: fijate si falta cargar algo de un lado o del otro.' : ' (es la diferencia de balanza).') + '</div>';
   } else if (cuentaPz) {
-    h += '<div class="cc-cruce">No hay piezas pesadas del ' + _abaH(c.fecha.slice(0, 5)) + ' en Productos → RECEPCIÓN CARNE.</div>';
+    h += '<div class="cc-cruce">No hay piezas pesadas del ' + _abaH(c.fecha.slice(0, 5)) + ' en Compras › Recibir · Carne.</div>';
   }
   if (c.nota) h += '<div class="cc-nota">' + _abaH(c.nota) + '</div>';
   if (c.recibio) h += '<div class="cc-recibio">Recibió ' + _abaH(c.recibio) + '</div>';
@@ -6574,6 +6648,8 @@ function _abaCcCard(c) {
       ? '<button type="button" class="cc-b cc-b-ok" onclick="abaCcRecibir(\'' + idJs + '\')">Confirmar lo que llegó</button>'
       : ((!c.fuera && !c.recibio && _abaCcFechaNum(c.fecha) >= 20260918)
         ? '<button type="button" class="cc-b" onclick="abaCcRecibir(\'' + idJs + '\')">Confirmar con los pesos de las cajas</button>' : '');
+    /* (13/11/2026) El pedido de carne, para mandarlo por WhatsApp como las órdenes de compra. */
+    if (esPed) h += '<button type="button" class="btn-wa cc-wa" onclick="abaCcCopiarWA(\'' + idJs + '\',this)">Copiar para WhatsApp</button>';
     h += '<div class="cc-acc">' + rec + '<button type="button" class="cc-b" onclick="abaCcAbrir(\'' + idJs + '\')">' + (esPed ? 'Corregir el pedido' : 'Corregir') + '</button>' +
       '<button type="button" class="cc-b cc-b-x" onclick="abaCcAnular(\'' + idJs + '\')">Anular</button></div>';
   }
