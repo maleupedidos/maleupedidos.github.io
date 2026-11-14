@@ -293,9 +293,9 @@ body.embed .tabs{top:0}
 .cobro-mas-b{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;padding:6px 0 4px}
 .cobro-falta-desc{background:#FFF8E1;border:1px solid #F3D27A;border-radius:8px;padding:8px 11px;margin-top:8px;font-size:12.5px;line-height:1.45;color:#5D4037}
 .armado-sale{padding:0 14px 10px 46px}
-.armado-sale button,.armado-sale span{display:inline-block;background:#F3EEE2;border:1px solid #E8DFC4;border-radius:14px;padding:4px 10px;font:inherit;font-size:12px;font-weight:700;color:#5D4037;min-height:30px;cursor:pointer;text-align:left}
-.armado-sale button b{color:#8D4B2A}
-.armado-sale button:disabled{opacity:.6}
+.armado-sale span{display:block;font-size:12.5px;font-weight:700;color:#8D4B2A;line-height:1.35}
+.armado-sale span::before{content:'';display:inline-block;width:6px;height:6px;border-radius:50%;background:#E5662F;margin:0 7px 1px 0;vertical-align:middle}
+
 .armado-prods .armado-pzc{display:inline-block;font-size:12.5px;font-weight:700;color:#5D4037;background:#FBF6EA;border:1px solid #E8DFC4;border-radius:14px;padding:3px 9px;line-height:1.3;font-variant-numeric:tabular-nums}
 .armado-prods .armado-kgtot{margin-top:6px;padding-top:6px;border-top:1px dashed #E8DFC4;color:#5D4037}
 .armado-prods .armado-kgtot b{color:#8D4B2A;font-variant-numeric:tabular-nums}
@@ -3415,6 +3415,7 @@ function _rutDepTraer(){
 }
 
 function rutDepPedir(force){
+  try{_rutMiDepPedir();}catch(e){}
   if(!force && RUT_DEP && (Date.now()-RUT_DEP_TS)<300000) return;
   _rutDepTraer()
     .then(function(d){
@@ -4081,16 +4082,54 @@ function _rutSaleDeps(e){
 function _rutDepsTodos(){return ((RUT_DEP&&RUT_DEP.deps)||[]).filter(function(d){return d&&d.id&&d.id!=='prueba';});}
 /* El nombre del depósito («Ustariz»), no el del dueño: así lo pidió Tadeo («Sale de Ustariz»). */
 function _rutDepNom(id){var t=_rutDepsTodos();for(var i=0;i<t.length;i++)if(t[i].id===id){var n=String(t[i].nombre||'').replace(/^dep[oó]sito\s+/i,'').trim();if(n)return n;}return String(id||'').charAt(0).toUpperCase()+String(id||'').slice(1);}
+/* (702, 14/11/2026) MI DEPÓSITO: de qué freezer saca quien está usando la app (`mi_deposito`). Tadeo armó el #2478 y
+   preguntó «¿qué significa sale de Moresco?»: la tarjeta decía «Sale de Ustariz · pasar a Moresco» en todos los pedidos y
+   se leía al revés. Ahora, si todo sale del depósito de quien arma (el caso de siempre), NO se muestra nada; solo si algo
+   sale de OTRO, una línea de aviso («Sale de Moresco: 1 Pizza J&Q»). El cambio de depósito va al «…» de la tarjeta.
+   Sin el dato (la base no contestó, o el usuario no tiene depósito) se toma el primero, que es el que usa la base por defecto. */
+var RUT_MIDEP=null, RUT_MIDEP_TS=0;
+function _rutMiDepPedir(){
+  if(RUT_MIDEP_TS&&Date.now()-RUT_MIDEP_TS<600000)return;
+  RUT_MIDEP_TS=Date.now();
+  if(typeof _sbPermiso!=='function')return;
+  Promise.resolve(_sbPermiso()).catch(function(){return null;}).then(function(sb){
+    if(!sb||!sb.url||!sb.token)return;
+    return fetch(sb.url+'/rest/v1/rpc/mi_deposito',{method:'POST',headers:{apikey:sb.key,Authorization:'Bearer '+sb.token,'Content-Type':'application/json'},body:'{}'})
+      .then(function(r){return r.ok?r.json():null;}).then(function(d){
+        var v=(d&&d.ok&&d.deposito)?String(d.deposito):'';
+        if(v!==RUT_MIDEP){RUT_MIDEP=v;var av=document.getElementById('armadoView');if(av&&!av.classList.contains('hidden'))try{renderArmado();}catch(e){}}
+      });
+  }).catch(function(){});
+}
+function _rutMiDep(){var t=_rutDepsTodos();if(RUT_MIDEP)for(var i=0;i<t.length;i++)if(t[i].id===RUT_MIDEP)return RUT_MIDEP;return t.length?t[0].id:'';}
+/* Lo que sale de un depósito que NO es el mío: [{dep, items:[[cant, nombre]]}]. null si no se sabe. */
+function _rutSaleAjeno(e){
+  var ds=_rutSaleDeps(e); if(!ds)return null;
+  var mio=_rutMiDep(), oD=(e&&e.oD)||{}, por={};
+  Object.keys(oD).forEach(function(a){
+    var x=oD[a]; if(!x||typeof x!=='object'||!x.w||_esKg(a))return;
+    Object.keys(x.w).forEach(function(k){var q=Number(x.w[k])||0;if(q>0&&k!==mio)(por[k]=por[k]||[]).push([q,(typeof PROD_NAMES!=='undefined'&&PROD_NAMES[a])||a]);});
+  });
+  return Object.keys(por).map(function(k){return {dep:k,items:por[k]};});
+}
+function _rutSaleClave(e){return String(e.h)+'|'+String(e.id).replace(/[^A-Za-z0-9_-]/g,'');}
 function _rutSaleDeChip(e){
   if(!e||e.h==='Red'||e.es==='Entregado')return '';
-  var ds=_rutSaleDeps(e); if(!ds||!ds.length)return '';
-  var todos=_rutDepsTodos(), destino=null;
-  if(ds.length===1){for(var i=0;i<todos.length;i++)if(todos[i].id!==ds[0]){destino=todos[i].id;break;}}
-  else if(todos.length)destino=todos[0].id;   /* repartido en dos: todo al primero */
-  var txt='Sale de '+ds.map(_rutDepNom).join(' y ');
-  if(!destino)return '<div class="armado-sale"><span>'+_rutEscR(txt)+'</span></div>';
-  return '<div class="armado-sale"><button type="button" onclick="event.stopPropagation();rutSaleDe(\''+String(e.h)+'|'+String(e.id).replace(/[^A-Za-z0-9_-]/g,'')+'\',\''+destino+'\',this)">'
-    +_rutEscR(txt)+' <b>· pasar a '+_rutEscR(_rutDepNom(destino))+'</b></button></div>';
+  var aj=_rutSaleAjeno(e); if(!aj||!aj.length)return '';
+  return '<div class="armado-sale">'+aj.map(function(g){
+    return '<span>Sale de '+_rutEscR(_rutDepNom(g.dep))+': '+_rutEscR(g.items.map(function(it){return it[0]+' '+it[1];}).join(', '))+'</span>';
+  }).join('')+'</div>';
+}
+/* La opción del «…»: si todo sale de mi depósito, pasarlo al otro; si algo sale de otro, traerlo todo al mío. */
+function _rutSaleDeMenu(e){
+  if(!e||e.h==='Red'||e.es==='Entregado')return '';
+  var aj=_rutSaleAjeno(e); if(!aj)return '';
+  var mio=_rutMiDep(), destino='';
+  if(aj.length)destino=mio;
+  else{var t=_rutDepsTodos();for(var i=0;i<t.length;i++)if(t[i].id!==mio){destino=t[i].id;break;}}
+  if(!destino)return '';
+  return '<button type="button" role="menuitem" class="k-menu-i" onclick="event.stopPropagation();kitMenuCerrar();rutSaleDe(\''+_rutSaleClave(e)+'\',\''+destino+'\',null)">Sale de otro depósito<small>'
+    +(aj.length?'que salga todo de ':'que salga de ')+_rutEscR(_rutDepNom(destino))+'</small></button>';
 }
 function _rutNoAlcanzaTxt(q,dep){
   return (q||[]).map(function(x){return (PROD_NAMES[x.a]||x.a)+' (en '+_rutDepNom(dep)+' hay '+(Number(x.hay)||0)+', pide '+(Number(x.pide)||0)+')';}).join(', ');
@@ -4133,7 +4172,7 @@ function _renderArmadoCard(e){
   var cancelBtn=isRed?'':'<div class="k-nuevo armado-mas" onclick="event.stopPropagation()">'
     +'<button type="button" class="armado-mas-b" onclick="event.stopPropagation();kitMenu(this,event)" aria-haspopup="menu" aria-expanded="false" aria-label="Más acciones de '+(e.c||'').replace(/"/g,'&quot;')+'">'
     +'<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg></button>'
-    +'<div class="k-menu" role="menu" hidden><button type="button" role="menuitem" class="k-menu-i armado-mas-peligro" onclick="event.stopPropagation();kitMenuCerrar();confirmarCancelar(\''+key+'\',\''+(e.c.replace(/\'/g,""))+'\')">Cancelar pedido<small>se revierte el stock al depósito</small></button></div></div>';
+    +'<div class="k-menu" role="menu" hidden>'+_rutSaleDeMenu(e)+'<button type="button" role="menuitem" class="k-menu-i armado-mas-peligro" onclick="event.stopPropagation();kitMenuCerrar();confirmarCancelar(\''+key+'\',\''+(e.c.replace(/\'/g,""))+'\')">Cancelar pedido<small>se revierte el stock al depósito</small></button></div></div>';
   // Tag "+OC" solo si el pedido es Mixto (parte D + parte OC). Si es Mixto, sí
   // va al Armado: hay que sacar la parte D del freezer y aclarar que el resto
   // viene del proveedor.
