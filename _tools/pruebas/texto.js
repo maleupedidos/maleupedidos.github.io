@@ -118,10 +118,16 @@ const CONTAR = `(function(){
       const navs = await ev(`(function(){var re=/^\\s*(${NAV})\\(/; var pg=document.querySelector('.pg.on'); if(!pg)return [];
         var vis=function(e){return !!(e.offsetWidth||e.offsetHeight||e.getClientRects().length);}; var vistos={}, l=[];
         Array.from(pg.querySelectorAll('[onclick]')).forEach(function(e){ var oc=e.getAttribute('onclick')||''; if(re.test(oc)&&vis(e)&&!vistos[oc]){vistos[oc]=1;l.push([oc,(e.innerText||'').trim().slice(0,24)]);} });
+        /* (14/11/2026) Una vista que pasó a un desplegable se sigue midiendo: cada opción es una pantalla. */
+        Array.from(pg.querySelectorAll('select[onchange]')).forEach(function(e){ var oc=e.getAttribute('onchange')||''; if(!re.test(oc)||!vis(e)||oc.indexOf('this.value')<0)return;
+          Array.from(e.options).forEach(function(o){ var k='sel:'+oc+'='+o.value; if(vistos[k])return; vistos[k]=1; l.push([k,o.textContent.trim().slice(0,24)]); }); });
         return l;})()`);
       if (!navs.length) { const m = await medir(); res.push({ donde: t, ...m }); continue; }
       for (const [oc, lab] of navs.slice(0, 14)) {
-        const ok = await ev(`(function(){var e=Array.from(document.querySelectorAll('.pg.on [onclick]')).find(function(x){return x.getAttribute('onclick')===${JSON.stringify(oc)};}); if(!e)return false; e.click(); window.scrollTo(0,0); return true;})()`);
+        const ok = oc.startsWith('sel:') ? await ev(`(function(){var k=${JSON.stringify(oc.slice(4))},i=k.lastIndexOf('='),on=k.slice(0,i),v=k.slice(i+1);
+            var e=Array.from(document.querySelectorAll('.pg.on select[onchange]')).find(function(x){return x.getAttribute('onchange')===on;}); if(!e)return false;
+            e.value=v; e.dispatchEvent(new Event('change',{bubbles:true})); window.scrollTo(0,0); return true;})()`)
+          : await ev(`(function(){var e=Array.from(document.querySelectorAll('.pg.on [onclick]')).find(function(x){return x.getAttribute('onclick')===${JSON.stringify(oc)};}); if(!e)return false; e.click(); window.scrollTo(0,0); return true;})()`);
         if (!ok) continue;
         await pausa(3500);
         const m = await medir();

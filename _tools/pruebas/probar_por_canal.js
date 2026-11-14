@@ -59,7 +59,7 @@ async function esperar(cli, expr, ms = 120000) {
       try{rtPer('sem')}catch(e){}
       var bs=[].slice.call(document.querySelectorAll('#hRetail .rt-dia')), dias=[];
       bs.forEach(function(b){
-        var iso=((b.getAttribute('onclick')||'').match(/\\d{4}-\\d{2}-\\d{2}/)||[])[0]; if(!iso)return;
+        var iso=((b.getAttribute('data-dia')||b.getAttribute('onclick')||'').match(/\\d{4}-\\d{2}-\\d{2}/)||[])[0]; if(!iso)return;
         var n=Number((b.querySelector('b')||{}).textContent); if(!(n>0))return;
         rtDiaVer(iso);
         var dd=document.querySelector('#hRetail .rt-dd'), t=dd?dd.textContent:'';

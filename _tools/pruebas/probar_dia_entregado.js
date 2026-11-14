@@ -114,7 +114,7 @@ const STUB = `
     if (!await esperar(cli, `document.querySelectorAll('#hRetail .rt-dia').length===7`, 20000)) { console.log('  no se dibujaron los 7 dias de Ventas retail', JSON.stringify(await ev(cli, `[document.querySelectorAll('#hRetail .rt-dia').length, (document.getElementById('hRetail')||{}).textContent.slice(0,300), window.__err]`))); salir(1); }
     chk('ya no está el desplegable «📅 Sem N» de abajo', (await ev(cli, `!!document.getElementById('sem-body-actual')`)) === false);
     const abrir = async iso => { await ev(cli, `rtDiaVer('${iso}')`); await pausa(250); return await ev(cli, `window.__tx(document.querySelector('#hRetail .rt-dd'))`) || ''; };
-    const cuadro = iso => ev(cli, `window.__tx([].filter.call(document.querySelectorAll('#hRetail .rt-dia'),function(b){return (b.getAttribute('onclick')||'').indexOf('${iso}')>-1;})[0])`);
+    const cuadro = iso => ev(cli, `window.__tx([].filter.call(document.querySelectorAll('#hRetail .rt-dia'),function(b){return (b.getAttribute('data-dia')||b.getAttribute('onclick')||'').indexOf('${iso}')>-1;})[0])`);
 
     console.log('\n-- lunes 14: Carolina, reservada y pagada, sin entregar --');
     const lun = await abrir('2026-09-14');
