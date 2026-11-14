@@ -75,9 +75,11 @@ const CONTAR = `(function(){
   var SELC='button,select,input:not([type=hidden]),textarea,summary,a[href],a[onclick],[role=button],[role=tab],[onclick]';
   var ctrl=0,ctrlL=[];
   [].slice.call(pg.querySelectorAll(SELC)).forEach(function(e){
-    /* se mira desde el PADRE: los botones hermanos (pestañas, chips, opciones) cuentan todos; lo que se dedupe son las
-       filas repetidas de una lista, que llevan los mismos controles adentro */
-    if(!visible(e)||(e.parentElement&&filaRepetida(e.parentElement)))return;
+    /* Una LISTA cuenta una fila: los controles adentro de filas repetidas, y las filas que son ellas mismas el control
+       (más de 25 caracteres: un pedido, un día, un cliente). Los botones hermanos CORTOS (pestañas, chips, opciones)
+       cuentan todos: cada uno es una opción a la vista. */
+    var repe=(e.parentElement&&filaRepetida(e.parentElement))||((e.innerText||'').trim().length>25&&filaRepetida(e));
+    if(!visible(e)||repe)return;
     var p=e.parentElement&&e.parentElement.closest(SELC); if(p&&pg.contains(p)&&p!==pg)return;
     ctrl++; ctrlL.push((e.innerText||e.value||e.getAttribute('aria-label')||e.tagName).trim().replace(/\\s+/g,' ').slice(0,24));
   });
