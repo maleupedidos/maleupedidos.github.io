@@ -75,7 +75,9 @@ const CONTAR = `(function(){
   var SELC='button,select,input:not([type=hidden]),textarea,summary,a[href],a[onclick],[role=button],[role=tab],[onclick]';
   var ctrl=0,ctrlL=[];
   [].slice.call(pg.querySelectorAll(SELC)).forEach(function(e){
-    if(!visible(e)||filaRepetida(e))return;
+    /* se mira desde el PADRE: los botones hermanos (pestañas, chips, opciones) cuentan todos; lo que se dedupe son las
+       filas repetidas de una lista, que llevan los mismos controles adentro */
+    if(!visible(e)||(e.parentElement&&filaRepetida(e.parentElement)))return;
     var p=e.parentElement&&e.parentElement.closest(SELC); if(p&&pg.contains(p)&&p!==pg)return;
     ctrl++; ctrlL.push((e.innerText||e.value||e.getAttribute('aria-label')||e.tagName).trim().replace(/\\s+/g,' ').slice(0,24));
   });
