@@ -36,6 +36,8 @@ const CONTAR = `(function(){
     return false;
   }
   function visible(e){
+    /* lo de adentro de un desplegable cerrado no se ve (la ⓘ que se abre no cuenta) */
+    var dt=e.closest&&e.closest('details:not([open])'); if(dt&&!(e.closest('summary')&&e.closest('summary').parentElement===dt))return false;
     for(var x=e;x&&x!==document.body;x=x.parentElement){var cs=getComputedStyle(x);if(cs.display==='none'||cs.visibility==='hidden'||Number(cs.opacity)<0.05)return false;}
     var r=e.getBoundingClientRect();return r.width>0&&r.height>0;
   }
