@@ -296,6 +296,8 @@ else
   echo "   Sin eso los hashes difieren y parece un deploy fallado."
   echo "   Y que el CDN lo entregue se confirma aparte, con un archivo que NO"
   echo "   esta protegido, CON la version en la direccion (como lo registra el ERP):"
-  echo "     curl -s \"https://app.maleu.com.ar/sw-panel.js?v=$(sed -n 's/^var CN='\''\(.*\)'\'';.*/\1/p' sw-panel.js | head -1)\" | grep -o 'maleu-panel-v[0-9]*'"
+  echo "     curl -s \"https://app.maleu.com.ar/sw-panel.js?v=$(sed -n 's/^var CN='\''\(.*\)'\'';.*/\1/p' sw-panel.js | head -1)&comprobar=\$RANDOM\" | grep -o 'maleu-panel-v[0-9]*'"
   echo "   Sin el ?v= Cloudflare devuelve una copia de hasta 4 h: parece que no se publico y no es asi (13/11/2026)."
+  echo "   OJO: nunca pidas la direccion EXACTA ?v=<version> antes de que Pages termine: Cloudflare guarda la VIEJA"
+  echo "   bajo esa clave hasta 4 h y los celulares quedan pegados (paso con la v1166). Por eso el &comprobar=."
 fi
