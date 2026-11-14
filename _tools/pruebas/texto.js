@@ -11,6 +11,8 @@
      · un token con un dígito o un $ no cuenta (número, monto, fecha, %);
      · una palabra con Mayúscula inicial que NO arranca una oración es un nombre propio (cliente, producto, barrio);
      · de una LISTA (3 o más filas hermanas con la misma clase) cuenta solo la primera fila: las demás son datos cargados.
+   (14/11, segunda vuelta) También cuenta los CONTROLES visibles (botones, desplegables, campos, chips, todo lo que se toca;
+   de una lista, los de la primera fila) y lista los NÚMEROS CORTADOS (un monto que no entra en su caja).
    Saca el total y las «frases» (textos sueltos de 3 o más palabras contadas), que son lo que hay que mirar.
    No hace falta que la cuenta sea perfecta: hace falta que sea la MISMA antes y después. */
 'use strict';
@@ -45,7 +47,7 @@ const CONTAR = `(function(){
      (conceptos, clientes, productos), no texto de la pantalla. La primera fila sí cuenta: ahí se ve el molde. */
   function filaRepetida(e){
     for(var x=e;x&&x!==pg;x=x.parentElement){
-      var p=x.parentElement; if(!p||!x.className||typeof x.className!=='string')continue;
+      var p=x.parentElement; if(!p||typeof x.className!=='string'||(!x.className&&x.tagName!=='TR'&&x.tagName!=='LI'))continue;
       var igual=0,ant=0,hs=p.children;
       for(var i=0;i<hs.length;i++){ if(hs[i].tagName===x.tagName&&hs[i].className===x.className){ igual++; if(hs[i]===x)ant=igual-1; } }
       if(igual>=3&&ant>0)return true;
@@ -67,8 +69,27 @@ const CONTAR = `(function(){
     }
     n+=c; if(c>=3)frases.push(s.slice(0,140));
   }
+  /* (14/11/2026, segunda vuelta) CONTROLES: botones, desplegables, campos, chips y todo lo que se toca, visibles.
+     Un control adentro de otro cuenta una vez; de una lista, solo los de la primera fila. */
+  var SELC='button,select,input:not([type=hidden]),textarea,summary,a[href],a[onclick],[role=button],[role=tab],[onclick]';
+  var ctrl=0,ctrlL=[];
+  [].slice.call(pg.querySelectorAll(SELC)).forEach(function(e){
+    if(!visible(e)||filaRepetida(e))return;
+    var p=e.parentElement&&e.parentElement.closest(SELC); if(p&&pg.contains(p)&&p!==pg)return;
+    ctrl++; ctrlL.push((e.innerText||e.value||e.getAttribute('aria-label')||e.tagName).trim().replace(/\\s+/g,' ').slice(0,24));
+  });
+  /* NÚMEROS CORTADOS: un monto o un número que no entra en su caja (scrollWidth > clientWidth) */
+  var cortados=[];
+  [].slice.call(pg.querySelectorAll('*')).forEach(function(e){
+    if(e.children.length>2||!visible(e))return;
+    var t=(e.innerText||'').trim(); if(!t||t.length>24||!/[0-9]/.test(t))return;
+    var cs=getComputedStyle(e);
+    if(e.scrollWidth>e.clientWidth+1&&e.clientWidth>0&&cs.overflow!=='visible'&&cs.overflowX!=='visible')cortados.push(String(e.className||e.tagName).split(' ')[0].slice(0,20)+' «'+t+'»');
+    else{var r=e.getBoundingClientRect(),pr=e.parentElement&&e.parentElement.getBoundingClientRect();
+      if(pr&&cs.whiteSpace==='nowrap'&&r.right>pr.right+1&&getComputedStyle(e.parentElement).overflow!=='visible')cortados.push(String(e.className||e.tagName).split(' ')[0].slice(0,20)+' «'+t+'» (sale)');}
+  });
   var txt=(pg.innerText||'').slice(0,500);
-  return {n:n,frases:frases.slice(0,60),carg:/Cargando|Trayendo/.test(txt)&&txt.length<300};
+  return {n:n,ctrl:ctrl,ctrlL:ctrlL.slice(0,80),cortados:cortados.slice(0,20),frases:frases.slice(0,60),carg:/Cargando|Trayendo/.test(txt)&&txt.length<300};
 })()`;
 
 (async () => {
@@ -103,9 +124,11 @@ const CONTAR = `(function(){
       }
     }
     const bloq = await ev('window.__bloqueados||[]');
-    console.log('pantalla'.padEnd(46) + 'palabras');
-    res.forEach(r => console.log('  ' + r.donde.padEnd(44) + String(r.n).padStart(6) + (r.carg ? '  (sin cargar)' : '')));
-    console.log('  ' + 'TOTAL'.padEnd(44) + String(res.reduce((a, r) => a + (r.n || 0), 0)).padStart(6));
+    console.log('pantalla'.padEnd(46) + 'palabras  controles');
+    res.forEach(r => console.log('  ' + r.donde.padEnd(44) + String(r.n).padStart(6) + String(r.ctrl || 0).padStart(11) + (r.carg ? '  (sin cargar)' : '')));
+    console.log('  ' + 'TOTAL'.padEnd(44) + String(res.reduce((a, r) => a + (r.n || 0), 0)).padStart(6) + String(res.reduce((a, r) => a + (r.ctrl || 0), 0)).padStart(11));
+    const cort = res.filter(r => r.cortados && r.cortados.length);
+    if (cort.length) { console.log('números cortados:'); cort.forEach(r => console.log('  ' + r.donde + ': ' + r.cortados.join(' · '))); }
     console.log('escrituras cortadas: ' + bloq.length);
     if (OUT) fs.writeFileSync(OUT, JSON.stringify(res, null, 1));
   } finally { cli.matar(); }
