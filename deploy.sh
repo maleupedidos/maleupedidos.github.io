@@ -295,5 +295,7 @@ else
   echo "   El 'tr -d' no es opcional: la copia local es CRLF y git guarda LF."
   echo "   Sin eso los hashes difieren y parece un deploy fallado."
   echo "   Y que el CDN lo entregue se confirma aparte, con un archivo que NO"
-  echo "   esta protegido:  curl -s https://app.maleu.com.ar/sw-panel.js"
+  echo "   esta protegido, CON la version en la direccion (como lo registra el ERP):"
+  echo "     curl -s \"https://app.maleu.com.ar/sw-panel.js?v=$(sed -n 's/^var CN='\''\(.*\)'\'';.*/\1/p' sw-panel.js | head -1)\" | grep -o 'maleu-panel-v[0-9]*'"
+  echo "   Sin el ?v= Cloudflare devuelve una copia de hasta 4 h: parece que no se publico y no es asi (13/11/2026)."
 fi
