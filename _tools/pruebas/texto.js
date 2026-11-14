@@ -9,7 +9,8 @@
      · se saltea lo que está adentro de un botón, link, select, summary, tab, chip o segmentado (si dice ≤ 5 palabras),
        y las celdas de una tabla (son datos);
      · un token con un dígito o un $ no cuenta (número, monto, fecha, %);
-     · una palabra con Mayúscula inicial que NO arranca una oración es un nombre propio (cliente, producto, barrio).
+     · una palabra con Mayúscula inicial que NO arranca una oración es un nombre propio (cliente, producto, barrio);
+     · de una LISTA (3 o más filas hermanas con la misma clase) cuenta solo la primera fila: las demás son datos cargados.
    Saca el total y las «frases» (textos sueltos de 3 o más palabras contadas), que son lo que hay que mirar.
    No hace falta que la cuenta sea perfecta: hace falta que sea la MISMA antes y después. */
 'use strict';
@@ -38,10 +39,21 @@ const CONTAR = `(function(){
     for(var x=e;x&&x!==document.body;x=x.parentElement){var cs=getComputedStyle(x);if(cs.display==='none'||cs.visibility==='hidden'||Number(cs.opacity)<0.05)return false;}
     var r=e.getBoundingClientRect();return r.width>0&&r.height>0;
   }
+  /* Una LISTA (filas hermanas con la misma clase, 3 o más) cuenta una sola fila: lo de las demás es dato cargado
+     (conceptos, clientes, productos), no texto de la pantalla. La primera fila sí cuenta: ahí se ve el molde. */
+  function filaRepetida(e){
+    for(var x=e;x&&x!==pg;x=x.parentElement){
+      var p=x.parentElement; if(!p||!x.className||typeof x.className!=='string')continue;
+      var igual=0,ant=0,hs=p.children;
+      for(var i=0;i<hs.length;i++){ if(hs[i].tagName===x.tagName&&hs[i].className===x.className){ igual++; if(hs[i]===x)ant=igual-1; } }
+      if(igual>=3&&ant>0)return true;
+    }
+    return false;
+  }
   var n=0,frases=[],w=document.createTreeWalker(pg,NodeFilter.SHOW_TEXT,null),t;
   while((t=w.nextNode())){
     var s=String(t.nodeValue||'').replace(/\\s+/g,' ').trim(); if(!s)continue;
-    var el=t.parentElement; if(!el||!visible(el)||boton(el))continue;
+    var el=t.parentElement; if(!el||!visible(el)||boton(el)||filaRepetida(el))continue;
     var toks=s.split(' '),c=0,ini=true;
     for(var i=0;i<toks.length;i++){
       var k=toks[i], lim=k.replace(/^[^A-Za-zÁÉÍÓÚÑÜáéíóúñü]+|[^A-Za-zÁÉÍÓÚÑÜáéíóúñü]+$/g,'');
