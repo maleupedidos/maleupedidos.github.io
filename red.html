@@ -1639,6 +1639,7 @@ const PRODUCTOS = [
   { id:52, cat:"Almacén",          nombre:"Aceite de Oliva Coratina 1 L (PET)",       precio:34000 },
 ];
 
+
 // Session state
 let session = null; // { nombre, wa, comision, partido, localidad }
 // % de comisión de ESTE vendedor. Viene de la hoja Vendedores (col J) vía
@@ -6259,7 +6260,7 @@ function _redBajaDesdePrecios(d) {
     var a = null;
     Object.keys(ABBR_TO_ID).forEach(function (k) { if (ABBR_TO_ID[k] === p.id) a = k; });
     var x = a && d[a];
-    if (x && typeof x.b === 'boolean' && !!p.baja !== x.b) { p.baja = x.b; cambio = true; }
+    if (x && typeof x.b === 'boolean' && !!p.baja !== (x.b || !!p._catBaja)) { p.baja = x.b || !!p._catBaja; cambio = true; }
   });
   if (cambio) { try { renderProducts(); } catch (e) {} }
 }
@@ -6291,9 +6292,48 @@ function _syncPreciosPortal() {
     .catch(function(){ /* sin conexión → precios hardcodeados */ });
 }
 
+/* (703, 14/11/2026) EL CATÁLOGO DEL PORTAL VIENE DE LA BASE (`catalogo_red`). Tadeo: «Dar de alta» deja el producto
+   listo en todos lados. La lista de arriba queda de RESPALDO y es la misma que se cargó en la base ese día (medido:
+   39 de 39 idénticos, mismo orden). Se cambia EN EL LUGAR (`PRODUCTOS` es el mismo arreglo) y cada producto conserva
+   el precio que ya tenía: los precios siguen llegando de `precios`, como siempre. `_catBaja` = no se vende en Red
+   (lo prende o apaga el dueño en Productos), y le gana al «dado de baja» de los precios. */
+function _redCatAplicar(l) {
+  if (!Array.isArray(l) || l.length < 10) return false;
+  if (!l.every(function (x) { return x && Number(x.id) > 0 && x.cat && x.nombre; })) return false;
+  var precio = {}; PRODUCTOS.forEach(function (p) { precio[p.id] = p.precio; });
+  var nueva = l.map(function (x) {
+    var p = { id: Number(x.id), cat: String(x.cat), nombre: String(x.nombre), precio: precio[Number(x.id)] || 0 };
+    if (x.baja) { p.baja = true; p._catBaja = true; }
+    return p;
+  });
+  var clave = function (a) { return JSON.stringify(a.map(function (p) { return [p.id, p.cat, p.nombre, !!p.baja]; })); };
+  var sinPrecio = nueva.some(function (p) { return !p.baja && !(p.precio > 0); });
+  l.forEach(function (x) {
+    if (x.abbr && ABBR_TO_ID[x.abbr] == null && !RED_CARNES.some(function (c) { return c.abbr === x.abbr; })) ABBR_TO_ID[x.abbr] = Number(x.id);
+    if (x.abbr && !PROD_NAME_BY_ABBR[x.abbr]) PROD_NAME_BY_ABBR[x.abbr] = String(x.nombre);   /* el nombre en los pedidos */
+  });
+  if (clave(nueva) === clave(PRODUCTOS)) return false;
+  PRODUCTOS.length = 0; nueva.forEach(function (p) { PRODUCTOS.push(p); });
+  if (sinPrecio) { try { _syncPreciosPortal(); } catch (e) {} }
+  return true;
+}
+var _redCatTs = 0;
+function _redCatPedir() {
+  if (_redCatTs && Date.now() - _redCatTs < 300000) return;
+  _redCatTs = Date.now();
+  if (typeof _baseRpc !== 'function') return;
+  _baseRpc('catalogo_red', {}).then(function (d) {
+    var l = d && d.productos; if (!Array.isArray(l)) return;
+    try { localStorage.setItem('maleu_red_cat', JSON.stringify(l)); } catch (e) {}
+    if (_redCatAplicar(l)) { try { renderProducts(); } catch (e) {} }
+  }).catch(function () { _redCatTs = Date.now() - 240000; });   /* sin la base: se reintenta en un minuto */
+}
+
 /* ═══════ INIT ═══════ */
+try { _redCatAplicar(JSON.parse(localStorage.getItem('maleu_red_cat') || 'null')); } catch (e) {}
 renderProducts();
 _syncPreciosPortal();
+_redCatPedir();
 _syncPreciosCombos();   /* (655) los precios de los combos, los mismos de la tienda */
 
 // Modo embebido: detectar ?embed=1 → ocultar header, deshabilitar logout local
