@@ -42324,6 +42324,18 @@ function _eerrStockPie(){
   return t;
 }
 
+/* (14/11/2026) LOS SUELDOS QUE FALTAN PAGAR SALEN DE «SUELDOS DE LA QUINCENA» (`sueldos_quincena_pantalla`, 699/700).
+   Hasta acá el renglón era un prorrateo del mes («14 de 30 días · el mes entero son $2.400.000, se pagan del 1 al 5»),
+   pero desde el 13/11 los sueldos se pagan por quincena: lo pendiente de verdad es lo que esa pantalla dice que falta.
+   Si la base no contesta (o no hay permiso de Caja), queda el prorrateo de antes. */
+var _finSq={d:null,t:0,vuelo:false,err:''};
+function _finSqPedir(cb){
+  if(_finSq.vuelo||(_finSq.d&&Date.now()-_finSq.t<120000))return;
+  if(typeof _baseRpc!=='function'){_finSq.err='sin base';return;}
+  _finSq.vuelo=true;
+  _baseRpc('sueldos_quincena_pantalla',{p:{}}).then(function(d){_finSq.d=d;_finSq.t=Date.now();_finSq.err='';},function(e){_finSq.err=String((e&&e.message)||e);})
+    .then(function(){_finSq.vuelo=false;try{cb();}catch(e){}});
+}
 function rEERR_financiero(body){
   var mn=eerrMes.getMonth()+1,anio=eerrMes.getFullYear();
   var F=_finCalc(mn,anio),A=F.av,mesNom=F.mesNom,mesMin=mesNom.toLowerCase();
@@ -42337,7 +42349,7 @@ function rEERR_financiero(body){
   var html='<div class="eerr-eco">';
 
   if(F.nEst>0){
-    html+='<div class="eerr-aviso"><b>'+F.nEst+' cobro'+(F.nEst>1?'s':'')+' sin fecha de cobro</b> ('+plata(F.cobrEst)+'): se cuentan en el mes en que se entregaron.</div>';
+    html+='<div class="eerr-aviso"><b>'+F.nEst+' cobro'+(F.nEst>1?'s':'')+' sin fecha de cobro</b> ('+plata(F.cobrEst)+')</div>';
   }
 
   /* ── HOY: cuanta plata hay y cuanta esta libre. Solo en el mes de hoy: en un
@@ -42352,18 +42364,21 @@ function rEERR_financiero(body){
     pc.detVD.forEach(function(x){cxc.push({l:(x.h||'')+' #'+(x.n||'?')+' · '+(x.c||'?'),m:x.m});});
     pc.detRed.forEach(function(x){cxc.push({l:'Red #'+(x.n||'?')+' · '+(x.br||x.c||'?'),m:x.m});});
     cxc.sort(function(a,b){return b.m-a.m;});
-    var sc=_sueldoComprometido(mn,anio),sueldos=sc.adeudado+sc.delMes;
+    var sc=_sueldoComprometido(mn,anio),sq=_finSq.d;
+    _finSqPedir(repintar);
+    var sueldos=sq?(Number(sq.falta)||0):(_finSq.err?sc.adeudado+sc.delMes:null);
     var PLm=_eerrMesGastos(pd.getMonth()+1,pd.getFullYear()).L;
     var planes=Math.max(0,(PLm.planes||0)-(F.rub.planes.m||0));
     var ymC=anio+'-'+String(mn).padStart(2,'0'),piso=Number(eerrConfig('CAJA_MINIMA',ymC))||0;
-    libre=caja-(deuda||0)-sueldos-planes;
+    libre=caja-(deuda||0)-(sueldos||0)-planes;
+    var libreSabe=deuda!==null&&sueldos!==null;
     var sig=MES_ORD[mn%12].toLowerCase();
 
     html+='<div class="eerr-hero '+(libre>=piso?'pos':'neg')+'" id="eerrHoy">';
-    html+='<div class="eerr-hero-l">Hoy · '+('0'+hoyD.getDate()).slice(-2)+'/'+('0'+mn).slice(-2)+'</div>';
-    html+='<div class="eerr-hero-v">Hay <b style="color:var(--ink)">'+plata(caja)+'</b> en caja · libres <b id="eerrLibreV">'+(deuda===null?'…':plata(libre))+'</b></div>';
-    html+='<div class="eerr-hero-s">'+(deuda===null?'Calculando lo que se les debe a los proveedores…'
-      :'Libre es lo que queda después de lo que ya se debe. '+(piso>0?(libre>=piso?'Está <b>'+plata(libre-piso)+'</b> por encima del piso de '+plata(piso)+'.':'<b style="color:var(--r)">Faltan '+plata(piso-libre)+'</b> para el piso de '+plata(piso)+'.'):''))+'</div>';
+    /* (14/11/2026, poda) El libre es el número; «en caja» va en la cuenta de abajo y en los chips. */
+    html+='<div class="eerr-hero-l">Libre hoy</div>';
+    html+='<div class="eerr-hero-v"><b id="eerrLibreV">'+(!libreSabe?'…':plata(libre))+'</b></div>';
+    html+='<div class="eerr-hero-s">'+(!libreSabe?'':(piso>0?(libre>=piso?plata(libre-piso)+' arriba del piso':'<b style="color:var(--r)">'+plata(piso-libre)+' abajo del piso</b>'):''))+'</div>';
     html+='<div class="eerr-ctas" id="eerrCuentas">';
     (sl.cuentas||[{nombre:'Efectivo',saldo:sl.ef},{nombre:'Digital',saldo:sl.dig}]).forEach(function(c){
       html+='<span><i>'+esc(c.nombre)+'</i> '+plata(c.saldo)+'</span>';
@@ -42374,26 +42389,28 @@ function rEERR_financiero(body){
     /* La cuenta de "libre", renglon por renglon */
     var fl='';
     function rl(o){fl+=_eerrFila(o,{hayP:false,base:0,baseP:0});}
-    rl({id:'f:caja',lbl:'En caja',sub:'todas las cuentas, con las inversiones',val:caja,cls:'pos',
+    rl({id:'f:caja',lbl:'En caja',val:caja,cls:'pos',
       hijos:(sl.cuentas||[]).map(function(c){return {lbl:esc(c.nombre),val:c.saldo};}).concat(inv>0?[{lbl:'Inversiones',val:inv}]:[])});
-    rl({id:'f:prov',lbl:'− Proveedores',sub:deuda===null?'calculando…':'lo que se les debe hoy',val:-(deuda||0),
+    rl({id:'f:prov',lbl:'− Proveedores',sub:deuda===null?'calculando…':'',val:-(deuda||0),
       hijos:deudaD.map(function(d){return {lbl:esc(d.n)+(d.sem?' <span class="x">desde la semana '+d.sem+'</span>':''),val:-d.m};})});
     /* El subtitulo dice que el numero es lo trabajado por dias y cuanto es el mes
        entero (Tadeo, 13/10/2026: «se pagan del 1 al 5» solo hacia creer que el
        renglon era el monto a pagar). No cambia ninguna cuenta. */
-    rl({id:'f:sue',lbl:'− Sueldos',sub:A.dia+' de '+A.dias+' días de '+mesMin+' · el mes entero son '+plata(sc.fijoMes)+', se pagan del 1 al 5 de '+sig
-        +(sc.adeudado>0.5?' · incluye '+plata(sc.adeudado)+' de meses anteriores sin girar':''),val:-sueldos,
-      hijos:[{lbl:'De meses anteriores, sin girar',val:-sc.adeudado},
-        {lbl:'De '+mesMin+', por los '+A.dia+' días que van',val:-sc.delMes,txt:'El mes entero son '+plata(sc.fijoMes)+'.'}].filter(function(h){return h.val!==0;})});
-    if(planes>0)rl({id:'f:pla',lbl:'− Planes del mes sin pagar',sub:'estimado con lo de '+pNom,val:-planes});
-    rl({id:'f:lib',lbl:'= Libre hoy',val:libre,cls:'fin '+(libre>=piso?'pos':'neg')});
-    rl({id:'f:cxc',lbl:'+ Te deben',sub:cxc.length+' pedido'+(cxc.length===1?'':'s')+' entregados sin cobrar',val:pc.total,cls:'pos',
+    if(sq){
+      var qh=String((sq.quincena||{}).hasta||'').split('-');
+      rl({id:'f:sue',lbl:'− Sueldos de la quincena',sub:qh.length===3?'vence el '+Number(qh[2])+'/'+Number(qh[1]):'',val:-sueldos,
+        hijos:(sq.personas||[]).filter(function(p){return Number(p.falta)>0.5;}).map(function(p){return {lbl:esc(p.persona),val:-Number(p.falta)};})});
+    }else{
+      rl({id:'f:sue',lbl:'− Sueldos',sub:sueldos===null?'calculando…':'',val:-(sueldos||0)});
+    }
+    if(planes>0)rl({id:'f:pla',lbl:'− Planes sin pagar',val:-planes});
+    /* (14/11/2026, poda) «= Libre hoy» repetía el número grande de arriba */
+    rl({id:'f:cxc',lbl:'+ Te deben',val:pc.total,cls:'pos',
       hijos:cxc.map(function(x){return {lbl:esc(x.l),val:x.m};})});
     rl({id:'f:tot',lbl:'= Cobrando todo',val:libre+pc.total,cls:'tot'});
-    html+='<div class="eerr-card eerr-tblw" id="eerrLibre"><div class="eerr-card-h">Cuánto está libre · tocá un renglón para abrirlo</div>';
+    html+='<div class="eerr-card eerr-tblw" id="eerrLibre"><div class="eerr-card-h">Cómo se llega</div>';
     html+='<table class="eerr-t2"><tbody>'+fl+'</tbody></table>';
-    html+='<div class="eerr-pie" id="eerrStockPie">'+(_eerrStockVal===null?'Mercadería en el freezer: calculando…'
-      :'Mercadería en el freezer, al costo: <b>'+plata(_eerrStockVal)+'</b>. No entra en la cuenta: no se puede gastar hasta que se venda.')+'</div>';
+    html+='<div class="eerr-pie" id="eerrStockPie">'+(_eerrStockVal===null?'':'Mercadería al costo: <b>'+plata(_eerrStockVal)+'</b>')+'</div>';
     html+='</div>';
     /* El flujo de fondos proyectado, aca adentro (21/10/2026). */
     html+='<div id="eerrProy">'+_proyHtml(repintar)+'</div>';
@@ -42418,7 +42435,7 @@ function rEERR_financiero(body){
         d='<span class="eerr-t-d '+(Math.abs(ch)<0.5?'':(bien?'ok':'mal'))+'">'+(s?'↗':'↘')+' '+_dec(Math.abs(ch),0)+'% contra '+pNom+'</span>';
       }
     }
-    return '<div class="eerr-t" id="'+id+'"><div class="eerr-t-l">'+lbl+'</div><div class="eerr-t-v">'+_eerrCorto(val)+'</div><div class="eerr-t-p">'+(A.enCurso?'en '+A.dia+' días de '+mesMin:'en '+mesMin)+'</div>'+d+'</div>';
+    return '<div class="eerr-t" id="'+id+'"><div class="eerr-t-l">'+lbl+'</div><div class="eerr-t-v">'+_eerrCorto(val)+'</div>'+d+'</div>';
   }
   html+='<div class="eerr-tiles eerr-tiles3">';
   html+=tile('eerrTEnt','Entró',F.entradas,P.entradas,false);
@@ -42437,10 +42454,10 @@ function rEERR_financiero(body){
     var cw=(body&&body.clientWidth>200)?Math.min(body.clientWidth,860):720;
     var dos=cw>=640,W=Math.max(300,Math.round(dos?(cw-12)/2-30:cw-30));
     html+='<div class="eerr-graf" id="eerrGraf">';
-    html+='<div class="eerr-card"><div class="eerr-card-h">Lo que entró · últimos '+serie.length+' meses</div>'+_eerrLinea(serie.map(function(s){return {l:s.l,v:s.f.entradas,curso:s.curso,sel:s.sel};}),W,'#8A5A3C')+'</div>';
-    html+='<div class="eerr-card"><div class="eerr-card-h">Cuánto subió la caja cada mes · entró menos salió</div>'+_eerrLinea(serie.map(function(s){return {l:s.l,v:s.f.flujo,curso:s.curso,sel:s.sel};}),W,'#2E7D4F')+'</div>';
+    html+='<div class="eerr-card"><div class="eerr-card-h">Entró por mes</div>'+_eerrLinea(serie.map(function(s){return {l:s.l,v:s.f.entradas,curso:s.curso,sel:s.sel};}),W,'#8A5A3C')+'</div>';
+    html+='<div class="eerr-card"><div class="eerr-card-h">Flujo por mes</div>'+_eerrLinea(serie.map(function(s){return {l:s.l,v:s.f.flujo,curso:s.curso,sel:s.sel};}),W,'#2E7D4F')+'</div>';
     html+='</div>';
-    if(A.enCurso)html+='<div class="eerr-graf-n">El tramo punteado es '+mesMin+', que va por la mitad: no es una caída.</div>';
+
   }
 
   /* ── La tabla del mes ── */
@@ -42455,7 +42472,7 @@ function rEERR_financiero(body){
     return {lbl:'Cobranzas '+c.k,val:c.m,pv:hayP?pv:undefined};
   });
   if(F.otrosIng>0||(hayP&&P.otrosIng>0))hE.push({lbl:'Otros ingresos',val:F.otrosIng,pv:hayP?P.otrosIng:undefined,det:dets(F.otrosIngD).map(function(d){return {lbl:esc(d.con),val:d.m};})});
-  filas+=_eerrFila({id:'f:ent',lbl:'Entró',sub:'lo cobrado en el mes, se haya entregado cuando se haya entregado',val:F.entradas,cls:'pos',pv:hayP?P.entradas:undefined,
+  filas+=_eerrFila({id:'f:ent',lbl:'Entró',val:F.entradas,cls:'pos',pv:hayP?P.entradas:undefined,
     nota:'Las liquidaciones de la Red no se suman aparte: ya están en los pedidos cobrados.',hijos:hE},cx);
   var unSolo=_sueldoPersonas().length<=1;
   var hS=F.rubros.map(function(r){
@@ -42463,16 +42480,18 @@ function rEERR_financiero(body){
     return {m:r.m,pm:pr.m,lbl:(r.id==='sueldo'&&unSolo)?'Sueldo girado a Tadeo':r.lbl,val:-r.m,pc:F.salidas>0&&r.m>0?pct(r.m,F.salidas)+' de lo que salió':'',pv:hayP?-pr.m:undefined,
       det:dets(r.det).map(function(d){return {lbl:esc(d.con)+(d.n>1?' <span class="x">×'+d.n+'</span>':''),val:-d.m};})};
   }).filter(function(h){return h.m>0||h.pm>0;}).sort(function(a,b){return b.m-a.m;});
-  filas+=_eerrFila({id:'f:sal',lbl:'− Salió',sub:'lo pagado en el mes, por el día en que se pagó',val:-F.salidas,pv:hayP?-P.salidas:undefined,
+  filas+=_eerrFila({id:'f:sal',lbl:'− Salió',val:-F.salidas,pv:hayP?-P.salidas:undefined,
     nota:'Los pagos a proveedores son plata que salió, no el costo de lo vendido: una compra grande baja la caja aunque el mes sea bueno.',hijos:hS},cx);
   filas+=_eerrFila({id:'f:flu',lbl:'= '+(F.flujo>=0?'La caja subió':'La caja bajó'),val:F.flujo,cls:'fin '+(F.flujo>=0?'pos':'neg'),pv:hayP?P.flujo:undefined},cx);
-  html+='<div class="eerr-card eerr-tblw" id="eerrMesTbl"><div class="eerr-card-h">La caja de '+mesMin+' · tocá un renglón para abrirlo</div>';
+  html+='<div class="eerr-card eerr-tblw" id="eerrMesTbl"><div class="eerr-card-h">La caja de '+mesMin+'</div>';
   html+='<table class="eerr-t2"><thead><tr><th></th><th class="num">'+mesNom+(A.enCurso?' (día '+A.dia+')':'')+'</th>'+(hayP?'<th class="num ant">'+P.mesNom+'</th>':'')+'</tr></thead><tbody>'+filas+'</tbody></table>';
-  html+='<div class="eerr-pie">El porcentaje chico es sobre lo que entró en ese mes.</div></div>';
+  html+='</div>';
 
   /* ── Sueldos, en limpio ── */
+  /* (14/11/2026, poda) «Sueldos de <mes>» sale: decía que se pagan del 1 al 5 y desde el 13/11 van por quincena
+     (Ruta › Cobranza › Sueldos, y el renglón de arriba). */
   var fijoS=_sueldoFijoMes(mn,anio),girS=F.rub.sueldo.m;
-  if(fijoS>0||girS>0){
+  if(false&&(fijoS>0||girS>0)){
     var persS=_sueldoPersonas(),tS=_sueldoCuentasTxt(mn,anio),sigS=MES_ORD[mn%12].toLowerCase();
     html+='<div class="eerr-card" id="eerrSueldos"><div class="eerr-card-h">Sueldos de '+mesMin+'</div>';
     html+='<table class="eerr-t2 eerr-sue"><tbody>';
@@ -42536,7 +42555,6 @@ function rEERR_financiero(body){
         ['Ajustes de caja',0,-b('ajuste'),'Diferencias de arqueo: mueven la caja y no son un gasto.']
       ];
       var sE=0,sC=0;
-      html+='<div class="eerr-be-n" style="margin:8px 0">El <b>resultado</b> cuenta lo que se vendió y lo que costó, se haya cobrado o pagado o no. La <b>caja</b> cuenta la plata que se movió. Acá está la diferencia, renglón por renglón.</div>';
       html+='<div class="eerr-6w"><table class="eerr-t2 eerr-pu"><thead><tr><th></th><th class="num">Resultado</th><th class="num">Caja</th><th class="num">Diferencia</th></tr></thead><tbody>';
       PU.forEach(function(r){
         sE+=r[1];sC+=r[2];
@@ -42945,13 +42963,13 @@ function _resEco(box){
   function mrow(n,f,c,sub){var mb=f-c,mp=f>0?mb/f*100:0;
     return '<div class="res-dr"><span class="res-dr-n">'+_resE(n)+(sub?'<small>'+sub+'</small>':'')+'</span><span class="res-dr-v">'+_resP(f)+'</span><span class="res-dr-m'+(mp>=25?' ok':(mp<18?' bajo':''))+'">'+_dec(mp,1)+'%</span></div>';}
   if(cans.length){
-    h+='<details class="res-card res-det"'+(RES.abiertos.canal?' open':'')+' ontoggle="RES.abiertos.canal=this.open"><summary class="res-card-t">Por canal <span>vendido y margen bruto</span></summary>'
+    h+='<details class="res-card res-det"'+(RES.abiertos.canal?' open':'')+' ontoggle="RES.abiertos.canal=this.open"><summary class="res-card-t">Por canal</summary>'
       +'<div class="res-dr res-dr-h"><span>Canal</span><span>Vendido</span><span>Margen</span></div>';
     cans.forEach(function(c){var n=R.ent[c.k]||0;h+=mrow(CN[c.k]||c.k,c.f,c.c,n?f$(n)+' entregas · '+_resP(c.f/n)+' c/u':'');});
     h+='</details>';
   }
   var FA=_eerrFamilias(mn,anio);
-  h+='<details class="res-card res-det"'+(RES.abiertos.fam?' open':'')+' ontoggle="RES.abiertos.fam=this.open"><summary class="res-card-t">Por familia <span>vendido y margen bruto</span></summary>';
+  h+='<details class="res-card res-det"'+(RES.abiertos.fam?' open':'')+' ontoggle="RES.abiertos.fam=this.open"><summary class="res-card-t">Por familia</summary>';
   if(!FA){var fe=_eerrFamErr[anio+'-'+mn];h+='<div class="res-vacio">'+(fe?'No pude traer el detalle. <button type="button" class="k-vacio-acc" onclick="_eerrFamPed={};_eerrFamErr={};resPintar()">Reintentar</button>':'Cargando…')+'</div>';}
   else{h+='<div class="res-dr res-dr-h"><span>Familia</span><span>Vendido</span><span>Margen</span></div>';
     FA.fams.forEach(function(x){h+=mrow(x.n,x.f,x.c,x.q?f$(Math.round(x.q))+(x.u?' '+_resE(x.u):'')+(x.q>0?' · '+_resP(x.f/x.q)+' c/u':''):'');});}
@@ -43120,7 +43138,7 @@ function _resGas(box){
   }
   function fila(z,tot){
     var tipo=_resTipo(z.t),cambio=RES.clases&&RES.clases[z.t.clave];
-    var sub=_resPct(z.a,tot)+' del '+(tipo==='fijo'?'fijo':'variable')
+    var sub=_resPct(z.a,tot)
       +(z.s!==null&&Math.abs(z.s)>=1?' · <span class="res-vs '+(z.s>0?'mal':'bien')+'">'+(z.s>0?'↗ ':'↘ ')+Math.abs(Math.round(z.s))+'%</span>':(z.b<=0.5?' · nuevo':''));
     return '<div class="res-g">'
       +'<div class="res-g-i"><b>'+_resE(z.t.nom)+'</b><span>'+sub+'</span></div>'
@@ -43129,7 +43147,7 @@ function _resGas(box){
       +'</div>';
   }
   var LF=lista('fijo',false),totF=LF.reduce(function(a,z){return a+z.a;},0);
-  h+='<div class="res-card"><div class="res-card-t">Dónde recortar <span>gastos fijos, de mayor a menor</span></div>';
+  h+='<div class="res-card"><div class="res-card-t">Dónde recortar</div>';
   LF.slice(0,10).forEach(function(z){h+=fila(z,totF);});
   if(LF.length>10){h+='<details class="res-mas"><summary>'+(LF.length-10)+' más</summary>';LF.slice(10).forEach(function(z){h+=fila(z,totF);});h+='</details>';}
   h+='</div>';
@@ -43214,7 +43232,24 @@ function _proyArmar(){
      Lo girado a mitad de mes es adelanto y ya bajo lo que falta. */
   var d1=Number(eerrConfig('DIA_GIRO_1',ymHoy))||5;
   var giros=_sueldoGirosPorMes();
-  _sueldoPersonas().forEach(function(p){
+  /* (14/11/2026) DESDE EL 13/11 SE PAGA POR QUINCENA. Con «Sueldos de la quincena» a mano (`_finSq`): lo que falta de
+     esta quincena va el día que vence (si ya pasó, hoy), y cada quincena que sigue hasta el final del horizonte, con lo
+     mismo que esta (sin representantes: su liquidación va abajo, con la de la Red). Sin ese dato, lo de antes. */
+  var SQ=(typeof _finSq!=='undefined'&&_finSq.d)?_finSq.d:null;
+  if(SQ){
+    var qh=String((SQ.quincena||{}).hasta||'').split('-').map(Number), venc=qh.length===3?new Date(qh[0],qh[1]-1,qh[2]):hoy;
+    var fq=function(d){return d<hoy?hoy:d;};
+    var sigQ=function(d){return d.getDate()===15?new Date(d.getFullYear(),d.getMonth()+1,0):new Date(d.getFullYear(),d.getMonth()+1,15);};
+    (SQ.personas||[]).forEach(function(p){
+      if(p.tipo==='representante')return;
+      var falta=Number(p.falta)||0, tot=Number(p.total)||0;
+      if(falta>0.5)pon({f:fq(venc),tipo:'out',lbl:'Sueldo '+p.persona+' · esta quincena',$:falta,atr:venc<hoy?venc:null,org:'Sueldos de la quincena'});
+      if(p.tipo==='suplente'||!(tot>0.5))return;
+      for(var d=sigQ(venc),k=0;k<6&&d<=hasta;d=sigQ(d),k++)
+        pon({f:d,tipo:'out',lbl:'Sueldo '+p.persona+' · quincena al '+_proyDm(d),$:tot,org:'Sueldos de la quincena · como esta'});
+    });
+  }
+  if(!SQ)_sueldoPersonas().forEach(function(p){
     var mn=hoy.getMonth()+1,an=hoy.getFullYear();
     var c=_sueldoCuenta(mn,an,p.k);if(!c)return;
     var fijo=_sueldoFijoMes(mn,an,p.k),pm=mn===1?12:mn-1,pa=mn===1?an-1:an;
@@ -43369,15 +43404,14 @@ function _proyHtml(repintar){
     else dias.some(function(d){if(d.saldo<piso){bajo={f:d.f,v:d.saldo};return true;}return false;});
   }
 
-  var h='<div class="eerr-sec-t" id="proySec">Lo que viene · día por día</div>';
+  var h='<div class="eerr-sec-t" id="proySec">Próximas semanas</div>';
   if(bajo)h+='<div class="eerr-aviso proy-bajo" id="proyBajo"><b>'+(bajo.hoy?'Hoy':'El '+DIAS[bajo.f.getDay()].toLowerCase()+' '+_proyDm(bajo.f))+' la caja queda abajo del piso</b>: '+plata(bajo.v)
-    +' contra '+plata(piso)+' de CAJA_MINIMA (faltan '+plata(piso-bajo.v)+'). Es el primer día; tocalo abajo para ver qué sale ese día.</div>';
+    +' (faltan '+plata(piso-bajo.v)+')</div>';
   h+='<div class="eerr-hero '+(bien?'pos':'neg')+'" id="proyHero">';
-  h+='<div class="eerr-hero-l">Flujo de fondos · de hoy '+_proyDm(P.hoy)+' al '+_proyDm(P.hasta)+'</div>';
-  h+='<div class="eerr-hero-v">Hoy hay <b style="color:var(--ink)">'+plata(P.caja)+'</b> · el '+_proyDm(P.hasta)+' quedarían <b id="proyFin">'+plata(fin)+'</b></div>';
-  h+='<div class="eerr-hero-s">Con lo que tiene fecha. El punto más bajo es <b>'+plata(min.v)+'</b> el '+DIAS[min.f.getDay()].toLowerCase()+' '+_proyDm(min.f)
-    +(piso>0?(min.v>=piso?', arriba del piso de '+plata(piso)+'.':', <b style="color:var(--r)">'+plata(piso-min.v)+' abajo del piso</b> de '+plata(piso)+'.'):'.')+'</div>';
-  if(P.sin.length)h+='<div class="eerr-hero-n">Sin fecha hay '+plata(sinS)+' para pagar y '+plata(sinE)+' para cobrar (abajo). Si se pagara y cobrara todo hoy, el '+_proyDm(P.hasta)+' quedarían <b>'+plata(fin+sinE-sinS)+'</b>.</div>';
+  h+='<div class="eerr-hero-l">Caja al '+_proyDm(P.hasta)+'</div>';
+  h+='<div class="eerr-hero-v"><b id="proyFin">'+plata(fin)+'</b></div>';
+  h+='<div class="eerr-hero-s">Mínimo <b>'+plata(min.v)+'</b> el '+DIAS[min.f.getDay()].toLowerCase()+' '+_proyDm(min.f)
+    +'</div>';   /* lo de abajo del piso ya lo dice el aviso de arriba */
   h+='</div>';
 
   /* La linea del saldo */
@@ -43385,7 +43419,7 @@ function _proyHtml(repintar){
     var pts=[{l:'hoy',v:P.caja}].concat(dias.map(function(d){return {l:_proyDm(d.f),v:d.saldo};}));
     var body=document.getElementById('eerrBody');
     var cw=(body&&body.clientWidth>200)?Math.min(body.clientWidth,860):720;
-    h+='<div class="eerr-card" id="proyGraf"><div class="eerr-card-h">Con cuánto queda la caja cada día que se mueve</div>'+_eerrLinea(pts,Math.max(300,cw-30),'#2E7D4F')+'</div>';
+    h+='<div class="eerr-card" id="proyGraf"><div class="eerr-card-h">Saldo por día</div>'+_eerrLinea(pts,Math.max(300,cw-30),'#2E7D4F')+'</div>';
   }
 
   /* Entra y Sale en dos columnas; en el celular, una sola (Mov.) para que entre Queda. */
@@ -43397,7 +43431,7 @@ function _proyHtml(repintar){
   dias.forEach(function(d){
     var id='p:'+_proyKey(d.f),ab=!!window.__eerrTodo||!!_eerrAbiertos[id];
     t+='<tr class="g abre'+(ab?' ab':'')+(d.saldo<piso?' neg':'')+'" data-eg="'+id+'" onclick="eerrTog(\''+id+'\')"><td><span class="fl">'+(ab?'<i class="k-chev-s"></i>':'<i class="k-chev-s der"></i>')+'</span>'+DIAS[d.f.getDay()]+' '+_proyDm(d.f)
-      +'<span class="sb">'+d.rs.length+' movimiento'+(d.rs.length===1?'':'s')+'</span></td>'
+      +'</td>'
       +cel(d.ent,d.sal)+'<td class="num"><b>'+plata(d.saldo)+'</b></td></tr>';
     if(ab)d.rs.forEach(function(r){
       t+='<tr class="h"><td>'+esc(r.lbl)+'<span class="sb">'+(r.atr?'<b style="color:var(--r)">tocaba el '+_proyDm(r.atr)+' y no figura</b> · ':'')+esc(r.org)+'</span></td>'
@@ -43405,9 +43439,9 @@ function _proyHtml(repintar){
     });
   });
   if(!dias.length)t+='<tr class="h"><td colspan="5">No hay nada con fecha de acá al '+_proyDm(P.hasta)+'.</td></tr>';
-  h+='<div class="eerr-card eerr-tblw" id="proyTbl"><div class="eerr-card-h">Día por día · tocá un día para ver de dónde sale cada renglón</div>';
+  h+='<div class="eerr-card eerr-tblw" id="proyTbl"><div class="eerr-card-h">Día por día</div>';
   h+='<table class="eerr-t2 proy-t"><tbody>'+t+'</tbody></table>';
-  h+='<div class="eerr-pie">Solo aparecen los días en que algo entra o sale. Lo que ya tendría que haber pasado y no figura en Egresos va hoy, marcado en rojo.</div></div>';
+  h+='</div>';
 
   /* Sin fecha */
   var s='';
@@ -43417,11 +43451,11 @@ function _proyHtml(repintar){
   var avisos=[];
   if(_eerrDeudaProv===null)avisos.push(_eerrDeudaProvFallo?'No se pudo leer la deuda con proveedores.':'Leyendo la deuda con proveedores…');
   if(!_proyRed)avisos.push(_proyRedErr?'La liquidación de la Red: '+_proyRedErr+'.':'Leyendo la liquidación de la Red…');
-  h+='<div class="eerr-card eerr-tblw" id="proySin"><div class="eerr-card-h">Sin fecha · '+P.sin.length+' renglón'+(P.sin.length===1?'':'es')+'</div>';
+  h+='<div class="eerr-card eerr-tblw" id="proySin"><div class="eerr-card-h">Sin fecha</div>';
   if(avisos.length)h+='<div class="eerr-aviso" style="margin-bottom:8px">'+avisos.join(' ')+'</div>';
   h+='<table class="eerr-t2 proy-t"><tbody><tr class="h">'+cab+'</tr>'+(s||'<tr class="h"><td colspan="4">Nada.</td></tr>')
     +'<tr class="g"><td><span class="fl"></span>Total sin fecha</td>'+cel(sinE,sinS)+'</tr></tbody></table>';
-  h+='<div class="eerr-pie">No se ponen en un día porque el ERP no sabe cuándo: un pedido entregado sin cobrar no tiene fecha de cobro.</div></div>';
+  h+='</div>';
   return h;
 }
 
