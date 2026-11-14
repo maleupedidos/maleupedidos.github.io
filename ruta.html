@@ -2132,6 +2132,44 @@ var NP_CAT = [
   ]}
 ];
 var NP_CAT_FLAT=[];NP_CAT.forEach(function(c){c.items.forEach(function(p){NP_CAT_FLAT.push(p)})});
+/* (703, 14/11/2026) EL CATÁLOGO DE + PEDIDO VIENE DE LA BASE (`catalogo_ruta`). Tadeo: «Dar de alta» tiene que dejar el
+   producto listo en todos lados, sin tocar código. La lista de arriba queda de RESPALDO (primer arranque sin red, o la
+   base sin contestar) y es la misma que se cargó en la base ese día: medido, 52 de 52 productos idénticos y en el mismo
+   orden. Se arma igual que antes —grupos {cat, items:[{id, abbr, n, …}]}— y se cambia EN EL LUGAR (`NP_CAT` y
+   `NP_CAT_FLAT` son los mismos arreglos): todo lo que los lee al pintar sigue andando sin enterarse.
+   Al abrir usa la copia guardada (`maleu_np_cat`) y pide la de ahora; si cambió, repinta como cuando llega el stock. */
+function _npCatDeLista(l){
+  if(!Array.isArray(l)||l.length<10)return null;
+  var g=[],ix={};
+  for(var i=0;i<l.length;i++){
+    var x=l[i]; if(!x||!x.abbr||!x.cat||!x.n)return null;
+    var id=Number(x.id); if(!(id>0))continue;   /* sin código de tienda no hay con qué guardarlo en el pedido */
+    var it={id:id,abbr:String(x.abbr),n:String(x.n)};
+    Object.keys(x).forEach(function(k){ if(k!=='id'&&k!=='abbr'&&k!=='n'&&k!=='cat')it[k]=x[k]; });
+    if(!(x.cat in ix)){ix[x.cat]=g.length;g.push({cat:String(x.cat),items:[]});}
+    g[ix[x.cat]].items.push(it);
+  }
+  return g.length?g:null;
+}
+function _npCatAplicar(g){
+  if(!Array.isArray(g)||g.length<3||!g.every(function(c){return c&&c.cat&&Array.isArray(c.items)&&c.items.every(function(p){return p&&p.id>0&&p.abbr&&p.n;});}))return false;
+  if(JSON.stringify(g)===JSON.stringify(NP_CAT))return false;
+  NP_CAT.length=0; g.forEach(function(c){NP_CAT.push(c);});
+  NP_CAT_FLAT.length=0; NP_CAT.forEach(function(c){c.items.forEach(function(p){NP_CAT_FLAT.push(p);});});
+  return true;
+}
+var _npCatTs=0;
+function npCatPedir(){
+  if(_npCatTs&&Date.now()-_npCatTs<300000)return;
+  _npCatTs=Date.now();
+  if(typeof _baseRpc!=='function')return;
+  _baseRpc('catalogo_ruta',{}).then(function(d){
+    var g=_npCatDeLista(d&&d.productos); if(!g)return;
+    try{localStorage.setItem('maleu_np_cat',JSON.stringify(g));}catch(e){}
+    if(_npCatAplicar(g)){ var h=document.getElementById('npProductos'); if(h&&h.offsetParent)try{npRenderCatalogo();}catch(e){} }
+  }).catch(function(){ _npCatTs=Date.now()-240000; });   /* sin la base: se reintenta en un minuto, no en cada repintada */
+}
+try{ _npCatAplicar(JSON.parse(localStorage.getItem('maleu_np_cat')||'null')); }catch(e){}
 
 // Orden canónico de productos por categoría, mismo criterio que el alta de pedidos:
 // Pizzas → Packs → Sorrentinos → Empanadas → Tartas (Red) → Tortas → Otros.
@@ -12647,6 +12685,7 @@ function npSetCta(id){npCta=id;npPintarCta();}
 
 
 function npRenderCatalogo(){
+  try{npCatPedir();}catch(e){}
   var host=document.getElementById('npProductos');
   var html='<button type="button" id="npInvEstado" onclick="npFetchStock(true)" style="display:block;border:0;background:none;padding:4px 0 8px;font-size:12px;text-align:left;color:#666" aria-live="polite">Consultando disponibilidad…</button>';
   // Un numero sin decir de que es, miente por omision: "quedan 5" no es lo mismo
