@@ -24,7 +24,7 @@
  * Y si alguien igual queda pegado: mantener apretado el ↻ borra todo y
  * recarga de cero (refreshDuro).
  */
-var CN='maleu-panel-v1201';
+var CN='maleu-panel-v1202';
 
 /* LAS LIBRERIAS DE AFUERA (25/9/2026).
  *

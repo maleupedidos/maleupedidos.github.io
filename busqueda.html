@@ -101,6 +101,7 @@ body.embed .sem-tabs{top:48px}
 .aba-rep-h{font-size:15px;font-weight:800;margin-bottom:6px}
 .aba-rep-l{display:flex;justify-content:space-between;gap:10px;font-size:14px;padding:4px 0;border-top:1px dashed var(--border,#e8dcc8)}
 .aba-rep-l b{font-variant-numeric:tabular-nums}
+.aba-rep-dep{display:block;font-size:12px;color:#8D4B2A;font-weight:600;margin-top:1px}
 .aba-rep-b{display:flex;gap:8px;margin-top:10px}.aba-rep-b button{flex:1;margin:0}
 #abaPedirBar{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:0 16px 12px}
 #abaPedirBar.hidden{display:none}
@@ -5579,7 +5580,7 @@ function _abaReponer() {
   var out = [];
   (catalogo.proveedores || []).forEach(function (prov) {
     var its = [];
-    (catalogo.productos[prov] || []).forEach(function (it) { if (it.u === 'kg') return; var q = npSugerido(it); if (q > 0) its.push({ n: it.n, a: it.a, q: q }); });
+    (catalogo.productos[prov] || []).forEach(function (it) { if (it.u === 'kg') return; var q = npSugerido(it); if (q > 0) its.push({ n: it.n, a: it.a, q: q, dep: npSugDepTxt(it, q) }); });
     if (its.length) out.push({ prov: prov, its: its });
   });
   return out;
@@ -5588,9 +5589,10 @@ function _abaReponerHTML() {
   var r = _abaReponer();
   if (r === null) return '<div class="aba-vacio-l">Calculando qué reponer…</div>';
   if (!r.length) return '';
+  _abaDemDepPedir();
   return '<div class="aba-sec-t">Para reponer</div>' + r.map(function (x, i) {
     return '<div class="aba-rep"><div class="aba-rep-h">' + _abaH(x.prov) + '</div>'
-      + x.its.map(function (it) { return '<div class="aba-rep-l"><span>' + _abaH(it.n) + '</span><b>' + it.q + '</b></div>'; }).join('')
+      + x.its.map(function (it) { return '<div class="aba-rep-l"><span>' + _abaH(it.n) + (it.dep ? '<small class="aba-rep-dep">' + _abaH(it.dep) + '</small>' : '') + '</span><b>' + it.q + '</b></div>'; }).join('')
       + '<div class="aba-rep-b"><button type="button" class="btn-wa" onclick="abaRepCopiar(' + i + ',this)">Copiar para WhatsApp</button>'
       + '<button type="button" class="btn-pedido" onclick="abaRepPedir(' + i + ')">Marcar como pedido</button></div></div>';
   }).join('');
@@ -5714,6 +5716,7 @@ function onNpProvChange() {
 }
 
 function _npPintarProductos(prov) {
+  try { _abaDemDepPedir(); } catch (e) {}
   var container = document.getElementById('npProductsList');
   var _esCarneSolo = prov && !catalogo.productos[prov] && _abaCcEsCarne(prov);
   if (!prov || (!catalogo.productos[prov] && !_esCarneSolo)) {
@@ -5811,7 +5814,8 @@ function _npPintarProductos(prov) {
           if (esKg) {
             sugHtml = '<span class="np-prod-sug info" title="' + _abaH(fteTxt + ' (' + wkTxt + ')') + '">Faltan ~' + _abaCant(sug, 'kg') + '</span>';
           } else {
-            sugHtml = '<button type="button" class="np-prod-sug" onclick="npAplicarSugerido(\'' + esc(it.a) + '\')" title="' + _abaH(fteTxt + ' (' + wkTxt + ') · cobertura ' + NP_COBERTURA + ' sem — cuenta solo lo que tenés acá — tocá para cargar') + '">Pedir ' + _abaCant(sug, 'u') + '</button>';
+            sugHtml = '<button type="button" class="np-prod-sug" onclick="npAplicarSugerido(\'' + esc(it.a) + '\')" title="' + _abaH(fteTxt + ' (' + wkTxt + ') · cobertura ' + NP_COBERTURA + ' sem — cuenta solo lo que tenés acá — tocá para cargar') + '">Pedir ' + _abaCant(sug, 'u') + '</button>'
+              + (function () { var t = npSugDepTxt(it, sug); return t ? '<span class="np-prod-sug info np-sug-dep">' + _abaH(t) + '</span>' : ''; })();
             /* (671) Sin «o traelo y pedí X»: el sugerido ya cuenta los dos freezers. Lo del otro va arriba, como dato. */
           }
         } else {
@@ -6015,6 +6019,52 @@ function npSugerido(it) {
     return _npTope(it, n > 0 ? Math.ceil(n / caja) * caja : 0, caja);
   }
   return _npTope(it, s > 0 ? s : 0, 0);
+}
+/* (704, 14/11/2026) DEPÓSITOS, FASE 2: PARA QUÉ DEPÓSITO ES LO QUE SE PIDE. `demanda_por_deposito` da lo que salió de
+   cada depósito en las últimas 4 semanas (Kardex, Home/Pilar/Clubes) y su ideal (demanda × 1,5 sem, sin tope de
+   capacidad todavía). El TOTAL del sugerido no cambia (npSugerido); se reparte según lo que le falta a cada depósito
+   para llegar a su ideal (ideal − lo libre de ese freezer). Si a ninguno le falta, va todo al principal. En cajas, se
+   reparten cajas enteras. Ojo: hasta la 695 (13/11) el Kardex anotó algunas salidas en el depósito equivocado (#2383):
+   la demanda de Moresco puede estar un poco corrida y se corrige sola a medida que entran semanas. */
+var ABA_DEM_DEP = null, _abaDemDepTs = 0;
+function abaDemDep() { return ABA_DEM_DEP; }   /* lo de ahora (de afuera, la variable se lee congelada) */
+function _abaDemDepPedir() {
+  if (_abaDemDepTs && Date.now() - _abaDemDepTs < 600000) return;
+  _abaDemDepTs = Date.now();
+  if (typeof _baseRpc !== 'function') return;
+  _baseRpc('demanda_por_deposito', {}).then(function (d) {
+    if (!d || !d.demanda) return;
+    ABA_DEM_DEP = d;
+    try { if (abaCurrentTab === 'proveedores' && typeof renderProveedores === 'function') renderProveedores(); } catch (e) {}
+    try { var _pv = document.getElementById('npProv'); if (abaCurrentTab === 'nuevo' && _pv && _pv.value) _npPintarProductos(_pv.value); } catch (e) {}
+  }).catch(function () { _abaDemDepTs = Date.now() - 540000; });
+}
+function npSugeridoPorDep(it, total) {
+  if (!it || !(total > 0) || !ABA_DEM_DEP || !Array.isArray(ABA_DEM_DEP.depositos) || ABA_DEM_DEP.depositos.length < 2) return null;
+  var deps = ABA_DEM_DEP.depositos, dm = (ABA_DEM_DEP.demanda || {})[it.a] || {};
+  var falta = deps.map(function (d) {
+    var libre = Math.max(0, (Number((it.pd || {})[d.id]) || 0) - (Number((it.pr || {})[d.id]) || 0));
+    var ideal = Number((dm[d.id] || {}).ideal) || 0;
+    return Math.max(0, ideal - libre);
+  });
+  var caja = Number(it.caja) || 0, paso = caja > 0 ? caja : 1, partes = Math.round(total / paso);
+  var suma = falta.reduce(function (a, b) { return a + b; }, 0);
+  var q = deps.map(function () { return 0; });
+  if (!(suma > 0)) q[0] = partes;
+  else {
+    var exacto = falta.map(function (f) { return f / suma * partes; });
+    q = exacto.map(Math.floor);
+    var resto = partes - q.reduce(function (a, b) { return a + b; }, 0);
+    exacto.map(function (x, i) { return [x - Math.floor(x), i]; }).sort(function (a, b) { return b[0] - a[0] || a[1] - b[1]; })
+      .slice(0, resto).forEach(function (r) { q[r[1]]++; });
+  }
+  /* El nombre del DEPÓSITO («Ustariz»), no el del dueño: así lo pidió Tadeo («pedí X para Ustariz, Y para Moresco»). */
+  return deps.map(function (d, i) { return { id: d.id, nombre: String(d.nombre || d.id).replace(/^dep[oó]sito\s+/i, ''), q: q[i] * paso }; });
+}
+/* El texto: solo si algo va a un depósito que no es el principal (si todo va al de siempre, no se dice nada). */
+function npSugDepTxt(it, total) {
+  var r = npSugeridoPorDep(it, total); if (!r || !r.slice(1).some(function (x) { return x.q > 0; })) return '';
+  return r.filter(function (x) { return x.q > 0; }).map(function (x) { return x.nombre + ' ' + x.q; }).join(' · ');
 }
 function _npTope(it, n, caja) {
   var t = Number(it && it.tope) || 0;
