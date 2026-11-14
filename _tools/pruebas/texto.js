@@ -48,8 +48,9 @@ const CONTAR = `(function(){
   function filaRepetida(e){
     for(var x=e;x&&x!==pg;x=x.parentElement){
       var p=x.parentElement; if(!p||typeof x.className!=='string'||(!x.className&&x.tagName!=='TR'&&x.tagName!=='LI'))continue;
-      var igual=0,ant=0,hs=p.children;
-      for(var i=0;i<hs.length;i++){ if(hs[i].tagName===x.tagName&&hs[i].className===x.className){ igual++; if(hs[i]===x)ant=igual-1; } }
+      /* misma etiqueta y misma PRIMERA clase: «stc-it» y «stc-it ok» son filas de la misma lista */
+      var c0=function(e){return String(e.className||'').split(' ')[0];}, k0=c0(x), igual=0,ant=0,hs=p.children;
+      for(var i=0;i<hs.length;i++){ if(hs[i].tagName===x.tagName&&c0(hs[i])===k0){ igual++; if(hs[i]===x)ant=igual-1; } }
       if(igual>=3&&ant>0)return true;
     }
     return false;
