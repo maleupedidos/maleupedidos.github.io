@@ -31,24 +31,30 @@ const pausa = (ms) => new Promise((r) => setTimeout(r, ms));
     await cli.enviar('Page.navigate', { url: BASE + (BASE.includes('?') ? '&' : '?') + 'v=' + Date.now() });
     for (let i = 0; i < 120; i++) { try { if (await cdp.evaluar(cli, "typeof go==='function'&&!!window.D&&Array.isArray(D.gastos)&&D.gastos.length>0")) break; } catch (e) {} await pausa(500); }
     await cdp.evaluar(cli, "go('resultados'); 1");
-    let r = null;
-    for (let i = 0; i < 60; i++) {
+    let r = null, ultimo = '', quieto = 0;
+    for (let i = 0; i < 120; i++) {
       r = await cdp.evaluar(cli, `(function(){ var h=document.getElementById('proyHero'); if(!h)return null;
         var P=_proyArmar(), mono=P.con.concat(P.sin).filter(function(x){return /Monotributo/.test(x.lbl);}).map(function(x){return {f:x.f?_proyDm(x.f):'sin fecha',m:Math.round(x.$),org:x.org};});
-        return {version:(typeof CN!=='undefined'?CN:''), texto:h.innerText.replace(/\s+/g,' ').trim(), caja:Math.round(P.caja), hasta:_proyDm(P.hasta), mono:mono,
+        return {version:(typeof CN!=='undefined'?CN:''), texto:h.innerText.replace(/\\s+/g,' ').trim(), caja:Math.round(P.caja), hasta:_proyDm(P.hasta), mono:mono,
           provNov:eerrProvisiones(11,2026).filter(function(p){return p.cat==='impuesto_monotributo';}).map(function(p){return p.concepto+' '+p.monto;}),
           monoNovAlDia:Math.round(_eerrMesGastosAlDia(11,2026).L.mono||0), monoOct:Math.round(_eerrMesGastos(10,2026).L.mono||0),
           scroll:document.documentElement.scrollWidth>innerWidth+1}; })()`);
-      if (r && !/…/.test(r.texto)) break; await pausa(1000);
+      /* La proyección se repinta a medida que llegan la deuda de proveedores y la Red: se lee recién cuando el número
+         quedó quieto 8 s seguidos (la primera vez se leyó a mitad de camino: $10,9M contra $5,0M). */
+      if (r && !/…|calculando/.test(r.texto)) { if (r.texto === ultimo) { if (++quieto >= 8) break; } else { ultimo = r.texto; quieto = 0; console.log('  …', r.texto); } }
+      await pausa(1000);
     }
     console.log(JSON.stringify(r, null, 1));
+    if (process.env.DETALLE) console.log(JSON.stringify(await cdp.evaluar(cli, `(function(){ var P=_proyArmar(), g={};
+      P.con.forEach(function(x){ var k=(x.tipo==='in'?'+ ':'- ')+String(x.lbl).split(' · ')[0].replace(/#.*$/,'').trim(); g[k]=(g[k]||0)+Math.round(x.$); });
+      return {caja:Math.round(P.caja), grupos:g, sinFecha:P.sin.map(function(x){return (x.tipo==='in'?'+ ':'- ')+x.lbl+' '+Math.round(x.$);}).slice(0,12)}; })()`), null, 1));
     await cdp.evaluar(cli, "var e=document.getElementById('proyHero'); if(e)e.scrollIntoView({block:'center'}); 1"); await pausa(400);
     const shot = await cli.enviar('Page.captureScreenshot', { format: 'png' });
     const out = require('os').tmpdir() + '/financiero_vivo_' + ANCHO + '.png'; fs.writeFileSync(out, Buffer.from(shot.data, 'base64')); console.log('captura: ' + out);
     if (process.env.DEPOSITOS) {
       await cdp.evaluar(cli, "go('ajustes'); ajGo('depositos'); 1");
       for (let i = 0; i < 30; i++) { if (await cdp.evaluar(cli, "document.querySelectorAll('#ajBody .st-frz-f').length>0")) break; await pausa(1000); }
-      console.log('Depósitos:', JSON.stringify(await cdp.evaluar(cli, "Array.from(document.querySelectorAll('#ajBody .st-frz')).map(function(c){return c.innerText.replace(/\s+/g,' ').trim();})")));
+      console.log('Depósitos:', JSON.stringify(await cdp.evaluar(cli, "Array.from(document.querySelectorAll('#ajBody .st-frz')).map(function(c){return c.innerText.replace(/\\s+/g,' ').trim();})")));
     }
   } finally { try { cli.matar(); } catch (e) {} }
 })();
