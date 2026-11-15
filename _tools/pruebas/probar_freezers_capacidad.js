@@ -123,7 +123,8 @@ const MOCK = `(function(){
       v = await evaluar(cli, `(function(){ var c=(__rpc.filter(function(x){return x.fn==='freezer_guardar_directo';})[0]||{}).args; var f=document.querySelector('#ajBody .st-frz-f'); return {p:c&&c.p, fila:f&&f.textContent}; })()`);
       chk('Guardar manda tipo, marca y las 3 medidas (sin litros: los calcula la base)',
           v.p && v.p.dep === 'ustariz' && String(v.p.id) === '1' && v.p.tipo === 'vertical' && v.p.marca === 'Gafa' && v.p.alto === 80 && v.p.ancho === 100 && v.p.prof === 60 && v.p.litros === undefined, v.p);
-      chk('la fila queda «Vertical · Gafa · por medidas · 480 L»', /Vertical/.test(v.fila) && /Gafa/.test(v.fila) && /por medidas/.test(v.fila) && /480 L/.test(v.fila), v.fila);
+      chk('la fila queda «Vertical / Gafa · por medidas · 480 L» (el tipo no se repite si el nombre ya lo dice)',
+          (v.fila.match(/Vertical/g) || []).length === 1 && /Gafa · por medidas/.test(v.fila) && /480 L/.test(v.fila), v.fila);
       await evaluar(cli, `stFrzEditar('2','ustariz'); 1`);
       await evaluar(cli, `var n=document.getElementById('stFrz_n'); n.value=''; n.dispatchEvent(new Event('input',{bubbles:true})); window.__rpc=[]; document.querySelector('#ajBody .st-frz-ok').click(); 1`);
       v = await evaluar(cli, `__rpc.length`);
