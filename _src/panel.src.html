@@ -2107,6 +2107,14 @@ details.k-info>summary::before{content:"\24D8";font-weight:400}
 #stMover .tr-lado small{font-size:11px;color:var(--ink3);font-weight:600;text-transform:uppercase;letter-spacing:.04em}
 #stMover .tr-lado b{font-size:15px;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 #stMover .tr-lado:last-child{border-color:var(--o);background:var(--ol)}
+#stMover .tr-sug{margin:10px 0;padding:11px 13px;border:1px solid #F6C98C;border-radius:12px;background:#FFF9F0}
+#stMover .tr-sug-t{display:flex;flex-direction:column;gap:2px}
+#stMover .tr-sug-t b{font-size:14px;color:var(--ink)}
+#stMover .tr-sug-t span{font-size:12px;color:var(--ink3)}
+#stMover .tr-sug-l{margin:7px 0 2px;font-size:13px;color:var(--ink2);line-height:1.5}
+#stMover .tr-sug-l b{color:var(--ink)}
+#stMover .tr-sug-cap{margin-top:4px;font-size:12px;color:var(--ink3)}
+#stMover .tr-sug-btn{margin-top:8px;min-height:44px;width:100%;border:0;border-radius:10px;background:var(--o);color:#fff;font:inherit;font-weight:700;font-size:14px;cursor:pointer}
 #stMover .tr-flip{width:52px;border-radius:12px;border:1px solid var(--border);background:var(--surface);color:var(--b);font-size:22px;cursor:pointer;font-family:inherit}
 #stMover .tr-flip:disabled{opacity:.4}
 #stMover .tr-listo{display:flex;align-items:center;gap:12px;margin:0 0 10px;padding:12px 10px 12px 14px;border-radius:14px;background:var(--gb);border:1px solid var(--g);font-size:13px;color:var(--ink)}
@@ -32643,6 +32651,64 @@ function _stmTanda(){
   });
   return out;
 }
+/* (15/11/2026) DEPÓSITOS, FASE 4: TRASPASOS SUGERIDOS. Tadeo (13/11): «pedir y abastecer según la capacidad y la demanda
+   de cada depósito». Arriba de la tanda, lo que conviene pasar de donde sale a donde va: lo que le FALTA al de destino para
+   su ideal y le SOBRA al de origen por encima del suyo (ideal = 1,5 semanas de lo que sale de cada freezer, la misma regla
+   que PEDIR, 704). Solo productos por unidad; la carne por pieza se elige a mano. El ERP sugiere: «Cargar en la tanda»
+   llena los números y la persona confirma con «Pasar». Sin freezers cargados trabaja solo con la demanda y lo dice. */
+var STM_DEM=null, _stmDemT=0;
+function _stmDemPedir(){
+  if(_stmDemT&&Date.now()-_stmDemT<600000)return;
+  _stmDemT=Date.now();
+  if(typeof _baseRpc!=='function')return;
+  _baseRpc('demanda_por_deposito',{}).then(function(d){
+    if(!d||!d.demanda)return;
+    STM_DEM=d;
+    try{ if(ST_TAB==='mover'&&!STM_TANDA)renderStMover(); }catch(e){}
+  },function(){ _stmDemT=Date.now()-540000; });
+}
+function _stmSugeridos(){
+  if(!STM_DEM||!DEP_DATA||typeof D!=='object'||!D||!Array.isArray(D.stock)||!D.stock.length)return null;
+  var desde=DEP_DESDE, hacia=DEP_HACIA, stk={}, out=[];
+  if(!desde||!hacia||desde===hacia)return null;
+  D.stock.forEach(function(x){ if(x&&x.a)stk[x.a]=x; });
+  (DEP_DATA.productos||[]).forEach(function(pr){
+    if(!pr||pr.baja||pr.u==='kg'||_stmPorPieza(pr))return;
+    if(String(pr.a||'').toUpperCase()==='PRUEBA')return;
+    var st=stk[pr.a]; if(!st)return;
+    var libre=function(d){
+      if(st.pdd&&st.pdd[d]!==undefined)return Math.max(0,Number(st.pdd[d])||0);
+      return Math.max(0,(Number((st.pd||{})[d])||0)-(Number((st.pr||{})[d])||0));
+    };
+    var dm=(STM_DEM.demanda||{})[pr.a]||{};
+    var idD=Number((dm[desde]||{}).ideal)||0, idH=Number((dm[hacia]||{}).ideal)||0;
+    if(!(idH>0))return;
+    var aca=Number((pr.porDep||{})[desde])||0;
+    var q=Math.floor(Math.min(Math.min(libre(desde),aca)-idD, idH-libre(hacia)));
+    if(q>0)out.push({pr:pr,q:q});
+  });
+  return out;
+}
+/* ¿Algún freezer con capacidad cargada? Sin los depósitos en memoria no se sabe: no se avisa. */
+function _stmFreezersCargados(){
+  try{ var deps=_depsReales(); if(!deps.length)return true; return deps.some(function(d){ return !!_stOcupacion(d); }); }catch(e){ return true; }
+}
+function _stmSugHtml(nD,nH){
+  if(STM_TANDA)return '';
+  _stmDemPedir();
+  var l=_stmSugeridos(); if(!l||!l.length)return '';
+  var u=l.reduce(function(a,x){ return a+x.q; },0);
+  return '<div class="tr-sug"><div class="tr-sug-t"><b>Sugerido: '+u+' u a '+stEsc(nH)+'</b>'
+    +'<span>le faltan para 1,5 semanas y en '+stEsc(nD)+' sobran</span></div>'
+    +'<div class="tr-sug-l">'+l.map(function(x){ return stEsc(_stcCorto(x.pr.n,x.pr.cat||_stFamDe(x.pr)))+' <b>'+x.q+'</b>'; }).join(' &middot; ')+'</div>'
+    +(_stmFreezersCargados()?'':'<div class="tr-sug-cap">Cargá los freezers para usar la capacidad.</div>')
+    +'<button type="button" class="tr-sug-btn" onclick="stmSugCargar()">Cargar en la tanda</button></div>';
+}
+window.stmSugCargar=function(){
+  if(STM_TANDA)return;
+  (_stmSugeridos()||[]).forEach(function(x){ STM_CANT[x.pr.a]=x.q; });
+  renderStMover();
+};
 function renderStMover(opts){
   var c=$('stMover'); if(!c)return;
   var snap=(opts&&opts.limpiar)?{}:_stCampos(c);
@@ -32686,6 +32752,7 @@ function _stMoverHtml(){
   });
   _stFamOrdenar(fams);
   if(!nCon&&!pzs.length)return h+'<div class="stc-vacio tr-vacio"><b>No hay nada en '+stEsc(nD)+' para pasar</b><p>Dale vuelta con &#8646; para traer de '+stEsc(nH)+'.</p></div>';
+  h+=_stmSugHtml(nD,nH);   /* (15/11/2026) depósitos, fase 4 */
   h+='<div class="tr-tools"><input id="stmQ" class="stc-q" type="search" placeholder="Buscar producto" autocomplete="off" value="'+stEsc(STM_Q)+'" oninput="stmBuscar(this.value)" aria-label="Buscar producto"></div>';
   fams.forEach(function(f){
     var n=0; f.ps.forEach(function(pr){ n+=_stmCant(pr)>0?1:0; });

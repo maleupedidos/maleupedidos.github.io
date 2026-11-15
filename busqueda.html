@@ -802,6 +802,8 @@ body *{touch-action:manipulation}
 .deuda-card.al-dia-card{background:#FBFAF6}
 /* (13/11/2026) El pago suelto, plegado. */
 .np-summary-dep{font-size:13px;font-weight:700;color:#331C1C;margin:2px 0 8px}
+.np-summary-cap{font-size:12px;color:#7A4A4A;margin:-4px 0 8px}
+.np-summary-rep{display:block;font-size:11px;font-weight:600;color:#7A4A4A;margin-top:1px}
 .rec-cli{margin:0 0 10px;padding:8px 10px;border-radius:8px;background:rgba(255,255,255,.6)}
 .rec-cli-f{display:flex;justify-content:space-between;gap:10px;font-size:13px;color:#331C1C;padding:3px 0}
 .rec-cli-f b{font-variant-numeric:tabular-nums}
@@ -1692,16 +1694,16 @@ function _abaAviso(estado) {
 /* Lo que hacen las tres puertas que traen `busqueda` (el ↻, despues de pagar y
    despues de comprar): antes cada una lo copiaba a mano. */
 /* (13/11/2026, 680) {OC: depósito} de las OC abiertas con destino. Se pide con cada lectura (cada 60 s como mucho). */
-var _abaDest = {}, _abaDestT = 0;
+var _abaDest = {}, _abaDestT = 0, _abaRepOc = {};   /* (712) {OC: {deposito: cantidad}} */
 function _abaDestPedir() {
   if (typeof _baseRpc !== 'function' || Date.now() - _abaDestT < 60000) return;
   _abaDestT = Date.now();
   Promise.resolve(typeof _sbPermiso === 'function' ? _sbPermiso() : null).catch(function () {})
     .then(function () { return _baseRpc('oc_destinos_pantalla', {}); })
     .then(function (d) {
-      var n = (d && d.destinos) || {};
-      if (JSON.stringify(n) === JSON.stringify(_abaDest)) return;
-      _abaDest = n;
+      var n = (d && d.destinos) || {}, rp = (d && d.repartos) || {};
+      if (JSON.stringify(n) === JSON.stringify(_abaDest) && JSON.stringify(rp) === JSON.stringify(_abaRepOc)) return;
+      _abaDest = n; _abaRepOc = rp;
       try { if (!(typeof abaHayEditor === 'function' && abaHayEditor())) abaRender(); } catch (e) {}
     }).catch(function () { _abaDestT = 0; });
 }
@@ -2148,18 +2150,64 @@ function abaNpDepPintar() {
   if (!w || !sel) return;
   var deps = (typeof _pedDeps === 'function' ? (_pedDeps() || []) : []).filter(function (d) { return d && d.id && d.id !== 'prueba'; });
   if (!deps.length || (typeof npEsStock === 'function' && !npEsStock())) { w.hidden = true; return; }
-  var cur = sel.value, html = deps.map(function (d) {
+  /* (15/11/2026, 712) DEPÓSITOS, FASE 3: «Según la demanda» parte cada producto entre los depósitos como lo sugiere PEDIR
+     (lo que le falta a cada uno para su ideal). Es la opción de entrada cuando hay dos depósitos; elegir uno manda todo ahí. */
+  var conDem = deps.length > 1 && !!abaDemDep();
+  var cur = sel.value, html = (conDem ? '<option value="__dem">Según la demanda de cada depósito</option>' : '') + deps.map(function (d) {
     var nom = String(d.nombre || d.id).replace(/^dep[oó]sito\s+/i, '');
     return '<option value="' + _abaH(d.id) + '">Depósito ' + _abaH(nom) + '</option>';
   }).join('');
   if (sel.__h !== html) { sel.innerHTML = html; sel.__h = html; }
   var ids = deps.map(function (d) { return d.id; });
-  sel.value = ids.indexOf(cur) >= 0 ? cur : (typeof abaRecDepMio === 'function' ? (abaRecDepMio(deps) || ids[0]) : ids[0]);
+  if (conDem) ids.unshift('__dem');
+  sel.value = ids.indexOf(cur) >= 0 ? cur : (conDem ? '__dem' : (typeof abaRecDepMio === 'function' ? (abaRecDepMio(deps) || ids[0]) : ids[0]));
   w.hidden = false;
 }
 function abaNpDepNombre() {
-  var sel = document.getElementById('npDepDest'); if (!sel || !sel.value || (document.getElementById('npDepField') || {}).hidden) return '';
+  var sel = document.getElementById('npDepDest'); if (!sel || !sel.value || sel.value === '__dem' || (document.getElementById('npDepField') || {}).hidden) return '';
   var o = sel.options[sel.selectedIndex]; return o ? o.text : '';
+}
+function abaNpPorDemanda() {
+  var sel = document.getElementById('npDepDest');
+  return !!(sel && sel.value === '__dem' && !(document.getElementById('npDepField') || {}).hidden && npEsStock());
+}
+/* El reparto de UNA cantidad cargada a mano: el mismo criterio que el sugerido (npSugeridoPorDep), pero que sume EXACTO lo
+   cargado (con cajas, npSugeridoPorDep redondea a cajas enteras). Lo que sobra o falta va al principal. */
+function abaNpRepartoExacto(it, q) {
+  var r = npSugeridoPorDep(it, q); if (!r || !r.length) return null;
+  var suma = r.reduce(function (a, x) { return a + x.q; }, 0), dif = q - suma;
+  if (dif > 0) r[0].q += dif;
+  for (var i = r.length - 1; dif < 0 && i >= 0; i--) { var saco = Math.min(r[i].q, -dif); r[i].q -= saco; dif += saco; }
+  return r;
+}
+/* {abbr: {deposito: cantidad}} de lo que va por OC, para `payload.reparto` (712). */
+function abaNpReparto(items) {
+  if (!abaNpPorDemanda()) return null;
+  var prov = document.getElementById('npProv').value, cat = (catalogo.productos && catalogo.productos[prov]) || [], out = {}, hay = false;
+  items.forEach(function (x) {
+    if (x.origen === 'Deposito') return;
+    var it = cat.filter(function (c) { return c.a === x.abbr; })[0]; if (!it) return;
+    var r = abaNpRepartoExacto(it, x.qty); if (!r) return;
+    var o = {}; r.forEach(function (d) { if (d.q > 0) o[d.id] = d.q; });
+    if (Object.keys(o).length) { out[x.abbr] = o; hay = true; }
+  });
+  return hay ? out : null;
+}
+/* (15/11/2026) ¿Hay algún freezer con capacidad cargada? Sin los depósitos todavía en memoria, no se sabe: no se avisa. */
+function abaFreezersCargados() {
+  try {
+    if (typeof _depsReales !== 'function' || typeof _stOcupacion !== 'function') return true;
+    var deps = _depsReales(); if (!deps.length) return true;
+    return deps.some(function (d) { return !!_stOcupacion(d); });
+  } catch (e) { return true; }
+}
+/* «Ustariz 12 · Moresco 3»: lo que va a cada depósito en toda la compra. */
+function abaNpRepartoTxt(items) {
+  var rp = abaNpReparto(items); if (!rp) return '';
+  var tot = {};
+  Object.keys(rp).forEach(function (a) { Object.keys(rp[a]).forEach(function (d) { tot[d] = (tot[d] || 0) + rp[a][d]; }); });
+  var deps = (abaDemDep() || {}).depositos || [];
+  return deps.filter(function (d) { return tot[d.id] > 0; }).map(function (d) { return String(d.nombre || d.id).replace(/^dep[oó]sito\s+/i, '') + ' ' + tot[d.id]; }).join(' · ');
 }
 function populateNpVendedor() {
   var sel = document.getElementById('npVendedor');
@@ -4277,7 +4325,10 @@ function _abaRecRepCalc(idx, grouped) {
     /* (13/11/2026, 680) Si las OC de reposición dicen a qué depósito van, eso manda sobre el ideal: lo de las OC «al otro»
        va precargado; si todas dicen «este», 0. Las OC viejas sin destino siguen con el ideal. Siempre editable. */
     var conDest = 0, alOtro = 0;
-    (g.rows || []).forEach(function (rr) { var dz = _abaDest[rr.oc]; if (!dz) return; conDest++; if (dz === dd.otro) alOtro += Number(rr.q) || 0; });
+    (g.rows || []).forEach(function (rr) {
+      var rz = _abaRepOc[rr.oc];   /* (712) la OC partida por depósito */
+      if (rz && typeof rz === 'object') { conDest++; alOtro += Math.min(Number(rr.q) || 0, Number(rz[dd.otro]) || 0); return; }
+      var dz = _abaDest[rr.oc]; if (!dz) return; conDest++; if (dz === dd.otro) alOtro += Number(rr.q) || 0; });
     var porOc = conDest > 0;
     if (porOc) x.otro = Math.max(0, Math.min(llega - cli, alOtro));
     out.push({ gi: gi, abbr: g.abbr, prod: g.prod, hacia: dd.otro, nom: dd.otroNom, acaNom: dd.acaNom,
@@ -6035,6 +6086,7 @@ function _abaDemDepPedir() {
   _baseRpc('demanda_por_deposito', {}).then(function (d) {
     if (!d || !d.demanda) return;
     ABA_DEM_DEP = d;
+    try { abaNpDepPintar(); } catch (e) {}   /* (712) aparece «Según la demanda» */
     try { if (abaCurrentTab === 'proveedores' && typeof renderProveedores === 'function') renderProveedores(); } catch (e) {}
     try { var _pv = document.getElementById('npProv'); if (abaCurrentTab === 'nuevo' && _pv && _pv.value) _npPintarProductos(_pv.value); } catch (e) {}
   }).catch(function () { _abaDemDepTs = Date.now() - 540000; });
@@ -6159,11 +6211,15 @@ function updateNpSummary() {
   var total = 0;
   var html = '<div class="np-summary"><div class="np-summary-title">Resumen del pedido</div>';
   if (npEsStock() && abaNpDepNombre()) html += '<div class="np-summary-dep">Reposición · ' + _abaH(abaNpDepNombre()) + '</div>';
+  var _rpTxt = abaNpRepartoTxt(items), _rp = _rpTxt ? abaNpReparto(items) : null;
+  if (_rpTxt) html += '<div class="np-summary-dep">Reposición · ' + _abaH(_rpTxt) + '</div>';
+  if (abaNpPorDemanda() && !abaFreezersCargados()) html += '<div class="np-summary-cap">Cargá los freezers para usar la capacidad (Ajustes › Depósitos).</div>';
   items.forEach(function(it) {
     var sub = it.costo * it.qty;
     total += sub;
     var orTag = it.origen === 'Deposito' ? '<span style="font-size:10px;background:#4CAF50;color:#fff;padding:1px 6px;border-radius:50px;margin-left:4px">DEPÓSITO</span>' : '<span style="font-size:10px;background:#1565C0;color:#fff;padding:1px 6px;border-radius:50px;margin-left:4px">COMPRA</span>';
-    html += '<div class="np-summary-line"><span>' + it.qty + ' × ' + _abaH(it.nombre) + orTag + '</span><span>' + abaFormatMoney(sub) + '</span></div>';
+    var _rpl = (_rp && _rp[it.abbr] && Object.keys(_rp[it.abbr]).length > 1) ? '<small class="np-summary-rep">' + _abaH(Object.keys(_rp[it.abbr]).map(function (d) { return _abaDepNom(d).replace(/^Depósito /, '') + ' ' + _rp[it.abbr][d]; }).join(' · ')) + '</small>' : '';
+    html += '<div class="np-summary-line"><span>' + it.qty + ' × ' + _abaH(it.nombre) + orTag + _rpl + '</span><span>' + abaFormatMoney(sub) + '</span></div>';
   });
   html += '<div class="np-summary-total"><span>Total costo</span><span class="amount">' + abaFormatMoney(total) + '</span></div>';
   // Si la compra es para un vendedor, ademas de la OC se crea el pedido Red.
@@ -6205,7 +6261,9 @@ function confirmarCompra(confirmarDuplicada) {
     proveedor: prov,
     vendedor: vendedor,
     /* (13/11/2026, 680) El depósito de la reposición: la base lo anota en las OC (destino_deposito). */
-    deposito: (npEsStock() && (document.getElementById('npDepDest') || {}).value) || undefined,
+    deposito: (npEsStock() && !abaNpPorDemanda() && (document.getElementById('npDepDest') || {}).value) || undefined,
+    /* (15/11/2026, 712) Con «Según la demanda»: cuánto de cada producto va a cada depósito. La base lo anota en la OC. */
+    reparto: abaNpReparto(items) || undefined,
     items: items,
     /* El mismo id en todos los reintentos: el servidor no carga dos veces una
        compra que ya escribio (13/9/2026). Si era para un vendedor, un reintento
@@ -7377,7 +7435,9 @@ function _abaHjArmar(prov) {
       ct += Number(oc.ct) || 0; q += Number(d.q) || 0;
       if (d.isStock) {
         rep += Number(d.q) || 0;
-        var dz = _abaDest[rr.oc]; if (dz) { conDest++; if (dd && dz === dd.otro) alOtro += Number(d.q) || 0; }
+        var rz = _abaRepOc[rr.oc];   /* (712) la OC partida por depósito */
+        if (rz && typeof rz === 'object') { conDest++; if (dd) alOtro += Math.min(Number(d.q) || 0, Number(rz[dd.otro]) || 0); }
+        else { var dz = _abaDest[rr.oc]; if (dz) { conDest++; if (dd && dz === dd.otro) alOtro += Number(d.q) || 0; } }
       } else (oc.ent ? pasa : vivos).push({ cli: d.cliente, canal: d.canal, n: d.nped, q: Number(d.q) || 0 });
     });
     var vq = vivos.reduce(function (a, x) { return a + x.q; }, 0), pq = pasa.reduce(function (a, x) { return a + x.q; }, 0);
