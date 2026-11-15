@@ -26,6 +26,9 @@ const PANTALLAS = [
   ['d5_mas_pedido', `go('ruta'); setTimeout(function(){ try{ switchTab('nuevo'); }catch(e){} },2000); true`, 'MITAD'],
   ['d6_productos_stock', `go('stock'); setTimeout(function(){ try{ stSwitchTab('productos'); }catch(e){} },1200); true`, 'MITAD'],
   ['d7_caja', `go('caja'); true`, 'MITAD'],
+  /* Ventas › VENTAS: el período y los filtros (Organizador, 15/11 20:26), cerrada y con los filtros abiertos. */
+  ['v1_ventas_cerrada', `go('ventas'); try{ vSwitchTab('ventas'); }catch(e){} true`, null],
+  ['v2_ventas_filtros', `go('ventas'); try{ vSwitchTab('ventas'); }catch(e){} setTimeout(function(){ if(typeof vfAbrirFiltros==='function'){ vfAbrirFiltros(); return; } try{ if(document.getElementById('vfPanel').hidden)vfPanelToggle(); }catch(e){} },2500); true`, null],
 ];
 (async () => {
   const ses = JSON.parse(fs.readFileSync(process.env.SES_ADMIN, 'utf8'));

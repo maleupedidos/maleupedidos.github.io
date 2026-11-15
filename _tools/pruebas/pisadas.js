@@ -235,7 +235,9 @@ const esperarCarga = (pg) => pg.waitForFunction(() => {
         if (!process.env.SIN_DET) {
           /* Los detalles: lo que se abre adentro de cada pantalla. */
           const DET = {
-            ventas: [['venta abierta', `go('ventas'); try{ vSwitchTab('ventas'); }catch(e){} var L=[].slice.call(document.querySelectorAll('#vList .vt')), e=L.filter(function(x){ var v=x.__venta; return v&&(v.h==='Home'||v.h==='Pilar')&&v.n; })[0]||L[0]; if(e){ vtToggle(e); e.scrollIntoView({block:'start'}); } !!e`]],
+            ventas: [['venta abierta', `go('ventas'); try{ vSwitchTab('ventas'); }catch(e){} var L=[].slice.call(document.querySelectorAll('#vList .vt')), e=L.filter(function(x){ var v=x.__venta; return v&&(v.h==='Home'||v.h==='Pilar')&&v.n; })[0]||L[0]; if(e){ vtToggle(e); e.scrollIntoView({block:'start'}); } !!e`],
+                     ['hoja de filtros', `go('ventas'); try{ vSwitchTab('ventas'); }catch(e){} window.scrollTo(0,0); if(typeof vfAbrirFiltros!=='function')false; else { vfAbrirFiltros(); true; }`],
+                     ['hoja de fechas', `go('ventas'); try{ vSwitchTab('ventas'); }catch(e){} window.scrollTo(0,0); if(typeof vfAbrirFechas!=='function')false; else { vfAbrirFechas(); true; }`]],
             pedidos: [['ficha del pedido', `var p=(D.pedidos||[]).filter(function(x){return x.es==='Entregado'&&x.h==='Home';})[0]; if(p){ openOrdDetail(p.h,p.n,p.r||0); } !!p`]],
             crm: [['ficha del cliente', `var p=(D.pedidos||[]).filter(function(x){return x.h==='Home';})[0]; if(p&&typeof verFichaDePedido==='function'){ verFichaDePedido(p.h,p.n); } !!p`]],
             ajustes: [['freezer', `go('ajustes'); ajGo('depositos'); setTimeout(function(){ try{ stFrzEditar('nuevo','ustariz'); }catch(e){} },800); true`],
@@ -247,7 +249,7 @@ const esperarCarga = (pg) => pg.waitForFunction(() => {
             if (!ok) continue;
             await pg.waitForTimeout(2500);
             await medir(t + ' › ' + nom);
-            await pg.evaluate(() => { ['pinOv', 'entFechaOv', 'rutAyerOv'].forEach((i) => { const o = document.getElementById(i); if (o) o.remove(); }); try { closeOrdDetail(); } catch (e) {} try { cerrarCobroRuta(); } catch (e) {} try { stFrzEditar(null, null); } catch (e) {} try { if (typeof fichaCerrar === 'function') fichaCerrar(); } catch (e) {} });
+            await pg.evaluate(() => { ['pinOv', 'entFechaOv', 'rutAyerOv'].forEach((i) => { const o = document.getElementById(i); if (o) o.remove(); }); try { closeOrdDetail(); } catch (e) {} try { vfCerrarHoja(); } catch (e) {} try { cerrarCobroRuta(); } catch (e) {} try { stFrzEditar(null, null); } catch (e) {} try { if (typeof fichaCerrar === 'function') fichaCerrar(); } catch (e) {} });
           }
         }
       }

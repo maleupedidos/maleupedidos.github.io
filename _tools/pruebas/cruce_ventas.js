@@ -63,6 +63,27 @@ const EXPR = `(async function(){
       cmp(p.nom,'Ventas','Catering',ref.catF,Math.round(l.filter(function(v){return v.canal==='Catering';}).reduce(function(a,v){return a+(+v.$||0);},0)),1);
       cmp(p.nom,'Ventas','B2B',ref.b2bF,Math.round(l.filter(function(v){return v.canal==='B2B';}).reduce(function(a,v){return a+(+v.$||0);},0)),1);
     }catch(e){ difs.push(p.nom+' · Ventas: '+e.message); }
+    /* VENTAS, LA PANTALLA (15/11/2026): el período puesto con el control de arriba (las claves de Inicio), sin filtros, y
+       lo que dicen la tarjeta «Ventas» y el botón «Ver N ventas» de la hoja de filtros. Ese día los chips decían 74 y 128
+       (filas) donde Inicio 69 y 121: ningún chip puede llevar número. */
+    try{
+      if(typeof _vPerPoner==='function'){
+        var vtA=vTab; if(vTab!=='ventas'&&typeof vSwitchTab==='function')vSwitchTab('ventas');
+        _vPerPoner(p.tipo==='sem'?'sem':'mes',false); if(p.off)vPerMover(p.off); else rVentas();
+        var Rv=vRango||{};
+        if(Rv.d!==p.d||Rv.h!==p.h)difs.push(p.nom+' · Ventas (pantalla): el control puso '+Rv.d+' a '+Rv.h+' y el período es '+p.d+' a '+p.h);
+        var lv=_vCalcular().lista, catN=lv.filter(function(v){return v.canal==='Catering';}).length;
+        var kv=document.querySelectorAll('#vSum .vs-top .v-kpi')[1], kn=kv?Number(String(kv.querySelector('.v-kpi-v').textContent).replace(/\\D/g,'')):-1;
+        cmp(p.nom,'Ventas (pantalla)','tarjeta Ventas (entregas de Inicio + '+catN+' de Catering)',ref.ent+catN,kn,0);
+        vfAbrirFiltros();
+        var okb=document.querySelector('#vfHoja .vf-h-ok'), bn=okb?Number(String(okb.textContent).replace(/\\D/g,'')):-1;
+        var conN=[].slice.call(document.querySelectorAll('#vfHoja .vf-op')).filter(function(b){return /\\d/.test(b.textContent)&&b.closest('[data-dim]')&&b.closest('[data-dim]').getAttribute('data-dim')!=='barrio';});
+        vfCerrarHoja();
+        cmp(p.nom,'Ventas (pantalla)','botón «Ver N ventas» = la tarjeta',kn,bn,0);
+        cmp(p.nom,'Ventas (pantalla)','chips de filtro con un número',0,conN.length,0);
+        if(vtA!=='ventas'&&typeof vSwitchTab==='function')try{vSwitchTab(vtA);}catch(e){}
+      }
+    }catch(e){ difs.push(p.nom+' · Ventas (pantalla): '+e.message); }
     if(p.tipo==='mes'){
       /* RESULTADOS: las ventas del mes (con Catering) y las entregas. */
       try{
