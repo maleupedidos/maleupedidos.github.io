@@ -130,6 +130,41 @@ else
   echo "    (ningun .html modificado)"
 fi
 
+# ── 3c3. En el iPhone nada se pisa (15/11/2026) ──────────────────────────────
+#  Tadeo: «Lo que hace Backend, desde el celular pone mal los tamaños y se pisa todo». La v1218 dejó «Entregado» encima
+#  de la fecha en la venta abierta y se dio por probado sin mirar el detalle abierto. Sobre las pantallas que toca este
+#  commit (_tools/pisadas_tabs.js, por el diff), el detector abre cada tab, sus sub-tabs y sus detalles en WebKit a 390 px
+#  con una sesión temporal (toda escritura cortada) y frena si hay texto encimado o scroll de costado. Deja una captura
+#  por pantalla. Urgencia: SIN_PISADAS=1 ./deploy.sh "…"
+echo "→ [3c3/8] En el iPhone nada se pisa…"
+TABS_PIS=$(node _tools/pisadas_tabs.js 2>/dev/null || true)
+PW_DIR=$(node _tools/pw_buscar.js 2>/dev/null || true)
+if [ -n "${SIN_PISADAS:-}" ] || [ -n "${SIN_HUMO:-}" ]; then
+  echo "${YEL}    SALTEADO a mano (SIN_PISADAS/SIN_HUMO). Corré _tools/pruebas/pisadas.js y mirá las capturas.${RST}"
+elif [ -z "$TABS_PIS" ]; then
+  echo "    (no se tocó ninguna pantalla)"
+elif [ -z "$PW_DIR" ] || [ ! -f ../estancias/scripts/migraciones/sesion_prueba.py ]; then
+  echo "${YEL}    sin WebKit o sin sesion_prueba.py en esta compu: no corrió. Corré _tools/pruebas/pisadas.js a mano.${RST}"
+else
+  PIS_TMP=$(mktemp -d)
+  PIS_SES="$PIS_TMP/ses_admin.json"; PIS_EXTRA=""
+  python ../estancias/scripts/migraciones/sesion_prueba.py crear "$PIS_SES" tadeo admin >/dev/null 2>&1 || true
+  if echo ",$TABS_PIS," | grep -q ",ruta,"; then python ../estancias/scripts/migraciones/sesion_prueba.py crear "$PIS_TMP/ses_rep.json" santos repartidor >/dev/null 2>&1 && PIS_EXTRA="$PIS_EXTRA SES_REPARTIDOR=$PIS_TMP/ses_rep.json"; fi
+  if echo ",$TABS_PIS," | grep -q ",miportal,"; then python ../estancias/scripts/migraciones/sesion_prueba.py crear "$PIS_TMP/ses_ven.json" marcos vendedor >/dev/null 2>&1 && PIS_EXTRA="$PIS_EXTRA SES_VENDEDOR=$PIS_TMP/ses_ven.json"; fi
+  node _tools/servir.js 8094 >/dev/null 2>&1 & PIS_SRV=$!
+  sleep 2
+  echo "    pantallas: $TABS_PIS"
+  set +e
+  env PW="$PW_DIR" BASE=http://localhost:8094/app.html OUT="$PIS_TMP/capturas" MEDIDAS=w390 SOLO="$TABS_PIS" CAPTURAS=1 SES_ADMIN="$PIS_SES" $PIS_EXTRA \
+    node _tools/pruebas/pisadas.js 2>&1 | grep -E "^(MAL|ok|PANTALLAS)" | sed 's/^/    /'
+  RC=${PIPESTATUS[0]}
+  set -e
+  kill $PIS_SRV 2>/dev/null || true
+  for f in "$PIS_SES" "$PIS_TMP/ses_rep.json" "$PIS_TMP/ses_ven.json"; do [ -f "$f" ] && python ../estancias/scripts/migraciones/sesion_prueba.py borrar "$f" >/dev/null 2>&1 || true; done
+  echo "    capturas a 390 px: $PIS_TMP/capturas  (mirá la del lugar que tocaste, con lo desplegable abierto)"
+  if [ "$RC" != "0" ]; then fallar "En el iPhone hay texto encimado o scroll de costado — no se publica."; fi
+fi
+
 # ── 3d. Que se pueda LEER en la computadora ──────────────────────────────────
 #  El 3/9/2026 se publico el desglose de una venta probado solo a 390px: en el
 #  celular se veia bien y en la computadora era ilegible (el label a 1189px de

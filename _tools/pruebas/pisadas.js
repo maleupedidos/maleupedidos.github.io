@@ -39,7 +39,10 @@ if (!ROLES.length) { console.log('falta SES_ADMIN=<archivo de sesion_prueba.py>'
 const MEDIR = String(function (movil) {
   var vis = function (e) {
     if (!e || !e.getClientRects().length) return false;
-    if (e.checkVisibility) return e.checkVisibility({ opacityProperty: true, visibilityProperty: true });
+    var bx = e.getBoundingClientRect(); if (bx.right <= 1 || bx.left >= innerWidth - 1) return false;   // fuera de la pantalla (el menú lateral cerrado)
+    /* contentVisibilityAuto: lo que el navegador no dibuja porque está fuera de pantalla (Pedidos usa content-visibility:auto)
+       tiene medidas estimadas: no se cuenta. */
+    if (e.checkVisibility) return e.checkVisibility({ opacityProperty: true, visibilityProperty: true, contentVisibilityAuto: true });
     var cs = getComputedStyle(e); return cs.visibility !== 'hidden' && Number(cs.opacity) > 0.05;
   };
   var nombre = function (e) {
@@ -49,13 +52,19 @@ const MEDIR = String(function (movil) {
   var fijo = function (e) { for (var n = e; n && n !== document.body; n = n.parentElement) { var p = getComputedStyle(n).position; if (p === 'fixed' || p === 'sticky') return n; } return null; };
   /* El recorte de los contenedores con overflow distinto de visible. */
   var clip = function (e) {
-    var r = { l: -1e9, t: -1e9, r: 1e9, b: 1e9 };
-    for (var n = e.parentElement; n && n !== document.documentElement; n = n.parentElement) {
+    var r = { l: -1e9, t: -1e9, r: 1e9, b: 1e9 }; var desliza = false;
+    for (var n = e; n && n !== document.documentElement; n = n.parentElement) {   // el propio elemento también recorta (un «…»)
       var cs = getComputedStyle(n);
       if (cs.overflowX !== 'visible' || cs.overflowY !== 'visible') { var b = n.getBoundingClientRect(); r = { l: Math.max(r.l, b.left), t: Math.max(r.t, b.top), r: Math.min(r.r, b.right), b: Math.min(r.b, b.bottom) }; }
+      /* Lo que corta de COSTADO sin dejar deslizar (hidden/clip, no auto/scroll): ahí un texto que se pasa queda mocho. */
+      if (cs.overflowX === 'auto' || cs.overflowX === 'scroll') desliza = true;   // de ahí para arriba, lo que se pasa se desliza: no queda mocho
+      if (!desliza && (cs.overflowX === 'hidden' || cs.overflowX === 'clip')) { var b2 = n.getBoundingClientRect(); r.hl = Math.max(r.hl === undefined ? -1e9 : r.hl, b2.left); r.hr = Math.min(r.hr === undefined ? 1e9 : r.hr, b2.right); }
     }
     return r;
   };
+  var mochos = new Set(), mochosL = [];
+  /* El «…» puede estar en el elemento o en el contenedor que corta (.cj-con con un .ord-link adentro). */
+  var conPuntos = function (e) { for (var n = e, i = 0; n && i < 5; n = n.parentElement, i++) if (getComputedStyle(n).textOverflow === 'ellipsis') return true; return false; };
   var cajas = [], tw = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT), nd, rg = document.createRange(), vistos = new Map();
   while ((nd = tw.nextNode())) {
     if (!nd.nodeValue || !nd.nodeValue.trim()) continue;
@@ -67,6 +76,10 @@ const MEDIR = String(function (movil) {
     for (var i = 0; i < rs.length; i++) {
       var q = rs[i]; if (q.width < 2 || q.height < 2) continue;
       var x = { l: Math.max(q.left, v.c.l), t: Math.max(q.top, v.c.t), r: Math.min(q.right, v.c.r), b: Math.min(q.bottom, v.c.b) };
+      /* Se ve, pero con la punta cortada de costado (y sin «…» a propósito): «30 d en el freeze». */
+      if (v.c.hr !== undefined && (q.right > v.c.hr + 2 || q.left < v.c.hl - 2) && q.bottom > v.c.t && q.top < v.c.b && !conPuntos(el)) {
+        var kc = nombre(el); if (!mochos.has(kc)) { mochos.add(kc); mochosL.push({ el: kc, t: nd.nodeValue.trim().slice(0, 40), sobra: Math.round(Math.max(q.right - v.c.hr, v.c.hl - q.left)) }); }
+      }
       if (x.r - x.l < 2 || x.b - x.t < 2) continue;   // recortado por su contenedor: no se ve
       cajas.push({ x: x, el: el, f: v.f, t: nd.nodeValue.trim().slice(0, 40) });
     }
@@ -99,9 +112,11 @@ const MEDIR = String(function (movil) {
       var hh = e.getBoundingClientRect().height;
       if (hh < 43.5 && hh > 0 && !fijo(e) || (hh < 43.5 && hh > 0 && fijo(e))) { var k2 = 'b' + nombre(e); if (!ks.has(k2)) { ks.add(k2); bot.push({ el: nombre(e), t: (e.textContent || '').trim().slice(0, 30), h: Math.round(hh) }); } }
     }
-    if (directo && parseFloat(cs.fontSize) < 11.95) { var k3 = 'l' + nombre(e); if (!ks.has(k3)) { ks.add(k3); let_.push({ el: nombre(e), t: (e.textContent || '').trim().slice(0, 30), px: parseFloat(cs.fontSize) }); } }
+    /* 0 = escondido a propósito; el texto de un SVG escala con el dibujo. */
+    if (directo && parseFloat(cs.fontSize) < 11.95 && parseFloat(cs.fontSize) > 0 && !e.closest('svg')) { var k3 = 'l' + nombre(e); if (!ks.has(k3)) { ks.add(k3); let_.push({ el: nombre(e), t: (e.textContent || '').trim().slice(0, 30), px: parseFloat(cs.fontSize) }); } }
   });
   var de = document.documentElement;
+  cort = cort.concat(mochosL);
   return { pisadas: pis, cortados: cort, scroll: Math.max(0, de.scrollWidth - de.clientWidth), botones: bot, letra: let_ };
 });
 
@@ -126,26 +141,33 @@ const esperarCarga = (pg) => pg.waitForFunction(() => {
         window.confirm=function(){return false;}; window.alert=function(){}; window.prompt=function(){return null;};
         (function(){var f=window.fetch;window.__cortados=[];window.fetch=function(u,x){var s=String(u&&u.url||u),m=String((x&&x.method)||'GET').toUpperCase();
           var r=/\\/rest\\/v1\\/rpc\\/([a-z0-9_]+)/.exec(s);
-          if(m!=='GET'&&m!=='HEAD'&&!/auth\\/v1\\/token/.test(s)&&(/script\\.google\\.com/.test(s)||!r||!/_(pantalla|datos|base)$|^permiso_base$|^mi_deposito$|^demanda_por_deposito$/.test(r[1]))){window.__cortados.push((r&&r[1])||s.slice(0,60));return Promise.resolve(new Response('{"ok":false,"err":"cortado por la prueba"}',{status:200,headers:{'Content-Type':'application/json'}}));}
+          if(m!=='GET'&&m!=='HEAD'&&!/auth\\/v1\\/token/.test(s)&&(/script\\.google\\.com/.test(s)||!r||!/_(pantalla|datos|base)$|^permiso_base$|^mi_deposito$|^demanda_por_deposito$|^catalogo_(red|ruta)$|^tienda_vendedores$/.test(r[1]))){window.__cortados.push((r&&r[1])||s.slice(0,60));return Promise.resolve(new Response('{"ok":false,"err":"cortado por la prueba"}',{status:200,headers:{'Content-Type':'application/json'}}));}
           return f.apply(this,arguments);};})();`);
       const pg = await ctx.newPage();
       const errs = []; pg.on('pageerror', (e) => errs.push(String(e.message || e).slice(0, 160)));
       await pg.goto(BASE + (BASE.includes('?') ? '&' : '?') + 'v=' + Date.now(), { waitUntil: 'domcontentloaded' });
       await pg.waitForFunction(() => typeof window.go === 'function' && typeof SESSION !== 'undefined' && !!SESSION, null, { timeout: 90000 }).catch(() => {});
       await pg.waitForTimeout(4000);
-      let tabs = await pg.evaluate(() => Array.from(document.querySelectorAll('.pg')).map((p) => p.id.replace(/^p-/, '')).filter((t) => {
-        const T = (SESSION && SESSION.tabs) || []; return T.indexOf('*') >= 0 || T.indexOf(t) >= 0 || (SESSION.rol === 'admin');
-      }));
+      /* Las pantallas de este rol: las de SESSION.tabs (admin: todas), la que abre al entrar y las que el menú ofrece. */
+      let tabs = await pg.evaluate(() => {
+        const T = (SESSION && SESSION.tabs) || [], ids = Array.from(document.querySelectorAll('.pg')).map((p) => p.id.replace(/^p-/, ''));
+        const menu = new Set();
+        document.querySelectorAll('[onclick]').forEach((e) => { const m = /\bgo\('([a-z]+)'\)/.exec(e.getAttribute('onclick') || ''); if (m && e.getClientRects().length) menu.add(m[1]); });
+        const on = ((document.querySelector('.pg.on') || {}).id || '').replace(/^p-/, '');
+        return ids.filter((t) => SESSION.rol === 'admin' || T.indexOf('*') >= 0 || T.indexOf(t) >= 0 || menu.has(t) || t === on);
+      });
       if (SOLO) tabs = tabs.filter((t) => SOLO.indexOf(t) >= 0);
       const medir = async (donde) => {
         await pg.waitForTimeout(700);
         let m = null;
         try { m = await pg.evaluate(`(${MEDIR})(${movil})`); } catch (e) { m = { error: String(e.message).slice(0, 120) }; }
         let foto = '';
-        if (m && ((m.pisadas || []).length || m.scroll)) {
+        if (m && (process.env.CAPTURAS || (m.pisadas || []).length || m.scroll)) {   // CAPTURAS=1: una por pantalla (deploy.sh)
           foto = path.join(OUT, (medida + '_' + rol + '_' + donde).replace(/[^a-z0-9_.-]+/gi, '_').slice(0, 90) + '.png');
           try {
-            await pg.evaluate(() => { const y = (document.documentElement.scrollHeight - innerHeight) / 2; window.scrollTo(0, Math.max(0, y)); });
+            /* Con una pisada, la foto es AHÍ (a un tercio de la pantalla); si no, a la mitad del scroll. */
+            const yP = (m.pisadas && m.pisadas[0]) ? m.pisadas[0].y : null;
+            await pg.evaluate((yp) => { const y = yp !== null ? yp - innerHeight / 3 : (document.documentElement.scrollHeight - innerHeight) / 2; window.scrollTo(0, Math.max(0, y)); }, yP);
             await pg.waitForTimeout(250); await pg.screenshot({ path: foto }); await pg.evaluate(() => window.scrollTo(0, 0));
           } catch (e) { foto = ''; }
         }
