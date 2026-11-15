@@ -2173,8 +2173,8 @@ function abaNpPorDemanda() {
 }
 /* El reparto de UNA cantidad cargada a mano: el mismo criterio que el sugerido (npSugeridoPorDep), pero que sume EXACTO lo
    cargado (con cajas, npSugeridoPorDep redondea a cajas enteras). Lo que sobra o falta va al principal. */
-function abaNpRepartoExacto(it, q) {
-  var r = npSugeridoPorDep(it, q); if (!r || !r.length) return null;
+function abaNpRepartoExacto(it, q, usado) {
+  var r = npSugeridoPorDep(it, q, usado); if (!r || !r.length) return null;
   var suma = r.reduce(function (a, x) { return a + x.q; }, 0), dif = q - suma;
   if (dif > 0) r[0].q += dif;
   for (var i = r.length - 1; dif < 0 && i >= 0; i--) { var saco = Math.min(r[i].q, -dif); r[i].q -= saco; dif += saco; }
@@ -2184,13 +2184,17 @@ function abaNpRepartoExacto(it, q) {
 function abaNpReparto(items) {
   if (!abaNpPorDemanda()) return null;
   var prov = document.getElementById('npProv').value, cat = (catalogo.productos && catalogo.productos[prov]) || [], out = {}, hay = false;
+  var usado = {}, noEntra = 0;   /* (714) los litros que ya se le asignaron a cada depósito en esta compra */
   items.forEach(function (x) {
     if (x.origen === 'Deposito') return;
     var it = cat.filter(function (c) { return c.a === x.abbr; })[0]; if (!it) return;
-    var r = abaNpRepartoExacto(it, x.qty); if (!r) return;
-    var o = {}; r.forEach(function (d) { if (d.q > 0) o[d.id] = d.q; });
+    var r = abaNpRepartoExacto(it, x.qty, usado); if (!r) return;
+    var lpu = typeof _skuLitros === 'function' ? _skuLitros(x.abbr) : 1;
+    noEntra += (r.noEntra || 0) * lpu;
+    var o = {}; r.forEach(function (d) { if (d.q > 0) { o[d.id] = d.q; usado[d.id] = (usado[d.id] || 0) + d.q * lpu; } });
     if (Object.keys(o).length) { out[x.abbr] = o; hay = true; }
   });
+  if (hay && noEntra > 0) Object.defineProperty(out, '__noEntraL', { value: Math.round(noEntra), enumerable: false });
   return hay ? out : null;
 }
 /* (15/11/2026) ¿Hay algún freezer con capacidad cargada? Sin los depósitos todavía en memoria, no se sabe: no se avisa. */
@@ -2207,7 +2211,8 @@ function abaNpRepartoTxt(items) {
   var tot = {};
   Object.keys(rp).forEach(function (a) { Object.keys(rp[a]).forEach(function (d) { tot[d] = (tot[d] || 0) + rp[a][d]; }); });
   var deps = (abaDemDep() || {}).depositos || [];
-  return deps.filter(function (d) { return tot[d.id] > 0; }).map(function (d) { return String(d.nombre || d.id).replace(/^dep[oó]sito\s+/i, '') + ' ' + tot[d.id]; }).join(' · ');
+  return deps.filter(function (d) { return tot[d.id] > 0; }).map(function (d) { return String(d.nombre || d.id).replace(/^dep[oó]sito\s+/i, '') + ' ' + tot[d.id]; }).join(' · ')
+    + (rp.__noEntraL ? ' · no entran ~' + rp.__noEntraL + ' L' : '');   /* (714) */
 }
 function populateNpVendedor() {
   var sel = document.getElementById('npVendedor');
@@ -6091,7 +6096,7 @@ function _abaDemDepPedir() {
     try { var _pv = document.getElementById('npProv'); if (abaCurrentTab === 'nuevo' && _pv && _pv.value) _npPintarProductos(_pv.value); } catch (e) {}
   }).catch(function () { _abaDemDepTs = Date.now() - 540000; });
 }
-function npSugeridoPorDep(it, total) {
+function npSugeridoPorDep(it, total, usado) {
   if (!it || !(total > 0) || !ABA_DEM_DEP || !Array.isArray(ABA_DEM_DEP.depositos) || ABA_DEM_DEP.depositos.length < 2) return null;
   var deps = ABA_DEM_DEP.depositos, dm = (ABA_DEM_DEP.demanda || {})[it.a] || {};
   var falta = deps.map(function (d) {
@@ -6110,8 +6115,26 @@ function npSugeridoPorDep(it, total) {
     exacto.map(function (x, i) { return [x - Math.floor(x), i]; }).sort(function (a, b) { return b[0] - a[0] || a[1] - b[1]; })
       .slice(0, resto).forEach(function (r) { q[r[1]]++; });
   }
+  /* (15/11/2026, 714) EL LUGAR DE CADA DEPÓSITO. Con los litros de todos sus freezers cargados, a un depósito no se le manda
+     más de lo que entra (lugar libre − lo que ya se le asignó en esta compra, `usado`); lo que no entra va al que tenga
+     lugar, y si no entra en ninguno, al principal y se avisa (`noEntra`). Sin litros cargados, `_depLibreL` da null: sin tope. */
+  var lpu = (typeof _skuLitros === 'function' ? _skuLitros(it.a) : 1) * paso, noEntra = 0;
+  var lugar = deps.map(function (d) {
+    var L = (typeof _depLibreL === 'function') ? _depLibreL(d.id) : null;
+    return L === null ? Infinity : Math.max(0, Math.floor((L - ((usado || {})[d.id] || 0)) / lpu));
+  });
+  var exceso = 0;
+  q = q.map(function (x, i) { if (x > lugar[i]) { exceso += x - lugar[i]; return lugar[i]; } return x; });
+  if (exceso > 0) {
+    deps.map(function (d, i) { return i; }).sort(function (a, b) { return falta[b] - falta[a] || a - b; }).forEach(function (i) {
+      var e = Math.min(exceso, lugar[i] - q[i]); if (e > 0) { q[i] += e; exceso -= e; }
+    });
+    if (exceso > 0) { q[0] += exceso; noEntra = exceso * paso; }
+  }
   /* El nombre del DEPÓSITO («Ustariz»), no el del dueño: así lo pidió Tadeo («pedí X para Ustariz, Y para Moresco»). */
-  return deps.map(function (d, i) { return { id: d.id, nombre: String(d.nombre || d.id).replace(/^dep[oó]sito\s+/i, ''), q: q[i] * paso }; });
+  var out = deps.map(function (d, i) { return { id: d.id, nombre: String(d.nombre || d.id).replace(/^dep[oó]sito\s+/i, ''), q: q[i] * paso }; });
+  out.noEntra = noEntra;
+  return out;
 }
 /* El texto: solo si algo va a un depósito que no es el principal (si todo va al de siempre, no se dice nada). */
 function npSugDepTxt(it, total) {

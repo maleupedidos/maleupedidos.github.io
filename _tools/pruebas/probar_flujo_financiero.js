@@ -69,7 +69,7 @@ const espera = ms => new Promise(r => setTimeout(r, ms));
     Object.keys(porDia).forEach((k) => { saldo += porDia[k]; if (!primero && r.piso > 0 && saldo < r.piso) primero = k; });
     if (r.piso > 0 && r.caja < r.piso) primero = 'hoy';
     chk('el aviso del piso nombra el PRIMER día abajo de CAJA_MINIMA' + (primero ? ' (' + primero + ')' : ' (ninguno: no hay aviso)'),
-      primero ? (primero === 'hoy' ? /^⚠️ Hoy/.test(r.bajo) : r.bajo.includes(primero)) : r.bajo === '', [primero, r.bajo]);
+      primero ? (primero === 'hoy' ? /^Hoy ya estás abajo/.test(r.bajo) : r.bajo.includes(primero)) : r.bajo === '', [primero, r.bajo]);
     /* El aviso con un piso que SI se cruza: CAJA_MINIMA = caja − $100.000, en memoria. */
     const piso2 = r.caja - 100000;
     let s2 = r.caja, prim2 = null;
