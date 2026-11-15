@@ -8405,8 +8405,44 @@ function togglePropSigno(inputId){
   if(btn2){btn2.classList.toggle('neg',el.value.charAt(0)==='-');btn2.textContent=el.value.charAt(0)==='-'?'−':'+';}
 }
 
+/* (15/11/2026, 717) «¿LO ENTREGASTE AYER?». Tadeo: «Noriega aparece como venta de hoy porque tocamos Entregado a las 00:11,
+   pero la entregamos ayer». Entre las 00:00 y las 05:59, si el pedido estaba planificado para AYER, el mismo cartel de
+   confirmar pregunta «Sí, ayer · No, hoy». «Sí, ayer» manda `ayer:true` y la base deja la entrega ayer a las 23:59 (solo
+   la entrega: el cobro conserva su hora). Fuera de esa ventana, ni se pregunta. Red no: va por el día acordado. */
+function _rutAyerFecha(){ var d=new Date(); d.setDate(d.getDate()-1); return d; }
+function _rutAyerISO(){ var d=_rutAyerFecha(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
+function _rutAyerAplica(peds){
+  if(new Date().getHours()>=6)return false;
+  var a=_rutAyerISO();
+  return (peds||[]).some(function(p){ return !!p&&p.h!=='Red'&&String(p.fe||'').slice(0,10)===a; });
+}
+function rutPreguntarAyer(quien,cb){
+  var v=document.getElementById('rutAyerOv');if(v)v.remove();
+  var d=_rutAyerFecha(), dia=['dom','lun','mar','mié','jue','vie','sáb'][d.getDay()]+' '+d.getDate()+'/'+(d.getMonth()+1);
+  var bt='flex:1;font-family:inherit;border-radius:12px;padding:12px 10px;cursor:pointer;min-height:52px;font-size:15px;font-weight:800;';
+  var ov=document.createElement('div');
+  ov.id='rutAyerOv';
+  ov.setAttribute('style','position:fixed;inset:0;z-index:2147483000;background:rgba(59,35,20,.55);display:flex;align-items:center;justify-content:center;padding:16px');
+  ov.innerHTML='<div role="dialog" aria-modal="true" style="background:#FBF6EF;border-radius:16px;max-width:400px;width:100%;padding:20px;box-shadow:0 12px 40px rgba(0,0,0,.3)">'
+    +'<div style="font-size:17px;font-weight:800;color:#3B2314">¿Lo entregaste ayer ('+dia+')?</div>'
+    +(quien?'<div style="font-size:14px;color:#6B5A4C;margin-top:4px">'+String(quien).replace(/[<>&"]/g,'')+'</div>':'')
+    +'<div style="display:flex;gap:10px;margin-top:16px">'
+    +'<button type="button" id="rutAyerHoy" style="'+bt+'background:#fff;color:#3B2314;border:1.5px solid #C9B8A8">No, hoy</button>'
+    +'<button type="button" id="rutAyerSi" style="'+bt+'background:#3B2314;color:#fff;border:0">Sí, ayer</button></div>'
+    +'<button type="button" id="rutAyerNo" style="display:block;width:100%;font-family:inherit;background:none;border:0;color:#6B5A4C;font-size:14px;font-weight:700;padding:14px 0 2px;cursor:pointer;min-height:44px">Volver</button>'
+    +'</div>';
+  document.body.appendChild(ov);
+  var fin=function(x){ ov.remove(); if(x!==null)cb(x); };
+  document.getElementById('rutAyerSi').onclick=function(){fin(true);};
+  document.getElementById('rutAyerHoy').onclick=function(){fin(false);};
+  document.getElementById('rutAyerNo').onclick=function(){fin(null);};
+}
+
 /* ── CONFIRMAR ENTREGADO ── */
 function confirmarEntregado(key){
+  /* (717) Entre las 00:00 y las 05:59 con el pedido de ayer: el cartel pregunta el día (y eso confirma la entrega). */
+  var _pAy=_esCombo(key)?_pedidosDelCombo(key):[findByKey(key)];
+  if(_rutAyerAplica(_pAy)){ rutPreguntarAyer(_pAy[0]&&_pAy[0].c,function(ay){ marcarEntregado(key,ay); }); return; }
   // Combo: confirmar mencionando la cantidad de pedidos.
   if(_esCombo(key)){
     var peds=_pedidosDelCombo(key);
@@ -8433,13 +8469,15 @@ function cerrarConfirm(){document.getElementById('confirmOverlay').classList.add
    Es el UNICO lugar que escribe `entregados`, para que los dos caminos -- el
    boton Entregado y la casilla del cuadro de cobro -- no se despeguen. Contar
    cuantos lugares hacen lo mismo ya se pago cuatro veces en este ERP. */
-function _entregarCore(ped){
+function _entregarCore(ped,ayer){
   if(!ped)return false;
   var k=eKey(ped);
   if(entregados[k])return false;
   entregados[k]=true;
-  syncQueue.push({action:'marcarEntregado',hoja:ped.h,id:String(ped.id),row:ped.r,
-    cobrado:!!cobrados[k],propina:propinas[k]||0,repartidor:_rutaUser(),ts:Date.now()});
+  var _q={action:'marcarEntregado',hoja:ped.h,id:String(ped.id),row:ped.r,
+    cobrado:!!cobrados[k],propina:propinas[k]||0,repartidor:_rutaUser(),ts:Date.now()};
+  if(ayer===true)_q.ayer=true;   /* (717) «Sí, ayer»: la base la deja ayer a las 23:59 si se cumple la ventana */
+  syncQueue.push(_q);
   /* Si queda sin cobrar va a COBROS para el seguimiento. Llamado desde el cuadro
      de cobro `cobrados[k]` ya es true, asi que no entra: es la misma condicion de
      siempre y no un caso aparte. Red se liquida por vendedor en Panel > Caja. */
@@ -8450,20 +8488,20 @@ function _entregarCore(ped){
   return true;
 }
 
-function marcarEntregado(key){
+function marcarEntregado(key,ayer){
   // Combo: iterar y marcar cada pedido individual.
   if(_esCombo(key)){
     var peds=_pedidosDelCombo(key);
     if(peds.length===0)return;
     var nombre=(peds[0].c||'').split(' ')[0];
-    peds.forEach(function(p){_entregarCore(p);});
+    peds.forEach(function(p){_entregarCore(p,ayer);});
     saveLocal();processSyncQueue();if(navigator.vibrate)navigator.vibrate(50);
     showToast('Entregado a '+nombre+' ('+peds.length+' pedidos)');
     rutRender();
     return;
   }
   var ent=findByKey(key);
-  _entregarCore(ent);
+  _entregarCore(ent,ayer);
   /* SIN loader: la marca ya esta en `entregados`, en la cola y en localStorage,
      y la card se repinta abajo. Tapar la pantalla hasta que conteste Apps
      Script (3-25 s) no protege nada — el dato sobrevive aunque se cierre la
@@ -10807,6 +10845,11 @@ function confirmarCobroRuta(){
   /* Fecha anterior al ultimo ajuste de caja (13/10/2026): primero se elige. */
   var _ca=_cobroCorteAjuste();
   if(_ca&&!st.ajDec){rutAjusteCartel(_ca,function(dec){st.ajDec=dec;confirmarCobroRuta();});return;}
+  /* (717) Cobrar y entregar entre las 00:00 y las 05:59 con el pedido de ayer: ¿la entrega fue ayer? (el cobro, con su hora) */
+  if(st.entregar&&_cobroEntAplica(st)&&st.ayerDec===undefined){
+    var _pa=st.combo?(st.pedidos||[]):[st.ent];
+    if(_rutAyerAplica(_pa)){ rutPreguntarAyer(_pa[0]&&_pa[0].c,function(ay){st.ayerDec=ay;confirmarCobroRuta();}); return; }
+  }
   // Combo: distribuir el cobro entre los pedidos individuales.
   if(st.combo){
     return _confirmarCobroComboRuta(st,r);
@@ -10958,7 +11001,7 @@ function confirmarCobroRuta(){
      para que el POST viaje con `cobrado:true` y el pedido no entre a COBROS --
      es la misma condicion de `_entregarCore`, no un caso especial. En la cola
      queda detras del `marcarCobrado`, que se procesa de a uno y en orden. */
-  var _entregoTambien=(st.entregar&&_cobroEntAplica(st))?_entregarCore(ent):false;
+  var _entregoTambien=(st.entregar&&_cobroEntAplica(st))?_entregarCore(ent,st.ayerDec):false;
 
   saveLocal();
   cerrarCobroRuta();
@@ -11165,7 +11208,7 @@ function _confirmarCobroComboRuta(st,r){
   _rutFirma='';_cobFirma='';
   /* La entrega de los N pedidos, con el mismo criterio que el cobro suelto. */
   var _nEnt=0;
-  if(st.entregar&&_cobroEntAplica(st))peds.forEach(function(p){if(_entregarCore(p))_nEnt++;});
+  if(st.entregar&&_cobroEntAplica(st))peds.forEach(function(p){if(_entregarCore(p,st.ayerDec))_nEnt++;});
   _rutCobrosBadge();
   var fromCobros=st.fromCobros;
   saveLocal();

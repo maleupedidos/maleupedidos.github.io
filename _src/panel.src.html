@@ -43373,6 +43373,13 @@ function _vtDetalle(v){
          '<button class="vt-det-btn" onclick="event.stopPropagation();vtCopiarTel(\''+esc(v.tel)+'\')">copiar</button></span></div>';
     }
     if(v.n) h+='<div class="vt-det-r"><span>Pedido</span><b>'+esc(v.h||v.canal)+' #'+esc(v.n)+'</b></div>';
+    /* (717) Cuándo se entregó, y cambiarlo. */
+    var _oE=_vDer(v), _hE=_vHoraEnt(v);
+    if(_oE.iso&&v.n){
+      h+='<div class="vt-det-r"><span>Entregado</span><span class="vt-det-tel"><b>'+esc(_vDiaLargo(_oE)+(_hE?' · '+_hE:''))+'</b>'
+        +(_entregaEditable(v.h||v.canal)?'<button class="vt-det-btn" onclick="event.stopPropagation();entregaCambiar(\''+esc(v.h||v.canal)+'\',\''+esc(v.n)+'\',\''+esc(String(v.cliente||'').replace(/\'/g,''))+'\',\''+_oE.iso+'\',\''+esc(_hE)+'\')">cambiar</button>':'')
+        +'</span></div>';
+    }
     h+='</div>';
   }
 
@@ -44101,10 +44108,50 @@ function _vDiaLargo(o){
   var p = o.iso.split('-');
   return _V_DIAS[o.dow] + ' ' + Number(p[2]) + '/' + Number(p[1]) + '/' + p[0];
 }
+/* (15/11/2026, 717) LA HORA DE ENTREGA de una venta: `hx` de la base (ventas_base); si la copia es vieja, la del pedido
+   en vivo (`D.pedidos`). Sin hora (las viejas, cargadas solo con el día), nada. */
+function _vHoraEnt(v){
+  if(!v)return '';
+  if(v.hx)return String(v.hx);
+  try{ var p=_vpIdx().idx[(v.h||v.canal)+'|'+v.n]; if(p&&p.hx&&p.es==='Entregado')return String(p.hx); }catch(e){}
+  return '';
+}
+/* (15/11/2026, 717) CAMBIAR EL DÍA Y LA HORA DE ENTREGA de una venta ya entregada. Solo admin (el dueño es admin); Home,
+   Pilar y Clubes (Red va por el día acordado). `pedido_fecha_real_directo` la mueve con auditoría (quién, cuándo, de qué
+   a qué) y todo lo que cuelga de la entrega (Ventas, Inicio, Tendencia, Resultados, el viaje, los días del repartidor)
+   se recalcula solo. El Kardex no se mueve. */
+function _entregaEditable(h){ return typeof SESSION!=='undefined'&&!!SESSION&&SESSION.rol==='admin'&&(h==='Home'||h==='Pilar'||h==='Clubes'); }
+function entregaCambiar(h,n,cli,iso,hora){
+  if(!_entregaEditable(h))return;
+  var hoy=new Date(), hoyIso=hoy.getFullYear()+'-'+String(hoy.getMonth()+1).padStart(2,'0')+'-'+String(hoy.getDate()).padStart(2,'0');
+  var o=document.getElementById('entFechaOv'); if(!o){o=document.createElement('div');o.id='entFechaOv';document.body.appendChild(o);}
+  o.className='ent-ov';
+  o.innerHTML='<div class="ent-box" role="dialog" aria-label="Cambiar la entrega"><div class="ent-h"><b>Cambiar la entrega</b></div>'
+    +'<p class="ent-nota">'+_kEsc(cli||'')+' · '+_kEsc(h)+' #'+_kEsc(n)+'</p>'
+    +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:10px 0">'
+    +'<label class="ent-nota">Día<input id="entFechaD" type="date" max="'+hoyIso+'" value="'+_kEsc(iso||'')+'" style="width:100%;min-height:44px;font-size:16px;margin-top:4px"></label>'
+    +'<label class="ent-nota">Hora<input id="entFechaH" type="time" value="'+_kEsc(hora||'')+'" style="width:100%;min-height:44px;font-size:16px;margin-top:4px"></label></div>'
+    +'<div style="display:flex;gap:8px"><button type="button" id="entFechaOk" class="aj-btn" style="flex:1;min-height:44px" onclick="_entregaGuardar(\''+_kEsc(h)+'\',\''+_kEsc(n)+'\')">Guardar</button>'
+    +'<button type="button" class="aj-btn ghost" style="flex:1;min-height:44px" onclick="document.getElementById(\'entFechaOv\').remove()">Cancelar</button></div></div>';
+}
+function _entregaGuardar(h,n){
+  var d=(document.getElementById('entFechaD')||{}).value||'', t=(document.getElementById('entFechaH')||{}).value||'';
+  var m=/^(\d{4})-(\d{2})-(\d{2})$/.exec(d); if(!m){toast('Elegí el día');return;}
+  var b=document.getElementById('entFechaOk'); if(b){b.disabled=true;b.textContent='Guardando…';}
+  _baseRpc('pedido_fecha_real_directo',{p:{action:'fechaEntregaReal',hoja:h,id:String(n),fecha:m[3]+'/'+m[2]+'/'+m[1],hora:t,clientOpId:_pfId()}}).then(function(r){
+    if(!r||r.ok===false)throw new Error((r&&r.err)||'error');
+    var ov=document.getElementById('entFechaOv'); if(ov)ov.remove();
+    toast(r.nada?'Ya estaba así':'Listo: entregado el '+r.ahora+(r.nota?' · '+r.nota:''),7000);
+    try{ _recargarPedidos(); }catch(e){}
+    try{ _vPidiendo=null; loadVentas(); }catch(e){}
+    try{ if(typeof closeOrdDetail==='function'&&document.getElementById('ordBody'))closeOrdDetail(); }catch(e){}
+  }).catch(function(e){ if(b){b.disabled=false;b.textContent='Guardar';} toast('No se guardó: '+((e&&e.message)||'error'),8000); });
+}
 function _vRefPedido(v){
   var partes = [];
   var ref = (v.h || v.canal || '') + (v.n ? ' #' + v.n : '');
   if(ref) partes.push(ref);
+  var _he = _vHoraEnt(v); if(_he) partes.push('entregado ' + _he);   /* (717) Tadeo: «ver el horario de entrega de cada venta» */
   if(v.canal === 'Red'){ if(v.zona) partes.push('representante ' + v.zona); if(v.dir) partes.push(v.dir); }
   else if(v.canal === 'Clubes'){ /* el club ya va en el nombre */ }
   else if(v.dir) partes.push(v.dir);
@@ -45101,7 +45148,8 @@ if('serviceWorker' in navigator){
     /* El pedido figura entregado y NO se entregó (11/9/2026): vuelve a Pendiente y lo que salió del freezer vuelve. */
     if((p.h==='Home'||p.h==='Pilar'||p.h==='Clubes')&&ent)masB+='<button class="ord-btn" onclick="_ordDeshacerEntrega(\''+p.h+'\',\''+p.n+'\','+(p.r||0)+')">No se entregó</button>';
     /* «Se entregó otro día» (25/10/2026, admin): mueve la entrega, el Kardex, el remito y el recibo a la fecha real. */
-    if((p.h==='Home'||p.h==='Pilar')&&ent&&SESSION&&SESSION.rol==='admin')masB+='<button class="ord-btn" onclick="_ordFechaEntregaReal(\''+p.h+'\',\''+p.n+'\','+(p.r||0)+')">Se entregó otro día</button>';
+    /* (717) Día y hora, con el mismo cuadro que Ventas. */
+    if(ent&&_entregaEditable(p.h))masB+='<button class="ord-btn" onclick="entregaCambiar(\''+p.h+'\',\''+p.n+'\',\''+_e(String(p.c||'').replace(/\'/g,''))+'\',\''+_e(_tendFechaVentaISO(p)||'')+'\',\''+_e(p.hx||'')+'\')">Cambiar día y hora de entrega</button>';
     var _uidDvF='dvf-'+p.h+p.n;
     if((p.h==='Home'||p.h==='Pilar')&&ent)masB+='<button class="ord-btn" onclick="abrirDevolucion(\''+p.h+'\',\''+p.n+'\','+(p.r||0)+',\''+_uidDvF+'\')">Devolvió un producto</button>';
     /* Deshacer el cobro (no Red): vuelve a «No cobrado» para corregirlo en COBROS. */
