@@ -619,6 +619,16 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
     return { ok: !falta.length, detalle: det.join(' · ') + (falta.length ? ' · FALTA: ' + falta.join(' · ') : '') + ' · pesaje de carne: después del corte' };
   }, { escribe: true, topeMs: 90000 });
 
+  /* (15/11/2026) EL MISMO PERÍODO DA LO MISMO EN TODAS LAS PANTALLAS: Inicio, Tendencia, Ventas, Resultados, Red y Mi Portal
+     (`_tools/pruebas/cruce_ventas.js`, solo lee). Solo de noche: en un deploy, una diferencia de datos no tiene por qué
+     frenar un arreglo urgente; de noche sale en el resumen de la mañana. */
+  if (!process.env.ROBOT_LOCAL) await paso('las pantallas de ventas dicen lo mismo', async () => {   /* ROBOT_LOCAL = el de deploy.sh */
+    const { EXPR } = require('../pruebas/cruce_ventas.js');
+    const r = await ev(EXPR, 300000);
+    const n = (r.filas || []).filter((f) => f.pantalla).length;
+    return { ok: !!r.ok, detalle: r.ok ? n + ' comparaciones, 0 diferencias' : (r.difs || []).slice(0, 8).join(' · ') };
+  });
+
   await paso('nadie lee la foto de Apps Script', async () => {
     const f = JSON.parse(await ev(`JSON.stringify(window.__fotoApps||null)`).catch(() => 'null'));
     if (f === null) return { ok: false, detalle: 'el ERP no tiene el corte de la foto (window.__fotoApps no existe)' };
