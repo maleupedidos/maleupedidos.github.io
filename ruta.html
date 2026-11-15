@@ -2436,6 +2436,17 @@ try{localStorage.removeItem('maleu_ruta_armadoCollapse')}catch(e){}
 if(location.hash){var h=location.hash.replace('#','').toLowerCase();if(h==='cobros'||h==='armado'||h==='ruta'||h==='nuevo')rutCurrentTab=h;}
 updateOnlineStatus();
 window.addEventListener('online', function(){isOnline=true;updateOnlineStatus();processSyncQueue();refresh(true)});
+/* (15/11/2026, 721) APENAS LA APP VUELVE A PRIMER PLANO, LA COLA SALE. iOS suspende la PWA y la cola solo corría con la app
+   abierta: Eugenia (11:20) se mandó recién a las 17:55, ya pasada la marca de 30 min. Al volver (visibilitychange, pageshow)
+   se intenta mandar en el momento, antes de esa marca. Sin señal, el aviso de arriba lo dice. */
+function _rutColaAlVolver(){
+  if(document.hidden)return;
+  if(typeof navigator!=='undefined'&&navigator.onLine===true&&!isOnline){isOnline=true;try{updateOnlineStatus();}catch(e){}}
+  try{_rutPintarBanner();}catch(e){}
+  if(isOnline&&syncQueue&&syncQueue.length)processSyncQueue();
+}
+document.addEventListener('visibilitychange',_rutColaAlVolver);
+window.addEventListener('pageshow',_rutColaAlVolver);
 window.addEventListener('offline', function(){isOnline=false;updateOnlineStatus()});
 // Restaurar tab activo visualmente
 document.querySelectorAll('.tab').forEach(function(t){t.classList.toggle('active',t.dataset.tab===rutCurrentTab)});
@@ -2586,7 +2597,7 @@ function loadLocal(){try{var d=JSON.parse(localStorage.getItem('maleu_ruta')||'{
     } else {
       /* Lo viejo no se reenvia solo (por eso existe la purga), pero tampoco se
          tira: pasa a "No se pudo guardar" para que la persona decida (7/10/2026). */
-      var _vale=function(it){var ts=Number(it&&it.ts)||0;return (ts>0&&(_now-ts)<_maxAge)||_rutVaIgual(it);};
+      var _vale=function(it){var ts=Number(it&&it.ts)||0;return (ts>0&&(_now-ts)<_maxAge)||_rutVaIgual(it)||!!(it&&it.__reint);};
       var _viejas=syncQueue.filter(function(it){return !_vale(it);});
       syncQueue=syncQueue.filter(_vale);
       if(_viejas.length){var _motV='Quedó más de 30 min en el celular sin poder guardarse';
@@ -12067,15 +12078,32 @@ var _RUT_ACC_TXT={marcarEntregado:'Entregado',deshacerEntrega:'Deshacer entrega'
   marcarCobrado:'Cobro',cobrarParcial:'Cobro parcial',descobrar:'Deshacer cobro',cancelarPedido:'Cancelar pedido',
   marcarEntregadoAVendedor:'Despacho al representante',cobrarVendedorRed:'Cobro al representante',marcarGuardadoEnStock:'Descarga al freezer'};
 function _rutEscR(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
+/* (15/11/2026, 721) La hora del TOQUE, no la de cuando se detectó: «hoy 11:20», «ayer 23:10», «13/11 20:05».
+   Eugenia #2479: el cartel decía 05:55 p. m. (cuando la app volvió) y Lucas la había tocado a las 11:20. */
+function _rutHoraToque(ts){
+  var t=Number(ts)||0; if(!t)return '';
+  var d=new Date(t), h=('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2), hoy=new Date(), ay=new Date(); ay.setDate(ay.getDate()-1);
+  if(d.toDateString()===hoy.toDateString())return 'hoy '+h;
+  if(d.toDateString()===ay.toDateString())return 'ayer '+h;
+  return ('0'+d.getDate()).slice(-2)+'/'+('0'+(d.getMonth()+1)).slice(-2)+' '+h;
+}
 function _rutRechazoTxt(it){
   var acc=_RUT_ACC_TXT[it&&it.action]||String(it&&it.action||'Acción');
+  /* (721) Lo que importa: «Cobro $115.600 por transferencia», «Entrega (con el cobro)». */
+  if(it&&it.action==='marcarCobrado'){
+    var m=(Number(it.ef)||0)+(Number(it.tr)||0), fp=String(it.formaPago||'').trim().toLowerCase();
+    if(m>0)acc='Cobro '+formatMoney(m)+(fp?' por '+fp:'');
+  }else if(it&&it.action==='marcarEntregado'){ acc=it.cobrado?'Entrega (con el cobro)':'Entrega'; }
   var quien='';
   if(it&&it.pedidos&&it.pedidos.length){quien=it.pedidos.map(function(p){return p.c||('#'+p.id);}).join(', ');}
   else if(it){
     var e=(entregas||[]).find(function(x){return x&&x.h===it.hoja&&String(x.id)===String(it.id);});
-    quien=(e&&e.c)||((it.hoja||'')+(it.id?' #'+it.id:''));
+    /* (721) Si el pedido ya no está en la lista y la entrega no trae el cliente, el nombre del cobro hermano (mismo pedido). */
+    var her=!(e&&e.c)&&!it.cliente?[].concat(rutSyncRechazados||[],syncQueue||[]).map(function(x){return x&&x.item?x.item:x;})
+      .find(function(x){return x&&x.cliente&&x.hoja===it.hoja&&String(x.id)===String(it.id);}):null;
+    quien=(e&&e.c)||(it.cliente)||(her&&her.cliente)||((it.hoja||'')+(it.id?' #'+it.id:''));
   }
-  return {acc:acc,quien:quien};
+  return {acc:acc,quien:quien,cuando:(it&&it.ts)?'lo marcaste '+_rutHoraToque(it.ts):''};
 }
 function _rutRechazar(item,motivo,por){
   var it=Object.assign({},item);delete it.__attempts;
@@ -12096,9 +12124,12 @@ function _rutRechazar(item,motivo,por){
    lee): lo que ya esta cobrado sale solo, sin preguntar. Si no contesta (sin
    señal), queda todo como estaba: no saber no es saber que esta cobrado. */
 var _RUT_COBRO_ACC={marcarCobrado:1,cobrarParcial:1};
+/* (721) Lo que se le pregunta a la base antes de avisar o reintentar: los cobros y, desde la 721, las entregas. */
+var _RUT_YA_ACC={marcarCobrado:1,cobrarParcial:1,marcarEntregado:1};
 function _rutCobroClave(it){return String(it&&it.hoja||'')+'|'+String(it&&it.id||'');}
 function _rutSacarCobrados(regs,cb){
   var hecho=false;
+  var nombres={};
   var fin=function(s){
     if(hecho)return;hecho=true;
     var sacados=0;
@@ -12106,25 +12137,34 @@ function _rutSacarCobrados(regs,cb){
       /* En el lugar (splice), nunca reasignando: el ERP fusionado publica el
          arreglo en window y una copia nueva lo dejaria mirando el viejo. */
       for(var k=rutSyncRechazados.length-1;k>=0;k--){
-        var r=rutSyncRechazados[k];
-        if(regs.indexOf(r)>=0&&r.item&&_RUT_COBRO_ACC[r.item.action]&&s[_rutCobroClave(r.item)]){rutSyncRechazados.splice(k,1);sacados++;}
+        var r=rutSyncRechazados[k], ck=r&&r.item?_rutCobroClave(r.item):'';
+        if(regs.indexOf(r)<0||!r.item)continue;
+        /* Un cobro, si está cobrado. Una entrega, si está entregada (y si llevaba el cobro, también cobrada). */
+        var hecho=(_RUT_COBRO_ACC[r.item.action]&&s.cob[ck])||(r.item.action==='marcarEntregado'&&s.ent[ck]&&(!r.item.cobrado||s.cob[ck]));
+        if(hecho){rutSyncRechazados.splice(k,1);sacados++;
+          /* Agrupado por PEDIDO, no por nombre: la entrega puede no traer el cliente y saldría «Home #2479» aparte. */
+          var qn=_rutRechazoTxt(r.item).quien||ck, g=nombres[ck]=nombres[ck]||{n:qn};
+          if(/ #\d+$/.test(g.n)&&!/ #\d+$/.test(qn))g.n=qn;
+          g[r.item.action==='marcarEntregado'?(r.item.cobrado?'ec':'e'):'c']=1;}
       }
       if(sacados)saveLocal();
     }
     _rutPintarBanner();
     var o=document.getElementById('confirmOverlay');
     if(sacados&&o&&!o.classList.contains('hidden')&&o.querySelector('.rut-rech-box'))rutVerRechazados();
-    if(sacados&&typeof showToast==='function')showToast(sacados===1?'Un cobro trabado ya estaba cobrado: lo saqué de la lista':''+sacados+' cobros trabados ya estaban cobrados: los saqué de la lista');
+    /* (721) Una línea por cliente: «Eugenia ya estaba entregada y cobrada en el sistema». Nunca se hace dos veces. */
+    if(sacados&&typeof showToast==='function')showToast(Object.keys(nombres).map(function(n){var x=nombres[n];
+      var q=(x.ec||(x.e&&x.c))?'entregada y cobrada':(x.e?'entregada':'cobrada'); return x.n+' ya estaba '+q+' en el sistema';}).join(' · '),7000);
     if(cb)cb(regs.filter(function(r){return rutSyncRechazados.indexOf(r)>=0;}));
   };
-  var ps=regs.filter(function(r){return r&&r.item&&_RUT_COBRO_ACC[r.item.action]&&r.item.hoja&&r.item.id;})
+  var ps=regs.filter(function(r){return r&&r.item&&_RUT_YA_ACC[r.item.action]&&r.item.hoja&&r.item.id;})
     .map(function(r){return {hoja:r.item.hoja,id:String(r.item.id),row:Number(r.item.row)||0};});
   if(!ps.length||!isOnline){fin(null);return;}
   setTimeout(function(){fin(null);},20000);
   try{_rutPostBase({action:'cobroYa',pedidos:ps})
     .then(function(d){
       if(!d||!d.ok||!Array.isArray(d.cobrados)){fin(null);return;}
-      var s={};d.cobrados.forEach(function(k){s[k]=1;});fin(s);})
+      var s={cob:{},ent:{}};d.cobrados.forEach(function(k){s.cob[k]=1;});(d.entregados||[]).forEach(function(k){s.ent[k]=1;});fin(s);})
     .catch(function(){fin(null);});}catch(_){fin(null);}
 }
 /* La constancia en Log Errores: si el celular se pierde o se borra, queda. */
@@ -12158,7 +12198,9 @@ function _rutPintarBanner(){
     b.className='sync-banner'+(syncQueue.length>0?' visible':'');
     /* (31/10/2026) Lo que se pintó al toque y todavía no confirmó el servidor. */
     var q0=syncQueue[0], qn=syncQueue.length;
-    b.textContent='Guardando… '+(q0?(_RUT_ACC_TXT[q0.action]||'un cambio'):'')+(qn>1?' y '+(qn-1)+' más':'');
+    /* (721) Sin señal no está «guardando»: está esperando. Que se vea en el encabezado. */
+    if(!isOnline&&qn>0)b.textContent='Sin señal · '+qn+(qn===1?' cosa sin guardar':' cosas sin guardar')+' · se manda sola cuando vuelva';
+    else b.textContent='Guardando… '+(q0?(_RUT_ACC_TXT[q0.action]||'un cambio'):'')+(qn>1?' y '+(qn-1)+' más':'');
     b.onclick=null;
   }
 }
@@ -12167,9 +12209,9 @@ function rutVerRechazados(){
   if(!rutSyncRechazados.length){o.classList.add('hidden');_rutPintarBanner();return;}
   var filas=rutSyncRechazados.map(function(r,i){
     var d=_rutRechazoTxt(r.item);
-    var cuando=new Date(r.t).toLocaleString('es-AR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'});
-    return '<div class="rut-rech-fila"><div class="rut-rech-tit">'+_rutEscR(d.acc)+' · '+_rutEscR(d.quien)+'</div>'+
-      '<div class="rut-rech-mot">'+_rutEscR(r.motivo)+' · '+_rutEscR(cuando)+'</div>'+
+    /* (721) «Eugenia · Cobro $115.600 por transferencia · lo marcaste hoy 11:20»: la hora es la del toque. */
+    return '<div class="rut-rech-fila"><div class="rut-rech-tit">'+_rutEscR(d.quien)+' · '+_rutEscR(d.acc)+(d.cuando?' · '+_rutEscR(d.cuando):'')+'</div>'+
+      '<div class="rut-rech-mot">'+_rutEscR(r.motivo)+'</div>'+
       '<div class="confirm-btns"><button class="btn-no" onclick="rutDescartarRechazado('+i+')">Descartar</button>'+
       '<button class="btn-si" onclick="rutReintentarRechazado('+i+')">Reintentar</button></div></div>';
   }).join('');
@@ -12180,13 +12222,16 @@ function rutVerRechazados(){
 function rutReintentarRechazado(i,yaMirado){
   var r=rutSyncRechazados[i];if(!r)return;
   /* Un cobro: antes de reenviarlo, ¿ya esta cobrado? (18/10/2026) */
-  if(!yaMirado&&r.item&&_RUT_COBRO_ACC[r.item.action]){
-    if(typeof showToast==='function')showToast('Revisando si ya estaba cobrado…');
+  if(!yaMirado&&r.item&&_RUT_YA_ACC[r.item.action]){
+    if(typeof showToast==='function')showToast('Revisando si ya estaba hecho…');
     _rutSacarCobrados([r],function(quedan){if(quedan.length){var j=rutSyncRechazados.indexOf(r);if(j>=0)rutReintentarRechazado(j,1);}});
     return;
   }
   rutSyncRechazados.splice(i,1);
-  var it=Object.assign({},r.item,{ts:Date.now()});delete it.__attempts;
+  /* (721) La operación ORIGINAL: el mismo `ts` (la base arma el id con él: si llegó a medias la reconoce como repetida, y
+     la entrega y el cobro quedan a la hora del toque). `__reint`: que al reabrir la app la regla de 30 min no la vuelva a
+     mandar al cartel; la persona ya decidió. */
+  var it=Object.assign({},r.item,{__reint:1});delete it.__attempts;
   syncQueue.push(it);saveLocal();_rutPintarBanner();
   rutVerRechazados();
   if(typeof showToast==='function')showToast('Reintentando…');
