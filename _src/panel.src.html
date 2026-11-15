@@ -6422,7 +6422,7 @@ div.rb-esq .rb-n{color:#bbb}
         <select id="vtMetric" class="vt-sel" onchange="rTendencia()">
           <option value="fact" selected>Facturación</option>
           <option value="mb">Margen Bruto</option>
-          <option value="ped">Cantidad de pedidos</option>
+          <option value="ped">Entregas</option>
           <option value="ticket">Ticket promedio</option>
           <option value="prod">Unidades vendidas</option>
           <option value="casas">Casas nuevas</option>
@@ -25739,16 +25739,40 @@ function _rtEsVenta(p){
   if(p.h==='Red')return String(p.ev||'').trim()==='Entregado'||p.es==='Entregado';
   return p.es==='Entregado';
 }
+/* (15/11/2026) UNA SOLA REGLA PARA TODO EL ERP. Tadeo: «no tiene que haber ninguna diferencia de datos entre cada sección».
+   Tendencia decía 71 «pedidos» y Inicio 67 entregas en la misma semana: Tendencia contaba filas y metía Catering y ventas
+   pendientes. Desde hoy las dos pantallas preguntan lo mismo a las mismas dos funciones:
+     · `_rtCuentaRetail(p)`: ¿esta venta entra en Ventas retail? (entregada —Red: entregada al representante—, con cliente y
+       monto, de Home, Pilar, Clubes o Red; Catering y B2B van aparte).
+     · `_rtEntregas(peds)`: cuántas ENTREGAS son (glosario): Home/Pilar por ocasión (misma casa, mismo día, mismo viaje),
+       Clubes igual, Red una por cliente del representante por día. */
+function _rtCuentaRetail(p){
+  if(!p||p.hist||p.es==='Cancelado')return false;
+  if(!_rtEsVenta(p))return false;
+  if(!p.c||!String(p.c).trim()||!(Number(p.$)>0))return false;
+  return p.h==='Home'||p.h==='Pilar'||p.h==='Clubes'||p.h==='Red';
+}
+function _rtEntregas(peds){
+  var home=[],otras=[],clubes=[],bolsas={};
+  (peds||[]).forEach(function(p){
+    if(p.h==='Home'||p.h==='Pilar')(_rtEsHome(p)?home:otras).push(p);
+    else if(p.h==='Clubes')clubes.push(p);
+    else if(p.h==='Red')bolsas[_redVentaKey(p,_tendFechaVentaISO(p))]=1;
+  });
+  var o={home:_contarVentas(home),otras:_contarVentas(otras),clubes:_contarVentas(clubes),red:Object.keys(bolsas).length};
+  o.dom=o.home+o.otras; o.tot=o.dom+o.clubes+o.red;
+  return o;
+}
 function _rtSumar(desde,hasta){
   var g={tot:_rtVacio(),dom:_rtVacio(),home:_rtVacio(),otras:_rtVacio(),inst:_rtVacio(),
          clubes:_rtVacio(),red:_rtVacio(),b2b:_rtVacio(),cat:_rtVacio(),bolsas:{}};
   function mete(n,f,c,det){var x=g[n];x.f+=f;x.c+=c;if(det)x.det[det]=(x.det[det]||0)+1;}
+  var _todos=[];
   ((typeof D!=='undefined'&&D&&D.pedidos)||[]).forEach(function(p){
-    if(p.hist||p.es==='Cancelado')return;
-    if(!_rtEsVenta(p))return;
-    if(!p.c||!String(p.c).trim()||!(Number(p.$)>0))return;
+    if(!_rtCuentaRetail(p))return;   /* (15/11/2026) la misma regla que Tendencia */
     var dia=_tendFechaVentaISO(p);
     if(!dia||dia<desde||dia>hasta)return;
+    _todos.push(p);
     var f=Number(p.$)||0,c=Number(p.co)||0;
     if(p.h==='Home'||p.h==='Pilar'){
       var home=_rtEsHome(p),hoja=home?'home':'otras';
@@ -25793,10 +25817,11 @@ function _rtSumar(desde,hasta){
     if(x.h==='B2B'){mete('inst',f,c);mete('b2b',f,c,String(x.c||'').trim());g.b2b.ent++;mete('tot',f,c);}
     else if(x.h==='Catering'){mete('cat',f,c);g.cat.ent++;}
   });
-  g.home.ent=_contarVentas(g.home.peds);g.otras.ent=_contarVentas(g.otras.peds);
-  g.dom.ent=g.home.ent+g.otras.ent;
-  g.clubes.ent=_contarVentas(g.clubes.peds);
-  g.red.ent=Object.keys(g.bolsas).length;
+  var _E=_rtEntregas(_todos);   /* (15/11/2026) la misma cuenta que Tendencia */
+  g.home.ent=_E.home;g.otras.ent=_E.otras;
+  g.dom.ent=_E.dom;
+  g.clubes.ent=_E.clubes;
+  g.red.ent=_E.red;
   g.inst.ent=g.clubes.ent+g.red.ent+g.b2b.ent;
   g.tot.ent=g.dom.ent+g.inst.ent;
   g.hayExtra=hayExtra;
@@ -42374,9 +42399,29 @@ function rTendencia(){
       uniProd=(_abCat.length&&_abCat.every(function(a){ return _uniMapa[a]==='kg'; }))?'kg':'u';
     }
   }
+  /* (15/11/2026) Cada venta de VD se mira como el PEDIDO de Inicio: si `D.pedidos` lo tiene (desde el 10/10, 307 de 307
+     emparejados con la misma fecha), es ese mismo objeto; si es más viejo, se arma con los datos de la venta. Así el
+     filtro (`_rtCuentaRetail`) y la cuenta de entregas (`_rtEntregas`) son los de Inicio, no unos propios. */
+  var _tIdx={};
+  ((typeof D!=='undefined'&&D&&D.pedidos)||[]).forEach(function(p){ if(p&&!p.hist)_tIdx[p.h+'|'+p.n]=p; });
+  /* Sin memoria entre dibujos, a propósito: si se guardaba, una venta mirada antes de que llegara `D.pedidos` quedaba
+     armada sin la hora de entrega, y sin hora dos viajes del mismo día cuentan como uno (W44: 60 en vez de 65). */
+  var _tMemo={};
+  function _tendComoPedido(v){
+    var _k=v.h+'|'+v.n+'|'+v.fecha+'|'+v.cliente;
+    if(_tMemo[_k])return _tMemo[_k];
+    var p=_tIdx[v.h+'|'+v.n];
+    if(!p){
+      var dd=_tendParseDMY(v.fecha), iso=dd?(dd.getFullYear()+'-'+String(dd.getMonth()+1).padStart(2,'0')+'-'+String(dd.getDate()).padStart(2,'0')):'';
+      p={h:v.h||v.canal,n:v.n,c:v.cliente,tel:v.tel,f:v.fecha,fe:v.fecha,fex:iso,dee:iso,es:v.estado,ev:v.estado,$:v.$,co:v.costo,br:v.sub,bar:v.barrio};
+    }
+    _tMemo[_k]=p;
+    return p;
+  }
   // 1. Filtrar (canal + día puntual si aplica)
   var rows=esProd?[]:VD.filter(function(v){
     if(v.ep==='Cancelado')return false;
+    if(!_rtCuentaRetail(_tendComoPedido(v)))return false;   /* (15/11/2026) lo mismo que Ventas retail de Inicio */
     if(sub!=='__all' && _tendSubcanal(v)!==sub)return false;
     if(bar!=='__all' && getBarrio(v)!==bar)return false;
     if(!v.fecha)return false;
@@ -42490,10 +42535,16 @@ function rTendencia(){
     item.fact+=Number(v.$)||0;
     item.mb+=(Number(v.$)||0)-(Number(v.costo)||0); // margen bruto = facturado − costo (canónico, igual que EERR)
     _acP(item,d,1,Number(v.$)||0,(Number(v.$)||0)-(Number(v.costo)||0),0);
+    (item._peds||(item._peds=[])).push(_tendComoPedido(v));
+    if(_offP(d)<=_offHoy)(item._pp||(item._pp=[])).push(_tendComoPedido(v));
     if(_prim&&_prim.has(v)){item.nue=(item.nue||0)+1;if(_offP(d)<=_offHoy)item.pnue=(item.pnue||0)+1;}
   });
   var serie=Object.keys(grp).map(function(k){return grp[k];}).sort(function(a,b){return a.sortKey-b.sortKey;});
   if(win>0 && serie.length>win)serie=serie.slice(-win);
+  /* (15/11/2026) ENTREGAS, no filas: la misma cuenta que Inicio (`_rtEntregas`). */
+  if(!esProd)serie.forEach(function(it){ if(it._peds){ it.n=_rtEntregas(it._peds).tot; it.pn=_rtEntregas(it._pp||[]).tot; } });
+  /* Lo último que se dibujó, para la prueba que cruza pantallas (`_tools/pruebas/cruce_ventas.js`). */
+  window._tendUltima={met:metric,per:period,sub:sub,serie:serie.map(function(it){ return {key:it.key,desde:it.minD||it.d||null,n:it.n,fact:it.fact,mb:it.mb}; })};
   function val(p){
     if(metric==='casas')return p.nue||0;
     if(metric==='prod')return p.u||0;
@@ -42630,7 +42681,7 @@ function rTendencia(){
         ? (dPed>=0?'vino más gente':'vino menos gente')
         : (dTk>=0?'cada uno gastó más':'cada uno gastó menos');
       palancasHtml='<div class="v-kpi"><div class="v-kpi-v vt-palancas">'
-        +'<span class="'+_cl(dPed)+'">'+_sg(dPed)+'</span><small>pedidos</small>'
+        +'<span class="'+_cl(dPed)+'">'+_sg(dPed)+'</span><small>entregas</small>'
         +'<span class="'+_cl(dTk)+'">'+_sg(dTk)+'</span><small>ticket</small>'
         +'</div><div class="v-kpi-l">De dónde viene · '+manda+'</div></div>';
     }
