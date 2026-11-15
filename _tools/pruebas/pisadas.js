@@ -64,11 +64,16 @@ const MEDIR = String(function (movil) {
   };
   var mochos = new Set(), mochosL = [];
   /* El «…» puede estar en el elemento o en el contenedor que corta (.cj-con con un .ord-link adentro). */
+  /* (15/11) Un monto o un número cortado con «…» («$80…») es un error: el «…» a propósito vale para nombres, no para plata. */
+  /* Monto = con «$», o un número solo («25», «1,6M»); «Home #2505 · La Pioner…» es una dirección, no un monto. */
+  var esMonto = function (s) { s = String(s || '').trim(); return /\$\s?[\d.,]/.test(s) || /^[\d.,]+\s?[kKM%]?$/.test(s); };
   var conPuntos = function (e) { for (var n = e, i = 0; n && i < 5; n = n.parentElement, i++) if (getComputedStyle(n).textOverflow === 'ellipsis') return true; return false; };
   var cajas = [], tw = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT), nd, rg = document.createRange(), vistos = new Map();
   while ((nd = tw.nextNode())) {
     if (!nd.nodeValue || !nd.nodeValue.trim()) continue;
     var el = nd.parentElement; if (!el || /^(SCRIPT|STYLE|NOSCRIPT|OPTION|TEXTAREA)$/.test(el.tagName)) continue;
+    /* El contenido de un <details> cerrado no se ve, aunque su padre (el details) sí: solo cuenta lo de su <summary>. */
+    if (el.closest('details:not([open])') && !el.closest('summary')) continue;
     var v = vistos.get(el); if (v === undefined) { v = vis(el) ? { f: fijo(el), c: clip(el) } : null; vistos.set(el, v); }
     if (!v) continue;
     rg.selectNodeContents(nd);
@@ -77,7 +82,7 @@ const MEDIR = String(function (movil) {
       var q = rs[i]; if (q.width < 2 || q.height < 2) continue;
       var x = { l: Math.max(q.left, v.c.l), t: Math.max(q.top, v.c.t), r: Math.min(q.right, v.c.r), b: Math.min(q.bottom, v.c.b) };
       /* Se ve, pero con la punta cortada de costado (y sin «…» a propósito): «30 d en el freeze». */
-      if (v.c.hr !== undefined && (q.right > v.c.hr + 2 || q.left < v.c.hl - 2) && q.bottom > v.c.t && q.top < v.c.b && !conPuntos(el)) {
+      if (v.c.hr !== undefined && (q.right > v.c.hr + 2 || q.left < v.c.hl - 2) && q.bottom > v.c.t && q.top < v.c.b && (!conPuntos(el) || esMonto(nd.nodeValue))) {
         var kc = nombre(el); if (!mochos.has(kc)) { mochos.add(kc); mochosL.push({ el: kc, t: nd.nodeValue.trim().slice(0, 40), sobra: Math.round(Math.max(q.right - v.c.hr, v.c.hl - q.left)) }); }
       }
       if (x.r - x.l < 2 || x.b - x.t < 2) continue;   // recortado por su contenedor: no se ve
@@ -105,7 +110,8 @@ const MEDIR = String(function (movil) {
     if (!vis(e)) return;
     var directo = false; for (var c = e.firstChild; c; c = c.nextSibling) if (c.nodeType === 3 && c.nodeValue.trim()) { directo = true; break; }
     var cs = getComputedStyle(e);
-    if (directo && e.scrollWidth > e.clientWidth + 1 && e.clientWidth > 0 && (cs.overflowX === 'hidden' || cs.overflowX === 'clip') && cs.textOverflow !== 'ellipsis') {
+    /* Lo que es solo para el lector de pantalla (1 px, recortado: .k-sr) no se ve: no está «cortado». */
+    if (directo && e.clientWidth > 2 && e.scrollWidth > e.clientWidth + 1 && e.clientWidth > 0 && (cs.overflowX === 'hidden' || cs.overflowX === 'clip') && (cs.textOverflow !== 'ellipsis' || esMonto(e.textContent))) {
       var k1 = 'c' + nombre(e); if (!ks.has(k1)) { ks.add(k1); cort.push({ el: nombre(e), t: (e.textContent || '').trim().slice(0, 40), sobra: e.scrollWidth - e.clientWidth }); }
     }
     if (movil && (e.tagName === 'BUTTON' || e.getAttribute('role') === 'button' || (e.tagName === 'A' && e.getAttribute('onclick')) || (e.tagName === 'INPUT' && /button|submit/.test(e.type)))) {
@@ -114,6 +120,36 @@ const MEDIR = String(function (movil) {
     }
     /* 0 = escondido a propósito; el texto de un SVG escala con el dibujo. */
     if (directo && parseFloat(cs.fontSize) < 11.95 && parseFloat(cs.fontSize) > 0 && !e.closest('svg')) { var k3 = 'l' + nombre(e); if (!ks.has(k3)) { ks.add(k3); let_.push({ el: nombre(e), t: (e.textContent || '').trim().slice(0, 30), px: parseFloat(cs.fontSize) }); } }
+  });
+  /* (15/11) DESBORDES ENTRE HERMANOS: «mar 1(mié 1)jue 12». Cada etiqueta desborda su celda (overflow visible) y se mete
+     en la vecina: los dos textos casi no se cruzan entre sí, pero el de una celda queda encima del borde de la otra. Para
+     cada renglón de texto, su celda es el ancestro que no es inline; si el texto se sale de costado y esa parte cae sobre
+     la caja de un hermano de la celda, es una pisada. */
+  var vistosC = new Set();
+  cajas.forEach(function (A) {
+    var cel = A.el; while (cel && cel !== document.body && getComputedStyle(cel).display === 'inline') cel = cel.parentElement;
+    if (!cel || cel === document.body || !cel.parentElement) return;
+    /* Sube mientras el texto también se salga del padre: la etiqueta es un bloque dentro de la celda, y las vecinas son
+       hermanas de la CELDA, no de la etiqueta. */
+    var sale = function (n) { var b = n.getBoundingClientRect(); return A.x.r > b.right + 2 || A.x.l < b.left - 2; };
+    for (var sub = 0; sub < 5 && cel.parentElement && cel.parentElement !== document.body && sale(cel.parentElement) && getComputedStyle(cel.parentElement).overflowX === 'visible'; sub++) cel = cel.parentElement;
+    var cb = cel.getBoundingClientRect(), fuera = null;
+    if (A.x.r > cb.right + 2) fuera = { l: Math.max(cb.right, A.x.l), r: A.x.r };
+    else if (A.x.l < cb.left - 2) fuera = { l: A.x.l, r: Math.min(cb.left, A.x.r) };
+    if (!fuera) return;
+    var hs = cel.parentElement.children;
+    for (var i = 0; i < hs.length; i++) {
+      var h2 = hs[i]; if (h2 === cel || !h2.getClientRects().length) continue;
+      var hb = h2.getBoundingClientRect();
+      /* Cuenta si lo que se sale cae sobre TEXTO de la vecina (lo que el ojo ve encimado), no sobre su caja vacía
+         (dos ⓘ cerradas una abajo de la otra en Jugadas daban un falso positivo). */
+      var tocaTexto = cajas.some(function (B) { return h2.contains(B.el) && B.x.r > fuera.l + 1 && B.x.l < fuera.r - 1 && B.x.b > A.x.t + 1 && B.x.t < A.x.b - 1; });
+      if (tocaTexto && fuera.r > hb.left + 1 && fuera.l < hb.right - 1 && A.x.b > hb.top + 1 && A.x.t < hb.bottom - 1) {
+        var kk = nombre(cel) + '>' + nombre(h2); if (vistosC.has(kk)) return; vistosC.add(kk);
+        pis.push({ a: nombre(cel), ta: A.t, b: nombre(h2) + ' (se mete en la celda de al lado)', tb: (h2.textContent || '').trim().slice(0, 30), y: Math.round(A.x.t + window.scrollY) });
+        return;
+      }
+    }
   });
   var de = document.documentElement;
   cort = cort.concat(mochosL);

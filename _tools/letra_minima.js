@@ -47,12 +47,14 @@ const URL = process.argv[2] || 'http://localhost:8080/app.html?prueba=1';
   const partir = (s) => { const r = []; let d = 0, cur = ''; for (const ch of s) { if (ch === '(') d++; if (ch === ')') d--; if (ch === ',' && d === 0) { r.push(cur.trim()); cur = ''; } else cur += ch; } if (cur.trim()) r.push(cur.trim()); return r; };
   const P = 'html:not(#_e1):not(#_e2):not(#_e3) ';
   const INLINE = [];
-  ['8', '8.5', '9', '9.5', '10', '10.5', '11', '11.5'].forEach((n) => { INLINE.push(n); INLINE.push(' ' + n); });
+  ['8', '8.5', '9', '9.5', '10', '10.5', '11', '11.5'].forEach((n) => { INLINE.push(n); INLINE.push(' ' + n); });   /* (las de la tira de días no son en línea) */
   const todos = new Set();
   sels.forEach((s) => partir(s).forEach((x) => {
     if (/^(html|:root)\b/.test(x)) x = x.replace(/^(html|:root)/, '').trim();
     /* Lo de adentro de las listas de Pedidos queda como estaba (ver arriba). */
-    todos.add(P + x.replace(/^body\b/, 'body') + ':not(#pList *, #pListHome *)');
+    /* Tampoco la tira de los 7 días de Inicio (15/11, Organizador): a 12 px las 7 etiquetas no entran en 390 px y se pisaban;
+       a su tamaño se leían enteras. */
+    todos.add(P + x.replace(/^body\b/, 'body') + ':not(#pList *, #pListHome *, .rt-dias *)');
   }));
   const css = '/* GENERADO por _tools/letra_minima.js (' + new Date().toISOString().slice(0, 10) + '): en el celular ninguna letra baja de 12 px. No se edita a mano. */\n'
     /* Una regla por selector: en una lista, UN selector que el navegador no entiende tira la regla entera. */
