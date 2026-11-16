@@ -54,10 +54,10 @@ const chk = (c, m, extra) => { if (c === true) { ok++; console.log('  ok  ', m);
   const snap = await evaluar(cli, `(function(){var o={};[].slice.call(document.querySelectorAll('#hSnap .snap-c')).forEach(function(c){
       o[(c.querySelector('.snap-l')||{}).textContent]=(c.querySelector('.snap-v')||{}).textContent;});
     return {o:o,mov:Array.isArray(D&&D.movimientos),saldo:(typeof _saldoLiquido==='function'&&D&&D.movimientos)?Math.round(_saldoLiquido().total):null};})()`);
-  const disp = snap.o['Disponibilidades'];
+  const disp = snap.o['Plata disponible'];
   chk(snap.mov === true, 'Inicio trajo la caja solo (sin abrir Caja)', snap);
-  chk(!!disp && disp !== '$0' && disp !== '—' && Number(disp.replace(/[^\d]/g, '')) === Math.abs(snap.saldo), `Disponibilidades ${disp} = saldo de la caja ${snap.saldo}`, snap);
-  chk(!!snap.o['Egresos del mes'] && snap.o['Egresos del mes'] !== '$0' && snap.o['Egresos del mes'] !== '—', `Egresos del mes ya no dice $0 (${snap.o['Egresos del mes']})`, snap);
+  chk(!!disp && disp !== '$0' && disp !== '—' && Number(disp.replace(/[^\d]/g, '')) === Math.abs(snap.saldo), `Plata disponible ${disp} = saldo de la caja ${snap.saldo}`, snap);
+  chk(!!snap.o['Salió en el mes'] && snap.o['Salió en el mes'] !== '$0' && snap.o['Salió en el mes'] !== '—', `Salió en el mes ya no dice $0 (${snap.o['Salió en el mes']})`, snap);
   const err = (await evaluar(cli, 'window.__err||[]')).filter((x) => !/ResizeObserver loop/.test(x));
   chk(!err.length, 'sin errores en la consola', err);
   console.log(`\n${ok} ok · ${mal} mal`);

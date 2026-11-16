@@ -168,7 +168,41 @@ const MEDIR = String(function (movil) {
   });
   var de = document.documentElement;
   cort = cort.concat(mochosL);
-  return { pisadas: pis, cortados: cort, scroll: Math.max(0, de.scrollWidth - de.clientWidth), botones: bot, letra: let_ };
+  /* (15/11/2026) TARJETAS HERMANAS DESPAREJAS. No es una pisada, es desprolijidad: en Inicio › Total Maleu la de Costo tenía
+     etiqueta y monto en la misma línea y el chip pegado al ícono, y las otras dos no. En un grupo de tarjetas hermanas (mismo
+     padre, misma clase), cada parte que tienen TODAS —el ícono (::after), la etiqueta, el número, el chip— tiene que estar en
+     la misma posición relativa a su tarjeta y el ícono del mismo tamaño (±2 px). */
+  var desp = [];
+  document.querySelectorAll('[class*="kpis"],.vs-top,.vs-plata,.res-ks,.mt-kpis,.rt-kpis').forEach(function (cont) {
+    if (!cont.getClientRects().length) return;
+    var porClase = {};
+    [].forEach.call(cont.children, function (c) { if (!c.getClientRects().length || !c.className || typeof c.className !== 'string') return; var kc = c.className.trim().split(/\s+/)[0] + ' (' + Math.round(c.getBoundingClientRect().width / 4) * 4 + 'px)'; (porClase[kc] = porClase[kc] || []).push(c); });   /* la primera clase y el mismo ancho: una tarjeta a todo el ancho (Proyectado) no es hermana de las de media */
+    Object.keys(porClase).forEach(function (cl) {
+      var L = porClase[cl]; if (L.length < 2 || L.length > 12) return;
+      var partes = { 'ícono': null, 'etiqueta': '[class*="kl"],[class*="-l"]:not(label),.v-kpi-l', 'número': '[class*="kv"],.v-kpi-v,[class*="-v"]:not(.vs-pr)', 'chip': '.kpi-cmp,.kpi-pill,[class*="kd"]' };
+      Object.keys(partes).forEach(function (pt) {
+        var med = L.map(function (c) {
+          var rc = c.getBoundingClientRect();
+          if (pt === 'ícono') {
+            var a = getComputedStyle(c, '::after');
+            if (!a || a.content === 'none' || a.content === 'normal' || !(parseFloat(a.width) > 4)) return null;
+            return { x: rc.right - c.clientLeft - (parseFloat(a.right) || 0) - parseFloat(a.width) - rc.left, y: parseFloat(a.top) || 0, w: parseFloat(a.width), h: parseFloat(a.height) };
+          }
+          var e = c.querySelector(partes[pt]); if (!e || !e.getClientRects().length) return null;
+          var r = e.getBoundingClientRect();
+          return { x: r.left - rc.left, y: pt === 'chip' ? null : r.top - rc.top, w: null, h: null, ry: (r.top - rc.top) / Math.max(1, rc.height) };
+        });
+        if (med.some(function (m) { return !m; })) return;
+        ['x', 'y', 'w', 'h'].forEach(function (k) {
+          var v = med.map(function (m) { return m[k]; }).filter(function (z) { return z !== null && z !== undefined; });
+          if (v.length < 2) return;
+          var dif = Math.max.apply(null, v) - Math.min.apply(null, v);
+          if (dif > 2) desp.push({ grupo: nombre(cont) + ' > .' + cl.split(' ')[0], parte: pt, eje: k, dif: Math.round(dif) });
+        });
+      });
+    });
+  });
+  return { pisadas: pis, cortados: cort, scroll: Math.max(0, de.scrollWidth - de.clientWidth), botones: bot, letra: let_, desparejos: desp };
 });
 
 const esperarCarga = (pg) => pg.waitForFunction(() => {
@@ -226,7 +260,7 @@ const esperarCarga = (pg) => pg.waitForFunction(() => {
         informe.push(r);
         const n = (x) => (x || []).length;
         console.log((n(m.pisadas) || m.scroll ? 'MAL ' : 'ok  ') + medida.padEnd(6) + rol.padEnd(11) + donde.padEnd(40).slice(0, 40)
-          + ' pisadas ' + n(m.pisadas) + ' · scroll ' + (m.scroll || 0) + ' · cortados ' + n(m.cortados) + ' · botones<44 ' + n(m.botones) + ' · letra<12 ' + n(m.letra) + (m.error ? ' · ERROR ' + m.error : ''));
+          + ' pisadas ' + n(m.pisadas) + ' · scroll ' + (m.scroll || 0) + ' · cortados ' + n(m.cortados) + ' · botones<44 ' + n(m.botones) + ' · letra<12 ' + n(m.letra) + ' · desparejas ' + n(m.desparejos) + (m.error ? ' · ERROR ' + m.error : ''));
         return m;
       };
       for (const t of tabs) {
@@ -279,7 +313,7 @@ const esperarCarga = (pg) => pg.waitForFunction(() => {
   fs.writeFileSync(path.join(OUT, 'informe.json'), JSON.stringify(informe, null, 1));
   const tot = (k) => informe.reduce((a, x) => a + ((x[k] || []).length || 0), 0);
   const pis = tot('pisadas'), scr = informe.filter((x) => x.scroll > 0).length;
-  console.log('\nPANTALLAS ' + informe.length + ' · pisadas ' + pis + ' · con scroll de costado ' + scr + ' · cortados ' + tot('cortados') + ' · botones<44 ' + tot('botones') + ' · letra<12 ' + tot('letra'));
+  console.log('\nPANTALLAS ' + informe.length + ' · pisadas ' + pis + ' · con scroll de costado ' + scr + ' · cortados ' + tot('cortados') + ' · botones<44 ' + tot('botones') + ' · letra<12 ' + tot('letra') + ' · tarjetas desparejas ' + tot('desparejos'));
   console.log('informe: ' + path.join(OUT, 'informe.json'));
   process.exitCode = (pis || scr) ? 1 : 0;
 })();
