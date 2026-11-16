@@ -16599,20 +16599,66 @@ function _pedDepHTML(p,homeOnly){
   /* Por FILA, no por numero (2/10/2026, Codex): dos pedidos Home sin numero
      ("-") daban el mismo id, y el repintado de uno caia en el bloque del otro. */
   var uid=_pedDepUid(p);
+  /* (734) Entregado y con n\u00famero: el t\u00edtulo habla en pasado y el valor lo dice la l\u00ednea del Kardex (\u00abSali\u00f3 de \u2026\u00bb). */
+  var _salio=cerrado&&p.h!=='Red'&&p.n&&p.n!=='-';
   var h='<div class="ped-dep" id="pdep-'+uid+'">'
-    +'<div class="ped-dep-t">De qu\u00e9 freezer sale</div>'
-    +'<div class="ped-dep-v">'+(_repTxt?_pedDepEsc(_repTxt):_pedDepEsc(_pedDepNombre(_marca)))+'</div>';
+    +'<div class="ped-dep-t">De qu\u00e9 freezer '+(_salio?'sali\u00f3':'sale')+'</div>'
+    +(_salio?'':'<div class="ped-dep-v">'+(_repTxt?_pedDepEsc(_repTxt):_pedDepEsc(_pedDepNombre(_marca)))+'</div>');
   if(!cerrado){
     h+='<div class="ped-dep-b">';
     deps.forEach(function(d){
       h+='<button type="button" class="ped-dep-x'+(_marca===d.id?' on':'')+'" onclick="pedDep(\''+_pedDepEsc(p.h)+'\','+(p.r||0)+',\''+_pedDepEsc(d.id)+'\',this)">'+_pedDepEsc(_pedDepCorto(d.nombre||d.id))+'</button>';
     });
     h+='</div>';
+  }else if(p.h!=='Red'&&p.n&&p.n!=='-'){
+    /* (734, 16/11/2026) Entregado: \u00abSali\u00f3 de\u00bb lo dice el Kardex (lo que de verdad sali\u00f3 de cada freezer), y un admin lo
+       corrige ac\u00e1 \u2014 el stock vuelve al freezer de antes y sale del elegido, atado al pedido. Antes dec\u00eda \u00abus\u00e1 un traspaso\u00bb. */
+    var _k=String(p.h)+'|'+String(p.n), _adm=typeof SESSION!=='undefined'&&SESSION&&SESSION.rol==='admin';
+    h+='<div class="ped-dep-n" data-salio="'+_pedDepEsc(_k)+'">Ya se entreg\u00f3. Mirando de qu\u00e9 freezer sali\u00f3\u2026</div>';
+    if(_adm){
+      h+='<div class="ped-dep-b">';
+      deps.forEach(function(d){
+        h+='<button type="button" class="ped-dep-x" data-dep="'+_pedDepEsc(d.id)+'" onclick="pedSalidaCorregir(\''+_pedDepEsc(_k)+'\',\''+_pedDepEsc(d.id)+'\',this)">'+_pedDepEsc(_pedDepCorto(d.nombre||d.id))+'</button>';
+      });
+      h+='</div>';
+    }
+    setTimeout(function(){ _pedSalioPedir(_k); },0);
   }else{
     h+='<div class="ped-dep-n">Ya se entreg\u00f3: la mercader\u00eda sali\u00f3 de un freezer y cambiar esto no la mueve. Para pasarla de uno a otro, us\u00e1 un traspaso en Productos.</div>';
   }
   return h+'</div>';
 }
+/* (734) De qu\u00e9 freezer sali\u00f3 un entregado, seg\u00fan el Kardex: pinta la l\u00ednea y marca el bot\u00f3n. */
+var _pedSalioCache={};
+function _pedSalioPintar(k,d){
+  var sal=(d&&d.salio)||{}, ks=Object.keys(sal);
+  var txt=!ks.length?'Ya se entreg\u00f3. No hay salida del freezer registrada (por OC o por pieza).'
+    :'Sali\u00f3 de '+(ks.length===1?_pedDepNombre(ks[0]):ks.map(function(x){ return _dec(Number(sal[x])||0,3).replace(/,?0+$/,'')+' '+_pedDepNombre(x); }).join(' \u00b7 '))
+     +((d&&d.puedeCorregir)?'. Si sali\u00f3 de otro, toc\u00e1 el correcto: el stock se corrige solo.':'.');
+  document.querySelectorAll('[data-salio="'+String(k).replace(/["\\]/g,'')+'"]').forEach(function(el){
+    el.textContent=txt;
+    var b=el.parentNode&&el.parentNode.querySelectorAll('button.ped-dep-x[data-dep]');
+    if(b)for(var i=0;i<b.length;i++)b[i].classList.toggle('on',ks.length===1&&b[i].getAttribute('data-dep')===ks[0]);
+  });
+}
+function _pedSalioPedir(k){
+  if(_pedSalioCache[k])_pedSalioPintar(k,_pedSalioCache[k]);
+  if(typeof _baseRpc!=='function')return;
+  _baseRpc('pedido_sale_de_pantalla',{p:{key:k}}).then(function(d){ _pedSalioCache[k]=d; _pedSalioPintar(k,d); })
+    .catch(function(){ document.querySelectorAll('[data-salio="'+String(k).replace(/["\\]/g,'')+'"]').forEach(function(el){ el.textContent='Ya se entreg\u00f3. No pude leer de qu\u00e9 freezer sali\u00f3.'; }); });
+}
+window.pedSalidaCorregir=function(k,dep,btn){
+  var box=btn&&btn.closest?btn.closest('.ped-dep'):null;
+  if(btn&&btn.classList.contains('on'))return;
+  if(box){ if(box.getAttribute('data-va'))return; box.setAttribute('data-va','1'); }
+  var bs=box?box.querySelectorAll('button.ped-dep-x'):[]; for(var i=0;i<bs.length;i++)bs[i].disabled=true;
+  var txt=btn.textContent; btn.textContent='Guardando\u2026';
+  _baseRpc('pedido_salida_corregir_directo',{p:{key:k,dep:dep,clientOpId:_pfId()}}).then(function(r){
+    toast(r&&r.nada?'Ya sal\u00eda de '+_pedDepNombre(dep)+'.':'Listo: sali\u00f3 de '+_pedDepNombre(dep)+'. El stock qued\u00f3 corregido.');
+    delete _pedSalioCache[k]; _pedSalioPedir(k);
+  }).catch(function(e){ toast('No se pudo: '+((e&&e.message)||'?'),5000); })
+    .then(function(){ if(box)box.removeAttribute('data-va'); for(var i=0;i<bs.length;i++)bs[i].disabled=false; btn.textContent=txt; });
+};
 /* Cambiarlo. No pinta optimista a proposito: el backend RECHAZA el cambio en
    un pedido ya entregado, y adelantar un estado que puede volver atras es
    justo lo que deja la pantalla diciendo una cosa y la planilla otra.
@@ -45389,6 +45435,10 @@ if('serviceWorker' in navigator){
         +_origenEditorHTML(p,'ofx'+p.h.replace(/ /g,'')+p.n).replace(/onclick="confirmarOrigen\(this\)"/,'onclick="ordOrigenOk(this)"')+'</div>';
       try{_repoCargar();}catch(_eR){}
     }
+    /* (734, 16/11/2026) De qué freezer sale (o salió), y la corrección: la ficha es el único lugar donde se cambia.
+       Pendiente: los dos freezers para elegir. Entregado: «Salió de» según el Kardex y, para un admin, el botón que lo
+       corrige (el stock vuelve al de antes y sale del elegido). Sin dos freezers o en Red no sale nada (`_pedDepHTML`). */
+    try{ html+=_pedDepHTML(p,false); }catch(_eD){}
     html+='</div>';
 
     /* ── 5. LA PLATA. Sin «Sin descuento» ni «Sin envío»: se dice lo que hay. La forma de pago ya está arriba. ── */
