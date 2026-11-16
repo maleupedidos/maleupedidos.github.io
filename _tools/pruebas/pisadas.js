@@ -202,7 +202,57 @@ const MEDIR = String(function (movil) {
       });
     });
   });
-  return { pisadas: pis, cortados: cort, scroll: Math.max(0, de.scrollWidth - de.clientWidth), botones: bot, letra: let_, desparejos: desp };
+  /* (16/11/2026) ESPACIADO DESPAREJO ENTRE SECCIONES (Organizador, por Tadeo: «un solo espaciado vertical entre secciones y uno
+     solo entre tarjetas»). Las secciones de la pantalla son las cajas anchas (≥ 60 % del ancho de la pantalla, con borde,
+     fondo o sombra) y las filas de tarjetas (un contenedor ancho sin caja con ≥ 2 cajas en el mismo renglón); no se baja
+     adentro de una caja. Se mide el aire vertical entre cada par vecino; el par con un título en el medio no cuenta (el título
+     va pegado a lo suyo). Se permiten DOS medidas (±2 px): la de entre secciones y la de entre tarjetas de un mismo grupo. */
+  var espaciado = [];
+  (function () {
+    var pg = document.querySelector('.pg.on'); if (!pg || !pg.getClientRects().length) return;
+    var W = pg.getBoundingClientRect().width;
+    var caja = function (e) { var cs = getComputedStyle(e); var bg = cs.backgroundColor; return (parseFloat(cs.borderTopWidth) > 0 || parseFloat(cs.borderLeftWidth) > 0 || (bg && bg !== 'rgba(0, 0, 0, 0)' && bg !== 'transparent') || (cs.boxShadow && cs.boxShadow !== 'none')); };
+    var ancho = function (e) { return e.getBoundingClientRect().width >= W * 0.6; };
+    var visto = function (e) { return e.getClientRects().length && e.getBoundingClientRect().height > 4 && getComputedStyle(e).position !== 'fixed' && getComputedStyle(e).position !== 'absolute'; };
+    var fila = function (e) { var hs = [].filter.call(e.children, function (c) { return visto(c) && caja(c); }); if (hs.length < 2) return false; var t0 = hs[0].getBoundingClientRect().top; return hs.filter(function (c) { return Math.abs(c.getBoundingClientRect().top - t0) < 3; }).length >= 2; };
+    var secs = [], tits = [];
+    var bajar = function (el, d) {
+      if (d > 8) return;
+      [].forEach.call(el.children, function (c) {
+        if (!visto(c) || !ancho(c)) return;
+        if (/^(BUTTON|INPUT|SELECT|TEXTAREA|LABEL|A)$/.test(c.tagName)) return;   // un control no es una sección
+        /* Un encabezado (≤ 48 px de alto, con texto: «Domingo 15/11 · 3 ventas», «Pizzas») es un título aunque tenga caja:
+           va pegado a lo suyo y con aire antes del grupo que sigue, y eso es ritmo, no desprolijidad. */
+        if (!fila(c) && c.getBoundingClientRect().height <= 48 && (c.textContent || '').trim()) { tits.push(c.getBoundingClientRect()); return; }
+        if (caja(c) || fila(c)) { secs.push(c); return; }
+        var txt = false; for (var n = c.firstChild; n; n = n.nextSibling) if (n.nodeType === 3 && n.nodeValue.trim()) { txt = true; break; }
+        if (txt && !c.children.length) { tits.push(c.getBoundingClientRect()); return; }
+        bajar(c, d + 1);
+      });
+    };
+    bajar(pg, 0);
+    secs.sort(function (a, b) { return a.getBoundingClientRect().top - b.getBoundingClientRect().top; });
+    /* Una LISTA es una sola sección: los hermanos seguidos con el mismo padre y la misma clase (los pedidos, los
+       movimientos de caja) se juntan en un bloque; su aire interno es el de la lista, no el de la pantalla. */
+    var blq = [];
+    secs.forEach(function (e) {
+      var r = e.getBoundingClientRect(), u = blq[blq.length - 1];
+      var c1 = (typeof e.className === 'string' ? e.className : '').trim().split(/\s+/)[0];   // la primera clase: .cj-r.t-cobro y .cj-r.t-gasto son la misma lista
+      if (u && u.par === e.parentElement && u.cls === c1) { u.bottom = Math.max(u.bottom, r.bottom); return; }
+      blq.push({ par: e.parentElement, cls: c1, top: r.top, bottom: r.bottom, n: nombre(e) });
+    });
+    var gaps = [];
+    for (var i = 1; i < blq.length; i++) {
+      var A = blq[i - 1], B = blq[i];
+      if (B.top < A.bottom - 1) continue;   // se encima (columnas): no es una pila
+      var g = Math.round(B.top - A.bottom);
+      if (tits.some(function (t) { return t.top >= A.bottom - 1 && t.bottom <= B.top + 1; })) continue;
+      gaps.push({ g: g, a: A.n, b: B.n });
+    }
+    var vals = []; gaps.forEach(function (x) { if (!vals.some(function (v) { return Math.abs(v - x.g) <= 2; })) vals.push(x.g); });
+    if (vals.length > 2) espaciado = gaps.map(function (x) { return x.a + ' ↕ ' + x.g + 'px ↕ ' + x.b; });
+  })();
+  return { pisadas: pis, cortados: cort, scroll: Math.max(0, de.scrollWidth - de.clientWidth), botones: bot, letra: let_, desparejos: desp, espaciado: espaciado };
 });
 
 const esperarCarga = (pg) => pg.waitForFunction(() => {
@@ -221,6 +271,8 @@ const esperarCarga = (pg) => pg.waitForFunction(() => {
       const ctx = await br.newContext(movil
         ? { viewport: { width: ancho, height: alto }, deviceScaleFactor: 2, isMobile: true, hasTouch: true, userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1' }
         : { viewport: { width: ancho, height: alto } });
+      /* (16/11/2026) CAJON=0 cerrado · CAJON=1 abierto (en la compu); sin la variable, lo que el ERP tenga por default. */
+      if (process.env.CAJON === '0' || process.env.CAJON === '1') await ctx.addInitScript(`try{localStorage.setItem('maleu_sb_open','${process.env.CAJON}')}catch(e){}`);
       await ctx.addInitScript(`try{localStorage.setItem('maleu_panel_session',JSON.stringify({usuario:${JSON.stringify(usuario)},rol:${JSON.stringify(rol)},ts:Date.now()}));
         localStorage.setItem('mc_sbses',${JSON.stringify(JSON.stringify({ u: usuario, url: SB, key: PUB, access: ses.access_token, refresh: ses.refresh_token, hasta: Date.now() + 50 * 60e3, modo: 'si', todos: true }))});}catch(e){}
         window.confirm=function(){return false;}; window.alert=function(){}; window.prompt=function(){return null;};
@@ -260,7 +312,8 @@ const esperarCarga = (pg) => pg.waitForFunction(() => {
         informe.push(r);
         const n = (x) => (x || []).length;
         console.log((n(m.pisadas) || m.scroll ? 'MAL ' : 'ok  ') + medida.padEnd(6) + rol.padEnd(11) + donde.padEnd(40).slice(0, 40)
-          + ' pisadas ' + n(m.pisadas) + ' · scroll ' + (m.scroll || 0) + ' · cortados ' + n(m.cortados) + ' · botones<44 ' + n(m.botones) + ' · letra<12 ' + n(m.letra) + ' · desparejas ' + n(m.desparejos) + (m.error ? ' · ERROR ' + m.error : ''));
+          + ' pisadas ' + n(m.pisadas) + ' · scroll ' + (m.scroll || 0) + ' · cortados ' + n(m.cortados) + ' · botones<44 ' + n(m.botones) + ' · letra<12 ' + n(m.letra) + ' · desparejas ' + n(m.desparejos) + ' · espaciado ' + (n(m.espaciado) ? 'DESPAREJO' : 'ok') + (m.error ? ' · ERROR ' + m.error : ''));
+        if (n(m.espaciado) && process.env.VER_ESPACIADO) m.espaciado.forEach((x) => console.log('      ' + x));
         return m;
       };
       for (const t of tabs) {
@@ -313,7 +366,7 @@ const esperarCarga = (pg) => pg.waitForFunction(() => {
   fs.writeFileSync(path.join(OUT, 'informe.json'), JSON.stringify(informe, null, 1));
   const tot = (k) => informe.reduce((a, x) => a + ((x[k] || []).length || 0), 0);
   const pis = tot('pisadas'), scr = informe.filter((x) => x.scroll > 0).length;
-  console.log('\nPANTALLAS ' + informe.length + ' · pisadas ' + pis + ' · con scroll de costado ' + scr + ' · cortados ' + tot('cortados') + ' · botones<44 ' + tot('botones') + ' · letra<12 ' + tot('letra') + ' · tarjetas desparejas ' + tot('desparejos'));
+  console.log('\nPANTALLAS ' + informe.length + ' · pisadas ' + pis + ' · con scroll de costado ' + scr + ' · cortados ' + tot('cortados') + ' · botones<44 ' + tot('botones') + ' · letra<12 ' + tot('letra') + ' · tarjetas desparejas ' + tot('desparejos') + ' · espaciado desparejo ' + informe.filter((x) => (x.espaciado || []).length).length);
   console.log('informe: ' + path.join(OUT, 'informe.json'));
   process.exitCode = (pis || scr) ? 1 : 0;
 })();

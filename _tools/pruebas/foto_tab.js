@@ -13,11 +13,15 @@ const URL = process.env.BASE_URL || 'http://localhost:8080/app.html';
 if (!TOKEN || !TAB || !OUT) { console.error('uso: foto_tab.js <token> <tab> <ancho> <salida.png>'); process.exit(2); }
 const PREP = require('./sesion_prep.js')(TOKEN);
 const SBSES = require('./sbses_guarda.js')(process.env.SBSES, process.env.USUARIO || 'tadeo');
-const CAJON = ANCHO >= 769 ? ";try{localStorage.setItem('maleu_sb_open','1')}catch(e){}" : '';
+/* CAJON=0 → la foto con el cajón lateral CERRADO (como Tadeo a 1362 px, 16/11/2026). */
+const CAJON = ANCHO >= 769 ? ";try{localStorage.setItem('maleu_sb_open'," + (process.env.CAJON === '0' ? "'0'" : "'1'") + ")}catch(e){}" : '';
+/* (16/11/2026) Con una sesión de la base de verdad, SIN la marca «Apps Script vive» del PREP: con ella el arranque no pide la
+   historia a la base y la foto sale con los 400 del adelanto (Total Maleu daba ↗ 96% en vez de ↘ 23%). */
+const SIN_APPS = process.env.SBSES ? ";try{localStorage.removeItem('maleu_apps_prueba')}catch(e){}" : '';
 (async () => {
   const cli = await abrir();
   await cli.enviar('Runtime.enable'); await cli.enviar('Page.enable');
-  await cli.enviar('Page.addScriptToEvaluateOnNewDocument', { source: PREP + SBSES + CAJON });
+  await cli.enviar('Page.addScriptToEvaluateOnNewDocument', { source: PREP + SBSES + SIN_APPS + CAJON });
   await cli.enviar('Emulation.setDeviceMetricsOverride', { width: ANCHO, height: ANCHO < 700 ? 844 : 900, deviceScaleFactor: 1, mobile: ANCHO < 700 });
   await cli.enviar('Page.navigate', { url: URL });
   await T(12000);
