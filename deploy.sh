@@ -149,7 +149,9 @@ else
   PIS_TMP=$(mktemp -d)
   PIS_SES="$PIS_TMP/ses_admin.json"; PIS_EXTRA=""
   python ../estancias/scripts/migraciones/sesion_prueba.py crear "$PIS_SES" tadeo admin >/dev/null 2>&1 || true
-  if echo ",$TABS_PIS," | grep -q ",ruta,"; then python ../estancias/scripts/migraciones/sesion_prueba.py crear "$PIS_TMP/ses_rep.json" santos repartidor >/dev/null 2>&1 && PIS_EXTRA="$PIS_EXTRA SES_REPARTIDOR=$PIS_TMP/ses_rep.json"; fi
+  if echo ",$TABS_PIS," | grep -q ",ruta,"; then python ../estancias/scripts/migraciones/sesion_prueba.py crear "$PIS_TMP/ses_rep.json" alfonso repartidor >/dev/null 2>&1 && PIS_EXTRA="$PIS_EXTRA SES_REPARTIDOR=$PIS_TMP/ses_rep.json"; fi
+  # (15/11/2026, 722) el rol «equipo» (Tatu): en Pedidos y Ruta, sin costos
+  if echo ",$TABS_PIS," | grep -qE ",(ruta|pedidos|inicio),"; then python ../estancias/scripts/migraciones/sesion_prueba.py crear "$PIS_TMP/ses_eq.json" santos equipo >/dev/null 2>&1 && PIS_EXTRA="$PIS_EXTRA SES_EQUIPO=$PIS_TMP/ses_eq.json"; fi
   if echo ",$TABS_PIS," | grep -q ",miportal,"; then python ../estancias/scripts/migraciones/sesion_prueba.py crear "$PIS_TMP/ses_ven.json" marcos vendedor >/dev/null 2>&1 && PIS_EXTRA="$PIS_EXTRA SES_VENDEDOR=$PIS_TMP/ses_ven.json"; fi
   node _tools/servir.js 8094 >/dev/null 2>&1 & PIS_SRV=$!
   sleep 2
@@ -160,7 +162,7 @@ else
   RC=${PIPESTATUS[0]}
   set -e
   kill $PIS_SRV 2>/dev/null || true
-  for f in "$PIS_SES" "$PIS_TMP/ses_rep.json" "$PIS_TMP/ses_ven.json"; do [ -f "$f" ] && python ../estancias/scripts/migraciones/sesion_prueba.py borrar "$f" >/dev/null 2>&1 || true; done
+  for f in "$PIS_SES" "$PIS_TMP/ses_rep.json" "$PIS_TMP/ses_eq.json" "$PIS_TMP/ses_ven.json"; do [ -f "$f" ] && python ../estancias/scripts/migraciones/sesion_prueba.py borrar "$f" >/dev/null 2>&1 || true; done
   echo "    capturas a 390 px: $PIS_TMP/capturas  (mirá la del lugar que tocaste, con lo desplegable abierto)"
   if [ "$RC" != "0" ]; then fallar "En el iPhone hay texto encimado o scroll de costado — no se publica."; fi
 fi

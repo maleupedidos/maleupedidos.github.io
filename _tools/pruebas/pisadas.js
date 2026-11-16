@@ -3,7 +3,7 @@
  * Tadeo: «Lo que hace Backend, desde el celular pone mal los tamaños y se pisa todo. Todo ajuste se tiene que poder ver
  * VISUALMENTE desde el iPhone como desde la computadora». No a ojo: un detector.
  *
- *   PW=<playwright-core> SES_ADMIN=<ses.json> [SES_REPARTIDOR=..] [SES_VENDEDOR=..] node _tools/pruebas/pisadas.js
+ *   PW=<playwright-core> SES_ADMIN=<ses.json> [SES_EQUIPO=..] [SES_REPARTIDOR=..] [SES_VENDEDOR=..] node _tools/pruebas/pisadas.js
  *   Opcionales: BASE (http://localhost:8080/app.html) · MEDIDAS=w390,w375,c1440 · SOLO=ventas,ajustes (tabs) ·
  *               OUT=<carpeta> (informe.json + capturas a la mitad del scroll) · SIN_SUB=1 · SIN_DET=1
  *   (las sesiones las arma estancias/scripts/migraciones/sesion_prueba.py crear <ses.json> <usuario> <rol>)
@@ -31,7 +31,8 @@ const SB = 'https://xhaxmyvhygxynwjqrarm.supabase.co', PUB = 'sb_publishable_IVI
 const NAV = /^(?:estSwitch|ajGo|setCrmProdPeriodo|switchTab|stSwitchTab|vSwitchTab|abaSwitchTab|setMainTab|stVista|setRutaFiltro|segSwitchVista|goSubInicio|setPlataSub|mrShowSub|estRecSub|estCliVista|eerrSetModo|setCobrosFiltro|showViernesTab|redVista|mpGo|cobModoElegir|resVer|crmVer|crmTab|bbddTab|pvTab|vfTab)\(/;
 fs.mkdirSync(OUT, { recursive: true });
 
-const ROLES = [['admin', process.env.SES_ADMIN, 'tadeo'], ['repartidor', process.env.SES_REPARTIDOR, 'santos'], ['vendedor', process.env.SES_VENDEDOR, 'marcos']]
+/* (15/11/2026, 722) «equipo» = Tatu (santos): corrige pedidos, sin costos ni historial. El repartidor de prueba pasa a ser alfonso. */
+const ROLES = [['admin', process.env.SES_ADMIN, 'tadeo'], ['equipo', process.env.SES_EQUIPO, 'santos'], ['repartidor', process.env.SES_REPARTIDOR, 'alfonso'], ['vendedor', process.env.SES_VENDEDOR, 'marcos']]
   .filter((r) => r[1] && fs.existsSync(r[1]));
 if (!ROLES.length) { console.log('falta SES_ADMIN=<archivo de sesion_prueba.py>'); process.exit(1); }
 
@@ -151,6 +152,20 @@ const MEDIR = String(function (movil) {
       }
     }
   });
+  /* (15/11/2026) LOS PLACEHOLDERS CORTADOS TAMBIÉN CUENTAN: «O una nueva. E…» en la juntada de la ficha. Un campo vacío y
+     visible cuyo placeholder, medido con la letra del campo, no entra en su ancho útil (sin el relleno ni el borde). */
+  var _cv = document.createElement('canvas').getContext('2d');
+  document.querySelectorAll('input[placeholder],textarea[placeholder]').forEach(function (inp) {
+    if (inp.value || !inp.placeholder || !inp.getClientRects().length) return;
+    var r = inp.getBoundingClientRect(); if (r.width < 2 || r.bottom < 0 || r.right < 0 || r.left > innerWidth) return;
+    if (inp.closest && inp.closest('details:not([open])')) return;
+    var cs = getComputedStyle(inp); if (cs.visibility === 'hidden') return;
+    _cv.font = cs.fontStyle + ' ' + cs.fontWeight + ' ' + cs.fontSize + ' ' + cs.fontFamily;
+    var util = inp.clientWidth - (parseFloat(cs.paddingLeft) || 0) - (parseFloat(cs.paddingRight) || 0);
+    var ancho = _cv.measureText(inp.placeholder).width;
+    if (inp.tagName === 'TEXTAREA') return;   /* el textarea parte el renglón: no corta */
+    if (ancho > util + 1) { var k2 = 'p' + nombre(inp); if (!ks.has(k2)) { ks.add(k2); cort.push({ el: nombre(inp) + ' (placeholder)', t: inp.placeholder.slice(0, 40), sobra: Math.round(ancho - util) }); } }
+  });
   var de = document.documentElement;
   cort = cort.concat(mochosL);
   return { pisadas: pis, cortados: cort, scroll: Math.max(0, de.scrollWidth - de.clientWidth), botones: bot, letra: let_ };
@@ -238,7 +253,8 @@ const esperarCarga = (pg) => pg.waitForFunction(() => {
             ventas: [['venta abierta', `go('ventas'); try{ vSwitchTab('ventas'); }catch(e){} var L=[].slice.call(document.querySelectorAll('#vList .vt')), e=L.filter(function(x){ var v=x.__venta; return v&&(v.h==='Home'||v.h==='Pilar')&&v.n; })[0]||L[0]; if(e){ vtToggle(e); e.scrollIntoView({block:'start'}); } !!e`],
                      ['hoja de filtros', `go('ventas'); try{ vSwitchTab('ventas'); }catch(e){} window.scrollTo(0,0); if(typeof vfAbrirFiltros!=='function')false; else { vfAbrirFiltros(); true; }`],
                      ['hoja de fechas', `go('ventas'); try{ vSwitchTab('ventas'); }catch(e){} window.scrollTo(0,0); if(typeof vfAbrirFechas!=='function')false; else { vfAbrirFechas(); true; }`]],
-            pedidos: [['ficha del pedido', `var p=(D.pedidos||[]).filter(function(x){return x.es==='Entregado'&&x.h==='Home';})[0]; if(p){ openOrdDetail(p.h,p.n,p.r||0); } !!p`]],
+            pedidos: [['ficha del pedido', `var p=(D.pedidos||[]).filter(function(x){return x.es==='Entregado'&&x.h==='Home';})[0]; if(p){ openOrdDetail(p.h,p.n,p.r||0); } !!p`],
+                      ['ficha › más opciones', `var p=(D.pedidos||[]).filter(function(x){return x.es==='Entregado'&&x.ep==='Cobrado'&&x.h==='Home';}).slice(-1)[0]; if(p){ openOrdDetail(p.h,p.n,p.r||0); setTimeout(function(){ var d=document.getElementById('ordMas'); if(d){ d.open=true; d.scrollIntoView({block:'start'}); } },600); } !!p`]],
             crm: [['ficha del cliente', `var p=(D.pedidos||[]).filter(function(x){return x.h==='Home';})[0]; if(p&&typeof verFichaDePedido==='function'){ verFichaDePedido(p.h,p.n); } !!p`]],
             ajustes: [['freezer', `go('ajustes'); ajGo('depositos'); setTimeout(function(){ try{ stFrzEditar('nuevo','ustariz'); }catch(e){} },800); true`],
                       ['PIN', `go('ajustes'); ajGo('usuarios'); setTimeout(function(){ try{ ajPinGenerar('robot','Robot de pruebas'); }catch(e){} },800); true`]],

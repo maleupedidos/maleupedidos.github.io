@@ -325,7 +325,7 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
     hechos.push(faltan.length ? 'en la base FALTA ' + faltan.join(', ') : 'en la base: ' + vp.forma + ' · ' + vp.cuenta + ' · ' + vp.cobrador);
     await ev(`_recargarPedidos(); 1`).catch(() => 0);
     const cob = await esperar(`(function(){ var p=(D.pedidos||[]).find(function(x){ return String(x.n)===${JSON.stringify(String(PED.n))}; }); return p&&p.ep==='Cobrado'; })()`, 8000);
-    r = await directa('descobrar', Object.assign({ action: 'descobrar', clientOpId: PREFIJO + 'descobrar' }, base));
+    r = await directa('descobrar', Object.assign({ action: 'descobrar', motivo: 'robot de pruebas', clientOpId: PREFIJO + 'descobrar' }, base));   /* (722) el motivo es obligatorio */
     if (!bien(r)) return mal(r, 'deshacer cobro'); hechos.push('descobrado');
     return { ok: !!cob && !faltan.length, detalle: hechos.join(' → ') + (cob ? '' : ' · después de cobrar la pantalla no lo mostró Cobrado en 8 s') };
   }, { escribe: true, topeMs: 30000 });
@@ -590,7 +590,7 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
     const libro = async () => { const v = await rpc('robot_verificar', { p: {} }).catch(() => null); return v && v.libro && v.libro[DEP] ? Number(v.libro[DEP].q) : null; };
     const qOC = (p) => ((p && p.ocs) || []).filter((o) => o.est !== 'Cancelado').reduce((t, o) => t + (Number(o.q) || 0), 0);
     const nOC = (p) => ((p && p.ocs) || []).filter((o) => o.est !== 'Cancelado').length;
-    const editar = (n, q, suf) => directa('editarPedido', { action: 'editarPedido', hoja: 'Home', id: String(n), row: -Number(n), lineas: [{ a: SKU, q: q, precio: precio }], descuentoReceta: null, descuentoRecetaEditor: true, formaPago: 'Transferencia', clientOpId: PREFIJO + suf });
+    const editar = (n, q, suf) => directa('editarPedido', { action: 'editarPedido', hoja: 'Home', id: String(n), row: -Number(n), lineas: [{ a: SKU, q: q, precio: precio }], descuentoReceta: null, descuentoRecetaEditor: true, formaPago: 'Transferencia', motivo: 'robot de pruebas', clientOpId: PREFIJO + suf });
     const esperarPed = async (clave, cond) => { let p = null; for (let k = 0; k < 10; k++) { p = await verPedido(clave); if (p && cond(p)) break; await pausa(2000); } return p; };
     const L0 = await libro(), qty = Math.ceil(L0 || 0) + 5;
     // A) subir
