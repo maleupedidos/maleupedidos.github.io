@@ -25,8 +25,13 @@ const SIN_APPS = process.env.SBSES ? ";try{localStorage.removeItem('maleu_apps_p
   await cli.enviar('Emulation.setDeviceMetricsOverride', { width: ANCHO, height: ANCHO < 700 ? 844 : 900, deviceScaleFactor: 1, mobile: ANCHO < 700 });
   await cli.enviar('Page.navigate', { url: URL });
   await T(12000);
-  await evaluar(cli, `try{go(${JSON.stringify(TAB)})}catch(e){}`);
-  await T(7000);
+  /* (16/11/2026) `go` a veces no llega (el arranque todavía repinta Inicio): se insiste hasta que la tab quede activa. */
+  for (let i = 0; i < 6; i++) {
+    await evaluar(cli, `try{go(${JSON.stringify(TAB)})}catch(e){}`);
+    await T(i ? 3000 : 7000);
+    const on = await evaluar(cli, `(function(){var p=document.querySelector('.pg.on');return p?p.id:''})()`).catch(() => '');
+    if (on === 'p-' + TAB) break;
+  }
   if (JS) { await evaluar(cli, JS); await T(1500); }
   await evaluar(cli, 'window.scrollTo(0,0)');
   await cli.enviar('Emulation.setDeviceMetricsOverride', { width: ANCHO, height: ALTO, deviceScaleFactor: 1, mobile: ANCHO < 700 });
