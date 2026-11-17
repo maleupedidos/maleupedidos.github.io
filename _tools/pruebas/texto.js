@@ -109,7 +109,7 @@ const CONTAR = `(function(){
     await cli.enviar('Page.navigate', { url: BASE + '/app.html' });
     for (let i = 0; i < 150; i++) { try { if (await ev(`typeof go==='function'&&typeof SESSION!=='undefined'&&!!SESSION`)) break; } catch (e) {} await pausa(200); }
     await pausa(5000);
-    const ORDEN = ['resultados', 'inicio', 'caja', 'egresos', 'busqueda', 'stock', 'pedidos', 'ventas', 'estancias', 'proveedores', 'ajustes', 'miportal', 'mireparto', 'ruta', 'catering', 'planificacion'];
+    const ORDEN = ['resultados', 'equipo', 'inicio', 'caja', 'egresos', 'busqueda', 'stock', 'pedidos', 'ventas', 'estancias', 'proveedores', 'ajustes', 'miportal', 'mireparto', 'ruta', 'catering', 'planificacion'];
     const tabs = ORDEN.filter(t => !process.env.SOLO || process.env.SOLO.split(',').indexOf(t) >= 0);
     const medir = async () => { let m = null; for (let i = 0; i < 40; i++) { m = await ev(CONTAR); if (!m.carg) break; await pausa(500); } return m; };
     for (const t of tabs) {
