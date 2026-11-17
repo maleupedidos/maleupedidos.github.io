@@ -537,6 +537,9 @@ select,input[type="number"]{font-size:16px}
 .aba-pago-cta-bs{display:flex;gap:6px;flex-wrap:wrap}
 .aba-pago-cta-b{flex:1;min-width:120px;min-height:44px;padding:8px 10px;border:1.5px solid #E8DFC4;background:#fff;color:#7A4A4A;border-radius:12px;font-size:13px;font-weight:700;cursor:pointer;font-family:inherit}
 .aba-pago-cta-b.on{background:#F07D47;color:#fff;border-color:#F07D47}
+.aba-pago-lug-s{display:block;font-size:12px;font-weight:600;opacity:.85;margin-top:1px}
+.aba-pago-fecha .aba-pago-dia{flex:0 1 auto;min-width:72px}
+.aba-pago-fecha .aba-pago-fecha-campo{flex:1 1 110px;min-width:110px;min-height:44px;margin:0}
 .pago-row{display:flex;gap:8px;margin-bottom:8px}
 .pago-input-wrap{flex:1}
 .pago-input-label{font-size:10px;font-weight:700;color:#7A4A4A;text-transform:uppercase;margin-bottom:3px}
@@ -3796,6 +3799,44 @@ function abaPagoCuenta(key, id) {
    pregunta y el pago sale de la caja fuerte, que es lo de antes. Si hay una
    reserva para este proveedor, se usa sola cuando sale de la caja fuerte. */
 var abaPagoLug = {};
+/* (17/11/2026, 743) LA FECHA DEL PAGO Y EL SALDO DE CADA LUGAR. Lucas paga el viernes y se carga después: la fecha se elige
+   (hoy por defecto). Y el efectivo sale de un lugar que tiene esa plata: se ve el saldo de cada uno y, si no alcanza, el botón
+   lo dice antes de guardar (la base también frena). El saldo sale de la Caja del panel (`_lugAct`/`_lugSaldo`). */
+function _abaIso(d) { return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
+function _abaHoyIso() { return _abaIso(new Date()); }
+function _abaDmyAIso(t) {
+  var m = String(t || '').trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/); if (!m) return '';
+  var d = new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1]), 12);
+  return (d.getDate() === Number(m[1]) && d.getMonth() === Number(m[2]) - 1) ? _abaIso(d) : '';
+}
+function _abaIsoADmy(iso) { var p = String(iso || '').split('-'); return p.length === 3 ? p[2] + '/' + p[1] + '/' + p[0] : ''; }
+function abaPagoFechaIso(key) { var i = document.getElementById('pagoFecha_' + key); return i ? _abaDmyAIso(i.value) : _abaHoyIso(); }
+function abaPagoFechaDia(key, off) {
+  var d = new Date(); d.setHours(12, 0, 0, 0); d.setDate(d.getDate() + Number(off || 0));
+  var i = document.getElementById('pagoFecha_' + key); if (i) i.value = _abaIsoADmy(_abaIso(d));
+  abaPagoFechaCambio(key);
+}
+function abaPagoFechaCambio(key) {
+  var iso = abaPagoFechaIso(key), hoy = new Date(); hoy.setHours(0, 0, 0, 0);
+  var dif = iso ? Math.round((new Date(iso + 'T00:00:00') - hoy) / 86400000) : 99;
+  document.querySelectorAll('.aba-pago-dia[data-key="' + key + '"]').forEach(function (b) {
+    var on = Number(b.getAttribute('data-off')) === dif; b.classList.toggle('on', on); b.setAttribute('aria-pressed', on ? 'true' : 'false');
+  });
+  var mont = document.getElementById('pagoRestante_' + key);
+  updatePagoTotal(key, Number((mont && mont.getAttribute('data-sug')) || 0));
+}
+/* Lo que hay en un lugar (null = no se sabe: sin billeteras o la Caja todavía no llegó). La caja fuerte suma la reserva de ESE
+   proveedor, que el pago consume. */
+function abaLugarSaldo(id, prov) {
+  try {
+    if (typeof _lugAct !== 'function' || typeof _lugSaldo !== 'function') return null;
+    var L = _lugAct(); if (!L) return null;
+    var s = Number(_lugSaldo(id)) || 0;
+    if (id === 'cf') (L.reservas || []).forEach(function (r) { if (r && prov && String(r.prov || '').trim().toLowerCase() === String(prov).trim().toLowerCase()) s += Number(r.monto) || 0; });
+    return s;
+  } catch (e) { return null; }
+}
+function _abaPlata(n) { n = Math.round(Number(n) || 0); return (n < 0 ? '\u2212' : '') + abaFormatMoney(Math.abs(n)); }
 function abaPersonasCaja() {
   return (busqueda && Array.isArray(busqueda.personasCaja)) ? busqueda.personasCaja : [];
 }
@@ -3897,6 +3938,7 @@ function confirmarPagoPlan(key, idx) {
   var ctaBox = document.getElementById('pagoCta_' + key); if (ctaBox && mp > 0 && !abaPagoCta[key]) { abaShowToast('Elegí de qué cuenta salió la transferencia'); return; }
   var lugBox = document.getElementById('pagoLug_' + key); if (lugBox && ef > 0 && !abaPagoLug[key]) { abaShowToast('Elegí de dónde salió el efectivo'); return; }
   var cta = mp > 0 ? (abaPagoCta[key] || '') : '', lug = ef > 0 ? (abaPagoLug[key] || '') : '';
+  var fechaP = (function () { var f = abaPagoFechaIso(key); return (f && f !== _abaHoyIso()) ? f : ''; })();
   var resto = T, piezas = [];
   plan.forEach(function (x, i) {
     var m = (i === plan.length - 1) ? resto : Math.min(resto, x.monto);
@@ -3911,7 +3953,7 @@ function confirmarPagoPlan(key, idx) {
   btn.disabled = true; btn.textContent = 'Enviando…';
   piezas.forEach(function (pz, i) {
     setTimeout(function () {
-      confirmarPago(key, idx, pz.sem, { ef: pz.ef, mp: pz.mp, bonif: pz.bonif, notas: pz.notas, cuenta: pz.mp > 0 ? cta : '', lugar: pz.ef > 0 ? lug : '', coid: base + '_' + i });
+      confirmarPago(key, idx, pz.sem, { ef: pz.ef, mp: pz.mp, bonif: pz.bonif, notas: pz.notas, cuenta: pz.mp > 0 ? cta : '', lugar: pz.ef > 0 ? lug : '', coid: base + '_' + i, fecha: fechaP });
     }, i * 700);
   });
 }
@@ -3925,6 +3967,11 @@ function renderPagoForm(key, idx, semana, montoSugerido) {
   var titulo = semana === 'PLAN' ? 'Pago de lo que se retira' : (semana ? 'Pago semana ' + semana : 'Pago a cuenta (se descuenta de la deuda más vieja)');
   var html = '<div class="pago-form" id="pagoForm_' + key + '">';
   html += '<div class="pago-form-title">' + titulo + '</div>';
+  html += '<div class="aba-pago-cta aba-pago-fecha"><div class="aba-pago-cta-t">Fecha del pago</div><div class="aba-pago-cta-bs">'
+    + [['Hoy', 0], ['Ayer', -1], ['Anteayer', -2]].map(function (x) {
+        return '<button type="button" class="aba-pago-cta-b aba-pago-dia' + (x[1] === 0 ? ' on' : '') + '" data-key="' + key + '" data-off="' + x[1] + '" aria-pressed="' + (x[1] === 0) + '" onclick="abaPagoFechaDia(this.getAttribute(\'data-key\'),' + x[1] + ')">' + x[0] + '</button>';
+      }).join('')
+    + '<input class="pago-input aba-pago-fecha-campo" id="pagoFecha_' + key + '" type="text" inputmode="numeric" maxlength="10" autocomplete="off" placeholder="dd/mm/aaaa" value="' + _abaIsoADmy(_abaHoyIso()) + '" oninput="abaPagoFechaCambio(\'' + key + '\')"></div></div>';
   // Atajos: tocás "Efectivo" o "Transferencia" y el monto sugerido se autocompleta.
   // "Mixto" deja ambos campos en cero para que dividas a mano. Reduce 3 toques a 1.
   html += '<div class="pago-fp-pills">' +
@@ -3947,8 +3994,11 @@ function renderPagoForm(key, idx, semana, montoSugerido) {
   }
   if (abaPersonasCaja().length) {
     html += '<div class="aba-pago-cta" id="pagoLug_' + key + '" hidden><div class="aba-pago-cta-t">¿De dónde salió el efectivo?</div><div class="aba-pago-cta-bs">';
+    var provLug = ((busqueda.deudas || [])[idx] || {}).n || '';
     abaLugaresPago().forEach(function (l) {
-      html += '<button type="button" class="aba-pago-cta-b aba-pago-lug-b" data-key="' + key + '" data-lug="' + _abaH(l.id) + '" aria-pressed="false" onclick="abaPagoLugar(this.getAttribute(\'data-key\'),this.getAttribute(\'data-lug\'))">' + _abaH(l.t) + '</button>';
+      var sl = abaLugarSaldo(l.id, provLug);
+      html += '<button type="button" class="aba-pago-cta-b aba-pago-lug-b" data-key="' + key + '" data-lug="' + _abaH(l.id) + '" aria-pressed="false" onclick="abaPagoLugar(this.getAttribute(\'data-key\'),this.getAttribute(\'data-lug\'))">' + _abaH(l.t)
+        + (sl !== null ? '<small class="aba-pago-lug-s">' + _abaPlata(sl) + '</small>' : '') + '</button>';
     });
     html += '</div></div>';
   }
@@ -4032,8 +4082,14 @@ function updatePagoTotal(key, montoSugerido) {
   var faltaLug = !!lugBox && ef > 0 && !abaPagoLug[key];
   if (lugBox) lugBox.hidden = !(ef > 0);
   var btnP = document.getElementById('btnPagar_' + key);
-  btnP.disabled = total <= 0 || faltaCta || faltaLug;
-  btnP.textContent = faltaCta ? 'Elegí de qué cuenta salió' : (faltaLug ? 'Elegí de dónde salió el efectivo' : 'Confirmar pago');
+  var fIso = abaPagoFechaIso(key), faltaF = !fIso ? 'La fecha va dd/mm/aaaa' : (fIso > _abaHoyIso() ? 'La fecha es de un día que no llegó' : '');
+  var noAlc = '';
+  if (!faltaLug && ef > 0 && abaPagoLug[key]) {
+    var slP = abaLugarSaldo(abaPagoLug[key], btnP.getAttribute('data-prov') || '');
+    if (slP !== null && ef > slP + 0.5) noAlc = 'No alcanza: hay ' + _abaPlata(slP);
+  }
+  btnP.disabled = total <= 0 || faltaCta || faltaLug || !!faltaF || !!noAlc;
+  btnP.textContent = faltaCta ? 'Elegí de qué cuenta salió' : (faltaLug ? 'Elegí de dónde salió el efectivo' : (faltaF || noAlc || 'Confirmar pago'));
 }
 
 function confirmarPago(key, idx, semana, fz) {
@@ -4080,6 +4136,8 @@ function confirmarPago(key, idx, semana, fz) {
     cuenta: fz ? (fz.cuenta || '') : (mp > 0 ? (abaPagoCta[key] || '') : ''),
     /* De que lugar salio el efectivo (5/10/2026). Vacio = caja fuerte. */
     lugar: fz ? (fz.lugar || '') : (ef > 0 ? (abaPagoLug[key] || '') : ''),
+    /* (743) La fecha del pago: vacía = hoy (lo de siempre). */
+    fecha: fz ? (fz.fecha || '') : (function () { var f = abaPagoFechaIso(key); return (f && f !== _abaHoyIso()) ? f : ''; })(),
     /* El mismo id en todos los reintentos: el servidor no carga dos veces un pago
        que ya escribio (13/9/2026). Antes, si se cortaba la red despues de que
        Apps Script escribiera, la cola lo volvia a mandar y el pago quedaba doble. */
@@ -4150,6 +4208,7 @@ function confirmarPago(key, idx, semana, fz) {
         var _hp = new Date(), _hoyP = _hp.getFullYear() + '-' + String(_hp.getMonth() + 1).padStart(2, '0') + '-' + String(_hp.getDate()).padStart(2, '0');
         var _ctaP = mp > 0 ? (payload.cuenta || '') : '';
         window._movMedBoton = 'pagoProveedor';   /* el medidor de botones (2/11/2026) */
+        if (payload.fecha) _hoyP = payload.fecha;
         if (ef > 0) aplicarMovLocal('gasto', _hoyP, 'Proveedor', 'Pago a ' + d.n, 'Efectivo', ef, notas, '');
         if (mp > 0) aplicarMovLocal('gasto', _hoyP, 'Proveedor', 'Pago a ' + d.n,
           (_ctaP && typeof _movNombre === 'function') ? _movNombre(_ctaP) : 'Mercado Pago', mp, notas, _ctaP);
