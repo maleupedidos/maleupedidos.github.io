@@ -95,7 +95,7 @@ const CUADRO = `(function(){ var o=document.getElementById('cobroRutaOverlay'); 
     console.log('\n== PARTE 2: cobro real sobre PRUEBA (corrida ' + CORRIDA + ') ==');
     const E = await rpc('robot_entidades_pantalla', {});
     if (!E || !E.ok || (E.faltan || []).length) throw new Error('sin las entidades PRUEBA: ' + JSON.stringify(E).slice(0, 200));
-    const CLI = E.cliente || 'PRUEBA Robot', TEL = String(E.telefono || '5490000000001'), CTA = E.cuenta || 'prueba';
+    const CLI = E.cliente || 'PRUEBA Robot', TEL = String(E.telefono || '5490000000001'), CTA = process.env.CUENTA || E.cuenta || 'prueba';
     const prod = await ev(`(function(){ var p=(D.stock||[]).find(function(x){return String(x.a||'').trim()===${JSON.stringify(E.producto || 'PRUEBA')};}); return p?{precio:Number(p.p)||1}:null; })()`);
     const hoy = new Date().toLocaleDateString('sv-SE', { timeZone: 'America/Argentina/Buenos_Aires' });
     const al = await directa('altaPedido', { canal: 'Pilar', fecha: new Date().toLocaleString('es-AR'), fechaEntrega: hoy, dia: '', horario: '', nombre: CLI, telefono: TEL,
@@ -123,11 +123,17 @@ const CUADRO = `(function(){ var o=document.getElementById('cobroRutaOverlay'); 
       /* Las cuentas digitales son botones de «¿Cómo te pagó?» (#cobroRutaFp, `_setCobroFpCta`). La del robot no viene en la
          lista que ve (`RUT_CTAS`): se suma ahí para que el cobro PRUEBA no toque Mercado Pago ni Brubank, y se toca con el mouse. */
       /* Por `_ctasDe` (de Ruta): `RUT_CTAS` en window es una COPIA de la global de la sub-app; pisarla no llega. */
+      /* CUENTA=galicia (741, 17/11/2026): NO se inyecta nada — la cuenta tiene que aparecer sola entre las billeteras del
+         cuadro, sin preseleccionar. Se cobra el PRUEBA ahí, la base lo guarda en esa cuenta y se deshace. */
+      if (process.env.CUENTA) {
+        const ctas = (await ev(CUADRO)).ctas;
+        chk('la cuenta «' + process.env.CUENTA + '» aparece sola entre las billeteras (' + ctas.join(' · ') + '), sin nada marcado', (await ev(`!!document.querySelector('#cobroRutaFp [data-cta="${process.env.CUENTA}"]')`)) && (await ev(CUADRO)).ctaOn === 0, ctas);
+      } else
       await ev(`(function(){ var l=[]; try{ l=JSON.parse(localStorage.getItem('maleu_ruta_ctas')||'[]'); }catch(e){}
         if(!l.some(function(c){return c.id===${JSON.stringify(CTA)};}))l.push({id:${JSON.stringify(CTA)},nombre:'PRUEBA',tipo:'digital'}); _ctasDe({cuentas:l}); _pintarCobroCtas(); return 1; })()`);
       const cta = await clic('#cobroRutaFp [data-cta="' + CTA + '"]');
       await T(300);
-      chk('elegida la cuenta PRUEBA con el mouse', !!cta && cta.mismo && !!(await ev(`!!document.querySelector('#cobroRutaFp [data-cta="${CTA}"].on')`)), cta);
+      chk('elegida la cuenta ' + CTA + ' con el mouse', !!cta && cta.mismo && !!(await ev(`!!document.querySelector('#cobroRutaFp [data-cta="${CTA}"].on')`)), cta);
       await foto('ficha_prueba_cuadro_w390');
       const antes = Date.now();
       await clic('#btnCobroRutaOk'); await T(400);
