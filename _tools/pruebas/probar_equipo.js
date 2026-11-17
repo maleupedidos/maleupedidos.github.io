@@ -51,13 +51,13 @@ async function clic(cli, sel) {
     sub:(document.querySelector('.eq-res-s')||{}).textContent,
     filas:[].map.call(document.querySelectorAll('#eqBody .eq-row'),function(r){var b=r.getBoundingClientRect(),h=r.querySelector('.eq-hoy'),a=r.querySelector('.eq-aldia'),n=r.querySelector('.eq-nom');
       return {p:r.dataset.p,hoy:h?h.textContent:'',aldia:!!a,h:Math.round(b.height),corta:n.scrollWidth>n.clientWidth+1||(h&&h.scrollWidth>h.clientWidth+1)};}),
-    base:EQ.d.personas.map(function(p){return {p:p.persona,hoy:_eqP(p.hoy),cero:!(p.hoy>0.5)}}), baseTot:_eqP(EQ.d.aPagarHoy),
+    base:EQ.d.personas.map(function(p){return {p:p.persona,hoy:_eqP(p.hoy),cero:!(p.hoy>0.5),acc:p.grupo==='accionistas'}}), baseTot:_eqP(EQ.d.aPagarHoy),
     scroll:document.documentElement.scrollWidth>document.documentElement.clientWidth+1})`));
   console.log('  ', L.tot, '·', L.sub);
   L.filas.forEach((f) => console.log('     ', f.p, '·', f.hoy || 'Al día'));
   chk(L.tot === L.baseTot, 'el total es el de la base: ' + L.tot);
   chk(L.filas.length === L.base.length && L.filas.length >= 8, L.filas.length + ' personas');
-  chk(L.filas.every((f, i) => f.p === L.base[i].p && (L.base[i].cero ? f.aldia : f.hoy === L.base[i].hoy)), 'cada fila dice lo de la base (y «Al día» en $0)');
+  chk(L.filas.every((f, i) => f.p === L.base[i].p && (L.base[i].acc ? !f.hoy && !f.aldia : (L.base[i].cero ? f.aldia : f.hoy === L.base[i].hoy))), 'cada fila dice lo de la base («Al día» en $0, los accionistas sin plata)');
   chk(L.filas.every((f) => f.h >= 44), 'filas ≥ 44 px');
   chk(!L.filas.some((f) => f.corta), 'ningún nombre ni monto cortado');
   chk(!L.scroll, 'sin scroll de costado');

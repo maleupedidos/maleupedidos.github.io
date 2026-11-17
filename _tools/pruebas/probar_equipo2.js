@@ -32,9 +32,12 @@ async function rend(cli, per, nom) {
   const R = JSON.parse(await evaluar(cli, `JSON.stringify({num:(document.querySelector('#eqfRend .eqr-num')||{}).textContent,
     pts:document.querySelectorAll('#eqfRend .fm-pt').length,vals:[].map.call(document.querySelectorAll('#eqfRend .fm-val'),function(t){return t.textContent}),
     mets:[].map.call(document.querySelectorAll('#eqfRend .eqr-met'),function(b){var r=b.getBoundingClientRect();return {t:b.textContent,h:Math.round(r.height)}}),
-    esc:(document.querySelector('#eqfRend .eqr-esc-p')||{}).textContent||'',per:(document.querySelector('#eqfRend .k-per-l')||{}).textContent||''})`));
+    esc:(document.querySelector('#eqfRend .eqr-esc-p')||{}).textContent||'',
+    pisa:(function(){var sv=document.querySelector('#eqfRend .eqr-svg'),ln=sv&&sv.querySelector('.fm-lin');if(!sv||!ln)return -1;var L=ln.getTotalLength(),cs=[].map.call(sv.querySelectorAll('.fm-val'),function(t){return t.getBBox()}),n=0;
+      cs.forEach(function(b,i){for(var d=0;d<=L;d+=2){var q=ln.getPointAtLength(d);if(q.x>b.x&&q.x<b.x+b.width&&q.y>b.y&&q.y<b.y+b.height){n++;break;}}cs.forEach(function(o,j){if(j>i&&b.x<o.x+o.width&&b.x+b.width>o.x&&b.y<o.y+o.height&&b.y+b.height>o.y)n++;});});return n;})(),per:(document.querySelector('#eqfRend .k-per-l')||{}).textContent||''})`));
   console.log('   ' + per + ':', JSON.stringify(R));
-  chk(R.pts >= 2 && R.pts === R.vals.length, nom + ': línea con ' + R.pts + ' puntos y su valor escrito');
+  chk(R.pts >= 2 && R.vals.length >= Math.min(3, R.pts), nom + ': línea con ' + R.pts + ' puntos y ' + R.vals.length + ' valores escritos');
+  chk(R.pisa === 0, nom + ': ninguna etiqueta pisa la línea ni a otra (' + R.pisa + ')');
   chk(!!R.num, nom + ': el período en curso aparte (' + R.num + ')');
   if (ANCHO < 700) chk(R.mets.every((m) => m.h >= 44), nom + ': métricas ≥ 44 px');
   return R;
@@ -76,20 +79,29 @@ async function rend(cli, per, nom) {
   await clic(cli, '#eqFicha .eqf-dato .eqf-agregar'); await T(300);
   chk(await evaluar(cli, `!!(document.activeElement&&document.activeElement.closest('.eqf-dato')&&/INPUT|TEXTAREA/.test(document.activeElement.tagName))`), 'tocar «Agregar» abre el campo con el foco');
   await evaluar(cli, `document.activeElement.blur()`); await T(400);
+  await evaluar(cli, `(function(){var d=document.querySelector('#eqFicha .eqf-dato');if(d)d.scrollIntoView({block:'center'})})()`); await T(300);
+  await foto(cli, 'tatu_datos.png');
+  await evaluar(cli, `document.querySelector('#eqFicha .eqf-cuerpo').scrollTop=0`); await T(300);
+  await foto(cli, 'tatu_arriba.png');
   // Recibo de un pago de Tadeo (el último de su historial)
   await evaluar(cli, `eqAbrir('Tadeo Ustariz')`); await T(500);
   const hay = await evaluar(cli, `!!document.querySelector('#eqFicha .eqf-ev-x[onclick^="eqRecibo"]')`);
   chk(hay, 'el historial trae «Recibo»');
   const b64 = await evaluar(cli, `(function(){var p=_eqDe('Tadeo Ustariz'),x=(p.historial||[])[0];var lin=[['Sueldo',x.m]];
-    return _eqReciboDibujar({persona:p.persona,rol:p.rol,periodo:'Quincena '+(_eqQCorto(x.q)||x.qLbl),lineas:lin,totQ:x.m,pago:x.m,fecha:_eqDMY(x.f),cuenta:x.cuenta,ref:''})
+    return _eqReciboDibujar({persona:p.persona,rol:p.rol,periodo:'Quincena '+(_eqQCorto(x.q)||x.qLbl),lineas:lin,totQ:x.m,pago:x.m,fecha:_eqDMY(x.f),cuenta:x.cuenta,ref:'',numero:1,pendiente:0})
       .then(function(b){return new Promise(function(ok){var r=new FileReader();r.onload=function(){ok(String(r.result).split(',')[1])};r.readAsDataURL(b);});});})()`);
   chk(b64 && b64.length > 20000, 'el recibo es una imagen (' + Math.round((b64 || '').length * 0.75 / 1024) + ' KB)');
   if (DIR && b64) fs.writeFileSync(path.join(DIR, 'recibo.png'), Buffer.from(b64, 'base64'));
+  // Un pago parcial de Tatu: «Queda pendiente $X de la quincena» y el número.
+  const b64p = await evaluar(cli, `(function(){var p=_eqDe('Santos Bullrich'),q=(p.quincenas||[]).filter(function(z){return z.estado==='vencida'})[0];
+    return _eqReciboDibujar({persona:p.persona,rol:p.rol,periodo:'Quincena '+q.corto,lineas:q.lineas.map(function(l){return [l.c,l.m]}),totQ:q.monto,pago:200000,fecha:'17/11/2026',cuenta:'Mercado Pago',ref:'',numero:2,pendiente:q.monto-200000})
+      .then(function(b){return new Promise(function(ok){var r=new FileReader();r.onload=function(){ok(String(r.result).split(',')[1])};r.readAsDataURL(b);});});})()`);
+  if (DIR && b64p) fs.writeFileSync(path.join(DIR, 'recibo_parcial.png'), Buffer.from(b64p, 'base64'));
   const txt = await evaluar(cli, `JSON.stringify(window.eqReciboDatos)`);
   chk(!/\d{8,}/.test(txt), 'el recibo no lleva teléfonos ni CBU');
   // Marcos
   const m1 = await rend(cli, 'Marcos Bottcher', 'Marcos');
-  chk(/^Le faltan \$[\d.]+ para \w+ · \d+ clientes activos$|^Está en el escalón más alto/.test(m1.esc), 'Marcos: ' + m1.esc);
+  chk(/^Le faltan \$[\d.]+ para \w+$|^Está en el escalón más alto/.test(m1.esc), 'Marcos: ' + m1.esc);
   await evaluar(cli, `document.querySelector('#eqFicha .eqf-cuerpo').scrollTop=document.getElementById('eqfRendD').offsetTop-80`); await T(300);
   await foto(cli, 'marcos_rend.png');
   const errs = JSON.parse(await evaluar(cli, `JSON.stringify(window.__errs||[])`));
