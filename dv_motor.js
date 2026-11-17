@@ -939,11 +939,14 @@ function _doGetDashboardVendedor(e) {
           if (estado === 'Entregado') viernesEntregados++;
           if (diaEntrega) _diasRepSem[diaEntrega] = (_diasRepSem[diaEntrega] || 0) + 1;
         }
+        /* (17/11/2026) La venta de Red, con la MISMA regla que el resto del ERP (`_rtEsVenta`): entregada al cliente (col L)
+           O la bolsa entregada al representante (col 57 «Entregado a Vendedor», idx 56). */
+        var _esVentaRed = estado === 'Entregado' || String(data[r][56] || '').trim() === 'Entregado';
         /* (17/11/2026) «Lo que vendiste en el mes» es lo ENTREGADO (una venta es una entrega; en Red, la bolsa al
            representante, fechada por el día acordado). Contaba también lo programado para más adelante: Lourdes con #2507 y
            #2508 del vie 20/11 veía $448.000 y 5 pedidos donde Red, Inicio y la liquidación dicen $272.000 y 3 (lo agarró el
            cruce de ventas del robot). Lo que falta entregar sigue en la semana de reparto y en «pendiente». */
-        if (year === yearActual && mes === nombreMesActual && estado === 'Entregado') {
+        if (year === yearActual && mes === nombreMesActual && _esVentaRed) {
           mesFacturado += facturado; mesPedidos++; mesEnvio += envio; mesCom += comision;
         }
         /* LA BASE DEL ESCALON ES OTRO NUMERO, Y NO SE PUEDEN MEZCLAR.
@@ -969,7 +972,7 @@ function _doGetDashboardVendedor(e) {
           escPendiente += facturado; escPendienteN++;
         }
         // Acumulado por (año, mes) para desglose. Solo si tenemos fechaEntrega válida.
-        if (fechaEntrega && mes && estado === 'Entregado') {   /* (17/11/2026) lo entregado, como el mes en curso */
+        if (fechaEntrega && mes && _esVentaRed) {   /* (17/11/2026) lo vendido, como el mes en curso */
           var mNum = fechaEntrega.getMonth() + 1; // 1-12
           var mKey = year + '-' + (mNum < 10 ? '0' + mNum : mNum);
           if (!mesesMap[mKey]) mesesMap[mKey] = { n: mes, y: year, m: mNum, facturado: 0, pedidos: 0, envio: 0, comision: 0 };
