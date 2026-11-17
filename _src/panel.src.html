@@ -4504,6 +4504,10 @@ body.sb-open .sb-toggle .sb-toggle-lbl{display:inline}
    ════════════════════════════════════════════════════════════════ */
 .ord-bg{position:fixed;inset:0;background:rgba(20,10,10,.55);z-index:300;opacity:0;pointer-events:none;transition:opacity .2s ease;backdrop-filter:blur(2px);-webkit-backdrop-filter:blur(2px)}
 .ord-bg.open{opacity:1;pointer-events:auto}
+/* (17/11/2026) El cuadro de cobro de Ruta abierto desde la ficha: Ruta sigue oculta y solo se ve el cuadro (z 350, arriba
+   de la ficha). `cob-suelto` lo pone y lo saca `rutCobrarDesdeFicha` / `cerrarCobroRuta`. */
+html.cob-suelto #p-ruta:not(.on){display:block!important;visibility:hidden;height:0!important;min-height:0!important;padding:0!important;margin:0!important;overflow:hidden}
+html.cob-suelto #p-ruta:not(.on) #cobroRutaOverlay{visibility:visible}
 .ord-drawer{position:fixed;top:0;right:0;bottom:0;width:min(480px,100vw);background:#fff;z-index:301;transform:translateX(100%);transition:transform .26s cubic-bezier(.22,1,.36,1);display:flex;flex-direction:column;box-shadow:-8px 0 32px rgba(20,10,10,.18)}
 .ord-drawer.open{transform:translateX(0)}
 .ord-drawer:not(.open){box-shadow:none}   /* (6/11/2026) cerrado, sin sombra en el borde */
@@ -21880,6 +21884,10 @@ function _origenEditable(p){
 function _pedOrigenPendiente(p){
   var o=String(p&&p.o||'').trim();
   if(!(o===''||o==='Pendiente'))return false;
+  /* (17/11/2026) Entregado o cancelado no tiene nada que decidir: lo que salió lo dice el Kardex. #2509 se cargó y entregó
+     en el mismo momento (sin origen) y la ficha decía «Falta decidir de dónde sale» al lado de «Salió de Ustariz». Tres de
+     los nueve llamadores ya lo excluían a mano; ahora vale para todos. */
+  if(p.es==='Entregado'||p.es==='Cancelado')return false;
   /* (6/11/2026, Tadeo) Un pedido de SOLO carne no tiene origen que decidir: sale por pieza y sus piezas ya quedan
      apartadas al cargarlo. Contarlo en «sin origen» era un aviso que no se podía resolver. */
   var it=(p&&Array.isArray(p.p))?p.p:[];
@@ -45574,7 +45582,10 @@ if('serviceWorker' in navigator){
     if(p.h==='Red'&&p.ev==='Entregado'&&!canc)bs.push('<button class="ord-btn" onclick="_ordDevolucionRed('+(p.r||0)+')">Me devolvió la mercadería</button>');
     /* Copiar el detalle: lo que se hace después de editar un pedido o para cobrarlo. Red no: ese teléfono es del
        cliente final del representante, que nunca le escribió a Maleu. */
-    if(!canc&&p.h!=='Red')bs.push('<button class="ord-btn'+(!cob&&ent?' primary':'')+'" onclick="_ordCopiarDetalle(\''+p.h+'\',\''+String(p.n).replace(/\\/g,"\\\\").replace(/'/g,"\\'")+'\')">Copiar el detalle</button>');
+    /* (17/11/2026) Cobrar, la acción del momento cuando falta cobrar: el mismo cuadro que COBRANZA. Va primero. */
+    var _cobrable=_fichaPuedeCobrar(p);
+    if(_cobrable)bs.unshift('<button class="ord-btn'+(ent?' primary':'')+' ofx-cobrar" onclick="fichaCobrar(\''+p.h+'\',\''+String(p.n).replace(/\\/g,"\\\\").replace(/'/g,"\\'")+'\','+(Number(p.r)||0)+')">Cobrar '+_ars(totCli)+'</button>');
+    if(!canc&&p.h!=='Red')bs.push('<button class="ord-btn'+(!cob&&ent&&!_cobrable?' primary':'')+'" onclick="_ordCopiarDetalle(\''+p.h+'\',\''+String(p.n).replace(/\\/g,"\\\\").replace(/'/g,"\\'")+'\')">Copiar el detalle</button>');
     /* (15/11/2026, 722) EDITAR PRODUCTOS, AHÍ MISMO: antes «Editar en Pedidos» te mandaba a otra pantalla. Lo no entregado ni
        cobrado, quien opera Pedidos; lo entregado o cobrado (Home y Pilar), dueño, admin o equipo, con motivo. */
     var _edit2=editable||(!canc&&(cob||ent)&&(p.h==='Home'||p.h==='Pilar')&&_puedeCorregir());
@@ -45732,6 +45743,35 @@ if('serviceWorker' in navigator){
       +'<button type="button" class="aj-btn ghost" style="flex:1;min-height:44px" onclick="document.getElementById(\'descobOv\').remove()">Cancelar</button></div></div>';
     o.dataset.cli=cli;
   };
+  /* (17/11/2026) COBRAR DESDE LA FICHA: el mismo cuadro de COBRANZA (`rutCobrarDesdeFicha`, en Ruta). Ruta arranca de fondo
+     si no estaba abierta (como con la cola pendiente). Quién puede: el mismo permiso que la lista de Cobranza
+     (`cobros_pendientes_pantalla`: ruta, reparto o caja); la base frena igual al equipo con lo suyo. */
+  window._fichaPuedeCobrar=function(p){
+    if(!p||p.h==='Red'||p.ep==='Cobrado'||p.es==='Cancelado')return false;
+    return _tengoTab('ruta')||_tengoTab('reparto')||_tengoTab('caja');
+  };
+  window.fichaCobrar=function(hoja,n,row){
+    var p=_ordPedLocal(hoja,n); if(!p||!_fichaPuedeCobrar(p))return;
+    if(typeof rutCobrarDesdeFicha!=='function'&&typeof _abrirSubapp==='function'){ try{ _abrirSubapp('ruta'); }catch(e){} }
+    if(typeof rutCobrarDesdeFicha!=='function'){ toast('No pude abrir el cobro: probá desde Ruta › COBRANZA',6000); return; }
+    rutCobrarDesdeFicha({h:p.h,n:String(p.n),r:Number(row)||Number(p.r)||0,c:p.c||'',tel:p.tel||p.t||'',total:_pedTotalCliente(p),
+      sub:Number(p.subt)||0,env:Number(p.env)||0,desc:Number(p.desc)||0,fp:p.fp||'',fe:p.dee||'',es:p.es||'',p:p.p||[]});
+  };
+  /* Ruta avisa cada cobro (de la ficha o de COBRANZA): la copia del pedido queda Cobrado ya, y la ficha abierta y la
+     pantalla de atrás se repintan sin esperar. Un parcial no cambia el estado: relee cuando la base lo confirma. */
+  window._fichaCobroHecho=function(hoja,n,payload,parcial){
+    var p=_ordPedLocal(hoja,n); if(!p)return;
+    if(!parcial){
+      p.ep='Cobrado';
+      if(payload&&payload.formaPago)p.fp=payload.formaPago;
+      if(payload){p.ef=Number(payload.ef)||0;p.tr=Number(payload.tr)||0;}
+      try{_pedMarcar(p,'cobrar');}catch(e){}
+    }
+    try{render();}catch(e){}
+    var a=window._ordAbierto;
+    if(a&&a[0]===hoja&&String(a[1])===String(n)&&document.getElementById('ordDrawer').classList.contains('open')){ try{openOrdDetail(hoja,String(n),a[2]);}catch(e){} }
+  };
+  window._fichaCobroConfirmado=function(){ try{_recargarPedidos();}catch(e){} };
   window._descobrarGuardar=function(hoja,n,row,dec){
     var o=document.getElementById('descobOv'); if(!o)return;
     var nom=(document.getElementById('descobNom')||{}).value||'', mot=String((document.getElementById('descobMot')||{}).value||'').trim();

@@ -6864,6 +6864,8 @@ function renderCobros(){
 /* Los cobros confirmados hace poco: ver el filtro de fetchCobrosPendientes. */
 var _cobRecientes=[];
 function _cobConfirmado(p){if(p&&p.action==='marcarCobrado')_cobRecientes.push({k:(p.hoja||'')+'|'+(p.id||''),t:Date.now()});
+  /* (17/11/2026) Confirmado por la base: el panel relee los pedidos (la ficha ya lo mostraba cobrado). */
+  try{ if(p&&(p.action==='marcarCobrado'||p.action==='cobrarParcial')&&typeof window._fichaCobroConfirmado==='function')window._fichaCobroConfirmado(p.hoja,String(p.id||'')); }catch(e){}
   if(p&&p.action==='cobrarParcial')_parcConfirmado(p);}
 /* EL COBRO PARCIAL AL INSTANTE (31/10/2026). Tapaba la pantalla hasta que contestaba Apps Script (4,2 s de mediana,
    Log Candado). Ahora va por la cola (`cobrarParcial` es orden con `clientOpId`: un reintento no cobra dos veces) y la
@@ -10202,6 +10204,7 @@ function cerrarCobroRuta(){
   _cobroTocado=false;
   document.getElementById('cobroRutaOverlay').classList.add('hidden');
   _cobroFondoLock(false);
+  if(_cobFicha){_cobFicha=null;_cobFichaHasta=Date.now()+5000;document.documentElement.classList.remove('cob-suelto');}
   var _pe=document.getElementById('cobroRutaProds');if(_pe){_pe.style.display='none';_pe.innerHTML='';}
   _cobroRutaState=null;
 }
@@ -11698,6 +11701,7 @@ function _commitCobroPendiente(payload,saldoPayload,pc){
   saveLocal();
   if(rutCurrentTab==='cobros')renderCobrosFromServer();
   _rutCobrosBadge();
+  _rutAvisarPanelCobro(pc,payload,false);
   if(navigator.vibrate)navigator.vibrate(30);
   /* Nombrar la cuenta cuando de verdad se eligio una: un cobro que entra a un
      lugar distinto del habitual y no lo dice es mentir por omision. */
@@ -11724,6 +11728,7 @@ function _commitCobroParcialModal(payload,pc){
   _parcAnotar(pc,payload);
   pendientesCobro=_parcSobre(pendientesCobro);
   _rutCobrosBadge();
+  _rutAvisarPanelCobro(pc,payload,true);
   if(rutCurrentTab==='cobros')renderCobrosFromServer();
   _rutPintarBanner();
   if(navigator.vibrate)navigator.vibrate(30);
@@ -15250,6 +15255,47 @@ function _npAbrirCobro(it,res){
   abrirCobroPendiente(pendientesCobro.length-1);
 }
 
+/* COBRAR DESDE LA FICHA DEL PEDIDO (17/11/2026). Tadeo: cambiar la fecha, deshacer el cobro y cobrar van en el mismo
+   lugar. Es EL MISMO cuadro de COBRANZA (`abrirCobroPendiente`) con el MISMO pedido que arma su lista
+   (`cobros_pendientes_pantalla`, que trae además las billeteras de «¿Quién cobró?» y lo pagado a cuenta). Un pedido no
+   entregado que no está en la lista se arma como el «Ya me pagó» del autopedido. Uno ENTREGADO que no está en la lista
+   NO se cobra a ciegas: no saber no es «no cobrado».
+   El cuadro vive adentro de Ruta: abierto desde otra pantalla, `cob-suelto` (CSS del panel) deja ver solo el cuadro. */
+var _cobFicha=null, _cobFichaHasta=0;
+function rutCobrarDesdeFicha(f){
+  if(!f||!f.h||!f.n)return;
+  _cobFichaHasta=Date.now()+20000;
+  if(_cobroRutaState){showToast('Ya hay un cobro abierto');return;}
+  if(_rutEsMio(f.c,f.tel)){showToast('Es un pedido tuyo: lo cobran Tadeo o Lucas');return;}
+  var k=f.h+'|'+String(f.n);
+  if(cobrados[k]){showToast('Ya está cobrado');return;}
+  /* El «Abriendo…» solo si la lista tarda: si no, queda flotando arriba del cuadro ya abierto. */
+  var _avAbr=setTimeout(function(){ showToast('Abriendo el cobro…',4000); },600);
+  fetchCobrosPendientes(false).then(function(ok){
+    clearTimeout(_avAbr); try{ var _tp=document.getElementById('toast'); if(_tp)_tp.classList.remove('show'); }catch(e){}
+    if(_cobroRutaState)return;
+    var i=-1;(pendientesCobro||[]).forEach(function(x,j){ if((x.h||'')+'|'+String(x.id||'')===k)i=j; });
+    if(i<0){
+      if(!ok){showToast('No pude traer la cobranza. Probá de nuevo en un rato',6000);return;}
+      if(f.es==='Entregado'){showToast('No figura en Cobranza: puede que ya se haya cobrado desde otro celular. Actualizá la pantalla',7000);return;}
+      var tot=Math.max(0,Number(f.total)||0);
+      if(!Array.isArray(pendientesCobro))pendientesCobro=[];
+      pendientesCobro.push({h:f.h,id:String(f.n),r:Number(f.r)||0,c:f.c||'',t:f.tel||'',$:tot,totalOriginal:tot,
+        sub:Number(f.sub)||tot,env:Number(f.env)||0,desc:Number(f.desc)||0,fp:f.fp||'Efectivo',fc:f.fc||'',feEnt:f.fe||'',fe:f.fe||'',
+        ep:'No Cobrado',es:f.es||'Pendiente',p:(f.p||[]).map(function(x){return {a:x.a,q:Number(x.q)||0};}),cobradoParcial:0,desdeFicha:true});
+      i=pendientesCobro.length-1;
+    }
+    _cobFicha=k;_cobFichaHasta=Date.now()+3600000;
+    document.documentElement.classList.add('cob-suelto');
+    abrirCobroPendiente(i);
+    if(!_cobroRutaState){_cobFicha=null;document.documentElement.classList.remove('cob-suelto');}
+  });
+}
+/* El panel se entera de cada cobro de Ruta (de la ficha o de COBRANZA): su copia del pedido queda Cobrado al instante. */
+function _rutAvisarPanelCobro(pc,payload,parcial){
+  try{ if(typeof window._fichaCobroHecho==='function')window._fichaCobroHecho(pc.h,String(pc.id),payload,!!parcial); }catch(e){}
+}
+
 /* EL PEDIDO A MEDIO CARGAR NO SE PIERDE (8/11/2026). El carrito vivia solo en memoria: si el telefono cerraba la app
    o se recargaba, un pedido de 12 productos se cargaba de nuevo. Cada toque o tecla adentro de + PEDIDO deja una copia
    en el celular (`maleu_np_borrador`, 24 h). Al volver, si el formulario esta vacio, ofrece recuperarlo. Se borra al
@@ -15720,7 +15766,10 @@ function _arrancarRuta(){
 _arrancarRuta();
 
 /* ── TOAST ── */
-function showToast(msg){var t=document.getElementById('rutToast');t.textContent=msg;t.classList.add('show');setTimeout(function(){t.classList.remove('show')},3000)}
+/* (17/11/2026) Con el cobro abierto desde la ficha, Ruta no se ve: el aviso sale por el del panel. */
+function showToast(msg,ms){var _pr=document.getElementById('p-ruta');
+  if(Date.now()<_cobFichaHasta&&_pr&&!_pr.classList.contains('on')&&typeof toast==='function'){toast(msg,ms||3000);return;}
+  var t=document.getElementById('rutToast');t.textContent=msg;t.classList.add('show');setTimeout(function(){t.classList.remove('show')},3000)}
 </script>
 </body>
 </html>
