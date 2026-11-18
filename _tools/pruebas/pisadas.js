@@ -252,7 +252,11 @@ const MEDIR = String(function (movil) {
     var vals = []; gaps.forEach(function (x) { if (!vals.some(function (v) { return Math.abs(v - x.g) <= 2; })) vals.push(x.g); });
     if (vals.length > 2) espaciado = gaps.map(function (x) { return x.a + ' ↕ ' + x.g + 'px ↕ ' + x.b; });
   })();
-  return { pisadas: pis, cortados: cort, scroll: Math.max(0, de.scrollWidth - de.clientWidth), botones: bot, letra: let_, desparejos: desp, espaciado: espaciado };
+  /* (18/11/2026) Cuánto texto se ve en la pantalla activa. Mi Portal como vendedor salía EN BLANCO (sin su sesión del portal)
+     y daba «pisadas 0»: medir una pantalla vacía es un verde sin mirar nada. Con menos de 30 letras, la pantalla es «vacía». */
+  var _pgOn = document.querySelector('.pg.on') || document.body;
+  var txtLen = String(_pgOn.innerText || '').replace(/\s+/g, ' ').trim().length;
+  return { pisadas: pis, cortados: cort, scroll: Math.max(0, de.scrollWidth - de.clientWidth), botones: bot, letra: let_, desparejos: desp, espaciado: espaciado, txt: txtLen, vacia: txtLen < 30 };
 });
 
 const esperarCarga = (pg) => pg.waitForFunction(() => {
@@ -268,13 +272,28 @@ const esperarCarga = (pg) => pg.waitForFunction(() => {
     const br = medida[0] === 'w' ? await pw.webkit.launch() : await pw.chromium.launch(CHROME ? { executablePath: CHROME } : {});
     for (const [rol, sesF, usuario] of ROLES) {
       const ses = JSON.parse(fs.readFileSync(sesF, 'utf8'));
+      let extra = '', uReal = usuario, sesPanel = { usuario, rol, ts: Date.now() };
+      /* SIN_SESION_PORTAL=1 reproduce lo de antes del 18/11 (el portal sin su sesión, en blanco): para comprobar que «vacía» lo agarra. */
+      if (rol === 'vendedor' && !process.env.SIN_SESION_PORTAL) {
+        try {
+          const r = await fetch(SB + '/rest/v1/rpc/mi_sesion_pantalla', { method: 'POST', headers: { apikey: PUB, Authorization: 'Bearer ' + ses.access_token, 'Content-Type': 'application/json' }, body: '{}' });
+          const s0 = await r.json();
+          if (s0 && s0.ok) {
+            uReal = String(s0.usuario || usuario);
+            sesPanel = { usuario: uReal, rol, nombre: s0.nombre || usuario, ts: Date.now(), tabs: Array.isArray(s0.tabs) ? s0.tabs : ['miportal'] };
+            extra = `try{localStorage.setItem('maleu_red_session',${JSON.stringify(JSON.stringify({ ok: true, nombre: s0.nombre || '', usuario: uReal, wa: s0.wa || '', aliasMp: s0.aliasMp || '',
+              comision: s0.comision || 17, barrios: s0.barrios || [], partido: s0.partido || '', localidad: s0.localidad || '' }))});}catch(e){}`;
+          } else console.log('  (vendedor: mi_sesion_pantalla no devolvió la sesión; el portal puede quedar vacío)');
+        } catch (e) { console.log('  (vendedor: no pude leer mi_sesion_pantalla: ' + e.message + ')'); }
+      }
       const ctx = await br.newContext(movil
         ? { viewport: { width: ancho, height: alto }, deviceScaleFactor: 2, isMobile: true, hasTouch: true, userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1' }
         : { viewport: { width: ancho, height: alto } });
       /* (16/11/2026) CAJON=0 cerrado · CAJON=1 abierto (en la compu); sin la variable, lo que el ERP tenga por default. */
       if (process.env.CAJON === '0' || process.env.CAJON === '1') await ctx.addInitScript(`try{localStorage.setItem('maleu_sb_open','${process.env.CAJON}')}catch(e){}`);
-      await ctx.addInitScript(`try{localStorage.setItem('maleu_panel_session',JSON.stringify({usuario:${JSON.stringify(usuario)},rol:${JSON.stringify(rol)},ts:Date.now()}));
-        localStorage.setItem('mc_sbses',${JSON.stringify(JSON.stringify({ u: usuario, url: SB, key: PUB, access: ses.access_token, refresh: ses.refresh_token, hasta: Date.now() + 50 * 60e3, modo: 'si', todos: true }))});}catch(e){}
+      if (extra) await ctx.addInitScript(extra);
+      await ctx.addInitScript(`try{localStorage.setItem('maleu_panel_session',${JSON.stringify(JSON.stringify(sesPanel))});
+        localStorage.setItem('mc_sbses',${JSON.stringify(JSON.stringify({ u: uReal, url: SB, key: PUB, access: ses.access_token, refresh: ses.refresh_token, hasta: Date.now() + 50 * 60e3, modo: 'si', todos: true }))});}catch(e){}
         window.confirm=function(){return false;}; window.alert=function(){}; window.prompt=function(){return null;};
         (function(){var f=window.fetch;window.__cortados=[];window.fetch=function(u,x){var s=String(u&&u.url||u),m=String((x&&x.method)||'GET').toUpperCase();
           var r=/\\/rest\\/v1\\/rpc\\/([a-z0-9_]+)/.exec(s);
@@ -311,7 +330,8 @@ const esperarCarga = (pg) => pg.waitForFunction(() => {
         const r = Object.assign({ medida, rol, donde, foto }, m);
         informe.push(r);
         const n = (x) => (x || []).length;
-        console.log((n(m.pisadas) || m.scroll ? 'MAL ' : 'ok  ') + medida.padEnd(6) + rol.padEnd(11) + donde.padEnd(40).slice(0, 40)
+        console.log((n(m.pisadas) || m.scroll || m.vacia ? 'MAL ' : 'ok  ') + medida.padEnd(6) + rol.padEnd(11) + donde.padEnd(40).slice(0, 40)
+          + (m.vacia ? ' VACÍA (' + (m.txt || 0) + ' letras a la vista: no se midió nada) ·' : '')
           + ' pisadas ' + n(m.pisadas) + ' · scroll ' + (m.scroll || 0) + ' · cortados ' + n(m.cortados) + ' · botones<44 ' + n(m.botones) + ' · letra<12 ' + n(m.letra) + ' · desparejas ' + n(m.desparejos) + ' · espaciado ' + (n(m.espaciado) ? 'DESPAREJO' : 'ok') + (m.error ? ' · ERROR ' + m.error : ''));
         if (n(m.espaciado) && process.env.VER_ESPACIADO) m.espaciado.forEach((x) => console.log('      ' + x));
         return m;
@@ -365,8 +385,9 @@ const esperarCarga = (pg) => pg.waitForFunction(() => {
   }
   fs.writeFileSync(path.join(OUT, 'informe.json'), JSON.stringify(informe, null, 1));
   const tot = (k) => informe.reduce((a, x) => a + ((x[k] || []).length || 0), 0);
-  const pis = tot('pisadas'), scr = informe.filter((x) => x.scroll > 0).length;
+  const pis = tot('pisadas'), scr = informe.filter((x) => x.scroll > 0).length, vac = informe.filter((x) => x.vacia).length;
   console.log('\nPANTALLAS ' + informe.length + ' · pisadas ' + pis + ' · con scroll de costado ' + scr + ' · cortados ' + tot('cortados') + ' · botones<44 ' + tot('botones') + ' · letra<12 ' + tot('letra') + ' · tarjetas desparejas ' + tot('desparejos') + ' · espaciado desparejo ' + informe.filter((x) => (x.espaciado || []).length).length);
+  if (vac) console.log('PANTALLAS VACÍAS ' + vac + ': ' + informe.filter((x) => x.vacia).map((x) => x.medida + ' ' + x.rol + ' ' + x.donde).join(', '));
   console.log('informe: ' + path.join(OUT, 'informe.json'));
-  process.exitCode = (pis || scr) ? 1 : 0;
+  process.exitCode = (pis || scr || vac) ? 1 : 0;
 })();

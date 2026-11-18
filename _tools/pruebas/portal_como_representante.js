@@ -70,7 +70,10 @@ const CONTAR = eval('`' + m[1] + '`');
       let c = null; for (let i = 0; i < 30; i++) { c = await ev(CONTAR); if (!c.carg) break; await pausa(500); }
       const extra = await ev(`(function(){var pg=document.querySelector('.pg.on');var t=(pg&&pg.innerText)||'';
         return {alto:document.documentElement.scrollHeight, pantallas:Math.round(document.documentElement.scrollHeight/844*10)/10,
-          primera:t.replace(/\\s+/g,' ').slice(0,700)};})()`);
+          primera:t.replace(/\\s+/g,' ').slice(0,700),
+          plegables:[].slice.call((pg||document).querySelectorAll('.cg-head, details > summary')).filter(function(h){return h.offsetParent;}).map(function(h){
+            var t=h.querySelector('.cg-t')||h, cs=getComputedStyle(t), fl=h.querySelector('.cg-arrow, .red-chev');
+            return (t.innerText||'').trim().slice(0,28)+' '+Math.round(h.getBoundingClientRect().height)+'px/'+cs.fontSize+'/'+cs.fontWeight+(fl?'/flecha':'/SIN flecha');})};})()`);
       res.push({ donde: n, ...c, ...extra });
       await foto(n);
     }
@@ -105,7 +108,8 @@ const CONTAR = eval('`' + m[1] + '`');
     const bloq = await ev('window.__bloqueados||[]');
     const err = await ev('window.__err||[]');
     console.log('pantalla'.padEnd(16) + 'palabras controles  pantallas de alto');
-    res.forEach(r => console.log('  ' + r.donde.padEnd(14) + String(r.n).padStart(8) + String(r.ctrl || 0).padStart(10) + String(r.pantallas).padStart(11) + (r.carg ? '  (sin cargar)' : '')));
+    res.forEach(r => console.log('  ' + r.donde.padEnd(14) + String(r.n).padStart(8) + String(r.ctrl || 0).padStart(10) + String(r.pantallas).padStart(11) + (r.carg ? '  (sin cargar)' : '')
+      + (r.plegables && r.plegables.length ? '\n      plegables: ' + r.plegables.join(' · ') : '')));
     console.log('  ' + 'TOTAL'.padEnd(14) + String(res.reduce((a, r) => a + (r.n || 0), 0)).padStart(8) + String(res.reduce((a, r) => a + (r.ctrl || 0), 0)).padStart(10));
     console.log('bloqueados (escrituras cortadas): ' + bloq.length + (bloq.length ? ' ' + JSON.stringify(bloq.slice(0, 5)) : ''));
     console.log('errores de consola: ' + err.length + (err.length ? ' ' + JSON.stringify(err.slice(0, 5)) : ''));
