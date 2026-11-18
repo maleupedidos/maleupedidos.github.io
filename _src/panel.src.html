@@ -15280,7 +15280,7 @@ function _movMontos(pref){
   /* `extra` dice si hay plata en una cuenta que el formato viejo no sabe
      mandar. Es lo que decide si se usa `montos` o `montoEf/montoMp`. */
   var extra=false;
-  for(var id in out)if(id!==idEf&&id!==idDef)extra=true;
+  for(var id in out)if(id!==idEf&&id!=='mp')extra=true;   /* (753) montoMp es solo MP */
   return {porCta:out,total:total,ef:ef,mp:mp,extra:extra,idEf:idEf,idDef:idDef};
 }
 /** El nombre de una cuenta, para los avisos. */
@@ -23723,13 +23723,16 @@ function _cajaCuentas(){
      lo mande deja la lista en blanco, y entonces ninguna tarjeta avisa: es el
      comportamiento anterior, no un aviso falso. */
   var sc=sb.sinContar||[],deu=cj.deudaCuentas||[];
+  /* (753) La cuenta por defecto la dice la base (Config_Maleu › CUENTA_DEFAULT, hoy Galicia). El motor de la caja la sigue
+     calculando como «mp»: si la base la manda y está en la lista, manda la base. Las Inversiones no se mueven. */
+  var defB=(cj.defCuenta&&lista.some(function(x){return x&&x.id===cj.defCuenta&&x.tipo!=='efectivo';}))?cj.defCuenta:'';
   var hayDef=false,out=[];
   for(var i=0;i<lista.length;i++){
     var c=lista[i];
     if(c.def)hayDef=true;
     out.push({id:c.id,nombre:c.nombre||c.id,tipo:c.tipo,
       banco:c.banco||'',alias:c.alias||'',
-      def:c.def===true,inv:c.inv===true,
+      def:defB?c.id===defB:c.def===true,inv:c.inv===true,
       /* (752) Una cuenta de DEUDA (la tarjeta): su saldo es toda su historia, sin la foto del arqueo (la base ya la
          suma entera), y no se cuenta en el arqueo ni en la plata disponible. */
       deuda:deu.indexOf(c.id)>=0,
@@ -23791,6 +23794,15 @@ function _saldoLiquido(){
   }
   return {ef:ef,dig:dig,total:ef+dig,cuentas:cts?cts.filter(function(c){return !c.deuda;}):cts,deuda:deuda,deudas:deudas};
 }
+/* (753) La cuenta que el arqueo cuenta en el campo de MP (la columna C de Saldo Base): «mp» por id. Hasta el 17/11/2026 era
+   «la por defecto», que era la misma por casualidad; con la por defecto en Galicia, el campo de MP tiene que seguir
+   siendo MP. Sin «mp» en la lista, la por defecto (como antes). */
+function _ctaMPid(cts){
+  cts=cts||_cajaCuentas()||[];
+  for(var i=0;i<cts.length;i++)if(cts[i].id==='mp')return 'mp';
+  for(var j=0;j<cts.length;j++)if(cts[j].def)return cts[j].id;
+  return 'mp';
+}
 /** La cuenta que lleva las Inversiones, o null. */
 function _ctaInv(cts){
   if(!cts)return null;
@@ -23812,10 +23824,10 @@ function _calcSaldo(){
     for(var i=0;i<cts.length;i++)pcOut[cts[i].id]=cts[i].saldo;
     /* Con cuentas, el efectivo y la digital por defecto salen de ahi: si el
        backend ya desglosa, `gastosMP` incluiria tambien lo del Brubank. */
-    var cEf=null,cDef=null;
+    var cEf=null,cDef=null,_mpId=_ctaMPid(cts);
     for(var k=0;k<cts.length;k++){
       if(cts[k].tipo==='efectivo'&&!cEf)cEf=cts[k];
-      if(cts[k].def)cDef=cts[k];
+      if(cts[k].id===_mpId)cDef=cts[k];   /* (753) el campo de MP del arqueo */
     }
     if(cEf)ef=cEf.saldo;
     if(cDef)mp=cDef.saldo;
@@ -23859,7 +23871,7 @@ function _ajExtras(conDeuda){
   if(!cts)return [];
   var out=[];
   for(var i=0;i<cts.length;i++){
-    if(cts[i].tipo==='efectivo'||cts[i].def)continue;
+    if(cts[i].tipo==='efectivo'||(conDeuda?cts[i].def:cts[i].id===_ctaMPid(cts)))continue;   /* (753) arqueo: MP tiene su campo */
     if(cts[i].deuda&&!conDeuda)continue;   /* (752) la tarjeta no se cuenta en el arqueo: va en gastos e ingresos */
     out.push(cts[i]);
   }
@@ -23872,8 +23884,8 @@ function _ajPintarExtras(c){
      dos lugares para transferir, "MP liquido" ya no alcanza para saber cual es. */
   var lbl=$('ajMpLbl');
   if(lbl&&cts){
-    var def=null;
-    for(var d=0;d<cts.length;d++)if(cts[d].def)def=cts[d];
+    var def=null,_mpId=_ctaMPid(cts);
+    for(var d=0;d<cts.length;d++)if(cts[d].id===_mpId)def=cts[d];   /* (753) */
     if(def)lbl.textContent=''+def.nombre+' ($)';
   }
   if(!ex.length){box.innerHTML='';return;}
@@ -23926,7 +23938,8 @@ function _ajTipeado(id){var e=$(id);return !!(e&&e.value.trim()!==''&&e.dataset.
    efectivo; el campo de MP, la cuenta digital por defecto. */
 function _ajIds(){
   var cts=_cajaCuentas()||[],ef='efectivo',def='mp';
-  cts.forEach(function(c){if(c.tipo==='efectivo')ef=c.id;else if(c.def)def=c.id;});
+  var _mpId=_ctaMPid(cts);
+  cts.forEach(function(c){if(c.tipo==='efectivo')ef=c.id;else if(c.id===_mpId)def=c.id;});   /* (753) el campo de MP */
   return {ef:ef,def:def};
 }
 /* La fecha del ultimo conteo DE VERDAD de una cuenta (21/10/2026), separada del
@@ -24063,7 +24076,7 @@ function guardarAjuste(){
           var _ctsN=_cajaCuentas();
           if(_ctsN)for(var _n=0;_n<_ctsN.length;_n++){
             var _cn=_ctsN[_n];
-            _pcNuevo[_cn.id]=(_cn.tipo==='efectivo')?ef:(_cn.def?mp:
+            _pcNuevo[_cn.id]=(_cn.tipo==='efectivo')?ef:(_cn.id===_ctaMPid(_ctsN)?mp:
               (payload['cta_'+_cn.id]!==undefined?payload['cta_'+_cn.id]:_cn.saldo));
           }
         }
