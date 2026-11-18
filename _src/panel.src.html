@@ -4658,6 +4658,13 @@ html.cob-suelto #p-ruta:not(.on) #cobroRutaOverlay{visibility:visible}
 .ofx-prods .ord-prod{padding:7px 0}
 .ofx-sec{color:var(--bl);font-size:12.5px}
 .ofx-mg{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-top:8px;padding-top:8px;border-top:1px dashed var(--cd);font-size:12.5px;color:var(--ink3);font-weight:600}
+.ofx-cobro{margin:12px 0 4px;padding:10px 12px;border:1px solid var(--cd,#E7DFD2);border-radius:12px;background:#fff}
+.ofx-cobro-t{font-size:12.5px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--bl,#7a6a5f);margin-bottom:4px}
+.ofx-cobro-r{display:flex;justify-content:space-between;align-items:baseline;gap:10px;min-height:28px;font-size:13.5px}
+.ofx-cobro-r b{font-weight:700;white-space:nowrap}
+.ofx-cobro-r.sub{color:var(--bl,#7a6a5f);font-size:12.5px}
+.ofx-cobro-r.txt b{font-weight:600}
+.ofx-cobro-r.mal{color:#B4471A}
 .ofx-mg .ok{color:var(--gd)}.ofx-mg .mal{color:var(--r)}.ofx-mg b{font-weight:800}
 .ofx-mas{border-bottom:1px solid var(--border)}
 .ofx-mas>summary{list-style:none;cursor:pointer;padding:14px 20px;min-height:48px;box-sizing:border-box;font-size:13px;font-weight:800;color:var(--bl);display:flex;align-items:center;justify-content:space-between}
@@ -17385,7 +17392,9 @@ function _sbAPedido(o){
     /* (11/11/2026) Red va por el NETO (lo que le queda a Maleu), como `pedidos_light_pantalla` y como
        Ventas (memoria project_red_facturacion_neta). Con el bruto, Inicio sumaba $30.231 de más en
        tres pedidos de Red de noviembre. Sin el neto (fila vieja), queda el bruto como antes. */
-    $:(o.channel==='Red'&&o.net_amount!=null&&o.net_amount!=='')?(Number(o.net_amount)||0):(Number(o.billed_amount)||0),
+    /* (18/11/2026, 766) Fuera de Red, la venta del pedido (sin la propina ni lo que quedó a favor): `_ventaDeFila`. */
+    $:(o.channel==='Red'&&o.net_amount!=null&&o.net_amount!=='')?(Number(o.net_amount)||0):(_ventaDeFila(o)!==null?_ventaDeFila(o):(Number(o.billed_amount)||0)),
+    fb:Number(o.billed_amount)||0, vn:1,
     /* La bolsa entregada al representante: `_rtEsVenta` cuenta una venta de Red por ESTO, no por el
        estado del pedido (Caro Rojo, 7/11: «Pendiente» con la bolsa entregada). */
     ev:o.handoff_state||'',
@@ -17393,6 +17402,8 @@ function _sbAPedido(o){
        vienen si la consulta los pidió (admin, ver `_sbPedCols`). */
     co:Number(o.cost_amount)||0, mg:Number(o.margin_amount)||0,
     ef:Number(o.cash_amount)||0, tr:Number(o.transfer_amount)||0,
+    /* (18/11/2026) Con los mismos nombres que `pedidos_light_pantalla` (pef, ptr, rep). */
+    pef:Number(o.tip_cash)||0, ptr:Number(o.tip_transfer)||0, rep:o.courier||'',
     r:Number(o.source_row)||0,
     /* De cuando es esta fila EN LA BASE. No lo dibuja nadie: lo usa `_sbEdad`
        para que el sello diga la verdad.
@@ -17635,6 +17646,9 @@ function _sbPedCols(){
        tenía el costo de los 74 entregados de noviembre). Solo para admin: la regla de la base
        (`_rol_sin_costo`) es que empleado y repartidor no ven costos, y acá se respeta igual. */
     +',net_amount,handoff_state'
+    /* (18/11/2026) La propina y quien repartió: sin ellas la ficha mostraba la venta con la propina adentro («$60.000
+       total» en el #2377 de $54.298) y no decía quién lo entregó. Las tres las puede leer `authenticated` (verificado). */
+    +',tip_cash,tip_transfer,courier,total_amount'
     +(_sbConCosto()?',cost_amount,margin_amount':'')
     +(_sbSinWarehouse?'':',warehouse')
     /* LOS PRODUCTOS NO SON OPCIONALES: ver el comentario de `_sbPedidosAhora`. */
@@ -17761,7 +17775,10 @@ function _sbAVenta(o){
      El fallback a `ordered_at` es el mismo de `_fechaDeVenta`: un pedido recién
      entrado y todavía sin agendar. */
   var fIso=String((esRed?o.planned_delivery_at:o.delivered_at)||o.ordered_at||'');
-  var neto=Number(o.net_amount)||0;
+  /* (18/11/2026, 766) Home, Pilar y Clubes: la venta del pedido, la misma de ventas_base (`net_amount` traía la propina
+     en los pedidos de antes de noviembre). `vn` = ya viene neta; `fav` = lo que quedó a favor. */
+  var _vF=_ventaDeFila(o);
+  var neto=_vF!==null?_vF:(Number(o.net_amount)||0);
   var v={
     canal: vd?'Venta Directa':canal,
     zona: zona,
@@ -17772,9 +17789,9 @@ function _sbAVenta(o){
       ? (String(o.customer_name||'').trim()+' ('+zona+')')
       : String(o.customer_name||'').trim(),
     estado: String(o.order_state||'').trim(),
-    $: neto,
+    $: neto, vn: 1, fav: _aFavorDeFila(o),
     costo: Number(o.cost_amount)||0,
-    margen: Number(o.margin_amount)||0,
+    margen: _vF!==null&&o.cost_amount!=null?Math.round((_vF-(Number(o.cost_amount)||0))*100)/100:(Number(o.margin_amount)||0),
     h: vd?canal:canal,
     n: String(o.order_number||'').trim(),
     tel: String(o.customer_key||'').trim(),
@@ -17847,7 +17864,7 @@ function _sbEsVenta(o){
    Si agregás un campo en `_sbAVenta`, agregalo ACÁ en el mismo movimiento. */
 var _SB_VENTA_COLS='channel,order_number,customer_name,customer_key,order_state,'
   +'payment_state,payment_method,ordered_at,planned_delivery_at,delivered_at,collected_at,'
-  +'billed_amount,net_amount,cash_amount,transfer_amount,tip_cash,tip_transfer,'
+  +'billed_amount,net_amount,total_amount,cash_amount,transfer_amount,tip_cash,tip_transfer,'
   +'cost_amount,margin_amount,neighborhood,sub_neighborhood,delivery_address,'
   +'zone,sale_month,sale_week,collection_account,'
   +'handoff_state,settlement_state,settlement_method,deleted_at';
@@ -24612,6 +24629,91 @@ function _crmRedPartes(tot, com, env, vend){
   com=Number(com)||0; env=Number(env)||0; tot=Number(tot)||0;
   var v=String(vend||'el representante').split(' ')[0].replace(/[<>&"]/g,'');
   return '<div class="crm-ped-prods" style="margin-top:3px;color:var(--bl)">Para '+v+' $'+f$(com+env)+(com>0&&env>0?' (comisión $'+f$(com)+' + envío $'+f$(env)+')':'')+' · Para Maleu $'+f$(Math.max(0,tot-com-env))+'</div>';
+}
+/* LA VENTA DE UN PEDIDO (18/11/2026, 766). En Home, Pilar y Clubes `billed_amount` es lo que PAGÓ el cliente: el pedido +
+   la propina (del repartidor) + lo que dejó a favor (crédito para la próxima). La venta es el pedido: `total_amount`; si
+   no hay, lo pagado menos las propinas positivas. Es la misma cuenta que hace la base (766: ventas_base, el trigger
+   sales_order_importe_venta). Red no cambia: su venta es `net_amount`. Recibe una fila de `sales_order`. */
+function _ventaDeFila(o){
+  var canal=String((o&&o.channel)||'').trim();
+  if(canal!=='Home'&&canal!=='Pilar'&&canal!=='Clubes')return null;
+  var t=Number(o.total_amount)||0; if(t>0)return t;
+  var b=Number(o.billed_amount)||0, pr=Math.max(0,Number(o.tip_cash)||0)+Math.max(0,Number(o.tip_transfer)||0);
+  return Math.max(0,b-pr);
+}
+/* Lo que quedó a favor del cliente en ese cobro (lo pagado − propinas − el pedido). */
+function _aFavorDeFila(o){
+  var v=_ventaDeFila(o); if(v===null)return 0;
+  var b=Number(o.billed_amount)||0; if(!(b>0))return 0;
+  var pr=Math.max(0,Number(o.tip_cash)||0)+Math.max(0,Number(o.tip_transfer)||0);
+  return Math.max(0,Math.round((b-pr-v)*100)/100);
+}
+/* EL COBRO DEL PEDIDO, ENTERO (18/11/2026). Tadeo: en la ficha no se veía cuánto debía pagar el cliente, cuánto pagó,
+   quién lo entregó ni si dejó propina; lo necesita para corroborar las propinas antes de pagarles a Tatu y a los
+   suplentes. Cinco renglones como mucho: el total, lo que pagó (con el billete y el vuelto si están guardados), la
+   propina y para quién, quién entregó y cuándo, y la cuenta si fue transferencia. Se pinta con lo que trae el pedido y
+   se completa con `pedido_cobro_pantalla` (765: billete, vuelto, cuenta). Sin la 765, queda lo del pedido. */
+var _FCB={};
+function _fichaCobroHTML(p,tot,d){
+  /* Los de la ficha (_ars, _e, _dia) son locales de su bloque: acá van los propios, iguales. */
+  var _ars=function(n){return '$'+(Number(n)||0).toLocaleString('es-AR',{maximumFractionDigits:0});};
+  var _e=function(x){return String(x==null?'':x).replace(/[<>&"]/g,function(c){return {'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c];});};
+  var _dia=function(iso){var m=String(iso||'').match(/^(\d{4})-(\d{2})-(\d{2})/);if(!m)return '';return Number(m[3])+'/'+Number(m[2]);};
+  if(!p||p.h==='Red'||p.es==='Cancelado')return '';
+  var ent=p.es==='Entregado', cob=p.ep==='Cobrado';
+  var ef=Number(p.ef)||0, tr=Number(p.tr)||0, pe=Math.max(0,Number(p.pef)||0), pt=Math.max(0,Number(p.ptr)||0);
+  var k=p.h+'|'+p.n+'|'+(Number(p.r)||0);
+  d=d||_FCB[k]||null;
+  /* Con la 765, el total es el del pedido (total_amount): en los pedidos donde el cliente pagó de más sin que quedara
+     anotado como propina (4 en noviembre, #2492 pagó 20.000 por 17.000), `$` trae lo pagado y lo escondía. */
+  if(d&&Number(d.total)>0)tot=Number(d.total);
+  if(!ent&&!cob&&!(pe+pt))return '';
+  var rep=String((d&&d.repartidor)||p.rep||'').trim(), rep1=rep?rep.split(' ')[0]:'';
+  var L=[];
+  L.push(['Total del pedido',_ars(tot)]);
+  if(cob||ef+tr>0){
+    var pago=ef+tr+pe+pt, medio=tr>0&&ef>0?'efectivo y transferencia':(tr>0?'transferencia':'efectivo');
+    var bil=d&&Number(d.billete)>0?Number(d.billete):0, vto=d&&d.vuelto!=null?Number(d.vuelto):null;
+    L.push(['Pagó en '+medio,_ars(pago)]);
+    /* Billete y vuelto en renglones separados: dos $ en un renglón se leen como una cuenta. */
+    if(bil>0){ L.push(['Billete',_ars(bil),'sub']); if(vto!=null)L.push(['Vuelto',_ars(vto),'sub']); }
+    /* Lo que sobró y no es propina: a favor del cliente (765, crédito para la próxima) o, si no hay crédito, sin explicar. */
+    var _fav=d&&Number(d.aFavor)>0?Number(d.aFavor):0;
+    if(_fav>0)L.push(['Quedó a favor del cliente',_ars(_fav),'sub']);
+    else if(pago-pe-pt>tot+1&&!(pe+pt))L.push(['Pagó de más, sin anotar qué fue',_ars(pago-tot),'mal']);
+  }
+  if(pe+pt>0)L.push(['Propina'+(rep1?' para '+rep1:'')+(pe>0&&pt>0?' (efectivo y transferencia)':(pt>0?' (transferencia)':'')),_ars(pe+pt)]);
+  if(ent){
+    var fx=String((d&&d.entregado)||'').slice(0,16)||[_dia(p.fex||''),p.hx?_e(p.hx):''].filter(Boolean).join(' ');
+    L.push(['Entregó '+(rep||'—'),fx,'txt']);
+  }
+  var cta=String((d&&d.cuenta)||'').trim();
+  if(tr>0&&cta)L.push(['Transferencia a',_e(cta),'txt']);
+  if(!_FCB[k]&&!_FCB[k+'|pidiendo'])_fichaCobroPedir(p,k);
+  return '<div class="ofx-cobro" id="ofxCobro" data-k="'+_e(k)+'"><div class="ofx-cobro-t">Cobro</div>'
+    +L.map(function(x){return '<div class="ofx-cobro-r'+(x[2]?' '+x[2]:'')+'"><span>'+x[0]+'</span><b>'+x[1]+'</b></div>';}).join('')+'</div>';
+}
+function _fichaCobroPedir(p,k){
+  _FCB[k+'|pidiendo']=1;
+  _baseRpc('pedido_cobro_pantalla',{p:{h:p.h,n:String(p.n),r:Number(p.r)||0}}).then(function(d){
+    delete _FCB[k+'|pidiendo'];
+    if(!d||d.nada)return;
+    _FCB[k]=d;
+    var box=document.getElementById('ofxCobro');
+    if(box&&box.getAttribute('data-k')===k){ var t=document.createElement('div'); t.innerHTML=_fichaCobroHTML(p,_pedTotalSinPropina(p),d); if(t.firstChild)box.replaceWith(t.firstChild); }
+  },function(){ delete _FCB[k+'|pidiendo']; _FCB[k]=null; });
+}
+/* (18/11/2026) LO QUE SALE EL PEDIDO, SIN LA PROPINA. En Home, Pilar y Clubes la base guarda en `$` (billed_amount) lo
+   que pagó el cliente, propina adentro: el #2377 de Lola Prieto decía «$60.000 total» y «Margen bruto $15.923 · 27%» sobre
+   un pedido de $54.298 (el margen de verdad, $10.221 · 19%). La propina es del repartidor, no de Maleu. Es la misma regla
+   que Resultados (`_eerrCalc`): la venta menos la propina. Red no tiene propina en `$`. */
+function _pedTotalSinPropina(p){
+  if(!p)return 0;
+  if(p.h==='Red')return _pedTotalCliente(p);
+  var f=Number(p.$)||0, pr=Math.max(0,Number(p.pef)||0)+Math.max(0,Number(p.ptr)||0);
+  /* (766) Ya neto: el pedido que viene de la base (`vn`) o de la lista liviana con la 766 (`$` distinto de lo pagado `fb`). */
+  if(p.vn||!(pr>0)||(Number(p.fb)>0&&Math.abs(f-Number(p.fb))>=1))return f;
+  return Math.max(0,f-Math.min(f,pr));
 }
 function _pedTotalCliente(p){
   if(!p)return 0;
@@ -40080,7 +40182,7 @@ function _eerrFamilias(mn,anio){
   vs.forEach(function(v){
     var f=Number(v.$)||0,c=Number(v.costo)||0;
     var k=v.canal==='Venta Directa'?(v.zona==='Pilar'?'Pilar':'Home'):v.canal;
-    if(k==='Home'||k==='Pilar'||k==='Clubes')f-=Math.max(0,Math.min(f,(Number(v.pEf)||0)+(Number(v.pTr)||0)));
+    if(!v.vn&&(k==='Home'||k==='Pilar'||k==='Clubes'))f-=Math.max(0,Math.min(f,(Number(v.pEf)||0)+(Number(v.pTr)||0)));   /* (766) neta: no se resta otra vez */
     var w=v.k?_eerrFamW[v.k]:null;
     if(v.canal==='Catering'){var x=fam('Catering (eventos)');x.f+=f;x.c+=c;x.ped++;return;}
     if(!w||!w.length){var y=fam('Sin detalle');y.f+=f;y.c+=c;y.ped++;return;}
@@ -40099,19 +40201,24 @@ function _eerrCalc(mn,anio){
      entra sin costo y le subia el margen a cada canal. El TOTAL de Ventas no cambia
      —es el mismo numero de Inicio, Objetivo y Maleu - Lectura—: cada canal va sin
      su propina y la propina va en un renglon propio. Red no tiene: es del vendedor. */
-  var totFact=0,totCMV=0,totProp=0,cn={};   /* cn: entregas por canal (10/11/2026) */
+  /* (18/11/2026, 766) LA PROPINA NO ES VENTA (Tadeo: «dale, saquémoslo»). Es del repartidor: Equipo se la paga en la
+     quincena. Tampoco lo que quedó a favor del cliente (se vende cuando se aplica). Hasta hoy el TOTAL de ventas y el
+     margen bruto las sumaban (cada canal ya iba sin la propina, desde el 11/10). Ahora la venta es neta en todos lados y
+     las dos van en «Plata de terceros», debajo del resultado, sin sumar. Con `vn` (766) la venta ya viene neta. */
+  var totFact=0,totCMV=0,totProp=0,totFav=0,cn={};   /* cn: entregas por canal (10/11/2026) */
   var _VV=_vdVivo();   /* (15/11/2026) las ventas + lo recién entregado, igual que Inicio */
   _VV.filter(function(v){return _esDelMes(v,mesNom,anio);}).forEach(function(v){
     var f=Number(v.$)||0,c=Number(v.costo)||0,k=null;
-    totFact+=f;totCMV+=c;
     if(v.canal==='Venta Directa')k=(v.zona==='Pilar'?'Pilar':'Home');
     else if(cf.hasOwnProperty(v.canal))k=v.canal;
     if(k)cn[k]=(cn[k]||0)+1;
-    var pr=(k==='Home'||k==='Pilar'||k==='Clubes')?Math.max(0,Math.min(f,(Number(v.pEf)||0)+(Number(v.pTr)||0))):0;
-    totProp+=pr;
-    if(k){cf[k]+=f-pr;cc[k]+=c;}
+    var _r=(k==='Home'||k==='Pilar'||k==='Clubes');
+    var pr=_r?Math.max(0,Number(v.pEf)||0)+Math.max(0,Number(v.pTr)||0):0;
+    if(_r&&!v.vn)f-=Math.min(f,pr);
+    totFact+=f;totCMV+=c;totProp+=pr;totFav+=_r?(Number(v.fav)||0):0;
+    if(k){cf[k]+=f;cc[k]+=c;}
   });
-  R.propinas=totProp;R.ent=cn;
+  R.propinas=totProp;R.aFavor=totFav;R.ent=cn;
   /* (15/11/2026) ENTREGAS con la misma cuenta que Inicio (`_rtEntregas`), no filas: daba 125 donde Inicio 116. B2B, una
      por fila; sin catering: un evento no es una entrega. `R.ent` (por canal) sigue en filas para el desglose. */
   var _eRet=_VV.filter(function(v){return _esDelMes(v,mesNom,anio)&&v.canal!=='B2B'&&v.canal!=='Catering';}).map(_ventaComoPedido);
@@ -41253,7 +41360,6 @@ function _resLineas(R){
   var L=[];
   L.push({k:'ventas',n:'Ventas',v:R.totFact,kind:'grp',g:'ven',mejor:1});
   R.canales.forEach(function(c){if(c.f)L.push({k:'can_'+c.k,n:C[c.k]||c.k,v:c.f,kind:'hijo',g:'ven',mejor:1});});
-  if(R.propinas)L.push({k:'prop',n:'Propinas',v:R.propinas,kind:'hijo',g:'ven',mejor:1});
   L.push({k:'cmv',n:'Mercadería',v:R.totCMV,signo:-1,kind:'grp',g:'cmv',mejor:-1});
   R.canales.forEach(function(c){if(c.c)L.push({k:'cc_'+c.k,n:C[c.k]||c.k,v:c.c,signo:-1,kind:'hijo',g:'cmv',mejor:-1});});
   if(R.cmvRed)L.push({k:'cmvred',n:'Redondeos con proveedores',v:R.cmvRed,signo:-1,kind:'hijo',g:'cmv',mejor:-1});
@@ -41331,6 +41437,16 @@ function _resEco(box){
     +'<div class="res-f res-cab" role="row"><span class="res-n">'+_RES_MES[mn-1]+(cuando?' '+cuando:'')+'</span><span class="res-m">$</span><span class="res-p">%</span><span class="res-c">'+(PV.nom?'vs '+_resE(PV.nom.split(' ')[0]):'')+'</span></div>';
   L.forEach(function(x){h+=_resFila({n:x.n,v:x.v,signo:x.signo,kind:x.kind,g:x.g,mejor:x.mejor,base:x.k==='ventas'?0:R.totFact,prev:PV.m?PV.m[x.k]:null,neg:x.kind&&x.kind.indexOf('tot')===0&&x.v<0});});
   h+='</div>';
+  /* (18/11/2026, 766) PLATA DE TERCEROS: entró con los cobros y no es de Maleu, así que no está en las ventas ni suma al
+     resultado. Las propinas son de los repartidores (Equipo se las paga en la quincena); lo que quedó a favor es crédito
+     de los clientes para su próximo pedido. */
+  if((R.propinas||0)+(R.aFavor||0)>0.5){
+    h+='<div class="res-tabla res-terc" role="table" aria-label="Plata de terceros">'
+      +'<div class="res-f res-cab" role="row"><span class="res-n">Plata de terceros</span><span class="res-m">$</span><span class="res-p"></span><span class="res-c"></span></div>';
+    if(R.propinas>0.5)h+=_resFila({n:'Propinas a pagar',v:R.propinas,base:0,prev:null});
+    if(R.aFavor>0.5)h+=_resFila({n:'A favor de clientes',v:R.aFavor,base:0,prev:null});
+    h+='</div>';
+  }
   /* ── Por canal y por familia: plegados (vivían en Inicio › EERR) ── */
   var CN={Home:'Home',Pilar:'Pilar',Clubes:'Clubes',Red:'Red',B2B:'Empresas',Catering:'Catering'};
   var cans=R.canales.filter(function(c){return c.f>0;}).sort(function(x,y){return y.f-x.f;});
@@ -42181,14 +42297,14 @@ function rEERR_dual(body){
     hijos:R.canales.map(function(c){
       var pc=null;if(hayP)P.canales.forEach(function(x){if(x.k===c.k)pc=x;});
       return {lbl:c.k,val:c.f,pc:c.f>0?'margen '+pct(c.f-c.c,c.f):'',pv:hayP?(pc?pc.f:0):undefined,ppc:pc&&pc.f>0?'margen '+pct(pc.f-pc.c,pc.f):''};
-    }).concat((R.propinas>0||(hayP&&P.propinas>0))?[{lbl:'Propinas y redondeos',sub:'lo que el cliente dejó de más; no es venta de productos',val:R.propinas,pv:hayP?(P.propinas||0):undefined}]:[])});
+    })});
   /* 2 · Costo */
   fila({id:'cmv',lbl:'− Costo de la mercadería',sub:'lo que costó lo que se entregó',val:-R.totCMV,pv:hayP?-P.totCMV:undefined,
     nota:'Es el costo de los productos entregados, pedido por pedido. No es lo que se les pagó a los proveedores este mes.',
     hijos:[{lbl:'Productos',val:-(R.totCMV-R.cmvCat-(R.cmvRed||0)),pv:hayP?-(P.totCMV-P.cmvCat-(P.cmvRed||0)):undefined}]
       .concat(R.cmvCat>0?[{lbl:'Gastos de los eventos de catering',val:-R.cmvCat,pv:hayP?-P.cmvCat:undefined,det:dets(R.cmvCatD)}]:[])
       .concat(R.cmvRed>0?[{lbl:'Redondeos a proveedores',val:-R.cmvRed,pv:hayP?-(P.cmvRed||0):undefined,det:dets(R.cmvRedD)}]:[])});
-  fila({id:'mb',lbl:'= Margen bruto',sub:R.propinas>0?('sin las propinas: '+pct(R.totMB-R.propinas,R.totFact-R.propinas)+' de lo vendido'):'',val:R.totMB,cls:'tot',pv:hayP?P.totMB:undefined});
+  fila({id:'mb',lbl:'= Margen bruto',val:R.totMB,cls:'tot',pv:hayP?P.totMB:undefined});
   /* 3 · Gastos de cada venta */
   fila({id:'var',lbl:'− Gastos de cada venta',sub:'crecen cuando vendés más',val:-R.totVar,pv:hayP?-P.totVar:undefined,
     nota:'Si un mes no vendés nada, estos no existen.',
@@ -42261,6 +42377,11 @@ function rEERR_dual(body){
   if(R.imp.impuesto>0)hi.push({lbl:'Otros impuestos',val:-R.imp.impuesto,det:dets(R.det.impuesto)});
   fila({id:'imp',lbl:'− Impuestos',val:-R.totImp,pv:hayP?-P.totImp:undefined,hijos:hi});
   fila({id:'res',lbl:'= Resultado del mes',val:R.resNeto,cls:'fin '+(gano?'pos':'neg'),pv:hayP?P.resNeto:undefined});
+  /* (766) Lo que entró y no es de Maleu: no suma al resultado. */
+  if((R.propinas||0)+(R.aFavor||0)>0||(hayP&&((P.propinas||0)+(P.aFavor||0))>0))
+    fila({id:'terc',lbl:'Plata de terceros',sub:'entró con los cobros y no es de Maleu: no suma',val:(R.propinas||0)+(R.aFavor||0),pv:hayP?(P.propinas||0)+(P.aFavor||0):undefined,
+      hijos:[{lbl:'Propinas a pagar',sub:'de los repartidores',val:R.propinas||0,pv:hayP?(P.propinas||0):undefined}]
+        .concat((R.aFavor||0)>0||(hayP&&(P.aFavor||0)>0)?[{lbl:'A favor de clientes',sub:'crédito para su próximo pedido',val:R.aFavor||0,pv:hayP?(P.aFavor||0):undefined}]:[])});
 
   var hayAb=Object.keys(_eerrAbiertos).some(function(k){return _eerrAbiertos[k];});
   html+='<div class="eerr-card eerr-tblw">';
@@ -45542,6 +45663,7 @@ function _vtDetalle(v){
     h+='<div class="vt-det-r sangria"><span>'+(v.rgTxt?'Descuento (con el regalo)':'Descuento')+'</span><b>−'+f(_vDesc)+'</b></div>';
   }
   h+='<div class="vt-det-r"><span>Facturado</span><b>'+f(fact)+'</b></div>';
+  if(Number(v.fav)>0) h+='<div class="vt-det-r sangria"><span>A favor del cliente</span><b>'+f(v.fav)+'</b></div>';   /* (766) crédito: no es venta */
   if(ef>0) h+='<div class="vt-det-r sangria"><span>Efectivo</span><b>'+f(ef)+'</b></div>';
   /* A que cuenta entro (11/9/2026): "MP / Transferencia" no lo decia. */
   var _vc=_vCtaDe(v);
@@ -47216,8 +47338,8 @@ if('serviceWorker' in navigator){
     })();
     var _telArg=[p.h,p.n,(p.c||'')].map(function(x){return String(x).replace(/\\/g,'\\\\').replace(/'/g,"\\'");});
 
-    /* ── 1. QUIÉN Y CUÁNTO ── */
-    var totCli=_pedTotalCliente(p);
+    /* ── 1. QUIÉN Y CUÁNTO ── (18/11/2026) el total del pedido, sin la propina */
+    var totCli=_pedTotalSinPropina(p);
     var canalTxt=p.h+(p.bar&&(p.h==='Home'||p.h==='Pilar')?' · '+p.bar:(p.h==='Clubes'&&p.club?' · '+p.club:(p.h==='Red'&&p.br?' · '+p.br:'')));
     html+='<div class="ofx-hero">';
     html+='<div class="ofx-top"><div class="ofx-quien">'
@@ -47318,8 +47440,10 @@ if('serviceWorker' in navigator){
     var sub=Number(p.$)||0, desc=Number(p.desc)||0, env=Number(p.env)||0;
     var subRaw=Number(p.subt)||Math.max(0,sub+desc-env);
     var costo=Number(p.co)||0;
-    var margen=p.mg!=null?Number(p.mg):(sub-costo);
-    var margenPct=sub>0?Math.round(margen/sub*100):0;
+    /* (18/11/2026) Fuera de Red, el margen es el total del pedido menos el costo: `mg` (margin_amount) trae la propina. */
+    var _baseMg=p.h==='Red'?sub:totCli;
+    var margen=p.h==='Red'?(p.mg!=null?Number(p.mg):(sub-costo)):(totCli-costo);
+    var margenPct=_baseMg>0?Math.round(margen/_baseMg*100):0;
     /* LA ETIQUETA DICE LO QUE ES EL DESCUENTO (23/10/2026): el ahorro del combo sale de su receta (p.cd); el 10% se nombra
        solo si el descuento ES el 10% del subtotal (pedidos viejos). */
     var descLabel='Descuento';
@@ -47359,6 +47483,7 @@ if('serviceWorker' in navigator){
       html+='<div class="ofx-mg"><span>Costo '+_ars(costo)+'</span><span class="'+(margen<0?'mal':(margenPct>=25?'ok':''))+'">Margen bruto <b>'+_ars(margen)+'</b> · '+margenPct+'%</span></div>';
     }
     html+='</div>';
+    try{ html+=_fichaCobroHTML(p,totCli,null); }catch(_eCb){}
 
     /* ── Red: quién trajo al cliente y la comisión. Se queda a la vista: decide cuánto cobra el representante.
        Los tres estados son tres: el vacío no es «Vendedor» disfrazado (28/9/2026). ── */
