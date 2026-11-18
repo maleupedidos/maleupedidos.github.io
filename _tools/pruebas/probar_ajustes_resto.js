@@ -5,8 +5,7 @@
      todas las del menú presentes (ninguna perdida), «Textos cambiados» solo para el dueño;
    · Parámetros, Saldos a favor, Provisiones, Permisos, Textos cambiados y Sesión en la columna (≤ 720 px), sin scroll
      horizontal ni nada cortado;
-   · Provisiones como lista con ficha: Guardar apagado al abrir, prendido con un cambio, apagado al volver; Guardar manda
-     el concepto original (origConcepto) y lo cambiado; Borrar en «…»;
+   · (Provisiones se mudó a Resultados › Gastos: la prueba es probar_provisiones_resultados.js.)
    · Saldos: la lista arriba y «Dar crédito» plegado.
    Salida 1 si algo falla. */
 'use strict';
@@ -52,7 +51,7 @@ const MIRA = `(function(){var b=document.getElementById('ajBody');var vis=functi
   const M0 = await E(MIRA);
   chk(!M0.cort.length && !M0.hs, `portada: nada cortado ni scroll horizontal${M0.cort.length ? ' — ' + M0.cort.join(' | ') : ''}`);
   await foto(cli, 'portada');
-  for (const sec of ['params', 'saldos', 'provisiones', 'permisos', 'textos', 'sesion']) {
+  for (const sec of ['params', 'saldos', 'permisos', 'textos', 'sesion']) {   /* Provisiones: probar_provisiones_resultados.js */
     await E(`ajGo('${sec}')`); await T(sec === 'saldos' ? 2500 : 1200);
     const M = await E(MIRA);
     chk(!M.cort.length && !M.hs, `${sec}: nada cortado ni scroll horizontal${M.cort.length ? ' — ' + M.cort.join(' | ') : ''}`);
@@ -63,26 +62,7 @@ const MIRA = `(function(){var b=document.getElementById('ajBody');var vis=functi
   const Sd = await E(`(function(){var c=[].slice.call(document.querySelectorAll('#ajBody .aj-card'));return {primero:c[0]&&c[0].querySelector('h3').textContent,cred:(document.getElementById('ajCredBox')||{}).open}})()`);
   chk(/saldo a favor/.test(Sd.primero || '') && Sd.cred === false, 'saldos: la lista arriba y «Dar crédito» plegado');
 
-  await E(`ajGo('provisiones')`); await T(1200);
-  const Pl = await E(`(function(){var r=document.querySelectorAll('#ajBody .aju-r');return {n:r.length,form:document.querySelectorAll('#ajBody .aj-row.pr').length,c:r[0]&&r[0].dataset.i,con:r[0]&&(AJ_DATA.provisiones[r[0].dataset.i]||{}).concepto}})()`);
-  chk(Pl.n > 0 && Pl.form === 0, `provisiones: ${Pl.n} renglones y ningún formulario abierto`);
-  /* El monto que se lee es el de la planilla (numAR), y la categoría por su nombre, no su código. */
-  const Pm = await E(`(function(){var mal=[];(AJ_DATA.provisiones||[]).forEach(function(p,i){var r=document.querySelector('#ajBody .aju-r[data-i="'+i+'"] .aju-m');if(!r)return;
-    var n=numAR(p.monto),txt=r.textContent;if(isFinite(n)&&txt.indexOf('$'+Math.round(n).toLocaleString('es-AR')+' ')<0)mal.push(p.concepto+': '+txt);if(/_/.test(txt))mal.push(p.concepto+' con código: '+txt);});return mal})()`);
-  chk(!Pm.length, `provisiones: montos y categorías bien leídos${Pm.length ? ' — ' + Pm.slice(0, 3).join(' | ') : ''}`);
-  await E(`ajPAbrir(${JSON.stringify(Pl.c || '')})`); await T(800);
-  const Pf = await E(`(function(){var b=document.getElementById('ajPFok'),m=document.getElementById('ajPF_m'),a=m.value,r={dis:b.disabled,est:document.getElementById('ajPFest').textContent};
-    m.value=String(Number(String(a).replace(/\\D/g,''))+1000);m.dispatchEvent(new Event('input',{bubbles:true}));r.on=!b.disabled;r.nuevo=m.value;
-    m.value=a;m.dispatchEvent(new Event('input',{bubbles:true}));r.off=b.disabled;m.value=r.nuevo;m.dispatchEvent(new Event('input',{bubbles:true}));
-    r.borrar=!!document.querySelector('#ajPF .k-menu .k-menu-peligro');return r})()`);
-  chk(Pf.dis && Pf.est === 'Sin cambios', `provisión: Guardar apagado y «${Pf.est}» al abrir`);
-  chk(Pf.on && Pf.off, 'provisión: Guardar se prende con el cambio y se apaga al volver');
-  chk(Pf.borrar, 'provisión: Borrar en «…»');
-  await foto(cli, 'provision_ficha');
-  await E(`ajSaveProv(document.getElementById('ajPFok'))`); await T(2500);
-  const G = await E(`window.__prov`), p = G[0] || {};
-  chk(G.length === 1 && p.origConcepto === Pl.con && String(p.monto) === Pf.nuevo, `provisión: guarda con origConcepto «${p.origConcepto}» y el monto nuevo (${p.monto})`);
-  await E(`window.confirm=function(){return true};AJ_PF=null;ajRender()`);
+
   const errs = await E(`(window.__err||[]).slice(0,5)`).catch(() => []);
   chk(!errs || !errs.length, `sin errores de JS${errs && errs.length ? ' — ' + errs.join(' | ') : ''}`);
   console.log(`\nAjustes › portada y configuración a ${ANCHO} px: ${ok.length} bien, ${mal.length} mal`);
