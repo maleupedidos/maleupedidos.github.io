@@ -136,11 +136,26 @@ if (require.main === module) (async () => {
       var r=/\\/rest\\/v1\\/rpc\\/([a-z0-9_]+)/.exec(s);
       if(m==='POST'&&(/script\\.google\\.com/.test(s)||(r&&!/_(pantalla|datos|base)$|^permiso_base$|^demanda_por_deposito$|^dashboard_vendedor_pantalla$/.test(r[1]))))return Promise.resolve(new Response('{"ok":false,"err":"cortado"}',{status:200,headers:{'Content-Type':'application/json'}}));
       return f.apply(this,arguments);};})();`;
+  /* (18/11/2026) SIM766=1: la respuesta de ventas_pantalla como la va a dar la 766 (la venta de Home, Pilar y Clubes sin
+     la propina, `vn`), para probar el front antes de aplicarla. No cubre lo que quedó a favor (4 pedidos de noviembre). */
+  const SIM766 = process.env.SIM766 ? `;(function(){var f=window.fetch;window.fetch=function(u,x){var s=String(u&&u.url||u);
+      var esV=/\\/rpc\\/ventas_pantalla/.test(s), esP=/\\/rpc\\/pedidos_light_pantalla/.test(s);
+      if(!esV&&!esP)return f.apply(this,arguments);
+      return f.apply(this,arguments).then(function(r){return r.clone().json().then(function(j){
+        /* ventas: Home, Pilar y Clubes sin la propina. pedidos livianos: el $ = lo pagado (fb) menos la propina. */
+        var visto=0;(function camina(o){ if(!o||typeof o!=='object')return; if(Array.isArray(o)){o.forEach(camina);return;}
+          if(esV&&(o.canal==='Venta Directa'||o.canal==='Clubes')&&o.$!=null&&!o.vn){var pr=Math.max(0,Number(o.pEf)||0)+Math.max(0,Number(o.pTr)||0);
+            o.$=Math.max(0,(Number(o.$)||0)-pr); o.margen=(Number(o.margen)||0)-pr; o.vn=1; visto++; return;}
+          if(esP&&(o.h==='Home'||o.h==='Pilar'||o.h==='Clubes')&&o.$!=null&&o.fb!=null){var pp=Math.max(0,Number(o.pef)||0)+Math.max(0,Number(o.ptr)||0);
+            if(pp>0&&Math.abs((Number(o.$)||0)-(Number(o.fb)||0))<1){o.$=Math.max(0,(Number(o.$)||0)-pp); if(o.mg!=null)o.mg=(Number(o.mg)||0)-pp;} visto++; return;}
+          Object.keys(o).forEach(function(k){camina(o[k]);}); })(j);
+        window.__sim766=(window.__sim766||0)+visto;
+        return new Response(JSON.stringify(j),{status:r.status,headers:{'Content-Type':'application/json'}});}).catch(function(){return r;});});};})();` : '';
   const cli = await cdp.abrir();
   try {
     await cli.enviar('Page.enable'); await cli.enviar('Runtime.enable');
     await cli.enviar('Emulation.setDeviceMetricsOverride', { width: 1440, height: 1000, deviceScaleFactor: 1, mobile: false });
-    await cli.enviar('Page.addScriptToEvaluateOnNewDocument', { source: PREP });
+    await cli.enviar('Page.addScriptToEvaluateOnNewDocument', { source: PREP + SIM766 });
     await cli.enviar('Page.navigate', { url: BASE });
     for (let i = 0; i < 120; i++) { try { if (await cdp.evaluar(cli, "typeof go==='function'&&!!window.D")) break; } catch (e) {} await new Promise((r) => setTimeout(r, 500)); }
     const r = await cruzar((e) => cdp.evaluar(cli, e));
