@@ -510,6 +510,7 @@
     .cob-card .cob-pill.ok { background: #e3f1e4; color: #1b5e20; }
     .cob-card .cob-pill.ent { background: #fdecd2; color: #8a4b00; }
     .cob-card .cob-pill.cob { background: #fff3c4; color: #6b5300; }
+    .cob-card .cob-pill.bol { background: #eef1f6; color: #34495e; }   /* (18/11/2026) todavía no se despachó: no se pide nada */
     .cob-card .cob-nota { font-size: .72rem; color: #6d4c41; margin-top: .45rem; line-height: 1.4; }
     .cob-card .cob-ult { font-size: .74rem; color: #555; margin-top: .8rem; padding-top: .6rem; border-top: 1px solid #eee; }
     .venc-card { background: #fff; border: 1px solid #f3c7c0; border-left: 4px solid #c62828; border-radius: 14px; padding: .9rem 1.1rem; margin-bottom: 1rem; }
@@ -3514,11 +3515,18 @@ function renderCobrar(L, liqs) {
     const B = blq(_cobNum(p.pagaEl));
     lbl(B, p.q);
     B.pend += Number(p.tot) || 0;
-    B.filas.push({ p: p, st: p.falta === 'entregar' ? 'ent' : 'cob' });
+    /* (18/11/2026) Desde la 664 la base manda falta='bolsa': la bolsa todavía no se le despachó. Antes caía en «cob» y decía
+       «Entregado sin cobrar · falta marcar el cobro» sobre pedidos cobrados y sin entregar. El cobro lo hace Maleu: ningún
+       texto le pide al representante marcarlo. */
+    B.filas.push({ p: p, st: p.falta === 'entregar' ? 'ent' : (p.falta === 'bolsa' ? 'bol' : 'cob') });
   });
   const ks = Object.keys(bloques).map(Number).sort(function (a, b) { return a - b; });
-  const ST = { ok: 'Listo para rendir', ent: 'Pendiente de entrega', cob: 'Entregado sin cobrar' };
-  const QUE = { ent: 'falta marcarlo entregado', cob: 'falta marcar el cobro' };
+  const ST = { ok: 'Listo para rendir', ent: 'Pendiente de entrega', cob: 'Lo cobra Maleu', bol: 'Se despacha' };
+  const QUE = { ent: 'falta marcarlo entregado', cob: 'lo cobra Maleu', bol: '' };
+  /* «Se despacha el viernes 20/11»: el día de entrega del pedido (dd/mm/aaaa). */
+  const _cobDespacha = function (dia) { const m = String(dia || '').match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/); if (!m) return 'Se despacha';
+    const D = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'][new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1])).getDay()];
+    return 'Se despacha el ' + D + ' ' + Number(m[1]) + '/' + Number(m[2]); };
   let h = '';
   if (!ks.length) {
     h += '<div class="cob-blk"><div class="cob-t">Lo que vas a cobrar</div><div class="cob-big">' + ars(0) + '</div>'
@@ -3526,7 +3534,7 @@ function renderCobrar(L, liqs) {
   }
   ks.forEach(function (k, i) {
     const B = bloques[k];
-    const orden = { ok: 0, cob: 1, ent: 2 };
+    const orden = { ok: 0, cob: 1, bol: 1, ent: 2 };
     B.filas.sort(function (a, b) { return orden[a.st] - orden[b.st]; });
     h += '<div class="cob-blk' + (i ? ' cob-blk2' : '') + '">'
        + '<div class="cob-t">' + (i ? 'Después' : 'Lo que vas a cobrar') + '</div>'
@@ -3537,19 +3545,20 @@ function renderCobrar(L, liqs) {
       const p = f.p;
       const det = p.prop ? 'Propina que te dejó en efectivo'
                 : 'Comisión ' + ars(Number(p.com) || 0) + ((Number(p.env) || 0) > 0 ? ' · envío ' + ars(Number(p.env) || 0) : '')
-                + (f.st !== 'ok' ? ' · ' + QUE[f.st] : '');
+                + (f.st !== 'ok' && QUE[f.st] ? ' · ' + QUE[f.st] : '');
       const izq = '<span class="cob-l"><div class="cob-cli">#' + redEsc(p.n) + ' · ' + redEsc(p.c || '') + '</div>'
                 + '<div class="cob-det">' + det + '</div></span>'
-                + '<span class="cob-r"><span class="cob-m">' + ars(Number(p.tot) || 0) + (f.st !== 'ok' ? ' ›' : '') + '</span>'
-                + '<span class="cob-pill ' + f.st + '">' + ST[f.st] + '</span></span>';
-      /* Lo pendiente lleva a su parada en Ruta, donde se marca. Lo listo no se toca. */
-      h += f.st === 'ok'
+                + '<span class="cob-r"><span class="cob-m">' + ars(Number(p.tot) || 0) + (f.st === 'ent' ? ' ›' : '') + '</span>'
+                + '<span class="cob-pill ' + f.st + '">' + (f.st === 'bol' ? _cobDespacha(p.dia) : ST[f.st]) + '</span></span>';
+      /* Lo pendiente de ENTREGA lleva a su parada en Ruta, donde se marca. Lo listo, lo que se despacha y lo que cobra Maleu no se tocan. */
+      h += f.st !== 'ent'
         ? '<div class="cob-row">' + izq + '</div>'
         : '<button type="button" class="cob-row" onclick="redIrAPedido(' + "'" + redEsc(p.n) + "'," + (Number(p.row) || 0) + ')">' + izq + '</button>';
     });
     h += '</div>';
     if (B.pend > 0) {
-      h += '<div class="cob-nota">' + ars(B.pend) + ' todavía no entran: se suman cuando el pedido está entregado y cobrado. Tocá uno para marcarlo.</div>';
+      const _hayEnt = B.filas.some(function (f) { return f.st === 'ent'; });
+      h += '<div class="cob-nota">' + ars(B.pend) + ' todavía no entran: se suman cuando ' + (_hayEnt ? 'el pedido está entregado. Tocá uno para marcarlo.' : 'te despachamos la bolsa.') + '</div>';
     }
     h += '</div>';
   });
@@ -3575,12 +3584,12 @@ function renderVencidos(pedidos) {
   let h = '<div class="vc-head"><span class="vc-t">' + v.length + (v.length === 1 ? ' pedido quedó' : ' pedidos quedaron') + ' sin marcar</span>'
         + '<span class="vc-tot">' + ars(tot) + '</span></div>'
         + '<div class="vc-sub">' + (sinEnt ? 'Ya pasó el día de entrega. Si los entregaste, marcalos: lo que no está marcado no cuenta para tu nivel.'
-                                           : 'Están entregados y falta marcar el cobro.') + '</div>';
+                                           : 'Están entregados; el cobro lo registra Maleu.') + '</div>';
   v.forEach(function (p) {
     const pz = String(p.fe).split('-');
     const dt = new Date(Number(pz[0]), Number(pz[1]) - 1, Number(pz[2]));
     const cuando = DIAS[dt.getDay()] + ' ' + pz[2] + '/' + pz[1];
-    const falta = p.es !== 'Entregado' ? 'falta marcar la entrega' : 'falta marcar el cobro';
+    const falta = p.es !== 'Entregado' ? 'falta marcar la entrega' : 'el cobro lo registra Maleu';
     h += '<button type="button" class="vc-row" onclick="redIrAPedido(' + "'" + redEsc(p.n) + "'," + (Number(p.row) || 0) + ')">'
        + '<span><div class="vc-cli">' + redEsc(p.c || ('Pedido ' + p.n)) + '</div>'
        + '<div class="vc-det">' + cuando + ' · ' + falta + '</div></span>'
