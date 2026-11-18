@@ -1,4 +1,5 @@
-/* Si el robot de GitHub falla, UNA línea al Telegram «Maleu · Resúmenes» (11/11/2026, migración 654).
+/* Si el robot de GitHub falla, UNA alerta técnica (technical_alert, origen «robot github»; desde el 18/11/2026, 785: antes
+   iba al Telegram «Maleu · Resúmenes», 654). Con VERDE=1 (el workflow terminó bien) resuelve la que haya quedado abierta.
      ROBOT_USUARIO=… ROBOT_PIN=… FALLO="qué falló" RUN_ID=… RUN_URL=… VERSION=… node _tools/robot/avisar_falla.js
    Entra como el usuario robot por la base (login_pin → contraseña de Auth, lo mismo que el ERP) y llama a
    robot_falla_avisar. No lleva token de Telegram: el aviso lo manda la base. La URL y la clave pública son las de
@@ -14,6 +15,6 @@ const H = (t) => ({ apikey: KEY, Authorization: 'Bearer ' + (t || KEY), 'Content
   const tk = await (await fetch(URL_SB + '/auth/v1/token?grant_type=password', { method: 'POST', headers: H(), body: JSON.stringify({ email: lp.email, password: lp.clave }) })).json();
   if (!tk || !tk.access_token) { console.log('no pude sacar el token del robot'); return; }
   const r = await fetch(URL_SB + '/rest/v1/rpc/robot_falla_avisar', { method: 'POST', headers: H(tk.access_token),
-    body: JSON.stringify({ p: { que: process.env.FALLO || '', run: process.env.RUN_ID || '', url: process.env.RUN_URL || '', version: process.env.VERSION || '' } }) });
-  console.log('aviso al Telegram: ' + r.status + ' ' + (await r.text()).slice(0, 200));
+    body: JSON.stringify({ p: { que: process.env.FALLO || '', run: process.env.RUN_ID || '', url: process.env.RUN_URL || '', version: process.env.VERSION || '', verde: process.env.VERDE === '1' ? 'true' : '' } }) });
+  console.log((process.env.VERDE === '1' ? 'alerta resuelta: ' : 'alerta técnica: ') + r.status + ' ' + (await r.text()).slice(0, 200));
 })().catch((e) => console.log('no pude avisar: ' + (e && e.message)));
