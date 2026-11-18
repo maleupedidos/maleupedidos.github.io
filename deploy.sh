@@ -154,7 +154,8 @@ else
   if echo ",$TABS_PIS," | grep -qE ",(ruta|pedidos|inicio),"; then python ../estancias/scripts/migraciones/sesion_prueba.py crear "$PIS_TMP/ses_eq.json" santos equipo >/dev/null 2>&1 && PIS_EXTRA="$PIS_EXTRA SES_EQUIPO=$PIS_TMP/ses_eq.json"; fi
   if echo ",$TABS_PIS," | grep -q ",miportal,"; then python ../estancias/scripts/migraciones/sesion_prueba.py crear "$PIS_TMP/ses_ven.json" marcos vendedor >/dev/null 2>&1 && PIS_EXTRA="$PIS_EXTRA SES_VENDEDOR=$PIS_TMP/ses_ven.json"; fi
   node _tools/servir.js 8094 >/dev/null 2>&1 & PIS_SRV=$!
-  sleep 2
+  # (18/11/2026) Con la máquina cargada 2 s no alcanzaban: el detector arrancaba sin servidor, reventaba sin mirar nada y frenaba el deploy como «texto encimado». Se espera a que conteste (hasta 60 s).
+  for _i in $(seq 1 60); do curl -s -o /dev/null -m 5 http://localhost:8094/app.html && break; sleep 1; done
   echo "    pantallas: $TABS_PIS"
   set +e
   env PW="$PW_DIR" BASE=http://localhost:8094/app.html OUT="$PIS_TMP/capturas" MEDIDAS=w390 SOLO="$TABS_PIS" CAPTURAS=1 SES_ADMIN="$PIS_SES" $PIS_EXTRA \
