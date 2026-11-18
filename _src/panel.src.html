@@ -20981,7 +20981,8 @@ function identHtml(){
   var h='<div class="rb-card rb-hay pd-card ident-card"><div class="rb-h"><span>Identidades</span><span class="rb-n">'+L.length+' por revisar</span></div>'
     +'<details class="k-info"><summary>Qué es esto</summary><div>Cuando un pedido trae un nombre que no es el de la ficha de ese teléfono, o va a otra casa, '
     +'el ERP no decide solo. <b>Es</b>: el pedido queda a nombre de la ficha y ese nombre ya no vuelve a preguntarse. <b>De su casa</b>: ficha propia, misma casa. '
-    +'<b>Otra persona</b>: ficha propia; si sabés su teléfono, ponelo. <b>Se mudó</b>: la ficha pasa a la dirección nueva.</div></details>';
+    +'<b>Otra persona</b>: ficha propia; si sabés su teléfono, ponelo. <b>Se mudó</b>: la ficha pasa a la dirección nueva. '
+    +'Una <b>ficha sin nombre</b> toma el de su primer pedido; si trae un mail, un solo nombre o el apellido primero, se elige acá.</div></details>';
   L.forEach(function(c){ h+=identCasoHtml(c); });
   return h+'</div>';
 }
@@ -20996,6 +20997,20 @@ function identCasoHtml(c){
       +'<button type="button" class="prep-ultimo" onclick="identResolver('+c.id+',\'solo\',this)">Solo este pedido</button>'
       +'<button type="button" class="prep-ultimo" onclick="identResolver('+c.id+',\'mudo\',this)">Se mudó</button>'
       +'<button type="button" class="prep-ultimo" onclick="identResolver('+c.id+',\'otra\',this)">Es otra persona</button></div>';
+    return h+'</div>';
+  }
+  if(c.tipo==='sin_nombre'){
+    /* (781) La ficha no tenía nombre y el pedido trae algo raro: se elige con un toque o se escribe. */
+    var por={mail:'trae un mail',dos_nombres:'trae dos nombres',un_nombre:'trae un solo nombre',apellido_primero:'parece el apellido primero'}[c.clase]||'';
+    var O=c.opciones||[], n1=P.length;
+    h+='<div class="rb-l1"><b>«'+e(c.tipeado)+'»</b><span>ficha sin nombre · '+e(por)+'</span></div>'
+      +'<div class="rb-l2">'+n1+(n1===1?' pedido':' pedidos')+(u.fecha?' · el último el '+e(u.fecha):'')+(u.dir?' · '+e(u.dir):'')+'</div>'
+      +'<div class="pd-acc">'+O.map(function(o,i){
+        return '<button type="button" class="'+(o===c.real?'prep-sumar':'prep-ultimo')+'" onclick="identResolver('+c.id+',\'nombre\',this,'+i+')">Es '+e(o)+'</button>';
+      }).join('')+'<button type="button" class="prep-ultimo" onclick="identOtra('+c.id+')">Otro nombre</button></div>'
+      +'<div class="ident-tel" id="identTelFila-'+c.id+'"'+(O.length?' hidden':'')+'><input type="text" id="identTel-'+c.id+'" placeholder="Nombre y apellido" autocomplete="off"'
+      +(c.clase==='un_nombre'?' value="'+e(_identCap(c.tipeado))+' "':'')+'>'
+      +'<button type="button" class="prep-sumar" onclick="identResolver('+c.id+',\'nombre\',this,-1)">Listo</button></div>';
     return h+'</div>';
   }
   var nP=P.length;
@@ -21026,17 +21041,23 @@ function identOtra(id){
   f.hidden=false; var i=document.getElementById('identTel-'+id); if(i)try{ i.focus(); }catch(e){}
 }
 function _identCaso(id){ return ((_IDENT&&_IDENT.casos)||[]).filter(function(x){ return x.id===id; })[0]; }
-function identResolver(id,op,btn){
+function identResolver(id,op,btn,iNom){
   var c=_identCaso(id); if(!c)return;
   var p={id:id,opcion:op};
   if(op==='otra'&&c.tipo==='nombre'){ var i=document.getElementById('identTel-'+id); if(i&&i.value.trim())p.telefono=i.value.trim(); }
+  if(c.tipo==='sin_nombre'){
+    var iN=document.getElementById('identTel-'+id);
+    p.nombre=(iNom>=0)?String((c.opciones||[])[iNom]||''):(iN?iN.value.trim():'');
+    if(String(p.nombre).trim().split(/\s+/).filter(Boolean).length<2){ toast('Poné nombre y apellido',4000); if(iN){ identOtra(id); } return; }
+  }
   var el=document.getElementById('ident-'+id);
   var bs=el?el.querySelectorAll('button'):[]; for(var j=0;j<bs.length;j++)bs[j].disabled=true;
   var tAntes=btn?btn.textContent:''; if(btn)btn.textContent='Guardando…';
   _baseRpc('identidad_resolver',{p:p}).then(function(r){
     if(!r||!r.ok)throw new Error((r&&r.err)||'no se pudo');
     var fn=_identPrimer(c.ficha);
-    toast(c.tipo==='direccion'
+    if(c.tipo==='sin_nombre')toast('Listo: la ficha se llama '+(r.nombre||p.nombre)+' · '+(r.pedidos||0)+(r.pedidos===1?' pedido':' pedidos')+(r.nuevoCaso?' · el otro nombre queda para decidir':''),5000);
+    else toast(c.tipo==='direccion'
       ?(op==='solo'?'Listo: la ficha queda como estaba':(op==='mudo'?'Listo: la ficha de '+fn+' tiene la dirección nueva':'Listo: ahora decí quién es'))
       :(op==='misma'?'Listo: '+(r.pedidos||0)+(r.pedidos===1?' pedido':' pedidos')+' a nombre de '+(r.nombre||c.real||_identCap(c.ficha))+(r.apodo?' · apodo «'+r.apodo+'»':'')
          :(op==='casa'?'Listo: «'+c.tipeado+'» tiene su ficha, en la misma casa':'Listo: «'+c.tipeado+'» tiene su ficha')),5000);
@@ -21045,7 +21066,7 @@ function identResolver(id,op,btn){
     try{ localStorage.setItem('mc_identidades',JSON.stringify(_IDENT)); }catch(e){}
     identRepintar();
     if(r.nuevoCaso){ identPedir(true); setTimeout(function(){ identIr(r.nuevoCaso); },900); }
-    if(c.tipo==='nombre'){ try{ if(typeof _recargarPedidos==='function')_recargarPedidos(); }catch(e){} }
+    if(c.tipo==='nombre'||c.tipo==='sin_nombre'){ try{ if(typeof _recargarPedidos==='function')_recargarPedidos(); }catch(e){} }
   }).catch(function(e){
     for(var j=0;j<bs.length;j++)bs[j].disabled=false; if(btn)btn.textContent=tAntes;
     toast('No se pudo: '+String(e&&e.message||e),6000);
