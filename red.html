@@ -3492,40 +3492,58 @@ function _pintarBono(el, d) {
     + ' con tu teléfono en vez del del cliente: esos no suman para el bono. Cargá el teléfono del cliente.</div>';
   el.innerHTML = h; el.classList.remove('hidden');
 }
-function renderCobrar(L, liqs) {
-  const box = $id('cob-card');
-  if (!box) return;
-  if (!L) { box.classList.add('hidden'); box.innerHTML = ''; return; }
-  const prox = Number(L.proxPagoNum) || 0, hoy = Number(L.hoy) || 0;
+/* LA LIQUIDACIÓN DEL REPRESENTANTE: UN SOLO NÚMERO (18/11/2026, auditoría de Mi Portal).
+   Hasta hoy el portal sacaba «lo que te debe Maleu» de cuatro cuentas distintas y a Marcos le daba
+   $73.100 en Hoy y $50.300 en Plata › Caja, las dos «se paga el 1/12». La buena es la de la base
+   (`liqProx`, la de red_liquidacion_base: la misma que paga Equipo): la comisión y el envío se
+   DEVENGAN al despacharle el pedido o cuando pasa el día de entrega (331), no cuando el pedido
+   está entregado y cobrado. La de Caja era la regla de antes, armada en el teléfono: dejaba afuera
+   el #2451 (entregado, el cliente todavía no pagó, $15.400) y el #2452 (despachado, sin marcar, $7.400).
+   Toda pantalla que muestre cuánto le paga Maleu lo saca de acá. */
+function _liqBloques(L) {
+  const prox = Number(L && L.proxPagoNum) || 0;
   const bloques = {};
   const blq = function (num) {
     const k = Math.max(num || 0, prox);
     return bloques[k] || (bloques[k] = { num: k, total: 0, pend: 0, lbls: [], filas: [] });
   };
   const lbl = function (B, t) { if (t && B.lbls.indexOf(t) < 0) B.lbls.push(t); };
-  (L.quincenas || []).forEach(function (q) {
+  ((L && L.quincenas) || []).forEach(function (q) {
     const B = blq(Number(q.pagaNum) || 0);
     lbl(B, q.lbl);
     (q.pedidos || []).forEach(function (p) { B.total += Number(p.tot) || 0; B.filas.push({ p: p, st: 'ok' }); });
     /* (664) Tus propinas en efectivo: se las diste a Maleu con todo y vuelven en esta quincena. */
     (q.propinas || []).forEach(function (t) { B.total += Number(t.propina) || 0; B.filas.push({ p: { n: t.n, c: t.c, tot: t.propina, prop: true }, st: 'ok' }); });
   });
-  (L.sinMarcar || []).forEach(function (p) {
+  ((L && L.sinMarcar) || []).forEach(function (p) {
     const B = blq(_cobNum(p.pagaEl));
     lbl(B, p.q);
     B.pend += Number(p.tot) || 0;
     B.filas.push({ p: p, st: p.falta === 'entregar' ? 'ent' : 'cob' });
   });
-  const ks = Object.keys(bloques).map(Number).sort(function (a, b) { return a - b; });
+  return Object.keys(bloques).map(Number).sort(function (a, b) { return a - b; }).map(function (k) { return bloques[k]; });
+}
+/* Lo próximo que te paga Maleu: { total, num } del primer bloque, o null si no hay liquidación cargada. */
+function _liqProxima() {
+  const L = lastDashboardData && lastDashboardData.liqProx;
+  if (!L) return null;
+  const B = _liqBloques(L)[0];
+  return B ? { total: B.total, num: B.num } : { total: 0, num: Number(L.proxPagoNum) || 0 };
+}
+function renderCobrar(L, liqs) {
+  const box = $id('cob-card');
+  if (!box) return;
+  if (!L) { box.classList.add('hidden'); box.innerHTML = ''; return; }
+  const prox = Number(L.proxPagoNum) || 0, hoy = Number(L.hoy) || 0;
+  const _bl = _liqBloques(L);
   const ST = { ok: 'Listo para rendir', ent: 'Pendiente de entrega', cob: 'Entregado sin cobrar' };
   const QUE = { ent: 'falta marcarlo entregado', cob: 'falta marcar el cobro' };
   let h = '';
-  if (!ks.length) {
+  if (!_bl.length) {
     h += '<div class="cob-blk"><div class="cob-t">Lo que vas a cobrar</div><div class="cob-big">' + ars(0) + '</div>'
        + '<div class="cob-sub">Por ahora no tenés nada para cobrar. Próximo pago ' + _cobDia(prox, hoy) + '.</div></div>';
   }
-  ks.forEach(function (k, i) {
-    const B = bloques[k];
+  _bl.forEach(function (B, i) {
     const orden = { ok: 0, cob: 1, ent: 2 };
     B.filas.sort(function (a, b) { return orden[a.st] - orden[b.st]; });
     h += '<div class="cob-blk' + (i ? ' cob-blk2' : '') + '">'
@@ -4617,7 +4635,6 @@ function renderCaja() {
        Facturado entero, o el efectivo desde el 5/10). Un pedido con aPg 0 lo
        cobro Maleu: esa plata no esta en su caja. Y su comision ya no se
        descuenta: Maleu se la debe y se la paga en la quincena (`mDebe`). */
-    g.pedidos.forEach(p => { if (p.es === 'Entregado' && p.ep === 'Cobrado') miComision += _redComMaleu(p); });
     const pendientes = g.pedidos.filter(p => p.ep === 'Cobrado' && !_esPagado(p.epm) && (Number(p.aPg) || 0) > 0);
     pendientes.forEach(p => {
       const spl = _splitPago(p);
@@ -4634,6 +4651,10 @@ function renderCaja() {
     }
   });
   aPagarMaleu = Math.max(0, aPagarPendTotal - efLiqMaleu - trLiqMaleu);
+  /* (18/11/2026) Lo que te debe Maleu es la liquidación de la base, la misma de Hoy: `_liqProxima()`.
+     Hasta hoy se sumaba acá solo lo entregado y cobrado, y daba otro número. */
+  const _lq = _liqProxima();
+  miComision = _lq ? _lq.total : 0;
   const efCobrado = efCobradoPend;
   const trCobrado = trCobradoPend;
 
@@ -4656,7 +4677,7 @@ function renderCaja() {
     html += '<div class="ch-label" style="margin-top:.4rem">Si ya te pagaron, debés ' + (aPagarMaleu > 0 ? ars(_smC.monto) + ' más' : ars(_smC.monto)) + ' · ' + _sinMarcarTxt(_smC) + '</div>';
   }
   if (miComision > 0) {
-    html += '<div class="ch-label" style="margin-top:.3rem">Maleu te debe ' + ars(miComision) + ' de comisión · se paga el ' + _mkCobro() + '</div>';
+    html += '<div class="ch-label" style="margin-top:.3rem">Tu liquidación: ' + ars(miComision) + ' · se paga ' + _cobDia(_lq.num, Number(lastDashboardData.liqProx.hoy) || 0) + '</div>';
   }
   /* «Te pagamos $X el dd/mm»: una linea por liquidacion quincenal que Maleu ya
      le pago (9/10/2026). Viene en `liqs` del dashboard; vacio si no hay ninguna. */
@@ -4693,7 +4714,7 @@ function renderCaja() {
     html += '<div class="caja-split-row"><span class="lbl">Total cobrado</span><span class="val">' + ars(efCobrado + trCobrado) + '</span></div>';
     html += '<div class="caja-split-row"><span class="lbl">Ya pagaste a Maleu</span><span class="val" style="color:#2e7d32">' + ars(yaPagadoTotal) + '</span></div>';
     html += '<div class="caja-split-row"><span class="lbl">Falta pagar a Maleu</span><span class="val" style="color:#c62828">' + ars(aPagarMaleu) + '</span></div>';
-    html += '<div class="caja-split-row tot"><span class="lbl">Maleu te debe (comisión, en tu quincena)</span><span class="val" style="color:#2e7d32">' + ars(miComision) + '</span></div>';
+    html += '<div class="caja-split-row tot"><span class="lbl">Tu liquidación (comisión y envío)</span><span class="val" style="color:#2e7d32">' + ars(miComision) + '</span></div>';
     html += '</div>';
   }
 
@@ -4746,7 +4767,6 @@ function renderCaja() {
       html += '<div class="caja-sem-cell"><div class="csc-lbl">Efectivo cobrado</div><div class="csc-val" style="color:#2e7d32">' + ars(efS) + '</div></div>';
       html += '<div class="caja-sem-cell"><div class="csc-lbl">Transfer cobrada</div><div class="csc-val" style="color:#1565c0">' + ars(trS) + '</div></div>';
       html += '<div class="caja-sem-cell"><div class="csc-lbl">A pagar Maleu</div><div class="csc-val" style="color:#c62828">' + ars(aPgS) + '</div></div>';
-      html += '<div class="caja-sem-cell"><div class="csc-lbl">Maleu te debe</div><div class="csc-val">' + ars(comS) + '</div></div>';
       html += '</div>';
 
       if (pagadoSem > 0) {
