@@ -282,7 +282,7 @@ const esperarCarga = (pg) => pg.waitForFunction(() => {
           return f.apply(this,arguments);};})();`);
       const pg = await ctx.newPage();
       const errs = []; pg.on('pageerror', (e) => errs.push(String(e.message || e).slice(0, 160)));
-      await pg.goto(BASE + (BASE.includes('?') ? '&' : '?') + 'v=' + Date.now(), { waitUntil: 'domcontentloaded' });
+      await pg.goto(BASE + (BASE.includes('?') ? '&' : '?') + 'v=' + Date.now(), { waitUntil: 'domcontentloaded', timeout: 90000 });
       await pg.waitForFunction(() => typeof window.go === 'function' && typeof SESSION !== 'undefined' && !!SESSION, null, { timeout: 90000 }).catch(() => {});
       await pg.waitForTimeout(4000);
       /* Las pantallas de este rol: las de SESSION.tabs (admin: todas), la que abre al entrar y las que el menú ofrece. */
