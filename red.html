@@ -1864,7 +1864,9 @@ function _dvEfectos(d, nom) {
      Script no se pega ni se espera. La llamada sale igual, SIN esperar la respuesta, por lo que HACE: anotar
      las tareas mostradas, guardar las props y el Telegram de «cumpliste». */
   if (d && d.base === 'ef') {
-    var _efApps = function () { try { fetch(APPS_SCRIPT_URL + '?action=dashboardVendedorEfectos&nombre=' + encodeURIComponent(nom), { cache: 'no-store', keepalive: true }).catch(function () {}); } catch (e) {} };
+    /* (18/11/2026) Sin respaldo a Apps Script: está apagado desde el corte y el robot «Sin Apps Script» lo marcaba (v1256).
+       Si la base no toma los efectos, no pasa nada visible: las tareas mostradas se vuelven a anotar la próxima vez. */
+    var _efApps = function () {};
     /* (329, corte parte 4 — 2/11/2026) Con PORTAL_EFECTOS_DIRECTO lo HACE la base: las tareas mostradas (lo que armó el
        motor), cuándo abrió y su «por venta», y «cumpliste» — eso lo cuenta la base, no este celular. Si la base no lo
        toma (palanca, sin sesión, un corte), Apps Script como siempre, sin esperar. */
@@ -1879,46 +1881,30 @@ function _dvEfectos(d, nom) {
     _efApps();
     return;
   }
+  /* Un tablero sin `base: 'ef'` (un backend de antes de la 242): las partes de los efectos salen de la copia guardada.
+     (18/11/2026) Ya no se le piden a Apps Script. */
   try {
     var c = JSON.parse(localStorage.getItem('maleu_red_dash_' + nom) || 'null');
     if (c && c.data) _dvPegarEfectos(d, { tareas: c.data.tareas, objetivo: c.data.objetivo, tg: c.data.tg, liqs: c.data.liqs,
       liqProx: c.data.liqProx, escala: c.data.stats ? c.data.stats.escala : null });
   } catch (e) {}
-  fetch(APPS_SCRIPT_URL + '?action=dashboardVendedorEfectos&nombre=' + encodeURIComponent(nom), { cache: 'no-store' })
-    .then(function (r) { return r.json(); })
-    .then(function (e) {
-      if (!e || !e.ok) return;
-      _dvPegarEfectos(d, e);
-      if (!session || session.nombre !== nom) return;
-      try { localStorage.setItem('maleu_red_dash_' + nom, JSON.stringify({ ts: Date.now(), data: d })); } catch (eS) {}
-      renderDashboard(d);
-    })
-    .catch(function () {});
 }
+/* (18/11/2026) EL TABLERO SALE SOLO DE LA BASE. Hasta hoy, si la base fallaba, `.catch` caía a `_fetchDashboardApps` (GET
+   dashboardVendedor a Apps Script, apagado desde el corte): el robot «Sin Apps Script» lo marcaba en miportal (v1256, run
+   44340785642) y en un celular era una espera de 2+4+8 s contra algo que nunca contesta. Ahora la base con su reintento
+   (`_lecBaseReintento`, el mismo de toda lectura) y, si igual no contesta, el error: `loadDashboard` muestra la copia. */
 function _fetchDashboardRetry(maxAttempts) {
-  if (typeof _lecJson === 'function' && typeof LEC_ARMA === 'object' && LEC_ARMA.dashboardVendedor) {
-    var nom = session.nombre, url = APPS_SCRIPT_URL + '?action=dashboardVendedor&nombre=' + encodeURIComponent(nom);
-    return _lecJson('dashboardVendedor', { p_nombre: nom }, url, function () {})
-      .then(function (d) { if (!d || !d.ok) throw new Error((d && d.err) || 'ok=false'); if (d.base) _dvEfectos(d, nom); return d; })
-      .catch(function () { return _fetchDashboardApps(maxAttempts); });
-  }
-  return _fetchDashboardApps(maxAttempts);
-}
-function _fetchDashboardApps(maxAttempts) {
-  maxAttempts = maxAttempts || 4;
-  var attempt = 0;
-  function _try() {
-    attempt++;
-    return fetch(APPS_SCRIPT_URL + '?action=dashboardVendedor&nombre=' + encodeURIComponent(session.nombre), { cache: 'no-store' })
-      .then(function(r){ if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
-      .then(function(d){ if (!d || !d.ok) throw new Error((d && d.err) || 'ok=false'); return d; })
-      .catch(function(err){
-        if (attempt >= maxAttempts) throw err;
-        var wait = Math.min(8000, Math.pow(2, attempt) * 1000); // 2s, 4s, 8s
-        return new Promise(function(res){ setTimeout(res, wait); }).then(_try);
-      });
-  }
-  return _try();
+  var nom = session && session.nombre;
+  if (!nom) return Promise.reject(new Error('sin sesión'));
+  var leer = (typeof _lecBaseReintento === 'function') ? function () { return _lecBaseReintento('dashboardVendedor', { p_nombre: nom }); }
+           : (typeof _lecArmaBase === 'function') ? function () { return _lecArmaBase('dashboardVendedor', { p_nombre: nom }); } : null;
+  if (!leer) return Promise.reject(new Error('Mi Portal se abre desde el ERP'));
+  return leer().then(function (r) {
+    var d = r && r.d;
+    if (!d || !d.ok) throw new Error((d && d.err) || 'la base no armó el portal');
+    if (d.base) _dvEfectos(d, nom);
+    return d;
+  });
 }
 
 /* ══ MI PORTAL EN VIVO (240, 28/10/2026) ══
