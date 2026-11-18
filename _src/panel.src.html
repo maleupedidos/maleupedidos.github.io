@@ -7321,6 +7321,8 @@ html,a,button,summary,label,input,select,textarea,[onclick],[role="button"],[rol
          nombre en el mismo ERP es justo lo que hay que evitar. Ademas es lo que
          es: personas del barrio, mientras que "Casas" son hogares. -->
     <button class="bbdd-tab" data-esub="clientes" onclick="estSwitch('clientes')">Personas</button>
+    <!-- (18/11/2026, 770) Un pedido con otro nombre para ese teléfono, o a otra casa: un toque por caso. -->
+    <button class="bbdd-tab" data-esub="identidades" onclick="estSwitch('identidades')">Identidades<span class="ident-n" id="identTabN" hidden></span></button>
     <!-- (13/11/2026, poda) Sub-barrios y Pulso salen de la barra: Sub-barrios repetía la «Penetración por sub-barrio» del
          Mapa, y Pulso la semana de ventas de Inicio y la meta de Planificación. Sus pantallas siguen en el HTML; estSwitch
          manda a Plan semana, que es la que arranca prendida ahora. -->
@@ -7337,6 +7339,10 @@ html,a,button,summary,label,input,select,textarea,[onclick],[role="button"],[rol
   <!-- (27/10/2026) El CRM en vivo: «● en vivo» o desde cuando no. Escondido con la palanca CRM_EN_VIVO apagada. -->
   <div class="ped-vivo-fila"><span id="crmEnVivo" class="ped-vivo" hidden></span></div>
 
+  <!-- Sub: IDENTIDADES (18/11/2026, 770): los casos que la base no resolvió sola -->
+  <div class="est-sub" id="est-identidades">
+    <div id="identCuerpo"><div class="loading">Cargando…</div></div>
+  </div>
   <!-- Sub: HOY nuevo (las jugadas del dia) -->
   <div class="est-sub" id="est-jugadas">
     <div id="jugCuerpo"><div class="loading">Armando las jugadas de hoy…</div></div>
@@ -12140,6 +12146,9 @@ function go(p){
      igual: el robot entraba como vendedor a Estancias, Pedidos o Proveedores y salían pedidos a Apps Script (las fotos
      del CRM, redBandeja, planMes) — el run en rojo de todas las noches. El admin no pasa por acá (ve todo). */
   try{ if(typeof SESSION!=='undefined'&&SESSION&&SESSION.rol&&SESSION.rol!=='admin'&&typeof _tengoTab==='function'&&!_tengoTab(p))return; }catch(_eTab){}
+  /* (18/11/2026) ¿Ya estaba en esta tab? `applyRoles` vuelve a llamar a go(<la actual>) cuando llegan los permisos (medido:
+     a los ~22 s del arranque): eso no es «entrar», y no puede sacar a nadie de la sub-tab del CRM donde está trabajando. */
+  var _goYaEstaba=false; try{ var _pgAct=document.getElementById('p-'+p); _goYaEstaba=!!(_pgAct&&_pgAct.classList.contains('on')); }catch(_eYa){}
   try{ if(typeof DIF!=='undefined'&&DIF.items.length)setTimeout(function(){ _difPintar(true); },0); }catch(_eDf0){}
   try{ if(p!==cur&&typeof _usoSumar==='function'){ var _up=p; setTimeout(function(){ try{ _usoSumar(_up,''); }catch(_eU2){} },0); } }catch(_eUso){}   /* (681) cuántas veces se entra · (18/11) después del toque */
   cur=p;try{localStorage.setItem('maleu_tab',p);}catch(e){}
@@ -12224,7 +12233,7 @@ function go(p){
        sacaria de la sub-tab donde esta trabajando. `rEstancias` restaura lo
        que diga `maleu_est_sub`, asi que alcanza con dejarselo escrito. */
     try{
-      if(typeof SESSION!=='undefined'&&SESSION&&SESSION.rol==='admin'&&typeof window.jugTabs==='function'&&window.jugTabs()){
+      if(!_goYaEstaba&&typeof SESSION!=='undefined'&&SESSION&&SESSION.rol==='admin'&&typeof window.jugTabs==='function'&&window.jugTabs()){
         localStorage.setItem('maleu_est_sub','jugadas');
       }
     }catch(e){}
@@ -20656,8 +20665,10 @@ function _rbDibujar(){
   var nEsp=((d.decidir||[]).length)+(((d.reclamos&&d.reclamos.pendientes)||[]).length);
   var _pd=nEsp?pdHtml(d):'';
   var _aviso=P.length?'<button type="button" class="rb-a-rep" onclick="go(\'miportal\')">'+P.length+(P.length===1?' pedido de Red espera':' pedidos de Red esperan')+' en Representantes ›</button>':'';
-  b.innerHTML=prepHtml()+_pd+_aviso;
+  _identCopia();
+  b.innerHTML=prepHtml()+_pd+_aviso+identLineaHtml();
   prepPedir();
+  identPedir();
 }
 /* ═══ PEDIDO REPETIDO (11/11/2026, 658) ═══
    Tadeo: Mercedes Girado hizo el #2446 a las 22:09 y el #2447 a las 22:14 con productos distintos: es una CORRECCIÓN,
@@ -20703,6 +20714,164 @@ function prepDecidir(i,dec){
     if(dec==='ultimo'){ try{ if(typeof _recargarPedidos==='function')_recargarPedidos(); }catch(e){} }
   }).catch(function(e){ if(el)el.style.opacity=''; toast('No se pudo: '+String(e&&e.message||e),6000); });
 }
+/* ═══ IDENTIDADES (18/11/2026, migraciones 770-772) ═══
+   Tadeo: «el nombre completo de un ser humano en el ERP tiene que ser SIEMPRE el mismo». La base ya reemplaza lo tipeado
+   por el nombre de la ficha cuando cuadra («Ale» → Alejandra Basualdo). Lo que no cuadra llega acá, un toque por caso:
+     · un teléfono con OTRO nombre («Iñaki» con el de Rodrigo Ustariz): Es <ficha> · De su casa · Otra persona;
+     · un pedido a OTRA casa que la de la ficha: se entrega donde dice el pedido; Solo este pedido · Se mudó · Es otra persona.
+   La lista vive en CRM › Identidades; Pedidos › Por decidir solo dice cuántos hay. La ficha del pedido pide SOLO lo suyo
+   (`identidad_pedido_pantalla`): «Se anotó como Ale» y la marca de dirección. Lo resuelto queda en la base y no vuelve a saltar. */
+var _IDENT=null, _identVuelo=false, _identT=0;
+function _identCopia(){ if(_IDENT)return; try{ var c=JSON.parse(localStorage.getItem('mc_identidades')||'null'); if(c&&c.ok)_IDENT=c; }catch(e){} }
+function identPedir(forzar){
+  _identCopia();
+  if(_identVuelo||(!forzar&&_identT&&Date.now()-_identT<30000)||typeof _baseRpc!=='function')return;
+  _identVuelo=true;
+  _baseRpc('identidad_pantalla',{}).then(function(d){
+    if(!d||!d.ok)return;
+    var dirAntes=JSON.stringify((_IDENT&&_IDENT.direccion)||{});
+    _IDENT=d; _identT=Date.now();
+    try{ localStorage.setItem('mc_identidades',JSON.stringify(d)); }catch(e){}
+    identRepintar();
+    /* la marca «Dirección distinta a la ficha» va en la tarjeta: si cambió, se repinta la lista (pasa poco) */
+    if(JSON.stringify(d.direccion||{})!==dirAntes){ try{ var pp=document.getElementById('p-pedidos'); if(pp&&pp.classList.contains('on')&&typeof rPedidos==='function')rPedidos(); }catch(e){} }
+  }).catch(function(e){
+    var c=document.getElementById('identCuerpo'); if(c&&!_IDENT)c.innerHTML='<div class="rb-vacio">No se pudo cargar: '+rbEsc(String(e&&e.message||e))+'</div>';
+  }).then(function(){ _identVuelo=false; });
+}
+function _identN(){ return (_IDENT&&_IDENT.casos)?_IDENT.casos.length:0; }
+function identRepintar(){
+  var n=_identN();
+  var t=document.getElementById('identTabN'); if(t){ t.textContent=n?String(n):''; t.hidden=!n; }
+  var l=document.getElementById('identLinea'); if(l)l.outerHTML=identLineaHtml();
+  /* Si los casos no cambiaron no se repinta: un repintado justo cuando llega la copia fresca se comía el toque. */
+  var c=document.getElementById('identCuerpo');
+  if(c){ var huella=JSON.stringify((_IDENT&&_IDENT.casos)||null); if(c._huella!==huella||!c.firstElementChild||c.querySelector('.loading')){ c.innerHTML=identHtml(); c._huella=huella; } }
+}
+/* Pedidos › Por decidir: un renglón, como el de Red. */
+function identLineaHtml(){
+  var n=_identN();
+  if(!n)return '<span id="identLinea"></span>';
+  return '<button type="button" id="identLinea" class="rb-a-rep" onclick="identIr()">'+n+(n===1?' identidad por revisar':' identidades por revisar')+' en Clientes ›</button>';
+}
+function identIr(id){
+  try{ go('estancias'); }catch(e){}
+  try{ estSwitch('identidades'); }catch(e){}
+  if(id)setTimeout(function(){ var el=document.getElementById('ident-'+id); if(el){ el.scrollIntoView({block:'center'}); el.classList.add('ident-foco'); } },250);
+}
+function _identDirTxt(d){
+  if(!d)return '';
+  var s=[d.sub,d.lote?'Lote '+d.lote:''].filter(Boolean).join(' · ');
+  return s||d.barrio||'';
+}
+/* El nombre bien escrito, como `_ident_capital` de la base: solo toca las palabras todas en minúscula o todas en mayúscula. */
+function _identCap(s){
+  var P={de:1,del:1,la:1,las:1,los:1,y:1,e:1,da:1,di:1,van:1,von:1};
+  return String(s||'').trim().split(/\s+/).map(function(w,i){
+    if(w!==w.toLowerCase()&&w!==w.toUpperCase())return w;
+    var l=w.toLowerCase(); if(i>0&&P[l])return l;
+    return l.split("'").map(function(x){ return x.split('-').map(function(y){ return y.charAt(0).toUpperCase()+y.slice(1); }).join('-'); }).join("'");
+  }).join(' ');
+}
+function _identPrimer(nom){ return _identCap(String(nom||'').trim().split(/\s+/)[0]||''); }
+function identHtml(){
+  var L=(_IDENT&&_IDENT.casos)||[];
+  if(!_IDENT)return '<div class="loading">Cargando…</div>';
+  if(!L.length)return '<div class="rb-card"><div class="rb-h"><span>Identidades</span><span class="rb-n">al día</span></div>'
+    +'<div class="rb-vacio">Cada pedido está a nombre de su persona.</div></div>';
+  var h='<div class="rb-card rb-hay pd-card ident-card"><div class="rb-h"><span>Identidades</span><span class="rb-n">'+L.length+' por revisar</span></div>'
+    +'<details class="k-info"><summary>Qué es esto</summary><div>Cuando un pedido trae un nombre que no es el de la ficha de ese teléfono, o va a otra casa, '
+    +'el ERP no decide solo. <b>Es</b>: el pedido queda a nombre de la ficha y ese nombre ya no vuelve a preguntarse. <b>De su casa</b>: ficha propia, misma casa. '
+    +'<b>Otra persona</b>: ficha propia; si sabés su teléfono, ponelo. <b>Se mudó</b>: la ficha pasa a la dirección nueva.</div></details>';
+  L.forEach(function(c){ h+=identCasoHtml(c); });
+  return h+'</div>';
+}
+function identCasoHtml(c){
+  var P=c.pedidos||[], u=P[0]||{}, e=rbEsc;
+  var h='<div class="rb-p ident-p" id="ident-'+c.id+'">';
+  if(c.tipo==='direccion'){
+    h+='<div class="rb-l1"><b>'+e(_identCap(c.ficha||c.tipeado))+'</b><span>pidió a otra casa</span></div>'
+      +'<div class="rb-l2">Ficha: '+e(_identDirTxt(c.fichaDir)||'—')+' · Pedido: '+e(_identDirTxt(c.pedidoDir)||'—')+'</div>'
+      +'<div class="rb-l3">'+e(u.h||'')+' #'+e(u.n||'')+(u.entrega?' · entrega '+e(u.entrega):'')+' · se entrega donde dice el pedido</div>'
+      +'<div class="pd-acc">'
+      +'<button type="button" class="prep-ultimo" onclick="identResolver('+c.id+',\'solo\',this)">Solo este pedido</button>'
+      +'<button type="button" class="prep-ultimo" onclick="identResolver('+c.id+',\'mudo\',this)">Se mudó</button>'
+      +'<button type="button" class="prep-ultimo" onclick="identResolver('+c.id+',\'otra\',this)">Es otra persona</button></div>';
+    return h+'</div>';
+  }
+  var nP=P.length;
+  h+='<div class="rb-l1"><b>«'+e(c.tipeado)+'»</b><span>con el teléfono de '+e(_identCap(c.ficha))+'</span></div>'
+    +'<div class="rb-l2">'+nP+(nP===1?' pedido':' pedidos')+(u.fecha?' · el último el '+e(u.fecha):'')+(u.dir?' · '+e(u.dir):'')+'</div>';
+  if(nP>1){
+    h+='<details class="rb-det"><summary>Ver los '+nP+' pedidos</summary>'
+      +P.map(function(p){ return '<div class="rb-r"><b>'+e(p.h)+' #'+e(p.n)+'</b> <small>'+e(p.fecha||'')+(p.dir?' · '+e(p.dir):'')+(p.estado?' · '+e(p.estado):'')+'</small></div>'; }).join('')
+      +'</details>';
+  }
+  /* (774) «Es <nombre real>», con nombre y apellido: si lo tipeado es el nombre real («Mariana Basualdo» con la ficha
+     «Maru Basualdo»), el botón ya dice con qué nombre queda la ficha. El apodo se guarda aparte. */
+  var ops=[{k:'misma',t:'Es '+(c.real||_identCap(c.ficha))},{k:'casa',t:'De su casa'},{k:'otra',t:'Otra persona'}];
+  /* lo sugerido va primero; sin sugerencia y con el mismo apellido, «De su casa» (lo más probable es alguien de la casa) */
+  if(c.sug!=='misma'&&c.clase==='apellido')ops=[ops[1],ops[0],ops[2]];
+  h+='<div class="pd-acc">'+ops.map(function(o){
+      var cls=(c.sug===o.k)?'prep-sumar':'prep-ultimo';
+      var on=o.k==='otra'?'identOtra('+c.id+')':'identResolver('+c.id+',\''+o.k+'\',this)';
+      return '<button type="button" class="'+cls+'" onclick="'+on+'">'+e(o.t)+'</button>';
+    }).join('')+'</div>';
+  if(c.sug==='misma')h+='<div class="rb-l3">Parece un apodo o un error de tipeo.</div>';
+  h+='<div class="ident-tel" id="identTelFila-'+c.id+'" hidden><input type="tel" inputmode="tel" id="identTel-'+c.id+'" placeholder="Su teléfono (si lo sabés)" autocomplete="off">'
+    +'<button type="button" class="prep-sumar" onclick="identResolver('+c.id+',\'otra\',this)">Listo</button></div>';
+  return h+'</div>';
+}
+function identOtra(id){
+  var f=document.getElementById('identTelFila-'+id); if(!f)return;
+  f.hidden=false; var i=document.getElementById('identTel-'+id); if(i)try{ i.focus(); }catch(e){}
+}
+function _identCaso(id){ return ((_IDENT&&_IDENT.casos)||[]).filter(function(x){ return x.id===id; })[0]; }
+function identResolver(id,op,btn){
+  var c=_identCaso(id); if(!c)return;
+  var p={id:id,opcion:op};
+  if(op==='otra'&&c.tipo==='nombre'){ var i=document.getElementById('identTel-'+id); if(i&&i.value.trim())p.telefono=i.value.trim(); }
+  var el=document.getElementById('ident-'+id);
+  var bs=el?el.querySelectorAll('button'):[]; for(var j=0;j<bs.length;j++)bs[j].disabled=true;
+  var tAntes=btn?btn.textContent:''; if(btn)btn.textContent='Guardando…';
+  _baseRpc('identidad_resolver',{p:p}).then(function(r){
+    if(!r||!r.ok)throw new Error((r&&r.err)||'no se pudo');
+    var fn=_identPrimer(c.ficha);
+    toast(c.tipo==='direccion'
+      ?(op==='solo'?'Listo: la ficha queda como estaba':(op==='mudo'?'Listo: la ficha de '+fn+' tiene la dirección nueva':'Listo: ahora decí quién es'))
+      :(op==='misma'?'Listo: '+(r.pedidos||0)+(r.pedidos===1?' pedido':' pedidos')+' a nombre de '+(r.nombre||c.real||_identCap(c.ficha))+(r.apodo?' · apodo «'+r.apodo+'»':'')
+         :(op==='casa'?'Listo: «'+c.tipeado+'» tiene su ficha, en la misma casa':'Listo: «'+c.tipeado+'» tiene su ficha')),5000);
+    _IDENT.casos=_IDENT.casos.filter(function(x){ return x.id!==id; });
+    if(c.tipo==='direccion'&&_IDENT.direccion){ for(var k in _IDENT.direccion){ if(_IDENT.direccion[k]===id)delete _IDENT.direccion[k]; } }
+    try{ localStorage.setItem('mc_identidades',JSON.stringify(_IDENT)); }catch(e){}
+    identRepintar();
+    if(r.nuevoCaso){ identPedir(true); setTimeout(function(){ identIr(r.nuevoCaso); },900); }
+    if(c.tipo==='nombre'){ try{ if(typeof _recargarPedidos==='function')_recargarPedidos(); }catch(e){} }
+  }).catch(function(e){
+    for(var j=0;j<bs.length;j++)bs[j].disabled=false; if(btn)btn.textContent=tAntes;
+    toast('No se pudo: '+String(e&&e.message||e),6000);
+  });
+}
+/* La tarjeta de Pedidos: la marca, con lo que ya llegó (o la copia guardada). */
+function _identDirTag(p){
+  _identCopia();
+  var id=_IDENT&&_IDENT.direccion&&_IDENT.direccion[p.h+'|'+p.n];
+  return id?'<span class="tg ident-dir-tg" title="La ficha dice otra casa. Se entrega donde dice el pedido." onclick="event.stopPropagation();identIr('+id+')">Dirección distinta a la ficha</span>':'';
+}
+/* La ficha del pedido: pide SOLO lo suyo. */
+function identEnFicha(p){
+  if(!p||typeof _baseRpc!=='function'||(p.h!=='Home'&&p.h!=='Pilar'&&p.h!=='Red'))return;
+  var k=p.h+'|'+p.n;
+  _baseRpc('identidad_pedido_pantalla',{p:{k:k}}).then(function(r){
+    if(!r||!r.ok||!_ordAbiertoEs(p))return;
+    var a=document.getElementById('ofxAnot');
+    if(a&&r.anotado){ a.textContent='Se anotó como «'+r.anotado+'»'; a.hidden=false; }
+    var d=document.getElementById('ofxDirMarca');
+    if(d&&r.direccion){ d.innerHTML='<button type="button" class="ident-dir-tg" onclick="identIrDesdeFicha('+r.direccion+')">Dirección distinta a la ficha · revisar</button>'; d.hidden=false; }
+  }).catch(function(){});
+}
+function identIrDesdeFicha(id){ try{ if(typeof closeOrdDetail==='function')closeOrdDetail(); }catch(e){} identIr(id); }
+function _ordAbiertoEs(p){ var b=document.getElementById('ordHeadId'); return !!(b&&b.textContent.indexOf(String(p.n))===0); }
 /* ═══ POR DECIDIR (5/10/2026) ═══
    Tadeo: "la tab Pedidos como el lugar donde Lucas y yo recibimos los pedidos
    de clientes y decidimos en un toque". Lo que entra por la tienda a Home o
@@ -28441,7 +28610,7 @@ function rPedidos(opts){
     /* El nombre abre el pedido (es la unica puerta a su ficha); el 👤, la del cliente en el CRM (28/10/2026). */
     html+=    '<div class="pc-c"><span class="ord-link" onclick="event.stopPropagation();openOrdDetail(\''+p.h+'\',\''+p.n+'\','+(p.r||0)+')" title="Ver detalle del pedido">'+_rtEsc(p.c)+'</span>'
       +(p.h!=='Red'&&_fichaOk()?'<button type="button" class="cli-ficha-btn" onclick="verFichaDePedido(\''+p.h+'\',\''+p.n+'\',event)" title="Ver su ficha en el CRM" aria-label="Ver la ficha de '+_rtEsc(p.c)+'">'+_oIco('persona')+'</button>':'')+'</div>';
-    html+=    '<div class="pc-summary-meta">'+sumCanal+sumStateBadge+sumOrigenPendBadge+sumPayBadge+sumReadyBadge+_casa.tag+'<span>Entrega '+feShort+'</span></div>';
+    html+=    '<div class="pc-summary-meta">'+sumCanal+sumStateBadge+sumOrigenPendBadge+sumPayBadge+sumReadyBadge+_casa.tag+_identDirTag(p)+'<span>Entrega '+feShort+'</span></div>';
     /* La fecha del pedido, en la lista solo si se ordena por pedido (10/11/2026): por entrega, lo que importa es la entrega. */
     if(pedidoInfo&&fO!=='entrega')html+='<div class="pc-summary-meta pc-pedido-fecha">'+_rtEsc(pedidoInfo)+'</div>';
     html+=  '</div>';
@@ -47344,6 +47513,7 @@ if('serviceWorker' in navigator){
     html+='<div class="ofx-hero">';
     html+='<div class="ofx-top"><div class="ofx-quien">'
       +'<div class="ord-cli-name">'+_e(p.c||'—')+(p.h!=='Red'&&(p.tel||p.t)&&_fichaOk()?'<button type="button" class="cli-ficha-btn" onclick="verFichaDePedido(\''+p.h+'\',\''+p.n+'\',event)" title="Ver su ficha en el CRM" aria-label="Ver su ficha en el CRM">'+_oIco('persona')+'</button>':'')+'</div>'
+      +'<div class="ofx-anotado" id="ofxAnot" hidden></div>'   /* (770) «Se anotó como Ale»: lo llena identEnFicha */
       +'<div class="ofx-canal">'+_e(canalTxt)+'</div></div>'
       +'<div class="ofx-tot"><b>'+_ars(totCli)+'</b><span>'+(p.h==='Red'?'paga el cliente':'total')+'</span></div></div>';
 
@@ -47372,6 +47542,7 @@ if('serviceWorker' in navigator){
     /* ── 3. DÓNDE Y CÓMO CONTACTARLO ── */
     html+='<div class="ofx-datos">';
     if(dir)html+='<div class="ofx-dato"><i>'+_oIco('pin')+'</i><span>'+_e(dir)+'</span></div>';
+    html+='<div class="ofx-dir-marca" id="ofxDirMarca" hidden></div>';   /* (770) la ficha dice otra casa: lo llena identEnFicha */
     if(tel){
       html+='<div class="ofx-dato"><i>'+_oIco('tel')+'</i><span><a class="ord-tel" href="https://wa.me/549'+tel+'" target="_blank" rel="noopener">'+tel+'</a>'
         +'<button class="ord-tel-mini" onclick="ordTelefono(\''+_telArg[0]+'\',\''+_telArg[1]+'\',\''+_telArg[2]+'\',\''+tel+'\')">cambiar</button></span></div>';
@@ -47651,6 +47822,7 @@ if('serviceWorker' in navigator){
     if(head)head.textContent=p.n+'  ·  '+p.h;
     var body=document.getElementById('ordBody');
     if(body)body.innerHTML=_render(p);
+    try{ if(typeof identEnFicha==='function')identEnFicha(p); }catch(eId){}
     document.getElementById('ordBg').classList.add('open');
     document.getElementById('ordDrawer').classList.add('open');
     document.body.style.overflow='hidden';
@@ -60853,6 +61025,7 @@ function _objRango(periodo, mesLabel){
     if(sub==='jugadas'){ if(typeof window.jugRender==='function')jugRender(); }
     if(sub==='mapa'){ if(typeof window.initMapaEstancias==='function')initMapaEstancias(); }
     if(sub==='leads'){ if(typeof window.rLeads==='function')rLeads(); }
+    if(sub==='identidades'){ if(typeof identRepintar==='function'){ _identCopia(); identRepintar(); identPedir(true); } }
   };
 
   // ── Motor de hogares (reusa _hogBuild del CRM vía estHogaresSync/Refresh) ──
@@ -63318,6 +63491,18 @@ html:not(#_e1):not(#_e2) .pg .ped-seg button.on{background:var(--b);color:#fff}
 .ped-seg button.on .ped-seg-n{color:rgba(255,255,255,.75)}
 html:not(#_e1):not(#_e2) .pg select.ped-orden{margin-left:auto;width:auto;font-size:12.5px;padding:0 26px 0 10px}
 .rb-a-rep{display:block;width:100%;text-align:left;margin:0 0 10px;padding:10px 14px;border:1px solid #F0C27B;border-radius:9px;background:#FFF6E5;color:#8A5A00;font:inherit;font-size:13px;font-weight:600;cursor:pointer}
+/* (18/11/2026, 770) Identidades: la cuenta en la tab, la marca de dirección, el teléfono de «Otra persona». */
+.ident-n{display:inline-block;min-width:18px;margin-left:6px;padding:0 5px;border-radius:9px;background:#ef6c00;color:#fff;font-size:11px;line-height:18px;text-align:center;vertical-align:1px}
+.ident-n[hidden]{display:none}
+.tg.ident-dir-tg,button.ident-dir-tg{background:#FFF6E5;color:#8A5A00;border:1px solid #F0C27B;cursor:pointer}
+button.ident-dir-tg{font:inherit;font-size:13px;font-weight:600;padding:8px 12px;border-radius:8px;min-height:40px;margin:6px 0 2px}
+.ofx-anotado{font-size:12px;color:#777;margin-top:2px}
+.ofx-anotado[hidden],.ofx-dir-marca[hidden],.ident-tel[hidden]{display:none}
+.ident-card .k-info{margin:4px 0 2px}
+.ident-tel{display:flex;gap:8px;margin-top:8px;flex-wrap:wrap}
+.ident-tel input{flex:1 1 180px;min-height:44px;padding:8px 10px;border:1px solid var(--sel-borde,#CED4DA);border-radius:8px;font:inherit;font-size:16px}
+.ident-tel button{flex:0 0 auto;min-height:44px;padding:8px 18px;border-radius:8px;border:1px solid var(--o);background:var(--o);color:#fff;font-weight:600;cursor:pointer}
+.ident-p.ident-foco{outline:2px solid #ef6c00;outline-offset:4px;border-radius:6px}
 @media(max-width:768px){
   .ped-fr{gap:6px}
   .ped-seg{display:flex;width:100%}
