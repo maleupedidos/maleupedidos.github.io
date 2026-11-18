@@ -6,11 +6,16 @@
 # (11/11/2026, Organizador por Tadeo) YA NO CORRE EN CADA PUSH. Corría en cada publicación, estuvo en rojo en todas, y a
 # Tadeo le llegaba un mail de GitHub por cada una. El de antes de publicar ya existe: `deploy.sh` corre el robot sobre lo
 # que se va a publicar (paso 3c2) y no publica si falla. Acá queda el nocturno y el manual (workflow_dispatch).
-# Si algo falla, el último paso avisa con UNA línea al Telegram «Maleu · Resúmenes» (migración 654), no por mail.
+# Si algo falla, avisa con UNA alerta técnica (technical_alert, 785; hasta el 18/11 iba al Telegram, 654). Si anduvo, la resuelve.
 name: robot nocturno
 on:
+  # (18/11/2026) GitHub larga el programado HORAS tarde: el de las 06:30 UTC arrancó del 12 al 18/11 entre las 10:43 y las
+  # 13:20 de Argentina (7 a 10 h de atraso), fuera de la madrugada, y el robot no corrió una sola noche desde el 11/11.
+  # Ahora son dos: el de las 21 UTC (18 h de Argentina), que con ese atraso cae entre la 1 y las 4, y el de siempre, por si
+  # un día GitHub llega a horario. El que caiga fuera de la madrugada no hace NADA (paso «hora»).
   schedule:
-    - cron: '30 6 * * *'   # 03:30 en Argentina (GitHub lo larga cuando quiere: el robot no corre fuera de 1–8 h)
+    - cron: '0 21 * * *'
+    - cron: '30 6 * * *'
   workflow_dispatch: {}
 permissions:
   contents: read
@@ -22,12 +27,24 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
+      # (18/11/2026) La guarda de la madrugada era solo de robot.js: los otros pasos (sin Apps Script, la compra PRUEBA en la
+      # tienda real, la reentrada, el representante) corrían igual a las 13 h, en plena operación. Ahora decide para todos.
+      - name: ¿Es de madrugada? (si GitHub lo largó tarde, no corre nada)
+        id: hora
+        run: |
+          H=$(TZ=America/Argentina/Buenos_Aires date +%-H)
+          if [ "${{ github.event_name }}" != "schedule" ] || { [ "$H" -ge 1 ] && [ "$H" -lt 8 ]; }; then
+            echo "corre=true" >> "$GITHUB_OUTPUT"; echo "Corre ($H h de Argentina, ${{ github.event_name }})."
+          else
+            echo "corre=false" >> "$GITHUB_OUTPUT"; echo "Programado a las $H h de Argentina: fuera de la madrugada, no corre nada."
+          fi
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
       - name: Robot contra app.maleu.com.ar
         id: robot
+        if: steps.hora.outputs.corre == 'true'
         env:
           ROBOT_USUARIO: ${{ secrets.ROBOT_USUARIO }}
           ROBOT_PIN: ${{ secrets.ROBOT_PIN }}
@@ -36,7 +53,7 @@ jobs:
         run: node _tools/robot/robot.js
       - name: Sin Apps Script (todas las tabs con script.google.com cortado)
         id: sinapps
-        if: always()
+        if: always() && steps.hora.outputs.corre == 'true'
         env:
           ROBOT_USUARIO: ${{ secrets.ROBOT_USUARIO }}
           ROBOT_PIN: ${{ secrets.ROBOT_PIN }}
@@ -44,13 +61,13 @@ jobs:
         run: node _tools/robot/sin_apps.js
       - name: Checkout PRUEBA en la tienda real (maleu.com.ar)
         id: tienda
-        if: always()
+        if: always() && steps.hora.outputs.corre == 'true'
         env:
           CHROME_BIN: /usr/bin/google-chrome
         run: node _tools/robot/tienda_checkout.js
       - name: La sesión vieja se cierra (reentrada con PIN, con y sin cola de Ruta)
         id: reentrada
-        if: always()
+        if: always() && steps.hora.outputs.corre == 'true'
         env:
           ROBOT_USUARIO: ${{ secrets.ROBOT_USUARIO }}
           ROBOT_PIN: ${{ secrets.ROBOT_PIN }}
@@ -58,7 +75,7 @@ jobs:
         run: node _tools/robot/reentrada.js
       - name: El representante entra por la pantalla de login sin Apps Script (y su portal no lo usa)
         id: rep
-        if: always()
+        if: always() && steps.hora.outputs.corre == 'true'
         env:
           ROBOT_USUARIO: ${{ secrets.ROBOT_USUARIO }}
           ROBOT_PIN: ${{ secrets.ROBOT_PIN }}
@@ -66,8 +83,8 @@ jobs:
           SIN_APPS_ROL: rep
           CHROME_BIN: /usr/bin/google-chrome
         run: node _tools/robot/sin_apps.js
-      - name: Si algo falló, una línea al Telegram de resúmenes
-        if: failure()
+      - name: Si algo falló, una alerta técnica (no al Telegram de Tadeo)
+        if: failure() && steps.hora.outputs.corre == 'true'
         env:
           ROBOT_USUARIO: ${{ secrets.ROBOT_USUARIO }}
           ROBOT_PIN: ${{ secrets.ROBOT_PIN }}
@@ -78,3 +95,12 @@ jobs:
         run: |
           export VERSION=$(grep -o "maleu-panel-v[0-9]*" sw-panel.js | head -1 | sed 's/maleu-panel-//')
           node _tools/robot/avisar_falla.js
+      # (18/11/2026, 785) Si todo terminó bien, la falla que haya quedado abierta en Alertas Técnicas se resuelve sola.
+      - name: Si todo anduvo, se resuelve la alerta abierta
+        if: success() && steps.hora.outputs.corre == 'true'
+        env:
+          ROBOT_USUARIO: ${{ secrets.ROBOT_USUARIO }}
+          ROBOT_PIN: ${{ secrets.ROBOT_PIN }}
+          RUN_ID: ${{ github.run_id }}
+          VERDE: '1'
+        run: node _tools/robot/avisar_falla.js
