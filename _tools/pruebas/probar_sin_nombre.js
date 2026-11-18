@@ -1,11 +1,12 @@
-/* CRM › Identidades con casos «sin_nombre» armados a mano (la 781 sin aplicar): se ve, se toca y manda lo que tiene que mandar.
-   node probar_sin_nombre.js <ancho> <carpeta> */
+/* CRM › Identidades con casos «sin_nombre» armados a mano (781), sin backend: se ve, se toca y manda lo que tiene que mandar.
+   [BASE_URL=http://localhost:8080] node _tools/pruebas/probar_sin_nombre.js <ancho> <carpeta> */
 'use strict';
 const fs = require('fs');
 const P = __dirname + '/';
 const { abrir, evaluar } = require(P + 'cdp.js');
 const T = (ms) => new Promise((r) => setTimeout(r, ms));
 const ANCHO = Number(process.argv[2] || 390), OUT = process.argv[3] || '.';
+fs.mkdirSync(OUT, { recursive: true });   // la carpeta de salida puede no existir
 const URL = (process.env.BASE_URL || 'http://localhost:8080') + '/app.html?prueba=1';
 const CASOS = [
   { id: 901, tipo: 'sin_nombre', clase: 'apellido_primero', tipeado: 'Figueroa Delfina', real: 'Delfina Figueroa', opciones: ['Delfina Figueroa', 'Figueroa Delfina'], pedidos: [{ k: 'Home|2301', h: 'Home', n: '2301', fecha: '18/09/2026', dir: 'Los Lagos · Lote 12' }, { k: 'Home|2200', h: 'Home', n: '2200', fecha: '02/09/2026' }] },

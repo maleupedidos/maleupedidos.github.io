@@ -6,6 +6,7 @@ const P = __dirname + '/';
 const { abrir, evaluar } = require(P + 'cdp.js');
 const T = (ms) => new Promise((r) => setTimeout(r, ms));
 const ANCHO = Number(process.argv[2] || 390), OUT = process.argv[3] || '.';
+fs.mkdirSync(OUT, { recursive: true });   // la carpeta de salida puede no existir
 const URL = (process.env.BASE_URL || 'http://localhost:8080') + '/app.html';   // BASE_URL sin /app.html
 const PREP = require(P + 'sesion_prep.js')('x');
 const SBSES = require(P + 'sbses_guarda.js')(process.env.SBSES, 'tadeo');
