@@ -18627,6 +18627,73 @@ function _sbPedidosClaves(claves) {
    el hilo esta libre. El dato ya quedo en D: lo que se corre es solo el dibujo. */
 var _pedVivoRT = null, _ultToqueMs = 0;
 try { document.addEventListener('pointerdown', function () { _ultToqueMs = Date.now(); }, { capture: true, passive: true }); } catch (e) {}
+/* UN TOQUE ES UN TOQUE (18/11/2026). Tadeo: en Equipo › ficha › lápiz del nombre, «Listo» había que tocarlo más de una vez.
+   Dos causas, y las dos son de todo el ERP, no de esa ficha:
+   1) Con el foco en un campo que guarda al salir (onblur/onchange) y repinta, el botón de al lado se apretaba, el campo
+      perdía el foco EN EL MEDIO del toque, el repintado cambiaba el botón por otro igual, y el clic no llegaba a ninguno.
+      Ahora, con el foco en un campo de texto, apretar un botón no le saca el foco; se lo saca recién el clic, antes de
+      que el botón haga lo suyo. El campo guarda igual y el botón hace lo suyo, en ese orden, con UN toque.
+   2) Una carga que llega de fondo (Equipo, Telegram, la señal en vivo) repinta justo debajo del dedo: el botón que se
+      tocó ya no existe y el clic se pierde. Si un toque corto y quieto sobre un botón no terminó en ningún clic, se le
+      da el clic al botón que está ahí ahora, si es el mismo (mismo onclick y mismo texto). Si llegó un clic, a donde
+      sea, no se hace nada: nunca hay dos.
+   No se mete: si la pantalla ya frenó el toque a propósito (preventDefault en touchstart/touchend, como el editor de
+   textos), si fue un arrastre (más de 10 px) o un toque largo (más de 600 ms, como el logo). */
+var _TQ_BOTON = 'button,[role="button"],a[href],[onclick]';
+function _tqEsCampo(el) {
+  if (!el || !el.tagName) return false;
+  if (el.tagName === 'TEXTAREA') return true;
+  if (el.tagName !== 'INPUT') return false;
+  return /^(text|search|tel|number|email|url|password|)$/.test(String(el.type || '').toLowerCase());
+}
+function _tqBoton(t) {
+  var b = t && t.closest ? t.closest(_TQ_BOTON) : null;
+  if (!b || /^(INPUT|SELECT|TEXTAREA|LABEL|OPTION)$/.test(b.tagName) || b.isContentEditable) return null;
+  return b;
+}
+function _tqFirma(b) { return b.tagName + '|' + (b.getAttribute('onclick') || '') + '|' + String(b.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 60); }
+var _TQ = { campo: null, toque: null, rescate: 0, ultClic: 0 };
+try {
+  /* 1) Apretar un botón no le saca el foco al campo (fase de burbuja: si la pantalla ya lo frenó, se respeta). */
+  window.addEventListener('mousedown', function (ev) {
+    _TQ.campo = null;
+    if (ev.defaultPrevented || ev.button) return;
+    var a = document.activeElement, b = _tqBoton(ev.target);
+    if (!b || !_tqEsCampo(a) || b.contains(a) || a.contains(b)) return;
+    ev.preventDefault(); _TQ.campo = a;
+  }, false);
+  window.addEventListener('click', function (ev) {
+    _TQ.ultClic = Date.now();
+    if (_TQ.rescate) { clearTimeout(_TQ.rescate); _TQ.rescate = 0; }
+    var a = _TQ.campo; _TQ.campo = null;
+    if (a && a === document.activeElement && a.isConnected) { try { a.blur(); } catch (e) {} }   /* guarda ANTES de lo del botón */
+  }, true);
+  /* 2) El toque que no terminó en ningún clic. */
+  document.addEventListener('pointerdown', function (ev) {
+    if (_TQ.rescate) { clearTimeout(_TQ.rescate); _TQ.rescate = 0; }
+    var b = ev.isPrimary !== false && !ev.button ? _tqBoton(ev.target) : null;
+    _TQ.toque = b ? { b: b, f: _tqFirma(b), x: ev.clientX, y: ev.clientY, t: Date.now(), frenado: false } : null;
+  }, { capture: true, passive: true });
+  document.addEventListener('pointermove', function (ev) {
+    var q = _TQ.toque; if (q && Math.abs(ev.clientX - q.x) + Math.abs(ev.clientY - q.y) > 10) _TQ.toque = null;
+  }, { capture: true, passive: true });
+  document.addEventListener('pointercancel', function () { _TQ.toque = null; }, { capture: true, passive: true });
+  ['touchstart', 'touchend'].forEach(function (n) {
+    window.addEventListener(n, function (ev) { if (ev.defaultPrevented && _TQ.toque) _TQ.toque.frenado = true; }, { passive: true });
+  });
+  document.addEventListener('pointerup', function (ev) {
+    var q = _TQ.toque; _TQ.toque = null;
+    if (!q || Date.now() - q.t > 600) return;
+    var desde = Date.now();
+    _TQ.rescate = setTimeout(function () {
+      _TQ.rescate = 0;
+      if (q.frenado || _TQ.ultClic >= desde) return;
+      var b = q.b.isConnected ? q.b : _tqBoton(document.elementFromPoint(q.x, q.y));
+      if (!b || _tqFirma(b) !== q.f || b.disabled) return;
+      try { b.click(); } catch (e) {}
+    }, 180);
+  }, { capture: true, passive: true });
+} catch (e) {}
 function _pedVivoRepintar() {
   if (_pedVivoRT) return;
   var correr = function () {
