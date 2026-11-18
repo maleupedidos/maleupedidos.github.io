@@ -43,7 +43,7 @@ const PANTALLAS = [
   ['evolucion', null, []],
   ['planificacion', null, []],
   ['estancias', 'estSwitch', ['hoy', 'semana', 'pulso', 'clientes', 'hogares', 'barrios', 'mapa', 'segmentos', 'leads', 'jugadas', 'recorrida']],
-  ['miportal', 'setMainTab', ['hoy', 'pedidos', 'clientes', 'plata']],
+  ['miportal', 'setMainTab', ['hoy', 'clientes', 'plata']],   /* (18/11/2026) Pedidos se juntó en Hoy */
   ['busqueda', 'abaSwitchTab', ['resumen', 'pedidos', 'proveedores', 'costos', 'pagos', 'nuevo']],
   ['proveedores', null, []],
   /* Ajustes no: el robot no la ve a propósito (usuarios y PIN). La cubre el paso «ajustes en la base» del robot (437). */
