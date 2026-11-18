@@ -32,7 +32,8 @@ const CONTAR = eval('`' + m[1] + '`');
   const res = [];
   try {
     await cli.enviar('Page.enable'); await cli.enviar('Runtime.enable');
-    await cli.enviar('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
+    const W = Number(process.env.ANCHO || 390), H = W > 800 ? 900 : 844;
+    await cli.enviar('Emulation.setDeviceMetricsOverride', { width: W, height: H, deviceScaleFactor: W > 800 ? 1 : 2, mobile: W <= 800 });
     await cli.enviar('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 });
     await cli.enviar('Page.addScriptToEvaluateOnNewDocument', { source: prep('prueba') + sbses(process.env.SBSES, USU)
       + `;try{localStorage.setItem('maleu_red_session',${JSON.stringify(red)});}catch(e){}`
@@ -53,7 +54,7 @@ const CONTAR = eval('`' + m[1] + '`');
       const a = await cli.enviar('Page.captureScreenshot', { format: 'png' });
       fs.writeFileSync(path.join(OUT, nombre + '-pantalla.png'), Buffer.from(a.data, 'base64'));
       const h = await ev(`Math.min(document.documentElement.scrollHeight, 9000)`);
-      const b = await cli.enviar('Page.captureScreenshot', { format: 'png', captureBeyondViewport: true, clip: { x: 0, y: 0, width: 390, height: h, scale: 1 } });
+      const b = await cli.enviar('Page.captureScreenshot', { format: 'png', captureBeyondViewport: true, clip: { x: 0, y: 0, width: W, height: h, scale: 1 } });
       fs.writeFileSync(path.join(OUT, nombre + '-entera.png'), Buffer.from(b.data, 'base64'));
     };
     /* (18/11/2026) Desde el portal nuevo: Hoy · Clientes · Plata (una pantalla) y la ficha que se abre desde Hoy.
