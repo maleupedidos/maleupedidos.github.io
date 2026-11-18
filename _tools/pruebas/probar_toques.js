@@ -16,14 +16,16 @@ const SB = 'https://xhaxmyvhygxynwjqrarm.supabase.co', PUB = 'sb_publishable_IVI
 const BASE = process.env.BASE || 'http://localhost:8080/app.html';
 const SOLO = process.env.SOLO ? process.env.SOLO.split(',') : null;
 const TOPE = Number(process.env.TOPE || 100);
+/* (17/11/2026, noche) Cada pantalla con su «listo»: hasta que no hay contenido, no se toca nada. Con una espera fija de 7 s,
+   Caja y Equipo daban «0 controles» (los datos no habían llegado) y el resultado era un verde sobre nada. */
 const PANT = [
-  ['inicio', `go('inicio')`],
-  ['pedidos', `go('pedidos')`],
-  ['ruta', `go('ruta'); setTimeout(function(){ try{ switchTab('ruta'); }catch(e){} },1500)`],
-  ['caja', `go('caja')`],
-  ['equipo', `go('equipo')`],
+  ['inicio', `go('inicio')`, `!!document.querySelector('.pg.on button, .pg.on [onclick]')`],
+  ['pedidos', `go('pedidos')`, `!!document.querySelector('.pg.on .pc, .pg.on [onclick]')`],
+  ['ruta', `go('ruta'); setTimeout(function(){ try{ switchTab('ruta'); }catch(e){} },1500)`, `!!document.querySelector('#pg-ruta button, #pg-ruta [onclick]')`],
+  ['caja', `window._cjSalAbierto=true; go('caja')`, `!!(document.querySelector('#cBal .cj-ct') && document.querySelector('#p-caja .cj-r'))`],
+  ['equipo', `go('equipo')`, `!!(typeof EQ!=='undefined' && EQ.d && !EQ.vuelo && document.querySelector('#eqBody .eq-row'))`],
 ];
-const NO = /pagar|cobrar|guardar|borrar|eliminar|deshacer|confirmar|recib[ií]|entreg|cancelar|anular|mover|cargar|contar|ajust|nuevo|\+|salir|cerrar sesi|llamar|whatsapp|compartir|descargar|subir|foto/i;
+const NO = /pagar|cobrar|guard|borrar|eliminar|deshacer|confirmar|recib[ií]|entreg|cancelar|anular|mover|cargar|contar|ajust|nuevo|\+|salir|cerrar sesi|llamar|whatsapp|compartir|descargar|subir|foto/i;
 (async () => {
   const ses = JSON.parse(fs.readFileSync(process.env.SES_ADMIN, 'utf8'));
   const br = await pw.webkit.launch();
@@ -59,17 +61,29 @@ const NO = /pagar|cobrar|guardar|borrar|eliminar|deshacer|confirmar|recib[ií]|e
   console.log(`  :hover fuera de @media(hover:hover): ${hov.tot} · de esas, ${hov.peli} cambian display/visibility/opacity/content · touch-action del html: ${hov.ta}`);
   hov.ej.forEach((x) => console.log('     ' + x));
   let mal = 0, n = 0; const filas = [];
-  for (const [nom, js] of PANT) {
+  for (const [nom, js, listo] of PANT) {
     if (SOLO && SOLO.indexOf(nom) < 0) continue;
-    await pg.evaluate(js); await pg.waitForTimeout(7000);
+    /* Lo que una pantalla anterior pudo dejar abierto (el cajón, una ficha, un menú) tapa la próxima: se cierra antes. */
+    await pg.evaluate(() => { try { document.body.classList.remove('sb-open'); } catch (e) {} try { if (typeof eqCerrar === 'function') eqCerrar(); } catch (e) {}
+      try { document.querySelectorAll('[aria-expanded="true"].k-mas').forEach((b) => b.click()); } catch (e) {} });
+    await pg.evaluate(js);
+    const llego = await pg.waitForFunction(listo, null, { timeout: 40000 }).then(() => true, () => false);
+    if (!llego) { mal++; console.log(`  MAL  ${nom}: la pantalla no llegó a tener contenido en 40 s (no se mide sobre nada)`); continue; }
+    await pg.waitForTimeout(1500);
     /* Los controles: visibles, en pantalla, de navegación. Se marcan con data-qa para volver a encontrarlos. */
     const cands = await pg.evaluate((src) => {
       const NO = new RegExp(src, 'i'); const out = []; let k = 0;
       const vis = (e) => { const r = e.getBoundingClientRect(); if (r.width < 20 || r.height < 20 || r.bottom < 60 || r.top > 800) return null; const cs = getComputedStyle(e); if (cs.visibility === 'hidden' || cs.pointerEvents === 'none') return null; return r; };
-      document.querySelectorAll('.pg.on .eq-row, .pg.on button, .pg.on summary, .pg.on [onclick], #pg-ruta button, #pg-ruta [onclick], .pg.active button, .pg.active [onclick]').forEach((e) => {
+      /* (17/11, noche) Los controles de más abajo también (en Caja, arriba son todos de escribir): se lleva cada uno a la
+         pantalla antes de mirarlo. Y las fichas primero: un filtro tocado antes cambia la lista y la ficha ya no está. */
+      const todos = [].slice.call(document.querySelectorAll('.pg.on .eq-row, .pg.on button, .pg.on summary, .pg.on [onclick], #pg-ruta button, #pg-ruta [onclick], .pg.active button, .pg.active [onclick]'));
+      todos.sort((a, b) => (b.classList.contains('eq-row') ? 1 : 0) - (a.classList.contains('eq-row') ? 1 : 0));
+      todos.forEach((e) => {
         if (out.length >= 6) return;
         const t = (e.innerText || e.getAttribute('aria-label') || '').trim().replace(/\s+/g, ' ').slice(0, 40);
         if (!t || NO.test(t) || e.disabled) return;
+        if (!e.getClientRects().length) return;
+        e.scrollIntoView({ block: 'center' });
         const r = vis(e); if (!r) return;
         const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
         if (!hit || !(hit === e || e.contains(hit))) return;
@@ -78,6 +92,8 @@ const NO = /pagar|cobrar|guardar|borrar|eliminar|deshacer|confirmar|recib[ií]|e
       return out;
     }, NO.source);
     console.log(`  ${nom}: ${cands.length} controles para tocar`);
+    if (!cands.length) console.log('     encima: ' + await pg.evaluate(() => { const e = document.elementFromPoint(195, 420); return e ? (e.id || '') + '.' + String(e.className || '').slice(0, 60) + ' en ' + ((e.closest('[id]') || {}).id || '') : 'nada'; }) + ' · pg.on=' + await pg.evaluate(() => (document.querySelector('.pg.on') || {}).id));
+    if (!cands.length) { mal++; console.log(`  MAL  ${nom}: 0 controles: un verde sobre nada no vale`); }
     for (const c of cands) {
       await pg.evaluate((js2) => { window.__t = {}; }, js);
       /* La pantalla se vuelve a pintar entre toque y toque: el control se busca de nuevo por su texto. */
