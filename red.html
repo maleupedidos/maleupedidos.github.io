@@ -510,7 +510,6 @@
     .cob-card .cob-pill.ok { background: #e3f1e4; color: #1b5e20; }
     .cob-card .cob-pill.ent { background: #fdecd2; color: #8a4b00; }
     .cob-card .cob-pill.cob { background: #fff3c4; color: #6b5300; }
-    .cob-card .cob-pill.bol { background: #efe9e2; color: #6d5f57; }
     /* HOY (18/11/2026, auditoría): las entregas con «Entregado» de un toque. */
     .portal-fuera { display: none !important; }
     .ent-card, .venc-card { background: #fff; border-radius: 14px; box-shadow: 0 1px 3px rgba(0,0,0,.06); padding: .9rem .9rem .3rem; margin-bottom: .8rem; }
@@ -544,6 +543,7 @@
     .pn-det[open] > summary { border-bottom: 1px solid #f0ebe3; }
     .pn-det .plata-numeros { padding: .4rem .6rem .6rem; }
     .plata-info { margin: 0 0 .8rem; }
+    .cob-card .cob-pill.bol { background: #eef1f6; color: #34495e; }   /* (18/11/2026) todavía no se despachó: no se pide nada */
     .cob-card .cob-nota { font-size: .72rem; color: #6d4c41; margin-top: .45rem; line-height: 1.4; }
     .cob-card .cob-ult { font-size: .74rem; color: #555; margin-top: .8rem; padding-top: .6rem; border-top: 1px solid #eee; }
     .venc-card { background: #fff; border: 1px solid #f3c7c0; border-left: 4px solid #c62828; border-radius: 14px; padding: .9rem 1.1rem; margin-bottom: 1rem; }
@@ -3558,10 +3558,10 @@ function _liqBloques(L) {
     const B = blq(_cobNum(p.pagaEl));
     lbl(B, p.q);
     B.pend += Number(p.tot) || 0;
-    /* (18/11/2026) Desde la 664 la base manda falta:'bolsa' (todavía no se lo despachamos) y acá todo lo que no era
-       'entregar' salía «Entregado sin cobrar · falta marcar el cobro»: los 5 pedidos de Lourdes del 20/11, cobrados
-       por transferencia y sin entregar. El cobro es de Maleu: al representante solo le toca entregar. */
-    B.filas.push({ p: p, st: p.falta === 'entregar' ? 'ent' : 'bol' });
+    /* (18/11/2026, main 3c3deb7) Desde la 664 la base manda falta='bolsa': la bolsa todavía no se le despachó. Antes caía en «cob» y decía
+       «Entregado sin cobrar · falta marcar el cobro» sobre pedidos cobrados y sin entregar. El cobro lo hace Maleu: ningún
+       texto le pide al representante marcarlo. */
+    B.filas.push({ p: p, st: p.falta === 'entregar' ? 'ent' : (p.falta === 'bolsa' ? 'bol' : 'cob') });
   });
   return Object.keys(bloques).map(Number).sort(function (a, b) { return a - b; }).map(function (k) { return bloques[k]; });
 }
@@ -3599,15 +3599,19 @@ function renderCobrar(L, liqs) {
   if (!L) { box.classList.add('hidden'); box.innerHTML = ''; return; }
   const prox = Number(L.proxPagoNum) || 0, hoy = Number(L.hoy) || 0;
   const _bl = _liqBloques(L);
-  const ST = { ok: 'Entra', ent: 'Falta entregarlo', bol: 'Al despacharlo' };
-  const QUE = { ent: 'falta marcarlo entregado', bol: 'se suma cuando te lo despachamos' };
+  const ST = { ok: 'Entra', ent: 'Falta entregarlo', cob: 'Lo cobra Maleu', bol: 'Se despacha' };
+  const QUE = { ent: 'falta marcarlo entregado', cob: 'lo cobra Maleu', bol: '' };
+  /* «Se despacha el viernes 20/11»: el día de entrega del pedido (dd/mm/aaaa). */
+  const _cobDespacha = function (dia) { const m = String(dia || '').match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/); if (!m) return 'Se despacha';
+    const D = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'][new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1])).getDay()];
+    return 'Se despacha el ' + D + ' ' + Number(m[1]) + '/' + Number(m[2]); };
   let h = '';
   if (!_bl.length) {
     h += '<div class="cob-blk"><div class="cob-t">Tu liquidación</div><div class="cob-big">' + ars(0) + '</div>'
        + '<div class="cob-sub">Por ahora no tenés nada para cobrar. Próximo pago ' + _cobDia(prox, hoy) + '.</div></div>';
   }
   _bl.forEach(function (B, i) {
-    const orden = { ok: 0, cob: 1, ent: 2 };
+    const orden = { ok: 0, cob: 1, bol: 1, ent: 2 };
     B.filas.sort(function (a, b) { return orden[a.st] - orden[b.st]; });
     h += '<div class="cob-blk' + (i ? ' cob-blk2' : '') + '">'
        + '<div class="cob-t">' + (i ? 'Después' : 'Tu liquidación') + '</div>'
@@ -3618,20 +3622,20 @@ function renderCobrar(L, liqs) {
       const p = f.p;
       const det = p.bono ? 'Bono por cliente nuevo' : p.prop ? 'Propina que te dejó en efectivo'
                 : 'Comisión ' + ars(Number(p.com) || 0) + ((Number(p.env) || 0) > 0 ? ' · envío ' + ars(Number(p.env) || 0) : '')
-                + (f.st !== 'ok' ? ' · ' + QUE[f.st] : '');
+                + (f.st !== 'ok' && QUE[f.st] ? ' · ' + QUE[f.st] : '');
       const izq = '<span class="cob-l"><div class="cob-cli">' + (p.n ? '#' + redEsc(p.n) + ' · ' : '') + redEsc(p.c || '') + '</div>'
                 + '<div class="cob-det">' + det + '</div></span>'
                 + '<span class="cob-r"><span class="cob-m">' + ars(Number(p.tot) || 0) + (f.st === 'ent' ? ' ›' : '') + '</span>'
-                + '<span class="cob-pill ' + f.st + '">' + ST[f.st] + '</span></span>';
-      /* Lo pendiente lleva a su parada en Ruta, donde se marca. Lo listo no se toca. */
-      /* Solo lo que falta entregar lleva a la ficha: lo que espera el despacho no tiene nada para tocar. */
+                + '<span class="cob-pill ' + f.st + '">' + (f.st === 'bol' ? _cobDespacha(p.dia) : ST[f.st]) + '</span></span>';
+      /* Lo pendiente de ENTREGA lleva a su parada en Ruta, donde se marca. Lo listo, lo que se despacha y lo que cobra Maleu no se tocan. */
       h += f.st !== 'ent'
         ? '<div class="cob-row">' + izq + '</div>'
         : '<button type="button" class="cob-row" onclick="redIrAPedido(' + "'" + redEsc(p.n) + "'," + (Number(p.row) || 0) + ')">' + izq + '</button>';
     });
     h += '</div>';
     if (B.pend > 0) {
-      h += '<div class="cob-nota">' + ars(B.pend) + ' todavía no entran: se suman cuando te despachamos el pedido o pasa su día de entrega.</div>';
+      const _hayEnt = B.filas.some(function (f) { return f.st === 'ent'; });
+      h += '<div class="cob-nota">' + ars(B.pend) + ' todavía no entran: se suman cuando ' + (_hayEnt ? 'el pedido está entregado. Tocá uno para marcarlo.' : 'te despachamos la bolsa.') + '</div>';
     }
     h += '</div>';
   });
