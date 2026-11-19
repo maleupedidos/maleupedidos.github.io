@@ -137,6 +137,7 @@ body.embed .sem-tabs{top:48px}
 .pc-fila>summary small{margin-left:auto;font-size:13px;color:#8a7a6a;text-align:right;font-variant-numeric:tabular-nums}
 .pc-fila>.prov-card{margin:0 0 12px!important;box-shadow:none}
 .pc-fila-np{cursor:default;justify-content:space-between}
+.pc-np-q{display:block;font-size:12.5px;font-weight:600;color:#8a7a6a}
 .pc-np-b{min-height:44px;padding:0 12px;border:1px solid var(--border,#e8dcc8);border-radius:10px;background:#fff;font:inherit;font-size:13px;font-weight:700;color:#6D4C41;cursor:pointer}
 .pc-np-sola{align-self:flex-start;margin-top:10px;border:0;background:none;padding:0 2px;text-decoration:underline;color:#8a7a6a}
 .pc-tot{display:flex;flex-direction:column;align-items:flex-end;text-align:right}
@@ -2943,8 +2944,23 @@ function _ocsRecibibles(provName) {
 /* Las marcas locales de "ya lo pedi / ya lo recibi" van por proveedor Y semana:
    marcar esta semana no puede dar por pedida la que viene. */
 function _abaMarcaKey(provName) { return provName + '|' + semSel; }
-/* (19/11/2026) «No pido esta semana»: proveedor + N° de semana real (no 'actual'/'prox', que cambian de significado el lunes). */
-function _abaNoPidoKey(provName) { return String(provName || '').toLowerCase().trim() + '|' + (_semActual() + (semSel === 'prox' ? 1 : 0)); }
+/* (19/11/2026, 802) «No pido esta semana» vive en la BASE (purchase_skip_week): Tadeo y Lucas piden a los mismos
+   proveedores, y lo que descarta uno lo tiene que ver el otro. Clave: proveedor normalizado (igual que la base) + «año-semana»
+   real (no 'actual'/'prox', que cambian de significado el lunes). */
+function _abaNoPidoSem(mas) { var y = new Date(Date.now() - 3 * 3600e3).getUTCFullYear(); return y + '-' + (_semActual() + (mas || 0)); }
+function _abaNoPidoProvK(provName) { return String(provName || '').trim().replace(/\s+/g, ' ').toLowerCase(); }
+function _abaNoPidoKey(provName) { return _abaNoPidoProvK(provName) + '|' + _abaNoPidoSem(semSel === 'prox' ? 1 : 0); }
+var _abaNP = { m: {}, t: 0, vuelo: false, ok: false };
+function _abaNoPidoPedir(forzar) {
+  if (typeof _baseRpc !== 'function' || _abaNP.vuelo || !_semActual()) return;
+  if (!forzar && Date.now() - _abaNP.t < 30000) return;
+  _abaNP.vuelo = true;
+  _baseRpc('compra_no_pido_pantalla', { p: { semanas: [_abaNoPidoSem(0), _abaNoPidoSem(1)] } }).then(function (d) {
+    var m = {}; (d.filas || []).forEach(function (f) { m[f.k + '|' + f.sem] = { por: f.por, cuando: f.cuando }; });
+    var antes = JSON.stringify(_abaNP.m); _abaNP.m = m; _abaNP.t = Date.now(); _abaNP.ok = true;
+    if (JSON.stringify(m) !== antes && abaCurrentTab === 'proveedores') renderProveedores();
+  }).catch(function () {}).then(function () { _abaNP.vuelo = false; });
+}
 /* Se puede «no pedir» solo si lo único que falta es lo sugerido: ninguna OC de clientes y nada del depósito pendiente. */
 function _abaPuedeNoPedir(t) {
   var ocs = (t && t.ocs) || [];
@@ -2955,15 +2971,23 @@ function _abaPuedeNoPedir(t) {
 /* Lo que abriste en Pedir sigue abierto cuando la pantalla se repinta sola (llega data nueva). */
 var _abaPcAb = {};
 function _abaPcTog(el) { var k = el && el.getAttribute('data-k'); if (!k) return; if (el.open) _abaPcAb[k] = 1; else delete _abaPcAb[k]; }
-function _abaNoPidoLeer() { try { return JSON.parse(localStorage.getItem('maleu_aba_nopido') || '{}') || {}; } catch (e) { return {}; } }
+function _abaNoPidoLeer() { return _abaNP.m; }
+/* Se ve al instante (y se deshace solo si la base dice que no). */
 function abaNoPido(provName, si) {
-  var m = _abaNoPidoLeer(), k = _abaNoPidoKey(provName), corte = _semActual() - 2;
-  if (si) m[k] = Date.now(); else delete m[k];
-  Object.keys(m).forEach(function (x) { var s = Number(x.split('|').pop()); if (!(s >= corte)) delete m[x]; });   /* las semanas viejas se van solas */
-  try { localStorage.setItem('maleu_aba_nopido', JSON.stringify(m)); } catch (e) {}
+  var k = _abaNoPidoKey(provName), antes = _abaNP.m[k], sem = k.split('|').pop();
+  var yo = ''; try { yo = String((typeof SESSION !== 'undefined' && SESSION && SESSION.usuario) || '').trim().toLowerCase(); } catch (eY) {}
+  if (si) _abaNP.m[k] = { por: yo, cuando: new Date().toISOString() }; else delete _abaNP.m[k];
   renderProveedores();
-  abaShowToast(si ? _abaMarca(provName) + ': sin pedir esta semana' : _abaMarca(provName) + ' vuelve a Falta pedir', 3500);
+  _baseRpc('compra_no_pido_directo', { p: { prov: provName, semana: sem, si: !!si } }).then(function () {
+    abaShowToast(si ? _abaMarca(provName) + ': sin pedir esta semana' : _abaMarca(provName) + ' vuelve a Falta pedir', 3500);
+    _abaNP.t = 0; _abaNoPidoPedir(true);
+  }).catch(function (e) {
+    if (antes) _abaNP.m[k] = antes; else delete _abaNP.m[k];
+    renderProveedores();
+    abaShowToast('No se pudo guardar: ' + String(e && e.message || e) + '. Reintentá.', 6000);
+  });
 }
+try { localStorage.removeItem('maleu_aba_nopido'); } catch (eNP) {}   /* lo de la v1280, que vivía en el aparato */
 /* "Ya lo copie" / "saque el boton" valen para ESE proveedor en ESA semana (9/10/2026).
    Se guardaba por proveedor solo: tocar el tacho una vez le sacaba el boton de
    WhatsApp para siempre. La semana es el numero real, no 'actual'/'prox', asi el
@@ -3046,10 +3070,12 @@ function renderProveedores() {
   /* (19/11/2026, Tadeo en el iPhone: «no se entiende qué está hecho») «No pido esta semana»: solo donde lo único que falta
      es lo SUGERIDO (ninguna OC de clientes, ningún renglón del depósito pendiente). Saca la sugerencia de esa semana y nada
      más: no toca OC ni stock. Se recuerda por proveedor y semana en este aparato. */
+  _abaNoPidoPedir();
   var _noP = _abaNoPidoLeer();
   _tarjetas.forEach(function (t) {
     t.puedeNoPedir = _abaPuedeNoPedir(t);
-    if (t.puedeNoPedir && _noP[_abaNoPidoKey(t.n)]) { t.rep = null; t.noPido = true; }
+    var _np = _noP[_abaNoPidoKey(t.n)];
+    if (t.puedeNoPedir && _np) { t.rep = null; t.noPido = _np; }
   });
   _tarjetas.forEach(function (t) {
     if (t.noPido && !t.ocs.length) { t.est = 'nopido'; return; }
@@ -3087,7 +3113,8 @@ function renderProveedores() {
   _tarjetas.forEach(function (t) {
     provsPintados[t.n] = 1; provsVisibles++;
     if (t.est === 'nopido') {
-      _secc.nopido.push('<div class="pc-fila pc-fila-np"><span class="pc-fila-n">' + _abaH(_abaMarca(t.n)) + '</span>'
+      var _quien = String((t.noPido && t.noPido.por) || ''), _qn = { tadeo: 'Tadeo', luqui: 'Lucas' }[_quien] || (_quien ? _quien.charAt(0).toUpperCase() + _quien.slice(1) : '');
+      _secc.nopido.push('<div class="pc-fila pc-fila-np"><span class="pc-fila-n">' + _abaH(_abaMarca(t.n)) + (_qn ? '<small class="pc-np-q">lo descartó ' + _abaH(_qn) + '</small>' : '') + '</span>'
         + '<button type="button" class="pc-np-b" onclick="abaNoPido(\'' + esc(t.n) + '\',false)">Pedir igual</button></div>');
       return;
     }
