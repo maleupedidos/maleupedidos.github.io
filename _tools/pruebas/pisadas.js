@@ -254,9 +254,32 @@ const MEDIR = String(function (movil) {
   })();
   /* (18/11/2026) Cuánto texto se ve en la pantalla activa. Mi Portal como vendedor salía EN BLANCO (sin su sesión del portal)
      y daba «pisadas 0»: medir una pantalla vacía es un verde sin mirar nada. Con menos de 30 letras, la pantalla es «vacía». */
+  /* (19/11/2026, Tadeo: «Pagos de hoy chueco abajo a la izquierda») HUECOS EN UNA GRILLA. Lo que no es una tarjeta de la
+     misma clase no comparte la grilla: en un contenedor `display:grid` con 2 o más columnas, un hijo de OTRA clase que la de
+     la mayoría (la sección «Pagos de hoy» entre las tarjetas de proveedor) y que no ocupa el ancho entero deja una celda
+     vacía al lado. Eso es un hueco. Los títulos que ocupan la fila (`grid-column:1/-1`) no cuentan. */
+  var huecos = [];
+  (function () {
+    var raiz = document.querySelector('.pg.on') || document.body;
+    [].forEach.call(raiz.querySelectorAll('*'), function (g) {
+      if (!g.getClientRects().length) return;
+      var cs = getComputedStyle(g); if (cs.display !== 'grid' && cs.display !== 'inline-grid') return;
+      var _tr = String(cs.gridTemplateColumns || '').trim().split(/\s+/).filter(function (x) { return /px$/.test(x); }); if (_tr.length < 2 || _tr.some(function (x) { return parseFloat(x) < 120; })) return;   /* una grilla de TARJETAS: columnas de 120 px o más (no la de los números de una fila) */
+      var hs = [].filter.call(g.children, function (c) { var p = getComputedStyle(c).position; return c.getClientRects().length && c.getBoundingClientRect().height > 4 && p !== 'absolute' && p !== 'fixed'; });
+      if (hs.length < 3) return;
+      var cl = function (c) { return (typeof c.className === 'string' ? c.className : '').trim().split(/\s+/)[0] || c.tagName; };
+      var cuenta = {}; hs.forEach(function (c) { cuenta[cl(c)] = (cuenta[cl(c)] || 0) + 1; });
+      var may = Object.keys(cuenta).sort(function (a, b) { return cuenta[b] - cuenta[a]; })[0]; if (cuenta[may] < 2) return;
+      /* Una grilla de TARJETAS: la mayoría tiene caja (borde, fondo o sombra). Un formulario o una fila de chips no. */
+      var _caja = function (e) { var z = getComputedStyle(e), bg = z.backgroundColor; return parseFloat(z.borderTopWidth) > 0 || parseFloat(z.borderLeftWidth) > 0 || (bg && bg !== 'rgba(0, 0, 0, 0)' && bg !== 'transparent') || (z.boxShadow && z.boxShadow !== 'none'); };
+      var _may = hs.filter(function (c) { return cl(c) === may; }); if (_may.filter(_caja).length < _may.length / 2) return;
+      var W = g.clientWidth - (parseFloat(cs.paddingLeft) || 0) - (parseFloat(cs.paddingRight) || 0);
+      hs.forEach(function (c) { if (/^(BUTTON|INPUT|SELECT|TEXTAREA|LABEL|A)$/.test(c.tagName)) return; if (cl(c) !== may && c.getBoundingClientRect().width < W * 0.9) huecos.push(nombre(g) + ' > .' + cl(c) + ' (' + Math.round(c.getBoundingClientRect().width) + ' de ' + Math.round(W) + 'px)'); });
+    });
+  })();
   var _pgOn = document.querySelector('.pg.on') || document.body;
   var txtLen = String(_pgOn.innerText || '').replace(/\s+/g, ' ').trim().length;
-  return { pisadas: pis, cortados: cort, scroll: Math.max(0, de.scrollWidth - de.clientWidth), botones: bot, letra: let_, desparejos: desp, espaciado: espaciado, txt: txtLen, vacia: txtLen < 30 };
+  return { pisadas: pis, cortados: cort, scroll: Math.max(0, de.scrollWidth - de.clientWidth), botones: bot, letra: let_, desparejos: desp, espaciado: espaciado, huecos: huecos, txt: txtLen, vacia: txtLen < 30 };
 });
 
 const esperarCarga = (pg) => pg.waitForFunction(() => {
@@ -330,9 +353,9 @@ const esperarCarga = (pg) => pg.waitForFunction(() => {
         const r = Object.assign({ medida, rol, donde, foto }, m);
         informe.push(r);
         const n = (x) => (x || []).length;
-        console.log((n(m.pisadas) || m.scroll || m.vacia ? 'MAL ' : 'ok  ') + medida.padEnd(6) + rol.padEnd(11) + donde.padEnd(40).slice(0, 40)
+        console.log((n(m.pisadas) || m.scroll || m.vacia || n(m.huecos) ? 'MAL ' : 'ok  ') + medida.padEnd(6) + rol.padEnd(11) + donde.padEnd(40).slice(0, 40)
           + (m.vacia ? ' VACÍA (' + (m.txt || 0) + ' letras a la vista: no se midió nada) ·' : '')
-          + ' pisadas ' + n(m.pisadas) + ' · scroll ' + (m.scroll || 0) + ' · cortados ' + n(m.cortados) + ' · botones<44 ' + n(m.botones) + ' · letra<12 ' + n(m.letra) + ' · desparejas ' + n(m.desparejos) + ' · espaciado ' + (n(m.espaciado) ? 'DESPAREJO' : 'ok') + (m.error ? ' · ERROR ' + m.error : ''));
+          + ' pisadas ' + n(m.pisadas) + ' · scroll ' + (m.scroll || 0) + ' · cortados ' + n(m.cortados) + ' · botones<44 ' + n(m.botones) + ' · letra<12 ' + n(m.letra) + ' · huecos ' + n(m.huecos) + ' · desparejas ' + n(m.desparejos) + ' · espaciado ' + (n(m.espaciado) ? 'DESPAREJO' : 'ok') + (m.error ? ' · ERROR ' + m.error : ''));
         if (n(m.espaciado) && process.env.VER_ESPACIADO) m.espaciado.forEach((x) => console.log('      ' + x));
         return m;
       };
@@ -387,7 +410,8 @@ const esperarCarga = (pg) => pg.waitForFunction(() => {
   const tot = (k) => informe.reduce((a, x) => a + ((x[k] || []).length || 0), 0);
   const pis = tot('pisadas'), scr = informe.filter((x) => x.scroll > 0).length, vac = informe.filter((x) => x.vacia).length;
   console.log('\nPANTALLAS ' + informe.length + ' · pisadas ' + pis + ' · con scroll de costado ' + scr + ' · cortados ' + tot('cortados') + ' · botones<44 ' + tot('botones') + ' · letra<12 ' + tot('letra') + ' · tarjetas desparejas ' + tot('desparejos') + ' · espaciado desparejo ' + informe.filter((x) => (x.espaciado || []).length).length);
+  const hue = tot('huecos'); if (hue) console.log('HUECOS EN GRILLAS ' + hue + ': ' + informe.filter((x) => (x.huecos || []).length).map((x) => x.medida + ' ' + x.donde + ' → ' + x.huecos.slice(0, 2).join(' · ')).join(' | '));
   if (vac) console.log('PANTALLAS VACÍAS ' + vac + ': ' + informe.filter((x) => x.vacia).map((x) => x.medida + ' ' + x.rol + ' ' + x.donde).join(', '));
   console.log('informe: ' + path.join(OUT, 'informe.json'));
-  process.exitCode = (pis || scr || vac) ? 1 : 0;
+  process.exitCode = (pis || scr || vac || hue) ? 1 : 0;   /* (19/11/2026) un hueco en una grilla también corta */
 })();
