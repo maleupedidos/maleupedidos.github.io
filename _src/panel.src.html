@@ -969,6 +969,8 @@ button.rlq-btn{min-height:44px;padding:0 16px;border-radius:10px;border:1.5px so
 .rlq-eq{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;border-top:0;padding-top:0;margin:-2px 0 6px;font-size:13px}
 .rlq-eq .rlq-btn{min-height:40px;padding:0 14px}
 .rlq-vacios{font-size:12px;color:var(--bl);margin:12px 2px}
+/* (18/11/2026) El borde naranja de los dias de Mi Reparto: era un onmouseover (en el iPhone se comia el clic). */
+@media(hover:hover){.mrh-dia:hover{border-color:var(--o)!important}}
 .rsc{--n-ini:#efebe9;--n-ini-t:#5d4037;--n-ini-s:#f8f5f3;--n-int:#fff8e1;--n-int-t:#e65100;--n-int-s:#fffcf1;--n-top:#e8f5e9;--n-top-t:#1b5e20;--n-top-s:#f3faf4}
 .rsc-niv{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:12px 0}
 .rsc-nv{background:#fff;border:1px solid var(--cd);border-top:4px solid var(--n-ini-t);border-radius:10px;padding:11px 12px;min-width:0}
@@ -7817,6 +7819,8 @@ function ajSesionHTML(){
   /* (14/11/2026, poda) */
   /* La salida de emergencia, que vivia en el ↻ (28/10/2026): borra las copias y recarga. */
   h+='<div class="aj-nota"><button class="aj-btn ghost sm" type="button" onclick="refreshDuro()">Recargar la app de cero</button></div>';
+  /* (18/11/2026, 795) Mide los toques en el aparato, 10 min: lo lee la sesión Backend en `toque_diag`. */
+  if(typeof _esDueno==='function'&&_esDueno())h+='<div class="aj-nota"><button class="aj-btn ghost sm" type="button" onclick="tdPrender();this.textContent=\'Diagnóstico de toques: prendido\'">'+(typeof _tdOn==='function'&&_tdOn()?'Diagnóstico de toques: prendido':'Diagnóstico de toques (10 min)')+'</button></div>';
   if(cola>0){
     h+='<div class="aj-alerta"><b>Pará.</b> Hay <b>'+cola+'</b> movimiento'+(cola>1?'s':'')+
        ' de Ruta sin sincronizar. Si salís ahora se pierde'+(cola>1?'n':'')+
@@ -12926,7 +12930,7 @@ function _mrhRender(d){
     var dt=new Date(Number(p[0]),Number(p[1])-1,Number(p[2]));
     var dia=DIAS[dt.getDay()];
     var fdmy=p[2]+'/'+p[1]+'/'+p[0]; // dd/mm/aaaa SIEMPRE
-    html+='<div class="mrh-dia" onclick="mrhAbrirDia(\''+fdmy+'\')" style="background:#fff;border:1px solid var(--bd);border-radius:10px;padding:12px 14px;margin-bottom:8px;cursor:pointer;transition:.12s" onmouseover="this.style.borderColor=\'var(--o)\'" onmouseout="this.style.borderColor=\'var(--bd)\'">';
+    html+='<div class="mrh-dia" onclick="mrhAbrirDia(\''+fdmy+'\')" style="background:#fff;border:1px solid var(--bd);border-radius:10px;padding:12px 14px;margin-bottom:8px;cursor:pointer;transition:.12s">';
     html+='<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px">';
     html+='<div style="min-width:0;flex:1">';
     html+='<div style="font-weight:700;font-size:15px;color:#222">'+dia+' '+fdmy+'</div>';
@@ -18946,7 +18950,7 @@ function _tqBoton(t) {
   return b;
 }
 function _tqFirma(b) { return b.tagName + '|' + (b.getAttribute('onclick') || '') + '|' + String(b.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 60); }
-var _TQ = { campo: null, toque: null, rescate: 0, ultClic: 0 };
+var _TQ = { campo: null, toque: null, rescate: 0, ultClic: 0, rescatado: null, ultRescate: 0, ultTragado: 0 };
 try {
   /* 1) Apretar un botón no le saca el foco al campo (fase de burbuja: si la pantalla ya lo frenó, se respeta). */
   window.addEventListener('mousedown', function (ev) {
@@ -18957,6 +18961,14 @@ try {
     ev.preventDefault(); _TQ.campo = a;
   }, false);
   window.addEventListener('click', function (ev) {
+    /* (18/11/2026) Si el iPhone tenía el hilo ocupado, el clic de verdad puede llegar DESPUÉS del rescate: eran dos clics
+       y una card que abre y cierra quedaba como estaba («tocar dos veces»). El de verdad que llega tarde se traga. */
+    var rz = _TQ.rescatado;
+    if (rz && ev.isTrusted) {
+      _TQ.rescatado = null;
+      var bb = Date.now() - rz.t < 1500 ? _tqBoton(ev.target) : null;
+      if (bb && (bb === rz.b || _tqFirma(bb) === rz.f)) { _TQ.ultTragado = Date.now(); ev.preventDefault(); ev.stopImmediatePropagation(); return; }
+    }
     _TQ.ultClic = Date.now();
     if (_TQ.rescate) { clearTimeout(_TQ.rescate); _TQ.rescate = 0; }
     var a = _TQ.campo; _TQ.campo = null;
@@ -18984,9 +18996,115 @@ try {
       if (q.frenado || _TQ.ultClic >= desde) return;
       var b = q.b.isConnected ? q.b : _tqBoton(document.elementFromPoint(q.x, q.y));
       if (!b || _tqFirma(b) !== q.f || b.disabled) return;
+      _TQ.ultRescate = Date.now(); _TQ.rescatado = { b: b, f: q.f, t: Date.now() };
       try { b.click(); } catch (e) {}
     }, 180);
   }, { capture: true, passive: true });
+} catch (e) {}
+
+/* DIAGNÓSTICO DE TOQUES (18/11/2026, migración 795). Se arregló tres veces midiendo en el WebKit de la compu, que no tiene
+   la heurística de iOS del primer toque. Esto mide EN EL IPHONE: Ajustes › Sesión › «Diagnóstico de toques», solo el dueño,
+   10 minutos (sobrevive a una recarga). Por cada toque: la hora de cada evento desde el touchstart (te, pd, pu, mo, md, mu,
+   ck), el elemento (selector, función del onclick, texto corto si es botón), si al clic seguía en la página o lo cambió un
+   repintado, cuántos repintados y cuántas llegadas de datos hubo en el medio, el cuadro más largo, y si actuó el rescate o
+   se tragó un clic repetido. Va a `toque_diag` cada 10 s. Sin datos de clientes. */
+var _TD = { hasta: 0, cola: [], cur: null, mut: [], datos: [], raf: 0, rafUlt: 0, env: 0, mo: null, fetchOk: false };
+function _tdOn() { return _TD.hasta > Date.now(); }
+function _tdSel(el) {
+  var out = [], k = 0;
+  while (el && el.nodeType === 1 && k < 4) {
+    var x = el.tagName.toLowerCase();
+    if (el.id) { out.unshift(x + '#' + el.id); break; }
+    if (el.classList && el.classList.length) x += '.' + [].slice.call(el.classList, 0, 2).join('.');
+    out.unshift(x); el = el.parentElement; k++;
+  }
+  return out.join('>').slice(0, 160);
+}
+function _tdFn(el) { var b = el && el.closest ? el.closest('[onclick]') : null, o = b ? String(b.getAttribute('onclick') || '') : ''; var m = o.match(/([A-Za-z_$][\w$]*)\s*\(/); return m ? m[1] : o.slice(0, 30); }
+function _tdTxt(el) { var b = el && el.closest ? el.closest('button') : null; if (!b) return ''; var t = String(b.textContent || '').replace(/\s+/g, ' ').trim(); return t.length <= 24 ? t : ''; }
+function _tdEntre(lista, a, b) { var n = 0; for (var i = 0; i < lista.length; i++) if (lista[i] >= a && lista[i] <= b) n++; return n; }
+function _tdCerrar() {
+  var c = _TD.cur; if (!c) return; _TD.cur = null; clearTimeout(c.tm);
+  var ahora = performance.now(), fin = c.ck != null ? c.t0 + c.ck : ahora;
+  var r = { at: new Date(c.at).toISOString(), tab: c.tab, sel: c.sel, fn: c.fn, txt: c.txt, boton: c.btn, x: c.x, y: c.y, ev: c.ev,
+    ck: c.ck == null ? 'no hubo click' : c.ck, clicks: c.nck, ckSel: c.ckSel || '', ckMismo: c.mismo, ckReal: c.real,
+    conectado: c.conectado != null ? c.conectado : c.el.isConnected,
+    repintos: _tdEntre(_TD.mut, c.t0, fin), repintosHover: c.ev.mo != null ? _tdEntre(_TD.mut, c.t0 + c.ev.mo, c.t0 + c.ev.mo + 80) : null,
+    datos: _tdEntre(_TD.datos, c.t0, fin), cuadroMax: Math.round(c.rafMax), movio: Math.round(c.mov), frenado: c.frenado,
+    rescate: (_TQ.ultRescate || 0) >= c.at, tragado: (_TQ.ultTragado || 0) >= c.at };
+  _TD.cola.push(r); if (_TD.cola.length > 300) _TD.cola.splice(0, _TD.cola.length - 300);
+  var viejo = ahora - 5000; _TD.mut = _TD.mut.filter(function (t) { return t > viejo; }); _TD.datos = _TD.datos.filter(function (t) { return t > viejo; });
+}
+function _tdMandar() {
+  if (!_TD.cola.length || typeof _baseRpc !== 'function') return;
+  var lote = _TD.cola.splice(0, 100);
+  var ver = (typeof _APP_CN_PAGINA === 'string' && _APP_CN_PAGINA.indexOf('@@') < 0) ? _APP_CN_PAGINA.replace('maleu-panel-', '') : 'dev';
+  _baseRpc('toques_diag_anotar', { p: { toques: lote, version: ver, ua: navigator.userAgent } })
+    .catch(function () { _TD.cola = lote.concat(_TD.cola).slice(-300); });
+}
+function _tdArrancar() {
+  if (!_TD.mo && typeof MutationObserver !== 'undefined') {
+    _TD.mo = new MutationObserver(function (ms) { if (!_tdOn()) return; for (var i = 0; i < ms.length; i++) if (ms[i].type === 'childList') { _TD.mut.push(performance.now()); return; } });
+    _TD.mo.observe(document.documentElement, { childList: true, subtree: true });
+  }
+  if (!_TD.fetchOk && window.fetch) {
+    _TD.fetchOk = true; var f0 = window.fetch;
+    window.fetch = function () { var p = f0.apply(this, arguments); if (_tdOn()) p.then(function () { _TD.datos.push(performance.now()); }, function () {}); return p; };
+  }
+  if (!_TD.raf) {
+    var loop = function (ts) {
+      if (!_tdOn()) { _TD.raf = 0; _TD.rafUlt = 0; _tdCerrar(); _tdMandar(); return; }
+      if (_TD.rafUlt && _TD.cur) { var g = ts - _TD.rafUlt; if (g > _TD.cur.rafMax) _TD.cur.rafMax = g; }
+      _TD.rafUlt = ts; _TD.raf = requestAnimationFrame(loop);
+    };
+    _TD.raf = requestAnimationFrame(loop);
+  }
+  if (!_TD.env) _TD.env = setInterval(function () { _tdMandar(); if (!_tdOn() && !_TD.cola.length) { clearInterval(_TD.env); _TD.env = 0; } }, 10000);
+}
+window.tdPrender = function () {
+  if (!(typeof _esDueno === 'function' && _esDueno())) { if (typeof toast === 'function') toast('Solo el dueño'); return; }
+  _TD.hasta = Date.now() + 10 * 60000; try { localStorage.setItem('td_hasta', String(_TD.hasta)); } catch (e) {}
+  _tdArrancar(); if (typeof toast === 'function') toast('Diagnóstico de toques: prendido por 10 min');
+};
+try {
+  _TD.hasta = Number(localStorage.getItem('td_hasta')) || 0; if (_tdOn()) _tdArrancar();
+  var _tdT = function () { return _TD.cur && _tdOn() ? _TD.cur : null; };
+  window.addEventListener('touchstart', function (ev) {
+    if (!_tdOn()) return; if (_TD.cur) _tdCerrar();
+    if (!ev.touches || ev.touches.length !== 1) return;
+    var t = ev.touches[0], el = ev.target;
+    _TD.cur = { t0: performance.now(), at: Date.now(), el: el, sel: _tdSel(el), fn: _tdFn(el), txt: _tdTxt(el), btn: !!_tqBoton(el),
+      x: Math.round(t.clientX), y: Math.round(t.clientY), x0: t.clientX, y0: t.clientY, tab: (typeof cur !== 'undefined' ? String(cur) : ''),
+      ev: {}, rafMax: 0, nck: 0, mov: 0, frenado: false };
+  }, { capture: true, passive: true });
+  window.addEventListener('touchmove', function (ev) { var c = _tdT(); if (!c || !ev.touches || !ev.touches[0]) return; var d = Math.abs(ev.touches[0].clientX - c.x0) + Math.abs(ev.touches[0].clientY - c.y0); if (d > c.mov) c.mov = d; }, { capture: true, passive: true });
+  window.addEventListener('touchend', function (ev) { var c = _tdT(); if (!c) return; if (c.ev.te == null) c.ev.te = Math.round(performance.now() - c.t0); clearTimeout(c.tm); c.tm = setTimeout(_tdCerrar, 1000); }, { capture: true, passive: true });
+  window.addEventListener('touchend', function (ev) { var c = _tdT(); if (c && ev.defaultPrevented) c.frenado = true; }, { passive: true });
+  [['pointerdown', 'pd'], ['pointerup', 'pu'], ['mouseover', 'mo'], ['mousedown', 'md'], ['mouseup', 'mu']].forEach(function (p) {
+    window.addEventListener(p[0], function () { var c = _tdT(); if (c && c.ev[p[1]] == null) c.ev[p[1]] = Math.round(performance.now() - c.t0); }, { capture: true, passive: true });
+  });
+  window.addEventListener('click', function (ev) {
+    var c = _tdT(); if (!c) return; c.nck++;
+    if (c.ck != null) return;
+    c.ck = Math.round(performance.now() - c.t0); c.ckSel = _tdSel(ev.target); c.real = ev.isTrusted;
+    c.mismo = ev.target === c.el || (c.el.contains && c.el.contains(ev.target)) || (ev.target.contains && ev.target.contains(c.el));
+    c.conectado = c.el.isConnected;
+  }, { capture: true, passive: true });
+  document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'hidden') { _tdCerrar(); _tdMandar(); } });
+} catch (e) {}
+
+/* LOS EVENTOS DE MOUSE QUE INVENTA EL TOQUE (18/11/2026). En iOS, después de un toque Safari dispara mouseover/mouseenter
+   «de compatibilidad»; si un manejador cambia algo visible (un globito, un borde, una clase), Safari se come el clic y hay
+   que tocar otra vez. Pasaba en seis lugares: el globito del kit (`kitTip`), el ⓘ de Resultados, el riel lateral, el borde
+   de los días de Mi Reparto, y los dos gráficos (en Evolución el mouseenter lo abría y el clic lo cerraba). En vez de
+   arreglarlos de a uno (y que el próximo nazca suelto): hasta 1 s después de un toque, esos eventos no llegan a ningún
+   manejador. El :hover del CSS lo saca `_sinHoverTactil`. Con mouse no cambia nada. */
+var _TQ_TACTO = 0;
+try {
+  ['touchstart', 'touchend'].forEach(function (n) { window.addEventListener(n, function () { _TQ_TACTO = Date.now(); }, { capture: true, passive: true }); });
+  ['mouseover', 'mouseout', 'mouseenter', 'mouseleave', 'mousemove'].forEach(function (n) {
+    window.addEventListener(n, function (ev) { if (Date.now() - _TQ_TACTO < 1000) ev.stopImmediatePropagation(); }, true);
+  });
 } catch (e) {}
 function _pedVivoRepintar() {
   if (_pedVivoRT) return;
@@ -41546,6 +41664,12 @@ function _sinHoverTactil(){
 }
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',_sinHoverTactil); else _sinHoverTactil();
 window.addEventListener('load',function(){ setTimeout(_sinHoverTactil,0); });
+/* (18/11/2026) Y cada vez que entra una hoja de estilos nueva después del arranque (un <style> o <link> agregado por JS):
+   sin esto, sus :hover seguían vivos en el iPhone. Es idempotente: lo ya limpio no tiene :hover. */
+try{ if(window.matchMedia&&matchMedia('(hover: none), (pointer: coarse)').matches&&typeof MutationObserver!=='undefined'){
+  var _shT=0; new MutationObserver(function(ms){ for(var i=0;i<ms.length;i++){ var a=ms[i].addedNodes; for(var j=0;j<a.length;j++){ var nd=a[j];
+    if(nd.nodeType===1&&(nd.tagName==='STYLE'||nd.tagName==='LINK'||(nd.querySelector&&nd.querySelector('style,link[rel=stylesheet]')))){ clearTimeout(_shT); _shT=setTimeout(_sinHoverTactil,0); if(nd.tagName==='LINK')nd.addEventListener('load',function(){ setTimeout(_sinHoverTactil,0); }); return; } } } })
+    .observe(document.documentElement,{childList:true,subtree:true}); } }catch(e){}
 
 /* ═══ RESULTADOS (14/11/2026, turno noche · Tadeo vía Organizador, «el punto B») ═══════════════════════
    Una tab con tres vistas: ECONÓMICO (devengado), FINANCIERO (la caja) y GASTOS (fijos, variables, equilibrio).
