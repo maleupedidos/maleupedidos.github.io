@@ -18478,7 +18478,7 @@ function _leerVersion(app){
    "El HTML no sabe que version es" dejo de ser cierto: el build le escribe
    adentro el CACHE_NAME de sw-panel.js, el mismo que deploy.sh obliga a subir en
    cada cambio. Si lo publicado dice otra cosa, esta pagina es vieja. Punto. */
-var _APP_CN_PAGINA='maleu-panel-v1265';
+var _APP_CN_PAGINA='maleu-panel-v1266';
 
 /* Devuelve [{k,v}] si lo publicado no es lo que esta pagina corre. */
 function _chequearVersiones(){
@@ -23518,6 +23518,8 @@ function _tqBoton(t) {
   if (!b || /^(INPUT|SELECT|TEXTAREA|LABEL|OPTION)$/.test(b.tagName) || b.isContentEditable) return null;
   return b;
 }
+/* La hora en que bajó el dedo del último toque (si fue hace menos de 3 s); si no, ahora. */
+function _tqDedo() { var a = performance.now(), d = typeof _TQ !== 'undefined' && _TQ.dedo; return d && a - d < 3000 ? d : a; }
 function _tqFirma(b) { return b.tagName + '|' + (b.getAttribute('onclick') || '') + '|' + String(b.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 60); }
 var _TQ = { campo: null, toque: null, rescate: 0, ultClic: 0, rescatado: null, ultRescate: 0, ultTragado: 0 };
 try {
@@ -23538,6 +23540,22 @@ try {
       var bb = Date.now() - rz.t < 1500 ? _tqBoton(ev.target) : null;
       if (bb && (bb === rz.b || _tqFirma(bb) === rz.f)) { _TQ.ultTragado = Date.now(); ev.preventDefault(); ev.stopImmediatePropagation(); return; }
     }
+    /* (18/11/2026) EL DEDO IMPACIENTE. Si el dedo volvió a tocar el MISMO botón antes de ver el resultado del primer toque
+       (hora del dedo, `timeStamp`, antes del primer cuadro pintado + 200 ms) y ese segundo clic esperó más de 150 ms en cola
+       (la pantalla estaba congelada), deshacía el primero (un interruptor, una card que abre y cierra). Se traga. Si no
+       hubo cola no se mete: tocar «+» dos veces seguidas sigue sumando dos. */
+    if (ev.isTrusted) {
+      /* La hora del dedo sale del pointerdown: la del click a veces es la de cuando se arma (medido en Chrome). */
+      var tsq = _tqDedo();
+      var bq = _tqBoton(ev.target), fq = bq ? _tqFirma(bq).replace(/\d+/g, '#') : '', u = _TQ.ult, ya = performance.now();
+      if (bq && u && u.f === fq && tsq > u.ts && tsq < (u.visto === Infinity ? ya : u.visto) && ya - Math.max(tsq, _TQ.arriba || 0) > 150) {
+        _TQ.ultImpaciente = Date.now(); ev.preventDefault(); ev.stopImmediatePropagation(); return;
+      }
+      if (bq) {
+        var reg = { f: fq, ts: tsq, t0: ya, visto: Infinity, lento: false }; _TQ.ult = reg;
+        requestAnimationFrame(function () { var a = performance.now(); reg.lento = a - reg.t0 > 150; reg.visto = a + 200; });
+      }
+    }
     _TQ.ultClic = Date.now();
     if (_TQ.rescate) { clearTimeout(_TQ.rescate); _TQ.rescate = 0; }
     var a = _TQ.campo; _TQ.campo = null;
@@ -23546,8 +23564,9 @@ try {
   /* 2) El toque que no terminó en ningún clic. */
   document.addEventListener('pointerdown', function (ev) {
     if (_TQ.rescate) { clearTimeout(_TQ.rescate); _TQ.rescate = 0; }
+    _TQ.dedo = ev.timeStamp > 0 && ev.timeStamp < performance.now() + 1000 ? ev.timeStamp : performance.now();   /* la hora del dedo */
     var b = ev.isPrimary !== false && !ev.button ? _tqBoton(ev.target) : null;
-    _TQ.toque = b ? { b: b, f: _tqFirma(b), x: ev.clientX, y: ev.clientY, t: Date.now(), frenado: false } : null;
+    _TQ.toque = b ? { b: b, f: _tqFirma(b), x: ev.clientX, y: ev.clientY, t: Date.now(), dedo: _TQ.dedo, frenado: false } : null;
   }, { capture: true, passive: true });
   document.addEventListener('pointermove', function (ev) {
     var q = _TQ.toque; if (q && Math.abs(ev.clientX - q.x) + Math.abs(ev.clientY - q.y) > 10) _TQ.toque = null;
@@ -23557,17 +23576,26 @@ try {
     window.addEventListener(n, function (ev) { if (ev.defaultPrevented && _TQ.toque) _TQ.toque.frenado = true; }, { passive: true });
   });
   document.addEventListener('pointerup', function (ev) {
+    _TQ.arriba = ev.timeStamp > 0 && ev.timeStamp < performance.now() + 1000 ? ev.timeStamp : performance.now();   /* el dedo se levantó */
     var q = _TQ.toque; _TQ.toque = null;
     if (!q || Date.now() - q.t > 600) return;
-    var desde = Date.now();
-    _TQ.rescate = setTimeout(function () {
+    var desde = Date.now(), vence = desde + 180;
+    /* (18/11/2026) Los 180 ms se cuentan con el hilo LIBRE. Si el timer se despierta tarde (había un repintado), el clic
+       de verdad puede estar todavía en cola: se le da un cuadro más para llegar antes de decidir. Medido: sin esto el
+       rescate apretaba primero y el clic real quedaba como segundo toque. */
+    var revisar = function () {
+      if (Date.now() - vence > 100 && !q.espero) { q.espero = true; _TQ.rescate = setTimeout(function () { requestAnimationFrame(function () { _TQ.rescate = setTimeout(revisar, 60); }); }, 0); return; }
       _TQ.rescate = 0;
       if (q.frenado || _TQ.ultClic >= desde) return;
       var b = q.b.isConnected ? q.b : _tqBoton(document.elementFromPoint(q.x, q.y));
       if (!b || _tqFirma(b) !== q.f || b.disabled) return;
+      /* El dedo impaciente también acá: un toque al mismo botón hecho antes de ver lo del anterior no se rescata. */
+      var u = _TQ.ult;
+      if (u && u.f === q.f.replace(/\d+/g, '#') && q.dedo > u.ts && q.dedo < u.visto) { _TQ.ultImpaciente = Date.now(); return; }
       _TQ.ultRescate = Date.now(); _TQ.rescatado = { b: b, f: q.f, t: Date.now() };
       try { b.click(); } catch (e) {}
-    }, 180);
+    };
+    _TQ.rescate = setTimeout(revisar, 180);
   }, { capture: true, passive: true });
 } catch (e) {}
 
@@ -23600,7 +23628,7 @@ function _tdCerrar() {
     conectado: c.conectado != null ? c.conectado : c.el.isConnected,
     repintos: _tdEntre(_TD.mut, c.t0, fin), repintosHover: c.ev.mo != null ? _tdEntre(_TD.mut, c.t0 + c.ev.mo, c.t0 + c.ev.mo + 80) : null,
     datos: _tdEntre(_TD.datos, c.t0, fin), cuadroMax: Math.round(c.rafMax), movio: Math.round(c.mov), frenado: c.frenado,
-    rescate: (_TQ.ultRescate || 0) >= c.at, tragado: (_TQ.ultTragado || 0) >= c.at };
+    rescate: (_TQ.ultRescate || 0) >= c.at, tragado: (_TQ.ultTragado || 0) >= c.at, impaciente: (_TQ.ultImpaciente || 0) >= c.at };
   _TD.cola.push(r); if (_TD.cola.length > 300) _TD.cola.splice(0, _TD.cola.length - 300);
   var viejo = ahora - 5000; _TD.mut = _TD.mut.filter(function (t) { return t > viejo; }); _TD.datos = _TD.datos.filter(function (t) { return t > viejo; });
 }
@@ -33369,7 +33397,18 @@ function rPedidos(opts){
     vals.forEach(function(v){
       var b=document.createElement('button');b.type='button';b.className=esSel(v)?'on':'';
       b.innerHTML=_rtEsc(v)+'<span class="ped-seg-n">'+(cnt[v]||0)+'</span>';
-      b.onclick=function(){toca(v);_rerender();};
+      /* (18/11/2026) Repintar Pedidos entero tarda (1,2 s con CPU x6) y el chip no cambiaba hasta el final: Tadeo tocaba
+         de nuevo y, como es un interruptor, lo volvía a sacar. Ahora se marca YA, el repintado va en el cuadro siguiente,
+         y un toque que el dedo hizo antes de ver el cambio no hace nada: queda en cola y llega después. Se mira la hora del
+         DEDO (`timeStamp`, medido: es la del toque, no la del despacho) contra el primer cuadro pintado + 200 ms, que es lo
+         mínimo para reaccionar a lo que apareció. */
+      b.onclick=function(ev){
+        var ts=typeof _tqDedo==='function'?_tqDedo():performance.now();
+        if(window._pedSegPend||ts<(window._pedSegHasta||0))return; window._pedSegPend=1;
+        var on=!b.classList.contains('on'); [].forEach.call(g.children,function(x){x.classList.remove('on');}); if(on||nombre==='Canal')b.classList.add('on');
+        toca(v);
+        requestAnimationFrame(function(){ setTimeout(function(){ try{ _rerender(); }finally{ window._pedSegPend=0; window._pedSegHasta=performance.now()+200; requestAnimationFrame(function(){ window._pedSegHasta=performance.now()+200; }); } },0); });
+      };
       g.appendChild(b);
     });
     _segEn.appendChild(g);
@@ -46213,7 +46252,7 @@ function eqDatoEditar(campo){ EQ.edit[campo]=1; _eqFichaRepintar(true); var el=d
    próxima nazca suelta), en un aparato SIN mouse se sacan de las hojas de estilo, una vez, al arrancar: las que son solo
    :hover se borran y las mezcladas («.x:hover, .x:focus-visible») pierden la parte :hover. Las que ya viven adentro de
    @media (hover: hover) no se tocan. En la compu no cambia nada. */
-function _sinHoverTactil(){
+function _sinHoverTactil(hojas){
   try{
     if(!window.matchMedia||!matchMedia('(hover: none), (pointer: coarse)').matches)return 0;
     var n=0;
@@ -46226,19 +46265,25 @@ function _sinHoverTactil(){
         try{ if(!sel.length){ (r.parentRule||r.parentStyleSheet).deleteRule(i); } else { r.selectorText=sel.join(','); } n++; }catch(e){}
       }
     };
-    for(var k=0;k<document.styleSheets.length;k++){ var sh=document.styleSheets[k]; try{ if(sh.cssRules)limpiar(sh.cssRules,false); }catch(e){} }
+    var lista=Array.isArray(hojas)?hojas:document.styleSheets;   /* (18/11) con `hojas`, solo esas: las recién agregadas */
+    for(var k=0;k<lista.length;k++){ var sh=lista[k]; try{ if(sh&&sh.cssRules)limpiar(sh.cssRules,false); }catch(e){} }
     window.__sinHover=(window.__sinHover||0)+n;
     return n;
   }catch(e){ return 0; }
 }
-if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',_sinHoverTactil); else _sinHoverTactil();
-window.addEventListener('load',function(){ setTimeout(_sinHoverTactil,0); });
+if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',function(){ _sinHoverTactil(); }); else _sinHoverTactil();
+window.addEventListener('load',function(){ setTimeout(function(){ _sinHoverTactil(); },0); });
 /* (18/11/2026) Y cada vez que entra una hoja de estilos nueva después del arranque (un <style> o <link> agregado por JS):
-   sin esto, sus :hover seguían vivos en el iPhone. Es idempotente: lo ya limpio no tiene :hover. */
+   sin esto, sus :hover seguían vivos en el iPhone. Se limpia SOLO la hoja nueva: la v1265 repasaba todas las hojas en
+   cada repintado que traía un <style> (Pedidos: 274 ms con CPU x6). */
 try{ if(window.matchMedia&&matchMedia('(hover: none), (pointer: coarse)').matches&&typeof MutationObserver!=='undefined'){
-  var _shT=0; new MutationObserver(function(ms){ for(var i=0;i<ms.length;i++){ var a=ms[i].addedNodes; for(var j=0;j<a.length;j++){ var nd=a[j];
-    if(nd.nodeType===1&&(nd.tagName==='STYLE'||nd.tagName==='LINK'||(nd.querySelector&&nd.querySelector('style,link[rel=stylesheet]')))){ clearTimeout(_shT); _shT=setTimeout(_sinHoverTactil,0); if(nd.tagName==='LINK')nd.addEventListener('load',function(){ setTimeout(_sinHoverTactil,0); }); return; } } } })
-    .observe(document.documentElement,{childList:true,subtree:true}); } }catch(e){}
+  var _shNuevas=[], _shT=0;
+  var _shJunta=function(el){ if(el.tagName==='STYLE')_shNuevas.push(el); else if(el.tagName==='LINK'&&/stylesheet/i.test(el.rel||'')){ if(el.sheet)_shNuevas.push(el); el.addEventListener('load',function(){ _sinHoverTactil([el.sheet]); }); } };
+  new MutationObserver(function(ms){
+    for(var i=0;i<ms.length;i++){ var a=ms[i].addedNodes; for(var j=0;j<a.length;j++){ var nd=a[j]; if(nd.nodeType!==1)continue;
+      if(nd.tagName==='STYLE'||nd.tagName==='LINK')_shJunta(nd); else if(nd.firstElementChild&&nd.getElementsByTagName){ var ss=nd.getElementsByTagName('style'); for(var k=0;k<ss.length;k++)_shJunta(ss[k]); } } }
+    if(_shNuevas.length&&!_shT)_shT=setTimeout(function(){ _shT=0; var h=_shNuevas.map(function(e){return e.sheet;}).filter(Boolean); _shNuevas=[]; if(h.length)_sinHoverTactil(h); },0);
+  }).observe(document.documentElement,{childList:true,subtree:true}); } }catch(e){}
 
 /* ═══ RESULTADOS (14/11/2026, turno noche · Tadeo vía Organizador, «el punto B») ═══════════════════════
    Una tab con tres vistas: ECONÓMICO (devengado), FINANCIERO (la caja) y GASTOS (fijos, variables, equilibrio).
