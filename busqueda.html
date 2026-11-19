@@ -120,6 +120,25 @@ body.embed .sem-tabs{top:48px}
 .pc-pleg>summary::after{content:'▾';margin-left:auto;color:#8a7a6a}
 .pc-pleg[open]>summary::after{content:'▴'}
 .pc-cat{margin:8px 0 0;font-size:12px;font-weight:700;color:#331C1C}
+/* (19/11/2026) Pedir en tres partes: Falta pedir (tarjetas), Ya pedido y Recibido (plegadas, una línea por proveedor). */
+.pc-sec{grid-column:1/-1;margin:14px 16px 0;border:1.5px solid var(--border,#e8dcc8);border-radius:12px;background:#fff}
+.pc-sec>summary{cursor:pointer;list-style:none;min-height:48px;display:flex;align-items:center;gap:8px;padding:0 14px;font-size:12px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--muted,#8a7a6a)}
+.pc-sec>summary::-webkit-details-marker{display:none}
+.pc-sec>summary::after{content:'▾';margin-left:auto}
+.pc-sec[open]>summary::after{content:'▴'}
+.pc-sec-n{min-width:22px;padding:1px 7px;border-radius:99px;background:#F3EEE6;color:#5D4037;text-align:center;letter-spacing:0}
+.pc-sec-b{padding:0 14px 6px}
+.pc-fila{border-top:1px dashed #EFE6CF}
+.pc-fila>summary,.pc-fila-np{cursor:pointer;list-style:none;min-height:48px;display:flex;align-items:center;gap:10px;font-size:14.5px}
+.pc-fila>summary::-webkit-details-marker{display:none}
+.pc-fila>summary::after{content:'▾';margin-left:8px;color:#8a7a6a}
+.pc-fila[open]>summary::after{content:'▴'}
+.pc-fila-n{font-weight:800;color:#331C1C;min-width:0;overflow-wrap:anywhere}
+.pc-fila>summary small{margin-left:auto;font-size:13px;color:#8a7a6a;text-align:right;font-variant-numeric:tabular-nums}
+.pc-fila>.prov-card{margin:0 0 12px!important;box-shadow:none}
+.pc-fila-np{cursor:default;justify-content:space-between}
+.pc-np-b{min-height:44px;padding:0 12px;border:1px solid var(--border,#e8dcc8);border-radius:10px;background:#fff;font:inherit;font-size:13px;font-weight:700;color:#6D4C41;cursor:pointer}
+.pc-np-sola{align-self:flex-start;margin-top:10px;border:0;background:none;padding:0 2px;text-decoration:underline;color:#8a7a6a}
 .pc-tot{display:flex;flex-direction:column;align-items:flex-end;text-align:right}
 .pc-falta{font-size:16px;font-weight:800;color:#E65100;white-space:nowrap}
 .pc-tot small{font-size:12px;font-weight:600;color:#8a7a6a;white-space:nowrap}
@@ -2924,6 +2943,27 @@ function _ocsRecibibles(provName) {
 /* Las marcas locales de "ya lo pedi / ya lo recibi" van por proveedor Y semana:
    marcar esta semana no puede dar por pedida la que viene. */
 function _abaMarcaKey(provName) { return provName + '|' + semSel; }
+/* (19/11/2026) «No pido esta semana»: proveedor + N° de semana real (no 'actual'/'prox', que cambian de significado el lunes). */
+function _abaNoPidoKey(provName) { return String(provName || '').toLowerCase().trim() + '|' + (_semActual() + (semSel === 'prox' ? 1 : 0)); }
+/* Se puede «no pedir» solo si lo único que falta es lo sugerido: ninguna OC de clientes y nada del depósito pendiente. */
+function _abaPuedeNoPedir(t) {
+  var ocs = (t && t.ocs) || [];
+  var hayCli = ocs.some(function (oc) { return !isTadeoStockCli(oc.cliente, oc.canal); });
+  var hayDepPend = ocs.some(function (oc) { return isTadeoStockCli(oc.cliente, oc.canal) && oc.est === 'Pendiente'; });
+  return !!(t && t.rep) && !hayCli && !hayDepPend;
+}
+/* Lo que abriste en Pedir sigue abierto cuando la pantalla se repinta sola (llega data nueva). */
+var _abaPcAb = {};
+function _abaPcTog(el) { var k = el && el.getAttribute('data-k'); if (!k) return; if (el.open) _abaPcAb[k] = 1; else delete _abaPcAb[k]; }
+function _abaNoPidoLeer() { try { return JSON.parse(localStorage.getItem('maleu_aba_nopido') || '{}') || {}; } catch (e) { return {}; } }
+function abaNoPido(provName, si) {
+  var m = _abaNoPidoLeer(), k = _abaNoPidoKey(provName), corte = _semActual() - 2;
+  if (si) m[k] = Date.now(); else delete m[k];
+  Object.keys(m).forEach(function (x) { var s = Number(x.split('|').pop()); if (!(s >= corte)) delete m[x]; });   /* las semanas viejas se van solas */
+  try { localStorage.setItem('maleu_aba_nopido', JSON.stringify(m)); } catch (e) {}
+  renderProveedores();
+  abaShowToast(si ? _abaMarca(provName) + ': sin pedir esta semana' : _abaMarca(provName) + ' vuelve a Falta pedir', 3500);
+}
 /* "Ya lo copie" / "saque el boton" valen para ESE proveedor en ESA semana (9/10/2026).
    Se guardaba por proveedor solo: tocar el tacho una vez le sacaba el boton de
    WhatsApp para siempre. La semana es el numero real, no 'actual'/'prox', asi el
@@ -3003,14 +3043,23 @@ function renderProveedores() {
   (_rep || []).forEach(function (x, i) {
     if (!_tarjetas.some(function (t) { return _k(t.n) === _k(x.prov); })) _tarjetas.push({ n: x.prov, idx: -1, prov: { n: x.prov }, ocs: [], rep: { x: x, i: i } });
   });
+  /* (19/11/2026, Tadeo en el iPhone: «no se entiende qué está hecho») «No pido esta semana»: solo donde lo único que falta
+     es lo SUGERIDO (ninguna OC de clientes, ningún renglón del depósito pendiente). Saca la sugerencia de esa semana y nada
+     más: no toca OC ni stock. Se recuerda por proveedor y semana en este aparato. */
+  var _noP = _abaNoPidoLeer();
   _tarjetas.forEach(function (t) {
+    t.puedeNoPedir = _abaPuedeNoPedir(t);
+    if (t.puedeNoPedir && _noP[_abaNoPidoKey(t.n)]) { t.rep = null; t.noPido = true; }
+  });
+  _tarjetas.forEach(function (t) {
+    if (t.noPido && !t.ocs.length) { t.est = 'nopido'; return; }
     var recib = t.ocs.length > 0 && t.ocs.every(function (oc) { return oc.est === 'Recibido'; });
     var pend = t.ocs.some(function (oc) { return oc.est === 'Pendiente'; });
     if (marcadosRecibido[_abaMarcaKey(t.n)]) recib = true;
     if (marcadosPedido[_abaMarcaKey(t.n)]) pend = false;
     t.est = (recib && !t.rep) ? 'listo' : ((pend || t.rep || !t.ocs.length) ? 'pedir' : 'pedido');
   });
-  var _ordEst = { pedir: 0, pedido: 1, listo: 2 };
+  var _ordEst = { pedir: 0, pedido: 1, listo: 2, nopido: 3 };
   _tarjetas.sort(function (a, b) { return (_ordEst[a.est] - _ordEst[b.est]) || ((a.prov.fProg || '9') < (b.prov.fProg || '9') ? -1 : (a.prov.fProg || '9') > (b.prov.fProg || '9') ? 1 : 0); });
   /* (19/11/2026) Por categoría y en el orden del catálogo; el renglón dice solo el gusto («Carne a Cuchillo 5»). */
   var _partes = function (n) { var s = String(n || ''), i = s.indexOf(' — '); return i >= 0 ? [s.slice(0, i).trim(), s.slice(i + 3).trim()] : [s, '']; };
@@ -3034,8 +3083,14 @@ function renderProveedores() {
     }).join('');
   };
   var _lin = function (n, q, sub) { return '<div class="pc-l"><span>' + _abaH(n) + (sub ? '<small>' + _abaH(sub) + '</small>' : '') + '</span><b>' + q + '</b></div>'; };
+  var _secc = { pedir: [], pedido: [], listo: [], nopido: [] };
   _tarjetas.forEach(function (t) {
     provsPintados[t.n] = 1; provsVisibles++;
+    if (t.est === 'nopido') {
+      _secc.nopido.push('<div class="pc-fila pc-fila-np"><span class="pc-fila-n">' + _abaH(_abaMarca(t.n)) + '</span>'
+        + '<button type="button" class="pc-np-b" onclick="abaNoPido(\'' + esc(t.n) + '\',false)">Pedir igual</button></div>');
+      return;
+    }
     var fp = t.prov.fProg || '', dias = fp ? _diasHasta(fp) : null;
     var dep = t.ocs.filter(function (oc) { return isTadeoStockCli(oc.cliente, oc.canal); });
     var cli = t.ocs.filter(function (oc) { return !isTadeoStockCli(oc.cliente, oc.canal); });
@@ -3113,9 +3168,20 @@ function renderProveedores() {
         + _porCat(_pc.map(function (x) { return { n: x.n, a: '', q: x.u ? _abaCant(x.q, x.u) : x.q }; }), t.n) + '</details>';
     }
     if (acc) h += '<div class="pc-acc">' + acc + '</div>';
-    _tarjetas.html = (_tarjetas.html || '') + h + '</div>';
+    if (t.est === 'pedir' && t.puedeNoPedir) h += '<button type="button" class="pc-np-b pc-np-sola" onclick="abaNoPido(\'' + nJs + '\',true)">No pido esta semana</button>';
+    h += '</div>';
+    if (t.est === 'pedir') { _secc.pedir.push(h); return; }
+    /* Ya pedido y Recibido: una línea por proveedor; la tarjeta entera se abre al tocarla. */
+    var _res = [_cuando, plata > 0 ? abaFormatMoney(plata) : ''].filter(Boolean).join(' · ');
+    var _kf = 'f:' + _k(t.n);
+    _secc[t.est].push('<details class="pc-fila" data-k="' + _abaH(_kf) + '" ontoggle="_abaPcTog(this)"' + (_abaPcAb[_kf] ? ' open' : '') + '><summary><span class="pc-fila-n">' + _abaH(_abaMarca(t.n)) + '</span><small>' + _abaH(_res) + '</small></summary>' + h + '</details>');
   });
-  html = _tarjetas.html || '';
+  var _sec = function (titulo, filas, abierta) {
+    var ks = 's:' + titulo;
+    return filas.length ? '<details class="pc-sec" data-k="' + _abaH(ks) + '" ontoggle="_abaPcTog(this)"' + ((abierta || _abaPcAb[ks]) ? ' open' : '') + '><summary>' + titulo + ' <span class="pc-sec-n">' + filas.length + '</span></summary><div class="pc-sec-b">' + filas.join('') + '</div></details>' : '';
+  };
+  html = (_secc.pedir.length ? '<div class="aba-sec-t">Falta pedir · ' + _secc.pedir.length + '</div>' + _secc.pedir.join('') : '')
+    + _sec('Ya pedido', _secc.pedido, false) + _sec('Recibido', _secc.listo, false) + _sec('Sin pedir esta semana', _secc.nopido, false);
 
   /* El proveedor que todavia no tenia nada en la semana no tiene tarjeta: la compra
      que se esta guardando se la arma, sin botones (no hay OC que marcar ni recibir). */
