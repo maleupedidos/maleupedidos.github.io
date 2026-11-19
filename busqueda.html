@@ -96,9 +96,10 @@ body.embed .sem-tabs{top:48px}
 .pago-mas>summary{cursor:pointer;font-size:13px;font-weight:700;color:var(--muted,#8a7a6a);padding:8px 0}
 #abaVivoFila{display:none!important}   /* (14/11/2026, poda) «● en vivo»: ruido */
 .aba-ocup-l{margin:10px 16px 0;font-size:13px;font-weight:700;color:var(--muted,#8a7a6a);cursor:pointer}
-.aba-sec-t{margin:16px 16px 8px;font-size:12px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--muted,#8a7a6a)}
+.aba-sec-t{grid-column:1/-1;margin:16px 16px 8px;font-size:12px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--muted,#8a7a6a)}
 .aba-rep{margin:0 16px 10px;background:#fff;border:1.5px solid var(--border,#e8dcc8);border-radius:12px;padding:12px 14px}
 .aba-rep-h{font-size:15px;font-weight:800;margin-bottom:6px}
+.aba-rep-cli{margin-top:8px;font-size:11px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;color:var(--muted,#8a7a6a)}
 .aba-rep-l{display:flex;justify-content:space-between;gap:10px;font-size:14px;padding:4px 0;border-top:1px dashed var(--border,#e8dcc8)}
 .aba-rep-l b{font-variant-numeric:tabular-nums}
 .aba-rep-dep{display:block;font-size:12px;color:#8D4B2A;font-weight:600;margin-top:1px}
@@ -3249,7 +3250,8 @@ function buildWaText(prov) {
 function copyWA(idx, btn, provName) {
   var prov = busqueda.provs[idx];
   if (!prov) return;
-  var texto = buildWaText(prov);
+  var _tieneRep = (_abaReponer() || []).some(function (x) { return String(x.prov).toLowerCase().trim() === String(prov.n).toLowerCase().trim(); });
+  var texto = (_tieneRep && _abaWaTotal(prov.n)) || buildWaText(prov);   /* (19/11) con reposición: un mensaje, el total */
   navigator.clipboard.writeText(texto).then(function() {
     btn.textContent = 'Copiado!';
     btn.style.background = '#331C1C';
@@ -5724,6 +5726,39 @@ function _abaReponer() {
   });
   return out;
 }
+/* (19/11/2026, Tadeo hace el pedido de los jueves) Lo de pedidos de clientes del proveedor (las OC «Pendiente» de la
+   semana que se mira, los pasamanos) vivía en otra tarjeta, más abajo: Tadeo creía que la reposición ERA eso. Ahora la
+   tarjeta de reposición lo muestra aparte, «Copiar para WhatsApp» (en cualquiera de las dos) copia UN mensaje con el total
+   de los dos por producto, y «Marcar como pedido» de la reposición también pasa a «Pedido» las OC de clientes. */
+function _abaProvCli(prov) {
+  var l = String(prov || '').toLowerCase().trim();
+  var ps = (typeof busqueda !== 'undefined' && busqueda && busqueda.provs) || [];
+  for (var i = 0; i < ps.length; i++) if (String(ps[i].n || '').toLowerCase().trim() === l) return { i: i, p: ps[i] };
+  return null;
+}
+function _abaCliItems(prov) {
+  var x = _abaProvCli(prov), out = [], idx = {};
+  if (!x) return out;
+  (x.p.cats || []).forEach(function (c) {
+    (c.items || []).forEach(function (it) {
+      if (!_matchSem(it)) return;
+      var k = it.a || (c.cat + '|' + (it.v || ''));
+      if (idx[k] == null) { idx[k] = out.length; out.push({ a: it.a || '', n: c.cat + (it.v ? ' — ' + it.v : ''), q: 0, u: _abaUni(it.a) }); }
+      out[idx[k]].q = Math.round((out[idx[k]].q + (Number(it.q) || 0)) * 1000) / 1000;
+    });
+  });
+  return out;
+}
+/* El mensaje para el proveedor: reposición + pedidos de clientes, sumado por producto. null si no hay nada. */
+function _abaWaTotal(prov) {
+  var rep = ((_abaReponer() || []).filter(function (x) { return x.prov === prov || String(x.prov).toLowerCase().trim() === String(prov).toLowerCase().trim(); })[0] || {}).its || [];
+  var cli = _abaCliItems(prov);
+  if (!rep.length && !cli.length) return null;
+  var m = [], k = {};
+  rep.forEach(function (it) { var c = it.a || it.n; k[c] = m.length; m.push({ n: it.n, q: Number(it.q) || 0, u: '' }); });
+  cli.forEach(function (it) { var c = it.a || it.n; if (k[c] != null) m[k[c]].q = Math.round((m[k[c]].q + it.q) * 1000) / 1000; else { k[c] = m.length; m.push({ n: it.n, q: it.q, u: it.u }); } });
+  return 'Hola! Te paso el pedido:\n' + m.map(function (x) { return '• ' + (x.u ? _abaCant(x.q, x.u) : x.q) + ' ' + x.n; }).join('\n');
+}
 function _abaReponerHTML() {
   var r = _abaReponer();
   if (r === null) return '<div class="aba-vacio-l">Calculando qué reponer…</div>';
@@ -5732,19 +5767,23 @@ function _abaReponerHTML() {
   return '<div class="aba-sec-t">Para reponer</div>' + r.map(function (x, i) {
     return '<div class="aba-rep"><div class="aba-rep-h">' + _abaH(x.prov) + '</div>'
       + x.its.map(function (it) { return '<div class="aba-rep-l"><span>' + _abaH(it.n) + (it.dep ? '<small class="aba-rep-dep">' + _abaH(it.dep) + '</small>' : '') + '</span><b>' + it.q + '</b></div>'; }).join('')
+      + (function () { var cli = _abaCliItems(x.prov); return cli.length ? '<div class="aba-rep-cli">Para pedidos de clientes</div>' + cli.map(function (it) { return '<div class="aba-rep-l"><span>' + _abaH(it.n) + '</span><b>' + _abaH(_abaCant(it.q, it.u)) + '</b></div>'; }).join('') : ''; })()
       + '<div class="aba-rep-b"><button type="button" class="btn-wa" onclick="abaRepCopiar(' + i + ',this)">Copiar para WhatsApp</button>'
       + '<button type="button" class="btn-pedido" onclick="abaRepPedir(' + i + ')">Marcar como pedido</button></div></div>';
   }).join('');
 }
 function abaRepCopiar(i, btn) {
   var x = (_abaReponer() || [])[i]; if (!x) return;
-  var t = 'Hola! Te paso el pedido:\n' + x.its.map(function (it) { return '• ' + it.q + ' ' + it.n; }).join('\n');
+  var t = _abaWaTotal(x.prov) || ('Hola! Te paso el pedido:\n' + x.its.map(function (it) { return '• ' + it.q + ' ' + it.n; }).join('\n'));
   var ok = function () { if (btn) { btn.textContent = '¡Copiado!'; setTimeout(function () { btn.textContent = 'Copiar para WhatsApp'; }, 1500); } };
   try { navigator.clipboard.writeText(t).then(ok, function () { _abaRepCopiarViejo(t); ok(); }); } catch (e) { _abaRepCopiarViejo(t); ok(); }
 }
 function _abaRepCopiarViejo(t) { var ta = document.createElement('textarea'); ta.value = t; ta.style.position = 'fixed'; ta.style.opacity = '0'; document.body.appendChild(ta); ta.select(); try { document.execCommand('copy'); } catch (e) {} ta.remove(); }
 function abaRepPedir(i) {
   var x = (_abaReponer() || [])[i]; if (!x) return;
+  /* (19/11/2026) Las OC de clientes de este proveedor (esta semana) pasan a «Pedido» también: si no, Recibir no las muestra. */
+  var c = _abaProvCli(x.prov);
+  if (c && (busqueda.ocs || []).some(function (oc) { return oc.prov === c.p.n && oc.est === 'Pendiente' && _matchSem(oc); })) { try { marcarPedido(c.p.n, c.i, null); } catch (e) {} }
   abaSwitchTab('nuevo');
   setTimeout(function () {
     var k = _npSugResumen().map(function (y) { return y.prov; }).indexOf(x.prov);
