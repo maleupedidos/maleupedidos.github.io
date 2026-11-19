@@ -657,6 +657,9 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
     /* (4/11/2026, Supa 443) Lo que la limpieza deja A PROPÓSITO (órdenes pendientes de esta corrida, < 30 min) viene
        aparte en `pendientes` y no cuenta: `residuos` es solo lo que no conoce, y eso sale rojo. */
     if (li && li.pendientes) console.log('  pendientes (protegidas a propósito, las barre la noche): ' + JSON.stringify(li.pendientes).slice(0, 120));
+    /* (798, 19/11/2026) Los residuos van en su propia llamada: dentro de robot_limpiar eran el 92% del tiempo y la cortaban
+       por «statement timeout». robot_residuos_aparte no cuenta lo protegido (lo de otra corrida de los últimos 30 min). */
+    if (li && li.residuosAparte) { const ra = await rpc('robot_residuos_aparte', { p_corrida: CORRIDA }).catch((e) => ({ ok: false, error: e.message })); li.residuos = (ra && ra.ok) ? (ra.residuos || {}) : {}; if (!(ra && ra.ok)) console.log('  residuos: no contestó (' + JSON.stringify(ra).slice(0, 100) + ')'); }
     const res = (li && li.residuos) || {}, conRes = Object.keys(res).filter((k) => Number(res[k]) > 0);
     pasos.push({ paso: 'limpieza', ok: !!(li && li.ok) && !conRes.length, ms: 0,
       detalle: li && li.ok ? 'borrado ' + JSON.stringify(li.borrado || {}).slice(0, 200) + (conRes.length ? ' · residuos en ' + conRes.join(', ') : '') : JSON.stringify(li).slice(0, 200) });
