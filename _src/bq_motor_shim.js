@@ -87,6 +87,14 @@ function _bqmPoner_(filas, row, fila) { if (!(row >= 2)) { (filas._neg || (filas
 var _BQM_OC_CAB_ = ['N° Orden', 'Fecha Creación', 'Semana', 'Mes', 'Canal', 'N° Pedido Origen', 'Cliente', 'Teléfono', 'Dirección',
   'Proveedor', 'Producto', 'Abreviatura', 'Cantidad', 'Costo Unitario', 'Costo Total', 'Precio Venta Unit.', 'Ingreso Total',
   'Margen Bruto ($)', 'Margen (%)', 'Origen', 'Estado OC', 'Fecha Pedido Prov', 'Fecha Recibido'];
+/* (20/11/2026) El encabezado de una hoja con `_cab` es el MAS LARGO de todas sus filas, no el de la primera: las
+   columnas nuevas se agregan al final y las filas viejas guardan el `_cab` de su dia. Con el de la fila 2 (15
+   columnas) la P «Galicia Maleu» salia vacia en todas las filas y la tarjeta decia «$0 · Sin contar todavia». */
+function _motCabLarga_(filas) {
+  var c = [];
+  (filas || []).forEach(function (x) { var k = x && x.d && x.d._cab; if (Array.isArray(k) && k.length > c.length) c = k; });
+  return c;
+}
 /* Las hojas chicas sin `_cab`: su encabezado, en orden. */
 var _BQM_CAB_ = {
   'Programaciones Búsqueda': ['Proveedor', 'Fecha Programada', 'Actualizado'],
@@ -132,7 +140,7 @@ function _bqmCargar_(d) {
   ['Home', 'Pilar', 'Clubes', 'Red'].forEach(function (h) { var fs = H[h].f; (fs._neg || []).forEach(function (x) { fs.push(x); }); delete fs._neg; });
   var hj = d.hojas || {};
   Object.keys(hj).forEach(function (n) {
-    var filas = hj[n] || [], cab = _BQM_CAB_[n] || ((filas[0] && filas[0].d && filas[0].d._cab) || []), out = [cab.slice()];
+    var filas = hj[n] || [], cab = _BQM_CAB_[n] || _motCabLarga_(filas), out = [cab.slice()];
     filas.forEach(function (x) { _bqmPoner_(out, x.row, cab.map(function (k) { return _bqmCelda_(x.d[k]); })); });
     H[n] = new _Hoja(n, out);
   });
