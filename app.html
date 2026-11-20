@@ -16307,7 +16307,7 @@ function panelDoLogin(){
         Promise.race([Promise.resolve(_sbPermiso()).catch(function(){ return null; }),new Promise(function(r){ setTimeout(r,3000); })]).then(function(){ _enterApp(); });
       } else _enterApp();
     })
-    .catch(function(){er.textContent='Error de conexión. Intentá de nuevo.';er.classList.add('show');btn.disabled=false;btn.textContent='Entrar';});
+    .catch(function(e){er.textContent=(e&&e.sinSesion)?e.message:'Error de conexión. Intentá de nuevo.';er.classList.add('show');btn.disabled=false;btn.textContent='Entrar';});
 }
 function panelDoLogout(){
   /* (30/10/2026) Un autopedido de Mi Portal sin registrar vive solo en este celular: salir lo borraria. */
@@ -18644,7 +18644,7 @@ function _leerVersion(app){
    "El HTML no sabe que version es" dejo de ser cierto: el build le escribe
    adentro el CACHE_NAME de sw-panel.js, el mismo que deploy.sh obliga a subir en
    cada cambio. Si lo publicado dice otra cosa, esta pagina es vieja. Punto. */
-var _APP_CN_PAGINA='maleu-panel-v1291';
+var _APP_CN_PAGINA='maleu-panel-v1292';
 
 /* Devuelve [{k,v}] si lo publicado no es lo que esta pagina corre. */
 function _chequearVersiones(){
@@ -21754,7 +21754,18 @@ function _loginBase(u,pin){
     .then(function(r){ return r.json(); })
     .then(function(lp){
       if(!lp||!lp.ok||!lp.email||!lp.clave)return {ok:false,err:(lp&&lp.err)||'Usuario o PIN incorrectos'};
-      return _sbAuth(c.url,c.key,'password',{email:lp.email,password:lp.clave}).then(function(t){
+      /* (819, 20/11/2026) Si auth dice que NO (con respuesta: no es la red), el PIN ya pasó: la clave interna quedó
+         desincronizada. La base la repara con el mismo PIN (`login_reparar`) y se reintenta UNA vez. Si igual no, se dice
+         la verdad: antes caía en «Error de conexión» y Tadeo quedó afuera el 20/11 sin saber por qué. */
+      var _auth=function(){ return _sbAuth(c.url,c.key,'password',{email:lp.email,password:lp.clave}); };
+      var _NOSES='Tu PIN está bien, pero no pude abrir tu sesión. Avisale a Tadeo (queda anotado).';
+      var _noSes=function(){ var e2=new Error(_NOSES); e2.sinSesion=true; return e2; };
+      return _auth().catch(function(e){
+        if(!e||!e.http)throw e;   /* sin respuesta: sí es la red */
+        return fetch(c.url+'/rest/v1/rpc/login_reparar',{method:'POST',headers:H(),body:JSON.stringify({p_usuario:u,p_pin:pin})})
+          .then(function(r){ return r.json(); }, function(){ throw _noSes(); })
+          .then(function(x){ if(x&&x.ok&&x.reparado)return _auth().catch(function(){ throw _noSes(); }); throw _noSes(); });
+      }).then(function(t){
         var g={u:lp.usuario||u,url:c.url,key:c.key,access:t.access_token,refresh:t.refresh_token,hasta:Date.now()+(Number(t.expires_in)||3600)*1000,modo:'si',todos:true};
         _sbSesGuardar(g);
         return fetch(c.url+'/rest/v1/rpc/mi_sesion_pantalla',{method:'POST',headers:H(t.access_token),body:'{}'})
@@ -45108,7 +45119,14 @@ function _sueldoComprometido(mn,anio){
 var _eerrStockVal=null,_eerrStockFallo=0,_eerrStockN=0,_eerrStockT=0,_eerrStockMal=false;
 function _eerrStockSuma(st){var t=0;(st||[]).forEach(function(s){var v=Number(s.iv||0);if(v>0)t+=v;});return t;}
 function _eerrStockCuenta(st){var n=0;(st||[]).forEach(function(s){if(Number(s.iv||0)>0)n++;});return n;}
+/* (20/11/2026) «Maximum call stack size exceeded» en Inicio (ventana nueva, sin palancas todavía): con la copia guardada de
+   `stockTab1`, `traer` pintaba AL TOQUE → el repintado de Inicio volvía a llamar acá → arriba se recalculaba desde D.stock
+   con la hora de AHORA (siempre distinta) → «cambió» → otra vez, sin fin. Ahora: un pedido por vez, y el repintado va
+   después (nunca dentro del mismo llamado). */
+var _eerrStockVuelo=false;
 function eerrFetchStock(cb,forzar){
+  if(_eerrStockVuelo)return;
+  var _cb0=cb; cb=function(){ setTimeout(function(){ try{ _cb0&&_cb0(); }catch(e){ console.error('eerrFetchStock',e); } },0); };
   if(D&&Array.isArray(D.stock)&&D.stock.length){
     _eerrStockVal=_eerrStockSuma(D.stock);_eerrStockN=_eerrStockCuenta(D.stock);
     _eerrStockT=Number(D.stockTs)||Date.now();
@@ -45117,12 +45135,16 @@ function eerrFetchStock(cb,forzar){
        renovaba hasta tocar ↻; el de ese momento era $4.955.781 (salieron $492.721 en las entregas de sábado y domingo). */
     var _stViejo=D.stockFuente==='copia'||(_eerrStockT&&Date.now()-_eerrStockT>15*60000);
     if(!forzar&&!_stViejo)return;
+    /* (20/11/2026) La copia vieja se vuelve a pedir A LO SUMO una vez por minuto: si no, cada repintado la volvía a pedir y
+       Inicio quedaba pidiendo el stock en vueltas sin fin. Un «forzar» de quien llama (↻, abrir Inicio) pasa igual. */
+    if(!forzar&&_eerrStockFallo&&Date.now()-_eerrStockFallo<60000)return;
     if(_stViejo)forzar=true;
   }
   if(_eerrStockVal!==null&&!forzar)return;
   if(typeof _tengoTab==='function'&&!_tengoTab('stock'))return;   /* seria un forbidden seguro */
   if(!forzar&&_eerrStockFallo&&Date.now()-_eerrStockFallo<60000)return;
   _eerrStockFallo=Date.now();_eerrStockMal=false;
+  _eerrStockVuelo=true; var _fin=function(){ _eerrStockVuelo=false; };
   /* (28/10/2026) Con `STOCK_BASE_ARMA = si` el valor del stock sale de la base (`stock_tab_pantalla`, con el
      costo adentro), no de `stockTab` en Apps Script. Si la base no contesta, lo de siempre. */
   {
@@ -45134,15 +45156,15 @@ function eerrFetchStock(cb,forzar){
         _eerrStockT=Number(d.alDia)||Date.now(); window.__eerrStockDe='base';
         if(antes!==_eerrStockVal||antesT!==_eerrStockT)cb();
       /* (3/11/2026, corte: pieza 8) Ya no cae a Apps Script: si la base no contesta, se dice. */
-      }).catch(function(){ if(_eerrStockVal===null){_eerrStockMal=true;} cb(); });
+      }).catch(function(){ if(_eerrStockVal===null){_eerrStockMal=true;} cb(); }).then(_fin,_fin);
       return;
     }
   }
-  _eerrStockDeApps(cb);
+  Promise.resolve(_eerrStockDeApps(cb)).then(_fin,_fin);
 }
 function _eerrStockDeApps(cb){
   window.__eerrStockDe='apps';
-  traer('stockTab1',API+'?action=stockTab&t='+Date.now(),function(d,info){
+  return traer('stockTab1',API+'?action=stockTab&t='+Date.now(),function(d,info){
     if(!d||!Array.isArray(d.stock))return;
     var antes=_eerrStockVal,antesT=_eerrStockT;
     _eerrStockVal=_eerrStockSuma(d.stock);_eerrStockN=_eerrStockCuenta(d.stock);
