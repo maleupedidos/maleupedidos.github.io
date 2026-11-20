@@ -7065,6 +7065,8 @@ html,a,button,summary,label,input,select,textarea,[onclick],[role="button"],[rol
 #eqFicha .eqf-sr{border-color:#F3D9B8}
 #eqFicha .eqf-sr .eqf-sr-d{padding:0 14px;border-bottom:1px solid #F3EEE3}
 #eqFicha .eqf-sr .eqf-tot{background:#FFF7ED}
+#eqFicha .eqf-comp-w{display:flex;justify-content:flex-end;padding:8px 14px 12px;background:#FCFAF6}
+#eqFicha .eqf-ev-x.eqf-comp{min-height:40px;height:auto;padding:0 16px}
 #eqFicha .eqf-sr .eqf-tot b{color:#B45309}
 #eqFicha .eqf-recibi{margin-top:4px}
 #eqFicha .eqf-neto{font-size:13px;color:var(--ink3);margin:0 0 8px;font-variant-numeric:tabular-nums}
@@ -41279,6 +41281,8 @@ function _eqQuincenaHtml(x,p){
   });
   if(Number(x.pagado)>0.5||x.estado!=='curso')h+='<div class="eqf-tot"><span>Pagado '+_eqP(x.pagado)+'</span><span>Falta <b class="eqf-m">'+_eqP(Math.max(0,Number(x.saldo)||0))+'</b></span></div>';
   else h+='<div class="eqf-tot"><span>Hasta hoy</span><b class="eqf-m">'+_eqP(x.monto)+'</b></div>';
+  /* (20/11/2026) Mandarle el detalle ANTES de pagar: la misma imagen de marca que el recibo. */
+  if((x.lineas||[]).length&&x.key)h+='<div class="eqf-comp-w"><button type="button" class="eqf-ev-x eqf-comp" data-k="'+_eqH(x.key)+'" onclick="eqCompartirDetalle(this.dataset.k)">Compartir detalle</button></div>';
   return h+'</div>';
 }
 function eqRecibi(per){
@@ -41720,12 +41724,17 @@ function eqRecibo(tipo,k){
   var p=_eqDe(EQ.abierto); if(!p)return;
   var x=(p.historial||[]).filter(function(h){return h.tipo===tipo&&String(tipo==='liq'?h.id:(h.row||h.k))===String(k);})[0]; if(!x)return;
   var lin=[], q=(p.quincenas||[]).filter(function(z){return z.key===x.q;})[0];
-  if(x.tipo==='liq'){
+  /* (20/11/2026) El recibo lleva el mismo detalle que la pantalla (pedido por pedido, el bono con su cliente, cada propina).
+     En Red, solo si ese detalle suma lo pagado; si no, como antes. */
+  var secs=(q&&(q.lineas||[]).length)?_eqSecciones(q):null, sumS=secs?secs.reduce(function(s,l){return s+(Number(l[1])||0);},0):0;
+  if(x.tipo==='liq'&&secs&&Math.abs(sumS-(Number(x.m)||0))<1.5){
+    lin=secs;
+  }else if(x.tipo==='liq'){
     if(Number(x.com)>0.5)lin.push(['Comisión'+(Number(x.nPedidos)?' · '+x.nPedidos+(Number(x.nPedidos)===1?' pedido':' pedidos'):''),x.com]);
     if(Number(x.env)>0.5)lin.push(['Envíos',x.env]);
     var resto=(Number(x.m)||0)-(Number(x.com)||0)-(Number(x.env)||0); if(resto>0.5)lin.push(['Bonos y propinas',resto]);
-  }else if(q&&(q.lineas||[]).length){
-    q.lineas.forEach(function(l){lin.push([l.c,l.m]);});
+  }else if(secs){
+    lin=secs;
   }else lin.push(['Sueldo',x.m]);
   var totQ=lin.reduce(function(s,l){return s+(Number(l[1])||0);},0);
   var datos={persona:_eqNom(p),rol:p.rol,   /* (755) el recibo dice el nombre que se ve; el número sigue con la clave */periodo:x.qLbl?('Quincena '+(_eqQCorto(x.q)||x.qLbl)):'',lineas:lin,totQ:totQ,pago:Number(x.m)||0,
@@ -41734,48 +41743,124 @@ function eqRecibo(tipo,k){
     pendiente:(x.tipo!=='liq'&&q&&Number(q.saldo)>0.5)?Number(q.saldo):0};
   /* (749) El número correlativo: uno por pago, el mismo cada vez que se vuelve a armar (la base lo guarda). */
   var clave=x.tipo==='liq'?'liq|'+x.id:'sueldo|'+x.k;
-  Promise.resolve(_baseRpc('equipo_recibo_numero_directo',{p:{clave:clave,persona:p.persona}})).then(function(r){ datos.numero=Number(r&&r.numero)||0; },function(){ datos.numero=0; })
+  /* (817) Una liquidación de Red ya pagada no está más en las quincenas: su detalle lo arma la base desde la liquidación
+     (pedido por pedido con cliente y día, el bono con su cliente, cada propina). Solo si suma lo pagado. */
+  var traer=(x.tipo==='liq'&&lin!==secs)?Promise.resolve(_baseRpc('red_liquidacion_detalle',{p:{id:x.id}})).then(function(r){
+      if(!(r&&r.ok&&(r.lineas||[]).length))return;
+      var s2=_eqSecciones({lineas:r.lineas}), t2=s2.reduce(function(s,l){return s+(Number(l[1])||0);},0);
+      if(Math.abs(t2-(Number(x.m)||0))<1.5){ datos.lineas=s2; datos.totQ=t2; }
+    },function(){}):Promise.resolve();
+  traer.then(function(){ return _baseRpc('equipo_recibo_numero_directo',{p:{clave:clave,persona:p.persona}}); }).then(function(r){ datos.numero=Number(r&&r.numero)||0; },function(){ datos.numero=0; })
   .then(function(){ return _eqReciboDibujar(datos); }).then(function(blob){
-    var nombre='recibo-'+String(p.persona.split(' ')[0]).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'')+'-'+String(datos.fecha).replace(/\//g,'-')+'.png';
-    var file=null; try{ file=new File([blob],nombre,{type:'image/png'}); }catch(e){}
-    if(file&&navigator.canShare&&navigator.canShare({files:[file]})&&window.matchMedia('(max-width: 768px)').matches){
-      navigator.share({files:[file],title:'Recibo de pago · Maleu'}).catch(function(){});
-    }else{
-      var u=URL.createObjectURL(blob),a=document.createElement('a'); a.href=u; a.download=nombre; document.body.appendChild(a); a.click();
-      setTimeout(function(){URL.revokeObjectURL(u);a.remove();},2000); toast('Recibo descargado');
-    }
+    _eqCompartirImg(blob,'recibo-'+_eqArch(p)+'-'+String(datos.fecha).replace(/\//g,'-')+'.png','Recibo de pago · Maleu','Recibo descargado');
   }).catch(function(e){ toast('No pude armar el recibo: '+((e&&e.message)||'error'),5000); });
 }
 window.eqReciboDatos=null;
+/* (20/11/2026) La imagen de marca, en dos modos: RECIBO (después de pagar) y DETALLE (antes: «Compartir detalle»). Cada renglón
+   puede traer su detalle (`[texto, monto, [{t,s,m}]]`): pedido por pedido con cliente y día, el bono con su cliente, cada
+   propina. En DETALLE, si la persona tiene efectivo sin rendir, hace la cuenta: «Nos tenés que dar $X» o «Te pagamos $X».
+   El alto sale de armar la imagen dos veces: la primera solo mide. */
 function _eqReciboDibujar(R){
   window.eqReciboDatos=R;
-  var F='Montserrat, system-ui, sans-serif';
+  var F='Montserrat, system-ui, sans-serif', DET=R.modo==='detalle';
   var listo=(document.fonts&&document.fonts.load)?Promise.all([document.fonts.load('700 40px Montserrat'),document.fonts.load('500 28px Montserrat')]).catch(function(){}):Promise.resolve();
   return listo.then(function(){
-    var W=1080, n=R.lineas.length, H=860+n*76+(R.pago!==R.totQ?76:0)+(R.pendiente>0.5?64:0), c=document.createElement('canvas'); c.width=W; c.height=H;
-    var g=c.getContext('2d');
-    var CR='#F5F2EB',B='#331C1C',I2='#5C3A2A',I3='#7A4A4A',L='#E8DFC4';
-    g.fillStyle=CR; g.fillRect(0,0,W,H);
-    g.fillStyle='#fff'; _eqRR(g,48,48,W-96,H-96,28); g.fill();
-    g.fillStyle=B; _eqRR(g,48,48,W-96,170,28); g.fill(); g.fillRect(48,150,W-96,68);
-    g.fillStyle='#F2E8C7'; g.font='800 56px '+F; g.textBaseline='middle'; g.fillText('maleu',100,133);
-    g.textAlign='right'; g.font='600 26px '+F; g.fillStyle='#E8DFC4'; g.fillText('RECIBO'+(R.numero?' N° '+String(R.numero).padStart(4,'0'):' DE PAGO'),W-100,118); g.font='500 24px '+F; g.fillText(R.fecha,W-100,156);
-    g.textAlign='left'; var y=300;
-    g.fillStyle=B; g.font='700 44px '+F; g.fillText(R.persona,100,y);
-    y+=52; g.fillStyle=I3; g.font='500 28px '+F; g.fillText([R.rol,R.periodo].filter(Boolean).join('  ·  '),100,y);
-    y+=70; g.strokeStyle=L; g.lineWidth=2; g.beginPath(); g.moveTo(100,y); g.lineTo(W-100,y); g.stroke();
-    R.lineas.forEach(function(l){
-      y+=76; g.textAlign='left'; g.fillStyle=I2; g.font='500 30px '+F; g.fillText(_eqCorta(g,String(l[0]),W-460),100,y);
-      g.textAlign='right'; g.fillStyle=B; g.font='600 30px '+F; g.fillText(_eqP(l[1]),W-100,y);
-    });
-    y+=56; g.beginPath(); g.moveTo(100,y); g.lineTo(W-100,y); g.stroke();
-    if(R.pago!==R.totQ){ y+=64; g.textAlign='left'; g.fillStyle=I3; g.font='500 28px '+F; g.fillText('Total de la quincena',100,y); g.textAlign='right'; g.fillText(_eqP(R.totQ),W-100,y); }
-    y+=86; g.textAlign='left'; g.fillStyle=B; g.font='700 34px '+F; g.fillText('Pagado',100,y); g.textAlign='right'; g.font='800 52px '+F; g.fillText(_eqP(R.pago),W-100,y);
-    if(R.pendiente>0.5){ y+=64; g.textAlign='left'; g.fillStyle='#9A3412'; g.font='600 28px '+F; g.fillText('Queda pendiente '+_eqP(R.pendiente)+' de la quincena',100,y); }
-    y+=70; g.textAlign='left'; g.fillStyle=I3; g.font='500 26px '+F; g.fillText('Cuenta: '+R.cuenta+(R.ref?'  ·  '+R.ref:''),100,y);
-    g.textAlign='center'; g.fillStyle='#A89880'; g.font='500 22px '+F; g.fillText('Maleu · comprobante interno de pago',W/2,H-86);
+    var W=1080, CR='#F5F2EB',B='#331C1C',I2='#5C3A2A',I3='#7A4A4A',L='#E8DFC4',ROJO='#9A3412';
+    var c=document.createElement('canvas'); c.width=W; c.height=10;
+    function lay(g,dib,H){
+      function T(t,x,y,font,col,al){ if(!dib)return; g.font=font+' '+F; g.fillStyle=col; g.textAlign=al||'left'; g.fillText(t,x,y); }
+      function raya(y){ if(!dib)return; g.strokeStyle=L; g.lineWidth=2; g.beginPath(); g.moveTo(100,y); g.lineTo(W-100,y); g.stroke(); }
+      function corta(t,font,max){ g.font=font+' '+F; return _eqCorta(g,String(t),max); }
+      function subs(arr,y){
+        (arr||[]).forEach(function(it){
+          y+=50;
+          T(corta(it.t+(it.s?'  ·  '+it.s:''),'500 25px',W-470),132,y,'500 25px',I3);
+          if(it.m!=null)T(_eqP(it.m),W-100,y,'500 25px',I3,'right');
+        });
+        return y+((arr||[]).length?14:0);
+      }
+      if(dib){
+        g.textBaseline='middle';
+        g.fillStyle=CR; g.fillRect(0,0,W,H);
+        g.fillStyle='#fff'; _eqRR(g,48,48,W-96,H-96,28); g.fill();
+        g.fillStyle=B; _eqRR(g,48,48,W-96,170,28); g.fill(); g.fillRect(48,150,W-96,68);
+      }
+      T('maleu',100,133,'800 56px','#F2E8C7');
+      T(DET?'DETALLE DE QUINCENA':('RECIBO'+(R.numero?' N° '+String(R.numero).padStart(4,'0'):' DE PAGO')),W-100,118,'600 26px','#E8DFC4','right');
+      T(R.fecha,W-100,156,'500 24px','#E8DFC4','right');
+      var y=300;
+      T(R.persona,100,y,'700 44px',B);
+      y+=52; T([R.rol,R.periodo].filter(Boolean).join('  ·  '),100,y,'500 28px',I3);
+      y+=70; raya(y);
+      R.lineas.forEach(function(l){
+        y+=76; T(corta(l[0],'500 30px',W-460),100,y,'500 30px',I2); T(_eqP(l[1]),W-100,y,'600 30px',B,'right');
+        y=subs(l[2],y);
+      });
+      y+=56; raya(y);
+      if(!DET){
+        if(R.pago!==R.totQ){ y+=64; T('Total de la quincena',100,y,'500 28px',I3); T(_eqP(R.totQ),W-100,y,'500 28px',I3,'right'); }
+        y+=86; T('Pagado',100,y,'700 34px',B); T(_eqP(R.pago),W-100,y,'800 52px',B,'right');
+        if(R.pendiente>0.5){ y+=64; T('Queda pendiente '+_eqP(R.pendiente)+' de la quincena',100,y,'600 28px',ROJO); }
+        y+=70; T('Cuenta: '+R.cuenta+(R.ref?'  ·  '+R.ref:''),100,y,'500 26px',I3);
+      }else{
+        y+=64; T('Total de la quincena',100,y,'500 28px',I3); T(_eqP(R.totQ),W-100,y,'500 28px',I3,'right');
+        if(R.pago>0.5){ y+=56; T('Ya cobraste',100,y,'500 28px',I3); T('− '+_eqP(R.pago),W-100,y,'500 28px',I3,'right'); }
+        y+=86; T(R.estado==='curso'?'A cobrar hasta hoy':'A cobrar',100,y,'700 34px',B); T(_eqP(R.falta),W-100,y,'800 52px',B,'right');
+        if(R.sinRendir>0.5){
+          var neto=(Number(R.falta)||0)-R.sinRendir;
+          y+=56; raya(y);
+          y+=76; T('Efectivo que tenés sin rendir',100,y,'600 30px',I2); T('− '+_eqP(R.sinRendir),W-100,y,'600 30px',B,'right');
+          y=subs(R.sinRendirPeds,y);
+          y+=40; raya(y);
+          y+=86; T(neto<-0.5?'Nos tenés que dar':'Te pagamos',100,y,'700 34px',neto<-0.5?ROJO:B);
+          T(_eqP(Math.abs(neto)),W-100,y,'800 52px',neto<-0.5?ROJO:B,'right');
+        }
+      }
+      if(dib){ g.textAlign='center'; g.fillStyle='#A89880'; g.font='500 22px '+F; g.fillText(DET?'Maleu · detalle de tu quincena, antes de pagar':'Maleu · comprobante interno de pago',W/2,H-86); }
+      return y;
+    }
+    var H=Math.max(860,lay(c.getContext('2d'),false)+190); c.height=H;
+    lay(c.getContext('2d'),true,H);
     return new Promise(function(ok,mal){ c.toBlob(function(b){ b?ok(b):mal(new Error('sin imagen')); },'image/png'); });
   });
+}
+/* (20/11/2026) Los renglones de una quincena con su detalle, para la imagen. Sin números de pedido sueltos: cliente y día. */
+function _eqSecciones(q){
+  return (q.lineas||[]).map(function(l){
+    var sub=(l.det||[]).map(function(it){
+      var t,s;
+      if(l.k==='dias'){ t='Repartió el '+String(it.dia||''); s=it.n+(Number(it.n)===1?' pedido entregado':' pedidos entregados'); }
+      else if(l.k==='bonos'){ t=String(it.c||''); s='volvió el '+String(it.dia||''); }
+      else { t=String(it.c||''); s=String(it.dia||it.entregado||''); }
+      return {t:t,s:s,m:it.m!=null?Number(it.m):(l.unit?Number(l.unit):null)};
+    });
+    return [l.c,Number(l.m)||0,sub];
+  });
+}
+/* La imagen: en el celular abre compartir; en la compu se descarga. */
+function _eqCompartirImg(blob,nombre,titulo,okTxt){
+  var file=null; try{ file=new File([blob],nombre,{type:'image/png'}); }catch(e){}
+  if(file&&navigator.canShare&&navigator.canShare({files:[file]})&&window.matchMedia('(max-width: 768px)').matches){
+    navigator.share({files:[file],title:titulo}).catch(function(){});
+  }else{
+    var u=URL.createObjectURL(blob),a=document.createElement('a'); a.href=u; a.download=nombre; document.body.appendChild(a); a.click();
+    setTimeout(function(){URL.revokeObjectURL(u);a.remove();},2000); toast(okTxt);
+  }
+}
+function _eqArch(p){ return String(p.persona.split(' ')[0]).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,''); }
+/* (20/11/2026) «Compartir detalle»: la quincena como se ve en pantalla, ANTES de pagar (también vencida y sin pagar). */
+function eqCompartirDetalle(key){
+  var p=_eqDe(EQ.abierto); if(!p)return;
+  var q=(p.quincenas||[]).filter(function(z){return String(z.key)===String(key);})[0]; if(!q)return;
+  var lin=_eqSecciones(q), totQ=lin.reduce(function(s,l){return s+(Number(l[1])||0);},0), pag=Number(q.pagado)||0;
+  var falta=q.saldo!=null&&q.estado!=='curso'?Math.max(0,Number(q.saldo)||0):Math.max(0,totQ-pag), sr=Number(p.sinRendir)||0;
+  var d=new Date(), f=String(d.getDate()).padStart(2,'0')+'/'+String(d.getMonth()+1).padStart(2,'0')+'/'+d.getFullYear();
+  var datos={modo:'detalle',persona:_eqNom(p),rol:p.rol,periodo:'Quincena '+(_eqQCorto(q.key)||q.corto||q.lbl||''),lineas:lin,totQ:totQ,pago:pag,falta:falta,
+    estado:q.estado,fecha:f,sinRendir:sr>0.5?sr:0,
+    sinRendirPeds:sr>0.5?(p.sinRendirPeds||[]).map(function(it){return {t:String(it.c||''),s:String(it.dia||''),m:Number(it.m)||0};}):[]};
+  _eqReciboDibujar(datos).then(function(blob){
+    _eqCompartirImg(blob,'detalle-'+_eqArch(p)+'-'+String(q.key||'').toLowerCase()+'.png','Detalle de tu quincena · Maleu','Detalle descargado');
+  }).catch(function(e){ toast('No pude armar el detalle: '+((e&&e.message)||'error'),5000); });
 }
 function _eqRR(g,x,y,w,h,r){g.beginPath();g.moveTo(x+r,y);g.arcTo(x+w,y,x+w,y+h,r);g.arcTo(x+w,y+h,x,y+h,r);g.arcTo(x,y+h,x,y,r);g.arcTo(x,y,x+w,y,r);g.closePath();}
 function _eqCorta(g,t,max){ if(g.measureText(t).width<=max)return t; while(t.length>1&&g.measureText(t+'…').width>max)t=t.slice(0,-1); return t+'…'; }
