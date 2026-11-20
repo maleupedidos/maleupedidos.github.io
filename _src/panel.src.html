@@ -23349,9 +23349,11 @@ function _orSegHTML(p,pr,rowUid,ini){
   var num=function(x){ return String(Math.round((Number(x)||0)*1000)/1000).replace('.',','); };
   var b=function(m,txt,sub,cls){ return '<button type="button" class="or-seg-b'+(ini.modo===m?' on':'')+(cls?' '+cls:'')+'" data-m="'+esc(m)+'" onclick="orSeg(this)">'+esc(txt)+(sub?'<small>'+esc(sub)+'</small>':'')+'</button>'; };
   var h='<div class="or-seg" data-row="'+rowUid+'" data-q="'+q+'">';
-  /* (19/11/2026, #2514) «Libre» para ESTE pedido: lo disponible + lo que él mismo ya tiene reservado en ese freezer. */
-  var _mio=(pr&&pr.or&&pr.or.w&&typeof pr.or.w==='object')?pr.or.w:{};
-  deps.forEach(function(d){ var v=(Number(disp[d.id])||0)+(Number(_mio[d.id])||0); h+=b('f:'+d.id,_pedDepCorto(d.nombre||d.id),'libre '+num(v)+(carne?' kg':''),v<q?'sin':''); });
+  /* (19/11/2026, #2514) «Libre» para ESTE pedido. (20/11/2026, Marcela Thomas: Ustariz decía «libre 2» con 0 físicas) No es
+     `pdd` + lo suyo: `pdd` viene recortado en 0 y, si el pedido reservó más de lo que hay, el recorte se come el negativo y al
+     sumarle lo propio aparece stock que no existe. Es físico − (lo reservado − lo de este pedido), con piso 0 (_origenLibrePara). */
+  var _mio=(pr&&pr.or&&pr.or.w&&typeof pr.or.w==='object')?pr.or.w:{}, _lib=_origenLibrePara(pr.a,_mio)||{};
+  deps.forEach(function(d){ var v=(d.id in _lib)?_lib[d.id]:(Number(disp[d.id])||0)+(Number(_mio[d.id])||0); h+=b('f:'+d.id,_pedDepCorto(d.nombre||d.id),'libre '+num(v)+(carne?' kg':''),v<q?'sin':''); });
   var prov=_orProvDe(pr.a), oca=_orOcAbierta(prov);
   /* Lo que se vende solo con stock (PRODUCTOS_SOLO_STOCK, 800) no se pide al proveedor por cliente: OC no se ofrece. */
   if(_esSoloStock(pr.a))h+='<button type="button" class="or-seg-b sin" data-m="oc" disabled title="Sale del freezer · se repone en cajas">OC<small>Sale del freezer · se repone en cajas</small></button>';
@@ -23583,6 +23585,18 @@ function setProvAll(uid, value){
   box.querySelectorAll('select[data-role="prov"]').forEach(function(s){s.value=value||'';});
 }
 
+/* (20/11/2026) Lo libre de un producto en cada freezer PARA UN PEDIDO: físico − (reservado − lo que ya es de ese pedido),
+   con piso 0, de `pd` y `pr` sin recortar. `mio` = {freezer: cant} de ese pedido. null si no hay datos de Productos. */
+function _origenLibrePara(a,mio){
+  var l=(D&&Array.isArray(D.stock))?D.stock:[], x=null;
+  for(var i=0;i<l.length;i++){ if(l[i]&&l[i].a===a){ x=l[i]; break; } }
+  if(!x||!x.pd||typeof x.pd!=='object')return null;
+  var out={}, pr=(x.pr&&typeof x.pr==='object')?x.pr:{}, m=mio||{};
+  Object.keys(Object.assign({},x.pd,pr)).forEach(function(k){
+    out[k]=Math.max(0,Math.round(((Number(x.pd[k])||0)-((Number(pr[k])||0)-(Number(m[k])||0)))*1000)/1000);
+  });
+  return out;
+}
 /* (544) Lo libre (fisico menos reservado) de un producto en cada freezer, de la tabla Productos (`pdd`). */
 function _origenDisp(a){
   var l=(D&&Array.isArray(D.stock))?D.stock:[], x=null;
@@ -23615,10 +23629,10 @@ function _repoCargar(forzar){
     .catch(function(){ if(!_repoEC.d)_repoEC.d={}; })
     .then(function(){ _repoEC.cargando=false; _repoPintar(); });
 }
-function _origenFaltan(productos){
+function _origenFaltan(productos,mios){
   var out=[];
   (productos||[]).forEach(function(x){
-    if(!(x.d>0))return; var d=_origenDisp(x.a); if(!d)return;
+    if(!(x.d>0))return; var d=_origenLibrePara(x.a,(mios||{})[x.a])||_origenDisp(x.a); if(!d)return;
     var libre=0; Object.keys(d).forEach(function(k){ libre+=Math.max(0,Number(d[k])||0); });
     var f=Math.round((x.d-libre)*1000)/1000;
     if(f>0)out.push('\u2022 '+(PN[x.a]||x.a)+': faltan '+f+' (hay '+(Math.round(libre*1000)/1000)+' libres)');
@@ -23777,7 +23791,10 @@ function confirmarOrigen(btn){
   });
   if(error){toast('Cantidad no coincide en '+error);return;}
   if(repError){toast(repError,6000);return;}
-  var _faltan=_origenFaltan(productos);
+  /* (20/11/2026) lo que este pedido ya tiene en cada freezer no cuenta en contra */
+  var _mios={}; (function(){ var pp=(D&&D.pedidos||[]).filter(function(q){return q&&q.h===hoja&&String(q.n)===String(id);})[0];
+    ((pp&&pp.p)||[]).forEach(function(it){ if(it&&it.a&&it.or&&it.or.w&&typeof it.or.w==='object')_mios[it.a]=it.or.w; }); })();
+  var _faltan=_origenFaltan(productos,_mios);
   var _auto=btn.dataset.auto==='1'; delete btn.dataset.auto;
   var _estEl=document.getElementById('orest-'+uid);
   var _est=function(t,c){ if(_estEl){ _estEl.className='or-est'+(c?' '+c:''); _estEl.textContent=t; } };
