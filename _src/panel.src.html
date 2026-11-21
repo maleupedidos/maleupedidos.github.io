@@ -12463,7 +12463,9 @@ function go(p){
      Ver el bloque _refrescarSiEstaViejo. */
   /* (18/11/2026, toques) Después del cuadro del toque: es un refresco de fondo (23-36 ms con la CPU de un celular).
      La tab se muestra primero. */
-  requestAnimationFrame(function(){ setTimeout(function(){ try{ if(typeof window._refrescarSiEstaViejo==='function') window._refrescarSiEstaViejo(); }catch(e){} },0); });
+  /* (21/11/2026) Si desde que la dejaste alguien escribio (vos o la base avisó), se relee aunque no pasaron 90 s. */
+  var _goSucia=(typeof _tabSucia==='object'&&_tabSucia&&!!_tabSucia[p])?'sucia':undefined;
+  requestAnimationFrame(function(){ setTimeout(function(){ try{ if(typeof window._refrescarSiEstaViejo==='function') window._refrescarSiEstaViejo(_goSucia); }catch(e){} },0); });
   /* Los datos se piden por tab, no de arranque: ver _pedirD(). */
   if(_tabUsaD(p))_pedirD();
   /* Y las despegadas piden LO SUYO (27/9/2026). `_pedirD` hace dos cosas:
@@ -14296,7 +14298,9 @@ var _REFRESCO_SUBAPP = {
           fn:  function(){ return abaRefresh(true); } },
   miportal: { nom: 'Mi Portal', g: 'lo',
           hay: function(){ return typeof refreshPortal === 'function'; },
-          fn:  function(){ return refreshPortal(); } }
+          fn:  function(){ return refreshPortal(); },
+          /* (21/11/2026) Al entrar despues de una escritura: lo mismo que el ↻, sin el cartel «Actualizado». */
+          sucia: function(){ return (typeof loadDashboard === 'function') ? loadDashboard() : refreshPortal(); } }
 };
 
 /* La tab abierta. Sale de `cur` y no del DOM a proposito: `go()` llama al
@@ -20077,12 +20081,29 @@ function _pfAplicar(r){
 /* Una escritura confirmada invalida las cuatro vistas operativas, incluso si estan
    cerradas. Solo se relee la visible; se conserva lo pendiente al cambiar de tab. */
 var _ordenCambios={}, _ordenVistaVuelo={}, _ordenVistaTimer=null;
+/* LA TAB DE AL LADO NO QUEDA VIEJA (21/11/2026, auditoría «al instante»). Las cinco vistas de arriba son las únicas que
+   se releían al volver a ellas despues de una escritura; Mi Portal, Ventas, Inicio, Productos, Clientes, Equipo… solo
+   si pasaban 90 s (`_REFRESCO_MIN_MS`) o si la señal llegaba con la tab A LA VISTA (con la tab escondida, su en vivo
+   no hace nada y no lo anota). Cobrabas en Cobranza, ibas a Caja o a Inicio, y estaba igual hasta el ↻.
+   Ahora toda escritura confirmada y toda señal de la base dejan SUCIAS las demas tabs, y `go()` le pide a
+   `_refrescarSiEstaViejo` que la relea al entrar aunque no hayan pasado los 90 s (las protecciones de lo recien
+   escrito —`_pedidosProteger`, `_movLocales`, `_saldoLocal`— siguen igual). `window.__tabSucia`. */
+var _tabSucia={};
+var _TABS_TODAS=['inicio','pedidos','pedidoshome','mireparto','ruta','estancias','miportal','catering','stock','busqueda',
+  'proveedores','caja','egresos','equipo','ventas','resultados','evolucion','planificacion','ajustes','resumen'];
+function _tabsEnsuciar(){
+  var a=(typeof _tabActual==='function')?_tabActual():cur, t=Date.now();
+  _TABS_TODAS.forEach(function(k){ if(k!==a)_tabSucia[k]=t; });
+  try{ window.__tabSucia=_tabSucia; }catch(e){}
+}
 function _ordenSenalPendiente(canal){
   var tabs={'erp:pedidos':['pedidos','caja','egresos','ruta','busqueda'],
     'erp:stock':['ruta','busqueda'],'erp:compras':['ruta','busqueda'],'erp:pagos':['caja','egresos','busqueda']};
   (tabs[canal]||[]).forEach(function(k){_ordenCambios[k]=(_ordenCambios[k]||0)+1;});
+  if(typeof _tabsEnsuciar==='function')_tabsEnsuciar();
 }
 function _ordenConfirmada(body,r){
+  if(r&&r.ok&&typeof _tabsEnsuciar==='function')_tabsEnsuciar();
   if(!r||!r.ok||r.baseEscribio!==true)return;
   ['pedidos','caja','egresos','ruta','busqueda'].forEach(function(k){_ordenCambios[k]=(_ordenCambios[k]||0)+1;});
   clearTimeout(_ordenVistaTimer);_ordenVistaTimer=setTimeout(_ordenVistaPedir,150);
@@ -47573,8 +47594,12 @@ function _vListaClick(e){
        uno en vuelo, ni con un cuadro abierto): no pasa por el freno de 90 s,
        que es para el volcado de ~900 KB. */
     var _tabA = (typeof _tabActual === 'function') ? _tabActual() : '';
+    /* (21/11/2026) Se relee: deja de estar sucia (ver `_tabsEnsuciar`). Si un candado de arriba cortó, sigue sucia. */
+    try{ if(typeof _tabSucia === 'object' && _tabSucia) delete _tabSucia[_tabA]; }catch(eS){}
     var _saA = _REFRESCO_SUBAPP[_tabA];
     if(_saA && _saA.auto && _saA.hay()){ try{ _saA.auto(); }catch(eA){} return; }
+    /* Una sub-app sucia con su relectura callada (Mi Portal: sin el cartel «Actualizado» del ↻). */
+    if(forzar === 'sucia' && _saA && _saA.sucia && _saA.hay()){ try{ _saA.sucia(); }catch(eSu){} return; }
     /* Lo que se refresca es lo que se esta MIRANDO. Estando en una sub-app,
        `loadRapido()` pedia ~900 KB del panel que esa pantalla no dibuja y
        dejaba sus propios datos viejos: eso es "volvi al celular y no se
