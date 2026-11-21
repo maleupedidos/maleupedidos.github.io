@@ -17651,7 +17651,9 @@ function _pedOrigenChip(p){
   var oTxt=nOc?(nOc+' OC'):'', rTxt=nRep?'reposición':'';
   return [dTxt,oTxt,rTxt].filter(Boolean).join(' + ');
 }
-function _pedDepHTML(p,homeOnly){
+/* (21/11/2026, Tadeo 19:59) `soloTexto`: en la ficha de un pedido ENTREGADO «De qué freezer salió» se lee, no se toca
+   («es bastante probable que sin querer toque Moresco»). La corrección va a «Más opciones», con confirmación. */
+function _pedDepHTML(p,homeOnly,soloTexto){
   _pedConOr(p);
   var deps=_pedDeps();
   /* Con UN solo deposito no hay nada que preguntar ni nada que mostrar: la
@@ -17696,8 +17698,8 @@ function _pedDepHTML(p,homeOnly){
     /* (734, 16/11/2026) Entregado: \u00abSali\u00f3 de\u00bb lo dice el Kardex (lo que de verdad sali\u00f3 de cada freezer), y un admin lo
        corrige ac\u00e1 \u2014 el stock vuelve al freezer de antes y sale del elegido, atado al pedido. Antes dec\u00eda \u00abus\u00e1 un traspaso\u00bb. */
     var _k=String(p.h)+'|'+String(p.n), _adm=typeof SESSION!=='undefined'&&SESSION&&SESSION.rol==='admin';
-    h+='<div class="ped-dep-n" data-salio="'+_pedDepEsc(_k)+'">Ya se entreg\u00f3. Mirando de qu\u00e9 freezer sali\u00f3\u2026</div>';
-    if(_adm){
+    h+='<div class="ped-dep-n" data-salio="'+_pedDepEsc(_k)+'"'+(soloTexto?' data-solo="1"':'')+'>Ya se entreg\u00f3. Mirando de qu\u00e9 freezer sali\u00f3\u2026</div>';
+    if(_adm&&!soloTexto){
       h+='<div class="ped-dep-b">';
       deps.forEach(function(d){
         h+='<button type="button" class="ped-dep-x" data-dep="'+_pedDepEsc(d.id)+'" onclick="pedSalidaCorregir(\''+_pedDepEsc(_k)+'\',\''+_pedDepEsc(d.id)+'\',this)">'+_pedDepEsc(_pedDepCorto(d.nombre||d.id))+'</button>';
@@ -17718,7 +17720,8 @@ function _pedSalioPintar(k,d){
     :'Sali\u00f3 de '+(ks.length===1?_pedDepNombre(ks[0]):ks.map(function(x){ return _dec(Number(sal[x])||0,3).replace(/,?0+$/,'')+' '+_pedDepNombre(x); }).join(' \u00b7 '))
      +((d&&d.puedeCorregir)?'. Si sali\u00f3 de otro, toc\u00e1 el correcto: el stock se corrige solo.':'.');
   document.querySelectorAll('[data-salio="'+String(k).replace(/["\\]/g,'')+'"]').forEach(function(el){
-    el.textContent=txt;
+    /* (21/11/2026) La línea de solo lectura no invita a tocar: los botones están en «Más opciones». */
+    el.textContent=el.hasAttribute('data-solo')?txt.replace(/\. Si sali\u00f3 de otro, toc\u00e1 el correcto: el stock se corrige solo\.$/,'.'):txt;
     var b=el.parentNode&&el.parentNode.querySelectorAll('button.ped-dep-x[data-dep]');
     if(b)for(var i=0;i<b.length;i++)b[i].classList.toggle('on',ks.length===1&&b[i].getAttribute('data-dep')===ks[0]);
   });
@@ -25807,23 +25810,60 @@ function _fichaCobroHTML(p,tot,d){
   }
   if(pe+pt>0)L.push(['Propina'+(cob?'':' anotada (falta cobrar)')+(rep1?' para '+rep1:'')+(pe>0&&pt>0?' (efectivo y transferencia)':(pt>0?' (transferencia)':'')),_ars(pe+pt)]);
   if(ent){
-    var fx=String((d&&d.entregado)||'').slice(0,16)||[_dia(p.fex||''),p.hx?_e(p.hx):''].filter(Boolean).join(' ');
+    var fx=String((d&&d.entregado)||'').slice(0,16).replace(/^(\d{2}\/\d{2})\/\d{4}/,'$1')||[_dia(p.fex||''),p.hx?_e(p.hx):''].filter(Boolean).join(' ');
     L.push(['Entregó '+(rep||'—'),fx,'txt']);
   }
-  var cta=String((d&&d.cuenta)||'').trim();
-  if(tr>0&&cta)L.push(['Transferencia a',_e(cta),'txt']);
+  /* (21/11/2026) Cómo fue el cobro: cuenta, quién y cuándo (antes, «Transferencia a galicia» con el id y nada más). */
+  if(cob){ var _lc=_fichaCobroLinea(p,d); if(_lc)L.push(['Cobro',_e(_lc),'txt']); }
   if(!_FCB[k]&&!_FCB[k+'|pidiendo'])_fichaCobroPedir(p,k);
   return '<div class="ofx-cobro" id="ofxCobro" data-k="'+_e(k)+'"><div class="ofx-cobro-t">Cobro</div>'
     +L.map(function(x){return '<div class="ofx-cobro-r'+(x[2]?' '+x[2]:'')+'"><span>'+x[0]+'</span><b>'+x[1]+'</b></div>';}).join('')+'</div>';
 }
+/* (21/11/2026, Tadeo 19:59: «dice cobrado transferencia, pero no se sabe dónde») CÓMO FUE EL COBRO, en una línea: el medio,
+   la CUENTA (por su nombre de Caja), quién cobró y cuándo. «Transferencia a Galicia Maleu · Santos · 21/11 19:41». En
+   efectivo, la billetera es la de quien cobró. `d` es lo de `pedido_cobro_pantalla` (cuenta = id, cobradoPor, cobro). */
+function _fichaCobroLinea(p,d){
+  if(!p||p.ep!=='Cobrado')return '';
+  var ef=Number(p.ef)||0, tr=Number(p.tr)||0;
+  var medio=tr>0&&ef>0?'Efectivo y transferencia':(tr>0?'Transferencia':(ef>0?'Efectivo':String(p.fp||'').trim()||'Cobrado'));
+  var cta=String((d&&d.cuenta)||'').trim(), ctaN='';
+  if(cta&&cta!=='efectivo'){ try{ (_cajaCuentas()||[]).forEach(function(c){ if(c&&String(c.id)===cta)ctaN=c.nombre||''; }); }catch(e){} ctaN=ctaN||cta; }
+  var quien=String((d&&d.cobradoPor)||'').trim().split(' ')[0];
+  var cuando=String((d&&d.cobro)||'').replace(/^(\d{2}\/\d{2})\/\d{4}/,'$1');
+  var txt=medio+(ctaN&&tr>0?' a '+ctaN:'')+(ef>0&&!tr&&quien?' · billetera de '+quien:'');
+  return [txt,(quien&&!(ef>0&&!tr)?quien:''),cuando].filter(Boolean).join(' · ');
+}
+/* (21/11/2026) RESPALDO: `pedido_cobro_pantalla` lee `o.collected_by_person` de `sales_order_real`, que no tiene esa
+   columna, y contesta 400 SIEMPRE: la ficha nunca recibió cuenta, quién cobró, billete ni vuelto. Hasta que se corrija la
+   función (migración), lo mínimo sale de la tabla `sales_order` (authenticated la lee: has_column_privilege). */
+function _fichaCobroDirecto(p){
+  return Promise.resolve(typeof _sbPermiso==='function'?_sbPermiso(true):null).then(function(sb){
+    if(!sb||!sb.token||!sb.url)throw new Error('sin permiso de la base');
+    var q='select=collection_account,collected_by_person,collector,collected_at,cash_received,courier,delivered_at,source_row'
+      +'&channel=eq.'+encodeURIComponent(p.h)+'&order_number=eq.'+encodeURIComponent(String(p.n))+'&deleted_at=is.null&order=source_row.desc&limit=5';
+    return fetch(sb.url+'/rest/v1/sales_order?'+q,{headers:{apikey:sb.key,Authorization:'Bearer '+sb.token}})
+      .then(function(r){ if(!r.ok)throw new Error('sb '+r.status); return r.json(); });
+  }).then(function(L){
+    L=Array.isArray(L)?L:[];
+    var o=L.filter(function(x){ return Number(x.source_row)===(Number(p.r)||0); })[0]||L[0];
+    if(!o)return null;
+    var ts=function(v){ var q=_sbArgPartes(v); return q&&q.f?(q.f+(q.h?' '+q.h:'')):null; };
+    var bil=Number(o.cash_received)||0;
+    return {ok:true,cuenta:String(o.collection_account||''),cobradoPor:String(o.collected_by_person||o.collector||''),cobro:ts(o.collected_at),
+      billete:bil||null,vuelto:bil>0?Math.max(0,bil-(Number(p.ef)||0)-(Number(p.pef)||0)):null,repartidor:String(o.courier||''),entregado:ts(o.delivered_at),directo:true};
+  });
+}
 function _fichaCobroPedir(p,k){
   _FCB[k+'|pidiendo']=1;
-  _baseRpc('pedido_cobro_pantalla',{p:{h:p.h,n:String(p.n),r:Number(p.r)||0}}).then(function(d){
+  _baseRpc('pedido_cobro_pantalla',{p:{h:p.h,n:String(p.n),r:Number(p.r)||0}}).catch(function(){ return _fichaCobroDirecto(p); }).then(function(d){
     delete _FCB[k+'|pidiendo'];
     if(!d||d.nada)return;
     _FCB[k]=d;
     var box=document.getElementById('ofxCobro');
     if(box&&box.getAttribute('data-k')===k){ var t=document.createElement('div'); t.innerHTML=_fichaCobroHTML(p,_pedTotalSinPropina(p),d); if(t.firstChild)box.replaceWith(t.firstChild); }
+    /* (21/11/2026) El chip de arriba también dice cómo fue el cobro, apenas llega. */
+    var ch=document.getElementById('ofxChipCob');
+    if(ch&&ch.getAttribute('data-k')===k){ var lc=_fichaCobroLinea(p,d); if(lc)ch.textContent='Cobrado · '+lc; }
   },function(){ delete _FCB[k+'|pidiendo']; _FCB[k]=null; });
 }
 /* (18/11/2026) LO QUE SALE EL PEDIDO, SIN LA PROPINA. En Home, Pilar y Clubes la base guarda en `$` (billed_amount) lo
@@ -48466,10 +48506,11 @@ if('serviceWorker' in navigator){
     else if(ent){eCls='ok';var _fx=_dia(p.fex||'');eTxt='Entregado'+(_fx?' el '+_fx:'')+(p.hx?' · '+_e(p.hx)+' h':'');}
     else{eCls='pend';var _fd=_dia(p.dee||'');eTxt=''+(p.es==='Reservado'?'Reservado':'Para entregar')+(_fd?' el '+_fd:'');}
     var cTxt, cCls;
-    if(cob){cCls='ok';cTxt='Cobrado'+(p.fp?' · '+_e(p.fp):'');}
+    var _kCob=p.h+'|'+p.n+'|'+(Number(p.r)||0);
+    if(cob){cCls='ok';var _lcC=(p.h!=='Red'&&_FCB[_kCob])?_fichaCobroLinea(p,_FCB[_kCob]):'';cTxt='Cobrado'+(_lcC?' · '+_e(_lcC):(p.fp?' · '+_e(p.fp):''));}
     else if(canc){cCls='';cTxt='';}
     else{cCls='pend';cTxt='Sin cobrar'+(p.fp?' · '+_e(p.fp):'');}
-    html+='<div class="ofx-est"><span class="ofx-pill '+eCls+'">'+eTxt+'</span>'+(cTxt?'<span class="ofx-pill '+cCls+'">'+cTxt+'</span>':'')+'</div>';
+    html+='<div class="ofx-est"><span class="ofx-pill '+eCls+'">'+eTxt+'</span>'+(cTxt?'<span class="ofx-pill '+cCls+'"'+(cob?' id="ofxChipCob" data-k="'+_e(_kCob)+'"':'')+'>'+cTxt+'</span>':'')+'</div>';
     /* (15/11/2026, 724) EL BENEFICIO DE EMPLEADO: si el cliente es alguien del equipo con beneficio (nombre o teléfono). */
     var _bfG=_fichaBenef(p);
     if(_bfG&&!canc){
@@ -48486,8 +48527,9 @@ if('serviceWorker' in navigator){
     if(dir)html+='<div class="ofx-dato"><i>'+_oIco('pin')+'</i><span>'+_e(dir)+'</span></div>';
     html+='<div class="ofx-dir-marca" id="ofxDirMarca" hidden></div>';   /* (770) la ficha dice otra casa: lo llena identEnFicha */
     if(tel){
-      html+='<div class="ofx-dato"><i>'+_oIco('tel')+'</i><span><a class="ord-tel" href="https://wa.me/549'+tel+'" target="_blank" rel="noopener">'+tel+'</a>'
-        +'<button class="ord-tel-mini" onclick="ordTelefono(\''+_telArg[0]+'\',\''+_telArg[1]+'\',\''+_telArg[2]+'\',\''+tel+'\')">cambiar</button></span></div>';
+      /* (21/11/2026, Tadeo: «el botón de cambiar el teléfono se usa muy de vez en cuando») El número a la vista; tocarlo
+         llama (y mantenerlo apretado lo copia). «Cambiar teléfono» va a «Más opciones». */
+      html+='<div class="ofx-dato"><i>'+_oIco('tel')+'</i><span><a class="ord-tel" href="tel:+549'+tel+'">'+tel+'</a></span></div>';
     }else{
       html+='<div class="ofx-dato"><i>'+_oIco('tel')+'</i><span><button class="ord-tel-add" onclick="ordTelefono(\''+_telArg[0]+'\',\''+_telArg[1]+'\',\''+_telArg[2]+'\',\'\')">Agregar teléfono</button></span></div>';
     }
@@ -48541,7 +48583,9 @@ if('serviceWorker' in navigator){
     /* (19/11/2026, Tadeo con el #2521) UN SOLO LUGAR PARA EL FREEZER: «De qué freezer sale» va arriba y vale para todo el
        pedido; lo de cada producto queda plegado en «Cambiar por producto». Y nada se guarda al tocar: se marca, y abajo
        queda fijo «Confirmar cambios (N)» (`_ofx*`, más abajo). */
-    var _ofxDepH=''; try{ _ofxDepH=_pedDepHTML(p,false)||''; }catch(_eD0){}
+    /* (21/11/2026) Entregado: «Salió de Ustariz» como texto; corregirlo está en «Más opciones», con confirmación. */
+    /* Cancelado: no sale de ningún freezer; elegirlo no sirve. */
+    var _ofxDepH=''; try{ _ofxDepH=canc?'':(_pedDepHTML(p,false,ent)||''); }catch(_eD0){}
     html+=_ofxDepH;
     var _ofxEd=!!(p&&Array.isArray(p.p)&&p.p.length&&p.es!=='Cancelado'&&p.es!=='Entregado'&&!_pedDepCerrado(p));
     if((_ofxEd||_origenEditable(p))&&typeof _origenEditorHTML==='function'){
@@ -48667,6 +48711,20 @@ if('serviceWorker' in navigator){
       masB+='<button class="ord-btn" onclick="cobroCambiar(\''+p.h+'\',\''+p.n+'\','+(p.r||0)+')">Cambiar fecha y hora del cobro</button>';
       masB+='<button class="ord-btn danger" onclick="deshacerCobro(\''+p.h+'\',\''+p.n+'\','+(p.r||0)+')">Deshacer el cobro</button>';
     }
+    /* (21/11/2026, Tadeo 19:59: «usar la cabeza: pensar qué está bueno que aparezca en la ficha de un pedido») LO RARO EN ESTE
+       ESTADO, ACÁ: nada se borra, solo deja de estar a la vista. */
+    if(!canc&&tel)masB+='<button class="ord-btn" onclick="ordTelefono(\''+_telArg[0]+'\',\''+_telArg[1]+'\',\''+_telArg[2]+'\',\''+tel+'\')">Cambiar teléfono</button>';
+    if(ent&&!canc&&p.h!=='Red'&&p.n&&p.n!=='-'&&typeof SESSION!=='undefined'&&SESSION&&SESSION.rol==='admin'&&_pedDeps().length>1){
+      var _dCorr=''; try{ _dCorr=(_pedDepHTML(p,false,false)||'').replace(/onclick="pedSalidaCorregir\(/g,'onclick="if(confirm(\'¿Cambiar de qué freezer salió? Mueve el stock: vuelve al freezer de antes y sale del que elijas.\'))pedSalidaCorregir('); }catch(_eDc){}
+      if(_dCorr){
+        masB+='<button class="ord-btn" onclick="var x=document.getElementById(\'ofxDepCorr\');if(x)x.hidden=!x.hidden">Corregir de qué freezer salió</button>';
+        mas+='<div id="ofxDepCorr" hidden style="margin:8px 20px 0">'+_dCorr+'</div>';
+      }
+    }
+    var _pesaMas=_pesKilosDe(p).length&&!canc&&ent&&(!cob||p.h==='Home'||p.h==='Pilar');
+    if(_pesaMas)masB+='<button class="ord-btn" onclick="_ordPesar(\''+p.h+'\',\''+p.n+'\')">'+(_pesHechoEn(p)?'Volver a pesar la carne':'Pesar la carne')+'</button>';
+    var _editMas=!canc&&(cob||ent)&&(p.h==='Home'||p.h==='Pilar')&&_puedeCorregir();
+    if(_editMas)masB+='<button class="ord-btn" onclick="_ordEditar(\''+p.h+'\',\''+p.n+'\','+(p.r||0)+')">Editar productos</button>';
     var editable=(!ent&&!canc&&!cob&&p.h!=='Red');
     /* (668) Juntar o separar la entrega a mano. */
     if(!ent&&!canc&&p.h!=='Red'){
@@ -48684,8 +48742,9 @@ if('serviceWorker' in navigator){
     /* ── LA BOTONERA: lo que se hace en ESTE momento del pedido, nada más. ── */
     var bs=[];
     /* Pesar: solo si lleva algo POR KILO y todavía se puede editar (`editarPedido` bloquea Cancelado y Cobrado). */
-    if(_pesKilosDe(p).length&&!canc&&(!cob||p.h==='Home'||p.h==='Pilar')){
-      bs.push('<button class="ord-btn'+(ent?'':' primary')+'" onclick="_ordPesar(\''+p.h+'\',\''+p.n+'\')">'+(_pesHechoEn(p)?'Volver a pesar':'Pesar la carne')+'</button>');
+    /* (21/11/2026) Entregado: pesar va a «Más opciones» (ya se pesó para entregar). */
+    if(_pesKilosDe(p).length&&!canc&&!ent&&(!cob||p.h==='Home'||p.h==='Pilar')){
+      bs.push('<button class="ord-btn primary" onclick="_ordPesar(\''+p.h+'\',\''+p.n+'\')">'+(_pesHechoEn(p)?'Volver a pesar':'Pesar la carne')+'</button>');
     }
     /* Red: los representantes no usan el ERP; se regulariza desde acá. */
     if(p.h==='Red'&&!ent&&!canc)bs.push('<button class="ord-btn" onclick="_ordMarcarEntregadoRed('+(p.r||0)+')">Marcar entregado al cliente</button>');
@@ -48699,10 +48758,10 @@ if('serviceWorker' in navigator){
     /* (15/11/2026, 722) EDITAR PRODUCTOS, AHÍ MISMO: antes «Editar en Pedidos» te mandaba a otra pantalla. Lo no entregado ni
        cobrado, quien opera Pedidos; lo entregado o cobrado (Home y Pilar), dueño, admin o equipo, con motivo. */
     var _edit2=editable||(!canc&&(cob||ent)&&(p.h==='Home'||p.h==='Pilar')&&_puedeCorregir());
-    if(_edit2){
-      html+='<div id="ordEd-'+p.h+'-'+_e(String(p.n))+'" class="hidden ord-ed"></div>';
-      bs.push('<button class="ord-btn" onclick="_ordEditar(\''+p.h+'\',\''+p.n+'\','+(p.r||0)+')">Editar productos</button>');
-    }else bs.push('<button class="ord-btn" onclick="_ordGo(\'pedidos\',\''+p.h+'\',\''+p.n+'\')">Ver en Pedidos</button>');
+    if(_edit2)html+='<div id="ordEd-'+p.h+'-'+_e(String(p.n))+'" class="hidden ord-ed"></div>';
+    /* (21/11/2026) Editar productos a la vista solo si no se entregó ni se cobró; si no, está en «Más opciones». */
+    if(editable)bs.push('<button class="ord-btn" onclick="_ordEditar(\''+p.h+'\',\''+p.n+'\','+(p.r||0)+')">Editar productos</button>');
+    else if(!_editMas)bs.push('<button class="ord-btn" onclick="_ordGo(\'pedidos\',\''+p.h+'\',\''+p.n+'\')">Ver en Pedidos</button>');
     var _puedeDer=(p.h==='Home'||p.h==='Pilar')&&!ent&&!canc&&!cob&&typeof SESSION!=='undefined'&&SESSION&&SESSION.rol==='admin';
     if(_puedeDer){
       html+=_derivarHTML(p);
