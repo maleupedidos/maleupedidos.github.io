@@ -84,6 +84,12 @@ if [ -n "$HTMLS" ]; then
 else
   echo "    (ningun .html modificado)"
 fi
+# ── 3b'. El alias que ve el cliente (21/11/2026) ──────────────────────────────
+#  Salió «maleump» a una clienta: cada pantalla armaba el alias de su lista de cuentas y caía a `def`. Una sola fuente
+#  (aliasClienteLista → tienda_cuentas). Esto corta si algún texto al cliente vuelve a armarlo de otro lado.
+echo "→ Alias al cliente…"
+node _tools/verificar_alias.js | sed 's/^/    /'
+[ "${PIPESTATUS[0]}" = "0" ] || fallar "Un texto al cliente puede salir con un alias que no es «Para clientes» — no se publica."
 
 # ── 3c. Que arranque de verdad ───────────────────────────────────────────────
 echo "→ Login exclusivamente en Supabase…"

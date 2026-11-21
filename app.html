@@ -12918,8 +12918,9 @@ var PR={estado:'nada',err:'',productos:[],combos:[],cuentas:[],filtro:'',ed:{},r
    la escritura igual. */
 var PR_COMBOS_HOY=[{id:'cmb_descubri_semana',nombre:'Descubrí Maleu · Semana',precio:33900},{id:'cmb_descubri_finde',nombre:'Descubrí Maleu · Fin de Semana',precio:34900},
   {id:'cmb_noche_casa',nombre:'Noche en Casa',precio:23900},{id:'cmb_mesa_familiar',nombre:'Mesa Familiar',precio:45900},{id:'cmb_freezer_lleno',nombre:'Freezer Lleno',precio:84900}];
-var PR_CUENTAS_HOY=[{id:'efectivo',nombre:'Efectivo',alias:'',banco:'',activo:true},{id:'mp',nombre:'Mercado Pago Tadeo',alias:'maleump',banco:'Mercado Pago',activo:true},
-  {id:'brubank',nombre:'Brubank Lucas',alias:'maleubru',banco:'Brubank',activo:true}];
+/* (21/11/2026) Sin respaldo de cuentas escrito a mano: era MP y Brubank (sin Galicia) y es justo la clase de copia vieja
+   que hizo salir «maleump» a una clienta. Sin la base, el editor de cuentas espera; no inventa. */
+var PR_CUENTAS_HOY=[];
 function pr$(n){ if(n===null||n===undefined||n==='')return '—'; var x=Number(n); return isNaN(x)?String(n):'$'+Math.round(x).toLocaleString('es-AR'); }
 /* (13/11/2026) EL lector de plata y cantidades del ERP, en formato argentino. «10309,50», «10.309,50», «10309.5» y
    «$ 10.309,50» dan 10309,5; «10.310» da 10310 (miles). Con `dec` (kilos, litros, cantidades) un punto solo es decimal:
@@ -18696,7 +18697,7 @@ function _leerVersion(app){
    "El HTML no sabe que version es" dejo de ser cierto: el build le escribe
    adentro el CACHE_NAME de sw-panel.js, el mismo que deploy.sh obliga a subir en
    cada cambio. Si lo publicado dice otra cosa, esta pagina es vieja. Punto. */
-var _APP_CN_PAGINA='maleu-panel-v1304';
+var _APP_CN_PAGINA='maleu-panel-v1305';
 
 /* Devuelve [{k,v}] si lo publicado no es lo que esta pagina corre. */
 function _chequearVersiones(){
@@ -26945,12 +26946,51 @@ function _jntClientes(){
       });
   }).catch(function(){return [];});
 }
+/* ══ EL ALIAS QUE VE EL CLIENTE: UNA SOLA FUENTE (21/11/2026) ═════════════════════════════════════════════════════════
+   El 21/11 salió «alias: *maleump*» a una clienta desde Ruta, un día después de dar por hecho que maleu26 estaba en todos
+   lados. Causa: cada pantalla sacaba el alias de SU lista de cuentas (Ruta de una copia de localStorage de la época de Apps
+   Script, que no se renovaba nunca; la ficha de D.caja.cuentas; Mi Portal del dashboard) y, si esa lista no traía `cli`
+   («Para clientes»), caía a `def`, que en las copias viejas es MP. Un navegador limpio daba maleu26 y la prueba mentía.
+   Ahora TODO texto al cliente sale de acá: la RPC `tienda_cuentas` (la misma de la tienda: SOLO las cuentas «Para
+   clientes» de la hoja Cuentas), guardada con su hora. Sin dato, maleu26. NUNCA `def`, NUNCA una lista de cuentas de cobro.
+   `_tools/verificar_alias.js` (en deploy.sh) corta la publicación si algún texto al cliente vuelve a armar el alias de
+   otro lado. */
+var _ALI_K='maleu_alias_cli', _ALI_RESPALDO=[{alias:'maleu26',banco:'Galicia'}], _aliVuelo=null;
+function _aliasCliCache(){
+  try{ var o=JSON.parse(localStorage.getItem(_ALI_K)||'null');
+    if(o&&Array.isArray(o.c)&&o.c.length&&o.c.every(function(x){return x&&typeof x.alias==='string'&&x.alias;}))return o; }catch(e){}
+  return null;
+}
+function aliasCliPedir(){
+  if(_aliVuelo)return _aliVuelo;
+  if(typeof _sbPermiso!=='function')return Promise.resolve(null);
+  _aliVuelo=Promise.resolve(_sbPermiso(true)).catch(function(){return null;}).then(function(sb){
+    if(!sb||!sb.url||!sb.key)return null;
+    return fetch(sb.url+'/rest/v1/rpc/tienda_cuentas',{method:'POST',headers:{apikey:sb.key,Authorization:'Bearer '+(sb.token||sb.key),'Content-Type':'application/json'},body:'{}'})
+      .then(function(r){return r.ok?r.json():null;});
+  }).then(function(c){
+    _aliVuelo=null;
+    if(Array.isArray(c)&&c.length&&c.every(function(x){return x&&x.alias;})){
+      try{ localStorage.setItem(_ALI_K,JSON.stringify({t:Date.now(),c:c.map(function(x){return {alias:String(x.alias),banco:String(x.banco||'')};})})); }catch(e){}
+    }
+    return _aliasCliCache();
+  },function(){ _aliVuelo=null; return null; });
+  return _aliVuelo;
+}
+/* La lista [{alias, banco}] para el cliente. Síncrona (los textos se arman al toque): lo guardado, y si tiene más de
+   10 minutos se pide de nuevo por atrás. */
+function aliasClienteLista(){
+  var o=_aliasCliCache();
+  if(!o||Date.now()-(o.t||0)>600000)aliasCliPedir();
+  return (o?o.c:_ALI_RESPALDO).map(function(x){return {alias:x.alias,banco:x.banco||''};});
+}
+window.aliasClienteLista=aliasClienteLista; window.aliasCliPedir=aliasCliPedir;
+/* Se pide al arrancar (cuando ya hay sesión) y cada 10 minutos. */
+setTimeout(function(){ aliasCliPedir(); },2500);
+setInterval(function(){ aliasCliPedir(); },600000);
 function _jntAlias(){
-  var l=((typeof D!=='undefined'&&D&&D.caja&&D.caja.cuentas)||[]).filter(function(c){return c&&c.tipo!=='efectivo'&&c.alias;});
-  /* (17/11/2026, 741) La cuenta para clientes (`cli`, Galicia); sin `cli`, la de siempre (`def`). */
-  var hayCli=l.some(function(c){return c.cli!==undefined;});
-  var p=l.filter(function(c){return hayCli?c.cli:c.def;}); if(p.length)l=p;
-  return l.length?l.map(function(c){return c.alias;}).join(' o '):'maleu26';
+  /* (21/11/2026) De la fuente única: antes caía a `def` si D.caja.cuentas no traía `cli`. */
+  return aliasClienteLista().map(function(c){return c.alias;}).join(' o ');
 }
 
 /* LA CUENTA. Pura: entra la juntada de la base, sale quién es quién, cuánto le toca y las transferencias.
@@ -53856,20 +53896,9 @@ if('serviceWorker' in navigator){
      tarjetas de la Caja). Si el volcado todavia no llego, la lista viene vacia
      y el mensaje NO promete un alias que no puede escribir. */
   function _ordAlias(){
-    var cj=(typeof D!=='undefined'&&D&&D.caja)||{};
-    var lista=cj.cuentas||[];
-    /* Al cliente, solo la cuenta principal (`def`, 24/10/2026: «Dejemos solo
-       maleump»). Sin ninguna marcada, todas, como antes. */
-    /* (17/11/2026, 741) La cuenta para clientes (`cli`, Galicia), aparte de `def`; sin `cli`, `def`. */
-    var _hayCli=lista.some(function(c){return c&&c.cli!==undefined;});
-    var princ=lista.filter(function(c){return c&&c.tipo!=='efectivo'&&(_hayCli?c.cli:c.def)&&c.alias;});
-    if(princ.length)lista=princ;
-    var out=[];
-    for(var i=0;i<lista.length;i++){
-      var c=lista[i];
-      if(c&&c.tipo!=='efectivo'&&c.alias)out.push(c.alias+(c.banco?' ('+c.banco+')':''));
-    }
-    return out;
+    /* (21/11/2026) De la fuente única (`aliasClienteLista`, solo «Para clientes»). Antes salía de D.caja.cuentas, que la
+       base arma sin `cli`, y caía a `def`. */
+    return aliasClienteLista().map(function(c){return c.alias+(c.banco?' ('+c.banco+')':'');});
   }
   function _ordMensajeCliente(p){
     if(!p)return '';
@@ -61716,7 +61745,7 @@ if('serviceWorker' in navigator){
         + '<div class="meta-ubic-hint">El teléfono es la <b>identidad</b> del cliente: el CRM agrupa sus pedidos por este número. Si lo cambiás, se reescribe en <b>todos</b> sus pedidos y se mueve su ficha, su apodo y su historial. Tiene que quedar en 10 dígitos (+54 9 y el 15 se sacan solos).</div></div>'
       + altsHtml
       + '<div class="fg"><label>Cumpleanos (DD/MM)</label><input id="metaCumple" placeholder="13/05" value="'+escHtml(meta.cumple||'')+'"></div>'
-      + '<div class="fg"><label>Alias MP</label><input id="metaAlias" placeholder="ej. maleump" value="'+escHtml(meta.aliasMp||'')+'"></div>'
+      + '<div class="fg"><label>Alias MP</label><input id="metaAlias" placeholder="ej. maleu26" value="'+escHtml(meta.aliasMp||'')+'"></div>'
       + '<div class="fg"><label>Tags</label><input id="metaTags" placeholder="ej. fan, alergia gluten" value="'+escHtml(meta.tags||'')+'"></div>'
       + '<div class="fg"><label>Notas</label><textarea id="metaNotas" rows="3" placeholder="...">'+escHtml(meta.notas||'')+'</textarea></div>'
       + '<div class="lote-sub-h">Ubicación en el mapa (corregí si cargaron mal el dato)</div>'
@@ -73910,9 +73939,10 @@ function _cobroCliente(p) {
 /* La cuenta de Maleu a la que transfiere el cliente: la que el backend marca
    como default (`def`), con su alias. */
 function _redCtaCliente() {
-  const d = _redCtasDigitales();
-  /* (17/11/2026, 741) La cuenta para clientes (`cli`, Galicia), aparte de `def`; sin `cli`, la de siempre. */
-  return d.find(c => c.cli === true && c.alias) || (d.some(c => c.cli !== undefined) ? null : d.find(c => c.def)) || d.find(c => c.def) || d[0] || null;
+  /* (21/11/2026) De la fuente única del panel (`aliasClienteLista`, RPC `tienda_cuentas`, solo «Para clientes»). Antes,
+     con un dashboard guardado sin `cli`, caía a `def` (MP). Solo se usa para MOSTRAR el alias; nunca para elegir cuenta. */
+  try { if (typeof window.aliasClienteLista === 'function') { const l = window.aliasClienteLista(); if (l && l.length) return l[0]; } } catch (e) {}
+  return { alias: 'maleu26', banco: 'Galicia' };
 }
 
 /** El recuadro «quién cobra» del pedido (24/10/2026). */
@@ -81965,13 +81995,13 @@ function _cobroCardHTML(pc, globalIdx){
 /* (17/11/2026, 741) La cuenta para CLIENTES la marca la base (`cli`, hoja Cuentas «Para clientes»): desde hoy Galicia
    (su alias sale de la base). `def` sigue siendo la por defecto y la de las Inversiones (MP), que no es lo mismo. Una base sin `cli`
    (antes de la 741), la de siempre: `def`. */
+/* (21/11/2026) EL ALIAS AL CLIENTE SALE DE UNA SOLA FUENTE: `aliasClienteLista()` del panel (RPC `tienda_cuentas`, solo
+   «Para clientes»). Hasta hoy salía de RUT_CTAS —la copia de localStorage de la época de Apps Script, que la base ya no
+   renueva— y sin `cli` caía a `def` (MP): el 21/11 le llegó «maleump» a una clienta. RUT_CTAS queda SOLO para elegir a
+   qué cuenta entra un cobro; nunca para un texto al cliente. Suelta (?standalone=1), el respaldo maleu26. */
 function _aliasCliente(){
-  var out=[], dig=_ctasDigitales(), hayCli=dig.some(function(c){return c&&c.cli!==undefined;});
-  var princ=dig.filter(function(c){return c&&(hayCli?c.cli:c.def)&&c.alias;});
-  (princ.length?princ:dig).forEach(function(c){
-    if(c&&c.alias)out.push({alias:String(c.alias),banco:String(c.banco||c.nombre||'')});
-  });
-  return out.length?out:[{alias:'maleu26',banco:'Galicia'}];   /* (20/11/2026) respaldo escrito a mano: solo si la base no mandó cuentas */
+  try{ if(typeof window.aliasClienteLista==='function'){ var l=window.aliasClienteLista(); if(l&&l.length)return l; } }catch(e){}
+  return [{alias:'maleu26',banco:'Galicia'}];
 }
 /** Los renglones del alias para WhatsApp: con uno, el formato de siempre; con
  *  varios, uno por banco, igual que el mensaje de la tienda. */
@@ -83111,7 +83141,7 @@ window.cobroAvisarCliCV=function(k){
   var cli=String(x.p.c||'').split(' ')[0];
   var rep=String(nomV||'').split(' ')[0];
   var ctas=(_rutCV&&_rutCV.cuentas)||[];
-  var cd=ctas.filter(function(c){return c.def;})[0]||ctas[0];
+  var cd=_aliasCliente()[0];   /* (21/11/2026) el alias al cliente, de la fuente única: nunca `def` */
   var tot=0;
   /* «que te entregó hoy nuestra representante Lourdes» / «para mañana», segun si ya se entrego. */
   var cuando=function(y){
@@ -83143,7 +83173,7 @@ window.cobroAvisarRepCV=function(k){
   if(!x)return;
   var p=x.p,rep=String(x.v.nombre||'').split(' ')[0];
   var ctas=(_rutCV&&_rutCV.cuentas)||[];
-  var cd=ctas.filter(function(c){return c.def;})[0]||ctas[0];
+  var cd=_aliasCliente()[0];   /* (21/11/2026) el alias al cliente, de la fuente única: nunca `def` */
   var txt='Hola '+rep+'! '+(p.c||'Tu cliente')+' (pedido #'+p.n+', '+formatMoney(_rutCVMonto(x))+') todavía no nos transfirió.'
     +(cd&&cd.alias?' ¿Le pasás el alias '+cd.alias+'?':' ¿Le pasás nuestro alias?')+' Gracias!';
   rutCopiarTexto(txt,'Mensaje copiado — pegalo en el chat de '+rep);
@@ -83154,7 +83184,7 @@ window.cobroAvisarRepTodos=function(nom){
   if(!xs.length)return;
   var rep=String(nom||'').split(' ')[0];
   var ctas=(_rutCV&&_rutCV.cuentas)||[];
-  var cd=ctas.filter(function(c){return c.def;})[0]||ctas[0];
+  var cd=_aliasCliente()[0];   /* (21/11/2026) el alias al cliente, de la fuente única: nunca `def` */
   var tot=0;
   var lin=xs.map(function(x){
     var m=_rutCVMonto(x);tot+=m;
