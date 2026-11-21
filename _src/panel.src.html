@@ -4602,6 +4602,14 @@ html.cob-suelto #p-ruta:not(.on) #cobroRutaOverlay{visibility:visible}
 .com-mas{min-height:40px;padding:0 14px;border:1.5px dashed var(--cd);border-radius:8px;background:#fff;font:inherit;font-size:12.5px;font-weight:700;color:var(--gd);cursor:pointer}
 .com-s{font-size:11.5px;color:var(--ink3);margin-bottom:6px;line-height:1.4}
 .com-nuevo{margin-top:2px}
+/* (21/11/2026) La cuenta de los que comieron: cada uno, quién pagó. */
+.com-cuenta{margin:0 0 8px;font-size:14px;color:var(--ink)}
+.com-cuenta span{font-size:12.5px;color:var(--ink3)}
+.com-cu-s{font-size:12.5px;font-weight:700;color:#B45309;margin-top:3px}
+.com-cu-s.ok{color:var(--gd)}
+.com-pago{margin-left:6px;min-height:32px;padding:0 10px;border-radius:50px;border:1.5px solid #E65100;background:#FFF3E0;color:#E65100;font:inherit;font-size:11.5px;font-weight:800;cursor:pointer}
+span.com-pago.ok{display:inline-flex;align-items:center;border-color:var(--gd);background:var(--gb);color:var(--gd);cursor:default}
+.com-grupo{margin-top:8px}
 .ord-junt{display:flex;flex-direction:column;gap:6px;margin-bottom:8px}
 .ord-junt-op{display:flex;flex-direction:column;align-items:flex-start;gap:2px;text-align:left;min-height:44px;width:100%}
 .ord-junt-op span{font-weight:500;font-size:11px;opacity:.85;white-space:normal}
@@ -22194,10 +22202,22 @@ function _comHTML(p){
   var a='('+hs+','+ns+')';
   var h='<div class="com" id="'+id+'"><div class="com-t">¿Quiénes comieron? <span>(opcional)</span>'+(lista.length?' <b>'+lista.length+'</b>':'')+'</div>';
   if(lista.length){
-    h+='<div class="com-chips">'+lista.map(function(nm){
-      var pe=!!_COM.pend[ck+'|'+_comNorm(nm)];
-      return '<span class="com-chip'+(pe?' pend':'')+'">'+_fpE(nm)+(pe?'':'<button type="button" aria-label="Sacar a '+_fpE(nm)+'" data-n="'+_fpE(nm)+'" onclick="comQuitar('+hs+','+ns+',this)">✕</button>')+'</span>';
+    /* (21/11/2026) La cuenta: cada uno, y con la 821 quién pagó. */
+    var CU=_comCuenta(p), pagoDe={}; CU.gente.forEach(function(g){ pagoDe[g.nombre]=g; });
+    h+=_comCuentaHTML(p);
+    h+='<div class="com-chips">'+(CU.n?CU.gente.map(function(x){return x.nombre;}):lista).map(function(nm){
+      var esPidio=!!(CU.pidio&&nm===CU.pidio);
+      if(esPidio){ var gp=pagoDe[nm], ep=(gp&&(CU.activo||CU.cobrado))?((gp.pago||CU.cobrado)?'<span class="com-pago ok">Pagó</span>'
+          :'<button type="button" class="com-pago" data-n="'+_fpE(nm)+'" onclick="comPago('+hs+','+ns+',this)" aria-label="Marcar que '+_fpE(nm)+' pagó">Falta</button>'):'';
+        return '<span class="com-chip">'+_fpE(nm)+' <small style="color:var(--ink3);font-weight:600">pidió</small>'+ep+'</span>'; }
+      var pe=!!_COM.pend[ck+'|'+_comNorm(nm)], g=pagoDe[nm];
+      var est='';
+      if(!pe&&g&&(CU.activo||CU.cobrado))est=(g.pago||CU.cobrado)?'<span class="com-pago ok">Pagó</span>'
+        :'<button type="button" class="com-pago" data-n="'+_fpE(nm)+'" onclick="comPago('+hs+','+ns+',this)" aria-label="Marcar que '+_fpE(nm)+' pagó">Falta</button>';
+      var quitar=(pe||(g&&g.pago))?'':'<button type="button" aria-label="Sacar a '+_fpE(nm)+'" data-n="'+_fpE(nm)+'" onclick="comQuitar('+hs+','+ns+',this)">✕</button>';
+      return '<span class="com-chip'+(pe?' pend':'')+'">'+_fpE(nm)+est+quitar+'</span>';
     }).join('')+'</div>';
+    h+='<button type="button" class="com-mas com-grupo" onclick="comCopiarGrupo('+hs+','+ns+')">Copiar para el grupo</button> ';
   }else if(!_COM.t&&_COM.va)h+='<div class="com-s">Trayendo…</div>';
   var nu=_COM.nuevo[id];
   if(nu){
@@ -22275,6 +22295,67 @@ function comNuevoOk(h,n){
     var dl=document.getElementById('comCliList'); if(dl)dl.innerHTML=''; _comLista();
   },function(e){ delete _COM.pend[ck+'|'+k]; _COM.j[ck]=antes; _comPintar(h,n); toast('No se guardó: '+String(e&&e.message||e),6000); });
 }
+/* ══ LA CUENTA DE LOS QUE COMIERON (21/11/2026, Tadeo 20:12/20:17) ═════════════════════════════════════════════════════
+   «Si somos 5 y no había ningún gasto más… todos tienen que pagar $18.000». El total del pedido (sin propina) ÷ la gente
+   cargada, en pesos enteros (el resto, de a $1 a los primeros). Solo el pedido: los gastos de afuera vivían en la cuenta
+   de la juntada, que Tadeo no quiere ver en la ficha.
+   «Pagó / Falta»: cada «Pagó» es un COBRO PARCIAL del pedido (`cobrarParcial`, el mismo de Cobranza) a la cuenta por
+   defecto (Galicia), con `pagador` y la nota «Juntada: <nombre>». Quién pagó se lee de los pagos del pedido
+   (`pedido_cobro_pantalla` › pagos[].nota, desde la 821): sin esa lectura NO se ofrece marcar (no se sabría después y se
+   podría cobrar dos veces). Con el último, la base cierra el pedido como Cobrado (como cualquier parcial que completa). */
+function _comK(p){ return p.h+'|'+p.n+'|'+(Number(p.r)||0); }
+function _comCuenta(p){
+  /* La gente: quien hizo el pedido + los cargados (como la cuenta de la juntada, `_jntCuenta`). «Si somos 5» = él y 4. */
+  var cargados=(_COM.j&&_COM.j[_comCk(p)])||[], pidio=String(p.c||'').replace(/\s*\(Red:[^)]*\)\s*$/,'').trim();
+  var lista=(pidio&&!cargados.some(function(x){return _comNorm(x)===_comNorm(pidio);}))?[pidio].concat(cargados):cargados.slice(), n=cargados.length?lista.length:0;
+  var tot=Math.round(typeof _pedTotalSinPropina==='function'?_pedTotalSinPropina(p):(Number(p.$)||0));
+  var base=n?Math.floor(tot/n):0, resto=n?tot-base*n:0;
+  var d=_FCB[_comK(p)], conNota=!!(d&&!d.directo&&Array.isArray(d.pagos)&&d.pagos.every(function(x){ return x&&('nota' in x); }));
+  var pagos={}; if(conNota)d.pagos.forEach(function(x){ var m=String(x.nota||'').match(/^Juntada:\s*(.+)$/); if(m)pagos[_comNorm(m[1])]=(pagos[_comNorm(m[1])]||0)+(Number(x.monto)||0); });
+  var gente=lista.map(function(nm,i){ var toca=base+(i<resto?1:0), pagado=pagos[_comNorm(nm)]||0; return {nombre:nm,toca:toca,pago:pagado>=toca-1}; });
+  if(!n)gente=[];
+  return {tot:tot,n:n,cada:base+(resto?1:0),gente:gente,pidio:(lista[0]===pidio?pidio:''),activo:conNota&&p.ep!=='Cobrado'&&p.es!=='Cancelado',cobrado:p.ep==='Cobrado',
+    pagaron:gente.filter(function(g){return g.pago;}).length};
+}
+function _comCuentaHTML(p){
+  var C=_comCuenta(p); if(!C.n||p.es==='Cancelado')return '';
+  if(!(_comK(p) in _FCB)&&!_FCB[_comK(p)+'|pidiendo']&&typeof _fichaCobroPedir==='function'&&p.h!=='Red')try{ _fichaCobroPedir(p,_comK(p)); }catch(e){}
+  var faltan=C.gente.filter(function(g){return !g.pago;});
+  var h='<div class="com-cuenta"><b>Cada uno: $'+f$(C.cada)+'</b><span> · son '+C.n+'</span>';
+  if(C.cobrado)h+='<div class="com-cu-s ok">Cobrado</div>';
+  else if(C.activo)h+='<div class="com-cu-s'+(faltan.length?'':' ok')+'">Pagaron '+C.pagaron+' de '+C.n+(faltan.length?' · falta '+faltan.map(function(g){return _fpE(g.nombre.split(' ')[0])+' $'+f$(g.toca);}).join(', '):'')+'</div>';
+  return h+'</div>';
+}
+window.comPago=function(h,n,btn){
+  var p=_comPed(h,n), nm=btn&&btn.getAttribute('data-n'); if(!p||!nm)return;
+  var C=_comCuenta(p), g=C.gente.filter(function(x){return x.nombre===nm;})[0]; if(!g||g.pago||!C.activo)return;
+  var cts=(typeof _cajaCuentas==='function'&&_cajaCuentas())||[], def=cts.filter(function(c){return c&&c.def&&c.tipo!=='efectivo';})[0]||{id:'galicia',nombre:'Galicia'};
+  if(!confirm(nm.split(' ')[0]+' pagó $'+f$(g.toca)+' por transferencia a '+(def.nombre||def.id)+'.\n\nSe anota como un pago a cuenta del pedido y entra a Caja. ¿Confirmás?'))return;
+  btn.disabled=true; btn.textContent='Guardando…';
+  var pay={action:'cobrarParcial',hoja:p.h,id:String(p.n),row:Number(p.r)||0,formaPago:'Transferencia',cuenta:def.id,monto:g.toca,
+    pagador:nm,notas:'Juntada: '+nm,quien:(typeof SESSION!=='undefined'&&SESSION&&SESSION.nombre)||'',ts:Date.now()};
+  pay.clientOpId='jp-'+p.h+'-'+p.n+'-'+_comNorm(nm).replace(/\s+/g,'_');   /* uno por persona: un reintento no cobra dos veces */
+  _ordenPost(pay).then(function(r){ return r.json(); }).then(function(r){
+    if(!r||r.ok===false){ toast('No se guardó el pago de '+nm.split(' ')[0]+': '+((r&&(r.err||r.error))||'sin respuesta'),6000); btn.disabled=false; btn.textContent='Falta'; return; }
+    toast('Pagó '+nm.split(' ')[0]+': $'+f$(g.toca)+' a '+(def.nombre||def.id));
+    var k=_comK(p); delete _FCB[k];
+    try{ if(typeof _pfAplicar==='function')_pfAplicar(r); }catch(e){}
+    _fichaCobroPedir(p,k);
+    try{ if(typeof _recargarPedidos==='function')_recargarPedidos(); }catch(e){}
+  },function(e){ toast('No se guardó: '+String(e&&e.message||e),6000); btn.disabled=false; btn.textContent='Falta'; });
+};
+window.comCopiarGrupo=function(h,n){
+  var p=_comPed(h,n); if(!p)return; var C=_comCuenta(p); if(!C.n)return;
+  var al=(typeof aliasClienteLista==='function'?aliasClienteLista():[{alias:'maleu26'}]).map(function(a){return a.alias;}).join(' o ');
+  /* Un solo monto por renglón: dos $ juntos el celular los lee como una fórmula (memoria dos-signos-pesos). */
+  var l=['¡Hola! La cuenta de Maleu, entre '+C.n+':','*$'+f$(C.cada)+' cada uno*',''];
+  C.gente.forEach(function(g){ l.push((C.activo||C.cobrado?(g.pago||C.cobrado?'✓ ':'• '):'• ')+g.nombre.split(' ')[0]+': $'+f$(g.toca)+(C.activo&&g.pago?' (pagó)':'')); });
+  var falt=C.gente.filter(function(g){return !g.pago;});
+  if(!C.cobrado){ l.push(''); l.push('Para transferir: alias *'+al+'*'); if(C.activo&&falt.length&&falt.length<C.n)l.push('Falta: '+falt.map(function(g){return g.nombre.split(' ')[0];}).join(', ')+'.'); }
+  else{ l.push(''); l.push('Ya está todo pago. ¡Gracias!'); }
+  var txt=l.join('\n');
+  try{ navigator.clipboard.writeText(txt).then(function(){ toast('Copiado: pegalo en el grupo'); },function(){ toast('No se pudo copiar'); }); }catch(e){ toast('No se pudo copiar'); }
+};
 function comQuitar(h,n,btn){ var p=_comPed(h,n), nm=btn&&btn.getAttribute('data-n'); if(!p||!nm)return; _comEscribir(p,{nombre:nm},true); }
 
 /* ══ LA CUENTA DE LA JUNTADA (10/11/2026, 638) ═══════════════════════════════════════════════════════════════════════
@@ -25861,6 +25942,8 @@ function _fichaCobroPedir(p,k){
     _FCB[k]=d;
     var box=document.getElementById('ofxCobro');
     if(box&&box.getAttribute('data-k')===k){ var t=document.createElement('div'); t.innerHTML=_fichaCobroHTML(p,_pedTotalSinPropina(p),d); if(t.firstChild)box.replaceWith(t.firstChild); }
+    /* (21/11/2026) La cuenta de los que comieron (quién pagó) sale de estos pagos. */
+    try{ if(typeof _comPintar==='function')_comPintar(p.h,String(p.n)); }catch(eC){}
     /* (21/11/2026) El chip de arriba también dice cómo fue el cobro, apenas llega. */
     var ch=document.getElementById('ofxChipCob');
     if(ch&&ch.getAttribute('data-k')===k){ var lc=_fichaCobroLinea(p,d); if(lc)ch.textContent='Cobrado · '+lc; }
