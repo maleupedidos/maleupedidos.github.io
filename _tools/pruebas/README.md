@@ -177,3 +177,16 @@ Solo marca usos peligrosos (un metodo o un indexado). Leer una variable que vale
 > El chequeo del build (`chequearOrdenDeclaraciones`) recorre **solo las tres
 > sub-apps**, no el panel, y por eso no lo marca. Antes de arreglar lo que este
 > script reporte, mira **quien llama** a esa funcion.
+
+## Auditoría «al instante» (21/11/2026)
+
+Todas con `SBSES=<sesion_prueba.json>` (sesión real de la base en solo lectura: `sbses_guarda.js`) y `BASE=http://localhost:<puerto>`. Cada una corta SOLO la directa que prueba y la hace contestar como la base; las lecturas son reales. Para la vuelta atrás: `APP=app_viejo_tmp.html` (sacado con `git show HEAD:app.html`).
+
+| Prueba | Qué sostiene |
+|---|---|
+| `probar_tab_sucia.js` | Después de una escritura o de una señal de la base, entrar a Ventas, Inicio, Clientes o Equipo relee aunque no pasaron 90 s. Ojo: con operación real llegan señales de verdad, y releer también es lo correcto (la prueba lo distingue con `__tabSucia`). Ventas y Clientes ya releían siempre al entrar |
+| `probar_ficha_al_instante.js` | Entregado de Red, devolución, «no se entregó» y «se entregó otro día» cambian el pedido con la respuesta, con las relecturas anuladas a propósito |
+| `probar_ficha_casa_juntada.js` | «Paga en … · falta cobrar» en un pedido sin cobrar; Casa / Juntada o evento en la ficha y en el alta (Ruta arranca al abrirla: `go('ruta')` antes) |
+| `probar_permiso_vuelve.js` | El tilde de un permiso no se da vuelta con `ajReload()` (lo escribe el aplicador ~33 s) |
+| `repro_contar_brubank.js` | Contar SOLO una cuenta extra (Brubank) y mirar la tarjeta 40 s con relecturas reales |
+
