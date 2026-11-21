@@ -14265,6 +14265,82 @@ function _borrRestaurar(){
 /* Recarga dura, la salida de emergencia en modo app: limpia las caches del
    service worker y vuelve a pedir todo al server. Se dispara manteniendo
    apretado el logo del encabezado (hasta el 28/10/2026, el boton ↻), o desde Ajustes › Sesion. */
+/* ══ LA VERSIÓN MÍNIMA (21/11/2026) ══════════════════════════════════════════════════════════════════════════════════
+   A las 18:59 Lucas copió desde Ruta › Cobranza «Para abonar: maleump» con un build de antes del arreglo del alias: en Ruta
+   la versión nueva no se aplica sola (decide el toque, para no cerrarle la parada al repartidor), y nadie tocó el cartel.
+   `version-min.json` (publicado con el ERP, se lee sin cache) dice la versión por debajo de la cual un celular NO puede
+   seguir: se pide al abrir, cada 10 min y al volver a la app. Si este build es más viejo:
+     · se recarga de cero solo (como mantener apretado el logo), salvo que haya algo a medio editar: ahí queda el cartel
+       fijo «Hay una versión nueva: tocá para actualizar», que no se puede cerrar;
+     · mientras tanto NO COPIA NADA (navigator.clipboard y execCommand('copy')): un texto al cliente armado con reglas
+       viejas es justo lo que la mínima viene a frenar. Copiar dice que hay que actualizar.
+   Dos intentos de recarga cada 30 min como mucho: si el publicado todavía no llegó, no queda en un bucle. Se sube la
+   mínima editando `version-min.json` cuando cambia algo que el cliente ve (un alias, un precio, un texto). */
+var _VMIN_K='maleu_vmin_rec';
+function _verNum(s){ var m=String(s||'').match(/v(\d+)/); return m?Number(m[1]):0; }
+function _verViejaAviso(){
+  var b=document.getElementById('verVieja');
+  if(!b){
+    b=document.createElement('div'); b.id='verVieja'; b.setAttribute('role','alert');
+    b.style.cssText='position:fixed;left:0;right:0;top:0;z-index:100000;background:#E65100;color:#fff;font:600 14px/1.35 Montserrat,system-ui,sans-serif;'
+      +'padding:calc(10px + env(safe-area-inset-top)) 14px 10px;display:flex;align-items:center;justify-content:space-between;gap:10px;box-shadow:0 4px 14px rgba(0,0,0,.25)';
+    b.innerHTML='<span>Hay una versión nueva: tocá para actualizar. Hasta entonces no se copian mensajes.</span>'
+      +'<button type="button" style="min-height:44px;padding:0 14px;border:0;border-radius:10px;background:#fff;color:#E65100;font:800 14px Montserrat,system-ui,sans-serif">Actualizar</button>';
+    b.querySelector('button').onclick=function(){
+      if(typeof _hayCambiosSinGuardar==='function'&&_hayCambiosSinGuardar()&&!confirm('Tenés algo sin guardar. ¿Actualizar igual?'))return;
+      _verDuro();
+    };
+    document.body.appendChild(b);
+  }
+  b.hidden=false;
+}
+function _verViejaQuitar(){ var b=document.getElementById('verVieja'); if(b)b.hidden=true; }
+function _verDuro(){
+  var fin=function(){ location.reload(); };
+  if(!('caches' in window))return fin();
+  caches.keys().then(function(ks){ return Promise.all(ks.map(function(k){ return caches.delete(k); })); }).then(fin,fin);
+}
+function _verMinChequear(){
+  if(typeof _APP_CN_PAGINA!=='string'||_APP_CN_PAGINA.indexOf('@@')>=0)return;
+  fetch('/version-min.json?t='+Date.now(),{cache:'no-store'}).then(function(r){ return r.ok?r.json():null; }).then(function(j){
+    if(!j||!j.min)return;
+    var vieja=_verNum(_APP_CN_PAGINA)<_verNum(j.min);
+    window.__verVieja=vieja;
+    if(!vieja){ _verViejaQuitar(); return; }
+    _verViejaAviso();
+    var editando=(typeof _hayCambiosSinGuardar==='function'&&_hayCambiosSinGuardar())||(typeof _hayEditorAbierto==='function'&&_hayEditorAbierto());
+    if(editando)return;
+    var m=null; try{ m=JSON.parse(sessionStorage.getItem(_VMIN_K)||'null'); }catch(e){}
+    if(m&&m.min===j.min&&m.n>=2&&Date.now()-m.t<30*60000)return;   /* ya probó dos veces: queda el cartel */
+    try{ sessionStorage.setItem(_VMIN_K,JSON.stringify({min:j.min,n:((m&&m.min===j.min)?m.n:0)+1,t:Date.now()})); }catch(e){}
+    try{ if(typeof _medEmpezar==='function')_medCerrar(_medEmpezar('version-minima',_APP_CN_PAGINA+' < '+j.min),'base'); }catch(eM){}
+    _verDuro();
+  }).catch(function(){});
+}
+/* El portapapeles, con la versión vieja, no copia. */
+(function(){
+  try{
+    var cb=navigator.clipboard;
+    if(cb&&typeof cb.writeText==='function'){
+      var orig=cb.writeText.bind(cb);
+      Object.defineProperty(cb,'writeText',{configurable:true,writable:true,value:function(t){
+        if(window.__verVieja){ _verViejaAviso(); try{ toast('No se copió: hay una versión nueva. Tocá «Actualizar» arriba.',6000); }catch(e){} return Promise.reject(new Error('version vieja')); }
+        return orig(t);
+      }});
+    }
+  }catch(e){}
+  try{
+    var ex=document.execCommand;
+    document.execCommand=function(c){
+      if(String(c).toLowerCase()==='copy'&&window.__verVieja){ _verViejaAviso(); try{ toast('No se copió: hay una versión nueva. Tocá «Actualizar» arriba.',6000); }catch(e){} return false; }
+      return ex.apply(document,arguments);
+    };
+  }catch(e){}
+})();
+setTimeout(_verMinChequear,3000);
+setInterval(_verMinChequear,600000);
+document.addEventListener('visibilitychange',function(){ if(document.visibilityState==='visible')_verMinChequear(); });
+
 function refreshDuro(){
   if(typeof _hayEditorAbierto==='function' && _hayEditorAbierto()){
     toast('Cerra lo que estas editando antes de recargar');return;
