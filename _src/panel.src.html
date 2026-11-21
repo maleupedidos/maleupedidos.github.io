@@ -25486,7 +25486,14 @@ function _fichaCobroHTML(p,tot,d){
   var rep=String((d&&d.repartidor)||p.rep||'').trim(), rep1=rep?rep.split(' ')[0]:'';
   var L=[];
   L.push(['Total del pedido',_ars(tot)]);
-  if(cob||ef+tr>0){
+  /* (21/11/2026, captura de Tadeo 12:09) SIN COBRO NO HAY «PAGÓ». En un pedido «No Cobrado», `cash_amount` /
+     `transfer_amount` son el medio que eligió el cliente (88 de 96 en 60 días; parciales no hay), no plata recibida:
+     la ficha decía «Pagó en efectivo $90.000» con el botón «Cobrar $90.000» abajo. */
+  if(!cob&&ef+tr>0){
+    var medioN=tr>0&&ef>0?'efectivo y transferencia':(tr>0?'transferencia':'efectivo');
+    L.push(['Paga en '+medioN+' · falta cobrar',_ars(ef+tr),'mal']);
+  }
+  if(cob){
     var pago=ef+tr+pe+pt, medio=tr>0&&ef>0?'efectivo y transferencia':(tr>0?'transferencia':'efectivo');
     var bil=d&&Number(d.billete)>0?Number(d.billete):0, vto=d&&d.vuelto!=null?Number(d.vuelto):null;
     L.push(['Pagó en '+medio,_ars(pago)]);
@@ -25497,7 +25504,7 @@ function _fichaCobroHTML(p,tot,d){
     if(_fav>0)L.push(['Quedó a favor del cliente',_ars(_fav),'sub']);
     else if(pago-pe-pt>tot+1&&!(pe+pt))L.push(['Pagó de más, sin anotar qué fue',_ars(pago-tot),'mal']);
   }
-  if(pe+pt>0)L.push(['Propina'+(rep1?' para '+rep1:'')+(pe>0&&pt>0?' (efectivo y transferencia)':(pt>0?' (transferencia)':'')),_ars(pe+pt)]);
+  if(pe+pt>0)L.push(['Propina'+(cob?'':' anotada (falta cobrar)')+(rep1?' para '+rep1:'')+(pe>0&&pt>0?' (efectivo y transferencia)':(pt>0?' (transferencia)':'')),_ars(pe+pt)]);
   if(ent){
     var fx=String((d&&d.entregado)||'').slice(0,16)||[_dia(p.fex||''),p.hx?_e(p.hx):''].filter(Boolean).join(' ');
     L.push(['Entregó '+(rep||'—'),fx,'txt']);
@@ -48312,26 +48319,16 @@ if('serviceWorker' in navigator){
     var _jRedOk=(p.h==='Red')&&!!(typeof _sbPerm!=='undefined'&&_sbPerm&&_sbPerm.pal&&_sbPerm.pal.juntadaRed);
     if((p.h==='Home'||p.h==='Pilar'||_jRedOk)&&!canc){
       var _grT=_e(p.grp);
-      mas+='<div class="ord-trajo"><div class="ord-trajo-t">¿Es de una juntada?</div>';
-      if(_grT){
-        mas+='<div class="ord-trajo-s" style="margin:0 0 7px">'+(_grT!=='Sí'?'Es de la juntada <b>'+_grT+'</b>':'Lo consumió un grupo')+'. Cuenta como venta, pero no como consumo de la casa de '+_e(p.c)+'.</div>';
-        mas+='<div class="ord-trajo-b"><button type="button" class="ord-trajo-op" onclick="_ordGrupal('+(p.r||0)+',\''+p.h+'\',\''+p.n+'\',\'\')">Sacar de la juntada</button></div>';
-      }else{
-        var _jl=_ordJuntadasRecientes(p);
-        window._ordJuntLista=_jl;
-        mas+='<div class="ord-trajo-s" style="margin:0 0 7px">'+(_jl.length?'Las juntadas de esos días':'No hay juntadas de esos días')+'</div>';
-        if(_jl.length){
-          mas+='<div class="ord-junt">'+_jl.map(function(j,i){
-            return '<button type="button" class="ord-trajo-op ord-junt-op" onclick="_ordJuntadaElegir('+i+','+(p.r||0)+',\''+p.h+'\',\''+p.n+'\')"><b>'+_e(j.nom)+'</b>'
-              +'<span>'+j.n+' pedido'+(j.n===1?'':'s')+' · '+_e(j.gente.slice(0,3).join(', '))+(j.gente.length>3?' y '+(j.gente.length-3)+' más':'')+'</span></button>';
-          }).join('')+'</div>';
-        }
-        /* (15/11/2026) El campo a todo el ancho y el botón abajo: «O una nueva. Ej: Asado en Champagnat» no entraba a 390 px
-           y se leía «O una nueva. E…». El ejemplo va en el aria-label. */
-        mas+='<div class="ord-trajo-b" style="flex-direction:column;align-items:stretch"><input type="text" id="ordGrupalQue" maxlength="80" placeholder="'+(_jl.length?'O el nombre de una nueva':'Nombre de la juntada')+'" aria-label="Nombre de la juntada nueva, por ejemplo Asado en Champagnat" oninput="_ordJuntAviso(this)" style="width:100%;box-sizing:border-box;min-height:44px;padding:9px 10px;border:1.5px solid var(--bd,#ddd);border-radius:8px;font-size:16px;font-family:inherit">'
-          +'<button type="button" class="ord-trajo-op" onclick="_ordGrupal('+(p.r||0)+',\''+p.h+'\',\''+p.n+'\',null)">Nueva juntada</button></div>'
-          +'<div class="ord-trajo-s" id="ordGrupalAviso" style="margin:6px 0 0"></div>';
-      }
+      /* (21/11/2026, Tadeo) «Lo importante es poner si un pedido es para su casa/lote o si es de una juntada/evento. Nada
+         de "nombre del evento"». Dos opciones, Casa por defecto, de un toque. Juntada = la marca «Sí» de siempre (`grp`),
+         que Cobranza no agrupa con otros clientes (ruta.html, `_cobClave`). Un pedido con cualquier nombre de juntada ya
+         guardado cuenta como «Juntada o evento». La cuenta de la juntada y sus datos siguen: solo se dejan de ofrecer acá. */
+      var _esJ=!!_grT, _ar=(p.r||0)+',\''+p.h+'\',\''+p.n+'\'';
+      mas+='<div class="ord-trajo"><div class="ord-trajo-t">¿Para dónde es?</div>'
+        +'<div class="ord-trajo-b" role="radiogroup" aria-label="Para dónde es el pedido">'
+        +'<button type="button" role="radio" aria-checked="'+(!_esJ)+'" class="ord-trajo-op'+(!_esJ?' on':'')+'"'+(_esJ?' onclick="_ordGrupal('+_ar+',\'\')"':'')+'>Casa</button>'
+        +'<button type="button" role="radio" aria-checked="'+_esJ+'" class="ord-trajo-op'+(_esJ?' on':'')+'"'+(!_esJ?' onclick="_ordGrupal('+_ar+',\'Sí\')"':'')+'>Juntada o evento</button></div>'
+        +(_esJ?'<div class="ord-trajo-s" style="margin:7px 0 0">Cuenta como venta, pero no como consumo de la casa de '+_e(p.c)+'.</div>':'');
       mas+='</div>';
     }
     var masB='';
@@ -62745,12 +62742,23 @@ function _objRango(periodo, mesLabel){
   // Recencia efectiva para el orden "Compra reciente": un pedido en curso (para
   // mañana) es la actividad MÁS reciente → va arriba de todo (antes Su caía al fondo).
   function _cliRec(v){ return (v.diasUltima>=0)?v.diasUltima:((v.pend>0)?-1:99999); }
+  /* (21/11/2026) «Juntadas o eventos»: el cliente que conocimos en una (`c.juntada`, el nombre de antes) o que tiene algún
+     pedido marcado «Juntada o evento» en la ficha (`grp`, sin nombre). Por teléfono, los últimos 10 dígitos. */
+  var _cliJuntTs=0, _cliJuntSet={};
+  function _cliEsJunt(c){
+    if(c&&c.juntada)return true;
+    var ps=(typeof D!=='undefined'&&D&&D.pedidos)||[];
+    if(_cliJuntTs!==ps.length){ _cliJuntSet={}; _cliJuntTs=ps.length;
+      ps.forEach(function(p){ if(p&&String(p.grp||'').trim()&&p.es!=='Cancelado'){ var t=String(p.tel||'').replace(/\D/g,'').slice(-10); if(t.length>=8)_cliJuntSet[t]=1; } }); }
+    var k=String((c&&(c.tel||c.key))||'').replace(/\D/g,'').slice(-10);
+    return k.length>=8&&!!_cliJuntSet[k];
+  }
   function _cliFilteredSorted(){
     var fe=_cliFiltro.estado||'', fi=_cliFiltro.integrante||'';
     var arr=(_estCli||[]).filter(function(c){
       var esVis=!!c.visitante;
       /* (707) «Vinieron por una juntada»: todos, visitas incluidas (la mayoría lo es). */
-      if(_cliFiltro.marca==='juntada'){ if(!c.juntada) return false; esVis=false; }
+      if(_cliFiltro.marca==='juntada'){ if(!_cliEsJunt(c)) return false; esVis=false; }
       // DIMENSIÓN INTEGRANTE (residencia). Sin filtro → ocultar visitas (vista de residentes).
       if(fi==='visita'||fi==='visitante'){ if(!esVis) return false; }
       else if(fi==='vive'||fi==='finde'){ if(esVis || (c.residencia||'')!==fi) return false; }
@@ -63120,7 +63128,7 @@ function _objRango(periodo, mesLabel){
       C.forEach(function(c){
         if(c.vip)vipN++;
         if((c.nombresAlt||[]).length)tipeoN++;
-        if(c.juntada)juntN++;
+        if(_cliEsJunt(c))juntN++;
         var _cm=String(c.cumple||'').match(/^(\d{1,2})\/(\d{1,2})/);
         if(_cm && Number(_cm[2])===_mesAct)cumpleN++;
         if(c.visitante){ visN++; return; }
@@ -63158,7 +63166,7 @@ function _objRango(periodo, mesLabel){
         +(deudaN>0?'<button class="est-chip'+(_cliFiltro.marca==='deuda'?' on':'')+'" data-m="deuda" onclick="estCliMarca(\'deuda\')">Con deuda ('+deudaN+')</button>':'')
         +'<button class="est-chip'+(_cliFiltro.marca==='cumple'?' on':'')+'" data-m="cumple" onclick="estCliMarca(\'cumple\')">Cumple este mes ('+cumpleN+')</button>'
         +'<button class="est-chip'+(_cliFiltro.marca==='tipeo'?' on':'')+'" data-m="tipeo" onclick="estCliMarca(\'tipeo\')" title="El mismo teléfono aparece con más de un nombre escrito distinto">Tipeo distinto ('+tipeoN+')</button>'
-        +(juntN>0?'<button class="est-chip'+(_cliFiltro.marca==='juntada'?' on':'')+'" data-m="juntada" onclick="estCliMarca(\'juntada\')">Vinieron por una juntada ('+juntN+')</button>':'')
+        +(juntN>0?'<button class="est-chip'+(_cliFiltro.marca==='juntada'?' on':'')+'" data-m="juntada" onclick="estCliMarca(\'juntada\')">Juntadas o eventos ('+juntN+')</button>':'')
         +'</div>';
 
       html+='<div class="est-ctl">'
