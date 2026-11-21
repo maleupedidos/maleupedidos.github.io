@@ -1,7 +1,7 @@
 /* AJUSTES › Permisos: el tilde no vuelve atrás con una relectura atrasada (21/11/2026).
    SBSES=<sbses.json> BASE=http://localhost:8155 [APP=app.html] node probar_permiso_vuelve.js
-   permiso_set_directo se corta y contesta OK (diferida, como la base). Después se fuerza ajReload(): lectura REAL, que
-   todavía trae el permiso de antes (en la vida real el aplicador tarda ~33 s). Nada se escribe. */
+   permiso_set_directo se corta y contesta OK. Después se fuerza ajReload(): lectura REAL que, por estar cortada la escritura,
+   trae el permiso de antes (en producción la base lo escribe en el acto: esto simula una lectura que ya estaba en viaje). Nada se escribe. */
 'use strict';
 const P = './';
 const { abrir, evaluar } = require('./cdp.js');
