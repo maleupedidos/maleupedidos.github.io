@@ -266,13 +266,19 @@ function _cuentas_() {
   try {
     /* v2 (11/9/2026): la lista trae alias y banco. La clave se sube para que
        una copia vieja sin esos campos no se sirva durante los 5 min del TTL. */
-    var raw = CacheService.getScriptCache().get('cuentas_v2');
+    /* v3 (21/11/2026): trae `cli` («Para clientes»). */
+    var raw = CacheService.getScriptCache().get('cuentas_v3');
     if (raw) return (_CUENTAS_MEMO_ = JSON.parse(raw));
   } catch (e) {}
   var out = [];
   var sh = SS.getSheetByName('Cuentas');
   if (sh) {
     var d = sh.getDataRange().getValues();
+    /* (21/11/2026) «Para clientes» se busca por el NOMBRE de la columna: se agregó al final de la hoja (741) y su posición
+       no es fija. Es la cuenta cuyo alias se le da al cliente (hoy Galicia, maleu26). Sin esto los motores del celular
+       (cp_motor.js) armaban las cuentas sin `cli` y los textos al cliente caían a la por defecto: MP, «maleump». */
+    var iCli = -1;
+    for (var h = 0; h < (d[0] || []).length; h++) if (String(d[0][h] || '').trim().toLowerCase() === 'para clientes') { iCli = h; break; }
     for (var r = 1; r < d.length; r++) {
       var id  = String(d[r][0] || '').trim().toLowerCase();
       var tip = String(d[r][2] || '').trim().toLowerCase();
@@ -288,7 +294,8 @@ function _cuentas_() {
                  tipo: (tip.indexOf('efec') === 0 ? 'efectivo' : 'digital'),
                  col: col,
                  alias: String(d[r][5] || '').trim(),
-                 banco: String(d[r][6] || '').trim() });
+                 banco: String(d[r][6] || '').trim(),
+                 cli: iCli >= 0 && String(d[r][iCli] || '').trim().toLowerCase().charAt(0) === 's' });
     }
   }
   /* Sin la hoja, o vacia, el ERP se comporta EXACTAMENTE como antes del
@@ -298,7 +305,7 @@ function _cuentas_() {
     out = [{ id: 'efectivo', nombre: 'Efectivo',     tipo: 'efectivo', col: 2, alias: '',        banco: '' },
            { id: 'mp',       nombre: 'Mercado Pago', tipo: 'digital',  col: 3, alias: 'maleump', banco: 'Mercado Pago' }];
   }
-  try { CacheService.getScriptCache().put('cuentas_v2', JSON.stringify(out), 300); } catch (e) {}
+  try { CacheService.getScriptCache().put('cuentas_v3', JSON.stringify(out), 300); } catch (e) {}
   _CUENTAS_MEMO_ = out;
   return out;
 }
@@ -383,11 +390,22 @@ function _redExcMonto_(v) {
 }
 
 function _cuentasParaPanel_() {
-  var cs = _cuentas_(), def = _cuentaDigitalDefault_(), out = [];
+  /* (21/11/2026) Igual que la base (`_cuentas_erp`, 741/753): `def` es la cuenta por defecto para un cobro NUEVO
+     (Config_Maleu › CUENTA_DEFAULT, hoy Galicia), `inv` sigue siendo MP (las Inversiones y lo histórico: no cambia dónde
+     vivió la plata, `_cuentaDigitalDefault_` no se toca) y `cli` es la que se le da al cliente («Para clientes»). Sin
+     ninguna marcada «Para clientes», `cli` = `def`, como en la base. Lo usan los motores del celular (cp_motor.js): sin
+     `cli` y con MP de `def`, Ruta le daba «maleump» al cliente y ofrecía MP en el cobro. */
+  var cs = _cuentas_(), inv = _cuentaDigitalDefault_(), out = [];
+  var cfg = String(_cfgTexto_('CUENTA_DEFAULT', '') || '').trim().toLowerCase(), def = '';
+  var hayCli = cs.some(function (c) { return c.cli && c.tipo === 'digital' && c.alias; });
+  for (var k = 0; k < cs.length; k++) if (cs[k].tipo === 'digital' && cs[k].id === cfg) { def = cfg; break; }
+  if (!def && hayCli) for (var m = 0; m < cs.length; m++) if (cs[m].cli && cs[m].tipo === 'digital' && cs[m].alias) { def = cs[m].id; break; }
+  if (!def) def = inv;
   for (var i = 0; i < cs.length; i++) {
     out.push({ id: cs[i].id, nombre: cs[i].nombre, tipo: cs[i].tipo, col: cs[i].col,
                alias: cs[i].alias || '', banco: cs[i].banco || '',
-               def: (cs[i].id === def), inv: (cs[i].id === def) });
+               def: (cs[i].id === def), inv: (cs[i].id === inv),
+               cli: hayCli ? !!(cs[i].cli && cs[i].tipo === 'digital' && cs[i].alias) : (cs[i].id === def) });
   }
   return out;
 }

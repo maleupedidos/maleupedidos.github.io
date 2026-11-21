@@ -83,7 +83,8 @@ function _cpmPoner_(filas, row, fila) { while (filas.length < row - 1) filas.pus
    telefono (columnas de `_doGetCobrosPendientes`, desde 0) y barrio, sub barrio y lote por encabezado. */
 var _CPM_PED_ = { Home: { est: 10, pago: 12, tel: 46 }, Pilar: { est: 10, pago: 12, tel: 49 }, Clubes: { est: 13, pago: 15, tel: null } };
 var _CPM_CAB_ = {
-  Cuentas: ['id', 'Nombre', 'Tipo', 'Col en Saldo Base', 'Activo', 'Alias', 'Banco'],
+  /* (21/11/2026) + «Para clientes»: `_cuentas_` la busca por nombre y arma `cli` (el alias que se le da al cliente). */
+  Cuentas: ['id', 'Nombre', 'Tipo', 'Col en Saldo Base', 'Activo', 'Alias', 'Banco', 'Para clientes'],
   Vendedores: ['Nombre', 'WhatsApp', 'Alias MP', 'Barrios (separados por coma)', 'Partido', 'Localidad', 'Estado',
     'Usuario', 'PIN', 'Comisión %', 'Notas', 'Días', 'Telegram'],
   Config_Maleu: ['Parámetro', 'Valor', 'Activo desde', 'Notas']

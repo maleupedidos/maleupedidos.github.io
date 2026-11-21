@@ -38,6 +38,8 @@ const CAPTURA = `window.__copiado=[];try{Object.defineProperty(navigator,'clipbo
   const anotar = (nombre, txt) => { const l = lineaAlias(txt); L.push([nombre, l]); };
   // ── Ruta › alta: los 4 estados ──
   await evaluar(cli, `go('ruta')`); await esperar(cli, `typeof npResumenTextoWA==='function'&&typeof npQty==='function'`, 30000);
+  /* Como lo usa el que cobra: pasa por Cobranza (la lectura que trae las cuentas del motor) antes de copiar. */
+  await evaluar(cli, `try{switchTab('cobros')}catch(e){}`); await pausa(7000);
   await evaluar(cli, `try{npRenderCatalogo()}catch(e){}`);
   await esperar(cli, `!!document.querySelector('[onclick*="npQty("]')`, 30000);
   const id = await evaluar(cli, `(function(){var b=document.querySelector('[onclick*="npQty("]');var m=b&&/npQty\\(\\s*['"]?([^'",)]+)/.exec(b.getAttribute('onclick'));return m?m[1]:'';})()`);
