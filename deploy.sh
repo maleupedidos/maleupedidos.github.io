@@ -167,11 +167,18 @@ else
   env PW="$PW_DIR" BASE=http://localhost:8094/app.html OUT="$PIS_TMP/capturas" MEDIDAS=w390 SOLO="$TABS_PIS" CAPTURAS=1 SES_ADMIN="$PIS_SES" $PIS_EXTRA \
     node _tools/pruebas/pisadas.js 2>&1 | grep -E "^(MAL|ok|PANTALLAS)" | sed 's/^/    /'
   RC=${PIPESTATUS[0]}
+  # (21/11/2026) LAS BARRAS FIJAS DE ABAJO, pegadas al borde de verdad: Ruta › tarjeta, ficha del pedido y + PEDIDO, con el
+  # scroll a 0/25/50/75/100% en WebKit 390×844. La ficha dejaba 24 px vacíos debajo de «Cobrar $X» (Tadeo, 17:57).
+  echo "→ Barras fijas de abajo (WebKit 390)…"
+  env PW="$PW_DIR" SES="$PIS_SES" BASE=http://localhost:8094/app.html OUT="$PIS_TMP/capturas" PREFIJO=barra SOLO=ruta,ficha,mas \
+    node _tools/pruebas/barras_fijas.js 2>&1 | grep -E "^ *(MAL|ok|--)" | sed 's/^/    /'
+  RC_BAR=${PIPESTATUS[0]}
   set -e
   kill $PIS_SRV 2>/dev/null || true
   for f in "$PIS_SES" "$PIS_TMP/ses_rep.json" "$PIS_TMP/ses_eq.json" "$PIS_TMP/ses_ven.json"; do [ -f "$f" ] && python ../estancias/scripts/migraciones/sesion_prueba.py borrar "$f" >/dev/null 2>&1 || true; done
   echo "    capturas a 390 px: $PIS_TMP/capturas  (mirá la del lugar que tocaste, con lo desplegable abierto)"
   if [ "$RC" != "0" ]; then fallar "En el iPhone hay texto encimado o scroll de costado — no se publica."; fi
+  if [ "${RC_BAR:-0}" != "0" ]; then fallar "Una barra fija de abajo no queda pegada al borde en el iPhone — no se publica."; fi
 fi
 
 # ── 3d. Que se pueda LEER en la computadora ──────────────────────────────────
