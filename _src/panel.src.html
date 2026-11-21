@@ -4580,6 +4580,21 @@ html.cob-suelto #p-ruta:not(.on) #cobroRutaOverlay{visibility:visible}
 .ord-trajo-op.on{border-color:var(--gd);background:var(--gb);color:var(--gd)}
 .ord-trajo-op:disabled{opacity:.5;cursor:default}
 .ord-trajo-s{font-size:10.5px;color:var(--bl);line-height:1.45;margin-top:7px}
+/* (21/11/2026) ¿Quiénes comieron? — chips con cruz, cargar ~10 personas rápido en el celular. */
+.com{margin-top:12px;padding-top:10px;border-top:1px dashed var(--cd)}
+.com-t{font-size:11px;font-weight:800;color:var(--bl);letter-spacing:.02em;margin-bottom:7px}
+.com-t span{font-weight:500;opacity:.8}
+.com-t b{display:inline-block;min-width:18px;padding:0 6px;border-radius:50px;background:var(--gb);color:var(--gd);text-align:center}
+.com-chips{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px}
+.com-chip{display:inline-flex;align-items:center;gap:2px;min-height:34px;padding:0 4px 0 12px;border:1.5px solid var(--cd);border-radius:50px;background:#fff;font-size:12.5px;font-weight:600;color:var(--ink)}
+.com-chip.pend{opacity:.55;padding-right:12px}
+.com-chip button{border:0;background:none;color:var(--ink3);font-size:13px;width:32px;height:32px;border-radius:50%;cursor:pointer;font-family:inherit}
+.com-add{display:flex;gap:6px;align-items:stretch}
+.com-add input{flex:1 1 auto;min-width:0;min-height:42px;padding:0 12px;border:1.5px solid var(--cd);border-radius:8px;font:inherit;font-size:16px}
+.com-add .jnt-btn{min-height:42px;white-space:nowrap}
+.com-mas{min-height:40px;padding:0 14px;border:1.5px dashed var(--cd);border-radius:8px;background:#fff;font:inherit;font-size:12.5px;font-weight:700;color:var(--gd);cursor:pointer}
+.com-s{font-size:11.5px;color:var(--ink3);margin-bottom:6px;line-height:1.4}
+.com-nuevo{margin-top:2px}
 .ord-junt{display:flex;flex-direction:column;gap:6px;margin-bottom:8px}
 .ord-junt-op{display:flex;flex-direction:column;align-items:flex-start;gap:2px;text-align:left;min-height:44px;width:100%}
 .ord-junt-op span{font-weight:500;font-size:11px;opacity:.85;white-space:normal}
@@ -17758,6 +17773,8 @@ function _sbAPedido(o){
     ef:Number(o.cash_amount)||0, tr:Number(o.transfer_amount)||0,
     /* (18/11/2026) Con los mismos nombres que `pedidos_light_pantalla` (pef, ptr, rep). */
     pef:Number(o.tip_cash)||0, ptr:Number(o.tip_transfer)||0, rep:o.courier||'',
+    /* (21/11/2026) Solo con valor, como la lista de la base (`_pedidos_light_de`). */
+    grp:String(o.group_label||'').trim()||undefined,
     r:Number(o.source_row)||0,
     /* De cuando es esta fila EN LA BASE. No lo dibuja nadie: lo usa `_sbEdad`
        para que el sello diga la verdad.
@@ -18003,6 +18020,10 @@ function _sbPedCols(){
     /* (18/11/2026) La propina y quien repartió: sin ellas la ficha mostraba la venta con la propina adentro («$60.000
        total» en el #2377 de $54.298) y no decía quién lo entregó. Las tres las puede leer `authenticated` (verificado). */
     +',tip_cash,tip_transfer,courier,total_amount'
+    /* (21/11/2026) La juntada (`grp`, como `pedidos_light_pantalla`): sin ella, un pedido que llegaba por esta lista
+       mostraba «Casa» en la ficha aunque fuera «Juntada o evento», y el CRM no lo contaba. `authenticated` la lee
+       (has_column_privilege, verificado ese día). */
+    +',group_label'
     +(_sbConCosto()?',cost_amount,margin_amount':'')
     +(_sbSinWarehouse?'':',warehouse')
     /* LOS PRODUCTOS NO SON OPCIONALES: ver el comentario de `_sbPedidosAhora`. */
@@ -21978,6 +21999,8 @@ function fpResumen(c){
 }
 function fpConocimos(c){
   if(!c||!c.juntada)return '';
+  /* (21/11/2026) Sin nombre de juntada la clave es «Pedido <canal> <n°>»: se dice de quién fue el pedido. */
+  if(/^Pedido [A-Za-z]+ \S+$/.test(c.juntada)&&typeof _comDeClave==='function'){ var dq=_comDeClave(_comNorm(c.juntada)); return 'Lo conocimos en '+(dq||'una juntada'); }
   var f=String(c.juntadaFecha||'').match(/^(\d{1,2})\/(\d{1,2})/);
   return 'Lo conocimos en la juntada «'+c.juntada+'»'+(f?' ('+Number(f[1])+'/'+Number(f[2])+')':'');
 }
@@ -22026,6 +22049,142 @@ function fpGuardar(id){
   return _jntRpc('crm_persona_directo',p).then(function(r){ st.vuelo=false; _fpRepintar(id); return r||{ok:false,err:'sin respuesta'}; },
     function(e){ st.vuelo=false; _fpRepintar(id); return {ok:false,err:String(e&&e.message||e)}; });
 }
+
+/* ══ QUIÉNES COMIERON (21/11/2026, Tadeo 15:58) ═══════════════════════════════════════════════════════════════════════
+   «¿No había para poner los integrantes de ese evento? … sirve cuando son menos de 10 personas». En la ficha del pedido,
+   con «Juntada o evento», un renglón opcional: chips con cruz y «+ Agregar persona» (buscador del CRM; si no está, alta
+   rápida con nombre y, si se tiene, teléfono — la ficha nace `sn-…` y se une cuando aparece el teléfono, como en la 707).
+   SIN nombre de juntada: la juntada ES el pedido. La clave la arma el ERP: «Pedido <canal> <n°>» (estable aunque se
+   reprograme o se corrija el nombre). Si el pedido ya tenía un nombre de juntada de antes, se usa ese (y sus integrantes).
+   Va sobre lo que ya existe: `order_group_member` por `juntada_integrante_directo` (escribe en el acto y contesta la lista)
+   y `juntada_integrantes_pantalla` para leer. No trae la cuenta (quién puso qué): solo quiénes comieron. */
+var _COM={j:null,t:0,v:0,va:null,tw:{},pend:{},abierto:{},nuevo:{}};
+function _comNorm(s){ return String(s||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9]+/g,' ').trim(); }
+function _comLbl(p){ var g=String((p&&p.grp)||'').trim(); return (g&&!/^s[ií]$/i.test(g))?g:('Pedido '+p.h+' '+p.n); }
+function _comCk(p){ return 'g:'+_comNorm(_comLbl(p)); }
+function _comId(h,n){ return 'com-'+String(h)+'-'+String(n).replace(/[^A-Za-z0-9_-]/g,''); }
+function _comPed(h,n){ var ps=(typeof D!=='undefined'&&D&&D.pedidos)||[]; for(var i=0;i<ps.length;i++){ if(ps[i]&&ps[i].h===h&&String(ps[i].n)===String(n))return ps[i]; } return null; }
+function _comDm(p){ var m=String((p&&p.f)||'').match(/^(\d{1,2})\/(\d{1,2})/); return m?Number(m[1])+'/'+Number(m[2]):''; }
+/* «la juntada de Tadeo Ustariz (20/11)» a partir de la clave; '' si no la reconoce. */
+function _comDeClave(ck){
+  var m=String(ck||'').replace(/^g:/,'').match(/^pedido ([a-z]+) (\S+)$/);
+  if(!m){ return ''; }
+  var h=m[1].charAt(0).toUpperCase()+m[1].slice(1), p=_comPed(h,m[2]);
+  if(!p)return 'una juntada';
+  var dm=_comDm(p); return 'la juntada de '+String(p.c||'').replace(/\s*\(Red:[^)]*\)\s*$/,'').trim()+(dm?' ('+dm+')':'');
+}
+function _comGuardarLS(){ try{ localStorage.setItem('mc_comensales',JSON.stringify({t:_COM.t,j:_COM.j})); }catch(e){} }
+function _comCargar(){
+  if(_COM.va)return _COM.va;
+  if(!_COM.j){ try{ var c=JSON.parse(localStorage.getItem('mc_comensales')||'null'); if(c&&c.j){ _COM.j=c.j; _COM.v++; } }catch(e){} }
+  if(_COM.t&&Date.now()-_COM.t<60000)return Promise.resolve(_COM.j||{});
+  var t0=Date.now();
+  _COM.va=_jntRpc('juntada_integrantes_pantalla',{}).then(function(d){
+    _COM.va=null;
+    if(d&&d.ok&&d.juntadas){
+      var nv=d.juntadas, viejo=_COM.j||{};
+      /* Lo escrito DESPUÉS de pedir esta lectura le gana (la lectura salió antes de que la base lo tuviera). */
+      Object.keys(_COM.tw).forEach(function(ck){ if(_COM.tw[ck]>t0){ if(viejo[ck])nv[ck]=viejo[ck]; else delete nv[ck]; } });
+      _COM.j=nv; _COM.v++; _comGuardarLS();
+    }
+    _COM.t=Date.now();   /* también si falló: se reintenta al minuto, nunca en bucle */
+    return _COM.j||{};
+  },function(){ _COM.va=null; _COM.t=Date.now(); return _COM.j||{}; });
+  return _COM.va;
+}
+/* Todas las juntadas donde comió esa persona (por nombre, que es como se guarda el integrante). */
+function _comDondeComio(nombre){
+  var k=_comNorm(nombre), out=[]; if(!k||!_COM.j)return out;
+  Object.keys(_COM.j).forEach(function(ck){ if((_COM.j[ck]||[]).some(function(n){return _comNorm(n)===k;}))out.push(ck); });
+  return out;
+}
+function _comHTML(p){
+  var id=_comId(p.h,p.n), ck=_comCk(p), lista=(_COM.j&&_COM.j[ck])||[], hs=JSON.stringify(String(p.h)).replace(/"/g,'&quot;'), ns=JSON.stringify(String(p.n)).replace(/"/g,'&quot;');
+  var a='('+hs+','+ns+')';
+  var h='<div class="com" id="'+id+'"><div class="com-t">¿Quiénes comieron? <span>(opcional)</span>'+(lista.length?' <b>'+lista.length+'</b>':'')+'</div>';
+  if(lista.length){
+    h+='<div class="com-chips">'+lista.map(function(nm){
+      var pe=!!_COM.pend[ck+'|'+_comNorm(nm)];
+      return '<span class="com-chip'+(pe?' pend':'')+'">'+_fpE(nm)+(pe?'':'<button type="button" aria-label="Sacar a '+_fpE(nm)+'" data-n="'+_fpE(nm)+'" onclick="comQuitar('+hs+','+ns+',this)">✕</button>')+'</span>';
+    }).join('')+'</div>';
+  }else if(!_COM.t&&_COM.va)h+='<div class="com-s">Trayendo…</div>';
+  var nu=_COM.nuevo[id];
+  if(nu){
+    h+='<div class="com-nuevo"><div class="com-s"><b>'+_fpE(nu.nombre)+'</b> no está en el CRM: queda como cliente nuevo.</div>'
+      +'<div class="com-add"><input id="'+id+'-tel" inputmode="tel" maxlength="20" autocomplete="off" placeholder="Teléfono (si lo tenés)" value="'+_fpE(nu.tel||'')+'" onkeydown="if(event.key===\'Enter\'){event.preventDefault();comNuevoOk'+a+';}">'
+      +'<button type="button" class="jnt-btn prim" onclick="comNuevoOk'+a+'">Sumarlo</button><button type="button" class="jnt-btn" onclick="comNuevoNo'+a+'">Cancelar</button></div></div>';
+  }else if(_COM.abierto[id]){
+    h+='<div class="com-add"><input id="'+id+'-q" list="comCliList" maxlength="80" autocomplete="off" placeholder="Nombre o teléfono" onkeydown="if(event.key===\'Enter\'){event.preventDefault();comSumar'+a+';}">'
+      +'<button type="button" class="jnt-btn prim" onclick="comSumar'+a+'">Sumar</button></div>';
+  }else h+='<button type="button" class="com-mas" onclick="comAbrir'+a+'">+ Agregar persona</button>';
+  return h+'</div>';
+}
+function _comPintar(h,n,foco){
+  var id=_comId(h,n), el=document.getElementById(id), p=_comPed(h,n); if(!el||!p)return;
+  var q=document.getElementById(id+'-q'), qv=q?q.value:'', fa=document.activeElement&&document.activeElement.id;
+  el.outerHTML=_comHTML(p);
+  var q2=document.getElementById(id+'-q'); if(q2&&qv)q2.value=qv;
+  var f=document.getElementById(foco||fa||''); if(f)try{f.focus();}catch(e){}
+}
+function _comLista(){
+  var dl=document.getElementById('comCliList');
+  if(!dl){ dl=document.createElement('datalist'); dl.id='comCliList'; document.body.appendChild(dl); }
+  if(dl.childNodes.length)return;
+  _jntClientes().then(function(l){ if(dl.childNodes.length)return;
+    dl.innerHTML=(l||[]).slice(0,3000).map(function(c){return '<option value="'+_fpE(c.nombre)+'">'+_fpE(c.tel)+'</option>';}).join(''); });
+}
+function comAbrir(h,n){ var id=_comId(h,n); _COM.abierto[id]=1; _comLista(); _comPintar(h,n,id+'-q'); }
+function comNuevoNo(h,n){ var id=_comId(h,n); delete _COM.nuevo[id]; _comPintar(h,n,id+'-q'); }
+/* Sumar o sacar: la lista cambia YA (chip «pendiente»), la base contesta la lista de verdad y con eso se repinta. */
+function _comEscribir(p,dat,quitar){
+  var ck=_comCk(p), k=_comNorm(dat.nombre), id=_comId(p.h,p.n);
+  if(!_COM.j)_COM.j={};
+  var antes=(_COM.j[ck]||[]).slice();
+  if(quitar)_COM.j[ck]=antes.filter(function(x){return _comNorm(x)!==k;});
+  else if(!antes.some(function(x){return _comNorm(x)===k;})){ _COM.j[ck]=antes.concat([dat.nombre]); _COM.pend[ck+'|'+k]=1; }
+  _COM.tw[ck]=Date.now(); _comPintar(p.h,p.n);
+  var body={action:'juntadaIntegrante',grp:_comLbl(p),nombre:dat.nombre};
+  if(dat.key)body.key=dat.key; if(dat.tel)body.tel=dat.tel; if(quitar)body.quitar=true;
+  return _jntRpc('juntada_integrante_directo',body).then(function(d){
+    delete _COM.pend[ck+'|'+k];
+    if(!d||d.ok===false){ _COM.j[ck]=antes; _comPintar(p.h,p.n); toast((d&&d.err)||'No se guardó',5000); return false; }
+    if(Array.isArray(d.integrantes))_COM.j[ck]=d.integrantes;
+    _COM.tw[ck]=Date.now(); _COM.v++; _comGuardarLS(); _comPintar(p.h,p.n);
+    if(typeof _tabsEnsuciar==='function')_tabsEnsuciar();
+    return true;
+  },function(e){ delete _COM.pend[ck+'|'+k]; _COM.j[ck]=antes; _comPintar(p.h,p.n); toast('No se guardó: '+String(e&&e.message||e),6000); return false; });
+}
+function comSumar(h,n){
+  var p=_comPed(h,n), id=_comId(h,n), inp=document.getElementById(id+'-q'); if(!p||!inp)return;
+  var t=String(inp.value||'').replace(/\s+/g,' ').trim(); if(!t){ inp.focus(); return; }
+  var dig=t.replace(/\D/g,''), soloTel=dig.length>=8&&dig.length===t.replace(/[\s+()-]/g,'').length;
+  var c=(_jntCli||[]).filter(function(x){return _jntNorm(x.nombre)===_jntNorm(t)||(dig.length>=8&&x.tel&&x.tel.slice(-10)===dig.slice(-10));})[0];
+  if(c){ inp.value=''; _comEscribir(p,{nombre:c.nombre,tel:c.tel||''}); return; }
+  if(!_jntCli){ toast('Trayendo los clientes del CRM: probá en un segundo'); _comLista(); return; }
+  if(soloTel){ toast('Ese teléfono no está en el CRM: escribí el nombre'); return; }
+  inp.value=''; _COM.nuevo[id]={nombre:t}; _comPintar(h,n,id+'-tel');
+}
+function comNuevoOk(h,n){
+  var p=_comPed(h,n), id=_comId(h,n), nu=_COM.nuevo[id]; if(!p||!nu)return;
+  var x=document.getElementById(id+'-tel'), tel=String((x&&x.value)||'').replace(/\D/g,'');
+  if(tel&&tel.length<8){ toast('Ese teléfono es corto: revisalo o dejalo vacío'); return; }
+  delete _COM.nuevo[id];
+  var pidio=String(p.c||'').replace(/\s*\(Red:[^)]*\)\s*$/,'').trim(), ck=_comCk(p), k=_comNorm(nu.nombre);
+  /* El chip aparece ya; la ficha del CRM y después el integrante con su clave (teléfono o sn-). */
+  if(!_COM.j)_COM.j={}; var antes=(_COM.j[ck]||[]).slice();
+  if(!antes.some(function(y){return _comNorm(y)===k;})){ _COM.j[ck]=antes.concat([nu.nombre]); _COM.pend[ck+'|'+k]=1; }
+  _COM.tw[ck]=Date.now(); _comPintar(h,n,id+'-q');
+  var fp={nombre:nu.nombre,donde:'visita',visitaDe:pidio,juntada:_comLbl(p),juntadaDia:(typeof _tendFechaVentaISO==='function'?_tendFechaVentaISO(p):'')||''};
+  if(tel)fp.tel=tel;
+  _jntRpc('crm_persona_directo',fp).then(function(r){
+    if(!r||!r.ok){ delete _COM.pend[ck+'|'+k]; _COM.j[ck]=antes; _comPintar(h,n); toast((r&&r.err)||'No se guardó',5000); return; }
+    delete _COM.pend[ck+'|'+k]; _COM.j[ck]=antes;   /* _comEscribir lo vuelve a poner, con el nombre que quedó en el CRM */
+    _comEscribir(p,{nombre:r.nombre||nu.nombre,key:r.key||'',tel:r.tel||tel});
+    _jntCli=null; try{localStorage.removeItem('maleu_np_clientes_v1');}catch(e){}
+    var dl=document.getElementById('comCliList'); if(dl)dl.innerHTML=''; _comLista();
+  },function(e){ delete _COM.pend[ck+'|'+k]; _COM.j[ck]=antes; _comPintar(h,n); toast('No se guardó: '+String(e&&e.message||e),6000); });
+}
+function comQuitar(h,n,btn){ var p=_comPed(h,n), nm=btn&&btn.getAttribute('data-n'); if(!p||!nm)return; _comEscribir(p,{nombre:nm},true); }
 
 /* ══ LA CUENTA DE LA JUNTADA (10/11/2026, 638) ═══════════════════════════════════════════════════════════════════════
    Tadeo: «hoy de 9 a 12 estuve mandando mensajes de todos los asados del finde… fue un quilombo separar los gastos». Maleu
@@ -48344,6 +48503,11 @@ if('serviceWorker' in navigator){
         +'<button type="button" role="radio" aria-checked="'+(!_esJ)+'" class="ord-trajo-op'+(!_esJ?' on':'')+'"'+(_esJ?' onclick="_ordGrupal('+_ar+',\'\')"':'')+'>Casa</button>'
         +'<button type="button" role="radio" aria-checked="'+_esJ+'" class="ord-trajo-op'+(_esJ?' on':'')+'"'+(!_esJ?' onclick="_ordGrupal('+_ar+',\'Sí\')"':'')+'>Juntada o evento</button></div>'
         +(_esJ?'<div class="ord-trajo-s" style="margin:7px 0 0">Cuenta como venta, pero no como consumo de la casa de '+_e(p.c)+'.</div>':'');
+      /* (21/11/2026, Tadeo 15:58) Con «Juntada o evento», quiénes comieron (opcional). Pinta lo guardado y relee. */
+      if(_esJ&&typeof _comHTML==='function'){
+        mas+=_comHTML(p);
+        (function(h,n){ _comCargar().then(function(){ _comPintar(h,n); }); })(p.h,p.n);
+      }
       mas+='</div>';
     }
     var masB='';
@@ -49262,7 +49426,9 @@ if('serviceWorker' in navigator){
             if(x.h===hoja&&Number(x.r)===Number(row)){ x.grp=(valor===true?'Sí':String(valor||'')); _pedMarcar(x,'juntada'); }
           });
           try{ render(); }catch(eR){}   /* (21/11/2026) se pinta ya, no con la relectura */
-          closeOrdDetail();
+          /* (21/11/2026) Con «Juntada o evento» la ficha queda abierta: abajo aparece «¿Quiénes comieron?». */
+          if(valor!==''&&typeof openOrdDetail==='function'){ try{ openOrdDetail(hoja,n,row); }catch(eO){ closeOrdDetail(); } }
+          else closeOrdDetail();
           _pfAplicar(d).then(function(){_recargarPedidos();});
         }else{
           toast('Error: '+((d&&d.err)||'?'));
@@ -56540,6 +56706,15 @@ if('serviceWorker' in navigator){
   window.crmResCtlHtml = function(tel, nombreEnc, barrioEnc, curRes, edit){
     var c=_crmCliDe(tel); if(!c) return '';
     var k=_fpE(c.key), con=fpConocimos(c), res=fpResumen(c);
+    /* (21/11/2026) Dónde comió: los pedidos «Juntada o evento» donde figura en «¿Quiénes comieron?» (sin repetir la
+       juntada en la que lo conocimos). Si las juntadas no llegaron, se piden y se repinta la ficha. */
+    if(typeof _comDondeComio==='function'){
+      if(!_COM.t&&!_COM.va)_comCargar().then(function(){ var el=document.getElementById('crmResCtl'); if(el&&!el.querySelector('.pf'))window.crmResEdit(c.key,'','','',0); });
+      var _jc=c.juntada?'g:'+_comNorm(c.juntada):'';
+      var _com=_comDondeComio(c.nombre).filter(function(ck){return ck!==_jc;}).map(function(ck){
+        var d=_comDeClave(ck); return d||('la juntada «'+ck.replace(/^g:/,'')+'»'); });
+      if(_com.length)con=(con?con+' · ':'')+'Comió en '+_com.slice(0,4).join(', ')+(_com.length>4?' y '+(_com.length-4)+' más':'');
+    }
     if(!edit){
       return '<div id="crmResCtl"><div class="pf-res"><span>'+(res?'<b>'+_fpE(res)+'</b>':'Dónde está: sin cargar')+'</span>'
         +'<button type="button" class="pf-cam" onclick="crmResEdit(\''+k+'\',\'\',\'\',\'\',1)">'+(res?'Cambiar':'Cargar')+'</button></div>'
@@ -62760,8 +62935,17 @@ function _objRango(periodo, mesLabel){
   /* (21/11/2026) «Juntadas o eventos»: el cliente que conocimos en una (`c.juntada`, el nombre de antes) o que tiene algún
      pedido marcado «Juntada o evento» en la ficha (`grp`, sin nombre). Por teléfono, los últimos 10 dígitos. */
   var _cliJuntTs=0, _cliJuntSet={};
+  var _cliComT=-1, _cliComSet={};
   function _cliEsJunt(c){
     if(c&&c.juntada)return true;
+    /* (21/11/2026) …o que figura en «¿Quiénes comieron?» de algún pedido. Si las juntadas no llegaron, se piden una vez
+       y se repinta la lista. */
+    if(typeof _comCargar==='function'){
+      if(!_COM.va&&(!_COM.t||Date.now()-_COM.t>60000)){ var _v0=_COM.v;
+        _comCargar().then(function(){ if(_COM.v===_v0)return; var el=document.getElementById('estClientes'); if(el&&el.offsetParent&&typeof rClientes==='function')try{rClientes();}catch(e){} }); }
+      if(_cliComT!==_COM.v){ _cliComT=_COM.v; _cliComSet={}; Object.keys(_COM.j||{}).forEach(function(ck){ (_COM.j[ck]||[]).forEach(function(n){ var x=_comNorm(n); if(x)_cliComSet[x]=1; }); }); }
+      if(c&&_cliComSet[_comNorm(c.nombre)])return true;
+    }
     var ps=(typeof D!=='undefined'&&D&&D.pedidos)||[];
     if(_cliJuntTs!==ps.length){ _cliJuntSet={}; _cliJuntTs=ps.length;
       ps.forEach(function(p){ if(p&&String(p.grp||'').trim()&&p.es!=='Cancelado'){ var t=String(p.tel||'').replace(/\D/g,'').slice(-10); if(t.length>=8)_cliJuntSet[t]=1; } }); }

@@ -190,3 +190,16 @@ Todas con `SBSES=<sesion_prueba.json>` (sesión real de la base en solo lectura:
 | `probar_permiso_vuelve.js` | El tilde de un permiso no se da vuelta con `ajReload()`. Ojo: la escritura va cortada, así que la base nunca cambia; en producción la base lo escribe en el acto y esto solo cubre una lectura que ya estaba en viaje |
 | `repro_contar_brubank.js` | Contar SOLO una cuenta extra (Brubank) y mirar la tarjeta 40 s con relecturas reales |
 
+
+
+## «¿Quiénes comieron?» en la ficha del pedido (21/11/2026, v1303)
+
+`probar_quienes_comieron.js [390|1440]` — con `PED=Home:<n°>` de un pedido marcado «Juntada o evento», sesión
+`pruebarobot` (`PREP_SESION='{usuario:"pruebarobot",rol:"admin",...}'`). Clics de mouse y tipeo de verdad: abre «Más
+opciones», suma 2 personas «del CRM» (clientes PRUEBA agregados a la lista del buscador: el CRM real no tiene PRUEBA) y
+1 nueva sin teléfono, saca una con la cruz, reabre y relee de la base, y mira el CRM. **Escribe de verdad** (solo
+`juntada_integrante_directo` y `crm_persona_directo` con «PRUEBA» en el cuerpo): al terminar hay que borrar las filas
+`order_group_member` del grupo `pedido <canal> <n°>` y las fichas `sn-` «Prueba Comensal…» de `crm_customer_meta`.
+Tres trampas que costaron corridas: el contenido de un `<details>` cerrado tiene `offsetParent` en este Chrome (mirar
+`.open`); el bloque se repinta al llegar la lectura, así que hay que volver a buscar el elemento antes de medir el clic;
+y la primera lista de pedidos (camino `_deSupabase`) no traía `grp` hasta v1303.
