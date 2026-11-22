@@ -29,7 +29,7 @@ let ok = 0, mal = 0; const chk = (n, c, d) => { c ? ok++ : mal++; console.log((c
         return f.apply(this,arguments);};})();`);
     const pg = await ctx.newPage();
     const errores = []; pg.on('pageerror', (e) => errores.push(String(e.message).slice(0, 160)));
-    console.log('\n=== ' + (con821 ? 'como con la 821 (pagos con nota)' : 'sin la 821 (como hoy)') + ' · ' + PH + ' #' + PN + ' ===');
+    console.log('\n=== ' + (con821 ? 'como con la 821 (pagos con nota)' : 'la base de hoy (821 aplicada, sin pagos)') + ' · ' + PH + ' #' + PN + ' ===');
     await pg.goto(BASE + '?v=' + Date.now(), { waitUntil: 'domcontentloaded' });
     await pg.waitForFunction(([h, n]) => window.D && (D.pedidos || []).some((x) => x.h === h && String(x.n) === n && String(x.grp || '').trim()), [PH, PN], { timeout: 150000 }).catch(() => {});
     if (con821) {
@@ -42,12 +42,13 @@ let ok = 0, mal = 0; const chk = (n, c, d) => { c ? ok++ : mal++; console.log((c
     await pg.waitForTimeout(3000);
     await pg.evaluate(() => { const m = document.getElementById('ordMas'); if (m) m.open = true; const c = document.querySelector('#ordBody .com'); if (c) c.scrollIntoView({ block: 'center' }); });
     await pg.waitForTimeout(2500);
-    const T = await pg.evaluate(() => ({ cuenta: (document.querySelector('#ordBody .com-cuenta') || {}).textContent || '', chips: [].slice.call(document.querySelectorAll('#ordBody .com-chip')).map((c) => c.textContent.replace(/\s+/g, ' ').trim()), faltaBtns: document.querySelectorAll('#ordBody button.com-pago').length }));
+    const T = await pg.evaluate(() => ({ cuenta: (document.querySelector('#ordBody .com-cuenta') || {}).textContent || '', chips: [].slice.call(document.querySelectorAll('#ordBody .com-fila')).map((c) => c.textContent.replace(/\s+/g, ' ').trim()), faltaBtns: document.querySelectorAll('#ordBody button.com-pagar').length, cobrar: (document.querySelector('#ordBody .ofx-cobrar') || {}).textContent || '', titulo: (document.querySelector('#ordBody .com-t') || {}).textContent || '' }));
     console.log('  ' + JSON.stringify(T));
     if (OUT) { fs.mkdirSync(OUT, { recursive: true }); await pg.screenshot({ path: path.join(OUT, 'juntada_' + (con821 ? 'con821' : 'hoy') + '.png') }); }
     chk('«Cada uno: $18.000 · son 5»', /Cada uno: \$18\.000/.test(T.cuenta) && /son 5/.test(T.cuenta), T.cuenta);
     if (!con821) {
-      chk('sin la 821 no se ofrece «Pagó/Falta» (no se podría saber después)', T.faltaBtns === 0 && !/Pagaron/.test(T.cuenta), T);
+      chk('con la 821 aplicada (21/11) y sin pagos: «Pagaron 0 de 5 · faltan $90.000» y 5 «Marcar pagó»', T.faltaBtns === 5 && /Pagaron 0 de 5 · faltan \$90\.000/.test(T.cuenta), T);
+      chk('sin pagos, el botón de abajo dice el total: «Cobrar $90.000»', /^Cobrar \$90\.000$/.test(T.cobrar.trim()), T.cobrar);
       const b = await pg.evaluate(() => { const x = document.querySelector('#ordBody .com-grupo'); if (!x) return null; x.scrollIntoView({ block: 'center' }); const r = x.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; });
       if (b) { await pg.waitForTimeout(300); await pg.touchscreen.tap(b.x, b.y); await pg.waitForTimeout(600); }
       const txt = await pg.evaluate(() => window.__copiado.join('\n'));
@@ -55,9 +56,15 @@ let ok = 0, mal = 0; const chk = (n, c, d) => { c ? ok++ : mal++; console.log((c
       chk('«Copiar para el grupo»: cada uno $18.000 y el alias maleu26, un monto por renglón', /\$18\.000 cada uno/.test(txt) && /maleu26/.test(txt) && txt.split('\n').every((l) => (l.match(/\$/g) || []).length <= 1), txt);
     } else {
       const falta = await pg.evaluate(() => window.__falta);
-      chk('«Pagaron 4 de 5 · falta ' + falta.split(' ')[0] + ' $18.000»', /Pagaron 4 de 5/.test(T.cuenta) && new RegExp('falta ' + falta.split(' ')[0] + ' \\$18\\.000').test(T.cuenta), T.cuenta);
-      chk('4 dicen «Pagó» y uno tiene el botón «Falta»', T.chips.filter((c) => /Pagó/.test(c)).length === 4 && T.faltaBtns === 1, T);
-      const b = await pg.evaluate(() => { const x = document.querySelector('#ordBody button.com-pago'); x.scrollIntoView({ block: 'center' }); const r = x.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; });
+      chk('«Pagaron 4 de 5 · faltan $18.000» (' + falta + ')', /Pagaron 4 de 5/.test(T.cuenta) && /faltan \$18\.000/.test(T.cuenta), T.cuenta);
+      chk('el botón de abajo dice «Cobrar lo que falta $18.000», no el total', /Cobrar lo que falta \$18\.000/.test(T.cobrar), T.cobrar);
+      const E = await pg.evaluate(() => { const antes = document.querySelectorAll('#ordBody .com-x').length; const b = [].slice.call(document.querySelectorAll('#ordBody .com-pie button')).filter((x) => /Editar la lista/.test(x.textContent))[0]; if (b) b.click();
+        const xs = [].slice.call(document.querySelectorAll('#ordBody .com-x')); return { antes: antes, despues: xs.length, conPago: xs.filter((x) => x.getAttribute('data-pago') === '1').length, listo: [].slice.call(document.querySelectorAll('#ordBody .com-pie button')).some((x) => /Listo/.test(x.textContent)) }; });
+      chk('«Sacar» no está a la vista; con «Editar la lista» aparece en los 4 cargados (el que pidió no se saca) y los 3 que pagaron piden confirmar', E.antes === 0 && E.despues === 4 && E.conPago === 3 && E.listo, E);
+      await pg.evaluate(() => { const b = [].slice.call(document.querySelectorAll('#ordBody .com-pie button')).filter((x) => /Listo/.test(x.textContent))[0]; if (b) b.click(); });
+      chk('el título no repite la cantidad (ya la dice «son 5»)', !/\d/.test(T.titulo) && !/opcional/.test(T.titulo), T.titulo);
+      chk('4 dicen «Pagó» y uno dice «Falta» con su botón «Marcar pagó» aparte', T.chips.filter((c) => /Pagó/.test(c)).length === 4 && T.faltaBtns === 1 && T.chips.filter((c) => /Falta/.test(c) && /Marcar pagó/.test(c)).length === 1, T);
+      const b = await pg.evaluate(() => { const x = document.querySelector('#ordBody button.com-pagar'); x.scrollIntoView({ block: 'center' }); const r = x.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; });
       await pg.waitForTimeout(300); await pg.touchscreen.tap(b.x, b.y); await pg.waitForTimeout(1500);
       const pp = await pg.evaluate(() => window.__parciales[0] || null);
       console.log('  cobro parcial que saldría: ' + JSON.stringify(pp));

@@ -67,6 +67,7 @@ const CASOS = [['pendiente', null, 'PEND'], ['entregado_sin_cobrar', 'Home', '25
     if (est !== 'cancelado' && F.telHref) chk(est + ': «Cambiar teléfono» está en Más opciones', F.mas.indexOf('Cambiar teléfono') >= 0, F.mas);
     if (est === 'cobrado') {
       chk('cobrado: el chip dice la cuenta (Galicia)', /Galicia/.test(F.chip), F.chip);
+      if (!VIEJO) chk('cobrado: el chip NO repite la línea del bloque Cobro (sin quién ni cuándo)', !/Santos|19:41|Maleu/.test(F.chip.split('Cobrado')[1] || ''), F.chip);
       chk('cobrado: el bloque COBRO dice cuenta, quién y cuándo', /Galicia/.test(F.cobro) && /Santos/.test(F.cobro) && /21\/11 19:41/.test(F.cobro), F.cobro);
     }
     if (est === 'entregado_sin_cobrar' || est === 'cobrado') {
@@ -77,6 +78,7 @@ const CASOS = [['pendiente', null, 'PEND'], ['entregado_sin_cobrar', 'Home', '25
     if (est === 'pendiente') {
       chk('pendiente: «Editar productos» a la vista', F.botonera.indexOf('Editar productos') >= 0, F.botonera);
       chk('pendiente: el freezer se elige con los botones a la vista', F.dep === '' || F.depBotones > 0, F);
+      if (!VIEJO) chk('pendiente: el freezer no se repite como texto encima de los botones', F.dep === '' || (F.dep.match(/Ustariz/g) || []).length <= 1, F.dep);
     }
   }
   chk('sin errores de JS', errores.length === 0, errores.slice(0, 4));

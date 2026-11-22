@@ -35,7 +35,7 @@ async function clic(sel, txt) {
 }
 async function foto(nom) { const r = await cli.enviar('Page.captureScreenshot', { format: 'png' }); const f = path.join(OUT, nom + '.png'); fs.writeFileSync(f, Buffer.from(r.data, 'base64')); console.log('       ' + f); }
 const COM = `(function(){ var c=document.querySelector('#ordBody .com'); if(!c)return null; return { cuenta:((c.querySelector('.com-cuenta')||{}).textContent||'').replace(/\\s+/g,' '),
-  pagaron:[].filter.call(c.querySelectorAll('.com-pago.ok'),function(x){return x.getClientRects().length;}).length, faltas:c.querySelectorAll('button.com-pago').length }; })()`;
+  pagaron:[].filter.call(c.querySelectorAll('.com-est.ok'),function(x){return x.getClientRects().length;}).length, faltas:c.querySelectorAll('button.com-pagar').length }; })()`;
 
 (async () => {
   const cred = JSON.parse(fs.readFileSync(path.join(os.homedir(), '.maleu', 'robot.json'), 'utf8'));
@@ -88,7 +88,7 @@ const COM = `(function(){ var c=document.querySelector('#ordBody .com'); if(!c)r
     chk('la ficha: «' + (c0 && c0.cuenta) + '» y 5 «Falta»', !!c0 && /Cada uno: \$/.test(c0.cuenta) && /son 5/.test(c0.cuenta) && /Pagaron 0 de 5/.test(c0.cuenta), c0 || await ev(COM));
     await foto('juntada_prueba_0');
     for (let i = 0; i < 4; i++) {
-      const b = await clic('#ordBody button.com-pago');
+      const b = await clic('#ordBody button.com-pagar');
       if (!b || !b.mismo) { chk('toque en «Falta» ' + (i + 1), false, b); break; }
       const c = await esperar(`(function(){ var c=${COM}; return c&&c.pagaron>=${i + 1}?c:null; })()`, 20000);
       if (!c) { chk('pago ' + (i + 1) + ' se ve', false, await ev(COM)); break; }
@@ -107,7 +107,7 @@ const COM = `(function(){ var c=document.querySelector('#ordBody .com'); if(!c)r
     chk('el pedido sigue sin cobrar (' + p4 + ')', p4 !== 'Cobrado', p4);
 
     console.log('\n== 3. El 5.º ==');
-    const b5 = await clic('#ordBody button.com-pago');
+    const b5 = await clic('#ordBody button.com-pagar');
     chk('toque en el último «Falta»', !!b5 && b5.mismo, b5);
     let d5 = null; for (let k = 0; k < 15; k++) { d5 = await rpc('pedido_cobro_pantalla', { p: { h: P.h, n: n, r: P.r } }); if (d5 && (d5.pagos || []).length >= 5) break; await T(1000); }
     await ev(`_recargarPedidos(); 1`).catch(() => 0);
