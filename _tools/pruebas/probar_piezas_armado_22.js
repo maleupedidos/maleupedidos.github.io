@@ -19,10 +19,21 @@ async function app(br, vp) {
   await ctx.addInitScript(`try{localStorage.setItem('maleu_panel_session',JSON.stringify({usuario:'tadeo',rol:'admin',nombre:'Tadeo Ustariz',ts:Date.now()}));
       localStorage.setItem('mc_sbses',${JSON.stringify(JSON.stringify({ u: 'tadeo', url: SB, key: PUB, access: ses.access_token, refresh: ses.refresh_token, hasta: Date.now() + 50 * 60e3, modo: 'si', todos: true }))});}catch(e){}
     window.__conf=[]; window.confirm=function(t){window.__conf.push(String(t));return true;}; window.alert=function(){}; window.__cortado=[];
+    /* Después de «cambiada», la base ya tiene la pieza nueva: el pedido (piezas, kg del renglón, total) se lee así. */
+    window.__parche=function(d){ var sw=window.__swap; if(!sw)return d; (function walk(o){ if(!o||typeof o!=='object')return;
+        if(Array.isArray(o)){ o.forEach(walk); return; }
+        if(o.h===sw.h&&String(o.id!=null?o.id:o.n)===sw.n){
+          if(Array.isArray(o.pz))o.pz.forEach(function(z){ if(z&&z.a===sw.a&&Math.abs(Number(z.kg)-sw.kgSale)<0.0005){ z.kg=sw.kgEntra; if('id' in z)z.id=sw.entra; } });
+          if(Array.isArray(o.p))o.p.forEach(function(it){ if(it&&it.a===sw.a)it.q=Math.round((Number(it.q)+sw.kgEntra-sw.kgSale)*1000)/1000; });
+          ['$','total','totalOriginal'].forEach(function(k){ if(typeof o[k]==='number'&&o[k]>0&&!o.__ya)o[k]=sw.total; });
+          o.__ya=1; }
+        Object.keys(o).forEach(function(k){ walk(o[k]); }); })(d); return d; };
     (function(){var f=window.fetch;window.fetch=function(u,x){var s=String(u&&u.url||u),m=String((x&&x.method)||'GET').toUpperCase();var r=/\\/rest\\/v1\\/rpc\\/([a-z0-9_]+)/.exec(s);
+      /* Toda lectura de la base (RPC de pantalla) pasa por el parche, si hubo un cambio. */
+      if(window.__swap&&r&&/(_pantalla|_datos|_base)$/.test(r[1])&&r[1]!=='pieza_armado_pantalla'){ return f.apply(this,arguments).then(function(res){ return res.text().then(function(t){ var d; try{ d=JSON.parse(t); }catch(e){ return new Response(t,{status:res.status,headers:{'Content-Type':'application/json'}}); } return new Response(JSON.stringify(window.__parche(d)),{status:res.status,headers:{'Content-Type':'application/json'}}); }); }); }
       /* La lectura de piezas: la real, con lo que «confirmó» o «cambió» la prueba encima (como la contestaría la base). */
       if(r&&r[1]==='pieza_armado_pantalla'){ return f.apply(this,arguments).then(function(res){ return res.json(); }).then(function(d){
-        try{ Object.keys((d&&d.pedidos)||{}).forEach(function(k){ Object.keys(d.pedidos[k]).forEach(function(a){ var ps=d.pedidos[k][a].piezas||[];
+        try{ window.__pzKg=window.__pzKg||{}; Object.keys((d&&d.pedidos)||{}).forEach(function(k){ Object.keys(d.pedidos[k]).forEach(function(a){ var ps=d.pedidos[k][a].piezas||[]; ps.forEach(function(q){ if(!(q.id in window.__pzKg))window.__pzKg[q.id]={kg:Number(q.kg),a:a}; });
           ps.forEach(function(q){ if(window.__pzOk&&(q.id in window.__pzOk))q.ok=window.__pzOk[q.id];
             if(window.__pzSale&&window.__pzSale[q.id]){q.de='';q.ok=false;} if(window.__pzEntra&&window.__pzEntra[q.id]){q.de='este';q.ok=true;} }); }); }); }catch(e){}
         return new Response(JSON.stringify(d),{status:200,headers:{'Content-Type':'application/json'}}); }); }
@@ -122,13 +133,30 @@ async function tocar(pg, sel, txt, mouse) {
       const chips = await pg.evaluate(() => [].map.call(document.querySelectorAll('.arm-pz .arm-pz-chips button.arm-pz-c'), (x) => x.textContent.trim()));
       chk(modo.n + ': «Agarré otra» abre las piezas libres de peso parecido (' + chips.join(', ') + ')', chips.length >= 1, chips);
       if (chips.length) {
-        await pg.evaluate(() => { const o = document.querySelector('.arm-pz button.arm-pz-otra.on'); const m = o && /armPzOtra\('([^']+)'\)/.exec(o.getAttribute('onclick')); window.__pzVaSale = m ? m[1].split('|').pop() : '';
-          window.__simular = function (b) { return { ok: true, accion: 'cambiada', kgEntra: 1.234, kgSale: 1.149, importe: { dPlata: 1000, total: 51000 } }; }; });
+        /* «cambiada» como la contesta la base (medido en seco: P-0598 → P-0606, +0,232 kg, +$5.568 = $24.000 el kg de Colita):
+           kgEntra = el peso de la pieza tocada, kgSale = el de la atada, total = el del pedido + la diferencia × $/kg. */
+        const tot0 = await pg.evaluate(([h, n]) => { const p = D.pedidos.find((x) => x.h === h && String(x.n) === n); return p ? Number(p.$) || 0 : 0; }, [PH, PN]);
+        await pg.evaluate(([h, n, tot0]) => { const o = document.querySelector('.arm-pz button.arm-pz-otra.on'); const m = o && /armPzOtra\('([^']+)'\)/.exec(o.getAttribute('onclick')); const pp = m ? m[1].split('|') : [];
+          window.__pzVaSale = pp.pop() || ''; const a = pp.pop() || 'CCo';
+          window.__simular = function (b) { const e = window.__pzKg[b.pieza], sa = window.__pzKg[window.__pzVaSale]; const dkg = Math.round((e.kg - sa.kg) * 1000) / 1000, dPlata = Math.round(dkg * 24000);
+            window.__swap = { h: h, n: n, a: a, kgSale: sa.kg, kgEntra: e.kg, entra: b.pieza, total: tot0 + dPlata, dPlata: dPlata };
+            return { ok: true, accion: 'cambiada', sale: window.__pzVaSale, entra: b.pieza, kgSale: sa.kg, kgEntra: e.kg, dkg: dkg, otro: null, importe: { total: tot0 + dPlata, dPlata: dPlata } }; }; }, [PH, PN, tot0]);
         b = await tocar(pg, '.arm-pz .arm-pz-chips button.arm-pz-c', '', modo.mouse); await T(1500);
         /* El aviso de Ruta se lee de la pantalla (su `showToast` vive adentro de la sub-app). */
         const tos = await pg.evaluate(() => { const t = document.getElementById('rutToast'); return t ? t.textContent.replace(/\s+/g, ' ').trim() : ''; });
         const mandada = await pg.evaluate(() => window.__cortado.filter((x) => x.fn === 'pieza_confirmar_directo').slice(-1)[0]);
-        chk(modo.n + ': elegir otra manda ESA pieza y dice el peso nuevo y el total («' + tos + '»)', /1,234 kg/.test(tos) && /51\.000/.test(tos) && !!mandada && !mandada.p.deshacer, { tos, mandada });
+        await T(2500);
+        const SW = await pg.evaluate(() => window.__swap);
+        const kgTxt = (k) => k.toLocaleString('es-AR', { minimumFractionDigits: 3, maximumFractionDigits: 3 });
+        const PANT = await pg.evaluate((cli) => { const c = [].find.call(document.querySelectorAll('.armado-card'), (x) => x.textContent.indexOf(cli) >= 0); if (!c) return null;
+          const t = (s) => ((c.querySelector(s) || {}).textContent || '').replace(/\s+/g, ' ').trim(); return { tot: t('.armado-kgtot'), filas: [].map.call(c.querySelectorAll('.arm-pz-fila'), (f) => f.textContent.replace(/\s+/g, ' ').trim()), ult: t('.arm-pz-ult') }; }, cli);
+        console.log('       cambio: ' + JSON.stringify(SW) + '\n       pantalla: ' + JSON.stringify(PANT) + '\n       aviso: ' + tos);
+        /* (`entregas` leído desde afuera es la copia vieja de la sub-app: se compara con la cuenta.) */
+        const totEsp = Math.round((2.144 - SW.kgSale + SW.kgEntra) * 1000) / 1000;
+        chk(modo.n + ': elegir otra manda ESA pieza y el aviso dice el kg de la que entró (' + kgTxt(SW.kgEntra) + ') y el total nuevo ($' + SW.total.toLocaleString('es-AR') + ', ' + (SW.dPlata >= 0 ? 'sube' : 'baja') + ')',
+          tos.indexOf(kgTxt(SW.kgEntra) + ' kg') >= 0 && tos.indexOf(kgTxt(SW.kgSale) + ' kg') >= 0 && tos.indexOf('$' + SW.total.toLocaleString('es-AR')) >= 0 && !!mandada && mandada.p.pieza === SW.entra && !mandada.p.deshacer, { tos, SW });
+        chk(modo.n + ': el renglón confirmado dice el MISMO kg que el aviso (' + kgTxt(SW.kgEntra) + ')', PANT && PANT.filas.some((f) => /Confirmada/.test(f) && f.indexOf(kgTxt(SW.kgEntra) + ' kg') >= 0), PANT && PANT.filas);
+        chk(modo.n + ': «Carne en total» se actualizó (' + PANT.tot + ')', PANT && PANT.tot.indexOf(kgTxt(Math.round(totEsp * 1000) / 1000)) >= 0 && Math.abs(totEsp - (2.144 - SW.kgSale + SW.kgEntra)) < 0.0015, { tot: PANT && PANT.tot, totEsp });
         await pg.evaluate(() => { window.__simular = null; });
       }
       /* 6. Confirmar todas, una por una, y tildar el armado. */
