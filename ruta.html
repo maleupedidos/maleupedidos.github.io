@@ -1662,12 +1662,16 @@ details.np-mas[open]{padding-bottom:6px}
         <option value="Entregado">Estado: Entregado</option>
       </select>
     </div>
-    <div class="np-lbl-mini">Cómo paga</div>
+    <!-- (21/11/2026, Tadeo 23:56: «no se sabe si me paga en transf, en efectivo») Arranca SIN nada marcado y no hace
+         falta para guardar: sin elegir, el pedido queda «a definir» y el medio se decide al cobrar. Tocar el elegido lo
+         desmarca. -->
+    <div class="np-lbl-mini">Cómo paga <span style="font-weight:500;text-transform:none;letter-spacing:0">· si ya lo sabés</span></div>
     <div class="np-chips np-pago">
-      <button type="button" class="np-chip active" data-pago="Efectivo" onclick="npSetPago('Efectivo')">Efectivo</button>
-      <button type="button" class="np-chip" data-pago="Transferencia" onclick="npSetPago('Transferencia')">Transferencia</button>
-      <button type="button" class="np-chip" data-pago="Mixto" onclick="npSetPago('Mixto')">Mixto</button>
+      <button type="button" class="np-chip" data-pago="Efectivo" onclick="npTocarPago('Efectivo')">Efectivo</button>
+      <button type="button" class="np-chip" data-pago="Transferencia" onclick="npTocarPago('Transferencia')">Transferencia</button>
+      <button type="button" class="np-chip" data-pago="Mixto" onclick="npTocarPago('Mixto')">Mixto</button>
     </div>
+    <div class="np-pago-nota" id="npPagoNota" style="font-size:12px;color:var(--muted);margin-top:4px">Sin elegir queda «a definir»: el medio se elige al cobrar.</div>
 
     <!-- (14/11/2026) «Es de una juntada» se mudó a «Más opciones» (se abre sola si está tildada). -->
 
@@ -2435,7 +2439,7 @@ var NP_DIAS_VALIDOS={Home:[0,1,2,3,4,5,6],Pilar:[0,1,2,3,4,5,6],Clubes:[0,1,2,3,
 var NP_DIA_NOMBRE=['Domingo','Lunes','Martes','Mi\u00E9rcoles','Jueves','Viernes','S\u00E1bado'];
 var NP_DIA_CORTO=['DOM','LUN','MAR','MIE','JUE','VIE','SAB'];
 var NP_MES_CORTO=['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
-var npCart={}, npZona='Home', npPago='Efectivo', npFechaSel='', npSaving=false;
+var npCart={}, npZona='Home', npPago='', npFechaSel='', npSaving=false;
 /* El id de ESTE intento de guardar. Vive mientras el pedido no entro, asi
    que si reintentas despues de que se corte, viaja el MISMO id y el backend
    lo reconoce como repetido en vez de crear un pedido gemelo. Se limpia al
@@ -3593,6 +3597,13 @@ function _saldoPara(cliente, cb){
  *  ese no tiene a donde elegir. */
 function _ctasDigitales(){
   return (RUT_CTAS || []).filter(function(c){ return c && c.tipo === 'digital'; });
+}
+/* (21/11/2026, Tadeo: «TODO se cobra por Galicia… no preguntar boludeces») Las cuentas donde COBRA un cliente: las
+   marcadas «Para clientes» en la hoja Cuentas (`cli`), hoy solo Galicia. Si ninguna viene marcada (una copia vieja),
+   todas las digitales, como antes. MP y Brubank siguen existiendo para el resto (vuelto, caja), no para cobrar. */
+function _ctasCobro(){
+  var d=_ctasDigitales(), c=d.filter(function(x){ return x.cli===true||x.cli==='true'||x.cli===1; });
+  return c.length?c:d;
 }
 
 /** La cuenta por defecto la marca el BACKEND con `def`. No se deriva de "la
@@ -7716,7 +7727,8 @@ function abrirCobroPendiente(idx){
   var pc=pendientesCobro[idx];
   var pcKey=(pc.h||'')+'|'+(pc.id||'');
   if(cobrados[pcKey]||pc.ep==='Cobrado'){showToast('Ya está cobrado');return;}
-  var fp=pc.fp||'Efectivo';
+  /* (21/11/2026) Un pedido «a definir» (sin medio al cargarlo) abre sin nada elegido: el medio se dice al cobrar. */
+  var fp=pc.fp||'';
   // Si el pedido tiene cobros parciales previos, el saldo pendiente es pc.$ directo
   // (no recalcular con descuentos: el descuento ya se aplicó al cobrar el primer parcial).
   // Bug del 01/06/2026: el modal mostraba el total original $58.700 en lugar
@@ -10739,7 +10751,9 @@ function cerrarCobroRuta(){
  */
 function _ctaDeCobro(st, fpFinal){
   if(fpFinal==='Efectivo')return '';
-  if(_ctasDigitales().length<2)return '';
+  var cc=_ctasCobro();
+  /* Una sola cuenta para clientes: va esa, escrita (el «por defecto» del backend podría ser otra). */
+  if(cc.length===1)return _ctasDigitales().length>1?cc[0].id:'';
   return (st && st.cta) || '';
 }
 
@@ -10763,7 +10777,7 @@ function _fpDelCobro(st){
  *  mas de una cuenta donde pueda entrar. */
 function _faltaCtaCobro(st){
   if(!st||st.cta)return false;
-  if(_ctasDigitales().length<2)return false;
+  if(_ctasCobro().length<2)return false;
   var f=_fpDelCobro(st);
   return f==='Transferencia'||f==='Mixto';
 }
@@ -10834,7 +10848,7 @@ function _pillCta(c,on,fn){
 function _pintarFpPills(){
   var box=document.getElementById('cobroRutaFp');
   if(!box)return;
-  var st=_cobroRutaState,dig=_ctasDigitales(),multi=dig.length>1;
+  var st=_cobroRutaState,dig=_ctasCobro(),multi=dig.length>1;
   var fp=st?(st.fp||''):'Efectivo',cta=(st&&st.cta)||'';
   var p=function(v,txt){return '<button type="button" class="cobro-pill'+(fp===v?' on':'')+
     '" data-fp="'+v+'" onclick="_setCobroFp(\''+v+'\')">'+txt+'</button>';};
@@ -10880,7 +10894,7 @@ function _pintarCobroCtas(){
   var sec=document.getElementById('cobroCtaSection');
   var box=document.getElementById('cobroRutaCta');
   if(!sec||!box)return;
-  var st=_cobroRutaState,dig=_ctasDigitales();
+  var st=_cobroRutaState,dig=_ctasCobro();
   var mostrar=!!st&&dig.length>1&&_fpDelCobro(st)==='Mixto';
   sec.style.display=mostrar?'':'none';
   sec.classList.toggle('falta',mostrar&&!st.cta);
@@ -11381,7 +11395,7 @@ function _recalcCobroRuta(){
   if(!partial && faltante>0 && st.fp==='Efectivo' && faltante<=_cobroFaltaTope()){
     if(!st.aceptaDescuento){st.aceptaDescuento=true;st.descAuto=true;}
   } else if(st.descAuto){st.aceptaDescuento=false;st.descAuto=false;}
-  if(!st.fp)errors.push('¿Cómo te pagó? Cada pedido se cargó distinto: elegilo arriba.');
+  if(!st.fp)errors.push(st.combo?'¿Cómo te pagó? Cada pedido se cargó distinto: elegilo arriba.':'¿Cómo te pagó? Elegilo arriba.');
   if(pagado<=0)errors.push('Indicá cuánto recibiste.');
   var faltaCtaCam=_faltaCtaCambio(st,recEf,camMP);
   if(faltaCtaCam)errors.push('¿De qué cuenta salió el vuelto por transferencia? Tocá '+_ctasDigitales().map(function(c){
@@ -13619,8 +13633,11 @@ function npSetZona(z){
 }
 var _npZonaGen=0;
 
+/* Tocar el medio elegido lo desmarca: vuelve a «a definir». */
+function npTocarPago(p){ npSetPago(npPago===p?'':p); }
 function npSetPago(p){
-  npPago=p;
+  npPago=p||'';
+  var _nt=document.getElementById('npPagoNota'); if(_nt)_nt.style.display=npPago?'none':'';
   document.querySelectorAll('.np-chip[data-pago]').forEach(function(b){b.classList.toggle('active',b.dataset.pago===p)});
   npUpdateMixtoSplit();
   npPintarCta();
@@ -14608,7 +14625,8 @@ function npMomento(){
     pagado:    !!(y && y.checked),
     /* El alias solo si de verdad falta cobrar Y el pago es por transferencia.
        Antes salia por la forma de pago sola, sin mirar si ya habia pagado. */
-    aliasVa:   !(y && y.checked) && (npPago === 'Transferencia' || npPago === 'Mixto')
+    /* (21/11/2026) Con el medio «a definir» va igual: el cliente tiene el dato si transfiere. Solo efectivo no. */
+    aliasVa:   !(y && y.checked) && npPago !== 'Efectivo'
   };
 }
 
@@ -14729,7 +14747,8 @@ function npResumenTextoWA(){
   if(mom.entregado){
     if(mom.pagado) lines.push('Ya está todo pago. ¡Que lo disfruten! 🧡');
     else if(mom.aliasVa){
-      lines.push(_aliasCliente().length>1?('Cuando puedas me transferís a '+_aliasCualquiera()+' y listo:'):'Cuando puedas me transferís y listo:');
+      lines.push(!npPago?(_aliasCliente().length>1?('Cuando puedas me lo abonás. Si transferís, '+_aliasCualquiera()+':'):'Cuando puedas me lo abonás. Si transferís:')
+        :(_aliasCliente().length>1?('Cuando puedas me transferís a '+_aliasCualquiera()+' y listo:'):'Cuando puedas me transferís y listo:'));
       _aliasRenglones().forEach(function(l){lines.push(l);});
     } else {
       lines.push('Cuando puedas me lo abonás y listo. ¡Gracias! 🧡');
@@ -14740,7 +14759,8 @@ function npResumenTextoWA(){
       lines.push(cuando ? ('Ya está pago. ' + cuando) : 'Ya está pago.');
     } else if(mom.aliasVa){
       if(cuando) lines.push(cuando);
-      lines.push(_aliasCliente().length>1?('Para abonar, '+_aliasCualquiera()+':'):'Para abonar:');
+      lines.push(!npPago?(_aliasCliente().length>1?('Si transferís, '+_aliasCualquiera()+':'):'Si transferís:')
+        :(_aliasCliente().length>1?('Para abonar, '+_aliasCualquiera()+':'):'Para abonar:'));
       _aliasRenglones().forEach(function(l){lines.push(l);});
     } else if(cuando){
       lines.push(cuando);
@@ -15778,7 +15798,7 @@ function _npAbrirCobro(it,res){
   var prods=[];
   (d.items||[]).forEach(function(x){ var p=NP_CAT_FLAT.filter(function(q){return String(q.id)===String(x.id);})[0]; if(p)prods.push({a:p.abbr,q:Number(x.qty)||0}); });
   var pc={h:d.canal,id:String(n),r:-Number(n),c:d.nombre||'',t:d.telefono||'',$:tot,totalOriginal:tot,sub:sub,env:env,
-    desc:Math.max(0,Math.round(sub+env-tot)),fp:d.pago||'Efectivo',fc:dmy,feEnt:d.fechaEntrega||'',fe:d.fechaEntrega||'',
+    desc:Math.max(0,Math.round(sub+env-tot)),fp:d.pago||'',fc:dmy,feEnt:d.fechaEntrega||'',fe:d.fechaEntrega||'',
     ep:'No Cobrado',es:d.estadoEntrega||'Pendiente',p:prods,cobradoParcial:0,desdeAutopedido:true};
   try{ npListo(true); }catch(e){}
   if(!Array.isArray(pendientesCobro))pendientesCobro=[];
@@ -16131,7 +16151,7 @@ function npReset(){
   npOrigenTocado=false;   // el pedido nuevo vuelve a dejar que el ERP lo elija
   npDepTocado=false; npDepRender();   // y vuelve al freezer propio
   var elEs=document.getElementById('npEstadoEntrega');if(elEs)elEs.value='Pendiente';
-  npSetPago('Efectivo');
+  npSetPago('');
   npEncargoAbierto=false;   // antes del render: el pedido nuevo arranca plegado
   npRenderCatalogo();
   npUpdateTotal();
