@@ -7164,6 +7164,7 @@ html,a,button,summary,label,input,select,textarea,[onclick],[role="button"],[rol
 #eqFicha .eqf-tot b{color:var(--ink)}
 #eqFicha .eqf-sr{border-color:#F3D9B8}
 #eqFicha .eqf-sr .eqf-sr-d{padding:0 14px;border-bottom:1px solid #F3EEE3}
+#eqFicha .eqf-sc .eqf-d{padding:0 14px;border-bottom:1px solid #F3EEE3}   /* (22/11) «Le falta marcar entregado»: el mismo renglón */
 #eqFicha .eqf-sr .eqf-tot{background:#FFF7ED}
 #eqFicha .eqf-comp-w{display:flex;justify-content:flex-end;padding:8px 14px 12px;background:#FCFAF6}
 #eqFicha .eqf-ev-x.eqf-comp{min-height:40px;height:auto;padding:0 16px}
@@ -42137,6 +42138,10 @@ function _eqFichaRepintar(forzar){
       +'<div class="eqf-tot"><span>Te tiene que dar</span><b class="eqf-m">'+_eqP(p.sinRendir)+'</b></div></div>'
       +'<button type="button" class="eqf-pagar sec eqf-recibi" data-p="'+_eqH(p.persona)+'" onclick="eqRecibi(this.dataset.p)">Recibí el efectivo de '+_eqH(_eqNom1(p))+'</button></section>';
   }
+  /* (22/11/2026, Organizador por Tadeo) LE FALTA MARCAR ENTREGADO: lo que era «Ya te rindieron — falta marcarlo» en
+     Cobranza. Pedidos de Red que el representante YA le pagó a Maleu y nadie marcó Entregados: no es cobranza (la plata
+     entró), es una tarea suya, y acá es donde se lo mira. */
+  if(p.grupo==='red')h+=_eqScHTML(p);
   /* (747) Rendimiento: plegado; se pide la primera vez que se abre. */
   if(EQ.rend.abierto)_eqRendTraer(p);
   var hRend='<details class="eqf-sec eqf-rend-d" id="eqfRendD"'+(EQ.rend.abierto?' open':'')+' ontoggle="eqRendToggle(this)"><summary class="eqf-h eqf-h-plg"><span>Rendimiento</span>'
@@ -42220,6 +42225,62 @@ function eqRecibi(per){
     if(Date.now()-t0<20000)return setTimeout(paso,400);
     toast('Abrí la tarjeta de '+per.split(' ')[0]+' en Cobranza',5000);
   })();
+}
+/* «Le falta marcar entregado» (22/11/2026). La lista sale de la MISMA lectura que la armaba en Cobranza
+   (`cobrosPendientes` → `sinCerrar`, la regla de cp_motor: rendido a Maleu y sin Entregado o sin Cobrado) y con la misma
+   regla del domingo: un pedido aparece recién desde el domingo siguiente a su día de entrega (el viernes el representante
+   todavía lo tiene en la bolsa). Marcar va por `cerrarRendidosRed` (la base): entregado con la fecha de entrega de cada
+   pedido, no la de hoy, y suma al facturado de ese mes. */
+var _EQ_SC={d:null,t:0,vuelo:null,hecho:{},err:''};
+function _eqScTraer(forzar){
+  if(_EQ_SC.vuelo)return _EQ_SC.vuelo;
+  if(!forzar&&_EQ_SC.d&&Date.now()-_EQ_SC.t<120000)return Promise.resolve(_EQ_SC.d);
+  if(typeof _lecArmaBase!=='function')return Promise.resolve(_EQ_SC.d||[]);
+  _EQ_SC.vuelo=_lecArmaBase('cobrosPendientes',{}).then(function(x){
+    _EQ_SC.d=(x&&x.d&&Array.isArray(x.d.sinCerrar))?x.d.sinCerrar:[]; _EQ_SC.t=Date.now(); _EQ_SC.err=''; _EQ_SC.vuelo=null; return _EQ_SC.d;
+  },function(e){ _EQ_SC.vuelo=null; _EQ_SC.err=String(e&&e.message||e); return _EQ_SC.d||[]; });
+  return _EQ_SC.vuelo;
+}
+function _eqScNorm(x){ return String(x||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/\s+/g,' ').trim(); }
+function _eqScDomingo(dia){
+  var m=String(dia||'').match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/); if(!m)return null;
+  var d=new Date(Number(m[3]),Number(m[2])-1,Number(m[1])); d.setDate(d.getDate()+(7-d.getDay())); return d;
+}
+function _eqScDe(p){
+  if(!_EQ_SC.d)return null;
+  var n=_eqScNorm(p.persona), hoy=new Date(); hoy.setHours(0,0,0,0);
+  var v=_EQ_SC.d.filter(function(x){ return _eqScNorm(x.vendedor)===n; })[0]; if(!v)return {v:null,peds:[]};
+  var hecho=_EQ_SC.hecho[v.vendedor]||{};
+  return {v:v,peds:(v.peds||[]).filter(function(x){ var dom=_eqScDomingo(x.dia); return (!dom||dom<=hoy)&&!(hecho[x.id]&&Date.now()-hecho[x.id]<180000); })};
+}
+function _eqScHTML(p){
+  var r=_eqScDe(p);
+  if(!r){ _eqScTraer().then(function(){ _eqFichaRepintar(); }); return ''; }
+  if(!r.peds.length)return '';
+  var tot=r.peds.reduce(function(s,x){ return s+(Number(x.total)||0); },0), n=r.peds.length;
+  return '<section class="eqf-sec"><h3 class="eqf-h">Le falta marcar entregado</h3><div class="eqf-q eqf-sc">'
+    +r.peds.map(function(x){
+      var dm=String(x.dia||'').replace(/^(\d{1,2})\/(\d{1,2})\/\d{4}$/,function(_,d,m){ return Number(d)+'/'+Number(m); });
+      return '<button type="button" class="eqf-d" data-h="Red" data-n="'+_eqH(x.id)+'" onclick="eqVerPedido(this.dataset.h,this.dataset.n)"><span class="eqf-dc"><span class="eqf-dn">'+_eqH(x.cliente||'(sin nombre)')+'</span><small>'+_eqH(dm)+' \u00b7 ya te lo pagó</small></span><span class="eqf-m">'+_eqP(x.total)+'</span></button>';
+    }).join('')
+    +'<div class="eqf-tot"><span>Ya te '+(n===1?'lo':'los')+' pagó: falta marcar'+(n===1?'lo':'los')+' entregado'+(n===1?'':'s')+'</span><b class="eqf-m">'+_eqP(tot)+'</b></div></div>'
+    +'<button type="button" class="eqf-pagar sec eqf-sc-b" data-v="'+_eqH(r.v.vendedor)+'" onclick="eqScMarcar(this)">'+(n===1?'Marcar entregado':'Marcar los '+n+' entregados')+'</button></section>';
+}
+function eqScMarcar(btn){
+  var vend=btn&&btn.getAttribute('data-v'); if(!vend||btn.disabled)return;
+  var p=_eqDe(EQ.abierto), r=p&&_eqScDe(p); if(!r||!r.peds.length)return;
+  var tot=r.peds.reduce(function(s,x){ return s+(Number(x.total)||0); },0), n=r.peds.length;
+  if(!confirm((n===1?'Marcar entregado el pedido de '+r.peds[0].cliente:'Marcar entregados los '+n+' pedidos de '+vend)+' ('+_eqP(tot)+').\n\n'
+    +'Quedan Entregados y Cobrados con su fecha de entrega (no la de hoy), y suman al facturado de ese mes. ¿Va?'))return;
+  btn.disabled=true; btn.textContent='Marcando…';
+  var body={action:'cerrarRendidosRed',vendedor:vend,clientOpId:'crr_'+Date.now().toString(36)+'_'+Math.random().toString(36).slice(2,10),ts:Date.now()};
+  Promise.resolve(typeof _ordenDirecta==='function'?_ordenDirecta(body,null,'cerrarRendidosRed'):null).then(function(d){
+    if(!d||d.ok===false){ toast('No se pudo marcar: '+((d&&(d.err||d.error))||'la base no lo tomó'),7000); btn.disabled=false; btn.textContent=n===1?'Marcar entregado':'Marcar los '+n+' entregados'; return; }
+    var h=_EQ_SC.hecho[vend]=_EQ_SC.hecho[vend]||{}; r.peds.forEach(function(x){ h[x.id]=Date.now(); });
+    toast((Number(d.n)||n)+((Number(d.n)||n)===1?' pedido marcado entregado':' pedidos marcados entregados')+' · '+_eqP(Number(d.total)||tot),4000);
+    _eqFichaRepintar(true);
+    setTimeout(function(){ _eqScTraer(true).then(function(){ _eqFichaRepintar(); }); },6000);
+  },function(e){ toast('No se pudo marcar: '+String(e&&e.message||e),7000); btn.disabled=false; btn.textContent=n===1?'Marcar entregado':'Marcar los '+n+' entregados'; });
 }
 function eqVerPedido(h,n){
   if(typeof window.openOrdDetail!=='function'){ toast('No pude abrir el pedido'); return; }
@@ -65756,6 +65817,10 @@ html:not(#_e1):not(#_e2):not(#_e3) :is(button,input,select,textarea){font-family
    botón entre 20 y 42 px. min-height le gana a un height fijo, así que no hace falta tocarlas una por una. */
 @media (max-width:700px){
   html:not(#_e1):not(#_e2):not(#_e3) :is(button,[role="button"],input[type="button"],input[type="submit"]){min-height:44px}
+  /* (22/11/2026) COBRANZA: la línea «Home #2547 · Sábado 21/11 · Ver pedido ›» es role=button y con los 44 px el texto
+     quedaba arriba y abría un hueco de ~30 px antes de la juntada o de Cobrar en cada tarjeta. El área de toque sigue
+     siendo de 44 px (14 de texto + 15 arriba y 15 abajo de relleno); los márgenes negativos le devuelven el lugar. */
+  html:not(#_e1):not(#_e2):not(#_e3) #pg-ruta .cob-meta.cob-ir{min-height:0;padding:15px 0;margin:-21px 0 -15px}
   /* Las tabs del kit fijan su alto con más peso: acá, el mismo peso y después en el archivo. */
   html:not(#_e1):not(#_e2):not(#_e3) :is(.v-tab,.bbdd-tab,#p-proveedores .pv-tab,#pg-abast .tabs>.tab){min-height:44px}
   /* A 12 px «30 d en el freezer» ya no entra en un renglón debajo del nombre: baja. */

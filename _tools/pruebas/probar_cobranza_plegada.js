@@ -6,6 +6,10 @@
        sin la lista de comensales ni los cobros a cuenta; al tocarlo se abren, y siguen abiertos después de repintar;
      · una juntada no repite arriba la caja amarilla de cobros a cuenta; las otras tarjetas pliegan el detalle de cada cobro;
      · «Equipo Maleu» y «Representantes» se pliegan con el total a la vista; cerrados no muestran tarjetas; se recuerda.
+   (22/11, segunda tanda) · Cobranza ya no tiene «Ya te rindieron»; ninguna tarjeta de representante en $0; entre la línea
+     «Home #… · fecha · Ver pedido» y lo que sigue no hay hueco (≤ 24 px: 10 en las comunes, 20 con la juntada, igual que en la compu; antes ~55); y Equipo › ficha del representante (Lourdes,
+     con la ficha armada a mano: el robot no tiene la tab Equipo) dice «Le falta marcar entregado» con el CLIENTE, el día y
+     el monto, y «Marcar entregado» manda `cerrarRendidosRed` de ella (cortado: no se marca nada).
      PW=<playwright-core> BASE=http://localhost:8155/app.html OUT=<dir> node probar_cobranza_plegada.js */
 'use strict';
 const fs = require('fs'), os = require('os'), path = require('path');
@@ -17,7 +21,7 @@ const CORTE = `try{localStorage.setItem('maleu_ensayo','1');['deu-eq','deu-re','
   window.confirm=function(){return true;}; window.alert=function(){}; window.__cortado=[];
   (function(){var f=window.fetch;window.fetch=function(u,x){var s=String(u&&u.url||u),m=String((x&&x.method)||'GET').toUpperCase();var r=/\\/rest\\/v1\\/rpc\\/([a-z0-9_]+)/.exec(s);
     if(m!=='GET'&&m!=='HEAD'&&!/auth\\/v1\\/|login_pin/.test(s)&&(/script\\.google\\.com/.test(s)||(r&&/(_directo|cobrar|anotar|guardar|borrar|marcar|limpiar|aplicar|escribir|crear|alta|cerrar|resolver|descobr|deshacer|_set)/.test(r[1]))||!r)){
-      window.__cortado.push((r&&r[1])||s.slice(0,60)); return Promise.resolve(new Response(JSON.stringify({ok:false,err:'cortado por la prueba'}),{status:200,headers:{'Content-Type':'application/json'}}));}
+      window.__cortado.push({fn:(r&&r[1])||s.slice(0,60),b:String((x&&x.body)||'').slice(0,400)}); return Promise.resolve(new Response(JSON.stringify({ok:false,err:'cortado por la prueba'}),{status:200,headers:{'Content-Type':'application/json'}}));}
     return f.apply(this,arguments);};})();`;
 async function abrir(br, vp, modo) {
   const cred = JSON.parse(fs.readFileSync(path.join(os.homedir(), '.maleu', 'robot.json'), 'utf8'));
@@ -99,6 +103,27 @@ async function medir(pg, n) {
       await pg.evaluate(() => { document.querySelector('#cobrosContent details.cob-sub[data-c="deu-eq"]').scrollIntoView({ block: 'start' }); window.scrollBy(0, -120); });
       await T(400); await pg.screenshot({ path: path.join(OUT, 'cobranza_' + modo + '_equipo_cerrado.png') });
       await tocar('#cobrosContent details.cob-sub[data-c="deu-eq"] > summary');
+      /* Segunda tanda (22/11). */
+      const C3 = await pg.evaluate(() => {
+        const vis = (e) => { for (let d = e.parentElement; d; d = d.parentElement) { if (d.tagName === 'DETAILS' && !d.open && !e.closest('summary')) return false; } const r = e.getBoundingClientRect(); return r.height > 0; };
+        const cc = document.getElementById('cobrosContent');
+        return { sc: cc.querySelectorAll('.sc-box').length + (/Ya te rindieron/.test(cc.textContent) ? 1 : 0),
+          reps: [].map.call(cc.querySelectorAll('.cobro-red-card .cobro-card-total'), (t) => t.textContent.trim()),
+          huecos: [].map.call(cc.querySelectorAll('.cobro-card .cob-meta'), (m) => { const t = m.querySelector('.cob-ir-v') || m, n = m.nextElementSibling; if (!n || !vis(n) || !vis(m)) return null;
+            return Math.round(n.getBoundingClientRect().top - t.getBoundingClientRect().bottom); }).filter((x) => x != null) };
+      });
+      chk(modo + ': Cobranza ya no tiene «Ya te rindieron»', C3.sc === 0, C3.sc);
+      chk(modo + ': ninguna tarjeta de representante en $0 (' + C3.reps.join(' · ') + ')', C3.reps.every((t) => !/^\$\s?0(?![\d.,])/.test(t)), C3.reps);
+      chk(modo + ': sin hueco debajo de «Ver pedido» (máx ' + Math.max.apply(null, C3.huecos.concat([0])) + ' px en ' + C3.huecos.length + ' tarjetas)', C3.huecos.length > 0 && C3.huecos.every((g) => g <= 24), C3.huecos); console.log('  huecos: ' + JSON.stringify(C3.huecos));
+      await pg.evaluate(() => { EQ.d = { personas: [{ persona: 'Lourdes Thomas', grupo: 'red', datos: { nombre: 'Lourdes', apellido: 'Thomas' }, hoy: 0, enCurso: 0, quincenas: [], historial: [] }] }; eqAbrir('Lourdes Thomas'); });
+      const sec = await pg.waitForFunction(() => { const x = [].find.call(document.querySelectorAll('#eqFicha .eqf-sec'), (q) => /Le falta marcar entregado/.test(q.textContent)); return x ? x.textContent.replace(/\s+/g, ' ').trim() : null; }, null, { timeout: 60000 }).then((h) => h.jsonValue()).catch(() => null);
+      chk(modo + ': Equipo › Lourdes: «' + String(sec).slice(0, 120) + '»', !!sec && /Juan Ricardo Thomas/.test(sec) && /20\/11/.test(sec) && /106\.000/.test(sec) && !/#\s?2508/.test(sec) && /Marcar entregado/.test(sec), sec);
+      await pg.evaluate(() => { const b = document.querySelector('#eqFicha .eqf-sc-b'); if (b) b.scrollIntoView({ block: 'center' }); }); await T(500);
+      await pg.screenshot({ path: path.join(OUT, 'equipo_' + modo + '_lourdes.png') });
+      const n0 = await pg.evaluate(() => window.__cortado.length);
+      await tocar('#eqFicha .eqf-sc-b'); await T(2500);
+      const env = await pg.evaluate((n0) => window.__cortado.slice(n0), n0);
+      chk(modo + ': «Marcar entregado» manda cerrarRendidosRed de Lourdes Thomas (cortado)', env.some((e) => /red_cerrar_rendidos_directo|cerrarRendidosRed/.test(e.fn + e.b) && /Lourdes Thomas/.test(e.b)), env);
       chk(modo + ': no salió ninguna escritura (' + (await pg.evaluate(() => window.__cortado.length)) + ' cortadas)', true);
       chk(modo + ': sin errores de JS', pg.__errs.length === 0, pg.__errs);
     } catch (e) { mal++; console.log('  MAL  reventó: ' + (e && e.stack || e)); }
