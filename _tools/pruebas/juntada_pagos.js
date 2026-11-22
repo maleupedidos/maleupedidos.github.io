@@ -47,8 +47,11 @@ let ok = 0, mal = 0; const chk = (n, c, d) => { c ? ok++ : mal++; console.log((c
     if (OUT) { fs.mkdirSync(OUT, { recursive: true }); await pg.screenshot({ path: path.join(OUT, 'juntada_' + (con821 ? 'con821' : 'hoy') + '.png') }); }
     chk('«Cada uno: $18.000 · son 5»', /Cada uno: \$18\.000/.test(T.cuenta) && /son 5/.test(T.cuenta), T.cuenta);
     if (!con821) {
-      chk('con la 821 aplicada (21/11) y sin pagos: «Pagaron 0 de 5 · faltan $90.000» y 5 «Marcar pagó»', T.faltaBtns === 5 && /Pagaron 0 de 5 · faltan \$90\.000/.test(T.cuenta), T);
-      chk('sin pagos, el botón de abajo dice el total: «Cobrar $90.000»', /^Cobrar \$90\.000$/.test(T.cobrar.trim()), T.cobrar);
+      /* La base real cambia: el 21/11 a la noche se cargaron 4 pagos de verdad en el #2533. Se chequea que sea coherente
+         con lo que haya: N pagaron, faltan (5−N)×$18.000, y el botón dice el total o «lo que falta». */
+      const nPag = Number((T.cuenta.match(/Pagaron (\d) de 5/) || [])[1]), faltaR = (5 - nPag) * 18000, f$ = (v) => '$' + v.toLocaleString('es-AR');
+      chk('la base de hoy: «Pagaron ' + nPag + ' de 5 · faltan ' + f$(faltaR) + '» y ' + (5 - nPag) + ' «Marcar pagó»', nPag >= 0 && T.faltaBtns === 5 - nPag && T.cuenta.indexOf('faltan ' + f$(faltaR)) >= 0, T);
+      chk('el botón de abajo dice ' + (nPag ? '«Cobrar lo que falta ' + f$(faltaR) + '»' : '«Cobrar $90.000»'), T.cobrar.trim() === (nPag ? 'Cobrar lo que falta ' + f$(faltaR) : 'Cobrar $90.000'), T.cobrar);
       const b = await pg.evaluate(() => { const x = document.querySelector('#ordBody .com-grupo'); if (!x) return null; x.scrollIntoView({ block: 'center' }); const r = x.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; });
       if (b) { await pg.waitForTimeout(300); await pg.touchscreen.tap(b.x, b.y); await pg.waitForTimeout(600); }
       const txt = await pg.evaluate(() => window.__copiado.join('\n'));
