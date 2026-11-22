@@ -309,6 +309,18 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
     return { ok: !!enRed, detalle: p.h + ' #' + p.n + ' (' + (p.es || '?') + ') → Red #' + (nRed || '?') + (enRed ? ' · se vio en ' + METRICAS.pase_se_ve_ms + ' ms' : ' · no apareció en Red') };
   }, { escribe: true, topeMs: 25000 });
 
+  /* (22/11/2026, 826) LAS PIEZAS DE CARNE EN EL ARMADO, EN SECO. Las piezas son reales: la base le ata una libre al pedido
+     PRUEBA, prueba la directa del armado (confirmar, deshacer, «agarré otra» con el total por la diferencia × $/kg, y el
+     reintento) y deshace todo antes de contestar. Va antes de armar: con el pedido entregado no se puede. */
+  await paso('piezas de carne en el armado (en seco)', async () => {
+    if (!PED) return { ok: false, detalle: 'sin el pedido del alta' };
+    const r = await rpc('robot_piezas_probar', { p: { pedido: PED.h + '|' + PED.n, op: PREFIJO + 'piezas' } });
+    if (r && r.salteado) return { ok: true, salteado: true, detalle: r.detalle };
+    const casos = (r && r.casos) || [];
+    const malos = casos.filter((c) => !c.ok).map((c) => c.caso + ': ' + JSON.stringify(c.r || {}).slice(0, 120) + (c.total ? ' · total ' + JSON.stringify(c.total) : ''));
+    return { ok: !!(r && r.ok) && casos.length === 4, detalle: (r && r.ok ? casos.length + ' de 4 casos (' + r.corte + ', ' + (r.kg || []).join(' ↔ ') + ' kg) · se deshizo' : (r && (r.err || r.error)) || JSON.stringify(r).slice(0, 200)) + (malos.length ? ' · MAL: ' + malos.join(' | ') : '') };
+  }, { escribe: true, topeMs: 20000 });
+
   await paso('armar, entregar, cobrar, deshacer cobro', async () => {
     if (!PED) return { ok: false, detalle: 'sin el pedido del alta' };
     const base = { hoja: PED.h, id: String(PED.n), row: PED.r }, hechos = [];
@@ -329,6 +341,57 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
     if (!bien(r)) return mal(r, 'deshacer cobro'); hechos.push('descobrado');
     return { ok: !!cob && !faltan.length, detalle: hechos.join(' → ') + (cob ? '' : ' · después de cobrar la pantalla no lo mostró Cobrado en 8 s') };
   }, { escribe: true, topeMs: 30000 });
+
+  /* (22/11/2026, 826) LA JUNTADA: un pedido PRUEBA entregado y de juntada con 3 (el que pidió y dos comensales), los 3
+     pagan a cuenta (cobrarParcial, la cuenta «prueba») → Cobrado; se deshace el pago de uno (823) → el pedido vuelve a
+     estar por cobrar con 2 pagos. Se mide contra la base (pedido_cobro_pantalla) y contra la pantalla (D.pedidos). Los
+     comensales los limpia robot_limpiar (826). */
+  await paso('juntada: pagan los 3 y se deshace un pago', async () => {
+    const prod = await prodPrueba();
+    if (!prod || prod.id == null) return { ok: false, detalle: 'sin el producto ' + SKU };
+    const hoy = new Date().toLocaleDateString('sv-SE', { timeZone: 'America/Argentina/Buenos_Aires' }), q = 3, tot = q * (Number(prod.precio) || 1);
+    const al = await directa('altaPedido', { canal: 'Pilar', fecha: new Date().toLocaleString('es-AR'), fechaEntrega: hoy, dia: '', horario: '', nombre: CLI, telefono: TEL,
+      pago: '', envio: 0, items: [{ id: prod.id, qty: q }], repartidor: '', total: tot, subtotalSinDescuento: tot, descuento: 0, descuentoManual: 0, descuentoGlobalPct: 0, descuentoReceta: null,
+      propina: 0, tipoPedido: '', deposito: DEP, barrio: 'PRUEBA', direccion: 'PRUEBA', lote: '', origen: 'Pendiente', estadoEntrega: 'Pendiente', estadoPago: 'No Cobrado', clientOrderId: PREFIJO + 'jnt-alta' });
+    if (!bien(al)) return mal(al, 'alta');
+    const n = String(al.d.n || al.d.ref); await ev(`_recargarPedidos(); 1`).catch(() => 0);
+    const P = await buscarPedido(n, 15000); if (!P) return { ok: false, detalle: 'la base dio el ' + n + ' pero no apareció en Pedidos' };
+    const b = { hoja: P.h, id: n, row: P.r }, hechos = ['#' + n + ' $' + P.$];
+    let r = await directa('marcarArmado', { action: 'marcarArmado', pedidos: [{ h: P.h, id: n, r: P.r, c: CLI }], armado: true, usuario: 'robot', clientOpId: PREFIJO + 'jnt-armar' });
+    if (!bien(r)) return mal(r, 'armar');
+    r = await directa('marcarEntregado', Object.assign({ action: 'marcarEntregado', cobrado: false, propina: 0, repartidor: '', clientOpId: PREFIJO + 'jnt-entregar' }, b));
+    if (!bien(r)) return mal(r, 'entregar');
+    r = await directa('pedidoGrupal', Object.assign({ action: 'pedidoGrupal', valor: 'Sí', clientOpId: PREFIJO + 'jnt-grupal' }, b));
+    if (!bien(r)) return mal(r, 'juntada');
+    const nombres = [CLI, 'PRUEBA Ana', 'PRUEBA Beto'];
+    for (const nm of nombres.slice(1)) {
+      const ri = await rpc('juntada_integrante_directo', { p: { action: 'juntadaIntegrante', grp: 'Pedido ' + P.h + ' ' + n, nombre: nm } });
+      if (!(ri && ri.ok)) return { ok: false, detalle: 'sumar a ' + nm + ': ' + JSON.stringify(ri).slice(0, 160) };
+    }
+    hechos.push('juntada con 3');
+    const total = Number(P.$) || tot, m1 = Math.floor(total / 3), montos = [m1, m1, total - 2 * m1];
+    const cobro = () => rpc('pedido_cobro_pantalla', { p: { h: P.h, n: n, r: P.r } });
+    for (let i = 0; i < 3; i++) {
+      r = await directa('cobrarParcial', Object.assign({ action: 'cobrarParcial', formaPago: 'Transferencia', cuenta: CTA, monto: montos[i], pagador: nombres[i], notas: 'Juntada: ' + nombres[i], quien: 'robot', clientOpId: PREFIJO + 'jnt-p' + i }, b));
+      if (!bien(r)) return mal(r, 'pago ' + (i + 1));
+    }
+    let c = null, t0 = Date.now();
+    while (Date.now() - t0 < 90000) { c = await cobro().catch(() => null); if (c && (c.pagos || []).length >= 3) break; await pausa(2000); }
+    const pagos3 = ((c && c.pagos) || []).length;
+    await ev(`_recargarPedidos(); 1`).catch(() => 0);
+    const epDe = (ms) => esperar(`(function(){ var p=(D.pedidos||[]).find(function(x){ return x.h===${JSON.stringify(P.h)}&&String(x.n)===${JSON.stringify(n)}; }); return p&&p.ep; })()`, ms);
+    const cobrado = await esperar(`(function(){ var p=(D.pedidos||[]).find(function(x){ return x.h===${JSON.stringify(P.h)}&&String(x.n)===${JSON.stringify(n)}; }); return p&&p.ep==='Cobrado'; })()`, 15000);
+    hechos.push(pagos3 + ' pagos en ' + Math.round((Date.now() - t0) / 1000) + ' s' + (cobrado ? ' → Cobrado' : ' → NO quedó Cobrado (' + (await epDe(1000)) + ')'));
+    const d = await rpc('cobro_parcial_deshacer_directo', { p: { action: 'cobroParcialDeshacer', hoja: P.h, id: n, nota: 'Juntada: PRUEBA Ana', motivo: 'robot de pruebas', clientOpId: PREFIJO + 'jnt-desh', ts: Date.now() } });
+    if (!(d && d.ok)) return { ok: false, detalle: hechos.join(' → ') + ' · deshacer: ' + JSON.stringify(d).slice(0, 160) };
+    let c2 = null; t0 = Date.now();
+    while (Date.now() - t0 < 60000) { c2 = await cobro().catch(() => null); if (c2 && (c2.pagos || []).length === 2) break; await pausa(2000); }
+    const quedan = ((c2 && c2.pagos) || []), sinAna = !quedan.some((x) => /PRUEBA Ana/.test(x.nota || ''));
+    await ev(`_recargarPedidos(); 1`).catch(() => 0);
+    const reabre = await esperar(`(function(){ var p=(D.pedidos||[]).find(function(x){ return x.h===${JSON.stringify(P.h)}&&String(x.n)===${JSON.stringify(n)}; }); return p&&p.ep&&p.ep!=='Cobrado'; })()`, 15000);
+    hechos.push('deshecho el de Ana: quedan ' + quedan.length + (sinAna ? '' : ' (¡sigue el de Ana!)') + (reabre ? ', por cobrar' : ', SIGUE Cobrado'));
+    return { ok: pagos3 === 3 && !!cobrado && quedan.length === 2 && sinAna && !!reabre && !!d.reabre, detalle: hechos.join(' → ') };
+  }, { escribe: true, topeMs: 150000 });
 
   await paso('contar stock y deshacer', async () => {
     const pp = await prodPrueba(), antes = pp ? pp.stock : null;
