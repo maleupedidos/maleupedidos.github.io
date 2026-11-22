@@ -72,7 +72,8 @@ const EXTRA = `window.__envios=[]; window.__base=[]; window.__alerts=[]; window.
   x = await carne(['nodirecto'], 4500);
   const b3 = x.e.find((y) => y.a === 'base'), a3 = x.e.find((y) => y.a === 'apps');
   chk('  directo:false: Apps Script con el MISMO ts (el mismo id de orden)', b3 && a3 && b3.id && b3.id === a3.id, x);
-  /* (324) Cerrar los rendidos NO se prueba acá: rutCerrarRendidos busca al representante en _rutSinCerrar, que vive en la
+  /* (324) Cerrar los rendidos NO se prueba acá (desde el 22/11/2026 vive en Equipo › «Le falta marcar entregado»,
+     `eqScMarcar`, y lo prueba probar_cobranza_plegada.js). Antes: rutCerrarRendidos buscaba al representante en _rutSinCerrar, que vive en la
      sub-app y se llena de tres fuentes (foto, lectura, Apps Script); la copia de window no sirve para sembrarlo. */
   await pal({});
   x = await carne(['ok'], 4500);

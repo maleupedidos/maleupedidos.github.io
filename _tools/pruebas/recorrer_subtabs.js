@@ -66,7 +66,7 @@ const NAV = 'estSwitch|ajGo|setCrmProdPeriodo|switchTab|stSwitchTab|vSwitchTab|a
   /* ABRIR=1: en cada pantalla toca hasta 2 de cada «abrir un detalle» (la ficha del cliente, el pedido, la OC…), solo
      lectura, y mira si lo que se abre dice undefined/NaN o tira error. Nunca toca los toggles que escriben
      (toggleEntrega, toggleCobrado, toggleArmado…): la lista es blanca. */
-  const ABRE = 'togglePc|lugDetToggle|cjLibro|vfPanelToggle|hoyQuienes|mrCalOpen|rtPer|pvSetPer|switchSemSel|redCgAbrir|crmOpenCliente|verFichaDePedido|openOrdDetail|prodOpenDetalle|estHogFicha|abaCcAbrir|cobItmAbrir|rutCliVendAbrir|tendVerProducto|stpzAbrir|toggleSem|toggleWeeks|toggleDiaPeds|toggleCollapse|_toggleCobroSec|planSemToggle|semTogglePlegada|togglePrevMonths|rutVerRendidos|rutVerRechazados|rtClVer|showDashboard|stApVer|redObjAbrir|toggleArmadoMasivo';
+  const ABRE = 'togglePc|lugDetToggle|cjLibro|vfPanelToggle|hoyQuienes|mrCalOpen|rtPer|pvSetPer|switchSemSel|redCgAbrir|crmOpenCliente|verFichaDePedido|openOrdDetail|prodOpenDetalle|estHogFicha|abaCcAbrir|cobItmAbrir|rutCliVendAbrir|tendVerProducto|stpzAbrir|toggleSem|toggleWeeks|toggleDiaPeds|toggleCollapse|_toggleCobroSec|planSemToggle|semTogglePlegada|togglePrevMonths|rutVerRechazados|rtClVer|showDashboard|stApVer|redObjAbrir|toggleArmadoMasivo';
   /* (13/11/2026, poda) VOLCAR=<carpeta>: por pantalla guarda el texto visible, los botones (texto + función) y una
      captura de lo que se ve arriba. Es el «antes» de la poda: qué hay, cuánto texto y cuántos botones. */
   const volcados = [];
