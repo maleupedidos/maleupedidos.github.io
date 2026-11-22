@@ -16,7 +16,8 @@
 const fs = require('fs'), os = require('os'), path = require('path');
 const pw = require(process.env.PW || 'playwright-core');
 const BASE = process.env.BASE || 'http://localhost:8155/app.html', VIEJO = process.env.VIEJO || '', OUT = process.env.OUT || os.tmpdir();
-const CORRIDA = 'jc' + Date.now().toString(36), PREFIJO = 'robot-' + CORRIDA + '-';
+/* Empieza con número: `robot_limpiar` de OTRA corrida protege solo `robot-<dígito>`. */
+const CORRIDA = Date.now() + 'jc', PREFIJO = 'robot-' + CORRIDA + '-';
 const SUF = CORRIDA.slice(-4).toUpperCase();
 const T = (ms) => new Promise((r) => setTimeout(r, ms));
 let ok = 0, mal = 0;
