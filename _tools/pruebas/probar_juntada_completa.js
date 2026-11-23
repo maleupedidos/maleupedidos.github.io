@@ -195,10 +195,10 @@ function esperada(totMaleu, gente, gastos) {
     chk('los pases entre ellos tienen «Ya se lo pasó» (' + aOtros.length + ')', L.pase === aOtros.length && aOtros.length >= 1, L.pase);
     chk('ningún botón de la juntada mide menos de 44 px', L.chicos.length === 0, L.chicos);
     await pg.evaluate(() => { window.__copiado = []; });
-    await tocar(pg, '#ordBody .com button.com-grupo'); await T(600);
+    await tocar(pg, '#ordBody .com-mandar'); await T(600);
     const txt = await pg.evaluate(() => (window.__copiado || []).join('\n'));
     console.log('       copiado:\n         ' + txt.replace(/\n/g, '\n         '));
-    chk('«Copiar para el grupo»: cada transferencia, el alias maleu26 y un $ por renglón', X.tr.every((t) => txt.indexOf(C2(t.de) + ' → ' + C2(t.a) + ': ' + f$(t.m)) >= 0) && /maleu26/.test(txt) && txt.split('\n').every((l) => (l.match(/\$/g) || []).length <= 1), txt);
+    chk('«Mandar la cuenta» (sin compartir: copia): cada transferencia, el alias maleu26 y un $ por renglón', X.tr.every((t) => txt.indexOf('• ' + C2(t.de) + ' ' + f$(t.m)) >= 0) && /maleu26/.test(txt) && txt.split('\n').every((l) => (l.match(/\$/g) || []).length <= 1), txt);
     await pg.screenshot({ path: path.join(OUT, 'juntada_cuenta_393.png'), fullPage: false });
     await pg.evaluate(() => { const c = document.querySelector('#ordBody .com'); if (c) c.scrollIntoView({ block: 'start' }); }); await T(300);
     await pg.screenshot({ path: path.join(OUT, 'juntada_cuenta_393_b.png') });

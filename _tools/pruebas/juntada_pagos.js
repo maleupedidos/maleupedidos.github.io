@@ -52,11 +52,11 @@ let ok = 0, mal = 0; const chk = (n, c, d) => { c ? ok++ : mal++; console.log((c
       const nPag = Number((T.cuenta.match(/Pagaron (\d) de 5/) || [])[1]), faltaR = (5 - nPag) * 18000, f$ = (v) => '$' + v.toLocaleString('es-AR');
       chk('la base de hoy: «Pagaron ' + nPag + ' de 5 · faltan ' + f$(faltaR) + '» y ' + (5 - nPag) + ' «Marcar pagó»', nPag >= 0 && T.faltaBtns === 5 - nPag && T.cuenta.indexOf('faltan ' + f$(faltaR)) >= 0, T);
       chk('el botón de abajo dice ' + (nPag ? '«Cobrar lo que falta ' + f$(faltaR) + '»' : '«Cobrar $90.000»'), T.cobrar.trim() === (nPag ? 'Cobrar lo que falta ' + f$(faltaR) : 'Cobrar $90.000'), T.cobrar);
-      const b = await pg.evaluate(() => { const x = document.querySelector('#ordBody .com-grupo'); if (!x) return null; x.scrollIntoView({ block: 'center' }); const r = x.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; });
+      const b = await pg.evaluate(() => { const x = document.querySelector('#ordBody .com-mandar'); if (!x) return null; x.scrollIntoView({ block: 'center' }); const r = x.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; });
       if (b) { await pg.waitForTimeout(300); await pg.touchscreen.tap(b.x, b.y); await pg.waitForTimeout(600); }
       const txt = await pg.evaluate(() => window.__copiado.join('\n'));
       console.log('  copiado:\n    ' + txt.replace(/\n/g, '\n    '));
-      chk('«Copiar para el grupo»: cada uno $18.000 y el alias maleu26, un monto por renglón', /\$18\.000 cada uno/.test(txt) && /maleu26/.test(txt) && txt.split('\n').every((l) => (l.match(/\$/g) || []).length <= 1), txt);
+      chk('«Mandar la cuenta» (sin compartir: copia): cada uno $18.000 y el alias maleu26, un monto por renglón', /cada uno \$18\.000/.test(txt) && /maleu26/.test(txt) && txt.split('\n').every((l) => (l.match(/\$/g) || []).length <= 1), txt);
     } else {
       const falta = await pg.evaluate(() => window.__falta);
       chk('«Pagaron 4 de 5 · faltan $18.000» (' + falta + ')', /Pagaron 4 de 5/.test(T.cuenta) && /faltan \$18\.000/.test(T.cuenta), T.cuenta);

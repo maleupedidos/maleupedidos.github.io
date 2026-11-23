@@ -19,7 +19,7 @@
 const fs = require('fs'), os = require('os'), path = require('path');
 const pw = require(process.env.PW || 'playwright-core');
 const BASE = process.env.BASE || 'http://localhost:8155/app.html', OUT = process.env.OUT || os.tmpdir();
-const MOTOR = process.env.MOTOR || 'webkit', COMPU = MOTOR === 'chromium';
+const MOTOR = process.env.MOTOR || 'webkit', COMPU = MOTOR === 'chromium' && !process.env.CEL;   /* CEL=1 con chromium: el celular a 393 (si WebKit no anda en la máquina) */
 const T = (ms) => new Promise((r) => setTimeout(r, ms));
 let ok = 0, mal = 0; const hall = [];
 const chk = (t, c, d) => { if (c) { ok++; console.log('  ok   ' + t); } else { mal++; hall.push(t); console.log('  MAL  ' + t + (d !== undefined ? '\n         ' + JSON.stringify(d).slice(0, 700) : '')); } return !!c; };
@@ -30,7 +30,12 @@ const INIT = `try{localStorage.setItem('maleu_ensayo','1');localStorage.removeIt
   window.__posts=[]; (function(){var f=window.fetch;window.fetch=function(u,x){var s=String(u&&u.url||u),m=String((x&&x.method)||'GET').toUpperCase();
     if(m!=='POST'||/auth\\/v1\\//.test(s)||/ui_medicion/.test(s))return f.apply(this,arguments);
     var it={u:s.replace(/^.*\\/rpc\\//,'rpc/').slice(0,70),b:String((x&&x.body)||'').slice(0,900),t:Date.now()}; window.__posts.push(it);
-    return f.apply(this,arguments).then(function(r){ try{ r.clone().text().then(function(tx){it.r=r.status+' '+tx.slice(0,400);}); }catch(e){} return r; });};})();`;
+    return f.apply(this,arguments).then(function(r){ try{ r.clone().text().then(function(tx){it.r=r.status+' '+tx.slice(0,400);}); }catch(e){} return r; });};})();
+  window.__shares=[]; window.__copiado=[]; window.__enToque=false;
+  document.addEventListener('click',function(){ window.__enToque=true; setTimeout(function(){ window.__enToque=false; },0); },true);
+  try{ Object.defineProperty(Navigator.prototype,'canShare',{configurable:true,value:function(d){ return !window.__sinShare&&!!(d&&d.files&&d.files.length); }});
+    Object.defineProperty(Navigator.prototype,'share',{configurable:true,value:function(d){ window.__shares.push({d:d,toque:window.__enToque}); return Promise.resolve(); }}); }catch(e){}
+  try{ Object.defineProperty(Navigator.prototype,'clipboard',{configurable:true,get:function(){ return {writeText:function(t){ window.__copiado.push(String(t)); return Promise.resolve(); }}; }}); }catch(e){}`;
 
 let pg, br, errs = [];
 /* Las credenciales: los secrets de GitHub (ROBOT_USUARIO, ROBOT_PIN, ROBOT_PIN_REP) o ~/.maleu/robot.json. Nunca se imprimen. */
@@ -267,6 +272,44 @@ async function flujoYaPago() {
    «Marcar pagó», la línea de quién falta y deshacer un pago. */
 const lineaDe = (sel) => pg.evaluate((sel) => { const c = document.querySelector(sel); if (!c) return null; const r = c.querySelector('.com-desp-r'); return r ? { t: r.textContent.trim(), cabe: r.scrollWidth <= r.clientWidth + 1 } : { t: '(sin línea)', cabe: true }; }, sel);
 const esperarLinea = (sel, re, ms) => esperar(([sel, src]) => { const n = (sel.match(/"(\d+)"/) || [])[1]; const c = [].slice.call(document.querySelectorAll('.cobro-card')).find((c) => c.offsetParent && c.textContent.indexOf('#' + n) >= 0 && /PRUEBA Robot/.test(c.textContent)); if (c) { document.querySelectorAll('[data-au="' + n + '"]').forEach((x) => { if (x !== c) x.removeAttribute('data-au'); }); c.setAttribute('data-au', n); } const r = c && c.querySelector('.com-desp-r'); return r && new RegExp(src).test(r.textContent) ? r.textContent.trim() : null; }, [sel, re.source], ms || 30000);
+/* (23/11/2026) «Mandar la cuenta»: el toque abre el compartir (simulado: WebKit de prueba no lo tiene) con un PNG y el
+   texto, y los montos cierran contra lo que muestra la juntada en pantalla (`cont`: la tarjeta o '#ordBody'). */
+const leerCuenta = (txt) => { const L = txt.split('\n'), num = (s) => Number(String(s || '').replace(/\./g, ''));
+  const bl = []; let b = null;
+  L.forEach((l) => { const m = /^\*(Le pasan a [^*]+)\*(?: \(alias ([^)]+)\))?:$/.exec(l); if (m) { b = { t: m[1], al: m[2] || '', f: [] }; bl.push(b); return; }
+    const f = /^• (~)?(.+) \$([\d.]+)~?$/.exec(l); if (f && b) b.f.push({ ya: !!f[1], n: f[2], m: num(f[3]) }); });
+  const iT = L.findIndex((l) => /^\*Total: /.test(l));
+  return { cada: num((/cada uno \$([\d.]+)/.exec(txt) || [])[1]), total: num((/^\*Total: \$([\d.]+)\*$/m.exec(txt) || [])[1]), n: Number((/^Son (\d+) ·/m.exec(txt) || [])[1]),
+    lineas: L.slice(0, Math.max(0, iT)).map((l) => num((/: \$([\d.]+)$/.exec(l) || [])[1])).filter((x) => x > 0), bl }; };
+const cuentaDom = (cont) => pg.evaluate((cont) => { const c = document.querySelector(cont + ' .com'); if (!c) return null;
+  const per = [].filter.call(c.querySelectorAll('.com-fila'), (f) => /Le toca/.test((f.querySelector('.com-sub') || {}).textContent || ''));
+  const est = per.map((f) => ((f.querySelector('.com-est') || {}).textContent || '').trim());
+  return { cada: Number(((c.querySelector('.com-cuenta b') || {}).textContent || '').replace(/\D/g, '')), n: per.length,
+    falta: est.filter((t) => /^Falta/.test(t)).map((t) => Number(t.replace(/\D/g, ''))).sort((a, b) => a - b), pago: est.filter((t) => /^Pagó/.test(t)).length }; }, cont);
+async function mandarCuenta(cont, nombre, totalEsperado) {
+  const s0 = await pg.evaluate(() => window.__shares.length);
+  /* La juntada se repinta cuando llegan sus datos (y la ficha, su cobro): se toca cuando el botón quedó quieto 1,5 s. */
+  const sel = cont + ' .com-mandar';
+  for (let k = 0; k < 20; k++) { const quieto = await pg.evaluate(async (sel) => { const a = document.querySelector(sel); if (!a) return false; await new Promise((r) => setTimeout(r, 1500)); return document.querySelector(sel) === a; }, sel); if (quieto) break; }
+  const b = await tocar(sel, 'Mandar la cuenta');
+  if (!chk(nombre + ': «Mandar la cuenta» a la vista y sin nada encima', !!b)) { await foto('mandar_' + nombre.replace(/\W+/g, '_')); return null; }
+  await esperar((s0) => window.__shares.length > s0, s0, 5000);
+  const r = await pg.evaluate(async (s0) => { const x = window.__shares[s0]; if (!x) return null; const f = x.d.files && x.d.files[0];
+    const url = f ? await new Promise((ok) => { const fr = new FileReader(); fr.onload = () => ok(fr.result); fr.readAsDataURL(f); }) : '';
+    const dim = url ? await new Promise((ok) => { const im = new Image(); im.onload = () => ok({ w: im.naturalWidth, h: im.naturalHeight }); im.onerror = () => ok(null); im.src = url; }) : null;
+    return { toque: x.toque, txt: String(x.d.text || ''), tipo: f && f.type, url, dim }; }, s0);
+  if (!chk(nombre + ': el toque abre el compartir en el mismo toque, con un PNG y el texto', r && r.toque && r.tipo === 'image/png' && r.txt.length > 20, r && { toque: r.toque, tipo: r.tipo, txt: r.txt.slice(0, 80) })) return null;
+  fs.writeFileSync(path.join(OUT, 'au_' + (COMPU ? '1440' : '393') + '_cuenta_' + nombre.replace(/\W+/g, '_') + '.png'), Buffer.from(r.url.split(',')[1], 'base64'));
+  console.log('       texto:\n         ' + r.txt.replace(/\n/g, '\n         '));
+  chk(nombre + ': la imagen es angosta (720 px = 360 a 2×, se lee a 393 sin zoom) · ' + (r.dim && r.dim.w + '×' + r.dim.h), r.dim && r.dim.w === 720 && r.dim.h > 300 && r.dim.h < 720 * 4, r.dim);
+  const C = leerCuenta(r.txt), D0 = await cuentaDom(cont), M = C.bl.find((x) => /Maleu/.test(x.t));
+  chk(nombre + ': «Son ' + C.n + ' · cada uno $' + C.cada + '» = la pantalla (' + (D0 && D0.n) + ', $' + (D0 && D0.cada) + ')', D0 && C.n === D0.n && C.cada === D0.cada, { C, D0 });
+  chk(nombre + ': total $' + C.total + (totalEsperado ? ' = $' + totalEsperado : '') + ' y los renglones suman el total', C.total > 0 && (!totalEsperado || C.total === totalEsperado) && C.lineas.reduce((a, x) => a + x, 0) === C.total, C);
+  if (M) chk(nombre + ': «Le pasan a Maleu (alias ' + M.al + ')»: lo que falta = los «Falta» de la pantalla, y ' + M.f.filter((x) => x.ya).length + ' tachados = los «Pagó»',
+    M.al === 'maleu26' && JSON.stringify(M.f.filter((x) => !x.ya).map((x) => x.m).sort((a, b) => a - b)) === JSON.stringify(D0.falta) && M.f.filter((x) => x.ya).length === D0.pago, { M, D0 });
+  chk(nombre + ': sin número de pedido ni «Home» (es para el cliente)', !/#\d|\bHome\b|PRUEBA Robot.*pidió/.test(r.txt), r.txt);
+  return C;
+}
 const botonesCobrar = (sel) => pg.evaluate((sel) => [].map.call(document.querySelectorAll(sel + ' .com-cobrar button'), (b) => b.textContent.trim()), sel);
 async function flujoJuntada() {
   console.log('\n── Juntada');
@@ -306,6 +349,19 @@ async function flujoJuntada() {
   /* (23/11) Guardó en + PEDIDO y se fue a COBRANZA: el salto automático de los 6 s a ARMADO no lo tiene que arrancar de acá. */
   const tabAhora = await pg.evaluate(() => (document.querySelector('#pg-ruta .tab.active') || {}).getAttribute ? document.querySelector('#pg-ruta .tab.active').getAttribute('data-tab') : '?');
   chk('juntada: guardé y me fui a COBRANZA: 20 s después sigo en COBRANZA (no me lleva a ARMADO)', tabAhora === 'cobros', tabAhora);
+  /* «Mandar la cuenta» con los 3 debiendo, desde la tarjeta de COBRANZA (sin abrir la juntada). */
+  await re(); const M1 = await mandarCuenta(sel, 'cuenta con 3 debiendo', tot);
+  if (M1) {
+    const M = M1.bl.find((x) => /Maleu/.test(x.t));
+    chk('cuenta con 3 debiendo: 3 a Maleu, ninguno tachado, ningún otro bloque', M && M.f.length === 3 && !M.f.some((x) => x.ya) && M1.bl.length === 1, M1.bl);
+    /* Sin compartir archivos (la compu vieja, otro navegador): copia el texto y avisa «Copiado». */
+    const c0 = await pg.evaluate(() => { window.__sinShare = true; return window.__copiado.length; });
+    await re(); await tocar(sel + ' .com-mandar', 'Mandar la cuenta');
+    const cop = await esperar((c0) => window.__copiado.length > c0 ? window.__copiado[window.__copiado.length - 1] : null, c0, 4000);
+    const toastT = await pg.evaluate(() => [].map.call(document.querySelectorAll('.toast,#toast,[id$="toast"],[id$="Toast"]'), (t) => t.textContent.trim()).join(' | '));
+    chk('cuenta: sin compartir archivos copia el mismo texto y avisa «Copiado» (' + toastT.slice(0, 60) + ')', !!cop && leerCuenta(cop).total === tot && /Copiado/.test(toastT), { cop: cop && cop.slice(0, 80), toastT });
+    await pg.evaluate(() => { window.__sinShare = false; });
+  }
   await re(); const b3 = await tocar(sel + ' .com-cobrar button', 'Cobrar a');
   if (!chk('juntada: con 3 debiendo, «Cobrar a… (3)»', b3 && /\(3\)/.test(b3.txt), b3)) {
     console.log('       GEOMETRÍA ' + JSON.stringify(await pg.evaluate((sel) => { const c = document.querySelector(sel); if (!c) return 'sin tarjeta'; const b = c.querySelector('.com-cobrar button');
@@ -340,6 +396,9 @@ async function flujoJuntada() {
   await irCobranza(); await tarjetaDe(n);
   L = await esperarLinea(sel, /falta /);
   chk('juntada: queda uno y la línea lo nombra («' + L + '»)', !!L && /Robot/.test(L), L);
+  /* Se rearma con el estado de ahora: Ana y Beto pagaron → tachados. */
+  await re(); const M2 = await mandarCuenta(sel, 'cuenta con 2 pagados', tot);
+  if (M2) { const M = M2.bl.find((x) => /Maleu/.test(x.t)); chk('cuenta con 2 pagados: 2 tachados y 1 que falta', M && M.f.filter((x) => x.ya).length === 2 && M.f.filter((x) => !x.ya).length === 1, M); }
   await re(); const aj2 = await abrirJnt(sel);
   const dsh = await tocarT(' [onclick*="comPagoInfo"][data-n="PRUEBA Ana"]');
   if (!chk('juntada: el pago de Ana tiene para deshacer (el «Pagó» de su renglón)', !!dsh, aj2)) await foto('jnt_sin_deshacer');
@@ -362,6 +421,21 @@ async function flujoJuntada() {
   chk('juntada: pagaron los 3 → el pedido queda Cobrado', vp && vp.estado_pago === 'Cobrado', { ep: vp && vp.estado_pago, pagos: pfin && (pfin.pagos || []).map((x) => x.nota + ' ' + x.monto), resp });
   const fuera = await esperar((n) => ![].slice.call(document.querySelectorAll('.cobro-card')).some((c) => c.offsetParent && c.textContent.indexOf('#' + n) >= 0), n, 30000);
   chk('juntada: ya no figura en COBRANZA', !!fuera);
+  /* Cobrada, con un gasto de afuera de Beto (verduras): desde la FICHA, Maleu todo tachado y «Le pasan a Beto». El gasto
+     es del robot (created_by): robot_limpiar lo borra. */
+  const VERD = 3000, rg = await rpc('juntada_gasto_directo', { p: { grp: 'Pedido Home ' + n, quien: 'PRUEBA Beto', que: 'Verduras', monto: VERD } });
+  if (chk('cuenta: gasto de afuera de Beto (Verduras $' + VERD + ')', rg && rg.ok !== false && rg.http === 200, rg)) {
+    await pg.evaluate((n) => { go('pedidos'); const p = (D.pedidos || []).find((x) => x.h === 'Home' && String(x.n) === String(n)); if (p) { openOrdDetail(p.h, String(p.n), Number(p.r) || 0); _comDatos(p, true).then(() => _comPintar(p.h, String(p.n))); } }, n);
+    await esperar(() => /Verduras/.test((document.querySelector('#ordBody .com') || {}).textContent || ''), null, 20000);
+    const M3 = await mandarCuenta('#ordBody', 'cuenta cobrada con verduras', tot + VERD);
+    if (M3) {
+      const M = M3.bl.find((x) => /Maleu/.test(x.t)), Bt = M3.bl.find((x) => /Le pasan a PRUEBA B/.test(x.t));
+      chk('cuenta cobrada: Maleu todo tachado; «Le pasan a Beto» con lo de los otros dos ($' + (Bt ? Bt.f.map((x) => x.m).join(' + $') : '?') + ')',
+        M && M.f.length && M.f.every((x) => x.ya) && Bt && Bt.f.length === 2 && !Bt.f.some((x) => x.ya) && Math.abs(Bt.f.reduce((a, x) => a + x.m, 0) - Math.round(VERD * 2 / 3)) <= 2, M3.bl);
+      await foto('cuenta_ficha');
+    }
+    await pg.evaluate(() => { try { closeOrdDetail(); } catch (e) {} });
+  }
   await foto('jnt_fin');
 }
 async function abrirJnt(sel) {
