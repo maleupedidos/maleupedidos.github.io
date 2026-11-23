@@ -49,7 +49,13 @@ async function medir(pg, n) {
       const d = c.querySelector('details.com-desp'), card = c.closest('.cobro-card,.cg-card');
       return { k: c.getAttribute('data-com'), abierto: !!(d && d.open), res: d ? d.querySelector('.com-desp-r').textContent.trim() : null, hSum: d ? Math.round(d.querySelector('summary').getBoundingClientRect().height) : 0,
         filasVis: [].filter.call(c.querySelectorAll('.com-fila'), vis).length, alto: Math.round(c.getBoundingClientRect().height),
-        amarilla: !!(card && [].some.call(card.querySelectorAll('div[style*="FFF8E1"]'), vis)), altoTarjeta: card ? Math.round(card.getBoundingClientRect().height) : 0 };
+        amarilla: !!(card && [].some.call(card.querySelectorAll('div[style*="FFF8E1"]'), vis)), altoTarjeta: card ? Math.round(card.getBoundingClientRect().height) : 0,
+        /* (22/11, 22:17) quién falta en la línea cerrada, en UNA línea; y «Cobrar» le cobra al que falta. */
+        resLineas: (() => { const r = d && d.querySelector('.com-desp-r'); if (!r) return 0; const lh = parseFloat(getComputedStyle(r).lineHeight) || (parseFloat(getComputedStyle(r).fontSize) * 1.3); return Math.round(r.getBoundingClientRect().height / lh); })(),
+        resDesborda: (() => { const r = d && d.querySelector('.com-desp-r'); return !!r && r.scrollWidth > r.clientWidth + 1; })(),
+        cobrar: card ? [].map.call(card.querySelectorAll('.com-cobrar button'), (b) => b.textContent.trim()) : [],
+        /* el saldo entero: en «Otras opciones» (tarjeta suelta) o «Cobrar lo tildado» (tarjeta por cliente) */
+        saldoEntero: !!(card && ([].some.call(card.querySelectorAll('.cobro-mas-b button'), (b) => /saldo entero/.test(b.textContent)) || (card.classList.contains('cg-card') && !!card.querySelector('.cg-cobrar')))) };
     });
     const S = [].map.call(document.querySelectorAll('#cobrosContent details.cob-sub'), (d) => ({ c: d.dataset.c, abierto: d.open, txt: d.querySelector('summary').textContent.replace(/\s+/g, ' ').trim(), hSum: Math.round(d.querySelector('summary').getBoundingClientRect().height),
       tarjVis: [].filter.call(d.querySelectorAll('.cobro-card,.cg-card,.cobro-red-card'), vis).length }));
@@ -71,12 +77,27 @@ async function medir(pg, n) {
       console.log('  cobros a cuenta plegados: ' + M.P.length);
       chk(modo + ': hay al menos una juntada en Cobranza (' + M.J.length + ')', M.J.length > 0);
       chk(modo + ': cada juntada arranca CERRADA, sin comensales a la vista', M.J.every((j) => !j.abierto && j.filasVis === 0), M.J);
-      chk(modo + ': a la vista dice cómo viene («' + ((M.J[0] || {}).res || '') + '»)', M.J.every((j) => /Pagaron \d+ de \d+|Maleu cobrado|son \d+|sin cargar/.test(j.res || '')), M.J.map((j) => j.res));
+      chk(modo + ': a la vista dice cómo viene («' + ((M.J[0] || {}).res || '') + '»)', M.J.every((j) => /Pagaron \d+ de \d+|falta|Maleu cobrado|son \d+|sin cargar/.test(j.res || '')), M.J.map((j) => j.res));
       chk(modo + ': el renglón de la juntada se toca entero (≥ 44 px)', M.J.every((j) => j.hSum >= 44), M.J.map((j) => j.hSum));
       chk(modo + ': la juntada no repite arriba la caja de cobros a cuenta', M.J.every((j) => !j.amarilla), M.J);
       chk(modo + ': el detalle de cobros a cuenta de las otras tarjetas va plegado y se toca (≥ 44 px)', M.P.every((p) => !p.abierto && p.h >= 44), M.P);
       chk(modo + ': «Equipo Maleu» y «Representantes» son desplegables con el total a la vista', M.S.length >= 2 && M.S.every((s) => /\$/.test(s.txt) && s.hSum >= 44), M.S);
       chk(modo + ': sin scroll de costado', M.ancho <= M.vw + 1, M);
+      const JF = M.J.filter((j) => /falta/.test(j.res || ''));
+      console.log('  con alguien que falta: ' + JSON.stringify(JF.map((j) => ({ res: j.res, lineas: j.resLineas, cobrar: j.cobrar }))));
+      chk(modo + ': la línea cerrada dice QUIÉN falta («' + ((JF[0] || {}).res || '') + '»)', JF.length > 0 && JF.every((j) => /falta [A-ZÁÉÍÓÚÑ]|faltan [A-ZÁÉÍÓÚÑ]|faltan \d+: [A-ZÁÉÍÓÚÑ]/.test(j.res)), JF.map((j) => j.res));
+      chk(modo + ': y entra en una línea, sin cortarse', JF.every((j) => j.resLineas <= 1 && !j.resDesborda), JF.map((j) => [j.res, j.resLineas, j.resDesborda]));
+      chk(modo + ': «Cobrar» le cobra al que falta («' + ((JF[0] || {}).cobrar || []).join(' / ') + '») y el saldo entero queda en Otras opciones', JF.every((j) => j.cobrar.length && j.cobrar.every((t) => /^Cobrar a /.test(t)) && j.saldoEntero), JF.map((j) => [j.cobrar, j.saldoEntero]));
+      if (JF.length) {
+        const cb = await pg.evaluate(() => { window.__cortado = []; const card = [].filter.call(document.querySelectorAll('#cobrosContent .com-cobrar'), (x) => /Cobrar a [^…]/.test(x.textContent))[0]; const b = card && card.querySelector('button');
+          if (!b) return null; const nom = b.getAttribute('data-n'); b.click(); return { nom, m: b.getAttribute('data-m') }; });
+        await T(1500);
+        const sal = await pg.evaluate(() => (window.__cortado || []).map((x) => ({ fn: x.fn, b: x.b })));
+        const par = sal.filter((x) => /cobrarParcial|cobro_parcial|pedido_cobrar/.test(x.fn + ' ' + x.b));
+        chk(modo + ': tocar «Cobrar a ' + (cb && cb.nom) + '» manda un pago a cuenta A SU NOMBRE (cortado), no el cobro del pedido entero',
+          !!cb && par.length >= 1 && par.every((x) => x.b.indexOf('cobrarParcial') >= 0 && x.b.indexOf(JSON.stringify(cb.nom).slice(1, -1)) >= 0 && x.b.indexOf('marcarCobrado') < 0), { cb, sal });
+        await pg.evaluate(() => { try { switchTab('cobros'); } catch (e) {} }); await T(2500);
+      }
       await pg.evaluate(() => { const j = document.querySelector('#cobrosContent .com-cob'); j.scrollIntoView({ block: 'center' }); });
       await T(400); await pg.screenshot({ path: path.join(OUT, 'cobranza_' + modo + '_cerrada.png') });
       /* Tocar la primera juntada: se abre con cobros y comensales. */
@@ -87,6 +108,10 @@ async function medir(pg, n) {
       await tocar(sel);
       M = await medir(pg); let j = M.J.find((x) => x.k === k);
       chk(modo + ': tocarla la abre y muestra quiénes comieron (' + j.filasVis + ' renglones)', j.abierto && j.filasVis > 0, j);
+      /* Adentro, la cuenta también dice quién falta (la misma línea que la ficha del pedido). */
+      await T(400);
+      const cu = await pg.evaluate(() => [].filter.call(document.querySelectorAll('#cobrosContent .com-cu-1'), (x) => x.clientWidth > 0).map((x) => ({ t: x.textContent.trim(), corta: x.scrollWidth > x.clientWidth + 1 })));
+      if (cu.length) chk(modo + ': adentro, la cuenta dice quién falta («' + cu[0].t + '») sin cortarse', cu.every((x) => /falta[n]? (\d+: )?[A-ZÁÉÍÓÚÑ]/.test(x.t) && !x.corta), cu);
       await pg.screenshot({ path: path.join(OUT, 'cobranza_' + modo + '_abierta.png') });
       /* Sigue abierta después de repintar (la base contesta y `_comPintar` la reemplaza). */
       await pg.evaluate((k) => { const [h, n] = k.split('|'); _comPintar(h, n); }, k); await T(500);
