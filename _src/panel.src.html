@@ -22755,8 +22755,23 @@ window.comPago=function(h,n,btn){
     pagador:nm,notas:'Juntada: '+nm,quien:(typeof SESSION!=='undefined'&&SESSION&&SESSION.nombre)||'',ts:Date.now()};
   /* Uno por persona y por lo que ya tenía pagado: un reintento no cobra dos veces, y un segundo pago real (si cambió la
      cuenta por un gasto nuevo) sí entra. */
-  pay.clientOpId='jp-'+p.h+'-'+p.n+'-'+_comNorm(nm).replace(/\s+/g,'_')+'-p'+Math.round(x.maleu);
-  _ordenPost(pay).then(function(r){ return r.json(); }).then(function(r){
+  /* (23/11/2026, auditoría) Si ese mismo pago se DESHIZO, el id de antes ya está usado: la base lo contestaba «repetida» y
+     no anotaba nada, mientras la pantalla decía «Pagó». Marcar de nuevo a quien se le deshizo el pago lleva «-r1», «-r2»… */
+  var _op='jp-'+p.h+'-'+p.n+'-'+_comNorm(nm).replace(/\s+/g,'_')+'-p'+Math.round(x.maleu);
+  var _opSig=function(){ var d=_comDeshechos(), k=0; while(d[_op+(k?'-r'+k:'')])k++; return _op+(k?'-r'+k:''); };
+  pay.clientOpId=_opSig();
+  /* Y si el pago se deshizo en OTRO celular (este no lo sabe): «repetida» y el pago no está → con un id nuevo, una vez.
+     Si el pago está (un reintento de verdad), no se manda nada más. */
+  var _enviar=function(intento){ return _ordenPost(pay).then(function(r){ return r.json(); }).then(function(r){
+    if(!r||!r.repetida||intento)return r;
+    return _jntRpc('pedido_cobro_pantalla',{h:p.h,n:String(p.n),r:Number(p.r)||0}).then(function(c){
+      var esta=((c&&c.pagos)||[]).some(function(q){ return String(q.nota||'')==='Juntada: '+nm; });
+      if(esta)return r;
+      _comDeshechoAnotar(pay.clientOpId); pay.clientOpId=_opSig(); pay.ts=Date.now();
+      return _enviar(1);
+    },function(){ return r; });
+  }); };
+  _enviar(0).then(function(r){
     delete _COM.vuelo[id];
     if(!r||r.ok===false){ toast('No se guardó el pago de '+nm.split(' ')[0]+': '+((r&&(r.err||r.error))||'sin respuesta'),6000); _comPintar(h,n); return; }
     toast('Pagó '+nm.split(' ')[0]+': '+_com$(monto)+' a '+(def.nombre||def.id));
@@ -22767,6 +22782,12 @@ window.comPago=function(h,n,btn){
     try{ if(typeof fetchCobrosPendientes==='function'&&typeof rutCurrentTab!=='undefined'&&rutCurrentTab==='cobros')setTimeout(function(){ fetchCobrosPendientes(true); },600); }catch(e){}
   },function(e){ delete _COM.vuelo[id]; toast('No se guardó: '+String(e&&e.message||e),6000); _comPintar(h,n); });
 };
+/* (23/11/2026) Los ids de los pagos de juntada que se deshicieron, en este celular (60 días). Sin esto, volver a marcar a
+   alguien después de deshacerle el pago mandaba el mismo id y la base lo tomaba como repetido. */
+function _comDeshechos(){ try{ var o=JSON.parse(localStorage.getItem('maleu_jnt_desh')||'{}'); return o&&typeof o==='object'?o:{}; }catch(e){ return {}; } }
+function _comDeshechoAnotar(op){
+  try{ var o=_comDeshechos(), lim=Date.now()-60*86400000; Object.keys(o).forEach(function(k){ if(!(o[k]>lim))delete o[k]; }); o[op]=Date.now(); localStorage.setItem('maleu_jnt_desh',JSON.stringify(o)); }catch(e){}
+}
 /* «Copiar para el grupo»: quién le pasa cuánto a quién; lo de Maleu, con el alias para clientes. Un monto por renglón. */
 window.comCopiarGrupo=function(h,n){
   var p=_comPed(h,n)||(window._comCobItem&&_comPedDe(h,n,window._comCobItem[h+'|'+n])); if(!p)return; var C=_comCuenta(p); if(!C.hay)return;
@@ -22819,6 +22840,8 @@ window.comPagoInfo=function(h,n,btn){
         clientOpId:'jd-'+p.h+'-'+p.n+'-'+_comNorm(nm).replace(/\s+/g,'_')+'-'+Date.now(),ts:Date.now()}).then(function(r){
       delete _COM.vuelo[id];
       if(!r||r.ok===false){ toast((r&&(r.err||r.error))||'No se pudo deshacer',7000); _comPintar(h,n); return; }
+      /* El id del pago deshecho («parcial|op:jp-…»): el próximo «Marcar pagó» de esta persona lleva uno nuevo. */
+      try{ var _mo=/op:([^\s|]+)/.exec(String(r.pago||'')); if(_mo)_comDeshechoAnotar(_mo[1]); }catch(eD){}
       toast('Deshecho: '+nm.split(' ')[0]+' vuelve a «Falta»'+(r.reabre?' y el pedido vuelve a estar por cobrar':''),5000);
       var k=_comK(p); delete _FCB[k]; _fichaCobroPedir(p,k);
       try{ if(typeof _recargarPedidos==='function')_recargarPedidos(); }catch(e){}
@@ -65878,6 +65901,12 @@ html:not(#_e1):not(#_e2):not(#_e3) :is(button,input,select,textarea){font-family
   /* (14/11/2026) La fila de títulos de la tabla de Productos se pega DEBAJO de las pestañas (52 + 40), no en el mismo lugar:
      pegada a 52 quedaba tapada y se scrolleaban columnas de números sin título. */
   html:not(#_e1):not(#_e2):not(#_e3) #p-stock .st-cab-pega{top:calc(92px + var(--sat, 0px))}
+}
+/* (23/11/2026, auditoría) En la COMPU pasaba lo mismo: las barras de Ruta y Abastecimiento quedaban sticky con top 0, DEBAJO
+   del encabezado (48 px, z 100). Bajando un poco en + PEDIDO, COBRANZA y las demás pestañas quedaban tapadas por «Buscar» y
+   no se podían tocar sin volver arriba. */
+@media(min-width:769px){
+  html:not(#_e1):not(#_e2):not(#_e3) :is(#pg-ruta .tabs, #pg-abast .tabs){position:sticky;top:var(--chrome, 48px) !important;z-index:60;background:var(--bg, #F5F2EB)}
 }
 /* (15/11/2026) EL DEDO. Tadeo: «todo se tiene que poder usar perfectamente desde el iPhone». En el celular todo lo que se
    toca mide 44 px de alto como mínimo (la medida de Apple); el detector (_tools/pruebas/pisadas.js) encontró 92 clases de
