@@ -1803,7 +1803,7 @@ details.np-mas[open]{padding-bottom:6px}
          abajo un pie fijo con el total y el botón, siempre a la vista. Antes era una hoja del 92% que en el iPhone quedaba
          debajo del reloj, dejaba ver la página de atrás y escondía «Confirmar» al fondo. -->
     <div class="cobro-ruta-top">
-      <button class="cobro-ruta-close" onclick="cerrarCobroRuta()" aria-label="Cerrar">×</button>
+      <button class="cobro-ruta-close" onclick="cobroCancelar()" aria-label="Cerrar">×</button>
       <div class="cobro-ruta-head">
         <div class="cobro-ruta-title" id="cobroRutaTitle">Cobrar</div>
         <div class="cobro-ruta-sub" id="cobroRutaSub">Pedido $0</div>
@@ -1991,7 +1991,7 @@ details.np-mas[open]{padding-bottom:6px}
     </label>
 
     <div class="cobro-ruta-btns">
-      <button type="button" class="cobro-ruta-btn-no" onclick="cerrarCobroRuta()">Cancelar</button>
+      <button type="button" class="cobro-ruta-btn-no" onclick="cobroCancelar()">Cancelar</button>
       <button type="button" class="cobro-ruta-btn-si" id="btnCobroRutaOk" onclick="confirmarCobroRuta()">Confirmar cobro</button>
     </div>
     </div><!-- /cobro-ruta-pie -->
@@ -9513,6 +9513,7 @@ function _setMoneyInput(id,value){
    Estado interno mientras el modal está abierto. Se setea en abrirCobroRuta()
    y se limpia en cerrarCobroRuta(). */
 var _cobroRutaState=null;
+var _npCobroEspera=[];   /* los cobros de «Ya me pagó» que esperan a que se cierre el cuadro abierto (22/11/2026) */
 var _billeteraRuta=0;  // saldo de la billetera (fondo de cambio), lo trae cobrosPendientes
 /* Pedidos que el vendedor YA rindio y siguen sin marcar entregados/cobrados.
    Los vendedores no usan el ERP, asi que nadie los cierra: el 6/9/2026 habia 13
@@ -10648,11 +10649,13 @@ function _cobroPiePintar(){
     +(est?'<span class="est" style="color:'+col+'">'+String(est).replace(/[<>&]/g,'')+'</span>':'');
 }
 function _cobroFondoToque(){
-  if(_cobroTocado){ showToast('Para salir sin cobrar, tocá la × de arriba'); return; }
+  if(_cobroTocado||(_cobroRutaState&&_cobroRutaState.desdeAutopedido)){ showToast('Para salir sin cobrar, tocá la × de arriba'); return; }
   cerrarCobroRuta();
 }
 function cerrarCobroRuta(){
   _cobroTocado=false;
+  /* El cobro de un «Ya me pagó» que esperaba a que se cierre este (22/11/2026). */
+  if(_npCobroEspera.length)setTimeout(function(){ var x=_npCobroEspera.shift(); if(x&&!_cobroRutaState)_npAbrirCobro(x[0],x[1]); else if(x)_npCobroEspera.unshift(x); },600);
   document.getElementById('cobroRutaOverlay').classList.add('hidden');
   _cobroFondoLock(false);
   if(_cobFicha){_cobFicha=null;_cobFichaHasta=Date.now()+5000;document.documentElement.classList.remove('cob-suelto');}
@@ -10674,7 +10677,9 @@ function _ctaDeCobro(st, fpFinal){
   if(fpFinal==='Efectivo')return '';
   var cc=_ctasCobro();
   /* Una sola cuenta para clientes: va esa, escrita (el «por defecto» del backend podría ser otra). */
-  if(cc.length===1)return _ctasDigitales().length>1?cc[0].id:'';
+  /* (22/11/2026) Escrita SIEMPRE, también con una sola cuenta digital: vacía, la base la imputaba a su «por defecto» (mp)
+     aunque la única cuenta para clientes fuera otra (el robot: «prueba» → en Caja salía en Mercado Pago). */
+  if(cc.length===1)return cc[0].id;
   return (st && st.cta) || '';
 }
 
@@ -15720,7 +15725,11 @@ function _npAbrirCobro(it,res){
   if(!n&&res&&res.ref){ var m=String(res.ref).match(/#\s*(\d+)/); if(m)n=Number(m[1]); }
   var nombre=String(it.nom||d.nombre||'').split(' ')[0];
   if(!n){ showToast('Pedido de '+nombre+' registrado. Cobralo desde COBRANZA',6000); return; }
-  if(rutCurrentTab!=='nuevo'||_cobroRutaState){ showToast('Falta registrar el cobro de '+nombre+': está en COBRANZA',7000); return; }
+  /* (22/11/2026, Home #2567 y #2559) El cobro NO depende de quedarse quieto en + PEDIDO. Hasta hoy, si mientras decía
+     «Registrándolo…» se tocaba «Listo →» u otra pestaña, el cuadro no se abría: un aviso de 7 s y el pedido quedaba
+     Entregado + No Cobrado sin que nadie lo note. Ahora se abre igual (donde estés); si hay otro cobro abierto, espera a
+     que se cierre y se abre después. */
+  if(_cobroRutaState){ _npCobroEspera.push([it,res]); showToast('Al cerrar este cobro se abre el de '+nombre,5000); return; }
   var tot=Math.max(0,Number(it.total)||0), sub=Number(d.subtotalSinDescuento)||0, env=Number(d.envio)||0;
   var hoy=new Date(), dmy=('0'+hoy.getDate()).slice(-2)+'/'+('0'+(hoy.getMonth()+1)).slice(-2)+'/'+hoy.getFullYear();
   var prods=[];
@@ -15728,11 +15737,28 @@ function _npAbrirCobro(it,res){
   var pc={h:d.canal,id:String(n),r:-Number(n),c:d.nombre||'',t:d.telefono||'',$:tot,totalOriginal:tot,sub:sub,env:env,
     desc:Math.max(0,Math.round(sub+env-tot)),fp:d.pago||'',fc:dmy,feEnt:d.fechaEntrega||'',fe:d.fechaEntrega||'',
     ep:'No Cobrado',es:d.estadoEntrega||'Pendiente',p:prods,cobradoParcial:0,desdeAutopedido:true};
-  try{ npListo(true); }catch(e){}
+  if(rutCurrentTab==='nuevo'){ try{ npListo(true); }catch(e){} }
   if(!Array.isArray(pendientesCobro))pendientesCobro=[];
   pendientesCobro=pendientesCobro.filter(function(x){return !((x.h||'')===pc.h&&String(x.id||'')===pc.id);});
   pendientesCobro.push(pc);
+  /* Si ya no está en Ruta (se fue a otra pestaña del ERP), el cuadro se abre suelto, como el cobro desde la ficha. */
+  var _pr=document.getElementById('pg-ruta'), _suelto=!!_pr&&!_pr.offsetParent;
+  if(_suelto){ _cobFicha=pc.h+'|'+pc.id; _cobFichaHasta=Date.now()+3600000; document.documentElement.classList.add('cob-suelto'); }
   abrirCobroPendiente(pendientesCobro.length-1);
+  if(_cobroRutaState){ _cobroRutaState.desdeAutopedido=true; _cobroRutaState.nomAuto=nombre; }
+  else if(_suelto){ _cobFicha=null; document.documentElement.classList.remove('cob-suelto'); }
+}
+/* Salir del cobro de un «Ya me pagó» sin cobrar (la ×, Cancelar o el fondo): se pregunta, y si sale queda dicho que el
+   pedido está No Cobrado. Cualquier otro cobro se cierra como siempre. */
+function cobroCancelar(){
+  var st=_cobroRutaState;
+  if(st&&st.desdeAutopedido){
+    if(!confirm('¿Salir sin registrar el cobro de '+(st.nomAuto||'este pedido')+'?\n\nEl pedido queda «No Cobrado». Lo cobrás después desde COBRANZA.'))return;
+    cerrarCobroRuta();
+    showToast('Quedó SIN cobrar: está en COBRANZA',8000);
+    return;
+  }
+  cerrarCobroRuta();
 }
 
 /* COBRAR DESDE LA FICHA DEL PEDIDO (17/11/2026). Tadeo: cambiar la fecha, deshacer el cobro y cobrar van en el mismo

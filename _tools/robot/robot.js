@@ -59,6 +59,9 @@ async function paso(nombre, fn, opt) {
   opt = opt || {};
   /* ROBOT_SOLO_LECTURA=1 (los deploy.sh, 4/11/2026): los pasos que escriben quedan para el nocturno hasta que den verde
      completo; si no, una falla del robot recién estrenado frenaría cualquier arreglo urgente. */
+  /* ROBOT_SOLO=<regex> (22/11/2026): corre solo los pasos que matchean (y «entrar»), para probar uno sin la vuelta entera.
+     La limpieza del final corre igual. */
+  if (process.env.ROBOT_SOLO && nombre !== 'entrar' && !new RegExp(process.env.ROBOT_SOLO, 'i').test(nombre)) { console.log('  --   ' + nombre + '  (ROBOT_SOLO)'); return null; }
   if (opt.escribe && process.env.ROBOT_SOLO_LECTURA) { pasos.push({ paso: nombre, ok: true, salteado: true, ms: 0, detalle: 'en el deploy solo lecturas (corre de noche)' }); console.log('  --   ' + nombre + '  (solo lecturas en el deploy)'); return null; }
   if (opt.escribe && !ENTIDADES) { pasos.push({ paso: nombre, ok: true, salteado: true, ms: 0, detalle: 'esperando las entidades PRUEBA (no corrió)' }); console.log('  --   ' + nombre + '  (esperando entidades)'); return null; }
   const antes = await ev(`(window.__ensayoApps||[]).length`).catch(() => 0), antesS = await ev(`JSON.stringify(window.__sinApps||{})`).catch(() => '{}'), t0 = Date.now();
@@ -392,6 +395,94 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
     hechos.push('deshecho el de Ana: quedan ' + quedan.length + (sinAna ? '' : ' (¡sigue el de Ana!)') + (reabre ? ', por cobrar' : ', SIGUE Cobrado'));
     return { ok: pagos3 === 3 && !!cobrado && quedan.length === 2 && sinAna && !!reabre && !!d.reabre, detalle: hechos.join(' → ') };
   }, { escribe: true, topeMs: 150000 });
+
+  /* (22/11/2026, Home #2567) + PEDIDO CON «YA ME PAGÓ», POR LA PANTALLA, UNO POR MEDIO. Tadeo cargó un autopedido entregado
+     con Transferencia y «Ya me pagó» y quedó Entregado + No Cobrado: el cobro dependía de quedarse quieto en + PEDIDO hasta
+     que se abriera el cuadro. Acá se hace como él: el formulario, GUARDAR, el cuadro que se abre solo, el medio y «Confirmar
+     cobro». Y se mira la base (Entregado + Cobrado, forma, importes por medio, quién cobró, la fecha del cobro y la cuenta que
+     eligió la pantalla) y la CAJA (el movimiento de ese pedido, con su efectivo y su digital). Para el robot la cuenta es la
+     suya (la pantalla elige la única «Para clientes» que ve); para Tadeo es Galicia. */
+  for (const medio of ['Efectivo', 'Transferencia', 'Mixto']) await paso('+ pedido «Ya me pagó» · ' + medio, async () => {
+    const hechos = [];
+    const r0 = await ev(`(async function(){ window.__cfRobot=window.confirm; window.confirm=function(){return true;};
+      try{ cerrarCobroRuta(); }catch(e){} go('ruta'); await new Promise(function(r){setTimeout(r,1200);}); switchTab('nuevo'); await new Promise(function(r){setTimeout(r,2500);});
+      try{ npReset(); }catch(e){}
+      /* Las cuentas de cobro le llegan a Tadeo con la lectura de Red (solo admin y gerente): al robot no. Se le da la suya
+         como única «Para clientes», que es como Tadeo tiene Galicia: así recorre el mismo camino (la cuenta escrita). */
+      try{ _ctasDe({cuentas:[{id:${JSON.stringify(CTA)},nombre:'PRUEBA',tipo:'digital',cli:true,def:true}]}); }catch(e){}
+      npSetZona('Home'); document.getElementById('npNombre').value=${JSON.stringify(CLI)}; document.getElementById('npTel').value=${JSON.stringify(TEL)};
+      document.getElementById('npLote').value='9';
+      var ids=[${JSON.stringify(String(E.producto_id || ''))},'14','1','19','3'].filter(Boolean), uso='';
+      for(var i=0;i<ids.length&&!uso;i++){ try{ npQty(Number(ids[i]),1); }catch(e){} if((npDiscountInfo()||{}).total>0)uso=ids[i]; else { try{ npQty(Number(ids[i]),-1); }catch(e){} } }
+      var hoy=npIsoDe(new Date()), fb=[].filter.call(document.querySelectorAll('#npFechas [onclick^="npSetFecha"]'),function(b){return (b.getAttribute('onclick')||'').indexOf(hoy)>=0;}); if(fb[0])fb[0].click();
+      var ee=document.getElementById('npEstadoEntrega'); ee.value='Entregado'; ee.dispatchEvent(new Event('change',{bubbles:true}));
+      var dp=document.getElementById('npDeposito'); if(dp&&[].some.call(dp.options,function(o){return o.value===${JSON.stringify(DEP)};})){ dp.value=${JSON.stringify(DEP)}; dp.dispatchEvent(new Event('change',{bubbles:true})); }
+      var og=document.getElementById('npOrigen'); og.value='Pendiente'; og.dispatchEvent(new Event('change',{bubbles:true}));
+      npSetPago(${JSON.stringify(medio)});
+      var yc=document.getElementById('npYaCobrado'); yc.checked=true; try{ npToggleYaCobrado(); }catch(e){}
+      var tot=(npDiscountInfo()||{}).total||0; if(!uso||!(tot>0))return {err:'no encontré un producto con precio para el carrito'};
+      /* Como Tadeo: apenas guarda, toca «Listo →» (se va de + PEDIDO antes de que vuelva el alta). Hasta la v1322 eso
+         dejaba el pedido sin cobrar: el cuadro no se abría. */
+      window.__altaRobot=null; npGuardar(); setTimeout(function(){ try{ npListo(); }catch(e){} },150); return {prod:uso,total:tot}; })()`, 30000);
+    if (!r0 || r0.err) return { ok: false, detalle: (r0 && r0.err) || 'no pude cargar el formulario' };
+    /* El cuadro se abre solo cuando el alta vuelve. */
+    const cu = await esperar(`(function(){ var o=document.getElementById('cobroRutaOverlay'); if(!o||o.classList.contains('hidden'))return null;
+      var t=(document.getElementById('cobroRutaTitle')||{}).textContent||'', s=(document.getElementById('cobroRutaSub')||{}).textContent||''; var m=s.match(/#(\\d+)/);
+      return (t.indexOf('PRUEBA Robot')>=0&&m)?{n:m[1],sub:s}:null; })()`, 60000);
+    if (!cu) { await ev(`window.confirm=window.__cfRobot||window.confirm; 1`).catch(() => 0); return { ok: false, detalle: 'GUARDAR no abrió el cuadro de cobro en 60 s (el pedido puede haber quedado No Cobrado)' }; }
+    hechos.push('#' + cu.n + ' $' + r0.total + ' → se abrió el cobro');
+    const tot = Number(r0.total), ef = medio === 'Efectivo' ? tot : medio === 'Mixto' ? Math.round(tot / 2) : 0, tr = tot - ef;
+    const c1 = await ev(`(async function(){ var p=[].filter.call(document.querySelectorAll('#cobroRutaFp .cobro-pill'),function(b){return b.textContent.trim()===${JSON.stringify(medio)};})[0];
+      if(p&&!p.classList.contains('on'))p.click(); await new Promise(function(r){setTimeout(r,400);});
+      if(${JSON.stringify(medio)}==='Mixto'){ ['cobroRecEf','cobroRecMP'].forEach(function(id,i){ var x=document.getElementById(id); if(!x)return; x.value=String(i?${tr}:${ef}); x.dispatchEvent(new Event('input',{bubbles:true})); x.dispatchEvent(new Event('change',{bubbles:true})); }); }
+      await new Promise(function(r){setTimeout(r,400);});
+      /* ¿Quién cobró? el efectivo: la persona del robot si lo pregunta. */
+      /* Solo si la pregunta está a la vista (con efectivo). Las personas son las reales: el pedido es PRUEBA, así que no
+         entra a la billetera de nadie (la base lo deja afuera de todo) y robot_limpiar lo borra. */
+      var qsec=document.getElementById('cobroQuienSection'), qs=(qsec&&qsec.style.display!=='none')?[].slice.call(qsec.querySelectorAll('#cobroQuien .cobro-pill')):[];
+      var q=qs.filter(function(b){return (b.getAttribute('data-p')||'')==='PRUEBA Robot';})[0]||qs.filter(function(b){return b.classList.contains('on');})[0]||qs[0];
+      if(q&&!q.classList.contains('on'))q.click();
+      await new Promise(function(r){setTimeout(r,300);});
+      /* Si además pregunta la billetera (persona sin billetera propia), la del robot. */
+      var bl=[].filter.call(document.querySelectorAll('#cobroRutaOverlay [onclick*="Bil"]'),function(b){return /PRUEBA Robot/.test(b.textContent)&&b.offsetParent;})[0]; if(bl&&!bl.classList.contains('on'))bl.click();
+      await new Promise(function(r){setTimeout(r,300);});
+      var b=document.getElementById('btnCobroRutaOk'); var txt=b?b.textContent.trim():'(sin botón)', dis=!!(b&&b.disabled);
+      if(dis){ var er=document.getElementById('cobroRutaErr'); txt+=' · '+(er?er.innerText.replace(/\\s+/g,' ').trim().slice(0,160):'')
+        +' · ef '+((document.getElementById('cobroRecEf')||{}).value||'')+' / tr '+((document.getElementById('cobroRecMP')||{}).value||''); }
+      if(b&&!dis)b.click(); return {txt:txt,dis:dis}; })()`, 20000);
+    if (c1.dis) { await ev(`window.confirm=window.__cfRobot||window.confirm; try{cerrarCobroRuta();}catch(e){} 1`).catch(() => 0); return { ok: false, detalle: hechos.join(' → ') + ' · el botón no deja cobrar: «' + c1.txt + '»' }; }
+    hechos.push('«' + c1.txt + '»');
+    const cerro = await esperar(`(function(){ var o=document.getElementById('cobroRutaOverlay'); return !o||o.classList.contains('hidden'); })()`, 15000);
+    await ev(`window.confirm=window.__cfRobot||window.confirm; 1`).catch(() => 0);
+    if (!cerro) return { ok: false, detalle: hechos.join(' → ') + ' · el cuadro siguió abierto después de «Confirmar cobro»' };
+    /* La base: Entregado + Cobrado, la forma, los importes por medio, quién y cuándo, y la cuenta que eligió la pantalla. */
+    const ctaEsperada = await ev(`(function(){ try{ return _ctaDeCobro({cta:''},${JSON.stringify(medio)})||''; }catch(e){ return '?'; } })()`).catch(() => '?');
+    let vp = null; for (let k = 0; k < 10; k++) { const v = await rpc('robot_verificar', { p: { pedido: 'Home|' + cu.n } }).catch(() => null); vp = v && v.pedido; if (vp && vp.estado_pago === 'Cobrado') break; await pausa(1500); }
+    const mal2 = [];
+    if (!vp || vp.estado_pago !== 'Cobrado') mal2.push('NO quedó Cobrado (' + (vp && vp.estado_pago) + ')');
+    else {
+      if (vp.forma !== medio) mal2.push('forma ' + vp.forma);
+      if (Math.abs(Number(vp.efectivo) - ef) > 100 || Math.abs(Number(vp.transferencia) - tr) > 0.5) mal2.push('importes ef ' + vp.efectivo + ' / tr ' + vp.transferencia + ' (esperaba ' + ef + ' / ' + tr + ')');
+      if (!vp.cobrador) mal2.push('sin quién cobró');
+      if (medio !== 'Efectivo' && String(vp.cuenta || '') !== String(ctaEsperada)) mal2.push('cuenta «' + vp.cuenta + '» y la pantalla eligió «' + ctaEsperada + '»');
+    }
+    await ev(`_recargarPedidos(); 1`).catch(() => 0);
+    const pd = await esperar(`(function(){ var p=(D.pedidos||[]).find(function(x){ return x.h==='Home'&&String(x.n)===${JSON.stringify(cu.n)}; }); return p&&p.ep==='Cobrado'?{es:p.es,ep:p.ep}:null; })()`, 15000);
+    if (!pd) mal2.push('la pantalla no lo muestra Cobrado'); else if (pd.es !== 'Entregado') mal2.push('quedó ' + pd.es + ', no Entregado');
+    /* La caja (con la sesión del robot la base deja ver lo PRUEBA): el movimiento de ese pedido. */
+    /* caja_light_pantalla: un movimiento por pata (Efectivo a la caja, lo digital a su cuenta), con hoja y pedido. */
+    const cjr = await rpc('caja_light_pantalla', { p_desde: new Date(Date.now() - 86400000).toISOString() }).catch((e) => ({ err: String(e.message || e) }));
+    const cj = (() => { if (!cjr || cjr.err || !Array.isArray(cjr.movimientos)) return { err: (cjr && (cjr.err || cjr.message || cjr.http)) || 'sin movimientos' };
+      const m = cjr.movimientos.filter((x) => x.hoja === 'Home' && String(x.pedido || '') === String(cu.n));
+      return { n: m.length, ef: m.filter((x) => x.met === 'Efectivo').reduce((a, x) => a + (Number(x.$) || 0), 0), mp: m.filter((x) => x.met !== 'Efectivo').reduce((a, x) => a + (Number(x.$) || 0), 0), cta: m.map((x) => x.cta).join(',') }; })();
+    if (!cj || cj.err) mal2.push('caja: ' + JSON.stringify(cj).slice(0, 120));
+    else if (!cj.n) mal2.push('no está en la caja');
+    else if (Math.abs(cj.ef - ef) > 100 || Math.abs(cj.mp - tr) > 0.5) mal2.push('en la caja ef ' + cj.ef + ' / digital ' + cj.mp);
+    else if (tr > 0 && vp && cj.cta.split(',').filter((c) => c !== 'efectivo').some((c) => c !== String(vp.cuenta || ''))) mal2.push('en la caja lo digital fue a «' + cj.cta + '» y el pedido dice «' + vp.cuenta + '»');
+    if (tr > 0 && vp && !vp.cuenta) mal2.push('el cobro digital salió SIN cuenta (la base lo imputa a su cuenta por defecto)');
+    hechos.push(mal2.length ? 'MAL: ' + mal2.join(' · ') : 'Entregado + Cobrado · ' + vp.forma + ' ef ' + vp.efectivo + ' / tr ' + vp.transferencia + (medio !== 'Efectivo' ? ' · cuenta «' + (vp.cuenta || '') + '»' : '') + ' · ' + vp.cobrador + ' · en la caja (' + cj.cta + ')');
+    return { ok: !mal2.length, detalle: hechos.join(' → ') };
+  }, { escribe: true, topeMs: 120000 });
 
   await paso('contar stock y deshacer', async () => {
     const pp = await prodPrueba(), antes = pp ? pp.stock : null;
