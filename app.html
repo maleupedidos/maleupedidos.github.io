@@ -27254,10 +27254,28 @@ function _comFaltanAlts(C){
 function _comFaltanTxt(C){ return _comFaltanAlts(C)[0]; }
 /* Elige, para cada línea con versiones (`data-alt`), la primera que entra sin cortarse. Se corre después de pintar y cuando
    se abre un desplegable (cerrado no tiene ancho: queda la primera hasta que se vea). */
+/* (23/11/2026, auditoría) Lo que se pinta OCULTO (COBRANZA refrescada mientras estás en otra tab) no tiene ancho y se
+   salteaba: al mostrarse quedaba la versión más larga, cortada («Pagaron 4 de 5 · falta Benja Villanueva…», 92 px de
+   más a 393). Cada línea se observa: cuando toma ancho (o le cambia), se vuelve a elegir. `__comW` corta el rebote del
+   propio ajuste (cambiar el texto cambia el ancho). */
+function _comAjustarUno(r){
+  if(!r||!r.clientWidth)return; var alts; try{ alts=JSON.parse(r.getAttribute('data-alt')); }catch(e){ return; }
+  for(var i=0;i<alts.length;i++){ r.textContent=alts[i]; if(r.scrollWidth<=r.clientWidth+1)break; }
+  r.__comW=r.parentNode?r.parentNode.clientWidth:0;
+}
+var _comRO=null;
+/* El ajuste va al cuadro SIGUIENTE (rAF): cambiar el texto adentro del aviso del observador le cambia el tamaño en el
+   mismo cuadro, y el navegador tira «ResizeObserver loop completed with undelivered notifications». */
+try{ if(typeof ResizeObserver==='function')_comRO=new ResizeObserver(function(es){ var hay=[]; es.forEach(function(e){ hay.push(e.target); });
+  requestAnimationFrame(function(){ hay.forEach(function(r){
+    var w=r.parentNode?r.parentNode.clientWidth:0; if(!r.isConnected){ try{ _comRO.unobserve(r); }catch(x){} return; }
+    if(w&&(w!==r.__comW||r.scrollWidth>r.clientWidth+1))_comAjustarUno(r); }); }); }); }catch(e){ _comRO=null; }
+/* La letra de la web llega DESPUÉS del primer ajuste (se eligió con la de reemplazo, más angosta): se elige de nuevo. */
+try{ if(document.fonts){ if(document.fonts.ready)document.fonts.ready.then(function(){ _comAjustarRes(); }); if(document.fonts.addEventListener)document.fonts.addEventListener('loadingdone',function(){ setTimeout(_comAjustarRes,0); }); } }catch(e){}
 function _comAjustarRes(){
   [].forEach.call(document.querySelectorAll('[data-alt]'),function(r){
-    if(!r.clientWidth)return; var alts; try{ alts=JSON.parse(r.getAttribute('data-alt')); }catch(e){ return; }
-    for(var i=0;i<alts.length;i++){ r.textContent=alts[i]; if(r.scrollWidth<=r.clientWidth+1)return; }
+    if(_comRO&&!r.__comRO){ r.__comRO=1; try{ _comRO.observe(r); }catch(e){} }
+    _comAjustarUno(r);
   });
 }
 try{ document.addEventListener('toggle',function(){ setTimeout(_comAjustarRes,0); },true); window.addEventListener('resize',function(){ clearTimeout(window.__comAjT); window.__comAjT=setTimeout(_comAjustarRes,150); }); }catch(e){}
@@ -70657,6 +70675,12 @@ html:not(#_e1):not(#_e2):not(#_e3) :is(button,input,select,textarea){font-family
      quedaba arriba y abría un hueco de ~30 px antes de la juntada o de Cobrar en cada tarjeta. El área de toque sigue
      siendo de 44 px (14 de texto + 15 arriba y 15 abajo de relleno); los márgenes negativos le devuelven el lugar. */
   html:not(#_e1):not(#_e2):not(#_e3) #pg-ruta .cob-meta.cob-ir{min-height:0;padding:15px 0;margin:-21px 0 -15px}
+  /* (23/11/2026, auditoría) «Ver pedido ›» (15 px de alto, adentro del renglón que TILDA el pedido) y el nombre de la
+     tarjeta (19 px) son spans: el min-height de 44 no les aplica (son inline). Con el dedo se tildaba en vez de abrir.
+     Relleno hasta 44 y margen negativo: el área de toque crece y nada se corre. */
+  html:not(#_e1):not(#_e2):not(#_e3) #pg-ruta .cob-ir-v{display:inline-block;padding:14px 6px;margin:-14px -6px}
+  html:not(#_e1):not(#_e2):not(#_e3) #pg-ruta .cobro-card-name .cob-ir{display:inline-block;padding:12px 0;margin:-12px 0}
+  html:not(#_e1):not(#_e2):not(#_e3) #pg-ruta .cobro-red-fila .cob-ir{display:inline-block;padding:5px 0;margin:-5px 0}
   /* Las tabs del kit fijan su alto con más peso: acá, el mismo peso y después en el archivo. */
   html:not(#_e1):not(#_e2):not(#_e3) :is(.v-tab,.bbdd-tab,#p-proveedores .pv-tab,#pg-abast .tabs>.tab){min-height:44px}
   /* A 12 px «30 d en el freezer» ya no entra en un renglón debajo del nombre: baja. */
@@ -90716,7 +90740,12 @@ function _npColaProcesar(){
     })
     .catch(function(err){
       clearTimeout(reloj);
-      npPreguntarSiEntro(it.coid,(err&&err.backend)?0:NP_ENTRO_MS,function(r){
+      /* (23/11/2026, auditoría) SIN SEÑAL no pudo haber entrado: no se esperan los 75 s de «¿entró?» (son para la
+         respuesta que se perdió). Se reintenta con la espera de siempre y, apenas vuelve la señal, al toque (evento
+         `online`, abajo). Reenviar es seguro: la base no duplica un alta con el mismo clientOrderId. Medido: con «Ya me
+         pagó» cargado sin señal, el cuadro de cobro se abría ~80 s después de volver la señal. */
+      var _sinRed=(typeof navigator!=='undefined'&&navigator.onLine===false);
+      npPreguntarSiEntro(it.coid,((err&&err.backend)||_sinRed)?0:NP_ENTRO_MS,function(r){
         if(r&&r.entro)return _npColaListo(it,{ok:true,verificado:true,ref:r.ref||''},t0);
         _npColaVuelo=false;
         var x=_npColaLeer().filter(function(y){return y.coid===it.coid;})[0]||{};
@@ -90951,6 +90980,8 @@ function _npColaPintar(){
 }
 /* Lo que quedo de antes (se cerro la app con algo en la cola): se retoma al abrir. */
 setTimeout(function(){ _npColaPintar(); _npColaProcesar(); },1500);
+/* (23/11/2026) Vuelve la señal: lo que quedó en la cola de + PEDIDO sale ya, sin esperar al próximo reintento. */
+try{ window.addEventListener('online',function(){ if(_npColaVuelo)return; clearTimeout(_npColaT); setTimeout(_npColaProcesar,400); }); }catch(e){}
 
 /* ── El intento sin confirmar y la pregunta "¿entró?" (4/10/2026) ──────────
    Ver el comentario de `npGuardar` donde se usa. */
@@ -91008,6 +91039,9 @@ function npListo(automatico){
   var empezoOtro=Object.keys(npCart||{}).length>0 ||
                  ((document.getElementById('npNombre')||{}).value||'').trim()!=='';
   if(automatico&&empezoOtro)return;        // esta cargando otro: no lo saques de acá
+  /* (23/11/2026, auditoría) Y si ya se fue de + PEDIDO (guardó y tocó COBRANZA para cobrar), el salto de los 6 s lo
+     arrancaba de donde estaba y lo llevaba a ARMADO en el medio del cobro. El salto es solo desde + PEDIDO. */
+  if(automatico&&rutCurrentTab!=='nuevo')return;
   refresh();
   rutCurrentTab='armado';saveLocal();
   document.querySelectorAll('.tab').forEach(function(t){t.classList.toggle('active',t.dataset.tab==='armado')});

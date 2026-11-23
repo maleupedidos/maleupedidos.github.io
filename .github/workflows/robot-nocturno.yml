@@ -28,7 +28,7 @@ concurrency:
 jobs:
   robot:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 60
     steps:
       # (18/11/2026) La guarda de la madrugada era solo de robot.js: los otros pasos (sin Apps Script, la compra PRUEBA en la
       # tienda real, la reentrada, el representante) corrían igual a las 13 h, en plena operación. Ahora decide para todos.
@@ -86,6 +86,28 @@ jobs:
           SIN_APPS_ROL: rep
           CHROME_BIN: /usr/bin/google-chrome
         run: node _tools/robot/sin_apps.js
+      # (23/11/2026, auditoría) LOS FLUJOS CON TOQUES REALES: lo que Tadeo usa todos los días, tocando la pantalla como él
+      # (+ Pedido con cada medio, Cobranza, la juntada con deshacer, Ruta sin señal, Red con la OC y el portal). Va en
+      # WebKit a 393 (el iPhone) y en Chromium a 1440 con el cajón abierto. Solo entidades PRUEBA; limpia al final.
+      - name: Flujos con toques (iPhone y compu)
+        id: flujos
+        if: always() && steps.hora.outputs.corre == 'true'
+        env:
+          ROBOT_USUARIO: ${{ secrets.ROBOT_USUARIO }}
+          ROBOT_PIN: ${{ secrets.ROBOT_PIN }}
+          ROBOT_PIN_REP: ${{ secrets.ROBOT_PIN_REP }}
+          BASE: https://app.maleu.com.ar/app.html
+          FLUJO: todo
+        run: |
+          mkdir -p /tmp/pw && cd /tmp/pw && npm init -y >/dev/null && npm i --no-save playwright-core@1.62.1 >/dev/null
+          npx -y playwright@1.62.1 install --with-deps webkit chromium >/dev/null
+          cd "$GITHUB_WORKSPACE"
+          export PW=/tmp/pw/node_modules/playwright-core OUT=/tmp
+          r=0; node _tools/pruebas/auditoria_flujos.js || r=1
+          MOTOR=chromium node _tools/pruebas/auditoria_flujos.js || r=1
+          # Dos fallas a la vez: «Ya me pagó» cargado SIN SEÑAL; al volver, el cobro se tiene que abrir solo.
+          FLUJO=yapago MEDIOS=Transferencia SIN_SENAL=1 node _tools/pruebas/auditoria_flujos.js || r=1
+          exit $r
       - name: Si algo falló, una alerta técnica (no al Telegram de Tadeo)
         if: failure() && steps.hora.outputs.corre == 'true'
         env:
@@ -94,7 +116,7 @@ jobs:
           RUN_ID: ${{ github.run_id }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           FALLO: >-
-            Falló: ${{ steps.robot.outcome == 'failure' && 'el recorrido del ERP · ' || '' }}${{ steps.sinapps.outcome == 'failure' && 'pantallas sin Apps Script · ' || '' }}${{ steps.tienda.outcome == 'failure' && 'compra de prueba en la tienda · ' || '' }}${{ steps.reentrada.outcome == 'failure' && 'volver a entrar con PIN · ' || '' }}${{ steps.rep.outcome == 'failure' && 'el portal del representante · ' || '' }}el detalle está en GitHub.
+            Falló: ${{ steps.robot.outcome == 'failure' && 'el recorrido del ERP · ' || '' }}${{ steps.sinapps.outcome == 'failure' && 'pantallas sin Apps Script · ' || '' }}${{ steps.tienda.outcome == 'failure' && 'compra de prueba en la tienda · ' || '' }}${{ steps.reentrada.outcome == 'failure' && 'volver a entrar con PIN · ' || '' }}${{ steps.rep.outcome == 'failure' && 'el portal del representante · ' || '' }}${{ steps.flujos.outcome == 'failure' && 'los flujos con toques · ' || '' }}el detalle está en GitHub.
         run: |
           export VERSION=$(grep -o "maleu-panel-v[0-9]*" sw-panel.js | head -1 | sed 's/maleu-panel-//')
           node _tools/robot/avisar_falla.js

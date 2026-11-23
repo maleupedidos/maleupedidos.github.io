@@ -3,10 +3,18 @@
    los días tocando la pantalla como él: WebKit a 393 con toque (MOTOR=chromium → 1440 con mouse y el cajón abierto).
    Solo entidades PRUEBA (cliente «PRUEBA Robot», teléfono del robot, depósito «prueba»). Al final: robot_limpiar.
    Cada toque comprueba que debajo del dedo esté el botón (elementFromPoint): si una capa lo tapa, es un hallazgo.
-     FLUJO=cobranza   + Pedido «Lo cobro después» con Efectivo / Transferencia / Mixto → cobrarlo desde COBRANZA.
-     MEDIOS=Efectivo,Mixto   (opcional) solo esos.
-     LIMPIAR=1        solo robot_limpiar.
-   PW=<playwright-core> BASE=http://localhost:8155/app.html OUT=<dir> node auditoria_flujos.js */
+     FLUJO=cobranza   + Pedido «Lo cobro después» con Efectivo / Transferencia / Mixto → cobrarlo desde COBRANZA
+                      (la pantalla manda Galicia; la base guarda «prueba» en todo pedido PRUEBA).
+     FLUJO=yapago     + Pedido «Ya me pagó» con cada medio, tocando «Listo →» apenas guarda (Home #2567).
+     FLUJO=juntada    alta «Juntada o evento», «Cobrar a… (3)», «Marcar pagó», «Cobrar a X», deshacer un pago y volver a
+                      marcarlo (JNT_OTRO=1: como si se hubiera deshecho en otro celular) → Cobrado. La línea dice quién falta.
+     FLUJO=ruta       ARMADO (la casilla) → RUTA «Entregado» → Cobranza; y sin señal: la cola sobrevive a recargar y sale sola.
+     FLUJO=red        el representante carga su autopedido (su usuario y PIN) → la OC en Abastecimiento (Marcar como pedido,
+                      la hoja de RECIBIR) → la bolsa en ARMADO y RUTA (el reloj de la página en el viernes) → el
+                      representante marca «Entregado» en Mi Portal.
+     FLUJO=todo       todos.   MEDIOS=Efectivo,Mixto (opcional) solo esos medios.   LIMPIAR=1 solo robot_limpiar.
+   PW=<playwright-core> BASE=http://localhost:8155/app.html OUT=<dir> node auditoria_flujos.js
+   En el robot nocturno (GitHub) corre contra app.maleu.com.ar, a 393 (WebKit) y a 1440 (Chromium). */
 'use strict';
 const fs = require('fs'), os = require('os'), path = require('path');
 const pw = require(process.env.PW || 'playwright-core');
@@ -25,6 +33,11 @@ const INIT = `try{localStorage.setItem('maleu_ensayo','1');localStorage.removeIt
     return f.apply(this,arguments).then(function(r){ try{ r.clone().text().then(function(tx){it.r=r.status+' '+tx.slice(0,400);}); }catch(e){} return r; });};})();`;
 
 let pg, br, errs = [];
+/* Las credenciales: los secrets de GitHub (ROBOT_USUARIO, ROBOT_PIN, ROBOT_PIN_REP) o ~/.maleu/robot.json. Nunca se imprimen. */
+function credRobot() {
+  if (process.env.ROBOT_USUARIO && process.env.ROBOT_PIN) return { usuario: process.env.ROBOT_USUARIO, pin: process.env.ROBOT_PIN, repUsuario: process.env.ROBOT_REP_USUARIO || 'pruebarobot', pinRep: process.env.ROBOT_PIN_REP || '' };
+  return JSON.parse(fs.readFileSync(path.join(os.homedir(), '.maleu', 'robot.json'), 'utf8'));
+}
 async function abrir() {
   br = await pw[MOTOR].launch();
   const ctx = await br.newContext(COMPU ? { viewport: { width: 1440, height: 900 } } : { viewport: { width: 393, height: 852 }, deviceScaleFactor: 3, isMobile: true, hasTouch: true });
@@ -33,7 +46,7 @@ async function abrir() {
   pg.on('pageerror', (e) => errs.push('JS: ' + String(e.message).slice(0, 200)));
   pg.on('console', (m) => { if (m.type() === 'error') errs.push('consola: ' + m.text().slice(0, 200)); });
   pg.on('response', (r) => { if (r.status() >= 400 && /supabase\.co\/rest/.test(r.url())) errs.push('base ' + r.status() + ': ' + r.url().replace(/^.*\/rest\/v1\//, '').split('?')[0]); });
-  const cred = JSON.parse(fs.readFileSync(path.join(os.homedir(), '.maleu', 'robot.json'), 'utf8'));
+  const cred = credRobot();
   await pg.goto(BASE + '?v=' + Date.now(), { waitUntil: 'domcontentloaded' });
   await pg.waitForFunction(() => typeof panelDoLogin === 'function' && !!document.getElementById('loginUser'), null, { timeout: 90000 });
   await pg.fill('#loginUser', cred.usuario); await pg.fill('#loginPin', String(cred.pin));
@@ -228,9 +241,19 @@ async function flujoYaPago() {
     chk(medio + ': el toque en «Ya me pagó» la tilda', await pg.evaluate(() => !!(document.getElementById('npYaCobrado') || {}).checked));
     if (medio === 'Mixto' && await visible('#npEfMixto')) { await pg.fill('#npEfMixto', String(Math.round(f.prod.total / 2))); await pg.fill('#npTrMixto', String(f.prod.total - Math.round(f.prod.total / 2))); }
     const n0 = await pg.evaluate(() => window.__posts.length);
+    /* SIN_SENAL=1: dos fallas a la vez. GUARDAR sin red (el alta queda en la cola de + Pedido), «Listo →», COBRANZA, y la
+       señal vuelve a los 8 s: el cuadro se tiene que abrir solo, esté donde esté. */
+    if (process.env.SIN_SENAL) { await pg.context().setOffline(true); await pg.evaluate(() => window.dispatchEvent(new Event('offline'))); }
     const g = await tocar('button', 'GUARDAR', '#nuevoView', { espera: 150 });
     if (!g) { chk(medio + ': GUARDAR', false); continue; }
     await tocar('button', 'Listo', '#nuevoView', { callado: true, espera: 200 });
+    if (process.env.SIN_SENAL) {
+      await tocar('.tab[data-tab="cobros"]', '', '', { callado: true, espera: 1000 });
+      const cola = await pg.evaluate(() => { try { return (JSON.parse(localStorage.getItem('maleu_np_cola') || '[]') || []).length; } catch (e) { return -1; } });
+      chk(medio + ' sin señal: el alta quedó en la cola de + Pedido (' + cola + ')', cola > 0, cola);
+      await T(8000);
+      await pg.context().setOffline(false); await pg.evaluate(() => window.dispatchEvent(new Event('online')));
+    }
     const cu = await esperar(() => { const o = document.getElementById('cobroRutaOverlay'); if (!o || o.classList.contains('hidden')) return null; const s = (document.getElementById('cobroRutaSub') || {}).textContent || ''; const m = s.match(/#(\d+)/); return /PRUEBA Robot/.test((document.getElementById('cobroRutaTitle') || {}).textContent || '') && m ? m[1] : null; }, null, 60000);
     if (!chk(medio + ': después de GUARDAR y «Listo →» se abre el cobro', !!cu, await pg.evaluate((n0) => window.__posts.slice(n0).map((p) => p.u + ' → ' + (p.r || '…').slice(0, 80)), n0))) continue;
     const c = await cobrarEnCuadro(medio, f.prod.total);
@@ -243,7 +266,7 @@ async function flujoYaPago() {
    «Nueva persona» crearía una ficha real en el CRM que robot_limpiar no borra), y lo demás con toques: «Cobrar a…»,
    «Marcar pagó», la línea de quién falta y deshacer un pago. */
 const lineaDe = (sel) => pg.evaluate((sel) => { const c = document.querySelector(sel); if (!c) return null; const r = c.querySelector('.com-desp-r'); return r ? { t: r.textContent.trim(), cabe: r.scrollWidth <= r.clientWidth + 1 } : { t: '(sin línea)', cabe: true }; }, sel);
-const esperarLinea = (sel, re, ms) => esperar(([sel, src]) => { const n = (sel.match(/"(\d+)"/) || [])[1]; const c = [].slice.call(document.querySelectorAll('.cobro-card')).find((c) => c.offsetParent && c.textContent.indexOf('#' + n) >= 0 && /PRUEBA Robot/.test(c.textContent)); if (c) c.setAttribute('data-au', n); const r = c && c.querySelector('.com-desp-r'); return r && new RegExp(src).test(r.textContent) ? r.textContent.trim() : null; }, [sel, re.source], ms || 30000);
+const esperarLinea = (sel, re, ms) => esperar(([sel, src]) => { const n = (sel.match(/"(\d+)"/) || [])[1]; const c = [].slice.call(document.querySelectorAll('.cobro-card')).find((c) => c.offsetParent && c.textContent.indexOf('#' + n) >= 0 && /PRUEBA Robot/.test(c.textContent)); if (c) { document.querySelectorAll('[data-au="' + n + '"]').forEach((x) => { if (x !== c) x.removeAttribute('data-au'); }); c.setAttribute('data-au', n); } const r = c && c.querySelector('.com-desp-r'); return r && new RegExp(src).test(r.textContent) ? r.textContent.trim() : null; }, [sel, re.source], ms || 30000);
 const botonesCobrar = (sel) => pg.evaluate((sel) => [].map.call(document.querySelectorAll(sel + ' .com-cobrar button'), (b) => b.textContent.trim()), sel);
 async function flujoJuntada() {
   console.log('\n── Juntada');
@@ -266,19 +289,36 @@ async function flujoJuntada() {
   await irCobranza(); await tarjetaDe(n);
   const sel = await tarjetaDe(n);
   const re = () => tarjetaDe(n);
+  /* COBRANZA se repinta sola y la marca de la tarjeta se pierde: se vuelve a ubicar y se reintenta el toque (hasta 3). */
+  const tocarT = async (sub, txt) => { for (let k = 0; k < 3; k++) { await re(); await abrirJnt(sel); const b = await tocar(sel + sub, txt || '', '', { callado: k < 2 }); if (b) return b; await T(800); } return null; };
   if (!chk('juntada: #' + n + ' en COBRANZA', !!sel)) return foto('jnt_sin_tarjeta');
   let L0 = await esperarLinea(sel, /falta/);
   let L = await lineaDe(sel);
   chk('juntada: con 3 debiendo, la línea lo dice en una línea («' + (L && L.t) + '»)', !!L0 && /faltan 3/.test(L.t) && L.cabe, L);
   await foto('jnt_1_tres');
+  /* ¿Cuántas veces se REEMPLAZA la tarjeta estando quieto? En el iPhone, un toque cuyo elemento se reemplaza entre que el
+     dedo baja y sube no hace clic. */
+  const rep = await pg.evaluate(async (n) => { const box = document.getElementById('cobrosView') || document.body; let k = 0, f = 0;
+    const mo = new MutationObserver((ms) => { ms.forEach((m) => { [].forEach.call(m.removedNodes, (x) => { if (x.nodeType === 1 && (x.matches && x.matches('.cobro-card') || x.querySelector && x.querySelector('.cobro-card')) && x.textContent.indexOf('#' + n) >= 0) k++; else if (x.nodeType === 1 && x.querySelector && x.querySelector('.com-pagar')) f++; }); }); });
+    mo.observe(box, { childList: true, subtree: true }); await new Promise((r) => setTimeout(r, 20000)); mo.disconnect(); return { tarjeta: k, juntada: f }; }, n);
+  console.log('       en 20 s quieto: la tarjeta se reemplazó ' + rep.tarjeta + ' veces, la juntada adentro ' + rep.juntada);
+  chk('juntada: quieto 20 s, la tarjeta no se reemplaza sola más de 1 vez (' + rep.tarjeta + ' / ' + rep.juntada + ')', rep.tarjeta + rep.juntada <= 1, rep);
+  /* (23/11) Guardó en + PEDIDO y se fue a COBRANZA: el salto automático de los 6 s a ARMADO no lo tiene que arrancar de acá. */
+  const tabAhora = await pg.evaluate(() => rutCurrentTab);
+  chk('juntada: guardé y me fui a COBRANZA: 20 s después sigo en COBRANZA (no me lleva a ARMADO)', tabAhora === 'cobros', tabAhora);
   await re(); const b3 = await tocar(sel + ' .com-cobrar button', 'Cobrar a');
-  chk('juntada: con 3 debiendo, «Cobrar a… (3)»', b3 && /\(3\)/.test(b3.txt), b3);
+  if (!chk('juntada: con 3 debiendo, «Cobrar a… (3)»', b3 && /\(3\)/.test(b3.txt), b3)) {
+    console.log('       GEOMETRÍA ' + JSON.stringify(await pg.evaluate((sel) => { const c = document.querySelector(sel); if (!c) return 'sin tarjeta'; const b = c.querySelector('.com-cobrar button');
+      const anc = []; let e = b; while (e && e !== document.body) { const cs = getComputedStyle(e), r = e.getBoundingClientRect(); anc.push((e.id || e.className || e.tagName).toString().slice(0, 30) + ' ' + cs.display + ' ' + Math.round(r.width) + 'x' + Math.round(r.height) + (e.hidden ? ' HIDDEN' : '')); e = e.parentElement; }
+      return { n: document.querySelectorAll(sel).length, tab: typeof rutCurrentTab !== 'undefined' ? rutCurrentTab : '?', pg: (document.querySelector('.pg.on') || {}).id, anc: anc.slice(0, 12) }; }, sel)));
+    await foto('jnt_geometria');
+  }
   await T(600);
   chk('juntada: «Cobrar a…» abre la juntada', await pg.evaluate((sel) => { const d = document.querySelector(sel + ' details.com-desp'); return !!(d && d.open); }, sel));
   await pg.evaluate(() => { window.__confirmResp = true; });
   await re(); const aj = await abrirJnt(sel);
   await esperar((sel) => !!document.querySelector(sel + ' .com-pagar[data-n="PRUEBA Ana"]') || (document.querySelector(sel + ' details.com-desp:not([open])') && (document.querySelector(sel + ' details.com-desp').open = true, false)), sel, 20000);
-  const ana = await tocar(sel + ' .com-pagar[data-n="PRUEBA Ana"]', '');
+  const ana = await tocarT(' .com-pagar[data-n="PRUEBA Ana"]');
   chk('juntada: «Marcar pagó» de Ana a la vista', !!ana, aj);
   const pg1 = await pagos(1);
   const conf1 = await pg.evaluate(() => window.__confirms.slice(-1)[0] || '');
@@ -290,7 +330,7 @@ async function flujoJuntada() {
   await re(); const bts = await botonesCobrar(sel);
   chk('juntada: con 2 debiendo, un «Cobrar a» por persona (' + bts.join(' | ') + ')', bts.length === 2 && bts.every((t) => /^Cobrar a .*\$/.test(t)), bts);
   /* Los botones llevan el nombre entero en data-n (el texto usa el corto: «PRUEBA B.»). */
-  const cobrarA = async (nm) => { await re(); const b = await tocar(sel + ' .com-cobrar button[data-n="' + nm + '"]', ''); return b; };
+  const cobrarA = async (nm) => { const b = await tocarT(' .com-cobrar button[data-n="' + nm + '"]'); return b; };
   const bB = await cobrarA('PRUEBA Beto');
   chk('juntada: botón «Cobrar a» de Beto (' + (bB && bB.txt) + ')', !!bB);
   const pg2 = await pagos(2);
@@ -301,7 +341,7 @@ async function flujoJuntada() {
   L = await esperarLinea(sel, /falta /);
   chk('juntada: queda uno y la línea lo nombra («' + L + '»)', !!L && /Robot/.test(L), L);
   await re(); const aj2 = await abrirJnt(sel);
-  await re(); const dsh = await tocar(sel + ' [onclick*="comPagoInfo"][data-n="PRUEBA Ana"]', '');
+  const dsh = await tocarT(' [onclick*="comPagoInfo"][data-n="PRUEBA Ana"]');
   if (!chk('juntada: el pago de Ana tiene para deshacer (el «Pagó» de su renglón)', !!dsh, aj2)) await foto('jnt_sin_deshacer');
   const pg3 = await pagos(1);
   chk('juntada: deshecho, queda solo el de Beto (' + pg3.map((x) => x.nota).join(', ') + ')', pg3.length === 1 && /Beto/.test(pg3[0].nota || ''), pg3);
@@ -422,10 +462,27 @@ async function flujoRuta() {
   const cola = await pg.evaluate((n) => ({ enCola: (()=>{ try { const q = (JSON.parse(localStorage.getItem('maleu_ruta') || '{}').syncQueue || []); return q.some((x) => x.action === 'marcarEntregado' && String(x.id) === String(n)); } catch (e) { return false; } })() }), b.n);
   chk('sin señal: la entrega quedó en la cola del celular', ok1 && cola.enCola, cola);
   await foto('sin_senal');
+  /* Y el cobro, todavía sin señal (el repartidor en la calle): COBRANZA lo tiene en el celular, «Cobrar» → Efectivo →
+     Confirmar → a la cola. */
+  const enColaDe = (accion) => pg.evaluate(([n, accion]) => { try { const q = (JSON.parse(localStorage.getItem('maleu_ruta') || '{}').syncQueue || []); return q.some((x) => x.action === accion && String(x.id) === String(n)); } catch (e) { return false; } }, [b.n, accion]);
+  await irCobranza();
+  const selB = await tarjetaDe(b.n);
+  if (chk('sin señal: el entregado aparece en COBRANZA sin red', !!selB)) {
+    await tocar(selB + ' .cobro-btn-cobrado', 'Cobrar');
+    const ab = await esperar(() => { const o = document.getElementById('cobroRutaOverlay'); return o && !o.classList.contains('hidden') ? 1 : null; }, null, 8000);
+    if (chk('sin señal: «Cobrar» abre el cuadro', !!ab)) {
+      const cb = await cobrarEnCuadro('Efectivo', b.total);
+      chk('sin señal: el cobro quedó en la cola del celular', cb.ok && await enColaDe('marcarCobrado'), await pg.evaluate(() => (JSON.parse(localStorage.getItem('maleu_ruta') || '{}').syncQueue || []).map((x) => x.action + ' ' + x.id)));
+    }
+  }
   await pg.reload({ waitUntil: 'domcontentloaded' }).catch(() => {});
   await T(4000);
   const cola2 = await pg.evaluate((n) => (()=>{ try { const q = (JSON.parse(localStorage.getItem('maleu_ruta') || '{}').syncQueue || []); return q.some((x) => x.action === 'marcarEntregado' && String(x.id) === String(n)); } catch (e) { return false; } })(), b.n).catch(() => null);
-  chk('sin señal: después de recargar la página la entrega sigue en la cola', cola2 === true, cola2);
+  /* Chromium sin service worker (el servidor local lo apaga) recarga sin red a su página de error: ahí no se puede leer la
+     cola. Que sobrevivió lo prueban los dos chequeos de abajo (sale sola después de recargar y la base la tiene). */
+  const errPage = await pg.evaluate(() => /^chrome-error:/.test(location.href)).catch(() => true);
+  if (errPage && COMPU) console.log('       (Chromium sin service worker: la recarga sin red no carga la app; la cola se comprueba al volver la señal)');
+  else chk('sin señal: después de recargar la página la entrega sigue en la cola', cola2 === true, cola2);
   await pg.context().setOffline(false);
   await pg.reload({ waitUntil: 'domcontentloaded' }).catch(() => {});
   await pg.waitForFunction(() => typeof D !== 'undefined' && D && Array.isArray(D.pedidos) && D.pedidos.length > 50, null, { timeout: 150000 }).catch(() => {});
@@ -433,11 +490,15 @@ async function flujoRuta() {
   const vacia = await esperar((n) => { try { if (typeof processSyncQueue === 'function') processSyncQueue(); } catch (e) {} return (()=>{ try { const q = (JSON.parse(localStorage.getItem('maleu_ruta') || '{}').syncQueue || []); return q.some((x) => x.action === 'marcarEntregado' && String(x.id) === String(n)); } catch (e) { return false; } })() ? null : 1; }, b.n, 60000);
   chk('sin señal: al volver la señal la cola se vacía sola', !!vacia);
   chk('sin señal: #' + b.n + ' quedó Entregado en la base', !!(await esEntregadoEnBase(b.n, 30000)));
+  const cobV = await esperar(() => null, null, 1) || !(await enColaDe('marcarCobrado'));
+  chk('sin señal: el cobro también salió de la cola', cobV);
+  const vb = await verPedido('Home', b.n, (v) => v.estado_pago === 'Cobrado', 30000);
+  chk('sin señal: #' + b.n + ' quedó Cobrado en la base, efectivo $' + (vb && vb.efectivo), vb && vb.estado_pago === 'Cobrado' && Math.abs(Number(vb.efectivo) - b.total) <= 100, vb);
 }
 /* ── FLUJO 4: Red. El representante PRUEBA carga su autopedido con SU usuario y PIN (como el nocturno); después, con
    toques: la bolsa en ARMADO, «Le falta marcar entregado» en Equipo, la excepción de comisión y que él marque entregado. */
 async function autopedidoRep() {
-  const cred = JSON.parse(fs.readFileSync(path.join(os.homedir(), '.maleu', 'robot.json'), 'utf8'));
+  const cred = credRobot();
   if (!cred.pinRep) return { err: 'falta pinRep en robot.json' };
   const prod = await pg.evaluate((pid) => { const s = (D.stock || []).find((x) => String(x.id) === String(pid) || String(x.a || x.abbr || '').toUpperCase() === 'TG'); return s ? { id: s.id, nombre: s.n || s.nombre || '', precio: Number(s.p || s.precio || 0) } : null; }, 14);
   for (const dias of [2, 4, 6, 8, 10, 12]) {
@@ -542,7 +603,7 @@ async function flujoRed() {
   await pg.clock.setSystemTime(new Date());   /* la página vuelve a la hora real */
   /* ── EL REPRESENTANTE, en SU celular: entra con su usuario y PIN y marca «Entregado» en Mi Portal (el viernes). */
   console.log('\n── Mi Portal del representante PRUEBA');
-  const cred = JSON.parse(fs.readFileSync(path.join(os.homedir(), '.maleu', 'robot.json'), 'utf8'));
+  const cred = credRobot();
   const ctx2 = await br.newContext(COMPU ? { viewport: { width: 1440, height: 900 } } : { viewport: { width: 393, height: 852 }, deviceScaleFactor: 3, isMobile: true, hasTouch: true });
   await ctx2.addInitScript(INIT);
   const pr = await ctx2.newPage(); const errs2 = [];
@@ -581,7 +642,7 @@ async function irCobranza() {
   await tocar('.tab[data-tab="cobros"]', '', '', { callado: true, espera: 1500 });
 }
 async function tarjetaDe(n) {
-  const ok = await esperar((n) => { const c = [].slice.call(document.querySelectorAll('.cobro-card')).find((c) => c.offsetParent && c.textContent.indexOf('#' + n) >= 0 && /PRUEBA Robot/.test(c.textContent)); if (!c) return null; c.setAttribute('data-au', String(n)); return 1; }, n, 30000);
+  const ok = await esperar((n) => { const c = [].slice.call(document.querySelectorAll('.cobro-card')).find((c) => c.offsetParent && c.textContent.indexOf('#' + n) >= 0 && /PRUEBA Robot/.test(c.textContent)); if (!c) return null; document.querySelectorAll('[data-au="' + n + '"]').forEach((x) => { if (x !== c) x.removeAttribute('data-au'); }); c.setAttribute('data-au', String(n)); return 1; }, n, 30000);
   return ok ? '.cobro-card[data-au="' + n + '"]' : null;
 }
 
@@ -590,7 +651,7 @@ async function tarjetaDe(n) {
   console.log('robot: ' + (await pg.evaluate(() => SESSION.nombre + ' / ' + SESSION.usuario + ' / ' + SESSION.rol)) + ' · ' + MOTOR);
   if (process.env.LIMPIAR) { console.log('limpiar', JSON.stringify(await rpc('robot_limpiar', { p_corrida: 'audit-' + Date.now() })).slice(0, 500)); await br.close(); return; }
   E = await rpc('robot_entidades_pantalla', {}); if (process.env.EXPLORAR) console.log('E ' + JSON.stringify(E).slice(0, 600)); if (process.env.EXPLORAR) console.log('PRUEBA en D.stock ' + JSON.stringify(await pg.evaluate((sku) => (D.stock || []).filter((x) => /PRUEBA/i.test(JSON.stringify(x).slice(0, 300))).slice(0, 3), E.producto)).slice(0, 600));
-  const fl = process.env.FLUJO || 'cobranza';
+  const fl = (process.env.FLUJO || 'cobranza').replace(/^todo$/, 'cobranza,yapago,juntada,ruta,red');
   try {
     if (/cobranza/.test(fl)) await flujoCobranza();
     if (/yapago/.test(fl)) await flujoYaPago();
