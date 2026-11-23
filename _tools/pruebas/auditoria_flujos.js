@@ -329,6 +329,253 @@ async function abrirJnt(sel) {
   if (st.d && !st.open) await tocar(sel + ' details.com-desp > summary', '');
   return pg.evaluate((sel) => { const c = document.querySelector(sel); const d = c && c.querySelector('details.com-desp'); return { hay: !!c, open: !!(d && d.open), pagar: c ? [].map.call(c.querySelectorAll('.com-pagar'), (b) => b.getAttribute('data-n')) : [], txt: d ? d.innerText.replace(/\s+/g, ' ').slice(0, 300) : '' }; }, sel);
 }
+/* ── FLUJO 3: Ruta y Armado (EXPLORAR=1 vuelca lo que se ve para armar los toques) ─────────────────────────────── */
+async function pedidoPendiente(medio) {
+  const f = await cargarPedido(medio || 'Transferencia', false);
+  if (f.err) return f;
+  await pg.evaluate(() => { const ee = document.getElementById('npEstadoEntrega'); ee.value = 'Pendiente'; ee.dispatchEvent(new Event('change', { bubbles: true })); });
+  const al = await guardar(f.antes);
+  return al && al.n ? { n: al.n, total: f.prod.total } : (al || { err: 'sin alta' });
+}
+async function volcar(et) {
+  const v = await pg.evaluate(() => {
+    const vis = (e) => e.getClientRects().length && getComputedStyle(e).visibility !== 'hidden';
+    const prueba = [].slice.call(document.querySelectorAll('#pg-ruta *')).filter((e) => vis(e) && e.children.length < 40 && /PRUEBA Robot/.test(e.textContent || '') && e.textContent.length < 600).slice(-6).map((e) => e.tagName + '.' + String(e.className).slice(0, 40) + ' «' + e.textContent.replace(/\s+/g, ' ').trim().slice(0, 200) + '»');
+    const btns = [].slice.call(document.querySelectorAll('#pg-ruta [onclick]')).filter(vis).slice(0, 40).map((e) => (e.getAttribute('onclick') || '').slice(0, 60) + ' «' + e.textContent.replace(/\s+/g, ' ').trim().slice(0, 30) + '»');
+    return { tab: typeof rutCurrentTab !== 'undefined' ? rutCurrentTab : '?', prueba, btns };
+  });
+  console.log('   [' + et + '] tab=' + v.tab + '\n     PRUEBA: ' + v.prueba.join('\n             ') + '\n     botones: ' + v.btns.join(' | ').slice(0, 2500));
+}
+async function armarPrueba(n) {
+  /* La tarjeta del pedido PRUEBA en Armado (el día puede venir plegado). Solo se toca la que dice «PRUEBA Robot». */
+  const marcar = () => pg.evaluate(() => { const c = [].slice.call(document.querySelectorAll('#armadoView .armado-card')).find((c) => c.offsetParent && /PRUEBA Robot/.test((c.querySelector('.armado-name') || {}).textContent || '')); if (!c) return null; document.querySelectorAll('[data-au="arm"]').forEach((x) => x.removeAttribute('data-au')); c.setAttribute('data-au', 'arm'); return { done: c.classList.contains('done'), txt: c.innerText.replace(/\s+/g, ' ').slice(0, 120) }; });
+  const t0 = Date.now(); let c = null;
+  while (Date.now() - t0 < 90000) { c = await marcar(); if (c) break; await tocar('[onclick*="toggleCollapse"]', 'HOY', '#armadoView', { callado: true, espera: 300 }); c = await marcar(); if (c) break; await T(1000); }
+  if (c) { c.seg = Math.round((Date.now() - t0) / 1000); console.log('       en ARMADO a los ' + c.seg + ' s'); }
+  return c;
+}
+async function entregarEnRuta(et) {
+  /* La parada del pedido PRUEBA en RUTA: «Entregado» y la confirmación (o la pregunta del freezer). */
+  await tocar('.tab[data-tab="ruta"]', '', '', { espera: 2500 });
+  const parada = await esperar(() => { const t = (document.getElementById('rutaView') || {}).innerText || ''; return /PRUEBA Robot/.test(t) ? t.replace(/\s+/g, ' ').slice(0, 160) : null; }, null, 15000);
+  if (!chk(et + ': la parada de PRUEBA Robot está en RUTA', !!parada)) { await volcar(et + ' ruta'); return false; }
+  const e1 = await tocar('.rtc-cta.entregar', 'Entregado');
+  if (!chk(et + ': botón «Entregado»', !!e1)) return false;
+  const ov = await esperar(() => {
+    const f = document.getElementById('rutFrzOv');
+    if (f && f.getClientRects().length) return 'FREEZER ' + f.innerText.replace(/\s+/g, ' ').slice(0, 160) + ' · deps=' + [].map.call(f.querySelectorAll('[data-dep]'), (b) => b.getAttribute('data-dep')).join(',');
+    const o = document.getElementById('confirmOverlay'); return o && !o.classList.contains('hidden') && o.getClientRects().length ? o.innerText.replace(/\s+/g, ' ').slice(0, 200) : null; }, null, 8000);
+  console.log('       cartel: ' + ov);
+  if (!ov) { await foto('sin_cartel'); console.log('       ' + JSON.stringify(await pg.evaluate(() => ({ ovs: [].slice.call(document.querySelectorAll('[class*="overlay"],[class*="modal-ov"],[role="dialog"]')).filter((e) => e.offsetParent !== null || getComputedStyle(e).position === 'fixed' && e.getClientRects().length).map((e) => (e.id || e.className) + ' «' + e.innerText.replace(/\s+/g, ' ').slice(0, 120) + '»').slice(0, 6), toast: [].map.call(document.querySelectorAll('.toast.show,#rutToast.show,#toast.show'), (t) => t.textContent.trim()), conf: window.__confirms.slice(-3) })))); }
+  if (!chk(et + ': pregunta antes de entregar', !!ov)) return false;
+  if (/^FREEZER/.test(ov)) {
+    /* SOLO el depósito prueba: con otro, la entrega del pedido PRUEBA movería stock real. */
+    if (!/deps=(.*,)?prueba(,|$)/.test(ov)) { chk(et + ': la pregunta del freezer ofrece el depósito prueba (si no, no se toca)', false, ov); await pg.evaluate(() => { const f = document.getElementById('rutFrzOv'); if (f) f.remove(); }); return false; }
+    await tocar('#rutFrzOv [data-dep="prueba"]', '');
+  } else await tocar('#confirmOverlay .btn-si', '');
+  await T(800);
+  const ov2 = await pg.evaluate(() => { const o = document.getElementById('confirmOverlay'); return o && !o.classList.contains('hidden') && o.getClientRects().length ? o.innerText.replace(/\s+/g, ' ').slice(0, 200) : ''; });
+  if (ov2) { console.log('       2º cartel: ' + ov2); await tocar('#confirmOverlay .btn-si', ''); await T(800); }
+  return true;
+}
+async function esEntregadoEnBase(n, ms) {
+  return esperar((n) => { try { _recargarPedidos(); } catch (e) {} const p = (D.pedidos || []).find((x) => x.h === 'Home' && String(x.n) === String(n)); return p && p.es === 'Entregado' ? p.es : null; }, n, ms || 30000);
+}
+async function flujoRuta() {
+  console.log('\n── Ruta y Armado');
+  const a = await pedidoPendiente('Transferencia');
+  if (!chk('ruta: alta Pendiente para hoy', a && a.n, a)) return;
+  const n = a.n;
+  await pg.evaluate(() => { try { _recargarPedidos(); } catch (e) {} });
+  await tocar('.tab[data-tab="armado"]', '', '', { espera: 3000 });
+  let c = await armarPrueba(n);
+  if (!chk('armado: la tarjeta de PRUEBA Robot (#' + n + ') está en ARMADO', !!c, c)) { await volcar('armado'); return; }
+  const n0 = await pg.evaluate(() => window.__posts.length);
+  await tocar('.armado-card[data-au="arm"] .armado-check', '');
+  const pre = await esperar(() => { const o = document.getElementById('confirmOverlay'); return o && !o.classList.contains('hidden') ? o.innerText.replace(/\s+/g, ' ').slice(0, 140) : null; }, null, 5000);
+  chk('armado: pregunta «Pedido armado?» (' + pre + ')', /armado/i.test(pre || ''), pre);
+  await tocar('#confirmOverlay .btn-si', 'armado');
+  c = await esperar(() => { const c = [].slice.call(document.querySelectorAll('#armadoView .armado-card')).find((c) => /PRUEBA Robot/.test(c.textContent)); return c && c.classList.contains('done') ? 1 : null; }, null, 8000);
+  chk('armado: la tarjeta queda tildada', !!c);
+  const pa = await esperar((n0) => { const p = window.__posts.slice(n0).find((x) => /armad/i.test(x.u + x.b) && x.r); return p ? p.u + ' → ' + p.r.slice(0, 120) : null; }, n0, 20000);
+  chk('armado: la base lo aceptó (' + (pa || 'sin respuesta') + ')', !!pa && /→ 200 /.test(pa) && !/"ok": ?false/.test(pa), pa);
+  await foto('armado');
+  if (!(await entregarEnRuta('ruta'))) return;
+  chk('ruta: #' + n + ' quedó Entregado en la base', !!(await esEntregadoEnBase(n, 30000)));
+  await foto('ruta_entregado');
+  await irCobranza();
+  chk('ruta: entregado sin cobrar → aparece en COBRANZA', !!(await tarjetaDe(n)));
+
+  /* SIN SEÑAL: entregar con el celular sin red. La marca queda en la cola (localStorage), sobrevive a recargar la
+     página y sale sola cuando vuelve la señal. */
+  console.log('\n── Ruta sin señal');
+  const b = await pedidoPendiente('Efectivo');
+  if (!chk('sin señal: alta Pendiente', b && b.n, b)) return;
+  await pg.evaluate(() => { try { _recargarPedidos(); } catch (e) {} });
+  await tocar('.tab[data-tab="armado"]', '', '', { espera: 3000 });
+  c = await armarPrueba(b.n);
+  if (!chk('sin señal: tarjeta en ARMADO', !!c)) return;
+  await tocar('.armado-card[data-au="arm"] .armado-check', ''); await tocar('#confirmOverlay .btn-si', 'armado'); await T(4000);
+  await pg.context().setOffline(true);
+  await pg.evaluate(() => { try { window.dispatchEvent(new Event('offline')); } catch (e) {} });
+  const ok1 = await entregarEnRuta('sin señal');
+  const cola = await pg.evaluate((n) => ({ enCola: (()=>{ try { const q = (JSON.parse(localStorage.getItem('maleu_ruta') || '{}').syncQueue || []); return q.some((x) => x.action === 'marcarEntregado' && String(x.id) === String(n)); } catch (e) { return false; } })() }), b.n);
+  chk('sin señal: la entrega quedó en la cola del celular', ok1 && cola.enCola, cola);
+  await foto('sin_senal');
+  await pg.reload({ waitUntil: 'domcontentloaded' }).catch(() => {});
+  await T(4000);
+  const cola2 = await pg.evaluate((n) => (()=>{ try { const q = (JSON.parse(localStorage.getItem('maleu_ruta') || '{}').syncQueue || []); return q.some((x) => x.action === 'marcarEntregado' && String(x.id) === String(n)); } catch (e) { return false; } })(), b.n).catch(() => null);
+  chk('sin señal: después de recargar la página la entrega sigue en la cola', cola2 === true, cola2);
+  await pg.context().setOffline(false);
+  await pg.reload({ waitUntil: 'domcontentloaded' }).catch(() => {});
+  await pg.waitForFunction(() => typeof D !== 'undefined' && D && Array.isArray(D.pedidos) && D.pedidos.length > 50, null, { timeout: 150000 }).catch(() => {});
+  await pg.evaluate(() => { try { go('ruta'); } catch (e) {} });
+  const vacia = await esperar((n) => { try { if (typeof processSyncQueue === 'function') processSyncQueue(); } catch (e) {} return (()=>{ try { const q = (JSON.parse(localStorage.getItem('maleu_ruta') || '{}').syncQueue || []); return q.some((x) => x.action === 'marcarEntregado' && String(x.id) === String(n)); } catch (e) { return false; } })() ? null : 1; }, b.n, 60000);
+  chk('sin señal: al volver la señal la cola se vacía sola', !!vacia);
+  chk('sin señal: #' + b.n + ' quedó Entregado en la base', !!(await esEntregadoEnBase(b.n, 30000)));
+}
+/* ── FLUJO 4: Red. El representante PRUEBA carga su autopedido con SU usuario y PIN (como el nocturno); después, con
+   toques: la bolsa en ARMADO, «Le falta marcar entregado» en Equipo, la excepción de comisión y que él marque entregado. */
+async function autopedidoRep() {
+  const cred = JSON.parse(fs.readFileSync(path.join(os.homedir(), '.maleu', 'robot.json'), 'utf8'));
+  if (!cred.pinRep) return { err: 'falta pinRep en robot.json' };
+  const prod = await pg.evaluate((pid) => { const s = (D.stock || []).find((x) => String(x.id) === String(pid) || String(x.a || x.abbr || '').toUpperCase() === 'TG'); return s ? { id: s.id, nombre: s.n || s.nombre || '', precio: Number(s.p || s.precio || 0) } : null; }, 14);
+  for (const dias of [2, 4, 6, 8, 10, 12]) {
+    const F = new Date(Date.now() + dias * 86400000), d = F.toLocaleDateString('es-AR', { weekday: 'long', timeZone: 'America/Argentina/Buenos_Aires' });
+    const body = { action: 'redAutopedido', clientOrderId: 'robot-' + Date.now() + '-aud-red-' + dias, canal: 'Red', vendedor: 'PRUEBA Robot', nombre: 'PRUEBA Robot', telefono: String(E.telefono || '5490000000001'),
+      barrioPrivado: 'PRUEBA', lote: '', dia: d.charAt(0).toUpperCase() + d.slice(1), fechaEntrega: F.toLocaleDateString('sv-SE', { timeZone: 'America/Argentina/Buenos_Aires' }), horario: 'A coordinar', pago: 'Transferencia', envio: 0,
+      items: [{ id: Number(E.producto_red || E.producto_id || 46), nombre: 'PRUEBA', qty: 1, precio: 1000 }], total: 1000, trajo: 'Vendedor', telCliente: String(E.telefono || '5490000000001') };
+    const r = await pg.evaluate(async ([u, pin, body]) => { const c = _sbCfgLogin(), H = (t) => ({ apikey: c.key, Authorization: 'Bearer ' + (t || c.key), 'Content-Type': 'application/json' });
+      const lp = await (await fetch(c.url + '/rest/v1/rpc/login_pin', { method: 'POST', headers: H(), body: JSON.stringify({ p_usuario: u, p_pin: pin }) })).json();
+      if (!lp || !lp.ok) return { paso: 'login', r: lp && { ok: lp.ok, err: lp.err } };
+      const t = await _sbAuth(c.url, c.key, 'password', { email: lp.email, password: lp.clave });
+      const x = await fetch(c.url + '/rest/v1/rpc/red_autopedido_directo', { method: 'POST', headers: H(t.access_token), body: JSON.stringify({ p: body }) });
+      let j = null; try { j = await x.json(); } catch (e) {} return { http: x.status, r: j, dia: body.dia, fecha: body.fechaEntrega }; }, [cred.repUsuario || 'pruebarobot', String(cred.pinRep), body]);
+    if (r && r.r && r.r.ok === false && /ya tiene el pedido|van desde el|reparte/.test(String(r.r.err || ''))) continue;
+    return Object.assign({ prod }, r);
+  }
+  return { err: 'ningún día le sirvió al autopedido' };
+}
+async function libroPrueba() { const v = await rpc('robot_verificar', { p: {} }).catch(() => null); return v && v.libro && v.libro[E.deposito || 'prueba'] ? Number(v.libro[E.deposito || 'prueba'].q) : null; }
+async function flujoRed() {
+  console.log('\n── Red');
+  const ap = await autopedidoRep();
+  console.log('       autopedido: ' + JSON.stringify(ap).slice(0, 300));
+  if (!chk('red: el representante carga su autopedido', ap && ap.r && ap.r.ok, ap)) return;
+  const n = String(ap.r.n || '').replace(/\D/g, '') || String(ap.r.ref || '').replace(/\D/g, '');
+  /* ── ABASTECIMIENTO: sin stock, el pedido abrió una OC al proveedor PRUEBA. Pedirla y recibirla con toques. */
+  console.log('\n── Abastecimiento: la OC del pedido de Red');
+  const la = await libroPrueba();
+  await pg.evaluate(() => go('busqueda')); await T(7000);
+  await tocar('#pg-abast .tab[data-tab="proveedores"]', '', '', { espera: 3000 });
+  const ped = await tocar('[onclick^="abaPcPedido(\'PRUEBA\'"]', 'Marcar como pedido', '', { espera: 3000 });
+  chk('abast: «Marcar como pedido» en la tarjeta del proveedor PRUEBA', !!ped);
+  await tocar('#pg-abast .tab[data-tab="recibir"]', '', '', { espera: 4000 });
+  if (process.env.EXPLORAR) await volcarAba('recibir después de pedir');
+  /* La hoja de RECIBIR (19/11/2026): Había + Llega = Total → el freezer del producto (PRUEBA → prueba). */
+  await tocar('.hj-prov', 'PRUEBA', '#pg-abast', { callado: true, espera: 1500 });
+  const hj = await pg.evaluate(() => { const b = document.querySelector('#recibirList .hj'); if (!b) return null;
+    return { cab: (b.querySelector('.hj-cab') || {}).innerText, pasos: (b.querySelector('.hj-pasos') || {}).innerText,
+      filas: [].map.call(b.querySelectorAll('.hj-f'), (f) => ({ t: f.innerText.replace(/\s+/g, ' ').slice(0, 80), ins: [].map.call(f.querySelectorAll('input'), (i) => (i.id || i.className) + '=' + i.value + (i.disabled ? '[dis]' : '')) })),
+      conf: (document.getElementById('hjConf') || {}).outerHTML ? document.getElementById('hjConf').textContent + (document.getElementById('hjConf').disabled ? ' [dis]' : '') : null, pie: (document.getElementById('hjPie') || {}).innerText }; });
+  console.log('       hoja: ' + JSON.stringify(hj).slice(0, 1500));
+  if (!chk('abast: la hoja de RECIBIR muestra a PRUEBA', hj && /PRUEBA/.test(hj.cab || ''), hj)) return;
+  /* «Había»: lo que dice el libro (la cuenta de verdad); «Llega»: lo que dice la OC. */
+  const fila = await pg.evaluate(() => { const f = [].find.call(document.querySelectorAll('#recibirList .hj-f'), (x) => /PRUEBA/.test(x.textContent)); if (!f) return null; f.setAttribute('data-au', 'hj'); return [].map.call(f.querySelectorAll('input:not([disabled])'), (i) => ({ id: i.id, cls: i.className, v: i.value, ph: i.placeholder })); });
+  console.log('       fila PRUEBA: ' + JSON.stringify(fila));
+  if (!fila || !fila.length) return chk('abast: la fila de PRUEBA tiene para cargar', false, fila);
+  const hab = fila[0];
+  if (hab && hab.id && !hab.v) await pg.fill('#' + hab.id, String(la == null ? 0 : la));
+  await T(600);
+  /* Tildar el renglón (controlado). */
+  await tocar('.hj-f[data-au="hj"] .hj-top', '');
+  await T(500);
+  const n0 = await pg.evaluate(() => window.__posts.length);
+  const hab2 = await pg.evaluate(() => { const b = document.getElementById('hjConf'); return b && !b.disabled; });
+  const rv = hab2 ? await tocar('#hjConf', 'Revisar') : null;
+  if (!chk('abast: «Revisar y confirmar» habilitado', !!rv, await pg.evaluate(() => ({ pie: (document.getElementById('hjPie') || {}).innerText, err: (document.querySelector('.hj-err') || {}).innerText })))) return;
+  await T(1200);
+  const res = await pg.evaluate(() => { const r = document.querySelector('#recibirList .hj-res, #recibirList [class*="resumen"]'); return { txt: r ? r.innerText.replace(/\s+/g, ' ').slice(0, 300) : '', btns: [].map.call(document.querySelectorAll('#recibirList button'), (b) => b.textContent.trim()).filter((t) => t).slice(0, 12) }; });
+  console.log('       resumen: ' + JSON.stringify(res));
+  const ok2 = await tocar('#recibirList button', 'Confirmar', '', { callado: true }) || await tocar('#recibirList button', 'confirmar', '', { callado: true });
+  chk('abast: botón final para confirmar', !!ok2, res);
+  await T(1500);
+  /* Si pregunta (falta la mitad, etc.), «Cerrar con lo que llegó». */
+  await tocar('button', 'Cerrar con lo que llegó', '', { callado: true });
+  const rr = await esperar((n0) => { const p = window.__posts.slice(n0).find((x) => /recibirMercaderia|recepci|recibir_/i.test(x.u + x.b.slice(0, 200)) && !/ui_uso/.test(x.u) && x.r); return p ? p.u + ' → ' + p.r.slice(0, 160) : null; }, n0, 60000);
+  chk('abast: la recepción llegó a la base (' + rr + ')', !!rr && /→ 200 /.test(rr) && !/"ok": ?false/.test(rr), rr);
+  let lq = null; const tL = Date.now(); while (Date.now() - tL < 60000) { lq = await libroPrueba(); if (la != null && lq === la + 1) break; await T(3000); }
+  chk('abast: el stock PRUEBA del freezer prueba subió 1 (' + la + ' → ' + lq + ')', la != null && lq === la + 1, { la, lq });
+  await foto('abast_recibido');
+  /* ── LA BOLSA: en ARMADO, el pedido de Red del representante. */
+  console.log('\n── Red: la bolsa');
+  await pg.evaluate(() => { try { _recargarPedidos(); } catch (e) {} go('ruta'); }); await T(2500);
+  await tocar('.tab[data-tab="armado"]', '', '', { espera: 4000 });
+  await tocar('[onclick*="toggleCollapse"]', '27/11', '#armadoView', { callado: true, espera: 1000 });
+  if (process.env.EXPLORAR) await volcar('red armado');
+  /* Armar la bolsa del representante (toggleArmadoMasivo → «Sí, listos») y dársela (entregarAVendedor). */
+  const rc = await pg.evaluate(() => { const c = [].find.call(document.querySelectorAll('#armadoView .armado-card.red'), (x) => /PRUEBA Robot/.test(x.textContent)); if (!c) return null; c.setAttribute('data-au', 'red'); return c.innerText.replace(/\s+/g, ' ').slice(0, 200); });
+  if (!chk('red: la bolsa de PRUEBA Robot está en ARMADO («' + rc + '»)', !!rc)) return;
+  await tocar('.armado-card[data-au="red"] .armado-check', '', '', { callado: true }) || await tocar('.armado-card[data-au="red"] .armado-prods', '');
+  const pre = await esperar(() => { const o = document.getElementById('confirmOverlay'); return o && !o.classList.contains('hidden') && o.getClientRects().length ? o.innerText.replace(/\s+/g, ' ').slice(0, 160) : null; }, null, 6000);
+  chk('red: pregunta «Listo para PRUEBA Robot?» (' + pre + ')', /Listo para/.test(pre || ''), pre);
+  await tocar('#confirmOverlay .btn-si', '');
+  await T(2500);
+  if (process.env.EXPLORAR) await volcar('red armada');
+  const cartel = await pg.evaluate(() => { const c = document.querySelector('.armado-card[data-au="red"]') || [].find.call(document.querySelectorAll('#armadoView .armado-card.red'), (x) => /PRUEBA Robot/.test(x.textContent)); return c ? c.innerText.replace(/\s+/g, ' ') : ''; });
+  chk('red: armada para otro día, el cartel dice cuándo aparece en RUTA (no «pasá a RUTA»)', /Aparece en RUTA el viernes 27\/11/i.test(cartel), cartel.slice(-120));
+  /* La bolsa se da en RUTA el día de la bolsa (el viernes): el reloj de la PÁGINA va a ese día; la base sigue en la hora real. */
+  const fe = ap.fecha; await pg.clock.setSystemTime(new Date(fe + 'T10:00:00-03:00'));
+  console.log('       reloj de la página: ' + (await pg.evaluate(() => new Date().toString())));
+  await pg.evaluate(() => { try { rutRender(); } catch (e) {} });
+  await tocar('.tab[data-tab="ruta"]', '', '', { espera: 3000 });
+  if (process.env.EXPLORAR) { await volcar('red en RUTA'); await foto('red_ruta'); }
+  const n1 = await pg.evaluate(() => window.__posts.length);
+  const eb = await tocar('[onclick^="entregarAVendedor("]', '', '#rutaView', { callado: true, espera: 1500 }) || await tocar('[onclick^="entregarAVendedor("]', '', '', { espera: 1500 });
+  if (!chk('red: botón para darle la bolsa', !!eb, await pg.evaluate(() => [].map.call(document.querySelectorAll('[onclick^="entregarAVendedor("]'), (b) => b.textContent.trim().slice(0, 40))))) { await volcar('red sin bolsa'); return; }
+  console.log('       bolsa: «' + eb.txt + '» · ' + (await pg.evaluate(() => window.__confirms.slice(-1)[0] || '')).replace(/\s+/g, ' ').slice(0, 160));
+  const pb = await esperar((n1) => { const p = window.__posts.slice(n1).find((x) => /EntregadoAVendedor|bolsa/i.test(x.u + x.b.slice(0, 200)) && x.r); return p ? p.u + ' → ' + p.r.slice(0, 200) : null; }, n1, 30000);
+  chk('red: la bolsa llegó a la base (' + pb + ')', !!pb && /→ 200 /.test(pb) && !/"ok": ?false/.test(pb), pb);
+  const ev = await esperar((n) => { try { _recargarPedidos(); } catch (e) {} const p = (D.pedidos || []).find((x) => x.h === 'Red' && String(x.n) === String(n)); return p && (p.ev === 'Entregado' || p.entVend === 'Entregado') ? { ev: p.ev, es: p.es } : null; }, n, 30000);
+  chk('red: #' + n + ' quedó «Entregado a vendedor» en Pedidos', !!ev, await pg.evaluate((n) => { const p = (D.pedidos || []).find((x) => x.h === 'Red' && String(x.n) === String(n)); return p ? { ev: p.ev, es: p.es, keys: Object.keys(p).join(',') } : null; }, n));
+  await foto('red_bolsa');
+  await pg.clock.setSystemTime(new Date());   /* la página vuelve a la hora real */
+  /* ── EL REPRESENTANTE, en SU celular: entra con su usuario y PIN y marca «Entregado» en Mi Portal (el viernes). */
+  console.log('\n── Mi Portal del representante PRUEBA');
+  const cred = JSON.parse(fs.readFileSync(path.join(os.homedir(), '.maleu', 'robot.json'), 'utf8'));
+  const ctx2 = await br.newContext(COMPU ? { viewport: { width: 1440, height: 900 } } : { viewport: { width: 393, height: 852 }, deviceScaleFactor: 3, isMobile: true, hasTouch: true });
+  await ctx2.addInitScript(INIT);
+  const pr = await ctx2.newPage(); const errs2 = [];
+  pr.on('pageerror', (e) => errs2.push('JS: ' + String(e.message).slice(0, 200)));
+  await pr.clock.setSystemTime(new Date(fe + 'T18:00:00-03:00'));
+  await pr.goto(BASE + '?v=' + Date.now(), { waitUntil: 'domcontentloaded' });
+  await pr.waitForFunction(() => typeof panelDoLogin === 'function' && !!document.getElementById('loginUser'), null, { timeout: 90000 });
+  await pr.fill('#loginUser', cred.repUsuario || 'pruebarobot'); await pr.fill('#loginPin', String(cred.pinRep));
+  await pr.evaluate(() => panelDoLogin());
+  const filaRep = await (async () => { const t0 = Date.now(); while (Date.now() - t0 < 120000) { const r = await pr.evaluate((n) => { const b = [].find.call(document.querySelectorAll('.hy-bt'), (x) => { const f = x.closest('.hy-f, .hy-filaRep, div'); return f && /PRUEBA Robot/.test(f.textContent) && x.tagName === 'BUTTON' && x.getClientRects().length; }); if (!b) return null; b.setAttribute('data-au', 'rep'); return { txt: b.closest('div').innerText.replace(/\s+/g, ' ').slice(0, 160) }; }, n).catch(() => null); if (r) return r; await T(1500); } return null; })();
+  if (!chk('portal: el representante ve el pedido con «Entregado» para tocar', !!filaRep, await pr.evaluate(() => (document.getElementById('p-miportal') || document.body).innerText.replace(/\s+/g, ' ').slice(0, 500)).catch(() => ''))) { await pr.screenshot({ path: path.join(OUT, 'au_portal_sin.png') }); await ctx2.close(); return; }
+  console.log('       filaRep: ' + filaRep.txt);
+  const b = await pr.evaluate(() => { const e = document.querySelector('.hy-bt[data-au="rep"]'); e.scrollIntoView({ block: 'center' }); const r = e.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; });
+  await T(400); if (COMPU) await pr.mouse.click(b.x, b.y); else await pr.touchscreen.tap(b.x, b.y);
+  await T(1500);
+  const cf = await pr.evaluate(() => window.__confirms.slice(-1)[0] || '');
+  console.log('       confirmación: ' + cf.replace(/\s+/g, ' ').slice(0, 140));
+  await pr.screenshot({ path: path.join(OUT, 'au_' + (COMPU ? '1440' : '393') + '_portal.png') });
+  const pe = await esperar((n) => { try { _recargarPedidos(); } catch (e) {} const p = (D.pedidos || []).find((x) => x.h === 'Red' && String(x.n) === String(n)); return p && p.es === 'Entregado' ? 1 : null; }, n, 40000);
+  chk('portal: lo que marcó el representante quedó Entregado en la base (Red #' + n + ')', !!pe, await pr.evaluate(() => window.__posts.slice(-3).map((x) => x.u + ' → ' + String(x.r || '').slice(0, 120))));
+  chk('portal: sin errores de JS', !errs2.length, errs2);
+  await ctx2.close();
+}
+async function volcarAba(et) {
+  const v = await pg.evaluate(() => {
+    const vis = (e) => e.getClientRects().length && getComputedStyle(e).visibility !== 'hidden';
+    const R = document.getElementById('pg-abast') || document;
+    const prueba = [].slice.call(R.querySelectorAll('*')).filter((e) => vis(e) && /PRUEBA/.test(e.textContent || '') && e.textContent.length < 400 && e.children.length < 30).slice(-5).map((e) => e.tagName + '.' + String(e.className).slice(0, 40) + ' «' + e.textContent.replace(/\s+/g, ' ').trim().slice(0, 220) + '»');
+    const btns = [].slice.call(R.querySelectorAll('[onclick]')).filter((e) => vis(e) && /PRUEBA|Recib|recib|Pedir|OC/.test(e.textContent + (e.getAttribute('onclick') || ''))).slice(0, 25).map((e) => (e.getAttribute('onclick') || '').slice(0, 70) + ' «' + e.textContent.replace(/\s+/g, ' ').trim().slice(0, 40) + '»');
+    return { prueba, btns };
+  });
+  console.log('   [' + et + ']\n     PRUEBA: ' + v.prueba.join('\n             ') + '\n     botones: ' + v.btns.join(' | ').slice(0, 2500));
+}
 async function irCobranza() {
   await pg.evaluate(() => { if (typeof go === 'function' && !(document.getElementById('pg-ruta') || {}).offsetParent) go('ruta'); });
   await tocar('.tab[data-tab="cobros"]', '', '', { callado: true, espera: 1500 });
@@ -342,14 +589,16 @@ async function tarjetaDe(n) {
   await abrir();
   console.log('robot: ' + (await pg.evaluate(() => SESSION.nombre + ' / ' + SESSION.usuario + ' / ' + SESSION.rol)) + ' · ' + MOTOR);
   if (process.env.LIMPIAR) { console.log('limpiar', JSON.stringify(await rpc('robot_limpiar', { p_corrida: 'audit-' + Date.now() })).slice(0, 500)); await br.close(); return; }
-  E = await rpc('robot_entidades_pantalla', {});
+  E = await rpc('robot_entidades_pantalla', {}); if (process.env.EXPLORAR) console.log('E ' + JSON.stringify(E).slice(0, 600)); if (process.env.EXPLORAR) console.log('PRUEBA en D.stock ' + JSON.stringify(await pg.evaluate((sku) => (D.stock || []).filter((x) => /PRUEBA/i.test(JSON.stringify(x).slice(0, 300))).slice(0, 3), E.producto)).slice(0, 600));
   const fl = process.env.FLUJO || 'cobranza';
   try {
     if (/cobranza/.test(fl)) await flujoCobranza();
     if (/yapago/.test(fl)) await flujoYaPago();
     if (/juntada/.test(fl)) await flujoJuntada();
+    if (/ruta/.test(fl)) await flujoRuta();
+    if (/red/.test(fl)) await flujoRed();
   } catch (e) { mal++; console.log('  MAL  reventó: ' + (e && e.stack || e)); await foto('revento'); }
-  const ej = errs.filter((e) => !/favicon|ERR_ABORTED/.test(e));
+  const ej = errs.filter((e) => !/favicon|ERR_ABORTED|WebKit encountered an internal error|ERR_INTERNET_DISCONNECTED/.test(e));
   chk('sin errores de JS ni de la base', ej.length === 0, [...new Set(ej)].slice(0, 12));
   if (!process.env.SIN_LIMPIAR) console.log('limpiar: ' + JSON.stringify(await rpc('robot_limpiar', { p_corrida: 'audit-' + Date.now() })).slice(0, 300));
   console.log('\n' + ok + ' ok · ' + mal + ' mal' + (hall.length ? '\n  · ' + hall.join('\n  · ') : ''));
