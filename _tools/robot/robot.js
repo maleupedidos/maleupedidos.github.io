@@ -352,7 +352,10 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
   await paso('juntada: pagan los 3 y se deshace un pago', async () => {
     const prod = await prodPrueba();
     if (!prod || prod.id == null) return { ok: false, detalle: 'sin el producto ' + SKU };
-    const hoy = new Date().toLocaleDateString('sv-SE', { timeZone: 'America/Argentina/Buenos_Aires' }), q = 3, tot = q * (Number(prod.precio) || 1);
+    /* (23/11/2026) UNA unidad, no 3: el libro PRUEBA arranca en 3 en «prueba» y el alta en la tienda ya se llevó 1. Con 3 la
+       entrega pedía 4 y la que faltaba salía de ustariz: «traspaso: PRUEBA tiene -1 en ustariz» frenó tres deploys. Los 3
+       comensales siguen: el total se divide igual en tres pagos. */
+    const hoy = new Date().toLocaleDateString('sv-SE', { timeZone: 'America/Argentina/Buenos_Aires' }), q = 1, tot = q * (Number(prod.precio) || 1);
     const al = await directa('altaPedido', { canal: 'Pilar', fecha: new Date().toLocaleString('es-AR'), fechaEntrega: hoy, dia: '', horario: '', nombre: CLI, telefono: TEL,
       pago: '', envio: 0, items: [{ id: prod.id, qty: q }], repartidor: '', total: tot, subtotalSinDescuento: tot, descuento: 0, descuentoManual: 0, descuentoGlobalPct: 0, descuentoReceta: null,
       propina: 0, tipoPedido: '', deposito: DEP, barrio: 'PRUEBA', direccion: 'PRUEBA', lote: '', origen: 'Pendiente', estadoEntrega: 'Pendiente', estadoPago: 'No Cobrado', clientOrderId: PREFIJO + 'jnt-alta' });

@@ -304,7 +304,7 @@ async function flujoJuntada() {
   console.log('       en 20 s quieto: la tarjeta se reemplazó ' + rep.tarjeta + ' veces, la juntada adentro ' + rep.juntada);
   chk('juntada: quieto 20 s, la tarjeta no se reemplaza sola más de 1 vez (' + rep.tarjeta + ' / ' + rep.juntada + ')', rep.tarjeta + rep.juntada <= 1, rep);
   /* (23/11) Guardó en + PEDIDO y se fue a COBRANZA: el salto automático de los 6 s a ARMADO no lo tiene que arrancar de acá. */
-  const tabAhora = await pg.evaluate(() => rutCurrentTab);
+  const tabAhora = await pg.evaluate(() => (document.querySelector('#pg-ruta .tab.active') || {}).getAttribute ? document.querySelector('#pg-ruta .tab.active').getAttribute('data-tab') : '?');
   chk('juntada: guardé y me fui a COBRANZA: 20 s después sigo en COBRANZA (no me lleva a ARMADO)', tabAhora === 'cobros', tabAhora);
   await re(); const b3 = await tocar(sel + ' .com-cobrar button', 'Cobrar a');
   if (!chk('juntada: con 3 debiendo, «Cobrar a… (3)»', b3 && /\(3\)/.test(b3.txt), b3)) {
@@ -390,7 +390,7 @@ async function armarPrueba(n) {
   /* La tarjeta del pedido PRUEBA en Armado (el día puede venir plegado). Solo se toca la que dice «PRUEBA Robot». */
   const marcar = () => pg.evaluate(() => { const c = [].slice.call(document.querySelectorAll('#armadoView .armado-card')).find((c) => c.offsetParent && /PRUEBA Robot/.test((c.querySelector('.armado-name') || {}).textContent || '')); if (!c) return null; document.querySelectorAll('[data-au="arm"]').forEach((x) => x.removeAttribute('data-au')); c.setAttribute('data-au', 'arm'); return { done: c.classList.contains('done'), txt: c.innerText.replace(/\s+/g, ' ').slice(0, 120) }; });
   const t0 = Date.now(); let c = null;
-  while (Date.now() - t0 < 90000) { c = await marcar(); if (c) break; await tocar('[onclick*="toggleCollapse"]', 'HOY', '#armadoView', { callado: true, espera: 300 }); c = await marcar(); if (c) break; await T(1000); }
+  while (Date.now() - t0 < 90000) { c = await marcar(); if (c) break; if (!(await pg.evaluate(() => [].some.call(document.querySelectorAll('#armadoView .armado-card'), (x) => x.getClientRects().length)))) await tocar('[onclick*="toggleCollapse"]', 'HOY', '#armadoView', { callado: true, espera: 300 }); c = await marcar(); if (c) break; await T(1000); }
   if (c) { c.seg = Math.round((Date.now() - t0) / 1000); console.log('       en ARMADO a los ' + c.seg + ' s'); }
   return c;
 }
@@ -646,10 +646,20 @@ async function tarjetaDe(n) {
   return ok ? '.cobro-card[data-au="' + n + '"]' : null;
 }
 
+/* (23/11/2026) El flujo de Red deja el producto PRUEBA en -1 en ustariz por corrida (la bolsa sale de ustariz y la recepción
+   entra a prueba). robot_limpiar lo vuelve a 3 en prueba y 0 en el resto, pero solo con 10 min sin órdenes del robot: se
+   espera (hasta 12 min) para no dejarle el residuo al próximo deploy (su paso «traspaso» pide 0 en ustariz). */
+async function libroEnSuLugar() {
+  const t0 = Date.now();
+  while (Date.now() - t0 < 12 * 60000) { const r = await rpc('robot_limpiar', { p_corrida: 'audit-libro-' + Date.now() }).catch(() => null); const lp = r && r.libroPrueba;
+    if (lp && lp.ok) { console.log('libro PRUEBA en su lugar: ' + JSON.stringify(lp)); return true; }
+    console.log('libro PRUEBA todavía no: ' + JSON.stringify(lp || r).slice(0, 160)); await T(60000); }
+  return false;
+}
 (async () => {
   await abrir();
   console.log('robot: ' + (await pg.evaluate(() => SESSION.nombre + ' / ' + SESSION.usuario + ' / ' + SESSION.rol)) + ' · ' + MOTOR);
-  if (process.env.LIMPIAR) { console.log('limpiar', JSON.stringify(await rpc('robot_limpiar', { p_corrida: 'audit-' + Date.now() })).slice(0, 500)); await br.close(); return; }
+  if (process.env.LIMPIAR) { console.log('limpiar', JSON.stringify(await rpc('robot_limpiar', { p_corrida: 'audit-' + Date.now() })).slice(0, 500)); if (process.env.LIBRO) await libroEnSuLugar(); await br.close(); return; }
   E = await rpc('robot_entidades_pantalla', {}); if (process.env.EXPLORAR) console.log('E ' + JSON.stringify(E).slice(0, 600)); if (process.env.EXPLORAR) console.log('PRUEBA en D.stock ' + JSON.stringify(await pg.evaluate((sku) => (D.stock || []).filter((x) => /PRUEBA/i.test(JSON.stringify(x).slice(0, 300))).slice(0, 3), E.producto)).slice(0, 600));
   const fl = (process.env.FLUJO || 'cobranza').replace(/^todo$/, 'cobranza,yapago,juntada,ruta,red');
   try {
@@ -662,6 +672,7 @@ async function tarjetaDe(n) {
   const ej = errs.filter((e) => !/favicon|ERR_ABORTED|WebKit encountered an internal error|ERR_INTERNET_DISCONNECTED/.test(e));
   chk('sin errores de JS ni de la base', ej.length === 0, [...new Set(ej)].slice(0, 12));
   if (!process.env.SIN_LIMPIAR) console.log('limpiar: ' + JSON.stringify(await rpc('robot_limpiar', { p_corrida: 'audit-' + Date.now() })).slice(0, 300));
+  if (!process.env.SIN_LIMPIAR && /red/.test(process.env.FLUJO === 'todo' ? 'red' : (process.env.FLUJO || ''))) chk('el stock PRUEBA vuelve a su lugar (robot_limpiar con 10 min quietos)', await libroEnSuLugar());
   console.log('\n' + ok + ' ok · ' + mal + ' mal' + (hall.length ? '\n  · ' + hall.join('\n  · ') : ''));
   await br.close(); process.exit(mal ? 1 : 0);
 })().catch((e) => { console.log('REVENTÓ', e && e.stack || e); process.exit(1); });
