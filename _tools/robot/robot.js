@@ -797,6 +797,20 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
     return { ok: !!r.ok, detalle: r.ok ? n + ' comparaciones, 0 diferencias' : (r.difs || []).slice(0, 8).join(' · ') };
   });
 
+  /* (24/11/2026, 833) EL EERR DE LA BASE = LA TAB RESULTADOS, al peso y renglón por renglón, en el mes en curso y los dos
+     anteriores (`_tools/pruebas/cruce_eerr.js`, solo lee). La base lo calcula para el tablero de Grupo Matriz con la regla
+     de `_eerrCalc` portada a SQL: si el panel cambia la regla y la base no, sale acá. Si no cierra, va en los hallazgos y
+     con eso en la alerta técnica de la mañana. De noche el robot corre de 1 a 8 h de Argentina: la fecha UTC del runner es
+     la misma que la de acá, así que el mes en curso se cuenta por los mismos días en los dos lados. */
+  if (!process.env.ROBOT_LOCAL) await paso('el EERR de la base dice lo mismo que Resultados', async () => {
+    const { EXPR, comparar } = require('../pruebas/cruce_eerr.js');
+    let r = await ev(EXPR, 300000); if (typeof r === 'string') r = JSON.parse(r);
+    const c = comparar(r);
+    const res = c.resumen.map((x) => x.mes + ' $' + x.resultadoErp + (x.resultadoErp === x.resultadoBase ? '' : '/$' + x.resultadoBase)).join(' · ');
+    return { ok: c.ok, detalle: c.ok ? c.resumen.length + ' meses, ' + c.resumen.reduce((a, x) => a + x.renglones, 0) + ' renglones iguales · ' + res
+      : 'EERR base ≠ Resultados: ' + c.difs.slice(0, 8).join(' · ') };
+  }, { esperado: '833' });
+
   await paso('nadie lee la foto de Apps Script', async () => {
     const f = JSON.parse(await ev(`JSON.stringify(window.__fotoApps||null)`).catch(() => 'null'));
     if (f === null) return { ok: false, detalle: 'el ERP no tiene el corte de la foto (window.__fotoApps no existe)' };
