@@ -7924,6 +7924,7 @@ function _cobroCardHTML(pc, globalIdx){
   else if(_jntBtn)c+=_jntBtn;
   else c+='<button type="button" class="cobro-btn-cobrado" onclick="abrirCobroPendiente('+globalIdx+')">Cobrar</button>';
   if(_cobEsEntregado(pc))c+=_cobRecordarBtn(pc,_jntCob||!!pc.grp);   /* (24/11/2026) a la vista, al lado de Cobrar */
+  if(!_jntCob&&!pc.grp)c+=_cobUnirBtn(pc);   /* (24/11/2026) «Unir con otra persona» */
   c+='</div><details class="cg-mas cobro-mas"><summary>Otras opciones</summary><div class="cobro-mas-b">'
     +(_jntBtn?'<button type="button" class="cobro-btn-copiar" onclick="abrirCobroPendiente('+globalIdx+')">Cobrar el saldo entero</button>':'')
     +'<button type="button" class="cobro-btn-copiar" onclick="cobroCopiarDetalle(\''+globalIdx+'\',this)">Copiar detalle</button>'
@@ -8738,7 +8739,7 @@ function _cobroClienteGrupoHTML(grp){
   var _cada=esEv&&(_cobModo[ck]||'uno')==='cada';
   c+='<div class="cobro-card-actions">'
     +(_cada?'':'<button type="button" class="cobro-btn-cobrado cg-cobrar"'+a+(selN?'':' disabled')+' onclick="cobGrpCobrar(this)">'+txt+'</button>')
-    +(items.some(_cobEsEntregado)?_cobRecordarBtn(items[0],esEv||items.some(function(p){return !!p.grp;})):'')+'</div>'
+    +(items.some(_cobEsEntregado)?_cobRecordarBtn(items[0],esEv||items.some(function(p){return !!p.grp;})):'')+(esEv?'':_cobUnirBtn(items[0]))+'</div>'
     ;
   if(_cada){
     /* Un boton por integrante con algo tildado: cada uno paga lo suyo, a su nombre. */
@@ -9347,6 +9348,117 @@ function _cobTarjetas(lista){
   });
   return '<div class="cobro-section" style="border:none;padding:0">'+h+'</div>';
 }
+/* ══ «UNIR CON OTRA PERSONA» (24/11/2026) ═══════════════════════════════════════════════════════════════════════════════
+   Tadeo, 10:59 y 12:49 (Nani Delfino pagó en una transferencia lo suyo, #2581, y lo de Javier, su hijo, #2578): «en cada
+   integrante de un pedido, al costadito, aparezca algo como unir con otra persona… donde yo pueda unir un pedido con otro.
+   Así, el usuario, tanto yo, Lucas o el siguiente, pueda unir cobros e interpretar distintos pedidos con un cobro».
+   NADA SE AGRUPA SOLO: las tarjetas siguen por cliente (regla del 8/11). El botón abre un buscador con los otros que deben;
+   arriba, como sugerencia, los de la MISMA CASA (barrio + lote). Se elige a una o varias personas, «¿Quién pagó?», y se abre
+   el cobro combinado de siempre (`abrirCobroComboCobros`): un cobro por pedido, el mismo pagador y la misma operación, la
+   cuenta del cuadro (Galicia por defecto). Lo que sobra de una transferencia hasta COBRO_FALTA_DESCUENTO va solo a propina
+   (en `_recalcCobroRuta`). El recordatorio de todo junto sale del mismo buscador.
+   Solo Home y Pilar: Red es del representante y Clubes del club; un evento («Juntada») ya se cobra junto. */
+function _cobUnirOk(pc){return !!pc&&['Home','Pilar'].indexOf(pc.h)>=0&&_canalDeCobro(pc)!=='re'&&!_cobEsEvento(_claveCliente(pc))&&!_rutEsMio(pc.c,pc.t);}
+function _cobUnirBtn(pc){
+  if(!_cobUnirOk(pc))return '';
+  return '<button type="button" class="cobro-btn-alias cobz-unir" data-ck="'+_rtcEsc(_claveCliente(pc))+'" onclick="cobUnirAbrir(this.dataset.ck)">Unir con otra persona</button>';
+}
+/* Los que deben, de a cliente (la misma clave que las tarjetas). */
+/* La casa = barrio + lote (Tadeo). La lista de cobros no los trae: salen del pedido del panel (`br`: «Champagnat Alto ·
+   Lote 291», `bar`: el barrio). Sin lote no hay casa que sugerir. */
+var _cobUnirIdx=null;
+function _cobUnirCasa(pc){
+  var p=_cobUnirIdx&&_cobUnirIdx[pc.h+'|'+pc.id]; if(!p)return '';
+  var br=String(p.br||''); if(!/lote/i.test(br))return '';
+  return _cobEventoNorm(p.bar)+'|'+_cobEventoNorm(br);
+}
+function _cobUnirClientes(){
+  var por={},orden=[];
+  _cobUnirIdx={};((typeof D!=='undefined'&&D&&D.pedidos)||[]).forEach(function(p){_cobUnirIdx[p.h+'|'+p.n]=p;});
+  pendientesCobro.forEach(function(pc){
+    if(!_cobUnirOk(pc))return;
+    var k=_claveCliente(pc);
+    if(!por[k]){por[k]={k:k,nm:String(pc.cn||pc.c||'').trim(),casa:_cobUnirCasa(pc),lote:String((_cobUnirIdx[pc.h+'|'+pc.id]||{}).br||''),barrio:'',tel:String(pc.t||''),items:[],tot:0};orden.push(k);}
+    por[k].items.push(pc);por[k].tot+=Number(pc.$)||0;
+  });
+  return orden.map(function(k){return por[k];});
+}
+window.cobUnirAbrir=function(ck){
+  var cs=_cobUnirClientes(), yo=cs.filter(function(c){return c.k===ck;})[0];
+  if(!yo){showToast('Este cliente ya no debe nada');return;}
+  _cobUnirB={yo:yo,cs:cs,sel:{},paga:yo.k};
+  var o=document.getElementById('cobUnirOv'); if(o)o.remove();
+  o=document.createElement('div'); o.id='cobUnirOv'; o.className='ent-ov';
+  o.onclick=function(e){if(e.target===o)o.remove();};
+  o.innerHTML='<div class="ent-box cob-unir" role="dialog" aria-label="Unir con otra persona"><div class="ent-h"><b>Unir a '+_rtcEsc(yo.nm.split(' ')[0])+' con…</b>'
+    +'<button type="button" class="ent-x" aria-label="Cerrar" onclick="document.getElementById(\'cobUnirOv\').remove()">×</button></div>'
+    +'<input id="cobUnirQ" type="search" autocomplete="off" placeholder="Buscá por nombre, lote o teléfono" oninput="_cobUnirPintar()">'
+    +'<div id="cobUnirL" class="ent-l"></div><div id="cobUnirPie" class="cob-unir-pie"></div></div>';
+  document.body.appendChild(o);
+  _cobUnirPintar();
+};
+var _cobUnirB=null;
+function _cobUnirNorm(s){return String(s||'').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'');}
+function _cobUnirPintar(){
+  var B=_cobUnirB, el=document.getElementById('cobUnirL'); if(!B||!el)return;
+  var q=_cobUnirNorm((document.getElementById('cobUnirQ')||{}).value).trim();
+  var casa=B.yo.casa, otros=B.cs.filter(function(c){return c.k!==B.yo.k;});
+  var misma=function(c){return !!casa&&c.casa===casa;};
+  var l=otros.filter(function(c){return B.sel[c.k]||!q||_cobUnirNorm(c.nm+' '+c.lote+' '+c.barrio+' '+c.tel).indexOf(q)>=0;})
+    .sort(function(a,b){return (misma(b)-misma(a))||(!!B.sel[b.k]-!!B.sel[a.k])||a.nm.localeCompare(b.nm,'es');});
+  var fila=function(c){
+    var on=!!B.sel[c.k];
+    return '<button type="button" class="ent-f cob-unir-f'+(on?' on':'')+'" aria-pressed="'+on+'" data-k="'+_rtcEsc(c.k)+'" onclick="_cobUnirTocar(this.dataset.k)">'
+      +'<span class="cob-unir-tick" aria-hidden="true"></span><span class="cob-unir-n"><b>'+_rtcEsc(c.nm)+'</b><small>'
+      +(misma(c)?'<em>Misma casa</em> · ':'')+(c.lote?_rtcEsc(c.lote)+' · ':'')+c.items.length+(c.items.length===1?' pedido':' pedidos')+'</small></span>'
+      +'<b>'+_cobroPesos(c.tot)+'</b></button>';
+  };
+  var nMisma=l.filter(misma).length;
+  el.innerHTML=l.length?((nMisma?'<div class="cob-unir-h">De la misma casa</div>'+l.filter(misma).map(fila).join('')+(l.length>nMisma?'<div class="cob-unir-h">Otros que deben</div>':''):'')
+    +l.filter(function(c){return !misma(c);}).slice(0,40).map(fila).join(''))
+    :'<div class="ent-vacio">'+(q?'Nadie que deba con eso.':'No hay nadie más que deba.')+'</div>';
+  _cobUnirPie();
+}
+window._cobUnirTocar=function(k){
+  var B=_cobUnirB; if(!B)return;
+  if(B.sel[k])delete B.sel[k]; else B.sel[k]=1;
+  if(!(B.paga===B.yo.k||B.sel[B.paga]))B.paga=B.yo.k;
+  _cobUnirPintar();
+};
+window._cobUnirPaga=function(k){if(_cobUnirB){_cobUnirB.paga=k;_cobUnirPie();}};
+function _cobUnirElegidos(){var B=_cobUnirB;return B?[B.yo].concat(B.cs.filter(function(c){return B.sel[c.k];})):[];}
+function _cobUnirPie(){
+  var B=_cobUnirB, el=document.getElementById('cobUnirPie'); if(!B||!el)return;
+  var ps=_cobUnirElegidos();
+  if(ps.length<2){el.innerHTML='<div class="ent-nota">Tocá a quién se suma. Se cobra todo en un solo pago y cada pedido queda cobrado.</div>';return;}
+  var tot=ps.reduce(function(s,c){return s+c.tot;},0), n=ps.reduce(function(s,c){return s+c.items.length;},0);
+  el.innerHTML='<div class="cob-unir-q">¿Quién pagó?</div><div class="cob-unir-chips">'+ps.map(function(c){
+      return '<button type="button" class="cob-unir-chip'+(B.paga===c.k?' on':'')+'" aria-pressed="'+(B.paga===c.k)+'" data-k="'+_rtcEsc(c.k)+'" onclick="_cobUnirPaga(this.dataset.k)">'+_rtcEsc(c.nm.split(' ')[0])+'</button>';
+    }).join('')+'</div>'
+    +'<button type="button" class="cob-unir-ok" onclick="cobUnirCobrar()">Cobrar '+n+' pedidos · '+_cobroPesos(tot)+'</button>'
+    +'<button type="button" class="cob-unir-rec" onclick="cobUnirRecordar()">Copiar recordatorio de todo junto</button>';
+}
+window.cobUnirCobrar=function(){
+  var B=_cobUnirB, ps=_cobUnirElegidos(); if(ps.length<2)return;
+  var quien=(ps.filter(function(c){return c.k===B.paga;})[0]||B.yo).nm;
+  var idxs=[];ps.forEach(function(c){c.items.forEach(function(pc){var i=pendientesCobro.indexOf(pc);if(i>=0)idxs.push(i);});});
+  var o=document.getElementById('cobUnirOv'); if(o)o.remove();
+  if(idxs.length<2){showToast('Se cobró algo mientras elegías: volvé a abrir');return;}
+  abrirCobroComboCobros(idxs.join(','),{pagador:quien});
+};
+/* Lo de todos, a nombre de quien paga y con lo de cada uno (sin número de pedido; se copia: nunca un wa.me). */
+window.cobUnirRecordar=function(){
+  var B=_cobUnirB, ps=_cobUnirElegidos(); if(ps.length<2)return;
+  var pag=(ps.filter(function(c){return c.k===B.paga;})[0]||B.yo), al=(_aliasCliente()[0]||{}).alias||'', tot=0;
+  var lin=ps.map(function(c){
+    var m=c.items.reduce(function(s,pc){return s+(Number(pc.$)||0);},0); tot+=m;
+    var dias=[];c.items.forEach(function(pc){var d=String(_cobroDiaRel(pc)||'').replace(/^el /,'');if(d&&dias.indexOf(d)<0)dias.push(d);});
+    return '• '+(c.k===pag.k?'Lo tuyo':'Lo de '+c.nm.split(' ')[0])+(dias.length?' ('+dias.join(', ')+')':'')+': '+_cobroPesos(m);
+  });
+  var txt='Hola '+pag.nm.split(' ')[0]+'! Te escribimos de Maleu. Te pasamos el total de todo junto:\n'+lin.join('\n')+'\nTotal: '+_cobroPesos(tot)+'.\n'
+    +(al?'Podés transferir todo junto al alias '+al+'. ':'')+'Cuando lo hagas, mandanos el comprobante por acá. ¡Gracias!';
+  rutCopiarTexto(txt,'Recordatorio copiado: pegalo en el chat de '+pag.nm.split(' ')[0]);
+};
 function _cobSubH(t,r){return '<div class="cob-sub-h"><span>'+t+'</span><b>'+r+'</b></div>';}
 /* (22/11/2026, Tadeo) «Equipo Maleu» y «Representantes» se pliegan igual que Deudores y A futuro: cerrados, el total a
    la vista. Arrancan abiertos (es lo que había) y se recuerda lo último por subgrupo en el celular. */
@@ -11510,7 +11622,7 @@ function _recalcCobroRuta(){
   if(propLbl){
     var _propAb=document.getElementById('cobroPropinaSection').style.display!=='none';
     if(neto<requerido){propLbl.textContent=st.aceptaDescuento?'Descuento aceptado':'Falta';propEl.textContent='\u2212'+formatMoney(requerido-neto);propEl.style.color='#C62828';}
-    else if(propina>0){propLbl.textContent=_propAb?'Propina':'Sobra';propEl.textContent='+'+formatMoney(propina);propEl.style.color='#2E7D32';}
+    else if(propina>0){propLbl.textContent=(_propAb||(recEf===0&&camTot===0&&propina<=_cobroFaltaTope()))?'Propina':'Sobra';propEl.textContent='+'+formatMoney(propina);propEl.style.color='#2E7D32';}
     else if(propina<0){propLbl.textContent='Propina';propEl.textContent='\u2212'+formatMoney(-propina);propEl.style.color='#C62828';}
     else {propLbl.textContent='Cierra justo';propEl.textContent='';propEl.style.color='#2E7D32';}
   }
@@ -11573,7 +11685,13 @@ function _recalcCobroRuta(){
   if(!partial && propina>0){
     var _aFavAbierto=document.getElementById('cobroAFavSection').style.display!=='none';
     var _propAbierto=document.getElementById('cobroPropinaSection').style.display!=='none';
-    if(!_aFavAbierto && !_propAbierto){
+    /* (24/11/2026, Tadeo 09:50: «mis amigos me pagan un poco de más… puede pasar esto en la vida real») Una TRANSFERENCIA
+       que entra hasta COBRO_FALTA_DESCUENTO ($500) de más no se pregunta: es propina, igual que la falta chica en efectivo
+       es descuento. En efectivo se sigue preguntando (lo de más suele ser el vuelto). Nani: $96.700 por $96.628 → $72. */
+    if(!_aFavAbierto && !_propAbierto && recEf===0 && camTot===0 && propina<=_cobroFaltaTope()){
+      sobrBtnExtra='<div class="cobro-falta-desc">Sobran <b>'+formatMoney(propina)+'</b>: va de propina.</div>';
+    }
+    else if(!_aFavAbierto && !_propAbierto){
       sobrBtnExtra='<div style="background:#E8F5E9;border:1.5px solid #4CAF50;border-radius:8px;padding:9px 11px;margin-top:8px;font-size:12px;line-height:1.5;color:#1B5E20">'
         +'Sobran <b>'+formatMoney(propina)+'</b> del cobro. ¿Qué hacés?<br>'
         +'<div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap">'

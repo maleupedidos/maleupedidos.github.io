@@ -741,6 +741,69 @@ async function volcarAba(et) {
 }
 /* (24/11/2026) COBRANZA es una tab del menú (al lado de Caja), ya no una sub-tab de Ruta: se entra por el menú, como Tadeo
    (en el celular, la hamburguesa y después «Cobranza»). Si el menú no la tiene, es un hallazgo: no se esquiva con go(). */
+/* ── FLUJO 6: «Unir con otra persona» (24/11/2026, Tadeo 12:49). Dos pedidos PRUEBA de la MISMA casa (barrio PRUEBA, lote
+   9) a nombre de dos personas (PRUEBA Robot y PRUEBA Ana, los dos teléfonos del robot). Desde la tarjeta de PRUEBA Robot:
+   «Unir con otra persona» → Ana arriba, «De la misma casa» → tildarla → «¿Quién pagó?» Ana → «Cobrar 2 pedidos» → el cuadro
+   combinado → transferencia con $72 de más (el caso de Nani: $96.700 por $96.628) → «va de propina», sin preguntar →
+   Confirmar. En la base: los dos Cobrado. Y el recordatorio de todo junto, con lo de cada uno y sin número de pedido. */
+async function flujoUnir() {
+  console.log('\n── Unir con otra persona');
+  const altaDe = (nombre, tel, k) => rpc('pedido_alta_directo', { p: { canal: 'Home', fecha: new Date().toLocaleString('es-AR'), fechaEntrega: new Date().toLocaleDateString('sv-SE', { timeZone: 'America/Argentina/Buenos_Aires' }), dia: '', horario: '',
+    nombre, telefono: tel, pago: 'Transferencia', envio: 0, items: [{ id: E.producto_id, qty: k }], total: 1000 * k, subtotalSinDescuento: 1000 * k, descuento: 0, descuentoManual: 0, descuentoGlobalPct: 0, descuentoReceta: null,
+    propina: 0, tipoPedido: '', deposito: E.deposito || 'prueba', barrio: 'PRUEBA', direccion: 'PRUEBA', lote: '9', estadoEntrega: 'Pendiente', estadoPago: 'No Cobrado', clientOrderId: 'robot-' + Date.now() + '-unir-' + k } });
+  if (!(Number(E.producto_id) > 0)) return chk('unir: el id de tienda de PRUEBA', false, E);
+  /* Lo de una corrida anterior (la limpieza protege 30 min lo que no es de su corrida): «-unir-» lo deja sin protección. */
+  await rpc('robot_limpiar', { p_corrida: '-unir-' }).catch(() => null);
+  const a = await altaDe('PRUEBA Robot', String(E.telefono || '5490000000001'), 1), b = await altaDe('PRUEBA Ana', String(E.telefono_representante || '5490000000002'), 2);
+  if (!chk('unir: dos pedidos PRUEBA de la misma casa (#' + (a && a.n) + ' y #' + (b && b.n) + ')', a && a.ok && a.n && b && b.ok && b.n, { a, b })) return;
+  /* La casa (barrio + lote) sale de los pedidos del panel: se espera a que los dos estén ahí, como en la vida real. */
+  const enD = await esperar(([na, nb]) => { try { _recargarPedidos && _recargarPedidos(); } catch (e) {} const ps = (D.pedidos || []); return ps.some((x) => String(x.n) === String(na)) && ps.some((x) => String(x.n) === String(nb)) ? 1 : null; }, [a.n, b.n], 60000);
+  chk('unir: los dos pedidos llegan a los pedidos del panel', !!enD);
+  await irCobranza();
+  const tarj = await esperar(([na, nb]) => { try { fetchCobrosPendientes(true); } catch (e) {} const t = (document.getElementById('cobrosContent') || {}).textContent || ''; return t.indexOf('#' + na) >= 0 && t.indexOf('#' + nb) >= 0 ? 1 : null; }, [a.n, b.n], 60000);
+  if (!chk('unir: Cobranza muestra los dos pedidos', !!tarj)) { await foto('unir_sin'); return; }
+  await T(1500);
+  /* Las tarjetas siguen siendo una por cliente: nada se juntó solo. */
+  const dos = await pg.evaluate(([na, nb]) => { const cs = [].slice.call(document.querySelectorAll('#cobrosContent .cobro-card')).filter((c) => c.textContent.indexOf('#' + na) >= 0 || c.textContent.indexOf('#' + nb) >= 0); return cs.length + (cs.some((c) => c.textContent.indexOf('#' + na) >= 0 && c.textContent.indexOf('#' + nb) >= 0) ? ' (juntas)' : ''); }, [a.n, b.n]);
+  chk('unir: cada persona en su tarjeta, nada se agrupa solo (' + dos + ')', dos === '2', dos);
+  /* El botón de la tarjeta de PRUEBA Robot. */
+  await pg.evaluate((na) => { document.querySelectorAll('[data-au="unir"]').forEach((x) => x.removeAttribute('data-au')); const c = [].find.call(document.querySelectorAll('#cobrosContent .cobro-card'), (c) => c.getClientRects().length && c.textContent.indexOf('#' + na) >= 0); for (let d = c && c.closest('details'); d; d = d.parentElement && d.parentElement.closest('details')) d.open = true; const bt = c && c.querySelector('.cobz-unir'); if (bt) bt.setAttribute('data-au', 'unir'); }, a.n);
+  if (!chk('unir: la tarjeta tiene «Unir con otra persona»', !!(await tocar('[data-au="unir"]', 'Unir con otra persona', '', { espera: 800 })))) { await foto('unir_boton'); return; }
+  const ov = await esperar(() => { const o = document.getElementById('cobUnirOv'); if (!o) return null; const hs = [].map.call(o.querySelectorAll('.cob-unir-h'), (x) => x.textContent); const f = [].map.call(o.querySelectorAll('.cob-unir-f'), (x) => x.textContent.replace(/\s+/g, ' ').trim()); return { hs, f }; }, null, 8000);
+  if (process.env.EXPLORAR) console.log('       D: ' + JSON.stringify(await pg.evaluate(([na,nb]) => (D.pedidos||[]).filter((x) => String(x.n)===String(na)||String(x.n)===String(nb)||/Basualdo|Delfino/.test(x.c||'')).slice(0,4).map((x) => { const o = {}; Object.keys(x).forEach((k) => { if (typeof x[k] !== 'object' && String(x[k]).length < 40) o[k] = x[k]; }); return o; }), [a.n, b.n])));
+  if (process.env.EXPLORAR) console.log('       casas: ' + JSON.stringify(await pg.evaluate(() => _cobUnirClientes().filter((c) => /PRUEBA/.test(c.nm)).map((c) => ({ nm: c.nm, casa: c.casa, l: c.lote, sb: c.barrio, raw: (c.items[0] || {}).l, ck: (c.items[0] || {}).ck, keys: Object.keys(c.items[0] || {}).join() })))));
+  chk('unir: Ana sugerida arriba, «De la misma casa»', ov && ov.hs[0] === 'De la misma casa' && /PRUEBA Ana/.test(ov.f[0] || '') && /Misma casa/.test(ov.f[0] || ''), ov && { hs: ov.hs, f: ov.f.slice(0, 3) });
+  await foto('unir_buscador');
+  await tocar('#cobUnirOv .cob-unir-f', 'PRUEBA Ana', '', { espera: 500 });
+  await tocar('#cobUnirOv .cob-unir-chip', 'PRUEBA', '', { callado: true, espera: 300 });
+  await tocar('#cobUnirOv .cob-unir-chip:not(.on)', '', '', { espera: 400 });   /* «¿Quién pagó?» → Ana (el que no está elegido) */
+  const pie = await pg.evaluate(() => { const o = document.getElementById('cobUnirOv'); return o && { paga: (o.querySelector('.cob-unir-chip.on') || {}).textContent, ok: (o.querySelector('.cob-unir-ok') || {}).textContent }; });
+  chk('unir: «¿Quién pagó?» Ana y «Cobrar 2 pedidos · $3.000»', pie && /PRUEBA/.test(pie.paga || '') && /Cobrar 2 pedidos/.test(pie.ok || '') && /3\.000/.test(pie.ok || ''), pie);
+  /* El recordatorio de todo junto. */
+  await pg.evaluate(() => { window.__copiado = []; });
+  await tocar('#cobUnirOv .cob-unir-rec', 'Copiar recordatorio', '', { espera: 600 });
+  const rec = await pg.evaluate(() => (window.__copiado || []).slice(-1)[0] || '');
+  chk('unir: recordatorio con lo de cada uno y el total, sin número de pedido', /Lo tuyo/.test(rec) && /Lo de PRUEBA/.test(rec) && /Total: \$3\.000/.test(rec) && !/#\d/.test(rec), rec);
+  /* El cobro. */
+  await tocar('#cobUnirOv .cob-unir-ok', 'Cobrar 2 pedidos', '', { espera: 1200 });
+  const cu = await esperar(() => { const o = document.getElementById('cobroRutaOverlay'); return o && !o.classList.contains('hidden') ? (document.getElementById('cobroRutaTitle') || {}).textContent : null; }, null, 10000);
+  chk('unir: abre UN cobro «Cobrar a PRUEBA Ana (paga)»', /Cobrar a PRUEBA Ana \(paga\)/.test(cu || ''), cu);
+  if (!cu) return;
+  await tocar('#cobroRutaFp .cobro-pill', 'Transferencia', '', { callado: true, espera: 400 });
+  if (await visible('#cobroRecEf')) await pg.fill('#cobroRecEf', ''); await pg.fill('#cobroRecMP', '3072');
+  await pg.evaluate(() => { ['cobroRecMP', 'cobroRecEf'].forEach((id) => { const x = document.getElementById(id); x.dispatchEvent(new Event('input', { bubbles: true })); }); });
+  await T(500);
+  const cuad = await pg.evaluate(() => ({ err: ((document.getElementById('cobroRutaErr') || {}).textContent || '').replace(/\s+/g, ' ').trim(), btn: (document.getElementById('btnCobroRutaOk') || {}).textContent, dis: !!(document.getElementById('btnCobroRutaOk') || {}).disabled,
+    lbl: (document.getElementById('cobroSumPropLbl') || {}).textContent }));
+  chk('unir: $72 de más en la transferencia → «va de propina», sin preguntar', /Sobran \$\s?72: va de propina/.test(cuad.err) && !cuad.dis && cuad.lbl === 'Propina', cuad);
+  await foto('unir_cuadro');
+  const ok = await tocar('#btnCobroRutaOk', '', '', { espera: 1500 });
+  chk('unir: «Confirmar cobro»', !!ok);
+  const va = await verPedido('Home', a.n, (v) => v.estado_pago === 'Cobrado', 40000), vb = await verPedido('Home', b.n, (v) => v.estado_pago === 'Cobrado', 40000);
+  chk('unir: los dos pedidos Cobrado en la base', va && vb && va.estado_pago === 'Cobrado' && vb.estado_pago === 'Cobrado', { va, vb });
+  console.log('       base: ' + JSON.stringify({ va, vb }).slice(0, 600));
+  console.log('       limpieza: ' + JSON.stringify(await rpc('robot_limpiar', { p_corrida: '-unir-' }).catch((e) => String(e))).slice(0, 300));
+}
 async function irCobranza(opt) {
   opt = opt || {};
   if (!COMPU && !(await pg.evaluate(() => document.body.classList.contains('sb-open')))) await tocar('.hdr-burger', '', '', { callado: true, espera: 600 });
@@ -780,13 +843,14 @@ async function libroEnSuLugar() {
   console.log('robot: ' + (await pg.evaluate(() => SESSION.nombre + ' / ' + SESSION.usuario + ' / ' + SESSION.rol)) + ' · ' + MOTOR);
   if (process.env.LIMPIAR) { console.log('limpiar', JSON.stringify(await rpc('robot_limpiar', { p_corrida: 'audit-' + Date.now() })).slice(0, 500)); if (process.env.LIBRO) await libroEnSuLugar(); await br.close(); return; }
   E = await rpc('robot_entidades_pantalla', {}); if (process.env.EXPLORAR) console.log('E ' + JSON.stringify(E).slice(0, 600)); if (process.env.EXPLORAR) console.log('PRUEBA en D.stock ' + JSON.stringify(await pg.evaluate((sku) => (D.stock || []).filter((x) => /PRUEBA/i.test(JSON.stringify(x).slice(0, 300))).slice(0, 3), E.producto)).slice(0, 600));
-  const fl = (process.env.FLUJO || 'cobranza').replace(/^todo$/, 'cobranza,yapago,juntada,ruta,red');
+  const fl = (process.env.FLUJO || 'cobranza').replace(/^todo$/, 'cobranza,yapago,juntada,ruta,red,unir');
   try {
     if (/cobranza/.test(fl)) await flujoCobranza();
     if (/yapago/.test(fl)) await flujoYaPago();
     if (/juntada/.test(fl)) await flujoJuntada();
     if (/ruta/.test(fl)) await flujoRuta();
     if (/red/.test(fl)) await flujoRed();
+    if (/unir/.test(fl)) await flujoUnir();
   } catch (e) { mal++; console.log('  MAL  reventó: ' + (e && e.stack || e)); await foto('revento'); }
   const ej = errs.filter((e) => !/favicon|ERR_ABORTED|WebKit encountered an internal error|ERR_INTERNET_DISCONNECTED/.test(e));
   chk('sin errores de JS ni de la base', ej.length === 0, [...new Set(ej)].slice(0, 12));
