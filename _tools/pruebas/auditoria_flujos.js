@@ -851,6 +851,25 @@ async function flujoPropina() {
   console.log('       limpieza: ' + JSON.stringify(await rpc('robot_limpiar', { p_corrida: '-prop-' }).catch((e) => String(e))).slice(0, 200));
   return n;
 }
+/* ── FLUJO 8: Compras › PEDIR, un negativo sin pedido abierto (24/11/2026). Si hay un freezer con físico negativo y nada
+   reservado ni en camino, va en ámbar arriba de «Para reponer», con «Contar» → Productos › Contar en ese freezer, con el
+   producto buscado. Solo lee: no cuenta nada. Sin negativos en ese momento, lo dice y no falla. */
+async function flujoNegativo() {
+  console.log('\n── Compras › PEDIR: el negativo sin pedido');
+  await pg.evaluate(() => go('busqueda')); await T(5000);
+  await pg.evaluate(() => { try { abaSwitchTab('proveedores'); } catch (e) {} });
+  const neg = await esperar(() => { const b = document.querySelector('#pg-abast .aba-neg'); if (b && b.getClientRects().length) return { lin: [].map.call(b.querySelectorAll('.aba-neg-l'), (l) => l.innerText.replace(/\s+/g, ' ').trim()) };
+    const r = document.querySelector('#pg-abast .aba-sec-t'); return r && /Para reponer/.test(r.textContent) ? { lin: [] } : null; }, null, 40000);
+  if (!neg) { await foto('pedir_sin'); return chk('pedir: la pantalla PEDIR cargó', false, await pg.evaluate(() => ({ cur: typeof cur !== 'undefined' ? cur : '?', tab: (document.querySelector('#pg-abast .tab.active') || {}).textContent, txt: ((document.getElementById('pg-abast') || {}).innerText || '').replace(/s+/g, ' ').slice(0, 400), prov: typeof catalogo !== 'undefined' ? (catalogo.proveedores || []).length : 'sin catalogo' }))); }
+  if (!neg.lin.length) { console.log('       (no hay ningún negativo sin pedido ahora: nada que mirar)'); return; }
+  chk('pedir: el negativo sin pedido va aparte, en ámbar («' + neg.lin.join(' | ').slice(0, 120) + '»)', neg.lin.length > 0 && /−|-\d/.test(neg.lin[0]), neg);
+  await foto('pedir_negativo');
+  const t = await tocar('#pg-abast .aba-neg-b', 'Contar', '', { espera: 2500 });
+  chk('pedir: «Contar» a la vista y sin nada encima', !!t);
+  const ct = await esperar(() => { const q = document.getElementById('stcQ'); return (typeof cur !== 'undefined' && cur === 'stock') && q && q.getClientRects().length ? { q: q.value, dep: ((document.querySelector('.stc-dep-btn.on') || {}).textContent || '').trim().slice(0, 30) } : null; }, null, 30000);
+  chk('pedir: «Contar» abre Productos › Contar con el producto buscado (' + JSON.stringify(ct) + ')', !!ct && ct.q.length > 1 && neg.lin[0].indexOf(ct.q.split(' ')[0]) >= 0, { ct, lin: neg.lin[0] });
+  await foto('pedir_contar');
+}
 async function irCobranza(opt) {
   opt = opt || {};
   if (!COMPU && !(await pg.evaluate(() => document.body.classList.contains('sb-open')))) await tocar('.hdr-burger', '', '', { callado: true, espera: 600 });
@@ -899,6 +918,7 @@ async function libroEnSuLugar() {
     if (/red/.test(fl)) await flujoRed();
     if (/unir/.test(fl)) await flujoUnir();
     if (/propina/.test(fl)) await flujoPropina();
+    if (/negativo/.test(fl)) await flujoNegativo();
   } catch (e) { mal++; console.log('  MAL  reventó: ' + (e && e.stack || e)); await foto('revento'); }
   const ej = errs.filter((e) => !/favicon|ERR_ABORTED|WebKit encountered an internal error|ERR_INTERNET_DISCONNECTED/.test(e));
   chk('sin errores de JS ni de la base', ej.length === 0, [...new Set(ej)].slice(0, 12));

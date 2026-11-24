@@ -96,6 +96,14 @@ body.embed .sem-tabs{top:48px}
 .pago-mas>summary{cursor:pointer;font-size:13px;font-weight:700;color:var(--muted,#8a7a6a);padding:8px 0}
 #abaVivoFila{display:none!important}   /* (14/11/2026, poda) «● en vivo»: ruido */
 .aba-ocup-l{margin:10px 16px 0;font-size:13px;font-weight:700;color:var(--muted,#8a7a6a);cursor:pointer}
+/* (24/11/2026) Un negativo sin pedido abierto: ámbar, aparte de «Para reponer», con «Contar». */
+.aba-neg{grid-column:1/-1;margin:16px 16px 4px;background:#FFF6E0;border:1.5px solid #E0A800;border-radius:12px;padding:12px 14px}
+.aba-falt .aba-neg{margin:12px 0 0}
+.aba-neg-t{font-size:14px;font-weight:800;color:#7A4E00}
+.aba-neg-s{font-size:12.5px;color:#7A5A1A;margin:2px 0 6px}
+.aba-neg-l{display:flex;justify-content:space-between;align-items:center;gap:10px;font-size:14px;padding:6px 0;border-top:1px dashed #E8C96A}
+.aba-neg-l small{display:block;font-size:12.5px;color:#9A3412;font-weight:700}
+.aba-neg-b{flex:none;min-height:44px;padding:0 16px;border:1.5px solid #B7791F;border-radius:10px;background:#fff;color:#7A4E00;font:inherit;font-size:14px;font-weight:800;cursor:pointer}
 .aba-sec-t{grid-column:1/-1;margin:16px 16px 8px;font-size:12px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--muted,#8a7a6a)}
 .aba-rep{margin:0 16px 10px;background:#fff;border:1.5px solid var(--border,#e8dcc8);border-radius:12px;padding:12px 14px}
 .aba-rep-h{font-size:15px;font-weight:800;margin-bottom:6px}
@@ -2177,9 +2185,22 @@ function abaRenderFalt() {
       : '<div class="aba-falt-s">Calculando qué falta para entregar…</div>';
     return;
   }
-  var ex = abaFalt.examinados || {}, f = abaFalt.faltan || [];
+  var ex = abaFalt.examinados || {}, f0 = abaFalt.faltan || [];
   var sello = _abaCcHace(abaFalt._cuando) + (abaFaltEstado === 'yendo' ? ' · actualizando…' : abaFaltEstado === 'error' ? ' · no se pudo actualizar' : '');
   var sobre = (ex.pedidos || 0) + ' pedido' + (ex.pedidos === 1 ? '' : 's') + ' abierto' + (ex.pedidos === 1 ? '' : 's');
+  /* (24/11/2026) UN NEGATIVO SIN PEDIDO ABIERTO VA APARTE. La TG de ustariz en −1 (la dejó el robot) salía acá: «Faltan
+     para entregar · Lo piden 0 pedidos abiertos… · Agregar a la compra de Cuverry». Nadie la pidió: no es algo para
+     comprar, es un conteo que no cierra. Va en ámbar, con «Contar» (Productos › Contar, con el producto buscado). */
+  var f = f0.filter(function (x) { return (x.pedidos || []).length || !(Number(x.disponible) < 0); });
+  var negs = f0.filter(function (x) { return !(x.pedidos || []).length && Number(x.disponible) < 0; });
+  var negH = negs.length ? '<div class="aba-neg"><div class="aba-neg-t">Stock negativo, sin pedidos que lo pidan</div>'
+    + '<div class="aba-neg-s">No es para comprar: el conteo no cierra. Contalo y después se ve si hace falta pedir.</div>'
+    + negs.map(function (x) {
+      var dep = _abaNegDepDe(x.a);
+      return '<div class="aba-neg-l"><span>' + _abaH(x.n) + '<small>' + (dep ? _abaH(_abaDepNom(dep.id)) + ' ' + _abaH(_abaCant(dep.q, x.u === 'kg' ? 'kg' : 'u')) : 'Disponible ' + _abaH(_abaCant(x.disponible, x.u === 'kg' ? 'kg' : 'u'))) + '</small></span>'
+        + '<button type="button" class="aba-neg-b" data-n="' + _abaH(x.n) + '" data-d="' + _abaH(dep ? dep.id : '') + '" onclick="abaNegContar(this.dataset.n,this.dataset.d)">Contar</button></div>';
+    }).join('') + '</div>' : '';
+  if (!f.length && negH) { box.className = 'aba-falt-neg'; box.innerHTML = negH; return; }
   if (!f.length) {
     box.className = 'aba-falt aba-falt-ok hidden';   /* (14/11/2026, poda) si no falta nada, no se dice */
     /* (10/11/2026) Sin faltantes, una línea: «Miré N pedidos de los cuatro canales…» era el cómo, no el qué. */
@@ -2205,7 +2226,7 @@ function abaRenderFalt() {
     h += '</div>';
   });
   box.className = 'aba-falt';
-  box.innerHTML = h;
+  box.innerHTML = h + negH;
 }
 
 /* Lleva a + NUEVO con «Tadeo — Stock», el proveedor del producto y lo que falta
@@ -5902,10 +5923,50 @@ function _abaReponer() {
   var out = [];
   (catalogo.proveedores || []).forEach(function (prov) {
     var its = [];
-    (catalogo.productos[prov] || []).forEach(function (it) { if (it.u === 'kg') return; var q = npSugerido(it); if (q > 0) its.push({ n: it.n, a: it.a, q: q, dep: _npRepartoTxt(it, q), dem: Number(it.dem) || 0, s: Number(it.s) || 0, cam: npEnCamino(it.a), caja: Number(it.caja) || 0 }); });
+    (catalogo.productos[prov] || []).forEach(function (it) {
+      if (it.u === 'kg') return;
+      /* (24/11) Un negativo sin pedido abierto no se compra: el sugerido lo calcula con ese freezer en 0. */
+      var x = _abaNegSinPedido(it) ? Object.assign({}, it, { s: _abaStockSinNeg(it) }) : it;
+      var q = npSugerido(x); if (q > 0) its.push({ n: it.n, a: it.a, q: q, dep: _npRepartoTxt(x, q), dem: Number(it.dem) || 0, s: Number(x.s) || 0, cam: npEnCamino(it.a), caja: Number(it.caja) || 0 });
+    });
     if (its.length) out.push({ prov: prov, its: its });
   });
   return out;
+}
+/* ══ UN NEGATIVO SIN PEDIDO ABIERTO VA APARTE (24/11/2026) ════════════════════════════════════════════════════════════
+   Un freezer con FÍSICO negativo (`pd` < 0), sin nada reservado (`pr`) ni en camino, no es algo para comprar: es un
+   conteo que no cierra (la TG de ustariz en −1 la dejó el robot el 22/11). Hasta hoy el sugerido sumaba ese negativo y
+   pedía de más. Ahora: va en ámbar, arriba de «Para reponer», con «Contar» (Productos › Contar en ese freezer, con el
+   producto buscado), y la reposición lo calcula con ese freezer en 0: si además hay demanda de verdad, igual se pide. */
+function _abaNegDeps(it) {
+  var pd = (it && it.pd) || {}, out = [];
+  Object.keys(pd).forEach(function (d) { var v = Number(pd[d]) || 0; if (v < -0.0005) out.push({ id: d, q: v }); });
+  return out;
+}
+function _abaNegSinPedido(it) {
+  if (!it || !_abaNegDeps(it).length) return false;
+  var pr = (it && it.pr) || {}, res = 0;
+  Object.keys(pr).forEach(function (d) { res += Number(pr[d]) || 0; });
+  return !(res > 0.0005) && !(npEnCamino(it.a) > 0);
+}
+/* El disponible con los freezers negativos en 0 (no hay nada reservado: el disponible es el físico). */
+function _abaStockSinNeg(it) {
+  var pd = (it && it.pd) || {}, s = 0;
+  Object.keys(pd).forEach(function (d) { s += Math.max(0, Number(pd[d]) || 0); });
+  return s;
+}
+/* El freezer donde está el negativo (del catálogo, que trae el físico por depósito); null si no se sabe. */
+function _abaNegDepDe(abbr) {
+  var provs = (catalogo && catalogo.proveedores) || [];
+  for (var i = 0; i < provs.length; i++) {
+    var its = (catalogo.productos && catalogo.productos[provs[i]]) || [];
+    for (var j = 0; j < its.length; j++) if (its[j].a === abbr) { var d = _abaNegDeps(its[j]); return d.length ? d[0] : null; }
+  }
+  return null;
+}
+function abaNegContar(nombre, dep) {
+  if (typeof window.stContarProducto === 'function') window.stContarProducto(nombre, dep);
+  else if (typeof showToast === 'function') showToast('Abrí Productos › Contar y buscá ' + nombre);
 }
 /* (19/11/2026, Tadeo hace el pedido de los jueves) Lo de pedidos de clientes del proveedor (las OC «Pendiente» de la
    semana que se mira, los pasamanos) vivía en otra tarjeta, más abajo: Tadeo creía que la reposición ERA eso. Ahora la
