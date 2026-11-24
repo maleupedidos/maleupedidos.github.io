@@ -415,11 +415,22 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
       try{ _ctasDe({cuentas:[{id:${JSON.stringify(CTA)},nombre:'PRUEBA',tipo:'digital',cli:true,def:true}]}); }catch(e){}
       npSetZona('Home'); document.getElementById('npNombre').value=${JSON.stringify(CLI)}; document.getElementById('npTel').value=${JSON.stringify(TEL)};
       document.getElementById('npLote').value='9';
-      var ids=[${JSON.stringify(String(E.producto_id || ''))},'14','1','19','3'].filter(Boolean), uso='';
-      for(var i=0;i<ids.length&&!uso;i++){ try{ npQty(Number(ids[i]),1); }catch(e){} if((npDiscountInfo()||{}).total>0)uso=ids[i]; else { try{ npQty(Number(ids[i]),-1); }catch(e){} } }
+      /* (24/11/2026) SOLO el producto PRUEBA. Hasta hoy, si PRUEBA no daba precio caía a los ids 14, 1, 19 y 3: el 14 es la
+         Torta Golosa (~300 salidas reales). PRUEBA no tiene tarjeta en + Pedido (catalogo_ruta lo deja afuera): se la agrega
+         el robot en SU navegador. npCart no se lee de window (npReset lo reasigna): se mira el contador de cada tarjeta. */
+      var pid=Number(${JSON.stringify(E.producto_id == null ? null : E.producto_id)}), uso='';
+      if(!(pid>0))return {err:'falta el id de tienda de PRUEBA: no uso un producto real'};
+      if(!NP_CAT_FLAT.some(function(x){return x.id===pid;})){ var itP={id:pid,abbr:'PRUEBA',n:'PRUEBA'}; NP_CAT.push({cat:'PRUEBA',items:[itP]}); NP_CAT_FLAT.push(itP); }
+      if(!(npLineUnit('PRUEBA','')>0)){ try{ window.NP_PRECIOS.PRUEBA={p:1000,c:500,pc:1000}; }catch(e){} }
+      var otros=function(){ return [].filter.call(document.querySelectorAll('[id^="npQty_"]'),function(x){return x.id!=='npQty_'+pid&&Number(x.textContent)>0;}).map(function(x){return x.id;}); };
+      if(otros().length||((npDiscountInfo()||{}).total||0)!==0)return {err:'el carrito ya traía productos reales: '+otros().join()};
+      npQty(pid,1); if(otros().length)return {err:'el carrito no quedó solo con PRUEBA: '+otros().join()};
+      if(((npDiscountInfo()||{}).total||0)>0)uso=String(pid);
       var hoy=npIsoDe(new Date()), fb=[].filter.call(document.querySelectorAll('#npFechas [onclick^="npSetFecha"]'),function(b){return (b.getAttribute('onclick')||'').indexOf(hoy)>=0;}); if(fb[0])fb[0].click();
       var ee=document.getElementById('npEstadoEntrega'); ee.value='Entregado'; ee.dispatchEvent(new Event('change',{bubbles:true}));
       var dp=document.getElementById('npDeposito'); if(dp&&[].some.call(dp.options,function(o){return o.value===${JSON.stringify(DEP)};})){ dp.value=${JSON.stringify(DEP)}; dp.dispatchEvent(new Event('change',{bubbles:true})); }
+      /* (24/11/2026) Sin el depósito prueba, el Entregado saldría del freezer por defecto (ustariz): corta. */
+      if(!dp||dp.value!==${JSON.stringify(DEP)})return {err:'el selector «Sale de» no tiene el depósito prueba: no guardo (saldría de un freezer real)'};
       var og=document.getElementById('npOrigen'); og.value='Pendiente'; og.dispatchEvent(new Event('change',{bubbles:true}));
       npSetPago(${JSON.stringify(medio)});
       var yc=document.getElementById('npYaCobrado'); yc.checked=true; try{ npToggleYaCobrado(); }catch(e){}

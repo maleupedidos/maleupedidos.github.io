@@ -111,6 +111,22 @@ async function irNuevo() {
   await tocar('.tab[data-tab="nuevo"]', '', '', { callado: true }) || await pg.evaluate(() => switchTab('nuevo'));
   await T(2500); await pg.evaluate(() => { try { npReset(); } catch (e) {} });
 }
+/* El carrito de + Pedido con SOLO el producto PRUEBA, o un error: nunca un producto real (regla del 24/11/2026). */
+function robotSoloPrueba([pid, q]) {
+  pid = Number(pid);
+  if (!(pid > 0)) return { err: 'falta el id de tienda de PRUEBA (robot_entidades_pantalla.producto_id): no uso un producto real' };
+  if (!NP_CAT_FLAT.some((x) => x.id === pid)) { const it = { id: pid, abbr: 'PRUEBA', n: 'PRUEBA' }; NP_CAT.push({ cat: 'PRUEBA', items: [it] }); NP_CAT_FLAT.push(it); }
+  if (!(npLineUnit('PRUEBA', '') > 0)) { try { window.NP_PRECIOS.PRUEBA = { p: 1000, c: 500, pc: 1000 }; } catch (e) {} }
+  /* `npCart` NO se lee de window: npReset lo reasigna y la copia publicada queda vieja. Se mira el contador de cada tarjeta. */
+  const otros = () => [].filter.call(document.querySelectorAll('[id^="npQty_"]'), (x) => x.id !== 'npQty_' + pid && Number(x.textContent) > 0).map((x) => x.id);
+  if (otros().length) return { err: 'el carrito ya traía productos reales: ' + otros().join() };
+  const t0 = (npDiscountInfo() || {}).total || 0;
+  npQty(pid, q);
+  const tot = (npDiscountInfo() || {}).total || 0, u = npLineUnit('PRUEBA', '');
+  if (otros().length) return { err: 'el carrito no quedó solo con PRUEBA: ' + otros().join() };
+  if (!(tot > 0) || t0 !== 0 || tot > u * q + 0.5) return { err: 'el total no es solo PRUEBA (antes ' + t0 + ', ahora ' + tot + ', PRUEBA ' + u + ' x ' + q + '): no uso un producto real' };
+  return { id: String(pid), total: tot };
+}
 async function cargarPedido(medio, yaPago, opt) {
   opt = opt || {};
   await irNuevo();
@@ -119,7 +135,11 @@ async function cargarPedido(medio, yaPago, opt) {
      (caja_light_base lee sales_order_real y order_payment_real, que dejan afuera lo PRUEBA). */
   await tocar('.np-zona [onclick*="Home"], [onclick^="npSetZona(\'Home\'"]', '', '', { callado: true }) || await pg.evaluate(() => npSetZona('Home'));
   await pg.fill('#npNombre', 'PRUEBA Robot'); await pg.fill('#npTel', String(E.telefono || '5490000000001')); await pg.fill('#npLote', '9');
-  const prod = await pg.evaluate(([pid, q]) => { const ids = [String(pid || ''), '14', '1', '19', '3'].filter(Boolean); for (const i of ids) { try { npQty(Number(i), 1); } catch (e) {} if ((npDiscountInfo() || {}).total > 0) { for (let k = 1; k < q; k++) npQty(Number(i), 1); return { id: i, total: npDiscountInfo().total }; } try { npQty(Number(i), -1); } catch (e) {} } return null; }, [E.producto_id, opt.qty || 1]);
+  /* (24/11/2026) SOLO el producto PRUEBA. Hasta hoy, si PRUEBA no daba precio se caía a los ids 14, 1, 19 y 3: el 14 es la
+     Torta Golosa y el robot le sacó 4 reales a ustariz (pedidos 905093-905098) más ~300 sin depósito. PRUEBA no tiene
+     tarjeta en + Pedido (`catalogo_ruta` lo deja afuera a propósito): se la agrega el robot en SU navegador. */
+  const prod = await pg.evaluate(robotSoloPrueba, [E.producto_id, opt.qty || 1]);
+  if (prod && prod.err) return { err: prod.err };
   if (opt.juntada) {
     /* Vive en «Más opciones» (plegado): primero se abre. */
     if (!(await pg.evaluate(() => { const d = document.querySelector('details.np-extras'); return !d || d.open; }))) await tocar('details.np-extras > summary', '');
@@ -127,11 +147,14 @@ async function cargarPedido(medio, yaPago, opt) {
   if (!prod) return { err: 'sin producto con precio' };
   const hoy = await pg.evaluate(() => npIsoDe(new Date()));
   await tocar('#npFechas [onclick*="' + hoy + '"]', '', '', { callado: true }) || await pg.evaluate((hoy) => { const b = document.querySelector('#npFechas [onclick*="' + hoy + '"]'); if (b) b.click(); }, hoy);
-  await pg.evaluate((DEP) => {
+  const depOk = await pg.evaluate((DEP) => {
     const ee = document.getElementById('npEstadoEntrega'); ee.value = 'Entregado'; ee.dispatchEvent(new Event('change', { bubbles: true }));
     const dp = document.getElementById('npDeposito'); if (dp && [].some.call(dp.options, (o) => o.value === DEP)) { dp.value = DEP; dp.dispatchEvent(new Event('change', { bubbles: true })); }
     const og = document.getElementById('npOrigen'); og.value = 'Pendiente'; og.dispatchEvent(new Event('change', { bubbles: true }));
+    return !!dp && dp.value === DEP;
   }, E.deposito || 'prueba');
+  /* (24/11/2026) Sin el depósito prueba, el pedido Entregado saldría del freezer por defecto (ustariz): corta. */
+  if (!depOk) return { err: 'el selector «Sale de» no tiene el depósito prueba: no guardo (saldría de un freezer real)' };
   await tocar('.np-pago .np-chip', medio);
   const pagoSel = await pg.evaluate(() => [].map.call(document.querySelectorAll('.np-chip[data-pago].active'), (b) => b.dataset.pago).join());
   chk(medio + ': tocar el chip deja elegido «' + medio + '»', pagoSel === medio, pagoSel);
@@ -577,12 +600,14 @@ async function flujoRuta() {
 async function autopedidoRep() {
   const cred = credRobot();
   if (!cred.pinRep) return { err: 'falta pinRep en robot.json' };
-  const prod = await pg.evaluate((pid) => { const s = (D.stock || []).find((x) => String(x.id) === String(pid) || String(x.a || x.abbr || '').toUpperCase() === 'TG'); return s ? { id: s.id, nombre: s.n || s.nombre || '', precio: Number(s.p || s.precio || 0) } : null; }, 14);
+  const pidRed = Number(E.producto_red || E.producto_id);   /* (24/11/2026) SOLO PRUEBA: nada de la Torta Golosa (id 14) ni del 46 a ciegas */
+  if (!(pidRed > 0)) return { err: 'falta el id de Red de PRUEBA (robot_entidades_pantalla.producto_red): no uso un producto real' };
+  const prod = { id: pidRed, nombre: 'PRUEBA' };
   for (const dias of [2, 4, 6, 8, 10, 12]) {
     const F = new Date(Date.now() + dias * 86400000), d = F.toLocaleDateString('es-AR', { weekday: 'long', timeZone: 'America/Argentina/Buenos_Aires' });
     const body = { action: 'redAutopedido', clientOrderId: 'robot-' + Date.now() + '-aud-red-' + dias, canal: 'Red', vendedor: 'PRUEBA Robot', nombre: 'PRUEBA Robot', telefono: String(E.telefono || '5490000000001'),
       barrioPrivado: 'PRUEBA', lote: '', dia: d.charAt(0).toUpperCase() + d.slice(1), fechaEntrega: F.toLocaleDateString('sv-SE', { timeZone: 'America/Argentina/Buenos_Aires' }), horario: 'A coordinar', pago: 'Transferencia', envio: 0,
-      items: [{ id: Number(E.producto_red || E.producto_id || 46), nombre: 'PRUEBA', qty: 1, precio: 1000 }], total: 1000, trajo: 'Vendedor', telCliente: String(E.telefono || '5490000000001') };
+      items: [{ id: pidRed, nombre: 'PRUEBA', qty: 1, precio: 1000 }], total: 1000, trajo: 'Vendedor', telCliente: String(E.telefono || '5490000000001') };
     const r = await pg.evaluate(async ([u, pin, body]) => { const c = _sbCfgLogin(), H = (t) => ({ apikey: c.key, Authorization: 'Bearer ' + (t || c.key), 'Content-Type': 'application/json' });
       const lp = await (await fetch(c.url + '/rest/v1/rpc/login_pin', { method: 'POST', headers: H(), body: JSON.stringify({ p_usuario: u, p_pin: pin }) })).json();
       if (!lp || !lp.ok) return { paso: 'login', r: lp && { ok: lp.ok, err: lp.err } };
