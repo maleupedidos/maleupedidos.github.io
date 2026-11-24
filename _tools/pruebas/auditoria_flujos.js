@@ -28,6 +28,8 @@ const chk = (t, c, d) => { if (c) { ok++; console.log('  ok   ' + t); } else { m
 const INIT = `try{localStorage.setItem('maleu_ensayo','1');localStorage.removeItem('maleu_np_borrador');localStorage.removeItem('maleu_np_cola');}catch(e){}
   window.__confirms=[]; window.__confirmResp=true; window.confirm=function(m){window.__confirms.push(String(m).slice(0,200));return window.__confirmResp;};
   window.alert=function(m){window.__confirms.push('ALERT '+String(m).slice(0,200));};
+  /* (24/11/2026) «Marcar pagó» pregunta cuánto pagó (831): contesta lo que diga __promptResp, o lo que propone la pantalla. */
+  window.__promptResp=null; window.prompt=function(m,d){window.__confirms.push('PROMPT '+String(m).slice(0,200));return window.__promptResp!=null?String(window.__promptResp):(d==null?'':String(d));};
   window.__posts=[]; (function(){var f=window.fetch;window.fetch=function(u,x){var s=String(u&&u.url||u),m=String((x&&x.method)||'GET').toUpperCase();
     if(m!=='POST'||/auth\\/v1\\//.test(s)||/ui_medicion/.test(s))return f.apply(this,arguments);
     var it={u:s.replace(/^.*\\/rpc\\//,'rpc/').slice(0,70),b:String((x&&x.body)||'').slice(0,900),t:Date.now()}; window.__posts.push(it);
@@ -400,12 +402,19 @@ async function flujoJuntada() {
   await pg.evaluate(() => { window.__confirmResp = true; });
   await re(); const aj = await abrirJnt(sel);
   await esperar((sel) => !!document.querySelector(sel + ' .com-pagar[data-n="PRUEBA Ana"]') || (document.querySelector(sel + ' details.com-desp:not([open])') && (document.querySelector(sel + ' details.com-desp').open = true, false)), sel, 20000);
+  /* (24/11/2026, 831) Ana paga $11 de más («mis amigos me pagan un poco de más»): su parte + $11 de propina. */
+  const parteAna = await pg.evaluate((sel) => Number((document.querySelector(sel + ' .com-pagar[data-n="PRUEBA Ana"]') || {}).getAttribute && document.querySelector(sel + ' .com-pagar[data-n="PRUEBA Ana"]').getAttribute('data-m')) || 0, sel);
+  await pg.evaluate((v) => { window.__promptResp = v; }, parteAna > 0 ? parteAna + 11 : null);
   const ana = await tocarT(' .com-pagar[data-n="PRUEBA Ana"]');
+  await pg.evaluate(() => { window.__promptResp = null; });
   chk('juntada: «Marcar pagó» de Ana a la vista', !!ana, aj);
   const pg1 = await pagos(1);
-  const conf1 = await pg.evaluate(() => window.__confirms.slice(-1)[0] || '');
-  chk('juntada: «Marcar pagó» pregunta y nombra Galicia («' + conf1.replace(/\s+/g, ' ').slice(0, 80) + '»)', /Galicia/i.test(conf1), conf1);
-  chk('juntada: el pago de Ana está en la base (' + pg1.map((x) => x.nota + ' ' + x.monto).join(', ') + ')', pg1.length === 1 && /PRUEBA Ana/.test(pg1[0].nota || '') && Math.abs(Number(pg1[0].monto) - tot / 3) < 1, pg1);
+  const conf1 = await pg.evaluate(() => window.__confirms.filter((x) => /^PROMPT/.test(x)).slice(-1)[0] || '');
+  const confP = await pg.evaluate(() => window.__confirms.slice(-1)[0] || '');
+  chk('juntada: «Marcar pagó» pregunta cuánto pagó y nombra Galicia («' + conf1.replace(/\s+/g, ' ').slice(0, 80) + '»)', /Galicia/i.test(conf1) && /Cuánto/.test(conf1), conf1);
+  chk('juntada: $11 de más → «de su parte y $11 de propina» («' + confP.replace(/\s+/g, ' ').slice(0, 90) + '»)', /\$\s?11 de propina/.test(confP), confP);
+  chk('juntada: el pago de Ana está en la base, con $11 de propina aparte (' + pg1.map((x) => x.nota + ' ' + x.monto + (x.propina ? '+' + x.propina : '')).join(', ') + ')',
+    pg1.length === 1 && /PRUEBA Ana/.test(pg1[0].nota || '') && Math.abs(Number(pg1[0].monto) - Number(pg1[0].propina || 0) - tot / 3) < 1 && Number(pg1[0].propina) === 11, pg1);
   await irCobranza(); await tarjetaDe(n);
   L = await esperarLinea(sel, /falta(?!n 3)/);
   chk('juntada: con 2 debiendo, la línea no nombra a Ana («' + L + '»)', !!L && !/Ana/.test(L), L);
@@ -804,6 +813,44 @@ async function flujoUnir() {
   console.log('       base: ' + JSON.stringify({ va, vb }).slice(0, 600));
   console.log('       limpieza: ' + JSON.stringify(await rpc('robot_limpiar', { p_corrida: '-unir-' }).catch((e) => String(e))).slice(0, 300));
 }
+/* ── FLUJO 7: la propina en el pago a cuenta (24/11/2026, 831). Juntada de 3 ($1.000 cada uno): Ana paga $1.011 (parte +
+   $11 de propina), Beto y Robot lo justo → el pedido se cierra con facturado $3.011, propina $11 y la Caja con $3.011 y
+   la fila de cierre en 0. Después se deshace EL PAGO DE ANA → el pedido vuelve a «No Cobrado», facturado $3.000 exacto,
+   propina 0 y la Caja con $2.000. Las tres llamadas son las de la pantalla (`cobrar_parcial_directo`). */
+async function flujoPropina() {
+  console.log('\n── Propina en el pago a cuenta');
+  if (!(Number(E.producto_id) > 0)) return chk('propina: el id de tienda de PRUEBA', false, E);
+  await rpc('robot_limpiar', { p_corrida: '-prop-' }).catch(() => null);
+  const op = 'robot-' + Date.now() + '-prop-';
+  const al = await rpc('pedido_alta_directo', { p: { canal: 'Home', fecha: new Date().toLocaleString('es-AR'), fechaEntrega: new Date().toLocaleDateString('sv-SE', { timeZone: 'America/Argentina/Buenos_Aires' }), dia: '', horario: '',
+    nombre: 'PRUEBA Robot', telefono: String(E.telefono || '5490000000001'), pago: 'Transferencia', envio: 0, items: [{ id: E.producto_id, qty: 3 }], total: 3000, subtotalSinDescuento: 3000, descuento: 0, descuentoManual: 0,
+    descuentoGlobalPct: 0, descuentoReceta: null, propina: 0, tipoPedido: '', deposito: E.deposito || 'prueba', barrio: 'PRUEBA', direccion: 'PRUEBA', lote: '9', estadoEntrega: 'Pendiente', estadoPago: 'No Cobrado', clientOrderId: op + 'alta' } });
+  if (!chk('propina: pedido PRUEBA de $3.000 (#' + (al && al.n) + ')', al && al.ok && al.n, al)) return;
+  const n = String(al.n);
+  const pagar = (quien, monto, prop, k) => rpc('cobrar_parcial_directo', { p: Object.assign({ action: 'cobrarParcial', hoja: 'Home', id: n, row: 0, formaPago: 'Transferencia', cuenta: E.cuenta || 'prueba', monto, pagador: quien,
+    notas: 'Juntada: ' + quien, quien: 'Tadeo Ustariz', ts: Date.now(), clientOpId: op + k }, prop ? { propina: prop } : {}) });
+  const p1 = await pagar('PRUEBA Ana', 1000, 11, 'ana'), p2 = await pagar('PRUEBA Beto', 1000, 0, 'beto');
+  chk('propina: con Ana (+$11) y Beto falta $1.000, no $989 (la propina no paga el pedido)', p2 && p2.ok && Number(p2.restante) === 1000 && !p2.cerrado, { p1, p2 });
+  const p3 = await pagar('PRUEBA Robot', 1000, 0, 'robot');
+  chk('propina: con el tercero se cierra', p3 && p3.ok && p3.cerrado, p3);
+  const lee = async () => {
+    const v = await rpc('robot_verificar', { p: { pedido: 'Home|' + n } }).catch(() => null);
+    return { estado: v && v.pedido && v.pedido.estado_pago, propina: v && v.pedido && v.pedido.propina, total: v && v.pedido && v.pedido.total, transf: v && v.pedido && v.pedido.transferencia };
+  };
+  const a = await lee();
+  console.log('       cerrado: ' + JSON.stringify(a));
+  chk('propina: cerrado con propina $11 (la Caja no ve lo PRUEBA: el facturado y los pagos se miden en la base)', a.estado === 'Cobrado' && Number(a.propina) === 11, a);
+  if (process.env.PAUSA_PROP) { console.log('       PAUSA #' + n); await T(Number(process.env.PAUSA_PROP)); }
+  /* Deshacer el pago de Ana (el de la propina). */
+  const d = await rpc('cobro_parcial_deshacer_directo', { p: { action: 'cobroParcialDeshacer', hoja: 'Home', id: n, row: 0, pago: 'parcial|op:' + op + 'ana', motivo: 'prueba 831', clientOpId: op + 'desh', ts: Date.now() } });
+  chk('propina: deshacer el pago de Ana reabre el pedido', d && d.ok && d.reabre, d);
+  const b = await lee();
+  console.log('       deshecho: ' + JSON.stringify(b));
+  chk('propina: reabierto y propina 0', b.estado === 'No Cobrado' && !(Number(b.propina) > 0), b);
+  if (process.env.PAUSA_PROP) { console.log('       PAUSA2 #' + n); await T(Number(process.env.PAUSA_PROP)); }
+  console.log('       limpieza: ' + JSON.stringify(await rpc('robot_limpiar', { p_corrida: '-prop-' }).catch((e) => String(e))).slice(0, 200));
+  return n;
+}
 async function irCobranza(opt) {
   opt = opt || {};
   if (!COMPU && !(await pg.evaluate(() => document.body.classList.contains('sb-open')))) await tocar('.hdr-burger', '', '', { callado: true, espera: 600 });
@@ -843,7 +890,7 @@ async function libroEnSuLugar() {
   console.log('robot: ' + (await pg.evaluate(() => SESSION.nombre + ' / ' + SESSION.usuario + ' / ' + SESSION.rol)) + ' · ' + MOTOR);
   if (process.env.LIMPIAR) { console.log('limpiar', JSON.stringify(await rpc('robot_limpiar', { p_corrida: 'audit-' + Date.now() })).slice(0, 500)); if (process.env.LIBRO) await libroEnSuLugar(); await br.close(); return; }
   E = await rpc('robot_entidades_pantalla', {}); if (process.env.EXPLORAR) console.log('E ' + JSON.stringify(E).slice(0, 600)); if (process.env.EXPLORAR) console.log('PRUEBA en D.stock ' + JSON.stringify(await pg.evaluate((sku) => (D.stock || []).filter((x) => /PRUEBA/i.test(JSON.stringify(x).slice(0, 300))).slice(0, 3), E.producto)).slice(0, 600));
-  const fl = (process.env.FLUJO || 'cobranza').replace(/^todo$/, 'cobranza,yapago,juntada,ruta,red,unir');
+  const fl = (process.env.FLUJO || 'cobranza').replace(/^todo$/, 'cobranza,yapago,juntada,ruta,red,unir,propina');
   try {
     if (/cobranza/.test(fl)) await flujoCobranza();
     if (/yapago/.test(fl)) await flujoYaPago();
@@ -851,6 +898,7 @@ async function libroEnSuLugar() {
     if (/ruta/.test(fl)) await flujoRuta();
     if (/red/.test(fl)) await flujoRed();
     if (/unir/.test(fl)) await flujoUnir();
+    if (/propina/.test(fl)) await flujoPropina();
   } catch (e) { mal++; console.log('  MAL  reventó: ' + (e && e.stack || e)); await foto('revento'); }
   const ej = errs.filter((e) => !/favicon|ERR_ABORTED|WebKit encountered an internal error|ERR_INTERNET_DISCONNECTED/.test(e));
   chk('sin errores de JS ni de la base', ej.length === 0, [...new Set(ej)].slice(0, 12));

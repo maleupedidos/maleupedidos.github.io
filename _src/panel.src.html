@@ -22402,7 +22402,8 @@ function _comCuenta(p){
   var pagMaleu=0;
   if(hay&&conNota){
     d.pagos.forEach(function(x){
-      var mt=Math.round(Number(x.monto)||0); if(!(mt>0))return;
+      /* (831) La propina que vino con el pago (pagó $29.000 por $28.989) no es parte de la cuenta: suma a lo que puso, no. */
+      var mt=Math.round((Number(x.monto)||0)-(Number(x.propina)||0)); if(!(mt>0))return;
       var m=String(x.nota||'').match(/^Juntada:\s*(.+)$/), q=(m&&per(m[1]))||idx[_comNorm(pidio)]||P[0];
       q.maleu+=mt; q.cta=String(x.cuenta||q.cta||''); pagMaleu+=mt;
     });
@@ -22799,13 +22800,33 @@ window.comPaseDeshacer=function(h,n,btn){
 window.comPago=function(h,n,btn){
   var p=_comPed(h,n)||(window._comCobItem&&_comPedDe(h,n,window._comCobItem[h+'|'+n])), nm=btn&&btn.getAttribute('data-n'); if(!p||!nm)return;
   var C=_comCuenta(p), x=C.P.filter(function(y){return y.nombre===nm;})[0]; if(!x||!(x.aMaleu>0)||!C.activo)return;
-  var monto=x.aMaleu, id=_comId(h,n);
+  var monto=x.aMaleu, id=_comId(h,n), prop=0, otro=null;
   var cts=(typeof _cajaCuentas==='function'&&_cajaCuentas())||[], def=cts.filter(function(c){return c&&c.def&&c.tipo!=='efectivo';})[0]||{id:'galicia',nombre:'Galicia'};
-  if(!confirm(nm.split(' ')[0]+' le pagó '+_com$(monto)+' a Maleu por transferencia a '+(def.nombre||def.id)+'.\n\nSe anota como un pago a cuenta del pedido y entra a Caja. ¿Confirmás?'))return;
+  /* (24/11/2026, Tadeo 09:50: «mis amigos me pagan un poco de más») Se pregunta CUÁNTO pago, con su parte ya escrita.
+     · justo → como siempre;
+     · hasta COBRO_FALTA_DESCUENTO ($500) de más → la diferencia es PROPINA (la base la guarda aparte, 831): Miguel y Tomás
+       mandaron $29.000 por $28.989;
+     · más que eso → «¿pago también lo de X?» si a alguien le falta justo eso (± el tope): dos pagos, uno a nombre de cada uno;
+     · menos → se anota lo que pagó y le queda el resto. */
+  var tope=(typeof _cobroFaltaTope==='function')?_cobroFaltaTope():500, n1=nm.split(' ')[0];
+  var txt=prompt('¿Cuánto le pagó '+n1+' a Maleu por transferencia a '+(def.nombre||def.id)+'?\nLe toca '+_com$(monto)+'.',String(monto));
+  if(txt===null)return;
+  var pago=Math.round(Number(String(txt).replace(/[^\d,.-]/g,'').replace(/\./g,'').replace(',','.'))||0);
+  if(!(pago>0)){toast('Escribí cuánto pagó');return;}
+  var de=pago-monto;
+  if(de<0){ monto=pago; if(!confirm(n1+' pagó '+_com$(pago)+' de '+_com$(x.aMaleu)+': se anota eso y le quedan '+_com$(-de)+'. ¿Confirmás?'))return; }
+  else if(de>0&&de<=tope){ prop=de; if(!confirm(n1+' pagó '+_com$(pago)+': '+_com$(monto)+' de su parte y '+_com$(de)+' de propina. ¿Confirmás?'))return; }
+  else if(de>tope){
+    var cand=C.P.filter(function(y){ return y.nombre!==nm&&y.aMaleu>0&&Math.abs(de-y.aMaleu)<=tope&&de>=y.aMaleu; })[0];
+    if(!cand){toast(n1+' pagó '+_com$(de)+' de más. Si pagó por otro, marcá a ese otro aparte con lo suyo',7000);return;}
+    if(!confirm(n1+' pagó '+_com$(pago)+': lo suyo ('+_com$(monto)+') y lo de '+cand.nombre.split(' ')[0]+' ('+_com$(cand.aMaleu)+')'+(de-cand.aMaleu>0?' y '+_com$(de-cand.aMaleu)+' de propina':'')+'. ¿Confirmás?'))return;
+    otro={nombre:cand.nombre,monto:cand.aMaleu,prop:de-cand.aMaleu,maleu:cand.maleu};
+  }
   if(_COM.vuelo[id])return;
   _COM.vuelo[id]=1; btn.disabled=true; btn.textContent='Guardando…';
   var pay={action:'cobrarParcial',hoja:p.h,id:String(p.n),row:Number(p.r)||0,formaPago:'Transferencia',cuenta:def.id,monto:monto,
     pagador:nm,notas:'Juntada: '+nm,quien:(typeof SESSION!=='undefined'&&SESSION&&SESSION.nombre)||'',ts:Date.now()};
+  if(prop>0)pay.propina=prop;   /* (831) lo de más, aparte: la base lo guarda en tip_amount */
   /* Uno por persona y por lo que ya tenía pagado: un reintento no cobra dos veces, y un segundo pago real (si cambió la
      cuenta por un gasto nuevo) sí entra. */
   /* (23/11/2026, auditoría) Si ese mismo pago se DESHIZO, el id de antes ya está usado: la base lo contestaba «repetida» y
@@ -22827,7 +22848,19 @@ window.comPago=function(h,n,btn){
   _enviar(0).then(function(r){
     delete _COM.vuelo[id];
     if(!r||r.ok===false){ toast('No se guardó el pago de '+nm.split(' ')[0]+': '+((r&&(r.err||r.error))||'sin respuesta'),6000); _comPintar(h,n); return; }
-    toast('Pagó '+nm.split(' ')[0]+': '+_com$(monto)+' a '+(def.nombre||def.id));
+    toast('Pagó '+nm.split(' ')[0]+': '+_com$(monto)+(prop>0?' + '+_com$(prop)+' de propina':'')+' a '+(def.nombre||def.id));
+    /* Pagó también lo de otro: un segundo pago a nombre de ese otro (su id propio: un reintento no lo cobra dos veces). */
+    if(otro){
+      var pay2={action:'cobrarParcial',hoja:p.h,id:String(p.n),row:Number(p.r)||0,formaPago:'Transferencia',cuenta:def.id,monto:otro.monto,
+        pagador:otro.nombre,notas:'Juntada: '+otro.nombre,quien:pay.quien,ts:Date.now(),opCobro:'jp-por-'+_comNorm(nm).replace(/\s+/g,'_'),
+        clientOpId:'jp-'+p.h+'-'+p.n+'-'+_comNorm(otro.nombre).replace(/\s+/g,'_')+'-p'+Math.round(otro.maleu)+'-por'};
+      if(otro.prop>0)pay2.propina=otro.prop;
+      _ordenPost(pay2).then(function(x){return x.json();}).then(function(r2){
+        if(!r2||r2.ok===false){ toast('Lo de '+otro.nombre.split(' ')[0]+' no se guardó: marcalo aparte ('+((r2&&(r2.err||r2.error))||'sin respuesta')+')',8000); }
+        else toast('Y lo de '+otro.nombre.split(' ')[0]+': '+_com$(otro.monto)+(otro.prop>0?' + '+_com$(otro.prop)+' de propina':''));
+        delete _FCB[_comK(p)]; _fichaCobroPedir(p,_comK(p));
+      },function(){ toast('Lo de '+otro.nombre.split(' ')[0]+' no se guardó: marcalo aparte',8000); });
+    }
     var k=_comK(p); delete _FCB[k];
     try{ if(typeof _pfAplicar==='function')_pfAplicar(r); }catch(e){}
     _fichaCobroPedir(p,k);
