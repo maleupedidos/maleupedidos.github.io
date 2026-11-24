@@ -174,12 +174,32 @@ async function guardar(antes) {
 }
 
 /* El cuadro de cobro abierto: elegir medio (si hace falta), montos de Mixto, quién cobró, y Confirmar. */
+/* (24/11/2026, Home 2574) DOS MIXTOS CON PROPINA, los que mordían. Ruta repartía el TOTAL en proporción a lo recibido:
+   85.090 pagados con 80.000 en efectivo + 5.100 transferidos daba ef 79.991 / tr 5.099. Acá: 1.250 transferidos (exacto) y
+   el resto en un billete redondeado a los $100 → sobran $50 de propina, que tienen que quedar en el EFECTIVO.
+   «Mixto propina»: el billete justo. «Mixto vuelto»: un billete de mil de más y el vuelto. Esperado: tr 1.250 exacto,
+   ef = total − 1.250, propina 50 en efectivo. Con el reparto viejo, con 4.000: ef 2.765 / tr 1.235. */
+const MX_TR = 1250, MX_PROP = 50;
+const esMixtoProp = (m) => m === 'Mixto propina' || m === 'Mixto vuelto';
+const medioBase = (m) => (m.indexOf('Mixto') === 0 ? 'Mixto' : m);
 async function cobrarEnCuadro(medio, tot) {
-  const ef = medio === 'Efectivo' ? tot : medio === 'Mixto' ? Math.round(tot / 2) : 0, tr = tot - ef;
+  const mb = medioBase(medio);
+  let ef = mb === 'Efectivo' ? tot : mb === 'Mixto' ? Math.round(tot / 2) : 0, tr = tot - ef, recEf = ef, camEf = 0;
+  if (esMixtoProp(medio)) {
+    tr = MX_TR; ef = tot - MX_TR;
+    recEf = Math.ceil((ef + 1) / 100) * 100; if (recEf - ef !== MX_PROP) recEf = ef + MX_PROP;   /* sobra justo la propina */
+    if (medio === 'Mixto vuelto') { camEf = 1000; recEf += 1000; }
+  }
   const pre = await pg.evaluate(() => [].map.call(document.querySelectorAll('#cobroRutaFp .cobro-pill.on'), (b) => b.textContent.trim()).join());
-  chk(medio + ': el cuadro viene con «' + medio + '» elegido (lo que se cargó)', pre === medio, pre);
-  if (pre !== medio) await tocar('#cobroRutaFp .cobro-pill', medio);
-  if (medio === 'Mixto') { await pg.fill('#cobroRecEf', String(ef)); await pg.fill('#cobroRecMP', String(tr)); await T(400); }
+  chk(medio + ': el cuadro viene con «' + mb + '» elegido (lo que se cargó)', pre === mb, pre);
+  if (pre !== mb) await tocar('#cobroRutaFp .cobro-pill', mb);
+  if (mb === 'Mixto') { await pg.fill('#cobroRecEf', String(recEf)); await pg.fill('#cobroRecMP', String(tr)); await T(400); }
+  if (camEf) {
+    if (!(await visible('#cobroCamEf'))) await tocar('#cobroToggleCambio', '');
+    await pg.fill('#cobroCamEf', String(camEf)); await T(400);
+  }
+  /* Lo que sobra: «Es propina», el botón que tocó Santos en el 2574. */
+  if (esMixtoProp(medio)) { await tocar('button', 'Es propina', '#cobroRutaOverlay'); await T(400); }
   if (medio === 'Efectivo') {
     /* Lo que te dio el cliente: si lo pide, el total justo. */
     if (await visible('#cobroRecEf')) { const v = await pg.inputValue('#cobroRecEf').catch(() => ''); if (!v) { await pg.fill('#cobroRecEf', String(tot)); await T(300); } }
@@ -196,20 +216,22 @@ async function cobrarEnCuadro(medio, tot) {
   await tocar('#btnCobroRutaOk', '', '', { espera: 800 });
   const cerro = await esperar(() => { const o = document.getElementById('cobroRutaOverlay'); return !o || o.classList.contains('hidden'); }, null, 15000);
   chk(medio + ': el cuadro se cierra después de confirmar', !!cerro, await pg.evaluate(() => ({ err: (document.getElementById('cobroRutaErr') || {}).innerText, c: window.__confirms.slice(-2) })));
-  return { ef, tr, ok: !!cerro, cta };
+  return { ef, tr, ok: !!cerro, cta, exacto: esMixtoProp(medio), prop: esMixtoProp(medio) ? MX_PROP : 0 };
 }
-async function chequearCobrado(h, n, medio, ef, tr, cta) {
+async function chequearCobrado(h, n, medio, ef, tr, cta, ex) {
+  ex = ex || {}; const tolEf = ex.exacto ? 0.5 : 100;
   const vp = await verPedido(h, n, (v) => v.estado_pago === 'Cobrado', 25000);
   const post = await pg.evaluate((n) => (window.__posts.filter((x) => /cobrar/i.test(x.u) && x.b.indexOf(String(n)) >= 0).pop() || {}), n);
   const mc = /"cuenta"\s*:\s*"([^"]*)"/.exec(post.b || ''); console.log('       POST ' + (post.u || '?') + ' cuenta=«' + (mc ? mc[1] : '?') + '»');
   if (!chk(medio + ': #' + n + ' en la base Cobrado', vp && vp.estado_pago === 'Cobrado', vp)) return;
-  chk(medio + ': forma «' + vp.forma + '»', vp.forma === medio, vp);
-  chk(medio + ': importes ef ' + vp.efectivo + ' / tr ' + vp.transferencia + ' (esperaba ' + ef + ' / ' + tr + ')', Math.abs(Number(vp.efectivo) - ef) <= 100 && Math.abs(Number(vp.transferencia) - tr) <= 0.5, vp);
+  chk(medio + ': forma «' + vp.forma + '»', vp.forma === medioBase(medio), vp);
+  chk(medio + ': importes ef ' + vp.efectivo + ' / tr ' + vp.transferencia + ' (esperaba ' + ef + ' / ' + tr + ')', Math.abs(Number(vp.efectivo) - ef) <= tolEf && Math.abs(Number(vp.transferencia) - tr) <= 0.5, vp);
+  if (ex.exacto) chk(medio + ': propina ' + JSON.stringify(vp.propina) + ' (esperaba ' + ex.prop + ' en efectivo)', JSON.stringify(vp.propina || '').indexOf(String(ex.prop)) >= 0, vp);
   chk(medio + ': quién cobró «' + (vp.cobrador || '') + '»', !!vp.cobrador, vp);
   /* La pantalla tiene que mandar Galicia; la base guarda «prueba» en todo pedido PRUEBA (triggers _so/_op_cuenta_prueba). */
   if (tr > 0) chk(medio + ': la pantalla manda la cuenta «' + (mc ? mc[1] : '?') + '» (Galicia) y la base la guardó («' + vp.cuenta + '», PRUEBA → prueba)', mc && mc[1] === 'galicia' && cta === 'galicia' && vp.cuenta === 'prueba', { post: post.b && post.b.slice(0, 300), vp });
   const cj = await cajaDe(h, n);
-  chk(medio + ': en la caja ef ' + cj.ef + ' / digital ' + cj.dig + ' (' + cj.cta + ')', !cj.err && cj.n > 0 && Math.abs(cj.ef - ef) <= 100 && Math.abs(cj.dig - tr) <= 0.5, cj);
+  chk(medio + ': en la caja ef ' + cj.ef + ' / digital ' + cj.dig + ' (' + cj.cta + ')', !cj.err && cj.n > 0 && Math.abs(cj.ef - ef - (ex.prop || 0)) <= tolEf && Math.abs(cj.dig - tr) <= 0.5, cj);
   await pg.evaluate(() => { try { _recargarPedidos(); } catch (e) {} });
   const pd = await esperar(([h, n]) => { const p = (D.pedidos || []).find((x) => x.h === h && String(x.n) === String(n)); return p && p.ep === 'Cobrado' ? { es: p.es, ep: p.ep } : null; }, [h, n], 15000);
   chk(medio + ': la pantalla lo muestra Entregado + Cobrado', pd && pd.es === 'Entregado', pd);
@@ -217,10 +239,10 @@ async function chequearCobrado(h, n, medio, ef, tr, cta) {
 
 /* ── FLUJO 1: «Lo cobro después» y cobrar desde COBRANZA ───────────────────────────────────────────────────────── */
 async function flujoCobranza() {
-  const medios = (process.env.MEDIOS || 'Efectivo,Transferencia,Mixto').split(',');
+  const medios = (process.env.MEDIOS || 'Efectivo,Transferencia,Mixto,Mixto propina,Mixto vuelto').split(',');
   for (const medio of medios) {
     console.log('\n── ' + medio + ' · Lo cobro después → Cobranza');
-    const f = await cargarPedido(medio, false);
+    const f = await cargarPedido(medioBase(medio), false, esMixtoProp(medio) ? { qty: 4 } : undefined);
     if (f.err) { chk(medio + ': cargar el formulario', false, f); continue; }
     await foto('np_' + medio);
     const al = await guardar(f.antes);
@@ -230,7 +252,7 @@ async function flujoCobranza() {
     await T(2500);
     chk(medio + ': sin «Ya me pagó» no se abre el cobro', !(await visible('#cobroRutaOverlay')));
     const v0 = await verPedido('Home', n, (v) => !!v.estado_pago, 15000);
-    chk(medio + ': #' + n + ' quedó Entregado + No Cobrado, forma ' + (v0 && v0.forma), v0 && v0.estado_pago !== 'Cobrado' && v0.forma === medio, v0);
+    chk(medio + ': #' + n + ' quedó Entregado + No Cobrado, forma ' + (v0 && v0.forma), v0 && v0.estado_pago !== 'Cobrado' && v0.forma === medioBase(medio), v0);
     /* Listo → y a COBRANZA, con el toque en la pestaña. */
     await tocar('button', 'Listo', '#nuevoView', { callado: true });
     await irCobranza();
@@ -255,7 +277,7 @@ async function flujoCobranza() {
     if (!chk(medio + ': «Cobrar» abre el cuadro (' + (abierto || '') + ')', !!abierto)) { await foto('no_abre_' + medio); continue; }
     const c = await cobrarEnCuadro(medio, tot);
     if (!c.ok) { await pg.evaluate(() => { try { cerrarCobroRuta(); } catch (e) {} }); continue; }
-    await chequearCobrado('Home', n, medio, c.ef, c.tr, c.cta);
+    await chequearCobrado('Home', n, medio, c.ef, c.tr, c.cta, c);
     const sigue = await esperar((n) => ![].slice.call(document.querySelectorAll('.cobro-card')).some((c) => c.offsetParent && c.textContent.indexOf('#' + n) >= 0 && /PRUEBA Robot/.test(c.textContent)), n, 20000);
     chk(medio + ': ya no figura en COBRANZA', !!sigue);
     await foto('cobranza_despues_' + medio);

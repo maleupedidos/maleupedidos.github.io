@@ -11974,6 +11974,22 @@ function _toggleCobroParcial(btn){
   _recalcCobroRuta();
 }
 
+/* EL MIXTO (24/11/2026, Home 2574). Hasta hoy los tres caminos del cobro repartían el TOTAL del pedido en proporción a lo
+   que entró por cada medio. Con 85.090 pagados con 80.000 en efectivo + 5.100 por transferencia ($10 de propina) eso daba
+   ef 79.991 y tr 5.099: el redondeo corría $1 de un medio al otro, y el cuadre del día pedía $220.001 en mano.
+   La regla: la transferencia entra por el monto EXACTO, así que es lo primero que cubre el total; el resto del total es
+   efectivo. Lo que sobra (propina, a favor) o falta (redondeo, descuento) queda en el efectivo, que es donde está.
+   La propina va al medio donde de verdad sobró, no al que tiene más plata. `pool` es lo que todavía queda por
+   transferencia (en un combo se va gastando pedido por pedido). */
+function _rutMixtoEfTr(total,netoEf,netoMP,pool){
+  /* Al peso (Home 2522, 20/11): el total de la pantalla traía centavos (330.803,40) y la base guarda 330.803; llegaba
+     tr 130.803,40 y la base dejaba ef 199.999,60 con un billete de 200.000 justos. */
+  total=Math.round(Number(total)||0); netoEf=Math.max(0,Number(netoEf)||0); netoMP=Math.max(0,Number(netoMP)||0);
+  var mp=(pool===undefined||pool===null)?netoMP:Math.max(0,Number(pool)||0);
+  if(netoEf+netoMP<=0)return {ef:total,tr:0,propMet:'Efectivo'};
+  var tr=Math.round(Math.min(mp,Math.max(0,total))), ef=total-tr;
+  return {ef:ef,tr:tr,propMet:(netoEf<=0||netoMP>total)?'Transferencia':'Efectivo'};
+}
 function confirmarCobroRuta(){
   if(!_cobroRutaState)return;
   var r=_recalcCobroRuta();
@@ -12054,17 +12070,15 @@ function confirmarCobroRuta(){
   if(fpFinal==='Efectivo'){ef=total;tr=0;}
   else if(fpFinal==='Transferencia'){ef=0;tr=total;}
   else {
-    // Mixto: distribuir el total puro según los recibidos netos
-    var totNeto=netoEf+netoMP;
-    if(totNeto<=0){ef=total;tr=0;}
-    else {ef=Math.round(total*(netoEf/totNeto));tr=total-ef;}
+    // Mixto: la transferencia exacta primero, el resto es efectivo (_rutMixtoEfTr)
+    var _mx=_rutMixtoEfTr(total,netoEf,netoMP); ef=_mx.ef; tr=_mx.tr;
   }
   // Lo que REALMENTE entró por este pedido. Espeja la fórmula del backend
   // (Code.js:4706 — Facturado V = Total + Propina Ef + Propina Tr + A Favor),
   // así el número local y el que baja después del refetch son el mismo.
   var facturadoTotal=total+prop+aFav-((fpFinal==='Efectivo')?(r.rd||0):0)-_descAceptadoMonto(st,r);
-  // Propina va al método dominante
-  var propMet=(ef>=tr)?'Efectivo':'Transferencia';
+  // Propina: al método del pedido; en un mixto, al medio donde sobró
+  var propMet=(fpFinal==='Mixto')?_mx.propMet:((ef>=tr)?'Efectivo':'Transferencia');
 
   // Marcar local como cobrado
   cobrados[key]=true;
@@ -12232,6 +12246,7 @@ function _confirmarCobroComboRuta(st,r){
   var netoMPC=Math.max(0,r.recMP-r.camMP);
   var esMixtoComboReal=(netoEfC>0 && netoMPC>0);
   var fpComboFinal=esMixtoComboReal?'Mixto':fp;
+  var _poolMPC=netoMPC;   /* (24/11/2026) lo transferido que queda por repartir entre los pedidos del combo */
   /* Una fila por pedido: su descuento y su envio (una vez por entrega). */
   var _dC=_descDelCombo(st);
   peds.forEach(function(p,idx){
@@ -12243,15 +12258,14 @@ function _confirmarCobroComboRuta(st,r){
     var aFavP=(idx===0)?aFav:0;
     // ef/tr = total puro del pedido (sin prop ni aFav). Backend suma aFav a la col
     // del método y escribe propina aparte. Ver bug Consuelo en confirmarCobroRuta.
-    var efP=0,trP=0;
+    var efP=0,trP=0,_mxP=null;
     if(fpComboFinal==='Efectivo'){efP=totalP;trP=0;}
     else if(fpComboFinal==='Transferencia'){efP=0;trP=totalP;}
     else {
-      var totNeto=netoEfC+netoMPC;
-      if(totNeto<=0){efP=totalP;}
-      else {efP=Math.round(totalP*(netoEfC/totNeto));trP=totalP-efP;}
+      /* Mixto: la transferencia se va gastando pedido por pedido (_rutMixtoEfTr) */
+      _mxP=_rutMixtoEfTr(totalP,netoEfC,netoMPC,_poolMPC); efP=_mxP.ef; trP=_mxP.tr; _poolMPC-=trP;
     }
-    var propMet=(efP>=trP)?'Efectivo':'Transferencia';
+    var propMet=_mxP?_mxP.propMet:((efP>=trP)?'Efectivo':'Transferencia');
     cobrados[k]=true;
     p.ep='Cobrado';
     // Mismo criterio que el cobro suelto: la card muestra lo realmente cobrado,
@@ -12406,12 +12420,10 @@ function _confirmarCobroPendiente(st,r){
   if(fpFinal==='Efectivo'){ef=total;tr=0;}
   else if(fpFinal==='Transferencia'){ef=0;tr=total;}
   else {
-    var totNeto=netoEf+netoMP;
-    if(totNeto<=0){ef=total;tr=0;}
-    else {ef=Math.round(total*(netoEf/totNeto));tr=total-ef;}
+    var _mx=_rutMixtoEfTr(total,netoEf,netoMP); ef=_mx.ef; tr=_mx.tr;   /* la transferencia exacta primero (24/11/2026) */
   }
   var propMet=(fpFinal==='Transferencia')?'Transferencia':'Efectivo';
-  if(fpFinal==='Mixto')propMet=(tr>ef)?'Transferencia':'Efectivo';
+  if(fpFinal==='Mixto')propMet=_mx.propMet;
 
   var payload={action:'marcarCobrado',quien:_quienCobro(st),billeteraVuelto:_bilVueltoPay(st),fechaCobro:_fechaCobroPay(),ajusteDec:_ajDecPay(),hoja:pc.h,id:String(pc.id),row:pc.r||0,
     formaPago:fpFinal,cuenta:_ctaDeCobro(st,fpFinal),ef:ef,tr:tr,propina:propina,propMet:propMet,
