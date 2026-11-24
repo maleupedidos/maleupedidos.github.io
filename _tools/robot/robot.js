@@ -809,6 +809,25 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
     return { ok: !falta.length, detalle: det.join(' · ') + (falta.length ? ' · FALTA: ' + falta.join(' · ') : '') + ' · pesaje de carne: después del corte' };
   }, { escribe: true, topeMs: 90000 });
 
+  /* (24/11/2026, 838) DESCUENTO A MANO + REDONDEO EN EL MISMO COBRO. Home 2560: el redondeo se descontaba del descuento a
+     mano y el pedido quedaba con $10 más de total y facturado que lo cobrado. Un PRUEBA de 3 ($3.000) se entrega y se cobra en
+     efectivo con $90 a mano y $10 de redondeo: total = efectivo = $2.900 (el detalle dice 10 + 90). */
+  await paso('cobro con descuento a mano y redondeo', async () => {
+    if (E.producto_id == null) return { ok: false, detalle: 'falta el id de tienda del producto ' + SKU };
+    const a = await altaHome('d838', 3); if (!a || !a.ok || !a.n) return { ok: false, detalle: 'alta: ' + JSON.stringify(a).slice(0, 160) };
+    const base = { hoja: 'Home', id: String(a.n), row: -Number(a.n) };
+    let r = await directa('marcarEntregado', Object.assign({ action: 'marcarEntregado', cobrado: false, propina: 0, repartidor: '', clientOpId: PREFIJO + 'd838-ent' }, base));
+    if (!bien(r)) return mal(r, 'entregar');
+    const p0 = await verPedido('Home|' + a.n), sub = Number(p0 && (p0.subtotal || p0.total)) || 3000;
+    const t = Math.floor(sub / 100) * 100 - 90, dd = sub - t;
+    r = await directa('marcarCobrado', Object.assign({ action: 'marcarCobrado', quien: 'robot', fechaCobro: '', formaPago: 'Efectivo', cuenta: '', ef: t, tr: 0, propina: 0, propMet: 'Efectivo',
+      aFavor: 0, aplicacion: 0, recalcular: true, redondeo: 10, recibidoEf: t - 10, descuentoManual: { tipo: 'monto', valor: dd, monto: dd }, cliente: CLI, repartidor: '', clientOpId: PREFIJO + 'd838-cob' }, base));
+    if (!bien(r)) return mal(r, 'cobrar');
+    let vp = null; for (let k = 0; k < 6; k++) { vp = await verPedido('Home|' + a.n); if (vp && vp.estado_pago === 'Cobrado') break; await pausa(1500); }
+    const ok = vp && Math.abs(Number(vp.total) - (t - 10)) < 0.5 && Math.abs(Number(vp.efectivo) - (t - 10)) < 0.5;
+    return { ok: !!ok, detalle: 'Home #' + a.n + ' subtotal ' + sub + ' · a mano ' + dd + ' + redondeo 10 → total ' + (vp && vp.total) + ' / efectivo ' + (vp && vp.efectivo) + ' (tenía que dar ' + (t - 10) + ')' };
+  }, { escribe: true, topeMs: 40000 });
+
   /* (15/11/2026) EL MISMO PERÍODO DA LO MISMO EN TODAS LAS PANTALLAS: Inicio, Tendencia, Ventas, Resultados, Red y Mi Portal
      (`_tools/pruebas/cruce_ventas.js`, solo lee). Solo de noche: en un deploy, una diferencia de datos no tiene por qué
      frenar un arreglo urgente; de noche sale en el resumen de la mañana. */
