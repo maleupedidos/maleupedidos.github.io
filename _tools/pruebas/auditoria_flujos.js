@@ -428,9 +428,13 @@ async function flujoJuntada() {
   /* (24/11/2026, 831) Ana paga $11 de más («mis amigos me pagan un poco de más»): su parte + $11 de propina. */
   const parteAna = await pg.evaluate((sel) => Number((document.querySelector(sel + ' .com-pagar[data-n="PRUEBA Ana"]') || {}).getAttribute && document.querySelector(sel + ' .com-pagar[data-n="PRUEBA Ana"]').getAttribute('data-m')) || 0, sel);
   await pg.evaluate((v) => { window.__promptResp = v; }, parteAna > 0 ? parteAna + 11 : null);
+  const tAna = Date.now();
   const ana = await tocarT(' .com-pagar[data-n="PRUEBA Ana"]');
   await pg.evaluate(() => { window.__promptResp = null; });
   chk('juntada: «Marcar pagó» de Ana a la vista', !!ana, aj);
+  /* (24/11/2026, «instante») La línea de la juntada cambia en la MISMA pantalla, sin navegar, en menos de 2 s. */
+  if (ana) { const Li = await esperarLinea(sel, /falta(?!n 3)/, 15000); const msA = Date.now() - tAna; TIEMPOS.push('Marcar pagó ' + (Li ? msA + ' ms' : 'más de 15 s'));
+    chk('instante: juntada › «Marcar pagó» → la línea deja de nombrar a Ana en ' + (Li ? msA + ' ms' : 'más de 15 s') + ' (tope ' + INSTANTE_MS + ' ms)', !!Li && msA <= INSTANTE_MS, { ms: msA, L: Li }); }
   const pg1 = await pagos(1);
   const conf1 = await pg.evaluate(() => window.__confirms.filter((x) => /^PROMPT/.test(x)).slice(-1)[0] || '');
   const confP = await pg.evaluate(() => window.__confirms.slice(-1)[0] || '');
@@ -829,7 +833,9 @@ async function flujoUnir() {
     lbl: (document.getElementById('cobroSumPropLbl') || {}).textContent }));
   chk('unir: $72 de más en la transferencia → «va de propina», sin preguntar', /Sobran \$\s?72: va de propina/.test(cuad.err) && !cuad.dis && cuad.lbl === 'Propina', cuad);
   await foto('unir_cuadro');
-  const ok = await tocar('#btnCobroRutaOk', '', '', { espera: 1500 });
+  /* (24/11/2026, «instante») Las dos tarjetas se van de Cobranza en menos de 2 s. */
+  const ok = await medirInstante('instante: unir › «Confirmar cobro» → las dos tarjetas se van', () => tocar('#btnCobroRutaOk', '', '', { espera: 50 }),
+    ([na, nb]) => { const t = [].filter.call(document.querySelectorAll('#cobrosContent .cobro-card'), (c) => c.offsetParent).map((c) => c.textContent).join(' '); return (t.indexOf('#' + na) < 0 && t.indexOf('#' + nb) < 0) || null; }, [a.n, b.n]);
   chk('unir: «Confirmar cobro»', !!ok);
   const va = await verPedido('Home', a.n, (v) => v.estado_pago === 'Cobrado', 40000), vb = await verPedido('Home', b.n, (v) => v.estado_pago === 'Cobrado', 40000);
   chk('unir: los dos pedidos Cobrado en la base', va && vb && va.estado_pago === 'Cobrado' && vb.estado_pago === 'Cobrado', { va, vb });

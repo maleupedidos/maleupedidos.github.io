@@ -507,11 +507,11 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
       const p = ((d && d.stock) || []).find((x) => String(x.a || x.abbr || '').trim() === SKU);
       v = p ? (Number(((p.pd || p.porDep) || {})[DEP]) || 0) : null;
       if (v == null || v >= 0) return v;
-      /* Si a los 30 s sigue en negativo es que lo dejaron así los pasos de antes (venden PRUEBA de este depósito y la
-         limpieza del final lo repone): se cuenta en 0, solo PRUEBA, y se sigue desde ahí. */
+      /* Si a los 30 s sigue en negativo es que lo dejaron así los pasos de antes o corridas seguidas (la limpieza solo
+         resetea con 10 min quietos): se cuenta en 3, lo mismo que deja `_robot_libro_prueba`, solo PRUEBA, y se sigue. */
       if (Date.now() - t0 > 30000) {
-        const c0 = await rpc('stock_contar_directo', { p: { abbr: SKU, deposito: DEP, cantidad: 0, clientOpId: PREFIJO + 'a-cero-' + Date.now(), cv: 'robot' } }).catch(() => null);
-        if (c0 && c0.ok) { console.log('  PRUEBA estaba en ' + v + ' en ' + DEP + ': se contó en 0'); return 0; }
+        const c0 = await rpc('stock_contar_directo', { p: { abbr: SKU, deposito: DEP, cantidad: 3, clientOpId: PREFIJO + 'a-base-' + Date.now(), cv: 'robot' } }).catch(() => null);
+        if (c0 && c0.ok) { console.log('  PRUEBA estaba en ' + v + ' en ' + DEP + ': se contó en 3 (la base de la limpieza)'); return 3; }
       }
       await pausa(5000);
     }
@@ -831,6 +831,15 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
     const res = c.resumen.map((x) => x.mes + ' $' + x.resultadoErp + (x.resultadoErp === x.resultadoBase ? '' : '/$' + x.resultadoBase)).join(' · ');
     return { ok: c.ok, detalle: c.ok ? c.resumen.length + ' meses, ' + c.resumen.reduce((a, x) => a + x.renglones, 0) + ' renglones iguales · ' + res
       : 'EERR base ≠ Resultados: ' + c.difs.slice(0, 8).join(' · ') };
+  });
+
+  /* (24/11/2026) VENTAS › TENDENCIA: barrio según el canal, períodos en cero hasta hoy, Retail = Home + Pilar + Red al peso,
+     los representantes suman Red y el toque en un punto suma el punto (`_tools/pruebas/cruce_tendencia.js`, solo lee). */
+  if (!process.env.ROBOT_LOCAL) await paso('Ventas › Tendencia cuenta lo mismo por canal y por representante', async () => {
+    const { EXPR } = require('../pruebas/cruce_tendencia.js');
+    let r = await ev(EXPR, 300000); if (typeof r === 'string') r = JSON.parse(r);
+    const n = (r.filas || []).filter((f) => 'ok' in f).length;
+    return { ok: !!r.ok, detalle: r.ok ? n + ' comparaciones, 0 diferencias' : (r.difs || []).slice(0, 8).join(' · ') };
   });
 
   await paso('nadie lee la foto de Apps Script', async () => {
