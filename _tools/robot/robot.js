@@ -82,7 +82,7 @@ async function paso(nombre, fn, opt) {
   console.log((r.ok ? (r.salteado && opt.esperado ? '  ESP  ' : '  ok   ') : '  MAL  ') + nombre + '  (' + ms + ' ms)' + (r.detalle ? '  ' + r.detalle : '') + (apps.length ? '  · Apps Script: ' + apps.join(', ') : ''));
   return r;
 }
-let ENTIDADES = false;
+let ENTIDADES = false, REP_PED_N = '';   /* (24/11) el autopedido del representante PRUEBA */
 /* Números que se siguen corrida a corrida (van en robot_resultado.metricas): la espera de «se está acomodando» entre dos
    movimientos de stock del mismo producto (4/11/2026: 30-90 s por el aplicador; tiene que bajar con el Kardex paso c). */
 const METRICAS = {};
@@ -679,9 +679,23 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
     for (const dias of [2, 4, 6, 8, 10]) { r = await cargar(dias); if (!(r && r.r && r.r.ok === false && /ya tiene el pedido|van desde el/.test(String(r.r.err || '')))) break; }
     if (r.paso === 'login') return { ok: false, detalle: 'el representante no pudo entrar por la base: ' + JSON.stringify(r.r).slice(0, 150) };
     const d = r.r || {};
+    /* (24/11/2026) El número del autopedido: lo entrega y lo cobra el paso de Mi Portal con toques. */
+    if (d.ok) REP_PED_N = (String(d.ref || (d.sumarA && d.sumarA.n) || '').match(/\d+/) || [''])[0];
     return d.ok ? { ok: true, detalle: 'entró como ' + CRED.repUsuario + ' (rol ' + r.rol + ') · autopedido ' + (d.ref || (d.sumarA && d.sumarA.n) || '') }
       : { ok: false, detalle: 'autopedido: http ' + r.http + ' ' + JSON.stringify(d).slice(0, 180) };
   }, { escribe: true, topeMs: 10000 });
+
+  /* (24/11/2026) MI PORTAL COMO EL REPRESENTANTE, A 393 Y CON TOQUES: las 7 cosas que tiene que poder hacer, y que lo que
+     marca se vea en la Cobranza del robot en menos de 2 s. Ver portal_rep.js. */
+  await paso('Mi Portal del representante PRUEBA, con toques a 393', async () => {
+    if (!CRED.repPin) return { ok: false, detalle: 'falta el PIN del representante PRUEBA Robot' };
+    /* Sin la 839 en la base (no viene `avisosTr`) no hay aviso ni señal en vivo: se saltea en vez de frenar el deploy. */
+    const ep = await rpc('red_efectivo_pantalla', {}).catch(() => null);
+    if (!(ep && ep.avisosTr)) return { ok: true, salteado: true, detalle: 'espera la migración 839 (aviso de transferencia y señal a Cobranza)' };
+    const r = await require('./portal_rep.js')({ cdp, url: URL_APP, usuario: CRED.repUsuario, pin: CRED.repPin, n: REP_PED_N, admin: { ev, esperar } });
+    Object.assign(METRICAS, r.metricas || {});
+    return { ok: r.ok, detalle: r.detalle };
+  }, { escribe: true, topeMs: 90000 });
 
   await paso('liquidación de PRUEBA', async () => {
     const liq = await rpc('red_liquidacion_pantalla', {});
