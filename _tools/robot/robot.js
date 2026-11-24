@@ -809,7 +809,7 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
     const res = c.resumen.map((x) => x.mes + ' $' + x.resultadoErp + (x.resultadoErp === x.resultadoBase ? '' : '/$' + x.resultadoBase)).join(' · ');
     return { ok: c.ok, detalle: c.ok ? c.resumen.length + ' meses, ' + c.resumen.reduce((a, x) => a + x.renglones, 0) + ' renglones iguales · ' + res
       : 'EERR base ≠ Resultados: ' + c.difs.slice(0, 8).join(' · ') };
-  }, { esperado: '833' });
+  });
 
   await paso('nadie lee la foto de Apps Script', async () => {
     const f = JSON.parse(await ev(`JSON.stringify(window.__fotoApps||null)`).catch(() => 'null'));
