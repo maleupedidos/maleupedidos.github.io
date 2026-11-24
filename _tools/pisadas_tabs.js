@@ -16,7 +16,7 @@ const PREF = [
   [/^_?(mr[A-Z]|_mr)/, 'mireparto'], [/^_?(mp[A-Z]|_mp|dv|_dv)/, 'miportal'], [/^_?(inicio|_inicio|hoy|_hoy|render)/, 'inicio'], [/^_?(cat[A-Z]|_cat|catering)/, 'catering'],
   [/^_?(egr|_egr)/, 'egresos'], [/^_?(evu|_evu|evol)/, 'evolucion'], [/^_?(plan|_plan)/, 'planificacion'], [/^_?(pv[A-Z]|_pv|prov)/, 'proveedores'],
 ];
-const FUENTE = { 'ruta.html': ['ruta'], 'red.html': ['miportal', 'ventas'], 'busqueda.html': ['busqueda'] };
+const FUENTE = { 'ruta.html': ['ruta', 'cobranza'], 'red.html': ['miportal', 'ventas'], 'busqueda.html': ['busqueda'] };
 const tabs = new Set();
 const files = sh('git diff --name-only origin/main -- _src/panel.src.html ruta.html red.html busqueda.html').split('\n').filter(Boolean);
 for (const f of files) {

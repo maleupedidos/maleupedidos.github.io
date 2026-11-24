@@ -333,7 +333,10 @@ const esperarCarga = (pg) => pg.waitForFunction(() => {
         const menu = new Set();
         document.querySelectorAll('[onclick]').forEach((e) => { const m = /\bgo\('([a-z]+)'\)/.exec(e.getAttribute('onclick') || ''); if (m && e.getClientRects().length) menu.add(m[1]); });
         const on = ((document.querySelector('.pg.on') || {}).id || '').replace(/^p-/, '');
-        return ids.filter((t) => SESSION.rol === 'admin' || T.indexOf('*') >= 0 || T.indexOf(t) >= 0 || menu.has(t) || t === on);
+        const r = ids.filter((t) => SESSION.rol === 'admin' || T.indexOf('*') >= 0 || T.indexOf(t) >= 0 || menu.has(t) || t === on);
+        /* (24/11/2026) COBRANZA no tiene página propia (es la de Ruta en «modo cobranza»): entra si el menú la ofrece. */
+        if (menu.has('cobranza') && r.indexOf('cobranza') < 0) r.push('cobranza');
+        return r;
       });
       if (SOLO) tabs = tabs.filter((t) => SOLO.indexOf(t) >= 0);
       const medir = async (donde) => {
@@ -388,7 +391,9 @@ const esperarCarga = (pg) => pg.waitForFunction(() => {
             crm: [['ficha del cliente', `var p=(D.pedidos||[]).filter(function(x){return x.h==='Home';})[0]; if(p&&typeof verFichaDePedido==='function'){ verFichaDePedido(p.h,p.n); } !!p`]],
             ajustes: [['freezer', `go('ajustes'); ajGo('depositos'); setTimeout(function(){ try{ stFrzEditar('nuevo','ustariz'); }catch(e){} },800); true`],
                       ['PIN', `go('ajustes'); ajGo('usuarios'); setTimeout(function(){ try{ ajPinGenerar('robot','Robot de pruebas'); }catch(e){} },800); true`]],
-            ruta: [['cuadro de cobro', `try{ switchTab('cobros'); }catch(e){} setTimeout(function(){ try{ abrirCobroPendiente(0); }catch(e){} },1500); true`]],
+            /* (24/11/2026) El cuadro de cobro se abre desde la tab Cobranza (salió de Ruta); y la juntada plegada, abierta. */
+            cobranza: [['cuadro de cobro', `go('cobranza'); setTimeout(function(){ try{ abrirCobroPendiente(0); }catch(e){} },1500); true`],
+                       ['juntada abierta', `go('cobranza'); setTimeout(function(){ var d=document.querySelector('#cobrosContent details.cobz-jnt-d'); if(d){ d.open=true; d.scrollIntoView({block:'start'}); } },1500); !!document.getElementById('cobrosContent')`]],
           };
           for (const [nom, js] of (DET[t] || [])) {
             let ok = false; try { ok = await pg.evaluate(js); } catch (e) {}

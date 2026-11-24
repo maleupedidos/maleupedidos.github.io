@@ -3,7 +3,8 @@
    los días tocando la pantalla como él: WebKit a 393 con toque (MOTOR=chromium → 1440 con mouse y el cajón abierto).
    Solo entidades PRUEBA (cliente «PRUEBA Robot», teléfono del robot, depósito «prueba»). Al final: robot_limpiar.
    Cada toque comprueba que debajo del dedo esté el botón (elementFromPoint): si una capa lo tapa, es un hallazgo.
-     FLUJO=cobranza   + Pedido «Lo cobro después» con Efectivo / Transferencia / Mixto → cobrarlo desde COBRANZA
+     FLUJO=cobranza   + Pedido «Lo cobro después» con Efectivo / Transferencia / Mixto → cobrarlo desde la tab COBRANZA
+                      (24/11/2026: tab propia, al lado de Caja; se entra por el menú)
                       (la pantalla manda Galicia; la base guarda «prueba» en todo pedido PRUEBA).
      FLUJO=yapago     + Pedido «Ya me pagó» con cada medio, tocando «Listo →» apenas guarda (Home #2567).
      FLUJO=juntada    alta «Juntada o evento», «Cobrar a… (3)», «Marcar pagó», «Cobrar a X», deshacer un pago y volver a
@@ -207,7 +208,7 @@ async function flujoCobranza() {
     chk(medio + ': #' + n + ' quedó Entregado + No Cobrado, forma ' + (v0 && v0.forma), v0 && v0.estado_pago !== 'Cobrado' && v0.forma === medio, v0);
     /* Listo → y a COBRANZA, con el toque en la pestaña. */
     await tocar('button', 'Listo', '#nuevoView', { callado: true });
-    await tocar('.tab[data-tab="cobros"]', '');
+    await irCobranza();
     const card = await esperar((n) => {
       const cs = [].slice.call(document.querySelectorAll('#cobrosView .cobro-card, #cobrosList .cobro-card, .cobro-card')).filter((c) => c.offsetParent && /PRUEBA Robot/.test(c.textContent) && c.textContent.indexOf('#' + n) >= 0);
       return cs.length ? { cg: cs[0].classList.contains('cg-card'), txt: cs[0].innerText.replace(/\s+/g, ' ').slice(0, 200), casa: cs[0].getAttribute('data-casa') || '' } : null;
@@ -253,7 +254,7 @@ async function flujoYaPago() {
     if (!g) { chk(medio + ': GUARDAR', false); continue; }
     await tocar('button', 'Listo', '#nuevoView', { callado: true, espera: 200 });
     if (process.env.SIN_SENAL) {
-      await tocar('.tab[data-tab="cobros"]', '', '', { callado: true, espera: 1000 });
+      await irCobranza({ callado: true, espera: 1000 });
       const cola = await pg.evaluate(() => { try { return (JSON.parse(localStorage.getItem('maleu_np_cola') || '[]') || []).length; } catch (e) { return -1; } });
       chk(medio + ' sin señal: el alta quedó en la cola de + Pedido (' + cola + ')', cola > 0, cola);
       await T(8000);
@@ -289,7 +290,9 @@ const cuentaDom = (cont) => pg.evaluate((cont) => { const c = document.querySele
 async function mandarCuenta(cont, nombre, totalEsperado) {
   const s0 = await pg.evaluate(() => window.__shares.length);
   /* La juntada se repinta cuando llegan sus datos (y la ficha, su cobro): se toca cuando el botón quedó quieto 1,5 s. */
-  const sel = cont + ' .com-mandar';
+  /* (24/11/2026) En COBRANZA la juntada va plegada y «Mandar la cuenta» queda AFUERA de la tarjeta, a la vista (.cobz-jnt). */
+  const fuera = await pg.evaluate((cont) => { const c = document.querySelector(cont), j = c && c.closest('.cobz-jnt'); if (!j) return false; document.querySelectorAll('[data-aumandar]').forEach((x) => x.removeAttribute('data-aumandar')); j.setAttribute('data-aumandar', '1'); return true; }, cont);
+  const sel = fuera ? '.cobz-jnt[data-aumandar="1"] > .com-mandar-ficha .com-mandar' : cont + ' .com-mandar';
   for (let k = 0; k < 20; k++) { const quieto = await pg.evaluate(async (sel) => { const a = document.querySelector(sel); if (!a) return false; await new Promise((r) => setTimeout(r, 1500)); return document.querySelector(sel) === a; }, sel); if (quieto) break; }
   const b = await tocar(sel, 'Mandar la cuenta');
   if (!chk(nombre + ': «Mandar la cuenta» a la vista y sin nada encima', !!b)) { await foto('mandar_' + nombre.replace(/\W+/g, '_')); return null; }
@@ -356,7 +359,7 @@ async function flujoJuntada() {
     chk('cuenta con 3 debiendo: 3 a Maleu, ninguno tachado, ningún otro bloque', M && M.f.length === 3 && !M.f.some((x) => x.ya) && M1.bl.length === 1, M1.bl);
     /* Sin compartir archivos (la compu vieja, otro navegador): copia el texto y avisa «Copiado». */
     const c0 = await pg.evaluate(() => { window.__sinShare = true; return window.__copiado.length; });
-    await re(); await tocar(sel + ' .com-mandar', 'Mandar la cuenta');
+    await re(); await tocar(sel + ' .com-mandar', 'Mandar la cuenta', '', { callado: true }) || await tocar('.cobz-jnt[data-aumandar="1"] > .com-mandar-ficha .com-mandar', 'Mandar la cuenta');
     const cop = await esperar((c0) => window.__copiado.length > c0 ? window.__copiado[window.__copiado.length - 1] : null, c0, 4000);
     const toastT = await pg.evaluate(() => [].map.call(document.querySelectorAll('.toast,#toast,[id$="toast"],[id$="Toast"]'), (t) => t.textContent.trim()).join(' | '));
     chk('cuenta: sin compartir archivos copia el mismo texto y avisa «Copiado» (' + toastT.slice(0, 60) + ')', !!cop && leerCuenta(cop).total === tot && /Copiado/.test(toastT), { cop: cop && cop.slice(0, 80), toastT });
@@ -711,11 +714,28 @@ async function volcarAba(et) {
   });
   console.log('   [' + et + ']\n     PRUEBA: ' + v.prueba.join('\n             ') + '\n     botones: ' + v.btns.join(' | ').slice(0, 2500));
 }
-async function irCobranza() {
-  await pg.evaluate(() => { if (typeof go === 'function' && !(document.getElementById('pg-ruta') || {}).offsetParent) go('ruta'); });
-  await tocar('.tab[data-tab="cobros"]', '', '', { callado: true, espera: 1500 });
+/* (24/11/2026) COBRANZA es una tab del menú (al lado de Caja), ya no una sub-tab de Ruta: se entra por el menú, como Tadeo
+   (en el celular, la hamburguesa y después «Cobranza»). Si el menú no la tiene, es un hallazgo: no se esquiva con go(). */
+async function irCobranza(opt) {
+  opt = opt || {};
+  if (!COMPU && !(await pg.evaluate(() => document.body.classList.contains('sb-open')))) await tocar('.hdr-burger', '', '', { callado: true, espera: 600 });
+  const t = await tocar('.snav .bn[data-p="cobranza"]', '', '', { callado: !!opt.callado, espera: opt.espera || 1500 });
+  if (!t) chk('el menú tiene «Cobranza»', false);
+  if (!COMPU) await pg.evaluate(() => { if (document.body.classList.contains('sb-open') && typeof sbToggle === 'function' && innerWidth < 1024) sbToggle(); });
+  await esperar(() => (typeof cur !== 'undefined' && cur === 'cobranza' && !!document.querySelector('#cobrosContent .cobz-res')) || null, null, 30000);
 }
 async function tarjetaDe(n) {
+  /* (24/11/2026) La juntada va PLEGADA en Cobranza: se abre tocando su línea, como Tadeo. */
+  const est = await esperar((n) => {
+    /* `offsetParent` NO alcanza: adentro de un <details> cerrado sigue teniendo uno (y medidas), pero no se pinta ni se toca. */
+    const vis = [].some.call(document.querySelectorAll('.cobro-card'), (c) => { const dj = c.closest('details.cobz-jnt-d'); return c.offsetParent && (!dj || dj.open) && c.textContent.indexOf('#' + n) >= 0 && /PRUEBA Robot/.test(c.textContent); });
+    if (vis) return 'visible';
+    const d = [].find.call(document.querySelectorAll('#cobrosContent details.cobz-jnt-d'), (x) => x.textContent.indexOf('#' + n) >= 0);
+    if (!d) return null;
+    document.querySelectorAll('[data-aujnt]').forEach((x) => x.removeAttribute('data-aujnt')); d.setAttribute('data-aujnt', '1');
+    return d.open ? 'visible' : 'cerrada';
+  }, n, 30000);
+  if (est === 'cerrada') await tocar('details[data-aujnt="1"] > summary', '', '', { espera: 900 });
   const ok = await esperar((n) => { const c = [].slice.call(document.querySelectorAll('.cobro-card')).find((c) => c.offsetParent && c.textContent.indexOf('#' + n) >= 0 && /PRUEBA Robot/.test(c.textContent)); if (!c) return null; document.querySelectorAll('[data-au="' + n + '"]').forEach((x) => { if (x !== c) x.removeAttribute('data-au'); }); c.setAttribute('data-au', String(n)); return 1; }, n, 30000);
   return ok ? '.cobro-card[data-au="' + n + '"]' : null;
 }
