@@ -38,13 +38,14 @@ let n=0;function ok(name,cond){assert(cond,name);n++;console.log('OK '+name);}
   ok('Pedidos en vivo tambien llena una lista vacia',p.D.pedidos.length===1);
 
   let refreshes=0,resolveRead;let scheduled=[];
-  const o=ctx(['_ordenConfirmada','_ordenVistaPedir'],{cur:'caja',_ordenCambios:{},_ordenVistaVuelo:{},_ordenVistaTimer:null,
+  const TABS=['inicio','pedidos','ruta','cobranza','caja','egresos','busqueda'];   /* (24/11/2026) toda escritura marca TODAS las tabs */
+  const o=ctx(['_ordenConfirmada','_ordenVistaPedir'],{cur:'caja',_ordenCambios:{},_ordenVistaVuelo:{},_ordenVistaTimer:null,_TABS_TODAS:TABS,
     setTimeout:f=>{scheduled.push(f);return scheduled.length;},clearTimeout:()=>{},
     window:{__ordenVistas:{caja:()=>{refreshes++;return new Promise(r=>resolveRead=r);}}}});
   o._ordenConfirmada({}, {ok:false,baseEscribio:true});ok('un rechazo no invalida ni anuncia cambios',Object.keys(o._ordenCambios).length===0);
   o._ordenConfirmada({}, {ok:true,directo:true});ok('una orden solo encolada no se presenta como escrita',Object.keys(o._ordenCambios).length===0);
   o._ordenConfirmada({}, {ok:true,baseEscribio:true});
-  ok('la confirmacion invalida las cuatro tabs y Pagos',Object.keys(o._ordenCambios).length===5);
+  ok('la confirmacion invalida todas las tabs (pantalla al instante, 24/11)',Object.keys(o._ordenCambios).length===TABS.length);
   o._ordenVistaPedir();await tick();o._ordenVistaPedir();await tick();
   ok('solo se relee la tab visible y no hay dos lecturas paralelas',refreshes===1);
   o._ordenConfirmada({}, {ok:true,baseEscribio:true});resolveRead(true);await tick();

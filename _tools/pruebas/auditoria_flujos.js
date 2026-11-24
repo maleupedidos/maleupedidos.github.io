@@ -13,6 +13,7 @@
      FLUJO=red        el representante carga su autopedido (su usuario y PIN) → la OC en Abastecimiento (Marcar como pedido,
                       la hoja de RECIBIR) → la bolsa en ARMADO y RUTA (el reloj de la página en el viernes) → el
                       representante marca «Entregado» en Mi Portal.
+     FLUJO=instante   cada toque que escribe se ve en la pantalla en menos de 2 s (juntada desde la ficha, Casa, cobrar).
      FLUJO=todo       todos.   MEDIOS=Efectivo,Mixto (opcional) solo esos medios.   LIMPIAR=1 solo robot_limpiar.
    PW=<playwright-core> BASE=http://localhost:8155/app.html OUT=<dir> node auditoria_flujos.js
    En el robot nocturno (GitHub) corre contra app.maleu.com.ar, a 393 (WebKit) y a 1440 (Chromium). */
@@ -926,12 +927,83 @@ async function libroEnSuLugar() {
     console.log('libro PRUEBA todavía no: ' + JSON.stringify(lp || r).slice(0, 160)); await T(60000); }
   return false;
 }
+/* ── FLUJO «instante» (24/11/2026, regla del ERP): después de cada toque que escribe, la pantalla muestra el cambio en
+   menos de 2 s, sin esperar el refresco periódico. Home 2564: la juntada marcada desde la ficha tardó ~50 s en pasar a
+   «Juntadas». Se mide desde el toque hasta que el DOM de Cobranza cambió. Un botón nuevo que se olvide de la regla
+   (`_ordenConfirmada` → `__ordenVistas[tab]`) sale acá. INSTANTE_MS cambia el tope. */
+const INSTANTE_MS = Number(process.env.INSTANTE_MS) || 2000;
+const TIEMPOS = [];
+async function medirInstante(nombre, tocarFn, cond, arg) {
+  const t0 = Date.now();
+  const tq = await tocarFn();
+  if (!tq) { chk(nombre + ': el toque', false); return null; }
+  const v = await esperar(cond, arg, 15000);
+  const ms = Date.now() - t0;
+  TIEMPOS.push(nombre + ' ' + (v ? ms + ' ms' : 'más de 15 s'));
+  chk(nombre + ': la pantalla lo muestra en ' + (v ? ms + ' ms' : 'más de 15 s') + ' (tope ' + INSTANTE_MS + ' ms)', !!v && ms <= INSTANTE_MS, { ms });
+  return v;
+}
+async function flujoInstante() {
+  console.log('\n── Al instante · Cobranza');
+  const f = await cargarPedido('Efectivo', false);
+  if (f.err) { chk('instante: cargar el formulario', false, f); return; }
+  const al = await guardar(f.antes);
+  if (!chk('instante: GUARDAR da el alta', al && al.n, al)) return;
+  const n = al.n;
+  await T(2000);
+  await tocar('button', 'Listo', '#nuevoView', { callado: true });
+  await irCobranza();
+  await tarjetaDe(n);
+  const enJnt = (n) => [].some.call(document.querySelectorAll('#cobrosContent details.cobz-jnt-d, #cobrosContent .cob-sec.jnt'), (d) => d.textContent.indexOf('#' + n) >= 0) || null;
+  const enCli = (n) => (![].some.call(document.querySelectorAll('#cobrosContent details.cobz-jnt-d, #cobrosContent .cob-sec.jnt'), (d) => d.textContent.indexOf('#' + n) >= 0)
+    && [].some.call(document.querySelectorAll('#cobrosContent .cobro-card'), (c) => c.textContent.indexOf('#' + n) >= 0)) || null;
+  /* 1. La juntada desde la FICHA (como Tadeo con el 2564): «Ver pedido ›» → «Juntada o evento». */
+  const abrirFicha = async () => {
+    await pg.evaluate((n) => { const c = [].slice.call(document.querySelectorAll('.cobro-card')).find((c) => c.offsetParent && c.textContent.indexOf('#' + n) >= 0); const v = c && c.querySelector('.cob-ir'); if (v) v.setAttribute('data-auf', '1'); }, n);
+    await tocar('[data-auf="1"]', '', '', { espera: 600 });
+    return esperar(() => { const d = document.getElementById('ordDrawer'); return d && d.classList.contains('open') && /Juntada o evento/.test((document.getElementById('ordBody') || {}).textContent || '') || null; }, null, 20000);
+  };
+  if (!chk('instante: «Ver pedido ›» abre la ficha', !!(await abrirFicha()))) return;
+  /* Los dos botones están abajo de la ficha: se traen a la vista, como con el dedo (si no, el toque cae fuera y no mide nada). */
+  /* Viven en «Más opciones» (un <details> cerrado mide pero no se toca): se abre tocando su título, y se traen a la vista. */
+  const verOp = async (txt) => {
+    const cerrado = await pg.evaluate((txt) => { document.querySelectorAll('[data-aumas]').forEach((x) => x.removeAttribute('data-aumas'));
+      const b = [].find.call(document.querySelectorAll('#ordBody .ord-trajo-op'), (x) => x.textContent.indexOf(txt) >= 0); const d = b && b.closest('details');
+      if (d && !d.open) { const s = d.querySelector(':scope > summary'); if (s) { s.setAttribute('data-aumas', '1'); s.scrollIntoView({ block: 'center' }); return true; } } return false; }, txt);
+    if (cerrado) { await T(300); await tocar('[data-aumas="1"]', '', '', { espera: 500 }); }
+    await pg.evaluate((txt) => { const b = [].find.call(document.querySelectorAll('#ordBody .ord-trajo-op'), (x) => x.textContent.indexOf(txt) >= 0); if (b) b.scrollIntoView({ block: 'center' }); }, txt);
+    await T(500);
+  };
+  await verOp('Juntada o evento');
+  /* El clic por código: acá se mide el tiempo hasta que la pantalla cambia. Si el dedo llega al botón se anota aparte. */
+  const clicOp = async (txt) => { const tapa = await pg.evaluate((txt) => { const b = [].find.call(document.querySelectorAll('#ordBody .ord-trajo-op'), (x) => x.textContent.indexOf(txt) >= 0);
+      if (!b) return 'no está'; const r = b.getBoundingClientRect(), e = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2); const libre = e === b || b.contains(e);
+      b.click(); return libre ? '' : ((e && (e.className || e.tagName)) + ' «' + String(e && e.textContent || '').trim().slice(0, 40) + '»'); }, txt);
+    if (tapa === 'no está') return null;
+    chk('instante: «' + txt + '» de la ficha se puede tocar con el dedo' + (tapa ? ' (lo tapa ' + tapa + ')' : ''), !tapa, tapa); return true; };
+  await medirInstante('instante: ficha › «Juntada o evento» → la tarjeta pasa a Juntadas', () => clicOp('Juntada o evento'), enJnt, n);
+  /* El reloj arranca con el botón ya habilitado (la ficha se repinta después de la juntada). */
+  await esperar(() => { const b = [].find.call(document.querySelectorAll('#ordBody .ord-trajo-op'), (x) => /Casa/.test(x.textContent)); return b && !b.disabled || null; }, null, 10000);
+  await verOp('Casa');
+  await medirInstante('instante: ficha › «Casa» → vuelve a la tarjeta del cliente', () => clicOp('Casa'), enCli, n);
+  await pg.evaluate(() => { try { if (typeof closeOrdDetail === 'function') closeOrdDetail(); } catch (e) {} const d = document.getElementById('ordDrawer'); if (d) d.classList.remove('open'); });
+  /* 2. Cobrarlo desde Cobranza: la tarjeta se va. */
+  await tarjetaDe(n);
+  await pg.evaluate((n) => { const c = [].slice.call(document.querySelectorAll('.cobro-card')).find((c) => c.offsetParent && c.textContent.indexOf('#' + n) >= 0); if (c) c.setAttribute('data-au', 'i'); }, n);
+  await tocar('.cobro-card[data-au="i"] .cobro-btn-cobrado', 'Cobrar');
+  const ab = await esperar(() => { const o = document.getElementById('cobroRutaOverlay'); return o && !o.classList.contains('hidden') || null; }, null, 10000);
+  if (!chk('instante: «Cobrar» abre el cuadro', !!ab)) return;
+  if (await visible('#cobroRecEf')) { const v = await pg.inputValue('#cobroRecEf').catch(() => ''); if (!v) await pg.fill('#cobroRecEf', String(f.prod.total)); }
+  if (await visible('#cobroQuienSection')) { const q = await pg.evaluate(() => [].slice.call(document.querySelectorAll('#cobroQuien .cobro-pill')).filter((b) => b.offsetParent && b.classList.contains('on')).length); if (!q) await tocar('#cobroQuien .cobro-pill', ''); }
+  await medirInstante('instante: Cobranza › «Confirmar cobro» → la tarjeta se va', () => tocar('#btnCobroRutaOk', ''), (n) => ![].some.call(document.querySelectorAll('#cobrosContent .cobro-card'), (c) => c.offsetParent && c.textContent.indexOf('#' + n) >= 0) || null, n);
+  console.log('       tiempos: ' + TIEMPOS.join(' · '));
+}
 (async () => {
   await abrir();
   console.log('robot: ' + (await pg.evaluate(() => SESSION.nombre + ' / ' + SESSION.usuario + ' / ' + SESSION.rol)) + ' · ' + MOTOR);
   if (process.env.LIMPIAR) { console.log('limpiar', JSON.stringify(await rpc('robot_limpiar', { p_corrida: 'audit-' + Date.now() })).slice(0, 500)); if (process.env.LIBRO) await libroEnSuLugar(); await br.close(); return; }
   E = await rpc('robot_entidades_pantalla', {}); if (process.env.EXPLORAR) console.log('E ' + JSON.stringify(E).slice(0, 600)); if (process.env.EXPLORAR) console.log('PRUEBA en D.stock ' + JSON.stringify(await pg.evaluate((sku) => (D.stock || []).filter((x) => /PRUEBA/i.test(JSON.stringify(x).slice(0, 300))).slice(0, 3), E.producto)).slice(0, 600));
-  const fl = (process.env.FLUJO || 'cobranza').replace(/^todo$/, 'cobranza,yapago,juntada,ruta,red,unir,propina');
+  const fl = (process.env.FLUJO || 'cobranza').replace(/^todo$/, 'cobranza,yapago,juntada,ruta,red,unir,propina,instante');
   try {
     if (/cobranza/.test(fl)) await flujoCobranza();
     if (/yapago/.test(fl)) await flujoYaPago();
@@ -941,6 +1013,7 @@ async function libroEnSuLugar() {
     if (/unir/.test(fl)) await flujoUnir();
     if (/propina/.test(fl)) await flujoPropina();
     if (/negativo/.test(fl)) await flujoNegativo();
+    if (/instante/.test(fl)) await flujoInstante();
   } catch (e) { mal++; console.log('  MAL  reventó: ' + (e && e.stack || e)); await foto('revento'); }
   const ej = errs.filter((e) => !/favicon|ERR_ABORTED|WebKit encountered an internal error|ERR_INTERNET_DISCONNECTED/.test(e));
   chk('sin errores de JS ni de la base', ej.length === 0, [...new Set(ej)].slice(0, 12));

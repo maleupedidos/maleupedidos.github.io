@@ -18880,7 +18880,7 @@ function _leerVersion(app){
    "El HTML no sabe que version es" dejo de ser cierto: el build le escribe
    adentro el CACHE_NAME de sw-panel.js, el mismo que deploy.sh obliga a subir en
    cada cambio. Si lo publicado dice otra cosa, esta pagina es vieja. Punto. */
-var _APP_CN_PAGINA='maleu-panel-v1332';
+var _APP_CN_PAGINA='maleu-panel-v1333';
 
 /* Devuelve [{k,v}] si lo publicado no es lo que esta pagina corre. */
 function _chequearVersiones(){
@@ -24646,7 +24646,10 @@ function _baseRpc(rpc,args){
     if(!sb||!sb.token||!sb.url)throw new Error('sin permiso de la base');
     return _baseReintenta(function(){ return fetch(sb.url+'/rest/v1/rpc/'+rpc,{method:'POST',headers:{apikey:sb.key,Authorization:'Bearer '+sb.token,'Content-Type':'application/json'},body:JSON.stringify(args||{})}); })
       .then(function(r){ if(!r.ok)throw new Error('la base contestó '+r.status); return r.json(); })
-      .then(function(d){ if(!d||d.ok===false)throw new Error((d&&d.err)||('la base no armó '+rpc)); return d; });
+      .then(function(d){ if(!d||d.ok===false)throw new Error((d&&d.err)||('la base no armó '+rpc));
+        /* (24/11/2026) Toda escritura directa confirmada pasa por el mismo camino que las órdenes: la pantalla al instante. */
+        if(/_directo$/.test(rpc)&&typeof _ordenConfirmada==='function')try{ _ordenConfirmada({action:rpc},(d.baseEscribio===undefined&&!d.diferida)?Object.assign({},d,{baseEscribio:true}):d); }catch(eOC){}
+        return d; });
   });
 }
 /* (3/11/2026, a pedido del Organizador) POR APARATO: con `sinApps=si` corta solo donde ya hay SESION PROPIA de la base
@@ -25136,10 +25139,20 @@ function _ordenSenalPendiente(canal){
   (tabs[canal]||[]).forEach(function(k){_ordenCambios[k]=(_ordenCambios[k]||0)+1;});
   if(typeof _tabsEnsuciar==='function')_tabsEnsuciar();
 }
+/* LA PANTALLA AL INSTANTE, COMO REGLA DEL ERP (24/11/2026, Tadeo: «no deberíamos lograr que cada botón actualice la
+   pantalla en tiempo real?»). Home 2564: marcó la juntada desde la ficha, la base la escribió en el acto y la tarjeta de
+   Cobranza tardó ~50 s en pasar a «Juntadas». La causa: `pedido_grupal_directo` no contesta `baseEscribio`, y acá eso
+   cortaba; Cobranza tampoco tenía su recarga. Ahora es UN SOLO CAMINO para toda escritura que la base confirma (las
+   órdenes de `_ordenDirecta` y toda RPC `…_directo` de `_baseRpc`): todas las tabs quedan marcadas como viejas
+   (`_ordenCambios`) y la que está abierta se recarga YA con su `window.__ordenVistas[tab]`; las otras, al entrar (`go`).
+   Solo lo ESCRITO (`baseEscribio:true`; una orden solo encolada no se presenta como escrita). Las RPC `…_directo` que
+   escriben en el acto no traen la marca: `_baseRpc` se la pone si no dicen `diferida`. Una tab nueva se suma registrando
+   su `__ordenVistas`, no botón por botón. */
 function _ordenConfirmada(body,r){
   if(r&&r.ok&&typeof _tabsEnsuciar==='function')_tabsEnsuciar();
   if(!r||!r.ok||r.baseEscribio!==true)return;
-  ['pedidos','caja','egresos','ruta','busqueda'].forEach(function(k){_ordenCambios[k]=(_ordenCambios[k]||0)+1;});
+  _TABS_TODAS.forEach(function(k){_ordenCambios[k]=(_ordenCambios[k]||0)+1;});
+  try{ window.__trasEscribir={t:Date.now(),a:(body&&body.action)||''}; }catch(e){}
   clearTimeout(_ordenVistaTimer);_ordenVistaTimer=setTimeout(_ordenVistaPedir,150);
 }
 function _ordenVistaPedir(){
@@ -25159,6 +25172,11 @@ window.__ordenVistas.pedidos=function(){
   if(_palancaVal('pedidosArma')!=='si')return null;
   if(_hayEditorAbierto())return false;
   return _pedVivoTodo();
+};
+/* (24/11/2026) COBRANZA: su lista es la de Ruta (`fetchCobrosPendientes`, fresca), y se repinta. */
+window.__ordenVistas.cobranza=function(){
+  if(typeof window.fetchCobrosPendientes!=='function')return null;
+  return Promise.resolve(window.fetchCobrosPendientes(true)).then(function(){ _cobRepintar(); return true; },function(){ return false; });
 };
 window.__ordenVistas.caja=window.__ordenVistas.egresos=function(){
   if(_palancaVal('cajaArma')!=='si')return null;

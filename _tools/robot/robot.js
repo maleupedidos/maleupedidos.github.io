@@ -498,16 +498,38 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
     return { ok: !mal2.length, detalle: hechos.join(' → ') };
   }, { escribe: true, topeMs: 120000 });
 
+  /* El depósito PRUEBA, esperando (hasta 2 min) a que no esté en negativo: el paso «pedido sin stock» vende 8 con 3 y lo
+     cancela, y el libro pasa por −5 hasta que se acomoda. Contar un negativo no se puede («cantidad invalida»). */
+  const pruebaNoNegativo = async () => {
+    let v = null; const t0 = Date.now();
+    while (Date.now() - t0 < 120000) {
+      const d = await rpc('stock_tab_pantalla', {}).catch(() => null);
+      const p = ((d && d.stock) || []).find((x) => String(x.a || x.abbr || '').trim() === SKU);
+      v = p ? (Number(((p.pd || p.porDep) || {})[DEP]) || 0) : null;
+      if (v == null || v >= 0) return v;
+      /* Si a los 30 s sigue en negativo es que lo dejaron así los pasos de antes (venden PRUEBA de este depósito y la
+         limpieza del final lo repone): se cuenta en 0, solo PRUEBA, y se sigue desde ahí. */
+      if (Date.now() - t0 > 30000) {
+        const c0 = await rpc('stock_contar_directo', { p: { abbr: SKU, deposito: DEP, cantidad: 0, clientOpId: PREFIJO + 'a-cero-' + Date.now(), cv: 'robot' } }).catch(() => null);
+        if (c0 && c0.ok) { console.log('  PRUEBA estaba en ' + v + ' en ' + DEP + ': se contó en 0'); return 0; }
+      }
+      await pausa(5000);
+    }
+    return v;
+  };
   await paso('contar stock y deshacer', async () => {
-    const pp = await prodPrueba(), antes = pp ? pp.stock : null;
-    if (antes == null) return { ok: false, detalle: 'el producto ' + SKU + ' no está en D.stock' };
+    /* (24/11/2026) El conteo es POR DEPÓSITO: el «antes» sale del libro de ese depósito (stock_tab_pantalla › pd), no del
+       total de D.stock. Ese total se recalcula de a un minuto y, justo después de «pedido sin stock → OC → cancelar» (8
+       PRUEBA con 3), quedaba en −5: contaba −4 y la base contestaba «cantidad invalida» (el deploy frenaba sin bug). */
+    const antes = await pruebaNoNegativo();
+    if (antes == null) return { ok: false, detalle: 'el producto ' + SKU + ' no está en el stock por depósito' };
     const contar = (cant, id, extra) => rpc('stock_contar_directo', { p: Object.assign({ abbr: SKU, deposito: DEP, cantidad: cant, clientOpId: PREFIJO + id, cv: 'robot' }, extra || {}) });
     const r1 = await contar(antes + 1, 'contar');
     if (!r1 || !r1.ok) return { ok: false, detalle: 'contar: ' + JSON.stringify(r1).slice(0, 200) };
     /* «Se está acomodando»: el movimiento anterior todavía no terminó de entrar. Se reintenta hasta 2 min. */
     let r2 = null; const tE = Date.now(); for (let k = 0; k < 12; k++) { r2 = await contar(antes, 'descontar', { desmarcar: true }); if (!(r2 && r2.acomodando)) break; await pausa(10000); }
     METRICAS.espera_contar_ms = Date.now() - tE;
-    if (!r2 || !r2.ok) return { ok: false, detalle: 'deshacer: ' + JSON.stringify(r2).slice(0, 200) };
+    if (!r2 || !r2.ok) return { ok: false, detalle: 'deshacer a ' + JSON.stringify(antes) + ': ' + JSON.stringify(r2).slice(0, 200) };
     return { ok: true, detalle: antes + ' → ' + (antes + 1) + ' → ' + antes + ' · el deshacer esperó ' + Math.round(METRICAS.espera_contar_ms / 1000) + ' s («se está acomodando»)' };
   }, { escribe: true, topeMs: 130000 });
 
@@ -524,7 +546,7 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
     const libro = stockPd;
     const reintentar = async (fn) => { let r = null; for (let k = 0; k < 12; k++) { r = await fn(); if (!(r && r.acomodando)) break; await pausa(10000); } return r; };
     const tras = (desde, hacia, id) => reintentar(() => rpc('stock_traspaso_directo', { p: { action: 'stockTraspaso', abbr: SKU, desde: desde, hacia: hacia, cantidad: 1, clientOpId: PREFIJO + id } }));
-    const a0 = await libro(); let contado = false;
+    await pruebaNoNegativo(); const a0 = await libro(); let contado = false;
     if (a0.prueba < 1) {
       const c = await rpc('stock_contar_directo', { p: { abbr: SKU, deposito: DEP, cantidad: 1, clientOpId: PREFIJO + 'tr-contar', cv: 'robot' } });
       if (!c || !c.ok) return { ok: false, detalle: 'no pude poner 1 en ' + DEP + ': ' + JSON.stringify(c).slice(0, 160) };
