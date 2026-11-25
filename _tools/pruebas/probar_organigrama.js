@@ -87,19 +87,19 @@ const sinScroll = `document.documentElement.scrollWidth<=document.documentElemen
   const A = JSON.parse(await evaluar(cli, `(function(){var cs=[].slice.call(document.querySelectorAll('#orgBody .org-c'));
     return JSON.stringify({cards:cs.length,ids:cs.map(function(c){return c.dataset.id}),vac:cs.filter(function(c){return c.classList.contains('vacio')}).map(function(c){return c.dataset.id+':'+c.querySelector('.org-vac').textContent}),
       base:ORG.d.puestos.length,baseVac:ORG.d.puestos.filter(function(x){return !x.ocupan.length}).map(function(x){return x.id}),
-      carga:[].map.call(document.querySelectorAll('.org-cg'),function(b){return b.dataset.p+'='+b.querySelector('b').textContent+(b.classList.contains('alta')?'!':'')}),
+      carga:document.querySelectorAll('.org-cg,.org-carga').length,desc:document.querySelectorAll('#orgBody .org-c-r,#orgBody .org-c-num,#orgBody .org-tag').length,
+      soloTitulo:cs.every(function(c){return [].every.call(c.children,function(k){return /org-c-(n|q)/.test(k.className)})}),
       ger:[].map.call(document.querySelectorAll('.org-g'),function(d){return d.dataset.id+(d.open?'+':'-')}),
-      matriz:(document.querySelector('.org-matriz')||{}).textContent||'',punt:[].map.call(document.querySelectorAll('.org-tag.punt'),function(t){return t.textContent}),
+      ley:(document.querySelector('.org-ley')||{}).textContent||'',mat:!!document.querySelector('.org-c.matricial[data-id="tecnologia"],.org-g.matricial[data-id="tecnologia"]'),punt:!!document.querySelector('.org-c.punteada[data-id="cobranzas"]'),
       sinScroll:${sinScroll},chico:[].filter.call(document.querySelectorAll('#orgBody button,#orgBody summary,#orgBody .org-c'),function(b){var r=b.getBoundingClientRect();return r.width>0&&r.height>0&&r.height<${CEL ? 40 : 28}}).map(function(b){return (b.className||b.tagName)+':'+Math.round(b.getBoundingClientRect().height)}).slice(0,6),
       cortados:[].filter.call(document.querySelectorAll('#orgBody .org-c-n,#orgBody .org-cg-n,#orgBody .org-g-t b'),function(e){return e.offsetParent&&e.scrollWidth>e.clientWidth+1}).length})})()`));
   console.log('     encabezado:', enc.trim(), '· tarjetas', A.cards, 'de', A.base, '· gerencias', A.ger.join(' '));
-  console.log('     puestos por persona:', A.carga.join('  '));
   if (CEL) chk(A.ger.length === 4 && A.ger.every((g) => g.endsWith('-')), 'celular: 4 gerencias plegadas');
   else chk(A.cards === A.base, 'compu: las ' + A.base + ' tarjetas de la base, todas a la vista');
   chk(JSON.stringify(A.vac.map((v) => v.split(':')[0]).filter((id) => A.ids.indexOf(id) >= 0).sort()) === JSON.stringify(A.baseVac.filter((id) => A.ids.indexOf(id) >= 0).sort()) && A.vac.every((v) => /Puesto vacío$/.test(v)), 'los vacíos de la base dicen «Puesto vacío»: ' + A.vac.length);
-  chk(/^Lucas Moresco=11!$/.test(A.carga[0]) && /^Tadeo Ustariz=6!$/.test(A.carga[1]), 'puestos por persona: Lucas 11 y Tadeo 6 primero, marcados');
-  chk(/Tecnología.*matricial/.test(A.matriz), 'Tecnología matricial: ' + A.matriz.trim());
-  chk(A.punt.some((t) => /Línea punteada con Tesorería/.test(t)) && (CEL || A.punt.some((t) => /Le da servicio: Cobranzas/.test(t))), 'Cobranzas punteada con Tesorería');
+  chk(!A.carga && !A.desc && A.soloTitulo, 'solo el organigrama: sin «Puestos por persona», cada tarjeta es título + quién (' + A.desc + ' descripciones)');
+  chk(A.mat && /Matricial/.test(A.ley), 'Tecnología matricial (borde y leyenda)');
+  chk(A.punt && /Línea punteada/.test(A.ley), 'Cobranzas en línea punteada (borde y leyenda)');
   chk(A.sinScroll, 'sin scroll de costado');
   chk(!A.chico.length, 'nada tocable más chico de lo debido ' + A.chico.join(' '));
   chk(!A.cortados, 'ningún nombre cortado (' + A.cortados + ')');
@@ -114,7 +114,7 @@ const sinScroll = `document.documentElement.scrollWidth<=document.documentElemen
   }
 
   /* 3 · La ficha de la persona */
-  await clic(cli, '.org-cg[data-p="Lucas Moresco"]'); await T(900);
+  await clic(cli, '.org-c[data-id="director"] .org-per[data-p="Lucas Moresco"]'); await T(900);
   const F = JSON.parse(await evaluar(cli, `(function(){var f=document.getElementById('eqFicha');return JSON.stringify({on:!!f&&f.classList.contains('on'),modo:EQ.modo,
     hs:[].map.call(f.querySelectorAll('.eqf-h'),function(h){return h.textContent.trim()}),ps:f.querySelectorAll('.orgf-p').length,
     erp:[].map.call(f.querySelectorAll('.eqf-cond'),function(c){return c.innerText.replace(/\\s+/g,' ')}),plata:!!f.querySelector('.eqf-kpis,.eqf-pagar'),
