@@ -51,8 +51,12 @@ function credenciales() {
 }
 
 /* ── los pasos ─────────────────────────────────────────────────────────────────────────────── */
-const pasos = [], hallazgos = [];
+const pasos = [], hallazgos = [], intermitentes = [];
 let cli = null;
+/* (25/11/2026) ROBOT_FALLA_SIMULADA=<regex del paso>:<cuántas vueltas falla> — para probar el reintento sin esperar a que
+   la red falle sola: «:1» falla la 1ª y corre de verdad la 2ª (tiene que quedar verde + intermitente); «:2» falla las dos
+   (tiene que frenar). La vuelta simulada no corre el paso. Solo para probar el robot: no va en deploy.sh ni en el workflow. */
+const _SIM = (function () { const m = String(process.env.ROBOT_FALLA_SIMULADA || '').match(/^(.+):(\d+)$/); return m ? { re: new RegExp(m[1], 'i'), n: Number(m[2]), cuenta: {} } : null; })();
 const ev = (expr, ms) => Promise.race([cdp.evaluar(cli, expr), new Promise((_, no) => setTimeout(() => no(new Error('la página no contestó en ' + ((ms || 30000) / 1000) + ' s')), ms || 30000))]);
 async function esperar(expr, ms) { const t0 = Date.now(); while (Date.now() - t0 < ms) { try { const v = await ev(expr, 10000); if (v) return v; } catch (e) {} await pausa(250); } return null; }
 /* Un paso: corre `fn`, mide cuánto tarda, y anota lo que intentó salir a Apps Script en el medio. `fn` devuelve
@@ -75,7 +79,9 @@ async function paso(nombre, fn, opt) {
   const vuelta = async () => {
     const antes = await ev(`(window.__ensayoApps||[]).length`).catch(() => 0), antesS = await ev(`JSON.stringify(window.__sinApps||{})`).catch(() => '{}'), t0 = Date.now();
     let r;
-    try { r = await fn(); } catch (e) { r = { ok: false, detalle: 'reventó: ' + String((e && e.message) || e).slice(0, 200) }; }
+    const sim = _SIM && _SIM.re.test(nombre) && (_SIM.cuenta[nombre] = (_SIM.cuenta[nombre] || 0) + 1) <= _SIM.n;
+    if (sim) r = { ok: false, detalle: 'falla simulada (ROBOT_FALLA_SIMULADA, vuelta ' + _SIM.cuenta[nombre] + ')' };
+    else try { r = await fn(); } catch (e) { r = { ok: false, detalle: 'reventó: ' + String((e && e.message) || e).slice(0, 200) }; }
     const ms = Date.now() - t0;
     const apps = await ev(`(function(){ var l=(window.__ensayoApps||[]).slice(${antes}).map(function(x){ return x.m+' '+x.a; }), a=${'${antesS}'}, c=window.__sinApps||{};
     Object.keys(c).forEach(function(k){ if(c[k]>(a[k]||0))l.push('GET '+k); }); return l; })()`).catch(() => []);
@@ -87,7 +93,8 @@ async function paso(nombre, fn, opt) {
     console.log('  ..   ' + nombre + '  falló en ' + ms + ' ms (' + String(r.detalle || '').slice(0, 160) + '): un reintento');
     const v2 = await vuelta();
     if (v2.r.ok && !v2.apps.length) {
-      hallazgos.push('intermitente: «' + nombre + '» falló en ' + ms + ' ms (' + String(r.detalle || 'falló').slice(0, 200) + ') y pasó al reintento en ' + v2.ms + ' ms');
+      const _int = '«' + nombre + '» falló en ' + ms + ' ms (' + String(r.detalle || 'falló').slice(0, 200) + ') y pasó al reintento en ' + v2.ms + ' ms';
+      hallazgos.push('intermitente: ' + _int); intermitentes.push(_int);
       r = Object.assign({}, v2.r, { detalle: 'INTERMITENTE (pasó al reintento en ' + v2.ms + ' ms; la 1ª falló en ' + ms + ' ms) · ' + (v2.r.detalle || '') });
       ms = v2.ms; apps = v2.apps;
     } else { r = v2.r; apps = v2.apps; r.detalle = 'falló dos veces · ' + (r.detalle || ''); ms = v2.ms; }
@@ -1014,6 +1021,13 @@ async function terminar() {
   if (!process.env.ROBOT_SIN_REPORTE && cli) {
     const r = await rpc('robot_resultado', { p: { corrida: CORRIDA, inicio: ahora.toISOString(), fin: new Date().toISOString(), pasos: pasos, hallazgos: hallazgos, metricas: METRICAS } }).catch((e) => ({ error: e.message }));
     console.log('resultado en la base: ' + JSON.stringify(r).slice(0, 160));
+  }
+  /* (25/11/2026, 844) En el deploy no se guarda corrida (ROBOT_SIN_REPORTE): lo intermitente va a una alerta técnica propia
+     («robot intermitente»), una por deploy. Si algo quedó en rojo no hace falta: el deploy frena y se ve en la consola. */
+  if (process.env.ROBOT_SIN_REPORTE && intermitentes.length && !mal && cli) {
+    let ver = ''; try { ver = (fs.readFileSync(path.join(__dirname, '..', '..', 'sw-panel.js'), 'utf8').match(/maleu-panel-(v\d+)/) || [])[1] || ''; } catch (e) {}
+    const r = await rpc('robot_intermitente_avisar', { p: { version: ver, pasos: intermitentes } }).catch((e) => ({ error: e.message }));
+    console.log('intermitente → alerta técnica: ' + JSON.stringify(r).slice(0, 160));
   }
   try { cli && cli.matar(); } catch (e) {}
   try { SERVIDOR && SERVIDOR.kill(); } catch (e) {}
