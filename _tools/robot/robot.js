@@ -416,6 +416,18 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
     const epDe = (ms) => esperar(`(function(){ var p=(D.pedidos||[]).find(function(x){ return x.h===${JSON.stringify(P.h)}&&String(x.n)===${JSON.stringify(n)}; }); return p&&p.ep; })()`, ms);
     const cobrado = await esperar(`(function(){ var p=(D.pedidos||[]).find(function(x){ return x.h===${JSON.stringify(P.h)}&&String(x.n)===${JSON.stringify(n)}; }); return p&&p.ep==='Cobrado'; })()`, 15000);
     hechos.push(pagos3 + ' pagos en ' + Math.round((Date.now() - t0) / 1000) + ' s' + (cobrado ? ' → Cobrado' : ' → NO quedó Cobrado (' + (await epDe(1000)) + ')'));
+    /* (25/11/2026, 848; Organizador) LA CAJA LEE LA JUNTADA: los 3 pagos van en UNA fila «Juntada de PRUEBA · 3 pagos» (el
+       pedido es sin carne) con quién pagó cada uno, y la misma regla con carne dice «Asado». No hay carne PRUEBA (el robot no
+       toca stock real): lo con carne se mide con la regla sobre los productos de ESTE pedido más una carne. */
+    const cj = JSON.parse(await ev(`(async function(){ try{ var d=await _cajaArmaTraer(Date.now(),true); if(d)_cajaCampos(d); go('caja');
+        await new Promise(function(r){setTimeout(r,800);}); window._movMostrar=400; rMovimientos();
+        var g=[].filter.call(document.querySelectorAll('#gList .cj-jnt'),function(e){ return e.textContent.indexOf('#'+${JSON.stringify(n)})>=0; })[0];
+        var m=(D.movimientos||[]).filter(function(x){ return x.jnt&&String(x.pedido||'').indexOf(${JSON.stringify(n)}+' ')===0; });
+        var sk=(m[0]&&m[0].skus)||[];
+        return JSON.stringify({fila:g?g.querySelector('summary').textContent.replace(/\\s+/g,' ').trim():'', n:m.length, quien:m.map(function(x){ return x.quien; }),
+          asado:_juntadaNombre(${JSON.stringify(CLI)},sk.concat(['CEn'])) }); }catch(e){ return JSON.stringify({err:String(e.message||e)}); } })()`, 60000).catch((e) => JSON.stringify({ err: e.message })));
+    const cajaOk = /Juntada de PRUEBA · 3 pagos/.test(cj.fila || '') && cj.n === 3 && (cj.quien || []).indexOf('PRUEBA Ana') >= 0 && /^Asado de PRUEBA/.test(cj.asado || '');
+    hechos.push('Caja: ' + (cj.err ? 'reventó: ' + cj.err : '«' + String(cj.fila || 'sin fila de juntada').slice(0, 90) + '» · con carne «' + cj.asado + '»'));
     const d = await rpc('cobro_parcial_deshacer_directo', { p: { action: 'cobroParcialDeshacer', hoja: P.h, id: n, nota: 'Juntada: PRUEBA Ana', motivo: 'robot de pruebas', clientOpId: PREFIJO + 'jnt-desh', ts: Date.now() } });
     if (!(d && d.ok)) return { ok: false, detalle: hechos.join(' → ') + ' · deshacer: ' + JSON.stringify(d).slice(0, 160) };
     let c2 = null; t0 = Date.now();
@@ -424,7 +436,7 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
     await ev(`_recargarPedidos(); 1`).catch(() => 0);
     const reabre = await esperar(`(function(){ var p=(D.pedidos||[]).find(function(x){ return x.h===${JSON.stringify(P.h)}&&String(x.n)===${JSON.stringify(n)}; }); return p&&p.ep&&p.ep!=='Cobrado'; })()`, 15000);
     hechos.push('deshecho el de Ana: quedan ' + quedan.length + (sinAna ? '' : ' (¡sigue el de Ana!)') + (reabre ? ', por cobrar' : ', SIGUE Cobrado'));
-    return { ok: pagos3 === 3 && !!cobrado && quedan.length === 2 && sinAna && !!reabre && !!d.reabre, detalle: hechos.join(' → ') };
+    return { ok: pagos3 === 3 && !!cobrado && cajaOk && quedan.length === 2 && sinAna && !!reabre && !!d.reabre, detalle: hechos.join(' → ') };
   }, { escribe: true, topeMs: 150000 });
 
   /* (22/11/2026, Home #2567) + PEDIDO CON «YA ME PAGÓ», POR LA PANTALLA, UNO POR MEDIO. Tadeo cargó un autopedido entregado
