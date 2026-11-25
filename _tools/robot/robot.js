@@ -3,6 +3,8 @@
    node _tools/robot/robot.js                 → corre contra producción y deja el resultado en la base
    BASE_URL=http://localhost:8080/app.html     → contra lo local (el backend y la base son los de producción)
    ROBOT_SIN_REPORTE=1                         → no guarda el resultado (para probar el robot)
+   ROBOT_OBSERVADOR=<archivo de sesión admin>  → (24/11/2026) el paso de Mi Portal mide Cobranza con un admin de prueba
+                                                 (solo lectura; `sesion_prueba.py crear <archivo> tadeo admin`)
    ROBOT_TOKEN=<token de Sesiones>             → mientras no exista el usuario robot: entra con una sesión de admin
                                                  y SOLO corre los pasos que no escriben (lecturas y «en seco»)
 
