@@ -66,19 +66,38 @@ async function paso(nombre, fn, opt) {
   if (process.env.ROBOT_SOLO && nombre !== 'entrar' && !new RegExp(process.env.ROBOT_SOLO, 'i').test(nombre)) { console.log('  --   ' + nombre + '  (ROBOT_SOLO)'); return null; }
   if (opt.escribe && process.env.ROBOT_SOLO_LECTURA) { pasos.push({ paso: nombre, ok: true, salteado: true, ms: 0, detalle: 'en el deploy solo lecturas (corre de noche)' }); console.log('  --   ' + nombre + '  (solo lecturas en el deploy)'); return null; }
   if (opt.escribe && !ENTIDADES) { pasos.push({ paso: nombre, ok: true, salteado: true, ms: 0, detalle: 'esperando las entidades PRUEBA (no corrió)' }); console.log('  --   ' + nombre + '  (esperando entidades)'); return null; }
-  const antes = await ev(`(window.__ensayoApps||[]).length`).catch(() => 0), antesS = await ev(`JSON.stringify(window.__sinApps||{})`).catch(() => '{}'), t0 = Date.now();
-  let r;
-  try { r = await fn(); } catch (e) { r = { ok: false, detalle: 'reventó: ' + String((e && e.message) || e).slice(0, 200) }; }
-  const ms = Date.now() - t0;
-  const apps = await ev(`(function(){ var l=(window.__ensayoApps||[]).slice(${antes}).map(function(x){ return x.m+' '+x.a; }), a=${'${antesS}'}, c=window.__sinApps||{};
+  /* (25/11/2026, Organizador) UN REINTENTO, EN EL MOMENTO. La v1338 frenó tres veces en tres pasos distintos que solos dan
+     verde (un traspaso que no contestó en 30 s, un autopedido de 10,4 s, una juntada, un aviso a 2,5 s): el robot medía la
+     red y la carga de la base de ese minuto, no la app, y cada intento costaba media hora. Ahora un paso que falla (sin
+     haber ido a Apps Script, que no es de tiempos) se corre una vez más: si pasa, queda verde y se anota INTERMITENTE en
+     los hallazgos (el paso y los dos tiempos: llega en la alerta técnica de la mañana, y si se repite se ve); si falla las
+     dos veces, frena como siempre. `opt.sinReintento` para un paso que no se puede repetir. */
+  const vuelta = async () => {
+    const antes = await ev(`(window.__ensayoApps||[]).length`).catch(() => 0), antesS = await ev(`JSON.stringify(window.__sinApps||{})`).catch(() => '{}'), t0 = Date.now();
+    let r;
+    try { r = await fn(); } catch (e) { r = { ok: false, detalle: 'reventó: ' + String((e && e.message) || e).slice(0, 200) }; }
+    const ms = Date.now() - t0;
+    const apps = await ev(`(function(){ var l=(window.__ensayoApps||[]).slice(${antes}).map(function(x){ return x.m+' '+x.a; }), a=${'${antesS}'}, c=window.__sinApps||{};
     Object.keys(c).forEach(function(k){ if(c[k]>(a[k]||0))l.push('GET '+k); }); return l; })()`).catch(() => []);
+    if (r.ok && opt.topeMs && ms > opt.topeMs) { r.ok = false; r.detalle = (r.detalle ? r.detalle + ' · ' : '') + 'tardó ' + ms + ' ms (tope ' + opt.topeMs + ')'; }
+    return { r: r, ms: ms, apps: apps };
+  };
+  let v1 = await vuelta(), r = v1.r, ms = v1.ms, apps = v1.apps;
+  if (!r.ok && !apps.length && !opt.esperado && !opt.sinReintento) {
+    console.log('  ..   ' + nombre + '  falló en ' + ms + ' ms (' + String(r.detalle || '').slice(0, 160) + '): un reintento');
+    const v2 = await vuelta();
+    if (v2.r.ok && !v2.apps.length) {
+      hallazgos.push('intermitente: «' + nombre + '» falló en ' + ms + ' ms (' + String(r.detalle || 'falló').slice(0, 200) + ') y pasó al reintento en ' + v2.ms + ' ms');
+      r = Object.assign({}, v2.r, { detalle: 'INTERMITENTE (pasó al reintento en ' + v2.ms + ' ms; la 1ª falló en ' + ms + ' ms) · ' + (v2.r.detalle || '') });
+      ms = v2.ms; apps = v2.apps;
+    } else { r = v2.r; apps = v2.apps; r.detalle = 'falló dos veces · ' + (r.detalle || ''); ms = v2.ms; }
+  }
   if (apps.length) { r.ok = false; hallazgos.push(nombre + ': intentó ir a Apps Script (' + [...new Set(apps)].join(', ') + ')'); }
   /* (5/11/2026, Organizador) ROJO ESPERADO: un paso armado antes de que la base tenga lo suyo (opt.esperado = la migración).
      Si falla, sale como «ESP» con el motivo y no frena el deploy ni cuenta como hallazgo; cuando pase, dice que ya se puede
      sacar la marca. */
   if (opt.esperado && !r.ok && !apps.length) { r = { ok: true, salteado: true, detalle: 'ROJO ESPERADO (hasta la ' + opt.esperado + '): ' + (r.detalle || 'falló') }; }
   else if (opt.esperado && r.ok && !r.salteado) { r.detalle = (r.detalle || '') + ' · ya pasa: sacarle la marca «esperado ' + opt.esperado + '»'; }
-  if (r.ok && opt.topeMs && ms > opt.topeMs) { r.ok = false; r.detalle = (r.detalle ? r.detalle + ' · ' : '') + 'tardó ' + ms + ' ms (tope ' + opt.topeMs + ')'; }
   if (!r.ok && !apps.length) hallazgos.push(nombre + ': ' + (r.detalle || 'falló'));
   pasos.push({ paso: nombre, ok: !!r.ok, ms: ms, salteado: r.salteado || undefined, detalle: String(r.detalle || '').slice(0, 300) + (apps.length ? ' · Apps Script: ' + [...new Set(apps)].join(', ') : '') });
   console.log((r.ok ? (r.salteado && opt.esperado ? '  ESP  ' : '  ok   ') : '  MAL  ') + nombre + '  (' + ms + ' ms)' + (r.detalle ? '  ' + r.detalle : '') + (apps.length ? '  · Apps Script: ' + apps.join(', ') : ''));
