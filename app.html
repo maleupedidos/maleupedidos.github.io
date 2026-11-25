@@ -18939,7 +18939,7 @@ function _leerVersion(app){
    "El HTML no sabe que version es" dejo de ser cierto: el build le escribe
    adentro el CACHE_NAME de sw-panel.js, el mismo que deploy.sh obliga a subir en
    cada cambio. Si lo publicado dice otra cosa, esta pagina es vieja. Punto. */
-var _APP_CN_PAGINA='maleu-panel-v1336';
+var _APP_CN_PAGINA='maleu-panel-v1337';
 
 /* Devuelve [{k,v}] si lo publicado no es lo que esta pagina corre. */
 function _chequearVersiones(){
@@ -23888,6 +23888,8 @@ function _enVivoPuede(canal) {
   if (rol === 'vendedor') return !!u && (canal === 'erp:red:' + u || !!_ENV_HOJAS_REP[canal]);
   /* (6/11/2026, 576) + los tres que escucha Ruta: solo traen ids, Ruta despues pide lo suyo. Antes, 15 s de respaldo. */
   if (rol === 'repartidor') return !!u && (canal === 'erp:reparto:' + u || canal === 'erp:pedidos' || canal === 'erp:compras' || canal === 'erp:stock');
+  /* (24/11/2026, 840) El robot escucha erp:pedidos: mide que lo que marca un representante llegue a Cobranza en menos de 2 s. */
+  if (rol === 'robot') return canal === 'erp:pedidos';
   return false;
 }
 function _enVivoUnir(canal) {
@@ -83592,6 +83594,7 @@ function _rutRedBloqueHTML(pcsRed,opt){
   _rutCVLista().forEach(function(x){rep(x.v.nombre).cv.push(x);});
   /* (10/11/2026) Lo que ya le pagaron al representante en efectivo: aparece en SU tarjeta, como plata a rendir. */
   if(typeof _rutEnMano!=='undefined'&&_rutEnMano)Object.keys(_rutEnMano.porRep||{}).forEach(function(n){rep(n).mano=_rutEnMano.porRep[n];});
+  if(typeof _rutEnMano!=='undefined'&&_rutEnMano)Object.keys(_rutEnMano.tr||{}).forEach(function(k){rep(_rutEnMano.tr[k].rep);});   /* (839) */
   /* (12/11/2026) Con `sinPend` lo no entregado va a la sección «A futuro», no adentro de la deuda. */
   if(!opt.sinPend)_rutCVLista(true).filter(function(x){return x.p.es!=='Entregado'&&x.p.ep!=='Cobrado';}).forEach(function(x){rep(x.v.nombre).pend.push(x);});
   orden.forEach(function(n){porRep[n].cv.sort(function(a,b){return _cobDiaTs(a.p.dia)-_cobDiaTs(b.p.dia);});});
@@ -83614,7 +83617,8 @@ function _rutRedBloqueHTML(pcsRed,opt){
      $0», «Ya entregó $81.500 · falta $0» y el botón «Recibí el efectivo de Rufino». Sin efectivo a rendir, sin plata en
      la mano y sin clientes que deban, no hay nada que hacer con él acá. Lo pendiente de entregar (sin `sinPend`) se queda. */
   orden=orden.filter(function(n){var r=porRep[n];
-    return (r.pc?(Number(r.pc.$)||0):0)+_manoTot(r)+r.cv.reduce(function(s,x){return s+_rutCVMonto(x);},0)>0.5||(r.pend&&r.pend.length>0);});
+    return (r.pc?(Number(r.pc.$)||0):0)+_manoTot(r)+r.cv.reduce(function(s,x){return s+_rutCVMonto(x);},0)>0.5||(r.pend&&r.pend.length>0)
+      ||(typeof _rutEnMano!=='undefined'&&!!_rutEnMano&&Object.keys(_rutEnMano.tr||{}).some(function(k){return _rutEnMano.tr[k].rep===n;}));});   /* (839) un aviso de transferencia también */
   if(!orden.length)return '';
   var tot=0;
   /* (12/11/2026) Lo que el representante YA cobró en efectivo y falta que rinda también es deuda: entra al total. */
@@ -83646,6 +83650,11 @@ function _rutRedBloqueHTML(pcsRed,opt){
       var _vistoCli={};
       r.cv.forEach(function(x){var kc=_rutCVCliK(x);c+=_rutCVItemHTML(x,!_vistoCli[kc]);_vistoCli[kc]=1;});
     }
+    /* (839) Lo que el representante avisó que le transfirieron y no está en la lista de arriba (todavía no se releyó, o
+       el pedido no viene en los abiertos): igual se ve en su tarjeta, al instante. */
+    var _trSueltos=Object.keys((typeof _rutEnMano!=='undefined'&&_rutEnMano&&_rutEnMano.tr)||{}).map(function(k){return _rutEnMano.tr[k];}).filter(function(a){
+      return _vendNombreLimpio(a.rep)===n&&!r.cv.some(function(x){return String(x.p.n)===String(a.n);});});
+    if(_trSueltos.length)c+=_trSueltos.map(function(a){return '<div class="cobro-red-avtr">'+_rtcEsc(n.split(' ')[0])+' avisó que le transfirieron '+formatMoney(a.monto)+' (#'+_rtcEsc(a.n)+(a.at?', '+_rtcEsc(a.at):'')+'): fijate si entró</div>';}).join('');
     if(r.mano&&r.mano.length){
       var _tm=r.mano.reduce(function(s2,x){return s2+x.monto;},0), _pn=_rtcEsc(n.split(' ')[0]), _dn=_rtcEsc(n);
       /* (13/11/2026) Tadeo tenía los $253.000 de Lourdes y el ERP no le daba con qué registrarlos: esto era solo para
@@ -84430,7 +84439,7 @@ function _rutCVItemHTML(x,conMsg){
       +(!cob&&p.es==='Entregado'&&dias>=3?'<br><span class="cobro-red-pend">Hace '+dias+' días y no pagó: escribile a '+_rutEsc(cliN)+'</span>':'')
       +'</span><b>'+formatMoney(monto)+'</b></div>';
     if(cob)c+='<div style="font-size:11px;color:#E65100;font-weight:700;margin:0 0 4px">Ya transfirió: falta decir a qué cuenta entró (todavía no suma en Caja)</div>';
-    var _avTr=!cob&&_rutEnMano&&_rutEnMano.tr&&_rutEnMano.tr[String(p.n==null?'':p.n).trim()];
+    var _avTr=!cob&&typeof _rutEnMano!=='undefined'&&_rutEnMano&&_rutEnMano.tr&&_rutEnMano.tr[String(p.n==null?'':p.n).trim()];
     if(_avTr)c+='<div class="cobro-red-avtr">'+_rutEsc(String(_avTr.rep||vN).split(' ')[0])+' avisó que '+_rutEsc(cliN)+' le transfirió'+(_avTr.at?' ('+_rutEsc(_avTr.at)+')':'')+': fijate si entró y tocá «Ya transfirió»</div>';
     if(_rutCVguardando[x.k]){
       c+='<div class="cobro-cv-guardando">Guardando'+_rutEsc(_rutCVguardando[x.k])+'… puede tardar unos segundos, no hace falta volver a tocar</div>';

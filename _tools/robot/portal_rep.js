@@ -20,19 +20,38 @@ module.exports = async function portalRep(o) {
   const cli = await o.cdp.abrir();
   const ev = (e, ms) => Promise.race([o.cdp.evaluar(cli, e), new Promise((_, no) => setTimeout(() => no(new Error('el portal no contestó')), ms || 20000))]);
   const esperar = async (e, ms) => { const t0 = Date.now(); while (Date.now() - t0 < ms) { try { const v = await ev(e, 8000); if (v) return v; } catch (x) {} await pausa(150); } return null; };
-  const A = o.admin;
+  let A = o.admin, cliObs = null;
+  /* OBSERVADOR (24/11/2026): el usuario robot no escucha el en vivo (las policies de realtime son de admin), así que su
+     Cobranza se entera recién al refrescar. Con `o.observador` (archivo de una sesión admin de prueba, de solo lectura:
+     `sesion_prueba.py crear <archivo> tadeo admin`) la Cobranza que se mide es la de un admin, como la ve Tadeo. */
+  if (o.observador) {
+    const P = require('path').join(__dirname, '..', 'pruebas');
+    process.env.PREP_SESION = JSON.stringify({ usuario: 'tadeo', rol: 'admin', nombre: 'Tadeo Ustariz', ts: Date.now() });
+    cliObs = await o.cdp.abrir();
+    await cliObs.enviar('Page.enable'); await cliObs.enviar('Runtime.enable');
+    await cliObs.enviar('Page.addScriptToEvaluateOnNewDocument', { source: require(P + '/sesion_prep.js')('prueba') + require(P + '/sbses_guarda.js')(o.observador, 'tadeo') });
+    await cliObs.enviar('Page.navigate', { url: o.url });
+    const evO = (e, ms) => Promise.race([o.cdp.evaluar(cliObs, e), new Promise((_, no) => setTimeout(() => no(new Error('el observador no contestó')), ms || 20000))]);
+    const espO = async (e, ms) => { const t0 = Date.now(); while (Date.now() - t0 < ms) { try { const v = await evO(e, 8000); if (v) return v; } catch (x) {} await pausa(100); } return null; };
+    if (!(await espO(`typeof go==='function'&&typeof SESSION!=='undefined'&&!!SESSION&&!!(window._palancaVal&&_palancaVal('stockArma'))`, 60000))) throw new Error('el observador admin no arrancó');
+    A = { ev: evO, esperar: espO };
+  }
   /* Un toque de verdad sobre el elemento que devuelve `sel` (expresión JS). Falla si no está o si algo lo tapa. */
   const tocar = async (sel, que) => {
+    /* El aviso de abajo («Listo… Deshacer») tapa la barra unos segundos, a propósito: se espera a que se vaya, como el dedo. */
+    await esperar(`!document.querySelector('.toast.show')`, 9000);
     const r = await ev(`(function(){ var e=${sel}; if(!e)return null; e.scrollIntoView({block:'center'});
       var b=e.getBoundingClientRect(), x=b.left+b.width/2, y=b.top+b.height/2, h=document.elementFromPoint(x,y);
       return {x:x, y:y, alto:Math.round(b.height), ok:!!h&&(h===e||e.contains(h)), h:h?String(h.className||h.tagName).slice(0,40):''}; })()`);
     if (!r) throw new Error(que + ': no está en pantalla');
     if (!r.ok) throw new Error(que + ': lo tapa «' + r.h + '»');
     if (r.alto < 40) malos.push(que + ': mide ' + r.alto + ' px de alto (menos de 44)');
+    const t0 = Date.now();
     await cli.enviar('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: r.x, y: r.y, radiusX: 2, radiusY: 2, force: 1, id: 1 }] });
     await pausa(40);
     await cli.enviar('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
     await pausa(250);
+    return t0;
   };
   const filaDe = (cont, txt) => `[].slice.call(document.querySelectorAll('#pg-miportal ${cont}')).filter(function(f){ return (f.innerText||'').indexOf(${JSON.stringify(txt)})>=0; })[0]`;
   let N = String(o.n || '');
@@ -40,7 +59,17 @@ module.exports = async function portalRep(o) {
   /* La fila de cobro del pedido N (Hoy y la ficha la marcan con data-n). */
   const enFila = (cont, btn) => `(function(){ var f=document.querySelector('#pg-miportal ${cont}[data-n="${N}"]'); return f&&f.querySelector(${JSON.stringify(btn)}); })()`;
   /* La Cobranza del robot (admin): cuánto tarda en aparecer (o irse) un texto. */
-  const cobranza = async (expr, tope) => { const t0 = Date.now(); const ok = await A.esperar(expr, tope || 6000); return ok ? Date.now() - t0 : null; };
+  /* `desde`: el momento del toque (lo que tarda de verdad, no desde después de la pausa del toque). */
+  /* Sin el en vivo en la Cobranza que mira (el usuario robot no lo tiene hasta la 840), no hay señal que medir: a los
+     1,5 s se relee como lo haría el refresco, y el tope de 2 s no se juzga (se dice). Con el en vivo, se mide de verdad. */
+  let VIVO = false;
+  const cobranza = async (expr, tope, desde) => {
+    const t0 = desde || Date.now();
+    let ok = await A.esperar(expr, VIVO ? (tope || 6000) : 1500);
+    if (!ok && !VIVO) { await A.ev(`(typeof _rutManoSenal==='function'&&_rutManoSenal(), 1)`).catch(() => 0); ok = await A.esperar(expr, 5000); }
+    return ok ? Date.now() - t0 : null;
+  };
+  const tarde = (ms, que) => { if (VIVO && ms > 2000) malos.push(que + ' tardó ' + ms + ' ms en verse en Cobranza (tope 2.000)'); };
   const enCob = (txt) => `(function(){ var c=document.getElementById('cobrosContent'); return !!c&&(c.innerText||'').indexOf(${JSON.stringify(txt)})>=0; })()`;
   const paso = async (nombre, fn) => { try { const d = await fn(); hechos.push(nombre + (d ? ' (' + d + ')' : '')); } catch (e) { malos.push(nombre + ': ' + e.message); } };
   try {
@@ -56,6 +85,11 @@ module.exports = async function portalRep(o) {
     if (!(await esperar(`typeof setMainTab==='function'&&typeof renderCobHoy==='function'&&!!document.querySelector('#pg-miportal #ent-card:not(.hidden)')`, 45000))) throw new Error('Mi Portal no pintó Hoy');
     hechos.push('entró como ' + o.usuario + ' a 393 px');
     await A.ev(`go('cobranza'); 1`);
+    /* Que Cobranza termine de cargar (y el en vivo de conectar) antes de medir. */
+    await A.esperar(`(function(){ var c=document.getElementById('cobrosContent'); return !!c&&(c.innerText||'').length>40&&(!window.__enVivo||window.__enVivo.estado!=='conectando'); })()`, 20000);
+    VIVO = (await A.ev(`(window.__enVivo&&window.__enVivo.estado)||''`).catch(() => '')) === 'vivo';
+    hechos.push('Cobranza de ' + (o.observador ? 'un admin' : 'el robot') + (VIVO ? ' con el en vivo' : ' SIN en vivo: se relee y el tope de 2 s no se mide'));
+    met.portal_cobranza_en_vivo = VIVO;
 
     await paso('1 entregar', async () => {
       await ev(`setMainTab('hoy'); 1`);
@@ -67,6 +101,10 @@ module.exports = async function portalRep(o) {
       /* La base tiene que tenerlo entregado antes de cobrar (lo pide red_efectivo_directo). */
       const base = await esperar(`(async function(){ try{ var p=(await _fetchDashboardRetry(1)).pedidos||[]; var x=p.filter(function(y){return String(y.n)===${JSON.stringify(N)};})[0]; if(x&&x.es==='Entregado'){ renderDashboard(await _fetchDashboardRetry(1)); return true; } }catch(e){} return false; })()`, 20000);
       if (!base) throw new Error('la base no lo dio por entregado en 20 s');
+      /* La entrega le manda una señal a Cobranza y la recarga entera (en el deploy medido: el cobro marcado 1 s después tardó
+         2,2 s en verse, contra 0,35 s con Cobranza quieta). En la vida real el cobro llega días después de la entrega: se
+         espera a que esa recarga termine, para medir la señal del cobro y no el choque con la de la entrega. */
+      await A.esperar(`!!window.__rutaVivo&&Date.now()-window.__rutaVivo.t>2500`, 12000);
       return '#' + N;
     });
 
@@ -79,37 +117,38 @@ module.exports = async function portalRep(o) {
       await tocar(enFila('.cb-fila', '.cb-bt:not(.sec)'), '«Me pagó en efectivo»');
       if (!(await esperar(`!!document.getElementById('redCuadroOv')`, 4000))) throw new Error('no abrió el cuadro de cobro');
       await tocar(`document.querySelector('#redCuadroOv button[onclick^="redCuadroBil"]')`, 'billete «Justo»');
-      await tocar(`document.getElementById('redCuadroOk')`, 'Guardar');
+      const tG = await tocar(`document.getElementById('redCuadroOk')`, 'Guardar');
       MARCADO.ef = true;
-      const ms = await cobranza(enCob('lo tiene PRUEBA'), 6000);
+      const ms = await cobranza(enCob('lo tiene PRUEBA'), 6000, tG);
       met.portal_efectivo_en_cobranza_ms = ms;
       if (ms == null) {
         const dx = await ev(`JSON.stringify({aviso:((document.getElementById('redToastBox')||{}).innerText||'').slice(0,140), marcado:Object.keys(_redEf.mios)})`).catch((e) => e.message);
-        await A.ev(`(typeof _rutManoSenal==='function'&&_rutManoSenal(), 1)`).catch(() => 0);
-        const re = await cobranza(enCob('lo tiene PRUEBA'), 5000);
-        throw new Error('Cobranza no lo mostró en 6 s (sin señal en vivo) · ' + (re != null ? 'releyendo a mano SÍ aparece: falta la señal' : 'ni releyendo a mano') + ' · portal: ' + dx);
+        throw new Error('Cobranza no lo mostró · portal: ' + dx);
       }
-      if (ms > 2000) malos.push('«Me pagó en efectivo» tardó ' + ms + ' ms en verse en Cobranza (tope 2.000)');
+      tarde(ms, '«Me pagó en efectivo»');
       return 'en Cobranza en ' + ms + ' ms';
     });
 
     await paso('3 efectivo para Maleu', async () => {
       if (!(await esperar(`(function(){ var c=document.querySelector('#pg-miportal #cb-card'); return !!c&&(c.innerText||'').indexOf('Tenés de Maleu en efectivo')>=0; })()`, 5000))) throw new Error('Hoy no dice cuánto tiene de Maleu');
       if (!(await A.esperar(enCob('¿Recibiste los'), 4000))) throw new Error('Cobranza no le pregunta a Maleu si lo recibió');
-      await tocar(enFila('.cb-fila', '.cb-des'), '«Deshacer» del efectivo');
-      const ms = await cobranza(`!(${enCob('lo tiene PRUEBA')})`, 6000);
+      const tD = await tocar(enFila('.cb-fila', '.cb-des'), '«Deshacer» del efectivo');
+      const ms = await cobranza(`!(${enCob('lo tiene PRUEBA')})`, 6000, tD);
       if (ms == null) throw new Error('deshecho, pero Cobranza lo siguió mostrando 6 s');
       return 'Hoy lo muestra, Cobranza pregunta «¿Recibiste?», deshecho y se fue en ' + ms + ' ms';
     });
 
     await paso('2b «Me dijo que transfirió» y Cobranza', async () => {
       if (!(await esperar(enFila('.cb-fila', '.cb-bt.sec'), 8000))) throw new Error('no está el botón (¿falta la 839?)');
-      await tocar(enFila('.cb-fila', '.cb-bt.sec'), '«Me dijo que transfirió»');
+      const tA = await tocar(enFila('.cb-fila', '.cb-bt.sec'), '«Me dijo que transfirió»');
       MARCADO.tr = true;
-      const ms = await cobranza(`(function(){ var c=document.getElementById('cobrosContent'); return !!c&&[].some.call(c.querySelectorAll('.cobro-red-avtr'),function(x){return x.closest('[data-cv]')&&(x.closest('[data-cv]').innerText||'').indexOf('PRUEBA')>=0;}); })()`, 6000);
+      const ms = await cobranza(`(function(){ var c=document.getElementById('cobrosContent'); return !!c&&[].some.call(c.querySelectorAll('.cobro-red-avtr'),function(x){ var k=x.closest('.cobro-red-card'); return !!k&&(k.innerText||'').indexOf('PRUEBA')>=0; }); })()`, 6000, tA);
       met.portal_aviso_tr_en_cobranza_ms = ms;
-      if (ms == null) throw new Error('Cobranza no mostró el aviso en 6 s');
-      if (ms > 2000) malos.push('«Me dijo que transfirió» tardó ' + ms + ' ms en verse en Cobranza (tope 2.000)');
+      if (ms == null) {
+        const dx = await A.ev(`(async function(){ var sb=await _sbPermiso(true); var d=await (await fetch(sb.url+'/rest/v1/rpc/red_efectivo_pantalla',{method:'POST',headers:{apikey:sb.key,Authorization:'Bearer '+sb.token,'Content-Type':'application/json'},body:'{}'})).json(); return JSON.stringify({base:d.avisosTr, mano:window.__rutManoSenal||0, html:(document.getElementById('cobrosContent').innerHTML.indexOf('avisó que')>=0), card:(function(){ var k=[].filter.call(document.querySelectorAll('#cobrosContent .cobro-red-card'),function(x){return (x.innerText||'').indexOf('PRUEBA')>=0;})[0]; return k?(k.innerText||'').slice(0,200):'sin tarjeta PRUEBA'; })()}); })()`).catch((e) => e.message);
+        throw new Error('Cobranza no mostró el aviso en 6 s · ' + String(dx).slice(0, 500));
+      }
+      tarde(ms, '«Me dijo que transfirió»');
       if (!(await esperar(enFila('.cb-fila', '.cb-des'), 5000))) throw new Error('el portal no lo muestra avisado');
       await tocar(enFila('.cb-fila', '.cb-des'), '«Deshacer» del aviso');
       return 'en Cobranza en ' + ms + ' ms, deshecho';
@@ -165,6 +204,7 @@ module.exports = async function portalRep(o) {
       } catch (e) { malos.push('no se pudo deshacer lo marcado del #' + N + ': ' + e.message); }
     }
     try { cli.matar(); } catch (e) {}
+    try { cliObs && cliObs.matar(); } catch (e) {}
   }
   return { ok: !malos.length, detalle: hechos.join(' · ') + (malos.length ? ' · MAL: ' + malos.join(' | ') : ''), metricas: met };
 };

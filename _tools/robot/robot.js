@@ -692,7 +692,7 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
     /* Sin la 839 en la base (no viene `avisosTr`) no hay aviso ni señal en vivo: se saltea en vez de frenar el deploy. */
     const ep = await rpc('red_efectivo_pantalla', {}).catch(() => null);
     if (!(ep && ep.avisosTr)) return { ok: true, salteado: true, detalle: 'espera la migración 839 (aviso de transferencia y señal a Cobranza)' };
-    const r = await require('./portal_rep.js')({ cdp, url: URL_APP, usuario: CRED.repUsuario, pin: CRED.repPin, n: REP_PED_N, admin: { ev, esperar } });
+    const r = await require('./portal_rep.js')({ cdp, url: URL_APP, usuario: CRED.repUsuario, pin: CRED.repPin, n: REP_PED_N, admin: { ev, esperar }, observador: process.env.ROBOT_OBSERVADOR || '' });
     Object.assign(METRICAS, r.metricas || {});
     return { ok: r.ok, detalle: r.detalle };
   }, { escribe: true, topeMs: 90000 });
