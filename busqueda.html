@@ -1782,15 +1782,21 @@ function _abaAviso(estado) {
    despues de comprar): antes cada una lo copiaba a mano. */
 /* (13/11/2026, 680) {OC: depósito} de las OC abiertas con destino. Se pide con cada lectura (cada 60 s como mucho). */
 var _abaDest = {}, _abaDestT = 0, _abaRepOc = {};   /* (712) {OC: {deposito: cantidad}} */
+/* (845, 25/11/2026) Qué pedidos cubre cada OC abierta: {OC: [{dep, q, k, h, n, cliente}]}. Al recibir, lo primero del reparto
+   sugerido es mandar eso al freezer de cada pedido. Si la base no contesta, {} y el reparto es el de siempre. */
+var _abaOcCubre = {};
 function _abaDestPedir() {
   if (typeof _baseRpc !== 'function' || Date.now() - _abaDestT < 60000) return;
   _abaDestT = Date.now();
   Promise.resolve(typeof _sbPermiso === 'function' ? _sbPermiso() : null).catch(function () {})
-    .then(function () { return _baseRpc('oc_destinos_pantalla', {}); })
-    .then(function (d) {
-      var n = (d && d.destinos) || {}, rp = (d && d.repartos) || {};
-      if (JSON.stringify(n) === JSON.stringify(_abaDest) && JSON.stringify(rp) === JSON.stringify(_abaRepOc)) return;
-      _abaDest = n; _abaRepOc = rp;
+    .then(function () { return Promise.all([_baseRpc('oc_destinos_pantalla', {}), _baseRpc('oc_cubre_base', {}).catch(function () { return null; })]); })
+    .then(function (dd) {
+      var d = dd[0], n = (d && d.destinos) || {}, rp = (d && d.repartos) || {}, cu = (dd[1] && dd[1].oc) || _abaOcCubre;
+      if (JSON.stringify(n) === JSON.stringify(_abaDest) && JSON.stringify(rp) === JSON.stringify(_abaRepOc) && JSON.stringify(cu) === JSON.stringify(_abaOcCubre)) return;
+      _abaDest = n; _abaRepOc = rp; _abaOcCubre = cu;
+      /* (845) La hoja de Recibir arma su sugerencia una vez por proveedor: si esto llega después y nadie tocó nada, se
+         rearma con el reparto nuevo (si no, lo cubierto o lo anotado en la OC no se veía hasta cambiar de proveedor). */
+      if (typeof _abaHj !== 'undefined' && _abaHj && !_abaHj.tocado && !_abaHj.yendo && !_abaHj.resumen) _abaHj = null;
       try { if (!(typeof abaHayEditor === 'function' && abaHayEditor())) abaRender(); } catch (e) {}
     }).catch(function () { _abaDestT = 0; });
 }
@@ -7870,12 +7876,13 @@ function _abaHjArmar(prov) {
   var ocs = _abaHjOcs(prov); if (!ocs.length) return [];
   return agruparOcsPorProducto(ocs).map(function (g) {
     var it = abaCatItem(g.abbr) || {}, dd = _abaRecDepsDe(it);
-    var rep = 0, vivos = [], pasa = [], ct = 0, q = 0, alOtro = 0, conDest = 0, pre = {};
+    var rep = 0, vivos = [], pasa = [], ct = 0, q = 0, alOtro = 0, conDest = 0, pre = {}, cub = {}, cubTot = 0, cubPed = [];
     getOcRowDetails(g.rows).forEach(function (d, i) {
       var oc = _abaHjFila(d.r) || {}, rr = g.rows[i] || {};
       ct += Number(oc.ct) || 0; q += Number(d.q) || 0;
       if (d.isStock) {
         rep += Number(d.q) || 0;
+        (_abaOcCubre[rr.oc] || []).forEach(function (c) { var v = Number(c.q) || 0; if (!(v > 0) || !c.dep) return; cub[c.dep] = (cub[c.dep] || 0) + v; cubTot += v; cubPed.push(c); });
         var rz = _abaRepOc[rr.oc];   /* (712) la OC partida por depósito */
         if (rz && typeof rz === 'object') { conDest++; if (dd) dd.otros.forEach(function (o) { var v = Math.min(Number(d.q) || 0, Number(rz[o]) || 0); pre[o] = (pre[o] || 0) + v; alOtro += v; }); }
         else { var dz = _abaDest[rr.oc]; if (dz) { conDest++; if (dd && dd.otros.indexOf(dz) >= 0) { pre[dz] = (pre[dz] || 0) + (Number(d.q) || 0); alOtro += Number(d.q) || 0; } } }
@@ -7883,7 +7890,22 @@ function _abaHjArmar(prov) {
     });
     var vq = vivos.reduce(function (a, x) { return a + x.q; }, 0), pq = pasa.reduce(function (a, x) { return a + x.q; }, 0);
     var mo = 0;
-    if (dd) {
+    /* (845, Tadeo por el Organizador, 25/11/2026) REPARTO SUGERIDO AL RECIBIR (se puede cambiar, nunca es automático):
+       1) lo que esta OC cubría va al freezer de cada pedido; 2) lo que sobra, según la demanda (el ideal del depósito que
+       recibe, `_repartoIdeal`); 3) el resto, donde digan. El destino anotado en la OC es provisorio: si la OC cubre
+       pedidos, manda la cobertura. */
+    if (dd && cubTot > 0) {
+      var cubTope = Math.min(cubTot, rep), fxC = cubTot > rep ? rep / cubTot : 1;
+      pre = {}; dd.otros.forEach(function (o) { if (cub[o] > 0) pre[o] = Math.round(cub[o] * fxC * 1000) / 1000; });
+      var resto = Math.max(0, rep - cubTope);
+      if (resto > 0 && typeof _repartoIdeal === 'function' && dd.otros.length === 1) {
+        var idl0 = (it.idl || {})[dd.aca], lib0 = (Number((it.pd || {})[dd.aca]) || 0) - (Number((it.pr || {})[dd.aca]) || 0) + (cub[dd.aca] || 0) * fxC;
+        if (idl0 != null) pre[dd.otro] = Math.round(((pre[dd.otro] || 0) + (Number((_repartoIdeal(resto, idl0, lib0) || {}).otro) || 0)) * 1000) / 1000;
+      }
+      dd.otros.forEach(function (o) { mo += Number(pre[o]) || 0; });
+      mo = Math.round(Math.min(rep, mo) * 1000) / 1000;
+    }
+    else if (dd) {
       if (conDest > 0) mo = Math.min(rep, alOtro);
       else if (typeof _repartoIdeal === 'function' && dd.otros.length === 1) {
         var ideal = (it.idl || {})[dd.aca], libre = (Number((it.pd || {})[dd.aca]) || 0) - (Number((it.pr || {})[dd.aca]) || 0);
@@ -7892,7 +7914,7 @@ function _abaHjArmar(prov) {
     }
     return { abbr: g.abbr, prod: g.prod, corto: _abaHjCorto(it.n || g.prod), fam: it.cat || String(g.prod || '').split('—')[0].trim() || 'Otros',
              g: g, it: it, dd: dd, rep: Math.round(rep * 1000) / 1000, vivos: vivos, pasa: pasa, vq: vq, pq: pq,
-             unit: q > 0 ? ct / q : 0, moPre: mo, prePor: pre, kg: _abaUni(g.abbr) === 'kg' };
+             unit: q > 0 ? ct / q : 0, moPre: mo, prePor: pre, kg: _abaUni(g.abbr) === 'kg', cubPed: cubPed };
   });
 }
 function _abaHjEstado(prov, P) {
@@ -8076,6 +8098,8 @@ function _abaHjFilaHtml(x, f) {
   var notas = [];
   if (x.vivos.length) notas.push('incluye ' + x.vivos.map(function (v) { return _abaCant(v.q, '') + ' de ' + _abaH(v.cli) + ' #' + _abaH(v.n); }).join(', ') + ' (reservado)');
   if (x.pasa.length) notas.push(_abaCant(x.pq, '') + ' ya entregado' + (x.pq === 1 ? '' : 's') + ' (pasamanos, no va al freezer)');
+  /* (845) Lo que esta compra cubría: el reparto sugerido ya lo manda al freezer de cada pedido. */
+  if (x.cubPed && x.cubPed.length) notas.push('cubre ' + x.cubPed.map(function (c) { return _abaCant(c.q, '') + ' de ' + _abaH(c.h + ' #' + c.n) + (c.cliente ? ' ' + _abaH(c.cliente) : '') + ' (' + _abaH(_abaHjSigla(c.dep)) + ')'; }).join(', '));
   var cam = ((_abaHjCam[_abaHj.prov] || {}).porAbbr || {})[x.abbr] || [];
   var h = '<div class="hj-f' + (f.ok ? ' ok' : '') + '" id="hjF_' + a + '">'
     + '<label class="hj-top"><span class="hj-ok"><input type="checkbox"' + (f.ok ? ' checked' : '') + ' onchange="abaHjTilde(\'' + a + '\',this.checked)" aria-label="Controlado: ' + _abaH(x.corto) + '"></span>'
@@ -8115,7 +8139,7 @@ function abaHjCambia(abbr, k, val) {
   if (k === 'H') f.h = n; else if (k === 'L') f.l = n; else if (k === 'U') { f.u = n; f.uAuto = false; }
   else if (k.charAt(0) === 'O') { f.o = f.o || {}; f.o[k.slice(1)] = n;
  }
-  f.ok = false; _abaHj.resumen = false; _abaHj.err = '';
+  f.ok = false; _abaHj.resumen = false; _abaHj.err = ''; _abaHj.tocado = true;
   var x = _abaHjArmar(_abaHj.prov).filter(function (y) { return y.abbr === abbr; })[0]; if (!x) return;
   if (k === 'H' || k === 'L' || k.charAt(0) === 'O') { if (f.uAuto) f.u = _abaHjUAuto(x, f); else if (f.u > f.h + f.l) f.u = f.h + f.l; }
   var c = _abaHjCalc(x, f), a = abbr;
