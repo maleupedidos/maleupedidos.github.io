@@ -25469,13 +25469,16 @@ function pcbCambios(el,h,n){
     .then(function(d){
       if(!d||!d.ok){box.textContent='No pude traer los cambios.';return;}
       el.dataset.ok='1';
-      var C=d.cambios||[];
-      box.innerHTML=C.length?C.map(function(c){
-        return '<div class="pcb-it"><b>'+esc(c.el)+' · '+esc(String(c.quien).split(' (')[0])+'</b> <small>('+(c.desde==='portal'?'su portal':'ERP')+')</small><br>'
+      /* (25/11/2026, 843) Con los productos van los MOVIMIENTOS: a quién se pasó, quién lo trajo, el día de entrega, con el
+         nombre de quien lo hizo («Pasado a Lourdes Thomas · Tadeo · 25/11 14:46»). Todo en una lista, lo último arriba. */
+      var _k=function(el){ var m=String(el||'').match(/^(\d{2})\/(\d{2})\/(\d{4})\s*(\d{2}):(\d{2})/); return m?m[3]+m[2]+m[1]+m[4]+m[5]:''; };
+      var C=(d.cambios||[]).map(function(c){ return {k:_k(c.el),h:'<div class="pcb-it"><b>'+esc(c.el)+' · '+esc(String(c.quien).split(' (')[0])+'</b> <small>('+(c.desde==='portal'?'su portal':'ERP')+')</small><br>'
           +[c.ag?'agregó '+esc(c.ag):'',c.sa?'sacó '+esc(c.sa):''].filter(Boolean).join(' · ')
           +' · '+m$(c.antes)+' → '+m$(c.despues)
-          +(c.oc?'<br><small>OC: '+esc(c.oc)+'</small>':'')+(c.corte?'<br><small>pasado el corte del jueves</small>':'')+'</div>';
-      }).join(''):'Sin cambios registrados (se anotan desde el 15/10/2026).';
+          +(c.oc?'<br><small>OC: '+esc(c.oc)+'</small>':'')+(c.corte?'<br><small>pasado el corte del jueves</small>':'')+'</div>'}; })
+        .concat((d.movs||[]).map(function(m){ return {k:_k(m.el),h:'<div class="pcb-it"><b>'+esc(m.el)+' · '+esc(m.quien||'—')+'</b><br>'+esc(m.que||'')+'</div>'}; }))
+        .sort(function(a,b){ return a.k<b.k?1:(a.k>b.k?-1:0); });
+      box.innerHTML=C.length?C.map(function(x){ return x.h; }).join(''):'Sin cambios registrados (se anotan desde el 15/10/2026).';
     }).catch(function(){box.textContent='Sin conexión.';});
 }
 function confirmarCancelarPed(btn,_ocTx){
@@ -28972,6 +28975,26 @@ function _vdVivo(){
   });
   return extra.length?vd.concat(extra):vd;
 }
+/* (25/11/2026) LAS VENTAS RETAIL, UNA SOLA LISTA PARA INICIO Y TENDENCIA. Las dos tenían la misma regla (`_rtCuentaRetail`) pero
+   partían de listas distintas: Inicio de `_rtLista()` (un pedido una vez, con la fecha y el monto del PEDIDO) y Tendencia de
+   `_vdVivo()` (las filas de VD tal cual: sin deduplicar, con la fecha y el monto de la FILA). El robot del 25/11 las agarró
+   distintas en la semana en curso: $659.280 contra $659.880 y 14 contra 15 entregas (un pedido de $600 que una contaba y la
+   otra no). Ahora las dos salen de acá: cada venta es su pedido (`_p`), con la fecha de `_tendFechaVentaISO` y los montos del
+   pedido, en la forma de una fila de VD (lo que Tendencia lee: canal, zona, barrio, fecha, $ y costo). */
+function _rtVentasRetail(){
+  var out=[], _h=new Date(), hoyIso=_h.getFullYear()+'-'+String(_h.getMonth()+1).padStart(2,'0')+'-'+String(_h.getDate()).padStart(2,'0');
+  _rtLista().forEach(function(p){
+    if(!_rtCuentaRetail(p)||p.ep==='Cancelado')return;
+    var iso=_tendFechaVentaISO(p); if(!/^\d{4}-\d\d-\d\d$/.test(iso))return;
+    /* Un período en curso se corta en hoy: una venta de Red con el día acordado el viernes, cuya bolsa se dio hoy, se
+       cuenta el viernes (memoria «en Red la venta se fecha por el día acordado»). Inicio ya cortaba; Tendencia no. */
+    if(iso>hoyIso)return;
+    var dv=(p.h==='Home'||p.h==='Pilar');
+    out.push({_p:p,_iso:iso,h:p.h,n:p.n,k:p.h+'|'+p.n,canal:dv?'Venta Directa':p.h,zona:dv?p.h:(p.br||''),barrio:p.bar||'',cliente:p.c,tel:p.tel,
+      fecha:iso.slice(8,10)+'/'+iso.slice(5,7)+'/'+iso.slice(0,4),mes:_MESES_VD[+iso.slice(5,7)-1],$:p.$,costo:p.co,ep:p.ep||'',he:p.he||''});
+  });
+  return out;
+}
 /* B2B y Catering: de VD (la «foto» que llenaba `D.ventasExtra` se apagó con Apps Script: llegaba vacía). */
 function _rtExtras(){
   var vd=(typeof VD!=='undefined'&&VD)||null;
@@ -28998,10 +29021,9 @@ function _rtSumar(desde,hasta){
          clubes:_rtVacio(),red:_rtVacio(),b2b:_rtVacio(),cat:_rtVacio(),bolsas:{}};
   function mete(n,f,c,det){var x=g[n];x.f+=f;x.c+=c;if(det)x.det[det]=(x.det[det]||0)+1;}
   var _todos=[];
-  _rtLista().forEach(function(p){
-    if(!_rtCuentaRetail(p))return;   /* (15/11/2026) la misma regla que Tendencia */
-    var dia=_tendFechaVentaISO(p);
-    if(!dia||dia<desde||dia>hasta)return;
+  _rtVentasRetail().forEach(function(x){   /* (25/11/2026) la misma lista que Tendencia, no solo la misma regla */
+    var p=x._p, dia=x._iso;
+    if(dia<desde||dia>hasta)return;
     _todos.push(p);
     var f=Number(p.$)||0,c=Number(p.co)||0;
     if(p.h==='Home'||p.h==='Pilar'){
@@ -41201,8 +41223,18 @@ function _anioMov(x){
    octubre daba 249, 259 o 257 bolsas segun cuanto hubiera llegado. */
 function _eerrBolsasMes(mn,anio){
   var mesNom=['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'][mn-1];
-  var vd=(typeof VD!=='undefined'&&VD)||(typeof window!=='undefined'&&window.VD)||[];
-  return vd.filter(function(v){ return v.canal==='Venta Directa'&&_esDelMes(v,mesNom,anio); }).length;   /* la base ya manda solo las entregadas */
+  /* (25/11/2026) De la MISMA lista que las ventas de Resultados (`_vdVivo`: VD + lo recién entregado). Con VD a secas, lo
+     entregado después de traer VD estaba en las ventas y no en las bolsas: el robot del 25/11, $153.000 contra $158.100 de la
+     base (6 pedidos). Y sin lo fechado después de hoy, igual que las ventas. */
+  var vd=(typeof _vdVivo==='function'?_vdVivo():null)||(typeof VD!=='undefined'&&VD)||[];
+  return vd.filter(function(v){ return v.canal==='Venta Directa'&&_esDelMes(v,mesNom,anio)&&_eerrNoFutura(v); }).length;   /* la base ya manda solo las entregadas */
+}
+/* (25/11/2026) EL MES EN CURSO SE CORTA EN HOY TAMBIÉN EN RESULTADOS: una venta fechada después de hoy (Red: el día acordado
+   es el viernes y la bolsa se dio hoy) todavía no pasó. Inicio no la contaba y Resultados sí. La base hace lo mismo (841). */
+function _eerrNoFutura(v){
+  var m=String((v&&v.fecha)||'').match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/); if(!m)return true;
+  var h=new Date(), hoy=h.getFullYear()*10000+(h.getMonth()+1)*100+h.getDate();
+  return (+m[3])*10000+(+m[2])*100+(+m[1])<=hoy;
 }
 function _esDelMes(x,mesNom,anio){
   if(!x||x.mes!==mesNom)return false;
@@ -42191,7 +42223,7 @@ function _eerrCalc(mn,anio){
      las dos van en «Plata de terceros», debajo del resultado, sin sumar. Con `vn` (766) la venta ya viene neta. */
   var totFact=0,totCMV=0,totProp=0,totFav=0,cn={};   /* cn: entregas por canal (10/11/2026) */
   var _VV=_vdVivo();   /* (15/11/2026) las ventas + lo recién entregado, igual que Inicio */
-  _VV.filter(function(v){return _esDelMes(v,mesNom,anio);}).forEach(function(v){
+  _VV.filter(function(v){return _esDelMes(v,mesNom,anio)&&_eerrNoFutura(v);}).forEach(function(v){
     var f=Number(v.$)||0,c=Number(v.costo)||0,k=null;
     if(v.canal==='Venta Directa')k=(v.zona==='Pilar'?'Pilar':'Home');
     else if(cf.hasOwnProperty(v.canal))k=v.canal;
@@ -42205,7 +42237,7 @@ function _eerrCalc(mn,anio){
   R.propinas=totProp;R.aFavor=totFav;R.ent=cn;
   /* (15/11/2026) ENTREGAS con la misma cuenta que Inicio (`_rtEntregas`), no filas: daba 125 donde Inicio 116. B2B, una
      por fila; sin catering: un evento no es una entrega. `R.ent` (por canal) sigue en filas para el desglose. */
-  var _eRet=_VV.filter(function(v){return _esDelMes(v,mesNom,anio)&&v.canal!=='B2B'&&v.canal!=='Catering';}).map(_ventaComoPedido);
+  var _eRet=_VV.filter(function(v){return _esDelMes(v,mesNom,anio)&&_eerrNoFutura(v)&&v.canal!=='B2B'&&v.canal!=='Catering';}).map(_ventaComoPedido);
   R.entTot=_rtEntregas(_eRet).tot+(cn.B2B||0);
   /* Los gastos de categoria Catering son el costo del evento: van al costo. */
   var cmvCat=0,cmvCatD=[],catCub=_catMesConPedido(mn,anio);
@@ -47017,11 +47049,9 @@ function rTendencia(){
      emparejados con la misma fecha), es ese mismo objeto; si es más viejo, se arma con los datos de la venta. Así el
      filtro (`_rtCuentaRetail`) y la cuenta de entregas (`_rtEntregas`) son los de Inicio, no unos propios. */
 
-  var _tendComoPedido=_ventaComoPedido;   /* (15/11/2026) la conversión única */
+  var _tendComoPedido=function(v){ return v._p||_ventaComoPedido(v); };   /* (25/11/2026) cada fila ya trae su pedido */
   // 1. Filtrar (canal + día puntual si aplica)
-  var rows=esProd?[]:_vdVivo().filter(function(v){   /* (15/11/2026) las ventas + lo recién entregado */
-    if(v.ep==='Cancelado')return false;
-    if(!_rtCuentaRetail(_tendComoPedido(v)))return false;   /* (15/11/2026) lo mismo que Ventas retail de Inicio */
+  var rows=esProd?[]:_rtVentasRetail().filter(function(v){   /* (25/11/2026) LA lista de Inicio (filtro, fecha y montos) */
     if(!_tendCanalOk(_tendSubcanal(v),sub))return false;
     if(bar!=='__all' && getBarrio(v)!==bar)return false;
     if(!v.fecha)return false;

@@ -699,6 +699,15 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
     return { ok: r.ok, detalle: r.detalle };
   }, { escribe: true, topeMs: 90000 });
 
+  /* (25/11/2026, 843) UN REPRESENTANTE DE BAJA NO RECIBE NADA: Fini se fue y la tienda le seguía dando ventas de Los Lagartos.
+     Para cada representante que no está activo, cada barrio suyo tiene que sugerir a otro (o a Maleu), nunca a él. */
+  await paso('los barrios de un representante de baja van a otro', async () => {
+    const r = await rpc('robot_reps_baja_probar', {});
+    if (!r || r.http >= 300) return { ok: false, detalle: 'la base contestó ' + (r && r.http) + ' ' + String((r && (r.message || r.texto)) || '').slice(0, 150) };
+    const c = r.casos || [];
+    return { ok: !!r.ok, detalle: c.length ? c.length + ' barrios de representantes de baja · ' + c.map((x) => x.barrio + ' → ' + x.va_a).join(', ').slice(0, 300) + (r.malos ? ' · ' + r.malos + ' todavía van al de baja' : '') : 'no hay representantes de baja' };
+  }, { topeMs: 10000 });
+
   await paso('liquidación de PRUEBA', async () => {
     const liq = await rpc('red_liquidacion_pantalla', {});
     let fila = null; (function mirar(o) { if (fila || !o || typeof o !== 'object') return; if (Array.isArray(o)) return o.forEach(mirar);

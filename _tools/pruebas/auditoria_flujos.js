@@ -23,6 +23,7 @@ const pw = require(process.env.PW || 'playwright-core');
 const BASE = process.env.BASE || 'http://localhost:8155/app.html', OUT = process.env.OUT || os.tmpdir();
 const MOTOR = process.env.MOTOR || 'webkit', COMPU = MOTOR === 'chromium' && !process.env.CEL;   /* CEL=1 con chromium: el celular a 393 (si WebKit no anda en la máquina) */
 const T = (ms) => new Promise((r) => setTimeout(r, ms));
+let SIN_RED = false;   /* (25/11/2026) el tramo sin señal: lo que falla ahí por no tener red no es un error de la app */
 let ok = 0, mal = 0; const hall = [];
 const chk = (t, c, d) => { if (c) { ok++; console.log('  ok   ' + t); } else { mal++; hall.push(t); console.log('  MAL  ' + t + (d !== undefined ? '\n         ' + JSON.stringify(d).slice(0, 700) : '')); } return !!c; };
 
@@ -53,7 +54,7 @@ async function abrir() {
   await ctx.addInitScript(INIT);
   pg = await ctx.newPage();
   pg.on('pageerror', (e) => errs.push('JS: ' + String(e.message).slice(0, 200)));
-  pg.on('console', (m) => { if (m.type() === 'error') errs.push('consola: ' + m.text().slice(0, 200)); });
+  pg.on('console', (m) => { if (m.type() === 'error') errs.push((SIN_RED ? 'sin red · ' : '') + 'consola: ' + m.text().slice(0, 200)); });
   pg.on('response', (r) => { if (r.status() >= 400 && /supabase\.co\/rest/.test(r.url())) errs.push('base ' + r.status() + ': ' + r.url().replace(/^.*\/rest\/v1\//, '').split('?')[0]); });
   const cred = credRobot();
   await pg.goto(BASE + '?v=' + Date.now(), { waitUntil: 'domcontentloaded' });
@@ -69,6 +70,19 @@ async function esperar(fn, arg, ms) { const t0 = Date.now(); while (Date.now() -
 
 /* Un toque de verdad: el elemento visible que matchea (y contiene `txt`, dentro de `dentro`), centrado en pantalla, y
    comprobando que el punto del toque caiga en él. Devuelve {txt} o null. */
+/* (25/11/2026) El «Cobrar» de un pedido en Cobranza, por su clave (h|N° en el onclick): estable aunque Cobranza se repinte
+   entre que se encuentra la tarjeta y el toque (pantalla al instante, v1333). Una marca data-au se pierde en el repintado. */
+const cobrarDe = (n) => '.cobro-btn-cobrado[onclick*="|' + n + "'\"]";
+/* (25/11/2026) «Cobrar» de un pedido en Cobranza, sea su propia tarjeta o la del cliente con varios pedidos (agrupada: se tilda
+   su renglón y «Cobrar…»). Sin marcas data-*: Cobranza se repinta al instante y una marca puesta antes del toque se pierde. */
+async function tocarCobrar(n) {
+  const casa = await pg.evaluate((n) => { const c = [].slice.call(document.querySelectorAll('.cg-card')).find((c) => c.offsetParent && c.textContent.indexOf('#' + n) >= 0); return c ? (c.getAttribute('data-casa') || '') : null; }, n);
+  if (casa === null) return tocar(cobrarDe(n), 'Cobrar');
+  const sel = '.cg-card[data-casa="' + casa.replace(/"/g, '\\"') + '"]';
+  const on = await pg.evaluate(([sel, n]) => [].slice.call(document.querySelectorAll(sel + ' .cg-row')).map((x) => ({ n: (x.textContent.match(/#(\d+)/) || [])[1], on: x.classList.contains('on') })), [sel, n]);
+  for (const r of on) { if ((r.n === String(n)) !== r.on) await tocar(sel + ' .cg-row', '#' + r.n); }
+  return tocar(sel + ' .cg-cobrar', 'Cobrar');
+}
 async function tocar(sel, txt, dentro, opt) {
   opt = opt || {};
   const b = await pg.evaluate(([sel, txt, dentro]) => {
@@ -272,7 +286,7 @@ async function flujoCobranza() {
       await tocar(sel + ' .cg-cobrar', 'Cobrar');
     } else {
       await pg.evaluate((n) => { const c = [].slice.call(document.querySelectorAll('.cobro-card')).find((c) => c.offsetParent && c.textContent.indexOf('#' + n) >= 0); if (c) c.setAttribute('data-au', 'x'); }, n);
-      await tocar('.cobro-card[data-au="x"] .cobro-btn-cobrado', 'Cobrar');
+      await tocar(cobrarDe(n), 'Cobrar');
     }
     const abierto = await esperar(() => { const o = document.getElementById('cobroRutaOverlay'); return o && !o.classList.contains('hidden') ? (document.getElementById('cobroRutaSub') || {}).textContent || 'abierto' : null; }, null, 10000);
     if (!chk(medio + ': «Cobrar» abre el cuadro (' + (abierto || '') + ')', !!abierto)) { await foto('no_abre_' + medio); continue; }
@@ -528,6 +542,14 @@ async function armarPrueba(n) {
   const t0 = Date.now(); let c = null;
   while (Date.now() - t0 < 90000) { c = await marcar(); if (c) break; if (!(await pg.evaluate(() => [].some.call(document.querySelectorAll('#armadoView .armado-card'), (x) => x.getClientRects().length)))) await tocar('[onclick*="toggleCollapse"]', 'HOY', '#armadoView', { callado: true, espera: 300 }); c = await marcar(); if (c) break; await T(1000); }
   if (c) { c.seg = Math.round((Date.now() - t0) / 1000); console.log('       en ARMADO a los ' + c.seg + ' s'); }
+  else {
+    /* (25/11/2026) Qué hay en ARMADO y cómo está el pedido en los datos de Ruta, para saber por qué no aparece. */
+    const dx = await pg.evaluate((n) => { const v = document.getElementById('armadoView'); let p = null;
+      try { p = (typeof pedidos !== 'undefined' && Array.isArray(pedidos) ? pedidos : []).filter((x) => String(x.n || x.id) === String(n)).map((x) => ({ es: x.es || x.estado, fe: x.fe || x.fechaEntrega, arm: x.armado, dep: x.dep || x.deposito, h: x.h })); } catch (e) { p = 'sin pedidos: ' + e.message; }
+      const dp = (typeof D !== 'undefined' && D && Array.isArray(D.pedidos) ? D.pedidos : []).filter((x) => String(x.n) === String(n)).map((x) => ({ h: x.h, es: x.es, ep: x.ep, fe: x.fe, dep: x.dep, arm: x.arm }));
+      return { armado: v ? (v.innerText || '').replace(/\s+/g, ' ').slice(0, 400) : 'sin #armadoView', pedido: p, panel: dp, modoCob: document.documentElement.classList.contains('modo-cob'), tab: typeof rutCurrentTab !== 'undefined' ? rutCurrentTab : '?' }; }, n).catch((e) => e.message);
+    console.log('       ARMADO sin la tarjeta: ' + JSON.stringify(dx).slice(0, 700));
+  }
   return c;
 }
 async function entregarEnRuta(et) {
@@ -592,7 +614,7 @@ async function flujoRuta() {
   c = await armarPrueba(b.n);
   if (!chk('sin señal: tarjeta en ARMADO', !!c)) return;
   await tocar('.armado-card[data-au="arm"] .armado-check', ''); await tocar('#confirmOverlay .btn-si', 'armado'); await T(4000);
-  await pg.context().setOffline(true);
+  await pg.context().setOffline(true); SIN_RED = true;
   await pg.evaluate(() => { try { window.dispatchEvent(new Event('offline')); } catch (e) {} });
   const ok1 = await entregarEnRuta('sin señal');
   const cola = await pg.evaluate((n) => ({ enCola: (()=>{ try { const q = (JSON.parse(localStorage.getItem('maleu_ruta') || '{}').syncQueue || []); return q.some((x) => x.action === 'marcarEntregado' && String(x.id) === String(n)); } catch (e) { return false; } })() }), b.n);
@@ -604,8 +626,11 @@ async function flujoRuta() {
   await irCobranza();
   const selB = await tarjetaDe(b.n);
   if (chk('sin señal: el entregado aparece en COBRANZA sin red', !!selB)) {
-    await tocar(selB + ' .cobro-btn-cobrado', 'Cobrar');
+    await tocarCobrar(b.n);
     const ab = await esperar(() => { const o = document.getElementById('cobroRutaOverlay'); return o && !o.classList.contains('hidden') ? 1 : null; }, null, 8000);
+    if (!ab) console.log('       sin cuadro: ' + JSON.stringify(await pg.evaluate((SEL) => ({ toast: [].map.call(document.querySelectorAll('.toast.show, #toast.show, .rut-toast.show'), (t) => t.textContent.trim().slice(0, 120)), confirms: (window.__confirms || []).slice(-3),
+      overlays: [].filter.call(document.querySelectorAll('[id$="Overlay"], .modal, [role=dialog]'), (o) => o.getClientRects().length && getComputedStyle(o).visibility !== 'hidden').map((o) => o.id || o.className).slice(0, 6),
+      boton: (function () { const b = document.querySelector(SEL + ' .cobro-btn-cobrado'); if (!b) { const cd = document.querySelector(SEL); return 'sin botón en ' + SEL + ': ' + (cd ? cd.innerText.replace(/\s+/g, ' ').slice(0, 300) + ' · botones: ' + [].map.call(cd.querySelectorAll('button'), (x) => x.className + '=' + x.textContent.trim().slice(0, 25)).join(' | ') : 'sin tarjeta'); } const r = b.getBoundingClientRect(), e = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2); return { txt: b.textContent.trim(), onclick: (b.getAttribute('onclick') || '').slice(0, 90), y: Math.round(r.top), arriba: e ? (e.id || String(e.className).slice(0, 50)) + ' «' + String(e.textContent || '').trim().slice(0, 30) + '»' : null }; })(), posts: (window.__posts || []).slice(-3).map((p) => p.u + ' ' + (p.r || '').slice(0, 80)) }), selB)).slice(0, 900));
     if (chk('sin señal: «Cobrar» abre el cuadro', !!ab)) {
       const cb = await cobrarEnCuadro('Efectivo', b.total);
       chk('sin señal: el cobro quedó en la cola del celular', cb.ok && await enColaDe('marcarCobrado'), await pg.evaluate(() => (JSON.parse(localStorage.getItem('maleu_ruta') || '{}').syncQueue || []).map((x) => x.action + ' ' + x.id)));
@@ -617,16 +642,18 @@ async function flujoRuta() {
   /* Chromium sin service worker (el servidor local lo apaga) recarga sin red a su página de error: ahí no se puede leer la
      cola. Que sobrevivió lo prueban los dos chequeos de abajo (sale sola después de recargar y la base la tiene). */
   const errPage = await pg.evaluate(() => /^chrome-error:/.test(location.href)).catch(() => true);
-  if (errPage && COMPU) console.log('       (Chromium sin service worker: la recarga sin red no carga la app; la cola se comprueba al volver la señal)');
+  if (errPage && (COMPU || MOTOR === 'chromium')) console.log('       (Chromium sin service worker: la recarga sin red no carga la app; la cola se comprueba al volver la señal)');
   else chk('sin señal: después de recargar la página la entrega sigue en la cola', cola2 === true, cola2);
-  await pg.context().setOffline(false);
+  await pg.context().setOffline(false); setTimeout(() => { SIN_RED = false; }, 3000);   /* lo que termina de fallar al volver */
   await pg.reload({ waitUntil: 'domcontentloaded' }).catch(() => {});
   await pg.waitForFunction(() => typeof D !== 'undefined' && D && Array.isArray(D.pedidos) && D.pedidos.length > 50, null, { timeout: 150000 }).catch(() => {});
   await pg.evaluate(() => { try { go('ruta'); } catch (e) {} });
   const vacia = await esperar((n) => { try { if (typeof processSyncQueue === 'function') processSyncQueue(); } catch (e) {} return (()=>{ try { const q = (JSON.parse(localStorage.getItem('maleu_ruta') || '{}').syncQueue || []); return q.some((x) => x.action === 'marcarEntregado' && String(x.id) === String(n)); } catch (e) { return false; } })() ? null : 1; }, b.n, 60000);
   chk('sin señal: al volver la señal la cola se vacía sola', !!vacia);
   chk('sin señal: #' + b.n + ' quedó Entregado en la base', !!(await esEntregadoEnBase(b.n, 30000)));
-  const cobV = await esperar(() => null, null, 1) || !(await enColaDe('marcarCobrado'));
+  /* (25/11/2026) La cola sale en orden (la entrega y después el cobro): se espera a que salga el cobro, no se mira en el
+     mismo instante en que salió la entrega. */
+  let cobV = false; for (let i = 0; i < 40 && !cobV; i++) { cobV = !(await enColaDe('marcarCobrado')); if (!cobV) { await pg.evaluate(() => { try { if (typeof processSyncQueue === 'function') processSyncQueue(); } catch (e) {} }).catch(() => {}); await T(500); } }
   chk('sin señal: el cobro también salió de la cola', cobV);
   const vb = await verPedido('Home', b.n, (v) => v.estado_pago === 'Cobrado', 30000);
   chk('sin señal: #' + b.n + ' quedó Cobrado en la base, efectivo $' + (vb && vb.efectivo), vb && vb.estado_pago === 'Cobrado' && Math.abs(Number(vb.efectivo) - b.total) <= 100, vb);
@@ -965,8 +992,9 @@ async function flujoInstante() {
     && [].some.call(document.querySelectorAll('#cobrosContent .cobro-card'), (c) => c.textContent.indexOf('#' + n) >= 0)) || null;
   /* 1. La juntada desde la FICHA (como Tadeo con el 2564): «Ver pedido ›» → «Juntada o evento». */
   const abrirFicha = async () => {
-    await pg.evaluate((n) => { const c = [].slice.call(document.querySelectorAll('.cobro-card')).find((c) => c.offsetParent && c.textContent.indexOf('#' + n) >= 0); const v = c && c.querySelector('.cob-ir'); if (v) v.setAttribute('data-auf', '1'); }, n);
-    await tocar('[data-auf="1"]', '', '', { espera: 600 });
+    /* (25/11/2026) Por el N° en su onclick (_openOrdInPanel('Home','N')): estable aunque Cobranza se repinte en el medio, y sirve
+       igual con la tarjeta de un pedido (el nombre, .cob-ir) que con la del cliente con varios («Ver pedido ›» de su renglón). */
+    await tocar('#cobrosContent [onclick*="_openOrdInPanel"][onclick*="' + "'" + n + "'" + '"]', '', '', { espera: 600 });
     return esperar(() => { const d = document.getElementById('ordDrawer'); return d && d.classList.contains('open') && /Juntada o evento/.test((document.getElementById('ordBody') || {}).textContent || '') || null; }, null, 20000);
   };
   if (!chk('instante: «Ver pedido ›» abre la ficha', !!(await abrirFicha()))) return;
@@ -993,10 +1021,13 @@ async function flujoInstante() {
   await verOp('Casa');
   await medirInstante('instante: ficha › «Casa» → vuelve a la tarjeta del cliente', () => clicOp('Casa'), enCli, n);
   await pg.evaluate(() => { try { if (typeof closeOrdDetail === 'function') closeOrdDetail(); } catch (e) {} const d = document.getElementById('ordDrawer'); if (d) d.classList.remove('open'); });
+  /* (25/11/2026) La ficha se va con una animación: en WebKit el dedo llegaba antes y tocaba la ficha que se iba («Entregó —»). Se
+     espera a que no quede nada de la ficha en pantalla, como el ojo antes de tocar. */
+  await esperar(() => { const d = document.getElementById('ordDrawer'); if (!d) return 1; const r = d.getBoundingClientRect(); return (r.width === 0 || r.left >= innerWidth - 1 || r.top >= innerHeight - 1 || getComputedStyle(d).visibility === 'hidden' || getComputedStyle(d).display === 'none') ? 1 : null; }, null, 4000);
   /* 2. Cobrarlo desde Cobranza: la tarjeta se va. */
   await tarjetaDe(n);
   await pg.evaluate((n) => { const c = [].slice.call(document.querySelectorAll('.cobro-card')).find((c) => c.offsetParent && c.textContent.indexOf('#' + n) >= 0); if (c) c.setAttribute('data-au', 'i'); }, n);
-  await tocar('.cobro-card[data-au="i"] .cobro-btn-cobrado', 'Cobrar');
+  await tocarCobrar(n);
   const ab = await esperar(() => { const o = document.getElementById('cobroRutaOverlay'); return o && !o.classList.contains('hidden') || null; }, null, 10000);
   if (!chk('instante: «Cobrar» abre el cuadro', !!ab)) return;
   if (await visible('#cobroRecEf')) { const v = await pg.inputValue('#cobroRecEf').catch(() => ''); if (!v) await pg.fill('#cobroRecEf', String(f.prod.total)); }
@@ -1021,7 +1052,9 @@ async function flujoInstante() {
     if (/negativo/.test(fl)) await flujoNegativo();
     if (/instante/.test(fl)) await flujoInstante();
   } catch (e) { mal++; console.log('  MAL  reventó: ' + (e && e.stack || e)); await foto('revento'); }
-  const ej = errs.filter((e) => !/favicon|ERR_ABORTED|WebKit encountered an internal error|ERR_INTERNET_DISCONNECTED/.test(e));
+  /* (25/11/2026) Desde la 840 el robot tiene el en vivo: en el tramo SIN SEÑAL el WebSocket de realtime no conecta y cada
+     recurso que el navegador intenta da ERR_FAILED. Es lo que tiene que pasar sin red, no un error de la app. */
+  const ej = errs.filter((e) => !/favicon|ERR_ABORTED|WebKit encountered an internal error|ERR_INTERNET_DISCONNECTED/.test(e) && !/^sin red · .*(realtime\/v1\/websocket|Failed to load resource: net::ERR_FAILED)/.test(e));
   chk('sin errores de JS ni de la base', ej.length === 0, [...new Set(ej)].slice(0, 12));
   if (!process.env.SIN_LIMPIAR) console.log('limpiar: ' + JSON.stringify(await rpc('robot_limpiar', { p_corrida: 'audit-' + Date.now() })).slice(0, 300));
   if (!process.env.SIN_LIMPIAR && /red/.test(process.env.FLUJO === 'todo' ? 'red' : (process.env.FLUJO || ''))) chk('el stock PRUEBA vuelve a su lugar (robot_limpiar con 10 min quietos)', await libroEnSuLugar());

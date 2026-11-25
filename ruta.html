@@ -7808,8 +7808,12 @@ function abrirCobroComboCobros(idxsCsv,extra){
 }
 
 // Abre el modal de cobro (idéntico a RUTA) para UN pedido suelto de COBROS.
-function abrirCobroPendiente(idx){
-  if(idx<0||idx>=pendientesCobro.length)return;
+function abrirCobroPendiente(idx,k){
+  /* (25/11/2026) Con la clave del pedido (h|id): si la lista se rearmó entre que se pintó la tarjeta y el toque (sin señal,
+     o un refresco en el medio), el índice apunta a otro pedido o a nada y «Cobrar» no hacía nada. Se busca por la clave. */
+  if(k){ var _ok=pendientesCobro[idx]&&((pendientesCobro[idx].h||'')+'|'+(pendientesCobro[idx].id||''))===k;
+    if(!_ok){ idx=-1; for(var _i=0;_i<pendientesCobro.length;_i++){ if(((pendientesCobro[_i].h||'')+'|'+(pendientesCobro[_i].id||''))===k){ idx=_i; break; } } } }
+  if(idx<0||idx>=pendientesCobro.length){ if(k)showToast('Ese pedido ya no está en Cobranza: actualizá'); return; }
   var pc=pendientesCobro[idx];
   var pcKey=(pc.h||'')+'|'+(pc.id||'');
   if(cobrados[pcKey]||pc.ep==='Cobrado'){showToast('Ya está cobrado');return;}
@@ -7923,11 +7927,11 @@ function _cobroCardHTML(pc, globalIdx){
   if(_jntCob&&!_rutEsMio(pc.c,pc.t)&&typeof window.comCobrarHTML==='function'){ try{ _jntBtn=window.comCobrarHTML(pc,globalIdx)||''; }catch(eB){} }
   if(_rutEsMio(pc.c,pc.t))c+='<div class="cobro-mio">Es un pedido tuyo: lo cobran Tadeo o Lucas</div>';
   else if(_jntBtn)c+=_jntBtn;
-  else c+='<button type="button" class="cobro-btn-cobrado" onclick="abrirCobroPendiente('+globalIdx+')">Cobrar</button>';
+  else c+='<button type="button" class="cobro-btn-cobrado" onclick="abrirCobroPendiente('+globalIdx+',\''+_rtcArg((pc.h||'')+'|'+(pc.id||''))+'\')">Cobrar</button>';
   if(_cobEsEntregado(pc))c+=_cobRecordarBtn(pc,_jntCob||!!pc.grp);   /* (24/11/2026) a la vista, al lado de Cobrar */
   if(!_jntCob&&!pc.grp)c+=_cobUnirBtn(pc);   /* (24/11/2026) «Unir con otra persona» */
   c+='</div><details class="cg-mas cobro-mas"><summary>Otras opciones</summary><div class="cobro-mas-b">'
-    +(_jntBtn?'<button type="button" class="cobro-btn-copiar" onclick="abrirCobroPendiente('+globalIdx+')">Cobrar el saldo entero</button>':'')
+    +(_jntBtn?'<button type="button" class="cobro-btn-copiar" onclick="abrirCobroPendiente('+globalIdx+',\''+_rtcArg((pc.h||'')+'|'+(pc.id||''))+'\')">Cobrar el saldo entero</button>':'')
     +'<button type="button" class="cobro-btn-copiar" onclick="cobroCopiarDetalle(\''+globalIdx+'\',this)">Copiar detalle</button>'
     +'<button type="button" class="cobro-btn-alias" onclick="cobroPedirComprobante('+globalIdx+')">Pedir comprobante</button></div></details></div>';
   return c;
@@ -8824,14 +8828,21 @@ try{var _cvC=JSON.parse(localStorage.getItem('maleu_ruta_clivend')||'null');if(_
    botón para escribirle. Ahora lo que el representante tiene en mano NO es deuda del cliente: es plata que el
    representante le tiene que rendir a Maleu, y se muestra así en su tarjeta. */
 var _rutEnMano={ts:0,n:{},porRep:{},tr:{}};
+/* (25/11/2026) Dos lecturas en vuelo (la de la señal y la de una sincronización que arrancó antes de marcar): la VIEJA podía
+   llegar última y pisar lo recién marcado con lo de antes (el robot lo vio de a ratos: «Cobranza no lo mostró»). Se aplica
+   solo la respuesta de una lectura más nueva que la última aplicada. */
+var _rutEnManoSeq=0,_rutEnManoAplicada=0;
 function _rutEnManoCargar(){
   if(typeof _sbPermiso!=='function')return Promise.resolve(false);
+  var _miSeq=++_rutEnManoSeq;
   return Promise.resolve(_sbPermiso(true)).then(function(sb){
     if(!sb)return null;
     return fetch(sb.url+'/rest/v1/rpc/red_efectivo_pantalla',{method:'POST',headers:{apikey:sb.key,Authorization:'Bearer '+sb.token,'Content-Type':'application/json'},body:'{}'})
       .then(function(r){ return r.ok?r.json():null; });
   }).then(function(d){
     if(!d||!d.ok||!d.palanca)return false;
+    if(_miSeq<_rutEnManoAplicada)return false;   /* una lectura más nueva ya se aplicó */
+    _rutEnManoAplicada=_miSeq;
     var n={},pr={};
     Object.keys(d.enMano||{}).forEach(function(rep){
       var x=d.enMano[rep]||{}, nom=_vendNombreLimpio(rep);
@@ -13620,6 +13631,8 @@ function switchTab(tab){
   _rutLuego(function(){if(_gen!==_rutTabGen||rutCurrentTab!==tab)return;rutRender();_switchTabDespues(tab);});
 }
 function _switchTabDespues(tab){
+  /* (25/11/2026) Lo que llegó por el en vivo mientras se cargaba un pedido (o con Ruta fuera de la vista), ya. */
+  if(tab!=='nuevo'&&typeof _rutVivo!=='undefined'&&_rutVivo.pend&&_rutEstaMirando()){_rutVivo.pend=false;rutSincronizar('pendiente');}
   // Al entrar a Ruta, refrescar pendientes de guardar (puede haber cambiado desde otro dispositivo)
   if(tab==='ruta')fetchPendientesGuardarStock();
   // Entrar a COBROS siempre los pide. Antes solo los pedia renderCobros(), y si
@@ -16607,13 +16620,17 @@ function _rutVivoNota(o){try{window.__rutaVivo=Object.assign({t:Date.now()},o);}
 function _rutVivoConectado(){return _rutVivo.prendido&&!!(window.__enVivo&&window.__enVivo.estado==='vivo');}
 function _rutVivoSincronizar(){
   _rutVivo.t=null;
-  if(rutCurrentTab!=='nuevo'&&!_rutEstaMirando()){_rutVivoNota({hizo:'nada: Ruta no esta a la vista'});return;}
+  /* (25/11/2026) Una señal que llega con Ruta fuera de la vista (o en + PEDIDO, donde no se repinta la lista) no se pierde:
+     queda PENDIENTE y se sincroniza apenas Ruta vuelve a estar a la vista (cambio de sub-tab o el reloj). Hasta hoy se
+     descartaba y, con el en vivo conectado, el reloj espera 2 min: un pedido cargado en + PEDIDO no aparecía en ARMADO. */
+  if(!_rutEstaMirando()){_rutVivo.pend=true;_rutVivoNota({hizo:'pendiente: Ruta no esta a la vista'});return;}
   var falta=RUT_VIVO_MIN_MS-(Date.now()-_rutVivo.ult);
   if(falta>0){_rutVivo.t=setTimeout(_rutVivoSincronizar,falta);return;}
   _rutVivo.ult=Date.now();
   rutSincronizar('vivo').then(function(r){
     _rutVivoNota({hizo:'sincronizo por una señal',r:r});
     if(!r&&_rutSyncEnVuelo&&!_rutVivo.t)_rutVivo.t=setTimeout(_rutVivoSincronizar,RUT_VIVO_MIN_MS);
+    else if(!r&&!_rutSyncEnVuelo)_rutVivo.pend=true;
   },function(){_rutVivoNota({hizo:'la sincronizacion fallo'});});
 }
 /* (839) Lo que marca un representante en Mi Portal (efectivo o «me dijo que transfirió»): se relee solo eso y se repinta
@@ -16669,6 +16686,7 @@ function _arrancarRuta(){
   });
   setInterval(function(){
     /* (28/10) Con el en vivo conectado el reloj es la red: cada RUT_SYNC_VIVO_MS, no cada 15 s. */
+    if(_rutVivo.pend&&_rutEstaMirando()){_rutVivo.pend=false;rutSincronizar('pendiente');return;}   /* (25/11) una señal que no se pudo aplicar */
     if(_rutVivoConectado()&&Date.now()-_rutVivo.ultSync<RUT_SYNC_VIVO_MS)return;
     rutSincronizar('reloj');
   },RUT_SYNC_MS);
