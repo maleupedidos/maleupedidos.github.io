@@ -34,7 +34,8 @@ async function servirLocal() {
   const puerto = 8300 + Math.floor(Math.random() * 600);
   SERVIDOR = require('child_process').spawn(process.execPath, [path.join(__dirname, '..', 'servir.js'), String(puerto)], { stdio: 'ignore' });
   URL_APP = 'http://localhost:' + puerto + '/app.html';
-  for (let i = 0; i < 80; i++) { try { const r = await fetch(URL_APP); if (r.ok) return; } catch (e) {} await pausa(250); }
+  /* (26/11/2026) 60 s y no 20: con la compu cargada (otras sesiones con servidores y Chrome) 20 s no alcanzó. */
+  for (let i = 0; i < 240; i++) { try { const r = await fetch(URL_APP); if (r.ok) return; } catch (e) {} await pausa(250); }
   throw new Error('el servidor local no arrancó');
 }
 const ahora = new Date(), dos = (n) => String(n).padStart(2, '0');
@@ -1131,6 +1132,10 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
 
 async function terminar() {
   const mal = pasos.filter((p) => !p.ok).length;
+  /* (26/11/2026) UN ROBOT QUE NO CORRIÓ NO DA VERDE. Si no le arrancaba el servidor local, salía «0 de 0 pasos bien» con
+     código 0 y deploy.sh lo tomaba por bueno. Sin pasos, o si reventó antes de terminar, sale con 3 y dice «NO CORRIÓ».
+     (El 2 sigue siendo «sin credenciales», que deploy.sh saltea a propósito.) */
+  const noCorrio = !pasos.length || hallazgos.some((h) => /^el robot reventó/.test(h));
   if (Object.keys(METRICAS).length) console.log('métricas: ' + JSON.stringify(METRICAS));
   console.log('\n' + (pasos.length - mal) + ' de ' + pasos.length + ' pasos bien' + (hallazgos.length ? ' · hallazgos:\n  - ' + hallazgos.join('\n  - ') : ''));
   if (!process.env.ROBOT_SIN_REPORTE && cli) {
@@ -1146,5 +1151,6 @@ async function terminar() {
   }
   try { cli && cli.matar(); } catch (e) {}
   try { SERVIDOR && SERVIDOR.kill(); } catch (e) {}
+  if (noCorrio) { console.log('\nEL ROBOT NO CORRIÓ' + (pasos.length ? ' ENTERO (reventó en el medio)' : ' (0 pasos)') + ': no es un verde.'); process.exit(3); }
   process.exit(mal ? 1 : 0);
 }

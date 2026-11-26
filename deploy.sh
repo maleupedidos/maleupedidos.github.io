@@ -125,15 +125,18 @@ fi
 echo "→ [3c2/8] El robot de pruebas…"
 if [ -n "${SIN_ROBOT:-}" ] || [ -n "${SIN_HUMO:-}" ]; then
   echo "${YEL}    SALTEADO a mano (SIN_ROBOT/SIN_HUMO). Corré: node _tools/robot/robot.js${RST}"
-elif [ -n "$HTMLS" ]; then
+elif [ -n "$HTMLS" ] || echo "${CAMBIOS:-}" | grep -qE '(^|/)[a-z]+_motor\.js$|^_src/motor_comun_shim\.js$|^lec_arma\.js$|^_tools/robot/'; then
+  # (26/11/2026) También con los motores de la base y el robot mismo: arman lo que ven las pantallas aunque no
+  # se toque un .html (el redondeo perdido de la Caja era del ca_motor.js y el deploy salteó el robot).
   set +e
   ROBOT_LOCAL=1 ROBOT_SIN_REPORTE=1 node _tools/robot/robot.js 2>&1 | sed 's/^/    /'
   RC=${PIPESTATUS[0]}
   set -e
   if [ "$RC" = "2" ]; then echo "${YEL}    sin credenciales del robot en esta compu: no corrió${RST}"
+  elif [ "$RC" = "3" ]; then fallar "El robot NO CORRIÓ (no le arrancó el servidor o reventó antes de terminar) — no se publica sin probar."
   elif [ "$RC" != "0" ]; then fallar "El robot encontró algo roto — no se publica."; fi
 else
-  echo "    (ningun .html modificado)"
+  echo "    (ningun .html ni motor modificado)"
 fi
 
 # ── 3c3. En el iPhone nada se pisa (15/11/2026) ──────────────────────────────
