@@ -639,11 +639,18 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
 
   let COMPRA = null;
   await paso('cargar una compra', async () => {
-    const r = await directa('compraManual', { action: 'compraManual', proveedor: PROV, vendedor: 'Tadeo — Stock', items: [{ abbr: SKU, nombre: SKU, costo: 1, qty: 1, origen: 'Orden de Compra' }], confirmarDuplicada: true, clientOpId: PREFIJO + 'compra' });   /* (5/11) cada corrida es una compra nueva: como tocar «es otra». Vendedor «Tadeo — Stock»: OC de STOCK (con otro vendedor es OC de cliente y al recibirla no entra al freezer; Supa) */
+    const base = { action: 'compraManual', proveedor: PROV, vendedor: 'Tadeo — Stock', items: [{ abbr: SKU, nombre: SKU, costo: 1, qty: 1, origen: 'Orden de Compra' }], confirmarDuplicada: true };
+    /* (26/11/2026, 871) Una reposición sin cuándo llega no se guarda (el proveedor del robot no tiene retiro programado). */
+    const sin = await directa('compraManual', Object.assign({}, base, { clientOpId: PREFIJO + 'compra-sin-fecha' }));
+    const frenada = sin && sin.d && sin.d.ok === false && /falta cuándo llega/.test(String(sin.d.err || sin.d.error || ''));
+    if (!frenada) return mal(sin, 'compra sin fecha: tenía que frenar con «falta cuándo llega»');
+    const hoyAR = new Date(Date.now() - 3 * 3600e3).toISOString().slice(0, 10);
+    const r = await directa('compraManual', Object.assign({}, base, { llegaEl: hoyAR, clientOpId: PREFIJO + 'compra' }));   /* (5/11) cada corrida es una compra nueva: como tocar «es otra». Vendedor «Tadeo — Stock»: OC de STOCK (con otro vendedor es OC de cliente y al recibirla no entra al freezer; Supa) */
     if (!bien(r)) return mal(r, 'compra');
+    if (String(r.d.llegaEl || '').slice(0, 10) !== hoyAR) return mal(r, 'compra: la base no devolvió la fecha de llegada ' + hoyAR);
     COMPRA = r.d;
-    return { ok: true, detalle: 'cargada' + (r.d.hora ? ' (' + r.d.hora + ')' : '') };
-  }, { escribe: true, topeMs: 10000 });
+    return { ok: true, detalle: 'sin fecha frenada · cargada con llega el ' + hoyAR + (r.d.hora ? ' (' + r.d.hora + ')' : '') };
+  }, { escribe: true, topeMs: 15000 });
 
   await paso('OC de prueba: pedir y recibir', async () => {
     if (!COMPRA) return { ok: false, detalle: 'sin la compra del paso anterior' };
