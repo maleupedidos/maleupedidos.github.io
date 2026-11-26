@@ -89,6 +89,19 @@ function _camCargar_(d) {
   (d.mov || []).forEach(function (x) {
     if (H[x[0]]) _motPoner_(H[x[0]].f, x[1], [_motFecha_(x[2]) || '', x[3], x[4], x[5], x[6], x[7], Number(x[8]) || 0, x[9], x[10]]);
   });
+  /* (874) Los lugares de guardado y lo En camino (`_lugaresExtras_`). Sin la 874 no vienen y la caja es la de siempre.
+     Los movimientos de cada En camino van con la hora en ms, como el corte (`saldoBase.fechaDate`). */
+  if (Array.isArray(d.guardados)) {
+    H['Lugares Guardado'] = new _Hoja('Lugares Guardado', [['Clave', 'Nombre', 'Orden', 'Activo']].concat(
+      d.guardados.map(function (x) { return [x[0], x[1], Number(x[2]) || 0, x[3] !== false]; })));
+  }
+  if (Array.isArray(d.caminos)) {
+    H['En Camino'] = new _Hoja('En Camino', [['Id', 'Lleva', 'Desde', 'Proveedor', 'OC', 'Nota', 'Monto', 'Abierto', 'Mov']].concat(
+      d.caminos.map(function (x) {
+        var mov = (x[8] || []).map(function (v) { var f = _motFecha_(v[0]); return [f ? f.getTime() : 0, Number(v[1]) || 0]; });
+        return [x[0], x[1], x[2], x[3], x[4], x[5], Number(x[6]) || 0, _motFecha_(x[7]) || '', JSON.stringify(mov)];
+      })));
+  }
   _HOJAS = H;
 }
 /* Las columnas fijas de `_sumarCobrado` (desde 0) y un encabezado con los nombres que busca por nombre,

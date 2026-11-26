@@ -2958,10 +2958,12 @@ function _doGetAdmin(opt) {
                         cobros: String(_dMP[_im][7] || '').trim() });
         }
       }
+      var _lugX = _lugaresExtras_();   // (874) los lugares de guardado y lo En camino
       lugares = _lugaresCalcular_({
         personas: _cfgLug.personas, base: _cfgLug.base,
         cobEf: _lugIn.cobEf, vueltos: _lugIn.vueltos, ing: _lugIn.ing, gas: _lugIn.gas,
         movs: _movsL, reservas: _reservasActivas_(),
+        guardados: _lugX.guardados, caminos: _lugX.caminos, corteTs: saldoBase.fechaDate.getTime(), contado: _cfgLug.contado,
         efVivo: saldoBase.ef + cobradoEf + ingresosEf - gastosEf
       });
       lugares.movsUlt = _movPlataUltimos_(15);
@@ -3250,7 +3252,8 @@ var _LUG_CFG_ = null;
 
 function _lugaresCfg_() {
   if (_LUG_CFG_) return _LUG_CFG_;
-  var cfg = { personas: [], colBil: {}, colCob: {}, activo: false, base: { ef: 0, bil: {}, cob: {} }, lastRow: 0 };
+  /* (874) colG: «Guardado <clave>», un lugar de guardado. contado: cuándo se contó de verdad cada id (col «Contadas»). */
+  var cfg = { personas: [], colBil: {}, colCob: {}, colG: {}, activo: false, base: { ef: 0, bil: {}, cob: {}, g: {} }, contado: {}, lastRow: 0 };
   var sh = SS.getSheetByName('Saldo Base');
   if (!sh || sh.getLastRow() < 1 || sh.getLastColumn() < 1) return (_LUG_CFG_ = cfg);
   var ancho = sh.getLastColumn();
@@ -3260,6 +3263,8 @@ function _lugaresCfg_() {
     if ((m = /^Billetera\s+(.+)$/.exec(h))) cfg.colBil[m[1].trim()] = i + 1;
     else if (h === 'Cobrado sin asignar') cfg.colCob[''] = i + 1;
     else if ((m = /^Cobrado\s+(.+)$/.exec(h))) cfg.colCob[m[1].trim()] = i + 1;
+    else if ((m = /^Guardado\s+(.+)$/.exec(h))) cfg.colG[m[1].trim()] = i + 1;   // (874)
+    else if (h === 'Contadas') cfg.colCont = i + 1;   // (874)
   }
   Object.keys(cfg.colBil).forEach(function (p) { if (cfg.colCob[p]) cfg.personas.push(p); });
   cfg.lastRow = sh.getLastRow();
@@ -3291,6 +3296,14 @@ function _lugaresCfg_() {
       cfg.base.cob[p] = Number(fila[cfg.colCob[p] - 1]) || 0;
     });
     cfg.base.cob[''] = cfg.colCob[''] ? (Number(fila[cfg.colCob[''] - 1]) || 0) : 0;
+    /* (874) Lo que dijo el conteo de cada lugar de guardado, y cuándo se contó de verdad cada cosa. */
+    Object.keys(cfg.colG).forEach(function (k) { cfg.base.g[k] = Number(fila[cfg.colG[k] - 1]) || 0; });
+    if (cfg.colCont) {
+      todas.forEach(function (f) {
+        if (!(f[0] instanceof Date)) return;
+        String(f[cfg.colCont - 1] || '').split(',').forEach(function (id) { id = id.trim(); if (id) cfg.contado[id] = f[0].getTime(); });
+      });
+    }
   }
   return (_LUG_CFG_ = cfg);
 }
@@ -3394,13 +3407,33 @@ function _lugaresCalcular_(e) {
     cf -= bil[p] + cob[p];
   });
   cf -= cob[''];
+  /* (874) LOS LUGARES DE GUARDADO Y LO EN CAMINO, con la regla de `_lugares_saldos` (la base). Cada lugar de guardado
+     arranca con lo que dijo el conteo («Guardado <clave>», 0 si nacio despues) y lo En camino con sus movimientos hasta el
+     corte: los dos salen de la caja fuerte. «cf» es la caja fuerte misma, no un lugar aparte. */
+  var g = {}, cam = {}, corte = num(e.corteTs), guar = [], camMeta = {};
+  (e.guardados || []).forEach(function (x) {
+    if (!x || !x.clave || x.clave === 'cf') return;
+    g[x.clave] = num((base.g || {})[x.clave]);
+    cf -= g[x.clave];
+    guar.push(x);
+  });
+  (e.caminos || []).forEach(function (c) {
+    if (!c || !c.id) return;
+    var b = 0, s = 0, ult = 0;
+    (c.mov || []).forEach(function (v) { var t = num(v[0]), m = num(v[1]); s += m; if (t <= corte) b += m; if (t > ult) ult = t; });
+    if (!(s > 0.5 || !(c.mov || []).length || ult > corte)) return;   // cerrado antes del conteo: no cuenta
+    cam[c.id] = b; cf -= b; camMeta[c.id] = c;
+  });
   /* Lo que no es de una persona con billetera, o no dice lugar, va a la caja
      fuerte: es lo de antes, y asi ningun peso queda afuera de la suma. Una
      reserva es caja fuerte con nombre. */
   function sumar(lugar, m) {
-    var x = /^(bil|cob):(.*)$/.exec(String(lugar || ''));
+    var l = String(lugar || '');
+    var x = /^(bil|cob):(.*)$/.exec(l);
     if (x && x[1] === 'bil' && P.indexOf(x[2]) >= 0) bil[x[2]] += m;
     else if (x && x[1] === 'cob' && (x[2] === '' || P.indexOf(x[2]) >= 0)) cob[x[2]] += m;
+    else if (l.indexOf('g:') === 0 && Object.prototype.hasOwnProperty.call(g, l.slice(2))) g[l.slice(2)] += m;   // (874)
+    else if (l.indexOf('camino:') === 0 && Object.prototype.hasOwnProperty.call(cam, l.slice(7))) cam[l.slice(7)] += m;   // (874)
     else cf += m;
   }
   (e.cobEf || []).forEach(function (c) {
@@ -3423,10 +3456,26 @@ function _lugaresCalcular_(e) {
   var reservado = reservas.reduce(function (a, r) { return a + num(r.monto); }, 0);
   var total = cf + cob[''];
   P.forEach(function (p) { total += bil[p] + cob[p]; });
+  Object.keys(g).forEach(function (k) { total += g[k]; });     // (874)
+  Object.keys(cam).forEach(function (k) { total += cam[k]; }); // (874)
   var r2 = function (x) { return Math.round(x * 100) / 100; };
+  /* (874) Lo que la pantalla dibuja: cada lugar con su saldo y cuándo se contó de verdad; lo En camino abierto, con
+     quién lo lleva, para quién y desde cuándo. */
+  var cont = e.contado || {};
+  var guardados = guar.map(function (x) {
+    return { clave: x.clave, nombre: x.nombre, activo: x.activo !== false, saldo: r2(g[x.clave]), contado: num(cont['g:' + x.clave]) || 0 };
+  });
+  var caminos = Object.keys(cam).filter(function (k) { return cam[k] > 0.5; }).map(function (k) {
+    var c = camMeta[k];
+    return { id: k, lleva: c.lleva || '', desde: c.desde || '', prov: c.prov || '', oc: c.oc || '', nota: c.nota || '',
+             monto: num(c.monto), saldo: r2(cam[k]), abierto: num(c.abierto) };
+  }).sort(function (a, b) { return a.abierto - b.abierto; });
+  Object.keys(g).forEach(function (k) { g[k] = r2(g[k]); });
+  Object.keys(cam).forEach(function (k) { cam[k] = r2(cam[k]); });
   return {
     activo: true, personas: P.slice(), bil: bil, cob: cob, cf: r2(cf),
     reservas: reservas, reservado: r2(reservado), cfLibre: r2(cf - reservado),
+    g: g, guardados: guardados, camino: cam, caminos: caminos, cfContado: num(cont.cf || cont.efectivo) || 0,
     total: r2(total), efVivo: r2(num(e.efVivo)), descuadre: r2(num(e.efVivo) - total)
   };
 }
@@ -3520,6 +3569,32 @@ function _lugaresDetalle_(e) {
     F.forEach(function (f) { if (f.queda > 0.5 && (!d.desde || f.ts < d.desde)) d.desde = f.ts; });
   });
   return det;
+}
+
+function _lugaresExtras_() {
+  var out = { guardados: [], caminos: [] };
+  try {
+    var sg = SS.getSheetByName('Lugares Guardado');
+    if (sg && sg.getLastRow() > 1) {
+      sg.getRange(2, 1, sg.getLastRow() - 1, 4).getValues().forEach(function (f) {
+        var k = String(f[0] || '').trim();
+        if (k) out.guardados.push({ clave: k, nombre: String(f[1] || '').trim() || k, orden: Number(f[2]) || 0, activo: f[3] !== false && String(f[3]) !== 'false' });
+      });
+    }
+    var sc = SS.getSheetByName('En Camino');
+    if (sc && sc.getLastRow() > 1) {
+      sc.getRange(2, 1, sc.getLastRow() - 1, 9).getValues().forEach(function (f) {
+        var id = String(f[0] || '').trim();
+        if (!id) return;
+        var mov = [];
+        try { mov = JSON.parse(String(f[8] || '[]')) || []; } catch (eM) { mov = []; }
+        out.caminos.push({ id: id, lleva: String(f[1] || '').trim(), desde: String(f[2] || '').trim(), prov: String(f[3] || '').trim(),
+                           oc: String(f[4] || '').trim(), nota: String(f[5] || '').trim(), monto: Number(f[6]) || 0,
+                           abierto: (f[7] instanceof Date) ? f[7].getTime() : 0, mov: mov });
+      });
+    }
+  } catch (e) { /* sin lugares nuevos: la caja de siempre */ }
+  return out;
 }
 
 function _reservasActivas_() {
@@ -4236,6 +4311,19 @@ function _camCargar_(d) {
   (d.mov || []).forEach(function (x) {
     if (H[x[0]]) _motPoner_(H[x[0]].f, x[1], [_motFecha_(x[2]) || '', x[3], x[4], x[5], x[6], x[7], Number(x[8]) || 0, x[9], x[10]]);
   });
+  /* (874) Los lugares de guardado y lo En camino (`_lugaresExtras_`). Sin la 874 no vienen y la caja es la de siempre.
+     Los movimientos de cada En camino van con la hora en ms, como el corte (`saldoBase.fechaDate`). */
+  if (Array.isArray(d.guardados)) {
+    H['Lugares Guardado'] = new _Hoja('Lugares Guardado', [['Clave', 'Nombre', 'Orden', 'Activo']].concat(
+      d.guardados.map(function (x) { return [x[0], x[1], Number(x[2]) || 0, x[3] !== false]; })));
+  }
+  if (Array.isArray(d.caminos)) {
+    H['En Camino'] = new _Hoja('En Camino', [['Id', 'Lleva', 'Desde', 'Proveedor', 'OC', 'Nota', 'Monto', 'Abierto', 'Mov']].concat(
+      d.caminos.map(function (x) {
+        var mov = (x[8] || []).map(function (v) { var f = _motFecha_(v[0]); return [f ? f.getTime() : 0, Number(v[1]) || 0]; });
+        return [x[0], x[1], x[2], x[3], x[4], x[5], Number(x[6]) || 0, _motFecha_(x[7]) || '', JSON.stringify(mov)];
+      })));
+  }
   _HOJAS = H;
 }
 /* Las columnas fijas de `_sumarCobrado` (desde 0) y un encabezado con los nombres que busca por nombre,

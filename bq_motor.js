@@ -1320,7 +1320,8 @@ var _LUG_CFG_ = null;
 
 function _lugaresCfg_() {
   if (_LUG_CFG_) return _LUG_CFG_;
-  var cfg = { personas: [], colBil: {}, colCob: {}, activo: false, base: { ef: 0, bil: {}, cob: {} }, lastRow: 0 };
+  /* (874) colG: «Guardado <clave>», un lugar de guardado. contado: cuándo se contó de verdad cada id (col «Contadas»). */
+  var cfg = { personas: [], colBil: {}, colCob: {}, colG: {}, activo: false, base: { ef: 0, bil: {}, cob: {}, g: {} }, contado: {}, lastRow: 0 };
   var sh = SS.getSheetByName('Saldo Base');
   if (!sh || sh.getLastRow() < 1 || sh.getLastColumn() < 1) return (_LUG_CFG_ = cfg);
   var ancho = sh.getLastColumn();
@@ -1330,6 +1331,8 @@ function _lugaresCfg_() {
     if ((m = /^Billetera\s+(.+)$/.exec(h))) cfg.colBil[m[1].trim()] = i + 1;
     else if (h === 'Cobrado sin asignar') cfg.colCob[''] = i + 1;
     else if ((m = /^Cobrado\s+(.+)$/.exec(h))) cfg.colCob[m[1].trim()] = i + 1;
+    else if ((m = /^Guardado\s+(.+)$/.exec(h))) cfg.colG[m[1].trim()] = i + 1;   // (874)
+    else if (h === 'Contadas') cfg.colCont = i + 1;   // (874)
   }
   Object.keys(cfg.colBil).forEach(function (p) { if (cfg.colCob[p]) cfg.personas.push(p); });
   cfg.lastRow = sh.getLastRow();
@@ -1361,6 +1364,14 @@ function _lugaresCfg_() {
       cfg.base.cob[p] = Number(fila[cfg.colCob[p] - 1]) || 0;
     });
     cfg.base.cob[''] = cfg.colCob[''] ? (Number(fila[cfg.colCob[''] - 1]) || 0) : 0;
+    /* (874) Lo que dijo el conteo de cada lugar de guardado, y cuándo se contó de verdad cada cosa. */
+    Object.keys(cfg.colG).forEach(function (k) { cfg.base.g[k] = Number(fila[cfg.colG[k] - 1]) || 0; });
+    if (cfg.colCont) {
+      todas.forEach(function (f) {
+        if (!(f[0] instanceof Date)) return;
+        String(f[cfg.colCont - 1] || '').split(',').forEach(function (id) { id = id.trim(); if (id) cfg.contado[id] = f[0].getTime(); });
+      });
+    }
   }
   return (_LUG_CFG_ = cfg);
 }
