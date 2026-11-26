@@ -779,6 +779,61 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
     return bien(r) ? { ok: true, detalle: '$' + total + ' desde la cuenta ' + CTA } : mal(r, 'liquidación');
   }, { escribe: true, topeMs: 10000 });
 
+  /* (25/11/2026, 857) EMPRESA › EQUIPO: EL ORGANIGRAMA, A 393 Y A 1440. Que el árbol traiga todos los puestos de la base, que
+     cada foto se firme y BAJE de verdad (la firma necesita la política de lectura del bucket «equipo»: el que la pierde ve
+     iniciales, sin un error a la vista), que nadie de baja ocupe un puesto y que no haya scroll de costado en el celular.
+     Solo lectura. ROBOT_CAPTURAS=<carpeta> guarda organigrama-<ancho>.png. */
+  await paso('Empresa › Equipo: el organigrama, con las fotos, a 393 y 1440', async () => {
+    const det = [];
+    for (const ancho of [393, 1440]) {
+      await cli.enviar('Emulation.setDeviceMetricsOverride', { width: ancho, height: ancho < 769 ? 852 : 900, deviceScaleFactor: 1, mobile: ancho < 769 });
+      /* El robot no es admin y su fila de Permisos no tiene «empresa»: se la suma en SU página para medir la pantalla (la lectura
+         en la base la tiene igual, `_soy_robot`). No toca la hoja Permisos. */
+      await ev(`(function(){ try{ ORG.d=null; ORG.t=0; ORG.vuelo=null; ORG.err=''; }catch(e){} try{ if(SESSION&&Array.isArray(SESSION.tabs)&&SESSION.tabs.indexOf('empresa')<0)SESSION.tabs.push('empresa'); }catch(e){} go('empresa'); var pg=document.getElementById('p-empresa'); if(pg)pg.classList.remove('role-hidden'); return 1; })()`);
+      const listo = await esperar(`!!(window.ORG&&ORG.d&&ORG.d.ok&&document.querySelectorAll('#orgBody .org-c').length)`, 20000);
+      if (!listo) { await cli.enviar('Emulation.clearDeviceMetricsOverride', {}); return { ok: false, detalle: ancho + 'px: el organigrama no llegó a pintarse (' + (await ev(`String((window.ORG&&ORG.err)||'')`).catch(() => '')).slice(0, 120) + ')' }; }
+      /* En el celular las gerencias van plegadas: se despliegan todas para contar lo que hay. */
+      await ev(`(function(){ document.querySelectorAll('#orgBody [aria-expanded="false"]').forEach(function(b){ try{ b.click(); }catch(e){} }); return 1; })()`);
+      await esperar(`(function(){ var a=[].slice.call(document.querySelectorAll('#orgBody .eq-av[data-foto]')).filter(function(e){ return e.dataset.foto; });
+        return a.length && a.every(function(e){ return /url\\(/.test(e.style.backgroundImage||''); }); })()`, 15000);
+      await ev(`(function(){ var pg=document.getElementById('p-empresa'); if(pg)pg.classList.remove('role-hidden'); return 1; })()`);
+      const m = await ev(`(async function(){
+        var box=document.getElementById('orgBody'), rb=box?box.getBoundingClientRect():{height:0,width:0}, c1=document.querySelector('#orgBody .org-c'), rc=c1?c1.getBoundingClientRect():{height:0,width:0};
+        var seVe=rb.height>100&&rb.width>200&&rc.height>20&&rc.width>60&&getComputedStyle(document.getElementById('p-empresa')).display!=='none';
+        var D=ORG.d, ids={}; (D.puestos||[]).forEach(function(x){ ids[x.id]=1; });
+        var pintados={}; document.querySelectorAll('#orgBody .org-c[data-id]').forEach(function(e){ pintados[e.dataset.id]=1; });
+        var faltan=Object.keys(ids).filter(function(k){ return !pintados[k]; });
+        var av=[].slice.call(document.querySelectorAll('#orgBody .eq-av[data-foto]')).filter(function(e){ return e.dataset.foto; });
+        var sinFoto=av.filter(function(e){ return !/url\\(/.test(e.style.backgroundImage||''); }).map(function(e){ return e.dataset.foto; });
+        var urls={}; av.forEach(function(e){ var u=(String(e.style.backgroundImage).match(/url\\(["']?(.*?)["']?\\)$/)||[])[1]; if(u)urls[u]=e.dataset.foto; });
+        var rotas=[]; for (var u in urls) { try { var r=await fetch(u,{cache:'no-store'}); var b=r.ok?await r.blob():null; if(!r.ok||!b||!/^image\\//.test(b.type)||b.size<500)rotas.push(urls[u]+' ('+(r.status)+')'); } catch(e){ rotas.push(urls[u]+' (red)'); } }
+        var ocup=[]; (D.puestos||[]).forEach(function(x){ (x.ocupan||[]).forEach(function(o){ ocup.push(o.persona); }); });
+        var deBaja=(D.personas||[]).filter(function(p){ return p && (p.baja || (p.datos&&p.datos.baja)); }).map(function(p){ return p.persona; });
+        return { puestos:Object.keys(ids).length, faltan:faltan, fotos:av.length, unicas:Object.keys(urls).length, sinFoto:sinFoto, rotas:rotas,
+          fini:ocup.concat((D.personas||[]).map(function(p){ return p.persona; })).filter(function(n){ return /fini|mihailovitch/i.test(n); }),
+          deBaja:deBaja, seVe:seVe, alto:Math.round(rb.height), costado:document.documentElement.scrollWidth-document.documentElement.clientWidth };
+      })()`, 40000);
+      if (process.env.ROBOT_CAPTURAS) {
+        try { await ev(`window.scrollTo(0,0)`); await pausa(400);
+          const shot = await cli.enviar('Page.captureScreenshot', { format: 'png', captureBeyondViewport: ancho >= 769 });
+          fs.writeFileSync(path.join(process.env.ROBOT_CAPTURAS, 'organigrama-' + ancho + '.png'), Buffer.from(shot.data, 'base64')); } catch (eC) {}
+      }
+      const malo = [];
+      if (!m.seVe) malo.push('el organigrama no se VE (alto ' + m.alto + 'px): contar el DOM no alcanza');
+      if (!(m.puestos >= 10)) malo.push('la base trajo ' + m.puestos + ' puestos');
+      if (m.faltan.length) malo.push('sin pintar: ' + m.faltan.slice(0, 5).join(', '));
+      if (!m.fotos) malo.push('ninguna foto');
+      if (m.sinFoto.length) malo.push(m.sinFoto.length + ' fotos sin firmar (' + m.sinFoto.slice(0, 3).join(', ') + ')');
+      if (m.rotas.length) malo.push('fotos que no bajan: ' + m.rotas.slice(0, 3).join(', '));
+      if (m.fini.length) malo.push('aparece Fini (de baja): ' + m.fini.join(', '));
+      if (m.costado > 2) malo.push('scroll de costado de ' + m.costado + 'px');
+      if (malo.length) { await cli.enviar('Emulation.clearDeviceMetricsOverride', {}); return { ok: false, detalle: ancho + 'px: ' + malo.join(' · ') }; }
+      det.push(ancho + 'px: ' + m.puestos + ' puestos, ' + m.fotos + ' fotos (' + m.unicas + ' distintas) firmadas y bajadas');
+    }
+    await cli.enviar('Emulation.clearDeviceMetricsOverride', {});
+    return { ok: true, detalle: det.join(' · ') + ' · sin nadie de baja' };
+  }, { topeMs: 90000 });
+
   await paso('stock a los 2 min (recepción y traspaso)', async () => {
     if (!STOCK_ESPERADO) return { ok: false, detalle: 'no hubo movimiento de stock que mirar (falló un paso anterior)' };
     const falta = 120000 - (Date.now() - T_ULTIMO_MOV); if (falta > 0) await pausa(falta);
