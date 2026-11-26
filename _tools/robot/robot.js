@@ -765,12 +765,23 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
     /* Sin la 839 en la base (no viene `avisosTr`) no hay aviso ni señal en vivo: se saltea en vez de frenar el deploy. */
     const ep = await rpc('red_efectivo_pantalla', {}).catch(() => null);
     if (!(ep && ep.avisosTr)) return { ok: true, salteado: true, detalle: 'espera la migración 839 (aviso de transferencia y señal a Cobranza)' };
+    const libroPrueba = async () => { const lv = await rpc('robot_verificar', { p: {} }).catch(() => null); return lv && lv.libro ? Number((lv.libro[DEP] || {}).q) || 0 : null; };
+    const lb0 = STOCK_ESPERADO ? await libroPrueba() : null;
     const r = await require('./portal_rep.js')({ cdp, url: URL_APP, usuario: CRED.repUsuario, pin: CRED.repPin, n: REP_PED_N, admin: { ev, esperar }, observador: process.env.ROBOT_OBSERVADOR || '' });
     Object.assign(METRICAS, r.metricas || {});
     /* (26/11/2026, alerta #957) Entregar el autopedido saca 1 PRUEBA del depósito prueba (-SAL del Red). Pasa DESPUÉS de
        fijar STOCK_ESPERADO en la carga: sin descontarlo, «stock a los 2 min» daba «¡EL LIBRO VOLVIÓ PARA ATRÁS!» con el
        libro bien (26/11: esperado 2, libro 1 = la salida del #906079). El reloj de los 2 min sigue siendo el de la carga. */
-    if (STOCK_ESPERADO && /(^| · )1 entregar \(#/.test(String(r.detalle || ''))) STOCK_ESPERADO = { prueba: STOCK_ESPERADO.prueba - 1, ustariz: STOCK_ESPERADO.ustariz, de: STOCK_ESPERADO.de + ' menos la entrega del autopedido #' + REP_PED_N };
+    /* (26/11/2026 14:55, #957 otra vez) Restar 1 SIEMPRE tampoco: la entrega saca del libro solo si el autopedido nació
+       con stock. Si en ese momento no alcanzaba el PRUEBA, el alta lo mandó a OC (`sinLibro`) y entregarlo no mueve el
+       libro: desde b9ff113 las corridas daban «esperado 2 · libro 3» con el libro bien. Se mide lo que movió la entrega
+       (el libro antes y después de Mi Portal): 0 o −1 es correcto; otra cosa resta 1 y queda dicha en el detalle. */
+    if (STOCK_ESPERADO && lb0 != null && /(^| · )1 entregar \(#/.test(String(r.detalle || ''))) {
+      const lb1 = await libroPrueba(), dl = lb1 == null ? -1 : lb1 - lb0;
+      const ok01 = dl === 0 || dl === -1;
+      STOCK_ESPERADO = { prueba: STOCK_ESPERADO.prueba + (ok01 ? dl : -1), ustariz: STOCK_ESPERADO.ustariz,
+        de: STOCK_ESPERADO.de + (dl === 0 ? ' (la entrega del autopedido #' + REP_PED_N + ' no movió el libro: nació sin stock)' : ' menos la entrega del autopedido #' + REP_PED_N) + (ok01 ? '' : ' (¡la entrega movió ' + dl + '!)') };
+    }
     return { ok: r.ok, detalle: r.detalle };
   }, { escribe: true, topeMs: 90000 });
 
