@@ -179,18 +179,21 @@ async function cargarPedido(medio, yaPago, opt) {
   const antes = await pg.evaluate(() => (D.pedidos || []).filter((x) => /PRUEBA Robot/.test(x.c || '')).map((x) => x.h + '|' + x.n));
   return { prod, antes };
 }
+/* (26/11/2026, alerta #956) Desde la v1341 (851) a una casa nueva se le pregunta «¿Cómo nos conoció?», obligatoria: sin
+   contestarla GUARDAR corta y no sale el alta. La casa del robot es nueva siempre (robot_limpiar le borra los pedidos).
+   Se contesta con un toque, como Tadeo; antes se espera a que `casa_es_nueva` haya vuelto. Va en UNA función: el primer
+   arreglo estaba solo en `guardar()` y «Ya me pagó» toca GUARDAR por su cuenta, así que siguió sin alta (5 medios × 2 motores). */
+/* `npConocio` vive adentro de la sub-app: la de window es una copia. Se mide el DOM. El rpc tarda: hasta 4 s. */
+async function contestarConocio() {
+  const pregunta = await esperar(() => { const w = document.getElementById('npConocioWrap'); return !!(w && w.style.display !== 'none'); }, null, 4000);
+  if (!pregunta) return;
+  await tocar('#npConocio .np-chip', 'Otro');
+  chk('+ Pedido: «¿Cómo nos conoció?» (casa nueva) queda contestada', await pg.evaluate(() => (document.querySelector('#npConocio .np-chip.active') || {}).textContent === 'Otro'));
+}
 async function guardar(antes) {
   const n0 = await pg.evaluate(() => window.__posts.length);
-  /* (26/11/2026, alerta #956) Desde la v1341 (851) a una casa nueva se le pregunta «¿Cómo nos conoció?», obligatoria: sin
-     contestarla GUARDAR corta y no sale el alta. La casa del robot es nueva siempre (robot_limpiar le borra los pedidos).
-     Se contesta con un toque, como Tadeo; antes se espera a que `casa_es_nueva` haya vuelto. */
-  /* `npConocio` vive adentro de la sub-app: la de window es una copia. Se mide el DOM. El rpc tarda: hasta 4 s. */
-  const pregunta = await esperar(() => { const w = document.getElementById('npConocioWrap'); return !!(w && w.style.display !== 'none'); }, null, 4000);
-  if (pregunta) {
-    await tocar('#npConocio .np-chip', 'Otro');
-    chk('+ Pedido: «¿Cómo nos conoció?» (casa nueva) queda contestada', await pg.evaluate(() => (document.querySelector('#npConocio .np-chip.active') || {}).textContent === 'Otro'));
-  }
-  const g = await tocar('button', 'GUARDAR', '#nuevoView', { espera: 300 }) || await tocar('button', 'GUARDAR');
+  await contestarConocio();
+  const g =await tocar('button', 'GUARDAR', '#nuevoView', { espera: 300 }) || await tocar('button', 'GUARDAR');
   if (!g) return { err: 'no encontré GUARDAR' };
   /* El número: lo que devuelve el alta. */
   const alta = await esperar((n0) => { const p = window.__posts.slice(n0).find((x) => /alta/i.test(x.u) && x.r); if (!p) return null; const m = /"n"\s*:\s*"?(\d+)/.exec(p.r) || /"ref"\s*:\s*"?(\d+)/.exec(p.r); return { u: p.u, r: p.r.slice(0, 200), n: m && m[1] }; }, n0, 30000);
@@ -320,6 +323,7 @@ async function flujoYaPago() {
     const n0 = await pg.evaluate(() => window.__posts.length);
     /* SIN_SENAL=1: dos fallas a la vez. GUARDAR sin red (el alta queda en la cola de + Pedido), «Listo →», COBRANZA, y la
        señal vuelve a los 8 s: el cuadro se tiene que abrir solo, esté donde esté. */
+    await contestarConocio();   /* antes de cortar la señal: la pregunta depende de `casa_es_nueva`, que va a la base */
     if (process.env.SIN_SENAL) { await pg.context().setOffline(true); await pg.evaluate(() => window.dispatchEvent(new Event('offline'))); }
     const g = await tocar('button', 'GUARDAR', '#nuevoView', { espera: 150 });
     if (!g) { chk(medio + ': GUARDAR', false); continue; }
@@ -746,21 +750,46 @@ async function flujoRed() {
   console.log('\n── Red: la bolsa');
   await pg.evaluate(() => { try { _recargarPedidos(); } catch (e) {} go('ruta'); }); await T(2500);
   await tocar('.tab[data-tab="armado"]', '', '', { espera: 4000 });
-  await tocar('[onclick*="toggleCollapse"]', '27/11', '#armadoView', { callado: true, espera: 1000 });
+  /* (26/11/2026, #956) El día de la bolsa sale del autopedido, no escrito a mano: con «27/11» fijo, el 28/11 el grupo
+     quedaba plegado, la card no se veía y el toque no la encontraba (y el cartel esperaba «viernes 27/11»). */
+  /* El día de la bolsa no es el de la entrega del autopedido (sale el viernes de antes): se busca el GRUPO que tiene la card
+     de PRUEBA Robot y se despliega ese. */
+  const diaBolsa = await pg.evaluate(() => { const c = [].find.call(document.querySelectorAll('#armadoView .armado-card.red'), (x) => /PRUEBA Robot/.test(x.textContent)); if (!c) return null;
+    for (let e = c.parentElement; e && e.id !== 'armadoView'; e = e.parentElement) { let h = e.previousElementSibling; while (h && !(h.getAttribute('onclick') || '').match(/toggleCollapse\('dia:/)) h = h.querySelector ? (h.querySelector('[onclick*="toggleCollapse(\'dia:"]') || h.previousElementSibling) : null;
+      if (h) { const m = /dia:(\d{4}-\d{2}-\d{2})/.exec(h.getAttribute('onclick') || ''); if (m) return m[1]; } }
+    return null; });
+  const dmBolsa = diaBolsa ? diaBolsa.slice(8, 10) + '/' + diaBolsa.slice(5, 7) : String(ap.fecha || '').slice(8, 10) + '/' + String(ap.fecha || '').slice(5, 7);
+  console.log('       la bolsa está en el día ' + (diaBolsa || '? (uso la entrega ' + ap.fecha + ')'));
+  /* Solo si la card no se ve: si el grupo ya venía desplegado, tocarlo lo PLIEGA (y la card desaparece). */
+  const cardVis = () => pg.evaluate(() => { const c = [].find.call(document.querySelectorAll('#armadoView .armado-card.red'), (x) => /PRUEBA Robot/.test(x.textContent)); const h = c && c.querySelector('.armado-head'); return !!(h && h.getClientRects().length && h.getBoundingClientRect().height > 0); });
+  /* Y no hay un solo pliegue: adentro del día el canal Red también viene plegado (`can:<día>:re`). Se despliega, de afuera
+     hacia adentro, cada grupo plegado que esconda la card (hasta 4). */
+  for (let k = 0; k < 4 && !(await cardVis()); k++) {
+    const t = await pg.evaluate(() => { const c = [].find.call(document.querySelectorAll('#armadoView .armado-card.red'), (x) => /PRUEBA Robot/.test(x.textContent)); let ult = null;
+      for (let e = c; e && e.id !== 'armadoView'; e = e.parentElement) { if (getComputedStyle(e).display === 'none') { const h = e.previousElementSibling, m = h && /toggleCollapse\('([^']+)'\)/.exec(h.getAttribute('onclick') || ''); if (m) ult = m[1]; } }
+      return ult; });
+    if (!t) break;
+    await tocar('[onclick*="toggleCollapse(\'' + t + '\')"]', '', '#armadoView', { callado: true, espera: 1000 });
+  }
+  if (!(await cardVis())) console.log('       la card de la bolsa NO se ve: ' + await pg.evaluate(() => { const c = [].find.call(document.querySelectorAll('#armadoView .armado-card.red'), (x) => /PRUEBA Robot/.test(x.textContent)); const out = [];
+    for (let e = c; e && e.id !== 'pg-ruta'; e = e.parentElement) { const cs = getComputedStyle(e); if (cs.display === 'none' || cs.visibility === 'hidden' || e.hidden || /collaps|cerrad|hidden/.test(e.className)) out.push((e.id ? '#' + e.id : '') + '.' + String(e.className).replace(/ +/g, '.') + ' [' + cs.display + '] ' + (e.previousElementSibling ? '← ' + String(e.previousElementSibling.getAttribute('onclick') || e.previousElementSibling.className).slice(0, 70) : '')); }
+    return out.join(' | ') || 'ningún ancestro oculto (alto ' + Math.round(c.getBoundingClientRect().height) + ')'; }));
   if (process.env.EXPLORAR) await volcar('red armado');
   /* Armar la bolsa del representante (toggleArmadoMasivo → «Sí, listos») y dársela (entregarAVendedor). */
   const rc = await pg.evaluate(() => { const c = [].find.call(document.querySelectorAll('#armadoView .armado-card.red'), (x) => /PRUEBA Robot/.test(x.textContent)); if (!c) return null; c.setAttribute('data-au', 'red'); return c.innerText.replace(/\s+/g, ' ').slice(0, 200); });
   if (!chk('red: la bolsa de PRUEBA Robot está en ARMADO («' + rc + '»)', !!rc)) return;
-  await tocar('.armado-card[data-au="red"] .armado-check', '', '', { callado: true }) || await tocar('.armado-card[data-au="red"] .armado-prods', '');
+  /* (26/11/2026, #956) Por TEXTO y no por la marca `data-au`: con el en vivo, ARMADO se repinta entre marcar y tocar y la
+     marca se pierde («no encontré .armado-card[data-au="red"]…»). La cabecera de la card dice «Sacar para PRUEBA Robot». */
+  await tocar('#armadoView .armado-card.red .armado-head', 'Sacar para PRUEBA Robot', '', { callado: true }) || await tocar('#armadoView .armado-card.red .armado-prods', '');
   const pre = await esperar(() => { const o = document.getElementById('confirmOverlay'); return o && !o.classList.contains('hidden') && o.getClientRects().length ? o.innerText.replace(/\s+/g, ' ').slice(0, 160) : null; }, null, 6000);
   chk('red: pregunta «Listo para PRUEBA Robot?» (' + pre + ')', /Listo para/.test(pre || ''), pre);
   await tocar('#confirmOverlay .btn-si', '');
   await T(2500);
   if (process.env.EXPLORAR) await volcar('red armada');
   const cartel = await pg.evaluate(() => { const c = document.querySelector('.armado-card[data-au="red"]') || [].find.call(document.querySelectorAll('#armadoView .armado-card.red'), (x) => /PRUEBA Robot/.test(x.textContent)); return c ? c.innerText.replace(/\s+/g, ' ') : ''; });
-  chk('red: armada para otro día, el cartel dice cuándo aparece en RUTA (no «pasá a RUTA»)', /Aparece en RUTA el viernes 27\/11/i.test(cartel), cartel.slice(-120));
+  chk('red: armada para otro día, el cartel dice cuándo aparece en RUTA (no «pasá a RUTA»)', new RegExp('Aparece en RUTA el [^ ]+ ' + dmBolsa, 'i').test(cartel), cartel.slice(-120));
   /* La bolsa se da en RUTA el día de la bolsa (el viernes): el reloj de la PÁGINA va a ese día; la base sigue en la hora real. */
-  const fe = ap.fecha; await pg.clock.setSystemTime(new Date(fe + 'T10:00:00-03:00'));
+  const fe = diaBolsa || ap.fecha; await pg.clock.setSystemTime(new Date(fe + 'T10:00:00-03:00'));
   console.log('       reloj de la página: ' + (await pg.evaluate(() => new Date().toString())));
   await pg.evaluate(() => { try { rutRender(); } catch (e) {} });
   await tocar('.tab[data-tab="ruta"]', '', '', { espera: 3000 });
