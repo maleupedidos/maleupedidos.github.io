@@ -542,6 +542,13 @@
     .bono-nota { font-size: .8rem; color: #8a7a70; padding-top: .4rem; }
     /* HOY (18/11/2026, auditoría): las entregas con «Entregado» de un toque. */
     .portal-fuera { display: none !important; }
+    .cons-card { background: #fff; border-radius: 14px; box-shadow: 0 1px 3px rgba(0,0,0,.06); padding: .9rem .9rem .5rem; margin-bottom: .8rem; }
+    .cons-fila { border-top: 1px solid #f0ebe3; padding: .6rem 0; }
+    .cons-fila:first-of-type { border-top: 0; }
+    .cons-m { font-size: 1rem; color: #2b211d; line-height: 1.35; }
+    .cons-m b { font-weight: 800; }
+    .cons-s { font-size: .82rem; color: #6d5f56; margin-top: 2px; }
+    .cons-bts { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: .5rem; }
     .ent-card, .venc-card { background: #fff; border-radius: 14px; box-shadow: 0 1px 3px rgba(0,0,0,.06); padding: .9rem .9rem .3rem; margin-bottom: .8rem; }
     .venc-card { border-left: 4px solid #c62828; }
     .venc-card .hy-h span { color: #b71c1c; }
@@ -1183,6 +1190,7 @@
            de este reparto con «Entregado» de un toque (renderEntregasHoy), y dos renglones que llevan a Plata y a
            Clientes. «Lo que vas a cobrar», el bono y el nivel se mudaron a Plata; el objetivo y las tareas, a Clientes. -->
       <div class="cb-card hidden" id="cb-card"></div>
+      <div class="cons-card hidden" id="cons-card"></div>
       <div class="venc-card hidden" id="venc-card"></div>
       <div class="ent-card hidden" id="ent-card"></div>
       <div class="hoy-links" id="hoy-links"></div>
@@ -2782,6 +2790,7 @@ function renderDashboard(d) {
   if (_liqBaseUlt) d.liqProx = _liqBaseUlt;   // (18/11/2026, 760) la de la base, si ya llegó: una sola liquidación
   renderCobrar(d.liqProx || null, d.liqs || []);
   renderBono();
+  renderConseguidos();   // (26/11/2026, 863/864) el reparto en 3
   cargarLiqBase();   // (18/11/2026, 760) la liquidación de la base reemplaza a la del teléfono
   // Lo vencido sin marcar (5/10/2026) y las entregas de esta semana con «Entregado» de un toque (18/11/2026)
   renderVencidos(d.pedidos);
@@ -3704,6 +3713,89 @@ function renderBono() {
     _bonoUlt = d; _pintarBono(el, d);
   }).catch(function () {});
 }
+/* (26/11/2026, 863/864) EL REPARTO EN 3. El cliente eligió a este representante en la tienda («¿Cómo nos conociste?»):
+   lo consiguió él. Si lo entrega otro (el de esa zona) cobra la mitad de su escala; si lo entrega él, la escala entera +
+   el envío. La decisión es suya hasta las 12 del día anterior a la entrega (`red_conseguidos_pantalla`). Arriba los dos
+   montos y el corte; el cliente, en chico. Y en «Hoy entregás», la entrega de un cliente de otro dice de quién es. */
+var _consUlt = null, _consDeOtros = {};
+function renderConseguidos() {
+  var el = $id('cons-card');
+  if (!el) return;
+  if (_consUlt) _pintarConseguidos(el, _consUlt);
+  if (typeof _sbPermiso !== 'function') return;
+  _sbPermiso(true).then(function (sb) {
+    if (!sb || !sb.token) return null;
+    return fetch(sb.url + '/rest/v1/rpc/red_conseguidos_pantalla', { method: 'POST',
+      headers: { apikey: sb.key, Authorization: 'Bearer ' + sb.token, 'Content-Type': 'application/json' }, body: '{"p":{}}' })
+      .then(function (r) { return r.ok ? r.json() : null; });
+  }).then(function (d) {
+    if (!d || !d.ok) return;
+    _consUlt = d; _pintarConseguidos(el, d);
+    var m = {}; (d.deOtros || []).forEach(function (x) { m[String(x.n)] = x.cons; });
+    var cambio = JSON.stringify(m) !== JSON.stringify(_consDeOtros);
+    _consDeOtros = m;
+    /* «Te falta marcar» también dice «cliente de X»: se repintan los dos (la respuesta llega después del primer pintado). */
+    if (cambio && lastDashboardData) { renderVencidos(lastDashboardData.pedidos); renderEntregasHoy(); }
+  }).catch(function () {});
+}
+function _consCorte(iso) {
+  var t = iso ? new Date(iso) : null;
+  if (!t || isNaN(t)) return '';
+  return _DIAS_CORTOS[t.getDay()] + ' ' + String(t.getHours()).padStart(2, '0') + ':' + String(t.getMinutes()).padStart(2, '0');
+}
+function _pintarConseguidos(el, d) {
+  var yo = d.yo || '', l = (d.conseguidos || []).filter(function (x) { return x.es !== 'Entregado'; });
+  if (!l.length) { el.classList.add('hidden'); el.innerHTML = ''; return; }
+  var pri = function (s) { return String(s || '').split(' ')[0]; };
+  var h = '<div class="hy-h"><span>Clientes que conseguiste</span><small>' + l.length + '</small></div>';
+  l.forEach(function (x) {
+    var sub = [x.c, x.b, _hoyDia(x.fe)].filter(Boolean).join(' · ');
+    var corte = _consCorte(x.corte), m = '', bts = '';
+    if (x.canal === 'Red' && x.entrega !== yo) {
+      if (x.puedeTomar) {
+        m = 'Lo entrega ' + redEsc(pri(x.entrega)) + ': cobrás <b>' + ars(x.mitad) + '</b><br>Si lo entregás vos: <b>' + ars(x.entero) + '</b>';
+        bts = '<button type="button" class="hy-bt" data-n="' + redEsc(x.n) + '" data-row="' + (Number(x.row) || 0) + '" data-v="' + redEsc(yo) + '" onclick="redConsEntrega(this)">Lo entrego yo</button>';
+        sub = 'Hasta el ' + corte + ' · ' + sub;
+      } else {
+        m = 'Lo entrega ' + redEsc(pri(x.entrega)) + ': cobrás <b>' + ars(x.mitad) + '</b>';
+        if (x.porConfirmar) sub = 'Maleu lo está confirmando · ' + sub;
+      }
+    } else if (x.canal === 'Red') {
+      m = 'Lo entregás vos: cobrás <b>' + ars(x.entero) + '</b>';
+      var otros = (x.opciones || []).filter(function (o) { return !o.yo; });
+      var antes = x.corte && new Date() < new Date(x.corte);
+      if (otros.length && antes) {
+        otros.forEach(function (o) { bts += '<button type="button" class="hy-bt" data-n="' + redEsc(x.n) + '" data-row="' + (Number(x.row) || 0) + '" data-v="' + redEsc(o.nombre) + '" onclick="redConsEntrega(this)">Que lo entregue ' + redEsc(pri(o.nombre)) + '</button>'; });
+        m += '<br>Si lo entrega otro: <b>' + ars(x.mitad || 0) + '</b>';
+        sub = 'Hasta el ' + corte + ' · ' + sub;
+      }
+    } else {
+      m = 'Lo entrega Maleu: cobrás <b>' + ars(x.mitad) + '</b>';
+    }
+    h += '<div class="cons-fila"><div class="cons-m">' + m + '</div><div class="cons-s">' + redEsc(sub) + '</div>' + (bts ? '<div class="cons-bts">' + bts + '</div>' : '') + '</div>';
+  });
+  el.innerHTML = h;
+  el.classList.remove('hidden');
+}
+function redConsEntrega(btn) {
+  var n = btn.getAttribute('data-n'), row = btn.getAttribute('data-row'), vend = btn.getAttribute('data-v');
+  if (btn) { btn.disabled = true; btn.textContent = 'Guardando…'; }
+  _sbPermiso(true).then(function (sb) {
+    if (!sb || !sb.token) throw new Error('sin sesión');
+    return fetch(sb.url + '/rest/v1/rpc/red_que_lo_entregue_directo', { method: 'POST',
+      headers: { apikey: sb.key, Authorization: 'Bearer ' + sb.token, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ p: { n: String(n), row: Number(row) || 0, vendedor: vend, clientOpId: 'qle_' + n + '_' + Date.now().toString(36) } }) })
+      .then(function (r) { return r.json(); });
+  }).then(function (r) {
+    if (!r || r.ok === false) throw new Error((r && (r.err || r.message)) || 'no se pudo');
+    redToast(r.vendedor === (_consUlt && _consUlt.yo) ? 'Listo: lo entregás vos' : 'Listo: lo entrega ' + String(r.vendedor || '').split(' ')[0]);
+    renderConseguidos();
+    try { loadDashboard(); } catch (e) {}
+  }).catch(function (e) {
+    if (btn) { btn.disabled = false; btn.textContent = 'Probá de nuevo'; }
+    redToast('No se cambió: ' + ((e && e.message) || 'error'));
+  });
+}
 function _pintarBono(el, d) {
   /* (18/11/2026, ronda 2) Un renglón: «5 clientes nuevos · hasta $75.000 si vuelven», y la lista plegada. Los bonos que ya
      ganó no se repiten acá: están adentro de la liquidación («Te debemos» / «En curso»). */
@@ -3859,6 +3951,8 @@ function _hoyDia(fe) {
 function _hoyDonde(p) { return [p.b || '', p.l ? 'Lote ' + p.l : ''].filter(Boolean).join(' · '); }
 function _hoyFila(p, det) {
   const ok = p.es === 'Entregado';
+  /* (26/11/2026, 863) La entrega de un cliente que consiguió otro representante dice de quién es. */
+  if (_consDeOtros[String(p.n)]) det = [det, 'cliente de ' + String(_consDeOtros[String(p.n)]).split(' ')[0]].filter(Boolean).join(' · ');
   const k = "'" + redEsc(p.n) + "'," + (Number(p.row) || 0);
   return '<div class="hy-fila' + (ok ? ' ok' : '') + '">'
     + '<button type="button" class="hy-q" ' + (ok ? 'disabled' : 'onclick="redIrAPedido(' + k + ')"') + '>'

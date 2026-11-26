@@ -178,9 +178,6 @@ body.embed .sem-tabs{top:48px}
 .aba-ocup-c[role=button]{cursor:pointer}
 .aba-ocup-c[role=button]:active{background:#FFF8EC}
 .hj{display:block}
-.np-cli-preg{background:#FFF8E1;border:1px solid #F3D27A;border-radius:12px;padding:10px 12px;margin:8px 0}
-.np-cli-t{font-weight:800;font-size:14px;color:#5D4037;margin-bottom:8px}
-.np-cli-b{display:flex;gap:8px}.np-cli-b>button{flex:1 1 0;margin:0!important;min-height:44px}
 /* (19/11/2026, Tadeo: «Pagos de hoy chueco abajo a la izquierda») Lo que no es una tarjeta de proveedor no comparte la grilla:
    la deuda total, Pagos de hoy y Pagado por mes van a todo el ancho. */
 #pagosList>.aba-res,#pagosList>.aba-pagmes,#pagosList>details.aba-pagmes,#provList>.aba-vacio-l,#provList>.aba-sec-t{grid-column:1/-1}
@@ -381,6 +378,8 @@ body.embed .sem-tabs{top:48px}
 .np-section{padding:8px}
 .np-field{margin-bottom:14px}
 .np-label{font-size:12px;font-weight:700;color:#7A4A4A;text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px}
+.np-llega-hint{font-size:12px;color:#7A4A4A;margin-top:6px;line-height:1.35}
+.np-llega-hint:empty{display:none}
 .np-select{width:100%;padding:12px;border:2px solid #E8DFC4;border-radius:10px;font-family:inherit;font-size:14px;color:#331C1C;background:#fff;appearance:none;outline:none}
 .np-select:focus{border-color:#F07D47}
 .np-empty{font-size:13px;color:#7A4A4A;font-style:italic;padding:20px;text-align:center}
@@ -1138,12 +1137,18 @@ details.res-plegada[open]>summary .res-prov-head{margin-bottom:8px}
         <option value="">Elegir proveedor…</option>
       </select>
     </div>
+    <!-- (26/11/2026, 871) Cuándo llega la reposición: sin fecha, lo que viene no cuenta en la tienda ni en Mi Portal. -->
+    <div class="np-field" id="npLlegaField" hidden>
+      <div class="np-label">Cuándo llega</div>
+      <input type="date" class="np-select" id="npLlegaEl" onchange="abaNpLlegaCambio()">
+      <div class="np-llega-hint" id="npLlegaHint"></div>
+    </div>
     <div id="npStockOverview"></div>
     <!-- La factura de la carne: aparece al elegir un proveedor de carne (15/9/2026) -->
     <div id="abaCcArriba" class="hidden"><div id="abaCcTop"></div><div id="abaCcFormBox"></div></div>
     <div id="npProductsList"></div>
     <div id="npSummary" class="hidden"></div>
-    <button class="btn-confirm hide" id="npConfirm" onclick="confirmarCompra()" disabled>Confirmar compra</button>
+    <button class="btn-confirm hide" id="npConfirm" onclick="confirmarCompra()" disabled>Ya se lo pedí</button>
     <div id="abaCcAbajo" class="hidden"><div id="abaCcListBox"></div></div>
   </div>
 </div>
@@ -6174,8 +6179,53 @@ function onNpProvChange() {
   _npPintarProductos(prov);
 }
 
+/* (26/11/2026, 871) CUÁNDO LLEGA LA REPOSICIÓN. Desde la 870 la tienda, Mi Portal y la cobertura de pedidos cuentan lo que
+   viene en camino solo si la OC sabe cuándo llega; una reposición sin esa fecha la base ya no la guarda. Al elegir el
+   proveedor viene propuesto el retiro programado o su día habitual (`prov_llegada_pantalla`), y se puede cambiar. Lo
+   elegido se queda mientras sea el mismo proveedor (también después de confirmar una compra). La carne no lleva fecha:
+   no se compra por acá. */
+var _abaNpLlega = { prov: '', tocado: false };
+function _abaNpLlegaHoy() { return new Date(Date.now() - 3 * 3600 * 1000).toISOString().slice(0, 10); }
+function abaNpLlegaPintar(prov) {
+  var w = document.getElementById('npLlegaField'), inp = document.getElementById('npLlegaEl'), h = document.getElementById('npLlegaHint');
+  if (!w || !inp || !h) return;
+  var its = (prov && catalogo.productos && catalogo.productos[prov]) || [];
+  var ver = npEsStock() && its.length > 0 && !its.every(function (it) { return it.u === 'kg'; });
+  w.hidden = !ver;
+  if (!ver) return;
+  inp.min = _abaNpLlegaHoy();
+  if (_abaNpLlega.prov === prov) return;
+  _abaNpLlega = { prov: prov, tocado: false };
+  inp.value = '';
+  h.textContent = 'Buscando el día de retiro…';
+  var sinFecha = function () { if (_abaNpLlega.prov === prov && !inp.value) h.textContent = 'Elegí el día que la retirás o te la traen.'; };
+  Promise.resolve().then(function () { return _baseRpc('prov_llegada_pantalla', { p: { proveedor: prov } }); }).then(function (d) {
+    if (_abaNpLlega.prov !== prov || _abaNpLlega.tocado) return;
+    var f = d && d.fecha ? String(d.fecha).slice(0, 10) : '';
+    if (f && f >= inp.min) { inp.value = f; h.textContent = 'Propuesto: ' + (d.texto || 'el día de retiro') + '. Si es otro día, cambialo.'; }
+    else sinFecha();
+    updateNpSummary();
+  }).catch(function () { sinFecha(); updateNpSummary(); });
+}
+function abaNpLlegaCambio() {
+  _abaNpLlega.tocado = true;
+  var h = document.getElementById('npLlegaHint'); if (h) h.textContent = '';
+  updateNpSummary();
+}
+/* La fecha elegida, solo si el campo se ve (reposición de stock con OC). */
+function abaNpLlegaEl() {
+  var w = document.getElementById('npLlegaField'), inp = document.getElementById('npLlegaEl');
+  return (w && !w.hidden && inp && inp.value) || '';
+}
+function abaNpLlegaFalta(items) {
+  var w = document.getElementById('npLlegaField');
+  if (!w || w.hidden) return false;
+  return (items || []).some(function (it) { return it.origen !== 'Deposito'; }) && !abaNpLlegaEl();
+}
+
 function _npPintarProductos(prov) {
   try { _abaDemDepPedir(); } catch (e) {}
+  try { abaNpLlegaPintar(prov); } catch (eLl) {}
   var container = document.getElementById('npProductsList');
   var _esCarneSolo = prov && !catalogo.productos[prov] && _abaCcEsCarne(prov);
   if (!prov || (!catalogo.productos[prov] && !_esCarneSolo)) {
@@ -6634,7 +6684,7 @@ function updateNpSummary() {
   if (items.length === 0) {
     div.classList.add('hidden');
     btn.disabled = true;
-    btn.textContent = 'Confirmar compra';
+    btn.textContent = 'Ya se lo pedí';
     btn.classList.remove('success');
     return;
   }
@@ -6660,12 +6710,20 @@ function updateNpSummary() {
             _abaH(_vend) + ': es lo que después te deja cobrarle.<br>' +
             'Aparece en <b>Ruta › COBRANZA</b> cuando marcás la entrega en ARMADO.</div>';
   }
+  /* (26/11/2026) Lucas armaba la lista acá y al tocar «Confirmar compra» quedaba «Ya pedido» sin haberla mandado: la compra
+     nace en «Pedido» (es lo único que acepta la base). El botón ahora dice lo que hace. */
+  html += '<div class="np-summary-dep">Tocá el botón cuando ya se lo mandaste a ' + _abaH((document.getElementById('npProv') || {}).value || 'el proveedor') + ': queda en «Ya pedido».</div>';
+  /* (871) La fecha de llegada se ve en el resumen; sin ella el botón no se puede tocar (la base no la guardaría). */
+  var _llega = abaNpLlegaEl(), _faltaLlega = abaNpLlegaFalta(items);
+  if (_llega) { var _ld = new Date(_llega + 'T12:00:00'); html += '<div class="np-summary-dep">Llega el ' + ['dom', 'lun', 'mar', 'mié', 'jue', 'vie', 'sáb'][_ld.getDay()] + ' ' + _llega.slice(8, 10) + '/' + _llega.slice(5, 7) + '</div>'; }
   html += '</div>';
 
   div.innerHTML = html;
   div.classList.remove('hidden');
+  btn.classList.remove('success');
+  if (_faltaLlega) { btn.disabled = true; btn.textContent = 'Elegí cuándo llega'; return; }
   btn.disabled = false;
-  btn.textContent = 'Confirmar compra — ' + abaFormatMoney(total);
+  btn.textContent = 'Ya se lo pedí — ' + abaFormatMoney(total);
   btn.classList.remove('success');
 }
 
@@ -6676,31 +6734,18 @@ function abaCompraDuplicadaSigue(resp) {
   return confirm(resp.error || ('Ya cargaste esta compra hoy a las ' + resp.hora + '. ¿Es otra?'));
 }
 
-/* (19/11/2026, 801) Las OC de clientes «Pendiente» de ese proveedor en la semana que se mira: si hay, la compra pregunta
-   «¿También le pediste lo de los N clientes?» (nada marcado) y el Sí las pasa a «Pedido» en la misma RPC. */
-var _npCliResp = null;
-function _npCliPend(prov) {
-  return ((busqueda && busqueda.ocs) || []).filter(function (oc) { return oc && oc.prov === prov && oc.est === 'Pendiente' && !isTadeoStockCli(oc.cliente, oc.canal) && _matchSem(oc); });
-}
-function npCliResponder(si) { _npCliResp = si ? 'si' : 'no'; var q = document.getElementById('npCliPreg'); if (q) q.remove(); confirmarCompra(); }
+/* (26/11/2026) Sin la pregunta de la 801 («¿También le pediste lo de los N clientes?»). Tadeo: «no tiene nada que ver
+   Sara con el pedido que está haciendo Lucas para los depósitos». La reposición no toca ni pregunta por las OC de
+   clientes: esas siguen su camino (su tarjeta en Pedir, «Marcar como pedido»). La base ya no recibe `marcarClientes`. */
 function confirmarCompra(confirmarDuplicada) {
   var items = getNpItems();
   if (items.length === 0) return;
 
   var prov = document.getElementById('npProv').value;
-  var _cliP = _npCliPend(prov);
-  if (_cliP.length && !_npCliResp) {
-    var _nC = {}; _cliP.forEach(function (oc) { _nC[oc.nped || oc.cliente || oc.r] = 1; }); _nC = Object.keys(_nC).length;
-    var _bt = document.getElementById('npConfirm');
-    if (_bt && !document.getElementById('npCliPreg')) _bt.insertAdjacentHTML('beforebegin', '<div id="npCliPreg" class="np-cli-preg"><div class="np-cli-t">¿También le pediste lo de ' + (_nC === 1 ? 'el cliente' : 'los ' + _nC + ' clientes') + '?</div>'
-      + '<div class="np-cli-b"><button type="button" class="btn-wa" onclick="npCliResponder(true)">Sí</button><button type="button" class="btn-wa" onclick="npCliResponder(false)">No</button></div></div>');
-    return;
-  }
-  var _marcarCli = (_npCliResp === 'si') ? _cliP.map(function (oc) { return { r: oc.r, oc: oc.oc || '', estado: 'Pedido' }; }) : null;
-  _npCliResp = null;
   var vendedor = document.getElementById('npVendedor').value;
   var btn = document.getElementById('npConfirm');
   if (btn.disabled) return;   // un segundo toque no manda otra compra
+  if (abaNpLlegaFalta(items)) { abaShowToast('Elegí cuándo llega la compra'); return; }
   btn.disabled = true;
   btn.textContent = 'Enviando…';
 
@@ -6712,7 +6757,8 @@ function confirmarCompra(confirmarDuplicada) {
     deposito: (npEsStock() && !abaNpPorDemanda() && (document.getElementById('npDepDest') || {}).value) || undefined,
     /* (15/11/2026, 712) Con «Según la demanda»: cuánto de cada producto va a cada depósito. La base lo anota en la OC. */
     reparto: abaNpReparto(items) || undefined,
-    marcarClientes: _marcarCli && _marcarCli.length ? _marcarCli : undefined,   /* (801) */
+    /* (26/11/2026, 871) Cuándo llega: la base lo guarda en la OC (`llega_el`); sin esto una reposición no se guarda. */
+    llegaEl: abaNpLlegaEl() || undefined,
     items: items,
     /* El mismo id en todos los reintentos: el servidor no carga dos veces una
        compra que ya escribio (13/9/2026). Si era para un vendedor, un reintento
@@ -6751,7 +6797,7 @@ function confirmarCompra(confirmarDuplicada) {
       _abaGuardandoSacar(payload.clientOpId);
       abaHideLoader(true);
       btn.disabled = false;
-      btn.textContent = 'Confirmar compra';
+      btn.textContent = 'Ya se lo pedí';
       updateNpSummary();
       if (resp.duplicada) {
         if (abaCompraDuplicadaSigue(resp)) confirmarCompra(true);
