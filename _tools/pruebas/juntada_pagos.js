@@ -1,0 +1,83 @@
+/* LA CUENTA DE LOS QUE COMIERON EN LA FICHA (21/11/2026). WebKit 390, toque real, NADA SE ESCRIBE.
+   PW=<playwright-core> SES=<sesion.json> BASE=http://localhost:8155/app.html PED=Home:2533 [OUT=<carpeta>] node juntada_pagos.js
+   1. Sin la 821 (como hoy): «Cada uno: $X · son N» (quien pidió + los cargados), sin «Pagó/Falta» (no se podría saber
+      después quién pagó), y «Copiar para el grupo» con maleu26.
+   2. Como con la 821: la respuesta de pedido_cobro_pantalla trae pagos con nota «Juntada: <nombre>» para todos menos uno.
+      «Pagaron N-1 de N · falta X», y tocar «Falta» arma el cobrarParcial correcto (se corta: no escribe). */
+'use strict';
+const fs = require('fs'), path = require('path');
+const pw = require(process.env.PW || 'playwright-core');
+const SB = 'https://xhaxmyvhygxynwjqrarm.supabase.co', PUB = 'sb_publishable_IVIVgOV-t_ugcQz1zQNwsw_U-4yOMZG';
+const BASE = process.env.BASE || 'http://localhost:8155/app.html', OUT = process.env.OUT || '.';
+const [PH, PN] = String(process.env.PED || 'Home:2533').split(':');
+let ok = 0, mal = 0; const chk = (n, c, d) => { c ? ok++ : mal++; console.log((c ? '  ok   ' : '  MAL  ') + n + (c || d === undefined ? '' : '\n         ' + JSON.stringify(d))); };
+(async () => {
+  const ses = JSON.parse(fs.readFileSync(process.env.SES, 'utf8'));
+  const br = await pw.webkit.launch();
+  for (const con821 of [false, true]) {
+    const ctx = await br.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true });
+    await ctx.addInitScript(`try{localStorage.setItem('maleu_panel_session',JSON.stringify({usuario:'tadeo',rol:'admin',nombre:'Tadeo Ustariz',ts:Date.now()}));
+      localStorage.setItem('mc_sbses',${JSON.stringify(JSON.stringify({ u: 'tadeo', url: SB, key: PUB, access: ses.access_token, refresh: ses.refresh_token, hasta: Date.now() + 50 * 60e3, modo: 'si', todos: true }))});}catch(e){}
+      window.confirm=function(){return true;}; window.alert=function(){}; window.__parciales=[]; window.__copiado=[];
+      try{Object.defineProperty(navigator,'clipboard',{value:{writeText:function(t){window.__copiado.push(String(t));return Promise.resolve();}},configurable:true});}catch(e){}
+      (function(){var f=window.fetch;window.fetch=function(u,x){var s=String(u&&u.url||u),m=String((x&&x.method)||'GET').toUpperCase();var r=/\\/rest\\/v1\\/rpc\\/([a-z0-9_]+)/.exec(s);
+        if(r&&r[1]==='cobrar_parcial_directo'){var b={};try{b=JSON.parse(x.body).p||{};}catch(e){} window.__parciales.push(b);
+          return Promise.resolve(new Response(JSON.stringify({ok:false,err:'cortado por la prueba'}),{status:200,headers:{'Content-Type':'application/json'}}));}
+        if(window.__con821&&r&&r[1]==='pedido_cobro_pantalla'){return Promise.resolve(new Response(JSON.stringify(window.__con821),{status:200,headers:{'Content-Type':'application/json'}}));}
+        if(m!=='GET'&&m!=='HEAD'&&!/auth\\/v1\\/token/.test(s)&&(/script\\.google\\.com/.test(s)||!r||!/_(pantalla|datos|base)$|^permiso_base$|^tienda_cuentas$|^catalogo_(red|ruta)$|^tienda_vendedores$/.test(r[1])))
+          return Promise.resolve(new Response(JSON.stringify({ok:false,err:'cortado por la prueba'}),{status:200,headers:{'Content-Type':'application/json'}}));
+        return f.apply(this,arguments);};})();`);
+    const pg = await ctx.newPage();
+    const errores = []; pg.on('pageerror', (e) => errores.push(String(e.message).slice(0, 160)));
+    console.log('\n=== ' + (con821 ? 'como con la 821 (pagos con nota)' : 'la base de hoy (821 aplicada, sin pagos)') + ' · ' + PH + ' #' + PN + ' ===');
+    await pg.goto(BASE + '?v=' + Date.now(), { waitUntil: 'domcontentloaded' });
+    await pg.waitForFunction(([h, n]) => window.D && (D.pedidos || []).some((x) => x.h === h && String(x.n) === n && String(x.grp || '').trim()), [PH, PN], { timeout: 150000 }).catch(() => {});
+    if (con821) {
+      /* 4 de 5 pagaron: todos menos el último cargado. */
+      await pg.evaluate(async ([h, n]) => { await _comCargar(); const p = D.pedidos.filter((x) => x.h === h && String(x.n) === n)[0]; const C = _comCuenta(p);
+        const pagos = C.gente.slice(0, C.gente.length - 1).map((g) => ({ monto: g.toca, nota: 'Juntada: ' + g.nombre, cuenta: 'galicia', fecha: '21/11 18:00', forma: 'Transferencia', cobro: 'Tadeo Ustariz' }));
+        window.__con821 = { ok: true, total: C.tot, ef: p.ef, tr: p.tr, pagos: pagos, cuenta: '', cobradoPor: '', cobro: null, entregado: null, repartidor: p.rep || '' }; window.__falta = C.gente[C.gente.length - 1].nombre; }, [PH, PN]);
+    }
+    await pg.evaluate(([h, n]) => { go('pedidos'); const p = D.pedidos.filter((x) => x.h === h && String(x.n) === n)[0]; openOrdDetail(p.h, String(p.n), Number(p.r) || 0); }, [PH, PN]);
+    await pg.waitForTimeout(3000);
+    await pg.evaluate(() => { const m = document.getElementById('ordMas'); if (m) m.open = true; const c = document.querySelector('#ordBody .com'); if (c) c.scrollIntoView({ block: 'center' }); });
+    await pg.waitForTimeout(2500);
+    const T = await pg.evaluate(() => ({ cuenta: (document.querySelector('#ordBody .com-cuenta') || {}).textContent || '', chips: [].slice.call(document.querySelectorAll('#ordBody .com-fila')).map((c) => c.textContent.replace(/\s+/g, ' ').trim()), faltaBtns: document.querySelectorAll('#ordBody button.com-pagar').length, cobrar: (document.querySelector('#ordBody .ofx-cobrar') || {}).textContent || '', titulo: (document.querySelector('#ordBody .com-t') || {}).textContent || '' }));
+    console.log('  ' + JSON.stringify(T));
+    if (OUT) { fs.mkdirSync(OUT, { recursive: true }); await pg.screenshot({ path: path.join(OUT, 'juntada_' + (con821 ? 'con821' : 'hoy') + '.png') }); }
+    chk('«Cada uno: $18.000 · son 5»', /Cada uno: \$18\.000/.test(T.cuenta) && /son 5/.test(T.cuenta), T.cuenta);
+    if (!con821) {
+      /* La base real cambia: el 21/11 a la noche se cargaron 4 pagos de verdad en el #2533. Se chequea que sea coherente
+         con lo que haya: N pagaron, faltan (5−N)×$18.000, y el botón dice el total o «lo que falta». */
+      const nPag = Number((T.cuenta.match(/Pagaron (\d) de 5/) || [])[1]), faltaR = (5 - nPag) * 18000, f$ = (v) => '$' + v.toLocaleString('es-AR');
+      chk('la base de hoy: «Pagaron ' + nPag + ' de 5 · faltan ' + f$(faltaR) + '» y ' + (5 - nPag) + ' «Marcar pagó»', nPag >= 0 && T.faltaBtns === 5 - nPag && T.cuenta.indexOf('faltan ' + f$(faltaR)) >= 0, T);
+      chk('el botón de abajo dice ' + (nPag ? '«Cobrar lo que falta ' + f$(faltaR) + '»' : '«Cobrar $90.000»'), T.cobrar.trim() === (nPag ? 'Cobrar lo que falta ' + f$(faltaR) : 'Cobrar $90.000'), T.cobrar);
+      const b = await pg.evaluate(() => { const x = document.querySelector('#ordBody .com-mandar'); if (!x) return null; x.scrollIntoView({ block: 'center' }); const r = x.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; });
+      if (b) { await pg.waitForTimeout(300); await pg.touchscreen.tap(b.x, b.y); await pg.waitForTimeout(600); }
+      const txt = await pg.evaluate(() => window.__copiado.join('\n'));
+      console.log('  copiado:\n    ' + txt.replace(/\n/g, '\n    '));
+      chk('«Mandar la cuenta» (sin compartir: copia): cada uno $18.000 y el alias maleu26, un monto por renglón', /cada uno \$18\.000/.test(txt) && /maleu26/.test(txt) && txt.split('\n').every((l) => (l.match(/\$/g) || []).length <= 1), txt);
+    } else {
+      const falta = await pg.evaluate(() => window.__falta);
+      chk('«Pagaron 4 de 5 · faltan $18.000» (' + falta + ')', /Pagaron 4 de 5/.test(T.cuenta) && /faltan \$18\.000/.test(T.cuenta), T.cuenta);
+      chk('el botón de abajo dice «Cobrar lo que falta $18.000», no el total', /Cobrar lo que falta \$18\.000/.test(T.cobrar), T.cobrar);
+      const E = await pg.evaluate(() => { const antes = document.querySelectorAll('#ordBody .com-x').length; const b = [].slice.call(document.querySelectorAll('#ordBody .com-pie button')).filter((x) => /Editar la lista/.test(x.textContent))[0]; if (b) b.click();
+        const xs = [].slice.call(document.querySelectorAll('#ordBody .com-x')); return { antes: antes, despues: xs.length, conPago: xs.filter((x) => x.getAttribute('data-pago') === '1').length, listo: [].slice.call(document.querySelectorAll('#ordBody .com-pie button')).some((x) => /Listo/.test(x.textContent)) }; });
+      chk('«Sacar» no está a la vista; con «Editar la lista» aparece en los 4 cargados (el que pidió no se saca) y los 3 que pagaron piden confirmar', E.antes === 0 && E.despues === 4 && E.conPago === 3 && E.listo, E);
+      await pg.evaluate(() => { const b = [].slice.call(document.querySelectorAll('#ordBody .com-pie button')).filter((x) => /Listo/.test(x.textContent))[0]; if (b) b.click(); });
+      chk('el título no repite la cantidad (ya la dice «son 5»)', !/\d/.test(T.titulo) && !/opcional/.test(T.titulo), T.titulo);
+      chk('4 dicen «Pagó» y uno dice «Falta» con su botón «Marcar pagó» aparte', T.chips.filter((c) => /Pagó/.test(c)).length === 4 && T.faltaBtns === 1 && T.chips.filter((c) => /Falta/.test(c) && /Marcar pagó/.test(c)).length === 1, T);
+      const b = await pg.evaluate(() => { const x = document.querySelector('#ordBody button.com-pagar'); x.scrollIntoView({ block: 'center' }); const r = x.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; });
+      await pg.waitForTimeout(300); await pg.touchscreen.tap(b.x, b.y); await pg.waitForTimeout(1500);
+      const pp = await pg.evaluate(() => window.__parciales[0] || null);
+      console.log('  cobro parcial que saldría: ' + JSON.stringify(pp));
+      chk('tocar «Falta» arma el cobro parcial: $18.000, Transferencia a galicia, pagador y nota de ' + falta.split(' ')[0] + ', clientOpId fijo',
+        pp && Number(pp.monto) === 18000 && pp.cuenta === 'galicia' && pp.formaPago === 'Transferencia' && pp.pagador === falta && pp.notas === 'Juntada: ' + falta && /^jp-/.test(pp.clientOpId || ''), pp);
+    }
+    chk('sin errores de JS', errores.length === 0, errores.slice(0, 3));
+    await ctx.close();
+  }
+  await br.close();
+  console.log('\n' + ok + ' ok · ' + mal + ' mal');
+  process.exit(mal ? 1 : 0);
+})();

@@ -1,0 +1,12 @@
+'use strict';
+const fs=require('fs'),vm=require('vm'),assert=require('assert/strict');
+const src=fs.readFileSync('_src/panel.src.html','utf8');
+const code=src.slice(src.indexOf('function _pedOrigenPendiente('),src.indexOf('// Atajo: aplicar el mismo origen'));
+let pair={value:0};const ctx={document:{querySelector:()=>pair}};vm.createContext(ctx);vm.runInContext(code,ctx);
+for(const o of ['',null,undefined,'  ','Pendiente'])assert.equal(ctx._pedOrigenPendiente({o}),true);
+for(const o of ['Deposito','Mixto','Orden de Compra'])assert.equal(ctx._pedOrigenPendiente({o}),false);
+const inp={value:'0.1',dataset:{row:'r',q:'0.3',role:'d'}};ctx.adjustOrigenSplit(inp);
+assert.equal(Number(pair.value),0.2);assert.equal(inp.value,0.1);
+inp.dataset.q='1.507';inp.value='0.619';ctx.adjustOrigenSplit(inp);assert.equal(Number(pair.value),0.888);
+assert(src.includes('if(!homeOnly && _pedOrigenPendiente(p)&&p.p'));
+console.log('OK: origen vacío/pendiente, confirmado y reparto decimal de kilos');

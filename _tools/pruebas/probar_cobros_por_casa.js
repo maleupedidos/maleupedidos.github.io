@@ -12,7 +12,8 @@
 
    Sostiene:
    · dos pedidos de la misma casa con nombres distintos = UNA tarjeta, con el
-     total sumado, los dos números, y cobrar y comprobante por pedido;
+     total sumado (sin centavos), los dos números y un renglón por pedido que se
+     tilda (desde el 24/10/2026; el detalle en probar_cobros_varios.js);
    · el nombre de la tarjeta es el del CRM, y el otro va chico en su renglón;
    · el mismo apellido en OTRA casa sigue aparte;
    · Clubes (sin `ck`) sigue como estaba;
@@ -67,8 +68,9 @@ const LEER = `(function(){
     var r=k.getBoundingClientRect();
     var bs=[].slice.call(k.querySelectorAll('button')).filter(function(b){return b.getBoundingClientRect().width>0;});
     return { txt:k.textContent.replace(/\\s+/g,' ').trim(),
-      nombre:(k.querySelector('.cobro-card-name')||{}).textContent||'',
-      total:(k.querySelector('.cobro-card-total')||{}).textContent||'',
+      nombre:(k.querySelector('.cobro-card-name')||k.querySelector('.cg-nom')||{}).textContent||'',
+      total:(k.querySelector('.cobro-card-total')||k.querySelector('.cg-tot b')||{}).textContent||'',
+      filas:k.querySelectorAll('[role=checkbox]').length,
       cobrar:bs.filter(function(b){return /^Cobrar$/.test(b.textContent.trim());}).length,
       comp:bs.filter(function(b){return /abrirCobroPendiente|cobroPedirComprobante/.test(b.getAttribute('onclick')||'')&&/cobroPedirComprobante/.test(b.getAttribute('onclick'));}).length,
       chico:[].map.call(k.querySelectorAll('.cobro-otro-nombre'),function(x){return x.textContent;}),
@@ -95,20 +97,25 @@ const LEER = `(function(){
     chk('4 pedidos, 3 tarjetas: la casa repetida es UNA', L.n === 3, L.cards && L.cards.map(x => x.nombre));
     const casa = (L.cards || []).filter(x => /#901/.test(x.txt))[0] || {};
     chk('la tarjeta de la casa trae los DOS pedidos', /#901/.test(casa.txt || '') && /#902/.test(casa.txt || ''), casa.txt);
-    chk('   y suma los dos montos ($117.470,50)', /117\.470/.test(casa.total || ''), casa.total);
+    chk('   y suma los dos montos, sin centavos ($117.471)', /117\.471/.test(casa.total || '') && !/,/.test(casa.total || ''), casa.total);
     chk('   con el nombre del CRM arriba', /Verónica Prueba/.test(casa.nombre || ''), casa.nombre);
     chk('   y el nombre distinto, chico, en su renglón', (casa.chico || []).length === 1 && /Vera Pruebaz/.test(casa.chico[0]), casa.chico);
     chk('   "veronica prueba" es el mismo nombre: no se repite', !(casa.chico || []).some(x => /veronica prueba/i.test(x)), casa.chico);
-    chk('   un Cobrar por pedido', casa.cobrar === 2, casa.cobrar);
-    chk('   un Pedir comprobante por pedido', casa.comp === 2, casa.comp);
+    /* Desde el 24/10/2026 cada pedido es un renglon que se tilda (probar_cobros_varios.js). */
+    chk('   un renglón tildable por pedido', casa.filas === 2, casa.filas);
     const otra = (L.cards || []).filter(x => /Sofi Prueba/.test(x.txt))[0] || {};
     chk('el mismo apellido en OTRA casa sigue en su tarjeta', !!otra.txt && !/#901|#902/.test(otra.txt), otra.txt);
     chk('Clubes, sin casa, sigue saliendo', (L.cards || []).some(x => /Plantel Prueba/.test(x.txt)));
     chk('ningún botón se sale de su tarjeta', (L.cards || []).every(x => x.afuera === 0), (L.cards || []).map(x => x.afuera));
     chk('ninguna tarjeta se sale de la pantalla', (L.cards || []).every(x => x.ancho <= L.vw + 1 && x.izq >= -1), { vw: L.vw, a: (L.cards || []).map(x => [x.izq, x.ancho]) });
-    /* Cobrar sigue siendo por pedido: el Cobrar del segundo abre SU cuadro. */
+    /* Cobrar un pedido solo: Ninguno, tildar el segundo y Cobrar. */
     await ev(cli, `(function(){var k=[].slice.call(document.querySelectorAll('#cobrosContent .cobro-card')).filter(function(x){return /#902/.test(x.textContent);})[0];
-      var b=[].slice.call(k.querySelectorAll('button')).filter(function(x){return /^Cobrar$/.test(x.textContent.trim());})[1]; b.click();})()`);
+      var bs=[].slice.call(k.querySelectorAll('button'));
+      bs.filter(function(x){return (x.getAttribute('onclick')||'').indexOf('cobGrpTodos(this,false)')>=0;})[0].click();
+      k=[].slice.call(document.querySelectorAll('#cobrosContent .cobro-card')).filter(function(x){return /#902/.test(x.textContent);})[0];
+      [].slice.call(k.querySelectorAll('[role=checkbox]')).filter(function(x){return /#902/.test(x.textContent);})[0].click();
+      k=[].slice.call(document.querySelectorAll('#cobrosContent .cobro-card')).filter(function(x){return /#902/.test(x.textContent);})[0];
+      [].slice.call(k.querySelectorAll('button')).filter(function(x){return /cobGrpCobrar/.test(x.getAttribute('onclick')||'');})[0].click();})()`);
     await pausa(500);
     const st = await ev(cli, `(function(){try{return {key:String(_cobroRutaState&&_cobroRutaState.key||''),tot:Number(_cobroRutaState&&(_cobroRutaState.total||_cobroRutaState.monto)||0)};}catch(e){return {err:String(e)};}})()`);
     chk('el Cobrar de un pedido abre el cuadro de ESE pedido', /902/.test(String(st.key || '')) && !/901/.test(String(st.key || '')), st);

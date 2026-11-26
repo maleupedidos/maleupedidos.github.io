@@ -24,7 +24,7 @@
  * Y si alguien igual queda pegado: mantener apretado el ↻ borra todo y
  * recarga de cero (refreshDuro).
  */
-var CN='maleu-panel-v667';
+var CN='maleu-panel-v1346';
 
 /* LAS LIBRERIAS DE AFUERA (25/9/2026).
  *
@@ -102,6 +102,8 @@ self.addEventListener('fetch',function(e){
   // nueva. Servirlo de la copia guardada seria decirle "no cambio nada" para
   // siempre.
   if(u.pathname==='/sw-panel.js')return;
+  /* (21/11/2026) La versión mínima tampoco: es la que dice «este celular no puede seguir con un build viejo». */
+  if(u.pathname==='/version-min.json')return;
 
   /* `?fresco=` es el pedido con el que la pagina trae el HTML nuevo antes de
      recargarse (13/9/2026): va derecho a la red. Pasarlo por aca devolveria la

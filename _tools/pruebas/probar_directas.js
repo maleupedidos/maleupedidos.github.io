@@ -1,0 +1,235 @@
+/* LAS DIRECTAS A LA BASE (257-265, 28/10/2026): el panel (`_ordenPost`) y la cola de Ruta (`processSyncQueue`).
+   node _tools/pruebas/probar_directas.js <token>      BASE_URL=http://localhost:PUERTO/app.html
+   Sesion real; sesion_prep intercepta todo POST que no es una lectura de la base (tambien las RPC directas): NO se
+   escribe nada. Una capa encima decide que contesta la base en cada caso. Sostiene:
+   PANEL  · con la palanca de la accion apagada, va a Apps Script y ni se llama a la base;
+          · prendida: cada una de las 7 del panel va a SU RPC, NO a Apps Script, sin token, y la pantalla recibe
+            la respuesta de la base como si fuera la de Apps Script (ok, diferida);
+          · `directo:false`, un 404 (migracion sin aplicar) o un 500/corte de la base → Apps Script con el MISMO id;
+          · prender una no prende otra.
+   RUTA   · la entrega por la cola va a la base con ENTREGAR_DIRECTO, con el mismo ts; el cobro sigue con su palanca. */
+'use strict';
+const cdp = require('./cdp.js'), prep = require('./sesion_prep.js');
+const [TOKEN] = process.argv.slice(2);
+const URL = process.env.BASE_URL || 'https://app.maleu.com.ar/app.html';
+const pausa = (ms) => new Promise((r) => setTimeout(r, ms));
+const ev = (c, e) => Promise.race([cdp.evaluar(c, e), new Promise((_, no) => setTimeout(() => no(new Error('20 s')), 20000))]);
+let ok = 0, mal = 0; const chk = (t, c, d) => { c ? ok++ : mal++; console.log((c ? '  ok  ' : '  MAL ') + t + (c ? '' : '  -> ' + JSON.stringify(d).slice(0, 400))); };
+async function esperar(cli, e, ms) { const t0 = Date.now(); while (Date.now() - t0 < ms) { try { if (await ev(cli, e)) return true; } catch (x) {} await pausa(200); } return false; }
+/* La base, simulada: `__base` es la secuencia de respuestas ('ok' = pendiente, 'aplicada', 'nodirecto', 'corte', '500', '404'). */
+const capa = `;(function(){var o=window.fetch;window.__envios=[];window.__base=[];window.fetch=function(u,x){var s=String((u&&u.url)||u||''),b=x&&x.body?String(x.body):'';
+  var m=/\\/rpc\\/((?:pedido|caja|ruta|compra|red|crm)_[a-z_]+_directo)/.exec(s);
+  if(m){var p=JSON.parse(b).p;window.__envios.push({a:'base',fn:m[1],acc:p.action,id:p.clientOpId||'',ts:p.ts||0,token:('token' in p)});var r=window.__base.shift()||'ok';
+    if(r==='corte')return Promise.reject(new TypeError('Failed to fetch'));
+    if(r==='500'||r==='404')return Promise.resolve(new Response('{}',{status:Number(r)}));
+    var d=r==='nodirecto'?{ok:false,directo:false,motivo:'datos'}:r==='freno'?{ok:false,necesitaPlata:true,sinReintento:true,cobrado:1500,err:'El pedido está cobrado'}
+      :{ok:true,aceptada:true,directo:true,orden:1,diferida:r==='ok',repetida:r==='aplicada'};
+    return Promise.resolve(new Response(JSON.stringify(d),{status:200,headers:{'Content-Type':'application/json'}}));}
+  if(/"action":"(marcarCobrado|marcarEntregado|pedidoGrupal|descobrar|updateDiaEntrega|pedidoDeposito|deshacerOrigen|deshacerEntrega|cambiarEstadoEntrega|cancelarPedido|updatePedidoRed|pasarAVendedor|gasto|ingreso|marcarArmado|pagarProveedor|borrarMovimientoCaja|marcarOC|compraManual|setOrigenProductos|redTrajoCliente|redReclamar|redReclamoDecidir|crmUpdateClienteMeta|crmDeleteInteraccion|crmLeadDelete|crmCampaniaConfirmar|pedidoDecidir|cobroFecha|marcarEntregadoAVendedor|noSeCobro)"/.test(b)){var q=JSON.parse(b);window.__envios.push({a:'apps',acc:q.action,id:q.clientOpId||'',ts:q.ts||0,nd:q._noDirecto||''});
+    /* Plata de prueba: nunca a Apps Script de verdad. */
+    if(q.action==='pagarProveedor'||q.action==='borrarMovimientoCaja'||q.action==='marcarOC'||q.action==='compraManual'||q.action==='setOrigenProductos'||/^red(TrajoCliente|Reclamar|ReclamoDecidir)$/.test(q.action)||/^crm(UpdateClienteMeta|DeleteInteraccion|LeadDelete)$/.test(q.action)||/^(pedidoDecidir|cobroFecha|marcarEntregadoAVendedor|noSeCobro)$/.test(q.action))return Promise.resolve(new Response('{"ok":true,"prueba":true}',{status:200,headers:{'Content-Type':'application/json'}}));}
+  if(b.indexOf('pedidosFuenteAplicar')>=0)window.__envios.push({a:'aplicar'});
+  return o.apply(this,arguments);};})();
+  window.__palForzar={};setInterval(function(){try{var p=window._sbPerm&&window._sbPerm.pal;if(!p)return;Object.keys(window.__palForzar).forEach(function(k){p[k]=window.__palForzar[k];});}catch(e){}},200);`;
+const PANEL = {
+  updateDiaEntrega: ['pedido_dia_directo', { hoja: 'Home', id: '999258', row: 0, fecha: '2026-10-30' }],
+  pedidoGrupal: ['pedido_grupal_directo', { hoja: 'Home', row: 0, id: '999258', valor: 'Prueba' }],
+  descobrar: ['pedido_descobrar_directo', { hoja: 'Home', id: '999258', row: 0, ts: 1 }],
+  pedidoDeposito: ['pedido_deposito_directo', { hoja: 'Home', row: 0, deposito: 'ustariz' }],
+  deshacerOrigen: ['pedido_deshacer_origen_directo', { hoja: 'Home', id: '999258', row: 0 }],
+  deshacerEntrega: ['pedido_deshacer_entrega_directo', { hoja: 'Home', id: '999258', row: 0 }],
+  cambiarEstadoEntrega: ['pedido_estado_directo', { hoja: 'Home', id: '999258', row: 0, estado: 'Pendiente' }],
+  /* Tanda 2 (266, 267). */
+  cancelarPedido: ['pedido_cancelar_directo', { hoja: 'Home', id: '999258', row: 0 }],
+  updatePedidoRed: ['pedido_portal_directo', { pedidoId: '999258', row: 0, vendedor: 'Prueba', updates: { entrega: true } }],
+  /* Tanda 3 (269). */
+  pasarAVendedor: ['pedido_pase_directo', { hoja: 'Home', id: '999258', row: 0, al: '28/10 10:00', vendedor: 'Prueba', trajo: 'Maleu', igual: true }],
+  /* Tanda 4 (272, 273): la caja. */
+  gasto: ['caja_gasto_directo', { fecha: '', hora: '', categoria: 'Prueba', concepto: 'Prueba', notas: '', montoEf: 1, montoMp: 0, metodo: 'Efectivo', monto: 1 }],
+  ingreso: ['caja_ingreso_directo', { fecha: '', hora: '', categoria: 'Prueba', concepto: 'Prueba', notas: '', montoEf: 1, montoMp: 0, metodo: 'Efectivo', monto: 1 }],
+  marcarArmado: ['ruta_armado_directo', { armado: true, usuario: 'Prueba', pedidos: [{ h: 'Home', id: '999258', c: 'Prueba', r: 0 }] }],
+  /* Tanda 5 (275, 276). */
+  pagarProveedor: ['caja_pago_directo', { proveedor: 'Prueba', efectivo: 0, mp: 1, bonif: 0, cuenta: '', lugar: '', semana: '', notas: '' }],
+  borrarMovimientoCaja: ['caja_borrar_directo', { tipo: 'gasto', row: 0, monto: 1, con: 'Prueba', f: '' }],
+  /* (277) */
+  marcarOC: ['compra_marcar_oc_directo', { rows: [{ r: 999999, oc: 'OC-PRUEBA', estado: 'Pedido' }] }],
+  /* (278) */
+  compraManual: ['compra_manual_directo', { proveedor: 'Prueba', vendedor: 'Tadeo — Stock', items: [{ abbr: 'PRUEBA', qty: 1, costo: 1 }] }],
+  /* (279) */
+  setOrigenProductos: ['pedido_origen_directo', { hoja: 'Home', id: '999258', row: 0, productos: [{ a: 'PRUEBA', d: 1, oc: 0 }] }],
+  /* (280) */
+  redTrajoCliente: ['red_trajo_directo', { row: 999258, valor: 'Maleu' }],
+  redReclamar: ['red_reclamar_directo', { n: '999258', row: 0 }],
+  redReclamoDecidir: ['red_reclamo_decidir_directo', { n: '999258', row: 0, aprobar: true }],
+  /* (281) */
+  crmUpdateClienteMeta: ['crm_ficha_directo', { tel: '5490000000000', notas: 'prueba' }],
+  crmDeleteInteraccion: ['crm_interaccion_borrar_directo', { id: 'I-PRUEBA' }],
+  crmLeadDelete: ['crm_lead_borrar_directo', { id: 'L-PRUEBA' }],
+  /* (282-285) */
+  pedidoDecidir: ['pedido_decidir_directo', { hoja: 'Home', id: '999258', row: 0, decision: 'nosotros' }],
+  cobroFecha: ['pedido_cobro_fecha_directo', { hoja: 'Home', id: '999258', row: 0, fecha: '27/10/2026' }],
+  marcarEntregadoAVendedor: ['red_bolsa_directo', { rows: [999999], vendedor: 'Prueba' }],
+  noSeCobro: ['pedido_no_se_cobro_directo', { hoja: 'Home', id: '999258', row: 0, abbr: 'PRUEBA', motivo: 'prueba' }],
+  /* (322) Caja › «Recibí de un vendedor» */
+  cobrarVendedorRed: ['red_cobro_directo', { vendedor: 'Vendedor Prueba', ef: 1, tr: 0, cuenta: '', quien: '' }] };
+(async () => {
+  const cli = await cdp.abrir();
+  await cli.enviar('Page.addScriptToEvaluateOnNewDocument', { source: prep(TOKEN, capa) });
+  await cli.enviar('Page.enable', {});
+  cli.escuchar((m) => { if (m === 'Page.javascriptDialogOpening') cli.enviar('Page.handleJavaScriptDialog', { accept: true }).catch(() => {}); });
+  await cli.enviar('Page.navigate', { url: URL });
+  chk('el ERP arranca', await esperar(cli, `typeof go==='function' && typeof _ordenPost==='function' && !!window._sbPerm`, 60000), '');
+  const envs = () => ev(cli, `window.__envios`);
+  const pal = (o) => ev(cli, `window.__palForzar.directas=${JSON.stringify(o)}; 1`).then(() => pausa(500));
+  /* Lo que la pantalla recibe, como la recibe: Response → json. */
+  const post = (a, extra) => ev(cli, `window.__envios=[]; _ordenPost(Object.assign({action:'${a}',clientOpId:'pr_${a}_'+Date.now()},${JSON.stringify(PANEL[a][1])},${JSON.stringify(extra || {})}))
+    .then(function(r){return r.json();}).then(function(d){window.__res=d;return 1;},function(e){window.__res={tiro:String(e)};return 1;})`).then(() => ev(cli, `window.__res`));
+  /* ── PANEL ── */
+  await pal({});
+  await post('updateDiaEntrega'); let e = await envs();
+  chk('panel, palanca apagada: Apps Script y NO la base', e.some((x) => x.a === 'apps') && !e.some((x) => x.a === 'base'), e);
+  for (const [a, [fn]] of Object.entries(PANEL)) {
+    await pal({ [a]: true }); await ev(cli, `window.__base=['ok']; 1`);
+    const r = await post(a); e = await envs();
+    chk(`panel ${a} prendida: va a ${fn}, NO a Apps Script, sin token; la pantalla recibe ok+diferida`,
+      e.length === 1 && e[0].a === 'base' && e[0].fn === fn && e[0].acc === a && !e[0].token && r && r.ok === true && r.diferida === true, { e, r });
+  }
+  await pal({ updateDiaEntrega: true });
+  for (const caso of ['nodirecto', '404', '500', 'corte']) {
+    await ev(cli, `window.__base=['${caso}']; 1`); await post('updateDiaEntrega'); e = await envs();
+    const b = e.find((x) => x.a === 'base'), ap = e.find((x) => x.a === 'apps');
+    chk(`panel, la base contesta ${caso}: Apps Script con el MISMO id`, b && ap && b.id && b.id === ap.id, e);
+  }
+  await ev(cli, `window.__base=['ok']; 1`); await post('pedidoGrupal'); e = await envs();
+  chk('panel, prender el día NO prende el grupal', e.some((x) => x.a === 'apps') && !e.some((x) => x.a === 'base'), e);
+  /* (266) Cuando la base FRENA (cobrado sin decidir la plata), esa respuesta llega a la pantalla: no se pregunta a Apps Script. */
+  await pal({ cancelarPedido: true }); await ev(cli, `window.__base=['freno']; 1`);
+  const rf = await post('cancelarPedido'); e = await envs();
+  chk('panel, cancelar un cobrado: la pantalla recibe el freno de la BASE (necesitaPlata, $1.500) y NO se pregunta a Apps Script',
+    rf && rf.ok === false && rf.necesitaPlata === true && Number(rf.cobrado) === 1500 && e.length === 1 && e[0].a === 'base', { rf, e });
+  /* (279) El botón «Confirmar origen» de verdad (`confirmarOrigen`), con su recuadro como lo arma el panel. */
+  const origen = (r) => ev(cli, `window.__envios=[]; window.__base=['${r}'];
+    var v=document.getElementById('orig-pr279'); if(v)v.remove(); var box=document.createElement('div'); box.id='orig-pr279'; box.style.display='none';
+    box.innerHTML='<div class="origen-prod" data-a="PRUEBA" data-q="1"><input data-role="d" value="1"><input data-role="oc" value="0"></div>';
+    document.body.appendChild(box); var b=document.createElement('button'); b.dataset.h='Home'; b.dataset.n='999258'; b.dataset.r='0'; b.dataset.uid='pr279';
+    box.appendChild(b); confirmarOrigen(b); 1`).then(() => pausa(2500)).then(envs);
+  await pal({ setOrigenProductos: true }); e = await origen('ok');
+  chk('Pedidos, «Confirmar origen» con ORIGEN_DIRECTO: va a pedido_origen_directo, NO a Apps Script', e.filter((x) => x.a === 'base' && x.fn === 'pedido_origen_directo' && x.acc === 'setOrigenProductos').length === 1
+    && !e.some((x) => x.a === 'apps'), e);
+  e = await origen('nodirecto'); const bo = e.find((x) => x.a === 'base'), ao = e.find((x) => x.a === 'apps');
+  chk('   la base contesta directo:false: Apps Script con el MISMO id', bo && ao && ao.acc === 'setOrigenProductos' && bo.id === ao.id, e);
+  await pal({}); e = await origen('ok');
+  chk('   apagada: Apps Script y NO la base', e.some((x) => x.a === 'apps' && x.acc === 'setOrigenProductos') && !e.some((x) => x.a === 'base'), e);
+  await ev(cli, `var v=document.getElementById('orig-pr279'); if(v)v.remove(); 1`);
+  /* (280) El «trajo» de la ficha del pedido de verdad (`_ordTrajoCliente`). */
+  const trajo = (r) => ev(cli, `window.__envios=[]; window.__base=['${r}']; window._ordTrajoCliente(999258,'Maleu'); 1`).then(() => pausa(2000)).then(envs);
+  await pal({ redTrajoCliente: true }); e = await trajo('ok');
+  chk('Pedidos, «Trajo el cliente» con TRAJO_DIRECTO: va a red_trajo_directo, NO a Apps Script', e.filter((x) => x.a === 'base' && x.fn === 'red_trajo_directo').length === 1 && !e.some((x) => x.a === 'apps'), e);
+  e = await trajo('nodirecto'); const bt = e.find((x) => x.a === 'base'), at = e.find((x) => x.a === 'apps');
+  chk('   la base contesta directo:false: Apps Script con el MISMO id', bt && at && at.acc === 'redTrajoCliente' && bt.id === at.id, e);
+  await pal({}); e = await trajo('ok');
+  chk('   apagada: Apps Script y NO la base', e.some((x) => x.a === 'apps' && x.acc === 'redTrajoCliente') && !e.some((x) => x.a === 'base'), e);
+  /* (280) El reclamo del portal sale por `redPost` (rutaReclamar): con RECLAMAR_DIRECTO va a la base. */
+  await ev(cli, `go('miportal'); 1`);
+  chk('Mi Portal arranca (redPost)', await esperar(cli, `typeof window.redPost==='function'`, 60000), '');
+  await pal({ redReclamar: true });
+  e = await ev(cli, `window.__envios=[]; window.__base=['ok']; redPost({action:'redReclamar',n:'999258',row:0,clientOpId:'rec_prueba_'+Date.now()}).then(function(r){return r.json();}).then(function(){return 1;})`).then(() => pausa(500)).then(envs);
+  chk('Portal, el reclamo por redPost con RECLAMAR_DIRECTO: va a red_reclamar_directo, NO a Apps Script', e.filter((x) => x.a === 'base' && x.fn === 'red_reclamar_directo').length === 1 && !e.some((x) => x.a === 'apps'), e);
+  /* (281) Las órdenes del CRM salen por el interceptor de fetch (el del token): un fetch a Apps Script con la acción, como
+     lo hace la ficha. Con su directa, a la base; con directo:false, a Apps Script con el MISMO clientOpId que puso el interceptor. */
+  const crm = (r) => ev(cli, `window.__envios=[]; window.__base=['${r}']; fetch(API,{method:'POST',body:JSON.stringify({action:'crmDeleteInteraccion',id:'I-PRUEBA'})})
+    .then(function(x){return x.json();}).then(function(){return 1;},function(){return 1;})`).then(() => pausa(1500)).then(envs);
+  await pal({ crmDeleteInteraccion: true }); e = await crm('ok');
+  chk('CRM, un fetch de la pantalla con BORRAR_INTERACCION_DIRECTO: va a crm_interaccion_borrar_directo (con su clientOpId), NO a Apps Script, y después el aplicador',
+    e.filter((x) => x.a === 'base' && x.fn === 'crm_interaccion_borrar_directo' && /^crm_/.test(x.id) && !x.token).length === 1 && !e.some((x) => x.a === 'apps') && e.some((x) => x.a === 'aplicar'), e);
+  e = await crm('nodirecto'); const bc2 = e.find((x) => x.a === 'base'), ac2 = e.find((x) => x.a === 'apps');
+  chk('   la base contesta directo:false: Apps Script con el MISMO clientOpId', bc2 && ac2 && ac2.acc === 'crmDeleteInteraccion' && bc2.id === ac2.id, e);
+  await pal({}); e = await crm('ok');
+  chk('   apagada: Apps Script y NO la base', e.some((x) => x.a === 'apps' && x.acc === 'crmDeleteInteraccion') && !e.some((x) => x.a === 'base'), e);
+  /* (328) Confirmar una lista de campaña, por el mismo interceptor del CRM. */
+  const conf = (r) => ev(cli, `window.__envios=[]; window.__base=['${r}']; fetch(API,{method:'POST',body:JSON.stringify({action:'crmCampaniaConfirmar',lote:'1700000000000',mandada:true})})
+    .then(function(x){return x.json();}).then(function(){return 1;},function(){return 1;})`).then(() => pausa(1500)).then(envs);
+  await pal({ crmCampaniaConfirmar: true }); e = await conf('ok');
+  chk('CRM, confirmar una lista con CAMPANIA_CONF_DIRECTO: va a crm_campania_confirmar_directo (con su clientOpId), NO a Apps Script',
+    e.filter((x) => x.a === 'base' && x.fn === 'crm_campania_confirmar_directo' && /^crm_/.test(x.id) && !x.token).length === 1 && !e.some((x) => x.a === 'apps'), e);
+  e = await conf('nodirecto'); const bq = e.find((x) => x.a === 'base'), aq = e.find((x) => x.a === 'apps');
+  chk('   la base contesta directo:false: Apps Script con el MISMO clientOpId y el motivo (_noDirecto = base:datos)', bq && aq && aq.acc === 'crmCampaniaConfirmar' && bq.id === aq.id && aq.nd === 'base:datos', e);
+  await pal({}); e = await conf('ok');
+  chk('   apagada: Apps Script y NO la base', e.some((x) => x.a === 'apps' && x.acc === 'crmCampaniaConfirmar') && !e.some((x) => x.a === 'base'), e);
+  /* (283) El 📅 del libro de Caja de verdad sale por _ordenPost; (284) la bolsa de Ruta, por _rutDirecta. */
+  await pal({ cobroFecha: true });
+  e = await ev(cli, `window.__envios=[]; window.__base=['nodirecto']; _ordenPost({action:'cobroFecha',hoja:'Home',id:'999258',row:0,fecha:'27/10/2026',clientOpId:'cf-prueba-'+Date.now()}).then(function(r){return r.json();}).then(function(){return 1;})`).then(() => pausa(800)).then(envs);
+  const bf = e.find((x) => x.a === 'base'), af = e.find((x) => x.a === 'apps');
+  chk('Caja, el día del cobro con COBRO_FECHA_DIRECTO y la base en directo:false (el ajuste de caja): Apps Script con el MISMO id', bf && af && bf.fn === 'pedido_cobro_fecha_directo' && af.acc === 'cobroFecha' && bf.id === af.id, e);
+  /* (275) Abastecimiento: el formulario de pago de verdad (`confirmarPago`) va primero a la base. */
+  await ev(cli, `go('busqueda'); 1`);
+  chk('Abastecimiento arranca', await esperar(cli, `typeof window.confirmarPago==='function' && typeof window._abaAplicarBusqueda==='function'`, 60000), '');
+  await pausa(4000);
+  const pagar = (r) => ev(cli, `window.__envios=[]; window.__base=['${r}']; try{_abaAplicarBusqueda({provs:[],clientes:[],total:0,ocs:[],deudas:[{n:'Prueba 275'}]});}catch(e){window.__err=(window.__err||[]).concat(['aplicar: '+e]);}
+    var k='pr275', box=document.createElement('div'); box.id='pr275box'; box.style.display='none';
+    box.innerHTML='<input id="pagoEf_'+k+'" value=""><input id="pagoMp_'+k+'" value="1"><input id="pagoNotas_'+k+'" value=""><button id="btnPagar_'+k+'" data-prov="Prueba 275">Confirmar pago</button><div id="pagoForm_'+k+'"></div>';
+    var v=document.getElementById('pr275box'); if(v)v.remove(); document.body.appendChild(box); confirmarPago(k,0,''); 1`).then(() => pausa(2500)).then(envs);
+  await pal({ pagarProveedor: true }); e = await pagar('ok');
+  chk('Abastecimiento, PAGO_DIRECTO prendida: el pago va a caja_pago_directo, NO a Apps Script, y después el aplicador',
+    e.filter((x) => x.a === 'base' && x.fn === 'caja_pago_directo' && x.acc === 'pagarProveedor' && !x.token).length === 1 && !e.some((x) => x.a === 'apps') && e.some((x) => x.a === 'aplicar'), e);
+  e = await pagar('nodirecto');
+  const bp = e.find((x) => x.a === 'base'), ap = e.find((x) => x.a === 'apps');
+  chk('   la base contesta directo:false (sobres): Apps Script con el MISMO id', bp && ap && ap.acc === 'pagarProveedor' && bp.id && bp.id === ap.id, e);
+  await pal({}); e = await pagar('ok');
+  chk('   apagada: Apps Script y NO la base', e.some((x) => x.a === 'apps' && x.acc === 'pagarProveedor') && !e.some((x) => x.a === 'base'), e);
+  await ev(cli, `var v=document.getElementById('pr275box'); if(v)v.remove(); 1`);
+  /* (278) El formulario de compra de verdad: un proveedor real del selector, una cantidad, «Confirmar». */
+  const comprar = (r) => ev(cli, `window.__envios=[]; window.__base=['${r}']; go('busqueda');
+    var sel=document.getElementById('npProv'), op=[].slice.call(sel.options).filter(function(o){return o.value;})[0]; sel.value=op?op.value:''; onNpProvChange();
+    var inp=[].slice.call(document.querySelectorAll('#pg-abast input[id^="npq_"]'))[0]; if(inp) npSetQty(inp.id.slice(4),1);
+    var b=document.getElementById('npConfirm'); b.disabled=false; confirmarCompra(); 1`).then(() => pausa(3000)).then(envs);
+  await esperar(cli, `(document.getElementById('npProv')||{options:[]}).options.length>1`, 60000);
+  await pal({ compraManual: true }); e = await comprar('ok');
+  chk('Abastecimiento, COMPRA_DIRECTO prendida: la compra del formulario va a compra_manual_directo, NO a Apps Script, y después el aplicador',
+    e.filter((x) => x.a === 'base' && x.fn === 'compra_manual_directo' && x.acc === 'compraManual' && !x.token).length === 1 && !e.some((x) => x.a === 'apps') && e.some((x) => x.a === 'aplicar'), e);
+  e = await comprar('nodirecto'); const bm = e.find((x) => x.a === 'base'), am = e.find((x) => x.a === 'apps');
+  chk('   la base contesta directo:false: Apps Script con el MISMO id', bm && am && am.acc === 'compraManual' && bm.id === am.id, e);
+  await pal({}); e = await comprar('ok');
+  chk('   apagada: Apps Script y NO la base', e.some((x) => x.a === 'apps' && x.acc === 'compraManual') && !e.some((x) => x.a === 'base'), e);
+  /* (277) La cola de Abastecimiento («Pedido enviado ✓» y lo demás que manda): la base primero. */
+  const cola = (r) => ev(cli, `window.__envios=[]; window.__base=['${r}']; abaSyncQueue.push({action:'marcarOC',rows:[{r:999999,oc:'OC-PRUEBA',estado:'Pedido'}],ts:Date.now(),clientOpId:'mo_prueba_'+Date.now()});
+    abaProcessSyncQueue(); 1`).then(() => esperar(cli, `abaSyncQueue.every(function(x){return x.clientOpId.indexOf('mo_prueba_')!==0;})`, 30000)).then(() => pausa(1500)).then(envs);
+  await pal({ marcarOC: true }); e = await cola('ok');
+  chk('Abastecimiento, la cola con MARCAR_OC_DIRECTO: compra_marcar_oc_directo, NO Apps Script, sale de la cola y llama al aplicador',
+    e.filter((x) => x.a === 'base' && x.fn === 'compra_marcar_oc_directo').length === 1 && !e.some((x) => x.a === 'apps') && e.some((x) => x.a === 'aplicar'), e);
+  e = await cola('nodirecto'); const bc = e.find((x) => x.a === 'base'), ac = e.find((x) => x.a === 'apps');
+  chk('   la base contesta directo:false: Apps Script con el MISMO id', bc && ac && ac.acc === 'marcarOC' && bc.id === ac.id, e);
+  await pal({}); e = await cola('ok');
+  chk('   apagada: Apps Script y NO la base', e.some((x) => x.a === 'apps' && x.acc === 'marcarOC') && !e.some((x) => x.a === 'base'), e);
+  /* ── RUTA ── */
+  await ev(cli, `go('ruta'); 1`);
+  chk('Ruta arranca', await esperar(cli, `typeof window.processSyncQueue==='function' && typeof window.loadLocal==='function'`, 60000), '');
+  await pausa(3000);
+  const T0 = Date.now();
+  const limpiar = () => ev(cli, `window.saveLocal(); var d=JSON.parse(localStorage.getItem('maleu_ruta')||'{}'); var es=function(q){return q&&q.repartidor==='prueba 258';};
+    d.syncQueue=(d.syncQueue||[]).filter(function(q){return !es(q);}); d.rutSyncRechazados=(d.rutSyncRechazados||[]).filter(function(r){return !es(r&&r.item);});
+    localStorage.setItem('maleu_ruta',JSON.stringify(d)); window.loadLocal(); 1`);
+  await limpiar();
+  const meter = (it) => ev(cli, `window.__envios=[]; window.saveLocal(); var d=JSON.parse(localStorage.getItem('maleu_ruta')||'{}'); d.syncQueue=(d.syncQueue||[]).concat([${JSON.stringify(it)}]);
+    localStorage.setItem('maleu_ruta',JSON.stringify(d)); window.loadLocal(); window.processSyncQueue(); 1`);
+  const vacia = () => esperar(cli, `(window.saveLocal(), (JSON.parse(localStorage.getItem('maleu_ruta')||'{}').syncQueue||[]).every(function(q){return q.repartidor!=='prueba 258';}))`, 40000);
+  await pal({ marcarEntregado: true }); await ev(cli, `window.__base=['ok','aplicada']; 1`);
+  await meter({ action: 'marcarEntregado', hoja: 'Home', id: '999258', row: 0, cobrado: false, propina: 0, repartidor: 'prueba 258', ts: T0 + 1 });
+  chk('Ruta: la entrega sale de la cola', await vacia(), '');
+  e = await envs();
+  chk('   fue a pedido_entregar_directo (dos veces: pendiente y aplicada), con el MISMO ts, y NO a Apps Script',
+    e.filter((x) => x.a === 'base' && x.fn === 'pedido_entregar_directo' && x.ts === T0 + 1).length === 2 && !e.some((x) => x.a === 'apps') && e.some((x) => x.a === 'aplicar'), e);
+  await pal({}); await ev(cli, `window.__palForzar.cobrarDirecto=true; window.__base=['aplicada']; 1`); await pausa(500);
+  await meter({ action: 'marcarCobrado', hoja: 'Home', id: '999258', row: 0, fechaCobro: '', formaPago: 'Efectivo', ef: 1, tr: 0, repartidor: 'prueba 258', ts: T0 + 2 });
+  chk('Ruta: el cobro sigue yendo directo con COBRAR_DIRECTO (la palanca de la 257)', await vacia() && (await envs()).some((x) => x.a === 'base' && x.fn === 'pedido_cobrar_directo'), await envs());
+  await ev(cli, `window.__palForzar.cobrarDirecto=false; 1`); await pausa(500);
+  await meter({ action: 'marcarEntregado', hoja: 'Home', id: '999258', row: 0, repartidor: 'prueba 258', ts: T0 + 3 });
+  chk('Ruta: con todo apagado la entrega va a Apps Script', await vacia() && (await envs()).some((x) => x.a === 'apps') && !(await envs()).some((x) => x.a === 'base'), await envs());
+  const err = await ev(cli, `(window.__err||[]).filter(function(x){ return !/favicon|ResizeObserver/.test(x); })`);
+  chk('sin errores de JS', err.length === 0, err);
+  chk('ninguna de prueba cayó en «No se pudo guardar»', await ev(cli, `window.saveLocal(); (JSON.parse(localStorage.getItem('maleu_ruta')||'{}').rutSyncRechazados||[]).every(function(r){return !(r&&r.item&&r.item.repartidor==='prueba 258');})`), '');
+  await limpiar();
+  console.log('\n' + ok + ' ok · ' + mal + ' MAL');
+  try { await cli.cerrar(); } catch (x) {}
+  process.exit(mal ? 1 : 0);
+})().catch((e) => { console.log('ERROR ' + (e && e.stack || e)); process.exit(1); });

@@ -126,6 +126,7 @@ const PREPARAR = `
     localStorage.setItem('maleu_token','escritorio-token-de-prueba');
     // Ventas abre en "Este mes" desde el 12/10/2026: las ventas sinteticas tienen fecha fija, se piden todas.
     localStorage.setItem('maleu_v_per','todo');
+    try{ sessionStorage.setItem('maleu_v_perk','todo'); }catch(e){}   // (15/11/2026) el período de Ventas va por sesión
     // La cache del SWR de Ventas: asi VD se llena sin backend y por el mismo
     // camino que usa el ERP de verdad cuando abre de la copia guardada.
     localStorage.setItem('ma3v2', ${JSON.stringify(JSON.stringify(VENTAS))});
@@ -294,7 +295,10 @@ async function main() {
       await ev('go("ventas")'); await pausa(700);
 
       const n = await ev("document.querySelectorAll('#vList .vt').length");
-      chequeo(n === VENTAS.length, 'la tab Ventas pinta las ' + VENTAS.length + ' filas (' + n + ')');
+      /* (15/11/2026) Ventas muestra VD + lo recién entregado de D.pedidos que VD todavía no trae (`_vdVivo`): con los
+         pedidos inventados de arriba, que no están en VENTAS, son más filas que VENTAS. */
+      const nVivo = await ev("(typeof _vdVivo==='function'&&_vdVivo())?_vdVivo().length:" + VENTAS.length);
+      chequeo(n === nVivo, 'la tab Ventas pinta las ' + nVivo + ' filas (' + n + ')');
 
       for (let i = 0; i < VENTAS.length; i++) {
         await ev(`(function(){ vtToggle(document.querySelectorAll('#vList .vt')[${i}]); return 1; })()`);
@@ -329,7 +333,8 @@ async function main() {
         /* Con un desglose ABIERTO: sus renglones son pares label→valor. La fila de
            la lista es una tabla con encabezados (13/9/2026) y ya no tiene pares
            propios, asi que sin esto el barrido no tendria nada que medir. */
-        await ev(`(function(){ var e=document.querySelector('#vList .vt'); if(e&&!e.classList.contains('abierta')) vtToggle(e); return 1; })()`);
+        /* Una venta de VENTAS (las inventadas de D.pedidos tienen menos datos: no sirven para contar pares). */
+        await ev(`(function(){ var e=[].filter.call(document.querySelectorAll('#vList .vt'),function(x){return /Cliente Uno/.test(x.innerText);})[0]||document.querySelector('#vList .vt'); if(e&&!e.classList.contains('abierta')) vtToggle(e); return 1; })()`);
         await pausa(260);
         const pintado = await ev(`(function(){var e=document.querySelector('#p-ventas');
           return e ? e.querySelectorAll('div,li,tr').length : -1;})()`);

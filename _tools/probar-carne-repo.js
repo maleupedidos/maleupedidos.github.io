@@ -248,7 +248,7 @@ h = correr(SAB, { carne: { ultCompra: '2026-09-08', ultVenta: '2026-09-11', comp
   { moresco: '2026-09-11' }, STOCK, true);
 chk('un toque a mano lo ABRE aunque no sea urgente', /data-abierto="1"/.test(h));
 chk('  y aparecen los cortes', /Carne Lomo/.test(h));
-chk('  con el boton para plegarlo', /▴ Plegar/.test(h));
+chk('  con el boton para plegarlo', />Plegar</.test(h));
 h = correr(MAR, { carne: { ultCompra: '2026-09-01', ultVenta: '2026-09-07', compras: 5 } },
   { moresco: '2026-09-07' }, STOCK, false);
 chk('y un toque lo CIERRA aunque sea el dia del pedido', /data-abierto="0"/.test(h));

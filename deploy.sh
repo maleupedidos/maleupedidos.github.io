@@ -30,6 +30,10 @@ fallar(){ echo "${RED}✖ $1${RST}" >&2; exit 1; }
 echo "→ [0/8] Armando app.html…"
 [ -d node_modules ] || { echo "    faltan dependencias, instalando…"; npm install --no-audit --no-fund >/dev/null; }
 node _tools/build.js | sed 's/^/    /' || fallar "El build no compilo — no se publica nada."
+# El motor de las jugadas (164): las reglas de Code.js, copiadas. Se regenera SIEMPRE, igual que
+# app.html: si Code.js cambio una regla, CRM > Hoy desde la base la tiene que tener.
+node _tools/copiar_motor.js ../estancias | sed 's/^/    /'
+node _tools/copiar_motor.js --chequear ../estancias >/dev/null 2>&1 || fallar "No pude copiar el motor de las jugadas de ../estancias — no se publica nada."
 
 # ── 1. Rama y sincronia con origin ───────────────────────────────────────────
 echo "→ [1/8] Sincronia con origin…"
@@ -48,7 +52,9 @@ echo "  OK: al dia con origin/main."
 
 # ── 2. Que haya algo que publicar ────────────────────────────────────────────
 echo "→ [2/8] Cambios a publicar…"
-CAMBIOS="$(git status --porcelain -- '*.html' '*.js' '*.json' '*.css' | awk '{print $NF}' | sort -u)"
+# (6/11/2026) Tambien lo commiteado y todavia no pusheado: un arreglo commiteado antes del deploy salia sin subir el
+# CACHE_NAME (y sin chequear su sintaxis), y los celulares no se enteraban de la version nueva. Paso con la v955.
+CAMBIOS="$( { git status --porcelain -- '*.html' '*.js' '*.json' '*.css' | awk '{print $NF}'; git diff --name-only origin/main..HEAD -- '*.html' '*.js' '*.json' '*.css'; } | sort -u)"
 if [ -z "$CAMBIOS" ] && [ "$(git rev-list --count origin/main..HEAD)" -eq 0 ]; then
   fallar "No hay nada modificado ni ningun commit pendiente de push."
 fi
@@ -78,8 +84,25 @@ if [ -n "$HTMLS" ]; then
 else
   echo "    (ningun .html modificado)"
 fi
+# ── 3b'. El alias que ve el cliente (21/11/2026) ──────────────────────────────
+#  Salió «maleump» a una clienta: cada pantalla armaba el alias de su lista de cuentas y caía a `def`. Una sola fuente
+#  (aliasClienteLista → tienda_cuentas). Esto corta si algún texto al cliente vuelve a armarlo de otro lado.
+echo "→ Alias al cliente…"
+node _tools/verificar_alias.js | sed 's/^/    /'
+[ "${PIPESTATUS[0]}" = "0" ] || fallar "Un texto al cliente puede salir con un alias que no es «Para clientes» — no se publica."
 
 # ── 3c. Que arranque de verdad ───────────────────────────────────────────────
+echo "→ Login exclusivamente en Supabase…"
+node _tools/pruebas/probar_login_solo_base.js || fallar "El login volvió a depender de Apps Script."
+echo "→ Apps Script apagado: nada del ERP sale a script.google.com…"
+node _tools/pruebas/probar_apps_apagado.js >/dev/null 2>&1 || fallar "El ERP volvió a mandar algo a Apps Script — corré: node _tools/pruebas/probar_apps_apagado.js"
+node _tools/pruebas/probar_envio_cargar.js >/dev/null 2>&1 || fallar "Cargar el envío de Red se rompió — corré: node _tools/pruebas/probar_envio_cargar.js"
+
+echo "→ Sincronizacion operativa (sin red ni escrituras reales)…"
+node _tools/probar-autopedido-vivo.js || fallar "Fallo la disponibilidad en autopedido."
+node _tools/probar-sync-operativo.js | sed 's/^/    /' || fallar "Fallo la sincronizacion operativa — no se publica."
+node _tools/probar-representantes-operativo.js | sed 's/^/    /' || fallar "Fallo el armado o los cobros de representantes — no se publica."
+
 #  `node --check` dice que el JS parsea, no que la app arranca. Ya rompi Ruta y
 #  Abastecimiento pasando el chequeo de sintaxis. (19/08/2026)
 #  Abre el ERP en un Chrome headless y prueba las tres sub-apps. Tarda ~1 min.
@@ -91,6 +114,64 @@ elif [ -n "$HTMLS" ]; then
   node _tools/humo.js | sed 's/^/    /' || fallar "El ERP no arranca limpio — no se publica."
 else
   echo "    (ningun .html modificado)"
+fi
+
+# ── 3c2. El robot de pruebas, sobre lo que se va a publicar (4/11/2026) ─────
+#  Entra con el usuario robot por la base, recorre las pantallas en modo ensayo
+#  (nada sale a Apps Script) y, con las entidades PRUEBA, escribe y deshace.
+#  Prueba el app.html local (ROBOT_LOCAL) contra el backend y la base de verdad.
+#  El resultado del deploy no se guarda (el aviso de las 8 es el de la noche).
+#  Urgencia: SIN_ROBOT=1 ./deploy.sh "…"
+echo "→ [3c2/8] El robot de pruebas…"
+if [ -n "${SIN_ROBOT:-}" ] || [ -n "${SIN_HUMO:-}" ]; then
+  echo "${YEL}    SALTEADO a mano (SIN_ROBOT/SIN_HUMO). Corré: node _tools/robot/robot.js${RST}"
+elif [ -n "$HTMLS" ]; then
+  set +e
+  ROBOT_LOCAL=1 ROBOT_SIN_REPORTE=1 node _tools/robot/robot.js 2>&1 | sed 's/^/    /'
+  RC=${PIPESTATUS[0]}
+  set -e
+  if [ "$RC" = "2" ]; then echo "${YEL}    sin credenciales del robot en esta compu: no corrió${RST}"
+  elif [ "$RC" != "0" ]; then fallar "El robot encontró algo roto — no se publica."; fi
+else
+  echo "    (ningun .html modificado)"
+fi
+
+# ── 3c3. En el iPhone nada se pisa (15/11/2026) ──────────────────────────────
+#  Tadeo: «Lo que hace Backend, desde el celular pone mal los tamaños y se pisa todo». La v1218 dejó «Entregado» encima
+#  de la fecha en la venta abierta y se dio por probado sin mirar el detalle abierto. Sobre las pantallas que toca este
+#  commit (_tools/pisadas_tabs.js, por el diff), el detector abre cada tab, sus sub-tabs y sus detalles en WebKit a 390 px
+#  con una sesión temporal (toda escritura cortada) y frena si hay texto encimado o scroll de costado. Deja una captura
+#  por pantalla. Urgencia: SIN_PISADAS=1 ./deploy.sh "…"
+echo "→ [3c3/8] En el iPhone nada se pisa…"
+TABS_PIS=$(node _tools/pisadas_tabs.js 2>/dev/null || true)
+PW_DIR=$(node _tools/pw_buscar.js 2>/dev/null || true)
+if [ -n "${SIN_PISADAS:-}" ] || [ -n "${SIN_HUMO:-}" ]; then
+  echo "${YEL}    SALTEADO a mano (SIN_PISADAS/SIN_HUMO). Corré _tools/pruebas/pisadas.js y mirá las capturas.${RST}"
+elif [ -z "$TABS_PIS" ]; then
+  echo "    (no se tocó ninguna pantalla)"
+elif [ -z "$PW_DIR" ] || [ ! -f ../estancias/scripts/migraciones/sesion_prueba.py ]; then
+  echo "${YEL}    sin WebKit o sin sesion_prueba.py en esta compu: no corrió. Corré _tools/pruebas/pisadas.js a mano.${RST}"
+else
+  PIS_TMP=$(mktemp -d)
+  PIS_SES="$PIS_TMP/ses_admin.json"; PIS_EXTRA=""
+  python ../estancias/scripts/migraciones/sesion_prueba.py crear "$PIS_SES" tadeo admin >/dev/null 2>&1 || true
+  if echo ",$TABS_PIS," | grep -q ",ruta,"; then python ../estancias/scripts/migraciones/sesion_prueba.py crear "$PIS_TMP/ses_rep.json" alfonso repartidor >/dev/null 2>&1 && PIS_EXTRA="$PIS_EXTRA SES_REPARTIDOR=$PIS_TMP/ses_rep.json"; fi
+  # (15/11/2026, 722) el rol «equipo» (Tatu): en Pedidos y Ruta, sin costos
+  if echo ",$TABS_PIS," | grep -qE ",(ruta|pedidos|inicio),"; then python ../estancias/scripts/migraciones/sesion_prueba.py crear "$PIS_TMP/ses_eq.json" santos equipo >/dev/null 2>&1 && PIS_EXTRA="$PIS_EXTRA SES_EQUIPO=$PIS_TMP/ses_eq.json"; fi
+  if echo ",$TABS_PIS," | grep -q ",miportal,"; then python ../estancias/scripts/migraciones/sesion_prueba.py crear "$PIS_TMP/ses_ven.json" marcos vendedor >/dev/null 2>&1 && PIS_EXTRA="$PIS_EXTRA SES_VENDEDOR=$PIS_TMP/ses_ven.json"; fi
+  node _tools/servir.js 8094 >/dev/null 2>&1 & PIS_SRV=$!
+  # (18/11/2026) Con la máquina cargada 2 s no alcanzaban: el detector arrancaba sin servidor, reventaba sin mirar nada y frenaba el deploy como «texto encimado». Se espera a que conteste (hasta 60 s).
+  for _i in $(seq 1 60); do curl -s -o /dev/null -m 5 http://localhost:8094/app.html && break; sleep 1; done
+  echo "    pantallas: $TABS_PIS"
+  set +e
+  env PW="$PW_DIR" BASE=http://localhost:8094/app.html OUT="$PIS_TMP/capturas" MEDIDAS=w390 SOLO="$TABS_PIS" CAPTURAS=1 SES_ADMIN="$PIS_SES" $PIS_EXTRA \
+    node _tools/pruebas/pisadas.js 2>&1 | grep -E "^(MAL|ok|PANTALLAS)" | sed 's/^/    /'
+  RC=${PIPESTATUS[0]}
+  set -e
+  kill $PIS_SRV 2>/dev/null || true
+  for f in "$PIS_SES" "$PIS_TMP/ses_rep.json" "$PIS_TMP/ses_eq.json" "$PIS_TMP/ses_ven.json"; do [ -f "$f" ] && python ../estancias/scripts/migraciones/sesion_prueba.py borrar "$f" >/dev/null 2>&1 || true; done
+  echo "    capturas a 390 px: $PIS_TMP/capturas  (mirá la del lugar que tocaste, con lo desplegable abierto)"
+  if [ "$RC" != "0" ]; then fallar "En el iPhone hay texto encimado o scroll de costado — no se publica."; fi
 fi
 
 # ── 3d. Que se pueda LEER en la computadora ──────────────────────────────────
@@ -258,5 +339,9 @@ else
   echo "   El 'tr -d' no es opcional: la copia local es CRLF y git guarda LF."
   echo "   Sin eso los hashes difieren y parece un deploy fallado."
   echo "   Y que el CDN lo entregue se confirma aparte, con un archivo que NO"
-  echo "   esta protegido:  curl -s https://app.maleu.com.ar/sw-panel.js"
+  echo "   esta protegido, CON la version en la direccion (como lo registra el ERP):"
+  echo "     curl -s \"https://app.maleu.com.ar/sw-panel.js?v=$(sed -n 's/^var CN='\''\(.*\)'\'';.*/\1/p' sw-panel.js | head -1)&comprobar=\$RANDOM\" | grep -o 'maleu-panel-v[0-9]*'"
+  echo "   Sin el ?v= Cloudflare devuelve una copia de hasta 4 h: parece que no se publico y no es asi (13/11/2026)."
+  echo "   OJO: nunca pidas la direccion EXACTA ?v=<version> antes de que Pages termine: Cloudflare guarda la VIEJA"
+  echo "   bajo esa clave hasta 4 h y los celulares quedan pegados (paso con la v1166). Por eso el &comprobar=."
 fi

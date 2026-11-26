@@ -106,7 +106,8 @@ const diaDelMes = n => iso(new Date(HOY.getFullYear(), HOY.getMonth(), n));
 
     /* 1) La bolsa ya entregada al vendedor ES venta de Red. */
     chk('Red cuenta lo ya entregado al vendedor (220.000, no 0)', g.red.f === 220000, g.red);
-    chk('y lo cuenta por BOLSA: 2 entregas, no 3 pedidos', g.red.ent === 2, g.red);
+    /* Desde el 25/10/2026 una venta de Red es cada CLIENTE del representante, no la bolsa. */
+    chk('y lo cuenta por CLIENTE: 3 ventas, no 2 bolsas', g.red.ent === 3, g.red);
 
     /* 2) Y entonces NO esta pendiente: el unico Red pendiente es el que sigue
           en el freezer. Mas la casa pendiente = 2. */

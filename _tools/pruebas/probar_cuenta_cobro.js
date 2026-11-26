@@ -422,23 +422,20 @@ const tocar = (cli, sel) => evaluar(cli,
       'npSetPago("Transferencia");npUpdateTotal();');
     const msg10 = await evaluar(cli, 'npResumenTextoWA()');
     chequear(/maleump/.test(msg10) && /maleubru/.test(msg10), 'el mensaje al cliente lleva los dos alias', msg10.split('\n').slice(-4).join(' | '));
+    /* (8/11/2026) La cuenta ya no se pregunta en el formulario: el pedido se registra «No Cobrado» y al tener número se
+       abre el CUADRO DE COBRO, que pregunta la cuenta (lo prueba probar_autopedido_cobro.js). */
     await evaluar(cli, 'var y=document.getElementById("npYaCobrado");y.checked=true;npToggleYaCobrado();');
     await dormir(200);
-    chequear(!await evaluar(cli, 'document.getElementById("npCtaWrap").classList.contains("hidden")'),
-      'al marcar "Ya me pagó" pregunta a que cuenta');
-    chequear(await evaluar(cli, 'document.querySelectorAll("#npCtaChips .np-chip").length') === 2 &&
-      !await evaluar(cli, '!!document.querySelector("#npCtaChips .active")'), 'con las 2, ninguna elegida');
-    await evaluar(cli, 'window.__posts=[];npGuardar()');
-    await dormir(1200);
-    chequear((await evaluar(cli, 'window.__posts.length')) === 0, 'sin cuenta NO guarda el pedido');
-    chequear(/A qué cuenta/.test(await evaluar(cli, '(document.getElementById("rutToast")||{}).textContent||""')), 'y dice que falta');
-    await tocar(cli, '#npCtaChips [data-cta=brubank]');
+    chequear(await evaluar(cli, 'document.getElementById("npCtaWrap").classList.contains("hidden")'),
+      'al marcar "Ya me pagó" NO pregunta la cuenta en el formulario (la pregunta el cuadro de cobro)');
     await evaluar(cli, 'window.__posts=[];npGuardar()');
     await esperar(cli, 'window.__posts.length>0', 8000);
     const p10 = await evaluar(cli, 'JSON.stringify(window.__posts[0]||{})');
     let o10 = {}; try { o10 = JSON.parse(p10); } catch (e) { }
-    chequear(o10.estadoPago === 'Cobrado' && o10.cuenta === 'brubank',
-      'el pedido se guarda cobrado con cuenta:"brubank"', J({ ep: o10.estadoPago, c: o10.cuenta }));
+    chequear(o10.estadoPago === 'No Cobrado' && !o10.cuenta,
+      'el alta sale «No Cobrado» (el cobro va después, por el cuadro)', J({ ep: o10.estadoPago, c: o10.cuenta }));
+    chequear(await evaluar(cli, '(JSON.parse(localStorage.getItem("maleu_np_cola")||"[]")[0]||{}).cobrar===true||!localStorage.getItem("maleu_np_cola")'),
+      'y queda marcado para abrir el cobro');
 
     console.log('\n-- AUTOPEDIDO: "Ya me pagó" en EFECTIVO no pregunta --');
     await arrancar(cli, CUENTAS, 'nuevo');
@@ -450,7 +447,7 @@ const tocar = (cli, sel) => evaluar(cli,
     await evaluar(cli, 'window.__posts=[];npGuardar()');
     await esperar(cli, 'window.__posts.length>0', 8000);
     let o11 = {}; try { o11 = JSON.parse(await evaluar(cli, 'JSON.stringify(window.__posts[0]||{})')); } catch (e) { }
-    chequear(o11.estadoPago === 'Cobrado' && !o11.cuenta, 'se guarda cobrado y sin cuenta', J({ ep: o11.estadoPago, c: o11.cuenta }));
+    chequear(o11.estadoPago === 'No Cobrado' && !o11.cuenta, 'se guarda «No Cobrado» y sin cuenta (el cobro va por el cuadro)', J({ ep: o11.estadoPago, c: o11.cuenta }));
 
     console.log('\n-- AUTOPEDIDO con UNA sola cuenta: el alias de siempre --');
     await arrancar(cli, UNA_SOLA, 'nuevo');

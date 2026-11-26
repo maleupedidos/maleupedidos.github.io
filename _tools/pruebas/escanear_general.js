@@ -83,10 +83,14 @@ const MEDIR = `(function(){
 (async () => {
   const cli = await abrir();
   await cli.enviar('Runtime.enable'); await cli.enviar('Page.enable');
-  await cli.enviar('Page.addScriptToEvaluateOnNewDocument', { source: PREP });
+  /* SBSES=<archivo>: con la sesion propia de la base y la guarda de solo lectura (sbses_guarda.js). */
+  const SBSES = require('./sbses_guarda.js')(process.env.SBSES, process.env.USUARIO || 'tadeo');
+  await cli.enviar('Page.addScriptToEvaluateOnNewDocument', { source: PREP + SBSES });
   await cli.enviar('Emulation.setDeviceMetricsOverride', { width: ANCHO, height: ANCHO < 700 ? 844 : 900, deviceScaleFactor: 1, mobile: ANCHO < 700 });
   await cli.enviar('Page.navigate', { url: 'http://localhost:8080/app.html' });
   await T(10000);
+  if (SBSES && !(await require('./sbses_guarda.js').verificarGuarda(cli, evaluar))) { console.error('  ABORTA: la guarda de solo lectura no corta'); process.exit(3); }
+  if (SBSES) console.log('  con la sesion de la base y la guarda de solo lectura');
   const lg = await evaluar(cli, '(function(){var e=document.getElementById("loginScreen");' +
     'return e && getComputedStyle(e).display !== "none";})()');
   if (lg) { console.error('  ABORTA: la pantalla de login quedo encima — la sesion no entro'); process.exit(3); }
@@ -223,6 +227,10 @@ const MEDIR = `(function(){
      El .gitignore lo cubre igual, como red. */
   const salida = require('path').join(require('os').tmpdir(), 'maleu-escaneo-' + ANCHO + '.json');
   require('fs').writeFileSync(salida, JSON.stringify(res, null, 1));
+  if (SBSES) {
+    const bl = await evaluar(cli, 'JSON.stringify(window.__bloqueados||[])').catch(() => '[]');
+    console.log('\n  escrituras cortadas por la guarda: ' + bl);
+  }
   console.log('\n  detalle completo: ' + salida);
   cli.matar(); process.exit(0);
 })();

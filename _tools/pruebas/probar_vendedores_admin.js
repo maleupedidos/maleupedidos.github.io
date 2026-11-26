@@ -33,12 +33,12 @@ setTimeout(() => { console.log('TIMEOUT global'); process.exit(2); }, 200000);
     console.log('La tab Vendedores (' + W + 'px)');
     await sleep(1500);
     const lbl = await evaluar(cli, '(function(){var b=document.querySelector(\'.bn[data-p="miportal"]\');return b?{l:b.querySelector(".bn-lbl").textContent,tip:b.getAttribute("data-tip")}:null})()');
-    chk('para el admin la tab se llama «Vendedores»', lbl && lbl.l === 'Vendedores' && lbl.tip === 'Vendedores', lbl);
+    chk('para el admin la tab se llama «Representantes» (21/10/2026)', lbl && lbl.l === 'Representantes' && lbl.tip === 'Representantes', lbl);
     await evaluar(cli, 'setTimeout(function(){go("miportal")},0),1');
     const t = await esperar(cli, '!!document.querySelector("#va-box .va-p")', 60000);
     console.log('   pedidos pintados en ' + t + ' ms');
     const hdr = await evaluar(cli, '(document.getElementById("hdrTitle")||{}).textContent');
-    chk('el encabezado dice «Vendedores»', hdr === 'Vendedores', hdr);
+    chk('el encabezado dice «Representantes»', hdr === 'Representantes', hdr);
     const v = await evaluar(cli, `(function(){var b=document.getElementById('va-box');return {vend:[].map.call(b.querySelectorAll('.va-vend > b'),function(x){return x.textContent}),
       peds:b.querySelectorAll('.va-p').length, fede:([].filter.call(b.querySelectorAll('.va-p'),function(x){return /#112/.test(x.textContent)})[0]||{}).textContent,
       chicos:[].filter.call(b.querySelectorAll('button'),function(x){var r=x.getBoundingClientRect();return r.height<44}).length, botones:b.querySelectorAll('button').length,

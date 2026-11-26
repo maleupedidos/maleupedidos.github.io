@@ -89,6 +89,9 @@ const EXTRA = `
     if(x && String(x.method||'').toUpperCase()==='POST'){
       var b={}; try{ b=JSON.parse(x.body); }catch(e){}
       window.__posts.push(b);
+      /* 🛵 Llegando (24/10/2026): el 9103 tiene seguimiento y mail; el resto no tiene seguimiento. */
+      if(b.action==='segLlegando') return Promise.resolve(new Response(JSON.stringify(
+        String(b.id)==='9103'?{ok:true,pagina:true,mail:true}:{ok:true,pagina:false,mail:false,motivo:'sin seguimiento'}),{status:200,headers:{'Content-Type':'application/json'}}));
       return Promise.resolve(new Response(JSON.stringify({ok:true,n:(b.rows||[]).length}),{status:200,headers:{'Content-Type':'application/json'}}));
     }
     if(url.indexOf('action=entregas')>-1){
@@ -320,6 +323,25 @@ async function irA(cli, texto) {
   const armPz = await evaluar(cli, `(function(){var c=[].find.call(document.querySelectorAll('#armadoList .armado-card'),function(x){return /Prueba Mixto/.test(x.textContent)});return c?(c.querySelector('.armado-prods')||{}).textContent||'':'no esta la card';})()`);
   chk('ARMADO dice la pieza exacta junto a la carne', /Carne Colita de Cuadril · 1 pieza de 1,234 kg/.test(armPz), armPz);
   await evaluar(cli, 'switchTab("ruta")'); await pausa(400);
+
+  // ── 🛵 Llegando (24/10/2026): avisa por el seguimiento, nunca por WhatsApp ──
+  await evaluar(cli, 'try{localStorage.removeItem("maleu_ruta_lleg")}catch(e){}');
+  chk('la parada de Prueba Mixto está a mano', await irA(cli, 'Prueba Mixto'));
+  const btnLl = `[].find.call(document.querySelectorAll('#rutaBody button'),function(b){return /Estoy llegando/.test(b.textContent)})`;
+  chk('la parada de Home tiene «Estoy llegando»', await evaluar(cli, '!!' + btnLl));
+  await evaluar(cli, 'window.__posts=[]'); await evaluar(cli, btnLl + '.click()');
+  await esperar(cli, cuerpo + '.indexOf("Avisado a las")>-1', 8000);
+  const pLl = await evaluar(cli, 'JSON.stringify((window.__posts||[]).filter(function(p){return p&&p.action==="segLlegando"}))');
+  chk('manda segLlegando con la hoja y el N°', /"hoja":"Home"/.test(pLl) && /"id":"9103"/.test(pLl), pLl);
+  const cLl = await evaluar(cli, cuerpo);
+  chk('dice que le llegó por página y mail', /Avisado a las .{3,14}: lo ve en su seguimiento y le llegó un mail/.test(cLl), (cLl.match(/Contacto[\s\S]{0,160}/) || [''])[0]);
+  chk('y el botón ya no está (no se avisa dos veces)', await evaluar(cli, '!' + btnLl));
+  chk('lo recuerda en el celular', /9003/.test(await evaluar(cli, 'localStorage.getItem("maleu_ruta_lleg")||""')));
+  chk('ningún link de WhatsApp', await evaluar(cli, `!document.querySelector('#rutaView a[href*="wa.me"], #rutaView a[href*="whatsapp"]')`));
+  chk('la parada de Prueba Atrasado está a mano', await irA(cli, 'Prueba Atrasado'));
+  await evaluar(cli, btnLl + '.click()');
+  await esperar(cli, cuerpo + '.indexOf("no tiene seguimiento")>-1', 8000);
+  chk('sin seguimiento lo dice en vez de hacer como que avisó', /no tiene seguimiento: no le llega ningún aviso/.test(await evaluar(cli, cuerpo)));
 
   // ── Nada se pisa, nada chico, nada desborda ──
   let peor = { cruces: [], chicos: [], pares: 0 };
