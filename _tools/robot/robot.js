@@ -445,6 +445,28 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
      cobro». Y se mira la base (Entregado + Cobrado, forma, importes por medio, quién cobró, la fecha del cobro y la cuenta que
      eligió la pantalla) y la CAJA (el movimiento de ese pedido, con su efectivo y su digital). Para el robot la cuenta es la
      suya (la pantalla elige la única «Para clientes» que ve); para Tadeo es Galicia. */
+  /* (25/11/2026, Organizador) LA HOJA «¿DE QUÉ FREEZER LO SACASTE?». Lucas contestó «Del de Tadeo» en las 8 entregas del
+     16 al 22/11 (el #2512 salió de su freezer). Rehecha: dice de quién es cada freezer, en columna, nada marcado, sin «la
+     última vez salió de…», con lo que hay según el ERP, y avisa si en el elegido no alcanza. Solo pantalla: un pedido y un
+     stock de prueba pasados a la hoja, el confirm respondido «no» y la elección anotada; no se entrega nada. */
+  await paso('la hoja «¿De qué freezer lo sacaste?»: de quién es, nada marcado, avisa si no alcanza', async () => {
+    const r = JSON.parse(await ev(`(async function(){ try{ go('ruta'); for(var i=0;i<40&&typeof rutPreguntarFreezer!=='function';i++) await new Promise(function(z){setTimeout(z,500);});
+      var dlg=[], cf=window.confirm; window.confirm=function(m){ dlg.push(String(m)); return false; }; window.__frzRobot=null;
+      rutPreguntarFreezer([{h:'Pilar',id:'999998',c:'PRUEBA',p:[{a:'PCC',q:2}]}],function(d){ window.__frzRobot=d; },{principal:'ustariz',otro:'moresco',stock:{PCC:{pd:{ustariz:0,moresco:3}}}});
+      var ov=document.getElementById('rutFrzOv'); if(!ov){ window.confirm=cf; return JSON.stringify({err:'la hoja no abrió'}); }
+      var bs=[].map.call(ov.querySelectorAll('.rut-frz-b'),function(b){ return b.innerText.trim(); });
+      var marcado=[].some.call(ov.querySelectorAll('.rut-frz-b'),function(b){ return b.classList.contains('on')||b.getAttribute('aria-pressed')==='true'; });
+      var st=(document.getElementById('rutFrzStock')||{}).textContent||'', ult=!!document.getElementById('rutFrzUlt');
+      ov.querySelectorAll('.rut-frz-b')[0].click();
+      var avisa=dlg.length===1&&dlg[0].indexOf('no alcanza')>=0, sigue=!!document.getElementById('rutFrzOv')&&window.__frzRobot===null;
+      ov.querySelectorAll('.rut-frz-b')[1].click(); var elige=window.__frzRobot;
+      window.confirm=cf; var o2=document.getElementById('rutFrzOv'); if(o2)o2.remove();
+      return JSON.stringify({bs:bs,marcado:marcado,st:st,ult:ult,avisa:avisa,sigue:sigue,elige:elige}); }catch(e){ return JSON.stringify({err:String(e.message||e)}); } })()`, 40000).catch((e) => JSON.stringify({ err: e.message })));
+    if (r.err) return { ok: false, detalle: 'reventó: ' + r.err };
+    const ok = r.bs[0] === 'Freezer de Tadeo (Estancias)' && r.bs[1] === 'Freezer de Lucas' && !r.marcado && !r.ult && r.st.indexOf('Tadeo: 0 de 2') >= 0 && r.avisa && r.sigue && r.elige === 'moresco';
+    return { ok, detalle: '«' + r.bs.join('» / «') + '»' + (r.marcado ? ' · ¡UNO MARCADO!' : '') + (r.ult ? ' · ¡con «la última vez»!' : '') + ' · «' + r.st + '» · no alcanza: ' + (r.avisa ? 'avisa' : 'NO AVISA') + (r.sigue ? ' y espera' : ' y SIGUE') + ' · elige ' + r.elige };
+  }, { topeMs: 45000 });
+
   for (const medio of ['Efectivo', 'Transferencia', 'Mixto']) await paso('+ pedido «Ya me pagó» · ' + medio, async () => {
     const hechos = [];
     const r0 = await ev(`(async function(){ window.__cfRobot=window.confirm; window.confirm=function(){return true;};

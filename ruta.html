@@ -1274,7 +1274,9 @@ select.np-input{background:var(--white) url("data:image/svg+xml;utf8,<svg xmlns=
 .rut-frz-quien{font-size:14px;color:var(--ink3,#6B5A4C);margin-top:4px}
 .rut-frz-ult{margin-top:12px;font-size:14px;line-height:1.35;color:var(--ink2,#5b4646);background:#F5EFE6;border-radius:10px;padding:8px 10px}
 .rut-frz-ult[hidden]{display:none}
-.rut-frz-btns{display:flex;gap:10px;margin-top:16px}
+.rut-frz-btns{display:flex;flex-direction:column;gap:10px;margin-top:16px}
+.rut-frz-stock{margin-top:12px;font-size:14px;line-height:1.35;color:var(--ink2,#5b4646);text-align:center}
+.rut-frz-stock:empty{display:none}
 .rut-frz-b{flex:1 1 0;min-width:0;min-height:72px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;padding:10px 8px;border:1.5px solid var(--brown,#3B2314);border-radius:14px;background:#fff;color:var(--brown,#3B2314);font:inherit;font-size:16px;font-weight:800;line-height:1.2;cursor:pointer}
 .rut-frz-b small{font-size:12px;font-weight:600;color:var(--ink3,#6B5A4C)}
 .rut-frz-b:active{background:#F5EFE6}
@@ -4894,6 +4896,25 @@ function _rutFrzPregunta(peds){
   var otro=RUT_MIDEP_INFO&&RUT_MIDEP_INFO.otro; if(!otro)return false;
   return (peds||[]).some(function(p){ return p&&p.h!=='Red'; });
 }
+/* (25/11/2026, Organizador) Los botones dicen de quién es el freezer, en columna y del mismo tamaño. */
+function _rutFrzNombre(dep){ return dep==='ustariz'?'Freezer de Tadeo (Estancias)':dep==='moresco'?'Freezer de Lucas':'Freezer '+(_rutDepNom(dep)||dep); }
+/* Cuánto de lo que sale del freezer en estos pedidos hay en un depósito, según NP_STOCK (pd por depósito). */
+function _rutFrzCubre(peds,dep,stk){
+  var ST=stk||NP_STOCK||{};
+  var nec={}, tiene=0, pide=0, falt=[];
+  (peds||[]).forEach(function(p){ if(p&&p.h!=='Red')_itemsDepDe(p).forEach(function(it){ nec[it.a]=(nec[it.a]||0)+(Number(it.q)||0); }); });
+  Object.keys(nec).forEach(function(a){
+    var q=nec[a], h=Number((((ST[a])||{}).pd||{})[dep])||0;
+    pide+=q; tiene+=Math.min(q,Math.max(0,h));
+    if(h<q)falt.push((Math.round((q-Math.max(0,h))*1000)/1000)+' '+((typeof PROD_NAMES==='object'&&PROD_NAMES[a])||a));
+  });
+  return {tiene:Math.round(tiene*1000)/1000, pide:Math.round(pide*1000)/1000, faltan:falt};
+}
+function _rutFrzStockTxt(peds,deps,stk){
+  if(!stk&&!NP_STOCK)return '';
+  var partes=deps.map(function(d){ var c=_rutFrzCubre(peds,d,stk); return _rutFrzNombre(d).replace(/^Freezer de /,'').replace(/ \(.*\)$/,'')+': '+c.tiene+' de '+c.pide; });
+  return 'Según el ERP hay · '+partes.join(' · ');
+}
 function _rutFrzDel(dep){ return dep==='ustariz'?'Del de Tadeo':'Del de '+(_rutDepNom(dep)||dep); }
 /* La ayuda (735, `ruta_ultima_salida`): de qué freezer salió el último pedido ENTREGADO de ese cliente, por el Kardex.
    Es solo un texto: nunca preselecciona. Se pide al pintar la parada y se guarda por pedido (`canal|número`); si no
@@ -4923,8 +4944,10 @@ function _rutUltTxt(peds){
 }
 /* La hoja: cuelga del mismo lugar que `confirmOverlay` (adentro de Ruta, donde vale su CSS). Fondo, «Volver» o Escape
    (el kit toca el fondo) la cierran sin entregar. `cb(dep)` solo con un toque en uno de los dos. */
-function rutPreguntarFreezer(peds,cb){
-  var otro=RUT_MIDEP_INFO&&RUT_MIDEP_INFO.otro, pri=_rutSalePrincipal(); if(!otro)return;
+function rutPreguntarFreezer(peds,cb,prueba){
+  /* `prueba` (solo las pruebas): {principal, otro, stock} en lugar de lo de este usuario. */
+  var I=prueba||RUT_MIDEP_INFO, STK=(prueba&&prueba.stock)||null;
+  var otro=I&&I.otro, pri=(prueba&&prueba.principal)||_rutSalePrincipal(); if(!otro)return;
   var viejo=document.getElementById('rutFrzOv'); if(viejo)viejo.remove();
   var quien=String((peds[0]&&peds[0].c)||'').trim();
   var ov=document.createElement('div');
@@ -4932,21 +4955,27 @@ function rutPreguntarFreezer(peds,cb){
   ov.innerHTML='<div class="est-modal rut-frz" role="dialog" aria-modal="true" aria-labelledby="rutFrzT">'
     +'<h3 id="rutFrzT">¿De qué freezer lo sacaste?</h3>'
     +(quien?'<div class="rut-frz-quien">'+_rtcEsc(quien)+(peds.length>1?' · '+peds.length+' pedidos':'')+'</div>':'')
-    +'<div class="rut-frz-ult" id="rutFrzUlt" hidden></div>'
     +'<div class="rut-frz-btns">'
-    +'<button type="button" class="rut-frz-b" data-dep="'+_rtcEsc(pri)+'">'+_rtcEsc(_rutFrzDel(pri))+'</button>'
-    +'<button type="button" class="rut-frz-b" data-dep="'+_rtcEsc(otro)+'">Del mío<small>(casa)</small></button>'
+    +'<button type="button" class="rut-frz-b" data-dep="'+_rtcEsc(pri)+'">'+_rtcEsc(_rutFrzNombre(pri))+'</button>'
+    +'<button type="button" class="rut-frz-b" data-dep="'+_rtcEsc(otro)+'">'+_rtcEsc(_rutFrzNombre(otro))+'</button>'
     +'</div>'
+    +'<div class="rut-frz-stock" id="rutFrzStock"></div>'
     +'<button type="button" class="rut-frz-volver">Volver</button></div>';
   var host=document.getElementById('confirmOverlay'); host=(host&&host.parentNode)||document.body;
   host.appendChild(ov);
-  var ult=function(){ var u=document.getElementById('rutFrzUlt'); if(!u)return; var t=_rutUltTxt(peds); u.textContent=t; u.hidden=!t; };
-  ult(); _rutUltPedir(peds,ult);
+  /* (25/11/2026, Organizador) Sin «la última vez salió de…»: empujaba al primer botón (Lucas contestó «Del de Tadeo» en
+     las 8 entregas del 16 al 22/11, incluido el #2512 que salió de su freezer). En su lugar, lo que dice el ERP. */
+  var stk=function(){ var el=document.getElementById('rutFrzStock'); if(!el)return; el.textContent=_rutFrzStockTxt(peds,[pri,otro],STK); };
+  stk(); if(!STK&&!NP_STOCK){ try{ var _pr=npFetchStock(); if(_pr&&_pr.then)_pr.then(stk,function(){}); }catch(e){} }
   var hecho=false;
   ov.addEventListener('click',function(ev){ if(ev.target===ov)ov.remove(); });
   ov.querySelector('.rut-frz-volver').onclick=function(){ ov.remove(); };
   [].forEach.call(ov.querySelectorAll('.rut-frz-b'),function(b){
-    b.onclick=function(){ if(hecho)return; hecho=true; var d=b.getAttribute('data-dep'); ov.remove(); cb(d); };
+    b.onclick=function(){ if(hecho)return; var d=b.getAttribute('data-dep');
+      /* (Organizador) Si según el ERP en ese freezer no alcanza, se avisa antes de confirmar. No bloquea. */
+      var c=_rutFrzCubre(peds,d,STK);
+      if((STK||NP_STOCK)&&c.faltan.length&&!confirm('En el '+_rutFrzNombre(d).replace(/^Freezer/,'freezer')+' no alcanza según el ERP (faltan '+c.faltan.join(', ')+'). ¿Seguro que salió de ahí?'))return;
+      hecho=true; ov.remove(); cb(d); };
   });
 }
 /* ── LA PRESENTACIÓN (735) ── Una sola vez, a quien tiene otro freezer: qué cambió. Queda hasta que toca «Entendido». */
