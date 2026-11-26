@@ -1622,9 +1622,17 @@ details.np-mas[open]{padding-bottom:6px}
     </div>
 
     <!-- Pilar: barrio + lote -->
-    <div id="npPilarFields" class="np-row-2 hidden">
-      <input type="text" id="npPilarBarrio" placeholder="Barrio / countr" class="np-input" oninput="npPilarBarrioInput()">
-      <input type="text" id="npPilarLote" placeholder="Lote/casa" class="np-input">
+    <!-- (26/11/2026) El barrio es una LISTA (los barrios de los representantes activos, tienda_vendedores, más los que
+         entrega Maleu) con «Otro…» para escribir uno nuevo, como el sub barrio de Home: así no entran «Ayres» y «Ayres
+         del Pilar» como dos barrios. El que viaja sigue siendo #npPilarBarrio; la lista solo lo escribe. -->
+    <div id="npPilarFields" class="hidden">
+      <div class="np-row-2">
+        <select id="npPilarBarrioSel" class="np-input" onchange="npPilarBarrioSelChange()" aria-label="Barrio"><option value="">Barrio</option></select>
+        <input type="text" id="npPilarLote" placeholder="Lote/casa" class="np-input">
+      </div>
+      <div class="np-row" id="npPilarOtroRow" style="display:none">
+        <input type="text" id="npPilarBarrio" placeholder="¿Qué barrio?" class="np-input" oninput="npPilarBarrioInput()" autocomplete="off">
+      </div>
     </div>
 
     <!-- ¿CÓMO NOS CONOCIÓ? (25/11/2026, 851). Solo a una casa nueva: la base decide (casa_es_nueva, con el teléfono y el
@@ -13945,6 +13953,7 @@ function npSelectCliente(idx){
     }
   } else if(npZona==='Pilar'){
     if(c.barrio){var bpi=document.getElementById('npPilarBarrio');if(bpi)bpi.value=c.barrio;}
+    try{ npPilarBarrioPintar(); }catch(_eBp){}
     npEnvioUI(npZona);npUpdateTotal();
     var lp=document.getElementById('npPilarLote');
     if(lp){
@@ -13990,6 +13999,7 @@ function npSetZona(z){
   document.querySelectorAll('#npZonaChips .np-chip').forEach(function(b){b.classList.toggle('active',b.dataset.zona===z)});
   document.getElementById('npHomeFields').classList.toggle('hidden',z!=='Home');
   document.getElementById('npPilarFields').classList.toggle('hidden',z!=='Pilar');
+  if(z==='Pilar'){ try{ npPilarBarriosCargar(); npPilarBarrioPintar(); }catch(_eBp){} }   /* (26/11) la lista de barrios */
   document.getElementById('npClubesFields').classList.toggle('hidden',z!=='Clubes');
   document.getElementById('npFam').style.display=(z==='Home')?'flex':'none';
   // Clubes: precio institucional → ocultar el % al pedido (y el % por categoría no se renderiza)
@@ -14692,6 +14702,54 @@ function npEnvioBase(zona){ return zona==='Pilar'?(npBarrioExHome()?0:5000):0; }
    `npEnvioUI(npZona)` en el oninput: desde el HTML, `npZona` es la COPIA que la
    sub-app publica en window al fusionarse y no cambia; la zona viva esta aca. */
 function npPilarBarrioInput(){ npEnvioUI(npZona); npUpdateTotal(); }
+/* ══ EL BARRIO DE PILAR COMO LISTA (26/11/2026) ══ Los barrios salen de los representantes activos (tienda_vendedores,
+   la misma que lee la tienda) más los que entrega Maleu sin representante. «Otro…» abre el texto. La lista solo escribe
+   #npPilarBarrio, que es lo que leen el alta, la edición, el envío y «¿Cómo nos conoció?». Se compara sin tildes ni
+   mayúsculas (la base las saca al guardar desde la 856). Copia en localStorage para abrir sin red. */
+var NP_BARRIOS_MALEU=['Los Alcanfores','Pilara'];
+var npPilarBarrios=null, npPilarBarriosPidiendo=false;
+function _npBarrioClave(s){ return String(s||'').normalize('NFD').replace(/[̀-ͯ]/g,'').toLowerCase().replace(/\s+/g,' ').trim(); }
+function _npPilarBarriosArmar(vend){
+  var vistos={}, lista=[];
+  var sumar=function(b){ b=String(b||'').replace(/\s+/g,' ').trim(); var k=_npBarrioClave(b); if(!k||vistos[k])return; vistos[k]=1; lista.push(b); };
+  (vend||[]).forEach(function(v){ ((v&&v.barrios)||[]).forEach(sumar); });
+  NP_BARRIOS_MALEU.forEach(sumar);
+  return lista.sort(function(a,b){ return a.localeCompare(b,'es',{sensitivity:'base'}); });
+}
+function npPilarBarriosCargar(){
+  if(npPilarBarrios===null){ try{ var c=JSON.parse(localStorage.getItem('mc_np_barrios_pilar')||'null'); if(c&&Array.isArray(c.l)&&c.l.length){ npPilarBarrios=c.l; npPilarBarrioPintar(); } }catch(_eC){} }
+  if(npPilarBarriosPidiendo||typeof _baseRpc!=='function')return;
+  npPilarBarriosPidiendo=true;
+  _baseRpc('tienda_vendedores',{}).then(function(d){
+    var l=_npPilarBarriosArmar(d&&d.vendedores); if(!l.length)return;
+    npPilarBarrios=l; try{ localStorage.setItem('mc_np_barrios_pilar',JSON.stringify({t:Date.now(),l:l})); }catch(_eS){}
+    npPilarBarrioPintar();
+  }).catch(function(){}).then(function(){ npPilarBarriosPidiendo=false; });
+}
+/* Dibuja las opciones y deja elegida la que corresponde a lo que hay en #npPilarBarrio (lo cargó una edición, un
+   cliente o el usuario). Lo que no está en la lista va como «Otro…» con el texto a la vista. */
+function npPilarBarrioPintar(){
+  var s=document.getElementById('npPilarBarrioSel'), inp=document.getElementById('npPilarBarrio'), fila=document.getElementById('npPilarOtroRow');
+  if(!s||!inp)return;
+  var l=npPilarBarrios||NP_BARRIOS_MALEU.slice(), val=inp.value.trim(), k=_npBarrioClave(val), elegido='';
+  var html='<option value="">Barrio</option>';
+  l.forEach(function(b){ if(k&&_npBarrioClave(b)===k)elegido=b; html+='<option value="'+String(b).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;')+'">'+String(b).replace(/&/g,'&amp;').replace(/</g,'&lt;')+'</option>'; });
+  html+='<option value="__otro__">Otro…</option>';
+  var otro=(s.value==='__otro__'&&!elegido)||(!!val&&!elegido);
+  s.innerHTML=html;
+  s.value=elegido?elegido:(otro?'__otro__':'');
+  if(elegido&&inp.value!==elegido)inp.value=elegido;
+  if(fila)fila.style.display=otro?'':'none';
+}
+function npPilarBarrioSelChange(){
+  var s=document.getElementById('npPilarBarrioSel'), inp=document.getElementById('npPilarBarrio'), fila=document.getElementById('npPilarOtroRow');
+  if(!s||!inp)return;
+  if(s.value==='__otro__'){ inp.value=''; if(fila)fila.style.display=''; setTimeout(function(){ try{ inp.focus(); }catch(_eF){} },30); }
+  else { inp.value=s.value; if(fila)fila.style.display='none'; }
+  try{ npCampoOk('npPilarBarrio'); }catch(_eOk){}
+  npPilarBarrioInput();
+  try{ npConocioChequear(); }catch(_eCo){}
+}
 /* Muestra u oculta la casilla "Envio de regalo" segun corresponda envio, y la
    destilda al salir de Pilar para que no viaje regalado a otro pedido. */
 function npEnvioUI(z){
@@ -16362,7 +16420,7 @@ function npBorradorRecuperar(){
   var put=function(id,v){ var el=document.getElementById(id); if(el&&v!=null&&v!=='')el.value=v; };
   put('npNombre',e.nombre); put('npTel',e.telefono);
   if(e.canal==='Home'){ put('npSubBarrio',e.subBarrio); put('npLote',e.lote); }
-  else if(e.canal==='Pilar'){ put('npPilarBarrio',e.barrio); put('npPilarLote',e.lotePilar); }
+  else if(e.canal==='Pilar'){ put('npPilarBarrio',e.barrio); put('npPilarLote',e.lotePilar); try{ npPilarBarrioPintar(); }catch(_eBp){} }
   else if(e.canal==='Clubes'){ put('npClub',e.club); put('npDeporte',e.deporte); put('npGrupo',e.grupo); }
   if(e.pago)npSetPago(e.pago);
   if(e.fechaEntrega)npSetFecha(e.fechaEntrega);
@@ -16385,7 +16443,7 @@ function npColaRecargar(coid){
   var put=function(id,v){ var el=document.getElementById(id); if(el&&v!=null)el.value=v; };
   put('npNombre',d.nombre); put('npTel',d.telefono);
   if(d.canal==='Home'){ put('npSubBarrio',d.subBarrio); put('npLote',d.lote); }
-  else if(d.canal==='Pilar'){ put('npPilarBarrio',d.barrio); put('npPilarLote',d.lote); }
+  else if(d.canal==='Pilar'){ put('npPilarBarrio',d.barrio); put('npPilarLote',d.lote); try{ npPilarBarrioPintar(); }catch(_eBp){} }
   else if(d.canal==='Clubes'){ put('npClub',d.club); put('npDeporte',d.deporte); put('npGrupo',d.grupo); }
   if(d.pago)npSetPago(d.pago);
   if(d.fechaEntrega)npSetFecha(d.fechaEntrega);
@@ -16603,6 +16661,7 @@ function npReset(){
   npBenefActivo=false; npBenefSacado=false; var _bfR=document.getElementById('npBenef'); if(_bfR){_bfR.hidden=true;_bfR.innerHTML='';}   /* (724) */
   var nd=document.getElementById('npChipNoDisc');if(nd)nd.classList.remove('active');
   ['npNombre','npLote','npPilarBarrio','npPilarLote','npTel','npPropina','npDescuentoManual','npGlobalPct','npEfMixto','npTrMixto'].forEach(function(id){var el=document.getElementById(id);if(el)el.value=''});
+  try{ var _pbs=document.getElementById('npPilarBarrioSel'); if(_pbs)_pbs.value=''; npPilarBarrioPintar(); }catch(_eBp){}
   var yc=document.getElementById('npYaCobrado');if(yc)yc.checked=false;
   npWaManual=false; try{npWaPintar();}catch(_eW){}
   npCliElegido=false; npCaptManual=false; try{var _cs=document.getElementById('npCaptado'); if(_cs)_cs.value=''; npCaptPintar();}catch(_eC){}

@@ -267,6 +267,10 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
       pago: 'Transferencia', envio: 0, items: [{ id: prod.id, qty: 1 }], repartidor: '', total: Number(prod.precio) || 1, subtotalSinDescuento: Number(prod.precio) || 1,
       descuento: 0, descuentoManual: 0, descuentoGlobalPct: 0, descuentoReceta: null, propina: 0, tipoPedido: '', deposito: DEP,
       barrio: 'PRUEBA', direccion: 'PRUEBA', lote: '', origen: 'Pendiente', estadoEntrega: 'Pendiente', estadoPago: 'No Cobrado', clientOrderId: PREFIJO + 'alta' };
+    /* (26/11/2026, alertas #945-#949) En el deploy la PRIMERA recarga de Pedidos después de publicar va en frío: 1,5-1,8 s
+       contra 0,4-0,95 s del reintento segundos después. No era el alta (el reloj arranca cuando ya volvió; el aviso al CRM
+       de la 849 va adentro de esa transacción). Una recarga antes del alta, sin medir: se mide la de uso normal. */
+    await ev(`Promise.resolve(_recargarPedidos()).then(function(){ return 1; }, function(){ return 1; })`, 15000).catch(() => 0);
     const r = await directa('altaPedido', body);
     if (!bien(r)) return mal(r, 'alta');
     const n = r.d.n || r.d.ref;
