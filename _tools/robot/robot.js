@@ -756,6 +756,10 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
     if (!(ep && ep.avisosTr)) return { ok: true, salteado: true, detalle: 'espera la migración 839 (aviso de transferencia y señal a Cobranza)' };
     const r = await require('./portal_rep.js')({ cdp, url: URL_APP, usuario: CRED.repUsuario, pin: CRED.repPin, n: REP_PED_N, admin: { ev, esperar }, observador: process.env.ROBOT_OBSERVADOR || '' });
     Object.assign(METRICAS, r.metricas || {});
+    /* (26/11/2026, alerta #957) Entregar el autopedido saca 1 PRUEBA del depósito prueba (-SAL del Red). Pasa DESPUÉS de
+       fijar STOCK_ESPERADO en la carga: sin descontarlo, «stock a los 2 min» daba «¡EL LIBRO VOLVIÓ PARA ATRÁS!» con el
+       libro bien (26/11: esperado 2, libro 1 = la salida del #906079). El reloj de los 2 min sigue siendo el de la carga. */
+    if (STOCK_ESPERADO && /(^| · )1 entregar \(#/.test(String(r.detalle || ''))) STOCK_ESPERADO = { prueba: STOCK_ESPERADO.prueba - 1, ustariz: STOCK_ESPERADO.ustariz, de: STOCK_ESPERADO.de + ' menos la entrega del autopedido #' + REP_PED_N };
     return { ok: r.ok, detalle: r.detalle };
   }, { escribe: true, topeMs: 90000 });
 

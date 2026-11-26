@@ -181,6 +181,15 @@ async function cargarPedido(medio, yaPago, opt) {
 }
 async function guardar(antes) {
   const n0 = await pg.evaluate(() => window.__posts.length);
+  /* (26/11/2026, alerta #956) Desde la v1341 (851) a una casa nueva se le pregunta «¿Cómo nos conoció?», obligatoria: sin
+     contestarla GUARDAR corta y no sale el alta. La casa del robot es nueva siempre (robot_limpiar le borra los pedidos).
+     Se contesta con un toque, como Tadeo; antes se espera a que `casa_es_nueva` haya vuelto. */
+  /* `npConocio` vive adentro de la sub-app: la de window es una copia. Se mide el DOM. El rpc tarda: hasta 4 s. */
+  const pregunta = await esperar(() => { const w = document.getElementById('npConocioWrap'); return !!(w && w.style.display !== 'none'); }, null, 4000);
+  if (pregunta) {
+    await tocar('#npConocio .np-chip', 'Otro');
+    chk('+ Pedido: «¿Cómo nos conoció?» (casa nueva) queda contestada', await pg.evaluate(() => (document.querySelector('#npConocio .np-chip.active') || {}).textContent === 'Otro'));
+  }
   const g = await tocar('button', 'GUARDAR', '#nuevoView', { espera: 300 }) || await tocar('button', 'GUARDAR');
   if (!g) return { err: 'no encontré GUARDAR' };
   /* El número: lo que devuelve el alta. */
