@@ -2694,9 +2694,11 @@ function _doGetAdmin(opt) {
     var idxBar = _ixH('Barrio'), idxSub = _ixH('Sub Barrio'), idxLot = _ixH('Domicilio - Lote');
     var idxOp = _ixH(COBRO_OP_COL_), idxPg = _ixH(COBRO_PAGO_COL_);
     var idxCobP = _ixH('Cobró en persona');   // (648) quién cobró ≠ dónde está la plata («Cobró»)
+    /* (872, 26/11/2026) La propina en efectivo de un Mixto es efectivo: ver el reparto de abajo. */
+    var idxPEf = _ixH('Propina Efectivo');
     var _c = _leerColsRalas_(shC, [1, 3, colsC.cli, colsC.fp, colsC.ep,
                                    colsC.ef, colsC.tr, colsC.fac, idxFc, idxFeEnt, idxRep, idxTel, idxBar, idxSub, idxLot], _lecModo);
-    var _fin = _leerColsRalas_(shC, [idxCta, idxCob, idxRec, idxOp, idxPg, idxCobP], _lecModo);
+    var _fin = _leerColsRalas_(shC, [idxCta, idxCob, idxRec, idxOp, idxPg, idxCobP, idxPEf], _lecModo);
     var _cta = function (r) { return idxCta >= 0 ? _fin.v(r, idxCta) : ''; };
     var _quien = function (r) {
       return String((idxCob >= 0 ? _fin.v(r, idxCob) : '') || (idxRep >= 0 ? _c.v(r, idxRep) : '') || '').trim();
@@ -2735,7 +2737,23 @@ function _doGetAdmin(opt) {
              neto por si hubo propina. Sin parciales da lo mismo que antes. */
           var efResta = Math.max(0, ef - (parcAcum ? parcAcum.ef : 0));
           var trResta = Math.max(0, tr - (parcAcum ? parcAcum.mp : 0));
-          if (facturado > 0 && (efResta + trResta) > 0) {
+          /* LA PROPINA EN EFECTIVO ES EFECTIVO (872, 26/11/2026; la misma regla que la 837 en
+             `caja_light_base`). Repartir el FACTURADO en proporcion le corria la propina a los dos
+             medios: Home #2574 (79.990 ef + 5.100 tr + 10 de propina en efectivo, le dieron 80.000
+             en la mano) salia 79.999 en la billetera de Tadeo y 5.101 en Galicia, y Caja decia
+             «entró $329.999». El efectivo es el del pedido menos lo cobrado a cuenta, mas su propina
+             en efectivo (con pagos a cuenta la propina ya viene adentro, 831), con tope en el neto;
+             lo demas es digital. Sin la columna (el motor con la base sin la 872) queda el reparto
+             de antes. */
+          var _pEfV = idxPEf >= 0 ? _fin.v(rc2, idxPEf) : null;
+          var pEf = (_pEfV === null || _pEfV === undefined) ? null : (Number(_pEfV) || 0);
+          if (pEf !== null && facturado > 0 && (efResta + trResta) > 0) {
+            efTotal = Math.min(netoCierre, Math.max(0, efResta + (alreadyCounted > 0 ? 0 : pEf)));
+            mpTotal = netoCierre - efTotal;
+          } else if (pEf !== null && facturado > 0 && (ef + tr) > 0) {
+            efTotal = Math.min(netoCierre, Math.max(0, ef + pEf));
+            mpTotal = netoCierre - efTotal;
+          } else if (facturado > 0 && (efResta + trResta) > 0) {
             efTotal = Math.round(netoCierre * (efResta / (efResta + trResta)));
             mpTotal = netoCierre - efTotal;
           } else if (facturado > 0 && (ef + tr) > 0) {
@@ -4179,7 +4197,10 @@ function _camCargar_(d) {
   var cb = [['Fecha', 'Hoja', 'Pedido', 'Cliente', 'Monto', 'Repartidor', 'Tipo']];
   (d.cambios || []).forEach(function (x) { _motPoner_(cb, x[0], [_motFecha_(x[1]) || '', x[2], x[3], x[4], Number(x[5]) || 0, x[6], x[7]]); });
   H['Cambios Billetera'] = new _Hoja('Cambios Billetera', cb);
-  ['Home', 'Pilar', 'Clubes'].forEach(function (h) { H[h] = new _Hoja(h, [_camCabPed_(h)]); });
+  /* (872) La propina en efectivo viaja en [21] desde la 872: sin ella no va la columna y el reparto del Mixto
+     queda el de antes (no se inventa una propina en cero). */
+  var conPEf = (d.cob || []).some(function (x) { return x && x.length > 21; });
+  ['Home', 'Pilar', 'Clubes'].forEach(function (h) { H[h] = new _Hoja(h, [_camCabPed_(h, conPEf)]); });
   (d.ids || []).forEach(function (x) { if (H[x[0]]) _motPoner_(H[x[0]].f, x[1], ['', x[2]]); });
   /* Tanda 3 (211). Los cobrados de Home, Pilar y Clubes, en las columnas que lee `_sumarCobrado`. */
   (d.cob || []).forEach(function (x) {
@@ -4196,6 +4217,7 @@ function _camCargar_(d) {
     put('Cuenta Cobro', x[14]); put('Cobró', x[15]); put('Repartidor', x[16]);
     put('Recibido Efectivo', Number(x[17]) || ''); put('Operación Cobro', x[18]); put('Pagó', x[19]);
     put('Cobró en persona', x[20] || '');   /* (648) */
+    if (x.length > 21) put('Propina Efectivo', Number(x[21]) || 0);   /* (872) */
     _motPoner_(H[h].f, x[1], f);
   });
   H['Cobros Parciales'] = new _Hoja('Cobros Parciales', [['Fecha/Hora', 'Hoja', 'N° Pedido', 'Cliente', 'Forma Pago', 'Monto', 'Notas',
@@ -4220,11 +4242,12 @@ function _camCargar_(d) {
    despues de la ultima columna fija. Clubes no tiene barrio, sub barrio ni lote (como la replica). */
 var _CAM_PED_ = { Home: { fp: 11, ep: 12, ef: 17, tr: 18, fac: 21 }, Pilar: { fp: 11, ep: 12, ef: 17, tr: 18, fac: 21 },
   Clubes: { fp: 14, ep: 15, ef: 18, tr: 19, fac: 22 } };
-function _camCabPed_(h) {
+function _camCabPed_(h, conPEf) {
   var cab = []; for (var i = 0; i < 30; i++) cab.push('');
   cab[1] = 'N° Pedido';
   return cab.concat(['Fecha de Cobro', 'Fecha Entrega', 'Repartidor', 'Teléfono', 'Cuenta Cobro', 'Cobró', 'Recibido Efectivo',
-    'Operación Cobro', 'Pagó', 'Cobró en persona'], h === 'Clubes' ? [] : ['Barrio', 'Sub Barrio', 'Domicilio - Lote']);
+    'Operación Cobro', 'Pagó', 'Cobró en persona'], h === 'Clubes' ? [] : ['Barrio', 'Sub Barrio', 'Domicilio - Lote'],
+    conPEf ? ['Propina Efectivo'] : []);
 }
 
 /* datos: lo que devuelve caja_resto_pantalla. opts.ahora: fijar el reloj (la prueba). Devuelve lo mismo

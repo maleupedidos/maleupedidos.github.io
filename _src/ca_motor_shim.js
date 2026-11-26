@@ -50,7 +50,10 @@ function _camCargar_(d) {
   var cb = [['Fecha', 'Hoja', 'Pedido', 'Cliente', 'Monto', 'Repartidor', 'Tipo']];
   (d.cambios || []).forEach(function (x) { _motPoner_(cb, x[0], [_motFecha_(x[1]) || '', x[2], x[3], x[4], Number(x[5]) || 0, x[6], x[7]]); });
   H['Cambios Billetera'] = new _Hoja('Cambios Billetera', cb);
-  ['Home', 'Pilar', 'Clubes'].forEach(function (h) { H[h] = new _Hoja(h, [_camCabPed_(h)]); });
+  /* (872) La propina en efectivo viaja en [21] desde la 872: sin ella no va la columna y el reparto del Mixto
+     queda el de antes (no se inventa una propina en cero). */
+  var conPEf = (d.cob || []).some(function (x) { return x && x.length > 21; });
+  ['Home', 'Pilar', 'Clubes'].forEach(function (h) { H[h] = new _Hoja(h, [_camCabPed_(h, conPEf)]); });
   (d.ids || []).forEach(function (x) { if (H[x[0]]) _motPoner_(H[x[0]].f, x[1], ['', x[2]]); });
   /* Tanda 3 (211). Los cobrados de Home, Pilar y Clubes, en las columnas que lee `_sumarCobrado`. */
   (d.cob || []).forEach(function (x) {
@@ -67,6 +70,7 @@ function _camCargar_(d) {
     put('Cuenta Cobro', x[14]); put('Cobró', x[15]); put('Repartidor', x[16]);
     put('Recibido Efectivo', Number(x[17]) || ''); put('Operación Cobro', x[18]); put('Pagó', x[19]);
     put('Cobró en persona', x[20] || '');   /* (648) */
+    if (x.length > 21) put('Propina Efectivo', Number(x[21]) || 0);   /* (872) */
     _motPoner_(H[h].f, x[1], f);
   });
   H['Cobros Parciales'] = new _Hoja('Cobros Parciales', [['Fecha/Hora', 'Hoja', 'N° Pedido', 'Cliente', 'Forma Pago', 'Monto', 'Notas',
@@ -91,11 +95,12 @@ function _camCargar_(d) {
    despues de la ultima columna fija. Clubes no tiene barrio, sub barrio ni lote (como la replica). */
 var _CAM_PED_ = { Home: { fp: 11, ep: 12, ef: 17, tr: 18, fac: 21 }, Pilar: { fp: 11, ep: 12, ef: 17, tr: 18, fac: 21 },
   Clubes: { fp: 14, ep: 15, ef: 18, tr: 19, fac: 22 } };
-function _camCabPed_(h) {
+function _camCabPed_(h, conPEf) {
   var cab = []; for (var i = 0; i < 30; i++) cab.push('');
   cab[1] = 'N° Pedido';
   return cab.concat(['Fecha de Cobro', 'Fecha Entrega', 'Repartidor', 'Teléfono', 'Cuenta Cobro', 'Cobró', 'Recibido Efectivo',
-    'Operación Cobro', 'Pagó', 'Cobró en persona'], h === 'Clubes' ? [] : ['Barrio', 'Sub Barrio', 'Domicilio - Lote']);
+    'Operación Cobro', 'Pagó', 'Cobró en persona'], h === 'Clubes' ? [] : ['Barrio', 'Sub Barrio', 'Domicilio - Lote'],
+    conPEf ? ['Propina Efectivo'] : []);
 }
 
 /* datos: lo que devuelve caja_resto_pantalla. opts.ahora: fijar el reloj (la prueba). Devuelve lo mismo
