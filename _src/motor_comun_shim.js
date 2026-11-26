@@ -102,7 +102,13 @@ function _motCelda_(v) {
   if (typeof v === 'string') { var f = _motFecha_(v); if (f) return f; }
   return v == null ? '' : v;
 }
+/* (26/11/2026) SIN FILA: lo que nace en la base después del corte (un redondeo, un proveedor, una palanca nueva) llega con
+   `row: null`. `Number(null)` es 0 y `filas[-1] = fila` lo tiraba sin un solo error: la Caja no veía el redondeo RD-0003
+   (−$30 en Resultados contra la base), ni 7 proveedores ni 19 filas de Config_Maleu. Va al final, como las negativas,
+   sin número real (el motor deja la fila prestada). */
 function _motPoner_(filas, row, fila) {
-  if (Number(row) < 0) { (filas.__neg = filas.__neg || []).push([Number(row), fila]); return; }   /* (noche) ver _Hoja */
+  if (row == null || row === '' || !isFinite(Number(row)) || Number(row) < 1) {
+    (filas.__neg = filas.__neg || []).push([Number(row) < 0 ? Number(row) : null, fila]); return;   /* (noche) ver _Hoja */
+  }
   while (filas.length < row - 1) filas.push([]); filas[row - 1] = fila;
 }
