@@ -208,6 +208,7 @@ body.embed .sem-tabs{top:48px}
 .hj-nota:empty{display:none}
 .hj-av{color:#B45309;font-weight:700}
 .hj-cam{padding:0 0 8px 34px;font-size:12.5px;color:#3E2723}
+.hj-llega{font-size:13px;font-weight:600;color:#1565C0}
 .hj-cam label{display:flex;gap:6px;align-items:center;min-height:34px}
 .hj-cam input{width:20px;height:20px}
 .hj-pasos{background:#FFF8E1;border:1px solid #F3D27A;border-radius:12px;padding:10px 12px;font-size:13.5px;font-weight:600;color:#5D4037;margin:0 0 12px}
@@ -8039,8 +8040,20 @@ function _abaHjCaminoCargar(prov, P) {
           var k = so.channel + '|' + so.order_number; if (propios[k]) return;
           (por[x.product_sku] = por[x.product_sku] || []).push({ k: k, cli: so.customer_name || '', canal: so.channel, n: so.order_number, q: Math.min(d, Number(x.quantity) || d) });
         });
-        _abaHjCam[prov] = { t: Date.now(), porAbbr: por };
-        if (abaCurrentTab === 'recibir' && _abaHj && _abaHj.prov === prov) abaRenderRecibir(true);
+        /* (27/11/2026, 878) Las bolsas de Red dadas hoy también bajaron el freezer: si salieron de lo que vino en el auto,
+           son «salió del auto» igual que una entrega. Del depósito que recibe (o sin depósito anotado). */
+        var depR = (_abaHj && _abaHj.prov === prov && _abaHj.dep) || '';
+        return (typeof _comprasLlegadas === 'function' ? _comprasLlegadas(true) : Promise.resolve(null)).then(function (ll) {
+          ((ll && ll.bolsas) || []).forEach(function (b) {
+            if (skus.indexOf(b.sku) < 0 || !(Number(b.q) > 0)) return;
+            if (depR && b.dep && b.dep !== depR) return;
+            (por[b.sku] = por[b.sku] || []).push({ k: 'bolsa|' + b.k, cli: b.cli || '', canal: 'Red', n: b.n, q: Number(b.q), bolsa: b.rep || 'representante' });
+          });
+        }, function () {}).then(function () {
+          _abaHjCam[prov] = { t: Date.now(), porAbbr: por };
+          _abaHjCamAuto(prov);
+          if (abaCurrentTab === 'recibir' && _abaHj && _abaHj.prov === prov) abaRenderRecibir(true);
+        });
       });
   }).catch(function () {});
 }
@@ -8095,6 +8108,10 @@ function abaRenderRecibir(forzar) {
     if (abaIsOnline && typeof loadCatalogo === 'function' && !_abaHjPidioCat) { _abaHjPidioCat = true; loadCatalogo(); }
     return;
   }
+  /* (27/11/2026, 878) Cuándo llega cada proveedor: la fecha de la OC («Llega hoy», «Llega mañana», «Llega vie 04/12»). */
+  var _ll = (typeof _comprasLlegadasYa === 'function' && _comprasLlegadasYa()) || null;
+  if (typeof _comprasLlegadas === 'function') _comprasLlegadas().then(function (d) { if (d && d !== _ll && abaCurrentTab === 'recibir') abaRenderRecibir(); });
+  var _llDe = function (p) { var f = _ll && _ll.llegan && _ll.llegan[p]; return (f && f.llega && typeof _llegaTxt === 'function') ? _llegaTxt(f.llega) : ''; };
   var provs = _abaHjProvs();
   if (!provs.length) {
     _abaHj = null;
@@ -8109,6 +8126,7 @@ function abaRenderRecibir(forzar) {
   _abaHjSel = prov;
   var P = _abaHjArmar(prov), S = _abaHjEstado(prov, P);
   /* UST sin tocar se acomoda a lo que llegó después (los destinos de las OC, 680): MO = lo que dice la OC. */
+  _abaHjCamAuto(prov);   /* (27/11) «Había» negativo: lo que salió del auto, tildado (si ya estaba en la copia) */
   P.forEach(function (x) { var f = S.f[x.abbr]; if (f && f.uAuto) f.u = _abaHjUAuto(x, f); });
   if (typeof _abaDestPedir === 'function') { try { _abaDestPedir(); } catch (e) {} }
   _abaHjCaminoCargar(prov, P);
@@ -8116,12 +8134,14 @@ function abaRenderRecibir(forzar) {
   var h = '<div class="hj" style="--hje:' + Math.max(1, _nDep) + '">';
   if (provs.length > 1) h += '<div class="hj-provs" role="group" aria-label="Proveedor">' + provs.map(function (p) {
     var f = _abaHjFuturo(p);
-    return '<button type="button" class="hj-prov' + (p === prov ? ' on' : '') + '" onclick="abaHjProv(\'' + esc(p) + '\')">' + _abaH(p) + (f ? ' <small>· ' + _abaH(_labelDia(f).toLowerCase()) + '</small>' : '') + '</button>'; }).join('') + '</div>';
+    var cu = _llDe(p);
+    return '<button type="button" class="hj-prov' + (p === prov ? ' on' : '') + '" onclick="abaHjProv(\'' + esc(p) + '\')">' + _abaH(p) + (cu ? ' <small>· ' + _abaH(cu.charAt(0).toLowerCase() + cu.slice(1)) + '</small>' : (f ? ' <small>· ' + _abaH(_labelDia(f).toLowerCase()) + '</small>' : '')) + '</button>'; }).join('') + '</div>';
   var depNom = _abaHjDepNom(S.dep), otro = '', otroId = '', _otros = [];
   P.some(function (x) { if (x.dd) { otroId = x.dd.otro; _otros = x.dd.otros; otro = _otros.map(_abaHjDepNom).join(' / '); return true; } return false; });
   h += _fut ? '<div class="hj-pasos hj-fut">Se retira el ' + _abaH(_labelDia(_fut).toLowerCase()) + '. Ese día, con la mercadería en casa, la recibís acá.</div>'
            : '<div class="hj-pasos">Cuando tengas la mercadería: contá lo que había, contá lo que llegó, confirmá.</div>';
-  h += '<div class="hj-cab"><b>Recibir de ' + _abaH(prov) + '</b><span>Había + Llega = Total → ' + _abaH(depNom || 'UST') + (otro ? ' / ' + _abaH(otro) : '') + '</span></div>';
+  var _cuSel = _llDe(prov);
+  h += '<div class="hj-cab"><b>Recibir de ' + _abaH(prov) + (_cuSel ? ' <small class="hj-llega">· ' + _abaH(_cuSel) + '</small>' : '') + '</b><span>Había + Llega = Total → ' + _abaH(depNom || 'UST') + (otro ? ' / ' + _abaH(otro) : '') + '</span></div>';
   var fams = [], porFam = {};
   P.forEach(function (x) { if (!porFam[x.fam]) { porFam[x.fam] = []; fams.push(x.fam); } porFam[x.fam].push(x); });
   fams.forEach(function (fam) {
@@ -8179,7 +8199,8 @@ function _abaHjFilaHtml(x, f) {
   h += '<div class="hj-nota" id="hjN_' + a + '">' + [aviso].concat(notas).filter(Boolean).join(' · ') + '</div>';
   if (cam.length) h += '<div class="hj-cam">' + cam.map(function (cc) {
     return '<label><input type="checkbox"' + (f.cam[cc.k] ? ' checked' : '') + ' onchange="abaHjCamino(\'' + a + '\',\'' + esc(cc.k) + '\',this.checked)"> '
-      + _abaH(cc.cli) + ' #' + _abaH(cc.n) + ' se llevó ' + _abaCant(cc.q, '') + ' hoy: <b>salió del auto</b></label>'; }).join('') + '</div>';
+      + (cc.bolsa ? 'La bolsa de ' + _abaH(cc.bolsa) + ' (' + _abaH(cc.cli) + ' #' + _abaH(cc.n) + ') se llevó ' : _abaH(cc.cli) + ' #' + _abaH(cc.n) + ' se llevó ')
+      + _abaCant(cc.q, '') + ' hoy: <b>salió del auto</b></label>'; }).join('') + '</div>';
   return h;
 }
 function _abaHjAviso(x, f, c) {
@@ -8200,7 +8221,7 @@ function abaHjProv(p) { _abaHjSel = p; if (_abaHj && _abaHj.prov !== p) _abaHj =
 function abaHjCambia(abbr, k, val) {
   if (!_abaHj || !_abaHj.f[abbr]) return;
   var f = _abaHj.f[abbr], n = _abaHjNum(val);
-  if (k === 'H') f.h = n; else if (k === 'L') f.l = n; else if (k === 'U') { f.u = n; f.uAuto = false; }
+  if (k === 'H') { f.h = n; f.hMano = true; } else if (k === 'L') { f.l = n; f.lMano = true; } else if (k === 'U') { f.u = n; f.uAuto = false; }
   else if (k.charAt(0) === 'O') { f.o = f.o || {}; f.o[k.slice(1)] = n;
  }
   f.ok = false; _abaHj.resumen = false; _abaHj.err = ''; _abaHj.tocado = true;
@@ -8215,7 +8236,34 @@ function abaHjCambia(abbr, k, val) {
   _abaHjPintarPie();
 }
 function abaHjTilde(abbr, si) { if (!_abaHj || !_abaHj.f[abbr]) return; _abaHj.f[abbr].ok = !!si; var fr = document.getElementById('hjF_' + abbr); if (fr) fr.classList.toggle('ok', !!si); _abaHj.resumen = false; _abaHjPintarPie(); }
-function abaHjCamino(abbr, k, si) { if (!_abaHj || !_abaHj.f[abbr]) return; _abaHj.f[abbr].cam[k] = !!si; _abaHj.resumen = false; abaRenderRecibir(true); }
+/* (27/11/2026, cola del Organizador) Lo que «salió del auto» nunca estuvo en el freezer, pero el ERP ya lo descontó (la
+   entrega o la bolsa de Red bajan el depósito): tildarlo se lo devuelve a «Había» y se lo saca a «Llega» —lo que llega a
+   casa es lo que quedó en el auto—. El Total no cambia y lo recibido de la OC (Llega + lo que salió del auto) da lo pedido.
+   Si «Había» o «Llega» se tocaron a mano, ese número no se corre. */
+function _abaHjCamCorrer(abbr, k, si) {
+  var f = _abaHj && _abaHj.f[abbr]; if (!f || !!f.cam[k] === !!si) return;
+  var c = (((_abaHjCam[_abaHj.prov] || {}).porAbbr || {})[abbr] || []).filter(function (x) { return x.k === k; })[0];
+  var q = c ? Number(c.q) || 0 : 0, sg = si ? 1 : -1;
+  f.cam[k] = !!si;
+  if (!(q > 0)) return;
+  if (!f.hMano) f.h = Math.round((f.h + sg * q) * 1000) / 1000;
+  if (!f.lMano) f.l = Math.max(0, Math.round((f.l - sg * q) * 1000) / 1000);
+}
+function abaHjCamino(abbr, k, si) { if (!_abaHj || !_abaHj.f[abbr]) return; _abaHjCamCorrer(abbr, k, si); _abaHj.f[abbr].ok = false; _abaHj.resumen = false; abaRenderRecibir(true); }
+/* Con «Había» en negativo, lo que salió hoy del auto ES la explicación: se tilda solo (las bolsas de Red primero), hasta
+   cubrir el negativo. Una vez por renglón: si después lo destildás, queda destildado. */
+function _abaHjCamAuto(prov) {
+  if (!_abaHj || _abaHj.prov !== prov) return false;
+  var por = (_abaHjCam[prov] || {}).porAbbr || {}, cambio = false;
+  Object.keys(_abaHj.f).forEach(function (abbr) {
+    var f = _abaHj.f[abbr]; if (f.camAuto || f.hMano || !(f.h < 0)) return;
+    var l = (por[abbr] || []).slice().sort(function (a, b) { return (b.bolsa ? 1 : 0) - (a.bolsa ? 1 : 0); });
+    if (!l.length) return;
+    f.camAuto = true;
+    l.forEach(function (c) { if (f.h < 0 && !f.cam[c.k]) { _abaHjCamCorrer(abbr, c.k, true); cambio = true; } });
+  });
+  return cambio;
+}
 function _abaHjPintarPie() {
   var P = _abaHjArmar(_abaHj.prov), pie = document.getElementById('hjPie'), b = document.getElementById('hjConf');
   if (pie) pie.textContent = _abaHjPieTxt(P, _abaHj);

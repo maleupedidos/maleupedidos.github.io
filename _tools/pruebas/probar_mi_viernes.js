@@ -200,7 +200,7 @@ async function sesionRobot() {
           const r = await tocar(pg, '.mv-paso button.mv-full', 0);
           chk('«' + prov.trim() + '» se toca', r.ok, r);
           const sel = await pg.waitForFunction(() => { const b = document.querySelector('#pg-abast .hj-prov.on, #pg-abast .hj h3, #pg-abast #recibirList'); return b && b.getClientRects().length ? (document.querySelector('#pg-abast .hj-prov.on') || {}).textContent || 'abierta' : null; }, null, { timeout: 30000 }).then((h) => h.jsonValue()).catch(() => null);
-          chk('lleva a Compras › Recibir con ese proveedor (' + sel + ')', !!sel && (MODO === 'prueba' || prov.indexOf(String(sel).trim()) >= 0), sel);
+          chk('lleva a Compras › Recibir con ese proveedor (' + sel + ')', !!sel && (MODO === 'prueba' || prov.indexOf(String(sel).split(' · ')[0].trim()) >= 0), sel);   /* (27/11, 878) el botón dice «· llega hoy» */
         }
       } else {
         const r = await tocar(pg, '.mv-pie .mv-sig');
