@@ -78,6 +78,8 @@ fi
 #  La sintaxis puede estar perfecta y el boton no hacer NADA: un onclick que
 #  llama a una funcion que el fusionador renombro. No tira error, no aparece en
 #  la consola. Fueron 311 botones y me entere semanas despues. (25/08/2026)
+# (26/11/2026) Un logout de Supabase sin scope=local cierra la sesión en TODOS los aparatos del usuario (12/11: a Lou).
+node _tools/sin_logout_global.js >/dev/null || { node _tools/sin_logout_global.js; fallar "Hay un logout global de Supabase — no se publica."; }
 echo "→ [3b/8] Botones muertos…"
 if [ -n "$HTMLS" ]; then
   node _tools/verificar.js | sed 's/^/    /' || fallar "Hay botones que no hacen nada — no se publica."

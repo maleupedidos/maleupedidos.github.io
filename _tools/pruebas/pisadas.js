@@ -296,6 +296,15 @@ const esperarCarga = (pg) => pg.waitForFunction(() => {
     for (const [rol, sesF, usuario] of ROLES) {
       const ses = JSON.parse(fs.readFileSync(sesF, 'utf8'));
       let extra = '', uReal = usuario, sesPanel = { usuario, rol, ts: Date.now() };
+      /* (26/11/2026) Las tabs del rol, como las trae la app (mi_sesion_pantalla): sin ellas `_tengoTab` dice que sí a todo
+         y se medía Inicio para «equipo», que no la tiene (vacía = correcto, pero frenaba el deploy). */
+      if (rol !== 'vendedor') {
+        try {
+          const r0 = await fetch(SB + '/rest/v1/rpc/mi_sesion_pantalla', { method: 'POST', headers: { apikey: PUB, Authorization: 'Bearer ' + ses.access_token, 'Content-Type': 'application/json' }, body: '{}' });
+          const s1 = await r0.json();
+          if (s1 && s1.ok && Array.isArray(s1.tabs) && s1.tabs.length && rol !== 'admin') sesPanel.tabs = s1.tabs;
+        } catch (e) {}
+      }
       /* SIN_SESION_PORTAL=1 reproduce lo de antes del 18/11 (el portal sin su sesión, en blanco): para comprobar que «vacía» lo agarra. */
       if (rol === 'vendedor' && !process.env.SIN_SESION_PORTAL) {
         try {
@@ -363,6 +372,10 @@ const esperarCarga = (pg) => pg.waitForFunction(() => {
         return m;
       };
       for (const t of tabs) {
+        /* (26/11/2026) La tab que el rol no tiene no se mide: «equipo» no tiene Inicio (Permisos equipo|inicio = No) y
+           go('inicio') la deja en blanco, que es lo correcto. Medirla daba «VACÍA» y frenaba el deploy sin motivo. */
+        const laTiene = await pg.evaluate((x) => (typeof _tengoTab !== 'function') || _tengoTab(x), t).catch(() => true);
+        if (!laTiene) { console.log('--  ' + rol + ' ' + t + ' (este rol no la tiene)'); continue; }
         try { await pg.evaluate((x) => go(x), t); } catch (e) { continue; }
         await esperarCarga(pg);
         await medir(t);
