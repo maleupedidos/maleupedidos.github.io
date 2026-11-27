@@ -43,7 +43,10 @@ function fixture(dia) {
         items: [it('PMa', 'Pizza Margarita', 2, { ustariz: 2 })], pz: [] }],
     provs: [{ prov: 'PRUEBA Proveedor', total: 100000, lineas: [
       { oc: 'OC-PR1', a: 'TJyQ', nom: 'Tarta Jamón y Queso', q: 12, est: 'Pedido', cli: false, destino: 'ustariz', llega: dia, para: [{ k: 'Red|990001', q: 3 }, { k: 'Red|990003', q: 2 }] },
-      { oc: 'OC-PR2', a: 'SCo', nom: 'Sorrentinos Cordero al Malbec', q: 1, est: 'Pedido', cli: true, destino: '', llega: null, para: [{ k: 'Red|990002', q: 1 }] }] }] };
+      { oc: 'OC-PR2', a: 'SCo', nom: 'Sorrentinos Cordero al Malbec', q: 1, est: 'Pedido', cli: true, destino: '', llega: null, para: [{ k: 'Red|990002', q: 1 }] }] },
+      /* (892) Ya recibido y con más de lo pedido: la OC era de 11 y llegaron 16 ($9.200 c/u). El estimado va con lo que llegó. */
+      { prov: 'PRUEBA Recibido', total: 147200, lineas: [
+      { oc: 'OC-PR3', a: 'PPM', nom: 'Pack Muzzarella x2', q: 16, est: 'Recibido', rec: true, total: 147200, cli: false, destino: 'ustariz', llega: dia, para: [] }] }] };
 }
 
 /* Las tres verificaciones, sobre lo que la pantalla armó (`_mvPasos`) y los datos que trajo. */
@@ -164,6 +167,15 @@ async function sesionRobot() {
         }
         const t = await pg.evaluate(() => [].map.call(document.querySelectorAll('.mv-paso li.mv-f[role="checkbox"]'), (x) => x.getAttribute('aria-checked')));
         chk('paso ' + (i + 1) + ': los ' + t.length + ' renglones quedaron tildados', t.every((x) => x === 'true'), t);
+        /* (892) «Pagás al retirar»: el total del proveedor; recibido entero, «con lo que llegó» (no «estimado»). */
+        if (P.tipo === 'prov') {
+          const pg2 = await pg.evaluate((prov) => { const v = (_mv.d.provs || []).find((x) => x.prov === prov) || {}; const ls = v.lineas || [];
+            const e = document.querySelector('.mv-paso .mv-pagar'); return { txt: e ? e.textContent : '', total: Number(v.total) || 0,
+              todo: ls.length > 0 && ls.every((l) => l.rec) }; }, P.prov);
+          const monto = pg2.total ? String(pg2.total).replace(/\B(?=(\d{3})+(?!\d))/g, '.') : '';
+          if (pg2.total) chk('paso ' + (i + 1) + ': «Pagás al retirar» de ' + P.prov + ' dice $' + monto + (pg2.todo ? ', con lo que llegó' : ' (estimado)'),
+            pg2.txt.indexOf(monto) >= 0 && (pg2.todo ? /con lo que lleg/.test(pg2.txt) && !/estimado/.test(pg2.txt) : /estimado/.test(pg2.txt)), pg2);
+        }
       }
       if (P.tipo === 'bolsa' && !P.dada) {
         const antes = await pg.evaluate(() => ({ q: (window.syncQueue || []).length, b: (window.__bloqueados || []).length }));
