@@ -130,7 +130,7 @@ module.exports = async function portalRep(o) {
     });
 
     await paso('3 efectivo para Maleu', async () => {
-      if (!(await esperar(`(function(){ var c=document.querySelector('#pg-miportal #cb-card'); return !!c&&(c.innerText||'').indexOf('Tenés de Maleu en efectivo')>=0; })()`, 5000))) throw new Error('Hoy no dice cuánto tiene de Maleu');
+      if (!(await esperar(`(function(){ var c=document.querySelector('#pg-miportal #cb-card'); return !!c&&/Tenés (de Maleu en efectivo|para darle a Maleu)/.test(c.innerText||''); })()`, 5000))) throw new Error('Hoy no dice cuánto tiene de Maleu');
       if (!(await A.esperar(enCob('¿Recibiste los'), 4000))) throw new Error('Cobranza no le pregunta a Maleu si lo recibió');
       const tD = await tocar(enFila('.cb-fila', '.cb-des'), '«Deshacer» del efectivo');
       const ms = await cobranza(`!(${enCob('lo tiene PRUEBA')})`, 6000, tD);
