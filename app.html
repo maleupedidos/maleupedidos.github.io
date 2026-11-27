@@ -19350,7 +19350,7 @@ function _leerVersion(app){
    "El HTML no sabe que version es" dejo de ser cierto: el build le escribe
    adentro el CACHE_NAME de sw-panel.js, el mismo que deploy.sh obliga a subir en
    cada cambio. Si lo publicado dice otra cosa, esta pagina es vieja. Punto. */
-var _APP_CN_PAGINA='maleu-panel-v1353';
+var _APP_CN_PAGINA='maleu-panel-v1354';
 
 /* Devuelve [{k,v}] si lo publicado no es lo que esta pagina corre. */
 function _chequearVersiones(){
@@ -35906,7 +35906,8 @@ function rPedidos(opts){
     // Build card. Red: Tadeo solo interviene Origen — resto lo maneja el vendedor desde red.html.
     var isRed=(p.h==='Red');
     var html='';
-    var editable=(!isRed&&p.es!=='Entregado'&&p.es!=='Cancelado');
+    /* (875) Red: solo el admin, y sin la bolsa dada (`_redDiaEditable`). */
+    var editable=((!isRed&&p.es!=='Entregado'&&p.es!=='Cancelado')||_redDiaEditable(p));
     var uidFe=(p.h.replace(/ /g,'')+p.n);
     var ddmmyyyy = entregaISO ? (function(iso){var pp=iso.split('-');return pp[2]+'/'+pp[1]+'/'+pp[0];})(entregaISO) : '';
     var feShort = entregaISO ? (function(iso){var pp=iso.split('-');return DNA[new Date(+pp[0],+pp[1]-1,+pp[2]).getDay()]+' '+pp[2]+'/'+pp[1];})(entregaISO) : '-';
@@ -54817,6 +54818,47 @@ function _fichaBenef(p){
 }
 function _puedeCorregir(){ var r=(typeof SESSION!=='undefined'&&SESSION)?SESSION.rol:''; return r==='admin'||r==='equipo'||(typeof _esDueno==='function'&&_esDueno()); }
 function _entregaEditable(h){ return _puedeCorregir()&&(h==='Home'||h==='Pilar'||h==='Clubes'); }
+/* (26/11/2026, 875) EL DÍA DE UN PEDIDO DE RED, solo admin. Antes no había forma: la tarjeta bloqueaba la fecha y el
+   portal edita productos, no el día. De la fecha sale el viernes de la bolsa, la reserva y Ruta (se calculan del día).
+   La base decide (`pedido_dia_directo`): entregado, cancelado o con la bolsa dada no se mueve; el admin elige cualquier
+   día; otro rol respeta el corte del jueves 12:00. La orden guarda de qué día venía. */
+function _redDiaEditable(p){ return !!p&&p.h==='Red'&&p.es!=='Entregado'&&p.es!=='Cancelado'&&String(p.ev||'').trim()!=='Entregado'
+  &&typeof SESSION!=='undefined'&&!!SESSION&&SESSION.rol==='admin'; }
+function _redViernesDe(iso){ var m=/^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso||'')); if(!m)return '';
+  var d=new Date(+m[1],+m[2]-1,+m[3]); d.setDate(d.getDate()-((d.getDay()+2)%7)); return String(d.getDate()).padStart(2,'0')+'/'+String(d.getMonth()+1).padStart(2,'0'); }
+function redDiaCambiar(n){
+  var p=((D&&D.pedidos)||[]).filter(function(x){return x.h==='Red'&&String(x.n)===String(n);})[0];
+  if(!_redDiaEditable(p))return;
+  var iso=/^\d{4}-\d{2}-\d{2}/.test(String(p.dee||''))?String(p.dee).slice(0,10):'';
+  var o=document.getElementById('entFechaOv'); if(!o){o=document.createElement('div');o.id='entFechaOv';document.body.appendChild(o);}
+  o.className='ent-ov';
+  o.innerHTML='<div class="ent-box" role="dialog" aria-label="Cambiar el día de entrega"><div class="ent-h"><b>Cambiar el día de entrega</b></div>'
+    +'<p class="ent-nota">'+_kEsc(p.c||'')+' · Red #'+_kEsc(n)+(p.b?' · '+_kEsc(p.b):'')+'</p>'
+    +'<label class="ent-nota" style="display:block;margin:10px 0">Día<input id="redDiaD" type="date" value="'+_kEsc(iso)+'" style="width:100%;min-height:44px;font-size:16px;margin-top:4px" oninput="_redDiaNota()"></label>'
+    +'<p class="ent-nota" id="redDiaN"></p>'
+    +'<div style="display:flex;gap:8px"><button type="button" id="redDiaOk" class="aj-btn" style="flex:1;min-height:44px" onclick="_redDiaGuardar(\''+_kEsc(String(n))+'\',\''+_kEsc(iso)+'\')">Guardar</button>'
+    +'<button type="button" class="aj-btn ghost" style="flex:1;min-height:44px" onclick="document.getElementById(\'entFechaOv\').remove()">Cancelar</button></div></div>';
+  _redDiaNota();
+}
+function _redDiaNota(){ var v=(document.getElementById('redDiaD')||{}).value||'', el=document.getElementById('redDiaN'); if(!el)return;
+  el.textContent=v?'Va en la bolsa del viernes '+_redViernesDe(v)+'. Como sos admin, el corte del jueves no te frena.':''; }
+function _redDiaGuardar(n,orig){
+  var f=(document.getElementById('redDiaD')||{}).value||'';
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(f)){toast('Elegí el día');return;}
+  if(f===orig){var ov0=document.getElementById('entFechaOv'); if(ov0)ov0.remove(); toast('Ya estaba así'); return;}
+  var b=document.getElementById('redDiaOk'); if(b){b.disabled=true;b.textContent='Guardando…';}
+  _ordenPost({action:'updateDiaEntrega',hoja:'Red',id:String(n),fecha:f,diaAntes:orig,clientOpId:_pfId()})
+    .then(function(r){return r.json();})
+    .then(function(r){
+      if(!r||!r.ok)throw new Error((r&&(r.err||r.error))||'error');
+      var ov=document.getElementById('entFechaOv'); if(ov)ov.remove();
+      var q=f.split('-'); toast('Listo: entrega el '+q[2]+'/'+q[1]+' · bolsa del viernes '+_redViernesDe(f),7000);
+      _patchPedidoLocal('Red',String(n),{dee:f,de:['Domingo','Lunes','Martes','Miércoles','Jueves','Viernes','Sábado'][new Date(+q[0],+q[1]-1,+q[2]).getDay()]});
+      try{ if(typeof closeOrdDetail==='function'&&document.getElementById('ordBody'))closeOrdDetail(); }catch(e){}
+      _pfAplicar(r).then(function(){return _recargarPedidos();});
+    })
+    .catch(function(e){ if(b){b.disabled=false;b.textContent='Guardar';} toast('No se cambió el día: '+((e&&e.message)||'error'),8000); });
+}
 function entregaCambiar(h,n,cli,iso,hora){
   if(!_entregaEditable(h))return;
   var hoy=new Date(), hoyIso=hoy.getFullYear()+'-'+String(hoy.getMonth()+1).padStart(2,'0')+'-'+String(hoy.getDate()).padStart(2,'0');
@@ -55897,6 +55939,7 @@ if('serviceWorker' in navigator){
     /* (15/11/2026, 719/720) «Lo consiguió»: quién consiguió al cliente (el premio por cliente nuevo de los empleados). */
     if((p.h==='Home'||p.h==='Pilar')&&typeof SESSION!=='undefined'&&SESSION&&SESSION.rol==='admin')masB+='<button class="ord-btn" onclick="captadoEditar(\''+p.h+'\',\''+p.n+'\',\''+_e(String(p.c||'').replace(/\'/g,''))+'\')">Lo consiguió…</button>';
     /* (717) Día y hora, con el mismo cuadro que Ventas. */
+    if(_redDiaEditable(p))masB+='<button class="ord-btn" onclick="redDiaCambiar(\''+_e(String(p.n))+'\')">Cambiar día de entrega</button>';
     if(ent&&_entregaEditable(p.h))masB+='<button class="ord-btn" onclick="entregaCambiar(\''+p.h+'\',\''+p.n+'\',\''+_e(String(p.c||'').replace(/\'/g,''))+'\',\''+_e(_tendFechaVentaISO(p)||'')+'\',\''+_e(p.hx||'')+'\')">Cambiar día y hora de entrega</button>';
     var _uidDvF='dvf-'+p.h+p.n;
     if((p.h==='Home'||p.h==='Pilar')&&ent)masB+='<button class="ord-btn" onclick="abrirDevolucion(\''+p.h+'\',\''+p.n+'\','+(p.r||0)+',\''+_uidDvF+'\')">Devolvió un producto</button>';
