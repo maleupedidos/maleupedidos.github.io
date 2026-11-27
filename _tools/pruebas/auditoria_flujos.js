@@ -50,7 +50,7 @@ function credRobot() {
 }
 async function abrir() {
   br = await pw[MOTOR].launch();
-  const ctx = await br.newContext(COMPU ? { viewport: { width: 1440, height: 900 } } : { viewport: { width: 393, height: 852 }, deviceScaleFactor: 3, isMobile: true, hasTouch: true });
+  const ctx = await br.newContext(COMPU ? { timezoneId: 'America/Argentina/Buenos_Aires', viewport: { width: 1440, height: 900 } } : { timezoneId: 'America/Argentina/Buenos_Aires', viewport: { width: 393, height: 852 }, deviceScaleFactor: 3, isMobile: true, hasTouch: true });
   await ctx.addInitScript(INIT);
   pg = await ctx.newPage();
   pg.on('pageerror', (e) => errs.push('JS: ' + String(e.message).slice(0, 200)));
@@ -822,7 +822,7 @@ async function flujoRed() {
   /* ── EL REPRESENTANTE, en SU celular: entra con su usuario y PIN y marca «Entregado» en Mi Portal (el viernes). */
   console.log('\n── Mi Portal del representante PRUEBA');
   const cred = credRobot();
-  const ctx2 = await br.newContext(COMPU ? { viewport: { width: 1440, height: 900 } } : { viewport: { width: 393, height: 852 }, deviceScaleFactor: 3, isMobile: true, hasTouch: true });
+  const ctx2 = await br.newContext(COMPU ? { timezoneId: 'America/Argentina/Buenos_Aires', viewport: { width: 1440, height: 900 } } : { timezoneId: 'America/Argentina/Buenos_Aires', viewport: { width: 393, height: 852 }, deviceScaleFactor: 3, isMobile: true, hasTouch: true });
   await ctx2.addInitScript(INIT);
   const pr = await ctx2.newPage(); const errs2 = [];
   pr.on('pageerror', (e) => errs2.push('JS: ' + String(e.message).slice(0, 200)));
