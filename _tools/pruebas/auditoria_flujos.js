@@ -707,7 +707,14 @@ async function flujoRed() {
   const la = await libroPrueba();
   await pg.evaluate(() => go('busqueda')); await T(7000);
   await tocar('#pg-abast .tab[data-tab="proveedores"]', '', '', { espera: 3000 });
-  const ped = await tocar('[onclick^="abaPcPedido(\'PRUEBA\'"]', 'Marcar como pedido', '', { espera: 3000 });
+  /* (26/11/2026, #956) Después del corte del jueves el autopedido cae para el viernes que viene y su OC está en «Próxima
+     semana»: buscarla solo en «Esta semana» daba un rojo que dependía de la hora a la que corría la prueba. */
+  let ped = await tocar('[onclick^="abaPcPedido(\'PRUEBA\'"]', 'Marcar como pedido', '', { espera: 3000, callado: true });
+  if (!ped) {
+    await tocar('[onclick="switchSemSel(\'prox\')"]', 'Próxima semana', '#pg-abast', { espera: 3000, callado: true });
+    ped = await tocar('[onclick^="abaPcPedido(\'PRUEBA\'"]', 'Marcar como pedido', '', { espera: 3000 });
+    if (ped) console.log('       la OC estaba en «Próxima semana» (autopedido para el ' + ap.fecha + ')');
+  }
   chk('abast: «Marcar como pedido» en la tarjeta del proveedor PRUEBA', !!ped);
   await tocar('#pg-abast .tab[data-tab="recibir"]', '', '', { espera: 4000 });
   if (process.env.EXPLORAR) await volcarAba('recibir después de pedir');
@@ -787,13 +794,21 @@ async function flujoRed() {
   await T(2500);
   if (process.env.EXPLORAR) await volcar('red armada');
   const cartel = await pg.evaluate(() => { const c = document.querySelector('.armado-card[data-au="red"]') || [].find.call(document.querySelectorAll('#armadoView .armado-card.red'), (x) => /PRUEBA Robot/.test(x.textContent)); return c ? c.innerText.replace(/\s+/g, ' ') : ''; });
-  chk('red: armada para otro día, el cartel dice cuándo aparece en RUTA (no «pasá a RUTA»)', new RegExp('Aparece en RUTA el [^ ]+ ' + dmBolsa, 'i').test(cartel), cartel.slice(-120));
+  /* La pantalla escribe el día sin cero adelante («4/12»): dmBolsa trae «04/12». */
+  const dmCartel = String(Number(dmBolsa.slice(0, 2))) + dmBolsa.slice(2);
+  chk('red: armada para otro día, el cartel dice cuándo aparece en RUTA (no «pasá a RUTA»)', new RegExp('Aparece en RUTA el [^ ]+ (' + dmBolsa + '|' + dmCartel + ')\\b', 'i').test(cartel), cartel.slice(-120));
   /* La bolsa se da en RUTA el día de la bolsa (el viernes): el reloj de la PÁGINA va a ese día; la base sigue en la hora real. */
   const fe = diaBolsa || ap.fecha; await pg.clock.setSystemTime(new Date(fe + 'T10:00:00-03:00'));
   console.log('       reloj de la página: ' + (await pg.evaluate(() => new Date().toString())));
   await pg.evaluate(() => { try { rutRender(); } catch (e) {} });
   await tocar('.tab[data-tab="ruta"]', '', '', { espera: 3000 });
   if (process.env.EXPLORAR) { await volcar('red en RUTA'); await foto('red_ruta'); }
+  /* (26/11/2026, #956) RUTA muestra UNA parada por vez («Parada 1 de 2 · Sigue: PRUEBA Robot (Red)»): si ese viernes hay
+     otra entrega antes, la bolsa de PRUEBA es la siguiente. Se avanza con «›» como Tadeo, hasta que la parada sea la suya. */
+  const bolsaVis = () => pg.evaluate(() => [].some.call(document.querySelectorAll('#rutaView [onclick^="entregarAVendedor("]'), (b) => b.getClientRects().length > 0 && /PRUEBA Robot/.test((b.closest('.rtc,.rut-card,[class*="card"]') || document.getElementById('rutaView')).textContent)));
+  for (let k = 0; k < 6 && !(await bolsaVis()); k++) {
+    if (!(await tocar('[onclick="rutaNext()"]', '', '', { callado: true, espera: 1200 }))) break;
+  }
   const n1 = await pg.evaluate(() => window.__posts.length);
   const eb = await tocar('[onclick^="entregarAVendedor("]', '', '#rutaView', { callado: true, espera: 1500 }) || await tocar('[onclick^="entregarAVendedor("]', '', '', { espera: 1500 });
   if (!chk('red: botón para darle la bolsa', !!eb, await pg.evaluate(() => [].map.call(document.querySelectorAll('[onclick^="entregarAVendedor("]'), (b) => b.textContent.trim().slice(0, 40))))) { await volcar('red sin bolsa'); return; }
