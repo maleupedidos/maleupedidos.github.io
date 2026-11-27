@@ -532,16 +532,15 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
       npSetPago(${JSON.stringify(medio)});
       var yc=document.getElementById('npYaCobrado'); yc.checked=true; try{ npToggleYaCobrado(); }catch(e){}
       var tot=(npDiscountInfo()||{}).total||0; if(!uso||!(tot>0))return {err:'no encontré un producto con precio para el carrito'};
-      /* Como Tadeo: apenas guarda, toca «Listo →» (se va de + PEDIDO antes de que vuelva el alta). Hasta la v1322 eso
-         dejaba el pedido sin cobrar: el cuadro no se abría. */
-      window.__altaRobot=null; npGuardar(); setTimeout(function(){ try{ npListo(); }catch(e){} },150); return {prod:uso,total:tot}; })()`, 30000);
+      /* (27/11/2026, B.6) El tilde abre el cuadro YA, antes de guardar: se cobra primero y GUARDAR va después. */
+      window.__npCobroPreEnviado=null; return {prod:uso,total:tot}; })()`, 30000);
     if (!r0 || r0.err) return { ok: false, detalle: (r0 && r0.err) || 'no pude cargar el formulario' };
-    /* El cuadro se abre solo cuando el alta vuelve. */
-    const cu = await esperar(`(function(){ var o=document.getElementById('cobroRutaOverlay'); if(!o||o.classList.contains('hidden'))return null;
-      var t=(document.getElementById('cobroRutaTitle')||{}).textContent||'', s=(document.getElementById('cobroRutaSub')||{}).textContent||''; var m=s.match(/#(\\d+)/);
-      return (t.indexOf('PRUEBA Robot')>=0&&m)?{n:m[1],sub:s}:null; })()`, 60000);
-    if (!cu) { await ev(`window.confirm=window.__cfRobot||window.confirm; 1`).catch(() => 0); return { ok: false, detalle: 'GUARDAR no abrió el cuadro de cobro en 60 s (el pedido puede haber quedado No Cobrado)' }; }
-    hechos.push('#' + cu.n + ' $' + r0.total + ' → se abrió el cobro');
+    const cu0 = await esperar(`(function(){ var o=document.getElementById('cobroRutaOverlay'); if(!o||o.classList.contains('hidden'))return null;
+      var t=(document.getElementById('cobroRutaTitle')||{}).textContent||'', s=(document.getElementById('cobroRutaSub')||{}).textContent||'';
+      return t.indexOf('PRUEBA Robot')>=0?{sub:s}:null; })()`, 15000);
+    if (!cu0) { await ev(`window.confirm=window.__cfRobot||window.confirm; 1`).catch(() => 0); return { ok: false, detalle: 'tildar «Ya me pagó» no abrió el cuadro de cobro' }; }
+    hechos.push('$' + r0.total + ' → tildar abrió el cobro');
+    const cu = { n: null };
     const tot = Number(r0.total), ef = medio === 'Efectivo' ? tot : medio === 'Mixto' ? Math.round(tot / 2) : 0, tr = tot - ef;
     const c1 = await ev(`(async function(){ var p=[].filter.call(document.querySelectorAll('#cobroRutaFp .cobro-pill'),function(b){return b.textContent.trim()===${JSON.stringify(medio)};})[0];
       if(p&&!p.classList.contains('on'))p.click(); await new Promise(function(r){setTimeout(r,400);});
@@ -564,8 +563,14 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
     if (c1.dis) { await ev(`window.confirm=window.__cfRobot||window.confirm; try{cerrarCobroRuta();}catch(e){} 1`).catch(() => 0); return { ok: false, detalle: hechos.join(' → ') + ' · el botón no deja cobrar: «' + c1.txt + '»' }; }
     hechos.push('«' + c1.txt + '»');
     const cerro = await esperar(`(function(){ var o=document.getElementById('cobroRutaOverlay'); return !o||o.classList.contains('hidden'); })()`, 15000);
+    if (!cerro) { await ev(`window.confirm=window.__cfRobot||window.confirm; 1`).catch(() => 0); return { ok: false, detalle: hechos.join(' → ') + ' · el cuadro siguió abierto después de «Confirmar cobro»' }; }
+    /* Como Tadeo: GUARDAR y apenas guarda toca «Listo →» (se va de + PEDIDO antes de que vuelva el alta). El cobro anotado
+       sale solo cuando el alta vuelve con número. */
+    await ev(`(function(){ window.__npCobroPreEnviado=null; npGuardar(); setTimeout(function(){ try{ npListo(); }catch(e){} },150); return 1; })()`);
+    const env = await esperar(`(function(){ var e=window.__npCobroPreEnviado; return e&&e.n?{n:String(e.n)}:null; })()`, 90000);
     await ev(`window.confirm=window.__cfRobot||window.confirm; 1`).catch(() => 0);
-    if (!cerro) return { ok: false, detalle: hechos.join(' → ') + ' · el cuadro siguió abierto después de «Confirmar cobro»' };
+    if (!env) return { ok: false, detalle: hechos.join(' → ') + ' · GUARDAR: el alta no volvió con el cobro en 90 s (puede haber quedado No Cobrado)' };
+    cu.n = env.n; hechos.push('#' + cu.n + ' guardado, el cobro salió');
     /* La base: Entregado + Cobrado, la forma, los importes por medio, quién y cuándo, y la cuenta que eligió la pantalla. */
     const ctaEsperada = await ev(`(function(){ try{ return _ctaDeCobro({cta:''},${JSON.stringify(medio)})||''; }catch(e){ return '?'; } })()`).catch(() => '?');
     let vp = null; for (let k = 0; k < 10; k++) { const v = await rpc('robot_verificar', { p: { pedido: 'Home|' + cu.n } }).catch(() => null); vp = v && v.pedido; if (vp && vp.estado_pago === 'Cobrado') break; await pausa(1500); }

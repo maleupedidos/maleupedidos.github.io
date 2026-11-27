@@ -1052,6 +1052,12 @@ summary.cob-sub-h b::after{content:'';width:7px;height:7px;border-right:2px soli
 .cg-pago-msg.ok{color:#2E7D32}.cg-pago-msg.err{color:#C62828}
 .cobro-card-actions .cg-cobrar{font-size:15px;font-weight:900;letter-spacing:.01em}
 .cg-cobrar:disabled{background:#D7CCC8;cursor:default}
+/* (27/11/2026, B.6) El cobro anotado abajo de «Ya me pagó». */
+.np-cobro-res{display:flex;align-items:center;gap:10px;margin-top:6px;padding:10px 12px;border-radius:10px;background:#E8F5E9;border:1.5px solid #A5D6A7;color:#1B5E20;font-size:13px;line-height:1.35}
+.np-cobro-res[hidden]{display:none}
+.np-cobro-res.mal{background:#FFEBEE;border-color:#EF9A9A;color:#B71C1C}
+.np-cobro-res-t{flex:1;min-width:0;font-weight:600}
+.np-cobro-res-b{flex-shrink:0;min-height:44px;padding:0 14px;border-radius:8px;border:1.5px solid currentColor;background:#fff;color:inherit;font-family:inherit;font-size:13px;font-weight:800;cursor:pointer}
 .cg-resto{font-size:12px;color:#8D6E63;text-align:center;font-weight:700}
 .cobro-card{background:var(--white);border-radius:14px;padding:14px 14px;margin-bottom:10px;border:2px solid #fff3e0;display:flex;flex-direction:column;gap:10px}
 .cobro-card-head{display:flex;justify-content:space-between;align-items:flex-start;gap:10px}
@@ -1854,6 +1860,8 @@ details.np-mas[open]{padding-bottom:6px}
       <input type="checkbox" id="npYaCobrado" onchange="npToggleYaCobrado()" style="width:20px;height:20px;cursor:pointer;accent-color:var(--green);flex-shrink:0">
       <span style="font-weight:700;color:var(--brown);font-size:14px">Ya me pagó</span>
     </label>
+    <!-- (27/11/2026, B.6) Lo que se cobró en el cuadro, antes de GUARDAR. -->
+    <div id="npCobroRes" class="np-cobro-res" hidden></div>
     <!-- A que cuenta te transfirio (11/9/2026). Sale solo con "Ya me pagó", una
          parte por transferencia y mas de una cuenta donde pueda entrar. Sin
          esto, todo lo que se cargaba ya pagado caia en la cuenta por defecto. -->
@@ -12581,6 +12589,7 @@ function _confirmarCobroPendiente(st,r){
     var fpPar=(fp==='Mixto')?(r.recMP>=r.recEf?'Transferencia':'Efectivo'):fp;
     var payloadPar={action:'cobrarParcial',quien:_quienCobro(st),billeteraVuelto:_bilVueltoPay(st),fechaCobro:_fechaCobroPay(),ajusteDec:_ajDecPay(),hoja:pc.h,id:String(pc.id),row:pc.r||0,formaPago:fpPar,cuenta:_ctaDeCobro(st,fpPar),monto:monto,notas:'Parcial desde Ruta/COBROS',ts:Date.now()};
     payloadPar.clientOpId=_opIdParcial(payloadPar);
+    if(st.preAlta){ var _qP=Math.max(0,Math.round((Number(st.total)||0)-monto)); cerrarCobroRuta(); return _npCobroPreGuardar({tipo:'parcial',payload:payloadPar,saldo:null,total:st.total,r:{neto:monto,queda:_qP}}); }   /* (27/11/2026, B.6) */
     cerrarCobroRuta();
     _commitCobroParcialModal(payloadPar,pc);
     return;
@@ -12644,6 +12653,9 @@ function _confirmarCobroPendiente(st,r){
   var _entRuta=entregas.filter(function(e){
     return (e.h||'')===(pc.h||'') && String(e.id||'')===String(pc.id||'');
   })[0];
+  /* (27/11/2026, B.6) Cobro de un pedido que todavía no se guardó: queda anotado en + PEDIDO y sale cuando vuelve el alta. */
+  if(st.preAlta){ cerrarCobroRuta(); return _npCobroPreGuardar({tipo:'total',payload:payload,saldo:saldoPayload,total:st.total,
+    r:{neto:r.neto,recEf:r.recEf,recMP:r.recMP,camEf:r.camEf,camMP:r.camMP,propina:propina,aFav:aFavorPos,aplicar:aplicacionPos,desc:_descAceptadoMonto(st,r),rd:(payload.redondeo||0)}}); }
   if(_entRuta){
     _entRuta['$']=total+propina+aFavorPos;
     _entRuta.ep='Cobrado';
@@ -14596,6 +14608,11 @@ function npUpdateMixtoSplit(){
 }
 
 function npToggleYaCobrado(){
+  /* (27/11/2026, B.6) Tildar abre el cuadro de cobro ya; destildar borra el cobro anotado. */
+  if(NP_COBRO_CUADRO){
+    var _ya=(document.getElementById('npYaCobrado')||{}).checked;
+    if(_ya)_npCobroPreAbrir(); else _npCobroPreBorrar();
+  }
   npUpdateMixtoSplit();
   npPintarCta();
 }
@@ -15489,6 +15506,7 @@ function npUpdateTotal(){
   // Mantener el mini-value (footer colapsado) sincronizado
   var miniV=document.getElementById('npFooterMiniValue');
   if(miniV)miniV.textContent=npMoney(total);
+  try{ _npCobroPrePintar(); }catch(_eCp){}   /* (27/11/2026, B.6) en rojo si el total cambió después de cobrar */
 }
 
 // Toggle del footer del + tab. Estado persistido en localStorage.
@@ -16544,6 +16562,11 @@ function npGuardar(){
     var _w=document.getElementById('npCtaWrap');if(_w&&_w.scrollIntoView)_w.scrollIntoView({block:'center'});return}
   if(npFaltaQuien()){showToast('¿Quién cobró el efectivo? Elegilo abajo de "Ya me pagó"');npPintarQuien();
     var _wq=document.getElementById('npQuienWrap');if(_wq&&_wq.scrollIntoView)_wq.scrollIntoView({block:'center'});return}
+  /* (27/11/2026, B.6) «Ya me pagó» sin el cobro completo (medio, cuenta, quién) o con el total cambiado: no se guarda. */
+  if(NP_COBRO_CUADRO&&(document.getElementById('npYaCobrado')||{}).checked&&Object.keys(npCart).length&&!_npCobroPreVigente()){
+    showToast(_npCobroPre?'El pedido cambió después de cobrar: volvé a cobrar':'Falta el cobro: completalo (o destildá «Ya me pagó»)',5000);
+    _npCobroPrePintar(); var _wc2=document.getElementById('npYaCobrado'); if(_wc2&&_wc2.scrollIntoView)_wc2.scrollIntoView({block:'center'});
+    _npCobroPreAbrir(); return }
   /* (8/11/2026) Lo que falta, ANTES de las preguntas de «¿guardar igual?»: se podia contestar una y recien despues
      enterarse de que el carrito estaba vacio o faltaba la fecha. Los mismos chequeos siguen abajo. */
   if(Object.keys(npCart).length===0){npCampoError('npProductos','Agregá al menos un producto');return}
@@ -16707,7 +16730,10 @@ function npGuardar(){
   // "Ya me pagó": registra el pedido como cobrado en el acto. Para Mixto pide
   // el split ef/tr; para Efectivo/Transf, el total va al método correspondiente.
   var yaCobrado=(document.getElementById('npYaCobrado')||{}).checked;
-  var _cobrarDespues=!!(yaCobrado&&NP_COBRO_CUADRO);
+  /* (27/11/2026, B.6) El cobro ya está hecho en pantalla: viaja en la cola y sale cuando vuelve el alta. */
+  var _cobroPre=(yaCobrado&&NP_COBRO_CUADRO&&_npCobroPreVigente())?JSON.parse(JSON.stringify(_npCobroPre)):null;
+  if(_cobroPre&&_cobroPre.payload&&_cobroPre.payload.formaPago)data.pago=_cobroPre.payload.formaPago;
+  var _cobrarDespues=!!(yaCobrado&&NP_COBRO_CUADRO&&!_cobroPre);
   if(yaCobrado&&!NP_COBRO_CUADRO){
     data.estadoPago='Cobrado';
     if(npPago==='Mixto'){
@@ -16779,7 +16805,7 @@ function npGuardar(){
   data.clientOrderId=npCoid;
   npPendienteAnotar(data,npCoid);
   var _resumen=npResumenTextoWA();
-  _npColaPoner({coid:npCoid,d:data,nom:nombre,total:total,resumen:_resumen,t:Date.now(),est:'enviando',intentos:0,cobrar:_cobrarDespues});
+  _npColaPoner({coid:npCoid,d:data,nom:nombre,total:total,resumen:_resumen,t:Date.now(),est:'enviando',intentos:0,cobrar:_cobrarDespues,cobroPre:_cobroPre});
   _npLastResumen=_resumen;
   var _s=document.getElementById('npSuccess');
   _s.classList.remove('hidden');
@@ -16854,7 +16880,8 @@ function _npColaProcesar(){
 /* Lo que contesto el alta, en el cartel (si sigue a la vista) y en un aviso. */
 function _npColaListo(it,res,t0){
   _npColaSacar(it.coid);
-  if(it.cobrar)setTimeout(function(){ _npAbrirCobro(it,res); },350);
+  if(it.cobroPre){ try{ _npCobroPreMandar(it,res); }catch(eCp){ try{ window.__npCobroPreErr=String(eCp&&eCp.message||eCp); }catch(_){} showToast('OJO: el cobro de '+String(it.nom||'').split(' ')[0]+' no se pudo guardar. Cobralo desde COBRANZA',12000); } }
+  else if(it.cobrar)setTimeout(function(){ _npAbrirCobro(it,res); },350);
   _npColaVuelo=false;
   try{ window.__npColaMs=Date.now()-t0; }catch(e){}
   try{ var pend=JSON.parse(localStorage.getItem(NP_PEND_KEY)||'null'); if(pend&&pend.coid===it.coid)npPendienteBorrar(); }catch(e){}
@@ -16954,10 +16981,107 @@ function _npAbrirCobro(it,res){
   if(_cobroRutaState){ _cobroRutaState.desdeAutopedido=true; _cobroRutaState.nomAuto=nombre; }
   else if(_suelto){ _cobFicha=null; document.documentElement.classList.remove('cob-suelto'); }
 }
+/* ══ «YA ME PAGÓ» COMO FICHA DE COBRO, ANTES DE GUARDAR (27/11/2026, B.6) ═══════════════════════════════════════
+   Tadeo (14:31): «quizá me pagó menos o me pagó más. ¿es propina? ¿se cobró y le dimos cambio? que esté todo conectado
+   como si fuese una ficha de cobro». Hasta hoy el cuadro de Cobranza se abría DESPUÉS del alta (`_npAbrirCobro`), cuando
+   el cargador ya estaba en el pedido siguiente. Ahora se abre AL TILDAR, con el pedido como está en pantalla: el MISMO
+   cuadro (`abrirCobroPendiente`), los mismos campos y las mismas reglas (falta chica, descuento, parcial, propina, vuelto,
+   cuenta, quién cobró). Con `st.preAlta` el «Confirmar» no manda nada: guarda el payload acá (`_npCobroPre`). GUARDAR
+   no sigue sin él, ni si el total cambió después de cobrar. El payload viaja adentro del item de la cola del alta (sobrevive
+   a cerrar la app) y, apenas el alta vuelve con número, sale por el MISMO transporte que Cobranza: `_commitCobroPendiente`
+   (marcarCobrado + Saldos Clientes) o `_commitCobroParcialModal` (cobrarParcial), los dos por la syncQueue. */
+var _npCobroPre=null;
+function _npTotalActual(){
+  var info=npDiscountInfo(), envio=npEnvioPara(npZona,info.sub);
+  return {total:Math.max(0,Math.round((info.total+envio)*100)/100),sub:info.sub,envio:envio};
+}
+function _npCobroPreAbrir(){
+  var yc=document.getElementById('npYaCobrado');
+  if(!Object.keys(npCart).length){ if(yc)yc.checked=false; npCampoError('npProductos','Primero cargá los productos: después el cobro'); return; }
+  if(_cobroRutaState){ if(yc)yc.checked=!!_npCobroPre; showToast('Hay otro cobro abierto: cerralo primero'); return; }
+  var t=_npTotalActual();
+  if(!(t.total>0)){ if(yc)yc.checked=false; showToast('El pedido está en $0: no hay nada que cobrar'); return; }
+  var nombre=(document.getElementById('npNombre')||{}).value||'';
+  var hoy=new Date(), dmy=('0'+hoy.getDate()).slice(-2)+'/'+('0'+(hoy.getMonth()+1)).slice(-2)+'/'+hoy.getFullYear();
+  var prods=[];
+  Object.keys(npCart).forEach(function(id){ var q=Number(npCart[id])||0; if(!q)return; var p=NP_CAT_FLAT.filter(function(x){return String(x.id)===String(id);})[0]; if(p)prods.push({a:p.abbr,q:q}); });
+  var pc={h:npZona||'Home',id:'nuevo',r:0,c:nombre.trim()||'el cliente',t:((document.getElementById('npTel')||{}).value||'').trim(),$:t.total,totalOriginal:t.total,
+    sub:t.sub,env:t.envio,desc:Math.max(0,Math.round(t.sub+t.envio-t.total)),fp:npPago||'',fc:dmy,feEnt:npFechaSel||'',fe:npFechaSel||'',
+    ep:'No Cobrado',es:'Pendiente',p:prods,cobradoParcial:0,preAlta:true};
+  if(!Array.isArray(pendientesCobro))pendientesCobro=[];
+  pendientesCobro.push(pc);
+  abrirCobroPendiente(pendientesCobro.length-1);
+  /* El pedido provisorio no queda en la lista de Cobranza: el cuadro ya tiene su referencia (st.ent). */
+  pendientesCobro=pendientesCobro.filter(function(x){ return x!==pc; });
+  if(!_cobroRutaState){ if(yc)yc.checked=!!_npCobroPre; return; }
+  _cobroRutaState.preAlta=true; _cobroRutaState.idx=-1;
+  var sb=document.getElementById('cobroRutaSub'); if(sb)sb.textContent='Pedido '+formatMoney(t.total)+' · se registra al tocar GUARDAR';
+}
+function _npCobroPreGuardar(x){
+  _npCobroPre=x;
+  var yc=document.getElementById('npYaCobrado'); if(yc)yc.checked=true;
+  /* El medio del pedido es el que se cobró (el chip «Cómo paga» puede haber quedado en otro). */
+  try{ var fpC=x.payload&&x.payload.formaPago; if(fpC&&fpC!==npPago)npSetPago(fpC); }catch(e){}
+  _npCobroPrePintar();
+  try{ window.__npCobroPre=JSON.parse(JSON.stringify(x)); }catch(e){}
+  showToast('Cobro anotado: se registra al tocar GUARDAR',3000);
+}
+/* El resumen abajo de «Ya me pagó»: qué se cobró, cómo y a dónde, con «Cambiar». En rojo si el total cambió. */
+function _npCobroPreTexto(x){
+  var p=x.payload||{}, r=x.r||{}, a=[];
+  if(x.tipo==='parcial'){ a.push('Pagó '+formatMoney(p.monto)+' a cuenta'); a.push(p.formaPago); if(r.queda>0)a.push('debe '+formatMoney(r.queda)); }
+  else {
+    a.push('Cobrado '+formatMoney(x.total)); a.push(p.formaPago==='Mixto'?('Mixto · ef '+formatMoney(p.ef)+' / tr '+formatMoney(p.tr)):p.formaPago);
+    if(r.recEf>0&&(r.camEf>0||r.camMP>0))a.push('pagó con '+formatMoney(r.recEf));
+    if(r.camEf>0)a.push('vuelto '+formatMoney(r.camEf)+' en efectivo');
+    if(r.camMP>0)a.push('vuelto '+formatMoney(r.camMP)+' por transferencia');
+    if(r.propina>0)a.push('propina '+formatMoney(r.propina));
+    if(r.aFav>0)a.push(formatMoney(r.aFav)+' a favor');
+    if(r.aplicar>0)a.push('usó '+formatMoney(r.aplicar)+' de saldo');
+    if(r.desc>0)a.push('descuento '+formatMoney(r.desc));
+    if(r.rd>0)a.push('redondeo −'+formatMoney(r.rd));
+  }
+  var cta=p.cuenta?_ctaNombre(p.cuenta):''; if(cta)a.push('a '+cta);
+  if(p.quien)a.push('lo tiene '+String(p.quien).split(' ')[0]);
+  return a.filter(Boolean).join(' · ');
+}
+function _npCobroPreVigente(){ return !!_npCobroPre&&Math.abs((Number(_npCobroPre.total)||0)-_npTotalActual().total)<0.5; }
+function _npCobroPrePintar(){
+  var w=document.getElementById('npCobroRes'); if(!w)return;
+  var ya=(document.getElementById('npYaCobrado')||{}).checked;
+  if(!ya||!_npCobroPre){ w.hidden=true; w.innerHTML=''; return; }
+  var ok=_npCobroPreVigente();
+  w.hidden=false; w.classList.toggle('mal',!ok);
+  w.innerHTML='<div class="np-cobro-res-t">'+_rtcEsc(ok?_npCobroPreTexto(_npCobroPre):'El pedido cambió a '+formatMoney(_npTotalActual().total)+' después de cobrar '+formatMoney(_npCobroPre.total)+': volvé a cobrar')+'</div>'
+    +'<button type="button" class="np-cobro-res-b" onclick="_npCobroPreAbrir()">'+(ok?'Cambiar':'Cobrar de nuevo')+'</button>';
+}
+function _npCobroPreBorrar(){ _npCobroPre=null; try{ window.__npCobroPre=null; }catch(e){} _npCobroPrePintar(); }
+/* Cuando vuelve el alta: el payload toma el número del pedido y sale por su transporte. Con el alta diferida (Apps
+   Script) el pedido todavía no está en la base: primero se despierta al aplicador, como el depósito. */
+function _npCobroPreMandar(it,res){
+  var x=it.cobroPre, d=it.d||{}, n=res&&res.n;
+  if(!n&&res&&res.ref){ var m=String(res.ref).match(/#\s*(\d+)/); if(m)n=Number(m[1]); }
+  var nombre=String(it.nom||d.nombre||'').split(' ')[0];
+  if(!n){ showToast('OJO: el pedido de '+nombre+' se registró sin número y el cobro NO se guardó. Cobralo desde COBRANZA',12000);
+    try{ if(typeof _directaNoAnotar==='function')_directaNoAnotar('npCobroPre','sin número',''); }catch(_){} return; }
+  var p=JSON.parse(JSON.stringify(x.payload)); p.hoja=d.canal; p.id=String(n); p.row=0;
+  if(x.tipo==='parcial')p.clientOpId=_opIdParcial(p);
+  var s=x.saldo?JSON.parse(JSON.stringify(x.saldo)):null; if(s){ s.pedidoHoja=d.canal; s.pedidoId=String(n); }
+  var tot=Number(it.total)||0;
+  var pc={h:d.canal,id:String(n),r:0,c:d.nombre||'',t:d.telefono||'',$:tot,totalOriginal:tot,ep:'No Cobrado',es:d.estadoEntrega||'Pendiente',cobradoParcial:0};
+  var ir=function(){
+    if(x.tipo==='parcial')_commitCobroParcialModal(p,pc); else _commitCobroPendiente(p,s,pc);
+    try{ window.__npCobroPreEnviado={n:n,hoja:d.canal,tipo:x.tipo,payload:p}; }catch(_){}
+  };
+  if(res.diferida&&typeof _rutDespertarAplicador==='function')_rutDespertarAplicador().catch(function(){}).then(ir);
+  else ir();
+}
 /* Salir del cobro de un «Ya me pagó» sin cobrar (la ×, Cancelar o el fondo): se pregunta, y si sale queda dicho que el
    pedido está No Cobrado. Cualquier otro cobro se cierra como siempre. */
 function cobroCancelar(){
   var st=_cobroRutaState;
+  /* (27/11/2026, B.6) Antes de guardar: salir sin cobrar destilda «Ya me pagó» (si ya había un cobro, queda el de antes). */
+  if(st&&st.preAlta){ cerrarCobroRuta(); if(!_npCobroPre){ var _yc=document.getElementById('npYaCobrado'); if(_yc)_yc.checked=false; } _npCobroPrePintar(); return; }
   if(st&&st.desdeAutopedido){
     if(!confirm('¿Salir sin registrar el cobro de '+(st.nomAuto||'este pedido')+'?\n\nEl pedido queda «No Cobrado». Lo cobrás después desde COBRANZA.'))return;
     cerrarCobroRuta();
@@ -17303,6 +17427,7 @@ function npReset(){
   ['npNombre','npLote','npPilarBarrio','npPilarLote','npTel','npPropina','npDescuentoManual','npGlobalPct','npEfMixto','npTrMixto'].forEach(function(id){var el=document.getElementById(id);if(el)el.value=''});
   try{ var _pbs=document.getElementById('npPilarBarrioSel'); if(_pbs)_pbs.value=''; npPilarBarrioPintar(); }catch(_eBp){}
   var yc=document.getElementById('npYaCobrado');if(yc)yc.checked=false;
+  try{ _npCobroPreBorrar(); }catch(_eCp){}   /* (27/11/2026, B.6) */
   npWaManual=false; try{npWaPintar();}catch(_eW){}
   npCliElegido=false; npCaptManual=false; try{var _cs=document.getElementById('npCaptado'); if(_cs)_cs.value=''; npCaptPintar();}catch(_eC){}
   window._npFamSel=false; setTimeout(function(){try{npMasPintar(true);}catch(_eM){}},0);   /* (14/11/2026) */

@@ -313,6 +313,8 @@ async function flujoCobranza() {
 }
 
 /* ── FLUJO 1b: «Ya me pagó» por la pantalla, tocando «Listo →» apenas guarda (como Tadeo) ─────────────────────── */
+/* (27/11/2026, B.6) El cuadro de cobro se abre AL TILDAR, antes de GUARDAR: se cobra ahí, queda el resumen abajo del tilde,
+   y el cobro sale solo cuando vuelve el alta (`window.__npCobroPreEnviado` trae el número). */
 async function flujoYaPago() {
   const medios = (process.env.MEDIOS || 'Efectivo,Transferencia,Mixto').split(',');
   for (const medio of medios) {
@@ -320,10 +322,15 @@ async function flujoYaPago() {
     const f = await cargarPedido(medio, true);
     if (f.err) { chk(medio + ': cargar el formulario', false, f); continue; }
     chk(medio + ': el toque en «Ya me pagó» la tilda', await pg.evaluate(() => !!(document.getElementById('npYaCobrado') || {}).checked));
-    if (medio === 'Mixto' && await visible('#npEfMixto')) { await pg.fill('#npEfMixto', String(Math.round(f.prod.total / 2))); await pg.fill('#npTrMixto', String(f.prod.total - Math.round(f.prod.total / 2))); }
-    const n0 = await pg.evaluate(() => window.__posts.length);
+    const ab = await esperar(() => { const o = document.getElementById('cobroRutaOverlay'); return o && !o.classList.contains('hidden') ? ((document.getElementById('cobroRutaSub') || {}).textContent || 'abierto') : null; }, null, 8000);
+    if (!chk(medio + ': tildar abre el cobro antes de guardar (' + (ab || '') + ')', !!ab)) continue;
+    const c = await cobrarEnCuadro(medio, f.prod.total);
+    if (!c.ok) { await pg.evaluate(() => { try { cerrarCobroRuta(); } catch (e) {} }); continue; }
+    const res = await pg.evaluate(() => { const w = document.getElementById('npCobroRes'); return w && !w.hidden ? w.innerText.replace(/\s+/g, ' ') : ''; });
+    chk(medio + ': el resumen del cobro queda abajo del tilde', /Cobrado|a cuenta/.test(res), res);
+    const n0 = await pg.evaluate(() => { window.__npCobroPreEnviado = null; return window.__posts.length; });
     /* SIN_SENAL=1: dos fallas a la vez. GUARDAR sin red (el alta queda en la cola de + Pedido), «Listo →», COBRANZA, y la
-       señal vuelve a los 8 s: el cuadro se tiene que abrir solo, esté donde esté. */
+       señal vuelve a los 8 s: el cobro anotado tiene que salir solo cuando entra el alta. */
     await contestarConocio();   /* antes de cortar la señal: la pregunta depende de `casa_es_nueva`, que va a la base */
     if (process.env.SIN_SENAL) { await pg.context().setOffline(true); await pg.evaluate(() => window.dispatchEvent(new Event('offline'))); }
     const g = await tocar('button', 'GUARDAR', '#nuevoView', { espera: 150 });
@@ -336,11 +343,9 @@ async function flujoYaPago() {
       await T(8000);
       await pg.context().setOffline(false); await pg.evaluate(() => window.dispatchEvent(new Event('online')));
     }
-    const cu = await esperar(() => { const o = document.getElementById('cobroRutaOverlay'); if (!o || o.classList.contains('hidden')) return null; const s = (document.getElementById('cobroRutaSub') || {}).textContent || ''; const m = s.match(/#(\d+)/); return /PRUEBA Robot/.test((document.getElementById('cobroRutaTitle') || {}).textContent || '') && m ? m[1] : null; }, null, 60000);
-    if (!chk(medio + ': después de GUARDAR y «Listo →» se abre el cobro', !!cu, await pg.evaluate((n0) => window.__posts.slice(n0).map((p) => p.u + ' → ' + (p.r || '…').slice(0, 80)), n0))) continue;
-    const c = await cobrarEnCuadro(medio, f.prod.total);
-    if (!c.ok) { await pg.evaluate(() => { window.__confirmResp = true; try { cerrarCobroRuta(); } catch (e) {} }); continue; }
-    await chequearCobrado('Home', cu, medio, c.ef, c.tr, c.cta);
+    const env = await esperar(() => window.__npCobroPreEnviado || null, null, 90000);
+    if (!chk(medio + ': cuando vuelve el alta, el cobro sale solo', !!(env && env.n), await pg.evaluate((n0) => window.__posts.slice(n0).map((p) => p.u + ' → ' + (p.r || '…').slice(0, 80)), n0))) continue;
+    await chequearCobrado('Home', String(env.n), medio, c.ef, c.tr, c.cta);
   }
 }
 
