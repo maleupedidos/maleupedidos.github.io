@@ -36,6 +36,9 @@ function fixture(dia) {
         items: [it('TJyQ', 'Tarta Jamón y Queso', 1, { ustariz: 1 }), it('SCo', 'Sorrentinos Cordero al Malbec', 1, {}, [{ prov: 'PRUEBA Proveedor', oc: 'OC-PR2', q: 1, cli: true }])], pz: [] },
       { k: 'Red|990003', h: 'Red', n: '990003', r: -990003, c: 'PRUEBA Cliente Tres', quien: 'PRUEBA Rep B', red: true, dada: false, ent: false, lote: '', barrio: '', reparte: '',
         items: [it('TJyQ', 'Tarta Jamón y Queso', 2, {}, [{ prov: 'PRUEBA Proveedor', oc: 'OC-PR1', q: 2, cli: false }])], pz: [] },
+      /* (879) Igual al Red #2590: el representante lo marco entregado SIN la bolsa. Tiene que seguir en la bolsa. */
+      { k: 'Red|990005', h: 'Red', n: '990005', r: -990005, c: 'PRUEBA Cliente Cinco', quien: 'PRUEBA Rep B', red: true, dada: false, ent: true, lote: '', barrio: '', reparte: '',
+        items: [it('TP', 'Tarta Pollo', 3, { ustariz: 3 }), it('TV', 'Tarta Verdura', 2, { moresco: 2 })], pz: [] },
       { k: 'Home|990004', h: 'Home', n: '990004', r: -990004, c: 'PRUEBA Robot', quien: 'Estancias del Pilar', red: false, dada: false, ent: false, lote: '9', barrio: 'Estancias del Pilar', reparte: '',
         items: [it('PMa', 'Pizza Margarita', 2, { ustariz: 2 })], pz: [] }],
     provs: [{ prov: 'PRUEBA Proveedor', total: 100000, lineas: [
@@ -189,6 +192,14 @@ async function sesionRobot() {
         const env = des.q.filter((x) => x.action === 'marcarEntregadoAVendedor');
         chk('paso ' + (i + 1) + ': la bolsa de ' + P.rep + ' sale (marcarEntregadoAVendedor, sin «Faltan productos de OC»)', env.length === 1 && !des.alertas.some((m) => /Faltan/.test(m)), des);
         if (env.length) enviados.push({ rep: P.rep, rows: env[0].rows });
+        /* (879) Lo que el representante ya marco entregado sin la bolsa va igual, y se avisa. */
+        const yaEnt = await pg.evaluate((rep) => (_mv.d.pedidos || []).filter((p) => p.red && p.quien === rep && p.ent && !p.dada).map((p) => p.r), P.rep);
+        if (yaEnt.length) {
+          const av = await pg.evaluate(() => [].map.call(document.querySelectorAll('.mv-paso .mv-aviso'), (x) => x.textContent).join(' | '));
+          chk('paso ' + (i + 1) + ': avisa que ' + P.rep + ' ya marco entregado ' + yaEnt.length + ' sin la bolsa', /ya lo marc|ya los marc/.test(av), av);
+          const filas = String((env[0] && env[0].rows) || '');
+          chk('paso ' + (i + 1) + ': esos pedidos van en la bolsa (' + yaEnt.join(',') + ')', yaEnt.every((r) => filas.split(',').map(Number).indexOf(Number(r)) >= 0 || filas.indexOf(String(r)) >= 0), { filas, yaEnt });
+        }
       }
       if (i === n - 1) {
         await verificar(pg, 'en el paso final');
@@ -207,7 +218,7 @@ async function sesionRobot() {
         chk('paso ' + (i + 1) + ': el botón de abajo pasa al siguiente', r.ok && await pg.evaluate((i) => _mvPaso(_mv.d.dia, 99) === i + 1, i), r);
       }
     }
-    if (MODO === 'prueba') chk('se dieron las 2 bolsas de PRUEBA (Rep A con 2 pedidos, Rep B con 1)', enviados.length === 2 && enviados.some((e) => /Rep A/.test(e.rep) && e.rows.length === 2) && enviados.some((e) => /Rep B/.test(e.rep) && e.rows.length === 1), enviados);
+    if (MODO === 'prueba') chk('se dieron las 2 bolsas de PRUEBA (Rep A con 2 pedidos, Rep B con 2: uno ya marcado entregado sin la bolsa, 879)', enviados.length === 2 && enviados.some((e) => /Rep A/.test(e.rep) && e.rows.length === 2) && enviados.some((e) => /Rep B/.test(e.rep) && e.rows.length === 2), enviados);
     chk('cero errores de consola', err.length === 0, err);
     await ctx.close();
   }

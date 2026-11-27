@@ -3116,6 +3116,25 @@ function _redEfRpc(fn, body) {
       .then(function (r) { return r.json().then(function (j) { if (!r.ok) throw new Error((j && (j.message || j.err)) || ('la base contestó ' + r.status)); return j; }); });
   });
 }
+/* (879, 27/11/2026) «TODAVÍA NO TE DIMOS LA BOLSA». Lou marcó Entregado #2583 y #2590 a las 10:03 y 10:23, antes de
+   recibir la bolsa; ya había pasado el 20/11 (5 pedidos). Al marcar la entrega de un pedido cuya bolsa Maleu todavía no
+   le dio, se pregunta UNA vez por pedido. Avisa y no prohíbe: el representante marca la entrega a su cliente. Sin
+   respuesta de la base en 2,5 s (o sin la 879) sigue como siempre: no se frena una entrega por no saber. */
+const _redBolsaPreg = {};
+function _redAvisoBolsa(p, seguir, cancelar) {
+  const k = String((p && p.n) || '') + '|' + (Number(p && p.row) || 0);
+  if (!p || p.es === 'Entregado' || _redBolsaPreg[k]) { seguir(); return; }
+  let listo = false;
+  const fin = function (bolsa) {
+    if (listo) return; listo = true;
+    if (bolsa !== false) { seguir(); return; }
+    _redBolsaPreg[k] = 1;
+    if (confirm('Todavía no te dimos la bolsa de este pedido.\n\n¿Lo tenías vos?')) seguir(); else if (cancelar) cancelar();
+  };
+  setTimeout(function () { fin(null); }, 2500);
+  _redEfRpc('red_bolsa_de_pedido', { p: { n: String(p.n), row: Number(p.row) || 0 } })
+    .then(function (d) { fin(d && d.ok ? !!d.bolsa : null); }).catch(function () { fin(null); });
+}
 function _redEfLeer(forzar) {
   if (_redEf.vuelo) return _redEf.vuelo;
   if (!forzar && Date.now() - _redEf.t < 20000) return Promise.resolve(_redEf);
@@ -4023,6 +4042,9 @@ function redMarcarEntregado(n, row, btn) {
   const p = ((lastDashboardData && lastDashboardData.pedidos) || []).find(function (x) { return String(x.n) === String(n) && (!row || Number(x.row) === row); });
   if (!p || p.es === 'Entregado') return;
   if (btn) { btn.disabled = true; btn.textContent = 'Guardando…'; }
+  _redAvisoBolsa(p, function () { _redMarcarEntregadoSeguir(p); }, function () { if (btn) { btn.disabled = false; btn.textContent = 'Entregado'; } });
+}
+function _redMarcarEntregadoSeguir(p) {
   currentPedido = p;
   updatePedido({ entrega: true });
   renderVencidos(lastDashboardData.pedidos); renderEntregasHoy(); updateMainBadges();
@@ -4373,8 +4395,8 @@ function rutaToggleEntrega() {
     ? '¿Confirmás que entregaste el pedido de ' + (p.c || '—') + '?'
     : '¿Deshacer la entrega de ' + (p.c || 'este pedido') + '?';
   if (!confirm(msg)) return;
-  _rutaUpdate({ entrega: nuevo });
-  redToast(nuevo ? 'Entregado a ' + (p.c || '—') : 'Entrega deshecha');
+  const seguir = function () { _rutaUpdate({ entrega: nuevo }); redToast(nuevo ? 'Entregado a ' + (p.c || '—') : 'Entrega deshecha'); };
+  if (nuevo) _redAvisoBolsa(p, seguir); else seguir();
 }
 function rutaCancelar() {
   const p = _rutaCurrent(); if (!p) return;
@@ -5750,8 +5772,9 @@ function toggleEntrega() {
     ? '¿Confirmás que entregaste el pedido de ' + (currentPedido.c || '—') + '?'
     : '¿Deshacer la entrega de ' + (currentPedido.c || 'este pedido') + '?';
   if (!confirm(msg)) return;
-  updatePedido({ entrega: nuevo });
-  showDetalle(currentPedido.n); // re-render
+  const p = currentPedido;
+  const seguir = function () { currentPedido = p; updatePedido({ entrega: nuevo }); showDetalle(p.n); }; // re-render
+  if (nuevo) _redAvisoBolsa(p, seguir); else seguir();
 }
 function toggleCobrado() {
   if (!currentPedido) return;
