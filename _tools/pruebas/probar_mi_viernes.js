@@ -123,6 +123,8 @@ async function sesionRobot() {
     console.log('\n=== Mi viernes · ' + MODO + ' · ' + ancho + 'px ===');
     const ctx = await br.newContext(Object.assign({ timezoneId: 'America/Argentina/Buenos_Aires' },
       movil ? { viewport: { width: ancho, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true } : { viewport: { width: ancho, height: 900 } }));
+    /* (27/11/2026) VIERNES se esconde fuera del viernes y con todo recibido: la prueba la quiere siempre (mv_siempre). */
+    await ctx.addInitScript(`try{localStorage.setItem('mv_siempre','1');}catch(e){}`);
     await ctx.addInitScript(`try{localStorage.setItem('maleu_panel_session',JSON.stringify({usuario:${JSON.stringify(USUARIO_R.v)},rol:'admin',nombre:'Lucas Moresco',ts:Date.now()}));}catch(e){}
       window.__confirms=[]; window.confirm=function(m){window.__confirms.push(String(m).slice(0,160));return true;}; window.alert=function(m){window.__confirms.push('ALERT '+String(m).slice(0,160));};
       try{ Object.defineProperty(window.navigator,'standalone',{get:function(){return true;}}); }catch(e){}` + sbses(process.env.SBSES, USUARIO_R.v));
@@ -143,7 +145,7 @@ async function sesionRobot() {
     await pg.goto(BASE + '?v=' + Date.now(), { waitUntil: 'domcontentloaded' });
     await pg.waitForFunction(() => typeof window.go === 'function', null, { timeout: 90000 });
     await T(2500);
-    await pg.evaluate(() => { try { Object.keys(localStorage).forEach((k) => { if (/^mv_/.test(k)) localStorage.removeItem(k); }); } catch (e) {} go('ruta'); });
+    await pg.evaluate(() => { try { Object.keys(localStorage).forEach((k) => { if (/^mv_/.test(k)) localStorage.removeItem(k); }); localStorage.setItem('mv_siempre', '1'); } catch (e) {} go('ruta'); });
     await pg.waitForFunction(() => typeof window.switchTab === 'function' && document.getElementById('viernesView'), null, { timeout: 90000 }).catch(() => {});
     await T(2000);
     const tab = await tocar(pg, '.tab[data-tab="viernes"]');
