@@ -552,16 +552,31 @@ async function volcar(et) {
 async function armarPrueba(n) {
   /* La tarjeta del pedido PRUEBA en Armado (el día puede venir plegado). Solo se toca la que dice «PRUEBA Robot». */
   const marcar = () => pg.evaluate(() => { const c = [].slice.call(document.querySelectorAll('#armadoView .armado-card')).find((c) => c.offsetParent && /PRUEBA Robot/.test((c.querySelector('.armado-name') || {}).textContent || '')); if (!c) return null; document.querySelectorAll('[data-au="arm"]').forEach((x) => x.removeAttribute('data-au')); c.setAttribute('data-au', 'arm'); return { done: c.classList.contains('done'), txt: c.innerText.replace(/\s+/g, ' ').slice(0, 120) }; });
-  const t0 = Date.now(); let c = null;
-  while (Date.now() - t0 < 90000) { c = await marcar(); if (c) break; if (!(await pg.evaluate(() => [].some.call(document.querySelectorAll('#armadoView .armado-card'), (x) => x.getClientRects().length)))) await tocar('[onclick*="toggleCollapse"]', 'HOY', '#armadoView', { callado: true, espera: 300 }); c = await marcar(); if (c) break; await T(1000); }
-  if (c) { c.seg = Math.round((Date.now() - t0) / 1000); console.log('       en ARMADO a los ' + c.seg + ' s'); }
+  /* (27/11/2026, alertas #978-#980) La tarjeta vive adentro de DOS plegados: el día («HOY») y, cuando el día tiene más de
+     un canal (el viernes: Venta Directa y la bolsa de Red), el canal («Venta Directa»). Los dos arrancan plegados. Hasta hoy
+     el robot desplegaba solo «HOY», y en cada vuelta de la espera (abría y cerraba): la tarjeta nunca quedaba a la vista.
+     Ahora sube desde la tarjeta PRUEBA (está en el DOM aunque esté plegada) y despliega cada plegado UNA vez, como Tadeo. */
+  const plegados = () => pg.evaluate(() => { const c = [].slice.call(document.querySelectorAll('#armadoView .armado-card')).find((c) => /PRUEBA Robot/.test((c.querySelector('.armado-name') || {}).textContent || ''));
+    const k = []; for (let x = c && c.parentElement; x && x.id !== 'armadoView'; x = x.parentElement) if (x.classList.contains('collapsed') && x.getAttribute('data-collapse-key')) k.unshift(x.getAttribute('data-collapse-key'));
+    return c ? k : null; });
+  const t0 = Date.now(); let c = null; const abiertos = [];
+  while (Date.now() - t0 < 90000) { c = await marcar(); if (c) break;
+    const ks = await plegados();
+    for (const k of ks || []) { if (abiertos.indexOf(k) >= 0) continue; abiertos.push(k); await tocar('[onclick*="toggleCollapse(\'' + k + '\')"]', '', '#armadoView', { callado: true, espera: 400 }); }
+    c = await marcar(); if (c) break; await T(1000); }
+  if (c) { c.seg = Math.round((Date.now() - t0) / 1000); console.log('       en ARMADO a los ' + c.seg + ' s (desplegué: ' + (abiertos.join(', ') || 'nada') + ')'); }
   else {
     /* (25/11/2026) Qué hay en ARMADO y cómo está el pedido en los datos de Ruta, para saber por qué no aparece. */
     const dx = await pg.evaluate((n) => { const v = document.getElementById('armadoView'); let p = null;
       try { p = (typeof pedidos !== 'undefined' && Array.isArray(pedidos) ? pedidos : []).filter((x) => String(x.n || x.id) === String(n)).map((x) => ({ es: x.es || x.estado, fe: x.fe || x.fechaEntrega, arm: x.armado, dep: x.dep || x.deposito, h: x.h })); } catch (e) { p = 'sin pedidos: ' + e.message; }
       const dp = (typeof D !== 'undefined' && D && Array.isArray(D.pedidos) ? D.pedidos : []).filter((x) => String(x.n) === String(n)).map((x) => ({ h: x.h, es: x.es, ep: x.ep, fe: x.fe, dep: x.dep, arm: x.arm }));
-      return { armado: v ? (v.innerText || '').replace(/\s+/g, ' ').slice(0, 400) : 'sin #armadoView', pedido: p, panel: dp, modoCob: document.documentElement.classList.contains('modo-cob'), tab: typeof rutCurrentTab !== 'undefined' ? rutCurrentTab : '?' }; }, n).catch((e) => e.message);
-    console.log('       ARMADO sin la tarjeta: ' + JSON.stringify(dx).slice(0, 700));
+      /* (27/11/2026) El en vivo (objeto compartido: se lee de verdad) y la cadena de plegados hasta la tarjeta PRUEBA. Las
+         variables simples de la sub-app que se ven en window son copias del arranque: no se usan para diagnosticar. */
+      let vivo = null; try { vivo = { nota: window.__rutaVivo || null, estado: window.__enVivo && window.__enVivo.estado, pend: !!_rutVivo.pend, ultSync: _rutVivo.ultSync ? Math.round((Date.now() - _rutVivo.ultSync) / 1000) + ' s' : 'nunca' }; } catch (e) { vivo = e.message; }
+      const tj = [].slice.call(document.querySelectorAll('#armadoView .armado-card')).find((c) => /PRUEBA Robot/.test(c.textContent || '')); const pleg = [];
+      for (let x = tj && tj.parentElement; x && x.id !== 'armadoView'; x = x.parentElement) if (x.classList.contains('collapsed')) pleg.unshift(x.getAttribute('data-collapse-key') || x.className);
+      return { armado: v ? (v.innerText || '').replace(/\s+/g, ' ').slice(0, 400) : 'sin #armadoView', pedido: p, panel: dp, tarjeta: tj ? { plegadaEn: pleg } : 'no está en el DOM', vivo, modoCob: document.documentElement.classList.contains('modo-cob'), tab: typeof rutCurrentTab !== 'undefined' ? rutCurrentTab : '?' }; }, n).catch((e) => e.message);
+    console.log('       ARMADO sin la tarjeta: ' + JSON.stringify(dx).slice(0, 900));
   }
   return c;
 }
