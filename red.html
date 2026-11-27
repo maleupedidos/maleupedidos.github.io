@@ -566,6 +566,14 @@
     .cb-des { min-height: 44px; padding: 0 .3rem; background: none; border: 0; color: #b23b3b; text-decoration: underline; font-family: inherit; font-size: .82rem; cursor: pointer; }
     .cb-mano { display: flex; justify-content: space-between; align-items: center; gap: .5rem; margin: .3rem 0 .3rem; padding: .6rem .75rem; border-radius: 10px; background: #e8f5e9; color: #1b5e20; font-weight: 800; font-size: .9rem; }
     .cb-nota { font-size: .78rem; color: #8a7a70; padding: .2rem 0 .3rem; }
+    /* (910) Los cuatro caminos de cobro en dos filas de dos, el alias de Maleu y la rendición. */
+    .cb-acc.cb-acc4 { display: grid; grid-template-columns: 1fr 1fr; }
+    .cb-acc.cb-acc4 .cb-bt { font-size: .8rem; line-height: 1.15; }
+    .cb-prom { color: #8d5a00; font-weight: 700; }
+    .cb-mal { color: #b23b3b; font-weight: 700; }
+    .cb-alias { display: flex; justify-content: space-between; align-items: center; gap: .5rem; font-size: .82rem; color: #5d4037; padding: .1rem 0 .2rem; }
+    .cb-alias small { color: #8a7a70; }
+    .cb-rendir { display: block; width: 100%; margin: .4rem 0 .3rem; flex: none; }
     .cliente-row.tocable { cursor: pointer; width: 100%; text-align: left; background: none; border: 0; border-bottom: 1px solid #f0f0f0; font-family: inherit; color: inherit; }
     .cliente-debe { background: #ffebee; color: #c62828; font-size: .75rem; font-weight: 800; padding: 3px 9px; border-radius: 10px; white-space: nowrap; }
     .cf-ov { position: fixed; inset: 0; z-index: 9000; background: rgba(40,24,16,.45); display: flex; align-items: flex-end; justify-content: center; }
@@ -3106,7 +3114,7 @@ function _rutaTotalViernes() {
    decirlo. El representante lo marca acá y la Caja de Maleu lo ve aparte («Rufino tiene $X de Maleu»): no es plata de
    la caja todavía. Al «Recibir de un representante», la base lo da por recibido. Solo en la base (`red_efectivo_*`):
    con RED_EFECTIVO_MANO apagada la base contesta directo:false y el botón no aparece. */
-let _redEf = { palanca: false, mios: {}, avisos: {}, recibidos: {}, avisoOk: false, t: 0, vuelo: null, enVuelo: {} };
+let _redEf = { palanca: false, mios: {}, avisos: {}, recibidos: {}, avisoOk: false, t: 0, vuelo: null, enVuelo: {}, rendOk: false, rend: [], prom: {} };
 function _redEfRpc(fn, body) {
   if (typeof _sbPermiso !== 'function') return Promise.reject(new Error('sin permiso de la base'));
   return Promise.resolve(_sbPermiso(true)).then(function (sb) {
@@ -3160,6 +3168,13 @@ function _redEfLeer(forzar) {
       rec[String(x.n)] = x;
     });
     _redEf.avisos = av; _redEf.recibidos = rec;
+    /* (910) Las rendiciones («Le pasé $X a Maleu») y las promesas («me va a transferir más adelante»). Sin la 910 no
+       vienen y los botones nuevos no se muestran. */
+    _redEf.rendOk = !!(d && d.ok && Array.isArray(d.rendiciones));
+    var mia = function (x) { return !yo || String((x && x.representante) || '').trim().toLowerCase() === yo; };
+    _redEf.rend = ((d && d.rendiciones) || []).filter(mia);
+    var pr = {}; ((d && d.promesas) || []).filter(mia).forEach(function (x) { if (x && x.n != null) pr[String(x.n)] = x; });
+    _redEf.prom = pr;
     return _redEf;
   }, function () { _redEf.vuelo = null; _redEf.t = Date.now(); return _redEf; });
   return _redEf.vuelo;
@@ -3306,19 +3321,30 @@ function _redDebeDe(k) {
 /* Una fila de cobro: la misma en Hoy y en la ficha del cliente. `conNombre`: en Hoy el nombre abre la ficha. */
 function _redCobFilaHTML(p, conNombre) {
   const n = String(p.n), k = "'" + redEsc(n) + "'," + (Number(p.row) || 0);
-  const mio = _redEf.mios[n], av = _redEf.avisos[n], vuelo = !!_redEf.enVuelo[n];
+  const mio = _redEf.mios[n], av = _redEf.avisos[n], vuelo = !!_redEf.enVuelo[n], rd = _redRendDe(n), pm = _redEf.prom[n];
   let sub, acc;
-  if (mio) {
-    sub = '<span class="cb-ok">Te pagó en efectivo' + (mio.monto ? ': tenés ' + ars(Number(mio.monto) || 0) + ' para Maleu' : '') + '</span>';
+  if (rd) {
+    /* (910) Ya se lo pasó a Maleu: se deshace desde el bloque de la rendición, no pedido por pedido. */
+    sub = '<span class="cb-ok">Se lo pasaste a Maleu: falta que lo confirme</span>';
+    acc = '';
+  } else if (mio) {
+    const tr = mio.medio === 'transferencia';
+    sub = '<span class="cb-ok">' + (tr ? 'Te transfirió a vos' : 'Te pagó en efectivo') + (mio.monto ? ': tenés ' + ars(Number(mio.monto) || 0) + ' para Maleu' : '') + '</span>';
     acc = vuelo ? '<span class="cb-nota">Guardando…</span>' : '<button type="button" class="cb-des" onclick="redEfectivo(' + k + ',true)">Deshacer</button>';
   } else if (av) {
     sub = '<span class="cb-ok">Avisaste que transfirió: Maleu lo confirma en el banco</span>';
     acc = vuelo ? '<span class="cb-nota">Guardando…</span>' : '<button type="button" class="cb-des" onclick="redTrAvisar(' + k + ',true)">Deshacer</button>';
   } else {
-    sub = redEsc(['#' + n, _redHaceDias(p.fe)].filter(Boolean).join(' · '));
-    acc = !_redEf.palanca ? '' : '<div class="cb-acc">'
-      + '<button type="button" class="cb-bt" ' + (vuelo ? 'disabled ' : '') + 'onclick="redEfectivo(' + k + ')">Me pagó en efectivo</button>'
-      + (_redEf.avisoOk ? '<button type="button" class="cb-bt sec" ' + (vuelo ? 'disabled ' : '') + 'onclick="redTrAvisar(' + k + ')">Me dijo que transfirió</button>' : '')
+    sub = pm ? '<span class="cb-prom">Te va a transferir más adelante</span>' : redEsc(['#' + n, _redHaceDias(p.fe)].filter(Boolean).join(' · '));
+    const dis = vuelo ? 'disabled ' : '';
+    /* (910, 27/11/2026, caso Lou) Los cuatro caminos que pasaron de verdad: efectivo a vos, transferencia a vos,
+       transferencia a Maleu, o «te transfiero más adelante». En dos filas de dos para que entren a 390. */
+    acc = !_redEf.palanca ? '' : '<div class="cb-acc' + (_redEf.rendOk ? ' cb-acc4' : '') + '">'
+      + '<button type="button" class="cb-bt" ' + dis + 'onclick="redEfectivo(' + k + ')">Me pagó en efectivo</button>'
+      + (_redEf.rendOk ? '<button type="button" class="cb-bt" ' + dis + 'onclick="redTrAMi(' + k + ')">Me transfirió a mí</button>' : '')
+      + (_redEf.avisoOk ? '<button type="button" class="cb-bt sec" ' + dis + 'onclick="redTrAvisar(' + k + ')">' + (_redEf.rendOk ? 'Le transfirió a Maleu' : 'Me dijo que transfirió') + '</button>' : '')
+      + (_redEf.rendOk ? (pm ? '<button type="button" class="cb-bt sec" ' + dis + 'onclick="redPromesa(' + k + ',true)">Ya no: deshacer</button>'
+                             : '<button type="button" class="cb-bt sec" ' + dis + 'onclick="redPromesa(' + k + ')">Me va a transferir</button>') : '')
       + '</div>';
   }
   const nom = redEsc(p.c || ('Pedido ' + n));
@@ -3327,8 +3353,13 @@ function _redCobFilaHTML(p, conNombre) {
                  : '<span class="hy-q" style="cursor:default"><span class="hy-n">' + redEsc(['#' + n, _hoyDia(p.fe)].filter(Boolean).join(' · ')) + '</span><span class="hy-s">' + (mio || av ? sub : redEsc(_redHaceDias(p.fe))) + '</span></span>')
     + '<b class="cb-m">' + ars(_cobroCliente(p)) + '</b></div>' + acc + '</div>';
 }
-function _redEnManoTotal() {
-  return Object.keys(_redEf.mios).reduce(function (s, k) { return s + (Number(_redEf.mios[k].monto) || 0); }, 0);
+/* (910) Lo que ya está en una rendición avisada no se cuenta dos veces: ya se lo pasó. `soloTr`: lo transferido a él. */
+function _redEnManoTotal(soloTr) {
+  return Object.keys(_redEf.mios).reduce(function (s, k) {
+    const m = _redEf.mios[k];
+    if (_redRendDe(k) || (soloTr && m.medio !== 'transferencia')) return s;
+    return s + (Number(m.monto) || 0);
+  }, 0);
 }
 function renderCobHoy() {
   const box = $id('cb-card');
@@ -3342,14 +3373,23 @@ function renderCobHoy() {
     });
   }
   const mano = _redEnManoTotal();
-  if (!l.length && !(mano > 0)) { box.classList.add('hidden'); box.innerHTML = ''; return; }
-  const debe = l.filter(function (p) { return !_redEf.mios[String(p.n)] && !_redEf.avisos[String(p.n)]; });
+  const rends = (_redEf.rend || []);
+  if (!l.length && !(mano > 0) && !rends.length) { box.classList.add('hidden'); box.innerHTML = ''; return; }
+  const debe = l.filter(function (p) { const n = String(p.n); return !_redEf.mios[n] && !_redEf.avisos[n] && !_redRendDe(n); });
   const tot = debe.reduce(function (s, p) { return s + _cobroCliente(p); }, 0);
-  let h = '<div class="hy-h"><span>' + (debe.length ? 'Tus clientes que todavía no pagaron' : 'Tus clientes ya te avisaron') + '</span>'
+  let h = '<div class="hy-h"><span>' + (debe.length ? 'Tus clientes que todavía no pagaron' : l.length ? 'Tus clientes ya te avisaron' : 'Lo que le pasaste a Maleu') + '</span>'
     + (debe.length ? '<small>' + ars(tot) + '</small>' : '') + '</div>';
   l.forEach(function (p) { h += _redCobFilaHTML(p, true); });
-  if (mano > 0) h += '<div class="cb-mano"><span>Tenés de Maleu en efectivo</span><span>' + ars(mano) + '</span></div>'
-    + '<div class="cb-nota">Dáselo entero a Maleu. Cuando lo reciba, sale de acá.</div>';
+  /* (910) La regla de Lucas: si el cliente quiere transferir, que le transfiera directo a Maleu. */
+  if (debe.length && _redEf.palanca) h += _redAliasHTML('¿Te quiere transferir? Pasale el alias');
+  if (mano > 0) {
+    const tr = _redEnManoTotal(true);
+    h += '<div class="cb-mano"><span>Tenés para darle a Maleu</span><span>' + ars(mano) + '</span></div>'
+      + '<div class="cb-nota">' + (tr > 0 && tr < mano ? ars(mano - tr) + ' en efectivo y ' + ars(tr) + ' que te transfirieron a vos. ' : tr > 0 ? 'Te lo transfirieron a vos. ' : '')
+      + 'Dáselo entero a Maleu. Cuando lo reciba, sale de acá.</div>';
+  }
+  if (_redEf.rendOk && _redRendCandidatos().length) h += '<button type="button" class="cb-bt cb-rendir" onclick="redRendirAbrir()">Le pasé plata a Maleu</button>';
+  rends.forEach(function (r) { h += _redRendFilaHTML(r); });
   box.innerHTML = h;
   box.classList.remove('hidden');
 }
@@ -3376,6 +3416,149 @@ function redTrAvisar(n, row, deshacer) {
     redToast(deshacer ? 'Listo: el #' + n + ' vuelve a «no pagó»' : 'Avisado: Maleu confirma en el banco los ' + ars(Number(r.monto) || 0) + ' del #' + n);
     _redEfLeer(true).then(_redCobRepintar);
   }).catch(function (e) { vuelve('No se avisó: ' + ((e && e.message) || 'sin conexión')); });
+}
+/* ═══ EL REPRESENTANTE RINDE DESDE EL PORTAL (910, 27/11/2026, encargo F del Organizador, caso Lou) ═══════════════
+   Lou juntó 5 pedidos, le transfirió $283.000 a Maleu y mandó la captura al grupo de WhatsApp. Ahora: «Le pasé plata a
+   Maleu» → elige los pedidos (el monto se suma solo) y pone el N.º de operación; queda AVISADA hasta que Maleu la
+   confirma en Cobranza (`red_rendicion_directo` → la 905). Y por pedido: «Me transfirió a mí» (lo en mano, por
+   transferencia) y «Me va a transferir» (una promesa que se ve). */
+function _redRendDe(n) {
+  n = String(n || '');
+  return (_redEf.rend || []).find(function (r) { return r && r.estado === 'avisada' && (r.pedidos || []).map(String).indexOf(n) >= 0; }) || null;
+}
+function _redAliasHTML(txt) {
+  const c = _redCtaCliente() || {}, al = String(c.alias || 'maleu26');
+  return '<div class="cb-alias"><span>' + redEsc(txt) + ' <b>' + redEsc(al) + '</b>' + (c.banco ? ' <small>(' + redEsc(c.banco) + ' · Maleu)</small>' : '') + '</span>'
+    + '<button type="button" class="cb-des" data-al="' + redEsc(al) + '" onclick="redCopiarAlias(this.dataset.al)">Copiar</button></div>';
+}
+function redCopiarAlias(al) {
+  const ok = function () { redToast('Copiado: ' + al); };
+  try { if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(al).then(ok, function () { redToast('El alias es ' + al); }); return; } } catch (e) {}
+  redToast('El alias es ' + al);
+}
+/* Lo que puede rendir por transferencia: entregado, sin cobrar, no avisado como «le transfirió a Maleu», no rendido ya,
+   y sin redondeo ni saldo a favor anotados (esos se reciben en mano). (911, Tadeo 27/11 18:35) La PROPINA sí viaja: rinde
+   todo lo que tiene en mano y la quincena se la devuelve. */
+function _redRendCandidatos() {
+  return _redDeben().filter(function (p) {
+    const n = String(p.n), m = _redEf.mios[n];
+    if (_redEf.avisos[n] || _redRendDe(n)) return false;
+    if (m && ((Number(m.redondeo) || 0) > 0 || (Number(m.favor) || 0) > 0)) return false;
+    return true;
+  });
+}
+/* Lo que le pasa a Maleu de ese pedido: lo que tiene en mano si anotó propina, si no el total. */
+function _redRendMonto(p) {
+  const m = _redEf.mios[String(p.n)];
+  return m && (Number(m.propina) || 0) > 0 && Number(m.monto) > 0 ? Number(m.monto) : _cobroCliente(p);
+}
+function _redRendFilaHTML(r) {
+  const cl = (r.clientes || []).map(function (c) { return redEsc(String(c.cliente || '#' + c.n).split(' ')[0]) + ' #' + redEsc(c.n); }).join(' · ');
+  let est, acc = '';
+  if (r.estado === 'avisada') {
+    est = '<span class="cb-ok">Le avisaste a Maleu' + (r.at ? ' (' + redEsc(r.at) + ')' : '') + ': falta que confirme que entró</span>';
+    acc = '<button type="button" class="cb-des" onclick="redRendirDeshacer(' + Number(r.id) + ')">Deshacer</button>';
+  } else if (r.estado === 'confirmada') est = '<span class="cb-ok">Maleu confirmó que entró' + (r.cerrada ? ' · ' + redEsc(r.cerrada) : '') + '</span>';
+  else est = '<span class="cb-mal">Maleu dice que no le entró' + (r.cerrada ? ' (' + redEsc(r.cerrada) + ')' : '') + ': fijate la transferencia y volvé a avisar</span>';
+  return '<div class="cb-fila cb-rend"><div class="cb-top"><span class="hy-q" style="cursor:default"><span class="hy-n">Le pasaste ' + ars(Number(r.monto) || 0) + ' a Maleu</span>'
+    + '<span class="hy-s">' + est + '</span><span class="hy-s">' + cl + (r.referencia ? ' · Op. ' + redEsc(r.referencia) : '') + '</span></span></div>' + acc + '</div>';
+}
+function _redRendRpc(body, n, okMsg) {
+  if (n) _redEf.enVuelo[n] = true;
+  _redCobRepintar();
+  return _redEfRpc('red_rendicion_directo', { p: body }).then(function (r) {
+    if (n) delete _redEf.enVuelo[n];
+    if (r && r.directo === false) throw new Error(r.motivo === 'palanca' ? 'todavía no está prendido' : 'probá de nuevo en un rato');
+    if (!r || r.ok === false) throw new Error((r && r.err) || 'no se pudo');
+    redToast(typeof okMsg === 'function' ? okMsg(r) : okMsg);
+    return _redEfLeer(true).then(function () { _redCobRepintar(); return r; });
+  }).catch(function (e) {
+    if (n) delete _redEf.enVuelo[n];
+    _redCobRepintar();
+    redToast('No se anotó: ' + ((e && e.message) || 'sin conexión'));
+    return null;
+  });
+}
+/* «Me transfirió a mí»: la plata la tenés vos, en tu cuenta. Se la pasás a Maleu igual que el efectivo. */
+function redTrAMi(n, row) {
+  n = String(n || ''); if (!n || _redEf.enVuelo[n]) return;
+  const c = _redCtaCliente() || {}, al = String(c.alias || 'maleu26');
+  if (!confirm('¿Te transfirió a tu cuenta?\n\nQueda como plata que le tenés que pasar a Maleu.\nLa próxima pasale el alias ' + al + ', así le llega directo a Maleu.')) return;
+  _redRendRpc({ action: 'redTrAMi', n: n, row: Number(row) || 0, clientOpId: 'rtm_' + n + '_' + Date.now().toString(36) }, n,
+    function (r) { return 'Anotado: tenés ' + ars(Number(r.monto) || 0) + ' del #' + n + ' para pasarle a Maleu'; });
+}
+function redPromesa(n, row, deshacer) {
+  n = String(n || ''); if (!n || _redEf.enVuelo[n]) return;
+  _redRendRpc({ action: deshacer ? 'redPromesaDeshacer' : 'redPromesa', n: n, row: Number(row) || 0 }, n,
+    deshacer ? 'Listo: el #' + n + ' vuelve a «no pagó»' : 'Anotado: el #' + n + ' te va a transferir más adelante');
+}
+function redRendirDeshacer(id) {
+  if (!confirm('¿Deshacer el aviso? Los pedidos vuelven a «no pagó».')) return;
+  _redRendRpc({ action: 'redRendirDeshacer', id: id }, '', 'Listo: el aviso se deshizo');
+}
+/* El cuadro «Le pasé plata a Maleu». Vienen tildados los que ya tenés en mano (efectivo o transferencia a vos). */
+let _redRend = null;
+function redRendirAbrir() {
+  const l = _redRendCandidatos();
+  if (!l.length) { redToast('No tenés pedidos para rendir'); return; }
+  const sel = {};
+  l.forEach(function (p) { if (_redEf.mios[String(p.n)]) sel[String(p.n)] = true; });
+  if (!Object.keys(sel).length) l.forEach(function (p) { sel[String(p.n)] = true; });
+  _redRend = { l: l, sel: sel, ref: '', vuelo: false };
+  let o = $id('redRendOv');
+  if (!o) { o = document.createElement('div'); o.id = 'redRendOv'; document.body.appendChild(o); }
+  o.setAttribute('style', 'position:fixed;inset:0;z-index:9000;background:rgba(40,24,16,.45);display:flex;align-items:flex-end;justify-content:center;font-family:inherit');
+  o.onclick = function (ev) { if (ev.target === o) redRendirCerrar(); };
+  _redRendPintar();
+}
+function redRendirCerrar() { const o = $id('redRendOv'); if (o) o.remove(); _redRend = null; }
+function _redRendSuma() { const q = _redRend; return q ? q.l.reduce(function (s, p) { return s + (q.sel[String(p.n)] ? _redRendMonto(p) : 0); }, 0) : 0; }
+function _redRendPintar() {
+  const q = _redRend, o = $id('redRendOv'); if (!q || !o) return;
+  const c = _redCtaCliente() || {}, al = String(c.alias || 'maleu26'), tot = _redRendSuma(), cant = Object.keys(q.sel).filter(function (k) { return q.sel[k]; }).length;
+  const btn = 'min-height:44px;border-radius:10px;font-family:inherit;font-size:14px;font-weight:700;cursor:pointer;padding:8px 10px;';
+  let h = '<div style="background:#fff;width:100%;max-width:440px;border-radius:16px 16px 0 0;padding:16px 16px calc(16px + env(safe-area-inset-bottom));box-shadow:0 -6px 24px rgba(0,0,0,.18);color:#3b2314;max-height:92vh;overflow:auto">'
+    + '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px"><b style="font-size:16px">Le pasé plata a Maleu</b>'
+    + '<button type="button" onclick="redRendirCerrar()" aria-label="Cerrar" style="' + btn + 'border:0;background:none;color:#7a6a60;font-size:20px;min-width:44px">×</button></div>'
+    + '<div style="font-size:13px;color:#7a6a60;margin:-4px 0 10px">Transferile a Maleu, alias <b style="color:#3b2314">' + redEsc(al) + '</b>, y elegí qué pedidos le pagaste.</div>';
+  q.l.forEach(function (p) {
+    const n = String(p.n), on = !!q.sel[n], m = _redEf.mios[n];
+    h += '<label style="display:flex;align-items:center;gap:10px;min-height:48px;padding:6px 2px;border-bottom:1px solid #f0e8e0;cursor:pointer">'
+      + '<input type="checkbox" ' + (on ? 'checked ' : '') + 'data-n="' + redEsc(n) + '" onchange="redRendSel(this.dataset.n,this.checked)" style="width:22px;height:22px;flex:0 0 auto;accent-color:#E07A3F">'
+      + '<span style="flex:1;min-width:0"><span style="display:block;font-weight:700;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + redEsc(p.c || 'Pedido ' + n) + '</span>'
+      + '<span style="display:block;font-size:12px;color:#7a6a60">#' + redEsc(n) + (m ? (m.medio === 'transferencia' ? ' · te transfirió a vos' : ' · te pagó en efectivo') : _redEf.prom[n] ? ' · iba a transferir' : '')
+      + ((Number(m && m.propina) || 0) > 0 ? ' · con tu propina de ' + ars(Number(m.propina)) + ' (te la devolvemos en la quincena)' : '') + '</span></span>'
+      + '<b style="font-size:14px">' + ars(_redRendMonto(p)) + '</b></label>';
+  });
+  h += '<label for="redRendRef" style="display:block;font-size:13px;font-weight:700;margin:14px 0 6px">N.º de operación de la transferencia</label>'
+    + '<input id="redRendRef" autocomplete="off" maxlength="80" value="' + redEsc(q.ref) + '" oninput="_redRend&&(_redRend.ref=this.value)" placeholder="Ej: 190816850643" style="width:100%;box-sizing:border-box;min-height:48px;font-size:16px;padding:8px 12px;border:1.5px solid #e0d6cc;border-radius:10px;font-family:inherit;color:#3b2314">'
+    + '<div style="font-size:12px;color:#7a6a60;margin-top:4px">Con eso Maleu la encuentra en el banco. Si no lo tenés a mano, dejalo vacío.</div>'
+    + '<div style="display:flex;justify-content:space-between;font-size:16px;font-weight:800;background:#F3EFEA;border-radius:10px;padding:10px 12px;margin-top:12px"><span>' + cant + ' pedido' + (cant === 1 ? '' : 's') + '</span><span>' + ars(tot) + '</span></div>'
+    + '<div style="display:flex;gap:8px;margin-top:14px">'
+    + '<button type="button" onclick="redRendirCerrar()" style="' + btn + 'flex:0 0 auto;border:1.5px solid #e0d6cc;background:#fff;color:#3b2314">Cancelar</button>'
+    + '<button type="button" id="redRendOk" ' + (!cant || q.vuelo ? 'disabled ' : '') + 'onclick="redRendirGuardar()" style="' + btn + 'flex:1;border:0;background:' + (!cant || q.vuelo ? '#D7CCC8' : '#E07A3F') + ';color:#fff">'
+    + (q.vuelo ? 'Avisando…' : !cant ? 'Elegí al menos un pedido' : 'Avisar a Maleu · ' + ars(tot)) + '</button></div></div>';
+  o.innerHTML = h;
+}
+function redRendSel(n, on) { if (!_redRend) return; _redRend.sel[String(n)] = !!on; _redRendPintar(); }
+function redRendirGuardar() {
+  const q = _redRend; if (!q || q.vuelo) return;
+  const ped = Object.keys(q.sel).filter(function (k) { return q.sel[k]; });
+  if (!ped.length) return;
+  const i = $id('redRendRef'); if (i) q.ref = i.value;
+  q.vuelo = true; _redRendPintar();
+  const tot = _redRendSuma();
+  if (!q.cop) q.cop = 'rend_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 6);
+  _redEfRpc('red_rendicion_directo', { p: { action: 'redRendirAvisar', pedidos: ped, monto: tot, referencia: String(q.ref || '').trim(), clientOpId: q.cop } }).then(function (r) {
+    if (r && r.directo === false) throw new Error(r.motivo === 'palanca' ? 'todavía no está prendido' : 'probá de nuevo en un rato');
+    if (!r || r.ok === false) throw new Error((r && r.err) || 'no se pudo');
+    redRendirCerrar();
+    redToast('Avisado: Maleu confirma en el banco los ' + ars(Number(r.monto) || tot));
+    return _redEfLeer(true).then(_redCobRepintar);
+  }).catch(function (e) {
+    if (_redRend) { _redRend.vuelo = false; _redRendPintar(); }
+    redToast('No se avisó: ' + ((e && e.message) || 'sin conexión'));
+  });
 }
 /* ═══ LA FICHA DEL CLIENTE (24/11/2026). Tocar un cliente no abría nada. Ahora: qué debe (con los mismos botones de
    Hoy), sus pedidos con el estado de pago de cada uno, y Llamar / WhatsApp. ═════════════════════════════════════════ */
@@ -3579,8 +3762,10 @@ function renderRuta() {
      solo coordina la entrega. El cobro es siempre de Maleu: le escribimos nosotros al cliente
      y nos paga a nosotros». Hasta hoy aca se elegia la forma de pago, se marcaba «Me pago en
      efectivo» y se copiaba un mensaje de cobro para el cliente. */
-  html += '<div class="qc-box"><div class="qc-t">El cobro lo hace Maleu</div>'
-    + '<div class="qc-s">Nosotros le escribimos a ' + redEsc(String(p.c || 'el cliente').split(' ')[0]) + ' y nos paga a nosotros' + (cobrado ? ' (ya está cobrado <svg class="ic-ok" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7"/></svg>)' : '') + '. Vos coordinás la entrega: no le cobrás.</div>'
+  /* (910, 27/11/2026, Organizador) Una sola regla, la de Hoy: el cliente le puede pagar al representante, que se lo pasa
+     a Maleu. Hasta hoy esta ficha decía «no le cobrás» y Hoy ofrecía «Me pagó en efectivo». */
+  html += '<div class="qc-box"><div class="qc-t">' + (cobrado ? 'Ya está cobrado <svg class="ic-ok" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7"/></svg>' : 'El cobro') + '</div>'
+    + (cobrado ? '' : '<div class="qc-s">Si ' + redEsc(String(p.c || 'el cliente').split(' ')[0]) + ' te paga a vos, en efectivo o por transferencia, anotalo en Hoy y pasáselo a Maleu. Si prefiere transferir, mejor directo a Maleu.</div>')
     /* Tadeo (27/10/2026): «igual ellos pueden empujar diciendo nuestro alias cuando vean a los clientes». */
     + (!cobrado && _redCtaCliente() && _redCtaCliente().alias ? '<div class="qc-alias">Si lo ves, recordale nuestro alias: <b>' + redEsc(_redCtaCliente().alias) + '</b></div>' : '')
     + '</div>';
