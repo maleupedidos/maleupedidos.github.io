@@ -316,6 +316,17 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
     return { ok: !!r.ok && al.length === 3 && al.every((a) => a.completo), detalle: (txt || 'sin altas') + (r.volvio_a_medir ? ' · la base volvió ALTA_COMPLETA a «medir»' : '') };
   }, { escribe: true, topeMs: 20000 });
 
+  /* (27/11/2026, 900/901) LA BOLSA NO SALTA DE FREEZER. La 891 dio verde en seco y falló en la bolsa real de Lou (13:38): la
+     PCC de #2593 salió de Moresco con la OC-7108 sin recibir, porque la bolsa marca el handoff ANTES de calcular. La base
+     arma un Red PRUEBA con la bolsa ya dada y `w` ustariz, una OC PRUEBA a ustariz que llega hoy y stock solo en «prueba»;
+     calcula la bolsa y deshace todo. Bien = sale de ustariz; mal = saltó a «prueba». */
+  await paso('la bolsa no salta de freezer si una OC de hoy la cubre (con la bolsa ya dada)', async () => {
+    const r = await rpc('robot_bolsa_w_probar', {});
+    if (!r || r.http >= 300) return { ok: false, detalle: 'la base contestó ' + (r && r.http) + ' ' + String((r && (r.message || r.texto)) || '').slice(0, 150) };
+    if (r.error) return { ok: false, detalle: 'no se pudo armar la prueba: ' + String(r.error).slice(0, 160) };
+    return { ok: !!r.ok, detalle: r.ok ? 'sale de ustariz (la OC de hoy la cubre) · se deshizo' : 'SALTÓ a ' + r.sale_de + ' (tenía que salir de ustariz): ' + JSON.stringify(r.movs).slice(0, 160) };
+  }, { escribe: true, topeMs: 20000 });
+
   /* AJUSTES SIN APPS SCRIPT (4/11/2026, Supa 437). El robot no ve Ajustes (están los usuarios y los PIN): la base corre
      ajustesData como admin, devuelve solo conteos y comprueba que al robot le da 403. */
   await paso('ajustes en la base (como admin, solo conteos)', async () => {
