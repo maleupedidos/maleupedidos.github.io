@@ -164,11 +164,12 @@ async function cargarPedido(medio, yaPago, opt) {
   if (!prod) return { err: 'sin producto con precio' };
   const hoy = await pg.evaluate(() => npIsoDe(new Date()));
   await tocar('#npFechas [onclick*="' + hoy + '"]', '', '', { callado: true }) || await pg.evaluate((hoy) => { const b = document.querySelector('#npFechas [onclick*="' + hoy + '"]'); if (b) b.click(); }, hoy);
+  /* (27/11/2026) «Sale de» son botones en el pie (npDepWrap), sin nada marcado para el robot: se toca «prueba». */
+  await tocar('.np-dep-op[data-dep="' + (E.deposito || 'prueba') + '"]', '', '', { callado: true });
   const depOk = await pg.evaluate((DEP) => {
     const ee = document.getElementById('npEstadoEntrega'); ee.value = 'Entregado'; ee.dispatchEvent(new Event('change', { bubbles: true }));
-    const dp = document.getElementById('npDeposito'); if (dp && [].some.call(dp.options, (o) => o.value === DEP)) { dp.value = DEP; dp.dispatchEvent(new Event('change', { bubbles: true })); }
     const og = document.getElementById('npOrigen'); og.value = 'Pendiente'; og.dispatchEvent(new Event('change', { bubbles: true }));
-    return !!dp && dp.value === DEP;
+    return typeof npDepElegido === 'function' && npDepElegido() === DEP;
   }, E.deposito || 'prueba');
   /* (24/11/2026) Sin el depósito prueba, el pedido Entregado saldría del freezer por defecto (ustariz): corta. */
   if (!depOk) return { err: 'el selector «Sale de» no tiene el depósito prueba: no guardo (saldría de un freezer real)' };

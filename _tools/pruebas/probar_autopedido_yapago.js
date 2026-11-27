@@ -46,8 +46,10 @@ const T = (ms) => new Promise((r) => setTimeout(r, ms));
     npQty(Number(window.__PROD||E.producto_id), 1);
     const hoyIso = npIsoDe(new Date()); const fb = Array.from(document.querySelectorAll('#npFechas [onclick^="npSetFecha"]')).filter((b) => (b.getAttribute('onclick') || '').indexOf(hoyIso) >= 0); if (fb[0]) fb[0].click();
     const ee = document.getElementById('npEstadoEntrega'); ee.value = 'Entregado'; ee.dispatchEvent(new Event('change', { bubbles: true }));
-    const dep = document.getElementById('npDeposito'); const depOpts = dep ? [].map.call(dep.options, (o) => o.value) : [];
-    if (dep && depOpts.indexOf(E.deposito) >= 0) { dep.value = E.deposito; dep.dispatchEvent(new Event('change', { bubbles: true })); }
+    /* (27/11/2026) «Sale de» son botones en el pie: se elige el del robot. */
+    const depOpts = [].map.call(document.querySelectorAll('.np-dep-op'), (o) => o.getAttribute('data-dep'));
+    if (depOpts.indexOf(E.deposito) >= 0) npDepElegir(E.deposito);
+    const dep = { value: npDepElegido() };
     const og = document.getElementById('npOrigen'); const ogOpts = [].map.call(og.options, (o) => o.value);
     return { fecha: npFechaSel, hoyIso, depOpts, dep: dep && dep.value, origen: og.value, ogOpts, cart: JSON.stringify(npCart) };
   }, E);

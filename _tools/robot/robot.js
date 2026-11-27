@@ -524,9 +524,10 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
       if(((npDiscountInfo()||{}).total||0)>0)uso=String(pid);
       var hoy=npIsoDe(new Date()), fb=[].filter.call(document.querySelectorAll('#npFechas [onclick^="npSetFecha"]'),function(b){return (b.getAttribute('onclick')||'').indexOf(hoy)>=0;}); if(fb[0])fb[0].click();
       var ee=document.getElementById('npEstadoEntrega'); ee.value='Entregado'; ee.dispatchEvent(new Event('change',{bubbles:true}));
-      var dp=document.getElementById('npDeposito'); if(dp&&[].some.call(dp.options,function(o){return o.value===${JSON.stringify(DEP)};})){ dp.value=${JSON.stringify(DEP)}; dp.dispatchEvent(new Event('change',{bubbles:true})); }
+      /* (27/11/2026) «Sale de» son botones en el pie (npDepWrap); al robot se le ofrece «prueba» sin nada marcado. */
+      if(document.querySelector('.np-dep-op[data-dep='+JSON.stringify(${JSON.stringify(DEP)})+']')&&typeof npDepElegir==='function')npDepElegir(${JSON.stringify(DEP)});
       /* (24/11/2026) Sin el depósito prueba, el Entregado saldría del freezer por defecto (ustariz): corta. */
-      if(!dp||dp.value!==${JSON.stringify(DEP)})return {err:'el selector «Sale de» no tiene el depósito prueba: no guardo (saldría de un freezer real)'};
+      if(typeof npDepElegido!=='function'||npDepElegido()!==${JSON.stringify(DEP)})return {err:'el selector «Sale de» no tiene el depósito prueba: no guardo (saldría de un freezer real) · ve: '+[].map.call(document.querySelectorAll('.np-dep-op'),function(b){return b.getAttribute('data-dep');}).join()+' · rol '+((typeof SESSION!=='undefined'&&SESSION&&SESSION.rol)||'?')};
       var og=document.getElementById('npOrigen'); og.value='Pendiente'; og.dispatchEvent(new Event('change',{bubbles:true}));
       npSetPago(${JSON.stringify(medio)});
       var yc=document.getElementById('npYaCobrado'); yc.checked=true; try{ npToggleYaCobrado(); }catch(e){}
