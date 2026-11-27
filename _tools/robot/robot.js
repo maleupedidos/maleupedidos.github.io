@@ -226,6 +226,24 @@ const rpc = (fn, p) => ev(`(async function(){ var sb=await _sbPermiso(true); if(
      en su id: la base lo saca de los totales y robot_limpiar lo borra. */
   const E = ent || {}, TEL = String(E.telefono || '5490000000001'), CLI = E.cliente || 'PRUEBA Robot', REP = E.representante || 'PRUEBA Robot';
   const PROV = E.proveedor || 'PRUEBA', SKU = E.producto || 'PRUEBA', DEP = E.deposito || 'prueba', CTA = E.cuenta || 'prueba';
+  /* (27/11/2026, Organizador) PRUEBA EN SU LUGAR AL EMPEZAR CADA CORRIDA. La limpieza deja el libro de PRUEBA en «prueba 3,
+     el resto 0» (`_robot_libro_prueba`) solo con 10 minutos sin el robot, o sea de noche. Con varios deploys en el día cada
+     corrida se lleva PRUEBA y no se repone: el 27/11 la 5ª corrida arrancó con prueba −3 y ustariz −1, y «traspaso» y
+     «carga de mercadería» frenaron la v1360. Ahora cada corrida arranca contando PRUEBA: 3 en su depósito y 0 en los demás.
+     Es un conteo (el mismo camino que «contar stock»), solo del SKU PRUEBA: nunca toca stock real. */
+  if (ENTIDADES) {
+    const st = await rpc('stock_tab_pantalla', {}).catch(() => null);
+    const pp = ((st && st.stock) || []).find((x) => String(x.a || x.abbr || '').trim() === SKU);
+    const pd = (pp && (pp.pd || pp.porDep)) || {}, quiero = {}, hechos = [];
+    Object.keys(pd).concat([DEP, 'ustariz', 'moresco']).forEach((k) => { quiero[k] = k === DEP ? 3 : 0; });
+    for (const dep of Object.keys(quiero)) {
+      const v = Number(pd[dep]) || 0;
+      if (Math.abs(v - quiero[dep]) < 0.0005) continue;
+      const c = await rpc('stock_contar_directo', { p: { abbr: SKU, deposito: dep, cantidad: quiero[dep], clientOpId: PREFIJO + 'inicio-' + dep, cv: 'robot' } }).catch((e) => ({ error: String(e) }));
+      hechos.push(dep + ' ' + v + ' → ' + quiero[dep] + (c && c.ok ? '' : ' (no se pudo: ' + JSON.stringify(c).slice(0, 80) + ')'));
+    }
+    console.log('  PRUEBA al empezar: ' + (hechos.length ? hechos.join(' · ') : DEP + ' 3 y el resto 0, ya estaba'));
+  }
   /* La directa desde la página. Devuelve {d} o {fueApps:motivo}. */
   const directa = (accion, body) => ev(`(async function(){ var b=${JSON.stringify(body)}; if(!b.ts)b.ts=Date.now();
     try{ var d=await _ordenDirecta(b,null,${JSON.stringify(accion)}); return d?{d:d}:{fueApps:b._noDirecto||'?'}; }catch(e){ return {error:String(e&&e.message||e)}; } })()`, 30000);
